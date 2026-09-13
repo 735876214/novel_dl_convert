@@ -38,6 +38,10 @@ services:
       - CONFIG_DIR=/app/config
       - COOKIE_DIR=/app/config/cookies
       - CACHE_DIR=/app/config/cache
+      - LOG_DIR=/app/config/logs
+      # 目录自动监听（默认开）：input 里的 txt 自动转 EPUB，非 txt 原样导出
+      # - AUTO_WATCH=true
+      # - WATCH_INTERVAL=5
       # 可选：AI 分章兜底（不填则不联网）
       # - LLM_API_KEY=
       # - LLM_BASE_URL=https://api.openai.com/v1

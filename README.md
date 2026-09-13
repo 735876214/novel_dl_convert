@@ -14,6 +14,8 @@ TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub 
 - **下载加固**：类浏览器标头伪造、Cookie 持久化（LWPCookieJar 落盘）、429 退避重试、域名替换、**原生 JS eval**（Node 执行站点解密脚本）
 - **增量更新**：为下载得到的 txt 写 sidecar，日后只爬取新增章节再重转
 - **内容预览 API**：`/content?url=...` 即时抓取清洗（不落盘即可完美预览），`/supported` 判断 URL 归属
+- **输入目录自动监听**：扔进 `input` 的文件自动处理——`txt` 转 EPUB，非 `txt` 原样导出到 `output`
+- **活动日志**：每一次「转换 / 添加」都记录时间、文件名、操作、成功或失败（Web 可查、可下载、CLI 可看）
 - FastAPI 服务：上传即转、按路径转换、列出文件、下载成品、搜索、下载
 
 ## 目录约定（输入 / 导出 / 配置 / 缓存 各自独立）
@@ -24,9 +26,57 @@ TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub 
 | `./output` | `/app/output` | 生成的 epub 等成品 |
 | `config.yaml` | `/app/config/config.yaml` | 转换行为配置（只读挂载） |
 | `./cookies` | `/app/config/cookies` | 各书源 Cookie 持久化（下载功能，跨重启保留登录态） |
-| `./cache`   | `/app/config/cache`   | AI 分章结果缓存（按文本哈希，重复文件不二次计费） |
+| `./cache`   | `/app/config/cache`   | AI 分章结果缓存（按文本哈希）+ 监听状态（已处理文件指纹） |
+| `./config/logs` | `/app/config/logs` | 活动日志 `activity.log` / `activity.jsonl` |
 
-目录路径由环境变量 `INPUT_DIR` / `OUTPUT_DIR` / `CONFIG_DIR` / `COOKIE_DIR` / `CACHE_DIR` 控制。
+目录路径由环境变量 `INPUT_DIR` / `OUTPUT_DIR` / `CONFIG_DIR` / `COOKIE_DIR` / `CACHE_DIR` / `LOG_DIR` 控制。
+
+## 自动监听与活动日志
+
+服务启动后自动监听输入目录（也可 `AUTO_WATCH=false` 关闭）：
+
+| 放到 input 的文件 | 处理动作 | 日志 |
+|------------------|---------|------|
+| `*.txt` | 走转换管线生成 EPUB，落到 output | `转换` |
+| 其它文件（pdf / epub / zip / 图片…） | 原样复制到 output | `添加` |
+| 隐藏文件、临时文件（`.*`、`*.tmp`、`*.crdownload`、`*.meta.json`…） | 忽略 | — |
+
+每条日志含：**时间、文件名、操作（转换 / 添加）、成功或失败**，失败附带原因；成功还记录输出文件名、体积、耗时。
+日志同时写 `activity.log`（人类可读）与 `activity.jsonl`（结构化，供接口读取），目录为 `LOG_DIR`（默认 `/app/config/logs`）。
+
+实现要点：
+- **轮询而非 inotify**：NAS 上 input 多是 SMB / NFS 挂载，inotify 事件不可靠，轮询 +「文件大小连续 N 次不变才认为写完」最稳。
+- **状态持久化**：已处理文件的 `(size, mtime)` 存进 `CACHE_DIR/watcher_state.json`，重启不会重复转换；文件被覆盖更新（指纹变化）才重新处理。
+- **失败重试**：同一文件失败最多重试 `watcher.max_retries` 次，之后记为失败并跳过，避免坏文件反复刷日志。
+
+相关接口：
+
+| 接口 | 说明 |
+|------|------|
+| `GET /api/watcher` | 监听状态（是否运行、输入输出目录、间隔、累计统计） |
+| `POST /api/watcher/start`、`/stop` | 启停监听 |
+| `POST /api/scan` | 立即扫描一轮（不等下个周期） |
+| `GET /api/logs?limit=&action=&status=&q=` | 活动日志（新→旧，可按操作 / 结果 / 关键字过滤） |
+| `GET /api/logs/download` | 下载 `activity.log` |
+| `DELETE /api/logs` | 清空日志 |
+
+配置（`config.yaml`）：
+
+```yaml
+watcher:
+  enabled: true           # 服务启动时自动监听（环境变量 AUTO_WATCH 可覆盖）
+  interval: 5             # 轮询间隔（秒），NAS 网络挂载建议 >=3
+  recursive: false        # 是否递归子目录
+  settle_seconds: 1       # 文件写入稳定判定的单次等待
+  stable_rounds: 2        # 连续 N 次大小不变才认为上传完成
+  copy_non_txt: true      # 非 txt 原样导出到 output
+  process_existing: true  # 启动时处理 input 里已有的存量文件
+  max_retries: 3          # 单文件失败重试上限
+  ignore: [".*", "*.tmp", "*.part", "*.crdownload", "*.meta.json", "*.log"]
+logging:
+  dir: ""                 # 留空则用 LOG_DIR
+  max_entries: 2000       # 接口读取的内存缓冲条数
+```
 
 ## 命令行
 
@@ -50,6 +100,15 @@ python -m novelforge download --item '{"_source":"gutenberg","url":"...","title"
 
 # 增量更新本地 txt（需先经 download 生成 .meta.json sidecar）
 python -m novelforge update ./input/某书.txt
+
+# 监听 input 目录：txt 自动转 EPUB，非 txt 自动导出（前台常驻，Ctrl+C 停止）
+python -m novelforge watch --interval 5 --recursive
+
+# 只扫描一轮就退出（适合放进 cron / 任务计划）
+python -m novelforge scan
+
+# 查看活动日志（可过滤）
+python -m novelforge logs -n 50 --action 转换 --status 失败
 ```
 
 ## Web 服务（NAS 部署）
@@ -77,6 +136,7 @@ docker compose up -d
 > 配置放 `./config/config.yaml`（留空则应用回退到内置默认值）。
 
 - 访问 http://<NAS-IP>:8000 上传 txt 转 EPUB
+- **文件直接丢进 `./input` 即可**：txt 自动转 EPUB，其它文件自动导出到 `./output`，全程记日志（网页「转换日志」页可看）
 - **输入放 `./input`，成品落 `./output`**，互不影响
 - 在线书源：`POST /search`、`POST /download`；内容预览：`GET /content?url=`、`GET /supported?url=`
 - Synology Container Manager / QNAP Container Station：直接导入本目录的 `docker-compose.yml` 即可
@@ -110,6 +170,8 @@ novel_dl_convert/
     server.py          FastAPI 服务（NAS 部署 + 内容预览 API）
     config.py          目录与配置解析
     core/              预处理 / 分章 / AI 分章 / 网络加固 / 元数据 / EPUB 组装 / 管线
+                       + activity_log.py（活动日志：时间 / 文件名 / 操作 / 成败）
+                       + watcher.py（输入目录监听：txt 转 EPUB，非 txt 导出）
     sources/           书源适配器（gutenberg 公版 / generic 模板 / rules 数据驱动 / store 用户源管理 / manager）
     static/             Web 界面（index.html / style.css / app.js，卡片式单页，无需构建）
 ```
@@ -123,6 +185,7 @@ novel_dl_convert/
 - **搜索下载**：输入书名跨全部书源搜索 → 结果可「预览」（看目录 + 首段样本）→ 点「下载并转 EPUB」后台抓取，按该书源规则分章并输出到导出目录，完成后直接下载成品。
 - **导出目录**：列出 EPUB 成品与下载留档的 txt，提供下载。
 - **本地转换**：上传本地 txt 直接转 EPUB（保留旧能力）。
+- **转换日志**：查看输入目录监听状态（可启停、立即扫描）与全部活动日志（时间 / 文件名 / 操作 / 成败，支持按操作与结果过滤、自动刷新、下载、清空）。
 
 ### 规则字段（JSON Schema 要点）
 ```jsonc

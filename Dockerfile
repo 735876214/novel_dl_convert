@@ -17,7 +17,7 @@
 
 ARG PY_VERSION=3.12
 ARG NODE_VERSION=22
-ARG APP_VERSION=0.4.0
+ARG APP_VERSION=0.5.0
 
 # ============================ 阶段 1：依赖构建 ============================
 FROM python:${PY_VERSION}-slim AS builder
