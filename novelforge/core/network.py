@@ -14,9 +14,15 @@ import subprocess
 import tempfile
 
 import httpx
-import urllib3
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# urllib3 仅为关闭 InsecureRequestWarning 而引入；httpx 0.28 改用 httpcore，
+# 不再依赖 urllib3。这里做防御式处理：存在时才关闭告警，避免干净环境因缺包崩溃。
+try:
+    import urllib3
+
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except Exception:  # pragma: no cover - 依赖可选
+    pass
 
 # 类浏览器默认标头（可被各书源覆盖）
 DEFAULT_HEADERS = {

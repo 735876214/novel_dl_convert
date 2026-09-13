@@ -11,6 +11,8 @@ CHAPTER_PATTERNS = [
     re.compile(r"^\s*[一二三四五六七八九十]+\s*[\.、]\s*.+", re.M),
 ]
 MIN_CHARS, MAX_CHARS = 80, 50_000
+# 仅当章节正文短于此值时才并入上一章（避免吞掉真实短章），默认不合并由调用方控制
+MERGE_MIN_LEN = 20
 
 
 def regex_bounds(text: str) -> list[tuple[int, str]]:
@@ -24,32 +26,48 @@ def _is_volume(title: str) -> bool:
     return bool(re.match(r"第.+[卷部]", title))
 
 
-def split_by_offsets(text: str, bounds: list[tuple[int, str]]) -> list[dict]:
-    """按 (偏移, 标题) 切分正文为章节；带卷/章层级。"""
-    chaps, prev = [], 0
-    for pos, title in bounds:
-        body = text[prev:pos].strip()
-        prev = pos
-        if len(body) >= MIN_CHARS or not chaps:
-            vol = title if _is_volume(title) else "正文"
-            chaps.append({"title": title, "body": body, "vol": vol})
-    return _merge_small(chaps)
+def split_by_offsets(text: str, bounds: list[tuple[int, str]], merge: bool = False) -> list[dict]:
+    """按 (偏移, 标题) 切分正文为章节；带卷/章层级。
+
+    边界 (pos_i, title_i) 表示 title_i 在文本中的位置；title_i 的正文是
+    [pos_i, pos_{i+1})，末章正文为 [pos_n, 文末)。首个边界之前的内容（书名/作者）
+    作为前言并入首章正文，不单独成章。merge=True 时按 MERGE_MIN_LEN 合并极小碎片章。
+    """
+    chaps, start = [], 0
+    for i, (pos, title) in enumerate(bounds):
+        vol = title if _is_volume(title) else "正文"
+        if i == 0:
+            # 首个章节标题之前的内容（书名/作者等）作为首章前置，不单独成章
+            chaps.append({"title": title, "body": text[:pos].strip(), "vol": vol})
+        else:
+            # 上一章（chaps[-1]）的正文 = 上一章标题位置到本章标题位置
+            chaps[-1]["body"] = text[start:pos].strip()
+            chaps.append({"title": title, "body": "", "vol": vol})
+        start = pos
+    # 末章正文 = 最后一个标题位置到文本末尾
+    if chaps:
+        chaps[-1]["body"] = text[start:].strip()
+    return _merge_small(chaps) if merge else chaps
 
 
-def detect_chapters(text: str) -> list[dict]:
+def detect_chapters(text: str, merge: bool = False) -> list[dict]:
     """章节识别：正则优先，命中率不足时退化为缩进切分。"""
     bounds = regex_bounds(text)
     if bounds and len(bounds) * 2000 >= len(text):  # 正则有效
-        return split_by_offsets(text, bounds)
+        return split_by_offsets(text, bounds, merge)
     return _split_by_indent(text)  # 缩进降级
 
 
-def detect_chapters_cfg(text: str, cfg: dict | None = None) -> list[dict]:
-    """带配置的入口：hybrid/ai 且配置了 llm 时交由 AI 检测器，否则走正则。"""
+def detect_chapters_cfg(text: str, cfg: dict | None = None, merge: bool | None = None) -> list[dict]:
+    """带配置的入口：hybrid/ai 且配置了 llm 时交由 AI 检测器，否则走正则。
+
+    merge 控制是否合并极小碎片章；为 None 时默认不合并（由 CLI --merge 显式开启）。
+    """
     cfg = cfg or {}
     cd = cfg.get("chapter_detection", {}) or {}
     mode = cd.get("mode", "hybrid")
     llm = cfg.get("llm", {}) or {}
+    do_merge = bool(merge)
     if mode in ("ai", "hybrid") and llm.get("api_key"):
         from .ai_detect import HybridChapterDetector
 
@@ -61,9 +79,9 @@ def detect_chapters_cfg(text: str, cfg: dict | None = None) -> list[dict]:
             return asyncio.run(detector.detect(text))
         except Exception:
             if cd.get("fallback", "regex") == "regex":
-                return detect_chapters(text)
+                return detect_chapters(text, do_merge)
             raise
-    return detect_chapters(text)
+    return detect_chapters(text, do_merge)
 
 
 def _split_by_indent(text: str) -> list[dict]:
@@ -86,7 +104,7 @@ def _split_by_indent(text: str) -> list[dict]:
 def _merge_small(chaps: list[dict]) -> list[dict]:
     out = []
     for c in chaps:
-        if out and len(c["body"]) < MIN_CHARS:
+        if out and len(c["body"]) < MERGE_MIN_LEN:
             out[-1]["body"] += "\n" + c["title"] + "\n" + c["body"]
         else:
             out.append(c)

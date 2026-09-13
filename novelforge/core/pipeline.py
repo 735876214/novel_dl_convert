@@ -33,7 +33,7 @@ def convert_text(raw: str, out_dir: Path, opts: dict, meta: dict | None = None) 
     )
 
     cfg = opts.get("cfg") or {}
-    chapters = detect.detect_chapters_cfg(raw, cfg)
+    chapters = detect.detect_chapters_cfg(raw, cfg, opts.get("merge", False))
     for ch in chapters:
         ch["body_html"] = preprocess.paragraphs_to_html(ch["body"])
 

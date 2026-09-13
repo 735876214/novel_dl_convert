@@ -1,0 +1,29 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+
+# 运行时目录（容器挂载点，不入库）
+input/
+output/
+cookies/
+cache/
+config/cookies/
+config/cache/
+
+# 构建 / 产物
+*.epub
+*.mobi
+*.azw3
+build/
+dist/
+*.egg-info/
+
+# 本地冒烟测试脚手架（非项目产物）
+_test/
+
+# 系统
+.DS_Store
+.git
