@@ -12,6 +12,17 @@
 
 set -e
 
+# 目录完整性自检：挂载到 /app 的源码目录必须含 requirements.txt 与 novelforge 包。
+# 否则 pip / 启动都会失败，这里提前给出醒目提示，避免晦涩报错难以定位。
+for f in /app/requirements.txt /app/novelforge; do
+  if [ ! -e "$f" ]; then
+    echo "[start] [FATAL] 缺失 $f —— 挂载到 /app 的目录不是完整的项目目录。"
+    echo "[start] [FATAL] 请确认 docker-compose.yml 所在的 novel_dl_convert/ 目录已完整同步到本机（含 requirements.txt、start.sh、novelforge/、config.yaml 等），再重建容器。"
+    echo "[start] [FATAL] 修复步骤：cd novel_dl_convert && git pull && docker compose up -d"
+    exit 1
+  fi
+done
+
 NEED_INSTALL=0
 if ! command -v node >/dev/null 2>&1; then
   NEED_INSTALL=1
