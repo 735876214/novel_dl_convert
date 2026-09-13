@@ -11,11 +11,17 @@ output:
   format: epub            # epub；mobi/azw3 需本机安装 Calibre 的 ebook-convert
 
 download:
-  enabled: false          # 默认关闭，仅公版源可用
-  public_only: true
+  enabled: false          # 默认关闭，仅公版源可用；设为 true 才开放搜索/下载
+  public_only: true       # true=只放行 public 书源（如 Gutenberg）；false=允许全部已注册源
 
-# 可选：hybrid 模式下 AI 分章兜底。留空则仅用正则+缩进降级（不联网、不花钱）
-# llm:
-#   api_key: ${LLM_API_KEY}
-#   base_url: https://api.openai.com/v1
-#   model: gpt-4o-mini
+network:
+  cookie_dir: /app/config/cookies   # 各书源 Cookie 持久化目录（容器内建议挂载）
+  host_replace: {}                  # 应对 CDN 漂移：{"old-host": "new-host"}
+  max_retries: 3                    # 传输/超时错误重试次数
+
+# 可选：hybrid/ai 模式下 AI 分章兜底。填入 api_key 后，正则零命中/低命中时才会调 AI
+# 支持任意 OpenAI 兼容端点（含本地 Ollama：base_url=http://host:11434/v1）
+llm:
+  api_key: ""
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini

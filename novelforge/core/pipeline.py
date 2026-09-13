@@ -18,26 +18,37 @@ def _detect_encoding(path: Path) -> str:
     return "utf-8"
 
 
-def convert_txt(path: Path, out_dir: Path, opts: dict) -> Path:
-    raw = path.read_text(encoding=_detect_encoding(path), errors="ignore")
+def convert_text(raw: str, out_dir: Path, opts: dict, meta: dict | None = None) -> Path:
+    """把一段纯文本（本地读取或下载得到）转为 EPUB。"""
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
     raw = preprocess.preprocess(raw)
     if opts.get("traditionalize"):
         raw = preprocess.traditionalize(raw)
 
-    meta = metadata.merge_meta(
-        metadata.from_filename(path.name),
+    base_meta = metadata.merge_meta(
+        meta or {},
+        metadata.from_filename(opts.get("filename", "") or ""),
         metadata.from_body(raw[:2000]),
     )
 
-    chapters = detect.detect_chapters(raw)
+    cfg = opts.get("cfg") or {}
+    chapters = detect.detect_chapters_cfg(raw, cfg)
     for ch in chapters:
         ch["body_html"] = preprocess.paragraphs_to_html(ch["body"])
 
-    out = out_dir / f"{meta['title']}.epub"
+    out = out_dir / f"{base_meta['title']}.epub"
     if out.exists() and not opts.get("force"):
         return out
-    epub_builder.build_epub(meta, chapters, str(out))
+    epub_builder.build_epub(base_meta, chapters, str(out))
     return out
+
+
+def convert_txt(path: Path, out_dir: Path, opts: dict) -> Path:
+    raw = path.read_text(encoding=_detect_encoding(path), errors="ignore")
+    opts = dict(opts)
+    opts.setdefault("filename", path.name)
+    return convert_text(raw, out_dir, opts)
 
 
 def dispatch(src: Path, out_dir: Path, opts: dict):

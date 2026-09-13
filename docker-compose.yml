@@ -1,3 +1,5 @@
+# NovelForge — NAS / 容器部署
+# 目录职责严格分离：输入源文件、导出成品、配置/cookie/缓存各自独立挂载。
 services:
   novel_dl_convert:
     build: .
@@ -7,12 +9,16 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # 输入目录：把待转换的 txt / 电子书源文件放这里
+      # ① 输入目录：把待转换的 txt / 电子书源文件放这里（只读可选，转换不写回）
       - ./input:/app/input
-      # 导出目录：生成的 epub 等成品会写到这里（与输入目录物理隔离）
+      # ② 导出目录：生成的 epub 等成品写到这里（与输入物理隔离，互不污染）
       - ./output:/app/output
-      # 配置文件（只读挂载）
+      # ③ 配置：config.yaml 只读挂载（改了需重启容器生效）
       - ./config.yaml:/app/config/config.yaml:ro
+      # ④ Cookie 持久化：各书源登录态落盘，跨重启保留（下载功能用）
+      - ./cookies:/app/config/cookies
+      # ⑤ AI 分章缓存：按文本哈希缓存 LLM 结果，重复文件不二次计费
+      - ./cache:/app/config/cache
     environment:
       - TZ=Asia/Shanghai
       - PUID=1000
@@ -20,6 +26,12 @@ services:
       - INPUT_DIR=/app/input
       - OUTPUT_DIR=/app/output
       - CONFIG_DIR=/app/config
+      - COOKIE_DIR=/app/config/cookies
+      - CACHE_DIR=/app/config/cache
+      # 可选：AI 分章兜底（不填则不联网）
+      # - LLM_API_KEY=
+      # - LLM_BASE_URL=https://api.openai.com/v1
+      # - LLM_MODEL=gpt-4o-mini
     healthcheck:
       test:
         - "CMD"

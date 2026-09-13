@@ -5,3 +5,4 @@ opencc-python-reimplemented>=0.1.7
 Pillow>=10.0
 fastapi>=0.110
 uvicorn>=0.29
+python-multipart>=0.0.9
