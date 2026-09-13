@@ -101,8 +101,8 @@ docker compose pull && docker compose up -d
 ```
 novel_dl_convert/
   docker-compose.yml   部署：input / output / config / cookies / cache 五处挂载
-  start.sh             幂等启动脚本（依赖已装则跳过 apt/pip，秒级启动）
-  Dockerfile           Python 3.12-slim + Node.js（JS eval 用，可选自建镜像）
+  start.sh             启动脚本（依赖已内置，自检后 exec uvicorn，秒级拉起）
+  Dockerfile           多阶段构建：builder(venv 依赖) + node(仅取二进制) + runtime(python-slim)
   config.yaml          转换行为配置
   .env.example         环境变量示例
   novelforge/          Python 包
@@ -156,6 +156,25 @@ novel_dl_convert/
 - 搜索 / 取书的解析均支持 **css 选择器**（需 `beautifulsoup4`，已加入依赖）与 **regex** 双通道，`::attr(name)` 取属性，空选择器 `""` 取元素自身文本。
 - **分章策略**：`book.mode=toc` 时直接用书目目录结构化分章（最干净，推荐）；`book.mode=single` + `chapter.mode=regex` 用该书源正则切全文；`chapter.mode=auto` 走全局正则/缩进/AI 检测。
 - 可一次粘贴 **JSON 数组** 或 **每行一条 JSON（JSONL）** 实现批量添加；示例见 `examples/sources/`（`example_regex.json` / `example_css.json`）。
+
+### 自建镜像（可选）
+
+默认直接用 ghcr.io 预构建镜像即可。需要自己 build 时，Dockerfile 是多阶段构建：
+
+```bash
+docker build -t novelforge .                 # 默认 amd64
+docker build --build-arg NODE_VERSION=22 -t novelforge .
+```
+
+| 阶段 | 作用 | 是否进最终镜像 |
+|------|------|----------------|
+| `builder` | 装 `build-essential`，把依赖装进 `/opt/venv` | 否 |
+| `nodejs` | 官方 Node 镜像，只借 `node` 二进制（书源 JS 解密用） | 仅二进制 |
+| `runtime` | `python:3.12-slim` + venv + 源码 | 是 |
+
+瘦身要点：编译工具链不进最终镜像；venv 剔除 pip/wheel、`.so` 去符号；只取 Node 二进制而
+不带 npm/文档；按路径精确 COPY 配合 `.dockerignore`。若不需要 JS 解密能力，删掉 runtime
+阶段 `COPY --from=nodejs` 那一行可再省约 90~110MB（镜像里最大的单个文件）。
 
 ## 扩展一个新书源（代码方式）
 

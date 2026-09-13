@@ -27,3 +27,5 @@ _test/
 # 系统
 .DS_Store
 .git
+*.log
+.workbuddy/
