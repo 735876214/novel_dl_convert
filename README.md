@@ -68,7 +68,17 @@ docker compose up -d
 - **输入放 `./input`，成品落 `./output`**，互不影响
 - 在线书源：`POST /search`、`POST /download`；内容预览：`GET /content?url=`、`GET /supported?url=`
 - Synology Container Manager / QNAP Container Station：直接导入本目录的 `docker-compose.yml` 即可
-- 首次启动会 `apt-get + pip install`（约 1~2 分钟），之后只要容器不重建就无需重装
+
+### 启动速度（幂等，重启秒级）
+
+启动逻辑在 `start.sh` 里做了**幂等检查**：
+
+- **首次启动 / 容器重建**（依赖缺失）：才执行 `apt-get + pip install`，约 1~2 分钟。
+- **日常重启**（同一容器，依赖已装）：`start.sh` 检测到 `node` 与关键 Python 包已存在，**直接跳过安装、秒级拉起 uvicorn** —— 不再每次重跑 `apt-get update`，NAS 重启 / 容器崩溃恢复等待从分钟级降到秒级。
+
+> 依赖装在容器自身文件系统（非挂载的源码目录），所以「同一容器重启」时保留、可跳过；
+> 只有「容器被重建」（如更换基础镜像）导致依赖丢失时才会再次完整安装。
+> 若想让重建也秒级启动，见下方「可选自建镜像」。
 
 ### 为什么不需要 build（不强制本地 build）
 
@@ -100,7 +110,8 @@ docker build -t novel_dl_convert .
 ```
 novel_dl_convert/
   docker-compose.yml   部署：input / output / config / cookies / cache 五处挂载
-  Dockerfile           Python 3.12-slim + Node.js（JS eval 用）
+  start.sh             幂等启动脚本（依赖已装则跳过 apt/pip，秒级启动）
+  Dockerfile           Python 3.12-slim + Node.js（JS eval 用，可选自建镜像）
   config.yaml          转换行为配置
   .env.example         环境变量示例
   novelforge/          Python 包

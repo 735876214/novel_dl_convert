@@ -14,7 +14,7 @@ WORKDIR /app
 
 # 系统依赖：nodejs 用于「原生 JS eval」解密字体加密 / 内容混淆的站点
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nodejs curl \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # 先装依赖，利用 Docker 层缓存

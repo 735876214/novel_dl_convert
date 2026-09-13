@@ -10,7 +10,9 @@
 #   mkdir -p input output cookies cache
 #   docker compose up -d
 #
-# 注：首次启动会 apt-get + pip install（约 1~2 分钟），之后只要容器不重建就无需重装。
+# 注：首次启动会 apt-get + pip install（约 1~2 分钟）；之后容器重启时由 start.sh
+#     做幂等检查，依赖已装则跳过安装、秒级直接启动，极大缩短 NAS 重启等待。
+#     仅当容器被「重建」（换了基础镜像等）导致依赖丢失时，才会再次完整安装。
 services:
   novel_dl_convert:
     image: python:3.12-slim
@@ -43,12 +45,8 @@ services:
       # - LLM_API_KEY=
       # - LLM_BASE_URL=https://api.openai.com/v1
       # - LLM_MODEL=gpt-4o-mini
-    command: >
-      sh -c "apt-get update &&
-             apt-get install -y --no-install-recommends nodejs curl &&
-             rm -rf /var/lib/apt/lists/* &&
-             pip install --no-cache-dir -r /app/requirements.txt &&
-             uvicorn novelforge.server:app --host 0.0.0.0 --port 8000"
+    # 幂等启动：依赖已装则跳过 apt/pip，秒级启动；详见 start.sh
+    command: ["sh", "/app/start.sh"]
     healthcheck:
       test:
         - "CMD"
@@ -58,4 +56,5 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 20s
+      # 覆盖首次启动（apt+pip 约 1~2 分钟）的安装耗时；重启时秒级就绪，不受影响
+      start_period: 150s
