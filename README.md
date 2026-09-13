@@ -54,76 +54,47 @@ python -m novelforge update ./input/某书.txt
 
 ## Web 服务（NAS 部署）
 
-### 第一步：把 docker-compose.yml 放到 NAS（只需这一个文件）
+### 部署方式：直接拉预构建镜像（源码 + 依赖已烤进镜像）
 
-本仓库的 `docker-compose.yml` 已内置「启动自动拉取源码」逻辑：**容器启动时若发现挂载目录里缺 `start.sh`
-（即源码不完整），会自动从 GitHub `git clone` 完整仓库到 `/app`**，自动修复此前「缺 start.sh / requirements.txt」
-的报错。因此你在 NAS 上**只需要这一个 `docker-compose.yml` 文件**即可，其余源码由容器自动拉取，无需手动同步、也不用手拷文件。
+镜像 `ghcr.io/735876214/novel_dl_convert:latest` 由 GitHub Actions 在每次推送到 `main` 时自动构建并发布，
+**源码与全部 Python 依赖已在「构建镜像时」烤进镜像**——不需要 NAS 本地 build，也不需要容器启动时 clone 源码。
+因此在 NAS 上**只需要一个 `docker-compose.yml` 文件**，一条命令即可运行：
 
 ```bash
-# 在 NAS 上建个目录，只放 docker-compose.yml 即可
+# 在 NAS 上建个目录，只放 docker-compose.yml（整份文件已含镜像地址与挂载配置）
 mkdir -p novel_dl_convert && cd novel_dl_convert
-# 把本仓库的 docker-compose.yml 下载/拷到这个目录（单独这一个文件就够）
-```
+# 把本仓库的 docker-compose.yml 下载/拷到这个目录
 
-> 如果你本机已有完整 git 仓库，也可以直接 `git clone https://github.com/735876214/novel_dl_convert.git`
-> 后 `docker compose up -d`——这种情况下源码已完整，容器会跳过 clone、直接用本地源码，启动更快。
-
-### 第二步：启动（免 build，自动拉源码）
-
-**默认免 build**：本仓库的 `docker-compose.yml` 基于官方 `python:3.12-slim` 镜像，挂载源码到容器、
-启动时自动安装依赖并拉起服务，**不要求本地 build 镜像**（适合部署平台拿不到 Dockerfile 的环境）。
-
-```bash
-# 在 docker-compose.yml 所在目录（即 novel_dl_convert/）内执行
-cd novel_dl_convert
+# 启动：自动从 ghcr.io 拉取「已含源码+依赖」的镜像并运行（无需 git / 无需 build / 无运行时 clone）
 docker compose up -d
 ```
 
-> `input/` `output/` `cookies/` `cache/` `config.yaml` 会由 Docker 自动创建（bind 挂载），
-> 首次启动无需手动 `mkdir`。`config.yaml` 若为空文件，应用会回退到内置默认值。
+> 首次会下载镜像（含 Python 依赖，约几百 MB，视网速 1~3 分钟，仅此一次，之后本地有缓存）；
+> 镜像下载完成即**秒级启动**，彻底告别之前「启动时 git clone 源码」的 2~4 分钟等待。
+> 之后日常重启 / NAS 重启恢复都是秒级。
+
+> 数据目录（`input/` `output/` `config/` `cookies/` `cache/`）首次启动由 Docker 自动创建，无需手动 `mkdir`；
+> 配置放 `./config/config.yaml`（留空则应用回退到内置默认值）。
 
 - 访问 http://<NAS-IP>:8000 上传 txt 转 EPUB
 - **输入放 `./input`，成品落 `./output`**，互不影响
 - 在线书源：`POST /search`、`POST /download`；内容预览：`GET /content?url=`、`GET /supported?url=`
 - Synology Container Manager / QNAP Container Station：直接导入本目录的 `docker-compose.yml` 即可
 
-### 启动速度（幂等，重启秒级）
+### 更新代码
 
-启动逻辑在 `start.sh` 里做了**幂等检查**：
-
-- **首次启动 / 容器重建**（依赖缺失）：才执行 `apt-get + pip install`，约 1~2 分钟。
-- 若挂载目录里源码不完整（只有 `docker-compose.yml`），首次还会额外 `apt-get 装 git + git clone`（约再 +1~2 分钟，仅此一次）；之后源码已落地，重建也不再重复 clone。
-- **日常重启**（同一容器，依赖已装）：`start.sh` 检测到 `node` 与关键 Python 包已存在，**直接跳过安装、秒级拉起 uvicorn** —— 不再每次重跑 `apt-get update`，NAS 重启 / 容器崩溃恢复等待从分钟级降到秒级。
-
-> 依赖装在容器自身文件系统（非挂载的源码目录），所以「同一容器重启」时保留、可跳过；
-> 只有「容器被重建」（如更换基础镜像）导致依赖丢失时才会再次完整安装。
-> 若想让重建也秒级启动，见下方「可选自建镜像」。
-
-### 为什么不需要 build（不强制本地 build）
-
-此前部署失败（`failed to read dockerfile` / `pull access denied`）是因为 compose 要求本地 build 镜像，
-而部署平台 / NAS 的 build 上下文拿不到完整 `Dockerfile`。现改为**直接用官方 Python 镜像 + 挂载源码**，
-彻底绕开 Dockerfile 依赖，部署门槛最低、不再有 build 步骤。
-
-### 首次运行需手动创建的目录
-
-`input/`、`output/`、`cookies/`、`cache/` 若不存在，先建好再启动（避免被挂载成文件）：
+仓库推新后，GitHub Actions 会自动重建并发布新镜像。NAS 上拉取最新镜像即可：
 
 ```bash
-mkdir -p input output cookies cache
+docker compose pull && docker compose up -d
 ```
 
-### （可选，非必须）自建镜像以获得更快启动
+### 为什么既没有本地 build、也没有运行时 clone
 
-若你的环境能正常 build、且希望启动更快，可基于仓库 `Dockerfile` 自行构建镜像（**这一步不是必须**）：
-
-```bash
-docker build -t novel_dl_convert .
-# 然后把 docker-compose.yml 里的 image 改成 novel_dl_convert 并去掉 command / 源码挂载段
-```
-
-> 默认免 build 方案已可直接运行，无需执行上面的 build。
+之前两种方案都有等待：免 build 方案在**容器启动时** `git clone` 源码（2~4 分钟）；
+本地 build 方案则要求 NAS 能 build 镜像（部署平台常拿不到 Dockerfile）。
+现改为 **CI 构建并把「源码 + 依赖」烤进 `ghcr.io` 公开镜像**：NAS 只是下载一个现成镜像，
+既不 build 也不 clone，部署后等待时间降到最低、更新也只需 `docker compose pull`。
 
 ### 目录结构
 

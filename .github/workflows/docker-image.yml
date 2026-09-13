@@ -1,18 +1,46 @@
-name: Docker Image CI
+name: Build and Push Image
 
+# 在每次推送到 main 时，把「源码 + 依赖」烤进镜像并发布到 ghcr.io。
+# NAS 端只需 docker compose up -d 即可拉取这个预构建镜像运行，无需本地 build、无需运行时 clone。
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
-
   build:
-
     runs-on: ubuntu-latest
-
     steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/735876214/novel_dl_convert:latest
+            ghcr.io/735876214/novel_dl_convert:${{ github.sha }}
+
+      # 公开镜像，确保 NAS 匿名即可 pull
+      - name: Ensure package is public
+        if: github.event_name == 'push'
+        continue-on-error: true
+        run: |
+          curl -fsSL -X PUT \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/user/packages/container/novel_dl_convert/visibility \
+            -d '{"visibility":"public"}'

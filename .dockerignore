@@ -1,0 +1,10 @@
+.git
+_test
+venv
+__pycache__
+*.pyc
+*.epub
+input
+output
+node_modules
+.workbuddy
