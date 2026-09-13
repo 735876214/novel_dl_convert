@@ -54,51 +54,46 @@ python -m novelforge update ./input/某书.txt
 
 ## Web 服务（NAS 部署）
 
-**标准方式（本地 build 镜像）：**
+**默认免 build**：本仓库的 `docker-compose.yml` 基于官方 `python:3.12-slim` 镜像，挂载源码到容器、
+启动时自动安装依赖并拉起服务，**不要求本地 build 镜像**（适合部署平台拿不到 Dockerfile 的环境）。
 
 ```bash
-# 必须在 docker-compose.yml 所在目录（即 novel_dl_convert/）内执行
+# 在 docker-compose.yml 所在目录（即 novel_dl_convert/）内执行
 cd novel_dl_convert
-docker compose up -d --build
+mkdir -p input output cookies cache   # 首次先建好挂载目录
+docker compose up -d
 ```
 
 - 访问 http://<NAS-IP>:8000 上传 txt 转 EPUB
 - **输入放 `./input`，成品落 `./output`**，互不影响
 - 在线书源：`POST /search`、`POST /download`；内容预览：`GET /content?url=`、`GET /supported?url=`
-- Synology Container Manager / QNAP Container Station：直接导入本目录的 `docker-compose.yml`
+- Synology Container Manager / QNAP Container Station：直接导入本目录的 `docker-compose.yml` 即可
+- 首次启动会 `apt-get + pip install`（约 1~2 分钟），之后只要容器不重建就无需重装
 
-### 部署目录要求（踩坑必读）
+### 为什么不需要 build（不强制本地 build）
 
-`docker compose` 的 build 上下文 = `docker-compose.yml` 所在目录。请务必满足：
-
-1. **在 `novel_dl_convert/` 目录内运行**（不要在上一级目录用 `docker compose -f novel_dl_convert/docker-compose.yml up`，否则上下文错位、找不到 Dockerfile）。
-2. 该目录必须包含**内容完整**的 `Dockerfile`（不是空文件）。日志若出现
-   `transferring dockerfile: 2B done` 或 `failed to read dockerfile: open Dockerfile: no such file or directory`，
-   即说明部署位置取到的 Dockerfile 为空 / 缺失——请确认整个目录已**完整上传或同步**，
-   不要只传了部分文件。
-3. `docker-compose.yml` 已**移除 `image` 字段**并显式声明 `build.context`/`dockerfile`，
-   避免某些平台带 `--pull` 时去 Docker Hub 拉取不存在的 `novel_dl_convert` 镜像而报
-   `pull access denied`（该报错只是噪音，真正致命的是上面的 Dockerfile 缺失）。
-
-### 免 build 备选（部署平台拿不到 Dockerfile 时）
-
-如果你的 NAS / 平台总是报 `open Dockerfile: no such file or directory`，不想排查上传目录，
-改用**免 build 方案**——直接基于官方 `python:3.12-slim` 镜像挂载源码运行，完全不依赖 Dockerfile：
-
-```bash
-docker compose -f docker-compose.nobuild.yml up -d
-```
-
-缺点：每次容器重建会重新 `apt-get + pip install`（约 1~2 分钟），但部署门槛最低、
-不依赖 build 上下文，适合反复调试部署环境。
+此前部署失败（`failed to read dockerfile` / `pull access denied`）是因为 compose 要求本地 build 镜像，
+而部署平台 / NAS 的 build 上下文拿不到完整 `Dockerfile`。现改为**直接用官方 Python 镜像 + 挂载源码**，
+彻底绕开 Dockerfile 依赖，部署门槛最低、不再有 build 步骤。
 
 ### 首次运行需手动创建的目录
 
-`input/`、`output/`、`cookies/`、`cache/` 若不存在，先建好再启动（避免挂载成文件）：
+`input/`、`output/`、`cookies/`、`cache/` 若不存在，先建好再启动（避免被挂载成文件）：
 
 ```bash
 mkdir -p input output cookies cache
 ```
+
+### （可选，非必须）自建镜像以获得更快启动
+
+若你的环境能正常 build、且希望启动更快，可基于仓库 `Dockerfile` 自行构建镜像（**这一步不是必须**）：
+
+```bash
+docker build -t novel_dl_convert .
+# 然后把 docker-compose.yml 里的 image 改成 novel_dl_convert 并去掉 command / 源码挂载段
+```
+
+> 默认免 build 方案已可直接运行，无需执行上面的 build。
 
 ### 目录结构
 

@@ -1,27 +1,30 @@
-# NovelForge — NAS / 容器部署
+# NovelForge — NAS / 容器部署（免 build，直接使用官方 Python 镜像）
+#
+# ⚠️ 不强制本地 build：基于官方 python:3.12-slim 镜像，把整个项目挂载到 /app，
+#    容器启动时自动安装依赖（apt + pip）并拉起服务。
+#    适合部署平台 / NAS 拿不到 Dockerfile、或不想本地构建镜像的环境。
+#
 # 目录职责严格分离：输入源文件、导出成品、配置/cookie/缓存各自独立挂载。
 #
-# ⚠️ 部署必读：
-# 1. 必须在「本文件所在目录」(novel_dl_convert/) 内运行 docker compose，
-#    不要在上一级目录用 -f 指向它——否则 build 上下文找不到 Dockerfile。
-# 2. 该目录必须包含【完整内容】的 Dockerfile（不是空文件）。日志里若出现
-#    "transferring dockerfile: 2B" / "open Dockerfile: no such file or directory"
-#    即说明取到的 Dockerfile 为空或目录不对，请确认上传/同步完整。
-# 3. 不写 image 字段，强制本地 build；避免某些平台带 --pull 时去 Docker Hub
-#    拉取一个不存在的 novel_dl_convert 镜像而报 "pull access denied"。
+# 用法（在 docker-compose.yml 所在目录内执行）：
+#   mkdir -p input output cookies cache
+#   docker compose up -d
+#
+# 注：首次启动会 apt-get + pip install（约 1~2 分钟），之后只要容器不重建就无需重装。
 services:
   novel_dl_convert:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: python:3.12-slim
     container_name: novel_dl_convert
     restart: unless-stopped
+    working_dir: /app
     ports:
       - "8000:8000"
     volumes:
-      # ① 输入目录：把待转换的 txt / 电子书源文件放这里（只读可选，转换不写回）
+      # 整个项目源码挂载进 /app（含 novelforge/、requirements.txt、config.yaml）
+      - ./:/app
+      # ① 输入目录：待转换的 txt / 电子书源文件
       - ./input:/app/input
-      # ② 导出目录：生成的 epub 等成品写到这里（与输入物理隔离，互不污染）
+      # ② 导出目录：生成的 epub 等成品写到这里（与输入物理隔离）
       - ./output:/app/output
       # ③ 配置：config.yaml 只读挂载（改了需重启容器生效）
       - ./config.yaml:/app/config/config.yaml:ro
@@ -31,8 +34,6 @@ services:
       - ./cache:/app/config/cache
     environment:
       - TZ=Asia/Shanghai
-      - PUID=1000
-      - PGID=1000
       - INPUT_DIR=/app/input
       - OUTPUT_DIR=/app/output
       - CONFIG_DIR=/app/config
@@ -42,6 +43,12 @@ services:
       # - LLM_API_KEY=
       # - LLM_BASE_URL=https://api.openai.com/v1
       # - LLM_MODEL=gpt-4o-mini
+    command: >
+      sh -c "apt-get update &&
+             apt-get install -y --no-install-recommends nodejs curl &&
+             rm -rf /var/lib/apt/lists/* &&
+             pip install --no-cache-dir -r /app/requirements.txt &&
+             uvicorn novelforge.server:app --host 0.0.0.0 --port 8000"
     healthcheck:
       test:
         - "CMD"
@@ -51,4 +58,4 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 20s
