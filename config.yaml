@@ -7,6 +7,29 @@ chapter_detection:
 
 traditionalize: false     # true=繁体转简体（opencc）
 
+# 输入目录自动监听：扔进 input 的文件自动处理，成品落 output，全程写活动日志
+watcher:
+  enabled: true           # 服务启动时自动监听（环境变量 AUTO_WATCH=false 可临时关闭）
+  interval: 5             # 轮询间隔（秒）；NAS 网络挂载建议 >=3s
+  recursive: false        # true=连子目录一起监听
+  settle_seconds: 1       # 文件写入稳定判定的单次等待
+  stable_rounds: 2        # 连续 N 次大小不变才认为上传完成
+  copy_non_txt: true      # 非 txt 文件原样导出到 output（记为「添加」）
+  process_existing: true  # 启动时处理 input 里已有的存量文件
+  max_retries: 3          # 单个文件失败重试上限，超过记一次失败并跳过
+  ignore:                 # 忽略规则（fnmatch，针对文件名）
+    - ".*"                # 隐藏文件
+    - "*.tmp"
+    - "*.part"
+    - "*.crdownload"
+    - "*.meta.json"       # 下载功能生成的 sidecar
+    - "*.log"
+
+# 活动日志（时间 / 文件名 / 操作 / 成功或失败）
+logging:
+  dir: ""                 # 留空=用环境变量 LOG_DIR（默认 /app/config/logs）
+  max_entries: 2000       # 接口读取的内存缓冲条数（落盘不受限）
+
 output:
   format: epub            # epub；mobi/azw3 需本机安装 Calibre 的 ebook-convert
 

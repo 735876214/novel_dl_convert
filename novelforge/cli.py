@@ -1,16 +1,44 @@
 import argparse
 import asyncio
 import json
+import logging
 import pathlib
 
-from .core import pipeline
+from .core import pipeline, activity_log, watcher as watcher_mod
 from . import config
 from .sources import DownloadManager
 
 
 def _load_cfg():
     config.ensure_dirs()
-    return config.load_config()
+    cfg = config.load_config()
+    d = (cfg.get("logging") or {}).get("dir")
+    if d:
+        activity_log.set_dir(d)
+    return cfg
+
+
+def _setup_logging(verbose: bool = True):
+    """让活动日志同步打到终端（watch / scan 时有用）。"""
+    if not verbose:
+        return
+    h = logging.StreamHandler()
+    h.setFormatter(logging.Formatter("%(asctime)s %(message)s", "%H:%M:%S"))
+    lg = logging.getLogger("novelforge.activity")
+    lg.setLevel(logging.INFO)
+    lg.handlers = [h]
+    lg.propagate = False
+
+
+def _print_summary(res: dict):
+    for it in res.get("converted", []):
+        print(f"  转换成功：{it['file']} → {it['output']}")
+    for it in res.get("added", []):
+        print(f"  添加成功：{it['file']} → {it['output']}")
+    for it in res.get("failed", []):
+        print(f"  失败：{it['file']}（{it['error']}）")
+    print(f"本轮：转换 {len(res.get('converted', []))} / 添加 {len(res.get('added', []))} / "
+          f"失败 {len(res.get('failed', []))}")
 
 
 def cmd_convert(args):
@@ -34,6 +62,42 @@ def cmd_convert(args):
                 pipeline.dispatch(f, out, opts)
     else:
         pipeline.dispatch(src, out, opts)
+
+
+def cmd_watch(args):
+    """持续监听输入目录，也可 --once 只跑一轮。"""
+    cfg = _load_cfg()
+    _setup_logging(True)
+    kw = {}
+    if args.interval:
+        kw["interval"] = args.interval
+    if args.recursive:
+        kw["recursive"] = True
+    w = watcher_mod.FolderWatcher(cfg=cfg, **kw)
+    if args.once:
+        print(f"扫描一次：{w.input_dir} → {w.output_dir}")
+        _print_summary(w.scan_once())
+        return
+    print(f"监听中：{w.input_dir} → {w.output_dir}（间隔 {w.interval}s，Ctrl+C 停止）")
+    w.run_forever()
+
+
+def cmd_logs(args):
+    """查看活动日志。"""
+    cfg = _load_cfg()
+    d = (cfg.get("logging") or {}).get("dir")
+    if d:
+        activity_log.set_dir(d)
+    items = activity_log.recent(limit=args.limit, action=args.action or "",
+                                status=args.status or "", q=args.q or "")
+    if not items:
+        print(f"（暂无日志，目录：{activity_log.log_dir()}）")
+        return
+    for e in reversed(items):      # 旧 → 新，符合 tail 习惯
+        out = f" → {e['output']}" if e.get("output") else ""
+        extra = f"（{e['detail']}）" if e.get("detail") else ""
+        print(f"{e['ts']} | {e['action']} | {e['status']} | {e['file']}{out}{extra}")
+    print(f"共 {len(items)} 条，日志目录：{activity_log.log_dir()}")
 
 
 async def cmd_search(args):
@@ -85,6 +149,24 @@ def main():
     pc.add_argument("--traditionalize", action="store_true", help="繁体转简体")
     pc.add_argument("-t", "--test-title", help="测试某标题是否能被正则识别（调试用）")
 
+    # watch（监听输入目录）
+    pw = sub.add_parser("watch", help="监听输入目录：txt 自动转 EPUB，非 txt 直接导出")
+    pw.add_argument("-i", "--interval", type=float, help="轮询间隔秒数（默认取 config.yaml）")
+    pw.add_argument("-r", "--recursive", action="store_true", help="递归监听子目录")
+    pw.add_argument("--once", action="store_true", help="只扫描一轮就退出（等同 scan）")
+
+    # scan（单次扫描）
+    pk = sub.add_parser("scan", help="立即扫描输入目录一轮（不常驻）")
+    pk.add_argument("-i", "--interval", type=float, help="（保留参数，单次扫描无需间隔）")
+    pk.add_argument("-r", "--recursive", action="store_true", help="递归扫描子目录")
+
+    # logs（查看活动日志）
+    pl = sub.add_parser("logs", help="查看转换 / 添加的活动日志")
+    pl.add_argument("-n", "--limit", type=int, default=50, help="显示条数（默认 50）")
+    pl.add_argument("--action", help="按操作过滤：转换 / 添加 / 跳过")
+    pl.add_argument("--status", help="按结果过滤：成功 / 失败")
+    pl.add_argument("-q", help="按文件名关键字过滤")
+
     # search
     ps = sub.add_parser("search", help="跨书源搜索（需开启 download）")
     ps.add_argument("title", help="书名关键词")
@@ -105,6 +187,11 @@ def main():
     cmd = args.cmd or "convert"
     if cmd in ("search", "download", "update"):
         asyncio.run(globals()[f"cmd_{cmd}"](args))
+    elif cmd == "scan":
+        args.once = True
+        cmd_watch(args)
+    elif cmd in ("watch", "logs"):
+        globals()[f"cmd_{cmd}"](args)
     else:
         cmd_convert(args)
 

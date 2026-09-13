@@ -27,11 +27,12 @@ $$(".tab").forEach((btn) => {
     $$(".tab").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
     const tab = btn.dataset.tab;
-    ["sources", "search", "output", "local"].forEach((t) => {
+    ["sources", "search", "output", "local", "logs"].forEach((t) => {
       $("#tab-" + t).style.display = t === tab ? "" : "none";
     });
     if (tab === "sources") loadSources();
     if (tab === "output") loadFiles();
+    if (tab === "logs") { loadWatcher(); loadLogs(); }
   });
 });
 
@@ -300,6 +301,102 @@ $("#localBtn").addEventListener("click", async () => {
     toast("转换失败：" + e.message, true);
   } finally { btn.disabled = false; }
 });
+
+// ---------------- 目录监听 ----------------
+async function loadWatcher() {
+  try {
+    const w = await api("/api/watcher");
+    const on = w.running;
+    $("#watchState").innerHTML =
+      '<span class="dot ' + (on ? "on" : "off") + '"></span>' +
+      (on ? "监听中" : "已停止") +
+      ' · ' + esc(w.input) + " → " + esc(w.output) +
+      ' · 间隔 ' + w.interval + "s" +
+      ' · 累计 转换 ' + (w.stats.converted || 0) + " / 添加 " + (w.stats.added || 0) +
+      " / 失败 " + (w.stats.failed || 0);
+    $("#watchStartBtn").disabled = on;
+    $("#watchStopBtn").disabled = !on;
+  } catch (e) {
+    $("#watchState").textContent = "状态加载失败：" + e.message;
+  }
+}
+
+$("#scanBtn").addEventListener("click", async () => {
+  const btn = $("#scanBtn"); btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = "扫描中…";
+  try {
+    const r = await api("/api/scan", { method: "POST" });
+    toast(`扫描完成：转换 ${r.converted.length} / 添加 ${r.added.length} / 失败 ${r.failed.length}`);
+    loadWatcher(); loadLogs(); loadFiles();
+  } catch (e) {
+    toast("扫描失败：" + e.message, true);
+  } finally { btn.disabled = false; btn.textContent = old; }
+});
+
+$("#watchStartBtn").addEventListener("click", async () => {
+  try { await api("/api/watcher/start", { method: "POST" }); toast("监听已启动"); loadWatcher(); }
+  catch (e) { toast("启动失败：" + e.message, true); }
+});
+
+$("#watchStopBtn").addEventListener("click", async () => {
+  try { await api("/api/watcher/stop", { method: "POST" }); toast("监听已停止"); loadWatcher(); }
+  catch (e) { toast("停止失败：" + e.message, true); }
+});
+
+// ---------------- 活动日志 ----------------
+$("#logRefreshBtn").addEventListener("click", () => loadLogs());
+$("#logAction").addEventListener("change", () => loadLogs());
+$("#logStatus").addEventListener("change", () => loadLogs());
+$("#logQuery").addEventListener("keydown", (e) => { if (e.key === "Enter") loadLogs(); });
+
+$("#logClearBtn").addEventListener("click", async () => {
+  if (!confirm("确定清空全部活动日志？")) return;
+  try { await api("/api/logs", { method: "DELETE" }); toast("日志已清空"); loadLogs(); }
+  catch (e) { toast("清空失败：" + e.message, true); }
+});
+
+async function loadLogs() {
+  const box = $("#logBox");
+  const p = new URLSearchParams({
+    limit: "300",
+    action: $("#logAction").value,
+    status: $("#logStatus").value,
+    q: $("#logQuery").value.trim(),
+  });
+  try {
+    const data = await api("/api/logs?" + p.toString());
+    $("#logSummary").textContent =
+      `共 ${data.count.total} 条（成功 ${data.count.success} / 失败 ${data.count.failed}），日志目录：${data.dir}`;
+    if (!data.items.length) { box.innerHTML = '<div class="empty">暂无记录</div>'; return; }
+    const rows = data.items.map((e) => {
+      const cls = e.status === "失败" ? "failed" : "";
+      const actCls = e.action === "转换" ? "convert" : e.action === "添加" ? "add" : "";
+      const stCls = e.status === "成功" ? "ok" : "fail";
+      const out = e.output ? " → " + esc(e.output) : "";
+      return (
+        '<tr class="' + cls + '">' +
+        '<td class="time">' + esc(e.ts) + "</td>" +
+        '<td><span class="tag ' + actCls + '">' + esc(e.action) + "</span></td>" +
+        '<td class="fname">' + esc(e.file) + out + "</td>" +
+        '<td><span class="tag ' + stCls + '">' + esc(e.status) + "</span></td>" +
+        '<td class="detail">' + esc(e.detail || "") + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+    box.innerHTML =
+      '<table class="logtable"><thead><tr>' +
+      "<th>时间</th><th>操作</th><th>文件名</th><th>结果</th><th>备注</th>" +
+      "</tr></thead><tbody>" + rows + "</tbody></table>";
+  } catch (e) {
+    box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + "</div>";
+  }
+}
+
+// 日志页自动刷新
+setInterval(() => {
+  if ($("#logAuto").checked && $("#tab-logs").style.display !== "none") loadLogs();
+}, 5000);
 
 // ---------------- 工具 ----------------
 function esc(s) {

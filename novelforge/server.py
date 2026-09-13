@@ -1,4 +1,6 @@
 import asyncio
+import contextlib
+import logging
 import pathlib
 import uuid
 
@@ -6,16 +8,54 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Body,
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .core import pipeline
+from .core import pipeline, activity_log
+from .core import watcher as watcher_mod
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
 
-# 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源目录存在
+# 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在
 # （用户书源在 novelforge.sources 包导入时已自动加载）
 config.ensure_dirs()
 
-app = FastAPI(title="NovelForge", version="0.4.0")
+# 全局监听器实例（生命周期内唯一）
+WATCHER: "watcher_mod.FolderWatcher | None" = None
+
+
+def _init_logging(cfg: dict):
+    """按配置指定日志目录（留空则用 LOG_DIR 默认值）。"""
+    d = (cfg.get("logging") or {}).get("dir")
+    if d:
+        activity_log.set_dir(d)
+
+
+def _start_watcher(cfg: dict) -> "watcher_mod.FolderWatcher":
+    global WATCHER
+    if WATCHER is None:
+        WATCHER = watcher_mod.FolderWatcher(cfg=cfg)
+    elif WATCHER.is_running():
+        return WATCHER
+    WATCHER.cfg = cfg
+    WATCHER.start()
+    return WATCHER
+
+
+@contextlib.asynccontextmanager
+async def lifespan(app: FastAPI):
+    cfg = config.load_config()
+    _init_logging(cfg)
+    if (cfg.get("watcher") or {}).get("enabled", True):
+        w = _start_watcher(cfg)
+        # 启动信息只进标准日志（docker logs），不污染「转换 / 添加」活动日志
+        logging.getLogger("novelforge").info(
+            "目录监听已启动：%s → %s（间隔 %ss）", w.input_dir, w.output_dir, w.interval
+        )
+    yield
+    if WATCHER is not None:
+        WATCHER.stop()
+
+
+app = FastAPI(title="NovelForge", version="0.5.0", lifespan=lifespan)
 
 STATIC_DIR = pathlib.Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -75,7 +115,13 @@ def index():
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "input": str(INPUT_DIR), "output": str(OUTPUT_DIR)}
+    return {
+        "status": "ok",
+        "input": str(INPUT_DIR),
+        "output": str(OUTPUT_DIR),
+        "watcher": bool(WATCHER and WATCHER.is_running()),
+        "logs": str(activity_log.log_dir()),
+    }
 
 
 # ---------------- 书源管理 ----------------
@@ -152,8 +198,19 @@ async def _run_download(tid: str, item: dict):
         )
         name = pathlib.Path(res).name
         TASKS[tid].update(status="done", result=f"/download/{name}", name=name)
+        activity_log.log_convert_ok(
+            item.get("title") or name, name, source="download",
+            size=(pathlib.Path(res).stat().st_size if pathlib.Path(res).exists() else None),
+        )
+        # 下载已顺带生成 EPUB，把刚落盘的 txt 登记为已处理，避免监听线程重复转换
+        if WATCHER is not None:
+            WATCHER.mark_recent(seconds=30, suffix=".txt")
     except Exception as e:
         TASKS[tid].update(status="failed", error=str(e))
+        activity_log.log_convert_fail(
+            item.get("title") or item.get("url") or "(未命名)",
+            f"{type(e).__name__}: {e}", source="download",
+        )
 
 
 @app.get("/api/tasks/{tid}")
@@ -182,19 +239,99 @@ def download_file(name: str):
     return FileResponse(target, filename=name)
 
 
+# ---------------- 目录监听（input → output）----------------
+
+def _get_watcher():
+    """惰性构造监听器（未启用监听时，手动扫描 / 查状态也要能用）。"""
+    global WATCHER
+    if WATCHER is None:
+        WATCHER = watcher_mod.FolderWatcher(cfg=config.load_config())
+    return WATCHER
+
+
+@app.get("/api/watcher")
+def api_watcher_status():
+    return _get_watcher().status()
+
+
+@app.post("/api/watcher/start")
+def api_watcher_start():
+    return {"ok": True, **_start_watcher(config.load_config()).status()}
+
+
+@app.post("/api/watcher/stop")
+def api_watcher_stop():
+    if WATCHER is not None:
+        WATCHER.stop()
+    return {"ok": True, "running": False}
+
+
+@app.post("/api/scan")
+async def api_scan():
+    """立即扫描一轮输入目录（不等下个轮询周期）。"""
+    w = _get_watcher()
+    w.cfg = config.load_config()
+    return await asyncio.to_thread(w.scan_once)
+
+
+# ---------------- 活动日志 ----------------
+
+@app.get("/api/logs")
+def api_logs(limit: int = Query(200, ge=1, le=5000), action: str = "",
+             status: str = "", q: str = ""):
+    return {
+        "items": activity_log.recent(limit=limit, action=action, status=status, q=q),
+        "count": activity_log.count(),
+        "dir": str(activity_log.log_dir()),
+    }
+
+
+@app.get("/api/logs/download")
+def api_logs_download():
+    p = activity_log.log_path()
+    if not p.is_file():
+        raise HTTPException(404, "暂无日志")
+    return FileResponse(p, filename="activity.log")
+
+
+@app.delete("/api/logs")
+def api_logs_clear():
+    return {"ok": activity_log.clear()}
+
+
 # ---------------- 兼容旧接口（脚本 / 油猴等）----------------
+
+def _log_dispatch(src: pathlib.Path, action: str, result, source: str, size=None):
+    """把一次分发结果写入活动日志，并登记为已处理（避免监听线程重复转换）。"""
+    out_name = pathlib.Path(result).name if result else ""
+    act = activity_log.ACTION_CONVERT if action == "convert" else activity_log.ACTION_ADD
+    activity_log.log(act, src.name, activity_log.STATUS_OK, output=out_name,
+                     size=size, source=source)
+    if WATCHER is not None:
+        try:
+            WATCHER.mark_processed(src)
+        except Exception:
+            pass
+
 
 @app.post("/convert")
 async def convert(file: UploadFile = File(...), traditionalize: bool = Form(False)):
     if not (file.filename or "").endswith(".txt"):
         raise HTTPException(400, "仅支持 .txt")
     src = INPUT_DIR / file.filename
+    data = await file.read()
     with open(src, "wb") as f:
-        f.write(await file.read())
-    action, result = pipeline.dispatch(
-        src, OUTPUT_DIR,
-        {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
-    )
+        f.write(data)
+    try:
+        action, result = pipeline.dispatch(
+            src, OUTPUT_DIR,
+            {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
+        )
+    except Exception as e:
+        activity_log.log_convert_fail(file.filename, f"{type(e).__name__}: {e}",
+                                      size=len(data), source="upload")
+        raise
+    _log_dispatch(src, action, result, "upload", size=len(data))
     return FileResponse(result, filename=pathlib.Path(result).name)
 
 
@@ -203,10 +340,15 @@ def convert_path(path: str = Form(...), traditionalize: bool = Form(False)):
     src = INPUT_DIR / path
     if not src.exists() or not src.is_file():
         raise HTTPException(404, "文件不存在")
-    action, result = pipeline.dispatch(
-        src, OUTPUT_DIR,
-        {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
-    )
+    try:
+        action, result = pipeline.dispatch(
+            src, OUTPUT_DIR,
+            {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
+        )
+    except Exception as e:
+        activity_log.log_convert_fail(src.name, f"{type(e).__name__}: {e}", source="api")
+        raise
+    _log_dispatch(src, action, result, "api", size=src.stat().st_size)
     return {"action": action, "result": str(result)}
 
 
