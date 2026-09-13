@@ -54,6 +54,26 @@ python -m novelforge update ./input/某书.txt
 
 ## Web 服务（NAS 部署）
 
+### 第一步：把「整套源码」拉到 NAS（关键，别手拷文件）
+
+本仓库所有运行所需文件（`docker-compose.yml`、`start.sh`、`requirements.txt`、`novelforge/`、`config.yaml` 等）
+都托管在 GitHub。**务必用 git 拉取整目录**，不要手动零散复制文件——之前 NAS 启动报 `cannot open /app/start.sh`、
+`Could not open requirements file`，就是因为只拷了部分文件、少了 `start.sh` / `requirements.txt`。
+
+```bash
+# 首次：在 NAS 上克隆整套源码
+git clone https://github.com/735876214/novel_dl_convert.git
+cd novel_dl_convert
+
+# 之后更新代码（比如本仓库发了新版）：在 novel_dl_convert/ 内直接拉取
+git pull
+```
+
+> 只要是从 GitHub 拉下来的 `novel_dl_convert/` 目录，就一定是完整的；`start.sh` 启动前也会做目录完整性自检，
+> 缺 `requirements.txt` / `novelforge/` 会直接打印 `[FATAL]` 并提示你 `git pull`，不会再以晦涩报错收场。
+
+### 第二步：启动（免 build）
+
 **默认免 build**：本仓库的 `docker-compose.yml` 基于官方 `python:3.12-slim` 镜像，挂载源码到容器、
 启动时自动安装依赖并拉起服务，**不要求本地 build 镜像**（适合部署平台拿不到 Dockerfile 的环境）。
 
