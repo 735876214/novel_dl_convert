@@ -54,25 +54,22 @@ python -m novelforge update ./input/某书.txt
 
 ## Web 服务（NAS 部署）
 
-### 第一步：把「整套源码」拉到 NAS（关键，别手拷文件）
+### 第一步：把 docker-compose.yml 放到 NAS（只需这一个文件）
 
-本仓库所有运行所需文件（`docker-compose.yml`、`start.sh`、`requirements.txt`、`novelforge/`、`config.yaml` 等）
-都托管在 GitHub。**务必用 git 拉取整目录**，不要手动零散复制文件——之前 NAS 启动报 `cannot open /app/start.sh`、
-`Could not open requirements file`，就是因为只拷了部分文件、少了 `start.sh` / `requirements.txt`。
+本仓库的 `docker-compose.yml` 已内置「启动自动拉取源码」逻辑：**容器启动时若发现挂载目录里缺 `start.sh`
+（即源码不完整），会自动从 GitHub `git clone` 完整仓库到 `/app`**，自动修复此前「缺 start.sh / requirements.txt」
+的报错。因此你在 NAS 上**只需要这一个 `docker-compose.yml` 文件**即可，其余源码由容器自动拉取，无需手动同步、也不用手拷文件。
 
 ```bash
-# 首次：在 NAS 上克隆整套源码
-git clone https://github.com/735876214/novel_dl_convert.git
-cd novel_dl_convert
-
-# 之后更新代码（比如本仓库发了新版）：在 novel_dl_convert/ 内直接拉取
-git pull
+# 在 NAS 上建个目录，只放 docker-compose.yml 即可
+mkdir -p novel_dl_convert && cd novel_dl_convert
+# 把本仓库的 docker-compose.yml 下载/拷到这个目录（单独这一个文件就够）
 ```
 
-> 只要是从 GitHub 拉下来的 `novel_dl_convert/` 目录，就一定是完整的；`start.sh` 启动前也会做目录完整性自检，
-> 缺 `requirements.txt` / `novelforge/` 会直接打印 `[FATAL]` 并提示你 `git pull`，不会再以晦涩报错收场。
+> 如果你本机已有完整 git 仓库，也可以直接 `git clone https://github.com/735876214/novel_dl_convert.git`
+> 后 `docker compose up -d`——这种情况下源码已完整，容器会跳过 clone、直接用本地源码，启动更快。
 
-### 第二步：启动（免 build）
+### 第二步：启动（免 build，自动拉源码）
 
 **默认免 build**：本仓库的 `docker-compose.yml` 基于官方 `python:3.12-slim` 镜像，挂载源码到容器、
 启动时自动安装依赖并拉起服务，**不要求本地 build 镜像**（适合部署平台拿不到 Dockerfile 的环境）。
@@ -80,9 +77,11 @@ git pull
 ```bash
 # 在 docker-compose.yml 所在目录（即 novel_dl_convert/）内执行
 cd novel_dl_convert
-mkdir -p input output cookies cache   # 首次先建好挂载目录
 docker compose up -d
 ```
+
+> `input/` `output/` `cookies/` `cache/` `config.yaml` 会由 Docker 自动创建（bind 挂载），
+> 首次启动无需手动 `mkdir`。`config.yaml` 若为空文件，应用会回退到内置默认值。
 
 - 访问 http://<NAS-IP>:8000 上传 txt 转 EPUB
 - **输入放 `./input`，成品落 `./output`**，互不影响
@@ -94,6 +93,7 @@ docker compose up -d
 启动逻辑在 `start.sh` 里做了**幂等检查**：
 
 - **首次启动 / 容器重建**（依赖缺失）：才执行 `apt-get + pip install`，约 1~2 分钟。
+- 若挂载目录里源码不完整（只有 `docker-compose.yml`），首次还会额外 `apt-get 装 git + git clone`（约再 +1~2 分钟，仅此一次）；之后源码已落地，重建也不再重复 clone。
 - **日常重启**（同一容器，依赖已装）：`start.sh` 检测到 `node` 与关键 Python 包已存在，**直接跳过安装、秒级拉起 uvicorn** —— 不再每次重跑 `apt-get update`，NAS 重启 / 容器崩溃恢复等待从分钟级降到秒级。
 
 > 依赖装在容器自身文件系统（非挂载的源码目录），所以「同一容器重启」时保留、可跳过；

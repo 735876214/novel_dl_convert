@@ -1,17 +1,21 @@
-# NovelForge — NAS / 容器部署（免 build，直接使用官方 Python 镜像）
+# NovelForge — NAS / 容器部署（免 build，且启动时自动从 GitHub 拉取完整源码）
 #
 # ⚠️ 不强制本地 build：基于官方 python:3.12-slim 镜像，把整个项目挂载到 /app，
 #    容器启动时自动安装依赖（apt + pip）并拉起服务。
 #    适合部署平台 / NAS 拿不到 Dockerfile、或不想本地构建镜像的环境。
 #
+# 🚀 自动拉取源码：若挂载目录里缺 start.sh（即源码不完整，之前「缺 start.sh /
+#    requirements.txt」就是这个原因），容器启动时会自动 git clone 完整仓库到 /app，
+#    自动修复「手拷部分文件导致缺文件」的问题；源码已完整则跳过、直接启动。
+#    因此 NAS 上「只需要这一个 docker-compose.yml 文件」即可，其余源码由容器自动拉取。
+#
 # 目录职责严格分离：输入源文件、导出成品、配置/cookie/缓存各自独立挂载。
 #
 # 用法（在 docker-compose.yml 所在目录内执行）：
-#   mkdir -p input output cookies cache
 #   docker compose up -d
 #
-# 注：首次启动会 apt-get + pip install（约 1~2 分钟）；之后容器重启时由 start.sh
-#     做幂等检查，依赖已装则跳过安装、秒级直接启动，极大缩短 NAS 重启等待。
+# 注：首次启动（源码缺失时）会 apt-get 装 git + git clone + apt/pip 装依赖，约 2~4 分钟；
+#     之后容器重启时由 start.sh 做幂等检查，依赖已装则跳过安装、秒级直接启动。
 #     仅当容器被「重建」（换了基础镜像等）导致依赖丢失时，才会再次完整安装。
 services:
   novel_dl_convert:
@@ -22,14 +26,15 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # 整个项目源码挂载进 /app（含 novelforge/、requirements.txt、config.yaml）
+      # 整个项目源码挂载进 /app（含 novelforge/、requirements.txt、config.yaml、start.sh）。
+      # 若此目录源码不完整，容器启动的 bootstrap 会自动从 GitHub 拉取完整仓库填补。
       - ./:/app
-      # ① 输入目录：待转换的 txt / 电子书源文件
+      # ① 输入目录：待转换的 txt / 电子书源文件（不存在会自动创建）
       - ./input:/app/input
       # ② 导出目录：生成的 epub 等成品写到这里（与输入物理隔离）
       - ./output:/app/output
-      # ③ 配置：config.yaml 只读挂载（改了需重启容器生效）
-      - ./config.yaml:/app/config/config.yaml:ro
+      # ③ 配置：config.yaml（不存在会自动创建为空文件，应用回退到内置默认值）
+      - ./config.yaml:/app/config/config.yaml
       # ④ Cookie 持久化：各书源登录态落盘，跨重启保留（下载功能用）
       - ./cookies:/app/config/cookies
       # ⑤ AI 分章缓存：按文本哈希缓存 LLM 结果，重复文件不二次计费
@@ -45,8 +50,28 @@ services:
       # - LLM_API_KEY=
       # - LLM_BASE_URL=https://api.openai.com/v1
       # - LLM_MODEL=gpt-4o-mini
-    # 幂等启动：依赖已装则跳过 apt/pip，秒级启动；详见 start.sh
-    command: ["sh", "/app/start.sh"]
+    # 启动引导：源码缺失则自动从 GitHub 拉取完整仓库到 /app；已存在则尝试 git pull 更新。
+    # 随后交由 start.sh 做依赖幂等安装并拉起 uvicorn。
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        if [ ! -f /app/start.sh ]; then
+          echo "[bootstrap] 未检测到完整源码，正在从 GitHub 拉取 novel_dl_convert ..."
+          apt-get update
+          apt-get install -y --no-install-recommends git
+          git clone --depth 1 https://github.com/735876214/novel_dl_convert.git /tmp/novel_src
+          cp -a /tmp/novel_src/. /app/
+          rm -rf /tmp/novel_src
+          echo "[bootstrap] 源码已就绪：/app/start.sh"
+        elif [ -d /app/.git ] && command -v git >/dev/null 2>&1; then
+          echo "[bootstrap] 源码已存在，尝试 git pull 更新 ..."
+          git -C /app pull --ff-only || true
+        else
+          echo "[bootstrap] 源码已存在，直接进入启动流程"
+        fi
+        sh /app/start.sh
     healthcheck:
       test:
         - "CMD"
@@ -56,5 +81,5 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      # 覆盖首次启动（apt+pip 约 1~2 分钟）的安装耗时；重启时秒级就绪，不受影响
-      start_period: 150s
+      # 覆盖首次启动（apt 装 git + git clone + apt/pip 约 2~4 分钟）的安装耗时；重启时秒级就绪
+      start_period: 300s
