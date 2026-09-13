@@ -18,6 +18,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 多架构：x86 NAS 与 ARM NAS（群晖部分机型 / 树莓派）都能直接 pull
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -25,14 +32,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 多阶段构建 + GHA 层缓存：源码没变时依赖层直接命中缓存，二次构建显著提速
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ./Dockerfile
           push: true
+          platforms: linux/amd64,linux/arm64
+          provenance: false # 关掉来源证明清单，避免老版本 Docker / 群晖套件拉多架构镜像时解析异常
+          build-args: |
+            APP_VERSION=${{ github.sha }}
           tags: |
             ghcr.io/735876214/novel_dl_convert:latest
             ghcr.io/735876214/novel_dl_convert:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # 公开镜像，确保 NAS 匿名即可 pull
       - name: Ensure package is public
