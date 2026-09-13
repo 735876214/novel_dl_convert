@@ -4,6 +4,7 @@ venv
 __pycache__
 *.pyc
 *.epub
+*.log
 input
 output
 node_modules

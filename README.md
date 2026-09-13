@@ -110,10 +110,54 @@ novel_dl_convert/
     server.py          FastAPI 服务（NAS 部署 + 内容预览 API）
     config.py          目录与配置解析
     core/              预处理 / 分章 / AI 分章 / 网络加固 / 元数据 / EPUB 组装 / 管线
-    sources/           书源适配器（gutenberg / generic 模板 / manager）
+    sources/           书源适配器（gutenberg 公版 / generic 模板 / rules 数据驱动 / store 用户源管理 / manager）
+    static/             Web 界面（index.html / style.css / app.js，卡片式单页，无需构建）
 ```
 
-## 扩展一个新书源
+## 数据驱动书源（可视化批量添加，无需写代码）
+
+除了写 Python 适配器，还可以用一段 **JSON 规则** 描述站点，在 Web 界面「书源管理」里**批量粘贴 / 上传**即可生效，无需改代码、无需重启。规则存到 `config/sources/<name>.json`（挂载目录，重建镜像不丢）。
+
+### Web 界面四个标签页
+- **书源管理**：查看已注册书源（内置/用户、公版/非公版），粘贴 JSON 或上传文件批量添加，可删除用户源。
+- **搜索下载**：输入书名跨全部书源搜索 → 结果可「预览」（看目录 + 首段样本）→ 点「下载并转 EPUB」后台抓取，按该书源规则分章并输出到导出目录，完成后直接下载成品。
+- **导出目录**：列出 EPUB 成品与下载留档的 txt，提供下载。
+- **本地转换**：上传本地 txt 直接转 EPUB（保留旧能力）。
+
+### 规则字段（JSON Schema 要点）
+```jsonc
+{
+  "name": "my_site",                  // 唯一标识（必填）
+  "display_name": "我的站",            // 展示名（可选）
+  "domains": ["example.com"],          // 域名白名单（必填，用于自动选源）
+  "public": false,                    // 是否公版/合规（默认 false）
+  "headers": {"User-Agent": "..."},   // 可选覆盖请求头
+  "concurrency": 8,                   // 并发抓取章节上限
+  "search": {                         // 搜索
+    "url": "https://x.com/s?q={title}",// {title} 会被 URL 编码替换
+    "mode": "css",                    // css | regex
+    "container": ".item",             // css：每条结果容器选择器
+    "fields": {"title": ".t", "author": ".a", "url": "a::attr(href)"}
+    // regex："pattern": "<a href=\"(?P<url>[^\"]+)\">(?P<title>[^<]+)</a>"
+  },
+  "book": {                           // 取书
+    "mode": "toc",                    // toc（目录式）| single（整页即全文）
+    "toc": {"mode": "css", "container": "#list a", "url_attr": "href"}
+    // regex："pattern": "<a href=\"(?P<href>[^\"]+)\"[^>]*>(?P<title>[^<]+)</a>"
+    "content": {"mode": "css", "container": "#content", "text": true}
+    // regex："pattern": "<div id=\"content\">([\\s\\S]*?)</div>"
+  },
+  "chapter": {                        // 分章（single 模式或全文后切分生效）
+    "mode": "toc",                    // toc（结构化，直接用目录）| regex | auto
+    "regex": "第\\s*\\d+\\s*章"        // mode=regex 时必填
+  }
+}
+```
+- 搜索 / 取书的解析均支持 **css 选择器**（需 `beautifulsoup4`，已加入依赖）与 **regex** 双通道，`::attr(name)` 取属性，空选择器 `""` 取元素自身文本。
+- **分章策略**：`book.mode=toc` 时直接用书目目录结构化分章（最干净，推荐）；`book.mode=single` + `chapter.mode=regex` 用该书源正则切全文；`chapter.mode=auto` 走全局正则/缩进/AI 检测。
+- 可一次粘贴 **JSON 数组** 或 **每行一条 JSON（JSONL）** 实现批量添加；示例见 `examples/sources/`（`example_regex.json` / `example_css.json`）。
+
+## 扩展一个新书源（代码方式）
 
 复制 `novelforge/sources/generic.py` 为 `my_site.py`，改 `name` / `domains`，实现 `search()` 与
 `fetch_book()`；若有字体加密 / 内容混淆，在 `decryption_js()` 返回解密片段，`render()` 会自动调用

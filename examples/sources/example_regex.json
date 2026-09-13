@@ -1,0 +1,22 @@
+{
+  "name": "my_regex_site",
+  "display_name": "我的正则书源(示例)",
+  "domains": ["example.com"],
+  "public": false,
+  "search": {
+    "url": "https://example.com/search?q={title}",
+    "mode": "regex",
+    "pattern": "<a href=\"(?P<url>[^\"]+)\"[^>]*>(?P<title>[^<]+)</a>"
+  },
+  "book": {
+    "mode": "toc",
+    "toc": {
+      "mode": "regex",
+      "pattern": "<a href=\"(?P<href>[^\"]+)\"[^>]*>(?P<title>[^<]+)</a>"
+    },
+    "content": {
+      "mode": "regex",
+      "pattern": "<div class=\"content\">([\\s\\S]*?)</div>"
+    }
+  }
+}

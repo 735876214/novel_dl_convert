@@ -7,7 +7,15 @@
 """
 import asyncio
 import json
+import re
 from pathlib import Path
+
+
+def _safe_name(s: str) -> str:
+    """把书名清洗为安全的文件名（去掉路径分隔与多数特殊字符）。"""
+    s = (s or "book").strip()
+    s = re.sub(r"[\\/:*?\"<>|]", "_", s)
+    return s[:120] or "book"
 
 from ..core import network, detect, pipeline
 from .base import REGISTRY
@@ -41,14 +49,16 @@ class DownloadManager:
             yield name, cls
 
     async def search(self, title: str) -> list[dict]:
+        """跨全部已注册书源搜索（含用户添加的非公版源；搜索是只读操作，不做 public 过滤）。"""
         out = []
-        for name, cls in self._visible_sources():
+        for name, cls in REGISTRY.items():
             src = cls()
             try:
                 async with self._client(src) as c:
                     items = await src.search(c, title) or []
                 for it in items:
                     it["_source"] = name
+                    it.setdefault("source_name", getattr(cls, "display_name", name))
                 out.extend(items)
             except Exception as e:  # 单源失败不影响其它源
                 print(f"[warn] 书源 {name} 搜索失败: {e}")
@@ -67,6 +77,65 @@ class DownloadManager:
         opts.setdefault("filename", item.get("title", "book"))
         meta = {"title": item.get("title", "未命名"), "author": item.get("author", "未知")}
         return pipeline.convert_text(text, Path(out_dir), opts, meta=meta)
+
+    async def download_to(self, item: dict, out_dir: Path, input_dir: Path, opts: dict) -> Path:
+        """下载整本书 → 落 txt 到输入目录（留档/可重转）→ 按书源分章方案转 EPUB 到导出目录。
+
+        - 书源提供结构化章节（目录式）时直接分章，最干净；否则抓全文后走全局检测/正则。
+        - 自动写 sidecar 元数据，便于日后增量更新。
+        """
+        out_dir, input_dir = Path(out_dir), Path(input_dir)
+        name = item.get("_source")
+        cls = REGISTRY.get(name)
+        if not cls:
+            raise ValueError(f"未知书源: {name}")
+        src = cls()
+        meta = {"title": item.get("title", "未命名"), "author": item.get("author", "未知")}
+
+        async with self._client(src) as c:
+            chapters = None
+            if hasattr(src, "fetch_book_chapters"):
+                try:
+                    chapters = await src.fetch_book_chapters(c, item)
+                except NotImplementedError:
+                    chapters = None
+            if not chapters:
+                text = await src.fetch_book(c, item)
+
+        safe = _safe_name(item.get("title", "book"))
+        opts = dict(opts)
+        opts.setdefault("cfg", self.cfg)
+        opts.setdefault("filename", safe)
+
+        if chapters:
+            txt_path = input_dir / f"{safe}.txt"
+            txt_path.write_text(
+                "\n\n".join(f"{c['title']}\n{c['body']}" for c in chapters),
+                encoding="utf-8",
+            )
+            self.write_sidecar(txt_path, item, out_dir)
+            return pipeline.convert_chapters(chapters, out_dir, opts, meta=meta)
+        else:
+            txt_path = input_dir / f"{safe}.txt"
+            txt_path.write_text(text, encoding="utf-8")
+            self.write_sidecar(txt_path, item, out_dir)
+            return pipeline.convert_text(text, out_dir, opts, meta=meta)
+
+    async def preview(self, item: dict) -> dict:
+        """廉价预览：返回目录标题列表 + 首段样本，供下载前确认。"""
+        name = item.get("_source")
+        cls = REGISTRY.get(name)
+        if not cls:
+            raise ValueError(f"未知书源: {name}")
+        src = cls()
+        if not hasattr(src, "preview"):
+            async with self._client(src) as c:
+                text = await src.fetch_book(c, item)
+            from ..core import detect
+            chaps = detect.detect_chapters(text)
+            return {"toc": [c["title"] for c in chaps[:50]], "sample": text[:1500]}
+        async with self._client(src) as c:
+            return await src.preview(c, item)
 
     # ---- 增量更新 ----
     async def update(self, txt_path: Path, opts: dict) -> Path:

@@ -1,0 +1,29 @@
+{
+  "name": "my_css_site",
+  "display_name": "我的CSS书源(示例)",
+  "domains": ["example.com"],
+  "public": false,
+  "search": {
+    "url": "https://example.com/search?q={title}",
+    "mode": "css",
+    "container": ".result-item",
+    "fields": {
+      "title": ".book-title",
+      "author": ".book-author",
+      "url": "a.book-link::attr(href)"
+    }
+  },
+  "book": {
+    "mode": "toc",
+    "toc": {
+      "mode": "css",
+      "container": "#chapter-list a",
+      "url_attr": "href"
+    },
+    "content": {
+      "mode": "css",
+      "container": "#chapter-content",
+      "text": true
+    }
+  }
+}

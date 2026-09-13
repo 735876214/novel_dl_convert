@@ -18,6 +18,7 @@ INPUT_DIR = pathlib.Path(os.getenv("INPUT_DIR", "/app/input"))
 OUTPUT_DIR = pathlib.Path(os.getenv("OUTPUT_DIR", "/app/output"))
 COOKIE_DIR = pathlib.Path(os.getenv("COOKIE_DIR", str(CONFIG_DIR / "cookies")))
 CACHE_DIR = pathlib.Path(os.getenv("CACHE_DIR", str(CONFIG_DIR / "cache")))
+SOURCES_DIR = pathlib.Path(os.getenv("SOURCES_DIR", str(CONFIG_DIR / "sources")))
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
 
 # 把解析后的目录回写环境变量，供其它模块（如 ai_detect）在 import 时读取
@@ -44,8 +45,8 @@ DEFAULTS = {
 
 
 def ensure_dirs():
-    """确保输入 / 导出 / 配置 / cookie / 缓存目录存在（容器启动时调用）。"""
-    for d in (INPUT_DIR, OUTPUT_DIR, CONFIG_DIR, COOKIE_DIR, CACHE_DIR):
+    """确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源目录存在（容器启动时调用）。"""
+    for d in (INPUT_DIR, OUTPUT_DIR, CONFIG_DIR, COOKIE_DIR, CACHE_DIR, SOURCES_DIR):
         try:
             d.mkdir(parents=True, exist_ok=True)
         except Exception:
