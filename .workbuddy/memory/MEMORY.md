@@ -21,7 +21,9 @@ FastAPI 服务 + CLI；可插拔书源（内置 Gutenberg 公版源 + 数据驱�
 - **沙箱环境**：Python 进程写系统临时目录（`%TEMP%`）会被杀（退出码 1、无任何输出），
   测试脚本的临时目录必须放在工作区内（如 `_test/_tmp`）；PowerShell 的 `Remove-Item` 也常失败，
   删文件用 Python；**PowerShell 工具不回显 stdout**，命令输出要重定向到文件再读。
-- `_test/` 已被 .gitignore 忽略（本地冒烟脚手架，不入库）；`.workbuddy/memory/` 需 `git add -f` 才会入库。
+- `_test/` 已被 .gitignore 忽略（本地冒烟脚手架，不入库）；`.workbuddy/` 用
+`.workbuddy/*` + `!.workbuddy/memory/` 放行——**否定规则必须写成不带尾斜杠的 `/*`**，
+写成 `.workbuddy/` 时子目录无法重新包含。
 
 ## 功能模块（截至 2026-09-14）
 
