@@ -55,7 +55,7 @@ def ensure_dirs():
 def load_config() -> dict:
     """加载配置：先取默认值，再用 YAML 文件中的字段覆盖。"""
     data = {k: (v.copy() if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
-    if CONFIG_FILE.exists():
+    if CONFIG_FILE.is_file():
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 loaded = yaml.safe_load(f) or {}

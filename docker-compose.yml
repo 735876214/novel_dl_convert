@@ -1,9 +1,19 @@
 # NovelForge — NAS / 容器部署
 # 目录职责严格分离：输入源文件、导出成品、配置/cookie/缓存各自独立挂载。
+#
+# ⚠️ 部署必读：
+# 1. 必须在「本文件所在目录」(novel_dl_convert/) 内运行 docker compose，
+#    不要在上一级目录用 -f 指向它——否则 build 上下文找不到 Dockerfile。
+# 2. 该目录必须包含【完整内容】的 Dockerfile（不是空文件）。日志里若出现
+#    "transferring dockerfile: 2B" / "open Dockerfile: no such file or directory"
+#    即说明取到的 Dockerfile 为空或目录不对，请确认上传/同步完整。
+# 3. 不写 image 字段，强制本地 build；避免某些平台带 --pull 时去 Docker Hub
+#    拉取一个不存在的 novel_dl_convert 镜像而报 "pull access denied"。
 services:
   novel_dl_convert:
-    build: .
-    image: novel_dl_convert:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: novel_dl_convert
     restart: unless-stopped
     ports:

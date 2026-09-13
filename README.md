@@ -54,14 +54,51 @@ python -m novelforge update ./input/某书.txt
 
 ## Web 服务（NAS 部署）
 
+**标准方式（本地 build 镜像）：**
+
 ```bash
+# 必须在 docker-compose.yml 所在目录（即 novel_dl_convert/）内执行
+cd novel_dl_convert
 docker compose up -d --build
 ```
 
 - 访问 http://<NAS-IP>:8000 上传 txt 转 EPUB
 - **输入放 `./input`，成品落 `./output`**，互不影响
 - 在线书源：`POST /search`、`POST /download`；内容预览：`GET /content?url=`、`GET /supported?url=`
-- Synology Container Manager / QNAP Container Station 均可直接导入本 `docker-compose.yml`
+- Synology Container Manager / QNAP Container Station：直接导入本目录的 `docker-compose.yml`
+
+### 部署目录要求（踩坑必读）
+
+`docker compose` 的 build 上下文 = `docker-compose.yml` 所在目录。请务必满足：
+
+1. **在 `novel_dl_convert/` 目录内运行**（不要在上一级目录用 `docker compose -f novel_dl_convert/docker-compose.yml up`，否则上下文错位、找不到 Dockerfile）。
+2. 该目录必须包含**内容完整**的 `Dockerfile`（不是空文件）。日志若出现
+   `transferring dockerfile: 2B done` 或 `failed to read dockerfile: open Dockerfile: no such file or directory`，
+   即说明部署位置取到的 Dockerfile 为空 / 缺失——请确认整个目录已**完整上传或同步**，
+   不要只传了部分文件。
+3. `docker-compose.yml` 已**移除 `image` 字段**并显式声明 `build.context`/`dockerfile`，
+   避免某些平台带 `--pull` 时去 Docker Hub 拉取不存在的 `novel_dl_convert` 镜像而报
+   `pull access denied`（该报错只是噪音，真正致命的是上面的 Dockerfile 缺失）。
+
+### 免 build 备选（部署平台拿不到 Dockerfile 时）
+
+如果你的 NAS / 平台总是报 `open Dockerfile: no such file or directory`，不想排查上传目录，
+改用**免 build 方案**——直接基于官方 `python:3.12-slim` 镜像挂载源码运行，完全不依赖 Dockerfile：
+
+```bash
+docker compose -f docker-compose.nobuild.yml up -d
+```
+
+缺点：每次容器重建会重新 `apt-get + pip install`（约 1~2 分钟），但部署门槛最低、
+不依赖 build 上下文，适合反复调试部署环境。
+
+### 首次运行需手动创建的目录
+
+`input/`、`output/`、`cookies/`、`cache/` 若不存在，先建好再启动（避免挂载成文件）：
+
+```bash
+mkdir -p input output cookies cache
+```
 
 ### 目录结构
 

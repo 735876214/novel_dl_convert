@@ -1,0 +1,51 @@
+# NovelForge — 免 build 备选部署（docker-compose.nobuild.yml）
+#
+# 适用场景：部署平台 / NAS 的 build 上下文拿不到 Dockerfile（报
+# "open Dockerfile: no such file or directory" / "transferring dockerfile: 2B"），
+# 又不想排查上传目录时，用本文件直接基于官方 python 镜像 + 挂载源码运行，
+# 完全不依赖本地 Dockerfile。
+#
+# 用法：
+#   docker compose -f docker-compose.nobuild.yml up -d
+#
+# 缺点：每次容器重建都会重新 apt-get + pip install（约 1~2 分钟），
+#       但无需 build 镜像、无需 Dockerfile，部署门槛最低。
+services:
+  novel_dl_convert:
+    image: python:3.12-slim
+    container_name: novel_dl_convert
+    restart: unless-stopped
+    working_dir: /app
+    ports:
+      - "8000:8000"
+    volumes:
+      # 整个项目挂载进 /app（含 novelforge/、requirements.txt、config.yaml）
+      - ./:/app
+      - ./input:/app/input
+      - ./output:/app/output
+      - ./config.yaml:/app/config/config.yaml:ro
+      - ./cookies:/app/config/cookies
+      - ./cache:/app/config/cache
+    environment:
+      - TZ=Asia/Shanghai
+      - INPUT_DIR=/app/input
+      - OUTPUT_DIR=/app/output
+      - CONFIG_DIR=/app/config
+      - COOKIE_DIR=/app/config/cookies
+      - CACHE_DIR=/app/config/cache
+    command: >
+      sh -c "apt-get update &&
+             apt-get install -y --no-install-recommends nodejs curl &&
+             rm -rf /var/lib/apt/lists/* &&
+             pip install --no-cache-dir -r /app/requirements.txt &&
+             uvicorn novelforge.server:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
