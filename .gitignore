@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+
+# 运行时目录（容器挂载点，不入库）
+input/
+output/
+
+# 构建 / 产物
+*.epub
+*.mobi
+*.azw3
+build/
+dist/
+*.egg-info/
+
+# 系统
+.DS_Store
+.git

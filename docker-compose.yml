@@ -1,0 +1,32 @@
+services:
+  novel_dl_convert:
+    build: .
+    image: novel_dl_convert:latest
+    container_name: novel_dl_convert
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      # 输入目录：把待转换的 txt / 电子书源文件放这里
+      - ./input:/app/input
+      # 导出目录：生成的 epub 等成品会写到这里（与输入目录物理隔离）
+      - ./output:/app/output
+      # 配置文件（只读挂载）
+      - ./config.yaml:/app/config/config.yaml:ro
+    environment:
+      - TZ=Asia/Shanghai
+      - PUID=1000
+      - PGID=1000
+      - INPUT_DIR=/app/input
+      - OUTPUT_DIR=/app/output
+      - CONFIG_DIR=/app/config
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
