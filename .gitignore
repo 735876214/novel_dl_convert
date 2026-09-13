@@ -28,4 +28,7 @@ _test/
 .DS_Store
 .git
 *.log
-.workbuddy/
+
+# AI 工作目录：仅记忆与脚本入库，其余忽略
+.workbuddy/*
+!.workbuddy/memory/
