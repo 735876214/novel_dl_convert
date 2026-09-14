@@ -26,11 +26,22 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DEFAULT_TIMEOUT=100
 
+# 顶层 ARG 只作用于 FROM 行，阶段内使用需重新声明
+ARG INSTALL_BUILD_TOOLS=1
+
 # 部分依赖在 arm64（很多 NAS 是 ARM）上可能没有现成 wheel，留一套构建工具兜底。
 # 这些工具只存在于本阶段，不会进入最终镜像。
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
-    && rm -rf /var/lib/apt/lists/*
+#
+# 本地网络受限（deb.debian.org 不稳定、502）时可跳过：
+#   docker build --build-arg INSTALL_BUILD_TOOLS=0 .
+# amd64 上本项目依赖均有现成 wheel，无需编译工具链；默认 1，CI 行为不变。
+RUN if [ "${INSTALL_BUILD_TOOLS}" = "0" ]; then \
+        echo "[builder] 跳过 build-essential（假定依赖均有现成 wheel）"; \
+    else \
+        apt-get -o Acquire::Retries=5 update \
+        && apt-get -o Acquire::Retries=5 install -y --no-install-recommends build-essential \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # 装进独立 venv：最终镜像整棵树拷过去即可，天然与系统 Python 隔离，也方便统一裁剪
 RUN python -m venv /opt/venv
@@ -38,8 +49,12 @@ ENV PATH="/opt/venv/bin:${PATH}"
 
 # 单独 COPY requirements.txt：依赖不变时复用缓存层，改源码不会触发重装
 COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r /tmp/requirements.txt
+
+# 允许替换 PyPI 源（国内网络 / 私有源），默认仍是官方源，CI 行为不变：
+#   docker build --build-arg PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple .
+ARG PIP_INDEX=https://pypi.org/simple
+RUN pip install --no-cache-dir --upgrade pip --index-url "${PIP_INDEX}" \
+    && pip install --no-cache-dir --index-url "${PIP_INDEX}" -r /tmp/requirements.txt
 
 # 裁剪 venv：运行时不再需要装包，pip / wheel 连同 native .so 的符号表一起去掉。
 # 说明：保留 setuptools / pkg_resources —— 少数库会在运行时 import 它们，为这几 MB 冒
@@ -56,6 +71,24 @@ RUN rm -rf /opt/venv/lib/python*/site-packages/pip \
 # ============================ 阶段 2：Node 源 ============================
 # 与 python:${PY_VERSION}-slim 同为 Debian bookworm 基线，glibc 版本一致，二进制可直接搬
 FROM node:${NODE_VERSION}-bookworm-slim AS nodejs
+
+# ============================ 阶段 2.5：前端构建 ============================
+# 构建 Vue 3 + Vite + Tailwind v4 前端，产物落 /web/dist。
+# node_modules 与源码都只活在本阶段，不会进入最终镜像。
+# 国内网络可换源：--build-arg NPM_REGISTRY=https://registry.npmmirror.com
+FROM node:${NODE_VERSION}-bookworm-slim AS frontend
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
+WORKDIR /web
+
+# 先 COPY 清单再装依赖：源码变动不会让依赖层失效
+COPY frontend/package.json frontend/package-lock.json frontend/.npmrc /web/
+RUN npm config set registry "${NPM_REGISTRY}" \
+    && npm ci --no-audit --no-fund
+
+COPY frontend/ /web/
+RUN npm run build
 
 # ============================ 阶段 3：运行镜像 ============================
 FROM python:${PY_VERSION}-slim AS runtime
@@ -85,8 +118,8 @@ ENV PYTHONUNBUFFERED=1 \
 # 运行期仅保留两类系统包：
 #   tzdata     —— 让 TZ=Asia/Shanghai 真正生效（slim 基线默认不带时区库）
 #   libstdc++6 —— Node 二进制的动态依赖；已存在时 apt 直接跳过，几乎不增加体积
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata libstdc++6 \
+RUN apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends tzdata libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
 # 只搬构建产物：venv 与 node 二进制，编译工具链 / apt 缓存自然被丢弃
@@ -98,6 +131,10 @@ WORKDIR /app
 # 精确 COPY，避免把本地 venv/、_test/、input/ 等目录带进镜像
 COPY start.sh requirements.txt config.yaml /app/
 COPY novelforge/ /app/novelforge/
+
+# 前端构建产物覆盖 static/v2（v2 已进 .dockerignore，镜像里只有这一份）。
+# 必须排在 COPY novelforge/ 之后，否则会被旧产物盖回去。
+COPY --from=frontend /web/dist/ /app/novelforge/static/v2/
 
 # 预建目录：保证配置文件以单文件方式挂载时挂载点一定存在
 RUN chmod +x /app/start.sh \

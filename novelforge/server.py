@@ -110,7 +110,15 @@ def _add_rules_list(rules: list) -> dict:
 
 @app.get("/")
 def index():
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    # 前端是 Vue 构建产物，落在 static/v2/（见 frontend/ 与 Dockerfile 的 frontend 阶段）。
+    # 产物不入库（.gitignore），由 `npm run deploy` 或镜像构建生成。
+    page = STATIC_DIR / "v2" / "index.html"
+    if not page.is_file():
+        raise HTTPException(
+            503,
+            "前端尚未构建：请在 frontend/ 下执行 npm install && npm run build && npm run deploy",
+        )
+    return FileResponse(str(page))
 
 
 @app.get("/health")
@@ -225,10 +233,18 @@ def api_task(tid: str):
 
 @app.get("/api/files")
 def list_files():
-    return {
-        "input": [f.name for f in sorted(INPUT_DIR.iterdir()) if f.is_file()],
-        "output": [f.name for f in sorted(OUTPUT_DIR.iterdir()) if f.is_file()],
-    }
+    def _stat(d):
+        out = []
+        for f in sorted(d.iterdir()):
+            if not f.is_file():
+                continue
+            try:
+                st = f.stat()
+                out.append({"name": f.name, "size": st.st_size, "mtime": st.st_mtime})
+            except OSError:
+                out.append({"name": f.name, "size": None, "mtime": None})
+        return out
+    return {"input": _stat(INPUT_DIR), "output": _stat(OUTPUT_DIR)}
 
 
 @app.get("/download/{name}")

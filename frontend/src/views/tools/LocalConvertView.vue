@@ -1,0 +1,233 @@
+<script setup lang="ts">
+import { computed, onMounted, ref } from 'vue'
+
+import Badge from '@/components/ui/Badge.vue'
+import Button from '@/components/ui/Button.vue'
+import Card from '@/components/ui/Card.vue'
+import PageHead from '@/components/ui/PageHead.vue'
+import { api, type FileEntry, type WatcherStatus } from '@/lib/api'
+import { useUiStore } from '@/stores/ui'
+
+/** 本地转换：拖拽上传 TXT → EPUB；监听目录状态与手动扫描。接真实 /convert、/api/watcher、/api/scan */
+const ui = useUiStore()
+
+const dragging = ref(false)
+const busy = ref(false)
+const traditionalize = ref(false)
+const watcher = ref<WatcherStatus | null>(null)
+const inputFiles = ref<FileEntry[]>([])
+const pathValue = ref('')
+const lastResult = ref('')
+
+const watcherRunning = computed(() => Boolean(watcher.value?.running))
+
+function fmtSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 ** 2).toFixed(2)} MB`
+}
+
+function refreshWatcher(): void {
+  api
+    .watcherStatus()
+    .then((s) => {
+      watcher.value = s
+    })
+    .catch((e: Error) => ui.toast(e.message))
+}
+
+function refreshInputs(): void {
+  api
+    .files()
+    .then((r) => {
+      inputFiles.value = r.input ?? []
+    })
+    .catch((e: Error) => ui.toast(e.message))
+}
+
+onMounted(() => {
+  refreshWatcher()
+  refreshInputs()
+})
+
+/** 用 Object URL 触发浏览器下载 */
+function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+function convertFiles(fileList: FileList | File[]): void {
+  const files = Array.from(fileList)
+  if (!files.length) return
+
+  busy.value = true
+  lastResult.value = ''
+  let done = 0
+
+  files.forEach((file) => {
+    api
+      .convertFile(file, traditionalize.value)
+      .then((blob) => {
+        const base = file.name.replace(/\.txt$/i, '')
+        saveBlob(blob, `${base}.epub`)
+        done += 1
+        lastResult.value = `已转换 ${done} / ${files.length}`
+      })
+      .catch((e: Error) => ui.toast(`${file.name}：${e.message}`))
+      .finally(() => {
+        if (done === files.length) {
+          busy.value = false
+          ui.toast('转换完成')
+          refreshInputs()
+        }
+      })
+  })
+}
+
+function onDrop(e: DragEvent): void {
+  dragging.value = false
+  if (e.dataTransfer?.files?.length) convertFiles(e.dataTransfer.files)
+}
+
+function onPick(e: Event): void {
+  const input = e.target as HTMLInputElement
+  if (input.files?.length) convertFiles(input.files)
+  input.value = ''
+}
+
+function convertByPath(): void {
+  const p = pathValue.value.trim()
+  if (!p) {
+    ui.toast('请填写 input 目录下的相对路径')
+    return
+  }
+  busy.value = true
+  api
+    .convertPath(p, traditionalize.value)
+    .then((blob) => {
+      saveBlob(blob, `${p.replace(/\.txt$/i, '')}.epub`)
+      lastResult.value = `已转换 ${p}`
+      ui.toast('转换完成')
+      refreshInputs()
+    })
+    .catch((e: Error) => ui.toast(e.message))
+    .finally(() => {
+      busy.value = false
+    })
+}
+
+function toggleWatcher(): void {
+  const action = watcherRunning.value ? api.watcherStop() : api.watcherStart()
+  action
+    .then(() => {
+      ui.toast(watcherRunning.value ? '已停止监听' : '已开启监听')
+      refreshWatcher()
+    })
+    .catch((e: Error) => ui.toast(e.message))
+}
+
+function scan(): void {
+  api
+    .scanNow()
+    .then(() => {
+      ui.toast('已触发一轮扫描')
+      refreshInputs()
+    })
+    .catch((e: Error) => ui.toast(e.message))
+}
+</script>
+
+<template>
+  <div>
+    <PageHead title="本地转换" desc="把 TXT 转成带目录的 EPUB，或交给监听目录自动处理" />
+
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <!-- 上传区 -->
+      <Card>
+        <h3 class="mb-2.5 text-[13px] font-semibold text-foreground">拖拽上传</h3>
+
+        <label
+          class="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-6 py-10 text-center transition-colors"
+          :class="dragging ? 'border-primary bg-[var(--shell-accent-wash)]' : 'border-border hover:border-primary/60'"
+          @dragover.prevent="dragging = true"
+          @dragleave.prevent="dragging = false"
+          @drop.prevent="onDrop"
+        >
+          <input type="file" accept=".txt" multiple class="hidden" @change="onPick">
+          <span class="grid h-11 w-11 place-items-center rounded-full bg-muted text-muted-foreground">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5">
+              <path d="M12 16V4M7.5 8.5L12 4l4.5 4.5M4 20h16" />
+            </svg>
+          </span>
+          <span class="mt-3 text-[13px] font-medium text-foreground">把 .txt 拖到这里，或点击选择</span>
+          <span class="mt-1 text-[11.5px] text-muted-foreground">支持多选，逐个转换并下载</span>
+        </label>
+
+        <label class="mt-3 flex cursor-pointer items-center gap-2 text-[12.5px] text-foreground">
+          <input v-model="traditionalize" type="checkbox" class="h-3.5 w-3.5 accent-[var(--primary)]">
+          转成繁体
+        </label>
+
+        <p v-if="lastResult" class="mt-2 text-[11.5px] text-success">{{ lastResult }}</p>
+        <p v-if="busy" class="mt-2 text-[11.5px] text-muted-foreground">转换中…</p>
+      </Card>
+
+      <!-- 路径转换 + 监听 -->
+      <div class="flex min-w-0 flex-col gap-4">
+        <Card>
+          <h3 class="mb-2.5 text-[13px] font-semibold text-foreground">按路径转换</h3>
+          <div class="flex items-center gap-2">
+            <input
+              v-model="pathValue"
+              type="text"
+              placeholder="相对 input 目录，例如 小说/某书.txt"
+              aria-label="待转换文件路径"
+              class="h-8 min-w-0 flex-1 rounded-md border border-border bg-muted px-3 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+              @keydown.enter="convertByPath"
+            >
+            <Button variant="primary" :disabled="busy" @click="convertByPath">转换</Button>
+          </div>
+
+          <h3 class="mt-5 mb-2 text-[13px] font-semibold text-foreground">input 目录</h3>
+          <div v-if="inputFiles.length" class="flex max-h-40 flex-col gap-1 overflow-y-auto">
+            <button
+              v-for="f in inputFiles"
+              :key="f.name"
+              type="button"
+              class="flex items-center gap-2 rounded-sm px-2 py-1 text-left transition-colors hover:bg-muted"
+              @click="pathValue = f.name"
+            >
+              <span class="min-w-0 flex-1 truncate text-[12px] text-foreground">{{ f.name }}</span>
+              <span class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ fmtSize(f.size) }}</span>
+            </button>
+          </div>
+          <p v-else class="text-[11.5px] text-muted-foreground">目录为空，拖文件进去或放进 input/ 目录。</p>
+        </Card>
+
+        <Card>
+          <div class="mb-2.5 flex items-center gap-2">
+            <h3 class="text-[13px] font-semibold text-foreground">目录监听</h3>
+            <Badge :tone="watcherRunning ? 'ok' : 'neutral'" class="ml-auto">
+              {{ watcherRunning ? '运行中' : '已停止' }}
+            </Badge>
+          </div>
+          <p class="mb-3 text-[11.5px] text-muted-foreground">
+            开启后，放进 input/ 的 TXT 会被自动转换并输出到 output/。
+          </p>
+          <div class="flex items-center gap-2">
+            <Button :variant="watcherRunning ? 'ghost' : 'primary'" @click="toggleWatcher">
+              {{ watcherRunning ? '停止监听' : '开启监听' }}
+            </Button>
+            <Button @click="scan">立即扫描一轮</Button>
+          </div>
+        </Card>
+      </div>
+    </div>
+  </div>
+</template>

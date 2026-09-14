@@ -1,0 +1,14 @@
+/* ── Radius presets ──────────────────────────────────────────
+   来源：BookOrbit（github.com/bookorbit/bookorbit, AGPL-3.0）
+        client/src/assets/theme/radius.css
+   Applied as a class on <html>. Default is :root value.
+   ────────────────────────────────────────────────────────────── */
+/* Shell cards follow the radius picker, capped so the pill preset
+   does not round a full-height panel into a lozenge. */
+:root {
+  --shell-radius: min(var(--radius), 1.25rem);
+}
+
+html.radius-sharp   { --radius: 0rem; }
+html.radius-rounded { --radius: 1.25rem; }
+html.radius-pill    { --radius: 2.5rem; }

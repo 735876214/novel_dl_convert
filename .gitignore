@@ -21,6 +21,10 @@ build/
 dist/
 *.egg-info/
 
+# 前端构建产物：由 frontend/ 构建生成（npm run deploy 或 Dockerfile 多阶段构建），
+# 不入库，避免源码与产物两份真值源。
+novelforge/static/v2/
+
 # 本地冒烟测试脚手架（非项目产物）
 _test/
 
@@ -28,7 +32,13 @@ _test/
 .DS_Store
 .git
 *.log
+*.err
 
-# AI 工作目录：仅记忆与脚本入库，其余忽略
+# AI 工作目录（两套约定并存）
+#   .workbuddy/ 由 WorkBuddy 环境使用；.codebuddy/ 由 CodeBuddy IDE 使用。
+#   两者都只放行 memory/ 入库（那是跨会话的项目知识），
+#   settings.local.json、plans/ 等本机状态一律忽略。
 .workbuddy/*
 !.workbuddy/memory/
+.codebuddy/*
+!.codebuddy/memory/

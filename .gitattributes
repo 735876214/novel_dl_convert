@@ -1,0 +1,7 @@
+# 统一换行符：容器内执行的脚本必须是 LF，否则 sh 报 set: Illegal option -
+*.sh text eol=lf
+Dockerfile text eol=lf
+
+# .dockerignore 也锁定 LF：本机 core.autocrlf=true，若不锁定，
+# 忽略规则会被写成 CRLF，容易在匹配时踩坑。
+.dockerignore text eol=lf

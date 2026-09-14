@@ -32,3 +32,10 @@ node_modules
 .pytest_cache
 .mypy_cache
 .workbuddy
+
+# 前端工程（顶层 frontend/）
+#   依赖与产物不进构建上下文：由 Dockerfile 的 frontend 阶段重新安装与构建。
+#   static/v2 是前端构建输出目录，同样排除，避免旧产物盖回去或残留旧 hash 资源。
+frontend/node_modules
+frontend/dist
+novelforge/static/v2

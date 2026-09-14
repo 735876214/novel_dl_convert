@@ -1,0 +1,300 @@
+/*
+ * NovelForge 前端全局样式入口
+ *
+ * 视觉层照搬 BookOrbit（github.com/bookorbit/bookorbit, AGPL-3.0）。
+ * 与上游的差异只有两处，均已在此注明：
+ *   1. 字体不用 @fontsource-variable/*，改用本地自托管的 fonts.css
+ *      （10 个 woff2，零外部请求，NAS 内网可用）
+ *   2. 未引入 tw-animate-css，动效由本文件的 keyframes 提供
+ */
+
+/* 字体必须在 tailwindcss 之前引入，保证 @font-face 先注册 */
+@import './fonts.css';
+
+@import 'tailwindcss';
+
+/*
+ * 主题层，顺序不能变：
+ *   tokens.css      定义 --background / --muted-foreground 等原子变量
+ *   accents.css     65 档 accent class，覆盖 --tint-h 与 --primary
+ *   radius.css      4 档圆角，覆盖 --radius 与 --shell-radius
+ *   bridge.css      @theme inline 桥接层，把变量映射成 Tailwind 工具类
+ *   cover-effects   书封视觉效果
+ * bridge.css 依赖 tokens.css 里的变量已存在，务必排在它之后。
+ */
+@import './theme/tokens.css';
+@import './theme/accents.css';
+@import './theme/radius.css';
+@import './theme/bridge.css';
+@import './theme/cover-effects.css';
+
+/*
+ * 消费层说明：外壳、仪表盘与全部视图**统一使用 Tailwind v4 工具类 + BookOrbit 语义 token**。
+ * 原先手写的消费层样式（app.css，迁移自 v2 style.css）已退役删除 —— 它的元素级基线
+ * 已并入下方 @layer base，组件级规则全部改为工具类写在模板里。
+ */
+
+/*
+ * 关键：Tailwind v4 的 dark: 变体默认跟随 prefers-color-scheme，
+ * 而本项目的深浅色由 <html class="dark"> 驱动（与 BookOrbit 一致）。
+ * 不声明这条，所有 dark: 工具类都不会生效。
+ */
+@custom-variant dark (&:is(.dark *));
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+
+  html,
+  body,
+  #app {
+    max-width: 100%;
+    overflow-x: clip;
+    overscroll-behavior-x: none;
+  }
+
+  @supports not (overflow: clip) {
+    html,
+    body,
+    #app {
+      overflow-x: hidden;
+    }
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-size: 14px;
+    line-height: 1.5;
+    transition:
+      background-color 0.15s cubic-bezier(0.4, 0, 0.2, 1),
+      color 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+
+  /* 元素级基线：原先由手写消费层提供，现统一并入 base 层。
+     组件里需要不同尺寸时用 Tailwind 的 h-* / w-* 覆盖即可（class 优先级高于元素选择器）。 */
+  svg {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+  }
+
+  button {
+    font-family: inherit;
+    cursor: pointer;
+    border: none;
+    background: none;
+    color: inherit;
+  }
+
+  input,
+  textarea,
+  select {
+    font-family: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: calc(var(--radius) - 4px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+
+  @supports (-webkit-touch-callout: none) {
+    @media (pointer: coarse) {
+      /* iOS Safari auto-zooms focused inputs below 16px. Keep editable controls at 16px on touch devices. */
+      input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']):not([type='file']):not([type='button']):not(
+          [type='submit']
+        ):not([type='reset']):not([data-ios-zoom-exempt]),
+      textarea:not([data-ios-zoom-exempt]),
+      select:not([data-ios-zoom-exempt]) {
+        font-size: 16px;
+      }
+    }
+  }
+
+  @media (pointer: coarse) {
+    .app-shell-inset,
+    .app-shell-scroll {
+      touch-action: pan-y;
+    }
+    /* Prevent double-tap zoom on tappable controls while preserving normal taps. */
+    a,
+    button,
+    [role='button'] {
+      touch-action: manipulation;
+    }
+  }
+
+  /* Webkit scrollbar styles */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: 10px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  /* A 10px scrollbar eats a visible slice of the sidebar's right gutter and makes the shell read as lopsided. Keep it narrow inside the sidebar only. */
+  [data-sidebar='content'] {
+    scrollbar-width: thin;
+  }
+  [data-sidebar='content']::-webkit-scrollbar {
+    width: 6px;
+  }
+  [data-sidebar='content']::-webkit-scrollbar-thumb {
+    border-width: 1px;
+  }
+}
+
+@layer components {
+  /* 书架横向滚动行需要它：隐藏滚动条但保留滚轮与拖拽 */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* ── Micro-animation keyframes ───────────────────────────────
+   Shared motion vocabulary used across all components.
+   Wrapped in prefers-reduced-motion so users who opt out get
+   instant transitions instead.
+   ──────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+  @keyframes shimmer {
+    from {
+      background-position: -400px 0;
+    }
+    to {
+      background-position: 400px 0;
+    }
+  }
+  @keyframes shake {
+    0%,
+    100% {
+      transform: translateX(0);
+    }
+    25% {
+      transform: translateX(-3px);
+    }
+    75% {
+      transform: translateX(3px);
+    }
+  }
+  @keyframes float {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-4px);
+    }
+  }
+  @keyframes count-pulse {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.1);
+    }
+  }
+  @keyframes progress-stripes {
+    from {
+      background-position: 1rem 0;
+    }
+    to {
+      background-position: 0 0;
+    }
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.25s ease-out both;
+  }
+  .animate-fade-up {
+    animation: fade-up 0.3s ease-out both;
+  }
+  .animate-scale-in {
+    animation: scale-in 0.25s ease-out both;
+  }
+  .animate-shimmer {
+    background: linear-gradient(90deg, transparent 0%, color-mix(in oklch, var(--foreground) 6%, transparent) 50%, transparent 100%);
+    background-size: 400px 100%;
+    animation: shimmer 1.5s infinite linear;
+  }
+  .animate-shake {
+    animation: shake 0.3s ease-in-out;
+  }
+  .animate-float {
+    animation: float 3s ease-in-out infinite;
+  }
+  .animate-count-pulse {
+    animation: count-pulse 0.2s ease-out;
+  }
+  .animate-progress-stripes {
+    background-image: linear-gradient(
+      45deg,
+      rgba(255, 255, 255, 0.1) 25%,
+      transparent 25%,
+      transparent 50%,
+      rgba(255, 255, 255, 0.1) 50%,
+      rgba(255, 255, 255, 0.1) 75%,
+      transparent 75%,
+      transparent
+    );
+    background-size: 1rem 1rem;
+    animation: progress-stripes 0.5s linear infinite;
+  }
+}

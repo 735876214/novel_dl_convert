@@ -1,0 +1,97 @@
+/* ── Tailwind theme bridge ───────────────────────────────────
+   照搬 BookOrbit（github.com/bookorbit/bookorbit, AGPL-3.0）
+   把 CSS 变量映射成 Tailwind 工具类。
+
+   使用 @theme inline 而非 @theme：inline 让生成的工具类直接引用
+   var(--background) 这类原子变量，而不是再注册一层 --color-background。
+   这样运行时切换主题（改 :root / .dark 的变量值）时，工具类无需重新
+   生成即可跟随变化 —— 这正是主题切换零重渲染的前提。
+
+   依赖 tokens.css / accents.css / radius.css 先于本文件引入。
+   ────────────────────────────────────────────────────────── */
+@theme inline {
+  /* 圆角：全部由单一 --radius 派生（radius.css 按档位覆盖它） */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+
+  /* 字体：与 fonts.css 里的 @font-face family 名严格对应 */
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-serif: 'Fraunces Variable', ui-serif, Georgia, serif;
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* 语义色对 */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  /* 状态色 */
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+
+  /* 业务专用色：书籍/卷册阅读状态与星级 */
+  --color-star-highlight: var(--star-highlight);
+  --color-volume-read: var(--volume-read);
+  --color-volume-reading: var(--volume-reading);
+  --color-volume-unread: var(--volume-unread);
+  --color-volume-missing: var(--volume-missing);
+
+  /* 表单与边框 */
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* 侧边栏 */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-count-foreground: var(--sidebar-count-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* 表面层级 */
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-surface-4: var(--surface-4);
+
+  /* 图案与差异视图（BookOrbit 原有命名空间，保留以便将来复用其组件） */
+  --color-pattern-token: var(--pattern-token);
+  --color-pattern-modifier: var(--pattern-modifier);
+  --color-pattern-optional: var(--pattern-optional);
+  --color-pattern-fallback: var(--pattern-fallback);
+  --color-diff-del: var(--diff-del);
+  --color-diff-ins: var(--diff-ins);
+  --color-path-dim: var(--path-dim);
+  --color-path-fold: var(--path-fold);
+
+  /* 阴影：映射到 elevation 层级 */
+  --shadow-xs: var(--elevation-xs);
+  --shadow-sm: var(--elevation-sm);
+  --shadow-md: var(--elevation-md);
+  --shadow-lg: var(--elevation-lg);
+  --shadow-xl: var(--elevation-xl);
+  --shadow-2xl: var(--elevation-2xl);
+}

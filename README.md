@@ -162,7 +162,7 @@ docker compose pull && docker compose up -d
 novel_dl_convert/
   docker-compose.yml   部署：input / output / config / cookies / cache 五处挂载
   start.sh             启动脚本（依赖已内置，自检后 exec uvicorn，秒级拉起）
-  Dockerfile           多阶段构建：builder(venv 依赖) + node(仅取二进制) + runtime(python-slim)
+  Dockerfile           多阶段构建：builder(venv 依赖) + node(仅取二进制) + frontend(Vue 构建) + runtime(python-slim)
   config.yaml          转换行为配置
   .env.example         环境变量示例
   novelforge/          Python 包
@@ -173,19 +173,46 @@ novel_dl_convert/
                        + activity_log.py（活动日志：时间 / 文件名 / 操作 / 成败）
                        + watcher.py（输入目录监听：txt 转 EPUB，非 txt 导出）
     sources/           书源适配器（gutenberg 公版 / generic 模板 / rules 数据驱动 / store 用户源管理 / manager）
-    static/             Web 界面（index.html / style.css / app.js，卡片式单页，无需构建）
+    static/v2/          前端构建产物（Vue + Tailwind，由 frontend/ 构建，不入库）
+  frontend/           前端工程（Vue 3 SFC + TypeScript + Vite 8 + Tailwind v4 + Pinia）
+    src/views/          仪表盘 / 探索发现 / 任务中心 / 书库 / 单书详情 / 设置 / 工具四页
+    src/components/     外壳（侧栏 / 顶栏 / 任务抽屉）+ UI 组件 + 仪表盘部件
+    src/stores/         Pinia：theme / nav / library / tasks / dashboard / ui
+    src/assets/theme/   照搬 BookOrbit 的 tokens / accents / radius / bridge / cover-effects
 ```
 
 ## 数据驱动书源（可视化批量添加，无需写代码）
 
 除了写 Python 适配器，还可以用一段 **JSON 规则** 描述站点，在 Web 界面「书源管理」里**批量粘贴 / 上传**即可生效，无需改代码、无需重启。规则存到 `config/sources/<name>.json`（挂载目录，重建镜像不丢）。
 
-### Web 界面四个标签页
-- **书源管理**：查看已注册书源（内置/用户、公版/非公版），粘贴 JSON 或上传文件批量添加，可删除用户源。
-- **搜索下载**：输入书名跨全部书源搜索 → 结果可「预览」（看目录 + 首段样本）→ 点「下载并转 EPUB」后台抓取，按该书源规则分章并输出到导出目录，完成后直接下载成品。
-- **导出目录**：列出 EPUB 成品与下载留档的 txt，提供下载。
-- **本地转换**：上传本地 txt 直接转 EPUB（保留旧能力）。
-- **转换日志**：查看输入目录监听状态（可启停、立即扫描）与全部活动日志（时间 / 文件名 / 操作 / 成败，支持按操作与结果过滤、自动刷新、下载、清空）。
+### Web 界面
+界面是 Vue 单页应用（hash 路由），侧栏分四块：
+
+- **仪表盘**：顶部统计部件（书库概览 / 年度目标环形 / 入库节奏柱状图）+ 下方横向滚动书架行；
+  右下角「调节」按钮可开关与拖拽排序部件、增删书架行（偏好存浏览器本地）。
+- **探索发现**：输入书名跨全部书源并发检索 → 结果可「预览」→ 点「下载」后台抓取，进度实时回写任务中心。
+- **任务中心**：下载 / 转换任务的统一列表，按状态筛选。
+- **书库 / 单书详情**：书卡网格与标签筛选；详情页含概览 / 目录 / 文件 / 批注四个标签。
+- **设置**：主题（浅色 / 深色 / 跟随系统）、65 档点缀色、四档圆角。
+- **工具**：
+  - **书源管理**：查看已注册书源，粘贴 JSON 或上传文件批量添加，可删除用户源。
+  - **导出目录**：列出 EPUB 成品与下载留档的 txt，提供下载。
+  - **本地转换**：拖拽上传本地 txt 直接转 EPUB、按路径转换、监听目录启停与立即扫描。
+  - **转换日志**：全部活动日志（时间 / 文件名 / 操作 / 成败，支持过滤、下载、清空）。
+
+#### 前端开发与构建
+```bash
+cd frontend
+npm install          # 依赖走 registry.npmmirror.com（见 frontend/.npmrc）
+npm run dev          # 开发：Vite dev server（HMR），/api /health /download 代理到 localhost:8993
+npm run build        # 产出到 frontend/dist
+npm run deploy       # 同步 dist → novelforge/static/v2（先删后拷）
+```
+
+> 生产镜像由 `Dockerfile` 的 `frontend` 阶段自动构建，无需本地执行 `deploy`。
+>
+> **注意**：dev server 看到的是最新源码，不等于 `dist` 最新 —— 验证生产服务前必须重新
+> `npm run build && npm run deploy`。
 
 ### 规则字段（JSON Schema 要点）
 ```jsonc
