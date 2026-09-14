@@ -6,7 +6,6 @@
  *   · count 不写时**不渲染计数胶囊**，等真实数据接上再填
  *   · 以 _ 开头的 id 目前没有对应视图，点击落占位页
  *   · 库 / 智能书架 / 收藏夹 的条目点击进入书库页
- *   · children 为缩进子条目（无组标题、无组间分隔线），当前只有「任务中心」用
  */
 import { COLLECTIONS, LIBRARIES, SMART_SHELVES, type NavEntry } from './collections'
 
@@ -18,11 +17,6 @@ export interface NavItem {
   count?: number
   /** 动态计数来源：目前只有任务中心用它取「运行中 + 排队中」 */
   countSource?: 'running'
-  /**
-   * 缩进子条目。当前只有「任务中心」用，且**只有一个**：「工具」汇总入口。
-   * 子条目单条时不做折叠（父项不加折叠箭头），故这里没有 collapsible 字段。
-   */
-  children?: NavItem[]
 }
 
 export interface NavGroup {
@@ -41,15 +35,10 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'dashboard', label: '仪表盘', icon: 'dash' },
       { id: 'search', label: '探索发现', icon: 'search' },
-      {
-        id: 'tasks',
-        label: '任务中心',
-        icon: 'task',
-        countSource: 'running',
-        // 「工具」不再独立成一个区域：只留一个汇总入口，缩进挂在任务中心下。
-        // 8 个工具在工具页内以标签栏切换（见 views/tools/ToolsLayout.vue）。
-        children: [{ id: 'tools', label: '工具', icon: 'wrench' }],
-      },
+      { id: 'tasks', label: '任务中心', icon: 'task', countSource: 'running' },
+      // 「工具」与任务中心**并列**（同属主导航这一层），但**不自成一块** ——
+      // 它是工具页的统一入口，8 个工具在页内用标签栏切换（见 views/tools/ToolsLayout.vue）。
+      { id: 'tools', label: '工具', icon: 'wrench' },
     ],
   },
   {
