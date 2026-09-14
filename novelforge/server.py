@@ -8,7 +8,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Body,
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .core import pipeline, activity_log
+from .core import pipeline, activity_log, library, fileops
 from .core import watcher as watcher_mod
 from . import config
 from .sources import REGISTRY, DownloadManager
@@ -313,6 +313,92 @@ def api_logs_download():
 @app.delete("/api/logs")
 def api_logs_clear():
     return {"ok": activity_log.clear()}
+
+
+# ---------------- 工具页：实体管理 / 批量重命名 / 重复书籍 / 缺失资源 ----------------
+# 数据源统一是扫描 OUTPUT_DIR（见 core/library.py）；会改磁盘的动作一律
+# 「先预览、再应用」，删除类走回收目录，全部写活动日志（见 core/fileops.py）。
+# 业务逻辑都在 core/ 里，这里只做参数校验与胶水。
+
+
+@app.get("/api/entities")
+def api_entities(type_: str = Query("author", alias="type")):
+    if type_ not in ("author", "series"):
+        raise HTTPException(400, "type 只能是 author 或 series")
+    return library.entities(type_)
+
+
+@app.post("/api/entities/rename/preview")
+def api_entity_rename_preview(payload: dict = Body(...)):
+    try:
+        return fileops.plan_entity_rename(
+            str(payload.get("type") or "author"),
+            str(payload.get("from") or ""),
+            str(payload.get("to") or ""),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/entities/rename/apply")
+def api_entity_rename_apply(payload: dict = Body(...)):
+    try:
+        return fileops.apply_rename(payload.get("items"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/entities/merge")
+def api_entity_merge(payload: dict = Body(...)):
+    """合并实体：与改名同构（源名 → 目标名），只返回预览，不直接改文件。"""
+    try:
+        return fileops.plan_merge(
+            str(payload.get("type") or "author"),
+            str(payload.get("source") or ""),
+            str(payload.get("target") or ""),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/rename/preview")
+def api_rename_preview(payload: dict = Body(...)):
+    try:
+        return fileops.plan_pattern_rename(
+            str(payload.get("scope") or "all"),
+            str(payload.get("pattern") or ""),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/rename/apply")
+def api_rename_apply(payload: dict = Body(...)):
+    try:
+        return fileops.apply_rename(payload.get("items"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/duplicates")
+def api_duplicates():
+    return library.duplicate_groups()
+
+
+@app.post("/api/duplicates/resolve")
+def api_duplicates_resolve(payload: dict = Body(...)):
+    try:
+        return fileops.resolve_duplicates(
+            str(payload.get("keep") or ""),
+            payload.get("remove") or [],
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/missing")
+def api_missing():
+    return library.missing_items()
 
 
 # ---------------- 兼容旧接口（脚本 / 油猴等）----------------

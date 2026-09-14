@@ -23,6 +23,11 @@ from datetime import datetime
 ACTION_CONVERT = "转换"   # txt → epub
 ACTION_ADD = "添加"       # 非 txt 文件直接导出到 output
 ACTION_SKIP = "跳过"      # 被忽略规则排除
+# 工具页（实体管理 / 批量重命名 / 重复书籍）对成品文件的改动。
+# 这两个取值是新增的，但与既有取值同构：同样只写「动作 + 文件名 + 成败」，
+# 前端日志表的「动作」列直接展示原值，无需改动。
+ACTION_RENAME = "重命名"  # 成品文件改名
+ACTION_RECYCLE = "清理"   # 移入回收目录（不真删）
 
 # ---- 结果 ----
 STATUS_OK = "成功"
