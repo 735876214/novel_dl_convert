@@ -1,0 +1,198 @@
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+
+import Button from '@/components/ui/Button.vue'
+import Card from '@/components/ui/Card.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import Icon from '@/components/ui/Icon.vue'
+import { api, type RenamePlan } from '@/lib/api'
+import { useUiStore } from '@/stores/ui'
+
+/**
+ * 批量重命名：按规则生成「旧名 → 新名」对照表，确认后才落盘。
+ *
+ * 规则由**服务端**解释（POST /api/rename/preview），前端只负责展示与勾选；
+ * 应用时回传的是预览过的具体条目，而不是规则 —— 避免同一套规则在两端解释不一致。
+ */
+const ui = useUiStore()
+
+const PATTERN_FIELDS = ['{title}', '{author}', '{series}', '{index}', '{ext}']
+
+const pattern = ref('{author} - {title}')
+const scope = ref('all')
+const plan = ref<RenamePlan | null>(null)
+const checked = ref<Record<string, boolean>>({})
+const busy = ref(false)
+
+const conflictCount = computed(() => (plan.value?.items ?? []).filter((i) => i.conflict).length)
+const selected = computed(() =>
+  (plan.value?.items ?? []).filter((i) => !i.conflict && checked.value[i.old]),
+)
+const selectedCount = computed(() => selected.value.length)
+const selectableCount = computed(() => (plan.value?.items ?? []).filter((i) => !i.conflict).length)
+
+const fields = computed(() => plan.value?.fields ?? PATTERN_FIELDS)
+
+function reset(): void {
+  plan.value = null
+  checked.value = {}
+}
+
+// 不挂 onActivated 重置：本页在 KeepAlive 下切换标签要保留「规则 + 预览表 + 勾选」
+// （需求明确要求切换不重置）。预览结果即使过期也不会改错文件 ——
+// 后端 apply 会逐条重新校验存在性与冲突，失效条目只会报错跳过。
+
+function makePreview(): void {
+  if (!pattern.value.trim()) {
+    ui.toast('请先填写重命名规则')
+    return
+  }
+  busy.value = true
+  api
+    .renamePreview(scope.value, pattern.value)
+    .then((r) => {
+      plan.value = r
+      // 默认勾选所有不冲突的条目
+      const next: Record<string, boolean> = {}
+      for (const it of r.items) next[it.old] = !it.conflict
+      checked.value = next
+      if (!r.items.length) ui.toast('没有匹配的文件')
+    })
+    .catch((e: Error) => ui.toast(e.message))
+    .finally(() => {
+      busy.value = false
+    })
+}
+
+function toggleOne(old: string): void {
+  checked.value[old] = !checked.value[old]
+}
+
+function toggleAll(): void {
+  const wantAll = selectedCount.value < selectableCount.value
+  const next: Record<string, boolean> = {}
+  for (const it of plan.value?.items ?? []) next[it.old] = !it.conflict && wantAll
+  checked.value = next
+}
+
+function apply(): void {
+  const items = selected.value
+  if (!items.length) {
+    ui.toast('还没有勾选任何条目')
+    return
+  }
+  busy.value = true
+  api
+    .renameApply(items)
+    .then((r) => {
+      const failed = r.errors.length
+      ui.toast(`已改名 ${r.count ?? 0} 个文件${failed ? `，${failed} 个失败` : ''}`)
+      reset()
+    })
+    .catch((e: Error) => ui.toast(e.message))
+    .finally(() => {
+      busy.value = false
+    })
+}
+</script>
+
+<template>
+  <div class="flex flex-col gap-4">
+    <Card>
+      <h3 class="text-[13px] font-semibold text-foreground">重命名规则</h3>
+      <p class="mt-1 mb-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
+        可用占位符：
+        <span v-for="(f, i) in fields" :key="f" class="font-mono text-foreground">
+          {{ f }}<span v-if="i < fields.length - 1">、</span>
+        </span>
+        （扩展名会自动保留在末尾）
+      </p>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <input
+          v-model="pattern"
+          type="text"
+          placeholder="{index}. {author} - {title}"
+          aria-label="重命名规则"
+          class="h-8 min-w-0 flex-1 rounded-md border border-border bg-muted px-3 font-mono text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+          @keydown.enter="makePreview"
+        >
+        <select
+          v-model="scope"
+          aria-label="格式筛选"
+          class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+        >
+          <option value="all">全部格式</option>
+          <option value="epub">仅 EPUB</option>
+          <option value="mobi">仅 MOBI</option>
+          <option value="azw3">仅 AZW3</option>
+          <option value="pdf">仅 PDF</option>
+          <option value="txt">仅 TXT</option>
+        </select>
+        <Button variant="primary" :disabled="busy" @click="makePreview">生成预览</Button>
+      </div>
+    </Card>
+
+    <Card v-if="plan && plan.items.length" padding="none">
+      <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+        <h3 class="text-[13px] font-semibold text-foreground">改名预览</h3>
+        <span class="text-[11.5px] text-muted-foreground">
+          共 {{ plan.items.length }} 项<template v-if="conflictCount">，{{ conflictCount }} 项冲突不可提交</template>
+        </span>
+        <Button size="sm" variant="ghost" class="ml-auto" @click="toggleAll">全选 / 全不选</Button>
+      </div>
+
+      <div class="max-h-[26rem] overflow-y-auto">
+        <div
+          v-for="p in plan.items"
+          :key="p.old"
+          class="flex items-start gap-2.5 border-b border-border/60 px-4 py-2.5 last:border-b-0"
+          :class="p.conflict ? 'opacity-55' : ''"
+        >
+          <input
+            type="checkbox"
+            class="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--primary)]"
+            :checked="!!checked[p.old]"
+            :disabled="p.conflict"
+            :aria-label="`选择 ${p.old}`"
+            @change="toggleOne(p.old)"
+          >
+          <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+            <div class="flex items-center gap-2 text-[12px]">
+              <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="p.old">{{ p.old }}</span>
+              <Icon name="arrowRight" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span
+                class="min-w-0 flex-1 truncate font-medium"
+                :class="p.conflict ? 'text-destructive' : 'text-foreground'"
+                :title="p.new"
+              >
+                {{ p.new }}
+              </span>
+            </div>
+            <div v-if="p.conflict" class="text-[11px] text-destructive">冲突：{{ p.reason }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 border-t border-border px-4 py-3">
+        <span class="text-[11.5px] text-muted-foreground">
+          将改名 <span class="font-semibold text-foreground tabular-nums">{{ selectedCount }}</span> 个文件
+        </span>
+        <Button variant="primary" class="ml-auto" :disabled="busy || !selectedCount" @click="apply">
+          应用
+        </Button>
+      </div>
+    </Card>
+
+    <EmptyState
+      v-else-if="plan"
+      icon="pencil"
+      title="没有匹配的文件"
+      desc="换个规则，或把格式筛选切回「全部格式」。"
+    />
+
+    <Card v-else class="py-10 text-center text-[12.5px] text-muted-foreground">
+      填一条规则后点「生成预览」，会先列出「旧名 → 新名」对照表，由你确认后才真正落盘。
+    </Card>
+  </div>
+</template>

@@ -6,6 +6,7 @@
  *   · count 不写时**不渲染计数胶囊**，等真实数据接上再填
  *   · 以 _ 开头的 id 目前没有对应视图，点击落占位页
  *   · 库 / 智能书架 / 收藏夹 的条目点击进入书库页
+ *   · children 为缩进子条目（无组标题、无组间分隔线），当前只有「任务中心」用
  */
 import { COLLECTIONS, LIBRARIES, SMART_SHELVES, type NavEntry } from './collections'
 
@@ -17,6 +18,11 @@ export interface NavItem {
   count?: number
   /** 动态计数来源：目前只有任务中心用它取「运行中 + 排队中」 */
   countSource?: 'running'
+  /**
+   * 缩进子条目。当前只有「任务中心」用，且**只有一个**：「工具」汇总入口。
+   * 子条目单条时不做折叠（父项不加折叠箭头），故这里没有 collapsible 字段。
+   */
+  children?: NavItem[]
 }
 
 export interface NavGroup {
@@ -35,19 +41,15 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'dashboard', label: '仪表盘', icon: 'dash' },
       { id: 'search', label: '探索发现', icon: 'search' },
-      { id: 'tasks', label: '任务中心', icon: 'task', countSource: 'running' },
-    ],
-  },
-  {
-    // 「工具」原为单个空占位项（功能待定）。v1 的四个功能页迁移完成后，
-    // 它升级为可折叠组：书源管理 / 导出目录 / 本地转换 / 转换日志。
-    title: '工具',
-    collapsible: true,
-    items: [
-      { id: 'tools-sources', label: '书源管理', icon: 'source' },
-      { id: 'tools-output', label: '导出目录', icon: 'file' },
-      { id: 'tools-local', label: '本地转换', icon: 'convert' },
-      { id: 'tools-logs', label: '转换日志', icon: 'note' },
+      {
+        id: 'tasks',
+        label: '任务中心',
+        icon: 'task',
+        countSource: 'running',
+        // 「工具」不再独立成一个区域：只留一个汇总入口，缩进挂在任务中心下。
+        // 8 个工具在工具页内以标签栏切换（见 views/tools/ToolsLayout.vue）。
+        children: [{ id: 'tools', label: '工具', icon: 'wrench' }],
+      },
     ],
   },
   {
@@ -90,7 +92,6 @@ export function isShelfGroup(title: string): boolean {
 
 /** 占位视图的元信息。迁移自 v2 app.js 的 VIEW_META（639–648） */
 export const VIEW_META: Record<string, { icon: string; title: string; desc: string }> = {
-  tools: { icon: 'wrench', title: '工具', desc: '功能待定，后续再补' },
   _authors: { icon: 'users', title: '作者', desc: '按作者浏览' },
   _series: { icon: 'layers', title: '系列', desc: '按系列浏览' },
   _notes: { icon: 'pencil', title: '批注', desc: '全部摘录与笔记' },

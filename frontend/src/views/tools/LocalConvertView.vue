@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, ref } from 'vue'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
-import PageHead from '@/components/ui/PageHead.vue'
 import { api, type FileEntry, type WatcherStatus } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
@@ -45,7 +44,10 @@ function refreshInputs(): void {
     .catch((e: Error) => ui.toast(e.message))
 }
 
-onMounted(() => {
+// 工具页子页在 KeepAlive 下不会重新挂载，所以刷新挂在 onActivated；
+// 它在「首次挂载」时也会触发，因此不需要再挂 onMounted（否则会重复请求）。
+// 本页没有定时器/轮询，onActivated 反复触发也不会叠加句柄。
+onActivated(() => {
   refreshWatcher()
   refreshInputs()
 })
@@ -145,12 +147,13 @@ function scan(): void {
 
 <template>
   <div>
-    <PageHead title="本地转换" desc="把 TXT 转成带目录的 EPUB，或交给监听目录自动处理" />
-
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <!-- 上传区 -->
       <Card>
-        <h3 class="mb-2.5 text-[13px] font-semibold text-foreground">拖拽上传</h3>
+        <h3 class="text-[13px] font-semibold text-foreground">拖拽上传</h3>
+        <p class="mt-1 mb-2.5 text-[11.5px] text-muted-foreground">
+          把 TXT 转成带目录的 EPUB，或交给下方的监听目录自动处理。
+        </p>
 
         <label
           class="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed px-6 py-10 text-center transition-colors"

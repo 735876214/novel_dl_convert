@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, ref } from 'vue'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import PageHead from '@/components/ui/PageHead.vue'
 import { api, type FileEntry } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
@@ -46,7 +45,9 @@ function load(): void {
     })
 }
 
-onMounted(load)
+// 工具页子页在 KeepAlive 下不会重新挂载，所以刷新挂在 onActivated；
+// 它在「首次挂载」时也会触发，因此不需要再挂 onMounted（否则会重复请求）。
+onActivated(load)
 
 function download(name: string): void {
   window.location.href = api.downloadUrl(name)
@@ -55,11 +56,6 @@ function download(name: string): void {
 
 <template>
   <div>
-    <PageHead
-      title="导出目录"
-      :desc="`${files.length} 个成品文件 · 合计 ${fmtSize(totalSize)}`"
-    />
-
     <div class="mb-4 flex items-center gap-2">
       <Button variant="primary" @click="load">刷新列表</Button>
       <span class="text-[11.5px] text-muted-foreground">
@@ -72,6 +68,13 @@ function download(name: string): void {
     </Card>
 
     <Card v-else-if="files.length" padding="none">
+      <div class="flex items-center gap-2 border-b border-border px-4 py-3">
+        <h3 class="text-[13px] font-semibold text-foreground">成品文件</h3>
+        <span class="text-[11.5px] text-muted-foreground">
+          {{ files.length }} 个 · 合计 {{ fmtSize(totalSize) }}
+        </span>
+      </div>
+
       <div
         v-for="f in files"
         :key="f.name"

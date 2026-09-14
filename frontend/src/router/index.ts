@@ -7,10 +7,15 @@ import PlaceholderView from '@/views/PlaceholderView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 import ShelfView from '@/views/ShelfView.vue'
 import TaskCenterView from '@/views/TaskCenterView.vue'
+import BulkRenameView from '@/views/tools/BulkRenameView.vue'
+import DuplicateBooksView from '@/views/tools/DuplicateBooksView.vue'
+import EntityManagerView from '@/views/tools/EntityManagerView.vue'
 import LocalConvertView from '@/views/tools/LocalConvertView.vue'
 import LogsView from '@/views/tools/LogsView.vue'
+import MissingResourcesView from '@/views/tools/MissingResourcesView.vue'
 import OutputView from '@/views/tools/OutputView.vue'
 import SourcesView from '@/views/tools/SourcesView.vue'
+import ToolsLayout from '@/views/tools/ToolsLayout.vue'
 
 /**
  * 使用 hash history：FastAPI 没有 SPA 兜底路由，
@@ -29,12 +34,23 @@ const router = createRouter({
     { path: '/book/:id', name: 'book', component: BookDetailView },
     { path: '/settings', name: 'settings', component: SettingsView },
 
-    // 工具：v1 五个功能页
-    { path: '/tools', redirect: '/tools/sources' },
-    { path: '/tools/sources', name: 'tools-sources', component: SourcesView },
-    { path: '/tools/output', name: 'tools-output', component: OutputView },
-    { path: '/tools/local', name: 'tools-local', component: LocalConvertView },
-    { path: '/tools/logs', name: 'tools-logs', component: LogsView },
+    // 工具：单页 + 顶部下划线标签栏（ToolsLayout），8 个子路由。
+    // 子路由 name 沿用 BookOrbit 的命名（tools-entity-manager 等），便于与上游对照。
+    {
+      path: '/tools',
+      component: ToolsLayout,
+      children: [
+        { path: '', redirect: { name: 'tools-entity-manager' } },
+        { path: 'entities', name: 'tools-entity-manager', component: EntityManagerView },
+        { path: 'rename', name: 'tools-bulk-rename', component: BulkRenameView },
+        { path: 'duplicates', name: 'tools-duplicate-books', component: DuplicateBooksView },
+        { path: 'missing', name: 'tools-missing-resources', component: MissingResourcesView },
+        { path: 'sources', name: 'tools-sources', component: SourcesView },
+        { path: 'output', name: 'tools-output', component: OutputView },
+        { path: 'local', name: 'tools-local', component: LocalConvertView },
+        { path: 'logs', name: 'tools-logs', component: LogsView },
+      ],
+    },
 
     // 尚未实现的视图：/placeholder/_authors、/placeholder/notify …
     { path: '/placeholder/:id', name: 'placeholder', component: PlaceholderView },

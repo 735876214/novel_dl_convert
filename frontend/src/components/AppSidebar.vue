@@ -20,10 +20,8 @@ const PATH_BY_ID: Record<string, string> = {
   dashboard: '/',
   search: '/explore',
   tasks: '/tasks',
-  'tools-sources': '/tools/sources',
-  'tools-output': '/tools/output',
-  'tools-local': '/tools/local',
-  'tools-logs': '/tools/logs',
+  // 「工具」是唯一入口，8 个工具在工具页内用标签栏切换
+  tools: '/tools',
 }
 
 function pathFor(id: string): string {
@@ -34,10 +32,8 @@ function pathFor(id: string): string {
 const PATH_TO_ID: Array<[string, string]> = [
   ['/explore', 'search'],
   ['/tasks', 'tasks'],
-  ['/tools/sources', 'tools-sources'],
-  ['/tools/output', 'tools-output'],
-  ['/tools/local', 'tools-local'],
-  ['/tools/logs', 'tools-logs'],
+  // 前缀匹配：/tools 覆盖全部 8 个工具子路径，故任意标签下「工具」项都保持高亮
+  ['/tools', 'tools'],
 ]
 
 const activeId = computed(() => {
@@ -135,28 +131,60 @@ function onItemClick(groupTitle: string | null, item: NavItem): void {
           </div>
 
           <div v-if="group.items.length">
-            <div
-              v-for="item in group.items"
-              v-show="nav.itemVisible(group.title ?? '', item)"
-              :key="item.id"
-              class="flex cursor-pointer items-center gap-[0.5625rem] rounded-md px-[0.625rem] py-[0.4375rem] text-[13px] transition-colors select-none"
-              :class="
-                isActive(item.id)
-                  ? 'bg-[var(--shell-accent-tint)] font-semibold text-primary opacity-100'
-                  : 'text-sidebar-foreground opacity-[0.78] hover:bg-[var(--shell-accent-wash)] hover:opacity-100'
-              "
-              @click="onItemClick(group.title, item)"
-            >
-              <Icon :name="item.icon" class="h-[0.9375rem] w-[0.9375rem] opacity-80" />
-              <span class="truncate">{{ item.label }}</span>
-              <span
-                v-if="navCount(item) !== null"
-                class="ml-auto shrink-0 rounded-full px-[0.4375rem] py-1 text-[10.5px] leading-none font-medium text-sidebar-count-foreground tabular-nums"
-                :class="isActive(item.id) ? 'bg-[var(--shell-accent-line)] text-primary' : 'bg-muted'"
+            <template v-for="item in group.items" :key="item.id">
+              <div
+                v-show="nav.itemVisible(group.title ?? '', item)"
+                class="flex cursor-pointer items-center gap-[0.5625rem] rounded-md px-[0.625rem] py-[0.4375rem] text-[13px] transition-colors select-none"
+                :class="
+                  isActive(item.id)
+                    ? 'bg-[var(--shell-accent-tint)] font-semibold text-primary opacity-100'
+                    : 'text-sidebar-foreground opacity-[0.78] hover:bg-[var(--shell-accent-wash)] hover:opacity-100'
+                "
+                @click="onItemClick(group.title, item)"
               >
-                {{ navCount(item) }}
-              </span>
-            </div>
+                <Icon :name="item.icon" class="h-[0.9375rem] w-[0.9375rem] opacity-80" />
+                <span class="truncate">{{ item.label }}</span>
+                <span
+                  v-if="navCount(item) !== null"
+                  class="ml-auto shrink-0 rounded-full px-[0.4375rem] py-1 text-[10.5px] leading-none font-medium text-sidebar-count-foreground tabular-nums"
+                  :class="isActive(item.id) ? 'bg-[var(--shell-accent-line)] text-primary' : 'bg-muted'"
+                >
+                  {{ navCount(item) }}
+                </span>
+              </div>
+
+              <!--
+                缩进子条目：无组标题、无组间分隔线，仅一条弱化竖引导线建立从属关系。
+                当前只有「任务中心 → 工具」一处（子条目单条，故不做折叠）。
+              -->
+              <div
+                v-if="item.children?.length"
+                v-show="nav.itemVisible(group.title ?? '', item)"
+                class="ml-[1.1875rem] border-l border-border/70 pl-[0.5rem]"
+              >
+                <div
+                  v-for="child in item.children"
+                  :key="child.id"
+                  class="flex cursor-pointer items-center gap-[0.5rem] rounded-md px-[0.625rem] py-[0.375rem] text-[12.5px] transition-colors select-none"
+                  :class="
+                    isActive(child.id)
+                      ? 'bg-[var(--shell-accent-tint)] font-semibold text-primary opacity-100'
+                      : 'text-sidebar-foreground opacity-[0.78] hover:bg-[var(--shell-accent-wash)] hover:opacity-100'
+                  "
+                  @click="onItemClick(group.title, child)"
+                >
+                  <Icon :name="child.icon" class="h-[0.875rem] w-[0.875rem] opacity-80" />
+                  <span class="truncate">{{ child.label }}</span>
+                  <span
+                    v-if="navCount(child) !== null"
+                    class="ml-auto shrink-0 rounded-full px-[0.4375rem] py-1 text-[10.5px] leading-none font-medium text-sidebar-count-foreground tabular-nums"
+                    :class="isActive(child.id) ? 'bg-[var(--shell-accent-line)] text-primary' : 'bg-muted'"
+                  >
+                    {{ navCount(child) }}
+                  </span>
+                </div>
+              </div>
+            </template>
           </div>
           <div v-else-if="!group.search" class="px-[0.625rem] pt-1.5 pb-2 text-[11.5px] text-muted-foreground/70">
             {{ group.empty ?? '暂无内容' }}

@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onActivated, ref } from 'vue'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import PageHead from '@/components/ui/PageHead.vue'
 import { api, type LogItem } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
@@ -35,7 +34,9 @@ function load(): void {
     })
 }
 
-onMounted(load)
+// 工具页子页在 KeepAlive 下不会重新挂载，所以刷新挂在 onActivated；
+// 它在「首次挂载」时也会触发，因此不需要再挂 onMounted（否则会重复请求）。
+onActivated(load)
 
 function clearAll(): void {
   api
@@ -67,8 +68,6 @@ function downloadLogs(): void {
 
 <template>
   <div>
-    <PageHead title="转换日志" :desc="`共 ${total} 条记录${logDir ? ` · ${logDir}` : ''}`" />
-
     <div class="mb-4 flex flex-wrap items-center gap-2">
       <input
         v-model="keyword"
@@ -95,39 +94,48 @@ function downloadLogs(): void {
 
     <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
 
-    <Card v-else-if="items.length" padding="none" class="overflow-x-auto">
-      <table class="w-full min-w-[46rem] border-collapse text-left">
-        <thead>
-          <tr class="border-b border-border">
-            <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">时间</th>
-            <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">动作</th>
-            <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">目标</th>
-            <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">状态</th>
-            <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">详情</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="(row, i) in items"
-            :key="i"
-            class="border-b border-border/60 last:border-b-0 transition-colors hover:bg-muted/50"
-          >
-            <td class="px-4 py-2 text-[11.5px] whitespace-nowrap text-muted-foreground tabular-nums">
-              {{ cell(row, 'ts') !== '—' ? cell(row, 'ts') : cell(row, 'time') }}
-            </td>
-            <td class="px-4 py-2 text-[12px] text-foreground">{{ cell(row, 'action') }}</td>
-            <td class="max-w-[16rem] truncate px-4 py-2 text-[12px] text-foreground" :title="cell(row, 'target')">
-              {{ cell(row, 'target') !== '—' ? cell(row, 'target') : cell(row, 'file') }}
-            </td>
-            <td class="px-4 py-2">
-              <Badge :tone="toneOf(row.status)">{{ row.status ?? '—' }}</Badge>
-            </td>
-            <td class="max-w-[22rem] truncate px-4 py-2 text-[11.5px] text-muted-foreground" :title="cell(row, 'message')">
-              {{ cell(row, 'message') }}
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <Card v-else-if="items.length" padding="none">
+      <div class="flex items-center gap-2 border-b border-border px-4 py-3">
+        <h3 class="text-[13px] font-semibold text-foreground">转换日志</h3>
+        <span class="max-w-[36rem] truncate text-[11.5px] text-muted-foreground" :title="logDir">
+          共 {{ total }} 条记录{{ logDir ? ` · ${logDir}` : '' }}
+        </span>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full min-w-[46rem] border-collapse text-left">
+          <thead>
+            <tr class="border-b border-border">
+              <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">时间</th>
+              <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">动作</th>
+              <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">目标</th>
+              <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">状态</th>
+              <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">详情</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              v-for="(row, i) in items"
+              :key="i"
+              class="border-b border-border/60 last:border-b-0 transition-colors hover:bg-muted/50"
+            >
+              <td class="px-4 py-2 text-[11.5px] whitespace-nowrap text-muted-foreground tabular-nums">
+                {{ cell(row, 'ts') !== '—' ? cell(row, 'ts') : cell(row, 'time') }}
+              </td>
+              <td class="px-4 py-2 text-[12px] text-foreground">{{ cell(row, 'action') }}</td>
+              <td class="max-w-[16rem] truncate px-4 py-2 text-[12px] text-foreground" :title="cell(row, 'target')">
+                {{ cell(row, 'target') !== '—' ? cell(row, 'target') : cell(row, 'file') }}
+              </td>
+              <td class="px-4 py-2">
+                <Badge :tone="toneOf(row.status)">{{ row.status ?? '—' }}</Badge>
+              </td>
+              <td class="max-w-[22rem] truncate px-4 py-2 text-[11.5px] text-muted-foreground" :title="cell(row, 'message')">
+                {{ cell(row, 'message') }}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </Card>
 
     <EmptyState v-else icon="note" title="没有日志记录" desc="转换、下载与监听动作都会写进这里。" />

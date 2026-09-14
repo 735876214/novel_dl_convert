@@ -67,6 +67,76 @@ export interface WatcherStatus {
   [key: string]: unknown
 }
 
+// ---------- 工具页（实体管理 / 批量重命名 / 重复书籍 / 缺失资源） ----------
+
+export type EntityKind = 'author' | 'series'
+
+export interface EntityItem {
+  name: string
+  count: number
+  books: string[]
+}
+
+export interface EntityListing {
+  type: EntityKind
+  items: EntityItem[]
+  total: number
+}
+
+/** 一条「旧名 → 新名」。conflict 为真时前端必须置灰、禁止提交。 */
+export interface RenameItem {
+  old: string
+  new: string
+  conflict: boolean
+  reason: string
+}
+
+export interface RenamePlan {
+  items: RenameItem[]
+  type?: EntityKind
+  from?: string
+  to?: string
+  scope?: string
+  pattern?: string
+  /** 批量重命名规则里可用的占位符，由后端给出，避免前后端各写一份 */
+  fields?: string[]
+}
+
+export interface DuplicateItem {
+  name: string
+  size: number
+  mtime: number
+  format?: string
+}
+
+export interface DuplicateGroup {
+  key: string
+  reason: string
+  title: string
+  author: string
+  items: DuplicateItem[]
+}
+
+export interface MissingItem {
+  name: string
+  size: number
+  mtime: number
+  issues: string[]
+}
+
+export interface ApplyResult {
+  renamed: Array<{ old: string; new: string }>
+  errors: Array<{ old?: string; error: string }>
+  count?: number
+}
+
+export interface RecycleResult {
+  moved: Array<{ name: string; moved_to: string }>
+  errors: Array<{ name: string; error: string }>
+  recycle_dir: string
+  keep?: string
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, init)
   if (!res.ok) {
@@ -178,4 +248,54 @@ export const api = {
   },
 
   downloadUrl: (name: string) => `/download/${encodeURIComponent(name)}`,
+
+  // ---------- 工具页：实体管理 / 批量重命名 / 重复书籍 / 缺失资源 ----------
+  // 改文件一律「先 preview、再 apply」；apply 只回传预览过的条目，不传规则。
+  entities: (type: EntityKind) => request<EntityListing>(`/api/entities?type=${type}`),
+
+  entityRenamePreview: (type: EntityKind, from: string, to: string) =>
+    request<RenamePlan>('/api/entities/rename/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, from, to }),
+    }),
+
+  entityRenameApply: (items: RenameItem[]) =>
+    request<ApplyResult>('/api/entities/rename/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    }),
+
+  entityMerge: (type: EntityKind, source: string, target: string) =>
+    request<RenamePlan>('/api/entities/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, source, target }),
+    }),
+
+  renamePreview: (scope: string, pattern: string) =>
+    request<RenamePlan>('/api/rename/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, pattern }),
+    }),
+
+  renameApply: (items: RenameItem[]) =>
+    request<ApplyResult>('/api/rename/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    }),
+
+  duplicates: () => request<{ groups: DuplicateGroup[]; total: number }>('/api/duplicates'),
+
+  duplicatesResolve: (keep: string, remove: string[]) =>
+    request<RecycleResult>('/api/duplicates/resolve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keep, remove }),
+    }),
+
+  missing: () => request<{ items: MissingItem[]; total: number }>('/api/missing'),
 }

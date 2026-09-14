@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, ref } from 'vue'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import PageHead from '@/components/ui/PageHead.vue'
 import { api, type SourceItem } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
@@ -33,7 +32,9 @@ function load(): void {
     })
 }
 
-onMounted(load)
+// 工具页子页在 KeepAlive 下不会重新挂载，所以刷新挂在 onActivated；
+// 它在「首次挂载」时也会触发，因此不需要再挂 onMounted（否则会重复请求）。
+onActivated(load)
 
 function submitPaste(): void {
   const text = pasteText.value.trim()
@@ -86,9 +87,7 @@ function remove(name: string): void {
 
 <template>
   <div>
-    <PageHead title="书源管理" :desc="`共 ${sources.length} 个书源 · 其中内置 ${builtinCount} 个`" />
-
-    <div class="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-2">
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <Card>
         <h3 class="mb-2 text-[13px] font-semibold text-foreground">批量粘贴</h3>
         <p class="mb-2.5 text-[11.5px] text-muted-foreground">
@@ -111,6 +110,9 @@ function remove(name: string): void {
       <Card padding="none">
         <div class="flex items-center gap-2 border-b border-border px-4 py-3">
           <h3 class="text-[13px] font-semibold text-foreground">已注册书源</h3>
+          <span class="text-[11.5px] text-muted-foreground">
+            共 {{ sources.length }} 个 · 其中内置 {{ builtinCount }} 个
+          </span>
           <Badge class="ml-auto">{{ sources.length }}</Badge>
         </div>
 
