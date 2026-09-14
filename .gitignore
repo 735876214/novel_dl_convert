@@ -34,10 +34,12 @@ _test/
 *.log
 *.err
 
-# AI 工作目录（两套约定并存）
-#   .workbuddy/ 由 WorkBuddy 环境使用；.codebuddy/ 由 CodeBuddy IDE 使用。
-#   两者都只放行 memory/ 入库（那是跨会话的项目知识），
+# AI 工作目录
+#   记忆已于 2026-09-15 统一：.codebuddy/memory/ 是唯一真值源，
+#   .workbuddy/memory/ 只剩一个指针文件（不再承载内容，勿往那里写）。
+#   两个目录都只放行 memory/ 入库（跨会话项目知识），
 #   settings.local.json、plans/ 等本机状态一律忽略。
+#   写法要点：否定规则必须配不带尾斜杠的 /* 形式，否则无法重新包含子目录。
 .workbuddy/*
 !.workbuddy/memory/
 .codebuddy/*
