@@ -2,7 +2,18 @@
 
 ## 项目
 - 这是一个 TXT→EPUB 转换工具（NovelForge），FastAPI Web 服务 + 目录监听自动转换。
-- 远程仓库：`git@github.com:735876214/novel_dl_convert.git`（HTTPS 形式 `https://github.com/735876214/novel_dl_convert.git`）。
+- 远程仓库：**实际 remote 是 HTTPS** —— `origin` = `https://github.com/735876214/novel_dl_convert.git`
+  （`git@github.com:` 的 SSH 形式并未配置为 remote）。当前分支 `main`。
+
+## AI 记忆目录：两套约定并存（重要）
+- 仓库里同时存在**两个** AI 记忆目录，都已被 `.gitignore` 放行 `memory/` 入库：
+  - **`.workbuddy/memory/`** —— WorkBuddy 环境在用（远端已有 2026-09-13 / 2026-09-14 / MEMORY.md）
+  - **`.codebuddy/memory/`** —— 本 CodeBuddy IDE 在用（2026-09-14 / 2026-09-15 / MEMORY.md）
+- 两套内容**有重叠也有分歧**（例如同一份 `MEMORY.md` 的前端章节：本地已是 Vue 版，远端那份仍是
+  旧的原生三件套版本）。**目前都入库但未合并** —— 写记忆前先看一眼另一套是否更权威，避免进一步分叉。
+- 忽略规则（对称，两目录都只放行 memory/）：
+  `.workbuddy/*` + `!.workbuddy/memory/`；`.codebuddy/*` + `!.codebuddy/memory/`。
+  即 `settings.local.json`、`plans/` 等本机状态不入库。
 
 ## Git 认证（重要）
 - 认证方式：**Git Credential Manager（GCM）**，已配置为 global `credential.helper`。
