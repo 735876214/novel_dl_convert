@@ -26,7 +26,6 @@ def from_body(head: str) -> dict:
     for k, p in [
         ("author", r"作者[：:]\s*(.+)"),
         ("description", r"简介[：:]\s*(.+)"),
-        ("cover", r"封面[：:]\s*(\S+)"),
     ]:
         m = re.search(p, head)
         if m:

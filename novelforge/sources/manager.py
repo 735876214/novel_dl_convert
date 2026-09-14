@@ -7,8 +7,11 @@
 """
 import asyncio
 import json
+import logging
 import re
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_name(s: str) -> str:
@@ -61,7 +64,7 @@ class DownloadManager:
                     it.setdefault("source_name", getattr(cls, "display_name", name))
                 out.extend(items)
             except Exception as e:  # 单源失败不影响其它源
-                print(f"[warn] 书源 {name} 搜索失败: {e}")
+                logger.warning("书源 %s 搜索失败: %s", name, e)
         return out
 
     async def fetch_and_convert(self, item: dict, out_dir: Path, opts: dict) -> Path:

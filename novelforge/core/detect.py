@@ -69,14 +69,13 @@ def detect_chapters_cfg(text: str, cfg: dict | None = None, merge: bool | None =
     llm = cfg.get("llm", {}) or {}
     do_merge = bool(merge)
     if mode in ("ai", "hybrid") and llm.get("api_key"):
-        from .ai_detect import HybridChapterDetector
+        from .ai_detect import HybridChapterDetector, _run_in_thread
 
         detector = HybridChapterDetector(cfg)
-        # 同步包装：AI 检测为 async，但转换管线多为同步调用，这里用简易事件循环
+        # 在独立线程跑新事件循环，兼容 CLI（同步）与 Web 服务（已有运行中的 loop）；
+        # 直接 asyncio.run 在事件中 loop 的线程会抛 RuntimeError，导致 AI 兜底静默失效。
         try:
-            import asyncio
-
-            return asyncio.run(detector.detect(text))
+            return _run_in_thread(detector.detect(text))
         except Exception:
             if cd.get("fallback", "regex") == "regex":
                 return detect_chapters(text, do_merge)

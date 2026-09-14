@@ -26,14 +26,6 @@ from .. import config
 
 STATE_FILENAME = "watcher_state.json"
 
-# 默认忽略：隐藏文件、下载/编辑临时文件、增量更新 sidecar、日志文件
-DEFAULT_IGNORE = [
-    ".*",
-    "*.tmp", "*.temp", "*.part", "*.crdownload", "*.partial", "*.download",
-    "*.swp", "*.swx", "~$*",
-    "*.meta.json", "*.log", "*.jsonl",
-]
-
 
 class FolderWatcher:
     """监听输入目录，自动转换 / 添加文件到导出目录。"""
@@ -51,14 +43,16 @@ class FolderWatcher:
         self.copy_non_txt = bool(w.get("copy_non_txt", True))
         self.process_existing = bool(w.get("process_existing", True))
         self.max_retries = max(0, int(w.get("max_retries", 3)))
-        self.ignore = list(w.get("ignore") or DEFAULT_IGNORE)
+        # ignore 默认值来自 config.DEFAULTS["watcher"]["ignore"]，这里不再重复定义
+        self.ignore = list(w.get("ignore") or [])
 
         self.state_file = Path(
             kw.get("state_file") or config.CACHE_DIR / STATE_FILENAME
         )
         self.state: dict = self._load_state()
 
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()       # 仅保护 state 字典的短临界区
+        self._scan_lock = threading.Lock()  # 串行化扫描轮次，避免并行重复处理
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._primed = False
@@ -209,8 +203,12 @@ class FolderWatcher:
             return ("failed", str(e))
 
     def scan_once(self) -> dict:
-        """扫描一轮，返回本轮结果摘要。"""
-        with self._lock:
+        """扫描一轮，返回本轮结果摘要。
+
+        用独立的 _scan_lock 串行化各扫描调用（后台轮询线程 / /api/scan），
+        避免对同一文件并行处理；state 字典的读写仍由短临界区的 _lock 保护。
+        """
+        with self._scan_lock:
             return self._scan_locked()
 
     def _scan_locked(self) -> dict:
@@ -221,67 +219,82 @@ class FolderWatcher:
         if not self._primed:                      # 首轮：决定是否处理历史存量文件
             self._primed = True
             if not self.process_existing:
-                for p in files:
-                    if self._ignored(p):
-                        continue
-                    sig = self._sig(p)
-                    if sig:
-                        self.state[str(p.relative_to(self.input_dir))] = {
-                            "size": sig[0], "mtime": sig[1], "failed": 0,
-                        }
-                self._save_state()
+                with self._lock:
+                    for p in files:
+                        if self._ignored(p):
+                            continue
+                        sig = self._sig(p)
+                        if sig:
+                            try:
+                                key = str(p.relative_to(self.input_dir))
+                            except Exception:
+                                key = p.name
+                            self.state[key] = {
+                                "size": sig[0], "mtime": sig[1], "failed": 0,
+                            }
+                    self._save_state()
                 self.last_scan = time.time()
                 return {"scanned": 0, "converted": [], "added": [], "failed": [], "skipped": 0}
+
+        # 在短临界区内收集「待处理」文件，转换 I/O 移到锁外执行，
+        # 避免 handle_file（可能耗时数十秒）长时间持有 _lock 而冻结其它调用方。
+        pending = []
+        with self._lock:
+            for p in sorted(files):
+                if self._stop.is_set():
+                    break
+                if self._ignored(p):
+                    continue
+                try:
+                    key = str(p.relative_to(self.input_dir))
+                except Exception:
+                    key = p.name
+
+                sig = self._sig(p)
+                if not sig:
+                    continue
+                cur = {"size": sig[0], "mtime": sig[1], "failed": 0}
+                old = self.state.get(key)
+                if old and old.get("size") == cur["size"] and old.get("mtime") == cur["mtime"]:
+                    fails = int(old.get("failed", 0))
+                    # 成功过、或已放弃的（重试到上限）不再处理；失败未到上限的继续重试
+                    if fails == 0 or fails >= max(1, self.max_retries):
+                        continue
+                    cur["failed"] = fails
+                pending.append((p, key, cur))
 
         result = {"scanned": 0, "converted": [], "added": [], "failed": [], "skipped": 0}
         dirty = False
 
-        for p in sorted(files):
+        for p, key, cur in pending:
             if self._stop.is_set():
                 break
-            if self._ignored(p):
-                continue
-            try:
-                key = str(p.relative_to(self.input_dir))
-            except Exception:
-                key = p.name
-
-            sig = self._sig(p)
-            if not sig:
-                continue
-            cur = {"size": sig[0], "mtime": sig[1], "failed": 0}
-            old = self.state.get(key)
-            if old and old.get("size") == cur["size"] and old.get("mtime") == cur["mtime"]:
-                fails = int(old.get("failed", 0))
-                # 成功过、或已放弃的（重试到上限）不再处理；失败未到上限的继续重试
-                if fails == 0 or fails >= max(1, self.max_retries):
-                    continue
-                cur["failed"] = fails
-
-            result["scanned"] += 1
             if not self._wait_stable(p):          # 还在写入，下轮再处理
                 continue
 
-            kind, detail = self.handle_file(p)
-            if kind in ("converted", "added"):
-                cur["failed"] = 0
-                self.state[key] = cur
-                self.stats[kind] += 1
-                result[kind].append({"file": p.name, "output": Path(detail).name})
-                dirty = True
-            elif kind == "failed":
-                cur["failed"] = int(cur.get("failed", 0)) + 1
-                self.state[key] = cur
-                self.stats["failed"] += 1
-                result["failed"].append({"file": p.name, "error": str(detail)})
-                dirty = True
-            else:
-                result["skipped"] += 1
+            result["scanned"] += 1
+            kind, detail = self.handle_file(p)    # 锁外执行 I/O / 转换
+            with self._lock:                      # 仅短临界区更新 state
+                if kind in ("converted", "added"):
+                    cur["failed"] = 0
+                    self.state[key] = cur
+                    self.stats[kind] += 1
+                    result[kind].append({"file": p.name, "output": Path(detail).name})
+                    dirty = True
+                elif kind == "failed":
+                    cur["failed"] = int(cur.get("failed", 0)) + 1
+                    self.state[key] = cur
+                    self.stats["failed"] += 1
+                    result["failed"].append({"file": p.name, "error": str(detail)})
+                    dirty = True
+                else:
+                    result["skipped"] += 1
 
-        if dirty:
-            self._save_state()
-        self.stats["scans"] += 1
-        self.last_scan = time.time()
+        with self._lock:
+            if dirty:
+                self._save_state()
+            self.stats["scans"] += 1
+            self.last_scan = time.time()
         return result
 
     # ---------------- 线程控制 ----------------
@@ -307,7 +320,10 @@ class FolderWatcher:
         self._stop.set()
         t = self._thread
         if t and t.is_alive():
-            t.join(timeout=self.interval + 5)
+            # 转换是同步 I/O，无法被中断；给足时间让其自然结束。
+            # 超时后线程仍可能短暂存活（daemon），但 WATCHER 已置空、不会再被复用，
+            # 且 state 锁已缩小范围，不会再阻塞 Web 服务的 mark 操作。
+            t.join(timeout=max(self.interval + 5, 30))
         self._thread = None
 
     def is_running(self) -> bool:

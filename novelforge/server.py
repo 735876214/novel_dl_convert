@@ -204,7 +204,7 @@ async def _run_download(tid: str, item: dict):
         )
         # 下载已顺带生成 EPUB，把刚落盘的 txt 登记为已处理，避免监听线程重复转换
         if WATCHER is not None:
-            WATCHER.mark_recent(seconds=30, suffix=".txt")
+            await asyncio.to_thread(WATCHER.mark_recent, seconds=30, suffix=".txt")
     except Exception as e:
         TASKS[tid].update(status="failed", error=str(e))
         activity_log.log_convert_fail(
@@ -301,15 +301,19 @@ def api_logs_clear():
 
 # ---------------- 兼容旧接口（脚本 / 油猴等）----------------
 
-def _log_dispatch(src: pathlib.Path, action: str, result, source: str, size=None):
-    """把一次分发结果写入活动日志，并登记为已处理（避免监听线程重复转换）。"""
+async def _log_dispatch(src: pathlib.Path, action: str, result, source: str, size=None):
+    """把一次分发结果写入活动日志，并登记为已处理（避免监听线程重复转换）。
+
+    mark_processed 涉及同步文件 I/O 与 watcher 的 state 锁，用 to_thread 跑，
+    避免阻塞 asyncio 事件循环（否则转换大文件时整个 Web 服务会冻结）。
+    """
     out_name = pathlib.Path(result).name if result else ""
     act = activity_log.ACTION_CONVERT if action == "convert" else activity_log.ACTION_ADD
     activity_log.log(act, src.name, activity_log.STATUS_OK, output=out_name,
                      size=size, source=source)
     if WATCHER is not None:
         try:
-            WATCHER.mark_processed(src)
+            await asyncio.to_thread(WATCHER.mark_processed, src)
         except Exception:
             pass
 
@@ -323,32 +327,34 @@ async def convert(file: UploadFile = File(...), traditionalize: bool = Form(Fals
     with open(src, "wb") as f:
         f.write(data)
     try:
-        action, result = pipeline.dispatch(
-            src, OUTPUT_DIR,
+        # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环（其它请求无响应）
+        action, result = await asyncio.to_thread(
+            pipeline.dispatch, src, OUTPUT_DIR,
             {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
         )
     except Exception as e:
         activity_log.log_convert_fail(file.filename, f"{type(e).__name__}: {e}",
                                       size=len(data), source="upload")
         raise
-    _log_dispatch(src, action, result, "upload", size=len(data))
+    await _log_dispatch(src, action, result, "upload", size=len(data))
     return FileResponse(result, filename=pathlib.Path(result).name)
 
 
 @app.post("/convert-path")
-def convert_path(path: str = Form(...), traditionalize: bool = Form(False)):
+async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)):
     src = INPUT_DIR / path
     if not src.exists() or not src.is_file():
         raise HTTPException(404, "文件不存在")
     try:
-        action, result = pipeline.dispatch(
-            src, OUTPUT_DIR,
+        # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环
+        action, result = await asyncio.to_thread(
+            pipeline.dispatch, src, OUTPUT_DIR,
             {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
         )
     except Exception as e:
         activity_log.log_convert_fail(src.name, f"{type(e).__name__}: {e}", source="api")
         raise
-    _log_dispatch(src, action, result, "api", size=src.stat().st_size)
+    await _log_dispatch(src, action, result, "api", size=src.stat().st_size)
     return {"action": action, "result": str(result)}
 
 

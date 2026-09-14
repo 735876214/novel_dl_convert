@@ -54,8 +54,7 @@ class BrowserClient:
         self.cookie_dir.mkdir(parents=True, exist_ok=True)
         self.cookie_path = self.cookie_dir / f"{source_name}.cookies.txt"
         self.jar = httpx.CookieJar()
-        # 用 LWPCookieJar 落盘，复用既有 cookie 文件
-        self._lwp = httpx.CookieJar()  # 占位，真正持久化见下方 load/save
+        # Cookie 持久化走下方 _load_cookies / _save_cookies（LWPCookieJar 落盘）
         self._load_cookies()
         merged = dict(DEFAULT_HEADERS)
         if headers:
@@ -166,5 +165,5 @@ def run_js_sync(js_code: str, *args):
 
 async def run_js(js_code: str, *args):
     """异步包装：在默认线程池里跑 Node 子进程，避免阻塞事件循环。"""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: run_js_sync(js_code, *args))
