@@ -107,6 +107,7 @@ function downloadLogs(): void {
           <thead>
             <tr class="border-b border-border">
               <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">时间</th>
+              <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">操作者</th>
               <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">动作</th>
               <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">目标</th>
               <th class="px-4 py-2.5 text-[11px] font-semibold text-muted-foreground">状态</th>
@@ -121,6 +122,14 @@ function downloadLogs(): void {
             >
               <td class="px-4 py-2 text-[11.5px] whitespace-nowrap text-muted-foreground tabular-nums">
                 {{ cell(row, 'ts') !== '—' ? cell(row, 'ts') : cell(row, 'time') }}
+              </td>
+              <!-- 操作者：历史条目没有该字段（字段后加），显示「未记录」而不臆测 -->
+              <td
+                class="px-4 py-2 text-[11.5px] whitespace-nowrap"
+                :class="cell(row, 'actor') === '—' ? 'text-muted-foreground/70 italic' : 'text-foreground'"
+                title="早于「操作者字段」上线的条目、以及未鉴权旧接口写入的条目没有操作者"
+              >
+                {{ cell(row, 'actor') === '—' ? '未记录' : cell(row, 'actor') }}
               </td>
               <td class="px-4 py-2 text-[12px] text-foreground">{{ cell(row, 'action') }}</td>
               <td class="max-w-[16rem] truncate px-4 py-2 text-[12px] text-foreground" :title="cell(row, 'target')">

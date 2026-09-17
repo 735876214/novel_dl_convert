@@ -10,7 +10,8 @@ import { api, type DuplicateGroup } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
 /**
- * 重复书籍：按「归一化书名 + 归一化作者」分组，每组保留一项、其余移入回收目录。
+ * 重复书籍：**同作者（归一化后一致）+ 书名相似度 ≥ 阈值** 分组。
+ * 阈值默认 85%（同 Calibre 的 Similar-title threshold），可调低抓近似、调高只留全同。
  *
  * **不会真删**：清理动作走 POST /api/duplicates/resolve，后端把文件 move 进
  * CACHE_DIR/recycle，响应里带回回收目录路径，方便随时人工找回。
@@ -21,6 +22,9 @@ const groups = ref<DuplicateGroup[]>([])
 const total = ref(0)
 const loading = ref(true)
 const busy = ref(false)
+/** 书名相似度阈值（%）。变更后重新扫描 —— 分组结果由它决定 */
+const threshold = ref(85)
+const THRESHOLD_PRESETS = [70, 85, 95] as const
 /** 每组保留哪一项（组 key → 文件名） */
 const keep = ref<Record<string, string>>({})
 const lastRecycleDir = ref('')
@@ -59,7 +63,7 @@ const pending = computed(() => groups.value.reduce((n, g) => n + removeOf(g).len
 function load(): void {
   loading.value = true
   api
-    .duplicates()
+    .duplicates(threshold.value)
     .then((r) => {
       groups.value = r.groups ?? []
       total.value = r.total ?? 0
@@ -76,6 +80,13 @@ function load(): void {
     .finally(() => {
       loading.value = false
     })
+}
+
+/** 改阈值后重扫。换阈值等于换判定口径，用户已选的保留项可能已不在组里，交给 load 兜底 */
+function setThreshold(v: number): void {
+  if (threshold.value === v) return
+  threshold.value = v
+  load()
 }
 
 // 工具页子页在 KeepAlive 下不会重新挂载，刷新挂 onActivated（首次挂载也会触发）
@@ -110,10 +121,32 @@ function apply(): void {
   <div class="flex flex-col gap-4">
     <div class="flex flex-wrap items-center gap-2">
       <Button :disabled="loading" @click="load">重新扫描</Button>
+
+      <span class="ml-1 text-[11.5px] text-muted-foreground">相似度阈值</span>
+      <div class="flex gap-1">
+        <button
+          v-for="p in THRESHOLD_PRESETS"
+          :key="p"
+          type="button"
+          class="cursor-pointer rounded-md px-2.5 py-1 text-[12px] font-medium transition-colors"
+          :class="threshold === p
+            ? 'bg-primary text-primary-foreground'
+            : 'bg-muted text-muted-foreground hover:text-foreground'"
+          @click="setThreshold(p)"
+        >
+          {{ p }}%
+        </button>
+      </div>
+
       <span class="text-[11.5px] text-muted-foreground">
         共扫描 {{ total }} 本书目，发现 {{ groups.length }} 组重复
       </span>
     </div>
+
+    <p class="text-[11.5px] text-muted-foreground">
+      判定口径：<span class="text-foreground">同作者</span>（归一化后一致为前提）+
+      书名相似度 ≥ {{ threshold }}%。前提之外只看书名，标点、空格与「校对版全本」这类版本后缀都会先被忽略。
+    </p>
 
     <p v-if="lastRecycleDir" class="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
       <Icon name="check" class="h-3.5 w-3.5 text-success" />
@@ -134,6 +167,7 @@ function apply(): void {
 
         <p class="border-b border-border/60 bg-muted/40 px-4 py-2 text-[11.5px] text-muted-foreground">
           判定依据：{{ g.reason }}
+          <span v-if="g.similarity < 100" class="tabular-nums">（组内最低相似度 {{ g.similarity }}%）</span>
         </p>
 
         <div
@@ -174,7 +208,7 @@ function apply(): void {
       v-else
       icon="layers"
       title="没有发现重复书籍"
-      desc="判定口径是「归一化后的书名与作者相同」——标点、空格与「校对版全本」这类版本后缀都会被忽略。"
+      :desc="`当前阈值下（同作者 + 书名相似度 ≥ ${threshold}%）没有成组的书。调低阈值可以抓出「同名近似」的版本，比如加了「第二版」后缀的那类。`"
     />
   </div>
 </template>

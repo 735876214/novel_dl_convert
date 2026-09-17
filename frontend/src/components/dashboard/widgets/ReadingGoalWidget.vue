@@ -1,21 +1,44 @@
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import ProgressRing from '@/components/ui/ProgressRing.vue'
-import { YEAR_GOAL_DONE, YEAR_GOAL_TARGET } from '@/data/dashboard-stats'
+import { useStatsStore } from '@/stores/stats'
 
 /**
- * 年度目标（对应 BookOrbit 的 ReadingGoalWidget）。
- * 左环右标签，点铅笔图标可就地改目标本数。
+ * 阅读目标（对应 BookOrbit 的 ReadingGoalWidget）。
+ * 已完成本数来自 /api/stats（进度 ≥ 99.5% 记为已读完）；目标本数本地记忆。
+ * 数据未接入前（stats.data 为空）显示 0，避免闪回演示值。
  */
-const target = ref(YEAR_GOAL_TARGET)
+const stats = useStatsStore()
+onMounted(() => stats.load())
+
+const GOAL_KEY = 'year-goal-target'
+
+function readTarget(): number {
+  try {
+    const v = Number(localStorage.getItem(GOAL_KEY))
+    return Number.isFinite(v) && v > 0 ? v : 30
+  } catch {
+    return 30
+  }
+}
+
+const target = ref(readTarget())
+watch(target, (v) => {
+  try {
+    localStorage.setItem(GOAL_KEY, String(v))
+  } catch {
+    /* ignore */
+  }
+})
+
 const editing = ref(false)
-const draft = ref(String(YEAR_GOAL_TARGET))
+const draft = ref(String(target.value))
 const inputEl = ref<HTMLInputElement | null>(null)
 
-const done = YEAR_GOAL_DONE
-const remaining = computed(() => Math.max(0, target.value - done))
-const reached = computed(() => done >= target.value)
+const done = computed(() => stats.data?.reading.finished ?? 0)
+const remaining = computed(() => Math.max(0, target.value - done.value))
+const reached = computed(() => done.value >= target.value)
 
 async function startEdit(): Promise<void> {
   draft.value = String(target.value)
@@ -37,7 +60,7 @@ function commit(): void {
 
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-1.5">
-        <h3 class="truncate text-[13px] font-semibold text-foreground">年度目标</h3>
+        <h3 class="truncate text-[13px] font-semibold text-foreground">阅读目标</h3>
         <button
           type="button"
           class="grid h-4 w-4 cursor-pointer place-items-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-primary"

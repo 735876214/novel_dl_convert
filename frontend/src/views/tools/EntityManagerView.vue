@@ -13,8 +13,8 @@ import { useUiStore } from '@/stores/ui'
 /**
  * 实体管理：按作者 / 系列聚合成品书目，可重命名、可合并。
  *
- * 数据源是扫描 output/ 的成品文件（后端没有图书库实体），作者名按本项目命名约定
- * 写在文件名里，所以「改名」实质是批量重命名文件。
+ * 数据源是扫描 output/ 的成品文件（后端没有图书库实体）。改名实质是批量重命名文件，
+ * 同时会同步改写 EPUB 内部的 dc:creator / calibre:series 元数据，让工具页聚合能识别新名称。
  * 任何改动都走「先预览、再应用」——预览由服务端算，应用只回传预览过的条目。
  */
 const ui = useUiStore()
@@ -114,7 +114,7 @@ function applyPlan(): void {
   }
   busy.value = true
   api
-    .entityRenameApply(clean)
+    .entityRenameApply(kind.value, editing.value.target.trim(), clean)
     .then((r) => {
       const failed = r.errors.length
       ui.toast(`已改名 ${r.count ?? 0} 个文件${failed ? `，${failed} 个失败` : ''}`)
@@ -202,8 +202,8 @@ function applyPlan(): void {
             </div>
 
             <p v-else class="text-[11.5px] leading-relaxed text-muted-foreground">
-              没有命中任何文件。作者名按本项目命名约定写在文件名里，所以改名生效；而系列名通常只存在于
-              EPUB 内部元数据、文件名里没有，因此改不到。
+              没有命中任何文件。改名会同步更新文件与 EPUB 内部元数据（作者 / 系列），
+              但该名称在当前成品里没有出现，所以改不到。
             </p>
 
             <div v-if="plan.items.length" class="mt-2.5 flex items-center gap-2">

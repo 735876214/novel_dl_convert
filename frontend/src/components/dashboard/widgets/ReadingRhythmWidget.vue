@@ -1,31 +1,31 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 
-import { RHYTHM_28D } from '@/data/dashboard-stats'
+import { useStatsStore } from '@/stores/stats'
 
 /**
  * 入库节奏（对应 BookOrbit 的 ReadingRhythmWidget）。
- * 最近 28 天每日入库数量柱状图，柱高按数值映射；下方一行平均读数。
- * 数据是确定性常量，因此每次渲染图形一致。
+ * 数据来自 /api/stats 的 added_28d（按成品文件 mtime 统计，真实值）。
  */
-const days = RHYTHM_28D
-const peak = computed(() => Math.max(1, ...days))
+const stats = useStatsStore()
+onMounted(() => stats.load())
 
-/** 柱高百分比（0 值保留 2% 底座，避免完全看不见） */
+const days = computed<number[]>(() => stats.data?.added_28d ?? new Array(28).fill(0))
+const peak = computed(() => Math.max(1, ...days.value))
+
+/** 柱高百分比（0 值保留小底座，避免完全看不见） */
 function heightOf(n: number): string {
-  if (n <= 0) return '2%'
-  return `${Math.max(6, (n / peak.value) * 100).toFixed(1)}%`
+  if (n <= 0) return '3%'
+  return `${Math.max(8, (n / peak.value) * 100).toFixed(1)}%`
 }
 
-/** 平均读数：只对「有记录的天」求平均，与 BookOrbit 的口径一致 */
-const activeDays = computed(() => days.filter((n) => n > 0))
+const activeDays = computed(() => days.value.filter((n) => n > 0))
 const average = computed(() => {
   if (!activeDays.value.length) return '0'
   const sum = activeDays.value.reduce((a, b) => a + b, 0)
   return (sum / activeDays.value.length).toFixed(1)
 })
-
-const total = computed(() => days.reduce((a, b) => a + b, 0))
+const total = computed(() => days.value.reduce((a, b) => a + b, 0))
 </script>
 
 <template>
@@ -35,7 +35,6 @@ const total = computed(() => days.reduce((a, b) => a + b, 0))
       <span class="text-[11px] text-muted-foreground tabular-nums">近 28 天 · 共 {{ total }} 本</span>
     </div>
 
-    <!-- 柱状图：纯 CSS 高度映射，无图表库 -->
     <div class="mt-3 flex h-[68px] flex-1 items-end gap-[3px]" role="img" aria-label="最近 28 天每日入库数量">
       <div
         v-for="(n, i) in days"

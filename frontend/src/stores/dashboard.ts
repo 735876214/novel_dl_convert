@@ -7,8 +7,11 @@ import {
   MAX_SHELVES,
   WIDGET_IDS,
   type ShelfDef,
+  type ShelfType,
   type WidgetId,
 } from '@/data/dashboard'
+
+const SHELF_TYPES: ShelfType[] = ['continue', 'recent', 'discover', 'scope']
 
 /**
  * 仪表盘偏好：部件的启用与顺序、书架行的启用与顺序。
@@ -60,7 +63,11 @@ function mergeWidgets(stored: WidgetPref[] | null): WidgetPref[] {
 }
 
 function mergeShelves(stored: ShelfDef[] | null): ShelfDef[] {
-  const valid = (stored ?? []).filter((s) => DEFAULT_SHELVES.some((d) => d.id === s.id))
+  // 只按「类型合法」保留用户书架（含自定义的 scope / 额外行），而不是按默认 id 白名单，
+  // 否则用户新增的行一刷新就丢。
+  const valid = (stored ?? []).filter(
+    (s): s is ShelfDef => Boolean(s) && typeof s.id === 'string' && SHELF_TYPES.includes(s.type),
+  )
   const seen = new Set(valid.map((s) => s.id))
   const added = DEFAULT_SHELVES.filter((d) => !seen.has(d.id))
   const merged = [...valid, ...added].slice(0, MAX_SHELVES)

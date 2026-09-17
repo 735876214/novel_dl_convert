@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
@@ -13,12 +14,18 @@ import { useUiStore } from '@/stores/ui'
  *
  * 规则由**服务端**解释（POST /api/rename/preview），前端只负责展示与勾选；
  * 应用时回传的是预览过的具体条目，而不是规则 —— 避免同一套规则在两端解释不一致。
+ *
+ * 默认规则来自服务端「设置 → 文件命名」（config.naming）；取不到时退回内置默认，
+ * 保证后端不可达时工具页仍可用。
  */
 const ui = useUiStore()
 
 const PATTERN_FIELDS = ['{title}', '{author}', '{series}', '{index}', '{ext}']
 
-const pattern = ref('{author} - {title}')
+/** 内置兜底（与后端 config.DEFAULTS.naming.pattern 保持一致） */
+const DEFAULT_PATTERN = '{author} - {title}'
+
+const pattern = ref(DEFAULT_PATTERN)
 const scope = ref('all')
 const plan = ref<RenamePlan | null>(null)
 const checked = ref<Record<string, boolean>>({})
@@ -94,6 +101,17 @@ function apply(): void {
       busy.value = false
     })
 }
+
+onMounted(async () => {
+  try {
+    const r = await api.getConfig()
+    const naming = r.config.naming
+    if (naming?.pattern) pattern.value = naming.pattern
+    if (naming?.scope) scope.value = naming.scope
+  } catch {
+    /* 后端不可达时保持内置默认，工具页仍可用 */
+  }
+})
 </script>
 
 <template>
@@ -106,6 +124,11 @@ function apply(): void {
           {{ f }}<span v-if="i < fields.length - 1">、</span>
         </span>
         （扩展名会自动保留在末尾）
+      </p>
+      <p class="mb-2.5 text-[11px] text-muted-foreground">
+        初始规则来自
+        <RouterLink to="/settings/library/file-naming" class="underline">设置 → 文件命名</RouterLink>；
+        在此处修改不会回写设置。
       </p>
 
       <div class="flex flex-wrap items-center gap-2">

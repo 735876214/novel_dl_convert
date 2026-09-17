@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 import BookCover from '@/components/ui/BookCover.vue'
 import Icon from '@/components/ui/Icon.vue'
-import type { Book } from '@/data/books'
+import type { BookCard } from '@/lib/api'
 import type { ShelfDef } from '@/data/dashboard'
 import { useLibraryStore } from '@/stores/library'
 
@@ -13,35 +13,47 @@ const props = defineProps<{ shelf: ShelfDef }>()
 const library = useLibraryStore()
 const router = useRouter()
 
+onMounted(() => library.loadBooks())
+
 /**
- * 「随机发现」的洗牌只在**模块加载时算一次**：
- *   · 刷新页面会重新洗牌（符合 BookOrbit 的行为）
- *   · 组件重渲染时顺序不变（避免参考页那种每次渲染图形乱跳的问题）
+ * 「随机发现」的洗牌：书目加载完成后算一次（刷新页面会重新洗牌，符合 BookOrbit 行为）。
+ * 用 computed 依赖 library.books，仅在数据变化时重算，避免每次渲染乱跳。
  */
-const SHUFFLED: Book[] = (() => {
+const shuffled = computed<BookCard[]>(() => {
   const list = [...library.books]
   for (let i = list.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1))
     ;[list[i], list[j]] = [list[j], list[i]]
   }
   return list
-})()
+})
 
 /** 每行最多展示 20 个封面（与 BookOrbit 一致） */
 const MAX_COVERS = 20
 
-const books = computed<Book[]>(() => {
+const books = computed<BookCard[]>(() => {
   switch (props.shelf.type) {
     case 'continue':
       return library.continueReading
     case 'discover':
-      return SHUFFLED
+      return shuffled.value
+    case 'recent':
+      return [...library.books].sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
+    case 'scope':
+      return props.shelf.scope ? library.smartBooks(props.shelf.scope) : library.books
     default:
       return library.books
   }
 })
 
 const visibleBooks = computed(() => books.value.slice(0, MAX_COVERS))
+
+/** 「查看全部」：继续阅读行跳到「在读」智能书架，其余按标题进书库页 */
+function openAll(): void {
+  if (props.shelf.type === 'continue') library.openSmart('在读', 'reading')
+  else library.openShelf(props.shelf.title)
+  router.push('/shelf')
+}
 </script>
 
 <template>
@@ -52,7 +64,7 @@ const visibleBooks = computed(() => books.value.slice(0, MAX_COVERS))
       <button
         type="button"
         class="ml-auto flex cursor-pointer items-center gap-1 text-[11.5px] text-primary transition-opacity hover:opacity-80"
-        @click="library.openShelf(shelf.title); router.push('/shelf')"
+        @click="openAll"
       >
         查看全部
         <Icon name="arrowRight" class="h-3 w-3" />

@@ -2,18 +2,24 @@ import type { Component } from 'vue'
 
 import { WIDGET_META, type WidgetId, type WidgetSize } from '@/data/dashboard'
 
+import CurrentlyReadingWidget from './CurrentlyReadingWidget.vue'
+import DiversityScoreWidget from './DiversityScoreWidget.vue'
+import HighlightOfTheDayWidget from './HighlightOfTheDayWidget.vue'
 import LibraryOverviewWidget from './LibraryOverviewWidget.vue'
+import LongWaitWidget from './LongWaitWidget.vue'
+import MonthlyChallengeWidget from './MonthlyChallengeWidget.vue'
+import NeglectedGemsWidget from './NeglectedGemsWidget.vue'
+import ReadingDnaWidget from './ReadingDnaWidget.vue'
 import ReadingGoalWidget from './ReadingGoalWidget.vue'
 import ReadingRhythmWidget from './ReadingRhythmWidget.vue'
+import ReadingStreakWidget from './ReadingStreakWidget.vue'
+import YearProjectionWidget from './YearProjectionWidget.vue'
 
 /**
  * 部件注册表 —— 整套设计的可扩展性支点。
  *
- * 12 个部件全部登记；`component` 为 null 即本轮未实现，
- * 渲染层跳过、自定义面板置灰标注「待实现」。
- *
- * 扩展方式：下一轮补部件时只需实现组件并把 null 换成组件，
- * 渲染层与设置面板**一行都不用改**。
+ * 12 个部件**全部已实现**（数据来自 /api/stats、/api/books、/api/annotations）。
+ * 渲染层与设置面板完全由本表驱动：新增部件只需在此登记，页面与面板一行都不用改。
  */
 export interface WidgetDef {
   id: WidgetId
@@ -23,11 +29,19 @@ export interface WidgetDef {
   component: Component | null
 }
 
-/** 本轮已实现的三个（其余为 null） */
 const IMPLEMENTED: Partial<Record<WidgetId, Component>> = {
   'library-overview': LibraryOverviewWidget,
   'reading-goal': ReadingGoalWidget,
   'reading-rhythm': ReadingRhythmWidget,
+  'currently-reading': CurrentlyReadingWidget,
+  'reading-streak': ReadingStreakWidget,
+  'reading-dna': ReadingDnaWidget,
+  'monthly-challenge': MonthlyChallengeWidget,
+  'highlight-of-the-day': HighlightOfTheDayWidget,
+  'neglected-gems': NeglectedGemsWidget,
+  'diversity-score': DiversityScoreWidget,
+  'year-projection': YearProjectionWidget,
+  'long-wait': LongWaitWidget,
 }
 
 export const WIDGETS: WidgetDef[] = WIDGET_META.map((meta) => ({

@@ -5,26 +5,42 @@ import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import { api, type SourceItem } from '@/lib/api'
+import Icon from '@/components/ui/Icon.vue'
+import { api, type SourceStatus } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
-/** 书源管理：已注册列表 + 批量粘贴 + 文件上传。接真实 /api/sources。 */
+/**
+ * 书源管理：运行状态（Cookie / 可用性）+ 已注册列表 + 批量粘贴 + 文件上传。
+ *
+ * 状态来自 /api/sources/status（真实取得：Cookie 落盘情况 + download 配置约束），
+ * 原「设置页」中的书源演示数据（成功率 / 延迟）已移除并归并到这里。
+ */
 const ui = useUiStore()
 
-const sources = ref<SourceItem[]>([])
+const sources = ref<SourceStatus[]>([])
 const loading = ref(true)
 const pasteText = ref('')
 const busy = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
-const builtinCount = computed(() => sources.value.filter((s) => s.builtin).length)
+const stats = computed(() => {
+  const total = sources.value.length
+  const builtin = sources.value.filter((s) => !s.user).length
+  const user = sources.value.filter((s) => s.user).length
+  const cookie = sources.value.filter((s) => s.cookie.has).length
+  const blocked = sources.value.filter((s) => !s.usable).length
+  return { total, builtin, user, cookie, blocked }
+})
+
+const downloadEnabled = computed(() => sources.value[0]?.download_enabled ?? false)
+const publicOnly = computed(() => sources.value[0]?.public_only ?? true)
 
 function load(): void {
   loading.value = true
   api
-    .listSources()
+    .sourcesStatus()
     .then((r) => {
-      sources.value = r.sources ?? []
+      sources.value = r.items ?? []
     })
     .catch((e: Error) => ui.toast(e.message))
     .finally(() => {
@@ -83,13 +99,39 @@ function remove(name: string): void {
     })
     .catch((e: Error) => ui.toast(e.message))
 }
+
+function fmtTime(ts: number | null): string {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 </script>
 
 <template>
-  <div>
-    <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+  <div class="flex flex-col gap-4">
+    <!-- 概览 -->
+    <div class="grid grid-cols-2 gap-3 md:grid-cols-5">
+      <Card v-for="c in [
+        { label: '书源总数', value: stats.total, icon: 'source' },
+        { label: '内置', value: stats.builtin, icon: 'library' },
+        { label: '用户添加', value: stats.user, icon: 'user' },
+        { label: '已持久化 Cookie', value: stats.cookie, icon: 'check' },
+        { label: '当前不可用', value: stats.blocked, icon: 'alert' },
+      ]" :key="c.label">
+        <div class="flex items-center gap-2 text-muted-foreground">
+          <Icon :name="c.icon" class="h-3.5 w-3.5" />
+          <span class="text-[11.5px]">{{ c.label }}</span>
+        </div>
+        <div class="mt-1.5 text-[20px] leading-none font-semibold text-foreground tabular-nums">
+          {{ c.value }}
+        </div>
+      </Card>
+    </div>
+
+    <div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <!-- 导入 -->
       <Card>
-        <h3 class="mb-2 text-[13px] font-semibold text-foreground">批量粘贴</h3>
+        <h3 class="mb-2 text-[13px] font-semibold text-foreground">导入书源</h3>
         <p class="mb-2.5 text-[11.5px] text-muted-foreground">
           支持 JSON 对象 / 数组 / JSONL 三种格式，一次可导入多个书源。
         </p>
@@ -107,27 +149,57 @@ function remove(name: string): void {
         </div>
       </Card>
 
-      <Card padding="none">
-        <div class="flex items-center gap-2 border-b border-border px-4 py-3">
-          <h3 class="text-[13px] font-semibold text-foreground">已注册书源</h3>
+      <!-- 状态列表 -->
+      <Card padding="none" class="lg:col-span-2">
+        <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+          <h3 class="text-[13px] font-semibold text-foreground">书源状态</h3>
           <span class="text-[11.5px] text-muted-foreground">
-            共 {{ sources.length }} 个 · 其中内置 {{ builtinCount }} 个
+            共 {{ stats.total }} 个 · 内置 {{ stats.builtin }} 个
           </span>
-          <Badge class="ml-auto">{{ sources.length }}</Badge>
+          <Badge class="ml-auto" :tone="downloadEnabled ? 'ok' : 'warn'">
+            {{ downloadEnabled ? '下载已开启' : '下载未开启' }}
+          </Badge>
+          <Badge v-if="downloadEnabled" :tone="publicOnly ? 'neutral' : 'warn'">
+            {{ publicOnly ? '仅公版源' : '全部源放行' }}
+          </Badge>
         </div>
+
+        <p v-if="!downloadEnabled" class="border-b border-border bg-muted/60 px-4 py-2 text-[11.5px] text-muted-foreground">
+          下载功能当前关闭：在 <code class="font-mono">config.yaml</code> 设 <code class="font-mono">download.enabled: true</code> 后，书源才可用于搜索与下载。
+        </p>
 
         <div v-if="loading" class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
 
-        <div v-else-if="sources.length" class="max-h-[26rem] overflow-y-auto">
+        <div v-else-if="sources.length" class="max-h-[30rem] overflow-y-auto">
           <div
             v-for="s in sources"
             :key="s.name"
-            class="flex items-center gap-2.5 border-b border-border/60 px-4 py-2.5 last:border-b-0"
+            class="flex items-start gap-3 border-b border-border/60 px-4 py-3 last:border-b-0"
           >
-            <span class="min-w-0 flex-1 truncate text-[12.5px] text-foreground">{{ s.name }}</span>
-            <Badge v-if="s.builtin" tone="accent">内置</Badge>
+            <span
+              class="mt-1 h-2 w-2 shrink-0 rounded-full"
+              :class="s.usable ? 'bg-success' : 'bg-muted-foreground'"
+              :title="s.usable ? '当前可用' : s.blocked_reason"
+            />
+
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="truncate text-[12.5px] font-medium text-foreground">{{ s.display_name || s.name }}</span>
+                <Badge :tone="s.user ? 'accent' : 'neutral'">{{ s.user ? '用户' : '内置' }}</Badge>
+                <Badge>{{ s.public ? '公版' : '私有' }}</Badge>
+                <Badge v-if="s.cookie.has" tone="ok">已登录</Badge>
+              </div>
+              <p v-if="s.domains.length" class="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                {{ s.domains.join(' · ') }}
+              </p>
+              <p v-if="s.cookie.has" class="mt-0.5 text-[11px] text-muted-foreground">
+                Cookie 已持久化 · {{ fmtTime(s.cookie.mtime) }}
+              </p>
+              <p v-if="!s.usable" class="mt-0.5 text-[11px] text-warning">{{ s.blocked_reason }}</p>
+            </div>
+
             <Button
-              v-if="!s.builtin"
+              v-if="s.user"
               size="sm"
               variant="danger"
               title="删除该书源"
@@ -135,6 +207,7 @@ function remove(name: string): void {
             >
               删除
             </Button>
+            <span v-else class="shrink-0 pt-1 text-[11px] text-muted-foreground">内置不可删</span>
           </div>
         </div>
 

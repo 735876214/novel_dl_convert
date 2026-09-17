@@ -1,13 +1,24 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
+import NotificationBell from '@/components/NotificationBell.vue'
 import Icon from '@/components/ui/Icon.vue'
+import { usePrefSyncStore } from '@/stores/prefSync'
 import { THEME_LABEL, useThemeStore } from '@/stores/theme'
 import { useUiStore } from '@/stores/ui'
 
 const ui = useUiStore()
 const theme = useThemeStore()
 const router = useRouter()
+const sync = usePrefSyncStore()
+
+/** 应用级入口：注册偏好变更回调并启动同步（幂等）。
+ *
+ * 放在顶栏而不是 App.vue：未登录时 App 渲染的是登录门禁、顶栏不挂载，
+ * 所以这里的启动时机天然是「已登录」，不会白跑一次注定 401 的 boot。
+ */
+onMounted(() => sync.init())
 
 function onTheme(): void {
   const next = theme.cycleTheme()
@@ -65,10 +76,19 @@ const ICON_BTN =
     </div>
 
     <div class="ml-auto flex items-center gap-[0.3125rem]">
-      <button :class="ICON_BTN" type="button" title="通知中心" aria-label="通知中心" @click="router.push('/placeholder/notify')">
-        <Icon name="bell" class="h-[17px] w-[17px]" />
+      <!-- 偏好未同步（离线 / 服务端不可用）：恢复后自动消失；点击去「偏好与同步」 -->
+      <button
+        v-if="sync.offline"
+        type="button"
+        class="flex h-7 cursor-pointer items-center rounded-full bg-amber-500/15 px-2.5 text-[11.5px] text-amber-600 transition-colors hover:bg-amber-500/25 dark:text-amber-400"
+        title="偏好未能同步到服务端（离线或服务端不可用）。本机改动照常生效，恢复后会自动推送"
+        @click="router.push('/settings/reader/general')"
+      >
+        离线 · 未同步
       </button>
-      <button :class="ICON_BTN" type="button" title="数据统计" aria-label="数据统计" @click="router.push('/placeholder/stats')">
+      <!-- 通知：浮层 + 未读角标（与整页 /notify 同数据源） -->
+      <NotificationBell />
+      <button :class="ICON_BTN" type="button" title="数据统计" aria-label="数据统计" @click="router.push('/stats')">
         <Icon name="chart" class="h-[17px] w-[17px]" />
       </button>
       <button

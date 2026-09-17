@@ -31,8 +31,6 @@ const previewTitle = ref('')
 const previewText = ref('')
 const previewLoading = ref(false)
 
-/** 下载任务轮询句柄：组件卸载时必须清掉 */
-const pollers = new Map<string, ReturnType<typeof setInterval>>()
 let inflight: AbortController | null = null
 
 const HOT_WORDS = ['三体', '诡秘之主', '长安的荔枝', '凡人修仙传', '球状闪电']
@@ -41,8 +39,6 @@ const hasResults = computed(() => hits.value.length > 0)
 
 onUnmounted(() => {
   inflight?.abort()
-  pollers.forEach((t) => clearInterval(t))
-  pollers.clear()
 })
 
 function runSearch(word?: string): void {
@@ -99,52 +95,16 @@ function openPreview(hit: SearchHit): void {
     })
 }
 
-/** 发起下载并轮询后端任务状态，进度回写任务 store */
+/** 发起下载：交给后端，然后让任务 store 从服务端刷新真实状态 */
 function startDownload(hit: SearchHit): void {
   api
     .download({ ...hit })
-    .then((r) => {
-      const tid = r.task_id
-      tasks.addTask({
-        id: tid,
-        book: hit.title,
-        type: 'download',
-        detail: `${hit.source} · 排队中`,
-        progress: 0,
-        status: 'queued',
-      })
+    .then(() => {
       ui.toast(`已加入下载队列：${hit.title}`)
-
-      const timer = setInterval(() => {
-        api
-          .task(tid)
-          .then((state) => {
-            if (state.status === 'done') {
-              clearInterval(timer)
-              pollers.delete(tid)
-              tasks.patchTask(tid, { status: 'done', progress: 100, detail: `${hit.source} · 已完成` })
-              ui.toast(`${hit.title} 下载完成`)
-              return
-            }
-            if (state.status === 'error') {
-              clearInterval(timer)
-              pollers.delete(tid)
-              tasks.patchTask(tid, {
-                status: 'failed',
-                progress: 100,
-                error: state.error ?? '下载失败',
-              })
-              ui.toast(`${hit.title} 下载失败`)
-              return
-            }
-            tasks.patchTask(tid, { status: 'running', detail: `${hit.source} · 下载中` })
-          })
-          .catch(() => {
-            // 轮询失败不中断，等下一次；连续失败由后端恢复后自然继续
-          })
-      }, 1500)
-
-      pollers.set(tid, timer)
+      // 任务状态统一由 store 从 /api/tasks 拉取并按需轮询，本页不再维护第二套轮询。
+      // （旧实现在这里自建轮询，且把失败状态判断成 'error'，而后端写的是 'failed'，
+      //   于是失败任务会永远停在「下载中」并无限轮询。）
+      void tasks.track()
     })
     .catch((e: Error) => ui.toast(e.message))
 }

@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 
 import { useDndSort } from '@/composables/useDndSort'
-import { SHELF_TYPE_LABEL, type ShelfType } from '@/data/dashboard'
+import { SCOPE_OPTIONS, SHELF_TYPE_LABEL, type ShelfType } from '@/data/dashboard'
 import { useDashboardStore } from '@/stores/dashboard'
 import { useUiStore } from '@/stores/ui'
 
@@ -51,6 +51,21 @@ function addShelf(type: ShelfType): void {
     id: `shelf-${type}-${Date.now()}`,
     type,
     title: SHELF_TYPE_LABEL[type],
+    enabled: true,
+  })
+}
+
+/** 新增一行「智能书架」：按阅读状态筛选（scope = SMART_KEYS 的键） */
+function addScopeShelf(key: string, label: string): void {
+  if (!dashboard.canAddShelf) {
+    ui.toast('最多 6 个书架行')
+    return
+  }
+  dashboard.addShelf({
+    id: `shelf-scope-${key}-${Date.now()}`,
+    type: 'scope',
+    title: label,
+    scope: key,
     enabled: true,
   })
 }
@@ -263,6 +278,20 @@ function onReset(): void {
             @click="addShelf(t)"
           >
             + {{ SHELF_TYPE_LABEL[t] }}
+          </button>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-1.5 border-t border-border pt-3">
+          <span class="text-[11.5px] text-muted-foreground">智能书架行：</span>
+          <button
+            v-for="o in SCOPE_OPTIONS"
+            :key="o.key"
+            type="button"
+            class="cursor-pointer rounded-md border border-border px-2 py-1 text-[11.5px] text-foreground transition-colors hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+            :disabled="!dashboard.canAddShelf"
+            @click="addScopeShelf(o.key, o.label)"
+          >
+            + {{ o.label }}
           </button>
         </div>
       </template>

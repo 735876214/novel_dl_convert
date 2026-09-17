@@ -39,15 +39,22 @@ export const NAV_GROUPS: NavGroup[] = [
       // 「工具」与任务中心**并列**（同属主导航这一层），但**不自成一块** ——
       // 它是工具页的统一入口，8 个工具在页内用标签栏切换（见 views/tools/ToolsLayout.vue）。
       { id: 'tools', label: '工具', icon: 'wrench' },
+      { id: 'stats', label: '数据统计', icon: 'chart' },
+      // Reading Log：reading_sessions 表的展示层（按天 / 按书 / 最近会话）
+      { id: 'log', label: '阅读记录', icon: 'clock' },
+      { id: 'notify', label: '通知中心', icon: 'bell' },
+      // 成就：上游放在顶栏（`/achievements`）。本项目与「数据统计」同层并列，
+      // 数据来自 /api/achievements（单用户口径，见 core/achievements.py）。
+      { id: 'achievements', label: '成就', icon: 'star' },
     ],
   },
   {
     title: '浏览',
     collapsible: true,
     items: [
-      { id: '_authors', label: '作者', icon: 'users' },
-      { id: '_series', label: '系列', icon: 'layers' },
-      { id: '_notes', label: '批注', icon: 'pencil' },
+      { id: 'authors', label: '作者', icon: 'users' },
+      { id: 'series', label: '系列', icon: 'layers' },
+      { id: 'annotations', label: '批注', icon: 'pencil' },
     ],
   },
   {

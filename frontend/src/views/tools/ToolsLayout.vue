@@ -31,6 +31,7 @@ const SECTIONS: ToolSection[] = [
   { label: '导出目录', routeName: 'tools-output' },
   { label: '本地转换', routeName: 'tools-local' },
   { label: '转换日志', routeName: 'tools-logs' },
+  { label: 'OPDS 订阅', routeName: 'tools-opds-sources' },
 ]
 
 const route = useRoute()

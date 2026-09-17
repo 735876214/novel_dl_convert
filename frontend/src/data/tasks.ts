@@ -1,28 +1,14 @@
-/** 下载 / 转换任务。迁移自 v2 app.js 的 TASKS（原第 56–63 行，6 条演示数据）。 */
+/**
+ * 任务相关的共享类型。
+ *
+ * ⚠️ 本文件原先还有一份 **6 条演示种子数据**（`TASKS`：诡秘之主 / 深空彼岸 / 三体 /
+ * 长安的荔枝 / 凡人修仙传 / 大奉打更人），由 `stores/tasks.ts` 当成真实任务渲染，
+ * 并配一个 900ms 的 ticker 每跳 +1.5%「推进」进度条 —— 那是**伪造的任务状态**，
+ * 用户会以为下载真的在按百分比推进。
+ *
+ * 现已删除：任务数据一律来自服务端任务表（`GET /api/tasks`），
+ * 行类型见 `lib/api.ts` 的 `TaskItem`。
+ */
 
 export type TaskStatus = 'running' | 'done' | 'queued' | 'failed'
 export type TaskType = 'download' | 'convert'
-
-export interface Task {
-  id: string
-  book: string
-  type: TaskType
-  detail: string
-  progress: number
-  status: TaskStatus
-  /** 仅运行中 */
-  speed?: string
-  /** 仅运行中 */
-  eta?: string
-  /** 仅失败 */
-  error?: string
-}
-
-export const TASKS: Task[] = [
-  { id: 't1', book: '诡秘之主', type: 'download', detail: 'EPUB · 1432 章 · 起点中文网', progress: 68, status: 'running', speed: '1.24 MB/s', eta: '2 分 12 秒' },
-  { id: 't2', book: '深空彼岸', type: 'download', detail: 'TXT · 1108 章 · 起点中文网', progress: 34, status: 'running', speed: '862 KB/s', eta: '5 分 40 秒' },
-  { id: 't3', book: '三体', type: 'convert', detail: 'EPUB → MOBI · Calibre', progress: 100, status: 'done' },
-  { id: 't4', book: '长安的荔枝', type: 'convert', detail: 'TXT → EPUB · 生成目录', progress: 0, status: 'queued' },
-  { id: 't5', book: '凡人修仙传', type: 'download', detail: 'EPUB · 2446 章 · 顶点小说', progress: 100, status: 'failed', error: '书源响应超时' },
-  { id: 't6', book: '大奉打更人', type: 'download', detail: 'EPUB · 1149 章 · 笔趣阁', progress: 100, status: 'done' },
-]

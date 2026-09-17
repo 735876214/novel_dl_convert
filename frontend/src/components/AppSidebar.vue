@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import Icon from '@/components/ui/Icon.vue'
+import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { isShelfGroup, type NavItem } from '@/data/nav'
+import { useCollectionsStore } from '@/stores/collections'
 import { useLibraryStore } from '@/stores/library'
 import { useNavStore } from '@/stores/nav'
 import { useTasksStore } from '@/stores/tasks'
@@ -22,6 +24,13 @@ const PATH_BY_ID: Record<string, string> = {
   tasks: '/tasks',
   // 「工具」是唯一入口，8 个工具在工具页内用标签栏切换
   tools: '/tools',
+  series: '/series',
+  authors: '/authors',
+  annotations: '/annotations',
+  stats: '/stats',
+  notify: '/notify',
+  achievements: '/achievements',
+  log: '/log',
 }
 
 function pathFor(id: string): string {
@@ -34,6 +43,13 @@ const PATH_TO_ID: Array<[string, string]> = [
   ['/tasks', 'tasks'],
   // 前缀匹配：/tools 覆盖全部 8 个工具子路径，故任意标签下「工具」项都保持高亮
   ['/tools', 'tools'],
+  ['/series', 'series'],
+  ['/authors', 'authors'],
+  ['/annotations', 'annotations'],
+  ['/stats', 'stats'],
+  ['/notify', 'notify'],
+  ['/achievements', 'achievements'],
+  ['/log', 'log'],
 ]
 
 const activeId = computed(() => {
@@ -45,18 +61,124 @@ const activeId = computed(() => {
 
 const isActive = computed(() => (id: string) => activeId.value === id)
 
+const collections = useCollectionsStore()
+const { cfg, loadConfig } = useSettingsConfig()
+
+/**
+ * 成就开关会影响侧栏是否显示「成就」入口（上游语义：关闭后不显示成就相关界面）。
+ *
+ * 静默加载：读配置失败时**不弹提示**，并按「启用」处理 ——
+ * 因为读不到配置就把入口藏起来，用户会以为功能没了，比多显示一个入口更糟。
+ */
+const achievementsEnabled = computed(() => cfg.value?.achievements?.enabled !== false)
+
+onMounted(() => {
+  collections.load()
+  library.loadBooks()
+  library.loadLibraries()
+  library.loadScopes()
+  void loadConfig(false, true)
+})
+
+/**
+ * 「库」用后端真实分组（格式 / 待修复 / 无封面），「收藏夹」用 SQLite 数据，
+ * 「智能书架」用真实阅读状态计数。其余组保持 NAV_GROUPS 原样。
+ */
+const groups = computed(() =>
+  nav.groups.map((g) => {
+    if (g.title === '库') {
+      return {
+        ...g,
+        items: library.libraryGroups.map((x) => ({
+          id: `lib:${x.key}`,
+          label: x.label,
+          icon: 'library',
+          count: x.count,
+        })),
+      }
+    }
+    if (g.title === '收藏夹') {
+      return {
+        ...g,
+        items: collections.items.map((c) => ({
+          id: `col:${c.id}`,
+          label: c.name,
+          icon: 'star',
+          count: c.count,
+        })),
+      }
+    }
+    if (g.title === '智能书架') {
+      return {
+        ...g,
+        items: [
+          ...g.items.map((it) => ({ ...it, count: library.smartCounts[it.label] ?? 0 })),
+          // 自定义智能书架：smart_scopes 表里的规则书架
+          ...library.scopes.map((s) => ({
+            id: `scope:${s.id}`,
+            label: s.name,
+            icon: 'search',
+            count: library.scopeCounts[`scope:${s.id}`] ?? 0,
+          })),
+        ],
+      }
+    }
+    return g
+  }),
+)
+
 function navCount(item: NavItem): number | null {
   if (item.countSource === 'running') return tasks.runningCount
   return item.count ?? null
 }
 
 function onItemClick(groupTitle: string | null, item: NavItem): void {
+  if (item.id.startsWith('col:')) {
+    router.push(`/collections/${item.id.slice(4)}`)
+    return
+  }
+  if (item.id.startsWith('scope:')) {
+    // 自定义智能书架：openSmart 直接吃 scope:{id} 键，shelfBooks 里按规则求值
+    library.openSmart(item.label, item.id)
+    router.push('/shelf')
+    return
+  }
+  if (item.id.startsWith('lib:')) {
+    library.openLibrary(item.label, item.id.slice(4))
+    router.push('/shelf')
+    return
+  }
+  if (groupTitle === '智能书架') {
+    library.openSmart(item.label, library.smartKeyOf(item.label))
+    router.push('/shelf')
+    return
+  }
   if (groupTitle && isShelfGroup(groupTitle)) {
     library.openShelf(item.label)
     router.push('/shelf')
     return
   }
   router.push(pathFor(item.id))
+}
+
+/** 分组头部的「新增 / 更多」：收藏夹的「新增」走真实创建，其余仍是演示态 */
+async function onGroupAction(title: string, action: 'add' | 'more'): Promise<void> {
+  if (title === '智能书架' && action === 'add') {
+    router.push('/smart-scopes')
+    return
+  }
+  if (title === '收藏夹' && action === 'add') {
+    const name = window.prompt('新建收藏夹名称')
+    if (name && name.trim()) {
+      try {
+        await collections.create(name.trim())
+      } catch (e) {
+        ui.demo(e instanceof Error ? e.message : '创建收藏夹失败')
+      }
+    }
+    return
+  }
+  nav.navAction(title, action)
 }
 </script>
 
@@ -74,7 +196,7 @@ function onItemClick(groupTitle: string | null, item: NavItem): void {
 
     <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3" data-sidebar="content">
       <div
-        v-for="(group, gi) in nav.groups"
+        v-for="(group, gi) in groups"
         :key="group.title ?? `main-${gi}`"
         class="relative"
         :class="gi > 0 ? '-mx-2 mt-1.5 border-t border-border px-2 pt-1.5' : ''"
@@ -93,7 +215,7 @@ function onItemClick(groupTitle: string | null, item: NavItem): void {
               class="grid h-5 w-5 shrink-0 cursor-pointer place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
               :title="(action === 'add' ? '新增' : '更多') + group.title"
               :aria-label="(action === 'add' ? '新增' : '更多') + group.title"
-              @click.stop="nav.navAction(group.title, action)"
+              @click.stop="onGroupAction(group.title, action)"
             >
               <Icon :name="action === 'add' ? 'plus' : 'more'" class="h-3 w-3" />
             </button>
@@ -133,7 +255,7 @@ function onItemClick(groupTitle: string | null, item: NavItem): void {
           <div v-if="group.items.length">
             <div
               v-for="item in group.items"
-              v-show="nav.itemVisible(group.title ?? '', item)"
+              v-show="nav.itemVisible(group.title ?? '', item) && (item.id !== 'achievements' || achievementsEnabled)"
               :key="item.id"
               class="flex cursor-pointer items-center gap-[0.5625rem] rounded-md px-[0.625rem] py-[0.4375rem] text-[13px] transition-colors select-none"
               :class="

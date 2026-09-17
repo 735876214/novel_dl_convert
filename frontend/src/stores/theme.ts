@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
+import { notifyPrefsChanged, suppressing } from '@/lib/prefsBridge'
+
 /**
  * 主题状态。机制照搬 BookOrbit：<html> 上挂 class + localStorage 持久化。
  *
@@ -47,6 +49,8 @@ function writeStored(key: string, value: unknown): void {
   } catch {
     /* 隐私模式等场景下静默失败，与 v2 行为一致 */
   }
+  // 主题 / 点缀色 / 圆角是**三个独立键**，但同属「外观」一块：任一变化都通知同步层
+  notifyPrefsChanged()
 }
 
 /** 清掉 <html> 上某个前缀的 class */
@@ -119,6 +123,29 @@ export const useThemeStore = defineStore('theme', () => {
     })
   }
 
+  /**
+   * 应用远端（模式 / 设备）的外观值。
+   * ⚠️ 仍必须经 `applyClasses()` 这一个入口挂 class —— 不要为了「快」直接改 DOM。
+   * 写入期间抑制通知（否则会把刚拉下来的值又推回服务端）。
+   */
+  function applyRemote(next: Partial<{ theme: ThemeMode; accent: string; radius: RadiusMode }>): void {
+    suppressing(() => {
+      if (next.theme && THEME_ORDER.includes(next.theme)) {
+        theme.value = next.theme
+        writeStored('theme', next.theme)
+      }
+      if (typeof next.accent === 'string') {
+        accent.value = next.accent || 'neutral'
+        writeStored('accent', accent.value)
+      }
+      if (next.radius && RADIUS_OPTIONS.some((o) => o.value === next.radius)) {
+        radius.value = next.radius
+        writeStored('radius', radius.value)
+      }
+    })
+    applyClasses()
+  }
+
   return {
     theme,
     accent,
@@ -130,5 +157,6 @@ export const useThemeStore = defineStore('theme', () => {
     setAccent,
     setRadius,
     watchSystem,
+    applyRemote,
   }
 })

@@ -4,7 +4,8 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import { statusMeta } from '@/lib/format'
-import type { Task, TaskStatus } from '@/data/tasks'
+import type { TaskStatus } from '@/data/tasks'
+import type { TaskItem } from '@/lib/api'
 import { useTasksStore } from '@/stores/tasks'
 import { useUiStore } from '@/stores/ui'
 
@@ -25,7 +26,7 @@ const grouped = computed(() =>
   ),
 )
 
-function meta(t: Task) {
+function meta(t: TaskItem) {
   return statusMeta(t.status)
 }
 
@@ -50,9 +51,13 @@ function goAll(): void {
   >
     <div class="flex h-14 shrink-0 items-center gap-2 border-b border-border px-3.5">
       <h3 class="text-[13px] font-semibold text-foreground">任务队列</h3>
-      <span class="ml-auto flex items-center gap-[0.3125rem] text-[10px] tracking-[0.04em] text-success">
-        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />
-        实时
+      <!-- 这里的数据来自服务端任务表，按 2.5s 轮询刷新（不是推送），所以写「自动刷新」而非「实时」 -->
+      <span class="ml-auto flex items-center gap-[0.3125rem] text-[10px] tracking-[0.04em] text-muted-foreground">
+        <span
+          v-if="tasks.runningCount > 0"
+          class="h-1.5 w-1.5 animate-pulse rounded-full bg-success"
+        />
+        自动刷新
       </span>
     </div>
 
@@ -69,24 +74,23 @@ function goAll(): void {
         >
           <div class="flex items-center gap-1.5">
             <span class="h-1.5 w-1.5 shrink-0 rounded-full" :class="DOT[meta(t).dot]" />
-            <span class="min-w-0 truncate text-[12.5px] font-medium text-foreground">{{ t.book }}</span>
-            <span class="ml-auto shrink-0 text-[11px] text-muted-foreground tabular-nums">
-              {{ t.status === 'running' ? t.speed : meta(t).text }}
-            </span>
+            <span class="min-w-0 truncate text-[12.5px] font-medium text-foreground">{{ t.title }}</span>
+            <span class="ml-auto shrink-0 text-[11px] text-muted-foreground">{{ meta(t).text }}</span>
           </div>
 
           <div class="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted">
             <i
               class="block h-full rounded-full transition-[width] duration-500 ease-out"
-              :class="meta(t).cls === 'ok' ? 'bg-success' : meta(t).cls === 'err' ? 'bg-destructive' : 'bg-primary'"
-              :style="{ width: `${t.progress}%` }"
+              :class="[
+                meta(t).cls === 'ok' ? 'bg-success' : meta(t).cls === 'err' ? 'bg-destructive' : 'bg-primary',
+                t.status === 'running' ? 'animate-pulse' : '',
+              ]"
+              :style="{ width: t.status === 'queued' ? '0%' : `${t.progress}%` }"
             />
           </div>
 
           <div v-if="t.error" class="mt-1 text-[11px] text-destructive">{{ t.error }}</div>
-          <div v-else-if="t.status === 'running' && t.eta" class="mt-1 text-[11px] text-muted-foreground">
-            剩余 {{ t.eta }}
-          </div>
+          <div v-else-if="t.detail" class="mt-1 truncate text-[11px] text-muted-foreground">{{ t.detail }}</div>
         </div>
       </template>
 

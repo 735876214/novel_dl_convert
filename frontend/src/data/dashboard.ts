@@ -32,11 +32,10 @@ export interface WidgetMeta {
 }
 
 /**
- * 12 个部件全登记。本轮实现 3 个（library-overview / reading-goal / reading-rhythm），
- * 其余在自定义面板中置灰标注「待实现」。
+ * 12 个部件全登记，且**均已实现**（见 widgets/registry.ts，数据来自 /api/stats 等）。
  *
- * 标题按 NovelForge 的业务语义落定：本产品是下载/转换工具，没有阅读会话数据，
- * 因此「阅读节奏」类部件改为「入库节奏」；需要不存在数据的部件保留 BookOrbit 原名待补。
+ * 标题按 NovelForge 的业务语义落定：「阅读节奏」类部件对应「入库节奏」，
+ * 其余沿用 BookOrbit 原名；需要的数据（进度 / 批注 / 会话 / 入库）均已持久化。
  */
 export const WIDGET_META: WidgetMeta[] = [
   { id: 'library-overview', title: '书库概览', description: '书籍、作者、系列与占用的一行数字', size: 'lg' },
@@ -55,11 +54,17 @@ export const WIDGET_META: WidgetMeta[] = [
 
 export const WIDGET_IDS: WidgetId[] = WIDGET_META.map((w) => w.id)
 
-/** 本轮已实现的部件（registry 会为这些 id 挂真实组件） */
-export const IMPLEMENTED_WIDGET_IDS: WidgetId[] = ['library-overview', 'reading-goal', 'reading-rhythm']
+/** 已实现的部件（registry 会为这些 id 挂真实组件）—— 现在 12 个全部实现 */
+export const IMPLEMENTED_WIDGET_IDS: WidgetId[] = [...WIDGET_IDS]
 
-/** 默认启用的部件即已实现的那三个 */
-export const DEFAULT_WIDGET_IDS: WidgetId[] = IMPLEMENTED_WIDGET_IDS
+/** 默认启用的部件：一屏信息量适中，其余可在自定义面板里打开 */
+export const DEFAULT_WIDGET_IDS: WidgetId[] = [
+  'library-overview',
+  'currently-reading',
+  'reading-goal',
+  'reading-rhythm',
+  'highlight-of-the-day',
+]
 
 /**
  * 书架行类型（对齐 BookOrbit 的四种）：
@@ -73,7 +78,18 @@ export interface ShelfDef {
   title: string
   /** 最多 6 行 */
   enabled: boolean
+  /** type === 'scope' 时的智能书架键（recent/unread/reading/finished/annotated） */
+  scope?: string
 }
+
+/** 可加为「智能书架行」的筛选（键与 stores/library.ts 的 SMART_KEYS 对应） */
+export const SCOPE_OPTIONS: { key: string; label: string }[] = [
+  { key: 'recent', label: '最近添加' },
+  { key: 'unread', label: '未读' },
+  { key: 'reading', label: '在读' },
+  { key: 'finished', label: '已完成' },
+  { key: 'annotated', label: '有批注' },
+]
 
 /** 最多 6 个书架行、最少保留 1 个 */
 export const MAX_SHELVES = 6

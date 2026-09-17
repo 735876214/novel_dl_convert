@@ -28,8 +28,8 @@ const meta = computed(
 
     <EmptyState
       :icon="meta.icon"
-      :title="`${meta.title} 将在后续实现`"
-      desc="本轮先交付外壳与仪表盘，其余视图照同一套组件铺开即可。"
+      :title="`${meta.title} 不存在`"
+      desc="该页面不存在或链接有误（所有正式视图均已实现，这里仅作未知路由兜底）。"
     >
       <template #action>
         <Button variant="primary" @click="router.push('/')">返回仪表盘</Button>

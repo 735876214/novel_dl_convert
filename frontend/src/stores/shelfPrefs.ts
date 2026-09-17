@@ -1,0 +1,117 @@
+import { defineStore } from 'pinia'
+import { ref } from 'vue'
+
+/**
+ * 书架偏好（对应上游书架的 Display 面板）。
+ *
+ * 存 localStorage，与 `stores/coverPrefs`、`stores/theme` 一致 ——
+ * 本项目的「外观 / 布局」类偏好都在前端；偏好同步是第 3 期（见 capability-gap §14）。
+ *
+ * 用 pinia store 是为了让**侧栏进入书架时的设定**与书架页共用一份状态：
+ * 从侧栏点不同的库 / 智能书架进来，视图与排序不该被重置。
+ */
+
+export type ShelfView = 'grid' | 'list' | 'table'
+export type ShelfSort = 'title' | 'author' | 'series' | 'added' | 'progress' | 'pages' | 'stars'
+export type SortDir = 'asc' | 'desc'
+/** 书卡信息密度：紧凑只给书名 / 标准加作者 / 详细再加格式·年份·页数 */
+export type CardInfo = 'compact' | 'standard' | 'detailed'
+
+export interface ShelfPrefs {
+  view: ShelfView
+  sort: ShelfSort
+  dir: SortDir
+  /** 折叠同系列：同系列的书合成一张卡 / 一行 */
+  collapseSeries: boolean
+}
+
+const KEY = 'nf-shelf-prefs'
+
+export const SHELF_PREFS_DEFAULT: ShelfPrefs = {
+  view: 'grid',
+  sort: 'added',
+  dir: 'desc',
+  collapseSeries: false,
+}
+
+export const SHELF_VIEW_OPTIONS: { value: ShelfView; label: string }[] = [
+  { value: 'grid', label: '网格' },
+  { value: 'list', label: '列表' },
+  { value: 'table', label: '表格' },
+]
+
+export const SHELF_SORT_OPTIONS: { value: ShelfSort; label: string }[] = [
+  { value: 'added', label: '入库时间' },
+  { value: 'title', label: '书名' },
+  { value: 'author', label: '作者' },
+  { value: 'series', label: '系列' },
+  { value: 'progress', label: '阅读进度' },
+  { value: 'pages', label: '页数' },
+  { value: 'stars', label: '评分' },
+]
+
+export const CARD_INFO_OPTIONS: { value: CardInfo; label: string }[] = [
+  { value: 'compact', label: '仅书名' },
+  { value: 'standard', label: '书名 + 作者' },
+  { value: 'detailed', label: '详细' },
+]
+
+function read(): ShelfPrefs {
+  try {
+    const raw = localStorage.getItem(KEY)
+    if (!raw) return { ...SHELF_PREFS_DEFAULT }
+    const p = JSON.parse(raw) as Partial<ShelfPrefs>
+    return {
+      view: SHELF_VIEW_OPTIONS.some((o) => o.value === p.view)
+        ? (p.view as ShelfView)
+        : SHELF_PREFS_DEFAULT.view,
+      sort: SHELF_SORT_OPTIONS.some((o) => o.value === p.sort)
+        ? (p.sort as ShelfSort)
+        : SHELF_PREFS_DEFAULT.sort,
+      dir: p.dir === 'asc' || p.dir === 'desc' ? p.dir : SHELF_PREFS_DEFAULT.dir,
+      collapseSeries: Boolean(p.collapseSeries),
+    }
+  } catch {
+    return { ...SHELF_PREFS_DEFAULT }
+  }
+}
+
+export const useShelfPrefsStore = defineStore('shelfPrefs', () => {
+  const prefs = ref<ShelfPrefs>(read())
+  /** 书卡信息密度是书架级的独立偏好（不在 ShelfPrefs 里，因为它更像「显示」而非「书架状态」） */
+  const cardInfo = ref<CardInfo>('standard')
+  /** 是否展开统一筛选面板 */
+  const filtersOpen = ref(false)
+
+  function save(): void {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(prefs.value))
+    } catch {
+      /* 隐私模式下不可写：本次会话仍生效 */
+    }
+  }
+
+  function patch(p: Partial<ShelfPrefs>): void {
+    prefs.value = { ...prefs.value, ...p }
+    save()
+  }
+
+  /** 点同一列时切换升降序，点不同列时用该列的默认方向 */
+  function sortBy(key: ShelfSort): void {
+    const numeric = key === 'added' || key === 'progress' || key === 'pages' || key === 'stars'
+    if (prefs.value.sort === key) {
+      patch({ dir: prefs.value.dir === 'asc' ? 'desc' : 'asc' })
+    } else {
+      // 时间 / 数值类默认降序（新的、大的在前），文本类默认升序
+      patch({ sort: key, dir: numeric ? 'desc' : 'asc' })
+    }
+  }
+
+  function reset(): void {
+    prefs.value = { ...SHELF_PREFS_DEFAULT }
+    cardInfo.value = 'standard'
+    save()
+  }
+
+  return { prefs, cardInfo, filtersOpen, patch, sortBy, reset }
+})

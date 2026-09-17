@@ -6,18 +6,37 @@
  *   · 统一的错误处理：非 2xx 打 console.error 并抛 Error（消息取自后端 detail）
  *   · 搜索等易竞态的场景由调用方传 AbortSignal
  */
+// 类型-only 循环引用在运行时会被擦除，安全（smartScope.ts 需要 BookCard）
+import type { PrefsPayload } from './prefsPayload'
+import type { SmartScope, ScopeRule } from './smartScope'
 
 export interface HealthInfo {
   status: string
   input: string
   output: string
   watcher: boolean
+  /** 活动日志目录（后端 /health 会返回） */
+  logs?: string
 }
 
 export interface SourceItem {
   name: string
   builtin?: boolean
   [key: string]: unknown
+}
+
+/** 书源运行状态（/api/sources/status）：Cookie 持久化 + 当前配置下的可用性 */
+export interface SourceStatus {
+  name: string
+  display_name?: string
+  domains: string[]
+  public: boolean
+  user: boolean
+  download_enabled: boolean
+  public_only: boolean
+  cookie: { has: boolean; mtime: number | null; size: number }
+  usable: boolean
+  blocked_reason: string
 }
 
 export interface FileEntry {
@@ -40,10 +59,32 @@ export interface SearchHit {
 }
 
 export interface TaskState {
-  status: 'pending' | 'running' | 'done' | 'error' | string
+  /**
+   * 任务状态。⚠️ 后端**失败时写的是 `failed`**（不是 `error`）——
+   * 旧类型这里写的是 `'error'`，导致调用方判断失败的分支永远不成立
+   * （失败任务会一直显示「下载中」并无限轮询）。已按后端实际取值修正。
+   */
+  status: 'queued' | 'running' | 'done' | 'failed' | string
   result: string | null
   error: string | null
   name: string | null
+}
+
+/** 任务表的一行（`GET /api/tasks`）。progress 只含真实里程碑：0 入队 / 50 开始 / 100 结束。 */
+export interface TaskItem {
+  id: string
+  type: string
+  title: string
+  detail: string
+  status: string
+  progress: number
+  error: string
+  result: string
+  name: string
+  notice: string
+  actor: string
+  created_at: number
+  updated_at: number
 }
 
 export interface LogItem {
@@ -52,6 +93,11 @@ export interface LogItem {
   action?: string
   status?: string
   message?: string
+  /**
+   * 操作者（登录账号名）。由后端鉴权中间件写入（见 `core/activity_log.py` 的 actor）。
+   * 历史条目没有该字段（字段是后加的），读取端必须按「未记录」渲染而非报错。
+   */
+  actor?: string
   [key: string]: unknown
 }
 
@@ -109,9 +155,144 @@ export interface DuplicateItem {
   format?: string
 }
 
+/** 外部服务的一个凭据字段（定义由后端给，前端不重复维护） */
+export interface IntegrationField {
+  key: string
+  label: string
+  type: 'password' | 'text'
+  hint?: string
+}
+
+/** 外部服务集成（Hardcover / Readwise / StoryGraph） */
+export interface IntegrationService {
+  id: string
+  label: string
+  desc: string
+  fields: IntegrationField[]
+  /** 能否自动验证凭据（StoryGraph 无公开 API → false，前端不显示验证按钮） */
+  verify: boolean
+  doc: string
+  note?: string
+  /** 当前值：已保存回显掩码，未保存为空串 */
+  values: Record<string, string>
+  /** 每个字段是否已设置 */
+  has: Record<string, boolean>
+}
+
+export interface IntegrationTestResult {
+  ok: boolean
+  message: string
+  detail?: string
+  /** StoryGraph 这类无法验证的服务会带这个标记 */
+  unsupported?: boolean
+}
+
+/** KOReader 进度互通状态（`GET /api/koreader`） */
+export interface KoreaderStatus {
+  enabled: boolean
+  username: string
+  /** 是否已设置同步密钥（= 密码的 MD5）。密钥本身永不回显 */
+  has_key: boolean
+  /** 已建立文档索引的书数 */
+  doc_count: number
+  /** 书库里的总数（用来看还有多少书没索引） */
+  book_count: number
+}
+
+/** 一本书的 KOReader 文档索引（`GET /api/koreader/docs`） */
+export interface KoreaderDoc {
+  book_id: string
+  name: string
+  title: string
+  /** partialMD5：KOReader 默认的 document 标识 */
+  doc_md5: string
+  /** md5(basename)：checksum_method=FILENAME 时用 */
+  alt_md5: string
+  size: number
+}
+
+/** OPDS 订阅源（客户端）。`password` 回显的是掩码，提交掩码 = 不修改 */
+export interface OpdsSource {
+  id: number
+  name: string
+  url: string
+  username: string
+  password: string
+  has_password: boolean
+}
+
+export interface OpdsEntry {
+  title: string
+  author: string
+  updated: string
+  /** nav = 可继续点进去的目录；book = 可下载 */
+  kind: 'nav' | 'book'
+  href: string
+  type: string
+  length: number
+  cover: string
+  summary: string
+  /** feed 里的 dc:isPartOf（如「系列 #3」），Komga 会给 */
+  series?: string
+  size_hint: string
+}
+
+export interface OpdsFeed {
+  title: string
+  /** 本次实际抓取的地址（面包屑 / 返回上一层用） */
+  url: string
+  /** 下一页（空 = 没有更多） */
+  next: string
+  /** 上一层（空 = 已在根） */
+  up: string
+  entries: OpdsEntry[]
+}
+
+/** `POST /api/komga/layout/preview`：整理为 Komga 库布局的预览（只算不改） */
+export interface KomgaLayoutItem {
+  /** 原相对路径（平铺时就是文件名） */
+  old: string
+  /** 目标相对路径，形如 `系列名/系列名 #1.epub` */
+  new: string
+  title: string
+  author: string
+  series: string
+  index: string
+  /** 会改 basename → book_id 变 → 应用时自动搬进度/批注/评分/收藏 */
+  id_changes: boolean
+  conflict: boolean
+  reason: string
+}
+
+export interface KomgaLayoutPlan {
+  items: KomgaLayoutItem[]
+  /** 书总数 */
+  total: number
+  /** 可安全移动的条目数（不含冲突项） */
+  movable: number
+  /** 无系列或已在目标位置、无需移动的书 */
+  unchanged: number
+  /** 涉及的系列数 */
+  series_count: number
+  /** 其中会换 book_id 的条数（需搬关联数据） */
+  id_changing: number
+}
+
+export interface KomgaLayoutResult {
+  moved: Array<{ old: string; new: string }>
+  errors: Array<{ old: string; error: string }>
+  count: number
+  /** 搬迁了关联数据的条目数 */
+  remapped: number
+  /** 清理掉的空系列目录数 */
+  pruned_dirs: number
+}
+
 export interface DuplicateGroup {
   key: string
   reason: string
+  /** 组内最小书名相似度（%）：这组「最不像的一对」的得分，判定强度最诚实的体现 */
+  similarity: number
   title: string
   author: string
   items: DuplicateItem[]
@@ -137,10 +318,577 @@ export interface RecycleResult {
   keep?: string
 }
 
+// ---------- 书库（图书馆浏览 / 书籍详情） ----------
+
+export interface BookChapter {
+  num: number
+  title: string
+  /** 在 EPUB spine 中的顺序索引，阅读器据此加载正文 */
+  index?: number
+}
+
+export interface BookVolume {
+  volume: string
+  chapters: BookChapter[]
+}
+
+export interface BookFile {
+  name: string
+  format: string
+  size: number
+  mtime: number
+}
+
+/** 书架网格与详情页共用的书籍卡片（对齐 docs/bookorbit-library-contract.md）。 */
+export interface BookCard {
+  id: string
+  name: string
+  title: string
+  author: string
+  series: string
+  /** 真实阅读状态；**null = 没设过状态**，界面用进度兜底推导（不能当 unread 用） */
+  status?: 'unread' | 'reading' | 'finished' | 'paused' | 'abandoned' | null
+  started_at?: number
+  finished_at?: number
+  /** 系列内序号（字符串，空串 = 无）。解析见 core/library._series_index_of */
+  series_index?: string
+  has_cover: boolean
+  format: string
+  size: number
+  mtime: number
+  /** 封面占位渐变（oklch），由后端按 id 派生，保证稳定 */
+  c1: string
+  c2: string
+  tags: string[]
+  year: string
+  publisher: string
+  isbn: string
+  language: string
+  description: string
+  issues: string[]
+  /** 阅读进度 0-100（由 /api/books 附加，来自 SQLite） */
+  percent?: number
+  /** 最近阅读时间戳（秒） */
+  updated_at?: number
+  /** 批注数量 */
+  annotation_count?: number
+  /** 评分 1–5；**0 = 未评分**（未评分不用 0 星表示，见 core/db.py 的说明） */
+  stars?: number
+  /** 页数——**估算值**：EPUB 没有固定页数概念，见 core/library._pages_in */
+  pages?: number
+  /** 页数来源；目前恒为 'estimate'，空串表示无法度量（如零字节文件） */
+  pages_source?: string
+}
+
+export interface BookDetail extends BookCard {
+  chapters: BookVolume[]
+  files: BookFile[]
+}
+
+// ---------- 账户（单用户轻登录） ----------
+
+export interface AuthResult {
+  token: string
+  user: string
+}
+
+export interface MeInfo {
+  user: string
+}
+
+// ---------- 阅读器：章节内容 / 进度 / 批注 ----------
+
+export interface ChapterContent {
+  index: number
+  total: number
+  title: string
+  /** 章节正文 HTML（资源 URL 已改写为后端接口） */
+  html: string
+}
+
+export interface ProgressState {
+  locator: number
+  percent: number
+}
+
+export interface Annotation {
+  id: number
+  chapter: number
+  quote: string
+  color: string
+  note: string
+  created_at: number
+}
+
+// ---------- 系列 ----------
+
+export interface SeriesCover {
+  id: string
+  title: string
+  c1: string
+  c2: string
+  /** 有内嵌封面时才去请求 /cover，避免为无封面的书发一堆注定 404 的请求 */
+  has_cover?: boolean
+}
+
+export interface SeriesItem {
+  name: string
+  count: number
+  authors: string[]
+  covers: SeriesCover[]
+}
+
+export interface SeriesDetail {
+  name: string
+  count: number
+  books: BookCard[]
+}
+
+// ---------- 作者 ----------
+
+export interface AuthorItem {
+  name: string
+  count: number
+  series: string[]
+  covers: SeriesCover[]
+}
+
+export interface AuthorDetail {
+  name: string
+  count: number
+  books: BookCard[]
+}
+
+// ---------- 批注总览 ----------
+
+export interface AllAnnotation {
+  id: number
+  book_id: string
+  book_title: string
+  book_author: string
+  chapter: number
+  quote: string
+  color: string
+  note: string
+  created_at: number
+}
+
+// ---------- 收藏夹 ----------
+
+export interface CollectionItem {
+  id: number
+  name: string
+  count: number
+  created_at: number
+}
+
+export interface CollectionDetail {
+  id: number
+  name: string
+  books: BookCard[]
+}
+
+// ---------- 数据统计 ----------
+
+export interface StatsTop {
+  name: string
+  count: number
+}
+
+export interface RecentRead {
+  id: string
+  title: string
+  author: string
+  percent: number
+  updated_at: number
+}
+
+export interface StatsOverview {
+  books: {
+    total: number
+    size: number
+    by_format: Record<string, number>
+    /** 出现过的语言数 */
+    languages: number
+  }
+  authors: { total: number; top: StatsTop[] }
+  series: { total: number; top: StatsTop[] }
+  publishers: { total: number; top: StatsTop[] }
+  /** 题材：来自 EPUB 的 dc:subject，一本书可贡献多个 */
+  genres: { total: number; top: StatsTop[] }
+  /** 出版年份按十年聚合（逐年噪声太大）；unknown = 没写年份的书 */
+  years: { known: number; unknown: number; decades: Array<{ decade: number; count: number }> }
+  /** 全库平均阅读进度（0–100，含未读书的 0） */
+  avg_progress: number
+  /** 书库体检：缺元数据 / 无封面 / 异常文件的计数 */
+  integrity: {
+    missing_author: number
+    missing_language: number
+    no_cover: number
+    zero_size: number
+    unparsable: number
+  }
+  reading: {
+    unread: number
+    reading: number
+    finished: number
+    annotations: number
+    /** 累计阅读秒数 */
+    seconds: number
+    /** 会话次数 */
+    sessions: number
+    /** 平均每次会话秒数 */
+    avg_seconds: number
+    /** 当前连续阅读天数 */
+    streak: number
+    /** 累计有阅读记录的天数 */
+    days: number
+  }
+  /** 近 N 天每日入库数量（索引 0 = N 天前，末尾 = 今天）。字段名保留历史叫法，长度跟随 window */
+  added_28d: number[]
+  /** 本月入库数量 */
+  added_month: number
+  /** 会话开始时段分布（24 小时） */
+  hours: number[]
+  /** 近 N 天每日阅读秒数。字段名保留历史叫法，长度跟随 window */
+  reading_28d: number[]
+  /** 本次返回的节奏图窗口（天）——两个 28d 命名的数组的实际长度 */
+  window: number
+  recent: RecentRead[]
+}
+
+// ---------- 应用设置（服务端持久化） ----------
+
+export interface AppConfig {
+  chapter_detection: { mode?: string; context_lines?: number; fallback?: string }
+  traditionalize: boolean
+  output: { format?: string; [k: string]: unknown }
+  /** 成品命名规则（批量重命名的默认值，服务端持久化） */
+  naming: { pattern?: string; scope?: string }
+  llm: { api_key: string; base_url: string; model: string; has_key: boolean }
+  watcher: {
+    enabled?: boolean
+    interval?: number
+    recursive?: boolean
+    settle_seconds?: number
+    stable_rounds?: number
+    copy_non_txt?: boolean
+    process_existing?: boolean
+    max_retries?: number
+    ignore?: string[]
+  }
+  network: { max_retries?: number; host_replace?: Record<string, string> }
+  download: { enabled?: boolean; public_only?: boolean }
+  logging: { dir?: string; max_entries?: number }
+  /** 上传上限（字节）。此前后端对上传**完全没有限制**，见 server.py 的 _read_capped */
+  upload: { max_bytes?: number; max_source_rules_bytes?: number }
+  /** 成就统计与界面开关（对应上游 Profile 页的 Enable achievements） */
+  achievements: { enabled?: boolean }
+}
+
+/** 目录占用（维护页） */
+export interface DirUsage {
+  path: string
+  files: number
+  bytes: number
+}
+
+/** 维护页只读总览（`GET /api/maintenance`） */
+export interface MaintenanceInfo {
+  upload: { max_bytes: number; max_source_rules_bytes: number }
+  overridden: string[]
+  dirs: {
+    input: DirUsage
+    output: DirUsage
+    cache: DirUsage
+    backups: DirUsage
+    recycle: DirUsage
+  }
+  library: { books: number }
+  capabilities: { ebook_convert: EbookConvertCap }
+}
+
+/** 通知条目 = 活动日志条目 + 稳定 id 与已读态（`GET /api/notifications`） */
+export interface NotificationItem extends LogItem {
+  id: string
+  read: boolean
+}
+
+/** 单条成就。`progress` 是实时算出来的，**不落库**（见 core/achievements.py） */
+export interface AchievementItem {
+  key: string
+  name: string
+  desc: string
+  group: string
+  metric: string
+  target: number
+  progress: number
+  percent: number
+  unlocked: boolean
+  /** 0 表示未解锁 */
+  unlocked_at: number
+  /** metric 名拼错时为 false —— 用于暴露配置错误，而不是静默算成 0 */
+  known_metric: boolean
+}
+
+export interface AchievementsOverview {
+  /** 由「设置 → 个人资料 → 成就」控制；**关闭时 items 为空数组**、不判定也不解锁 */
+  enabled: boolean
+  items: AchievementItem[]
+  groups: Array<{ group: string; total: number; unlocked: number }>
+  total: number
+  unlocked: number
+  newly_unlocked: string[]
+  metrics: Record<string, number>
+}
+
+export interface RequestSection {
+  key: string
+  label: string
+  /** unavailable = 本项目不支持；not_configured = 支持但未配置；configured = 已就绪 */
+  state: string
+  desc: string
+  items: Array<{ label: string; detail: string }>
+}
+
+/** 求书配置的只读结构（`GET /api/requests/config`） */
+export interface RequestsConfig {
+  stage: string
+  note: string
+  sections: RequestSection[]
+  alternative: {
+    label: string
+    desc: string
+    download_enabled: boolean
+    public_only: boolean
+    source_count: number
+    guidance: string
+    settings_link: string
+    tools_link: string
+  }
+}
+
+/** 孤儿记录：引用了已不存在的书的数据库行（`GET /api/maintenance/orphans`） */
+export interface OrphansInfo {
+  /** 表名 → 孤儿书数 + 样例 book_id（便于确认清的是什么） */
+  tables: Record<string, { books: number; sample: string[] }>
+  total: number
+  library_books: number
+}
+
+/** 可编辑的元数据字段（与后端 fileops.METADATA_FIELDS 一一对应） */
+export interface BookMetadataFields {
+  title: string
+  author: string
+  series: string
+  series_index: string
+  /** 出版年（OPF 里是 dc:date，书目里叫 year，接口层已映射） */
+  date: string
+  publisher: string
+  language: string
+  description: string
+  isbn: string
+  /** 题材；后端写入时会**去重且保序** */
+  tags: string[]
+}
+
+/** `GET /api/books/{bid}/metadata` */
+export interface BookMetadata {
+  id: string
+  name: string
+  format: string
+  /** 非 EPUB（无 OPF 可改写）为 false，前端据此把表单置为只读并说明原因 */
+  editable: boolean
+  fields: BookMetadataFields
+}
+
+/** 阅读状态行（`GET/PUT /api/books/{bid}/status`）。时间戳为 epoch 秒，0 = 未发生 */
+export interface ReadingStatus {
+  book_id: string
+  status: 'unread' | 'reading' | 'finished' | 'paused' | 'abandoned'
+  started_at: number
+  finished_at: number
+  updated_at: number
+}
+
+/** 评分 + 书评（`GET/PUT /api/books/{bid}/review`）。stars 0 = 未评分 */
+export interface BookReview {
+  book_id: string
+  stars: number
+  review: string
+}
+
+/** 相似书条目（`GET /api/books/{bid}/similar`）。reasons 说明为什么相似 */
+export interface SimilarBook {
+  id: string
+  title: string
+  author: string
+  series: string
+  series_index: string
+  cover_url: string
+  has_cover: boolean
+  score: number
+  reasons: string[]
+}
+
+/** Reading Log 的单日行（`GET /api/reading-log`）。books 按当天时长倒序 */
+export interface ReadingLogDay {
+  date: string
+  seconds: number
+  sessions: number
+  books: Array<{ id: string; title: string; seconds: number }>
+}
+
+export interface ReadingLogBook {
+  id: string
+  title: string
+  author: string
+  seconds: number
+  sessions: number
+  last_ended: number
+}
+
+export interface ReadingLogSession {
+  book_id: string
+  title: string
+  seconds: number
+  started_at: number
+  ended_at: number
+  /** 已格式化的结束时间（YYYY-MM-DD HH:MM，本地时区） */
+  date: string
+}
+
+// ---------- 偏好模式 / 设备（按设备的偏好同步）----------
+
+/** 偏好「模式」：具名的整套偏好快照（payload 五块，见 lib/prefsPayload.ts） */
+export interface PrefProfile {
+  id: number
+  name: string
+  payload: PrefsPayload
+  created_at: number
+  updated_at: number
+}
+
+/** 偏好「设备」：每台设备持有自己的一份配置 */
+export interface PrefDevice {
+  id: string
+  name: string
+  payload: PrefsPayload
+  /**
+   * 当前套用了哪个模式 —— **只是来源标记**：应用模式 = 拷贝内容，
+   * 之后设备各改各的，改模式本体不影响它。null = 未套用。
+   */
+  active_profile_id: number | null
+  created_at: number
+  last_seen: number
+}
+
+/** 上传的阅读字体（`GET /api/fonts`）。id = 文件名，name = 字体族名（解析不出时回落文件名） */
+export interface FontItem {
+  id: string
+  name: string
+  /** 子样式（Regular/Bold…）；族名未解析出时是提示文案 */
+  style: string
+  size: number
+  /** ttf / otf / woff / woff2 */
+  format: string
+  mtime: number
+}
+
+/** POST /api/books/batch 的返回：逐本执行，单本失败不影响其余 */
+export interface BatchResult {
+  ok: boolean
+  /** 请求中的 id 总数 */
+  total: number
+  /** 成功处理的 book_id 列表 */
+  succeeded: string[]
+  /** 失败的（书不存在 / 参数非法），每项带原因 */
+  failed: Array<{ id: string; error: string }>
+}
+
+/** POST /api/books/{bid}/metadata */
+export interface MetadataWriteResult {
+  ok: boolean
+  /** 被接受的字段（已按白名单过滤） */
+  written: string[]
+  /** **实际发生变化**的字段（同值重写不在此列） */
+  changed: string[]
+  /** 提交了但不支持的字段 */
+  unknown: string[]
+  book: BookMetadataFields
+}
+
+export interface ConfigPayload {
+  config: AppConfig
+  overrides: Record<string, unknown>
+  /** 被 settings.json 覆盖的点号键（提示「改了 config.yaml 但不生效」的原因） */
+  overridden: string[]
+  config_file: string
+  settings_file: string
+  backup_dir: string
+  capabilities: { ebook_convert: EbookConvertCap }
+}
+
+/** Calibre ebook-convert 能力探测 */
+export interface EbookConvertCap {
+  available: boolean
+  path: string
+  version: string
+  env_var: string
+  supported: string[]
+}
+
+/** config.yaml 原文 */
+export interface RawConfig {
+  exists: boolean
+  text: string
+  path: string
+  mtime: number
+  size: number
+}
+
+export interface BackupItem {
+  name: string
+  mtime: number
+  size: number
+}
+
+// ---------- 库（真实分组） ----------
+
+export interface LibraryGroup {
+  /** 筛选键：fmt:EPUB / issues:1 / nocover:1 */
+  key: string
+  label: string
+  count: number
+  kind: string
+}
+
+function _authToken(): string {
+  try {
+    return localStorage.getItem('nf_token') || ''
+  } catch {
+    return ''
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init)
+  const headers = new Headers(init?.headers)
+  const token = _authToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const res = await fetch(path, { ...init, headers })
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
+    if (res.status === 401) {
+      // 登录失效 / 未登录：清 token 并通知全局弹出登录门禁
+      try {
+        localStorage.removeItem('nf_token')
+      } catch {
+        /* ignore */
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('nf-unauthorized'))
+      }
+    }
     console.error(`[api] ${init?.method ?? 'GET'} ${path} → ${res.status}`, detail)
     throw new Error(detail || `请求失败（HTTP ${res.status}）`)
   }
@@ -183,6 +931,9 @@ export const api = {
   deleteSource: (name: string) =>
     request<{ ok: boolean }>(`/api/sources/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
+  /** 书源运行状态：Cookie 是否已持久化、当前配置下是否可用 */
+  sourcesStatus: () => request<{ items: SourceStatus[] }>('/api/sources/status'),
+
   // ---------- 搜索 / 预览 / 下载 ----------
   search: (title: string, signal?: AbortSignal) =>
     request<{ results?: SearchHit[]; items?: SearchHit[]; errors?: unknown[] }>('/api/search', {
@@ -206,6 +957,9 @@ export const api = {
 
   task: (tid: string) => request<TaskState>(`/api/tasks/${encodeURIComponent(tid)}`),
 
+  /** 任务列表（服务端真实任务表，新 → 旧） */
+  tasks: (limit = 100) => request<{ items: TaskItem[]; count: number }>(`/api/tasks?limit=${limit}`),
+
   // ---------- 文件 ----------
   files: () => request<FileListing>('/api/files'),
 
@@ -228,9 +982,251 @@ export const api = {
     return request<{ items: LogItem[]; count: unknown; dir: string }>(`/api/logs${qs ? `?${qs}` : ''}`)
   },
 
-  clearLogs: () => request<{ ok: boolean }>('/api/logs', { method: 'DELETE' }),
+  clearLogs: () =>
+    request<{ ok: boolean; read_marks_cleared?: number }>('/api/logs', { method: 'DELETE' }),
 
   logsDownloadUrl: () => '/api/logs/download',
+
+  /**
+   * 封面 URL，直接给 `<img src>` 用。
+   *
+   * ⚠️ 必须带 `?token=`：`<img>` 无法携带 Authorization 头，而 /api 前缀一律要求 Bearer。
+   * 后端只为 `/cover` 与 `/asset` 这两个**只读图片接口**接受 query 令牌
+   * （见 `server._request_token`），其余接口仍只认请求头。
+   */
+  coverUrl: (bid: string) => {
+    const t = _authToken()
+    return `/api/books/${encodeURIComponent(bid)}/cover${t ? `?token=${encodeURIComponent(t)}` : ''}`
+  },
+
+  // ---------- 漫画（CBZ）----------
+  /** 漫画页清单。前端按 index 逐页取图，不一次拉整本（一话可能几十 MB） */
+  comicPages: (bid: string) =>
+    request<{ pages: Array<{ index: number; name: string; size: number }>; total: number }>(
+      `/api/books/${encodeURIComponent(bid)}/comic`,
+    ),
+
+  /**
+   * 漫画单页 URL（1-based 的 index 由调用方转 0-based）。
+   * ⚠️ 必须带 `?token=`：漫画页用 `<img>` 加载（比 fetch+blob 更省内存），
+   * `<img>` 无法携带 Authorization 头。后端只为只读图片接口接受 query 令牌，
+   * 该路径已在 `server._MEDIA_TOKEN_PATHS` 中（见那里的注释）。
+   */
+  comicPageUrl: (bid: string, index: number) => {
+    const t = _authToken()
+    return `/api/books/${encodeURIComponent(bid)}/comic/${index}${t ? `?token=${encodeURIComponent(t)}` : ''}`
+  },
+
+  // ---------- 通知（活动日志 + 已读态）----------
+  notifications: (limit = 100) =>
+    request<{ items: NotificationItem[]; count: number; unread: number; unread_total: number }>(
+      `/api/notifications?limit=${limit}`,
+    ),
+
+  markNotificationsRead: (payload: { ids?: string[]; all?: boolean }) =>
+    request<{ ok: boolean; marked: number }>('/api/notifications/read', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  // ---------- 成就 ----------
+  achievements: () => request<AchievementsOverview>('/api/achievements'),
+
+  /** 重算全部成就（会重置解锁时间，见 core/achievements.backfill） */
+  backfillAchievements: () =>
+    request<AchievementsOverview>('/api/achievements/backfill', { method: 'POST' }),
+
+  // ---------- 求书（只读骨架）----------
+  requestsConfig: () => request<RequestsConfig>('/api/requests/config'),
+
+  // ---------- 孤儿记录 ----------
+  orphans: () => request<OrphansInfo>('/api/maintenance/orphans'),
+
+  // ---------- 单书元数据编辑 ----------
+  bookMetadata: (bid: string) =>
+    request<BookMetadata>(`/api/books/${encodeURIComponent(bid)}/metadata`),
+
+  /**
+   * 改写单本书的 EPUB 内嵌元数据。
+   * 返回的 `changed` 只含**实际发生变化**的字段（同值重写不会出现在里面）。
+   */
+  setBookMetadata: (bid: string, fields: Partial<BookMetadataFields>) =>
+    request<MetadataWriteResult>(`/api/books/${encodeURIComponent(bid)}/metadata`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields }),
+    }),
+
+  // ---------- 阅读状态 / 书评 / 相似书 ----------
+  bookStatus: (bid: string) =>
+    request<ReadingStatus>(`/api/books/${encodeURIComponent(bid)}/status`),
+
+  /** status 之外可显式传起止日期（epoch 秒）；不传则由后端按状态规则自动维护 */
+  setStatus: (bid: string, payload: { status: string; started_at?: number; finished_at?: number }) =>
+    request<ReadingStatus>(`/api/books/${encodeURIComponent(bid)}/status`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  bookReview: (bid: string) =>
+    request<BookReview>(`/api/books/${encodeURIComponent(bid)}/review`),
+
+  /** stars 0 = 清除评分；review 空串 = 清除书评。两者一起保存但可独立留空 */
+  setReview: (bid: string, payload: { stars: number; review: string }) =>
+    request<BookReview>(`/api/books/${encodeURIComponent(bid)}/review`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 相似书：内容重合度派生（同作者 / 题材 / 同系列），得分为 0 的不返回 */
+  similarBooks: (bid: string, limit = 6) =>
+    request<{ items: SimilarBook[] }>(`/api/books/${encodeURIComponent(bid)}/similar?limit=${limit}`),
+
+  /**
+   * 导出全部书目 CSV（含阅读进度 / 状态 / 评分）。
+   * 用 blob 触发下载：`/api` 一律要求 Bearer 头，`<a download>` 带不了，
+   * 所以不能像 /cover 那样直接给 URL（那是后端专门为图片开的 ?token= 口子）。
+   */
+  exportBooks: async (): Promise<void> => {
+    const headers = new Headers()
+    const token = _authToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    const res = await fetch('/api/books/export', { headers })
+    if (!res.ok) throw new Error(`导出失败（${res.status}）`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `library-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
+  /** 批量动作（详见后端 api_batch）。逐本执行，返回成功/失败清单。 */
+  batch: (payload: { action: string; ids: string[]; params?: Record<string, unknown> }) =>
+    request<BatchResult>('/api/books/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  // ---------- 自定义智能书架（规则存后端，求值在前端 lib/smartScope.ts）----------
+  smartScopes: () => request<{ items: SmartScope[] }>('/api/smart-scopes'),
+
+  createSmartScope: (payload: { name: string; rules: ScopeRule[]; match: 'all' | 'any' }) =>
+    request<SmartScope>('/api/smart-scopes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  updateSmartScope: (id: number, payload: { name: string; rules: ScopeRule[]; match: 'all' | 'any' }) =>
+    request<SmartScope>(`/api/smart-scopes/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  deleteSmartScope: (id: number) =>
+    request<{ ok: boolean }>(`/api/smart-scopes/${id}`, { method: 'DELETE' }),
+
+  // ---------- 偏好模式 / 设备（按设备的偏好同步）----------
+  prefProfiles: () => request<{ items: PrefProfile[] }>('/api/prefs/profiles'),
+
+  prefProfileCreate: (payload: { name: string; payload: PrefsPayload }) =>
+    request<PrefProfile>('/api/prefs/profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  prefProfileUpdate: (id: number, payload: { name: string; payload: PrefsPayload }) =>
+    request<PrefProfile>(`/api/prefs/profiles/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 删模式：返回被解除引用的设备数（那些设备的配置不变） */
+  prefProfileDelete: (id: number) =>
+    request<{ ok: boolean; deleted: boolean; detached_devices: number }>(`/api/prefs/profiles/${id}`, {
+      method: 'DELETE',
+    }),
+
+  prefDevices: () => request<{ items: PrefDevice[] }>('/api/prefs/devices'),
+
+  /** 本设备记录。未登记时后端 404 → 这里抛错，调用方据此判断「新设备」 */
+  prefDevice: (id: string) => request<PrefDevice>(`/api/prefs/devices/${encodeURIComponent(id)}`),
+
+  /** 设备上报。`active_profile_id` 不传即保留原值（推送配置时不该顺手清掉来源标记） */
+  prefDeviceUpsert: (
+    id: string,
+    payload: { name: string; payload: PrefsPayload; active_profile_id?: number | null },
+  ) =>
+    request<PrefDevice>(`/api/prefs/devices/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 应用模式到本设备（服务端把模式 payload 拷贝过来） */
+  prefDeviceApply: (id: string, pid: number) =>
+    request<PrefDevice>(`/api/prefs/devices/${encodeURIComponent(id)}/apply/${pid}`, { method: 'POST' }),
+
+  prefDeviceDelete: (id: string) =>
+    request<{ ok: boolean }>(`/api/prefs/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  // ---------- 阅读字体（后端字体库；上传后可在阅读器里选用）----------
+  fonts: () =>
+    request<{ items: FontItem[]; max_bytes: number; max_count: number }>('/api/fonts'),
+
+  /** 上传字体（multipart）。Content-Type 交给浏览器自动带 boundary，不能手写。 */
+  uploadFont: async (file: File): Promise<FontItem> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    const headers = new Headers()
+    const token = _authToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    const res = await fetch('/api/fonts', { method: 'POST', headers, body: fd })
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      let msg = `上传失败（${res.status}）`
+      try {
+        msg = (JSON.parse(detail) as { detail?: string }).detail || msg
+      } catch {
+        /* 非 JSON 响应 */
+      }
+      throw new Error(msg)
+    }
+    return (await res.json()) as FontItem
+  },
+
+  deleteFont: (id: string) =>
+    request<{ ok: boolean }>(`/api/fonts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  /** Reading Log：按天明细 + 按书聚合 + 最近会话（reading_sessions 表） */
+  readingLog: (days = 60) =>
+    request<{ days: number; items: ReadingLogDay[]; by_book: ReadingLogBook[]; recent: ReadingLogSession[] }>(
+      `/api/reading-log?days=${days}`,
+    ),
+
+  /** 手工补录一次阅读会话（读了纸质书 / 没开阅读器的场景）。返回会话结束时间 */
+  addReadingSession: (payload: { book_id: string; minutes: number; date: string; start?: string }) =>
+    request<{ ok: boolean; session: ReadingLogSession }>('/api/reading-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 清理孤儿记录 —— **不可恢复**（但把文件放回原处会重新关联） */
+  clearOrphans: () =>
+    request<{ ok: boolean; removed: Record<string, number>; total: number }>(
+      '/api/maintenance/orphans/clear',
+      { method: 'POST' },
+    ),
 
   // ---------- 本地转换 ----------
   convertFile: (file: File, traditionalize = false) => {
@@ -260,11 +1256,11 @@ export const api = {
       body: JSON.stringify({ type, from, to }),
     }),
 
-  entityRenameApply: (items: RenameItem[]) =>
+  entityRenameApply: (type: EntityKind, to: string, items: RenameItem[]) =>
     request<ApplyResult>('/api/entities/rename/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({ type, to, items }),
     }),
 
   entityMerge: (type: EntityKind, source: string, target: string) =>
@@ -288,7 +1284,99 @@ export const api = {
       body: JSON.stringify({ items }),
     }),
 
-  duplicates: () => request<{ groups: DuplicateGroup[]; total: number }>('/api/duplicates'),
+  /** threshold = 书名相似度阈值（%，50–100）。同作者是硬条件，阈值只管书名。 */
+  duplicates: (threshold = 85) =>
+    request<{ groups: DuplicateGroup[]; total: number; threshold: number }>(
+      `/api/duplicates?threshold=${threshold}`,
+    ),
+
+  // ---------- Komga 库布局（输出侧）----------
+  /** 预览「整理为 Komga 布局」：哪些书会移进系列目录（只算不改） */
+  komgaLayoutPreview: () =>
+    request<KomgaLayoutPlan>('/api/komga/layout/preview', { method: 'POST' }),
+
+  /** 应用整理。只传回预览里确认过的条目，后端会再校验一遍 */
+  komgaLayoutApply: (items: Array<{ old: string; new: string }>) =>
+    request<KomgaLayoutResult>('/api/komga/layout/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    }),
+
+  // ---------- 外部服务集成（Hardcover / Readwise / StoryGraph）----------
+  integrations: () => request<{ items: IntegrationService[] }>('/api/integrations'),
+
+  /** 提交掩码 = 不修改（与其它凭据同一约定） */
+  saveIntegration: (service: string, payload: Record<string, string>) =>
+    request<{ ok: boolean }>(`/api/integrations/${service}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 真实连通性验证。StoryGraph 无公开 API，会返回 `unsupported: true` */
+  testIntegration: (service: string) =>
+    request<IntegrationTestResult>(`/api/integrations/${service}/test`, { method: 'POST' }),
+
+  // ---------- KOReader 进度互通 ----------
+  koreaderStatus: () => request<KoreaderStatus>('/api/koreader'),
+
+  /** 保存。`password` 留空 = 不修改密钥（后端存的是 md5，永不回显） */
+  saveKoreader: (payload: { enabled: boolean; username: string; password?: string }) =>
+    request<{ ok: boolean }>('/api/koreader', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 重建文档索引（为每本书算 partialMD5，KOReader 靠它认出是哪本） */
+  koreaderScan: () =>
+    request<{ ok: boolean; scanned: number }>('/api/koreader/scan', { method: 'POST' }),
+
+  koreaderDocs: () => request<{ items: KoreaderDoc[] }>('/api/koreader/docs'),
+
+  // ---------- OPDS 订阅（客户端：订阅 Komga / 任何 OPDS 源）----------
+  opdsSources: () => request<{ items: OpdsSource[] }>('/api/opds/sources'),
+
+  createOpdsSource: (payload: { name: string; url: string; username?: string; password?: string }) =>
+    request<OpdsSource>('/api/opds/sources', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 密码留空或传掩码 = 不修改（后端按此约定处理） */
+  updateOpdsSource: (
+    id: number,
+    payload: { name: string; url: string; username?: string; password?: string },
+  ) =>
+    request<OpdsSource>(`/api/opds/sources/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  deleteOpdsSource: (id: number) =>
+    request<{ ok: boolean }>(`/api/opds/sources/${id}`, { method: 'DELETE' }),
+
+  /** 抓取并解析一个 feed；href 为空 = 用源地址（订阅入口） */
+  opdsBrowse: (id: number, href = '') =>
+    request<OpdsFeed>(`/api/opds/sources/${id}/browse`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ href }),
+    }),
+
+  /** 下载一本书 → 直接落进书库（按 output.layout 归位） */
+  opdsDownload: (
+    id: number,
+    payload: { href: string; title: string; type?: string; series?: string },
+  ) =>
+    request<{ ok: boolean; name: string; bytes: number }>(`/api/opds/sources/${id}/download`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
 
   duplicatesResolve: (keep: string, remove: string[]) =>
     request<RecycleResult>('/api/duplicates/resolve', {
@@ -298,4 +1386,183 @@ export const api = {
     }),
 
   missing: () => request<{ items: MissingItem[]; total: number }>('/api/missing'),
+
+  // ---------- 书库：图书馆浏览 / 书籍详情 ----------
+  books: () => request<{ items: BookCard[]; total: number }>('/api/books'),
+
+  bookDetail: (id: string) =>
+    request<BookDetail>(`/api/books/${encodeURIComponent(id)}`),
+
+  // ---------- 账户（单用户轻登录） ----------
+  login: (user: string, pin: string) =>
+    request<AuthResult>('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user, pin }),
+    }),
+
+  me: () => request<MeInfo>('/api/auth/me'),
+
+  /** 修改当前账号密码（需原密码） */
+  changePin: (oldPin: string, newPin: string) =>
+    request<{ ok: boolean }>('/api/auth/pin', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_pin: oldPin, new_pin: newPin }),
+    }),
+
+  // ---------- 阅读器：章节内容 / 进度 / 批注 ----------
+  chapter: (id: string, index: number) =>
+    request<ChapterContent>(
+      `/api/books/${encodeURIComponent(id)}/chapter/${index}`,
+    ),
+
+  getProgress: (id: string) =>
+    request<ProgressState>(`/api/books/${encodeURIComponent(id)}/progress`),
+
+  setProgress: (id: string, locator: number, percent: number) =>
+    request<{ ok: boolean }>(`/api/books/${encodeURIComponent(id)}/progress`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ locator, percent }),
+    }),
+
+  listAnnotations: (id: string) =>
+    request<{ items: Annotation[] }>(
+      `/api/books/${encodeURIComponent(id)}/annotations`,
+    ),
+
+  addAnnotation: (id: string, a: Omit<Annotation, 'id' | 'created_at'>) =>
+    request<{ id: number; ok: boolean }>(
+      `/api/books/${encodeURIComponent(id)}/annotations`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(a),
+      },
+    ),
+
+  deleteAnnotation: (id: string, aid: number) =>
+    request<{ ok: boolean }>(
+      `/api/books/${encodeURIComponent(id)}/annotations/${aid}`,
+      { method: 'DELETE' },
+    ),
+
+  // ---------- 系列 ----------
+  series: () => request<{ items: SeriesItem[]; total: number }>('/api/series'),
+
+  seriesDetail: (name: string) =>
+    request<SeriesDetail>(`/api/series/${encodeURIComponent(name)}`),
+
+  // ---------- 收藏夹 ----------
+  collections: () => request<{ items: CollectionItem[] }>('/api/collections'),
+
+  createCollection: (name: string) =>
+    request<{ id: number; name: string }>('/api/collections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
+
+  collectionDetail: (id: number) =>
+    request<CollectionDetail>(`/api/collections/${id}`),
+
+  deleteCollection: (id: number) =>
+    request<{ ok: boolean }>(`/api/collections/${id}`, { method: 'DELETE' }),
+
+  addToCollection: (id: number, bookId: string) =>
+    request<{ ok: boolean }>(`/api/collections/${id}/books`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ book_id: bookId }),
+    }),
+
+  removeFromCollection: (id: number, bookId: string) =>
+    request<{ ok: boolean }>(
+      `/api/collections/${id}/books/${encodeURIComponent(bookId)}`,
+      { method: 'DELETE' },
+    ),
+
+  bookCollections: (bookId: string) =>
+    request<{ items: number[] }>(
+      `/api/books/${encodeURIComponent(bookId)}/collections`,
+    ),
+
+  // ---------- 作者 ----------
+  authors: () => request<{ items: AuthorItem[]; total: number }>('/api/authors'),
+
+  authorDetail: (name: string) =>
+    request<AuthorDetail>(`/api/authors/${encodeURIComponent(name)}`),
+
+  // ---------- 批注总览 ----------
+  allAnnotations: () =>
+    request<{ items: AllAnnotation[]; total: number }>('/api/annotations'),
+
+  // ---------- 库（真实分组） ----------
+  libraries: () => request<{ items: LibraryGroup[] }>('/api/libraries'),
+
+  // ---------- 阅读时长（会话上报） ----------
+  recordSession: (bookId: string, seconds: number) =>
+    request<{ ok: boolean }>(
+      `/api/books/${encodeURIComponent(bookId)}/session`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seconds }),
+      },
+    ),
+
+  // ---------- 应用设置（服务端持久化） ----------
+  getConfig: () => request<ConfigPayload>('/api/config'),
+
+  saveConfig: (patch: Record<string, unknown>) =>
+    request<{ ok: boolean; overrides: Record<string, unknown> }>('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+
+  clearCache: () =>
+    request<{ ok: boolean; removed: number; preserved?: string }>('/api/cache/clear', { method: 'POST' }),
+
+  // ---------- 维护 ----------
+  maintenance: () => request<MaintenanceInfo>('/api/maintenance'),
+
+  /** 重建书库索引（清缓存 + 强制重扫 OUTPUT_DIR；只读操作，不动任何文件） */
+  rebuildLibrary: () =>
+    request<{ ok: boolean; books: number }>('/api/maintenance/library/rebuild', { method: 'POST' }),
+
+  /** 清空回收站 —— **真删，不可恢复** */
+  clearRecycle: () =>
+    request<{ ok: boolean; removed: number; freed: number }>('/api/maintenance/recycle/clear', {
+      method: 'POST',
+    }),
+
+  // ---------- 高级：config.yaml 原文 ----------
+  getRawConfig: () => request<RawConfig>('/api/config/raw'),
+
+  saveRawConfig: (text: string) =>
+    request<{ ok: boolean; backup: string }>('/api/config/raw', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    }),
+
+  listBackups: () => request<{ items: BackupItem[] }>('/api/config/backups'),
+
+  restoreBackup: (name: string) =>
+    request<{ ok: boolean; restored: string; backup: string }>('/api/config/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
+
+  resetConfig: () =>
+    request<{ ok: boolean; backup: string }>('/api/config/reset', { method: 'POST' }),
+
+  clearOverrides: () =>
+    request<{ ok: boolean }>('/api/config/overrides', { method: 'DELETE' }),
+
+  // ---------- 数据统计 ----------
+  stats: (days = 28) => request<StatsOverview>(`/api/stats?days=${days}`),
 }

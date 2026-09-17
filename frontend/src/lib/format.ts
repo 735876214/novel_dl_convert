@@ -37,6 +37,8 @@ const STATUS_META: Record<TaskStatus, StatusMeta> = {
 }
 
 /** 任务状态 → 圆点样式 / 文案 / 徽章 class。迁移自 v2 的 statusMeta() */
-export function statusMeta(status: TaskStatus): StatusMeta {
-  return STATUS_META[status] ?? { dot: 'queue', text: '未知', cls: '' }
+export function statusMeta(status: string): StatusMeta {
+  // 入参放宽为 string：任务状态来自服务端，本地类型只是收窄视图。
+  // 未知值走下面的兜底，不抛错也不误判成「进行中」。
+  return STATUS_META[status as TaskStatus] ?? { dot: 'queue', text: '未知', cls: '' }
 }
