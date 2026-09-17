@@ -24,11 +24,31 @@
 - `.codebuddy/memory/` = 唯一真值源；`.workbuddy/memory/` 只有指针文件。
 - 忽略规则：`.codebuddy/*` + `!.codebuddy/memory/`（否定规则必须配 `/*` 不带尾斜杠，否则无法重新包含子目录）。
 
+## 不该入库的东西（2026-09-17 补齐，**都属于安全项**）
+- **`data/`（= `DATA_DIR`，默认 `CONFIG_DIR/data`）**：运行时 SQLite，里面有阅读进度 / 批注 / 评分 /
+  收藏 / 偏好，**以及外部服务 Token 与 KOReader 密钥哈希** → 已加 `.gitignore`（连同 `*.db`）。
+  2026-09-17 检查过：`git log --all -- data/novelforge.db` 为空，**从未入库**，无需清理历史。
+- **`.playwright-cli/`**：浏览器自动化的工作目录（console 日志、页面快照、导出的 CSV），项目根与
+  `frontend/` 下各有一份 → 已加 `.gitignore`。
+- 忽略生效自检：`git check-ignore -v <path>`。
+
 ## Git 认证与代理
 - 认证走 **GCM**（global `credential.helper`）；URL 内嵌 token 与 `insteadof` 明文重写均已清除，**勿再引入**。
-- `github.com` 作用域代理 `http.https://github.com/.proxy`（内网代理含 Basic 认证），解决直连 github:443 超时；
-  凭据明文在 global git config，**勿外泄**。2026-09-15 实测经代理 `git push` 成功。
+- `github.com` 作用域代理 `http.https://github.com/.proxy`（内网代理含 Basic 认证）、凭据明文在 global git config
+  —— **这是 Windows 环境（`C:\Users\qingr`）的配置**。
+- **⚠️ 环境差异（2026-09-17 在 macOS 工作区实测）**：当前环境**没有**配置该代理，且
+  `GIT_TERMINAL_PROMPT=0 git push origin main` **直连推送成功**（一次推了 10 个 commit）。
+  所以别照搬「必须经代理才能推」的结论去改 git config；推送失败时先看是不是认证/网络，而不是先加代理。
 - 安全：历史 PAT 视为已泄露，建议撤销。
+
+## 提交分组（2026-09-17 一次推 10 个 commit 的拆法，可复用）
+按「能力」而不是按「文件类型」拆，一条线从底层到上层：
+`feat(core)` 书库/元数据/文件操作/统计 → `feat(reader)` PDF/漫画/字体 → 每个独立能力各一个
+（`feat(opds)` / `feat(komga)` / `feat(koreader)` / `feat(integrations)`）→ `feat(server)` 路由与配置接线
+→ `feat(frontend)` 前端整体 → `chore(build)` 构建容器依赖 → `docs` 文档与工作记忆。
+- **`novelforge/server.py` 与 `novelforge/config.py` 被多期共同改动**（新增路由与配置键散落其中），
+  无法按功能拆进各 commit，只能合成一个「接线」commit —— 想拆得更细就得改后端结构，不值。
+- 提交信息用 `-m 标题 -m 正文`（两段式）；超长时改用 `git commit -F <信息文件>`（放 `.git/` 下）。
 
 ## 前端技术栈 / 视觉规范
 - 顶层 `frontend/` = **Vue 3 SFC + TS + Vite 8 + Tailwind v4 + Pinia 4 + vue-router 5**。
