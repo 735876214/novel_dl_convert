@@ -8,6 +8,7 @@
 - CACHE_DIR  缓存目录：AI 分章结果缓存（按文本哈希）+ 监听状态文件
 - LOG_DIR    日志目录：转换 / 添加的活动日志（activity.log、activity.jsonl）
 """
+import json
 import os
 import pathlib
 
@@ -21,7 +22,17 @@ COOKIE_DIR = pathlib.Path(os.getenv("COOKIE_DIR", str(CONFIG_DIR / "cookies")))
 CACHE_DIR = pathlib.Path(os.getenv("CACHE_DIR", str(CONFIG_DIR / "cache")))
 SOURCES_DIR = pathlib.Path(os.getenv("SOURCES_DIR", str(CONFIG_DIR / "sources")))
 LOG_DIR = pathlib.Path(os.getenv("LOG_DIR", str(CONFIG_DIR / "logs")))
+# 持久化数据（SQLite + 其它用户数据），与配置目录同卷挂载，便于 NAS 多端一致
+DATA_DIR = pathlib.Path(os.getenv("DATA_DIR", str(CONFIG_DIR / "data")))
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
+# 应用内「设置」页写回的文件：只存被改过的字段，叠加在 config.yaml 之上。
+# 单独放一个文件是为了**不改写 config.yaml 的注释与排版**。
+SETTINGS_FILE = CONFIG_DIR / "settings.json"
+# 「高级」里直接编辑 config.yaml 时的自动备份目录
+BACKUP_DIR = pathlib.Path(os.getenv("BACKUP_DIR", str(CONFIG_DIR / "backups")))
+# 阅读字体（用户上传的 TTF/OTF/WOFF/WOFF2，见 core/fonts.py）——
+# 与配置同卷，随 CONFIG_DIR 一起备份，NAS 多端一致
+FONTS_DIR = pathlib.Path(os.getenv("FONTS_DIR", str(CONFIG_DIR / "fonts")))
 
 # 把解析后的目录回写环境变量，供其它模块（如 ai_detect）在 import 时读取
 os.environ.setdefault("COOKIE_DIR", str(COOKIE_DIR))
@@ -32,7 +43,17 @@ os.environ.setdefault("LOG_DIR", str(LOG_DIR))
 DEFAULTS = {
     "chapter_detection": {"mode": "hybrid", "context_lines": 3, "fallback": "regex"},
     "traditionalize": False,
-    "output": {"format": "epub"},  # epub；mobi/azw3 需本机 Calibre ebook-convert
+    # format: epub；mobi/azw3 需本机 Calibre ebook-convert
+    # layout: flat  = 全部平铺在 OUTPUT_DIR（原行为）
+    #         komga = 有系列的书放 ``系列名/系列名 #N.ext``，让 Komga 扫描后正确成系列
+    #                 （Komga 不递归系列目录的子目录，故最多一层；无系列的书仍平铺）
+    "output": {"format": "epub", "layout": "flat"},
+    # 成品命名规则：批量重命名的默认 pattern/scope（存 settings.json 覆盖层，工具页读取）
+    # 可用占位符见 core/fileops.PATTERN_FIELDS；扩展名由后端自动追加，模式里不要写 {ext} 之外的后缀
+    "naming": {
+        "pattern": "{author} - {title}",
+        "scope": "all",             # all / epub / mobi / azw3 / pdf / txt
+    },
     "download": {
         "enabled": False,           # 默认关闭，仅公版源可用
         "public_only": True,
@@ -66,20 +87,79 @@ DEFAULTS = {
         "dir": "",                  # 留空则用 LOG_DIR（默认 <CONFIG_DIR>/logs）
         "max_entries": 2000,        # 内存缓冲条数（API 读取用，落盘不受限）
     },
+    # 上传上限。⚠️ 此前**完全没有任何限制**：POST /convert 与 POST /api/sources/upload
+    # 都直接 `await file.read()`，把整个请求体一次性读进内存 —— 一个几 GB 的请求
+    # 就能把容器内存打满（不需要鉴权绕过，走正常接口即可）。
+    # 现在改为按上限分块读取，累计超限立即中断并返回 413。
+    "upload": {
+        "max_bytes": 50 * 1024 * 1024,          # 单本书上限（默认 50 MB）
+        "max_source_rules_bytes": 5 * 1024 * 1024,  # 书源 JSON 上限（默认 5 MB）
+    },
+    # 成就统计与界面开关（对应上游 Profile 页的 Enable achievements）。
+    # 关闭后：不判定、不解锁，且侧栏隐藏成就入口 —— 与上游「不统计、不显示成就相关界面」一致。
+    "achievements": {
+        "enabled": True,
+    },
+    # OPDS 目录订阅源（供第三方阅读器订阅下载）。
+    # 默认**关闭**：它开了一个 Basic Auth 入口（账号=应用账号），
+    # 用户没打算用就不该默默对外暴露。
+    "opds": {
+        "enabled": False,
+    },
+    # KOReader 进度互通（kosync 协议）。
+    # `key` 是**密码的 MD5**（协议本身就这么传），服务端只存这个哈希，从不接触明文。
+    # 同样是默认关闭：开了就多一个对外入口。
+    "koreader": {
+        "enabled": False,
+        "username": "koreader",
+        "key": "",
+    },
+    # 外部服务凭据（第 4 期）。三家都**不是 OAuth**：
+    #   Hardcover   → API Token（账号设置页生成），GraphQL + Bearer
+    #   Readwise    → API Token，REST + `Authorization: Token`
+    #   StoryGraph  → **没有公开 API**：上游存的也是登录态 Cookie，且自己注明可能失效
+    # 凭据一律掩码回显，提交掩码 = 不修改。
+    "integrations": {
+        "hardcover": {"token": ""},
+        "readwise": {"token": ""},
+        "storygraph": {"session": "", "remember_token": ""},
+    },
 }
 
 
 def ensure_dirs():
     """确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在（容器启动时调用）。"""
-    for d in (INPUT_DIR, OUTPUT_DIR, CONFIG_DIR, COOKIE_DIR, CACHE_DIR, SOURCES_DIR, LOG_DIR):
+    for d in (INPUT_DIR, OUTPUT_DIR, CONFIG_DIR, COOKIE_DIR, CACHE_DIR, SOURCES_DIR, LOG_DIR, DATA_DIR, BACKUP_DIR, FONTS_DIR):
         try:
             d.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
 
 
+def load_overrides() -> dict:
+    """读取应用内设置覆盖层（settings.json）。不存在或损坏时返回空 dict。"""
+    if not SETTINGS_FILE.is_file():
+        return {}
+    try:
+        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_overrides(data: dict) -> None:
+    """写入设置覆盖层（整份替换）。"""
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
 def load_config() -> dict:
-    """加载配置：先取默认值，再用 YAML 文件中的字段覆盖。"""
+    """加载配置：默认值 → config.yaml → settings.json 覆盖层 → 环境变量。"""
     data = {k: (v.copy() if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
     if CONFIG_FILE.is_file():
         try:
@@ -93,6 +173,13 @@ def load_config() -> dict:
                         data[k] = v
         except Exception:
             pass
+
+    # 应用内「设置」页的覆盖层（config.yaml 之上）
+    for k, v in load_overrides().items():
+        if isinstance(v, dict) and isinstance(data.get(k), dict):
+            data[k] = {**data[k], **v}
+        else:
+            data[k] = v
 
     # 环境变量覆盖监听开关 / 轮询间隔：容器部署时无需改配置文件
     auto = os.getenv("AUTO_WATCH")
