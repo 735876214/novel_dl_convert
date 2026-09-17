@@ -43,6 +43,7 @@ import OpdsPage from '@/views/settings/pages/OpdsPage.vue'
 import KomgaPage from '@/views/settings/pages/KomgaPage.vue'
 import KoreaderPage from '@/views/settings/pages/KoreaderPage.vue'
 import IntegrationPage from '@/views/settings/pages/IntegrationPage.vue'
+import MetadataPage from '@/views/settings/pages/MetadataPage.vue'
 import PreferenceSyncPage from '@/views/settings/pages/PreferenceSyncPage.vue'
 import TaskCenterView from '@/views/TaskCenterView.vue'
 import BulkRenameView from '@/views/tools/BulkRenameView.vue'
@@ -93,6 +94,14 @@ const SETTINGS_PAGE_COMPONENTS: Record<string, Component> = {
   hardcover: IntegrationPage,
   readwise: IntegrationPage,
   storygraph: IntegrationPage,
+  // 元数据抓取的 7 页共用一个组件，props.section 决定展示哪些区块
+  'metadata/providers': MetadataPage,
+  'metadata/field-rules': MetadataPage,
+  'metadata/custom-fields': MetadataPage,
+  'metadata/score': MetadataPage,
+  'metadata/auto-fetch': MetadataPage,
+  'metadata/authors': MetadataPage,
+  'metadata/genre-blocklist': MetadataPage,
 }
 
 /** 需要传 props 的设置页（当前只有字体页的两种形态） */
@@ -102,6 +111,14 @@ const SETTINGS_PAGE_PROPS: Record<string, () => Record<string, unknown>> = {
   hardcover: () => ({ service: 'hardcover' }),
   readwise: () => ({ service: 'readwise' }),
   storygraph: () => ({ service: 'storygraph' }),
+  // 元数据 7 页同样共用一个组件，section 决定显示哪些区块
+  'metadata/providers': () => ({ section: 'providers' }),
+  'metadata/field-rules': () => ({ section: 'field-rules' }),
+  'metadata/custom-fields': () => ({ section: 'custom-fields' }),
+  'metadata/score': () => ({ section: 'score' }),
+  'metadata/auto-fetch': () => ({ section: 'auto-fetch' }),
+  'metadata/authors': () => ({ section: 'authors' }),
+  'metadata/genre-blocklist': () => ({ section: 'genre-blocklist' }),
 }
 
 /** 设置页的 46 个子路由，由注册表生成，避免手写路由与侧栏导航两处走样 */

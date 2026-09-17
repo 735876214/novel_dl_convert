@@ -303,12 +303,11 @@ def _patch_opf(opf: str, field: str, value: str) -> str:
     return patch_opf_meta(opf, {field: value})
 
 
-def _rewrite_zip_opf(path: pathlib.Path, transform) -> bool:
-    """把 OPF 取出 → 交给 transform 改写 → 写回 zip（其余条目原样保留）。
+def _read_epub(path) -> tuple:
+    """读出 ``(opf 路径, opf 文本, 全部条目 blob)``；失败返回 ``("", "", None)``。
 
-    返回 True 表示**成功**（transform 没产生改动也算成功）；任何异常返回 False。
-    抽出来是因为「单字段改名」与「多字段编辑元数据」需要同一套读改写逻辑，
-    各写一份迟早会走样。
+    抽出来是因为「只改 OPF」与「还要增删条目（写入封面图）」两条路径需要同一套读法，
+    各写一份迟早走样。定位 OPF 走 ``META-INF/container.xml``，找不到再退回扫 ``.opf``。
     """
     try:
         with zipfile.ZipFile(path) as z:
@@ -324,24 +323,24 @@ def _rewrite_zip_opf(path: pathlib.Path, transform) -> bool:
             if not opf_path:
                 opfs = [n for n in z.namelist() if n.lower().endswith(".opf")]
                 if not opfs:
-                    return False
+                    return ("", "", None)
                 opf_path = opfs[0]
             opf = z.read(opf_path).decode("utf-8", "ignore")
             blob = {info.filename: (info, z.read(info)) for info in infos}
+        return (opf_path, opf, blob)
     except Exception:
-        return False
+        return ("", "", None)
 
-    new_opf = transform(opf)
-    if new_opf == opf:
-        return True
 
-    blob[opf_path] = (blob[opf_path][0], new_opf.encode("utf-8"))
+def _write_epub(path, blob) -> bool:
+    """把 blob 写成新的 zip 并**原子替换**（失败时清理临时文件）。"""
     tmp = path.with_name(path.name + ".tmp-epub")
     try:
         with zipfile.ZipFile(tmp, "w") as z:
-            for fn, (info, content) in blob.items():
+            for info, content in blob.values():
                 z.writestr(info, content)
         tmp.replace(path)
+        return True
     except Exception:
         if tmp.exists():
             try:
@@ -349,7 +348,22 @@ def _rewrite_zip_opf(path: pathlib.Path, transform) -> bool:
             except Exception:
                 pass
         return False
-    return True
+
+
+def _rewrite_zip_opf(path: pathlib.Path, transform) -> bool:
+    """把 OPF 取出 → 交给 transform 改写 → 写回 zip（其余条目原样保留）。
+
+    返回 True 表示**成功**（transform 没产生改动也算成功）；任何异常返回 False。
+    注意这里**只能改 OPF 文本**；要增删 zip 条目（如写入封面图）请用 :func:`rewrite_epub`。
+    """
+    opf_path, opf, blob = _read_epub(path)
+    if blob is None:
+        return False
+    new_opf = transform(opf)
+    if new_opf == opf:
+        return True
+    blob[opf_path] = (blob[opf_path][0], new_opf.encode("utf-8"))
+    return _write_epub(path, blob)
 
 
 def _rewrite_epub_meta(path: pathlib.Path, field: str, value: str) -> bool:
@@ -361,6 +375,79 @@ def _rewrite_epub_meta(path: pathlib.Path, field: str, value: str) -> bool:
     if field not in METADATA_FIELDS:
         return False
     return _rewrite_zip_opf(path, lambda opf: patch_opf_meta(opf, {field: value}))
+
+
+# ---------------- 封面写入（元数据抓取用）----------------
+# EPUB 加封面要动三处：① zip 里放图片 ② OPF 的 manifest 声明 ③ EPUB2 的 <meta name="cover">。
+# zip 不能原地加条目，所以必须走 rewrite_epub（整包重写 + 原子替换）。
+
+#: 封面条目的 id（EPUB3 的 properties 与 EPUB2 的 meta name 共用同一个）
+COVER_ID = "cover-image"
+_COVER_EXTS = {
+    "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png",
+    "image/webp": ".webp", "image/gif": ".gif",
+}
+
+
+def cover_paths(media_type: str, opf_path: str) -> tuple:
+    """算出 ``(zip 内路径, OPF 里的 href)``。
+
+    这两个**不是同一个值**：manifest 的 href 是**相对 OPF 所在目录**的，
+    而 zip 内路径要从根算起。OPF 常见放在 `OEBPS/` 或 `EPUB/` 下，写错这一处
+    就是「阅读器找不到封面」，故单独抽出来并测。
+    """
+    ext = _COVER_EXTS.get((media_type or "").lower(), ".jpg")
+    name = f"_nf-cover{ext}"
+    parent = str(pathlib.PurePosixPath(opf_path).parent)
+    full = f"{parent}/{name}" if parent not in ("", ".") else name
+    return full, name
+
+
+def set_epub_cover(opf: str, href: str, media_type: str) -> str:
+    """在 OPF 里声明封面：**EPUB3 的 properties 与 EPUB2 的 meta 都写**。
+
+    两种都写是为了兼容：老阅读器只认 ``<meta name="cover">``，
+    新阅读器与校验器认 ``properties="cover-image"``。
+    写入前先清掉旧的封面声明，避免同一本书里出现两个封面条目。
+    """
+    href = escape(href)
+    opf = re.sub(r'<item[^>]*properties="[^"]*cover-image[^"]*"[^>]*/?>\s*', "", opf, flags=re.I)
+    opf = re.sub(r'<meta[^>]*name="cover"[^>]*/?>\s*', "", opf, flags=re.I)
+    item = (f'<item id="{COVER_ID}" href="{href}" media-type="{escape(media_type)}"'
+            f' properties="cover-image"/>')
+    if re.search(r"<manifest[^>]*>", opf, re.I):
+        opf = re.sub(r"(<manifest[^>]*>)", lambda m: m.group(1) + item, opf, count=1, flags=re.I)
+    elif "</metadata>" in opf:          # 畸形 OPF（无 manifest）：挂在 metadata 后，聊胜于无
+        opf = opf.replace("</metadata>", f"</metadata>{item}", 1)
+    if "</metadata>" in opf:
+        opf = opf.replace("</metadata>", f'<meta name="cover" content="{COVER_ID}"/></metadata>', 1)
+    return opf
+
+
+def rewrite_epub(path, *, updates: dict = None, transform=None, add_files: dict = None) -> bool:
+    """改写 EPUB：**改 OPF + 增删 zip 条目**（``_rewrite_zip_opf`` 做不到增删条目）。
+
+    - ``updates``：走 :func:`patch_opf_meta`，与「编辑元数据」同一套字段语义
+    - ``transform``：直接变换 OPF 文本（比 updates 更底层，如插入封面声明）；给了它就忽略 updates
+    - ``add_files``：``{zip 内路径: bytes}``，同名条目**替换**
+    - OPF 与条目都没变化时返回 True 且**不重写文件**（避免无谓地改 mtime）
+    """
+    opf_path, opf, blob = _read_epub(path)
+    if blob is None:
+        return False
+    new_opf = transform(opf) if transform else patch_opf_meta(opf, updates or {})
+    adds = {k: v for k, v in (add_files or {}).items() if v}
+    if new_opf == opf and not adds:
+        return True
+    blob[opf_path] = (blob[opf_path][0], new_opf.encode("utf-8"))
+    for name, data in adds.items():
+        if name in blob:
+            blob[name] = (blob[name][0], data)
+        else:
+            zi = zipfile.ZipInfo(name)
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            blob[name] = (zi, data)
+    return _write_epub(path, blob)
 
 
 def patch_epub_meta(path: pathlib.Path, updates: dict) -> list:

@@ -21,10 +21,42 @@ import threading
 import time
 from pathlib import Path
 
-from . import activity_log, pipeline
+from . import activity_log, komga, pipeline
 from .. import config
 
 STATE_FILENAME = "watcher_state.json"
+
+
+def auto_fetch_async(name: str, cfg: dict | None) -> None:
+    """入库后自动抓取元数据（**仅在配置开启时**）。
+
+    三条约束：
+
+    1. **必须异步**：抓取要外呼公网（每本 1–3 秒）。watcher 是后台线程，同步做会拖慢
+       扫描轮次；起个 daemon 线程最省心 —— 晚几秒补上元数据没有任何影响。
+    2. **吞掉一切异常**：这是旁路增强，不能因为外网不通就影响入库结果。
+    3. **只对 EPUB**：其它格式没有可写的 OPF（与 `metafetch.plan` 的口径保持一致）。
+    """
+    mf = (cfg or {}).get("metadata_fetch") or {}
+    if not mf.get("enabled") or not mf.get("auto_on_import"):
+        return
+    if not str(name).lower().endswith(".epub"):
+        return
+
+    def _run():
+        try:
+            from . import metafetch
+            res = metafetch.auto_fetch(name, cfg=cfg)
+            if res.get("ok"):
+                detail = f"入库自动补全 {len(res.get('fields') or [])} 个字段"
+                if res.get("cover"):
+                    detail += "，含封面"
+                activity_log.log(activity_log.ACTION_METADATA, name,
+                                 activity_log.STATUS_OK, source="watcher", detail=detail)
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 class FolderWatcher:
@@ -184,6 +216,7 @@ class FolderWatcher:
                     p.name, Path(out).name, size=size, duration_ms=dur(),
                     source="watcher", detail=opts.get("_notice", ""),
                 )
+                auto_fetch_async(Path(out).name, self.cfg)
                 return ("converted", str(out))
             except Exception as e:
                 activity_log.log_convert_fail(
@@ -196,9 +229,17 @@ class FolderWatcher:
 
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            dst = self.output_dir / p.name
+            # ⚠️ 复制路径**也要遵循 output.layout**：第 4 期只改了 `pipeline.dispatch`，
+            # 而 watcher 这条复制是自己实现的，于是「开了 Komga 布局却只有转换产物进系列目录」。
+            # 系列只能从文件名推断 —— 复制进来的书没经过 OPF 解析。
+            layout = str(((self.cfg or {}).get("output") or {}).get("layout") or "flat").strip().lower()
+            series, index = komga.infer(p.stem)
+            rel = komga.relpath_for(p.stem, p.suffix.lstrip("."), series, index, layout)
+            dst = self.output_dir / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, dst)
-            activity_log.log_add_ok(p.name, dst.name, size=size, duration_ms=dur(), source="watcher")
+            activity_log.log_add_ok(p.name, rel, size=size, duration_ms=dur(), source="watcher")
+            auto_fetch_async(rel, self.cfg)
             return ("added", str(dst))
         except Exception as e:
             activity_log.log_add_fail(p.name, f"{type(e).__name__}: {e}", size=size, source="watcher")

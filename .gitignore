@@ -46,7 +46,9 @@ _test/
 !.codebuddy/memory/
 
 # 运行时数据库（DATA_DIR）：进度 / 批注 / 评分 / 偏好 / 外部服务凭据都是本机数据
-data/
+# ⚠️ 前导斜杠**不能省**：写 `data/` 会匹配任意层级的同名目录，
+#    把 `frontend/src/data/`（设置页注册表等**源码**）一并忽略掉 —— 实测漏掉了两个源文件。
+/data/
 *.db
 
 # 浏览器自动化缓存（playwright-cli 的工作目录：console 日志、页面快照、导出文件）

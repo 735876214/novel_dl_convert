@@ -155,6 +155,70 @@ export interface DuplicateItem {
   format?: string
 }
 
+/** 元数据源（OpenLibrary / Google Books） */
+export interface MetadataSource {
+  id: string
+  label: string
+  home: string
+  note: string
+  /** 是否在当前启用的源顺序里 */
+  active: boolean
+}
+
+/** 一次抓取给出的候选 */
+export interface MetadataCandidate {
+  source: string
+  title: string
+  author: string
+  publisher: string
+  year: string
+  language: string
+  isbn: string
+  description: string
+  tags: string[]
+  cover_url: string
+  /** 与目标书的匹配分（0–1） */
+  score: number
+}
+
+/** 一本书的抓取预览 */
+export interface MetadataPlanItem {
+  name: string
+  book_id: string
+  title: string
+  author: string
+  format: string
+  candidates: MetadataCandidate[]
+  sources: Record<string, { ok: boolean; count: number; error: string }>
+  best_score: number
+  /** 最佳候选是否达到置信度阈值 */
+  auto_ok: boolean
+  /** 字段级改动：{字段: {from, to, source, score}}（字段名是 OPF 口径，年份叫 date） */
+  changes: Record<string, { from: unknown; to: unknown; source: string; score: number }>
+  cover: { url: string; action: string; source: string; score: number } | null
+  /** 非 EPUB 等跳过原因 */
+  skipped: string
+  error: string
+}
+
+export interface MetadataPlan {
+  enabled: boolean
+  items: MetadataPlanItem[]
+  sources?: string[]
+  threshold?: number
+  /** 达到阈值可自动应用的本数 */
+  auto?: number
+  total?: number
+  message?: string
+}
+
+export interface MetadataApplyResult {
+  applied: Array<{ name: string; fields: string[]; cover: boolean }>
+  failed: Array<{ name: string; error: string }>
+  count: number
+  covers: number
+}
+
 /** 外部服务的一个凭据字段（定义由后端给，前端不重复维护） */
 export interface IntegrationField {
   key: string
@@ -1298,6 +1362,41 @@ export const api = {
   /** 应用整理。只传回预览里确认过的条目，后端会再校验一遍 */
   komgaLayoutApply: (items: Array<{ old: string; new: string }>) =>
     request<KomgaLayoutResult>('/api/komga/layout/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    }),
+
+  // ---------- 元数据抓取与治理 ----------
+  metadataSources: () =>
+    request<{ items: MetadataSource[]; enabled: boolean; has_googlebooks_key: boolean }>(
+      '/api/metadata/sources',
+    ),
+
+  /** 源连通性自检（真的外呼；被点的源才测） */
+  metadataProbe: (sources?: string[]) =>
+    request<{ items: Record<string, { ok: boolean; message: string; ms: number }> }>(
+      '/api/metadata/probe',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sources }),
+      },
+    ),
+
+  /** 抓取预览（只算不改）。一次最多 10 本，前端逐本调以便显示进度 */
+  metadataPlan: (names?: string[], limit?: number) =>
+    request<MetadataPlan>('/api/metadata/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names, limit }),
+    }),
+
+  /** 应用：只传回预览里确认过的具体值（后端会再校验） */
+  metadataApply: (
+    items: Array<{ name: string; fields: Record<string, unknown>; cover: { url: string } | null }>,
+  ) =>
+    request<MetadataApplyResult>('/api/metadata/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }),
