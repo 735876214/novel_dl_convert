@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 
 import BookCover from '@/components/ui/BookCover.vue'
 import Button from '@/components/ui/Button.vue'
@@ -139,7 +139,10 @@ function statusText(s: string): string {
   return ({ unread: '未读', reading: '在读', finished: '已读完', paused: '搁置', abandoned: '弃读' } as Record<string, string>)[s] ?? s
 }
 
-const keyword = ref('')
+const route = useRoute()
+// 顶栏全局搜索会跳到这里并带上 ?q=关键词（原先顶栏只弹提示，没接线）
+const keyword = ref(String(route.query.q || ''))
+watch(() => route.query.q, (q) => { keyword.value = String(q || '') })
 /** 已展开的系列名 */
 const expanded = ref<string[]>([])
 

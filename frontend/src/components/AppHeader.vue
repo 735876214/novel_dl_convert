@@ -32,7 +32,11 @@ function onSearchKeydown(e: KeyboardEvent): void {
     input.blur()
   }
   if (e.key === 'Enter' && input.value.trim()) {
-    ui.demo(`全局搜索「${input.value.trim()}」`)
+    // 真实搜索：跳到书架页并把关键词带过去（书架本地过滤全量书单，所以这是真检索）。
+    // 原先这里只弹一个 demo 提示 —— 属于「看起来能用、其实没接线」。
+    router.push({ path: '/shelf', query: { q: input.value.trim() } })
+    input.value = ''
+    input.blur()
   }
 }
 
