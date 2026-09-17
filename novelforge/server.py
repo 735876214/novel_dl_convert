@@ -23,7 +23,8 @@ from fastapi.staticfiles import StaticFiles
 from .core import pipeline, activity_log, library, fileops
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, recommend,
-                   fonts, comics, opds, opds_client, komga, koreader, integrations)
+                   fonts, comics, opds, opds_client, komga, koreader, integrations,
+                   metasources, metafetch, komga_api)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -117,7 +118,14 @@ def _request_token(request: Request) -> str:
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):
     path = request.url.path
-    if path == "/health" or path == "/api/auth/login":
+    # `/api/logout` 是 Komga 的登出端点（不在 /api/v1 下），也要放行给 komga_api 那边处理
+    if path in ("/health", "/api/auth/login", "/api/logout"):
+        return await call_next(request)
+    # Komga v1 兼容面（`/api/v1/*`）：第三方客户端发的是 **Basic / X-API-Key / 会话 cookie**，
+    # 不是 Bearer。这里必须放行，由各路由自己走 `komga_api.verify()` 校验 —— 否则前缀判断
+    # 会把客户端全部拦成 401。第 4 期的 OPDS 是为绕开它才另起了 `/opds` 前缀，
+    # 但 Komga 客户端的 `/api/v1` 路径是**写死的**，绕不开。
+    if path.startswith("/api/v1/"):
         return await call_next(request)
     if path.startswith("/api/"):
         token = _request_token(request)
@@ -1700,6 +1708,16 @@ EDITABLE: dict = {
     "koreader": {"enabled", "username", "key"},
     # 整块覆盖：三家服务的字段各不相同，逐键白名单只会让新增字段时漏改
     "integrations": {"hardcover", "readwise", "storygraph"},
+    # 元数据抓取：顶层子键白名单（`fields` / `custom_fields` 这类嵌套结构不再逐层校验 ——
+    # 它们的形状由前端页面保证，后端只在应用时逐字段判定合法性）。
+    # 注意 `None` 是「标量/整块取值」的意思（见 _sanitize_config），这里**刻意不用 None**，
+    # 免得将来有人往前端配置里塞任意键。
+    "metadata_fetch": {
+        "enabled", "sources", "limit", "threshold", "fields", "auto_on_import",
+        "genre_blocklist", "custom_fields", "googlebooks_api_key",
+    },
+    # Komga 兼容服务端：开关 + Basic 用户名 + 可选 API Key
+    "komga": {"enabled", "username", "api_key"},
 }
 
 # api_key 掩码：前端回显该值即表示「不修改」
@@ -1818,6 +1836,15 @@ def api_get_config():
             },
             # 三家外部服务的凭据——同样一律掩码（等同凭据，明文回显没有意义只有风险）
             "integrations": _mask_integrations(cfg.get("integrations") or {}),
+            # 元数据抓取：只有 API Key 需要掩码，其余是普通配置
+            "metadata_fetch": _mask_metadata_fetch(cfg.get("metadata_fetch") or {}),
+            # Komga 兼容服务端：api_key 是凭据 → 掩码
+            "komga": {
+                "enabled": bool((cfg.get("komga") or {}).get("enabled")),
+                "username": str((cfg.get("komga") or {}).get("username") or "admin"),
+                "api_key": _KEY_MASK if str((cfg.get("komga") or {}).get("api_key") or "").strip() else "",
+                "has_api_key": bool(str((cfg.get("komga") or {}).get("api_key") or "").strip()),
+            },
         },
         "overrides": config.load_overrides(),
         "overridden": _flatten_overrides(config.load_overrides()),
@@ -2733,6 +2760,15 @@ def _mask_integrations(sec: dict) -> dict:
     return out
 
 
+def _mask_metadata_fetch(sec: dict) -> dict:
+    """元数据抓取的配置回显：**只掩码 API Key**，其余原样（都是普通配置项）。"""
+    out = dict(sec or {})
+    has_key = bool(str(out.get("googlebooks_api_key") or "").strip())
+    out["googlebooks_api_key"] = _KEY_MASK if has_key else ""
+    out["has_googlebooks_key"] = has_key
+    return out
+
+
 def _integration_field_keys(service: str) -> list:
     return [f["key"] for f in (integrations.spec(service).get("fields") or [])]
 
@@ -2795,6 +2831,395 @@ def api_integration_test(service: str, payload: dict = Body(None)):
         if str(v) and str(v) != _KEY_MASK:
             creds[k] = str(v)
     return integrations.verify(service, creds)
+
+
+# ---------------- 元数据抓取与治理（第 5 期）----------------
+# 与「先预览、再应用」同一范式：/plan 只算不改，/apply 只认前端回传的具体值。
+#
+# ⚠️ `/plan` 每本书都要对每个启用的源各发一次外呼 —— 全库一次跑完必然超时
+#    （17 本 × 2 源 ≈ 34 次请求）。所以它**一次只处理传入的那几本**（默认 1 本，
+#    上限 10 本），由前端逐本循环、逐本显示进度与结果。
+
+@app.get("/api/metadata/sources")
+def api_metadata_sources():
+    """可用元数据源 + 当前启用情况（设置页据此渲染）。"""
+    mf = config.load_config().get("metadata_fetch") or {}
+    active = mf.get("sources") or list(metasources.DEFAULT_ORDER)
+    return {
+        "items": [{**meta, "id": sid, "active": sid in active}
+                  for sid, meta in metasources.SOURCES.items()],
+        "enabled": bool(mf.get("enabled")),
+        "has_googlebooks_key": bool(str(mf.get("googlebooks_api_key") or "").strip()),
+    }
+
+
+@app.post("/api/metadata/probe")
+def api_metadata_probe(payload: dict = Body(None)):
+    """源连通性自检（真的外呼：点一次测一次，结果只回给这次请求）。"""
+    mf = config.load_config().get("metadata_fetch") or {}
+    key = str(mf.get("googlebooks_api_key") or "")
+    wanted = (payload or {}).get("sources") or list(metasources.SOURCES)
+    out = {}
+    for sid in wanted:
+        if sid in metasources.SOURCES:
+            out[sid] = metasources.probe(sid, {"api_key": key} if sid == "googlebooks" else None)
+    return {"items": out}
+
+
+@app.post("/api/metadata/plan")
+def api_metadata_plan(payload: dict = Body(None)):
+    """抓取预览（只算不改）。body: ``{names?: [...], limit?: n}``。"""
+    p = payload or {}
+    names = p.get("names") or []
+    if not isinstance(names, list):
+        raise HTTPException(400, "names 必须是数组")
+    if len(names) > 10:
+        raise HTTPException(400, "一次最多预览 10 本：每本都要外呼，多了会超时")
+    limit = p.get("limit")
+    try:
+        return metafetch.plan(names=names or None, cfg=config.load_config(),
+                              limit=int(limit) if limit else None)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(400, f"参数非法：{e}")
+
+
+@app.post("/api/metadata/apply")
+def api_metadata_apply(payload: dict = Body(...)):
+    """应用抓取结果。body: ``{items: [{name, fields: {...}, cover: {url} | null}]}``。"""
+    items = (payload or {}).get("items") or []
+    if not isinstance(items, list) or not items:
+        raise HTTPException(400, "items 必须是非空数组")
+    res = metafetch.apply(items, cfg=config.load_config())
+    for a in res.get("applied", []):
+        activity_log.log(
+            activity_log.ACTION_METADATA, a["name"], activity_log.STATUS_OK,
+            output=a["name"], source="api",
+            detail=f"补全 {len(a['fields'])} 个字段" + ("，含封面" if a.get("cover") else ""),
+        )
+    for f in res.get("failed", []):
+        activity_log.log(activity_log.ACTION_METADATA, f["name"], activity_log.STATUS_FAIL,
+                         source="api", detail=f["error"])
+    return res
+
+
+# ---------------- Komga v1 兼容服务端（第 5 期）----------------
+# 让第三方 Komga 客户端把本应用当成 Komga 服务器（协议细节见 core/komga_api.py）。
+# 认证走 Basic / X-API-Key / 会话 cookie，由 komga_api.verify 负责；
+# 中间件已对 `/api/v1/` 前缀放行（见 _auth_middleware）。
+#
+# ⚠️ **路由注册顺序**：FastAPI 按注册顺序匹配，所以 `/books/latest`、`/books/ondeck`
+#    必须注册在 `/books/{book_id}` **之前**，否则 "latest" 会被当成 bookId 吞掉
+#    （本项目在 `/api/books/export` 与 `/opds/all` 上踩过同一个坑）。
+
+_KO_PAGE = Query(0, ge=0)
+_KO_SIZE = Query(20, ge=1, le=500)
+_KO_401 = {"WWW-Authenticate": 'Basic realm="Komga"'}
+
+
+def _ko_guard(request: Request) -> str:
+    """统一鉴权入口。未启用 → 404（401 会让客户端反复弹密码框）。"""
+    try:
+        return komga_api.verify(request)
+    except komga_api.KomgaAuthError as e:
+        if str(e) == "disabled":
+            raise HTTPException(404, "Komga 兼容服务未启用")
+        raise HTTPException(401, "凭据无效", headers=_KO_401)
+
+
+def _ko_404(msg: str = "不存在"):
+    raise HTTPException(404, msg)
+
+
+def _ko_sorted(items: list, sort: str, default: str = "name") -> list:
+    """`sort=field,asc|desc`。**不认识的字段按 default 排，不报错** ——
+    客户端传的排序字段五花八门，为一个排序把整页打回失败不值得。"""
+    field, _, direction = (sort or "").partition(",")
+    field = field.strip() or default
+    desc = direction.strip().lower() in ("desc", "descending")
+    keys = {
+        "name": lambda x: str(x.get("name") or "").lower(),
+        "title": lambda x: str((x.get("metadata") or {}).get("title") or "").lower(),
+        "createdDate": lambda x: str(x.get("created") or ""),
+        "lastModifiedDate": lambda x: str(x.get("lastModified") or ""),
+        "fileSize": lambda x: x.get("sizeBytes") or 0,
+        "sizeBytes": lambda x: x.get("sizeBytes") or 0,
+        "booksCount": lambda x: x.get("booksCount") or 0,
+        "releaseDate": lambda x: str((x.get("metadata") or {}).get("releaseDate") or ""),
+        "metadata.releaseDate": lambda x: str((x.get("metadata") or {}).get("releaseDate") or ""),
+        "readProgress.lastModified": lambda x: str((x.get("readProgress") or {}).get("lastModified") or ""),
+    }
+    return sorted(items, key=keys.get(field) or keys[default], reverse=desc)
+
+
+def _ko_read_filter(payload: dict):
+    """把 Komga 的 SearchCondition 翻成过滤函数；``None`` 表示不过滤。
+
+    **只支持最常见的几个条件**（libraryId / readStatus / mediaStatus / seriesId / tag / title），
+    其余一概忽略 —— 宁可多返回，也不让客户端因为一个陌生的过滤条件整页失败
+    （失败还很难排查：客户端只会显示「加载失败」）。
+    """
+    cond = (payload or {}).get("condition") or {}
+    clauses = cond.get("allOf") or ([cond] if cond else [])
+    tests = []
+    for cl in clauses:
+        if not isinstance(cl, dict):
+            continue
+        if "libraryId" in cl:
+            want = ((cl["libraryId"] or {}).get("in") or [])
+            if want and komga_api.LIBRARY_ID not in want:
+                tests.append(lambda b: False)
+        if "readStatus" in cl:
+            want = [str(s).upper() for s in ((cl["readStatus"] or {}).get("in") or [])]
+            if want:
+                def _read(b, _w=want):
+                    pct = float((db.get_progress(b["id"]) or {}).get("percent") or 0)
+                    st = "READ" if pct >= 99.5 else ("IN_PROGRESS" if pct > 0 else "UNREAD")
+                    return st in _w
+                tests.append(_read)
+        if "mediaStatus" in cl:
+            want = [str(s).upper() for s in ((cl["mediaStatus"] or {}).get("in") or [])]
+            if want and "READY" not in want:
+                tests.append(lambda b: False)
+        if "seriesId" in cl:
+            want = set((cl["seriesId"] or {}).get("in") or [])
+            if want:
+                tests.append(lambda b, _w=want: komga_api.series_id(
+                    komga_api.series_name_of(b)) in _w)
+        if "tag" in cl:
+            want = [str(t).lower() for t in ((cl["tag"] or {}).get("in") or [])]
+            if want:
+                def _tag(b, _w=want):
+                    have = [str(t).lower() for t in (b.get("tags") or [])]
+                    return any(t in have for t in _w)
+                tests.append(_tag)
+        if "title" in cl:
+            want = str((cl["title"] or {}).get("contains") or "").lower()
+            if want:
+                tests.append(lambda b, _w=want: _w in str(b.get("title") or "").lower())
+    if not tests:
+        return None
+    return lambda b: all(t(b) for t in tests)
+
+
+# ---- 认证 / 用户 ----
+
+@app.post("/api/v1/login")
+def ko_login(request: Request):
+    """校验凭据 + 发会话 cookie（无状态签名）。204 是 Komga 的语义。"""
+    user = _ko_guard(request)
+    resp = Response(status_code=204)
+    resp.set_cookie(komga_api.SESSION_COOKIE, komga_api.session_token(user),
+                    httponly=True, samesite="lax")
+    return resp
+
+
+@app.post("/api/logout")
+def ko_logout():
+    resp = Response(status_code=204)
+    resp.delete_cookie(komga_api.SESSION_COOKIE)
+    return resp
+
+
+@app.get("/api/v1/users/me")
+def ko_me(request: Request):
+    """客户端「测试连接」常调它。"""
+    user = _ko_guard(request)
+    return {
+        "id": "1", "email": f"{user}@novelforge.local",
+        "roles": ["ADMIN", "USER"], "labelsAllow": [], "labelsExclude": [],
+        "sharedLibraries": [{"libraryId": komga_api.LIBRARY_ID, "userId": "1", "role": "ADMIN"}],
+    }
+
+
+# ---- 库 ----
+
+@app.get("/api/v1/libraries")
+def ko_libraries(request: Request):
+    """客户端第一步就调它。"""
+    _ko_guard(request)
+    return [komga_api.library_dto()]
+
+
+# ---- 系列（latest 必须先于 {series_id}）----
+
+def _ko_series_page(page: int, size: int, sort: str) -> dict:
+    items = [komga_api.series_dto(name, bs) for name, bs in komga_api.grouped().items()]
+    return komga_api.paginate(_ko_sorted(items, sort, "name"), page, size)
+
+
+@app.get("/api/v1/series")
+def ko_series_get(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
+    """已弃用（1.19+ 推 `POST /series/list`），但**老客户端仍在用**，必须保留。"""
+    _ko_guard(request)
+    return _ko_series_page(page, size, sort)
+
+
+@app.post("/api/v1/series/list")
+def ko_series_list(request: Request, payload: dict = Body(None),
+                   page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
+    _ko_guard(request)
+    return _ko_series_page(page, size, sort)
+
+
+@app.get("/api/v1/series/latest")
+def ko_series_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE):
+    _ko_guard(request)
+    items = [komga_api.series_dto(n, bs) for n, bs in komga_api.grouped().items()]
+    return komga_api.paginate(_ko_sorted(items, "lastModifiedDate,desc"), page, size)
+
+
+@app.get("/api/v1/series/{series_id}")
+def ko_series_one(request: Request, series_id: str):
+    _ko_guard(request)
+    found = komga_api.find_series(series_id)
+    if not found:
+        _ko_404("系列不存在")
+    name, items = found
+    return komga_api.series_dto(name, items)
+
+
+@app.get("/api/v1/series/{series_id}/books")
+def ko_series_books(request: Request, series_id: str, page: int = _KO_PAGE,
+                    size: int = _KO_SIZE, sort: str = ""):
+    _ko_guard(request)
+    found = komga_api.find_series(series_id)
+    if not found:
+        _ko_404("系列不存在")
+    name, items = found
+    dtos = [komga_api.book_dto(b, name) for b in items]
+    return komga_api.paginate(_ko_sorted(dtos, sort, "name"), page, size)
+
+
+@app.get("/api/v1/series/{series_id}/thumbnail")
+def ko_series_thumb(request: Request, series_id: str):
+    """系列封面 = 该系列**第一本有封面的书**的封面。"""
+    _ko_guard(request)
+    found = komga_api.find_series(series_id)
+    if not found:
+        _ko_404("系列不存在")
+    _name, items = found
+    for b in items:
+        if b.get("has_cover"):
+            return api_book_cover(b["id"])
+    _ko_404("该系列没有可用封面")
+
+
+# ---- 书籍（latest / ondeck 必须先于 {book_id}）----
+
+def _ko_books_dto(sort: str = "") -> list:
+    return _ko_sorted([komga_api.book_dto(b) for b in library.books()], sort, "name")
+
+
+@app.get("/api/v1/books")
+def ko_books_get(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
+    """已弃用但老客户端在用（同系列）。"""
+    _ko_guard(request)
+    return komga_api.paginate(_ko_books_dto(sort), page, size)
+
+
+@app.post("/api/v1/books/list")
+def ko_books_list(request: Request, payload: dict = Body(None),
+                  page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
+    _ko_guard(request)
+    bs = library.books()
+    flt = _ko_read_filter(payload)
+    if flt:
+        bs = [b for b in bs if flt(b)]
+    items = _ko_sorted([komga_api.book_dto(b) for b in bs], sort, "name")
+    return komga_api.paginate(items, page, size)
+
+
+@app.get("/api/v1/books/latest")
+def ko_books_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE):
+    _ko_guard(request)
+    return komga_api.paginate(_ko_sorted(_ko_books_dto(), "lastModifiedDate,desc"), page, size)
+
+
+@app.get("/api/v1/books/ondeck")
+def ko_books_ondeck(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE):
+    """待读：**系列里已有在读书**时，该系列的第一本未读书（Komga 的语义）。"""
+    _ko_guard(request)
+    out = []
+    for name, items in komga_api.grouped().items():
+        pcts = [float((db.get_progress(b["id"]) or {}).get("percent") or 0) for b in items]
+        if not any(0 < p < 99.5 for p in pcts):
+            continue
+        nxt = next((b for b, p in zip(items, pcts) if p < 99.5), None)
+        if nxt:
+            out.append(komga_api.book_dto(nxt, name))
+    return komga_api.paginate(out, page, size)
+
+
+@app.get("/api/v1/books/{book_id}")
+def ko_book_one(request: Request, book_id: str):
+    _ko_guard(request)
+    b = library.by_id(book_id) or _ko_404("书不存在")
+    return komga_api.book_dto(b)
+
+
+@app.get("/api/v1/books/{book_id}/thumbnail")
+def ko_book_thumb(request: Request, book_id: str):
+    _ko_guard(request)
+    if not library.by_id(book_id):
+        _ko_404("书不存在")
+    return api_book_cover(book_id)
+
+
+@app.get("/api/v1/books/{book_id}/file")
+def ko_book_file(request: Request, book_id: str):
+    _ko_guard(request)
+    b = library.by_id(book_id) or _ko_404("书不存在")
+    path = config.OUTPUT_DIR / b["name"]
+    if not path.is_file():
+        _ko_404("文件不存在")
+    return FileResponse(path, media_type="application/octet-stream",
+                        filename=pathlib.PurePosixPath(b["name"]).name)
+
+
+@app.get("/api/v1/books/{book_id}/pages")
+def ko_book_pages(request: Request, book_id: str):
+    _ko_guard(request)
+    b = library.by_id(book_id) or _ko_404("书不存在")
+    pages = komga_api.pages_for(b)
+    if not pages:
+        raise HTTPException(400, "该格式不支持页面流：请下载文件后本地阅读")
+    return pages
+
+
+@app.get("/api/v1/books/{book_id}/pages/{number}")
+def ko_book_page(request: Request, book_id: str, number: int, convert: str = ""):
+    _ko_guard(request)
+    b = library.by_id(book_id) or _ko_404("书不存在")
+    data, media = komga_api.page_image(b, number, convert)
+    if not data:
+        _ko_404("页不存在")
+    return Response(content=data, media_type=media)
+
+
+@app.get("/api/v1/books/{book_id}/manifest")
+def ko_book_manifest(request: Request, book_id: str):
+    _ko_guard(request)
+    b = library.by_id(book_id) or _ko_404("书不存在")
+    return Response(content=json.dumps(komga_api.manifest_for(b), ensure_ascii=False),
+                    media_type="application/webpub+json")
+
+
+@app.put("/api/v1/books/{book_id}/read-progress")
+def ko_put_read_progress(request: Request, book_id: str, payload: dict = Body(None)):
+    _ko_guard(request)
+    b = library.by_id(book_id) or _ko_404("书不存在")
+    locator, percent = komga_api.apply_read_progress(b, payload)
+    db.set_progress(book_id, locator, percent)
+    return Response(status_code=204)
+
+
+@app.delete("/api/v1/books/{book_id}/read-progress")
+def ko_delete_read_progress(request: Request, book_id: str):
+    _ko_guard(request)
+    if not library.by_id(book_id):
+        _ko_404("书不存在")
+    db.set_progress(book_id, 0, 0)
+    return Response(status_code=204)
 
 
 @app.get("/api/duplicates")

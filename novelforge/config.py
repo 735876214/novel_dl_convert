@@ -124,6 +124,37 @@ DEFAULTS = {
         "readwise": {"token": ""},
         "storygraph": {"session": "", "remember_token": ""},
     },
+    # 元数据自动抓取与治理（第 5 期）。
+    # 会**外呼公网**（OpenLibrary / Google Books），所以默认关闭，由用户显式打开。
+    "metadata_fetch": {
+        "enabled": False,
+        # 源顺序：依次检索并按匹配分合并（单源失败不影响其它源）
+        "sources": ["openlibrary", "googlebooks"],
+        "limit": 5,                      # 每个源取多少条候选
+        # 置信度阈值：低于它的候选**不自动应用**，只在页面上列出来让人挑
+        "threshold": 0.75,
+        # 字段策略：fill_only（仅当原值为空时写，默认最安全）/ overwrite / skip
+        "fields": {
+            "title": "fill_only", "author": "fill_only", "publisher": "fill_only",
+            "year": "fill_only", "language": "fill_only", "isbn": "fill_only",
+            "description": "fill_only", "tags": "fill_only", "cover": "fill_only",
+        },
+        "auto_on_import": False,         # 新书入库时自动抓（仍受阈值与字段策略约束）
+        # 题材黑名单：抓到的 tags 里命中这些词的**不写入**（过滤「小说」这类无信息量的值）
+        "genre_blocklist": ["小说", "文学", "General", "Fiction"],
+        # 自定义元数据：写入 EPUB 的 <meta name="…" content="…"/>，给书打业务标记
+        "custom_fields": [],
+        # Google Books 匿名额度很低（实测常撞 429），填 Key 可提高
+        "googlebooks_api_key": "",
+    },
+    # Komga v1 兼容服务端（第 5 期）：让第三方 Komga 客户端（Mihon/Panels/官方 App）
+    # 把本应用当成 Komga 服务器用 —— 浏览书库、读漫画/EPUB/PDF、推拉阅读进度。
+    # 默认关闭：开了等于对外暴露一个「Komga 服务端」，且认证走应用账号。
+    "komga": {
+        "enabled": False,
+        "username": "admin",   # HTTP Basic 的用户名（密码用登录 PIN）
+        "api_key": "",         # 可选：客户端也可用 X-API-Key（App 端比 Basic 更省事）
+    },
 }
 
 
