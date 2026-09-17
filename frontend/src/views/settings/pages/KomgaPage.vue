@@ -30,6 +30,22 @@ onMounted(() => loadConfig())
 
 const isKomga = computed(() => String(val('output.layout') || 'flat') === 'komga')
 
+// ---- 兼容服务端（第三方 Komga 客户端直连本应用）----
+const komga = computed<Record<string, any>>(() => (cfg.value as any)?.komga ?? {})
+/** 客户端里填的「服务器地址」就是本应用的根地址（它会自己拼 /api/v1） */
+const serverUrl = computed(() => window.location.origin)
+const copiedServer = ref(false)
+
+async function copyServer(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(serverUrl.value)
+    copiedServer.value = true
+    setTimeout(() => (copiedServer.value = false), 1500)
+  } catch {
+    ui.toast('复制失败，请手动选中地址')
+  }
+}
+
 async function toggleLayout(): Promise<void> {
   const next = isKomga.value ? 'flat' : 'komga'
   setVal('output.layout', next)
@@ -218,15 +234,87 @@ async function apply(): Promise<void> {
       </div>
     </Card>
 
+    <!-- 兼容服务端：让第三方 Komga 客户端直接连本应用（不必安装 Komga） -->
+    <Card class="mt-4" padding="none">
+      <div class="flex items-center gap-4 border-b border-border px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">Komga 兼容服务端</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            开启后，第三方 Komga 客户端（Mihon / Panels / 官方 App）把服务器地址填成本应用即可：
+            浏览书库、读漫画与 PDF、下载 EPUB、双向同步阅读进度
+          </div>
+        </div>
+        <Button size="sm" :variant="komga.enabled ? 'ghost' : 'primary'" :disabled="saving || !cfg"
+                @click="setVal('komga.enabled', !komga.enabled); saveSection('komga')">
+          {{ komga.enabled ? '关闭' : '开启' }}
+        </Button>
+      </div>
+
+      <div class="border-b border-border px-4 py-3.5">
+        <div class="mb-1.5 text-[13px] font-medium text-foreground">服务器地址</div>
+        <div class="flex flex-wrap items-center gap-2">
+          <code class="flex-1 truncate rounded-md border border-border bg-muted px-3 py-2 font-mono text-[12px] text-foreground">
+            {{ serverUrl }}
+          </code>
+          <Button size="sm" @click="copyServer">{{ copiedServer ? '已复制' : '复制' }}</Button>
+        </div>
+        <div class="mt-1.5 text-[11.5px] text-muted-foreground">
+          客户端里填这个地址即可（它会自己拼 <code class="font-mono">/api/v1</code>）
+        </div>
+      </div>
+
+      <div class="border-b border-border px-4 py-3.5">
+        <div class="mb-1.5 text-[13px] font-medium text-foreground">凭据</div>
+        <div class="grid gap-3 md:grid-cols-2">
+          <label class="block">
+            <span class="mb-1 block text-[12px] text-muted-foreground">用户名（密码 = 登录 PIN）</span>
+            <input :value="val('komga.username')" type="text"
+                   class="w-full rounded-md border border-border bg-muted px-3 py-1.5 text-[12.5px] text-foreground outline-none focus:border-ring focus:bg-card"
+                   @input="setVal('komga.username', ($event.target as HTMLInputElement).value)" />
+          </label>
+          <label class="block">
+            <span class="mb-1 block text-[12px] text-muted-foreground">
+              API Key（可选，掩码表示已设置；清空即删除）
+            </span>
+            <input :value="val('komga.api_key')" type="password" placeholder="未设置"
+                   class="w-full rounded-md border border-border bg-muted px-3 py-1.5 font-mono text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
+                   @input="setVal('komga.api_key', ($event.target as HTMLInputElement).value)" />
+          </label>
+        </div>
+        <div class="mt-2 flex items-center gap-2">
+          <Button size="sm" variant="primary" :disabled="saving" @click="saveSection('komga')">保存</Button>
+          <span class="text-[11.5px] text-muted-foreground">
+            三种认证都支持：HTTP Basic、<code class="font-mono">X-API-Key</code> 头、会话 cookie
+          </span>
+        </div>
+      </div>
+
+      <div class="px-4 py-3.5">
+        <div class="mb-1.5 text-[13px] font-medium text-foreground">客户端里怎么填</div>
+        <ol class="ml-4 list-decimal space-y-1 text-[12.5px] text-muted-foreground">
+          <li>在客户端里选「Komga」这类源，服务器地址填上面的地址</li>
+          <li>用户名 / 密码填上面的用户名与登录 PIN（或用 API Key）</li>
+          <li>漫画与 PDF 走**页面流**在线阅读；EPUB 走下载（也可用 WebPub manifest）</li>
+        </ol>
+        <p class="mt-2 text-[11.5px] text-muted-foreground">
+          阅读进度双向同步：客户端读到第几页 ↔ 本项目详情页的进度；EPUB 用 locator（章节 + 百分比）。
+          实测通过：Mihon/Panels 所需的 <code class="font-mono">/api/v1/libraries</code>、
+          <code class="font-mono">/series</code>、<code class="font-mono">/books</code>、
+          <code class="font-mono">/pages</code>、<code class="font-mono">/read-progress</code> 均已按 Komga 的分页壳与字段名对齐。
+        </p>
+      </div>
+    </Card>
+
     <SettingsUnsupportedCard
       label="Komga"
       :groups="['SERVER', 'LIBRARIES', 'SYNC']"
       :items="[
         '从 Komga 拉取书目 / 下载入库（需 Komga REST 客户端）',
-        '与 Komga 双向同步阅读进度',
+        '与已有 Komga 服务器双向同步（本项目已能**充当**服务端，但不做客户端）',
         '按 Komga 库分别输出（本项目单一 OUTPUT_DIR）',
+        'HTTP/2 与 WebSocket 那类实时推送（客户端会回落到轮询）',
       ]"
-      note="本项目已实现「输出侧」：输出布局开关（output.layout）+ 既有库整理（预览 → 应用，改名的书自动迁移阅读进度/批注/评分/收藏）。"
+      note="已实现两侧：①输出侧——输出布局开关（output.layout）+ 既有库整理（会改名时自动迁移阅读数据）；②兼容服务端——第三方 Komga 客户端可直接连本应用，支持 Basic / X-API-Key / 会话认证、分页壳、系列与书籍列表、封面、CBZ 与 PDF 页面流、EPUB 下载与 manifest、阅读进度双向同步。"
     />
   </div>
 </template>

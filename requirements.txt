@@ -7,3 +7,6 @@ fastapi>=0.110
 uvicorn>=0.29
 python-multipart>=0.0.9
 beautifulsoup4>=4.12
+# PDF 页面渲染：Komga 兼容服务端的页面流要把 PDF 逐页转成图片
+# （pypdfium2 自带 PDFium 二进制，pip 装即可，不需要系统库）
+pypdfium2>=4.30
