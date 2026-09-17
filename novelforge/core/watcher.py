@@ -178,9 +178,11 @@ class FolderWatcher:
 
         if p.suffix.lower() == ".txt":
             try:
-                out = pipeline.convert_txt(p, self.output_dir, self._opts())
+                opts = self._opts()
+                out = pipeline.convert_txt(p, self.output_dir, opts)
                 activity_log.log_convert_ok(
-                    p.name, Path(out).name, size=size, duration_ms=dur(), source="watcher"
+                    p.name, Path(out).name, size=size, duration_ms=dur(),
+                    source="watcher", detail=opts.get("_notice", ""),
                 )
                 return ("converted", str(out))
             except Exception as e:

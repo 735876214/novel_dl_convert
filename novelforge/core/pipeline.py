@@ -1,10 +1,64 @@
 import shutil
 from pathlib import Path
 
-from . import preprocess, detect, metadata, epub_builder
+from . import preprocess, detect, metadata, epub_builder, ebook_convert, komga
 
 # 已是电子书格式的文件直接复制
 EBOOK_EXT = {".epub", ".mobi", ".azw3", ".pdf", ".fb2"}
+
+
+def _layout(cfg: dict) -> str:
+    return str((cfg.get("output") or {}).get("layout") or "flat").strip().lower()
+
+
+def _place(out_dir: Path, stem: str, ext: str, series: str, index: str, cfg: dict) -> Path:
+    """按 ``output.layout`` 算出落盘路径，并建好系列目录（Komga 布局时才有一层子目录）。"""
+    rel = komga.relpath_for(stem, ext, series, index, _layout(cfg))
+    target = out_dir / rel
+    if target.parent != out_dir:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _emit(base_meta: dict, chapters: list, out_dir: Path, opts: dict) -> Path:
+    """产出成品：EPUB 必产，再按 ``output.format`` 派生 MOBI / AZW3。
+
+    - **EPUB 始终生成**：在线阅读（library.chapter_html）只支持 EPUB，是阅读基础。
+    - ``format`` 为 mobi/azw3 时用 Calibre 额外派生；不可用或失败则**降级**，
+      把原因写进 ``opts["_notice"]``，由调用方写进活动日志 / 界面提示。
+    - **落盘位置**由 ``output.layout`` 决定：komga 布局下有系列的书进
+      ``系列名/系列名 #N.epub``（见 core/komga.py）；无系列仍旧平铺 ——
+      转换出来的书**没有系列元数据**（epub_builder 不写 series），
+      所以这里只能从书名推断，判不出就老实平铺。
+    - 返回交付物路径：派生成功为派生文件，否则为 EPUB 本身。
+    """
+    title = base_meta.get("title") or "untitled"
+    cfg = opts.get("cfg") or {}
+    series, index = komga.infer(
+        title, base_meta.get("series", ""), base_meta.get("series_index", "")
+    )
+    epub = _place(out_dir, title, "epub", series, index, cfg)
+    if epub.exists() and not opts.get("force"):
+        return epub
+    epub_builder.build_epub(base_meta, chapters, str(epub))
+
+    fmt = str((cfg.get("output") or {}).get("format") or "epub").strip().lower()
+    if fmt not in ebook_convert.SUPPORTED:
+        opts["_notice"] = ""
+        return epub
+
+    # 派生文件与原 EPUB **同目录同名**（komga 布局时就在系列目录里）
+    target = epub.with_suffix(f".{fmt}")
+    try:
+        timeout = int(opts.get("ebook_convert_timeout") or ebook_convert.DEFAULT_TIMEOUT)
+    except (TypeError, ValueError):
+        timeout = ebook_convert.DEFAULT_TIMEOUT
+    res = ebook_convert.convert(epub, target, timeout=timeout)
+    if res["ok"]:
+        opts["_notice"] = ""
+        return Path(res["output"])
+    opts["_notice"] = f"{fmt.upper()} 派生失败，已降级为 EPUB：{res['error']}"
+    return epub
 
 
 def _detect_encoding(path: Path) -> str:
@@ -37,18 +91,18 @@ def convert_text(raw: str, out_dir: Path, opts: dict, meta: dict | None = None) 
     for ch in chapters:
         ch["body_html"] = preprocess.paragraphs_to_html(ch["body"])
 
-    out = out_dir / f"{base_meta['title']}.epub"
-    if out.exists() and not opts.get("force"):
-        return out
-    epub_builder.build_epub(base_meta, chapters, str(out))
+    out = _emit(base_meta, chapters, out_dir, opts)
     return out
 
 
 def convert_txt(path: Path, out_dir: Path, opts: dict) -> Path:
     raw = path.read_text(encoding=_detect_encoding(path), errors="ignore")
-    opts = dict(opts)
-    opts.setdefault("filename", path.name)
-    return convert_text(raw, out_dir, opts)
+    inner = dict(opts)
+    inner.setdefault("filename", path.name)
+    out = convert_text(raw, out_dir, inner)
+    # 回传降级提示（派生格式失败的原因），供调用方写进活动日志
+    opts["_notice"] = inner.get("_notice", "")
+    return out
 
 
 def convert_chapters(chapters: list[ dict], out_dir: Path, opts: dict, meta: dict | None = None) -> Path:
@@ -83,18 +137,27 @@ def convert_chapters(chapters: list[ dict], out_dir: Path, opts: dict, meta: dic
     for ch in chapters:
         ch["body_html"] = preprocess.paragraphs_to_html(ch["body"])
 
-    out = out_dir / f"{base_meta['title']}.epub"
-    if out.exists() and not opts.get("force"):
-        return out
-    epub_builder.build_epub(base_meta, chapters, str(out))
+    out = _emit(base_meta, chapters, out_dir, opts)
     return out
 
 
 def dispatch(src: Path, out_dir: Path, opts: dict):
-    """文件分发：txt 走转换管线，电子书格式直接复制，其余跳过。"""
+    """文件分发：txt 走转换管线，电子书格式直接复制，其余跳过。
+
+    复制路径同样遵循 ``output.layout``：这类文件（外部 EPUB / 漫画 CBZ）没有
+    ``calibre:series`` 可读的解析环节，系列只能从**文件名**推断（见 core/komga.py）——
+    这正是把漫画喂给 Komga 的主要场景。
+    """
     if src.suffix.lower() == ".txt":
         return ("convert", convert_txt(src, out_dir, opts))
     if src.suffix.lower() in EBOOK_EXT:
-        shutil.copy2(src, out_dir / src.name)
-        return ("copy", out_dir / src.name)
+        cfg = opts.get("cfg") or {}
+        # 上传/下载链路可能已带显式元数据（如书源给的系列名），优先采信它
+        meta = opts.get("meta") or {}
+        series, index = komga.infer(
+            src.stem, meta.get("series", ""), meta.get("series_index", "")
+        )
+        target = _place(out_dir, src.stem, src.suffix.lstrip("."), series, index, cfg)
+        shutil.copy2(src, target)
+        return ("copy", target)
     return ("skip", src)

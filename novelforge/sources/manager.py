@@ -75,11 +75,15 @@ class DownloadManager:
         src = cls()
         async with self._client(src) as c:
             text = await src.fetch_book(c, item)
+        caller_opts = opts
         opts = dict(opts)
         opts.setdefault("cfg", self.cfg)
         opts.setdefault("filename", item.get("title", "book"))
         meta = {"title": item.get("title", "未命名"), "author": item.get("author", "未知")}
-        return pipeline.convert_text(text, Path(out_dir), opts, meta=meta)
+        result = pipeline.convert_text(text, Path(out_dir), opts, meta=meta)
+        # 回传派生格式的降级提示（供上层写活动日志 / 任务结果）
+        caller_opts["_notice"] = opts.get("_notice", "")
+        return result
 
     async def download_to(self, item: dict, out_dir: Path, input_dir: Path, opts: dict) -> Path:
         """下载整本书 → 落 txt 到输入目录（留档/可重转）→ 按书源分章方案转 EPUB 到导出目录。
@@ -106,6 +110,7 @@ class DownloadManager:
                 text = await src.fetch_book(c, item)
 
         safe = _safe_name(item.get("title", "book"))
+        caller_opts = opts
         opts = dict(opts)
         opts.setdefault("cfg", self.cfg)
         opts.setdefault("filename", safe)
@@ -117,12 +122,15 @@ class DownloadManager:
                 encoding="utf-8",
             )
             self.write_sidecar(txt_path, item, out_dir)
-            return pipeline.convert_chapters(chapters, out_dir, opts, meta=meta)
+            result = pipeline.convert_chapters(chapters, out_dir, opts, meta=meta)
         else:
             txt_path = input_dir / f"{safe}.txt"
             txt_path.write_text(text, encoding="utf-8")
             self.write_sidecar(txt_path, item, out_dir)
-            return pipeline.convert_text(text, out_dir, opts, meta=meta)
+            result = pipeline.convert_text(text, out_dir, opts, meta=meta)
+        # 回传派生格式的降级提示
+        caller_opts["_notice"] = opts.get("_notice", "")
+        return result
 
     async def preview(self, item: dict) -> dict:
         """廉价预览：返回目录标题列表 + 首段样本，供下载前确认。"""

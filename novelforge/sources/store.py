@@ -73,6 +73,42 @@ def remove_rule(name: str) -> bool:
     return False
 
 
+def sources_status() -> list[dict]:
+    """书源运行状态：是否可用（受 download 配置约束）+ Cookie 是否已持久化。
+
+    Cookie 文件命名见 core/network.py：``COOKIE_DIR/<name>.cookies.txt``。
+    这些是**真实可得**的状态，替代此前界面里的演示成功率 / 延迟。
+    """
+    cfg = config.load_config()
+    dl = cfg.get("download") or {}
+    enabled = bool(dl.get("enabled", False))
+    public_only = bool(dl.get("public_only", True))
+    cookie_dir = Path(config.COOKIE_DIR)
+
+    out = []
+    for s in list_sources():
+        cpath = cookie_dir / f"{s['name']}.cookies.txt"
+        has_cookie = cpath.is_file()
+        reasons = []
+        if not enabled:
+            reasons.append("下载功能未开启（config.yaml → download.enabled）")
+        elif public_only and not s["public"]:
+            reasons.append("仅放行公版源（download.public_only）")
+        out.append({
+            **s,
+            "download_enabled": enabled,
+            "public_only": public_only,
+            "cookie": {
+                "has": has_cookie,
+                "mtime": (cpath.stat().st_mtime if has_cookie else None),
+                "size": (cpath.stat().st_size if has_cookie else 0),
+            },
+            "usable": not reasons,
+            "blocked_reason": "；".join(reasons),
+        })
+    return out
+
+
 def list_sources() -> list[dict]:
     """列出全部已注册书源，标注是否为用户源。"""
     d = _sources_dir()

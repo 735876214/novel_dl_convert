@@ -44,3 +44,10 @@ _test/
 !.workbuddy/memory/
 .codebuddy/*
 !.codebuddy/memory/
+
+# 运行时数据库（DATA_DIR）：进度 / 批注 / 评分 / 偏好 / 外部服务凭据都是本机数据
+data/
+*.db
+
+# 浏览器自动化缓存（playwright-cli 的工作目录：console 日志、页面快照、导出文件）
+.playwright-cli/

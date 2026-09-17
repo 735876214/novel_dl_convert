@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 from collections import deque
+from contextvars import ContextVar
 from datetime import datetime
 
 # ---- 操作类型 ----
@@ -28,6 +29,11 @@ ACTION_SKIP = "跳过"      # 被忽略规则排除
 # 前端日志表的「动作」列直接展示原值，无需改动。
 ACTION_RENAME = "重命名"  # 成品文件改名
 ACTION_RECYCLE = "清理"   # 移入回收目录（不真删）
+ACTION_FONT = "字体"      # 阅读字体的上传 / 删除（第 3 期新增）
+# 偏好模式的变更（新建/更新/删除）。**设备上报不写日志** —— 每次启动都会发生、
+# 没有审计价值，写进去只会把审计流水淹掉。
+ACTION_PREFS = "偏好"     # 偏好模式变更（第 3 期新增）
+ACTION_LAYOUT = "整理"    # 整理为 Komga 库布局（第 4 期新增）
 
 # ---- 结果 ----
 STATUS_OK = "成功"
@@ -44,6 +50,24 @@ _lock = threading.RLock()
 _memory: "deque[dict]" = deque(maxlen=2000)   # 内存环形缓冲，避免每次读盘
 _dir: pathlib.Path | None = None
 _dir_ready = False
+
+
+# ---------------- 操作者（actor）----------------
+# 由 server 的鉴权中间件在每次请求开始时设置（见 server._auth_middleware）。
+# 深层调用（如 core/fileops 的改名 / 清理）没有 request 参数，靠它自动带上操作者，
+# 无需把这些函数的签名逐个改掉。
+# 后台任务（watcher、下载）不在请求上下文里 → 取到空串，由写入端记「系统」。
+_ACTOR: ContextVar[str] = ContextVar("novelforge_actor", default="")
+
+
+def set_actor(actor: str) -> None:
+    """设置当前请求的操作者（登录账号名）。"""
+    _ACTOR.set((actor or "").strip())
+
+
+def current_actor() -> str:
+    """取当前操作者；无请求上下文时返回空串。"""
+    return _ACTOR.get()
 
 
 # ---------------- 目录 ----------------
@@ -146,11 +170,13 @@ def _text_line(e: dict) -> str:
 
 
 def log(action: str, file: str, status: str, output: str = "", detail: str = "",
-        size=None, duration_ms=None, source: str = "") -> dict:
+        size=None, duration_ms=None, source: str = "", actor: str = "") -> dict:
     """写一条活动日志，返回该条记录（dict）。
 
     action: ACTION_CONVERT / ACTION_ADD / ACTION_SKIP
     status: STATUS_OK / STATUS_FAIL
+    actor:  操作者（登录账号名）。无请求上下文的后台任务写「系统」；
+            历史条目没有该字段，读取端按「未知」渲染，不影响兼容性。
     """
     now = datetime.now()
     entry = {
@@ -164,6 +190,9 @@ def log(action: str, file: str, status: str, output: str = "", detail: str = "",
         "size": int(size) if size is not None else None,
         "duration_ms": int(duration_ms) if duration_ms else None,
         "source": source or "",
+        # 显式传入优先；否则取当前请求的操作者（由鉴权中间件设置）。
+        # 后台任务取不到 → 空串，界面按「未记录」渲染。
+        "actor": (actor or current_actor()).strip(),
     }
     line_txt = _text_line(entry)
     try:
@@ -215,12 +244,19 @@ def log_add_fail(file, detail, **kw):
 def recent(limit: int = 200, action: str = "", status: str = "", q: str = "") -> list:
     """读取最近的活动记录（新→旧），支持按操作 / 结果 / 关键字过滤。
 
-    优先用内存缓冲；内存为空（如刚重启）时回落到 jsonl 文件尾部。
+    内存缓冲只含**本次进程**写入的记录。原实现仅在「内存为空」时才回填 jsonl，
+    于是重启后只要发生一次新写入，内存就不再为空，历史条目被整体遮蔽 ——
+    对审计视图是致命的（只看得到重启之后发生的事）。
+    现改为：内存不足 limit 条时，用 jsonl 尾部**重建**缓冲。
+    jsonl 是追加式且包含本进程刚写的那几条，因此重建结果既完整又有序。
     """
-    if not _memory:
-        # 刚重启时内存为空：从 jsonl 尾部回填（deque 有上限，不会无限增长）
-        for e in _read_tail(_memory.maxlen or 2000):
-            _memory.append(e)
+    need = limit if limit and limit > 0 else 0
+    if need and len(_memory) < need:
+        tail = _read_tail(max(need, _memory.maxlen or 2000))   # 旧 → 新
+        if tail:
+            _memory.clear()
+            for e in tail:
+                _memory.append(e)
     items = list(reversed(_memory))        # 新 → 旧
 
     if action:
