@@ -259,6 +259,25 @@ Komga 是漫画/电子书服务器：扫描**库根目录**，目录结构约定
 - **B. 接入侧集成**（Komga → NovelForge）：配置 Komga 地址 + API Key，浏览其库/系列/书、下载入库、同步阅读进度。
   成本大（需 Komga REST 客户端 + 凭据存储 + 下载任务）。
 
+### 第 5 期：元数据抓取与 Komga 兼容服务端（2026-09-17 完成）
+
+两条线并行，均已落地并验证：
+
+- **元数据自动抓取与治理** ✅：`core/metasources.py`（OpenLibrary / Google Books，均无需 Key）+
+  `core/metafetch.py`（plan / apply / 入库自动抓）+ `fileops` 的封面写入（zip + OPF 三处声明）。
+  落地「书库」组 7 个设置页：Providers / Books / Authors / Field Rules / Confidence Score /
+  Genre Blocklist / Custom Fields，并提供「先预览、再应用」的手动抓取面板。
+  - 实测：OpenLibrary 可用；Google Books 匿名请求常撞 429（已支持填 Key）
+  - 默认 `fill_only` 策略（只补空字段）；封面复用 `library._COVER_MIN_BYTES` 阈值拦掉小图
+- **Komga v1 兼容服务端** ✅（用户选定形态 A：本应用**冒充** Komga，客户端零改动）：
+  `core/komga_api.py`（DTO / Spring Data 分页壳 / Basic + X-API-Key + 会话三种认证 / 进度双向映射）+
+  `core/pdfrender.py`（PDF 逐页渲染 + 磁盘缓存）+ 21 条 `/api/v1/*` 路由。
+  - 第三方 Komga 客户端（Mihon / Panels / 官方 App）把地址填成本应用即可浏览书库、读漫画与 PDF、
+    下载 EPUB、双向同步阅读进度；已弃用的 `GET /series`、`GET /books` 也保留（老客户端在用）
+  - **中间件必须放行 `/api/v1/`**：客户端路径写死、发 Basic 而非 Bearer
+- 顺带修两处旧缺口：**全局搜索**原先只弹提示（现跳书架并预填，真实过滤）；
+  **watcher 的复制路径**不走 `output.layout`（现跟上）
+
 ### 后期（未定期）
 
 - **Requests 具体功能**（§9）：插件式索引器 + 插件市场、Torznab/Newznab、下载客户端与凭据加密（上游需 `BOOK_REQUEST_ENCRYPTION_KEY`）、下载后自动化
