@@ -31,6 +31,8 @@ services:
       - ./config:/app/config
       - ./cookies:/app/config/cookies
       - ./cache:/app/config/cache
+      # 阅读端持久化：SQLite（阅读进度 / 批注 / 账号），跨重启与多端共享
+      - ./data:/app/data
     environment:
       - TZ=Asia/Shanghai
       - INPUT_DIR=/app/input
@@ -39,6 +41,14 @@ services:
       - COOKIE_DIR=/app/config/cookies
       - CACHE_DIR=/app/config/cache
       - LOG_DIR=/app/config/logs
+      - DATA_DIR=/app/data
+      # 阅读端单用户轻登录（仅首次启动初始化；之后在「设置 → 账户」改，生产务必改默认值）
+      - AUTH_USER=admin
+      - AUTH_PIN=changeme
+      - AUTH_SECRET=change-this-to-a-long-random-string
+      # 可选：MOBI / AZW3 派生所需的 Calibre ebook-convert 路径
+      # （缺失时对应任务自动降级为 EPUB，日志会说明原因）
+      # - EBOOK_CONVERT_BIN=/usr/bin/ebook-convert
       # 目录自动监听（默认开）：input 里的 txt 自动转 EPUB，非 txt 原样导出
       # - AUTO_WATCH=true
       # - WATCH_INTERVAL=5

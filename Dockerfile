@@ -122,6 +122,14 @@ RUN apt-get -o Acquire::Retries=5 update \
     && apt-get -o Acquire::Retries=5 install -y --no-install-recommends tzdata libstdc++6 \
     && rm -rf /var/lib/apt/lists/*
 
+# 可选：MOBI / AZW3 派生需要 Calibre 的 ebook-convert —— 体积很大，默认**不安装**。
+# 需要时二选一：
+#   1) 自备镜像：在上面 apt 安装里加上 calibre（镜像会显著变大）
+#   2) 复用外部二进制：容器外提供 ebook-convert，用环境变量传入路径：
+#        -e EBOOK_CONVERT_BIN=/path/to/ebook-convert
+# 未提供时，输出格式为 mobi / azw3 的任务会**自动降级为 EPUB**，并在活动日志中写明原因
+# （EPUB 始终产出，在线阅读只依赖 EPUB）。
+
 # 只搬构建产物：venv 与 node 二进制，编译工具链 / apt 缓存自然被丢弃
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=nodejs  /usr/local/bin/node /usr/local/bin/node
