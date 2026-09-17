@@ -1,0 +1,82 @@
+# 路线图完成度核查（2026-09-17）
+
+## 核查方法
+
+**不采信文档里的状态标记**（那些也是本项目自己写的），每一项都要求两类实证：
+
+1. **源码特征**：模块/表/路由/页面文件确实存在，且含关键实现特征（不是空壳）
+2. **运行实例响应**：对隔离测试实例（`127.0.0.1:8791`，目录 `/tmp/nf-test`）发真实 HTTP 请求，
+   参数化接口还要验证**参数真的生效**（如 `?days=7` 回传 `window=7`）
+
+共 27 个核查项，覆盖第 0–4 期全部条目。
+
+## 结果：27/27 通过
+
+| 期 | 条目 | 实证要点 |
+|---|---|---|
+| 0 | 审计日志 | `activity_log` 写 actor；审计页存在；`/api/logs` 支持 actor 过滤 |
+| 0 | 收书目录 | BookDock 页；`/api/watcher`；与 `INPUT_DIR` 关联 |
+| 1 | 通知已读态 | `notifications_read` 表；`POST /api/notifications/read`；通知页 + 顶栏浮层 |
+| 1 | 任务持久化 | `tasks` 表；`server.py` 已无进程内 `TASKS` dict；前端无种子数据 |
+| 1 | 维护与清理 | `/api/maintenance`（含 orphans）；维护页 |
+| 1 | 上传大小上限 | `upload.max_bytes` 配置 + 接口回传 + 页面可改 |
+| 1 | Requests 骨架 | `/api/requests/config`；页面存在且标注「待实现」 |
+| 1 | 成就体系 | `core/achievements.py`；`user_achievements` 表；接口 + 页面 |
+| 2 | 真实封面 | `/api/books/{bid}/cover`；BookCover 组件；封面设置（模式/书脊/阴影/叠加层） |
+| 2 | 书架三视图等 | 三视图 + 多选批量 + `POST /api/books/batch` + `/api/libraries` 筛选 |
+| 2 | 书卡信息 + 系列序号 | `lib/bookInfo.ts`；`library.py` 解析 `series_index` |
+| 2 | Edit Metadata | `POST /api/books/{bid}/metadata` + 详情页标签 |
+| 2 | 阅读状态/书评/相似书/Reading Log | 状态、评分书评、相似书、全局 Reading Log、`reading_sessions`（时长/补录） |
+| 2 | 统计增强 | `days`/`top` 参数**实测生效**；publishers/genres/years/avg_progress/integrity 齐全 |
+| 2 | 导出元数据 | `/api/books/export` + 书架入口 |
+| 2 | 自定义智能书架 | `/api/smart-scopes`；`lib/smartScope.ts` 求值器；管理页 |
+| 2 | 查重阈值 | `?threshold=70` **实测回传 70**；返回 `similarity`；页面有阈值控件 |
+| 3 | 排版增强 | `readerPrefs` 含分栏/页展/字距/两端对齐等；阅读器页 |
+| 3 | PDF 阅读器 | PdfReader 组件 + `pdfPrefs` + pdf.js 依赖 + 设置页 |
+| 3 | 漫画阅读器 | ComicReader + `comicPrefs` + 页清单/取图接口 + 设置页（**另造 CBZ 实测**，见下） |
+| 3 | 字体管理 | `core/fonts.py`；`/api/fonts`；阅读器字体页 + 服务端字体页 |
+| 3 | 偏好同步 | `/api/prefs/profiles` + `/api/prefs/devices`；`prefSync` store；`prefsBridge` 防回环 |
+| 4 | OPDS 订阅源 | `core/opds.py`；`/opds`（关闭态 404）；设置页 |
+| 4 | KOReader 互通 | `core/koreader.py`；healthcheck 实测返回 `{"state":"OK"}`；syncs 路由；设置页 |
+| 4 | Komga 集成 | `core/komga.py` + `core/opds_client.py`；布局预览接口；订阅页 + 设置页 |
+| 4 | 外部服务集成 | `core/integrations.py`；三家服务齐全；三页共用组件（props 传 service） |
+| 4 | Kobo / 邮件投递 | 文档已划掉并写明理由；设置页保持 `placeholder`（不假装可用） |
+
+### 两处首轮 FAIL 的甄别（均为**检查方式**问题，非实现缺失）
+
+1. **「前端无演示种子数据」**：首轮正则命中了 `data/tasks.ts` 里**说明「旧版曾有」的注释**。
+   逐行剥离注释后复核：代码里已无 `TASKS` 常量、无演示书名；`stores/tasks.ts` 也无假推进 ticker。
+2. **「漫画页清单接口」**：测试库里**没有 CBZ 样本**，不是接口缺失。
+   补造一个含 3 张 PNG + macOS 垃圾条目（`__MACOSX/`、`.DS_Store`）的 CBZ 后实测：
+   页数 = **3**（垃圾条目被正确过滤）、页序自然序、单页取图 `image/png` 且**字节与源一致**、越界返回 404。
+
+## 文档数字核对（连自己写进文档的数字也一并核实）
+
+| 说法 | 实测 | 结论 |
+|---|---|---|
+| 设置页 48 个 | `settingsNav.ts` 中 `p('` 计数 = 48 | ✓ |
+| 点缀色 65 档 | `data/accents.ts` 的 `ACCENTS` = 65（页面按 `ACCENTS.length` 显示） | ✓ |
+| 工具 9 标签 | `ToolsLayout` 的 `routeName: 'tools-*'` = 9 | ✓ |
+| 主导航 8 项 | `NAV_GROUPS` 首组条目 = 8 | ✓ |
+| 后端 146 条路由 | `^@app\.(get\|post\|put\|delete)` = 146 | ✓ |
+
+## 明确**不属于**完成项的
+
+- **后期（未定期）**：Requests 的完整功能（插件式索引器 / 插件市场 / Torznab-Newznab / 下载客户端与凭据加密 / 下载后自动化）。
+  文档标注为「未定期」，本轮**未启动**，其骨架（第 1 期）已完成。
+- **明确不做**：Kobo 同步、邮件投递（2026-09-17 用户决定，文档已划掉）。
+
+## 各功能页里如实标注的「未支持」（后续可选方向，非缺陷）
+
+| 功能 | 未支持项 |
+|---|---|
+| Komga | 接入侧：从 Komga 拉书目 / 下载入库、双向进度同步 |
+| KOReader | 多设备管理、注解与书签同步（kosync 协议本身只同步进度） |
+| 外部服务 | 同步任务（推送状态/书评/书摘，需先做书籍匹配 ISBN/标题） |
+| OPDS 服务 | 独立账号体系（现用应用账号）、按书库分别暴露 |
+| 阅读器 | 有声书播放器（文档 §11 判定不建议做）、CBR（需 RAR 系统依赖） |
+
+## 结论
+
+**第 0–4 期路线图 27 项全部完成，且每一项都有代码与运行实例层面的实证。**
+没有发现「文档说完成但实际缺失」的情况；两处首轮 FAIL 经复核均为核查脚本的判据问题。
