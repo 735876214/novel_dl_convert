@@ -3,6 +3,9 @@
 TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub / denovel 的思路。
 面向 NAS / 服务器部署，输入与导出目录**物理分离**，避免源文件与成品混在一起。
 
+除此之外，Web 端本身是一个可用的**书库 + 阅读器**：管理成品（书架 / 元数据 / 统计 / 工具），
+直接在浏览器里读 ePub、PDF 与漫画，并把书库喂给第三方阅读器（OPDS / Komga / KOReader）。
+
 ## 功能
 
 - 多正则 + 缩进降级 + **AI 兜底**的章节识别（`-t` 可调试正则；配置 `llm.api_key` 后疑难章节自动调 LLM）
@@ -17,19 +20,63 @@ TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub 
 - **输入目录自动监听**：扔进 `input` 的文件自动处理——`txt` 转 EPUB，非 `txt` 原样导出到 `output`
 - **活动日志**：每一次「转换 / 添加」都记录时间、文件名、操作、成功或失败（Web 可查、可下载、CLI 可看）
 - FastAPI 服务：上传即转、按路径转换、列出文件、下载成品、搜索、下载
+- **书库与阅读**：书架三视图 / 真实封面、ePub+PDF+漫画阅读器、进度与状态追踪、批注与收藏夹、数据统计、智能书架、九个工具 —— 见下两节
+
+## 书库与阅读
+
+转换与下载之外，Web 端就是一个书库与阅读器。数据**全部来自 `output/`**（没有额外的库实体），
+所以「把文件放进导出目录」就等于入库。
+
+- **书架**：三视图（网格 / 列表 / 表格）、真实内嵌封面（显示模式 / 书脊 / 阴影 / 卡片叠加层）、搜索、
+  排序、按系列折叠、多选批量（标记状态 / 评分 / 加入收藏夹）
+- **元数据**：单本「编辑元数据」直接改写 EPUB 内的 OPF（书名 / 作者 / 系列 / 系列序号 / 语言 / 出版社 /
+  标签 / ISBN），改完立即生效；系列与作者可成批改名、合并
+- **阅读器**：ePub（排版增强：翻页 / 纵向 / 横向、分栏、字距词距、两端对齐、多档阅读主题）、
+  PDF（pdf.js 懒加载）、漫画（CBZ）。**刻意不支持 CBR**：RAR 需要额外的系统级解压依赖，
+  与其放一本永远打不开的书进书架，不如让它不出现在书目里
+- **阅读追踪**：进度与位置（位置精确到章节 / 页码）、阅读状态（未读 / 在读 / 读完 / 搁置 / 弃读）、
+  起止日期、1–5 星评分与书评、Reading Log（按书的时间流水）、手工补录、阅读时长统计
+- **批注 / 收藏夹 / 成就 / 通知**：批注按书聚合与检索；收藏夹跨书归类
+- **数据统计**：规模卡片、入库节奏与阅读节奏（窗口 7 / 28 / 90 天可切换）、Top 作者 / 系列 / 出版社 / 题材、
+  出版年代分布、平均阅读进度、**书库体检**（缺作者 / 缺语言 / 无封面 / 零字节 / 解析失败）
+- **智能书架**：自定义规则书架（字段 + 操作 + 值，全部满足 / 任一满足），规则存服务端、命中数实时预览
+- **工具**（9 个标签）：实体管理、批量重命名、重复书籍（同作者 + 书名相似度阈值可调）、缺失资源、
+  书源管理、导出目录、本地转换、转换日志、OPDS 订阅。
+  会改磁盘的三个工具一律**先预览、再应用**，且「删除」是移入回收站（`CONFIG_DIR/cache/recycle`），
+  **从不直接删文件**
+
+## 多端互通
+
+让别的阅读器用上这个书库，或与外部的阅读服务对接 —— 都在「设置 → 设备」里，**默认关闭**。
+
+| 方向 | 能力 | 要点 |
+|---|---|---|
+| 对外 | **OPDS 目录** | 只读 Atom feed：全部 / 最近 / 按作者 / 按系列 / 按标签 / 搜索 / 单书 / 封面 / 下载。用 HTTP Basic + 应用账号；`/opds` 是独立前缀，不走 `/api` 的 Bearer 中间件（客户端只会发 Basic） |
+| 对外 | **Komga 库布局** | 有系列的书按 `系列名/系列名 #N.ext` 落盘（Komga 只认一层系列目录、不递归），并可从文件名或 OPF 推断系列；「整理既有库」把已平铺的书收进系列目录，**会改名时自动迁移阅读进度 / 批注 / 评分 / 收藏** |
+| 对接 | **KOReader 进度互通** | 实现 kosync 协议（`users/auth`、`users/create`、`syncs/progress` 的 GET/PUT）：按 partialMD5 索引文档，并在 XPointer / 页码与本项目的位置之间换算 |
+| 对接 | **OPDS 订阅** | 工具页里可订阅外部 OPDS 源（Komga / Calibre-Web 等），浏览后直接下载入库 |
+| 对接 | **Hardcover / Readwise / StoryGraph** | 凭据存储 + **真实连通性验证**（能验证的才放验证按钮；StoryGraph 无公开 API，如实标注不可验证） |
+
+未做：Kobo 同步、邮件投递（成本与收益不匹配，已明确不做）；
+外部服务的「同步任务」（把状态 / 书评 / 书摘推给对方）需要先做书籍匹配，尚未实现。
 
 ## 目录约定（输入 / 导出 / 配置 / 缓存 各自独立）
 
 | 宿主机 | 容器内 | 作用 |
 |--------|--------|------|
 | `./input`  | `/app/input`  | 待转换的 txt / 电子书源文件 |
-| `./output` | `/app/output` | 生成的 epub 等成品 |
+| `./output` | `/app/output` | 生成的 epub 等成品（**也是书库的唯一来源**：文件放进去就等于入库） |
 | `config.yaml` | `/app/config/config.yaml` | 转换行为配置（只读挂载） |
 | `./cookies` | `/app/config/cookies` | 各书源 Cookie 持久化（下载功能，跨重启保留登录态） |
-| `./cache`   | `/app/config/cache`   | AI 分章结果缓存（按文本哈希）+ 监听状态（已处理文件指纹） |
+| `./cache`   | `/app/config/cache`   | AI 分章结果缓存（按文本哈希）+ 监听状态（已处理文件指纹）+ **回收站** `recycle/` |
 | `./config/logs` | `/app/config/logs` | 活动日志 `activity.log` / `activity.jsonl` |
+| `./data` | `/app/data` | **运行时数据库** `novelforge.db`：阅读进度 / 批注 / 评分 / 收藏 / 阅读状态 / 偏好 / 外部服务凭据。**备份它等于备份全部阅读数据**（容器里由 `DATA_DIR=/app/data` 指定，裸跑时默认落 `CONFIG_DIR/data`） |
+| `./config/fonts` | `/app/config/fonts` | 「设置 → 阅读字体」上传的自定义字体（TTF / OTF / WOFF / WOFF2） |
+| `./config/sources` | `/app/config/sources` | 数据驱动书源规则 |
+| `./config/backups` | `/app/config/backups` | 直接编辑 `config.yaml` 前的自动备份 |
 
-目录路径由环境变量 `INPUT_DIR` / `OUTPUT_DIR` / `CONFIG_DIR` / `COOKIE_DIR` / `CACHE_DIR` / `LOG_DIR` 控制。
+目录路径由环境变量 `INPUT_DIR` / `OUTPUT_DIR` / `CONFIG_DIR` / `COOKIE_DIR` / `CACHE_DIR` / `LOG_DIR` /
+`DATA_DIR` / `SOURCES_DIR` / `FONTS_DIR` / `BACKUP_DIR` 控制。
 
 ## 自动监听与活动日志
 
@@ -160,27 +207,40 @@ docker compose pull && docker compose up -d
 
 ```
 novel_dl_convert/
-  docker-compose.yml   部署：input / output / config / cookies / cache 五处挂载
+  docker-compose.yml   部署：input / output / config / cookies / cache / data 六处挂载
+  docker-compose.dev.yml  本地开发编排（挂源码、端口 8993）
   start.sh             启动脚本（依赖已内置，自检后 exec uvicorn，秒级拉起）
   Dockerfile           多阶段构建：builder(venv 依赖) + node(仅取二进制) + frontend(Vue 构建) + runtime(python-slim)
   config.yaml          转换行为配置
   .env.example         环境变量示例
   novelforge/          Python 包
-    cli.py             命令行入口（convert/search/download/update）
+    cli.py             命令行入口（convert / search / download / update / watch / scan / logs）
     server.py          FastAPI 服务（NAS 部署 + 内容预览 API）
     config.py          目录与配置解析
     core/              预处理 / 分章 / AI 分章 / 网络加固 / 元数据 / EPUB 组装 / 管线
-                       + activity_log.py（活动日志：时间 / 文件名 / 操作 / 成败）
-                       + watcher.py（输入目录监听：txt 转 EPUB，非 txt 导出）
-                       + library.py（扫描导出目录，聚合书目 / 作者 / 系列 / 重复分组 / 缺失项）
-                       + fileops.py（安全改名、冲突检测、移入回收目录；不做 unlink）
+                       + activity_log.py（活动日志）· watcher.py（输入目录监听）
+                       + library.py（扫描导出目录，聚合书目 / 作者 / 系列 / 重复 / 缺失）
+                       + fileops.py（安全改名与移动、冲突检测、回收目录；不做 unlink）
+                       + db.py（SQLite：进度 / 批注 / 评分 / 收藏 / 状态 / 偏好 / 凭据）
+                       + stats.py（统计聚合）· achievements.py · recommend.py（相似书）
+                       + auth.py（单用户轻登录）· comics.py（CBZ 解包）· fonts.py（字体管理）
+                       + ebook_convert.py（Calibre 派生兜底，缺失时降级 EPUB）
+                       + opds.py（对外 OPDS 目录）· opds_client.py（订阅外部 OPDS 源）
+                       + komga.py（Komga 库布局与系列推断）· koreader.py（kosync 进度互通）
+                       + integrations.py（Hardcover / Readwise / StoryGraph 凭据与验证）
     sources/           书源适配器（gutenberg 公版 / generic 模板 / rules 数据驱动 / store 用户源管理 / manager）
     static/v2/          前端构建产物（Vue + Tailwind，由 frontend/ 构建，不入库）
   frontend/           前端工程（Vue 3 SFC + TypeScript + Vite 8 + Tailwind v4 + Pinia）
-    src/views/          仪表盘 / 探索发现 / 任务中心 / 书库 / 单书详情 / 设置
-                        tools/  工具页外壳（ToolsLayout，顶部标签栏）+ 8 个工具子页
-    src/components/     外壳（侧栏 / 顶栏 / 任务抽屉）+ UI 组件 + 仪表盘部件
-    src/stores/         Pinia：theme / nav / library / tasks / dashboard / ui
+    src/views/          仪表盘 / 探索发现 / 任务中心 / 数据统计 / 阅读记录 / 通知 / 成就 /
+                        书架 / 单书详情 / 作者 / 系列 / 批注 / 收藏夹 / 智能书架
+                        reader/    阅读器（ePub / PDF / 漫画）
+                        settings/  设置页（注册表生成；48 页分 6 组）
+                        tools/     工具页外壳（ToolsLayout，顶部标签栏）+ 9 个工具子页
+    src/components/     外壳（侧栏 / 顶栏 / 任务抽屉）+ UI 组件 + 仪表盘部件 + 阅读器组件
+    src/stores/         Pinia：theme / nav / library / tasks / dashboard / ui / auth /
+                        collections / fonts / stats / shelfPrefs / coverPrefs / prefSync
+    src/lib/            阅读与外貌偏好（readerPrefs / pdfPrefs / comicPrefs）、
+                        智能书架求值（smartScope）、偏好同步桥（prefsBridge / prefsPayload）
     src/assets/theme/   照搬 BookOrbit 的 tokens / accents / radius / bridge / cover-effects
 ```
 
@@ -189,31 +249,43 @@ novel_dl_convert/
 除了写 Python 适配器，还可以用一段 **JSON 规则** 描述站点，在 Web 界面「书源管理」里**批量粘贴 / 上传**即可生效，无需改代码、无需重启。规则存到 `config/sources/<name>.json`（挂载目录，重建镜像不丢）。
 
 ### Web 界面
-界面是 Vue 单页应用（hash 路由）。侧栏为：主导航（仪表盘 / 探索发现 / 任务中心 / 工具）+
-四个可折叠组（浏览 / 库 / 智能书架 / 收藏夹）。
+界面是 Vue 单页应用（hash 路由）。侧栏为：主导航（仪表盘 / 探索发现 / 任务中心 / 工具 /
+数据统计 / 阅读记录 / 通知中心 / 成就）+ 四个可折叠组（浏览 / 库 / 智能书架 / 收藏夹）。
 
 > 「工具」**与任务中心并列**（同属主导航这一层），但**不自成一块** —— 它不再是一个带组标题的
-> 独立分组，而是工具页的**唯一入口**：点进去是单页 8 标签。
+> 独立分组，而是工具页的**唯一入口**：点进去是单页 9 标签。
 
 - **仪表盘**：顶部统计部件（书库概览 / 年度目标环形 / 入库节奏柱状图）+ 下方横向滚动书架行；
   右下角「调节」按钮可开关与拖拽排序部件、增删书架行（偏好存浏览器本地）。
 - **探索发现**：输入书名跨全部书源并发检索 → 结果可「预览」→ 点「下载」后台抓取，进度实时回写任务中心。
-- **任务中心**：下载 / 转换任务的统一列表，按状态筛选。
-- **工具**：**单页 + 顶部下划线标签栏**（结构照搬 BookOrbit 的 tools），8 个标签在页内切换；
+- **任务中心**：下载 / 转换任务的统一列表，按状态筛选；右侧抽屉形态（点遮罩或 Esc 关闭）。
+- **数据统计**：规模卡片 + 入库与阅读节奏（窗口 7 / 28 / 90 天可切换）+ Top 作者 / 系列 / 出版社 / 题材 +
+  出版年代分布 + 平均阅读进度 + **书库体检**（缺作者 / 缺语言 / 无封面 / 零字节 / 解析失败）。
+- **阅读记录**：按时间的阅读流水（Reading Log），支持手工补录。
+- **通知中心 / 成就**：任务与系统通知（只读标记，不做推送）；基于阅读数据的单用户成就墙。
+- **工具**：**单页 + 顶部下划线标签栏**（结构照搬 BookOrbit 的 tools），9 个标签在页内切换；
   切换时各标签的列表 / 筛选 / 输入与滚动位置都保留（子页走 `KeepAlive`）。
   - **实体管理**：按作者（或系列）聚合成品书目，可批量改名、可合并。作者名按本项目命名约定
     写在文件名里，因此「改名」实质是改文件名。
   - **批量重命名**：按规则（`{title}` / `{author}` / `{series}` / `{index}` / `{ext}`）生成
     「旧名 → 新名」对照表，冲突行置灰且不可提交，确认后才落盘。
-  - **重复书籍**：按「归一化书名 + 作者」分组（标点、空格与「校对版全本」这类版本后缀都会被忽略），
-    每组选一项保留、其余移入回收目录。
+  - **重复书籍**：同作者 + **书名相似度阈值可调**（默认 85%，与 Calibre 的 similar-title 口径一致），
+    相似的书聚成一组，每组选一项保留、其余移入回收目录。
   - **缺失资源**：列出零字节 / 无法解析 / 缺封面的成品文件，并逐条说明原因。
   - **书源管理**：查看已注册书源，粘贴 JSON 或上传文件批量添加，可删除用户源。
   - **导出目录**：列出 EPUB 成品与下载留档的 txt，提供下载。
   - **本地转换**：拖拽上传本地 txt 直接转 EPUB、按路径转换、监听目录启停与立即扫描。
   - **转换日志**：全部活动日志（时间 / 文件名 / 操作 / 成败，支持过滤、下载、清空）。
-- **书库 / 单书详情**：书卡网格与标签筛选；详情页含概览 / 目录 / 文件 / 批注四个标签。
-- **设置**：主题（浅色 / 深色 / 跟随系统）、65 档点缀色、四档圆角。
+  - **OPDS 订阅**：添加外部 OPDS 目录（Komga / Calibre-Web 等），逐级浏览并直接下载入库。
+- **书架**：三视图（网格 / 列表 / 表格）+ 搜索 / 排序 / 系列折叠 / 多选批量；书卡用真实内嵌封面。
+- **单书详情**：概览 / 目录 / 文件 / 批注 / 阅读状态（评分与书评、相似书推荐）等标签，
+  并可「编辑元数据」直接改写 EPUB 内的 OPF。
+- **阅读器**：ePub（排版增强）/ PDF / 漫画三种；阅读进度、状态与时长自动回写。
+- **设置**：48 个页面分 6 组 —— 你 / 书库 / **设备**（OPDS、Komga、KOReader、字体、偏好与同步）/
+  外部账号 / 服务端 / 本项目扩展。含主题（浅色 / 深色 / 跟随系统）、65 档点缀色、四档圆角、
+  转换与监听配置、回收站与维护等。
+- **接口文档**：FastAPI 自带的交互式 API 文档在 **`/docs`**（OpenAPI，实时反映全部路由）——
+  下面几张 API 表只是常用项的摘录，不作为完整清单。
 
 > **工具页的安全约定**：会改磁盘的三个工具（实体管理 / 批量重命名 / 重复书籍）一律
 > **「先预览、再应用」**，`apply` 只接受预览过的具体条目、不接受自由规则；
