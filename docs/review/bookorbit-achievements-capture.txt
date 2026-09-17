@@ -1,0 +1,397 @@
+Book Orbit
+Dashboard
+Book Dock
+Requests (Beta)
+Tools
+BROWSE
+Authors
+226
+Series
+5
+Annotations
+LIBRARIES
+Filter libraries
+漫画
+55
+刘备
+154
+有声书
+87
+工具书
+172
+插图书
+37
+教学
+17
+杂志
+3
+其他
+4
+See all libraries (9)
+
+SMART SCOPES
+
+No Smart Scopes yet
+
+COLLECTIONS
+
+No collections yet
+
+v2.10.0
+⌘
+K
+43
+Y
+Achievements
+9 / 87 tiers
+All
+Earned (8)
+In Progress (11)
+Locked (49)
+Reading
+4 / 28
+Ink Initiate
+Common
+
+Finish your first book
+
+Tier 1 of 4
+·
+1 / 10 to Spine Scout
+First Leaves
+Common
+
+Read 500 pages
+
+Tier 0 of 4
+·
+23 / 500 to First Leaves
+Hour Initiate
+Common
+
+Read for 10 hours
+
+Tier 0 of 4
+·
+2 / 10 to Hour Initiate
+Marathoner
+Rare
+
+Complete a reading session of 90 minutes or more
+
+31 / 90
+All-nighter
+Epic
+
+Read between 1am and 4am
+
+Earned Sep 9, 2026
+
+Early Bird
+Rare
+
+Start a reading session between 5am and 7am
+
+Earned Sep 8, 2026
+
+Story Stretch
+Common
+
+Finish a book with 300 or more pages
+
+Tier 0 of 4
+·
+23 / 300 to Story Stretch
+Sprint
+Epic
+
+Finish a book in a single day
+
+Earned Sep 8, 2026
+
+Binge Reader
+Epic
+
+Finish 3 or more books in a single week
+
+0 / 3
+Monthly Machine
+Legendary
+
+Finish 10 books in a single calendar month
+
+1 / 10
+Slow Burn
+Rare
+
+Take over 90 days from start to finish a book
+
+One Sitting
+Epic
+
+Cover 90% or more of a book in a single reading session
+
+Power Hour
+Rare
+
+Read 75 or more pages in a single reading session
+
+8 / 75
+Speed Reader
+Epic
+
+Read 100 or more pages in a single day
+
+23 / 100
+Old Friend
+Rare
+
+Finish a book you were re-reading
+
+Secret Achievement
+???
+Library
+3 / 23
+Collection Architect
+Rare
+
+Have 250 books in your library
+
+Tier 2 of 4
+·
+531 / 1000 to Stack Sovereign
+Note Taker
+Common
+
+Create 10 annotations
+
+Tier 0 of 4
+·
+0 / 10 to Note Taker
+Multi-Format
+Rare
+
+Own books in 3 or more different formats
+
+Earned Sep 8, 2026
+
+Curator
+Rare
+
+Create 10 or more collections
+
+0 / 10
+Note Keeper
+Rare
+
+Create 25 annotations that include a note
+
+0 / 25
+Deep Dive
+Rare
+
+Create 10 annotations in a single day
+
+0 / 10
+Bookmarked
+Common
+
+Create your first annotation or highlight
+
+First Verdict
+Common
+
+Rate your first book
+
+Fledgling Critic
+Common
+
+Rate 10 books
+
+Tier 0 of 4
+·
+0 / 10 to Fledgling Critic
+Standing Ovation
+Common
+
+Give a book a 5-star rating
+
+Across the Board
+Rare
+
+Use all five star ratings at least once
+
+0 / 5
+Secret Achievement
+???
+Wordsmith
+Rare
+
+Write a note longer than 280 characters
+
+0 / 280
+Box of Crayons
+Rare
+
+Use all 5 highlight colors
+
+0 / 5
+Exploration
+0 / 18
+Genre Curious
+Common
+
+Finish books in 5 different genres
+
+Tier 0 of 4
+·
+0 / 5 to Genre Curious
+Bilingual
+Common
+
+Finish books in 2 different languages
+
+Tier 0 of 4
+·
+0 / 2 to Bilingual
+Old Soul
+Epic
+
+Finish a book published before 1900
+
+New Release
+Rare
+
+Finish a book published in the current year
+
+Century Span
+Epic
+
+Finish books from 3 or more different centuries
+
+0 / 3
+Author Deep Dive
+Rare
+
+Read 5 or more books by the same author
+
+0 / 5
+Decade Sampler
+Epic
+
+Finish books published in 5 different decades
+
+0 / 5
+Short Story Fan
+Rare
+
+Finish 5 books with fewer than 100 pages
+
+1 / 5
+Thick and Thin
+Rare
+
+Finish at least one book under 100 pages and one over 800 pages
+
+Trilogy Master
+Rare
+
+Finish a complete 3-book series
+
+Genre Devotee
+Rare
+
+Finish 10 books in the same genre
+
+0 / 10
+Series Begun
+Common
+
+Finish your first book that belongs to a named series
+
+Dedication
+0 / 15
+Getting Started
+Common
+
+Maintain a 7-day reading streak
+
+Tier 0 of 4
+·
+0 / 7 to Getting Started
+Year-Round Reader
+Epic
+
+Read in all 12 months of a calendar year
+
+Secret Achievement
+???
+Comeback Kid
+Rare
+
+Resume reading after a 30-day break
+
+Four Seasons
+Epic
+
+Read in all 4 seasons within a single year
+
+1 / 4
+Perfect Month
+Legendary
+
+Read every day of a calendar month
+
+Consistency Is Key
+Rare
+
+Read at least 30 minutes every day for 14 consecutive days
+
+Weekend Rhythm
+Epic
+
+Read on 8 consecutive weekends
+
+Weekend Warrior
+Rare
+
+Read for 5 or more hours in a single weekend
+
+Yearly Closer
+Epic
+
+Finish 12 books in a single calendar year
+
+1 / 12
+Secret Achievement
+???
+Category Sweeper
+Legendary
+
+Earn at least one achievement in all 4 categories
+
+3 / 4
+Devices
+2 / 3
+Synced Up
+Common
+
+Sync reading progress from a Kobo or KOReader device for the first time
+
+Earned Sep 8, 2026
+
+Full Orbit
+Legendary
+
+Log reading from the web reader, a Kobo, and a KOReader device
+
+2 / 3
+Two Worlds
+Rare
+
+Read the same book from two or more different sources
+
+Earned Sep 8, 2026
+
+Author enrichment finished
+43 failed
