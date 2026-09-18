@@ -25,7 +25,7 @@ import time
 import zipfile
 
 from .. import config
-from . import audio, comics, metadata
+from . import audio, comics, db, metadata
 
 # 只把这些扩展名当成「书」；与 /api/files 的全量列表不同，这里是有意收窄的。
 # .cbr（RAR 漫画）自第 9 期起在列 —— 由 core/comics.py 的 zip/rar 双后端解压。
@@ -44,7 +44,9 @@ _COVER_MIN_BYTES = 1024
 _CACHE_TTL = 5.0
 
 _lock = threading.RLock()
-_cache = {"at": 0.0, "sig": None, "books": []}
+#: 缓存按**书库**分桶：``{library_id: {"at", "sig", "books"}}``。
+#: 单份缓存 + 单根指纹在多库下会让「另一个库新增的书」不触发失效（列表长期陈旧）。
+_cache: dict = {}
 
 # 文件名噪声：括号里的版本说明 + 空白/连字符
 _NOISE_RE = re.compile(r"[（(][^）)]*(?:校对|全本|完结|精校|未删减|典藏|合集)[^）)]*[）)]|[\s\-_·]+")
@@ -581,10 +583,16 @@ def chapter_html(path: pathlib.Path, index: int, bid: str) -> dict:
 
 
 def by_id(bid: str) -> "dict | None":
-    for b in books():
-        if b["id"] == bid:
-            return b
-    return None
+    """按 id 取书。
+
+    多库下同一 id 可能命中多本（跨库**同名同扩展**）—— 此时**显式报错**，不静默取第一条，
+    否则进度 / 批注会写到错的书上。正常情况下入库与迁移的冲突检测已拦掉这种数据。
+    """
+    hits = [b for b in books() if b["id"] == bid]
+    if len(hits) > 1:
+        libs = "、".join(sorted({str(h.get("library_id")) for h in hits}))
+        raise RuntimeError(f"book_id {bid} 在多个书库中重复（{libs}），请先改名消除冲突")
+    return hits[0] if hits else None
 
 
 def series_list() -> list:
@@ -704,16 +712,22 @@ def probe_epub(path: pathlib.Path) -> dict:
 # Komga 布局是「一层系列目录 + 书文件」（core/komga.py），所以扫描要跟着下探一层。
 # **只下一层**：Komga 自己也不递归系列目录的子目录，再深只会扫到它不认的文件。
 
-def _iter_book_entries(d: pathlib.Path) -> list:
-    """OUTPUT_DIR 下的**书目条目**（平铺 + 一层系列目录），按遍历顺序返回。
+def _iter_book_entries(d: pathlib.Path, exts=None) -> list:
+    """**一个书库根目录**下的书目条目（平铺 + 一层系列目录），按遍历顺序返回。
 
     条目有两种形态，二者都算「一本书」：
-    - **文件**：``suffix in BOOK_EXTS`` 的电子书 / 漫画 / **单个音频文件**；
+    - **文件**：``suffix in exts`` 的电子书 / 漫画 / **单个音频文件**；
     - **目录**：含音频文件的目录（有声书多轨，「一章一文件」）。
+
+    ``exts`` 按**库类型**收窄白名单（漫画库只收 `.cbz/.cbr`、有声书库只收音频…），
+    不传则用全量 ``BOOK_EXTS``。音频目录的识别也随之收窄：白名单里没有音频扩展名时
+    不再把目录当有声书。
 
     `_scan_once` 与 `_dir_signature` 共用它，保证「扫到哪些」与「什么变化会让缓存失效」
     永远一致 —— 这两处若各写一套，很容易出现「新书已入库但列表还是旧的」。
     """
+    allowed = tuple(exts) if exts else BOOK_EXTS
+    allow_audio_dir = any(e in allowed for e in audio.AUDIO_EXTS)
     out: list = []
     try:
         entries = sorted(d.iterdir())
@@ -721,13 +735,13 @@ def _iter_book_entries(d: pathlib.Path) -> list:
         return out
     for f in entries:
         if f.is_file():
-            if f.suffix.lower() in BOOK_EXTS:
+            if f.suffix.lower() in allowed:
                 out.append(f)
             continue
         if not f.is_dir() or f.name.startswith("."):
             continue
         # 顶层目录本身就是一个音频目录 → 整目录算一本书
-        if audio.is_audio_dir(f):
+        if allow_audio_dir and audio.is_audio_dir(f):
             out.append(f)
             continue
         try:
@@ -735,11 +749,111 @@ def _iter_book_entries(d: pathlib.Path) -> list:
         except Exception:
             continue
         for x in children:
-            if x.is_file() and x.suffix.lower() in BOOK_EXTS:
+            if x.is_file() and x.suffix.lower() in allowed:
                 out.append(x)
-            elif x.is_dir() and not x.name.startswith(".") and audio.is_audio_dir(x):
+            elif allow_audio_dir and x.is_dir() and not x.name.startswith(".") \
+                    and audio.is_audio_dir(x):
                 out.append(x)
     return out
+
+
+# ---------------- 书库注册表（第 10 期 D8）----------------
+# 库是**数据**（存 SQLite），不是配置常量：库表为空时回退到「默认库 = OUTPUT_DIR」，
+# 保证老部署升级后书目不为空（否则孤儿判定会把所有 id 当孤儿）。
+
+#: 库表为空时合成的默认库 id
+DEFAULT_LIBRARY_ID = "default"
+
+_COMIC_EXTS = (".cbz", ".cbr")
+_EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt")
+
+
+def _exts_for_type(ltype) -> tuple:
+    """库类型 → 扫描白名单（``mixed`` 用全量）。"""
+    t = str(ltype or "mixed").lower()
+    if t == "comic":
+        return _COMIC_EXTS
+    if t == "audiobook":
+        return tuple(audio.AUDIO_EXTS)
+    if t == "ebook":
+        return _EBOOK_EXTS
+    return BOOK_EXTS
+
+
+def default_library() -> dict:
+    """默认库：老部署的 ``OUTPUT_DIR``（库表为空时使用）。"""
+    return {"id": DEFAULT_LIBRARY_ID, "name": "默认书库", "type": "mixed",
+            "mode": "inplace", "root_path": str(config.OUTPUT_DIR),
+            "storage_path": "", "source_subdir": "", "rules": "", "sort_order": 0}
+
+
+def libraries() -> list:
+    """全部书库（库表为空时回退为单条默认库）。"""
+    try:
+        rows = db.list_libraries()
+    except Exception:
+        rows = []
+    return rows or [default_library()]
+
+
+def get_library(lid) -> "dict | None":
+    if str(lid) == DEFAULT_LIBRARY_ID:
+        rows = [l for l in libraries() if l["id"] == DEFAULT_LIBRARY_ID]
+        return rows[0] if rows else None
+    return db.get_library(lid)
+
+
+def ensure_default_library() -> None:
+    """库表为空时落一条默认库（启动调用一次），使 DB 成为单一真值源。"""
+    try:
+        if db.list_libraries():
+            return
+        lib = default_library()
+        db.create_library(lib["id"], lib["name"], lib["type"], lib["mode"],
+                          lib["root_path"], sort_order=0)
+    except Exception:
+        pass
+
+
+def library_of(book: dict) -> dict:
+    """书目所属的库；按 ``library_id`` 查，查不到回退默认库。"""
+    lid = (book or {}).get("library_id")
+    if lid:
+        lib = get_library(lid)
+        if lib:
+            return lib
+    return default_library()
+
+
+def root_of(book_or_id) -> pathlib.Path:
+    """书目（或库 id）的**库根目录** —— 替代全仓 ``config.OUTPUT_DIR``。
+
+    ⚠️ 这是多库后「取文件路径」的唯一入口。直接用 ``config.OUTPUT_DIR / name``
+    会取到错的库（同名书跨库时甚至取到别的书）。
+    """
+    if isinstance(book_or_id, dict):
+        lib = library_of(book_or_id)
+    else:
+        lib = get_library(book_or_id) or default_library()
+    return pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+
+
+def resolve(name: str, library_id=None) -> dict:
+    """库内相对路径 → ``{library_id, library_type, root, path}``。
+
+    不给 ``library_id`` 时按名字在所有库中查找（命中多个库会报错，见 :func:`find`）。
+    """
+    if library_id:
+        lib = get_library(library_id) or default_library()
+    else:
+        b = find(name)
+        if not b:
+            lib = default_library()
+        else:
+            lib = library_of(b)
+    root = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+    return {"library_id": lib.get("id"), "library_type": lib.get("type"),
+            "root": root, "path": root / name}
 
 
 def _entry_mtime(p: pathlib.Path) -> float:
@@ -756,15 +870,15 @@ def _entry_mtime(p: pathlib.Path) -> float:
         return 0.0
 
 
-def _dir_signature(d: pathlib.Path) -> tuple:
+def _dir_signature(d: pathlib.Path, exts=None) -> tuple:
     """目录指纹：(书目条目数, 目录内文件总数, 最新 mtime)。任一变化即让缓存失效。
 
-    ⚠️ 必须与 :func:`_iter_book_entries` 同源。有声书是**目录**，往目录里加一集既不改变
-    条目数、也不一定改目录自身 mtime —— 所以目录内部的文件数也要计入，否则会出现
-    「新音频已入库但列表还是旧的」。
+    ⚠️ 必须与 :func:`_iter_book_entries` 同源（含 ``exts`` 白名单）。有声书是**目录**，
+    往目录里加一集既不改变条目数、也不一定改目录自身 mtime —— 所以目录内部的文件数
+    也要计入，否则会出现「新音频已入库但列表还是旧的」。
     """
     n, inner, newest = 0, 0, 0.0
-    for p in _iter_book_entries(d):
+    for p in _iter_book_entries(d, exts):
         n += 1
         if p.is_dir():
             try:
@@ -779,10 +893,17 @@ def _dir_signature(d: pathlib.Path) -> tuple:
     return (n, inner, round(newest, 3))
 
 
-def _scan_once() -> list:
-    d = config.OUTPUT_DIR
+def _scan_once(lib: dict = None) -> list:
+    """扫描**一个书库**的根目录，返回书目条目。
+
+    ``name`` 仍是**相对该库根**的 posix 路径 —— BookCard 契约不变，前端 / OPDS / Komga
+    都不必连锁改；跨库同名由入库与迁移时的冲突检测拦住（见 core/migrate.py）。
+    """
+    lib = lib or default_library()
+    d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+    exts = _exts_for_type(lib.get("type"))
     books = []
-    for f in _iter_book_entries(d):
+    for f in _iter_book_entries(d, exts):
         is_dir = f.is_dir()
         try:
             st = f.stat()
@@ -859,29 +980,54 @@ def _scan_once() -> list:
             "c1": c1,
             "c2": c2,
             "issues": issues,
+            # 多书库：归属信息。`name` 相对**所属库根**，故协议层与前端无需改
+            "library_id": lib.get("id") or DEFAULT_LIBRARY_ID,
+            "library_type": lib.get("type") or "mixed",
         })
     return books
 
 
-def books(force: bool = False) -> list:
-    """导出目录里的书目列表（带短期缓存）。"""
-    d = config.OUTPUT_DIR
-    sig = _dir_signature(d)
+def _books_of(lib: dict, force: bool = False) -> list:
+    """单个库的书目（带**按库**的短期缓存）。"""
+    d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+    sig = _dir_signature(d, _exts_for_type(lib.get("type")))
+    key = str(lib.get("id") or DEFAULT_LIBRARY_ID)
     with _lock:
-        fresh = _cache["sig"] == sig and (time.time() - _cache["at"]) < _CACHE_TTL
-        if fresh and not force:
-            return _cache["books"]
-
-    result = _scan_once()
+        cur = _cache.get(key) or {}
+        if not force and cur.get("sig") == sig and (time.time() - cur.get("at", 0)) < _CACHE_TTL:
+            return cur.get("books", [])
+    result = _scan_once(lib)
     with _lock:
-        _cache.update({"at": time.time(), "sig": sig, "books": result})
+        _cache[key] = {"at": time.time(), "sig": sig, "books": result}
     return result
 
 
-def invalidate() -> None:
-    """让缓存立即失效（任何改文件的操作之后都要调）。"""
+def books(library_id=None, force: bool = False) -> list:
+    """书目列表（**多库合并**；可按库过滤）。
+
+    - ``library_id`` 为空 → 合并全部库（保持既有「全库」语义，供统计 / 搜索 / 推荐用）；
+    - 缓存与指纹**按库**：任一库变化只让该库失效（单份缓存会让别的库新书不出现）。
+    """
+    libs = libraries()
+    if library_id:
+        libs = [l for l in libs if l["id"] == library_id]
+    out: list = []
+    for lib in libs:
+        out.extend(_books_of(lib, force))
+    return out
+
+
+def invalidate(library_id=None) -> None:
+    """让缓存立即失效（任何改文件的操作之后都要调）。
+
+    给 ``library_id`` 时只失效该库；不给则全部失效（调用方多数不关心库，
+    但按库失效能在多库下避免「改一个库、全库重扫」）。
+    """
     with _lock:
-        _cache.update({"at": 0.0, "sig": None, "books": []})
+        if library_id:
+            _cache.pop(str(library_id), None)
+        else:
+            _cache.clear()
 
 
 def export_rows() -> list:
@@ -911,19 +1057,21 @@ def export_rows() -> list:
     return rows
 
 
-def find(name: str) -> dict | None:
-    for b in books():
+def find(name: str, library_id=None) -> dict | None:
+    """按**库内相对路径**取书；给 ``library_id`` 时限定在该库内查找。"""
+    for b in books(library_id):
         if b["name"] == name:
             return b
     return None
 
 
-def book_detail(name: str) -> dict | None:
+def book_detail(name: str, library_id=None) -> dict | None:
     """单本详情：基础元数据 + 真实章节树 + 同 stem 的成品文件列表（音频另给轨道清单）。"""
-    b = find(name)
+    b = find(name, library_id)
     if not b:
         return None
-    path = config.OUTPUT_DIR / name
+    root = root_of(b)
+    path = root / name
     chapters = _reading_list(path) if path.suffix.lower() == ".epub" else []
     files = []
     # 音频目录没有「同 stem 兄弟文件」的概念，跳过枚举（否则会把别的目录当成文件列出来）
@@ -935,7 +1083,7 @@ def book_detail(name: str) -> dict | None:
             for f in sorted(path.parent.iterdir()):
                 if f.is_file() and f.stem == stem:
                     files.append({
-                        "name": f.relative_to(config.OUTPUT_DIR).as_posix(),
+                        "name": f.relative_to(root).as_posix(),
                         "format": f.suffix.lstrip(".").upper() or "?",
                         "size": f.stat().st_size,
                         "mtime": f.stat().st_mtime,

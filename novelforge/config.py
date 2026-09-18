@@ -18,6 +18,10 @@ import yaml
 CONFIG_DIR = pathlib.Path(os.getenv("CONFIG_DIR", "/app/config"))
 INPUT_DIR = pathlib.Path(os.getenv("INPUT_DIR", "/app/input"))
 OUTPUT_DIR = pathlib.Path(os.getenv("OUTPUT_DIR", "/app/output"))
+# 多书库（第 10 期）：书库来源根目录 —— 其下的子文件夹可被「新建书库」就地引用，
+# 或作为导入源（扫描后复制/移入该库自己的存储目录）。
+# OUTPUT_DIR 不废弃：当书库表为空时它是**默认书库**的根（兼容既有部署）。
+LIBRARY_SOURCE_DIR = pathlib.Path(os.getenv("LIBRARY_SOURCE_DIR", "/app/libraries"))
 COOKIE_DIR = pathlib.Path(os.getenv("COOKIE_DIR", str(CONFIG_DIR / "cookies")))
 CACHE_DIR = pathlib.Path(os.getenv("CACHE_DIR", str(CONFIG_DIR / "cache")))
 SOURCES_DIR = pathlib.Path(os.getenv("SOURCES_DIR", str(CONFIG_DIR / "sources")))

@@ -41,9 +41,23 @@ def _print_summary(res: dict):
           f"失败 {len(res.get('failed', []))}")
 
 
+def _resolve_out(args=None, default=None) -> pathlib.Path:
+    """导出根（多书库）：``-o/--output`` 优先 → ``--library <id>`` → 默认库根（= OUTPUT_DIR）。"""
+    out = getattr(args, "output", None) if args is not None else None
+    if out:
+        return pathlib.Path(out)
+    lid = getattr(args, "library", None) if args is not None else None
+    if lid:
+        from .core import library as _library
+        lib = _library.get_library(lid)
+        if lib:
+            return pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+    return pathlib.Path(default or config.OUTPUT_DIR)
+
+
 def cmd_convert(args):
     cfg = _load_cfg()
-    out = pathlib.Path(args.output) if args.output else config.OUTPUT_DIR
+    out = _resolve_out(args)
     out.mkdir(parents=True, exist_ok=True)
 
     if args.test_title:
@@ -121,7 +135,7 @@ async def cmd_download(args):
         item = {"_source": args.source, "url": args.url,
                 "title": args.title or "book", "author": args.author or "未知",
                 "formats": {}}
-    result = await mgr.fetch_and_convert(item, config.OUTPUT_DIR,
+    result = await mgr.fetch_and_convert(item, _resolve_out(args),
                                         {"force": True, "merge": True, "cfg": cfg})
     print(f"已生成：{result}")
 
@@ -144,6 +158,7 @@ def main():
     pc.add_argument("input", nargs="?", default=None,
                     help="txt 文件或目录；省略时用 INPUT_DIR")
     pc.add_argument("-o", "--output", default=None, help="导出目录；省略时用 OUTPUT_DIR")
+    pc.add_argument("--library", default=None, help="目标书库 id（多书库；省略时用默认书库）")
     pc.add_argument("-f", "--force", action="store_true", help="覆盖已存在的输出")
     pc.add_argument("-m", "--merge", action="store_true", help="合并过小的章节")
     pc.add_argument("--traditionalize", action="store_true", help="繁体转简体")

@@ -35,7 +35,17 @@ _BAD_TAIL = re.compile(r"[. ]+$")
 PATTERN_FIELDS = ("{title}", "{author}", "{series}", "{index}", "{ext}")
 
 
-def output_dir() -> pathlib.Path:
+def output_dir(library_id=None) -> pathlib.Path:
+    """**库根目录**（多书库）。
+
+    不给 ``library_id`` 时返回默认库根（= 既有 ``OUTPUT_DIR``，兼容单库调用方）。
+    ⚠️ 不要再用 ``config.OUTPUT_DIR`` 直接拼路径：多库下它只是**默认库**的根，
+    对其它库的书会解析到错位置 —— 改名 / 回收 / 改元数据都会动到错文件。
+    """
+    if library_id:
+        lib = library.get_library(library_id)
+        if lib:
+            return pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
     return config.OUTPUT_DIR
 
 
@@ -47,12 +57,16 @@ def recycle_dir() -> pathlib.Path:
 
 # ---------------- 校验 ----------------
 
-def safe_path(name: str) -> pathlib.Path:
-    """把「文件名」或「系列/文件名」解析成 ``OUTPUT_DIR`` 下的真实路径，可疑输入抛 ValueError。
+def safe_path(name: str, library_id=None) -> pathlib.Path:
+    """把「文件名」或「系列/文件名」解析成**该书所属库根**下的真实路径，可疑输入抛 ValueError。
 
     **允许一层子目录**（Komga 布局的 ``系列名/书`` 结构，见 core/komga.py）。
     更深的层级一律拒绝：Komga 自己也不递归系列目录的子目录，
     而层级越深越容易藏路径穿越（``a/../../etc``）。
+
+    ⚠️ 多书库（第 10 期）：基根由 ``library_id`` 决定，**不能**固定用 ``OUTPUT_DIR``
+    （否则库内相对路径会被判「不在导出目录内」而全挂；反之若固定放宽到书库根，
+    又会允许跨库穿越 —— 改名 / 回收可能动到别的库的文件）。
     """
     raw = (name or "").strip().replace("\\", "/")
     if not raw:
@@ -65,9 +79,9 @@ def safe_path(name: str) -> pathlib.Path:
     for part in rel.parts:
         if _BAD_CHARS.search(part):
             raise ValueError(f"文件名含非法字符：{name}")
-    base = output_dir().resolve()
+    base = output_dir(library_id).resolve()
     p = (base / raw).resolve()
-    # resolve 之后再判一次：符号链接可能把路径指到 OUTPUT_DIR 之外
+    # resolve 之后再判一次：符号链接可能把路径指到库根之外
     if p != base and base not in p.parents:
         raise ValueError(f"路径不在导出目录内：{name}")
     if len(p.relative_to(base).parts) > 2:
@@ -480,7 +494,7 @@ def apply_rename(items: list, meta_field: str | None = None, meta_value: str | N
             errors.append({"old": old, "error": "存在冲突，已跳过"})
             continue
         try:
-            src, dst = safe_path(old), safe_path(new)
+            src, dst = safe_path(old, _lib_of(old)), safe_path(new, _lib_of(new))
             if not src.is_file():
                 raise ValueError("源文件不存在")
             if old == new:
@@ -516,8 +530,20 @@ def apply_rename(items: list, meta_field: str | None = None, meta_value: str | N
     return {"renamed": renamed, "errors": errors, "count": len(renamed)}
 
 
-def _prune_empty_dirs() -> int:
-    """删掉 OUTPUT_DIR 下**空**的一层子目录（布局整理把系列目录搬空后留下的壳）。
+def _lib_of(name: str, item: dict = None):
+    """条目所属的库 id：优先取前端回传的 ``library_id``，否则按名字反查书目。
+
+    多书库下 `safe_path` 必须知道基根；这样即使预览项没带库信息，
+    后端也能自己反查出来（避免默认落到默认库上改错文件）。
+    """
+    if isinstance(item, dict) and item.get("library_id"):
+        return item["library_id"]
+    b = library.find(name)
+    return (b or {}).get("library_id")
+
+
+def _prune_empty_dirs(library_id=None) -> int:
+    """删掉**库根**下**空**的一层子目录（布局整理把系列目录搬空后留下的壳）。
 
     只删一层、只删空目录：``rmdir`` 对非空目录会抛错，这里天然安全 ——
     不会出现「手滑删掉还有书的目录」。
@@ -586,7 +612,7 @@ def plan_komga_layout() -> dict:
         if it["conflict"]:
             continue
         try:
-            dst = safe_path(it["new"])
+            dst = safe_path(it["new"], _lib_of(it.get("old", ""), it))
         except ValueError as e:
             it["conflict"] = True
             it["reason"] = str(e)
@@ -626,7 +652,7 @@ def apply_komga_layout(items: list) -> dict:
             errors.append({"old": old, "error": "存在冲突，已跳过"})
             continue
         try:
-            src, dst = safe_path(old), safe_path(new)
+            src, dst = safe_path(old, _lib_of(old)), safe_path(new, _lib_of(new))
             if not src.is_file():
                 raise ValueError("源文件不存在")
             if src == dst:
@@ -665,7 +691,7 @@ def recycle_items(names: list, reason: str = "") -> dict:
     for name in names:
         label = str(name or "").strip()
         try:
-            src = safe_path(label)
+            src = safe_path(label, _lib_of(label))
             if not src.is_file():
                 raise ValueError("文件不存在")
             dst = dest_dir / f"{stamp}_{src.name}"

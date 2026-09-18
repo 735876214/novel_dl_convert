@@ -120,6 +120,22 @@ class FolderWatcher:
         except Exception:
             pass
 
+    def target_root(self, src: Path) -> Path:
+        """该来源条目应落进**哪个库根**（多书库）。
+
+        目前返回默认库根（= 既有 ``OUTPUT_DIR``，行为与改造前一致）；
+        第 10 期的归类规则（来源子文件夹名 / 格式 / 元数据关键词）接在这里
+        —— 见 core/library_rules.py。
+        """
+        try:
+            from . import library_rules  # 延迟导入，避免 core 内部循环依赖
+            lib = library_rules.decide_for_path(src, self.input_dir)
+            if lib:
+                return Path(lib.get("root_path") or self.output_dir)
+        except Exception:
+            pass
+        return self.output_dir
+
     def _sig(self, p: Path) -> tuple:
         """条目指纹 ``(size, mtime)``。
 
@@ -287,11 +303,11 @@ class FolderWatcher:
             if not audio.is_audio_dir(p):
                 return ("skipped", "非音频目录")
             try:
-                self.output_dir.mkdir(parents=True, exist_ok=True)
+                self.target_root(p).mkdir(parents=True, exist_ok=True)
                 layout = str(((self.cfg or {}).get("output") or {}).get("layout") or "flat").strip().lower()
                 series, index = komga.infer(p.name)
                 rel = komga.relpath_for_dir(p.name, series, index, layout)
-                dst = self.output_dir / rel
+                dst = self.target_root(p) / rel
                 pipeline._copy_tree(p, dst)
                 activity_log.log_add_ok(p.name, rel, size=self._sig(p)[0],
                                         duration_ms=dur(), source="watcher")
@@ -320,14 +336,14 @@ class FolderWatcher:
             return ("skipped", "非 txt 且已关闭 copy_non_txt")
 
         try:
-            self.output_dir.mkdir(parents=True, exist_ok=True)
+            self.target_root(p).mkdir(parents=True, exist_ok=True)
             # ⚠️ 复制路径**也要遵循 output.layout**：第 4 期只改了 `pipeline.dispatch`，
             # 而 watcher 这条复制是自己实现的，于是「开了 Komga 布局却只有转换产物进系列目录」。
             # 系列只能从文件名推断 —— 复制进来的书没经过 OPF 解析。
             layout = str(((self.cfg or {}).get("output") or {}).get("layout") or "flat").strip().lower()
             series, index = komga.infer(p.stem)
             rel = komga.relpath_for(p.stem, p.suffix.lstrip("."), series, index, layout)
-            dst = self.output_dir / rel
+            dst = self.target_root(p) / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, dst)
             activity_log.log_add_ok(p.name, rel, size=size, duration_ms=dur(), source="watcher")
@@ -358,7 +374,7 @@ class FolderWatcher:
 
     def _scan_locked(self) -> dict:
         self.input_dir.mkdir(parents=True, exist_ok=True)
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.target_root(p).mkdir(parents=True, exist_ok=True)
 
         entries = self._iter_entries()
         if not self._primed:                      # 首轮：决定是否处理历史存量文件

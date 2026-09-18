@@ -235,6 +235,36 @@ def init():
                 photo_local_path TEXT NOT NULL DEFAULT '',
                 fetched_at       REAL NOT NULL DEFAULT 0
             );
+            -- 多书库（第 10 期 D8）：库实体。type 决定功能显隐矩阵；
+            -- mode='inplace' 就地引用来源子目录（不搬文件），'import' 则另有 storage_path。
+            CREATE TABLE IF NOT EXISTS libraries (
+                id             TEXT PRIMARY KEY,
+                name           TEXT NOT NULL,
+                type           TEXT NOT NULL DEFAULT 'mixed',
+                mode           TEXT NOT NULL DEFAULT 'inplace',
+                root_path      TEXT NOT NULL,
+                storage_path   TEXT NOT NULL DEFAULT '',
+                source_subdir  TEXT NOT NULL DEFAULT '',
+                rules          TEXT NOT NULL DEFAULT '',
+                sort_order     INTEGER NOT NULL DEFAULT 0,
+                created_at     REAL NOT NULL,
+                last_scan_at   REAL NOT NULL DEFAULT 0,
+                last_scan_note TEXT NOT NULL DEFAULT ''
+            );
+            -- 迁移台账：既做**幂等**依据（重复启动不重复搬），也做**回滚**依据。
+            -- 迁移是破坏性操作，故逐条落库：src/dst 都要记全，供反向移动。
+            CREATE TABLE IF NOT EXISTS library_migrations (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id   TEXT NOT NULL,
+                direction  TEXT NOT NULL DEFAULT 'move',
+                library_id TEXT NOT NULL DEFAULT '',
+                src        TEXT NOT NULL,
+                dst        TEXT NOT NULL,
+                status     TEXT NOT NULL DEFAULT 'pending',
+                error      TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_mig_batch ON library_migrations(batch_id);
             """
         )
         # 轻量迁移：ratings 表后来加了 review 列。CREATE TABLE IF NOT EXISTS
@@ -1409,6 +1439,127 @@ def set_author_photo_local(name, path) -> None:
             (str(name), str(path or "").strip()),
         )
         c.commit()
+
+
+# ---------------- 书库与迁移台账（第 10 期 D8）----------------
+
+#: 库类型：电子书 / 漫画 / 有声书 / 混合通用（决定功能显隐矩阵）
+LIBRARY_TYPES = ("ebook", "comic", "audiobook", "mixed")
+#: 归属模式：inplace = 就地引用来源子目录（不搬文件）；import = 另有存储目录（复制/移入）
+LIBRARY_MODES = ("inplace", "import")
+
+
+def list_libraries() -> list:
+    rows = _connect().execute(
+        "SELECT * FROM libraries ORDER BY sort_order, created_at"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_library(lid) -> "dict | None":
+    row = _connect().execute("SELECT * FROM libraries WHERE id=?", (str(lid),)).fetchone()
+    return dict(row) if row else None
+
+
+def create_library(lid, name, type_, mode="inplace", root_path="",
+                   storage_path="", source_subdir="", rules="", sort_order=0) -> dict:
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT OR REPLACE INTO libraries"
+            "(id, name, type, mode, root_path, storage_path, source_subdir, rules,"
+            " sort_order, created_at, last_scan_at, last_scan_note) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,0,'')",
+            (str(lid), str(name), str(type_), str(mode), str(root_path),
+             str(storage_path or ""), str(source_subdir or ""), str(rules or ""),
+             int(sort_order or 0), time.time()),
+        )
+        c.commit()
+    return get_library(lid) or {}
+
+
+#: update_library 允许改的列（白名单，避免把任意键拼进 SQL）
+_LIBRARY_COLS = {"name", "type", "mode", "root_path", "storage_path",
+                 "source_subdir", "rules", "sort_order", "last_scan_at", "last_scan_note"}
+
+
+def update_library(lid, **fields) -> "dict | None":
+    cols = {k: v for k, v in fields.items() if k in _LIBRARY_COLS}
+    if not cols:
+        return get_library(lid)
+    c = _connect()
+    with _lock:
+        c.execute(
+            "UPDATE libraries SET " + ", ".join(f"{k}=?" for k in cols) + " WHERE id=?",
+            (*cols.values(), str(lid)),
+        )
+        c.commit()
+    return get_library(lid)
+
+
+def delete_library(lid) -> bool:
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM libraries WHERE id=?", (str(lid),))
+        c.commit()
+    return bool(cur.rowcount)
+
+
+def set_library_scan(lid, note="") -> None:
+    c = _connect()
+    with _lock:
+        c.execute("UPDATE libraries SET last_scan_at=?, last_scan_note=? WHERE id=?",
+                  (time.time(), str(note or ""), str(lid)))
+        c.commit()
+
+
+# ---- 迁移台账（幂等 + 回滚依据）----
+
+def migration_add(batch_id, direction, library_id, src, dst, status="pending", error="") -> int:
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "INSERT INTO library_migrations"
+            "(batch_id, direction, library_id, src, dst, status, error, created_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (str(batch_id), str(direction), str(library_id), str(src), str(dst),
+             str(status), str(error or ""), time.time()),
+        )
+        c.commit()
+        return int(cur.lastrowid or 0)
+
+
+def migration_mark(row_id, status, error="") -> None:
+    c = _connect()
+    with _lock:
+        c.execute("UPDATE library_migrations SET status=?, error=? WHERE id=?",
+                  (str(status), str(error or ""), int(row_id)))
+        c.commit()
+
+
+def migration_batch(batch_id) -> list:
+    rows = _connect().execute(
+        "SELECT * FROM library_migrations WHERE batch_id=? ORDER BY id", (str(batch_id),)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def migration_batches(limit=20) -> list:
+    rows = _connect().execute(
+        "SELECT batch_id, direction, COUNT(*) n, MIN(created_at) at "
+        "FROM library_migrations GROUP BY batch_id, direction ORDER BY at DESC LIMIT ?",
+        (int(limit),),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def migration_last_batch(direction="move") -> str:
+    """最近一次某方向的批次（回滚默认取最近一次 move 批次）。"""
+    row = _connect().execute(
+        "SELECT batch_id FROM library_migrations WHERE direction=? ORDER BY id DESC LIMIT 1",
+        (str(direction),),
+    ).fetchone()
+    return row["batch_id"] if row else ""
 
 
 def set_status(book_id, status, started_at=None, finished_at=None) -> dict:
