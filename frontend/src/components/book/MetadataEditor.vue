@@ -10,12 +10,9 @@ import { useUiStore } from '@/stores/ui'
 /**
  * 单书元数据编辑（详情页第 5 个标签）。
  *
- * 三条边界要在界面上讲清楚，而不是藏在实现里：
- *   · 只写 EPUB 内嵌的 OPF —— 非 EPUB（mobi/pdf/txt）没有可改写的 OPF，表单置为只读；
- *   · **不改文件名**：文件名归「批量重命名」管，且改文件名会改变 book_id，
- *     进而切断阅读进度与批注的关联；
- *   · 保存后界面显示的是**实际改动的字段**（`changed`），不是「提交了哪些」——
- *     同值重写不该被报告成一次修改。
+ * 元数据分层原则（第 8 期）：生效值 = 用户覆盖(override) > 在线抓取(online) > OPF 原值(opf)。
+ *  - 编辑保存：与 OPF 原值不同的字段记入用户覆盖，再抓取不冲掉；
+ *  - 已覆盖的字段显示「已本地修改」徽标 + 「恢复在线」按钮（撤销覆盖并写回在线值）。
  */
 const props = defineProps<{ bookId: string }>()
 const emit = defineEmits<{ saved: [] }>()
@@ -24,6 +21,7 @@ const ui = useUiStore()
 const meta = ref<BookMetadata | null>(null)
 const loading = ref(true)
 const saving = ref(false)
+const restoring = ref(false)
 const form = ref<BookMetadataFields | null>(null)
 const changed = ref<string[]>([])
 const tagText = ref('')
@@ -65,7 +63,12 @@ watch(() => props.bookId, load)
 
 const editable = computed(() => meta.value?.editable === true)
 
-/** 是否有未保存的改动（含题材文本的解析结果） */
+/** 是否有任意字段被用户本地覆盖（决定「恢复全部为在线」是否可用） */
+const hasOverrides = computed(() =>
+  !!meta.value && Object.values(meta.value.meta).some((m) => m.overridden),
+)
+
+/** 是否有未保存的改动（与加载时的生效值比对） */
 const dirty = computed(() => {
   if (!meta.value || !form.value) return false
   const a = meta.value.fields
@@ -74,6 +77,24 @@ const dirty = computed(() => {
     k === 'tags' ? JSON.stringify(a.tags) !== JSON.stringify(b.tags) : String(a[k]) !== String(b[k]),
   )
 })
+
+function fmt(v: string | string[]): string {
+  return Array.isArray(v) ? v.join('、') : String(v ?? '')
+}
+
+function metaState(k: keyof BookMetadataFields) {
+  return meta.value?.meta?.[k]
+}
+
+/** 已覆盖字段的「在线建议值」提示文案 */
+function onlineText(k: keyof BookMetadataFields): string {
+  const s = metaState(k)
+  if (s?.overridden) {
+    const o = fmt(s.online)
+    return o ? `在线：${o}` : '（无在线建议，恢复后将回到 OPF 原值）'
+  }
+  return ''
+}
 
 function parseTags(): string[] {
   return tagText.value
@@ -94,16 +115,43 @@ async function save(): Promise<void> {
     } else {
       ui.toast(r.changed.length ? `已保存，实际改动 ${r.changed.length} 项` : '没有实际改动')
     }
-    // 用服务端回读的值刷新表单（后端会做规整，如 3.00 → 3）
-    form.value = { ...r.book }
-    tagText.value = (r.book.tags || []).join('、')
-    meta.value = { ...(meta.value as BookMetadata), fields: { ...r.book } }
+    // 用服务端回读的值刷新表单与分层明细（后端会做规整，如 3.00 → 3）
+    meta.value = { ...meta.value, fields: { ...r.fields }, meta: { ...r.meta } }
+    form.value = { ...r.fields }
+    tagText.value = (r.fields.tags || []).join('、')
     emit('saved')
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '保存失败')
   } finally {
     saving.value = false
   }
+}
+
+async function restoreFields(fields: string[]): Promise<void> {
+  if (!meta.value || !fields.length) return
+  restoring.value = true
+  try {
+    const r = await api.revertBookMetadata(props.bookId, fields)
+    meta.value = { ...meta.value, fields: { ...r.fields }, meta: { ...r.meta } }
+    form.value = { ...r.fields }
+    tagText.value = (r.fields.tags || []).join('、')
+    ui.toast(`已恢复 ${r.recovered.length} 个字段为在线值`)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '恢复失败')
+  } finally {
+    restoring.value = false
+  }
+}
+
+function restoreOne(k: keyof BookMetadataFields): void {
+  void restoreFields([k])
+}
+
+function restoreAll(): void {
+  const fields = meta.value
+    ? Object.keys(meta.value.meta).filter((f) => meta.value!.meta[f]?.overridden)
+    : []
+  void restoreFields(fields)
 }
 
 const INPUT_CLS =
@@ -133,30 +181,94 @@ const INPUT_CLS =
             <span v-if="dirty" class="rounded bg-warning/14 px-1.5 py-0.5 text-[10.5px] text-warning">有未保存的改动</span>
           </div>
           <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
-            直接写入 EPUB 内嵌的 OPF，改完立即被书库扫描读到。
-            <strong>不会改文件名</strong>——文件名归「批量重命名」管，而且改文件名会切断这本书的阅读进度与批注。
+            直接写入 EPUB 内嵌的 OPF，改完立即被书库扫描读到。<strong>不会改文件名</strong>。
+            在线抓取默认优先覆盖本地；你手动改过的字段会被保护（标「已本地修改」），再抓取也不冲掉，可随时「恢复在线」。
           </p>
         </div>
 
         <div class="grid grid-cols-1 gap-x-4 px-4 py-3 sm:grid-cols-2">
-          <label v-for="k in TEXT_FIELDS" :key="k" class="flex flex-col gap-1 border-b border-border/60 py-2.5">
-            <span class="text-[11.5px] text-muted-foreground">{{ FIELD_LABELS[k] }}</span>
+          <label
+            v-for="k in TEXT_FIELDS"
+            :key="k"
+            class="flex flex-col gap-1 border-b border-border/60 py-2.5"
+          >
+            <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+              {{ FIELD_LABELS[k] }}
+              <span
+                v-if="meta.meta[k]?.overridden"
+                class="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] text-primary"
+              >已本地修改</span>
+            </span>
             <input v-model="form[k] as string" type="text" :disabled="!editable" :class="INPUT_CLS">
+            <div
+              v-if="meta.meta[k]?.overridden"
+              class="mt-1 flex flex-wrap items-center gap-2 text-[11px]"
+            >
+              <button
+                type="button"
+                :disabled="!editable || restoring"
+                class="cursor-pointer rounded text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
+                @click="restoreOne(k)"
+              >
+                ↺ 恢复在线
+              </button>
+              <span class="text-muted-foreground">{{ onlineText(k) }}</span>
+            </div>
           </label>
 
           <label class="flex flex-col gap-1 border-b border-border/60 py-2.5 sm:col-span-2">
-            <span class="text-[11.5px] text-muted-foreground">题材（用「、」或逗号分隔，保存时自动去重）</span>
+            <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+              题材（用「、」或逗号分隔，保存时自动去重）
+              <span
+                v-if="meta.meta.tags?.overridden"
+                class="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] text-primary"
+              >已本地修改</span>
+            </span>
             <input v-model="tagText" type="text" :disabled="!editable" :class="INPUT_CLS" placeholder="科幻 · 小说">
+            <div
+              v-if="meta.meta.tags?.overridden"
+              class="mt-1 flex flex-wrap items-center gap-2 text-[11px]"
+            >
+              <button
+                type="button"
+                :disabled="!editable || restoring"
+                class="cursor-pointer rounded text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
+                @click="restoreOne('tags')"
+              >
+                ↺ 恢复在线
+              </button>
+              <span class="text-muted-foreground">{{ onlineText('tags') }}</span>
+            </div>
           </label>
 
           <label class="flex flex-col gap-1 py-2.5 sm:col-span-2">
-            <span class="text-[11.5px] text-muted-foreground">简介</span>
+            <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+              简介
+              <span
+                v-if="meta.meta.description?.overridden"
+                class="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] text-primary"
+              >已本地修改</span>
+            </span>
             <textarea
               v-model="form.description"
               rows="5"
               :disabled="!editable"
               class="w-full rounded-md border border-border bg-muted px-2.5 py-2 text-[12.5px] leading-relaxed text-foreground outline-none focus:border-ring focus:bg-card"
             />
+            <div
+              v-if="meta.meta.description?.overridden"
+              class="mt-1 flex flex-wrap items-center gap-2 text-[11px]"
+            >
+              <button
+                type="button"
+                :disabled="!editable || restoring"
+                class="cursor-pointer rounded text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
+                @click="restoreOne('description')"
+              >
+                ↺ 恢复在线
+              </button>
+              <span class="text-muted-foreground">{{ onlineText('description') }}</span>
+            </div>
           </label>
         </div>
 
@@ -165,10 +277,20 @@ const INPUT_CLS =
             实际改动：{{ changed.map((c) => FIELD_LABELS[c as keyof BookMetadataFields] ?? c).join('、') }}
           </span>
           <Button
+            v-if="hasOverrides && editable"
+            size="sm"
+            variant="ghost"
+            :disabled="restoring"
+            class="ml-auto"
+            @click="restoreAll"
+          >
+            ↺ 恢复全部为在线
+          </Button>
+          <Button
             size="sm"
             variant="primary"
-            class="ml-auto"
             :disabled="!editable || saving || !dirty"
+            :class="hasOverrides ? '' : 'ml-auto'"
             @click="save"
           >
             {{ saving ? '保存中…' : '保存' }}

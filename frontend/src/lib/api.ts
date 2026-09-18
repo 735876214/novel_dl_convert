@@ -598,12 +598,44 @@ export interface AuthorItem {
   count: number
   series: string[]
   covers: SeriesCover[]
+  /** 是否有本地缓存的头像（有则去 `/api/authors/{name}/photo` 取图） */
+  has_photo: boolean
+  /** 名下最早一本书的入库时间（秒），用于「本周新增」筛选 */
+  added_ts: number
 }
 
 export interface AuthorDetail {
   name: string
   count: number
   books: BookCard[]
+  /** 传记（本地覆盖 > 在线抓取），无则空串 */
+  bio: string
+  /** 传记是否被用户本地覆盖（受抓取保护） */
+  bio_overridden: boolean
+  /** 是否有头像（本地缓存的在线照片 或 用户上传） */
+  has_photo: boolean
+  /** 头像是否被用户本地覆盖（上传过头像） */
+  photo_overridden: boolean
+  /** 头像在线来源（如 openlibrary），空串 = 无 */
+  photo_source: string
+  /** 在线抓取时间戳（秒），0 = 未抓取过 */
+  fetched_at: number
+  /** 名下最早一本书的入库时间（秒） */
+  added_ts: number
+}
+
+/** 作者元数据写操作的返回（btw BIO / 头像 / 抓取接口，只回生效信息不含书目） */
+export interface AuthorMeta {
+  ok?: boolean
+  name: string
+  bio: string
+  bio_overridden: boolean
+  has_photo: boolean
+  photo_overridden: boolean
+  photo_source: string
+  fetched_at: number
+  /** 仅抓取接口返回：本次抓取结果 */
+  result?: { ok: boolean; bio?: string; has_photo?: boolean; error?: string }
 }
 
 // ---------- 批注总览 ----------
@@ -839,6 +871,21 @@ export interface BookMetadataFields {
   tags: string[]
 }
 
+/** 单字段的分层状态（编辑器渲染「已本地修改」徽标 / 恢复在线按钮用） */
+export interface MetaFieldState {
+  /** 当前生效值（override > online > opf） */
+  value: string | string[]
+  /** 在线抓取的候选值（空串 = 无在线建议） */
+  online: string | string[]
+  /** OPF 文件原值 */
+  opf: string | string[]
+  /** 是否已被用户本地覆盖（受抓取保护，再抓取不冲掉） */
+  overridden: boolean
+}
+
+/** 字段名 → 分层状态 */
+export type MetaStateMap = Record<string, MetaFieldState>
+
 /** `GET /api/books/{bid}/metadata` */
 export interface BookMetadata {
   id: string
@@ -846,7 +893,29 @@ export interface BookMetadata {
   format: string
   /** 非 EPUB（无 OPF 可改写）为 false，前端据此把表单置为只读并说明原因 */
   editable: boolean
+  /** 生效值（override > online > opf） */
   fields: BookMetadataFields
+  /** 逐字段明细（在线建议 / 是否已本地覆盖） */
+  meta: MetaStateMap
+}
+
+/** `GET /api/books/{bid}/metadata/online` */
+export interface MetadataOnlineResult {
+  ok: boolean
+  /** 在线候选字段值 */
+  values: Partial<BookMetadataFields>
+  source: string
+  score: number
+  message?: string
+}
+
+/** `POST /api/books/{bid}/metadata/revert` */
+export interface MetadataRevertResult {
+  ok: boolean
+  fields: BookMetadataFields
+  meta: MetaStateMap
+  /** 实际恢复到在线值的字段 */
+  recovered: string[]
 }
 
 /** 阅读状态行（`GET/PUT /api/books/{bid}/status`）。时间戳为 epoch 秒，0 = 未发生 */
@@ -962,7 +1031,10 @@ export interface MetadataWriteResult {
   changed: string[]
   /** 提交了但不支持的字段 */
   unknown: string[]
-  book: BookMetadataFields
+  /** 回写的生效值 */
+  fields: BookMetadataFields
+  /** 回写的逐字段明细 */
+  meta: MetaStateMap
 }
 
 export interface ConfigPayload {
@@ -1234,6 +1306,18 @@ export const api = {
    */
   setBookMetadata: (bid: string, fields: Partial<BookMetadataFields>) =>
     request<MetadataWriteResult>(`/api/books/${encodeURIComponent(bid)}/metadata`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields }),
+    }),
+
+  /** 实时在线建议（编辑器「在线建议 / 重新获取」用，不写库）。 */
+  bookMetadataOnline: (bid: string) =>
+    request<MetadataOnlineResult>(`/api/books/${encodeURIComponent(bid)}/metadata/online`),
+
+  /** 把指定字段恢复为在线值（撤销用户覆盖并把 OPF 写回在线值）。 */
+  revertBookMetadata: (bid: string, fields: string[]) =>
+    request<MetadataRevertResult>(`/api/books/${encodeURIComponent(bid)}/metadata/revert`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fields }),
@@ -1713,6 +1797,44 @@ export const api = {
 
   authorDetail: (name: string) =>
     request<AuthorDetail>(`/api/authors/${encodeURIComponent(name)}`),
+
+  /** 作者头像 URL，直接给 `<img src>` 用（同封面，必须带 ?token=）。 */
+  authorPhotoUrl: (name: string) => {
+    const t = _authToken()
+    return `/api/authors/${encodeURIComponent(name)}/photo${t ? `?token=${encodeURIComponent(t)}` : ''}`
+  },
+
+  /** 设置作者传记的本地覆盖（空串 = 撤销覆盖，回退到在线传记）。 */
+  setAuthorBio: (name: string, bio: string) =>
+    request<AuthorMeta>(`/api/authors/${encodeURIComponent(name)}/bio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bio }),
+    }),
+
+  /** 上传作者头像作为本地覆盖。 */
+  uploadAuthorPhoto: (name: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<AuthorMeta>(`/api/authors/${encodeURIComponent(name)}/photo`, {
+      method: 'POST',
+      body: form,
+    })
+  },
+
+  /** 撤销本地头像覆盖，回退到在线照片。 */
+  clearAuthorPhoto: (name: string) =>
+    request<AuthorMeta>(`/api/authors/${encodeURIComponent(name)}/photo`, { method: 'DELETE' }),
+
+  /** 抓取单个作者的在线传记 / 头像。 */
+  fetchAuthor: (name: string) =>
+    request<AuthorMeta>(`/api/authors/${encodeURIComponent(name)}/fetch`, { method: 'POST' }),
+
+  /** 抓取全部作者的在线元数据。 */
+  fetchAllAuthors: () =>
+    request<{ total: number; ok: number; failed: number }>('/api/authors/fetch-all', {
+      method: 'POST',
+    }),
 
   // ---------- 批注总览 ----------
   allAnnotations: () =>

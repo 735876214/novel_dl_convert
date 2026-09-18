@@ -36,8 +36,8 @@ const SECTIONS: Record<string, { zh: string; en: string; desc: string; blocks: s
     blocks: ['switch', 'fetch', 'panel'],
   },
   authors: {
-    zh: '作者元数据', en: 'Authors', desc: '按作者检索的抓取策略',
-    blocks: ['switch', 'fetch'],
+    zh: '作者元数据', en: 'Authors', desc: '抓取作者传记与头像（在线优先、本地可覆盖）',
+    blocks: ['authors'],
   },
   'field-rules': {
     zh: '字段规则', en: 'Field Rules', desc: '每个字段允许被怎样写入',
@@ -79,6 +79,25 @@ const POLICIES = [
 const sources = ref<MetadataSource[]>([])
 const probes = ref<Record<string, { ok: boolean; message: string; ms: number }>>({})
 const probing = ref(false)
+
+// ---------------- 作者元数据（第 8 期 D1/D2/D5）----------------
+const af = computed<Record<string, any>>(() => mf.value.authors ?? {})
+const authorFetching = ref(false)
+const authorFetchResult = ref('')
+
+async function runAuthorFetch(): Promise<void> {
+  authorFetching.value = true
+  authorFetchResult.value = ''
+  try {
+    const r = await api.fetchAllAuthors()
+    authorFetchResult.value = `成功 ${r.ok} / 共 ${r.total}` + (r.failed ? `，失败 ${r.failed}` : '')
+    ui.toast(`作者抓取完成：成功 ${r.ok} / 共 ${r.total}`)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '作者抓取失败')
+  } finally {
+    authorFetching.value = false
+  }
+}
 
 async function loadSources(): Promise<void> {
   try {
@@ -224,7 +243,10 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
       <h2 class="text-[14px] font-semibold text-foreground">{{ meta.zh }}</h2>
       <span class="font-mono text-[11.5px] text-muted-foreground">{{ meta.en }}</span>
       <span class="text-[11.5px] text-muted-foreground">{{ meta.desc }}</span>
-      <Badge v-if="mf.enabled" tone="accent">已启用</Badge>
+      <Badge v-if="props.section === 'authors'" :tone="af.enabled ? 'accent' : undefined">
+        {{ af.enabled ? '已启用' : '已关闭' }}
+      </Badge>
+      <Badge v-else-if="mf.enabled" tone="accent">已启用</Badge>
       <Badge v-else>已关闭</Badge>
       <Button size="sm" variant="primary" class="ml-auto" :disabled="saving || !cfg" @click="saveSection('metadata')">
         保存
@@ -291,7 +313,7 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
         <div class="min-w-0 flex-1">
           <div class="text-[13px] font-medium text-foreground">入库时自动抓取</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
-            新书转好后自动补全（异步执行、失败不影响入库；只补空字段）
+            新书转好后自动抓取（异步执行、失败不影响入库；在线优先覆盖本地，你手动改过的字段受保护）
           </div>
         </div>
         <Button size="sm" :variant="mf.auto_on_import ? 'ghost' : 'primary'" :disabled="saving"
@@ -305,6 +327,58 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
                class="w-20 rounded-md border border-border bg-muted px-3 py-1.5 text-[12.5px] text-foreground outline-none focus:border-ring focus:bg-card"
                @input="setVal('metadata_fetch.limit', Number(($event.target as HTMLInputElement).value))" />
         <span class="text-[11.5px] text-muted-foreground">越多越慢（每个源都会外呼一次）</span>
+      </div>
+    </Card>
+
+    <Card v-if="has('authors')" class="mt-4" padding="none">
+      <div class="border-b border-border px-4 py-3">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-[13px] font-medium text-foreground">作者元数据</span>
+          <Badge v-if="af.enabled" tone="accent">已启用</Badge>
+          <Badge v-else>已关闭</Badge>
+          <Button size="sm" class="ml-auto" :disabled="authorFetching" @click="runAuthorFetch">
+            {{ authorFetching ? '抓取中…' : '立即抓取全部作者' }}
+          </Button>
+        </div>
+        <div class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+          从 OpenLibrary 抓取作者传记与头像。头像会下载到本地缓存（零外链），由后端统一分发；
+          抓取到的值优先使用，你手动改过的传记 / 头像会被保护，可随时恢复在线。
+        </div>
+        <div v-if="authorFetchResult" class="mt-1 text-[11.5px] text-muted-foreground">
+          {{ authorFetchResult }}
+        </div>
+      </div>
+      <div class="flex items-center gap-4 border-b border-border px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[12.5px] text-foreground">启用作者抓取</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            独立于上方书籍抓取的开关；关闭后仍可用上面的按钮手动触发单次抓取
+          </div>
+        </div>
+        <Button size="sm" :variant="af.enabled ? 'ghost' : 'primary'" :disabled="saving"
+                @click="setVal('metadata_fetch.authors.enabled', !af.enabled); saveSection('metadata')">
+          {{ af.enabled ? '关闭' : '开启' }}
+        </Button>
+      </div>
+      <div class="flex items-center gap-4 border-b border-border px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[12.5px] text-foreground">抓取传记</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">OpenLibrary 作者简介</div>
+        </div>
+        <Button size="sm" :variant="af.fetch_bio !== false ? 'ghost' : 'primary'" :disabled="saving"
+                @click="setVal('metadata_fetch.authors.fetch_bio', af.fetch_bio === false)">
+          {{ af.fetch_bio !== false ? '已开启' : '已关闭' }}
+        </Button>
+      </div>
+      <div class="flex items-center gap-4 px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[12.5px] text-foreground">抓取头像</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">下载到本地缓存后由后端分发</div>
+        </div>
+        <Button size="sm" :variant="af.fetch_photo !== false ? 'ghost' : 'primary'" :disabled="saving"
+                @click="setVal('metadata_fetch.authors.fetch_photo', af.fetch_photo === false)">
+          {{ af.fetch_photo !== false ? '已开启' : '已关闭' }}
+        </Button>
       </div>
     </Card>
 
@@ -477,10 +551,9 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
       :groups="['PROVIDERS', 'RULES', 'SCORE']"
       :items="[
         '元数据源插件市场 / 更多第三方源（当前内置 OpenLibrary 与 Google Books）',
-        '按 ISBN 精确匹配（当前只用书名 + 作者做相似度匹配）',
         '系列级元数据（当前只写单本）',
       ]"
-      note="已实现：源选择与顺序、连通性自检、Google Books API Key、入库自动抓取、字段级写入策略、置信度阈值、题材黑名单、自定义元数据、以及「先预览再应用」的手动抓取面板。"
+      note="已实现：源选择与顺序、连通性自检、Google Books API Key、入库自动抓取、ISBN 精确匹配、字段级写入策略、置信度阈值、题材黑名单、自定义元数据、「先预览再应用」的手动抓取面板，以及作者传记 / 头像抓取与本地覆盖编辑。"
     />
   </div>
 </template>
