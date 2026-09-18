@@ -1,8 +1,12 @@
-# NovelForge — 本地开发用 Compose（对比 docker-compose.yml 用）
+# NovelForge — 本地测试用 Compose（对比 docker-compose.yml 用）
 #
 # 与 docker-compose.yml 的区别：
-#   docker-compose.yml     拉 ghcr.io 预构建镜像，源码 + 依赖全烤在镜像里 → NAS 部署用
-#   docker-compose.dev.yml 本地 build 镜像，并把宿主机 novelforge/ 挂进容器覆盖镜像源码 → 本地开发用
+#   docker-compose.yml    拉 ghcr.io 预构建镜像，源码 + 依赖全烤在镜像里 → 真实/部署版
+#   docker-compose.test.yml 本地 build 镜像，并把宿主机 novelforge/ 挂进容器覆盖镜像源码 → 测试版
+#
+# 数据隔离：
+#   测试版把 DATA_DIR 挂到宿主机 ./data-test，与真实版的 ./data 完全分开，
+#   阅读进度 / 批注 / 账号 / 外部服务凭据互不污染。
 #
 # 挂载源码带来的好处：
 #   - 改前端（index.html / style.css / app.js）→ StaticFiles 每次请求都从磁盘读，
@@ -10,17 +14,17 @@
 #   - 改 Python（server.py / core / sources）→ 执行 restart 重启容器即可
 #
 # 用法（在本文件所在目录执行）：
-#   docker compose -f docker-compose.dev.yml up -d --build   # 首次构建 + 启动
-#   docker compose -f docker-compose.dev.yml logs -f         # 跟踪日志
-#   docker compose -f docker-compose.dev.yml restart         # 改完 Python 后重启
-#   docker compose -f docker-compose.dev.yml down            # 停止并删除容器
-#   docker compose -f docker-compose.dev.yml up -d --build   # 改过 requirements.txt / Dockerfile 后重建
+#   docker compose -f docker-compose.test.yml up -d --build   # 首次构建 + 启动
+#   docker compose -f docker-compose.test.yml logs -f         # 跟踪日志
+#   docker compose -f docker-compose.test.yml restart         # 改完 Python 后重启
+#   docker compose -f docker-compose.test.yml down            # 停止并删除容器
+#   docker compose -f docker-compose.test.yml up -d --build   # 改过 requirements.txt / Dockerfile 后重建
 #
 # 访问：http://localhost:8993
-# 说明：这里刻意用 8993（docker-compose.yml 用 8992），这样旧镜像容器和新代码可以同时跑、便于对比。
+# 说明：这里刻意用 8993（docker-compose.yml 用 8992），这样真实容器和测试容器可以同时跑、便于对比。
 
 services:
-  novelforge-dev:
+  novelforge-test:
     build:
       context: .
       dockerfile: Dockerfile
@@ -32,11 +36,11 @@ services:
         INSTALL_BUILD_TOOLS: "0"
         # 国内 PyPI 源，比 pypi.org 快很多
         PIP_INDEX: "https://pypi.tuna.tsinghua.edu.cn/simple"
-    image: novelforge:dev
-    container_name: novelforge-dev
+    image: novelforge:test
+    container_name: novelforge-test
     restart: unless-stopped
     working_dir: /app
-    pull_policy: build          # 始终用本地构建，不去 registry 找 novelforge:dev
+    pull_policy: build          # 始终用本地构建，不去 registry 找 novelforge:test
     ports:
       - "8993:8000"
     volumes:
@@ -44,7 +48,8 @@ services:
       - ./novelforge:/app/novelforge
       # 仓库根目录的 config.yaml 直接映射到容器实际读取的路径（CONFIG_DIR/config.yaml）
       - ./config.yaml:/app/config/config.yaml:ro
-      # 数据目录，与 NAS 部署保持一致
+      # 数据目录，与真实版隔离（./data-test），避免污染 ./data
+      - ./data-test:/app/data
       - ./input:/app/input
       - ./output:/app/output
       - ./cookies:/app/config/cookies
@@ -57,6 +62,11 @@ services:
       - COOKIE_DIR=/app/config/cookies
       - CACHE_DIR=/app/config/cache
       - LOG_DIR=/app/config/logs
+      - DATA_DIR=/app/data
+      # 登录凭据（占位，部署前请改掉）。显式声明以保证与真实版登录行为一致。
+      - AUTH_USER=admin
+      - AUTH_PIN=changeme
+      - AUTH_SECRET=change-this-to-a-long-random-string
       # 本地调试想手动触发扫描时，可打开下面这行关掉自动监听
       # - AUTO_WATCH=false
       # 可选：AI 分章兜底（不填则不联网）

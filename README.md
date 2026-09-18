@@ -211,8 +211,8 @@ docker compose pull && docker compose up -d
 
 ```
 novel_dl_convert/
-  docker-compose.yml   部署：input / output / config / cookies / cache / data 六处挂载
-  docker-compose.dev.yml  本地开发编排（挂源码、端口 8993）
+  docker-compose.yml   真实版：拉 ghcr 预构建镜像，input / output / config / cookies / cache / data 六处挂载
+  docker-compose.test.yml  测试版：本地 build + 挂源码、端口 8993、数据隔离到 ./data-test
   start.sh             启动脚本（依赖已内置，自检后 exec uvicorn，秒级拉起）
   Dockerfile           多阶段构建：builder(venv 依赖) + node(仅取二进制) + frontend(Vue 构建) + runtime(python-slim)
   config.yaml          转换行为配置

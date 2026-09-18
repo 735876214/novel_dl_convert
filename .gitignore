@@ -49,6 +49,8 @@ _test/
 # ⚠️ 前导斜杠**不能省**：写 `data/` 会匹配任意层级的同名目录，
 #    把 `frontend/src/data/`（设置页注册表等**源码**）一并忽略掉 —— 实测漏掉了两个源文件。
 /data/
+# 测试版 DATA_DIR（docker-compose.test.yml 挂载点，与 /data 隔离、同样不入库）
+/data-test/
 *.db
 
 # 浏览器自动化缓存（playwright-cli 的工作目录：console 日志、页面快照、导出文件）

@@ -11,7 +11,7 @@ import { defineConfig } from 'vite'
  */
 const BUILD_BASE = process.env.VITE_BASE ?? '/static/v2/'
 
-/** 开发期后端（docker-compose.dev.yml 暴露的 FastAPI） */
+/** 开发期后端（docker-compose.test.yml 暴露的 FastAPI） */
 const BACKEND = process.env.VITE_BACKEND ?? 'http://localhost:8993'
 
 export default defineConfig(({ command }) => ({
