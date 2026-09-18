@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from .core import pipeline, activity_log, library, fileops
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, recommend,
-                   fonts, comics, opds, opds_client, komga, koreader, integrations,
+                   fonts, comics, audio, opds, opds_client, komga, koreader, integrations,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod)
 from . import config
@@ -107,6 +107,8 @@ _MEDIA_TOKEN_PATHS = (
     re.compile(r"^/api/books/[^/]+/comic/\d+$"),
     # 作者头像：同样是 <img src> 原生请求（第 8 期）
     re.compile(r"^/api/authors/[^/]+/photo$"),
+    # 有声书单轨：<audio src> 同样是原生请求，带不了 Authorization（第 9 期）
+    re.compile(r"^/api/books/[^/]+/audio/\d+$"),
 )
 
 
@@ -1005,15 +1007,16 @@ def api_revert_book_metadata(bid: str, payload: dict = Body(None)):
 
 @app.get("/api/books/{bid}/cover")
 def api_book_cover(bid: str):
-    """书籍封面（EPUB 内嵌的那一张）。
+    """书籍封面。
 
-    为什么单独开接口，而不是让前端自己拼 `/asset?p=<zip 内路径>`：
-      · 「封面是哪一张」由 OPF 决定，解析逻辑属于服务端；
-      · 前端只需要一个不含内部路径的稳定 URL，拿不到就 404、回退渐变占位；
-      · 系列 / 作者页的封面载荷里只有 id，没有 zip 路径（见 api_series / api_authors）。
+    分支（按格式）：
+      · **EPUB**：OPF 指定的内嵌图（`library.cover_path`）；
+      · **漫画（CBZ / CBR）**：归档第一页 —— 走 `comics.cover_bytes`，zip/rar 双后端统一，
+        避免这里再自己解一次 zip（那样 CBR 会「列得出封面名却读不出来」）；
+      · **有声书**：目录内的 `cover.jpg` / `folder.jpg` 之类；单文件音频无封面；
+      · 其余非 EPUB（mobi/pdf/txt）不解析封面，直接 404 —— 与 has_cover 的口径一致。
 
-    CBZ（漫画）的封面 = 第一页，因此这里比 EPUB 多一条分支。
-    其余非 EPUB（mobi/pdf/txt）不解析封面，直接 404 —— 与 has_cover 的口径一致。
+    为什么单独开接口：前端只需要一个不含内部路径的稳定 URL，拿不到就 404、回退渐变占位。
     """
     b = library.by_id(bid)
     if not b:
@@ -1021,19 +1024,20 @@ def api_book_cover(bid: str):
     fmt = (b.get("format") or "").upper()
     path = config.OUTPUT_DIR / b["name"]
 
-    if fmt == "CBZ":
-        entry = comics.cover_entry(path)
-        if not entry:
+    if fmt in ("CBZ", "CBR"):
+        data, media = comics.cover_bytes(path)
+        if data is None:
             raise HTTPException(404, "该漫画没有图片")
-        try:
-            with zipfile.ZipFile(path) as z:
-                data = z.read(entry)
-        except Exception as e:
-            raise HTTPException(500, f"读取封面失败：{e}")
-        return Response(
-            content=data, media_type=mimetypes.guess_type(entry)[0] or "image/jpeg",
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
+        return Response(content=data, media_type=media,
+                        headers={"Cache-Control": "public, max-age=86400"})
+
+    if fmt == "AUDIO":
+        name = audio.cover_in_dir(path) if path.is_dir() else ""
+        if not name:
+            raise HTTPException(404, "该有声书没有封面")
+        return FileResponse(path / name,
+                            media_type=mimetypes.guess_type(name)[0] or "image/jpeg",
+                            headers={"Cache-Control": "public, max-age=86400"})
 
     if fmt != "EPUB":
         raise HTTPException(404, "该格式没有内嵌封面")
@@ -1074,18 +1078,21 @@ def api_book_file(bid: str):
     return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=3600"})
 
 
-# ---------------- 漫画（CBZ）----------------
-# 只支持 CBZ。CBR 需要 RAR 解压依赖，不为单一格式引入系统级二进制依赖（见 core/comics.py）。
+# ---------------- 漫画（CBZ / CBR）----------------
+# 两种容器走同一套 comics 抽象（zipfile / rarfile 由魔数嗅探选择），上层零分支。
 
 @app.get("/api/books/{bid}/comic")
 def api_comic_pages(bid: str):
-    """漫画页清单。前端按 index 逐页取图（配合懒加载预取邻页），不一次拉全部。"""
+    """漫画页清单（CBZ / CBR）。前端按 index 逐页取图，不一次拉全部。"""
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    if (b.get("format") or "").upper() != "CBZ":
-        raise HTTPException(400, "仅 CBZ 支持漫画阅读（CBR 需 RAR 依赖，本项目不支持）")
-    return comics.pages(config.OUTPUT_DIR / b["name"])
+    path = config.OUTPUT_DIR / b["name"]
+    if not comics.is_comic(path):
+        raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
+    if comics.is_cbr(path) and not comics.rar_available():
+        raise HTTPException(503, "服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）")
+    return comics.pages(path)
 
 
 @app.get("/api/books/{bid}/comic/{index}")
@@ -1093,13 +1100,58 @@ def api_comic_page(bid: str, index: int):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    if (b.get("format") or "").upper() != "CBZ":
-        raise HTTPException(400, "仅 CBZ 支持漫画阅读")
-    data, media = comics.page_bytes(config.OUTPUT_DIR / b["name"], index)
+    path = config.OUTPUT_DIR / b["name"]
+    if not comics.is_comic(path):
+        raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
+    if comics.is_cbr(path) and not comics.rar_available():
+        raise HTTPException(503, "服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）")
+    data, media = comics.page_bytes(path, index)
     if data is None:
         raise HTTPException(404, "页不存在")
     return Response(content=data, media_type=media,
                     headers={"Cache-Control": "public, max-age=86400"})
+
+
+# ---------------- 有声书（单文件 / 多轨目录）----------------
+# 一本书 = 一个音频文件 或 一个含音频的目录（见 core/audio.py）。
+
+_AUDIO_MIME = {
+    ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".m4b": "audio/mp4", ".aac": "audio/aac",
+    ".flac": "audio/flac", ".opus": "audio/opus", ".ogg": "audio/ogg", ".wav": "audio/wav",
+}
+
+
+@app.get("/api/books/{bid}/audio")
+def api_audio_tracks(bid: str):
+    """有声书轨清单（单文件 1 轨 / 目录 n 轨，自然序）。"""
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    if (b.get("format") or "").upper() != "AUDIO":
+        raise HTTPException(400, "该书不是有声书")
+    return audio.tracks(config.OUTPUT_DIR / b["name"])
+
+
+@app.get("/api/books/{bid}/audio/{index}")
+def api_audio_track(bid: str, index: int):
+    """单轨音频流。
+
+    · 用 `FileResponse` → 自带 **Range（206）**，播放器拖拽跳转必需，且不必整份进内存；
+    · 与 PDF 不同：`<audio src>` 是浏览器原生请求、带不了 Bearer，
+      所以该路径已在 `_MEDIA_TOKEN_PATHS` 里允许 `?token=`。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    if (b.get("format") or "").upper() != "AUDIO":
+        raise HTTPException(400, "该书不是有声书")
+    track = audio.track_path(config.OUTPUT_DIR / b["name"], index)
+    if not track or not track.is_file():
+        raise HTTPException(404, "轨道不存在")
+    media = _AUDIO_MIME.get(track.suffix.lower()) \
+        or mimetypes.guess_type(track.name)[0] or "application/octet-stream"
+    return FileResponse(track, media_type=media,
+                        headers={"Cache-Control": "private, max-age=3600"})
 
 
 @app.get("/api/books/{bid}/chapter/{index}")
@@ -1645,7 +1697,7 @@ def api_delete_smart_scope(sid: int):
 #   · 删模式只把引用设备的 active_profile_id 置空（来源标记），设备配置不动；
 #   · 设备上报（PUT）不写活动日志（每次启动都发生，无审计价值），只有模式变更写。
 
-PREFS_BLOCKS = {"reader", "pdf", "comic", "appearance", "cover"}
+PREFS_BLOCKS = {"reader", "pdf", "comic", "audio", "appearance", "cover"}
 PREFS_MAX_BYTES = 64 * 1024
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
@@ -3496,7 +3548,7 @@ async def _log_dispatch(src: pathlib.Path, action: str, result, source: str, siz
 @app.post("/convert")
 async def convert(file: UploadFile = File(...), traditionalize: bool = Form(False)):
     # B1 上传多格式：放开 .txt 限制，允许 pipeline.EBOOK_EXT 直接入库（.txt 仍走转换）。
-    # 其余类型（如 .docx/.cbr）明确拒绝。CBR 因 RAR 系统依赖未做，不在白名单内。
+    # 第 9 期起 EBOOK_EXT 含漫画（.cbz/.cbr）与音频（.mp3/.m4b…）；其余类型（如 .docx）明确拒绝。
     _name = file.filename or ""
     _ext = pathlib.Path(_name).suffix.lower()
     _allowed = {".txt", *pipeline.EBOOK_EXT}
