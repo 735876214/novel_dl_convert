@@ -252,6 +252,31 @@ def init():
                 photo_local_path TEXT NOT NULL DEFAULT '',
                 fetched_at       REAL NOT NULL DEFAULT 0
             );
+            -- 系列级元数据（第 12 期 C3 SYNOPSIS）：与 authors 表同构 —— 在线抓取值与
+            -- 用户本地覆盖**分列**，展示取 本地覆盖 > 在线，用户改过的不会被再次抓取冲掉。
+            --
+            -- ⚠️ **本表是系列级字段的唯一存储**：刻意**不写回 EPUB**。
+            --    OPF 没有「系列简介」这个字段（唯一近似 dc:description 属于**单册**，
+            --    写进去就是覆盖掉某一册自己的简介），而「系列首发年」写进各册 dc:date
+            --    会让某本 2019 年出版的第 7 册变成 2015 年 —— 属信息损毁。
+            --    代价（已确认接受）：其他软件**直读文件**时看不到这些字段；连服务读则可见。
+            CREATE TABLE IF NOT EXISTS series_meta (
+                name              TEXT PRIMARY KEY,
+                description       TEXT NOT NULL DEFAULT '',
+                description_local TEXT NOT NULL DEFAULT '',
+                publisher         TEXT NOT NULL DEFAULT '',
+                publisher_local   TEXT NOT NULL DEFAULT '',
+                first_year        TEXT NOT NULL DEFAULT '',
+                first_year_local  TEXT NOT NULL DEFAULT '',
+                tags              TEXT NOT NULL DEFAULT '',
+                tags_local        TEXT NOT NULL DEFAULT '',
+                -- 外部**声明**的系列总册数；与「库里实际拥有数」语义不同，勿混用
+                declared_count    INTEGER NOT NULL DEFAULT 0,
+                source            TEXT NOT NULL DEFAULT '',
+                -- 一致性打分（无系列实体，靠成员书打分挑候选）→ 界面据此展示置信度
+                score             REAL NOT NULL DEFAULT 0.0,
+                fetched_at        REAL NOT NULL DEFAULT 0
+            );
             -- 多书库（第 10 期 D8）：库实体。type 决定功能显隐矩阵。
             -- root_path **永远是实际库根**（扫描 / 落盘 / 路径解析的唯一根），两种模式一致。
             -- mode='inplace' 就地引用来源子目录（不搬文件）；'import' 库另有独立存储（root_path 就是它）。
@@ -1465,6 +1490,74 @@ def set_author_photo_local(name, path) -> None:
             "INSERT INTO authors(name, photo_local_path) VALUES(?,?) "
             "ON CONFLICT(name) DO UPDATE SET photo_local_path=excluded.photo_local_path",
             (str(name), str(path or "").strip()),
+        )
+        c.commit()
+
+
+# ---------------- 系列元数据（第 12 期 C3）----------------
+# 与作者侧同构：在线值与本地覆盖分列。系列**没有独立实体表**（系列名来自各册
+# calibre:series），故本表以系列名为键、按需创建行 —— 一律 upsert。
+
+#: 允许被本地覆盖的列白名单（动态拼 SQL 前的校验，避免任意列名注入）
+SERIES_LOCAL_COLS = ("description_local", "publisher_local", "first_year_local", "tags_local")
+
+
+def upsert_series_meta(name, description="", publisher="", first_year="", tags="",
+                       declared_count=0, source="", score=0.0) -> None:
+    """写入在线抓取的系列字段。**不动**用户本地覆盖列（与 ``upsert_author`` 同规矩）。"""
+    now = time.time()
+    try:
+        dc = int(declared_count or 0)
+    except (TypeError, ValueError):
+        dc = 0
+    c = _connect()
+    with _lock:
+        c.execute(
+            """INSERT INTO series_meta(name, description, publisher, first_year, tags,
+                                       declared_count, source, score, fetched_at)
+               VALUES(?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(name) DO UPDATE SET
+                 description=excluded.description, publisher=excluded.publisher,
+                 first_year=excluded.first_year, tags=excluded.tags,
+                 declared_count=excluded.declared_count, source=excluded.source,
+                 score=excluded.score, fetched_at=excluded.fetched_at""",
+            (str(name), str(description or ""), str(publisher or ""), str(first_year or ""),
+             str(tags or ""), dc, str(source or ""), float(score or 0.0), now),
+        )
+        c.commit()
+
+
+def get_series_meta(name) -> "dict | None":
+    row = _connect().execute("SELECT * FROM series_meta WHERE name=?", (str(name),)).fetchone()
+    return dict(row) if row else None
+
+
+def all_series_meta() -> dict:
+    """``{name: row}``，供列表页一次取全（避免逐系列查库）。"""
+    rows = _connect().execute("SELECT * FROM series_meta").fetchall()
+    return {r["name"]: dict(r) for r in rows}
+
+
+def set_series_local(name, **fields) -> None:
+    """设置/清除系列的本地覆盖列（空串 = 撤销该字段的覆盖，回退到在线值）。
+
+    用 upsert 而非 UPDATE：系列可能从没抓取过（表里没有行），只编辑简介时也要能落库。
+    列名走 :data:`SERIES_LOCAL_COLS` 白名单 —— 这里是动态拼 SQL，不校验就等于开了注入口子。
+    """
+    cols = [k for k in fields if k in SERIES_LOCAL_COLS]
+    if not cols:
+        return
+    vals = [str(fields[k] or "").strip() for k in cols]
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO series_meta(name, {cs}) VALUES(?,{qs}) "
+            "ON CONFLICT(name) DO UPDATE SET {sets}".format(
+                cs=", ".join(cols),
+                qs=", ".join("?" for _ in cols),
+                sets=", ".join(f"{k}=excluded.{k}" for k in cols),
+            ),
+            (str(name), *vals),
         )
         c.commit()
 

@@ -336,6 +336,48 @@ def search_all(sources: list, title: str, author: str, limit: int = 5,
     return {"entries": uniq, "sources": report, "best": uniq[0] if uniq else None}
 
 
+# ---------------- 系列级检索（第 12 期 C3）----------------
+# ⚠️ 外部源**没有「系列」这个实体**：OpenLibrary 的 search.json 既不返回系列字段、
+#    也没有系列详情接口（作者侧能靠 /search/authors.json 拿真实体，系列没有对应物）。
+#    所以这里只能「用系列名检索 + 用成员书一致性打分」挑最可信的候选 ——
+#    可靠性**天然低于作者侧**，调用方必须把 score 如实展示，低于阈值就别用、不要编造。
+
+def score_against_members(cand: dict, members: list) -> float:
+    """候选与**系列成员书**的一致性分：对每本成员书算 :func:`score_candidate`，取最高。
+
+    取**最高**而非平均是刻意的：一个系列常混有不同译本 / 不同版本，
+    平均会把「精确命中某一册」这个强信号摊薄成中等分，反而更容易误判。
+    """
+    best = 0.0
+    for m in members or []:
+        title = str((m or {}).get("title") or "").strip()
+        if not title:
+            continue
+        s = score_candidate(title, (m or {}).get("author") or "", cand)
+        if s > best:
+            best = s
+    return round(best, 4)
+
+
+def search_series(series_name: str, members: list, sources: list = None,
+                  limit: int = 5, options: dict = None) -> dict:
+    """按系列名检索，再按成员书一致性重打分。
+
+    返回 ``{entries, sources, best, members}``；``entries`` 已按一致性分倒序，
+    ``best`` 是最高分候选（**可能是 0 分** —— 那就说明没搜到能对上的东西，
+    由调用方如实回「未找到」，不要拿个不相关的候选硬凑简介）。
+    """
+    res = search_all(sources, series_name, "", limit=limit, options=options)
+    entries = []
+    for e in res["entries"]:
+        e = dict(e)
+        e["score"] = score_against_members(e, members)
+        entries.append(e)
+    entries.sort(key=lambda x: -float(x.get("score") or 0.0))
+    return {"entries": entries, "sources": res["sources"],
+            "best": entries[0] if entries else None, "members": len(members or [])}
+
+
 def probe(source: str, opts: dict = None) -> dict:
     """连通性自检（设置页用）。用一本几乎必然存在的书探路，返回耗时与结论。"""
     if source not in SOURCES:
