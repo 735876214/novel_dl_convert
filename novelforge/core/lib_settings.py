@@ -48,6 +48,8 @@ ITEMS = (
      "占位符：{title} {author} {series} {index}"),
     ("naming.scope", "命名适用格式", "str", None,
      "all 或某个扩展名（如 epub）"),
+    ("opds.expose", "对 OPDS 暴露", "bool", None,
+     "关闭后该书库不出现在对外 OPDS 目录里，直连它的单库地址也返回 404"),
 )
 
 _ITEM_MAP = {spec[0]: spec for spec in ITEMS}

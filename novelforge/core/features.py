@@ -38,10 +38,11 @@ FEATURE_LABELS = {
     "missing": "缺失资源",
     "logs": "转换日志",
     "output": "导出目录浏览",
+    "opds": "OPDS 对外目录",
 }
 
 #: 与格式无关的通用能力（三类库都有）
-_COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output"}
+_COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"}
 
 #: 类型 → 能力集。判据是**现有实现真实支持的范围**，不是「理论上可以」：
 #:   · 元数据抓取只写 EPUB 的 OPF → 仅 ebook（漫画 / 音频暂不支持，见 metafetch.plan 的跳过说明）
@@ -73,6 +74,7 @@ SETTING_CAPS = {
     "metadata_fetch.fields": "metadata",
     "naming.pattern": "rename",
     "naming.scope": "rename",
+    "opds.expose": "opds",              # 该书库是否出现在对外 OPDS 目录里
 }
 
 

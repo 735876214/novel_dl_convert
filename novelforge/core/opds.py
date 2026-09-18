@@ -113,7 +113,8 @@ def _link(parent, rel: str, href: str, type_: str = None, **extra) -> None:
     _atom(parent, "link", None, **attrs)
 
 
-def book_entry(parent, b: dict, base: str, *, with_alternate: bool = True) -> None:
+def book_entry(parent, b: dict, base: str, *, with_alternate: bool = True,
+               prefix: str = "/opds") -> None:
     """一本书 → OPDS acquisition entry。"""
     bid = b["id"]
     e = _atom(parent, "entry")
@@ -136,15 +137,15 @@ def book_entry(parent, b: dict, base: str, *, with_alternate: bool = True) -> No
 
     # 封面：OPDS 用 image + image/thumbnail 两个 rel（客户端按屏幕密度各取所需）
     if b.get("has_cover"):
-        _link(e, _IMG_REL, f"{base}/opds/cover/{bid}", "image/jpeg")
-        _link(e, _THUMB_REL, f"{base}/opds/cover/{bid}", "image/jpeg")
+        _link(e, _IMG_REL, f"{base}{prefix}/cover/{bid}", "image/jpeg")
+        _link(e, _THUMB_REL, f"{base}{prefix}/cover/{bid}", "image/jpeg")
 
-    _link(e, _ACQ_REL, f"{base}/opds/download/{bid}",
+    _link(e, _ACQ_REL, f"{base}{prefix}/download/{bid}",
           mime_of(b.get("format")), length=int(b.get("size") or 0))
 
     if with_alternate:
         # 详情 feed：客户端「书籍信息」页可据此展示完整元数据
-        _link(e, "alternate", f"{base}/opds/book/{bid}", _ACQ_TYPE)
+        _link(e, "alternate", f"{base}{prefix}/book/{bid}", _ACQ_TYPE)
 
 
 def _feed(title: str, feed_id: str, updated: float, links: list, *,
@@ -171,28 +172,38 @@ def tostring(feed: ET.Element) -> str:
     return '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(feed, encoding="unicode")
 
 
-def navigation_feed(base: str, counts: dict) -> str:
+def navigation_feed(base: str, counts: dict, *, prefix: str = "/opds",
+                    title: str = "NovelForge 书库", feed_id: str = "urn:novelforge:opds:root",
+                    libraries: list = None) -> str:
     """根导航：全部 / 最近添加 / 作者 / 系列 / 标签 / 搜索。
 
     客户端惯例是从根 feed 逐级点进来，所以这里必须是 navigation feed
     （`kind=navigation`），条目只带 subsection link、不带下载 link。
+
+    ``prefix`` 让单库路由复用同一个导航：传 ``/opds/lib/<id>`` 时条目全部落到库内，
+    默认 ``/opds`` → 输出与加这个参数之前**逐字节一致**。
+    ``libraries`` = ``[(库 id, 名称, 册数)]``，**多于一个**才插入「按书库」入口
+    （沿用 C2「仅多于一组才加组标题」的取法，单库时不给噪音）。
     """
     items = [
-        ("全部书籍", f"{base}/opds/all", f"共 {counts.get('all', 0)} 本"),
-        ("最近添加", f"{base}/opds/recent", "按入库时间倒序"),
-        ("按作者", f"{base}/opds/authors", f"共 {counts.get('authors', 0)} 位"),
-        ("按系列", f"{base}/opds/series", f"共 {counts.get('series', 0)} 个"),
-        ("按标签", f"{base}/opds/tags", f"共 {counts.get('tags', 0)} 个"),
-        ("搜索", f"{base}/opds/search", "OpenSearch"),
+        ("全部书籍", f"{base}{prefix}/all", f"共 {counts.get('all', 0)} 本"),
+        ("最近添加", f"{base}{prefix}/recent", "按入库时间倒序"),
+        ("按作者", f"{base}{prefix}/authors", f"共 {counts.get('authors', 0)} 位"),
+        ("按系列", f"{base}{prefix}/series", f"共 {counts.get('series', 0)} 个"),
+        ("按标签", f"{base}{prefix}/tags", f"共 {counts.get('tags', 0)} 个"),
+        ("搜索", f"{base}{prefix}/search", "OpenSearch"),
     ]
+    libs = list(libraries or ())
+    if len(libs) > 1:
+        items.insert(2, ("按书库", f"{base}/opds/libraries", f"共 {len(libs)} 个"))
     updated = counts.get("updated") or 0
     feed = _feed(
-        "NovelForge 书库",
-        "urn:novelforge:opds:root",
+        title,
+        feed_id,
         updated,
         [
-            {"rel": "start", "href": f"{base}/opds", "type_": _NAV_TYPE},
-            {"rel": "search", "href": f"{base}/opds/search", "type_": "application/atom+xml"},
+            {"rel": "start", "href": f"{base}{prefix}", "type_": _NAV_TYPE},
+            {"rel": "search", "href": f"{base}{prefix}/search", "type_": "application/atom+xml"},
         ],
     )
     for label, href, desc in items:
@@ -206,27 +217,30 @@ def navigation_feed(base: str, counts: dict) -> str:
 
 
 def group_navigation(base: str, title: str, section: str, groups: list, updated: float,
-                     *, descriptions: dict = None) -> str:
+                     *, descriptions: dict = None, prefix: str = "/opds",
+                     feed_id: str = None) -> str:
     """作者 / 系列 / 标签的分组导航（每组一个 subsection）。
 
     ``descriptions``（可选）是 ``{组名: 简介}``：**传了才**给条目加 ``<summary>``。
     刻意做成外部显式传入、而不是函数内部自己去查系列元数据 —— 这个函数被
     作者 / 系列 / 标签三个路由共用，内部查库会让另外两页多跑无意义的查询、
     并顺带改变它们的输出。
+
+    ``prefix`` 同 :func:`navigation_feed`：单库路由传 ``/opds/lib/<id>``，条目落进库内。
     """
     from urllib.parse import quote
 
     feed = _feed(
         title,
-        f"urn:novelforge:opds:{section}",
+        feed_id or f"urn:novelforge:opds:{section}",
         updated,
         [
-            {"rel": "start", "href": f"{base}/opds", "type_": _NAV_TYPE},
-            {"rel": "up", "href": f"{base}/opds", "type_": _NAV_TYPE},
+            {"rel": "start", "href": f"{base}{prefix}", "type_": _NAV_TYPE},
+            {"rel": "up", "href": f"{base}{prefix}", "type_": _NAV_TYPE},
         ],
     )
     for name, count in groups:
-        href = f"{base}/opds/{section}/{quote(str(name), safe='')}"
+        href = f"{base}{prefix}/{section}/{quote(str(name), safe='')}"
         e = _atom(feed, "entry")
         _atom(e, "title", name)
         _atom(e, "id", href)
@@ -250,10 +264,14 @@ def acquisition_feed(
     sort: str = "recent",
     order: str = "desc",
     subtitle: str = "",
+    prefix: str = "/opds",
+    feed_id: str = None,
 ) -> str:
     """书籍列表 feed（acquisition），带分页。
 
     ``subtitle``（可选）用于「系列：X」这类页面带出系列简介；默认空 → 输出不变。
+    ``prefix`` 同 :func:`navigation_feed`；⚠️ self / next / previous / up 四组 href
+    都要跟着它走，漏一处就会在单库翻页时跳回全局。
     """
     total = len(books)
     pages = max(1, (total + page_size - 1) // page_size)
@@ -262,40 +280,68 @@ def acquisition_feed(
     updated = max([b.get("mtime") or 0 for b in books] or [0])
 
     qs = f"&sort={sort}&order={order}" if section == "all" else ""
-    up = base + ("/opds" if section in ("all", "recent", "search") else f"/opds/{section}")
+    up = base + (prefix if section in ("all", "recent", "search") else f"{prefix}/{section}")
     links = [
-        {"rel": "start", "href": f"{base}/opds", "type_": _NAV_TYPE},
+        {"rel": "start", "href": f"{base}{prefix}", "type_": _NAV_TYPE},
         {"rel": "up", "href": up, "type_": _NAV_TYPE},
-        {"rel": "self", "href": f"{base}/opds/{section}?page={page}{qs}", "type_": _ACQ_TYPE},
+        {"rel": "self", "href": f"{base}{prefix}/{section}?page={page}{qs}", "type_": _ACQ_TYPE},
     ]
     if page < pages:
         links.append({"rel": "next",
-                      "href": f"{base}/opds/{section}?page={page + 1}{qs}", "type_": _ACQ_TYPE})
+                      "href": f"{base}{prefix}/{section}?page={page + 1}{qs}", "type_": _ACQ_TYPE})
     if page > 1:
         links.append({"rel": "previous",
-                      "href": f"{base}/opds/{section}?page={page - 1}{qs}", "type_": _ACQ_TYPE})
+                      "href": f"{base}{prefix}/{section}?page={page - 1}{qs}", "type_": _ACQ_TYPE})
 
-    feed = _feed(title, f"urn:novelforge:opds:{section}:{page}", updated, links,
+    feed = _feed(title, feed_id or f"urn:novelforge:opds:{section}:{page}", updated, links,
                  subtitle=str(subtitle or "").strip())
     # OpenSearch：客户端据此显示「第 N 页 / 共 M 条」
     _e(feed, f"{{{NS_OS}}}totalResults", total)
     _e(feed, f"{{{NS_OS}}}startIndex", (page - 1) * page_size + 1)
     _e(feed, f"{{{NS_OS}}}itemsPerPage", page_size)
     for b in chunk:
-        book_entry(feed, b, base)
+        book_entry(feed, b, base, prefix=prefix)
     return tostring(feed)
 
 
-def book_feed(base: str, b: dict) -> str:
+def library_navigation(base: str, libs: list, updated: float) -> str:
+    """书库导航：``libs`` = ``[(库 id, 名称, 册数)]``，每条 subsection 指向该库的一整套 feed。
+
+    传进来的**只应是对 OPDS 可见的库** —— 可见性判定留在 server 侧，那里才有请求与
+    配置上下文；这个函数只管把给定的库列出来，不做第二处判断（免得两处口径走样）。
+    """
+    from urllib.parse import quote
+
+    feed = _feed(
+        "按书库",
+        "urn:novelforge:opds:libraries",
+        updated,
+        [
+            {"rel": "start", "href": f"{base}/opds", "type_": _NAV_TYPE},
+            {"rel": "up", "href": f"{base}/opds", "type_": _NAV_TYPE},
+        ],
+    )
+    for lid, name, count in libs:
+        href = f"{base}/opds/lib/{quote(str(lid), safe='')}"
+        e = _atom(feed, "entry")
+        _atom(e, "title", name)
+        _atom(e, "id", href)
+        _atom(e, "updated", _iso(updated))
+        _atom(e, "content", f"{count} 本", type="text")
+        _link(e, "subsection", href, _NAV_TYPE)
+    return tostring(feed)
+
+
+def book_feed(base: str, b: dict, *, prefix: str = "/opds") -> str:
     """单本书的详情 feed：客户端「书籍信息」页用它，也提供下载入口。"""
     feed = _feed(
         b.get("title") or b.get("name") or b["id"],
         f"urn:novelforge:opds:book:{b['id']}",
         b.get("mtime") or 0,
         [
-            {"rel": "start", "href": f"{base}/opds", "type_": _NAV_TYPE},
-            {"rel": "up", "href": f"{base}/opds/all", "type_": _ACQ_TYPE},
+            {"rel": "start", "href": f"{base}{prefix}", "type_": _NAV_TYPE},
+            {"rel": "up", "href": f"{base}{prefix}/all", "type_": _ACQ_TYPE},
         ],
     )
-    book_entry(feed, b, base, with_alternate=False)
+    book_entry(feed, b, base, with_alternate=False, prefix=prefix)
     return tostring(feed)
