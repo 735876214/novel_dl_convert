@@ -207,7 +207,7 @@ const sortedDevices = computed(() =>
       </div>
 
       <p class="mt-2 text-[11.5px] text-muted-foreground">
-        本设备的改动**即时生效并自动同步**；模式本体只在你点上面两个按钮时才写入 ——
+        本设备的改动<strong>即时生效并自动同步</strong>；模式本体只在你点上面两个按钮时才写入 ——
         所以你的调整不会静默影响其它设备。
       </p>
     </Card>
@@ -323,7 +323,7 @@ const sortedDevices = computed(() =>
       </div>
 
       <p class="border-t border-border/60 px-4 py-2.5 text-[11.5px] text-muted-foreground">
-        说明：本项目没有实时推送通道，**其它设备的改动要等这台设备下次打开（或点「立即同步」）才可见**。
+        说明：本项目没有实时推送通道，<strong>其它设备的改动要等这台设备下次打开（或点「立即同步」）才可见</strong>。
         离线时照常可改可用，恢复后自动推送。
       </p>
     </Card>

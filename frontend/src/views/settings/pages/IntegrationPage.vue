@@ -156,9 +156,9 @@ async function test(): Promise<void> {
       <div class="text-[12.5px] leading-relaxed text-muted-foreground">
         <div class="mb-1.5 font-medium text-foreground">凭据存在哪里</div>
         存在服务端的设置覆盖层（<code class="font-mono">settings.json</code>），与其它配置一起随
-        <code class="font-mono">CONFIG_DIR</code> 备份。页面上**只回显掩码**：
-        显示 <code class="font-mono">••••••••</code> 时原样提交即保持不变，**把它删空再保存就是删除凭据**。
-        三家服务都**不是 OAuth**，所以没有回调地址、也没有授权跳转——把 Token / Cookie 粘进来即可。
+        <code class="font-mono">CONFIG_DIR</code> 备份。页面上<strong>只回显掩码</strong>：
+        显示 <code class="font-mono">••••••••</code> 时原样提交即保持不变，<strong>把它删空再保存就是删除凭据</strong>。
+        三家服务都<strong>不是 OAuth</strong>，所以没有回调地址、也没有授权跳转——把 Token / Cookie 粘进来即可。
       </div>
     </Card>
 
@@ -171,8 +171,8 @@ async function test(): Promise<void> {
         '同步历史与失败重试（本项目现有任务中心可承载，但匹配层未做）',
       ]"
       :note="isStorygraph
-        ? '本页已实现：凭据存储（两个 Cookie）。StoryGraph 没有公开 API，上游同样只能用登录态 Cookie 并注明可能失效，因此本项目**不提供**自动验证与同步。'
-        : '本页已实现：凭据存储 + **真实连通性验证**（直接请求对方 API 判断 Token 是否有效）。'"
+        ? '本页已实现：凭据存储（两个 Cookie）。StoryGraph 没有公开 API，上游同样只能用登录态 Cookie 并注明可能失效，因此本项目不提供自动验证与同步。'
+        : '本页已实现：凭据存储 + 真实连通性验证（直接请求对方 API 判断 Token 是否有效）。'"
     />
   </div>
 </template>

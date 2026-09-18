@@ -127,7 +127,7 @@ const LABEL = 'w-24 shrink-0 text-[13px] font-medium text-foreground'
     </Card>
 
     <p class="mt-3 text-[11.5px] leading-relaxed text-muted-foreground">
-      这些是**默认值**：播放器里临时调倍速只影响当次播放；睡眠定时到点会自动暂停并在播放器里提示。
+      这些是<strong>默认值</strong>：播放器里临时调倍速只影响当次播放；睡眠定时到点会自动暂停并在播放器里提示。
       有声书支持「一个目录 = 一本书」（一章一文件）与单个音频文件两种形态，播放进度按秒保存并跨设备同步。
     </p>
   </div>

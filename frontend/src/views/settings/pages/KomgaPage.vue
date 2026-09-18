@@ -129,7 +129,7 @@ async function apply(): Promise<void> {
         <div class="min-w-0 flex-1">
           <div class="text-[13px] font-medium text-foreground">输出布局</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
-            开启后，**有系列**的书按 <code class="font-mono">系列名/系列名 #N.ext</code> 落盘；
+            开启后，<strong>有系列</strong>的书按 <code class="font-mono">系列名/系列名 #N.ext</code> 落盘；
             无系列的书仍然平铺（Komga 会把它当成一个独立系列，这是合理结果）
           </div>
         </div>
@@ -142,7 +142,7 @@ async function apply(): Promise<void> {
         <div class="mb-1.5 text-[13px] font-medium text-foreground">整理既有库</div>
         <div class="mb-2.5 text-[11.5px] text-muted-foreground">
           把已经平铺的书收进系列目录。系列来自 EPUB 内的 <code class="font-mono">calibre:series</code>，
-          判不出时从**文件名**推断（<code class="font-mono">系列 第01卷</code> /
+          判不出时从<strong>文件名</strong>推断（<code class="font-mono">系列 第01卷</code> /
           <code class="font-mono">系列 #1</code> / <code class="font-mono">系列 (01)</code> 这类）；
           两者都判不出的书原地不动 —— 凭空造一个系列名比平铺更糟。
         </div>
@@ -294,7 +294,7 @@ async function apply(): Promise<void> {
         <ol class="ml-4 list-decimal space-y-1 text-[12.5px] text-muted-foreground">
           <li>在客户端里选「Komga」这类源，服务器地址填上面的地址</li>
           <li>用户名 / 密码填上面的用户名与登录 PIN（或用 API Key）</li>
-          <li>漫画与 PDF 走**页面流**在线阅读；EPUB 走下载（也可用 WebPub manifest）</li>
+          <li>漫画与 PDF 走<strong>页面流</strong>在线阅读；EPUB 走下载（也可用 WebPub manifest）</li>
         </ol>
         <p class="mt-2 text-[11.5px] text-muted-foreground">
           阅读进度双向同步：客户端读到第几页 ↔ 本项目详情页的进度；EPUB 用 locator（章节 + 百分比）。
@@ -310,7 +310,7 @@ async function apply(): Promise<void> {
       :groups="['SERVER', 'LIBRARIES', 'SYNC']"
       :items="[
         '从 Komga 拉取书目 / 下载入库（需 Komga REST 客户端）',
-        '与已有 Komga 服务器双向同步（本项目已能**充当**服务端，但不做客户端）',
+        '与已有 Komga 服务器双向同步（本项目已能充当服务端，但不做客户端）',
         '按 Komga 库分别输出（本项目单一 OUTPUT_DIR）',
         'HTTP/2 与 WebSocket 那类实时推送（客户端会回落到轮询）',
       ]"

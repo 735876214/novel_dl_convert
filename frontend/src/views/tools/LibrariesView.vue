@@ -279,11 +279,11 @@ async function remove(l: LibraryEntity): Promise<void> {
           <Badge v-if="preview.conflict">同名冲突 {{ preview.conflict }}</Badge>
           <Badge v-if="preview.no_library">缺目标库 {{ preview.no_library }}</Badge>
           <span class="ml-auto text-[11.5px] text-muted-foreground">
-            迁移只**挪库不改名**，进度与批注不会断链
+            迁移只<strong>挪库不改名</strong>，进度与批注不会断链
           </span>
         </div>
         <div class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
-          电子书 / 漫画 / 有声书按**格式**分到各自的库；同名文件一律拒绝覆盖并给出建议名
+          电子书 / 漫画 / 有声书按<strong>格式</strong>分到各自的库；同名文件一律拒绝覆盖并给出建议名
           （改名会换 book_id，所以只建议、不自动改）。
         </div>
       </div>
@@ -426,7 +426,7 @@ async function remove(l: LibraryEntity): Promise<void> {
           <Badge v-if="!library.currentLibraryId" tone="accent">不裁剪</Badge>
         </div>
         <div class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
-          侧栏导航 / 工具标签 / 设置项 / 仪表盘部件按**当前库的能力**裁剪；
+          侧栏导航 / 工具标签 / 设置项 / 仪表盘部件按<strong>当前库的能力</strong>裁剪；
           选「全部书库」时不做任何裁剪。
         </div>
       </div>

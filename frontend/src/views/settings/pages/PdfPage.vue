@@ -114,7 +114,7 @@ function reset(): void {
     </Card>
 
     <p class="mt-3 text-[11.5px] text-muted-foreground">
-      说明：PDF 由 pdf.js 渲染。渲染器采用**懒加载**——只有打开 PDF 时才下载（约 117 KB + 291 KB gzip），
+      说明：PDF 由 pdf.js 渲染。渲染器采用<strong>懒加载</strong>——只有打开 PDF 时才下载（约 117 KB + 291 KB gzip），
       不影响书架与 EPUB 阅读器的加载体积。
     </p>
 

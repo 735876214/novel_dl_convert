@@ -145,7 +145,7 @@ function commitText(key: string): void {
         </Button>
       </div>
       <div class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
-        没设过的项**继承全局**（全局改了就跟着变）；标「已覆盖」的是这个库单独设过的。
+        没设过的项<strong>继承全局</strong>（全局改了就跟着变）；标「已覆盖」的是这个库单独设过的。
       </div>
     </div>
 

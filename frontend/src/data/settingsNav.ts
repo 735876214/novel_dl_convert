@@ -229,7 +229,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
     zh: '书库',
     icon: 'library',
     pages: [
-      p('libraries', 'Libraries', '书库管理', 'ready', {
+      p('libraries', 'Libraries', '书库管理', 'placeholder', {
         upstream: {
           title: 'Libraries',
           desc: 'Scan paths, watched folders, and ingest rules.',
@@ -237,7 +237,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['书库列表（组织模式 / 文件夹 / 书数 / 占用 / 格式分布）', 'Watch folders', 'Scheduled scan', 'Write to file', 'Rename files', '最后扫描状态与原因', 'Scan All', 'Add Library', '排序（默认 / 名称 / 书数 / 占用 / 最后扫描）'],
         },
         link: { to: '/tools/libraries', label: '工具 → 书库管理' },
-        note: '**已实现（第 10 期）**：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用 / 独立存储）、来源子目录投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、按子目录名 / 格式 / 关键词自动归库、以及「库类型 → 功能显隐」。未支持：每库独立的 Scheduled scan / Write to file / Rename files 开关（这些仍是全局策略）。',
+        note: '已实现（第 10 期）：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用 / 独立存储）、来源子目录投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、按子目录名 / 格式 / 关键词自动归库、以及「库类型 → 功能显隐」。已实现（第 13 期）：每库独立覆盖投递布局 / 产物格式、递归与复制非 txt、元数据抓取策略与字段、命名规则（未覆写则继承全局）；以及入库时的跨库同名拦截与工具页一键改名。本页只作上游结构对照，实际操作在「工具 → 书库管理」。',
       }),
       p('metadata/providers', 'Providers', '元数据来源', 'ready', {
         upstream: {

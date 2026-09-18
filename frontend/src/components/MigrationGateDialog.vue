@@ -140,7 +140,7 @@ function goManage(): void {
     <div class="w-[min(40rem,94vw)] max-h-[88vh] overflow-y-auto rounded-lg border border-border bg-card p-5 shadow-2xl">
       <h3 class="font-serif text-[17px] font-semibold text-foreground">按格式归库</h3>
       <p class="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-        现有书还没分进各自的库。迁移只**挪库、不改名**，因此书名、阅读进度、批注与评分都不会变；
+        现有书还没分进各自的库。迁移只<strong>挪库、不改名</strong>，因此书名、阅读进度、批注与评分都不会变；
         目标库已有同名文件时一律拒绝覆盖（只给建议名，不自动改名）。
       </p>
 

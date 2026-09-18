@@ -267,7 +267,7 @@ function fmtSize(n: number): string {
 
     <Card class="mt-4">
       <div class="text-[12.5px] leading-relaxed text-muted-foreground">
-        下载的书**直接落进书库**（<code class="font-mono">OUTPUT_DIR</code>），按
+        下载的书<strong>直接落进书库</strong>（<code class="font-mono">OUTPUT_DIR</code>），按
         <RouterLink to="/settings/komga" class="underline">设置的输出布局</RouterLink>
         归位：开了 Komga 布局就进系列目录，否则平铺。扩展名优先取自 feed 的 MIME，
         其次看标题，都没有则按 EPUB 处理。同名文件不会覆盖，会直接报错拦下。

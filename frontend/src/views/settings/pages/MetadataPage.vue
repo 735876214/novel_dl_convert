@@ -258,7 +258,7 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
         <div class="min-w-0 flex-1">
           <div class="text-[13px] font-medium text-foreground">总开关</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
-            抓取会**外呼公网**（OpenLibrary / Google Books），故默认关闭
+            抓取会<strong>外呼公网</strong>（OpenLibrary / Google Books），故默认关闭
           </div>
         </div>
         <Button size="sm" :variant="mf.enabled ? 'ghost' : 'primary'" :disabled="saving"
@@ -404,7 +404,7 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
         先在上方「总开关」里启用抓取。
       </div>
       <div v-else-if="!planItems.length" class="px-4 py-6 text-center text-[12.5px] text-muted-foreground">
-        点「开始预览」后，这里会逐本列出候选与将要写入的内容 —— 预览**不会改动任何文件**。
+        点「开始预览」后，这里会逐本列出候选与将要写入的内容 —— 预览<strong>不会改动任何文件</strong>。
       </div>
       <div v-else class="max-h-[520px] overflow-auto">
         <table class="w-full text-[12px]">
@@ -474,7 +474,7 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
           <div class="text-[13px] font-medium text-foreground">抓取候选阈值</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
             书名权重 0.7 + 作者 0.3（与「重复书籍」同一套相似度）；低于它的候选只列出、不自动写入。
-            注意：这是**抓取匹配分**，与上方的**元数据完整度**是两件事。
+            注意：这是<strong>抓取匹配分</strong>，与上方的<strong>元数据完整度</strong>是两件事。
           </div>
         </div>
         <input :value="val('metadata_fetch.threshold')" type="number" min="0.1" max="1" step="0.05"
