@@ -137,6 +137,23 @@ def test_编辑不支持的字段被拒绝(series_fixture):
         series_meta.set_local("", description="x")
 
 
+def test_题材覆盖的写入读取往返(series_fixture):
+    """配对契约：`set_local(tags=...)` 以 JSON 落库，`effective` 再解析回来 —— 必须同源。
+
+    列表形态最容易在这里走样（写成 Python repr 就解析不回来），所以两端都要断言：
+    写入的列表 == 读出的列表，且覆盖标记为真；清除后落回聚合值。
+    """
+    series_meta.set_local(series_fixture, tags=["甲", "乙", "甲"])
+    eff = series_meta.effective(series_fixture)
+    assert eff["tags"] == ["甲", "乙"], "写入的列表必须能原样读回（顺带去重保序）"
+    assert eff["overridden"]["tags"] is True
+
+    series_meta.set_local(series_fixture, tags=[])
+    eff2 = series_meta.effective(series_fixture)
+    assert eff2["tags"] == ["科幻", "经典", "太空"], "清空覆盖后应回落到成员书聚合值"
+    assert eff2["overridden"]["tags"] is False
+
+
 def test_state给出逐字段明细(series_fixture):
     db.upsert_series_meta(series_fixture, description="在线简介", source="openlibrary", score=0.8)
     st = series_meta.state(series_fixture)["description"]
