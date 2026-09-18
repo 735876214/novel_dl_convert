@@ -52,6 +52,15 @@ export const WIDGET_META: WidgetMeta[] = [
   { id: 'long-wait', title: '等待最久', description: '书库中未读时间最长的一本书', size: 'sm' },
 ]
 
+/**
+ * 部件 → 所需能力（第 10 期「库类型 → 全量显隐」）。
+ * 不声明 = 通用部件。真值源在后端 `core/features.py`。
+ */
+export const WIDGET_FEATURE: Record<string, string> = {
+  // 每日划线取自批注，而批注只对 EPUB 有效
+  'highlight-of-the-day': 'annotations',
+}
+
 export const WIDGET_IDS: WidgetId[] = WIDGET_META.map((w) => w.id)
 
 /** 已实现的部件（registry 会为这些 id 挂真实组件）—— 现在 12 个全部实现 */

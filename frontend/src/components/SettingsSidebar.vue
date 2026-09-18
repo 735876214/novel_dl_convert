@@ -3,8 +3,10 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import Icon from '@/components/ui/Icon.vue'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 import {
+  PAGE_FEATURE,
   SETTINGS_GROUPS,
   findSettingsGroup,
   findSettingsPage,
@@ -14,6 +16,22 @@ import {
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
+const library = useLibraryStore()
+
+/**
+ * 按**当前库的能力**裁剪设置页（第 10 期「全量显隐」的一部分）：
+ * 漫画库里不显示「有声书」阅读设置，有声书库里不显示元数据抓取那几页。
+ * 整组都被裁掉的分组也不显示（否则会留下一个点开是空的分组头）。
+ */
+const groups = computed(() =>
+  SETTINGS_GROUPS.map((g) => ({
+    ...g,
+    pages: g.pages.filter((pg) => {
+      const need = PAGE_FEATURE[pg.path]
+      return !need || library.hasFeature(need)
+    }),
+  })).filter((g) => g.pages.length > 0),
+)
 
 /** 相对 `/settings/` 的子路径 */
 const rel = computed(() => route.path.replace(/^\/settings\/?/, ''))
@@ -75,7 +93,7 @@ function goHome(): void {
     <!-- 设置分组导航 -->
     <div class="min-h-0 flex-1 overflow-y-auto px-2 py-3">
       <div
-        v-for="g in SETTINGS_GROUPS"
+        v-for="g in groups"
         :key="g.id"
         class="relative"
       >

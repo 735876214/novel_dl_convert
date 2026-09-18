@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 
+import { WIDGET_FEATURE } from '@/data/dashboard'
 import { useDashboardStore } from '@/stores/dashboard'
+import { useLibraryStore } from '@/stores/library'
 import { widgetById } from './widgets/registry'
 
 /**
@@ -11,6 +13,7 @@ import { widgetById } from './widgets/registry'
  * 自定义面板的排序/开关就没法生效。
  */
 const dashboard = useDashboardStore()
+const library = useLibraryStore()
 
 /** 列跨度：lg 占满整行、md 两列、sm 三列（窄屏统一切成单/双列） */
 const SPAN_CLASS: Record<string, string> = {
@@ -19,11 +22,16 @@ const SPAN_CLASS: Record<string, string> = {
   sm: 'lg:col-span-2',
 }
 
-/** 只取「已启用且已实现」的部件（未实现的在面板里置灰，不占版面） */
+/** 只取「已启用、已实现、且当前库有能力」的部件（未实现的在面板里置灰，不占版面） */
 const visible = computed(() =>
   dashboard.enabledWidgets
     .map((w) => widgetById(w.id))
-    .filter((w): w is NonNullable<typeof w> => Boolean(w?.component)),
+    .filter((w): w is NonNullable<typeof w> => Boolean(w?.component))
+    // 第 10 期：按当前库能力裁剪（「每日划线」要批注，漫画库里没有）
+    .filter((w) => {
+      const need = WIDGET_FEATURE[w.id]
+      return !need || library.hasFeature(need)
+    }),
 )
 </script>
 

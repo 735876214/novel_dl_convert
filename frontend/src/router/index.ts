@@ -19,6 +19,7 @@ import DashboardView from '@/views/DashboardView.vue'
 import DocumentationView from '@/views/DocumentationView.vue'
 import ExploreView from '@/views/ExploreView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
+import LibrariesView from '@/views/tools/LibrariesView.vue'
 import SettingsLayout from '@/views/settings/SettingsLayout.vue'
 import SettingsPlaceholder from '@/views/settings/SettingsPlaceholder.vue'
 import AboutPage from '@/views/settings/pages/AboutPage.vue'
@@ -193,6 +194,7 @@ const router = createRouter({
       component: ToolsLayout,
       children: [
         { path: '', redirect: { name: 'tools-entity-manager' } },
+        { path: 'libraries', name: 'tools-libraries', component: LibrariesView },
         { path: 'entities', name: 'tools-entity-manager', component: EntityManagerView },
         { path: 'rename', name: 'tools-bulk-rename', component: BulkRenameView },
         { path: 'duplicates', name: 'tools-duplicate-books', component: DuplicateBooksView },

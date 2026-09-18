@@ -14,7 +14,7 @@ import {
   sortBySeriesIndex,
   tagsLabel,
 } from '@/lib/bookInfo'
-import { api, type BookCard } from '@/lib/api'
+import { api, type BookCard, type SeriesGroup } from '@/lib/api'
 
 /**
  * 系列详情：该系列下的全部书目。
@@ -32,6 +32,7 @@ const route = useRoute()
 const router = useRouter()
 const name = computed(() => String(route.params.name))
 const books = ref<BookCard[]>([])
+const groups = ref<SeriesGroup[]>([])
 const loading = ref(true)
 
 const dir = ref<'asc' | 'desc'>('asc')
@@ -54,12 +55,31 @@ const sorted = computed(() => {
   return dir.value === 'desc' ? [...arr].reverse() : arr
 })
 
+/**
+ * 按**媒体**分段渲染（第 10 期 C2）。
+ *
+ * 只有多于一组时才显示组标题 —— 单媒体的系列本来就好读，多一行标题只是噪音。
+ * 组内沿用同一个排序/倒序切换：序号是**每种媒体各自**的顺序，跨媒体比较没有意义。
+ */
+const sections = computed(() => {
+  const order = (arr: BookCard[]) => {
+    const a = sortBySeriesIndex(arr)
+    return dir.value === 'desc' ? [...a].reverse() : a
+  }
+  if (!books.value.length) return []
+  if (groups.value.length <= 1) return [{ label: '', books: sorted.value }]
+  return groups.value.map((g) => ({ label: `${g.label} · ${g.count} 册`, books: order(g.books) }))
+})
+
 async function load(): Promise<void> {
   loading.value = true
   try {
-    books.value = (await api.seriesDetail(name.value)).books
+    const res = await api.seriesDetail(name.value)
+    books.value = res.books
+    groups.value = res.groups ?? []
   } catch {
     books.value = []
+    groups.value = []
   }
   loading.value = false
 }
@@ -94,12 +114,16 @@ watch(name, load)
         />
       </div>
 
-      <div
-        v-if="books.length"
-        class="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8"
-      >
+      <!-- 按媒体分段（有多组时每组一个标题）；序号是每种媒体各自的顺序，故按组渲染 -->
+      <div v-for="sec in sections" :key="sec.label || 'all'" class="mb-5">
+        <div v-if="sec.label" class="mb-2 text-[12px] font-medium text-muted-foreground">
+          {{ sec.label }}
+        </div>
+        <div
+          class="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8"
+        >
         <button
-          v-for="b in sorted"
+          v-for="b in sec.books"
           :key="b.id"
           type="button"
           class="group cursor-pointer text-left"
@@ -140,6 +164,7 @@ watch(name, load)
             {{ tagsLabel(b) }}
           </div>
         </button>
+        </div>
       </div>
 
       <!-- 系列简介：来自外部元数据，本项目未接入，给诚实说明而非编造 -->

@@ -117,6 +117,8 @@ export const SECTION_KEYS: Record<string, string[]> = {
   komga: ['output', 'komga'],
   // 元数据抓取的 7 个页面共用同一配置段（同一份 cfg 草稿，各页只改自己的子键）
   metadata: ['metadata_fetch'],
+  // 多书库：跨库策略开关（库实体存 SQLite，见「工具 → 书库管理」）
+  libraries: ['libraries'],
 }
 
 /** 命名规则的格式筛选取值（与 fileops.plan_pattern_rename 的 scope 参数一致） */

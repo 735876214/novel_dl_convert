@@ -229,14 +229,15 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
     zh: '书库',
     icon: 'library',
     pages: [
-      p('libraries', 'Libraries', '书库管理', 'placeholder', {
+      p('libraries', 'Libraries', '书库管理', 'ready', {
         upstream: {
           title: 'Libraries',
           desc: 'Scan paths, watched folders, and ingest rules.',
           groups: ['LIBRARY', 'CONTENTS', 'AUTOMATION', 'LAST SCAN'],
           items: ['书库列表（组织模式 / 文件夹 / 书数 / 占用 / 格式分布）', 'Watch folders', 'Scheduled scan', 'Write to file', 'Rename files', '最后扫描状态与原因', 'Scan All', 'Add Library', '排序（默认 / 名称 / 书数 / 占用 / 最后扫描）'],
         },
-        note: '本项目为单一 OUTPUT_DIR 模型，无多书库概念；迁移涉及架构变更，需单独立项。',
+        link: { to: '/tools/libraries', label: '工具 → 书库管理' },
+        note: '**已实现（第 10 期）**：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用 / 独立存储）、来源子目录投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、按子目录名 / 格式 / 关键词自动归库、以及「库类型 → 功能显隐」。未支持：每库独立的 Scheduled scan / Write to file / Rename files 开关（这些仍是全局策略）。',
       }),
       p('metadata/providers', 'Providers', '元数据来源', 'ready', {
         upstream: {
@@ -521,6 +522,28 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
 
 /** 扁平化的页面列表（供路由生成与查找） */
 export const SETTINGS_PAGES: SettingsPageDef[] = SETTINGS_GROUPS.flatMap((g) => g.pages)
+
+/**
+ * 设置页 → 所需能力（第 10 期「库类型 → 全量显隐」）。
+ *
+ * 单独一张表而不是写进每个 `p(...)`：
+ *   · 显隐是**一处**策略，集中在这里一眼能看全，也便于对照后端 `core/features.py`；
+ *   · 不声明的页面 = 通用页（账号 / 外观 / 服务端…），任何库类型都显示。
+ */
+export const PAGE_FEATURE: Record<string, string> = {
+  'reader/ebook': 'ebook',
+  'reader/pdf': 'pdf',
+  'reader/comics': 'comic',
+  'reader/audio': 'audio',
+  // 元数据抓取只写 EPUB 的 OPF → 只有电子书库有这套页面
+  'metadata/providers': 'metadata',
+  'metadata/field-rules': 'metadata',
+  'metadata/custom-fields': 'metadata',
+  'metadata/score': 'metadata',
+  'metadata/auto-fetch': 'metadata',
+  'metadata/genre-blocklist': 'metadata',
+  'metadata/authors': 'authors',
+}
 
 /** 设置页默认落点 */
 export const SETTINGS_HOME = '/settings/appearance/theme'

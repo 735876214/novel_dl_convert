@@ -77,24 +77,37 @@ onMounted(() => {
   library.loadBooks()
   library.loadLibraries()
   library.loadScopes()
+  // 能力清单要跟着**当前库**走（含刷新后恢复上次选中的库）
+  void library.loadFeatures()
   void loadConfig(false, true)
 })
 
+/** 菜单项 → 所需能力（**不声明 = 通用能力**，任何库类型都显示）。菜单归前端所有，所以这张表在前端。 */
+const ITEM_FEATURE: Record<string, string> = {
+  // 批注只对 EPUB 有效（漫画 / 音频没有批注能力）
+  annotations: 'annotations',
+}
+
 /**
- * 「库」用后端真实分组（格式 / 待修复 / 无封面），「收藏夹」用 SQLite 数据，
- * 「智能书架」用真实阅读状态计数。其余组保持 NAV_GROUPS 原样。
+ * 「库」= **真实书库实体**（含「全部书库」），点击即切库；
+ * 「收藏夹」用 SQLite 数据，「智能书架」用真实阅读状态计数；其余组保持 NAV_GROUPS 原样。
+ * 最后统一按**当前库的能力清单**裁剪 —— 未选库（全部书库）时不裁剪。
  */
 const groups = computed(() =>
   nav.groups.map((g) => {
     if (g.title === '库') {
       return {
         ...g,
-        items: library.libraryGroups.map((x) => ({
-          id: `lib:${x.key}`,
-          label: x.label,
-          icon: 'library',
-          count: x.count,
-        })),
+        items: [
+          // 「全部书库」置顶：它是**默认态**，也必须是能随时回来的出口
+          { id: 'lib:', label: '全部书库', icon: 'library', count: library.books.length },
+          ...library.libraryEntities.map((x) => ({
+            id: `lib:${x.id}`,
+            label: x.name,
+            icon: 'library',
+            count: x.book_count,
+          })),
+        ] as NavItem[],
       }
     }
     if (g.title === '收藏夹') {
@@ -124,7 +137,14 @@ const groups = computed(() =>
       }
     }
     return g
-  }),
+  }).map((g) => ({
+    // 按当前库的能力裁剪条目（见 ITEM_FEATURE；未声明的通用项一律保留）
+    ...g,
+    items: g.items.filter((it) => {
+      const need = ITEM_FEATURE[it.id]
+      return !need || library.hasFeature(need)
+    }),
+  })),
 )
 
 function navCount(item: NavItem): number | null {
@@ -144,7 +164,8 @@ function onItemClick(groupTitle: string | null, item: NavItem): void {
     return
   }
   if (item.id.startsWith('lib:')) {
-    library.openLibrary(item.label, item.id.slice(4))
+    // 切库 + 进书架（`lib:` 后为空 = 全部书库）；能力清单随库类型变化
+    void library.openLibraryById(item.id.slice(4), item.label)
     router.push('/shelf')
     return
   }

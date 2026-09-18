@@ -8,6 +8,7 @@ import SettingsSidebar from '@/components/SettingsSidebar.vue'
 import AppToast from '@/components/AppToast.vue'
 import TaskDrawer from '@/components/TaskDrawer.vue'
 import LoginGate from '@/components/LoginGate.vue'
+import MigrationGateDialog from '@/components/MigrationGateDialog.vue'
 import { useTasksStore } from '@/stores/tasks'
 import { useThemeStore } from '@/stores/theme'
 import { useUiStore } from '@/stores/ui'
@@ -76,6 +77,9 @@ onUnmounted(() => {
 
     <TaskDrawer />
   </div>
+
+  <!-- 首次「按格式归库」的阻塞确认（第 10 期）：登录后自己判断要不要弹 -->
+  <MigrationGateDialog v-if="!showLogin" />
 
   <div
     v-if="ui.drawerOpen"

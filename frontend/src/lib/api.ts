@@ -527,6 +527,10 @@ export interface BookCard {
   pages_source?: string
   /** 有声书轨数（单文件 1、目录 n）；非音频为 0 或未定义 */
   tracks?: number
+  /** 所属书库 id（第 10 期多书库；`name` 仍是**相对该库根**的路径） */
+  library_id?: string
+  /** 所属书库类型（ebook / comic / audiobook / mixed） */
+  library_type?: LibraryType
 }
 
 export interface BookDetail extends BookCard {
@@ -596,10 +600,21 @@ export interface SeriesItem {
   covers: SeriesCover[]
 }
 
+/** 系列内**按媒体**分组（第 10 期 C2）：同一系列可能横跨电子书 / 漫画 / 有声书 */
+export interface SeriesGroup {
+  /** ebook / comic / audiobook / other */
+  media: string
+  label: string
+  count: number
+  books: BookCard[]
+}
+
 export interface SeriesDetail {
   name: string
   count: number
   books: BookCard[]
+  /** 按媒体分组（组内保持扫描顺序；只有多于一组时前端才显示组标题） */
+  groups?: SeriesGroup[]
 }
 
 // ---------- 作者 ----------
@@ -774,6 +789,11 @@ export interface AppConfig {
   upload: { max_bytes?: number; max_source_rules_bytes?: number }
   /** 成就统计与界面开关（对应上游 Profile 页的 Enable achievements） */
   achievements: { enabled?: boolean }
+  /**
+   * 多书库跨库策略（第 10 期）。库实体本身存 SQLite（见 `/api/libraries`），
+   * 这里只有「跨库行为」类开关。
+   */
+  libraries: { auto_migrate?: boolean }
 }
 
 /** 目录占用（维护页） */
@@ -1083,14 +1103,169 @@ export interface BackupItem {
   size: number
 }
 
-// ---------- 库（真实分组） ----------
+// ---------- 库（第 10 期：库实体 / 格式分面 / 能力 / 迁移） ----------
 
-export interface LibraryGroup {
+/**
+ * 格式分面（`/api/library-facets`）。
+ *
+ * ⚠️ 这就是第 10 期**改址**的旧 `/api/libraries` 语义：侧栏已不再用它
+ * （书库页自带格式筛选），保留给需要按格式筛选的页面与既有调用方。
+ */
+export interface LibraryFacet {
   /** 筛选键：fmt:EPUB / issues:1 / nocover:1 */
   key: string
   label: string
   count: number
   kind: string
+}
+
+/** 归属模式：就地引用来源子目录（不搬文件）/ 独立存储 */
+export type LibraryMode = 'inplace' | 'import'
+/** 库类型：决定功能显隐矩阵（见后端 core/features.py） */
+export type LibraryType = 'ebook' | 'comic' | 'audiobook' | 'mixed'
+
+/** 书库实体（`/api/libraries`，第 10 期起） */
+export interface LibraryEntity {
+  id: string
+  name: string
+  type: LibraryType
+  type_label: string
+  mode: LibraryMode
+  mode_label: string
+  /** **实际库根**（扫描 / 落盘 / 路径解析的唯一根） */
+  root_path: string
+  /** 来源子目录名（相对 `LIBRARY_SOURCE_DIR`；只存相对名，挂载点换了也不失效） */
+  source_subdir: string
+  /** 归类规则（JSON 字符串：`{"keywords":[...],"subdirs":[...]}`） */
+  rules: string
+  sort_order: number
+  book_count: number
+  exists: boolean
+  writable: boolean
+  /** 默认书库（承接未归类的书）不可删除 */
+  is_default: boolean
+  last_scan_at: number
+  last_scan_note: string
+}
+
+export interface LibrariesResult {
+  items: LibraryEntity[]
+  total: number
+  /** `LIBRARY_SOURCE_DIR` —— 新建「就地引用」库时的父目录 */
+  source_dir: string
+  types: { value: LibraryType; label: string }[]
+  modes: { value: LibraryMode; label: string }[]
+}
+
+/** 能力清单（`/api/features`）。后端是「库类型 → 能力」的真值源，前端只声明「哪项菜单需要哪个能力」。 */
+export interface FeaturesResult {
+  library_id: string
+  library_type: string
+  features: string[]
+  matrix: { types: Record<string, string[]>; all: string[]; labels: Record<string, string> }
+}
+
+/** 迁移预览里的一条（`/api/library-migrations/preview`） */
+export interface MigrationItem {
+  name: string
+  book_id: string
+  title: string
+  format: string
+  target_type: LibraryType
+  target_label: string
+  /** 当前所在库 */
+  library_id: string
+  library_name: string
+  src: string
+  dst_library_id: string
+  dst_library_name: string
+  dst: string
+  /** ready=可迁移 / conflict=目标同名 / no_library=目标库未建 / ambiguous=需指定目标 */
+  status: 'ready' | 'conflict' | 'no_library' | 'ambiguous'
+  reason: string
+  /** 冲突时的建议名（**只建议不自动改**：改名会换 book_id，进度会断链） */
+  suggest: string
+}
+
+export interface MigrationGate {
+  /** 用户已答过「暂不迁移」 */
+  dismissed: boolean
+  dismissed_at: number
+  note: string
+  /** 设置里勾了「以后自动执行」 */
+  auto_migrate: boolean
+}
+
+/** 向导建议：为缺失的类型库给出的两套位置方案（逐库选：就地引用 / 独立存储） */
+export interface LibrarySpecSuggestion {
+  id: string
+  type: LibraryType
+  name: string
+  source_subdir: string
+  inplace: { mode: LibraryMode; root_path: string }
+  import: { mode: LibraryMode; root_path: string }
+}
+
+export interface MigrationPreview {
+  items: MigrationItem[]
+  total: number
+  ready: number
+  conflict: number
+  no_library: number
+  ambiguous: number
+  movable: number
+  blocked: number
+  missing_types: LibraryType[]
+  missing_labels: string[]
+  suggest_specs: LibrarySpecSuggestion[]
+  gate: MigrationGate
+  /** 有可迁移项、且未答过、且未开自动 → 前端应**阻塞式**确认一次 */
+  needs_confirm: boolean
+}
+
+export interface MigrationPlanResult {
+  batch_id: string
+  created: number
+  /** 同一批文件重复 plan 会复用同一批次（幂等） */
+  reused: boolean
+  items: MigrationItem[]
+  message: string
+}
+
+export interface MigrationRow {
+  id: number
+  batch_id: string
+  direction: string
+  library_id: string
+  src: string
+  dst: string
+  status: 'pending' | 'done' | 'failed' | 'rolled_back' | 'rollback_failed' | string
+  error: string
+  created_at: number
+}
+
+export interface MigrationRunResult {
+  ok: boolean
+  batch_id: string
+  /** 执行时 */
+  moved?: number
+  /** 回滚时 */
+  restored?: number
+  failed: number
+  skipped?: number
+  errors: { src: string; dst: string; error: string }[]
+  items: MigrationRow[]
+}
+
+export interface MigrationBatch {
+  batch_id: string
+  direction: string
+  n: number
+  at: number
+  pending: number
+  done: number
+  failed: number
+  rolled_back: number
 }
 
 function _authToken(): string {
@@ -1868,8 +2043,124 @@ export const api = {
   allAnnotations: () =>
     request<{ items: AllAnnotation[]; total: number }>('/api/annotations'),
 
-  // ---------- 库（真实分组） ----------
-  libraries: () => request<{ items: LibraryGroup[] }>('/api/libraries'),
+  // ---------- 书库（第 10 期：库实体 / 分面 / 能力 / 迁移） ----------
+
+  /** 书库实体列表（含书数 / 是否存在 / 可写）。 */
+  libraries: () => request<LibrariesResult>('/api/libraries'),
+
+  /** 格式分面（原 `/api/libraries` 语义，第 10 期改址到 `/api/library-facets`）。 */
+  libraryFacets: () => request<{ items: LibraryFacet[] }>('/api/library-facets'),
+
+  /** `LIBRARY_SOURCE_DIR` 下的候选来源子目录（新建向导给默认值用）。 */
+  librarySourceDirs: () =>
+    request<{ root: string; exists: boolean; dirs: { name: string; path: string; entries: number }[] }>(
+      '/api/libraries/source-dirs',
+    ),
+
+  /** 新建书库（**只登记，不搬文件**）。 */
+  createLibrary: (payload: {
+    name: string
+    type: LibraryType
+    mode: LibraryMode
+    root_path: string
+    source_subdir?: string
+    rules?: unknown
+    sort_order?: number
+  }) =>
+    request<{ ok: boolean; library: LibraryEntity }>('/api/libraries', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 改库属性（改 `root_path` 只改登记，不搬文件）。 */
+  updateLibrary: (
+    id: string,
+    payload: Partial<{
+      name: string
+      type: LibraryType
+      mode: LibraryMode
+      root_path: string
+      source_subdir: string
+      rules: unknown
+      sort_order: number
+    }>,
+  ) =>
+    request<{ ok: boolean; library: LibraryEntity }>(`/api/libraries/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 移除库**登记**（绝不删文件）。库非空时默认拒绝，`force` 才会只移除登记。 */
+  deleteLibrary: (id: string, force = false) =>
+    request<{ ok: boolean; removed: string; books_left_on_disk: number }>(
+      `/api/libraries/${encodeURIComponent(id)}${force ? '?force=true' : ''}`,
+      { method: 'DELETE' },
+    ),
+
+  /** 重新扫描单个库。 */
+  scanLibrary: (id: string) =>
+    request<{ ok: boolean; id: string; count: number }>(
+      `/api/libraries/${encodeURIComponent(id)}/scan`,
+      { method: 'POST' },
+    ),
+
+  /** 当前库（或「全部书库」）的能力清单。 */
+  features: (libraryId = '') =>
+    request<FeaturesResult>(
+      `/api/features${libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : ''}`,
+    ),
+
+  /** 待迁移概览。`targets` 用于「同类库有多个」时指定目标。 */
+  migrationPreview: (targets?: Record<string, string>) => {
+    const q =
+      targets && Object.keys(targets).length
+        ? `?targets=${encodeURIComponent(JSON.stringify(targets))}`
+        : ''
+    return request<MigrationPreview>(`/api/library-migrations/preview${q}`)
+  },
+
+  /** 生成/复用迁移批次（只写台账，不搬文件）。 */
+  migrationPlan: (targets?: Record<string, string>) =>
+    request<MigrationPlanResult>('/api/library-migrations/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ targets }),
+    }),
+
+  /** 执行迁移批次（**真移文件**）。 */
+  migrationApply: (batchId: string) =>
+    request<MigrationRunResult>('/api/library-migrations/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ batch_id: batchId }),
+    }),
+
+  /** 一键回滚（`batchId` 留空 = 最近一次迁移批次）。 */
+  migrationRollback: (batchId = '') =>
+    request<MigrationRunResult>('/api/library-migrations/rollback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ batch_id: batchId }),
+    }),
+
+  migrationBatches: () =>
+    request<{ items: MigrationBatch[]; gate: MigrationGate }>('/api/library-migrations/batches'),
+
+  /** 「暂不迁移」：之后不再每次启动阻塞提示。 */
+  migrationDismiss: (note = '') =>
+    request<{ ok: boolean; gate: MigrationGate }>('/api/library-migrations/dismiss', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note }),
+    }),
+
+  /** 让启动提示重新出现。 */
+  migrationResetGate: () =>
+    request<{ ok: boolean; gate: MigrationGate }>('/api/library-migrations/reset-gate', {
+      method: 'POST',
+    }),
 
   // ---------- 阅读时长（会话上报） ----------
   recordSession: (bookId: string, seconds: number) =>
