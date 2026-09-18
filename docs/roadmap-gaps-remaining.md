@@ -36,7 +36,7 @@
 
 ### C 类 · 重（架构/外部依赖，周级，按需）
 
-- [ ] **C1 Requests 完整功能** — 插件式索引器/下载客户端/凭据加密/下载后自动化（原"后期未定期"）→ 排入第 10 期
+- [x] ~~**C1 Requests 完整功能**~~ — **已决策不做（2026-09-18，用户决策）**。理由：本项目的「从外部获取书」由**数据驱动书源规则**覆盖（`sources/rules.py` + `sources/store.py`），插件式索引器 / 下载客户端与之形态重叠、维护成本高。**页面与接口骨架已从代码中删除**：后端 `REQUEST_SECTIONS` + `GET /api/requests/config`；前端 `RequestsPage.vue` / 路由 / 设置注册项 / API 方法（`admin/requests` 页数 48 → 47）。⚠️ 旧理由「`Add to library` 依赖多库 → 不落地」在**第 10 期多库完成后已失效**，不再引用
 - [x] **C2 系列详情 Group by media** — 第 10 期完成：`GET /api/series/{name}` 增 `groups`（复用 `migrate.target_type_of` 按媒体归类，含 media/label/count/books）；`SeriesDetailView` 按组分段渲染，**仅多于一组时**才加组标题（单媒体系列不加噪音），组内仍按系列序号排序并保留首册标记与倒序切换
 - [ ] **C3 SYNOPSIS 外部源** — 依赖外部系列元数据，先做可行性评估 → 排入第 10 期
 
@@ -45,11 +45,11 @@
 > 复核结论：原「已决策不做」清单里有 6 项判定已过期或过粗（详见第二节「已修正的过期记载」）。
 > 其中「在线元数据抓取 / Pages」实际已实现，「作者传记/头像、有声书、多书库、CBR」现正式排期。
 
-- [ ] **D1 作者传记** — 作者级元数据抓取（复用 `metasources`/`metafetch`），落库 → 第 8 期
-- [ ] **D2 作者头像** — 抓取作者照片并**本地缓存**（零外链），替换当前「拿首本书封面代替」→ 第 8 期
-- [ ] **D3 `metadata/authors` 页做实** — 当前 status 虚高为 `ready`（实为通用抓取开关）→ 第 8 期
-- [ ] **D4 抓取深化** — 按 ISBN 精确匹配、系列级元数据（当前只写单本）→ 第 8 期
-- [ ] **D5 A2 收尾** — 作者页「Added this week」需后端 author 级 `added` 字段 → 第 8 期
+- [x] **D1 作者传记** — 第 8 期完成：`core/authors.py` 走 OpenLibrary 作者检索取传记；`authors` 表把**在线值 / 本地覆盖分列**，展示取「本地覆盖 > 在线」，用户改过的不被再次抓取冲掉
+- [x] **D2 作者头像** — 第 8 期完成：头像下载到 `CACHE_DIR/authors/`（**零外链**），并加入 `_MEDIA_TOKEN_PATHS`（`<img src>` 只能靠 `?token=`）；无图 404 → 前端回退渐变占位；归一化名相似度 <0.5 视为不同人（宁可放弃也不给错配）
+- [x] **D3 `metadata/authors` 页做实** — 第 8 期完成：作者区块改为真实开关（启用 / 抓传记 / 抓头像 / 立即抓取全部作者），不再虚高为 `ready`
+- [x] **D4 抓取深化（部分完成）** — **ISBN 精确匹配**已落地（`metasources.search_by_isbn`，命中即 `score=1.0`、`exact_isbn=True`，`metafetch.plan` 与 `online_candidate` 优先采用）；⚠️ **系列级元数据仍缺**（当前只写单本）→ 顺延，未随本期关闭
+- [x] **D5 A2 收尾** — 第 8 期完成：`GET /api/authors` 增 `added_ts`（名下最早一本书的 mtime），作者页「本周新增」筛选 +「新」徽标落地
 - [x] **D6 CBR 阅读** — 第 9 期完成：`core/comics.py` 抽象 zip/rar 双后端（魔数嗅探 + `rarfile`，后端 `bsdtar` 由 `libarchive-tools` 提供）；`.cbr` 进 `BOOK_EXTS`；封面 / 漫画路由 / Komga 页面流 / OPDS MIME 全部放开
 - [x] **D7 有声书播放器** — 第 9 期完成：新增 `core/audio.py`，把「一本书 = 一个文件」扩展为「**音频目录（一章一文件）或单个音频文件 = 一本书**」；`/api/books/{bid}/audio(/{index})` 轨清单 + Range 流式；完整播放器（倍速 / 快退快进间隔 / 睡眠定时 / 轨道列表 / 按秒进度同步）；`reader/audio` 设置页做实并纳入偏好同步（`PREFS_BLOCKS` 加 `audio`）
 - [x] **D8 多书库** — 第 10 期完成。`libraries` 表 + `library_migrations` 台账 + `app_state` KV；`library.py` 改为**库注册表驱动的多根扫描**（缓存与指纹按库）；路径解析全仓库感知（`library.root_of(book)`、`fileops.output_dir(library_id)`、`safe_path` 按**所属库根**约束；Komga `libraryId` 按真实库返回、按库过滤生效）；`core/migrate.py` 按格式迁移（同名冲突拒绝并给建议名、批次幂等、一键回滚）；`core/library_rules.py` 入库归库（来源子目录名 > 格式 > 关键词）；`core/features.py` 能力矩阵驱动侧栏 / 工具标签 / 设置分组 / 仪表盘部件显隐。**一个刻意的保留**：`book_id` 仍由 basename 派生、不做数据迁移，跨库同名由迁移与入库时的冲突检测拦住
@@ -121,7 +121,7 @@
    - **自动归类**（三条都启用）**+ 手动兜底**：按格式 / 媒体类型（`cbz`·`cbr` → 漫画；音频文件或目录 → 有声书；`epub`·`mobi`·`azw3`·`pdf`·`txt` → 电子书）、按元数据关键词（tags / 系列 / 作者）、按来源子文件夹名；界面上仍可逐本 / 批量手动指定；
    - **影响面**：`library.py`（多 root + 库维度扫描）、`stats.py`、工具页全域（实体管理 / 重命名 / 查重 / 缺失资源）、侧栏「库」组接真实数据（当前 `collections.ts` 的 `LIBRARIES = []`）、摄入链路（`pipeline` / `watcher` / `bookdock` 按规则路由）、`db.py`（新增 `libraries` 表与归属关系；⚠️ `book_id` 由 basename 派生，**跨库同名会冲突**，需带库维度或加前缀）；
    - **与第 9 期的关系**：第 9 期落地的漫画与有声书是「按类型分类与显隐」的前置，顺序不可颠倒。
-2. **C1 Requests 完整功能** — 插件式索引器 / 下载客户端 / 凭据加密 / 下载后自动化（价值最高、成本最高）
+2. ~~**C1 Requests 完整功能**~~ — **已于 2026-09-18 决策不做**（详见第一节 C 类说明）：本项目的「从外部获取书」走数据驱动书源规则，插件式索引器 / 下载客户端不做；已交付的只读骨架页与接口**已从代码中删除**
 3. **C2 系列 Group by media** — 需后端按媒体类型分组（第 9 期已让 `format` 具备 `AUDIO` / `CBR` 两种媒体类型，此项可顺势落地）
 4. **C3 SYNOPSIS 外部源** — 依赖外部系列元数据，先做可行性评估，可能并入 D1 的作者 / 系列级抓取
 
@@ -144,6 +144,32 @@
 新接口分组：`/api/libraries`（实体 CRUD + 扫描 + 来源目录列举）、`/api/library-facets`、
 `/api/features`、`/api/library-migrations/*`（preview / plan / apply / rollback / batches / dismiss / reset-gate）。
 **安全边界**：库根只允许落在「书库来源目录 / 导出目录 / 数据目录」之内（否则改名 / 回收会作用到系统目录）。
+
+#### 第 11 期实施记录（工程护栏：自动化测试 + 删除 C1）
+
+**主题**：给项目装上「工程护栏」—— 十期迭代后回归面已很大，而此前**零自动化测试**，每期只能人工冒烟。
+
+- **新增 `tests/`（107 个用例，完全离线，约 2 秒跑完）**，分两层：
+  - **核心纯逻辑**：`test_migrate.py`（按格式迁移 / 批次幂等 / 同名冲突拒绝并给建议名 / 一键回滚 / 逐条独立）、
+    `test_library_rules.py`（归库优先级：来源子目录名 > 格式 > 关键词 > 回退默认库）、
+    `test_features.py`（库类型能力矩阵边界）、`test_metastore.py`（override > online > opf 与 `orig` 语义）、
+    `test_fileops_guard.py`（越界 / 绝对路径 / 层级 / 非法字符 / **跨库穿越**等安全负例）；
+  - **接口冒烟**：`test_api_smoke.py`（鉴权 401、库根白名单 400、默认库不可删、非空库需 force、
+    迁移 preview→plan→apply→rollback 全链路、元数据编辑产生覆盖并可恢复、非 EPUB 编辑被拒、能力清单、系列按媒体分组）。
+- **两处关键工程决策**：① **环境变量必须在 import 业务模块之前设置**（`config` 导入即固化各目录、
+  `server.py` 导入即执行 `ensure_dirs()`）→ `tests/conftest.py` 顶部先建会话级临时根再 import；
+  ② `db` 的 `_conn` / `_db_path` 是模块级缓存 → **本期唯一一处业务代码改动**是新增 `db.close()`
+  （关闭并清空缓存，供测试与切换数据目录使用，**不改任何运行时行为**）。
+- **dev 依赖隔离**：新增 `requirements-dev.txt`（`-r requirements.txt` + `pytest>=8.0`）与 `pytest.ini`；
+  **不写进 `requirements.txt`**，生产镜像不受影响。按用户选择**未加** CI workflow / 自检脚本。
+- **删除 C1（求书）**：后端 `REQUEST_SECTIONS` + `GET /api/requests/config`；前端 `RequestsPage.vue` +
+  router 注册 + settingsNav 条目 + `api.ts` 类型与方法 + `NetworkPage` 死链文案。并在测试里加了
+  「`/api/requests/config` 返回 404」的断言，防止半删状态回归。上游采集记录（`NotificationsPage` 的
+  `Book requests` 事件列举、`docs/review/*`、`bookorbit-settings-inventory.md`）**作为对照记录保留**。
+- **文档与实况对齐**：C1 归档为「已决策不做」（并指出旧理由「依赖多库」在多库落地后**已失效**）；
+  补勾第 8 期遗留未勾的 D1–D5（其中 **D4 的「系列级元数据」明确标注仍缺、未随本期关闭**）；
+  `capability-gap.md` 修正 6 处过期记载（Requests 三处、多库两处、有声书 / Pages 各一处）；
+  README 48 → 47 并新增「自动化测试」小节；`router/index.ts` 与 `settingsNav.ts` 里早已漂移的页面计数统一为 **47**。
 
 ---
 

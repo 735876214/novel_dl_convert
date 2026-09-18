@@ -285,7 +285,7 @@ novel_dl_convert/
 - **单书详情**：概览 / 目录 / 文件 / 批注 / 阅读状态（评分与书评、相似书推荐）等标签，
   并可「编辑元数据」直接改写 EPUB 内的 OPF。
 - **阅读器**：ePub（排版增强）/ PDF / 漫画三种；阅读进度、状态与时长自动回写。
-- **设置**：48 个页面分 6 组 —— 你 / 书库 / **设备**（OPDS、Komga、KOReader、字体、偏好与同步）/
+- **设置**：47 个页面分 6 组 —— 你 / 书库 / **设备**（OPDS、Komga、KOReader、字体、偏好与同步）/
   外部账号 / 服务端 / 本项目扩展。含主题（浅色 / 深色 / 跟随系统）、65 档点缀色、四档圆角、
   转换与监听配置、回收站与维护等。
 - **接口文档**：FastAPI 自带的交互式 API 文档在 **`/docs`**（OpenAPI，实时反映全部路由）——
@@ -309,6 +309,19 @@ npm run deploy       # 同步 dist → novelforge/static/v2（先删后拷）
 >
 > **注意**：dev server 看到的是最新源码，不等于 `dist` 最新 —— 验证生产服务前必须重新
 > `npm run build && npm run deploy`。
+
+#### 自动化测试（第 11 期「工程护栏」）
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt     # 含 pytest（**不进生产镜像**）
+.venv/bin/python -m pytest                        # 全部用例，约 2 秒
+.venv/bin/python -m pytest tests/test_migrate.py   # 只跑某个模块
+```
+
+- 覆盖两层：**核心纯逻辑**（按格式迁移与回滚、入库归库判决、库类型能力矩阵、元数据分层、路径安全边界）
+  + **接口冒烟**（鉴权、书库 CRUD 边界、迁移全链路、元数据覆盖与恢复、能力清单、系列按媒体分组）。
+- 全程**离线**（不触任何外部网络）；每个用例自带临时目录与独立 SQLite，**不依赖执行顺序**、可反复连跑。
+- 只新增 `tests/` 与 dev 依赖：`Dockerfile` 只装 `requirements.txt`，生产镜像不受影响。
 
 ### 规则字段（JSON Schema 要点）
 ```jsonc

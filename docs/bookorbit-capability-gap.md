@@ -19,7 +19,7 @@
 | **可直接落地** | 本项目已有后端支撑，或纯前端即可完成 | 排入路线图，直接做 |
 | **需新增后端能力** | 需新写接口 / 表 / 模块，但架构不变 | **排入路线图，先补后端再实现能力** |
 | **需架构变更** | 动摇现有单用户 / 单一成品目录假设 | **不落地**（见 0.2） |
-| **页面与接口保留、功能后置** | 页面与接口先存在，具体能力后期实现 | 见第 9 节（Requests 适用） |
+| ~~**页面与接口保留、功能后置**~~ | 页面与接口先存在，具体能力后期实现 | **已废弃（2026-09-18）**：唯一用例是第 9 节的 Requests，而它已改为「已决策不做」，骨架页与只读接口均已删除 |
 | **不建议做** | 与本项目定位无关，或维护成本远超收益 | 不实现，仅记录理由（见第 11 节） |
 
 ### 0.2 两条硬性落地原则
@@ -42,9 +42,9 @@
 
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| 侧栏主导航 | Dashboard / Book Dock / Requests / Tools | 部分：仪表盘/探索发现/任务中心/工具/数据统计/通知中心（`data/nav.ts:32-45`）；**无 Book Dock、无 Requests** | Book Dock **可直接落地**／Requests **页面+接口保留**（§9） | Book Dock 可复用 `INPUT_DIR` + watcher |
+| 侧栏主导航 | Dashboard / Book Dock / Requests / Tools | 部分：仪表盘/探索发现/任务中心/工具/数据统计/通知中心（`data/nav.ts:32-45`）；**无 Book Dock、无 Requests** | Book Dock **可直接落地**／Requests **已决策不做**（§9） | Book Dock 可复用 `INPUT_DIR` + watcher |
 | BROWSE 组（Authors / Series / Annotations） | 三个入口 | **已有**（`router/index.ts:96-100`） | 可直接落地 | — |
-| LIBRARIES 组（`/library/:id`、`/libraries`、New Library） | 多书库实体 + 分组菜单 | **形态不同**：无 `/library/:id`、无 `/libraries`；侧栏「库」组是 `/api/libraries` 返回的**格式 / 待修复 / 无封面 三个分面**（`core/library.py:422-444`），点进 `/shelf` | **需架构变更 → 不落地** | 线上 Library 有独立 id 与 `folders[]` 物理路径；本项目唯一目录，需推翻 `OUTPUT_DIR` 假设 |
+| LIBRARIES 组（`/library/:id`、`/libraries`、New Library） | 多书库实体 + 分组菜单 | **第 10 期已实现多库实体**：侧栏「库」组列**真实书库**（`GET /api/libraries` 返回库实体，含类型 / 归属模式 / 书数），点击**切库 + 进书架**；原先的「格式 / 待修复 / 无封面」分面已改址 `GET /api/library-facets` 且不再占侧栏 | ~~需架构变更 → 不落地~~ **已落地** | 仍无 `/library/:id` 独立路由（用「当前库」状态替代），但 `OUTPUT_DIR` 假设已被推翻 |
 | SMART SCOPES | `/smart-scopes` + New Smart Scope | 部分：固定 5 个智能书架（`data/collections.ts:22-28`），无独立路由、**无自定义** | 固定档 **可直接落地**／自定义 **需新增后端能力** | 自定义需 `smart_scopes` 表 + CRUD |
 | COLLECTIONS | `/collections` + New Collection | **已有**（`router/index.ts:101-102`；后端 `server.py:516-568`） | 可直接落地 | — |
 | 全局搜索（⌘K） | 跨库检索 | 部分：**UI 齐全但未接后端**——回车只弹提示（`components/AppHeader.vue:17-26`） | **可直接落地** | `/api/books` 已有，加一个查询接口即可 |
@@ -72,7 +72,7 @@
 | **Grid / List / Table 三视图** | 三视图切换 | **仅 Grid**（`ShelfView.vue:74-77`） | **可直接落地** | 纯前端 |
 | Display 面板（书架级） | 书卡信息/密度 | 部分：仅仪表盘有部件面板 | **可直接落地** | 复用 localStorage 模式 |
 | 书卡信息（格式徽章/系列 #序号/出版日期·语言/题材） | 5 类信息 | 部分：只显示 title/author/进度；数据侧 `format/year/language/tags/series` 后端**已有**（`core/library.py:552-562`），**系列序号字段不存在** | 展示 **可直接落地**／系列序号 **需新增后端能力**（很轻） | 序号需解析 OPF `calibre:series_index`（现仅解析系列名，`core/library.py:63-75`） |
-| `/libraries` 列表页、`/library/:id` | 多书库 | **无**（库组 → `/shelf`） | **需架构变更 → 不落地** | 同 §1 |
+| `/libraries` 列表页、`/library/:id` | 多书库 | **第 10 期已落地**：`GET /api/libraries` 返回**库实体**、侧栏「库」组点击即**切库 + 进书架**（无 `/library/:id` 独立路由，用「当前库」状态替代） | ~~需架构变更 → 不落地~~ **已落地** | 同 §1 |
 
 ## 3. 域：书籍详情
 
@@ -142,22 +142,27 @@
 | 任务中心 | `/tasks` **返回 404**（线上无此页） | **本项目有**（`/tasks`、`TaskCenterView.vue`、`TaskDrawer.vue`）——**超出线上** | 可直接落地 | 但见右栏风险 |
 | 任务真实性 | — | **半真半假**：任务 store 混入 **6 条演示种子数据**（`data/tasks.ts:21-28`）并由 900ms ticker **假推进**（`stores/tasks.ts:12-14,71-80`）；真实任务仅来自下载；后端为**进程内字典**（`server.py:95`，重启即清空） | 持久化 **需新增后端能力**；**清除演示数据属修复**（见 §12 执行约定） | 假数据会让用户误判真实进度 |
 
-## 9. 域：求书（Requests）—— 页面与接口保留、功能后置
+## 9. 域：求书（Requests）—— **已决策不做（2026-09-18）**
 
-**约定**：本项**前端页面与后端接口要存在且保留**（页面上不呈现为「未支持」占位）；**真正的求书功能排到后期**。
+> **状态变更**：本条原定档位是「页面与接口保留、功能后置」（第 1 期建了只读骨架页 + `GET /api/requests/config`）。
+> **2026-09-18 用户决策：C1 不做** —— 本项目的「从外部获取书」已由**数据驱动书源规则**覆盖，
+> 插件式索引器 / 下载客户端与之形态重叠、维护成本高。
+> **代码现状**：后端 `REQUEST_SECTIONS` 与 `GET /api/requests/config`、前端 `RequestsPage.vue`
+> 及其路由 / 设置注册项 / API 方法 / 死链文案**均已删除**；`/api/requests/config` 现返回 **404**。
+> ⚠️ 原「`Add to library（目标书库）` 依赖多库 → 不落地」的**旧理由已失效**（第 10 期多库已落地），
+> 该项仍因**定位**而不做，请勿再引用旧理由。
 
 | 能力项 | 线上形态 | 本项目现状 | 档位 |
 | --- | --- | --- | --- |
-| `/requests` 页面 + Beta 说明 | 「Ask for books the library does not have yet」+ 实验性提示 | **无**（能力最接近的是「探索发现」`ExploreView.vue`，但它是**即时搜索→下载**，不是「登记需求、等待匹配」） | **页面保留**（第 1 期建骨架页） |
-| 「No search sources are set up…」+ **Add a source** | 引导文案 + 按钮 | 形态不同：本项目书源是数据驱动 JSON 规则（`novelforge/sources/store.py`），默认仅内置 Gutenberg 公版源，`download.enabled` 默认 `false` | 引导文案 **可直接落地** |
-| 标签 `My requests` / `All requests` | 两个列表 | **无** | **功能后置** |
-| 表单（Title / Author / Format / Fulfillment / Choose a release / Request language / More options） | 完整 | **无** | **功能后置** |
-| 「Add to library（目标书库）」 | 选目标库 | **无** | **需架构变更 → 不落地**（依赖多库） |
-| 设置侧三段（Sources / Download clients / Automation） | 完整 | 占位（`data/settingsNav.ts:418-428` 已记录） | 第 1 期补**接口定义 + 骨架页**；**功能后置** |
+| `/requests` 页面 + Beta 说明 | 「Ask for books the library does not have yet」+ 实验性提示 | **无**（能力最接近的是「探索发现」`ExploreView.vue`，但它是**即时搜索→下载**，不是「登记需求、等待匹配」） | **不做**（原骨架页已删） |
+| 「No search sources are set up…」+ **Add a source** | 引导文案 + 按钮 | 形态不同：本项目书源是数据驱动 JSON 规则（`novelforge/sources/store.py`），默认仅内置 Gutenberg 公版源，`download.enabled` 默认 `false` | 见「网络与下载」页的真实引导 |
+| 标签 `My requests` / `All requests` | 两个列表 | **无** | **不做** |
+| 表单（Title / Author / Format / Fulfillment / Choose a release / Request language / More options） | 完整 | **无** | **不做** |
+| 「Add to library（目标书库）」 | 选目标库 | **无**（多库已于第 10 期落地，但求书不做） | **不做** |
+| 设置侧三段（Sources / Download clients / Automation） | 完整 | **无**（原占位页已删） | **不做** |
 
-**已交付 / 待交付边界**：
-- 第 1 期交付：页面骨架（Sources / Download clients / Automation 三段结构，按线上真实结构搭）+ 后端接口定义（返回明确空态而非 404）+ 「未配置书源」引导
-- 后期交付：单文件插件式索引器与插件市场、Torznab/Newznab 接入、下载客户端对接与凭据加密、下载完成后自动化
+**替代路径**：本项目「从外部获取书」一律走「工具 → 书源管理」的数据驱动书源规则（检索 / 下载 / 入库）。
+与上游的插件 / indexer 形态不同，但覆盖同一需求。
 
 ## 10. 域：收书目录
 
@@ -193,10 +198,10 @@
 | **界面国际化（Language，25 语言）** | 界面中文硬编码（如 `data/nav.ts:36-43`），需全量抽文案 + i18n 基建；对单人内网工具收益远低于维护成本 |
 | **Metadata Freshness / 在线元数据抓取体系** | 本项目元数据来源只有 EPUB 自身 + 文件名（`core/metadata.py:11-33`）；引入抓取体系与项目定位冲突 |
 | **作者传记 / 作者头像（No portrait）** | 依赖外部作者元数据服务 |
-| **有声书阅读器** | 音源获取与版权成本远超收益；`BOOK_EXTS` 亦不含音频（`core/library.py:31`） |
-| **Requests 的 Sources / Download clients / Automation 具体功能**（索引器 + 下载客户端） | 与既有「数据驱动书源」体系（`sources/rules.py`、`sources/store.py`）功能重叠；**但页面与接口按 §9 保留** |
-| **Pages（页数）字段** | EPUB 无固定页数概念，本项目在线阅读仅支持 EPUB |
-| **多书库（`/libraries`、`/library/:id`、按书库筛选 / 批量重命名 / 查重）** | 动摇单一 `OUTPUT_DIR`；`core/library.py:1-3` 明写无书库实体 |
+| ~~**有声书阅读器**~~ ⚠️ **该条已过期** | 第 9 期已实现（`core/audio.py` + `/api/books/{bid}/audio` + 播放器 + `reader/audio` 设置页）；原判据「`BOOK_EXTS` 不含音频」不再成立 |
+| **Requests 的 Sources / Download clients / Automation 具体功能**（索引器 + 下载客户端） | 与既有「数据驱动书源」体系（`sources/rules.py`、`sources/store.py`）功能重叠。**2026-09-18 起为「已决策不做」**：骨架页与只读接口也已从代码中删除（不再是「按 §9 保留」） |
+| ~~**Pages（页数）字段**~~ ⚠️ **该条已过期** | 已实现：EPUB 为估算值（`library._pages_in`）、CBZ 为归档真实页数；第 7 期已计入元数据完整度评分 |
+| ~~**多书库（`/libraries`、`/library/:id`、按书库筛选 / 批量重命名 / 查重）**~~ ⚠️ **该条已过期** | **第 10 期已实现**（`libraries` 表 + 库感知路径解析 + 按格式迁移 + 能力显隐矩阵）；原判据「唯一 `OUTPUT_DIR`、无书库实体」不再成立 |
 | **全部多用户能力** | 单用户轻登录（`core/auth.py:1-5`）；`users` 表无角色字段 |
 
 ---
@@ -216,7 +221,7 @@
 - **任务持久化**：用 `tasks` 表替掉进程内 `TASKS` dict（`server.py:95`）→ 任务中心改真表；**同时移除 `data/tasks.ts` 的 6 条演示种子与 ticker 假推进**
 - **维护与清理**：新增 orphaned 封面目录扫描 + 清理接口（复用 `fileops.recycle_items`）→ `Maintenance` 页真实现
 - **上传大小上限**：新增全局上传上限配置（当前**完全无限制**）→ 落到维护页
-- **Requests 页面与接口**（§9）：接口定义（三段，返回明确空态）+ 骨架页（配置项可见但标「功能待实现」，零后端写入）+「未配置书源」引导
+- ~~**Requests 页面与接口**（§9）~~：**已于 2026-09-18 撤销**（第 1 期曾交付只读骨架页 + `GET /api/requests/config`，现两者均已从代码删除）
 - **成就体系**（单用户口径）：新表 `achievements` + `user_achievements` + `core/achievements.py` → `/achievements` 页
 
 ### 第 2 期：书库与元数据
@@ -280,13 +285,13 @@ Komga 是漫画/电子书服务器：扫描**库根目录**，目录结构约定
 
 ### 后期（未定期）
 
-- **Requests 具体功能**（§9）：插件式索引器 + 插件市场、Torznab/Newznab、下载客户端与凭据加密（上游需 `BOOK_REQUEST_ENCRYPTION_KEY`）、下载后自动化
+- ~~**Requests 具体功能**（§9）~~：**已决策不做（2026-09-18）**。插件式索引器 + 插件市场、Torznab/Newznab、下载客户端与凭据加密（上游需 `BOOK_REQUEST_ENCRYPTION_KEY`）、下载后自动化 —— 本项目改用**数据驱动书源规则**覆盖同一需求
 
 ---
 
 ## 15. 执行约定
 
-1. **不做假交互**：任何页面上的控件都必须真实生效；缺后端就先把后端做出来（§0.2）。**骨架页（Requests）的配置项可见但必须标注「功能待实现」，且不产生任何后端写入。**
+1. **不做假交互**：任何页面上的控件都必须真实生效；缺后端就先把后端做出来（§0.2）。⚠️ 原例证「骨架页（Requests）的配置项可见但标注功能待实现」**已失效** —— 该页随 C1 于 2026-09-18 删除，现全仓不再有「看得见但点不动」的控件。
 2. **新增可配置项必须同时改两处**：`server.py` 的 `EDITABLE`（控制**可写**）与 `GET /api/config` 里的**硬编码键列表**（控制**可读**）是分开的——上一轮新增 `naming` 时踩过「能写进 settings.json 但读不回来」的坑，已在该处留注释。
 3. **清除既有演示数据**：`frontend/src/data/tasks.ts:21-28` 的 6 条种子任务与 `stores/tasks.ts` 的假推进 ticker 属**伪造进度**，在第 1 期任务持久化时一并移除，不得保留。
 4. **脱敏**：文档与截图不含账号 / 邮箱 / 令牌 / 密钥真实值；含账号显示名的截图不归档（本批已排除仪表盘截图）。

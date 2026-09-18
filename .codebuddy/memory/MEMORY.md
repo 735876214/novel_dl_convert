@@ -144,6 +144,16 @@
   书库页相关筛选（smart/facet/tag/continueReading/scopeCounts/allTags）都按**当前库**走。工具页新增「书库管理」
   （`views/tools/LibrariesView.vue`），启动阻塞确认在 `components/MigrationGateDialog.vue`（挂在 `App.vue`）。
 
+## 自动化测试（第 11 期，2026-09-18）
+- **命令**：`.venv/bin/pip install -r requirements-dev.txt` → `.venv/bin/python -m pytest`（107 个用例，约 2 秒，**完全离线**）。
+  `requirements-dev.txt` 只放 dev 依赖（`-r requirements.txt` + `pytest>=8.0`），**不进生产镜像**；`pytest.ini` 定 `testpaths=tests` 与 `pythonpath=.`。
+- **两条硬前提（改测试前必读）**：① **环境变量必须在 import 业务模块之前设置**（`config` 导入即固化各目录、`server.py` 导入即 `ensure_dirs()`）→ `tests/conftest.py` 顶部先建会话级临时根；② `db` 的 `_conn` / `_db_path` 是**模块级缓存** → 用例隔离靠 `db.close()`（本期为测试新增的唯一业务代码，**不改运行时行为**）。
+- **夹具约定**：碰书库/DB 的用例必须声明 `isolated`；`make_library` 已**强制依赖** `isolated`；打接口用 `client` + `auth_headers`；造数据用 `make_book` / `make_audio_dir` / `make_library`。
+  假 EPUB（`b"EPUB"`）可用于扫描类测试，但**元数据写回 / 系列解析必须用真 EPUB**（`epub_builder.build_epub`），否则接口 500。
+- **不要测会外呼的接口**：本机无外网；且测试环境配置目录为空 → `metadata_fetch.enabled=False` → `online_candidate` 直接返回 None（这是元数据相关用例能离线跑的原因，已有用例显式钉住）。
+- **`GET /` 会 503**（`static/v2/index.html` 不入库），不是可测点。
+- **C1（求书 / Requests）已决策不做（2026-09-18）**：代码骨架（`REQUEST_SECTIONS`、`GET /api/requests/config`、`RequestsPage.vue` 及其路由/设置项/API 方法）**已删除**；测试里有 404 断言防回归。上游采集记录（`NotificationsPage` 的 `Book requests` 列举、`docs/review/*`、`settings-inventory`）保留为对照，**不要当成本项目功能去删**。
+
 ## 后端踩坑（真实教训）
 - **`threading.Lock` 自锁死锁**：`log()` 持锁后调 `log_dir()`（再取同锁）→ 进程**静默挂死**（无异常无 traceback）。
   **规律：模块内共用一个锁且有嵌套调用时，一律用 RLock。**
