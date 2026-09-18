@@ -25,7 +25,8 @@ from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, recommend,
                    fonts, comics, audio, opds, opds_client, komga, koreader, integrations,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
-                   authors as authors_mod, migrate, library_rules, features, series_meta)
+                   authors as authors_mod, migrate, library_rules, features, series_meta,
+                   lib_settings)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -369,14 +370,16 @@ async def _run_download(tid: str, item: dict, actor: str = "系统"):
     db.task_update(tid, status="running", progress=50.0)
     try:
         mgr = _manager()
-        opts = {"force": True, "merge": True, "cfg": mgr.cfg}
         # 多书库：书源下载走产出 EPUB，按「来源子目录名 → 格式 → 关键词」归库，不中则落默认库
-        out_dir = library_rules.target_root(
+        tgt = library_rules.resolve_target(
             name=f"{item.get('title') or 'book'}.epub",
             meta={"title": item.get("title"), "author": item.get("author")},
             default=OUTPUT_DIR,
         )
-        res = await mgr.download_to(item, out_dir, INPUT_DIR, opts)
+        # 第 13 期：产物格式 / 落盘布局按**目标库**取（库没覆写时等于全局值）
+        opts = {"force": True, "merge": True,
+                "cfg": lib_settings.config_for(tgt["library_id"] or None)}
+        res = await mgr.download_to(item, tgt["root"], INPUT_DIR, opts)
         notice = opts.get("_notice", "")
         name = pathlib.Path(res).name
         db.task_update(tid, status="done", progress=100.0,
@@ -1963,6 +1966,100 @@ def api_scan_library(lid: str):
     return {"ok": True, "id": lid, "count": len(bs)}
 
 
+# ---- 每库覆盖（第 13 期）----
+# 生效值 = 每库覆写 ?? 全局值，落点仍是 ``libraries.settings`` 的稀疏 JSON
+# （见 core/lib_settings 的模块注释）。这里只做「校验 + 落库 + 回显」：
+# 校验与归一化**全部复用** lib_settings —— 界面拒了而内核收了（或反之）就是两套口径。
+
+def _library_settings_or_404(lid: str) -> None:
+    if not db.get_library(lid):
+        raise HTTPException(404, "书库不存在")
+
+
+@app.get("/api/libraries/{lid}/settings")
+def api_library_settings(lid: str):
+    """该库的生效设置 + 哪些项被本库覆写过（界面据此显示「已覆盖 / 恢复继承」）。
+
+    返回项已按**库类型能力**收窄：漫画库不会返回元数据策略这类它根本用不上的项。
+    """
+    _library_settings_or_404(lid)
+    return lib_settings.effective(lid)
+
+
+@app.put("/api/libraries/{lid}/settings")
+def api_set_library_settings(lid: str, payload: dict = Body(...)):
+    """写入覆盖项：``{键: 值}``。**值传 ``null`` = 该项恢复继承全局**。
+
+    ``metadata_fetch.fields`` 支持**字段级**恢复（``{"fields": {"tags": null}}``）。
+    键名一律用全局配置的点分路径（``output.layout`` / ``naming.pattern`` …）。
+    """
+    _library_settings_or_404(lid)
+    body = payload if isinstance(payload, dict) else {}
+    if not body:
+        raise HTTPException(400, "没有可更新的覆盖项")
+    try:
+        res = lib_settings.set_overrides(lid, body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    activity_log.log(activity_log.ACTION_PREFS, str(res.get("name") or lid),
+                     activity_log.STATUS_OK,
+                     detail="更新每库设置：" + "、".join(sorted(str(k) for k in body)),
+                     source="api")
+    return res
+
+
+@app.delete("/api/libraries/{lid}/settings")
+def api_clear_library_settings(lid: str, keys: str = ""):
+    """恢复继承：``keys`` 逗号分隔时只清这几项；不给 = **全部**回到全局值。"""
+    _library_settings_or_404(lid)
+    ks = [k.strip() for k in str(keys or "").split(",") if k.strip()] or None
+    try:
+        res = lib_settings.clear_overrides(lid, ks)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    activity_log.log(activity_log.ACTION_PREFS, str(res.get("name") or lid),
+                     activity_log.STATUS_OK,
+                     detail="恢复继承全局：" + ("、".join(ks) if ks else "全部项"),
+                     source="api")
+    return res
+
+
+# ---- 同名冲突（book_id 撞车）修复（第 13 期）----
+# ``book_id`` 由 basename 派生（见 core/library.py），于是「A 库有三体.epub、B 库也有
+# 三体.epub」会撞上同一个 id：进度 / 批注 / 评分只有一份，``library.by_id`` 会抛
+# ``BookIdConflict``，详情页与进度接口都打不开那本书。入库侧新产生的冲突已被
+# `library_rules` 拦掉，但**老库里可能已经躺着**这种数据（拦截是第 13 期才补的），
+# 所以这个「清单 + 一键改名」的修复入口是必需的，不是可选的。
+
+@app.get("/api/library-conflicts")
+def api_library_conflicts():
+    """同名冲突清单：按 ``book_id`` 聚合，只留命中多本的组（跨库的排前面）。
+
+    每组带 ``keep``（保留项）与每个待改名项的 ``suggest``（建议名），
+    前端据此直接渲染表格、无需自己算一套建议名口径。
+    """
+    groups = library.id_conflicts()
+    return {
+        "groups": groups, "total": len(groups),
+        "cross_library": len([g for g in groups if g["cross_library"]]),
+        "libraries": [{"id": l["id"], "name": l["name"]} for l in library.libraries()],
+    }
+
+
+@app.post("/api/library-conflicts/apply")
+def api_library_conflicts_apply(payload: dict = Body(...)):
+    """执行改名修复（**真改磁盘**，逐条独立，一条失败不影响其余）。
+
+    与其它工具同一范式：先看清单（已带建议名）、再应用，应用只认前端回传的
+    ``{old, new, library_id}`` 条目。改名会换 ``book_id``，关联数据一并搬
+    （见 ``fileops.apply_conflict_rename``）。
+    """
+    try:
+        return fileops.apply_conflict_rename((payload or {}).get("items"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 # ---- 迁移（预览 / 计划 / 执行 / 回滚 / 门禁）----
 
 @app.get("/api/library-migrations/preview")
@@ -3075,13 +3172,28 @@ def api_logs_clear():
 # 数据源统一是扫描 OUTPUT_DIR（见 core/library.py）；会改磁盘的动作一律
 # 「先预览、再应用」，删除类走回收目录，全部写活动日志（见 core/fileops.py）。
 # 业务逻辑都在 core/ 里，这里只做参数校验与胶水。
+#
+# 第 13 期起这几个工具支持**库维度**（工具页的「范围：当前库 / 全部书库」）。
+# 约定：``library_id`` 为空 = 全部书库 = **与加参数之前完全一致**（零行为变化）。
+
+
+def _opt_library(library_id) -> str:
+    """工具页「范围」参数：空 = 全部书库；给了就校验存在（不存在 → 404）。
+
+    返回 ``str``；调用 core 时一律写成 ``_opt_library(x) or None`` —— core 侧
+    约定 ``None`` 才是「全部」，空串会被当成某个具体库从而筛出空结果。
+    """
+    lid = str(library_id or "").strip()
+    if lid and not db.get_library(lid):
+        raise HTTPException(404, "书库不存在")
+    return lid
 
 
 @app.get("/api/entities")
-def api_entities(type_: str = Query("author", alias="type")):
+def api_entities(type_: str = Query("author", alias="type"), library_id: str = ""):
     if type_ not in ("author", "series"):
         raise HTTPException(400, "type 只能是 author 或 series")
-    return library.entities(type_)
+    return library.entities(type_, _opt_library(library_id) or None)
 
 
 @app.post("/api/entities/rename/preview")
@@ -3094,6 +3206,7 @@ def api_entity_rename_preview(payload: dict = Body(...)):
             type_,
             str(payload.get("from") or ""),
             str(payload.get("to") or ""),
+            _opt_library(payload.get("library_id")) or None,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -3125,6 +3238,7 @@ def api_entity_merge(payload: dict = Body(...)):
             type_,
             str(payload.get("source") or ""),
             str(payload.get("target") or ""),
+            _opt_library(payload.get("library_id")) or None,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -3134,16 +3248,18 @@ def api_entity_merge(payload: dict = Body(...)):
 def api_rename_preview(payload: dict = Body(...)):
     """按规则生成改名预览（只算不改）。
 
-    pattern / scope 缺省时回退到服务端保存的命名规则（「设置 → 文件命名」维护），
-    这样工具页可以直接预览「已保存的规则」，无需每次重打一遍。
+    pattern / scope 缺省时回退到**该库的生效命名规则**（第 13 期起走每库覆盖，
+    见 ``core/lib_settings.config_for``）：没给 ``library_id`` 时就是全局值，
+    「设置 → 文件命名」保存的规则照旧直接生效，行为与加参数前一致。
     """
-    saved = (config.load_config() or {}).get("naming") or {}
+    lid = _opt_library(payload.get("library_id"))
+    saved = (lib_settings.config_for(lid or None) or {}).get("naming") or {}
     scope = str(payload.get("scope") or saved.get("scope") or "all")
     pattern = str(payload.get("pattern") or saved.get("pattern") or "")
     if not pattern.strip():
         raise HTTPException(400, "命名规则为空：请先在「设置 → 文件命名」保存一条规则")
     try:
-        plan = fileops.plan_pattern_rename(scope, pattern)
+        plan = fileops.plan_pattern_rename(scope, pattern, lid or None)
         # 回显实际使用的规则，便于前端确认「用的是保存值还是本次传入值」
         plan["scope"] = scope
         plan["pattern"] = pattern
@@ -3935,9 +4051,14 @@ def ko_delete_read_progress(request: Request, book_id: str):
 
 
 @app.get("/api/duplicates")
-def api_duplicates(threshold: int = Query(85, ge=50, le=100)):
-    """重复书目。threshold 为书名相似度阈值（%，同 Calibre 的 Similar-title threshold）。"""
-    return library.duplicate_groups(threshold)
+def api_duplicates(threshold: int = Query(85, ge=50, le=100), library_id: str = ""):
+    """重复书目。threshold 为书名相似度阈值（%，同 Calibre 的 Similar-title threshold）。
+
+    ``library_id`` 为空 = 全部书库（与加参数前一致），给定时只在该库内比对。
+    组上的 ``cross_library`` = **跨库重复**（分属不同库）——最该先处理的那批：
+    它们往往同时撞 ``book_id``，会连带出「进度张冠李戴」的冲突（见 /api/library-conflicts）。
+    """
+    return library.duplicate_groups(threshold, _opt_library(library_id) or None)
 
 
 @app.post("/api/duplicates/resolve")
@@ -3952,8 +4073,9 @@ def api_duplicates_resolve(payload: dict = Body(...)):
 
 
 @app.get("/api/missing")
-def api_missing():
-    return library.missing_items()
+def api_missing(library_id: str = ""):
+    """零字节 / 解析失败 / 缺封面的条目。``library_id`` 为空 = 全部书库。"""
+    return library.missing_items(_opt_library(library_id) or None)
 
 
 # ---------------- 兼容旧接口（脚本 / 油猴等）----------------
