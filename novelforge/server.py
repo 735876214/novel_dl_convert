@@ -25,7 +25,7 @@ from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, recommend,
                    fonts, comics, audio, opds, opds_client, komga, koreader, integrations,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
-                   authors as authors_mod, migrate, library_rules, features)
+                   authors as authors_mod, migrate, library_rules, features, series_meta)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -548,8 +548,12 @@ def opds_series(request: Request):
     _opds_guard(request)
     bs = library.books()
     _, s, _ = _opds_groups(bs)
+    # 系列简介一并下发，订阅端在系列列表就能看到（作者 / 标签页不传 → 输出与之前一致）
+    rows = db.all_series_meta()
+    descs = {name: series_meta.effective_light(name, rows.get(name) or {})["description"]
+             for name, _count in s}
     return _opds_xml(opds.group_navigation(_opds_base(request), "按系列", "series", s,
-                                           _opds_updated(bs)), "navigation")
+                                           _opds_updated(bs), descriptions=descs), "navigation")
 
 
 @app.get("/opds/tags")
@@ -582,8 +586,9 @@ def opds_by_series(request: Request, name: str, page: int = Query(1, ge=1)):
         raise HTTPException(404, "没有该系列的书")
     # 系列内按「系列序号」自然序（sort=series 用的是同系列键，正好）
     bs = opds.sort_books(bs, "series", "asc")
+    desc = series_meta.effective_light(target)["description"]
     return _opds_xml(opds.acquisition_feed(_opds_base(request), f"系列：{target}", "series",
-                                           bs, page=page))
+                                           bs, page=page, subtitle=desc))
 
 
 @app.get("/opds/tag/{name}")
@@ -1388,27 +1393,32 @@ def api_delete_annotation(bid: str, aid: int):
 
 
 # ---------------- 系列（浏览 / 系列详情）----------------
-# 系列名来自 EPUB 元数据（见 library.series_list），无独立实体表。
+# 系列名来自 EPUB 元数据（见 library.series_list），**没有独立实体表**；
+# 系列级元数据（简介 / 出版社 / 首发年 / 题材）另存 `series_meta` 表（第 12 期 C3）。
 
 @app.get("/api/series")
 def api_series():
     items = library.series_list()
-    return {
-        "items": [
-            {
-                "name": s["name"],
-                "count": s["count"],
-                "authors": sorted({b["author"] for b in s["books"] if b.get("author")})[:3],
-                "covers": [
-                    {"id": b["id"], "title": b["title"], "c1": b["c1"], "c2": b["c2"],
-                     "has_cover": b.get("has_cover", False)}
-                    for b in s["books"][:4]
-                ],
-            }
-            for s in items
-        ],
-        "total": len(items),
-    }
+    # 一次取全所有系列的元数据行：逐系列查库 = N 次查询，列表页不能这么干
+    rows = db.all_series_meta()
+    out = []
+    for s in items:
+        eff = series_meta.effective_light(s["name"], rows.get(s["name"]) or {})
+        out.append({
+            "name": s["name"],
+            "count": s["count"],
+            "authors": sorted({b["author"] for b in s["books"] if b.get("author")})[:3],
+            "covers": [
+                {"id": b["id"], "title": b["title"], "c1": b["c1"], "c2": b["c2"],
+                 "has_cover": b.get("has_cover", False)}
+                for b in s["books"][:4]
+            ],
+            # 系列简介（无值则空串，前端**有值才渲染**，不占位）
+            "description": eff["description"],
+            "source": eff["source"],
+            "score": eff["score"],
+        })
+    return {"items": out, "total": len(out)}
 
 
 @app.get("/api/series/{name}")
@@ -1420,6 +1430,9 @@ def api_series_detail(name: str):
 
     组内顺序仍是扫描顺序：序号排序在前端做（``SeriesDetailView``，
     因为倒序切换是纯展示逻辑，不必来回请求）。
+
+    第 12 期补 ``meta`` / ``meta_state``：系列级元数据的生效值与逐字段明细，
+    供系列页展示简介与编辑器渲染「已本地修改 / 恢复在线」。
     """
     bs = library.series_books(name)
     if not bs:
@@ -1439,7 +1452,105 @@ def api_series_detail(name: str):
              "count": len(buckets[t]), "books": buckets[t]}
             for t in order
         ],
+        # 单系列查询：这里做**完整**分层（含成员书聚合），成本可接受
+        "meta": series_meta.effective(name),
+        "meta_state": series_meta.state(name),
     }
+
+
+# ---- 系列级元数据（第 12 期 C3 SYNOPSIS）----
+# ⚠️ 只存本项目的 SQLite，**绝不写回 EPUB**：OPF 没有「系列简介」这个字段
+#    （唯一近似 dc:description 属于**单册**，写进去就是覆盖某册自己的简介）。
+#    生效点是三处注入：本组接口 + komga_api.series_dto + OPDS 系列入口。
+
+@app.get("/api/series/{name}/meta")
+def api_series_meta(name: str):
+    """系列元数据：生效值 + 逐字段明细（编辑器渲染「已本地修改 / 恢复在线」用）。"""
+    if not library.series_books(name):
+        raise HTTPException(404, "系列不存在")
+    return {
+        "ok": True,
+        "meta": series_meta.effective(name),
+        "state": series_meta.state(name),
+        "fields": list(series_meta.FIELDS),
+        "labels": series_meta.LABELS,
+    }
+
+
+@app.post("/api/series/{name}/meta")
+def api_set_series_meta(name: str, payload: dict = Body(...)):
+    """设置 / 清除系列的本地覆盖（**空串 = 撤销该字段的覆盖**）。只写本项目 DB。
+
+    与作者侧同一语义：用户改过的不会被再次抓取冲掉。
+    """
+    if not library.series_books(name):
+        raise HTTPException(404, "系列不存在")
+    p = payload or {}
+    unknown = [k for k in p if k not in series_meta.FIELDS]
+    if unknown:
+        raise HTTPException(400, f"不支持的字段：{'、'.join(sorted(unknown))}")
+    if not p:
+        raise HTTPException(400, "没有可更新的字段")
+    try:
+        meta = series_meta.set_local(name, **p)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    activity_log.log(activity_log.ACTION_METADATA, name, activity_log.STATUS_OK,
+                     detail="编辑系列元数据：" + "、".join(sorted(p)), source="api")
+    return {"ok": True, "meta": meta, "state": series_meta.state(name)}
+
+
+@app.post("/api/series/{name}/fetch")
+def api_fetch_series_meta(name: str):
+    """抓取单个系列的在线元数据。**失败不抛** —— 抓不到就如实回「未找到」。"""
+    if not library.series_books(name):
+        raise HTTPException(404, "系列不存在")
+    res = series_meta.fetch_one(name)
+    return {"ok": bool(res.get("ok")), "result": res, **series_meta.effective(name)}
+
+
+@app.post("/api/series/fetch-all")
+def api_fetch_all_series_meta(payload: dict = Body(None)):
+    """批量抓取系列元数据：一次只处理一批，回 ``remaining`` 让前端循环显示进度。
+
+    全库一次跑完必然超时（见 ``/api/metadata/plan`` 的既有教训），故分批；
+    单个系列失败不中断其余，统计在 ``ok`` / ``failed`` 里。
+    """
+    p = payload or {}
+    names = p.get("names")
+    if names is not None and not isinstance(names, list):
+        raise HTTPException(400, "names 必须是数组")
+    limit = p.get("limit")
+    try:
+        cap = int(limit) if limit else series_meta.FETCH_BATCH
+    except (TypeError, ValueError):
+        raise HTTPException(400, "limit 必须是整数")
+    return series_meta.fetch_all(names=names, limit=cap)
+
+
+@app.get("/api/series/{name}/renumber/preview")
+def api_series_renumber_preview(name: str):
+    """重排册号**预览**（只算不改）。只改 OPF 里的 ``calibre:series_index``、不动文件名。"""
+    try:
+        return series_meta.renumber_plan(name)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/series/{name}/renumber/apply")
+def api_series_renumber_apply(name: str, payload: dict = Body(...)):
+    """执行重排：**真改 EPUB 内的 calibre:series_index**。只认前端回传的具体条目。
+
+    先预览、再应用（工具页既有纪律）；不动文件名 → ``book_id`` 不变 →
+    阅读进度 / 批注 / 评分 / 收藏不断链。
+    """
+    items = (payload or {}).get("items")
+    if not isinstance(items, list) or not items:
+        raise HTTPException(400, "items 必须是非空数组")
+    try:
+        return series_meta.renumber_apply(name, items)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 # ---------------- 作者（浏览 / 作者详情）----------------
@@ -3638,7 +3749,10 @@ def ko_libraries(request: Request):
 # ---- 系列（latest 必须先于 {series_id}）----
 
 def _ko_series_page(page: int, size: int, sort: str) -> dict:
-    items = [komga_api.series_dto(name, bs) for name, bs in komga_api.grouped().items()]
+    # 列表端点遍历**全部**系列 → 走轻量分层（不聚合），一次取全元数据行
+    rows = db.all_series_meta()
+    items = [komga_api.series_dto(name, bs, series_meta.effective_light(name, rows.get(name) or {}))
+             for name, bs in komga_api.grouped().items()]
     return komga_api.paginate(_ko_sorted(items, sort, "name"), page, size)
 
 
@@ -3659,7 +3773,9 @@ def ko_series_list(request: Request, payload: dict = Body(None),
 @app.get("/api/v1/series/latest")
 def ko_series_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE):
     _ko_guard(request)
-    items = [komga_api.series_dto(n, bs) for n, bs in komga_api.grouped().items()]
+    rows = db.all_series_meta()
+    items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}))
+             for n, bs in komga_api.grouped().items()]
     return komga_api.paginate(_ko_sorted(items, "lastModifiedDate,desc"), page, size)
 
 
@@ -3670,7 +3786,8 @@ def ko_series_one(request: Request, series_id: str):
     if not found:
         _ko_404("系列不存在")
     name, items = found
-    return komga_api.series_dto(name, items)
+    # 单系列查询：完整分层（含成员书聚合），成本可接受
+    return komga_api.series_dto(name, items, series_meta.effective(name))
 
 
 @app.get("/api/v1/series/{series_id}/books")
