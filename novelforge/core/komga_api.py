@@ -50,11 +50,13 @@ _SESSION_SECRET = (os.getenv("AUTH_SECRET") or "novelforge-komga").encode()
 #: 格式 → Komga 客户端要的媒体类型
 MEDIA_TYPES = {
     "EPUB": "application/epub+zip", "PDF": "application/pdf",
-    "CBZ": "application/vnd.comicbook+zip", "MOBI": "application/x-mobipocket-ebook",
+    "CBZ": "application/vnd.comicbook+zip", "CBR": "application/vnd.comicbook-rar",
+    "MOBI": "application/x-mobipocket-ebook",
     "AZW3": "application/x-mobipocket-ebook", "TXT": "text/plain",
 }
-#: Komga 用 mediaProfile 决定阅读器：漫画类走 DIVINA，EPUB 走 EPUB，PDF 走 PDF
-_PROFILES = {"EPUB": "EPUB", "PDF": "PDF", "CBZ": "DIVINA"}
+#: Komga 用 mediaProfile 决定阅读器：漫画类走 DIVINA，EPUB 走 EPUB，PDF 走 PDF。
+#: CBR 与 CBZ 同为漫画容器（第 15 期补上；此前缺它，CBR 会退化成 octet-stream）。
+_PROFILES = {"EPUB": "EPUB", "PDF": "PDF", "CBZ": "DIVINA", "CBR": "DIVINA"}
 
 
 class KomgaAuthError(Exception):
@@ -188,10 +190,18 @@ def series_id(name: str) -> str:
     return "s" + hashlib.sha1(norm_key(name).encode("utf-8")).hexdigest()[:15]
 
 
-def grouped() -> dict:
-    """``{系列名: [书…]}``，系列内按卷号/书名排序。"""
+def grouped(library_id=None) -> dict:
+    """``{系列名: [书…]}``，系列内按卷号/书名排序。
+
+    ``library_id`` 给定时只统计**该库**的书（客户端点进某个库就该只看到它的系列）；
+    默认 ``None`` = 全库，与加这个参数之前的行为一致。
+
+    ⚠️ 系列仍**按名字聚合**：同名系列的书分散在多库时，过滤后只出现在第一本所在库
+    （`series_dto` 的 libraryId 取成员书第一本，见 :func:`book_library_id`）。
+    这是已知取舍 —— 系列 id 由名字派生，客户端已用它存进度与收藏，不能为了分库而改。
+    """
     out: dict = {}
-    for b in library.books():
+    for b in library.books(library_id=library_id):
         out.setdefault(series_name_of(b), []).append(b)
     for name, items in out.items():
         def key(b, _n=name):
@@ -203,9 +213,13 @@ def grouped() -> dict:
     return out
 
 
-def find_series(name: str):
-    """按 id 或名字找系列 → ``(名字, [书…])``；找不到返回 ``None``。"""
-    for sname, items in grouped().items():
+def find_series(name: str, library_id=None):
+    """按 id 或名字找系列 → ``(名字, [书…])``；找不到返回 ``None``。
+
+    ``library_id`` 默认 ``None`` = 全库 → 三个单系列端点（详情 / books / thumbnail）
+    的行为不变（它们本来就没有库上下文）。
+    """
+    for sname, items in grouped(library_id).items():
         if sname == name or series_id(sname) == name:
             return (sname, items)
     return None
@@ -425,6 +439,31 @@ def apply_read_progress(b: dict, payload: dict = None) -> tuple:
     if not locator:
         locator = int((db.get_progress(b["id"]) or {}).get("locator") or 0)
     return (locator, percent)
+
+
+def mark_series_read(items: list, completed: bool = True) -> int:
+    """系列级已读标记（Komga 的 ``POST`` / ``DELETE /api/v1/series/{id}/read-progress``）。
+
+    **已读时保留原 locator、只把 percent 顶到 100** —— 与书级 ``completed: true``
+    同一语义（见 :func:`apply_read_progress`）：「标记已读」不该把读者的位置清零，
+    否则它就等于「回到第一页」。未读则按既有 DELETE 路由的做法归零。
+
+    返回写入条数。`series_dto` 的 booksReadCount / booksUnreadCount 是**每次实时算**的
+    （读完阈值 99.5，与 `read_progress_dto`、`_ko_read_filter` 三处同一口径），
+    所以写完立即生效，不需要给 SeriesDto 加字段。
+    """
+    n = 0
+    for b in items or ():
+        bid = str(b.get("id") or "")
+        if not bid:
+            continue
+        if completed:
+            loc = int((db.get_progress(bid) or {}).get("locator") or 0)
+            db.set_progress(bid, loc, 100.0)
+        else:
+            db.set_progress(bid, 0, 0.0)
+        n += 1
+    return n
 
 
 # ---------------- 页面流（客户端阅读的核心）----------------
