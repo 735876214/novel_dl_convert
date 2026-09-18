@@ -30,7 +30,6 @@ FEATURE_LABELS = {
     "authors": "作者元数据",
     "convert": "本地转换（TXT → EPUB）",
     "sources": "书源搜索与下载",
-    "opds_sources": "OPDS 订阅下载",
     "komga": "Komga 布局整理",
     "rename": "批量重命名",
     "duplicates": "重复书籍清理",
@@ -48,15 +47,14 @@ _COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"
 #:   · 元数据抓取只写 EPUB 的 OPF → 仅 ebook（漫画 / 音频暂不支持，见 metafetch.plan 的跳过说明）
 #:   · 本地转换产出 EPUB → 仅 ebook
 #:   · 书源下载产出 EPUB → 仅 ebook
-#:   · OPDS 订阅可下 EPUB / CBZ → ebook + comic
 #:   · Komga 布局整理针对系列化目录（电子书 / 漫画）→ ebook + comic
 FEATURES_BY_TYPE = {
     "ebook": _COMMON | {"ebook", "pdf", "annotations", "metadata", "authors",
-                        "convert", "sources", "opds_sources", "komga"},
-    "comic": _COMMON | {"comic", "opds_sources", "komga"},
+                        "convert", "sources", "komga"},
+    "comic": _COMMON | {"comic", "komga"},
     "audiobook": _COMMON | {"audio"},
     "mixed": _COMMON | {"ebook", "pdf", "comic", "audio", "annotations", "metadata",
-                        "authors", "convert", "sources", "opds_sources", "komga"},
+                        "authors", "convert", "sources", "komga"},
 }
 
 #: 全部能力的并集（「全部书库」与未知类型都用它）
