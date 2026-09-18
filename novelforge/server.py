@@ -25,7 +25,7 @@ from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, recommend,
                    fonts, comics, audio, opds, opds_client, komga, koreader, integrations,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
-                   authors as authors_mod)
+                   authors as authors_mod, migrate, library_rules, features)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -370,7 +370,13 @@ async def _run_download(tid: str, item: dict, actor: str = "系统"):
     try:
         mgr = _manager()
         opts = {"force": True, "merge": True, "cfg": mgr.cfg}
-        res = await mgr.download_to(item, OUTPUT_DIR, INPUT_DIR, opts)
+        # 多书库：书源下载走产出 EPUB，按「来源子目录名 → 格式 → 关键词」归库，不中则落默认库
+        out_dir = library_rules.target_root(
+            name=f"{item.get('title') or 'book'}.epub",
+            meta={"title": item.get("title"), "author": item.get("author")},
+            default=OUTPUT_DIR,
+        )
+        res = await mgr.download_to(item, out_dir, INPUT_DIR, opts)
         notice = opts.get("_notice", "")
         name = pathlib.Path(res).name
         db.task_update(tid, status="done", progress=100.0,
@@ -1407,10 +1413,33 @@ def api_series():
 
 @app.get("/api/series/{name}")
 def api_series_detail(name: str):
+    """系列详情。**按媒体分组**（第 10 期 C2）。
+
+    同一系列常常横跨多种媒体（先有小说 EPUB，后来又收了漫画版 / 有声版），
+    混在一个网格里会让「第 1 册」失去意义 —— 序号是**每种媒体各自**的阅读顺序。
+
+    组内顺序仍是扫描顺序：序号排序在前端做（``SeriesDetailView``，
+    因为倒序切换是纯展示逻辑，不必来回请求）。
+    """
     bs = library.series_books(name)
     if not bs:
         raise HTTPException(404, "系列不存在")
-    return {"name": name, "count": len(bs), "books": bs}
+    buckets: dict = {}
+    order: list = []
+    for b in bs:
+        t = migrate.target_type_of(b) or "other"
+        if t not in buckets:
+            buckets[t] = []
+            order.append(t)
+        buckets[t].append(b)
+    return {
+        "name": name, "count": len(bs), "books": bs,
+        "groups": [
+            {"media": t, "label": migrate.TYPE_LABELS.get(t, "其它"),
+             "count": len(buckets[t]), "books": buckets[t]}
+            for t in order
+        ],
+    }
 
 
 # ---------------- 作者（浏览 / 作者详情）----------------
@@ -1547,11 +1576,345 @@ def api_all_annotations():
     return {"items": out, "total": len(out)}
 
 
-# ---------------- 库（真实分组：格式 / 待修复 / 无封面）----------------
+# ---------------- 书库（第 10 期 D8）----------------
+# 三个概念各有归属，别再混用：
+#   /api/libraries          → **库实体**（id / 名称 / 类型 / 归属模式 / 根目录 / 书数）
+#   /api/library-facets     → **格式分面**（原 /api/libraries 的语义：fmt: / issues: / nocover:）
+#   /api/library-migrations → 现有书「按格式迁移」的预览 / 计划 / 执行 / 回滚
+
+_LIB_TYPE_LABELS = migrate.TYPE_LABELS
+_MODE_LABELS = {"inplace": "就地引用", "import": "独立存储"}
+
+
+def _library_root_allowed(raw) -> pathlib.Path:
+    """库根必须落在白名单父目录内。
+
+    放任任意路径 = 放任「扫描 / 改名 / 回收」作用到系统目录：``safe_path`` 的边界是
+    **库根**，库根一放开边界就等于没有。所以这里与 ``safe_path`` 同一条思路 ——
+    只认已知根的子路径。
+    """
+    p = pathlib.Path(str(raw or "").strip()).expanduser()
+    if not p.is_absolute():
+        raise HTTPException(400, "库根必须是绝对路径")
+    rp = p.resolve()
+    for base in (config.LIBRARY_SOURCE_DIR, config.OUTPUT_DIR, config.DATA_DIR):
+        try:
+            br = pathlib.Path(base).resolve()
+        except Exception:
+            continue
+        if rp == br or br in rp.parents:
+            return rp
+    raise HTTPException(400, "库根必须位于「书库来源目录 / 导出目录 / 数据目录」之内"
+                             "（否则可能误扫、甚至误移系统文件）")
+
+
+def _writable_dir(p: pathlib.Path) -> bool:
+    """真实试写一次 —— 只看权限位会漏掉只读挂载等情形。"""
+    try:
+        probe = p / ".nf-write-probe"
+        probe.write_text("", encoding="utf-8")
+        probe.unlink()
+        return True
+    except Exception:
+        return False
+
+
+def _library_dto(lib: dict, counts: dict = None) -> dict:
+    root = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+    t = str(lib.get("type") or "mixed")
+    m = str(lib.get("mode") or "inplace")
+    return {
+        "id": lib.get("id"), "name": lib.get("name") or "", "type": t,
+        "type_label": _LIB_TYPE_LABELS.get(t, "混合库"),
+        "mode": m, "mode_label": _MODE_LABELS.get(m, m),
+        "root_path": str(root),
+        # 只存**相对**来源子目录名（挂载点换了绝对路径会失效，见 db.libraries 的列注释）
+        "source_subdir": lib.get("source_subdir") or "",
+        "rules": lib.get("rules") or "",
+        "sort_order": int(lib.get("sort_order") or 0),
+        "book_count": int((counts or {}).get(str(lib.get("id")), 0)),
+        "exists": root.is_dir(),
+        "writable": _writable_dir(root) if root.is_dir() else False,
+        "is_default": str(lib.get("id")) == library.DEFAULT_LIBRARY_ID,
+        "last_scan_at": float(lib.get("last_scan_at") or 0),
+        "last_scan_note": lib.get("last_scan_note") or "",
+    }
+
+
+def _book_counts() -> dict:
+    """``{library_id: 书数}``（一次扫描全库，避免逐库重扫）。"""
+    out: dict = {}
+    for b in library.books():
+        k = str(b.get("library_id") or library.DEFAULT_LIBRARY_ID)
+        out[k] = out.get(k, 0) + 1
+    return out
+
+
+def _new_library_id(seed: str) -> str:
+    """库 id：ASCII 名做 slug，否则用短哈希（URL 安全、单段）。"""
+    s = re.sub(r"[^a-z0-9]+", "-", str(seed or "").lower()).strip("-")
+    if s and 2 <= len(s) <= 32:
+        return s
+    return "lib-" + hashlib.sha1(str(seed or "").encode("utf-8")).hexdigest()[:8]
+
+
+def _norm_rules(raw) -> str:
+    """库的 ``rules`` 统一存 JSON 字符串（关键词 / 来源子目录）。
+
+    前端可能传对象、数组，或一句「科幻, 太空」—— 一律归一，别让三种形状在库里并存。
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return ""
+        if text.startswith("{"):
+            try:
+                json.loads(text)
+                return text
+            except Exception:
+                pass
+        return json.dumps(
+            {"keywords": [p.strip() for p in re.split(r"[,、;]", text) if p.strip()]},
+            ensure_ascii=False,
+        )
+    if isinstance(raw, dict):
+        return json.dumps(raw, ensure_ascii=False)
+    if isinstance(raw, list):
+        return json.dumps({"keywords": [str(x) for x in raw]}, ensure_ascii=False)
+    return ""
+
 
 @app.get("/api/libraries")
 def api_libraries():
+    """**库实体**列表（含书数 / 是否存在 / 可写）。格式分面见 ``/api/library-facets``。"""
+    counts = _book_counts()
+    items = [_library_dto(l, counts) for l in library.libraries()]
+    items.sort(key=lambda x: (x["sort_order"], x["name"]))
+    return {
+        "items": items, "total": len(items), "source_dir": str(config.LIBRARY_SOURCE_DIR),
+        "types": [{"value": t, "label": _LIB_TYPE_LABELS.get(t, t)} for t in db.LIBRARY_TYPES],
+        "modes": [{"value": m, "label": _MODE_LABELS[m]} for m in db.LIBRARY_MODES],
+    }
+
+
+@app.get("/api/features")
+def api_features(library_id: str = ""):
+    """当前库（或全部书库）的**能力清单** —— 前端据此裁剪导航 / 工具标签 / 设置 / 仪表盘。
+
+    不传 ``library_id``（= 「全部书库」）时返回全部能力，**不做裁剪**。
+    """
+    lib = db.get_library(library_id) if library_id else None
+    ltype = str((lib or {}).get("type") or "") if library_id else ""
+    return {
+        "library_id": library_id,
+        "library_type": ltype,
+        "features": features.features_for(ltype),
+        "matrix": features.matrix(),
+    }
+
+
+@app.get("/api/library-facets")
+def api_library_facets():
+    """按格式 / 待修复 / 无封面的**分面**（原 ``/api/libraries`` 的语义，第 10 期改址）。
+
+    侧栏不再展示它（ShelfView 本就有格式筛选），保留给需要的页面与既有调用方。
+    """
     return {"items": library.library_groups()}
+
+
+@app.get("/api/libraries/source-dirs")
+def api_library_source_dirs():
+    """``LIBRARY_SOURCE_DIR`` 下的候选来源子目录（新建向导给默认值用）。"""
+    base = config.LIBRARY_SOURCE_DIR
+    dirs = []
+    try:
+        for p in sorted(base.iterdir()):
+            if not p.is_dir() or p.name.startswith("."):
+                continue
+            n = 0
+            try:
+                for _c in p.iterdir():
+                    n += 1
+                    if n >= 500:        # 只报「有多少」，不为一个巨大目录白跑一遍
+                        break
+            except Exception:
+                pass
+            dirs.append({"name": p.name, "path": str(p), "entries": n})
+    except Exception:
+        pass
+    return {"root": str(base), "exists": base.is_dir(), "dirs": dirs}
+
+
+@app.post("/api/libraries")
+def api_create_library(payload: dict = Body(...)):
+    """新建书库。**只登记，不动文件**（文件搬迁归迁移流程管）。"""
+    p = payload or {}
+    name = str(p.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "库名不能为空")
+    ltype = str(p.get("type") or "mixed")
+    if ltype not in db.LIBRARY_TYPES:
+        raise HTTPException(400, "库类型非法")
+    mode = str(p.get("mode") or "inplace")
+    if mode not in db.LIBRARY_MODES:
+        raise HTTPException(400, "归属模式非法")
+    root = _library_root_allowed(p.get("root_path"))
+    lid = _new_library_id(p.get("id") or name)
+    if db.get_library(lid):
+        raise HTTPException(400, f"库标识已存在：{lid}")
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        raise HTTPException(400, f"无法创建库根目录：{e}")
+    try:
+        sort_order = int(p.get("sort_order") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "sort_order 必须是整数")
+    lib = db.create_library(lid, name, ltype, mode, str(root),
+                            source_subdir=str(p.get("source_subdir") or "").strip(),
+                            rules=_norm_rules(p.get("rules")), sort_order=sort_order)
+    library.invalidate()
+    activity_log.log(activity_log.ACTION_LAYOUT, name, activity_log.STATUS_OK,
+                     detail=f"新建书库：{ltype} / {mode} / {root}", source="api")
+    return {"ok": True, "library": _library_dto(lib or {}, {})}
+
+
+@app.patch("/api/libraries/{lid}")
+def api_update_library(lid: str, payload: dict = Body(...)):
+    """改库属性。改 ``root_path`` **只改登记，不搬文件**（搬用迁移流程）。"""
+    if not db.get_library(lid):
+        raise HTTPException(404, "书库不存在")
+    p = payload or {}
+    fields: dict = {}
+    if "name" in p:
+        nm = str(p.get("name") or "").strip()
+        if not nm:
+            raise HTTPException(400, "库名不能为空")
+        fields["name"] = nm
+    if "type" in p:
+        if str(p["type"]) not in db.LIBRARY_TYPES:
+            raise HTTPException(400, "库类型非法")
+        fields["type"] = str(p["type"])
+    if "mode" in p:
+        if str(p["mode"]) not in db.LIBRARY_MODES:
+            raise HTTPException(400, "归属模式非法")
+        fields["mode"] = str(p["mode"])
+    if "root_path" in p:
+        fields["root_path"] = str(_library_root_allowed(p.get("root_path")))
+    if "source_subdir" in p:
+        fields["source_subdir"] = str(p.get("source_subdir") or "").strip()
+    if "rules" in p:
+        fields["rules"] = _norm_rules(p.get("rules"))
+    if "sort_order" in p:
+        try:
+            fields["sort_order"] = int(p.get("sort_order") or 0)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "sort_order 必须是整数")
+    if not fields:
+        raise HTTPException(400, "没有可更新的字段")
+    lib = db.update_library(lid, **fields)
+    library.invalidate()
+    activity_log.log(activity_log.ACTION_LAYOUT, str(p.get("name") or lid),
+                     activity_log.STATUS_OK,
+                     detail="更新书库：" + "、".join(sorted(fields)), source="api")
+    return {"ok": True, "library": _library_dto(lib or {}, _book_counts())}
+
+
+@app.delete("/api/libraries/{lid}")
+def api_delete_library(lid: str, force: bool = False):
+    """**只移除登记，绝不删文件**。库里还有书时默认拒绝（先迁移或清空）。"""
+    if str(lid) == library.DEFAULT_LIBRARY_ID:
+        raise HTTPException(400, "默认书库不可删除（它承接未归类的书）")
+    if not db.get_library(lid):
+        raise HTTPException(404, "书库不存在")
+    n = _book_counts().get(str(lid), 0)
+    if n and not force:
+        raise HTTPException(400, f"该库还有 {n} 本书：请先迁移走，"
+                                 f"或加 force=1 仅移除登记（文件留在原地）")
+    db.delete_library(lid)
+    library.invalidate()
+    activity_log.log(activity_log.ACTION_LAYOUT, str(lid), activity_log.STATUS_OK,
+                     detail=f"移除书库登记（文件保留在原地）· 当时 {n} 本", source="api")
+    return {"ok": True, "removed": str(lid), "books_left_on_disk": n}
+
+
+@app.post("/api/libraries/{lid}/scan")
+def api_scan_library(lid: str):
+    """重新扫描单个库（失效该库缓存 + 记一次扫描时间）。"""
+    lib = db.get_library(lid)
+    if not lib:
+        raise HTTPException(404, "书库不存在")
+    library.invalidate(lid)
+    bs = library.books(lid, force=True)
+    db.set_library_scan(lid, note=f"手动扫描：{len(bs)} 本")
+    return {"ok": True, "id": lid, "count": len(bs)}
+
+
+# ---- 迁移（预览 / 计划 / 执行 / 回滚 / 门禁）----
+
+@app.get("/api/library-migrations/preview")
+def api_mig_preview(targets: str = ""):
+    """待迁移概览。``targets`` 传 JSON（如 ``{"comic": "comic-2"}``）用于指定同类多库时的目标。"""
+    t: dict = {}
+    if targets.strip():
+        try:
+            parsed = json.loads(targets)
+            if not isinstance(parsed, dict):
+                raise ValueError
+            t = parsed
+        except Exception:
+            raise HTTPException(400, "targets 必须是 JSON 对象")
+    return migrate.preview(t)
+
+
+@app.post("/api/library-migrations/plan")
+def api_mig_plan(payload: dict = Body(None)):
+    """生成/复用迁移批次（**只写台账，不搬文件**）。"""
+    targets = (payload or {}).get("targets")
+    return migrate.plan(targets if isinstance(targets, dict) else None)
+
+
+@app.post("/api/library-migrations/apply")
+def api_mig_apply(payload: dict = Body(...)):
+    """执行迁移批次（**真移文件**；逐条独立，一条失败不影响其余）。"""
+    bid = str((payload or {}).get("batch_id") or "").strip()
+    if not bid:
+        raise HTTPException(400, "缺少 batch_id")
+    try:
+        return migrate.execute(bid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/library-migrations/rollback")
+def api_mig_rollback(payload: dict = Body(None)):
+    """一键回滚（默认最近一次迁移批次）。"""
+    bid = str((payload or {}).get("batch_id") or "").strip() or migrate.last_batch("move")
+    if not bid:
+        raise HTTPException(400, "没有可回滚的批次")
+    try:
+        return migrate.rollback(bid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/library-migrations/batches")
+def api_mig_batches():
+    return {"items": migrate.pending_batches(), "gate": migrate.gate_state()}
+
+
+@app.post("/api/library-migrations/dismiss")
+def api_mig_dismiss(payload: dict = Body(None)):
+    """「暂不迁移」：记下来，之后不再每次启动阻塞提示。"""
+    return {"ok": True, "gate": migrate.dismiss(str((payload or {}).get("note") or ""))}
+
+
+@app.post("/api/library-migrations/reset-gate")
+def api_mig_reset_gate():
+    """让启动提示重新出现（管理页 / 设置页用）。"""
+    return {"ok": True, "gate": migrate.reset_gate()}
 
 
 # ---------------- 收藏夹（用户自建，持久化于 SQLite）----------------
@@ -1958,6 +2321,8 @@ EDITABLE: dict = {
     },
     # Komga 兼容服务端：开关 + Basic 用户名 + 可选 API Key
     "komga": {"enabled", "username", "api_key"},
+    # 多书库：跨库策略开关（库实体本身存 SQLite，不走 config）
+    "libraries": {"auto_migrate"},
 }
 
 # api_key 掩码：前端回显该值即表示「不修改」
@@ -2084,6 +2449,10 @@ def api_get_config():
                 "username": str((cfg.get("komga") or {}).get("username") or "admin"),
                 "api_key": _KEY_MASK if str((cfg.get("komga") or {}).get("api_key") or "").strip() else "",
                 "has_api_key": bool(str((cfg.get("komga") or {}).get("api_key") or "").strip()),
+            },
+            # 多书库：跨库策略开关（库实体本身存 SQLite，走 /api/libraries）
+            "libraries": {
+                "auto_migrate": bool((cfg.get("libraries") or {}).get("auto_migrate")),
             },
         },
         "overrides": config.load_overrides(),
@@ -2867,7 +3236,10 @@ def api_opds_source_download(sid: int, payload: dict = Body(...)):
         series, index = komga.infer(str(p.get("series") or ""))
     layout = str((config.load_config().get("output") or {}).get("layout") or "flat").strip().lower()
     rel = komga.relpath_for(stem, ext.lstrip("."), series, index, layout)
-    target = config.OUTPUT_DIR / rel
+    # 多书库：按归库规则选根（来源子目录名 → 格式 → 关键词），都不中则落默认库
+    target = library_rules.target_root(
+        name=rel, meta={"title": stem, "series": series}, default=config.OUTPUT_DIR,
+    ) / rel
     if target.exists():
         raise HTTPException(400, f"已存在同名文件：{rel}")
     try:
@@ -3258,8 +3630,12 @@ def _ko_read_filter(payload: dict):
             continue
         if "libraryId" in cl:
             want = ((cl["libraryId"] or {}).get("in") or [])
-            if want and komga_api.LIBRARY_ID not in want:
-                tests.append(lambda b: False)
+            if want:
+                wset = {str(x) for x in want}
+                # 老客户端可能仍发兜底常量；此时把默认库也算命中（否则它看到的永远是空列表）
+                if komga_api.LIBRARY_ID in wset:
+                    wset.add(library.DEFAULT_LIBRARY_ID)
+                tests.append(lambda b, _w=wset: komga_api.book_library_id(b) in _w)
         if "readStatus" in cl:
             want = [str(s).upper() for s in ((cl["readStatus"] or {}).get("in") or [])]
             if want:
@@ -3572,9 +3948,12 @@ async def convert(file: UploadFile = File(...), traditionalize: bool = Form(Fals
     with open(src, "wb") as f:
         f.write(data)
     opts = {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()}
+    # 多书库：上传件按归库规则决定落点，不中则落默认库（单库时行为与改造前一致）
+    out_dir = library_rules.target_root(src=src, name=_name, meta=opts.get("meta"),
+                                        base_dir=INPUT_DIR, default=OUTPUT_DIR)
     try:
         # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环（其它请求无响应）
-        action, result = await asyncio.to_thread(pipeline.dispatch, src, OUTPUT_DIR, opts)
+        action, result = await asyncio.to_thread(pipeline.dispatch, src, out_dir, opts)
     except Exception as e:
         activity_log.log_convert_fail(file.filename, f"{type(e).__name__}: {e}",
                                       size=len(data), source="upload")
@@ -3589,9 +3968,12 @@ async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)
     if not src.exists() or not src.is_file():
         raise HTTPException(404, "文件不存在")
     opts = {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()}
+    # 多书库：按归库规则决定落点（来源子目录名 → 格式 → 关键词），不中则落默认库
+    out_dir = library_rules.target_root(src=src, name=src.name, meta=opts.get("meta"),
+                                        base_dir=INPUT_DIR, default=OUTPUT_DIR)
     try:
         # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环
-        action, result = await asyncio.to_thread(pipeline.dispatch, src, OUTPUT_DIR, opts)
+        action, result = await asyncio.to_thread(pipeline.dispatch, src, out_dir, opts)
     except Exception as e:
         activity_log.log_convert_fail(src.name, f"{type(e).__name__}: {e}", source="api")
         raise
