@@ -351,7 +351,7 @@ def test_提交不支持的字段被拒(client, auth_headers, default_root):
 
 def test_能力清单按库类型返回(client, auth_headers):
     everything = client.get("/api/features", headers=auth_headers).json()
-    assert len(everything["features"]) == 17          # 「全部书库」= 不裁剪
+    assert len(everything["features"]) == 18          # 「全部书库」= 不裁剪（含第 14 期的 opds）
 
     comic = _create_library(client, auth_headers, "漫画库", "comic",
                             pathlib.Path(config.LIBRARY_SOURCE_DIR) / "comics")

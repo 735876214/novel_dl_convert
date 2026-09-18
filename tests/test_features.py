@@ -7,7 +7,7 @@
 from novelforge.core import features, library
 
 #: 与格式无关的通用能力（三类库都有）
-COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output"}
+COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"}
 
 
 def test_漫画库能力集():
