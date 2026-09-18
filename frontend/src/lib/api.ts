@@ -598,6 +598,10 @@ export interface SeriesItem {
   count: number
   authors: string[]
   covers: SeriesCover[]
+  /** 系列简介（第 12 期 C3）：无值/未抓到时为空串，**有值才渲染** */
+  description?: string
+  source?: string
+  score?: number
 }
 
 /** 系列内**按媒体**分组（第 10 期 C2）：同一系列可能横跨电子书 / 漫画 / 有声书 */
@@ -609,12 +613,65 @@ export interface SeriesGroup {
   books: BookCard[]
 }
 
+/**
+ * 系列级元数据生效值（第 12 期 C3）。
+ *
+ * ⚠️ 数据只存本项目服务端，**不写回 EPUB**（OPF 没有「系列简介」字段）；
+ *    `owned_count` 与 `declared_count` 是两个概念，界面上不要混成一个「册数」。
+ */
+export interface SeriesMeta {
+  name: string
+  description: string
+  publisher: string
+  first_year: string
+  tags: string[]
+  /** 库里**实际拥有**的册数（本地聚合，必为真） */
+  owned_count: number
+  /** 外部**声明**的系列总册数（0 = 未知） */
+  declared_count: number
+  overridden: Record<string, boolean>
+  /** 在线来源（openlibrary / googlebooks / ''）与一致性打分 —— 界面据此如实展示置信度 */
+  source: string
+  score: number
+  fetched_at: number
+}
+
+/** 逐字段明细（编辑器渲染「已本地修改」徽标与「恢复在线」用） */
+export interface SeriesMetaFieldState {
+  value: string | string[]
+  online: string | string[]
+  aggregated: string | string[]
+  local: string | string[]
+  overridden: boolean
+}
+
+export interface SeriesMetaState {
+  description: SeriesMetaFieldState
+  publisher: SeriesMetaFieldState
+  first_year: SeriesMetaFieldState
+  tags: SeriesMetaFieldState
+}
+
+/** 重排预览的一条：**只改 OPF 里的序号、不动文件名**（book_id 不变 → 进度不断链） */
+export interface SeriesRenumberItem {
+  name: string
+  book_id: string
+  title: string
+  format: string
+  old_index: string
+  new_index: string
+  changed: boolean
+}
+
 export interface SeriesDetail {
   name: string
   count: number
   books: BookCard[]
   /** 按媒体分组（组内保持扫描顺序；只有多于一组时前端才显示组标题） */
   groups?: SeriesGroup[]
+  /** 系列级元数据（单系列查询走完整分层，含成员书聚合） */
+  meta?: SeriesMeta
+  meta_state?: SeriesMetaState
 }
 
 // ---------- 作者 ----------
@@ -1932,6 +1989,72 @@ export const api = {
 
   seriesDetail: (name: string) =>
     request<SeriesDetail>(`/api/series/${encodeURIComponent(name)}`),
+
+  // 系列级元数据（第 12 期 C3）：只写服务端 DB，不动 EPUB 文件
+  seriesMeta: (name: string) =>
+    request<{
+      ok: boolean
+      meta: SeriesMeta
+      state: SeriesMetaState
+      fields: string[]
+      labels: Record<string, string>
+    }>(`/api/series/${encodeURIComponent(name)}/meta`),
+
+  saveSeriesMeta: (name: string, fields: Record<string, string>) =>
+    request<{ ok: boolean; meta: SeriesMeta; state: SeriesMetaState }>(
+      `/api/series/${encodeURIComponent(name)}/meta`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fields),
+      },
+    ),
+
+  fetchSeriesMeta: (name: string) =>
+    request<{
+      ok: boolean
+      result: {
+        ok: boolean
+        error?: string
+        score?: number
+        matched_title?: string
+        source?: string
+      }
+      meta: SeriesMeta
+    }>(`/api/series/${encodeURIComponent(name)}/fetch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    }),
+
+  /** 批量抓取：一次只处理一批（`remaining` > 0 时由调用方循环，避免单请求超时） */
+  fetchAllSeriesMeta: (payload: { names?: string[]; limit?: number } = {}) =>
+    request<{ total: number; ok: number; failed: number; remaining: number }>(
+      '/api/series/fetch-all',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+
+  seriesRenumberPreview: (name: string) =>
+    request<{ series: string; items: SeriesRenumberItem[]; total: number; changing: number }>(
+      `/api/series/${encodeURIComponent(name)}/renumber/preview`,
+    ),
+
+  seriesRenumberApply: (name: string, items: Array<{ name: string; new_index: string }>) =>
+    request<{
+      ok: boolean
+      series: string
+      renumbered: number
+      skipped: Array<{ name: string; error: string }>
+      mismatched: string[]
+    }>(`/api/series/${encodeURIComponent(name)}/renumber/apply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    }),
 
   // ---------- 收藏夹 ----------
   collections: () => request<{ items: CollectionItem[] }>('/api/collections'),

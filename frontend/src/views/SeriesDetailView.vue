@@ -2,7 +2,10 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import SeriesMetaPanel from '@/components/book/SeriesMetaPanel.vue'
+import SeriesRenumberDialog from '@/components/book/SeriesRenumberDialog.vue'
 import BookCover from '@/components/ui/BookCover.vue'
+import Button from '@/components/ui/Button.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
@@ -14,7 +17,7 @@ import {
   sortBySeriesIndex,
   tagsLabel,
 } from '@/lib/bookInfo'
-import { api, type BookCard, type SeriesGroup } from '@/lib/api'
+import { api, type BookCard, type SeriesGroup, type SeriesMeta } from '@/lib/api'
 
 /**
  * 系列详情：该系列下的全部书目。
@@ -25,8 +28,12 @@ import { api, type BookCard, type SeriesGroup } from '@/lib/api'
  *   · 展示 `#序号` 与格式徽章 —— 序号是这一页最该突出的字段（见 §2 书卡信息补全）。
  *     缺序号的书排在最后，并明确标「序号未知」，不假装它是第一册。
  *
- * 第 6 期补充（A4/A5）：首册标记（FIRST IN SERIES）+ 顺序/倒序切换；系列简介来自外部元数据，
- * 本项目未接入，仅给诚实的「未提供」说明，不编造内容。
+ * 第 6 期补充（A4/A5）：首册标记（FIRST IN SERIES）+ 顺序/倒序切换。
+ *
+ * 第 12 期 C3：系列简介与系列级字段（出版社 / 首发年 / 题材 / 册数）已接入，
+ * 由 `SeriesMetaPanel` 承载（简介可编辑、可「恢复在线」、可抓取）；
+ * 重排册号在 `SeriesRenumberDialog` 里先预览再应用。
+ * 这些数据**只存服务端数据库、不写回 EPUB** —— 详见后端 `core/series_meta.py`。
  */
 const route = useRoute()
 const router = useRouter()
@@ -34,6 +41,9 @@ const name = computed(() => String(route.params.name))
 const books = ref<BookCard[]>([])
 const groups = ref<SeriesGroup[]>([])
 const loading = ref(true)
+/** 系列级元数据（第 12 期 C3）：简介 / 出版社 / 首发年 / 题材 / 册数 */
+const meta = ref<SeriesMeta | null>(null)
+const renumberOpen = ref(false)
 
 const dir = ref<'asc' | 'desc'>('asc')
 const dirOptions = [
@@ -77,9 +87,11 @@ async function load(): Promise<void> {
     const res = await api.seriesDetail(name.value)
     books.value = res.books
     groups.value = res.groups ?? []
+    meta.value = res.meta ?? null
   } catch {
     books.value = []
     groups.value = []
+    meta.value = null
   }
   loading.value = false
 }
@@ -106,12 +118,18 @@ watch(name, load)
     <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <template v-else>
-      <div v-if="books.length" class="mb-4">
+      <!-- 系列简介与系列级字段：数据只存服务端，**不写入书本文件** -->
+      <SeriesMetaPanel :name="name" :meta="meta" class="mb-4" @changed="load" />
+
+      <div v-if="books.length" class="mb-4 flex flex-wrap items-center gap-2">
         <Segment
           :options="dirOptions"
           :model-value="dir"
           @update:model-value="(v: string) => (dir = v as 'asc' | 'desc')"
         />
+        <Button size="sm" variant="ghost" class="ml-auto" @click="renumberOpen = true">
+          重排册号
+        </Button>
       </div>
 
       <!-- 按媒体分段（有多组时每组一个标题）；序号是每种媒体各自的顺序，故按组渲染 -->
@@ -167,15 +185,16 @@ watch(name, load)
         </div>
       </div>
 
-      <!-- 系列简介：来自外部元数据，本项目未接入，给诚实说明而非编造 -->
-      <div
-        v-if="books.length"
-        class="mt-6 rounded-[var(--shell-radius)] border border-dashed border-border px-4 py-3 text-[12px] text-muted-foreground"
-      >
-        系列简介：本项目未接入外部元数据服务，暂无简介（上游来自在线元数据，需在元数据抓取体系落地后才有）。
-      </div>
-
-      <EmptyState v-else icon="layers" title="这个系列暂时没有书" desc="书目可能已被移出导出目录。" />
+      <EmptyState v-if="!books.length" icon="layers" title="这个系列暂时没有书"
+                  desc="书目可能已被移出导出目录。" />
     </template>
+
+    <!-- 重排册号：只改 OPF 序号、不动文件名（book_id 不变 → 进度/批注不断链） -->
+    <SeriesRenumberDialog
+      :name="name"
+      :open="renumberOpen"
+      @close="renumberOpen = false"
+      @applied="load"
+    />
   </div>
 </template>
