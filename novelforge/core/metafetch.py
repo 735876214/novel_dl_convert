@@ -100,7 +100,7 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         # ⚠️ `library.books()` 的 format 本来就是大写（"EPUB"），这里必须与 "EPUB" 比 ——
         # 写成 `.upper() != "epub"` 会让**每本 EPUB 都被当成非 EPUB 跳过**（实测踩过）
         if (b.get("format") or "").upper() != "EPUB":
-            base["skipped"] = "非 EPUB：没有可写的 OPF（PDF / CBZ 的元数据抓取暂不支持）"
+            base["skipped"] = "非 EPUB：没有可写的 OPF（PDF / 漫画 / 音频的元数据抓取暂不支持）"
             items.append(base)
             continue
 

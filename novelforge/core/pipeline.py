@@ -1,10 +1,24 @@
 import shutil
 from pathlib import Path
 
-from . import preprocess, detect, metadata, epub_builder, ebook_convert, komga
+from . import audio, preprocess, detect, metadata, epub_builder, ebook_convert, komga
 
-# 已是电子书格式的文件直接复制
-EBOOK_EXT = {".epub", ".mobi", ".azw3", ".pdf", ".fb2"}
+# 已是电子书格式的文件直接复制（含漫画归档与**单个**音频文件；
+# 「音频目录」形态由 dispatch 的目录分支单独处理）
+EBOOK_EXT = {".epub", ".mobi", ".azw3", ".pdf", ".fb2", ".cbz", ".cbr", *audio.AUDIO_EXTS}
+
+
+def _copy_tree(src: Path, dst: Path) -> None:
+    """整树复制音频目录（跳过隐藏项与 macOS 垃圾），保留内部相对结构。"""
+    dst.mkdir(parents=True, exist_ok=True)
+    for c in src.rglob("*"):
+        if c.is_dir() or c.name.startswith("."):
+            continue
+        if "__MACOSX" in c.parts or c.name in ("Thumbs.db", ".DS_Store"):
+            continue
+        t = dst / c.relative_to(src)
+        t.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(c, t)
 
 
 def _layout(cfg: dict) -> str:
@@ -142,12 +156,25 @@ def convert_chapters(chapters: list[ dict], out_dir: Path, opts: dict, meta: dic
 
 
 def dispatch(src: Path, out_dir: Path, opts: dict):
-    """文件分发：txt 走转换管线，电子书格式直接复制，其余跳过。
+    """文件分发：txt 走转换管线，电子书 / 漫画 / 音频直接复制，其余跳过。
 
-    复制路径同样遵循 ``output.layout``：这类文件（外部 EPUB / 漫画 CBZ）没有
+    复制路径同样遵循 ``output.layout``：这类文件（外部 EPUB / 漫画 CBZ·CBR）没有
     ``calibre:series`` 可读的解析环节，系列只能从**文件名**推断（见 core/komga.py）——
     这正是把漫画喂给 Komga 的主要场景。
+
+    **目录**（含音频）整树复制为一本书目目录：有声书「一章一文件」就靠这条路径入库。
     """
+    if src.is_dir():
+        if not audio.is_audio_dir(src):
+            return ("skip", src)
+        cfg = opts.get("cfg") or {}
+        meta = opts.get("meta") or {}
+        series, index = komga.infer(
+            src.name, meta.get("series", ""), meta.get("series_index", "")
+        )
+        target = out_dir / komga.relpath_for_dir(src.name, series, index, _layout(cfg))
+        _copy_tree(src, target)
+        return ("copy", target)
     if src.suffix.lower() == ".txt":
         return ("convert", convert_txt(src, out_dir, opts))
     if src.suffix.lower() in EBOOK_EXT:

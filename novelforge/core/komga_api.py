@@ -404,7 +404,7 @@ def pages_for(b: dict) -> list:
 
     fmt = str(b.get("format") or "").upper()
     path = config.OUTPUT_DIR / str(b.get("name") or "")
-    if fmt == "CBZ":
+    if fmt in ("CBZ", "CBR"):
         info = comics.pages(path)
         out = []
         for i, p in enumerate(info.get("pages") or []):
@@ -443,7 +443,7 @@ def page_image(b: dict, number, convert: str = "") -> tuple:
 
     fmt = str(b.get("format") or "").upper()
     path = config.OUTPUT_DIR / str(b.get("name") or "")
-    if fmt == "CBZ":
+    if fmt in ("CBZ", "CBR"):
         data, media = comics.page_bytes(path, idx)
         if not data:
             return (None, "")

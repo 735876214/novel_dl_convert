@@ -40,7 +40,7 @@ STATUS_LABELS = {
 }
 
 #: 非自动处理类型条目的说明文案（复用同一句，避免措辞漂移）
-_UNSUPPORTED_HINT = "类型不在自动处理范围（.txt / EPUB / PDF / CBZ 等）"
+_UNSUPPORTED_HINT = "类型不在自动处理范围（.txt / EPUB / PDF / CBZ·CBR / 音频等）"
 
 
 def supported(name: str) -> bool:

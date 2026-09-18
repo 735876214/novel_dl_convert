@@ -35,7 +35,10 @@ _MIME = {
     "MOBI": "application/x-mobipocket-ebook",
     "AZW3": "application/x-mobipocket-ebook",
     "CBZ": "application/vnd.comicbook+zip",
+    "CBR": "application/vnd.comicbook-rar",
     "TXT": "text/plain",
+    # 有声书：OPDS 客户端据此识别为音频（目录型书目的 size 为音频总体积）
+    "AUDIO": "audio/mpeg",
 }
 _ACQ_REL = "http://opds-spec.org/acquisition"
 _IMG_REL = "http://opds-spec.org/image"

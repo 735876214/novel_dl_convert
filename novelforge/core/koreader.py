@@ -109,7 +109,7 @@ def from_nf(book: dict, prog: dict, device: str = "") -> dict:
     percent = float((prog or {}).get("percent") or 0)
     locator = int((prog or {}).get("locator") or 0)
     fmt = str((book or {}).get("format") or "").upper()
-    has_pages = fmt in ("PDF", "CBZ")
+    has_pages = fmt in ("PDF", "CBZ", "CBR")
     return {
         "document": "",
         "progress": str(locator + 1) if has_pages else make_xpointer(locator),

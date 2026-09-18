@@ -25,11 +25,12 @@ import time
 import zipfile
 
 from .. import config
-from . import comics, metadata
+from . import audio, comics, metadata
 
-# 只把这些扩展名当成「书」；与 /api/files 的全量列表不同，这里是有意收窄的
-# .cbz（漫画）在列；.cbr 刻意不在 —— RAR 需要额外解压依赖，见 core/comics.py
-BOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".cbz")
+# 只把这些扩展名当成「书」；与 /api/files 的全量列表不同，这里是有意收窄的。
+# .cbr（RAR 漫画）自第 9 期起在列 —— 由 core/comics.py 的 zip/rar 双后端解压。
+# 单个音频文件也算一本书；「音频目录」（一章一文件）由 _iter_book_entries 单独识别。
+BOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".cbz", ".cbr", *audio.AUDIO_EXTS)
 
 # 可能作为封面出现的图片扩展名
 _COVER_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
@@ -703,8 +704,12 @@ def probe_epub(path: pathlib.Path) -> dict:
 # Komga 布局是「一层系列目录 + 书文件」（core/komga.py），所以扫描要跟着下探一层。
 # **只下一层**：Komga 自己也不递归系列目录的子目录，再深只会扫到它不认的文件。
 
-def _iter_book_files(d: pathlib.Path) -> list:
-    """OUTPUT_DIR 下的书文件（平铺 + 一层系列目录），按遍历顺序返回。
+def _iter_book_entries(d: pathlib.Path) -> list:
+    """OUTPUT_DIR 下的**书目条目**（平铺 + 一层系列目录），按遍历顺序返回。
+
+    条目有两种形态，二者都算「一本书」：
+    - **文件**：``suffix in BOOK_EXTS`` 的电子书 / 漫画 / **单个音频文件**；
+    - **目录**：含音频文件的目录（有声书多轨，「一章一文件」）。
 
     `_scan_once` 与 `_dir_signature` 共用它，保证「扫到哪些」与「什么变化会让缓存失效」
     永远一致 —— 这两处若各写一套，很容易出现「新书已入库但列表还是旧的」。
@@ -719,86 +724,132 @@ def _iter_book_files(d: pathlib.Path) -> list:
             if f.suffix.lower() in BOOK_EXTS:
                 out.append(f)
             continue
-        if f.is_dir() and not f.name.startswith("."):
-            try:
-                out.extend(sorted(
-                    x for x in f.iterdir()
-                    if x.is_file() and x.suffix.lower() in BOOK_EXTS
-                ))
-            except Exception:
-                continue
+        if not f.is_dir() or f.name.startswith("."):
+            continue
+        # 顶层目录本身就是一个音频目录 → 整目录算一本书
+        if audio.is_audio_dir(f):
+            out.append(f)
+            continue
+        try:
+            children = sorted(f.iterdir())
+        except Exception:
+            continue
+        for x in children:
+            if x.is_file() and x.suffix.lower() in BOOK_EXTS:
+                out.append(x)
+            elif x.is_dir() and not x.name.startswith(".") and audio.is_audio_dir(x):
+                out.append(x)
     return out
 
 
+def _entry_mtime(p: pathlib.Path) -> float:
+    """条目的「最新修改时间」：文件取自身 mtime；目录取内部最新文件的 mtime。"""
+    try:
+        if p.is_dir():
+            newest = 0.0
+            for c in p.rglob("*"):
+                if c.is_file():
+                    newest = max(newest, c.stat().st_mtime)
+            return newest or p.stat().st_mtime
+        return p.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
 def _dir_signature(d: pathlib.Path) -> tuple:
-    """目录指纹：书文件数 + 最新 mtime（含一层系列目录）。任一变化即让缓存失效。"""
-    n, newest = 0, 0.0
-    for f in _iter_book_files(d):
+    """目录指纹：(书目条目数, 目录内文件总数, 最新 mtime)。任一变化即让缓存失效。
+
+    ⚠️ 必须与 :func:`_iter_book_entries` 同源。有声书是**目录**，往目录里加一集既不改变
+    条目数、也不一定改目录自身 mtime —— 所以目录内部的文件数也要计入，否则会出现
+    「新音频已入库但列表还是旧的」。
+    """
+    n, inner, newest = 0, 0, 0.0
+    for p in _iter_book_entries(d):
         n += 1
-        try:
-            m = f.stat().st_mtime
-            if m > newest:
-                newest = m
-        except OSError:
-            pass
-    return (n, round(newest, 3))
+        if p.is_dir():
+            try:
+                for c in p.rglob("*"):
+                    if c.is_file():
+                        inner += 1
+                        newest = max(newest, c.stat().st_mtime)
+            except OSError:
+                pass
+        else:
+            newest = max(newest, _entry_mtime(p))
+    return (n, inner, round(newest, 3))
 
 
 def _scan_once() -> list:
     d = config.OUTPUT_DIR
     books = []
-    for f in _iter_book_files(d):
+    for f in _iter_book_entries(d):
+        is_dir = f.is_dir()
         try:
             st = f.stat()
         except OSError:
             continue
 
+        # 音频（单文件或目录）统一成 format="AUDIO"，前端据此进播放器
+        is_audio_entry = is_dir or audio.is_audio(f)
         name_meta = metadata.from_filename(f.name)
         info = {
             "title": "", "author": "", "series": "", "has_cover": False, "unparsable": False,
             "year": "", "publisher": "", "isbn": "", "language": "", "description": "", "tags": [],
             "cover": "", "pages": 0, "pages_source": "", "series_index": "",
         }
-        if f.suffix.lower() == ".epub":
+        tracks = 0
+        size = st.st_size
+        mtime = _entry_mtime(f)
+        if is_audio_entry:
+            tracks = audio.tracks(f)["total"]
+            if is_dir:
+                size, dm = audio.dir_size_and_mtime(f)
+                mtime = dm or mtime
+                cover = audio.cover_in_dir(f)
+                info.update({"has_cover": bool(cover), "cover": cover})
+            if tracks == 0:
+                info["unparsable"] = True
+        elif f.suffix.lower() == ".epub":
             info = probe_epub(f)
-        elif f.suffix.lower() == ".cbz":
-            # 漫画：页数与封面都是**真实值**（不是估算），pages_source = "archive"
+        elif comics.is_comic(f):
+            # 漫画（CBZ / CBR）：页数与封面都是**真实值**（不是估算），pages_source = "archive"
             info.update(comics.probe(f))
 
         issues = []
-        if st.st_size == 0:
+        if not is_dir and size == 0:
             issues.append("zero-bytes")
         if info["unparsable"]:
             issues.append("unparsable")
         elif not info["has_cover"] and f.suffix.lower() == ".epub":
             issues.append("no-cover")
-        elif f.suffix.lower() != ".epub":
-            # 非 EPUB（mobi/pdf/txt）本项目不会去解析封面，不计为缺失
-            pass
+        # 非 EPUB（mobi/pdf/txt/漫画/音频）本项目不去解析封面，不计为缺失
 
-        # 相对路径（Komga 布局下形如 "系列/书.epub"，平铺时就是文件名）；
+        # 相对路径（Komga 布局下形如 "系列/书.epub"，平铺时就是文件名；音频目录形如 "系列/书名"）；
         # id 由 basename 派生（见 _book_id），所以挪进系列目录不会换 id
         rel = f.relative_to(d).as_posix()
         bid = _book_id(rel)
         c1, c2 = _gradient(bid)
+        fmt = "AUDIO" if is_audio_entry else f.suffix.lstrip(".").upper()
         books.append({
             "id": bid,
             "name": rel,
-            "size": st.st_size,
-            "mtime": st.st_mtime,
-            "format": f.suffix.lstrip(".").upper(),
+            "size": size,
+            "mtime": mtime,
+            "format": fmt,
             "title": info["title"] or name_meta["title"],
             "author": info["author"] or name_meta["author"],
             "series": info["series"],
             # 系列内序号（字符串，空串 = 无）。解析见 _series_index_of
             "series_index": info.get("series_index", ""),
             "has_cover": info["has_cover"],
-            # 封面在 zip 内的路径（空串 = 没有）。前端据此拼 /api/books/{id}/cover
+            # 封面来源（EPUB = zip 内路径；漫画 = 归档内条目名；音频 = 目录内文件名；空串 = 无）
             "cover": info.get("cover", ""),
             # 页数：**估算值**（见 _pages_in），pages_source 恒为 "estimate"；
-            # 非 EPUB 恒为 0，前端据此不显示页数而不是显示 0 页
+            # 漫画为归档真实页数（"archive"）；非 EPUB / 漫画恒为 0，前端据此不显示页数
             "pages": info.get("pages", 0),
             "pages_source": info.get("pages_source", ""),
+            # 音频轨数（单文件 1、目录 n）；非音频恒 0
+            "tracks": tracks,
             "year": info.get("year", ""),
             "publisher": info.get("publisher", ""),
             "isbn": info.get("isbn", ""),
@@ -868,30 +919,35 @@ def find(name: str) -> dict | None:
 
 
 def book_detail(name: str) -> dict | None:
-    """单本详情：基础元数据 + 真实章节树 + 同 stem 的成品文件列表。"""
+    """单本详情：基础元数据 + 真实章节树 + 同 stem 的成品文件列表（音频另给轨道清单）。"""
     b = find(name)
     if not b:
         return None
     path = config.OUTPUT_DIR / name
     chapters = _reading_list(path) if path.suffix.lower() == ".epub" else []
-    stem = path.stem
     files = []
-    try:
-        # 同 stem 的其它格式（epub/mobi/azw3）只在**同一个目录**里找：
-        # Komga 布局下同系列的书都躺在系列目录内，跨目录去找会串到别的系列
-        for f in sorted(path.parent.iterdir()):
-            if f.is_file() and f.stem == stem:
-                files.append({
-                    "name": f.relative_to(config.OUTPUT_DIR).as_posix(),
-                    "format": f.suffix.lstrip(".").upper() or "?",
-                    "size": f.stat().st_size,
-                    "mtime": f.stat().st_mtime,
-                })
-    except Exception:
-        pass
+    # 音频目录没有「同 stem 兄弟文件」的概念，跳过枚举（否则会把别的目录当成文件列出来）
+    if not path.is_dir():
+        stem = path.stem
+        try:
+            # 同 stem 的其它格式（epub/mobi/azw3）只在**同一个目录**里找：
+            # Komga 布局下同系列的书都躺在系列目录内，跨目录去找会串到别的系列
+            for f in sorted(path.parent.iterdir()):
+                if f.is_file() and f.stem == stem:
+                    files.append({
+                        "name": f.relative_to(config.OUTPUT_DIR).as_posix(),
+                        "format": f.suffix.lstrip(".").upper() or "?",
+                        "size": f.stat().st_size,
+                        "mtime": f.stat().st_mtime,
+                    })
+        except Exception:
+            pass
     detail = dict(b)
     detail["chapters"] = chapters
     detail["files"] = files
+    # 有声书：把轨道清单随详情一起下发，播放器首屏无需再发一次请求
+    if (b.get("format") or "").upper() == "AUDIO":
+        detail["audio_tracks"] = audio.tracks(path)["items"]
     return detail
 
 

@@ -110,6 +110,19 @@ def relpath_for(stem: str, ext: str, series: str, index: str, layout: str = "fla
     return f"{seg}/{name}"
 
 
+def relpath_for_dir(name: str, series: str, index: str, layout: str = "flat") -> str:
+    """**目录型书目**（有声书目录）的相对路径：与 :func:`relpath_for` 同规则，但不带扩展名。
+
+    目录名本身就是装音轨的容器，硬加 ``.audio`` 这类伪扩展名只会让磁盘上的目录名变脏。
+    """
+    seg = clean_segment(series)
+    stem = clean_segment(name) or "untitled"
+    if layout != "komga" or not seg:
+        return stem
+    idx = normalize_index(index)
+    return f"{seg}/{seg} #{idx}" if idx else f"{seg}/{stem}"
+
+
 def series_dir(relpath: str) -> str:
     """相对路径所属的系列目录名（平铺时为空串）。"""
     p = pathlib.PurePosixPath(str(relpath))

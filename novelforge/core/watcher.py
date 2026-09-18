@@ -21,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import activity_log, komga, pipeline
+from . import activity_log, audio, komga, pipeline
 from .. import config
 
 STATE_FILENAME = "watcher_state.json"
@@ -121,7 +121,22 @@ class FolderWatcher:
             pass
 
     def _sig(self, p: Path) -> tuple:
+        """条目指纹 ``(size, mtime)``。
+
+        **目录**（有声书）递归汇总内部文件：往里加一集必须让指纹变化，
+        否则会出现「已入库但列表还是旧的」。
+        """
         try:
+            if p.is_dir():
+                total, newest = 0, 0.0
+                for c in p.rglob("*"):
+                    if c.is_file():
+                        st = c.stat()
+                        total += st.st_size
+                        newest = max(newest, st.st_mtime)
+                if total == 0:
+                    return (0, round(float(p.stat().st_mtime), 3))
+                return (int(total), round(float(newest), 3))
             st = p.stat()
             return (int(st.st_size), round(float(st.st_mtime), 3))
         except OSError:
@@ -201,14 +216,43 @@ class FolderWatcher:
         except Exception:
             return []
 
+    def _iter_entries(self):
+        """待处理条目：文件 + **含音频的目录**（有声书，整目录算一本书）。
+
+        与 `_iter_files`（收书目录对账仍只用文件）分开，避免让收书目录去登记目录。
+        递归模式下若目录本身已是音频目录，则**不再单独处理它内部的音频文件**，
+        否则同一本书会被复制两次。
+        """
+        try:
+            entries = [p for p in self._iter_files()
+                       if not p.name.startswith(".")]
+            if self.input_dir.is_dir():
+                it = self.input_dir.rglob("*") if self.recursive else self.input_dir.iterdir()
+                for p in it:
+                    if p.is_dir() and not p.name.startswith(".") and audio.is_audio_dir(p):
+                        entries.append(p)
+        except Exception:
+            return []
+        # 只保留最外层的音频目录，并剔除落在其中的文件
+        dirs = [d for d in entries if d.is_dir()]
+        keep = [d for d in dirs if not any(o is not d and o in d.parents for o in dirs)]
+        out = []
+        for p in entries:
+            if p.is_dir():
+                if p in keep:
+                    out.append(p)
+            elif not any(d in p.parents for d in keep):
+                out.append(p)
+        return out
+
     def _wait_stable(self, p: Path) -> bool:
-        """连续 stable_rounds 次读到相同大小才认为写入完成。"""
+        """连续 stable_rounds 次读到相同大小才认为写入完成（目录按内部总量计）。"""
         last = -1
         for _ in range(self.stable_rounds + 1):
-            try:
-                size = p.stat().st_size
-            except OSError:
+            sig = self._sig(p)
+            if not sig:
                 return False
+            size = sig[0]
             if size == last:
                 return True
             last = size
@@ -237,6 +281,24 @@ class FolderWatcher:
 
         t0 = time.time()
         dur = lambda: int((time.time() - t0) * 1000)
+
+        if p.is_dir():
+            # 有声书目录：整树复制为一本书目目录（名字不带扩展名）
+            if not audio.is_audio_dir(p):
+                return ("skipped", "非音频目录")
+            try:
+                self.output_dir.mkdir(parents=True, exist_ok=True)
+                layout = str(((self.cfg or {}).get("output") or {}).get("layout") or "flat").strip().lower()
+                series, index = komga.infer(p.name)
+                rel = komga.relpath_for_dir(p.name, series, index, layout)
+                dst = self.output_dir / rel
+                pipeline._copy_tree(p, dst)
+                activity_log.log_add_ok(p.name, rel, size=self._sig(p)[0],
+                                        duration_ms=dur(), source="watcher")
+                return ("added", str(dst))
+            except Exception as e:
+                activity_log.log_add_fail(p.name, f"{type(e).__name__}: {e}", size=0, source="watcher")
+                return ("failed", str(e))
 
         if p.suffix.lower() == ".txt":
             try:
@@ -298,12 +360,12 @@ class FolderWatcher:
         self.input_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        files = self._iter_files()
+        entries = self._iter_entries()
         if not self._primed:                      # 首轮：决定是否处理历史存量文件
             self._primed = True
             if not self.process_existing:
                 with self._lock:
-                    for p in files:
+                    for p in entries:
                         if self._ignored(p):
                             continue
                         sig = self._sig(p)
@@ -324,7 +386,7 @@ class FolderWatcher:
         # 避免 handle_file（可能耗时数十秒）长时间持有 _lock 而冻结其它调用方。
         pending = []
         with self._lock:
-            for p in sorted(files):
+            for p in sorted(entries):
                 if self._stop.is_set():
                     break
                 if self._ignored(p):
