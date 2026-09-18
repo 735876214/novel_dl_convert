@@ -523,13 +523,24 @@ export interface BookCard {
   stars?: number
   /** 页数——**估算值**：EPUB 没有固定页数概念，见 core/library._pages_in */
   pages?: number
-  /** 页数来源；目前恒为 'estimate'，空串表示无法度量（如零字节文件） */
+  /** 页数来源：'estimate'（EPUB 估算）/ 'archive'（漫画归档真实页数）/ 空串 */
   pages_source?: string
+  /** 有声书轨数（单文件 1、目录 n）；非音频为 0 或未定义 */
+  tracks?: number
 }
 
 export interface BookDetail extends BookCard {
   chapters: BookVolume[]
   files: BookFile[]
+  /** 有声书专有：轨清单（随详情一起下发，播放器首屏无需再请求一次） */
+  audio_tracks?: AudioTrack[]
+}
+
+/** 单条音轨（目录型有声书里一章一文件） */
+export interface AudioTrack {
+  index: number
+  name: string
+  size: number
 }
 
 // ---------- 账户（单用户轻登录） ----------
@@ -1252,7 +1263,7 @@ export const api = {
     return `/api/books/${encodeURIComponent(bid)}/cover${t ? `?token=${encodeURIComponent(t)}` : ''}`
   },
 
-  // ---------- 漫画（CBZ）----------
+  // ---------- 漫画（CBZ / CBR）----------
   /** 漫画页清单。前端按 index 逐页取图，不一次拉整本（一话可能几十 MB） */
   comicPages: (bid: string) =>
     request<{ pages: Array<{ index: number; name: string; size: number }>; total: number }>(
@@ -1268,6 +1279,23 @@ export const api = {
   comicPageUrl: (bid: string, index: number) => {
     const t = _authToken()
     return `/api/books/${encodeURIComponent(bid)}/comic/${index}${t ? `?token=${encodeURIComponent(t)}` : ''}`
+  },
+
+  // ---------- 有声书（单文件 / 多轨目录）----------
+  /** 轨清单（单文件 1 轨 / 目录 n 轨，自然序） */
+  audioTracks: (bid: string) =>
+    request<{ items: AudioTrack[]; total: number }>(
+      `/api/books/${encodeURIComponent(bid)}/audio`,
+    ),
+
+  /**
+   * 单轨音频 URL，直接给 `<audio src>` 用。
+   * ⚠️ 必须带 `?token=`：`<audio>` 无法携带 Authorization 头。
+   * 后端为只读媒体接口接受 query 令牌，该路径已在 `server._MEDIA_TOKEN_PATHS` 中。
+   */
+  audioTrackUrl: (bid: string, index: number) => {
+    const t = _authToken()
+    return `/api/books/${encodeURIComponent(bid)}/audio/${index}${t ? `?token=${encodeURIComponent(t)}` : ''}`
   },
 
   // ---------- 通知（活动日志 + 已读态）----------

@@ -38,6 +38,12 @@ export const ICONS = {
   star: '<path d="M12 3l2.7 5.4 6 .8-4.3 4.2 1 6-5.4-2.8-5.4 2.8 1-6L3.3 9.2l6-.8z"/>',
   sparkle: '<path d="M11 3l1.7 4.3L17 9l-4.3 1.7L11 15l-1.7-4.3L5 9l4.3-1.7z"/><path d="M18 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/>',
   logout: '<path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
+  // 有声书播放器（第 9 期）：pause / 上一轨 / 下一轨 / 音量 / 睡眠定时
+  pause: '<rect x="7" y="4.5" width="3.4" height="15" rx="1.2"/><rect x="13.6" y="4.5" width="3.4" height="15" rx="1.2"/>',
+  skipBack: '<path d="M19 20L9 12l10-8z"/><path d="M6 4v16"/>',
+  skipForward: '<path d="M5 4l10 8-10 8z"/><path d="M18 4v16"/>',
+  volume: '<path d="M11 5L6.5 9H3v6h3.5L11 19z"/><path d="M15.5 8.5a5 5 0 010 7"/><path d="M18.5 6a9 9 0 010 12"/>',
+  moon: '<path d="M20 14.5A8.5 8.5 0 019.5 4a7 7 0 1010.5 10.5z"/>',
 } as const
 
 export type IconName = keyof typeof ICONS

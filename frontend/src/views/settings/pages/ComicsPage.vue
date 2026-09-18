@@ -26,7 +26,7 @@ import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vu
  *   阅读方向（左→右 / 右→左）、页间距、背景色。
  * 未支持：跨页对齐、宽页单独处理、小屏强制双页、自动翻下一本。
  *
- * 只支持 CBZ；CBR（RAR）需要额外解压依赖，本项目不做。
+ * 支持 CBZ 与 CBR：CBR 由服务端的 zip/rar 双后端解压（依赖 bsdtar，容器内由 libarchive-tools 提供）。
  */
 const ui = useUiStore()
 const prefs = ref<ComicPrefs>(readComicPrefs())
@@ -46,7 +46,7 @@ function reset(): void {
   <div>
     <div class="mb-3 flex flex-wrap items-baseline gap-2">
       <h2 class="text-[14px] font-semibold text-foreground">漫画</h2>
-      <span class="text-[11.5px] text-muted-foreground">CBZ 阅读器的默认呈现方式</span>
+      <span class="text-[11.5px] text-muted-foreground">漫画（CBZ / CBR）阅读器的默认呈现方式</span>
       <Button size="sm" class="ml-auto" @click="reset">恢复默认</Button>
     </div>
 
@@ -149,8 +149,9 @@ function reset(): void {
     </Card>
 
     <p class="mt-3 text-[11.5px] text-muted-foreground">
-      说明：漫画支持 <span class="text-foreground">CBZ</span>（zip 打包的图片）。
-      CBR 是 RAR 格式，需要额外的系统级解压依赖，本项目不做 —— 放一本打不开的书进书架比不显示更糟。
+      说明：漫画支持 <span class="text-foreground">CBZ</span>（zip）与 <span class="text-foreground">CBR</span>（RAR）。
+      CBR 由服务端的 zip/rar 双后端解压，依赖系统解压器 <code class="font-mono">bsdtar</code>
+      （容器内由 <code class="font-mono">libarchive-tools</code> 提供，macOS 自带）；缺依赖时接口会明确返回 503。
       页图按需加载，不会一次拉整本。
     </p>
 
@@ -162,9 +163,8 @@ function reset(): void {
         '宽页单独处理（Wide-page handling）',
         '小屏强制双页（Force two-page on small screens）',
         '自动翻到下一本（Auto-advance to next book）',
-        'CBR 支持（需 RAR 解压依赖）',
       ]"
-      note="本项目已实现：阅读模式 / 页视图 / 适配方式 / 阅读方向（含日漫右→左）/ 页间距 / 背景色 / 阅读进度。"
+      note="本项目已实现：阅读模式 / 页视图 / 适配方式 / 阅读方向（含日漫右→左）/ 页间距 / 背景色 / 阅读进度，以及 CBZ 与 CBR 两种归档格式。"
     />
   </div>
 </template>

@@ -167,15 +167,16 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['VIEW', 'DISPLAY'],
           items: ['Reading mode（Paginated / Infinite spaced / Infinite no gaps）', 'Page view（Single / Two-page）', 'Fit mode（Page / Width / Height / Actual）', 'Reading direction（L to R / R to L）', 'Spread alignment', 'Spread gap', 'Wide-page handling', 'Force two-page on small screens', 'Auto-advance to next book', 'Background color'],
         },
-        note: '已实现：阅读模式（翻页 / 纵向连续）、页视图（单页 / 双页）、适配方式、阅读方向（含日漫右→左）、页间距、背景色、阅读进度。**只支持 CBZ**：CBR 是 RAR 格式，需额外系统级解压依赖，本项目不做——放一本打不开的书进书架比不显示更糟，故 .cbr 不进书目扫描。',
+        note: '已实现：阅读模式（翻页 / 纵向连续）、页视图（单页 / 双页）、适配方式、阅读方向（含日漫右→左）、页间距、背景色、阅读进度。**支持 CBZ 与 CBR**：CBR 由服务端的 zip/rar 双后端解压（bsdtar，容器内由 libarchive-tools 提供），两种格式在阅读器里体验完全一致。',
       }),
-      p('reader/audio', 'Audiobook', '有声书', 'placeholder', {
+      p('reader/audio', 'Audiobook', '有声书', 'ready', {
         upstream: {
           title: 'Audiobook',
           desc: 'Playback speed, skip intervals, and sleep timer.',
           groups: ['PLAYBACK', 'SKIP CONTROLS'],
           items: ['Default playback speed（0.75x–2x）', 'Default volume', 'Skip back duration（5/10/15/30s）', 'Skip forward duration（10/15/30/60s）'],
         },
+        note: '已实现：默认倍速（0.75x–2x）、默认音量、快退间隔（5/10/15/30 秒）、快进间隔（10/15/30/60 秒）、睡眠定时默认时长。播放器另提供轨道列表与按秒进度保存（跨设备同步）；有声书支持「一个目录 = 一本书」（一章一文件）与单个音频文件两种形态。',
       }),
       p('reader/fonts', 'Fonts', '阅读字体', 'ready', {
         upstream: {

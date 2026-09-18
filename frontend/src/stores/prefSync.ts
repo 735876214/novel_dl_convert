@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 import { api, type PrefDevice, type PrefProfile } from '@/lib/api'
+import { readAudioPrefs, saveAudioPrefs } from '@/lib/audioPrefs'
 import { readComicPrefs, saveComicPrefs } from '@/lib/comicPrefs'
 import { deviceIdOf, deviceNameOf, setDeviceNameLocally } from '@/lib/deviceInfo'
 import { readPdfPrefs, savePdfPrefs } from '@/lib/pdfPrefs'
@@ -48,12 +49,13 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
   let pushing = false
   let requeue = false
 
-  /** 收集五块当前值（服务端 payload 的形状） */
+  /** 收集六块当前值（服务端 payload 的形状） */
   function collect(): PrefsPayload {
     return normalizePayload({
       reader: readReaderPrefs(),
       pdf: readPdfPrefs(),
       comic: readComicPrefs(),
+      audio: readAudioPrefs(),
       appearance: { theme: theme.theme, accent: theme.accent, radius: theme.radius },
       cover: { ...cover.prefs },
     })
@@ -66,6 +68,7 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       saveReaderPrefs(p.reader)
       savePdfPrefs(p.pdf)
       saveComicPrefs(p.comic)
+      saveAudioPrefs(p.audio)
       cover.applyRemote(p.cover)
       theme.applyRemote({
         theme: p.appearance.theme as ThemeMode,

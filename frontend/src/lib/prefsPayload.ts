@@ -1,14 +1,15 @@
 import type { CoverPrefs } from '@/stores/coverPrefs'
 
 import { COVER_PREFS_DEFAULT } from '@/stores/coverPrefs'
+import { AUDIO_PREFS_DEFAULT, type AudioPrefs } from './audioPrefs'
 import { COMIC_PREFS_DEFAULT, type ComicPrefs } from './comicPrefs'
 import { PDF_PREFS_DEFAULT, type PdfPrefs } from './pdfPrefs'
 import { READER_PREFS_DEFAULT, type ReaderPrefs } from './readerPrefs'
 
 /**
- * 偏好载荷：**五块**，与服务端 `PREFS_BLOCKS` 一一对应。
+ * 偏好载荷：**六块**，与服务端 `PREFS_BLOCKS` 一一对应。
  *
- * ⚠️ 五块背后其实是 **7 个 localStorage 键**（`appearance` 一块 = 主题 / 点缀色 / 圆角
+ * ⚠️ 六块背后其实是 **8 个 localStorage 键**（`appearance` 一块 = 主题 / 点缀色 / 圆角
  * 三个独立键）—— 按「模块」枚举会漏键，所以这里按块定义、在同步层里逐块读写。
  *
  * 归一化（`normalizePayload`）是 dirty 判定与推送的前提：把缺省字段补齐、
@@ -25,12 +26,13 @@ export interface PrefsPayload {
   reader: ReaderPrefs
   pdf: PdfPrefs
   comic: ComicPrefs
+  audio: AudioPrefs
   appearance: AppearancePrefs
   cover: CoverPrefs
 }
 
-/** 与后端一致的块名白名单 */
-export const PAYLOAD_BLOCKS = ['reader', 'pdf', 'comic', 'appearance', 'cover'] as const
+/** 与后端一致的块名白名单（第 9 期起含 audio） */
+export const PAYLOAD_BLOCKS = ['reader', 'pdf', 'comic', 'audio', 'appearance', 'cover'] as const
 
 /** 外观默认值：与 stores/theme.ts 的初值保持一致（system / neutral / default） */
 export const APPEARANCE_DEFAULT: AppearancePrefs = {
@@ -46,6 +48,7 @@ export function normalizePayload(raw: Partial<PrefsPayload> | null | undefined):
     reader: { ...READER_PREFS_DEFAULT, ...(r.reader || {}) },
     pdf: { ...PDF_PREFS_DEFAULT, ...(r.pdf || {}) },
     comic: { ...COMIC_PREFS_DEFAULT, ...(r.comic || {}) },
+    audio: { ...AUDIO_PREFS_DEFAULT, ...(r.audio || {}) },
     appearance: { ...APPEARANCE_DEFAULT, ...(r.appearance || {}) },
     cover: { ...COVER_PREFS_DEFAULT, ...(r.cover || {}) },
   }

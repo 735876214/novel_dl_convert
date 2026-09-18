@@ -78,12 +78,25 @@ function loadSimilar(id: string): void {
 loadSimilar(bookId.value)
 watch(bookId, loadSimilar)
 
-/** 仅 EPUB 且抽到章节时才可在线阅读 */
-const canRead = computed(
-  () => !!detail.value && detail.value.format === 'EPUB' && chapterCount.value > 0,
-)
+/** 阅读器支持的格式：EPUB 需抽到章节；PDF / 漫画（CBZ·CBR）由各自阅读器就地处理 */
+const canRead = computed(() => {
+  if (!detail.value) return false
+  const f = (detail.value.format || '').toUpperCase()
+  if (f === 'EPUB') return chapterCount.value > 0
+  return f === 'PDF' || f === 'CBZ' || f === 'CBR'
+})
+
+/** 有声书走播放器而非阅读器 */
+const canListen = computed(() => (detail.value?.format || '').toUpperCase() === 'AUDIO')
+
+/** 能否「打开」（阅读或收听） */
+const canStart = computed(() => canRead.value || canListen.value)
 
 function startReading(): void {
+  if (canListen.value) {
+    router.push(`/listen/${bookId.value}`)
+    return
+  }
   if (!canRead.value) return
   router.push(`/read/${bookId.value}`)
 }
@@ -229,12 +242,16 @@ onMounted(async () => {
         <div class="mt-4 flex flex-wrap items-center gap-2">
           <Button
             variant="primary"
-            :disabled="!canRead"
-            :title="canRead ? '进入阅读器' : '仅 EPUB 且含章节时可在线阅读'"
+            :disabled="!canStart"
+            :title="canStart
+              ? (canListen ? '进入播放器' : '进入阅读器')
+              : 'EPUB（含章节）/ PDF / 漫画 / 有声书可在线打开'"
             @click="startReading"
           >
             <Icon name="play" class="h-3.5 w-3.5" />
-            {{ progress && progress.percent > 0 ? '继续阅读' : '开始阅读' }}
+            {{ progress && progress.percent > 0
+              ? (canListen ? '继续播放' : '继续阅读')
+              : (canListen ? '开始播放' : '开始阅读') }}
           </Button>
           <Button v-if="files.length" variant="ghost" @click="download(files[0].name)">
             <Icon name="download" class="h-3.5 w-3.5" />下载
@@ -348,7 +365,9 @@ onMounted(async () => {
           <p class="mt-2 text-[12.5px] text-muted-foreground tabular-nums">
             已读 {{ Math.round(progress.percent) }}%
           </p>
-          <Button size="sm" class="mt-3" :disabled="!canRead" @click="startReading">继续阅读</Button>
+          <Button size="sm" class="mt-3" :disabled="!canStart" @click="startReading">
+            {{ canListen ? '继续播放' : '继续阅读' }}
+          </Button>
         </template>
         <p v-else class="text-[12.5px] leading-relaxed text-muted-foreground">
           尚未开始阅读。点击「开始阅读」进入阅读器，进度与批注会自动多端同步。

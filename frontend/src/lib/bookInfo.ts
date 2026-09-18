@@ -28,8 +28,14 @@ export function formatLabel(b: BookCard): string {
  * 页数：`320≈`
  * 带上「≈」是因为它**是估算值**（EPUB 没有固定页数，见 core/library._pages_in）。
  * 不标估算就等于把估算当事实展示。
+ *
+ * 有声书没有「页」的概念，改显示轨数（`12 轨`）——「0 页」是错误信息。
  */
 export function pagesLabel(b: BookCard): string {
+  if ((b.format || '').toUpperCase() === 'AUDIO') {
+    const n = b.tracks ?? 0
+    return n > 0 ? `${n} 轨` : ''
+  }
   if (!b.pages) return ''
   return b.pages_source === 'estimate' ? `${b.pages}≈` : String(b.pages)
 }

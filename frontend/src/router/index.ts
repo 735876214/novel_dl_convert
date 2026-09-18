@@ -4,6 +4,7 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import AchievementsView from '@/views/AchievementsView.vue'
 import BookDetailView from '@/views/BookDetailView.vue'
 import ReaderView from '@/views/ReaderView.vue'
+import AudioPlayerView from '@/views/AudioPlayerView.vue'
 import AnnotationsView from '@/views/AnnotationsView.vue'
 import AuthorDetailView from '@/views/AuthorDetailView.vue'
 import AuthorsView from '@/views/AuthorsView.vue'
@@ -40,6 +41,7 @@ import SmartScopesView from '@/views/SmartScopesView.vue'
 import ReaderFontsPage from '@/views/settings/pages/ReaderFontsPage.vue'
 import PdfPage from '@/views/settings/pages/PdfPage.vue'
 import ComicsPage from '@/views/settings/pages/ComicsPage.vue'
+import ReaderAudioPage from '@/views/settings/pages/ReaderAudioPage.vue'
 import OpdsPage from '@/views/settings/pages/OpdsPage.vue'
 import KomgaPage from '@/views/settings/pages/KomgaPage.vue'
 import KoreaderPage from '@/views/settings/pages/KoreaderPage.vue'
@@ -75,6 +77,7 @@ const SETTINGS_PAGE_COMPONENTS: Record<string, Component> = {
   'reader/ebook': ReaderEbookPage,
   'reader/pdf': PdfPage,
   'reader/comics': ComicsPage,
+  'reader/audio': ReaderAudioPage,
   'reader/general': PreferenceSyncPage,
   // 同一组件两种形态：本项目单用户部署下「阅读字体」与「服务端字体」是同一份库
   'reader/fonts': ReaderFontsPage,
@@ -158,6 +161,7 @@ const router = createRouter({
     { path: '/smart-scopes', name: 'smart-scopes', component: SmartScopesView },
     { path: '/book/:id', name: 'book', component: BookDetailView },
     { path: '/read/:id', name: 'read', component: ReaderView },
+    { path: '/listen/:id', name: 'listen', component: AudioPlayerView },
     { path: '/series', name: 'series', component: SeriesView },
     { path: '/series/:name', name: 'series-detail', component: SeriesDetailView },
     { path: '/authors', name: 'authors', component: AuthorsView },

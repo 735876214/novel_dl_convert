@@ -36,10 +36,10 @@ const book = ref<BookDetail | null>(null)
 const loading = ref(true)
 const error = ref('')
 
-/** 按格式分流：PDF → PdfReader（pdf.js 懒加载）、CBZ → ComicReader；章节流只服务 EPUB */
+/** 按格式分流：PDF → PdfReader（pdf.js 懒加载）、漫画（CBZ / CBR）→ ComicReader；章节流只服务 EPUB */
 const fmt = computed(() => (book.value?.format || '').toUpperCase())
 const isPdf = computed(() => fmt.value === 'PDF')
-const isComic = computed(() => fmt.value === 'CBZ')
+const isComic = computed(() => fmt.value === 'CBZ' || fmt.value === 'CBR')
 
 /** 扁平化章节（按 spine 顺序，带 index） */
 const flat = computed(() => {
@@ -553,6 +553,12 @@ onMounted(async () => {
     /* ignore */
   }
   loading.value = false
+
+  // 有声书不属于阅读器：直接转去播放器（详情页按钮已分流，这里是深链兜底）
+  if (fmt.value === 'AUDIO') {
+    router.replace(`/listen/${bookId.value}`)
+    return
+  }
 
   // PDF / 漫画不进章节流：书目已就绪，渲染与进度交给各自的阅读器。
   // （两者都不计阅读时长会话——章节流的计时基于章节位置，套上去会得出错误的时长）
