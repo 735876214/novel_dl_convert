@@ -33,6 +33,9 @@ services:
       - ./cache:/app/config/cache
       # 阅读端持久化：SQLite（阅读进度 / 批注 / 账号），跨重启与多端共享
       - ./data:/app/data
+      # 多书库（第 10 期）书库来源根目录：其下的子文件夹可被「新建书库」**就地引用**，
+      # 或作为投递 / 导入源。不挂也能跑（默认 /app/libraries 在容器层），但重建即丢，故显式挂出。
+      - ./libraries:/app/libraries
     environment:
       - TZ=Asia/Shanghai
       - INPUT_DIR=/app/input
@@ -42,6 +45,7 @@ services:
       - CACHE_DIR=/app/config/cache
       - LOG_DIR=/app/config/logs
       - DATA_DIR=/app/data
+      - LIBRARY_SOURCE_DIR=/app/libraries
       # 阅读端单用户轻登录（仅首次启动初始化；之后在「设置 → 账户」改，生产务必改默认值）
       - AUTH_USER=admin
       - AUTH_PIN=changeme

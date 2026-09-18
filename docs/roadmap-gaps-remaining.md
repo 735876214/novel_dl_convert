@@ -37,7 +37,7 @@
 ### C 类 · 重（架构/外部依赖，周级，按需）
 
 - [ ] **C1 Requests 完整功能** — 插件式索引器/下载客户端/凭据加密/下载后自动化（原"后期未定期"）→ 排入第 10 期
-- [ ] **C2 系列详情 Group by media** — 需后端按媒体类型分组 → 排入第 10 期
+- [x] **C2 系列详情 Group by media** — 第 10 期完成：`GET /api/series/{name}` 增 `groups`（复用 `migrate.target_type_of` 按媒体归类，含 media/label/count/books）；`SeriesDetailView` 按组分段渲染，**仅多于一组时**才加组标题（单媒体系列不加噪音），组内仍按系列序号排序并保留首册标记与倒序切换
 - [ ] **C3 SYNOPSIS 外部源** — 依赖外部系列元数据，先做可行性评估 → 排入第 10 期
 
 ### D 类 · 2026-09-18 复核后从「不做」移入排期
@@ -52,7 +52,7 @@
 - [ ] **D5 A2 收尾** — 作者页「Added this week」需后端 author 级 `added` 字段 → 第 8 期
 - [x] **D6 CBR 阅读** — 第 9 期完成：`core/comics.py` 抽象 zip/rar 双后端（魔数嗅探 + `rarfile`，后端 `bsdtar` 由 `libarchive-tools` 提供）；`.cbr` 进 `BOOK_EXTS`；封面 / 漫画路由 / Komga 页面流 / OPDS MIME 全部放开
 - [x] **D7 有声书播放器** — 第 9 期完成：新增 `core/audio.py`，把「一本书 = 一个文件」扩展为「**音频目录（一章一文件）或单个音频文件 = 一本书**」；`/api/books/{bid}/audio(/{index})` 轨清单 + Range 流式；完整播放器（倍速 / 快退快进间隔 / 睡眠定时 / 轨道列表 / 按秒进度同步）；`reader/audio` 设置页做实并纳入偏好同步（`PREFS_BLOCKS` 加 `audio`）
-- [ ] **D8 多书库** — 架构级，动摇单一 `OUTPUT_DIR` → 第 10 期（需单独立项）
+- [x] **D8 多书库** — 第 10 期完成。`libraries` 表 + `library_migrations` 台账 + `app_state` KV；`library.py` 改为**库注册表驱动的多根扫描**（缓存与指纹按库）；路径解析全仓库感知（`library.root_of(book)`、`fileops.output_dir(library_id)`、`safe_path` 按**所属库根**约束；Komga `libraryId` 按真实库返回、按库过滤生效）；`core/migrate.py` 按格式迁移（同名冲突拒绝并给建议名、批次幂等、一键回滚）；`core/library_rules.py` 入库归库（来源子目录名 > 格式 > 关键词）；`core/features.py` 能力矩阵驱动侧栏 / 工具标签 / 设置分组 / 仪表盘部件显隐。**一个刻意的保留**：`book_id` 仍由 basename 派生、不做数据迁移，跨库同名由迁移与入库时的冲突检测拦住
 
 ---
 
@@ -124,6 +124,26 @@
 2. **C1 Requests 完整功能** — 插件式索引器 / 下载客户端 / 凭据加密 / 下载后自动化（价值最高、成本最高）
 3. **C2 系列 Group by media** — 需后端按媒体类型分组（第 9 期已让 `format` 具备 `AUDIO` / `CBR` 两种媒体类型，此项可顺势落地）
 4. **C3 SYNOPSIS 外部源** — 依赖外部系列元数据，先做可行性评估，可能并入 D1 的作者 / 系列级抓取
+
+#### 第 10 期实施记录（D8 + C2）与**用户确认的四项结构决策**
+
+四项决策已由用户逐条拍板，实现按此落地（偏离前需重新确认）：
+
+1. **`/api/libraries` 升级为「库实体」**，格式分面改址 `/api/library-facets`；侧栏「库」组只列真实书库，
+   格式分面**不再占侧栏**（书库页本就有格式筛选，那批 `fmt:` 条目是冗余入口）。侧栏「库」组里
+   `data/collections.ts` 的 `LIBRARIES = []` 仍是**死数据**（被 `AppSidebar.groups` 覆盖）。
+2. **库根不设默认，逐库选**：新建库时在向导里二选一 —— **就地引用**（`LIBRARY_SOURCE_DIR/<子目录>`
+   即库根，不搬文件）/ **独立存储**（库自有存储目录，来源目录的文件导入进来）。
+   库里**只存相对的来源子目录名**（`source_subdir`），不存来源绝对路径 —— 挂载点换了绝对路径会失效。
+3. **迁移首次需一次确认**：启动时只生成逐条预览并落 manifest，**阻塞**等用户点一次「执行迁移」；
+   选过「暂不迁移」即记入 `app_state`（不再打扰），设置里可勾「以后自动执行」。
+4. **保留「全部书库」为默认**（不裁剪）：只有选中某个库时，侧栏导航 / 工具标签 / 设置分组 /
+   仪表盘部件才按该库类型裁剪；统计与搜索默认跨库。
+
+新落地的关键文件：`core/migrate.py`、`core/library_rules.py`、`core/features.py`；
+新接口分组：`/api/libraries`（实体 CRUD + 扫描 + 来源目录列举）、`/api/library-facets`、
+`/api/features`、`/api/library-migrations/*`（preview / plan / apply / rollback / batches / dismiss / reset-gate）。
+**安全边界**：库根只允许落在「书库来源目录 / 导出目录 / 数据目录」之内（否则改名 / 回收会作用到系统目录）。
 
 ---
 

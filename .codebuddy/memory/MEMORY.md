@@ -63,10 +63,11 @@
   `SettingsLayout.vue` 只留页头 + 面包屑 + `RouterView`。
 - 计数胶囊**有值才渲染**（`count == null` 不输出）。
 
-## 工具页（单页 8 标签）
+## 工具页（单页 9 标签）
 - 形态：`views/tools/ToolsLayout.vue` = `/tools` 外壳，只有「标签栏 + 嵌套 `<RouterView>` + `KeepAlive :max="8"`」，
   **无卡片外框与内边距**（`App.vue` 主区已是卡片）。标签栏 `h-11` 横向下划线，`sticky top-0` + 负 `m` 抵消 main 内边距。
-- 8 标签（顺序固定）：实体管理 / 批量重命名 / 重复书籍 / 缺失资源 → 书源管理 / 导出目录 / 本地转换 / 转换日志。
+- 9 标签（顺序固定）：**书库管理** / 实体管理 / 批量重命名 / 重复书籍 / 缺失资源 → 书源管理 / 导出目录 / 本地转换 / 转换日志。
+  其中「书源管理 / 本地转换 / OPDS 订阅」**按当前库能力裁剪**（第 10 期）。
   子路由 `name` 沿用 BookOrbit（`tools-entity-manager` 等），`/tools` 重定向到第一个。**不做权限门控**。
 - **状态保持是硬要求**（切标签不重置）：子页用 `onActivated`（KeepAlive 下也覆盖首次挂载，**别再挂 `onMounted`**）；
   **不要在 `onActivated` 里重置用户输入/勾选/预览**；需重拉的页面保留已选项。
@@ -75,13 +76,17 @@
 
 ## 后端模块
 - `core/pipeline.py`：文件分发（`.txt` 转换 / 电子书复制 / 其它跳过）。
-- **`core/library.py`**（只读数据源）：扫 `OUTPUT_DIR` 成品 → 解析元数据（EPUB 真解 zip 读 OPF）→ 聚合
-  书目 / 作者 / 系列 / 重复 / 缺失。**进程内短期缓存**（TTL 5s + 目录指纹「文件数 + 最新 mtime」），写操作后 `invalidate()`。
-  `probe_epub()` 全程容错（失败折算 `unparsable` 不抛）。**后端没有「图书库」实体，唯一的书就是输出目录里的文件。**
-  `books()` 的 `BookCard` 含 `id`(= `_book_id(name)`) / `mtime` / `c1,c2` 渐变等。
-- **`core/fileops.py`**（写操作）：`safe_path()`（拒绝分隔符 / `..` / 绝对路径；父目录必须**恰好**是 `OUTPUT_DIR`）、
+- **`core/library.py`**（只读数据源）：**多书库**（第 10 期）——按 `libraries` 表逐库扫描并合并，
+  解析元数据（EPUB 真解 zip 读 OPF）→ 聚合书目 / 作者 / 系列 / 重复 / 缺失。
+  **进程内短期缓存按库分桶**（TTL 5s + 目录指纹），写操作后 `invalidate(library_id)`。
+  `probe_epub()` 全程容错（失败折算 `unparsable` 不抛）。
+  `books()` 的 `BookCard` 含 `id`(= `_book_id(name)`，**basename 派生**)、`library_id`/`library_type`、`mtime`、`c1,c2` 等。
+  **`name` 始终是「相对所属库根」的路径** —— 这是协议层不用改的关键。
+- **`core/fileops.py`**（写操作）：`safe_path(name, library_id)`（拒绝分隔符 / `..` / 绝对路径；父目录必须**恰好**是**该书所属库根**）、
+  `output_dir(library_id)`、`_lib_of(name, item)`（前端回传 `library_id` 优先，否则按名字反查）、
   `plan_*` 预览、`apply_rename()`、`recycle_items()`；`METADATA_FIELDS` 白名单、`patch_epub_meta()`、`rewrite_epub()`、
   `patch_opf_meta()`、`cover_paths()`、`set_epub_cover()`。**只用 `Path.rename` / `shutil.move`，从不 `unlink`。**
+  ⚠️ **不要再写 `config.OUTPUT_DIR / b["name"]`**（它只是默认库的根）——按书取路径一律 `library.root_of(b) / b["name"]`。
 - `sources/`：gutenberg / generic / rules 数据驱动 / store / manager。
 - `server.py`：FastAPI，业务逻辑都在 `core/`，server 只做校验与胶水。`cli.py`：convert / search / download / update / watch / scan / logs。
 - `activity_log.py` 操作类型含 `重命名`（`ACTION_RENAME`）/ `清理`（`ACTION_RECYCLE`）/ `ACTION_FONT` / `ACTION_METADATA` 等，与既有同构。
@@ -116,6 +121,28 @@
   **头像端点已加入 `_MEDIA_TOKEN_PATHS`**（`<img src>` 只能靠 `?token=`）。
 - 前端：`MetadataEditor.vue`（已本地修改徽标 + 逐字段/整体「恢复在线」+ 在线值提示）；`AuthorsView`（有头像显示头像，否则书封占位 +「本周新增」+「新」徽标）；
   `AuthorDetailView`（资料卡：抓取在线资料 / 编辑传记 / 上传头像 / 恢复在线）；`MetadataPage` 作者区块做实（启用 / 抓传记 / 抓头像 / 立即抓取全部作者）。
+
+## 多书库（第 10 期 D8，2026-09-18）
+- **四项已确认的结构决策**（改前需重新确认）：① `/api/libraries` = **库实体**，格式分面改址 `/api/library-facets`，
+  侧栏「库」组只列真实书库（分面不再占侧栏）；② **库根不设默认、逐库选**（就地引用 / 独立存储），
+  库里只存**相对的** `source_subdir`（挂载点换了绝对路径会失效）；③ **迁移首次需一次确认**（启动出预览 + 落 manifest，
+  阻塞等确认；「暂不迁移」记 `app_state`，设置可勾自动执行）；④ 保留**「全部书库」为默认不裁剪**。
+- **模型**：库是**数据**（`libraries` 表），不是配置常量；库表为空时 `library.ensure_default_library()` 落一条
+  「默认库 = `OUTPUT_DIR`」（**启动必须调用** —— 漏掉会让书目为空 → 孤儿判定真删进度/批注）。
+  列语义：`root_path` = **实际库根**（扫描/落盘唯一根，两模式一致）；`storage_path` 预留；`source_subdir` = 相对来源子目录名。
+  关键类型：`ebook` / `comic` / `audiobook` / `mixed`；模式：`inplace` / `import`。
+- **`core/migrate.py`**：按格式迁移；**只挪库不改名**（`name` 是库内相对路径 → `book_id` 不变 → 进度/批注不断链）；
+  manifest 先行（pending→done/failed）→ 幂等 + 可回滚；同名**拒绝覆盖**给建议名；`batch_id` 由条目集合确定性派生（重复 plan 复用）。
+- **`core/library_rules.py`**：入库归库优先级 **来源子目录名 > 格式 > 关键词**；都不可靠 → `None` → 回退默认库；
+  `target_root()` 是摄入侧取目标目录的唯一入口（watcher / 上传 / convert-path / 书源下载 / OPDS 下载五处共用）。
+- **`core/features.py`**：库类型 → 能力矩阵（真值源，只登记**有区分度**的能力）。前端自己声明「哪项菜单需要哪个能力」：
+  `AppSidebar` 的 `ITEM_FEATURE`、`ToolsLayout` 的 section `feature`、`settingsNav` 的 `PAGE_FEATURE`、`dashboard.ts` 的 `WIDGET_FEATURE`。
+  未选库（全部书库）= 全部能力 = **不裁剪**。
+- **安全边界**：库根**只允许**落在 `LIBRARY_SOURCE_DIR` / `OUTPUT_DIR` / `DATA_DIR` 之内 —— 库根就是 `safe_path` 的边界。
+- **`book_id` 仍由 basename 派生、不做数据迁移**：跨库同名由迁移与入库的冲突检测拦住（`library.by_id` 命中多库时显式报错）。
+- 前端：`stores/library.ts` 的 `currentLibraryId`（localStorage `nf_current_library`，空 = 全部书库）、`scopedBooks`、`hasFeature`；
+  书库页相关筛选（smart/facet/tag/continueReading/scopeCounts/allTags）都按**当前库**走。工具页新增「书库管理」
+  （`views/tools/LibrariesView.vue`），启动阻塞确认在 `components/MigrationGateDialog.vue`（挂在 `App.vue`）。
 
 ## 后端踩坑（真实教训）
 - **`threading.Lock` 自锁死锁**：`log()` 持锁后调 `log_dir()`（再取同锁）→ 进程**静默挂死**（无异常无 traceback）。

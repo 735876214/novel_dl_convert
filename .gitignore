@@ -53,5 +53,9 @@ _test/
 /data-test/
 *.db
 
+# 多书库（第 10 期）书库来源根目录：就地引用的书库实体落在它下面，不入库
+# ⚠️ 同样必须带前导斜杠（理由见上面 /data/ 那条）
+/libraries/
+
 # 浏览器自动化缓存（playwright-cli 的工作目录：console 日志、页面快照、导出文件）
 .playwright-cli/
