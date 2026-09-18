@@ -7,7 +7,10 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Segment from '@/components/ui/Segment.vue'
+import LibraryScopeSwitch from '@/components/tools/LibraryScopeSwitch.vue'
+import { useLibraryNames } from '@/composables/useLibraryNames'
 import { api, type EntityItem, type EntityKind, type RenamePlan } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -18,6 +21,8 @@ import { useUiStore } from '@/stores/ui'
  * 任何改动都走「先预览、再应用」——预览由服务端算，应用只回传预览过的条目。
  */
 const ui = useUiStore()
+const library = useLibraryStore()
+const { nameOf } = useLibraryNames()
 
 const KINDS = [
   { value: 'author', label: '作者' },
@@ -29,6 +34,8 @@ const items = ref<EntityItem[]>([])
 const total = ref(0)
 const loading = ref(true)
 const keyword = ref('')
+/** 统计范围（第 13 期）：**空串 = 全部书库**，等于加库维度之前的行为 */
+const scope = ref('')
 
 /** 展开的行。始终是对象（name 为空表示没展开），避免模板里判空 */
 const editing = ref<{ name: string; mode: 'rename' | 'merge'; target: string }>({
@@ -49,10 +56,34 @@ const cleanCount = computed(() => (plan.value?.items ?? []).filter((i) => !i.con
 const conflictCount = computed(() => (plan.value?.items ?? []).filter((i) => i.conflict).length)
 const noun = computed(() => (kind.value === 'author' ? '作者' : '系列'))
 
+/** 书名 → 所属库（判断一个作者 / 系列是否横跨多个库） */
+const libraryOfBook = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {}
+  for (const b of library.books) out[b.name] = String(b.library_id || '')
+  return out
+})
+
+/**
+ * 横跨 ≥2 个库的实体名 → 库数。
+ * 被拆到多个库的同名作者 / 系列是最该被重新归类的情况，所以在列表上直接标出来。
+ */
+const spreadLibraries = computed<Record<string, number>>(() => {
+  const out: Record<string, number> = {}
+  for (const it of filtered.value) {
+    const seen = new Set<string>()
+    for (const n of it.books) seen.add(libraryOfBook.value[n] ?? '')
+    if (seen.size > 1) out[it.name] = seen.size
+  }
+  return out
+})
+
 function load(): void {
   loading.value = true
+  // 侧栏已拉过；这里防的是「直接刷新进工具页」时 store 仍为空（内部会早退，不产生额外请求）
+  void library.loadLibraries()
+  void library.loadBooks()
   api
-    .entities(kind.value)
+    .entities(kind.value, scope.value)
     .then((r) => {
       items.value = r.items ?? []
       total.value = r.total ?? 0
@@ -67,6 +98,12 @@ function load(): void {
 onActivated(load)
 
 watch(kind, () => {
+  closeEditor()
+  load()
+})
+
+// 换范围 = 换数据集，之前那份预览不再成立
+watch(scope, () => {
   closeEditor()
   load()
 })
@@ -91,8 +128,8 @@ function makePreview(): void {
   busy.value = true
   const call =
     ed.mode === 'rename'
-      ? api.entityRenamePreview(kind.value, ed.name, target)
-      : api.entityMerge(kind.value, ed.name, target)
+      ? api.entityRenamePreview(kind.value, ed.name, target, scope.value)
+      : api.entityMerge(kind.value, ed.name, target, scope.value)
   call
     .then((r) => {
       plan.value = r
@@ -132,6 +169,7 @@ function applyPlan(): void {
   <div class="flex flex-col gap-4">
     <div class="flex flex-wrap items-center gap-2">
       <Segment v-model="kind" :options="KINDS" />
+      <LibraryScopeSwitch v-model="scope" />
       <input
         v-model="keyword"
         type="text"
@@ -153,6 +191,7 @@ function applyPlan(): void {
           <Icon :name="kind === 'author' ? 'users' : 'layers'" class="h-4 w-4 text-muted-foreground" />
           <span class="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">{{ it.name }}</span>
           <Badge>{{ it.count }} 本</Badge>
+          <Badge v-if="spreadLibraries[it.name]" tone="accent">跨 {{ spreadLibraries[it.name] }} 个库</Badge>
           <Button size="sm" variant="ghost" :disabled="busy" @click="openEditor(it, 'rename')">重命名</Button>
           <Button size="sm" variant="ghost" :disabled="busy" @click="openEditor(it, 'merge')">合并</Button>
         </div>
@@ -182,12 +221,13 @@ function applyPlan(): void {
             <div v-if="plan.items.length" class="max-h-64 overflow-y-auto rounded-md border border-border bg-card">
               <div
                 v-for="p in plan.items"
-                :key="p.old"
+                :key="(p.library_id || '') + p.old"
                 class="flex flex-col gap-0.5 border-b border-border/60 px-3 py-2 last:border-b-0"
                 :class="p.conflict ? 'opacity-55' : ''"
               >
                 <div class="flex items-center gap-2 text-[12px]">
                   <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="p.old">{{ p.old }}</span>
+                  <Badge v-if="p.library_id" class="shrink-0">{{ nameOf(p.library_id) }}</Badge>
                   <Icon name="arrowRight" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                   <span
                     class="min-w-0 flex-1 truncate font-medium"

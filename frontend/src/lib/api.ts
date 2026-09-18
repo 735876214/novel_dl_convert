@@ -167,6 +167,11 @@ export interface RenameItem {
   new: string
   conflict: boolean
   reason: string
+  /**
+   * 条目所属书库（第 13 期）。**多库下必须有**：同名书在不同库都有时，
+   * 只拿名字没法判断该改哪个库的文件（后端会按它取正确的库根）。
+   */
+  library_id?: string | null
 }
 
 export interface RenamePlan {
@@ -185,6 +190,7 @@ export interface DuplicateItem {
   size: number
   mtime: number
   format?: string
+  library_id?: string | null
 }
 
 /** 元数据源（OpenLibrary / Google Books） */
@@ -442,6 +448,8 @@ export interface DuplicateGroup {
   similarity: number
   title: string
   author: string
+  /** **跨库重复**：成员分属不同书库（「全部书库」范围下最该先看的那批） */
+  cross_library?: boolean
   items: DuplicateItem[]
 }
 
@@ -450,16 +458,61 @@ export interface MissingItem {
   size: number
   mtime: number
   issues: string[]
+  library_id?: string | null
 }
 
 export interface ApplyResult {
-  renamed: Array<{ old: string; new: string }>
+  renamed: Array<{ old: string; new: string; library_id?: string | null }>
   errors: Array<{ old?: string; error: string }>
   count?: number
+  /** 连带搬迁过关联数据（进度 / 批注 / 评分 / 收藏）的条目数 */
+  remapped?: number
+}
+
+/** 同名冲突组里的一条（`/api/library-conflicts`）。 */
+export interface ConflictItem {
+  name: string
+  library_id: string | null
+  library_name: string
+  format?: string
+  size?: number
+  mtime?: number
+  /** 保留项：不动它，改的是同组其余项（改一个就够消除冲突） */
+  keep: boolean
+  /** 建议名（后端给的口径：`X (2).ext`），保留项为空串 */
+  suggest: string
+}
+
+export interface ConflictGroup {
+  id: string
+  name: string
+  title: string
+  /** **跨库**冲突：分属不同库，最该先处理（阅读数据会张冠李戴） */
+  cross_library: boolean
+  library_count: number
+  keep: string
+  suggest: string
+  items: ConflictItem[]
+}
+
+export interface ConflictsResult {
+  groups: ConflictGroup[]
+  total: number
+  /** 其中跨库冲突组数 */
+  cross_library: number
+  libraries: Array<{ id: string; name: string }>
+}
+
+export interface ConflictApplyResult {
+  renamed: Array<{ old: string; new: string; library_id: string }>
+  errors: Array<{ old?: string; error: string }>
+  count: number
+  /** 搬迁了关联数据的条数（改名必然换 book_id，所以正常 = count） */
+  remapped: number
 }
 
 export interface RecycleResult {
-  moved: Array<{ name: string; moved_to: string }>
+  moved: Array<{ name: string; moved_to: string; library_id?: string | null }>
   errors: Array<{ name: string; error: string }>
   recycle_dir: string
   keep?: string
@@ -1188,6 +1241,35 @@ export interface LibrariesResult {
   modes: { value: LibraryMode; label: string }[]
 }
 
+/** 每库可覆写项中的一项（`/api/libraries/{id}/settings` 的 `schema`）。 */
+export interface LibrarySettingItem {
+  /** 全局配置的点分路径（如 `output.layout`）—— 覆写就以它为键 */
+  key: string
+  label: string
+  /** `str` 是自由文本（命名规则 / 适用格式） */
+  kind: 'bool' | 'enum' | 'number' | 'str' | 'policy_map'
+  /** `kind = enum` 时的候选项 */
+  options: string[]
+  note: string
+  /** 需要的能力键：库类型没有它 → 该项根本不会出现在 schema 里 */
+  capability: string
+}
+
+export interface LibrarySettingsResult {
+  library_id: string
+  name: string
+  library_type: LibraryType
+  /** 生效值（该库覆写 ?? 全局），键为点分路径 */
+  values: Record<string, unknown>
+  /** 全局值（该项未覆写时与 `values` 相同） */
+  global: Record<string, unknown>
+  /** `overridden[key]` 为真 = 本库显式覆写过（界面据此显示「已覆盖 / 恢复继承」） */
+  overridden: Record<string, boolean>
+  /** **原始覆写**（未与全局合并）：`policy_map` 逐字段判断「继承 / 覆盖」要靠它 */
+  overrides: Record<string, unknown>
+  schema: LibrarySettingItem[]
+}
+
 /** 能力清单（`/api/features`）。后端是「库类型 → 能力」的真值源，前端只声明「哪项菜单需要哪个能力」。 */
 export interface FeaturesResult {
   library_id: string
@@ -1744,13 +1826,17 @@ export const api = {
 
   // ---------- 工具页：实体管理 / 批量重命名 / 重复书籍 / 缺失资源 ----------
   // 改文件一律「先 preview、再 apply」；apply 只回传预览过的条目，不传规则。
-  entities: (type: EntityKind) => request<EntityListing>(`/api/entities?type=${type}`),
+  /** libraryId 为空 = 全部书库（与加库维度之前一致）；给了就只统计该库。 */
+  entities: (type: EntityKind, libraryId = '') =>
+    request<EntityListing>(
+      `/api/entities?type=${type}${libraryId ? `&library_id=${encodeURIComponent(libraryId)}` : ''}`,
+    ),
 
-  entityRenamePreview: (type: EntityKind, from: string, to: string) =>
+  entityRenamePreview: (type: EntityKind, from: string, to: string, libraryId = '') =>
     request<RenamePlan>('/api/entities/rename/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, from, to }),
+      body: JSON.stringify({ type, from, to, library_id: libraryId }),
     }),
 
   entityRenameApply: (type: EntityKind, to: string, items: RenameItem[]) =>
@@ -1760,18 +1846,22 @@ export const api = {
       body: JSON.stringify({ type, to, items }),
     }),
 
-  entityMerge: (type: EntityKind, source: string, target: string) =>
+  entityMerge: (type: EntityKind, source: string, target: string, libraryId = '') =>
     request<RenamePlan>('/api/entities/merge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, source, target }),
+      body: JSON.stringify({ type, source, target, library_id: libraryId }),
     }),
 
-  renamePreview: (scope: string, pattern: string) =>
+  /**
+   * 按规则预览改名。scope / pattern 留空时用**该库的生效命名规则**
+   * （每库覆写 ?? 全局，见 `/api/libraries/{id}/settings`）。
+   */
+  renamePreview: (scope: string, pattern: string, libraryId = '') =>
     request<RenamePlan>('/api/rename/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, pattern }),
+      body: JSON.stringify({ scope, pattern, library_id: libraryId }),
     }),
 
   renameApply: (items: RenameItem[]) =>
@@ -1781,10 +1871,13 @@ export const api = {
       body: JSON.stringify({ items }),
     }),
 
-  /** threshold = 书名相似度阈值（%，50–100）。同作者是硬条件，阈值只管书名。 */
-  duplicates: (threshold = 85) =>
+  /**
+   * threshold = 书名相似度阈值（%，50–100）。同作者是硬条件，阈值只管书名。
+   * libraryId 为空 = 全部书库；给定时只在该库内比对。组上的 cross_library 标跨库重复。
+   */
+  duplicates: (threshold = 85, libraryId = '') =>
     request<{ groups: DuplicateGroup[]; total: number; threshold: number }>(
-      `/api/duplicates?threshold=${threshold}`,
+      `/api/duplicates?threshold=${threshold}${libraryId ? `&library_id=${encodeURIComponent(libraryId)}` : ''}`,
     ),
 
   // ---------- Komga 库布局（输出侧）----------
@@ -1914,14 +2007,23 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  duplicatesResolve: (keep: string, remove: string[]) =>
+  /**
+   * 清理重复项（move 进回收目录，**不是删除**）。
+   *
+   * `remove` 的条目在**多库**下必须带 `library_id`：同名文件可以同时存在于多个库，
+   * 只给名字时后端只能按名字反查出其中一个，那个库未必是这条命中的库。
+   */
+  duplicatesResolve: (keep: string, remove: Array<string | { name: string; library_id?: string | null }>) =>
     request<RecycleResult>('/api/duplicates/resolve', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ keep, remove }),
     }),
 
-  missing: () => request<{ items: MissingItem[]; total: number }>('/api/missing'),
+  missing: (libraryId = '') =>
+    request<{ items: MissingItem[]; total: number }>(
+      `/api/missing${libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : ''}`,
+    ),
 
   // ---------- 书库：图书馆浏览 / 书籍详情 ----------
   books: () => request<{ items: BookCard[]; total: number }>('/api/books'),
@@ -2200,6 +2302,52 @@ export const api = {
       `/api/libraries/${encodeURIComponent(id)}/scan`,
       { method: 'POST' },
     ),
+
+  // ---------- 每库覆盖 + 同名冲突（第 13 期）----------
+  /**
+   * 该库的**生效设置**：`每库覆写 ?? 全局`。返回里同时带全局值与 `overridden`，
+   * 界面才能说清「这一项是跟着全局走、还是这个库单独设过」。
+   * `schema` 已按库类型能力收窄 —— 漫画库不会返回元数据策略这类它用不上的项。
+   */
+  librarySettings: (id: string) =>
+    request<LibrarySettingsResult>(`/api/libraries/${encodeURIComponent(id)}/settings`),
+
+  /**
+   * 写入覆盖项：`{键: 值}`。**值传 `null` = 该项恢复继承全局**。
+   * `metadata_fetch.fields` 支持字段级恢复（`{"fields": {"tags": null}}`）。
+   * 键名用全局配置的点分路径（`output.layout` / `naming.pattern` …）。
+   */
+  librarySettingsUpdate: (id: string, values: Record<string, unknown>) =>
+    request<LibrarySettingsResult>(`/api/libraries/${encodeURIComponent(id)}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(values),
+    }),
+
+  /** 恢复继承：给 keys 只清这几项，不给 = 全部回到全局值。 */
+  librarySettingsReset: (id: string, keys?: string[]) =>
+    request<LibrarySettingsResult>(
+      `/api/libraries/${encodeURIComponent(id)}/settings${
+        keys && keys.length ? `?keys=${encodeURIComponent(keys.join(','))}` : ''
+      }`,
+      { method: 'DELETE' },
+    ),
+
+  /** 同名冲突清单（book_id 撞车：跨库同名 / 库内同名）。 */
+  libraryConflicts: () => request<ConflictsResult>('/api/library-conflicts'),
+
+  /**
+   * 应用冲突修复。只回传清单里确认过的条目，后端会**再校验一遍**；
+   * 改名会换 book_id，关联数据由后端一并搬迁（`remapped` 即搬迁条数）。
+   */
+  libraryConflictsApply: (
+    items: Array<{ old: string; new: string; library_id?: string | null }>,
+  ) =>
+    request<ConflictApplyResult>('/api/library-conflicts/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    }),
 
   /** 当前库（或「全部书库」）的能力清单。 */
   features: (libraryId = '') =>

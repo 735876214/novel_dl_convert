@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
+import LibraryScopeSwitch from '@/components/tools/LibraryScopeSwitch.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type RenamePlan } from '@/lib/api'
+import Badge from '@/components/ui/Badge.vue'
+import { useLibraryNames } from '@/composables/useLibraryNames'
+import { api, type RenameItem, type RenamePlan } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -26,14 +29,27 @@ const PATTERN_FIELDS = ['{title}', '{author}', '{series}', '{index}', '{ext}']
 const DEFAULT_PATTERN = '{author} - {title}'
 
 const pattern = ref(DEFAULT_PATTERN)
+/** 格式筛选（不是书库范围！书库范围是 libScope） */
 const scope = ref('all')
+/** 书库范围（第 13 期）：空串 = 全部书库 */
+const libScope = ref('')
 const plan = ref<RenamePlan | null>(null)
 const checked = ref<Record<string, boolean>>({})
 const busy = ref(false)
 
+const { nameOf } = useLibraryNames()
+
+/**
+ * 勾选表的键。**不能用文件名单独当键**：不同库可以有同名文件，
+ * 那样勾一个会连带勾上另一个库的同名条目（第 13 期多库下真实存在）。
+ */
+function keyOf(it: RenameItem | { old: string; library_id?: string | null }): string {
+  return `${it.library_id || ''}|${it.old}`
+}
+
 const conflictCount = computed(() => (plan.value?.items ?? []).filter((i) => i.conflict).length)
 const selected = computed(() =>
-  (plan.value?.items ?? []).filter((i) => !i.conflict && checked.value[i.old]),
+  (plan.value?.items ?? []).filter((i) => !i.conflict && checked.value[keyOf(i)]),
 )
 const selectedCount = computed(() => selected.value.length)
 const selectableCount = computed(() => (plan.value?.items ?? []).filter((i) => !i.conflict).length)
@@ -56,12 +72,12 @@ function makePreview(): void {
   }
   busy.value = true
   api
-    .renamePreview(scope.value, pattern.value)
+    .renamePreview(scope.value, pattern.value, libScope.value)
     .then((r) => {
       plan.value = r
       // 默认勾选所有不冲突的条目
       const next: Record<string, boolean> = {}
-      for (const it of r.items) next[it.old] = !it.conflict
+      for (const it of r.items) next[keyOf(it)] = !it.conflict
       checked.value = next
       if (!r.items.length) ui.toast('没有匹配的文件')
     })
@@ -71,14 +87,14 @@ function makePreview(): void {
     })
 }
 
-function toggleOne(old: string): void {
-  checked.value[old] = !checked.value[old]
+function toggleOne(key: string): void {
+  checked.value[key] = !checked.value[key]
 }
 
 function toggleAll(): void {
   const wantAll = selectedCount.value < selectableCount.value
   const next: Record<string, boolean> = {}
-  for (const it of plan.value?.items ?? []) next[it.old] = !it.conflict && wantAll
+  for (const it of plan.value?.items ?? []) next[keyOf(it)] = !it.conflict && wantAll
   checked.value = next
 }
 
@@ -112,6 +128,9 @@ onMounted(async () => {
     /* 后端不可达时保持内置默认，工具页仍可用 */
   }
 })
+
+// 换范围后旧预览里的条目已经不属于当前范围，整张表作废重来（规则文本保留）
+watch(libScope, reset)
 </script>
 
 <template>
@@ -128,7 +147,8 @@ onMounted(async () => {
       <p class="mb-2.5 text-[11px] text-muted-foreground">
         初始规则来自
         <RouterLink to="/settings/library/file-naming" class="underline">设置 → 文件命名</RouterLink>；
-        在此处修改不会回写设置。
+        在此处修改不会回写设置。范围切到某个库时仍用上面这条规则，
+        库自己的命名规则在「书库管理 → 设置」里改。
       </p>
 
       <div class="flex flex-wrap items-center gap-2">
@@ -152,6 +172,7 @@ onMounted(async () => {
           <option value="pdf">仅 PDF</option>
           <option value="txt">仅 TXT</option>
         </select>
+        <LibraryScopeSwitch v-model="libScope" />
         <Button variant="primary" :disabled="busy" @click="makePreview">生成预览</Button>
       </div>
     </Card>
@@ -168,21 +189,22 @@ onMounted(async () => {
       <div class="max-h-[26rem] overflow-y-auto">
         <div
           v-for="p in plan.items"
-          :key="p.old"
+          :key="keyOf(p)"
           class="flex items-start gap-2.5 border-b border-border/60 px-4 py-2.5 last:border-b-0"
           :class="p.conflict ? 'opacity-55' : ''"
         >
           <input
             type="checkbox"
             class="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--primary)]"
-            :checked="!!checked[p.old]"
+            :checked="!!checked[keyOf(p)]"
             :disabled="p.conflict"
             :aria-label="`选择 ${p.old}`"
-            @change="toggleOne(p.old)"
+            @change="toggleOne(keyOf(p))"
           >
           <div class="flex min-w-0 flex-1 flex-col gap-0.5">
             <div class="flex items-center gap-2 text-[12px]">
               <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="p.old">{{ p.old }}</span>
+              <Badge v-if="!libScope && p.library_id" class="shrink-0">{{ nameOf(p.library_id) }}</Badge>
               <Icon name="arrowRight" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <span
                 class="min-w-0 flex-1 truncate font-medium"

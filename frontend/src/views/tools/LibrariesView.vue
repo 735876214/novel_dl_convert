@@ -12,6 +12,8 @@ import { computed, onMounted, ref } from 'vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import LibraryConflictPanel from '@/components/tools/LibraryConflictPanel.vue'
+import LibrarySettingsPanel from '@/components/tools/LibrarySettingsPanel.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import {
   api,
@@ -38,6 +40,14 @@ const loading = ref(false)
 const busy = ref('')
 const detailBatch = ref<MigrationRow[]>([])
 const detailOpen = ref(false)
+/** 正在展开「每库设置」的书库 id（空 = 收起）：同时只开一个，免得一屏堆满控件 */
+const settingsFor = ref('')
+/** 同名冲突面板：迁移 / 改名之后要让它重新拉清单 */
+const conflicts = ref<InstanceType<typeof LibraryConflictPanel> | null>(null)
+
+function toggleSettings(id: string): void {
+  settingsFor.value = settingsFor.value === id ? '' : id
+}
 
 /** 向导里为「缺失的类型库」逐库选择的位置方案：`{ 类型: 'inplace' | 'import' }` */
 const specMode = ref<Record<string, LibraryMode>>({})
@@ -383,6 +393,9 @@ async function remove(l: LibraryEntity): Promise<void> {
           </div>
         </div>
         <div class="flex shrink-0 gap-1">
+          <Button size="sm" variant="ghost" @click="toggleSettings(l.id)">
+            {{ settingsFor === l.id ? '收起设置' : '设置' }}
+          </Button>
           <Button size="sm" variant="ghost" :disabled="!!busy" @click="scan(l)">
             {{ busy === `scan:${l.id}` ? '扫描中…' : '扫描' }}
           </Button>
@@ -398,6 +411,11 @@ async function remove(l: LibraryEntity): Promise<void> {
           </Button>
         </div>
       </div>
+    </Card>
+
+    <!-- 2.5) 逐库设置：把投递 / 元数据 / 命名按库分开（未设的项继承全局） -->
+    <Card v-if="settingsFor" padding="none">
+      <LibrarySettingsPanel :library-id="settingsFor" @changed="reload(true)" />
     </Card>
 
     <!-- 3) 当前库能力（解释「为什么某些菜单不见了」） -->
@@ -420,6 +438,11 @@ async function remove(l: LibraryEntity): Promise<void> {
           （全部书库：不裁剪）
         </span>
       </div>
+    </Card>
+
+    <!-- 3.5) 同名冲突：book_id 由文件名派生，跨库同名会撞同一个 id -->
+    <Card padding="none">
+      <LibraryConflictPanel ref="conflicts" @changed="reload(true)" />
     </Card>
 
     <!-- 迁移台账 -->

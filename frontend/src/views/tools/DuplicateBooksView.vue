@@ -1,12 +1,15 @@
 <script setup lang="ts">
-import { computed, onActivated, ref } from 'vue'
+import { computed, onActivated, ref, watch } from 'vue'
 
+import LibraryScopeSwitch from '@/components/tools/LibraryScopeSwitch.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type DuplicateGroup } from '@/lib/api'
+import { useLibraryNames } from '@/composables/useLibraryNames'
+import { api, type DuplicateGroup, type DuplicateItem } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -15,8 +18,13 @@ import { useUiStore } from '@/stores/ui'
  *
  * **不会真删**：清理动作走 POST /api/duplicates/resolve，后端把文件 move 进
  * CACHE_DIR/recycle，响应里带回回收目录路径，方便随时人工找回。
+ *
+ * 范围（第 13 期）：全部书库时会把**跨库重复**单独成段展示 —— 同名书分散在不同库时
+ * 往往同时撞 ``book_id``，是「进度张冠李戴」冲突的高发区，最该先处理。
  */
 const ui = useUiStore()
+const library = useLibraryStore()
+const { nameOf } = useLibraryNames()
 
 const groups = ref<DuplicateGroup[]>([])
 const total = ref(0)
@@ -25,7 +33,9 @@ const busy = ref(false)
 /** 书名相似度阈值（%）。变更后重新扫描 —— 分组结果由它决定 */
 const threshold = ref(85)
 const THRESHOLD_PRESETS = [70, 85, 95] as const
-/** 每组保留哪一项（组 key → 文件名） */
+/** 书库范围（第 13 期）：空串 = 全部书库 */
+const libScope = ref('')
+/** 每组保留哪一项（组 key → **条目键**，见 itemKey） */
 const keep = ref<Record<string, string>>({})
 const lastRecycleDir = ref('')
 
@@ -39,40 +49,79 @@ function fmtTime(ts: number): string {
   return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
 }
 
+/**
+ * 组内条目的唯一键。**不能只用文件名**：不同库可以有同名文件
+ * （跨库重复正是本期要处理的对象），只用名字会让「保留项 / 清理项」串库。
+ */
+function itemKey(it: DuplicateItem): string {
+  return `${it.library_id || ''}|${it.name}`
+}
+
 /** 默认保留体积最大的一项（通常内容最完整） */
 function defaultKeep(g: DuplicateGroup): string {
   const sorted = [...g.items].sort((a, b) => b.size - a.size)
-  return sorted[0]?.name ?? ''
+  return sorted[0] ? itemKey(sorted[0]) : ''
 }
 
 function keepOf(g: DuplicateGroup): string {
   return keep.value[g.key] ?? defaultKeep(g)
 }
 
-function setKeep(key: string, name: string): void {
-  keep.value[key] = name
+/** 被保留的那一项（清理日志里记它的名字） */
+function keepItem(g: DuplicateGroup): DuplicateItem | null {
+  const k = keepOf(g)
+  return g.items.find((i) => itemKey(i) === k) ?? null
 }
 
-function removeOf(g: DuplicateGroup): string[] {
+function setKeep(key: string, it: DuplicateItem): void {
+  keep.value[key] = itemKey(it)
+}
+
+/** 待清理项带 **library_id**：同名文件分属不同库时，只给名字后端会移错库的文件 */
+function removeOf(g: DuplicateGroup): Array<{ name: string; library_id?: string | null }> {
   const k = keepOf(g)
-  return g.items.filter((i) => i.name !== k).map((i) => i.name)
+  return g.items
+    .filter((i) => itemKey(i) !== k)
+    .map((i) => ({ name: i.name, library_id: i.library_id }))
 }
 
 const pending = computed(() => groups.value.reduce((n, g) => n + removeOf(g).length, 0))
 
+/**
+ * 展示分组。全部书库时把**跨库重复**单独成段 —— 它们和库内重复的处理心态不同：
+ * 库内重复是「留哪一本」，跨库重复还牵扯 book_id 冲突，要先看清归属再动手。
+ */
+const sections = computed<Array<{ label: string; hint: string; items: DuplicateGroup[] }>>(() => {
+  if (libScope.value) return [{ label: '', hint: '', items: groups.value }]
+  const cross = groups.value.filter((g) => g.cross_library)
+  const plain = groups.value.filter((g) => !g.cross_library)
+  const out: Array<{ label: string; hint: string; items: DuplicateGroup[] }> = []
+  if (cross.length) {
+    out.push({
+      label: '跨库重复',
+      hint: '同名书分散在不同书库，容易同时撞 book_id（进度张冠李戴），建议先处理',
+      items: cross,
+    })
+  }
+  if (plain.length) out.push({ label: cross.length ? '库内重复' : '', hint: '', items: plain })
+  return out
+})
+
 function load(): void {
   loading.value = true
+  // 侧栏已拉过；这里防的是直接刷新进工具页时 store 仍为空（内部会早退）
+  void library.loadLibraries()
   api
-    .duplicates(threshold.value)
+    .duplicates(threshold.value, libScope.value)
     .then((r) => {
       groups.value = r.groups ?? []
       total.value = r.total ?? 0
-      // 重新扫描后重建保留项：**保留用户已选的**（只要那个文件还在这组里），
+      // 重新扫描后重建保留项：**保留用户已选的**（只要那一项还在这组里），
       // 否则回落到默认 —— 否则每次切回标签都会把用户的选择重置掉。
       const next: Record<string, string> = {}
       for (const g of groups.value) {
         const prev = keep.value[g.key]
-        next[g.key] = prev && g.items.some((i) => i.name === prev) ? prev : defaultKeep(g)
+        next[g.key] = prev && g.items.some((i) => itemKey(i) === prev) ? prev : defaultKeep(g)
       }
       keep.value = next
     })
@@ -89,12 +138,15 @@ function setThreshold(v: number): void {
   load()
 }
 
+// 换范围 = 换判定集合，保留项按组 key 复用（组不在了自然回落），但必须重扫
+watch(libScope, load)
+
 // 工具页子页在 KeepAlive 下不会重新挂载，刷新挂 onActivated（首次挂载也会触发）
 onActivated(load)
 
 function apply(): void {
   const jobs = groups.value
-    .map((g) => ({ keep: keepOf(g), remove: removeOf(g) }))
+    .map((g) => ({ keep: keepItem(g)?.name ?? '', remove: removeOf(g) }))
     .filter((j) => j.remove.length)
   if (!jobs.length) {
     ui.toast('没有需要清理的条目')
@@ -138,6 +190,8 @@ function apply(): void {
         </button>
       </div>
 
+      <LibraryScopeSwitch v-model="libScope" />
+
       <span class="text-[11.5px] text-muted-foreground">
         共扫描 {{ total }} 本书目，发现 {{ groups.length }} 组重复
       </span>
@@ -156,43 +210,52 @@ function apply(): void {
     <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
 
     <template v-else-if="groups.length">
-      <Card v-for="g in groups" :key="g.key" padding="none">
-        <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
-          <h3 class="min-w-0 truncate text-[13px] font-semibold text-foreground" :title="g.title">
-            {{ g.title || '（无书名）' }}
-          </h3>
-          <span class="truncate text-[11.5px] text-muted-foreground">{{ g.author }}</span>
-          <Badge class="ml-auto">{{ g.items.length }} 份</Badge>
+      <template v-for="s in sections" :key="s.label || 'all'">
+        <div v-if="s.label" class="flex flex-col gap-0.5">
+          <h3 class="text-[12.5px] font-semibold text-foreground">{{ s.label }}</h3>
+          <p v-if="s.hint" class="text-[11.5px] text-muted-foreground">{{ s.hint }}</p>
         </div>
 
-        <p class="border-b border-border/60 bg-muted/40 px-4 py-2 text-[11.5px] text-muted-foreground">
-          判定依据：{{ g.reason }}
-          <span v-if="g.similarity < 100" class="tabular-nums">（组内最低相似度 {{ g.similarity }}%）</span>
-        </p>
-
-        <div
-          v-for="it in g.items"
-          :key="it.name"
-          class="flex items-center gap-2.5 border-b border-border/60 px-4 py-2.5 last:border-b-0"
-        >
-          <input
-            type="radio"
-            :name="`keep-${g.key}`"
-            class="h-3.5 w-3.5 shrink-0 accent-[var(--primary)]"
-            :checked="keepOf(g) === it.name"
-            :aria-label="`保留 ${it.name}`"
-            @change="setKeep(g.key, it.name)"
-          >
-          <div class="min-w-0 flex-1">
-            <div class="truncate text-[12.5px] text-foreground" :title="it.name">{{ it.name }}</div>
-            <div class="text-[11px] text-muted-foreground tabular-nums">
-              {{ fmtSize(it.size) }} · {{ fmtTime(it.mtime) }}
-            </div>
+        <Card v-for="g in s.items" :key="g.key" padding="none">
+          <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+            <h3 class="min-w-0 truncate text-[13px] font-semibold text-foreground" :title="g.title">
+              {{ g.title || '（无书名）' }}
+            </h3>
+            <span class="truncate text-[11.5px] text-muted-foreground">{{ g.author }}</span>
+            <Badge v-if="g.cross_library" tone="accent">跨库重复</Badge>
+            <Badge class="ml-auto">{{ g.items.length }} 份</Badge>
           </div>
-          <Badge v-if="keepOf(g) === it.name" tone="ok">保留</Badge>
-          <Badge v-else tone="warn">将清理</Badge>
-        </div>
-      </Card>
+
+          <p class="border-b border-border/60 bg-muted/40 px-4 py-2 text-[11.5px] text-muted-foreground">
+            判定依据：{{ g.reason }}
+            <span v-if="g.similarity < 100" class="tabular-nums">（组内最低相似度 {{ g.similarity }}%）</span>
+          </p>
+
+          <div
+            v-for="it in g.items"
+            :key="itemKey(it)"
+            class="flex items-center gap-2.5 border-b border-border/60 px-4 py-2.5 last:border-b-0"
+          >
+            <input
+              type="radio"
+              :name="`keep-${g.key}`"
+              class="h-3.5 w-3.5 shrink-0 accent-[var(--primary)]"
+              :checked="keepOf(g) === itemKey(it)"
+              :aria-label="`保留 ${it.name}`"
+              @change="setKeep(g.key, it)"
+            >
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-[12.5px] text-foreground" :title="it.name">{{ it.name }}</div>
+              <div class="text-[11px] text-muted-foreground tabular-nums">
+                {{ fmtSize(it.size) }} · {{ fmtTime(it.mtime) }}
+              </div>
+            </div>
+            <Badge v-if="!libScope && it.library_id" class="shrink-0">{{ nameOf(it.library_id) }}</Badge>
+            <Badge v-if="keepOf(g) === itemKey(it)" tone="ok">保留</Badge>
+            <Badge v-else tone="warn">将清理</Badge>
+          </div>
+        </Card>
+      </template>
 
       <div class="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-4 py-3">
         <span class="text-[11.5px] text-muted-foreground">

@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, onActivated, ref } from 'vue'
+import { computed, onActivated, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
+import LibraryScopeSwitch from '@/components/tools/LibraryScopeSwitch.vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
+import { useLibraryNames } from '@/composables/useLibraryNames'
 import { api, type MissingItem } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -15,9 +18,14 @@ import { useUiStore } from '@/stores/ui'
  *
  * 判定在服务端（core/library.py 的 probe_epub）：真实解开 EPUB 容器读 OPF，
  * 所以「无法解析」「缺封面」都不是猜测。
+ *
+ * 范围（第 13 期）：全部书库时按所属库分组展示 —— 同一个「缺封面」在不同库里的
+ * 处理方式（谁去重新转换）通常不同，混在一张表里看不出归属。
  */
 const ui = useUiStore()
 const router = useRouter()
+const library = useLibraryStore()
+const { nameOf } = useLibraryNames()
 
 const ISSUE_META: Record<string, { label: string; tone: 'warn' | 'err'; hint: string }> = {
   'zero-bytes': {
@@ -41,6 +49,8 @@ const items = ref<MissingItem[]>([])
 const total = ref(0)
 const loading = ref(true)
 const filter = ref('')
+/** 书库范围（第 13 期）：空串 = 全部书库 */
+const libScope = ref('')
 
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -70,14 +80,29 @@ const filtered = computed(() =>
   filter.value ? items.value.filter((i) => i.issues.includes(filter.value)) : items.value,
 )
 
+/** 按所属库分组（「全部书库」范围下才用得上；单库范围只有一组，渲染时不显示库头） */
+const groups = computed(() => {
+  const byLib: Record<string, MissingItem[]> = {}
+  for (const it of filtered.value) {
+    const k = String(it.library_id || '')
+    ;(byLib[k] ??= []).push(it)
+  }
+  return Object.keys(byLib).map((k) => ({ id: k, name: nameOf(k), items: byLib[k] }))
+})
+
+/** 只有一个库有问题时就不加库头了 —— 徒增一行视觉噪音 */
+const showLibHeaders = computed(() => !libScope.value && groups.value.length > 1)
+
 function countOf(key: string): number {
   return key ? (counts.value[key] ?? 0) : items.value.length
 }
 
 function load(): void {
   loading.value = true
+  // 侧栏已拉过；这里防的是直接刷新进工具页时 store 仍为空（内部会早退）
+  void library.loadLibraries()
   api
-    .missing()
+    .missing(libScope.value)
     .then((r) => {
       items.value = r.items ?? []
       total.value = r.total ?? 0
@@ -87,6 +112,9 @@ function load(): void {
       loading.value = false
     })
 }
+
+// 换范围 = 换数据集，重新扫（筛选条件保留，用户没改它）
+watch(libScope, load)
 
 // 工具页子页在 KeepAlive 下不会重新挂载，刷新挂 onActivated（首次挂载也会触发）
 onActivated(load)
@@ -119,6 +147,8 @@ function goConvert(): void {
         {{ meta(k).label }} <span class="ml-1 tabular-nums opacity-70">{{ countOf(k) }}</span>
       </button>
 
+      <LibraryScopeSwitch v-model="libScope" />
+
       <Button class="ml-auto" :disabled="loading" @click="load">重新扫描</Button>
       <span class="text-[11.5px] text-muted-foreground">共扫描 {{ total }} 本书目</span>
     </div>
@@ -126,34 +156,46 @@ function goConvert(): void {
     <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
 
     <Card v-else-if="filtered.length" padding="none">
-      <div
-        v-for="it in filtered"
-        :key="it.name"
-        class="flex items-start gap-3 border-b border-border/60 px-4 py-3 last:border-b-0"
-      >
-        <span class="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-          <Icon name="alert" class="h-4 w-4" />
-        </span>
-
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="min-w-0 truncate text-[12.5px] font-medium text-foreground" :title="it.name">
-              {{ it.name }}
-            </span>
-            <Badge v-for="iss in it.issues" :key="iss" :tone="meta(iss).tone">{{ meta(iss).label }}</Badge>
-          </div>
-          <div class="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
-            {{ fmtSize(it.size) }} · {{ fmtTime(it.mtime) }}
-          </div>
-          <ul class="mt-1.5 flex flex-col gap-0.5">
-            <li v-for="iss in it.issues" :key="iss" class="text-[11.5px] leading-relaxed text-muted-foreground">
-              · {{ meta(iss).hint }}
-            </li>
-          </ul>
+      <template v-for="g in groups" :key="g.id || 'default'">
+        <div
+          v-if="showLibHeaders"
+          class="flex items-center gap-2 border-b border-border bg-muted/50 px-4 py-2"
+        >
+          <Icon name="library" class="h-3.5 w-3.5 text-muted-foreground" />
+          <span class="text-[12px] font-medium text-foreground">{{ g.name }}</span>
+          <Badge class="ml-auto">{{ g.items.length }}</Badge>
         </div>
 
-        <Button size="sm" class="shrink-0" @click="goConvert">重新转换</Button>
-      </div>
+        <div
+          v-for="it in g.items"
+          :key="(it.library_id || '') + it.name"
+          class="flex items-start gap-3 border-b border-border/60 px-4 py-3 last:border-b-0"
+        >
+          <span class="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+            <Icon name="alert" class="h-4 w-4" />
+          </span>
+
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="min-w-0 truncate text-[12.5px] font-medium text-foreground" :title="it.name">
+                {{ it.name }}
+              </span>
+              <Badge v-if="!libScope && !showLibHeaders && it.library_id">{{ nameOf(it.library_id) }}</Badge>
+              <Badge v-for="iss in it.issues" :key="iss" :tone="meta(iss).tone">{{ meta(iss).label }}</Badge>
+            </div>
+            <div class="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
+              {{ fmtSize(it.size) }} · {{ fmtTime(it.mtime) }}
+            </div>
+            <ul class="mt-1.5 flex flex-col gap-0.5">
+              <li v-for="iss in it.issues" :key="iss" class="text-[11.5px] leading-relaxed text-muted-foreground">
+                · {{ meta(iss).hint }}
+              </li>
+            </ul>
+          </div>
+
+          <Button size="sm" class="shrink-0" @click="goConvert">重新转换</Button>
+        </div>
+      </template>
     </Card>
 
     <EmptyState
