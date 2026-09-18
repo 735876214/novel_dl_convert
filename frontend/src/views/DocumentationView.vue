@@ -39,7 +39,7 @@ const sections = [
     desc: '格式转换、查重、OPDS、Komga、KOReader 等。',
     links: [
       { to: '/tools', label: '工具箱' },
-      { to: '/settings/opds', label: 'OPDS 订阅源' },
+      { to: '/settings/opds', label: 'OPDS 目录' },
       { to: '/settings/komga', label: 'Komga' },
     ],
   },

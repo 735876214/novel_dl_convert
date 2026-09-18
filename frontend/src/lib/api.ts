@@ -364,43 +364,6 @@ export interface KoreaderDoc {
   size: number
 }
 
-/** OPDS 订阅源（客户端）。`password` 回显的是掩码，提交掩码 = 不修改 */
-export interface OpdsSource {
-  id: number
-  name: string
-  url: string
-  username: string
-  password: string
-  has_password: boolean
-}
-
-export interface OpdsEntry {
-  title: string
-  author: string
-  updated: string
-  /** nav = 可继续点进去的目录；book = 可下载 */
-  kind: 'nav' | 'book'
-  href: string
-  type: string
-  length: number
-  cover: string
-  summary: string
-  /** feed 里的 dc:isPartOf（如「系列 #3」），Komga 会给 */
-  series?: string
-  size_hint: string
-}
-
-export interface OpdsFeed {
-  title: string
-  /** 本次实际抓取的地址（面包屑 / 返回上一层用） */
-  url: string
-  /** 下一页（空 = 没有更多） */
-  next: string
-  /** 上一层（空 = 已在根） */
-  up: string
-  entries: OpdsEntry[]
-}
-
 /** `POST /api/komga/layout/preview`：整理为 Komga 库布局的预览（只算不改） */
 export interface KomgaLayoutItem {
   /** 原相对路径（平铺时就是文件名） */
@@ -1963,49 +1926,6 @@ export const api = {
     request<{ ok: boolean; scanned: number }>('/api/koreader/scan', { method: 'POST' }),
 
   koreaderDocs: () => request<{ items: KoreaderDoc[] }>('/api/koreader/docs'),
-
-  // ---------- OPDS 订阅（客户端：订阅 Komga / 任何 OPDS 源）----------
-  opdsSources: () => request<{ items: OpdsSource[] }>('/api/opds/sources'),
-
-  createOpdsSource: (payload: { name: string; url: string; username?: string; password?: string }) =>
-    request<OpdsSource>('/api/opds/sources', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }),
-
-  /** 密码留空或传掩码 = 不修改（后端按此约定处理） */
-  updateOpdsSource: (
-    id: number,
-    payload: { name: string; url: string; username?: string; password?: string },
-  ) =>
-    request<OpdsSource>(`/api/opds/sources/${id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }),
-
-  deleteOpdsSource: (id: number) =>
-    request<{ ok: boolean }>(`/api/opds/sources/${id}`, { method: 'DELETE' }),
-
-  /** 抓取并解析一个 feed；href 为空 = 用源地址（订阅入口） */
-  opdsBrowse: (id: number, href = '') =>
-    request<OpdsFeed>(`/api/opds/sources/${id}/browse`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ href }),
-    }),
-
-  /** 下载一本书 → 直接落进书库（按 output.layout 归位） */
-  opdsDownload: (
-    id: number,
-    payload: { href: string; title: string; type?: string; series?: string },
-  ) =>
-    request<{ ok: boolean; name: string; bytes: number }>(`/api/opds/sources/${id}/download`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }),
 
   /**
    * 清理重复项（move 进回收目录，**不是删除**）。

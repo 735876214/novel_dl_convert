@@ -58,7 +58,6 @@ import LogsView from '@/views/tools/LogsView.vue'
 import MissingResourcesView from '@/views/tools/MissingResourcesView.vue'
 import OutputView from '@/views/tools/OutputView.vue'
 import SourcesView from '@/views/tools/SourcesView.vue'
-import OpdsSourcesView from '@/views/tools/OpdsSourcesView.vue'
 import ToolsLayout from '@/views/tools/ToolsLayout.vue'
 import { SETTINGS_HOME, SETTINGS_PAGES } from '@/data/settingsNav'
 
@@ -198,8 +197,7 @@ const router = createRouter({
         { path: 'duplicates', name: 'tools-duplicate-books', component: DuplicateBooksView },
         { path: 'missing', name: 'tools-missing-resources', component: MissingResourcesView },
         { path: 'sources', name: 'tools-sources', component: SourcesView },
-        { path: 'opds', name: 'tools-opds-sources', component: OpdsSourcesView },
-        { path: 'output', name: 'tools-output', component: OutputView },
+              { path: 'output', name: 'tools-output', component: OutputView },
         { path: 'local', name: 'tools-local', component: LocalConvertView },
         { path: 'logs', name: 'tools-logs', component: LogsView },
       ],

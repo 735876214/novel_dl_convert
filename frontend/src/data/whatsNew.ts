@@ -33,7 +33,7 @@ export const WHATS_NEW: WhatsNewEntry[] = [
     title: '基础能力与生态对接',
     items: [
       '书架 / 阅读器（EPUB·PDF·漫画）/ 统计 / 成就',
-      'OPDS 订阅源、KOReader 进度互通、外部服务集成',
+      'OPDS 目录、KOReader 进度互通、外部服务集成',
       '收书目录、审计日志、任务中心持久化、自定义智能书架',
     ],
   },
