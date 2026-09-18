@@ -174,6 +174,57 @@
   `capability-gap.md` 修正 6 处过期记载（Requests 三处、多库两处、有声书 / Pages 各一处）；
   README 48 → 47 并新增「自动化测试」小节；`router/index.ts` 与 `settingsNav.ts` 里早已漂移的页面计数统一为 **47**。
 
+#### 第 14 期实施记录（OPDS 按库暴露）
+
+**主题**：第 10 期多书库落地后，书库已是**数据实体**，但对外目录仍停在「全库一个 feed」——
+客户端订阅 `/opds` 看到的是所有库混在一起。本期把库维度补进 OPDS。
+
+- **库只能落在路径上**：OPDS 客户端只会发 URL（多数连自定义头都不支持），且订阅的是固定地址
+  → 新增 `/opds/lib/{lid}/…` 一整套（all / recent / authors / series / tags / author/{name} /
+  series/{name} / tag/{name} / search / book / cover / download），**不给既有路由加 `?library=`**。
+- **默认零变化**：`opds.py` 的新参数一律 keyword-only 且默认值等于原行为（`prefix="/opds"`），
+  `/opds`、`/opds/all` 一行没动；只有**可见库 > 1** 时根导航才插入「按书库」入口
+  （沿用 C2「仅多于一组才加组标题」的取法）—— 单库部署的输出与加它之前一致。
+- **可见性两层，真值源只有一处**：`features` 新增能力键 `opds`（入 `_COMMON`），
+  `SETTING_CAPS` 登记 `opds.expose`；`lib_settings.ITEMS` 新增覆盖项「对 OPDS 暴露」（bool），
+  全局 `config.DEFAULTS["opds"]["expose"] = True`（= 全部暴露 = 与加开关前一致）。
+  **不可见与不存在一律 404**，不给客户端「这里有个库只是不给你看」的暗示。
+- **单库取书走库内查找**（`_opds_book_in`），不用 `library.by_id()` —— 后者遇跨库同名抛
+  `BookIdConflict`；于是「这本书在不在该库」只有一处判定。
+- **测试**：新增 `tests/test_opds_library.py`（10 例：关闭态 404、Basic 401、库导航、单库整套、
+  单库搜索只在本库、关掉暴露后 404 且不进导航、越库取书 404、全局输出无库前缀回归）。
+  能力集因此 +1 `opds`，同步改 `test_features.COMMON` 与「能力清单 17 → 18」两处断言；全量 **181 passed**。
+- **顺带收尾（四处小尾巴）**：`settingsNav` 的 Watcher note 过期（`watcher.auto_fetch_async` 早已实现，
+  且 `auto_fetch` 按阈值自动定稿）；`MEMORY.md` 里「仪表盘 12 登记 / 3 实现」过期（实际 12 个全实现）；
+  两条同 id 的 `koreader` 设置页（上游对照那条改 path `koreader-upstream`，消掉 vue-router 的静默覆盖
+  与侧栏重复 key 告警）；仪表盘「作者」计数 `/placeholder/_authors` 死链改 `/authors`。
+
+#### 第 15 期实施记录（Komga 兼容服务端补齐）
+
+**主题来源**：用户要的是「**本机作为服务端，为其他设备提供 Komga 订阅源**」—— 不是 OPDS，
+而是第 5 期就有的 `/api/v1/*` 兼容服务端（第三方 Komga 客户端把地址填成 NovelForge 即可）。
+多书库落地后它有一处没闭环：客户端在库视图里选了某个库，看到的仍是全部书库混在一起。
+
+- **库维度接进 Komga 出口**：`komga_api.grouped(library_id=None)` 与 `find_series(name, library_id=None)`
+  加可选库形参（默认 `None` = 全库 → 三个单系列端点行为零变化）；server 侧新增
+  `_ko_visible_libraries` / `_ko_books` / `_ko_grouped` / `_ko_library_id_of` 四个辅助，
+  **可见性判定只有这一处**。`POST /series/list` 此前**整个丢掉 payload**，现在 `libraryId` 生效；
+  老客户端的 `GET /series`、`GET /books` 也新增 `library_id` 查询参数（不传 = 全部可见库 = 与之前一致）。
+- **有声书不进 Komga**：不新增配置项，复用既有能力矩阵 —— `features` 的 `komga` 能力只属于
+  ebook / comic / mixed，`audiobook` 天然没有 → 从**书库**这一层挡掉（`/libraries` 不列，
+  书籍与系列列表也不含它的书）。此前 AUDIO 会因回退 DIVINA 变成打不开的坏条目。
+- **CBR**：`MEDIA_TYPES` 补 `application/vnd.comicbook-rar`、`_PROFILES` 补 `DIVINA`
+  （页面流早支持 CBZ/CBR，缺的只是元数据）。
+- **系列级已读**（全新能力，仓库内无既有口径）：官方规格已查证 ——
+  `POST /api/v1/series/{id}/read-progress` = 标已读、`DELETE` = 标未读，均 **204、无 body**。
+  实现 `komga_api.mark_series_read()`：**保留原 locator、只把 percent 顶到 100**
+  （与书级 `completed: true` 同语义 —— 标已读不该把读者送回第一页）。
+  顺带给书级补了官方新口径 `PATCH`（老客户端仍走 `PUT`，两者都保留）。
+- **测试**：新增 `tests/test_komga_library.py`（7 例：系列按库过滤、书籍按库过滤、有声书库不出现、
+  CBR 媒体类型、系列级已读保留位置 / 未读归零、不存在的系列 404、PATCH 与 PUT 等价）。全量 **188 passed**。
+- **已知取舍（已写进注释与文档）**：系列 id 由**名字**派生，客户端已用它存进度与收藏 →
+  按库过滤后同名系列只出现在第一本所在库，**不为此改 id 派生方式**。
+
 ---
 
 ## 四、验证纪律（沿用 history）

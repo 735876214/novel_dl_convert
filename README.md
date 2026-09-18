@@ -65,12 +65,12 @@ TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub 
 
 | 方向 | 能力 | 要点 |
 |---|---|---|
-| 对外 | **OPDS 目录** | 只读 Atom feed：全部 / 最近 / 按作者 / 按系列 / 按标签 / 搜索 / 单书 / 封面 / 下载。用 HTTP Basic + 应用账号；`/opds` 是独立前缀，不走 `/api` 的 Bearer 中间件（客户端只会发 Basic） |
+| 对外 | **OPDS 目录** | 只读 Atom feed：全部 / 最近 / 按作者 / 按系列 / 按标签 / 搜索 / 单书 / 封面 / 下载。用 HTTP Basic + 应用账号；`/opds` 是独立前缀，不走 `/api` 的 Bearer 中间件（客户端只会发 Basic）。**按书库暴露**：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 `/opds/lib/<库 id>`，可在「工具 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404） |
 | 对外 | **Komga 库布局** | 有系列的书按 `系列名/系列名 #N.ext` 落盘（Komga 只认一层系列目录、不递归），并可从文件名或 OPF 推断系列；「整理既有库」把已平铺的书收进系列目录，**会改名时自动迁移阅读进度 / 批注 / 评分 / 收藏** |
 | 对接 | **KOReader 进度互通** | 实现 kosync 协议（`users/auth`、`users/create`、`syncs/progress` 的 GET/PUT）：按 partialMD5 索引文档，并在 XPointer / 页码与本项目的位置之间换算 |
 | 对接 | **OPDS 订阅** | 工具页里可订阅外部 OPDS 源（Komga / Calibre-Web 等），浏览后直接下载入库 |
 | 对接 | **Hardcover / Readwise / StoryGraph** | 凭据存储 + **真实连通性验证**（能验证的才放验证按钮；StoryGraph 无公开 API，如实标注不可验证） |
-| 双向 | **Komga 兼容服务端** | 本应用可直接**冒充 Komga 服务端**：第三方 Komga 客户端（Mihon / Panels / 官方 App）把地址填成 NovelForge 即可浏览书库、读漫画与 PDF（服务端逐页渲染）、下载 EPUB、双向同步阅读进度。支持 Basic / `X-API-Key` / 会话三种认证与 Komga 的分页壳 |
+| 双向 | **Komga 兼容服务端** | 本应用可直接**冒充 Komga 服务端**：第三方 Komga 客户端（Mihon / Panels / 官方 App）把地址填成 NovelForge 即可浏览书库、读漫画与 PDF（服务端逐页渲染）、下载 EPUB、双向同步阅读进度。支持 Basic / `X-API-Key` / 会话三种认证与 Komga 的分页壳。**可按书库浏览**（系列与书籍都按库过滤，老客户端的 GET 端点同样生效）、**系列级「全部已读 / 全部未读」**（只把百分比顶到 100，不清除读者位置）、CBR 有正确的媒体类型；**有声书库不进 Komga**（Komga 没有音频模型，硬塞进去只会得到打不开的坏条目） |
 
 未做：Kobo 同步、邮件投递（成本与收益不匹配，已明确不做）；
 外部服务的「同步任务」（把状态 / 书评 / 书摘推给对方）需要先做书籍匹配，尚未实现。
