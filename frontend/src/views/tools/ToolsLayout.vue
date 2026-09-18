@@ -82,7 +82,9 @@ function go(section: ToolSection): void {
       </button>
     </div>
 
-    <div class="p-[var(--shell-content-gutter)]">
+    <!-- 内容区上内边距取两倍 gutter：标签栏与内容之间留出更明显的呼吸感。
+         用显式 px/pt/pb 而非 p-[…] + pt-[…]，避免依赖同一属性的工具类排序。 -->
+    <div class="px-[var(--shell-content-gutter)] pt-[calc(var(--shell-content-gutter)*2)] pb-[var(--shell-content-gutter)]">
       <RouterView v-slot="{ Component, route: childRoute }">
         <KeepAlive :max="8">
           <component :is="Component" :key="childRoute.name ?? childRoute.path" />
