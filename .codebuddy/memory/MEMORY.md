@@ -85,6 +85,9 @@
   任务面板 → 主题 → 设置 → 头像。
 - **任务面板**是右侧滑出抽屉（`fixed` + `translateX` + `.drawer-scrim`，点遮罩或 Esc 关闭），不是常驻第三列。
 - **设置入口在顶栏**；设置页含「外观」（主题段控 + 65 档 swatch 网格 8 列 + 圆角段控）与「书源」。
+- **设置页左列替换（2026-09-18）**：进 `/settings` 任意子路径时，`App.vue` 外壳左列由 `AppSidebar`（书籍轨道）
+  整体替换为 `SettingsSidebar`（复用其卡片样式，顶部「返回主界面」按钮 `router.push('/')` + `SETTINGS_GROUPS` 分组导航）。
+  `SettingsLayout.vue` 内容区只留页头 + 面包屑 + `RouterView`，不再重复画设置导航。
 - 计数胶囊**有值才渲染**（`count == null` 不输出），接真实数据后自动出现，不用改代码。
 
 ## 工具页（单页 8 标签，结构照搬 BookOrbit tools）
@@ -216,11 +219,13 @@ npm run deploy   # dist → novelforge/static/v2（脚本先删目录再拷）
 - `.dockerignore` 排除 `frontend/node_modules`、`frontend/dist`、`novelforge/static/v2`。
 
 ## 本地开发与 Docker 约定
-- 本地开发用 **`docker-compose.dev.yml`**（不是 `docker-compose.yml`）：本地 build `novelforge:dev` +
-  挂载 `./novelforge:/app/novelforge`，端口 **8993**（8992 归 `docker-compose.yml`）。
-  改 Python → restart 容器；改 requirements / Dockerfile → 重新 `--build`；
-  前端走宿主机 `npm run dev`（5173），不用 rebuild。
-- `docker-compose.yml` 拉 ghcr 预构建镜像、源码烤在镜像里，**本地改代码用它不会生效**。
+- 仅保留两个 compose（2026-09-18 整理，删除了 `docker-compose.dev.yml` / `docker-compose.local.yml`）：
+  - **真实版 `docker-compose.yml`**：拉 ghcr 预构建镜像、源码烤在镜像里，**本地改代码用它不会生效**；
+    端口 **8992**，挂载 `./data`（运行时 SQLite）。
+  - **测试版 `docker-compose.test.yml`**：本地 build `novelforge:test` + 挂载 `./novelforge:/app/novelforge`，
+    端口 **8993**；数据目录隔离到 `./data-test`（`DATA_DIR=/app/data` + `./data-test` 挂载，`.gitignore` 已加 `/data-test/`），
+    避免和真实版 `./data` 互相污染。用法：`docker compose -f docker-compose.test.yml up -d --build`。
+- 改 Python → restart 测试版容器；改 requirements / Dockerfile → 重新 `--build`；前端走宿主机 `npm run dev`（5173），不用 rebuild。
 - **行尾必须 LF**：本机 `core.autocrlf=true`，`.gitattributes` 已把 `*.sh` / `Dockerfile` / `.dockerignore`
   锁为 `eol=lf`。改这几类文件不要写成 CRLF，否则容器 `sh /app/start.sh` 报 `set: Illegal option -` 并反复重启
   （`write_to_file` 在 Windows 会写 CRLF → 改用 `[IO.File]::WriteAllText` + `UTF8Encoding $false`）。
