@@ -211,8 +211,15 @@ def find_series(name: str):
     return None
 
 
-def series_dto(name: str, items: list) -> dict:
-    """SeriesDto。读完/在读计数客户端会显示，所以要认真算（按 percent 判定）。"""
+def series_dto(name: str, items: list, meta: dict = None) -> dict:
+    """SeriesDto。读完/在读计数客户端会显示，所以要认真算（按 percent 判定）。
+
+    ``meta`` 是**已解析好的**系列生效元数据（``series_meta.effective`` 或
+    ``series_meta.effective_light``）。刻意由调用方传入、不在这里自己查库：
+    列表端点会对**每个**系列调本函数，若在函数内做聚合（扫一遍成员书目），
+    N 个系列就是 N 次全库扫描 —— 所以「用完整分层还是轻量分层」由调用方决定。
+    """
+    meta = meta or {}
     progs = {b["id"]: (db.get_progress(b["id"]) or {}) for b in items}
     read = sum(1 for p in progs.values() if float(p.get("percent") or 0) >= 99.5)
     inprog = sum(1 for p in progs.values() if 0 < float(p.get("percent") or 0) < 99.5)
@@ -227,19 +234,28 @@ def series_dto(name: str, items: list) -> dict:
         "booksCount": len(items), "booksReadCount": read,
         "booksUnreadCount": len(items) - read - inprog, "booksInProgressCount": inprog,
         "metadata": {
-            "title": name, "titleLock": False, "summary": "", "summaryLock": False,
-            "publisher": str(first.get("publisher") or ""), "publisherLock": False,
+            "title": name, "titleLock": False,
+            # 系列简介来自系列级元数据（本地覆盖 > 在线）；没抓到就是空串，不编造
+            "summary": str(meta.get("description") or ""), "summaryLock": False,
+            "publisher": str(meta.get("publisher") or first.get("publisher") or ""),
+            "publisherLock": False,
             "readingDirection": "LEFT_TO_RIGHT", "readingDirectionLock": False,
             "ageRating": None, "ageRatingLock": False,
             "language": str(first.get("language") or ""), "languageLock": False,
-            "genres": list({t for b in items for t in (b.get("tags") or [])})[:10],
+            # 系列级题材优先；没有则退回成员书题材并集。
+            # ⚠️ 原实现用 set 去重 → 每次运行顺序可能不同（字符串哈希随机化），
+            #    这里改成保序去重：客户端看到的题材顺序不再乱跳。
+            "genres": (list(meta.get("tags") or [])
+                       or list(dict.fromkeys(t for b in items for t in (b.get("tags") or []))))[:10],
             "genresLock": False, "tags": [], "tagsLock": False,
             "totalBookCount": len(items), "totalBookCountLock": False,
             "sharingLabels": [], "sharingLabelsLock": False,
             "links": [], "linksLock": False,
         },
+        # booksMetadata.summary 与 metadata.summary 同源（Komga 两处都展示系列级摘要）；
+        # summaryNumber 是「卷号」语义，不是简介，保持不动。
         "booksMetadata": {"authors": [], "tags": [], "releaseDate": None,
-                          "summary": "", "summaryNumber": ""},
+                          "summary": str(meta.get("description") or ""), "summaryNumber": ""},
         "deleted": False, "oneshot": len(items) == 1,
     }
 
