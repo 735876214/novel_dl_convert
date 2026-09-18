@@ -4,7 +4,7 @@ import type { IconName } from '@/lib/icons'
  * 设置页分区注册表 —— 上游（BookOrbit）设置页信息架构的单一数据源。
  *
  * 对齐依据：`docs/bookorbit-settings-inventory.md`（线上实例逐页采集）。
- * 结构刻意与上游一致：6 个分组 / 46 个叶子页，路由为 `/settings/<path>`。
+ * 结构刻意与上游一致：6 个分组 / 47 个叶子页，路由为 `/settings/<path>`。
  *
  * 命名约定（迁移要点 2：不自创中文名）：
  *   - `label` = 上游英文原名，**作为对齐基准，不翻译**
@@ -432,17 +432,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['PROVIDERS'],
           items: ['Add Provider', '提供者列表（provider / claims / provisioning）'],
         },
-      }),
-      p('admin/requests', 'Requests', '求书', 'ready', {
-        upstream: {
-          title: 'Requests',
-          desc: 'Sources, download clients, and what happens to a book once it downloads.',
-          groups: ['Sources', 'Download clients', 'Automation'],
-          items: ['Install a plugin（单文件插件，自备并填配置）', 'Add an indexer（Torznab / Newznab feed）', '下载客户端配置', '下载完成后的自动化'],
-          uncaptured: '该实例三个标签页均为空态；且提示 BOOK_REQUEST_ENCRYPTION_KEY 未设置，客户端密码无法保存。',
-        },
-        link: { to: '/tools/sources', label: '工具 → 书源管理' },
-        note: '按 §9 约定：页面与接口保留、功能后置。三段结构（Sources / Download clients / Automation）已按上游搭好，配置项可见但标注「功能待实现」，接口为只读、零后端写入。本项目已有「书源管理 / 书源下载」，与本项都在解决「从外部获取书」，但形态不同（插件/PT indexer vs 书源规则）。',
       }),
       p('admin/book-dock', 'Book Dock', '收书目录', 'ready', {
         note: '已实现：投递目录（= 输入目录）+ 监听状态与启停 + 自动处理开关 + 处理计数。上游的「元数据自动抓取」「置信度自动定稿」依赖元数据体系，暂标未支持。',

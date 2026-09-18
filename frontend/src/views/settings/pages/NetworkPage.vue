@@ -63,11 +63,10 @@ onMounted(() => loadConfig())
 
     <Card class="mt-4">
       <div class="text-[12.5px] leading-relaxed text-muted-foreground">
-        上游有相近但形态不同的两块：求书来源在
-        <RouterLink to="/settings/admin/requests" class="underline">服务端 → Requests</RouterLink>
-        （插件 / Torznab indexer），书源规则治理在
-        <RouterLink to="/tools/sources" class="underline">工具 → 书源管理</RouterLink>。
-        本项目的书源下载与它们不重叠。
+        上游的「求书」是「插件 / Torznab 索引器 + 下载客户端」那一套；本项目定位不同，
+        从外部获取书一律走
+        <RouterLink to="/tools/sources" class="underline">工具 → 书源管理</RouterLink>
+        的数据驱动书源规则，因此<strong>不提供「求书」页</strong>（该能力已决策不做）。
       </div>
     </Card>
   </div>

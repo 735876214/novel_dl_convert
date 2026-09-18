@@ -852,32 +852,6 @@ export interface AchievementsOverview {
   metrics: Record<string, number>
 }
 
-export interface RequestSection {
-  key: string
-  label: string
-  /** unavailable = 本项目不支持；not_configured = 支持但未配置；configured = 已就绪 */
-  state: string
-  desc: string
-  items: Array<{ label: string; detail: string }>
-}
-
-/** 求书配置的只读结构（`GET /api/requests/config`） */
-export interface RequestsConfig {
-  stage: string
-  note: string
-  sections: RequestSection[]
-  alternative: {
-    label: string
-    desc: string
-    download_enabled: boolean
-    public_only: boolean
-    source_count: number
-    guidance: string
-    settings_link: string
-    tools_link: string
-  }
-}
-
 /** 孤儿记录：引用了已不存在的书的数据库行（`GET /api/maintenance/orphans`） */
 export interface OrphansInfo {
   /** 表名 → 孤儿书数 + 样例 book_id（便于确认清的是什么） */
@@ -1493,8 +1467,6 @@ export const api = {
   backfillAchievements: () =>
     request<AchievementsOverview>('/api/achievements/backfill', { method: 'POST' }),
 
-  // ---------- 求书（只读骨架）----------
-  requestsConfig: () => request<RequestsConfig>('/api/requests/config'),
 
   // ---------- 孤儿记录 ----------
   orphans: () => request<OrphansInfo>('/api/maintenance/orphans'),

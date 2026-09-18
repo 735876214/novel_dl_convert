@@ -34,7 +34,6 @@ import NetworkPage from '@/views/settings/pages/NetworkPage.vue'
 import NotificationsPage from '@/views/settings/pages/NotificationsPage.vue'
 import ProfilePage from '@/views/settings/pages/ProfilePage.vue'
 import ReaderEbookPage from '@/views/settings/pages/ReaderEbookPage.vue'
-import RequestsPage from '@/views/settings/pages/RequestsPage.vue'
 import ThemePage from '@/views/settings/pages/ThemePage.vue'
 import WatcherPage from '@/views/settings/pages/WatcherPage.vue'
 import ShelfView from '@/views/ShelfView.vue'
@@ -87,7 +86,6 @@ const SETTINGS_PAGE_COMPONENTS: Record<string, Component> = {
   'library/maintenance': MaintenancePage,
   'admin/audit-log': AuditLogPage,
   'admin/book-dock': BookDockPage,
-  'admin/requests': RequestsPage,
   'ext/conversion': ConversionPage,
   'ext/watcher': WatcherPage,
   'ext/network': NetworkPage,
@@ -127,7 +125,7 @@ const SETTINGS_PAGE_PROPS: Record<string, () => Record<string, unknown>> = {
   'metadata/genre-blocklist': () => ({ section: 'genre-blocklist' }),
 }
 
-/** 设置页的 46 个子路由，由注册表生成，避免手写路由与侧栏导航两处走样 */
+/** 设置页的 47 个子路由，由注册表生成，避免手写路由与侧栏导航两处走样 */
 const settingsChildren = SETTINGS_PAGES.map((page) => {
   const component = SETTINGS_PAGE_COMPONENTS[page.path]
   if (page.status === 'ready' && !component) {
