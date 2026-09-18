@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from .core import pipeline, activity_log, library, fileops
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, recommend,
-                   fonts, comics, audio, opds, opds_client, komga, koreader, integrations,
+                   fonts, comics, audio, opds, komga, koreader, integrations,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, migrate, library_rules, features, series_meta,
                    lib_settings)
@@ -847,6 +847,24 @@ def opds_lib_by_tag(request: Request, lid: str, name: str, page: int = Query(1, 
     return _opds_xml(opds.acquisition_feed(
         _opds_base(request), f"标签：{target}", "tag", bs, page=page,
         prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "tag")), "acquisition")
+
+
+@app.get("/opds/search/description")
+def opds_search_description(request: Request):
+    """OpenSearch Description：客户端据此拿到搜索地址模板（否则搜索框多半不出现）。"""
+    _opds_guard(request)
+    return Response(content=opds.search_description(_opds_base(request)),
+                    media_type="application/opensearchdescription+xml")
+
+
+@app.get("/opds/lib/{lid}/search/description")
+def opds_lib_search_description(request: Request, lid: str):
+    """单库版 OSDD：模板落在该库内（订阅单个库时搜索也只搜这个库）。"""
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    return Response(
+        content=opds.search_description(_opds_base(request), prefix=_opds_prefix(lib_id)),
+        media_type="application/opensearchdescription+xml")
 
 
 @app.get("/opds/lib/{lid}/search")
@@ -3544,113 +3562,6 @@ def api_komga_layout_apply(payload: dict = Body(...)):
         raise HTTPException(400, str(e))
 
 
-# ---------------- OPDS 客户端（订阅远程 OPDS 源）----------------
-# 与上面的 OPDS **服务**方向相反：这里去读别人的 feed
-# （Komga / Calibre-Web / 任何标准 OPDS 源，见 core/opds_client.py）。
-# 密码回显一律掩码，提交掩码 = 不修改（与 llm.api_key 同一约定，见 _KEY_MASK）。
-
-_OPDS_SRC_MASK = "••••••••"
-
-
-def _opds_src_public(s: dict) -> dict:
-    out = {k: v for k, v in s.items() if k != "password"}
-    out["password"] = _OPDS_SRC_MASK if (s.get("password") or "") else ""
-    out["has_password"] = bool(s.get("password"))
-    return out
-
-
-def _opds_src_fields(payload: dict) -> tuple:
-    name = str((payload or {}).get("name") or "").strip()
-    url = str((payload or {}).get("url") or "").strip()
-    if not name:
-        raise HTTPException(400, "名称不能为空")
-    if not url.lower().startswith(("http://", "https://")):
-        raise HTTPException(400, "地址必须以 http:// 或 https:// 开头")
-    return name, url
-
-
-@app.get("/api/opds/sources")
-def api_opds_sources():
-    return {"items": [_opds_src_public(s) for s in db.list_opds_sources()]}
-
-
-@app.post("/api/opds/sources")
-def api_opds_source_create(payload: dict = Body(...)):
-    name, url = _opds_src_fields(payload)
-    return _opds_src_public(db.create_opds_source(
-        name, url,
-        str((payload or {}).get("username") or ""),
-        str((payload or {}).get("password") or ""),
-    ))
-
-
-@app.put("/api/opds/sources/{sid}")
-def api_opds_source_update(sid: int, payload: dict = Body(...)):
-    if not db.get_opds_source(sid):
-        raise HTTPException(404, "订阅源不存在")
-    name, url = _opds_src_fields(payload)
-    pw = (payload or {}).get("password")
-    # 空串或掩码都表示「保留原密码」：前端没改密码时提交的正是掩码
-    keep = pw is None or str(pw) == "" or str(pw) == _OPDS_SRC_MASK
-    return _opds_src_public(db.update_opds_source(
-        sid, name, url, str((payload or {}).get("username") or ""),
-        None if keep else str(pw),
-    ))
-
-
-@app.delete("/api/opds/sources/{sid}")
-def api_opds_source_delete(sid: int):
-    if not db.delete_opds_source(sid):
-        raise HTTPException(404, "订阅源不存在")
-    return {"ok": True}
-
-
-@app.post("/api/opds/sources/{sid}/browse")
-def api_opds_source_browse(sid: int, payload: dict = Body(...)):
-    """抓取并解析 feed。href 为空时用源地址（即订阅入口）。"""
-    s = db.get_opds_source(sid)
-    if not s:
-        raise HTTPException(404, "订阅源不存在")
-    try:
-        return opds_client.fetch(s, str((payload or {}).get("href") or ""))
-    except opds_client.OpdsError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/opds/sources/{sid}/download")
-def api_opds_source_download(sid: int, payload: dict = Body(...)):
-    """下载一本书 → 落进导出目录，与转换产出的书同等对待（按 output.layout 归位）。"""
-    s = db.get_opds_source(sid)
-    if not s:
-        raise HTTPException(404, "订阅源不存在")
-    p = payload or {}
-    href = str(p.get("href") or "").strip()
-    if not href.lower().startswith(("http://", "https://")):
-        raise HTTPException(400, "下载地址非法")
-
-    stem, ext = opds_client.split_name(str(p.get("title") or ""), str(p.get("type") or ""))
-    stem = komga.clean_segment(stem) or "未命名"
-    # 系列：先看标题，再看 feed 里的 dc:isPartOf（Komga 会给「系列 #3」这种值）
-    series, index = komga.infer(stem)
-    if not series:
-        series, index = komga.infer(str(p.get("series") or ""))
-    layout = str((config.load_config().get("output") or {}).get("layout") or "flat").strip().lower()
-    rel = komga.relpath_for(stem, ext.lstrip("."), series, index, layout)
-    # 多书库：按归库规则选根（来源子目录名 → 格式 → 关键词），都不中则落默认库
-    target = library_rules.target_root(
-        name=rel, meta={"title": stem, "series": series}, default=config.OUTPUT_DIR,
-    ) / rel
-    if target.exists():
-        raise HTTPException(400, f"已存在同名文件：{rel}")
-    try:
-        r = opds_client.download(s, href, target.parent, target.name)
-    except opds_client.OpdsError as e:
-        raise HTTPException(400, str(e))
-    library.invalidate()
-    activity_log.log(activity_log.ACTION_ADD, rel, activity_log.STATUS_OK,
-                     output=rel, source="opds", detail=f"来自订阅源「{s['name']}」")
-    return {"ok": True, "name": rel, "bytes": r["bytes"]}
-
 
 # ---------------- KOReader 进度互通（kosync 协议服务端）----------------
 # ⚠️ 与 /opds 同理：**刻意不用 /api/ 前缀**（中间件对 /api/ 一律要 Bearer Token），
@@ -4419,6 +4330,281 @@ def ko_delete_read_progress(request: Request, book_id: str):
 def ko_patch_read_progress(request: Request, book_id: str, payload: dict = Body(None)):
     """官方新客户端用 ``PATCH``（老客户端用 ``PUT``）—— 两者语义完全一致。"""
     return ko_put_read_progress(request, book_id, payload)
+
+
+# ---- Collections（第 16 期：映射本项目的收藏夹，可写）----
+# Komga 的 Collection 装的是**系列**，本项目收藏夹装的是 **book_id** → 成员先按书归到
+# 各自系列再给出去。成员一律过 Komga 可见性过滤：有声书库的书不会从收藏夹漏进客户端。
+
+
+def _ko_collection_groups(cid) -> dict:
+    """收藏夹成员 → ``{系列名: [书…]}``（只保留对 Komga 可见的书）。"""
+    visible = {str(b.get("id") or ""): b for b in _ko_books()}
+    out: dict = {}
+    for bid in db.collection_book_ids(cid):
+        b = visible.get(str(bid or ""))
+        if not b:
+            continue                     # 越库 / 不进 Komga 的库里的书，直接跳过
+        out.setdefault(komga_api.series_name_of(b), []).append(b)
+    for items in out.values():
+        items.sort(key=_ko_series_key)
+    return out
+
+
+def _ko_series_books(ids: list) -> list:
+    """系列 id（或名字）列表 → 这些系列里的书；同一系列只算一次。"""
+    out, seen = [], set()
+    for sid in ids or []:
+        found = komga_api.find_series(str(sid))
+        if not found:
+            continue
+        name, items = found
+        if name in seen:
+            continue
+        seen.add(name)
+        out.extend(items)
+    return out
+
+
+def _ko_collection_or_404(cid) -> dict:
+    row = db.get_collection(int(cid))
+    if not row:
+        _ko_404("收藏夹不存在")
+    return row
+
+
+@app.get("/api/v1/collections")
+def ko_collections(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
+                   sort: str = ""):
+    _ko_guard(request)
+    items = [komga_api.collection_dto(r["id"], r["name"], r.get("created_at"),
+                                      _ko_collection_groups(r["id"]))
+             for r in db.list_collections()]
+    return komga_api.paginate(_ko_sorted(items, sort, "name"), page, size)
+
+
+@app.post("/api/v1/collections")
+def ko_collection_create(request: Request, payload: dict = Body(None)):
+    body = payload or {}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "收藏夹名称不能为空")
+    _ko_guard(request)
+    try:
+        cid = db.create_collection(name)
+    except Exception:                    # noqa: BLE001 —— 靠 name 的 UNIQUE 撞库判重
+        raise HTTPException(409, "同名收藏夹已存在") from None
+    for b in _ko_series_books(body.get("seriesIds") or []):
+        db.add_book_to_collection(cid, str(b.get("id") or ""))
+    return komga_api.collection_dto(cid, name, time.time(), _ko_collection_groups(cid))
+
+
+@app.get("/api/v1/collections/{cid}")
+def ko_collection_one(request: Request, cid: int):
+    _ko_guard(request)
+    row = _ko_collection_or_404(cid)
+    return komga_api.collection_dto(row["id"], row["name"], row.get("created_at"),
+                                    _ko_collection_groups(cid))
+
+
+@app.patch("/api/v1/collections/{cid}")
+def ko_collection_rename(request: Request, cid: int, payload: dict = Body(None)):
+    _ko_guard(request)
+    row = _ko_collection_or_404(cid)
+    name = str((payload or {}).get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "收藏夹名称不能为空")
+    try:
+        if not db.update_collection(cid, name):
+            _ko_404("收藏夹不存在")
+    except Exception:                    # noqa: BLE001 —— 同上，重名撞 UNIQUE
+        raise HTTPException(409, "同名收藏夹已存在") from None
+    return komga_api.collection_dto(cid, name, row.get("created_at"),
+                                    _ko_collection_groups(cid))
+
+
+@app.delete("/api/v1/collections/{cid}")
+def ko_collection_delete(request: Request, cid: int):
+    _ko_guard(request)
+    _ko_collection_or_404(cid)
+    db.delete_collection(cid)
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/collections/{cid}/series")
+def ko_collection_series(request: Request, cid: int, page: int = _KO_PAGE,
+                         size: int = _KO_SIZE):
+    _ko_guard(request)
+    _ko_collection_or_404(cid)
+    rows = db.all_series_meta()
+    items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}))
+             for n, bs in _ko_collection_groups(cid).items()]
+    return komga_api.paginate(_ko_sorted(items, "", "name"), page, size)
+
+
+@app.put("/api/v1/collections/{cid}/series")
+def ko_collection_replace_series(request: Request, cid: int, payload: dict = Body(None)):
+    """**整体替换**（Komga 的语义）：先清空，再按给定的系列逐本加入。"""
+    _ko_guard(request)
+    row = _ko_collection_or_404(cid)
+    db.clear_collection(cid)
+    for b in _ko_series_books((payload or {}).get("seriesIds") or []):
+        db.add_book_to_collection(cid, str(b.get("id") or ""))
+    return komga_api.collection_dto(cid, row["name"], row.get("created_at"),
+                                    _ko_collection_groups(cid))
+
+
+@app.delete("/api/v1/collections/{cid}/series/{series_id}")
+def ko_collection_remove_series(request: Request, cid: int, series_id: str):
+    _ko_guard(request)
+    _ko_collection_or_404(cid)
+    found = komga_api.find_series(series_id)
+    if not found:
+        _ko_404("系列不存在")
+    for b in found[1]:
+        db.remove_book_from_collection(cid, str(b.get("id") or ""))
+    return Response(status_code=204)
+
+
+@app.get("/api/v1/collections/{cid}/thumbnail")
+def ko_collection_thumb(request: Request, cid: int):
+    """夹封面 = 成员里**第一本有封面**的书。"""
+    _ko_guard(request)
+    _ko_collection_or_404(cid)
+    for items in _ko_collection_groups(cid).values():
+        for b in items:
+            if b.get("has_cover"):
+                return api_book_cover(b["id"])
+    _ko_404("该收藏夹没有可用封面")
+
+
+@app.post("/api/v1/collections/{cid}/thumbnail")
+@app.put("/api/v1/collections/{cid}/thumbnail")
+@app.delete("/api/v1/collections/{cid}/thumbnail")
+def ko_collection_thumb_unsupported(request: Request, cid: int):
+    """自定义封面不做（夹封面一律取成员书的封面）——**明确报错**，不假装成功。"""
+    _ko_guard(request)
+    raise HTTPException(403, "不支持自定义收藏夹封面：封面取成员书的封面")
+
+
+# ---- Readlists / Referential / 单库 / 上一本下一本 / analyze（第 16 期）----
+# 这批端点的共同点：**客户端会来问**。没有对应概念的（Readlist）就诚实返回空，
+# 而不是编造数据或让客户端撞 404 报错页。
+
+
+def _ko_siblings(b: dict) -> list:
+    """同系列的书（系列内已排好序）；取不到就退化成「只有自己」。"""
+    found = komga_api.find_series(komga_api.series_name_of(b))
+    return list(found[1]) if found else [b]
+
+
+def _ko_sibling(b: dict, offset: int):
+    """系列内偏移 ``offset`` 本的邻居；没有就返回 ``None``。"""
+    items = _ko_siblings(b)
+    ids = [str(x.get("id") or "") for x in items]
+    try:
+        idx = ids.index(str(b.get("id") or ""))
+    except ValueError:
+        return None
+    nxt = idx + offset
+    return items[nxt] if 0 <= nxt < len(items) else None
+
+
+@app.get("/api/v1/readlists")
+def ko_readlists(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE):
+    """本项目**没有阅读清单**这个概念 → 诚实返回空分页，不编造条目。"""
+    _ko_guard(request)
+    return komga_api.paginate([], page, size)
+
+
+@app.get("/api/v1/readlists/{rid}")
+def ko_readlist_one(request: Request, rid: str):  # noqa: ARG001 —— 任何 id 都不存在
+    _ko_guard(request)
+    _ko_404("本项目没有阅读清单")
+
+
+@app.get("/api/v1/readlists/{rid}/books")
+def ko_readlist_books(request: Request, rid: str,  # noqa: ARG001
+                      page: int = _KO_PAGE, size: int = _KO_SIZE):
+    _ko_guard(request)
+    return komga_api.paginate([], page, size)
+
+
+@app.post("/api/v1/readlists")
+@app.post("/api/v1/readlists/import")
+def ko_readlists_unsupported(request: Request):
+    _ko_guard(request)
+    raise HTTPException(403, "不支持阅读清单：本项目没有这个概念")
+
+
+@app.get("/api/v1/referential")
+def ko_referential(request: Request):
+    """客户端启动时可能取的引用表（作者 / 系列 / 标签 …）。
+
+    给**真实值**（基于对 Komga 可见的书目），字段一律齐全 —— 缺字段会让部分客户端崩。
+    """
+    _ko_guard(request)
+    authors, series, tags, langs, pubs, years = set(), set(), set(), set(), set(), set()
+    for b in _ko_books():
+        if b.get("author"):
+            authors.add(str(b["author"]).strip())
+        if b.get("series"):
+            series.add(str(b["series"]).strip())
+        if b.get("language"):
+            langs.add(str(b["language"]).strip())
+        if b.get("publisher"):
+            pubs.add(str(b["publisher"]).strip())
+        if b.get("year"):
+            years.add(str(b["year"]).strip())
+        tags.update(str(t).strip() for t in (b.get("tags") or []) if str(t).strip())
+    return {
+        "id": "referential",
+        "authors": sorted(authors), "series": sorted(series), "tags": sorted(tags),
+        "languages": sorted(langs), "publishers": sorted(pubs),
+        "seriesReleaseDates": sorted(years), "ageRatings": [], "sharingLabels": [],
+    }
+
+
+@app.get("/api/v1/libraries/{library_id}")
+def ko_library_one(request: Request, library_id: str):
+    """单库详情（对 Komga 不可见的库与不存在一律 404）。"""
+    _ko_guard(request)
+    for lib in _ko_visible_libraries():
+        if str(lib.get("id") or "") == str(library_id):
+            return komga_api.library_dto(lib)
+    _ko_404("书库不存在")
+
+
+@app.get("/api/v1/books/{book_id}/previous")
+def ko_book_previous(request: Request, book_id: str):
+    _ko_guard(request)
+    b = library.by_id(book_id) or _ko_404("书不存在")
+    prev = _ko_sibling(b, -1)
+    if not prev:
+        _ko_404("没有上一本")
+    return komga_api.book_dto(prev, komga_api.series_name_of(prev))
+
+
+@app.get("/api/v1/books/{book_id}/next")
+def ko_book_next(request: Request, book_id: str):
+    _ko_guard(request)
+    b = library.by_id(book_id) or _ko_404("书不存在")
+    nxt = _ko_sibling(b, 1)
+    if not nxt:
+        _ko_404("没有下一本")
+    return komga_api.book_dto(nxt, komga_api.series_name_of(nxt))
+
+
+@app.post("/api/v1/series/{series_id}/analyze")
+def ko_series_analyze(request: Request, series_id: str):
+    """「重新分析」：本项目书目是**实时扫描**的，没有这一步 → 返回 204 的空实现。
+
+    客户端点了不该报错；但也**不假装真的分析了什么**。
+    """
+    _ko_guard(request)
+    if not komga_api.find_series(series_id):
+        _ko_404("系列不存在")
+    return Response(status_code=204)
 
 
 @app.get("/api/duplicates")
