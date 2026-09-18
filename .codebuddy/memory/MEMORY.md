@@ -145,7 +145,7 @@
   （`views/tools/LibrariesView.vue`），启动阻塞确认在 `components/MigrationGateDialog.vue`（挂在 `App.vue`）。
 
 ## 自动化测试（第 11 期，2026-09-18）
-- **命令**：`.venv/bin/pip install -r requirements-dev.txt` → `.venv/bin/python -m pytest`（107 个用例，约 2 秒，**完全离线**）。
+- **命令**：`.venv/bin/pip install -r requirements-dev.txt` → `.venv/bin/python -m pytest`（**136 个用例**，约 2.4 秒，**完全离线**；第 11 期建 107 例，第 12 期加 29 例）。
   `requirements-dev.txt` 只放 dev 依赖（`-r requirements.txt` + `pytest>=8.0`），**不进生产镜像**；`pytest.ini` 定 `testpaths=tests` 与 `pythonpath=.`。
 - **两条硬前提（改测试前必读）**：① **环境变量必须在 import 业务模块之前设置**（`config` 导入即固化各目录、`server.py` 导入即 `ensure_dirs()`）→ `tests/conftest.py` 顶部先建会话级临时根；② `db` 的 `_conn` / `_db_path` 是**模块级缓存** → 用例隔离靠 `db.close()`（本期为测试新增的唯一业务代码，**不改运行时行为**）。
 - **夹具约定**：碰书库/DB 的用例必须声明 `isolated`；`make_library` 已**强制依赖** `isolated`；打接口用 `client` + `auth_headers`；造数据用 `make_book` / `make_audio_dir` / `make_library`。
@@ -153,6 +153,16 @@
 - **不要测会外呼的接口**：本机无外网；且测试环境配置目录为空 → `metadata_fetch.enabled=False` → `online_candidate` 直接返回 None（这是元数据相关用例能离线跑的原因，已有用例显式钉住）。
 - **`GET /` 会 503**（`static/v2/index.html` 不入库），不是可测点。
 - **C1（求书 / Requests）已决策不做（2026-09-18）**：代码骨架（`REQUEST_SECTIONS`、`GET /api/requests/config`、`RequestsPage.vue` 及其路由/设置项/API 方法）**已删除**；测试里有 404 断言防回归。上游采集记录（`NotificationsPage` 的 `Book requests` 列举、`docs/review/*`、`settings-inventory`）保留为对照，**不要当成本项目功能去删**。
+
+## 系列级元数据（第 12 期 C3 = 路线图最后一项，2026-09-18）
+- **导航**：`docs/roadmap-gaps-remaining.md` 的 A / B / C / D 类**已全部关闭**（C3 于第 12 期完成，D4 的「系列级元数据」随之完结）。新一期想做别的方向时，先看该文档的「已决策不做」清单再提。
+- **存储决策（用户拍板，勿擅改）**：系列级字段**只存本项目 SQLite（`series_meta` 表），绝不写回 EPUB**。理由：OPF 里没有「系列简介」字段，写 `dc:description` 就是覆盖**单册**简介；「系列首发年」写进各册 `dc:date` 会让某册年份失真。**已知代价（用户已知并接受）**：SMB 直读文件（Calibre 等）看不到这些字段，**连服务读**（Komga 客户端 / OPDS / 应用界面）全部可见 —— 且写回方案**同样送不出「系列简介」**，故不值得动用户文件。
+- **分层顺序**：**本地覆盖 > 本地聚合 > 在线补空**。册数 / 首发年 / 出版社 / 题材优先取**成员书 OPF 聚合的事实**；**系列简介只能来自在线**。`owned_count`（实际拥有，必来自聚合）与 `declared_count`（外部声明的总数，当前恒 0 = 未知）**是两个概念，界面分开显示**。
+- **在线可靠性低于作者侧**：外部源**没有系列实体**（不像作者有 `/search/authors.json`）→ 只能「系列名检索 + 用**成员书**书名/作者打分（复用 `score_candidate` 0.7/0.3）」，`MIN_MATCH=0.6` 以下**如实回「未找到」且不写库**，界面展示来源 + 置信度。**不要为了让界面好看而放宽阈值或编造简介。**
+- **性能红线**：`komga_api.series_dto` 在列表端点被**逐系列**调用 → 里面**不许**调 `series_meta.effective()`（会 N 次全库聚合）；列表走 `effective_light()` + `db.all_series_meta()`。`library.books()` 热路径不查 DB 的第 8 期红线仍然成立。
+- **`renumber_apply`（重排册号）不变量**：只改 OPF `calibre:series_index`、**不动文件名**（→ `book_id` 不变 → 进度/批注/评分/收藏不断链）；默认按当前序号升序、缺序号排最后；幂等；可完整回滚（返回每条 `old_index`）；**必须走 `fileops.safe_path(name, library_id)`**；`RLock` 串行化；写后 `library.invalidate(lid)` 并**回读 OPF 校验**。
+- **造真 EPUB 的坑**：`epub_builder.build_epub` 用 `ebooklib.write_epub`，而它在**父目录不存在时只 warn 不抛** → 文件静默没生成，随后 `patch_epub_meta` 报「EPUB 元数据写入失败」。**先 mkdir 输出目录**（测试用 `default_root` 夹具即可）。
+- **UI 验证（本机已具备）**：`pip install playwright` 装在项目 `.venv`（**不进生产依赖**）；1.63 自带内核未下载，用缓存内核 `~/Library/Caches/ms-playwright/chromium_headless_shell-1223/.../chrome-headless-shell` 传 `executable_path`。直连本机实例时 **`nf_token` 必须用 `context.add_init_script` 在页面脚本前注入**（否则首屏 401 会清 token 并弹登录门禁）。
 
 ## 后端踩坑（真实教训）
 - **`threading.Lock` 自锁死锁**：`log()` 持锁后调 `log_dir()`（再取同锁）→ 进程**静默挂死**（无异常无 traceback）。

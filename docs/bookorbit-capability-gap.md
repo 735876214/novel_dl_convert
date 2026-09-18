@@ -180,7 +180,7 @@
 | `/authors` 索引 / 排序 / 筛选（2+ books / Added this week） | 完整 | 部分：仅纯 Grid（`AuthorsView.vue:37-61`） | **可直接落地** | 2+books / added-this-week 前端可算 |
 | `/authors` No portrait / No sort name | 依赖作者头像与排序名 | **无**（`core/library.py:474-475` 只取 `dc:creator`） | **不建议做** | 依赖外部作者元数据服务 |
 | `/authors/:id` 传记 + Actions | 完整 | 部分：有 Back + 书数 + 书单；**无传记、无 Actions** | Last Added **可直接落地**／传记 **不建议做** | 传记需外部数据源 |
-| `/series/:id` 排序 + 方向 / Group by media / FIRST IN SERIES / 每书 #序号 / SYNOPSIS | 完整 | 部分：`SeriesDetailView.vue` 仅 Back + 册数 + 网格 | 排序/FIRST IN SERIES **可直接落地**；`#序号` **需新增后端能力**（微改）；Group by media **需新增后端能力**；Edit Metadata **需新增后端能力** | — |
+| `/series/:id` 排序 + 方向 / Group by media / FIRST IN SERIES / 每书 #序号 / SYNOPSIS | 完整 | **已完整**（第 12 期）：排序 + 方向 / FIRST IN SERIES / 每书 `#序号`（第 6 期）、Group by media（第 10 期 C2）、SYNOPSIS 与系列级字段（第 12 期 C3：`SeriesMetaPanel` 展示 + 就地编辑 + 「恢复在线」+ 抓取，`SeriesRenumberDialog` 重排册号） | — | SYNOPSIS 的取值与作者侧**不同档**：外部源没有「系列」实体，只能靠「系列名检索 + 成员书一致性打分」，低置信度时如实显示「未找到」；**且只存服务端 DB、不写回 EPUB**（OPF 无该字段） |
 | `/series` 总览 | — | **已有**（`core/library.py:386-396`） | 可直接落地 | — |
 
 ## 12. 域：批注
