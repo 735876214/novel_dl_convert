@@ -379,3 +379,174 @@ def test_系列详情按媒体分组(client, auth_headers, default_root):
     assert group["media"] == "ebook"
     assert group["label"] == "电子书库"
     assert group["count"] == 2 and len(group["books"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# 系列级元数据（第 12 期 C3）：编辑 / 覆盖 / 恢复 / 抓取优雅失败 / 重排 / 三处注入
+# ---------------------------------------------------------------------------
+
+def _series_setup(root, series: str = "银河帝国") -> str:
+    """三册真 EPUB 同系列：出版社 2:1 多数派、年份 2012–2015、题材有交集与独有项。"""
+    from novelforge.core import fileops
+
+    for fn, title, idx, pub, year, tags in (
+        ("基地.epub", "基地", "1", "江苏文艺出版社", "2012", ["科幻", "经典"]),
+        ("基地与帝国.epub", "基地与帝国", "2", "江苏文艺出版社", "2013", ["科幻"]),
+        ("第二基地.epub", "第二基地", "3", "读客文化", "2015", ["科幻", "太空"]),
+    ):
+        p = _build_real_epub(root, fn, title=title)
+        assert fileops.patch_epub_meta(p, {"series": series, "series_index": idx,
+                                           "publisher": pub, "date": year, "tags": tags})
+    library.invalidate()
+    return series
+
+
+@pytest.fixture
+def enable_services():
+    """临时开启 OPDS / Komga 兼容服务 —— 注入点要启用后才能访问（未启用一律 404）。
+
+    设置覆盖层写在**会话级** CONFIG_DIR 上，所以退出时必须还原，否则会渗到别的用例。
+    """
+    config.save_overrides({"opds": {"enabled": True},
+                           "komga": {"enabled": True, "username": "admin", "api_key": "test-key"}})
+    try:
+        yield ("admin", "test1234")
+    finally:
+        config.save_overrides({})
+
+
+def test_系列详情带元数据分层(client, auth_headers, default_root):
+    name = _series_setup(default_root)
+    detail = client.get(f"/api/series/{name}", headers=auth_headers).json()
+    meta = detail["meta"]
+    assert meta["owned_count"] == 3, "册数是实际拥有数"
+    assert meta["publisher"] == "江苏文艺出版社" and meta["first_year"] == "2012"
+    assert meta["tags"] == ["科幻", "经典", "太空"] and meta["declared_count"] == 0
+    assert set(detail["meta_state"]) == {"description", "publisher", "first_year", "tags"}
+    assert detail["meta_state"]["publisher"]["aggregated"] == "江苏文艺出版社"
+
+
+def test_系列列表带简介字段(client, auth_headers, default_root):
+    name = _series_setup(default_root)
+    items = client.get("/api/series", headers=auth_headers).json()["items"]
+    hit = next(i for i in items if i["name"] == name)
+    assert hit["description"] == "" and hit["source"] == "", "没抓过就是空值，前端有值才渲染"
+    assert hit["covers"] and hit["count"] == 3
+
+
+def test_系列元数据编辑与恢复(client, auth_headers, default_root):
+    name = _series_setup(default_root)
+    r = client.get(f"/api/series/{name}/meta", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["fields"] == ["description", "publisher", "first_year", "tags"]
+
+    r = client.post(f"/api/series/{name}/meta", headers=auth_headers,
+                    json={"description": "银河帝国系列总简介"})
+    assert r.status_code == 200, r.text
+    assert r.json()["meta"]["description"] == "银河帝国系列总简介"
+    assert r.json()["meta"]["overridden"]["description"] is True
+
+    # 覆盖后不再随聚合/在线变化；清空即撤销覆盖
+    r = client.post(f"/api/series/{name}/meta", headers=auth_headers, json={"description": ""})
+    assert r.json()["meta"]["description"] == ""
+    assert r.json()["meta"]["overridden"]["description"] is False
+    # 未覆盖的字段始终取聚合值
+    assert r.json()["meta"]["publisher"] == "江苏文艺出版社"
+
+
+def test_系列元数据接口边界(client, auth_headers, default_root):
+    name = _series_setup(default_root)
+    assert client.get(f"/api/series/{name}/meta").status_code == 401, "无令牌必须拒绝"
+    assert client.get("/api/series/不存在/meta", headers=auth_headers).status_code == 404
+    # 字段白名单：不校验就等于放任任意列名流进库里
+    assert client.post(f"/api/series/{name}/meta", headers=auth_headers,
+                       json={"owned_count": "999"}).status_code == 400
+    assert client.post(f"/api/series/{name}/meta", headers=auth_headers,
+                       json={}).status_code == 400
+
+
+def test_系列抓取离线优雅失败(client, auth_headers, default_root):
+    """会外呼的接口只断言「不抛、结构正确」—— 测试环境抓取默认关闭。"""
+    name = _series_setup(default_root)
+    r = client.post(f"/api/series/{name}/fetch", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False and r.json()["result"]["error"]
+    assert client.post("/api/series/不存在/fetch", headers=auth_headers).status_code == 404
+    assert client.post(f"/api/series/{name}/fetch").status_code == 401
+
+
+def test_系列批量抓取结构与分批(client, auth_headers, default_root):
+    _series_setup(default_root)
+    r = client.post("/api/series/fetch-all", headers=auth_headers, json={"limit": 1})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) >= {"total", "ok", "failed", "remaining", "items"}
+    assert body["total"] == 1, "limit 应把一次处理的量卡住（前端循环显示进度）"
+    assert body["failed"] == 1, "抓取未启用 → 如实计入失败，而不是抛错"
+    assert client.post("/api/series/fetch-all", headers=auth_headers,
+                       json={"names": "不是数组"}).status_code == 400
+
+
+def test_重排册号预览与执行(client, auth_headers, default_root):
+    name = _series_setup(default_root)
+    before = {b["title"]: b["id"] for b in _books(client, auth_headers)}
+
+    preview = client.get(f"/api/series/{name}/renumber/preview", headers=auth_headers)
+    assert preview.status_code == 200, preview.text
+    items = preview.json()["items"]
+    assert [i["new_index"] for i in items] == ["1", "2", "3"]
+
+    # 倒序重排：序号变了、文件名与 book_id 不能变
+    payload = [{"name": i["name"], "new_index": str(len(items) - n)}
+               for n, i in enumerate(items)]
+    r = client.post(f"/api/series/{name}/renumber/apply", headers=auth_headers,
+                    json={"items": payload})
+    assert r.status_code == 200, r.text
+    assert r.json()["renumbered"] == 3 and r.json()["mismatched"] == []
+    assert {b["title"]: b["id"] for b in _books(client, auth_headers)} == before, \
+        "只改 OPF 序号：book_id 不变 → 进度/批注不断链"
+    assert client.get(f"/api/series/{name}",
+                      headers=auth_headers).json()["meta"]["owned_count"] == 3
+
+
+def test_重排册号接口边界(client, auth_headers, default_root):
+    name = _series_setup(default_root)
+    assert client.get("/api/series/不存在/renumber/preview", headers=auth_headers).status_code == 404
+    assert client.post(f"/api/series/{name}/renumber/apply", headers=auth_headers,
+                       json={"items": []}).status_code == 400
+    assert client.get(f"/api/series/{name}/renumber/preview").status_code == 401
+
+
+def test_Komga系列摘要注入(client, enable_services, auth_headers, default_root):
+    """Komga 客户端的 SeriesDto.metadata.summary 必须带出系列简介（原先恒为空串）。"""
+    from novelforge.core import komga_api
+
+    name = _series_setup(default_root)
+    client.post(f"/api/series/{name}/meta", headers=auth_headers, json={"description": "系列简介"})
+
+    sid = komga_api.series_id(name)
+    r = client.get(f"/api/v1/series/{sid}", auth=enable_services)
+    assert r.status_code == 200, r.text
+    dto = r.json()
+    assert dto["metadata"]["summary"] == "系列简介"
+    assert dto["booksMetadata"]["summary"] == "系列简介"
+    assert dto["metadata"]["publisher"] == "江苏文艺出版社"
+
+
+def test_OPDS系列入口带简介(client, enable_services, auth_headers, default_root):
+    """订阅端在系列列表（<summary>）与系列内（<subtitle>）都能看到简介。"""
+    import urllib.parse
+
+    name = _series_setup(default_root)
+    client.post(f"/api/series/{name}/meta", headers=auth_headers, json={"description": "系列简介"})
+
+    nav = client.get("/opds/series", auth=enable_services)
+    assert nav.status_code == 200, nav.text
+    assert "系列简介" in nav.text and "<summary" in nav.text
+
+    one = client.get(f"/opds/series/{urllib.parse.quote(name)}", auth=enable_services)
+    assert one.status_code == 200, one.text
+    assert "系列简介" in one.text and "<subtitle" in one.text
+    # 作者 / 标签列表不该被顺带注入（那里没有系列简介的概念）
+    auth_nav = client.get("/opds/authors", auth=enable_services)
+    assert auth_nav.status_code == 200 and "<summary" not in auth_nav.text
