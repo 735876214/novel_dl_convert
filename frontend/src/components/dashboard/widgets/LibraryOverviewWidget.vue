@@ -29,7 +29,7 @@ const s = computed(() => stats.data)
 
 const cards = computed(() => [
   { label: '书籍', value: String(s.value?.books.total ?? library.books.length), to: '/shelf' },
-  { label: '作者', value: String(s.value?.authors.total ?? 0), to: '/placeholder/_authors' },
+  { label: '作者', value: String(s.value?.authors.total ?? 0), to: '/authors' },
   { label: '系列', value: String(s.value?.series.total ?? 0), to: '/series' },
   { label: '占用', value: fmtBytes(s.value?.books.size ?? 0), to: '/stats' },
 ])

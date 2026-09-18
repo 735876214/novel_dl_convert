@@ -328,7 +328,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['Two-way progress sync', 'Sync highlights to Kobo', 'Include Kobo store titles', 'Convert to KEPUB', 'Force hyphenation', 'MARK AS READING（1%）', 'MARK AS FINISHED（99%）', 'KEPUB 上限（100MB）'],
         },
       }),
-      p('koreader', 'KOReader', 'KOReader', 'placeholder', {
+      p('koreader-upstream', 'KOReader (upstream)', 'KOReader 上游对照', 'placeholder', {
         upstream: {
           title: 'KOReader',
           desc: 'Progress sync and document matching.',
@@ -343,13 +343,13 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['SERVER', 'ENDPOINT', 'OPDS ACCOUNTS', 'OPDS NOTES'],
           items: ['OPDS Catalog Server 开关', '端点地址（可复制）', 'OPDS 账号管理', '排序（Recently Added / Title / Author / Series 各升降序）'],
         },
-        note: '已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页（?page=）与排序（?sort=recent|title|author|series&order=）。鉴权用 **HTTP Basic + 应用账号**（OPDS 客户端只会发 Basic，所以 /opds 不走 /api 的 Bearer 中间件）。未支持：独立 OPDS 账号体系、按书库分别暴露。',
+        note: '已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页（?page=）与排序（?sort=recent|title|author|series&order=）。第 14 期起支持按书库分别暴露：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 /opds/lib/<库 id>，可在「工具 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404）。鉴权用 HTTP Basic + 应用账号（OPDS 客户端只会发 Basic，所以 /opds 不走 /api 的 Bearer 中间件）。未支持：独立 OPDS 账号体系。',
       }),
       p('koreader', 'KOReader', 'KOReader 进度互通', 'ready', {
         note: '本项目实现 kosync 协议的服务端：healthcheck / users/auth / users/create / syncs/progress（GET+PUT）。**三个必须精确的协议细节**：①鉴权头是 x-auth-user / x-auth-key，key = 密码的 MD5（不是 Basic，服务端也只存这个哈希）；②文档标识是 partialMD5（只采样 12 个点，偏移 1024×4^i，i=-1..10，**不读第 0 字节**、读不满即停），另有 checksum_method=FILENAME 的 md5(basename) 变体，两种都索引；③percentage 是 0–1，progress 对 EPUB 是 XPointer、PDF/漫画是页码。进度映射：DocFragment[N] ↔ 本项目章节序号（N-1），PDF/漫画用页码；反向的 XPointer 只定位到章首，准确位置由 percentage 兜底。未支持：多设备管理、注解/书签同步。',
       }),
       p('komga', 'Komga', 'Komga 库布局', 'ready', {
-        note: '本项目实现「输出侧」：输出布局开关（output.layout —— 有系列的书落 系列名/系列名 #N.ext，无系列保持平铺）+ 既有库整理（先预览、再应用）。**会改 basename 的条目在应用时自动迁移阅读进度 / 批注 / 评分 / 收藏**（按 book_id 搬迁），整理库不会把进度清零。系列来源：EPUB 的 calibre:series 优先，判不出则从文件名推断（系列 第01卷 / 系列 #1 / 系列 (01) / 系列 - 01），都判不出就原地不动。未支持「接入侧」：从 Komga 拉书目 / 下载入库、双向同步进度。',
+        note: '本项目实现「输出侧」：输出布局开关（output.layout —— 有系列的书落 系列名/系列名 #N.ext，无系列保持平铺）+ 既有库整理（先预览、再应用）。**会改 basename 的条目在应用时自动迁移阅读进度 / 批注 / 评分 / 收藏**（按 book_id 搬迁），整理库不会把进度清零。系列来源：EPUB 的 calibre:series 优先，判不出则从文件名推断（系列 第01卷 / 系列 #1 / 系列 (01) / 系列 - 01），都判不出就原地不动。第 15 期起兼容服务端补齐：客户端可按书库浏览（系列与书籍都按库过滤，老客户端的 GET 端点同样生效）、系列级「全部已读 / 全部未读」（只把百分比顶到 100，不清除读者位置）、CBR 拿到正确的媒体类型；有声书库不进 Komga（Komga 没有音频模型，硬塞进去只会得到打不开的坏条目）。未支持「接入侧」：从 Komga 拉书目 / 下载入库、双向同步进度。',
       }),
       p('email', 'Email', '邮件投递', 'placeholder', {
         upstream: {
@@ -434,7 +434,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
         },
       }),
       p('admin/book-dock', 'Book Dock', '收书目录', 'ready', {
-        note: '已实现：投递目录（= 输入目录）+ 监听状态与启停 + 自动处理开关 + 处理计数。上游的「元数据自动抓取」「置信度自动定稿」依赖元数据体系，暂标未支持。',
+        note: '已实现：投递目录（= 输入目录）+ 监听状态与启停 + 自动处理开关 + 处理计数 + 入库后自动抓元数据（watcher 旁路调用 auto_fetch，按所属库的策略执行；达到置信度阈值的字段自动定稿，低于阈值的只列在预览页等人工确认）。',
         upstream: {
           title: 'Book Dock',
           desc: 'Quick actions shown on book pages.',

@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
+import { api, type LibraryEntity } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 
@@ -15,16 +16,33 @@ import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vu
  *
  * 本项目实现：只读目录 feed（全部 / 最近 / 按作者 / 按系列 / 按标签 / 搜索 / 单书详情 /
  * 封面 / 下载），鉴权用**应用账号**（Basic Auth）。
+ *
+ * 第 14 期起**按书库暴露**：可见库多于一个时，根 feed 会多一个「按书库」入口，
+ * 每个书库有独立地址 `/opds/lib/<库 id>`，可以只订阅其中一个。逐库开关在
+ * 「工具 → 书库管理 → 每库设置」的「对 OPDS 暴露」（默认全部暴露）。
+ *
  * 未支持：独立的 OPDS 账号体系（上游可为不同客户端建不同账号与权限）。
  */
 const ui = useUiStore()
 const { cfg, saving, val, setVal, loadConfig, saveSection } = useSettingsConfig()
 
-onMounted(() => loadConfig())
+const libs = ref<LibraryEntity[]>([])
+
+onMounted(async () => {
+  await loadConfig()
+  try {
+    libs.value = (await api.libraries())?.items ?? []
+  } catch {
+    libs.value = []   // 书库列表取不到不影响本页其它开关，不弹错
+  }
+})
 
 const enabled = computed(() => Boolean(val('opds.enabled')))
 /** 端点是同源根路径（应用挂在 /，#/x 是 hash 路由，不影响 /opds） */
-const endpoint = computed(() => `${window.location.origin}/opds`)
+const origin = computed(() => window.location.origin)
+const endpoint = computed(() => `${origin.value}/opds`)
+/** 单库地址：库 id 可能含中文 / 空格，URL 里必须编码 */
+const libUrl = (id: string) => `${origin.value}/opds/lib/${encodeURIComponent(id)}`
 
 /** 当前账号名：直接从 token 的首段取（格式 user.exp.sig），不必额外请求 */
 const account = computed(() => {
@@ -35,12 +53,13 @@ const account = computed(() => {
   }
 })
 
-const copied = ref(false)
-async function copyEndpoint(): Promise<void> {
+/** 存**被复制的那条地址**（而不是布尔值）：多行列地址时不会一起变成「已复制」 */
+const copied = ref('')
+async function copy(text: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(endpoint.value)
-    copied.value = true
-    setTimeout(() => (copied.value = false), 1500)
+    await navigator.clipboard.writeText(text)
+    copied.value = text
+    setTimeout(() => (copied.value = ''), 1500)
   } catch {
     ui.toast('复制失败，请手动选中地址')
   }
@@ -87,8 +106,31 @@ async function toggle(): Promise<void> {
           <code class="flex-1 truncate rounded-md border border-border bg-muted px-3 py-2 font-mono text-[12px] text-foreground">
             {{ endpoint }}
           </code>
-          <Button size="sm" @click="copyEndpoint">{{ copied ? '已复制' : '复制' }}</Button>
+          <Button size="sm" @click="copy(endpoint)">{{ copied === endpoint ? '已复制' : '复制' }}</Button>
         </div>
+      </div>
+
+      <div v-if="libs.length > 1" class="border-b border-border px-4 py-3.5">
+        <div class="mb-1.5 text-[13px] font-medium text-foreground">按书库订阅</div>
+        <div class="mb-2 text-[11.5px] text-muted-foreground">
+          每个书库有独立地址，只想订阅其中一个（例如只给孩子设备看漫画库）就填下面对应那条。
+          关掉某库的「对 OPDS 暴露」后，它既不出现在这里，直连它的地址也返回 404。
+        </div>
+        <ul class="space-y-1.5">
+          <li v-for="l in libs" :key="l.id" class="flex flex-wrap items-center gap-2">
+            <span class="w-24 shrink-0 truncate text-[12.5px] text-foreground">{{ l.name }}</span>
+            <code class="min-w-0 flex-1 truncate rounded-md border border-border bg-muted px-2.5 py-1.5 font-mono text-[11.5px] text-foreground">
+              {{ libUrl(l.id) }}
+            </code>
+            <Button size="sm" variant="ghost" @click="copy(libUrl(l.id))">
+              {{ copied === libUrl(l.id) ? '已复制' : '复制' }}
+            </Button>
+          </li>
+        </ul>
+        <p class="mt-2 text-[11.5px] text-muted-foreground">
+          书库导航：<code class="font-mono">{{ origin }}/opds/libraries</code>；
+          逐库开关在「工具 → 书库管理 → 每库设置」。
+        </p>
       </div>
 
       <div class="border-b border-border px-4 py-3.5">
@@ -123,9 +165,8 @@ async function toggle(): Promise<void> {
       :items="[
         'OPDS 账号管理（独立账号 / 每客户端权限 / 失效时间）——本项目用应用账号',
         '仅 HTTPS 的强制开关（上游为按部署方式给建议）',
-        '按书库分别暴露 feed（本项目单一 OUTPUT_DIR）',
       ]"
-      note="本项目已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页与排序参数、Basic 认证（账号=应用账号）。"
+      note="本项目已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页与排序参数、Basic 认证（账号=应用账号），以及按书库分别暴露（每个书库有独立地址，可逐库开关）。"
     />
   </div>
 </template>

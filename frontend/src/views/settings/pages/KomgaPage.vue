@@ -300,7 +300,12 @@ async function apply(): Promise<void> {
           阅读进度双向同步：客户端读到第几页 ↔ 本项目详情页的进度；EPUB 用 locator（章节 + 百分比）。
           实测通过：Mihon/Panels 所需的 <code class="font-mono">/api/v1/libraries</code>、
           <code class="font-mono">/series</code>、<code class="font-mono">/books</code>、
-          <code class="font-mono">/pages</code>、<code class="font-mono">/read-progress</code> 均已按 Komga 的分页壳与字段名对齐。
+          <code class="font-mono">/pages</code>、<code class="font-mono">/read-progress</code> 均已按 Komga 的分页壳与字段名对齐；
+          书库维度也已打通 —— 客户端点进某个书库只看到该库的内容，系列上还能直接标「全部已读」。
+        </p>
+        <p class="mt-2 text-[11.5px] text-amber-600 dark:text-amber-400">
+          有声书库不会出现在 Komga 客户端里：Komga 没有音频模型，硬塞进去只会得到打不开的坏条目。
+          要听有声书请用应用内的播放器或 OPDS。
         </p>
       </div>
     </Card>
@@ -311,10 +316,9 @@ async function apply(): Promise<void> {
       :items="[
         '从 Komga 拉取书目 / 下载入库（需 Komga REST 客户端）',
         '与已有 Komga 服务器双向同步（本项目已能充当服务端，但不做客户端）',
-        '按 Komga 库分别输出（本项目单一 OUTPUT_DIR）',
         'HTTP/2 与 WebSocket 那类实时推送（客户端会回落到轮询）',
       ]"
-      note="已实现两侧：①输出侧——输出布局开关（output.layout）+ 既有库整理（会改名时自动迁移阅读数据）；②兼容服务端——第三方 Komga 客户端可直接连本应用，支持 Basic / X-API-Key / 会话认证、分页壳、系列与书籍列表、封面、CBZ 与 PDF 页面流、EPUB 下载与 manifest、阅读进度双向同步。"
+      note="已实现两侧：①输出侧——输出布局开关（output.layout）+ 既有库整理（会改名时自动迁移阅读数据）；②兼容服务端——第三方 Komga 客户端可直接连本应用，支持 Basic / X-API-Key / 会话认证、分页壳、系列与书籍列表（可按书库过滤，老客户端的 GET 端点同样生效）、封面、CBZ/CBR 与 PDF 页面流、EPUB 下载与 manifest、阅读进度双向同步，以及系列级「全部已读 / 全部未读」（只把百分比顶到 100，不清除读者位置）。有声书库不进 Komga（Komga 没有音频模型）。"
     />
   </div>
 </template>
