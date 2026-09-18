@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 *.pyo
+# pytest 缓存（tests/ 在版本库里，缓存不在）
+.pytest_cache/
 .env
 .venv/
 venv/

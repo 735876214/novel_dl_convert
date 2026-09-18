@@ -38,6 +38,23 @@ def _connect():
     return _conn
 
 
+def close() -> None:
+    """关闭并清空缓存的连接与数据库路径。
+
+    供**测试**（每个用例一套独立空库）与「运行时切换 DATA_DIR」使用。
+    正常请求流程不会调用它 —— 生产路径下连接始终复用，行为与之前完全一致。
+    """
+    global _conn, _db_path
+    with _lock:
+        if _conn is not None:
+            try:
+                _conn.close()
+            except Exception:
+                pass
+        _conn = None
+        _db_path = None
+
+
 def init():
     """建表并写入默认账号（环境变量 AUTH_USER / AUTH_PIN 控制，缺省 admin/changeme）。"""
     with _lock:
