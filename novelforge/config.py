@@ -167,12 +167,19 @@ DEFAULTS = {
         "username": "admin",   # HTTP Basic 的用户名（密码用登录 PIN）
         "api_key": "",         # 可选：客户端也可用 X-API-Key（App 端比 Basic 更省事）
     },
+    # 多书库（第 10 期 D8）。
+    # 库实体本身存 SQLite（libraries 表）；这里只放**跨库策略开关**。
+    "libraries": {
+        # 启动时检测到「现有书还没按格式归库」时，是否跳过确认直接搬。
+        # 默认 **False**：迁移是真移文件（破坏性），第一次必须由用户点一次确认。
+        "auto_migrate": False,
+    },
 }
 
 
 def ensure_dirs():
     """确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在（容器启动时调用）。"""
-    for d in (INPUT_DIR, OUTPUT_DIR, CONFIG_DIR, COOKIE_DIR, CACHE_DIR, SOURCES_DIR, LOG_DIR, DATA_DIR, BACKUP_DIR, FONTS_DIR):
+    for d in (INPUT_DIR, OUTPUT_DIR, CONFIG_DIR, COOKIE_DIR, CACHE_DIR, SOURCES_DIR, LOG_DIR, DATA_DIR, BACKUP_DIR, FONTS_DIR, LIBRARY_SOURCE_DIR):
         try:
             d.mkdir(parents=True, exist_ok=True)
         except Exception:

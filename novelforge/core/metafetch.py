@@ -94,6 +94,8 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         base = {
             "name": b["name"], "book_id": b["id"], "title": b.get("title") or "",
             "author": b.get("author") or "", "format": b.get("format") or "",
+            # 多书库：回传库 id，`apply` 才能把路径解析到**该书的库根**（否则默认库误判）
+            "library_id": b.get("library_id") or library.DEFAULT_LIBRARY_ID,
             "candidates": [], "sources": {}, "best_score": 0.0,
             "auto_ok": False, "changes": {}, "cover": None, "skipped": "", "error": "",
         }
@@ -238,7 +240,9 @@ def apply(items: list, cfg: dict = None) -> dict:
         if not name:
             continue
         try:
-            path = fileops.safe_path(name)           # 复用越界/非法字符校验
+            # 多书库：基根取**该书所属库**（前端回传 library_id 优先，缺失则按名字反查），
+            # 不能默认落到默认库根 —— 否则非默认库的书会被误判「文件不存在」。
+            path = fileops.safe_path(name, fileops._lib_of(name, it))
             if not path.is_file():
                 raise ValueError("文件不存在")
             if path.suffix.lower() != ".epub":
@@ -249,7 +253,8 @@ def apply(items: list, cfg: dict = None) -> dict:
 
             # 把「将要写回的在线值」记进 meta_online（仅供「恢复在线」回退，不参与展示优先）
             if updates:
-                db.set_online(library._book_id(name), {k: (v, "") for k, v in updates.items()})
+                bid = it.get("book_id") or library._book_id(name)
+                db.set_online(bid, {k: (v, "") for k, v in updates.items()})
 
             add_files = None
             href = mt = ""

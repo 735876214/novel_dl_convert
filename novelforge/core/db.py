@@ -235,8 +235,12 @@ def init():
                 photo_local_path TEXT NOT NULL DEFAULT '',
                 fetched_at       REAL NOT NULL DEFAULT 0
             );
-            -- 多书库（第 10 期 D8）：库实体。type 决定功能显隐矩阵；
-            -- mode='inplace' 就地引用来源子目录（不搬文件），'import' 则另有 storage_path。
+            -- 多书库（第 10 期 D8）：库实体。type 决定功能显隐矩阵。
+            -- root_path **永远是实际库根**（扫描 / 落盘 / 路径解析的唯一根），两种模式一致。
+            -- mode='inplace' 就地引用来源子目录（不搬文件）；'import' 库另有独立存储（root_path 就是它）。
+            -- source_subdir 来源子目录名（相对 LIBRARY_SOURCE_DIR）—— **只存相对名**：
+            --   挂载点换了之后存绝对路径会失效，存相对子目录不会。
+            -- storage_path 预留（当前为空）：将来「来源与存储在物理上分开记」时才用。
             CREATE TABLE IF NOT EXISTS libraries (
                 id             TEXT PRIMARY KEY,
                 name           TEXT NOT NULL,
@@ -265,6 +269,13 @@ def init():
                 created_at REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_mig_batch ON library_migrations(batch_id);
+            -- 轻量 KV：持久化**运行态**（如「用户已答过迁移门禁」）。
+            -- 刻意不放 config.yaml —— 那是用户配置，会被设置页覆盖；门禁状态属于运行痕迹。
+            CREATE TABLE IF NOT EXISTS app_state (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL
+            );
             """
         )
         # 轻量迁移：ratings 表后来加了 review 列。CREATE TABLE IF NOT EXISTS
@@ -1560,6 +1571,31 @@ def migration_last_batch(direction="move") -> str:
         (str(direction),),
     ).fetchone()
     return row["batch_id"] if row else ""
+
+
+# ---- 运行态 KV（app_state）----
+
+def state_get(key, default="") -> str:
+    row = _connect().execute("SELECT value FROM app_state WHERE key=?", (str(key),)).fetchone()
+    return row["value"] if row else str(default)
+
+
+def state_set(key, value) -> None:
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO app_state(key, value, updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            (str(key), str(value or ""), time.time()),
+        )
+        c.commit()
+
+
+def state_delete(key) -> None:
+    c = _connect()
+    with _lock:
+        c.execute("DELETE FROM app_state WHERE key=?", (str(key),))
+        c.commit()
 
 
 def set_status(book_id, status, started_at=None, finished_at=None) -> dict:

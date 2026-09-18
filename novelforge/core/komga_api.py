@@ -38,7 +38,8 @@ from . import auth as auth_mod
 from . import db, library
 from .library import norm_key
 
-#: 只有一个库，id 固定（客户端只透传，不做语义解析）
+#: 库 id / 名字的**兜底**常量：多书库后真实值来自 ``libraries`` 表，
+#: 只在拿不到库实体时使用（例如库表为空的老部署）。
 LIBRARY_ID = "novelforge"
 LIBRARY_NAME = "NovelForge"
 #: 会话 cookie（Komga 官方 Web 用这个；第三方 App 多数直接用 Basic）
@@ -166,6 +167,16 @@ def library_dto(lib: dict = None) -> dict:
     }
 
 
+def book_library_id(b: dict) -> str:
+    """书归属的**真实**库 id —— 必须与 ``/api/v1/libraries`` 返回的 id 一致。
+
+    书目自带 ``library_id``（扫描时写入，见 core/library.py）。缺失时回退**默认库 id**
+    而非 :data:`LIBRARY_ID` 常量：后者只用于兜底展示，若拿它当归属，客户端点进任一库
+    都会得到空列表（id 对不上）。
+    """
+    return str((b or {}).get("library_id") or library.DEFAULT_LIBRARY_ID)
+
+
 def series_name_of(b: dict) -> str:
     """书归属的系列名：没有系列就**用书名**（Komga 里每本书都属于某个系列）。"""
     s = str(b.get("series") or "").strip()
@@ -208,7 +219,9 @@ def series_dto(name: str, items: list) -> dict:
     latest = max([b.get("mtime") or 0 for b in items] or [0])
     first = items[0] if items else {}
     return {
-        "id": series_id(name), "libraryId": LIBRARY_ID, "name": name,
+        # 系列按名字跨库聚合，若同名系列的书分散在多库，归属取**第一本**所在库
+        # （Komga 的 SeriesDto 只允许一个 libraryId；给空会让客户端整页失败）
+        "id": series_id(name), "libraryId": book_library_id(first), "name": name,
         "url": "", "created": iso(latest), "lastModified": iso(latest),
         "fileLastModified": iso(latest),
         "booksCount": len(items), "booksReadCount": read,
@@ -251,7 +264,7 @@ def book_dto(b: dict, series_name: str = "") -> dict:
         number = 1
     return {
         "id": b["id"], "seriesId": series_id(sname), "seriesTitle": sname,
-        "libraryId": LIBRARY_ID,
+        "libraryId": book_library_id(b),
         "name": pathlib.PurePosixPath(str(b.get("name") or "")).name,
         "url": "", "number": number,
         "created": iso(b.get("mtime")), "lastModified": iso(b.get("mtime")),
