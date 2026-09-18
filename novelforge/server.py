@@ -12,7 +12,7 @@ import shutil
 import time
 import uuid
 import zipfile
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import yaml
 
@@ -518,7 +518,12 @@ def opds_root(request: Request):
     a, s, t = _opds_groups(bs)
     counts = {"all": len(bs), "authors": len(a), "series": len(s), "tags": len(t),
               "updated": _opds_updated(bs)}
-    return _opds_xml(opds.navigation_feed(_opds_base(request), counts), "navigation")
+    # 书库入口只在「可见库多于一个」时出现（单库部署输出与加它之前逐字节一致）
+    libs = [(str(l.get("id") or ""), str(l.get("name") or ""),
+             len(library.books(library_id=str(l.get("id") or ""))))
+            for l in _opds_visible_libraries()]
+    return _opds_xml(opds.navigation_feed(_opds_base(request), counts, libraries=libs),
+                     "navigation")
 
 
 @app.get("/opds/all")
@@ -647,6 +652,250 @@ def opds_download(request: Request, bid: str):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
+    path = library.root_of(b) / b["name"]
+    if not path.is_file():
+        raise HTTPException(404, "文件不存在")
+    return FileResponse(path, media_type=opds.mime_of(b.get("format")), filename=b["name"])
+
+
+# ---------------- OPDS 按库暴露（第 14 期）----------------
+# 书库在第 10 期之后已经是**数据实体**，但对外目录仍只有一个「全库」视图：客户端订阅
+# `/opds` 看到的是所有库混在一起。这里补上库维度 —— 既能订阅全部，也能单独订阅某个库。
+#
+# 三条口径（改这里之前先看一眼）：
+# 1. **库只能落在路径上**。OPDS 客户端只会发 URL（多数连自定义头都不支持），且订阅的是
+#    固定地址，所以不加 `?library=` 查询参数，而是给单库整套独立前缀。
+# 2. **默认零变化**。`/opds`、`/opds/all` 等既有地址一行没动，输出字节也不变 —— 已经订阅
+#    出去的地址不能因为升级而失效。
+# 3. **「不可见」与「不存在」对客户端一律 404**。不给任何「这里有个库只是不让你看」的暗示。
+
+
+def _opds_visible_libraries() -> list:
+    """对 OPDS 可见的书库：库类型具备该能力，且开关开着。
+
+    开关取 **每库覆写 ?? 全局**（与 `lib_settings` 的其它覆盖项同口径）：全局默认
+    `opds.expose = True`，即**全部书库都暴露**，与加这个开关之前的行为完全一致。
+    """
+    cfg = config.load_config()
+    default = bool((cfg.get("opds") or {}).get("expose", True))
+    out = []
+    for lib in library.libraries():
+        lid = str(lib.get("id") or "")
+        if not features.allows_setting(str(lib.get("type") or "mixed"), "opds.expose"):
+            continue                        # 库类型没这能力 → 覆写即便残留也不生效
+        ov = lib_settings.overrides(lid).get("opds.expose")
+        if not (default if ov is None else bool(ov)):
+            continue
+        out.append(lib)
+    return out
+
+
+def _opds_lib(lid: str) -> dict:
+    """取一个**对 OPDS 可见**的书库；不存在 / 不可见都 404。"""
+    target = unquote(str(lid or "")).strip()
+    for lib in _opds_visible_libraries():
+        if str(lib.get("id") or "") == target:
+            return lib
+    raise HTTPException(404, "书库不存在或未对 OPDS 暴露")
+
+
+def _opds_prefix(lib_id: str) -> str:
+    return f"/opds/lib/{quote(str(lib_id), safe='')}"
+
+
+def _opds_fid(lib_id: str, section: str) -> str:
+    """单库 feed 的 urn。带上库 id，免得与全局同名 section 撞 id（客户端按 id 去重）。"""
+    return f"urn:novelforge:opds:lib:{lib_id}:{section}"
+
+
+def _opds_book_in(lib_id: str, bid: str) -> "dict | None":
+    """在该库书目内按 id 取书 —— **不用** `library.by_id`（跨库同名会抛 `BookIdConflict`）。
+
+    单库模式下的详情 / 封面 / 下载都经过这里，于是「这本书在不在该库」只有这一处判定。
+    """
+    for b in library.books(library_id=lib_id):
+        if b.get("id") == bid:
+            return b
+    return None
+
+
+@app.get("/opds/libraries")
+def opds_libraries(request: Request):
+    """书库导航：列出对 OPDS 可见的书库，每个带册数。"""
+    _opds_guard(request)
+    libs = _opds_visible_libraries()
+    rows = [(str(l.get("id") or ""), str(l.get("name") or ""),
+             len(library.books(library_id=str(l.get("id") or "")))) for l in libs]
+    return _opds_xml(opds.library_navigation(_opds_base(request), rows,
+                                             _opds_updated(library.books())), "navigation")
+
+
+@app.get("/opds/lib/{lid}")
+def opds_lib_root(request: Request, lid: str):
+    """单库根导航（客户端可以只订阅这一个库）。"""
+    _opds_guard(request)
+    lib = _opds_lib(lid)
+    lib_id = str(lib["id"])
+    bs = library.books(library_id=lib_id)
+    a, s, t = _opds_groups(bs)
+    counts = {"all": len(bs), "authors": len(a), "series": len(s), "tags": len(t),
+              "updated": _opds_updated(bs)}
+    return _opds_xml(opds.navigation_feed(
+        _opds_base(request), counts, prefix=_opds_prefix(lib_id),
+        title=str(lib.get("name") or "书库"), feed_id=_opds_fid(lib_id, "root")),
+        "navigation")
+
+
+@app.get("/opds/lib/{lid}/all")
+def opds_lib_all(request: Request, lid: str, page: int = Query(1, ge=1),
+                 sort: str = Query("recent"), order: str = Query("desc")):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    bs = opds.sort_books(library.books(library_id=lib_id), sort, order)
+    return _opds_xml(opds.acquisition_feed(
+        _opds_base(request), "全部书籍", "all", bs, page=page, sort=sort, order=order,
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "all")), "acquisition")
+
+
+@app.get("/opds/lib/{lid}/recent")
+def opds_lib_recent(request: Request, lid: str, page: int = Query(1, ge=1)):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    bs = opds.sort_books(library.books(library_id=lib_id), "recent", "desc")
+    return _opds_xml(opds.acquisition_feed(
+        _opds_base(request), "最近添加", "recent", bs, page=page,
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "recent")), "acquisition")
+
+
+@app.get("/opds/lib/{lid}/authors")
+def opds_lib_authors(request: Request, lid: str):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    bs = library.books(library_id=lib_id)
+    a, _, _ = _opds_groups(bs)
+    return _opds_xml(opds.group_navigation(
+        _opds_base(request), "按作者", "author", a, _opds_updated(bs),
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "author")), "navigation")
+
+
+@app.get("/opds/lib/{lid}/series")
+def opds_lib_series(request: Request, lid: str):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    bs = library.books(library_id=lib_id)
+    _, s, _ = _opds_groups(bs)
+    rows = db.all_series_meta()
+    descs = {name: series_meta.effective_light(name, rows.get(name) or {})["description"]
+             for name, _count in s}
+    return _opds_xml(opds.group_navigation(
+        _opds_base(request), "按系列", "series", s, _opds_updated(bs), descriptions=descs,
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "series")), "navigation")
+
+
+@app.get("/opds/lib/{lid}/tags")
+def opds_lib_tags(request: Request, lid: str):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    bs = library.books(library_id=lib_id)
+    _, _, t = _opds_groups(bs)
+    return _opds_xml(opds.group_navigation(
+        _opds_base(request), "按标签", "tag", t, _opds_updated(bs),
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "tag")), "navigation")
+
+
+@app.get("/opds/lib/{lid}/author/{name}")
+def opds_lib_by_author(request: Request, lid: str, name: str, page: int = Query(1, ge=1)):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    target = unquote(name).strip()
+    bs = [b for b in library.books(library_id=lib_id)
+          if (b.get("author") or "").strip() == target]
+    if not bs:
+        raise HTTPException(404, "该书库没有这位作者的书")
+    bs = opds.sort_books(bs, "title", "asc")
+    return _opds_xml(opds.acquisition_feed(
+        _opds_base(request), f"作者：{target}", "author", bs, page=page,
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "author")), "acquisition")
+
+
+@app.get("/opds/lib/{lid}/series/{name}")
+def opds_lib_by_series(request: Request, lid: str, name: str, page: int = Query(1, ge=1)):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    target = unquote(name).strip()
+    bs = [b for b in library.books(library_id=lib_id)
+          if (b.get("series") or "").strip() == target]
+    if not bs:
+        raise HTTPException(404, "该书库没有这个系列的书")
+    bs = opds.sort_books(bs, "series", "asc")
+    desc = series_meta.effective_light(target)["description"]
+    return _opds_xml(opds.acquisition_feed(
+        _opds_base(request), f"系列：{target}", "series", bs, page=page, subtitle=desc,
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "series")), "acquisition")
+
+
+@app.get("/opds/lib/{lid}/tag/{name}")
+def opds_lib_by_tag(request: Request, lid: str, name: str, page: int = Query(1, ge=1)):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    target = unquote(name).strip()
+    bs = [b for b in library.books(library_id=lib_id)
+          if target in [str(x).strip() for x in (b.get("tags") or [])]]
+    if not bs:
+        raise HTTPException(404, "该书库没有这个标签的书")
+    bs = opds.sort_books(bs, "title", "asc")
+    return _opds_xml(opds.acquisition_feed(
+        _opds_base(request), f"标签：{target}", "tag", bs, page=page,
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "tag")), "acquisition")
+
+
+@app.get("/opds/lib/{lid}/search")
+def opds_lib_search(request: Request, lid: str, q: str = Query(""),
+                    page: int = Query(1, ge=1)):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    term = (q or "").strip().lower()
+    bs = library.books(library_id=lib_id)
+    if term:
+        bs = [b for b in bs
+              if term in (b.get("title") or "").lower()
+              or term in (b.get("author") or "").lower()
+              or term in (b.get("series") or "").lower()]
+    else:
+        bs = []
+    bs = opds.sort_books(bs, "title", "asc")
+    title = f"搜索：{q}" if term else "搜索（请带 ?q= 参数）"
+    return _opds_xml(opds.acquisition_feed(
+        _opds_base(request), title, "search", bs, page=page,
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "search")), "acquisition")
+
+
+@app.get("/opds/lib/{lid}/book/{bid}")
+def opds_lib_book(request: Request, lid: str, bid: str):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    b = _opds_book_in(lib_id, bid)
+    if not b:
+        raise HTTPException(404, "书籍不在该书库内")
+    return _opds_xml(opds.book_feed(_opds_base(request), b, prefix=_opds_prefix(lib_id)))
+
+
+@app.get("/opds/lib/{lid}/cover/{bid}")
+def opds_lib_cover(request: Request, lid: str, bid: str):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    if not _opds_book_in(lib_id, bid):
+        raise HTTPException(404, "书籍不在该书库内")
+    return api_book_cover(bid)
+
+
+@app.get("/opds/lib/{lid}/download/{bid}")
+def opds_lib_download(request: Request, lid: str, bid: str):
+    _opds_guard(request)
+    lib_id = str(_opds_lib(lid)["id"])
+    b = _opds_book_in(lib_id, bid)
+    if not b:
+        raise HTTPException(404, "书籍不在该书库内")
     path = library.root_of(b) / b["name"]
     if not path.is_file():
         raise HTTPException(404, "文件不存在")
@@ -2515,7 +2764,7 @@ EDITABLE: dict = {
     "logging": {"dir", "max_entries"},
     "upload": {"max_bytes", "max_source_rules_bytes"},
     "achievements": {"enabled"},
-    "opds": {"enabled"},
+    "opds": {"enabled", "expose"},
     "koreader": {"enabled", "username", "key"},
     # 整块覆盖：三家服务的字段各不相同，逐键白名单只会让新增字段时漏改
     "integrations": {"hardcover", "readwise", "storygraph"},
@@ -3820,6 +4069,83 @@ def _ko_read_filter(payload: dict):
     return lambda b: all(t(b) for t in tests)
 
 
+# ---- 按库过滤（第 15 期）----
+# 多书库之后，客户端在库视图里选了某个库，看到的却仍是全部书库混在一起（系列侧甚至完全
+# 忽略筛选条件）。这里把库维度接到 Komga 出口，口径照抄第 14 期的 OPDS 按库暴露：
+# **默认等于今天的行为**（不传库 = 全部**可见**库），且可见性判定只有这一处。
+
+
+def _ko_visible_libraries() -> list:
+    """对 Komga 客户端可见的书库：库类型具备 ``komga`` 能力。
+
+    **有声书库天然不具备**（见 `features.FEATURES_BY_TYPE`）：Komga 没有音频模型，
+    有声书落到客户端就是打不开的坏条目 —— 所以从**书库**这一层挡掉，而不是让每本书
+    各自判断（口径只留一处，库类型改了会自动跟着变）。
+    """
+    return [lib for lib in library.libraries()
+            if features.visible(str(lib.get("type") or "mixed"), "komga")]
+
+
+def _ko_visible_ids() -> set:
+    return {str(l.get("id") or "") for l in _ko_visible_libraries()}
+
+
+def _ko_books(library_id=None) -> list:
+    """Komga 视图下的书目：只含可见库；不给库时按可见库逐个取再合并。"""
+    lid = str(library_id or "").strip()
+    if lid:
+        if lid not in _ko_visible_ids():
+            return []                    # 不可见的库对客户端就是「没有」
+        return library.books(library_id=lid)
+    out = []
+    for lib in _ko_visible_libraries():
+        out.extend(library.books(library_id=str(lib.get("id") or "")))
+    return out
+
+
+def _ko_series_key(b: dict):
+    """系列内排序键（与 `komga_api.grouped` 内部同一口径）。"""
+    try:
+        return (float(str(b.get("series_index") or "").strip() or 1e9),
+                str(b.get("title") or ""))
+    except ValueError:
+        return (1e9, str(b.get("title") or ""))
+
+
+def _ko_grouped(library_id=None) -> dict:
+    """可见库范围内的 ``{系列名: [书…]}``。"""
+    lid = str(library_id or "").strip()
+    if lid:
+        if lid not in _ko_visible_ids():
+            return {}
+        return komga_api.grouped(lid)
+    out: dict = {}
+    for lib in _ko_visible_libraries():
+        for name, items in komga_api.grouped(str(lib.get("id") or "")).items():
+            out.setdefault(name, []).extend(items)
+    for items in out.values():           # 跨库同名系列合并后要重排一次
+        items.sort(key=_ko_series_key)
+    return out
+
+
+def _ko_library_id_of(payload: dict) -> str:
+    """从 Komga 的 SearchCondition 里取 libraryId（取第一个即可）。
+
+    老客户端会发单库时代的兜底常量 `komga_api.LIBRARY_ID` —— 按 `_ko_read_filter` 的
+    既有约定，此时当作默认库。
+    """
+    cond = (payload or {}).get("condition") or {}
+    for cl in (cond.get("allOf") or ([cond] if cond else [])):
+        if not isinstance(cl, dict) or "libraryId" not in cl:
+            continue
+        for raw in ((cl["libraryId"] or {}).get("in") or []):
+            lid = str(raw or "").strip()
+            if not lid:
+                continue
+            return library.DEFAULT_LIBRARY_ID if lid == komga_api.LIBRARY_ID else lid
+    return ""
+
+
 # ---- 认证 / 用户 ----
 
 @app.post("/api/v1/login")
@@ -3857,41 +4183,48 @@ def ko_me(request: Request):
 
 @app.get("/api/v1/libraries")
 def ko_libraries(request: Request):
-    """客户端第一步就调它（多书库后逐库返回）。"""
+    """客户端第一步就调它（多书库后**逐库**返回；有声书库不进 Komga）。"""
     _ko_guard(request)
-    return [komga_api.library_dto(lib) for lib in library.libraries()]
+    return [komga_api.library_dto(lib) for lib in _ko_visible_libraries()]
 
 
 # ---- 系列（latest 必须先于 {series_id}）----
 
-def _ko_series_page(page: int, size: int, sort: str) -> dict:
+def _ko_series_page(page: int, size: int, sort: str, library_id: str = "") -> dict:
+    """``library_id`` 为空 = 全部**可见**书库（与加参数前一致）。"""
     # 列表端点遍历**全部**系列 → 走轻量分层（不聚合），一次取全元数据行
     rows = db.all_series_meta()
     items = [komga_api.series_dto(name, bs, series_meta.effective_light(name, rows.get(name) or {}))
-             for name, bs in komga_api.grouped().items()]
+             for name, bs in _ko_grouped(library_id).items()]
     return komga_api.paginate(_ko_sorted(items, sort, "name"), page, size)
 
 
 @app.get("/api/v1/series")
-def ko_series_get(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
-    """已弃用（1.19+ 推 `POST /series/list`），但**老客户端仍在用**，必须保留。"""
+def ko_series_get(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
+                  sort: str = "", library_id: str = ""):
+    """已弃用（1.19+ 推 `POST /series/list`），但**老客户端仍在用**，必须保留。
+
+    ``library_id`` 为空 = 全部**可见**书库（与加参数前一致）。
+    """
     _ko_guard(request)
-    return _ko_series_page(page, size, sort)
+    return _ko_series_page(page, size, sort, library_id)
 
 
 @app.post("/api/v1/series/list")
 def ko_series_list(request: Request, payload: dict = Body(None),
                    page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
+    """筛选条件里的 ``libraryId`` 现在真的生效（此前 payload 被整个丢掉）。"""
     _ko_guard(request)
-    return _ko_series_page(page, size, sort)
+    return _ko_series_page(page, size, sort, _ko_library_id_of(payload))
 
 
 @app.get("/api/v1/series/latest")
-def ko_series_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE):
+def ko_series_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
+                     library_id: str = ""):
     _ko_guard(request)
     rows = db.all_series_meta()
     items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}))
-             for n, bs in komga_api.grouped().items()]
+             for n, bs in _ko_grouped(library_id).items()]
     return komga_api.paginate(_ko_sorted(items, "lastModifiedDate,desc"), page, size)
 
 
@@ -3934,22 +4267,26 @@ def ko_series_thumb(request: Request, series_id: str):
 
 # ---- 书籍（latest / ondeck 必须先于 {book_id}）----
 
-def _ko_books_dto(sort: str = "") -> list:
-    return _ko_sorted([komga_api.book_dto(b) for b in library.books()], sort, "name")
+def _ko_books_dto(sort: str = "", library_id: str = "") -> list:
+    return _ko_sorted([komga_api.book_dto(b) for b in _ko_books(library_id)], sort, "name")
 
 
 @app.get("/api/v1/books")
-def ko_books_get(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
-    """已弃用但老客户端在用（同系列）。"""
+def ko_books_get(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
+                 sort: str = "", library_id: str = ""):
+    """已弃用但老客户端在用（同系列）。
+
+    ``library_id`` 为空 = 全部**可见**书库（与加参数前一致）。
+    """
     _ko_guard(request)
-    return komga_api.paginate(_ko_books_dto(sort), page, size)
+    return komga_api.paginate(_ko_books_dto(sort, library_id), page, size)
 
 
 @app.post("/api/v1/books/list")
 def ko_books_list(request: Request, payload: dict = Body(None),
                   page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
     _ko_guard(request)
-    bs = library.books()
+    bs = _ko_books()                     # 可见库范围内（有声书库不进 Komga）
     flt = _ko_read_filter(payload)
     if flt:
         bs = [b for b in bs if flt(b)]
@@ -3958,9 +4295,11 @@ def ko_books_list(request: Request, payload: dict = Body(None),
 
 
 @app.get("/api/v1/books/latest")
-def ko_books_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE):
+def ko_books_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
+                    library_id: str = ""):
     _ko_guard(request)
-    return komga_api.paginate(_ko_sorted(_ko_books_dto(), "lastModifiedDate,desc"), page, size)
+    return komga_api.paginate(_ko_sorted(_ko_books_dto("", library_id),
+                                         "lastModifiedDate,desc"), page, size)
 
 
 @app.get("/api/v1/books/ondeck")
@@ -3968,7 +4307,7 @@ def ko_books_ondeck(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE
     """待读：**系列里已有在读书**时，该系列的第一本未读书（Komga 的语义）。"""
     _ko_guard(request)
     out = []
-    for name, items in komga_api.grouped().items():
+    for name, items in _ko_grouped().items():
         pcts = [float((db.get_progress(b["id"]) or {}).get("percent") or 0) for b in items]
         if not any(0 < p < 99.5 for p in pcts):
             continue
@@ -3976,6 +4315,32 @@ def ko_books_ondeck(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE
         if nxt:
             out.append(komga_api.book_dto(nxt, name))
     return komga_api.paginate(out, page, size)
+
+
+@app.post("/api/v1/series/{series_id}/read-progress")
+def ko_series_mark_read(request: Request, series_id: str):
+    """标记整个系列为**已读**（Komga 官方：``POST`` → 204，无 body）。
+
+    **保留每本书的原位置、只把 percent 顶到 100** —— 「标已读」不该把读者送回第一页
+    （见 `komga_api.mark_series_read`）。
+    """
+    _ko_guard(request)
+    found = komga_api.find_series(series_id)
+    if not found:
+        _ko_404("系列不存在")
+    komga_api.mark_series_read(found[1], completed=True)
+    return Response(status_code=204)
+
+
+@app.delete("/api/v1/series/{series_id}/read-progress")
+def ko_series_mark_unread(request: Request, series_id: str):
+    """标记整个系列为**未读**（Komga 官方：``DELETE`` → 204）。"""
+    _ko_guard(request)
+    found = komga_api.find_series(series_id)
+    if not found:
+        _ko_404("系列不存在")
+    komga_api.mark_series_read(found[1], completed=False)
+    return Response(status_code=204)
 
 
 @app.get("/api/v1/books/{book_id}")
@@ -4048,6 +4413,12 @@ def ko_delete_read_progress(request: Request, book_id: str):
         _ko_404("书不存在")
     db.set_progress(book_id, 0, 0)
     return Response(status_code=204)
+
+
+@app.patch("/api/v1/books/{book_id}/read-progress")
+def ko_patch_read_progress(request: Request, book_id: str, payload: dict = Body(None)):
+    """官方新客户端用 ``PATCH``（老客户端用 ``PUT``）—— 两者语义完全一致。"""
+    return ko_put_read_progress(request, book_id, payload)
 
 
 @app.get("/api/duplicates")
