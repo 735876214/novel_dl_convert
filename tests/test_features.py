@@ -11,7 +11,7 @@ COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"}
 
 
 def test_漫画库能力集():
-    assert set(features.features_for("comic")) == COMMON | {"comic", "opds_sources", "komga"}
+    assert set(features.features_for("comic")) == COMMON | {"comic", "komga"}
 
 
 def test_有声书库能力集():
@@ -21,7 +21,7 @@ def test_有声书库能力集():
 def test_电子书库能力集():
     got = set(features.features_for("ebook"))
     assert {"ebook", "pdf", "annotations", "metadata", "authors",
-            "convert", "sources", "opds_sources", "komga"} <= got
+            "convert", "sources", "komga"} <= got
     assert "comic" not in got and "audio" not in got
 
 
