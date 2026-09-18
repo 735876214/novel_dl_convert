@@ -15,7 +15,7 @@
 """
 import httpx
 
-from . import db, fileops, library, metasources
+from . import db, fileops, lib_settings, library, metasources
 from .library import norm_key
 
 #: 封面下载上限：常见封面 100KB–2MB，超过 8MB 基本是异常图
@@ -40,6 +40,25 @@ DEFAULT_POLICY = "overwrite"
 
 def _cfg(cfg: dict) -> dict:
     return ((cfg or {}).get("metadata_fetch") or {})
+
+
+def _mf_of(book: dict, mf: dict) -> dict:
+    """**该书所属库**的生效 ``metadata_fetch``（第 13 期「每库覆盖」）。
+
+    只并入该库**真正覆写过**的键（见 :func:`lib_settings.apply_to`），所以：
+    库没覆写时结果与传入的 ``mf`` 完全一致 —— 既有行为不变；
+    库覆写了就按库走，这正是「每库覆盖」的意义（如电子书库抓、混合库不抓）。
+    """
+    return lib_settings.apply_to(mf, (book or {}).get("library_id"), "metadata_fetch")
+
+
+def _threshold_of(mf: dict, fallback: float) -> float:
+    """从配置段取阈值并夹到合法区间；取不到 / 非法 → 用 ``fallback``。"""
+    try:
+        t = float((mf or {}).get("threshold"))
+    except (TypeError, ValueError):
+        return fallback
+    return t if 0 < t <= 1 else fallback
 
 
 def _current_value(book: dict, field: str):
@@ -78,7 +97,8 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         threshold = 0.75
     if not (0 < threshold <= 1):
         threshold = 0.75
-    policy = mf.get("fields") or {}
+    # 字段策略不在这里一次性取：它可能**按库不同**（见循环里的 `b_policy`），
+    # 这里只留库级都取不到时的兜底值（DEFAULT_POLICY）。
     blocklist = {norm_key(x) for x in (mf.get("genre_blocklist") or []) if str(x).strip()}
     options = {"googlebooks": {"api_key": mf.get("googlebooks_api_key") or ""}}
 
@@ -99,6 +119,16 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             "candidates": [], "sources": {}, "best_score": 0.0,
             "auto_ok": False, "changes": {}, "cover": None, "skipped": "", "error": "",
         }
+        # 第 13 期：策略（开关 / 字段 / 阈值）按**该书所属库**取。
+        # 库没覆写过时 `_mf_of` 原样返回传入值 → 行为与改造前逐字段一致。
+        mfb = _mf_of(b, mf)
+        b_policy = mfb.get("fields") or {}
+        b_threshold = _threshold_of(mfb, threshold)
+        if not mfb.get("enabled"):
+            base["skipped"] = "该库已关闭在线元数据抓取（每库覆盖）"
+            items.append(base)
+            continue
+
         # ⚠️ `library.books()` 的 format 本来就是大写（"EPUB"），这里必须与 "EPUB" 比 ——
         # 写成 `.upper() != "epub"` 会让**每本 EPUB 都被当成非 EPUB 跳过**（实测踩过）
         if (b.get("format") or "").upper() != "EPUB":
@@ -123,11 +153,11 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             continue
 
         base["best_score"] = best["score"]
-        base["auto_ok"] = best["score"] >= threshold
+        base["auto_ok"] = best["score"] >= b_threshold
         vals = _candidate_values(best, blocklist)
         changes = {}
         for field, value in vals.items():
-            pol = policy.get(field) or DEFAULT_POLICY
+            pol = b_policy.get(field) or DEFAULT_POLICY
             if pol == "skip" or not value:
                 continue
             # 用户改过的字段受保护：抓取不覆盖，否则会冲掉本地修正
@@ -144,7 +174,7 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
                               "score": best["score"]}
         base["changes"] = changes
 
-        cover_pol = policy.get("cover") or DEFAULT_POLICY
+        cover_pol = b_policy.get("cover") or DEFAULT_POLICY
         if best.get("cover_url") and cover_pol != "skip":
             has = bool(b.get("has_cover"))
             if (not has) or cover_pol == "overwrite":
@@ -167,6 +197,10 @@ def online_candidate(book: dict, cfg: dict = None, limit: int = None) -> "dict |
     不参与任何落盘，因此和 :func:`plan` 一样是纯查询。
     """
     mf = _cfg(cfg)
+    if not mf.get("enabled"):
+        return None
+    # 第 13 期：该书所属库覆盖过开关就按库走（库没覆写则与全局一致）
+    mf = _mf_of(book, mf)
     if not mf.get("enabled"):
         return None
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))

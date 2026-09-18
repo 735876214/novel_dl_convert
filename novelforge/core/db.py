@@ -292,6 +292,10 @@ def init():
                 storage_path   TEXT NOT NULL DEFAULT '',
                 source_subdir  TEXT NOT NULL DEFAULT '',
                 rules          TEXT NOT NULL DEFAULT '',
+                -- 每库覆盖（第 13 期）：JSON 文本，键 = 全局配置的**点分路径**（如 "output.layout"）。
+                -- 只存**被本库覆写**的键；未出现的键一律继承全局 ——
+                -- 于是全局改了策略，没覆写过的库会自动跟着变（若存全量副本就做不到这点）。
+                settings       TEXT NOT NULL DEFAULT '',
                 sort_order     INTEGER NOT NULL DEFAULT 0,
                 created_at     REAL NOT NULL,
                 last_scan_at   REAL NOT NULL DEFAULT 0,
@@ -329,6 +333,11 @@ def init():
         ocols = {r["name"] for r in c.execute("PRAGMA table_info(meta_override)")}
         if ocols and "orig" not in ocols:
             c.execute("ALTER TABLE meta_override ADD COLUMN orig TEXT NOT NULL DEFAULT ''")
+        # 第 13 期：libraries 后来加了 settings 列（每库覆盖）。
+        # CREATE TABLE IF NOT EXISTS 不会改已有表结构，老库不补列则读写会报 no such column。
+        lcols = {r["name"] for r in c.execute("PRAGMA table_info(libraries)")}
+        if lcols and "settings" not in lcols:
+            c.execute("ALTER TABLE libraries ADD COLUMN settings TEXT NOT NULL DEFAULT ''")
         _seed_user(c)
         c.commit()
 
@@ -1583,25 +1592,30 @@ def get_library(lid) -> "dict | None":
 
 
 def create_library(lid, name, type_, mode="inplace", root_path="",
-                   storage_path="", source_subdir="", rules="", sort_order=0) -> dict:
+                   storage_path="", source_subdir="", rules="", sort_order=0,
+                   settings="") -> dict:
+    """建库。``settings`` 是每库覆盖的 JSON 文本（第 13 期），新建时通常传空串。"""
     c = _connect()
     with _lock:
         c.execute(
             "INSERT OR REPLACE INTO libraries"
             "(id, name, type, mode, root_path, storage_path, source_subdir, rules,"
-            " sort_order, created_at, last_scan_at, last_scan_note) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,0,'')",
+            " settings, sort_order, created_at, last_scan_at, last_scan_note) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,0,'')",
             (str(lid), str(name), str(type_), str(mode), str(root_path),
              str(storage_path or ""), str(source_subdir or ""), str(rules or ""),
-             int(sort_order or 0), time.time()),
+             str(settings or ""), int(sort_order or 0), time.time()),
         )
         c.commit()
     return get_library(lid) or {}
 
 
-#: update_library 允许改的列（白名单，避免把任意键拼进 SQL）
+#: update_library 允许改的列（白名单，避免把任意键拼进 SQL）。
+#: ⚠️ 新增列**必须**同时加进来，否则 update_library 会**静默写不进**
+#: （它是「过滤后为空就原样返回」，不报错）。
 _LIBRARY_COLS = {"name", "type", "mode", "root_path", "storage_path",
-                 "source_subdir", "rules", "sort_order", "last_scan_at", "last_scan_note"}
+                 "source_subdir", "rules", "settings", "sort_order",
+                 "last_scan_at", "last_scan_note"}
 
 
 def update_library(lid, **fields) -> "dict | None":

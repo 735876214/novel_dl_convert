@@ -164,16 +164,122 @@ def decide_for_path(src, base_dir=None) -> "dict | None":
     return decide(src=src, base_dir=base_dir)
 
 
+class IngestConflict(Exception):
+    """入库时命中**跨库同名**：同名同扩展的文件已经在**别的库**里了。
+
+    带 ``suggest``（建议的新文件名，与迁移侧同一套 ``X (2).ext`` 文案）与
+    ``existing``（撞上的那本书）。**同库同名不会走到这里** —— 那是「重新转换
+    一版」的正常覆盖流程。
+
+    刻意继承 ``Exception`` 而不是 ``RuntimeError``：调用方（watcher / 下载任务 /
+    上传）现成的 ``except Exception`` 兜底就会把它记成一次失败并带上可读原因，
+    **不会中断扫描线程或任务循环**（第 13 期「后台路径记日志并跳过，不向后抛」）。
+    交互路径（上传 / convert-path）额外把它翻成 400 + 建议名。
+    """
+
+    def __init__(self, message: str, suggest: str = "", existing: dict = None):
+        super().__init__(message)
+        self.suggest = suggest
+        self.existing = existing
+
+
+def library_id_of_root(root) -> str:
+    """由**库根**反查库 id；不在任何已登记库根内时返回空串。
+
+    摄入闸门用它判断「同名的那本是不是**别的**库」—— 判据必须是库身份，
+    不能只看目录是否相同（两个库的根可以长得像，也可能指向同一个位置）。
+    """
+    try:
+        want = pathlib.Path(root).resolve()
+    except Exception:
+        return ""
+    for l in library.libraries():
+        try:
+            if pathlib.Path(l.get("root_path") or "").resolve() == want:
+                return str(l.get("id") or "")
+        except Exception:
+            continue
+    return ""
+
+
+def guard_conflict(out_dir, rel: str) -> None:
+    """产出**前**的跨库同名闸门；命中就抛 :class:`IngestConflict`。
+
+    放在「最终落盘相对路径已知」的那一刻（``pipeline.dispatch`` / ``_emit`` /
+    watcher 自实现的复制分支），因此 Komga 布局下改成 ``系列/系列 #N.epub``
+    也照样按**真正要写的名字**判定，不会因为只看源文件名而漏判。
+
+    ``out_dir`` 必须是**目标库根**（摄入侧一律来自 :func:`resolve_target`）；
+    同库内已有同名文件**一律放行**（覆盖是正常流程），这是本期最易误伤的点。
+    """
+    base = pathlib.PurePosixPath(str(rel or "")).name
+    if not base:
+        return
+    lib_id = library_id_of_root(out_dir) or library.DEFAULT_LIBRARY_ID
+    hit = library.id_conflict_with(base, lib_id)
+    if not hit:
+        return
+    other = str(hit.get("library_id") or "")
+    lib_name = ""
+    for l in library.libraries():
+        if str(l.get("id") or "") == other:
+            lib_name = str(l.get("name") or other)
+            break
+    suggest = library.suggest_name(base, lib_id, out_dir)
+    raise IngestConflict(
+        f"已存在同名文件「{base}」（在「{lib_name or other}」中）——"
+        f"两个库各有一本同名书会让阅读进度 / 批注无法区分归属。"
+        f"建议改名为「{suggest}」，或到「工具 → 书库管理 → 跨库同名冲突」一键修复",
+        suggest=suggest,
+        existing={"name": hit.get("name"), "library_id": other, "library_name": lib_name},
+    )
+
+
+def resolve_target(src=None, name: str = "", meta: dict = None, base_dir=None,
+                   default=None) -> dict:
+    """摄入目标的**决策结构**：``{library, library_id, root, conflict, suggest, existing}``。
+
+    判据与 :func:`target_root` 完全同源，只是把「命中的库实体」也交出来 ——
+    调用方需要库 id 才能取**该库的生效配置**（第 13 期「每库覆盖」：
+    落盘布局 / 转换产物 / 非 txt 收取都可能逐库不同，见 :mod:`core.lib_settings`）。
+
+    ``library`` 为 ``None`` 表示没命中任何规则、落到 ``default``（默认库），
+    此时 ``library_id`` 也是空串（调用方按「无覆写」处理即可）；
+    ``effective_library_id`` 则是**真正拥有该根目录的库**，冲突判据用它。
+
+    ``conflict`` 为真 = ``name`` 的 basename 已经在**别的库**里（同名同扩展，
+    见 :func:`guard_conflict`）；此时 ``suggest`` 是建议的新名字，``existing``
+    是撞上的那本。**同库同名不算冲突**，一定放行。
+    """
+    lib = decide(src=src, name=name, meta=meta, base_dir=base_dir)
+    if lib:
+        root = pathlib.Path(lib.get("root_path") or default or config.OUTPUT_DIR)
+    elif default is not None:
+        root = pathlib.Path(default)
+    else:
+        root = library.root_of(library.DEFAULT_LIBRARY_ID)
+    lib_id = str((lib or {}).get("id") or "")
+    effective_id = lib_id or library_id_of_root(root) or library.DEFAULT_LIBRARY_ID
+
+    base = name or pathlib.PurePosixPath(str(src or "")).name
+    hit = library.id_conflict_with(base, effective_id) if base else None
+    return {
+        "library": lib,
+        "library_id": lib_id,
+        "effective_library_id": effective_id,
+        "root": root,
+        "conflict": hit is not None,
+        "existing": hit,
+        "suggest": library.suggest_name(base, effective_id, root) if hit and base else "",
+    }
+
+
 def target_root(src=None, name: str = "", meta: dict = None, base_dir=None,
                 default=None) -> pathlib.Path:
     """落库根目录：命中规则用命中的库，否则回退 ``default``（再退默认库根）。
 
     这是**摄入侧**取目标目录的唯一入口（上传 / 下载 / 监听三条链路共用），
-    与读取侧 ``library.root_of()`` 对称。
+    与读取侧 ``library.root_of()`` 对称。需要库实体 / 冲突信息时用 :func:`resolve_target`。
     """
-    lib = decide(src=src, name=name, meta=meta, base_dir=base_dir)
-    if lib:
-        return pathlib.Path(lib.get("root_path") or default or config.OUTPUT_DIR)
-    if default is not None:
-        return pathlib.Path(default)
-    return library.root_of(library.DEFAULT_LIBRARY_ID)
+    return resolve_target(src=src, name=name, meta=meta, base_dir=base_dir,
+                          default=default)["root"]

@@ -34,6 +34,20 @@ def _place(out_dir: Path, stem: str, ext: str, series: str, index: str, cfg: dic
     return target
 
 
+def _guard(out_dir: Path, target: Path) -> None:
+    """落盘前的跨库同名闸门（第 13 期）。
+
+    延迟导入 ``library_rules``：pipeline 在 core 内部被广泛引用，顶层导入会
+    增加循环依赖风险；这里只在真正要写盘时付出一次导入成本（之后命中 sys.modules）。
+    """
+    from . import library_rules
+    try:
+        rel = target.relative_to(out_dir).as_posix()
+    except ValueError:                                  # 理论上不会发生，防御性放行
+        return
+    library_rules.guard_conflict(out_dir, rel)
+
+
 def _emit(base_meta: dict, chapters: list, out_dir: Path, opts: dict) -> Path:
     """产出成品：EPUB 必产，再按 ``output.format`` 派生 MOBI / AZW3。
 
@@ -54,6 +68,8 @@ def _emit(base_meta: dict, chapters: list, out_dir: Path, opts: dict) -> Path:
     epub = _place(out_dir, title, "epub", series, index, cfg)
     if epub.exists() and not opts.get("force"):
         return epub
+    # 跨库同名闸门：名字到这里才最终确定（Komga 布局下带系列前缀），必须在此判定
+    _guard(out_dir, epub)
     epub_builder.build_epub(base_meta, chapters, str(epub))
 
     fmt = str((cfg.get("output") or {}).get("format") or "epub").strip().lower()
@@ -173,6 +189,7 @@ def dispatch(src: Path, out_dir: Path, opts: dict):
             src.name, meta.get("series", ""), meta.get("series_index", "")
         )
         target = out_dir / komga.relpath_for_dir(src.name, series, index, _layout(cfg))
+        _guard(out_dir, target)
         _copy_tree(src, target)
         return ("copy", target)
     if src.suffix.lower() == ".txt":
@@ -185,6 +202,7 @@ def dispatch(src: Path, out_dir: Path, opts: dict):
             src.stem, meta.get("series", ""), meta.get("series_index", "")
         )
         target = _place(out_dir, src.stem, src.suffix.lstrip("."), series, index, cfg)
+        _guard(out_dir, target)
         shutil.copy2(src, target)
         return ("copy", target)
     return ("skip", src)

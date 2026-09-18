@@ -22,6 +22,7 @@ from urllib.parse import quote, unquote
 import re
 import threading
 import time
+import uuid
 import zipfile
 
 from .. import config
@@ -582,17 +583,135 @@ def chapter_html(path: pathlib.Path, index: int, bid: str) -> dict:
     return {"index": index, "total": len(spine), "title": title, "html": html}
 
 
+class BookIdConflict(RuntimeError):
+    """同一 ``book_id`` 命中多本（跨库 / 库内同名同扩展）。
+
+    单独一个类型是为了让服务层能把它翻成**可读的 409 + 修复入口**，而不是让
+    详情页 / 阅读进度接口整体 500（第 13 期「冲突可见而非整页报错」）。
+    继承 ``RuntimeError``：既有把 ``RuntimeError`` 当兜底的调用方行为不变。
+    """
+
+
 def by_id(bid: str) -> "dict | None":
     """按 id 取书。
 
-    多库下同一 id 可能命中多本（跨库**同名同扩展**）—— 此时**显式报错**，不静默取第一条，
-    否则进度 / 批注会写到错的书上。正常情况下入库与迁移的冲突检测已拦掉这种数据。
+    多库下同一 id 可能命中多本（跨库 / 库内**同名同扩展**）—— 此时**显式报错**，不静默取第一条，
+    否则进度 / 批注会写到错的书上。
+
+    ⚠️ 入库侧的冲突拦截是**第 13 期才补上**的（此前只有迁移侧会拦），所以老库里完全可能
+    已经躺着这种数据 —— 旧注释写的「入库与迁移都已拦掉」与实况不符。命中时抛
+    :class:`BookIdConflict`（是 ``RuntimeError`` 的子类，原有 except 不受影响），
+    提示语直接指向修复入口。
     """
     hits = [b for b in books() if b["id"] == bid]
     if len(hits) > 1:
+        names = " / ".join(sorted({str(h.get("name")) for h in hits}))
         libs = "、".join(sorted({str(h.get("library_id")) for h in hits}))
-        raise RuntimeError(f"book_id {bid} 在多个书库中重复（{libs}），请先改名消除冲突")
+        raise BookIdConflict(
+            f"《{names}》在多个书库中同名（{libs}），本服务无法确定是哪一本。"
+            f"请到「工具 → 书库管理 → 跨库同名冲突」一键改名消除冲突后重试"
+        )
     return hits[0] if hits else None
+
+
+# ---------------- 同名冲突（book_id 撞车）----------------
+
+def id_conflicts() -> list:
+    """**同名冲突**清单：按 ``book_id`` 聚合，只留命中多本的组。
+
+    ``book_id`` 由 basename 派生（见 :func:`book_id`），所以「A 库有三体.epub、
+    B 库也有三体.epub」会撞上**同一个 id** —— 进度 / 批注 / 评分只有一份，
+    打开哪一本都说不清（``by_id`` 会直接抛 :class:`BookIdConflict`）。这里按 id
+    分组把它显式列出来，交给工具页一键改名修复。
+
+    - ``cross_library`` 为真 = **跨库**冲突（多书库下最该被注意的情形，新产生的会被
+      入库侧拦掉，见 ``core/library_rules.resolve_target``）；
+    - 库内的同名（同一库里两个系列目录下同名）同样会撞 id，也一并列出；
+    - ``items[0]`` 是**保留项**（扫描顺序 = 库序 + 目录序，确定性），其余是需要改名的；
+    - 每个**待改名**项带 ``suggest``（界面据此直接给出「改名为此」的默认值，
+      省掉前端自己算一套 —— 口径只有 ``suggest_name`` 一处）。
+
+    O(n) 一次分组，不做两两比对。
+    """
+    bucket: dict = {}
+    for b in books():
+        bid = str(b.get("id") or "")
+        if bid:
+            bucket.setdefault(bid, []).append(b)
+    name_of_lib = {str(l.get("id")): str(l.get("name") or "") for l in libraries()}
+    out = []
+    for bid, items in bucket.items():
+        if len(items) < 2:
+            continue
+        libs = sorted({str(b.get("library_id") or "") for b in items})
+        rows = []
+        for i, b in enumerate(items):
+            keep = i == 0
+            rows.append({
+                "name": b["name"],
+                "library_id": b.get("library_id"),
+                "library_name": name_of_lib.get(str(b.get("library_id") or ""), ""),
+                "format": b.get("format") or "",
+                "size": b.get("size") or 0,
+                "mtime": b.get("mtime") or 0,
+                "keep": keep,
+                # 建议名只给**要改名**的那些（保留项不动）；文案与迁移侧同口径
+                "suggest": "" if keep else suggest_name(b["name"], b.get("library_id"),
+                                                        root_of(b)),
+            })
+        out.append({
+            "id": bid,
+            "name": items[0]["name"],
+            "title": items[0].get("title") or items[0]["name"],
+            "cross_library": len(libs) > 1,
+            "library_count": len(libs),
+            "keep": items[0]["name"],
+            # 组级默认建议名 = 第一个待改名项的建议名（界面「一键」用它打底）
+            "suggest": rows[1]["suggest"] if len(rows) > 1 else "",
+            "items": rows,
+        })
+    # 跨库的排前面；组内书多的排前面；同档按名字稳定排序
+    out.sort(key=lambda g: (not g["cross_library"], -len(g["items"]), g["name"]))
+    return out
+
+
+def id_conflict_with(name: str, library_id=None) -> "dict | None":
+    """``name`` 的 ``book_id`` 是否已命中**别的库**的书（入库冲突判据）。
+
+    只比 id（= basename）而不比整个相对路径：Komga 布局下同一本书在 A 库是
+    ``系列/书.epub``、在 B 库是 ``书.epub``，照样撞同一个 id，照样说不清进度归谁。
+
+    **同库同名不算冲突** —— 那是「重新投递一版」的正常流程（覆盖旧文件即可），
+    必须放行。这是本期最容易误伤的地方。
+    """
+    bid = book_id(name)
+    if not bid:
+        return None
+    lid = str(library_id or "")
+    for b in books():
+        if b.get("id") == bid and str(b.get("library_id") or "") != lid:
+            return b
+    return None
+
+
+def suggest_name(name: str, library_id=None, root=None) -> str:
+    """给 ``name`` 找一个「不撞 id、目标目录里也不存在」的候选名。
+
+    文案与迁移侧同一套（``三体 (2).epub``，见 ``core.migrate._suggest_name``）；
+    这里**只建议、不自动改** —— 改名会换 ``book_id``，必须显式确认后走冲突修复
+    流程（它会把关联数据一起搬，见 ``db.remap_book_id``）。
+    """
+    p = pathlib.PurePosixPath(str(name))
+    stem, suffix, parent = p.stem, p.suffix, str(p.parent)
+    for i in range(2, 100):
+        cand = f"{stem} ({i}){suffix}"
+        rel = cand if parent in ("", ".") else f"{parent}/{cand}"
+        if root is not None and (pathlib.Path(root) / rel).exists():
+            continue
+        if id_conflict_with(rel, library_id) is not None:
+            continue
+        return rel
+    return f"{stem} ({uuid.uuid4().hex[:6]}){suffix}"
 
 
 def series_list() -> list:
@@ -781,10 +900,15 @@ def _exts_for_type(ltype) -> tuple:
 
 
 def default_library() -> dict:
-    """默认库：老部署的 ``OUTPUT_DIR``（库表为空时使用）。"""
+    """默认库：老部署的 ``OUTPUT_DIR``（库表为空时使用）。
+
+    字段与 ``db.list_libraries()`` 的行**保持同形**（含第 13 期的 ``settings``），
+    否则「库表为空」这条回退路径上的消费者会拿到缺键的 dict。
+    """
     return {"id": DEFAULT_LIBRARY_ID, "name": "默认书库", "type": "mixed",
             "mode": "inplace", "root_path": str(config.OUTPUT_DIR),
-            "storage_path": "", "source_subdir": "", "rules": "", "sort_order": 0}
+            "storage_path": "", "source_subdir": "", "rules": "", "settings": "",
+            "sort_order": 0}
 
 
 def libraries() -> list:
@@ -897,7 +1021,10 @@ def _scan_once(lib: dict = None) -> list:
     """扫描**一个书库**的根目录，返回书目条目。
 
     ``name`` 仍是**相对该库根**的 posix 路径 —— BookCard 契约不变，前端 / OPDS / Komga
-    都不必连锁改；跨库同名由入库与迁移时的冲突检测拦住（见 core/migrate.py）。
+    都不必连锁改；跨库同名由入库侧（``core/library_rules.resolve_target``）与迁移侧
+    （``core/migrate.py``）**两道**冲突检测拦住 —— 入库侧的拦截是第 13 期才补上的，
+    此前只有迁移侧会拦（旧注释把两件事写成了一件）。已经产生的冲突用
+    :func:`id_conflicts` 列出来，走工具页一键改名修复。
     """
     lib = lib or default_library()
     d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
@@ -1101,11 +1228,15 @@ def book_detail(name: str, library_id=None) -> dict | None:
 
 # ---------------- 聚合 ----------------
 
-def entities(kind: str) -> dict:
-    """按作者或系列聚合：``{type, items: [{name, count, books}]}``。"""
+def entities(kind: str, library_id=None) -> dict:
+    """按作者或系列聚合：``{type, items: [{name, count, books}]}``。
+
+    ``library_id`` 给定时**只看该库**（工具页的「范围：当前库」）；缺省 = 全部书库。
+    """
     field = "author" if kind == "author" else "series"
+    bs = books(library_id)
     bucket: dict = {}
-    for b in books():
+    for b in bs:
         key = (b.get(field) or "").strip()
         if not key:
             continue
@@ -1114,10 +1245,10 @@ def entities(kind: str) -> dict:
         {"name": k, "count": len(v), "books": v}
         for k, v in sorted(bucket.items(), key=lambda kv: (-len(kv[1]), kv[0]))
     ]
-    return {"type": kind, "items": items, "total": len(books())}
+    return {"type": kind, "items": items, "total": len(bs)}
 
 
-def duplicate_groups(threshold: int = 85) -> dict:
+def duplicate_groups(threshold: int = 85, library_id=None) -> dict:
     """重复书目分组：**归一化后同作者 + 书名相似度 ≥ threshold**。
 
     与上游 Calibre 的「Similar-title threshold」同口径（默认 85%）：
@@ -1128,6 +1259,10 @@ def duplicate_groups(threshold: int = 85) -> dict:
 
     聚类用并查集单链法：A~B、B~C 达标会把 A、B、C 并成一组（传递闭包），
     这与「人工看重复」的直觉一致 —— 中间那本把两头的书连起来了。
+
+    ``library_id`` 给定时只在该库内找重复（工具页默认只看当前库）；缺省 = 全部书库。
+    每条 item 都带 ``library_id``，组上给 ``cross_library`` —— 「全部书库」范围下
+    分属不同库的重复会被明确标成**跨库重复**（这正是最该被注意的情形）。
     """
     from difflib import SequenceMatcher
 
@@ -1137,7 +1272,7 @@ def duplicate_groups(threshold: int = 85) -> dict:
         threshold = 85
     thr = threshold / 100.0
 
-    bs = books()
+    bs = books(library_id)
     by_author: dict = {}
     for b in bs:
         t = norm_key(b["title"])
@@ -1187,6 +1322,7 @@ def duplicate_groups(threshold: int = 85) -> dict:
                 for i in range(len(members)) for j in range(i + 1, len(members))
             ]
             exact = len({m[1] for m in members}) == 1
+            libs = {str(m[0].get("library_id") or "") for m in members}
             groups.append({
                 "key": f"{akey}|{ms[0]['id']}",
                 "reason": (f"书名与作者完全相同" if exact
@@ -1194,19 +1330,27 @@ def duplicate_groups(threshold: int = 85) -> dict:
                 "similarity": round(min(sims) * 100) if sims else 100,
                 "title": ms[0]["title"],
                 "author": ms[0]["author"],
+                "cross_library": len(libs) > 1,
                 "items": [
-                    {"name": i["name"], "size": i["size"], "mtime": i["mtime"], "format": i["format"]}
+                    {"name": i["name"], "size": i["size"], "mtime": i["mtime"],
+                     "format": i["format"], "library_id": i.get("library_id")}
                     for i in ms
                 ],
             })
-    groups.sort(key=lambda g: (-len(g["items"]), -g["similarity"]))
+    # 跨库重复排前面：分属不同库的同名书是最该先看的（它们还会撞 book_id）
+    groups.sort(key=lambda g: (not g["cross_library"], -len(g["items"]), -g["similarity"]))
     return {"groups": groups, "total": len(bs), "threshold": threshold}
 
 
-def missing_items() -> dict:
-    """有问题的条目：零字节 / 无法解析 / 缺封面。"""
+def missing_items(library_id=None) -> dict:
+    """有问题的条目：零字节 / 无法解析 / 缺封面。
+
+    ``library_id`` 给定时只看该库（工具页默认只看当前库）；缺省 = 全部书库。
+    """
+    bs = books(library_id)
     items = [
-        {"name": b["name"], "size": b["size"], "mtime": b["mtime"], "issues": b["issues"]}
-        for b in books() if b["issues"]
+        {"name": b["name"], "size": b["size"], "mtime": b["mtime"],
+         "issues": b["issues"], "library_id": b.get("library_id")}
+        for b in bs if b["issues"]
     ]
-    return {"items": items, "total": len(books())}
+    return {"items": items, "total": len(bs)}

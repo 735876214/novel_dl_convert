@@ -21,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import activity_log, audio, komga, pipeline
+from . import activity_log, audio, komga, lib_settings, pipeline
 from .. import config
 
 STATE_FILENAME = "watcher_state.json"
@@ -120,21 +120,27 @@ class FolderWatcher:
         except Exception:
             pass
 
-    def target_root(self, src: Path) -> Path:
-        """该来源条目应落进**哪个库根**（多书库）。
+    def _target(self, src: Path):
+        """该来源条目应落进哪个库：返回 ``(库实体 | None, 库根)``。
 
-        目前返回默认库根（= 既有 ``OUTPUT_DIR``，行为与改造前一致）；
-        第 10 期的归类规则（来源子文件夹名 / 格式 / 元数据关键词）接在这里
-        —— 见 core/library_rules.py。
+        归库判据在 ``core/library_rules.py``（**来源子目录名 > 格式 > 关键词**）；
+        判不出（或没有对应类型的库）时返回 ``(None, 默认库根)`` —— 与改造前一致。
+
+        第 13 期起调用方还用它拿到**库 id**，进而取该库的生效配置
+        （投递布局 / 是否转换 / 非 txt 收取都可能逐库不同，见 :mod:`core.lib_settings`）。
         """
         try:
             from . import library_rules  # 延迟导入，避免 core 内部循环依赖
             lib = library_rules.decide_for_path(src, self.input_dir)
-            if lib:
-                return Path(lib.get("root_path") or self.output_dir)
         except Exception:
-            pass
-        return self.output_dir
+            lib = None
+        if lib:
+            return lib, Path(lib.get("root_path") or self.output_dir)
+        return None, self.output_dir
+
+    def target_root(self, src: Path) -> Path:
+        """该来源条目应落进**哪个库根**（多书库）。兼容薄壳 —— 需要库实体时用 :meth:`_target`。"""
+        return self._target(src)[1]
 
     def _sig(self, p: Path) -> tuple:
         """条目指纹 ``(size, mtime)``。
@@ -278,12 +284,13 @@ class FolderWatcher:
 
     # ---------------- 处理 ----------------
 
-    def _opts(self) -> dict:
+    def _opts(self, cfg: dict = None) -> dict:
+        c = cfg if cfg is not None else self.cfg
         return {
-            "traditionalize": bool((self.cfg or {}).get("traditionalize", False)),
+            "traditionalize": bool((c or {}).get("traditionalize", False)),
             "force": True,      # 内容有变化就重转，保证 output 是最新
             "merge": True,
-            "cfg": self.cfg,
+            "cfg": c,
         }
 
     def handle_file(self, p: Path) -> tuple:
@@ -298,16 +305,26 @@ class FolderWatcher:
         t0 = time.time()
         dur = lambda: int((time.time() - t0) * 1000)
 
+        # 第 13 期「每库覆盖」：先定目标库，再取**该库**的生效配置。
+        # 库没覆写过时 `config_for` 就是全局值 → 行为与改造前逐字段一致。
+        lib, root = self._target(p)
+        cfg = lib_settings.config_for((lib or {}).get("id") or None)
+        layout = str((cfg.get("output") or {}).get("layout") or "flat").strip().lower()
+        # 非 txt 是否原样收取：按库取值，取不到时回落到构造时的全局判定
+        copy_non_txt = bool((cfg.get("watcher") or {}).get("copy_non_txt", self.copy_non_txt))
+        from . import library_rules  # 延迟导入：与 _target 同理，避免 core 内循环依赖
+
         if p.is_dir():
             # 有声书目录：整树复制为一本书目目录（名字不带扩展名）
             if not audio.is_audio_dir(p):
                 return ("skipped", "非音频目录")
             try:
-                self.target_root(p).mkdir(parents=True, exist_ok=True)
-                layout = str(((self.cfg or {}).get("output") or {}).get("layout") or "flat").strip().lower()
+                root.mkdir(parents=True, exist_ok=True)
                 series, index = komga.infer(p.name)
                 rel = komga.relpath_for_dir(p.name, series, index, layout)
-                dst = self.target_root(p) / rel
+                # 跨库同名闸门（有声书目录是 watcher 自己实现的复制，不经 pipeline.dispatch）
+                library_rules.guard_conflict(root, rel)
+                dst = root / rel
                 pipeline._copy_tree(p, dst)
                 activity_log.log_add_ok(p.name, rel, size=self._sig(p)[0],
                                         duration_ms=dur(), source="watcher")
@@ -318,13 +335,15 @@ class FolderWatcher:
 
         if p.suffix.lower() == ".txt":
             try:
-                opts = self._opts()
-                out = pipeline.convert_txt(p, self.output_dir, opts)
+                opts = self._opts(cfg)
+                # 转换产物也落**目标库根**（原来固定写默认库根，绕过了归库规则：
+                # 投到 libraries/ebooks/ 的 txt 会被转进默认库，与「按子目录名归库」相矛盾）
+                out = pipeline.convert_txt(p, root, opts)
                 activity_log.log_convert_ok(
                     p.name, Path(out).name, size=size, duration_ms=dur(),
                     source="watcher", detail=opts.get("_notice", ""),
                 )
-                auto_fetch_async(Path(out).name, self.cfg)
+                auto_fetch_async(Path(out).name, cfg)
                 return ("converted", str(out))
             except Exception as e:
                 activity_log.log_convert_fail(
@@ -332,22 +351,23 @@ class FolderWatcher:
                 )
                 return ("failed", str(e))
 
-        if not self.copy_non_txt:
+        if not copy_non_txt:
             return ("skipped", "非 txt 且已关闭 copy_non_txt")
 
         try:
-            self.target_root(p).mkdir(parents=True, exist_ok=True)
+            root.mkdir(parents=True, exist_ok=True)
             # ⚠️ 复制路径**也要遵循 output.layout**：第 4 期只改了 `pipeline.dispatch`，
             # 而 watcher 这条复制是自己实现的，于是「开了 Komga 布局却只有转换产物进系列目录」。
             # 系列只能从文件名推断 —— 复制进来的书没经过 OPF 解析。
-            layout = str(((self.cfg or {}).get("output") or {}).get("layout") or "flat").strip().lower()
             series, index = komga.infer(p.stem)
             rel = komga.relpath_for(p.stem, p.suffix.lstrip("."), series, index, layout)
-            dst = self.target_root(p) / rel
+            # 跨库同名闸门（复制分支同样是自己实现的，见上一段注释）
+            library_rules.guard_conflict(root, rel)
+            dst = root / rel
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, dst)
             activity_log.log_add_ok(p.name, rel, size=size, duration_ms=dur(), source="watcher")
-            auto_fetch_async(rel, self.cfg)
+            auto_fetch_async(rel, cfg)
             return ("added", str(dst))
         except Exception as e:
             activity_log.log_add_fail(p.name, f"{type(e).__name__}: {e}", size=size, source="watcher")

@@ -103,7 +103,11 @@ def _mk_item(old: str, new: str) -> dict:
 
 
 def _mark_conflicts(items: list) -> list:
-    """标出冲突：新名与原名相同、两条目撞名、目标已存在、新名非法。"""
+    """标出冲突：新名与原名相同、两条目撞名、目标已存在、新名非法。
+
+    ⚠️ 条目带 ``library_id`` 时必须按**该库根**解析（第 13 期）：库内相对路径在
+    别的库可能是同名文件，用默认库根去判会误报「目标文件已存在」或漏报。
+    """
     olds = {it["old"] for it in items}
     taken: dict = {}
     for it in items:
@@ -116,7 +120,7 @@ def _mark_conflicts(items: list) -> list:
         else:
             taken[new] = it["old"]
         try:
-            tgt = safe_path(new)
+            tgt = safe_path(new, it.get("library_id"))
         except ValueError as e:
             it["conflict"], it["reason"] = True, str(e)
             continue
@@ -125,8 +129,12 @@ def _mark_conflicts(items: list) -> list:
     return items
 
 
-def plan_entity_rename(kind: str, frm: str, to: str) -> dict:
+def plan_entity_rename(kind: str, frm: str, to: str, library_id=None) -> dict:
     """把某作者 / 系列名批量改成另一个名字。
+
+    ``library_id`` 给定时只处理**该库**的书（工具页的「范围：当前库」）；
+    缺省 = 全部书库（既有行为不变）。条目一律带上 ``library_id``，
+    apply 阶段据此取正确的库根 —— 否则多库下同名书会改到**错库**的文件上。
 
     - 作者：文件名里出现就替换；没出现则按本项目命名约定重建为
       ``《书名》作者：新名.epub``。apply 阶段还会同步改写 EPUB 内部
@@ -142,10 +150,11 @@ def plan_entity_rename(kind: str, frm: str, to: str) -> dict:
     field = "author" if kind == "author" else "series"
 
     items = []
-    for b in library.books():
+    for b in library.books(library_id):
         cur = (b.get(field) or "").strip()
         if cur != frm:
             continue
+        lid = b.get("library_id")
         p = pathlib.Path(b["name"])
         stem, suffix = p.stem, p.suffix
         if frm in stem:
@@ -156,28 +165,32 @@ def plan_entity_rename(kind: str, frm: str, to: str) -> dict:
         elif field == "series":
             # 系列名只存在于 EPUB 内部元数据（calibre:series），文件名通常不含；
             # 改名即改写 OPF 元数据、不动文件名：生成「同名条目」，apply 阶段只更新元数据
-            items.append({**_mk_item(b["name"], b["name"]), "meta_only": True})
+            items.append({**_mk_item(b["name"], b["name"]), "meta_only": True,
+                          "library_id": lid})
             continue
         else:
             continue
         new_stem = sanitize_stem(new_stem)
         if not new_stem:
             continue
-        items.append(_mk_item(b["name"], f"{new_stem}{suffix}"))
+        items.append({**_mk_item(b["name"], f"{new_stem}{suffix}"), "library_id": lid})
 
-    return {"type": kind, "from": frm, "to": to, "items": _mark_conflicts(items)}
+    return {"type": kind, "from": frm, "to": to, "library_id": str(library_id or ""),
+            "items": _mark_conflicts(items)}
 
 
-def plan_merge(kind: str, source: str, target: str) -> dict:
+def plan_merge(kind: str, source: str, target: str, library_id=None) -> dict:
     """合并实体 = 把 ``source`` 名下所有书改挂到 ``target``，即一次改名预览。"""
-    return plan_entity_rename(kind, source, target)
+    return plan_entity_rename(kind, source, target, library_id)
 
 
-def plan_pattern_rename(scope: str, pattern: str) -> dict:
+def plan_pattern_rename(scope: str, pattern: str, library_id=None) -> dict:
     """按规则生成「旧名 → 新名」预览。
 
     规则里可用 ``{title}`` / ``{author}`` / ``{series}`` / ``{index}`` / ``{ext}``。
     ``scope`` 传扩展名（如 ``epub``，不带点）可只处理该格式；留空或 ``all`` 表示全部。
+    ``library_id`` 给定时只处理该库的书（缺省 = 全部书库）；``{index}`` 序号
+    按**本次范围**重新计数 —— 只改一个库时从 01 开始，符合「当前库」的预期。
     """
     pat = (pattern or "").strip()
     if not pat:
@@ -188,7 +201,7 @@ def plan_pattern_rename(scope: str, pattern: str) -> dict:
     want = (scope or "").strip().lstrip(".").lower()
     items = []
     idx = 0
-    for b in library.books():
+    for b in library.books(library_id):
         suffix = pathlib.Path(b["name"]).suffix
         if want and want != "all" and suffix.lstrip(".").lower() != want:
             continue
@@ -204,11 +217,13 @@ def plan_pattern_rename(scope: str, pattern: str) -> dict:
         new_stem = sanitize_stem(filled)
         if not new_stem:
             continue
-        items.append(_mk_item(b["name"], f"{new_stem}{suffix}"))
+        items.append({**_mk_item(b["name"], f"{new_stem}{suffix}"),
+                      "library_id": b.get("library_id")})
 
     return {
         "scope": want or "all",
         "pattern": pat,
+        "library_id": str(library_id or ""),
         "fields": list(PATTERN_FIELDS),
         "items": _mark_conflicts(items),
     }
@@ -681,17 +696,24 @@ def apply_komga_layout(items: list) -> dict:
 
 
 def recycle_items(names: list, reason: str = "") -> dict:
-    """把若干成品文件移入回收目录（**不是删除**），返回回收目录路径。"""
+    """把若干成品文件移入回收目录（**不是删除**），返回回收目录路径。
+
+    条目可以是**文件名**，也可以是 ``{"name": ..., "library_id": ...}``。
+    多书库下同名文件可以同时存在于多个库，只给名字时 ``_lib_of`` 只能反查到其中之一
+    （``library.find`` 命中多个就取第一个）—— 清理时给错库就等于移错了书。
+    所以工具页在「全部书库」范围下一律带上 ``library_id``。
+    """
     if not isinstance(names, list) or not names:
         raise ValueError("没有要清理的条目")
 
     dest_dir = recycle_dir()
     stamp = time.strftime("%Y%m%d-%H%M%S")
     moved, errors = [], []
-    for name in names:
-        label = str(name or "").strip()
+    for raw in names:
+        item = raw if isinstance(raw, dict) else {"name": raw}
+        label = str(item.get("name") or "").strip()
         try:
-            src = safe_path(label, _lib_of(label))
+            src = safe_path(label, _lib_of(label, item))
             if not src.is_file():
                 raise ValueError("文件不存在")
             dst = dest_dir / f"{stamp}_{src.name}"
@@ -705,7 +727,8 @@ def recycle_items(names: list, reason: str = "") -> dict:
             activity_log.log(activity_log.ACTION_RECYCLE, label, activity_log.STATUS_FAIL,
                              detail=str(e), source="api")
             continue
-        moved.append({"name": label, "moved_to": dst.name})
+        moved.append({"name": label, "moved_to": dst.name,
+                      "library_id": item.get("library_id") or _lib_of(label, item)})
         activity_log.log(activity_log.ACTION_RECYCLE, label, activity_log.STATUS_OK,
                          output=dst.name, detail=reason or "移入回收目录", source="api")
 
@@ -719,3 +742,68 @@ def resolve_duplicates(keep: str, remove: list) -> dict:
     result = recycle_items(remove, reason=f"保留重复项：{keep}" if keep else "重复书籍清理")
     result["keep"] = keep
     return result
+
+
+# ---------------- 同名冲突修复（第 13 期）----------------
+# ``book_id`` 由 basename 派生（core/library.py），于是「A 库有三体.epub、B 库也有
+# 三体.epub」会撞上同一个 id：进度 / 批注 / 评分只有一份，``library.by_id`` 会直接抛
+# ``BookIdConflict``。修法只能是给其中一本改名 —— 而改名就换了 id，所以**必须**
+# 连关联数据一起搬，否则「一键修复冲突」= 把阅读记录清空（详见下面的 docstring）。
+
+def apply_conflict_rename(items: list) -> dict:
+    """执行同名冲突修复改名。只认 ``{old, new, library_id?}``，逐条**再校验一遍**。
+
+    与 :func:`apply_rename` 唯一的、也是最关键的区别：这里**每条都要搬关联数据**。
+    冲突修复必然改 basename（不改就消不掉冲突），而 ``book_id`` 由 basename 派生 ——
+    不调 ``db.remap_book_id`` 就等于把进度 / 批注 / 评分 / 收藏全丢掉，而用户点这个
+    按钮的意图恰恰是「让数据不再张冠李戴」。
+
+    ``library_id`` 缺省时按名字反查（见 :func:`_lib_of`）：多库下必须知道基根，
+    否则 ``safe_path`` 会落到错的库上。只 rename，**从不 unlink**。
+    """
+    if not isinstance(items, list) or not items:
+        raise ValueError("没有可应用的条目")
+
+    renamed, errors, remapped = [], [], 0
+    for it in items:
+        it = it if isinstance(it, dict) else {}
+        old = str(it.get("old") or "").strip()
+        new = str(it.get("new") or "").strip()
+        lib_id = _lib_of(old, it)
+        if it.get("conflict"):
+            errors.append({"old": old, "error": "存在冲突，已跳过"})
+            continue
+        try:
+            if not old or not new:
+                raise ValueError("缺少原名或新名")
+            src, dst = safe_path(old, lib_id), safe_path(new, lib_id)
+            if not src.is_file():
+                raise ValueError("源文件不存在")
+            if src == dst:
+                raise ValueError("新名与原名相同，消不掉冲突")
+            if dst.exists():
+                raise ValueError("目标文件已存在")
+            old_id, new_id = library.book_id(old), library.book_id(new)
+            if old_id == new_id:
+                raise ValueError("新名与原名的 id 相同（只换了目录），消不掉冲突")
+            # 改完还得**不撞 id**，否则等于白改一趟：库内 + 跨库各查一遍。
+            # （库内同名同样会撞 id，见 library.id_conflicts 的注释）
+            if any(str(b.get("id")) == new_id for b in library.books(lib_id)):
+                raise ValueError("新名仍与本库其它书撞名")
+            if library.id_conflict_with(new, lib_id) is not None:
+                raise ValueError("新名仍与其它库的书撞名")
+            src.rename(dst)
+        except Exception as e:
+            errors.append({"old": old, "error": str(e)})
+            activity_log.log(activity_log.ACTION_RENAME, old, activity_log.STATUS_FAIL,
+                             detail=str(e), source="api")
+            continue
+        db.remap_book_id(old_id, new_id)
+        remapped += 1
+        renamed.append({"old": old, "new": new, "library_id": lib_id})
+        activity_log.log(activity_log.ACTION_RENAME, old, activity_log.STATUS_OK,
+                         output=new, source="api", detail="同名冲突修复")
+
+    library.invalidate()
+    return {"renamed": renamed, "errors": errors, "count": len(renamed),
+            "remapped": remapped}

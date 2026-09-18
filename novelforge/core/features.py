@@ -61,6 +61,31 @@ FEATURES_BY_TYPE = {
 #: 全部能力的并集（「全部书库」与未知类型都用它）
 ALL_FEATURES = sorted(set().union(*FEATURES_BY_TYPE.values()))
 
+#: 每库覆盖项（第 13 期）→ 所需能力。**这里是唯一真值源**：前端据此隐藏不适用的覆盖项，
+#: `core/lib_settings.py` 据此把「这个库根本没有的能力」对应的覆写直接**剔除**（不返回、不生效）。
+#: 键是全局配置的**点分路径**（与 `libraries.settings` 里存的一致）。
+#: 未登记的键 = 无条件可用（如递归子目录 / 非 TXT 收取，任何类型的库投递时都可能需要）。
+SETTING_CAPS = {
+    "output.format": "convert",              # 派生 MOBI/AZW3 依赖 Calibre 转换能力
+    "output.layout": "komga",                # Komga 布局（系列目录）只对电子书 / 漫画有意义
+    "metadata_fetch.enabled": "metadata",    # 元数据抓取只写 EPUB 的 OPF
+    "metadata_fetch.threshold": "metadata",
+    "metadata_fetch.fields": "metadata",
+    "naming.pattern": "rename",
+    "naming.scope": "rename",
+}
+
+
+def setting_capability(key: str) -> str:
+    """某覆盖项需要的能力键；空串 = 无条件可用。"""
+    return str(SETTING_CAPS.get(str(key)) or "")
+
+
+def allows_setting(library_type, key: str) -> bool:
+    """该库类型是否允许覆写这一项（无所需能力则不允许 —— 免得「设了却没反应」）。"""
+    cap = setting_capability(key)
+    return not cap or visible(library_type, cap)
+
 
 def features_for(library_type=None, library_id=None) -> list:
     """某库（或某类型）的能力清单。

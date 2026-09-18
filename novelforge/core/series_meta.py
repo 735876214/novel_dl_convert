@@ -26,7 +26,7 @@ import threading
 from collections import Counter
 
 from .. import config
-from . import activity_log, db, fileops, library, metasources
+from . import activity_log, db, fileops, lib_settings, library, metasources
 
 #: 可被本地覆盖的展示字段（与 :data:`db.SERIES_LOCAL_COLS` 一一对应）
 FIELDS = ("description", "publisher", "first_year", "tags")
@@ -257,9 +257,27 @@ def set_local(name: str, **fields) -> dict:
 # 全程容错（照 authors.fetch_author）：任何异常都折算成 {ok: False, error}，
 # **绝不向上抛** —— 这是旁路增强，不能因为它失败就把系列页整个弄挂。
 
-def _fetch_cfg(cfg: dict = None) -> dict:
-    """取元数据抓取配置（与 metafetch / 设置页同一份 ``metadata_fetch``）。"""
-    return ((cfg or config.load_config()).get("metadata_fetch") or {})
+def _owner_library(members: list) -> str:
+    """系列的归属库：**全部成员同属一库**时用它，否则空串。
+
+    跨库系列没有单一归属 —— 这时回退全局配置，而不是随手挑一个库的策略
+    （挑错会让「按库配置」变得不可预期）。
+    """
+    libs = {str(b.get("library_id") or "") for b in members or []}
+    libs.discard("")
+    return libs.pop() if len(libs) == 1 else ""
+
+
+def _fetch_cfg(cfg: dict = None, library_id=None) -> dict:
+    """取元数据抓取配置（与 metafetch / 设置页同一份 ``metadata_fetch``）。
+
+    第 13 期「每库覆盖」：给了 ``library_id`` 就并入该库覆写过的键；
+    该库没覆写过（或传空）时与全局完全一致 —— 既有行为不变。
+    """
+    mf = ((cfg or config.load_config()).get("metadata_fetch") or {})
+    if library_id:
+        mf = lib_settings.apply_to(mf, library_id, "metadata_fetch")
+    return mf
 
 
 def fetch_one(name: str, cfg: dict = None) -> dict:
@@ -276,7 +294,7 @@ def fetch_one(name: str, cfg: dict = None) -> dict:
     if not members:
         return {"name": name, "ok": False, "error": "系列不存在或没有成员书"}
 
-    mf = _fetch_cfg(cfg)
+    mf = _fetch_cfg(cfg, _owner_library(members))
     if not mf.get("enabled"):
         return {"name": name, "ok": False, "error": "在线元数据抓取未启用"}
     sources = mf.get("sources") or list(metasources.DEFAULT_ORDER)
