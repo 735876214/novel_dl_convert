@@ -15,7 +15,7 @@
 """
 import httpx
 
-from . import fileops, library, metasources
+from . import db, fileops, library, metasources
 from .library import norm_key
 
 #: 封面下载上限：常见封面 100KB–2MB，超过 8MB 基本是异常图
@@ -32,7 +32,10 @@ _CURRENT = {
 }
 #: 同上：字段名 → 候选里的键（候选结构里年份叫 year）
 _VALUE_KEYS = dict(_CURRENT)
-DEFAULT_POLICY = "fill_only"
+#: 第 8 期：默认改为「在线优先覆盖本地」——抓取来的元数据默认写回（覆盖 OPF 原值），
+#: 但**用户显式改过的字段（meta_override）受保护**，不会被再次抓取冲掉（见 plan/apply）。
+#: 仍可在配置的 `fields` 里逐项改回 `fill_only` / `skip`。
+DEFAULT_POLICY = "overwrite"
 
 
 def _cfg(cfg: dict) -> dict:
@@ -85,6 +88,8 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         books = [b for b in books if b["name"] in wanted]
 
     items = []
+    # 一次性取出全部用户覆盖，避免逐书查库；plan 只算不改，这里只读不写
+    overrides = db.all_overrides()
     for b in books:
         base = {
             "name": b["name"], "book_id": b["id"], "title": b.get("title") or "",
@@ -99,8 +104,13 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             items.append(base)
             continue
 
-        res = metasources.search_all(sources, b.get("title") or b["name"], b.get("author") or "",
-                                     limit, options)
+        # ISBN 精确匹配优先（第 8 期 D4）：有 ISBN 且在线查得到就直接用，置信度视为最高
+        exact = metasources.search_by_isbn(b.get("isbn") or "", sources, 3, options)
+        if exact:
+            res = {"entries": [exact], "sources": {}, "best": exact}
+        else:
+            res = metasources.search_all(sources, b.get("title") or b["name"],
+                                         b.get("author") or "", limit, options)
         best = res.get("best")
         base["candidates"] = res["entries"]
         base["sources"] = res["sources"]
@@ -117,6 +127,9 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         for field, value in vals.items():
             pol = policy.get(field) or DEFAULT_POLICY
             if pol == "skip" or not value:
+                continue
+            # 用户改过的字段受保护：抓取不覆盖，否则会冲掉本地修正
+            if field in overrides.get(b["id"], {}):
                 continue
             cur = _current_value(b, field)
             if pol == "fill_only" and cur:
@@ -143,6 +156,32 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         "auto": sum(1 for i in items if i["auto_ok"]),
         "total": len(items),
     }
+
+
+def online_candidate(book: dict, cfg: dict = None, limit: int = None) -> "dict | None":
+    """对单本书做一次在线检索，返回**最佳候选**的字段值（不上锁、不写库）。
+
+    供详情页编辑器的「在线建议 / 恢复在线」使用：它只决定「在线说这本书是什么」，
+    不参与任何落盘，因此和 :func:`plan` 一样是纯查询。
+    """
+    mf = _cfg(cfg)
+    if not mf.get("enabled"):
+        return None
+    sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
+               if s in metasources.SOURCES] or list(metasources.DEFAULT_ORDER)
+    limit = max(1, min(int(limit or mf.get("limit") or 5), 20))
+    blocklist = {norm_key(x) for x in (mf.get("genre_blocklist") or []) if str(x).strip()}
+    options = {"googlebooks": {"api_key": mf.get("googlebooks_api_key") or ""}}
+    # ISBN 精确匹配优先，否则回退书名 + 作者检索
+    best = metasources.search_by_isbn(book.get("isbn") or "", sources, 3, options)
+    if not best:
+        res = metasources.search_all(sources, book.get("title") or book.get("name") or "",
+                                     book.get("author") or "", limit, options)
+        best = res.get("best")
+    if not best:
+        return None
+    vals = _candidate_values(best, blocklist)
+    return {"values": vals, "source": best.get("source"), "score": best.get("score")}
 
 
 def _download_cover(url: str) -> tuple:
@@ -208,6 +247,10 @@ def apply(items: list, cfg: dict = None) -> dict:
             updates = {k: v for k, v in fields.items()
                        if k in fileops.METADATA_FIELDS and (v not in ("", None, []))}
 
+            # 把「将要写回的在线值」记进 meta_online（仅供「恢复在线」回退，不参与展示优先）
+            if updates:
+                db.set_online(library._book_id(name), {k: (v, "") for k, v in updates.items()})
+
             add_files = None
             href = mt = ""
             if cover and str(cover.get("url") or "").strip():
@@ -249,7 +292,8 @@ def auto_fetch(name: str, cfg: dict = None, limit: int = 3) -> dict:
     三条自我约束：
 
     1. **只应用达到阈值的字段** —— 低于阈值的候选一律不动，留给用户在预览页人工决定；
-    2. **只补空字段**（`fill_only` 策略已在 plan 里生效），绝不用抓来的值盖掉用户自己写的；
+    2. **在线优先覆盖本地**（默认策略已是 ``overwrite``），但用户通过编辑器显式改过的
+       字段（``meta_override``）受保护、不会被这次自动抓取冲掉；
     3. **吞掉一切异常**：这是**旁路增强**，不能因为外网不通就影响入库主流程。
 
     返回 ``{ok, fields?, cover?, reason?}``，供活动日志记一笔。

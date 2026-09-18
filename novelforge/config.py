@@ -133,11 +133,12 @@ DEFAULTS = {
         "limit": 5,                      # 每个源取多少条候选
         # 置信度阈值：低于它的候选**不自动应用**，只在页面上列出来让人挑
         "threshold": 0.75,
-        # 字段策略：fill_only（仅当原值为空时写，默认最安全）/ overwrite / skip
+        # 字段策略：默认 overwrite（在线优先覆盖本地）；fill_only（仅原值空时写）/ skip 仍可用。
+        # 无论哪种，用户通过编辑器显式改过的字段都会记入 meta_override 并受保护（再抓取不冲掉）。
         "fields": {
-            "title": "fill_only", "author": "fill_only", "publisher": "fill_only",
-            "year": "fill_only", "language": "fill_only", "isbn": "fill_only",
-            "description": "fill_only", "tags": "fill_only", "cover": "fill_only",
+            "title": "overwrite", "author": "overwrite", "publisher": "overwrite",
+            "year": "overwrite", "language": "overwrite", "isbn": "overwrite",
+            "description": "overwrite", "tags": "overwrite", "cover": "overwrite",
         },
         "auto_on_import": False,         # 新书入库时自动抓（仍受阈值与字段策略约束）
         # 题材黑名单：抓到的 tags 里命中这些词的**不写入**（过滤「小说」这类无信息量的值）
@@ -146,6 +147,13 @@ DEFAULTS = {
         "custom_fields": [],
         # Google Books 匿名额度很低（实测常撞 429），填 Key 可提高
         "googlebooks_api_key": "",
+        # 作者级元数据（第 8 期 D1/D2/D5）：独立于书籍抓取开关，默认关
+        "authors": {
+            "enabled": False,      # 是否抓取作者传记 / 头像
+            "fetch_bio": True,     # 抓传记
+            "fetch_photo": True,   # 抓头像（下载到 CACHE_DIR/authors/ 本地缓存）
+            "sources": ["openlibrary"],
+        },
     },
     # Komga v1 兼容服务端（第 5 期）：让第三方 Komga 客户端（Mihon/Panels/官方 App）
     # 把本应用当成 Komga 服务器用 —— 浏览书库、读漫画/EPUB/PDF、推拉阅读进度。

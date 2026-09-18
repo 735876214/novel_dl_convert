@@ -201,6 +201,40 @@ def init():
             );
             CREATE INDEX IF NOT EXISTS idx_dock_status ON book_dock_items(status);
             CREATE INDEX IF NOT EXISTS idx_dock_updated ON book_dock_items(updated_at DESC);
+            -- 元数据在线/本地分层（第 8 期：在线优先 + 用户编辑兜底）。
+            -- meta_override：用户显式改过的字段（受保护，再抓取不冲掉）；value 空 = 撤销覆盖。
+            -- meta_online：最近一次在线抓取的值（仅供「恢复在线」回退，不参与展示优先）。
+            CREATE TABLE IF NOT EXISTS meta_override (
+                book_id    TEXT NOT NULL,
+                field      TEXT NOT NULL,
+                value      TEXT NOT NULL DEFAULT '',
+                -- 首次覆盖前的 OPF 原值：无在线值时「恢复在线」用它还原，避免丢失编辑前的值
+                orig       TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                PRIMARY KEY(book_id, field)
+            );
+            CREATE TABLE IF NOT EXISTS meta_online (
+                book_id    TEXT NOT NULL,
+                field      TEXT NOT NULL,
+                value      TEXT NOT NULL DEFAULT '',
+                source     TEXT NOT NULL DEFAULT '',
+                fetched_at REAL NOT NULL,
+                PRIMARY KEY(book_id, field)
+            );
+            CREATE INDEX IF NOT EXISTS idx_override_book ON meta_override(book_id);
+            CREATE INDEX IF NOT EXISTS idx_online_book ON meta_online(book_id);
+            -- 作者级元数据（第 8 期 D1/D2/D5）：在线抓取的 bio/photo 与用户本地覆盖分列。
+            -- 展示取 本地覆盖 > 在线；用户改过的不会被再次抓取冲掉。
+            -- 照片一律缓存到 CACHE_DIR/authors/（零外链），这里只存文件名。
+            CREATE TABLE IF NOT EXISTS authors (
+                name             TEXT PRIMARY KEY,
+                bio              TEXT NOT NULL DEFAULT '',
+                bio_local        TEXT NOT NULL DEFAULT '',
+                photo_path       TEXT NOT NULL DEFAULT '',
+                photo_source     TEXT NOT NULL DEFAULT '',
+                photo_local_path TEXT NOT NULL DEFAULT '',
+                fetched_at       REAL NOT NULL DEFAULT 0
+            );
             """
         )
         # 轻量迁移：ratings 表后来加了 review 列。CREATE TABLE IF NOT EXISTS
@@ -208,6 +242,10 @@ def init():
         cols = {r["name"] for r in c.execute("PRAGMA table_info(ratings)")}
         if "review" not in cols:
             c.execute("ALTER TABLE ratings ADD COLUMN review TEXT NOT NULL DEFAULT ''")
+        # 第 8 期：meta_override 后来加了 orig 列（编辑前原值），老库同样要补
+        ocols = {r["name"] for r in c.execute("PRAGMA table_info(meta_override)")}
+        if ocols and "orig" not in ocols:
+            c.execute("ALTER TABLE meta_override ADD COLUMN orig TEXT NOT NULL DEFAULT ''")
         _seed_user(c)
         c.commit()
 
@@ -1224,6 +1262,153 @@ def dock_prune(keep=500) -> int:
         )
         c.commit()
         return int(cur.rowcount or 0)
+
+
+# ---------------- 元数据 override / online（第 8 期）----------------
+# 分层优先级：override（用户编辑）> online（在线抓取）> opf（文件本体）。
+# override 同时是「受保护标记」：metafetch 抓取时跳过这些字段，避免冲掉用户修正。
+
+def set_override(book_id, field, value, orig=None) -> None:
+    """记录/撤销单字段的用户覆盖。value 为空（含只有空白）=> 撤销覆盖（删行）。
+
+    ``orig`` 是**首次覆盖前的 OPF 原值**，仅在新建行时写入；已存在的行**不更新**它
+    （它代表「用户动手之前长什么样」，供无在线值时回退）。撤销即删行。
+    """
+    bid = str(book_id)
+    f = str(field)
+    v = str(value or "").strip()
+    o = str(orig if orig is not None else "").strip()
+    c = _connect()
+    with _lock:
+        if not v:
+            c.execute("DELETE FROM meta_override WHERE book_id=? AND field=?", (bid, f))
+        else:
+            c.execute(
+                "INSERT INTO meta_override(book_id, field, value, orig, updated_at) "
+                "VALUES(?,?,?,?,?) "
+                "ON CONFLICT(book_id, field) DO UPDATE SET value=excluded.value, "
+                "updated_at=excluded.updated_at",
+                (bid, f, v, o, time.time()),
+            )
+        c.commit()
+
+
+def get_overrides(book_id) -> dict:
+    rows = _connect().execute(
+        "SELECT field, value FROM meta_override WHERE book_id=?", (str(book_id),)
+    ).fetchall()
+    return {r["field"]: r["value"] for r in rows}
+
+
+def get_override_row(book_id, field) -> "dict | None":
+    row = _connect().execute(
+        "SELECT field, value, orig FROM meta_override WHERE book_id=? AND field=?",
+        (str(book_id), str(field)),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def all_overrides() -> dict:
+    """全量覆盖：``{book_id: {field: value}}``（metafetch.plan 一次取全，避免逐书查询）。"""
+    rows = _connect().execute("SELECT book_id, field, value FROM meta_override").fetchall()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["book_id"], {})[r["field"]] = r["value"]
+    return out
+
+
+def set_online(book_id, fields) -> None:
+    """批量写入在线抓取值：``fields`` 为 ``{field: (value, source)}``。空值跳过。"""
+    bid = str(book_id)
+    now = time.time()
+    c = _connect()
+    with _lock:
+        for f, (val, src) in (fields or {}).items():
+            v = str(val or "").strip()
+            if not v:
+                continue
+            c.execute(
+                "INSERT INTO meta_online(book_id, field, value, source, fetched_at) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(book_id, field) DO UPDATE SET value=excluded.value, "
+                "source=excluded.source, fetched_at=excluded.fetched_at",
+                (bid, str(f), v, str(src or ""), now),
+            )
+        c.commit()
+
+
+def get_online(book_id) -> dict:
+    rows = _connect().execute(
+        "SELECT field, value, source FROM meta_online WHERE book_id=?", (str(book_id),)
+    ).fetchall()
+    return {r["field"]: {"value": r["value"], "source": r["source"]} for r in rows}
+
+
+def all_online() -> dict:
+    rows = _connect().execute(
+        "SELECT book_id, field, value, source FROM meta_online"
+    ).fetchall()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["book_id"], {})[r["field"]] = {"value": r["value"], "source": r["source"]}
+    return out
+
+
+# ---------------- 作者元数据（第 8 期 D1/D2/D5）----------------
+# 在线抓取的 bio/photo 与用户本地覆盖（bio_local / photo_local_path）分开存：
+# 展示取 本地覆盖 > 在线；用户改过的不会被再次抓取冲掉。
+
+def upsert_author(name, bio="", photo_path="", photo_source="") -> None:
+    """写入在线抓取的作者信息（bio / 照片缓存名 / 来源）。**不动**用户本地覆盖列。"""
+    now = time.time()
+    c = _connect()
+    with _lock:
+        c.execute(
+            """INSERT INTO authors(name, bio, photo_path, photo_source, fetched_at)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(name) DO UPDATE SET
+                 bio=excluded.bio, photo_path=excluded.photo_path,
+                 photo_source=excluded.photo_source, fetched_at=excluded.fetched_at""",
+            (str(name), str(bio or ""), str(photo_path or ""), str(photo_source or ""), now),
+        )
+        c.commit()
+
+
+def get_author(name) -> "dict | None":
+    row = _connect().execute("SELECT * FROM authors WHERE name=?", (str(name),)).fetchone()
+    return dict(row) if row else None
+
+
+def all_authors() -> dict:
+    """``{name: row}``，供批量操作一次取全。"""
+    rows = _connect().execute("SELECT * FROM authors").fetchall()
+    return {r["name"]: dict(r) for r in rows}
+
+
+def set_author_bio_local(name, bio) -> None:
+    """设置/清除用户本地传记覆盖（空串 = 撤销覆盖，回退到在线传记）。
+
+    用 upsert 而非 UPDATE：作者可能从没抓取过（表里没有行），只编辑传记时也要能落库。
+    """
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO authors(name, bio_local) VALUES(?,?) "
+            "ON CONFLICT(name) DO UPDATE SET bio_local=excluded.bio_local",
+            (str(name), str(bio or "").strip()),
+        )
+        c.commit()
+
+
+def set_author_photo_local(name, path) -> None:
+    """设置/清除用户本地头像覆盖（空串 = 撤销覆盖，回退到在线照片）。用 upsert，理由同上。"""
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO authors(name, photo_local_path) VALUES(?,?) "
+            "ON CONFLICT(name) DO UPDATE SET photo_local_path=excluded.photo_local_path",
+            (str(name), str(path or "").strip()),
+        )
+        c.commit()
 
 
 def set_status(book_id, status, started_at=None, finished_at=None) -> dict:

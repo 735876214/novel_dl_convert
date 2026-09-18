@@ -140,13 +140,58 @@ def _entry(source: str, **kw) -> dict:
     }
 
 
+#: OpenLibrary 检索要返回的字段（书名 / 作者检索与 ISBN 精确匹配共用）
+_OL_FIELDS = "key,title,author_name,first_publish_year,publisher,language,isbn,subject,cover_i"
+
+
+def _ol_entry(d: dict) -> dict:
+    """OpenLibrary 单条 doc → 统一候选。"""
+    cover = d.get("cover_i")
+    return _entry(
+        "openlibrary",
+        title=d.get("title"),
+        author=(d.get("author_name") or [""])[0],
+        publisher=(d.get("publisher") or [""])[0],
+        year=d.get("first_publish_year"),
+        # 语言要**挑**而不是取第一个：多语言列表是无序的（见 _pick_lang 注释）
+        language=_pick_lang(d.get("language")),
+        isbn=(d.get("isbn") or [""])[0],
+        tags=_split_subjects(d.get("subject")),
+        cover_url=OPENLIBRARY_COVER.format(cover=cover) if cover else "",
+        raw_id=d.get("key") or "",
+    )
+
+
+def _gb_entry(it: dict) -> dict:
+    """Google Books 单条 item → 统一候选。"""
+    v = it.get("volumeInfo") or {}
+    ids = v.get("industryIdentifiers") or []
+    isbn = next((i.get("identifier") for i in ids if i.get("type") == "ISBN_13"), "") or \
+        next((i.get("identifier") for i in ids if i.get("type") == "ISBN_10"), "")
+    img = ((v.get("imageLinks") or {}).get("thumbnail") or "")
+    return _entry(
+        "googlebooks",
+        title=v.get("title"),
+        author=(v.get("authors") or [""])[0],
+        publisher=v.get("publisher"),
+        year=v.get("publishedDate"),
+        language=v.get("language"),
+        isbn=isbn,
+        description=v.get("description"),
+        tags=v.get("categories") or [],
+        # Google 的缩略图常是 http 且带 zoom 参数；统一成 https 并放大到最大尺寸
+        cover_url=img.replace("http://", "https://").replace("&zoom=1", "&zoom=3") if img else "",
+        raw_id=it.get("id") or "",
+    )
+
+
 # ---------------- OpenLibrary ----------------
 
 def _search_openlibrary(title: str, author: str, limit: int, opts: dict) -> list:
     params = {
-        "title": title,
+        "title": _clean(title),
         "limit": str(limit),
-        "fields": "key,title,author_name,first_publish_year,publisher,language,isbn,subject,cover_i",
+        "fields": _OL_FIELDS,
     }
     if author and norm_key(author) not in ("未知", "unknown", "佚名"):
         params["author"] = author
@@ -155,29 +200,13 @@ def _search_openlibrary(title: str, author: str, limit: int, opts: dict) -> list
         raise RuntimeError("被限流（429）：稍后再试")
     r.raise_for_status()
     docs = (r.json() or {}).get("docs") or []
-    out = []
-    for d in docs[:limit]:
-        cover = d.get("cover_i")
-        out.append(_entry(
-            "openlibrary",
-            title=d.get("title"),
-            author=(d.get("author_name") or [""])[0],
-            publisher=(d.get("publisher") or [""])[0],
-            year=d.get("first_publish_year"),
-            # 语言要**挑**而不是取第一个：多语言列表是无序的（见 _pick_lang 注释）
-            language=_pick_lang(d.get("language")),
-            isbn=(d.get("isbn") or [""])[0],
-            tags=_split_subjects(d.get("subject")),
-            cover_url=OPENLIBRARY_COVER.format(cover=cover) if cover else "",
-            raw_id=d.get("key") or "",
-        ))
-    return out
+    return [_ol_entry(d) for d in docs[:limit]]
 
 
 # ---------------- Google Books ----------------
 
 def _search_googlebooks(title: str, author: str, limit: int, opts: dict) -> list:
-    q = f'intitle:"{title}"'
+    q = f'intitle:"{_clean(title)}"'
     if author and norm_key(author) not in ("未知", "unknown", "佚名"):
         q += f'+inauthor:"{author}"'
     params = {"q": q, "maxResults": str(limit)}
@@ -193,34 +222,72 @@ def _search_googlebooks(title: str, author: str, limit: int, opts: dict) -> list
         raise RuntimeError("该地区不支持（Google 返回 403）")
     r.raise_for_status()
     items = (r.json() or {}).get("items") or []
-    out = []
-    for it in items[:limit]:
-        v = it.get("volumeInfo") or {}
-        ids = v.get("industryIdentifiers") or []
-        isbn = next((i.get("identifier") for i in ids if i.get("type") == "ISBN_13"), "") or \
-            next((i.get("identifier") for i in ids if i.get("type") == "ISBN_10"), "")
-        img = ((v.get("imageLinks") or {}).get("thumbnail") or "")
-        out.append(_entry(
-            "googlebooks",
-            title=v.get("title"),
-            author=(v.get("authors") or [""])[0],
-            publisher=v.get("publisher"),
-            year=v.get("publishedDate"),
-            language=v.get("language"),
-            isbn=isbn,
-            description=v.get("description"),
-            tags=v.get("categories") or [],
-            # Google 的缩略图常是 http 且带 zoom 参数；统一成 https 并放大到最大尺寸
-            cover_url=img.replace("http://", "https://").replace("&zoom=1", "&zoom=3") if img else "",
-            raw_id=it.get("id") or "",
-        ))
-    return out
+    return [_gb_entry(it) for it in items[:limit]]
+
+
+# ---------------- ISBN 精确匹配（第 8 期 D4）----------------
+# 有 ISBN 的书直接按 ISBN 查，命中即为**同一版本**，比「书名+作者」相似度可靠得多。
+
+def _search_isbn_openlibrary(isbn: str, limit: int, opts: dict) -> list:
+    params = {"q": f"isbn:{isbn}", "limit": str(limit), "fields": _OL_FIELDS}
+    r = httpx.get(OPENLIBRARY, params=params, timeout=TIMEOUT, headers=_HEADERS)
+    if r.status_code == 429:
+        raise RuntimeError("被限流（429）：稍后再试")
+    r.raise_for_status()
+    return [_ol_entry(d) for d in ((r.json() or {}).get("docs") or [])[:limit]]
+
+
+def _search_isbn_googlebooks(isbn: str, limit: int, opts: dict) -> list:
+    params = {"q": f"isbn:{isbn}", "maxResults": str(limit)}
+    api_key = _clean((opts or {}).get("api_key"))
+    if api_key:
+        params["key"] = api_key
+    r = httpx.get(GOOGLEBOOKS, params=params, timeout=TIMEOUT, headers=_HEADERS)
+    if r.status_code == 429:
+        raise RuntimeError("被限流（429）：稍后再试")
+    if r.status_code == 403:
+        raise RuntimeError("该地区不支持（Google 返回 403）")
+    r.raise_for_status()
+    return [_gb_entry(it) for it in ((r.json() or {}).get("items") or [])[:limit]]
 
 
 _FETCHERS = {
     "openlibrary": _search_openlibrary,
     "googlebooks": _search_googlebooks,
 }
+_ISBN_FETCHERS = {
+    "openlibrary": _search_isbn_openlibrary,
+    "googlebooks": _search_isbn_googlebooks,
+}
+
+
+def search_by_isbn(isbn: str, sources: list = None, limit: int = 3,
+                   options: dict = None) -> "dict | None":
+    """按 ISBN 精确检索（跨源，按顺序取第一个命中）。
+
+    命中即返回该候选并打上 ``exact_isbn=True``、``score=1.0`` —— ISBN 一一对应**同一版本**，
+    匹配度无需再用相似度估算。未命中或源失败返回 ``None``（调用方回退到书名 + 作者检索）。
+    """
+    digits = re.sub(r"[^0-9Xx]", "", str(isbn or "")).upper()
+    if len(digits) < 10:
+        return None
+    order = [s for s in (sources or DEFAULT_ORDER) if s in SOURCES] or list(DEFAULT_ORDER)
+    opts_map = options or {}
+    for name in order:
+        fn = _ISBN_FETCHERS.get(name)
+        if not fn:
+            continue
+        try:
+            entries = fn(digits, max(1, min(int(limit or 3), 10)), opts_map.get(name) or {})
+        except Exception:                       # noqa: BLE001 —— 精确匹配失败即回退普通检索
+            continue
+        if entries:
+            e = entries[0]
+            e["isbn"] = digits
+            e["exact_isbn"] = True
+            e["score"] = 1.0
+            return e
+    return None
 
 
 def search(source: str, title: str, author: str, limit: int = 5, opts: dict = None) -> dict:
