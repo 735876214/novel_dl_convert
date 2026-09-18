@@ -63,6 +63,9 @@ async def lifespan(app: FastAPI):
     _init_logging(cfg)
     # 初始化 SQLite 持久层（进度 / 批注 / 账号），表与默认账号在此落地
     db.init()
+    # 多书库：库表为空时落一条「默认库 = OUTPUT_DIR」，保证老部署升级后书目不为空。
+    # ⚠️ 若这里漏掉，书目会为空 → 孤儿判定会把**所有** book_id 当孤儿（会真删进度/批注）。
+    library.ensure_default_library()
     if (cfg.get("watcher") or {}).get("enabled", True):
         w = _start_watcher(cfg)
         # 启动信息只进标准日志（docker logs），不污染「转换 / 添加」活动日志
@@ -80,6 +83,9 @@ STATIC_DIR = pathlib.Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 INPUT_DIR = config.INPUT_DIR
+# ⚠️ 多书库（第 10 期）后这是**默认库的根**，不是「唯一根」。
+# 按书取路径一律用 `library.root_of(b) / b["name"]`；只有「新书落哪个库还没判定」的
+# 摄入/下载入口（上传转换、下载落盘）才回退到这里。
 OUTPUT_DIR = config.OUTPUT_DIR
 
 
@@ -627,7 +633,7 @@ def opds_download(request: Request, bid: str):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = config.OUTPUT_DIR / b["name"]
+    path = library.root_of(b) / b["name"]
     if not path.is_file():
         raise HTTPException(404, "文件不存在")
     return FileResponse(path, media_type=opds.mime_of(b.get("format")), filename=b["name"])
@@ -826,7 +832,7 @@ def api_book_asset(bid: str, p: str = Query(..., description="zip 内资源相�
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = config.OUTPUT_DIR / b["name"]
+    path = library.root_of(b) / b["name"]
     with zipfile.ZipFile(path) as z:
         if p not in z.namelist():
             raise HTTPException(404, "资源不存在")
@@ -905,7 +911,7 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
 
     before = {f: _meta_value(b, f) for f in accepted}
     try:
-        written = fileops.patch_epub_meta(config.OUTPUT_DIR / b["name"], accepted)
+        written = fileops.patch_epub_meta(library.root_of(b) / b["name"], accepted)
     except ValueError as e:
         raise HTTPException(500, str(e))
 
@@ -992,7 +998,7 @@ def api_revert_book_metadata(bid: str, payload: dict = Body(None)):
             updates[f] = target
     if updates:
         try:
-            fileops.patch_epub_meta(config.OUTPUT_DIR / b["name"], updates)
+            fileops.patch_epub_meta(library.root_of(b) / b["name"], updates)
         except ValueError as e:
             raise HTTPException(500, str(e))
     library.invalidate()
@@ -1022,7 +1028,7 @@ def api_book_cover(bid: str):
     if not b:
         raise HTTPException(404, "书籍不存在")
     fmt = (b.get("format") or "").upper()
-    path = config.OUTPUT_DIR / b["name"]
+    path = library.root_of(b) / b["name"]
 
     if fmt in ("CBZ", "CBR"):
         data, media = comics.cover_bytes(path)
@@ -1071,7 +1077,7 @@ def api_book_file(bid: str):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = config.OUTPUT_DIR / b["name"]
+    path = library.root_of(b) / b["name"]
     if not path.is_file():
         raise HTTPException(404, "文件不存在")
     media = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
@@ -1087,7 +1093,7 @@ def api_comic_pages(bid: str):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = config.OUTPUT_DIR / b["name"]
+    path = library.root_of(b) / b["name"]
     if not comics.is_comic(path):
         raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
     if comics.is_cbr(path) and not comics.rar_available():
@@ -1100,7 +1106,7 @@ def api_comic_page(bid: str, index: int):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = config.OUTPUT_DIR / b["name"]
+    path = library.root_of(b) / b["name"]
     if not comics.is_comic(path):
         raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
     if comics.is_cbr(path) and not comics.rar_available():
@@ -1129,7 +1135,7 @@ def api_audio_tracks(bid: str):
         raise HTTPException(404, "书籍不存在")
     if (b.get("format") or "").upper() != "AUDIO":
         raise HTTPException(400, "该书不是有声书")
-    return audio.tracks(config.OUTPUT_DIR / b["name"])
+    return audio.tracks(library.root_of(b) / b["name"])
 
 
 @app.get("/api/books/{bid}/audio/{index}")
@@ -1145,7 +1151,7 @@ def api_audio_track(bid: str, index: int):
         raise HTTPException(404, "书籍不存在")
     if (b.get("format") or "").upper() != "AUDIO":
         raise HTTPException(400, "该书不是有声书")
-    track = audio.track_path(config.OUTPUT_DIR / b["name"], index)
+    track = audio.track_path(library.root_of(b) / b["name"], index)
     if not track or not track.is_file():
         raise HTTPException(404, "轨道不存在")
     media = _AUDIO_MIME.get(track.suffix.lower()) \
@@ -1159,7 +1165,7 @@ def api_book_chapter(bid: str, index: int):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = config.OUTPUT_DIR / b["name"]
+    path = library.root_of(b) / b["name"]
     if path.suffix.lower() != ".epub":
         raise HTTPException(400, "仅 EPUB 支持在线阅读")
     try:
@@ -3007,7 +3013,11 @@ def api_koreader_save(payload: dict = Body(...)):
 @app.post("/api/koreader/scan")
 def api_koreader_scan():
     """重建文档索引（为每本书算 partialMD5）。书库改动后需重扫。"""
-    rows = koreader.scan_books(library.books(), config.OUTPUT_DIR)
+    # 多书库：按**各自的库根**建索引（partialMD5 与路径相关，用错根会把进度同步到错书）
+    rows: list = []
+    for lib in library.libraries():
+        root = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+        rows.extend(koreader.scan_books(library.books(lib["id"]), root))
     return {"ok": True, "scanned": db.replace_koreader_docs(rows)}
 
 
@@ -3309,7 +3319,10 @@ def ko_me(request: Request):
     return {
         "id": "1", "email": f"{user}@novelforge.local",
         "roles": ["ADMIN", "USER"], "labelsAllow": [], "labelsExclude": [],
-        "sharedLibraries": [{"libraryId": komga_api.LIBRARY_ID, "userId": "1", "role": "ADMIN"}],
+        "sharedLibraries": [
+            {"libraryId": lib["id"], "userId": "1", "role": "ADMIN"}
+            for lib in library.libraries()
+        ],
     }
 
 
@@ -3317,9 +3330,9 @@ def ko_me(request: Request):
 
 @app.get("/api/v1/libraries")
 def ko_libraries(request: Request):
-    """客户端第一步就调它。"""
+    """客户端第一步就调它（多书库后逐库返回）。"""
     _ko_guard(request)
-    return [komga_api.library_dto()]
+    return [komga_api.library_dto(lib) for lib in library.libraries()]
 
 
 # ---- 系列（latest 必须先于 {series_id}）----
@@ -3451,7 +3464,7 @@ def ko_book_thumb(request: Request, book_id: str):
 def ko_book_file(request: Request, book_id: str):
     _ko_guard(request)
     b = library.by_id(book_id) or _ko_404("书不存在")
-    path = config.OUTPUT_DIR / b["name"]
+    path = library.root_of(b) / b["name"]
     if not path.is_file():
         _ko_404("文件不存在")
     return FileResponse(path, media_type="application/octet-stream",
