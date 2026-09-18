@@ -82,6 +82,12 @@ class FolderWatcher:
             kw.get("state_file") or config.CACHE_DIR / STATE_FILENAME
         )
         self.state: dict = self._load_state()
+        # 收书目录「忽略」的运行时名单（持久化在 state 的保留键下，见 add_ignore）
+        self._ignore_names: set = set(self.state.get("__ignored__") or [])
+
+        #: 每轮扫描结束后的回调（由 server 注入 core.bootdock.note_scan）。
+        #: 刻意用回调而不是 import —— core 内部不互相依赖，watcher 不认识 dock。
+        self.on_scan = None
 
         self._lock = threading.Lock()       # 仅保护 state 字典的短临界区
         self._scan_lock = threading.Lock()  # 串行化扫描轮次，避免并行重复处理
@@ -157,10 +163,34 @@ class FolderWatcher:
 
     def _ignored(self, p: Path) -> bool:
         name = p.name
+        if name in self._ignore_names:          # 收书目录「忽略」的条目
+            return True
         for pat in self.ignore:
             if fnmatch.fnmatch(name, pat):
                 return True
         return False
+
+    def is_ignored(self, p) -> bool:
+        """公开的忽略判定（收书目录对账用）。"""
+        return self._ignored(Path(p))
+
+    def iter_files(self) -> list:
+        """公开的文件枚举（供收书目录对账，替代直接调私有 _iter_files）。"""
+        return self._iter_files()
+
+    def add_ignore(self, name: str) -> None:
+        """把某个文件名加入**运行时忽略名单**并持久化（收书目录「忽略」操作）。
+
+        与配置里的 ``watcher.ignore``（glob 通配）分开存：那是用户设定的长期规则，
+        这是界面上对单个条目的临时决定，混在一起会让「忽略一个文件」变成改配置。
+        """
+        n = str(name or "").strip()
+        if not n:
+            return
+        with self._lock:
+            self._ignore_names.add(n)
+            self.state["__ignored__"] = sorted(self._ignore_names)
+            self._save_state()
 
     def _iter_files(self):
         if not self.input_dir.is_dir():
@@ -245,6 +275,16 @@ class FolderWatcher:
             activity_log.log_add_fail(p.name, f"{type(e).__name__}: {e}", size=size, source="watcher")
             return ("failed", str(e))
 
+    def _emit(self, result: dict) -> dict:
+        """把本轮结果交给 on_scan 回调（收书目录状态机），回调异常一律吞掉。"""
+        cb = self.on_scan
+        if cb is not None:
+            try:
+                cb(result)
+            except Exception:
+                pass
+        return result
+
     def scan_once(self) -> dict:
         """扫描一轮，返回本轮结果摘要。
 
@@ -277,7 +317,8 @@ class FolderWatcher:
                             }
                     self._save_state()
                 self.last_scan = time.time()
-                return {"scanned": 0, "converted": [], "added": [], "failed": [], "skipped": 0}
+                return self._emit({"scanned": 0, "converted": [], "added": [],
+                                   "failed": [], "skipped": 0})
 
         # 在短临界区内收集「待处理」文件，转换 I/O 移到锁外执行，
         # 避免 handle_file（可能耗时数十秒）长时间持有 _lock 而冻结其它调用方。
@@ -338,7 +379,7 @@ class FolderWatcher:
                 self._save_state()
             self.stats["scans"] += 1
             self.last_scan = time.time()
-        return result
+        return self._emit(result)
 
     # ---------------- 线程控制 ----------------
 

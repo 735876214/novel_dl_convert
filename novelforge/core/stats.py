@@ -11,7 +11,7 @@
 """
 import time
 
-from . import db, library
+from . import db, library, metascore
 
 
 def _top(counter: dict, n: int = 8) -> list:
@@ -173,6 +173,8 @@ def overview(days: int = 28, top: int = 8) -> dict:
         },
         "avg_progress": round(psum / total, 1) if total else 0.0,
         "integrity": integrity,
+        # 元数据完整度分布（Average / P50 / P90 + 分档直方图），模型见 core/metascore.py
+        "metadata_score": metascore.summary(bs),
         "reading": {
             "unread": unread,
             "reading": reading,

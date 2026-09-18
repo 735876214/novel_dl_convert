@@ -24,7 +24,7 @@ from .core import pipeline, activity_log, library, fileops
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, recommend,
                    fonts, comics, opds, opds_client, komga, koreader, integrations,
-                   metasources, metafetch, komga_api)
+                   metasources, metafetch, komga_api, bookdock, metascore)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -48,7 +48,8 @@ def _start_watcher(cfg: dict) -> "watcher_mod.FolderWatcher":
     global WATCHER
     if WATCHER is None:
         WATCHER = watcher_mod.FolderWatcher(cfg=cfg)
-    elif WATCHER.is_running():
+    WATCHER.on_scan = bookdock.note_scan      # 收书目录状态机回调（幂等绑定）
+    if WATCHER.is_running():
         return WATCHER
     WATCHER.cfg = cfg
     WATCHER.start()
@@ -2266,6 +2267,7 @@ def _get_watcher():
     global WATCHER
     if WATCHER is None:
         WATCHER = watcher_mod.FolderWatcher(cfg=config.load_config())
+    WATCHER.on_scan = bookdock.note_scan      # 幂等绑定收书目录回调
     return WATCHER
 
 
@@ -2292,6 +2294,53 @@ async def api_scan():
     w = _get_watcher()
     w.cfg = config.load_config()
     return await asyncio.to_thread(w.scan_once)
+
+
+# ---------------- 收书目录条目（Book Dock 五态流水线，第 7 期）----------------
+# 列表接口在 GET 时**懒对账**（bookdock.payload → reconcile）：把投递目录里
+# 尚未登记的文件补成 pending / needs_review，清掉文件已消失的悬空条目。
+# 三个单项操作：rescan（重跑管线）/ ignore（登记运行时忽略）/ delete（移入回收目录）。
+
+@app.get("/api/book-dock")
+def api_book_dock(status: str = ""):
+    w = _get_watcher()
+    return bookdock.payload(w, status=(status or None))
+
+
+@app.post("/api/book-dock/{item_id}/rescan")
+def api_book_dock_rescan(item_id: str):
+    try:
+        item = bookdock.rescan(_get_watcher(), item_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "item": item}
+
+
+@app.post("/api/book-dock/{item_id}/ignore")
+def api_book_dock_ignore(item_id: str):
+    try:
+        item = bookdock.ignore(_get_watcher(), item_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "item": item}
+
+
+@app.post("/api/book-dock/{item_id}/delete")
+def api_book_dock_delete(item_id: str):
+    try:
+        res = bookdock.remove(_get_watcher(), item_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return res
+
+
+# ---------------- 元数据完整度评分（B2）----------------
+# 权重模型与分位聚合都在 core/metascore.py，这里只做透传。
+# force=true 绕过 library 的 5 秒缓存重算 —— 对应页面上的「重新计算」。
+
+@app.get("/api/metadata-score")
+def api_metadata_score(force: bool = False):
+    return metascore.payload(library.books(force=force))
 
 
 # ---------------- 活动日志 ----------------
@@ -3265,8 +3314,13 @@ async def _log_dispatch(src: pathlib.Path, action: str, result, source: str, siz
 
 @app.post("/convert")
 async def convert(file: UploadFile = File(...), traditionalize: bool = Form(False)):
-    if not (file.filename or "").endswith(".txt"):
-        raise HTTPException(400, "仅支持 .txt")
+    # B1 上传多格式：放开 .txt 限制，允许 pipeline.EBOOK_EXT 直接入库（.txt 仍走转换）。
+    # 其余类型（如 .docx/.cbr）明确拒绝。CBR 因 RAR 系统依赖未做，不在白名单内。
+    _name = file.filename or ""
+    _ext = pathlib.Path(_name).suffix.lower()
+    _allowed = {".txt", *pipeline.EBOOK_EXT}
+    if _ext not in _allowed:
+        raise HTTPException(400, "仅支持 .txt 与电子书格式：" + ", ".join(sorted(_allowed)))
     src = INPUT_DIR / file.filename
     data = await _read_capped(file, _upload_limit("max_bytes"))
     with open(src, "wb") as f:

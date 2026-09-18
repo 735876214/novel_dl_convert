@@ -184,6 +184,23 @@ def init():
                 created_at        REAL NOT NULL,
                 last_seen         REAL NOT NULL
             );
+            -- 收书目录条目（Book Dock 五态流水线，第 7 期）。
+            -- 一条 = 投递目录里的一个文件：id 取文件名（投递目录是平的，见 core/bookdock.py），
+            -- 状态在 core/bookdock.py 的常量里定义，这里只存字符串。
+            CREATE TABLE IF NOT EXISTS book_dock_items (
+                id          TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                ext         TEXT NOT NULL DEFAULT '',
+                size        INTEGER NOT NULL DEFAULT 0,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                output      TEXT NOT NULL DEFAULT '',
+                detail      TEXT NOT NULL DEFAULT '',
+                retries     INTEGER NOT NULL DEFAULT 0,
+                created_at  REAL NOT NULL,
+                updated_at  REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_dock_status ON book_dock_items(status);
+            CREATE INDEX IF NOT EXISTS idx_dock_updated ON book_dock_items(updated_at DESC);
             """
         )
         # 轻量迁移：ratings 表后来加了 review 列。CREATE TABLE IF NOT EXISTS
@@ -1081,6 +1098,132 @@ def all_statuses() -> dict:
     """全部状态行：``{book_id: {status, started_at, finished_at}}``（供书单批量附带）。"""
     rows = _connect().execute("SELECT * FROM reading_status").fetchall()
     return {r["book_id"]: dict(r) for r in rows}
+
+
+# ---------------- 收书目录条目（Book Dock 五态流水线）----------------
+# 状态集合（与 core/bookdock.STATUSES 一致）：
+#   pending 待处理 / ready 就绪 / needs_review 待复核 / error 出错 / ignored 已忽略
+# `ignored` 是「用户显式忽略」的终态：**不计入任何标签页**，也不算可见条目 ——
+# 故 dock_list / dock_counts 默认把它排除在外。
+
+DOCK_STATUSES = ("pending", "ready", "needs_review", "error", "ignored")
+#: 界面标签页（All + 4 个可见状态）；ignored 刻意不出现在这里
+DOCK_TABS = ("all", "needs_review", "pending", "ready", "error")
+
+_DOCK_FIELDS = {"name", "ext", "size", "status", "output", "detail", "retries"}
+
+
+def dock_upsert(item_id, name, ext="", size=0, status="pending",
+                output="", detail="", retries=0) -> None:
+    """新建条目；已存在则**只补空缺、不改状态**（状态流转交给 dock_update）。"""
+    now = time.time()
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT OR IGNORE INTO book_dock_items"
+            "(id, name, ext, size, status, output, detail, retries, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (str(item_id), str(name), str(ext or ""), int(size or 0), str(status),
+             str(output or ""), str(detail or ""), int(retries or 0), now, now),
+        )
+        c.commit()
+
+
+def dock_update(item_id, **fields) -> None:
+    """按白名单列更新条目，并刷新 updated_at。"""
+    cols = {k: v for k, v in fields.items() if k in _DOCK_FIELDS}
+    if not cols:
+        return
+    sets = ", ".join("%s=?" % k for k in cols)
+    c = _connect()
+    with _lock:
+        c.execute(
+            "UPDATE book_dock_items SET %s, updated_at=? WHERE id=?" % sets,
+            (*cols.values(), time.time(), str(item_id)),
+        )
+        c.commit()
+
+
+def dock_get(item_id):
+    r = _connect().execute(
+        "SELECT * FROM book_dock_items WHERE id=?", (str(item_id),)
+    ).fetchone()
+    return dict(r) if r else None
+
+
+def dock_list(status=None, limit=500) -> list:
+    """可见条目（不含 ignored），可按状态过滤；新 → 旧。"""
+    limit = max(1, int(limit))
+    if status and status in DOCK_STATUSES and status != "ignored":
+        rows = _connect().execute(
+            "SELECT * FROM book_dock_items WHERE status=? ORDER BY updated_at DESC LIMIT ?",
+            (status, limit),
+        ).fetchall()
+    else:
+        rows = _connect().execute(
+            "SELECT * FROM book_dock_items WHERE status!='ignored' "
+            "ORDER BY updated_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def dock_counts() -> dict:
+    """各可见状态计数 + total（不含 ignored）。"""
+    rows = _connect().execute(
+        "SELECT status, COUNT(*) AS n FROM book_dock_items WHERE status!='ignored' "
+        "GROUP BY status"
+    ).fetchall()
+    counts = {s: 0 for s in DOCK_TABS if s != "all"}
+    for r in rows:
+        if r["status"] in counts:
+            counts[r["status"]] = int(r["n"])
+    counts["all"] = sum(counts.values())
+    return counts
+
+
+def dock_delete(item_id) -> bool:
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM book_dock_items WHERE id=?", (str(item_id),))
+        c.commit()
+        return bool(cur.rowcount)
+
+
+def dock_prune_missing(existing_ids) -> int:
+    """删掉「文件已不在投递目录」的条目，但**保留 ready 历史**（已入库的成品记录）。
+
+    只清理 pending / needs_review / error 这类「悬空」条目 —— 文件都没了，
+    再显示也不能重扫，留着只会误导。
+    """
+    keep = {str(x) for x in (existing_ids or [])}
+    rows = _connect().execute(
+        "SELECT id FROM book_dock_items WHERE status IN ('pending','needs_review','error')"
+    ).fetchall()
+    gone = [r["id"] for r in rows if r["id"] not in keep]
+    if not gone:
+        return 0
+    c = _connect()
+    with _lock:
+        n = 0
+        for i in gone:
+            n += int(c.execute("DELETE FROM book_dock_items WHERE id=?", (i,)).rowcount or 0)
+        c.commit()
+        return n
+
+
+def dock_prune(keep=500) -> int:
+    """只保留最近 keep 条（含 ready 历史），返回删除条数，防止无限增长。"""
+    keep = max(50, int(keep))
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "DELETE FROM book_dock_items WHERE id NOT IN "
+            "(SELECT id FROM book_dock_items ORDER BY updated_at DESC LIMIT ?)",
+            (keep,),
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
 
 
 def set_status(book_id, status, started_at=None, finished_at=None) -> dict:
