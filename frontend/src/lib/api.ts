@@ -113,6 +113,38 @@ export interface WatcherStatus {
   [key: string]: unknown
 }
 
+// ---------- 收书目录条目（Book Dock 五态流水线） ----------
+
+export type BookDockStatus = 'pending' | 'ready' | 'needs_review' | 'error' | 'ignored'
+
+export interface BookDockItem {
+  id: string
+  name: string
+  ext: string
+  size: number
+  status: BookDockStatus
+  /** 成品相对路径（ready 时才有） */
+  output: string
+  /** 说明 / 错误原因 */
+  detail: string
+  retries: number
+  created_at: number
+  updated_at: number
+}
+
+export interface BookDockTab {
+  key: 'all' | 'needs_review' | 'pending' | 'ready' | 'error'
+  label: string
+  count: number
+}
+
+export interface BookDockResponse {
+  items: BookDockItem[]
+  counts: Record<string, number>
+  tabs: BookDockTab[]
+  statuses: string[]
+}
+
 // ---------- 工具页（实体管理 / 批量重命名 / 重复书籍 / 缺失资源） ----------
 
 export type EntityKind = 'author' | 'series'
@@ -217,6 +249,57 @@ export interface MetadataApplyResult {
   failed: Array<{ name: string; error: string }>
   count: number
   covers: number
+}
+
+// ---------- 元数据完整度评分（Confidence Score）----------
+
+export interface MetadataScoreField {
+  key: string
+  label: string
+  weight: number
+  /** 该字段在全库的覆盖率（0–100） */
+  coverage: number
+}
+
+export interface MetadataScoreGroup {
+  key: string
+  label: string
+  zh: string
+  weight: number
+  coverage: number
+  fields: MetadataScoreField[]
+}
+
+export interface MetadataScoreBucket {
+  key: string
+  label: string
+  count: number
+  percent: number
+}
+
+export interface MetadataScoreBook {
+  id: string
+  name: string
+  title: string
+  author: string
+  format: string
+  score: number
+  present: string[]
+  missing: Array<{ key: string; label: string; weight: number }>
+}
+
+export interface MetadataScoreResponse {
+  total: number
+  avg: number
+  p50: number
+  p90: number
+  min: number
+  max: number
+  buckets: MetadataScoreBucket[]
+  groups: MetadataScoreGroup[]
+  lowest: MetadataScoreBook[]
+  not_scored: Array<{ key: string; label: string; why: string }>
+  notes: string[]
 }
 
 /** 外部服务的一个凭据字段（定义由后端给，前端不重复维护） */
@@ -992,6 +1075,19 @@ export const api = {
     })
   },
 
+  /** 收书目录整页拖拽投递：把文件丢进 INPUT_DIR（监听目录）并按现有管线处理。
+   *  复用后端的 /convert（写入 INPUT_DIR 后走 pipeline），等价于把文件放进投递目录。 */
+  convertDrop: (file: File, traditionalize = false) =>
+    request<{ ok?: boolean }>('/convert', {
+      method: 'POST',
+      body: (() => {
+        const f = new FormData()
+        f.append('file', file)
+        if (traditionalize) f.append('traditionalize', 'true')
+        return f
+      })(),
+    }),
+
   deleteSource: (name: string) =>
     request<{ ok: boolean }>(`/api/sources/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
@@ -1032,6 +1128,27 @@ export const api = {
   watcherStart: () => request<WatcherStatus>('/api/watcher/start', { method: 'POST' }),
   watcherStop: () => request<WatcherStatus>('/api/watcher/stop', { method: 'POST' }),
   scanNow: () => request<Record<string, unknown>>('/api/scan', { method: 'POST' }),
+
+  // ---------- 收书目录条目（Book Dock 五态流水线） ----------
+  bookDock: (status?: string) =>
+    request<BookDockResponse>(
+      `/api/book-dock${status && status !== 'all' ? `?status=${encodeURIComponent(status)}` : ''}`,
+    ),
+  bookDockRescan: (id: string) =>
+    request<{ ok: boolean; item: BookDockItem }>(
+      `/api/book-dock/${encodeURIComponent(id)}/rescan`,
+      { method: 'POST' },
+    ),
+  bookDockIgnore: (id: string) =>
+    request<{ ok: boolean; item: BookDockItem }>(
+      `/api/book-dock/${encodeURIComponent(id)}/ignore`,
+      { method: 'POST' },
+    ),
+  bookDockDelete: (id: string) =>
+    request<{ ok: boolean; name: string; recycled: string }>(
+      `/api/book-dock/${encodeURIComponent(id)}/delete`,
+      { method: 'POST' },
+    ),
 
   // ---------- 日志 ----------
   logs: (query: LogQuery = {}) => {
@@ -1401,6 +1518,10 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }),
     }),
+
+  /** 元数据完整度分布（force=true 绕过 library 的 5 秒缓存重算） */
+  metadataScore: (force = false) =>
+    request<MetadataScoreResponse>(`/api/metadata-score${force ? '?force=true' : ''}`),
 
   // ---------- 外部服务集成（Hardcover / Readwise / StoryGraph）----------
   integrations: () => request<{ items: IntegrationService[] }>('/api/integrations'),

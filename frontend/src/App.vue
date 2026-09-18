@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
-import { RouterView } from 'vue-router'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { RouterView, useRoute } from 'vue-router'
 
 import AppHeader from '@/components/AppHeader.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
+import SettingsSidebar from '@/components/SettingsSidebar.vue'
 import AppToast from '@/components/AppToast.vue'
 import TaskDrawer from '@/components/TaskDrawer.vue'
 import LoginGate from '@/components/LoginGate.vue'
@@ -16,7 +17,11 @@ const ui = useUiStore()
 const tasks = useTasksStore()
 const theme = useThemeStore()
 const auth = useAuthStore()
+const route = useRoute()
 const showLogin = ref(false)
+
+/** 设置路由下，左列渲染设置导航而非主侧栏 */
+const isSettingsRoute = computed(() => route.path.startsWith('/settings'))
 
 /** ⌘K / Ctrl+K 聚焦全局搜索；Esc 关闭任务抽屉 */
 function onKeydown(e: KeyboardEvent): void {
@@ -59,7 +64,8 @@ onUnmounted(() => {
 
   <!-- 卡片式外壳：三块浮起卡片，块间一个 --shell-gap -->
   <div v-else class="flex h-[100dvh] gap-[var(--shell-gap)] overflow-hidden p-[var(--shell-gap)]">
-    <AppSidebar />
+    <SettingsSidebar v-if="isSettingsRoute" />
+    <AppSidebar v-else />
 
     <div class="flex min-w-0 flex-1 flex-col overflow-hidden rounded-[var(--shell-radius)] border border-[var(--shell-border)] bg-[var(--shell-surface)] shadow-xs backdrop-blur-md backdrop-saturate-150">
       <AppHeader />

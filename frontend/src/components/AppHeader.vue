@@ -3,13 +3,13 @@ import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 import NotificationBell from '@/components/NotificationBell.vue'
+import AppearanceMenu from '@/components/AppearanceMenu.vue'
+import UserMenu from '@/components/UserMenu.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { usePrefSyncStore } from '@/stores/prefSync'
-import { THEME_LABEL, useThemeStore } from '@/stores/theme'
 import { useUiStore } from '@/stores/ui'
 
 const ui = useUiStore()
-const theme = useThemeStore()
 const router = useRouter()
 const sync = usePrefSyncStore()
 
@@ -19,11 +19,6 @@ const sync = usePrefSyncStore()
  * 所以这里的启动时机天然是「已登录」，不会白跑一次注定 401 的 boot。
  */
 onMounted(() => sync.init())
-
-function onTheme(): void {
-  const next = theme.cycleTheme()
-  ui.toast(`主题：${THEME_LABEL[next]}`)
-}
 
 function onSearchKeydown(e: KeyboardEvent): void {
   const input = e.target as HTMLInputElement
@@ -107,24 +102,11 @@ const ICON_BTN =
           <path d="M15 4v16" />
         </svg>
       </button>
-      <button
-        :class="ICON_BTN"
-        type="button"
-        :title="`切换主题（当前：${THEME_LABEL[theme.theme]}）`"
-        aria-label="切换主题"
-        @click="onTheme()"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="h-[17px] w-[17px]">
-          <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
-        </svg>
-      </button>
+      <AppearanceMenu />
       <button :class="ICON_BTN" type="button" title="设置" aria-label="设置" @click="router.push('/settings')">
         <Icon name="settings" class="h-[17px] w-[17px]" />
       </button>
-      <div
-        class="h-8 w-8 shrink-0 cursor-pointer rounded-full border border-border bg-muted shadow-[inset_0_0_0_3px_var(--card)]"
-        title="本地用户"
-      />
+      <UserMenu />
     </div>
   </header>
 </template>

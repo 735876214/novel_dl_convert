@@ -37,6 +37,7 @@ export const ICONS = {
   library: '<path d="M3 7.2A2.2 2.2 0 015.2 5h13.6A2.2 2.2 0 0121 7.2V9H3z"/><path d="M4.6 9v9.4A1.6 1.6 0 006.2 20h11.6a1.6 1.6 0 001.6-1.6V9"/><path d="M10 13h4"/>',
   star: '<path d="M12 3l2.7 5.4 6 .8-4.3 4.2 1 6-5.4-2.8-5.4 2.8 1-6L3.3 9.2l6-.8z"/>',
   sparkle: '<path d="M11 3l1.7 4.3L17 9l-4.3 1.7L11 15l-1.7-4.3L5 9l4.3-1.7z"/><path d="M18 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/>',
+  logout: '<path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
 } as const
 
 export type IconName = keyof typeof ICONS

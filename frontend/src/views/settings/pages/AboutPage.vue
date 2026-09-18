@@ -53,9 +53,11 @@ onMounted(() => loadConfig())
         原始采集证据见
         <code class="font-mono text-foreground">docs/review/bookorbit-settings-capture.md</code>。
       </div>
-      <div class="mt-2 text-[12.5px] text-muted-foreground">
-        上游对应入口：Help → Documentation / What's New / About BookOrbit。相关页：
-        <RouterLink to="/settings/ext/advanced" class="underline">高级</RouterLink>。
+      <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-muted-foreground">
+        <span>对应上游 Help 菜单：</span>
+        <RouterLink to="/docs" class="underline hover:text-primary">Documentation</RouterLink>
+        <RouterLink to="/whats-new" class="underline hover:text-primary">What's New</RouterLink>
+        <RouterLink to="/settings/ext/advanced" class="underline hover:text-primary">高级</RouterLink>
       </div>
     </Card>
   </div>

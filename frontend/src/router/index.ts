@@ -15,6 +15,7 @@ import SeriesView from '@/views/SeriesView.vue'
 import StatsView from '@/views/StatsView.vue'
 import ReadingLogView from '@/views/ReadingLogView.vue'
 import DashboardView from '@/views/DashboardView.vue'
+import DocumentationView from '@/views/DocumentationView.vue'
 import ExploreView from '@/views/ExploreView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 import SettingsLayout from '@/views/settings/SettingsLayout.vue'
@@ -46,6 +47,7 @@ import IntegrationPage from '@/views/settings/pages/IntegrationPage.vue'
 import MetadataPage from '@/views/settings/pages/MetadataPage.vue'
 import PreferenceSyncPage from '@/views/settings/pages/PreferenceSyncPage.vue'
 import TaskCenterView from '@/views/TaskCenterView.vue'
+import WhatsNewView from '@/views/WhatsNewView.vue'
 import BulkRenameView from '@/views/tools/BulkRenameView.vue'
 import DuplicateBooksView from '@/views/tools/DuplicateBooksView.vue'
 import EntityManagerView from '@/views/tools/EntityManagerView.vue'
@@ -167,6 +169,8 @@ const router = createRouter({
     { path: '/log', name: 'log', component: ReadingLogView },
     { path: '/notify', name: 'notify', component: NotificationsView },
     { path: '/achievements', name: 'achievements', component: AchievementsView },
+    { path: '/whats-new', name: 'whats-new', component: WhatsNewView },
+    { path: '/docs', name: 'docs', component: DocumentationView },
 
     // 设置：嵌套路由，每个叶子页有独立 URL（可直达、可刷新、可分享）
     {

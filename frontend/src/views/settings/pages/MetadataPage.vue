@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import MetadataScoreCard from '@/components/MetadataScoreCard.vue'
 import { api, type MetadataPlanItem, type MetadataSource } from '@/lib/api'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { useLibraryStore } from '@/stores/library'
@@ -43,7 +44,8 @@ const SECTIONS: Record<string, { zh: string; en: string; desc: string; blocks: s
     blocks: ['fields'],
   },
   score: {
-    zh: '置信度阈值', en: 'Confidence Score', desc: '低于阈值的候选不会自动应用',
+    zh: '置信度阈值', en: 'Confidence Score',
+    desc: '元数据完整度评分模型与书库分布；下方阈值用于抓取候选的自动应用',
     blocks: ['score'],
   },
   'genre-blocklist': {
@@ -390,12 +392,15 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
       </div>
     </Card>
 
+    <MetadataScoreCard v-if="has('score')" class="mt-4" />
+
     <Card v-if="has('score')" class="mt-4" padding="none">
       <div class="flex flex-wrap items-center gap-3 px-4 py-3.5">
         <div class="min-w-[240px] flex-1">
-          <div class="text-[13px] font-medium text-foreground">置信度阈值</div>
+          <div class="text-[13px] font-medium text-foreground">抓取候选阈值</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
-            书名权重 0.7 + 作者 0.3（与「重复书籍」同一套相似度）；低于它的候选只列出、不自动写入
+            书名权重 0.7 + 作者 0.3（与「重复书籍」同一套相似度）；低于它的候选只列出、不自动写入。
+            注意：这是**抓取匹配分**，与上方的**元数据完整度**是两件事。
           </div>
         </div>
         <input :value="val('metadata_fetch.threshold')" type="number" min="0.1" max="1" step="0.05"

@@ -1,13 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import Icon from '@/components/ui/Icon.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
-import { api, type HealthInfo, type WatcherStatus } from '@/lib/api'
+import { api, type BookDockResponse, type HealthInfo, type WatcherStatus } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -53,12 +55,85 @@ const counters = computed(() => [
   { k: '扫描轮次', v: watcher.value?.scans ?? 0 },
 ])
 
+// ---- 五态流水线（B3）：All / Needs review / Pending / Ready / Error ----
+const dock = ref<BookDockResponse | null>(null)
+const activeTab = ref('all')
+const busyId = ref('')
+
+const STATUS_LABEL: Record<string, string> = {
+  pending: '待处理',
+  ready: '就绪',
+  needs_review: '待复核',
+  error: '出错',
+  ignored: '已忽略',
+}
+const STATUS_TONE: Record<string, 'neutral' | 'ok' | 'warn' | 'err'> = {
+  pending: 'neutral',
+  ready: 'ok',
+  needs_review: 'warn',
+  error: 'err',
+  ignored: 'neutral',
+}
+
+function fmtSize(n: number): string {
+  const b = Number(n) || 0
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
+  return `${(b / 1024 / 1024).toFixed(1)} MB`
+}
+
+async function loadDock(): Promise<void> {
+  try {
+    dock.value = await api.bookDock(activeTab.value)
+  } catch {
+    /* 列表取不到时不阻塞上方开关 */
+  }
+}
+
+async function switchTab(key: string): Promise<void> {
+  activeTab.value = key
+  await loadDock()
+}
+
+/** 单项操作统一收尾：提示 + 重载（服务端已把新状态写回条目） */
+async function act(fn: () => Promise<{ ok?: boolean }>, okMsg: string): Promise<void> {
+  try {
+    await fn()
+    ui.toast(okMsg)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '操作失败')
+  }
+  await refresh()
+}
+
+async function rescanItem(id: string): Promise<void> {
+  busyId.value = id
+  await act(() => api.bookDockRescan(id), '已重新处理')
+  busyId.value = ''
+}
+
+async function ignoreItem(id: string): Promise<void> {
+  busyId.value = id
+  await act(() => api.bookDockIgnore(id), '已忽略该条目')
+  busyId.value = ''
+}
+
+async function deleteItem(id: string): Promise<void> {
+  if (!window.confirm('把该文件移出收书目录？\n\n文件会移入回收目录（不会真正删除），之后不再自动处理。')) {
+    return
+  }
+  busyId.value = id
+  await act(() => api.bookDockDelete(id), '已移出到回收目录')
+  busyId.value = ''
+}
+
 async function refresh(): Promise<void> {
   try {
     watcher.value = (await api.watcherStatus()) as WatcherInfo
   } catch {
     /* 状态取不到时不阻塞页面 */
   }
+  await loadDock()
 }
 
 async function toggleWatcher(): Promise<void> {
@@ -88,7 +163,56 @@ async function saveAuto(): Promise<void> {
   if (ok) await refresh()
 }
 
+// ---- 整页拖拽投递（A8）：把文件拖进窗口即丢进 INPUT_DIR 处理 ----
+const dragDepth = ref(0)
+const dragging = computed(() => dragDepth.value > 0)
+const dropping = ref(false)
+
+function hasFiles(e: DragEvent): boolean {
+  return Boolean(e.dataTransfer && [...e.dataTransfer.types].includes('Files'))
+}
+function onDragEnter(e: DragEvent): void {
+  if (!hasFiles(e)) return
+  e.preventDefault()
+  dragDepth.value++
+}
+function onDragOver(e: DragEvent): void {
+  if (!hasFiles(e)) return
+  e.preventDefault()
+}
+function onDragLeave(e: DragEvent): void {
+  if (!hasFiles(e)) return
+  e.preventDefault()
+  dragDepth.value = Math.max(0, dragDepth.value - 1)
+}
+async function onDrop(e: DragEvent): Promise<void> {
+  if (!e.dataTransfer) return
+  e.preventDefault()
+  dragDepth.value = 0
+  const files = [...e.dataTransfer.files]
+  if (!files.length) return
+  dropping.value = true
+  let ok = 0
+  for (const file of files) {
+    try {
+      await api.convertDrop(file)
+      ok++
+    } catch (err) {
+      ui.toast(err instanceof Error ? `${file.name}：${err.message}` : `${file.name} 投递失败`)
+    }
+  }
+  dropping.value = false
+  if (ok) {
+    ui.toast(`已投递 ${ok} 个文件到收书目录`)
+    await refresh()
+  }
+}
+
 onMounted(async () => {
+  window.addEventListener('dragenter', onDragEnter)
+  window.addEventListener('dragover', onDragOver)
+  window.addEventListener('dragleave', onDragLeave)
+  window.addEventListener('drop', onDrop)
   try {
     health.value = await api.health()
   } catch {
@@ -96,6 +220,13 @@ onMounted(async () => {
   }
   await loadConfig()
   await refresh()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('dragenter', onDragEnter)
+  window.removeEventListener('dragover', onDragOver)
+  window.removeEventListener('dragleave', onDragLeave)
+  window.removeEventListener('drop', onDrop)
 })
 </script>
 
@@ -172,17 +303,73 @@ onMounted(async () => {
       开关已改动但尚未保存 —— 保存后监听器会立即按新配置启停。
     </p>
 
+    <!-- 五态流水线（B3）：All / Needs review / Pending / Ready / Error -->
+    <Card padding="none">
+      <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+        <h3 class="text-[13px] font-semibold text-foreground">投递流水线</h3>
+        <span class="text-[11.5px] text-muted-foreground">条目按状态流转，可逐条复核</span>
+        <div class="ml-auto flex flex-wrap items-center gap-1.5">
+          <button
+            v-for="t in dock?.tabs ?? []"
+            :key="t.key"
+            type="button"
+            class="cursor-pointer rounded-full px-3 py-1 text-[12px] transition-colors"
+            :class="activeTab === t.key
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-muted text-muted-foreground hover:text-foreground'"
+            @click="switchTab(t.key)"
+          >
+            {{ t.label }}<span class="ml-1 tabular-nums opacity-70">{{ t.count }}</span>
+          </button>
+        </div>
+      </div>
+
+      <div v-if="dock && dock.items.length" class="divide-y divide-border">
+        <div
+          v-for="it in dock.items"
+          :key="it.id"
+          class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3"
+        >
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+              <Icon name="book" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span class="truncate text-[12.5px] font-medium text-foreground" :title="it.name">{{ it.name }}</span>
+              <Badge :tone="STATUS_TONE[it.status] ?? 'neutral'">
+                {{ STATUS_LABEL[it.status] ?? it.status }}
+              </Badge>
+            </div>
+            <div class="mt-1 truncate text-[11.5px] text-muted-foreground" :title="it.output || it.detail">
+              {{ it.output ? `成品：${it.output}` : it.detail || '等待自动处理' }}
+              <span class="ml-1 opacity-70">{{ fmtSize(it.size) }}</span>
+              <span v-if="it.retries" class="ml-1 text-warning">· 已重试 {{ it.retries }} 次</span>
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <Button size="sm" :disabled="busyId === it.id" @click="rescanItem(it.id)">重扫</Button>
+            <Button size="sm" :disabled="busyId === it.id" @click="ignoreItem(it.id)">忽略</Button>
+            <Button size="sm" variant="danger" :disabled="busyId === it.id" @click="deleteItem(it.id)">移出</Button>
+          </div>
+        </div>
+      </div>
+
+      <EmptyState
+        v-else
+        icon="upload"
+        dashed
+        class="m-4"
+        :title="activeTab === 'all' ? '投递目录里还没有文件' : '该状态下没有条目'"
+        desc="把 .txt / EPUB / PDF / CBZ 拖进本页任意位置，或直接放进投递目录，文件会在这里按状态流转。"
+      />
+    </Card>
+
     <SettingsUnsupportedCard
       label="Book Dock"
-      :groups="['METADATA', 'AUTO-FINALIZE', '状态机']"
+      :groups="['METADATA', 'AUTO-FINALIZE']"
       :items="[
-        'Auto-fetch metadata from providers（投递后自动抓取元数据）—— 依赖元数据抓取体系，本项目尚无',
-        'Enable auto-finalize（元数据置信度达阈值自动定稿）—— 依赖置信度评分体系，本项目尚无',
-        '五态流水线：All / Needs review / Pending / Ready / Error',
-        '整页拖拽投递（本项目仅工具页的本地转换支持 .txt 拖拽）',
-        '按条目的重新扫描 / 忽略 / 删除等单项操作',
+        'Auto-fetch metadata from providers（投递后自动抓取元数据）—— 已有 MANUAL 版（设置 → 元数据 → 手动抓取），投递即抓的自动化开关尚未接线',
+        'Enable auto-finalize（元数据置信度达阈值自动定稿）—— 依赖 Metadata Score 置信度评分，见第 7 期 B2',
       ]"
-      note="上游 Book Dock 是「投递目录 + 元数据抓取 + 置信度定稿」的完整流水线；本项目只具备其中的「投递目录 + 自动处理」部分，等价物就是输入目录监听。前两项待元数据体系落地后再补。"
+      note="上游 Book Dock 是「投递目录 + 元数据抓取 + 置信度定稿」的完整流水线。本项目的「投递目录 + 自动处理 + 五态复核（待复核 / 待处理 / 就绪 / 出错）」已落地；余下两项待元数据评分体系（B2）落地后再补。"
     />
 
     <Card class="mt-4">
@@ -192,5 +379,28 @@ onMounted(async () => {
         轮询与稳定判定参数）、<RouterLink to="/tools/local" class="underline">工具 → 本地转换</RouterLink>（单文件投递）。
       </div>
     </Card>
+
+    <!-- 整页拖拽投递遮罩（A8）：拖文件进窗口时浮层，松手即投递到收书目录 -->
+    <transition
+      enter-active-class="transition-opacity duration-150"
+      leave-active-class="transition-opacity duration-150"
+      enter-from-class="opacity-0"
+      leave-to-class="opacity-0"
+    >
+      <div
+        v-if="dragging"
+        class="fixed inset-0 z-[60] flex items-center justify-center bg-black/55 backdrop-blur-sm"
+        @dragover.prevent
+        @drop.prevent="onDrop"
+      >
+        <div class="flex flex-col items-center gap-3 rounded-[var(--shell-radius)] border-2 border-dashed border-primary/60 bg-[var(--shell-surface)] px-10 py-9 text-center">
+          <Icon name="upload" class="h-9 w-9 text-primary" />
+          <div class="text-[15px] font-semibold text-foreground">松开投递到收书目录</div>
+          <div class="text-[12px] text-muted-foreground">
+            {{ dropping ? '正在处理…' : '.txt 会被转换，其它电子书格式（EPUB/PDF/CBZ 等）直接入库' }}
+          </div>
+        </div>
+      </div>
+    </transition>
   </div>
 </template>
