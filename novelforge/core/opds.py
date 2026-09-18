@@ -147,9 +147,18 @@ def book_entry(parent, b: dict, base: str, *, with_alternate: bool = True) -> No
         _link(e, "alternate", f"{base}/opds/book/{bid}", _ACQ_TYPE)
 
 
-def _feed(title: str, feed_id: str, updated: float, links: list) -> ET.Element:
+def _feed(title: str, feed_id: str, updated: float, links: list, *,
+          subtitle: str = "") -> ET.Element:
+    """Atom feed 底座（全站 4 个 feed 共用：导航 / 分组导航 / acquisition / 单本详情）。
+
+    ``subtitle`` 是**keyword-only 且默认空**：既有调用点都传恰好 4 个位置参数，
+    keyword-only 参数语法上不可能被位置参数顶掉；空值时**输出逐字节不变**。
+    位置紧跟 ``<title>`` —— Atom 规范要求这个顺序，不图省事追加到末尾。
+    """
     feed = ET.Element(_q("feed"))
     _atom(feed, "title", title)
+    if subtitle:
+        _atom(feed, "subtitle", subtitle, type="text")
     _atom(feed, "id", feed_id)
     _atom(feed, "updated", _iso(updated))
     _author(feed, "NovelForge")
@@ -196,8 +205,15 @@ def navigation_feed(base: str, counts: dict) -> str:
     return tostring(feed)
 
 
-def group_navigation(base: str, title: str, section: str, groups: list, updated: float) -> str:
-    """作者 / 系列 / 标签的分组导航（每组一个 subsection）。"""
+def group_navigation(base: str, title: str, section: str, groups: list, updated: float,
+                     *, descriptions: dict = None) -> str:
+    """作者 / 系列 / 标签的分组导航（每组一个 subsection）。
+
+    ``descriptions``（可选）是 ``{组名: 简介}``：**传了才**给条目加 ``<summary>``。
+    刻意做成外部显式传入、而不是函数内部自己去查系列元数据 —— 这个函数被
+    作者 / 系列 / 标签三个路由共用，内部查库会让另外两页多跑无意义的查询、
+    并顺带改变它们的输出。
+    """
     from urllib.parse import quote
 
     feed = _feed(
@@ -216,6 +232,9 @@ def group_navigation(base: str, title: str, section: str, groups: list, updated:
         _atom(e, "id", href)
         _atom(e, "updated", _iso(updated))
         _atom(e, "content", f"{count} 本", type="text")
+        desc = str((descriptions or {}).get(name) or "").strip()
+        if desc:
+            _atom(e, "summary", desc, type="text")
         _link(e, "subsection", href, _ACQ_TYPE)
     return tostring(feed)
 
@@ -230,8 +249,12 @@ def acquisition_feed(
     page_size: int = PAGE_SIZE,
     sort: str = "recent",
     order: str = "desc",
+    subtitle: str = "",
 ) -> str:
-    """书籍列表 feed（acquisition），带分页。"""
+    """书籍列表 feed（acquisition），带分页。
+
+    ``subtitle``（可选）用于「系列：X」这类页面带出系列简介；默认空 → 输出不变。
+    """
     total = len(books)
     pages = max(1, (total + page_size - 1) // page_size)
     page = min(max(1, page), pages)  # 越界回落到最后一页：客户端手滑翻过头不该看到报错
@@ -252,7 +275,8 @@ def acquisition_feed(
         links.append({"rel": "previous",
                       "href": f"{base}/opds/{section}?page={page - 1}{qs}", "type_": _ACQ_TYPE})
 
-    feed = _feed(title, f"urn:novelforge:opds:{section}:{page}", updated, links)
+    feed = _feed(title, f"urn:novelforge:opds:{section}:{page}", updated, links,
+                 subtitle=str(subtitle or "").strip())
     # OpenSearch：客户端据此显示「第 N 页 / 共 M 条」
     _e(feed, f"{{{NS_OS}}}totalResults", total)
     _e(feed, f"{{{NS_OS}}}startIndex", (page - 1) * page_size + 1)
