@@ -115,11 +115,14 @@ ENV PYTHONUNBUFFERED=1 \
     CACHE_DIR=/app/config/cache \
     NODE_BIN=/usr/local/bin/node
 
-# 运行期仅保留两类系统包：
-#   tzdata     —— 让 TZ=Asia/Shanghai 真正生效（slim 基线默认不带时区库）
-#   libstdc++6 —— Node 二进制的动态依赖；已存在时 apt 直接跳过，几乎不增加体积
+# 运行期保留三类系统包：
+#   tzdata           —— 让 TZ=Asia/Shanghai 真正生效（slim 基线默认不带时区库）
+#   libstdc++6       —— Node 二进制的动态依赖；已存在时 apt 直接跳过，几乎不增加体积
+#   libarchive-tools —— 提供 bsdtar，CBR（RAR 漫画）靠它解压（rarfile 的后端，第 9 期）。
+#                       libarchive 支持 RAR4/RAR5 读取；不装则 .cbr 无法打开（接口会返回 503）。
 RUN apt-get -o Acquire::Retries=5 update \
-    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends tzdata libstdc++6 \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+       tzdata libstdc++6 libarchive-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # 可选：MOBI / AZW3 派生需要 Calibre 的 ebook-convert —— 体积很大，默认**不安装**。

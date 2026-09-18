@@ -10,3 +10,7 @@ beautifulsoup4>=4.12
 # PDF 页面渲染：Komga 兼容服务端的页面流要把 PDF 逐页转成图片
 # （pypdfium2 自带 PDFium 二进制，pip 装即可，不需要系统库）
 pypdfium2>=4.30
+# CBR（RAR 格式漫画）读取：rarfile 是纯 Python，但**必须有外部解压器**
+# （bsdtar / unrar）。容器里由 libarchive-tools 提供 bsdtar（见 Dockerfile）；
+# macOS 本机自带 bsdtar，无需额外安装。
+rarfile>=4.0
