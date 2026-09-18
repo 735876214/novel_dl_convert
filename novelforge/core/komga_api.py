@@ -274,6 +274,26 @@ def series_dto(name: str, items: list, meta: dict = None) -> dict:
     }
 
 
+def collection_dto(cid, name: str, created, groups: dict) -> dict:
+    """CollectionDto（第 16 期）—— 映射本项目的**收藏夹**。
+
+    Komga 的 Collection 装的是**系列**，而本项目收藏夹装的是 **book_id**，
+    所以成员要**先按书归到各自的系列**再给出去 —— ``groups`` 是
+    ``{系列名: [书…]}``，由调用方按 Komga 可见性过滤后传入（本函数不做可见性判断）。
+
+    ``createdDate`` / ``created`` 两套都给：不同客户端实现挑自己认的那个，多给不会错。
+    ``ordered`` 恒为 ``False``：收藏夹没有顺序概念，不假装支持排序。
+    """
+    sids = [series_id(n) for n in (groups or {})]
+    return {
+        "id": str(cid), "name": str(name or ""),
+        "ordered": False, "filtered": False,
+        "seriesIds": sids, "seriesCount": len(sids),
+        "createdDate": iso(created), "lastModifiedDate": iso(created),
+        "created": iso(created), "lastModified": iso(created),
+    }
+
+
 def book_dto(b: dict, series_name: str = "") -> dict:
     """BookDto —— 客户端依赖最多的结构，字段名必须逐字对齐。"""
     fmt = str(b.get("format") or "").upper()

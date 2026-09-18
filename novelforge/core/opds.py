@@ -44,6 +44,8 @@ _ACQ_REL = "http://opds-spec.org/acquisition"
 _IMG_REL = "http://opds-spec.org/image"
 _THUMB_REL = "http://opds-spec.org/image/thumbnail"
 _NAV_TYPE = "application/atom+xml;profile=opds-catalog;kind=navigation"
+#: OpenSearch Description（第 16 期）：不少客户端**只有拿到它**才显示搜索框
+_OSDD_TYPE = "application/opensearchdescription+xml"
 _ACQ_TYPE = "application/atom+xml;profile=opds-catalog;kind=acquisition"
 
 
@@ -203,7 +205,8 @@ def navigation_feed(base: str, counts: dict, *, prefix: str = "/opds",
         updated,
         [
             {"rel": "start", "href": f"{base}{prefix}", "type_": _NAV_TYPE},
-            {"rel": "search", "href": f"{base}{prefix}/search", "type_": "application/atom+xml"},
+            {"rel": "search", "href": f"{base}{prefix}/search/description",
+             "type_": _OSDD_TYPE},
         ],
     )
     for label, href, desc in items:
@@ -302,6 +305,32 @@ def acquisition_feed(
     for b in chunk:
         book_entry(feed, b, base, prefix=prefix)
     return tostring(feed)
+
+
+def _esc_attr(s: str) -> str:
+    """XML **属性值**转义（OSDD 的 template 里带 ``?q={searchTerms}``，``&`` 与引号必须转义）。"""
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def search_description(base: str, prefix: str = "/opds") -> str:
+    """OpenSearch Description（OSDD）—— **搜索地址模板**。
+
+    根 feed 里那条 ``rel="search"`` 指向本文档；客户端拿到它才知道该往哪个地址拼
+    ``?q=``。此前那里放的是 acquisition feed 的链接与类型，客户端多半识别不出搜索。
+
+    ``prefix`` 同其它函数：单库订阅时传 ``/opds/lib/<id>``，模板就落在库内。
+    """
+    url = f"{base}{prefix}/search?q={{searchTerms}}"
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">\n'
+        "  <ShortName>NovelForge</ShortName>\n"
+        "  <Description>搜索 NovelForge 书库（书名 / 作者 / 系列）</Description>\n"
+        "  <InputEncoding>UTF-8</InputEncoding>\n"
+        f'  <Url type="{_ACQ_TYPE}" template="{_esc_attr(url)}"/>\n'
+        "</OpenSearchDescription>\n"
+    )
 
 
 def library_navigation(base: str, libs: list, updated: float) -> str:

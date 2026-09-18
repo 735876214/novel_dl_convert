@@ -459,6 +459,30 @@ def create_collection(name: str) -> int:
         return cur.lastrowid or 0
 
 
+def update_collection(cid: int, name: str) -> bool:
+    """重命名（第 16 期 Komga Collections 用）。重名由 ``collections.name`` 的 UNIQUE
+    约束拦下并向上抛（调用方翻成 409），不做「先查后改」以免竞态。
+
+    返回是否真的改到行（不存在的夹返回 ``False``）。
+    """
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "UPDATE collections SET name=? WHERE id=?", (str(name).strip(), int(cid))
+        )
+        c.commit()
+        return int(cur.rowcount or 0) > 0
+
+
+def clear_collection(cid: int) -> int:
+    """清空成员（保留夹本身；Komga 的 ``PUT /collections/{id}/series`` 是**整体替换**）。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM collection_items WHERE collection_id=?", (int(cid),))
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
 def delete_collection(cid: int):
     c = _connect()
     with _lock:
@@ -987,62 +1011,6 @@ def delete_scope(scope_id) -> bool:
         c.commit()
         return bool(cur.rowcount)
 
-
-# ---------------- OPDS 订阅源（客户端：去读别人的 feed）----------------
-# 密码明文落库：本项目是单用户自托管工具，与 llm.api_key 同一取舍
-# （settings.json 里也是明文）。对外回显一律掩码，提交掩码 = 不修改。
-
-def list_opds_sources() -> list:
-    rows = _connect().execute(
-        "SELECT * FROM opds_sources ORDER BY created_at DESC, id DESC"
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
-def get_opds_source(source_id):
-    r = _connect().execute(
-        "SELECT * FROM opds_sources WHERE id=?", (int(source_id),)
-    ).fetchone()
-    return dict(r) if r else None
-
-
-def create_opds_source(name, url, username="", password="") -> dict:
-    c = _connect()
-    with _lock:
-        cur = c.execute(
-            "INSERT INTO opds_sources(name, url, username, password, created_at) VALUES(?,?,?,?,?)",
-            (str(name), str(url), str(username), str(password), time.time()),
-        )
-        c.commit()
-        return get_opds_source(cur.lastrowid)
-
-
-def update_opds_source(source_id, name, url, username="", password=None) -> dict:
-    """``password=None`` = 保留原密码。
-
-    前端回显的是掩码，提交掩码必须被解释成「不改」——否则用户改一次名字，
-    掩码字符串就会被当成新密码写回去，认证当场失效。
-    """
-    cur_row = get_opds_source(source_id)
-    if not cur_row:
-        return None
-    pw = cur_row["password"] if password is None else str(password)
-    c = _connect()
-    with _lock:
-        c.execute(
-            "UPDATE opds_sources SET name=?, url=?, username=?, password=? WHERE id=?",
-            (str(name), str(url), str(username), pw, int(source_id)),
-        )
-        c.commit()
-    return get_opds_source(source_id)
-
-
-def delete_opds_source(source_id) -> bool:
-    c = _connect()
-    with _lock:
-        cur = c.execute("DELETE FROM opds_sources WHERE id=?", (int(source_id),))
-        c.commit()
-        return bool(cur.rowcount)
 
 
 # ---------------- KOReader 文档索引（document md5 → 书）----------------
