@@ -24,7 +24,8 @@ from .core import pipeline, activity_log, library, fileops
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, recommend,
                    fonts, comics, opds, opds_client, komga, koreader, integrations,
-                   metasources, metafetch, komga_api, bookdock, metascore)
+                   metasources, metafetch, metastore, komga_api, bookdock, metascore,
+                   authors as authors_mod)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -104,6 +105,8 @@ _MEDIA_TOKEN_PATHS = (
     re.compile(r"^/api/fonts/[^/]+/file$"),
     # 漫画单页：<img src> 同样是原生请求（PRD 的 PDF 用 fetch 带 httpHeaders，漫画用 img 更省内存）
     re.compile(r"^/api/books/[^/]+/comic/\d+$"),
+    # 作者头像：同样是 <img src> 原生请求（第 8 期）
+    re.compile(r"^/api/authors/[^/]+/photo$"),
 )
 
 
@@ -848,7 +851,12 @@ def _meta_value(book: dict, field: str):
 
 @app.get("/api/books/{bid}/metadata")
 def api_book_metadata(bid: str):
-    """单书当前的可编辑元数据（详情页「编辑元数据」标签用）。"""
+    """单书当前的生效元数据（详情页「编辑元数据」标签用）。
+
+    返回的 ``fields`` 是分层后的生效值（override > online > opf）；
+    ``meta`` 是逐字段明细（在线建议值 / 是否已被用户本地覆盖），供编辑器渲染
+    「已本地修改」徽标与「恢复为在线值」按钮。
+    """
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
@@ -858,20 +866,24 @@ def api_book_metadata(bid: str):
         "format": (b.get("format") or "").upper(),
         # 非 EPUB 没有可改写的 OPF，前端据此把表单置为只读并说明原因
         "editable": (b.get("format") or "").upper() == "EPUB",
-        "fields": {f: _meta_value(b, f) for f in fileops.METADATA_FIELDS},
+        # 生效值：用户覆盖 > 在线抓取 > OPF 原值
+        "fields": metastore.effective(b),
+        # 逐字段明细（含在线建议 / 是否已本地覆盖）
+        "meta": metastore.state(b),
     }
 
 
 @app.post("/api/books/{bid}/metadata")
 def api_set_book_metadata(bid: str, payload: dict = Body(...)):
-    """改写单本书的 EPUB 内嵌元数据。
+    """改写单本书的 EPUB 内嵌元数据，并记录用户覆盖（受抓取保护）。
 
-    四条边界：
+    边界：
       · 只接受 ``fileops.METADATA_FIELDS`` 里的字段，其余**不写**（并在响应里回报）；
       · 只支持 EPUB —— 其它格式没有可改写的 OPF；
       · 改完必须 ``library.invalidate()``，否则扫描缓存会让界面继续显示旧值；
-      · **不动文件名**：文件名归「批量重命名」管。改文件名会让 book_id 变化，
-        进而切断阅读进度与批注的关联（它们以 book_id 为键），不该由元数据编辑顺手做掉。
+      · **不动文件名**：文件名归「批量重命名」管；
+      · 与 OPF 原值**不同**的字段记入 ``meta_override``（用户本地修正，再抓取不冲掉）；
+        与 OPF **一致**的字段若此前有覆盖则撤销，回到「跟随在线 / OPF」。
     """
     b = library.by_id(bid)
     if not b:
@@ -895,6 +907,15 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
     except ValueError as e:
         raise HTTPException(500, str(e))
 
+    # 与 OPF 原值不同的才记为用户覆盖（并记下编辑前原值 orig，供无在线值时回退）；
+    # 与 OPF 一致的字段若此前有覆盖则撤销，回到「跟随在线 / OPF」。
+    for f in accepted:
+        new_val = str(accepted[f] or "").strip()
+        if new_val != str(before[f] or "").strip():
+            db.set_override(bid, f, new_val, orig=before[f])
+        else:
+            db.set_override(bid, f, "")
+
     library.invalidate()
     fresh = library.by_id(bid) or {}
     changed = sorted(f for f in accepted if before.get(f) != _meta_value(fresh, f))
@@ -906,7 +927,79 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
         "written": written,
         "changed": changed,
         "unknown": unknown,
-        "book": {f: _meta_value(fresh, f) for f in fileops.METADATA_FIELDS},
+        # 回写生效值 + 逐字段明细，前端直接据此刷新表单
+        "fields": metastore.effective(fresh),
+        "meta": metastore.state(fresh),
+    }
+
+
+@app.get("/api/books/{bid}/metadata/online")
+def api_book_metadata_online(bid: str):
+    """实时在线候选（编辑器「在线建议 / 重新获取」用）。**不写库**。"""
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    cand = metafetch.online_candidate(b, cfg=config.load_config())
+    if not cand:
+        return {"ok": False, "values": {}, "source": "", "score": 0.0,
+                "message": "未找到在线候选或抓取未启用"}
+    return {"ok": True, **cand}
+
+
+@app.post("/api/books/{bid}/metadata/revert")
+def api_revert_book_metadata(bid: str, payload: dict = Body(None)):
+    """把指定字段恢复为在线值：撤销用户覆盖，并把 OPF 也写回在线值（外部阅读器保持一致）。
+
+    仅 EPUB。恢复的在线值优先用实时检索；检索失败则回退到上次抓取的 ``meta_online`` 缓存。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    if (b.get("format") or "").upper() != "EPUB":
+        raise HTTPException(400, "仅支持 EPUB")
+    fields = (payload or {}).get("fields") or []
+    if not isinstance(fields, list) or not fields:
+        raise HTTPException(400, "fields 必须是非空数组")
+    fields = [f for f in fields if f in fileops.METADATA_FIELDS]
+    if not fields:
+        raise HTTPException(400, "没有可恢复的字段")
+
+    # 在线值：先实时检索，失败回退到 meta_online 缓存
+    cand = metafetch.online_candidate(b, cfg=config.load_config())
+    online_vals = (cand or {}).get("values") or {}
+    stored = db.get_online(bid)
+
+    def _online_of(f: str) -> str:
+        v = str(online_vals.get(f) or "").strip()
+        if v:
+            return v
+        return str((stored.get(f) or {}).get("value") or "").strip()
+
+    updates = {}
+    for f in fields:
+        row = db.get_override_row(bid, f)
+        ov = _online_of(f)
+        if ov:
+            target = ov                              # 有在线值：把 OPF 写回在线值
+        elif row is not None:
+            target = str(row.get("orig") or "")      # 无在线值：还原到编辑前原值（可能为空 = 清空）
+        else:
+            target = None
+        db.set_override(bid, f, "")                  # 撤销覆盖
+        if target is not None:
+            updates[f] = target
+    if updates:
+        try:
+            fileops.patch_epub_meta(config.OUTPUT_DIR / b["name"], updates)
+        except ValueError as e:
+            raise HTTPException(500, str(e))
+    library.invalidate()
+    fresh = library.by_id(bid) or {}
+    return {
+        "ok": True,
+        "fields": metastore.effective(fresh),
+        "meta": metastore.state(fresh),
+        "recovered": sorted(updates.keys()),
     }
 
 
@@ -1267,22 +1360,28 @@ def api_series_detail(name: str):
 @app.get("/api/authors")
 def api_authors():
     items = library.authors_list()
-    return {
-        "items": [
-            {
-                "name": a["name"],
-                "count": a["count"],
-                "series": sorted({b["series"] for b in a["books"] if b.get("series")})[:3],
-                "covers": [
-                    {"id": b["id"], "title": b["title"], "c1": b["c1"], "c2": b["c2"],
-                     "has_cover": b.get("has_cover", False)}
-                    for b in a["books"][:4]
-                ],
-            }
-            for a in items
-        ],
-        "total": len(items),
-    }
+    rows = db.all_authors()
+    out = []
+    for a in items:
+        row = rows.get(a["name"]) or {}
+        has_photo = bool(str(row.get("photo_local_path") or "").strip()
+                         or str(row.get("photo_path") or "").strip())
+        stamps = [b.get("mtime") or 0 for b in a["books"]]
+        out.append({
+            "name": a["name"],
+            "count": a["count"],
+            "series": sorted({b["series"] for b in a["books"] if b.get("series")})[:3],
+            "covers": [
+                {"id": b["id"], "title": b["title"], "c1": b["c1"], "c2": b["c2"],
+                 "has_cover": b.get("has_cover", False)}
+                for b in a["books"][:4]
+            ],
+            # 本地缓存的作者头像有无（有则前端去 /api/authors/{name}/photo 取；无则渐变占位）
+            "has_photo": has_photo,
+            # 名下最早一本书的入库时间（秒），用于「本周新增」筛选
+            "added_ts": min(stamps) if stamps else 0,
+        })
+    return {"items": out, "total": len(items)}
 
 
 @app.get("/api/authors/{name}")
@@ -1290,7 +1389,89 @@ def api_author_detail(name: str):
     bs = library.author_books(name)
     if not bs:
         raise HTTPException(404, "作者不存在")
-    return {"name": name, "count": len(bs), "books": bs}
+    info = authors_mod.effective(name)
+    stamps = [b.get("mtime") or 0 for b in bs]
+    return {
+        "name": name,
+        "count": len(bs),
+        "books": bs,
+        # 传记（本地覆盖 > 在线），无则空串
+        "bio": info["bio"],
+        "bio_overridden": info["bio_overridden"],
+        # 头像（本地缓存的在线照片 或 用户上传），经专属端点分发
+        "has_photo": info["has_photo"],
+        "photo_overridden": info["photo_overridden"],
+        "photo_source": info["photo_source"],
+        "fetched_at": info["fetched_at"],
+        # 名下最早一本书的入库时间（秒）
+        "added_ts": min(stamps) if stamps else 0,
+    }
+
+
+# ---------------- 作者元数据（抓取 / 编辑 / 头像分发，第 8 期 D1/D2/D5）----------------
+
+_AUTHOR_PHOTO_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                       ".webp": "image/webp", ".gif": "image/gif"}
+_AUTHOR_PHOTO_MAX = 8 * 1024 * 1024
+
+
+@app.get("/api/authors/{name}/photo")
+def api_author_photo(name: str):
+    """分发作者头像（本地缓存文件，零外链）。无头像返回 404，前端回退渐变占位。"""
+    p = authors_mod.photo_path_for(name)
+    if not p:
+        raise HTTPException(404, "无头像")
+    media = _AUTHOR_PHOTO_TYPES.get(p.suffix.lower(), "application/octet-stream")
+    return FileResponse(p, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.post("/api/authors/{name}/bio")
+def api_set_author_bio(name: str, payload: dict = Body(...)):
+    """设置作者传记的本地覆盖（空串 = 撤销覆盖，回退到在线传记）。"""
+    if not library.author_books(name):
+        raise HTTPException(404, "作者不存在")
+    bio = (payload or {}).get("bio")
+    if bio is None:
+        raise HTTPException(400, "缺少 bio 字段")
+    return {"ok": True, **authors_mod.set_bio(name, str(bio))}
+
+
+@app.post("/api/authors/{name}/photo")
+async def api_upload_author_photo(name: str, file: UploadFile = File(...)):
+    """上传作者头像作为本地覆盖（保存到 CACHE_DIR/authors/，覆盖在线照片）。"""
+    if not library.author_books(name):
+        raise HTTPException(404, "作者不存在")
+    fn = (file.filename or "").lower()
+    ext = ("." + fn.rsplit(".", 1)[-1]) if "." in fn else ".jpg"
+    if ext not in _AUTHOR_PHOTO_TYPES:
+        raise HTTPException(400, "仅支持 jpg / png / webp / gif 图片")
+    data = await _read_capped(file, _AUTHOR_PHOTO_MAX)
+    if not data:
+        raise HTTPException(400, "文件为空")
+    return {"ok": True, **authors_mod.set_photo(name, data, ext)}
+
+
+@app.delete("/api/authors/{name}/photo")
+def api_clear_author_photo(name: str):
+    """撤销本地头像覆盖，回退到在线照片。"""
+    if not library.author_books(name):
+        raise HTTPException(404, "作者不存在")
+    return {"ok": True, **authors_mod.clear_photo_override(name)}
+
+
+@app.post("/api/authors/{name}/fetch")
+def api_fetch_author(name: str):
+    """抓取单个作者的在线传记 / 头像。"""
+    if not library.author_books(name):
+        raise HTTPException(404, "作者不存在")
+    res = authors_mod.fetch_author(name)
+    return {"ok": bool(res.get("ok")), "result": res, **authors_mod.effective(name)}
+
+
+@app.post("/api/authors/fetch-all")
+def api_fetch_all_authors():
+    """抓取全部作者的在线元数据（逐个抓取、失败不中断）。"""
+    return authors_mod.fetch_all()
 
 
 # ---------------- 批注总览（跨书）----------------
@@ -1715,7 +1896,7 @@ EDITABLE: dict = {
     # 免得将来有人往前端配置里塞任意键。
     "metadata_fetch": {
         "enabled", "sources", "limit", "threshold", "fields", "auto_on_import",
-        "genre_blocklist", "custom_fields", "googlebooks_api_key",
+        "genre_blocklist", "custom_fields", "googlebooks_api_key", "authors",
     },
     # Komga 兼容服务端：开关 + Basic 用户名 + 可选 API Key
     "komga": {"enabled", "username", "api_key"},
