@@ -38,7 +38,7 @@
 | 3 | 偏好同步 | `/api/prefs/profiles` + `/api/prefs/devices`；`prefSync` store；`prefsBridge` 防回环 |
 | 4 | OPDS 订阅源 | `core/opds.py`；`/opds`（关闭态 404）；设置页 |
 | 4 | KOReader 互通 | `core/koreader.py`；healthcheck 实测返回 `{"state":"OK"}`；syncs 路由；设置页 |
-| 4 | Komga 集成 | `core/komga.py` + `core/opds_client.py`；布局预览接口；订阅页 + 设置页 |
+| 4 | Komga 集成 | `core/komga.py` + `core/opds_client.py`（⚠️ **订阅外部 OPDS 源于第 16 期删除**）；布局预览接口；~~订阅页~~ + 设置页 |
 | 4 | 外部服务集成 | `core/integrations.py`；三家服务齐全；三页共用组件（props 传 service） |
 | 4 | Kobo / 邮件投递 | 文档已划掉并写明理由；设置页保持 `placeholder`（不假装可用） |
 

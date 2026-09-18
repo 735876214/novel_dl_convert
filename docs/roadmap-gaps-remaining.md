@@ -225,6 +225,36 @@
 - **已知取舍（已写进注释与文档）**：系列 id 由**名字**派生，客户端已用它存进度与收藏 →
   按库过滤后同名系列只出现在第一本所在库，**不为此改 id 派生方式**。
 
+#### 第 16 期实施记录（Komga 客户端兼容收尾 + 删除 OPDS 订阅）
+
+**主题**：本项目**就是** Komga 服务端，本期只做「被客户端访问」的最后一公里；同时删掉唯一一条
+「从其他项目取数据」的能力。用户明确：**接入侧（从别的 Komga 拉书目 / 下载入库 / 双向同步）永久不做**，
+设置页「未支持接入侧」那句**保留不划掉**。
+
+- **Collections = 应用内收藏夹（可写）**：Komga 的 Collection 装**系列**，本项目收藏夹装 **book_id**
+  → 映射时按书归到各自系列。端点按官方规格实现：`GET/POST /api/v1/collections`、
+  `GET/PATCH/DELETE /api/v1/collections/{id}`、`GET/PUT /api/v1/collections/{id}/series`、
+  `DELETE /api/v1/collections/{id}/series/{seriesId}`、`GET /api/v1/collections/{id}/thumbnail`。
+  写操作真的落到 `collections` 表（应用内收藏夹页立刻能看到）；**自定义封面一律 403**
+  （夹封面取成员书的封面，不假装支持上传）。`db` 新增 `update_collection` / `clear_collection`
+  （此前**没有重命名入口**）。
+- **越库的书不进 Komga**：收藏夹是全局的（能装有声书库的书），成员工书一律过 `_ko_books()` 的可见性过滤
+  → 从 Komga 侧看它们不存在。
+- **没有的概念诚实为空**：Readlist 返回空分页；`POST /readlists` 与 `/readlists/import` 给 403。
+  `POST /api/v1/series/{id}/analyze` 是 **204 空实现**（书目实时扫描，没有「重新分析」这一步，但不假装做了）。
+- **其余补齐**：`GET /api/v1/referential`（引用表，字段齐全且给真实值）、`GET /api/v1/libraries/{id}`（单库详情）、
+  `GET /api/v1/books/{id}/previous|next`（系列内相邻）。
+- **OPDS 搜索描述文档（OSDD）**：新增 `/opds/search/description`（与单库版），根 feed 的 `rel="search"`
+  指向它并改用 `application/opensearchdescription+xml` —— 此前那里放的是 acquisition feed 的类型，客户端多半识别不出搜索。
+- **删除「OPDS 订阅」（接入外部源）**：后端 6 条路由与注释段（107 行）、`core/opds_client.py`（240 行）、
+  `db` 的 5 个 CRUD 函数（建表语句保留，老库可能已有）、`features` 的 `opds_sources` 能力键（三处集合 + 标签）；
+  前端 `OpdsSourcesView.vue`、ToolsLayout 标签（10 → 9）、router 注册、`lib/api.ts` 类型与方法块；README 四处；
+  `whatsNew.ts` 与 `DocumentationView.vue` 的「订阅源」文案改「目录」（避免与对外服务混淆）。
+  测试加「`/api/opds/sources` 返回 404」的防回归断言。
+- **测试**：新增 `tests/test_komga_client.py`（12 例：收藏夹映射 / 整体替换与移出 / 越库过滤 / 重命名与重名 409 /
+  自定义封面 403 / Readlist 空与 403 / 引用表 / 单库详情 / 上一本下一本 / analyze / OSDD / 删除后 404）。
+  能力集删掉 `opds_sources` → `test_features` 两处与「能力清单 18 → 17」同步。全量 **200 passed**。
+
 ---
 
 ## 四、验证纪律（沿用 history）

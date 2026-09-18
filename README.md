@@ -55,7 +55,7 @@ TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub 
 - **重排册号**：把某个系列的 `calibre:series_index` 按当前顺序重写成 1..N（可逐册微调），
   **只改文件内部的序号、不改文件名** —— 因此阅读进度 / 批注 / 评分 / 收藏都不会断链，可随时再排或还原
 - **工具**（9 个标签）：实体管理、批量重命名、重复书籍（同作者 + 书名相似度阈值可调）、缺失资源、
-  书源管理、导出目录、本地转换、转换日志、OPDS 订阅。
+  书源管理、导出目录、本地转换、转换日志。
   会改磁盘的三个工具一律**先预览、再应用**，且「删除」是移入回收站（`CONFIG_DIR/cache/recycle`），
   **从不直接删文件**
 
@@ -68,9 +68,8 @@ TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub 
 | 对外 | **OPDS 目录** | 只读 Atom feed：全部 / 最近 / 按作者 / 按系列 / 按标签 / 搜索 / 单书 / 封面 / 下载。用 HTTP Basic + 应用账号；`/opds` 是独立前缀，不走 `/api` 的 Bearer 中间件（客户端只会发 Basic）。**按书库暴露**：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 `/opds/lib/<库 id>`，可在「工具 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404） |
 | 对外 | **Komga 库布局** | 有系列的书按 `系列名/系列名 #N.ext` 落盘（Komga 只认一层系列目录、不递归），并可从文件名或 OPF 推断系列；「整理既有库」把已平铺的书收进系列目录，**会改名时自动迁移阅读进度 / 批注 / 评分 / 收藏** |
 | 对接 | **KOReader 进度互通** | 实现 kosync 协议（`users/auth`、`users/create`、`syncs/progress` 的 GET/PUT）：按 partialMD5 索引文档，并在 XPointer / 页码与本项目的位置之间换算 |
-| 对接 | **OPDS 订阅** | 工具页里可订阅外部 OPDS 源（Komga / Calibre-Web 等），浏览后直接下载入库 |
 | 对接 | **Hardcover / Readwise / StoryGraph** | 凭据存储 + **真实连通性验证**（能验证的才放验证按钮；StoryGraph 无公开 API，如实标注不可验证） |
-| 双向 | **Komga 兼容服务端** | 本应用可直接**冒充 Komga 服务端**：第三方 Komga 客户端（Mihon / Panels / 官方 App）把地址填成 NovelForge 即可浏览书库、读漫画与 PDF（服务端逐页渲染）、下载 EPUB、双向同步阅读进度。支持 Basic / `X-API-Key` / 会话三种认证与 Komga 的分页壳。**可按书库浏览**（系列与书籍都按库过滤，老客户端的 GET 端点同样生效）、**系列级「全部已读 / 全部未读」**（只把百分比顶到 100，不清除读者位置）、CBR 有正确的媒体类型；**有声书库不进 Komga**（Komga 没有音频模型，硬塞进去只会得到打不开的坏条目） |
+| 双向 | **Komga 兼容服务端** | 本应用可直接**冒充 Komga 服务端**：第三方 Komga 客户端（Mihon / Panels / 官方 App）把地址填成 NovelForge 即可浏览书库、读漫画与 PDF（服务端逐页渲染）、下载 EPUB、双向同步阅读进度。支持 Basic / `X-API-Key` / 会话三种认证与 Komga 的分页壳。**可按书库浏览**（系列与书籍都按库过滤，老客户端的 GET 端点同样生效）、**系列级「全部已读 / 全部未读」**（只把百分比顶到 100，不清除读者位置）、CBR 有正确的媒体类型；**有声书库不进 Komga**（Komga 没有音频模型，硬塞进去只会得到打不开的坏条目）。**Collections = 应用内收藏夹**（可新建 / 加系列 / 移出 / 重命名，改动真的落到收藏夹），**Readlists 为空**（本项目没有阅读清单这个概念，不编造），另有单库详情与系列内「上一本 / 下一本」 |
 
 未做：Kobo 同步、邮件投递（成本与收益不匹配，已明确不做）；
 外部服务的「同步任务」（把状态 / 书评 / 书摘推给对方）需要先做书籍匹配，尚未实现。
@@ -240,7 +239,7 @@ novel_dl_convert/
                        + stats.py（统计聚合）· achievements.py · recommend.py（相似书）
                        + auth.py（单用户轻登录）· comics.py（CBZ 解包）· fonts.py（字体管理）
                        + ebook_convert.py（Calibre 派生兜底，缺失时降级 EPUB）
-                       + opds.py（对外 OPDS 目录）· opds_client.py（订阅外部 OPDS 源）
+                       + opds.py（对外 OPDS 目录）
                        + komga.py（Komga 库布局与系列推断）· koreader.py（kosync 进度互通）
                        + integrations.py（Hardcover / Readwise / StoryGraph 凭据与验证）
     sources/           书源适配器（gutenberg 公版 / generic 模板 / rules 数据驱动 / store 用户源管理 / manager）
@@ -291,7 +290,6 @@ novel_dl_convert/
   - **导出目录**：列出 EPUB 成品与下载留档的 txt，提供下载。
   - **本地转换**：拖拽上传本地 txt 直接转 EPUB、按路径转换、监听目录启停与立即扫描。
   - **转换日志**：全部活动日志（时间 / 文件名 / 操作 / 成败，支持过滤、下载、清空）。
-  - **OPDS 订阅**：添加外部 OPDS 目录（Komga / Calibre-Web 等），逐级浏览并直接下载入库。
 - **书架**：三视图（网格 / 列表 / 表格）+ 搜索 / 排序 / 系列折叠 / 多选批量；书卡用真实内嵌封面。
 - **单书详情**：概览 / 目录 / 文件 / 批注 / 阅读状态（评分与书评、相似书推荐）等标签，
   并可「编辑元数据」直接改写 EPUB 内的 OPF。

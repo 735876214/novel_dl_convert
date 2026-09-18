@@ -4,6 +4,7 @@
 
 ## 项目 / 约定
 - **TXT 小说 → EPUB 工具**，NAS/容器部署；`input`/`output` 物理分离；FastAPI + CLI；可插拔书源（Gutenberg + JSON 规则）。镜像 `ghcr.io/735876214/novel_dl_convert:latest`。
+- **删功能要删干净**（照搬第 11 期删 C1）：路由 + 模块 + db CRUD + 能力键 + 前端页面/路由/api 方法 + 文档四处 + 记忆，并加「接口返回 404」的防回归断言；db 建表语句可保留（幂等无害，老库可能已有）。
 - **写计划只写四块**：需求来源 / 功能范围 / 防回归要点 / 任务清单；**不要**输出架构设计、目录结构、关键代码结构（2026-09-18 用户明确要求）。
 - **提交即推送**：做完 `git add → commit → push`，中文信息，**按能力拆多个 commit**（`feat(core)` → 各能力 → `feat(server)` 接线 → `feat(frontend)` → `chore(build)` → `docs`）。
 - 视觉**严格照搬 BookOrbit**（自创已否决）；**零外部请求**；**局部更新**，不重建 DOM。
@@ -76,6 +77,13 @@
 - **系列 id 由名字派生，不能改**（客户端已用它存进度 / 收藏）→ 同名系列跨库时只出现在第一本所在库，这是已知取舍，别为此改派生方式。
 - **系列级进度**：官方 `POST /api/v1/series/{id}/read-progress` = 已读、`DELETE` = 未读，均 204 无 body；书级官方新口径是 `PATCH`（老客户端 `PUT`，两个都留）。**标已读保留原 locator、只顶 percent**（`mark_series_read`）。
 
+## Komga 客户端收尾（第 16 期）
+- **接入侧永久不做**（用户 2026-09-18 拍板）：本项目就是 Komga 服务端，不从别的 Komga 拉书目；同理**「工具 → OPDS 订阅」（订阅外部 OPDS 源）已删除**（路由 / `opds_client.py` / db CRUD / `features.opds_sources` / 前端四处 / README）。对外只剩两条：`/opds` 目录与 `/api/v1/*` 冒充 Komga —— 协议与客户端群体不同，**都不删**。
+- **Collections = 收藏夹**：Komga 装**系列**、本项目收藏夹装 **book_id** → 按书归到系列再给出。写操作（新建 / PUT 替换 / DELETE 移出 / PATCH 重命名）真的写 `collections` 表；**自定义封面 403**（夹封面取成员书封面）。
+- **收藏夹是全局的**（能装有声书库的书）→ 从 Komga 看必须过 `_ko_books()` 可见性过滤，否则客户端拿到坏条目。
+- **没有的概念诚实为空**：Readlist 空分页 + 写操作 403；`POST /series/{id}/analyze` 是 204 空实现（不假装分析了）。
+- **OSDD**：`/opds/search/description`（含单库版），根 feed 的 `rel="search"` 指向它且 type 用 `application/opensearchdescription+xml`。
+
 ## OPDS 按库暴露（第 14 期）
 - **库维度只落在路径上**：`/opds/lib/{lid}/…` 一整套（14 条路由）。OPDS 客户端只会发 URL、订阅的是固定地址，**不能用 `?library=`**；`/opds` 前缀不走 Bearer 中间件（Basic）这条不变。
 - **`opds.py` 新增参数一律 keyword-only**：`prefix="/opds"`（还有 `title` / `feed_id` / `libraries`），默认值 = 原行为 → 既有 `/opds*` 输出逐字节不变；⚠️ `acquisition_feed` 的 self/next/prev/up **四组** href 都要跟 prefix 走。
@@ -106,4 +114,4 @@
 - 构建：`cd frontend && npm run type-check && npm run build && npm run deploy`（生产镜像由 Dockerfile 的 `frontend` 阶段自动构建）。
 
 ## 各期状态
-- 6–7 期前端快赢 + B 类轻后端；8 期元数据在线优先 + 作者页 + ISBN；9 期 CBR + 有声书；10 期多书库；11 期工程护栏（`tests/`，删 C1）；12 期系列级元数据（路线图最后一项已关）；**13 期（已完结）** 每库覆盖 + 跨库同名防护 + 工具页库维度，收尾 commit `f07012e`；**14 期** OPDS 按库暴露（`/opds/lib/{lid}/*` + 每库开关）+ 四处小尾巴；**15 期** Komga 兼容服务端补齐（系列 / 书籍按库过滤、有声书库不进 Komga、CBR 类型、系列级已读 + 书级 PATCH）。
+- 6–7 期前端快赢 + B 类轻后端；8 期元数据在线优先 + 作者页 + ISBN；9 期 CBR + 有声书；10 期多书库；11 期工程护栏（`tests/`，删 C1）；12 期系列级元数据（路线图最后一项已关）；**13 期（已完结）** 每库覆盖 + 跨库同名防护 + 工具页库维度，收尾 commit `f07012e`；**14 期** OPDS 按库暴露（`/opds/lib/{lid}/*` + 每库开关）+ 四处小尾巴；**15 期** Komga 兼容服务端补齐（系列 / 书籍按库过滤、有声书库不进 Komga、CBR 类型、系列级已读 + 书级 PATCH）；**16 期** Komga 客户端收尾（Collections 映射收藏夹可写、Readlists 空、Referential / 单库详情 / 上一本下一本 / analyze）+ OSDD + 删除 OPDS 订阅接入侧。
