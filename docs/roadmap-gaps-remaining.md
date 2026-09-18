@@ -2,7 +2,7 @@
 
 > 来源：`docs/bookorbit-capability-gap.md`（采集自线上实例 BookOrbit v2.10.0，2026-09-16）
 > 基线日期：2026-09-18
-> 已完成参考：第 0–5 期路线图（见 `docs/roadmap-verification.md`，第 0–4 期 27/27 验证，第 5 期 2026-09-17 完成）；**第 6–7 期已完成**（A1–A9 前端快赢 + B1–B4 轻后端，见第一、三节）
+> 已完成参考：第 0–5 期路线图（见 `docs/roadmap-verification.md`，第 0–4 期 27/27 验证，第 5 期 2026-09-17 完成）；**第 6–9 期已完成**（第 6 期 A1–A9 前端快赢、第 7 期 B1–B4 轻后端、第 8 期 D1–D5 作者级元数据与抓取深化、第 9 期 D6–D7 CBR 阅读与有声书播放器）
 > 用途：跟踪"上游有、本项目仍缺失"的功能，并给出分期实施计划。本文件为**活文档**，每完成一项勾掉一项。
 
 ## 核验约定
@@ -50,8 +50,8 @@
 - [ ] **D3 `metadata/authors` 页做实** — 当前 status 虚高为 `ready`（实为通用抓取开关）→ 第 8 期
 - [ ] **D4 抓取深化** — 按 ISBN 精确匹配、系列级元数据（当前只写单本）→ 第 8 期
 - [ ] **D5 A2 收尾** — 作者页「Added this week」需后端 author 级 `added` 字段 → 第 8 期
-- [ ] **D6 CBR 阅读** — 前置：RAR 解压依赖 → 第 9 期（无前置则维持不做）
-- [ ] **D7 有声书播放器** — 前置：音频格式扩展 + 播放器 UI + 音源确认 → 第 9 期
+- [x] **D6 CBR 阅读** — 第 9 期完成：`core/comics.py` 抽象 zip/rar 双后端（魔数嗅探 + `rarfile`，后端 `bsdtar` 由 `libarchive-tools` 提供）；`.cbr` 进 `BOOK_EXTS`；封面 / 漫画路由 / Komga 页面流 / OPDS MIME 全部放开
+- [x] **D7 有声书播放器** — 第 9 期完成：新增 `core/audio.py`，把「一本书 = 一个文件」扩展为「**音频目录（一章一文件）或单个音频文件 = 一本书**」；`/api/books/{bid}/audio(/{index})` 轨清单 + Range 流式；完整播放器（倍速 / 快退快进间隔 / 睡眠定时 / 轨道列表 / 按秒进度同步）；`reader/audio` 设置页做实并纳入偏好同步（`PREFS_BLOCKS` 加 `audio`）
 - [ ] **D8 多书库** — 架构级，动摇单一 `OUTPUT_DIR` → 第 10 期（需单独立项）
 
 ---
@@ -96,15 +96,34 @@
 4. **D4 抓取深化** — 按 **ISBN 精确匹配**（当前只用书名+作者相似度）、**系列级元数据**（当前只写单本）
 5. **D5 A2 收尾** — 作者页「Added this week」需后端 author 级 `added` 字段，随 `authors` 表一并落地
 
-### 第 9 期 · 需外部/系统依赖（周级，**有前置条件才开工**）
-1. **D6 CBR 阅读** — 前置：引入 RAR 解压能力（`unrar` 二进制，或 `rarfile` + 系统解包）。**不引入依赖则维持不做** —— 宁可 `.cbr` 不显示，也不放一本永远打不开的书进书架（`comics.py` 现有取舍）
-2. **D7 有声书播放器** — 前置：① `BOOK_EXTS` 扩展音频格式（mp3/m4b/flac）② 播放器 UI（进度/倍速/跳转/睡眠定时）③ **音源与版权、体积占用需先确认**。README 定位是「TXT→EPUB 工具」，此项偏离较远，需用户明确要才做
+### 第 9 期 · 媒体形态扩展（CBR + 有声书）✅ 已完成
+> 主题：把书目从「EPUB / PDF / CBZ」扩展到「漫画（+ CBR）」与「有声书（多轨 / 单文件）」。
+> 用户已确认全部取最大档：引入系统依赖完整支持 CBR；有声书按「文件夹多轨 = 一本书」；播放器做到完整。
+
+1. [x] **D6 CBR 阅读** — `requirements.txt` 加 `rarfile`；`Dockerfile` runtime 加 `libarchive-tools`（提供 bsdtar）；
+   `comics.py` 用**魔数嗅探**选后端（`PK` → zipfile / `Rar!` → rarfile），`probe/pages/page_bytes/cover_entry` **签名不变**
+   （上层零分支）；`BOOK_EXTS` 收 `.cbr`；`server` 封面与两个 comic 路由放开 CBZ/CBR（缺解压器返回 503）；
+   `komga_api` 页面流、`opds._MIME`、`koreader.from_nf` 一并同步。
+2. [x] **D7 有声书播放器** — 新增 `core/audio.py`（`AUDIO_EXTS` / `is_audio` / `is_audio_dir` / `tracks` / `cover_in_dir`）；
+   `library` 引入**书目条目**概念（文件 **或** 音频目录），`_dir_signature` 与枚举**同源**（目录内部文件数与最新 mtime 计入指纹，
+   避免「加了音频但列表不刷新」）；`book_detail` 下发轨道清单；
+   `pipeline` / `watcher` 支持音频文件与**音频目录整树入库**；
+   `GET /api/books/{bid}/audio(/{index})` + `_MEDIA_TOKEN_PATHS` 放开 `?token=`（`FileResponse` 自带 Range，拖拽跳转必需）；
+   前端新增 `AudioPlayerView.vue` + `AudioPlayer.vue` + `lib/audioPrefs.ts`，路由 `/listen/:id`；`BookDetailView` 按格式分流；
+   `reader/audio` 设置页做实（默认倍速 / 音量 / 快退快进间隔 / 睡眠定时），偏好同步三处加 `audio` 块。
 
 ### 第 10 期 · 架构级 / 重投入（需单独立项，周级+）
-1. **D8 多书库** — 动摇单一 `OUTPUT_DIR` 假设：`/libraries` 实体 + 每库独立扫描路径/挂载 + 按库筛选/批量/查重 + 侧栏「库」组接真实数据（当前 `LIBRARIES = []`）。**涉及 `library.py` / `stats.py` / 工具页全域**，改动面最大
+
+1. **D8 多书库（含库类型与功能按需加载）** — 动摇单一 `OUTPUT_DIR` 假设。**已确认口径**：
+   - **compose 增加「书库来源根目录」挂载**（形如 `LIBRARY_SOURCE_DIR`，容器内如 `/app/libraries`），与既有 `INPUT_DIR` / `OUTPUT_DIR` / `CONFIG_DIR` / `CACHE_DIR` 同风格；
+   - **新建书库两种模式并存**：①**就地引用**来源根目录下某个子文件夹（直接扫描、不搬文件，类 Komga 多 root）；②**作为导入源**（库另有独立存储目录，扫描后复制 / 移入）；
+   - **库类型**：电子书 / 漫画 / 有声书 / 混合通用 —— 类型决定**功能显隐矩阵**（侧栏导航项、工具页标签、阅读器入口、设置页分组、仪表盘部件）；
+   - **自动归类**（三条都启用）**+ 手动兜底**：按格式 / 媒体类型（`cbz`·`cbr` → 漫画；音频文件或目录 → 有声书；`epub`·`mobi`·`azw3`·`pdf`·`txt` → 电子书）、按元数据关键词（tags / 系列 / 作者）、按来源子文件夹名；界面上仍可逐本 / 批量手动指定；
+   - **影响面**：`library.py`（多 root + 库维度扫描）、`stats.py`、工具页全域（实体管理 / 重命名 / 查重 / 缺失资源）、侧栏「库」组接真实数据（当前 `collections.ts` 的 `LIBRARIES = []`）、摄入链路（`pipeline` / `watcher` / `bookdock` 按规则路由）、`db.py`（新增 `libraries` 表与归属关系；⚠️ `book_id` 由 basename 派生，**跨库同名会冲突**，需带库维度或加前缀）；
+   - **与第 9 期的关系**：第 9 期落地的漫画与有声书是「按类型分类与显隐」的前置，顺序不可颠倒。
 2. **C1 Requests 完整功能** — 插件式索引器 / 下载客户端 / 凭据加密 / 下载后自动化（价值最高、成本最高）
-3. **C2 系列 Group by media** — 需后端按媒体类型分组
-4. **C3 SYNOPSIS 外部源** — 依赖外部系列元数据，先做可行性评估，可能并入 D1 的作者/系列级抓取
+3. **C2 系列 Group by media** — 需后端按媒体类型分组（第 9 期已让 `format` 具备 `AUDIO` / `CBR` 两种媒体类型，此项可顺势落地）
+4. **C3 SYNOPSIS 外部源** — 依赖外部系列元数据，先做可行性评估，可能并入 D1 的作者 / 系列级抓取
 
 ---
 
