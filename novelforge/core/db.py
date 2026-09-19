@@ -5,8 +5,10 @@
 - 全进程共享一个连接（check_same_thread=False + 写锁），单机单用户足够。
 - 表：users（轻登录账号）、progress（每本书当前阅读位置）、annotations（高亮/笔记）。
 """
+import ast
 import hashlib
 import pathlib
+import re
 import threading
 import time
 
@@ -240,6 +242,14 @@ def init():
             );
             CREATE INDEX IF NOT EXISTS idx_override_book ON meta_override(book_id);
             CREATE INDEX IF NOT EXISTS idx_online_book ON meta_online(book_id);
+            -- 书籍封面（第 17 期 T3）：元数据写回改为只存服务端，封面同样不写进 EPUB，
+            -- 而是按 book_id 缓存到本表（BLOB 直接落库，零外链、零独立目录）。
+            -- 展示 / OPDS 封面接口优先取服务端缓存，无则回退 EPUB 内嵌图。
+            CREATE TABLE IF NOT EXISTS meta_cover (
+                book_id    TEXT PRIMARY KEY,
+                data       BLOB NOT NULL,
+                media_type TEXT NOT NULL DEFAULT 'image/jpeg'
+            );
             -- 作者级元数据（第 8 期 D1/D2/D5）：在线抓取的 bio/photo 与用户本地覆盖分列。
             -- 展示取 本地覆盖 > 在线；用户改过的不会被再次抓取冲掉。
             -- 照片一律缓存到 CACHE_DIR/authors/（零外链），这里只存文件名。
@@ -299,7 +309,17 @@ def init():
                 sort_order     INTEGER NOT NULL DEFAULT 0,
                 created_at     REAL NOT NULL,
                 last_scan_at   REAL NOT NULL DEFAULT 0,
-                last_scan_note TEXT NOT NULL DEFAULT ''
+                last_scan_note TEXT NOT NULL DEFAULT '',
+                -- 逐库扫描调度（第 17 期 T2）：watch=是否监听该库来源子目录；
+                -- scan_interval=轮询间隔秒（0=继承全局）；scan_cron=定时表达式（空=不启用）。
+                watch           INTEGER NOT NULL DEFAULT 1,
+                scan_interval   INTEGER NOT NULL DEFAULT 0,
+                scan_cron       TEXT NOT NULL DEFAULT '',
+                -- 刮削出版成品目录（第 18 期）：刮削后**硬链接副本**的落点，供外部阅读器
+                -- （Komga 等）直接挂载读取。空 = 该库不产出副本。
+                -- ⚠️ 副本只读源、只写自己：源文件永不改写。该目录不得位于任何库根 /
+                -- 扫描源目录内部（否则会被扫回来，书列表出现重复），由 server 侧校验。
+                publish_path    TEXT NOT NULL DEFAULT ''
             );
             -- 迁移台账：既做**幂等**依据（重复启动不重复搬），也做**回滚**依据。
             -- 迁移是破坏性操作，故逐条落库：src/dst 都要记全，供反向移动。
@@ -322,6 +342,40 @@ def init():
                 value      TEXT NOT NULL DEFAULT '',
                 updated_at REAL NOT NULL
             );
+            -- 刮削出版台账（第 18 期）。**一张表身兼三职**：
+            --   ① 队列（status='pending' 即待办，天然持久化、重启可续）；
+            --   ② 结果视图（副本路径 / 模式 / 已写字段 / 失败原因）；
+            --   ③ 待确认待办（status='removed' 等，用户「空闲时确认」的依据 ——
+            --      若只写 activity_log 文件，重启后待办就丢了）。
+            -- ⚠️ status 状态机**只许降级**：检测逻辑只能把 ok 降成 removed/orphan；
+            --    回到 ok 必须由用户显式动作（重新生成副本 / 手动整理）触发。
+            CREATE TABLE IF NOT EXISTS scrape_items (
+                -- 库维度化的 book_id（库$哈希），与 meta_override 等同一套 id
+                book_id      TEXT PRIMARY KEY,
+                library_id   TEXT NOT NULL DEFAULT '',
+                source_rel   TEXT NOT NULL DEFAULT '',   -- 源相对库根的路径
+                status       TEXT NOT NULL DEFAULT 'pending',
+                link_rel     TEXT NOT NULL DEFAULT '',   -- 副本相对成品目录的路径
+                link_mode    TEXT NOT NULL DEFAULT '',   -- hardlink / copy
+                -- 写入后是否仍与源共享数据块（内嵌过元数据 = 0，占额外空间）
+                link_shared  INTEGER NOT NULL DEFAULT 0,
+                src_size     INTEGER NOT NULL DEFAULT 0,
+                src_mtime    REAL NOT NULL DEFAULT 0,
+                embedded     TEXT NOT NULL DEFAULT '',   -- 已写进副本的字段（逗号分隔）
+                has_cover    INTEGER NOT NULL DEFAULT 0,
+                error        TEXT NOT NULL DEFAULT '',   -- 失败原因（供人工整理）
+                attempts     INTEGER NOT NULL DEFAULT 0,
+                -- 队列里这条待办是否要求**强制重新外呼抓取**（「重新刮削」按钮置 1，
+                -- process 跑完清 0）。没有它就无法区分「入库自动刮」与「用户要重刮」，
+                -- 只能靠「meta_online 为空」推断 —— 那会让重刮永远不生效。
+                force_fetch  INTEGER NOT NULL DEFAULT 0,
+                removed_at   REAL NOT NULL DEFAULT 0,    -- 副本被删（待确认）的时刻
+                removed_path TEXT NOT NULL DEFAULT '',   -- 被删副本的路径（提示里给出）
+                confirmed_at REAL NOT NULL DEFAULT 0,    -- 用户确认处置的时刻
+                updated_at   REAL NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_scrape_status ON scrape_items(status);
+            CREATE INDEX IF NOT EXISTS idx_scrape_library ON scrape_items(library_id);
             """
         )
         # 轻量迁移：ratings 表后来加了 review 列。CREATE TABLE IF NOT EXISTS
@@ -338,6 +392,18 @@ def init():
         lcols = {r["name"] for r in c.execute("PRAGMA table_info(libraries)")}
         if lcols and "settings" not in lcols:
             c.execute("ALTER TABLE libraries ADD COLUMN settings TEXT NOT NULL DEFAULT ''")
+        # 第 17 期 T2：libraries 又加了逐库扫描调度三列（watch / scan_interval / scan_cron）。
+        # 老库不补列则 watcher 派生目标 / update_library 会报 no such column。
+        if lcols and "watch" not in lcols:
+            c.execute("ALTER TABLE libraries ADD COLUMN watch INTEGER NOT NULL DEFAULT 1")
+        if lcols and "scan_interval" not in lcols:
+            c.execute("ALTER TABLE libraries ADD COLUMN scan_interval INTEGER NOT NULL DEFAULT 0")
+        if lcols and "scan_cron" not in lcols:
+            c.execute("ALTER TABLE libraries ADD COLUMN scan_cron TEXT NOT NULL DEFAULT ''")
+        # 第 18 期：libraries 加成品目录列（刮削出版落点）。
+        # 与上面同理：老库不补列则 update_library / 刮削读取会报 no such column。
+        if lcols and "publish_path" not in lcols:
+            c.execute("ALTER TABLE libraries ADD COLUMN publish_path TEXT NOT NULL DEFAULT ''")
         _seed_user(c)
         c.commit()
 
@@ -840,11 +906,12 @@ def delete_orphans(orphans: dict) -> dict:
 # 不搬就变成一堆走不到的孤儿行（见上方 ORPHAN_TABLES）。
 # 所以**凡是会改变 basename 的移动，都要把关联数据搬过去**。
 
-#: 需要跟着 book_id 迁移的表（与 ORPHAN_TABLES 相比多出 ratings / reading_status：
-#: 这两张表在删书时会主动清理，但改名时同样必须跟着走）
+#: 需要跟着 book_id 迁移的表（与 ORPHAN_TABLES 相比多出 ratings / reading_status /
+#: koreader_docs：ratings / reading_status 在删书时会主动清理，但改名时同样必须跟着走；
+#: koreader_docs 是 KOReader 进度映射，id 换了必须一起搬，否则 KOReader 关联全断）。
 REMAP_TABLES = (
     "progress", "annotations", "collection_items", "reading_sessions",
-    "ratings", "reading_status",
+    "ratings", "reading_status", "koreader_docs",
 )
 
 
@@ -877,6 +944,60 @@ def remap_book_id(old_id, new_id) -> dict:
                 moved[t] = 0
         c.commit()
     return moved
+
+
+def upgrade_book_ids() -> dict:
+    """一次性把 book_id 从「全局 basename 哈希」升级为「库维度 id（库$哈希）」。
+
+    书本身不落库（扫描实时生成），需要迁移的只有按 book_id 存的关联表
+    （见 ``REMAP_TABLES``，含 koreader_docs）。做法：
+
+    1. 遍历每个库的根目录，按文件名 basename 反算**旧** id（纯 12 位哈希），
+       建立 ``旧id → 库id`` 索引；
+    2. 取所有关联表里出现过的旧 id，凡能在索引里查到库，就重算新 id 并
+       ``remap_book_id`` 搬到新 id（复用既有搬迁逻辑，含「目标已有数据则跳过」保护）；
+    3. 用 ``app_state.bookid_v2`` 记幂等标记，跑过即跳过。
+
+    无法反查到库的行（文件已删、只剩孤儿关联）保持不动 —— 它们本就是孤儿，
+    由「工具 → 维护」的孤儿清理负责，不必在此强搬。
+    """
+    if state_get("bookid_v2") == "1":
+        return {"skipped": True}
+    from . import library as _lib  # 延迟导入，避开与 library 的循环依赖
+    index: dict = {}
+    for lib in _lib.libraries():
+        lid = str(lib.get("id") or _lib.DEFAULT_LIBRARY_ID)
+        d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+        if not d.is_dir():
+            continue
+        for f in d.rglob("*"):
+            if not f.is_file():
+                continue
+            base = f.name
+            old = hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+            index.setdefault(old, lid)
+    old_ids: set = set()
+    c = _connect()
+    for t in REMAP_TABLES:
+        try:
+            rows = c.execute("SELECT DISTINCT book_id FROM %s" % t).fetchall()
+        except Exception:
+            rows = []
+        for r in rows:
+            old_ids.add(str(r["book_id"]))
+    moved_total = 0
+    for old in sorted(old_ids):
+        lid = index.get(old)
+        if not lid:
+            continue
+        new = f"{lid}${old}"
+        if new == old:
+            continue
+        moved = remap_book_id(old, new)
+        moved_total += sum(moved.values())
+    state_set("bookid_v2", "1")
+    return {"skipped": False, "indexed": len(index),
+            "old_ids": len(old_ids), "moved": moved_total}
 
 
 def clear_unlocked() -> int:
@@ -1328,6 +1449,25 @@ def dock_prune(keep=500) -> int:
 # 分层优先级：override（用户编辑）> online（在线抓取）> opf（文件本体）。
 # override 同时是「受保护标记」：metafetch 抓取时跳过这些字段，避免冲掉用户修正。
 
+#: 「显式无值」哨兵（第 18 期）。
+#: 覆盖值是**列**，存不了空串 —— 空串在 :func:`set_override` 里表示「撤销覆盖」（删行）。
+#: 但有些字段需要表达「用户就是要它没有值」：最典型的是**重排册号时清空序号**
+#: （原本没有序号的册，靠这条才能把序号去掉）。这时写哨兵，读取端翻译回空串。
+#: 目前只对 ``series_index`` 生效（见 :func:`_meta_out`）—— 不扩大到任意字段，
+#: 免得用户真填了 ``-`` 却被当成空值。
+META_CLEAR = "-"
+
+#: 允许使用 :data:`META_CLEAR` 的字段（语义上「无值」是有意义的）
+_CLEARABLE = ("series_index",)
+
+
+def _meta_out(field: str, value):
+    """读取覆盖值时把哨兵翻译回空串（仅对 :data:`_CLEARABLE` 里的字段）。"""
+    if str(value) == META_CLEAR and str(field) in _CLEARABLE:
+        return ""
+    return value
+
+
 def set_override(book_id, field, value, orig=None) -> None:
     """记录/撤销单字段的用户覆盖。value 为空（含只有空白）=> 撤销覆盖（删行）。
 
@@ -1410,6 +1550,141 @@ def all_online() -> dict:
     out: dict = {}
     for r in rows:
         out.setdefault(r["book_id"], {})[r["field"]] = {"value": r["value"], "source": r["source"]}
+    return out
+
+
+# ---------------- 书籍封面（第 17 期 T3）----------------
+# 元数据写回改为只存服务端后，封面同样**不写进 EPUB**，而是按 book_id 缓存到
+# ``meta_cover``（BLOB 直接落库，零外链、零独立目录）。展示 / OPDS 封面接口
+# 优先取服务端缓存，无则回退 EPUB 内嵌图（兼容原文件自带的封面）。
+
+def set_cover(book_id, data: bytes, media_type: str = "image/jpeg") -> None:
+    """写入 / 覆盖某书的服务端封面。``data`` 为空视为**删除**该封面。"""
+    bid = str(book_id)
+    c = _connect()
+    with _lock:
+        if not data:
+            c.execute("DELETE FROM meta_cover WHERE book_id=?", (bid,))
+        else:
+            c.execute(
+                "INSERT INTO meta_cover(book_id, data, media_type) VALUES(?,?,?) "
+                "ON CONFLICT(book_id) DO UPDATE SET data=excluded.data, "
+                "media_type=excluded.media_type",
+                (bid, bytes(data), str(media_type or "image/jpeg")),
+            )
+        c.commit()
+
+
+def get_cover(book_id) -> "tuple | None":
+    """``(data_bytes, media_type)``；无服务端封面返回 ``None``。"""
+    row = _connect().execute(
+        "SELECT data, media_type FROM meta_cover WHERE book_id=?", (str(book_id),)
+    ).fetchone()
+    if not row or not row["data"]:
+        return None
+    return (bytes(row["data"]), row["media_type"] or "image/jpeg")
+
+
+def cover_ids(bids) -> set:
+    """给定 book_id 集合，返回其中**有服务端封面**的 id 集合（一次批量查询）。"""
+    ids = [str(x) for x in (bids or [])]
+    return _ids_in("meta_cover", ids)
+
+
+# ---------------- 批量生效元数据（列表 / 卡片合并用）----------------
+# 列表 / 卡片 / 搜索 / OPDS 都要按 override > online > opf 展示服务端元数据，
+# 但 ``library.books()`` 是热路径，必须**一次批量取全**（靠扫描缓存 TTL 摊销），
+# 严禁逐书两次查库（get_overrides + get_online）。
+#
+#: 服务端可参与合并的字段（对齐 ``fileops.METADATA_FIELDS``，无封面）
+_META_FIELDS = ("title", "author", "series", "series_index", "date",
+                "publisher", "language", "description", "tags", "isbn")
+#: DB 字段名 → 书对象键（``date`` 在书目里叫 ``year``）
+_META_BOOK_KEY = {"date": "year"}
+
+
+def _ids_in(table: str, ids: list) -> set:
+    """分片执行 ``SELECT book_id FROM <table> WHERE book_id IN (...)``，返回命中集合。
+
+    SQLite 对 IN 参数数量有上限（默认 ~999），书库单次扫描可能上千，故按 500 分片。
+    """
+    if not ids:
+        return set()
+    c = _connect()
+    out: set = set()
+    with _lock:
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            rows = c.execute(
+                f"SELECT book_id FROM {table} WHERE book_id IN ({q})", chunk
+            ).fetchall()
+            out.update(r["book_id"] for r in rows)
+    return out
+
+
+def _parse_tags(value) -> list:
+    """把 DB 里存的 tags 解析成列表：兼容 ``str(list)``（抓取/编辑写入）与分隔符串。"""
+    s = str(value or "").strip()
+    if not s:
+        return []
+    if s.startswith("[") and s.endswith("]"):
+        try:
+            val = ast.literal_eval(s)
+            if isinstance(val, (list, tuple, set)):
+                return [str(t).strip() for t in val if str(t).strip()]
+        except (ValueError, SyntaxError):
+            pass
+    return [t.strip() for t in re.split(r"[、,，;/|]", s) if t.strip()]
+
+
+def get_effective_meta(bids) -> dict:
+    """批量返回 ``{book_id: {book_key: value}}``：合并 override > online。
+
+    只返回 override / online 里**确有值**的字段（opf 原值由 ``library`` 自己兜底）。
+    ``tags`` 解析成列表（与书对象一致）；``date`` 映射成 ``year``；其余字符串。
+    """
+    ids = [str(x) for x in (bids or [])]
+    if not ids:
+        return {}
+    ov: dict = {}
+    on: dict = {}
+    c = _connect()
+    with _lock:
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            for r in c.execute(
+                f"SELECT book_id, field, value FROM meta_override WHERE book_id IN ({q})", chunk
+            ).fetchall():
+                ov.setdefault(r["book_id"], {})[r["field"]] = r["value"]
+            for r in c.execute(
+                f"SELECT book_id, field, value FROM meta_online WHERE book_id IN ({q})", chunk
+            ).fetchall():
+                on.setdefault(r["book_id"], {})[r["field"]] = r["value"]
+    out: dict = {}
+    for bid in ids:
+        o = ov.get(bid, {})
+        n = on.get(bid, {})
+        merged: dict = {}
+        for f in _META_FIELDS:
+            # 哨兵：用户显式要求「这个字段没有值」（如清空系列序号）。
+            # 必须**带着空值**并进结果 —— 否则 library 那边只会保留文件里的旧值。
+            if f in _CLEARABLE and str(o.get(f) or "") == META_CLEAR:
+                merged[_META_BOOK_KEY.get(f, f)] = ""
+                continue
+            if o.get(f) and str(o[f]).strip():
+                v = o[f]
+            elif n.get(f) and str(n[f]).strip():
+                v = n[f]
+            else:
+                continue
+            if f == "tags":
+                merged["tags"] = _parse_tags(v)
+            else:
+                merged[_META_BOOK_KEY.get(f, f)] = str(v)
+        if merged:
+            out[bid] = merged
     return out
 
 
@@ -1539,6 +1814,155 @@ def set_series_local(name, **fields) -> None:
         c.commit()
 
 
+# ---------------- 刮削出版台账（第 18 期）----------------
+
+#: 状态机取值（与前端徽标一一对应）：
+#:   pending 待刮削 / running 进行中 / ok 已出版 / failed 失败 / skipped 跳过
+#:   （库未配成品目录、目录型有声书等「不是错误、但没出版」）
+#:   removed 副本已被删除，**待用户确认**（是否连原文件一起删）
+#:   kept    用户确认「保留」/ orphan 源已不在、副本成孤本
+#:   source_removed 用户确认删除原文件（已移入回收站，副本保留）
+#:
+#: ⚠️ **只许降级**：检测逻辑只能把 ok 降为 removed / orphan；回到 ok 的唯一路径
+#: 是用户显式动作（重新生成副本 / 手动整理后重建）。
+SCRAPE_STATUSES = ("pending", "running", "ok", "failed", "skipped",
+                   "removed", "kept", "orphan", "source_removed")
+
+#: 可写列白名单（与 update_library 同一思路：过滤后拼 SQL，不认任意键）
+_SCRAPE_COLS = {"library_id", "source_rel", "status", "link_rel", "link_mode",
+                "link_shared", "src_size", "src_mtime", "embedded", "has_cover",
+                "error", "attempts", "force_fetch", "removed_at", "removed_path",
+                "confirmed_at", "updated_at"}
+
+
+def scrape_set(book_id, **fields) -> None:
+    """Upsert 一本书的刮削台账（只认 :data:`_SCRAPE_COLS`）。
+
+    ``status`` 的流转合法性由**调用方**保证（见 :data:`SCRAPE_STATUSES` 的降级约定）——
+    这里只做存储，不猜语义。
+    """
+    bid = str(book_id)
+    cols = {k: v for k, v in fields.items() if k in _SCRAPE_COLS}
+    cols.setdefault("updated_at", time.time())
+    c = _connect()
+    with _lock:
+        names = ", ".join(cols)
+        marks = ", ".join("?" * len(cols))
+        c.execute(
+            f"INSERT INTO scrape_items(book_id, {names}) VALUES(?,{marks}) "
+            f"ON CONFLICT(book_id) DO UPDATE SET "
+            + ", ".join(f"{k}=excluded.{k}" for k in cols),
+            [bid, *cols.values()],
+        )
+        c.commit()
+
+
+def scrape_get(book_id) -> "dict | None":
+    row = _connect().execute(
+        "SELECT * FROM scrape_items WHERE book_id=?", (str(book_id),)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def scrape_list(library_id=None, status=None, limit=0) -> list:
+    """台账列表（最近更新的在前）。``status`` 支持逗号分隔的多值（页面的分段筛选）。"""
+    q = "SELECT * FROM scrape_items"
+    where, args = [], []
+    if library_id:
+        where.append("library_id=?")
+        args.append(str(library_id))
+    statuses = [s.strip() for s in str(status or "").split(",") if s.strip()]
+    if len(statuses) == 1:
+        where.append("status=?")
+        args.append(statuses[0])
+    elif statuses:
+        where.append("status IN (" + ",".join("?" * len(statuses)) + ")")
+        args.extend(statuses)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    q += " ORDER BY updated_at DESC"
+    if limit:
+        q += " LIMIT ?"
+        args.append(int(limit))
+    return [dict(r) for r in _connect().execute(q, args).fetchall()]
+
+
+def scrape_counts(library_id=None) -> dict:
+    """``{状态: 条数}`` 汇总（页面概览条用；一次 GROUP BY，不逐条查）。"""
+    q = "SELECT status, COUNT(*) AS n FROM scrape_items"
+    args = []
+    if library_id:
+        q += " WHERE library_id=?"
+        args.append(str(library_id))
+    q += " GROUP BY status"
+    return {r["status"]: int(r["n"]) for r in _connect().execute(q, args).fetchall()}
+
+
+def scrape_pending(limit=20) -> list:
+    """取待办条目（队列 worker 用）。
+
+    **不在这里改状态**：状态流转由调用方显式做 —— 否则「取出来了但进程被 kill」
+    会让条目永远卡在 running 上。启动时另用 :func:`scrape_reset_running` 兜底。
+    """
+    rows = _connect().execute(
+        "SELECT * FROM scrape_items WHERE status='pending' "
+        "ORDER BY updated_at LIMIT ?", (int(limit),)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def scrape_reset_running() -> int:
+    """把残留的 ``running`` 打回 ``pending``（上次进程被 kill / 重启时调用）。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "UPDATE scrape_items SET status='pending', updated_at=? "
+            "WHERE status='running'", (time.time(),)
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
+def scrape_delete(book_id) -> None:
+    c = _connect()
+    with _lock:
+        c.execute("DELETE FROM scrape_items WHERE book_id=?", (str(book_id),))
+        c.commit()
+
+
+def scrape_delete_by_library(library_id) -> int:
+    """移除某库的全部台账行（**只删登记，不动任何文件**）。
+
+    库被移除登记后，这些行没有意义（UI 会显示一堆属于不存在书库的条目）；
+    副本文件仍留在成品目录里，由用户自行处置 —— 与「移除库不删文件」一致。
+    """
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM scrape_items WHERE library_id=?", (str(library_id),))
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
+def scrape_books_in(library_id, book_ids) -> dict:
+    """``{book_id: 台账行}`` —— 扫描时一次取全，**避免逐书查库**（热路径）。"""
+    ids = [str(x) for x in (book_ids or [])]
+    if not ids:
+        return {}
+    out: dict = {}
+    c = _connect()
+    with _lock:
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            q = ",".join("?" * len(chunk))
+            rows = c.execute(
+                f"SELECT * FROM scrape_items WHERE library_id=? AND book_id IN ({q})",
+                [str(library_id), *chunk],
+            ).fetchall()
+            for r in rows:
+                out[str(r["book_id"])] = dict(r)
+    return out
+
+
 # ---------------- 书库与迁移台账（第 10 期 D8）----------------
 
 #: 库类型：电子书 / 漫画 / 有声书 / 混合通用（决定功能显隐矩阵）
@@ -1561,18 +1985,35 @@ def get_library(lid) -> "dict | None":
 
 def create_library(lid, name, type_, mode="inplace", root_path="",
                    storage_path="", source_subdir="", rules="", sort_order=0,
-                   settings="") -> dict:
-    """建库。``settings`` 是每库覆盖的 JSON 文本（第 13 期），新建时通常传空串。"""
+                   settings="", watch=1, scan_interval=0, scan_cron="",
+                   publish_path="") -> dict:
+    """建库。``settings`` 是每库覆盖的 JSON 文本（第 13 期）。
+
+    ``watch`` / ``scan_interval`` / ``scan_cron`` 是逐库扫描调度（第 17 期 T2）：
+    默认 watch=1（开）、scan_interval=0（继承全局）、scan_cron=""（不启用定时）。
+
+    ``publish_path`` 是刮削出版的成品目录（第 18 期）：空 = 该库不产出硬链接副本。
+    """
+    try:
+        w = int(watch or 0)
+    except (TypeError, ValueError):
+        w = 1
+    try:
+        si = int(scan_interval or 0)
+    except (TypeError, ValueError):
+        si = 0
     c = _connect()
     with _lock:
         c.execute(
             "INSERT OR REPLACE INTO libraries"
             "(id, name, type, mode, root_path, storage_path, source_subdir, rules,"
-            " settings, sort_order, created_at, last_scan_at, last_scan_note) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,0,'')",
+            " settings, sort_order, created_at, last_scan_at, last_scan_note,"
+            " watch, scan_interval, scan_cron, publish_path) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,0,'',?,?,?,?)",
             (str(lid), str(name), str(type_), str(mode), str(root_path),
              str(storage_path or ""), str(source_subdir or ""), str(rules or ""),
-             str(settings or ""), int(sort_order or 0), time.time()),
+             str(settings or ""), int(sort_order or 0), time.time(),
+             w, si, str(scan_cron or ""), str(publish_path or "")),
         )
         c.commit()
     return get_library(lid) or {}
@@ -1583,6 +2024,7 @@ def create_library(lid, name, type_, mode="inplace", root_path="",
 #: （它是「过滤后为空就原样返回」，不报错）。
 _LIBRARY_COLS = {"name", "type", "mode", "root_path", "storage_path",
                  "source_subdir", "rules", "settings", "sort_order",
+                 "watch", "scan_interval", "scan_cron", "publish_path",
                  "last_scan_at", "last_scan_note"}
 
 

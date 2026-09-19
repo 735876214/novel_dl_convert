@@ -1,7 +1,9 @@
 """元数据分层解析：override（用户编辑）> online（在线抓取）> opf（文件本体）。
 
-只服务「详情 / 编辑」这类需要展示生效值的接口；`library.books()` 的批量热路径
-保持只读 OPF，不引入额外 DB 查询（控制爆炸半径，参见第 8 期 plan 的防回归说明）。
+本模块服务「详情 / 编辑」这类单书的生效值查询。第 17 期 T3 起，``library.books()``
+的**批量热路径**也会按同一优先级合并服务端元数据（``db.get_effective_meta`` 一次批量
+取全，靠扫描缓存摊销），使列表 / 卡片 / 搜索 / OPDS 与详情页一致 —— 元数据只存服务端，
+不再改写 EPUB 文件。两处**优先级必须保持一致**（override > online > opf）。
 
 分层语义对应"在线优先、本地兜底、可编辑"：
 - **override**：用户通过本工具显式改过的字段，最高优先、且抓取时受保护不被覆盖；
@@ -29,7 +31,9 @@ def effective(book: dict) -> dict:
     out = {}
     for f in fileops.METADATA_FIELDS:
         if ov.get(f) and str(ov[f]).strip():
-            out[f] = ov[f]
+            # 翻掉「显式无值」哨兵（清空系列序号这类）—— 取到的是空串，
+            # 而不是把哨兵本身当成值显示出去。
+            out[f] = db._meta_out(f, ov[f])
         elif on.get(f) and str((on[f].get("value") or "")).strip():
             out[f] = on[f]["value"]
         else:
@@ -52,8 +56,10 @@ def state(book: dict) -> dict:
         online = (on.get(f) or {}).get("value") or ""
         online = str(online).strip()
         overridden = bool(ov.get(f) and str(ov[f]).strip())
+        # 被覆盖时取「对外形态」：哨兵 → 空串（用户显式清空）。overridden 仍为真，
+        # 编辑器据此显示「已本地修改」并提供「恢复为在线值」——语义没变，只是值空了。
         out[f] = {
-            "value": ov[f] if overridden else (online or opf),
+            "value": db._meta_out(f, ov[f]) if overridden else (online or opf),
             "online": online,
             "opf": opf,
             "overridden": overridden,

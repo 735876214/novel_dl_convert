@@ -58,6 +58,17 @@ DEFAULTS = {
         "pattern": "{author} - {title}",
         "scope": "all",             # all / epub / mobi / azw3 / pdf / txt
     },
+    # 刮削出版（第 18 期）：把刮削结果写进**硬链接副本**，源文件永不改动 ——
+    # 这样外部阅读器（Komga 等）能读到整理完成的书，而原作逐字节保持原样。
+    # 成品目录**不在全局配置里**：它是每库的列（libraries.publish_path），
+    # 由「新建 / 编辑书库」时手动选择，只对该库的内容生效。
+    "scrape": {
+        "enabled": True,            # 扫描入库后自动排队刮削（后台单线程串行）
+        "max_attempts": 2,          # 同一本的自动重试上限，超限标失败等人工整理
+        # 空闲时校验副本是否还在（每 N 秒一次；<=0 关闭）。
+        # ⚠️ 校验只**标记待确认**（removed / orphan），绝不自动删源、绝不自动重建。
+        "verify_interval": 120,
+    },
     "download": {
         "enabled": False,           # 默认关闭，仅公版源可用
         "public_only": True,

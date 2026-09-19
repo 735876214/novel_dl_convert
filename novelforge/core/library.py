@@ -293,31 +293,44 @@ def _subjects_of(opf: str) -> list:
     return [re.sub(r"<[^>]+>", "", t).strip() for t in _tag_all(opf, "dc:subject") if t.strip()]
 
 
-def _book_id(name: str) -> str:
+def _book_id(name: str, library_id: str = None) -> str:
     """文件名 → 稳定短 id（用于 URL 与前端主键，避免暴露中文文件名）。
 
     **只用 basename**（不含系列目录）：这样把书从平铺迁进 Komga 布局
     （``三体.epub`` → ``三体/三体 #1.epub``）时 id 不变，
     进度 / 批注 / 评分 / 收藏夹等关联数据不会因为「只是挪了个目录」而断链。
     平铺时 basename 就是 name，与改动前的行为完全一致。
+
+    **库维度（第 17 期）**：给定 ``library_id`` 时，id 形如 ``库$哈希``，
+    让「A 库有三体.epub、B 库也有」得到**两个不同 id**，进度 / 批注互不串；
+    不传则退化成纯哈希（旧行为，仅供一次性迁移按旧 id 反查关联行）。
+    分隔符用 ``$``（URL 安全、且非 ``/``，``server._MEDIA_TOKEN_PATHS``
+    的 ``[^/]+`` 仍整段匹配）；新 id 不再是纯十六进制，故取色相请用哈希而非 ``bid[:8]``。
     """
     base = str(name).replace("\\", "/").rsplit("/", 1)[-1]
-    return hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+    h = hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+    if library_id:
+        return f"{library_id}${h}"
+    return h
 
 
-def book_id(name: str) -> str:
+def book_id(name: str, library_id: str = None) -> str:
     """``_book_id`` 的公开别名。
 
-    布局迁移（``fileops.apply_komga_layout``）要在移动前后各算一次 id、
-    判断是否需要搬关联数据，必须与扫描用的是同一个规则 —— 所以把它公开出来，
-    而不是让外部去碰私有函数。
+    布局迁移（``fileops.apply_komga_layout`` / ``apply_conflict_rename``）、
+    扫描、元数据写回都要传 ``library_id``，保证算出的 id 与「库维度」规则一致 ——
+    否则跨库同名会串 id。
     """
-    return _book_id(name)
+    return _book_id(name, library_id)
 
 
 def _gradient(bid: str) -> tuple:
-    """由 id 派生确定性 oklch 渐变（封面占位用，色相稳定）。"""
-    h = int(bid[:8], 16) % 360
+    """由 id 派生确定性 oklch 渐变（封面占位用，色相稳定）。
+
+    第 17 期起 book_id 不再是纯十六进制（形如 ``库$哈希``），故改用完整 id 的
+    SHA1 取色相，避免 ``int(bid[:8], 16)`` 因非十六进制字符抛错。
+    """
+    h = int(hashlib.sha1(bid.encode("utf-8")).hexdigest()[:8], 16) % 360
     return (f"oklch(0.62 0.16 {h})", f"oklch(0.48 0.13 {(h + 38) % 360})")
 
 
@@ -676,20 +689,20 @@ def id_conflicts() -> list:
 
 
 def id_conflict_with(name: str, library_id=None) -> "dict | None":
-    """``name`` 的 ``book_id`` 是否已命中**别的库**的书（入库冲突判据）。
+    """``name`` 即将入库时，是否已存在**同 id 且不同路径**的书（入库冲突判据）。
 
-    只比 id（= basename）而不比整个相对路径：Komga 布局下同一本书在 A 库是
-    ``系列/书.epub``、在 B 库是 ``书.epub``，照样撞同一个 id，照样说不清进度归谁。
+    第 17 期起 ``book_id`` 是「库$哈希」：跨库同名得到不同 id，天然不冲突；
+    真正会撞的是**同库内不同路径的同名书**（``科幻/三体.epub`` 与 ``三体.epub``
+    同 basename → 同 id），那才会让 ``by_id`` 抛 ``BookIdConflict``，必须拦。
 
-    **同库同名不算冲突** —— 那是「重新投递一版」的正常流程（覆盖旧文件即可），
-    必须放行。这是本期最容易误伤的地方。
+    判定口径：存在一本书 ``b`` 满足 ``b.id == book_id(name, library_id)``
+    且 ``b.name != name``。同路径（``b.name == name``）= 重新投递一版、覆盖即可，放行。
     """
-    bid = book_id(name)
+    bid = book_id(name, library_id)
     if not bid:
         return None
-    lid = str(library_id or "")
     for b in books():
-        if b.get("id") == bid and str(b.get("library_id") or "") != lid:
+        if b.get("id") == bid and str(b.get("name") or "") != str(name):
             return b
     return None
 
@@ -908,7 +921,13 @@ def default_library() -> dict:
     return {"id": DEFAULT_LIBRARY_ID, "name": "默认书库", "type": "mixed",
             "mode": "inplace", "root_path": str(config.OUTPUT_DIR),
             "storage_path": "", "source_subdir": "", "rules": "", "settings": "",
-            "sort_order": 0}
+            "sort_order": 0,
+            # 第 18 期：刮削出版成品目录（空 = 不产出副本）
+            "publish_path": "",
+            # 第 17 期 T2 的逐库扫描调度，同形补齐：老部署的库表为空时走这里，
+            # 缺键会让 watcher._derive_targets 的 l.get("watch", 1) 之外
+            # 其它直接下标读取的调用方炸掉。
+            "watch": 1, "scan_interval": 0, "scan_cron": ""}
 
 
 def libraries() -> list:
@@ -1075,7 +1094,7 @@ def _scan_once(lib: dict = None) -> list:
         # 相对路径（Komga 布局下形如 "系列/书.epub"，平铺时就是文件名；音频目录形如 "系列/书名"）；
         # id 由 basename 派生（见 _book_id），所以挪进系列目录不会换 id
         rel = f.relative_to(d).as_posix()
-        bid = _book_id(rel)
+        bid = _book_id(rel, lib.get("id"))
         c1, c2 = _gradient(bid)
         fmt = "AUDIO" if is_audio_entry else f.suffix.lstrip(".").upper()
         books.append({
@@ -1111,6 +1130,23 @@ def _scan_once(lib: dict = None) -> list:
             "library_id": lib.get("id") or DEFAULT_LIBRARY_ID,
             "library_type": lib.get("type") or "mixed",
         })
+
+    # 第 17 期 T3：合并服务端元数据（override > online > opf）与封面，使列表 / 卡片 /
+    # 搜索 / OPDS 全部以服务器为准（详情页早已由 metastore 合并，这里补齐批量热路径）。
+    # **一次批量查询**，靠扫描缓存（TTL 5s）摊销，严禁逐书查库（get_overrides/get_online）。
+    bids = [b["id"] for b in books]
+    eff = db.get_effective_meta(bids)
+    cids = db.cover_ids(bids)
+    if eff or cids:
+        for b in books:
+            m = eff.get(b["id"])
+            if m:
+                for k, v in m.items():
+                    b[k] = v
+            if b["id"] in cids:
+                # 服务端封面并入：置 has_cover 并撤掉扫描时基于文件判定的 no-cover
+                b["has_cover"] = True
+                b["issues"] = [x for x in b["issues"] if x != "no-cover"]
     return books
 
 
@@ -1160,8 +1196,8 @@ def invalidate(library_id=None) -> None:
 def export_rows() -> list:
     """书目元数据的平铺行（CSV 导出用）。
 
-    只含**文件派生**的字段。阅读进度 / 状态 / 评分在 SQLite 里，
-    由接口层合并 —— library 刻意不 import db，保持依赖单向（文件层 ↑ 数据层）。
+    字段来自 ``books()``（文件派生 + 服务端元数据合并）。阅读进度 / 状态 / 评分在
+    另一批表里，由接口层合并 —— 本函数不查这些表。
     """
     rows = []
     for b in books():

@@ -44,7 +44,9 @@ FEATURE_LABELS = {
 _COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"}
 
 #: 类型 → 能力集。判据是**现有实现真实支持的范围**，不是「理论上可以」：
-#:   · 元数据抓取只写 EPUB 的 OPF → 仅 ebook（漫画 / 音频暂不支持，见 metafetch.plan 的跳过说明）
+#:   · 元数据抓取：字段语义与「文件原值兜底」都建立在 EPUB 的 OPF 上，漫画 / 音频
+#:     暂无可用源与字段语义 → 仅 ebook（见 metafetch.plan 的跳过说明）
+#:     （第 18 期起结果只存服务端 DB，不再改写文件 —— 但**能力范围没变**）
 #:   · 本地转换产出 EPUB → 仅 ebook
 #:   · 书源下载产出 EPUB → 仅 ebook
 #:   · Komga 布局整理针对系列化目录（电子书 / 漫画）→ ebook + comic
@@ -67,11 +69,15 @@ ALL_FEATURES = sorted(set().union(*FEATURES_BY_TYPE.values()))
 SETTING_CAPS = {
     "output.format": "convert",              # 派生 MOBI/AZW3 依赖 Calibre 转换能力
     "output.layout": "komga",                # Komga 布局（系列目录）只对电子书 / 漫画有意义
-    "metadata_fetch.enabled": "metadata",    # 元数据抓取只写 EPUB 的 OPF
+    "metadata_fetch.enabled": "metadata",     # 在线元数据抓取（服务侧存储，不下写 EPUB）
+    "metadata_fetch.auto_on_import": "metadata",
     "metadata_fetch.threshold": "metadata",
     "metadata_fetch.fields": "metadata",
     "naming.pattern": "rename",
     "naming.scope": "rename",
+    # 刮削出版（第 18 期）：副本的目标读者就是 Komga 这类外部阅读器，
+    # 故沿用 komga 能力（电子书 / 漫画库可见，有声书库不出现该项 —— Komga 不收有声书）。
+    "scrape.enabled": "komga",
     "opds.expose": "opds",              # 该书库是否出现在对外 OPDS 目录里
 }
 

@@ -358,12 +358,13 @@ def fetch_all(names: list = None, limit: int = FETCH_BATCH, cfg: dict = None) ->
 
 
 # ---------------- 重排册号 ----------------
-# ⚠️ 只改 OPF 里的 calibre:series_index，**不动文件名**。
+# ⚠️ 只改**服务端覆盖**（``meta_override.series_index``），
+#    既不改文件名、也**不改写 EPUB 文件**（第 18 期统一口径：元数据只存服务端）。
 #    文件名是 library.book_id 的来源（basename 派生）；文件名不动 → book_id 不变
 #    → 阅读进度 / 批注 / 评分 / 收藏全部不断链。
 #    操作本身可逆：返回里带每个条目的 old_index，按它再跑一次即可还原。
 
-#: 串行化重排：逐册重写 zip 不是原子批操作，两个并发请求交叉会写出错乱的序号
+#: 串行化重排：一批覆盖是「先读后写」的组合，两个并发请求交叉会写出错乱的序号
 _renumber_lock = threading.RLock()
 
 
@@ -413,17 +414,15 @@ def renumber_plan(name: str, order: list = None) -> dict:
 
 
 def renumber_apply(name: str, items: list) -> dict:
-    """按前端回传的**具体条目**写回序号。逐条独立：一条失败不影响其余。
+    """按前端回传的**具体条目**写回序号（**只写服务端覆盖，不动文件**）。
 
-    只接受 ``{name, new_index}``；``name`` 必须是该系列的成员（否则跳过），
-    每条都走 :func:`fileops.safe_path` 带上**该书所属库**解析路径 ——
-    多库下不带 library_id 会解析到默认库，改错文件。
+    只接受 ``{name, new_index}``；``name`` 必须是该系列的成员（否则跳过）。
 
-    ``new_index`` **必须显式给出**：缺键 = 跳过；给空串 = **清除序号**
-    （重排前本来就没有序号的书，靠这条才能完整还原回去）。
-    成员必然来自 EPUB 的 OPF 解析（``library.probe_epub`` 是唯一写入 ``series``
-    的地方），故这里不再另判格式 —— 万一将来有别的格式能带系列，写回会抛异常，
-    由下面的逐条 try 收进 ``skipped``。
+    - ``new_index`` **必须显式给出**：缺键 = 跳过；
+    - 给**具体数字** = 写 ``meta_override.series_index``（该册的生效序号立刻变，
+      列表 / 详情 / OPF 无关地一致）；
+    - 给**空串** = **清空序号**（写 :data:`db.META_CLEAR` 哨兵）：该册在所有界面
+      都显示「无序号」，并单列在返回的 ``cleared`` 里。文件本身依旧一个字节都不改。
     """
     name = str(name or "").strip()
     members = library.series_books(name)
@@ -433,7 +432,7 @@ def renumber_apply(name: str, items: list) -> dict:
         raise ValueError("items 必须是非空数组")
 
     by_name = {str(b.get("name")): b for b in members}
-    done, skipped = [], []
+    done, skipped, cleared = [], [], []
     touched_libs = set()
 
     with _renumber_lock:
@@ -448,33 +447,46 @@ def renumber_apply(name: str, items: list) -> dict:
                 continue
             new_index = str((it or {}).get("new_index") or "").strip()
             old_index = str(b.get("series_index") or "").strip()
+            bid = str(b.get("id") or "")
+            if not bid:
+                skipped.append({"name": raw, "error": "书目没有 book_id"})
+                continue
             try:
-                path = fileops.safe_path(raw, b.get("library_id"))
-                fileops.patch_epub_meta(path, {"series_index": new_index})
+                # 空串 = 用户显式要求「这一册没有序号」→ 写**哨兵**：覆盖值是列，
+                # 存不了空串（空串在 set_override 里表示「撤销覆盖」）。
+                # orig 只在首次建行时写入，代表「用户动手前文件里是什么」——
+                # 与 server 的元数据编辑同义，供「无在线值时回退」使用。
+                db.set_override(bid, "series_index",
+                                new_index or db.META_CLEAR, orig=old_index)
             except Exception as e:               # noqa: BLE001 —— 逐条独立，一条失败不中断
                 skipped.append({"name": raw, "error": str(e)})
                 continue
             if b.get("library_id"):
                 touched_libs.add(str(b["library_id"]))
-            done.append({"name": raw, "book_id": str(b.get("id")),
-                         "title": str(b.get("title") or raw),
-                         "old_index": old_index, "new_index": new_index})
+            row = {"name": raw, "book_id": bid, "title": str(b.get("title") or raw),
+                   "old_index": old_index, "new_index": new_index}
+            done.append(row)
+            if not new_index:
+                cleared.append(row)
 
     # 失效受影响库的书目缓存，否则紧接着的读取还是 TTL 内的旧序号
     for lid in touched_libs or {""}:
         library.invalidate(lid or None)
 
-    # 回读确认：真的从 OPF 里读回序号，而不是相信「写函数没抛异常」
+    # 回读确认：真的从**生效值**（override > online > opf）里读回序号，
+    # 而不是相信「写库没抛异常」。清空的那批也参与比对 —— 哨兵读回来必须是空串。
     verified = {}
     for x in library.series_books(name):
         verified[str(x.get("name"))] = str(x.get("series_index") or "").strip()
-    mismatched = [d["name"] for d in done if verified.get(d["name"]) != d["new_index"]]
+    mismatched = [d["name"] for d in done
+                  if verified.get(d["name"]) != d["new_index"]]
 
     activity_log.log(activity_log.ACTION_METADATA, name,
                      activity_log.STATUS_OK if done else activity_log.STATUS_FAIL,
                      detail=f"重排系列序号：成功 {len(done)} 条"
+                            + (f"（其中 {len(cleared)} 条恢复文件原值）" if cleared else "")
                             + (f"，跳过 {len(skipped)} 条" if skipped else ""),
                      source="api")
     return {"ok": True, "series": name, "renumbered": len(done),
-            "items": done, "skipped": skipped,
+            "items": done, "skipped": skipped, "cleared": cleared,
             "verified": verified, "mismatched": mismatched}

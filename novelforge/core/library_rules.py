@@ -203,7 +203,10 @@ def library_id_of_root(root) -> str:
 
 
 def guard_conflict(out_dir, rel: str) -> None:
-    """产出**前**的跨库同名闸门；命中就抛 :class:`IngestConflict`。
+    """产出**前**的同名冲突闸门；命中就抛 :class:`IngestConflict`。
+
+    第 17 期起 ``book_id`` 是「库$哈希」，跨库同名天然隔离；本闸门只拦
+    **同库内不同路径的同名书**（同 id 撞车，会让 ``by_id`` 抛 ``BookIdConflict``）。
 
     放在「最终落盘相对路径已知」的那一刻（``pipeline.dispatch`` / ``_emit`` /
     watcher 自实现的复制分支），因此 Komga 布局下改成 ``系列/系列 #N.epub``
@@ -227,9 +230,9 @@ def guard_conflict(out_dir, rel: str) -> None:
             break
     suggest = library.suggest_name(base, lib_id, out_dir)
     raise IngestConflict(
-        f"已存在同名文件「{base}」（在「{lib_name or other}」中）——"
-        f"两个库各有一本同名书会让阅读进度 / 批注无法区分归属。"
-        f"建议改名为「{suggest}」，或到「工具 → 书库管理 → 跨库同名冲突」一键修复",
+        f"已存在同名文件「{base}」（在「{lib_name or other}」中，不同路径）——"
+        f"同 id 不同路径会撞车，阅读进度 / 批注无法区分归属。"
+        f"建议改名为「{suggest}」，或到「工具 → 书库管理 → 同名冲突」一键修复",
         suggest=suggest,
         existing={"name": hit.get("name"), "library_id": other, "library_name": lib_name},
     )

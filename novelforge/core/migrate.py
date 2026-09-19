@@ -7,9 +7,10 @@
 
 1. **判据只看格式**（ebook / comic / audiobook）：迁移要可解释、可复现。
    靠元数据关键词猜「这本奇幻该进哪个库」只用于**入库**归库（core/library_rules.py）。
-2. **只挪库、不改名**：``name`` 是**库内相对路径**，换库根它不变，因此
-   ``book_id``（basename 派生，见 library._book_id）不变 —— 进度 / 批注 / 评分
-   不会断链。目标库已有同名文件时**拒绝覆盖**并给出建议名，改名与否由用户决定。
+2. **只挪库、不改名**：``name`` 是**库内相对路径**，换库根它不变；但第 17 期起
+   ``book_id`` 是「库$哈希」，换库会让 id 的**库前缀**变化 —— 所以执行时用
+   ``db.remap_book_id`` 把进度 / 批注 / 评分一起搬到新 id，数据不断链。
+   目标库已有同名文件时**拒绝覆盖**并给出建议名，改名与否由用户决定。
 3. **manifest 先行**：每条 ``src → dst`` 在执行前落 ``library_migrations``（pending），
    执行后标 done/failed。于是：重复启动不会重复搬（幂等依据），回滚有据可依。
 4. **逐条独立**：一条失败不影响其余；原因逐条入账，最后汇总返回。
@@ -77,6 +78,22 @@ def libraries_of_type(ltype: str) -> list:
     """某类型的全部库（正常每类一个；多出来的会在预览里标为需指定目标）。"""
     t = str(ltype or "")
     return [l for l in library.libraries() if str(l.get("type") or "") == t]
+
+
+def _src_library_id_of(src: pathlib.Path) -> str:
+    """由源文件绝对路径反查它所属的书库 id（搬库前它在哪个库）。"""
+    try:
+        want = src.resolve()
+    except Exception:
+        return library.DEFAULT_LIBRARY_ID
+    for l in library.libraries():
+        try:
+            root = pathlib.Path(l.get("root_path") or "").resolve()
+        except Exception:
+            continue
+        if root and str(want).startswith(str(root)):
+            return str(l.get("id") or library.DEFAULT_LIBRARY_ID)
+    return library.DEFAULT_LIBRARY_ID
 
 
 def _suggest_name(root: pathlib.Path, name: str) -> str:
@@ -294,6 +311,12 @@ def execute(batch_id: str) -> dict:
             errors.append({"src": str(src), "dst": str(dst), "error": reason})
             failed += 1
             continue
+        # 库维度 id：搬库后 basename 不变但库前缀变了 → 把关联数据搬到新 id，避免断链
+        src_lib = _src_library_id_of(src)
+        old_id = library.book_id(str(src), src_lib)
+        new_id = library.book_id(str(dst), r["library_id"])
+        if old_id != new_id:
+            db.remap_book_id(old_id, new_id)
         db.migration_mark(r["id"], "done")
         moved += 1
 

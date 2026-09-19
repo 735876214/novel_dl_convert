@@ -59,6 +59,41 @@ def auto_fetch_async(name: str, cfg: dict | None) -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 
+def enqueue_scrape_async(name: str, lib: dict | None, cfg: dict | None) -> None:
+    """入库后把这本书排进**刮削出版**队列（异步，不拖慢扫描轮次）。
+
+    与 :func:`auto_fetch_async` 刻意分成两件事：
+    - 抓在线元数据看 ``metadata_fetch.enabled``；
+    - 出版硬链接副本看 ``scrape.enabled``（每库可覆写第 13 期机制）。
+
+    用户完全可能关掉在线抓取、只用本地已有元数据把副本出版出去，因此不能把入队
+    塞进 auto_fetch_async 的提前 return 之后。
+
+    **这里只入队，不出版** —— 出版是「外呼 + 写盘」的混合动作，必须由
+    ``core.scrape`` 的单线程 worker 串行执行（并发外呼会被站点限流甚至封禁）。
+    """
+    def _run():
+        try:
+            from . import library, scrape
+            lid = str((lib or {}).get("id") or "")
+            if not lid or not scrape.enabled(lid):
+                return
+            book = library.find(name, lid)
+            if not book:
+                # 刚入库的文件可能还没进扫描缓存（TTL 5s），失效一次再看
+                library.invalidate(lid)
+                book = library.find(name, lid)
+            if not book:
+                return
+            if scrape.enqueue(book, reason="import").get("queued"):
+                scrape.start()
+                scrape.wake()
+        except Exception:                             # noqa: BLE001 —— 旁路增强，绝不外抛
+            pass
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 class FolderWatcher:
     """监听输入目录，自动转换 / 添加文件到导出目录。"""
 
@@ -93,8 +128,13 @@ class FolderWatcher:
         self._scan_lock = threading.Lock()  # 串行化扫描轮次，避免并行重复处理
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._primed = False
+        # 已「首轮」过的扫描目标集合（逐个目标独立判定历史存量是否处理）
+        self._primed: set = set()
         self.last_scan = 0.0
+        # 主循环 tick 间隔（秒）：短间隔轮询，各目标按自己的 interval/cron 决定是否真扫
+        self.tick_interval = float(self.interval)
+        # 各扫描目标的上次实际扫描时刻（按 tkey 分桶，避免跨目标互相干扰）
+        self._target_last: dict = {}
         self.stats = {"converted": 0, "added": 0, "failed": 0, "scans": 0}
 
     # ---------------- 状态持久化 ----------------
@@ -229,27 +269,29 @@ class FolderWatcher:
             self.state["__ignored__"] = sorted(self._ignore_names)
             self._save_state()
 
-    def _iter_files(self):
-        if not self.input_dir.is_dir():
+    def _iter_files(self, root=None):
+        root = root or self.input_dir
+        if not root.is_dir():
             return []
-        it = self.input_dir.rglob("*") if self.recursive else self.input_dir.iterdir()
+        it = root.rglob("*") if self.recursive else root.iterdir()
         try:
             return [p for p in it if p.is_file()]
         except Exception:
             return []
 
-    def _iter_entries(self):
+    def _iter_entries(self, root=None):
         """待处理条目：文件 + **含音频的目录**（有声书，整目录算一本书）。
 
         与 `_iter_files`（收书目录对账仍只用文件）分开，避免让收书目录去登记目录。
         递归模式下若目录本身已是音频目录，则**不再单独处理它内部的音频文件**，
         否则同一本书会被复制两次。
         """
+        root = root or self.input_dir
         try:
-            entries = [p for p in self._iter_files()
+            entries = [p for p in self._iter_files(root)
                        if not p.name.startswith(".")]
-            if self.input_dir.is_dir():
-                it = self.input_dir.rglob("*") if self.recursive else self.input_dir.iterdir()
+            if root.is_dir():
+                it = root.rglob("*") if self.recursive else root.iterdir()
                 for p in it:
                     if p.is_dir() and not p.name.startswith(".") and audio.is_audio_dir(p):
                         entries.append(p)
@@ -293,8 +335,13 @@ class FolderWatcher:
             "cfg": c,
         }
 
-    def handle_file(self, p: Path) -> tuple:
-        """处理单个文件，返回 (结果类型, 详情)。结果类型：converted / added / failed / skipped"""
+    def handle_file(self, p: Path, owner_lib=None) -> tuple:
+        """处理单个文件，返回 (结果类型, 详情)。结果类型：converted / added / failed / skipped
+
+        ``owner_lib`` 非空 = 该文件来自某库**专属来源子目录**的扫描，直接归到该库
+        （跳过来源子目录名路由，避免又被按格式/关键词改派到别的库）；为 ``None``
+        时走既有 ``_target`` 路由（全局 INPUT_DIR 路径）。
+        """
         try:
             size = p.stat().st_size
         except OSError as e:
@@ -307,7 +354,11 @@ class FolderWatcher:
 
         # 第 13 期「每库覆盖」：先定目标库，再取**该库**的生效配置。
         # 库没覆写过时 `config_for` 就是全局值 → 行为与改造前逐字段一致。
-        lib, root = self._target(p)
+        if owner_lib is not None:
+            lib = owner_lib
+            root = Path(lib.get("root_path") or self.output_dir)
+        else:
+            lib, root = self._target(p)
         cfg = lib_settings.config_for((lib or {}).get("id") or None)
         layout = str((cfg.get("output") or {}).get("layout") or "flat").strip().lower()
         # 非 txt 是否原样收取：按库取值，取不到时回落到构造时的全局判定
@@ -325,6 +376,10 @@ class FolderWatcher:
                 # 跨库同名闸门（有声书目录是 watcher 自己实现的复制，不经 pipeline.dispatch）
                 library_rules.guard_conflict(root, rel)
                 dst = root / rel
+                if dst.resolve() == p.resolve():     # 就地库：来源即存储，无需复制
+                    activity_log.log_add_ok(p.name, rel, size=self._sig(p)[0],
+                                            duration_ms=dur(), source="watcher")
+                    return ("added", str(dst))
                 pipeline._copy_tree(p, dst)
                 activity_log.log_add_ok(p.name, rel, size=self._sig(p)[0],
                                         duration_ms=dur(), source="watcher")
@@ -344,6 +399,7 @@ class FolderWatcher:
                     source="watcher", detail=opts.get("_notice", ""),
                 )
                 auto_fetch_async(Path(out).name, cfg)
+                enqueue_scrape_async(Path(out).name, lib, cfg)
                 return ("converted", str(out))
             except Exception as e:
                 activity_log.log_convert_fail(
@@ -364,10 +420,16 @@ class FolderWatcher:
             # 跨库同名闸门（复制分支同样是自己实现的，见上一段注释）
             library_rules.guard_conflict(root, rel)
             dst = root / rel
+            if dst.resolve() == p.resolve():     # 就地库：来源即存储，无需复制
+                activity_log.log_add_ok(p.name, rel, size=size, duration_ms=dur(), source="watcher")
+                auto_fetch_async(rel, cfg)
+                enqueue_scrape_async(rel, lib, cfg)
+                return ("added", str(dst))
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, dst)
             activity_log.log_add_ok(p.name, rel, size=size, duration_ms=dur(), source="watcher")
             auto_fetch_async(rel, cfg)
+            enqueue_scrape_async(rel, lib, cfg)
             return ("added", str(dst))
         except Exception as e:
             activity_log.log_add_fail(p.name, f"{type(e).__name__}: {e}", size=size, source="watcher")
@@ -384,21 +446,24 @@ class FolderWatcher:
         return result
 
     def scan_once(self) -> dict:
-        """扫描一轮，返回本轮结果摘要。
-
-        用独立的 _scan_lock 串行化各扫描调用（后台轮询线程 / /api/scan），
-        避免对同一文件并行处理；state 字典的读写仍由短临界区的 _lock 保护。
-        """
+        """立即扫描全局 INPUT_DIR 一轮（手动 /api/scan 用，向后兼容）。"""
         with self._scan_lock:
-            return self._scan_locked()
+            return self._scan_locked(self.input_dir, owner_lib=None,
+                                     tkey="input", library_id=None)
 
-    def _scan_locked(self) -> dict:
-        self.input_dir.mkdir(parents=True, exist_ok=True)
-        self.target_root(p).mkdir(parents=True, exist_ok=True)
+    def _state_key(self, p: Path, root: Path) -> str:
+        """state 字典的键：相对扫描根的路径（按根分桶，避免多目标互相覆盖）。"""
+        try:
+            return str(p.relative_to(root))
+        except Exception:
+            return p.name
 
-        entries = self._iter_entries()
-        if not self._primed:                      # 首轮：决定是否处理历史存量文件
-            self._primed = True
+    def _scan_locked(self, root, owner_lib=None, tkey="input", library_id=None) -> dict:
+        root.mkdir(parents=True, exist_ok=True)
+
+        entries = self._iter_entries(root)
+        if tkey not in self._primed:               # 首轮：决定是否处理历史存量文件
+            self._primed.add(tkey)
             if not self.process_existing:
                 with self._lock:
                     for p in entries:
@@ -406,15 +471,11 @@ class FolderWatcher:
                             continue
                         sig = self._sig(p)
                         if sig:
-                            try:
-                                key = str(p.relative_to(self.input_dir))
-                            except Exception:
-                                key = p.name
-                            self.state[key] = {
+                            self.state[self._state_key(p, root)] = {
                                 "size": sig[0], "mtime": sig[1], "failed": 0,
                             }
                     self._save_state()
-                self.last_scan = time.time()
+                self._target_last[tkey] = time.time()
                 return self._emit({"scanned": 0, "converted": [], "added": [],
                                    "failed": [], "skipped": 0})
 
@@ -427,11 +488,7 @@ class FolderWatcher:
                     break
                 if self._ignored(p):
                     continue
-                try:
-                    key = str(p.relative_to(self.input_dir))
-                except Exception:
-                    key = p.name
-
+                key = self._state_key(p, root)
                 sig = self._sig(p)
                 if not sig:
                     continue
@@ -455,7 +512,7 @@ class FolderWatcher:
                 continue
 
             result["scanned"] += 1
-            kind, detail = self.handle_file(p)    # 锁外执行 I/O / 转换
+            kind, detail = self.handle_file(p, owner_lib=owner_lib)   # 锁外执行 I/O / 转换
             with self._lock:                      # 仅短临界区更新 state
                 if kind in ("converted", "added"):
                     cur["failed"] = 0
@@ -477,16 +534,98 @@ class FolderWatcher:
                 self._save_state()
             self.stats["scans"] += 1
             self.last_scan = time.time()
+            self._target_last[tkey] = time.time()
+        # LAST SCAN 回写：每库目标的来源子目录扫完后记到该库（全局 INPUT_DIR 无库，跳过）
+        if library_id:
+            try:
+                from . import db as _db
+                note = f"扫描 {result['scanned']} 项" if result["scanned"] else "无新文件"
+                _db.set_library_scan(library_id, note)
+            except Exception:
+                pass
         return self._emit(result)
+
+    # ---------------- 多目标调度（第 17 期 T2）----------------
+    # 监听对象从一个全局 INPUT_DIR 扩展为「N 个来源目录」：
+    #   · 全局 INPUT_DIR（library_id=None）行为完全不变（格式/关键词路由）；
+    #   · 每个库的 LIBRARY_SOURCE_DIR/<source_subdir> 作为独立目标，带该库自己的
+    #     watch / scan_interval / scan_cron；关掉的库不扫、设 cron 的库只在定时窗口扫。
+    # 目标在每个 tick 轻量重读 libraries() 派生 —— 增 / 删 / 改库即时热重载。
+
+    def _derive_targets(self) -> list:
+        wcfg = (self.cfg or {}).get("watcher", {}) or {}
+        global_interval = float(self.interval)
+        global_enabled = bool(wcfg.get("enabled", True))
+        targets = [{
+            "root": self.input_dir, "library_id": None, "watch": global_enabled,
+            "interval": global_interval, "cron": None, "tkey": "input", "name": "input",
+            "owner_lib": None,
+        }]
+        try:
+            from . import library as _lib
+            for l in _lib.libraries():
+                sub = (l.get("source_subdir") or "").strip()
+                if not sub:
+                    continue
+                root = config.LIBRARY_SOURCE_DIR / sub
+                try:
+                    watch = int(l.get("watch", 1) or 0)
+                except (TypeError, ValueError):
+                    watch = 1
+                interval = float(l.get("scan_interval") or 0) or global_interval
+                cron = (l.get("scan_cron") or "").strip() or None
+                targets.append({
+                    "root": root, "library_id": str(l.get("id")), "watch": bool(watch),
+                    "interval": interval, "cron": cron,
+                    "tkey": "lib:" + str(l.get("id")), "name": l.get("name"),
+                    "owner_lib": l,
+                })
+        except Exception:
+            pass
+        return targets
+
+    def _should_scan(self, t: dict) -> bool:
+        now = time.time()
+        last = self._target_last.get(t["tkey"], 0)
+        if t["cron"]:
+            try:
+                from datetime import datetime
+                from croniter import croniter
+                # 最近一次 cron 触发晚于上次扫描 → 该扫一轮；
+                # 坏表达式走 except，退化成 interval 行为，绝不拖垮线程。
+                prev = croniter(t["cron"], datetime.fromtimestamp(now)).get_prev(datetime)
+                return prev.timestamp() > last
+            except Exception:
+                return (now - last) >= t["interval"]
+        return (now - last) >= t["interval"]
+
+    def _scan_target(self, t: dict) -> None:
+        with self._scan_lock:
+            self._scan_locked(t["root"], owner_lib=t.get("owner_lib"),
+                              tkey=t["tkey"], library_id=t.get("library_id"))
+
+    def scan_library_now(self, lid) -> bool:
+        """立即扫描某库的来源子目录（忽略间隔/cron），供 /api/libraries/{lid}/scan。"""
+        for t in self._derive_targets():
+            if t.get("library_id") == str(lid):
+                self._scan_target(t)
+                return True
+        return False
 
     # ---------------- 线程控制 ----------------
 
     def _loop(self):
-        while not self._stop.wait(self.interval):
+        while not self._stop.wait(self.tick_interval):
             try:
-                self.scan_once()
+                for t in self._derive_targets():
+                    if self._stop.is_set():
+                        break
+                    if not t["watch"]:
+                        continue
+                    if self._should_scan(t):
+                        self._scan_target(t)
             except Exception:                     # 单轮异常不能让监听线程死掉
-                time.sleep(self.interval)
+                time.sleep(self.tick_interval)
 
     def start(self) -> bool:
         if self._thread and self._thread.is_alive():
@@ -524,6 +663,13 @@ class FolderWatcher:
             self._stop.set()
 
     def status(self) -> dict:
+        targets = []
+        for t in self._derive_targets():
+            targets.append({
+                "root": str(t["root"]), "library_id": t["library_id"],
+                "watch": t["watch"], "interval": t["interval"], "cron": t["cron"],
+                "name": t.get("name"),
+            })
         return {
             "running": self.is_running(),
             "input": str(self.input_dir),
@@ -534,6 +680,7 @@ class FolderWatcher:
             "ignore": self.ignore,
             "last_scan": self.last_scan,
             "stats": dict(self.stats),
+            "targets": targets,
         }
 
 

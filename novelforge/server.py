@@ -20,7 +20,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Body,
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from .core import pipeline, activity_log, library, fileops
+from .core import pipeline, activity_log, library, fileops, publish, scrape
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, recommend,
                    fonts, comics, audio, opds, komga, koreader, integrations,
@@ -67,15 +67,34 @@ async def lifespan(app: FastAPI):
     # 多书库：库表为空时落一条「默认库 = OUTPUT_DIR」，保证老部署升级后书目不为空。
     # ⚠️ 若这里漏掉，书目会为空 → 孤儿判定会把**所有** book_id 当孤儿（会真删进度/批注）。
     library.ensure_default_library()
+    # 第 17 期：book_id 库维度化的一次性迁移（跨库同名不再串 id）。幂等，跑过即跳过。
+    try:
+        res = db.upgrade_book_ids()
+        if not res.get("skipped"):
+            logging.getLogger("novelforge").info(
+                "book_id 库维度迁移完成：索引 %s 个文件、迁移 %s 条关联",
+                res.get("indexed"), res.get("moved"),
+            )
+    except Exception as e:  # 迁移失败不应阻断启动
+        logging.getLogger("novelforge").exception("book_id 迁移失败：%s", e)
     if (cfg.get("watcher") or {}).get("enabled", True):
         w = _start_watcher(cfg)
         # 启动信息只进标准日志（docker logs），不污染「转换 / 添加」活动日志
         logging.getLogger("novelforge").info(
             "目录监听已启动：%s → %s（间隔 %ss）", w.input_dir, w.output_dir, w.interval
         )
+    # 第 18 期：刮削出版 worker。**只在有未完成待办时启动** —— 队列是持久化的
+    # （status='pending' 的行），重启要接着跑；没待办就不必白起一个后台线程。
+    try:
+        if (cfg.get("scrape") or {}).get("enabled", True) and db.scrape_pending(limit=1):
+            scrape.start()
+            logging.getLogger("novelforge").info("刮削 worker 已启动（续跑上次未完成的待办）")
+    except Exception as e:  # noqa: BLE001 —— 旁路功能，绝不阻断启动
+        logging.getLogger("novelforge").exception("刮削 worker 启动失败：%s", e)
     yield
     if WATCHER is not None:
         WATCHER.stop()
+    scrape.stop()
 
 
 app = FastAPI(title="NovelForge", version="0.5.0", lifespan=lifespan)
@@ -1153,7 +1172,9 @@ def api_book_metadata(bid: str):
         "id": b["id"],
         "name": b["name"],
         "format": (b.get("format") or "").upper(),
-        # 非 EPUB 没有可改写的 OPF，前端据此把表单置为只读并说明原因
+        # 仅 EPUB：字段的**兜底原值**来自 OPF，非 EPUB 没有这一层，
+        # 放开只会得到一个「原值全空」的编辑器（第 18 期起改动只落服务端 DB，
+        # 故这一条限制与「是否写文件」无关）。
         "editable": (b.get("format") or "").upper() == "EPUB",
         # 生效值：用户覆盖 > 在线抓取 > OPF 原值
         "fields": metastore.effective(b),
@@ -1164,21 +1185,21 @@ def api_book_metadata(bid: str):
 
 @app.post("/api/books/{bid}/metadata")
 def api_set_book_metadata(bid: str, payload: dict = Body(...)):
-    """改写单本书的 EPUB 内嵌元数据，并记录用户覆盖（受抓取保护）。
+    """编辑单本书的元数据：**只记服务端覆盖，不改写 EPUB 文件**（第 18 期口径）。
 
     边界：
       · 只接受 ``fileops.METADATA_FIELDS`` 里的字段，其余**不写**（并在响应里回报）；
-      · 只支持 EPUB —— 其它格式没有可改写的 OPF；
+      · 只支持 EPUB —— 字段的兜底原值来自 OPF，非 EPUB 没有这一层；
       · 改完必须 ``library.invalidate()``，否则扫描缓存会让界面继续显示旧值；
       · **不动文件名**：文件名归「批量重命名」管；
-      · 与 OPF 原值**不同**的字段记入 ``meta_override``（用户本地修正，再抓取不冲掉）；
-        与 OPF **一致**的字段若此前有覆盖则撤销，回到「跟随在线 / OPF」。
+      · 与生效原值**不同**的字段记入 ``meta_override``（用户本地修正，再抓取不冲掉）；
+        与原值**一致**的字段若此前有覆盖则撤销，回到「跟随在线 / OPF」。
     """
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
     if (b.get("format") or "").upper() != "EPUB":
-        raise HTTPException(400, "仅支持改写 EPUB 的内嵌元数据")
+        raise HTTPException(400, "仅 EPUB 支持编辑元数据（字段的兜底原值来自 OPF）")
 
     raw = (payload or {}).get("fields")
     if not isinstance(raw, dict):
@@ -1191,11 +1212,7 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
         )
 
     before = {f: _meta_value(b, f) for f in accepted}
-    try:
-        written = fileops.patch_epub_meta(library.root_of(b) / b["name"], accepted)
-    except ValueError as e:
-        raise HTTPException(500, str(e))
-
+    # 第 17 期 T3：元数据写回**只存服务端**（meta_override），不再改写 Epub 文件。
     # 与 OPF 原值不同的才记为用户覆盖（并记下编辑前原值 orig，供无在线值时回退）；
     # 与 OPF 一致的字段若此前有覆盖则撤销，回到「跟随在线 / OPF」。
     for f in accepted:
@@ -1213,7 +1230,8 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
                      source="api")
     return {
         "ok": True,
-        "written": written,
+        # 不再写文件：written 恒为空（保留字段以兼容前端），实际生效见 changed
+        "written": [],
         "changed": changed,
         "unknown": unknown,
         # 回写生效值 + 逐字段明细，前端直接据此刷新表单
@@ -1237,9 +1255,10 @@ def api_book_metadata_online(bid: str):
 
 @app.post("/api/books/{bid}/metadata/revert")
 def api_revert_book_metadata(bid: str, payload: dict = Body(None)):
-    """把指定字段恢复为在线值：撤销用户覆盖，并把 OPF 也写回在线值（外部阅读器保持一致）。
+    """把指定字段恢复为在线值：撤销用户覆盖（``meta_override``）。
 
-    仅 EPUB。恢复的在线值优先用实时检索；检索失败则回退到上次抓取的 ``meta_online`` 缓存。
+    第 17 期 T3：**不再改写 EPUB**。撤销覆盖后，展示自动回落到在线值（``meta_online``，
+    若曾抓取）或文件原值 —— 因此**无需外呼**、无需写盘。仅 EPUB 支持该编辑链路。
     """
     b = library.by_id(bid)
     if not b:
@@ -1253,42 +1272,19 @@ def api_revert_book_metadata(bid: str, payload: dict = Body(None)):
     if not fields:
         raise HTTPException(400, "没有可恢复的字段")
 
-    # 在线值：先实时检索，失败回退到 meta_online 缓存
-    cand = metafetch.online_candidate(b, cfg=config.load_config())
-    online_vals = (cand or {}).get("values") or {}
-    stored = db.get_online(bid)
-
-    def _online_of(f: str) -> str:
-        v = str(online_vals.get(f) or "").strip()
-        if v:
-            return v
-        return str((stored.get(f) or {}).get("value") or "").strip()
-
-    updates = {}
+    # 第 17 期 T3：只撤销覆盖（meta_override）。撤销后展示自动回落到在线值或文件原值。
+    recovered = []
     for f in fields:
-        row = db.get_override_row(bid, f)
-        ov = _online_of(f)
-        if ov:
-            target = ov                              # 有在线值：把 OPF 写回在线值
-        elif row is not None:
-            target = str(row.get("orig") or "")      # 无在线值：还原到编辑前原值（可能为空 = 清空）
-        else:
-            target = None
-        db.set_override(bid, f, "")                  # 撤销覆盖
-        if target is not None:
-            updates[f] = target
-    if updates:
-        try:
-            fileops.patch_epub_meta(library.root_of(b) / b["name"], updates)
-        except ValueError as e:
-            raise HTTPException(500, str(e))
+        if db.get_override_row(bid, f) is not None:
+            recovered.append(f)
+        db.set_override(bid, f, "")
     library.invalidate()
     fresh = library.by_id(bid) or {}
     return {
         "ok": True,
         "fields": metastore.effective(fresh),
         "meta": metastore.state(fresh),
-        "recovered": sorted(updates.keys()),
+        "recovered": sorted(recovered),
     }
 
 
@@ -1328,6 +1324,13 @@ def api_book_cover(bid: str):
 
     if fmt != "EPUB":
         raise HTTPException(404, "该格式没有内嵌封面")
+    # 第 17 期 T3：优先取服务端缓存封面（在线抓取写入 meta_cover），
+    # 无则回退 EPUB 内嵌图（兼容原文件本来就带封面、从未抓过在线封面的情况）。
+    server_cover = db.get_cover(bid)
+    if server_cover:
+        data, sct = server_cover
+        return Response(content=data, media_type=sct or "image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400"})
     cover = library.cover_path(path)
     if not cover:
         raise HTTPException(404, "该书没有封面")
@@ -1800,7 +1803,7 @@ def api_fetch_all_series_meta(payload: dict = Body(None)):
 
 @app.get("/api/series/{name}/renumber/preview")
 def api_series_renumber_preview(name: str):
-    """重排册号**预览**（只算不改）。只改 OPF 里的 ``calibre:series_index``、不动文件名。"""
+    """重排册号**预览**（只算不改）。序号的落点是**服务端**，不动文件名、不改文件内容。"""
     try:
         return series_meta.renumber_plan(name)
     except ValueError as e:
@@ -1809,10 +1812,11 @@ def api_series_renumber_preview(name: str):
 
 @app.post("/api/series/{name}/renumber/apply")
 def api_series_renumber_apply(name: str, payload: dict = Body(...)):
-    """执行重排：**真改 EPUB 内的 calibre:series_index**。只认前端回传的具体条目。
+    """执行重排：写**服务端覆盖**（``meta_override.series_index``）。只认前端回传的具体条目。
 
     先预览、再应用（工具页既有纪律）；不动文件名 → ``book_id`` 不变 →
-    阅读进度 / 批注 / 评分 / 收藏不断链。
+    阅读进度 / 批注 / 评分 / 收藏不断链；**不改写 EPUB 文件**（第 18 期口径）。
+    ``new_index`` 给空串 = 撤销覆盖（该册回到文件原值，不等价于「文件里没有序号」）。
     """
     items = (payload or {}).get("items")
     if not isinstance(items, list) or not items:
@@ -1989,6 +1993,61 @@ def _library_root_allowed(raw) -> pathlib.Path:
                              "（否则可能误扫、甚至误移系统文件）")
 
 
+def _own_roots(root_path, source_subdir) -> list:
+    """「本书库自己」的库根与扫描源目录 → 成品目录校验的守卫项。"""
+    out = []
+    if str(root_path or "").strip():
+        out.append(("本书库的库根", pathlib.Path(str(root_path)).resolve()))
+    sub = str(source_subdir or "").strip()
+    if sub:
+        out.append(("本书库的扫描源目录", (config.LIBRARY_SOURCE_DIR / sub).resolve()))
+    return out
+
+
+def _publish_path_allowed(raw, extra_roots=()) -> "pathlib.Path | None":
+    """刮削出版的**成品目录**校验（第 18 期）。
+
+    比库根更严一档：除了必须在白名单根内（复用 :func:`_library_root_allowed`），
+    还**不得与任何扫描根 / 库根相交** —— 相等、位于其内、或是它的祖先都不行。
+
+    理由：成品目录里放的是**硬链接副本**，一旦它落在扫描范围里，watcher 与库扫描
+    会把副本当成新书扫进来（书列表出现重复），改名 / 回收 / 迁移也会作用到副本上，
+    进而破坏「原书不被改动」这条底线。空值表示该库不产出副本，直接放行。
+
+    ``extra_roots``：**正在建 / 正在改的那一个书库自己**的库根与扫描源目录。
+    库表里已有的书库能从 :func:`library.libraries` 查到，但「还没落库的自己」查不到，
+    必须显式传进来 —— 否则「把成品目录放进自己库根」这条最典型的错法会漏过校验。
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    rp = _library_root_allowed(text)
+    guards = list(extra_roots)
+    try:
+        guards.append(("投递目录", pathlib.Path(config.INPUT_DIR).resolve()))
+    except Exception:                                   # noqa: BLE001
+        pass
+    try:
+        for lib in library.libraries():
+            root = str(lib.get("root_path") or "").strip()
+            if root:
+                guards.append((f"书库「{lib.get('name') or lib.get('id')}」的库根",
+                               pathlib.Path(root).resolve()))
+            sub = str(lib.get("source_subdir") or "").strip()
+            if sub:
+                guards.append((f"书库「{lib.get('name') or lib.get('id')}」的扫描源目录",
+                               (config.LIBRARY_SOURCE_DIR / sub).resolve()))
+    except Exception:                                   # noqa: BLE001
+        pass
+    for label, g in guards:
+        if rp == g or g in rp.parents or rp in g.parents:
+            raise HTTPException(
+                400,
+                f"成品目录不能与{label}重叠（{g}）：副本会被扫描回来变成重复书，"
+                "请选一个独立目录（可与库根、扫描源目录平级）")
+    return rp
+
+
 def _writable_dir(p: pathlib.Path) -> bool:
     """真实试写一次 —— 只看权限位会漏掉只读挂载等情形。"""
     try:
@@ -2004,6 +2063,10 @@ def _library_dto(lib: dict, counts: dict = None) -> dict:
     root = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
     t = str(lib.get("type") or "mixed")
     m = str(lib.get("mode") or "inplace")
+    # 刮削出版成品目录（第 18 期）：空串 = 该库不产出硬链接副本。
+    # ⚠️ 不能用 pathlib.Path("") 兜底 —— 那会解析成 "." 并被 is_dir() 判真。
+    pub_raw = str(lib.get("publish_path") or "").strip()
+    pub = pathlib.Path(pub_raw) if pub_raw else None
     return {
         "id": lib.get("id"), "name": lib.get("name") or "", "type": t,
         "type_label": _LIB_TYPE_LABELS.get(t, "混合库"),
@@ -2013,6 +2076,14 @@ def _library_dto(lib: dict, counts: dict = None) -> dict:
         "source_subdir": lib.get("source_subdir") or "",
         "rules": lib.get("rules") or "",
         "sort_order": int(lib.get("sort_order") or 0),
+        # 刮削出版成品目录（第 18 期）：副本落点，供外部阅读器挂载；空 = 未启用
+        "publish_path": pub_raw,
+        "publish_exists": bool(pub) and pub.is_dir(),
+        "publish_writable": _writable_dir(pub) if pub and pub.is_dir() else False,
+        # 逐库扫描调度（第 17 期 T2）
+        "watch": int(lib.get("watch", 1) or 0),
+        "scan_interval": int(lib.get("scan_interval", 0) or 0),
+        "scan_cron": lib.get("scan_cron") or "",
         "book_count": int((counts or {}).get(str(lib.get("id")), 0)),
         "exists": root.is_dir(),
         "writable": _writable_dir(root) if root.is_dir() else False,
@@ -2153,12 +2224,37 @@ def api_create_library(payload: dict = Body(...)):
         sort_order = int(p.get("sort_order") or 0)
     except (TypeError, ValueError):
         raise HTTPException(400, "sort_order 必须是整数")
+    watch = 1
+    if "watch" in p:
+        try:
+            watch = int(p.get("watch") or 0)
+        except (TypeError, ValueError):
+            watch = 1
+    scan_interval = 0
+    if "scan_interval" in p:
+        try:
+            scan_interval = int(p.get("scan_interval") or 0)
+        except (TypeError, ValueError):
+            scan_interval = 0
+    scan_cron = (str(p.get("scan_cron") or "").strip()) if "scan_cron" in p else ""
+    # 刮削出版成品目录（第 18 期）：可选。给了就校验边界并预先建出来，
+    # 免得界面显示「已配置」、首次刮削才发现目录不存在。
+    sub = str(p.get("source_subdir") or "").strip()
+    publish = _publish_path_allowed(p.get("publish_path"), _own_roots(str(root), sub))
+    if publish:
+        try:
+            publish.mkdir(parents=True, exist_ok=True)
+        except Exception as e:                          # noqa: BLE001
+            raise HTTPException(400, f"无法创建成品目录：{e}")
     lib = db.create_library(lid, name, ltype, mode, str(root),
                             source_subdir=str(p.get("source_subdir") or "").strip(),
-                            rules=_norm_rules(p.get("rules")), sort_order=sort_order)
+                            rules=_norm_rules(p.get("rules")), sort_order=sort_order,
+                            watch=watch, scan_interval=scan_interval, scan_cron=scan_cron,
+                            publish_path=str(publish or ""))
     library.invalidate()
     activity_log.log(activity_log.ACTION_LAYOUT, name, activity_log.STATUS_OK,
-                     detail=f"新建书库：{ltype} / {mode} / {root}", source="api")
+                     detail=f"新建书库：{ltype} / {mode} / {root}"
+                            + (f" / 成品目录 {publish}" if publish else ""), source="api")
     return {"ok": True, "library": _library_dto(lib or {}, {})}
 
 
@@ -2193,6 +2289,34 @@ def api_update_library(lid: str, payload: dict = Body(...)):
             fields["sort_order"] = int(p.get("sort_order") or 0)
         except (TypeError, ValueError):
             raise HTTPException(400, "sort_order 必须是整数")
+    # 逐库扫描调度字段（第 17 期 T2）
+    if "watch" in p:
+        try:
+            fields["watch"] = int(p.get("watch") or 0)
+        except (TypeError, ValueError):
+            fields["watch"] = 1
+    if "scan_interval" in p:
+        try:
+            fields["scan_interval"] = int(p.get("scan_interval") or 0)
+        except (TypeError, ValueError):
+            fields["scan_interval"] = 0
+    if "scan_cron" in p:
+        fields["scan_cron"] = str(p.get("scan_cron") or "").strip()
+    # 刮削出版成品目录（第 18 期）：传空串 = 关闭该库的副本产出。
+    # ⚠️ 改这一项**不动已有副本**（副本的清理由刮削页显式操作），只影响后续刮削落点。
+    if "publish_path" in p:
+        cur = db.get_library(lid) or {}
+        # 用**改完之后**的库根 / 来源目录做校验：同一次请求里同时改了 root_path 与
+        # publish_path 时，只按旧值校验会放过「改完就重叠」的组合。
+        pub = _publish_path_allowed(p.get("publish_path"), _own_roots(
+            str(fields.get("root_path") or cur.get("root_path") or ""),
+            str(fields.get("source_subdir", cur.get("source_subdir") or "") or "")))
+        if pub:
+            try:
+                pub.mkdir(parents=True, exist_ok=True)
+            except Exception as e:                      # noqa: BLE001
+                raise HTTPException(400, f"无法创建成品目录：{e}")
+        fields["publish_path"] = str(pub or "")
     if not fields:
         raise HTTPException(400, "没有可更新的字段")
     lib = db.update_library(lid, **fields)
@@ -2215,6 +2339,9 @@ def api_delete_library(lid: str, force: bool = False):
         raise HTTPException(400, f"该库还有 {n} 本书：请先迁移走，"
                                  f"或加 force=1 仅移除登记（文件留在原地）")
     db.delete_library(lid)
+    # 库没了，刮削台账行也没有意义（UI 会显示一堆属于不存在书库的条目）。
+    # **只删登记，副本文件留在成品目录里**，与「移除库不删文件」一致。
+    db.scrape_delete_by_library(lid)
     library.invalidate()
     activity_log.log(activity_log.ACTION_LAYOUT, str(lid), activity_log.STATUS_OK,
                      detail=f"移除书库登记（文件保留在原地）· 当时 {n} 本", source="api")
@@ -2223,14 +2350,55 @@ def api_delete_library(lid: str, force: bool = False):
 
 @app.post("/api/libraries/{lid}/scan")
 def api_scan_library(lid: str):
-    """重新扫描单个库（失效该库缓存 + 记一次扫描时间）。"""
+    """重新扫描单个库（失效该库缓存 + 记一次扫描时间）。
+
+    第 18 期起，扫描后**顺带把该库的书排进刮削队列**（若开了自动刮削）——
+    这正是用户要的「扫描 → 刮削 → 在新目录硬链接出成品」那一道工序：新书入库与
+    手工重扫都会收敛到同一条流水。刮削本身是异步的（worker 串行跑，进度看 /api/scrape/state）。
+    """
     lib = db.get_library(lid)
     if not lib:
         raise HTTPException(404, "书库不存在")
     library.invalidate(lid)
     bs = library.books(lid, force=True)
     db.set_library_scan(lid, note=f"手动扫描：{len(bs)} 本")
-    return {"ok": True, "id": lid, "count": len(bs)}
+    # 若该库有来源子目录且 watcher 在跑，立即触发一次来源目录扫描（摄入新文件）
+    if WATCHER is not None and WATCHER.is_running():
+        try:
+            WATCHER.scan_library_now(lid)
+        except Exception:
+            pass
+    try:
+        queued = _enqueue_scrape_for(lid)
+    except Exception as e:  # noqa: BLE001 —— 刮削是旁路，绝不因它让扫描报错
+        logging.getLogger("novelforge").exception("扫描后入队刮削失败：%s", e)
+        queued = 0
+    return {"ok": True, "id": lid, "count": len(bs), "scrape_queued": queued}
+
+
+def _enqueue_scrape_for(library_id=None) -> int:
+    """按自动开关把书排进刮削队列并唤醒 worker；返回新入队条数。
+
+    **自动开关只管这里** —— 页面上的「开始刮削」走 ``/api/scrape/run``，
+    不受开关限制（用户点了就该跑）。
+    """
+    lid = str(library_id or "")
+    if lid and not scrape.enabled(lid):
+        return 0
+    if not lid:
+        # 全部库：只处理开了自动刮削的库（逐库判断，避免给关掉的库排一堆待办）
+        enabled = [str(l.get("id")) for l in library.libraries()
+                   if scrape.enabled(str(l.get("id")))]
+        if not enabled:
+            return 0
+        queued = sum(_enqueue_scrape_for(x) for x in enabled)
+        return queued
+    res = scrape.enqueue_library(lid)
+    queued = int(res.get("queued") or 0)
+    if queued:
+        scrape.start()
+        scrape.wake()
+    return queued
 
 
 # ---- 每库覆盖（第 13 期）----
@@ -2288,6 +2456,156 @@ def api_clear_library_settings(lid: str, keys: str = ""):
                      activity_log.STATUS_OK,
                      detail="恢复继承全局：" + ("、".join(ks) if ks else "全部项"),
                      source="api")
+    return res
+
+
+# ---------------- 刮削出版（第 18 期）----------------
+# ⚠️ **字面量路径必须注册在带路径参数的路径之前**：``/api/scrape/run`` 与
+# ``/api/scrape/{bid}/resolve`` 若顺序颠倒，"run" 会被当成 book_id 吃掉
+# （与 ``/api/books/{bid}`` 那次踩坑同源，见 tests 里的注册顺序断言）。
+
+#: 状态 → 界面徽标文案（真值源放后端，免得前后端各写一套文案）
+_SCRAPE_LABELS = {
+    "pending": "待刮削", "running": "进行中", "ok": "已出版",
+    "failed": "失败", "skipped": "跳过", "removed": "待确认",
+    "kept": "已保留", "orphan": "孤本", "source_removed": "原文件已回收",
+}
+
+
+def _scrape_actions(status: str) -> list:
+    """该状态下**允许**用户做的处置（界面据此渲染按钮，后端仍会二次校验）。"""
+    st = str(status or "")
+    if st == "removed":
+        return ["delete_source", "keep_source", "rebuild"]
+    if st == "orphan":
+        return ["keep_copy", "recycle_copy"]
+    if st in ("kept", "failed", "skipped"):
+        return ["rebuild"]
+    return []
+
+
+@app.get("/api/scrape/state")
+def api_scrape_state(library_id: str = "", status: str = "", q: str = ""):
+    """刮削台账：概览计数 + 条目列表 + worker 运行态（页面轮询此端点）。
+
+    列表带出书名 / 作者 / 源路径 / 副本路径 / 模式 / 已写字段 / 失败原因 / 可用动作。
+    书籍信息来自 ``library.books()``（已有 5s 扫描缓存），**不逐条查库**。
+    """
+    lid = str(library_id or "").strip()
+    rows = db.scrape_list(library_id=lid or None, status=status or None)
+    books = {str(b.get("id")): b for b in library.books(lid or None)}
+    lib_names = {str(l.get("id")): str(l.get("name") or "")
+                 for l in library.libraries()}
+    items = []
+    keyword = str(q or "").strip().lower()
+    for r in rows:
+        bid = str(r.get("book_id"))
+        b = books.get(bid) or {}
+        name = str(r.get("source_rel") or b.get("name") or "")
+        title = str(b.get("title") or "") or name
+        author = str(b.get("author") or "")
+        if keyword and keyword not in f"{name} {title} {author}".lower():
+            continue
+        l_id = str(r.get("library_id") or "")
+        pdir = publish.publish_dir(l_id)
+        rel = str(r.get("link_rel") or "")
+        st = str(r.get("status") or "")
+        items.append({
+            "book_id": bid, "library_id": l_id,
+            "library_name": lib_names.get(l_id, ""),
+            "name": name, "title": title, "author": author,
+            "status": st, "status_label": _SCRAPE_LABELS.get(st, st),
+            "source_path": str(pathlib.Path(
+                (library.get_library(l_id) or {}).get("root_path") or "") / name),
+            "copy_path": str(pdir / rel) if (pdir and rel) else "",
+            "link_rel": rel, "link_mode": str(r.get("link_mode") or ""),
+            "shared": bool(r.get("link_shared")),
+            "embedded": [x for x in str(r.get("embedded") or "").split(",") if x],
+            "has_cover": bool(r.get("has_cover")),
+            "error": str(r.get("error") or ""),
+            "attempts": int(r.get("attempts") or 0),
+            "removed_at": float(r.get("removed_at") or 0),
+            "removed_path": str(r.get("removed_path") or ""),
+            "confirmed_at": float(r.get("confirmed_at") or 0),
+            "updated_at": float(r.get("updated_at") or 0),
+            "actions": _scrape_actions(st),
+            "degraded": st in ("removed", "orphan"),
+        })
+    counts = db.scrape_counts(lid or None)
+    # 当前筛选范围内有没有「配了成品目录」的库？没有的话，空状态要给的是
+    # 「去书库管理设置成品目录」而不是含糊的「暂无记录」—— 否则用户会以为功能坏了。
+    if lid:
+        publish_ok = publish.publish_dir(lid) is not None
+    else:
+        publish_ok = any(publish.publish_dir(str(l.get("id")))
+                         for l in library.libraries())
+    return {
+        "items": items, "count": len(items), "counts": counts,
+        "total": sum(counts.values()),
+        "pending": int(counts.get("pending", 0)) + int(counts.get("running", 0)),
+        "needs_confirm": int(counts.get("removed", 0)) + int(counts.get("orphan", 0)),
+        "worker": scrape.worker_state(),
+        "labels": _SCRAPE_LABELS,
+        "actions": scrape.ACTIONS,
+        "auto_enabled": scrape.enabled(lid or None),
+        "publish_configured": publish_ok,
+    }
+
+
+@app.post("/api/scrape/run")
+def api_scrape_run(payload: dict = Body(default=None)):
+    """开始刮削 / 重新刮削：入队 + 唤醒 worker（**异步**，进度看 /state 轮询）。
+
+    ``{library_id?, force?, only_failed?}``：
+    - 不带 ``library_id`` = 全部**配置了成品目录**的库；
+    - ``force=True`` = 忽略「已是最新」，强制重新抓取并重建副本；
+    - ``only_failed=True`` = 只重排当前失败的条目（轻量重试）。
+    """
+    p = payload or {}
+    lid = str(p.get("library_id") or "").strip()
+    force = bool(p.get("force"))
+    if p.get("only_failed"):
+        rows = db.scrape_list(library_id=lid or None, status="failed")
+        queued = 0
+        for r in rows:
+            b = library.by_id(r.get("book_id"))
+            if b and scrape.enqueue(b, force=True, reason="retry").get("queued"):
+                queued += 1
+        total = len(rows)
+    else:
+        res = scrape.enqueue_library(lid or None, force=force)
+        total, queued = int(res.get("total") or 0), int(res.get("queued") or 0)
+    started = scrape.start()
+    scrape.wake()
+    activity_log.log(activity_log.ACTION_SCRAPE, lid or "全部书库",
+                     activity_log.STATUS_OK,
+                     detail=f"{'强制重新' if force else ''}刮削：排队 {queued} / 共 {total}",
+                     source="api")
+    return {"ok": True, "queued": queued, "total": total, "started": started}
+
+
+@app.post("/api/scrape/verify")
+def api_scrape_verify(library_id: str = ""):
+    """校验副本是否还在：缺失 → 标记「待确认」，源不在 → 标记「孤本」。
+
+    ⚠️ **只标记、不处置** —— 不删源文件、不自动重建（用户空闲时在页面上确认）。
+    """
+    res = scrape.verify(str(library_id or "").strip() or None)
+    return {"ok": True, **res}
+
+
+@app.post("/api/scrape/{bid}/resolve")
+def api_scrape_resolve(bid: str, payload: dict = Body(default=None)):
+    """对某本书执行用户显式处置（删原文件 / 保留 / 重建 / 清理副本）。
+
+    这是**唯一**能把降级状态（待确认 / 孤本）带回已出版的入口。
+    """
+    action = str((payload or {}).get("action") or "").strip()
+    if action not in scrape.ACTIONS:
+        raise HTTPException(400, "未知处置动作")
+    res = scrape.resolve(bid, action)
+    if not res.get("ok"):
+        raise HTTPException(400, str(res.get("error") or "处置失败"))
     return res
 
 
@@ -3481,6 +3799,12 @@ def api_entity_rename_preview(payload: dict = Body(...)):
 
 @app.post("/api/entities/rename/apply")
 def api_entity_rename_apply(payload: dict = Body(...)):
+    """执行实体改名 / 合并：**只改文件名 + 写服务端元数据，绝不改写 EPUB 内容**。
+
+    第 18 期起 ``meta_field`` 落点从「OPF 内部」改为 ``meta_override`` ——
+    文件名照旧真改（那是这个工具的本质），但原文件字节保持原样；
+    列表 / 详情 / 实体聚合按新名字走（见 ``library._scan_once`` 的批量合并）。
+    """
     type_ = str(payload.get("type") or "author")
     if type_ not in ("author", "series"):
         raise HTTPException(400, "type 只能是 author 或 series")

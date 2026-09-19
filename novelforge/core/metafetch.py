@@ -1,6 +1,6 @@
 """元数据抓取引擎：候选 → 按策略决定改什么 → 预览 → 应用。
 
-分工：`metasources` 只管查（网络）· 本模块管**决策与落盘** · `fileops` 管 OPF/zip 重写。
+分工：`metasources` 只管查（网络）· 本模块管**决策与落库**。
 
 **一律先预览、再应用**（与批量重命名、查重同一范式）：
 - :func:`plan` 只算不改，返回每本书的字段级「当前值 → 建议值 + 来源 + 置信度」
@@ -8,8 +8,10 @@
 
 两条硬规则：
 
-1. **只写 EPUB**：PDF / CBZ / MOBI 没有可写的 OPF，plan 里直接标为「跳过」并说明原因，
+1. **只支持 EPUB**：PDF / CBZ / MOBI 没有可编辑的元数据语义，plan 里直接标为「跳过」并说明原因，
    而不是假装能改（那会让用户以为抓取失败了）。
+   ⚠️ 第 17 期 T3：结果**只存服务端 DB**（``meta_online`` / ``meta_cover``），**绝不改写 EPUB 文件**；
+   ``fileops`` 的 OPF/zip 重写能力保留给结构性重排（改名 / 系列），不在本链路调用。
 2. **字段策略先于一切**：`fill_only`（默认，只在原值为空时写）→ `overwrite` → `skip`。
    默认 fill_only 是刻意的：抓取来的元数据**没有用户自己写/改过的值可信**。
 """
@@ -256,15 +258,10 @@ def apply(items: list, cfg: dict = None) -> dict:
 
     ⚠️ 只认前端回传的**具体值**，不接受「用第 N 个候选」这种间接指令 ——
     与 `apply_rename` 同一原则：规则若在两端解释不一致就会写错数据。
-    """
-    mf = _cfg(cfg)
-    customs = {}
-    for cf in (mf.get("custom_fields") or []):
-        name = str((cf or {}).get("name") or "").strip()
-        val = str((cf or {}).get("value") or "").strip()
-        if name and val:
-            customs[name] = val
 
+    第 17 期 T3：结果**只存服务器 DB**（数值 → ``meta_online``，封面 → ``meta_cover``），
+    **绝不改写 Epub 文件**。列表 / 详情 / 封面接口都从服务端读取生效值。
+    """
     applied, failed, covers = [], [], 0
     for it in items or []:
         it = it if isinstance(it, dict) else {}
@@ -280,44 +277,33 @@ def apply(items: list, cfg: dict = None) -> dict:
             if not path.is_file():
                 raise ValueError("文件不存在")
             if path.suffix.lower() != ".epub":
-                raise ValueError("只有 EPUB 支持写回元数据")
+                raise ValueError("只有 EPUB 支持在线元数据")
 
             updates = {k: v for k, v in fields.items()
                        if k in fileops.METADATA_FIELDS and (v not in ("", None, []))}
 
-            # 把「将要写回的在线值」记进 meta_online（仅供「恢复在线」回退，不参与展示优先）
+            bid = it.get("book_id") or library.book_id(name, fileops._lib_of(name, it))
+            # 在线值只记服务端（供展示与「恢复在线」回退），不下写文件
             if updates:
-                bid = it.get("book_id") or library._book_id(name)
                 db.set_online(bid, {k: (v, "") for k, v in updates.items()})
 
-            add_files = None
-            href = mt = ""
+            # 封面同样只存服务端缓存；下载失败不阻断元数据写回
+            has_cover = False
             if cover and str(cover.get("url") or "").strip():
-                data, mt = _download_cover(str(cover["url"]))
-                opf_path, _, _ = fileops._read_epub(path)
-                if not opf_path:
-                    raise ValueError("无法定位 EPUB 的 OPF")
-                zip_rel, href = fileops.cover_paths(mt, opf_path)
-                add_files = {zip_rel: data}
+                try:
+                    data, ctype = _download_cover(str(cover["url"]))
+                    db.set_cover(bid, data, ctype)
+                    has_cover = True
+                except Exception:                    # noqa: BLE001 —— 封面失败不阻断
+                    has_cover = False
 
-            def _transform(opf, _u=updates, _h=href, _m=mt, _c=customs):
-                out = fileops.patch_opf_meta(opf, _u)
-                for k, v in _c.items():              # 自定义字段 → <meta name content>
-                    out = fileops._set_meta_name(out, k, v)
-                if _h:
-                    out = fileops.set_epub_cover(out, _h, _m)
-                return out
-
-            if not updates and not add_files and not customs:
+            if not updates and not has_cover:
                 raise ValueError("没有需要写入的内容")
-            if not fileops.rewrite_epub(path, transform=_transform, add_files=add_files):
-                raise ValueError("EPUB 写入失败（可能是只读或损坏）")
         except Exception as e:                       # noqa: BLE001 —— 单本失败不影响其余
             failed.append({"name": name, "error": str(e)})
             continue
-        applied.append({"name": name, "fields": sorted(updates.keys()),
-                        "cover": bool(add_files)})
-        if add_files:
+        applied.append({"name": name, "fields": sorted(updates.keys()), "cover": has_cover})
+        if has_cover:
             covers += 1
 
     if applied:
