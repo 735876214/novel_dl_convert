@@ -46,38 +46,6 @@ def publish_dir(library_id) -> "pathlib.Path | None":
     return pathlib.Path(raw) if raw else None
 
 
-def _index_text(book: dict) -> str:
-    """``{index}`` 的取值：优先该书**自己的系列卷号**（``series_index``），
-    其次调用方塞的 ``seq``（本库顺序），最后 ``01``。
-
-    与批量改名的 ``{index}``（本次范围内的流水号）**语义不同** —— 出版要的是
-    「这本书是第几卷」，不是「今天刮到第几本」；流水号会让文件名每刮一次就变。
-    """
-    for raw in (book.get("series_index"), book.get("seq")):
-        s = str(raw or "").strip()
-        if s.isdigit() and int(s) > 0:
-            return f"{int(s):02d}"
-    return "01"
-
-
-def fill_pattern(pattern: str, book: dict, ext: str = "") -> str:
-    """展开命名规则占位符 —— 缺省值与扩展名口径与 ``fileops.plan_pattern_rename``
-    一致（{title} 退化到文件名、{author} → 未知、{series} → 无系列、扩展名不带点），
-    避免两处解释不一致改错名字。
-    """
-    stem = pathlib.PurePosixPath(str(book.get("name") or "")).stem
-    e = (ext or pathlib.Path(str(book.get("name") or "")).suffix).lstrip(".")
-    filled = (
-        str(pattern or "")
-        .replace("{title}", str(book.get("title") or "") or stem)
-        .replace("{author}", str(book.get("author") or "") or "未知")
-        .replace("{series}", str(book.get("series") or "") or "无系列")
-        .replace("{index}", _index_text(book))
-        .replace("{ext}", e)
-    )
-    return fileops.sanitize_stem(filled)
-
-
 def relpath_for(book: dict, cfg: dict = None) -> str:
     """副本在**成品目录**下的相对路径（``/`` 分隔）。
 
@@ -93,7 +61,9 @@ def relpath_for(book: dict, cfg: dict = None) -> str:
     # scope 限定「规则适用于哪些格式」：不在范围内就保留原文件名
     in_scope = scope in ("", "all", ext.lstrip(".").lower())
     if pattern and in_scope:
-        stem = fill_pattern(pattern, book, ext) or stem
+        # 展开走 fileops.fill_pattern —— **全项目唯一实现**（第 28 期合并，
+        # 原先这里是只认 5 个占位符的第二套实现，与预览各说各话）
+        stem = fileops.fill_pattern(pattern, book, ext) or stem
     layout = str(((cfg or {}).get("output") or {}).get("layout") or "flat")
     rel = komga.relpath_for(stem, ext, str(book.get("series") or ""),
                             str(book.get("series_index") or ""), layout)
@@ -193,6 +163,28 @@ def embed_meta(dst, updates: dict = None, cover=None) -> list:
     return sorted(ups.keys())
 
 
+#: 落点被占时的处置（见 :func:`rel_verdict`）
+REL_REUSE = "reuse"          # 落点空着，或已是**本源**的硬链接 → 直接用
+REL_REBUILD = "rebuild"      # 是**本书记台账的**旧副本 → 回收后重建
+REL_DECLINE = "decline"      # **不属于这本书**的东西占着 → 退让改名，绝不覆盖
+
+
+def rel_verdict(pdir: pathlib.Path, rel: str, src=None, prev_rel: str = "") -> str:
+    """落点 ``rel`` 已存在时该怎么处置。**只读**：不建目录、不动文件。
+
+    ``publish`` 与「重命名预览」共用这一份判据 —— 预览必须能预先说出「哪几本会退让
+    改名（``书名 (2).ext``）」，否则预览名与实际落盘名就会各说各话（第 28 期）。
+    """
+    dst = pdir / rel
+    if not dst.exists():
+        return REL_REUSE
+    if src is not None and same_file(src, dst):
+        return REL_REUSE
+    if prev_rel and str(prev_rel) == rel:
+        return REL_REBUILD
+    return REL_DECLINE
+
+
 def _free_rel(pdir: pathlib.Path, rel: str) -> str:
     """目标已被**非本系统生成**的文件占用时，找一个不冲突的新名字。
 
@@ -241,16 +233,14 @@ def publish(book: dict, *, cfg: dict = None, updates: dict = None, cover=None,
         dst = pdir / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
 
-        # 目标已存在：是我们自己的就复用/覆盖，是别人的就退让改名
-        if dst.exists():
-            if same_file(src, dst):
-                pass                                  # 已是本源的硬链接，直接用
-            elif prev_rel and str(prev_rel) == rel:
-                # 上次我们自己产的副本（复制模式，或源换过 inode）→ 移入回收后重建
-                recycle(dst, why="重建副本")
-            else:
-                rel = _free_rel(pdir, rel)
-                dst = pdir / rel
+        # 目标已存在：是我们自己的就复用/重建，是别人的就退让改名（判据与预览共用）
+        verdict = rel_verdict(pdir, rel, src, prev_rel)
+        if verdict == REL_REBUILD:
+            # 上次我们自己产的副本（复制模式，或源换过 inode）→ 移入回收后重建
+            recycle(dst, why="重建副本")
+        elif verdict == REL_DECLINE:
+            rel = _free_rel(pdir, rel)
+            dst = pdir / rel
 
         if not dst.exists():
             out["mode"] = link_or_copy(src, dst)

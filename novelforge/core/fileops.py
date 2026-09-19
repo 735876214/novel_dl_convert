@@ -37,7 +37,8 @@ _BAD_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 # 其它非法字符（路径分隔符、Windows 保留结尾的点和空格）
 _BAD_TAIL = re.compile(r"[. ]+$")
 
-#: 批量重命名规则里可用的占位符，前端据此给出提示。
+#: 命名规则里可用的占位符，前端据此给出提示。**这是全项目唯一真值源** ——
+#: 展开逻辑只有 :func:`fill_pattern` 一份（第 28 期合并，设置页预览与刮削出版共用）。
 #: 第 20 期扩到 9 个 —— **只加书目里真实存在的字段**（`library.books()` 的
 #: year / publisher / language / series_index）；加不出真实值的一律不加。
 PATTERN_FIELDS = ("{title}", "{author}", "{series}", "{series_index}", "{index}",
@@ -103,6 +104,58 @@ def sanitize_stem(stem: str) -> str:
     s = _BAD_CHARS.sub("", (stem or "").strip())
     s = _BAD_TAIL.sub("", s)
     return s.strip()
+
+
+# ---------------- 命名规则（唯一实现） ----------------
+
+def index_text(book: dict) -> str:
+    """``{index}`` 的取值：优先该书**自己的系列卷号**（``series_index``），
+    其次调用方塞的 ``seq``（本库顺序），最后 ``01``。
+
+    ⚠️ 这是**系列卷号**语义（「这本书是第几卷」），不是「本次处理到第几本」的流水号：
+    流水号会让文件名每处理一次就变，也正是「预览名与实际落盘名对不上」的老根因
+    （第 28 期合并前的 ``plan_pattern_rename`` 用的是流水号）。
+    """
+    for raw in (book.get("series_index"), book.get("seq")):
+        s = str(raw or "").strip()
+        if s.isdigit() and int(s) > 0:
+            return f"{int(s):02d}"
+    return "01"
+
+
+def fill_pattern(pattern: str, book: dict, ext: str = "", seq: str = "") -> str:
+    """展开命名规则占位符 —— **全项目唯一实现**：设置页预览、刮削出版、重出版共用。
+
+    支持 ``PATTERN_FIELDS`` 的 9 个占位符；缺省值口径：``{title}`` 退化到文件名、
+    ``{author}`` → 未知、``{series}`` → 无系列、扩展名不带点。
+
+    ``seq`` 是给 ``{index}`` 的兜底（书目里没有系列卷号时用），调用方按需给。
+    ``ext`` 不给时从 ``book["name"]`` 的后缀取。
+
+    ⚠️ 替换顺序**先长后短**：``{series_index}`` 必须排在 ``{series}`` / ``{index}``
+    之前处理，否则会被短 token 抢先吃掉一半（``str.replace`` 只看字面量，不认词边界）。
+
+    ⚠️ **不要在这里加「空值清理」规则**（合并空占位符残留的分隔符、去首尾分隔符）：
+    那会一次性改掉所有存量副本的落盘结果，属于另一件事、需要单独拍板（第 28 期明确不做）。
+    """
+    b = dict(book or {})
+    if seq:
+        b.setdefault("seq", seq)
+    suffix = ext or pathlib.Path(str(b.get("name") or "")).suffix
+    stem = pathlib.PurePosixPath(str(b.get("name") or "")).stem
+    filled = (
+        str(pattern or "")
+        .replace("{series_index}", str(b.get("series_index") or ""))
+        .replace("{title}", str(b.get("title") or "") or stem)
+        .replace("{author}", str(b.get("author") or "") or "未知")
+        .replace("{series}", str(b.get("series") or "") or "无系列")
+        .replace("{index}", index_text(b))
+        .replace("{year}", str(b.get("year") or ""))
+        .replace("{publisher}", str(b.get("publisher") or ""))
+        .replace("{language}", str(b.get("language") or ""))
+        .replace("{ext}", str(suffix).lstrip("."))
+    )
+    return sanitize_stem(filled)
 
 
 # ---------------- 预览 ----------------
@@ -197,14 +250,9 @@ def plan_pattern_rename(scope: str, pattern: str, library_id=None) -> dict:
     """按规则生成「旧名 → 新名」预览。
 
     规则里可用 ``PATTERN_FIELDS`` 里的 9 个占位符（书名 / 作者 / 系列 / 系列序号 /
-    本次范围序号 / 出版年 / 出版社 / 语言 / 扩展名）。
+    卷号 / 出版年 / 出版社 / 语言 / 扩展名）—— 展开走 :func:`fill_pattern`（唯一实现）。
     ``scope`` 传扩展名（如 ``epub``，不带点）可只处理该格式；留空或 ``all`` 表示全部。
-    ``library_id`` 给定时只处理该库的书（缺省 = 全部书库）；``{index}`` 序号
-    按**本次范围**重新计数 —— 只改一个库时从 01 开始，符合「当前库」的预期；
-    ``{series_index}`` 则是书目里的**系列序号原值**（读不到就是空串），两者语义不同。
-
-    ⚠️ 替换顺序：先长后短 —— ``{series_index}`` 必须排在 ``{series}`` / ``{index}``
-    之前处理，否则会被短 token 抢先吃掉一半（``str.replace`` 只看字面量，不认词边界）。
+    ``library_id`` 给定时只处理该库的书（缺省 = 全部书库）。
     """
     pat = (pattern or "").strip()
     if not pat:
@@ -214,26 +262,11 @@ def plan_pattern_rename(scope: str, pattern: str, library_id=None) -> dict:
 
     want = (scope or "").strip().lstrip(".").lower()
     items = []
-    idx = 0
     for b in library.books(library_id):
         suffix = pathlib.Path(b["name"]).suffix
         if want and want != "all" and suffix.lstrip(".").lower() != want:
             continue
-        idx += 1
-        stem = pathlib.Path(b["name"]).stem
-        # ⚠️ 先长后短：{series_index} 必须在 {series} / {index} 之前替换
-        filled = (
-            pat.replace("{series_index}", str(b.get("series_index") or ""))
-            .replace("{title}", b["title"] or stem)
-            .replace("{author}", b["author"] or "未知")
-            .replace("{series}", b["series"] or "无系列")
-            .replace("{index}", f"{idx:02d}")
-            .replace("{year}", str(b.get("year") or ""))
-            .replace("{publisher}", b.get("publisher") or "")
-            .replace("{language}", b.get("language") or "")
-            .replace("{ext}", suffix.lstrip("."))
-        )
-        new_stem = sanitize_stem(filled)
+        new_stem = fill_pattern(pat, b, suffix)
         if not new_stem:
             continue
         items.append({**_mk_item(b["name"], f"{new_stem}{suffix}"),
