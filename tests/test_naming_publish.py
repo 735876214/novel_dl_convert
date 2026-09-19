@@ -329,3 +329,34 @@ def test_publish的落点判据与预览一致(env):
     # 落点就是本书记台账的旧副本 → 回收后重建（不是退让、也不是复用）
     assert publish.rel_verdict(env["pdir"], rel, pathlib.Path("/nowhere"), rel) \
         == publish.REL_REBUILD
+
+
+# ---------------------------------------------------------------------------
+# ⑤ 与实体改名不交叉：改名只写元数据，重出版只改副本名
+# ---------------------------------------------------------------------------
+
+def test_实体改名后重出版用新名字而源文件名不变(env):
+    """两条路各管一头，谁也不碰源文件：
+
+    · 实体改名 → 写服务端元数据（源文件名不动）；
+    · 重出版   → 按规则展开**生效**元数据 ⇒ 副本名跟着变成新作者名。
+    """
+    src = _epub(env["root"], "基地.epub", title="基地", author="阿西莫夫")
+    _rule(env, "{author} - {title}")
+    _publish(env, "基地.epub")
+    fp_before = _fp(src)
+
+    res = fileops.apply_entity_rename("author", "阿西莫夫", "艾萨克·阿西莫夫", env["lid"])
+    assert res["count"] == 1 and res["errors"] == []
+    assert src.name == "基地.epub" and _fp(src) == fp_before, "实体改名不碰源文件"
+
+    plan = scrape.plan_naming(env["lid"])
+    it = plan["items"][0]
+    assert it["old_rel"] == "阿西莫夫 - 基地.epub"
+    assert it["new_rel"] == "艾萨克·阿西莫夫 - 基地.epub", "规则展开读的是生效值"
+    assert it["changed"] is True and not it["conflict"]
+
+    assert scrape.republish(None, env["lid"])["done"] == 1
+    assert db.scrape_get(it["book_id"])["link_rel"] == it["new_rel"]
+    assert src.name == "基地.epub" and _fp(src) == fp_before, "重出版也不碰源文件"
+    assert not (env["pdir"] / "阿西莫夫 - 基地.epub").exists(), "旧副本已回收，不留双份"
