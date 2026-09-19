@@ -1,117 +1,82 @@
 # 长期记忆（novel_dl_convert / NovelForge）
 
-> 真值源 = `.codebuddy/memory/`；结构性决策留本文件，逐期细节看同名日记 `YYYY-MM-DD.md`。
+> 真值源 = `.codebuddy/memory/`；逐期细节看同名日记 `YYYY-MM-DD.md`（git 历史亦存）。
 
-## 项目 / 约定
-- **TXT 小说 → EPUB 工具**，NAS/容器部署；`input`/`output` 物理分离；FastAPI + CLI；可插拔书源（Gutenberg + JSON 规则）。镜像 `ghcr.io/735876214/novel_dl_convert:latest`。
-- **删功能要删干净**（照搬第 11 期删 C1）：路由 + 模块 + db CRUD + 能力键 + 前端页面/路由/api 方法 + 文档四处 + 记忆，并加「接口返回 404」的防回归断言；db 建表语句可保留（幂等无害，老库可能已有）。
-- **写计划只写四块**：需求来源 / 功能范围 / 防回归要点 / 任务清单；**不要**输出架构设计、目录结构、关键代码结构（2026-09-18 用户明确要求）。
-- **提交即推送**：做完 `git add → commit → push`，中文信息，**按能力拆多个 commit**（`feat(core)` → 各能力 → `feat(server)` 接线 → `feat(frontend)` → `chore(build)` → `docs`）。
-- 视觉**严格照搬 BookOrbit**（自创已否决）；**零外部请求**；**局部更新**，不重建 DOM。
-- ⚠️ 本工作区**可能同时有另一个 AI 会话**：改文件前先 `git status`；别人的改动不回退；临时文件放 `/tmp`；写记忆一律**追加**。
+## 项目 / 硬约定
+- TXT→EPUB 工具，NAS/容器部署；`input`/`output` 物理分离；FastAPI + CLI；可插拔书源。镜像 `ghcr.io/735876214/novel_dl_convert:latest`。
+- 删功能要删干净（路由+模块+db CRUD+能力键+前端页面/路由/api+文档+记忆+404 防回归断言）。
+- 写计划只写四块：需求来源/功能范围/防回归要点/任务清单（用户 2026-09-18 明确要求，不要架构/目录/代码结构）。
+- 提交即推送：中文 commit，按能力拆多 commit。
+- 视觉严格照搬 BookOrbit；零外部请求；局部更新不重建 DOM。
+- ⚠️ 可能同时有另一 AI 会话：改文件前先 `git status`；别人改动不回退；临时文件放 `/tmp`；写记忆追加。
 
-## 记忆 / Git / 环境
-- `.gitignore`：`.codebuddy/*` + `!.codebuddy/memory/`（否定规则须配 `/*` 且**不带尾斜杠**）；忽略 `data/`、`*.db`、`/data-test/`、`.playwright-cli/`、`novelforge/static/v2/`。
-- 认证走 **GCM**；URL 内嵌 token 与 `insteadof` 明文重写已清除，**勿再引入**。推送失败先查认证/网络，别改 git config。
-- Python 需 **3.10+**（放 `.venv`）；Node v20/22 皆可。**Docker daemon 可用**（Linux 容器环境），本机网络对外有限制。
-- 行尾必须 **LF**（`.gitattributes` 已锁）；CRLF 会让容器 `sh /app/start.sh` 报 `set: Illegal option -` 并反复重启。
+## Git / 环境 / 构建
+- `.gitignore`：`.codebuddy/*` + `!.codebuddy/memory/`（否定规则配 `/*`）；忽略 `data/`、`*.db`、`novelforge/static/v2/`。
+- 认证走 GCM；URL 内嵌 token / `insteadof` 明文重写已清除，勿再引入。推送失败先查认证/网络，别改 git config。
+- Python 需 3.10+（`.venv`，用 `.venv/bin/python` 或 `/Users/stromboid/.local/bin/python3.12`）；Node v20/22 皆可。Docker daemon 可用，本机对外网络有限。
+- 行尾必须 LF（`.gitattributes` 锁）；CRLF 让容器 `sh /app/start.sh` 报 `set: Illegal option -` 反复重启。
 
-## 前端栈 / 规范
-- `frontend/` = **Vue 3 SFC + TS + Vite 8 + Tailwind v4 + Pinia 4 + vue-router 5**（勿再往 `novelforge/static/` 加手写页面）；产物落 `novelforge/static/v2/`（gitignore），FastAPI 挂 `/static`，`/` 服务其 `index.html`（缺失 503）；路由 **hash 模式**。
-- 样式**全用** Tailwind v4 工具类 + BookOrbit 语义 token；重复类串封装进 `components/ui/*`。**`bridge.css` 是前提**（`@theme inline` 桥接层）；**`main.css` 必须有 `@custom-variant dark (&:is(.dark *));`**。
-- 主题：`<html>` 挂 `dark`/`accent-*`/`radius-*`；localStorage `theme`/`accent`/`radius`（JSON）+ `nav-collapsed`/`dashboard-widgets`/`dashboard-shelves`；`index.html` 防 FOUC。BookOrbit **默认暖中性**，蓝只是 accent 之一。
-- 仪表盘 = 部件行（`widgets/registry.ts` 12 登记 / 3 实现，未实现置灰）+ 书架行；**演示数据必须确定性常量，禁止 `Math.random()`**。
-- `settingsNav.ts`/`router` 里「标 ready 但未注册组件」会 `console.error` → **注册表与组件必须同批改**（`libraries` 页已是 `placeholder`，只跳 `/tools/libraries`）。
-- ⚠️ **Vue 模板不渲染 markdown**：模板里写 `**强调**` 会原样显示星号 → 静态文本用 `<strong>`，JS 字符串别加星号。
-- **侧栏**：品牌区 → 主导航（仪表盘/探索发现/任务中心/工具）→ 四个可折叠组（浏览/库/智能书架/收藏夹），无 footer。**顶栏顺序固定**：侧栏开关 → 全局搜索（⌘K）→ 通知 → 数据统计 → 任务面板（抽屉）→ 主题 → 设置 → 头像。`/settings` 用 `SettingsSidebar`（含「返回主界面」+ `SETTINGS_GROUPS`）替换 `AppSidebar`。
+## 自动化测试（硬前提）
+- `.venv/bin/python -m pytest`（完全离线）；dev 依赖在 `requirements-dev.txt`。约 242 passed。
+- ⚠️ 全量跑完在解释器退出时会打一段 lxml faulthandler dump（既有环境现象，排除新用例同样出现），**以「N passed」为准**；仍会打印 exitCode 0。
+- 两条硬前提：① 环境变量必须在 import 业务模块前设置（`config` 导入即固化目录、`server.py` 导入即 `ensure_dirs()`）；② `db` 的 `_conn`/`_db_path` 模块级缓存→隔离靠 `db.close()`。
+- 碰书库/DB 用例必须 `isolated`；接口用 `client`+`auth_headers`。假 EPUB（`b"EPUB"`）够扫描类；元数据写回/系列解析必须真 EPUB（`epub_builder.build_epub`）。不测会外呼的接口；`GET /` 会 503。
+- 库 id 由名称派生（中文 slug 空→`lib-<sha1[:8]>`）；测试库根必须在 `LIBRARY_SOURCE_DIR` 下。
 
-## 工具页（单页 9 标签，硬约定）
-- `ToolsLayout.vue` = `/tools` 外壳，只有「标签栏 + 嵌套 `<RouterView>` + `KeepAlive :max="8"`」，**无卡片外框与内边距**。顺序：书库管理/实体管理/批量重命名/重复书籍/缺失资源 → 书源管理/导出目录/本地转换/转换日志；后段三个**按当前库能力裁剪**；**不做权限门控**。
-- **状态保持硬要求**：子页用 `onActivated`（**别挂 `onMounted`**），**不要在 `onActivated` 里重置用户输入/勾选/预览**。
-- **改磁盘的工具一律「先预览、再应用」**；`apply` 只认前端回传的**具体条目**；**删除即移入回收目录**（`CACHE_DIR/recycle`，**永不 `unlink`**）；每次改动写活动日志。
-- 四个工具页（实体管理/批量重命名/重复书籍/缺失资源）有「范围：当前库 / 全部书库」（`LibraryScopeSwitch.vue`）；全部时按库分组并标「跨库重复」。
+## 后端硬约束
+- core 内引用配置一律 `from .. import config`；`import config` 被同名命名空间包劫持（py_compile 抓不到，启动才炸）。
+- 写磁盘只用 rename/move，**从不 unlink**；删除即移入回收目录（`CACHE_DIR/recycle`）。**禁 `config.OUTPUT_DIR / b["name"]`** → 一律 `library.root_of(b) / b["name"]`。
+- 库根只允许落在 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR` 内（`safe_path` 边界）。`book_id` 由 basename 派生、库维度化（`库$哈希`）。
+- 新增库表列**必须**同进 `db._LIBRARY_COLS`，否则 `update_library` 静默写不进。
 
-## 后端模块
-- `core/library.py`（只读）：按 `libraries` 表**逐库扫描并合并**，EPUB 真解 zip 读 OPF；**缓存按库分桶**（TTL 5s + 目录指纹），写后 `invalidate(library_id)`。`BookCard.id` = `_book_id`（**basename 派生**）；**`name` = 相对所属库根的路径**；`by_id` 命中多库**显式报错**（`BookIdConflict`）。
-- `core/fileops.py`（写）：`safe_path(name, library_id)`（拒分隔符/`..`/绝对路径；父目录**恰好**是所属库根）、`plan_*` 预览、`apply_rename`、`apply_conflict_rename`、`recycle_items`、`apply_komga_layout`、`patch_epub_meta`/`patch_opf_meta`/`rewrite_epub`。**只用 `rename`/`move`，从不 `unlink`。** ⚠️ **禁止 `config.OUTPUT_DIR / b["name"]`** —— 一律 `library.root_of(b) / b["name"]`。
-- `core/pipeline.py` 分发（`.txt` 转换 / 电子书复制 / 其它跳过），`EBOOK_EXT` 含 `.cbz/.cbr` 与音频。`core/comics.py` CBZ/CBR **zip/rar 双后端 + 魔数嗅探**，缺解压器 503。`core/audio.py` 音频目录 = 一本书。`core/komga.py` 系列推断**保守**。
-- `sources/`（gutenberg/generic/rules/store/manager）；`server.py` 只做校验与胶水；`cli.py` convert/search/download/update/watch/scan/logs。
-- `activity_log.py`：**双写** `activity.log` + `activity.jsonl`，失败降级临时目录；**内存与文件都存旧→新，`reversed()` 后给 API**。
-- `watcher.py`：**轮询**；写入稳定判定（连续 `stable_rounds` 次同 size）；状态存 `CACHE_DIR/watcher_state.json`；失败 3 次跳过；`_target()` → `(库实体|None, 库根)`。
-- ⚠️ core 内引用配置一律 `from .. import config`；`import config` 会被同名命名空间包劫持（**py_compile 抓不到，启动才炸**）。
+## 配置分层（第 13 期，已实现）
+- `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时叠加 `生效值 = 每库覆写 ?? 全局值`，落点 `libraries.settings`（稀疏 JSON，键=点分路径）。
+- `core/lib_settings.py`：`effective()`/`config_for()`/`apply_to()`/`set_overrides`/`clear_overrides`/`schema()`；与 `features.allows_setting` 联动，`features.SETTING_CAPS` 唯一真值源。接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（`?keys=` 按项恢复）。
+- 覆盖项：`output.format/layout`、`watcher.recursive/copy_non_txt`、`metadata_fetch.*`、`naming.pattern/scope`、`scrape.enabled`。（库实体属性 `watch`/`scan_interval`/`scan_cron`/`publish_path` 是列，非覆盖项。）
 
-## 配置分层（第 13 期：四层 + 每库覆盖）
-- `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时叠加 `生效值 = 每库覆写 ?? 全局值`。落点 `libraries.settings`（**稀疏 JSON**，键 = 全局点分路径如 `output.layout`；**只存被覆写的键**），老库靠幂等 `ALTER TABLE libraries ADD COLUMN settings`。
-- `core/lib_settings.py`：`effective()`（生效值 + `overridden` + `overrides`）/ `config_for()`（**深拷贝**）/ `apply_to()`（只并入**真正覆写过**的键 → 「库没覆写 = 行为不变」）/ `set_overrides`（`None` = 恢复继承，全清则整体摘掉）/ `clear_overrides(keys?)` / `schema(type)`。**不改 `config.load_config()` 语义。**
-- 与 `features.allows_setting` 联动：库类型没这能力 → 覆盖项**不返回、不生效**（历史残留也不会「活过来」）；`features.SETTING_CAPS` 是唯一真值源。接口：`GET/PUT/DELETE /api/libraries/{lid}/settings`（`?keys=` 按项恢复）。
-- `db.py` 新增列**必须**同进 `_LIBRARY_COLS`，否则 `update_library` **静默写不进**。
-- 覆盖项：`output.format`、`output.layout`、`watcher.recursive`、`watcher.copy_non_txt`、`metadata_fetch.enabled/.threshold/.fields`、`naming.pattern/.scope`。
+## 前端栈 / 规范（要点）
+- `frontend/` = Vue 3 SFC + TS + Vite 8 + Tailwind v4 + Pinia 4 + vue-router 5（hash 模式）；产物落 `novelforge/static/v2/`，FastAPI 挂 `/static`，`/` 服务其 `index.html`（缺失 503）。勿往 `novelforge/static/` 加手写页。
+- `bridge.css` 是前提（`@theme inline`）；`main.css` 必须 `@custom-variant dark (&:is(.dark *));`。
+- 仪表盘演示数据必须确定性常量，禁 `Math.random()`。`settingsNav`/router「标 ready 未注册组件」会 `console.error` → 注册表与组件同批改。
+- Vue 模板不渲染 markdown → 静态文本用 `<strong>`，JS 字符串别加星号。
+- 工具页 `ToolsLayout.vue` = `/tools` 外壳（标签栏+嵌套 RouterView+KeepAlive :max=8，**无卡片外框**）；**路由子页**用 `onActivated`（别挂 `onMounted`），不在 onActivated 重置用户输入。改磁盘工具一律先预览再应用。
+- ⚠️ 例外：**页面内部的 `v-if` 子组件**（比 KeepAlive 深两层，如 `ScrapePanel`）首次挂载时 `onActivated` **不触发** → 必须用 `onMounted` 首载，`onActivated` 只做「重新激活时刷新」（用 `data` 非空之类的条件天然去重）。
+- 表格类面板要窄屏可用：宽屏 `<table class="hidden md:block">`，窄屏另写一份 `<ul class="md:hidden">` 卡片流（信息不裁剪、只换排布）。
 
-## 元数据：在线优先分层（第 8 期）
-- 分层 `meta_override`（用户编辑，受保护）> `meta_online`（在线值）> `opf`（原值）。`meta_override.orig` = **首次覆盖前的 OPF 原值**；`authors` 在线/本地覆盖**分列**，写覆盖必须 **upsert**。
-- `core/metastore.py` 分层解析，**只服务详情/编辑接口，`library.books()` 热路径不动**。`core/metafetch.py` 的 `DEFAULT_POLICY` = **`overwrite`**（可逐字段 `fill_only`/`skip`），`plan()` **跳过用户改过的字段**；策略**按书所属库**取。
-- `core/metasources.py`：OpenLibrary / Google Books（**无需 Key**）；**ISBN 精确匹配**优先，否则书名 0.7 + 作者 0.3。`core/authors.py` 头像 → **`CACHE_DIR/authors/`**（零外链）；相似度 **<0.5 视为不同人**。头像端点已进 `_MEDIA_TOKEN_PATHS`（`<img src>` 只能靠 `?token=`）。
-
-## 多书库（第 10 期）
-- **四项结构决策**（改前须重新确认）：① `/api/libraries` = **库实体**，格式分面改址 `/api/library-facets`；② **库根不设默认、逐库选**（`inplace` / `import`），库里只存**相对的** `source_subdir`；③ **迁移首次需一次确认**（预览 + manifest，阻塞等确认）；④ 保留**「全部书库」为默认不裁剪**。
-- **库是数据**（`libraries` 表）；表为空时 `ensure_default_library()` 落「默认库 = `OUTPUT_DIR`」（**启动必须调用**，漏掉会让书目为空 → 孤儿判定**真删**进度/批注）。类型 `ebook`/`comic`/`audiobook`/`mixed`。
-- `core/migrate.py`：**只挪库不改名**（`book_id` 不变）；manifest 先行 → 幂等 + 可回滚；同名**拒绝覆盖**并建议 `X (2).ext`。
-- `core/library_rules.py`：归库优先级 **来源子目录名 > 格式 > 关键词**；`resolve_target()` 返回决策结构（含跨库同名闸门），`target_root()` 是薄壳；**摄入侧取目标目录的唯一入口**（watcher/上传/convert-path/书源/OPDS 共用）。
-- **跨库同名防护（第 13 期）**：`guard_conflict` —— **同库同名 = 重新投递，放行**；跨库才抛 `IngestConflict`（带建议名）。`library.id_conflicts()`/`id_conflict_with()`/`suggest_name()`；`fileops.apply_conflict_rename()` 改名必换 `book_id` → 必须 `db.remap_book_id` 搬 `REMAP_TABLES`（否则进度/批注清零），**basename 未变必须跳过**。接口 `GET /api/library-conflicts` + `POST /api/library-conflicts/apply`。
-- **范围参数语义**：工具端点可选 `library_id`，**空串 = 全部书库 = 零行为变化**，不存在 → 404（`_opt_library()`）。
-- `core/features.py`：库类型 → 能力矩阵（真值源）；前端需求表 `AppSidebar.ITEM_FEATURE`、`ToolsLayout` 的 `feature`、`settingsNav.PAGE_FEATURE`、`dashboard.WIDGET_FEATURE`；「全部书库」= 不裁剪。
-- **安全边界**：库根**只允许**落在 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR` 之内 —— 库根就是 `safe_path` 的边界。**`book_id` 仍由 basename 派生、不做数据迁移**，跨库同名由入库冲突检测拦住。
-- 前端 `stores/library.ts`：`currentLibraryId`（localStorage `nf_current_library`，空 = 全部）、`scopedBooks`、`hasFeature`；启动阻塞确认 `MigrationGateDialog.vue`。
-
-## 系列级元数据（第 12 期）
-- **存储决策（勿擅改）**：系列级字段**只存本项目 SQLite（`series_meta`）**，绝不写回 EPUB。已知代价（用户接受）：SMB 直读看不到，连服务读全可见。
-- **分层**：**本地覆盖 > 本地聚合 > 在线补空**；册数/首发年/出版社/题材优先取**成员书 OPF 聚合**，**系列简介只能来自在线**。`owned_count` 与 `declared_count` 分开显示。
-- **在线可靠性低**：只能「系列名检索 + 成员书书名/作者打分（0.7/0.3）」，`MIN_MATCH=0.6` 以下**如实回「未找到」且不写库**；**不为好看放宽阈值或编造简介。**
-- **性能红线**：`komga_api.series_dto` 在列表端点被**逐系列**调用 → 里面**不许**调 `series_meta.effective()`；列表走 `effective_light()` + `db.all_series_meta()`。`genres` **保序去重**。
-- **`renumber_apply` 不变量**：只改 OPF `calibre:series_index`、**不动文件名**（→ `book_id` 不变）；幂等、可回滚；**必须 `safe_path(name, library_id)`**；写后 `invalidate(lid)` 并**回读 OPF 校验**。
-
-## Komga 兼容服务端（第 15 期）
-- **对外是两条通道，别混**：`/opds` = OPDS 目录；`/api/v1/*` = **冒充 Komga 服务端**（客户端把地址填成 NovelForge）。用户说「给别的设备提供 Komga 订阅源」指的是后者；真 Komga **服务端**不支持订阅外部源，那种场景只能 SMB/NFS 挂目录或让客户端直连。
-- **可见性只有一处判定**：`_ko_visible_libraries()`（库类型具备 `features` 的 `komga` 能力）。**有声书库天然没有该能力** → 不进 Komga（Komga 无音频模型，硬塞就是打不开的坏条目）。不新增配置项，库类型改了自动跟着变。
-- **按库过滤**：`komga_api.grouped(library_id=None)` / `find_series(name, library_id=None)` 默认 `None` = 全库（三个单系列端点零变化）；server 侧 `_ko_books` / `_ko_grouped` / `_ko_library_id_of`。不传库 = 全部**可见**库 = 与之前一致。
-- **系列 id 由名字派生，不能改**（客户端已用它存进度 / 收藏）→ 同名系列跨库时只出现在第一本所在库，这是已知取舍，别为此改派生方式。
-- **系列级进度**：官方 `POST /api/v1/series/{id}/read-progress` = 已读、`DELETE` = 未读，均 204 无 body；书级官方新口径是 `PATCH`（老客户端 `PUT`，两个都留）。**标已读保留原 locator、只顶 percent**（`mark_series_read`）。
-
-## Komga 客户端收尾（第 16 期）
-- **接入侧永久不做**（用户 2026-09-18 拍板）：本项目就是 Komga 服务端，不从别的 Komga 拉书目；同理**「工具 → OPDS 订阅」（订阅外部 OPDS 源）已删除**（路由 / `opds_client.py` / db CRUD / `features.opds_sources` / 前端四处 / README）。对外只剩两条：`/opds` 目录与 `/api/v1/*` 冒充 Komga —— 协议与客户端群体不同，**都不删**。
-- **Collections = 收藏夹**：Komga 装**系列**、本项目收藏夹装 **book_id** → 按书归到系列再给出。写操作（新建 / PUT 替换 / DELETE 移出 / PATCH 重命名）真的写 `collections` 表；**自定义封面 403**（夹封面取成员书封面）。
-- **收藏夹是全局的**（能装有声书库的书）→ 从 Komga 看必须过 `_ko_books()` 可见性过滤，否则客户端拿到坏条目。
-- **没有的概念诚实为空**：Readlist 空分页 + 写操作 403；`POST /series/{id}/analyze` 是 204 空实现（不假装分析了）。
-- **OSDD**：`/opds/search/description`（含单库版），根 feed 的 `rel="search"` 指向它且 type 用 `application/opensearchdescription+xml`。
-
-## OPDS 按库暴露（第 14 期）
-- **库维度只落在路径上**：`/opds/lib/{lid}/…` 一整套（14 条路由）。OPDS 客户端只会发 URL、订阅的是固定地址，**不能用 `?library=`**；`/opds` 前缀不走 Bearer 中间件（Basic）这条不变。
-- **`opds.py` 新增参数一律 keyword-only**：`prefix="/opds"`（还有 `title` / `feed_id` / `libraries`），默认值 = 原行为 → 既有 `/opds*` 输出逐字节不变；⚠️ `acquisition_feed` 的 self/next/prev/up **四组** href 都要跟 prefix 走。
-- **可见性两层，真值源一处**：`features` 能力键 `opds`（在 `_COMMON` 里）+ `SETTING_CAPS["opds.expose"]="opds"` + `lib_settings.ITEMS` 的「对 OPDS 暴露」bool；`config.DEFAULTS["opds"]["expose"]=True`。**不可见与不存在一律 404**。
-- **单库取书用 `_opds_book_in`（库内查找）**，不用 `library.by_id()`（跨库同名抛 `BookIdConflict`）。
-- 根导航**只在可见库 > 1** 时插「按书库」入口（沿用 C2 取法）；`/opds/libraries` 始终可达。
-- 前端：`OpdsPage` 拉 `/api/libraries` 列各库地址（>1 才显示）；复制状态存**被复制的地址**而非布尔值（多行列不会一起变「已复制」）。
-- 设置页注册表：`p()` 的第一个参数就是 path，**全局必须唯一** —— 同 path 两条会静默覆盖（vue-router 同名路由后者胜 + 侧栏重复 key）。上游对照页用不同 path（如 `koreader-upstream`）且它**不应**在 `SETTINGS_PAGE_COMPONENTS` 里注册组件（否则拿到真组件而非 placeholder）。
-
-## 自动化测试
-- `.venv/bin/python -m pytest`（**完全离线**）；dev 依赖在 `requirements-dev.txt`，**不进生产镜像**。当前 **171 passed**（约 2.4s）。
-- **两条硬前提**：① **环境变量必须在 import 业务模块之前设置**（`config` 导入即固化目录、`server.py` 导入即 `ensure_dirs()`）；② `db` 的 `_conn`/`_db_path` 是**模块级缓存** → 隔离靠 `db.close()`。
-- 碰书库/DB 的用例**必须声明 `isolated`**；接口用 `client` + `auth_headers`。假 EPUB（`b"EPUB"`）只够扫描类用例；**元数据写回 / 系列解析必须用真 EPUB**（`epub_builder.build_epub`）。**不测会外呼的接口**；**`GET /` 会 503**。
-- 库 id 由名称派生（中文名 slug 为空 → 回退 `lib-<sha1[:8]>`）；测试库根必须在 `LIBRARY_SOURCE_DIR` 之下。冲突用例注意：`id_conflict_with` 只算**别的**库。
-- **C1（求书 / Requests）已决策不做**；上游采集记录（`docs/review/*`）**保留为对照，不要删**。
+## 运行 / UI 验证
+- 本地测试实例（已授权直接 py_compile + 重启）：`*_DIR`→`/tmp/nf-test/…`，**`LIBRARY_SOURCE_DIR=/tmp/nf-test/libraries` 也要显式设**（否则走默认 `/app/libraries` 不存在），`AUTO_WATCH=false`，auth `admin`/test1234，`.venv/bin/python -m uvicorn novelforge.server:app --port 8791`。token 落 `/tmp/nf-test/token.txt`（`POST /api/auth/login`）。
+- Docker：`docker-compose.yml` 真实版拉镜像端口 **8992**；`docker-compose.test.yml` 本地 build 挂 `./novelforge` 端口 **8993**（容器，别动）。**断网无法 `--build`**。8992/8993 数据隔离。
+- UI 验证（playwright）：项目 `.venv`，`executable_path` 传内核；直连实例 `nf_token` 用 `add_init_script` 注入；迁移弹窗先 `force=True` 点「暂不迁移」。构建：`cd frontend && npm run type-check && npm run build && npm run deploy`。
+- 本轮改用 **playwright-cli**（全局未安装，直接 `node /Users/stromboid/.codebuddy/plugins/marketplaces/codebuddy-plugins-official/plugins/playwright-cli/playwright-cli.js ...`）：默认要 Chrome 会报错 → **加 `--browser=chromium`**（内核已在 `~/Library/Caches/ms-playwright`）；先 `goto` 首页 → `localstorage-set nf_token <token>` → **`reload`**（只改 hash 不会重载，令牌不生效）；快照落项目根 `.playwright-cli/page-*.yml`（`--filename=` 会被忽略）；`npm ci` 可离线秒装（前端 `node_modules` 默认不在）。
 
 ## 后端踩坑（真实教训）
-- **`threading.Lock` 自锁死锁**：持锁后再取同锁 → 进程**静默挂死**。**模块内共用一个锁且有嵌套调用 → 一律 `RLock`。**
-- **事件循环线程长持同步锁 → Web 假死**：`mark_processed/mark_recent` 走 `asyncio.to_thread`；watcher 独立 `_scan_lock`。**AI 分章在 async 路径静默失效** → 用 `_run_in_thread()`。
-- **`ebooklib.write_epub` 父目录不存在时只 warn 不抛** → 造真 EPUB 前必须先 `mkdir`。
-- **HMR 源码 ≠ 服务端产物**：验证前必须 `npm run build && npm run deploy`。
-- 其它已修：批量端点必须注册在 `/api/books/{bid}` **之前**；查重长度预筛 `max/min > (2-thr)/thr`；OPDS 走 `trust_env=False`，integrations 公网目标**保留** `trust_env=True`。
+- `threading.Lock` 自锁死锁→共用锁且有嵌套一律 `RLock`。
+- 事件循环线程长持同步锁→Web 假死：`mark_processed/mark_recent` 走 `asyncio.to_thread`；watcher 独立 `_scan_lock`。
+- `ebooklib.write_epub` 父目录不存在只 warn 不抛→造真 EPUB 前必须先 `mkdir`。
+- HMR 源码≠服务端产物→验证前必须 `npm run build && npm run deploy`。
+- 批量端点必须注册在 `/api/books/{bid}` 之前；**同前缀下字面量路径也要在 `{param}` 之前**（如 `/api/scrape/run` vs `/api/scrape/{bid}/resolve`）。
+- **硬链接副本禁止原地写**：副本与源共享 inode，`open(dst,'wb')` 会连源文件一起改坏；必须走「临时文件 + `Path.replace`」（只换目录项）。推论：内嵌过元数据的副本必然换成独立 inode、不再共享数据块，界面要如实标注而不是继续宣称「硬链接省空间」。
+- FastAPI 的 `StaticFiles` 静态资源会被浏览器缓存：改了前端务必 `npm run build && npm run deploy` 再校对 `document.querySelectorAll('script')[].src` 是否为新 hash，否则会对着旧 JS 排查。
 
-## 运行 / 构建 / UI 验证
-- **本地测试实例**（已授权直接 py_compile + 重启）：各 `*_DIR` → `/tmp/nf-test/…`，`AUTO_WATCH=false`，auth `admin`/`test1234`，`.venv/bin/python -m uvicorn novelforge.server:app --port 8791`。
-- **Docker**：`docker-compose.yml` 真实版拉 ghcr 镜像，端口 **8992**，挂 `./data`；`docker-compose.test.yml` 测试版本地 build + 挂 `./novelforge:/app/novelforge`，端口 **8993**，数据隔离 `./data-test`。**断网无法 `--build`**。
-- **UI 验证（playwright）**：装在项目 `.venv`（不进生产依赖），缓存内核传 `executable_path`；直连本机实例时 **`nf_token` 必须用 `context.add_init_script` 注入**（否则首屏 401）；迁移确认弹窗（`div.fixed.inset-0`）会挡点击 → 先 `force=True` 点「暂不迁移」。
-- 构建：`cd frontend && npm run type-check && npm run build && npm run deploy`（生产镜像由 Dockerfile 的 `frontend` 阶段自动构建）。
+## 第 17 期（部分完成）
+- 多书库收尾。T1 `book_id` 库维度化+迁移（**已完成**）；T2 逐库扫描调度（watcher 多目标 + 库表 `watch`/`scan_interval`/`scan_cron` 列，**已完成**）；T3「每库元数据写回 EPUB」**被第 18 期的口径取代**：元数据只存服务端 DB（`meta_override`/`meta_online`/`meta_cover`），**绝不改写 EPUB 文件**（2026-09-19 变更）。
+- **T4 已完成**（第 19 期）：书库管理页工具条 + 四栏卡片，新建/编辑走三页签 —— 见下文第 19 期。
+- **未完成**：T5 文档同步。
+- 约束：新增书库由用户手动操作（参考上游三页签），**不自动建库**；每库内容来源 = 挂载文件夹 `LIBRARY_SOURCE_DIR/<source_subdir>`；格式按 `type` 只决定功能显隐矩阵，不干预来源子目录优先归库。
 
-## 各期状态
-- 6–7 期前端快赢 + B 类轻后端；8 期元数据在线优先 + 作者页 + ISBN；9 期 CBR + 有声书；10 期多书库；11 期工程护栏（`tests/`，删 C1）；12 期系列级元数据（路线图最后一项已关）；**13 期（已完结）** 每库覆盖 + 跨库同名防护 + 工具页库维度，收尾 commit `f07012e`；**14 期** OPDS 按库暴露（`/opds/lib/{lid}/*` + 每库开关）+ 四处小尾巴；**15 期** Komga 兼容服务端补齐（系列 / 书籍按库过滤、有声书库不进 Komga、CBR 类型、系列级已读 + 书级 PATCH）；**16 期** Komga 客户端收尾（Collections 映射收藏夹可写、Readlists 空、Referential / 单库详情 / 上一本下一本 / analyze）+ OSDD + 删除 OPDS 订阅接入侧。
+## 第 18 期：刮削出版（已完成 2026-09-19）
+- 一句话：**扫描入库 → 刮元数据 → 在每库独立的「成品目录」硬链接出一份副本并把元数据写进副本**，源文件逐字节不变，外部阅读器（Komga 等）挂载成品目录即可读；「转换日志」页新增「刮削」子标签看进展/结果/失败人工整理。目的三条：不改原书信息 / 外部阅读器可见 / 失败可及时更正。
+- 数据层：`libraries.publish_path`（每库成品目录，建/改库时选，空=不出版）；表 **`scrape_items`**（逐书台账，兼持久队列与「待确认」待办）；状态机 `pending/running/ok/failed/skipped/removed/kept/orphan/source_removed`，**只许降级**（回 ok 必须用户显式动作）。
+- 模块分工：`core/publish.py` 只管**文件**（硬链接→失败回退 copy2、算命名/系列路径、原子写副本、回收旧副本）；`core/scrape.py` 只管**状态与调度**（单线程 daemon worker、队列入队、verify、resolve 五个显式动作）。
+- 配置：`scrape.{enabled,max_attempts,verify_interval}`；每库覆写 `scrape.enabled`（能力 `komga`，有声书库不暴露）。日志动作 `ACTION_SCRAPE="刮削"`。
+- 接口：`GET /api/scrape/state`、`POST /api/scrape/run|verify`、`POST /api/scrape/{bid}/resolve`；`/api/libraries/{lid}/scan` 扫描后按开关自动入队；watcher 入库三处调 `enqueue_scrape_async`（与 `auto_fetch_async` 分开：抓取看 `metadata_fetch`，出版看 `scrape.enabled`）。
+- **不可动摇的三条**：① 源文件只读；② 副本禁止原地写（共享 inode，必须原子替换）；③ 副本被删**只标记待确认 + 记日志**，绝不自动删源、绝不自动重建（删原文件走回收站，需勾选二次确认）。成品目录**不得与库根/扫描源目录重叠**（否则副本被扫回来成重复书），后端建库即拦。
+- 未续：`series_meta`/`apply_rename` 的结构性重排是否也去掉文件写（改前需用户确认）。
+
+## 第 19 期：写文件彻底收敛 + T4 建库三页签（已完成 2026-09-19）
+- **口径终局**：「元数据只存服务端」现在覆盖**全部**写回路径 —— 手动编辑 / revert / 抓取 apply / **重排册号** / **实体改名与合并**都只写 `meta_override`。**`core/publish.py` 是唯一还会写文件的地方**（写的是硬链接**副本**，且走原子替换）。`fileops.patch_epub_meta` / `rewrite_epub` 已退出生产路径（前者仅测试造夹具、后者仅 publish 写副本），别再新增调用方。
+- **显式无值哨兵** `db.META_CLEAR = "-"`（仅对 `_CLEARABLE = ("series_index",)` 生效）：覆盖值是列、存不了空串（空串=撤销覆盖），「清空序号」只能靠哨兵。翻译点三处：`db.get_effective_meta`（要**带着空值**并进 merged，否则 library 保留文件旧值）、`metastore.effective`、`metastore.state`。
+- **改名的 book_id 陷阱**：改名后 id 变（basename 派生），覆盖要落**新 id**；算库 id **不能**用 `fileops._lib_of(名字)`（它查扫描缓存，改名刚做完缓存还没更新 → 退化成旧纯哈希 id → 覆盖写进没人读的 id →「改了没生效」且不报错）。已加 `fileops._owning_library_id(path)`：按真实路径包含关系（取最深）算。测试用「扫描结果的 id」比对才抓得住这类静默错误。
+- **后台线程与测试隔离**：接口用例会把 scrape daemon worker 真叫起来，跨用例存活会拿旧 DB 连接查新库 → 「单独跑必过、全量跑随机挂」。`scrape.stop(timeout=)` 支持 join，`tests/conftest.py` 用 **autouse 夹具**每例收尾停 worker（同「测试不养 watcher 线程」纪律）。
+- **T4 建库流程（对齐上游）**：书库管理页 = 顶部工具条（全部扫描 / 过滤 / 排序：默认·名称·书籍数·上次扫描）+ 每库**四栏卡片**（书库 · 内容 · 自动化 · 上次扫描）；新建/编辑 = **三页签**（内容 / 自动化 / 上次扫描）。「刮削出版」开关在自动化页签，保存时「与全局一致 → 恢复继承；不一致 → 写覆盖」，避免切断继承。
+- 仍未做：第 17 期 T5 文档同步。
