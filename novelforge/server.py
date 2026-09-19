@@ -4931,6 +4931,44 @@ def ko_series_analyze(request: Request, series_id: str):
     return Response(status_code=204)
 
 
+# ---- 反向查询（第 17 期封口）----
+# 客户端在「书籍信息 / 系列信息」里会问「这本属于哪些清单」「这个系列在哪些合集里」。
+
+@app.get("/api/v1/series/{series_id}/collections")
+def ko_series_collections(request: Request, series_id: str, page: int = _KO_PAGE,
+                          size: int = _KO_SIZE):
+    """该系列在哪些收藏夹里（Komga 的 *List series' collections*）。
+
+    Collections 在第 16 期已映射为**真实收藏夹**，所以这里是真实数据：逐夹判断
+    成员书里是否有属于该系列的书。系列不存在 → 404（不静默给空列表）。
+    """
+    _ko_guard(request)
+    found = komga_api.find_series(series_id)
+    if not found:
+        _ko_404("系列不存在")
+    name, _items = found
+    rows = []
+    for row in db.list_collections():
+        groups = _ko_collection_groups(row["id"])
+        if name in groups:
+            rows.append(komga_api.collection_dto(row["id"], row["name"],
+                                                row.get("created_at"), groups))
+    return komga_api.paginate(rows, page, size)
+
+
+@app.get("/api/v1/books/{book_id}/readlists")
+def ko_book_readlists(request: Request, book_id: str, page: int = _KO_PAGE,
+                      size: int = _KO_SIZE):
+    """该书属于哪些阅读清单 —— 本项目**没有阅读清单**概念，诚实返回空分页。
+
+    书不存在仍按 Komga 惯例 404（先确认它在可见书目里）。
+    """
+    _ko_guard(request)
+    if not library.by_id(book_id):
+        _ko_404("书不存在")
+    return komga_api.paginate([], page, size)
+
+
 @app.get("/api/duplicates")
 def api_duplicates(threshold: int = Query(85, ge=50, le=100), library_id: str = ""):
     """重复书目。threshold 为书名相似度阈值（%，同 Calibre 的 Similar-title threshold）。
