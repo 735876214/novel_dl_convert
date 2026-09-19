@@ -4,6 +4,8 @@
  * 约定：
  *   · 同源请求，dev 期由 vite.config.ts 的 server.proxy 转发到 localhost:8993
  *   · 统一的错误处理：非 2xx 打 console.error 并抛 Error（消息取自后端 detail）
+ *     调用方要避免这条日志，只能**不发这个请求** —— 浏览器自身的网络层日志
+ *     任何 JS 都压不掉，压制应用层日志只是自欺。
  *   · 搜索等易竞态的场景由调用方传 AbortSignal
  */
 // 类型-only 循环引用在运行时会被擦除，安全（smartScope.ts 需要 BookCard）
@@ -1844,9 +1846,6 @@ export const api = {
     }),
 
   prefDevices: () => request<{ items: PrefDevice[] }>('/api/prefs/devices'),
-
-  /** 本设备记录。未登记时后端 404 → 这里抛错，调用方据此判断「新设备」 */
-  prefDevice: (id: string) => request<PrefDevice>(`/api/prefs/devices/${encodeURIComponent(id)}`),
 
   /** 设备上报。`active_profile_id` 不传即保留原值（推送配置时不该顺手清掉来源标记） */
   prefDeviceUpsert: (

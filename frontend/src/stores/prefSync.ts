@@ -161,12 +161,15 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       const [ps, ds] = await Promise.all([api.prefProfiles(), api.prefDevices()])
       profiles.value = ps.items
       devices.value = ds.items
-      let remote: PrefDevice | null = null
-      try {
-        remote = await api.prefDevice(deviceId.value)
-      } catch {
-        remote = null // 404 = 新设备
-      }
+      // 本设备是否已登记，**就在刚拉回来的列表里查**（同一张表、同一个 `_device_out` 序列化），
+      // 不再单独 GET 一次单设备：
+      //   · 那次 GET 在「新设备」时必然 404 —— 浏览器会把它当作加载失败记进控制台，
+      //     而这一层网络日志**任何前端代码都压不掉**，只能靠不发这个请求来消除；
+      //   · 语义上它也确实是多余的：`find` 与「取单条」对同一份数据是等价的。
+      // 旧的写法是「GET 抛 404 → catch 吞掉 → remote = null」，把「尚未登记」这层
+      // 正常契约藏进了异常路径里。
+      const remote: PrefDevice | null =
+        devices.value.find((d) => d.id === deviceId.value) ?? null
       if (remote) {
         device.value = remote
         if (hasPending()) {
