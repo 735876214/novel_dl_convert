@@ -13,6 +13,8 @@
 
 ## 0. 图例
 
+> **权威真值源**：本文件「本项目可行性」结论以 `frontend/src/data/settingsNav.ts` 的 `status`（`ready`＝已有真实实现 / `placeholder`＝无该后端能力、页面只读展示上游结构并标注「未支持」）与每页 `note` 为准。下列符号仅作约定；§2 各表保留的上游采集控件形态 / 当前值仍作为「上游长什么样」的基线，不改动。
+
 **「本项目可行性」列取值**
 
 | 标记 | 含义 |
@@ -101,6 +103,8 @@ SERVER
 └── Audit Log                /settings/admin/audit-log
 ```
 
+> **本项目侧栏实际形态**：设置页的单一数据源是 `frontend/src/data/settingsNav.ts`，共 **6 组（比上游多一个 `本项目扩展` / EXTENSIONS）/ 38 个叶子页**，路由为 `/settings/<path>`。上游的 `Language` / `Privacy & Sharing` / `Restrictions` / `Kobo` / `Email` / `Users & Access`（4 页）/ `Requests` 在本项目**无对应设置页**（单用户 / 设计系统统一 / 无该业务域），故本结构树只描述**上游 BookOrbit** 信息架构、用作对齐基线；逐页「本项目可行性」一律以 settingsNav 为准（见 §2）。
+
 ### 1.3 页面清单与页内分区
 
 | 组 | 页 | 页面 `<h2>` | 页内 `h3`/分组标题 |
@@ -155,15 +159,15 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 / 联动 | 本项目可行性 |
 |---|---|---|---|---|
-| 头像 | 按钮 `Upload picture` / `Remove picture` | 已设置（PNG/JPEG/WEBP ≤5MB） | 头像位显示首字母 `Y` | 🟡 |
-| Full name | 文本 | 已设置 | 显示名 | 🟡 |
-| Username | 只读 | 已设置 | 「Your username cannot be changed.」 | ⬜ |
-| Email | 只读 | 已设置 | 「Contact an administrator to change your email address.」 | ➖ |
-| Timezone | 下拉（长列表，按洲/城市） | 未能采集（下拉未展开，仅见选项列表） | 「用于 Early Bird / All-nighter 等与时间相关的成就」 | ⬜ |
-| Enable achievements | 开关 | 未能采集 | 关闭后不统计成就、不显示成就相关界面 | ➖ |
-| Guided Tour | 按钮 `Take the tour again` | — | 重放新手引导 | ⬜ |
+| 头像 | 按钮 `上传头像` / `移除` | 未设置（占位首字母） | JPG/PNG/WEBP ≤5MB，落 `CACHE_DIR/user/avatar.<ext>` 经 `/api/account/avatar` 分发（零外链，带 `?token=`） | ✅ |
+| Full name | 文本 | 未设置 | 显示名，保存后回显设置页与顶栏（回退 username） | ✅ |
+| Username | 只读 | 已设置 | 「Your username cannot be changed.」—— 本项目账号名由部署配置，不可改 | ➖ |
+| Email | 只读 | 无 | 本项目无邮箱体系，仅服务端可读 | ➖ |
+| Timezone | 下拉（IANA 全量，含「未设置」） | 未设置 | 接通 Early Bird / All-nighter 等时间类成就（按账号时区归一，缺省用服务器本地时） | ✅ |
+| Enable achievements | 开关 | 未能采集 | 关闭后不统计成就、不显示成就相关界面 | ✅（本项目已有「成就」开关） |
+| Guided Tour | 按钮 `重放新手引导` | — | 轻量新手引导浮层（书架 / 阅读器 / 设置同步），离线可用 | ✅ |
 | Change password | 按钮 | — | 「Change the password you use to sign in.」 | ✅（本项目已有「修改密码」） |
-| Connected Accounts | 只读 | 无 OIDC 提供者 | 「Ask an administrator to set up SSO.」 | ➖ |
+| Connected Accounts | 只读 | 无 OIDC 提供者 | 「Ask an administrator to set up SSO.」—— 单用户场景无意义 | ➖ |
 
 **联动**：`Enable achievements` 关闭 → 成就界面隐藏（说明文字明确），但与 Notifications 里的成就通知是分开管理的。
 
@@ -171,11 +175,13 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 / 联动 | 本项目可行性 |
 |---|---|---|---|---|
-| **外观偏好的保存位置** | 单选卡（2 项） | `My account`（ACTIVE） | `This device only`＝存浏览器；`My account`＝存账号，多设备一致 | 🟡（本项目全部存 localStorage，无账号级同步） |
+| **外观偏好的保存位置** | 单选卡（2 项） | `My account`（ACTIVE） | `This device only`＝存浏览器；`My account`＝存账号，多设备一致 | ✅（本项目「偏好与同步」页统管外观与阅读偏好的整套同步，也可按设备各用各的） |
 | Color scheme | 分段（3） | **System** | Light / Dark / System | ✅（本项目有浅色/深色/跟随系统） |
 | Accent color | 色板（64 档，5 行×16 未满） | **存在分歧，未能确证** | 见下注 | ✅（本项目有 65 档点缀色） |
 | Corner radius | 分段（4） | **Default** | Sharp / Default / Rounded / Pill | ✅（本项目有 4 档圆角） |
 | Background pattern | 图形按钮（4 组共 20） | 未能采集 | 组：FUNDAMENTAL(4) / STRUCTURAL(6) / AMBIENT(5) / REFRACTIVE(5)；按钮无文本/`aria-label` | ⬜ |
+
+**本项目落地**：主题 / 点缀色（65 档）/ 圆角 / 外观偏好保存位置均已实现（保存位置落到「偏好与同步」页）；背景图案（20 个）为未支持项。
 
 **点缀色当前值的分歧（如实记录）**：`<html>` 上为 `class="accent-blue"`、`--primary=oklch(48.7% .25 263)`（指向 Blue）；但 64 个色板按钮中**仅 `White` 带非空 `box-shadow`**（疑为选中环，也可能是首项聚焦环）。两个信号矛盾，**未确证**，迁移时不需要该值，仅需 64 档选项清单。
 
@@ -191,13 +197,15 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| Default cover search provider | 分段（3） | 未能采集 | `DuckDuckGo` / `iTunes` / `All Sources`；存账号，多端一致 | ⬜ |
-| Cover display mode | 分段（3） | **Fill card** | `Blurred fit`（模糊填充保完整）/ `Fill card`（裁切填满）/ `Natural bottom`（保比例底部对齐） | ⬜ |
-| Book spine overlay | 分段（3） | **Subtle** | `Off` / `Subtle` / `Strong`：给封面卡加书脊+光泽效果 | ⬜ |
-| Show spine on comics | 开关 | 未能采集 | 对 cbz/cbr/cb7 封面同样应用书脊效果 | ⬜ |
-| Book details cover tint | 分段（3） | **Two colours** | `Off` / `One colour` / `Two colours`：详情页从封面取色做背景渐变 | ⬜ |
-| Cover shadow strength | 分段（2） | 未能采集 | `Default` / `Strong`：网格、列表、表格、仪表盘缩略图的封面阴影 | ⬜ |
-| Card overlays | 多选（6 项） | 未能采集 | 封面上直接叠加的元数据：`Progress bar` / `File format` / `Rating` / `Read status` / `Series number` / `Lock status` | ⬜ |
+| Default cover search provider | 分段（3） | 未能采集 | `DuckDuckGo` / `iTunes` / `All Sources`；存账号，多端一致 | ⬜（依赖在线封面抓取，未支持） |
+| Cover display mode | 分段（3） | **Fill card** | `Blurred fit`（模糊填充保完整）/ `Fill card`（裁切填满）/ `Natural bottom`（保比例底部对齐） | ✅（本项目：填满 / 自然贴底 / 模糊底图） |
+| Book spine overlay | 分段（3） | **Subtle** | `Off` / `Subtle` / `Strong`：给封面卡加书脊+光泽效果 | ✅（含第 20 期「漫画是否显示书脊」开关） |
+| Show spine on comics | 开关 | 未能采集 | 对 cbz/cbr/cb7 封面同样应用书脊效果 | ✅ |
+| Book details cover tint | 分段（3） | **Two colours** | `Off` / `One colour` / `Two colours`：详情页从封面取色做背景渐变 | ✅（详情页封面取色，第 20 期） |
+| Cover shadow strength | 分段（2） | 未能采集 | `Default` / `Strong`：网格、列表、表格、仪表盘缩略图的封面阴影 | ✅（阴影强度） |
+| Card overlays | 多选（6 项） | 未能采集 | 封面上直接叠加的元数据：`Progress bar` / `File format` / `Rating` / `Read status` / `Series number` / `Lock status` | ✅（5 种卡片叠加层） |
+
+**本项目落地**：真实内嵌封面 + 填充方式（填满 / 自然贴底 / 模糊底图）+ 书脊（含漫画开关）+ 阴影强度 + 5 种卡片叠加层 + 详情页封面取色，存本机、改完立即生效；未支持封面搜索提供者（依赖在线封面抓取）。
 
 ### 2.4 YOU → Display → Icons（`/settings/appearance/icons`）
 
@@ -209,28 +217,34 @@ SERVER
 
 **空态文案**：`No custom icons uploaded yet.`
 
+**本项目落地**：图标风格由设计系统统一决定，不提供自定义图标 / 上传图标风格选项；此页仅作上游对照（`settingsNav` 标 `placeholder`）。
+
 ### 2.5 YOU → Display → Layout（`/settings/appearance/layout`）
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| Cover size behavior | 分段（2） | 未能采集 | `Sync all views` / `Per-view sizes`；Per-view 时在各自视图的 Display 面板调 | ⬜ |
-| Portrait cover size | 滑杆/数字 | 130px | 竖向书库与视图的封面尺寸 | ⬜ |
-| Square cover size | 滑杆/数字 | 150px | 方形书库与视图的封面尺寸 | ⬜ |
-| Portrait grid spacing | 滑杆/数字 | 28px | 竖向封面的网格间距 | ⬜ |
-| Square grid spacing | 滑杆/数字 | 28px | 方形封面的网格间距 | ⬜ |
-| Card info mode | 分段（3） | **On hover** | `On hover` / `Below cover` / `Off`：网格卡上标题作者的显示位置 | ⬜ |
-| Collapsed series cover | 分段（5） | **Stack** | `Stack` / `Mosaic` / `First` / `Latest` / `First Unread`：系列折叠时用哪张封面 | 🟡 |
-| Author grid → Cover size | 滑杆/数字 | 120px | 作者网格封面宽度 | 🟡 |
-| Author grid → Cover shape | 分段（2） | 未能采集 | `Circle` / `Square` | 🟡 |
-| List and table → Zebra striping | 开关 | 未能采集 | 表格斑马纹 | ✅（本项目表格可对齐） |
+| Cover size behavior | 分段（2） | 未能采集 | `Sync all views` / `Per-view sizes`；Per-view 时在各自视图的 Display 面板调 | ⬜（本项目不暴露为设置） |
+| Portrait cover size | 滑杆/数字 | 130px | 竖向书库与视图的封面尺寸 | ⬜（本项目不暴露为设置） |
+| Square cover size | 滑杆/数字 | 150px | 方形书库与视图的封面尺寸 | ⬜（本项目不暴露为设置） |
+| Portrait grid spacing | 滑杆/数字 | 28px | 竖向封面的网格间距 | ⬜（本项目不暴露为设置） |
+| Square grid spacing | 滑杆/数字 | 28px | 方形封面的网格间距 | ⬜（本项目不暴露为设置） |
+| Card info mode | 分段（3） | **On hover** | `On hover` / `Below cover` / `Off`：网格卡上标题作者的显示位置 | ⬜（本项目不暴露为设置） |
+| Collapsed series cover | 分段（5） | **Stack** | `Stack` / `Mosaic` / `First` / `Latest` / `First Unread`：系列折叠时用哪张封面 | ⬜（本项目不暴露为设置） |
+| Author grid → Cover size | 滑杆/数字 | 120px | 作者网格封面宽度 | ⬜（本项目不暴露为设置） |
+| Author grid → Cover shape | 分段（2） | 未能采集 | `Circle` / `Square` | ⬜（本项目不暴露为设置） |
+| List and table → Zebra striping | 开关 | 未能采集 | 表格斑马纹 | ⬜（本项目表格已实现斑马纹，但不作为设置暴露） |
+
+**本项目落地**：书库视图密度 / 封面尺寸 / 网格间距 / 卡片信息模式 / 系列折叠 / 作者网格外观等由前端统一定制，不暴露为逐项设置；此页仅作上游对照（`settingsNav` 标 `placeholder`）。
 
 ### 2.6 YOU → Display → Behavior（`/settings/appearance/behavior`）
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| Thumbnail clicks | 分段（2） | 未能采集 | `Read first`（有可读文件直接进阅读器）/ `Open details`（进详情页） | ✅（本项目已有阅读入口，可加此开关） |
-| Show filter preview by default | 开关 | 未能采集 | 打开智能书架时自动展开筛选与排序摘要 | ⬜ |
-| Collapse series by default | 开关 | 未能采集 | 在书库/收藏夹/智能书架中把同系列书折叠为一张卡 | 🟡 |
+| Thumbnail clicks | 分段（2） | 未能采集 | `Read first`（有可读文件直接进阅读器）/ `Open details`（进详情页） | ⬜（本项目有阅读入口，但无此开关，不暴露为设置） |
+| Show filter preview by default | 开关 | 未能采集 | 打开智能书架时自动展开筛选与排序摘要 | ⬜（本项目不暴露为设置） |
+| Collapse series by default | 开关 | 未能采集 | 在书库/收藏夹/智能书架中把同系列书折叠为一张卡 | ⬜（本项目不暴露为设置） |
+
+**本项目落地**：缩略图点击行为 / 筛选预览默认展开 / 系列默认折叠等浏览行为由前端固定，不暴露为设置；此页仅作上游对照（`settingsNav` 标 `placeholder`）。
 
 ### 2.7 YOU → Display → Language（`/settings/appearance/language`）
 
@@ -246,72 +260,84 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| NEW BOOKS → Apply my settings to new books | 开关 | 未能采集 | 关闭时新书沿用出版方字体与排版，改动后才应用设置 | ✅（本项目的 reader-prefs 可扩展） |
-| LAYOUT → Reading flow | 分段（2） | 未能采集 | `Paginated`（翻页）/ `Scrolled`（滚动） | ⬜（本项目为滚动） |
-| Fixed-layout page spreads | 分段（3） | 未能采集 | `Book default` / `Single page` / `Columns`（漫画、图像型 EPUB 默认值） | ⬜ |
-| Columns | 数字 | 2 | 每页文本列数 | ⬜ |
-| THEME → Dark mode | 分段（13） | 未能采集 | 深色变体：`Default, Gray, Sepia, Crimson, Meadow, Rosewood, Azure, Dawnlight, Ember, Aurora, Ocean, Mist, AMOLED` | 🟡（本项目阅读主题仅 3 档） |
-| TYPOGRAPHY → Font | 分段（4） | 未能采集 | `Book default` / `Serif` / `Sans-serif` / `Monospace` | ✅（本项目有 3 档字体） |
-| Font style | 分段（4） | 未能采集 | `Regular` / `Bold` / `Regular Italic` / `Bold Italic` | ⬜ |
+| NEW BOOKS → Apply my settings to new books | 开关 | 未能采集 | 关闭时新书沿用出版方字体与排版，改动后才应用设置 | ⬜（未支持） |
+| LAYOUT → Reading flow | 分段（2） | 未能采集 | `Paginated`（翻页）/ `Scrolled`（滚动） | ✅（本项目阅读模式＝滚动） |
+| Fixed-layout page spreads | 分段（3） | 未能采集 | `Book default` / `Single page` / `Columns`（漫画、图像型 EPUB 默认值） | ⬜（未支持） |
+| Columns | 数字 | 2 | 每页文本列数 | ✅（本项目分栏） |
+| THEME → Dark mode | 分段（13） | 未能采集 | 深色变体：`Default, Gray, Sepia, Crimson, Meadow, Rosewood, Azure, Dawnlight, Ember, Aurora, Ocean, Mist, AMOLED` | ✅（本项目 13 档主题） |
+| TYPOGRAPHY → Font | 分段（4） | 未能采集 | `Book default` / `Serif` / `Sans-serif` / `Monospace` | ✅（本项目 3 档字体） |
+| Font style | 分段（4） | 未能采集 | `Regular` / `Bold` / `Regular Italic` / `Bold Italic` | ⬜（未支持：字重样式） |
 | Font size | 滑杆 | 16px | 基准字号 | ✅ |
 | Line height | 滑杆 | 1.5 | 行高 | ✅ |
-| Paragraph spacing | 分段 | 未能采集 | `Book default` / 自定义 | ⬜ |
-| Justify text | 开关 | 未能采集 | 两端对齐 | ⬜ |
-| Hyphenation | 开关 | 未能采集 | 自动断词 | ⬜ |
-| ADVANCED → Letter spacing | 分段 | 未能采集 | `Book default` / `Custom` | ⬜ |
-| Word spacing | 分段 | 未能采集 | `Book default` / `Custom` | ⬜ |
-| First-line indent | 分段 | 未能采集 | `Book default` / `Custom` | ⬜ |
-| Max content width | 滑杆 | 720px | 文本区最大宽度 | ✅（本项目有「内容宽度」，单位 rem） |
-| Column gap | 滑杆 | 5% | 文本区左右内边距 | ⬜ |
+| Paragraph spacing | 分段 | 未能采集 | `Book default` / 自定义 | ✅（本项目段落间距） |
+| Justify text | 开关 | 未能采集 | 两端对齐 | ✅（本项目两端对齐） |
+| Hyphenation | 开关 | 未能采集 | 自动断词 | ✅（本项目断词） |
+| ADVANCED → Letter spacing | 分段 | 未能采集 | `Book default` / `Custom` | ✅（本项目字距） |
+| Word spacing | 分段 | 未能采集 | `Book default` / `Custom` | ✅（本项目词距） |
+| First-line indent | 分段 | 未能采集 | `Book default` / `Custom` | ✅（本项目首行缩进） |
+| Max content width | 滑杆 | 720px | 文本区最大宽度 | ✅（本项目内容宽度，单位 rem） |
+| Column gap | 滑杆 | 5% | 文本区左右内边距 | ⬜（未支持：文本区左右内边距） |
 | Reset to defaults | 按钮 | — | 恢复默认 | ✅ |
+
+**本项目落地**：已实现「阅读模式 / 13 档主题 / 字体 / 字号 / 行高 / 内容宽度 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 13 项；未支持：新书套用设置（Apply my settings to new books）、固定版式页宽（Fixed-layout page spreads）、字重样式（Font style）、文本区左右内边距（Column gap）。
 
 ### 2.9 YOU → Reader → PDF（`/settings/reader/pdf`）
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| Scroll mode | 分段（3） | **Scrolled** | `Page`（逐页翻）/ `Scrolled`（连续）/ `Horizontal`（横向） | ⬜ |
-| Page spread | 分段（4） | **None** | `None` / `Odd` / `Even` / `Auto`：双页视图中起始页在哪侧 | ⬜ |
-| Default fit | 分段（4） | **Fit Width** | `Fit Page` / `Fit Width` / `Automatic` / `Custom` | ⬜ |
-| Reset to defaults | 按钮 | — | — | ⬜ |
+| Scroll mode | 分段（3） | **Scrolled** | `Page`（逐页翻）/ `Scrolled`（连续）/ `Horizontal`（横向） | ✅（本项目：翻页 / 纵向 / 横向） |
+| Page spread | 分段（4） | **None** | `None` / `Odd` / `Even` / `Auto`：双页视图中起始页在哪侧 | ✅（本项目：单页 / 双页奇右 / 偶右 / 自动） |
+| Default fit | 分段（4） | **Fit Width** | `Fit Page` / `Fit Width` / `Automatic` / `Custom` | ✅（本项目：适配方式 / 自定义缩放） |
+| Reset to defaults | 按钮 | — | — | ✅ |
+
+**本项目落地**：滚动模式（翻页 / 纵向 / 横向）、页展（单页 / 双页奇右 / 偶右 / 自动）、适配方式、自定义缩放、阅读进度均已实现；渲染用 pdf.js，懒加载（打开 PDF 才下载）。
 
 ### 2.10 YOU → Reader → Comics（`/settings/reader/comics`）
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| Reading mode | 分段（3） | **Paginated** | `Paginated` / `Infinite (spaced)` / `Infinite (no gaps)`（条漫） | ⬜ |
-| Page view | 分段（2） | 未能采集 | `Single` / `Two-page` | ⬜ |
-| Fit mode | 分段（4） | **Page** | `Page` / `Width` / `Height` / `Actual` | ⬜ |
-| Reading direction | 分段（2） | 未能采集 | `L to R`（西文漫画）/ `R to L`（日漫） | ⬜ |
-| Spread alignment | 分段（2） | 未能采集 | `Normal` / `Shifted`：修正扫描件封面错位 | ⬜ |
-| Spread gap | 滑杆/数字 | 0px | 双页视图页间距 | ⬜ |
-| Wide-page handling | 分段（2） | 未能采集 | `Auto` / `Disable`：宽幅扫描件单独显示 | ⬜ |
-| Force two-page on small screens | 开关 | 未能采集 | 小屏也强制双页 | ⬜ |
-| Auto-advance to next book | 开关 | 未能采集 | 翻过最后一页打开系列下一本 | ⬜ |
-| DISPLAY → Background color | 分段（3） | **Black** | `Black` / `Gray` / `White`：画布底色 | ⬜ |
-| Reset to defaults | 按钮 | — | — | ⬜ |
+| Reading mode | 分段（3） | **Paginated** | `Paginated` / `Infinite (spaced)` / `Infinite (no gaps)`（条漫） | ✅（本项目：翻页 / 纵向连续） |
+| Page view | 分段（2） | 未能采集 | `Single` / `Two-page` | ✅（本项目：单页 / 双页） |
+| Fit mode | 分段（4） | **Page** | `Page` / `Width` / `Height` / `Actual` | ✅（本项目：页 / 宽 / 高 / 原尺寸） |
+| Reading direction | 分段（2） | 未能采集 | `L to R`（西文漫画）/ `R to L`（日漫） | ✅（含日漫右→左） |
+| Spread alignment | 分段（2） | 未能采集 | `Normal` / `Shifted`：修正扫描件封面错位 | ✅ |
+| Spread gap | 滑杆/数字 | 0px | 双页视图页间距 | ✅（本项目页间距） |
+| Wide-page handling | 分段（2） | 未能采集 | `Auto` / `Disable`：宽幅扫描件单独显示 | ✅ |
+| Force two-page on small screens | 开关 | 未能采集 | 小屏也强制双页 | ✅ |
+| Auto-advance to next book | 开关 | 未能采集 | 翻过最后一页打开系列下一本 | ✅ |
+| DISPLAY → Background color | 分段（3） | **Black** | `Black` / `Gray` / `White`：画布底色 | ✅（本项目背景色） |
+| Reset to defaults | 按钮 | — | — | ✅ |
+
+**本项目落地**：阅读模式（翻页 / 纵向连续）、页视图（单页 / 双页）、适配方式、阅读方向（含日漫右→左）、页间距、背景色、阅读进度均已实现；**支持 CBZ 与 CBR**——CBR 由服务端 zip/rar 双后端解压（bsdtar，容器内 libarchive-tools 提供），两种格式在阅读器里体验一致。
 
 ### 2.11 YOU → Reader → Audiobook（`/settings/reader/audio`）
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| Default playback speed | 分段（6） | **1x** | `0.75x / 1x / 1.25x / 1.5x / 1.75x / 2x` | ➖（本项目无有声书） |
-| Default volume | 滑杆 | 100% | 初始音量 0–100 | ➖ |
-| Skip back duration | 分段（4） | **10s** | `5s / 10s / 15s / 30s` | ➖ |
-| Skip forward duration | 分段（4） | **30s** | `10s / 15s / 30s / 60s` | ➖ |
-| Reset to defaults | 按钮 | — | — | ➖ |
+| Default playback speed | 分段（6） | **1x** | `0.75x / 1x / 1.25x / 1.5x / 1.75x / 2x` | ✅（本项目倍速 0.75x–2x） |
+| Default volume | 滑杆 | 100% | 初始音量 0–100 | ✅（本项目默认音量） |
+| Skip back duration | 分段（4） | **10s** | `5s / 10s / 15s / 30s` | ✅（本项目快退 5/10/15/30 秒） |
+| Skip forward duration | 分段（4） | **30s** | `10s / 15s / 30s / 60s` | ✅（本项目快进 10/15/30/60 秒） |
+| Reset to defaults | 按钮 | — | — | ✅ |
+
+**本项目落地**：默认倍速（0.75x–2x）、默认音量、快退间隔（5/10/15/30 秒）、快进间隔（10/15/30/60 秒）、睡眠定时默认时长均已实现；播放器另提供轨道列表与按秒进度保存（跨设备同步）。有声书支持「一个目录 = 一本书」（一章一文件）与单个音频文件两种形态。
 
 ### 2.12 YOU → Reader → Fonts（`/settings/reader/fonts`）
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| UPLOAD FONTS | 拖拽/浏览上传 | 未上传 | 支持 `TTF, OTF, WOFF, WOFF2`，单个 ≤50MB | ⬜ |
-| YOUR FONTS | 只读 | `0 / 50 used` | 空态：`No fonts uploaded yet` / `Drag a font file above to get started.` | ⬜ |
+| UPLOAD FONTS | 拖拽/浏览上传 | 未上传 | 支持 `TTF, OTF, WOFF, WOFF2`，单个 ≤50MB | ✅（本项目上传 / 列表 / 删除 / 选用） |
+| YOUR FONTS | 只读 | `0 / 50 used` | 空态：`No fonts uploaded yet` / `Drag a font file above to get started.` | ✅（族名从字体 name 表解析，回落文件名） |
+
+**本项目落地**：字体上传 / 列表 / 删除 / 在阅读器中选用均已实现；族名从字体 name 表解析（TTF/OTF），解析不出时回落文件名并显示。本项目单用户，上限取服务端口径（200）。
 
 ### 2.13 YOU → Reader → General（`/settings/reader/general`）
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| 阅读偏好的保存位置 | 单选卡（2） | `My account`（ACTIVE） | `This device only`＝存浏览器；`My account`＝存账号，多设备一致 | 🟡（本项目 reader-prefs 仅 localStorage） |
+| 阅读偏好的保存位置 | 单选卡（2） | `My account`（ACTIVE） | `This device only`＝存浏览器；`My account`＝存账号，多设备一致 | ✅（本项目扩展为「偏好与同步」） |
+
+**本项目落地**：本项目把它扩展为「偏好与同步」——偏好可存成具名**模式**（整套快照，含外观），供不同设备套用；每台设备也可各用各的。应用模式 = 拷贝内容，别人改模式本体不会让你被动变化。已知限制：无实时推送——其它设备的改动需本机下次打开或点「立即同步」才可见。
 
 > 该页只有这一项（与 Display→Theme 的「保存位置」同构，是全站「偏好作用域」模式的第二个实例）。
 
@@ -324,17 +350,19 @@ SERVER
 | 分组 | 设置项 | 说明 | 本项目可行性 |
 |---|---|---|---|
 | LIBRARY | Library scanning | 书库扫描完成/失败/发现缺失书 | ✅（本项目有监听与任务中心） |
-| LIBRARY | Metadata fetching | 元数据抓取完成或失败 | ⬜ |
-| LIBRARY | Author enrichment | 作者传记与照片抓取完成 | ⬜ |
-| FILES | File write-back | 编辑后的元数据写回磁盘文件 | 🔵（本项目 bulk-rename 写入能力） |
+| LIBRARY | Metadata fetching | 元数据抓取完成或失败 | ✅ |
+| LIBRARY | Author enrichment | 作者传记与照片抓取完成 | ✅ |
+| FILES | File write-back | 编辑后的元数据写回磁盘文件 | ✅（本项目 bulk-rename 写入能力） |
 | FILES | File rename | 单本书文件按命名模式重命名 | ✅（本项目有批量重命名） |
 | FILES | Bulk rename | 批量重命名或跨书库移动完成/失败 | ✅ |
-| FILES | Data migration | 从其它书库工具导入完成/失败 | ⬜ |
-| INTEGRATIONS | Book Dock | Book Dock 定稿完成或异常 | ⬜ |
-| INTEGRATIONS | Book requests | 求书提交/审批/到货 | ⬜ |
-| INTEGRATIONS | Email delivery | 送书到邮箱成功/失败 | ➖ |
-| PERSONAL | Achievements | 解锁新成就（仅 `Off` / `All`，无 `Problems` 档） | ➖ |
-| APP UPDATES | Show "What's New" after updates | 开关；更新后弹新功能提示，归档始终可访问 | ⬜ |
+| FILES | Data migration | 从其它书库工具导入完成/失败 | ✅ |
+| INTEGRATIONS | Book Dock | Book Dock 定稿完成或异常 | ✅ |
+| INTEGRATIONS | Book requests | 求书提交/审批/到货 | ➖（本项目无求书系统） |
+| INTEGRATIONS | Email delivery | 送书到邮箱成功/失败 | ➖（本项目无邮件投递渠道） |
+| PERSONAL | Achievements | 解锁新成就（仅 `Off` / `All`，无 `Problems` 档） | ✅ |
+| APP UPDATES | Show "What's New" after updates | 开关；更新后弹新功能提示，归档始终可访问 | ✅ |
+
+**本项目落地**：按活动类别设「关闭 / 仅失败 / 全部」三档；差异——上游是服务端投递（可走邮件），本项目无投递渠道，开关为客户端过滤，生效范围是通知中心与日志。Book requests / Email delivery 在本项目无对应系统（➖）。
 
 ### 2.15 YOU → Privacy & Sharing（`/settings/account/privacy`）
 
@@ -358,17 +386,19 @@ SERVER
 
 | 字段 | 示例 / 取值 | 说明 | 本项目可行性 |
 |---|---|---|---|
-| 书库名 | 9 个：`漫画, 刘备, 有声书, 工具书, 插图书, 教学, 杂志, 其他, 连环画` | 列表按此展示 | 🟡（本项目单 OUTPUT_DIR） |
-| 组织模式 | `Folder mode` | 另有 `File as Book` 模式（见 2.25） | 🟡 |
-| 文件夹数 + 路径 | `1 folder` / `/books/<名称>` | 可多个文件夹 | 🟡 |
+| 书库名 | 9 个：`漫画, 刘备, 有声书, 工具书, 插图书, 教学, 杂志, 其他, 连环画` | 列表按此展示 | ✅ |
+| 组织模式 | `Folder mode` | 另有 `File as Book` 模式（见 2.25） | ✅ |
+| 文件夹数 + 路径 | `1 folder` / `/books/<名称>` | 可多个文件夹 | ✅ |
 | 书籍数 + 占用 | 如 `55 books` / `2.4 GB` | — | ✅ |
-| 格式分布 | 如 `PDF 46 / CBZ 6 / CBR 1 / EPUB 1 / MOBI 1` | 按格式计数 | 🟡 |
+| 格式分布 | 如 `PDF 46 / CBZ 6 / CBR 1 / EPUB 1 / MOBI 1` | 按格式计数 | ✅ |
 | Watch folders | `On` | 监听文件夹 | ✅（本项目 watcher） |
 | Scheduled scan | `At 12:00 AM` | 定时扫描 | ✅（本项目有 cron 概念） |
-| Write to file | `Off` | 元数据写回文件 | 🔵 |
-| Rename files | `On` | 按命名模式重命名 | 🔵 |
+| Write to file | `Off` | 元数据写回文件 | 🔵（等价能力在「工具 → 批量重命名」） |
+| Rename files | `On` | 按命名模式重命名 | 🔵（等价能力在「工具 → 批量重命名」） |
 | LAST SCAN | `Scanned 2 days ago` / `Failed 17 hours ago` + 小字（如 `Server restarted during scan`）+ 原因标签（`Schedule - no change` / `Manual - no change`） | 扫描状态与原因 | ✅ |
 | 行动按钮 | `Scan` | 单库扫描 | ✅ |
+
+**本项目落地**：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用 / 独立存储）、来源子目录投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、自动归库、库类型→功能显隐、每库独立覆盖（第 13 期）均在「工具 → 书库管理」实现；此设置页仅作上游结构对照（`settingsNav` 标 `placeholder`，link→/tools/libraries）。
 
 ### 2.18 LIBRARY → Metadata → Providers（`/settings/metadata/providers`）
 
@@ -393,10 +423,12 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| Combine genres from all selected providers | 开关 | 未能采集 | 对 Genres 字段收集并去重所有提供者的结果，而非首个命中即停 | ⬜ |
-| Maximum genres per book | 数字 | 未能采集（留空＝不限） | 在排除与去重之后应用 | ⬜ |
-| Store provider IDs on books | 开关 | 未能采集 | 保存返回的提供者 ID（ISBN/ASIN/Goodreads ID 等）以供后续更准查询 | ⬜ |
-| Use existing provider IDs only | 开关 | 未能采集 | 已有书只用已存的 ID 查询，ID 查询失败也不回退到搜索（不影响手动搜索与新书发现） | ⬜ |
+| Combine genres from all selected providers | 开关 | 未能采集 | 对 Genres 字段收集并去重所有提供者的结果，而非首个命中即停 | ✅（本项目已实现合并策略） |
+| Maximum genres per book | 数字 | 未能采集（留空＝不限） | 在排除与去重之后应用 | ✅ |
+| Store provider IDs on books | 开关 | 未能采集 | 保存返回的提供者 ID（ISBN/ASIN/Goodreads ID 等）以供后续更准查询 | ✅ |
+| Use existing provider IDs only | 开关 | 未能采集 | 已有书只用已存的 ID 查询，ID 查询失败也不回退到搜索（不影响手动搜索与新书发现） | ✅ |
+
+**本项目落地**：14 个元数据源（当前 10 个启用）、逐字段的提供者优先级链、每字段合并策略（Fill gaps / Merge / If provided / Always）、Combine genres、Maximum genres、Store provider IDs、Use existing provider IDs 均已实现。
 
 顶部工具条：`All / Enabled / Needs setup` 筛选；底部状态条 `No unsaved changes` + `Discard` + `Save Global defaults`。
 
@@ -409,7 +441,7 @@ SERVER
 | 覆盖策略 | `Overwrite if provided` / `Merge with existing` 等 | 绝大多数字段为 **`Overwrite if provided`**（「Write if provider returned a value」）；`Genres` 为 **`Merge with existing`**（4 选项组） |
 | 其它列 | 该页还有锁定/优先级相关列 | 未能逐列采集（矩阵列头未在正文中呈现） |
 
-**本项目可行性**：⬜（本项目无元数据抓取体系，此页整体属占位范围）。
+**本项目落地**：逐字段覆写策略（Overwrite if provided / Merge with existing 等）规则矩阵已实现（204 个控件，是设置页中控件最多的一页）。
 
 > ⚠️ 该页是设置页中控件最多的一页（204 个）。本次已采集完整正文与控件清单，但**截图仅为视口首屏**（原因见 `bookorbit-settings-capture.md` 的 1.1 节），整页视觉还原需另取整页截图。
 
@@ -417,8 +449,10 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| NEW FIELD 表单 | 表单（未展开填写） | 无自定义字段 | 定义自定义元数据字段并选择适用书库 | 🟡 |
-| FIELDS 列表 | 只读 | `No custom fields yet` | 「Drag to reorder, edit labels, toggle libraries, or archive fields」 | 🟡 |
+| NEW FIELD 表单 | 表单（未展开填写） | 无自定义字段 | 定义自定义元数据字段并选择适用书库 | ✅ |
+| FIELDS 列表 | 只读 | `No custom fields yet` | 「Drag to reorder, edit labels, toggle libraries, or archive fields」 | ✅ |
+
+**本项目落地**：自定义字段定义表单 + 字段列表（拖拽排序 / 改标签 / 切换适用书库 / 归档）均已实现。
 
 ### 2.21 LIBRARY → Metadata → Confidence Score（`/settings/metadata/score`）
 
@@ -451,7 +485,7 @@ SERVER
 
 **WHERE YOUR BOOKS LAND**（分布直方图）：`UNDER 50 / 50-69 / 70-89 / 90+`，刻度 0/50/70/90/100；当前 `MEDIAN 35`、`UNDER 50 = 366`、`90 AND UP = 0`（统计范围 515 本书）。
 
-**本项目可行性**：⬜（整体属占位；「元数据完整度」对本书库有参考价值，可作为后续独立需求）
+**本项目落地**：元数据完整度打分（24 计分字段 + 5 个权重分组 + 书库分布直方图 + Recalculate all / Reset to defaults）已实现。
 
 ### 2.22 LIBRARY → Metadata → Books（`/settings/metadata/auto-fetch`）
 
@@ -459,9 +493,11 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| GLOBAL SETTINGS → Enable auto-fetch | 开关 | 未能采集 | 对合格书籍自动抓取元数据 | ⬜ |
-| Trigger on import | 开关 | 未能采集 | 首次加入书库时入队 | ⬜ |
-| Eligibility conditions | 条件列表（多选/规则） | 未能逐条采集 | 文案：`A book is eligible if it matches any enabled condition.` 条件列表首项为 `Never fetched • ...` | ⬜ |
+| GLOBAL SETTINGS → Enable auto-fetch | 开关 | 未能采集 | 对合格书籍自动抓取元数据 | ✅（本项目入库自动抓取已实现） |
+| Trigger on import | 开关 | 未能采集 | 首次加入书库时入队 | ✅（本项目 watcher 旁路调用 auto_fetch，按所属库策略执行） |
+| Eligibility conditions | 条件列表（多选/规则） | 未能逐条采集 | 文案：`A book is eligible if it matches any enabled condition.` 条件列表首项为 `Never fetched • ...` | ✅（本项目按置信度阈值自动定稿，低于阈值列预览等人工确认） |
+
+**本项目落地**：Enable auto-fetch / Trigger on import / 合格条件均已实现；达到置信度阈值的字段自动定稿，低于阈值的只列在预览页等人工确认。
 
 ### 2.23 LIBRARY → Metadata → Authors（`/settings/metadata/authors`）
 
@@ -469,7 +505,7 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| 作者元数据自动抓取相关项 | 开关/分段/按钮（26 个控件） | 未能逐项采集 | 该页为作者传记与照片的自动抓取配置；页面含 `Save` 按钮（`★` 判定命中但属误报，非设置项） | ⬜ |
+| 作者元数据自动抓取相关项 | 开关/分段/按钮（26 个控件） | 未能逐项采集 | 该页为作者传记与照片的自动抓取配置；页面含 `Save` 按钮（`★` 判定命中但属误报，非设置项） | ✅（本项目作者抓取已实现） |
 
 > 该页正文 1303 字符已完整采集存档（正文抽取读的是完整 DOM，不受截图局限影响），但**未能逐项结构化**——原因与「未能采集」口径一致：页面未渲染出可判定的分段控件选中态。视觉参考见截图 `metadata__authors.jpg`（⚠️ 仅首屏，见 `bookorbit-settings-capture.md` 1.1）。
 
@@ -477,10 +513,10 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| 新增黑名单值 | 文本 + `Add` 按钮 | 空 | placeholder：`Add a genre value, for example Audiobook` | 🟡（本项目的题材治理可复用） |
-| 过滤 | 文本 | 空 | placeholder：`Filter blocklist` | 🟡 |
+| 新增黑名单值 | 文本 + `Add` 按钮 | 空 | placeholder：`Add a genre value, for example Audiobook` | ✅（本项目题材黑名单已实现） |
+| 过滤 | 文本 | 空 | placeholder：`Filter blocklist` | ✅ |
 
-**本项目可行性整体**：🟡（本项目有实体管理工具，可扩展一个「题材黑名单」）
+**本项目落地**：题材黑名单（新增 / 过滤）已实现。
 
 ### 2.25 LIBRARY → File Naming（`/settings/library/file-naming`）
 
@@ -488,11 +524,13 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| 各书库的模式分配 | 列表 | 9 个书库均为 `Folder as Book` | 「A library with a pattern of its own wins. Every other library follows the global default for its organization mode.」 | 🟡 |
+| 各书库的模式分配 | 列表 | 9 个书库均为 `Folder as Book` | 「A library with a pattern of its own wins. Every other library follows the global default for its organization mode.」 | ✅（本项目命名规则存服务端，工具页默认载入） |
 | File as Book default 模式 | 文本 | 见下方代码块（含 13 个 token） | 「Each file is one book.」；当前无书库使用该默认 | ✅（本项目 bulk-rename 的核心规则来源） |
 | 按钮 | 按钮 | — | `Examples`、`Reset to shipped default` | ✅ |
 | Cross-platform path sanitization | 开关 | 未能采集 | 替换 Windows 不接受的字元，预览会反映该设置 | ✅ |
 | 底部状态条 | 按钮 | `No unsaved changes` | `Discard`、`Save changes` | — |
+
+**本项目落地**：命名规则存服务端（config.naming）+ 4 个配方 + 生效预览，工具页默认载入该规则；第 20 期起支持 9 个占位符（书名 / 作者 / 系列 / 系列序号 / 顺序号 / 出版年 / 出版社 / 语言 / 扩展名）。上游的 13 token / 7 修饰符 / 结构语法未支持。实际编辑入口在「工具 → 批量重命名」（🔵）。
 
 **File as Book 默认模式（原文，含 `|` 与 `<>` 特殊字符，故以代码块呈现）**
 
@@ -522,11 +560,13 @@ SERVER
 
 | 分组 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|---|
-| UPLOADS | Maximum upload file size limit | 数字 + `MB` + `Save` | 未能采集 | 全局上传大小上限 | ✅（本项目可加） |
-| IMPORT | Import library data | 按钮 `Get Started` | — | 一次性从其它书库工具导入书籍/元数据/阅读进度 | ⬜ |
-| RECOMMENDATIONS | Refresh recommendation index | 按钮 `Run` | — | 后台重建推荐索引 | ➖ |
-| ACHIEVEMENTS | Backfill achievements | 按钮 `Run Backfill` | — | 重算所有用户的成就 | ➖ |
-| UPDATES | Check for updates | 开关 | 未能采集 | 启动时查 GitHub 新版本，有更新时侧栏显示指示器 | ⬜ |
+| UPLOADS | Maximum upload file size limit | 数字 + `MB` + `Save` | 未能采集 | 全局上传大小上限 | ✅（本项目可配置且生效） |
+| IMPORT | Import library data | 按钮 `Get Started` | — | 一次性从其它书库工具导入书籍/元数据/阅读进度 | ⬜（容器部署口径下未实现，页内只读列出） |
+| RECOMMENDATIONS | Refresh recommendation index | 按钮 `Run` | — | 后台重建推荐索引 | ➖（本项目无推荐系统） |
+| ACHIEVEMENTS | Backfill achievements | 按钮 `Run Backfill` | — | 重算所有用户的成就 | ✅（本项目成就重算 Backfill 已实现） |
+| UPDATES | Check for updates | 开关 | 未能采集 | 启动时查 GitHub 新版本，有更新时侧栏显示指示器 | ⬜（容器部署口径下未实现，页内只读列出） |
+
+**本项目落地**：UPLOADS 上传上限（可配置且生效）、ACHIEVEMENTS 的成就重算（Backfill）、书库索引重建、缓存清理、回收站清空与各目录占用统计均已实现；IMPORT（从其它书库工具一次性导入）/ RECOMMENDATIONS（刷新推荐索引）/ UPDATES（查 GitHub 新版本）在容器部署口径下未实现，页内以只读条目列出。
 
 ### 2.27 DEVICES → Kobo（`/settings/kobo`）
 
@@ -564,15 +604,19 @@ SERVER
 | SETUP GUIDE | KOReader setup steps | 可展开 | — | 插件用于目录浏览/下载/进度/事件/高亮；内置插件仅进度 | ➖ |
 | DANGER ZONE | Delete KOReader credentials | 按钮 `Delete` | — | 删除凭据并断开所有设备，进度数据保留 | ➖ |
 
+**本项目落地**：本页（`settingsNav` 的 `koreader-upstream`）仅对照上游 KOReader 设置页结构；真正的对接在 `koreader` 页——本项目实现 kosync 协议的服务端：`healthcheck` / `users/auth` / `users/create` / `syncs/progress`（GET+PUT）。三个必须精确的协议细节：① 鉴权头是 `x-auth-user` / `x-auth-key`，key = 密码的 MD5（不是 Basic，服务端也只存这个哈希）；② 文档标识是 partialMD5（只采样 12 个点，偏移 `1024×4^i`，`i=-1..10`，不读第 0 字节、读不满即停），另有 `checksum_method=FILENAME` 的 `md5(basename)` 变体，两种都索引；③ `percentage` 是 0–1，progress 对 EPUB 是 XPointer、PDF/漫画是页码。进度映射：`DocFragment[N]` ↔ 本项目章节序号（`N-1`），PDF/漫画用页码；反向的 XPointer 只定位到章首，准确位置由 `percentage` 兜底。未支持：多设备管理、注解/书签同步。
+
 ### 2.29 DEVICES → OPDS（`/settings/opds`）
 
 | 分组 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|---|
-| SERVER | OPDS Catalog Server | 开关 | 未能采集 | 允许 OPDS 客户端浏览与下载书籍 | 🟡（本项目已有 /api/books，做只读 OPDS 订阅源可行） |
-| ENDPOINT | 端点地址 | 只读 + `Copy` | 已生成 | 供阅读 App 填入 | 🟡 |
-| OPDS ACCOUNTS | 账号列表 | 列表 + `Add` | 1 个账号 | 账号名可为个人数据，不展开 | 🟡 |
-| OPDS ACCOUNTS | 排序选项 | 下拉 | 未能采集 | `Recently Added / Title (A-Z) / Title (Z-A) / Author (A-Z) / Author (Z-A) / Series (A-Z) / Series (Z-A)` | 🟡 |
+| SERVER | OPDS Catalog Server | 开关 | 未能采集 | 允许 OPDS 客户端浏览与下载书籍 | ✅（本项目 OPDS 目录开关已实现） |
+| ENDPOINT | 端点地址 | 只读 + `Copy` | 已生成 | 供阅读 App 填入 | ✅（本项目端点地址可复制） |
+| OPDS ACCOUNTS | 账号列表 | 列表 + `Add` | 1 个账号 | 账号名可为个人数据，不展开 | ✅（本项目支持账号管理） |
+| OPDS ACCOUNTS | 排序选项 | 下拉 | 未能采集 | `Recently Added / Title (A-Z) / Title (Z-A) / Author (A-Z) / Author (Z-A) / Series (A-Z) / Series (Z-A)` | ✅（本项目支持排序） |
 | OPDS NOTES | 只读 | — | — | 「Use OPDS accounts in reader apps. Keep credentials private and rotate passwords if shared accidentally.」 | — |
+
+**本项目落地**：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页（`?page=`）与排序（`?sort=recent|title|author|series&order=`）均已实现。第 14 期起支持按书库分别暴露：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 `/opds/lib/<库 id>`，可在「工具 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404）。鉴权用 HTTP Basic + 应用账号（OPDS 客户端只会发 Basic，所以 `/opds` 不走 `/api` 的 Bearer 中间件）。未支持：独立 OPDS 账号体系。
 
 ### 2.30 DEVICES → Email（`/settings/email`）
 
@@ -588,26 +632,32 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| API TOKEN | 密码 + `Show` | **未设置** | 「Find your token at hardcover.app/account/api.」 | ⬜ |
-| 动作 | 按钮 | `Validate token`、`Save` | 连接 Hardcover 账号同步阅读状态与书评 | ⬜ |
+| API TOKEN | 密码 + `Show` | **未设置** | 「Find your token at hardcover.app/account/api.」 | ✅（本项目 Token 存储，掩码回显） |
+| 动作 | 按钮 | `Validate token`、`Save` | 连接 Hardcover 账号同步阅读状态与书评 | ✅（真实连通性验证已实现） |
+
+**本项目落地**：API Token 存储（掩码回显，提交掩码 = 不修改）+ **真实连通性验证**（向 Hardcover GraphQL 发 `{ me { id username } }` 探针）。⚠️ 其鉴权失败也可能返回 200 + `errors`，所以**不能只看状态码**。未支持：状态 / 书评同步（需先做书籍匹配）。
 
 ### 2.32 ACCOUNTS → Readwise（`/settings/readwise`）
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| ACCESS TOKEN | 密码 + `Show` | **未设置** | 「Add your Readwise access token to start syncing.」；`Find your token at readwise.io/access_token.` | ⬜ |
-| Enable sync | 开关 | 未能采集 | 自动把高亮推送到 Readwise | ⬜ |
-| 动作 | 按钮 | `Test`、`Save` | — | ⬜ |
+| ACCESS TOKEN | 密码 + `Show` | **未设置** | 「Add your Readwise access token to start syncing.」；`Find your token at readwise.io/access_token.` | ✅（本项目 Token 存储，掩码回显） |
+| Enable sync | 开关 | 未能采集 | 自动把高亮推送到 Readwise | ⬜（同步未实现） |
+| 动作 | 按钮 | `Test`、`Save` | — | ✅（真实验证已实现） |
+
+**本项目落地**：Access Token 存储 + 真实验证（`GET /api/v2/auth/`）。⚠️ Readwise **用 204 表示验证通过**（不是 200）——按 200 判定会把有效凭据误判为失败。未支持：自动推送高亮与「Enable sync」开关。
 
 ### 2.33 ACCOUNTS → StoryGraph（`/settings/storygraph`）
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| _STORYGRAPH_SESSION | 密码 + `Show` | **未设置** | 从浏览器 Cookie 复制 | ⬜ |
-| REMEMBER_USER_TOKEN | 密码 + `Show` | **未设置** | 同上 | ⬜ |
-| 动作 | 按钮 | `Validate cookies`、`Save` | — | ⬜ |
+| _STORYGRAPH_SESSION | 密码 + `Show` | **未设置** | 从浏览器 Cookie 复制 | ✅（本项目 Cookie 存储，掩码回显） |
+| REMEMBER_USER_TOKEN | 密码 + `Show` | **未设置** | 同上 | ✅（本项目 Cookie 存储，掩码回显） |
+| 动作 | 按钮 | `Validate cookies`、`Save` | — | ✅（存储已实现；不做自动验证与同步） |
 
 **说明原文要点**：StoryGraph 无公开 API，此集成复用登录态下的两个 Cookie（社区 KOReader 插件同法），可能因对方改版失效，需偶尔重新粘贴。
+
+**本项目落地**：两个 Cookie 的存储（掩码回显）已实现；**不做自动验证与同步**——StoryGraph 没有公开 API，上游自己也只能用登录态 Cookie 并注明可能失效，本项目如实标注，而不是放一个点了没用的「Validate cookies」。
 
 ### 2.34 SERVER → Users（`/settings/admin/users`）
 
@@ -654,13 +704,17 @@ SERVER
 | 免责声明 | 只读 | — | 「BookOrbit does not provide or endorse indexer sources. Every source here is one you configured...」 | — |
 | Download clients / Automation | — | **未能采集**（空态） | — | ⬜ |
 
+**本项目落地**：上游 indexers（Torznab / Newznab 形态）未做；等价能力在「网络与下载」（书源管理 / 书源下载，🔵，本项目扩展，ready）。本设置页仅作上游对照。
+
 ### 2.39 SERVER → Book Dock（`/settings/admin/book-dock`）
 
 | 分组 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|---|
-| DROP FOLDER | Container path | 只读 | `/data/book-dock` | 把书丢进该目录即被 Book Dock 自动拾取处理，支持子目录；改路径需设 `BOOK_DOCK_PATH` 环境变量 | 🟡（与本项目「输入目录 + watcher」高度同构） |
-| METADATA | Auto-fetch metadata from providers | 开关 | 未能采集 | 文件进入 Book Dock 后自动抓取元数据 | ⬜ |
-| AUTO-FINALIZE | Enable auto-finalize | 开关 | 未能采集 | 元数据置信度达到阈值即自动定稿 | 🟡 |
+| DROP FOLDER | Container path | 只读 | `/data/book-dock` | 把书丢进该目录即被 Book Dock 自动拾取处理，支持子目录；改路径需设 `BOOK_DOCK_PATH` 环境变量 | ✅（本项目投递目录＝输入目录 + 监听） |
+| METADATA | Auto-fetch metadata from providers | 开关 | 未能采集 | 文件进入 Book Dock 后自动抓取元数据 | ✅（本项目 watcher 旁路调用 auto_fetch，按所属库策略执行） |
+| AUTO-FINALIZE | Enable auto-finalize | 开关 | 未能采集 | 元数据置信度达到阈值即自动定稿 | ✅（本项目达到阈值的字段自动定稿，低于阈值的列预览等人工确认） |
+
+**本项目落地**：投递目录（＝输入目录）+ 监听状态与启停 + 自动处理开关 + 处理计数 + 入库后自动抓元数据（watcher 旁路调用 auto_fetch，按所属库的策略执行；达到置信度阈值的字段自动定稿，低于阈值的只列在预览页等人工确认）均已实现。
 
 > 该页 `<h2>` 说明写的是「Quick actions shown on book pages.」，与页内三组内容（投递目录/元数据/自动定稿）存在表述不一致，如实记录。
 
@@ -668,19 +722,38 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| UPLOAD FONTS | 拖拽/浏览上传 | 未上传 | `TTF, OTF, WOFF, WOFF2 - max 50 MB each` | ⬜ |
-| SERVER FONTS | 只读 | `0 / 200 used` | 空态：`No server fonts yet` / 「Fonts you add here appear in every user's reader.」 | ⬜ |
+| UPLOAD FONTS | 拖拽/浏览上传 | 未上传 | `TTF, OTF, WOFF, WOFF2 - max 50 MB each` | ✅（本项目上传 / 列表 / 删除 / 选用） |
+| SERVER FONTS | 只读 | `0 / 200 used` | 空态：`No server fonts yet` / 「Fonts you add here appear in every user's reader.」 | ✅（本项目与「阅读字体」共用同一份字体库，上限 200） |
+
+**本项目落地**：服务端字体与「阅读字体」共用同一份字体库（本项目单用户部署，无「每用户 / 服务端」两级），上限 200。
 
 ### 2.41 SERVER → Audit Log（`/settings/admin/audit-log`）
 
 | 分组 | 内容 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| 筛选 | 多个筛选控件（107 个控件） | 未能逐项采集 | — | 🟡（本项目已有 activity_log，可升级为审计流） |
-| 流水 | 表格 | 有历史记录 | 列：`时间` ｜ `操作者`（形如 `<账号>#1`）｜ `类别` ｜ `动作` ｜ `Details`（如 `Book` / `1 book` / `Library #3`） | 🟡 |
+| 筛选 | 多个筛选控件（107 个控件） | 未能逐项采集 | — | ✅（本项目活动日志支持按动作/结果/关键字筛选） |
+| 流水 | 表格 | 有历史记录 | 列：`时间` ｜ `操作者`（形如 `<账号>#1`）｜ `类别` ｜ `动作` ｜ `Details`（如 `Book` / `1 book` / `Library #3`） | ✅（本项目活动日志已实现，含操作者/类别/Details） |
+
+**本项目落地**：直接读活动日志并显示操作者（actor 为本次新增，历史条目按「未记录」渲染）+ 类别归并 + 按动作/结果/关键字筛选，已实现；上游是独立审计子系统，本项目复用活动日志。
 
 **采集到的类别枚举（有价值，供对齐）**：`Authentication`（登录）、`Books`（移动到书库、删除书、写元数据并重命名、更新元数据与锁定、刷新元数据）、`Libraries`（创建/更新/删除书库）、`Settings`（更新作者增强配置、更新作者元数据偏好）、`Integrations`（注册/重命名 Kobo 设备）。
 
 > **脱敏说明**：审计流中的具体账号名与书目名属个人数据，本清单只记录**类别与动作形态**，不记录具体条目。
+
+### 2.42 DEVICES → Komga（`/settings/komga`）
+
+> `settingsNav` 标 `ready`（本项目扩展能力，归在 DEVICES 组）。
+
+本项目实现「输出侧」Komga 支持：
+
+- **输出布局开关**（`output.layout`）：有系列的书落 `系列名/系列名 #N.ext`，无系列保持平铺；
+- **既有库整理**：先预览、再应用；会改 basename 的条目在应用时自动迁移阅读进度 / 批注 / 评分 / 收藏（按 `book_id` 搬迁），整理库不会把进度清零；
+- **系列来源**：EPUB 的 `calibre:series` 优先，判不出则从文件名推断（`系列 第01卷` / `系列 #1` / `系列 (01)` / `系列 - 01`），都判不出就原地不动；
+- **逐库暴露**（第 22 期起）：在「工具 → 书库管理 → 每库设置」关掉某库的「对 Komga 暴露」，它就不进客户端书库列表，直连它的系列 / 书籍地址也一并 404（默认全部暴露）；
+- **兼容服务端补齐**：客户端可按书库浏览（系列与书籍都按库过滤），系列级「全部已读 / 全部未读」（只把百分比顶到 100，不清除读者位置），CBR 拿到正确的媒体类型；
+- 有声书库不进 Komga（Komga 没有音频模型）。
+
+**本项目可行性**：✅（输出侧布局 + 逐库暴露 + 进度迁移均已实现）；未支持「接入侧」：从 Komga 拉书目 / 下载入库、双向同步进度。
 
 ---
 
@@ -758,27 +831,33 @@ SERVER
 
 | BookOrbit 分区 | 本项目现有分区 | 差异判定 |
 |---|---|---|
-| YOU → Profile | **账户** | 命名不一致：本项目「账户」只有账号展示 + 改密码；缺头像/显示名/时区/成就开关/引导重放/已连接账号 |
-| YOU → Display（Theme/Book Covers/Icons/Layout/Behavior/Language） | **外观** | 部分对齐：Type 对应 Theme 的主题/点缀色/圆角；缺 Book Covers、Icons、Layout、Behavior、Language 五页，且无「保存位置」与「Surface opacity」「背景图案」 |
-| YOU → Reader（eBook/PDF/Comics/Audiobook/Fonts/General） | **阅读** | 部分对齐：eBook 已实现「阅读模式 / 13 档主题 / 字体 / 字号 / 行高 / 内容宽度 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 13 项；缺 PDF、Comics、Audiobook、Fonts、General 五页；eBook 仍未支持：新书套用设置、固定版式页宽、字重样式、文本区左右内边距 |
-| YOU → Notifications | 无 | **缺失**（本项目有消息，但无可配置项） |
-| YOU → Privacy & Sharing | 无 | **缺失**（单用户场景无意义，建议占位或标注不适用） |
-| YOU → Restrictions | 无 | **缺失**（同上） |
-| LIBRARY → Libraries | 无（单 `OUTPUT_DIR` 模型） | **架构级差异**：本项目是单成品目录；BookOrbit 是多书库 + 多文件夹 + 每库自动化 |
-| LIBRARY → Metadata（7 页） | 无（仅有实体管理工具） | **整体缺失**，且是 41 页中体量最大的一块（Providers / Field Rules / Custom Fields / Confidence Score / Books / Authors / Genre Blocklist） |
-| LIBRARY → File Naming | **工具 → 批量重命名** | 🔵 能力等价但入口不同：本项目已有 tokens 概念与预览执行；**缺「配方（recipe）」与 IF-METADATA-IS-MISSING 降级预览** |
-| LIBRARY → Maintenance | 部分散落在 **监听** / **工具** | 命名与分组不一致 |
-| DEVICES → Kobo / KOReader / OPDS / Email | 无 | **整体缺失** |
-| ACCOUNTS → Hardcover / Readwise / StoryGraph | 无 | **整体缺失** |
-| SERVER → Users & Access（4 页） | **账户**（仅单用户改密） | **架构级差异**：本项目是单用户轻登录，无角色/权限/邀请/免密链接/OIDC |
-| SERVER → Audit Log | 工具 → 日志（`activity_log`） | 🔵 能力形似但不含操作者/类别/Details 结构 |
-| SERVER → Book Dock | **监听**（输入目录 + watcher） | 🔵 **高度同构**：`/data/book-dock` ↔ 本项目 `INPUT_DIR`；「丢进去自动处理」↔ 目录监听；「auto-finalize 置信度阈值」↔ 可扩展 |
-| SERVER → Requests | 工具 → 书源管理 / 书源下载 | 🔵 部分同构（都在做「从外部获取书」），但形态不同（插件/PT indexer vs 本项目书源规则） |
-| SERVER → Server Fonts | 无 | **缺失** |
+| YOU → Profile | **账户 / Profile 页** | ✅ 已实现：账号展示、改密码、头像上传/移除、显示名、时区（接通时间类成就）、成就开关、引导重放；OIDC / Email / Username（不可改）单用户无意义，不实现 |
+| YOU → Display（Theme/Book Covers/Icons/Layout/Behavior/Language） | **外观**（Theme / Book Covers 已实现；Icons / Layout / Behavior 占位对照；Language 无页） | ✅ Theme / Book Covers 已实现；Icons / Layout / Behavior 由设计系统统一、不暴露为设置（`placeholder` 对照）；Language 本项目中文单语无页 |
+| YOU → Reader（eBook/PDF/Comics/Audiobook/Fonts/General） | **阅读**（六页均实现） | ✅ 六页均 `ready`；eBook 个别项未支持（新书套用设置 / 固定版式页宽 / 字重样式 / 文本区左右内边距） |
+| YOU → Notifications | **通知** 页 | ✅ 已实现：按类 Off / Problems / All 客户端过滤（生效范围 = 通知中心与日志） |
+| YOU → Privacy & Sharing | 无 | ➖ 单用户场景无意义，无页（标注不适用） |
+| YOU → Restrictions | 无 | ➖ 单用户场景无意义，无页（标注不适用） |
+| LIBRARY → Libraries | **工具 → 书库管理**（设置页仅对照） | 🔵 多书库实体 / 自动归库 / 每库覆盖均在工具页；设置页 `placeholder` 对照 |
+| LIBRARY → Metadata（7 页） | **元数据**（7 页均实现） | ✅ Providers / Field Rules / Custom Fields / Confidence Score / Books / Authors / Genre Blocklist 均 `ready` |
+| LIBRARY → File Naming | **工具 → 批量重命名** | 🔵 命名规则存服务端 + 4 配方 + 预览；上游 13 token / 7 修饰符 / 结构语法未支持 |
+| LIBRARY → Maintenance | 部分散落 **监听** / **工具** | ✅ 上传上限 / 成就重算 / 索引重建 / 缓存 / 回收站已实现；IMPORT / RECOMMENDATIONS / UPDATES 未实现（只读列出） |
+| DEVICES → Kobo | 无 | ➖ 无 Kobo 支持 |
+| DEVICES → KOReader | **KOReader 进度互通**（kosync 服务端）+ KOReader 上游对照页 | ✅ kosync 协议服务端已实现；上游结构页为 `placeholder` 对照 |
+| DEVICES → OPDS | **OPDS** 页 | ✅ 已实现（目录 / 端点 / 排序 / 逐库暴露） |
+| DEVICES → Komga | **Komga 库布局** 页 | ✅ 本项目扩展：输出侧布局 + 逐库暴露 + 进度迁移 |
+| DEVICES → Email | 无 | ➖ 无邮件投递渠道 |
+| ACCOUNTS → Hardcover / Readwise / StoryGraph | **Hardcover / Readwise / StoryGraph** 页 | ✅ 凭据存储 + 真实验证已实现；同步推送（书评 / 阅读状态 / 高亮）未实现 |
+| SERVER → Users & Access（4 页） | **账户**（仅单用户改密） | ➖ 单用户轻登录，无角色 / 权限 / 邀请 / 免密链接 / OIDC |
+| SERVER → Audit Log | **工具 → 日志**（activity_log） | ✅ 活动日志已实现，含操作者 / 类别 / Details |
+| SERVER → Book Dock | **监听**（输入目录 + watcher） | ✅ 投递目录 + 监听 + 自动抓取 + 自动定稿已实现 |
+| SERVER → Requests | **网络与下载**（书源管理 / 书源下载） | 🔵 等价能力在「网络与下载」（书源管理），上游 indexers 形态未做 |
+| SERVER → Server Fonts | **服务端字体** 页 | ✅ 与阅读字体共用字体库，上限 200 |
 | — | **转换**（分章模式/AI/LLM/繁转简/输出格式/Calibre） | **本项目独有**，BookOrbit 无对应页 |
 | — | **监听**（watcher 9 项参数） | **本项目独有**（BookOrbit 的 watcher 是每书库的 `Watch folders` 开关 + `Scheduled scan`） |
 | — | **网络与下载**（传输重试/开放下载/公版源/日志/域名替换） | **本项目独有**，BookOrbit 无对应页 |
 | — | **高级**（config.yaml 原文编辑 / 覆盖层清除 / 备份列表与还原） | **本项目独有**，BookOrbit 无「直接编辑配置文件」入口 |
+
+> 本表已完成迁移对齐（以 `settingsNav.ts` 为权威真值源）；§5.3 为迁移时期的处置建议，现全部落地，保留为历史记录。
 
 ### 5.3 本项目现有 8 分区的处置建议
 
