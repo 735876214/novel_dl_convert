@@ -4,14 +4,14 @@
 
 **一律先预览、再应用**（与批量重命名、查重同一范式）：
 - :func:`plan` 只算不改，返回每本书的字段级「当前值 → 建议值 + 来源 + 置信度」
-- :func:`apply` 只接受前端回传的**具体条目**，并再校验一遍（书还在、是 EPUB、值非空）
+- :func:`apply` 只接受前端回传的**具体条目**，并再校验一遍（书还在、值非空）
 
 两条硬规则：
 
-1. **只支持 EPUB**：PDF / CBZ / MOBI 没有可编辑的元数据语义，plan 里直接标为「跳过」并说明原因，
-   而不是假装能改（那会让用户以为抓取失败了）。
-   ⚠️ 第 17 期 T3：结果**只存服务端 DB**（``meta_online`` / ``meta_cover``），**绝不改写 EPUB 文件**；
+1. **不按格式分流**：结果**只存服务端 DB**（``meta_online`` / ``meta_cover``），**绝不改写任何文件**，
+   所以 EPUB / PDF / 漫画 / 有声书一律同等对待（有声书是**目录**型条目，不再要求「是文件」）。
    ``fileops`` 的 OPF/zip 重写能力保留给结构性重排（改名 / 系列），不在本链路调用。
+   ⚠️ 例外：**手动编辑元数据**仍只对 EPUB 开放（非 EPUB 没有 OPF 兜底原值层，「恢复原值」无从取）。
 2. **字段策略先于一切**：`fill_only`（默认，只在原值为空时写）→ `overwrite` → `skip`。
    默认 fill_only 是刻意的：抓取来的元数据**没有用户自己写/改过的值可信**。
 """
@@ -131,12 +131,8 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             items.append(base)
             continue
 
-        # ⚠️ `library.books()` 的 format 本来就是大写（"EPUB"），这里必须与 "EPUB" 比 ——
-        # 写成 `.upper() != "epub"` 会让**每本 EPUB 都被当成非 EPUB 跳过**（实测踩过）
-        if (b.get("format") or "").upper() != "EPUB":
-            base["skipped"] = "非 EPUB：没有可写的 OPF（PDF / 漫画 / 音频的元数据抓取暂不支持）"
-            items.append(base)
-            continue
+        # 不按格式跳过：结果**只写服务端 DB**，与文件能不能改无关 —— PDF / 漫画 / 有声书一视同仁。
+        # （曾按 `format != "EPUB"` 跳过，理由是「没有可写的 OPF」；该前提在本链路改为只落库后已失效。）
 
         # ISBN 精确匹配优先（第 8 期 D4）：有 ISBN 且在线查得到就直接用，置信度视为最高
         exact = metasources.search_by_isbn(b.get("isbn") or "", sources, 3, options)
@@ -273,11 +269,11 @@ def apply(items: list, cfg: dict = None) -> dict:
         try:
             # 多书库：基根取**该书所属库**（前端回传 library_id 优先，缺失则按名字反查），
             # 不能默认落到默认库根 —— 否则非默认库的书会被误判「文件不存在」。
+            # ⚠️ 只校验「确实在这本书所属的库根下」（`safe_path` 的安全边界），**不再限定必须是
+            # EPUB 文件**：有声书是**目录**、漫画 / PDF 是各自的容器，而结果本来就只写 DB。
             path = fileops.safe_path(name, fileops._lib_of(name, it))
-            if not path.is_file():
+            if not path.exists():
                 raise ValueError("文件不存在")
-            if path.suffix.lower() != ".epub":
-                raise ValueError("只有 EPUB 支持在线元数据")
 
             updates = {k: v for k, v in fields.items()
                        if k in fileops.METADATA_FIELDS and (v not in ("", None, []))}

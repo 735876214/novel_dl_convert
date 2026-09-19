@@ -44,17 +44,17 @@ FEATURE_LABELS = {
 _COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"}
 
 #: 类型 → 能力集。判据是**现有实现真实支持的范围**，不是「理论上可以」：
-#:   · 元数据抓取：字段语义与「文件原值兜底」都建立在 EPUB 的 OPF 上，漫画 / 音频
-#:     暂无可用源与字段语义 → 仅 ebook（见 metafetch.plan 的跳过说明）
-#:     （第 18 期起结果只存服务端 DB，不再改写文件 —— 但**能力范围没变**）
+#:   · 元数据抓取：结果**只存服务端 DB**、与文件格式无关 → ebook / comic / audiobook 都适用
+#:     （⚠️ 只有**手动编辑**元数据仍限 EPUB：非 EPUB 没有 OPF 兜底原值层）
+#:   · 作者元数据：与作者检索绑定，目前只有 ebook / mixed（`authors` 键仍只给 ebook）
 #:   · 本地转换产出 EPUB → 仅 ebook
 #:   · 书源下载产出 EPUB → 仅 ebook
 #:   · Komga 布局整理针对系列化目录（电子书 / 漫画）→ ebook + comic
 FEATURES_BY_TYPE = {
     "ebook": _COMMON | {"ebook", "pdf", "annotations", "metadata", "authors",
                         "convert", "sources", "komga"},
-    "comic": _COMMON | {"comic", "komga"},
-    "audiobook": _COMMON | {"audio"},
+    "comic": _COMMON | {"comic", "metadata", "komga"},
+    "audiobook": _COMMON | {"audio", "metadata"},
     "mixed": _COMMON | {"ebook", "pdf", "comic", "audio", "annotations", "metadata",
                         "authors", "convert", "sources", "komga"},
 }
