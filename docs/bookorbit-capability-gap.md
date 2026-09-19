@@ -106,13 +106,16 @@
 
 ## 5. 域：工具
 
+> **第 28 期复核（2026-09-20）**：Bulk Rename 那一行按代码改判 —— 原「有页面 `/tools/rename`」的
+> 现状已不成立（页面与 `/api/rename/*` 一并删除），改名并入刮削面板；其余各行为第 27 期复核结论。
+
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
 | Entity Manager | 实体管理 | **已有**（`/tools/entities`、`server.py:947-997`） | 可直接落地 | — |
-| Bulk Rename | **需先选书库** | 部分：有页面（`/tools/rename`），但 **scope 是扩展名而非书库**（`core/fileops.py:150-188`） | 现状 **可直接落地**／按书库 **需架构变更** | 「选书库」依赖多库实体 |
+| Bulk Rename | **需先选书库** | **口径不同的自有实现**：第 28 期删掉 `/tools/rename` 页与 `/api/rename/*`，并入刮削面板的「命名规则」区块（规则 + 预览 + 一键重出版，`core/scrape.py` 的 `plan_naming` / `republish`）；**scope 仍是扩展名而非书库**（`naming.scope`），且只改**副本名**、源文件名无任何入口可改 | 现状 **可直接落地**／按书库 **需架构变更** | 「选书库」依赖多库实体；「只改副本名」是**刻意**与上游分流（上游改的是 `book.files[].filename`，与本项目「源文件只读」硬约束冲突，见 §1 的 `fileRenameEnabled`） |
 | Duplicate Books | Library scope 多选 + **Similar-title threshold 85%** + Run scan | 部分：有页面与接口（`/api/duplicates`）；**无 scope、无可调阈值**；匹配为「归一化书名+作者」**精确**分组（`core/library.py:642-666`） | 精确匹配 **可直接落地**／阈值 **需新增后端能力**／library scope **需架构变更** | 阈值需引入相似度算法 |
 | Missing Resources | Cover check + Run check + Missing books / Broken covers / **Orphaned cover folders** | 部分：有页面与接口，三类 issue = `zero-bytes`/`unparsable`/`no-cover`；**无 orphaned 目录、无 clean 动作、无 sweep** | **需新增后端能力** | 可复用 `fileops.recycle_items`（`core/fileops.py:309-339`） |
-| 工具页签数 | 4 个 | **本项目 8 个**（前 4 对齐上游，后 4 为自有） | 可直接落地 | 已超出线上 |
+| 工具页签数 | 4 个 | **本项目 8 个**（书库管理 / 实体管理 / 重复书籍 / 缺失资源对齐上游；书源管理 / 导出目录 / 本地转换 / 转换日志为自有。第 28 期删掉「批量重命名」页签后为 8 个） | 可直接落地 | 已超出线上 |
 
 ## 6. 域：统计与成就
 

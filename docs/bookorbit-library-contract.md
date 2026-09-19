@@ -2,13 +2,14 @@
 
 > 来源：上游参考仓库 **`https://github.com/735876214/bookorbit`**（分支 `main` @ commit `c292d6cc`，站点版本 v2.10.0）；类型定义集中在 `@bookorbit/types` 包（`packages/types/src/`）。
 > **来源更正（2026-09-19）**：本文件此前把来源写作 `https://github.com/bookorbit/bookorbit`，该路径并非上游实际地址；已更正为 `735876214/bookorbit`。
-> **取证方式（2026-09-19 复核）**：只读镜像（blobless 稀疏克隆，`packages/types` + `packages/plugin-api`，落盘 76 个 `.ts`）**逐文件比对**。下文凡标注「已核对」的 TS 片段，均已与镜像中的同名文件逐字段比对通过；镜像中**不存在**的类型（如 bulk-rename 的请求/响应类型）如实标注「未在 `packages/types` 中定义 / 未验证（源码无法确认）」，不臆测补全。
+> **取证方式（2026-09-19 复核）**：只读镜像（blobless 稀疏克隆，`packages/types` + `packages/plugin-api`，落盘 76 个 `.ts`）**逐文件比对**。下文凡标注「已核对」的 TS 片段，均已与镜像中的同名文件逐字段比对通过；镜像中**不存在**的类型如实标注「未在 `packages/types` 中定义 / 未验证（源码无法确认）」，不臆测补全。
+> **取证方式补记（2026-09-20，第 28 期）**：检索「某类型是否存在于 `packages/types`」**必须全目录扫符号**，按文件名猜（如「bulk-rename 的类型应在 `bulk-rename.ts`」）会漏 —— §5 原据此断言「不存在 `BulkRename*`」，实际它们在 `file-write.ts:229-274`。
 > 用途：本文件是 **novel_dl_convert 移植四工具（book-duplicates / bulk-rename / entity-manager / missing-resources）** 时，前端 `lib/api.ts`、后端 `core/*` 与上游数据模型的对齐基准。
 > 领域映射约定（已拍板）：
 > - 「书 book」→ 转换后的小说 epub（`OUTPUT_DIR` 成品文件）+ 元数据（标题/作者/系列）
 > - 「实体 entity」→ 作者 / 系列（EPUB 元数据 + 文件名解析）
 > - 「重复 duplicate」→ 归一化书名+作者分组或内容哈希重复
-> - 「批量重命名 bulk-rename」→ 按规则批量重命名 `OUTPUT_DIR` 内的 epub 文件
+> - 「批量重命名 bulk-rename」→ 按命名规则重出版**副本**（改副本文件名；源文件名只读，第 28 期口径）
 > - 「缺失资源 missing-resources」→ 零字节 / 无法解析 / 缺封面
 
 ---
@@ -325,20 +326,68 @@ export interface DismissedPairInfo { id: number; entityType: EntityType; nameA: 
 
 ## 5. bulk-rename 批量重命名（依赖 `library.ts` 字段）
 
-上游依赖 `Library.fileNamingPattern`（**已核对**，见 §1）与 `Library.fileRenameEnabled`（**已核对**），按 `Library` 维度对 `book.files[].filename` 做预览/执行。
+上游依赖 `Library.fileNamingPattern`（**已核对**，`library.ts:72`）与 `Library.fileRenameEnabled`（**已核对**，`library.ts:87`），按 `Library` 维度对 `book.files[].filename` 做预览/执行。
 
-> ⚠️ **更正（2026-09-19）**：本节此前写「类型来自 `@bookorbit/types`」。复核后**该说法不成立**——对 `packages/types/src` 全目录检索 `BulkRename`，**没有任何 `BulkRename*` 类型定义**（仅 `audit.ts` / `file-write.ts` / `notification.ts` 中出现过 bulk rename 的**字符串**，属动作名与通知文案，不是数据结构）。
-> 故下列类型的**字段级定义：未验证（源码无法确认）**——它们应在 `client/src/features/tools/api/bulk-rename.ts` 或服务端 DTO 中，本轮未取该目录；下列名称仅来自本文件早前的接口记录，未能在 `packages/types` 复核：
-- `BulkRenameExecuteRequest`（含 `excludeBookIds`；省略则重命名所有候选）
-- `BulkRenamePreviewPage`（分页预览：旧名/新名候选）
-- `BulkRenameStatus`
->
-> **对本项目的影响**：bulk-rename 的契约**不能以上游类型为对齐基准**，应以本项目 `core/fileops.py` 的现有签名 + 前端 `lib/api.ts` 为准（见 §7）。
+> ✅ **更正（2026-09-20，第 28 期）**：本节 2026-09-19 的更正**本身是错的**，现撤掉。当时写「对 `packages/types/src` 全目录检索 `BulkRename`，**没有任何 `BulkRename*` 类型定义**」——实际**有**，就在 `packages/types/src/file-write.ts:229-274`（与 `FileRenameResult` / `BookWriteAndRenameResult` 同段）。当时漏检的原因应是检索按「文件名像 bulk-rename」找而没全目录扫符号；**教训：取证要扫符号，不要按文件名猜**。
+> 下面各类型均已与镜像逐字段比对通过（**已核对**）。
+
+```ts
+// packages/types/src/file-write.ts:228-274
+export type BulkRenameStatus = "will_rename" | "unchanged" | "collision" | "no_pattern" | "error";
+
+export interface BulkRenamePreviewItem {
+  bookId: number;
+  title: string;
+  currentPath: string;
+  newPath: string | null;
+  status: BulkRenameStatus;
+  reason?: string;
+}
+
+export interface BulkRenamePreviewPage {
+  items: BulkRenamePreviewItem[];
+  total: number;
+  totalByStatus: Record<BulkRenameStatus, number>;
+  /** 预览所依据的命名规则 —— 让客户端能把「变了的路径段」归因到产出它的规则段 */
+  pattern: string;
+}
+
+/** `excludeBookIds` = 「除这些之外全改」（默认复审流）；`includeBookIds` = 「只改这些」（从空选开始的流）。
+ *  两个都传会被拒；都不传 = 改全部候选。两侧都不整份传：候选可上万而客户端只持有已加载的页。 */
+export interface BulkRenameExecuteRequest {
+  excludeBookIds?: number[];
+  includeBookIds?: number[];
+}
+
+/** `started` 在任何慢活之前发出，好让响应头立刻 flush、客户端显示真进度；
+ *  它的 `total` 是**服务端收窄后**的数，才是权威值。 */
+export type BulkRenameProgressEvent =
+  | { started: true; total: number }
+  | { bookId: number; status: "success" | "failed" | "skipped"; reason?: string }
+  | { done: true; processed: number; succeeded: number; failed: number; skipped: number };
+```
+
+相邻的动作名 / 通知文案（**已核对**，不是数据结构）：`audit.ts:44` `LibraryBulkRename = "library.bulk_rename"`；`notification.ts:27-28` `BulkRenameCompleted` / `BulkRenameFailed`。
 
 对应 REST（`bulk-rename.ts` api），`BASE = /api/v1/libraries/{libraryId}/bulk-rename`：
 - `GET  /preview?page=&pageSize=&status=&search=`
 - `GET  /status` → `{ running: boolean }`
-- `POST /execute`（body `BulkRenameExecuteRequest`；`excludeBookIds` 用于保留部分书不被重命名）
+- `POST /execute`（body `BulkRenameExecuteRequest`，见上）
+
+### 5.1 本项目现状与**刻意分流**（第 28 期）
+
+| 上游 | 本项目（第 28 期起） | 说明 |
+| --- | --- | --- |
+| 改 `book.files[].filename`（**源文件真改名**） | **只改硬链接副本名**，源文件名无任何入口可改 | 与本项目「源文件只读」硬约束直接冲突，属**刻意分流**而非缺口 |
+| 入口 `/tools/rename` 独立工具页 | 并入刮削面板「命名规则」区块（`core/scrape.py` 的 `plan_naming` / `republish`） | 规则唯一、写点唯一；`/tools/rename` 与 `/api/rename/*` 已删（有 404 防回归断言） |
+| `BulkRenamePreviewItem.{currentPath,newPath,status}` | `NamingItem.{old_rel,new_rel,changed,conflict,reason}` | 语义对应；`conflict` 分 `occupied`（落点被别人的文件占着）/ `dup`（同批内重名） |
+| `BulkRenamePreviewPage.pattern` / `totalByStatus` | `NamingPlan.{pattern,stats:{total,changed,conflict,ready}}` | 同上，本项目用四档统计 |
+| `BulkRenameExecuteRequest`（include / exclude 二选一） | `POST /api/naming/apply` 的 `book_ids`（**只能收窄**，不可扩） | 我们只保留 include 一侧：客户端给不出「去改哪本书」，要改哪些由服务端按规则自算 |
+| `BulkRenameProgressEvent`（流式进度） | **无**（同步返回 `{total,done,failed,skipped,items}`） | 串行跑在 `asyncio.to_thread`；进度靠转换日志的轮询看板，不新开流式端点 |
+| `scope` 是书库 | `scope` 是**扩展名筛选**（`naming.scope`） | 上游按 `Library` 维度；本项目的书库维度另有入口，见 `docs/bookorbit-capability-gap.md` §5 |
+
+> 因此 bulk-rename 的契约**不以本项目接口为对齐基准、也不再以上游类型反推**：上游类型已核实如上，
+> 本项目的对应物以 `core/scrape.py` + `frontend/src/lib/api.ts` 为准（见 §7）。
 
 ---
 
@@ -406,7 +455,9 @@ export type MissingResourceCleanupResult = {
 
 1. 前端 `lib/api.ts` 的入参/出参字段名需与 `server.py` 实际返回字段一一对应（上游为 camelCase，注意本项目后端是否已统一）。
 2. 实体类型子集：`author` / `series`（本项目），其余类型不要暴露。
-3. 改盘安全约定（本项目既有）：`fileops.safe_path` 校验、`plan_*` 只算不改、`apply_*` 只接受前端回传并再校验、`recycle_items` 走回收目录、`library.invalidate()` 写后失效缓存。
+3. 改盘安全约定（本项目既有）：`fileops.safe_path` 校验、`plan_*` 只算不改、`recycle_items` 走回收目录、`library.invalidate()` 写后失效缓存。
+   **`apply_*` 的目标一律由服务端自己算**（第 28 期收紧，原文写「只接受前端回传并再校验」）：客户端给的 `book_ids` 只当**收窄**条件，预览条目里的旧名/新名仅供参考，不作为落盘依据 —— 预览过期也不会改错书。
+   推论：**源文件名没有任何可写入口**（唯一的落盘路径是「按命名规则重出版副本」；仅「同名冲突修复」与「库布局整理」还改 basename，因为它们改的就是这件事本身，且都成对调用 `db.remap_book_id`）。
 4. 缺失封面以 `hasCover === false` 或 `coverSource === null` 表示。
 5. 查重 reason 枚举：`file_hash | isbn | exact_metadata | fuzzy_metadata`（**已核对**）；扫描状态枚举 `queued | running | completed | failed`（**已核对**，本段此前漏记）。
 6. **系列序号（`series-index.ts`，已核对）**：`SeriesIndex` 是**字符串**类型，形状受 `SERIES_INDEX_PATTERN = /^\d+(?:\.\d+)?$/` 与 `SERIES_INDEX_MAX_LENGTH = 20` 约束（`isValidSeriesIndex` / `parseSeriesIndex` 校验，非法即 `null`）。
@@ -414,4 +465,5 @@ export type MissingResourceCleanupResult = {
    - **展示用 `formatSeriesIndex`**：整段**补零到 2 位**（`1` → `01`，`1.5` → `01.5`）。本项目第 6 期起展示 `#序号`，如与上游口径对齐需注意补零规则。
 7. **实体动作必须受 `EntityCapabilities` 约束**（见 §4 能力矩阵）：`series` 无 split、无软删除、无图片、无排序名——前端不要渲染这些入口。
 8. 上游 `BookMediaKind` 允许**一本书同时是多种媒介**（`hasEbook` 与 `hasAudio` 可同真）；本项目按「单个成品文件 / 目录」建模，映射时需明确「主媒介」口径。
-9. **分页响应的键名上游自身不统一**：`BooksPage` 用 `size`（`book.ts`），而 `BookDuplicateGroupsResponse` / `BrowseEntitiesResponse` / `MissingResourcePage` / `ReadingAttemptListResponse` 用 `pageSize`。本项目对齐时建议**统一选一套**，不要照抄这种不一致。
+9. **bulk-rename 的预览/执行/进度三组 DTO 已核实**（`file-write.ts:229-274`，见 §5）：`BulkRenamePreviewPage.pattern` 与 `totalByStatus`（按 `BulkRenameStatus` 五档计数）在上游是**响应自带**的，本项目对应 `NamingPlan.{pattern,stats}`；上游 `POST /execute` 用 `excludeBookIds` / `includeBookIds` **二选一**（都传则拒），本项目只保留 include 一侧且**只能收窄**。
+10. **分页响应的键名上游自身不统一**：`BooksPage` 用 `size`（`book.ts`），而 `BookDuplicateGroupsResponse` / `BrowseEntitiesResponse` / `MissingResourcePage` / `ReadingAttemptListResponse` 用 `pageSize`。本项目对齐时建议**统一选一套**，不要照抄这种不一致。

@@ -380,9 +380,13 @@
   **之前**等它们收干净（与既有「测试不养后台轮询」同一条纪律）。
   ② `test_scrape_publish` 的「扫描后自动入队」断言要求状态仍是 `pending/running`，而单线程 worker
   可能已经刮完 → 改为允许 `ok`（「入队」这件事本身由 `scrape_queued == 1` 钉住）。
-- **本次发现、但未改（留给以后）**：`watcher.auto_fetch_async` 仍按 `.epub` 后缀提前 return
-  （第 21 期只放开了 `metafetch.plan/apply`），因此**入库自动抓取**对漫画 / 有声书仍不触发 ——
-  改它要连同「入库即外呼」的取舍一起定。
+- ~~**本次发现、但未改（留给以后）**：`watcher.auto_fetch_async` 仍按 `.epub` 后缀提前 return，
+  因此**入库自动抓取**对漫画 / 有声书仍不触发。~~
+  **第 28 期改判：已实现，非缺口**（连带项核验时发现原文已过期）。`core/watcher.py:88-92` 的
+  允许清单早已放宽为 `.epub/.mobi/.azw3/.pdf/.fb2/*comics.COMIC_EXTS`，并有 `kind="audiobook"`
+  分支（`core/watcher.py:430,436`，目录型条目名字无后缀、按 `kind` 显式放行）；
+  `tests/test_watcher_auto_fetch.py` 已钉住漫画与有声书两例。双重门控（`metadata_fetch.enabled`
+  且 `auto_on_import`）不变，默认仍是不联网。「入库即外呼」的取舍**已经定过**，只是没写进本文件。
 
 ---
 
