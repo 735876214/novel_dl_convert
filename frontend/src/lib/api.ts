@@ -605,6 +605,8 @@ export interface Annotation {
   color: string
   note: string
   created_at: number
+  /** 来源枚举：`web` / `koreader` / `kobo`。当前只有 Web 阅读器会写入。 */
+  origin?: string
 }
 
 // ---------- 系列 ----------
@@ -758,6 +760,20 @@ export interface AllAnnotation {
   color: string
   note: string
   created_at: number
+  /** 来源枚举：`web` / `koreader` / `kobo`。当前只有 Web 阅读器会写入。 */
+  origin: string
+  /** 0 = 活跃；> 0 = 在垃圾桶（软删除时刻）。仅在 `include_trashed=1` 时有意义。 */
+  deleted_at: number
+}
+
+/** 批注总览统计。上游同名字段还有 needsReview / devices，本项目无对应数据源故不返回。 */
+export interface AnnotationOverview {
+  active: number
+  trashed: number
+  /** 有过批注的周数（同一周多条只算一周） */
+  weeks: number
+  /** 最长的一段「连续无批注」周数，含最后一次批注到本周的空档 */
+  longest_quiet_weeks: number
 }
 
 // ---------- 收藏夹 ----------
@@ -2151,7 +2167,7 @@ export const api = {
       `/api/books/${encodeURIComponent(id)}/annotations`,
     ),
 
-  addAnnotation: (id: string, a: Omit<Annotation, 'id' | 'created_at'>) =>
+  addAnnotation: (id: string, a: Omit<Annotation, 'id' | 'created_at' | 'origin'>) =>
     request<{ id: number; ok: boolean }>(
       `/api/books/${encodeURIComponent(id)}/annotations`,
       {
@@ -2161,9 +2177,23 @@ export const api = {
       },
     ),
 
+  /** **移入垃圾桶**（软删除）。彻底删除走 `purgeAnnotation`。 */
   deleteAnnotation: (id: string, aid: number) =>
-    request<{ ok: boolean }>(
+    request<{ ok: boolean; trashed: boolean }>(
       `/api/books/${encodeURIComponent(id)}/annotations/${aid}`,
+      { method: 'DELETE' },
+    ),
+
+  restoreAnnotation: (id: string, aid: number) =>
+    request<{ ok: boolean }>(
+      `/api/books/${encodeURIComponent(id)}/annotations/${aid}/restore`,
+      { method: 'POST' },
+    ),
+
+  /** 彻底删除（不可恢复）。只对垃圾桶里的条目成立，活跃条目会 400。 */
+  purgeAnnotation: (id: string, aid: number) =>
+    request<{ ok: boolean }>(
+      `/api/books/${encodeURIComponent(id)}/annotations/${aid}/purge`,
       { method: 'DELETE' },
     ),
 
@@ -2320,8 +2350,13 @@ export const api = {
     }),
 
   // ---------- 批注总览 ----------
-  allAnnotations: () =>
-    request<{ items: AllAnnotation[]; total: number }>('/api/annotations'),
+  /** 跨书批注。默认只给活跃批注（既有契约）；`includeTrashed` 时把垃圾桶一并带回。 */
+  allAnnotations: (includeTrashed = false) =>
+    request<{ items: AllAnnotation[]; total: number }>(
+      `/api/annotations${includeTrashed ? '?include_trashed=1' : ''}`,
+    ),
+
+  annotationOverview: () => request<AnnotationOverview>('/api/annotations/overview'),
 
   // ---------- 书库（第 10 期：库实体 / 分面 / 能力 / 迁移） ----------
 
