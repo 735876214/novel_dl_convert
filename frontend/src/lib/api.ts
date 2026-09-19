@@ -923,6 +923,8 @@ export interface AchievementsOverview {
   unlocked: number
   newly_unlocked: string[]
   metrics: Record<string, number>
+  /** `backfillAchievements` 返回时为真：清空解锁记录后按当前数据重判（解锁时间被重置） */
+  backfilled?: boolean
 }
 
 /** 孤儿记录：引用了已不存在的书的数据库行（`GET /api/maintenance/orphans`） */

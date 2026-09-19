@@ -157,7 +157,7 @@ function setNum(key: NumPrefKey, value: number): void {
 
     <SettingsUnsupportedCard
       label="eBook"
-      :groups="['NEW BOOKS', 'LAYOUT', 'ADVANCED']"
+      :groups="['NEW BOOKS', 'ADVANCED']"
       :items="[
         'Apply my settings to new books（新书是否套用我的设置）',
         'Fixed-layout page spreads（Book default / Single page / Columns）',

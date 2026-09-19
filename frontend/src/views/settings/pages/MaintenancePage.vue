@@ -9,7 +9,11 @@ import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vu
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { UPLOAD_FIELDS } from '@/data/settingsFields'
 import { findSettingsPage } from '@/data/settingsNav'
-import { api, type MaintenanceInfo, type OrphansInfo } from '@/lib/api'
+import {
+  api,
+  type MaintenanceInfo,
+  type OrphansInfo,
+} from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -39,12 +43,12 @@ const orphanTables = computed(() =>
 const upstream = computed(() => findSettingsPage('library/maintenance')?.upstream)
 
 /** 已实现的条目不再列入「未支持」 */
-const IMPLEMENTED = ['Maximum upload file size limit']
+const IMPLEMENTED = ['Maximum upload file size limit', 'Backfill achievements']
 const unsupportedItems = computed(() =>
   (upstream.value?.items ?? []).filter((i) => !IMPLEMENTED.includes(i)),
 )
 const unsupportedGroups = computed(() =>
-  (upstream.value?.groups ?? []).filter((g) => g !== 'UPLOADS'),
+  (upstream.value?.groups ?? []).filter((g) => g !== 'UPLOADS' && g !== 'ACHIEVEMENTS'),
 )
 
 const DIR_LABELS: Record<string, string> = {
@@ -127,6 +131,17 @@ function clearRecycle(): Promise<void> {
   return run('recycle', '清空回收站', async () => {
     const r = await api.clearRecycle()
     return `已清空回收站：删除 ${r.removed} 个文件，释放 ${fmtBytes(r.freed)}`
+  })
+}
+
+function backfillAchievements(): Promise<void> {
+  // 对应上游 Maintenance 的 Backfill achievements：清空解锁记录后按当前数据重判，
+  // 解锁时间会被重置为此刻。是可逆的（重判后会重新解锁），但不保留原解锁时间，故加说明。
+  return run('achievements', '重算成就', async () => {
+    const r = await api.backfillAchievements()
+    return r.backfilled
+      ? `已重算成就：${r.unlocked}/${r.total} 项解锁（解锁时间已重置为现在）`
+      : '成就未启用，无需重算'
   })
 }
 
@@ -287,6 +302,19 @@ onMounted(async () => {
         <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
           清理动作互不混淆：清缓存<strong>保留</strong>回收站；清空回收站是真删，需二次确认。
         </p>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3 border-b border-border/60 px-4 py-3">
+        <div class="min-w-0 flex-1">
+          <div class="text-[12.5px] font-medium text-foreground">重算成就</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            对应上游 Backfill achievements：清空解锁记录后按当前数据重判，
+            <strong>解锁时间会重置为现在</strong>（可逆，重判后会重新解锁）
+          </div>
+        </div>
+        <Button size="sm" :disabled="!!busy" @click="backfillAchievements">
+          {{ busy === 'achievements' ? '处理中…' : '重算' }}
+        </Button>
       </div>
 
       <div class="flex flex-wrap items-center gap-3 border-b border-border/60 px-4 py-3">

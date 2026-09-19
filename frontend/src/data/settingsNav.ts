@@ -116,6 +116,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['图标风格', '自定义图标上传', '排序（Newest / Name）'],
           uncaptured: '该页正文仅 134 字符，图标风格选项未渲染为可判定控件。',
         },
+        note: '未实现：图标风格统一由设计系统决定，不提供自定义图标 / 上传图标风格选项。此页仅作上游对照。',
       }),
       p('appearance/layout', 'Layout', '布局', 'placeholder', {
         upstream: {
@@ -124,6 +125,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['LIBRARY GRID LAYOUT', 'SERIES DISPLAY', 'AUTHOR GRID', 'LIST AND TABLE VIEWS'],
           items: ['Cover size behavior（全部同步 / 各视图独立）', 'Portrait cover size（130px）', 'Square cover size（150px）', 'Portrait grid spacing（28px）', 'Square grid spacing（28px）', 'Card info mode（On hover / Below cover / Off）', 'Collapsed series cover（Stack / Mosaic / First / Latest / First Unread）', 'Author cover size（120px）/ shape（Circle / Square）', 'Zebra striping'],
         },
+        note: '未实现：书库视图密度 / 封面尺寸 / 网格间距 / 卡片信息模式等由前端统一定制，不暴露为逐项设置。此页仅作上游对照。',
       }),
       p('appearance/behavior', 'Behavior', '浏览行为', 'placeholder', {
         upstream: {
@@ -132,6 +134,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['LIBRARY BEHAVIOR'],
           items: ['Thumbnail clicks（Read first / Open details）', 'Show filter preview by default', 'Collapse series by default'],
         },
+        note: '未实现：缩略图点击行为 / 筛选预览默认展开 / 系列默认折叠等浏览行为由前端固定，不暴露为设置。此页仅作上游对照。',
       }),
       p('reader/ebook', 'eBook', '电子书', 'ready', {
         upstream: {
@@ -140,7 +143,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['NEW BOOKS', 'LAYOUT', 'THEME', 'TYPOGRAPHY', 'ADVANCED'],
           items: ['Apply my settings to new books', 'Reading flow（Paginated / Scrolled）', 'Fixed-layout page spreads', 'Columns', 'Dark mode（13 档变体）', 'Font', 'Font style', 'Font size', 'Line height', 'Paragraph spacing', 'Justify text', 'Hyphenation', 'Letter / Word spacing', 'First-line indent', 'Max content width', 'Column gap'],
         },
-        note: '本项目实现「字体 / 阅读主题 / 字号 / 行高 / 内容宽度」；其余为未支持。',
+        note: '本项目实现「阅读模式 / 13 档主题 / 字体 / 字号 / 行高 / 内容宽度 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 13 项；未支持：新书套用设置（Apply my settings to new books）、固定版式页宽（Fixed-layout page spreads）、字重样式（Font style）、文本区左右内边距（Column gap）。',
       }),
       p('reader/pdf', 'PDF', 'PDF', 'ready', {
         upstream: {
@@ -285,7 +288,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['Maximum upload file size limit', 'Import library data（从其它书库工具一次性导入）', 'Refresh recommendation index', 'Backfill achievements', 'Check for updates（查 GitHub 新版本）'],
         },
         link: { to: '/tools/duplicates', label: '重复书籍清理' },
-        note: '已实现：UPLOADS 的上传上限（可配置且真正生效）、书库索引重建、缓存清理、回收站清空与各目录占用统计。IMPORT / RECOMMENDATIONS / ACHIEVEMENTS / UPDATES 未实现，页内以只读条目列出。',
+        note: '已实现：UPLOADS 上传上限（可配置且生效）、ACHIEVEMENTS 的成就重算（Backfill）、书库索引重建、缓存清理、回收站清空与各目录占用统计。IMPORT（从其它书库工具一次性导入）/ RECOMMENDATIONS（刷新推荐索引）/ UPDATES（查 GitHub 新版本）在容器部署口径下未实现，页内以只读条目列出。',
       }),
     ],
   },
@@ -302,6 +305,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['KOREADER STATUS', 'SETUP', 'DEVICES', 'PLUGIN ACTIVITY', 'UNMATCHED KOREADER BOOKS', 'MANUAL KOREADER LINKS', 'SETUP GUIDE', 'DANGER ZONE'],
           items: ['Progress sync 开关', '同步账号与凭据', 'KOReader sync URL', '预置 BookOrbit 插件下载', '设备管理（退役 / 删除数据）', '未匹配书目与手动链接', '删除同步凭据'],
         },
+        note: '对照上游 KOReader 设置页；本项目实际对接在「KOReader 进度互通」（kosync 协议服务端），此页仅列上游结构供比对。',
       }),
       p('opds', 'OPDS', 'OPDS', 'ready', {
         upstream: {
