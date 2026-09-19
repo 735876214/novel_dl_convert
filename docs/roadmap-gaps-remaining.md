@@ -36,7 +36,8 @@
 
 ### C 类 · 重（架构/外部依赖，周级，按需）
 
-- [x] ~~**C1 Requests 完整功能**~~ — **已决策不做（2026-09-18，用户决策）**。理由：本项目的「从外部获取书」由**数据驱动书源规则**覆盖（`sources/rules.py` + `sources/store.py`），插件式索引器 / 下载客户端与之形态重叠、维护成本高。**页面与接口骨架已从代码中删除**：后端 `REQUEST_SECTIONS` + `GET /api/requests/config`；前端 `RequestsPage.vue` / 路由 / 设置注册项 / API 方法（`admin/requests` 页数 48 → 47）。⚠️ 旧理由「`Add to library` 依赖多库 → 不落地」在**第 10 期多库完成后已失效**，不再引用
+- [x] ~~**C1 Requests 完整功能**~~ — **已决策不做（2026-09-18，用户决策）**。理由：本项目的「从外部获取书」由**数据驱动书源规则**覆盖（`sources/rules.py` + `sources/store.py`），插件式索引器 / 下载客户端与之形态重叠、维护成本高。**页面与接口骨架已从代码中删除**：后端 `REQUEST_SECTIONS` + `GET /api/requests/config`；前端 `RequestsPage.vue` / 路由 / 设置注册项 / API 方法（`admin/requests` 页数 48 → 47）。⚠️ 旧理由「`Add to library` 依赖多库 → 不落地」在**第 10 期多库完成后已失效**，不再引用。
+  ⚠️ **第 27 期复核（2026-09-19）**：此处「48 → 47」只是**当次删除动作**的增量记录，不是当前页数。当前设置页为 **48 页**（41 上游 + 7 本项目补充），见 `tests/test_settings_nav_contract.py:96` 的双向断言；`admin/requests` 仍在 `EXPECTED_PLACEHOLDERS`（`:47`）里，即该页骨架被删除后**又以只读占位页形式存在**
 - [x] **C2 系列详情 Group by media** — 第 10 期完成：`GET /api/series/{name}` 增 `groups`（复用 `migrate.target_type_of` 按媒体归类，含 media/label/count/books）；`SeriesDetailView` 按组分段渲染，**仅多于一组时**才加组标题（单媒体系列不加噪音），组内仍按系列序号排序并保留首册标记与倒序切换
 - [x] **C3 SYNOPSIS 外部源** — **第 12 期完成**：新增 `core/series_meta.py` + `series_meta` 表（在线值与本地覆盖**分列**，与 `authors` 表同构）；`metasources.search_series` 用**系列名检索 + 成员书一致性打分**挑候选（⚠️ 外部源**没有「系列」实体**，OpenLibrary 的 `search.json` 既不返回系列字段也无系列详情接口 —— 可靠性天然低于作者侧；一致性分低于 `MIN_MATCH=0.6` 就**如实回「未找到」**，不编造简介，并把来源与置信度一并交给界面展示）；字段分层取 **本地覆盖 > 本地聚合 > 在线补空**（总册数 / 首发年 / 出版社 / 题材**优先**用成员书 OPF 聚合出的**事实**，在线值仅补空）；生效点是三处注入：`GET /api/series/{name}`、`komga_api.series_dto`（`metadata.summary` 原先恒为空串）、OPDS 系列入口（列表 `<summary>` / 系列内 `<subtitle>`）。
   ⚠️ **系列级字段只存本项目 DB、绝不写回 EPUB**（用户 2026-09-18 拍板）：OPF 里没有「系列简介」这个字段，唯一近似 `dc:description` 属于**单册**，写进去就是用系列简介覆盖掉某一册自己的简介；「系列首发年」写进各册 `dc:date` 还会让某本 2019 年出版的第 7 册变成 2015 年。**已知代价（已确认接受）**：把书库目录直接用 SMB 挂给别的软件（如 Calibre）时看不到系列简介与系列出版社；**连服务读**（Komga 客户端 / OPDS / 应用界面）则全部可见 —— 且写回方案**同样送不出「系列简介」**，故不为此动用户文件。
@@ -297,6 +298,12 @@
   设置页 **47 → 38**；这 9 条经实测**只出现在 `settingsNav.ts`**（无组件 / 路由注册 / `PAGE_FEATURE` /
   能力键引用），所以删除只动一处 + 计数文案；`docs/bookorbit-*` 的上游采集记录**保留**作对照。
   统一记为「已决策不做（永久排除）」。
+  ⚠️ **第 27 期复核（2026-09-19）**：这里的「47 → 38」是**当次删除的增量**，**不是当前页数** ——
+  本轮复核时设置页为 **48 页**（41 上游 + 7 本项目补充），其中 **15 页为只读占位页**
+  （`admin/requests` 等已决策不做的页后来重新以占位页承载）。真值源是
+  `frontend/src/data/settingsNav.ts` + `tests/test_settings_nav_contract.py`（`:42-54` 的
+  `EXPECTED_PLACEHOLDERS` 双向断言、`:96` 的总数断言），**改动页数时以该测试为准**。
+  本文不改写上面的历史快照，只追加本节说明。
 - **三项对标差异**：
   ① **命名 token 5 → 9**（`{series_index} {year} {publisher} {language}`）：只加 `library.books()`
   里**真实存在**的字段，取不到给空串；⚠️ 替换必须**先长后短**（`{series_index}` 在 `{series}` /

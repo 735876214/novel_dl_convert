@@ -31,11 +31,14 @@
 
 ### 0.3 本项目实况基线（判定依据）
 
-- 后端 `novelforge/server.py` 共 **68 个路由**；前端路由见 `frontend/src/router/index.ts:89-137`
+> **第 27 期复核（2026-09-19）**：本节原记「68 个路由 / 6 张表」，已随第 1–26 期落地而失真 —— 失真的基线会让下游每条判定都失去依据，故按代码重取。
+
+- 后端 `novelforge/server.py` 共 **260 个路由**（`grep -cE "^@app\.(get|post|put|delete|patch)\("`）；前端路由见 `frontend/src/router/index.ts`
 - **唯一物理目录** `OUTPUT_DIR`（`novelforge/config.py:20`）；`novelforge/core/library.py:1-3` 明写「后端没有『图书库』实体」
 - 单用户轻登录（`novelforge/core/auth.py:1-5` 明写不做多租户/角色；`users` 表无角色字段）
-- SQLite 表（`novelforge/core/db.py:41-97`）：`users` / `progress` / `annotations` / `collections` / `collection_items` / **`reading_sessions`**
-- **元数据来源只有 EPUB 自身 + 文件名**（`novelforge/core/metadata.py:11-33`），**没有任何在线元数据抓取**
+- SQLite 表 **28 张**（`novelforge/core/db.py`）：`users` / `progress` / `annotations` / `collections` / `collection_items` / `reading_sessions` / `reading_status` / `ratings` / `achievements` / `user_achievements` / `authors` / `series_meta` / `tasks` / `libraries` / `library_migrations` / `scrape_items` / `smart_scopes` / `opds_sources` / `pref_devices` / `pref_profiles` / `book_dock_items` / `notifications_read` / `koreader_docs` / `app_state` / `meta_cover` / `meta_online` / `meta_override`
+- **元数据解析**来源是 EPUB 自身 + 文件名（`novelforge/core/metadata.py:11-33`）；**在线元数据抓取体系已于第 5 期落地**（`core/metasources.py` OpenLibrary / Google Books，均无需 API Key；`core/metafetch.py` plan→预览→apply，结果只落 `meta_online` / `meta_cover`、不改写文件）。
+  ⚠️ 本节原写「**没有任何在线元数据抓取**」，与 §14 第 5 期「元数据自动抓取与治理 ✅」自相矛盾，以代码为准更正。
 
 ---
 
@@ -113,36 +116,42 @@
 
 ## 6. 域：统计与成就
 
+> **第 27 期复核（2026-09-19）**：本域原判定「无」的多数项在第 1–26 期已落地，下表按代码改判；每行结论可指到代码行。**两条原判原样保留**（两大标签 / Integrity 四项百分比）；**Metadata Freshness 保留档位但更正了判据**（原判据与代码矛盾，见该行）。
+
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| 两大标签（Library Stats / My Reading） | 分区 | 部分：单页 `/stats` 无分区 | **可直接落地** | 前端分区 |
-| 筛选（All Libraries）+ Configure + 时间粒度（Monthly/Yearly/Last 5 Years） | 参数化聚合 | **无**：`stats.overview()` 窗口**硬编码**（`core/stats.py:62-68,87-93`） | **需新增后端能力** | 需时间粒度参数化 |
-| Books / Authors / Series / Storage / Languages | — | **已有**（`core/stats.py:95-107`） | 可直接落地 | — |
-| Publishers / Genres | — | **无聚合**（`publishers`/`tags` 字段已有，`core/library.py:559-562`） | **可直接落地** | 加两个聚合字典 |
-| Published 年份范围 / This Year | — | 部分：`year` 已有但未聚合范围 | **可直接落地** | — |
-| My Reading（Started / In Progress / Completed / **Avg Progress**） | — | 部分：前三项已有（`core/stats.py:108-118`），**Avg Progress 无** | **可直接落地** | — |
-| **Library Integrity**（Integrity / Present / Primary / Metadata） | 四项百分比 | **无**（有 issues/nocover 计数，无百分比口径） | **需新增后端能力**（很轻） | — |
-| Format Distribution | — | **已有**（`core/stats.py:25-30`） | 可直接落地 | — |
-| **Metadata Score Distribution**（P50/P90） | 24 字段权重评分 | **无**（本项目无元数据完整度评分体系） | **需新增后端能力** | 需评分模型 + 分位统计 |
-| Metadata Freshness（Fresh ≤30d / Never fetched） | — | **无** | **不建议做** | 依赖在线元数据抓取，与定位冲突（见 §11） |
-| Top 50 Largest Books | — | **无**（`_top()` 硬编码 n=8，`core/stats.py:13-17`） | **可直接落地** | — |
+| 两大标签（Library Stats / My Reading） | 分区 | 部分：单页 `/stats` 无分区（`views/StatsView.vue` 为平铺区块，20+ 个 `<h3>`，无 tab 结构） | **可直接落地** | 前端分区 —— **原判仍成立** |
+| 筛选（All Libraries）+ Configure + 时间粒度（Monthly/Yearly/Last 5 Years） | 参数化聚合 | 时间粒度**已有**：`overview(days=28, top=8)` 参数化并收敛 7–365（`core/stats.py:24,27`），统计页传值（`views/StatsView.vue:26` → `lib/api.ts:2704`）；响应含权威 `window` 字段。「All Libraries」在本项目**无对应概念**（单库部署，`config.py:20` 唯一 `OUTPUT_DIR`） | 时间粒度**已落地**／多库筛选**不适用** | — |
+| Books / Authors / Series / Storage / Languages | — | **已有**（`core/stats.py:152-166`） | 可直接落地 | — |
+| Publishers / Genres | — | **已有**（`core/stats.py:64-70` 聚合，`:168-169` 返回）；统计页已渲染「Top 出版社」「Top 题材」（`StatsView.vue:327,349`） | **已落地** | — |
+| Published 年份范围 / This Year | — | **已有**：`year` 按**十年**聚合（`core/stats.py:71-74` → `years.decades`，`:172-177`），统计页已渲染（`StatsView.vue:371`）。「This Year」按日历年的入库数已有 `added_month`（`core/stats.py:151-157`） | **已落地** | — |
+| My Reading（Started / In Progress / Completed / **Avg Progress**） | — | **已有**：前三项（`core/stats.py:88-110`）+ **`avg_progress`**（`:178`） | **已落地** | — |
+| **Library Integrity**（Integrity / Present / Primary / Metadata） | 四项百分比 | **无百分比口径**：`integrity` 只有**原始计数** —— `missing_author`/`missing_language`/`no_cover`/`zero_size`/`unparsable`（`core/stats.py:46-52` 初始化、`:59-83` 累加、`:179` 返回），前端按「0 字节」等计数渲染（`StatsView.vue:394`） | **需新增后端能力**（很轻） | **原判仍成立**（计数有、百分比无） |
+| Format Distribution | — | **已有**（`core/stats.py:54-55,161`） | 可直接落地 | — |
+| **Metadata Score Distribution**（P50/P90） | 24 字段权重评分 | **已有**：`core/metascore.py` 评分模型 + `metascore.summary(bs)`（Average / P50 / P90 + 分档直方图，`core/stats.py:14` import、`:181` 返回） | **已落地** | — |
+| Metadata Freshness（Fresh ≤30d / Never fetched） | — | **指标无**。⚠️ 原判据「依赖在线元数据抓取，与定位冲突」**已失效** —— 抓取体系第 5 期就落地了（`core/metafetch.py`，`meta_online.fetched_at` 已在库里，见 `core/db.py:241-250`），这个指标**技术上可直接算** | **不建议做**（档位依价值而非依赖） | 与本项目已有 `metadata_score`（完整度）口径重叠、增量信息少；**不是做不了，是不值得做** |
+| Top 50 Largest Books | — | **半落地**：`top` **已参数化**并收敛 1–50（`core/stats.py:17` 默认 8、`:31`），但 ⚠️ **前端从不传** `top`（`lib/api.ts:2704` 只发 `days`），且仓库**无任何按体积的榜单** —— `StatsView.vue` 体积只用于「占用」汇总卡（`:155`） | **可直接落地**（缺榜单与 UI） | 后端参数已具备，缺的是榜单本身与传参 |
 | Achievements | 成就体系 | **已有（第 22 期实现）** | **已落地**（单用户口径） | 与多用户无关的成就可做；跨用户口径不做 |
 | └ 上游成就模型（源码：`packages/types/src/achievement.ts`） | **5 分类**：`reading / library / exploration / dedication / devices`；**4 档稀有度**：`common / rare / epic / legendary`；字段 `groupKey / tier / threshold / hidden / sortOrder / earned / awardedAt / currentProgress / context` | 本项目成就为自有规则集，**未逐项对齐上游分类与稀有度** | 逐项对齐 **可直接落地**（纯数据/规则）；`devices` 分类 **不建议做**（依赖 KOReader/Kobo 设备实体） | 上游进度由**服务端算好**（`currentProgress` + `threshold`），且支持**全量回填**（对应设置页「运行回填」）——本项目的成就也应是**派生数据**而非一次性打卡 |
 | 仪表盘部件 | 12 件 | **已有 12 件**（`components/dashboard/widgets/registry.ts:32-45`） | 可直接落地 | 已对齐 |
 
 ## 7. 域：通知与更新
 
+> **第 27 期复核（2026-09-19）**：本域两行**此前全判为「无」，已全部过期** —— 浮层与已读均已落地。
+
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| Notifications 浮层 | 浮层 + 已读 + Mark all read | 部分：整页日志视图，**按类别偏好做客户端过滤**（`lib/notifyPrefs.ts`）；无浮层、无已读 | 浮层 **可直接落地**／已读 **需新增后端能力** | 已读需新表 |
-| What's New | `/whats-new` | **无** | **可直接落地** | 静态数据 |
+| Notifications 浮层 | 浮层 + 已读 + Mark all read | **已有**：头部铃铛挂浮层（`AppHeader.vue:89` → `components/NotificationBell.vue`），「全部已读」在 `NotificationBell.vue:135-137`；已读走后端 `POST /api/notifications/read`（`server.py:3853`）+ `notifications_read` 表（`core/db.py:135`，`mark_notifications_read` `:980` / `clear_notifications_read` `:1005`）。整页日志视图保留，按类别偏好做客户端过滤（`lib/notifyPrefs.ts`） | **已落地** | — |
+| What's New | `/whats-new` | **已有**：`views/WhatsNewView.vue` + 路由 `/whats-new`（`router/index.ts:174`） | **已落地** | — |
 
 ## 8. 域：任务中心
+
+> **第 27 期复核（2026-09-19）**：「任务真实性」原有的两项指控（6 条演示种子 + 900ms 假进度 ticker）**均已在第 25 期前后清除**，原判过期。
 
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
 | 任务中心 | `/tasks` **返回 404**（线上无此页） | **本项目有**（`/tasks`、`TaskCenterView.vue`、`TaskDrawer.vue`）——**超出线上** | 可直接落地 | 但见右栏风险 |
-| 任务真实性 | — | **半真半假**：任务 store 混入 **6 条演示种子数据**（`data/tasks.ts:21-28`）并由 900ms ticker **假推进**（`stores/tasks.ts:12-14,71-80`）；真实任务仅来自下载；后端为**进程内字典**（`server.py:95`，重启即清空） | 持久化 **需新增后端能力**；**清除演示数据属修复**（见 §12 执行约定） | 假数据会让用户误判真实进度 |
+| 任务真实性 | — | **已改为全真**：演示种子与假 ticker 均已删除 —— `data/tasks.ts` 头注释明写移除始末，该文件现只剩类型；任务数据一律来自服务端任务表，`stores/tasks.ts` 轮询真实 `GET /api/tasks`；后端已持久化到 `tasks` 表（`core/db.py`，非进程内字典） | **已落地** | 原「假数据会让用户误判真实进度」的风险已消除 |
 
 ## 9. 域：求书（Requests）—— **已决策不做（2026-09-18）**
 
@@ -168,12 +177,14 @@
 
 ## 10. 域：收书目录
 
+> **第 27 期复核（2026-09-19）**：本域**整域已落地**（第 25 期前后 B3 交付），原判「无独立页 / 无状态机 / 需新增后端能力」全部过期。
+
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| `/book-dock` 页面 | 独立页 | **无独立页**，但能力**已存在且分散**：`core/watcher.py` + `tools/LocalConvertView.vue` + `settings/pages/WatcherPage.vue` | **可直接落地** | 新页面聚合现有接口即可 |
-| Pause / Rescan / Upload | 三个按钮 | **对应物已有**：`POST /api/watcher/stop`、`POST /api/scan`、`POST /convert` | **可直接落地** | — |
-| 状态标签（All / Needs review / Pending / Ready / Error） | 5 态状态机 | **无**：watcher 只有 4 个粗粒度计数（`core/watcher.py:60,346-357`），**无「待审 / 已定稿」状态机** | **需新增后端能力** | 需 `book_dock_items` 表 + 状态字段 |
-| 空态 + **整页拖拽投递** | 全页 drop | 部分：仅 `LocalConvertView.vue:158-173` 一个小拖拽区（限 .txt） | **可直接落地** | — |
+| `/book-dock` 页面 | 独立页 | **已有独立页**：`views/BookDockPage.vue` + 路由 `/book-dock`（`router/index.ts:87`）；接口 `GET /api/book-dock`（`server.py:3759`） | **已落地** | — |
+| Pause / Rescan / Upload | 三个按钮 | **已有**：`POST /api/book-dock/{item_id}/rescan`（`server.py:3765`）+ `.../ignore`（`server.py:3774`）；watcher 侧 `POST /api/watcher/stop`、`POST /api/scan`、`POST /convert` 仍在 | **已落地** | — |
+| 状态标签（All / Needs review / Pending / Ready / Error） | 5 态状态机 | **已有状态机**：`book_dock_items` 表（`core/db.py:215`，含 `status` 字段 + `idx_dock_status` 索引） | **已落地** | — |
+| 空态 + **整页拖拽投递** | 全页 drop | 部分：仅 `LocalConvertView.vue:158-173` 一个小拖拽区（限 .txt） | **可直接落地** | **原判仍成立** —— 整页拖拽未做 |
 
 ## 11. 域：作者与系列
 
@@ -188,15 +199,17 @@
 ## 12. 域：批注
 
 > **重要更正（2026-09-19）**：历史实测把本域记为「线上为空态」——那只是**该实例当时没有批注数据**，**不等于上游没有能力**。源码（`packages/types/src/annotation.ts`）显示模型明显更深，故原档位理由「超出线上」**作废**，改为按能力项逐条判定。
+>
+> **第 27 期交付（2026-09-19）**：分组 / 软删除垃圾桶 / 周节拍统计 **三项已落地**；**多端来源、`needsReview`、`devices` 与跨端降色仍未做**，理由见下（无数据源，不建死列与死 UI）。
 
 | 能力项 | 线上形态（历史实测） | 本项目现状 | 档位 | 判据（源码） |
 | --- | --- | --- | --- | --- |
-| 批注来源 | 空态三张引导卡：Read here / Sync a Kobo / Sync KOReader | **仅 Web 内创建**（`server.py:494-504`） | 多端来源 **需新增后端能力** | `origin = "web" / "koreader" / "kobo"` ——三卡即三来源枚举，无第四种 |
-| 配色 | 页面未渲染 | **已有彩色高亮** | **需新增后端能力**（跨端降色） | 应用 10 色 / KOReader 9 色 / Kobo 4 色，每色带 `koreaderFallback` + `koboFallback` |
-| 分组维度 | 页面未渲染 | **无**（仅平铺列表） | **需新增后端能力** | `ANNOTATION_HUB_GROUP_MODES = ["month", "book", "color", "source"]` |
-| 待复核 / 垃圾桶 | 页面未渲染 | **无**（删除即删除） | **需新增后端能力** | `AnnotationHubOverview.needsReview` / `.trashed` ——删除是**软删除**；设备回传批注需**人工对账** |
-| 统计口径 | 页面未渲染 | **无** | **需新增后端能力**（很轻） | `weeks` / `longestQuietWeeks` / `devices` ——以周为节拍，并跟踪「连续无批注周数」 |
-| 跨书搜索 / 跳转章节 / 导出 Markdown | 无 | **已有**（`views/AnnotationsView.vue`、`server.py:494-504`） | **已落地** | 本项目自有能力；上游是否存在对应能力：未验证（源码无法确认，本轮未取 `server/src/modules/annotation` 与 `client/`） |
+| 批注来源 | 空态三张引导卡：Read here / Sync a Kobo / Sync KOReader | 仅 Web 内创建（`server.py:494-504`）；**已建 `origin` 列**并回填 `'web'`（`core/db.py` 迁移块），但**只有 web 一个写入方** | 多端来源 **需新增后端能力** —— **本轮不做** | `origin = "web" / "koreader" / "kobo"` ——三卡即三来源枚举，无第四种。⚠️ kosync 已核实是**纯进度**（只有 `/koreader/syncs/progress` 的 PUT/GET，无批注端点），也没有 KOReader/Kobo 批注导入 → **无数据源**，故只建列不建导入链路，界面如实标注 |
+| 配色 | 页面未渲染 | **已有应用侧 10 色**：单一权威表 `frontend/src/data/annotationColors.ts`（原 4 处各自为政的颜色表已全部归并） | 应用侧 **已落地**／**跨端降色不做** | 应用 10 色 / KOReader 9 色 / Kobo 4 色，每色带 `koreaderFallback` + `koboFallback`。⚠️ 没有非 web 来源就没有降色对象，`downmapTo` 写了也无调用方 → 不做 |
+| 分组维度 | 页面未渲染 | **已落地**：月 / 书 / 颜色 / 来源四档，默认按书（`views/AnnotationsView.vue`）。**纯前端**分组（列表本就在手，重排即可），未加服务端 `group=` 参数 | **已落地** | `ANNOTATION_HUB_GROUP_MODES = ["month", "book", "color", "source"]` |
+| 待复核 / 垃圾桶 | 页面未渲染 | **垃圾桶已落地**：`DELETE` 改**软删除**（写 `deleted_at`），新增 `restore` / `purge`，总览页有垃圾桶视图与恢复/彻底删除（`core/db.py`、`server.py`）。**待复核（needsReview）不做** —— 它服务于「设备回传批注需人工对账」，没有设备回传就没有可对账对象 | 垃圾桶 **已落地**／待复核 **不做** | `AnnotationHubOverview.needsReview` / `.trashed` ——删除是**软删除**；设备回传批注需**人工对账** |
+| 统计口径 | 页面未渲染 | **已落地（部分）**：`GET /api/annotations/overview` 返回 `active` / `trashed` / `weeks` / `longest_quiet_weeks`（周节拍按 ISO 周归桶，`core/db.py`），总览页顶部统计条消费。**`devices` 不做**（恒 1，无意义） | **已落地** | `weeks` / `longestQuietWeeks` / `devices` ——以周为节拍，并跟踪「连续无批注周数」 |
+| 跨书搜索 / 跳转章节 / 导出 Markdown | 无 | **已有**（`views/AnnotationsView.vue`、`server.py:494-504`）；导出**只导活跃批注**、不含垃圾桶 | **已落地** | 本项目自有能力；上游是否存在对应能力：未验证（源码无法确认，本轮未取 `server/src/modules/annotation` 与 `client/`） |
 
 ---
 
@@ -205,8 +218,8 @@
 | 项 | 依据 |
 | --- | --- |
 | **界面国际化（Language，25 语言）** | 界面中文硬编码（如 `data/nav.ts:36-43`），需全量抽文案 + i18n 基建；对单人内网工具收益远低于维护成本 |
-| **Metadata Freshness / 在线元数据抓取体系** | 本项目元数据来源只有 EPUB 自身 + 文件名（`core/metadata.py:11-33`）；引入抓取体系与项目定位冲突 |
-| **作者传记 / 作者头像（No portrait）** | 依赖外部作者元数据服务 |
+| ~~**Metadata Freshness / 在线元数据抓取体系**~~ ⚠️ **该条已过期** | **第 5 期已实现抓取体系**：`core/metasources.py`（OpenLibrary / Google Books，均无需 Key）+ `core/metafetch.py`（plan→预览→apply，结果只落 `meta_online`/`meta_cover`、不改写文件）。原判据「本项目只有 EPUB 自身 + 文件名」与 §14 自相矛盾，已作废。**仅「Freshness 指标」本身不做**，理由见 §6 该行（价值低，非依赖冲突） |
+| ~~**作者传记 / 作者头像（No portrait）**~~ ⚠️ **该条已过期** | **第 8 期 D1/D2 已实现**：`authors` 表分列「在线抓取值」与「用户本地覆盖」（`bio` / `bio_local`、`photo` / `photo_local_path`，`core/db.py:259-265`），接口 `POST /api/authors/{name}/bio`（`server.py:1931`）+ 作者详情返回 `bio`/`bio_overridden`（`server.py:1902-1903`），前端 `views/AuthorDetailView.vue` 可编辑并显示「已覆盖」标记。原判据「依赖外部作者元数据服务」不再成立 —— 走的是既有抓取链路 + 本地覆盖，不引入新依赖 |
 | ~~**有声书阅读器**~~ ⚠️ **该条已过期** | 第 9 期已实现（`core/audio.py` + `/api/books/{bid}/audio` + 播放器 + `reader/audio` 设置页）；原判据「`BOOK_EXTS` 不含音频」不再成立 |
 | **Requests 的 Sources / Download clients / Automation 具体功能**（索引器 + 下载客户端） | 与既有「数据驱动书源」体系（`sources/rules.py`、`sources/store.py`）功能重叠。**2026-09-18 起为「已决策不做」**：骨架页与只读接口也已从代码中删除（不再是「按 §9 保留」） |
 | ~~**Pages（页数）字段**~~ ⚠️ **该条已过期** | 已实现：EPUB 为估算值（`library._pages_in`）、CBZ 为归档真实页数；第 7 期已计入元数据完整度评分 |
