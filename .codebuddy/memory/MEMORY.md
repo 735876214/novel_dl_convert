@@ -26,6 +26,7 @@
 
 ## 自动化测试（硬前提）
 - 完全离线：`.venv/bin/python -m pytest`（本机 `python3`）。dev 依赖在 `requirements-dev.txt`。当前 **270 passed / exit 0 / 无 dump**（第 24 期 +5）。
+- ⚠️ 该基线是 **POSIX 环境**结果：win32 侧**没有项目 venv、也没有 pytest/运行期依赖**（`.venv/` 已在 `.gitignore` 内，但本机未建）。自建 venv 后跑全量前**必须先 `mkdir novelforge/static`**（该目录不入库，缺它导入 `server` 即 `ensure_dirs()` 失败，报 `BASE_DIR` 不存在）；且 win32 实测有 1–2 个「扫描→自动入队」用例失败（`test_watcher_auto_fetch` 有声书、`test_scrape_publish`），pytest 汇总行在 PowerShell 下抓不到（详见 2026-09-19 记忆）。**核对回归请在用户原环境跑。**
 - 曾全量后半程 segfault 根因：`watcher.auto_fetch_async`/`enqueue_scrape_async` 派生旁路线程未登记，teardown 关库后它们才查库。现由 `tests/conftest.py` 的 `_quiesce_background()`（`watcher.wait_pending`+`scrape.stop`）在 `isolated` 夹具 `db.close()` **之前**收尾，autouse 只兜底。
 - 硬前提：①环境变量必须在 import 业务模块前设（`config` 导入即固化目录、`server` 导入即 `ensure_dirs()`）；②`db._conn`/`_db_path` 模块级缓存 → 隔离靠 `db.close()`。
 - 碰库/DB 用例必须 `isolated`；接口用 `client`+`auth_headers`。假 EPUB（`b"EPUB"`）够扫描类；元数据写回/系列解析要真 EPUB（`epub_builder.build_epub`）。不测会外呼的接口（要测就换检索函数返回固定候选）；`GET /` 会 503。
@@ -74,4 +75,6 @@
 - 目录型条目（有声书）不能用 `is_file()` 判存在：它是目录，`path.is_file()` 为假→误判不存在（元数据 `apply()` 踩过）。判存在用 `path.exists()`，格式闸门不该拦「只写 DB」的链路。
 
 ## 待办（跨会话）
-- 外部服务「同步任务」（Hardcover/Readwise/StoryGraph 推送）未实现，前置书籍匹配（ISBN/标题+作者）；本机外网受限，验证成本高。
+- 外部服务同步（Hardcover/Readwise/StoryGraph 推送）：**用户 2026-09-19 拍板本轮明确不做**，不再排期，也不留半成品入口；相关设置页维持如实标注「未支持」。
+- BookOrbit 参考仓库已升格为**真值源**：`735876214/bookorbit` @ `main` @ `c292d6cc`，只读 blobless 稀疏镜像在 `%TEMP%\bookorbit-ref`（`packages/types` + `packages/plugin-api`，76 个 `.ts`）；文档结论须标注来源文件，与历史实测冲突时以源码为准，源码无法确认处标「未验证（源码无法确认）」。
+- 上游 `client/` 与 `server/src/modules/*` **尚未纳入取证**（需按需 sparse-checkout 追加）；已定位的界面层空白：批注 Hub 四分组 UI、成就 `dedication/devices` 分组标题、Requests 两页表格列、bulk-rename 请求/响应类型定义（`packages/types` 内不存在）。
