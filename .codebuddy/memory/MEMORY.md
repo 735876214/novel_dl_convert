@@ -1,82 +1,77 @@
 # 长期记忆（novel_dl_convert / NovelForge）
 
-> 真值源 = `.codebuddy/memory/`。**本文件只写不变式、约定与踩坑**；某一期做了什么、完成了什么，
-> 写当天日记 `YYYY-MM-DD.md`（git 历史亦存），**不要写进本文件**（用户 2026-09-19 明确要求）。
-> 待办另见文末「待办（跨会话）」小节。
+> 真值源 = `.codebuddy/memory/`。本文件只写不变式、约定、踩坑；某一期做了什么写当天 `YYYY-MM-DD.md`，不写进本文件（用户 2026-09-19 要求）。待办见文末。
 
 ## 项目 / 硬约定
 - TXT→EPUB 工具，NAS/容器部署；`input`/`output` 物理分离；FastAPI + CLI；可插拔书源。镜像 `ghcr.io/735876214/novel_dl_convert:latest`。
-- 删功能要删干净（路由 + 模块 + db CRUD + 能力键 + 前端页面/路由/api + 文档 + 记忆 + 「接口 404」防回归断言）。
-- 写计划只写四块：需求来源 / 功能范围 / 防回归要点 / 任务清单（用户 2026-09-18 明确要求，不要架构设计 / 目录结构 / 关键代码结构）。
-- 提交即推送：中文 commit，按能力拆多个 commit；收尾时工作区不留未提交改动。
+- 删功能要删干净（路由+模块+db CRUD+能力键+前端页/路由/api+文档+记忆+「接口404」防回归断言）。
+- 写计划只写四块：需求来源/功能范围/防回归要点/任务清单（不要架构/目录/关键代码结构）。
+- 提交即推送：中文 commit，按能力拆多 commit；收尾工作区不留未提交改动。
 - 视觉严格照搬 BookOrbit；零外部请求；局部更新不重建 DOM。
-- ⚠️ 可能同时有另一 AI 会话：改文件前先 `git status`；别人改动不回退、也不要顺手提交（必要时用「恢复 HEAD 版本 → 只加自己那一处 → 提交 → 还原」分离）；临时文件放 `/tmp`；写记忆只追加。
-- 新增书库由用户**手动**操作（**不自动建库**）；每库内容来源 = 挂载的 `LIBRARY_SOURCE_DIR/<source_subdir>`；库 `type` 只决定功能显隐矩阵，**不干预**「来源子目录优先」的归库顺序。
+- ⚠️ 可能同时有另一 AI 会话：改前先 `git status`；别人改动不回退/不顺手提交；临时文件放 `/tmp`；记忆只追加。
+- 新增书库由用户手动操作（不自动建库）；每库来源 = 挂载的 `LIBRARY_SOURCE_DIR/<source_subdir>`；库 `type` 只决定功能显隐矩阵，不干预「来源子目录优先」归库顺序。
 
 ## 元数据与出版（口径终局）
-- 元数据**只能落服务端 DB**（`meta_override` / `meta_online` / `meta_cover`）：手动编辑、revert、抓取 apply、重排册号、实体改名与合并**全部不写回文件**。
-- **在线抓取与手动编辑都不按格式分流**：结果只写 DB、与文件类型无关 → EPUB / PDF / 漫画 / 有声书一视同仁（有声书是**目录型条目**）。手动编辑自第 22 期起也对所有格式开放（`server.py` 的 `editable` 恒 true）：非 EPUB 没有 OPF 兜底原值层，所以「恢复」= 撤销覆盖后回落在线的抓取值、没有在线值即为空。
-- **`core/publish.py` 是唯一还会写文件的模块**（写的是硬链接**副本**，且走原子替换）；`fileops.patch_epub_meta` / `rewrite_epub` 已退出生产路径（前者仅测试造夹具、后者仅 publish 写副本），别再新增调用方。
-- 刮削出版**三条不可动摇**：① 源文件只读；② 副本禁止原地写（与源共享 inode，必须「临时文件 + `Path.replace`」）；③ 副本被删**只标记待确认 + 记日志**，绝不自动删源、绝不自动重建。成品目录**不得与库根 / 扫描源目录重叠**（否则副本被扫回来成重复书），后端建库即拦。
-- 显式**无值哨兵** `db.META_CLEAR = "-"`（`_CLEARABLE` 自第 22 期起 = **全部可编辑字段**，与 `fileops.METADATA_FIELDS` / `db._META_FIELDS` 同集合、有测试钉住）：覆盖值是列、存不了空串（空串 = **撤销覆盖**，EPUB 老行为不变），「清空」只能靠哨兵。接口层正规写法是 **`null` = 显式清空**（前端「清空」按钮用它）：写哨兵、盖住在线的抓取值；哨兵同样在 overrides 里 → metafetch 不会把它填回来。翻译点三处必须一致：`db.get_effective_meta`（要**带着无值**并进 merged，否则 library 保留文件旧值）、`metastore.effective`、`metastore.state`（`tags` 的「无值」给 `[]`，其余给 `""`）。
+- 元数据只落服务端 DB（`meta_override`/`meta_online`/`meta_cover`）：手动编辑/revert/抓取apply/重排册号/改名/合并全部不写回文件。
+- 在线抓取与手动编辑不按格式分流：结果只写 DB、与文件类型无关 → EPUB/PDF/漫画/有声书一视同仁（有声书是目录型条目）。非 EPUB 无 OPF 兜底原值层，故「恢复」=撤销覆盖后回落在线抓取值、无在线值即空。
+- `core/publish.py` 是唯一仍写文件的模块（写硬链接副本、走原子替换）；`fileops.patch_epub_meta`/`rewrite_epub` 已退出生产路径，勿新增调用方。
+- 刮削出版三不可动摇：①源文件只读；②副本禁止原地写（共享 inode，须「临时文件+Path.replace」）；③副本被删只标记待确认+记日志，绝不自删源/自重建。成品目录不得与库根/扫描源重叠（否则副本被扫回成重复书），建库即拦。
+- 无值哨兵 `db.META_CLEAR = "-"`（`_CLEARABLE`=全部可编辑字段，有测试钉住）：空串=撤销覆盖，「清空」只能靠哨兵。接口层 `null`=显式清空（写哨兵盖住在线值）。翻译三处一致：`db.get_effective_meta`（带无值进 merged）、`metastore.effective`、`metastore.state`（tags 无值给[]，其余给""）。
 
 ## Git / 环境 / 构建
-- `.gitignore`：`.codebuddy/*` + `!.codebuddy/memory/`（否定规则配 `/*`）；忽略 `data/`、`*.db`、`novelforge/static/v2/`。
-- 认证走 GCM；URL 内嵌 token / `insteadof` 明文重写已清除，勿再引入。推送失败先查认证/网络，别改 git config。
-- Python 需 3.10+（`.venv`，用 `.venv/bin/python` 或 `/Users/stromboid/.local/bin/python3.12`）；Node v20/22 皆可。Docker daemon 可用，本机对外网络有限。
+- `.gitignore`：`.codebuddy/*` + `!.codebuddy/memory/`（否定配 `/*`）；忽略 `data/`、`*.db`、`novelforge/static/v2/`。
+- 认证走 GCM；已清除 token 内嵌/insteadof 明文重写，勿再引入。推送失败先查认证/网络，别改 git config。
+- Python 3.10+（本机用 `python3`）；Node v20/22。Docker daemon 可用，本机对外网络有限。
 - 行尾必须 LF（`.gitattributes` 锁）；CRLF 让容器 `sh /app/start.sh` 报 `set: Illegal option -` 反复重启。
 
 ## 自动化测试（硬前提）
-- `.venv/bin/python -m pytest`（完全离线）；dev 依赖在 `requirements-dev.txt`。
-- ⚠️ 曾出现「全量跑到后半程解释器 segfault、连汇总行都打不出来」，**根因不是 lxml**：`watcher.auto_fetch_async` / `enqueue_scrape_async` 派生的**旁路线程**没登记，用例 teardown 关库之后它们才去查库。第 22 期已修（见下一条），现在 265 passed / exit 0 / 无 dump。
-- 两条硬前提：① 环境变量必须在 import 业务模块前设置（`config` 导入即固化目录、`server.py` 导入即 `ensure_dirs()`）；② `db` 的 `_conn`/`_db_path` 是模块级缓存 → 隔离靠 `db.close()`。
-- 碰书库/DB 用例必须声明 `isolated`；接口用 `client` + `auth_headers`。假 EPUB（`b"EPUB"`）够扫描类；元数据写回 / 系列解析必须真 EPUB（`epub_builder.build_epub`）。**不测会外呼的接口**（要测就把检索函数换成返回固定候选）；`GET /` 会 503。
-- 库 id 由名称派生（中文 slug 空 → `lib-<sha1[:8]>`）；测试库根必须在 `LIBRARY_SOURCE_DIR` 下。
-- 后台线程要能被测试收尾，且**必须早于 `db.close()`**：`scrape` daemon worker 与 `watcher._spawn_bg` 派生的**旁路线程**（`auto_fetch_async` / `enqueue_scrape_async`）都会跨用例存活、拿旧 DB 连接查新库（「单独跑必过、全量跑随机挂」，严重时直接 segfault）。做法 = `watcher.wait_pending(timeout)` + `scrape.stop(timeout=)`，由 `tests/conftest.py` 的 `_quiesce_background()` 统一调用，**在 `isolated` 夹具 `db.close()` 之前**；autouse 夹具只作兜底。
-- 断言终态要留余地：单线程 worker 可能比测试跑得快 —— 断言「还在 pending / running」会随机挂（scrape 入队用例踩过），应允许 `ok`。
+- 完全离线：`.venv/bin/python -m pytest`（本机 `python3`）。dev 依赖在 `requirements-dev.txt`。当前 **270 passed / exit 0 / 无 dump**（第 24 期 +5）。
+- 曾全量后半程 segfault 根因：`watcher.auto_fetch_async`/`enqueue_scrape_async` 派生旁路线程未登记，teardown 关库后它们才查库。现由 `tests/conftest.py` 的 `_quiesce_background()`（`watcher.wait_pending`+`scrape.stop`）在 `isolated` 夹具 `db.close()` **之前**收尾，autouse 只兜底。
+- 硬前提：①环境变量必须在 import 业务模块前设（`config` 导入即固化目录、`server` 导入即 `ensure_dirs()`）；②`db._conn`/`_db_path` 模块级缓存 → 隔离靠 `db.close()`。
+- 碰库/DB 用例必须 `isolated`；接口用 `client`+`auth_headers`。假 EPUB（`b"EPUB"`）够扫描类；元数据写回/系列解析要真 EPUB（`epub_builder.build_epub`）。不测会外呼的接口（要测就换检索函数返回固定候选）；`GET /` 会 503。
+- 库 id 由名称派生（中文 slug 空→`lib-<sha1[:8]>`）；测试库根须在 `LIBRARY_SOURCE_DIR` 下。
+- 断言终态留余地：单线程 worker 可能比测试快 → 断言「还在 pending/running」会随机挂，应允许 ok。
 
 ## 后端硬约束
 - core 内引用配置一律 `from .. import config`；`import config` 被同名命名空间包劫持（py_compile 抓不到，启动才炸）。
-- 写磁盘只用 rename/move，**从不 unlink**；删除即移入回收目录（`CACHE_DIR/recycle`）。**禁 `config.OUTPUT_DIR / b["name"]`** → 一律 `library.root_of(b) / b["name"]`。
-- 库根只允许落在 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR` 内（`safe_path` 的边界）。`book_id` 由 basename 派生、**库维度化**（`库$哈希`）。
-- 新增库表列**必须**同进 `db._LIBRARY_COLS`，否则 `update_library` 静默写不进。
+- 写磁盘只用 rename/move，从不 unlink；删除即移入回收目录（`CACHE_DIR/recycle`）。禁 `config.OUTPUT_DIR / b["name"]` → 一律 `library.root_of(b) / b["name"]`。
+- 库根只允许落在 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR` 内（`safe_path` 边界）。`book_id` 由 basename 派生、库维度化（`库$哈希`）。
+- 新增库表列必须同进 `db._LIBRARY_COLS`，否则 `update_library` 静默写不进。
 
 ## 配置分层（四层 + 每库覆盖）
-- `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时叠加 `生效值 = 每库覆写 ?? 全局值`，落点 `libraries.settings`（稀疏 JSON，键 = 全局点分路径）。
-- `core/lib_settings.py`：`effective()` / `config_for()` / `apply_to()` / `set_overrides` / `clear_overrides` / `schema()`；与 `features.allows_setting` 联动，**`features.SETTING_CAPS` 是唯一真值源**。接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（`?keys=` 按项恢复）。
-- 覆盖项：`output.format` / `output.layout`、`watcher.recursive` / `watcher.copy_non_txt`、`metadata_fetch.*`、`naming.pattern` / `naming.scope`、`scrape.enabled`、`opds.expose`、`komga.expose`。（库实体属性 `watch` / `scan_interval` / `scan_cron` / `publish_path` 是**列**，不是覆盖项。）
-- 对外接口的「可见性」一律两层：**能力矩阵**（库类型有没有这能力）**且**「每库覆写 ?? 全局」开关，判定只留一处（OPDS `_opds_visible_libraries` / Komga `_ko_visible_libraries`，后者自第 22 期起不再是「只看库类型」）。口径：**「不可见」与「不存在」对客户端同待遇** —— 列表里没有 **且** 直连 404（Komga 侧用 `_ko_book` / `_ko_find_series`，别再用 `library.by_id` / `komga_api.find_series`）。
-- 能力矩阵 `features.FEATURES_BY_TYPE` 决定「哪些库类型有哪些能力」，前端只声明「哪一行菜单需要哪个能力」——加库类型只改后端，加菜单只改前端。
+- `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时 `生效值 = 每库覆写 ?? 全局值`，落 `libraries.settings`（稀疏 JSON，键=全局点分路径）。
+- `core/lib_settings.py`：`effective`/`config_for`/`apply_to`/`set_overrides`/`clear_overrides`/`schema()`；与 `features.allows_setting` 联动，`features.SETTING_CAPS` 是唯一真值源。接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（`?keys=` 按项恢复）。
+- 覆盖项：`output.format`/`output.layout`、`watcher.recursive`/`watcher.copy_non_txt`、`metadata_fetch.*`、`naming.pattern`/`naming.scope`、`scrape.enabled`、`opds.expose`、`komga.expose`。（库实体属性 `watch`/`scan_interval`/`scan_cron`/`publish_path` 是列，非覆盖项。）
+- 对外可见性两层：**能力矩阵**（库类型有没有这能力）**且**「每库覆写??全局」开关，判定只留一处（OPDS `_opds_visible_libraries`/Komga `_ko_visible_libraries`）。口径：「不可见」=「不存在」对客户端同待遇 → 列表没有且直连 404（Komga 用 `_ko_book`/`_ko_find_series`，别用 `library.by_id`/`komga_api.find_series`）。
+- 能力矩阵 `features.FEATURES_BY_TYPE` 决定库类型能力，前端只声明菜单需哪个能力——加库类型只改后端，加菜单只改前端。
 
-## 前端栈 / 规范（要点）
-- `frontend/` = Vue 3 SFC + TS + Vite 8 + Tailwind v4 + Pinia 4 + vue-router 5（hash 模式）；产物落 `novelforge/static/v2/`，FastAPI 挂 `/static`，`/` 服务其 `index.html`（缺失 503）。勿往 `novelforge/static/` 加手写页。
-- `bridge.css` 是前提（`@theme inline`）；`main.css` 必须 `@custom-variant dark (&:is(.dark *));`。
-- 仪表盘演示数据必须确定性常量，禁 `Math.random()`。`settingsNav` / router「标 ready 未注册组件」会 `console.error` → 注册表与组件必须同批改。**`p()` 的首参就是路由 path，全局必须唯一**（同 path 两条会被 vue-router 静默覆盖 + 侧栏重复 key）。
+## 前端栈 / 规范
+- `frontend/` = Vue3 SFC + TS + Vite8 + Tailwind v4 + Pinia4 + vue-router5（hash）。产物落 `novelforge/static/v2/`，FastAPI 挂 `/static`，`/` 服务其 index.html（缺失 503）。勿往 `novelforge/static/` 加手写页。
+- `bridge.css` 前提（`@theme inline`）；`main.css` 须 `@custom-variant dark (&:is(.dark *));`。
+- 仪表盘演示数据必须确定性常量，禁 `Math.random()`。`settingsNav`/router「标 ready 未注册组件」会 console.error → 注册表与组件同批改。`p()` 首参=路由 path，全局唯一（同 path 两条被 vue-router 静默覆盖+侧栏重复 key）。
 - Vue 模板不渲染 markdown → 静态文本用 `<strong>`，JS 字符串别加星号。
-- 工具页 `ToolsLayout.vue` = `/tools` 外壳（标签栏 + 嵌套 RouterView + KeepAlive :max=8，**无卡片外框**）；**路由子页**用 `onActivated`（别挂 `onMounted`），不在 `onActivated` 里重置用户输入。改磁盘的工具一律「先预览、再应用」，删除即移入回收站。
-- ⚠️ 例外：**页面内部的 `v-if` 子组件**（比 KeepAlive 深两层，如 `ScrapePanel`）首次挂载时 `onActivated` **不触发** → 必须用 `onMounted` 首载，`onActivated` 只做「重新激活时刷新」（用 `data` 非空之类的条件天然去重）。
-- 表格类面板要窄屏可用：宽屏 `<table class="hidden md:block">`，窄屏另写一份 `<ul class="md:hidden">` 卡片流（信息不裁剪、只换排布）。
-- 纯装饰类增强（如详情页封面取色）**取不到就不设变量** → CSS 整条声明失效 → 天然回退，不留黑块/透明块。
+- 工具页 `ToolsLayout.vue`=`/tools` 外壳（标签栏+嵌套 RouterView+KeepAlive :max=8，无卡片外框）；路由子页用 `onActivated`（别挂 `onMounted`），不在 `onActivated` 里重置用户输入。改磁盘工具一律「先预览再应用」，删除即移回收站。
+- ⚠️ 例外：页面内部 `v-if` 子组件（比 KeepAlive 深两层，如 `ScrapePanel`）首挂 `onActivated` 不触发 → 用 `onMounted` 首载，`onActivated` 只做重新激活刷新（用 data 非空条件天然去重）。
+- 表格面板窄屏可用：宽屏 `<table class="hidden md:block">`，窄屏另写 `<ul class="md:hidden">` 卡片流。
+- 纯装饰增强（如详情页封面取色）取不到就不设变量 → CSS 整条失效 → 天然回退。
 
 ## 运行 / UI 验证
-- 本地测试实例（已授权直接 py_compile + 重启）：`*_DIR` → `/tmp/nf-test/…`，**`LIBRARY_SOURCE_DIR=/tmp/nf-test/libraries` 也要显式设**（否则走默认 `/app/libraries` 不存在），`AUTO_WATCH=false`，auth `admin`/test1234，`.venv/bin/python -m uvicorn novelforge.server:app --port 8791`。token 落 `/tmp/nf-test/token.txt`（`POST /api/auth/login`）。⚠️ `/tmp/nf-test` 可能被清理 → e2e 脚本要**自带数据准备**（建目录、写占位书、建库、再 scan）。
-- Docker：`docker-compose.yml` 真实版拉镜像端口 **8992**；`docker-compose.test.yml` 本地 build 挂 `./novelforge` 端口 **8993**（容器，别动）。**断网无法 `--build`**。8992/8993 数据隔离。
-- UI 验证（playwright）：项目 `.venv`，`executable_path` 传内核；直连实例 `nf_token` 用 `add_init_script` 注入；迁移弹窗先 `force=True` 点「暂不迁移」。构建：`cd frontend && npm run type-check && npm run build && npm run deploy`。
-- playwright-cli（全局未安装，直接 `node /Users/stromboid/.codebuddy/plugins/marketplaces/codebuddy-plugins-official/plugins/playwright-cli/playwright-cli.js ...`）：默认要 Chrome 会报错 → **加 `--browser=chromium`**（内核已在 `~/Library/Caches/ms-playwright`）；先 `goto` 首页 → `localstorage-set nf_token <token>` → **`reload`**（只改 hash 不会重载，令牌不生效）；快照落项目根 `.playwright-cli/page-*.yml`（`--filename=` 会被忽略）；`npm ci` 可离线秒装。
+- 本地测试实例：`*_DIR` → `/tmp/nf-test/…`，`LIBRARY_SOURCE_DIR=/tmp/nf-test/libraries` 要显式设，`AUTO_WATCH=false`，auth admin/test1234，`python3 -m uvicorn novelforge.server:app --port 8791`，token 落 `/tmp/nf-test/token.txt`。⚠️ `/tmp/nf-test` 可能被清理 → e2e 脚本自带数据准备。
+- Docker：`docker-compose.yml` 真实版端口 **8992**；`docker-compose.test.yml` 本地 build 挂 `./novelforge` 端口 **8993**（容器，别动）。断网无法 `--build`。8992/8993 数据隔离。
+- UI 验证：playwright 直连实例，`nf_token` 用 `add_init_script` 注入；迁移弹窗先 `force=True` 点「暂不迁移」。构建：`cd frontend && npm run type-check && npm run build && npm run deploy`。
+- playwright-cli：默认要 Chrome 报错 → 加 `--browser=chromium`；先 `goto` 首页 → `localstorage-set nf_token <token>` → **`reload`**（只改 hash 不重载，令牌不生效）；快照落 `.playwright-cli/page-*.yml`。
 
-## 后端踩坑（真实教训）
+## 后端踩坑
 - `threading.Lock` 自锁死锁 → 共用锁且有嵌套调用一律 `RLock`。
-- 事件循环线程长持同步锁 → Web 假死：`mark_processed` / `mark_recent` 走 `asyncio.to_thread`；watcher 独立 `_scan_lock`。
-- `ebooklib.write_epub` 父目录不存在只 warn 不抛 → 造真 EPUB 前必须先 `mkdir`。
+- 事件循环线程长持同步锁 → Web 假死：`mark_processed`/`mark_recent` 走 `asyncio.to_thread`；watcher 独立 `_scan_lock`。
+- `ebooklib.write_epub` 父目录不存在只 warn 不抛 → 造真 EPUB 前先 `mkdir`。
 - HMR 源码 ≠ 服务端产物 → 验证前必须 `npm run build && npm run deploy`。
-- 批量端点必须注册在 `/api/books/{bid}` 之前；**同前缀下字面量路径也要在 `{param}` 之前**（如 `/api/scrape/run` vs `/api/scrape/{bid}/resolve`）。
-- **硬链接副本禁止原地写**：副本与源共享 inode，`open(dst,'wb')` 会连源文件一起改坏；必须走「临时文件 + `Path.replace`」（只换目录项）。推论：内嵌过元数据的副本必然换成独立 inode、不再共享数据块，界面要如实标注而不是继续宣称「硬链接省空间」。
-- FastAPI 的 `StaticFiles` 静态资源会被浏览器缓存：改了前端务必 build + deploy，再校对页面引用的 JS hash 是否更新，否则会对着旧 JS 排查。
-- **改名后 `book_id` 会变**（basename 派生）：元数据覆盖要落**新 id**；算所属库**不能**用 `fileops._lib_of(名字)`（它查扫描缓存，改名刚做完缓存未更新 → 退化成旧纯哈希 id → 覆盖写进没人读的 id →「改了没生效」且不报错）。用 `fileops._owning_library_id(path)`（按真实路径包含关系、取最深）。测试要用「扫描结果的 id」比对才抓得住这类静默错误。
-- **字符串模板替换必须先长后短**：`{series_index}` 要排在 `{series}` / `{index}` 之前 —— `str.replace` 只看字面量，顺序错了会被短 token 抢先吃掉一半。
-- **目录型条目（有声书）不能用 `is_file()` 判存在**：它是**目录**，`path.is_file()` 为假 → 会被误判「文件不存在」（元数据抓取的 `apply()` 就踩过）。判存在用 `path.exists()`，格式相关的闸门不该拦「只写 DB」的链路。
+- 批量端点必须注册在 `/api/books/{bid}` 之前；同前缀字面量路径也要在 `{param}` 之前（如 `/api/scrape/run` vs `/api/scrape/{bid}/resolve`）。
+- 硬链接副本禁止原地写：副本与源共享 inode，`open(dst,'wb')` 连源一起改坏 → 须「临时文件+Path.replace」。推论：内嵌过元数据的副本换成独立 inode，界面要如实标注而非宣称「硬链接省空间」。
+- FastAPI `StaticFiles` 被浏览器缓存：改前端务必 build+deploy 再校对 JS hash。
+- 改名后 `book_id` 会变（basename 派生）：元数据覆盖要落新 id；算所属库不能用 `fileops._lib_of(名字)`（查扫描缓存，改名后缓存未更新→退化旧纯哈希 id→覆盖写进没人读的 id→「改了没生效」不报错）。用 `fileops._owning_library_id(path)`（按真实路径包含、取最深）。测试用「扫描结果的 id」比对。
+- 字符串模板替换先长后短：`{series_index}` 排 `{series}`/`{index}` 之前。
+- 目录型条目（有声书）不能用 `is_file()` 判存在：它是目录，`path.is_file()` 为假→误判不存在（元数据 `apply()` 踩过）。判存在用 `path.exists()`，格式闸门不该拦「只写 DB」的链路。
 
 ## 待办（跨会话）
-- `watcher.auto_fetch_async` 仍按 `.epub` 后缀提前 return（第 21 期只放开了 `metafetch.plan/apply`）→ **入库自动抓取**对漫画 / 有声书仍不触发；改它要连同「入库即外呼」的取舍一起定。
-- 外部服务的「同步任务」（Hardcover / Readwise / StoryGraph 推送）尚未实现，前置是书籍匹配（ISBN / 标题 + 作者）；本机外网受限，验证成本高。
-- 维护页其余分组（IMPORT / RECOMMENDATIONS / UPDATES 未支持，ACHIEVEMENTS 的 Backfill 已接入）第 23 期已落地，详见 `docs/roadmap-verification.md` 未支持表。
+- 外部服务「同步任务」（Hardcover/Readwise/StoryGraph 推送）未实现，前置书籍匹配（ISBN/标题+作者）；本机外网受限，验证成本高。
