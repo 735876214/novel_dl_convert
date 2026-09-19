@@ -11,6 +11,12 @@ import pathlib
 import re
 import threading
 import time
+from datetime import datetime
+
+try:  # 时区归一（Python 3.9+ 标准库；极老环境或缺 tzdata 时回落本地时）
+    from zoneinfo import ZoneInfo
+except Exception:  # pragma: no cover
+    ZoneInfo = None  # type: ignore
 
 from .. import config
 
@@ -404,6 +410,15 @@ def init():
         # 与上面同理：老库不补列则 update_library / 刮削读取会报 no such column。
         if lcols and "publish_path" not in lcols:
             c.execute("ALTER TABLE libraries ADD COLUMN publish_path TEXT NOT NULL DEFAULT ''")
+        # 第 25 期：users 表补账号资料列（展示名 / 时区 / 头像相对文件名）。
+        # 老库不补列则读写会报 no such column（与上方同理）。
+        ucols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
+        if "display_name" not in ucols:
+            c.execute("ALTER TABLE users ADD COLUMN display_name TEXT NOT NULL DEFAULT ''")
+        if "timezone" not in ucols:
+            c.execute("ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT ''")
+        if "avatar_path" not in ucols:
+            c.execute("ALTER TABLE users ADD COLUMN avatar_path TEXT NOT NULL DEFAULT ''")
         _seed_user(c)
         c.commit()
 
@@ -434,6 +449,56 @@ def set_pin(username: str, pin: str) -> None:
     c = _connect()
     with _lock:
         c.execute("UPDATE users SET pin_hash=? WHERE username=?", (h, username))
+        c.commit()
+
+
+# ---------------- 账号资料（第 25 期）----------------
+# 单用户场景只有一行 users，以下读写一律命中该行，不做多用户区分。
+
+def get_user_profile() -> dict:
+    """返回唯一账号的资料（展示名 / 时区 / 头像相对文件名）。"""
+    row = _connect().execute(
+        "SELECT username, display_name, timezone, avatar_path FROM users LIMIT 1"
+    ).fetchone()
+    if not row:
+        return {"username": "", "display_name": "", "timezone": "", "avatar_path": ""}
+    return {
+        "username": row["username"],
+        "display_name": row["display_name"] or "",
+        "timezone": row["timezone"] or "",
+        "avatar_path": row["avatar_path"] or "",
+    }
+
+
+def update_user_profile(display_name: str, timezone: str) -> dict:
+    """更新展示名与时区（均 strip；空串表示回退默认）。"""
+    c = _connect()
+    with _lock:
+        c.execute(
+            "UPDATE users SET display_name=?, timezone=? WHERE id=(SELECT id FROM users LIMIT 1)",
+            (str(display_name or "").strip(), str(timezone or "").strip()),
+        )
+        c.commit()
+    return get_user_profile()
+
+
+def set_user_avatar(fn: str) -> None:
+    """记录头像相对文件名（落在 CACHE_DIR/user/ 下）。空串 = 移除。"""
+    c = _connect()
+    with _lock:
+        c.execute(
+            "UPDATE users SET avatar_path=? WHERE id=(SELECT id FROM users LIMIT 1)",
+            (str(fn or "").strip(),),
+        )
+        c.commit()
+
+
+def clear_user_avatar() -> None:
+    c = _connect()
+    with _lock:
+        c.execute(
+            "UPDATE users SET avatar_path='' WHERE id=(SELECT id FROM users LIMIT 1)"
+        )
         c.commit()
 
 
@@ -656,11 +721,27 @@ def daily_seconds(days: int = 28) -> list:
 
 
 def hour_histogram() -> list:
-    """会话开始时段的 24 小时分布（本地时区）。"""
+    """会话开始时段的 24 小时分布。
+
+    第 25 期起按账号时区归一：设置过 timezone 才转换，否则回落服务器本地时
+    （保持历史口径，避免老库无时区时分布突变）。时区解析失败同样回落本地时。
+    """
     c = _connect()
+    tz = (get_user_profile().get("timezone") or "").strip()
+    zone = None
+    if tz and ZoneInfo is not None:
+        try:
+            zone = ZoneInfo(tz)
+        except Exception:
+            zone = None
     buckets = [0] * 24
     for r in c.execute("SELECT started_at FROM reading_sessions").fetchall():
-        buckets[time.localtime(r["started_at"]).tm_hour] += 1
+        ts = r["started_at"]
+        if zone is not None:
+            hr = datetime.fromtimestamp(ts, tz=zone).hour
+        else:
+            hr = time.localtime(ts).tm_hour
+        buckets[hr] += 1
     return buckets
 
 

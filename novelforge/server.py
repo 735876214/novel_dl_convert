@@ -133,6 +133,8 @@ _MEDIA_TOKEN_PATHS = (
     re.compile(r"^/api/books/[^/]+/comic/\d+$"),
     # 作者头像：同样是 <img src> 原生请求（第 8 期）
     re.compile(r"^/api/authors/[^/]+/photo$"),
+    # 账号头像：同样是 <img src> 原生请求（第 25 期）；单用户，无需 {id}
+    re.compile(r"^/api/account/avatar$"),
     # 有声书单轨：<audio src> 同样是原生请求，带不了 Authorization（第 9 期）
     re.compile(r"^/api/books/[^/]+/audio/\d+$"),
 )
@@ -1935,6 +1937,81 @@ def api_clear_author_photo(name: str):
     if not library.author_books(name):
         raise HTTPException(404, "作者不存在")
     return {"ok": True, **authors_mod.clear_photo_override(name)}
+
+
+# ---------------- 账号资料（第 25 期）----------------
+# 单用户：profile 只有一行，头像以覆盖式文件落在 CACHE_DIR/user/avatar.<ext>。
+
+_USER_AVATAR_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                      ".webp": "image/webp"}
+_USER_AVATAR_MAX = 5 * 1024 * 1024
+
+
+def _account_avatar_url() -> "str | None":
+    p = db.get_user_profile().get("avatar_path") or ""
+    return f"/api/account/avatar?t={int(time.time())}" if p else None
+
+
+@app.get("/api/account/profile")
+def api_account_profile():
+    """当前账号资料（头像以可分发 URL 形式返回）。"""
+    prof = db.get_user_profile()
+    prof["avatar_url"] = _account_avatar_url()
+    return prof
+
+
+@app.put("/api/account/profile")
+def api_update_account_profile(payload: dict = Body(...)):
+    """更新展示名 / 时区（缺字段则沿用当前值）。"""
+    cur = db.get_user_profile()
+    new_name = payload.get("display_name", cur["display_name"])
+    new_tz = payload.get("timezone", cur["timezone"])
+    prof = db.update_user_profile(str(new_name), str(new_tz))
+    prof["avatar_url"] = _account_avatar_url()
+    return prof
+
+
+@app.post("/api/account/avatar")
+async def api_upload_account_avatar(file: UploadFile = File(...)):
+    """上传账号头像（JPG/PNG/WEBP，≤5MB），覆盖式写入。"""
+    fn = (file.filename or "").lower()
+    ext = ("." + fn.rsplit(".", 1)[-1]) if "." in fn else ""
+    if ext not in _USER_AVATAR_TYPES:
+        raise HTTPException(400, "仅支持 JPG / PNG / WEBP 图片")
+    data = await _read_capped(file, _USER_AVATAR_MAX)
+    if not data:
+        raise HTTPException(400, "文件为空")
+    d = pathlib.Path(config.CACHE_DIR) / "user"
+    d.mkdir(parents=True, exist_ok=True)
+    target = d / f"avatar{ext}"
+    target.write_bytes(data)
+    db.set_user_avatar(f"avatar{ext}")
+    return {"ok": True, "avatar_url": _account_avatar_url()}
+
+
+@app.delete("/api/account/avatar")
+def api_clear_account_avatar():
+    """移除账号头像，回退占位。"""
+    p = db.get_user_profile().get("avatar_path") or ""
+    if p:
+        f = pathlib.Path(config.CACHE_DIR) / "user" / p
+        if f.is_file():
+            f.unlink()
+    db.clear_user_avatar()
+    return {"ok": True}
+
+
+@app.get("/api/account/avatar")
+def api_account_avatar():
+    """分发账号头像（单用户；走 _MEDIA_TOKEN_PATHS 允许 ?token=）。"""
+    p = db.get_user_profile().get("avatar_path") or ""
+    if not p:
+        raise HTTPException(404, "无头像")
+    f = pathlib.Path(config.CACHE_DIR) / "user" / p
+    if not f.is_file():
+        raise HTTPException(404, "无头像")
+    media = _USER_AVATAR_TYPES.get(pathlib.Path(p).suffix.lower(), "application/octet-stream")
+    return FileResponse(f, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.post("/api/authors/{name}/fetch")
