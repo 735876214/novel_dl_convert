@@ -3,8 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
-import Icon from '@/components/ui/Icon.vue'
-import { api, type BookMetadata, type BookMetadataFields } from '@/lib/api'
+import { api, type BookMetadata, type BookMetadataFields, type BookMetadataWriteFields } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -12,11 +11,16 @@ import { useUiStore } from '@/stores/ui'
  *
  * 元数据分层原则（第 8 期）：生效值 = 用户覆盖(override) > 在线抓取(online) > 文件原值(opf)。
  *  - 编辑保存：与生效原值不同的字段记入**服务端覆盖**，再抓取不冲掉；
- *  - 已覆盖的字段显示「已本地修改」徽标 + 「恢复在线」按钮（撤销覆盖，回落在线值）。
+ *  - 已覆盖的字段显示「已本地修改」徽标 + 「恢复在线」按钮（撤销覆盖，回落在线值）；
+ *  - **「清空」**（第 22 期）：把字段置为「真的没有值」（提交 `null`，后端写无值标记）——
+ *    与「恢复在线」相反：恢复是撤掉改动、回落到抓取值 / 文件原值，清空则是显式无值、
+ *    之后抓取也不会把它填回来。两种动作并存，别再让「删空输入框」承担清空语义
+ *    （空串仍是「撤销覆盖」，EPUB 上的老行为不变）。
  *
- * ⚠️ 第 18 期起保存**不改写 EPUB 文件**（只有服务端 DB 变），所以界面文案说的是
+ * ⚠️ 第 18 期起保存**不改写书文件**（只有服务端 DB 变），所以界面文案说的是
  * 「存到应用数据库、所有界面一致」，而不是「写进文件」——别再写成写文件，
- * 否则用户会以为把书改脏了。
+ * 否则用户会以为把书改脏了。第 22 期起**所有格式都可编辑**（原先限 EPUB 的
+ * 理由是「兜底原值来自 OPF」，改动只落库后这条前提已不成立）。
  */
 const props = defineProps<{ bookId: string }>()
 const emit = defineEmits<{ saved: [] }>()
@@ -26,6 +30,7 @@ const meta = ref<BookMetadata | null>(null)
 const loading = ref(true)
 const saving = ref(false)
 const restoring = ref(false)
+const clearing = ref(false)
 const form = ref<BookMetadataFields | null>(null)
 const changed = ref<string[]>([])
 const tagText = ref('')
@@ -95,7 +100,11 @@ function onlineText(k: keyof BookMetadataFields): string {
   const s = metaState(k)
   if (s?.overridden) {
     const o = fmt(s.online)
-    return o ? `在线：${o}` : '（无在线建议，恢复后将回到 OPF 原值）'
+    if (o) return `在线：${o}`
+    // 非 EPUB 没有 OPF 那一层：撤掉覆盖之后这个字段就是空，别写成「回到原值」
+    return meta.value?.format === 'EPUB'
+      ? '（无在线建议，恢复后将回到文件原值）'
+      : '（无在线建议，恢复后该字段为空）'
   }
   return ''
 }
@@ -151,6 +160,27 @@ function restoreOne(k: keyof BookMetadataFields): void {
   void restoreFields([k])
 }
 
+/**
+ * **显式清空**单个字段（提交 `null`）——与 `restoreOne` 相反：
+ * 恢复是撤掉覆盖、回落到在线值或文件原值；清空是让这个字段真的没有值。
+ */
+async function clearOne(k: keyof BookMetadataFields): Promise<void> {
+  if (!meta.value) return
+  clearing.value = true
+  try {
+    const r = await api.setBookMetadata(props.bookId, { [k]: null } as BookMetadataWriteFields)
+    meta.value = { ...meta.value, fields: { ...r.fields }, meta: { ...r.meta } }
+    form.value = { ...r.fields }
+    tagText.value = (r.fields.tags || []).join('、')
+    ui.toast(r.changed.length ? `已清空：${FIELD_LABELS[k] ?? k}` : '该字段本来就是空的')
+    emit('saved')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '清空失败')
+  } finally {
+    clearing.value = false
+  }
+}
+
 function restoreAll(): void {
   const fields = meta.value
     ? Object.keys(meta.value.meta).filter((f) => meta.value!.meta[f]?.overridden)
@@ -167,16 +197,6 @@ const INPUT_CLS =
     <div v-if="loading" class="py-16 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <template v-else-if="meta && form">
-      <Card v-if="!editable" padding="sm" class="mb-3">
-        <div class="flex gap-2 text-[12px] text-muted-foreground">
-          <Icon name="alert" class="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>
-            该书的格式是 <span class="font-mono">{{ meta.format || '未知' }}</span>。
-            元数据编辑只支持 EPUB —— 其它格式没有可作「恢复原值」兜底的 OPF 原值层，因此这里只能查看（在线抓取的结果照常显示）。
-          </span>
-        </div>
-      </Card>
-
       <Card padding="none" class="mb-3">
         <div class="border-b border-border px-4 py-3">
           <div class="flex flex-wrap items-center gap-2">
@@ -186,9 +206,11 @@ const INPUT_CLS =
           </div>
           <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
             改动存进应用数据库，书库列表、详情、搜索、OPDS 立即一致。
-            <strong>不会改文件名，也不会改写 EPUB 文件本身</strong>
+            <strong>不会改文件名，也不会改写书文件本身</strong>
             —— 用其它软件直读文件看到的是原始元数据；在线抓取默认优先覆盖本地，
-            你手动改过的字段会被保护（标「已本地修改」），再抓取也不冲掉，可随时「恢复在线」。
+            你手动改过的字段会被保护（标「已本地修改」），再抓取也不冲掉。
+            两种撤销方式不一样：<strong>「恢复在线」</strong>是撤掉你的改动、回落到抓取结果或文件原值；
+            <strong>「清空」</strong>是让这个字段真的没有值（之后抓取也不会把它填回来）。
           </p>
         </div>
 
@@ -207,18 +229,27 @@ const INPUT_CLS =
             </span>
             <input v-model="form[k] as string" type="text" :disabled="!editable" :class="INPUT_CLS">
             <div
-              v-if="meta.meta[k]?.overridden"
+              v-if="meta.meta[k]?.overridden || fmt(form[k] as string)"
               class="mt-1 flex flex-wrap items-center gap-2 text-[11px]"
             >
               <button
+                v-if="meta.meta[k]?.overridden"
                 type="button"
-                :disabled="!editable || restoring"
+                :disabled="!editable || restoring || clearing"
                 class="cursor-pointer rounded text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
                 @click="restoreOne(k)"
               >
                 ↺ 恢复在线
               </button>
-              <span class="text-muted-foreground">{{ onlineText(k) }}</span>
+              <button
+                type="button"
+                :disabled="!editable || clearing"
+                class="cursor-pointer rounded text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                @click="clearOne(k)"
+              >
+                ✕ 清空
+              </button>
+              <span v-if="meta.meta[k]?.overridden" class="text-muted-foreground">{{ onlineText(k) }}</span>
             </div>
           </label>
 
@@ -232,18 +263,27 @@ const INPUT_CLS =
             </span>
             <input v-model="tagText" type="text" :disabled="!editable" :class="INPUT_CLS" placeholder="科幻 · 小说">
             <div
-              v-if="meta.meta.tags?.overridden"
+              v-if="meta.meta.tags?.overridden || tagText.trim()"
               class="mt-1 flex flex-wrap items-center gap-2 text-[11px]"
             >
               <button
+                v-if="meta.meta.tags?.overridden"
                 type="button"
-                :disabled="!editable || restoring"
+                :disabled="!editable || restoring || clearing"
                 class="cursor-pointer rounded text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
                 @click="restoreOne('tags')"
               >
                 ↺ 恢复在线
               </button>
-              <span class="text-muted-foreground">{{ onlineText('tags') }}</span>
+              <button
+                type="button"
+                :disabled="!editable || clearing"
+                class="cursor-pointer rounded text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                @click="clearOne('tags')"
+              >
+                ✕ 清空
+              </button>
+              <span v-if="meta.meta.tags?.overridden" class="text-muted-foreground">{{ onlineText('tags') }}</span>
             </div>
           </label>
 
@@ -262,18 +302,27 @@ const INPUT_CLS =
               class="w-full rounded-md border border-border bg-muted px-2.5 py-2 text-[12.5px] leading-relaxed text-foreground outline-none focus:border-ring focus:bg-card"
             />
             <div
-              v-if="meta.meta.description?.overridden"
+              v-if="meta.meta.description?.overridden || form.description.trim()"
               class="mt-1 flex flex-wrap items-center gap-2 text-[11px]"
             >
               <button
+                v-if="meta.meta.description?.overridden"
                 type="button"
-                :disabled="!editable || restoring"
+                :disabled="!editable || restoring || clearing"
                 class="cursor-pointer rounded text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
                 @click="restoreOne('description')"
               >
                 ↺ 恢复在线
               </button>
-              <span class="text-muted-foreground">{{ onlineText('description') }}</span>
+              <button
+                type="button"
+                :disabled="!editable || clearing"
+                class="cursor-pointer rounded text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                @click="clearOne('description')"
+              >
+                ✕ 清空
+              </button>
+              <span v-if="meta.meta.description?.overridden" class="text-muted-foreground">{{ onlineText('description') }}</span>
             </div>
           </label>
         </div>

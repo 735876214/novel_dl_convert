@@ -100,7 +100,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
         note: '本项目实现主题 / 点缀色（65 档）/ 圆角；「保存位置」已由「偏好与同步」页统管（外观与阅读偏好整套同步，也可按设备各用各的）；「背景图案」为未支持。',
       }),
       p('appearance/book-covers', 'Book Covers', '封面样式', 'ready', {
-        note: '已实现：真实内嵌封面 + 填充方式（填满 / 自然贴底 / 模糊底图）+ 书脊（含第 17 期的「漫画是否显示书脊」开关）+ 阴影强度 + 5 种卡片叠加层 + 详情页封面取色（第 17 期），存本机、改完立即生效。未支持：封面搜索提供者（依赖在线封面抓取）。',
+        note: '已实现：真实内嵌封面 + 填充方式（填满 / 自然贴底 / 模糊底图）+ 书脊（含第 20 期的「漫画是否显示书脊」开关）+ 阴影强度 + 5 种卡片叠加层 + 详情页封面取色（第 20 期），存本机、改完立即生效。未支持：封面搜索提供者（依赖在线封面抓取）。',
         upstream: {
           title: 'Book Covers',
           desc: 'Cover shadows, spine effects, and placeholder art.',
@@ -275,7 +275,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['每书库命名模式（Folder as Book / File as Book）', 'File as Book 默认模式', '13 个 TOKENS', '7 个 MODIFIERS', '4 类 STRUCTURE（optional / fallback / folder / or）', '4 个配方', '元数据缺失时的降级预览', 'Cross-platform path sanitization'],
         },
         link: { to: '/tools/rename', label: '批量重命名' },
-        note: '已实现：命名规则存服务端（config.naming）+ 4 个配方 + 生效预览，工具页默认载入该规则；第 17 期起支持 9 个占位符（书名 / 作者 / 系列 / 系列序号 / 顺序号 / 出版年 / 出版社 / 语言 / 扩展名）。上游的 13 token / 7 修饰符 / 结构语法未支持。',
+        note: '已实现：命名规则存服务端（config.naming）+ 4 个配方 + 生效预览，工具页默认载入该规则；第 20 期起支持 9 个占位符（书名 / 作者 / 系列 / 系列序号 / 顺序号 / 出版年 / 出版社 / 语言 / 扩展名）。上游的 13 token / 7 修饰符 / 结构语法未支持。',
       }),
       p('library/maintenance', 'Maintenance', '维护', 'ready', {
         upstream: {
@@ -316,7 +316,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
         note: '本项目实现 kosync 协议的服务端：healthcheck / users/auth / users/create / syncs/progress（GET+PUT）。**三个必须精确的协议细节**：①鉴权头是 x-auth-user / x-auth-key，key = 密码的 MD5（不是 Basic，服务端也只存这个哈希）；②文档标识是 partialMD5（只采样 12 个点，偏移 1024×4^i，i=-1..10，**不读第 0 字节**、读不满即停），另有 checksum_method=FILENAME 的 md5(basename) 变体，两种都索引；③percentage 是 0–1，progress 对 EPUB 是 XPointer、PDF/漫画是页码。进度映射：DocFragment[N] ↔ 本项目章节序号（N-1），PDF/漫画用页码；反向的 XPointer 只定位到章首，准确位置由 percentage 兜底。未支持：多设备管理、注解/书签同步。',
       }),
       p('komga', 'Komga', 'Komga 库布局', 'ready', {
-        note: '本项目实现「输出侧」：输出布局开关（output.layout —— 有系列的书落 系列名/系列名 #N.ext，无系列保持平铺）+ 既有库整理（先预览、再应用）。**会改 basename 的条目在应用时自动迁移阅读进度 / 批注 / 评分 / 收藏**（按 book_id 搬迁），整理库不会把进度清零。系列来源：EPUB 的 calibre:series 优先，判不出则从文件名推断（系列 第01卷 / 系列 #1 / 系列 (01) / 系列 - 01），都判不出就原地不动。第 15 期起兼容服务端补齐：客户端可按书库浏览（系列与书籍都按库过滤，老客户端的 GET 端点同样生效）、系列级「全部已读 / 全部未读」（只把百分比顶到 100，不清除读者位置）、CBR 拿到正确的媒体类型；有声书库不进 Komga（Komga 没有音频模型，硬塞进去只会得到打不开的坏条目）。未支持「接入侧」：从 Komga 拉书目 / 下载入库、双向同步进度。',
+        note: '本项目实现「输出侧」：输出布局开关（output.layout —— 有系列的书落 系列名/系列名 #N.ext，无系列保持平铺）+ 既有库整理（先预览、再应用）。**会改 basename 的条目在应用时自动迁移阅读进度 / 批注 / 评分 / 收藏**（按 book_id 搬迁），整理库不会把进度清零。系列来源：EPUB 的 calibre:series 优先，判不出则从文件名推断（系列 第01卷 / 系列 #1 / 系列 (01) / 系列 - 01），都判不出就原地不动。第 15 期起兼容服务端补齐：客户端可按书库浏览（系列与书籍都按库过滤，老客户端的 GET 端点同样生效）、系列级「全部已读 / 全部未读」（只把百分比顶到 100，不清除读者位置）、CBR 拿到正确的媒体类型；有声书库不进 Komga（Komga 没有音频模型，硬塞进去只会得到打不开的坏条目）。第 22 期起还能逐库决定是否暴露：在「工具 → 书库管理 → 每库设置」关掉某库的「对 Komga 暴露」，它就不进客户端书库列表，直连它的系列 / 书籍地址也一并 404（默认全部暴露，与加这个开关之前一致）。未支持「接入侧」：从 Komga 拉书目 / 下载入库、双向同步进度。',
       }),
     ],
   },

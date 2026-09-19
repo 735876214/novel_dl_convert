@@ -964,12 +964,23 @@ export interface MetaFieldState {
 /** 字段名 → 分层状态 */
 export type MetaStateMap = Record<string, MetaFieldState>
 
+/**
+ * 提交给 `POST /api/books/{bid}/metadata` 的值（第 22 期起对所有格式一致）：
+ *  - 字符串 / 字符串数组：正常写入 —— 非空值记成**服务端覆盖**，再抓取也不冲掉；
+ *  - `null`：**显式清空**该字段（后端写「无值」标记）—— 该字段显示为空，
+ *    且盖住在线的抓取值（之后抓取也不会把它填回来）；
+ *  - 空串 / 空数组：**撤销覆盖**，回到「跟随在线 / 文件原值」（等同「恢复在线」）。
+ */
+export type BookMetadataWriteFields = {
+  [K in keyof BookMetadataFields]?: BookMetadataFields[K] | null
+}
+
 /** `GET /api/books/{bid}/metadata` */
 export interface BookMetadata {
   id: string
   name: string
   format: string
-  /** 非 EPUB 为 false（缺 OPF 兜底原值层，无法「恢复原值」），前端据此把表单置为只读并说明原因 */
+  /** 是否可编辑；第 22 期起**所有格式都是 true**（保留字段以便将来真有不可编辑的形态） */
   editable: boolean
   /** 生效值（override > online > opf） */
   fields: BookMetadataFields
@@ -1684,10 +1695,11 @@ export const api = {
     request<BookMetadata>(`/api/books/${encodeURIComponent(bid)}/metadata`),
 
   /**
-   * 编辑单本书的元数据：**只写服务端覆盖，不改写 EPUB 文件**（第 18 期口径）。
+   * 编辑单本书的元数据：**只写服务端，不改写任何书文件**（第 18 期口径）。
+   * 值语义见 `BookMetadataWriteFields`（`null` = 显式清空，空串 = 撤销覆盖）。
    * 返回的 `changed` 只含**实际发生变化**的字段（同值重写不会出现在里面）。
    */
-  setBookMetadata: (bid: string, fields: Partial<BookMetadataFields>) =>
+  setBookMetadata: (bid: string, fields: BookMetadataWriteFields) =>
     request<MetadataWriteResult>(`/api/books/${encodeURIComponent(bid)}/metadata`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1698,7 +1710,7 @@ export const api = {
   bookMetadataOnline: (bid: string) =>
     request<MetadataOnlineResult>(`/api/books/${encodeURIComponent(bid)}/metadata/online`),
 
-  /** 把指定字段恢复为在线值（撤销用户覆盖并把 OPF 写回在线值）。 */
+  /** 撤销用户覆盖（含「显式清空」）让字段回落到在线值 / 文件原值；**不改写任何文件**。 */
   revertBookMetadata: (bid: string, fields: string[]) =>
     request<MetadataRevertResult>(`/api/books/${encodeURIComponent(bid)}/metadata/revert`, {
       method: 'POST',

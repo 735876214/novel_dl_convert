@@ -17,8 +17,9 @@ import { useLibraryStore } from '@/stores/library'
  * 与「主题」一致：本项目的「外观」类偏好都在前端，不存在服务端写入，
  * 放一个保存按钮反而会让人以为不点就不生效。
  *
- * 未支持：封面搜索提供者（依赖在线封面抓取）、漫画是否显示书脊（本项目无漫画支持）、
- * 详情页封面取色（需要详情页配合，未做）。
+ * 未支持：封面搜索提供者（依赖在线封面抓取，本项目不做封面搜索）。
+ * 「漫画是否显示书脊」与「详情页封面取色」已于第 20 期实现（此前这里写着「本项目无漫画支持」，
+ * 与事实不符 —— 漫画支持从第 3 期起就有）。
  */
 const prefs = useCoverPrefsStore()
 const library = useLibraryStore()
@@ -197,7 +198,7 @@ function chip(active: boolean): string {
       :label="upstream?.title ?? 'Book Covers'"
       :groups="upstream?.groups"
       :items="unsupportedItems"
-      note="以下条目在上游该页存在，本项目未实现。「封面搜索提供者」依赖在线封面抓取（本项目的元数据抓取只覆盖 EPUB，且不做封面搜索）。漫画书脊与详情页封面取色已于第 17 期实现。"
+      note="以下条目在上游该页存在，本项目未实现。「封面搜索提供者」依赖在线封面抓取（本项目不做封面搜索）。漫画书脊与详情页封面取色已于第 20 期实现。"
     />
   </div>
 </template>

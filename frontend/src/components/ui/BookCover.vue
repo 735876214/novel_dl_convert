@@ -51,7 +51,7 @@ const mode = computed(() => prefs.prefs.display)
 const spine = computed(() => prefs.prefs.spine)
 
 /**
- * 实际生效的书脊：漫画（CBZ / CBR）受「漫画书脊」开关控制（第 17 期）。
+ * 实际生效的书脊：漫画（CBZ / CBR）受「漫画书脊」开关控制（第 20 期）。
  * 该开关默认开着 → 与加它之前**完全一致**（此前漫画与电子书共用同一个 spine 设置）。
  */
 const spineMode = computed<CoverSpine>(() => {

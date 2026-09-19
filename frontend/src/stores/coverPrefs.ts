@@ -23,7 +23,7 @@ export interface CoverPrefs {
   display: CoverDisplay
   /** 书脊覆盖层 */
   spine: CoverSpine
-  /** 漫画（CBZ / CBR）是否也显示书脊；电子书不受此项影响（第 17 期） */
+  /** 漫画（CBZ / CBR）是否也显示书脊；电子书不受此项影响（第 20 期） */
   spineComics: boolean
   /** 阴影强度 */
   shadow: CoverShadow

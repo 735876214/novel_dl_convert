@@ -31,7 +31,7 @@ const loading = ref(true)
 const book = computed(() => detail.value ?? library.findBook(bookId.value))
 
 /**
- * 封面取色（第 17 期）：从封面图取两个色相，喂给照搬来的 `.book-detail-cover-tint`。
+ * 封面取色（第 20 期）：从封面图取两个色相，喂给照搬来的 `.book-detail-cover-tint`。
  * 取不到（无封面 / 加载失败 / 画布不可用）就**不设变量** —— CSS 那条 hsl() 整条失效，
  * 于是不染色，不会留下黑块。**纯装饰，绝不阻塞或报错**。
  */
