@@ -1657,19 +1657,42 @@ def api_add_annotation(bid: str, payload: dict = Body(...)):
     quote = str(payload.get("quote", "") or "").strip()
     if not quote:
         raise HTTPException(400, "quote 不能为空")
+    # origin 固定来源枚举（web / koreader / kobo）。当前只有 Web 阅读器会写入，
+    # 允许显式传入是为将来批注导入留出契约，但**不校验也不编造**：不传就是 web。
+    origin = str(payload.get("origin", "web") or "web").strip() or "web"
     rid = db.add_annotation(
         bid,
         int(payload.get("chapter", 0) or 0),
         quote,
         str(payload.get("color", "yellow") or "yellow"),
         str(payload.get("note", "") or ""),
+        origin,
     )
     return {"id": rid, "ok": True}
 
 
 @app.delete("/api/books/{bid}/annotations/{aid}")
 def api_delete_annotation(bid: str, aid: int):
-    db.delete_annotation(bid, aid)
+    """**移入垃圾桶**（软删除），不是真删；彻底删除走 `/purge`。"""
+    n = db.delete_annotation(bid, aid)
+    return {"ok": True, "trashed": n > 0}
+
+
+@app.post("/api/books/{bid}/annotations/{aid}/restore")
+def api_restore_annotation(bid: str, aid: int):
+    n = db.restore_annotation(bid, aid)
+    if not n:
+        raise HTTPException(404, "批注不存在或不在垃圾桶中")
+    return {"ok": True}
+
+
+@app.delete("/api/books/{bid}/annotations/{aid}/purge")
+def api_purge_annotation(bid: str, aid: int):
+    """彻底删除（不可恢复）。**只允许删垃圾桶里的条目** —— 活跃条目须先删除再 purge，
+    避免误点一次就永久丢失。"""
+    n = db.purge_annotation(bid, aid)
+    if not n:
+        raise HTTPException(400, "只能彻底删除垃圾桶中的批注（该条目不存在或仍为活跃状态）")
     return {"ok": True}
 
 
@@ -2032,9 +2055,15 @@ def api_fetch_all_authors():
 # ---------------- 批注总览（跨书）----------------
 
 @app.get("/api/annotations")
-def api_all_annotations():
+def api_all_annotations(include_trashed: int = 0):
+    """跨书批注总览。
+
+    ``include_trashed=1`` 时把垃圾桶里的条目一并返回（每条带 ``deleted_at``，
+    由前端区分活跃/垃圾桶）。**默认 0，即与本次改动前行为一致** ——
+    图书详情「批注」tab、每日划线 widget 等无参调用方不该看到已丢弃的条目。
+    """
     out = []
-    for a in db.all_annotations():
+    for a in db.all_annotations(include_trashed=bool(include_trashed)):
         b = library.by_id(a["book_id"])
         out.append({
             **a,
@@ -2042,6 +2071,22 @@ def api_all_annotations():
             "book_author": b["author"] if b else "",
         })
     return {"items": out, "total": len(out)}
+
+
+# ⚠️ 字面量路径 `/api/annotations/overview` 与参数化路径不冲突（该前缀下没有
+#    `{param}` 兄弟路由），但仓库已有「字面量注册在 {param} 之后、只因 method 不同
+#    才没出事」的先例（`/api/authors/{name}` 先于 `/api/authors/fetch-all`）——
+#    契约测试因此同时断言 method + path，而不是只看 path。
+@app.get("/api/annotations/overview")
+def api_annotations_overview():
+    """批注总览统计：活跃 / 垃圾桶计数 + 周节拍（有批注的周数、最长连续无批注周数）。
+
+    ⚠️ 上游同名字段还含 `needsReview` 与 `devices`，本项目**刻意不返回**：
+    它们依赖「设备回传批注 + 人工对账」这套上游能力，而本项目 kosync 只同步**进度**
+    （无批注端点）、也没有 KOReader/Kobo 批注导入 —— 没有数据源就返回恒 0/恒 1 是假数据。
+    等批注导入落地后再一并补上。
+    """
+    return db.annotation_overview()
 
 
 # ---------------- 书库（第 10 期 D8）----------------
