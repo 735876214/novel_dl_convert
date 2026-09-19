@@ -255,6 +255,36 @@
   自定义封面 403 / Readlist 空与 403 / 引用表 / 单库详情 / 上一本下一本 / analyze / OSDD / 删除后 404）。
   能力集删掉 `opds_sources` → `test_features` 两处与「能力清单 18 → 17」同步。全量 **200 passed**。
 
+#### 第 20 期实施记录（Komga 反向查询封口 + 删 9 个「永久不做」页 + 差异清理）
+
+> 编号说明：**第 17–19 期**由并行会话用于「多书库收尾 / 刮削出版 / 写文件收敛」，本期不占用那些编号。
+
+**主题**：把 Komga 客户端面彻底封口，并清理三类已经明确「不再做」与三项「对标差异」。
+
+- **Komga 反向查询封口**（官方规格已查证）：
+  `GET /api/v1/series/{seriesId}/collections`（*List series' collections*）—— 走第 16 期映射的
+  **真实收藏夹**，逐夹判「成员书里是否有属于该系列的书」；系列不存在 → 404。
+  `GET /api/v1/books/{bookId}/readlists`（*List book's readlists*）—— 本项目没有阅读清单概念，
+  **诚实返回空分页**；书不存在 → 404。两个都沿用既有分页壳。
+- **删除 9 个「已决策不做」的 placeholder 设置页**（用户 2026-09-19 拍板）：
+  `kobo`、`email`、`appearance/language`、`account/privacy`、`account/restrictions`、
+  `admin/users`、`admin/account-activity`、`admin/magic-links`、`admin/oidc`。
+  设置页 **47 → 38**；这 9 条经实测**只出现在 `settingsNav.ts`**（无组件 / 路由注册 / `PAGE_FEATURE` /
+  能力键引用），所以删除只动一处 + 计数文案；`docs/bookorbit-*` 的上游采集记录**保留**作对照。
+  统一记为「已决策不做（永久排除）」。
+- **三项对标差异**：
+  ① **命名 token 5 → 9**（`{series_index} {year} {publisher} {language}`）：只加 `library.books()`
+  里**真实存在**的字段，取不到给空串；⚠️ 替换必须**先长后短**（`{series_index}` 在 `{series}` /
+  `{index}` 之前），否则会被短 token 抢先吃掉一半 —— 已加回归断言。
+  ② **漫画书脊**：`coverPrefs` 新增 `spineComics`（默认 true = 与之前观感完全一致），
+  `BookCover` 只在漫画（CBZ / CBR）且关掉时不给 `data-cover-spine`。
+  ③ **详情页封面取色**：新增 `lib/coverTint.ts`（canvas 采样 → 两个色相），
+  接上照搬来却一直没接线的 `.book-detail-cover-tint`；**取不到就不设变量** → CSS 那条 `hsl()`
+  整条失效 → 不染色，天然回退。
+- **测试**：新增 `tests/test_naming_tokens.py`（5 例：真实值 / 先长后短不被抢先 / 缺字段空串 /
+  `fields` 与后端一致 / 扩展后仍拒路径分隔符）+ `tests/test_komga_client.py` 追加 2 例
+  （系列反向查收藏夹含「不在夹里 = 空分页」与 404；书籍查清单恒空 + 404）。全量 **255 passed**。
+
 ---
 
 ## 四、验证纪律（沿用 history）

@@ -80,3 +80,11 @@
 - **后台线程与测试隔离**：接口用例会把 scrape daemon worker 真叫起来，跨用例存活会拿旧 DB 连接查新库 → 「单独跑必过、全量跑随机挂」。`scrape.stop(timeout=)` 支持 join，`tests/conftest.py` 用 **autouse 夹具**每例收尾停 worker（同「测试不养 watcher 线程」纪律）。
 - **T4 建库流程（对齐上游）**：书库管理页 = 顶部工具条（全部扫描 / 过滤 / 排序：默认·名称·书籍数·上次扫描）+ 每库**四栏卡片**（书库 · 内容 · 自动化 · 上次扫描）；新建/编辑 = **三页签**（内容 / 自动化 / 上次扫描）。「刮削出版」开关在自动化页签，保存时「与全局一致 → 恢复继承；不一致 → 写覆盖」，避免切断继承。
 - 仍未做：第 17 期 T5 文档同步。
+
+## 第 20 期：Komga 反向查询封口 + 删 9 个「永久不做」页 + 差异清理（已完成 2026-09-19）
+- **编号约定**：第 17–19 期已被并行会话用于「多书库收尾 / 刮削出版 / 写文件收敛」，本会话的工作记为**第 20 期**，不要回头改那三期编号。
+- **Komga 封口**：`GET /api/v1/series/{id}/collections`（*List series' collections*，走真实收藏夹，系列不存在 404）与 `GET /api/v1/books/{id}/readlists`（本项目没有阅读清单 → **诚实空分页**，书不存在 404）。
+- **删 9 个已决策不做页**：`kobo` / `email` / `appearance/language` / `account/privacy` / `account/restrictions` / `admin/users` / `admin/account-activity` / `admin/magic-links` / `admin/oidc` —— 设置页 **47 → 38**。实测这 9 条**只在 `settingsNav.ts`**（无组件 / PROPS / `PAGE_FEATURE` / 能力键引用），删除只动一处 + 计数文案；`docs/bookorbit-*` 采集记录**保留**。
+- **命名 token 5 → 9**：`{series_index} {year} {publisher} {language}`，只加 `library.books()` 里**真实有**的字段，缺值给空串。⚠️ **替换顺序必须先长后短**（`{series_index}` 在 `{series}` / `{index}` 前），否则 `str.replace` 只看字面量会吃掉一半 —— 已钉测试。
+- **漫画书脊**：`coverPrefs.spineComics`（默认 true = 与旧观感一致），`BookCover` 只在漫画（CBZ/CBR）关掉时不给 `data-cover-spine`。**详情页封面取色**：新增 `lib/coverTint.ts`（canvas 采样两色相），接上此前是死代码的 `.book-detail-cover-tint`；**取不到就不设变量** → CSS 整条失效 → 不染色（天然回退）。
+- **协作提醒**：本工作区**可能有并行会话**（第 17–19 期即由它提交）。提交前先 `git status` / `git log`，自己的改动单独成 commit，**不要**把对方未提交的文件一起 add（必要时用「恢复 HEAD 版本 → 只加自己那一处 → 提交 → 还原」的办法分离）。
