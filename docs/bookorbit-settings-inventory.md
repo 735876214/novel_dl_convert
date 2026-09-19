@@ -106,7 +106,7 @@ SERVER
 └── Audit Log                /settings/admin/audit-log
 ```
 
-> **本项目侧栏实际形态**：设置页的单一数据源是 `frontend/src/data/settingsNav.ts`，共 **6 组（比上游多一个 `本项目扩展` / EXTENSIONS）/ 38 个叶子页**，路由为 `/settings/<path>`。上游的 `Language` / `Privacy & Sharing` / `Restrictions` / `Kobo` / `Email` / `Users & Access`（4 页）/ `Requests` 在本项目**无对应设置页**（单用户 / 设计系统统一 / 无该业务域），故本结构树只描述**上游 BookOrbit** 信息架构、用作对齐基线；逐页「本项目可行性」一律以 settingsNav 为准（见 §2）。
+> **本项目侧栏实际形态**：设置页的单一数据源是 `frontend/src/data/settingsNav.ts`，共 **6 组（比上游多一个 `本项目扩展` / EXTENSIONS）/ 48 个叶子页**，路由为 `/settings/<path>`。其中**上游 41 页逐页有落点**：已实现的走真实组件（`status: 'ready'`）；本项目不做的走**只读占位页**（`status: 'placeholder'`）——只展示上游该页的页内分组与设置项并逐条标注「未支持」，页首用中文写明本项目为何不提供，**不伪造可点开关**。另 **7 页为本项目补充**（上游**没有**这一页，标 `own: true`，界面显示「本项目补充」徽标），与上游逐页对读时不会误判为「上游也有」。故本结构树描述的是**上游 BookOrbit** 信息架构、用作对齐基线；逐页落点与「本项目可行性」一律以 settingsNav 为准（见 §2）。
 
 ### 1.3 页面清单与页内分区
 
@@ -816,53 +816,54 @@ SERVER
 
 ---
 
-## 5. 与本站现有 SettingsView 的差异对照
+## 5. 与本站现有设置区的差异对照
 
 ### 5.1 结构层面（最重要的差异）
 
-| 维度 | BookOrbit（线上实例） | 本项目现状（`frontend/src/views/SettingsView.vue`） |
+> **🔄 2026-09-19 落地现状**：设置区已按本清单完成嵌套路由改造，`frontend/src/views/SettingsView.vue` 单页形态**已不存在**。下表右列随之更新为已落地现状（真值源：`frontend/src/data/settingsNav.ts` 与 `frontend/src/router/index.ts`）。
+
+| 维度 | BookOrbit（线上实例） | 本项目现状 |
 |---|---|---|
-| 路由形态 | **嵌套路由** `/settings/<域>/<页>`，41 个叶子页 | **单一路由** `/settings` + 8 个 `v-show` 分区（页内标签） |
-| 页面数量 | 41 | 1 |
-| 一级分组 | 5 组（YOU / LIBRARY / DEVICES / ACCOUNTS / SERVER） | 8 个平铺分区 |
-| 分区导航 | 左侧分组导航（可折叠、带搜索） | 页内横向标签栏 |
-| URL 可分享 | 是（每页独立 URL） | 否（hash 路由无二级路径，刷新回默认分区） |
-| 设置项搜索 | 有（`Search settings` + Cmd+K 面板） | 无 |
-| 偏好作用域 | 可见：Theme / Reader General 提供「本机 vs 账号」二选一 | 无（外观与阅读全部存 localStorage） |
-| 未保存变更提示 | 有（`No unsaved changes` + Discard / Save） | 分区各自有「保存」按钮，无脏数据提示 |
-| 面包屑 | 有（`Settings > 组 > 页`） | 无 |
+| 路由形态 | **嵌套路由** `/settings/<域>/<页>`，41 个叶子页 | 同构：`/settings/<path>` 嵌套路由，**48 个叶子页**（上游 41 页逐页有落点 + 7 页本项目补充） |
+| 一级分组 | 5 组（YOU / LIBRARY / DEVICES / ACCOUNTS / SERVER） | 6 组（上述 5 组 + `本项目扩展` / EXTENSIONS，把上游没有的四块能力隔离开） |
+| 分区导航 | 左侧分组导航（可折叠、按当前所在域动态展开） | 同构：`SettingsSidebar.vue` 左侧分组导航（可折叠），条目右侧按状态标「未支持」或「本项目补充」 |
+| URL 可分享 | 是（每页独立 URL） | 是（每页独立 hash 路径，可分享与刷新；`/settings/system` 别名与上游一致，重定向到文件命名页） |
+| 设置项搜索 | 有（`Search settings` + `Cmd+K` 面板，42 项） | 有：设置区按 `Cmd+K` 唤起 `SettingsSearchPanel.vue`；索引由 `settingsNav.ts` 派生（页面级 + 上游页内设置项），↑↓ 选择 / ↵ 跳转 / Esc 关闭，侧栏底部有入口 |
+| 偏好作用域 | 可见：Theme / Reader General 提供「本机 vs 账号」二选一 | 无（外观与阅读偏好存 localStorage；「偏好与同步」页的**具名模式**是另一种语义，不等于账号级同步） |
+| 未保存变更提示 | 有（`No unsaved changes` + Discard / Save） | 有：`SettingsLayout.vue` 顶部统一提示条 + 「放弃更改」；覆盖**共享配置草稿**（`useSettingsConfig`）与**页面自持草稿**（`useSettingsDirty` 通道）两类来源，各页原有保存按钮行为不变 |
+| 面包屑 | 有（`Settings > 组 > 页`） | 有（`Settings / 组 / 页`，并附「未支持」或「本项目补充」徽标） |
 
 ### 5.2 分区映射建议
 
 | BookOrbit 分区 | 本项目现有分区 | 差异判定 |
 |---|---|---|
 | YOU → Profile | **账户 / Profile 页** | ✅ 已实现：账号展示、改密码、头像上传/移除、显示名、时区（接通时间类成就）、成就开关、引导重放；OIDC / Email / Username（不可改）单用户无意义，不实现 |
-| YOU → Display（Theme/Book Covers/Icons/Layout/Behavior/Language） | **外观**（Theme / Book Covers 已实现；Icons / Layout / Behavior 占位对照；Language 无页） | ✅ Theme / Book Covers 已实现；Icons / Layout / Behavior 由设计系统统一、不暴露为设置（`placeholder` 对照）；Language 本项目中文单语无页 |
+| YOU → Display（Theme/Book Covers/Icons/Layout/Behavior/Language） | **外观**（Theme / Book Covers 已实现；Icons / Layout / Behavior / Language 为只读占位页） | ✅ Theme / Book Covers 已实现；Icons / Layout / Behavior 由设计系统统一、不暴露为设置（`placeholder` 对照）；Language 本项目中文单语，`placeholder` 对照 |
 | YOU → Reader（eBook/PDF/Comics/Audiobook/Fonts/General） | **阅读**（六页均实现） | ✅ 六页均 `ready`；eBook 个别项未支持（新书套用设置 / 固定版式页宽 / 字重样式 / 文本区左右内边距） |
 | YOU → Notifications | **通知** 页 | ✅ 已实现：按类 Off / Problems / All 客户端过滤（生效范围 = 通知中心与日志） |
-| YOU → Privacy & Sharing | 无 | ➖ 单用户场景无意义，无页（标注不适用） |
-| YOU → Restrictions | 无 | ➖ 单用户场景无意义，无页（标注不适用） |
+| YOU → Privacy & Sharing | **隐私与共享** 只读占位页 | ➖ 单用户部署下没有可分享对象（无其它账号、无管理员角色），整页不提供 |
+| YOU → Restrictions | **内容限制** 只读占位页 | ➖ 单用户部署下无内容限制的应用对象，整页不提供 |
 | LIBRARY → Libraries | **工具 → 书库管理**（设置页仅对照） | 🔵 多书库实体 / 自动归库 / 每库覆盖均在工具页；设置页 `placeholder` 对照 |
 | LIBRARY → Metadata（7 页） | **元数据**（7 页均实现） | ✅ Providers / Field Rules / Custom Fields / Confidence Score / Books / Authors / Genre Blocklist 均 `ready` |
 | LIBRARY → File Naming | **工具 → 批量重命名** | 🔵 命名规则存服务端 + 4 配方 + 预览；上游 13 token / 7 修饰符 / 结构语法未支持 |
 | LIBRARY → Maintenance | 部分散落 **监听** / **工具** | ✅ 上传上限 / 成就重算 / 索引重建 / 缓存 / 回收站已实现；IMPORT / RECOMMENDATIONS / UPDATES 未实现（只读列出） |
-| DEVICES → Kobo | 无 | ➖ 无 Kobo 支持 |
-| DEVICES → KOReader | **KOReader 进度互通**（kosync 服务端）+ KOReader 上游对照页 | ✅ kosync 协议服务端已实现；上游结构页为 `placeholder` 对照 |
+| DEVICES → Kobo | **Kobo 同步** 只读占位页 | ➖ 不做 Kobo 设备同步（注册 / 双向进度 / KEPUB 投递 / 书店书目混投）；上游的 Progress Thresholds 在本项目无可配置对应项（已读完固定口径 ≥99.5%） |
+| DEVICES → KOReader | **KOReader 进度互通**（kosync 服务端）+ **KOReader 上游对照** 占位页（本项目补充） | ✅ kosync 协议服务端已实现；上游结构页为 `placeholder` 对照，该页本身标 `own: true`（上游只有一个 KOReader 页，对照页是本项目拆出来的） |
 | DEVICES → OPDS | **OPDS** 页 | ✅ 已实现（目录 / 端点 / 排序 / 逐库暴露） |
-| DEVICES → Komga | **Komga 库布局** 页 | ✅ 本项目扩展：输出侧布局 + 逐库暴露 + 进度迁移 |
-| DEVICES → Email | 无 | ➖ 无邮件投递渠道 |
+| DEVICES → Komga | **Komga 库布局** 页（**本项目补充**，标 `own: true`） | ✅ 上游无此页（原 `/settings/komga` 已消失，见 §2.42 🔄）；本项目实现输出侧布局 + 逐库暴露 + 进度迁移 |
+| DEVICES → Email | **邮件投递** 只读占位页 | ➖ 无邮件投递渠道 |
 | ACCOUNTS → Hardcover / Readwise / StoryGraph | **Hardcover / Readwise / StoryGraph** 页 | ✅ 凭据存储 + 真实验证已实现；同步推送（书评 / 阅读状态 / 高亮）未实现 |
-| SERVER → Users & Access（4 页） | **账户**（仅单用户改密） | ➖ 单用户轻登录，无角色 / 权限 / 邀请 / 免密链接 / OIDC |
+| SERVER → Users & Access（4 页） | **用户** / **账号活动** / **免密链接** / **OIDC / SSO** 四个只读占位页（单用户改密仍在「账户 → 资料」） | ➖ 单用户轻登录，无角色 / 权限 / 邀请 / 免密链接 / OIDC；「账号活动」页给出通往本项目**审计日志**的入口 |
 | SERVER → Audit Log | **工具 → 日志**（activity_log） | ✅ 活动日志已实现，含操作者 / 类别 / Details |
 | SERVER → Book Dock | **监听**（输入目录 + watcher） | ✅ 投递目录 + 监听 + 自动抓取 + 自动定稿已实现 |
-| SERVER → Requests | **网络与下载**（书源管理 / 书源下载） | 🔵 等价能力在「网络与下载」（书源管理），上游 indexers 形态未做 |
+| SERVER → Requests | **求书** 只读占位页 + **网络与下载**（书源管理 / 书源下载） | ➖ 上游那套 indexer（Torznab / Newznab）+ 下载客户端 + 自动化规则的求书体系**已决策不做**（2026-09-18，见 `docs/bookorbit-capability-gap.md` 第 9 节）；功能定位相同的等价能力在本项目是「网络与下载」的书源管理，入口不同、形态也不同 |
 | SERVER → Server Fonts | **服务端字体** 页 | ✅ 与阅读字体共用字体库，上限 200 |
 | — | **转换**（分章模式/AI/LLM/繁转简/输出格式/Calibre） | **本项目独有**，BookOrbit 无对应页 |
 | — | **监听**（watcher 9 项参数） | **本项目独有**（BookOrbit 的 watcher 是每书库的 `Watch folders` 开关 + `Scheduled scan`） |
 | — | **网络与下载**（传输重试/开放下载/公版源/日志/域名替换） | **本项目独有**，BookOrbit 无对应页 |
 | — | **高级**（config.yaml 原文编辑 / 覆盖层清除 / 备份列表与还原） | **本项目独有**，BookOrbit 无「直接编辑配置文件」入口 |
 
-> 本表已完成迁移对齐（以 `settingsNav.ts` 为权威真值源）；§5.3 为迁移时期的处置建议，现全部落地，保留为历史记录。
+> 本表已完成迁移对齐（以 `settingsNav.ts` 为权威真值源）。表中「只读占位页」= `status: 'placeholder'`：页面只展示上游该页的页内分组与设置项、逐条标注「未支持」，并在页首用中文写明本项目为何不提供，**没有任何可点开关**；标「**本项目补充**」的 = `own: true`，上游根本没有这一页。两者合计使上游 41 页在本项目**逐页有落点**。§5.3 为迁移时期的处置建议，现全部落地，保留为历史记录。
 
 ### 5.3 本项目现有 8 分区的处置建议
 
@@ -880,6 +881,8 @@ SERVER
 ---
 
 ## 6. 后续迁移要点
+
+> **🔄 2026-09-19 落地现状**：下列第 1 / 2 / 3 / 5 / 7 / 8 条**均已落地**（嵌套路由、分组命名对齐、占位页统一呈现、本项目独有能力独立分组、未保存变更提示、设置项搜索），保留原文作为迁移期的决策记录。第 4 条列出的「必须新增后端能力」各项**仍未做**——本轮只补前端的只读占位页，不含任何后端改动。
 
 1. **先定路由形态，再动内容**。BookOrbit 的 41 页依赖嵌套路由；本项目当前是单路由 + `v-show` 分区。建议先把 `/settings` 改为**嵌套子路由**（如 `/settings/appearance/theme`），否则 41 页塞进一个组件的内联标签栏会不可维护。本项目用 hash 路由，天然支持多级路径，无需后端改动。
 2. **分组命名直接对齐上游**：`YOU / LIBRARY / DEVICES / ACCOUNTS / SERVER`，侧栏项名沿用英文原文（`Theme`、`Book Covers`、`Field Rules`…）或在中文界面下做对照表；**不要自创中文名**，否则后续再对读会失真。
@@ -918,6 +921,17 @@ SERVER
 | 4 | `/settings/system` | 未记录 | 实测为**别名路由**，重定向到 `/settings/library/file-naming` | §1.1 🔄 |
 | 5 | 设置项跳转面板 | 「未能采集」 | 已采集：`Cmd+K` 面板 **42 项** | §1.1 🔄 |
 | 6 | 全局搜索 | 「顶栏搜索框（`Search all books...`，带 `⌘K`）」 | 实为**内联输入框**（`搜索全部书籍…`），输入 ≥2 字实时联想下拉；`⌘K` 实测不聚焦、不弹面板 | §4.6 |
+
+**🔄 2026-09-19 落地对照**（本表结论 → 本项目实现）：
+
+| # | 复核结论 | 本项目落实情况 |
+|---|---|---|
+| 1 | 上游无 `/settings/komga` | 本项目把 Komga 作为**本项目补充页**保留并标 `own: true`（不冒充上游页） |
+| 2 | 上游 5 组 | 对齐 5 组 + 1 个 `本项目扩展` 组，共 6 组 |
+| 3 | 上游 41 个叶子页 | 上游 41 页**逐页有落点**；本项目共 48 页（+7 页本项目补充） |
+| 4 | `/settings/system` 为别名路由 | 已实现同名别名：`{ path: 'system', redirect: { name: 'settings-library-file-naming' } }`，契约测试钉住 |
+| 5 | `Cmd+K` 设置项跳转面板 | 已实现：设置区 `Cmd+K` 唤起设置项搜索浮层（索引由 `settingsNav.ts` 派生，非平行清单） |
+| 6 | `⌘K` 不聚焦顶栏搜索 | 本项目保留顶栏 `⌘K` 聚焦全局搜索，但**在设置路由下让位**给设置项搜索浮层，避免一次按键触发两个行为 |
 
 ### 7.2 本轮新增采集、原清单未覆盖项
 
