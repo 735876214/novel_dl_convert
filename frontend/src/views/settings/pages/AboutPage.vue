@@ -48,7 +48,7 @@ onMounted(() => loadConfig())
 
     <Card class="mt-4">
       <div class="text-[12.5px] leading-relaxed text-muted-foreground">
-        设置页分区结构对齐上游 BookOrbit（6 分组 / 46 页）。迁移对照基准见
+        设置页分区结构对齐上游 BookOrbit（6 分组 / 38 页）。迁移对照基准见
         <code class="font-mono text-foreground">docs/bookorbit-settings-inventory.md</code>；
         原始采集证据见
         <code class="font-mono text-foreground">docs/review/bookorbit-settings-capture.md</code>。

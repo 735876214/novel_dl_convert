@@ -4,7 +4,7 @@ import type { IconName } from '@/lib/icons'
  * 设置页分区注册表 —— 上游（BookOrbit）设置页信息架构的单一数据源。
  *
  * 对齐依据：`docs/bookorbit-settings-inventory.md`（线上实例逐页采集）。
- * 结构刻意与上游一致：6 个分组 / 47 个叶子页，路由为 `/settings/<path>`。
+ * 结构刻意与上游一致：6 个分组 / 38 个叶子页，路由为 `/settings/<path>`。
  *
  * 命名约定（迁移要点 2：不自创中文名）：
  *   - `label` = 上游英文原名，**作为对齐基准，不翻译**
@@ -100,7 +100,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
         note: '本项目实现主题 / 点缀色（65 档）/ 圆角；「保存位置」已由「偏好与同步」页统管（外观与阅读偏好整套同步，也可按设备各用各的）；「背景图案」为未支持。',
       }),
       p('appearance/book-covers', 'Book Covers', '封面样式', 'ready', {
-        note: '已实现：真实内嵌封面 + 填充方式（填满 / 自然贴底 / 模糊底图）+ 书脊 + 阴影强度 + 5 种卡片叠加层，存本机、改完立即生效。未支持：封面搜索提供者（依赖在线抓取）、漫画书脊（第 3 期）、详情页封面取色。',
+        note: '已实现：真实内嵌封面 + 填充方式（填满 / 自然贴底 / 模糊底图）+ 书脊（含第 17 期的「漫画是否显示书脊」开关）+ 阴影强度 + 5 种卡片叠加层 + 详情页封面取色（第 17 期），存本机、改完立即生效。未支持：封面搜索提供者（依赖在线封面抓取）。',
         upstream: {
           title: 'Book Covers',
           desc: 'Cover shadows, spine effects, and placeholder art.',
@@ -131,15 +131,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           desc: 'How the library reacts as you browse and sort.',
           groups: ['LIBRARY BEHAVIOR'],
           items: ['Thumbnail clicks（Read first / Open details）', 'Show filter preview by default', 'Collapse series by default'],
-        },
-      }),
-      p('appearance/language', 'Language', '界面语言', 'placeholder', {
-        upstream: {
-          title: 'Language',
-          desc: 'Interface language and regional formats.',
-          groups: ['LANGUAGE'],
-          items: ['Language（共 25 个语言项，含 English / 简体中文 / 繁體中文 等）'],
-          uncaptured: '设置页只显示当前值，完整语言列表取自顶栏 Language 快捷面板。',
         },
       }),
       p('reader/ebook', 'eBook', '电子书', 'ready', {
@@ -203,22 +194,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           desc: 'What BookOrbit tells you about, and where.',
           groups: ['LIBRARY', 'FILES', 'INTEGRATIONS', 'PERSONAL', 'APP UPDATES'],
           items: ['Library scanning', 'Metadata fetching', 'Author enrichment', 'File write-back', 'File rename', 'Bulk rename', 'Data migration', 'Book Dock', 'Book requests', 'Email delivery', '（以上每条为 Off / Problems / All 三档）', 'Achievements（Off / All）', "Show \"What's New\" after updates"],
-        },
-      }),
-      p('account/privacy', 'Privacy & Sharing', '隐私与分享', 'placeholder', {
-        upstream: {
-          title: 'Privacy & Sharing',
-          desc: 'Reading insights, shared links, and activity visibility.',
-          groups: ['PRIVACY & SHARING', 'Profile access history'],
-          items: ['Reading insights sharing level（Private / Share summary / Share detailed insights）', 'Profile access history（管理员查看记录）'],
-        },
-      }),
-      p('account/restrictions', 'Restrictions', '内容限制', 'placeholder', {
-        upstream: {
-          title: 'Restrictions',
-          desc: 'Age ratings and hidden content for this account.',
-          items: ['按账号的内容限制 / 年龄分级'],
-          uncaptured: '该账号无内容限制，页面为空态，限制项的具体形态未能采集。',
         },
       }),
     ],
@@ -300,7 +275,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['每书库命名模式（Folder as Book / File as Book）', 'File as Book 默认模式', '13 个 TOKENS', '7 个 MODIFIERS', '4 类 STRUCTURE（optional / fallback / folder / or）', '4 个配方', '元数据缺失时的降级预览', 'Cross-platform path sanitization'],
         },
         link: { to: '/tools/rename', label: '批量重命名' },
-        note: '已实现：命名规则存服务端（config.naming）+ 4 个配方 + 生效预览，工具页默认载入该规则。上游的 13 token / 7 修饰符 / 结构语法未支持。',
+        note: '已实现：命名规则存服务端（config.naming）+ 4 个配方 + 生效预览，工具页默认载入该规则；第 17 期起支持 9 个占位符（书名 / 作者 / 系列 / 系列序号 / 顺序号 / 出版年 / 出版社 / 语言 / 扩展名）。上游的 13 token / 7 修饰符 / 结构语法未支持。',
       }),
       p('library/maintenance', 'Maintenance', '维护', 'ready', {
         upstream: {
@@ -320,14 +295,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
     zh: '设备',
     icon: 'layers',
     pages: [
-      p('kobo', 'Kobo', 'Kobo', 'placeholder', {
-        upstream: {
-          title: 'Kobo',
-          desc: 'Sync endpoint, store proxy, and shelf mapping.',
-          groups: ['REGISTERED DEVICES', 'SYNC PREFERENCES', 'Progress Thresholds', 'KEPUB CONVERSION LIMIT'],
-          items: ['Two-way progress sync', 'Sync highlights to Kobo', 'Include Kobo store titles', 'Convert to KEPUB', 'Force hyphenation', 'MARK AS READING（1%）', 'MARK AS FINISHED（99%）', 'KEPUB 上限（100MB）'],
-        },
-      }),
       p('koreader-upstream', 'KOReader (upstream)', 'KOReader 上游对照', 'placeholder', {
         upstream: {
           title: 'KOReader',
@@ -350,15 +317,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
       }),
       p('komga', 'Komga', 'Komga 库布局', 'ready', {
         note: '本项目实现「输出侧」：输出布局开关（output.layout —— 有系列的书落 系列名/系列名 #N.ext，无系列保持平铺）+ 既有库整理（先预览、再应用）。**会改 basename 的条目在应用时自动迁移阅读进度 / 批注 / 评分 / 收藏**（按 book_id 搬迁），整理库不会把进度清零。系列来源：EPUB 的 calibre:series 优先，判不出则从文件名推断（系列 第01卷 / 系列 #1 / 系列 (01) / 系列 - 01），都判不出就原地不动。第 15 期起兼容服务端补齐：客户端可按书库浏览（系列与书籍都按库过滤，老客户端的 GET 端点同样生效）、系列级「全部已读 / 全部未读」（只把百分比顶到 100，不清除读者位置）、CBR 拿到正确的媒体类型；有声书库不进 Komga（Komga 没有音频模型，硬塞进去只会得到打不开的坏条目）。未支持「接入侧」：从 Komga 拉书目 / 下载入库、双向同步进度。',
-      }),
-      p('email', 'Email', '邮件投递', 'placeholder', {
-        upstream: {
-          title: 'Email',
-          desc: 'SMTP delivery and send-to-device addresses.',
-          groups: ['SMTP PROVIDERS', 'PROVIDER NOTES', 'Providers / Recipients / Groups / Templates / Preferences / History'],
-          items: ['SMTP 提供者管理', 'System 提供者（仅超管，用于密码重置）', 'Default 提供者', 'Shared 标记'],
-          uncaptured: '该实例无任何 SMTP 提供者，5 个标签页均为空态，其内部项未能采集。',
-        },
       }),
     ],
   },
@@ -401,38 +359,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
     zh: '服务端',
     icon: 'settings',
     pages: [
-      p('admin/users', 'Users', '用户与权限', 'placeholder', {
-        upstream: {
-          title: 'Users',
-          desc: 'Accounts, roles, permissions, and invitations.',
-          groups: ['DEFAULTS FOR NEW ACCOUNTS'],
-          items: ['账号表（用户 / 邮箱 / 角色 / 可访问书库 / 最后活跃 / 状态 / 操作）', 'Create user', 'Allow self-registration', 'Starting libraries（新账号自动获得的书库）'],
-        },
-        note: '本项目为单用户轻登录，无角色 / 权限 / 邀请体系，整体属未支持。',
-      }),
-      p('admin/account-activity', 'Account Activity', '账号活动', 'placeholder', {
-        upstream: {
-          title: 'Account Activity',
-          desc: 'Per-user reading and session activity.',
-          items: ['活动状态统计（Recently active / Dormant / No recorded activity / Disabled）', '按活动状态 / 认证方式筛选', '排序（最近活跃 / 登录时间 / 注册时间 / 名称）', '账号活动表'],
-        },
-      }),
-      p('admin/magic-links', 'Magic Links', '免密链接', 'placeholder', {
-        upstream: {
-          title: 'Magic Links',
-          desc: 'Passwordless share and login links.',
-          groups: ['ACTIVE LINKS'],
-          items: ['Create link', '链接列表（需先创建共享账号）'],
-        },
-      }),
-      p('admin/oidc', 'OIDC / SSO', '单点登录', 'placeholder', {
-        upstream: {
-          title: 'OIDC / SSO',
-          desc: 'Single sign-on provider, claims, and provisioning.',
-          groups: ['PROVIDERS'],
-          items: ['Add Provider', '提供者列表（provider / claims / provisioning）'],
-        },
-      }),
       p('admin/book-dock', 'Book Dock', '收书目录', 'ready', {
         note: '已实现：投递目录（= 输入目录）+ 监听状态与启停 + 自动处理开关 + 处理计数 + 入库后自动抓元数据（watcher 旁路调用 auto_fetch，按所属库的策略执行；达到置信度阈值的字段自动定稿，低于阈值的只列在预览页等人工确认）。',
         upstream: {
