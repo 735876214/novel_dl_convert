@@ -4,6 +4,7 @@
 > 用途：本文件是 **novel_dl_convert 设置页「全部对齐（含占位）」迁移** 的对照基准，与 `docs/bookorbit-library-contract.md` 并列。
 > 采集方式：浏览器自动化（Playwright CLI）**真实登录后逐页渲染采集**；全程只读——仅导航、展开折叠分组、读取 DOM、截图，**未点击任何保存 / 应用 / 删除 / 重置 / 启用 / 上传 / 退出 / 同步类控件**，未向任何输入框提交内容。
 > 采集日期：2026-09-15 ｜ 账号角色：Superuser（该实例为单账号本地部署）
+> **🔄 复核日期：2026-09-19**（同一实例的另一地址 `http://192.168.0.95:3400/`，账号同为 Superuser，界面此时渲染为**简体中文**）。本轮以**界面实际渲染内容**为准逐页复核，滞后项已就地修正并加 `🔄 2026-09-19` 行；汇总见 **§7 复核纪要**。功能与流程的完整描述见并列文档 `docs/bookorbit-feature-flows.md`。
 > 证据：逐页采集记录与未能采集项见 `docs/review/bookorbit-settings-capture.md`；分区截图见 `docs/review/bookorbit-settings-shots/`
 > ⚠️ 截图局限：该批截图**实为 1440×1000 视口截图，仅覆盖各页首屏**（应用使用内层滚动容器，`fullPage` 未生效）。本清单的文字结论取自完整 DOM 抽取，不受此影响；但截图不可当作「整页」证据。详见 `bookorbit-settings-capture.md` 的 1.1 节。
 > **脱敏**：全文不含账号、密码、邮箱、令牌、密钥等任何真实敏感值；此类字段一律只记「已设置 / 未设置」。
@@ -38,11 +39,13 @@
 - 设置**不是「单页 + 标签栏」**，而是**嵌套路由 + 左侧分组导航**：`/settings/<域>/<页>`
 - 直接访问 `/settings` 会 302 到 `/login?redirect=/settings/appearance/theme`；登录后落在 `/settings/appearance/theme`
 - 左侧导航基于 `<nav aria-label="Settings sections">`，分 **5 组**：`YOU` / `LIBRARY` / `DEVICES` / `ACCOUNTS` / `SERVER`
-- 共 **23 个入口** = 17 个直接链接 + 3 个可展开分组（`Display` 6 项、`Reader` 6 项、`Metadata` 7 项、`Users & Access` 4 项）
-- 展开后共 **41 个叶子页**
+- 共 **23 个一级入口** = 19 个直接链接 + **4 个可展开分组**（`Display` 6 项、`Reader` 6 项、`Metadata` 7 项、`Users & Access` 4 项）
 - 侧栏底部提示 `Press Cmd K to jump to any setting`（设置项级跳转面板；本次未成功唤起，其内容未能采集）
+- **🔄 2026-09-19 复核（设置项跳转面板已采集）**：该面板已于后续轮次成功唤起并采集，展开态共 **42 个可跳转项**（行为与清单见 `docs/bookorbit-feature-flows.md` §3.9）；上一条的「未能采集」作废。
 - 面包屑格式：`Settings > <组> > <页>`；`document.title` 格式：`<页标题> · BookOrbit`
 - 侧栏有折叠按钮 `Toggle Sidebar` / `Collapse sidebar`
+- **🔄 2026-09-19 复核（叶子页计数与侧栏渲染规律）**：在同一页面的 DOM 中一次性抓到的 `a[href^="/settings"]` 为 **29 个**，另加只在各自域展开时才渲染的 `appearance/*` 6 个与 `reader/*` 6 个，合计 **41 个叶子页**（原结论成立）。侧栏**按当前所在域动态展开**：停在「服务器 / 用户与权限」下只会列出 `admin/*` 8 项，停在元数据页则列出 `account/* + libraries + metadata/* + library/* + 设备 + ACCOUNTS` 而不列 `admin/users`。逐页清单见 `docs/bookorbit-feature-flows.md` §3.9。
+- **🔄 2026-09-19 复核（失效路由）**：`/settings/komga` **已不存在**，直连会回落到 `/settings/appearance/theme`（原 §2.42 记录的上游页已消失，见 §2.42 修订）；`/settings/system` 会被重定向到 `/settings/library/file-naming`（别名路由，非独立页）。
 
 ### 1.2 结构树
 
@@ -742,6 +745,8 @@ SERVER
 
 ### 2.42 DEVICES → Komga（`/settings/komga`）
 
+> **🔄 2026-09-19 复核**：**上游实例不存在 `/settings/komga` 页面**——直连该地址会回落到 `/settings/appearance/theme`（本小节标题中的「上游页」记录已失效，仅作历史保留）。因此 Komga **不属于上游任何设置分组**；下述内容全部是**本项目扩展能力**，不是 BookOrbit 的对照项。
+>
 > `settingsNav` 标 `ready`（本项目扩展能力，归在 DEVICES 组）。
 
 本项目实现「输出侧」Komga 支持：
@@ -802,7 +807,7 @@ SERVER
 
 | 能力 | 位置 | 说明 |
 |---|---|---|
-| 全局搜索 | 顶栏搜索框（`Search all books...`，带 `⌘K` 提示） | 全库检索 |
+| 全局搜索 | 顶栏**内联输入框**（placeholder `搜索全部书籍…`） | 全库检索；输入 ≥2 字实时联想下拉（封面 + 标题 + 作者 + 格式徽章），底部「显示所有 N 条结果」；`⌘K` 实测不聚焦、不弹面板。详见 `docs/bookorbit-feature-flows.md` §4.19 |
 | 通知角标 | 顶栏铃铛 | 未读数 |
 | Statistics / Achievements | 顶栏按钮 | 跳转到独立页面（`/achievements` 等） |
 | Upload books | 顶栏按钮 | 上传书籍 |
@@ -896,3 +901,31 @@ SERVER
 10. **迁移前先复核权限矩阵**：本轮因只读约束未验证非管理员视角（见第 3 节）。若迁移要把 `SERVER` 分组做进去，需先确认哪些页对普通用户隐藏。
 11. **截图与文档同步更新**：迁移完成后，本清单与 `docs/review/bookorbit-settings-shots/` 的对照关系应保留（截图是「上游长什么样」的最终依据）。
 12. **与既有契约文档联动**：`docs/bookorbit-library-contract.md` 已定义 `Library.fileNamingPattern` / `fileRenameEnabled` / `readingThreshold` / `markAsFinishedPercentComplete` 等字段，与本清单的 File Naming（2.25）、Kobo 进度阈值（2.27）直接对应，两文应保持同步修订。
+
+---
+
+## 7. 🔄 复核纪要（2026-09-19）
+
+> 复核对象：同一线上实例的另一入口 `http://192.168.0.95:3400/`（账号角色 Superuser，界面此时渲染为**简体中文**）。方式：Playwright 真实登录后逐路由渲染采集 + 向页面注入 fetch/XHR 钩子读真实网络流量，**全程只读**（仅导航、展开折叠、读 DOM、移动鼠标唤出阅读器工具条）。功能与流程的逐域描述见并列文档 `docs/bookorbit-feature-flows.md`。
+
+### 7.1 差异与修正（均已就地更新）
+
+| # | 项 | 原记录 | 复核结论 | 落点 |
+|---|---|---|---|---|
+| 1 | `DEVICES → Komga` | 上游存在 `/settings/komga` | **上游无此页**，直连回落 `/settings/appearance/theme` | §1.1 🔄 / §2.42 🔄 |
+| 2 | 侧栏分组数 | 5 组 | 实测 **5 组**：`YOU / LIBRARY / DEVICES / ACCOUNTS / SERVER`（原记录成立） | §1.1 |
+| 3 | 叶子页总数 | 41 | **41**（复算成立：DOM 内 `a[href^="/settings"]` 29 + `appearance/*` 6 + `reader/*` 6） | §1.1 🔄 |
+| 4 | `/settings/system` | 未记录 | 实测为**别名路由**，重定向到 `/settings/library/file-naming` | §1.1 🔄 |
+| 5 | 设置项跳转面板 | 「未能采集」 | 已采集：`Cmd+K` 面板 **42 项** | §1.1 🔄 |
+| 6 | 全局搜索 | 「顶栏搜索框（`Search all books...`，带 `⌘K`）」 | 实为**内联输入框**（`搜索全部书籍…`），输入 ≥2 字实时联想下拉；`⌘K` 实测不聚焦、不弹面板 | §4.6 |
+
+### 7.2 本轮新增采集、原清单未覆盖项
+
+- **阅读器内置设置面板**（在 `/read/*` 内，**不是** `/settings/reader/*`）：主题（亮/暗）、字号（`A` 步进，实测 16px）、**13 档页面底色**（默认主题/灰度/护眼棕/…/纯黑 AMOLED）、字体族、字重与斜体、行间距、段间距、页面宽度、阅读模式（分页/滚动）；另有「高级排版设置」：分栏数、列间距、`Letter spacing`、`Word spacing`、`First-line indent`（三者均为 `Book / Custom`）、对齐文本、连字符断字。详见 `docs/bookorbit-feature-flows.md` §4.18。
+- **`/api/v1` 端点清单**：页面向 `fetch`/`XHR` 注入钩子得到的真实调用（如 `/api/v1/user-preferences/*`、`/api/v1/dashboard/widgets/batch`、`/api/v1/libraries/:id/books/jump-buckets`、`/api/v1/kobo/devices`、`/api/v1/opds-users`、`/api/v1/book-dock/summary` 等），见 `docs/bookorbit-feature-flows.md` §5。
+- **前端全站路由盘**与设置组之外的管理页（`/settings/admin/metadata*`、`/settings/integrations` 等别名/落点），见 `docs/bookorbit-feature-flows.md` §2、§3.9。
+
+### 7.3 仍未验证项（维持原判）
+
+- **非管理员角色的可见性**：实例只有唯一一个 Superuser 账号，创建第二个账号属写操作，为遵守只读约束未执行（详见第 3 节）。
+- 个别开关的当前值（如「缩略图点击行为」）仍标注「未能采集」，**未做推测补全**。
