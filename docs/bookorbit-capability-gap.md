@@ -32,11 +32,16 @@
 ### 0.3 本项目实况基线（判定依据）
 
 > **第 27 期复核（2026-09-19）**：本节原记「68 个路由 / 6 张表」，已随第 1–26 期落地而失真 —— 失真的基线会让下游每条判定都失去依据，故按代码重取。
+> **第 29 期重取（2026-09-20）**：本节**逐条重验，锚点全部仍然准确**（含 `config.py:20` / `library.py:1-3` /
+> `auth.py:1-5` / `metadata.py:11-33` 四处引用）。唯一改动是**表数量**：原文写「**28 张**」，但同一句只枚举了
+> **27 个**名字，实测 `CREATE TABLE` 也是 **27** —— **枚举是对的，计数写错了**。
+> 另补一条**否定性说明**（下方），免得后来者按「审计日志」去找一张并不存在的表。
 
 - 后端 `novelforge/server.py` 共 **260 个路由**（`grep -cE "^@app\.(get|post|put|delete|patch)\("`）；前端路由见 `frontend/src/router/index.ts`
 - **唯一物理目录** `OUTPUT_DIR`（`novelforge/config.py:20`）；`novelforge/core/library.py:1-3` 明写「后端没有『图书库』实体」
 - 单用户轻登录（`novelforge/core/auth.py:1-5` 明写不做多租户/角色；`users` 表无角色字段）
-- SQLite 表 **28 张**（`novelforge/core/db.py`）：`users` / `progress` / `annotations` / `collections` / `collection_items` / `reading_sessions` / `reading_status` / `ratings` / `achievements` / `user_achievements` / `authors` / `series_meta` / `tasks` / `libraries` / `library_migrations` / `scrape_items` / `smart_scopes` / `opds_sources` / `pref_devices` / `pref_profiles` / `book_dock_items` / `notifications_read` / `koreader_docs` / `app_state` / `meta_cover` / `meta_online` / `meta_override`
+- SQLite 表 **27 张**（`novelforge/core/db.py` 的 `CREATE TABLE IF NOT EXISTS` 计数）：`users` / `progress` / `annotations` / `collections` / `collection_items` / `reading_sessions` / `reading_status` / `ratings` / `achievements` / `user_achievements` / `authors` / `series_meta` / `tasks` / `libraries` / `library_migrations` / `scrape_items` / `smart_scopes` / `opds_sources` / `pref_devices` / `pref_profiles` / `book_dock_items` / `notifications_read` / `koreader_docs` / `app_state` / `meta_cover` / `meta_online` / `meta_override`
+- ⚠️ **审计/活动日志不是表，是文件**：`novelforge/core/activity_log.py:4-7` 明写落盘两份 —— `activity.log`（人类可读，可直接 tail）与 `activity.jsonl`（结构化，供接口与前端表格消费），目录由 `LOG_DIR` 控制。**上表里没有 `activity_log` 不是遗漏**；§14 第 0 期那条「审计日志」说的是给它加 `actor` 字段，不是新建表
 - **元数据解析**来源是 EPUB 自身 + 文件名（`novelforge/core/metadata.py:11-33`）；**在线元数据抓取体系已于第 5 期落地**（`core/metasources.py` OpenLibrary / Google Books，均无需 API Key；`core/metafetch.py` plan→预览→apply，结果只落 `meta_online` / `meta_cover`、不改写文件）。
   ⚠️ 本节原写「**没有任何在线元数据抓取**」，与 §14 第 5 期「元数据自动抓取与治理 ✅」自相矛盾，以代码为准更正。
 
@@ -44,96 +49,149 @@
 
 ## 1. 域：应用外壳
 
+> **第 29 期复核（2026-09-20）**：本域此前**从来没有复核头**，14 行全部是**第 4 期旧文**。
+> 本轮逐行按代码改判，结果：**已过期 6 行**（54 全局搜索 / 55 Notifications 浮层 / 59 Help /
+> 60 Appearance 浮层 / 62 用户菜单 / 49 侧栏主导航部分）、**部分过期 2 行**（58 Upload books / 63 版本标识）、
+> **结论仍成立但锚点失效 6 行**（50 / 51 / 53 / 56 / 57，锚点已逐个换新）。
+> ⚠️ 本域暴露出一条**通用教训**：这 6 行「结论对、锚点错」的行最危险 —— 结论对得让人不去复核，
+> 而 `文件:行` 早已指到别的代码上（例如原 `router/index.ts:96-100` 今天落在无关代码上）。
+> 因此本轮**对仍成立的行也一律重取锚点**。
+
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| 侧栏主导航 | Dashboard / Book Dock / Requests / Tools | 部分：仪表盘/探索发现/任务中心/工具/数据统计/通知中心（`data/nav.ts:32-45`）；**无 Book Dock、无 Requests** | Book Dock **可直接落地**／Requests **已决策不做**（§9） | Book Dock 可复用 `INPUT_DIR` + watcher |
-| BROWSE 组（Authors / Series / Annotations） | 三个入口 | **已有**（`router/index.ts:96-100`） | 可直接落地 | — |
-| LIBRARIES 组（`/library/:id`、`/libraries`、New Library） | 多书库实体 + 分组菜单 | **第 10 期已实现多库实体**：侧栏「库」组列**真实书库**（`GET /api/libraries` 返回库实体，含类型 / 归属模式 / 书数），点击**切库 + 进书架**；原先的「格式 / 待修复 / 无封面」分面已改址 `GET /api/library-facets` 且不再占侧栏 | ~~需架构变更 → 不落地~~ **已落地** | 仍无 `/library/:id` 独立路由（用「当前库」状态替代），但 `OUTPUT_DIR` 假设已被推翻 |
-| SMART SCOPES | `/smart-scopes` + New Smart Scope | 部分：固定 5 个智能书架（`data/collections.ts:22-28`），无独立路由、**无自定义** | 固定档 **可直接落地**／自定义 **需新增后端能力** | 自定义需 `smart_scopes` 表 + CRUD |
-| COLLECTIONS | `/collections` + New Collection | **已有**（`router/index.ts:101-102`；后端 `server.py:516-568`） | 可直接落地 | — |
-| 全局搜索（⌘K） | 跨库检索 | 部分：**UI 齐全但未接后端**——回车只弹提示（`components/AppHeader.vue:17-26`） | **可直接落地** | `/api/books` 已有，加一个查询接口即可 |
-| Notifications 浮层（Mark all read / Clear） | 顶栏浮层 + 流水 + 已读 | 部分：仅整页 `/notify`（日志视图），**无浮层、无已读态**（`views/NotificationsView.vue`） | 浮层 **可直接落地**／已读 **需新增后端能力** | 已读需新表 `notifications_read` |
-| Statistics | `/statistics` | **已有**（`/stats`，`router/index.ts:103`） | 可直接落地 | — |
-| Achievements | `/achievements` | **已有（第 22 期实现）** | **已落地** | 新表 `achievements` + `user_achievements` + 派生规则（单用户内可行，不涉多用户）；维护页已接入 Backfill 按钮 |
-| Upload books | 上传（支持多格式） | 部分：拖拽上传**限 .txt**（`tools/LocalConvertView.vue:165`；后端硬校验 `server.py:1072-1073`） | **可直接落地** | 放开多格式需在 `core/pipeline.py` 加分派 |
-| Help（Documentation / What's New / About） | 三项 | 部分：About 已有；**Documentation / What's New 无** | **可直接落地** | What's New 静态 JSON 即可 |
-| Appearance 浮层 | 顶栏浮层 | 部分：主题循环按钮 + 设置页主题页，**无浮层** | **可直接落地** | 偏好已存 localStorage |
+| 侧栏主导航 | Dashboard / Book Dock / Requests / Tools | **部分过期 —— 功能层已补齐，位置与文档写的不一样**：主导航现为 **8 项**（仪表盘/探索发现/任务中心/工具/数据统计/**阅读记录**/**通知中心**/**成就**，`data/nav.ts:32-49`）。**Book Dock 已实现**（`core/bookdock.py` + `GET /api/book-dock` 与 rescan/ignore/delete，`server.py:3760-3787`），但它是**设置页**（`views/settings/pages/BookDockPage.vue:15-26`，路由 `admin/book-dock`），**不是侧栏项**（`components/AppSidebar.vue:21-34` 的路由表里没有它）。**Requests 确实没做**：全仓 `/api/requests` **零命中**，只剩设置注册表里一个 `placeholder` 占位（`data/settingsNav.ts:501`） | Book Dock **已落地**／Requests **已决策不做**（§9） | 原判「Book Dock 可直接落地，可复用 INPUT_DIR + watcher」**已实现** —— 目录监听与 Book Dock 本就是同一套（`BookDockPage.vue:15-26` 自陈「投递目录 = INPUT_DIR」） |
+| BROWSE 组（Authors / Series / Annotations） | 三个入口 | **已有**（侧栏「浏览」组 = 作者/系列/批注，`data/nav.ts:51-59`；路由 `router/index.ts:162-166`） | 可直接落地 | 结论仍成立，**锚点已换**（原 `router/index.ts:96-100` 今天落在无关代码上） |
+| LIBRARIES 组（`/library/:id`、`/libraries`、New Library） | 多书库实体 + 分组菜单 | **第 10 期已实现多库实体**：侧栏「库」组列**真实书库**（`GET /api/libraries` 返回库实体，含类型 / 归属模式 / 书数，`server.py:2270-2283`）+「全部书库」置顶（`components/AppSidebar.vue:96-110`），点击**切库 + 进书架**（`AppSidebar.vue:165-170`）；原先的「格式 / 待修复 / 无封面」分面已改址 `GET /api/library-facets` 且不再占侧栏（`server.py:2299-2305`） | ~~需架构变更 → 不落地~~ **已落地** | 仍无 `/library/:id` 独立路由（用「当前库」状态替代；书库实体管理在 `/tools/libraries`，`router/index.ts:196`），但 `OUTPUT_DIR` 假设已被推翻。**结论仍成立，锚点已换** |
+| SMART SCOPES | `/smart-scopes` + New Smart Scope | **自定义已落地**（第 10 期起）：独立路由 `/smart-scopes`（`router/index.ts:158`）+ 管理页 `views/SmartScopesView.vue:100-131`（增删改）、`:147-264`（表单 + 列表 + 实时预览命中数）；后端 CRUD `server.py:2939 / 2951 / 2963 / 2977`；侧栏把规则书架并入「智能书架」组、组头「+」直跳该页（`AppSidebar.vue:124-137`、`:186-190`）。固定 5 个仍在（`data/collections.ts:22-28`） | **已落地** | 原判「无独立路由、无自定义」两条均已过期 —— 这正是「结论过期」而非「锚点漂移」的典型 |
+| COLLECTIONS | `/collections` + New Collection | **已有**（路由 `router/index.ts:167-168`；后端 CRUD `server.py:2844-2893`；侧栏用真实数据渲染且「+」走真实创建，`AppSidebar.vue:113-123`、`:191-201`） | 可直接落地 | 结论仍成立，**锚点已换**（原 `router/index.ts:101-102`、`server.py:516-568` 均已失效） |
+| 全局搜索（⌘K） | 跨库检索 | **已落地**：回车**真跳转**并带查询串 —— `components/AppHeader.vue:23-36`（关键在 `:32` 的 `router.push({ path: '/shelf', query: { q } })`，代码注释自陈「原先这里只弹一个 demo 提示」）；书架页消费 `q`：`views/ShelfView.vue:143-145`（读取 + watch 同步）、`:188-196`（按 title/author/series/name 四字段过滤）、搜索框 `:412-418` | **已落地** | 原判「UI 齐全但未接后端」已过期。⚠️ 口径更正：实现是**在已加载书单上做前端过滤**，**没有**新增跨库检索接口 —— 原档位理由「加一个查询接口即可」也随之失效 |
+| Notifications 浮层（Mark all read / Clear） | 顶栏浮层 + 流水 + 已读 | **已落地**：铃铛挂真实浮层（`components/AppHeader.vue:89` → `components/NotificationBell.vue:122-185`），「全部已读」在 `NotificationBell.vue:130-138`（→ `:50-61`），单条点击标记已读 `:63-71`，未读角标 `:114-119`；后端 `GET /api/notifications`（`server.py:3826`）+ `POST /api/notifications/read`（`server.py:3854`）+ `notifications_read` 表已建 | **已落地** | 原判「无浮层、无已读态」「需新增后端能力／需新表」**三条全部过期**。⚠️ 一处**仍未做**：浮层里**没有 Clear**（清空日志入口在别处：`settings/pages/WatcherPage.vue:154`、`tools/LogsView.vue:151`）—— 判「已落地」时不要再顺手把 Clear 也说成做了 |
+| Statistics | `/statistics` | **已有**（`/stats`，`router/index.ts:169`；顶栏亦有入口 `components/AppHeader.vue:90-92`） | 可直接落地 | 结论仍成立，**锚点已换**（原 `router/index.ts:103` 已失效） |
+| Achievements | `/achievements` | **已有（第 22 期实现）**：路由 `router/index.ts:172` + `views/AchievementsView.vue`；后端 `server.py:3555`（列表）、`:3565`（backfill）；维护页 Backfill 按钮 `settings/pages/MaintenancePage.vue:137-142`、`:315` | **已落地** | 新表 `achievements` + `user_achievements` + 派生规则（单用户内可行，不涉多用户）；维护页已接入 Backfill 按钮。结论与锚点均仍准确 |
+| Upload books | 上传（支持多格式） | **部分过期 —— 后端已放开、前端仍限 .txt**：前端 `tools/LocalConvertView.vue:165`（`accept=".txt"`）、`:171`（「把 .txt 拖到这里」）**未变**；但**后端硬校验已放开**（`server.py:5208-5215`，注释明写「B1 上传多格式：放开 .txt 限制」，允许 `.txt` ∪ `pipeline.EBOOK_EXT`） | 后端 **已落地**／前端仍 **可直接落地** | 原判「后端硬校验」（`server.py:1072-1073`，已失效）**已过期**。⚠️ **残留不一致（静态阅读所得，未运行验证）**：拖拽路径不做扩展名校验（`LocalConvertView.vue:95-103`），且下载名一律拼 `.epub`（`:79-80`、`:116`）—— 投非 txt 会得到 `x.epub.epub` 这类名。**这是一条真实待修项**，不是已完成 |
+| Help（Documentation / What's New / About） | 三项 | **已落地（三项都在）**：Documentation = `/docs`（`router/index.ts:174` + `views/DocumentationView.vue`）；What's New = `/whats-new`（`router/index.ts:173` + `views/WhatsNewView.vue:10-33` + 数据 `data/whatsNew.ts:9-40`）；About = `/settings/ext/about`（`router/index.ts:91` → `settings/pages/AboutPage.vue`），About 页内直接给出前两者入口（`AboutPage.vue:56-61`） | **已落地** | 原判「Documentation / What's New 无」已过期 —— 且它**与 §7 自相矛盾**（§7 早已记「已有」）。⚠️ **残留缺口**：**没有顶层 Help 菜单** —— 除路由注册外，全前端只有 `AboutPage.vue:58-59` 两处链接，侧栏无任何 Help 入口 |
+| Appearance 浮层 | 顶栏浮层 | **已落地**：`components/AppearanceMenu.vue:86-145`（主题 Segment / 点缀色 SwatchGrid / 圆角 Segment + 「恢复默认外观」），「完整设置」跳 `/settings/appearance/theme`（`AppearanceMenu.vue:59-62`），挂载点 `components/AppHeader.vue:105` | **已落地** | 原判「主题循环按钮 + 无浮层」已过期 |
 | Language 浮层（25 语言） | 全站 i18n | **无**（界面中文硬编码） | **不建议做** | 见 §11 |
-| 用户菜单（Account / Change Password / Sign out） | 浮层 | 部分：改密码已有；**无 Account 页、无 Sign out、无浮层**（顶栏头像为静态 div） | **可直接落地** | token 在 `localStorage.nf_token` |
-| 版本标识 / What's New | `/whats-new`（v2.10.0） | **无**（后端 `FastAPI(version="0.5.0")`，前端未展示） | **可直接落地** | — |
+| 用户菜单（Account / Change Password / Sign out） | 浮层 | **已落地**：头像已是按钮 + 浮层（**不再是静态 div**）—— `components/UserMenu.vue:68-114`，挂载 `components/AppHeader.vue:109`；Account 页 = `/settings/account/profile`（`UserMenu.vue:34-37` → `settings/pages/ProfilePage.vue`，含账号展示 + 修改密码 `:243-267` + 退出登录 + 成就开关 + 头像 + 显示名 + 时区）；Sign out = `UserMenu.vue:39-44`（清 token 并派发 `nf-unauthorized`）+ 按钮 `:108-112` | **已落地** | 原判四条断言（无 Account 页 / 无 Sign out / 无浮层 / 静态 div）**全部过期** |
+| 版本标识 / What's New | `/whats-new`（v2.10.0） | **部分过期 —— What's New 已有，后端版本仍未展示**：What's New 见 `router/index.ts:173`、`views/WhatsNewView.vue`、静态条目 `data/whatsNew.ts:9-40`（最新 `v0.6` 在 `:11`）；但**后端版本仍未露出** —— `server.py:100` 仍是 `FastAPI(..., version="0.5.0")`，全前端 grep `.version` 只命中 `whatsNew.ts` 自己的字段，About 页信息块无版本项（`AboutPage.vue:29-47`），`/api/health` 类型亦无版本（`lib/api.ts:15-22`） | What's New **已落地**／版本标识 **可直接落地**（仍未做） | ⚠️ 顺带指出一处**同源性问题**：前端 `v0.6` 是**手写常量**，与后端 `0.5.0` **不同源**，两者会各说各话 —— 要做版本标识就得先定谁是权威 |
 
 ## 2. 域：书架与智能书架
 
+> **第 29 期复核（2026-09-20）**：本域此前**从来没有复核头**，11 行全是**第 4 期旧文**。
+> 本轮逐行按代码改判，结果：**已过期 10 行**、**仍成立 1 行**（74 库级控制）。
+> 这是全文**过期最彻底的一节** —— 原判「无」的九项（搜索/排序/折叠/导出/统一筛选/多选/三视图/
+> Display/书卡信息）**全部已实现**。⚠️ 请注意档位列里那些「需新增后端能力」的判断：
+> 批量写接口（`POST /api/books/batch`）与导出接口（`GET /api/books/export`）**都已存在**，
+> 原判把它们当作「待补的后端」是错的。
+
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| 书架搜索 | 搜索框 | **无**（`ShelfView.vue` 无搜索） | **可直接落地** | 前端过滤即可 |
-| 排序 | Title ↑ 等多键 | **无**（`stores/library.ts:94-99` `shelfBooks` 无排序） | **可直接落地** | — |
-| Collapse series | 折叠同系列 | **无** | **可直接落地** | `books` 已带 `series` 字段 |
-| Export metadata | 导出书目元数据 | **无**（`tools/OutputView.vue` 只下载文件本体） | **需新增后端能力**（很轻） | 由 `library.books()` 生成 CSV/JSON |
-| Filters 面板 | 统一筛选面板 | 部分：标签 chips + 库分面 + 智能书架，**无统一面板** | **可直接落地** | — |
-| Show library controls | 库级控制 | **无** | **可直接落地** | — |
-| SELECT（多选模式） | 多选 + 批量动作 | **无**（全仓书架无多选；`checkbox` 仅出现在转换/改名/查重页） | UI **可直接落地**／批量写 **需新增后端能力** | 批量写需批量接口 |
-| **Grid / List / Table 三视图** | 三视图切换 | **仅 Grid**（`ShelfView.vue:74-77`） | **可直接落地** | 纯前端 |
-| Display 面板（书架级） | 书卡信息/密度 | 部分：仅仪表盘有部件面板 | **可直接落地** | 复用 localStorage 模式 |
-| 书卡信息（格式徽章/系列 #序号/出版日期·语言/题材） | 5 类信息 | 部分：只显示 title/author/进度；数据侧 `format/year/language/tags/series` 后端**已有**（`core/library.py:552-562`），**系列序号字段不存在** | 展示 **可直接落地**／系列序号 **需新增后端能力**（很轻） | 序号需解析 OPF `calibre:series_index`（现仅解析系列名，`core/library.py:63-75`） |
-| `/libraries` 列表页、`/library/:id` | 多书库 | **第 10 期已落地**：`GET /api/libraries` 返回**库实体**、侧栏「库」组点击即**切库 + 进书架**（无 `/library/:id` 独立路由，用「当前库」状态替代） | ~~需架构变更 → 不落地~~ **已落地** | 同 §1 |
+| 书架搜索 | 搜索框 | **已落地**：工具栏搜索框（`aria-label="书架搜索"`，`views/ShelfView.vue:407-418`）；过滤 computed `searched` 按 title/author/series/name 四字段（`:188-196`）；顶栏全局搜索经 `?q=` 接进来（`:143-145`） | **已落地** | 原判「无搜索」已过期 |
+| 排序 | Title ↑ 等多键 | **已落地**：排序**上移到页面层**（不在 store）—— `sorted` computed 支持 title/author/series/progress/pages/stars/added + 升降序（`ShelfView.vue:210-245`），字段选择器 `:439-446`、升降序按钮 `:447-453`，选项定义 `stores/shelfPrefs.ts:15,43-51` | **已落地** | 原判「无排序」已过期，**锚点也错**：原引的 `stores/library.ts:94-99` 今天是 `SMART_KEYS` 常量表；`shelfBooks` 今天在 `library.ts:165-170`（确实不含排序，但结论不能据此下） |
+| Collapse series | 折叠同系列 | **已落地**：工具栏 toggle `ShelfView.vue:454-461`；`rows` computed 按 `series` 合成一条并带展开态（`:250-274`），展开集合 `:147`，列表/表格的展开行 `:309-324`、`:327-345`；系列内按序号重排 `lib/bookInfo.ts:73-83` | **已落地** | 原判「无」已过期 |
+| Export metadata | 导出书目元数据 | **已落地**：书架「导出 CSV」按钮 + `onExport`（`ShelfView.vue:44-51,483`）；客户端 `api.exportBooks`（`lib/api.ts:1872-1885`）；后端 `GET /api/books/export`（`server.py:978-1018`，**17 列**含系列/序号/格式/大小/出版年/出版社/语言/ISBN/题材/入库日期/进度/状态/评分/批注数），行生成 `library.export_rows`（`core/library.py:1197-1221`） | **已落地** | 原判「无」「需新增后端能力」均过期。注：`tools/OutputView.vue` 今天**仍只下载文件本体**（`:11,62,93`）—— 导出能力是**新增在书架页**，两者已分家 |
+| Filters 面板 | 统一筛选面板 | **已落地**：统一筛选面板 Card（`ShelfView.vue:488-536`），筛选按钮带脏标记 ●（`:462-468`），维度 = 格式/语言/题材/封面/阅读状态（`:161-172`、`:489-535`），过滤 computed `:198-208`，清除 `:174-180,534` | **已落地** | 原判「无统一面板」已过期。⚠️ **顺带发现一处死入口**：文档所称「标签 chips」已失效 —— `openShelf(title, tag)` 的 `tag` 参数**今天所有调用点都不传值**（`AppSidebar.vue:178,307`、`dashboard/DashboardShelfRow.vue:54`、`library.ts:304`），`shelfTag` 成为无人写入的 store 残留（`library.ts:79,168,280`）；题材筛选已由面板 select 承担（`ShelfView.vue:507-513`） |
+| Show library controls | 库级控制 | **仍成立（无此能力）**：`ShelfView.vue` 全文 grep `libraries\|renameLibrary\|deleteLibrary\|scanLibrary\|新建\|重命名\|删除` **零命中**；全仓 grep `libraryControls` / `library control` **零命中**。书库实体管理确实存在但**入口不在此页**：`/tools/libraries`（`router/index.ts:196`）→ `views/tools/LibrariesView.vue`，后端 `PATCH/DELETE /api/libraries/{lid}`（`server.py:2390`、`:2459`） | **可直接落地** | **本节唯一原判仍成立的一行** —— 但请注意它说的是「书架页内的库级控制」，不是「书库管理不存在」 |
+| SELECT（多选模式） | 多选 + 批量动作 | **已落地（含后端）**：`selectMode`/`selected`/`toggleSelect`/`selectAllVisible`/`runBatch`（`ShelfView.vue:53-137`），「多选」按钮 `:435-437`，批量动作条（标记状态/评分/加入收藏夹）`:538-558`，三视图内勾选框 `:580-586`（网格）、`:671-677`（列表）、`:732-738`（表格）；**后端批量接口已在**：`POST /api/books/batch`（`server.py:1038-1088`，动作 set_status/set_rating/add_to_collection） | **已落地** | 原判「无多选」与「批量写需新增后端能力」**均过期** —— 批量接口不是待补项，是已存在的 |
+| **Grid / List / Table 三视图** | 三视图切换 | **已落地**：grid `ShelfView.vue:568-635`、list `:637-706`、table `:708-783`；切换按钮 `v-for SHELF_VIEW_OPTIONS`（`:421-433`）；选项与类型 `stores/shelfPrefs.ts:14,37-41` | **已落地** | 原判「仅 Grid」已过期，**锚点也错**：原引的 `ShelfView.vue:74-77` 今天是 `visibleIds()` 内部的分支 |
+| Display 面板（书架级） | 书卡信息/密度 | **已落地**：书架级显示偏好已持久化 —— `ShelfPrefs`（view/sort/dir/collapseSeries）`stores/shelfPrefs.ts:20-35`、书卡信息密度三档 compact/standard/detailed `:17-18,53-57`、筛选面板开关 `:84`，localStorage 键 `nf-shelf-prefs`（`:28,86-92`）；UI 在工具栏第二行「书卡信息」chips + 恢复默认（`ShelfView.vue:471-485`） | **已落地** | 原判「仅仪表盘有部件面板」已过期。⚠️ 形态差异：本项目是**工具栏常驻**而非浮层「面板」—— 能力等价，形态不同，如实记录 |
+| 书卡信息（格式徽章/系列 #序号/出版日期·语言/题材） | 5 类信息 | **已落地（两处断言均已过期）**：格式徽章 `ShelfView.vue:594-600`；系列 `#序号` `:606-608`（列表 `:684-686`、表格 `:742-744`）；出版日期·语言·页数 `metaOf` `:614-615` → `lib/bookInfo.ts:44-46`；题材 `tagsLabel` `:618-622` → `bookInfo.ts:49-54`；评分 `:697-699,767-769`；进度 `:623-633`。集中定义见 `bookInfo.ts:3-10`（注释明写「对齐上游的 5 类」） | **已落地** | ⚠️ **原判「系列序号字段不存在」是错的** —— 解析器 `_series_index_of`（`calibre:series_index` + EPUB3 `group-position` 兜底）在 `core/library.py:71-90`，EPUB 探测处调用 `library.py:823`，下发书目字典 `library.py:1111`，前端契约 `lib/api.ts:526-527`。原引锚点 `core/library.py:63-75` 今天分别是 `norm_key`（63-69）与序号解析（71-90）—— **恰好指到了它声称不存在的那段代码上** |
+| `/libraries` 列表页、`/library/:id` | 多书库 | **第 10 期已落地**：`GET /api/libraries` 返回**库实体**（`server.py:2270-2283`）；侧栏「库」组 = 库实体、「全部书库」置顶、每项带书数胶囊（`AppSidebar.vue:96-110`），点击即**切库 + 进书架**（`:165-170`，store 侧 `library.ts:301-305`）；**无 `/library/:id` 独立路由** —— 路由全表 `router/index.ts:154-209` 无此路径，全仓 grep 零命中 | ~~需架构变更 → 不落地~~ **已落地** | 结论与今日实现一致（本轮复核确认）。同 §1 |
 
 ## 3. 域：书籍详情
 
+> **第 29 期复核（2026-09-20）**：本域此前**从来没有复核头**，10 行全是**第 4 期旧文**。
+> 本轮逐行按代码改判，结果：**已过期 8 行**、**部分过期 1 行**（89 DETAILS 字段）、**仍成立 1 行**（91 Files on disk）。
+> ⚠️ 本域是**「档位列集体判反」**的典型：原判的「需新增后端能力」五项（Edit Metadata / 阅读状态起止 /
+> 书评 / 相似书 / 按书日志 / 手工补录）**后端全部已存在**，且都是**只写服务端、不碰源文件**的实现 ——
+> 与本项目「源文件只读」的硬约束一致。**原判理由里说「复用 `_patch_opf` 写 OPF」的那个方向，恰恰是错的**。
+
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| 五标签（Details / Edit Metadata / Files / Reading Log / Highlights） | 5 个标签 | 部分：四标签（概览/目录/文件/批注，`BookDetailView.vue:30-35`） | — | 见下逐条 |
-| Edit Metadata | 单书元数据编辑 | **无**（仅实体改名/合并会写 OPF，`core/fileops.py:193-254`） | **需新增后端能力** | 复用 `_patch_opf`，加 `POST /api/books/{bid}/metadata` |
-| 阅读状态 + Date Started / Finished | 显式状态字段 | 部分：状态由进度**推导**（`core/stats.py:46-51`，阈值 99.5%），**无起止日期** | **需新增后端能力** | `progress` 表加 `status/started_at/finished_at` |
-| YOUR REVIEW（书评 + 评分） | 可写书评 | **无** | **需新增后端能力** | 新表 `reviews(book_id, rating, body, ...)` |
-| DETAILS 字段 | Publisher / Published / Language / Pages / ISBN / File Size / Library / Added | 部分：`BookDetailView.vue:309-316` 有系列/出版年/出版社/语言/ISBN；**Pages 无来源**（EPUB 无页数概念）；**Library 需多库** | 大部分 **可直接落地**／Pages **不建议做**／Library **需架构变更** | — |
-| EDITIONS（按格式列文件与大小） | 版本编号 + 格式 + 大小 | 部分：按同 stem 聚合（`core/library.py:604-617`），**无版本编号** | **可直接落地** | — |
-| Files on disk | 磁盘文件 | 部分：同 stem 文件列表，不展示绝对路径 | **可直接落地** | — |
-| Similar Books | 相似书推荐 | **无** | **需新增后端能力** | 新模块 `core/recommend.py`（作者/系列/题材/标题相似度） |
-| Reading Log（Total time / Sessions / Average / Active days / Pace / Last read） | 按书聚合 | 部分：**全局**口径已有（`core/stats.py:70-73,108-118`），**按书无**；表与写入路径已在（`core/db.py:85-93`、`server.py:573-585`） | **需新增后端能力**（数据已有，仅缺接口） | 加 `GET /api/books/{bid}/reading-log` |
-| Add a session by hand | 手工补录 | **无** | **需新增后端能力**（很轻） | 复用 `db.add_session`（`core/db.py:285-296`） |
+| 五标签（Details / Edit Metadata / Files / Reading Log / Highlights） | 5 个标签 | **已落地（且比上游多一档）**：今天 **6 个标签** —— 概览/目录/文件/批注/编辑元数据/我的记录（`TABS` 定义 `views/BookDetailView.vue:61-69`，渲染 `:336-353`）。与上游对应：Details=概览 `:356-436`、Edit Metadata=编辑元数据 `:536-538`、Files=文件 `:487-505`、Highlights=批注 `:508-533`、Reading Log ≈ 我的记录 `:541-543` | **已落地** | 原判「四标签」已过期，**锚点也错**（原引 `:30-35` 今天是文件头注释，且那段注释**自身也过期**：仍写「四标签」与「持久化字段将在引入 SQLite 后接入」，见下方「本轮发现」）。⚠️ 对应关系是**近似**：本项目的「我的记录」只有状态/起止日期/评分/书评，**会话级**日志在 `/log` 页 —— 不宜写成「已有 Reading Log 标签」 |
+| Edit Metadata | 单书元数据编辑 | **已落地**：后端 `GET`/`POST /api/books/{bid}/metadata`（`server.py:1162-1186`、`:1188-1251`，三种取值语义：覆盖 / `null` 清空 / 空串撤销），另有 `/metadata/online`（`:1253`）与 `/metadata/revert`（`:1266`）；**只写服务端覆盖、不改写任何文件**（`:1190-1196,1226-1233` 明写「不再写文件：written 恒为空」）；前端 `components/book/MetadataEditor.vue`（357 行）挂在「编辑元数据」标签（`BookDetailView.vue:536-538`） | **已落地** | 原判「无」已过期。⚠️ 原判理由「复用 `_patch_opf` 加 POST 接口」**方向就是错的** —— 那会写回 OPF，与「元数据仅存服务端」的既定原则冲突。`core/fileops.py:193-254` 今天只服务实体改名与命名规则重出版 |
+| 阅读状态 + Date Started / Finished | 显式状态字段 | **已落地**：表 `reading_status(book_id, status, started_at, finished_at, updated_at)`（`core/db.py:160-166`）；写入规则 `db.set_status`（`db.py:2369-2408`：进 reading/finished 自动记 `started_at`，进 finished 记 `finished_at`，**离开 finished 清零**）；接口 `GET`/`PUT /api/books/{bid}/status`（`server.py:1489-1503`，可显式传起止日期）；前端 `components/book/ReadingRecord.vue:26-32`（5 档状态）、`:84-126`（保存）、`:138-172`（「开始于/读完于」date input） | **已落地** | 原判「无起止日期」已过期。⚠️ 进度推导**今天只是兜底**：真实状态优先，无状态行才按 ≥99.5% 推导（`core/stats.py:146-165`）—— 原引锚点 `core/stats.py:46-51` 今天是 `integrity` 计数块 |
+| YOUR REVIEW（书评 + 评分） | 可写书评 | **已落地**：后端 `GET`/`PUT /api/books/{bid}/review`（`server.py:1508-1528`，stars 与 review 一起保存，0/空串=清除）；落 `ratings` 表 review 列（`db.set_review` `db.py:1275-1286`、`db.get_review` `:1288-1300`）；前端「我的评分与书评」卡（5 星 + 清除 + textarea + 保存）`ReadingRecord.vue:175-221`；书架列表/表格也展示评分（`ShelfView.vue:697-699,767-769`） | **已落地** | 原判「无」「需新建 `reviews` 表」均过期 —— **没有新建表**，复用了既有的 `ratings` 表加列 |
+| DETAILS 字段 | Publisher / Published / Language / Pages / ISBN / File Size / Library / Added | **部分过期**：系列/出版年/出版社/语言/ISBN 在「版本信息」`BookDetailView.vue:371-384`（锚点已右移）；**仍无 Library**（书卡数据里有 `library_id/library_type` `api.ts:557-558`，但 `BookDetailView.vue` 全文 grep 零命中；面包屑显示的是**当前库** `library.shelfTitle` `:234-241`，不是书的归属库）、**仍无 Added**（只在导出 CSV 有「入库日期」）。**Pages 不再「无来源」**：有 EPUB **估算**页数 `pages/pages_source='estimate'`（`core/library.py:1112-1115`），但**详情页未展示**（书架表格有，`ShelfView.vue:762`） | Library / Added **可直接落地**／Pages **已落地**（展示待补） | 原判「Pages 无来源 → 不建议做」**已过期**。⚠️ 一处小瑕疵：`:379` 的「字数」是**写死的 `'未知'`** |
+| EDITIONS（按格式列文件与大小） | 版本编号 + 格式 + 大小 | **部分落地**：「按格式列文件与大小」**已落地**（详情页「文件」标签逐个列同 stem 文件的格式徽章 + 大小 + 时间 + 下载，`BookDetailView.vue:487-505`；概览侧栏「成品文件」同源 `:404-415`）；「**版本编号**」**仍无**（全仓 grep `edition` 零命中）。后端聚合锚点已变：今天是 `library.book_detail`（`core/library.py:1232-1263`，同 stem 枚举 `:1240-1256`） | **可直接落地**（仅缺版本编号） | 原判锚点 `core/library.py:604-617` 今天是 `by_id`/`BookIdConflict` |
+| Files on disk | 磁盘文件 | **仍成立**：文件行只给**库内相对路径**名 + 格式 + 大小 + mtime + 下载，不展示绝对路径（`BookDetailView.vue:487-505`）；后端返回 `f.relative_to(root).as_posix()`（`core/library.py:1250`）；协议层 `BookFile` 只有 `name/format/size/mtime` 四字段、**无 path**（`lib/api.ts:508-513`） | **可直接落地** | **本域唯一原判仍成立的一行**（结论与锚点均经本轮复核） |
+| Similar Books | 相似书推荐 | **已落地**：后端 `GET /api/books/{bid}/similar`（`server.py:1530-1542`），实现 `core/recommend.py:18-24`（同作者/题材/系列，0 分不返回）；前端加载 `BookDetailView.vue:102-109`，渲染「相似书」块（标题 + reasons + 点击跳转）`:417-433` | **已落地** | 原判「无」「需新建 `core/recommend.py`」均过期 —— 该模块正是按原计划建的，只是文档没跟上 |
+| Reading Log（Total time / Sessions / Average / Active days / Pace / Last read） | 按书聚合 | **部分过期 ——「按书无」已不成立**：接口扩为三块 `GET /api/reading-log` → `items`(按天) / `by_book`(按书) / `recent`(最近会话)（`server.py:1544-1593`），按书聚合 `db.session_by_book → {seconds, sessions, last_ended}`（`db.py:886-899`）；前端「按书」卡（书名/作者/次数/最近日期/累计时长，可点进书）`views/ReadingLogView.vue:208-226`，顶部汇总 `:173-183`，按天柱状图 `:186-206`，最近会话 `:229-242`。**仍缺**：Average（平均单次）与 Pace 这类**按书**指标（`by_book` 只有三个字段）；且**按书日志不在详情页**（`BookDetailView.vue` grep `readingLog\|session\|时长` 零命中） | 按书聚合 **已落地**／Average·Pace **可直接落地** | 原判两个锚点均失效：`core/db.py:85-93` → 今天 session 表在 `db.py:112-118`；`server.py:573-585` → 今天写入是 `db.add_session`（`db.py:810-820`） |
+| Add a session by hand | 手工补录 | **已落地**：后端 `POST /api/reading-log`（`server.py:1595-1649`，校验书存在 / 1–1440 分钟 / 日期 `YYYY-MM-DD` / 开始 `HH:MM` / **不补录未来**）；前端「补录」按钮 + 表单（书/日期/开始/时长）`ReadingLogView.vue:51-86,122-161` | **已落地** | 原判「无」已过期，锚点 `core/db.py:285-296` 亦失效（`db.add_session` 今天在 `db.py:810-820`） |
 
 ## 4. 域：阅读器
 
+> **第 29 期复核（2026-09-20）**：本域此前**从来没有复核头**，6 行全是**第 4 期旧文**。
+> 本轮逐行按代码改判，结果：**已过期 4 行**（101 PDF / 102 漫画 / 103 有声书 / 105 排版增强）、
+> **仍成立 2 行**（100 ePub / 104 阅读偏好，锚点已换）。
+> ⚠️ 本域有**两处跨节自相矛盾**，裁定如下（均以代码为准）：
+> **①有声书** —— §13「有声书阅读器」条早已标为**已过期**（第 9 期实现），而本节却仍写「无」；
+> 代码证实 **§13 正确、本节作废**。**②PDF 阅读器** —— 本节称「后端硬拒绝」，但那条拒绝语
+> 今天只约束 **EPUB 章节 HTML 流**这一条路径，PDF 走的是另一条接口，**本节作废**。
+> ⚠️ 还有一处**易误判点**必须写明：`core/pdfrender.py` 是给 **Komga 客户端**逐页取图用的
+> 服务端渲染（文件头 `:1-4` 自陈），**不是** Web 阅读器的实现 —— 拿它当「PDF 阅读器已存在」的证据是错的。
+> 更根本的变化：阅读器今天已按格式分流为**四个独立子系统**（各有自己的偏好模块与设置页），
+> 本表 6 行的结构**已不足以描述它** —— 新增部分见本节末尾补记。
+
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| ePub 阅读器 | 完整 | **已有**（`/read/:id`、`views/ReaderView.vue`、`server.py:374-385`） | 可直接落地 | 注：**线上该页未采集到独立路由**，入口在详情页内 |
-| PDF 阅读器 | 完整 | **无**：后端硬拒绝（`server.py:380-381` `仅 EPUB 支持在线阅读`）；详情页 `canRead` 仅 EPUB | **需新增后端能力** | 需文件流接口（`asset` 只支持 zip 内路径）+ 前端 pdf.js |
-| 漫画阅读器（CBZ/CBR） | 完整 | **无** | **需新增后端能力** | 需解包 + 图片序列接口 |
-| 有声书播放器 | 完整 | **无**（`BOOK_EXTS` 不含音频，`core/library.py:31`） | **不建议做** | 见 §11 |
-| 阅读偏好（主题/字体/字号/行高/宽度） | 完整 | **已有**（`lib/readerPrefs.ts`、`ReaderView.vue:53-70`） | 可直接落地 | — |
-| 深色主题 13 档 / 翻页模式 / 段落间距 / 断词 / 字距等 | 完整（设置页已采） | **无**（仅 3 档阅读主题） | **可直接落地** | 纯前端 |
+| ePub 阅读器 | 完整 | **仍成立**：路由 `/read/:id`（`router/index.ts:160`）+ `views/ReaderView.vue:28-31`（章节流渲染）；后端 `GET /api/books/{bid}/chapter/{index}`（`server.py:1456-1467`，仅 `.epub` 放行）、`/api/books/{bid}/asset`（`server.py:1133-1140`，取 zip 内资源） | 可直接落地 | 注：**线上该页未采集到独立路由**，入口在详情页内。**锚点已换** —— 原引 `server.py:374-385` 今天是 `POST /api/download` |
+| PDF 阅读器 | 完整 | **已落地**：前端 `components/reader/PdfReader.vue`（pdf.js 动态 `import('pdfjs-dist')` `:222-224`，取流 `url: /api/books/{bid}/file` `:231-233`，Bearer 走 pdf.js `httpHeaders`），接入 `ReaderView.vue:8`、`:42`、`:615`；后端 `GET /api/books/{bid}/file`（`server.py:1362-1377`，`FileResponse` 自带 Range/206）；详情页 `canRead` 已放行（`BookDetailView.vue:111-117`）；偏好 `lib/pdfPrefs.ts:11-53` + 设置页 `reader/pdf` | **已落地** | 原判「无」已过期。⚠️ **`仅 EPUB 支持在线阅读`（今天在 `server.py:1463`）只约束 `/api/books/{bid}/chapter/{index}` 这一条 EPUB 章节表单路径**，不能据此判 PDF 无阅读器 —— 这正是原判出错的机制。另注：PDF **刻意不开** `?token=` 口子（`server.py:1367-1368` 有明确理由） |
+| 漫画阅读器（CBZ/CBR） | 完整 | **已落地**：前端 `components/reader/ComicReader.vue`（页列表 `api.comicPages` `:75`，页图 URL `api.comicPageUrl` `:46-48`），接入 `ReaderView.vue:9`、`:43`、`:616`；后端 `core/comics.py`（文件头 `:1-24`：zip/rar 魔数嗅探双后端、自然排序、`__MACOSX`/`.DS_Store` 过滤），路由 `server.py:1383-1394`（页清单）、`:1397-1411`（单页取图），**CBR 缺解压器时如实报 503**；偏好 `lib/comicPrefs.ts` + 设置页 `reader/comics` | **已落地** | 原判「无」已过期 |
+| 有声书播放器 | 完整 | **已落地（第 9 期）**：`core/audio.py:16` `AUDIO_EXTS = (".m4b",".mp3",".m4a",".opus",".ogg",".flac",".aac",".wav")`；**`BOOK_EXTS` 今天在 `core/library.py:35` 且已含 `*audio.AUDIO_EXTS`**；路由 `GET /api/books/{bid}/audio`（`server.py:1423-1431`，轨清单）、单轨流（`:1434-1453`，带 Range，`?token=` 已登记于 `_MEDIA_TOKEN_PATHS` `server.py:139`）；前端独立路由 `/listen/:id`（`router/index.ts:161`）+ `views/AudioPlayerView.vue` + `components/reader/AudioPlayer.vue`，详情页入口 `BookDetailView.vue:120`（`canListen`）；偏好 `lib/audioPrefs.ts:10-40`（倍速/跳过/睡眠定时）+ 设置页 `reader/audio` | **已落地** | ⚠️ **本节此行为错误记载，已作废；以 §13 为准**（§13 早已标「已过期：第 9 期已实现」）。原判「`BOOK_EXTS` 不含音频，`core/library.py:31`」**锚点与事实双错**：常量在 `:35` 且已含音频 |
+| 阅读偏好（主题/字体/字号/行高/宽度） | 完整 | **仍成立**：`lib/readerPrefs.ts:21-44`（`ReaderPrefs` 字段）、`:48-62`（默认值）、`:64-68`（`READER_FONTS`）、`:107-116`（滑杆范围）；消费端 `ReaderView.vue:64-67`（双向绑定）、`:89-107`（`contentStyle` 落到 `fontSize`/`lineHeight`/`maxWidth`/`fontFamily`） | 可直接落地 | 结论与锚点均经本轮复核（原引 `ReaderView.vue:53-70` 恰覆盖该区块） |
+| 深色主题 13 档 / 翻页模式 / 段落间距 / 断词 / 字距等 | 完整（设置页已采） | **已落地**：`lib/readerPrefs.ts:79-93` —— `READER_THEMES` **实为 13 档**（浅色 light/paper/sepia/gray 4 档 + 深色 charcoal/dark/black/midnight/navy/forest/wine/umber/slate 9 档）；翻页模式 `:19`（`ReaderMode = 'scroll' \| 'paged'`）+ `:70-73`，实现在 `ReaderView.vue:74-107`（定高分栏 + 横向翻页）；段落间距/两端对齐/断词/字距/词距/首行缩进/分栏定义在 `readerPrefs.ts:29-43`、渲染 `ReaderView.vue:97-103`、设置 UI `settings/pages/ReaderEbookPage.vue:47-52,77-82,93,148,152` | **已落地** | 原判「**无**（仅 3 档阅读主题）」**整句不成立** —— 13 档主题当时就已存在 |
+
+> **补记（第 29 期）：阅读器今天已分流为四个子系统**，上表 6 行的结构不足以描述，故在此补记。
+> 每个子系统各有独立的偏好模块与设置页：
+>
+> - **PDF**：`lib/pdfPrefs.ts:11-53`（scrollMode/spread/fit/zoom）→ `settings/pages/PdfPage.vue`
+> - **漫画**：`lib/comicPrefs.ts:11-70` → `settings/pages/ComicsPage.vue`
+> - **有声书**：`lib/audioPrefs.ts:10-40` → `settings/pages/ReaderAudioPage.vue`
+> - **电子书**：`lib/readerPrefs.ts` → `settings/pages/ReaderEbookPage.vue` 与 `reader/fonts`
+>
+> 另：阅读入口**不止 `/read/:id`** —— 听书是独立路由 `/listen/:id`（`router/index.ts:161`）。
 
 ## 5. 域：工具
 
 > **第 28 期复核（2026-09-20）**：Bulk Rename 那一行按代码改判 —— 原「有页面 `/tools/rename`」的
 > 现状已不成立（页面与 `/api/rename/*` 一并删除），改名并入刮削面板；其余各行为第 27 期复核结论。
+> **第 29 期复核（2026-09-20）**：本域**逐行重验，结果最不乐观** —— 5 行里 **3 行判定本身是错的**：
+> **Duplicate Books**（称「无 scope、无可调阈值、精确分组」—— 三者**全部已实现**）、
+> **Missing Resources**（称「无 clean 动作」—— 接口已在）、**Entity Manager**（能力对、锚点全错）。
+> ⚠️ 尤其注意 Duplicate Books 的原锚点 `core/library.py:642-666`：它今天指向 `id_conflicts()`
+> —— **那是 book_id 撞车清单，与重复书毫无关系**。这类「锚点指到隔壁功能上」的错误比结论过期更隐蔽，
+> 因为锚点看起来「有据可查」。
 
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| Entity Manager | 实体管理 | **已有**（`/tools/entities`、`server.py:947-997`） | 可直接落地 | — |
-| Bulk Rename | **需先选书库** | **口径不同的自有实现**：第 28 期删掉 `/tools/rename` 页与 `/api/rename/*`，并入刮削面板的「命名规则」区块（规则 + 预览 + 一键重出版，`core/scrape.py` 的 `plan_naming` / `republish`）；**scope 仍是扩展名而非书库**（`naming.scope`），且只改**副本名**、源文件名无任何入口可改 | 现状 **可直接落地**／按书库 **需架构变更** | 「选书库」依赖多库实体；「只改副本名」是**刻意**与上游分流（上游改的是 `book.files[].filename`，与本项目「源文件只读」硬约束冲突，见 §1 的 `fileRenameEnabled`） |
-| Duplicate Books | Library scope 多选 + **Similar-title threshold 85%** + Run scan | 部分：有页面与接口（`/api/duplicates`）；**无 scope、无可调阈值**；匹配为「归一化书名+作者」**精确**分组（`core/library.py:642-666`） | 精确匹配 **可直接落地**／阈值 **需新增后端能力**／library scope **需架构变更** | 阈值需引入相似度算法 |
-| Missing Resources | Cover check + Run check + Missing books / Broken covers / **Orphaned cover folders** | 部分：有页面与接口，三类 issue = `zero-bytes`/`unparsable`/`no-cover`；**无 orphaned 目录、无 clean 动作、无 sweep** | **需新增后端能力** | 可复用 `fileops.recycle_items`（`core/fileops.py:309-339`） |
-| 工具页签数 | 4 个 | **本项目 8 个**（书库管理 / 实体管理 / 重复书籍 / 缺失资源对齐上游；书源管理 / 导出目录 / 本地转换 / 转换日志为自有。第 28 期删掉「批量重命名」页签后为 8 个） | 可直接落地 | 已超出线上 |
+| Entity Manager | 实体管理 | **已有**（能力成立，**锚点全错**）：前端 `/tools/entities`（`router/index.ts:197` → `views/tools/EntityManagerView.vue`）；后端真实锚点 `GET /api/entities`（`server.py:3908`）、`POST /api/entities/rename/preview`（`:3915`）、`.../rename/apply`（`:3931`）、`POST /api/entities/merge`（`:3956`） | 可直接落地 | **结论仍成立、锚点已换** —— 原引 `server.py:947-997` 今天是 `/api/books`（`:948`）与 `/api/books/export`（`:978`）。另注：第 28 期起改名**只写服务端元数据**（`server.py:3931-3953` docstring 明写「源文件名与文件内容都不动」） |
+| Bulk Rename | **需先选书库** | **口径不同的自有实现**：第 28 期删掉 `/tools/rename` 页与 `/api/rename/*`，并入刮削面板的「命名规则」区块（`components/tools/ScrapePanel.vue:571` 注释「第 28 期并入本面板」、`:574` 标题「命名规则（副本名）」），规则 + 预览 + 一键重出版走 `/api/naming/preview`（`server.py:3973`）与 `/api/naming/apply`（`:3998`），实现 `core/scrape.py:443` `plan_naming` / `:509` `republish`（docstring 明写「**只动副本，源文件只读**」）；**scope 仍是扩展名而非书库**（`core/publish.py:60-63` `in_scope = scope in ("", "all", ext.lstrip(".").lower())`） | 现状 **可直接落地**／按书库 **需架构变更** | 「选书库」依赖多库实体；「只改副本名」是**刻意**与上游分流（上游改的是 `book.files[].filename`，与本项目「源文件只读」硬约束冲突）。**第 29 期逐条复核，结论仍成立**，本轮仅补齐精确锚点 |
+| Duplicate Books | Library scope 多选 + **Similar-title threshold 85%** + Run scan | **已落地（原判三条全错）**：`core/library.py:1288` `def duplicate_groups(threshold: int = 85, library_id=None)`；相似度用 `difflib.SequenceMatcher`（`:1304` import、`:1343` `ratio() >= thr`）+ **并查集单链法聚类**（`:1320-1350`），阈值钳制 50–100（`:1306-1309`）；接口 `GET /api/duplicates`（`server.py:5160-5161`，`threshold: int = Query(85, ge=50, le=100)` + `library_id: str = ""`）；前端阈值控件与库 scope 均在 `views/tools/DuplicateBooksView.vue:34`（`threshold = ref(85)`）、`:35`（预设 `[70, 85, 95]`）、`:177-191`、`:193`（`<LibraryScopeSwitch>`，组件 `components/tools/LibraryScopeSwitch.vue`） | **已落地** | ⚠️ **原判「无 scope、无可调阈值、精确分组」三条全部过期**，档位列三段判定也随之作废。**锚点更是指错了功能**：原引 `core/library.py:642-666` 今天是 `id_conflicts()`（`:633` 定义）—— **book_id 撞车清单，与重复书无关**。附一处细节更正：阈值是 **70/85/95 三个预设按钮**，不是滑块（无 `input type="range"`） |
+| Missing Resources | Cover check + Run check + Missing books / Broken covers / **Orphaned cover folders** | **部分过期**：三类 issue 属实（`views/tools/MissingResourcesView.vue:30-46` `ISSUE_META`、`core/library.py:1382-1392` `missing_items`、`GET /api/missing` `server.py:5182-5185`）。**「无 clean 动作」已过期**：`GET /api/maintenance/orphans`（`server.py:3593`，只读扫描）+ `POST /api/maintenance/orphans/clear`（`:3599-3614`，清理），前端 `settings/pages/MaintenancePage.vue:156`「清理孤儿记录」。**「无 orphaned 目录」字面仍成立但概念已另立**：`server.py:3574-3578` 注释明写本项目对应物**不是**「孤儿封面目录」而是「DB 里指向已消失书籍的行」。**「无 sweep」仍成立**（全仓 grep `sweep` 零命中） | orphaned/clean **已落地**／sweep **可直接落地**（仍未做） | ⚠️ 原判「无 clean 动作」过期。**锚点也错**：`fileops.recycle_items` 在 `core/fileops.py:714`（原引 `309-339` 今天是 `_set_tags`/`patch_opf_meta` 一带的 OPF 改写代码）；且该函数**已被重复书籍清理实际复用**（`fileops.py:755` `resolve_duplicates` → `:758` 调用）—— 原判写成「可复用（将来时）」与现状不符 |
+| 工具页签数 | 4 个 | **本项目 8 个**（`views/tools/ToolsLayout.vue:32-41` `SECTIONS` 恰 8 项：书库管理 / 实体管理 / 重复书籍 / 缺失资源 / 书源管理 / 导出目录 / 本地转换 / 转换日志；路由 `router/index.ts:195-203` 为 8 个子路由 + 空路径重定向） | 可直接落地 | 已超出线上。**第 29 期复核：仍成立**。⚠️ 补一条：**实际可见数可能少于 8** —— `ToolsLayout.vue:48-50` 按库能力裁剪（书源管理需 `sources`、本地转换需 `convert`，真值源 `core/features.py`） |
 
 ## 6. 域：统计与成就
 
-> **第 27 期复核（2026-09-19）**：本域原判定「无」的多数项在第 1–26 期已落地，下表按代码改判；每行结论可指到代码行。**两条原判原样保留**（两大标签 / Integrity 四项百分比）；**Metadata Freshness 保留档位但更正了判据**（原判据与代码矛盾，见该行）。
+> **第 27 期复核（2026-09-19）**：本域原判定「无」的多数项在第 1–26 期已落地，下表按代码改判；每行结论可指到代码行。**Metadata Freshness 保留档位但更正了判据**（原判据与代码矛盾，见该行）。
+> **第 29 期复核（2026-09-20）**：第 27 期「原样保留」的**两条原判（两大标签 / Integrity 四项百分比）
+> 已于本期落地**，连同「Top 50 Largest Books」一并改判为**已落地** —— 本域**已无缺口**。
+> 这三行的改判锚点全部指向本期新写的代码行（见下），不是「据说做了」。
+> ⚠️ 本轮同时确认：**Metadata Freshness 仍是不做**，且理由仍是「价值低」而非「做不了」—— 那个判据更正依然有效。
 
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| 两大标签（Library Stats / My Reading） | 分区 | 部分：单页 `/stats` 无分区（`views/StatsView.vue` 为平铺区块，20+ 个 `<h3>`，无 tab 结构） | **可直接落地** | 前端分区 —— **原判仍成立** |
+| 两大标签（Library Stats / My Reading） | 分区 | **已落地（第 29 期）**：`StatsView.vue:46-50` 定义两档 `TabKey = 'library' \| 'reading'`（默认「书库统计」），`:172` 用本项目既有的 `Segment` 原语渲染切换，`:194` 起按 `tab` 分支渲染两套区块 | **已落地** | 本轮落地 —— 原判「单页无分区」已不成立 |
 | 筛选（All Libraries）+ Configure + 时间粒度（Monthly/Yearly/Last 5 Years） | 参数化聚合 | 时间粒度**已有**：`overview(days=28, top=8)` 参数化并收敛 7–365（`core/stats.py:24,27`），统计页传值（`views/StatsView.vue:26` → `lib/api.ts:2704`）；响应含权威 `window` 字段。「All Libraries」在本项目**无对应概念**（单库部署，`config.py:20` 唯一 `OUTPUT_DIR`） | 时间粒度**已落地**／多库筛选**不适用** | — |
 | Books / Authors / Series / Storage / Languages | — | **已有**（`core/stats.py:152-166`） | 可直接落地 | — |
 | Publishers / Genres | — | **已有**（`core/stats.py:64-70` 聚合，`:168-169` 返回）；统计页已渲染「Top 出版社」「Top 题材」（`StatsView.vue:327,349`） | **已落地** | — |
 | Published 年份范围 / This Year | — | **已有**：`year` 按**十年**聚合（`core/stats.py:71-74` → `years.decades`，`:172-177`），统计页已渲染（`StatsView.vue:371`）。「This Year」按日历年的入库数已有 `added_month`（`core/stats.py:151-157`） | **已落地** | — |
 | My Reading（Started / In Progress / Completed / **Avg Progress**） | — | **已有**：前三项（`core/stats.py:88-110`）+ **`avg_progress`**（`:178`） | **已落地** | — |
-| **Library Integrity**（Integrity / Present / Primary / Metadata） | 四项百分比 | **无百分比口径**：`integrity` 只有**原始计数** —— `missing_author`/`missing_language`/`no_cover`/`zero_size`/`unparsable`（`core/stats.py:46-52` 初始化、`:59-83` 累加、`:179` 返回），前端按「0 字节」等计数渲染（`StatsView.vue:394`） | **需新增后端能力**（很轻） | **原判仍成立**（计数有、百分比无） |
+| **Library Integrity**（Integrity / Present / Primary / Metadata） | 四项百分比 | **已落地（第 29 期）**：`core/stats.py:99-122` 在**原有 5 个计数键之侧**增补 `total_books` / `present(_percent)` / `primary(_percent)` / `metadata(_percent)` / `score`（对齐上游 `LibraryIntegrityGauge` 四值）；前端 `StatsView.vue:123-135` 渲染大号 `score`% + 三条覆盖率，**原有计数行保留在分隔线下**（琥珀警告不变） | **已落地** | 本轮落地 —— 原判「计数有、百分比无」已不成立。⚠️ **口径差异已写进代码注释**：上游 Present = 文件在磁盘上，本项目书目**由扫描文件得来**、该值恒真，故改落在「文件有实体内容（非 0 字节）」；Primary 落在「主文件能被解析」 |
 | Format Distribution | — | **已有**（`core/stats.py:54-55,161`） | 可直接落地 | — |
 | **Metadata Score Distribution**（P50/P90） | 24 字段权重评分 | **已有**：`core/metascore.py` 评分模型 + `metascore.summary(bs)`（Average / P50 / P90 + 分档直方图，`core/stats.py:14` import、`:181` 返回） | **已落地** | — |
 | Metadata Freshness（Fresh ≤30d / Never fetched） | — | **指标无**。⚠️ 原判据「依赖在线元数据抓取，与定位冲突」**已失效** —— 抓取体系第 5 期就落地了（`core/metafetch.py`，`meta_online.fetched_at` 已在库里，见 `core/db.py:241-250`），这个指标**技术上可直接算** | **不建议做**（档位依价值而非依赖） | 与本项目已有 `metadata_score`（完整度）口径重叠、增量信息少；**不是做不了，是不值得做** |
-| Top 50 Largest Books | — | **半落地**：`top` **已参数化**并收敛 1–50（`core/stats.py:17` 默认 8、`:31`），但 ⚠️ **前端从不传** `top`（`lib/api.ts:2704` 只发 `days`），且仓库**无任何按体积的榜单** —— `StatsView.vue` 体积只用于「占用」汇总卡（`:155`） | **可直接落地**（缺榜单与 UI） | 后端参数已具备，缺的是榜单本身与传参 |
+| Top 50 Largest Books | — | **已落地（第 29 期）**：`core/stats.py:124-139` 新增 `largest`（按体积降序，字段 `id/title/size_bytes/format`，对齐上游 `LargestBookItem`）；前端 `StatsView.vue:159-162` 体积榜区块、`lib/api.ts:2770` 已传 `top=50` | **已落地** | 本轮落地 —— 原判「仓库无任何按体积的榜单」「前端从不传 top」均已不成立。⚠️ 榜单长度固定 50（`_LARGEST_N`）、**刻意不跟随 `top`**：那个参数管作者/系列/出版社/题材四个计数器榜，混用会一加载就把四个榜一起撑到 50 行 |
 | Achievements | 成就体系 | **已有（第 22 期实现）** | **已落地**（单用户口径） | 与多用户无关的成就可做；跨用户口径不做 |
 | └ 上游成就模型（源码：`packages/types/src/achievement.ts`） | **5 分类**：`reading / library / exploration / dedication / devices`；**4 档稀有度**：`common / rare / epic / legendary`；字段 `groupKey / tier / threshold / hidden / sortOrder / earned / awardedAt / currentProgress / context` | 本项目成就为自有规则集，**未逐项对齐上游分类与稀有度** | 逐项对齐 **可直接落地**（纯数据/规则）；`devices` 分类 **不建议做**（依赖 KOReader/Kobo 设备实体） | 上游进度由**服务端算好**（`currentProgress` + `threshold`），且支持**全量回填**（对应设置页「运行回填」）——本项目的成就也应是**派生数据**而非一次性打卡 |
 | 仪表盘部件 | 12 件 | **已有 12 件**（`components/dashboard/widgets/registry.ts:32-45`） | 可直接落地 | 已对齐 |
@@ -181,38 +239,58 @@
 ## 10. 域：收书目录
 
 > **第 27 期复核（2026-09-19）**：本域**整域已落地**（第 25 期前后 B3 交付），原判「无独立页 / 无状态机 / 需新增后端能力」全部过期。
+> **第 29 期复核（2026-09-20）**：⚠️ **上轮把「整页拖拽投递」改判为「未做」是错的** —— 本轮逐行复核发现
+> 它**早已实现**，且覆盖范围是**整个窗口**而非小方块（见末行）。错误来源是**证据取错了地方**：
+> 拿 `LocalConvertView.vue` 那个限 `.txt` 的小拖拽区去推断「整页拖拽未做」，而真正的实现在
+> **另一个文件**里。这条教训值得记住 —— **「在那里没找到」不等于「不存在」**。
+> 另修正三处路径/行号：页面在 `settings/pages/BookDockPage.vue`（**不是** `views/BookDockPage.vue`）、
+> URL 是 `/settings/admin/book-dock`（**不是** `/book-dock`）、后端锚点整体偏移 1 行。
 
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| `/book-dock` 页面 | 独立页 | **已有独立页**：`views/BookDockPage.vue` + 路由 `/book-dock`（`router/index.ts:87`）；接口 `GET /api/book-dock`（`server.py:3759`） | **已落地** | — |
-| Pause / Rescan / Upload | 三个按钮 | **已有**：`POST /api/book-dock/{item_id}/rescan`（`server.py:3765`）+ `.../ignore`（`server.py:3774`）；watcher 侧 `POST /api/watcher/stop`、`POST /api/scan`、`POST /convert` 仍在 | **已落地** | — |
-| 状态标签（All / Needs review / Pending / Ready / Error） | 5 态状态机 | **已有状态机**：`book_dock_items` 表（`core/db.py:215`，含 `status` 字段 + `idx_dock_status` 索引） | **已落地** | — |
-| 空态 + **整页拖拽投递** | 全页 drop | 部分：仅 `LocalConvertView.vue:158-173` 一个小拖拽区（限 .txt） | **可直接落地** | **原判仍成立** —— 整页拖拽未做 |
+| `/book-dock` 页面 | 独立页 | **已有**（页面路径与 URL 均已更正）：`views/settings/pages/BookDockPage.vue`，注册 `router/index.ts:86`（`'admin/book-dock': BookDockPage`），由 `settingsChildren`（`:127-141`）从注册表生成、挂在 `:178-186` 的 `/settings` 下 ⇒ **URL 是 `/settings/admin/book-dock`**；导航登记 `data/settingsNav.ts:517`；接口 `GET /api/book-dock`（`server.py:3760`） | **已落地** | ⚠️ 两处更正：页面**不在** `views/BookDockPage.vue`；`router/index.ts:87` 今天是 `'admin/audit-log'`。另注：它**不是侧栏主导航项**（见 §1） |
+| Pause / Rescan / Upload | 三个按钮 | **已有**：暂停/开始 `BookDockPage.vue:240-242` → `server.py:3740` `/api/watcher/stop`、`:3735` `/api/watcher/start`；重扫 `:348` → `server.py:3766`；忽略 `:349` → `server.py:3775`；页头「立即扫描」`:239` → `POST /api/scan`（`server.py:3747`）；Upload 走 `POST /convert`（`server.py:5207`） | **已落地** | 结论仍成立，**锚点整体偏移 1 行**已更正。⚠️ 原表**漏记第三个动作**：移出 `BookDockPage.vue:350` → `POST /api/book-dock/{item_id}/delete`（`server.py:3784`） |
+| 状态标签（All / Needs review / Pending / Ready / Error） | 5 态状态机 | **已有状态机**：`book_dock_items` 表（`core/db.py:215`，含 `status` 字段 + `idx_dock_status` 索引 `:227`）；五态枚举 `DOCK_TABS = ("all","needs_review","pending","ready","error")`（`core/db.py:1546`），中文标签 `core/bookdock.py:34-35`，计数装配 `bookdock.py:140-149`，前端渲染 `BookDockPage.vue:312-323` | **已落地** | 结论与原有锚点均仍准确，本轮**补上原表未引的五态枚举锚点** |
+| 空态 + **整页拖拽投递** | 全页 drop | **已落地（原判「未做」是错的）**：①脚本 —— `settings/pages/BookDockPage.vue:166-230`，用 **window 级**事件（`onMounted` 注册 `:211-215` 的 `dragenter`/`dragover`/`dragleave`/`drop`，`onBeforeUnmount` 移除 `:225-230`）；②视觉 —— 全屏遮罩 `:383-404`（`class="fixed inset-0 z-[60] …"`），drop 处理 `:394`，文案「松开投递到收书目录」`:398`；③**接受的扩展名不限于 .txt**：`POST /convert` 后端放行 `.txt ∪ pipeline.EBOOK_EXT`（`server.py:5212-5215`），`EBOOK_EXT` 含 epub/mobi/azw3/pdf/fb2/cbz/cbr **+ 音频扩展**（`core/pipeline.py:8`），空态文案亦如此声明（`BookDockPage.vue:361`「把 .txt / EPUB / PDF / CBZ 拖进本页任意位置」） | **已落地** | ⚠️ **本节上轮的改判作废**。`LocalConvertView.vue:158-171` 那个小拖拽区**确实仍限 .txt**，但**由它推不出**「整页拖拽未做」—— 两者是两个不同页面上的两个不同控件 |
 
 ## 11. 域：作者与系列
 
+> **第 29 期复核（2026-09-20）**：本域此前**从来没有复核头**，5 行全是**第 4 期旧文**。
+> 本轮逐行按代码改判，结果：**已过期 2 行**（196 索引/排序/筛选、198 传记+Actions）、
+> **部分过期 1 行**（197 No portrait / No sort name）、**仍成立 2 行**（199 `/series/:id`、200 `/series` 总览，锚点已换）。
+> ⚠️ 本域同样有**跨节自相矛盾**：§13「作者传记 / 作者头像（No portrait）」条早已标为**已过期**
+> （第 8 期 D1/D2 实现），而本节第 198 行却仍写「无传记、无 Actions」——
+> 代码证实 **§13 正确、本节作废**，且第 197 行的判据「依赖外部作者元数据服务」**随之一起作废**。
+
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| `/authors` 索引 / 排序 / 筛选（2+ books / Added this week） | 完整 | 部分：仅纯 Grid（`AuthorsView.vue:37-61`） | **可直接落地** | 2+books / added-this-week 前端可算 |
-| `/authors` No portrait / No sort name | 依赖作者头像与排序名 | **无**（`core/library.py:474-475` 只取 `dc:creator`） | **不建议做** | 依赖外部作者元数据服务 |
-| `/authors/:id` 传记 + Actions | 完整 | 部分：有 Back + 书数 + 书单；**无传记、无 Actions** | Last Added **可直接落地**／传记 **不建议做** | 传记需外部数据源 |
-| `/series/:id` 排序 + 方向 / Group by media / FIRST IN SERIES / 每书 #序号 / SYNOPSIS | 完整 | **已完整**（第 12 期）：排序 + 方向 / FIRST IN SERIES / 每书 `#序号`（第 6 期）、Group by media（第 10 期 C2）、SYNOPSIS 与系列级字段（第 12 期 C3：`SeriesMetaPanel` 展示 + 就地编辑 + 「恢复在线」+ 抓取，`SeriesRenumberDialog` 重排册号） | — | SYNOPSIS 的取值与作者侧**不同档**：外部源没有「系列」实体，只能靠「系列名检索 + 成员书一致性打分」，低置信度时如实显示「未找到」；**且只存服务端 DB、不写回 EPUB**（OPF 无该字段） |
-| `/series` 总览 | — | **已有**（`core/library.py:386-396`） | 可直接落地 | — |
+| `/authors` 索引 / 排序 / 筛选（2+ books / Added this week） | 完整 | **已落地**：后端 `authors_list` 聚合（`core/library.py:749-759`）+ `GET /api/authors`（`server.py:1864-1888`，含 `count`/`series`/`covers`/`has_photo`/`added_ts`）；前端 `views/AuthorsView.vue` 排序状态 `:18-20`、选项 `:31-34`（按书量 / 按姓名）、过滤+排序 `:40-47`（`count >= 2`、`isNew`）、筛选 UI `:71-87`（Segment + 「2+ 本」+「本周新增」）、「本周」口径 `:27-29`（最近 7 天，按名下最早入库时间） | **已落地** | 原判「仅纯 Grid」已过期。⚠️ 原引锚点 `AuthorsView.vue:37-61` 今天恰好落在筛选逻辑范围内 —— **锚点「蒙对」而结论错**，这是最容易被放过去的一类 |
+| `/authors` No portrait / No sort name | 依赖作者头像与排序名 | **部分落地**：**portrait 已实现** —— `core/authors.py`（OpenLibrary 作者检索 + 传记/头像本地缓存，零外链，文件头 `:1-10`），后端 `has_photo`（`server.py:1884`）、头像分发 `:1922-1929`、上传 `:1943`；前端渲染真实头像 `AuthorsView.vue:104-118`（含 `photoFailed` 回退书封 `:23`）。**未实现**：`sort name` 全仓无任何字段/逻辑（grep 仅命中文档自身）；「无头像」作为快捷**筛选**也没有（`AuthorsView.vue:40-47` 只有 `onlyMulti`/`onlyRecent`） | portrait **已落地**／sort name·无头像筛选 **可直接落地** | ⚠️ 原判「**不建议做**」的理由「依赖外部作者元数据服务」**已作废** —— 抓取链路 `core/authors.py` 已在，走的是既有链路、不引入新依赖。原引 `core/library.py:474-475` 今天是 `_spine()`；`dc:creator` 在 `library.py:821` |
+| `/authors/:id` 传记 + Actions | 完整 | **已落地**：后端 `GET` 详情返回 `bio`/`bio_overridden`/`has_photo`/`photo_overridden`/`photo_source`（`server.py:1891-1912`），`POST /api/authors/{name}/bio`（`:1932-1942`），抓取单个 `:2041` / 全部 `:2050`，实现在 `core/authors.py`（本地覆盖 > 在线的 `effective()`）；前端 `views/AuthorDetailView.vue:183-275`（资料卡：头像 + 传记正文 `:220-225` + 「传记已本地修改」/「头像已本地修改」标记 `:206-218`），Actions：抓取在线资料 `:228-230`、编辑/保存/恢复在线传记 `:231-233,260-271`、上传头像 `:234`、恢复在线头像 `:235-243`、书单排序 `:277-286`；**「打开最近添加」也已在**（`:50-52`、`:159-161`、`:283-285`） | **已落地** | ⚠️ **本节此行为错误记载，已作废；以 §13 为准**（§13 早已标「已过期：第 8 期 D1/D2 已实现」）。原判「无传记、无 Actions」与其「传记不建议做／需外部数据源」的理由**一并作废** —— 传记反而成了「Last Added 可直接落地」之外**已经做完**的那一项 |
+| `/series/:id` 排序 + 方向 / Group by media / FIRST IN SERIES / 每书 #序号 / SYNOPSIS | 完整 | **已完整**（第 12 期收口，**本轮逐项复核仍成立**）：排序+方向 `views/SeriesDetailView.vue:48-52`、`:63-66`、`:124-129`；Group by media `:74-82`（多组才显示组标题）、`:136-139`；FIRST IN SERIES `:57-61`（`firstId` 取最小 `series_index`）、`:165-171`（「首册」徽章）；每书 `#序号` `:152-158`（缺号提示 `:54-55`、`:114-116`）；SYNOPSIS 与系列级字段 `components/book/SeriesMetaPanel.vue`（展示 + 就地编辑 + 「恢复在线」`:77-85`、`:133`、`:144`、`:180-182`），挂载 `SeriesDetailView.vue:122`；重排册号 `components/book/SeriesRenumberDialog.vue`（挂载 `:193-198`）。后端 `server.py:1729`（详情）、`:1771`/`:1785`（meta 读写）、`:1808`/`:1817`（抓取）、`:1836`/`:1845`（重排预览/应用）+ `core/series_meta.py` | — | SYNOPSIS 的取值与作者侧**不同档**：外部源没有「系列」实体，只能靠「系列名检索 + 成员书一致性打分」，低置信度时如实显示「未找到」；**且只存服务端 DB、不写回 EPUB**（OPF 无该字段） |
+| `/series` 总览 | — | **仍成立**：后端 `series_list` 聚合按册数降序（`core/library.py:731-741`）+ `GET /api/series`（`server.py:1704`）；前端路由 `/series`（`router/index.ts:162`）+ `views/SeriesView.vue:20-27`（取数）、`:40-71`（Grid 渲染），**已含简介摘要** `:63-69`（第 12 期 C3） | 可直接落地 | **结论仍成立、锚点已换** —— 原引 `core/library.py:386-396` 今天是 `_nav_entries` 内部（EPUB3 nav 解析，与系列无关） |
 
 ## 12. 域：批注
 
 > **重要更正（2026-09-19）**：历史实测把本域记为「线上为空态」——那只是**该实例当时没有批注数据**，**不等于上游没有能力**。源码（`packages/types/src/annotation.ts`）显示模型明显更深，故原档位理由「超出线上」**作废**，改为按能力项逐条判定。
 >
 > **第 27 期交付（2026-09-19）**：分组 / 软删除垃圾桶 / 周节拍统计 **三项已落地**；**多端来源、`needsReview`、`devices` 与跨端降色仍未做**，理由见下（无数据源，不建死列与死 UI）。
+> **第 29 期复核（2026-09-20）**：本域**能力结论基本仍成立，但两处「理由/判据」是错的**，本轮更正：
+> **①配色行**称「每色带 `koreaderFallback` + `koboFallback`」「`downmapTo` 写了也无调用方」——
+> 全仓 grep 这三个标识符 **零命中**，它们**根本不存在**；**②分组维度行**引的
+> `ANNOTATION_HUB_GROUP_MODES` **也不存在**，本项目真实常量是 `GROUP_MODES`（`views/AnnotationsView.vue:29-34`）。
+> ⚠️ **根因**：「判据（源码）」这一列**长期混用上游类型名与本项目实现名**，两者长得像、又都带反引号，
+> 复核时极易把上游名当成实现锚点。本轮起该列**一律用本项目实现名**，上游名如需保留须显式标注「（上游）」。
+> 另：三行的后端锚点 `server.py:494-504` 今天指向的是 **OPDS 代码**，已全部换新。
 
 | 能力项 | 线上形态（历史实测） | 本项目现状 | 档位 | 判据（源码） |
 | --- | --- | --- | --- | --- |
-| 批注来源 | 空态三张引导卡：Read here / Sync a Kobo / Sync KOReader | 仅 Web 内创建（`server.py:494-504`）；**已建 `origin` 列**并回填 `'web'`（`core/db.py` 迁移块），但**只有 web 一个写入方** | 多端来源 **需新增后端能力** —— **本轮不做** | `origin = "web" / "koreader" / "kobo"` ——三卡即三来源枚举，无第四种。⚠️ kosync 已核实是**纯进度**（只有 `/koreader/syncs/progress` 的 PUT/GET，无批注端点），也没有 KOReader/Kobo 批注导入 → **无数据源**，故只建列不建导入链路，界面如实标注 |
-| 配色 | 页面未渲染 | **已有应用侧 10 色**：单一权威表 `frontend/src/data/annotationColors.ts`（原 4 处各自为政的颜色表已全部归并） | 应用侧 **已落地**／**跨端降色不做** | 应用 10 色 / KOReader 9 色 / Kobo 4 色，每色带 `koreaderFallback` + `koboFallback`。⚠️ 没有非 web 来源就没有降色对象，`downmapTo` 写了也无调用方 → 不做 |
-| 分组维度 | 页面未渲染 | **已落地**：月 / 书 / 颜色 / 来源四档，默认按书（`views/AnnotationsView.vue`）。**纯前端**分组（列表本就在手，重排即可），未加服务端 `group=` 参数 | **已落地** | `ANNOTATION_HUB_GROUP_MODES = ["month", "book", "color", "source"]` |
-| 待复核 / 垃圾桶 | 页面未渲染 | **垃圾桶已落地**：`DELETE` 改**软删除**（写 `deleted_at`），新增 `restore` / `purge`，总览页有垃圾桶视图与恢复/彻底删除（`core/db.py`、`server.py`）。**待复核（needsReview）不做** —— 它服务于「设备回传批注需人工对账」，没有设备回传就没有可对账对象 | 垃圾桶 **已落地**／待复核 **不做** | `AnnotationHubOverview.needsReview` / `.trashed` ——删除是**软删除**；设备回传批注需**人工对账** |
-| 统计口径 | 页面未渲染 | **已落地（部分）**：`GET /api/annotations/overview` 返回 `active` / `trashed` / `weeks` / `longest_quiet_weeks`（周节拍按 ISO 周归桶，`core/db.py`），总览页顶部统计条消费。**`devices` 不做**（恒 1，无意义） | **已落地** | `weeks` / `longestQuietWeeks` / `devices` ——以周为节拍，并跟踪「连续无批注周数」 |
-| 跨书搜索 / 跳转章节 / 导出 Markdown | 无 | **已有**（`views/AnnotationsView.vue`、`server.py:494-504`）；导出**只导活跃批注**、不含垃圾桶 | **已落地** | 本项目自有能力；上游是否存在对应能力：未验证（源码无法确认，本轮未取 `server/src/modules/annotation` 与 `client/`） |
+| 批注来源 | 空态三张引导卡：Read here / Sync a Kobo / Sync KOReader | **结论仍成立**：仅 Web 内创建（`POST /api/books/{bid}/annotations` `server.py:1656-1673`，`:1661` `origin` 缺省 `'web'`）；**已建 `origin` 列**并回填 `'web'`（迁移块 `core/db.py:427-428`），写入函数 `db.add_annotation(..., origin="web")`（`db.py:556`），**只有 web 一个写入方**；前端如实标注只有一种来源（`views/AnnotationsView.vue:296-301`） | 多端来源 **需新增后端能力** —— **本轮不做** | `origin = "web" / "koreader" / "kobo"` ——三卡即三来源枚举，无第四种。⚠️ kosync 已核实是**纯进度**（只有 `/koreader/syncs/progress` 的 PUT/GET，无批注端点），也没有 KOReader/Kobo 批注导入 → **无数据源**，故只建列不建导入链路，界面如实标注。**锚点已换**（原引 `server.py:494-504` 今天是 `_opds_base`/`_opds_xml`） |
+| 配色 | 页面未渲染 | **已有应用侧 10 色**：单一权威表 `frontend/src/data/annotationColors.ts:27-38`（yellow/orange/red/pink/magenta/purple/blue/teal/green/gray，原 4 处各自为政的颜色表已全部归并，沿革见该文件 `:3-16`） | 应用侧 **已落地**／**跨端降色不做** | ⚠️ **本行原判据有两处不实，已删**：称「每色带 `koreaderFallback` + `koboFallback`」与「`downmapTo` 写了也无调用方」—— 全仓 grep 这三个标识符 **零命中，它们根本不存在**；`HighlightColor` 接口只有 `key`/`label`/`hex` 三字段（`annotationColors.ts:18-24`）。该文件反而**如实声明**其余 6 色色值「未经上游源码逐色取证（未验证）」（`:13-16`）—— 以该声明为准，不要补写不存在的降色字段 |
+| 分组维度 | 页面未渲染 | **已落地**：月 / 书 / 颜色 / 来源四档，默认按书。**纯前端**分组（列表本就在手，重排即可），未加服务端 `group=` 参数 —— 该前缀下只有 `/api/annotations`（仅 `include_trashed`）与 `/api/annotations/overview`（`server.py:2058-2095`） | **已落地** | ⚠️ **原判据引的常量名不存在**，已改为本项目真名：`GROUP_MODES`（`views/AnnotationsView.vue:29-34`，取值 `month`/`book`/`color`/`source`），类型 `GroupMode` 在 `:27`，默认 `groupBy = ref<GroupMode>('book')` 在 `:28`；分桶与排序逻辑 `:85-124`，切换 UI `:282-296` |
+| 待复核 / 垃圾桶 | 页面未渲染 | **仍成立**：`DELETE` 改**软删除**（写 `deleted_at`，`db.delete_annotation` `core/db.py:569-580`），新增 `restore`（`:590`）/ `purge`（`:607`，SQL 带 `deleted_at != 0` 条件、**活跃条目拒删**），垃圾桶查询 `:615-626`；路由软删 `server.py:1675`、restore `:1682`、purge `:1690`；前端活跃/垃圾桶切换 `AnnotationsView.vue:240-258`、恢复/彻底删除按钮 `:331-347`、移入垃圾桶 `:349-357`。**待复核（needsReview）不做** —— 没有设备回传就没有可对账对象 | 垃圾桶 **已落地**／待复核 **不做** | ⚠️ 判据列原引的 `AnnotationHubOverview.needsReview` 是**上游类型名**，本项目对应类型是 `AnnotationOverview`（`lib/api.ts:780-787`，**无该字段**）；后端 `server.py:2086-2089` 明写**刻意不返回** `needsReview`。删除是**软删除**；设备回传批注需**人工对账** |
+| 统计口径 | 页面未渲染 | **仍成立**：`GET /api/annotations/overview`（`server.py:2081-2094`）→ `core/db.py:777-805` `annotation_overview()`，返回 `active` / `trashed` / `weeks` / `longest_quiet_weeks`（`:800-805`）；**按 ISO 周归桶**准确 —— `_week_index`（`db.py:766-774`）按 ISO 周周一 `monday.toordinal() // 7`，注释解释了为何不用 `year*53+week`；前端统计条消费 `AnnotationsView.vue:216-236`。**`devices` 不做**（恒 1，无意义） | **已落地** | 判据列的 `weeks`/`longestQuietWeeks`/`devices` 是**上游字段名**；本项目字段为 snake_case 的 `weeks`/`longest_quiet_weeks`，**且不含 `devices`** |
+| 跨书搜索 / 跳转章节 / 导出 Markdown | 无 | **仍成立**，三项全在 `views/AnnotationsView.vue`：跨书搜索（按 quote / note / book_title 过滤）`:60-75`；跳转章节 `:147-149`（`router.push('/read/<book_id>?chapter=<chapter>')`）；导出 Markdown `:178-209`，**只导活跃批注**由 `:180` `items.value.filter((a) => a.deleted_at === 0)` 落实 | **已落地** | 后端锚点已换：`GET /api/annotations`（`server.py:2058`）、overview（`:2081`）、单书批注 CRUD 含 restore/purge（`:1651-1696`）—— 原引 `server.py:494-504` 是 **OPDS 代码**。上游是否存在对应能力：**未验证（源码无法确认）**，本轮仍未取 `server/src/modules/annotation` 与 `client/` |
 
 ---
 
@@ -220,13 +298,13 @@
 
 | 项 | 依据 |
 | --- | --- |
-| **界面国际化（Language，25 语言）** | 界面中文硬编码（如 `data/nav.ts:36-43`），需全量抽文案 + i18n 基建；对单人内网工具收益远低于维护成本 |
+| **界面国际化（Language，25 语言）** | 界面中文硬编码（如 `data/nav.ts:32-49` 的导航分组标签），需全量抽文案 + i18n 基建；对单人内网工具收益远低于维护成本（锚点第 29 期更正：原引 `:36-43` 是旧行号，今天落在分组中段） |
 | ~~**Metadata Freshness / 在线元数据抓取体系**~~ ⚠️ **该条已过期** | **第 5 期已实现抓取体系**：`core/metasources.py`（OpenLibrary / Google Books，均无需 Key）+ `core/metafetch.py`（plan→预览→apply，结果只落 `meta_online`/`meta_cover`、不改写文件）。原判据「本项目只有 EPUB 自身 + 文件名」与 §14 自相矛盾，已作废。**仅「Freshness 指标」本身不做**，理由见 §6 该行（价值低，非依赖冲突） |
 | ~~**作者传记 / 作者头像（No portrait）**~~ ⚠️ **该条已过期** | **第 8 期 D1/D2 已实现**：`authors` 表分列「在线抓取值」与「用户本地覆盖」（`bio` / `bio_local`、`photo` / `photo_local_path`，`core/db.py:259-265`），接口 `POST /api/authors/{name}/bio`（`server.py:1931`）+ 作者详情返回 `bio`/`bio_overridden`（`server.py:1902-1903`），前端 `views/AuthorDetailView.vue` 可编辑并显示「已覆盖」标记。原判据「依赖外部作者元数据服务」不再成立 —— 走的是既有抓取链路 + 本地覆盖，不引入新依赖 |
 | ~~**有声书阅读器**~~ ⚠️ **该条已过期** | 第 9 期已实现（`core/audio.py` + `/api/books/{bid}/audio` + 播放器 + `reader/audio` 设置页）；原判据「`BOOK_EXTS` 不含音频」不再成立 |
 | **Requests 的 Sources / Download clients / Automation 具体功能**（索引器 + 下载客户端） | 与既有「数据驱动书源」体系（`sources/rules.py`、`sources/store.py`）功能重叠。**2026-09-18 起为「已决策不做」**：骨架页与只读接口也已从代码中删除（不再是「按 §9 保留」） |
 | ~~**Pages（页数）字段**~~ ⚠️ **该条已过期** | 已实现：EPUB 为估算值（`library._pages_in`）、CBZ 为归档真实页数；第 7 期已计入元数据完整度评分 |
-| ~~**多书库（`/libraries`、`/library/:id`、按书库筛选 / 批量重命名 / 查重）**~~ ⚠️ **该条已过期** | **第 10 期已实现**（`libraries` 表 + 库感知路径解析 + 按格式迁移 + 能力显隐矩阵）；原判据「唯一 `OUTPUT_DIR`、无书库实体」不再成立 |
+| ~~**多书库（`/libraries`、`/library/:id`、按书库筛选 / 批量重命名 / 查重）**~~ ⚠️ **该条已过期** | **第 10 期已实现**（`libraries` 表 + 库感知路径解析 + 按格式迁移 + 能力显隐矩阵）；原判据「唯一 `OUTPUT_DIR`、无书库实体」不再成立。**注（第 29 期）**：本条枚举里的「批量重命名」作为**独立工具页**已于**第 28 期删除** —— 按用户决定改名**并入刮削面板**（`core/scrape.py` 的 `plan_naming` / `republish`），前端 `BulkRenameView.vue` 与 `/api/rename/*` 已不存在；查重页 `DuplicateBooksView.vue` 保留 |
 | **Hardcover / Readwise / StoryGraph 同步** | **2026-09-19 用户拍板：本轮明确不做**。源码显示这三项的上游形态并不轻：Hardcover 是**双向**（含导入书单/进度：`HardcoverImportPreviewOutcome` 五态、版本关联 `HardcoverEdition`、匹配方式 `hardcover_id / isbn / title_author`）；StoryGraph **没有公开 API**，凭据只能复用浏览器 `sessionCookie` + `rememberToken`；Readwise 虽最小（`ReadwiseSettings` + `disabledReason`）但与项目定位无关。三项均需**凭据加密存储 + 书籍匹配（ISBN/标题+作者）+ 同步任务调度**，维护成本远超收益 |
 | **KOReader / Kobo 设备侧集成** | Kobo 同步已于 2026-09-17 决定不做；KOReader 侧源码显示并非「一处同步」而是**四套并列通道**（进度单一权威源 `canonicalSource`、`heldByReset` 设备分歧、插件目录 9 段 + 批量清单下载、能力协商 `KoreaderPluginCapability`），且插件有独立供应链（`manifestUrl` + `ed25519PublicKey` 签名校验）。复刻设备侧协议成本与收益不匹配，本轮不进入路线图 |
 | **上游 Requests 的插件式索引器 / 下载客户端** | 见上一条 Requests 行；另据源码（`packages/types/src/indexer.ts`）其插件体系含签名更新通道与 SSRF 防护（`INDEXER_URL_UNSAFE` / `INDEXER_URL_PRIVATE`）、凭据加密（`BOOK_REQUEST_ENCRYPTION_KEY`），是**完整的插件市场形态**，与本项目「数据驱动书源规则」定位不同 |
@@ -237,6 +315,15 @@
 ## 14. 分阶段路线图
 
 > 每项格式：**能力 → 后端要补什么 → 前端要做什么**
+>
+> **⏳ 时效标注（第 29 期，2026-09-20）**：本节的期号**止于第 5 期**，是**历史排期记录**——
+> 第 0–5 期**均已交付**（第 5 期于 2026-09-17 完成），本节此后未再随项目推进更新。
+> **第 6 期起的实施记录不在本文件**，见 `docs/roadmap-gaps-remaining.md`（活文档，逐期追加实施记录）。
+> 因此：本节里的「要补什么」**一律是过去时，不是待办**；判断某能力今天做没做，
+> **看 §1–§12 的现状列（第 29 期已逐行核验到底），不要看本节**。
+> ⚠️ 本节还残留几处**已被后来决策推翻**的写法，各条已就地标注（如第 1 期的 Requests、
+> 第 2 期的 `reviews` 新表与「复用 `_patch_opf` 写 OPF」方向）—— 它们**当时**是对的，
+> 后来的实现换了路子，不表示原计划有误，但**照着做会做错**。
 
 ### 第 0 期（本批立即开工）
 
@@ -246,7 +333,7 @@
 ### 第 1 期：自动化与运维
 
 - **通知已读态**：新表 `notifications_read` + `POST /api/notifications/read` → 通知中心加已读标记与「全部已读」；顶栏加浮层入口
-- **任务持久化**：用 `tasks` 表替掉进程内 `TASKS` dict（`server.py:95`）→ 任务中心改真表；**同时移除 `data/tasks.ts` 的 6 条演示种子与 ticker 假推进**
+- **任务持久化**：用 `tasks` 表替掉进程内 `TASKS` dict（`server.py:95`）→ 任务中心改真表；**同时移除 `data/tasks.ts` 的 6 条演示种子与 ticker 假推进** ✅ **已完成**（见 §8 复核头：种子与假 ticker 均已清除）
 - **维护与清理**：新增 orphaned 封面目录扫描 + 清理接口（复用 `fileops.recycle_items`）→ `Maintenance` 页真实现
 - **上传大小上限**：新增全局上传上限配置（当前**完全无限制**）→ 落到维护页
 - ~~**Requests 页面与接口**（§9）~~：**已于 2026-09-18 撤销**（第 1 期曾交付只读骨架页 + `GET /api/requests/config`，现两者均已从代码删除）
@@ -255,22 +342,24 @@
 ### 第 2 期：书库与元数据
 
 - **真实封面**：后端无需新接口（`/api/books/{bid}/asset` 已能代理 zip 内资源）→ 前端先接真实封面，再做封面显示模式 / 书脊 / 阴影 / 卡片叠加层
-- **书架三视图 + 搜索 + 排序 + Collapse series + 多选 + Filters**：后端无需改（多选批量写需批量接口）→ 前端 `ShelfView.vue` 重做
-- **书卡信息补全 + 系列序号**：后端扩 `_series_of` 解析 OPF `calibre:series_index` → 书卡与系列页展示 `#序号`
-- **单书 Edit Metadata**：复用 `fileops._patch_opf`，加 `POST /api/books/{bid}/metadata` → 详情页新增「编辑元数据」标签
-- **阅读状态 + 起止日期 + 书评 + 相似书 + Reading Log（按书）+ 手工补录**：`progress` 扩字段 / 新表 `reviews` / 新模块 `core/recommend.py` / 加 `GET /api/books/{bid}/reading-log` → 详情页五标签逐步补齐
+- **书架三视图 + 搜索 + 排序 + Collapse series + 多选 + Filters**：后端无需改（多选批量写需批量接口）→ 前端 `ShelfView.vue` 重做 —— ✅ **已完成**；⚠️ 括注「多选批量写需批量接口」当时的判断偏保守：`POST /api/books/batch` **已建**（`server.py:1038-1088`）
+- **书卡信息补全 + 系列序号**：后端扩 `_series_of` 解析 OPF `calibre:series_index` → 书卡与系列页展示 `#序号` —— ✅ **已完成**；⚠️ 实际落点是 `_series_index_of`（`core/library.py:71-90`，另加 EPUB3 `group-position` 兜底），函数名与当时的计划不同
+- **单书 Edit Metadata**：复用 `fileops._patch_opf`，加 `POST /api/books/{bid}/metadata` → 详情页新增「编辑元数据」标签 —— ✅ **已完成，但方向改了**：⚠️ **没有**复用 `_patch_opf` 写 OPF，实现是**只写服务端覆盖、不碰任何文件**（`server.py:1190-1196,1226-1233`）。**按原计划做会做错** —— 它会写回 OPF，与「元数据仅存服务端」的既定原则冲突
+- **阅读状态 + 起止日期 + 书评 + 相似书 + Reading Log（按书）+ 手工补录**：`progress` 扩字段 / 新表 `reviews` / 新模块 `core/recommend.py` / 加 `GET /api/books/{bid}/reading-log` → 详情页五标签逐步补齐 —— ✅ **已完成**；⚠️ 两处与计划不同：**没有新建 `reviews` 表**（复用既有 `ratings` 表加列，`db.set_review` `db.py:1275`）；**没有建 `GET /api/books/{bid}/reading-log`**（实现为 `GET /api/reading-log` 返回 `items`/`by_book`/`recent` 三块，`server.py:1544-1593`）。相似书模块 `core/recommend.py` **按计划建了**
 - **统计增强**：时间粒度参数化、Publishers/Genres/年份范围/Avg Progress/Top50、Library Integrity（很轻）→ `StatsView.vue` 分区改版
-- **导出元数据**：`library.export_rows()` + `/api/books/export` → 书架导出按钮
-- **自定义智能书架**：`smart_scopes` 表 + CRUD → `/smart-scopes` 页
-- **查重阈值与模糊匹配**：改 `duplicate_groups()` 引入相似度 → 查重页加阈值滑块
+- **导出元数据**：`library.export_rows()` + `/api/books/export` → 书架导出按钮 —— ✅ **已完成**，**按计划落地**（`core/library.py:1197-1221`、`server.py:978-1018`，17 列）
+- **自定义智能书架**：`smart_scopes` 表 + CRUD → `/smart-scopes` 页 —— ✅ **已完成**，**按计划落地**（`server.py:2939/2951/2963/2977`）
+- **查重阈值与模糊匹配**：改 `duplicate_groups()` 引入相似度 → 查重页加阈值滑块 —— ✅ **已完成**；⚠️ 交互与计划不同：**不是滑块**，是 **70/85/95 三个预设按钮**（`views/tools/DuplicateBooksView.vue:35`（`THRESHOLD_PRESETS = [70, 85, 95]`）、`:177-191`）
 
 ### 第 3 期：阅读器体验
 
-- **eBook 排版增强**（纯前端）：翻页/滚动模式、13 档深色主题、段落间距、两端对齐、断词、字距/词距/首行缩进、分栏
-- **PDF 阅读器**：后端加文件流接口 → 前端 pdf.js 阅读器 + 对应设置
-- **漫画阅读器**：后端加 CBZ/CBR 解包与图片序列接口 → 前端漫画阅读器 + 对应设置
-- **字体管理**：后端新增字体上传/列表/分发接口（当前**后端零字体能力**）→ 阅读器字体页 + 服务端字体页
-- **偏好同步**（单用户「账号级」= 存服务端多端一致）：偏好表 + 接口 → 外观与阅读偏好支持「本机 / 账号」
+> **第 29 期注**：本期五项**均已交付**（详见 §4 及其「补记」）。下方保留当时的计划措辞。
+
+- **eBook 排版增强**（纯前端）：翻页/滚动模式、13 档深色主题、段落间距、两端对齐、断词、字距/词距/首行缩进、分栏 —— ✅ **已完成**（`lib/readerPrefs.ts:79-93` 13 档主题、`:29-43` 各项、`:70-73` 翻页模式）
+- **PDF 阅读器**：后端加文件流接口 → 前端 pdf.js 阅读器 + 对应设置 —— ✅ **已完成**（`GET /api/books/{bid}/file` `server.py:1362-1377` + `components/reader/PdfReader.vue`）
+- **漫画阅读器**：后端加 CBZ/CBR 解包与图片序列接口 → 前端漫画阅读器 + 对应设置 —— ✅ **已完成**（`core/comics.py` + `components/reader/ComicReader.vue`）
+- **字体管理**：后端新增字体上传/列表/分发接口（当时**后端零字体能力**）→ 阅读器字体页 + 服务端字体页 —— ✅ **已完成**（`core/fonts.py` + `/api/fonts` 4 条路由）
+- **偏好同步**（单用户「账号级」= 存服务端多端一致）：偏好表 + 接口 → 外观与阅读偏好支持「本机 / 账号」 —— ✅ **已完成**（`/api/prefs/profiles` + `/api/prefs/devices` 共 9 条路由，前端 `stores/prefSync.ts` + `lib/prefsBridge.ts` 防回环）
 
 ### 第 4 期：多端同步与设备
 
@@ -321,7 +410,7 @@ Komga 是漫画/电子书服务器：扫描**库根目录**，目录结构约定
 
 1. **不做假交互**：任何页面上的控件都必须真实生效；缺后端就先把后端做出来（§0.2）。⚠️ 原例证「骨架页（Requests）的配置项可见但标注功能待实现」**已失效** —— 该页随 C1 于 2026-09-18 删除，现全仓不再有「看得见但点不动」的控件。
 2. **新增可配置项必须同时改两处**：`server.py` 的 `EDITABLE`（控制**可写**）与 `GET /api/config` 里的**硬编码键列表**（控制**可读**）是分开的——上一轮新增 `naming` 时踩过「能写进 settings.json 但读不回来」的坑，已在该处留注释。
-3. **清除既有演示数据**：`frontend/src/data/tasks.ts:21-28` 的 6 条种子任务与 `stores/tasks.ts` 的假推进 ticker 属**伪造进度**，在第 1 期任务持久化时一并移除，不得保留。
+3. **清除既有演示数据**：`frontend/src/data/tasks.ts:21-28` 的 6 条种子任务与 `stores/tasks.ts` 的假推进 ticker 属**伪造进度**，在第 1 期任务持久化时一并移除，不得保留。✅ **已完成（2026-09-20 复核）**：种子与假 ticker **均已删除** —— 见 §8 复核头；`data/tasks.ts` 现只剩类型。本节原写作「待移除」，与 §8 冲突，以本条为准。
 4. **脱敏**：文档与截图不含账号 / 邮箱 / 令牌 / 密钥真实值；含账号显示名的截图不归档（本批已排除仪表盘截图）。
 5. **验证纪律**：全量类型检查（**按输出文本判定**，`vue-tsc --build` 报错也返回退出码 0）→ 构建 → 部署 `novelforge/static/v2` → 重启测试实例 → 端到端脚本验证「保存 → 读回 → 实际生效」→ 浏览器逐路由冒烟；改后端写入路径时额外验证**历史条目兼容**。
 6. **采集复现**：截图必须是**整页**——本应用用内层滚动容器，`fullPage` 对它是无效的。可靠做法是**把视口高度撑到内容高度**（实测：11 页从 720 补到 1006），而不是解除容器 overflow。
