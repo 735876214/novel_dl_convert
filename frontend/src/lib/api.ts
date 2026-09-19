@@ -574,6 +574,15 @@ export interface MeInfo {
   user: string
 }
 
+/** 账号资料（第 25 期）：展示名 / 时区 / 头像分发 URL。 */
+export interface AccountProfile {
+  username: string
+  display_name: string
+  timezone: string
+  avatar_path: string
+  avatar_url: string | null
+}
+
 // ---------- 阅读器：章节内容 / 进度 / 批注 ----------
 
 export interface ChapterContent {
@@ -2088,6 +2097,38 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ old_pin: oldPin, new_pin: newPin }),
     }),
+
+  /** 当前账号资料（头像以可分发 URL 形式返回）。 */
+  getProfile: () => request<AccountProfile>('/api/account/profile'),
+
+  /** 更新展示名 / 时区（缺字段则沿用当前值）。 */
+  updateProfile: (p: { display_name?: string; timezone?: string }) =>
+    request<AccountProfile>('/api/account/profile', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(p),
+    }),
+
+  /** 上传账号头像（JPG/PNG/WEBP，≤5MB）。 */
+  uploadAvatar: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<{ ok: boolean; avatar_url: string }>('/api/account/avatar', {
+      method: 'POST',
+      body: form,
+    })
+  },
+
+  /** 移除账号头像，回退占位。 */
+  deleteAvatar: () =>
+    request<{ ok: boolean }>('/api/account/avatar', { method: 'DELETE' }),
+
+  /** 账号头像 URL，给 `<img src>` 用（带 ?token=；可选 ts 做缓存破坏）。 */
+  accountAvatarUrl: (ts?: number) => {
+    const t = _authToken()
+    const q = t ? `?token=${encodeURIComponent(t)}` : ''
+    return `/api/account/avatar${q}${ts ? `${q ? '&' : '?'}t=${ts}` : ''}`
+  },
 
   // ---------- 阅读器：章节内容 / 进度 / 批注 ----------
   chapter: (id: string, index: number) =>

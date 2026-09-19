@@ -44,6 +44,7 @@ export const ICONS = {
   skipForward: '<path d="M5 4l10 8-10 8z"/><path d="M18 4v16"/>',
   volume: '<path d="M11 5L6.5 9H3v6h3.5L11 19z"/><path d="M15.5 8.5a5 5 0 010 7"/><path d="M18.5 6a9 9 0 010 12"/>',
   moon: '<path d="M20 14.5A8.5 8.5 0 019.5 4a7 7 0 1010.5 10.5z"/>',
+  x: '<path d="M6 6l12 12M18 6L6 18"/>',
 } as const
 
 export type IconName = keyof typeof ICONS

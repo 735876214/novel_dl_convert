@@ -87,7 +87,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['PREFERENCES', 'SECURITY & ACCESS', 'Connected Accounts'],
           items: ['头像上传 / 移除', 'Full name', 'Username（不可改）', 'Email（只读）', 'Timezone', 'Enable achievements', 'Guided Tour 重放', 'Change password', 'Connected Accounts（OIDC）'],
         },
-        note: '本项目实现「账号信息 + 修改密码」两项；头像、显示名、时区、成就、引导重放、OIDC 为未支持。',
+        note: '本项目为单用户轻登录：已实现账号展示、修改密码、头像上传/移除、显示名、时区（接通时间类成就）、成就开关与新手引导重放；OIDC / Email 在单用户场景无意义，故不提供。',
       }),
       p('appearance/theme', 'Theme', '主题', 'ready', {
         upstream: {

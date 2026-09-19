@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
+import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
 
 /**
@@ -20,6 +21,11 @@ const open = ref(false)
 const wrap = ref<HTMLElement | null>(null)
 
 const initial = computed(() => (auth.user || 'U').trim().charAt(0).toUpperCase())
+
+// 头像图 URL：带 token（供 <img src> 鉴权），并以后端返回的 avatar_url 作缓存破坏键。
+const avatarImg = computed(() =>
+  auth.avatarUrl ? `${api.accountAvatarUrl()}&v=${encodeURIComponent(auth.avatarUrl)}` : null,
+)
 
 function toggle(): void {
   open.value = !open.value
@@ -66,12 +72,13 @@ onUnmounted(() => {
         'h-8 w-8 shrink-0 cursor-pointer rounded-full border border-border bg-muted shadow-[inset_0_0_0_3px_var(--card)] text-[12px] font-semibold text-foreground transition-colors',
         open ? 'bg-[var(--shell-accent-tint)] text-primary hover:text-primary' : 'hover:bg-muted',
       ]"
-      :title="auth.user || '本地用户'"
+      :title="auth.display"
       :aria-expanded="open"
       aria-label="账户菜单"
       @click.stop="toggle"
     >
-      {{ initial }}
+      <img v-if="avatarImg" :src="avatarImg" alt="" class="h-full w-full rounded-full object-cover">
+      <span v-else>{{ initial }}</span>
     </button>
 
     <div
@@ -79,12 +86,13 @@ onUnmounted(() => {
       class="absolute top-[calc(100%+0.5rem)] right-0 z-50 w-[min(16rem,88vw)] overflow-hidden rounded-[var(--shell-radius)] border border-[var(--shell-border)] bg-[var(--shell-surface)] shadow-2xl backdrop-blur-md backdrop-saturate-150"
     >
       <div class="flex items-center gap-2.5 border-b border-border px-3.5 py-3">
-        <span class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-muted text-[13px] font-semibold text-foreground">
-          {{ initial }}
+        <span class="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-full bg-muted text-[13px] font-semibold text-foreground">
+          <img v-if="avatarImg" :src="avatarImg" alt="" class="h-full w-full object-cover">
+          <span v-else>{{ initial }}</span>
         </span>
         <div class="min-w-0">
-          <div class="truncate text-[13px] font-medium text-foreground">{{ auth.user || '已登录' }}</div>
-          <div class="truncate text-[11px] text-muted-foreground">单用户轻登录</div>
+          <div class="truncate text-[13px] font-medium text-foreground">{{ auth.display }}</div>
+          <div class="truncate text-[11px] text-muted-foreground">@{{ auth.user || 'local' }} · 单用户轻登录</div>
         </div>
       </div>
 
