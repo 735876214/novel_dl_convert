@@ -1449,22 +1449,39 @@ def dock_prune(keep=500) -> int:
 # 分层优先级：override（用户编辑）> online（在线抓取）> opf（文件本体）。
 # override 同时是「受保护标记」：metafetch 抓取时跳过这些字段，避免冲掉用户修正。
 
-#: 「显式无值」哨兵（第 18 期）。
+#: 「显式无值」哨兵（第 18 期；第 22 期扩到全部可编辑字段）。
 #: 覆盖值是**列**，存不了空串 —— 空串在 :func:`set_override` 里表示「撤销覆盖」（删行）。
-#: 但有些字段需要表达「用户就是要它没有值」：最典型的是**重排册号时清空序号**
-#: （原本没有序号的册，靠这条才能把序号去掉）。这时写哨兵，读取端翻译回空串。
-#: 目前只对 ``series_index`` 生效（见 :func:`_meta_out`）—— 不扩大到任意字段，
-#: 免得用户真填了 ``-`` 却被当成空值。
+#: 但「用户就是要这个字段没有值」需要单独表达：最早只有**重排册号清空序号**，
+#: 第 22 期起非 EPUB 也能手动编辑元数据 —— 它们没有 OPF 兜底层，若只用「撤销覆盖」
+#: 来表达清空，字段会立刻**回落到在线的抓取值**（看起来就是「清空后又被填回来」）。
+#: 所以写哨兵、读取端翻译成「无值」；哨兵同时让该字段进入 metafetch 的保护名单
+#: （见其 ``field in overrides.get(book_id)``），之后的抓取不会再把它填回来。
+#: ⚠️ 字面量是 ``-``：字段进了 :data:`_CLEARABLE` 之后，**恰好填一个短横线**会被读成
+#: 空值（可接受的极端情况）。接口层另有正规写法 ``null`` = 显式清空（前端「清空」按钮用它）。
 META_CLEAR = "-"
 
-#: 允许使用 :data:`META_CLEAR` 的字段（语义上「无值」是有意义的）
-_CLEARABLE = ("series_index",)
+#: 允许使用 :data:`META_CLEAR` 的字段（= 可手动编辑的全部字段）。
+#: 与 ``fileops.METADATA_FIELDS`` 以及下方的 :data:`_META_FIELDS` **必须同集合**
+#: （db 不能 import fileops —— 后者 import 前者会成环，故此处显式列一遍），
+#: 三者一致性有测试钉住（``tests/test_metadata_server_side.py``）。
+_CLEARABLE = ("title", "author", "series", "series_index", "date",
+              "publisher", "language", "description", "tags", "isbn")
+
+
+def clearable(field: str) -> bool:
+    """该字段是否支持「显式清空」（覆盖值写 :data:`META_CLEAR` 哨兵）。"""
+    return str(field) in _CLEARABLE
+
+
+def is_cleared(field: str, value) -> bool:
+    """这个覆盖值是不是「显式无值」哨兵（只对 :data:`_CLEARABLE` 里的字段成立）。"""
+    return str(value) == META_CLEAR and clearable(field)
 
 
 def _meta_out(field: str, value):
-    """读取覆盖值时把哨兵翻译回空串（仅对 :data:`_CLEARABLE` 里的字段）。"""
-    if str(value) == META_CLEAR and str(field) in _CLEARABLE:
-        return ""
+    """把覆盖值翻译成对外形态：哨兵 → 「无值」（``tags`` 给空列表，其余给空串）。"""
+    if is_cleared(field, value):
+        return [] if str(field) == "tags" else ""
     return value
 
 
@@ -1668,10 +1685,11 @@ def get_effective_meta(bids) -> dict:
         n = on.get(bid, {})
         merged: dict = {}
         for f in _META_FIELDS:
-            # 哨兵：用户显式要求「这个字段没有值」（如清空系列序号）。
-            # 必须**带着空值**并进结果 —— 否则 library 那边只会保留文件里的旧值。
-            if f in _CLEARABLE and str(o.get(f) or "") == META_CLEAR:
-                merged[_META_BOOK_KEY.get(f, f)] = ""
+            # 哨兵：用户显式要求「这个字段没有值」（清空系列序号 / 清空某个抓来的字段）。
+            # 必须**带着无值**并进结果 —— 否则 library 那边只会保留文件里的旧值，
+            # 而在线值也会被重新填上（清空就等于没做）。
+            if is_cleared(f, o.get(f)):
+                merged[_META_BOOK_KEY.get(f, f)] = _meta_out(f, META_CLEAR)
                 continue
             if o.get(f) and str(o[f]).strip():
                 v = o[f]

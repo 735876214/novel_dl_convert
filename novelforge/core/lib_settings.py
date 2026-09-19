@@ -55,6 +55,8 @@ ITEMS = (
      "关闭后只能手动跑。要先在书库上设置成品目录"),
     ("opds.expose", "对 OPDS 暴露", "bool", None,
      "关闭后该书库不出现在对外 OPDS 目录里，直连它的单库地址也返回 404"),
+    ("komga.expose", "对 Komga 暴露", "bool", None,
+     "关闭后该书库不出现在 Komga 客户端的书库列表里，它的系列 / 书籍 / 单本直连地址也一并 404"),
 )
 
 _ITEM_MAP = {spec[0]: spec for spec in ITEMS}

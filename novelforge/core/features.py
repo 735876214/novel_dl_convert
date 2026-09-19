@@ -44,8 +44,8 @@ FEATURE_LABELS = {
 _COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"}
 
 #: 类型 → 能力集。判据是**现有实现真实支持的范围**，不是「理论上可以」：
-#:   · 元数据抓取：结果**只存服务端 DB**、与文件格式无关 → ebook / comic / audiobook 都适用
-#:     （⚠️ 只有**手动编辑**元数据仍限 EPUB：非 EPUB 没有 OPF 兜底原值层）
+#:   · 元数据抓取与手动编辑：都只存服务端 DB、与文件格式无关 → ebook / comic / audiobook 都适用
+#:     （手动编辑自第 22 期起不限格式；非 EPUB 没有 OPF 兜底原值层，「恢复」即回落在线的抓取值）
 #:   · 作者元数据：与作者检索绑定，目前只有 ebook / mixed（`authors` 键仍只给 ebook）
 #:   · 本地转换产出 EPUB → 仅 ebook
 #:   · 书源下载产出 EPUB → 仅 ebook
@@ -79,6 +79,7 @@ SETTING_CAPS = {
     # 故沿用 komga 能力（电子书 / 漫画库可见，有声书库不出现该项 —— Komga 不收有声书）。
     "scrape.enabled": "komga",
     "opds.expose": "opds",              # 该书库是否出现在对外 OPDS 目录里
+    "komga.expose": "komga",            # 该书库是否出现在 Komga 客户端的书库列表里
 }
 
 

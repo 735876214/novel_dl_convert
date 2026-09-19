@@ -26,6 +26,44 @@ from .. import config
 
 STATE_FILENAME = "watcher_state.json"
 
+#: 旁路线程登记表：`*_async` 派生的那些「发了就不管」的线程。
+#: 为什么要登记：它们都要**查库**（`library.find` → `publish_dir` → `db.get_library`），
+#: 而测试收尾 / 进程关停会关掉 DB 连接 —— 线程晚一步动手就会在已关闭的连接上查库，
+#: 本仓实测到过解释器 **segfault**（全量 pytest 跑到后半程突然崩、连汇总行都打不出来）。
+#: 登记后配 :func:`wait_pending`，收尾方就能在关库**之前**等它们收干净。
+_BG_THREADS: dict = {}
+_BG_LOCK = threading.Lock()
+
+
+def _spawn_bg(target, name: str) -> threading.Thread:
+    """起一个**被登记**的旁路线程（daemon，不阻塞主流程）。"""
+    th = threading.Thread(target=target, daemon=True, name=name)
+    with _BG_LOCK:
+        _BG_THREADS[id(th)] = th
+    th.start()
+    return th
+
+
+def wait_pending(timeout: float = 5.0) -> int:
+    """等所有旁路线程结束 → 返回**超时后仍未结束**的数量（``0`` = 全收干净了）。
+
+    调用点：测试的 ``isolated`` 夹具在 ``db.close()`` **之前**（见 ``tests/conftest.py``）；
+    将来若做优雅关停，也应在这里等一次再拆连接。
+    """
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while True:
+        with _BG_LOCK:
+            for tid in [k for k, t in _BG_THREADS.items() if not t.is_alive()]:
+                _BG_THREADS.pop(tid, None)
+            alive = list(_BG_THREADS.values())
+        if not alive:
+            return 0
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return len(alive)
+        for t in alive:
+            t.join(timeout=min(0.25, left))
+
 
 def auto_fetch_async(name: str, cfg: dict | None) -> None:
     """入库后自动抓取元数据（**仅在配置开启时**）。
@@ -56,7 +94,7 @@ def auto_fetch_async(name: str, cfg: dict | None) -> None:
         except Exception:
             pass
 
-    threading.Thread(target=_run, daemon=True).start()
+    _spawn_bg(_run, "novelforge-auto-fetch")
 
 
 def enqueue_scrape_async(name: str, lib: dict | None, cfg: dict | None) -> None:
@@ -91,7 +129,7 @@ def enqueue_scrape_async(name: str, lib: dict | None, cfg: dict | None) -> None:
         except Exception:                             # noqa: BLE001 —— 旁路增强，绝不外抛
             pass
 
-    threading.Thread(target=_run, daemon=True).start()
+    _spawn_bg(_run, "novelforge-scrape-enqueue")
 
 
 class FolderWatcher:

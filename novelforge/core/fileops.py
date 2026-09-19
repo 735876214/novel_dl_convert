@@ -38,7 +38,7 @@ _BAD_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 _BAD_TAIL = re.compile(r"[. ]+$")
 
 #: 批量重命名规则里可用的占位符，前端据此给出提示。
-#: 第 17 期扩到 9 个 —— **只加书目里真实存在的字段**（`library.books()` 的
+#: 第 20 期扩到 9 个 —— **只加书目里真实存在的字段**（`library.books()` 的
 #: year / publisher / language / series_index）；加不出真实值的一律不加。
 PATTERN_FIELDS = ("{title}", "{author}", "{series}", "{series_index}", "{index}",
                   "{year}", "{publisher}", "{language}", "{ext}")

@@ -181,6 +181,10 @@ DEFAULTS = {
         "enabled": False,
         "username": "admin",   # HTTP Basic 的用户名（密码用登录 PIN）
         "api_key": "",         # 可选：客户端也可用 X-API-Key（App 端比 Basic 更省事）
+        # 书库是否出现在 Komga 客户端的书库列表里（第 22 期，与 opds.expose 同口径）。
+        # 默认 True = 全部符合条件的库都暴露，与加这个开关之前的行为完全一致；
+        # 可逐库覆盖为 False 把某个库藏起来（不进列表、直连它的书也 404）。
+        "expose": True,
     },
     # 多书库（第 10 期 D8）。
     # 库实体本身存 SQLite（libraries 表）；这里只放**跨库策略开关**。
