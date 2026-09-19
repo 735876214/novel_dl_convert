@@ -52,7 +52,8 @@ DEFAULTS = {
     #         komga = 有系列的书放 ``系列名/系列名 #N.ext``，让 Komga 扫描后正确成系列
     #                 （Komga 不递归系列目录的子目录，故最多一层；无系列的书仍平铺）
     "output": {"format": "epub", "layout": "flat"},
-    # 成品命名规则：批量重命名的默认 pattern/scope（存 settings.json 覆盖层，工具页读取）
+    # 成品命名规则：**副本名**的默认 pattern/scope（存 settings.json 覆盖层；
+    # 每库可覆盖，见 core/lib_settings，刮削面板与设置页共用同一份规则）
     # 可用占位符见 core/fileops.PATTERN_FIELDS；扩展名由后端自动追加，模式里不要写 {ext} 之外的后缀
     "naming": {
         "pattern": "{author} - {title}",

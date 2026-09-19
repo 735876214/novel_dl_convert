@@ -24,8 +24,8 @@ import pathlib
 import threading
 import time
 
-from . import (activity_log, db, lib_settings, library, metafetch, metastore,
-               publish)
+from . import (activity_log, db, fileops, lib_settings, library, metafetch,
+               metastore, publish)
 
 _logger = logging.getLogger("novelforge.scrape")
 
@@ -423,6 +423,119 @@ def resolve(bid, action: str) -> dict:
         return {"ok": True, "action": action, "recycled": str(dst)}
     db.scrape_delete(bid)
     return {"ok": True, "action": action, "note": "副本本来就不在，已清台账"}
+
+
+# ---------------- 命名规则预览 / 重出版（第 28 期）----------------
+# 「批量重命名」与刮削合并后，改名只剩一个口径：**只改硬链接副本的文件名**，源文件
+# 永远只读。预览与落盘共用 ``publish.relpath_for`` / ``publish.rel_verdict``，所以
+# 预览给出的 ``new_rel`` 就是重出版后台账里的 ``link_rel``（所见即所得）。
+
+def _rule_cfg(library_id, pattern: str, scope: str) -> dict:
+    """该库的生效配置；给了草稿规则就覆盖 ``naming``（预览「所见即所得」用）。"""
+    cfg = lib_settings.config_for(library_id)
+    if not str(pattern or "").strip():
+        return cfg
+    return {**cfg, "naming": {**(cfg.get("naming") or {}),
+                              "pattern": str(pattern).strip(),
+                              "scope": str(scope or "all").strip() or "all"}}
+
+
+def plan_naming(library_id=None, pattern: str = "", scope: str = "") -> dict:
+    """预览「当前副本名 → 重出版后的副本名」。**只算不改**（源与本都不碰）。
+
+    ``pattern`` 留空 = 用该库已保存的生效规则（每库覆写 ?? 全局）；给了就按草稿算
+    —— 设置页与刮削面板的「预览」都是这个用法。
+
+    只列**已出版**的书（台账 ``link_rel`` 非空）：未出版的书归「开始刮削」管，
+    在这里列出来只是噪声。``conflict`` 两类，都不进批量重出版：
+
+    - ``dup``：同批内两本及以上落点相同（谁留谁走没有正确答案）；
+    - ``occupied``：落点已被**不属于这本书**的文件占着 —— ``publish`` 会退让成
+      「书名 (2).ext」。与其让预览说 A、落盘成 B，不如摆出来让用户自己处理。
+    """
+    lid = str(library_id or "").strip()
+    saved = (lib_settings.config_for(lid or None).get("naming") or {})
+    pat = str(pattern or "").strip() or str(saved.get("pattern") or "").strip()
+    sc = str(scope or "").strip() or str(saved.get("scope") or "all")
+    items = []
+    for r in db.scrape_list(library_id=lid or None):
+        bid = str(r.get("book_id") or "")
+        old_rel = str(r.get("link_rel") or "")
+        lib_id = str(r.get("library_id") or "")
+        if not bid or not old_rel:
+            continue
+        pdir = publish.publish_dir(lib_id)
+        if pdir is None:
+            continue
+        try:
+            book = library.by_id(bid)
+        except Exception:                             # noqa: BLE001 —— book_id 撞车等
+            continue
+        if not book:
+            continue                                  # 源已不在书目里（台账另行处置）
+        new_rel = publish.relpath_for(book, _rule_cfg(lib_id, pattern, sc))
+        name = str(book.get("name") or r.get("source_rel") or "")
+        verdict = publish.rel_verdict(pdir, new_rel, library.root_of(book) / name, old_rel)
+        declined = verdict == publish.REL_DECLINE
+        items.append({
+            "book_id": bid, "library_id": lib_id,
+            "name": name, "title": str(book.get("title") or "") or name,
+            "old_rel": old_rel, "new_rel": new_rel,
+            "changed": new_rel != old_rel,
+            "conflict": "occupied" if declined else "",
+            "reason": "落点已被不属于这本书的文件占用，重出版会另起「(2)」名" if declined else "",
+        })
+
+    dup: dict = {}
+    for it in items:
+        if it["changed"]:
+            dup.setdefault(it["new_rel"], []).append(it)
+    for group in dup.values():
+        if len(group) > 1:
+            for it in group:
+                it["conflict"], it["reason"] = "dup", "同批内有多本书的落点相同"
+
+    ready = [it for it in items if it["changed"] and not it["conflict"]]
+    return {
+        "library_id": lid, "pattern": pat, "scope": sc or "all",
+        "fields": list(fileops.PATTERN_FIELDS), "items": items,
+        "stats": {"total": len(items),
+                  "changed": sum(1 for it in items if it["changed"]),
+                  "conflict": sum(1 for it in items if it["conflict"]),
+                  "ready": len(ready)},
+    }
+
+
+def republish(subset=None, library_id=None) -> dict:
+    """按当前命名规则重出版：**只动副本，源文件只读**。
+
+    只处理 :func:`plan_naming` 判为「会变且不冲突」的书 —— 名字没变的跳过（白搬一次
+    文件没有意义）。单本走 ``resolve(bid, "rebuild")`` 即 ``process(bid, fetch=False)``：
+    **不外呼**，只按当前元数据重写副本；旧副本由 ``publish`` 按 ``prev_rel`` 移入回收
+    （源文件与旧副本都不会被 ``unlink``）。
+
+    ``subset`` 给了就只做其中的书，但**仍以 plan 的判定为准**：客户端说了不算，
+    冲突项与无变化的书一律跳过（也就不会出现「客户端指定去动某个文件」这个面）。
+    """
+    plan = plan_naming(library_id)
+    allow = {str(x) for x in (subset or []) if str(x or "").strip()}
+    targets = [it for it in plan["items"]
+               if it["changed"] and not it["conflict"]
+               and (not allow or it["book_id"] in allow)]
+    items = []
+    for it in targets:
+        res = resolve(it["book_id"], "rebuild")
+        items.append({"book_id": it["book_id"], "name": it["name"],
+                      "old_rel": it["old_rel"], "new_rel": it["new_rel"],
+                      "rel": str(res.get("rel") or ""), "ok": bool(res.get("ok")),
+                      "error": str(res.get("error") or "")})
+    done = sum(1 for x in items if x["ok"])
+    # 每本的成功/失败已由 publish/process 各自记日志，这里只补一条批次小结
+    _log(str(library_id or "全部书库"),
+         f"按命名规则重出版：成功 {done} / 共 {len(items)}"
+         f"（跳过 {len(plan['items']) - len(targets)}：名字未变或落点冲突）")
+    return {"ok": True, "total": len(items), "done": done, "failed": len(items) - done,
+            "skipped": len(plan["items"]) - len(targets), "items": items}
 
 
 # ---------------- worker ----------------

@@ -3965,36 +3965,51 @@ def api_entity_merge(payload: dict = Body(...)):
         raise HTTPException(400, str(e))
 
 
-@app.post("/api/rename/preview")
-def api_rename_preview(payload: dict = Body(...)):
-    """按规则生成改名预览（只算不改）。
+@app.post("/api/naming/preview")
+def api_naming_preview(payload: dict = Body(default=None)):
+    """按命名规则预览**副本名**的变化（只算不改）。
 
-    pattern / scope 缺省时回退到**该库的生效命名规则**（第 13 期起走每库覆盖，
-    见 ``core/lib_settings.config_for``）：没给 ``library_id`` 时就是全局值，
-    「设置 → 文件命名」保存的规则照旧直接生效，行为与加参数前一致。
+    ``{library_id?, pattern?, scope?}``：pattern / scope 缺省回退**该库的生效命名
+    规则**（每库覆写 ?? 全局，见 ``core/lib_settings.config_for``）—— 没给
+    ``library_id`` 时就是全局值，「设置 → 文件命名」保存的规则照旧直接生效。
+
+    规则的口径只有一个：**成品目录里的副本名**（第 28 期起与批量重命名合并，
+    源文件名不再有任何入口可改）。
     """
-    lid = _opt_library(payload.get("library_id"))
-    saved = (lib_settings.config_for(lid or None) or {}).get("naming") or {}
-    scope = str(payload.get("scope") or saved.get("scope") or "all")
-    pattern = str(payload.get("pattern") or saved.get("pattern") or "")
-    if not pattern.strip():
-        raise HTTPException(400, "命名规则为空：请先在「设置 → 文件命名」保存一条规则")
-    try:
-        plan = fileops.plan_pattern_rename(scope, pattern, lid or None)
-        # 回显实际使用的规则，便于前端确认「用的是保存值还是本次传入值」
-        plan["scope"] = scope
-        plan["pattern"] = pattern
-        return plan
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+    p = payload or {}
+    lid = _opt_library(p.get("library_id"))
+    pattern = str(p.get("pattern") or "")
+    if pattern.strip():
+        try:
+            pattern = fileops.validate_pattern(pattern)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+    plan = scrape.plan_naming(lid or None, pattern, str(p.get("scope") or ""))
+    if not plan["pattern"]:
+        raise HTTPException(400, "命名规则为空：请先填写或保存一条规则")
+    return plan
 
 
-@app.post("/api/rename/apply")
-def api_rename_apply(payload: dict = Body(...)):
-    try:
-        return fileops.apply_rename(payload.get("items"))
-    except ValueError as e:
-        raise HTTPException(400, str(e))
+@app.post("/api/naming/apply")
+async def api_naming_apply(payload: dict = Body(default=None)):
+    """按**已保存**的命名规则重出版：只动硬链接副本，源文件只读。
+
+    ``{library_id?, book_ids?}``。逐本重建副本（``scrape.resolve(bid,'rebuild')``
+    即 ``process(bid, fetch=False)``，**不外呼**），旧副本移入回收站，不留双份。
+    整批跑在 to_thread 里 —— 是同步文件 I/O，不能占着事件循环（同 mark_processed）。
+    """
+    p = payload or {}
+    lid = _opt_library(p.get("library_id"))
+    sub = p.get("book_ids") or None
+    if sub is not None and not isinstance(sub, list):
+        raise HTTPException(400, "book_ids 必须是数组")
+    res = await asyncio.to_thread(scrape.republish, sub, lid or None)
+    activity_log.log(activity_log.ACTION_SCRAPE, lid or "全部书库",
+                     activity_log.STATUS_OK,
+                     detail=f"按命名规则重出版：成功 {res['done']} / 共 {res['total']}"
+                            f"（跳过 {res['skipped']}）",
+                     source="api")
+    return res
 
 
 # ---------------- Komga 库布局（输出侧）----------------

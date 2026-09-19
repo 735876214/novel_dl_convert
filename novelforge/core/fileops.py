@@ -108,6 +108,20 @@ def sanitize_stem(stem: str) -> str:
 
 # ---------------- 命名规则（唯一实现） ----------------
 
+def validate_pattern(pattern: str) -> str:
+    """校验命名规则本身：不能为空、不能含路径分隔符等非法字符。返回 strip 后的规则。
+
+    规则会被当文件名用，含 ``/`` 时 :func:`sanitize_stem` 会**静默清掉**——配置项被
+    悄悄改写比报错更难查，所以保存/预览前先在这里拦下来（接口层据此回 400）。
+    """
+    pat = (pattern or "").strip()
+    if not pat:
+        raise ValueError("命名规则不能为空")
+    if _BAD_CHARS.search(pat):
+        raise ValueError("规则里不能含 \\ / : * ? \" < > | 这些字符")
+    return pat
+
+
 def index_text(book: dict) -> str:
     """``{index}`` 的取值：优先该书**自己的系列卷号**（``series_index``），
     其次调用方塞的 ``seq``（本库顺序），最后 ``01``。
@@ -244,41 +258,6 @@ def plan_entity_rename(kind: str, frm: str, to: str, library_id=None) -> dict:
 def plan_merge(kind: str, source: str, target: str, library_id=None) -> dict:
     """合并实体 = 把 ``source`` 名下所有书改挂到 ``target``，即一次改名预览。"""
     return plan_entity_rename(kind, source, target, library_id)
-
-
-def plan_pattern_rename(scope: str, pattern: str, library_id=None) -> dict:
-    """按规则生成「旧名 → 新名」预览。
-
-    规则里可用 ``PATTERN_FIELDS`` 里的 9 个占位符（书名 / 作者 / 系列 / 系列序号 /
-    卷号 / 出版年 / 出版社 / 语言 / 扩展名）—— 展开走 :func:`fill_pattern`（唯一实现）。
-    ``scope`` 传扩展名（如 ``epub``，不带点）可只处理该格式；留空或 ``all`` 表示全部。
-    ``library_id`` 给定时只处理该库的书（缺省 = 全部书库）。
-    """
-    pat = (pattern or "").strip()
-    if not pat:
-        raise ValueError("重命名规则不能为空")
-    if _BAD_CHARS.search(pat):
-        raise ValueError("规则里不能含 \\ / : * ? \" < > | 这些字符")
-
-    want = (scope or "").strip().lstrip(".").lower()
-    items = []
-    for b in library.books(library_id):
-        suffix = pathlib.Path(b["name"]).suffix
-        if want and want != "all" and suffix.lstrip(".").lower() != want:
-            continue
-        new_stem = fill_pattern(pat, b, suffix)
-        if not new_stem:
-            continue
-        items.append({**_mk_item(b["name"], f"{new_stem}{suffix}"),
-                      "library_id": b.get("library_id")})
-
-    return {
-        "scope": want or "all",
-        "pattern": pat,
-        "library_id": str(library_id or ""),
-        "fields": list(PATTERN_FIELDS),
-        "items": _mark_conflicts(items),
-    }
 
 
 # ---------------- EPUB 元数据改写 ----------------

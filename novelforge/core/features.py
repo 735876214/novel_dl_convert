@@ -31,7 +31,9 @@ FEATURE_LABELS = {
     "convert": "本地转换（TXT → EPUB）",
     "sources": "书源搜索与下载",
     "komga": "Komga 布局整理",
-    "rename": "批量重命名",
+    # 「rename」这个键名是第 13 期定的，含义自第 28 期起收敛为**副本命名规则**
+    # （批量重命名工具已并入刮削面板）：它管的是 naming.* 覆盖项与「按规则重出版」。
+    "rename": "命名规则",
     "duplicates": "重复书籍清理",
     "entity": "实体管理",
     "missing": "缺失资源",
