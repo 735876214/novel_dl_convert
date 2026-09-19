@@ -11,7 +11,7 @@ import pathlib
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 try:  # 时区归一（Python 3.9+ 标准库；极老环境或缺 tzdata 时回落本地时）
     from zoneinfo import ZoneInfo
@@ -419,6 +419,15 @@ def init():
             c.execute("ALTER TABLE users ADD COLUMN timezone TEXT NOT NULL DEFAULT ''")
         if "avatar_path" not in ucols:
             c.execute("ALTER TABLE users ADD COLUMN avatar_path TEXT NOT NULL DEFAULT ''")
+        # 第 27 期：annotations 补「来源 / 软删除」两列，删除由硬删改为移入垃圾桶。
+        # 老库不补列则读写会报 no such column；两列都有 NOT NULL DEFAULT，
+        # 存量行照旧可读（来源回填 web —— 批注此前只可能由 Web 阅读器创建；
+        # deleted_at=0 即「活跃」，语义与本次改动前完全一致）。
+        acols = {r["name"] for r in c.execute("PRAGMA table_info(annotations)")}
+        if acols and "origin" not in acols:
+            c.execute("ALTER TABLE annotations ADD COLUMN origin TEXT NOT NULL DEFAULT 'web'")
+        if acols and "deleted_at" not in acols:
+            c.execute("ALTER TABLE annotations ADD COLUMN deleted_at REAL NOT NULL DEFAULT 0")
         _seed_user(c)
         c.commit()
 
@@ -536,30 +545,86 @@ def set_progress(book_id: str, locator: int, percent: float):
 def list_annotations(book_id: str) -> list:
     c = _connect()
     rows = c.execute(
-        "SELECT id, chapter, quote, color, note, created_at "
-        "FROM annotations WHERE book_id=? ORDER BY chapter, created_at",
+        "SELECT id, chapter, quote, color, note, created_at, origin "
+        "FROM annotations WHERE book_id=? AND deleted_at=0 ORDER BY chapter, created_at",
         (book_id,),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def add_annotation(book_id: str, chapter: int, quote: str, color: str, note: str) -> int:
+def add_annotation(book_id: str, chapter: int, quote: str, color: str, note: str,
+                   origin: str = "web") -> int:
     c = _connect()
     with _lock:
         cur = c.execute(
-            "INSERT INTO annotations(book_id, chapter, quote, color, note, created_at) "
-            "VALUES(?,?,?,?,?,?)",
-            (book_id, chapter, quote, color, note, time.time()),
+            "INSERT INTO annotations(book_id, chapter, quote, color, note, created_at, origin) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (book_id, chapter, quote, color, note, time.time(), origin),
         )
         c.commit()
         return cur.lastrowid or 0
 
 
-def delete_annotation(book_id: str, anno_id: int):
+def delete_annotation(book_id: str, anno_id: int) -> int:
+    """**软删除**：移入垃圾桶（写 ``deleted_at``），行仍留在表内可恢复。
+
+    返回受影响行数；0 表示该条目不存在或本来就在垃圾桶里。
+    彻底删除走 :func:`purge_annotation`。
+    """
     c = _connect()
     with _lock:
-        c.execute("DELETE FROM annotations WHERE id=? AND book_id=?", (anno_id, book_id))
+        cur = c.execute(
+            "UPDATE annotations SET deleted_at=? "
+            "WHERE id=? AND book_id=? AND deleted_at=0",
+            (time.time(), anno_id, book_id),
+        )
         c.commit()
+        return int(cur.rowcount or 0)
+
+
+def restore_annotation(book_id: str, anno_id: int) -> int:
+    """从垃圾桶恢复。返回受影响行数；0 表示条目不存在或本就不在垃圾桶里。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "UPDATE annotations SET deleted_at=0 "
+            "WHERE id=? AND book_id=? AND deleted_at!=0",
+            (anno_id, book_id),
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
+def purge_annotation(book_id: str, anno_id: int) -> int:
+    """**彻底删除**（真 DELETE），且**只允许删垃圾桶里的条目**。
+
+    ``deleted_at != 0`` 这个条件是刻意的：活跃条目必须先进垃圾桶，
+    避免误点一次就不可恢复。返回受影响行数。
+    """
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "DELETE FROM annotations WHERE id=? AND book_id=? AND deleted_at!=0",
+            (anno_id, book_id),
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
+def trashed_annotations(book_id: str | None = None) -> list:
+    """垃圾桶里的批注（``deleted_at`` 倒序 = 最近丢弃的在前）。
+
+    传 ``book_id`` 则只看某本书。``include_trashed`` 的总览查询也走这里。
+    """
+    c = _connect()
+    sql = ("SELECT id, book_id, chapter, quote, color, note, created_at, origin, deleted_at "
+           "FROM annotations WHERE deleted_at!=0")
+    args: tuple = ()
+    if book_id is not None:
+        sql += " AND book_id=?"
+        args = (book_id,)
+    rows = c.execute(sql + " ORDER BY deleted_at DESC", args).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------------- 收藏夹 ----------------
@@ -667,21 +732,77 @@ def all_progress() -> dict:
 
 
 def annotation_counts() -> dict:
+    """每本书的**活跃**批注数（垃圾桶不计入）。
+
+    ⚠️ 这个数字有三处下游，删批注改软删除后它们必须一起正确：
+    统计页的 ``reading.annotations``（core/stats.py）、书目列表的
+    ``annotation_count``（server.py ``GET /api/books``，驱动「有批注」智能书架）、
+    以及 CSV 导出的「批注数」列（server.py ``GET /api/books/export``）。
+    所以这里的 ``deleted_at=0`` 不是可选项。
+    """
     c = _connect()
     rows = c.execute(
-        "SELECT book_id, COUNT(*) AS n FROM annotations GROUP BY book_id"
+        "SELECT book_id, COUNT(*) AS n FROM annotations WHERE deleted_at=0 GROUP BY book_id"
     ).fetchall()
     return {r["book_id"]: r["n"] for r in rows}
 
 
-def all_annotations() -> list:
-    """全部批注（跨书），按创建时间倒序；供「批注总览」页使用。"""
+def all_annotations(include_trashed: bool = False) -> list:
+    """全部批注（跨书），按创建时间倒序；供「批注总览」页使用。
+
+    ``include_trashed=True`` 时把垃圾桶里的条目一并返回，由调用方按 ``deleted_at``
+    自行区分（总览页的垃圾桶视图靠它）。**默认只返回活跃批注** —— 这是既有行为，
+    无参调用的几处（图书详情「批注」tab、每日划线 widget）不该看到已丢弃的条目。
+    """
     c = _connect()
-    rows = c.execute(
-        "SELECT id, book_id, chapter, quote, color, note, created_at "
-        "FROM annotations ORDER BY created_at DESC"
-    ).fetchall()
+    sql = ("SELECT id, book_id, chapter, quote, color, note, created_at, origin, deleted_at "
+           "FROM annotations")
+    if not include_trashed:
+        sql += " WHERE deleted_at=0"
+    rows = c.execute(sql + " ORDER BY created_at DESC").fetchall()
     return [dict(r) for r in rows]
+
+
+def _week_index(ts: float) -> int:
+    """时间戳 → **单调递增的周序号**（按 ISO 周的周一归桶）。
+
+    用「周一那天的 ordinal // 7」而不是 ``year*53 + week``：后者在 52/53 周的
+    年份交界处算出的差值是错的，而下面正是要按周序号做差求「连续无批注周数」。
+    """
+    dt = datetime.fromtimestamp(ts)
+    monday = dt.date() - timedelta(days=dt.weekday())
+    return monday.toordinal() // 7
+
+
+def annotation_overview() -> dict:
+    """批注总览的统计口径（计数只看**活跃**批注，垃圾桶单列）。
+
+    - ``weeks``：有过批注的周数（同一周内多条只算一周）。
+    - ``longest_quiet_weeks``：最长的一段「连续无批注」周数 —— 既看历史周之间的
+      空档，也看最后一次批注到**本周**的空档（所以停笔越久这个数越大）。
+    """
+    c = _connect()
+    active = int(c.execute(
+        "SELECT COUNT(*) AS n FROM annotations WHERE deleted_at=0"
+    ).fetchone()["n"])
+    trashed = int(c.execute(
+        "SELECT COUNT(*) AS n FROM annotations WHERE deleted_at!=0"
+    ).fetchone()["n"])
+    ts = [r["created_at"] for r in c.execute(
+        "SELECT created_at FROM annotations WHERE deleted_at=0"
+    ).fetchall()]
+    if not ts:
+        return {"active": active, "trashed": trashed, "weeks": 0, "longest_quiet_weeks": 0}
+    idx = sorted({_week_index(t) for t in ts})
+    gaps = [b - a - 1 for a, b in zip(idx, idx[1:])]
+    # 最后一段空档算到「本周」为止：长期没批注应该如实反映出来
+    gaps.append(_week_index(time.time()) - idx[-1])
+    return {
+        "active": active,
+        "trashed": trashed,
+        "weeks": len(idx),
+        "longest_quiet_weeks": max(max(gaps), 0),
+    }
 
 
 # ---------------- 阅读时长（会话）----------------
@@ -951,7 +1072,14 @@ ORPHAN_TABLES = ("progress", "annotations", "collection_items", "reading_session
 
 
 def book_id_refs() -> dict:
-    """各表引用的 book_id 集合。表名取自固定常量，不拼接外部输入。"""
+    """各表引用的 book_id 集合。表名取自固定常量，不拼接外部输入。
+
+    ⚠️ 这里**刻意不看** ``annotations.deleted_at``：孤儿的判据是「book_id 已不在书库」，
+    与批注是否进了垃圾桶无关 —— 书都没了，它的批注（活跃的、垃圾桶的）本就都该可清理。
+    反过来，书**仍然存在**时它的垃圾桶批注不会被清（因为书在，book_id 不算孤儿）。
+    所以别顺手给这条 SQL 加 ``deleted_at=0``：那会让「只剩垃圾桶批注的已删书」
+    永远清不掉，垃圾桶里堆着看不见的垃圾。
+    """
     out: dict = {}
     c = _connect()
     for t in ORPHAN_TABLES:
@@ -995,6 +1123,12 @@ REMAP_TABLES = (
     "ratings", "reading_status", "koreader_docs",
 )
 
+#: 「新 id 是否已有数据」这个探测要**按表**加过滤：annotations 第 27 期起有软删除，
+#: 新 id 上只躺着**垃圾桶**条目时不该算作「已有数据」—— 否则整张表被跳过搬迁，
+#: 旧 id 的**活跃**批注会被搁浅成孤儿（静默丢失，不报错）。
+#: ⚠️ 搬迁本身（UPDATE）**不加**这个谓词：活跃与垃圾桶条目都属于同一本书，都该跟着走。
+REMAP_PROBE_FILTER = {"annotations": " AND deleted_at=0"}
+
 
 def remap_book_id(old_id, new_id) -> dict:
     """把关联数据从 ``old_id`` 搬到 ``new_id``，返回 ``{表名: 搬迁行数}``。
@@ -1012,7 +1146,8 @@ def remap_book_id(old_id, new_id) -> dict:
         for t in REMAP_TABLES:
             try:
                 exists = c.execute(
-                    "SELECT 1 FROM %s WHERE book_id=? LIMIT 1" % t, (new,)
+                    "SELECT 1 FROM %s WHERE book_id=?%s LIMIT 1"
+                    % (t, REMAP_PROBE_FILTER.get(t, "")), (new,)
                 ).fetchone()
                 if exists:
                     moved[t] = 0
