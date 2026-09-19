@@ -252,3 +252,42 @@ def test_外部OPDS订阅接口已删除(client, auth_headers):
     assert client.get("/api/opds/sources", headers=auth_headers).status_code == 404
     assert client.post("/api/opds/sources", headers=auth_headers,
                        json={"name": "x", "url": "https://example.com"}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# 反向查询（第 17 期封口）
+# ---------------------------------------------------------------------------
+
+def test_系列反向查收藏夹(client, auth_headers, enable_komga, two_book_series, default_root):
+    sid, _ids = two_book_series
+    _epub(default_root, "单独的.epub", title="单独的")      # 造第二个系列做对照
+    library.invalidate()
+    others = [s for s in client.get("/api/v1/series", auth=enable_komga).json()["content"]
+              if s["id"] != sid]
+    assert others, "应当有第二个系列"
+
+    cid = client.post("/api/v1/collections", auth=enable_komga,
+                      json={"name": "科幻", "seriesIds": [sid]}).json()["id"]
+
+    inside = client.get(f"/api/v1/series/{sid}/collections", auth=enable_komga)
+    assert inside.status_code == 200, inside.text
+    body = inside.json()
+    assert body["totalElements"] == 1
+    assert body["content"][0]["id"] == str(cid)
+
+    # 不在任何收藏夹里的系列 → 空分页（不是 404）
+    outside = client.get(f"/api/v1/series/{others[0]['id']}/collections", auth=enable_komga)
+    assert outside.status_code == 200 and outside.json()["totalElements"] == 0
+
+    # 系列不存在 → 404（不静默给空）
+    assert client.get("/api/v1/series/没有这个系列/collections",
+                      auth=enable_komga).status_code == 404
+
+
+def test_书籍反向查阅读清单恒空(client, auth_headers, enable_komga, two_book_series):
+    _sid, ids = two_book_series
+    r = client.get(f"/api/v1/books/{ids[0]}/readlists", auth=enable_komga)
+    assert r.status_code == 200
+    assert r.json()["totalElements"] == 0          # 本项目没有阅读清单概念，诚实为空
+    assert client.get("/api/v1/books/没有这本书/readlists",
+                      auth=enable_komga).status_code == 404
