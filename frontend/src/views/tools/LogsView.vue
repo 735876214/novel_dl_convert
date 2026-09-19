@@ -1,15 +1,31 @@
 <script setup lang="ts">
-import { onActivated, ref } from 'vue'
+import { onActivated, ref, watch } from 'vue'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ScrapePanel from '@/components/tools/ScrapePanel.vue'
 import { api, type LogItem } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
-/** 转换日志：列表 + 关键词/状态过滤 + 下载 + 清空。接真实 /api/logs */
+/**
+ * 转换日志页，两个子标签（第 18 期）：
+ * - **日志**：转换 / 添加 / 刮削的流水（列表 + 过滤 + 下载 + 清空），接 /api/logs；
+ * - **刮削**：刮削出版的进展、结果与失败手动整理（接 /api/scrape/*）。
+ *
+ * 两件事放在同一页是因为它们回答的是同一个问题：「我刚丢进去的书，现在怎么样了？」
+ * —— 流水说「做过什么」，刮削面板说「成品对不对、要不要我插手」。
+ */
 const ui = useUiStore()
+
+type Tab = 'log' | 'scrape'
+const tab = ref<Tab>('log')
+
+const TABS: Array<{ value: Tab; label: string }> = [
+  { value: 'log', label: '日志' },
+  { value: 'scrape', label: '刮削' },
+]
 
 const items = ref<LogItem[]>([])
 const total = ref(0)
@@ -36,7 +52,14 @@ function load(): void {
 
 // 工具页子页在 KeepAlive 下不会重新挂载，所以刷新挂在 onActivated；
 // 它在「首次挂载」时也会触发，因此不需要再挂 onMounted（否则会重复请求）。
-onActivated(load)
+// 只在「日志」标签下请求 —— 刮削面板有自己的轮询与拉取，别替它白跑一遍。
+onActivated(() => {
+  if (tab.value === 'log') load()
+})
+
+watch(tab, (v) => {
+  if (v === 'log') load()
+})
 
 function clearAll(): void {
   api
@@ -68,6 +91,27 @@ function downloadLogs(): void {
 
 <template>
   <div>
+    <!-- 子标签：日志（做过什么） / 刮削（成品对不对、要不要插手） -->
+    <div class="mb-4 flex gap-4 border-b border-border" role="tablist">
+      <button
+        v-for="t in TABS"
+        :key="t.value"
+        type="button"
+        role="tab"
+        :aria-selected="tab === t.value"
+        class="-mb-px cursor-pointer border-b-2 px-0.5 pb-2 text-[13px] font-medium transition-colors"
+        :class="
+          tab === t.value
+            ? 'border-primary text-foreground'
+            : 'border-transparent text-muted-foreground hover:text-foreground'
+        "
+        @click="tab = t.value"
+      >
+        {{ t.label }}
+      </button>
+    </div>
+
+    <template v-if="tab === 'log'">
     <div class="mb-4 flex flex-wrap items-center gap-2">
       <input
         v-model="keyword"
@@ -148,5 +192,9 @@ function downloadLogs(): void {
     </Card>
 
     <EmptyState v-else icon="note" title="没有日志记录" desc="转换、下载与监听动作都会写进这里。" />
+    </template>
+
+    <!-- 刮削出版：进展 / 结果 / 待确认与失败的人工整理（第 18 期） -->
+    <ScrapePanel v-else />
   </div>
 </template>

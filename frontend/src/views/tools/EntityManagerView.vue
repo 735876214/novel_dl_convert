@@ -16,8 +16,9 @@ import { useUiStore } from '@/stores/ui'
 /**
  * 实体管理：按作者 / 系列聚合成品书目，可重命名、可合并。
  *
- * 数据源是扫描 output/ 的成品文件（后端没有图书库实体）。改名实质是批量重命名文件，
- * 同时会同步改写 EPUB 内部的 dc:creator / calibre:series 元数据，让工具页聚合能识别新名称。
+ * 数据源是扫描各库的书目（后端没有图书库实体）。改名实质是批量重命名文件，
+ * 同时把新名字写成**服务端元数据覆盖**（author / series）让列表与聚合立刻识别新名称 ——
+ * **不改写 EPUB 文件内容**（第 18 期口径）。
  * 任何改动都走「先预览、再应用」——预览由服务端算，应用只回传预览过的条目。
  */
 const ui = useUiStore()
@@ -242,8 +243,8 @@ function applyPlan(): void {
             </div>
 
             <p v-else class="text-[11.5px] leading-relaxed text-muted-foreground">
-              没有命中任何文件。改名会同步更新文件与 EPUB 内部元数据（作者 / 系列），
-              但该名称在当前成品里没有出现，所以改不到。
+              没有命中任何文件。改名会移动文件并把新名字记为服务端元数据（作者 / 系列），
+              但该名称在当前库里没有出现，所以改不到。
             </p>
 
             <div v-if="plan.items.length" class="mt-2.5 flex items-center gap-2">

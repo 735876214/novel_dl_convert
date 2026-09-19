@@ -3,7 +3,8 @@
  * 重排系列序号（第 12 期 C3）。
  *
  * 关键约束（决定了这个对话框为什么要写成「先预览、再应用」）：
- *  · 只改 EPUB 内部的 `calibre:series_index`，**不动文件名** ——
+ *  · 序号只写**服务端**（`meta_override.series_index`），
+ *    **不动文件名、也不改写 EPUB 文件** ——
  *    文件名是 book_id 的来源，文件名不动则 book_id 不变，
  *    阅读进度 / 批注 / 评分 / 收藏**不会断链**；
  *  · 逐册可调：默认按当前序号升序编号 1..N，缺序号的排在最后（不假装它是第一册），
@@ -83,8 +84,9 @@ async function apply(): Promise<void> {
     <div class="w-[min(46rem,94vw)] max-h-[88vh] overflow-y-auto rounded-lg border border-border bg-card p-5 shadow-2xl">
       <h3 class="font-serif text-[17px] font-semibold text-foreground">重排系列序号</h3>
       <p class="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-        只改书本文件内部的系列序号（<code class="font-mono">calibre:series_index</code>），
-        <strong>不改文件名</strong> —— 因此阅读进度、批注、评分与收藏都不会断链，可以随时再排。
+        序号存进应用数据库（<strong>不改写 EPUB 文件、也不改文件名</strong>）——
+        因此阅读进度、批注、评分与收藏都不会断链，可以随时再排或还原。
+        清空某一册的数字 = 这一册没有序号（同样只存服务端；用别的软件直读文件时看不到）。
       </p>
 
       <div v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">

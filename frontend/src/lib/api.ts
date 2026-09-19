@@ -668,7 +668,7 @@ export interface SeriesMetaState {
   tags: SeriesMetaFieldState
 }
 
-/** 重排预览的一条：**只改 OPF 里的序号、不动文件名**（book_id 不变 → 进度不断链） */
+/** 重排预览的一条：**只写服务端序号、不动文件名也不改文件**（book_id 不变 → 进度不断链） */
 export interface SeriesRenumberItem {
   name: string
   book_id: string
@@ -1186,6 +1186,22 @@ export interface LibraryEntity {
   /** 归类规则（JSON 字符串：`{"keywords":[...],"subdirs":[...]}`） */
   rules: string
   sort_order: number
+  /**
+   * 刮削出版**成品目录**（第 18 期）：刮削后的硬链接副本落点，供外部阅读器
+   * （Komga 等）直接挂载读取。空串 = 该库不产出副本。
+   *
+   * 副本只读源、只写自己 —— 原书文件永不改写。该目录不得位于任何库根 /
+   * 扫描源目录内部（否则会被扫回来变成重复书），后端在建/改库时会拦。
+   */
+  publish_path: string
+  publish_exists: boolean
+  publish_writable: boolean
+  /** 逐库扫描调度（第 17 期 T2）：1 = 监听该库来源子目录 */
+  watch: number
+  /** 轮询间隔秒；0 = 继承全局 */
+  scan_interval: number
+  /** 定时表达式（空 = 不启用）；坏表达式会退化为间隔扫描 */
+  scan_cron: string
   book_count: number
   exists: boolean
   writable: boolean
@@ -1233,12 +1249,102 @@ export interface LibrarySettingsResult {
   schema: LibrarySettingItem[]
 }
 
-/** 能力清单（`/api/features`）。后端是「库类型 → 能力」的真值源，前端只声明「哪项菜单需要哪个能力」。 */
-export interface FeaturesResult {
+/** 能力清单（`/api/features`）。后端是「库类型 → 能力」的真值源，前端只声明「哪项菜单需要哪个能力」。 */export interface FeaturesResult {
   library_id: string
   library_type: string
   features: string[]
   matrix: { types: Record<string, string[]>; all: string[]; labels: Record<string, string> }
+}
+
+// ---------- 刮削出版（第 18 期） ----------
+
+/**
+ * 逐书刮削状态（与后端 `core/db.SCRAPE_STATUSES` 一一对应）：
+ * - `pending` 待刮削 / `running` 进行中 / `ok` 已出版 / `failed` 失败
+ * - `skipped` 跳过（库未配成品目录、目录型有声书等「不是错误但没出版」）
+ * - `removed` 副本已被删除，**待确认**（是否连原文件一起删）
+ * - `kept` 已确认保留 / `orphan` 原文件已不在、副本成孤本
+ * - `source_removed` 原文件已按确认移入回收站（副本保留）
+ *
+ * ⚠️ 状态机**只许降级**：回到 `ok` 只能由用户在页面上显式点「重新生成副本」。
+ */
+export type ScrapeStatus =
+  | 'pending'
+  | 'running'
+  | 'ok'
+  | 'failed'
+  | 'skipped'
+  | 'removed'
+  | 'kept'
+  | 'orphan'
+  | 'source_removed'
+
+/** 刮削页允许的显式处置动作 */
+export type ScrapeAction =
+  | 'delete_source'
+  | 'keep_source'
+  | 'rebuild'
+  | 'keep_copy'
+  | 'recycle_copy'
+
+export interface ScrapeItem {
+  book_id: string
+  library_id: string
+  library_name: string
+  /** 源文件在库内的相对路径（书名，可能带一层系列目录） */
+  name: string
+  title: string
+  author: string
+  status: ScrapeStatus
+  /** 后端给的中文文案（真值源在后端，免得两处各写一套） */
+  status_label: string
+  /** 原文件绝对路径 */
+  source_path: string
+  /** 副本绝对路径（空 = 还没出版） */
+  copy_path: string
+  /** 副本相对成品目录的路径 */
+  link_rel: string
+  /** `hardlink` = 硬链接；`copy` = 回退复制；空 = 未产出 */
+  link_mode: '' | 'hardlink' | 'copy'
+  /** 是否仍与源**共享数据块**（内嵌过元数据 = false，占额外空间） */
+  shared: boolean
+  /** 已写进副本的字段 */
+  embedded: string[]
+  has_cover: boolean
+  error: string
+  attempts: number
+  removed_at: number
+  removed_path: string
+  confirmed_at: number
+  updated_at: number
+  /** 当前状态下允许的动作（后端二次校验） */
+  actions: ScrapeAction[]
+  /** 是否处于「降级待确认」（removed / orphan）—— 界面需高亮提醒 */
+  degraded: boolean
+}
+
+export interface ScrapeState {
+  items: ScrapeItem[]
+  count: number
+  /** 状态 → 条数 */
+  counts: Record<string, number>
+  total: number
+  /** 待刮削 + 进行中 */
+  pending: number
+  /** 待确认 + 孤本 */
+  needs_confirm: number
+  /**
+   * worker 运行态。
+   * ⚠️ `running` = 线程活着（起来后常驻，**不代表在干活**）；判断「正在刮削」与
+   * 「要不要开轮询」一律用 `busy`。
+   */
+  worker: { running: boolean; current: string; busy: boolean }
+  labels: Record<string, string>
+  actions: Record<string, string>
+  /** 该库（或全局）是否开了自动刮削 */
+  auto_enabled: boolean
+  /** 当前筛选范围内有没有配了成品目录的库（空状态据此给出可执行的下一步） */
+  publish_configured: boolean
 }
 
 /** 迁移预览里的一条（`/api/library-migrations/preview`） */
@@ -1578,7 +1684,7 @@ export const api = {
     request<BookMetadata>(`/api/books/${encodeURIComponent(bid)}/metadata`),
 
   /**
-   * 改写单本书的 EPUB 内嵌元数据。
+   * 编辑单本书的元数据：**只写服务端覆盖，不改写 EPUB 文件**（第 18 期口径）。
    * 返回的 `changed` 只含**实际发生变化**的字段（同值重写不会出现在里面）。
    */
   setBookMetadata: (bid: string, fields: Partial<BookMetadataFields>) =>
@@ -2070,6 +2176,8 @@ export const api = {
       ok: boolean
       series: string
       renumbered: number
+      /** 被清空序号的那些（`new_index` 传空串）—— 服务端存「显式无值」 */
+      cleared?: Array<{ name: string; book_id: string; old_index: string; new_index: string }>
       skipped: Array<{ name: string; error: string }>
       mismatched: string[]
     }>(`/api/series/${encodeURIComponent(name)}/renumber/apply`, {
@@ -2183,6 +2291,12 @@ export const api = {
     source_subdir?: string
     rules?: unknown
     sort_order?: number
+    /** 刮削出版成品目录（可选；空 = 该库不产出硬链接副本） */
+    publish_path?: string
+    /** 逐库扫描调度 */
+    watch?: number
+    scan_interval?: number
+    scan_cron?: string
   }) =>
     request<{ ok: boolean; library: LibraryEntity }>('/api/libraries', {
       method: 'POST',
@@ -2201,6 +2315,11 @@ export const api = {
       source_subdir: string
       rules: unknown
       sort_order: number
+      /** 传空串 = 关闭该库的副本产出（不动已有副本） */
+      publish_path: string
+      watch: number
+      scan_interval: number
+      scan_cron: string
     }>,
   ) =>
     request<{ ok: boolean; library: LibraryEntity }>(`/api/libraries/${encodeURIComponent(id)}`, {
@@ -2268,6 +2387,63 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }),
     }),
+
+  // ---------- 刮削出版（第 18 期）----------
+  /** 刮削台账：概览计数 + 条目 + worker 运行态（页面轮询此端点）。 */
+  scrapeState: (query: { library_id?: string; status?: string; q?: string } = {}) => {
+    const p = new URLSearchParams()
+    if (query.library_id) p.set('library_id', query.library_id)
+    if (query.status) p.set('status', query.status)
+    if (query.q) p.set('q', query.q)
+    const qs = p.toString()
+    return request<ScrapeState>(`/api/scrape/state${qs ? `?${qs}` : ''}`)
+  },
+
+  /**
+   * 开始 / 重新刮削（**异步**：入队后由后端单线程 worker 串行跑，进度看 /state）。
+   * `force` = 忽略「已是最新」强制重抓；`only_failed` = 只重排当前失败的条目。
+   */
+  scrapeRun: (payload: { library_id?: string; force?: boolean; only_failed?: boolean } = {}) =>
+    request<{ ok: boolean; queued: number; total: number; started: boolean }>(
+      '/api/scrape/run',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      },
+    ),
+
+  /**
+   * 校验副本是否还在。缺失 → 标「待确认」，源不在 → 标「孤本」。
+   * ⚠️ 只标记不处置：不删源文件、不自动重建。
+   */
+  scrapeVerify: (libraryId = '') =>
+    request<{
+      ok: boolean
+      checked: number
+      removed: Array<{ book_id: string; name: string; source: string; removed_path: string }>
+      orphan: Array<{ book_id: string; name: string; copy: string }>
+    }>(`/api/scrape/verify${libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : ''}`, {
+      method: 'POST',
+    }),
+
+  /**
+   * 对某本书执行**显式**处置。这是唯一能把「待确认 / 孤本」带回已出版的入口。
+   * - `delete_source` 原文件移入回收站（绝不真删）
+   * - `keep_source`   保留原文件，不再提醒
+   * - `rebuild`       重新生成副本（按当前元数据重写）
+   * - `keep_copy`     保留副本（原文件已不在，以副本为准）
+   * - `recycle_copy`  副本移入回收站并清台账
+   */
+  scrapeResolve: (bid: string, action: ScrapeAction) =>
+    request<{ ok: boolean; action: string; recycled?: string; note?: string }>(
+      `/api/scrape/${encodeURIComponent(bid)}/resolve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      },
+    ),
 
   /** 当前库（或「全部书库」）的能力清单。 */
   features: (libraryId = '') =>

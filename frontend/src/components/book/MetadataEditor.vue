@@ -10,9 +10,13 @@ import { useUiStore } from '@/stores/ui'
 /**
  * 单书元数据编辑（详情页第 5 个标签）。
  *
- * 元数据分层原则（第 8 期）：生效值 = 用户覆盖(override) > 在线抓取(online) > OPF 原值(opf)。
- *  - 编辑保存：与 OPF 原值不同的字段记入用户覆盖，再抓取不冲掉；
- *  - 已覆盖的字段显示「已本地修改」徽标 + 「恢复在线」按钮（撤销覆盖并写回在线值）。
+ * 元数据分层原则（第 8 期）：生效值 = 用户覆盖(override) > 在线抓取(online) > 文件原值(opf)。
+ *  - 编辑保存：与生效原值不同的字段记入**服务端覆盖**，再抓取不冲掉；
+ *  - 已覆盖的字段显示「已本地修改」徽标 + 「恢复在线」按钮（撤销覆盖，回落在线值）。
+ *
+ * ⚠️ 第 18 期起保存**不改写 EPUB 文件**（只有服务端 DB 变），所以界面文案说的是
+ * 「存到应用数据库、所有界面一致」，而不是「写进文件」——别再写成写文件，
+ * 否则用户会以为把书改脏了。
  */
 const props = defineProps<{ bookId: string }>()
 const emit = defineEmits<{ saved: [] }>()
@@ -181,8 +185,10 @@ const INPUT_CLS =
             <span v-if="dirty" class="rounded bg-warning/14 px-1.5 py-0.5 text-[10.5px] text-warning">有未保存的改动</span>
           </div>
           <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
-            直接写入 EPUB 内嵌的 OPF，改完立即被书库扫描读到。<strong>不会改文件名</strong>。
-            在线抓取默认优先覆盖本地；你手动改过的字段会被保护（标「已本地修改」），再抓取也不冲掉，可随时「恢复在线」。
+            改动存进应用数据库，书库列表、详情、搜索、OPDS 立即一致。
+            <strong>不会改文件名，也不会改写 EPUB 文件本身</strong>
+            —— 用其它软件直读文件看到的是原始元数据；在线抓取默认优先覆盖本地，
+            你手动改过的字段会被保护（标「已本地修改」），再抓取也不冲掉，可随时「恢复在线」。
           </p>
         </div>
 

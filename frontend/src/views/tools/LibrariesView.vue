@@ -169,6 +169,23 @@ async function toggleAutoMigrate(): Promise<void> {
 
 const dialogOpen = ref(false)
 const editingId = ref('')
+/**
+ * 新建 / 编辑书库的三页签（对齐上游 BookOrbit 的 LIBRARY / CONTENTS / AUTOMATION / LAST SCAN）。
+ *
+ * 分页签不是为了好看：这三块回答的是**三个不同时刻的问题** ——
+ *   内容：这库收什么、放哪（建库时就要定）；
+ *   自动化：什么时候扫、要不要刮削（建完再调也行）；
+ *   上次扫描：现在健康吗（只有编辑态才有内容）。
+ * 一页平铺会像「一次性填 15 个框」，用户根本不知道该看哪。
+ */
+type DlgTab = 'contents' | 'automation' | 'last_scan'
+const dlgTab = ref<DlgTab>('contents')
+const DLG_TABS: Array<{ value: DlgTab; label: string }> = [
+  { value: 'contents', label: '内容' },
+  { value: 'automation', label: '自动化' },
+  { value: 'last_scan', label: '上次扫描' },
+]
+
 const form = ref({
   name: '',
   type: 'ebook' as LibraryType,
@@ -176,14 +193,119 @@ const form = ref({
   root_path: '',
   source_subdir: '',
   rules: '',
+  /** 刮削出版成品目录（第 18 期）：留空 = 该库不产出硬链接副本 */
+  publish_path: '',
+  // ---- 自动化（逐库扫描调度，第 17 期 T2 的库实体列）----
+  watch: true,
+  scan_interval: 0,
+  scan_cron: '',
+  /** 刮削出版开关（**每库覆盖项**，不是库实体列 → 建库后单独 PUT） */
+  scrape_enabled: true,
 })
+
+/** 编辑态：当前正在改的库实体（「上次扫描」页签要读它的历史） */
+const editingLib = computed(() => libs.value.find((l) => l.id === editingId.value) || null)
+
+/** 全局的「刮削出版」开关（用于判断该库是继承还是覆写） */
+const globalScrape = computed(
+  () => ((cfg.value as unknown as { scrape?: { enabled?: boolean } })?.scrape?.enabled) !== false,
+)
+
+/** 列表过滤 + 排序（对齐上游工具条的 Filter / Sort） */
+const filter = ref('')
+const sortBy = ref<'order' | 'name' | 'books' | 'scan'>('order')
+const SORTS = [
+  { value: 'order', label: '默认顺序' },
+  { value: 'name', label: '名称' },
+  { value: 'books', label: '书籍数' },
+  { value: 'scan', label: '上次扫描' },
+]
+
+const visibleLibs = computed(() => {
+  const kw = filter.value.trim().toLowerCase()
+  const list = libs.value.filter(
+    (l) => !kw || `${l.name} ${l.root_path} ${l.source_subdir}`.toLowerCase().includes(kw),
+  )
+  const by = sortBy.value
+  if (by === 'name') return [...list].sort((a, b) => a.name.localeCompare(b.name, 'zh'))
+  if (by === 'books') return [...list].sort((a, b) => b.book_count - a.book_count)
+  if (by === 'scan') return [...list].sort((a, b) => b.last_scan_at - a.last_scan_at)
+  return list
+})
+
+/** 时间戳 → 「3 天前」这类相对说法（上游 LAST SCAN 就是这么显示的） */
+function ago(ts: number): string {
+  if (!ts) return '从未扫描'
+  const diff = Date.now() / 1000 - ts
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
+  return `${Math.floor(diff / 86400)} 天前`
+}
+
+/** 扫描全部库（上游工具条的 Scan All）：逐库串行，单个失败不打断 */
+async function scanAll(): Promise<void> {
+  if (!libs.value.length) return
+  busy.value = 'scan-all'
+  let ok = 0
+  try {
+    for (const l of libs.value) {
+      try {
+        await api.scanLibrary(l.id)
+        ok += 1
+      } catch {
+        /* 单库失败继续扫其余，最后统一报数 */
+      }
+    }
+    ui.toast(`已扫描 ${ok} / ${libs.value.length} 个书库，扫描过的书会自动进刮削队列`)
+    await reload()
+  } finally {
+    busy.value = ''
+  }
+}
 
 function defaultRoot(mode: LibraryMode, type: LibraryType): string {
   return mode === 'inplace' ? `${sourceDir.value}/${type}s` : `${sourceDir.value}/../data/libraries/${type}`
 }
 
+/** 成品目录建议位置：与库根平级（**不能**放在库根或扫描源目录里面，否则副本会被扫回来） */
+function defaultPublish(type: LibraryType): string {
+  return `${sourceDir.value}/../output/${type}-sorted`
+}
+
+/**
+ * 成品目录的**本地预检**（后端仍会再校验一次，这里只为即时反馈）。
+ * 与后端 `_publish_path_allowed` 同口径：不得与任何库根 / 扫描源目录相交 ——
+ * 相交意味着副本会被扫描回来变成重复书，改名 / 回收也会误伤副本。
+ */
+const publishIssue = computed(() => {
+  const raw = form.value.publish_path.trim()
+  if (!raw) return ''
+  if (!raw.startsWith('/')) return '请输入绝对路径'
+  const norm = (s: string) => s.replace(/\/+$/, '')
+  const p = norm(raw)
+  for (const l of libs.value) {
+    const guards: Array<{ label: string; path: string }> = []
+    if (l.root_path) guards.push({ label: `书库「${l.name}」的库根`, path: l.root_path })
+    if (l.source_subdir) {
+      guards.push({
+        label: `书库「${l.name}」的扫描源目录`,
+        path: `${sourceDir.value}/${l.source_subdir}`,
+      })
+    }
+    for (const g of guards) {
+      const gp = norm(g.path)
+      if (p === gp || p.startsWith(`${gp}/`) || gp.startsWith(`${p}/`)) {
+        return `与${g.label}重叠（${g.path}）：副本会被扫描回来变成重复书`
+      }
+    }
+  }
+  return ''
+})
+
 function openCreate(): void {
   editingId.value = ''
+  dlgTab.value = 'contents'
   form.value = {
     name: '',
     type: 'ebook',
@@ -191,12 +313,18 @@ function openCreate(): void {
     root_path: '',
     source_subdir: '',
     rules: '',
+    publish_path: '',
+    watch: true,
+    scan_interval: 0,
+    scan_cron: '',
+    scrape_enabled: true,
   }
   dialogOpen.value = true
 }
 
-function openEdit(l: LibraryEntity): void {
+async function openEdit(l: LibraryEntity): Promise<void> {
   editingId.value = l.id
+  dlgTab.value = 'contents'
   form.value = {
     name: l.name,
     type: l.type,
@@ -204,8 +332,20 @@ function openEdit(l: LibraryEntity): void {
     root_path: l.root_path,
     source_subdir: l.source_subdir,
     rules: l.rules,
+    publish_path: l.publish_path ?? '',
+    watch: l.watch !== 0,
+    scan_interval: l.scan_interval ?? 0,
+    scan_cron: l.scan_cron ?? '',
+    scrape_enabled: true,
   }
   dialogOpen.value = true
+  // 刮削出版开关是**每库覆盖项**（不是库实体列），单独取一次生效值
+  try {
+    const s = await api.librarySettings(l.id)
+    form.value.scrape_enabled = s.values['scrape.enabled'] !== false
+  } catch {
+    /* 取不到就按默认「开」显示；保存时只在用户真的改过才写覆盖 */
+  }
 }
 
 async function submitDialog(): Promise<void> {
@@ -218,14 +358,27 @@ async function submitDialog(): Promise<void> {
       root_path: form.value.root_path.trim() || defaultRoot(form.value.mode, form.value.type),
       source_subdir: form.value.source_subdir.trim(),
       rules: form.value.rules,
+      publish_path: form.value.publish_path.trim(),
+      watch: form.value.watch ? 1 : 0,
+      scan_interval: Number(form.value.scan_interval) || 0,
+      scan_cron: form.value.scan_cron.trim(),
     }
-    if (editingId.value) {
-      await api.updateLibrary(editingId.value, payload)
-      ui.toast('书库已更新')
+    let lid = editingId.value
+    if (lid) {
+      await api.updateLibrary(lid, payload)
     } else {
-      await api.createLibrary(payload)
-      ui.toast('书库已创建')
+      const res = await api.createLibrary(payload)
+      lid = res.library.id
     }
+    // 「刮削出版」是**每库覆盖项**，只能建库之后再写：
+    // 与全局一致 → 恢复继承（不留覆盖，以后全局改了它跟着变）；
+    // 与全局不同 → 写死覆盖（这正是「这个库单独关掉」的表达）。
+    if (form.value.scrape_enabled !== globalScrape.value) {
+      await api.librarySettingsUpdate(lid, { 'scrape.enabled': form.value.scrape_enabled })
+    } else {
+      await api.librarySettingsReset(lid, ['scrape.enabled'])
+    }
+    ui.toast(editingId.value ? '书库已更新' : '书库已创建')
     dialogOpen.value = false
     await reload()
   } catch (e) {
@@ -357,11 +510,31 @@ async function remove(l: LibraryEntity): Promise<void> {
 
     <!-- 2) 书库列表 -->
     <Card padding="none">
+      <!-- 工具条：对齐上游（Scan All / Add Library / Filter / Sort） -->
       <div class="border-b border-border px-4 py-3">
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-[13px] font-medium text-foreground">书库</span>
-          <Badge>{{ libs.length }}</Badge>
-          <Button size="sm" class="ml-auto" @click="openCreate">新建书库</Button>
+          <Badge>{{ visibleLibs.length }} / {{ libs.length }}</Badge>
+          <div class="ml-auto flex flex-wrap items-center gap-2">
+            <input
+              v-model="filter"
+              type="text"
+              placeholder="过滤书库…"
+              aria-label="过滤书库"
+              class="h-8 w-40 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+            />
+            <select
+              v-model="sortBy"
+              aria-label="排序方式"
+              class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+            >
+              <option v-for="s in SORTS" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </select>
+            <Button size="sm" :disabled="!!busy" @click="scanAll">
+              {{ busy === 'scan-all' ? '扫描中…' : '全部扫描' }}
+            </Button>
+            <Button size="sm" variant="primary" @click="openCreate">新建书库</Button>
+          </div>
         </div>
         <div class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
           来源父目录：<code>{{ sourceDir || '—' }}</code>（「就地引用」直接引用它下面的子目录，不搬文件）
@@ -370,45 +543,99 @@ async function remove(l: LibraryEntity): Promise<void> {
 
       <div v-if="loading && !libs.length" class="px-4 py-6 text-[12.5px] text-muted-foreground">加载中…</div>
       <div v-else-if="!libs.length" class="px-4 py-6 text-[12.5px] text-muted-foreground">还没有书库</div>
-
       <div
-        v-for="l in libs"
-        :key="l.id"
-        class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3 last:border-b-0"
+        v-else-if="!visibleLibs.length"
+        class="px-4 py-6 text-[12.5px] text-muted-foreground"
       >
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-[12.5px] font-medium text-foreground">{{ l.name }}</span>
-            <Badge tone="accent">{{ l.type_label }}</Badge>
-            <Badge>{{ l.mode_label }}</Badge>
-            <Badge v-if="l.is_default">默认</Badge>
-            <Badge v-if="!l.exists">根目录不存在</Badge>
-            <Badge v-else-if="!l.writable">只读</Badge>
-            <span class="text-[11.5px] text-muted-foreground">{{ l.book_count }} 本</span>
-          </div>
-          <div class="mt-0.5 truncate text-[11.5px] text-muted-foreground" :title="l.root_path">
-            {{ l.root_path }}
-            <span v-if="l.source_subdir"> · 来源子目录 {{ l.source_subdir }}</span>
-            <span v-if="l.last_scan_note"> · {{ l.last_scan_note }}</span>
+        没有匹配「{{ filter }}」的书库。
+      </div>
+
+      <!--
+        每库一块，四栏对齐上游 BookOrbit 的 LIBRARY / CONTENTS / AUTOMATION / LAST SCAN：
+        这样「这个库怎么建的」「它现在健康吗」不用点开就能看全。
+      -->
+      <div
+        v-for="l in visibleLibs"
+        :key="l.id"
+        class="border-b border-border px-4 py-3 last:border-b-0"
+      >
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-[12.5px] font-medium text-foreground">{{ l.name }}</span>
+          <Badge v-if="l.is_default">默认</Badge>
+          <Badge v-if="l.publish_path" tone="ok">刮削出版</Badge>
+          <div class="ml-auto flex shrink-0 gap-1">
+            <Button size="sm" variant="ghost" @click="toggleSettings(l.id)">
+              {{ settingsFor === l.id ? '收起设置' : '设置' }}
+            </Button>
+            <Button size="sm" variant="ghost" :disabled="!!busy" @click="scan(l)">
+              {{ busy === `scan:${l.id}` ? '扫描中…' : '扫描' }}
+            </Button>
+            <Button size="sm" variant="ghost" @click="openEdit(l)">编辑</Button>
+            <Button
+              v-if="!l.is_default"
+              size="sm"
+              variant="ghost"
+              :disabled="!!busy"
+              @click="remove(l)"
+            >
+              移除
+            </Button>
           </div>
         </div>
-        <div class="flex shrink-0 gap-1">
-          <Button size="sm" variant="ghost" @click="toggleSettings(l.id)">
-            {{ settingsFor === l.id ? '收起设置' : '设置' }}
-          </Button>
-          <Button size="sm" variant="ghost" :disabled="!!busy" @click="scan(l)">
-            {{ busy === `scan:${l.id}` ? '扫描中…' : '扫描' }}
-          </Button>
-          <Button size="sm" variant="ghost" @click="openEdit(l)">编辑</Button>
-          <Button
-            v-if="!l.is_default"
-            size="sm"
-            variant="ghost"
-            :disabled="!!busy"
-            @click="remove(l)"
-          >
-            移除
-          </Button>
+
+        <div class="mt-2 grid gap-x-4 gap-y-2 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <div class="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground">书库</div>
+            <div class="mt-1 flex flex-wrap items-center gap-1">
+              <Badge tone="accent">{{ l.type_label }}</Badge>
+              <Badge>{{ l.mode_label }}</Badge>
+              <Badge v-if="!l.exists">根目录不存在</Badge>
+              <Badge v-else-if="!l.writable">只读</Badge>
+            </div>
+          </div>
+
+          <div class="min-w-0">
+            <div class="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground">内容</div>
+            <div class="mt-1 text-[11.5px] text-foreground">{{ l.book_count }} 本</div>
+            <div class="truncate text-[11px] text-muted-foreground" :title="l.root_path">
+              {{ l.root_path }}
+            </div>
+            <div v-if="l.source_subdir" class="truncate text-[11px] text-muted-foreground">
+              来源子目录 {{ l.source_subdir }}
+            </div>
+            <div
+              v-if="l.publish_path"
+              class="truncate text-[11px] text-muted-foreground"
+              :title="l.publish_path"
+            >
+              成品目录 {{ l.publish_path }}
+              <span v-if="!l.publish_exists" class="text-destructive">（尚不存在）</span>
+              <span v-else-if="!l.publish_writable" class="text-destructive">（不可写）</span>
+            </div>
+          </div>
+
+          <div>
+            <div class="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground">自动化</div>
+            <div class="mt-1 text-[11.5px] text-muted-foreground">
+              {{ l.watch !== 0 ? '监听中' : '未监听' }} ·
+              {{ l.scan_cron ? `定时 ${l.scan_cron}` : l.scan_interval ? `每 ${l.scan_interval}s` : '按全局间隔' }}
+            </div>
+            <div class="text-[11px] text-muted-foreground">
+              刮削出版：{{ l.publish_path ? '已配成品目录' : '未配成品目录' }}
+            </div>
+          </div>
+
+          <div class="min-w-0">
+            <div class="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground">上次扫描</div>
+            <div class="mt-1 text-[11.5px] text-foreground">{{ ago(l.last_scan_at) }}</div>
+            <div
+              v-if="l.last_scan_note"
+              class="truncate text-[11px] text-muted-foreground"
+              :title="l.last_scan_note"
+            >
+              {{ l.last_scan_note }}
+            </div>
+          </div>
         </div>
       </div>
     </Card>
@@ -487,11 +714,31 @@ async function remove(l: LibraryEntity): Promise<void> {
       @click.self="dialogOpen = false"
     >
       <div class="w-[min(34rem,94vw)] rounded-lg border border-border bg-card p-5 shadow-2xl">
-        <h3 class="mb-3 font-serif text-[16px] font-semibold text-foreground">
+        <h3 class="font-serif text-[16px] font-semibold text-foreground">
           {{ editingId ? '编辑书库' : '新建书库' }}
         </h3>
 
-        <div class="space-y-3">
+        <!-- 三页签：内容 / 自动化 / 上次扫描（对齐上游的 LIBRARY-CONTENTS / AUTOMATION / LAST SCAN） -->
+        <div class="mt-3 mb-3 flex gap-4 border-b border-border" role="tablist">
+          <button
+            v-for="t in DLG_TABS"
+            :key="t.value"
+            type="button"
+            role="tab"
+            :aria-selected="dlgTab === t.value"
+            class="-mb-px cursor-pointer border-b-2 px-0.5 pb-2 text-[12.5px] font-medium transition-colors"
+            :class="
+              dlgTab === t.value
+                ? 'border-primary text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            "
+            @click="dlgTab = t.value"
+          >
+            {{ t.label }}
+          </button>
+        </div>
+
+        <div v-if="dlgTab === 'contents'" class="space-y-3">
           <div>
             <div class="mb-1 text-[11.5px] text-muted-foreground">名称</div>
             <input
@@ -564,11 +811,114 @@ async function remove(l: LibraryEntity): Promise<void> {
               />
             </div>
           </div>
+
+          <!-- 成品目录（第 18 期）：刮削后的硬链接副本落点，供外部阅读器挂载 -->
+          <div>
+            <div class="mb-1 flex items-center gap-2 text-[11.5px] text-muted-foreground">
+              成品目录（刮削出版）
+              <Button
+                size="sm"
+                variant="ghost"
+                class="ml-auto"
+                @click="form.publish_path = defaultPublish(form.type)"
+              >
+                用建议路径
+              </Button>
+            </div>
+            <input
+              v-model="form.publish_path"
+              :placeholder="`留空 = 不产出副本（建议 ${defaultPublish(form.type)}）`"
+              class="w-full rounded-md border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+              :class="publishIssue ? 'border-destructive' : 'border-border'"
+            />
+            <div v-if="publishIssue" class="mt-1 text-[11px] text-destructive">{{ publishIssue }}</div>
+            <div v-else class="mt-1 text-[11px] text-muted-foreground">
+              刮削出的元数据写进这里的<strong>硬链接副本</strong>（原书文件永远不改），外部阅读器
+              （Komga 等）挂载此目录即可读到整理完成的书。<strong>不得</strong>与库根或扫描源目录重叠
+              —— 副本会被扫回来变成重复书。
+            </div>
+            <div class="mt-1 text-[11px] text-muted-foreground">
+              副本文件名沿用命名规则 + 系列布局；想为本库单独指定规则，保存后在列表里点
+              「设置 → 命名规则」。
+            </div>
+          </div>
+        </div>
+
+        <!-- ② 自动化：什么时候扫、要不要刮削出版 -->
+        <div v-else-if="dlgTab === 'automation'" class="space-y-3">
+          <label class="flex items-center gap-2 text-[12.5px] text-foreground">
+            <input v-model="form.watch" type="checkbox" />
+            监听该库的来源子目录（关掉后只能手动「扫描」）
+          </label>
+
+          <div class="flex flex-wrap gap-3">
+            <div class="min-w-[9rem] flex-1">
+              <div class="mb-1 text-[11.5px] text-muted-foreground">扫描间隔（秒，0 = 跟随全局）</div>
+              <input
+                v-model.number="form.scan_interval"
+                type="number"
+                min="0"
+                class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+              />
+            </div>
+            <div class="min-w-[9rem] flex-1">
+              <div class="mb-1 text-[11.5px] text-muted-foreground">定时扫描（cron，可留空）</div>
+              <input
+                v-model="form.scan_cron"
+                placeholder="如 0 3 * * *"
+                class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+              />
+            </div>
+          </div>
+          <div class="text-[11px] text-muted-foreground">
+            cron 写错了不会让监听整个坏掉 —— 会退化成按间隔扫描（错误只记在扫描备注里）。
+          </div>
+
+          <label class="flex items-start gap-2 text-[12.5px] text-foreground">
+            <input v-model="form.scrape_enabled" type="checkbox" class="mt-0.5" />
+            <span>
+              刮削出版（扫描入库后自动抓元数据并写进成品目录的硬链接副本）
+              <span class="mt-0.5 block text-[11px] text-muted-foreground">
+                默认跟随全局（当前全局：{{ globalScrape ? '开' : '关' }}）；
+                与全局不同时才会为该库单独记一条覆盖。没配成品目录的库不会刮削。
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <!-- ③ 上次扫描：只有编辑态才有内容 -->
+        <div v-else class="space-y-3">
+          <template v-if="editingLib">
+            <div class="rounded-md border border-border bg-muted px-3 py-2">
+              <div class="text-[12px] text-foreground">
+                上次扫描：{{ ago(editingLib.last_scan_at) }}（{{ editingLib.book_count }} 本）
+              </div>
+              <div v-if="editingLib.last_scan_note" class="mt-0.5 text-[11.5px] text-muted-foreground">
+                {{ editingLib.last_scan_note }}
+              </div>
+              <div v-else class="mt-0.5 text-[11.5px] text-muted-foreground">没有备注</div>
+            </div>
+            <div class="text-[11.5px] leading-relaxed text-muted-foreground">
+              扫描 = 重新读一遍库根目录：新文件会被收进书目，被移走的书会从书目里消失。
+              开了自动刮削的库，扫描后新书会自动进刮削队列（进度看「工具 → 转换日志 → 刮削」）。
+            </div>
+            <Button size="sm" :disabled="!!busy" @click="scan(editingLib)">
+              {{ busy === `scan:${editingLib.id}` ? '扫描中…' : '立即扫描' }}
+            </Button>
+          </template>
+          <div v-else class="text-[11.5px] leading-relaxed text-muted-foreground">
+            这是新书库，还没有扫描记录。保存后到列表里点「扫描」，这里会显示上次扫描时间、
+            备注与书目数量。
+          </div>
         </div>
 
         <div class="mt-4 flex justify-end gap-2">
           <Button size="sm" variant="ghost" @click="dialogOpen = false">取消</Button>
-          <Button size="sm" :disabled="busy === 'save' || !form.name.trim()" @click="submitDialog">
+          <Button
+            size="sm"
+            :disabled="busy === 'save' || !form.name.trim() || !!publishIssue"
+            @click="submitDialog"
+          >
             {{ busy === 'save' ? '保存中…' : '保存' }}
           </Button>
         </div>

@@ -189,7 +189,7 @@ watch(name, load)
                   desc="书目可能已被移出导出目录。" />
     </template>
 
-    <!-- 重排册号：只改 OPF 序号、不动文件名（book_id 不变 → 进度/批注不断链） -->
+    <!-- 重排册号：只写服务端序号、不动文件名也不改文件（book_id 不变 → 进度/批注不断链） -->
     <SeriesRenumberDialog
       :name="name"
       :open="renumberOpen"

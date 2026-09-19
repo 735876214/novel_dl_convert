@@ -27,7 +27,7 @@ const fAction = ref('')
 const fStatus = ref('')
 const fQ = ref('')
 
-const ACTIONS = ['转换', '添加', '跳过', '重命名', '清理']
+const ACTIONS = ['转换', '添加', '跳过', '重命名', '清理', '刮削']
 const STATUSES = ['成功', '失败']
 
 /** 类别由动作归并（上游有独立类别体系，本项目没有） */
