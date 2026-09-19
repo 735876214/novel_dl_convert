@@ -8,10 +8,19 @@
 时间窗口（days）与 Top 榜长度（top）参数化：dashboard 用默认 28/8，
 统计页可传 7/28/90 天与更长榜单。历史字段名 added_28d / reading_28d 保留
 （dashboard 契约不变），实际长度跟随 days，响应里的 window 是权威口径。
+
+第 29 期补的两件（都是**增补**，不删既有键）：
+- ``integrity`` 在原有 5 个计数键之外增补百分比口径（``total_books`` / ``present`` /
+  ``primary`` / ``metadata`` 三项覆盖率 + ``score``），对齐上游 ``LibraryIntegrityGauge``；
+- 新增 ``largest``（按体积降序的 Top 50，对齐上游 ``LargestBookItem``）。
 """
 import time
 
 from . import db, library, metascore
+
+#: 体积榜固定长度（上游该榜名为「Top 50 Largest Books」）。
+#: 刻意**不**跟随 `top` 参数：那个参数管的是作者/系列/出版社/题材四个计数器榜。
+_LARGEST_N = 50
 
 
 def _top(counter: dict, n: int = 8) -> list:
@@ -74,13 +83,60 @@ def overview(days: int = 28, top: int = 8) -> dict:
             decades[d] = decades.get(d, 0) + 1
         if not (b.get("language") or "").strip():
             integrity["missing_language"] += 1
-        # 无封面只对 EPUB 有意义（mobi/pdf/txt 本来就不解析封面）
-        if (b.get("format") or "").upper() == "EPUB" and not b.get("has_cover"):
+        # 三项「文件侧」计数一律读 issues —— 与「缺失资源」页 / 库分面同一口径
+        # （library 已经把「无封面只对 EPUB 有意义」「音频目录不算 0 字节」
+        # 「服务端有封面就撤掉 no-cover」这些判定做在 issues 上了，这里再各判一遍必然走岔）。
+        # ⚠️ 原先 unparsable 读的是 b["unparsable"]，而书目字典**没有这个键**
+        # （library._scan_once 只下发 issues）⇒ 该计数恒为 0。
+        iss = b.get("issues") or []
+        if "no-cover" in iss:
             integrity["no_cover"] += 1
-        if not (b.get("size") or 0):
+        if "zero-bytes" in iss:
             integrity["zero_size"] += 1
-        if b.get("unparsable"):
+        if "unparsable" in iss:
             integrity["unparsable"] += 1
+
+    # ---- 书库体检的百分比口径（第 29 期，对齐上游 LibraryIntegrityGauge 的四值）----
+    # 口径差异要写明：本项目书目**由扫描文件得来**，不存在「库里登记了、文件却不在」的书，
+    # 上游的 Present（文件在磁盘上）在本项目恒为 100%、是个恒真项。故这里把
+    #   Present 落在「文件有实体内容（非 0 字节）」、Primary 落在「主文件能被解析」上。
+    # 元数据侧取 metascore 的达标本数（阈值 = 已公示的分档边界 70）。
+    scores = [metascore.audit(b)["score"] for b in bs]
+    metadata_ok = sum(1 for s in scores if s >= metascore.METADATA_OK)
+
+    def _pct(n: int) -> float:
+        return round(n / total * 100, 1) if total else 0.0
+
+    present = total - integrity["zero_size"]
+    primary = total - integrity["unparsable"]
+    integrity.update({
+        "total_books": total,
+        "present": present,
+        "present_percent": _pct(present),
+        "primary": primary,
+        "primary_percent": _pct(primary),
+        "metadata": metadata_ok,
+        "metadata_percent": _pct(metadata_ok),
+        # 综合分 = 三项覆盖率的算术平均（不发明权重：三项各占三分之一）
+        "score": round((_pct(present) + _pct(primary) + _pct(metadata_ok)) / 3, 1),
+    })
+
+    # ---- Top 50 最大书（上游 LargestBookItem）----
+    # 固定 50 条：上游该榜就叫 Top 50 Largest Books，故不与 `top`（计数器榜长度）混用 ——
+    # 混用会让统计页一加载就把作者/系列/出版社/题材四个榜一起撑到 50 行。
+    # 0 字节书**不排除**：它是一种真实信号（配合上面的 zero_size 计数看）。
+    largest = sorted(
+        (
+            {
+                "id": b["id"],
+                "title": b["title"],
+                "size_bytes": int(b.get("size") or 0),
+                "format": b.get("format") or "",
+            }
+            for b in bs
+        ),
+        key=lambda x: (-x["size_bytes"], x["title"]),
+    )[:_LARGEST_N]
 
     prog = db.all_progress()
     annos = db.annotation_counts()
@@ -174,7 +230,9 @@ def overview(days: int = 28, top: int = 8) -> dict:
         "avg_progress": round(psum / total, 1) if total else 0.0,
         "integrity": integrity,
         # 元数据完整度分布（Average / P50 / P90 + 分档直方图），模型见 core/metascore.py
-        "metadata_score": metascore.summary(bs),
+        "metadata_score": metascore.summary(scores=scores),
+        # 体积榜：固定最多 50 条，与 `top` 无关（见上方注释）
+        "largest": largest,
         "reading": {
             "unread": unread,
             "reading": reading,

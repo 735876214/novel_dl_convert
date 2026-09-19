@@ -72,6 +72,10 @@ _BUCKETS = (
     ("gte90", "90+", lambda s: s >= 90),
 )
 
+#: 「元数据达标」阈值 = 分档边界 70（70–89 良好、90+ 优秀）。
+#: 统计页的书库体检拿它算 Metadata 覆盖率 —— 直接沿用**已公示**的分档，不另立标准。
+METADATA_OK = 70.0
+
 #: 明确不参与计分的项（页面上单独列出，避免「为什么它没算」的疑问）
 NOT_SCORED = (
     {"key": "subtitle", "label": "副标题", "why": "本项目元数据面没有这个字段"},
@@ -166,10 +170,16 @@ def _summarize(scores: list) -> dict:
     }
 
 
-def summary(books=None) -> dict:
-    """紧凑摘要（供统计页 / dashboard 直接内嵌）：分位 + 分档直方图。"""
-    bs = library.books() if books is None else books
-    return _summarize([audit(b)["score"] for b in bs])
+def summary(books=None, scores=None) -> dict:
+    """紧凑摘要（供统计页 / dashboard 直接内嵌）：分位 + 分档直方图。
+
+    已经算过分数时传 ``scores`` 直接复用：统计页要在**同一批书**上同时出直方图与
+    「达标本数」（``METADATA_OK``），传分数进来可省掉第二遍全量评分。
+    """
+    if scores is None:
+        bs = library.books() if books is None else books
+        scores = [audit(b)["score"] for b in bs]
+    return _summarize(list(scores))
 
 
 def payload(books=None, lowest: int = 12) -> dict:
