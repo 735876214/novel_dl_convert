@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import Icon from '@/components/ui/Icon.vue'
+import { useSettingsSearch } from '@/composables/useSettingsSearch'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 import {
@@ -17,6 +18,7 @@ const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
 const library = useLibraryStore()
+const search = useSettingsSearch()
 
 /**
  * 按**当前库的能力**裁剪设置页（第 10 期「全量显隐」的一部分）：
@@ -134,14 +136,40 @@ function goHome(): void {
             "
           >
             <span class="min-w-0 flex-1 truncate">{{ pg.zh }}</span>
-            <!-- 未支持页给出明确标识，避免用户点进去才发现 -->
+            <!--
+              条目右侧的状态标识（窄屏隐藏，避免挤掉页名）：
+                · 本项目补充（own）—— 上游没有这一页，防止对读时误判
+                · 未支持（placeholder）—— 点进去前就知道该页只做上游对照
+              own 页优先显示「本项目补充」：它更具体，且该页自己会写明是否已实现。
+            -->
             <span
-              v-if="pg.status === 'placeholder'"
+              v-if="pg.own"
+              class="hidden shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground lg:inline"
+            >本项目补充</span>
+            <span
+              v-else-if="pg.status === 'placeholder'"
               class="hidden shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground lg:inline"
             >未支持</span>
           </RouterLink>
         </div>
       </div>
+    </div>
+
+    <!-- 底部：设置项搜索入口（对齐上游侧栏底部的 Cmd K 提示） -->
+    <div class="shrink-0 border-t border-border p-2">
+      <button
+        type="button"
+        class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-[var(--shell-accent-wash)] hover:text-foreground"
+        title="搜索设置项（Ctrl/⌘ + K）"
+        aria-label="搜索设置项"
+        @click="search.openPanel()"
+      >
+        <Icon name="search" class="h-3.5 w-3.5 shrink-0" />
+        <span class="min-w-0 flex-1 truncate text-left">搜索设置项</span>
+        <kbd
+          class="hidden shrink-0 rounded border border-border bg-muted px-1 py-0.5 font-mono text-[10px] text-muted-foreground lg:inline"
+        >⌘K</kbd>
+      </button>
     </div>
   </aside>
 </template>
