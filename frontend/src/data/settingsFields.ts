@@ -121,7 +121,7 @@ export const SECTION_KEYS: Record<string, string[]> = {
   libraries: ['libraries'],
 }
 
-/** 命名规则的格式筛选取值（与 fileops.plan_pattern_rename 的 scope 参数一致） */
+/** 命名规则的格式筛选取值（与后端 naming.scope 的取值一致：all 或某个扩展名） */
 export const RENAME_SCOPES: { value: string; label: string }[] = [
   { value: 'all', label: '全部格式' },
   { value: 'epub', label: '仅 EPUB' },
@@ -141,7 +141,7 @@ export const RENAME_TOKENS: { token: string; desc: string }[] = [
   { token: '{author}', desc: '作者；为空时回退「未知」' },
   { token: '{series}', desc: '系列名；为空时回退「无系列」' },
   { token: '{series_index}', desc: '系列内序号（书目原值；读不到为空串）' },
-  { token: '{index}', desc: '序号（两位补零，按文件列表顺序，非按系列）' },
+  { token: '{index}', desc: '系列卷号（两位补零；无系列卷号时回落 01）' },
   { token: '{year}', desc: '出版年（读不到为空串）' },
   { token: '{publisher}', desc: '出版社（读不到为空串）' },
   { token: '{language}', desc: '语言（读不到为空串）' },
@@ -151,7 +151,7 @@ export const RENAME_TOKENS: { token: string; desc: string }[] = [
 /** 命名配方：一键填入常用模式（对齐上游的 recipes，但只使用本项目支持的占位符） */
 export const RENAME_RECIPES: { name: string; pattern: string; desc: string }[] = [
   { name: '作者 - 书名', pattern: '{author} - {title}', desc: '默认；扁平结构，便于按作者浏览' },
-  { name: '序号. 书名', pattern: '{index}. {title}', desc: '按当前顺序编号，适合成系列的成品' },
-  { name: '系列 - 序号 - 书名', pattern: '{series} - {index} - {title}', desc: '系列优先，同类聚在一起' },
+  { name: '卷号. 书名', pattern: '{index}. {title}', desc: '按系列卷号编号，适合成系列的成品' },
+  { name: '系列 - 卷号 - 书名', pattern: '{series} - {index} - {title}', desc: '系列优先，同类聚在一起' },
   { name: '书名（作者）', pattern: '{title}（{author}）', desc: '书名在前，适合书名优先的检索习惯' },
 ]

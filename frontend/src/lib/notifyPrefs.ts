@@ -25,7 +25,7 @@ export interface NotifyCategory {
 export const NOTIFY_CATEGORIES: NotifyCategory[] = [
   { id: 'convert', label: '转换', actions: ['转换'], desc: 'txt → EPUB 的转换结果' },
   { id: 'add', label: '添加', actions: ['添加'], desc: '文件进入成品目录的记录' },
-  { id: 'rename', label: '重命名', actions: ['重命名'], desc: '批量重命名与服务端元数据更新' },
+  { id: 'rename', label: '重命名', actions: ['重命名'], desc: '实体改名（服务端元数据）与同名冲突修复' },
   { id: 'recycle', label: '清理', actions: ['清理'], desc: '重复书 / 缺失资源移入回收目录' },
 ]
 

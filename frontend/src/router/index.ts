@@ -50,7 +50,6 @@ import MetadataPage from '@/views/settings/pages/MetadataPage.vue'
 import PreferenceSyncPage from '@/views/settings/pages/PreferenceSyncPage.vue'
 import TaskCenterView from '@/views/TaskCenterView.vue'
 import WhatsNewView from '@/views/WhatsNewView.vue'
-import BulkRenameView from '@/views/tools/BulkRenameView.vue'
 import DuplicateBooksView from '@/views/tools/DuplicateBooksView.vue'
 import EntityManagerView from '@/views/tools/EntityManagerView.vue'
 import LocalConvertView from '@/views/tools/LocalConvertView.vue'
@@ -196,7 +195,6 @@ const router = createRouter({
         { path: '', redirect: { name: 'tools-entity-manager' } },
         { path: 'libraries', name: 'tools-libraries', component: LibrariesView },
         { path: 'entities', name: 'tools-entity-manager', component: EntityManagerView },
-        { path: 'rename', name: 'tools-bulk-rename', component: BulkRenameView },
         { path: 'duplicates', name: 'tools-duplicate-books', component: DuplicateBooksView },
         { path: 'missing', name: 'tools-missing-resources', component: MissingResourcesView },
         { path: 'sources', name: 'tools-sources', component: SourcesView },

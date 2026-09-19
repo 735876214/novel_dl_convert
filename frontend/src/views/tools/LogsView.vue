@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onActivated, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -20,7 +21,21 @@ import { useUiStore } from '@/stores/ui'
 const ui = useUiStore()
 
 type Tab = 'log' | 'scrape'
-const tab = ref<Tab>('log')
+
+/**
+ * 子标签可用查询参数直达（`/tools/logs?tab=scrape`）—— 设置页的「文件命名」等
+ * 页面要跳到刮削面板，落错标签会让人以为功能没了。点标签本身不改 URL
+ * （没必要把每次点标签都写进历史），所以这里只在 query 变化时跟随。
+ */
+const route = useRoute()
+const tab = ref<Tab>(route.query.tab === 'scrape' ? 'scrape' : 'log')
+
+watch(
+  () => route.query.tab,
+  (v) => {
+    tab.value = v === 'scrape' ? 'scrape' : 'log'
+  },
+)
 
 const TABS: Array<{ value: Tab; label: string }> = [
   { value: 'log', label: '日志' },

@@ -16,10 +16,13 @@ import { useUiStore } from '@/stores/ui'
 /**
  * 实体管理：按作者 / 系列聚合成品书目，可重命名、可合并。
  *
- * 数据源是扫描各库的书目（后端没有图书库实体）。改名实质是批量重命名文件，
- * 同时把新名字写成**服务端元数据覆盖**（author / series）让列表与聚合立刻识别新名称 ——
- * **不改写 EPUB 文件内容**（第 18 期口径）。
- * 任何改动都走「先预览、再应用」——预览由服务端算，应用只回传预览过的条目。
+ * 数据源是扫描各库的书目（后端没有图书库实体）。第 28 期起改名是**纯元数据操作**：
+ * 只写服务端元数据覆盖（author / series），源文件名与文件内容都不动 ——
+ * 书目的 `book_id` 由文件名派生，所以关联数据（进度 / 批注 / 评分）也不会断链。
+ * 想让**副本**名跟着变，去「转换日志 → 刮削 → 命名规则」按规则重出版（那条路只改副本名）。
+ *
+ * 任何改动都走「先预览、再应用」——预览由服务端算；应用只回传 `{type, from, to}`
+ * 与预览时一致的名称，**要改哪些书由服务端自己算**（预览过期也改不错）。
  */
 const ui = useUiStore()
 const library = useLibraryStore()
@@ -135,7 +138,7 @@ function makePreview(): void {
     .then((r) => {
       plan.value = r
       if (!r.items.length) {
-        ui.toast('这个名称没有出现在任何文件名里，改不到')
+        ui.toast('没有书的该字段等于这个名字，改不到')
       }
     })
     .catch((e: Error) => ui.toast(e.message))
@@ -151,11 +154,13 @@ function applyPlan(): void {
     return
   }
   busy.value = true
+  // 只回传「把哪个名字改成哪个名字」：要改哪些书由服务端按 from 重算，
+  // 所以即使这份预览已经过期，也不会改到别的书上（更不会动文件）。
   api
-    .entityRenameApply(kind.value, editing.value.target.trim(), clean)
+    .entityRenameApply(kind.value, editing.value.name, editing.value.target.trim(), scope.value)
     .then((r) => {
       const failed = r.errors.length
-      ui.toast(`已改名 ${r.count ?? 0} 个文件${failed ? `，${failed} 个失败` : ''}`)
+      ui.toast(`已更新 ${r.count ?? 0} 本书的元数据${failed ? `，${failed} 本失败` : ''}`)
       closeEditor()
       load()
     })
@@ -214,9 +219,14 @@ function applyPlan(): void {
             <Button :disabled="busy" @click="closeEditor">取消</Button>
           </div>
 
+          <p class="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+            改名只写服务端元数据（{{ noun }}），源文件名与文件内容都不变。
+            要让<strong>副本</strong>名跟着变，去「转换日志 → 刮削 → 命名规则」按规则重出版。
+          </p>
+
           <div v-if="plan" class="mt-3">
             <p class="mb-2 text-[11.5px] text-muted-foreground">
-              命中 {{ plan.items.length }} 个文件 · 可提交 {{ cleanCount }} 个<template v-if="conflictCount">，{{ conflictCount }} 个冲突已置灰</template>
+              命中 {{ plan.items.length }} 本书 · 可提交 {{ cleanCount }} 本<template v-if="conflictCount">，{{ conflictCount }} 项冲突已置灰</template>
             </p>
 
             <div v-if="plan.items.length" class="max-h-64 overflow-y-auto rounded-md border border-border bg-card">
@@ -227,15 +237,12 @@ function applyPlan(): void {
                 :class="p.conflict ? 'opacity-55' : ''"
               >
                 <div class="flex items-center gap-2 text-[12px]">
-                  <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="p.old">{{ p.old }}</span>
+                  <span class="min-w-0 flex-1 truncate font-medium text-foreground" :title="p.title || p.old">
+                    {{ p.title || p.old }}
+                  </span>
                   <Badge v-if="p.library_id" class="shrink-0">{{ nameOf(p.library_id) }}</Badge>
-                  <Icon name="arrowRight" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span
-                    class="min-w-0 flex-1 truncate font-medium"
-                    :class="p.conflict ? 'text-destructive' : 'text-foreground'"
-                    :title="p.new"
-                  >
-                    {{ p.new }}
+                  <span class="shrink-0 font-mono text-[10.5px] text-muted-foreground" :title="`文件名不变：${p.old}`">
+                    {{ p.old }}
                   </span>
                 </div>
                 <div v-if="p.conflict" class="text-[11px] text-destructive">冲突：{{ p.reason }}</div>
@@ -243,8 +250,8 @@ function applyPlan(): void {
             </div>
 
             <p v-else class="text-[11.5px] leading-relaxed text-muted-foreground">
-              没有命中任何文件。改名会移动文件并把新名字记为服务端元数据（作者 / 系列），
-              但该名称在当前库里没有出现，所以改不到。
+              没有书的该字段等于这个名字。改名只写服务端元数据（作者 / 系列），
+              不移动文件、不改文件内容 —— 所以「命中 0 本」就是当前范围里没有可改的书。
             </p>
 
             <div v-if="plan.items.length" class="mt-2.5 flex items-center gap-2">

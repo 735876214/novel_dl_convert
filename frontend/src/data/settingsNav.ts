@@ -318,8 +318,8 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           desc: '按书库或全局模式生成文件路径与文件名。',
           items: ['每书库命名模式（Folder as Book / File as Book）', 'File as Book 默认模式', '13 个 TOKENS', '7 个 MODIFIERS', '4 类 STRUCTURE（optional / fallback / folder / or）', '4 个配方', '元数据缺失时的降级预览', 'Cross-platform path sanitization'],
         },
-        link: { to: '/tools/rename', label: '批量重命名' },
-        note: '已实现：命名规则存服务端（config.naming）+ 4 个配方 + 生效预览，工具页默认载入该规则；第 20 期起支持 9 个占位符（书名 / 作者 / 系列 / 系列序号 / 顺序号 / 出版年 / 出版社 / 语言 / 扩展名）。上游的 13 token / 7 修饰符 / 结构语法未支持。',
+        link: { to: '/tools/logs?tab=scrape', label: '刮削面板 → 命名规则' },
+        note: '已实现：命名规则存服务端（config.naming，**每库可覆写**）+ 4 个配方 + 生效预览，支持 9 个占位符（书名 / 作者 / 系列 / 系列序号 / 卷号 / 出版年 / 出版社 / 语言 / 扩展名）。第 28 期起规则只作用于**副本名**（改名不再动源文件，批量重命名工具已并入刮削面板的「命名规则」区块，可预览并一键重出版）。上游的 13 token / 7 修饰符 / 结构语法未支持。',
       }),
       p('library/maintenance', 'Maintenance', '维护', 'ready', {
         upstream: {

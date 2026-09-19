@@ -32,7 +32,6 @@ interface ToolSection {
 const SECTIONS: ToolSection[] = [
   { label: '书库管理', routeName: 'tools-libraries' },
   { label: '实体管理', routeName: 'tools-entity-manager' },
-  { label: '批量重命名', routeName: 'tools-bulk-rename' },
   { label: '重复书籍', routeName: 'tools-duplicate-books' },
   { label: '缺失资源', routeName: 'tools-missing-resources' },
   { label: '书源管理', routeName: 'tools-sources', feature: 'sources' },
