@@ -1,12 +1,13 @@
 # BookOrbit 全站能力缺口与添加方案
 
-> 来源：`https://orbit.735876214.xyz:16666/`（线上实例，站点版本 **v2.10.0**）
-> 用途：本文件是 novel_dl_convert **补齐线上能力**的排期依据，与 `docs/bookorbit-settings-inventory.md`（设置页 41 页清单）、`docs/bookorbit-library-contract.md`（四工具数据契约）并列。
+> 来源（历史实测）：`https://orbit.735876214.xyz:16666/`（线上实例，站点版本 **v2.10.0**）；采集日期 2026-09-16 ｜ 账号角色：Superuser（单账号本地部署）
+> **源码对照（本轮新增）**：上游参考仓库 `https://github.com/735876214/bookorbit`，分支 `main` @ commit `c292d6cc`（v2.10.0）。只读镜像，不在本项目中复制上游代码，仅引用文件路径与结论。
+> 用途：本文件是 novel_dl_convert **补齐线上能力**的排期依据，与 `docs/bookorbit-settings-inventory.md`（设置页 41 页清单）、`docs/bookorbit-library-contract.md`（类型契约）、`docs/bookorbit-feature-flows.md`（功能与流程）并列。
 > 采集方式：浏览器自动化（Playwright CLI）**真实登录后逐页渲染采集**非设置页十个能力域；全程只读——仅导航、展开、点击进入子页、读取 DOM、截图；**未点击任何保存 / 删除 / 提交 / 启用 / 重置类控件**。
-> 采集日期：2026-09-16 ｜ 账号角色：Superuser（该实例为单账号本地部署）
 > 证据：逐页采集记录见 `docs/review/bookorbit-app-capture.md`；截图见 `docs/review/bookorbit-app-shots/`
 > **脱敏**：全文不含账号、密码、邮箱、令牌、密钥真实值；此类字段一律只记「已设置 / 未设置」；含账号显示名的仪表盘截图主动未归档。
-> **准确性约定**：未取得可信值的项标注「未能采集」并说明原因，不做推测补全。
+> **准确性约定**：①未取得可信值的项标注「未能采集」并说明原因；②本轮新增结论一律标注来源文件（`源码（<路径>）`），与历史实测（`历史实测（2026-09-16）`）分列，不混写；③凡源码无法确认的一律标注「**未验证（源码无法确认）**」，不做推测补全；④**「实例页面为空」不等于「上游无此能力」**——能力判断以源码为准，页面为空只在对应条目里说明 UI 侧未渲染。
+> **本轮范围**：纯文档复核（零代码改动、零实例访问）；Hardcover / Readwise / StoryGraph 同步按用户拍板**本轮明确不做**（见 §13、§14）。
 
 ---
 
@@ -126,6 +127,7 @@
 | Metadata Freshness（Fresh ≤30d / Never fetched） | — | **无** | **不建议做** | 依赖在线元数据抓取，与定位冲突（见 §11） |
 | Top 50 Largest Books | — | **无**（`_top()` 硬编码 n=8，`core/stats.py:13-17`） | **可直接落地** | — |
 | Achievements | 成就体系 | **已有（第 22 期实现）** | **已落地**（单用户口径） | 与多用户无关的成就可做；跨用户口径不做 |
+| └ 上游成就模型（源码：`packages/types/src/achievement.ts`） | **5 分类**：`reading / library / exploration / dedication / devices`；**4 档稀有度**：`common / rare / epic / legendary`；字段 `groupKey / tier / threshold / hidden / sortOrder / earned / awardedAt / currentProgress / context` | 本项目成就为自有规则集，**未逐项对齐上游分类与稀有度** | 逐项对齐 **可直接落地**（纯数据/规则）；`devices` 分类 **不建议做**（依赖 KOReader/Kobo 设备实体） | 上游进度由**服务端算好**（`currentProgress` + `threshold`），且支持**全量回填**（对应设置页「运行回填」）——本项目的成就也应是**派生数据**而非一次性打卡 |
 | 仪表盘部件 | 12 件 | **已有 12 件**（`components/dashboard/widgets/registry.ts:32-45`） | 可直接落地 | 已对齐 |
 
 ## 7. 域：通知与更新
@@ -185,9 +187,16 @@
 
 ## 12. 域：批注
 
-| 能力项 | 线上形态 | 本项目现状 | 档位 |
-| --- | --- | --- | --- |
-| `/annotations` | 线上为空态 | **已有且更丰富**：跨书搜索、彩色高亮、跳转章节、删除、**导出 Markdown**（`views/AnnotationsView.vue`、`server.py:494-504`） | 可直接落地（**超出线上**） |
+> **重要更正（2026-09-19）**：历史实测把本域记为「线上为空态」——那只是**该实例当时没有批注数据**，**不等于上游没有能力**。源码（`packages/types/src/annotation.ts`）显示模型明显更深，故原档位理由「超出线上」**作废**，改为按能力项逐条判定。
+
+| 能力项 | 线上形态（历史实测） | 本项目现状 | 档位 | 判据（源码） |
+| --- | --- | --- | --- | --- |
+| 批注来源 | 空态三张引导卡：Read here / Sync a Kobo / Sync KOReader | **仅 Web 内创建**（`server.py:494-504`） | 多端来源 **需新增后端能力** | `origin = "web" / "koreader" / "kobo"` ——三卡即三来源枚举，无第四种 |
+| 配色 | 页面未渲染 | **已有彩色高亮** | **需新增后端能力**（跨端降色） | 应用 10 色 / KOReader 9 色 / Kobo 4 色，每色带 `koreaderFallback` + `koboFallback` |
+| 分组维度 | 页面未渲染 | **无**（仅平铺列表） | **需新增后端能力** | `ANNOTATION_HUB_GROUP_MODES = ["month", "book", "color", "source"]` |
+| 待复核 / 垃圾桶 | 页面未渲染 | **无**（删除即删除） | **需新增后端能力** | `AnnotationHubOverview.needsReview` / `.trashed` ——删除是**软删除**；设备回传批注需**人工对账** |
+| 统计口径 | 页面未渲染 | **无** | **需新增后端能力**（很轻） | `weeks` / `longestQuietWeeks` / `devices` ——以周为节拍，并跟踪「连续无批注周数」 |
+| 跨书搜索 / 跳转章节 / 导出 Markdown | 无 | **已有**（`views/AnnotationsView.vue`、`server.py:494-504`） | **已落地** | 本项目自有能力；上游是否存在对应能力：未验证（源码无法确认，本轮未取 `server/src/modules/annotation` 与 `client/`） |
 
 ---
 
@@ -202,6 +211,9 @@
 | **Requests 的 Sources / Download clients / Automation 具体功能**（索引器 + 下载客户端） | 与既有「数据驱动书源」体系（`sources/rules.py`、`sources/store.py`）功能重叠。**2026-09-18 起为「已决策不做」**：骨架页与只读接口也已从代码中删除（不再是「按 §9 保留」） |
 | ~~**Pages（页数）字段**~~ ⚠️ **该条已过期** | 已实现：EPUB 为估算值（`library._pages_in`）、CBZ 为归档真实页数；第 7 期已计入元数据完整度评分 |
 | ~~**多书库（`/libraries`、`/library/:id`、按书库筛选 / 批量重命名 / 查重）**~~ ⚠️ **该条已过期** | **第 10 期已实现**（`libraries` 表 + 库感知路径解析 + 按格式迁移 + 能力显隐矩阵）；原判据「唯一 `OUTPUT_DIR`、无书库实体」不再成立 |
+| **Hardcover / Readwise / StoryGraph 同步** | **2026-09-19 用户拍板：本轮明确不做**。源码显示这三项的上游形态并不轻：Hardcover 是**双向**（含导入书单/进度：`HardcoverImportPreviewOutcome` 五态、版本关联 `HardcoverEdition`、匹配方式 `hardcover_id / isbn / title_author`）；StoryGraph **没有公开 API**，凭据只能复用浏览器 `sessionCookie` + `rememberToken`；Readwise 虽最小（`ReadwiseSettings` + `disabledReason`）但与项目定位无关。三项均需**凭据加密存储 + 书籍匹配（ISBN/标题+作者）+ 同步任务调度**，维护成本远超收益 |
+| **KOReader / Kobo 设备侧集成** | Kobo 同步已于 2026-09-17 决定不做；KOReader 侧源码显示并非「一处同步」而是**四套并列通道**（进度单一权威源 `canonicalSource`、`heldByReset` 设备分歧、插件目录 9 段 + 批量清单下载、能力协商 `KoreaderPluginCapability`），且插件有独立供应链（`manifestUrl` + `ed25519PublicKey` 签名校验）。复刻设备侧协议成本与收益不匹配，本轮不进入路线图 |
+| **上游 Requests 的插件式索引器 / 下载客户端** | 见上一条 Requests 行；另据源码（`packages/types/src/indexer.ts`）其插件体系含签名更新通道与 SSRF 防护（`INDEXER_URL_UNSAFE` / `INDEXER_URL_PRIVATE`）、凭据加密（`BOOK_REQUEST_ENCRYPTION_KEY`），是**完整的插件市场形态**，与本项目「数据驱动书源规则」定位不同 |
 | **全部多用户能力** | 单用户轻登录（`core/auth.py:1-5`）；`users` 表无角色字段 |
 
 ---
@@ -247,9 +259,9 @@
 ### 第 4 期：多端同步与设备
 
 - **OPDS 订阅源**：只读 Atom/XML feed + 客户端账号 → `OPDS` 页 —— **已完成**（`core/opds.py`，`/opds` 独立前缀 + Basic 认证，开关 `opds.enabled` 默认关闭）
-- **KOReader 进度互通**：同步协议端点 → `KOReader` 页
 - **Komga 集成**：见下方说明（方向待确认）→ `Komga` 页
-- **外部服务集成**：Hardcover / Readwise / StoryGraph 凭据存储 + 同步任务 → 三页
+- ~~**外部服务集成**：Hardcover / Readwise / StoryGraph 凭据存储 + 同步任务 → 三页~~ ⚠️ **本轮明确不做（2026-09-19 用户拍板）**：与项目定位无关，且上游形态并不轻（Hardcover 双向含导入、StoryGraph 无公开 API 只能复用浏览器会话 Cookie、三项均需凭据加密 + 书籍匹配 + 同步调度）。原「三页」不建骨架、不留占位入口，据此 §13 已列依据。**相关设置页与文案维持现状，继续如实标注未支持。**
+- **KOReader 设备侧集成**（原「KOReader 进度互通」）：**本轮不进入路线图（优先级最低）**——源码显示上游是四套并列通道 + 独立插件签名供应链（见 §13），复刻成本与收益不匹配
 - ~~**Kobo 同步**~~：**不做**（2026-09-17 用户决定，KEPUB 派生 + 私有同步协议成本与收益不匹配）
 - ~~**邮件投递**~~：**不做**（2026-09-17 用户决定）
 
