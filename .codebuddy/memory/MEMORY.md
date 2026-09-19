@@ -15,6 +15,7 @@
 
 ## 元数据与出版（口径终局）
 - 元数据**只能落服务端 DB**（`meta_override` / `meta_online` / `meta_cover`）：手动编辑、revert、抓取 apply、重排册号、实体改名与合并**全部不写回文件**。
+- **在线抓取不按格式分流**：结果只写 DB、与文件类型无关 → EPUB / PDF / 漫画 / 有声书一视同仁（有声书是**目录型条目**）。⚠️ 但**手动编辑元数据仍限 EPUB**：非 EPUB 没有 OPF 兜底原值层，「恢复原值」无从取（`server.py` 的 `editable` / 400 是刻意保留的）。
 - **`core/publish.py` 是唯一还会写文件的模块**（写的是硬链接**副本**，且走原子替换）；`fileops.patch_epub_meta` / `rewrite_epub` 已退出生产路径（前者仅测试造夹具、后者仅 publish 写副本），别再新增调用方。
 - 刮削出版**三条不可动摇**：① 源文件只读；② 副本禁止原地写（与源共享 inode，必须「临时文件 + `Path.replace`」）；③ 副本被删**只标记待确认 + 记日志**，绝不自动删源、绝不自动重建。成品目录**不得与库根 / 扫描源目录重叠**（否则副本被扫回来成重复书），后端建库即拦。
 - 显式**无值哨兵** `db.META_CLEAR = "-"`（仅对 `_CLEARABLE = ("series_index",)` 生效）：覆盖值是列、存不了空串（空串 = 撤销覆盖），「清空序号」只能靠哨兵。翻译点三处必须一致：`db.get_effective_meta`（要**带着空值**并进 merged，否则 library 保留文件旧值）、`metastore.effective`、`metastore.state`。
@@ -71,6 +72,7 @@
 - FastAPI 的 `StaticFiles` 静态资源会被浏览器缓存：改了前端务必 build + deploy，再校对页面引用的 JS hash 是否更新，否则会对着旧 JS 排查。
 - **改名后 `book_id` 会变**（basename 派生）：元数据覆盖要落**新 id**；算所属库**不能**用 `fileops._lib_of(名字)`（它查扫描缓存，改名刚做完缓存未更新 → 退化成旧纯哈希 id → 覆盖写进没人读的 id →「改了没生效」且不报错）。用 `fileops._owning_library_id(path)`（按真实路径包含关系、取最深）。测试要用「扫描结果的 id」比对才抓得住这类静默错误。
 - **字符串模板替换必须先长后短**：`{series_index}` 要排在 `{series}` / `{index}` 之前 —— `str.replace` 只看字面量，顺序错了会被短 token 抢先吃掉一半。
+- **目录型条目（有声书）不能用 `is_file()` 判存在**：它是**目录**，`path.is_file()` 为假 → 会被误判「文件不存在」（元数据抓取的 `apply()` 就踩过）。判存在用 `path.exists()`，格式相关的闸门不该拦「只写 DB」的链路。
 
 ## 待办（跨会话）
 - **T5 文档同步**（并行会话遗留的收尾）。

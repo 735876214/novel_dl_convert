@@ -285,6 +285,34 @@
   `fields` 与后端一致 / 扩展后仍拒路径分隔符）+ `tests/test_komga_client.py` 追加 2 例
   （系列反向查收藏夹含「不在夹里 = 空分页」与 404；书籍查清单恒空 + 404）。全量 **255 passed**。
 
+#### 第 21 期实施记录（元数据抓取扩到非 EPUB）
+
+**主题**：把在线元数据抓取从「只支持 EPUB」扩到 PDF / 漫画 / 有声书。规划阶段实测发现整条链路
+**早已就位**，本期实际只需拆掉两处过期判定 + 放开能力矩阵：
+
+- **写入侧已就位**：`metafetch.apply()` 早已只写服务端 DB（`db.set_online` / `db.set_cover`），不碰 OPF。
+- **展示侧已就位**：`library.books()` 已批量合并 DB 侧元数据与封面（`db.get_effective_meta` + `db.cover_ids`）
+  → 书架 / 详情 / 搜索 / Komga / OPDS **自动可见**。所以「书架要不要展示、要不要付性能代价」这个选项前提
+  **根本不存在**（详见本期计划记录）。
+- **封面侧已就位**：封面路由优先下发 DB 缓存封面，无则回退文件内嵌图。
+- **两处过期判定（本期拆掉的）**：
+  ① `metafetch.plan()` 的 `format != "EPUB"` 跳过分支（理由写的是「没有可写的 OPF」，前提已失效）；
+  ② `metafetch.apply()` 的 `.epub` 后缀闸门 —— 以及它上面用 `path.is_file()` 判存在，
+  **有声书是目录型条目**，会被直接判「文件不存在」。改为只保留 `safe_path` 的**安全边界**
+  （确实在该书所属库根下）+ `path.exists()`；结果本来只写 DB，与文件类型无关。
+- **能力矩阵**：`features.FEATURES_BY_TYPE` 给 `comic` 与 `audiobook` 授予 `metadata`
+  （`authors` 仍只给 ebook / mixed，它与作者检索绑定）。`ALL_FEATURES` 是并集、`metadata` 本就在其中 →
+  **能力总数不变（17）**，前端 6 个元数据设置页在漫画 / 有声书库也出现，`metadata_fetch.*` 覆盖项同样可用。
+- **边界未动**：**手动编辑元数据仍限 EPUB**（`server.py` 的 `editable` 与 400，非 EPUB 缺 OPF 兜底原值层，
+  「恢复原值」无从取）—— 本期只动「在线抓取」这条路径。
+- **前端文案**：`MetadataEditor` 改准原因（缺的是 OPF 兜底层，不是「不能写文件」）、`settingsNav` 的
+  `PAGE_FEATURE` 注释、`api.ts` 两处注释、`MetadataPage` 的「有缺口」不再只算 EPUB + 两处「写入 EPUB」措辞。
+- **测试**：新增 `tests/test_metafetch_formats.py`（5 例：漫画 / 有声书目录不再被跳过、apply 两类都能落库
+  且书架可见、越界名仍被 `safe_path` 拦、全局关闭时不下发候选）；同步 4 处既有断言
+  （`test_features` 2 处、`test_api_smoke` 1 处、`test_metadata_server_side` 1 处、
+  `test_library_settings` 2 处 —— 后两处此前断言「漫画库不暴露 / 拒绝元数据覆盖」）。
+  **全程 mock 检索、绝不外呼**。全量 **260 passed**。
+
 ---
 
 ## 四、验证纪律（沿用 history）
