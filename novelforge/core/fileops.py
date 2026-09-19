@@ -37,8 +37,11 @@ _BAD_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 # 其它非法字符（路径分隔符、Windows 保留结尾的点和空格）
 _BAD_TAIL = re.compile(r"[. ]+$")
 
-#: 批量重命名规则里可用的占位符，前端据此给出提示
-PATTERN_FIELDS = ("{title}", "{author}", "{series}", "{index}", "{ext}")
+#: 批量重命名规则里可用的占位符，前端据此给出提示。
+#: 第 17 期扩到 9 个 —— **只加书目里真实存在的字段**（`library.books()` 的
+#: year / publisher / language / series_index）；加不出真实值的一律不加。
+PATTERN_FIELDS = ("{title}", "{author}", "{series}", "{series_index}", "{index}",
+                  "{year}", "{publisher}", "{language}", "{ext}")
 
 
 def output_dir(library_id=None) -> pathlib.Path:
@@ -193,10 +196,15 @@ def plan_merge(kind: str, source: str, target: str, library_id=None) -> dict:
 def plan_pattern_rename(scope: str, pattern: str, library_id=None) -> dict:
     """按规则生成「旧名 → 新名」预览。
 
-    规则里可用 ``{title}`` / ``{author}`` / ``{series}`` / ``{index}`` / ``{ext}``。
+    规则里可用 ``PATTERN_FIELDS`` 里的 9 个占位符（书名 / 作者 / 系列 / 系列序号 /
+    本次范围序号 / 出版年 / 出版社 / 语言 / 扩展名）。
     ``scope`` 传扩展名（如 ``epub``，不带点）可只处理该格式；留空或 ``all`` 表示全部。
     ``library_id`` 给定时只处理该库的书（缺省 = 全部书库）；``{index}`` 序号
-    按**本次范围**重新计数 —— 只改一个库时从 01 开始，符合「当前库」的预期。
+    按**本次范围**重新计数 —— 只改一个库时从 01 开始，符合「当前库」的预期；
+    ``{series_index}`` 则是书目里的**系列序号原值**（读不到就是空串），两者语义不同。
+
+    ⚠️ 替换顺序：先长后短 —— ``{series_index}`` 必须排在 ``{series}`` / ``{index}``
+    之前处理，否则会被短 token 抢先吃掉一半（``str.replace`` 只看字面量，不认词边界）。
     """
     pat = (pattern or "").strip()
     if not pat:
@@ -213,11 +221,16 @@ def plan_pattern_rename(scope: str, pattern: str, library_id=None) -> dict:
             continue
         idx += 1
         stem = pathlib.Path(b["name"]).stem
+        # ⚠️ 先长后短：{series_index} 必须在 {series} / {index} 之前替换
         filled = (
-            pat.replace("{title}", b["title"] or stem)
+            pat.replace("{series_index}", str(b.get("series_index") or ""))
+            .replace("{title}", b["title"] or stem)
             .replace("{author}", b["author"] or "未知")
             .replace("{series}", b["series"] or "无系列")
             .replace("{index}", f"{idx:02d}")
+            .replace("{year}", str(b.get("year") or ""))
+            .replace("{publisher}", b.get("publisher") or "")
+            .replace("{language}", b.get("language") or "")
             .replace("{ext}", suffix.lstrip("."))
         )
         new_stem = sanitize_stem(filled)
