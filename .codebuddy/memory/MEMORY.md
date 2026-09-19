@@ -77,4 +77,7 @@
 ## 待办（跨会话）
 - 外部服务同步（Hardcover/Readwise/StoryGraph 推送）：**用户 2026-09-19 拍板本轮明确不做**，不再排期，也不留半成品入口；相关设置页维持如实标注「未支持」。
 - BookOrbit 参考仓库已升格为**真值源**：`735876214/bookorbit` @ `main` @ `c292d6cc`，只读 blobless 稀疏镜像在 `%TEMP%\bookorbit-ref`（`packages/types` + `packages/plugin-api`，76 个 `.ts`）；文档结论须标注来源文件，与历史实测冲突时以源码为准，源码无法确认处标「未验证（源码无法确认）」。
-- 上游 `client/` 与 `server/src/modules/*` **尚未纳入取证**（需按需 sparse-checkout 追加）；已定位的界面层空白：批注 Hub 四分组 UI、成就 `dedication/devices` 分组标题、Requests 两页表格列、bulk-rename 请求/响应类型定义（`packages/types` 内不存在）。
+- 上游 `client/` 与 `server/src/modules/*` **尚未纳入取证**（需按需 sparse-checkout 追加）；已定位的界面层空白：成就 `dedication/devices` 分组标题、Requests 两页表格列、bulk-rename 请求/响应类型定义（`packages/types` 内不存在）。
+  （~~批注 Hub 四分组 UI~~ **第 27 期已落地**：月/书/颜色/来源四档，纯前端分组；垃圾桶与周节拍统计同批交付。仍**无数据源故不做**：`origin` 的 `koreader`/`kobo` 两个值、`needsReview`、`devices`、跨端降色 —— kosync 已核实是**纯进度**，无批注端点。）
+- **批注域的软删除是既定语义**（第 27 期）：`DELETE` = 移入垃圾桶（写 `deleted_at`），`purge` 才是真删且**只对垃圾桶内条目开放**。加任何新的 `annotations` 读点时**必须带 `WHERE deleted_at = 0`**；新增「按 book_id 探测是否已有数据」的级联逻辑时，探测谓词**必须同样过滤**，否则会静默搁浅活跃批注（`remap_book_id` 踩过，见 `REMAP_PROBE_FILTER`）。
+- **文档过期是常态，改文档前先核验代码**：`docs/bookorbit-capability-gap.md` 曾把「本项目无」写在一堆早已实现的能力上，**它的 §0.3「判定依据」基线自己就先过期了**（68→260 路由、6→28 表）。**基线错误会让下游每条判定都失去依据** —— 复核该文档时先重取基线，再逐条核验，**不做整表翻转**（有反例：StatsView 双分区、Integrity 百分比、「孤儿封面目录」是刻意不同设计，均为「仍缺/刻意」而非「已做」）。
