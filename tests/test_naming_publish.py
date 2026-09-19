@@ -122,6 +122,31 @@ def test_预览名就是重出版后的落盘名(env):
     assert (env["pdir"] / after["link_rel"]).is_file()
 
 
+def test_模式里的ext占位符不再重复拼扩展名(env):
+    """``{ext}`` 展开后**已经带上了扩展名**，落点拼接不能再拼一次。
+
+    设置页把 ``{ext}`` 列为可选占位符（``settingsFields.ts`` 的 PATTERN_FIELDS
+    「扩展名（去点）」），用户照着填就会撞上 —— 第 29 期端到端发现：
+    ``{author} - {title}.{ext}`` 落成 ``作者 - 基地.epub.epub``。
+    """
+    _epub(env["root"], "基地.epub", title="基地", author="作者")
+    _rule(env, "{author} - {title}.{ext}")
+    row = _publish(env, "基地.epub")
+    assert row["link_rel"] == "作者 - 基地.epub", row["link_rel"]
+
+    # 预览走的是同一个 relpath_for：它也得说同一个名字
+    _rule(env, "{title}.{ext}")
+    it = scrape.plan_naming(env["lid"])["items"][0]
+    assert it["new_rel"] == "基地.epub"
+    assert scrape.republish(None, env["lid"])["done"] == 1
+    assert (env["pdir"] / "基地.epub").is_file()
+    assert db.scrape_get(row["book_id"])["link_rel"] == "基地.epub"
+
+    # 修正别做过头：``{ext}`` 不在结尾时是用户**显式要扩展名进名字**，照旧保留
+    _rule(env, "{ext} - {title}")
+    assert scrape.plan_naming(env["lid"])["items"][0]["new_rel"] == "epub - 基地.epub"
+
+
 def test_重出版把旧副本移入回收不留双份(env):
     _epub(env["root"], "旧名.epub", title="旧名")
     _rule(env, "{title}")

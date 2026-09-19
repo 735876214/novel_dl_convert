@@ -124,10 +124,24 @@ def relpath_for(book: dict, cfg: dict = None) -> str:
             # ``fill_pattern`` 的 ``ext`` 参数是「覆盖值」，传空串会回落去读书目名的后缀
             # （``书.名`` 于是填出「名」）。模式里剩下的分隔符残留由 ``sanitize_stem`` 的
             # ``_BAD_TAIL`` 收掉（``书名 - 作者.`` → ``书名 - 作者``）。
-            pattern = pattern.replace("{ext}", "")
+            pattern, drop_ext = pattern.replace("{ext}", ""), ""
+        else:
+            # ``{ext}`` 展开后 stem **已经带上了扩展名**，而下面 ``komga.relpath_for`` 还会
+            # 再拼一次 → 模式写 ``{title}.{ext}`` 落成 ``书名.m4b.m4b``（第 29 期端到端
+            # 发现；设置页把 ``{ext}`` 列为可选占位符，用户照着填就会撞上）。
+            # 只在模式**以 ``{ext}`` 收尾**时才摘：这时展开结果必然以该扩展名收尾，摘掉
+            # 正好抵消，也不会误伤书名本身以「.扩展名」结尾的条目。``{ext}`` 出现在别处
+            # （如 ``{ext} - {title}``）是用户显式要扩展名进名字，不动。
+            # 边界：只摘**带点分隔**的（``{title}.{ext}`` / ``{author} - {title}.{ext}``，
+            # 也就是设置页示例与用户直觉的写法）。``{title} {ext}`` 这种不带点的写法无法
+            # 与「书名本身以扩展名文字结尾」零误判地区分，仍会重复一次。
+            tail = "." + ext.lstrip(".").lower()
+            drop_ext = tail if pattern.rstrip().endswith("{ext}") else ""
         # 展开走 fileops.fill_pattern —— **全项目唯一实现**（第 28 期合并，
         # 原先这里是只认 5 个占位符的第二套实现，与预览各说各话）
         stem = fileops.fill_pattern(pattern, book, ext) or stem
+        if drop_ext and stem.lower().endswith(drop_ext):
+            stem = stem[: -len(drop_ext)]
     series = str(book.get("series") or "")
     index = str(book.get("series_index") or "")
     layout = str(((cfg or {}).get("output") or {}).get("layout") or "flat")
