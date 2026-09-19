@@ -68,7 +68,7 @@ import { SETTINGS_HOME, SETTINGS_PAGES } from '@/data/settingsNav'
  * 并统一标注「未支持」（对齐 `docs/bookorbit-settings-inventory.md` 的迁移约定 3）。
  * 用映射表而不是在注册表里直接引用组件，是为了让 `data/settingsNav.ts` 保持纯数据、可被非 UI 代码复用。
  */
-const SETTINGS_PAGE_COMPONENTS: Record<string, Component> = {
+export const SETTINGS_PAGE_COMPONENTS: Record<string, Component> = {
   'account/profile': ProfilePage,
   'account/notifications': NotificationsPage,
   'appearance/theme': ThemePage,
@@ -124,7 +124,7 @@ const SETTINGS_PAGE_PROPS: Record<string, () => Record<string, unknown>> = {
   'metadata/genre-blocklist': () => ({ section: 'genre-blocklist' }),
 }
 
-/** 设置页的 38 个子路由，由注册表生成，避免手写路由与侧栏导航两处走样 */
+/** 设置页的 48 个子路由，由注册表生成，避免手写路由与侧栏导航两处走样 */
 const settingsChildren = SETTINGS_PAGES.map((page) => {
   const component = SETTINGS_PAGE_COMPONENTS[page.path]
   if (page.status === 'ready' && !component) {
@@ -180,6 +180,9 @@ const router = createRouter({
       component: SettingsLayout,
       children: [
         { path: '', redirect: SETTINGS_HOME },
+        // 上游实测存在的别名：/settings/system 会被上游重定向到「文件命名」。
+        // 本项目同样保留，避免从上游文档/书签跳进来时 404（见 inventory §7.1 #4）。
+        { path: 'system', redirect: { name: 'settings-library-file-naming' } },
         ...settingsChildren,
       ],
     },
