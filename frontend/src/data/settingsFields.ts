@@ -132,14 +132,19 @@ export const RENAME_SCOPES: { value: string; label: string }[] = [
 ]
 
 /**
- * 后端 `core/fileops.py` 实际支持的 5 个占位符。
+ * 后端 `core/fileops.py` 实际支持的 9 个占位符（`PATTERN_FIELDS`，顺序与之一致）。
  * 这是**本项目实现**，不是上游的 token 表 —— 上游有 13 个 token + 7 个修饰符。
+ * 只登记书目里**真实存在**的字段：加不出真实值的一律不加。
  */
 export const RENAME_TOKENS: { token: string; desc: string }[] = [
   { token: '{title}', desc: '书名；为空时回退原始文件名' },
   { token: '{author}', desc: '作者；为空时回退「未知」' },
   { token: '{series}', desc: '系列名；为空时回退「无系列」' },
+  { token: '{series_index}', desc: '系列内序号（书目原值；读不到为空串）' },
   { token: '{index}', desc: '序号（两位补零，按文件列表顺序，非按系列）' },
+  { token: '{year}', desc: '出版年（读不到为空串）' },
+  { token: '{publisher}', desc: '出版社（读不到为空串）' },
+  { token: '{language}', desc: '语言（读不到为空串）' },
   { token: '{ext}', desc: '扩展名（去点）' },
 ]
 

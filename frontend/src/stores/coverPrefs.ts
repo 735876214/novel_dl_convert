@@ -23,6 +23,8 @@ export interface CoverPrefs {
   display: CoverDisplay
   /** 书脊覆盖层 */
   spine: CoverSpine
+  /** 漫画（CBZ / CBR）是否也显示书脊；电子书不受此项影响（第 17 期） */
+  spineComics: boolean
   /** 阴影强度 */
   shadow: CoverShadow
   /** 卡片叠加层（勾选项） */
@@ -38,6 +40,8 @@ const KEY = 'nf-cover-prefs'
 export const COVER_PREFS_DEFAULT: CoverPrefs = {
   display: 'fill',
   spine: 'subtle',
+  // 默认显示：与加这个开关之前的观感完全一致（此前漫画也走同一个 spine 设置）
+  spineComics: true,
   shadow: 'normal',
   overlays: [],
 }
@@ -80,6 +84,9 @@ function read(): CoverPrefs {
       spine: COVER_SPINE_OPTIONS.some((o) => o.value === p.spine)
         ? (p.spine as CoverSpine)
         : COVER_PREFS_DEFAULT.spine,
+      // 旧数据没这个键 → 取默认 True（与旧观感一致）
+      spineComics:
+        typeof p.spineComics === 'boolean' ? p.spineComics : COVER_PREFS_DEFAULT.spineComics,
       shadow: COVER_SHADOW_OPTIONS.some((o) => o.value === p.shadow)
         ? (p.shadow as CoverShadow)
         : COVER_PREFS_DEFAULT.shadow,

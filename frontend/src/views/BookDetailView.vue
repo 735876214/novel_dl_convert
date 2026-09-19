@@ -13,6 +13,7 @@ import ReadingRecord from '@/components/book/ReadingRecord.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useCollectionsStore } from '@/stores/collections'
 import { api, type Annotation, type BookDetail, type ProgressState, type SimilarBook } from '@/lib/api'
+import { extractCoverTint, type CoverTint } from '@/lib/coverTint'
 
 /**
  * 单书详情：面包屑 + hero + 四标签（概览 / 目录 / 文件 / 批注）。
@@ -28,6 +29,34 @@ const bookId = computed(() => String(route.params.id))
 const detail = ref<BookDetail | null>(null)
 const loading = ref(true)
 const book = computed(() => detail.value ?? library.findBook(bookId.value))
+
+/**
+ * 封面取色（第 17 期）：从封面图取两个色相，喂给照搬来的 `.book-detail-cover-tint`。
+ * 取不到（无封面 / 加载失败 / 画布不可用）就**不设变量** —— CSS 那条 hsl() 整条失效，
+ * 于是不染色，不会留下黑块。**纯装饰，绝不阻塞或报错**。
+ */
+const tint = ref<CoverTint | null>(null)
+const tintStyle = computed(() =>
+  tint.value
+    ? {
+        '--cover-tint-hue': `${tint.value.hue}`,
+        '--cover-tint-saturation': `${tint.value.saturation}%`,
+        '--cover-tint-hue-2': `${tint.value.hue2}`,
+        '--cover-tint-saturation-2': `${tint.value.saturation2}%`,
+      }
+    : undefined,
+)
+watch(
+  () => [book.value?.id, book.value?.has_cover] as const,
+  async ([bid, hasCover]) => {
+    tint.value = null
+    if (!bid || !hasCover) return
+    const result = await extractCoverTint(api.coverUrl(String(bid)))
+    // 竞态：取色是异步的，回来时可能已经切到别的书了
+    if (String(book.value?.id ?? '') === String(bid)) tint.value = result
+  },
+  { immediate: true },
+)
 
 const TABS = [
   { id: 'overview', label: '概览' },
@@ -216,8 +245,12 @@ onMounted(async () => {
       <span class="text-foreground">{{ book.title }}</span>
     </nav>
 
-    <!-- hero -->
-    <div class="mb-6 flex flex-col gap-5 sm:flex-row sm:gap-7">
+    <!-- hero：背景取封面主色染色（取不到就不染色，见 tint / coverTint.ts） -->
+    <div
+      class="mb-6 flex flex-col gap-5 sm:flex-row sm:gap-7"
+      :class="tint ? 'book-detail-cover-tint' : ''"
+      :style="tintStyle"
+    >
       <div class="relative w-[140px] shrink-0 sm:w-[176px]">
         <BookCover :book="book" :interactive="false" :show-title="false" />
       </div>

@@ -38,7 +38,8 @@ const unsupportedItems = computed(() =>
 )
 
 /** 已实现的条目不在「未支持」卡片里重复出现（前缀匹配上游原文） */
-const IMPLEMENTED = ['Cover display mode', 'Book spine overlay', 'Cover shadow strength', 'Card overlays']
+const IMPLEMENTED = ['Cover display mode', 'Book spine overlay', 'Show spine on comics',
+  'Cover shadow strength', 'Card overlays', 'Book details cover tint']
 
 onMounted(() => {
   void library.loadBooks()
@@ -137,6 +138,29 @@ function chip(active: boolean): string {
           </div>
         </div>
       </div>
+
+      <div class="border-t border-border px-4 py-3">
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="min-w-0 flex-1">
+            <div class="text-[12.5px] font-medium text-foreground">漫画书脊</div>
+            <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+              漫画（CBZ / CBR）是否也显示书脊；电子书不受此项影响
+            </div>
+          </div>
+          <div class="flex shrink-0 gap-1.5">
+            <button
+              v-for="o in [{ v: true, label: '显示' }, { v: false, label: '隐藏' }]"
+              :key="o.label"
+              type="button"
+              class="cursor-pointer rounded-full px-3 py-1 text-[12px] font-medium transition-colors"
+              :class="chip(prefs.prefs.spineComics === o.v)"
+              @click="prefs.patch({ spineComics: o.v })"
+            >
+              {{ o.label }}
+            </button>
+          </div>
+        </div>
+      </div>
     </Card>
 
     <!-- 卡片叠加层 -->
@@ -173,7 +197,7 @@ function chip(active: boolean): string {
       :label="upstream?.title ?? 'Book Covers'"
       :groups="upstream?.groups"
       :items="unsupportedItems"
-      note="以下条目在上游该页存在，本项目未实现。「封面搜索提供者」依赖在线封面抓取，与本项目定位冲突；「漫画书脊」依赖漫画支持（第 3 期）。"
+      note="以下条目在上游该页存在，本项目未实现。「封面搜索提供者」依赖在线封面抓取（本项目的元数据抓取只覆盖 EPUB，且不做封面搜索）。漫画书脊与详情页封面取色已于第 17 期实现。"
     />
   </div>
 </template>

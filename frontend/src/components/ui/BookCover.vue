@@ -2,7 +2,7 @@
 import { computed, ref, watch } from 'vue'
 
 import { api, type BookCard } from '@/lib/api'
-import { useCoverPrefsStore, type CoverOverlay } from '@/stores/coverPrefs'
+import { useCoverPrefsStore, type CoverOverlay, type CoverSpine } from '@/stores/coverPrefs'
 
 /**
  * 书封。显示方式 / 书脊 / 阴影 / 叠加层全部由「设置 → 封面样式」的偏好驱动
@@ -50,6 +50,16 @@ const showImg = computed(() => Boolean(src.value) && !failed.value)
 const mode = computed(() => prefs.prefs.display)
 const spine = computed(() => prefs.prefs.spine)
 
+/**
+ * 实际生效的书脊：漫画（CBZ / CBR）受「漫画书脊」开关控制（第 17 期）。
+ * 该开关默认开着 → 与加它之前**完全一致**（此前漫画与电子书共用同一个 spine 设置）。
+ */
+const spineMode = computed<CoverSpine>(() => {
+  const fmt = String(props.book.format || '').toUpperCase()
+  if ((fmt === 'CBZ' || fmt === 'CBR') && !prefs.prefs.spineComics) return 'off'
+  return prefs.prefs.spine
+})
+
 function has(o: CoverOverlay): boolean {
   return prefs.prefs.overlays.includes(o)
 }
@@ -81,7 +91,7 @@ const statusLabel = computed(() => {
   <div
     class="book-cover-surface relative aspect-3/4 w-full overflow-hidden rounded-md transition-transform duration-200 ease-out"
     :class="interactive ? 'group-hover:-translate-y-0.5' : ''"
-    :data-cover-spine="spine === 'off' ? undefined : spine"
+    :data-cover-spine="spineMode === 'off' ? undefined : spineMode"
     :data-cover-shadow="prefs.prefs.shadow === 'strong' ? 'strong' : undefined"
     :data-cover-fit="natural ? 'natural-bottom' : undefined"
     :style="[{ backgroundImage: `linear-gradient(160deg, ${book.c1}, ${book.c2})` }, styleVars]"
@@ -115,7 +125,7 @@ const statusLabel = computed(() => {
     <!-- 书脊覆盖层：与 surface 用同一个取值，CSS 分别读两处 -->
     <div
       class="book-cover-spine-layer absolute inset-0"
-      :data-cover-spine="spine === 'off' ? undefined : spine"
+      :data-cover-spine="spineMode === 'off' ? undefined : spineMode"
     />
 
     <!-- 占位文字（只在没有真实封面时出现） -->
