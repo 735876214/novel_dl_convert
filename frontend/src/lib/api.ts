@@ -808,6 +808,14 @@ export interface StatsTop {
   count: number
 }
 
+/** 体积榜一项（对应上游 `LargestBookItem`；snake_case 是本项目接口口径） */
+export interface LargestBook {
+  id: string
+  title: string
+  size_bytes: number
+  format: string
+}
+
 export interface RecentRead {
   id: string
   title: string
@@ -833,14 +841,38 @@ export interface StatsOverview {
   years: { known: number; unknown: number; decades: Array<{ decade: number; count: number }> }
   /** 全库平均阅读进度（0–100，含未读书的 0） */
   avg_progress: number
-  /** 书库体检：缺元数据 / 无封面 / 异常文件的计数 */
+  /**
+   * 书库体检。
+   *
+   * 前 5 个是**计数**（哪一类有问题、各几本，可照着修）；后 8 个是**百分比口径**
+   * （对齐上游 `LibraryIntegrityGauge` 的四值：Integrity 综合分 + Present / Primary /
+   * Metadata 三项覆盖率）。两者是增补关系，不是替代 —— 计数键一直在，别删。
+   */
   integrity: {
     missing_author: number
     missing_language: number
     no_cover: number
     zero_size: number
     unparsable: number
+    /** 分母（= books.total） */
+    total_books: number
+    /** 文件有实体内容（非 0 字节）的本数 */
+    present: number
+    present_percent: number
+    /** 主文件能被解析出结构的本数 */
+    primary: number
+    primary_percent: number
+    /** 元数据完整度达标（评分 ≥ 70）的本数 */
+    metadata: number
+    metadata_percent: number
+    /** 综合分：三项覆盖率的算术平均（0–100） */
+    score: number
   }
+  /**
+   * 体积榜（Top 50 Largest Books）：按 size_bytes 降序，**固定最多 50 条**，
+   * 不随 `top` 参数伸缩（`top` 管的是作者/系列/出版社/题材四个计数器榜）。
+   */
+  largest: LargestBook[]
   reading: {
     unread: number
     reading: number
@@ -2734,5 +2766,6 @@ export const api = {
     request<{ ok: boolean }>('/api/config/overrides', { method: 'DELETE' }),
 
   // ---------- 数据统计 ----------
-  stats: (days = 28) => request<StatsOverview>(`/api/stats?days=${days}`),
+  // top=50：让「展开全部」真的能展开到 50（服务端已收敛 1–50）；体积榜固定 50 条、与之无关
+  stats: (days = 28) => request<StatsOverview>(`/api/stats?days=${days}&top=50`),
 }
