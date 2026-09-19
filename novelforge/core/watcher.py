@@ -65,21 +65,31 @@ def wait_pending(timeout: float = 5.0) -> int:
             t.join(timeout=min(0.25, left))
 
 
-def auto_fetch_async(name: str, cfg: dict | None) -> None:
+def auto_fetch_async(name: str, cfg: dict | None, kind: str | None = None) -> None:
     """入库后自动抓取元数据（**仅在配置开启时**）。
 
-    三条约束：
+    四条约束：
 
     1. **必须异步**：抓取要外呼公网（每本 1–3 秒）。watcher 是后台线程，同步做会拖慢
        扫描轮次；起个 daemon 线程最省心 —— 晚几秒补上元数据没有任何影响。
     2. **吞掉一切异常**：这是旁路增强，不能因为外网不通就影响入库结果。
-    3. **只对 EPUB**：其它格式没有可写的 OPF（与 `metafetch.plan` 的口径保持一致）。
+    3. **只对「可抓格式」触发**：第 22 期起元数据只落服务端 DB、不再写 OPF，原
+       「其它格式无 OPF 可写」的理由已失效；放开到电子书（epub / mobi / azw3 / pdf / fb2）
+       与漫画（cbz / cbr）。有声书是**目录条目**、名字无后缀，由调用点显式传
+       ``kind="audiobook"`` 放行（与 `metafetch.plan` 对格式无依赖的口径一致）。
+    4. **仍受双重门控**：``metadata_fetch.enabled`` 且 ``auto_on_import`` 为真才触发；
+       默认关闭、默认不联网、默认行为零变化。
     """
     mf = (cfg or {}).get("metadata_fetch") or {}
     if not mf.get("enabled") or not mf.get("auto_on_import"):
         return
-    if not str(name).lower().endswith(".epub"):
-        return
+    # 目录型有声书靠 kind 显式放行；其余格式按 allow-list（名字无后缀的散落文件不抓，
+    # 避免「入库即外呼」误伤无关文件）。
+    if kind != "audiobook":
+        ext = Path(str(name)).suffix.lower()
+        from . import comics  # 延迟导入：避免 core 内循环依赖
+        if ext not in {".epub", ".mobi", ".azw3", ".pdf", ".fb2", *comics.COMIC_EXTS}:
+            return
 
     def _run():
         try:
@@ -417,10 +427,14 @@ class FolderWatcher:
                 if dst.resolve() == p.resolve():     # 就地库：来源即存储，无需复制
                     activity_log.log_add_ok(p.name, rel, size=self._sig(p)[0],
                                             duration_ms=dur(), source="watcher")
+                    auto_fetch_async(rel, cfg, kind="audiobook")
+                    enqueue_scrape_async(rel, lib, cfg)
                     return ("added", str(dst))
                 pipeline._copy_tree(p, dst)
                 activity_log.log_add_ok(p.name, rel, size=self._sig(p)[0],
                                         duration_ms=dur(), source="watcher")
+                auto_fetch_async(rel, cfg, kind="audiobook")
+                enqueue_scrape_async(rel, lib, cfg)
                 return ("added", str(dst))
             except Exception as e:
                 activity_log.log_add_fail(p.name, f"{type(e).__name__}: {e}", size=0, source="watcher")
