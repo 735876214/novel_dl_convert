@@ -172,7 +172,7 @@ const INPUT_CLS =
           <Icon name="alert" class="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             该书的格式是 <span class="font-mono">{{ meta.format || '未知' }}</span>。
-            元数据编辑只支持 EPUB —— 其它格式没有可改写的 OPF，因此这里只能查看。
+            元数据编辑只支持 EPUB —— 其它格式没有可作「恢复原值」兜底的 OPF 原值层，因此这里只能查看（在线抓取的结果照常显示）。
           </span>
         </div>
       </Card>

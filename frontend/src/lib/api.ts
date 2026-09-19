@@ -234,7 +234,7 @@ export interface MetadataPlanItem {
   /** 字段级改动：{字段: {from, to, source, score}}（字段名是 OPF 口径，年份叫 date） */
   changes: Record<string, { from: unknown; to: unknown; source: string; score: number }>
   cover: { url: string; action: string; source: string; score: number } | null
-  /** 非 EPUB 等跳过原因 */
+  /** 跳过原因（例如该库关闭了在线元数据抓取、或没有够格的候选） */
   skipped: string
   error: string
 }
@@ -969,7 +969,7 @@ export interface BookMetadata {
   id: string
   name: string
   format: string
-  /** 非 EPUB（无 OPF 可改写）为 false，前端据此把表单置为只读并说明原因 */
+  /** 非 EPUB 为 false（缺 OPF 兜底原值层，无法「恢复原值」），前端据此把表单置为只读并说明原因 */
   editable: boolean
   /** 生效值（override > online > opf） */
   fields: BookMetadataFields

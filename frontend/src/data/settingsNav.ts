@@ -450,8 +450,8 @@ export const PAGE_FEATURE: Record<string, string> = {
   'reader/pdf': 'pdf',
   'reader/comics': 'comic',
   'reader/audio': 'audio',
-  // 元数据抓取的字段语义与「文件原值兜底」都建立在 EPUB 上 → 只有电子书库有这套页面
-  // （第 18 期起结果只存服务端 DB，但能力范围没变）
+  // 这 6 页绑 `metadata` 能力：抓取结果只存服务端 DB、与文件格式无关
+  // → 电子书 / 漫画 / 有声书库都可见（`metadata/authors` 绑的是 `authors`，仍只有电子书库）
   'metadata/providers': 'metadata',
   'metadata/field-rules': 'metadata',
   'metadata/custom-fields': 'metadata',

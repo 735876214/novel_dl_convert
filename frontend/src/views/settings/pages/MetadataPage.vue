@@ -53,7 +53,7 @@ const SECTIONS: Record<string, { zh: string; en: string; desc: string; blocks: s
     blocks: ['blocklist'],
   },
   'custom-fields': {
-    zh: '自定义字段', en: 'Custom Fields', desc: '写入 EPUB 的自定义元数据',
+    zh: '自定义字段', en: 'Custom Fields', desc: '存入应用数据库的自定义元数据',
     blocks: ['custom'],
   },
 }
@@ -142,12 +142,10 @@ const picked = ref<Set<string>>(new Set())
 const running = ref(false)
 const progress = ref({ done: 0, total: 0 })
 
-/** 「有缺口」= 该补的书：EPUB 且缺封面 / 缺语言 / 缺出版社 / 缺简介 */
+/** 「有缺口」= 该补的书：缺封面 / 缺语言 / 缺出版社 / 缺简介（**不限格式** —— 抓取对非 EPUB 同样适用） */
 const missing = computed(() =>
   library.books.filter(
-    (b) =>
-      (b.format || '').toUpperCase() === 'EPUB' &&
-      (!b.has_cover || !b.language || !b.publisher || !b.description),
+    (b) => !b.has_cover || !b.language || !b.publisher || !b.description,
   ),
 )
 
@@ -520,7 +518,7 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
         <div class="min-w-0 flex-1">
           <div class="text-[13px] font-medium text-foreground">自定义元数据</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
-            写入 EPUB 的 <code class="font-mono">&lt;meta name="…" content="…"/&gt;</code>，每次应用抓取时一并写入
+            存入应用数据库，每次应用抓取时一并写入（不改写任何文件）
           </div>
         </div>
         <Button size="sm" @click="setVal('metadata_fetch.custom_fields', [...(mf.custom_fields ?? []), { name: '', value: '' }])">
