@@ -323,17 +323,28 @@ def test_恢复到在线值(client, auth_headers, default_root):
     assert data["meta"]["publisher"]["online"] == "在线出版社"
 
 
-def test_非EPUB不可编辑元数据(client, auth_headers, default_root, make_book):
+def test_非EPUB也能编辑元数据(client, auth_headers, default_root, make_book):
+    """第 22 期：手动编辑不再限 EPUB（此前断言「非 EPUB 一律 400」）。
+
+    原先限 EPUB 的理由是「字段的兜底原值来自 OPF」；第 18/19 期把改动改成只落服务端 DB
+    之后这条前提就不成立了 —— 非 EPUB 没有 OPF 层，「恢复原值」即撤销覆盖后回落在线的
+    抓取值、没有在线值就是空，是清晰语义而不是缺口。
+    """
     make_book(default_root, "测试漫画.cbz")
     library.invalidate()
     bid = next(b["id"] for b in _books(client, auth_headers) if b["format"] == "CBZ")
 
+    assert client.get(f"/api/books/{bid}/metadata",
+                      headers=auth_headers).json()["editable"] is True
+
     r = client.post(f"/api/books/{bid}/metadata", headers=auth_headers,
-                    json={"fields": {"publisher": "x"}})
-    assert r.status_code == 400
-    # 第 18 期起元数据只存服务端，但「仅 EPUB」这条没变 —— 理由是**兜底原值来自 OPF**，
-    # 非 EPUB 没有这一层（不再是「要写文件所以限 EPUB」）。
-    assert "EPUB" in r.json()["detail"]
+                    json={"fields": {"publisher": "服务端社"}})
+    assert r.status_code == 200, r.text
+    assert r.json()["changed"] == ["publisher"]
+    # 详情与列表（批量热路径）读到同一个值
+    assert r.json()["fields"]["publisher"] == "服务端社"
+    row = next(b for b in _books(client, auth_headers) if b["id"] == bid)
+    assert row["publisher"] == "服务端社"
 
 
 def test_提交不支持的字段被拒(client, auth_headers, default_root):

@@ -15,7 +15,7 @@ import pathlib
 import pytest
 
 from novelforge import config
-from novelforge.core import db, epub_builder, lib_settings, library, metafetch
+from novelforge.core import db, epub_builder, fileops, lib_settings, library, metafetch
 
 
 def _real_epub(root, name: str, title: str = "书") -> pathlib.Path:
@@ -194,3 +194,84 @@ def test_漫画库也能覆盖auto_on_import(isolated, make_library, tmp_path): 
     assert "metadata_fetch.auto_on_import" in keys
     lib_settings.set_overrides(lid, {"metadata_fetch.auto_on_import": True})
     assert lib_settings.config_for(lid)["metadata_fetch"]["auto_on_import"] is True
+
+
+# ---------------------------------------------------------------------------
+# 第 22 期：编辑放开到所有格式 + 「显式清空」（哨兵）
+# ---------------------------------------------------------------------------
+
+def test_清空哨兵字段与可编辑字段同集合(isolated):  # noqa: ARG001
+    """`db._CLEARABLE` 必须与 `fileops.METADATA_FIELDS` 同集合。
+
+    db 不能 import fileops（后者 import 前者，会成环），那份字段清单是手抄的 ——
+    这条断言就是防「加了字段却忘了能清空」。
+    """
+    assert set(db._CLEARABLE) == set(fileops.METADATA_FIELDS)
+    assert db.clearable("publisher") is True
+    assert db.clearable("不存在的字段") is False
+
+
+def test_清空题材在批量热路径返回空列表(isolated):  # noqa: ARG001
+    """题材清空后要进列表形态（``[]``），否则列表 / 卡片会拿到字符串。"""
+    db.set_override("bx", "tags", db.META_CLEAR)
+    assert db.get_effective_meta(["bx"])["bx"]["tags"] == []
+    # 哨兵本身不该被当成值漏出去
+    assert db.META_CLEAR not in str(db.get_effective_meta(["bx"]))
+
+
+def test_非EPUB编辑并显式清空盖住在线值(client, auth_headers, default_root, make_book):
+    """非 EPUB 也能编辑；「清空」（提交 ``null``）是**显式无值**，不会被在线值填回来。"""
+    make_book(default_root, "漫画.cbz")
+    library.invalidate()
+    bid = next(b["id"] for b in library.books() if b["format"] == "CBZ")
+    db.set_online(bid, {"publisher": ("在线社", "openlibrary")})
+    library.invalidate()
+
+    meta = client.get(f"/api/books/{bid}/metadata", headers=auth_headers).json()
+    assert meta["editable"] is True
+    assert meta["fields"]["publisher"] == "在线社"          # 在线值先露出来
+
+    r = client.post(f"/api/books/{bid}/metadata", headers=auth_headers,
+                    json={"fields": {"publisher": "用户社"}})
+    assert r.status_code == 200, r.text
+    assert r.json()["fields"]["publisher"] == "用户社"
+
+    # 清空 = 显式无值：详情为空、仍算「用户改过」、库里落的是哨兵
+    r = client.post(f"/api/books/{bid}/metadata", headers=auth_headers,
+                    json={"fields": {"publisher": None}})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["changed"] == ["publisher"]
+    assert d["fields"]["publisher"] == ""
+    assert d["meta"]["publisher"]["overridden"] is True
+    assert db.get_overrides(bid)["publisher"] == db.META_CLEAR
+
+    # 批量热路径（列表 / 卡片 / OPDS / Komga 都走它）同样为空，不回落在线值
+    library.invalidate()
+    assert next(b for b in library.books() if b["id"] == bid)["publisher"] == ""
+
+    # 抓取保护：哨兵同样在 overrides 里 → metafetch 不会再把它填回来
+    assert db.all_overrides()[bid]["publisher"] == db.META_CLEAR
+
+    # 撤销覆盖 → 回到在线值（这是「恢复」，不是「清空」）
+    r = client.post(f"/api/books/{bid}/metadata/revert", headers=auth_headers,
+                    json={"fields": ["publisher"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["fields"]["publisher"] == "在线社"
+
+
+def test_EPUB空串仍是撤销覆盖(client, auth_headers, default_root):
+    """EPUB 的老行为不变：提交**空串** = 撤销覆盖（回落 OPF / 在线值），不写哨兵。"""
+    _real_epub(default_root, "空串.epub", title="空串书")
+    library.invalidate()
+    b = _find(client, auth_headers, "空串书")
+
+    client.post(f"/api/books/{b['id']}/metadata", headers=auth_headers,
+                json={"fields": {"publisher": "用户社"}})
+    assert db.get_overrides(b["id"])["publisher"] == "用户社"
+
+    r = client.post(f"/api/books/{b['id']}/metadata", headers=auth_headers,
+                    json={"fields": {"publisher": ""}})
+    assert r.status_code == 200, r.text
+    assert "publisher" not in db.get_overrides(b["id"])     # 覆盖被撤掉
+    assert db.get_overrides(b["id"]).get("publisher") != db.META_CLEAR

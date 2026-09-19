@@ -80,22 +80,49 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ARG001
 # 夹具
 # ---------------------------------------------------------------------------
 
+def _quiesce_background() -> None:
+    """收干净后台线程 —— **必须在 `db.close()` 之前调用**。
+
+    两类要收的东西：
+
+    1. **长驻轮询线程**：刮削 worker、文件监听 watcher（它们都会扫库 / 查库）；
+    2. **旁路线程**：`watcher.auto_fetch_async` / `enqueue_scrape_async` 派生的线程 ——
+       它们「发了就不管」，但同样要查库（`library.find` → `publish_dir` → `db.get_library`）。
+
+    本套测试的 DB 是**用例级隔离**的（`db.close()` + `db.init()`）：线程晚一步动手就会
+    在已关闭的连接上查库 —— 全量跑实测到过 **segfault**（跑到后半程解释器直接崩、
+    连汇总行都打不出来）。与既有的「测试不养后台轮询」是同一条纪律。
+    """
+    try:
+        from novelforge.core import scrape, watcher
+        scrape.stop(timeout=2.0)
+        watcher.wait_pending(5.0)
+    except Exception:                                 # noqa: BLE001 —— 收尾失败不该让用例变红
+        pass
+    try:
+        from novelforge import server
+        w = getattr(server, "WATCHER", None)
+        if w is not None and w.is_running():
+            w.stop()
+    except Exception:                                 # noqa: BLE001
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _stop_scrape_worker():
-    """每个用例结束后停掉**刮削 worker**（第 18 期）。
+    """每个用例结束后收干净后台线程（第 18 期；第 22 期扩到旁路线程）。
 
     接口用例（`POST /api/scrape/run`、单库扫描）会真的把 daemon worker 叫起来，
     而本套测试的 DB 是**用例级隔离**的（`db.close()` + `db.init()`）——
     一个跨用例活着的线程会拿着旧连接去查新库（还会 invalidate 全局扫描缓存），
     于是出现「单独跑必过、全量跑随机挂」的假故障。与 watcher 同一条纪律：
     **测试不养后台轮询**。这里带 timeout 等它真退出，不留窗口期。
+
+    ⚠️ 时序上真正关键的那次收尾在 `isolated` 夹具里（它会在 `db.close()` **之前**收），
+    这里只是兜底 —— 让「没用 `isolated` 的用例」也不留线程。
     """
     yield
-    try:
-        from novelforge.core import scrape
-        scrape.stop(timeout=2.0)
-    except Exception:                                 # noqa: BLE001 —— 收尾失败不该让用例变红
-        pass
+    _quiesce_background()
 
 
 @pytest.fixture(scope="session")
@@ -125,6 +152,9 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     try:
         yield
     finally:
+        # ⚠️ 顺序不能反：先让后台线程收干净，再关连接。反过来就是「线程在已关闭的
+        # 连接上查库」，本仓实测到过 segfault（见 `_quiesce_background` 的说明）。
+        _quiesce_background()
         db.close()
 
 

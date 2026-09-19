@@ -191,3 +191,50 @@ def test_书级PATCH与PUT等价(client, auth_headers, enable_komga, default_roo
                      json={"completed": True})
     assert r.status_code == 204, r.text
     assert float((db.get_progress(bid) or {}).get("percent") or 0) == 100.0
+
+
+# ---------------------------------------------------------------------------
+# 逐库「对 Komga 暴露」（第 22 期）
+# ---------------------------------------------------------------------------
+
+def test_逐库关闭对Komga暴露(client, auth_headers, enable_komga, default_root):
+    """关掉某库的 ``komga.expose`` 后它对客户端就是「不存在」：不进书库列表、
+    系列 / 书籍从列表消失、**直连单本也 404**（否则开关只是把书藏起来，形同虚设）。
+
+    默认 True = 全部符合条件的库都暴露 —— 与加这个开关之前的行为一致。
+    """
+    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    lib_b = _new_library(client, auth_headers, "漫画库", src / "comics", "comic")
+    _put(src / "comics", "乙.cbz")
+    library.invalidate()
+
+    assert config.load_config()["komga"]["expose"] is True          # 全局默认 = 暴露
+    ids = [l["id"] for l in client.get("/api/v1/libraries", auth=enable_komga).json()]
+    assert lib_b["id"] in ids
+    book = next(b for b in client.get("/api/v1/books", auth=enable_komga).json()["content"]
+                if b["libraryId"] == lib_b["id"])
+    bid, sid = book["id"], book["seriesId"]
+    assert client.get(f"/api/v1/books/{bid}", auth=enable_komga).status_code == 200
+
+    r = client.put(f"/api/libraries/{lib_b['id']}/settings", headers=auth_headers,
+                   json={"komga.expose": False})
+    assert r.status_code == 200, r.text
+    library.invalidate()
+
+    assert lib_b["id"] not in [l["id"] for l in
+                               client.get("/api/v1/libraries", auth=enable_komga).json()]
+    assert all(b["libraryId"] != lib_b["id"] for b in
+               client.get("/api/v1/books", auth=enable_komga).json()["content"])
+    assert all(s["libraryId"] != lib_b["id"] for s in
+               client.post("/api/v1/series/list", auth=enable_komga).json()["content"])
+    # 直连单本 / 单系列 / 进度写入一律当不存在
+    assert client.get(f"/api/v1/books/{bid}", auth=enable_komga).status_code == 404
+    assert client.get(f"/api/v1/series/{sid}", auth=enable_komga).status_code == 404
+    assert client.put(f"/api/v1/books/{bid}/read-progress", auth=enable_komga,
+                      json={"completed": True}).status_code == 404
+
+    # 打开 → 立刻回来
+    client.put(f"/api/libraries/{lib_b['id']}/settings", headers=auth_headers,
+               json={"komga.expose": True})
+    library.invalidate()
+    assert client.get(f"/api/v1/books/{bid}", auth=enable_komga).status_code == 200

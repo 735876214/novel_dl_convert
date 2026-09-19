@@ -440,9 +440,13 @@ def test_接口_扫描后按开关自动入队(client, auth_headers):
 
     st = client.get("/api/scrape/state", headers=auth_headers).json()
     assert st["total"] == 1
-    assert st["items"][0]["status"] in ("pending", "running")
-    assert st["items"][0]["source_path"].endswith("扫描.epub")
-    assert st["items"][0]["actions"] == []              # 待刮削：还没有需要人工处置的事
+    item = st["items"][0]
+    # ⚠️ worker 是单线程且跑得快：断言「还在排队」会随机挂（它可能已经刮完了）。
+    # 「扫描后自动入队」这件事由上面的 `scrape_queued == 1` 钉住，这里只要求它
+    # 没落到需要人工处置的终态（失败 / 跳过 / 待确认）。
+    assert item["status"] in ("pending", "running", "ok")
+    assert item["source_path"].endswith("扫描.epub")
+    assert item["actions"] == []                        # 三种状态下都没有需要人工处置的事
 
     # 关掉该库的自动刮削后，扫描不再入队（存量条目保持原状）
     assert client.put(f"/api/libraries/{lid}/settings", headers=auth_headers,
