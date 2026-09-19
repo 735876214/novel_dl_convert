@@ -6,6 +6,7 @@
  *   1. 刮到哪了？   → 概览条（计数 + 进度 + worker 状态）
  *   2. 结果对不对？ → 结果表（源 → 副本、模式、已写字段、失败原因）
  *   3. 出问题怎么办？→ 处置按钮（待确认三选一）/ 整理抽屉（改元数据并重建）
+ *   4. 副本叫什么？ → 命名规则区块（第 28 期由「批量重命名」并入：规则 + 预览 + 一键重出版）
  *
  * 三条与后端约定一致的界面规则（不要"优化"掉）：
  *   · 轮询**只在有进行中 / 待刮削条目时**开启（沿用 tasks store 的 2.5s 范式）；
@@ -14,6 +15,7 @@
  *     并明确它是移动而非抹除（后端走 CACHE_DIR/recycle）。
  */
 import { computed, onActivated, onDeactivated, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -22,7 +24,14 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Segment from '@/components/ui/Segment.vue'
 import ScrapeFixDrawer from '@/components/tools/ScrapeFixDrawer.vue'
-import { api, type ScrapeAction, type ScrapeItem, type ScrapeState } from '@/lib/api'
+import { RENAME_SCOPES, RENAME_TOKENS } from '@/data/settingsFields'
+import {
+  api,
+  type NamingPlan,
+  type ScrapeAction,
+  type ScrapeItem,
+  type ScrapeState,
+} from '@/lib/api'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -48,6 +57,31 @@ const fixFor = ref<ScrapeItem | null>(null)
 /** 待确认的「删除原文件」目标（弹窗里的二次确认） */
 const confirmDel = ref<ScrapeItem | null>(null)
 const confirmAck = ref(false)
+
+// ---------------- 命名规则（第 28 期：批量重命名并入本面板） ----------------
+/**
+ * 规则只有**一份**（`naming.pattern` / `naming.scope`），生效值 = 每库覆写 ?? 全局。
+ * 本面板：选定某个库时可改**该库覆写**；「全部书库」时只读展示全局规则 ——
+ * 全局规则只有「设置 → 文件命名」一个写点，两个地方都能改会让「生效值」说不清。
+ *
+ * 「预览 == 落盘」靠两件事保证：预览与重出版都由服务端算，且**重出版前不允许
+ * 有未保存的草稿**（否则预览用草稿、落盘用保存值，两边说的不是一件事）。
+ */
+const naming = ref({ pattern: '', scope: 'all' })
+const namingSaved = ref({ pattern: '', scope: 'all' })
+const namingOverridden = ref(false)
+/** 该库类型有没有「命名规则」能力（后端 schema 已按能力收窄，缺键即没有） */
+const namingEditable = ref(false)
+const namingNote = ref('')
+const namingLoading = ref(false)
+const namingPlan = ref<NamingPlan | null>(null)
+const namingBusy = ref('')
+
+const namingDirty = computed(
+  () =>
+    naming.value.pattern !== namingSaved.value.pattern ||
+    naming.value.scope !== namingSaved.value.scope,
+)
 
 const STATUS_OPTIONS = [
   { value: '', label: '全部' },
@@ -117,6 +151,7 @@ function stopPoll(): void {
 onMounted(() => {
   void library.loadLibraries(true)
   load()
+  loadNaming()
 })
 
 /**
@@ -125,6 +160,7 @@ onMounted(() => {
  */
 onActivated(() => {
   if (data.value) load(true)
+  if (!namingLoading.value) loadNaming()
 })
 
 onDeactivated(stopPoll)
@@ -227,6 +263,139 @@ function togglePick(id: string): void {
   const i = picked.value.indexOf(id)
   if (i >= 0) picked.value.splice(i, 1)
   else picked.value.push(id)
+}
+
+// ---------------- 命名规则：读 / 存 / 预览 / 重出版 ----------------
+
+/** 读该库的生效规则（或「全部书库」时的全局值）。换库后旧预览不再成立，一并作废。 */
+function loadNaming(): void {
+  namingPlan.value = null
+  const setValues = (pattern: unknown, scope: unknown) => {
+    naming.value = { pattern: String(pattern ?? ''), scope: String(scope ?? 'all') }
+    namingSaved.value = { ...naming.value }
+  }
+
+  if (!libId.value) {
+    namingEditable.value = false
+    namingOverridden.value = false
+    namingNote.value =
+      '「全部书库」范围下只读展示全局规则。选定一个书库后，可在此改该库的覆写并一键重出版。'
+    namingLoading.value = true
+    api
+      .getConfig()
+      .then((r) => setValues(r.config.naming?.pattern, r.config.naming?.scope))
+      .catch((e: Error) => ui.toast(e.message))
+      .finally(() => {
+        namingLoading.value = false
+      })
+    return
+  }
+
+  namingLoading.value = true
+  api
+    .librarySettings(libId.value)
+    .then((r) => {
+      // schema 已按该库类型的能力收窄：没有 naming.pattern 就是这类库没有命名规则能力
+      namingEditable.value = r.schema.some((s) => s.key === 'naming.pattern')
+      namingNote.value = namingEditable.value
+        ? ''
+        : '该库类型没有「命名规则」能力（成品副本只对电子书 / 漫画库有意义），这里只展示生效值。'
+      namingOverridden.value = !!r.overridden['naming.pattern'] || !!r.overridden['naming.scope']
+      setValues(r.values['naming.pattern'], r.values['naming.scope'])
+    })
+    .catch((e: Error) => ui.toast(e.message))
+    .finally(() => {
+      namingLoading.value = false
+    })
+}
+
+function onLibChange(): void {
+  loadNaming()
+  load()
+}
+
+async function saveNaming(): Promise<void> {
+  if (!libId.value || !namingEditable.value) return
+  if (!naming.value.pattern.trim()) {
+    ui.toast('命名规则不能为空')
+    return
+  }
+  namingBusy.value = 'save'
+  try {
+    // 复用每库覆写的**唯一写入口**（与「书库管理 → 设置」同一路径），不新开写点
+    await api.librarySettingsUpdate(libId.value, {
+      'naming.pattern': naming.value.pattern.trim(),
+      'naming.scope': naming.value.scope,
+    })
+    ui.toast('已保存到该库（只影响这个库的副本名）')
+    loadNaming()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    namingBusy.value = ''
+  }
+}
+
+async function resetNaming(): Promise<void> {
+  if (!libId.value) return
+  namingBusy.value = 'reset'
+  try {
+    await api.librarySettingsReset(libId.value, ['naming.pattern', 'naming.scope'])
+    ui.toast('已改回跟随全局规则')
+    loadNaming()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '恢复失败')
+  } finally {
+    namingBusy.value = ''
+  }
+}
+
+/** 预览「当前副本名 → 新副本名」。传草稿而非保存值：所见即所得（保不保存由用户定）。 */
+async function previewNaming(): Promise<void> {
+  if (!libId.value) {
+    ui.toast('先在上面选一个书库')
+    return
+  }
+  namingBusy.value = 'preview'
+  try {
+    namingPlan.value = await api.namingPreview({
+      libraryId: libId.value,
+      pattern: naming.value.pattern,
+      scope: naming.value.scope,
+    })
+    if (!namingPlan.value.items.length) ui.toast('该库还没有已出版的副本')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '预览失败')
+  } finally {
+    namingBusy.value = ''
+  }
+}
+
+/**
+ * 按规则重出版。后端用**已保存**的规则重算目标，所以这里拒绝在有草稿时执行
+ * （否则「预览按草稿、落盘按保存值」，正是本期要消灭的那种不一致）。
+ */
+async function applyNaming(): Promise<void> {
+  if (!namingPlan.value) return
+  if (namingDirty.value) {
+    ui.toast('规则有未保存的改动：先「保存到本库」再重出版')
+    return
+  }
+  namingBusy.value = 'apply'
+  try {
+    const r = await api.namingApply({ libraryId: libId.value })
+    ui.toast(
+      r.failed
+        ? `重出版完成：成功 ${r.done} / 共 ${r.total}，${r.failed} 本失败`
+        : `已按规则重出版 ${r.done} 本${r.skipped ? `，跳过 ${r.skipped} 本（名字未变或落点冲突）` : ''}`,
+    )
+    loadNaming()
+    load(true) // 结果表的「副本」列也跟着变了，静默刷新一次
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '重出版失败')
+  } finally {
+    namingBusy.value = ''
+  }
 }
 
 function toggleAll(): void {
@@ -366,7 +535,7 @@ function pickConfirm(): void {
         v-model="libId"
         aria-label="按书库筛选"
         class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
-        @change="load()"
+        @change="onLibChange()"
       >
         <option value="">全部书库</option>
         <option v-for="l in library.libraryEntities" :key="l.id" :value="l.id">
@@ -396,6 +565,152 @@ function pickConfirm(): void {
         @keydown.enter="load()"
       />
     </div>
+
+    <!-- ②′ 命名规则：改名只剩「按规则重出版副本」这一条路（第 28 期并入本面板） -->
+    <Card class="mb-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <h3 class="text-[13px] font-semibold text-foreground">命名规则（副本名）</h3>
+        <Badge v-if="namingOverridden" tone="accent">本库已覆盖</Badge>
+        <span class="text-[11.5px] text-muted-foreground">
+          只改成品目录里的<strong>副本名</strong>，源文件名与书库数据永不改动
+        </span>
+        <span v-if="namingLoading" class="ml-auto text-[11px] text-muted-foreground">读取中…</span>
+      </div>
+
+      <p v-if="namingNote" class="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+        {{ namingNote }}
+        <RouterLink
+          v-if="!libId"
+          to="/settings/library/file-naming"
+          class="underline"
+        >
+          去「设置 → 文件命名」修改全局规则
+        </RouterLink>
+      </p>
+
+      <div class="mt-2.5 flex flex-wrap items-center gap-2">
+        <input
+          v-model="naming.pattern"
+          type="text"
+          :disabled="!namingEditable"
+          placeholder="{index}. {author} - {title}"
+          aria-label="命名规则"
+          class="h-8 min-w-0 flex-1 rounded-md border border-border bg-muted px-3 font-mono text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card disabled:opacity-60"
+          @input="namingPlan = null"
+          @keydown.enter="previewNaming"
+        >
+        <select
+          v-model="naming.scope"
+          :disabled="!namingEditable"
+          aria-label="格式筛选"
+          class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring disabled:opacity-60"
+          @change="namingPlan = null"
+        >
+          <option v-for="s in RENAME_SCOPES" :key="s.value" :value="s.value">{{ s.label }}</option>
+        </select>
+        <Button
+          v-if="namingEditable"
+          size="sm"
+          variant="primary"
+          :disabled="!!namingBusy || !namingDirty"
+          @click="saveNaming"
+        >
+          {{ namingBusy === 'save' ? '保存中…' : '保存到本库' }}
+        </Button>
+        <Button
+          v-if="namingEditable && namingOverridden"
+          size="sm"
+          :disabled="!!namingBusy"
+          @click="resetNaming"
+        >
+          跟随全局
+        </Button>
+        <Button v-if="libId" size="sm" :disabled="!!namingBusy" @click="previewNaming">
+          {{ namingBusy === 'preview' ? '预览中…' : '预览效果' }}
+        </Button>
+      </div>
+
+      <p class="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+        占位符：
+        <code
+          v-for="t in RENAME_TOKENS"
+          :key="t.token"
+          class="mr-1.5 font-mono text-foreground"
+          :title="t.desc"
+        >{{ t.token }}</code>
+        （扩展名自动保留在末尾）
+      </p>
+
+      <!-- 预览：现名 → 新名。冲突项单独标出且**不进批量**（不让服务端的「(2)」兜底改掉结论） -->
+      <div v-if="namingPlan" class="mt-3 rounded-md border border-border">
+        <div
+          class="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-3 py-2 text-[11.5px] text-muted-foreground"
+        >
+          <span>
+            已出版 <span class="tabular-nums">{{ namingPlan.stats.total }}</span> 本 · 会改名
+            <span class="font-semibold text-foreground tabular-nums">{{ namingPlan.stats.changed }}</span> 本
+          </span>
+          <span v-if="namingPlan.stats.conflict" class="text-destructive">
+            {{ namingPlan.stats.conflict }} 本落点冲突，需人工处理
+          </span>
+          <span class="ml-auto max-w-[18rem] truncate font-mono text-[11px]" :title="namingPlan.pattern">
+            {{ namingPlan.pattern }}
+          </span>
+        </div>
+
+        <div v-if="namingPlan.items.length" class="max-h-64 overflow-y-auto">
+          <div
+            v-for="p in namingPlan.items"
+            :key="p.book_id"
+            class="flex flex-wrap items-center gap-2 border-b border-border/60 px-3 py-1.5 text-[12px] last:border-b-0"
+            :class="p.conflict || !p.changed ? 'opacity-55' : ''"
+          >
+            <span class="min-w-0 flex-1 truncate text-muted-foreground" :title="p.old_rel">
+              {{ p.old_rel }}
+            </span>
+            <Icon name="arrowRight" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span
+              class="min-w-0 flex-1 truncate font-medium"
+              :class="p.conflict ? 'text-destructive' : 'text-foreground'"
+              :title="p.new_rel"
+            >
+              {{ p.new_rel }}
+            </span>
+            <Badge v-if="p.conflict" tone="err">冲突</Badge>
+            <Badge v-else-if="!p.changed" tone="neutral">不变</Badge>
+            <span v-if="p.conflict" class="w-full text-[10.5px] text-destructive">
+              {{ p.reason }}
+            </span>
+          </div>
+        </div>
+        <p v-else class="px-3 py-4 text-[11.5px] text-muted-foreground">
+          该库还没有已出版的副本。先在上面「开始刮削」出版一次，再回来按规则重出版。
+        </p>
+
+        <div class="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2">
+          <Button
+            size="sm"
+            variant="primary"
+            :disabled="!!namingBusy || !namingPlan.stats.ready || namingDirty"
+            @click="applyNaming"
+          >
+            {{
+              namingBusy === 'apply'
+                ? '重出版中…'
+                : `按此规则重出版（${namingPlan.stats.ready} 本）`
+            }}
+          </Button>
+          <span class="text-[11px] leading-relaxed text-muted-foreground">
+            <template v-if="namingDirty">
+              规则有未保存的改动：先「保存到本库」，预览与落盘才是同一份规则。
+            </template>
+            <template v-else>
+              旧副本会移入回收目录（不留双份），源文件不受影响；整个过程不外呼。
+            </template>
+          </span>
+        </div>
+      </div>
+    </Card>
 
     <!-- 批量条：只给「不破坏数据」的动作 -->
     <div

@@ -147,7 +147,7 @@ export interface BookDockResponse {
   statuses: string[]
 }
 
-// ---------- 工具页（实体管理 / 批量重命名 / 重复书籍 / 缺失资源） ----------
+// ---------- 工具页（实体管理 / 重排册号 / 重复书籍 / 缺失资源） ----------
 
 export type EntityKind = 'author' | 'series'
 
@@ -163,16 +163,24 @@ export interface EntityListing {
   total: number
 }
 
-/** 一条「旧名 → 新名」。conflict 为真时前端必须置灰、禁止提交。 */
+/**
+ * 实体改名预览里的一条「旧名 → 新名」。
+ *
+ * 第 28 期起实体改名**只写服务端元数据、不动源文件名**，所以这里的 `old` 与 `new`
+ * 恒等（`meta_only` 为真），只用来展示「这本会被改到」；文件是否改名与此无关。
+ * 冲突项前端必须置灰、禁止提交。
+ */
 export interface RenameItem {
   old: string
   new: string
   conflict: boolean
   reason: string
-  /**
-   * 条目所属书库（第 13 期）。**多库下必须有**：同名书在不同库都有时，
-   * 只拿名字没法判断该改哪个库的文件（后端会按它取正确的库根）。
-   */
+  /** 文件名不变、改的是元数据（实体改名 / 合并的条目恒为真） */
+  meta_only?: boolean
+  /** 该条目对应的书（`meta_only` 时用于展示与计数） */
+  book_id?: string
+  title?: string
+  /** 条目所属书库（多库下同名书会撞 book_id，得让人看见是哪一本） */
   library_id?: string | null
 }
 
@@ -181,10 +189,18 @@ export interface RenamePlan {
   type?: EntityKind
   from?: string
   to?: string
-  scope?: string
-  pattern?: string
-  /** 批量重命名规则里可用的占位符，由后端给出，避免前后端各写一份 */
-  fields?: string[]
+  /** 命中数（= items.length；后端一并给出，前端不必自己数） */
+  count?: number
+}
+
+/** 实体改名 / 合并的落库结果（**只写服务端元数据**，没有改名文件这回事）。 */
+export interface EntityRenameResult {
+  type: EntityKind
+  from: string
+  to: string
+  count: number
+  items: Array<{ book_id: string; name: string; library_id?: string | null }>
+  errors: Array<{ name: string; error: string }>
 }
 
 export interface DuplicateItem {
@@ -424,14 +440,6 @@ export interface MissingItem {
   mtime: number
   issues: string[]
   library_id?: string | null
-}
-
-export interface ApplyResult {
-  renamed: Array<{ old: string; new: string; library_id?: string | null }>
-  errors: Array<{ old?: string; error: string }>
-  count?: number
-  /** 连带搬迁过关联数据（进度 / 批注 / 评分 / 收藏）的条目数 */
-  remapped?: number
 }
 
 /** 同名冲突组里的一条（`/api/library-conflicts`）。 */
@@ -868,7 +876,7 @@ export interface AppConfig {
   chapter_detection: { mode?: string; context_lines?: number; fallback?: string }
   traditionalize: boolean
   output: { format?: string; [k: string]: unknown }
-  /** 成品命名规则（批量重命名的默认值，服务端持久化） */
+  /** 成品**副本名**的默认命名规则（服务端持久化；每库可覆写，见 librarySettings） */
   naming: { pattern?: string; scope?: string }
   llm: { api_key: string; base_url: string; model: string; has_key: boolean }
   watcher: {
@@ -1287,6 +1295,56 @@ export interface LibrarySettingsResult {
   /** **原始覆写**（未与全局合并）：`policy_map` 逐字段判断「继承 / 覆盖」要靠它 */
   overrides: Record<string, unknown>
   schema: LibrarySettingItem[]
+}
+
+/**
+ * 命名规则预览里的一条（`/api/naming/preview`）。
+ *
+ * `old_rel` 是台账里的当前副本名，`new_rel` 是按规则重出版后的副本名 ——
+ * 两者都由服务端用同一个函数算出，所以预览与落盘一致。
+ */
+export interface NamingItem {
+  book_id: string
+  library_id?: string | null
+  /** 源文件名（相对库根，**永不改动**） */
+  name: string
+  title: string
+  old_rel: string
+  new_rel: string
+  changed: boolean
+  /** 空串 = 可重出版；`dup` = 同批内落点重复；`occupied` = 落点被别的文件占着 */
+  conflict: '' | 'dup' | 'occupied'
+  reason: string
+}
+
+export interface NamingPlan {
+  library_id: string
+  /** 实际生效的规则（回显：让用户确认用的是保存值还是草稿） */
+  pattern: string
+  scope: string
+  /** 规则里可用的占位符，由后端给出，避免前后端各写一份 */
+  fields: string[]
+  items: NamingItem[]
+  stats: { total: number; changed: number; conflict: number; ready: number }
+}
+
+/** 重出版结果（`/api/naming/apply`）。`skipped` = 名字未变或落点冲突而未处理的本数。 */
+export interface NamingApplyResult {
+  ok: boolean
+  total: number
+  done: number
+  failed: number
+  skipped: number
+  items: Array<{
+    book_id: string
+    name: string
+    old_rel: string
+    new_rel: string
+    /** 实际落盘的副本名（成功时与 new_rel 相同） */
+    rel: string
+    ok: boolean
+    error: string
+  }>
 }
 
 /** 能力清单（`/api/features`）。后端是「库类型 → 能力」的真值源，前端只声明「哪项菜单需要哪个能力」。 */export interface FeaturesResult {
@@ -1931,8 +1989,9 @@ export const api = {
 
   downloadUrl: (name: string) => `/download/${encodeURIComponent(name)}`,
 
-  // ---------- 工具页：实体管理 / 批量重命名 / 重复书籍 / 缺失资源 ----------
-  // 改文件一律「先 preview、再 apply」；apply 只回传预览过的条目，不传规则。
+  // ---------- 工具页：实体管理 / 重复书籍 / 缺失资源 ----------
+  // 实体改名一律「先 preview、再 apply」；apply 只回传 {type, from, to} ——
+  // **改哪些书由服务端按 from 自己算**，客户端不能指定去动哪本书（预览过期也改不错）。
   /** libraryId 为空 = 全部书库（与加库维度之前一致）；给了就只统计该库。 */
   entities: (type: EntityKind, libraryId = '') =>
     request<EntityListing>(
@@ -1946,11 +2005,15 @@ export const api = {
       body: JSON.stringify({ type, from, to, library_id: libraryId }),
     }),
 
-  entityRenameApply: (type: EntityKind, to: string, items: RenameItem[]) =>
-    request<ApplyResult>('/api/entities/rename/apply', {
+  /**
+   * 执行实体改名 / 合并：**只写服务端元数据**（源文件名与字节原样），
+   * 落库后列表 / 详情 / 实体聚合按新名字走。
+   */
+  entityRenameApply: (type: EntityKind, from: string, to: string, libraryId = '') =>
+    request<EntityRenameResult>('/api/entities/rename/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, to, items }),
+      body: JSON.stringify({ type, from, to, library_id: libraryId }),
     }),
 
   entityMerge: (type: EntityKind, source: string, target: string, libraryId = '') =>
@@ -1961,21 +2024,39 @@ export const api = {
     }),
 
   /**
-   * 按规则预览改名。scope / pattern 留空时用**该库的生效命名规则**
-   * （每库覆写 ?? 全局，见 `/api/libraries/{id}/settings`）。
+   * 命名规则预览（**副本名**）：列出「当前副本名 → 按此规则重出版后的副本名」。
+   *
+   * `pattern` / `scope` 留空时用**该库的生效命名规则**（每库覆写 ?? 全局，见
+   * `/api/libraries/{id}/settings`）；给了就按草稿算（所见即所得）。
+   * 预览与落盘共用服务端的 `publish.relpath_for`，所以预览里的 `new_rel`
+   * 就是重出版后台账里的 `link_rel`。
    */
-  renamePreview: (scope: string, pattern: string, libraryId = '') =>
-    request<RenamePlan>('/api/rename/preview', {
+  namingPreview: (opts: { libraryId?: string; pattern?: string; scope?: string } = {}) =>
+    request<NamingPlan>('/api/naming/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scope, pattern, library_id: libraryId }),
+      body: JSON.stringify({
+        library_id: opts.libraryId ?? '',
+        pattern: opts.pattern ?? '',
+        scope: opts.scope ?? '',
+      }),
     }),
 
-  renameApply: (items: RenameItem[]) =>
-    request<ApplyResult>('/api/rename/apply', {
+  /**
+   * 按**已保存**的命名规则重出版副本：只动硬链接副本、源文件只读，
+   * 旧副本移入回收目录不留双份，全程不外呼。
+   *
+   * `bookIds` 只是**收窄**范围：改哪些书由服务端自己算（名字没变的不做、
+   * 落点冲突的跳过），客户端指定不了别的。
+   */
+  namingApply: (opts: { libraryId?: string; bookIds?: string[] } = {}) =>
+    request<NamingApplyResult>('/api/naming/apply', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items }),
+      body: JSON.stringify({
+        library_id: opts.libraryId ?? '',
+        book_ids: opts.bookIds ?? null,
+      }),
     }),
 
   /**
