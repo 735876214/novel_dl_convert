@@ -50,7 +50,7 @@
 | 全局搜索（⌘K） | 跨库检索 | 部分：**UI 齐全但未接后端**——回车只弹提示（`components/AppHeader.vue:17-26`） | **可直接落地** | `/api/books` 已有，加一个查询接口即可 |
 | Notifications 浮层（Mark all read / Clear） | 顶栏浮层 + 流水 + 已读 | 部分：仅整页 `/notify`（日志视图），**无浮层、无已读态**（`views/NotificationsView.vue`） | 浮层 **可直接落地**／已读 **需新增后端能力** | 已读需新表 `notifications_read` |
 | Statistics | `/statistics` | **已有**（`/stats`，`router/index.ts:103`） | 可直接落地 | — |
-| Achievements | `/achievements` | **无** | **需新增后端能力** | 新表 `achievements` + `user_achievements` + 派生规则（单用户内可行，不涉多用户） |
+| Achievements | `/achievements` | **已有（第 22 期实现）** | **已落地** | 新表 `achievements` + `user_achievements` + 派生规则（单用户内可行，不涉多用户）；维护页已接入 Backfill 按钮 |
 | Upload books | 上传（支持多格式） | 部分：拖拽上传**限 .txt**（`tools/LocalConvertView.vue:165`；后端硬校验 `server.py:1072-1073`） | **可直接落地** | 放开多格式需在 `core/pipeline.py` 加分派 |
 | Help（Documentation / What's New / About） | 三项 | 部分：About 已有；**Documentation / What's New 无** | **可直接落地** | What's New 静态 JSON 即可 |
 | Appearance 浮层 | 顶栏浮层 | 部分：主题循环按钮 + 设置页主题页，**无浮层** | **可直接落地** | 偏好已存 localStorage |
@@ -125,7 +125,7 @@
 | **Metadata Score Distribution**（P50/P90） | 24 字段权重评分 | **无**（本项目无元数据完整度评分体系） | **需新增后端能力** | 需评分模型 + 分位统计 |
 | Metadata Freshness（Fresh ≤30d / Never fetched） | — | **无** | **不建议做** | 依赖在线元数据抓取，与定位冲突（见 §11） |
 | Top 50 Largest Books | — | **无**（`_top()` 硬编码 n=8，`core/stats.py:13-17`） | **可直接落地** | — |
-| Achievements | 成就体系 | **无** | **需新增后端能力**（单用户口径） | 与多用户无关的成就可做；跨用户口径不做 |
+| Achievements | 成就体系 | **已有（第 22 期实现）** | **已落地**（单用户口径） | 与多用户无关的成就可做；跨用户口径不做 |
 | 仪表盘部件 | 12 件 | **已有 12 件**（`components/dashboard/widgets/registry.ts:32-45`） | 可直接落地 | 已对齐 |
 
 ## 7. 域：通知与更新

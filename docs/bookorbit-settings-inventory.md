@@ -760,7 +760,7 @@ SERVER
 |---|---|---|
 | YOU → Profile | **账户** | 命名不一致：本项目「账户」只有账号展示 + 改密码；缺头像/显示名/时区/成就开关/引导重放/已连接账号 |
 | YOU → Display（Theme/Book Covers/Icons/Layout/Behavior/Language） | **外观** | 部分对齐：Type 对应 Theme 的主题/点缀色/圆角；缺 Book Covers、Icons、Layout、Behavior、Language 五页，且无「保存位置」与「Surface opacity」「背景图案」 |
-| YOU → Reader（eBook/PDF/Comics/Audiobook/Fonts/General） | **阅读** | 部分对齐：eBook 的字体/字号/行高/内容宽度/主题对应得上；缺 PDF、Comics、Audiobook、Fonts、General 五页；eBook 内的 13 档深色变体、两端对齐、断词、字距/词距/首行缩进等均缺 |
+| YOU → Reader（eBook/PDF/Comics/Audiobook/Fonts/General） | **阅读** | 部分对齐：eBook 已实现「阅读模式 / 13 档主题 / 字体 / 字号 / 行高 / 内容宽度 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 13 项；缺 PDF、Comics、Audiobook、Fonts、General 五页；eBook 仍未支持：新书套用设置、固定版式页宽、字重样式、文本区左右内边距 |
 | YOU → Notifications | 无 | **缺失**（本项目有消息，但无可配置项） |
 | YOU → Privacy & Sharing | 无 | **缺失**（单用户场景无意义，建议占位或标注不适用） |
 | YOU → Restrictions | 无 | **缺失**（同上） |
