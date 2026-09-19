@@ -185,11 +185,12 @@ def test_每库auto_on_import独立于全局(isolated, make_library, tmp_path): 
     assert config.load_config()["metadata_fetch"]["auto_on_import"] is False   # 全局不动
 
 
-def test_漫画库不暴露auto_on_import(isolated, make_library, tmp_path):  # noqa: ARG001
+def test_漫画库也能覆盖auto_on_import(isolated, make_library, tmp_path):  # noqa: ARG001
+    """第 21 期：抓取不再按格式分流 → 漫画库也暴露并接受该覆盖项（此前断言「不暴露」）。"""
     lid = "comic-a"
     make_library(lid, "漫画库", "comic", tmp_path / "libraries" / lid)
 
     keys = [s["key"] for s in lib_settings.schema("comic")]
-    assert "metadata_fetch.auto_on_import" not in keys
-    with pytest.raises(ValueError):
-        lib_settings.set_overrides(lid, {"metadata_fetch.auto_on_import": True})
+    assert "metadata_fetch.auto_on_import" in keys
+    lib_settings.set_overrides(lid, {"metadata_fetch.auto_on_import": True})
+    assert lib_settings.config_for(lid)["metadata_fetch"]["auto_on_import"] is True

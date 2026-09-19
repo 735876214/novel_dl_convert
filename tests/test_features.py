@@ -11,11 +11,11 @@ COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"}
 
 
 def test_漫画库能力集():
-    assert set(features.features_for("comic")) == COMMON | {"comic", "komga"}
+    assert set(features.features_for("comic")) == COMMON | {"comic", "metadata", "komga"}
 
 
 def test_有声书库能力集():
-    assert set(features.features_for("audiobook")) == COMMON | {"audio"}
+    assert set(features.features_for("audiobook")) == COMMON | {"audio", "metadata"}
 
 
 def test_电子书库能力集():
@@ -25,11 +25,13 @@ def test_电子书库能力集():
     assert "comic" not in got and "audio" not in got
 
 
-def test_元数据抓取能力只在电子书库():
-    # 判据：元数据抓取只改写 EPUB 的 OPF（见 metafetch.plan 的非 EPUB 跳过说明）
+def test_元数据抓取能力覆盖电子书漫画与有声书():
+    # 判据：抓取结果只存服务端 DB、与文件格式无关（**手动编辑**仍限 EPUB，那是另一条路径）
     assert "metadata" in features.features_for("ebook")
-    assert "metadata" not in features.features_for("comic")
-    assert "metadata" not in features.features_for("audiobook")
+    assert "metadata" in features.features_for("comic")
+    assert "metadata" in features.features_for("audiobook")
+    # 作者元数据仍只给电子书 / 混合库（与作者检索绑定）
+    assert "authors" not in features.features_for("comic")
 
 
 def test_全部书库与混合库返回全部能力():

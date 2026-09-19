@@ -146,31 +146,36 @@ def test_policy_map_all_fields_reset_drops_the_override(isolated, make_library, 
 # 能力联动：漫画库没有元数据能力
 # ---------------------------------------------------------------------------
 
-def test_comic_library_hides_and_rejects_metadata_overrides(isolated, make_library, tmp_path):
+def test_comic_library_exposes_metadata_but_not_convert(isolated, make_library, tmp_path):
+    """第 21 期：抓取不再按格式分流 → 漫画库也暴露并接受它；**本地转换**仍只给电子书库。"""
     lid = "comic-a"
     make_library(lid, "漫画库", "comic", tmp_path / "libraries" / lid)
 
     keys = [s["key"] for s in lib_settings.schema("comic")]
-    assert "metadata_fetch.fields" not in keys
+    assert "metadata_fetch.fields" in keys        # 抓取对漫画库同样适用
     assert "output.format" not in keys            # 派生 MOBI 依赖 Calibre 转换能力，漫画库没有
     assert "watcher.recursive" in keys            # 未登记能力的项 = 无条件可用
 
-    with pytest.raises(ValueError):
-        lib_settings.set_overrides(lid, {"metadata_fetch.enabled": True})
+    lib_settings.set_overrides(lid, {"metadata_fetch.enabled": True})
+    assert lib_settings.effective(lid)["values"]["metadata_fetch.enabled"] is True
 
-    assert "metadata_fetch.enabled" not in lib_settings.effective(lid)["values"]
+    with pytest.raises(ValueError):
+        lib_settings.set_overrides(lid, {"output.format": "mobi"})
+
+    assert "output.format" not in lib_settings.effective(lid)["values"]
 
 
 def test_stale_override_does_not_activate_after_type_change(isolated, make_library, tmp_path):
     """库里残留着「类型改过之前」写的覆写：能力不匹配 → **不生效**（也不应该突然活过来）。"""
     lid = "comic-a"
     make_library(lid, "漫画库", "comic", tmp_path / "libraries" / lid)
-    db.update_library(lid, settings=json.dumps({"metadata_fetch.enabled": True}))
+    # 用**仍然不匹配**的能力项：漫画库没有 convert（第 21 期起它已经有了 metadata）
+    db.update_library(lid, settings=json.dumps({"output.format": "mobi"}))
 
     res = lib_settings.effective(lid)
-    assert "metadata_fetch.enabled" not in res["values"]
-    assert lib_settings.config_for(lid)["metadata_fetch"]["enabled"] == \
-        config.load_config()["metadata_fetch"]["enabled"]
+    assert "output.format" not in res["values"]
+    assert lib_settings.config_for(lid)["output"]["format"] == \
+        config.load_config()["output"]["format"]
 
 
 # ---------------------------------------------------------------------------

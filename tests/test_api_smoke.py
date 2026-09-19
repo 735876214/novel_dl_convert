@@ -360,7 +360,8 @@ def test_能力清单按库类型返回(client, auth_headers):
     per_lib = client.get(f"/api/features?library_id={comic['id']}", headers=auth_headers).json()
     assert per_lib["library_type"] == "comic"
     assert "comic" in per_lib["features"]
-    assert "convert" not in per_lib["features"] and "metadata" not in per_lib["features"]
+    # 第 21 期：元数据抓取不再按格式分流 → 漫画库也有该能力；本地转换仍只给电子书库
+    assert "convert" not in per_lib["features"] and "metadata" in per_lib["features"]
 
 
 def test_系列详情按媒体分组(client, auth_headers, default_root):
