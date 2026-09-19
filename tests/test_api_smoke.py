@@ -306,7 +306,7 @@ def test_元数据编辑产生用户覆盖(client, auth_headers, default_root):
 
 
 def test_恢复到在线值(client, auth_headers, default_root):
-    """有在线缓存值时，「恢复」把 OPF 写回在线值并撤掉覆盖。"""
+    """有在线缓存值时，「恢复」撤销覆盖，展示回落到在线值（不写文件，见 T3）。"""
     _build_real_epub(default_root, "测试书.epub", title="测试书")
     library.invalidate()
     bid = _find_book(client, auth_headers, "测试书")["id"]
@@ -331,7 +331,9 @@ def test_非EPUB不可编辑元数据(client, auth_headers, default_root, make_b
     r = client.post(f"/api/books/{bid}/metadata", headers=auth_headers,
                     json={"fields": {"publisher": "x"}})
     assert r.status_code == 400
-    assert "仅支持" in r.json()["detail"]
+    # 第 18 期起元数据只存服务端，但「仅 EPUB」这条没变 —— 理由是**兜底原值来自 OPF**，
+    # 非 EPUB 没有这一层（不再是「要写文件所以限 EPUB」）。
+    assert "EPUB" in r.json()["detail"]
 
 
 def test_提交不支持的字段被拒(client, auth_headers, default_root):

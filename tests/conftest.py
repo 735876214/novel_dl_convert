@@ -80,6 +80,24 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ARG001
 # 夹具
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _stop_scrape_worker():
+    """每个用例结束后停掉**刮削 worker**（第 18 期）。
+
+    接口用例（`POST /api/scrape/run`、单库扫描）会真的把 daemon worker 叫起来，
+    而本套测试的 DB 是**用例级隔离**的（`db.close()` + `db.init()`）——
+    一个跨用例活着的线程会拿着旧连接去查新库（还会 invalidate 全局扫描缓存），
+    于是出现「单独跑必过、全量跑随机挂」的假故障。与 watcher 同一条纪律：
+    **测试不养后台轮询**。这里带 timeout 等它真退出，不留窗口期。
+    """
+    yield
+    try:
+        from novelforge.core import scrape
+        scrape.stop(timeout=2.0)
+    except Exception:                                 # noqa: BLE001 —— 收尾失败不该让用例变红
+        pass
+
+
 @pytest.fixture(scope="session")
 def session_root() -> pathlib.Path:
     """会话级临时根（所有测试数据的父目录）。"""

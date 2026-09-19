@@ -157,12 +157,25 @@ def test_执行迁移把书搬进对应库(default_with_books, typed_libraries):
     assert counts == {"ebook": 2, "comic": 2, "audiobook": 1}
 
 
-def test_只挪库不改名_保持book_id(default_with_books, typed_libraries):
-    """`book_id` 由 basename 派生：名字不变 → id 不变 → 进度/批注/评分不断链。"""
+def test_搬库后关联数据随库维度id迁移(default_with_books, typed_libraries):
+    """库维度 id：搬库后 id 的库前缀会变，但 migrate 会把进度/批注一起 remap，不断链。"""
     before = {b["name"]: b["id"] for b in library.books()}
+    # 在旧 id（default$哈希）上写一条进度，验证搬库后跟到新 id
+    some_old_id = next(iter(before.values()))
+    db.set_progress(some_old_id, 5, 20.0)
+
     migrate.execute(migrate.plan()["batch_id"])
     after = {b["name"]: b["id"] for b in library.books()}
-    assert before == after
+
+    # 文件名不变，但库前缀从 default 换成类型库 → id 变了
+    assert before != after
+    # 进度跟着新 id 走（remap 后的新 id 上能查到）
+    assert any(
+        db.get_progress(nid) and db.get_progress(nid)["locator"] == 5
+        for nid in after.values()
+    )
+    # 旧 id 上不残留
+    assert db.get_progress(some_old_id) is None
 
 
 def test_逐条独立_单条失败不影响其余(default_with_books, typed_libraries):

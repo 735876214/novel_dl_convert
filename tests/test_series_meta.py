@@ -1,12 +1,18 @@
 """系列级元数据（第 12 期 C3）：聚合、分层、抓取阈值、重排册号不变量。
 
 为什么这个文件必须用**真 EPUB**：系列名与系列序号只存在于 EPUB 内部的 OPF
-（`calibre:series` / `calibre:series_index`），假 `b"EPUB"` 占位解析不出系列；
-而重排册号要真的改写 OPF 再回读验证。构造器见 `_epub_with_series`。
+（`calibre:series` / `calibre:series_index`），假 `b"EPUB"` 占位解析不出系列。
+构造器见 `_epub_with_series`（用 `fileops.patch_epub_meta` 造出「文件里带系列」的
+真实样本 —— 该函数已退出生产路径，现在是**测试夹具**）。
+
+⚠️ 第 18 期口径变更：**重排册号不再改写 OPF**，改为写服务端覆盖
+（`meta_override.series_index`）；因此本文件对「重排」的断言从
+「回读 OPF 确认」变成「**文件字节分毫未动** + 生效值（override > online > opf）正确」。
 
 离线约定：抓取相关用例一律用 `monkeypatch` 顶掉 `metasources.search_all`，
 断言的是**我们自己的打分/阈值/落库逻辑**，不是外部源是否可达（本机无外网）。
 """
+import hashlib
 import json
 import pathlib
 
@@ -219,8 +225,16 @@ def test_批量抓取分批并回remaining(series_fixture, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 重排册号：只改 OPF、不动文件名
+# 重排册号：只写服务端覆盖，不动文件名、更不动文件内容
 # ---------------------------------------------------------------------------
+
+def _sha_of(root) -> dict:
+    """库根下每个文件的 sha256（用来钉死「文件分毫未动」）。"""
+    out = {}
+    for p in sorted(pathlib.Path(root).rglob("*")):
+        if p.is_file():
+            out[str(p.relative_to(root))] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return out
 
 def test_重排计划按当前序号升序(series_fixture, default_root):  # noqa: ARG001
     _epub_with_series(default_root, "无序.epub", title="无序册", series=series_fixture)
@@ -232,9 +246,15 @@ def test_重排计划按当前序号升序(series_fixture, default_root):  # noq
     assert plan["total"] == 4 and plan["changing"] == 1
 
 
-def test_重排只改OPF不改文件名(series_fixture):
-    """核心不变量：文件名不动 → book_id 不变 → 阅读进度/批注/评分/收藏不断链。"""
+def test_重排只写服务端不动文件名与文件字节(series_fixture, default_root):
+    """核心不变量（第 18 期加严）：
+
+    1. 文件名不动 → book_id 不变 → 阅读进度/批注/评分/收藏不断链；
+    2. **文件字节一个都不变** → 元数据只存服务端（`meta_override`），原书可随时还原；
+    3. 生效值（override > online > opf）确实是新序号。
+    """
     before = {b["name"]: b["id"] for b in library.series_books(series_fixture)}
+    files_before = _sha_of(default_root)
     plan = series_meta.renumber_plan(series_fixture, order=list(reversed(list(before))))
     res = series_meta.renumber_apply(series_fixture, [
         {"name": i["name"], "new_index": i["new_index"]} for i in plan["items"]])
@@ -242,7 +262,9 @@ def test_重排只改OPF不改文件名(series_fixture):
     assert res["renumbered"] == 3 and res["skipped"] == [] and res["mismatched"] == []
     after = {b["name"]: b["id"] for b in library.series_books(series_fixture)}
     assert after == before, "文件名与 book_id 都不能变"
-    # 真的从 OPF 里读回了新序号（回读确认，而不是只相信写函数没抛）
+    assert _sha_of(default_root) == files_before, "EPUB 文件字节不能被改写"
+    # 序号落在服务端覆盖上，且**生效值**回读到的是新序号
+    assert db.get_overrides(next(iter(after.values()))).get("series_index")
     assert res["verified"] == {i["name"]: i["new_index"] for i in plan["items"]}
 
 
@@ -288,10 +310,21 @@ def test_重排拒绝越界与非法条目(series_fixture, default_root):  # noq
         series_meta.renumber_apply(series_fixture, [])
 
 
-def test_重排支持清除序号(series_fixture):
+def test_重排支持清除序号(series_fixture, default_root):
+    """清空序号 = 写「显式无值」哨兵。
+
+    覆盖值是**列**，存不了空串（空串在 `set_override` 里表示撤销覆盖），
+    所以清空必须走哨兵；否则该册会退回**文件原值**（这里是 1），
+    「把序号去掉」这个能力就丢了。
+    """
+    files_before = _sha_of(default_root)
     res = series_meta.renumber_apply(series_fixture, [
         {"name": "基地.epub", "new_index": ""}])
     assert res["renumbered"] == 1 and res["mismatched"] == []
+    assert [c["name"] for c in res["cleared"]] == ["基地.epub"]
     idx = {b["name"]: str(b.get("series_index") or "")
            for b in library.series_books(series_fixture)}
     assert idx["基地.epub"] == ""
+    assert _sha_of(default_root) == files_before, "清空只写服务端，文件字节不能变"
+    # 哨兵只当值用，不该泄漏到读取端
+    assert db.META_CLEAR not in [idx[k] for k in idx]
