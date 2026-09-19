@@ -79,4 +79,4 @@
 ## 待办（跨会话）
 - `watcher.auto_fetch_async` 仍按 `.epub` 后缀提前 return（第 21 期只放开了 `metafetch.plan/apply`）→ **入库自动抓取**对漫画 / 有声书仍不触发；改它要连同「入库即外呼」的取舍一起定。
 - 外部服务的「同步任务」（Hardcover / Readwise / StoryGraph 推送）尚未实现，前置是书籍匹配（ISBN / 标题 + 作者）；本机外网受限，验证成本高。
-- 剩余 5 个 placeholder 设置页（`appearance/icons`、`appearance/layout`、`appearance/behavior`、`libraries`、`koreader-upstream`）**处置未定**（删 / 留作上游对照）。
+- 维护页其余分组（IMPORT / RECOMMENDATIONS / UPDATES 未支持，ACHIEVEMENTS 的 Backfill 已接入）第 23 期已落地，详见 `docs/roadmap-verification.md` 未支持表。
