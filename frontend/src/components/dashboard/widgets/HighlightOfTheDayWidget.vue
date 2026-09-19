@@ -2,6 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import { highlightHex } from '@/data/annotationColors'
 import { api, type AllAnnotation } from '@/lib/api'
 
 /** 每日划线：按当天日期确定性地抽一条批注（同一天刷新不变）。 */
@@ -16,12 +17,8 @@ onMounted(async () => {
   }
 })
 
-const COLORS: Record<string, string> = {
-  yellow: '#f5d76e',
-  green: '#8fd694',
-  blue: '#8fc1f0',
-  pink: '#f2a6c4',
-}
+// 高亮取色统一来自 data/annotationColors.ts（唯一一份）—— 这里此前自己写了一份
+// 四色表，扩容时会把新增颜色静默渲染成黄色。
 
 const today = computed<AllAnnotation | null>(() => {
   if (!items.value.length) return null
@@ -40,7 +37,7 @@ const today = computed<AllAnnotation | null>(() => {
     </p>
 
     <template v-else>
-      <div class="mt-2.5 flex-1 border-l-2 pl-2.5" :style="{ borderColor: COLORS[today.color] || COLORS.yellow }">
+      <div class="mt-2.5 flex-1 border-l-2 pl-2.5" :style="{ borderColor: highlightHex(today.color) }">
         <p class="text-[12.5px] leading-relaxed text-foreground">「{{ today.quote }}」</p>
         <p v-if="today.note" class="mt-1 text-[11.5px] text-muted-foreground">{{ today.note }}</p>
       </div>

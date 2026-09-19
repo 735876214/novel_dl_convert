@@ -12,6 +12,7 @@ import MetadataEditor from '@/components/book/MetadataEditor.vue'
 import ReadingRecord from '@/components/book/ReadingRecord.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useCollectionsStore } from '@/stores/collections'
+import { highlightHex as highlightColor } from '@/data/annotationColors'
 import { api, type Annotation, type BookDetail, type ProgressState, type SimilarBook } from '@/lib/api'
 import { extractCoverTint, type CoverTint } from '@/lib/coverTint'
 
@@ -161,15 +162,9 @@ function download(name: string): void {
   a.click()
 }
 
-const HIGHLIGHT_COLORS: Record<string, string> = {
-  yellow: '#f5d76e',
-  green: '#8fd694',
-  blue: '#8fc1f0',
-  pink: '#f2a6c4',
-}
-function highlightColor(c: string): string {
-  return HIGHLIGHT_COLORS[c] || HIGHLIGHT_COLORS.yellow
-}
+// 高亮取色统一来自 data/annotationColors.ts（唯一一份）—— 这里此前自己写了一份
+// 四色表，扩容时会把新增颜色静默渲染成黄色。
+
 
 // ---------------- 收藏夹 ----------------
 

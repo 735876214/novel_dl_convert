@@ -7,6 +7,7 @@ import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
+import { HIGHLIGHT_COLORS, highlightHex as hex } from '@/data/annotationColors'
 import { api, type Annotation, type BookDetail } from '@/lib/api'
 import {
   READER_FONTS,
@@ -257,21 +258,10 @@ const selText = ref('')
 const selPos = ref<{ x: number; y: number } | null>(null)
 const noteDraft = ref('')
 
-const COLORS = [
-  { key: 'yellow', label: '黄色高亮' },
-  { key: 'green', label: '绿色高亮' },
-  { key: 'blue', label: '蓝色高亮' },
-  { key: 'pink', label: '粉色高亮' },
-]
-const COLOR_HEX: Record<string, string> = {
-  yellow: '#f5d76e',
-  green: '#8fd694',
-  blue: '#8fc1f0',
-  pink: '#f2a6c4',
-}
-function hex(c: string): string {
-  return COLOR_HEX[c] || COLOR_HEX.yellow
-}
+// 调色板与取色统一来自 data/annotationColors.ts（唯一一份）：
+// 这里此前自己写了一份四色表，扩容时与另外三处（批注总览 / 图书详情 / 每日划线）
+// 各自为政，漏改的地方会把新颜色静默渲染成黄色。
+const COLORS = HIGHLIGHT_COLORS
 
 const overallPercent = computed(() =>
   total.value ? Math.min(100, ((pos.value + local.value) / total.value) * 100) : 0,
@@ -867,7 +857,7 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="shrink-0 cursor-pointer text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
-                title="删除"
+                title="移入垃圾桶（可在「批注」页的垃圾桶里恢复）"
                 @click.stop="removeAnnotation(a.id)"
               >
                 <Icon name="trash" class="h-3.5 w-3.5" />
