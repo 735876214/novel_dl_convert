@@ -15,10 +15,10 @@
 
 ## 元数据与出版（口径终局）
 - 元数据**只能落服务端 DB**（`meta_override` / `meta_online` / `meta_cover`）：手动编辑、revert、抓取 apply、重排册号、实体改名与合并**全部不写回文件**。
-- **在线抓取不按格式分流**：结果只写 DB、与文件类型无关 → EPUB / PDF / 漫画 / 有声书一视同仁（有声书是**目录型条目**）。⚠️ 但**手动编辑元数据仍限 EPUB**：非 EPUB 没有 OPF 兜底原值层，「恢复原值」无从取（`server.py` 的 `editable` / 400 是刻意保留的）。
+- **在线抓取与手动编辑都不按格式分流**：结果只写 DB、与文件类型无关 → EPUB / PDF / 漫画 / 有声书一视同仁（有声书是**目录型条目**）。手动编辑自第 22 期起也对所有格式开放（`server.py` 的 `editable` 恒 true）：非 EPUB 没有 OPF 兜底原值层，所以「恢复」= 撤销覆盖后回落在线的抓取值、没有在线值即为空。
 - **`core/publish.py` 是唯一还会写文件的模块**（写的是硬链接**副本**，且走原子替换）；`fileops.patch_epub_meta` / `rewrite_epub` 已退出生产路径（前者仅测试造夹具、后者仅 publish 写副本），别再新增调用方。
 - 刮削出版**三条不可动摇**：① 源文件只读；② 副本禁止原地写（与源共享 inode，必须「临时文件 + `Path.replace`」）；③ 副本被删**只标记待确认 + 记日志**，绝不自动删源、绝不自动重建。成品目录**不得与库根 / 扫描源目录重叠**（否则副本被扫回来成重复书），后端建库即拦。
-- 显式**无值哨兵** `db.META_CLEAR = "-"`（仅对 `_CLEARABLE = ("series_index",)` 生效）：覆盖值是列、存不了空串（空串 = 撤销覆盖），「清空序号」只能靠哨兵。翻译点三处必须一致：`db.get_effective_meta`（要**带着空值**并进 merged，否则 library 保留文件旧值）、`metastore.effective`、`metastore.state`。
+- 显式**无值哨兵** `db.META_CLEAR = "-"`（`_CLEARABLE` 自第 22 期起 = **全部可编辑字段**，与 `fileops.METADATA_FIELDS` / `db._META_FIELDS` 同集合、有测试钉住）：覆盖值是列、存不了空串（空串 = **撤销覆盖**，EPUB 老行为不变），「清空」只能靠哨兵。接口层正规写法是 **`null` = 显式清空**（前端「清空」按钮用它）：写哨兵、盖住在线的抓取值；哨兵同样在 overrides 里 → metafetch 不会把它填回来。翻译点三处必须一致：`db.get_effective_meta`（要**带着无值**并进 merged，否则 library 保留文件旧值）、`metastore.effective`、`metastore.state`（`tags` 的「无值」给 `[]`，其余给 `""`）。
 
 ## Git / 环境 / 构建
 - `.gitignore`：`.codebuddy/*` + `!.codebuddy/memory/`（否定规则配 `/*`）；忽略 `data/`、`*.db`、`novelforge/static/v2/`。
@@ -28,11 +28,12 @@
 
 ## 自动化测试（硬前提）
 - `.venv/bin/python -m pytest`（完全离线）；dev 依赖在 `requirements-dev.txt`。
-- ⚠️ 全量跑完在解释器退出时会打一段 lxml faulthandler dump（既有环境现象），**以「N passed」为准**；exit code 仍为 0。
+- ⚠️ 曾出现「全量跑到后半程解释器 segfault、连汇总行都打不出来」，**根因不是 lxml**：`watcher.auto_fetch_async` / `enqueue_scrape_async` 派生的**旁路线程**没登记，用例 teardown 关库之后它们才去查库。第 22 期已修（见下一条），现在 265 passed / exit 0 / 无 dump。
 - 两条硬前提：① 环境变量必须在 import 业务模块前设置（`config` 导入即固化目录、`server.py` 导入即 `ensure_dirs()`）；② `db` 的 `_conn`/`_db_path` 是模块级缓存 → 隔离靠 `db.close()`。
 - 碰书库/DB 用例必须声明 `isolated`；接口用 `client` + `auth_headers`。假 EPUB（`b"EPUB"`）够扫描类；元数据写回 / 系列解析必须真 EPUB（`epub_builder.build_epub`）。**不测会外呼的接口**（要测就把检索函数换成返回固定候选）；`GET /` 会 503。
 - 库 id 由名称派生（中文 slug 空 → `lib-<sha1[:8]>`）；测试库根必须在 `LIBRARY_SOURCE_DIR` 下。
-- 后台线程要能被测试收尾：`scrape` daemon worker 会跨用例存活并拿旧 DB 连接查新库（「单独跑必过、全量跑随机挂」）→ `scrape.stop(timeout=)` 支持 join，`tests/conftest.py` 用 **autouse 夹具**每例收尾停 worker（同「测试不养 watcher 线程」纪律）。
+- 后台线程要能被测试收尾，且**必须早于 `db.close()`**：`scrape` daemon worker 与 `watcher._spawn_bg` 派生的**旁路线程**（`auto_fetch_async` / `enqueue_scrape_async`）都会跨用例存活、拿旧 DB 连接查新库（「单独跑必过、全量跑随机挂」，严重时直接 segfault）。做法 = `watcher.wait_pending(timeout)` + `scrape.stop(timeout=)`，由 `tests/conftest.py` 的 `_quiesce_background()` 统一调用，**在 `isolated` 夹具 `db.close()` 之前**；autouse 夹具只作兜底。
+- 断言终态要留余地：单线程 worker 可能比测试跑得快 —— 断言「还在 pending / running」会随机挂（scrape 入队用例踩过），应允许 `ok`。
 
 ## 后端硬约束
 - core 内引用配置一律 `from .. import config`；`import config` 被同名命名空间包劫持（py_compile 抓不到，启动才炸）。
@@ -43,7 +44,8 @@
 ## 配置分层（四层 + 每库覆盖）
 - `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时叠加 `生效值 = 每库覆写 ?? 全局值`，落点 `libraries.settings`（稀疏 JSON，键 = 全局点分路径）。
 - `core/lib_settings.py`：`effective()` / `config_for()` / `apply_to()` / `set_overrides` / `clear_overrides` / `schema()`；与 `features.allows_setting` 联动，**`features.SETTING_CAPS` 是唯一真值源**。接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（`?keys=` 按项恢复）。
-- 覆盖项：`output.format` / `output.layout`、`watcher.recursive` / `watcher.copy_non_txt`、`metadata_fetch.*`、`naming.pattern` / `naming.scope`、`scrape.enabled`。（库实体属性 `watch` / `scan_interval` / `scan_cron` / `publish_path` 是**列**，不是覆盖项。）
+- 覆盖项：`output.format` / `output.layout`、`watcher.recursive` / `watcher.copy_non_txt`、`metadata_fetch.*`、`naming.pattern` / `naming.scope`、`scrape.enabled`、`opds.expose`、`komga.expose`。（库实体属性 `watch` / `scan_interval` / `scan_cron` / `publish_path` 是**列**，不是覆盖项。）
+- 对外接口的「可见性」一律两层：**能力矩阵**（库类型有没有这能力）**且**「每库覆写 ?? 全局」开关，判定只留一处（OPDS `_opds_visible_libraries` / Komga `_ko_visible_libraries`，后者自第 22 期起不再是「只看库类型」）。口径：**「不可见」与「不存在」对客户端同待遇** —— 列表里没有 **且** 直连 404（Komga 侧用 `_ko_book` / `_ko_find_series`，别再用 `library.by_id` / `komga_api.find_series`）。
 - 能力矩阵 `features.FEATURES_BY_TYPE` 决定「哪些库类型有哪些能力」，前端只声明「哪一行菜单需要哪个能力」——加库类型只改后端，加菜单只改前端。
 
 ## 前端栈 / 规范（要点）
@@ -75,7 +77,6 @@
 - **目录型条目（有声书）不能用 `is_file()` 判存在**：它是**目录**，`path.is_file()` 为假 → 会被误判「文件不存在」（元数据抓取的 `apply()` 就踩过）。判存在用 `path.exists()`，格式相关的闸门不该拦「只写 DB」的链路。
 
 ## 待办（跨会话）
-- **T5 文档同步**（并行会话遗留的收尾）。
-- `series_meta` / `apply_rename` 的**结构性重排**是否也去掉文件写 —— **改前需用户确认**（与「元数据只存服务端」口径对齐的最后两处）。
-- 非 EPUB 的元数据**手动编辑**仍限 EPUB（缺 OPF 兜底原值层，「恢复原值」无从取）；要放开需先设计「清除覆盖 = 恢复无值」的语义。
+- `watcher.auto_fetch_async` 仍按 `.epub` 后缀提前 return（第 21 期只放开了 `metafetch.plan/apply`）→ **入库自动抓取**对漫画 / 有声书仍不触发；改它要连同「入库即外呼」的取舍一起定。
+- 外部服务的「同步任务」（Hardcover / Readwise / StoryGraph 推送）尚未实现，前置是书籍匹配（ISBN / 标题 + 作者）；本机外网受限，验证成本高。
 - 剩余 5 个 placeholder 设置页（`appearance/icons`、`appearance/layout`、`appearance/behavior`、`libraries`、`koreader-upstream`）**处置未定**（删 / 留作上游对照）。
