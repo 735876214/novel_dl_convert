@@ -1391,7 +1391,7 @@ export interface NamingApplyResult {
 /**
  * 逐书刮削状态（与后端 `core/db.SCRAPE_STATUSES` 一一对应）：
  * - `pending` 待刮削 / `running` 进行中 / `ok` 已出版 / `failed` 失败
- * - `skipped` 跳过（库未配成品目录、目录型有声书等「不是错误但没出版」）
+ * - `skipped` 跳过（库未配成品目录等「不是错误但没出版」）
  * - `removed` 副本已被删除，**待确认**（是否连原文件一起删）
  * - `kept` 已确认保留 / `orphan` 原文件已不在、副本成孤本
  * - `source_removed` 原文件已按确认移入回收站（副本保留）
