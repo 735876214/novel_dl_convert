@@ -2,7 +2,7 @@
 
 > 来源：`docs/bookorbit-capability-gap.md`（采集自线上实例 BookOrbit v2.10.0，2026-09-16）
 > 基线日期：2026-09-18
-> 已完成参考：第 0–5 期路线图（见 `docs/roadmap-verification.md`，第 0–4 期 27/27 验证，第 5 期 2026-09-17 完成）；**第 6–9 期已完成**（第 6 期 A1–A9 前端快赢、第 7 期 B1–B4 轻后端、第 8 期 D1–D5 作者级元数据与抓取深化、第 9 期 D6–D7 CBR 阅读与有声书播放器）
+> 已完成参考：第 0–5 期路线图（见 `docs/roadmap-verification.md`，第 0–4 期 27/27 验证，第 5 期 2026-09-17 完成）；**第 6–29 期已完成** —— 第 6–9 期见下方分期标题（A1–A9 前端快赢 / B1–B4 轻后端 / D1–D5 作者级元数据与抓取深化 / D6–D7 CBR 阅读与有声书播放器），第 10 期起见「三、分期实施计划」下的**逐期实施记录**
 > 用途：跟踪"上游有、本项目仍缺失"的功能，并给出分期实施计划。本文件为**活文档**，每完成一项勾掉一项。
 
 ## 核验约定
@@ -387,6 +387,173 @@
   分支（`core/watcher.py:430,436`，目录型条目名字无后缀、按 `kind` 显式放行）；
   `tests/test_watcher_auto_fetch.py` 已钉住漫画与有声书两例。双重门控（`metadata_fetch.enabled`
   且 `auto_on_import`）不变，默认仍是不联网。「入库即外呼」的取舍**已经定过**，只是没写进本文件。
+
+#### 第 23 期实施记录（对标差异清理，纯前端 + 文档）
+
+**主题**：上游对照页与已实现能力之间最后几处「说了但没落」的差异清理，**零后端改动**。
+
+- **维护页**：ACHIEVEMENTS 重算接后端既有 `POST /api/achievements/backfill`；IMPORT / RECOMMENDATIONS /
+  UPDATES 在容器口径下明确未支持（`SettingsUnsupportedCard`）。`api.ts` 的 `AchievementsOverview`
+  补 `backfilled?`。
+- **阅读器排版口径更正**：`ReaderEbookPage.vue` **实际已实现 13 项**（阅读模式 / 13 档主题 / 字体 /
+  字号 / 行高 / 内容宽度 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词），而
+  `settingsNav` 的 `reader/ebook` note 仍写「仅字体 / 主题 / 字号 / 行高 / 内容宽度」——已按实况改为
+  13 项 + 4 未支持。这类「代码已做、口径没跟上」正是本文件后面反复出现的漂移模式。
+- **5 个 placeholder 页**（`appearance/icons`、`appearance/layout`、`appearance/behavior`、
+  `koreader-upstream`、`libraries`）全部补 note「留作上游对照」，**未删任何导航项**（无重复入口）。
+- **文档同步**：`roadmap-verification.md` 未支持表补阅读器排版 / 维护页 / 外观占位；
+  `settings-inventory.md:763` 修正「均缺」断言；`capability-gap.md` 两条 Achievements 标「第 22 期已实现」。
+
+#### 第 24 期实施记录（入库自动抓取放开到漫画 / 有声书）
+
+**主题**：兑现第 22 期留的待办 —— `watcher.auto_fetch_async` 的「无 OPF 可写」早退理由自第 22 期起
+已失效，但它仍按 `.epub` 后缀提前 return。
+
+- `auto_fetch_async(name, cfg, kind=None)`：guard 改 **allow-list**（epub/mobi/awz3/pdf/fb2/cbz/cbr，
+  复用 `comics.COMIC_EXTS`），并加 `kind="audiobook"` 显式放行（目录型条目名字无后缀）。
+- **有声书目录分支**（`watcher.py` 的 `p.is_dir()`）此前**根本没调**这两个异步入口，补上
+  `auto_fetch_async(rel, cfg, kind="audiobook")` 与 `enqueue_scrape_async(rel, lib, cfg)`。
+- **双重门控不变**：`metadata_fetch.enabled` 且 `auto_on_import`，默认仍是不联网。
+- 测试：新增 `tests/test_watcher_auto_fetch.py` 5 例（allow-list + kind 单元、门控、漫画库扫描触发、
+  有声书库扫描触发、关闭不触发），全部 mock 外呼、断言名字抵达 `metafetch.auto_fetch`。
+- 验收：全量 **270 passed / exit 0**（基线 265 + 5）。`MEMORY.md` 对应待办移除。
+
+#### 第 25 期实施记录（Profile 补全：头像 / 显示名 / 时区 / 引导重放）
+
+**主题**：YOU→Profile 是设置区最后一块**真缺口**（其余「阅读器五页」「Metadata 7 子页」复核后
+发现早已 ready，是 inventory 文档滞后造成的假缺口 —— 后续规划改以 `settingsNav.ts` 为准）。
+
+- **后端**：`users` 表加 `display_name` / `timezone` / `avatar_path`（**PRAGMA 守卫 ALTER** 迁移，
+  不碰 `CREATE TABLE`）；`get_user_profile` / `update_user_profile` / `set_user_avatar` /
+  `clear_user_avatar`；`hour_histogram()` 按账号时区（ZoneInfo，失败回落服务器本地时）归一 →
+  接通 Early Bird / All-nighter 等时间类成就。
+- **接口**：`GET/PUT /api/account/profile`、`POST/DELETE/GET /api/account/avatar`（复用 `_read_capped`，
+  5MB、JPG/PNG/WEBP 白名单，落 `CACHE_DIR/user/avatar.<ext>`，**零外链**分发）；头像分发加入
+  `_MEDIA_TOKEN_PATHS` 允许 `<img src>` 带 `?token=`。
+- **前端**：`stores/auth.ts` 扩 `displayName` / `timezone` / `avatarUrl` + `display` getter；
+  `ProfilePage.vue` 账号卡加头像上传 / 移除、显示名、时区（IANA 全量下拉）+「新手引导」卡；
+  新建 `components/settings/GuidedTourModal.vue`（3 步浮层）；`UserMenu.vue` 顶栏优先显示头像 + 显示名。
+- **验证**：头像 HTTP e2e 7 项全过（上传 / 带 token 分发 / profile 回显 / 移除 / 移除后 404 /
+  非图片 400 / 空文件 400）；按能力拆 3 commit 推送。
+
+#### 第 26 期实施记录（设置区对齐收尾：41 页逐页有落点 + 搜索 + 脏状态）
+
+**主题**：在既有 `/settings` 嵌套路由骨架上补齐与对齐，**后端零改动、不新增前端依赖**。
+
+- `settingsNav.ts` **38 → 48 页**：新增 10 个 `placeholder` 页（`appearance/language`、
+  `account/privacy`、`account/restrictions`、`kobo`、`email`、`admin/users`、`admin/account-activity`、
+  `admin/magic-links`、`admin/oidc`、`admin/requests`），每页带 `upstream`（标题 / 说明 / 页内分组 /
+  条目）+ 中文 `note`；`SettingsPageDef` 增 `own?: boolean`，`komga` 与 `koreader-upstream` 标
+  `own: true`（界面显示「本项目补充」徽标）。**7 页本项目补充 + 41 页上游落点 = 48**。
+- **设置搜索**：新增 `composables/useSettingsSearch.ts` + `components/settings/SettingsSearchPanel.vue`
+  （索引从 `SETTINGS_GROUPS` 派生：页面级 rank0 + `upstream.items` rank1；多词 AND、↑↓/↵/Esc、
+  限高滚动 + `scrollIntoView`）。`App.vue` 的 ⌘K 在 `/settings` 下**让位**给设置面板。
+- **脏状态双通道**：`useSettingsConfig` 按 `SECTION_KEYS` 分组比基线出 `dirtySections` / `hasDirty` /
+  `discardDirty`（既有返回值不变，12 个使用方无感）；新增 `composables/useSettingsDirty.ts` 注册表，
+  供自带局部 `dirty` 的页上报。`SettingsLayout.vue` 合并两源渲染「有未保存的改动 + 放弃更改」。
+- 测试：`tests/test_settings_nav_contract.py` **9 项**，纯文本解析 `settingsNav.ts` / `router/index.ts`
+  （48 页、path/name 唯一、上游 41 标题齐全、`ready` 与组件映射一致、own 集合、别名存在）——
+  **不依赖 DB / 夹具，win32 稳定通过**。
+- 踩坑：`note` 字符串里的 `**` 会被原样渲染（Vue 模板不解析 markdown，静态文本要用 `<strong>`）；
+  本机构建需先把 `CODEBUDDY_NODE_BIN` 与 PATH 指向 `C:\Users\qingr\nodejs\` 的真实 Node。
+
+#### 第 27 期实施记录（批注域补齐 + 文档漂移清理）
+
+**主题**：复核后确认批注域是当时唯一成体系的真实功能缺口（现状只有一张平铺列表 + **硬删除**）。
+
+- **数据模型**：`annotations` 补 `origin TEXT NOT NULL DEFAULT 'web'` 与
+  `deleted_at REAL NOT NULL DEFAULT 0`（同一段 PRAGMA 守卫 ALTER 迁移块）；存量行语义完全不变。
+- **软删除**：`delete_annotation` 由硬 `DELETE` 改**写 `deleted_at`**；新增 `restore_annotation`、
+  `purge_annotation`（真删，**要求 `deleted_at != 0`**，活跃条目拒绝）、`trashed_annotations`。
+  三处读点加 `WHERE deleted_at = 0`：`list_annotations` / `all_annotations` / `annotation_counts`。
+- **统计**：`_week_index(ts)`（`monday.toordinal() // 7` —— ⚠️ **不能用 `year*53+week`**，跨年算错）
+  与 `annotation_overview()` → `{active, trashed, weeks, longest_quiet_weeks}`。
+- **级联真 bug 修复**：`remap_book_id` 的探测 `SELECT 1 FROM <t> WHERE book_id=?` 在软删除下会把
+  「新 id 只有垃圾桶批注」误判成「已有数据」→ 跳过搬迁 → **旧 id 的活跃批注被静默搁浅**。修法：
+  `REMAP_PROBE_FILTER = {"annotations": " AND deleted_at=0"}`，**只改探测、`UPDATE` 仍搬全部行**；
+  `book_id_refs` **故意不加过滤**（孤儿判据与垃圾桶状态无关）。
+- **接口**：`GET /api/annotations` 扩 `include_trashed`（**无参行为与改动前完全一致**）；新增
+  `GET /api/annotations/overview`、`POST .../{aid}/restore`、`DELETE .../{aid}/purge`。
+- **前端**：新建 `data/annotationColors.ts`（应用侧 10 色单一权威表）**归并 4 处各自为政的颜色表**；
+  `AnnotationsView.vue` 重写为「活跃 / 垃圾桶」双视图 + 月 / 书 / 颜色 / 来源四档**前端**分组 +
+  顶部统计条；`api.request()` 加 `expectStatus`（只压制 `console.error`，不动 401 分支）。
+- **测试**：`tests/test_annotations.py` **12 项**。含三条钉子：软删除语义与 purge 拒绝活跃条目；
+  **3 个下游逐个断言**批注数不变（`/api/stats` 的 `reading.annotations`、`GET /api/books[]`、
+  导出 CSV 的「批注数」列 —— 只测 stats 会漏掉后两个）；rename 后旧 id 的**活跃**批注确实被搬走。
+- **文档漂移清理**：`capability-gap.md` 逐条按代码核验后改判（§0.3 基线 **68 → 260 路由、
+  6 → 28 张表**；§6/§7/§8/§10/§13 多项过期），**不做整表翻转**；并显式记下**三条必须保持原判**的项
+  （两大标签分区 / Integrity 百分比 / 「孤儿封面目录」是刻意不同设计）—— 第 29 期正是从这三条开工的。
+
+#### 第 28 期实施记录（重命名并入刮削：副本命名唯一化）
+
+**主题**：用户拍板「批量重命名与刮削合并」。复核后确认这**不是新增能力，是消灭重复** ——
+`publish.relpath_for` 早已按该库生效规则派生副本名，`scrape.resolve(bid,"rebuild")` 早已能按当前
+规则重生成副本并把旧副本移入回收。真正的缺陷是**「同一份保存的规则有两套解释」**。
+
+- **命名展开唯一化**（`9a0f126`）：`fileops.fill_pattern(pattern, book, ext, seq)` 收全部 9 个占位符、
+  **先长后短**替换（`{series_index}` 必须排 `{series}` / `{index}` 之前）；`publish.fill_pattern` /
+  `_index_text` **删除**，`relpath_for` 改调。此前 publish 只认 5 个占位符 ⇒ 预览（走 fileops）与
+  落盘（走 publish）不一致，`{series_index}` 会被**字面写进文件名**。
+- **接口**：新增 `POST /api/naming/preview`、`POST /api/naming/apply`；**删** `/api/rename/preview`、
+  `/api/rename/apply` 与 `fileops.plan_pattern_rename`；删 `views/tools/BulkRenameView.vue`、路由
+  `/tools/rename`、`ToolsLayout` 导航项（**工具页签 9 → 8**）。
+- **冲突不静默**：把 `publish._free_rel` 的占用判断抽成只读可复用的 `publish.rel_verdict`
+  （`REL_REUSE` / `REL_REBUILD` / `REL_DECLINE`），**预览与落盘共用同一判据**；预览标 `conflict`
+  （`occupied` / `dup`）并**从批量里排除**，不让 `(2)` 兜底悄悄改掉预览结论。
+- **实体改名纯元数据化**（`2b4fe03`、`1cff287`）：`apply_rename` / `_meta_override_for` /
+  `_owning_library_id` **整函数删除**，新增只写 `db.set_override` 的 `apply_entity_rename`；
+  `/api/entities/rename/apply` 契约改为 `{type, from, to, library_id?}`，**改哪些书由服务端按 `from`
+  自算**（客户端指定的 items 一律无效）。顺带消灭「老 `apply_rename` 改 basename 却不调
+  `db.remap_book_id` ⇒ 进度 / 批注搁浅在旧 id」这一已报缺陷 —— **不是打补丁，是把整条路径删掉**。
+  仍改 basename 的只剩 `apply_conflict_rename` / `apply_komga_layout`，二者都成对调用 `remap_book_id`。
+- **前端**：`ScrapePanel.vue` 新增「命名规则」区块（选定某库可改该库覆写；「全部书库」时只读并指向
+  设置页 —— **全局规则只有一处能写**）；有未保存草稿时禁用重出版按钮（否则「预览按草稿、落盘按
+  保存值」正是要消灭的不一致）。
+- **测试**：`tests/test_naming_publish.py` 新增 14 例 + `test_rename_server_side.py` 重写，**30 passed**。
+  钉住预览 == 落盘（逐字）、源文件指纹分毫不动、`book_id` 不变、**不外呼**（打开在线抓取并
+  monkeypatch `metafetch.auto_fetch` 使其抛异常，整批仍成功）、旧接口 **404**（method + path 一起断言）。
+- **e2e**（真 uvicorn + 真文件）：建库 → 扫描 → 出版 → 改规则 → 预览 → 重出版全程；源文件
+  `(inode, 大小, mtime_ns, sha256)` 完全未变；旧副本两次进回收；`/api/rename/*` 实测 404。
+
+#### 第 29 期实施记录（缺口清单核验到底 + 统计域收口 + 有声书出版）
+
+**主题**：用户选定「核验到底 + 落地一批」。核验结果与「落地域」勾选**冲突并如实纠正** ——
+勾选的「书籍详情补全」「书架与列表剩余项」经代码实测**早已全部实现**，其「缺」只存在于文档里；
+根因正是本期要治的事：`capability-gap.md` 的 §1/§2/§3/§4/§11 **从来没有复核头**，内容停在
+第 4 期时代，而第 27 / 28 期已两次证明**人工校正不持有**。故本期 = 把核验做完并写回文档（止血），
+再加上统计域真缺口落地与有声书出版。
+
+- **文档核验到底**（`d1a7ed5`、`fdc5353`）：§1–§12 全表逐条按代码核验改判，**补上 §1/§2/§3/§4/§11
+  缺失的复核头**；本轮确认 **23 行过期**（PDF 阅读器、漫画阅读器、书架折叠 / 排序 / 导出、系列序号
+  字段、编辑元数据、查重阈值、缺失资源 orphans、全局搜索…），自评「缺口」里真正站得住的只剩 5 条。
+  **每行改判都附 `文件:行` 锚点**（抽查 30+ 处全部命中），§0.3 基线重取实测值并补 `activity_log`。
+  另给三份停在旧期的文档加 ⏳ 时效标注（`roadmap-verification.md` 止于第 4 期、
+  `settings-inventory.md` / `feature-flows.md` 止于 2026-09-19 上游快照）。
+- **统计域三项**（`88e1e9f`、`295f120`、`3ad6725`）：`integrity` 在原有 5 个计数键**之外**增补百分比
+  口径（按上游 `LibraryIntegrityGauge`）；`overview` 新增 `largest: [{id, title, size_bytes, format}]`
+  体积榜（按上游 `LargestBookItem`，长度受既有 `top` 控制且**不塞进 `_top`**，0 字节书如实上榜）；
+  前端 `StatsView.vue` 由一串平铺 `<h3>` 改为 **Library Stats / My Reading 两分区**、书库体检改
+  百分比展示、新增 Top 50 体积榜。
+- **有声书出版（目录型条目）**：出版链路原先用 `if not src.is_file()` 一票否决 ⇒ 一章一文件的
+  有声书永远不出版。本次把条目形态判据从「读磁盘的 `is_dir`」换成「**条目名带不带书库认识的
+  扩展名**」，与入库侧（`komga.relpath_for_dir`）同判据、同落点。副本：`link_tree_or_copy` 逐文件
+  硬链接（回退逐文件 `copy2`），是**真目录**而非符号链接；指纹：`source_sig` 对目录产出**整树指纹**
+  （相对路径 + 大小 + mtime —— 目录自身 mtime 看不出内部改动，而章序就是文件名顺序，改名同样算
+  源变更）；副本名**不带扩展名**；名字与磁盘形态不一致时**跳过出版**而不产出错名。
+- **顺带修一处既有缺陷**（`fafe999`）：`fileops.fill_pattern` 展开 `{ext}` 已带扩展名，
+  `komga.relpath_for` 又拼一次 ⇒ 模式写 `{title}.{ext}` 落成 `书名.m4b.m4b`（设置页把 `{ext}` 列为
+  可选占位符，用户照着填就撞上）。只在模式**以 `{ext}` 收尾**时摘掉尾部扩展名（零误判），
+  `{ext}` 出现在别处一律不动。第 29 期端到端验证时发现，**非本轮引入**。
+- **测试**：新增 `tests/test_audiobook_publish.py` **14 例**（源目录只读 / 逐文件同 inode / 整树指纹
+  逮住「改一轨内容」与「互换章序」/ 指纹与链接共用同一份文件清单 / 目录条目不落扩展名 /
+  scope 非 all 时不动 / 名字与磁盘形态不一致时跳过 / 旧副本进回收不留双份 / 落点被占时退让不覆盖 /
+  重出版不外呼 / 副本目录走回收而非 unlink / 入库与出版同落点）；`test_naming_publish.py` 加
+  `{ext}` 回归。全量回归与基线一致，只余既有 win32 flaky 两例。
+- **e2e**（真 uvicorn，端口 8799）：建 audiobook 库 → 扫描 → 出版成**真目录** → 逐文件同 inode →
+  改命名规则使预览 == 落盘 → 旧副本目录进回收 → 改名后逐文件仍同 inode 且源指纹分毫未动 →
+  落点被别人的目录占着时预览标 `occupied`、apply 只跳过那一本、别人的目录原样不动。
+  ⚠️ 踩坑：默认命名规则是 `{author} - {title}`（**不是空**），脚本第一版按「原样出版」写，
+  于是「改名」根本没改到目录条目、断言假失败。
 
 ---
 
