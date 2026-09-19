@@ -297,9 +297,11 @@ function loadNaming(): void {
     .then((r) => {
       // schema 已按该库类型的能力收窄：没有 naming.pattern 就是这类库没有命名规则能力
       namingEditable.value = r.schema.some((s) => s.key === 'naming.pattern')
+      // 目前 `rename` 能力在 `features._COMMON` 里（所有库类型都有），这条分支是防御性的：
+      // 将来能力矩阵收窄到某类型没有命名规则时，界面自动退化为只读，不必再改这里。
       namingNote.value = namingEditable.value
         ? ''
-        : '该库类型没有「命名规则」能力（成品副本只对电子书 / 漫画库有意义），这里只展示生效值。'
+        : '该库类型没有「命名规则」能力，这里只展示生效值。'
       namingOverridden.value = !!r.overridden['naming.pattern'] || !!r.overridden['naming.scope']
       setValues(r.values['naming.pattern'], r.values['naming.scope'])
     })
