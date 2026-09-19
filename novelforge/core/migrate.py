@@ -100,7 +100,8 @@ def _suggest_name(root: pathlib.Path, name: str) -> str:
     """冲突时的建议名：``三体 (2).epub``（递增到不冲突为止）。
 
     ⚠️ 改名会换 ``book_id`` → 进度 / 批注断链，所以这里**只建议、不自动改**；
-    真要改名应走「批量重命名」（它会把关联数据一起搬，见 db.remap_book_id）。
+    真要改名应走「工具 → 书库管理 → 跨库同名冲突」的一键修复
+    （``fileops.apply_conflict_rename``，它会把关联数据一起搬，见 db.remap_book_id）。
     """
     p = pathlib.PurePosixPath(str(name))
     stem, suffix, parent = p.stem, p.suffix, str(p.parent)

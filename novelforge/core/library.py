@@ -7,7 +7,8 @@
 - 实体管理     → :func:`entities`
 - 重复书籍     → :func:`duplicate_groups`
 - 缺失资源     → :func:`missing_items`
-- 批量重命名   → 只读 :func:`books`，改名逻辑在 ``fileops``
+- 命名规则     → 只读 :func:`books`；预览 / 重出版副本见 ``core/scrape.plan_naming``
+                （第 28 期起改名只改硬链接副本，源文件名不再有任何入口可改）
 
 EPUB 解析是 IO 密集（要解开 zip 读 OPF），因此扫描结果做进程内短期缓存：
 TTL + 目录指纹（文件数 + 最新 mtime）双重判定；任何写操作后调用

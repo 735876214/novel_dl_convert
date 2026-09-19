@@ -1199,7 +1199,8 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
       · 只接受 ``fileops.METADATA_FIELDS`` 里的字段，其余**不写**（并在响应里回报）；
       · 只接受 ``db.clearable`` 的字段用 ``null`` 清空（当前 = 全部可编辑字段）；
       · 改完必须 ``library.invalidate()``，否则扫描缓存会让界面继续显示旧值；
-      · **不动文件名**：文件名归「批量重命名」管；
+      · **不动文件名**：改名只剩「按命名规则重出版副本」一条路，源文件名
+        没有任何入口可改（第 28 期起）；
       · ``orig`` 记的是**编辑前的生效值**（供撤销覆盖后无在线值时回退）。
     """
     b = library.by_id(bid)
@@ -3883,7 +3884,7 @@ def api_logs_clear():
     return {"ok": ok, "read_marks_cleared": cleared}
 
 
-# ---------------- 工具页：实体管理 / 批量重命名 / 重复书籍 / 缺失资源 ----------------
+# ---------------- 工具页：实体管理 / 重排册号 / 重复书籍 / 缺失资源 ----------------
 # 数据源统一是扫描 OUTPUT_DIR（见 core/library.py）；会改磁盘的动作一律
 # 「先预览、再应用」，删除类走回收目录，全部写活动日志（见 core/fileops.py）。
 # 业务逻辑都在 core/ 里，这里只做参数校验与胶水。
@@ -3929,20 +3930,24 @@ def api_entity_rename_preview(payload: dict = Body(...)):
 
 @app.post("/api/entities/rename/apply")
 def api_entity_rename_apply(payload: dict = Body(...)):
-    """执行实体改名 / 合并：**只改文件名 + 写服务端元数据，绝不改写 EPUB 内容**。
+    """执行实体改名 / 合并：**只写服务端元数据**（``meta_override``），源文件名与字节原样。
 
-    第 18 期起 ``meta_field`` 落点从「OPF 内部」改为 ``meta_override`` ——
-    文件名照旧真改（那是这个工具的本质），但原文件字节保持原样；
+    第 28 期起连同文件名都不改了：改名只剩「按命名规则重出版**副本**」一条落盘路径
+    （``/api/naming/apply``），源文件名没有任何入口可改。
+
+    契约 ``{type, from, to, library_id?}`` —— **不收 items**：要改哪些书由服务端按
+    ``from`` 自己算（见 ``fileops.apply_entity_rename``），预览过期也改不错。
     列表 / 详情 / 实体聚合按新名字走（见 ``library._scan_once`` 的批量合并）。
     """
     type_ = str(payload.get("type") or "author")
     if type_ not in ("author", "series"):
         raise HTTPException(400, "type 只能是 author 或 series")
     try:
-        return fileops.apply_rename(
-            payload.get("items"),
-            meta_field="author" if type_ == "author" else "series",
-            meta_value=str(payload.get("to") or ""),
+        return fileops.apply_entity_rename(
+            type_,
+            str(payload.get("from") or ""),
+            str(payload.get("to") or ""),
+            _opt_library(payload.get("library_id")) or None,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -4014,9 +4019,9 @@ async def api_naming_apply(payload: dict = Body(default=None)):
 
 # ---------------- Komga 库布局（输出侧）----------------
 # 把已入库的书整理成 Komga 认识的结构：``系列名/系列名 #N.ext``（见 core/komga.py）。
-# 与批量重命名同一范式：**先预览、再应用** —— 预览只算不改，应用只认回传的
-# ``{old, new}`` 条目并再校验一遍。会改 basename 的条目在应用时自动搬关联数据
-# （db.remap_book_id），否则整理一次就把阅读进度丢了。
+# 范式与其它改动型工具一致：**先预览、再应用** —— 预览只算不改，应用只认回传的
+# ``{old, new}`` 条目并再校验一遍。这里**真改 basename**（布局整理就是搬文件），
+# 所以应用时必须搬关联数据（db.remap_book_id），否则整理一次就把阅读进度丢了。
 
 @app.post("/api/komga/layout/preview")
 def api_komga_layout_preview():

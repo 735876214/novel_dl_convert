@@ -1,22 +1,31 @@
-"""成品文件操作：批量重命名与回收目录。
+"""成品文件操作：命名规则展开、实体改名（纯元数据）、冲突修复与回收目录。
 
-对应工具页里的三个「会改磁盘」的工具（实体管理 / 批量重命名 / 重复书籍）。
+对应工具页里的几个「会改磁盘」的工具（实体管理 / 重排册号 / 重复书籍 / 库布局）。
 
 安全约定（三条硬约束，改这个模块前先读）：
 
 1. **路径不越界**：所有文件名入参都过 :func:`safe_path` —— 不允许路径分隔符、
-   ``..``、绝对路径、非法字符；解析后的父目录必须**恰好**是 ``OUTPUT_DIR``。
-2. **一律「先预览、再应用」**：``plan_*`` 只算不改；``apply_rename`` 只接受前端
-   回传的 ``{old, new}`` 条目并**再校验一遍**，不接受自由规则 ——
-   避免同一套规则在前后端解释不一致时改错文件。
+   ``..``、绝对路径、非法字符；解析后的父目录必须**恰好**是该库的根
+   （``library_id`` 缺省时 = ``OUTPUT_DIR``）。
+2. **一律「先预览、再应用」**：``plan_*`` 只算不改；``apply_*`` 只接受**服务端
+   自己算出的目标**（第 28 期起连调用方传的 ``book_ids`` 也只当**收窄**条件），
+   不接受调用方指定「去动哪个文件」—— 预览过期时改错东西的根因就在这里。
 3. **删除即回收**：清理动作走 :func:`recycle_items`，把文件 move 进
    ``CACHE_DIR/recycle``（带时间戳前缀，重名自动加序号），**从不 unlink**。
 
-第 18 期补充（第 4 条，与上面三条同等重要）：
-4. **本模块只动「文件名」，不动「文件内容」**。改名 / 合并 / 重排册号需要的元数据
-   一律写服务端（``db.set_override``），**不再回写 EPUB 的 OPF**（用户口径：
-   元数据只存服务端，原书文件逐字节不变）。本模块里残留的 ``patch_epub_meta`` /
-   ``rewrite_epub`` 等写文件的函数已**退出生产路径**（仅测试造夹具与副本出版用）。
+第 28 期补充（第 4 条，与上面三条同等重要）：
+4. **源文件名没有任何入口可改**。改名只剩「按命名规则重出版**副本**」一条路
+   （见 ``core/scrape.republish``），源文件全程只读；实体改名 / 合并只写服务端
+   元数据（``db.set_override``），文件名与字节都原样。
+   本模块仍会动文件的只剩**改 basename 才是这件事本身**的两处：
+   同名冲突修复（:func:`apply_conflict_rename`，改完必须 ``db.remap_book_id``
+   把进度 / 批注搬过去）与库布局整理（:func:`apply_komga_layout`）。
+
+第 18 期补充（仍有效）：
+5. **本模块只动「文件名」，不动「文件内容」**。元数据一律写服务端
+   （``db.set_override``），**不再回写 EPUB 的 OPF**（用户口径：元数据只存服务端，
+   原书文件逐字节不变）。本模块里残留的 ``patch_epub_meta`` / ``rewrite_epub``
+   等写文件内容的函数已**退出生产路径**（仅测试造夹具与副本出版用）。
 """
 from __future__ import annotations
 
@@ -206,17 +215,19 @@ def _mark_conflicts(items: list) -> list:
 
 
 def plan_entity_rename(kind: str, frm: str, to: str, library_id=None) -> dict:
-    """把某作者 / 系列名批量改成另一个名字。
+    """把某作者 / 系列名批量改成另一个名字 —— **只写服务端元数据，不动源文件名**。
+
+    第 28 期起与「批量重命名」合并，改名的落盘口径只剩「按命名规则重出版**副本**」
+    （见 ``core/scrape.republish``）；本函数因此只产出「该字段生效值等于 ``frm`` 的书」
+    清单，条目一律 ``old == new`` + ``meta_only``：文件名不变，改的是
+    ``meta_override`` —— 列表 / 详情 / 实体聚合立刻按新名字走，原文件逐字节原样。
 
     ``library_id`` 给定时只处理**该库**的书（工具页的「范围：当前库」）；
-    缺省 = 全部书库（既有行为不变）。条目一律带上 ``library_id``，
-    apply 阶段据此取正确的库根 —— 否则多库下同名书会改到**错库**的文件上。
+    缺省 = 全部书库（既有行为不变）。条目带 ``library_id`` 是为了让预览显示每本
+    属于哪个库（多库下同名书会撞 ``book_id``，得让人看见）。
 
-    - 作者：文件名里出现就替换；没出现则按本项目命名约定重建为
-      ``《书名》作者：新名.epub``。apply 阶段还会同步改写 EPUB 内部
-      ``dc:creator``，使工具页（按 OPF 聚合）能识别新作者。
-    - 系列：通常只存在于 EPUB 内部元数据（``calibre:series``）、文件名里没有，
-      因此生成「同名条目」，apply 阶段只改写 OPF 的 ``calibre:series``，不动文件名。
+    ⚠️ 应用**不回传 items**：由服务端按 ``frm`` 重算（见 :func:`apply_entity_rename`），
+    这样预览即使过期也改不错东西。条目的 ``old`` / ``new`` 只供预览展示。
     """
     frm, to = (frm or "").strip(), (to or "").strip()
     if not frm or not to:
@@ -227,32 +238,16 @@ def plan_entity_rename(kind: str, frm: str, to: str, library_id=None) -> dict:
 
     items = []
     for b in library.books(library_id):
-        cur = (b.get(field) or "").strip()
-        if cur != frm:
+        if (b.get(field) or "").strip() != frm:
             continue
-        lid = b.get("library_id")
-        p = pathlib.Path(b["name"])
-        stem, suffix = p.stem, p.suffix
-        if frm in stem:
-            new_stem = stem.replace(frm, to, 1)
-        elif field == "author":
-            # 作者名没写在文件名里：按本项目命名约定重建，结果可预期
-            new_stem = f"《{b['title']}》作者：{to}"
-        elif field == "series":
-            # 系列名只存在于 EPUB 内部元数据（calibre:series），文件名通常不含；
-            # 改名即改写 OPF 元数据、不动文件名：生成「同名条目」，apply 阶段只更新元数据
-            items.append({**_mk_item(b["name"], b["name"]), "meta_only": True,
-                          "library_id": lid})
-            continue
-        else:
-            continue
-        new_stem = sanitize_stem(new_stem)
-        if not new_stem:
-            continue
-        items.append({**_mk_item(b["name"], f"{new_stem}{suffix}"), "library_id": lid})
+        name = str(b.get("name") or "")
+        items.append({**_mk_item(name, name), "meta_only": True,
+                      "book_id": str(b.get("id") or ""),
+                      "title": str(b.get("title") or "") or name,
+                      "library_id": b.get("library_id")})
 
     return {"type": kind, "from": frm, "to": to, "library_id": str(library_id or ""),
-            "items": _mark_conflicts(items)}
+            "items": _mark_conflicts(items), "count": len(items)}
 
 
 def plan_merge(kind: str, source: str, target: str, library_id=None) -> dict:
@@ -520,96 +515,48 @@ def patch_epub_meta(path: pathlib.Path, updates: dict) -> list:
 
 # ---------------- 应用 ----------------
 
-def _owning_library_id(path) -> str:
-    """文件所在库的 id：按**真实路径的包含关系**判断，不依赖扫描缓存。
+def apply_entity_rename(kind: str, frm: str, to: str, library_id=None) -> dict:
+    """把某作者 / 系列名下所有书的该字段写成 ``to``（**只写服务端元数据**）。
 
-    ⚠️ 不能改用 ``_lib_of(名字)`` 来算：它靠 ``library.find`` 反查书目，而改名
-    **刚做完**时扫描缓存（TTL 5s）里根本还没有新名字 → 反查失败 → ``book_id``
-    退化成旧的**纯哈希**形态，于是写下的覆盖永远不会被列表读到
-    （列表用的是「库$哈希」）。这类 bug 不报错、只是「改了没生效」，必须防死。
+    **要改哪些书由这里自己算**（该字段生效值 == ``frm``），不接受调用方传条目：
+    预览可能已经过期，让调用方指定目标等于把「动哪些文件 / 写哪些书」交给它 ——
+    第 28 期把这条面收掉了（预览只用来给人看）。合并（``plan_merge``）与改名同构，
+    共用这一个 apply。
+
+    源文件名与字节全程不变 ⇒ ``book_id`` 也不变 ⇒ 进度 / 批注 / 评分无需搬迁。
+    （老 ``apply_rename`` 恰恰在这点上出错：它真改文件名却从不调
+    ``db.remap_book_id``，关联数据会搁浅在旧 id 上；现在整条路径消失，
+    缺陷随实现一起没了。）
     """
-    try:
-        target = pathlib.Path(path).resolve()
-    except Exception:                                 # noqa: BLE001
-        return str(library.DEFAULT_LIBRARY_ID)
-    best, best_len = "", -1
-    for lib in library.libraries():
-        root = str(lib.get("root_path") or "").strip()
-        if not root:
+    frm, to = (frm or "").strip(), (to or "").strip()
+    if not frm or not to:
+        raise ValueError("原名称与新名称都不能为空")
+    if not sanitize_stem(to):
+        raise ValueError("新名称含非法字符")
+    field = "author" if kind == "author" else "series"
+
+    done, errors, items = [], [], []
+    for b in library.books(library_id):
+        if (b.get(field) or "").strip() != frm:
             continue
+        bid = str(b.get("id") or "")
+        name = str(b.get("name") or "")
         try:
-            r = pathlib.Path(root).resolve()
-        except Exception:                             # noqa: BLE001
-            continue
-        # 取**最深**的匹配：库根嵌套时按更具体的那个归属
-        if (target == r or r in target.parents) and len(str(r)) > best_len:
-            best, best_len = str(lib.get("id") or ""), len(str(r))
-    return best or str(library.DEFAULT_LIBRARY_ID)
-
-
-def _meta_override_for(name: str, field: str, value: str) -> dict:
-    """把「改名后的新名字」记成**服务端元数据覆盖**（第 18 期：元数据不写文件）。
-
-    ⚠️ ``book_id`` 由 basename 派生 → **改名后 id 就变了**，覆盖必须落在**新 id** 上，
-    否则列表读到的还是旧 id 的覆盖（那条记录已经没有任何书指向它），等于没改。
-    """
-    path = safe_path(name, _lib_of(name))
-    bid = library.book_id(name, _owning_library_id(path))
-    db.set_override(bid, field, value)
-    return {"name": name, "book_id": bid, "field": field, "value": value}
-
-
-def apply_rename(items: list, meta_field: str | None = None, meta_value: str | None = None) -> dict:
-    """执行改名。只认 ``{old, new}``；冲突项与非法项一律跳过并记失败日志。
-
-    第 18 期起：**只改文件名，绝不改写 EPUB 内部元数据**（用户口径：元数据只存服务端）。
-    实体改名 / 合并需要的「新名字」改为写 :func:`db.set_override` ——
-    列表 / 详情 / 实体聚合立刻按新名字走，而原文件保持逐字节原样。
-    """
-    if not isinstance(items, list) or not items:
-        raise ValueError("没有可应用的条目")
-
-    renamed, errors, overrides = [], [], []
-    for it in items:
-        it = it if isinstance(it, dict) else {}
-        old = str(it.get("old") or "").strip()
-        new = str(it.get("new") or "").strip()
-        if it.get("conflict"):
-            errors.append({"old": old, "error": "存在冲突，已跳过"})
-            continue
-        try:
-            src, dst = safe_path(old, _lib_of(old)), safe_path(new, _lib_of(new))
-            if not src.is_file():
-                raise ValueError("源文件不存在")
-            if old == new:
-                # 只改元数据（系列 / 作者改名时文件名不变）：不移动文件、不碰文件字节
-                if meta_field and meta_value:
-                    overrides.append(_meta_override_for(old, meta_field, meta_value))
-                renamed.append({"old": old, "new": new})
-                activity_log.log(activity_log.ACTION_RENAME, old, activity_log.STATUS_OK,
-                                output=new, source="api", detail="仅更新服务端元数据")
-                continue
-            if dst.exists():
-                raise ValueError("目标文件已存在")
-            src.rename(dst)
-        except Exception as e:
-            errors.append({"old": old, "error": str(e)})
-            activity_log.log(activity_log.ACTION_RENAME, old, activity_log.STATUS_FAIL,
+            if not bid:
+                raise ValueError("书目缺少 id")
+            db.set_override(bid, field, to)
+        except Exception as e:                            # noqa: BLE001
+            errors.append({"name": name, "error": str(e)})
+            activity_log.log(activity_log.ACTION_RENAME, name, activity_log.STATUS_FAIL,
                              detail=str(e), source="api")
             continue
-        renamed.append({"old": old, "new": new})
-        activity_log.log(activity_log.ACTION_RENAME, old, activity_log.STATUS_OK,
-                         output=new, source="api")
-        # 实体改名 / 合并：新名字记成服务端覆盖，使工具页（按生效元数据聚合）识别新名称
-        if meta_field and meta_value:
-            try:
-                overrides.append(_meta_override_for(new, meta_field, meta_value))
-            except Exception as e:              # noqa: BLE001 —— 文件已改名，元数据失败不算全败
-                errors.append({"old": old, "error": f"文件已改名，但服务端元数据更新失败：{e}"})
+        done.append({"book_id": bid, "name": name, "library_id": b.get("library_id")})
+        activity_log.log(activity_log.ACTION_RENAME, name, activity_log.STATUS_OK,
+                         detail=f"服务端元数据：{field}：{frm} → {to}", source="api")
 
     library.invalidate()
-    return {"renamed": renamed, "errors": errors, "count": len(renamed),
-            "overrides": overrides}
+    return {"type": kind, "from": frm, "to": to, "count": len(done),
+            "items": done, "errors": errors}
 
 
 def _lib_of(name: str, item: dict = None):
@@ -822,10 +769,11 @@ def resolve_duplicates(keep: str, remove: list) -> dict:
 def apply_conflict_rename(items: list) -> dict:
     """执行同名冲突修复改名。只认 ``{old, new, library_id?}``，逐条**再校验一遍**。
 
-    与 :func:`apply_rename` 唯一的、也是最关键的区别：这里**每条都要搬关联数据**。
-    冲突修复必然改 basename（不改就消不掉冲突），而 ``book_id`` 由 basename 派生 ——
-    不调 ``db.remap_book_id`` 就等于把进度 / 批注 / 评分 / 收藏全丢掉，而用户点这个
-    按钮的意图恰恰是「让数据不再张冠李戴」。
+    这里**每条都要搬关联数据**，而且**必须**搬。冲突修复必然改 basename（不改就消不掉
+    冲突），而 ``book_id`` 由 basename 派生 —— 不调 ``db.remap_book_id`` 就等于把进度 /
+    批注 / 评分 / 收藏全丢掉，而用户点这个按钮的意图恰恰是「让数据不再张冠李戴」。
+    （第 28 期删掉的 ``apply_rename`` 正是「改了名却不搬数据」，所以那条路径整个消失，
+    只剩这里 —— 本模块唯一还会改 basename 的入口，另一处是库布局整理。）
 
     ``library_id`` 缺省时按名字反查（见 :func:`_lib_of`）：多库下必须知道基根，
     否则 ``safe_path`` 会落到错的库上。只 rename，**从不 unlink**。
