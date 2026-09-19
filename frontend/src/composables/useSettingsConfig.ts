@@ -2,13 +2,14 @@ import { computed, ref } from 'vue'
 
 import { SECTION_KEYS } from '@/data/settingsFields'
 import { api, type AppConfig, type EbookConvertCap } from '@/lib/api'
+import { payloadEqual } from '@/lib/prefsPayload'
 import { useUiStore } from '@/stores/ui'
 
 /**
  * 设置页服务端配置的**共享单例**。
  *
  * 为什么用模块级状态而不是每页各拉一份：
- *   设置页现在是 38 个子路由，用户在侧栏来回切换时组件会反复挂载/卸载。
+ *   设置页现在是 48 个子路由，用户在侧栏来回切换时组件会反复挂载/卸载。
  *   若每页各自 `getConfig()`，会在切换时产生大量重复请求，且「未保存的修改」
  *   会随页面卸载而丢失。集中到单例后，切换页面保留编辑状态，只在必要时重新拉取。
  *
@@ -27,6 +28,20 @@ const overridden = ref<string[]>([])
 const saving = ref(false)
 const loading = ref(false)
 const loadError = ref('')
+
+/**
+ * 服务端配置的**深拷贝基线**（每次加载/保存成功后刷新）。
+ *
+ * `cfg` 是本地草稿，改动不落库；这一份用来判断「哪些分区有未保存改动」，
+ * 以及「放弃更改」时把草稿整体还原回服务端值。
+ * 没有它就只能靠各页自己记「初始值」，而草稿是跨页共享的，各页记不住对方改了什么。
+ */
+const baseline = ref<AppConfig | null>(null)
+
+/** 结构化克隆（AppConfig 是纯 JSON 数据，JSON 往返足够且不挑运行环境） */
+function clone<T>(v: T): T {
+  return v === undefined || v === null ? v : (JSON.parse(JSON.stringify(v)) as T)
+}
 
 /** 同一时刻只允许一个在途请求 */
 let inflight: Promise<void> | null = null
@@ -78,6 +93,7 @@ export function useSettingsConfig() {
       try {
         const r = await api.getConfig()
         cfg.value = r.config
+        baseline.value = clone(r.config)
         capabilities.value = r.capabilities
         overridden.value = r.overridden ?? []
         files.value = {
@@ -158,6 +174,35 @@ export function useSettingsConfig() {
 
   const calibreOk = computed(() => capabilities.value?.ebook_convert.available ?? false)
 
+  /**
+   * 有未保存改动的分区 id（按 `SECTION_KEYS` 的顶层键逐组比对草稿与基线）。
+   *
+   * 用分组而不是一个整体布尔值：保存是按分区提交的（`saveSection`），
+   * 提示条要能说清「哪一块还没保存」，也便于将来做「按分区放弃」。
+   */
+  const dirtySections = computed<string[]>(() => {
+    const base = baseline.value as unknown as Record<string, unknown> | null
+    const cur = cfg.value as unknown as Record<string, unknown> | null
+    if (!base || !cur) return []
+    const out: string[] = []
+    for (const [section, keys] of Object.entries(SECTION_KEYS)) {
+      if ((keys ?? []).some((k) => !payloadEqual(base[k], cur[k]))) out.push(section)
+    }
+    return out
+  })
+
+  const hasDirty = computed(() => dirtySections.value.length > 0)
+
+  /** 放弃改动：把草稿中所有改动过的顶层键还原为基线值（不写服务端） */
+  function discardDirty(): void {
+    const base = baseline.value as unknown as Record<string, unknown> | null
+    const cur = cfg.value as unknown as Record<string, unknown> | null
+    if (!base || !cur) return
+    for (const section of dirtySections.value) {
+      for (const k of SECTION_KEYS[section] ?? []) cur[k] = clone(base[k])
+    }
+  }
+
   return {
     // 状态
     cfg,
@@ -168,6 +213,10 @@ export function useSettingsConfig() {
     loading,
     loadError,
     calibreOk,
+    // 未保存改动（草稿 vs 基线）
+    dirtySections,
+    hasDirty,
+    discardDirty,
     // 取值 / 赋值
     val,
     setVal,

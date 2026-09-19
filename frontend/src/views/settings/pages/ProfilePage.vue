@@ -8,6 +8,7 @@ import SettingsFieldRow from '@/views/settings/SettingsFieldRow.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import GuidedTourModal from '@/components/settings/GuidedTourModal.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
+import { useSettingsDirty } from '@/composables/useSettingsDirty'
 import { ACHIEVEMENTS_FIELDS } from '@/data/settingsFields'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
@@ -37,6 +38,21 @@ const tourOpen = ref(false)
 const dirty = computed(
   () => dName.value !== auth.displayName || tz.value !== auth.timezone,
 )
+
+/**
+ * 把「资料」页的草稿脏状态上报给设置外壳，让提示条与「放弃更改」也覆盖本页
+ * （本页草稿存在页面自己的 ref 里，不在 `useSettingsConfig` 的共享草稿中）。
+ * 放弃 = 还原成已保存值，不写服务端。
+ */
+useSettingsDirty().register({
+  key: 'account/profile',
+  label: '资料',
+  isDirty: () => dirty.value,
+  discard: () => {
+    dName.value = auth.displayName
+    tz.value = auth.timezone
+  },
+})
 
 // IANA 时区列表：现代浏览器用 Intl 全量，旧环境回落到常用子集。
 const TIMEZONES = (() => {
