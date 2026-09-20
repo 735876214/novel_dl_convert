@@ -4,8 +4,10 @@
  * 约定（沿用 v2 注释）：
  *   · title 为 null 即「无组标题」的主导航
  *   · count 不写时**不渲染计数胶囊**，等真实数据接上再填
- *   · 以 _ 开头的 id 目前没有对应视图，点击落占位页
  *   · 库 / 智能书架 / 收藏夹 的条目点击进入书库页
+ *
+ * 每个 id 都在 AppSidebar 的 `PATH_BY_ID` 里有真实路由；表里没有的 id 会退到
+ * `/placeholder/:id`（未知路由兜底页，不是「未实现的视图」——见 PlaceholderView.vue）。
  */
 import { COLLECTIONS, LIBRARIES, SMART_SHELVES, type NavEntry } from './collections'
 
@@ -95,15 +97,4 @@ export const NAV_GROUPS: NavGroup[] = [
 /** 「库 / 智能书架 / 收藏夹」的条目都进书库页 */
 export function isShelfGroup(title: string): boolean {
   return title === '库' || title === '智能书架' || title === '收藏夹'
-}
-
-/** 占位视图的元信息。迁移自 v2 app.js 的 VIEW_META（639–648） */
-export const VIEW_META: Record<string, { icon: string; title: string; desc: string }> = {
-  _authors: { icon: 'users', title: '作者', desc: '按作者浏览' },
-  _series: { icon: 'layers', title: '系列', desc: '按系列浏览' },
-  _notes: { icon: 'pencil', title: '批注', desc: '全部摘录与笔记' },
-  notify: { icon: 'bell', title: '通知中心', desc: '任务完成与失败提醒' },
-  stats: { icon: 'chart', title: '数据统计', desc: '阅读与任务统计' },
-  search: { icon: 'search', title: '探索发现', desc: '跨全部已启用书源聚合检索' },
-  sources: { icon: 'source', title: '书源', desc: '规则、健康度与启用开关' },
 }

@@ -212,7 +212,8 @@ const router = createRouter({
       ],
     },
 
-    // 尚未实现的视图：/placeholder/_authors、/placeholder/notify …
+    // 未知路由兜底：正式视图现已全部实现，侧栏每个 id 都有真实路由（见 AppSidebar 的
+    // PATH_BY_ID），这两条只是「链接写错了」时的落点，不再是「尚未实现的视图」。
     { path: '/placeholder/:id', name: 'placeholder', component: PlaceholderView },
     { path: '/:pathMatch(.*)*', name: 'fallback', component: PlaceholderView },
   ],

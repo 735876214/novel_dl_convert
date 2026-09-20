@@ -19,8 +19,9 @@ import { useUiStore } from '@/stores/ui'
  * 把文件丢进去就会被自动处理。本页把「目录 + 监听状态 + 自动处理开关 + 处理计数」
  * 聚合展示（与上游 Book Dock 的「投递目录 + 自动处理」高度同构）。
  *
- * 上游还有「元数据自动抓取」与「按置信度自动定稿」——本项目没有元数据抓取体系，
- * 这两项明确标注未支持，并写明依赖条件。
+ * 上游还有两组：METADATA 的「投递后自动抓元数据」本项目**已实现**（`metadata_fetch.auto_on_import`
+ * 与 `metadata_fetch.enabled` 双重门控，见 core/watcher.py:84；开关在 设置 → 元数据），
+ * AUTO-FINALIZE 的「按置信度无人值守定稿」未做（缺的是上游那组目标库 / 文件夹 / 合并模式配置）。
  *
  * 参数细节（轮询间隔 / 稳定判定 / 忽略规则等）在「本项目扩展 → 监听」，本页不重复。
  */
@@ -364,12 +365,11 @@ onBeforeUnmount(() => {
 
     <SettingsUnsupportedCard
       label="Book Dock"
-      :groups="['METADATA', 'AUTO-FINALIZE']"
+      :groups="['AUTO-FINALIZE']"
       :items="[
-        'Auto-fetch metadata from providers（投递后自动抓取元数据）—— 已有 MANUAL 版（设置 → 元数据 → 手动抓取），投递即抓的自动化开关尚未接线',
-        'Enable auto-finalize（元数据置信度达阈值自动定稿）—— 依赖 Metadata Score 置信度评分，见第 7 期 B2',
+        'Enable auto-finalize（置信度达标即无人值守定稿）—— 上游开着后还要选 0–100 分阈值 / 目标库 / 元数据合并模式（safe_merge、embedded_only 等）/ 目标文件夹四项（上游 BookDockSettings.vue:207-287）；本项目入库目标是各库自己的来源目录（没有单点「目标库」设置），元数据侧的置信度阈值是 0–1 的**候选筛选**阈值、只决定哪些字段自动写回，两者不是一回事',
       ]"
-      note="上游 Book Dock 是「投递目录 + 元数据抓取 + 置信度定稿」的完整流水线。本项目的「投递目录 + 自动处理 + 五态复核（待复核 / 待处理 / 就绪 / 出错）」已落地；余下两项待元数据评分体系（B2）落地后再补。"
+      note="上游 Book Dock 是「投递目录 + 元数据抓取 + 置信度定稿」的完整流水线。本项目的「投递目录 + 自动处理 + 五态复核（待复核 / 待处理 / 就绪 / 出错）」已落地；投递即抓也已接线（metadata_fetch.auto_on_import，与 metadata_fetch.enabled 双重门控，开关在 设置 → 元数据），本卡只剩上游 auto-finalize 那组「目标库 / 文件夹 + 合并模式」配置未做。"
     />
 
     <Card class="mt-4">
