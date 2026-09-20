@@ -59,8 +59,8 @@ watch(
   { immediate: true },
 )
 
-/** 日期格式化（秒 → 本地 YYYY/M/D）。 */
-function fmtDate(sec?: number): string {
+/** 日期格式化（秒 → 本地 YYYY/M/D）；供版本信息区「入库」行使用（与文件行 fmtDate 区分）。 */
+function fmtDateSlash(sec?: number): string {
   if (!sec) return '未知'
   const d = new Date(sec * 1000)
   if (Number.isNaN(d.getTime())) return '未知'
@@ -87,7 +87,7 @@ const versionRows = computed<Array<{ k: string; v: string; hint?: string }>>(() 
   const rows: Array<{ k: string; v: string; hint?: string }> = []
   rows.push({ k: '系列', v: b.series || '独立作品' })
   if (libraryName.value) rows.push({ k: '书库', v: libraryName.value })
-  if (b.mtime) rows.push({ k: '入库', v: fmtDate(b.mtime) })
+  if (b.mtime) rows.push({ k: '入库', v: fmtDateSlash(b.mtime) })
   rows.push({ k: '出版年', v: b.year || '未知' })
   rows.push({ k: '出版社', v: b.publisher || '未知' })
   rows.push({ k: '语言', v: b.language || '未知' })
