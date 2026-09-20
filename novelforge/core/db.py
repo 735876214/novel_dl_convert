@@ -927,6 +927,7 @@ def weekday_histogram(book_ids: set | None = None, days: int = 365) -> list:
     now = time.time()
     floor = now - days * 86400
     seconds = [0.0] * 7
+    events = [0] * 7
     for r in c.execute("SELECT book_id, seconds, started_at FROM reading_sessions").fetchall():
         if book_ids is not None and r["book_id"] not in book_ids:
             continue
@@ -938,6 +939,7 @@ def weekday_histogram(book_ids: set | None = None, days: int = 365) -> list:
         else:
             wd = (time.localtime(ts).tm_wday + 1) % 7
         seconds[wd] += float(r["seconds"])
+        events[wd] += 1
 
     # 窗口内各星期几各有几天：按日期逐日走（窗口不整除 7 天时不能拿 days/7 糊弄）
     end = datetime.fromtimestamp(now, tz=zone) if zone is not None else datetime.fromtimestamp(now)
@@ -949,7 +951,14 @@ def weekday_histogram(book_ids: set | None = None, days: int = 365) -> list:
         cursor += timedelta(days=1)
 
     return [
-        {"weekday": i, "seconds": round(seconds[i], 1), "days": occurrences[i]}
+        {
+            "weekday": i,
+            "seconds": round(seconds[i], 1),
+            "days": occurrences[i],
+            # 会话次数：只给「数据够不够画」用 —— 图上画的是平均每日时长，
+            # 但样本只有两三次会话时那个平均数没有意义，界面据此走「数据不足」。
+            "events": events[i],
+        }
         for i in range(7)
     ]
 

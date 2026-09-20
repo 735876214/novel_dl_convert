@@ -957,8 +957,10 @@ export interface StatsOverview {
    * 周几读多久，**索引 0 = 周日**（与 `Date.getDay()` 一致，不是 ISO 的周一）。
    * `days` = 该星期几在统计窗口里出现过几天 —— 界面算日均要用它，
    * 直接比总时长会在窗口不整除 7 天时造出「某个星期几总是最多」的假信号。
+   * `events` = 该星期几的会话次数，只用于「样本够不够画」的判定（次数太少时
+   * 日均时长没有意义，界面走「数据不足」而不是画一根噪声柱）。
    */
-  weekdays: Array<{ weekday: number; seconds: number; days: number }>
+  weekdays: Array<{ weekday: number; seconds: number; days: number; events: number }>
 }
 
 // ---------- 应用设置（服务端持久化） ----------
