@@ -31,6 +31,9 @@ const sortOptions = [
 
 const bioDraft = ref('')
 const editingBio = ref(false)
+/** 排序名草稿与两个编辑区的开合。两个编辑区**互斥** —— 同时铺开两块输入框太乱 */
+const sortNameDraft = ref('')
+const editingSortName = ref(false)
 const busy = ref(false)
 const photoFailed = ref(false)
 /** 上传头像后 +1，用于给稳定的头像 URL 加版本号，避免浏览器缓存旧图 */
@@ -63,11 +66,13 @@ async function load(): Promise<void> {
   loading.value = true
   photoFailed.value = false
   editingBio.value = false
+  editingSortName.value = false
   try {
     const d = await api.authorDetail(name.value)
     detail.value = d
     books.value = d.books
     bioDraft.value = d.bio
+    sortNameDraft.value = d.sort_name
   } catch {
     detail.value = null
     books.value = []
@@ -105,6 +110,43 @@ async function saveBio(): Promise<void> {
     ui.toast('传记已保存')
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    busy.value = false
+  }
+}
+
+/** 两个编辑区互斥：打开一个就收起另一个 */
+function toggleBioEdit(): void {
+  editingBio.value = !editingBio.value
+  if (editingBio.value) editingSortName.value = false
+}
+
+function toggleSortNameEdit(): void {
+  editingSortName.value = !editingSortName.value
+  if (editingSortName.value) editingBio.value = false
+}
+
+async function saveSortName(): Promise<void> {
+  busy.value = true
+  try {
+    await api.setAuthorSortName(name.value, sortNameDraft.value)
+    await load()
+    ui.toast('排序名已保存')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function restoreSortName(): Promise<void> {
+  busy.value = true
+  try {
+    await api.setAuthorSortName(name.value, '')
+    await load()
+    ui.toast('已恢复为按显示名排序')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '恢复失败')
   } finally {
     busy.value = false
   }
@@ -212,6 +254,10 @@ function pickPhoto(): void {
                 v-if="detail.photo_overridden"
                 class="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] text-primary"
               >头像已本地修改</span>
+              <span
+                v-if="detail.sort_name_overridden"
+                class="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] text-primary"
+              >排序名已本地修改</span>
               <span v-if="detail.photo_source" class="text-[10.5px] text-muted-foreground">
                 在线来源：{{ detail.photo_source }}
               </span>
@@ -224,12 +270,19 @@ function pickPhoto(): void {
               {{ detail.bio || '暂无传记。点「抓取在线资料」从 OpenLibrary 获取，或点「编辑传记」手动填写。' }}
             </p>
 
+            <p class="mt-2 text-[11.5px] text-muted-foreground">
+              排序名：<span class="font-mono text-foreground/90">{{ detail.sort_name || '未设置（按显示名排序）' }}</span>
+            </p>
+
             <div class="mt-3 flex flex-wrap items-center gap-2">
               <Button size="sm" :disabled="busy" @click="fetchOnline">
                 <Icon name="download" class="mr-1.5 h-3.5 w-3.5" />抓取在线资料
               </Button>
-              <Button size="sm" variant="ghost" :disabled="busy" @click="editingBio = !editingBio">
+              <Button size="sm" variant="ghost" :disabled="busy" @click="toggleBioEdit">
                 {{ editingBio ? '取消' : '编辑传记' }}
+              </Button>
+              <Button size="sm" variant="ghost" :disabled="busy" @click="toggleSortNameEdit">
+                {{ editingSortName ? '取消' : '编辑排序名' }}
               </Button>
               <Button size="sm" variant="ghost" :disabled="busy" @click="pickPhoto">上传头像</Button>
               <Button
@@ -267,6 +320,30 @@ function pickPhoto(): void {
                   @click="restoreBio"
                 >
                   ↺ 恢复在线传记
+                </Button>
+              </div>
+            </div>
+
+            <div v-if="editingSortName" class="mt-3">
+              <input
+                v-model="sortNameDraft"
+                type="text"
+                class="w-full rounded-md border border-border bg-muted px-2.5 py-2 text-[12.5px] text-foreground outline-none focus:border-ring focus:bg-card"
+                placeholder="如 Lu Xun（留空 = 按显示名排序）"
+              >
+              <p class="mt-1.5 text-[11px] text-muted-foreground">
+                排序名只影响作者页「按姓名」排序的位置，不改显示名 —— 中文名填拼音即可让「鲁迅」排在 L 下。
+              </p>
+              <div class="mt-2 flex items-center gap-2">
+                <Button size="sm" variant="primary" :disabled="busy" @click="saveSortName">保存排序名</Button>
+                <Button
+                  v-if="detail.sort_name_overridden"
+                  size="sm"
+                  variant="ghost"
+                  :disabled="busy"
+                  @click="restoreSortName"
+                >
+                  ↺ 恢复为按显示名排序
                 </Button>
               </div>
             </div>

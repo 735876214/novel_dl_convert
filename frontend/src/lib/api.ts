@@ -722,6 +722,13 @@ export interface AuthorItem {
   covers: SeriesCover[]
   /** 是否有本地缓存的头像（有则去 `/api/authors/{name}/photo` 取图） */
   has_photo: boolean
+  /**
+   * 排序名（本地覆盖 > 在线），空串 = 没设 ⇒ **排序时回退到 `name`**。
+   *
+   * 列表接口只给生效值、不给 `*_overridden` 标记 —— 「按姓名」排序用不上它，
+   * 少下发一个字段就少一处被误用的机会（覆盖标记只在详情/写接口里给）。
+   */
+  sort_name: string
   /** 名下最早一本书的入库时间（秒），用于「本周新增」筛选 */
   added_ts: number
 }
@@ -734,6 +741,10 @@ export interface AuthorDetail {
   bio: string
   /** 传记是否被用户本地覆盖（受抓取保护） */
   bio_overridden: boolean
+  /** 排序名（本地覆盖 > 在线），空串 = 按显示名排序 */
+  sort_name: string
+  /** 排序名是否被用户本地覆盖（受抓取保护） */
+  sort_name_overridden: boolean
   /** 是否有头像（本地缓存的在线照片 或 用户上传） */
   has_photo: boolean
   /** 头像是否被用户本地覆盖（上传过头像） */
@@ -746,12 +757,16 @@ export interface AuthorDetail {
   added_ts: number
 }
 
-/** 作者元数据写操作的返回（btw BIO / 头像 / 抓取接口，只回生效信息不含书目） */
+/** 作者元数据写操作的返回（btw BIO / 排序名 / 头像 / 抓取接口，只回生效信息不含书目） */
 export interface AuthorMeta {
   ok?: boolean
   name: string
   bio: string
   bio_overridden: boolean
+  /** 排序名（本地覆盖 > 在线），空串 = 按显示名排序 */
+  sort_name: string
+  /** 排序名是否被用户本地覆盖（受抓取保护） */
+  sort_name_overridden: boolean
   has_photo: boolean
   photo_overridden: boolean
   photo_source: string
@@ -2563,6 +2578,14 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ bio }),
+    }),
+
+  /** 设置作者排序名的本地覆盖（空串 = 撤销覆盖，排序回退到在线排序名 / 显示名）。 */
+  setAuthorSortName: (name: string, sortName: string) =>
+    request<AuthorMeta>(`/api/authors/${encodeURIComponent(name)}/sort-name`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sort_name: sortName }),
     }),
 
   /** 上传作者头像作为本地覆盖。 */

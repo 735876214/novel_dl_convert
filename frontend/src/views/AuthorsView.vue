@@ -53,12 +53,23 @@ function isNew(a: AuthorItem): boolean {
   return a.added_ts >= weekAgo
 }
 
+/**
+ * 「按姓名」实际排的是**排序名**（`sort_name`，没设则回退显示名）——
+ * 「鲁迅」要排在 L 下、「The Lord of the Rings」要按 Lord 排，都靠它。
+ * 排序名由作者详情页设置（`/api/authors/{name}/sort-name`）。
+ */
+function sortKeyOf(a: AuthorItem): string {
+  return a.sort_name || a.name
+}
+
 const display = computed(() => {
   let list = items.value
   if (onlyMulti.value) list = list.filter((a) => a.count >= 2)
   if (onlyRecent.value) list = list.filter(isNew)
   return [...list].sort((a, b) =>
-    sortMode.value === 'name' ? a.name.localeCompare(b.name, 'zh') : b.count - a.count,
+    sortMode.value === 'name'
+      ? sortKeyOf(a).localeCompare(sortKeyOf(b), 'zh')
+      : b.count - a.count,
   )
 })
 
