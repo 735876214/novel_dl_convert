@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import type { Component } from 'vue'
 
+import AcquisitionLagScatterChart from '@/components/charts/library/AcquisitionLagScatterChart.vue'
 import BooksAddedOverTimeChart from '@/components/charts/library/BooksAddedOverTimeChart.vue'
 import FormatDistributionChart from '@/components/charts/library/FormatDistributionChart.vue'
+import FormatShareOverTimeChart from '@/components/charts/library/FormatShareOverTimeChart.vue'
+import GenreCooccurrenceChart from '@/components/charts/library/GenreCooccurrenceChart.vue'
 import GenreDistributionChart from '@/components/charts/library/GenreDistributionChart.vue'
 import LanguageDistributionChart from '@/components/charts/library/LanguageDistributionChart.vue'
 import LargestBooksChart from '@/components/charts/library/LargestBooksChart.vue'
 import LibraryIntegrityGaugeChart from '@/components/charts/library/LibraryIntegrityGaugeChart.vue'
+import LibraryMetadataCompletenessHeatmapChart from '@/components/charts/library/LibraryMetadataCompletenessHeatmapChart.vue'
+import MetadataCompletenessChart from '@/components/charts/library/MetadataCompletenessChart.vue'
+import MetadataScoreDistributionChart from '@/components/charts/library/MetadataScoreDistributionChart.vue'
 import PageCountDistributionChart from '@/components/charts/library/PageCountDistributionChart.vue'
 import PublicationDecadeChart from '@/components/charts/library/PublicationDecadeChart.vue'
 import PublicationYearTimelineChart from '@/components/charts/library/PublicationYearTimelineChart.vue'
@@ -28,9 +34,14 @@ import type { StatisticsChartId, StatisticsChartSize, StatisticsChartTile } from
  *
  * 1. **去掉拖拽排序**。上游把整块网格包在 `VueDraggable` 里；本项目不引拖拽库，
  *    排序改到 Configure 面板里用上移/下移按钮（功能等价，零新依赖）。
- * 2. **不做 `defineAsyncComponent`**。上游 33 张图各自异步加载；本项目第 33 期共
- *    17 张，单屏最多 12 张（书库侧）同时渲染，拆成十几个 chunk 只是把一次请求变成
- *    十几次。等第二批缺口图落地（总数到 30 张）连同包体积一起评估。
+ * 2. **不做 `defineAsyncComponent`**（第 33 期图数从 10 涨到 30 时实测后的决定）：
+ *    上游 33 张图各自异步加载；本项目单屏最多同时渲染**一个分区**的图（书库侧 18 张，
+ *    且玩家可以在 Configure 里只留几张），逐图拆只是把一次请求变成几十次。
+ *
+ *    ⚠️ 而且**路由级已经拆过了**：`StatsView` 是 `() => import(...)`（`router/index.ts:176`），
+ *    实测产物 `StatsView-*.js` 845 kB / gzip 279 kB，而首屏 `index-*.js` 里
+ *    **一个 `echarts` 字样都没有** —— ECharts 只在这页打开时才下载。真要再拆，
+ *    该拆的是「书库侧 / 阅读侧」两个分区，不是每张图一个 chunk。
  */
 defineProps<{
   /** 已解析的图（窄 id + 元信息）。窄 id 是刻意的，见 `CHART_COMPONENTS` 的注释 */
@@ -46,16 +57,22 @@ defineProps<{
  * `<div>` 照占栅格、里面什么都没有）。
  */
 const CHART_COMPONENTS: Record<StatisticsChartId, Component> = {
-  // ---- 书库侧 ----
+  // ---- 书库侧（顺序与 lib/statistics-charts.ts 的目录一致，便于两处并排核对）----
   'library-integrity-gauge': LibraryIntegrityGaugeChart,
   'format-distribution': FormatDistributionChart,
+  'metadata-score-distribution': MetadataScoreDistributionChart,
   'largest-books': LargestBooksChart,
   'genre-distribution': GenreDistributionChart,
+  'format-share-over-time': FormatShareOverTimeChart,
   'top-authors': TopAuthorsChart,
+  'metadata-completeness': MetadataCompletenessChart,
+  'acquisition-lag-scatter': AcquisitionLagScatterChart,
+  'library-metadata-completeness': LibraryMetadataCompletenessHeatmapChart,
   'storage-by-format': StorageByFormatChart,
   'language-distribution': LanguageDistributionChart,
   'page-count-distribution': PageCountDistributionChart,
   'publication-decade': PublicationDecadeChart,
+  'genre-cooccurrence': GenreCooccurrenceChart,
   'top-series': TopSeriesChart,
   'books-added-over-time': BooksAddedOverTimeChart,
   'publication-year-timeline': PublicationYearTimelineChart,

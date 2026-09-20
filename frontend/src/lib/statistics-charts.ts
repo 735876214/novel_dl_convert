@@ -2,9 +2,11 @@
  * 统计页图表目录：每张图的 id / 标题 / 图标 / 栅格尺寸 / 所属分区，以及默认顺序。
  *
  * 对标上游 `client/src/features/statistics/statistics-chart-meta.ts`（33 张）。本项目
- * **分两批**落地：第 32 期 10 张（书库侧 5 + 阅读侧 5），第 33 期把统计页原有的 7 张
- * 手写卡片转成正式 id（全在书库侧），共 17 张。余下 16 张的账目见
- * `docs/bookorbit-capability-gap.md`：13 张待做 + 3 张已声明不做。
+ * **分两批**落地：第 32 期 10 张（书库侧 5 + 阅读侧 5）；第 33 期把统计页原有的 7 张
+ * 手写卡片转成正式 id（全在书库侧）、再补 13 张缺口图（书库侧 6 + 阅读侧 7），
+ * 合计 30 张。剩下 3 张已声明不做（`metadata-freshness-gauge` /
+ * `reading-source-distribution` / `goal-trajectory`），账目见
+ * `docs/bookorbit-capability-gap.md`。
  *
  * 两条与上游对齐的规矩：
  *
@@ -53,6 +55,13 @@ export const STATISTICS_CHART_META = {
     size: '1x1',
     tab: 'library',
   },
+  'metadata-score-distribution': {
+    id: 'metadata-score-distribution',
+    label: '元数据分数分布',
+    icon: 'chart',
+    size: '1x1',
+    tab: 'library',
+  },
   'largest-books': {
     id: 'largest-books',
     // 不叫「体积榜」—— 那是下方仍在的明细卡片的名字，这张是它的图形版
@@ -69,11 +78,42 @@ export const STATISTICS_CHART_META = {
     size: '2x1',
     tab: 'library',
   },
+  'format-share-over-time': {
+    id: 'format-share-over-time',
+    // 与「格式分布」（按本数的环形图）、「格式占用」（按体积）区分：这张看的是**构成随时间变**
+    label: '格式占比随时间',
+    icon: 'shelf',
+    size: '2x1',
+    tab: 'library',
+  },
   'top-authors': {
     id: 'top-authors',
     // 本项目的接口固定 top=50（上游这张图取 25），所以写 50 而不是照抄「Top 25」
     label: 'Top 50 作者',
     icon: 'users',
+    size: '2x1',
+    tab: 'library',
+  },
+  'metadata-completeness': {
+    id: 'metadata-completeness',
+    label: '元数据覆盖率',
+    icon: 'check',
+    size: '1x1',
+    tab: 'library',
+  },
+  'acquisition-lag-scatter': {
+    id: 'acquisition-lag-scatter',
+    label: '入库滞后',
+    icon: 'clock',
+    size: '1x1',
+    tab: 'library',
+  },
+  'library-metadata-completeness': {
+    id: 'library-metadata-completeness',
+    // 不直译成「各库元数据覆盖率」：同屏已有一张「元数据覆盖率」，差两个字必然看串。
+    // 「对比」正是这张图的用途（见组件的注释）。
+    label: '各库元数据对比',
+    icon: 'library',
     size: '2x1',
     tab: 'library',
   },
@@ -108,6 +148,14 @@ export const STATISTICS_CHART_META = {
     label: '出版年代',
     icon: 'library',
     size: '1x1',
+    tab: 'library',
+  },
+  'genre-cooccurrence': {
+    id: 'genre-cooccurrence',
+    // 与「题材分布」（单题材计数、树图）区分：这张是**题材之间**的共同出现
+    label: '题材共现',
+    icon: 'layers',
+    size: '2x2',
     tab: 'library',
   },
   'top-series': {
@@ -212,13 +260,19 @@ export const DEFAULT_CHART_ORDER: Record<StatisticsTab, StatisticsChartId[]> = {
   library: [
     'library-integrity-gauge',
     'format-distribution',
+    'metadata-score-distribution',
     'largest-books',
     'genre-distribution',
+    'format-share-over-time',
     'top-authors',
+    'metadata-completeness',
+    'acquisition-lag-scatter',
+    'library-metadata-completeness',
     'storage-by-format',
     'language-distribution',
     'page-count-distribution',
     'publication-decade',
+    'genre-cooccurrence',
     'top-series',
     'books-added-over-time',
     'publication-year-timeline',

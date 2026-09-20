@@ -907,6 +907,25 @@ export interface StatsOverview {
     score: number
   }
   /**
+   * 元数据完整度评分摘要（`metascore._summarize`）。第 33 期之前就在响应里，
+   * 只是 `StatsOverview` 漏了这座键 —— 补上类型，契约不变。
+   *
+   * ⚠️ `buckets` 是**常量分档表**：`< 50` / `50–69` / `70–89` / `90+` 永远 4 条，
+   * 空库给的是「4 条计数全 0」而不是空数组。判空要看 `total`（= `books.total`）。
+   */
+  metadata_score: {
+    total: number
+    avg: number
+    /** 分位（线性插值，与 `metascore.percentile` 同口径） */
+    p25: number
+    p50: number
+    p75: number
+    p90: number
+    min: number
+    max: number
+    buckets: Array<{ key: string; label: string; count: number; percent: number }>
+  }
+  /**
    * 体积榜（Top 50 Largest Books）：按 size_bytes 降序，**固定最多 50 条**，
    * 不随 `top` 参数伸缩（`top` 管的是作者/系列/出版社/题材四个计数器榜）。
    */
@@ -978,6 +997,58 @@ export interface StatsOverview {
    * 日均时长没有意义，界面走「数据不足」而不是画一根噪声柱）。
    */
   weekdays: Array<{ weekday: number; seconds: number; days: number; events: number }>
+
+  // ---- 第 33 期图表序列（书库侧）----
+  // 同样是**新键**，上面一个都没动。字段顺序与 `core/stats.py` 的 `metascore.FIELDS`
+  // 一致（后端定序，前端照单渲染）。
+
+  /**
+   * 按字段的元数据覆盖率（1x1 横条图）。分母是**在册书总数**，与元数据页
+   * `metascore.payload()` 的字段覆盖率同口径 —— 封面 / 页数只对 EPUB 有意义，
+   * 这里刻意不做格式归一，两个页面的数字必须能对上。
+   */
+  metadata_fields: Array<{
+    key: string
+    label: string
+    present: number
+    total: number
+    percent: number
+  }>
+  /**
+   * 按 书库 × 字段 的覆盖率（热力图）。⚠️ **唯一不跟随 `library_id` 的序列** ——
+   * 它要回答「哪个库的元数据更完整」，跟随筛选就只剩一行、图本身失去意义。
+   *
+   * 行序 = `library.libraries()` 的顺序、列序 = `metascore.FIELDS` 的顺序，都由后端
+   * 定死（前端自己排会让每次刷新出来一张不一样的热图）。0 本书的库**照样出行**、
+   * `percent` 全 0：那是一条真实状态，藏掉会让人以为库不存在。
+   */
+  library_metadata: Array<{
+    library_id: string
+    library_name: string
+    key: string
+    label: string
+    present: number
+    total: number
+    percent: number
+  }>
+  /**
+   * 题材两两共现（弦图）。节点收敛到 12（弦一多就糊成一团），**只留两端都在节点
+   * 集里的边**；对是无序的、书内重复题材已去重。
+   */
+  genre_cooccurrence: {
+    nodes: Array<{ name: string; count: number }>
+    links: Array<{ source: string; target: string; value: number }>
+  }
+  /**
+   * 格式 × 月份的入库交叉序列（堆叠面积图）。**只给计数、占比由前端算** ——
+   * 分母是「当月入库总数」，后端先折算成百分比的话 tooltip 就没法同时给出本数了。
+   */
+  format_share_monthly: Array<{ year: number; month: number; format: string; count: number }>
+  /**
+   * 出版年 → 入库滞后点集（散点图）。只收**出版年已知**的书（不知道出版年 ≠
+   * 滞后 0 年），未标注的本数由界面用 `books.total − Σcount` 反推。
+   */
+  acquisition_lag: Array<{ added_year: number; lag_years: number; count: number }>
 }
 
 // ---------- 应用设置（服务端持久化） ----------

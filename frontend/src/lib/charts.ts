@@ -26,10 +26,13 @@
 import {
   BarChart,
   BoxplotChart,
+  ChordChart,
   FunnelChart,
   GaugeChart,
+  HeatmapChart,
   LineChart,
   PieChart,
+  ScatterChart,
   TreemapChart,
 } from 'echarts/charts'
 import {
@@ -38,9 +41,11 @@ import {
   GridComponent,
   LegendComponent,
   MarkAreaComponent,
+  MarkLineComponent,
   MarkPointComponent,
   PolarComponent,
   TooltipComponent,
+  VisualMapComponent,
 } from 'echarts/components'
 import { use as echartsUse } from 'echarts/core'
 import { SVGRenderer } from 'echarts/renderers'
@@ -61,19 +66,24 @@ import { useThemeStore } from '@/stores/theme'
 echartsUse([
   SVGRenderer,
   // 图型
-  BarChart, // 入库节奏 / 时段分布 / 周几分布 / 漏斗的 dropoff 模式 / 出版年代 / Top 作者 / Top 系列 / 体积榜
+  BarChart, // 入库节奏 / 时段分布 / 周几分布 / 漏斗的 dropoff 模式 / 出版年代 / Top 作者 / Top 系列 / 体积榜 / 元数据覆盖率 / 分数分布 / 完成耗时 / 会话时间轴
   BoxplotChart, // 页数分布（上游是箱线图，不是直方图）
+  ChordChart, // 题材共现（弦图，第 33 期）
   FunnelChart, // 进度漏斗
   GaugeChart, // 书库体检（半环仪表盘）
-  LineChart, // 出版年时间轴 / 按月读完 / Top 作者与 Top 系列的累计占比折线
+  HeatmapChart, // 按库的元数据覆盖率 + 阅读热力图（第 33 期）
+  LineChart, // 出版年时间轴 / 按月读完 / 按期读完累计 / 格式占比随时间 / 题材阅读时长折线 / Top 作者与 Top 系列的累计占比折线
   PieChart, // 语言分布 / 格式分布
-  TreemapChart, // 题材分布（矩形树图）
+  ScatterChart, // 入库滞后 / 阅读速度 / 会话形态（第 33 期）
+  TreemapChart, // 题材分布 / 题材阅读时长（矩形树图）
   // 组件
   GridComponent,
   TooltipComponent,
   LegendComponent,
   PolarComponent, // 阅读时钟（极坐标）
-  MarkAreaComponent, // 出版年时间轴的「黄金年代」区间
+  VisualMapComponent, // 热力图与散点的分档配色（第 33 期）
+  MarkAreaComponent, // 出版年时间轴的「黄金年代」区间 / 分数分布图的 P25–P75 阴影带
+  MarkLineComponent, // 分数分布图的 P50 / P90 虚线
   MarkPointComponent, // 出版年时间轴的峰值标注
   DataZoomInsideComponent, // 出版年时间轴（滚轮 / 拖动缩放）
   DataZoomSliderComponent, // 出版年时间轴（底部滑块）
@@ -184,6 +194,23 @@ export function chartPalette(): string[] {
   }
 
   return HUE_OFFSETS.map((off) => oklchToHex(l, c, h + off))
+}
+
+/**
+ * 单色深浅序列：热力图的**分档配色**（取调色板首色，按递增不透明度铺开）。
+ *
+ * 为什么是「一色多档」而不是彩虹色：热力图读的是**深浅**，多色相（上游入库滞后那张
+ * 用了绿→黄→橙→红）在深色主题下会有一半档位糊在背景里，且红绿相邻对色觉障碍不友好。
+ *
+ * `palette` 由调用方从 `useChartTheme()` 里传进来（**不是**在这里读 DOM）：
+ * 这个函数要能在 `computed` 里跟着主题/强调色重算，所以必须是 palette 的纯函数。
+ */
+export function chartShades(palette: string[], steps = 5): string[] {
+  const base = palette[0] ?? '#888888'
+  // 8 位 hex 的 alpha 分量（ECharts 的取色器认 #RRGGBBAA）
+  const alphas = ['14', '3d', '66', 'a3', 'ff']
+  Array.from({ length: Math.max(0, steps - alphas.length) }).forEach(() => alphas.push('ff'))
+  return alphas.slice(0, Math.max(1, steps)).map((a) => `${base}${a}`)
 }
 
 // ---------------------------------------------------------------------------
