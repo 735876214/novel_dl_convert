@@ -20,7 +20,7 @@ import { extractCoverTint, type CoverTint } from '@/lib/coverTint'
  * 单书详情：面包屑 + hero + 四标签（概览 / 目录 / 文件 / 批注）。
  *
  * 数据全部来自后端 /api/books/{id}（真实 EPUB 元数据 + 章节树 + 同 stem 成品文件）；
- * 阅读进度（:259 `api.getProgress`）、批注（:264 `api.listAnnotations`）、我的记录
+ * 阅读进度（:260 `api.getProgress`）、批注（:265 `api.listAnnotations`）、我的记录
  * （状态 / 日期 / 评分 / 书评）都是真数据，落 SQLite。
  */
 const route = useRoute()
