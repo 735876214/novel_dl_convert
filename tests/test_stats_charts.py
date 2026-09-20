@@ -1,27 +1,36 @@
-"""第 32 期：统计接口的 8 条图表序列。
+"""第 32/33 期：统计接口的图表序列。
 
 上游统计页是「一张图一个 composable 一次请求」，本项目是**单接口共享一份 overview**
-（``GET /api/stats``），所以这 8 条序列一次算齐、并随 ``library_id`` 一起收窄。
+（``GET /api/stats``），所以这些序列一次算齐、并随 ``library_id`` 一起收窄。
 
-书库侧 5 条：``by_language`` / ``by_format_size`` / ``pages_by_format`` /
+第 32 期 8 条 —— 书库侧 5 条：``by_language`` / ``by_format_size`` / ``pages_by_format`` /
 ``added_monthly`` / ``publication_yearly``；阅读侧 3 条：``progress_funnel`` /
 ``completion_monthly`` / ``weekdays``。
 
-这个文件钉三件事：
+第 33 期 5 条（全在书库侧）：``metadata_fields``（按字段覆盖率）/ ``library_metadata``
+（按 库 × 字段，heatmap）/ ``genre_cooccurrence``（题材共现，弦图）/
+``format_share_monthly``（格式 × 月份）/ ``acquisition_lag``（出版 → 入库滞后）。
+
+这个文件钉四件事：
 
 1. **既有键一个不丢** —— 8 个仪表盘部件与既有契约测试都读它们（第 29/30 期立的规矩）；
 2. **新序列跟随按库筛选** —— 书库侧从 ``bs`` 算，阅读侧靠 ``ids`` 过滤（阅读会话
    没有库维度，故「某库的阅读」靠「这本书属于哪个库」判定）；
 3. **口径诚实** —— 页数 0 是「不知道」不是「0 页」，不进分布；进度漏斗必须单调；
-   空库给空序列而不是 0 假数据。
+   空库给空序列而不是 0 假数据；
+4. ⚠️ **``library_metadata`` 是唯一的例外**（第 33 期）—— 它是「库之间横向比」的图，
+   跟随 ``library_id`` 就退化成一行、图本身失去意义，故**始终覆盖全部书库**。
+   其余序列都收窄、这一条不收窄；下面对按库筛选的正反两个用例并排钉住这个差别。
 """
 from __future__ import annotations
 
 import pathlib
 import time
 
+import pytest
+
 from novelforge import config
-from novelforge.core import db, epub_builder, fileops, library, stats, watcher
+from novelforge.core import db, epub_builder, fileops, library, metascore, stats, watcher
 
 #: 第 32 期之前就有的顶层键。新序列一律**增补**，这些一个都不能少。
 _OLD_KEYS = (
@@ -34,6 +43,12 @@ _OLD_KEYS = (
 _NEW_KEYS = (
     "by_language", "by_format_size", "pages_by_format", "added_monthly",
     "publication_yearly", "progress_funnel", "completion_monthly", "weekdays",
+)
+
+#: 第 33 期新增的书库侧图表序列。
+_NEW_KEYS_33 = (
+    "metadata_fields", "library_metadata", "genre_cooccurrence",
+    "format_share_monthly", "acquisition_lag",
 )
 
 
@@ -67,6 +82,11 @@ def test_新序列是增补_既有键一个不丢(default_root):  # noqa: ARG001
         assert k in ov, f"既有键丢了：{k}"
     for k in _NEW_KEYS:
         assert k in ov, f"第 32 期新键缺失：{k}"
+    for k in _NEW_KEYS_33:
+        assert k in ov, f"第 33 期新键缺失：{k}"
+    # 元数据分位数是第 33 期增补的两个键（P25/P75），既有的 P50/P90 一个不动
+    for k in ("p25", "p50", "p75", "p90"):
+        assert k in ov["metadata_score"], f"metadata_score 缺分位键：{k}"
 
 
 def test_空库给空序列不炸(isolated):  # noqa: ARG001
@@ -86,6 +106,18 @@ def test_空库给空序列不炸(isolated):  # noqa: ARG001
     assert len(ov["weekdays"]) == 7
     assert all(w["seconds"] == 0 for w in ov["weekdays"])
     assert sum(w["days"] for w in ov["weekdays"]) == 365
+
+    # 第 33 期：空库也要给**结构完整**的空序列（12 个字段照列、分母为 0），
+    # 而不是空数组 —— 形状随数据变会让前端得写两套渲染路径
+    assert [x["key"] for x in ov["metadata_fields"]] == list(metascore.FIELDS)
+    assert all(x["total"] == 0 and x["present"] == 0 for x in ov["metadata_fields"])
+    assert all(x["percent"] == 0.0 for x in ov["metadata_fields"])
+    assert ov["genre_cooccurrence"] == {"nodes": [], "links": []}
+    assert ov["format_share_monthly"] == []
+    assert ov["acquisition_lag"] == []
+    # 按库热力图：默认库那一行照出（12 条 0/0），不是空数组 —— 库存在就是 0 本书
+    assert ov["library_metadata"], "按库热力图不该是空的：库存在即应有行"
+    assert all(x["total"] == 0 for x in ov["library_metadata"])
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +276,13 @@ def test_按月读完数只看已读完的日期(default_root, make_book):  # no
 # ④ 按库筛选必须对新序列生效（第 30 期立的规矩）
 # ---------------------------------------------------------------------------
 
-def test_新序列跟随按库筛选(make_library, tmp_path):  # noqa: ARG001
+@pytest.fixture
+def two_libs(make_library, tmp_path):  # noqa: ARG001 —— 依赖 isolated 切目录
+    """两个库各一本真 EPUB：``sc-a`` 中文/2012、``sc-b`` 英文/1998。
+
+    走 watcher **真导入**（与生产同一条路径），故两库的书目内容确实不同 ——
+    下面「按库筛选生效」与「按库热力图不跟随筛选」两个用例共用这一份数据。
+    """
     src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
     for lid, lang, year in (("sc-a", "zh", "2012"), ("sc-b", "en", "1998")):
         make_library(lid, lid, "ebook", tmp_path / f"st_{lid}",
@@ -255,6 +293,8 @@ def test_新序列跟随按库筛选(make_library, tmp_path):  # noqa: ARG001
         watcher.FolderWatcher(cfg=config.load_config()).scan_library_now(lid)
     library.invalidate()
 
+
+def test_新序列跟随按库筛选(two_libs):  # noqa: ARG001
     a = stats.overview(library_id="sc-a")
     b = stats.overview(library_id="sc-b")
 
@@ -266,12 +306,58 @@ def test_新序列跟随按库筛选(make_library, tmp_path):  # noqa: ARG001
     for ov in (a, b):
         assert sum(ov["by_format_size"].values()) == ov["books"]["size"]
 
+    # 第 33 期的四条也随库收窄（`library_metadata` 是例外，见下一个用例）
+    assert all(x["total"] == 1 for x in a["metadata_fields"]), "字段覆盖率的分母要随库变成该库本数"
+    assert [x["format"] for x in a["format_share_monthly"]] == ["EPUB"]
+    assert [x["lag_years"] for x in a["acquisition_lag"]] == [time.localtime().tm_year - 2012]
+    assert [x["lag_years"] for x in b["acquisition_lag"]] == [time.localtime().tm_year - 1998]
+    assert a["genre_cooccurrence"] == {"nodes": [], "links": []}, "夹具的书没有题材"
+
     # 未知库 = 空集合（不 404，与 /api/duplicates 同一条惯例）
     none = stats.overview(library_id="没有这个库")
     assert none["by_language"] == {}
     assert none["by_format_size"] == {}
     assert none["publication_yearly"] == []
     assert none["pages_by_format"] == []
+    assert none["format_share_monthly"] == []
+    assert none["acquisition_lag"] == []
+    assert none["genre_cooccurrence"] == {"nodes": [], "links": []}
+    # 字段覆盖率形状不变、分母归零（不是空数组：形状随数据变会让前端写两套渲染）
+    assert [x["key"] for x in none["metadata_fields"]] == list(metascore.FIELDS)
+    assert all(x["total"] == 0 and x["percent"] == 0.0 for x in none["metadata_fields"])
+
+
+def test_按库热力图刻意不跟随统计范围(two_libs):  # noqa: ARG001
+    """⚠️ ``library_metadata`` 是**唯一**不跟随 ``library_id`` 的序列（见模块头第 4 条）。
+
+    它回答的是「哪个库的元数据更完整」——**对比**才是它的用途；跟随筛选就只剩当前库
+    那一行，图直接失去意义。这条与上一条**并排**放着，就是为了让「顺手统一」的人先看到
+    这个差别：同一份响应里，别的序列都收窄、只有它不收窄。
+    """
+    a = stats.overview(library_id="sc-a")
+    rows = a["library_metadata"]
+
+    names = {x["library_name"] for x in rows}
+    assert {"sc-a", "sc-b"} <= names, "必须覆盖全部书库，而不是只看当前库"
+    # 同一份响应里其余序列确实收窄了
+    assert a["books"]["total"] == 1
+    assert a["by_language"] == {"zh": 1}
+
+    # 结构：行 = 库 × 字段，列顺序由后端定死（前端照单渲染，不按出现顺序自己排）
+    assert len(rows) == len(names) * len(metascore.FIELDS)
+    for name in ("sc-a", "sc-b"):
+        assert [x["key"] for x in rows if x["library_name"] == name] == list(metascore.FIELDS)
+
+    # 每个库的分母是**该库**的本数（不是全部书的总数），百分比能从它自己算回来
+    for x in rows:
+        assert x["percent"] == (round(x["present"] / x["total"] * 100, 1) if x["total"] else 0.0)
+    mine = next(x for x in rows if x["library_id"] == "sc-a" and x["key"] == "title")
+    assert (mine["total"], mine["present"], mine["percent"]) == (1, 1, 100.0)
+
+    # 没有书的库（`isolated` 落的默认库）照样出行：0/0 全 0%，藏掉会让人以为库不存在
+    empty = [x for x in rows if x["total"] == 0]
+    assert empty, "本用例里默认库没有书 —— 它必须有行"
+    assert all(x["present"] == 0 and x["percent"] == 0.0 for x in empty)
 
 
 # ---------------------------------------------------------------------------
@@ -293,3 +379,116 @@ def test_接口_stats下发新序列(client, auth_headers, default_root):  # noq
         "started", "reached25", "reached50", "reached75", "completed",
     }
     assert len(body["weekdays"]) == 7
+    # 第 33 期的五条也要真的过一遍 HTTP（序列算出来但没下发，等于没做）
+    assert [x["key"] for x in body["metadata_fields"]] == list(metascore.FIELDS)
+    assert set(body["genre_cooccurrence"]) == {"nodes", "links"}
+    assert body["format_share_monthly"], "格式 × 月份 序列下发"
+    assert body["acquisition_lag"], "出版 → 入库滞后序列下发"
+    assert body["library_metadata"], "按库热力图始终有行（库存在即有）"
+
+
+# ---------------------------------------------------------------------------
+# ⑥ 第 33 期：书库侧第二批序列逐条口径
+# ---------------------------------------------------------------------------
+
+def test_逐字段覆盖率与元数据页同口径(default_root):  # noqa: ARG001
+    """分母是**全部在册书**，与元数据页 ``metascore.payload()`` 的字段覆盖率是同一个数。
+
+    两处各算各的就会出现「元数据页说出版社覆盖 50%、统计页说 33%」这种自相矛盾 ——
+    故这里不重算，直接把两个来源的数字并排比一遍。
+    """
+    _epub(default_root, "全.epub", title="全", meta={"publisher": "社", "tags": ["科幻"]})
+    _epub(default_root, "薄.epub", title="薄")
+    _scan()
+
+    ov = stats.overview()
+    fields = {x["key"]: x for x in ov["metadata_fields"]}
+
+    assert [x["key"] for x in ov["metadata_fields"]] == list(metascore.FIELDS), "字段顺序由后端定死"
+    assert all(x["total"] == ov["books"]["total"] == 2 for x in ov["metadata_fields"])
+    assert fields["publisher"]["present"] == 1 and fields["publisher"]["percent"] == 50.0
+    assert fields["series"]["present"] == 0 and fields["series"]["percent"] == 0.0
+    assert fields["title"]["percent"] == 100.0, "书名可由文件名推断，两本都有"
+
+    page = metascore.payload()
+    cov = {f["key"]: f["coverage"] for g in page["groups"] for f in g["fields"]}
+    for x in ov["metadata_fields"]:
+        assert x["percent"] == cov[x["key"]], f"{x['key']} 的覆盖率与元数据页对不上"
+
+
+def test_题材共现按无序对记(default_root):  # noqa: ARG001
+    """两本书的题材顺序相反，共现只该记**一条**弦、值为 2。
+
+    按「书里写的顺序」记成有向对的话，(科幻,短篇) 与 (短篇,科幻) 会各记一份 ——
+    弦图上同一条弦被拆成两条细的，读数直接减半。顺带钉住「书内重复题材先去重」：
+    不去重的话一本书会自己跟自己配一对。
+    """
+    _epub(default_root, "甲.epub", title="甲", meta={"tags": ["科幻", "短篇"]})
+    _epub(default_root, "乙.epub", title="乙", meta={"tags": ["短篇", "科幻", "科幻"]})
+    _scan()
+
+    chord = stats.overview()["genre_cooccurrence"]
+
+    assert {n["name"] for n in chord["nodes"]} == {"科幻", "短篇"}
+    assert all(n["count"] == 2 for n in chord["nodes"]), "书内重复题材不该抬高单本计数"
+    assert chord["links"] == [{"source": "短篇", "target": "科幻", "value": 2}]
+
+
+def test_题材共现节点收敛且不引用集外题材(default_root):  # noqa: ARG001
+    """节点上限见 ``stats._CHORD_NODES``（12）：弦图靠弧长与弦的粗细读数，节点一多
+    就糊成一团。收敛节点之后**只保留两端都在节点集里的边** —— 否则会画出指向不存在
+    节点的弦（ECharts 会悄悄丢掉或画到原点，看图的人无从察觉）。
+    """
+    for i in range(13):
+        _epub(default_root, f"g{i:02d}.epub", title=f"g{i:02d}",
+              meta={"tags": [f"题材{i:02d}", f"题材{(i + 1) % 13:02d}"]})
+    _scan()
+
+    chord = stats.overview()["genre_cooccurrence"]
+    names = {n["name"] for n in chord["nodes"]}
+
+    assert len(chord["nodes"]) == 12, "节点必须收敛到 _CHORD_NODES 条"
+    assert all(l["source"] in names and l["target"] in names for l in chord["links"])
+    assert len(chord["links"]) < 12 * 11 // 2, "不是全连接：只留两端都在节点集里的边"
+
+
+def test_格式月份交叉序列与入库月同源(default_root, make_book):  # noqa: ARG001
+    """「格式 × 月份」不是另起一套口径：它的月度合计必须与 ``added_monthly`` 逐月相等。
+
+    两处都从文件 mtime 出发 —— 哪天有人只改了其中一边的取月方式，这条会立刻炸。
+    """
+    _epub(default_root, "甲.epub", title="甲")
+    make_book(default_root, "乙.pdf", b"%PDF")
+    _scan()
+
+    ov = stats.overview()
+    share = ov["format_share_monthly"]
+    now = time.localtime()
+
+    assert sum(x["count"] for x in share) == sum(x["count"] for x in ov["added_monthly"])
+    cur = [x for x in share if (x["year"], x["month"]) == (now.tm_year, now.tm_mon)]
+    assert {x["format"] for x in cur} == set(ov["books"]["by_format"]), "当月的格式集合应与 by_format 一致"
+    assert sum(x["count"] for x in cur) == 2
+
+
+def test_入库滞后只收出版年已知的书(default_root):  # noqa: ARG001
+    """滞后 = 入库年 − 出版年。「不知道出版年」≠「滞后 0 年」，故那本书**不进点集**；
+    界面用 ``books.total − Σcount`` 反推未标注年份的本数写进脚注。
+    """
+    this_year = time.localtime().tm_year
+    _epub(default_root, "老.epub", title="老", meta={"date": "2000"})
+    _epub(default_root, "新.epub", title="新", meta={"date": str(this_year)})
+    _epub(default_root, "无年.epub", title="无年")
+    _scan()
+
+    ov = stats.overview()
+    lag = ov["acquisition_lag"]
+    got = {x["lag_years"]: x["count"] for x in lag}
+
+    assert sum(1 for b in library.books() if str(b.get("year") or "").strip()) == 2, \
+        "前提：三本里只有两本标了出版年"
+    assert all(x["added_year"] == this_year for x in lag), "入库年取文件 mtime 的年份"
+    assert got.get(this_year - 2000) == 1
+    assert got.get(0) == 1
+    assert sum(x["count"] for x in lag) == 2, "无年份那本不该被当成滞后 0 混进来"
+    assert ov["books"]["total"] - sum(x["count"] for x in lag) == 1, "差出来的就是未标注年份的"

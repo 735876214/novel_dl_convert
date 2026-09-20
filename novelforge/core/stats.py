@@ -36,10 +36,21 @@ overview**，故这里把序列一次算齐：
 阅读侧：``progress_funnel``（进度分档）、``completion_monthly``（按月读完）、
 ``weekdays``（周几读多久，与 ``hours`` 同族）。
 
-三条口径约定（写在这里免得以后各算各的）：
+第 33 期再补 5 条（书库侧第二批图表，同样全是新键）：
+
+``metadata_fields``（按字段的元数据覆盖率）、``library_metadata``（按 库 × 字段 的覆盖率，
+heatmap 用）、``genre_cooccurrence``（题材两两共现，弦图用）、``format_share_monthly``
+（格式 × 月份 的入库交叉序列）、``acquisition_lag``（出版年 → 入库的滞后年数点集）。
+分数分布要用的 P25 / P75 由 ``metascore`` 侧补（``metadata_score`` 增补两键，既有键不动）。
+
+四条口径约定（写在这里免得以后各算各的）：
 
 - 一律**跟随 ``library_id``**：书库侧从 ``bs`` 算，阅读侧靠 ``ids`` 过滤
   （阅读会话没有库维度，见上）。新增序列不得绕过这条。
+- **唯一的例外是 ``library_metadata``**：它要回答的是「哪个库的元数据更完整」——
+  对比才是它的用途，跟随 ``library_id`` 就退化成一行、图本身没了意义。故它**始终覆盖
+  全部书库**，并在每条里带 ``library_id`` / ``library_name``，界面据此标注口径。
+  看接口的人要知道：这一条不随统计范围收窄，其余都收窄。
 - ``pages`` 的 0 是「不知道」不是「0 页」（EPUB 为估算值、漫画为归档实际值、
   其余格式恒 0），故不进分布 —— 否则 PDF / 有声书会压出一根假底线。
 - ``progress_funnel`` **走进度、不走真实状态**：漏斗要求各档单调包含，而真实状态
@@ -52,6 +63,11 @@ from . import db, library, metascore
 #: 体积榜固定长度（上游该榜名为「Top 50 Largest Books」）。
 #: 刻意**不**跟随 `top` 参数：那个参数管的是作者/系列/出版社/题材四个计数器榜。
 _LARGEST_N = 50
+
+#: 题材共现弦图的节点上限（第 33 期）：弦图靠弧长与弦的粗细读数，节点一多弦就糊成
+#: 一团、什么都读不出来。收敛到计数最高的 12 个题材，且**只统计两端都在节点集里的
+#: 边** —— 否则会出现指向不存在节点的弦（ECharts 会把它们悄悄丢掉或画到原点）。
+_CHORD_NODES = 12
 
 
 def _top(counter: dict, n: int = 8) -> list:
@@ -111,6 +127,10 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     publishers: dict = {}
     genres: dict = {}
     decades: dict = {}
+    # 第 33 期：格式 × 月份 的入库交叉、出版→入库滞后、题材两两共现
+    fmt_monthly: dict = {}
+    lag: dict = {}
+    genre_pairs: dict = {}
     # 书库体检：不指望一个人去逐本检查，缺元数据 / 无封面这类问题聚合成计数
     integrity = {
         "missing_author": 0,
@@ -146,15 +166,27 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         pub = (b.get("publisher") or "").strip()
         if pub:
             publishers[pub] = publishers.get(pub, 0) + 1
+        # 一本书的题材先去重：tags 里可能有重复项，不去重会让「这本书」在共现对里
+        # 被数两次（自己和自己配一对），也会把单本计数抬高。
+        bg: list = []
         for g in b.get("tags") or []:
             g = str(g).strip()
-            if g:
-                genres[g] = genres.get(g, 0) + 1
+            if not g:
+                continue
+            genres[g] = genres.get(g, 0) + 1
+            if g not in bg:
+                bg.append(g)
+        for i in range(len(bg)):
+            for j in range(i + 1, len(bg)):
+                # 无序对：统一按字典序排，否则 (A,B) 与 (B,A) 会各记一份、共现数减半
+                p = (bg[i], bg[j]) if bg[i] <= bg[j] else (bg[j], bg[i])
+                genre_pairs[p] = genre_pairs.get(p, 0) + 1
         y = str(b.get("year") or "").strip()
+        pub_year = 0
         if y.isdigit() and 1000 <= int(y) <= 2100:
-            d = int(y) // 10 * 10
-            decades[d] = decades.get(d, 0) + 1
             yi = int(y)
+            pub_year = yi
+            decades[yi // 10 * 10] = decades.get(yi // 10 * 10, 0) + 1
             yearly[yi] = yearly.get(yi, 0) + 1
             year_titles.setdefault(yi, []).append(b["title"])
         # 入库月份（按文件 mtime）。mtime<=0 是「没有时间戳」的异常文件：time.localtime(0)
@@ -164,6 +196,14 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
             lt_m = time.localtime(mt)
             mk = (lt_m.tm_year, lt_m.tm_mon)
             monthly[mk] = monthly.get(mk, 0) + 1
+            fk = (lt_m.tm_year, lt_m.tm_mon, f)
+            fmt_monthly[fk] = fmt_monthly.get(fk, 0) + 1
+            # 入库滞后只在出版年已知时才有意义（不知道出版年 ≠ 滞后 0 年）；
+            # 为负 = 文件时间戳早于出版年（重新入库、时间戳被改动等），照实记为负数，
+            # 不 clamp —— 掩盖掉反而会让「未标注年份」和「倒挂」两种异常混作一谈。
+            if pub_year:
+                lk = (lt_m.tm_year, lt_m.tm_year - pub_year)
+                lag[lk] = lag.get(lk, 0) + 1
         if not (b.get("language") or "").strip():
             integrity["missing_language"] += 1
         # 三项「文件侧」计数一律读 issues —— 与「缺失资源」页 / 库分面同一口径
@@ -184,11 +224,33 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     # 上游的 Present（文件在磁盘上）在本项目恒为 100%、是个恒真项。故这里把
     #   Present 落在「文件有实体内容（非 0 字节）」、Primary 落在「主文件能被解析」上。
     # 元数据侧取 metascore 的达标本数（阈值 = 已公示的分档边界 70）。
-    scores = [metascore.audit(b)["score"] for b in bs]
+    # audit 的返回值这里要**用全**：既取 score（下面算达标率），也取 present（下面算
+    # 逐字段覆盖率）—— 第 33 期之前只取 score，等于把已经算好的字段命中信息扔了。
+    audits = [metascore.audit(b) for b in bs]
+    scores = [a["score"] for a in audits]
     metadata_ok = sum(1 for s in scores if s >= metascore.METADATA_OK)
 
     def _pct(n: int) -> float:
         return round(n / total * 100, 1) if total else 0.0
+
+    # ---- 逐字段的元数据覆盖率（第 33 期，对齐上游 MetadataCompletenessItem）----
+    # 分母是**全部在册书**，与元数据页 metascore.payload() 里的字段覆盖率同口径
+    # （那里也是除以 n）。封面 / 页数只对 EPUB 有意义，但这里刻意**不**做格式归一：
+    # 与已公示的元数据页保持一致，比多一个更精确的分母更重要 —— 页面已用脚注说明
+    # 「这两项只对 EPUB 有意义」，两处口径不同才是真正的坑。
+    field_hits: dict = {}
+    for a in audits:
+        for k in a["present"]:
+            field_hits[k] = field_hits.get(k, 0) + 1
+    metadata_fields = [
+        {
+            "key": k, "label": label,
+            "present": field_hits.get(k, 0),
+            "total": total,
+            "percent": _pct(field_hits.get(k, 0)),
+        }
+        for k, (_g, _w, label) in metascore.FIELDS.items()
+    ]
 
     present = total - integrity["zero_size"]
     primary = total - integrity["unparsable"]
@@ -329,6 +391,65 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         for y, n in sorted(yearly.items())
     ]
 
+    # ---- 第 33 期：书库侧第二批图表序列 ----
+    # 格式 × 月份：只给计数、占比留给前端算 —— 占比的分母是「当月入库总数」，
+    # 后端先算成百分比，前端就没法在 tooltip 里同时给出「本数」了。
+    fmt_share = [
+        {"year": y, "month": m, "format": f, "count": n}
+        for (y, m, f), n in sorted(fmt_monthly.items())
+    ]
+    # 出版年 → 入库滞后：只含**出版年已知**的书（不知道 ≠ 滞后 0 年），
+    # 未标注年份的本数由界面用 `books.total - Σcount` 反推，不再多给一个键。
+    lag_list = [
+        {"added_year": ay, "lag_years": lg, "count": n}
+        for (ay, lg), n in sorted(lag.items())
+    ]
+    # 题材共现：节点先收敛到 top N，再只留两端都在节点集里的边（见 _CHORD_NODES）
+    top_genres = _top(genres, _CHORD_NODES)
+    node_set = {x["name"] for x in top_genres}
+    genre_chord = {
+        "nodes": [{"name": x["name"], "count": x["count"]} for x in top_genres],
+        "links": [
+            {"source": a, "target": b, "value": n}
+            for (a, b), n in sorted(genre_pairs.items())
+            if a in node_set and b in node_set
+        ],
+    }
+
+    # ---- 按 库 × 字段 的覆盖率（heatmap）----
+    # **刻意不跟随 library_id**（见文件头第 2 条）：切库时另取全库书目做横向对比，
+    # 全库时直接复用上面那一份（同一次扫描结果，不重扫盘）。
+    scope = bs if not lid else library.books()
+    scope_audits = audits if not lid else [metascore.audit(b) for b in scope]
+    lib_hits: dict = {}
+    lib_n: dict = {}
+    for b, a in zip(scope, scope_audits):
+        k = str(b.get("library_id") or "")
+        lib_n[k] = lib_n.get(k, 0) + 1
+        hits = lib_hits.setdefault(k, {})
+        for fk in a["present"]:
+            hits[fk] = hits.get(fk, 0) + 1
+    # 行按 libraries() 的顺序（= 书库管理的排序）、列按 metascore.FIELDS 的顺序，
+    # 都由后端定死 —— 前端照单渲染，否则每次刷新可能排出一个不一样的热图。
+    # 0 本书的库**照样出行**（percent 全 0）：它是一条真实状态，藏掉会让人以为库不存在；
+    # tooltip 里的 present/total 会显示成 0/0，不至于被误读为「字段全缺」。
+    library_metadata = []
+    for lib in library.libraries():
+        k = str(lib.get("id") or "")
+        n = lib_n.get(k, 0)
+        hits = lib_hits.get(k, {})
+        for fkey, (_g, _w, label) in metascore.FIELDS.items():
+            c = hits.get(fkey, 0)
+            library_metadata.append({
+                "library_id": k,
+                "library_name": lib.get("name") or k,
+                "key": fkey,
+                "label": label,
+                "present": c,
+                "total": n,
+                "percent": round(c / n * 100, 1) if n else 0.0,
+            })
+
     return {
         "books": {
             "total": total,
@@ -342,6 +463,12 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         "pages_by_format": pages_list,
         "added_monthly": added_list,
         "publication_yearly": yearly_list,
+        # ---- 第 33 期图表序列（书库侧）：同样是新键，既有键一个不动 ----
+        "metadata_fields": metadata_fields,
+        "library_metadata": library_metadata,
+        "genre_cooccurrence": genre_chord,
+        "format_share_monthly": fmt_share,
+        "acquisition_lag": lag_list,
         "authors": {"total": len(authors), "top": _top(authors, top)},
         "series": {"total": len(series), "top": _top(series, top)},
         "publishers": {"total": len(publishers), "top": _top(publishers, top)},
@@ -354,7 +481,7 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         },
         "avg_progress": round(psum / total, 1) if total else 0.0,
         "integrity": integrity,
-        # 元数据完整度分布（Average / P50 / P90 + 分档直方图），模型见 core/metascore.py
+        # 元数据完整度分布（Average / P25 / P50 / P75 / P90 + 分档直方图），模型见 core/metascore.py
         "metadata_score": metascore.summary(scores=scores),
         # 体积榜：固定最多 50 条，与 `top` 无关（见上方注释）
         "largest": largest,

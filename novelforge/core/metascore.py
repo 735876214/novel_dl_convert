@@ -1,7 +1,7 @@
 """元数据完整度评分（Confidence Score / Metadata Score）。
 
-给每本书算一个 **0–100 的完整度分**，再聚合出**分布直方图与分位数（P50 / P90）**，
-用于回答「我的书库元数据整体有多完整、哪些书最该补」。
+给每本书算一个 **0–100 的完整度分**，再聚合出**分布直方图与分位数
+（P25 / P50 / P75 / P90）**，用于回答「我的书库元数据整体有多完整、哪些书最该补」。
 
 模型
 ----
@@ -162,7 +162,12 @@ def _summarize(scores: list) -> dict:
     return {
         "total": total,
         "avg": round(sum(scores) / total, 1) if total else 0.0,
+        # 四个分位一起给：P25–P75 是统计页那张分数分布图的阴影带，P50/P90 是它的
+        # 两条虚线（对齐上游 MetadataScoreDistributionChart 的 markArea + markLine）。
+        # 第 33 期之前只有 P50/P90 —— 增补不删，既有两个键原地不动。
+        "p25": percentile(scores, 25),
         "p50": percentile(scores, 50),
+        "p75": percentile(scores, 75),
         "p90": percentile(scores, 90),
         "min": round(min(scores), 1) if scores else 0.0,
         "max": round(max(scores), 1) if scores else 0.0,
