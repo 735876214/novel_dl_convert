@@ -32,7 +32,7 @@
 - Windows 上 IDE 的 safe-delete shim 也拦 PowerShell `Remove-Item`（报 `SAFE_DELETE_BULK_GUARD_ERROR`，静默不删）⇒ 清临时产物用删除工具；`Out-File` 不带 `-Encoding` 同样被拦。
 
 ## 自动化测试（硬前提）
-- 完全离线：`.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。基线：POSIX 270 passed；**win32 全量 346 例 / 1 failed**（唯一失败=`test_watcher_auto_fetch::test_audiobook_library_scan_triggers_auto_fetch`，既有 win32 不通，单跑也挂）。计数按环境取，别混引。
+- 完全离线：`.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。基线：POSIX 270 passed；**win32 全量 388 例 / 1 failed**（第32期实测；第31期为 346 例。唯一失败=`test_watcher_auto_fetch::test_audiobook_library_scan_triggers_auto_fetch`，既有 win32 不通，单跑也挂）。计数按环境取，别混引。
 - win32 本机已有项目 venv `.venv\Scripts\python.exe`；跑全量前确认 `novelforge/static` 存在（缺它 import `server` 即 `ensure_dirs()` 失败）。另有 `test_scrape_publish::test_接口_扫描后按开关自动入队` 属**顺序依赖 flaky**（单跑该文件必过，全量里随机挂，别当回归）。
 - ⚠️ **PowerShell 下 pytest 的汇总行与失败清单抓不到**（stdout 尾段丢失，落盘文件里也只有进度条）⇒ 定位失败**改用 `--junitxml` 再解析**：`& .\.venv\Scripts\python.exe -m pytest -q --tb=line --junitxml="$env:TEMP\nf.xml" > $null 2>$null`，然后 `.\.venv\Scripts\python.exe -c "import os,xml.etree.ElementTree as ET; ..."` 取 `//testcase[failure]` 的 `.text`（`--tb=line` 一行、默认给完整回溯）。**别再用 `Select-Object -Last N` 抓汇总，白耗时间**；且别用 PowerShell 的 `[xml]` 直接解析（编码会崩），交给 Python。
 - 曾全量后半程 segfault→现由 `tests/conftest.py` 的 `_quiesce_background()`（`watcher.wait_pending`+`scrape.stop`）在 `isolated` 夹具 `db.close()` **之前**收尾。
@@ -45,6 +45,7 @@
 - 库根限 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR`（`safe_path`）；`book_id`=basename 派生+库维度化（`库$哈希`）。
 - 新增库表列须同进 `db._LIBRARY_COLS`，否则 `update_library` 静默写不进。
 - 统计接口（`core/stats.py`）：`overview.integrity` **原有 5 个计数键一个都不能少**（第29期百分比是增补）；`largest`（体积榜）独立新键、与作者/系列榜共用 `top`，但**不要塞进 `_top`**（排序 `(-count, name)`）；0 字节书如实上榜。
+- **统计接口新序列口径（第32期立）**：`GET /api/stats` 共用一份 `overview`（**不照搬上游 per-chart 取数层**）；一切新序列**只增键不删键**（既有 16 键有测试钉住）；新聚合**必须跟随 `library_id`** —— 书库侧从 `bs` 算、阅读侧靠 `core/stats.py:97` 的 `ids` 集合过滤（`lid` 空时 `ids=None`=全库），**不新增扫描路径**。序列真名照代码：`weekdays`（**不是** `weekday_minutes`）、`pages_by_format`（**boxplot 五数概括**，非直方图）。
 - 共用锁嵌套用 `RLock`；`mark_processed`/`mark_recent` 走 `asyncio.to_thread`，watcher 独立 `_scan_lock`。
 - `write_epub` 前先 `mkdir`（父目录不存在只 warn 不抛）；批量端点注册在 `/api/books/{bid}` 之前、字面量路径在 `{param}` 之前；目录型条目用 `path.exists()` 不用 `is_file()`；模板替换先长后短（`{series_index}` 排 `{series}`/`{index}` 前）。
 - **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**：路由是 `@app.get("/health")`（`server.py`），**没有 `/api/health`**；鉴权白名单只含 `/health`+`/api/auth/login`+`/api/logout`，打 `/api/health` 会被中间件拦成 401。前端 `lib/api.ts` 的 `health()` 也走 `/health`。三处必须同口径（第31期修掉了一条把路径写成 `/api/health` 的契约测试）。
@@ -61,6 +62,8 @@
 - 演示数据确定性常量禁 `Math.random()`；`p()` 路由 path 全局唯一（同 path 两条被静默覆盖+侧栏重复 key）；`settingsNav`/router 注册表与组件同批改。
 - 工具页 `ToolsLayout.vue` 子页用 `onActivated`（非 `onMounted`）；改磁盘工具「先预览再应用」、删除移回收站。例外：页面内 `v-if` 子组件（如 `ScrapePanel`）需 `onMounted` 首载、`onActivated` 只刷新。
 - 表格窄屏：宽屏 `<table class="hidden md:block">`+窄屏 `<ul class="md:hidden">`；纯装饰增强取不到就不设变量→CSS 整条失效→天然回退。
+- **图表栈（第32期立）**：`echarts` + `vue-echarts`；`frontend/src/lib/charts.ts` 是**全站唯一**的注册/主题适配入口（**组件里别各自 `use()`** —— 会重复注册且主题不同步），按需 `use()` 用到的图型 + 页面级动态 import；SVGRenderer（上游注释：消除 canvas 命中测试坐标错位导致的 hover 闪烁）+ `oklchToHex()`（ECharts 不认 oklch 变量）+ 幂等主题注册（`themeRegistered` 守卫）。**零外部请求**：不得 CDN、不得运行时拉地图/主题/字体。
+- **外观偏好归属边界（第32期立）**：`stores/displayPrefs.ts`（Layout 页六项；落盘键 `nf-display-prefs`）**并入 `appearance` 偏好块**随「外观与阅读偏好整套同步」走服务端（不新增第七块；应用远端值时**逐键挑**，因为传进来的是整块）；`stores/shelfPrefs.ts`（Behavior 三项 + 卡片信息；键 `nf-shelf-prefs`）走 localStorage、**不进服务端同步** —— 书架级偏好与服务端偏好是两条边界，别混。新偏好写入经 `notifyPrefsChanged`、应用远端值走 `suppressing`（同 `theme.ts`）。
 
 ## 运行 / UI 验证
 - 本地实例：`*_DIR→/tmp/nf-test/…`，`LIBRARY_SOURCE_DIR=/tmp/nf-test/libraries`，`AUTO_WATCH=false`，auth admin/test1234，`uvicorn novelforge.server:app --port 8791`，token 落 `/tmp/nf-test/token.txt`（⚠️目录可能被清→e2e 自带数据）。
@@ -77,7 +80,11 @@
 - 批注 Hub 四分组 UI 第27期落地（月/书/颜色/来源，纯前端）；**无数据源故不做**：`koreader`/`kobo`/`needsReview`/`devices`/跨端降色（kosync 纯进度、无批注端点）。
 - **批注软删除既定语义**（第27期）：`DELETE`=移垃圾桶（`deleted_at`），`purge` 才真删且只对垃圾桶内开放；读点必须 `WHERE deleted_at=0`（曾 `remap_book_id` 踩过，`REMAP_PROBE_FILTER`）。
 - **文档过期是常态，改前先核验代码**：`docs/bookorbit-capability-gap.md` 曾把「本项目无」写在已实现能力上，§0.3 基线自身先过期（68→260 路由、6→28 表）；复核先重取基线再逐条核验，**不做整表翻转**（StatsView 双分区、Integrity 百分比、「孤儿封面目录」为刻意不同设计）。
+- **判断「某能力有没有页面入口」要两头查**（第32期踩坑）：只看配置文件会误判 —— `upload.max_bytes` 曾被写成「本项目没做成维护页可编辑项」，实际 `server.py` 的 `EDITABLE` 白名单（含 `"upload"`）、`/api/maintenance` 回传、前端 `settingsFields.ts` 的 `UPLOAD_FIELDS` 三处都在。**先查白名单，再查前端字段定义**。
+- ⚠️ **`docs/roadmap-verification.md` 的「27/27 通过」里有 1 项不实**（第32期发现）：第 0 期「审计日志」行把**计划**写成了**实证**（「`/api/logs` 支持 actor 过滤」当时不成立，到第 32 期才真落地）。**该文件正文结论不采信**（「核查方法」章节仍有价值）；已在原行就地更正 + 结论段补记。
 - 第31期取证仍无终端/网络，`client/` 与 `server/src/modules` **仍未 fetch**（同第30期），真值源限 `%TEMP%\bookorbit-ref` 的 `packages/types`。⚠️ **`account-activity.ts` = 管理端账号活跃度（admin 用户列表），不是阅读时间轴**，别拿它当热力图依据；阅读会话模型看 `reading-session.ts` 的 `dailySummary{day,totalMinutes}[]`（含 `READING_SESSION_SOURCES` 分桶）。
+- **【第32期突破】上游源码可取证了**：镜像 `%TEMP%\bookorbit-ref` 的 **tree 对象本地已在** ⇒ 零网络即可列出上游全部文件清单（第30/31期只扫了 `packages/types`，所以缺口清单**系统性漏掉模块级能力**）；读文件内容按需拉单个 blob，**直连坏、走代理成功**：`git -C $REF -c http.proxy=http://127.0.0.1:7897 cat-file -p HEAD:<path>`（勿改持久 git 配置）。
+- **统计页图表与上游的三处硬差异（第32期取证）**：①本项目无 `reading_sessions.source` 列、无按格式分桶 ⇒ 上游 `reading-clock`/`peak-reading-hours`/`favorite-reading-days` 的 `BreakdownSelect`（format/source 维度）**无数据源、不做该控件**（三图降级单序列）；②本项目是**单接口** `GET /api/stats`，不照搬上游 per-chart 取数层；③本项目**无** vue-i18n / shadcn(Sheet/Popover) / `@lucide/vue` / `@vueuse/core` / `vue-draggable-plus` ⇒ 用既有 `Icon.vue`/`Card.vue`/原生 `<select>`，Configure 重排用**上移/下移按钮**（不引拖拽库）。上游图表元数据真值源=`client/src/features/statistics/statistics-chart-meta.ts`（**33 张**：Library 19 / User 14，带 `label`/`size`/`category`）；低数据量阈值逐图照搬（`MIN_EVENTS` 20/14、`MIN_STARTED` 10、`MIN_COMPLETIONS` 3），不足走空态**不画噪声图**。
 
 ## 阅读活动与成就（第31期）
 - 阅读活动页：后端 `core/activity.py` + `GET /api/reading-activity`（`library_id` 空串=全库、未知库=空集合不 404，与 `/api/stats` 同惯例；`year`/`limit` 可选）；聚合 `reading_sessions`（按 `started_at` **本地日**）+ `annotations`（必须 `WHERE deleted_at=0`）+ `user_achievements`；前端 `/reading-activity`（`stores/activity.ts` + `ReadingActivityView.vue`，纯 CSS Grid 热力图、零外链）。热力图数据模型对齐上游 `dailySummary`；**无 `source` 列 ⇒ 无分设备热力图**，属刻意分流。
