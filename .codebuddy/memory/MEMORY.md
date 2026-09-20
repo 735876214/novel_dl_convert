@@ -29,10 +29,12 @@
 - 认证走 GCM；已清 token 内嵌/insteadof 明文重写，勿再引入；推送失败先查认证/网络，别改 git config。
 - Python 3.10+（本机 `python3`）；Node v20/22；Docker daemon 可用，本机对外网络有限（推送/拉取常需代理优先策略）。
 - 行尾必须 LF（`.gitattributes` 锁）；CRLF 让容器 `sh /app/start.sh` 报 `set: Illegal option -` 反复重启。
+- Windows 上 IDE 的 safe-delete shim 也拦 PowerShell `Remove-Item`（报 `SAFE_DELETE_BULK_GUARD_ERROR`，静默不删）⇒ 清临时产物用删除工具；`Out-File` 不带 `-Encoding` 同样被拦。
 
 ## 自动化测试（硬前提）
-- 完全离线：`.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。基线：POSIX 270 passed；**win32 全量 310 例 / 309 passed / 1 failed**（唯一失败=已知 flaky 有声书）。计数按环境取，别混引。
-- win32 无项目 venv；自建后跑全量前先 `mkdir novelforge/static`（缺它 import `server` 即 `ensure_dirs()` 失败）；另有 1–2 例「扫描→自动入队」失败，PowerShell 下 pytest 汇总行抓不到→**核对回归请在用户原环境跑**。
+- 完全离线：`.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。基线：POSIX 270 passed；**win32 全量 346 例 / 1 failed**（唯一失败=`test_watcher_auto_fetch::test_audiobook_library_scan_triggers_auto_fetch`，既有 win32 不通，单跑也挂）。计数按环境取，别混引。
+- win32 本机已有项目 venv `.venv\Scripts\python.exe`；跑全量前确认 `novelforge/static` 存在（缺它 import `server` 即 `ensure_dirs()` 失败）。另有 `test_scrape_publish::test_接口_扫描后按开关自动入队` 属**顺序依赖 flaky**（单跑该文件必过，全量里随机挂，别当回归）。
+- ⚠️ **PowerShell 下 pytest 的汇总行与失败清单抓不到**（stdout 尾段丢失，落盘文件里也只有进度条）⇒ 定位失败**改用 `--junitxml` 再解析**：`& .\.venv\Scripts\python.exe -m pytest -q --tb=line --junitxml="$env:TEMP\nf.xml" > $null 2>$null`，然后 `.\.venv\Scripts\python.exe -c "import os,xml.etree.ElementTree as ET; ..."` 取 `//testcase[failure]` 的 `.text`（`--tb=line` 一行、默认给完整回溯）。**别再用 `Select-Object -Last N` 抓汇总，白耗时间**；且别用 PowerShell 的 `[xml]` 直接解析（编码会崩），交给 Python。
 - 曾全量后半程 segfault→现由 `tests/conftest.py` 的 `_quiesce_background()`（`watcher.wait_pending`+`scrape.stop`）在 `isolated` 夹具 `db.close()` **之前**收尾。
 - 硬前提：①环境变量须在 import 业务模块前设（`config` 导入固化目录、`server` 导入即 `ensure_dirs()`）；②`db._conn`/`_db_path` 模块级缓存→隔离靠 `db.close()`。
 - 碰库/DB 用例必须 `isolated`；接口用 `client`+`auth_headers`。假 EPUB（`b"EPUB"`）够扫描类；元数据写回/系列解析要真 EPUB（`epub_builder.build_epub`）。不测会外呼接口。`GET /` 会 503。库 id 由名称派生（中文 slug 空→`lib-<sha1[:8]>`）；测试库根须在 `LIBRARY_SOURCE_DIR` 下；断言终态留余地。
@@ -45,6 +47,7 @@
 - 统计接口（`core/stats.py`）：`overview.integrity` **原有 5 个计数键一个都不能少**（第29期百分比是增补）；`largest`（体积榜）独立新键、与作者/系列榜共用 `top`，但**不要塞进 `_top`**（排序 `(-count, name)`）；0 字节书如实上榜。
 - 共用锁嵌套用 `RLock`；`mark_processed`/`mark_recent` 走 `asyncio.to_thread`，watcher 独立 `_scan_lock`。
 - `write_epub` 前先 `mkdir`（父目录不存在只 warn 不抛）；批量端点注册在 `/api/books/{bid}` 之前、字面量路径在 `{param}` 之前；目录型条目用 `path.exists()` 不用 `is_file()`；模板替换先长后短（`{series_index}` 排 `{series}`/`{index}` 前）。
+- **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**：路由是 `@app.get("/health")`（`server.py`），**没有 `/api/health`**；鉴权白名单只含 `/health`+`/api/auth/login`+`/api/logout`，打 `/api/health` 会被中间件拦成 401。前端 `lib/api.ts` 的 `health()` 也走 `/health`。三处必须同口径（第31期修掉了一条把路径写成 `/api/health` 的契约测试）。
 
 ## 配置分层（四层 + 每库覆盖）
 - `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时 `生效值=每库覆写 ?? 全局`，落 `libraries.settings`（稀疏 JSON，键=全局点分路径）。
@@ -61,6 +64,8 @@
 
 ## 运行 / UI 验证
 - 本地实例：`*_DIR→/tmp/nf-test/…`，`LIBRARY_SOURCE_DIR=/tmp/nf-test/libraries`，`AUTO_WATCH=false`，auth admin/test1234，`uvicorn novelforge.server:app --port 8791`，token 落 `/tmp/nf-test/token.txt`（⚠️目录可能被清→e2e 自带数据）。
+- 登录接口字段是 `{"user","pin"}`（**不是** username/password）。**全新 `DATA_DIR` 首次启动由 `db.init()` 按 `AUTH_USER`/`AUTH_PIN` 建默认账号，缺省 `admin/changeme`**（`test1234` 只是 8791 那个旧实例自设的，自建实例别混用）。
+- 端口 8791 常被前几期留下的实例占着（跑的是旧代码、无新路由）⇒ 冒烟**另起端口 + 独立临时目录**（如 8795），别 kill 别人的实例。
 - Docker：`docker-compose.yml` 端口 **8992**；`docker-compose.test.yml` 挂 `./novelforge` 端口 **8993**；断网无法 `--build`；数据隔离。
 - 构建：`cd frontend && npm run type-check && npm run build && npm run deploy`，核对 `/static/v2/assets/index-*.js` 实际内容（HMR 源码≠服务端产物）。
 - UI 验证：playwright 注入 `nf_token`（`add_init_script`+`localstorage-set`+**`reload`**）；迁移弹窗 `force=True` 点暂不迁移；CLI 加 `--browser=chromium`；快照落 `.playwright-cli/page-*.yml`。
@@ -77,4 +82,4 @@
 ## 阅读活动与成就（第31期）
 - 阅读活动页：后端 `core/activity.py` + `GET /api/reading-activity`（`library_id` 空串=全库、未知库=空集合不 404，与 `/api/stats` 同惯例；`year`/`limit` 可选）；聚合 `reading_sessions`（按 `started_at` **本地日**）+ `annotations`（必须 `WHERE deleted_at=0`）+ `user_achievements`；前端 `/reading-activity`（`stores/activity.ts` + `ReadingActivityView.vue`，纯 CSS Grid 热力图、零外链）。热力图数据模型对齐上游 `dailySummary`；**无 `source` 列 ⇒ 无分设备热力图**，属刻意分流。
 - 成就分组对齐上游 5 分类中的 **4 个**（`library`/`reading`/`exploration`/`dedication`）；**`devices` 刻意不做**（上游靠 `reading_sessions.source` 分桶，本项目无该列）。`rarity/tier/hidden/iconName` 为上游展示层概念，本项目有意简化为无。**成就 key 不可改名**（前端/统计引用），只扩 `ACHIEVEMENTS` 目录 + `_metrics()`。
-- 第31期新增测试 `tests/test_reading_activity.py`(3) 与 `tests/test_achievements_align.py`(4)，全量基线计数随之上浮（本机未复跑全量，别沿用旧的 310 例）。
+- 第31期新增测试 `tests/test_reading_activity.py`(3) 与 `tests/test_achievements_align.py`(4)；全量 win32 **346 例 / 1 failed**（详见「自动化测试」节）。同期末修掉第30期写错路径的 `tests/test_version_contract.py`（`/api/health`→`/health`；第30期本机跑不了测试，所以这条错误路径一直没暴露）。
