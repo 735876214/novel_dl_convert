@@ -1890,6 +1890,9 @@ def api_authors():
                  "has_cover": b.get("has_cover", False)}
                 for b in a["books"][:4]
             ],
+            # 排序名（本地覆盖 > 在线；空串 = 没设，前端排序时回退到 name）。
+            # 复用 authors.sort_name_of 而不是在这儿再写一遍回退 —— 与详情页同一个口径
+            "sort_name": authors_mod.sort_name_of(row),
             # 本地缓存的作者头像有无（有则前端去 /api/authors/{name}/photo 取；无则渐变占位）
             "has_photo": has_photo,
             # 名下最早一本书的入库时间（秒），用于「本周新增」筛选
@@ -1912,6 +1915,9 @@ def api_author_detail(name: str):
         # 传记（本地覆盖 > 在线），无则空串
         "bio": info["bio"],
         "bio_overridden": info["bio_overridden"],
+        # 排序名（本地覆盖 > 在线），无则空串 = 按显示名排序
+        "sort_name": info["sort_name"],
+        "sort_name_overridden": info["sort_name_overridden"],
         # 头像（本地缓存的在线照片 或 用户上传），经专属端点分发
         "has_photo": info["has_photo"],
         "photo_overridden": info["photo_overridden"],
@@ -1948,6 +1954,17 @@ def api_set_author_bio(name: str, payload: dict = Body(...)):
     if bio is None:
         raise HTTPException(400, "缺少 bio 字段")
     return {"ok": True, **authors_mod.set_bio(name, str(bio))}
+
+
+@app.post("/api/authors/{name}/sort-name")
+def api_set_author_sort_name(name: str, payload: dict = Body(...)):
+    """设置作者排序名的本地覆盖（空串 = 撤销覆盖，排序回退到在线排序名 / 显示名）。"""
+    if not library.author_books(name):
+        raise HTTPException(404, "作者不存在")
+    value = (payload or {}).get("sort_name")
+    if value is None:
+        raise HTTPException(400, "缺少 sort_name 字段")
+    return {"ok": True, **authors_mod.set_sort_name(name, str(value))}
 
 
 @app.post("/api/authors/{name}/photo")

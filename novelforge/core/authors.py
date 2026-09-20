@@ -139,8 +139,20 @@ def fetch_all() -> dict:
     return {"total": len(names), "ok": ok, "failed": failed}
 
 
+def sort_name_of(row: dict) -> str:
+    """从 ``authors`` 表行里取**生效**排序名（本地覆盖 > 在线），都没有则空串。
+
+    抽成纯函数是为了让 ``effective()``（单作者、自己查行）与 ``/api/authors``
+    （批量、已用 ``db.all_authors()`` 一次取全）共用同一套回退逻辑 —— 两处各写一遍
+    迟早会走样。**刻意不回退到 name**：「没设排序名」与「把排序名设成和显示名一样」
+    是两件事；回退到显示名是排序时的事，由取值方 ``or name`` 决定。
+    """
+    r = row or {}
+    return str(r.get("sort_name_local") or "").strip() or str(r.get("sort_name") or "")
+
+
 def effective(name: str) -> dict:
-    """作者生效信息：bio（本地覆盖 > 在线）、头像有无、各覆盖标记、抓取时间。"""
+    """作者生效信息：bio（本地覆盖 > 在线）、排序名（同左）、头像有无、各覆盖标记、抓取时间。"""
     row = db.get_author(name) or {}
     bio_local = str(row.get("bio_local") or "").strip()
     photo_local = str(row.get("photo_local_path") or "").strip()
@@ -149,6 +161,8 @@ def effective(name: str) -> dict:
         "name": name,
         "bio": bio_local or str(row.get("bio") or ""),
         "bio_overridden": bool(bio_local),
+        "sort_name": sort_name_of(row),
+        "sort_name_overridden": bool(str(row.get("sort_name_local") or "").strip()),
         "has_photo": bool(photo_local or photo_online),
         "photo_overridden": bool(photo_local),
         "photo_source": str(row.get("photo_source") or ""),
@@ -169,6 +183,12 @@ def photo_path_for(name: str) -> "pathlib.Path | None":
 def set_bio(name: str, bio: str) -> dict:
     """设置/清除用户本地传记覆盖（空串 = 撤销覆盖）。"""
     db.set_author_bio_local(name, bio)
+    return effective(name)
+
+
+def set_sort_name(name: str, value: str) -> dict:
+    """设置/清除作者排序名的本地覆盖（空串 = 撤销覆盖，排序回退到在线排序名 / 显示名）。"""
+    db.set_author_sort_name_local(name, value)
     return effective(name)
 
 

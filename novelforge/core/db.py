@@ -263,6 +263,12 @@ def init():
                 name             TEXT PRIMARY KEY,
                 bio              TEXT NOT NULL DEFAULT '',
                 bio_local        TEXT NOT NULL DEFAULT '',
+                -- 排序名（第 32 期）：排序用的键，与显示名分开 —— 「鲁迅」要排在 L 下、
+                -- 「The Lord of the Rings」要按 Lord 排，都不是把显示名改掉能解决的。
+                -- 与 bio 同构：在线值与本地覆盖**分列**，生效取 本地覆盖 > 在线，
+                -- 两者都空则排序回退到 name（即加此列之前的行为，一字不差）。
+                sort_name        TEXT NOT NULL DEFAULT '',
+                sort_name_local  TEXT NOT NULL DEFAULT '',
                 photo_path       TEXT NOT NULL DEFAULT '',
                 photo_source     TEXT NOT NULL DEFAULT '',
                 photo_local_path TEXT NOT NULL DEFAULT '',
@@ -428,6 +434,14 @@ def init():
             c.execute("ALTER TABLE annotations ADD COLUMN origin TEXT NOT NULL DEFAULT 'web'")
         if acols and "deleted_at" not in acols:
             c.execute("ALTER TABLE annotations ADD COLUMN deleted_at REAL NOT NULL DEFAULT 0")
+        # 第 32 期：authors 补「排序名」两列（在线值 / 本地覆盖分列，与 bio 同构）。
+        # 老库不补列则作者排序与覆盖读写会报 no such column。两列都有 NOT NULL DEFAULT ''，
+        # 存量行照旧可读 —— 空串即「没有排序名」，排序回退到 name，与加列前完全一致。
+        aucols = {r["name"] for r in c.execute("PRAGMA table_info(authors)")}
+        if aucols and "sort_name" not in aucols:
+            c.execute("ALTER TABLE authors ADD COLUMN sort_name TEXT NOT NULL DEFAULT ''")
+        if aucols and "sort_name_local" not in aucols:
+            c.execute("ALTER TABLE authors ADD COLUMN sort_name_local TEXT NOT NULL DEFAULT ''")
         _seed_user(c)
         c.commit()
 
@@ -2153,6 +2167,18 @@ def set_author_photo_local(name, path) -> None:
             "INSERT INTO authors(name, photo_local_path) VALUES(?,?) "
             "ON CONFLICT(name) DO UPDATE SET photo_local_path=excluded.photo_local_path",
             (str(name), str(path or "").strip()),
+        )
+        c.commit()
+
+
+def set_author_sort_name_local(name, value) -> None:
+    """设置/清除作者排序名的本地覆盖（空串 = 撤销覆盖，回退到在线排序名/显示名）。用 upsert，理由同上。"""
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO authors(name, sort_name_local) VALUES(?,?) "
+            "ON CONFLICT(name) DO UPDATE SET sort_name_local=excluded.sort_name_local",
+            (str(name), str(value or "").strip()),
         )
         c.commit()
 
