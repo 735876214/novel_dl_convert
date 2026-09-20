@@ -18,6 +18,23 @@ const inputFiles = ref<FileEntry[]>([])
 const pathValue = ref('')
 const lastResult = ref('')
 
+/**
+ * 上传/拖拽允许的扩展名（与后端 `POST /convert` 的允许集一致：
+ * `.txt` ∪ `core/pipeline.EBOOK_EXT`，EBOOK_EXT 含 .epub/.mobi/.azw3/.pdf/.fb2/.cbz/.cbr
+ * 与 `core/audio.AUDIO_EXTS`）。这里不再写死 .txt——前端只做**预校验**（后端 400 才报错，
+ * 但前端应提前给出可读提示，不留「点了没反应」）。
+ */
+const ALLOWED_EXT = [
+  '.txt', '.epub', '.mobi', '.azw3', '.pdf', '.fb2', '.cbz', '.cbr',
+  '.m4b', '.mp3', '.m4a', '.opus', '.ogg', '.flac', '.aac', '.wav',
+]
+const ACCEPT = ALLOWED_EXT.join(',')
+
+function extOf(name: string): string {
+  const i = name.lastIndexOf('.')
+  return i >= 0 ? name.slice(i).toLowerCase() : ''
+}
+
 const watcherRunning = computed(() => Boolean(watcher.value?.running))
 
 function fmtSize(bytes: number): string {
@@ -68,22 +85,30 @@ function convertFiles(fileList: FileList | File[]): void {
   const files = Array.from(fileList)
   if (!files.length) return
 
+  // 前端预校验：跳出不支持的格式，给可读提示（不再写死 .txt）
+  const allowed = files.filter((f) => ALLOWED_EXT.includes(extOf(f.name)))
+  const skipped = files.length - allowed.length
+  if (skipped > 0) {
+    ui.toast(`已跳过 ${skipped} 个不支持的格式（仅支持 TXT 与电子书/漫画/音频）`)
+  }
+  if (!allowed.length) return
+
   busy.value = true
   lastResult.value = ''
-  let done = 0
+  let finished = 0
 
-  files.forEach((file) => {
+  allowed.forEach((file) => {
     api
       .convertFile(file, traditionalize.value)
-      .then((blob) => {
-        const base = file.name.replace(/\.txt$/i, '')
-        saveBlob(blob, `${base}.epub`)
-        done += 1
-        lastResult.value = `已转换 ${done} / ${files.length}`
+      .then(({ blob, filename }) => {
+        // 文件名用后端给的真实产物名（Content-Disposition），不再自己拼 .epub（避免 x.epub.epub）
+        saveBlob(blob, filename)
+        lastResult.value = `已转换 ${finished + 1} / ${allowed.length}`
       })
       .catch((e: Error) => ui.toast(`${file.name}：${e.message}`))
       .finally(() => {
-        if (done === files.length) {
+        finished += 1
+        if (finished === allowed.length) {
           busy.value = false
           ui.toast('转换完成')
           refreshInputs()
@@ -109,11 +134,16 @@ function convertByPath(): void {
     ui.toast('请填写 input 目录下的相对路径')
     return
   }
+  if (!ALLOWED_EXT.includes(extOf(p))) {
+    ui.toast(`不支持的格式：${extOf(p) || '无扩展名'}（仅支持 TXT 与电子书/漫画/音频）`)
+    return
+  }
   busy.value = true
   api
     .convertPath(p, traditionalize.value)
-    .then((blob) => {
-      saveBlob(blob, `${p.replace(/\.txt$/i, '')}.epub`)
+    .then(({ blob, filename }) => {
+      // /convert-path 与 /convert 同口径返回文件流，文件名由后端给（不会是 x.epub.epub）
+      saveBlob(blob, filename)
       lastResult.value = `已转换 ${p}`
       ui.toast('转换完成')
       refreshInputs()
@@ -152,7 +182,7 @@ function scan(): void {
       <Card>
         <h3 class="text-[13px] font-semibold text-foreground">拖拽上传</h3>
         <p class="mt-1 mb-2.5 text-[11.5px] text-muted-foreground">
-          把 TXT 转成带目录的 EPUB，或交给下方的监听目录自动处理。
+          把 TXT 或常见电子书/漫画/音频交给流水线；TXT 会转成带目录的 EPUB，其余格式按原样入库，或交给下方监听目录自动处理。
         </p>
 
         <label
@@ -162,14 +192,14 @@ function scan(): void {
           @dragleave.prevent="dragging = false"
           @drop.prevent="onDrop"
         >
-          <input type="file" accept=".txt" multiple class="hidden" @change="onPick">
+          <input type="file" :accept="ACCEPT" multiple class="hidden" @change="onPick">
           <span class="grid h-11 w-11 place-items-center rounded-full bg-muted text-muted-foreground">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-5 w-5">
               <path d="M12 16V4M7.5 8.5L12 4l4.5 4.5M4 20h16" />
             </svg>
           </span>
-          <span class="mt-3 text-[13px] font-medium text-foreground">把 .txt 拖到这里，或点击选择</span>
-          <span class="mt-1 text-[11.5px] text-muted-foreground">支持多选，逐个转换并下载</span>
+          <span class="mt-3 text-[13px] font-medium text-foreground">把文件拖到这里，或点击选择</span>
+          <span class="mt-1 text-[11.5px] text-muted-foreground">支持 TXT / EPUB / MOBI / PDF / CBZ 等电子书与常见音频；支持多选，逐个转换并下载</span>
         </label>
 
         <label class="mt-3 flex cursor-pointer items-center gap-2 text-[12.5px] text-foreground">
@@ -189,7 +219,7 @@ function scan(): void {
             <input
               v-model="pathValue"
               type="text"
-              placeholder="相对 input 目录，例如 小说/某书.txt"
+              placeholder="相对 input 目录，例如 小说/某书.txt 或 漫画.cbz"
               aria-label="待转换文件路径"
               class="h-8 min-w-0 flex-1 rounded-md border border-border bg-muted px-3 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
               @keydown.enter="convertByPath"
