@@ -602,10 +602,221 @@
 #### 第 30 期验证
 
 - 后端 py_compile 已过；前端 `vue-tsc` 待用户在原环境跑（本会话命令授权超时，未能在本环境编译）。
+  **〔第 31 期补记〕** 命令通道恢复后已跑完：`npm run type-check` / `build` / `deploy` 全部通过，
+  产物同步 `novelforge/static/v2`。
 - 新增契约测试：`tests/test_version_contract.py`（`GET /health` 的 `version` 非空且 == `server.APP_VERSION`）、
   `tests/test_stats_scope.py`（`/api/stats` 不传=全库 / 传库=只算该库 / 不存在的库=全库空集合）。
 - 待运行：全量 pytest、构建部署、playwright 逐路由冒烟（统计库选择器 / 本地转换非 txt 文件名 /
   详情页新字段不出现 0/假值 / 阅读记录按书卡）。
+  **〔第 31 期补记〕** 以上已全部执行，结论并入下方「第 31 期验证」。
+
+---
+
+#### 第 31 期实施记录（上游取证补记 + 阅读活动页 + 成就对齐 + 三份停旧期文档刷新）
+
+**主题**：用户多选确认为全部四项 —— 上游取证补全 / 笔记子系统（时间轴 + 热力图）/ 成就体系对齐上游 /
+文档过期清理。
+
+- **阅读活动（本期唯一新增 UI）**：后端新增 `core/activity.py` —— `heatmap()` 按 `started_at` 的**本地日**
+  聚合 `seconds/60` 成 `{date, minutes, sessions}`、`timeline()` 合并 session / annotation / achievement
+  按 ts 倒序、`reading_activity()` 一次返回；`core/db.py` 增 `reading_day_minutes` / `session_feed` /
+  `annotation_feed`（读批注**必须** `deleted_at=0`；空集合直接返回 `[]`，避免 `IN ()` 语法错）/
+  `list_achievements` / `unlocked_map` / `upsert_achievement` / `clear_unlocked`。
+  接口 `GET /api/reading-activity`（`server.py:3231`）：`library_id` **空串 = 全部书库**（与 `/api/stats`
+  同惯例），**未知库返回空集合不 404**；`year` 过滤热力图年份、`limit` 限时间轴条数；按库过滤复用
+  `library.books(lid)` 取 id 集合（同 `core/stats.py` 范式，**不新增扫描**）。
+  前端 `stores/activity.ts`（跟随 `library.currentLibraryId` 失效重载）+ `views/ReadingActivityView.vue`
+  （GitHub 式**纯 CSS Grid** 53×7 热力图、5 档色阶、hover 放大 + `title` 提示、时间轴按日分组 + 类型图标 +
+  `HH:MM`、范围选择「今年 / 去年 / 全部」、空态如实显示「还没有阅读记录」）；接线在 `router/index.ts:174`、
+  `data/nav.ts:45`、`AppSidebar.vue:34/58`、`lib/api.ts`。**零假数据、零外链、无 `Math.random()`**（确定性）。
+- **成就对齐上游**：`core/achievements.py` 由 3 组（LIBRARY / READING / ANNOTATION）改为上游的 4 组
+  （library / reading / exploration，批注归入 exploration）+ 新增 `dedication` 档（`streak_100` /
+  `hours_500` / `active_days_100` / `finished_50`），共 21 条；`devices` **不引入**（本项目无 `source` 列）。
+  `_metrics()` **未新增指标**（dedication 复用既有 streak / hours / days / finished）⇒ 判定逻辑零改动，
+  「只解锁不回退、进度实时算」机制不变。前端 `AchievementsView.vue` 的 `GROUP_LABELS` 补 `dedication/坚持`。
+- **上游取证（降级，如实标注）**：本环境当时**仍无终端 / 网络**，`client/` 与 `server/src/modules`
+  第二次 fetch 失败（同第 30 期），取证范围限镜像 `%TEMP%\bookorbit-ref` 的 `packages/types` + 各根文档，
+  结论附 `文件:行` 写回 `capability-gap.md` §1/§6/§7 的「第 31 期取证补记」，**未取证部分一律标「未取证」
+  不臆测**：`achievement.ts` 5 分类（reading / library / exploration / dedication / devices）+ 4 档稀有度；
+  `reading-session.ts` 热力图真值源是 `dailySummary{day,totalMinutes}[]`，`READING_SESSION_SOURCES`
+  分桶 web / koreader / manual / kobo（本项目无 `source` 列 ⇒ 不做分设备热力图，**刻意分流**）；
+  ⚠️ `account-activity.ts` 是**管理端账号活跃度**（admin 用户列表），与阅读时间轴**不相干**（易混点，
+  勿拿它当依据）；`notification.ts` 有 30 种 `NotificationType` / 11 个 `NotificationCategory`，
+  但**本项目无通知产生端** ⇒ 「清空通知」仍不做（第 30 期判定的取证补强，**非翻转**）；
+  `maintenance.ts` 的 `sweep` = `CoverSweep` 封面修复维护扫描，与「孤儿记录」概念不同 ⇒ 仍不做；
+  `hardcover.ts` 的 EDITIONS 属外部 Hardcover `edition` ⇒ 第 30 期结论获证。
+- **文档刷新（不整表翻转）**：三份停旧期文档去 ⏳ 改「**时效说明（第 31 期复核，2026-09-20）**」头，
+  一律指向 `capability-gap.md` 为权威 —— `roadmap-verification.md:3-7`（明写正文是 2026-09-17 的 0–4 期快照，
+  保留价值在「当时怎么证的」）、`bookorbit-settings-inventory.md:12-15`、`bookorbit-feature-flows.md:10-13`；
+  `capability-gap.md` §6 新增「阅读活动（时间轴 + 热力图）」行、§7 通知 Clear 取证补强、
+  §1 全局搜索 / 收藏等锚点更新。
+- **修一条第 30 期遗留真 bug**：`tests/test_version_contract.py` 打的是 `/api/health`，而路由是 `/health`
+  （`server.py:248`；白名单 `server.py:160` 只有 `/health` + `/api/auth/login` + `/api/logout`；
+  前端 `lib/api.ts:1698` 也走 `/health`）⇒ 401。全仓 `/api/health` **仅此一处**，改为 `/health` 后通过。
+  根因：第 30 期本机跑不了测试，错误路径一直没暴露。
+- **顺带修 TypeScript 报错**：`BookDetailView.vue` 重复 `fmtDate` 触发 TS2393（第 30 期 `bf6a8ab` 引入，
+  非本期）；新版改名 `fmtDateSlash`。
+
+#### 第 31 期验证
+
+- **全量 pytest：346 例 / 1 failed**。唯一失败 = `test_watcher_auto_fetch::test_audiobook_library_scan_triggers_auto_fetch`
+  （既有 win32 不通，单跑也挂）→ **与基线一致，非本期回归**。另 `test_scrape_publish::test_接口_扫描后按开关自动入队`
+  本次全量挂、单跑该文件过 → 判定为**顺序依赖 flaky**（即早先记忆中「1–2 例扫描→自动入队失败」的真相）。
+- 本期新增测试 7 例全绿：`test_reading_activity.py` 3 + `test_achievements_align.py` 4。
+- 前端 `type-check` / `build` / `deploy` 成功，产物已同步 `novelforge/static/v2`（含「阅读活动 /
+  reading-activity / 阅读热力图 / 时间轴」字符串）。
+- **e2e 冒烟（真进程，非 TestClient）**：另起实例 `--port 8795` + 独立临时目录（8791 被旧代码实例占着，
+  不打扰它）。`GET /api/reading-activity` 空态结构完整（`heatmap{library_id, year, days, total_minutes,
+  active_days}` + `timeline{library_id, events, total}`）；`?year=2025&limit=3` 生效；`?library_id=nope`
+  返回空集合**不 404**。playwright 注入 `nf_token` 后打开 `#/reading-activity`：侧栏入口在、热力图 53×7
+  全网格（`title` 提示 `YYYY-MM-DD · 0 分钟 / 0 次`）、色阶图例、时间轴空态；**控制台 0 错误**。
+  冒烟后停实例、关浏览器、工作区干净。
+- **定位失败的关键手法**（已进 MEMORY）：PowerShell 抓不到 pytest 汇总行（落盘也只有进度条）⇒
+  改用 `--junitxml` 落盘 + Python 解析 `//testcase[failure]`。此前记忆写的是「核对回归请在用户原环境跑」，
+  等于放弃，现已改正。
+
+---
+
+#### 第 32 期实施记录（统计图表补齐 10 张 + 外观两页做实 + 真缺失小项收口）
+
+**主题**：用户拍板三域 —— **统计页图表补齐 + 外观三页做实 + 已知真缺失小项收口**；上游核对深度取
+「聚焦高价值缺口」；图表渲染**引入 ECharts**；统计图表**分两批、本期做前 10 张**。
+⚠️ 用户勾的是「外观三页」，本轮**主动收窄为两页**（Icons 未做，理由见下），**不假装做了第三页**。
+
+**上游形态取证（本轮突破，任务 1）**：第 30 / 31 期连续两次 fetch 失败的上游 `client/` 与
+`server/src/modules`，本轮找到可行路径 —— 镜像 `%TEMP%\bookorbit-ref` 的 **tree 对象本地已有**
+（零网络即可 `git ls-tree` 列出上游全部文件清单，此前只看了 `packages/types`，所以旧「缺口清单」
+系统性漏掉了模块级能力），读内容则**走代理按需拉单个 blob**
+（`git -C $REF -c http.proxy=http://127.0.0.1:7897 cat-file -p HEAD:<path>`）。
+据此取到上游统计页完整图表元数据 `client/src/features/statistics/statistics-chart-meta.ts`：
+**33 张图**（Library 19 / User 14），本项目原有 11 张 ⇒ 缺约 20 张。
+照搬的骨架（全部实拉实读，未取到的不臆测）：`client/src/lib/echarts.ts` —— **单点 `use([...])` 注册**
+（SVGRenderer + 12 图型 + 14 组件；注释 `:34-36` 写明选 SVG 而非 Canvas 是为消除 canvas 命中测试
+坐标错位导致的 hover 闪烁；调色板 `HUE_OFFSETS` + `oklchToHex()` 手写 OKLCH→sRGB，因主题色是 oklch
+变量而 ECharts 不认；`initChartThemes()` 幂等预注册「2 模式 × N 强调色」主题）、`ChartCard.vue`
+（图标底色 `oklch(from var(--primary) l c calc(h + N))` + `#controls` 插槽）、`ChartEmptyState.vue`
+（图标 `size-9 opacity-20` + 标题 + 描述，居中）、`StatisticsGrid.vue`（`tileClass(size)` 映射栅格跨度 +
+`grid-flow-row-dense`）、`useStatisticsConfig.ts`（`config:{id,visible,order}[]` +
+`normalizeCharts` 过滤未知 id 并给新图补默认项 + 600ms 防抖持久化）。
+**上游的低数据量诚实提示阈值逐图照搬**（`reading-clock`/`peak` `MIN_EVENTS=20`、`favorite-days` `=14`、
+`progress-funnel` `MIN_STARTED=10`、`completion-timeline` `MIN_COMPLETIONS=3`），不足阈值走空态文案
+「数据不足」，**不画噪声图**。
+
+**三处硬差异（照搬形态、不照搬数据契约）**
+
+1. 本项目**无 `reading_sessions.source` 列、无按格式分桶** ⇒ 上游 `reading-clock` / `peak-reading-hours` /
+   `favorite-reading-days` 三图的 `BreakdownSelect`（format / source 维度）**没有数据源** ⇒ **不做该控件**
+   （防回归要点「不做假交互」），三图降级为单序列。
+2. 本项目是**单接口 `GET /api/stats`**（上游每图一个 composable 一个 API）⇒ 所有图共用一份 `overview`，
+   新序列一律**增补新键**，不照搬 per-chart 取数层。
+3. 本项目无 `vue-i18n` / shadcn（Sheet / Popover / Dropdown）/ `@lucide/vue` / `@vueuse/core` /
+   `vue-draggable-plus` ⇒ 用既有 `Icon.vue` / `Card.vue` / 原生 `<select>`；Configure 的重排**改用
+   「上移 / 下移」按钮**（不引入拖拽库），功能等价、**零新依赖**（除 `echarts` + `vue-echarts`）。
+
+**一处口径修正**：原计划写「Page Count Distribution → 加 `pages_hist` 分档直方图」，上游实为
+**boxplot 按格式的五数概括**。改按上游形态，新键名 **`pages_by_format`**
+（`{format, count, min, q1, median, q3, max}[]`），只含有页数的书（本项目非 EPUB 页数恒 0，自然排除），
+tooltip 标注样本数。
+
+**交付明细**
+
+- **后端 · 统计序列**（`43fb435`）：`core/stats.py` 增补 8 条序列、`core/db.py` 配套聚合 ——
+  `by_language` / `by_format_size` / `pages_by_format` / `added_monthly` / `publication_yearly` /
+  `progress_funnel` / `completion_monthly` / `weekdays`（周几读多久，与 `hours` 同族）。
+  **全部跟随 `library_id`**（复用 `core/stats.py:97` 的 `ids` 集合，**不新增扫描路径**）；
+  **全部是新键**，既有键**一个未删**。新增 `tests/test_stats_charts.py`（295 行）。
+- **前端 · 图表基建**（`604ddd9` + `b12bcf9`）：装 `echarts` + `vue-echarts`；`lib/charts.ts` 是**全站唯一**
+  的图型注册 / 主题适配入口（按需注册 + 动态 import，跟随 `stores/theme.ts` 深色 / 浅色）；
+  `components/charts/` 下 `ChartCard.vue` / `ChartEmptyState.vue` / `ChartFrame.vue`（动态 import +
+  空态 / 加载态）+ `ChartGrid.vue`（`tileClass(size)` 映射栅格跨度）；`lib/statistics-charts.ts` 存图表元数据
+  （id / label / size / category 与默认顺序，对齐上游常量）、`lib/format.ts` 补格式化工具。
+- **前端 · 10 张图**（`7043dd1` 书库侧 5 张 + `f61ab7d` 阅读侧 5 张）：Books Added Over Time（柱 +
+  `borderRadius:[3,3,0,0]`）/ Language Distribution（环形饼）/ Storage by Format（环形饼 + `formatBytes`）/
+  **Page Count Distribution（boxplot）** / Publication Year Timeline（折线 + 面积 + `dataZoom` +
+  markArea「Golden Era」+ markPoint「Peak」+ 5 年均线 + 底部统计卡）/ Reading Clock（极坐标堆叠柱）/
+  Peak Reading Hours（直角堆叠柱，y 轴 `{value}m`）/ Progress Funnel（五阶段三模式 percent / counts / dropoff）/
+  Completion Timeline（按月折线 + 面积）/ Favorite Reading Days（按星期堆叠柱，y 轴为**平均每日分钟**）。
+  每张都有空态与低数据量提示。
+- **前端 · 接入 + Configure**（`e4c4540`）：`components/charts/ChartConfigPanel.vue`（显隐开关 + 上移 / 下移 +
+  恢复默认）+ `stores/statsChartPrefs.ts`（localStorage `nf-stats-chart-prefs`，600ms 防抖持久化 +
+  读取时校验 + 未知 id 过滤）。
+- **外观 · Layout 页做实**（`882beef`）：新 `stores/displayPrefs.ts` 承载展示类偏好（`coverSize` /
+  `gridGap` / `cardInfoMode` / `authorCoverSize` / `authorCoverShape` / `zebraStriping`），**并入既有
+  `appearance` 偏好块**（`lib/prefsPayload.ts`，**不新增第七块**，避免牵动服务端 `PREFS_BLOCKS`）；
+  `stores/prefSync.ts` 接线；`ShelfView.vue` 的硬编码 Tailwind 栅格类改为 **CSS 变量驱动**
+  （保留响应式断点行为）、`AuthorsView.vue` 消费作者封面尺寸 / 形状、`components/ui/BookCover.vue` 支持形状。
+- **外观 · Behavior 页做实**（`36e0c8e`）：缩略图点击行为（上游 Read first / Open details —— 本项目原为
+  固定进详情，`ShelfView.vue` 的 `onGridClick` / `onEntryClick` / `onTableRowClick` 加分支）、
+  筛选预览默认展开、系列默认折叠，**上游三项全做实**，故该页页尾**没有**「未支持」对照卡。
+- **测试同步**（`c59a649`）：外观两页由 `placeholder` 改 `ready` 后，`tests/test_settings_nav_contract.py`
+  的占位页清单同步。
+- **真缺失小项收口**：
+  - **作者 `sort name`**（`4bfe94b` 后端 + `0b8a92d` 前端）：`authors` 表加列（照抄同表「在线值 / 本地覆盖」
+    分列模式）+ `GET /api/authors` 下发 + `AuthorDetailView.vue` 可编辑 / 恢复在线（照抄 bio 那套）+
+    `AuthorsView.vue` 排序项；新增 `tests/test_author_sort_name.py`（177 行）。
+  - **作者「无头像」快捷筛选**（`c3367d2`）：`AuthorsView.vue` 加过滤项，`has_photo` 字段现成。
+  - **审计日志按操作者筛选**（`5b47013` 后端 + `f6f4218` 前端）：`activity_log.recent()` 加 actor 过滤 +
+    `/api/logs` **可选**参数（不传参输出与改动前一致）+ `AuditLogPage.vue` 控件（该页原有注释如实标注
+    「日志接口尚未支持按 actor 过滤」，本期把它变成真的，注释一并更新）；新增 `tests/test_logs_actor.py`（160 行）。
+  - **侧栏假按钮 + 收藏夹失败提示**（`df59689`）：侧栏「库」组的 add / more 原落到 `ui.demo()`
+    （弹「演示动作：…」，与 `capability-gap.md` 的「全仓不再有看得见但点不动的控件」自我声明冲突），
+    改为真实路由（add → `/#/tools/libraries?new=1` 并自动开新建向导，more → `/#/tools/libraries`）；
+    新建收藏夹**失败**时提示被套上演示前缀的真 bug 改走 `ui.toast`，并在 `lib/api.ts` 新增
+    `apiErrorMessage()` 剥掉后端 `{"detail":"…"}` 的花括号（**只剥壳**，不改 `request()` 的抛错约定，
+    全站既有调用点不受影响）。
+  - **`generic` 书源取消注册**（`26795f9`）：该模板类两个抽象方法都 `raise NotImplementedError`，
+    却 `@register` 进了 `REGISTRY` ⇒ **每次 `/api/search` 都命中它、抛异常、被吞成一条
+    「书源 generic 搜索失败」假失败日志**，还白建一次 `BrowserClient`。去掉 `@register`
+    （`sources/__init__.py` 刻意不导入它）并在 docstring 与 README 写明「模板类不注册、JSON 规则源
+    （`CONFIG_DIR/sources/*.json`）是首选路径」；新增 `tests/test_sources_registry.py`（5 例，含零网络桩
+    与「接口 404」式防回归断言）。
+  - **陈旧文案与注释订正**（`f44c634`）：`BookDockPage.vue` 的「未支持」卡把**已实现**的「投递后自动抓
+    元数据」列成未支持（实测 `metadata_fetch.auto_on_import` 自第 5 期就在 `core/watcher.py:84` 与
+    `metadata_fetch.enabled` 双重门控，多个入库点调 `auto_fetch_async`）⇒ 本轮**实拉上游**
+    `client/src/features/settings/BookDockSettings.vue`（295 行）逐行核对后重写：上游 AUTO-FINALIZE 组 =
+    开关 + 0–100 分阈值 + 目标库 + 合并模式 + 目标文件夹（`:207-287`），本项目缺的是「目标库 / 文件夹 /
+    合并模式」这组配置，而本项目的 0–1 置信度阈值只是**候选筛选**阈值，两者不是一回事；
+    `BookDetailView.vue:23` 原写「引入 SQLite 后（Batch 2）接入」（已改写为「阅读进度 `:259` `api.getProgress`」）；`data/nav.ts` 的「`_` 开头的 id」说法
+    与**整个 `VIEW_META` 死表**（7 个 key 一个都到不了）+ `PlaceholderView.vue` / `router/index.ts`
+    相应改写为「未知路由兜底」。
+
+**明确不做（附理由，不做假动作）**
+
+- **外观 Icons 页**：上游是「图标风格 + 自定义图标上传 + 排序」。本项目图标是内联 SVG 常量集
+  （`lib/icons.ts`），做「风格」需多套图标集、「上传」需存储 + 覆盖机制，成本远超收益 ⇒ **保持
+  placeholder 并如实标注**。
+- 上游统计图的 `metadata-freshness-gauge`（第 30 期已判「价值低」）、`reading-source-distribution`
+  （本项目无 `source` 列）、`goal-trajectory`（本项目无阅读目标设置）—— 三张不只不做，且**不补死 UI**。
+- 上游 `client/` 全量取证、69 个后端模块逐模块对照：用户未选，本期只按需拉本期要照搬的文件。
+- `win32` 那例长期失败与顺序依赖 flaky 两例：**列为观察项不列为交付**（根因未定位，属既有 win32 不通）。
+
+**备查（本轮未改）**：侧栏「库」组底部的 more 行仍写「查看全部书库（3）」—— 括号里是书库数、点下去是
+「看全部书库的书」，读法含糊但**不属假动作**；要改得动 more 行的 label + count 契约，超出「订正文案」的
+范围，留待后续。
+
+#### 第 32 期验证
+
+- **后端全量 pytest：388 例 / 1 failed**，唯一失败仍是既有的 win32 不通那例
+  （`test_watcher_auto_fetch::test_audiobook_library_scan_triggers_auto_fetch`）→ **非本期回归**。
+  本期新增 4 个测试文件全绿：`test_stats_charts.py` / `test_author_sort_name.py` / `test_logs_actor.py` /
+  `test_sources_registry.py`。
+- **统计接口向后兼容实测**：`/api/stats` 的**既有 16 个键一个不少** + 8 条新序列齐全且带真实数据；
+  按库收窄生效（`default` 空库的阅读侧序列全 0、**形状固定**，`days` 是分母）；未知库 **200 + 空集合不 404**
+  （与第 31 期 `/api/reading-activity` 同惯例）。
+- **前端 e2e（8795 实例 + playwright）**：统计页两分区各 5 张图**全部渲染**（`inst:5`，每张都
+  `withSvgPath:5`，标题逐一核对），Configure 隐藏一张 → 图数 5→4、**刷新后仍隐藏**（`checkboxStillOff:true`）、
+  重排刷新后保留、「恢复默认」生效；外观 layout / behavior 两页存活（5 / 3 个控件）；
+  **`ext: []` 零外部请求、`errs: []` 无控制台错误**。
+- **小项 e2e**：侧栏「新建」→ `/#/tools/libraries?new=1` 且新建书库弹窗自动打开、「更多」→
+  `/#/tools/libraries` 且弹窗不开；收藏夹同名连建两次 → 第一次进列表、第二次 toast 为「同名收藏夹已存在」
+  （**无「演示动作」前缀、无花括号**）；`generic` 取消注册的因果链用**离线探针坐实**（现注册
+  `['gutenberg']` → 无假失败日志；手工 `register(GenericHtmlSource)` 回去 → 复现「书源 generic 搜索失败：
+  请实现 search()…」）；Book Dock 页分组标签只剩 AUTO-FINALIZE、旧文案（「尚未接线」「见第 7 期 B2」）绝迹；
+  `/#/placeholder/_authors` 与任意未知路径照常渲染兜底页。
+- **两处记号偏差的更正（记录在案，避免后续误读为缺陷）**：① 复核时按计划里的旧名 `weekday_minutes`
+  去对响应，发现实现的真名是 **`weekdays`** —— 系「拿计划里的旧名当清单」的记号问题，**不是缺陷**，
+  改用真名复核后 8 条新序列全部在位且带真实数据；② `LayoutPage` 的「上游还有、本项目未支持」卡经逐项
+  核对是**准确的**（列 4 项真未做 + 理由），与 BookDock 那张（已实现却写着未支持）**不同，不需改**。
 
 ---
 
