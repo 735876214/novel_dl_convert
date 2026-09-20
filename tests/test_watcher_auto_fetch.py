@@ -138,3 +138,32 @@ def test_auto_fetch_not_triggered_when_disabled(isolated, make_library, monkeypa
     watcher.wait_pending(5.0)
 
     assert calls == [], f"未开 auto_on_import 不应触发，实际：{calls}"
+
+
+def test_audio_dir_not_mistaken_for_empty_file(isolated, make_library, make_audio_dir, monkeypatch):
+    """回归（第 33 期）：音频目录不能被「空文件」检查拦掉。
+
+    `handle_file` 原用 `p.stat().st_size == 0` 判空文件，而 **Windows 上目录的
+    `st_size` 恒为 0**（NTFS 的目录大小字段）—— 于是音频目录在到达下面的
+    `p.is_dir()` 分支**之前**就被判「空文件」返回 `("skipped", "空文件")`，
+    表现为「win32 上有声书永远不入库」。
+
+    这条用例**故意直接断言 `handle_file` 的返回值**：上面的
+    `test_audiobook_library_scan_triggers_auto_fetch` 虽然也会因此失败，但它的
+    失败信息只是「auto_fetch 未被调用」，看不出根因（第 33 期实测：定位它需要
+    逐层打印 `_scan_locked` 的返回值才明白是 `skipped`）。
+    """
+    monkeypatch.setattr("novelforge.core.scrape.enabled", lambda lid: False)
+    src = config.LIBRARY_SOURCE_DIR
+    storage = config.OUTPUT_DIR
+    make_library("audio9", "有声书库9", "audiobook", storage, mode="import", source_subdir="audios9")
+    d = make_audio_dir(src / "audios9", "回归有声书", tracks=2)
+
+    w = _make_watcher()
+    kind, detail = w.handle_file(d)
+
+    assert not (kind == "skipped" and detail == "空文件"), (
+        "音频目录被误判为空文件 —— Windows 上目录 st_size 恒为 0，"
+        f"空文件检查必须排除目录：{(kind, detail)}"
+    )
+    assert kind == "added", f"音频目录应入库，实际：{(kind, detail)}"

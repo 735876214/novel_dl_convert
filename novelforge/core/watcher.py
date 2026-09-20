@@ -390,11 +390,16 @@ class FolderWatcher:
         （跳过来源子目录名路由，避免又被按格式/关键词改派到别的库）；为 ``None``
         时走既有 ``_target`` 路由（全局 INPUT_DIR 路径）。
         """
+        # ⚠️ 空文件检查只对**文件**生效：Windows 上目录的 `st_size` **恒为 0**
+        # （NTFS 的目录大小字段），若一并拦掉，音频目录（有声书）会在到达下面的
+        # `p.is_dir()` 分支之前就被判「空文件」跳过 —— 表现为「win32 上有声书
+        # 永远不入库」。目录的大小另有 `_sig()` 递归汇总，不靠 `st_size`。
+        is_dir = p.is_dir()
         try:
             size = p.stat().st_size
         except OSError as e:
             return ("failed", str(e))
-        if size == 0:
+        if not is_dir and size == 0:
             return ("skipped", "空文件")
 
         t0 = time.time()
@@ -413,7 +418,7 @@ class FolderWatcher:
         copy_non_txt = bool((cfg.get("watcher") or {}).get("copy_non_txt", self.copy_non_txt))
         from . import library_rules  # 延迟导入：与 _target 同理，避免 core 内循环依赖
 
-        if p.is_dir():
+        if is_dir:
             # 有声书目录：整树复制为一本书目目录（名字不带扩展名）
             if not audio.is_audio_dir(p):
                 return ("skipped", "非音频目录")
