@@ -9,9 +9,10 @@
 3. **只解锁、不回退**：书删了、批注删了，已解锁的成就不会消失 ——
    那是对「曾经做到过」的记录，不是一个当前状态的投影。
 
-⚠️ 下方的 :data:`ACHIEVEMENTS` 是**起步集**，目的是把
-   「目录 → 判定 → 解锁 → 接口 → 页面」这条链路先打通并验证；
-   具体条目名 / 阈值 / 分组待确认后再定，改这一份列表即可。
+⚠️ 下方的 :data:`ACHIEVEMENTS` 第 31 期已对齐上游 `achievement.ts` 的 5 分类
+   （library / reading / exploration / dedication；`devices` 因缺 `source` 列刻意不做）。
+   `rarity / tier / hidden / iconName` 等上游展示层概念本项目有意简化为无。
+   具体条目名 / 阈值 / 分组仍集中在此列表，改这一份即可，无需改其它代码。
 """
 from __future__ import annotations
 
@@ -20,12 +21,18 @@ import time
 from .. import config
 from . import db, stats
 
-# ---- 分组（按能力面，不按难度）----
-GROUP_LIBRARY = "LIBRARY"        # 书库规模
-GROUP_READING = "READING"        # 阅读行为
-GROUP_ANNOTATION = "ANNOTATION"  # 批注
+# ---- 分组（对齐上游 5 分类：reading / library / exploration / dedication / devices）----
+# 上游 `packages/types/src/achievement.ts` 定义 5 个分类；本项目对齐前 4 个：
+#   library / reading / exploration（批注归入「探索」内容）/ dedication（长周期坚持）。
+# `devices` 分类**刻意不做**：上游依赖 `reading_sessions.source` 多设备分桶，本项目
+# `reading_sessions` 表无 `source` 列，无法喂数据（见 docs/bookorbit-capability-gap.md §6）。
+# 上游还有 rarity / tier / hidden / iconName 等展示层概念，本项目有意简化为无（不改判定逻辑）。
+GROUP_LIBRARY = "library"
+GROUP_READING = "reading"
+GROUP_EXPLORATION = "exploration"
+GROUP_DEDICATION = "dedication"
 
-# ---- 目录（起步集）----
+# ---- 目录（第 31 期对齐上游分类）----
 # metric 必须存在于 _metrics()；target 为达成阈值（含等于）。
 ACHIEVEMENTS: list = [
     # 书库规模
@@ -66,11 +73,21 @@ ACHIEVEMENTS: list = [
     {"key": "active_days_30", "group": GROUP_READING, "metric": "days", "target": 30,
      "name": "活跃三十天", "desc": "累计 30 天有阅读记录（无需连续）"},
 
-    # 批注
-    {"key": "first_note", "group": GROUP_ANNOTATION, "metric": "annotations", "target": 1,
+    # 探索（批注）
+    {"key": "first_note", "group": GROUP_EXPLORATION, "metric": "annotations", "target": 1,
      "name": "第一条批注", "desc": "记下第一条批注"},
-    {"key": "notes_50", "group": GROUP_ANNOTATION, "metric": "annotations", "target": 50,
+    {"key": "notes_50", "group": GROUP_EXPLORATION, "metric": "annotations", "target": 50,
      "name": "五十条批注", "desc": "累计 50 条批注"},
+
+    # 坚持（长周期，dedication）
+    {"key": "streak_100", "group": GROUP_DEDICATION, "metric": "streak", "target": 100,
+     "name": "百日坚持", "desc": "连续 100 天有阅读记录"},
+    {"key": "hours_500", "group": GROUP_DEDICATION, "metric": "hours", "target": 500,
+     "name": "五百小时", "desc": "累计阅读 500 小时"},
+    {"key": "active_days_100", "group": GROUP_DEDICATION, "metric": "days", "target": 100,
+     "name": "百日为伴", "desc": "累计 100 天有阅读记录（无需连续）"},
+    {"key": "finished_50", "group": GROUP_DEDICATION, "metric": "finished", "target": 50,
+     "name": "五十本达成", "desc": "读完 50 本书"},
 ]
 
 

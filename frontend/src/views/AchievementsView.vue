@@ -17,8 +17,8 @@ import { useUiStore } from '@/stores/ui'
  *   · 进度由后端**实时计算**，不落库（删了书进度会变，但已解锁的不变）；
  *   · **解锁只增不退** —— 曾经达成过就是达成过，不因为书被删掉而回收。
  *
- * ⚠️ 当前成就目录是**起步集**（`core/achievements.py` 的 `ACHIEVEMENTS`），
- * 条目名与阈值待定。本页保证的是「目录 → 判定 → 解锁 → 展示」这条链路可用。
+ * ⚠️ 成就目录第 31 期已对齐上游 5 分类（library / reading / exploration / dedication，
+ * `devices` 因缺阅读会话 source 列刻意不做）。本页保证「目录 → 判定 → 解锁 → 展示」链路可用。
  */
 const ui = useUiStore()
 const data = ref<AchievementsOverview | null>(null)
@@ -26,9 +26,10 @@ const loading = ref(true)
 const busy = ref(false)
 
 const GROUP_LABELS: Record<string, string> = {
-  LIBRARY: '书库',
-  READING: '阅读',
-  ANNOTATION: '批注',
+  library: '书库',
+  reading: '阅读',
+  exploration: '探索',
+  dedication: '坚持',
 }
 
 const grouped = computed(() => {
@@ -213,7 +214,7 @@ onMounted(load)
           <Icon name="alert" class="mt-0.5 h-3.5 w-3.5 shrink-0" />
           <span>
             进度由后端实时计算、不落库；<strong>解锁只增不退</strong>——曾经达成过就是达成过，
-            不因为删掉书而回收。当前成就目录是起步集，条目与阈值待定（见
+            不因为删掉书而回收。成就目录第 31 期已对齐上游 5 分类（`devices` 除外，见
             <span class="font-mono">core/achievements.py</span> 的 ACHIEVEMENTS）。
           </span>
         </div>
