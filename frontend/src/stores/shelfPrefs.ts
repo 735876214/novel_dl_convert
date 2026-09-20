@@ -16,6 +16,8 @@ export type ShelfSort = 'title' | 'author' | 'series' | 'added' | 'progress' | '
 export type SortDir = 'asc' | 'desc'
 /** 书卡信息密度：紧凑只给书名 / 标准加作者 / 详细再加格式·年份·页数 */
 export type CardInfo = 'compact' | 'standard' | 'detailed'
+/** 点击缩略图 / 书卡后去哪：先看详情（默认）还是直接开读 */
+export type ThumbnailClick = 'details' | 'reader'
 
 export interface ShelfPrefs {
   view: ShelfView
@@ -23,6 +25,16 @@ export interface ShelfPrefs {
   dir: SortDir
   /** 折叠同系列：同系列的书合成一张卡 / 一行 */
   collapseSeries: boolean
+  /**
+   * 缩略图点击行为（对应上游 Behavior 页的 Thumbnail clicks）。
+   * 默认 `details` —— 与这个开关存在之前的行为一致，老用户的书架不会突然换手感。
+   */
+  thumbnailClick: ThumbnailClick
+  /**
+   * 进书架页时统一筛选面板默认展开（对应上游 Behavior 的 Show filter preview by default）。
+   * ⚠️ 这是**偏好**（初值），不是当前开合状态 —— 用户展开/收起一次不该改掉默认值。
+   */
+  filtersOpenByDefault: boolean
 }
 
 const KEY = 'nf-shelf-prefs'
@@ -32,7 +44,14 @@ export const SHELF_PREFS_DEFAULT: ShelfPrefs = {
   sort: 'added',
   dir: 'desc',
   collapseSeries: false,
+  thumbnailClick: 'details',
+  filtersOpenByDefault: false,
 }
+
+export const THUMBNAIL_CLICK_OPTIONS: { value: ThumbnailClick; label: string; hint: string }[] = [
+  { value: 'details', label: '先看详情', hint: '点封面进书籍详情页' },
+  { value: 'reader', label: '直接阅读', hint: '能在线读的格式直接进阅读器' },
+]
 
 export const SHELF_VIEW_OPTIONS: { value: ShelfView; label: string }[] = [
   { value: 'grid', label: '网格' },
@@ -70,6 +89,11 @@ function read(): ShelfPrefs {
         : SHELF_PREFS_DEFAULT.sort,
       dir: p.dir === 'asc' || p.dir === 'desc' ? p.dir : SHELF_PREFS_DEFAULT.dir,
       collapseSeries: Boolean(p.collapseSeries),
+      // 老存档没有这个字段 ⇒ 落回 `details`，与开关出现之前的行为一致
+      thumbnailClick: THUMBNAIL_CLICK_OPTIONS.some((o) => o.value === p.thumbnailClick)
+        ? (p.thumbnailClick as ThumbnailClick)
+        : SHELF_PREFS_DEFAULT.thumbnailClick,
+      filtersOpenByDefault: Boolean(p.filtersOpenByDefault),
     }
   } catch {
     return { ...SHELF_PREFS_DEFAULT }
@@ -80,8 +104,11 @@ export const useShelfPrefsStore = defineStore('shelfPrefs', () => {
   const prefs = ref<ShelfPrefs>(read())
   /** 书卡信息密度是书架级的独立偏好（不在 ShelfPrefs 里，因为它更像「显示」而非「书架状态」） */
   const cardInfo = ref<CardInfo>('standard')
-  /** 是否展开统一筛选面板 */
-  const filtersOpen = ref(false)
+  /**
+   * 是否展开统一筛选面板。**当前开合状态**，初值取偏好 `filtersOpenByDefault` ——
+   * 用户展开/收起只改状态、不改偏好，所以「默认」要回设置页改。
+   */
+  const filtersOpen = ref(prefs.value.filtersOpenByDefault)
 
   function save(): void {
     try {

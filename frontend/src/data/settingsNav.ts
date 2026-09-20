@@ -133,14 +133,14 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
         },
         note: '未实现：书库视图密度 / 封面尺寸 / 网格间距 / 卡片信息模式等由前端统一定制，不暴露为逐项设置。此页仅作上游对照。',
       }),
-      p('appearance/behavior', 'Behavior', '浏览行为', 'placeholder', {
+      p('appearance/behavior', 'Behavior', '浏览行为', 'ready', {
         upstream: {
           title: 'Behavior',
           desc: 'How the library reacts as you browse and sort.',
           groups: ['LIBRARY BEHAVIOR'],
           items: ['Thumbnail clicks（Read first / Open details）', 'Show filter preview by default', 'Collapse series by default'],
         },
-        note: '未实现：缩略图点击行为 / 筛选预览默认展开 / 系列默认折叠等浏览行为由前端固定，不暴露为设置。此页仅作上游对照。',
+        note: '已实现上游该页全部三项（缩略图点击 / 筛选预览默认展开 / 系列默认折叠）—— 故无「未支持」对照卡。三项存本机，与书架视图偏好同一份，不随账号同步。',
       }),
       p('appearance/language', 'Language', '界面语言', 'placeholder', {
         upstream: {

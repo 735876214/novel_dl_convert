@@ -137,18 +137,18 @@ async function runBatch(action: string, params: Record<string, unknown>): Promis
 function onGridClick(r: any): void {
   if (!r.book) return
   if (selectMode.value && !isSeriesRow(r)) { toggleSelect(r.book.id); return }
-  if (r.book) openBook(r.book.id)
+  if (r.book) openBook(r.book.id, r.book.format)
 }
 function onEntryClick(e: any): void {
   if (!e.book) return
   if (selectMode.value && e.kind === 'book') { toggleSelect(e.book.id); return }
-  openBook(e.book.id)
+  openBook(e.book.id, e.book.format)
 }
 function onTableRowClick(row: any): void {
   if (!row.book) return
   // 系列行（带 toggle）没有勾选框，与网格口径一致：不参与多选
   if (selectMode.value && !row.toggle) { toggleSelect(row.book.id); return }
-  openBook(row.book.id)
+  openBook(row.book.id, row.book.format)
 }
 
 function batchStatus(s: string): void { runBatch('set_status', { status: s }) }
@@ -405,7 +405,23 @@ function chip(active: boolean): string {
     : 'bg-muted text-muted-foreground hover:text-foreground'
 }
 
-function openBook(id: string): void {
+/**
+ * 能**在线读**的格式 —— 与 `ReaderView` 的分流口径一致（章节流 / PDF / 漫画）。
+ * 这不是「本项目支持的格式」清单，而是「点进去有东西看」的清单。
+ */
+const READABLE_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR'])
+
+/**
+ * 打开一本书。默认进详情；「浏览行为 → 缩略图点击」选了「直接阅读」时进阅读器。
+ *
+ * ⚠️ 打不开的格式（MOBI、有声书等）**仍进详情**：那个开关的语义是「先去哪儿」，
+ * 不是「强制进阅读器」—— 让用户点一下只换来一句「点不了」是更差的体验。
+ */
+function openBook(id: string, format?: string): void {
+  if (prefs.prefs.thumbnailClick === 'reader' && READABLE_FORMATS.has((format || '').toUpperCase())) {
+    router.push(`/read/${id}`)
+    return
+  }
   router.push(`/book/${id}`)
 }
 

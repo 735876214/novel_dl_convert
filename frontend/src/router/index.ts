@@ -41,6 +41,7 @@ import SmartScopesView from '@/views/SmartScopesView.vue'
 import ReaderFontsPage from '@/views/settings/pages/ReaderFontsPage.vue'
 import PdfPage from '@/views/settings/pages/PdfPage.vue'
 import ComicsPage from '@/views/settings/pages/ComicsPage.vue'
+import BehaviorPage from '@/views/settings/pages/BehaviorPage.vue'
 import ReaderAudioPage from '@/views/settings/pages/ReaderAudioPage.vue'
 import OpdsPage from '@/views/settings/pages/OpdsPage.vue'
 import KomgaPage from '@/views/settings/pages/KomgaPage.vue'
@@ -72,6 +73,7 @@ export const SETTINGS_PAGE_COMPONENTS: Record<string, Component> = {
   'account/notifications': NotificationsPage,
   'appearance/theme': ThemePage,
   'appearance/book-covers': CoverPage,
+  'appearance/behavior': BehaviorPage,
   'reader/ebook': ReaderEbookPage,
   'reader/pdf': PdfPage,
   'reader/comics': ComicsPage,
