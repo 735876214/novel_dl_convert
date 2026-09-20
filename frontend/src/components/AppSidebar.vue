@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Icon from '@/components/ui/Icon.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { isShelfGroup, type NavItem } from '@/data/nav'
+import { apiErrorMessage } from '@/lib/api'
 import { useCollectionsStore } from '@/stores/collections'
 import { useLibraryStore } from '@/stores/library'
 import { useNavStore } from '@/stores/nav'
@@ -191,8 +192,14 @@ function onItemClick(groupTitle: string | null, item: NavItem): void {
   router.push(pathFor(item.id))
 }
 
-/** 分组头部的「新增 / 更多」：收藏夹的「新增」走真实创建，其余仍是演示态 */
+/** 分组头部的「新增 / 更多」：三组各自接到真实去处，不再有演示态动作 */
 async function onGroupAction(title: string, action: 'add' | 'more'): Promise<void> {
+  if (title === '库') {
+    // 「新增」直达书库管理页的新建弹窗（`?new=1`，见 LibrariesView 的 onMounted）；
+    // 「更多」进同一页 —— 库的增删改都在那里，本项目没有第二个书库管理界面。
+    router.push(action === 'add' ? '/tools/libraries?new=1' : '/tools/libraries')
+    return
+  }
   if (title === '智能书架' && action === 'add') {
     router.push('/smart-scopes')
     return
@@ -203,12 +210,14 @@ async function onGroupAction(title: string, action: 'add' | 'more'): Promise<voi
       try {
         await collections.create(name.trim())
       } catch (e) {
-        ui.demo(e instanceof Error ? e.message : '创建收藏夹失败')
+        // ⚠️ 这里原本是 ui.demo(...)：真失败被套上「演示动作：」前缀，看着像在演戏
+        ui.toast(apiErrorMessage(e, '创建收藏夹失败'))
       }
     }
     return
   }
-  nav.navAction(title, action)
+  // 兜底：不再有假动作。真出现没接线的分组就如实说，不弹「演示动作」
+  ui.toast(`「${title}」分组暂无对应页面`)
 }
 </script>
 

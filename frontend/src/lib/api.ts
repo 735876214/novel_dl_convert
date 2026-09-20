@@ -1726,6 +1726,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
+/**
+ * 把接口抛出的错误转成**能给用户看的一行字**。
+ *
+ * `request()` 抛的是后端响应原文，而后端错误体是 `{"detail":"同名收藏夹已存在"}`
+ * —— 直接 `e.message` 塞进 toast 会把花括号和键名一起露给用户。
+ * 这里只做「剥壳」，不改 `request()` 本身的抛错约定（全站既有调用点不受影响）。
+ */
+export function apiErrorMessage(e: unknown, fallback: string): string {
+  if (!(e instanceof Error) || !e.message) return fallback
+  try {
+    const parsed: unknown = JSON.parse(e.message)
+    if (parsed && typeof parsed === 'object') {
+      const d = (parsed as { detail?: unknown }).detail
+      if (typeof d === 'string' && d.trim()) return d
+    }
+  } catch {
+    /* 非 JSON 响应体（如纯文本 / HTML 错误页）：原样用之 */
+  }
+  return e.message
+}
+
 /** 下载类接口返回文件流（后端用 FileResponse(filename=...) 在 Content-Disposition 给真实文件名）。 */
 export interface BlobResult {
   blob: Blob

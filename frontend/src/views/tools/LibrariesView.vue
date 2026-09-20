@@ -8,6 +8,7 @@
  *   3. 当前库能力 —— 解释「为什么某些菜单不见了」（否则用户会以为功能丢了）。
  */
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -26,6 +27,7 @@ import {
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
+const route = useRoute()
 const ui = useUiStore()
 const library = useLibraryStore()
 const { cfg, setVal, saveSection, saving, loadConfig } = useSettingsConfig()
@@ -78,6 +80,8 @@ async function reload(force = false): Promise<void> {
 onMounted(() => {
   void reload()
   void loadConfig(false, true)
+  // 侧栏「库」组的「新增」按钮带 `?new=1` 进来，直达新建弹窗（见 AppSidebar.onGroupAction）
+  if (route.query.new) openCreate()
 })
 
 // ---------------- 迁移 ----------------

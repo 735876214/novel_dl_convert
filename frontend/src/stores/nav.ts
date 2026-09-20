@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 import { isShelfGroup, NAV_GROUPS, type NavItem } from '@/data/nav'
-import { useUiStore } from './ui'
 
 /**
  * 侧栏 store：分组折叠状态 + 「库」组筛选 + 任务计数。
@@ -56,13 +55,6 @@ export const useNavStore = defineStore('nav', () => {
     return items.filter((it) => itemVisible(groupTitle, it))
   }
 
-  /** 分组头部的「新增 / 更多」按钮（演示态） */
-  function navAction(title: string, action: 'add' | 'more'): void {
-    const ui = useUiStore()
-    const label = action === 'add' ? '新增' : '更多'
-    ui.demo(`${label}${title}`)
-  }
-
   return {
     groups,
     collapsed,
@@ -73,6 +65,5 @@ export const useNavStore = defineStore('nav', () => {
     itemVisible,
     filteredItems,
     isShelfGroup,
-    navAction,
   }
 })

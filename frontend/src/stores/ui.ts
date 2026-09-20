@@ -36,11 +36,11 @@ export const useUiStore = defineStore('ui', () => {
     sidebarCollapsed.value = !sidebarCollapsed.value
   }
 
-  /** 占位动作：统一打上「演示动作」前缀，便于将来区分哪些是假按钮 */
-  function demo(label: string): void {
-    toast(`演示动作：${label}`)
-  }
-
+  /**
+   * ⚠️ 这里原本有个 `demo(label)`：给占位按钮统一打「演示动作：」前缀的 toast。
+   * 第 32 期把**最后一个调用点**（侧栏「库」组的假按钮）接上真实路由后，它已无任何
+   * 调用者，故删掉 —— 留着只会让「再塞个假按钮」变得顺手。
+   */
   return {
     toastMessage,
     drawerOpen,
@@ -49,6 +49,5 @@ export const useUiStore = defineStore('ui', () => {
     toggleDrawer,
     setDrawer,
     toggleSidebar,
-    demo,
   }
 })
