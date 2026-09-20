@@ -795,6 +795,10 @@ tooltip 标注样本数。
     ⇒ 能力模块 66 个；清单见 `docs/bookorbit-module-inventory.md`（含 16 个此前从未被判定过的模块）。
     `client/` 的 33 个 feature 也一并列了对照表。**本期只产出清单，不实现清单项。**
 - `win32` 那例长期失败与顺序依赖 flaky 两例：**列为观察项不列为交付**（根因未定位，属既有 win32 不通）。
+  - **第 33 期订正**：其中 `test_audiobook_library_scan_triggers_auto_fetch` **已定位并修复** ——
+    它**不是 flaky 而是产品 bug**（win32 上目录 `st_size` 恒为 0，音频目录被 `handle_file` 的空文件
+    检查拦掉 ⇒ 有声书永不入库）。另两例（顺序依赖那例 + `test_series_meta.py` 候选）本轮**未复现**，
+    机制已分析、**按拍板不改测试逻辑**。详见下方 `#### 第 33 期验证` 的 B 段。
 
 **备查（本轮未改）**：侧栏「库」组底部的 more 行仍写「查看全部书库（3）」—— 括号里是书库数、点下去是
 「看全部书库的书」，读法含糊但**不属假动作**；要改得动 more 行的 label + count 契约，超出「订正文案」的
@@ -823,6 +827,53 @@ tooltip 标注样本数。
   去对响应，发现实现的真名是 **`weekdays`** —— 系「拿计划里的旧名当清单」的记号问题，**不是缺陷**，
   改用真名复核后 8 条新序列全部在位且带真实数据；② `LayoutPage` 的「上游还有、本项目未支持」卡经逐项
   核对是**准确的**（列 4 项真未做 + 理由），与 BookDock 那张（已实现却写着未支持）**不同，不需改**。
+
+#### 第 33 期验证
+
+**A. 上游模块级系统取证**：见 `docs/bookorbit-module-inventory.md`（67 个目录逐条判定 + 33 个 feature
+对照 + 一条方法学警告「按模块名 grep 得出的覆盖结论是错的」）。**本期只产出清单，不实现清单项。**
+
+**B. win32「flaky」的真相**：一例是产品 bug，另两例本轮未复现
+
+| 用例 | 第 33 期结论 |
+| --- | --- |
+| `test_watcher_auto_fetch::test_audiobook_library_scan_triggers_auto_fetch` | **已定位并修复** —— 不是 flaky，是**产品 bug**（见 ①） |
+| `test_scrape_publish::test_接口_扫描后按开关自动入队` | **未复现** —— 机制已分析（见 ②），**不改测试逻辑** |
+| `test_series_meta.py`（第 33 期新观察到的候选） | **未复现** —— 同上 |
+
+**① 第一例 = 产品 bug（已修，commit `16b0fb1`）**：`FolderWatcher.handle_file` 开头用
+`p.stat().st_size == 0` 判「空文件」，而 **Windows 上目录的 `st_size` 恒为 0**（NTFS 的目录大小字段）
+⇒ 音频目录（有声书）在到达 `p.is_dir()` 分支**之前**就被判「空文件」跳过 ⇒ **win32 上有声书永远
+不入库**。Linux 上目录 st_size 非 0，所以 CI / 开发机一直没暴露，只在 win32 稳定复现。
+
+> **定位难点值得记**：该用例的报错只有「auto_fetch 未被调用」（`calls == []`），**完全不指向根因**。
+> 逐层打印后才看到 `_scan_locked` 返回 `{'scanned': 1, 'skipped': 1}` —— 即「条目进了流程但被跳过」，
+> 再比对 `p.stat().st_size`（0）与 `_sig()`（对目录递归汇总，本来就是对的）才锁定。
+> 另外「**长期稳定失败**」本身就是线索：**真 flaky 不会次次都挂**。
+> 新增 `test_audio_dir_not_mistaken_for_empty_file` 直指 `handle_file` 的返回值；已实测
+> 「临时改回旧逻辑 ⇒ 恰好这两例失败」，确认断言真能捕获该 bug。
+
+**② 第二例 = 未复现，机制如下（不改测试逻辑，如实记录）**：该用例 `assert st["total"] == 1`
+（`test_scrape_publish.py:442`）断言的是**全局**队列，而
+
+- `total` = `sum(db.scrape_counts().values())`（`server.py:2700`）= **`scrape_items` 表全表行数**；
+- `_quiesce_background` 收尾走 `scrape.stop(timeout=2.0)`（`conftest.py:98`）—— **超时后线程仍在**；
+- `isolated` 会 `db.close()` + `db.init()` 换一套空库，但**残留线程下次取连接拿到的是新库**。
+
+⇒ 残留 worker 要么经 `db.scrape_delete`（`scrape.py:230`「书库已不在」/ `:316`「源与副本都不在」）
+**删行**（total 变 0），要么 upsert **插行**（total 变 2）。两种都让断言落空，**且时序决定是否发生**
+—— 这正是「单跑必过、全量偶挂」的形状。
+
+**为何本轮复现不了**：本机离线，worker 首次外呼**快速失败** ⇒ 秒退 ⇒ `stop(timeout=2.0)` 总能收干净。
+历史上偶发时应是 worker 卡在超时里、2s 收不掉。**按用户拍板「定位不到就不硬改」**：既不改测试逻辑，
+也不动 `total` 的口径（那会改变页面上「概览计数」的语义）。
+
+**③ 第三例候选（`test_series_meta.py`）**：2026-09-20 那轮曾连跑三次、每次随机挂 1–2 例（受害者每次
+不同，报错都落在 `fileops.patch_epub_meta` → `_rewrite_zip_opf`），怀疑同样是「残余 worker 持句柄」。
+**第 33 期 4 轮全量一次未复现**，故只保留观察项，不做任何改动。
+
+**④ 全量基线**：**404 例 / 0 failed**（第 32 期基线 388 例 / 1 failed；例数增加系本期新增的统计接口
+测试）。第 33 期共跑 4 轮全量，**全部 0 failed**。
 
 ---
 
