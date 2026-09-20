@@ -854,22 +854,33 @@ def daily_seconds(days: int = 28, book_ids: set | None = None) -> list:
     return buckets
 
 
+def _reading_zone():
+    """阅读**时段图**的账号时区；``None`` = 回落服务器本地时。
+
+    第 25 期起按账号时区归一：设置过 timezone 才转换，否则回落本地（保持历史口径，
+    避免老库无时区时分布突变）；解析失败同样回落本地。
+
+    ``hour_histogram``（几点读）与 ``weekday_histogram``（周几读）同属时段分布图，
+    口径必须一致 —— 两处共用这一个判定，别再各写一份。
+    """
+    tz = (get_user_profile().get("timezone") or "").strip()
+    if tz and ZoneInfo is not None:
+        try:
+            return ZoneInfo(tz)
+        except Exception:
+            return None
+    return None
+
+
 def hour_histogram(book_ids: set | None = None) -> list:
     """会话开始时段的 24 小时分布。
 
-    第 25 期起按账号时区归一：设置过 timezone 才转换，否则回落服务器本地时
-    （保持历史口径，避免老库无时区时分布突变）。时区解析失败同样回落本地时。
+    时区口径见 ``_reading_zone``。
 
     ``book_ids`` 语义同 ``reading_totals``（None = 全部）。
     """
     c = _connect()
-    tz = (get_user_profile().get("timezone") or "").strip()
-    zone = None
-    if tz and ZoneInfo is not None:
-        try:
-            zone = ZoneInfo(tz)
-        except Exception:
-            zone = None
+    zone = _reading_zone()
     buckets = [0] * 24
     for r in c.execute("SELECT book_id, started_at FROM reading_sessions").fetchall():
         if book_ids is not None and r["book_id"] not in book_ids:
@@ -895,6 +906,76 @@ def active_days(book_ids: set | None = None) -> list:
         for r in rows
         if book_ids is None or r["book_id"] in book_ids
     })
+
+
+def weekday_histogram(book_ids: set | None = None, days: int = 365) -> list:
+    """最近 ``days`` 天按星期几聚合的阅读时长 + 各星期几在窗口内的出现天数。
+
+    索引 **0 = 周日**（与前端 ``Date.getDay()`` 一致）。Python 的 ``weekday()`` 是
+    周一 0、``tm_wday`` 是周一 0，故统一按 ``(weekday + 1) % 7`` 归一。
+
+    时区口径同 ``hour_histogram``：两者都是时段分布图，见 ``_reading_zone``。
+
+    每项带 ``days``（该星期几在这个窗口里出现过几天）—— 界面据此算**平均每日时长**
+    （上游 Favorite Reading Days 的口径）。只给总时长会误导：窗口未必整除 7 天，
+    直接比大小会造出「某个星期几总是最多」的假信号。
+
+    ``book_ids`` 语义同 ``reading_totals``（None = 全部）。
+    """
+    c = _connect()
+    zone = _reading_zone()
+    now = time.time()
+    floor = now - days * 86400
+    seconds = [0.0] * 7
+    for r in c.execute("SELECT book_id, seconds, started_at FROM reading_sessions").fetchall():
+        if book_ids is not None and r["book_id"] not in book_ids:
+            continue
+        ts = r["started_at"]
+        if ts < floor:
+            continue
+        if zone is not None:
+            wd = (datetime.fromtimestamp(ts, tz=zone).weekday() + 1) % 7
+        else:
+            wd = (time.localtime(ts).tm_wday + 1) % 7
+        seconds[wd] += float(r["seconds"])
+
+    # 窗口内各星期几各有几天：按日期逐日走（窗口不整除 7 天时不能拿 days/7 糊弄）
+    end = datetime.fromtimestamp(now, tz=zone) if zone is not None else datetime.fromtimestamp(now)
+    cursor = end - timedelta(days=days - 1)
+    occurrences = [0] * 7
+    last = end.date()
+    while cursor.date() <= last:
+        occurrences[(cursor.weekday() + 1) % 7] += 1
+        cursor += timedelta(days=1)
+
+    return [
+        {"weekday": i, "seconds": round(seconds[i], 1), "days": occurrences[i]}
+        for i in range(7)
+    ]
+
+
+def completion_months(book_ids: set | None = None) -> list:
+    """按月统计「读完」的本数：``[{"year": y, "month": m, "count": n}]``（年月升序）。
+
+    数据源 = ``reading_status.finished_at`` —— ``set_status`` 进入 finished 时记时间、
+    离开 finished 时清零（「读完」的日期只对「已读完」有意义），故只取 ``> 0`` 的行。
+
+    **按本地日**折算年月（与阅读活动页的热力图口径一致）：这是「哪天读完的」，
+    不是「哪个时段读的」，故不参与账号时区归一。
+
+    ``book_ids`` 语义同 ``reading_totals``（None = 全部）。
+    """
+    c = _connect()
+    months: dict = {}
+    for r in c.execute(
+        "SELECT book_id, finished_at FROM reading_status WHERE finished_at > 0"
+    ).fetchall():
+        if book_ids is not None and r["book_id"] not in book_ids:
+            continue
+        lt = time.localtime(r["finished_at"])
+        key = (lt.tm_year, lt.tm_mon)
+        months[key] = months.get(key, 0) + 1
+    return [{"year": y, "month": m, "count": n} for (y, m), n in sorted(months.items())]
 
 
 def recent_sessions(limit: int = 50) -> list:

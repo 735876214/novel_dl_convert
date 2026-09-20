@@ -24,6 +24,26 @@
 - ``integrity`` 在原有 5 个计数键之外增补百分比口径（``total_books`` / ``present`` /
   ``primary`` / ``metadata`` 三项覆盖率 + ``score``），对齐上游 ``LibraryIntegrityGauge``；
 - 新增 ``largest``（按体积降序的 Top 50，对齐上游 ``LargestBookItem``）。
+
+第 32 期再补 8 条**图表序列**（同样全是新键，既有键一个不删），供统计页照搬上游的
+图表用 —— 上游是「一张图一个 composable 一次请求」，本项目是**单接口共享一份
+overview**，故这里把序列一次算齐：
+
+书库侧：``by_language``（语言分布）、``by_format_size``（按格式体积）、
+``pages_by_format``（按格式的页数五数概括，箱线图用）、``added_monthly``（全时段
+按月入库）、``publication_yearly``（逐年出版，带该年样例书名）。
+
+阅读侧：``progress_funnel``（进度分档）、``completion_monthly``（按月读完）、
+``weekdays``（周几读多久，与 ``hours`` 同族）。
+
+三条口径约定（写在这里免得以后各算各的）：
+
+- 一律**跟随 ``library_id``**：书库侧从 ``bs`` 算，阅读侧靠 ``ids`` 过滤
+  （阅读会话没有库维度，见上）。新增序列不得绕过这条。
+- ``pages`` 的 0 是「不知道」不是「0 页」（EPUB 为估算值、漫画为归档实际值、
+  其余格式恒 0），故不进分布 —— 否则 PDF / 有声书会压出一根假底线。
+- ``progress_funnel`` **走进度、不走真实状态**：漏斗要求各档单调包含，而真实状态
+  允许把 20% 的书标成 finished，那会造出「后档比前档多」的畸形图。
 """
 import time
 
@@ -39,6 +59,25 @@ def _top(counter: dict, n: int = 8) -> list:
         {"name": k, "count": v}
         for k, v in sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))[:n]
     ]
+
+
+def _five_number(values: list) -> dict:
+    """五数概括（min / Q1 / median / Q3 / max），分位数走线性插值。
+
+    与常见统计库的默认口径一致；``values`` 必须非空（调用方已过滤）。
+    """
+    v = sorted(values)
+    n = len(v)
+
+    def q(p: float) -> float:
+        if n == 1:
+            return float(v[0])
+        pos = p * (n - 1)
+        lo = int(pos)
+        hi = min(lo + 1, n - 1)
+        return round(v[lo] + (v[hi] - v[lo]) * (pos - lo), 1)
+
+    return {"min": v[0], "q1": q(0.25), "median": q(0.5), "q3": q(0.75), "max": v[-1]}
 
 
 def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
@@ -60,6 +99,13 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     size = sum(b.get("size") or 0 for b in bs)
 
     by_format: dict = {}
+    by_format_size: dict = {}
+    by_language: dict = {}
+    pages_by_format: dict = {}
+    page_sources: dict = {}
+    monthly: dict = {}
+    yearly: dict = {}
+    year_titles: dict = {}
     authors: dict = {}
     series: dict = {}
     publishers: dict = {}
@@ -76,6 +122,19 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     for b in bs:
         f = b.get("format") or "?"
         by_format[f] = by_format.get(f, 0) + 1
+        by_format_size[f] = by_format_size.get(f, 0) + int(b.get("size") or 0)
+        # 未知语言归到 "?"（照 by_format 的既成惯例，不新造一个 null 维度）
+        lg = (b.get("language") or "").strip()
+        by_language[lg or "?"] = by_language.get(lg or "?", 0) + 1
+        # 页数只对有值的书有意义：EPUB 是估算值（pages_source=estimate）、漫画是归档
+        # 实际值（archive），其余格式恒 0 —— 0 是「不知道」不是「0 页」，不进分布，
+        # 否则 PDF / 有声书会在箱线图上压出一根假底线。来源构成一并带上，界面如实标注。
+        pnum = int(b.get("pages") or 0)
+        if pnum > 0:
+            pages_by_format.setdefault(f, []).append(pnum)
+            src = (b.get("pages_source") or "").strip() or "unknown"
+            page_sources.setdefault(f, {})
+            page_sources[f][src] = page_sources[f].get(src, 0) + 1
         a = (b.get("author") or "").strip()
         if a:
             authors[a] = authors.get(a, 0) + 1
@@ -95,6 +154,16 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         if y.isdigit() and 1000 <= int(y) <= 2100:
             d = int(y) // 10 * 10
             decades[d] = decades.get(d, 0) + 1
+            yi = int(y)
+            yearly[yi] = yearly.get(yi, 0) + 1
+            year_titles.setdefault(yi, []).append(b["title"])
+        # 入库月份（按文件 mtime）。mtime<=0 是「没有时间戳」的异常文件：time.localtime(0)
+        # 是 1970-01，放进去会在时间轴最左端造出一根假柱子，故直接不进序列。
+        mt = b.get("mtime") or 0
+        if mt > 0:
+            lt_m = time.localtime(mt)
+            mk = (lt_m.tm_year, lt_m.tm_mon)
+            monthly[mk] = monthly.get(mk, 0) + 1
         if not (b.get("language") or "").strip():
             integrity["missing_language"] += 1
         # 三项「文件侧」计数一律读 issues —— 与「缺失资源」页 / 库分面同一口径
@@ -159,10 +228,25 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     recent: list = []
     statuses = db.all_statuses()
     psum = 0.0
+    # 进度漏斗（对齐上游 ProgressFunnel 的五档）：**走进度，不走真实状态** ——
+    # 漏斗要求各档单调包含（开始 ⊇ 25% ⊇ 50% ⊇ 75% ⊇ 读完），而真实状态允许把
+    # 一本 20% 的书手动标成 finished，那会让漏斗出现「后档比前档多」的畸形。
+    # 「读完」阈值沿用本模块既有口径 99.5%（见文件头）。
+    funnel = {"started": 0, "reached25": 0, "reached50": 0, "reached75": 0, "completed": 0}
     for b in bs:
         p = prog.get(b["id"])
         pct = float(p["percent"]) if p else 0.0
         psum += pct
+        if pct > 0:
+            funnel["started"] += 1
+        if pct >= 25:
+            funnel["reached25"] += 1
+        if pct >= 50:
+            funnel["reached50"] += 1
+        if pct >= 75:
+            funnel["reached75"] += 1
+        if pct >= 99.5:
+            funnel["completed"] += 1
         # 真实状态优先；没有状态行的书才按进度兜底推导（与 stats 口径一致）。
         # paused/abandoned 归入在读：它们都「翻过」，和未读不是一回事。
         raw = (statuses.get(b["id"]) or {}).get("status")
@@ -199,6 +283,8 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     tot = db.reading_totals(ids)
     read_daily = db.daily_seconds(days, ids)
     hours = db.hour_histogram(ids)
+    weekdays = db.weekday_histogram(ids)
+    completions = db.completion_months(ids)
     active = db.active_days(ids)
     day_set = set(active)
 
@@ -224,6 +310,25 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         (b.get("language") or "").strip() for b in bs if (b.get("language") or "").strip()
     })
 
+    # ---- 第 32 期：把上面累加的字典整理成有序列表（图表直接吃）----
+    pages_list = [
+        {"format": f, "count": len(v), **_five_number(v), "sources": page_sources.get(f, {})}
+        for f, v in sorted(pages_by_format.items())
+    ]
+    added_list = [
+        {"year": y, "month": m, "count": n} for (y, m), n in sorted(monthly.items())
+    ]
+    yearly_list = [
+        {
+            "year": y,
+            "count": n,
+            # 该年的几本样例书名（上游 PublicationYearTimeline 的 topTitles 同义，
+            # 只进 tooltip）；排序取稳定口径，避免每次刷新 tooltip 里换一批书
+            "top_titles": sorted(year_titles.get(y, []))[:3],
+        }
+        for y, n in sorted(yearly.items())
+    ]
+
     return {
         "books": {
             "total": total,
@@ -231,6 +336,12 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
             "by_format": by_format,
             "languages": languages,
         },
+        # ---- 第 32 期图表序列（书库侧）：全部是新键，既有键一个不动 ----
+        "by_language": by_language,
+        "by_format_size": by_format_size,
+        "pages_by_format": pages_list,
+        "added_monthly": added_list,
+        "publication_yearly": yearly_list,
         "authors": {"total": len(authors), "top": _top(authors, top)},
         "series": {"total": len(series), "top": _top(series, top)},
         "publishers": {"total": len(publishers), "top": _top(publishers, top)},
@@ -266,6 +377,10 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         "added_28d": buckets,
         "added_month": added_month,
         "hours": hours,
+        # ---- 第 32 期图表序列（阅读侧）：weekdays 与 hours 同族（时段分布）----
+        "weekdays": weekdays,
+        "progress_funnel": funnel,
+        "completion_monthly": completions,
         "reading_28d": read_daily,
         "recent": recent[:12],
     }
