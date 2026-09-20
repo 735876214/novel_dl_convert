@@ -27,6 +27,7 @@ import {
   BarChart,
   BoxplotChart,
   ChordChart,
+  CustomChart,
   FunnelChart,
   GaugeChart,
   HeatmapChart,
@@ -36,6 +37,7 @@ import {
   TreemapChart,
 } from 'echarts/charts'
 import {
+  CalendarComponent,
   DataZoomInsideComponent,
   DataZoomSliderComponent,
   GridComponent,
@@ -69,14 +71,16 @@ echartsUse([
   BarChart, // 入库节奏 / 时段分布 / 周几分布 / 漏斗的 dropoff 模式 / 出版年代 / Top 作者 / Top 系列 / 体积榜 / 元数据覆盖率 / 分数分布 / 完成耗时 / 会话时间轴
   BoxplotChart, // 页数分布（上游是箱线图，不是直方图）
   ChordChart, // 题材共现（弦图，第 33 期）
+  CustomChart, // 会话时间轴（一天的时段条，bar/scatter 都画不出「起点 + 长度」两个自由度）
   FunnelChart, // 进度漏斗
   GaugeChart, // 书库体检（半环仪表盘）
   HeatmapChart, // 按库的元数据覆盖率 + 阅读热力图（第 33 期）
-  LineChart, // 出版年时间轴 / 按月读完 / 按期读完累计 / 格式占比随时间 / 题材阅读时长折线 / Top 作者与 Top 系列的累计占比折线
+  LineChart, // 出版年时间轴 / 按月读完 / 读完累计 / 格式占比随时间 / 题材阅读时长折线 / Top 作者与 Top 系列的累计占比折线
   PieChart, // 语言分布 / 格式分布
   ScatterChart, // 入库滞后 / 阅读速度 / 会话形态（第 33 期）
   TreemapChart, // 题材分布 / 题材阅读时长（矩形树图）
   // 组件
+  CalendarComponent, // 阅读热力图（日历坐标系）
   GridComponent,
   TooltipComponent,
   LegendComponent,

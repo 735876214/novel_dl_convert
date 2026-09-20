@@ -19,11 +19,18 @@ import PublicationYearTimelineChart from '@/components/charts/library/Publicatio
 import StorageByFormatChart from '@/components/charts/library/StorageByFormatChart.vue'
 import TopAuthorsChart from '@/components/charts/library/TopAuthorsChart.vue'
 import TopSeriesChart from '@/components/charts/library/TopSeriesChart.vue'
+import BooksCompletedChart from '@/components/charts/reading/BooksCompletedChart.vue'
+import CompletionLatencyChart from '@/components/charts/reading/CompletionLatencyChart.vue'
 import CompletionTimelineChart from '@/components/charts/reading/CompletionTimelineChart.vue'
 import FavoriteReadingDaysChart from '@/components/charts/reading/FavoriteReadingDaysChart.vue'
+import GenreReadingTimeChart from '@/components/charts/reading/GenreReadingTimeChart.vue'
 import PeakReadingHoursChart from '@/components/charts/reading/PeakReadingHoursChart.vue'
 import ProgressFunnelChart from '@/components/charts/reading/ProgressFunnelChart.vue'
 import ReadingClockChart from '@/components/charts/reading/ReadingClockChart.vue'
+import ReadingHeatmapChart from '@/components/charts/reading/ReadingHeatmapChart.vue'
+import ReadingPaceChart from '@/components/charts/reading/ReadingPaceChart.vue'
+import ReadingSessionTimelineChart from '@/components/charts/reading/ReadingSessionTimelineChart.vue'
+import SessionArchetypesChart from '@/components/charts/reading/SessionArchetypesChart.vue'
 import type { StatsOverview } from '@/lib/api'
 import type { StatisticsChartId, StatisticsChartSize, StatisticsChartTile } from '@/lib/statistics-charts'
 
@@ -76,12 +83,19 @@ const CHART_COMPONENTS: Record<StatisticsChartId, Component> = {
   'top-series': TopSeriesChart,
   'books-added-over-time': BooksAddedOverTimeChart,
   'publication-year-timeline': PublicationYearTimelineChart,
-  // ---- 阅读侧 ----
+  // ---- 阅读侧（同上，顺序与目录一致）----
+  'reading-heatmap': ReadingHeatmapChart,
   'peak-reading-hours': PeakReadingHoursChart,
   'favorite-reading-days': FavoriteReadingDaysChart,
   'completion-timeline': CompletionTimelineChart,
   'progress-funnel': ProgressFunnelChart,
+  'completion-latency': CompletionLatencyChart,
+  'genre-reading-time': GenreReadingTimeChart,
+  'reading-pace': ReadingPaceChart,
+  'books-completed': BooksCompletedChart,
   'reading-clock': ReadingClockChart,
+  'reading-session-timeline': ReadingSessionTimelineChart,
+  'session-archetypes': SessionArchetypesChart,
 }
 
 /** 尺寸 → 栅格跨度（逐条照搬上游 `StatisticsGrid.vue:53-60`） */

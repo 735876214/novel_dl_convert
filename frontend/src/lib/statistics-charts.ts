@@ -1,11 +1,12 @@
 /**
  * 统计页图表目录：每张图的 id / 标题 / 图标 / 栅格尺寸 / 所属分区，以及默认顺序。
  *
- * 对标上游 `client/src/features/statistics/statistics-chart-meta.ts`（33 张）。本项目
+ * 对标上游 `packages/types/src/statistics.ts` 的 `StatisticsChartId`（33 张）。本项目
  * **分两批**落地：第 32 期 10 张（书库侧 5 + 阅读侧 5）；第 33 期把统计页原有的 7 张
  * 手写卡片转成正式 id（全在书库侧）、再补 13 张缺口图（书库侧 6 + 阅读侧 7），
- * 合计 30 张。剩下 3 张已声明不做（`metadata-freshness-gauge` /
- * `reading-source-distribution` / `goal-trajectory`），账目见
+ * 合计 **30 张**（书库侧 18 + 阅读侧 12，与上游逐 id 对得上）。
+ * 剩下 3 张已声明不做（`metadata-freshness-gauge` / `reading-source-distribution`
+ * 「Where You Read」/ `goal-trajectory`「Pace vs Goal」），账目见
  * `docs/bookorbit-capability-gap.md`。
  *
  * 两条与上游对齐的规矩：
@@ -183,6 +184,13 @@ export const STATISTICS_CHART_META = {
     tab: 'library',
   },
   // ---- 阅读侧（顺序 = 上游 DEFAULT_USER_CHART_ORDER 滤掉未实现的）----
+  'reading-heatmap': {
+    id: 'reading-heatmap',
+    label: '阅读热力图',
+    icon: 'dash',
+    size: '2x1',
+    tab: 'reading',
+  },
   'peak-reading-hours': {
     id: 'peak-reading-hours',
     label: '高峰时段',
@@ -199,7 +207,39 @@ export const STATISTICS_CHART_META = {
   },
   'completion-timeline': {
     id: 'completion-timeline',
+    // 画的是**每月新增**；下面那张 `books-completed` 是它的**累计**，两张同源不同读法
     label: '读完时间轴',
+    icon: 'check',
+    size: '2x1',
+    tab: 'reading',
+  },
+  'completion-latency': {
+    id: 'completion-latency',
+    // 与「读完时间轴」（什么时候读完的）、「完成耗时」（读了多久）分工明确，别改成近义词
+    label: '完成耗时',
+    icon: 'clock',
+    size: '1x1',
+    tab: 'reading',
+  },
+  'genre-reading-time': {
+    id: 'genre-reading-time',
+    // 与书库侧的「题材分布」（有几本）区分：这张是**读了多久**
+    label: '题材阅读时长',
+    icon: 'note',
+    size: '2x1',
+    tab: 'reading',
+  },
+  'reading-pace': {
+    id: 'reading-pace',
+    label: '阅读速度',
+    icon: 'sparkle',
+    size: '2x1',
+    tab: 'reading',
+  },
+  'books-completed': {
+    id: 'books-completed',
+    // `completion-timeline` 是逐月新增（节奏），这张是累计（总量）—— 同源不同读法
+    label: '读完累计',
     icon: 'check',
     size: '2x1',
     tab: 'reading',
@@ -216,6 +256,21 @@ export const STATISTICS_CHART_META = {
     label: '阅读时钟',
     icon: 'clock',
     size: '1x1',
+    tab: 'reading',
+  },
+  'reading-session-timeline': {
+    id: 'reading-session-timeline',
+    label: '会话时间轴',
+    icon: 'shelf',
+    size: '2x1',
+    tab: 'reading',
+  },
+  'session-archetypes': {
+    id: 'session-archetypes',
+    // 与「会话时间轴」（这一周的具体作息）区分：这张是**一年**里几点读多久的散点
+    label: '会话形态',
+    icon: 'layers',
+    size: '2x2',
     tab: 'reading',
   },
 } satisfies Record<string, StatisticsChartMeta>
@@ -278,10 +333,17 @@ export const DEFAULT_CHART_ORDER: Record<StatisticsTab, StatisticsChartId[]> = {
     'publication-year-timeline',
   ],
   reading: [
+    'reading-heatmap',
     'peak-reading-hours',
     'favorite-reading-days',
     'completion-timeline',
     'progress-funnel',
+    'completion-latency',
+    'genre-reading-time',
+    'reading-pace',
+    'books-completed',
     'reading-clock',
+    'reading-session-timeline',
+    'session-archetypes',
   ],
 }

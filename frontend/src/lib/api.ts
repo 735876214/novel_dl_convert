@@ -1049,6 +1049,71 @@ export interface StatsOverview {
    * 滞后 0 年），未标注的本数由界面用 `books.total − Σcount` 反推。
    */
   acquisition_lag: Array<{ added_year: number; lag_years: number; count: number }>
+
+  // ---- 第 33 期图表序列（阅读侧）----
+  // ⚠️ 三条各自的时间窗口**不统一**，也**不跟随 `days` 参数**（那个参数管的是入库与
+  // 阅读节奏两张图的粒度）：完成耗时 5 年、题材阅读时长与会话形态 365 天。
+  // 理由见 `core/stats.py` 文件头。
+
+  /**
+   * 开始读 → 读完的耗时分布（1x1 直方图 + 三个分位读数）。窗口 5 年。
+   *
+   * ⚠️ 分位数**无数据时是 `null` 而不是 0** —— 0 天会被读成「当天就读完」。
+   * 只收 `started_at > 0 && finished_at >= started_at` 的书（结束早于开始是脏数据，
+   * 记成负数会把 P50 拉到 0 附近）。
+   */
+  completion_latency: {
+    total: number
+    median_days: number | null
+    p75_days: number | null
+    p90_days: number | null
+    buckets: Array<{
+      label: string
+      min_days: number
+      /** `null` = 最后一档（`731d+`），没有上界 */
+      max_days: number | null
+      count: number
+    }>
+  }
+  /**
+   * 题材 × 阅读时长（矩形树图）。窗口 365 天，取前 30 个题材。
+   *
+   * ⚠️ **各题材之和 ≥ 窗口内实际总时长**：一本书的整段时长会计入它的**每个**题材
+   * （与上游内连接后 `SUM` 的扇出同义）；**没打题材的书完全不进这张表**。
+   */
+  genre_reading: Array<{ genre: string; seconds: number }>
+  /**
+   * 阅读速度点集（散点图）。⚠️ **口径与上游不同**：上游要 per-session 的
+   * `progressDelta`，本项目 `reading_sessions` 没有那一列，故换成**按书聚合**
+   * （累计时长 × 当前进度）。已按 seconds 降序，前端照单渲染。
+   */
+  reading_pace: Array<{
+    book_id: string
+    title: string
+    format: string
+    seconds: number
+    percent: number
+  }>
+  /**
+   * 会话时间轴明细：**最近 400 条**（5 年窗内、按 `ended_at` 倒序），带书名与格式。
+   * 本期只做只读渲染 —— 上游那张图能拖动改会话时间，那要新接口与冲突检测。
+   */
+  session_timeline: Array<{
+    book_id: string
+    title: string
+    format: string
+    started_at: number
+    ended_at: number
+    seconds: number
+  }>
+  /**
+   * 会话形态点集（散点图）：x = 一天内的时刻（**小数小时**，9:30 → 9.5）、
+   * y = 这次读了多少分钟，`weekday` 分色。
+   *
+   * 窗口 365 天、只收 **≥ 300 秒**的会话、最多 2000 条；按**开始**时刻定档
+   * （按结束时刻会把跨零点的会话算到第二天）。`weekday` **0 = 周日**。
+   */
+  session_archetypes: Array<{ hour: number; minutes: number; weekday: number }>
 }
 
 // ---------- 应用设置（服务端持久化） ----------
