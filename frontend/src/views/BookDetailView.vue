@@ -59,6 +59,51 @@ watch(
   { immediate: true },
 )
 
+/** 日期格式化（秒 → 本地 YYYY/M/D）。 */
+function fmtDate(sec?: number): string {
+  if (!sec) return '未知'
+  const d = new Date(sec * 1000)
+  if (Number.isNaN(d.getTime())) return '未知'
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
+}
+
+/** 书的归属书库名（library_id → 库实体名）；「全部书库」视图下 book.library_id 仍可能是具体库 */
+const libraryName = computed(() => {
+  const id = book.value?.library_id
+  if (!id) return ''
+  return library.libraryEntities.find((l) => l.id === id)?.name || id
+})
+
+/**
+ * 版本信息区的行（第 30 期补全）：
+ * - 书库（归属库，来自 book.library_id）
+ * - 入库（与导出 CSV「入库日期」同源：都是文件 mtime）
+ * - 页数（非 EPUB 恒 0 → 不展示；带来源标注：估算值 / 归档真实值）
+ * 移除原先写死「字数：未知」的假值行（项目约定不做假交互）。
+ */
+const versionRows = computed<Array<{ k: string; v: string; hint?: string }>>(() => {
+  const b = book.value
+  if (!b) return []
+  const rows: Array<{ k: string; v: string; hint?: string }> = []
+  rows.push({ k: '系列', v: b.series || '独立作品' })
+  if (libraryName.value) rows.push({ k: '书库', v: libraryName.value })
+  if (b.mtime) rows.push({ k: '入库', v: fmtDate(b.mtime) })
+  rows.push({ k: '出版年', v: b.year || '未知' })
+  rows.push({ k: '出版社', v: b.publisher || '未知' })
+  rows.push({ k: '语言', v: b.language || '未知' })
+  rows.push({ k: 'ISBN', v: b.isbn || '未知' })
+  if (b.pages && b.pages > 0) {
+    const src =
+      b.pages_source === 'archive'
+        ? '归档真实页数'
+        : b.pages_source === 'estimate'
+          ? 'EPUB 估算页数'
+          : ''
+    rows.push({ k: '页数', v: String(b.pages), hint: src })
+  }
+  return rows
+})
+
 const TABS = [
   { id: 'overview', label: '概览' },
   { id: 'chapters', label: '目录' },
@@ -370,16 +415,11 @@ onMounted(async () => {
 
         <h3 class="mt-5 mb-2 text-[13px] font-semibold text-foreground">版本信息</h3>
         <dl class="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
-          <div v-for="item in [
-            { k: '系列', v: book.series || '独立作品' },
-            { k: '出版年', v: book.year || '未知' },
-            { k: '出版社', v: book.publisher || '未知' },
-            { k: '语言', v: book.language || '未知' },
-            { k: 'ISBN', v: book.isbn || '未知' },
-            { k: '字数', v: '未知' },
-          ]" :key="item.k">
+          <div v-for="item in versionRows" :key="item.k">
             <dt class="text-[11px] text-muted-foreground">{{ item.k }}</dt>
-            <dd class="mt-0.5 truncate text-[12.5px] text-foreground">{{ item.v }}</dd>
+            <dd class="mt-0.5 truncate text-[12.5px] text-foreground">
+              {{ item.v }}<span v-if="item.hint" class="ml-1 text-[10.5px] text-muted-foreground">{{ item.hint }}</span>
+            </dd>
           </div>
         </dl>
       </Card>
