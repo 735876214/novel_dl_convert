@@ -22,6 +22,8 @@
 - 在线抓取与手动编辑不按格式分流：结果只写 DB、与文件类型无关 → EPUB/PDF/漫画/有声书一视同仁（有声书是目录型条目）。非 EPUB 无 OPF 兜底原值层，故「恢复」=撤销覆盖后回落在线抓取值、无在线值即空。
 - `core/publish.py` 是唯一仍写文件的模块（写硬链接副本、走原子替换）；`fileops.patch_epub_meta`/`rewrite_epub` 已退出生产路径，勿新增调用方。
 - 刮削出版三不可动摇：①源文件只读；②副本禁止原地写（共享 inode，须「临时文件+Path.replace」）；③副本被删只标记待确认+记日志，绝不自删源/自重建。成品目录不得与库根/扫描源重叠（否则副本被扫回成重复书），建库即拦。
+- **目录型条目（有声书一章一文件）同样出版**（第 29 期）：副本是**真目录**，内部逐文件硬链接（`publish.link_tree_or_copy`；`os.link`/`copy2` 都不能对目录用），故写副本不改源。条目形态判据 = **名字带不带 `library.BOOK_EXTS` 的扩展名**（不看 `format`：单文件与目录型音频同为 `AUDIO`；也不 stat 磁盘），与入库侧 `komga.relpath_for_dir` 同判据、同落点；副本名**不带扩展名**。源指纹是**整树指纹**（`source_sig` 对目录走 `_tree_files`：相对路径+大小+mtime）—— 目录自身 mtime 看不出内部改动，而章序就是文件名顺序，所以「改一轨内容」「互换章序」都必须算源变更；`_tree_files` 是**指纹与链接共用的唯一清单**，两处各写一套必然分叉。名字与磁盘形态不一致（目录名带扩展名）时**跳过出版**，不产错名。
+- `{ext}` 展开后**已经带上了扩展名**，落点拼接（`komga.relpath_for`）会再拼一次 ⇒ 模式写 `{title}.{ext}` 曾落成 `书名.m4b.m4b`（第 29 期修）。只在模式**以 `{ext}` 收尾**时摘掉尾部扩展名；`{ext}` 出现在别处（如 `{ext} - {title}`）是用户显式要扩展名进名字，一律不动。
 - 无值哨兵 `db.META_CLEAR = "-"`（`_CLEARABLE`=全部可编辑字段，有测试钉住）：空串=撤销覆盖，「清空」只能靠哨兵。接口层 `null`=显式清空（写哨兵盖住在线值）。翻译三处一致：`db.get_effective_meta`（带无值进 merged）、`metastore.effective`、`metastore.state`（tags 无值给[]，其余给""）。
 
 ## Git / 环境 / 构建
@@ -31,9 +33,8 @@
 - 行尾必须 LF（`.gitattributes` 锁）；CRLF 让容器 `sh /app/start.sh` 报 `set: Illegal option -` 反复重启。
 
 ## 自动化测试（硬前提）
-- 完全离线：`.venv/bin/python -m pytest`（本机 `python3`）。dev 依赖在 `requirements-dev.txt`。
-  **POSIX 基线：270 passed / exit 0 / 无 dump**（第 24 期 +5）；**第 28 期在 win32 上跑全量 = 310 例 / 309 passed / 1 failed**，唯一失败即下条已知 flaky（有声书），**无本期回归**。测试计数按环境取，别把两个数混着引用。
-- ⚠️ 该基线是 **POSIX 环境**结果：win32 侧**没有项目 venv、也没有 pytest/运行期依赖**（`.venv/` 已在 `.gitignore` 内，但本机未建）。自建 venv 后跑全量前**必须先 `mkdir novelforge/static`**（该目录不入库，缺它导入 `server` 即 `ensure_dirs()` 失败，报 `BASE_DIR` 不存在）；且 win32 实测有 1–2 个「扫描→自动入队」用例失败（`test_watcher_auto_fetch` 有声书、`test_scrape_publish`），pytest 汇总行在 PowerShell 下抓不到（详见 2026-09-19 记忆）。**核对回归请在用户原环境跑。**
+- 完全离线：`.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。基线：POSIX **270 passed**（第 24 期 +5）；**第 28 期 win32 全量 310 例 / 309 passed / 1 failed**（唯一失败 = 已知 flaky 有声书，无回归）。计数按环境取，别混引。
+- ⚠️ win32 侧无项目 venv（`.venv/` 未建）；自建后跑全量前先 `mkdir novelforge/static`（不入库，缺它 import `server` 即 `ensure_dirs()` 失败）；win32 另有 1–2 例「扫描→自动入队」失败（`test_watcher_auto_fetch`、`test_scrape_publish`），pytest 汇总行 PowerShell 下抓不到。**核对回归请在用户原环境跑。**
 - 曾全量后半程 segfault 根因：`watcher.auto_fetch_async`/`enqueue_scrape_async` 派生旁路线程未登记，teardown 关库后它们才查库。现由 `tests/conftest.py` 的 `_quiesce_background()`（`watcher.wait_pending`+`scrape.stop`）在 `isolated` 夹具 `db.close()` **之前**收尾，autouse 只兜底。
 - 硬前提：①环境变量必须在 import 业务模块前设（`config` 导入即固化目录、`server` 导入即 `ensure_dirs()`）；②`db._conn`/`_db_path` 模块级缓存 → 隔离靠 `db.close()`。
 - 碰库/DB 用例必须 `isolated`；接口用 `client`+`auth_headers`。假 EPUB（`b"EPUB"`）够扫描类；元数据写回/系列解析要真 EPUB（`epub_builder.build_epub`）。不测会外呼的接口（要测就换检索函数返回固定候选）；`GET /` 会 503。
@@ -45,6 +46,7 @@
 - 写磁盘只用 rename/move，从不 unlink；删除即移入回收目录（`CACHE_DIR/recycle`）。禁 `config.OUTPUT_DIR / b["name"]` → 一律 `library.root_of(b) / b["name"]`。
 - 库根只允许落在 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR` 内（`safe_path` 边界）。`book_id` 由 basename 派生、库维度化（`库$哈希`）。
 - 新增库表列必须同进 `db._LIBRARY_COLS`，否则 `update_library` 静默写不进。
+- 统计接口（`core/stats.py`）：`overview.integrity` 的**原有 5 个计数键一个都不能少**（前端旧渲染路径与既有测试都依赖它），第 29 期加的百分比是**增补**不是替换；`largest`（体积榜）是独立新键，与作者/系列榜共用 `top` 参数，但**不要塞进 `_top`**（后者的排序口径是 `(-count, name)`）；0 字节书如实上榜 —— 它是真实信号，不是要排除的脏数据。
 
 ## 配置分层（四层 + 每库覆盖）
 - `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时 `生效值 = 每库覆写 ?? 全局值`，落 `libraries.settings`（稀疏 JSON，键=全局点分路径）。
@@ -77,14 +79,14 @@
 - 批量端点必须注册在 `/api/books/{bid}` 之前；同前缀字面量路径也要在 `{param}` 之前（如 `/api/scrape/run` vs `/api/scrape/{bid}/resolve`）。
 - 硬链接副本禁止原地写：副本与源共享 inode，`open(dst,'wb')` 连源一起改坏 → 须「临时文件+Path.replace」。推论：内嵌过元数据的副本换成独立 inode，界面要如实标注而非宣称「硬链接省空间」。
 - FastAPI `StaticFiles` 被浏览器缓存：改前端务必 build+deploy 再校对 JS hash。
-- ⚠️ **第 28 期收窄**：实体改名/合并**不再改 basename** ⇒ `book_id` 不变、无 id 搬迁问题。下面这条老踩坑**只对仍改 basename 的两处**（`apply_conflict_rename` / `apply_komga_layout`）生效：改 basename 后 `book_id` 会变（basename 派生），元数据覆盖要落新 id；算所属库不能用 `fileops._lib_of(名字)`（查扫描缓存，改名后缓存未更新→退化旧纯哈希 id→覆盖写进没人读的 id→「改了没生效」不报错）。~~用 `fileops._owning_library_id(path)`~~ **该 helper 已随 `apply_rename` 删除**；现在这两处走 `db.remap_book_id` 搬迁，不靠反查所属库。测试用「扫描结果的 id」比对。
+- ⚠️ **第 28 期收窄**：实体改名/合并**不再改 basename** ⇒ `book_id` 不变、无 id 搬迁问题。下面这条老踩坑**只对仍改 basename 的两处**（`apply_conflict_rename` / `apply_komga_layout`）生效：改 basename 后 `book_id` 会变（basename 派生），元数据覆盖要落新 id；算所属库不能靠 `fileops._lib_of`（查扫描缓存，改名后缓存未更新 → 覆盖写进没人读的 id，「改了没生效」还不报错）；`_owning_library_id` 已随 `apply_rename` 删除，这两处走 `db.remap_book_id` 搬迁。测试用「扫描结果的 id」比对。
 - 字符串模板替换先长后短：`{series_index}` 排 `{series}`/`{index}` 之前（唯一实现 `fileops.fill_pattern`，见「元数据与出版」）。
 - 目录型条目（有声书）不能用 `is_file()` 判存在：它是目录，`path.is_file()` 为假→误判不存在（元数据 `apply()` 踩过）。判存在用 `path.exists()`，格式闸门不该拦「只写 DB」的链路。
 
 ## 待办（跨会话）
 - 外部服务同步（Hardcover/Readwise/StoryGraph 推送）：**用户 2026-09-19 拍板本轮明确不做**，不再排期，也不留半成品入口；相关设置页维持如实标注「未支持」。
 - BookOrbit 参考仓库已升格为**真值源**：`735876214/bookorbit` @ `main` @ `c292d6cc`，只读 blobless 稀疏镜像在 `%TEMP%\bookorbit-ref`（`packages/types` + `packages/plugin-api`，76 个 `.ts`）；文档结论须标注来源文件，与历史实测冲突时以源码为准，源码无法确认处标「未验证（源码无法确认）」。
-- 上游 `client/` 与 `server/src/modules/*` **尚未纳入取证**（需按需 sparse-checkout 追加）；已定位的界面层空白：成就 `dedication/devices` 分组标题、Requests 两页表格列。（~~bulk-rename 请求/响应类型定义（`packages/types` 内不存在）~~ **第 28 期已核实：在 `packages/types/src/file-write.ts:229-274`** —— 原判断是「按文件名猜」导致的漏检，详见 `docs/bookorbit-library-contract.md` §5 与其「取证方式补记」：**扫符号，别按文件名猜**。）
-  （~~批注 Hub 四分组 UI~~ **第 27 期已落地**：月/书/颜色/来源四档，纯前端分组；垃圾桶与周节拍统计同批交付。仍**无数据源故不做**：`origin` 的 `koreader`/`kobo` 两个值、`needsReview`、`devices`、跨端降色 —— kosync 已核实是**纯进度**，无批注端点。）
+- 上游 `client/` 与 `server/src/modules/*` **尚未取证**（按需 sparse-checkout 追加）；已知界面层空白：成就 `dedication/devices` 分组标题、Requests 两页表格列。bulk-rename 类型在 `packages/types/src/file-write.ts:229-274`（第 28 期核实）—— **取证要扫符号，别按文件名猜**。
+- 批注 Hub 四分组 UI 第 27 期已落地（月/书/颜色/来源，纯前端分组）；**无数据源故不做**：`origin` 的 `koreader`/`kobo`、`needsReview`、`devices`、跨端降色（kosync 已核实是纯进度、无批注端点）。
 - **批注域的软删除是既定语义**（第 27 期）：`DELETE` = 移入垃圾桶（写 `deleted_at`），`purge` 才是真删且**只对垃圾桶内条目开放**。加任何新的 `annotations` 读点时**必须带 `WHERE deleted_at = 0`**；新增「按 book_id 探测是否已有数据」的级联逻辑时，探测谓词**必须同样过滤**，否则会静默搁浅活跃批注（`remap_book_id` 踩过，见 `REMAP_PROBE_FILTER`）。
 - **文档过期是常态，改文档前先核验代码**：`docs/bookorbit-capability-gap.md` 曾把「本项目无」写在一堆早已实现的能力上，**它的 §0.3「判定依据」基线自己就先过期了**（68→260 路由、6→28 表）。**基线错误会让下游每条判定都失去依据** —— 复核该文档时先重取基线，再逐条核验，**不做整表翻转**（有反例：StatsView 双分区、Integrity 百分比、「孤儿封面目录」是刻意不同设计，均为「仍缺/刻意」而非「已做」）。
