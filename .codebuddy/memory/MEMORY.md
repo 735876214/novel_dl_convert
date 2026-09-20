@@ -46,6 +46,7 @@
 - 新增库表列须同进 `db._LIBRARY_COLS`，否则 `update_library` 静默写不进。
 - 统计接口（`core/stats.py`）：`overview.integrity` **原有 5 个计数键一个都不能少**（第29期百分比是增补）；`largest`（体积榜）独立新键、与作者/系列榜共用 `top`，但**不要塞进 `_top`**（排序 `(-count, name)`）；0 字节书如实上榜。
 - **统计接口新序列口径（第32期立）**：`GET /api/stats` 共用一份 `overview`（**不照搬上游 per-chart 取数层**）；一切新序列**只增键不删键**（既有 16 键有测试钉住）；新聚合**必须跟随 `library_id`** —— 书库侧从 `bs` 算、阅读侧靠 `core/stats.py:97` 的 `ids` 集合过滤（`lid` 空时 `ids=None`=全库），**不新增扫描路径**。序列真名照代码：`weekdays`（**不是** `weekday_minutes`）、`pages_by_format`（**boxplot 五数概括**，非直方图）。
+- **写进文档/注释的「文件:行号」必须收尾实测复核**（第32期，两轮共核 71 处、修 10 处漂移）：行号写的时候是对的，代码一长就错位。核对法是**并排打印「文档上下文 + 源码实际行」**再判定 —— 别凭记忆改，也别因为「上次核过」就跳过；区间端点与注释行起点都算命中，期望写太严会出假警报。
 - 共用锁嵌套用 `RLock`；`mark_processed`/`mark_recent` 走 `asyncio.to_thread`，watcher 独立 `_scan_lock`。
 - `write_epub` 前先 `mkdir`（父目录不存在只 warn 不抛）；批量端点注册在 `/api/books/{bid}` 之前、字面量路径在 `{param}` 之前；目录型条目用 `path.exists()` 不用 `is_file()`；模板替换先长后短（`{series_index}` 排 `{series}`/`{index}` 前）。
 - **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**：路由是 `@app.get("/health")`（`server.py`），**没有 `/api/health`**；鉴权白名单只含 `/health`+`/api/auth/login`+`/api/logout`，打 `/api/health` 会被中间件拦成 401。前端 `lib/api.ts` 的 `health()` 也走 `/health`。三处必须同口径（第31期修掉了一条把路径写成 `/api/health` 的契约测试）。
