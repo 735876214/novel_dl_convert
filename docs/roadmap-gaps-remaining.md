@@ -557,6 +557,58 @@
 
 ---
 
+#### 第 30 期实施记录（残留清账 + 统计按库筛选 + 外壳小项 + 版本同源 + 上游取证）
+
+**主题**：用户拍板「梳理下一期」，范围经多选确认为**残留缺口清账 + 统计按库筛选 + 上游取证与基线校准**；
+成就体系对齐上游本轮**明确不做**。版本标识口径：**后端为权威**（前端不再手写版本号）。
+
+- **统计按库筛选**：`GET /api/stats`（`server.py:3205-3209`）增 `library_id: str = Query("")`；
+  `core/stats.py` 的 `overview(days, top, library_id="")` 据此取书（沿用既有 `library.by_library` 缓存，
+  `invalidate(library_id)` 不新增扫描）；**空串 = 全库**，不传参输出与改动前逐字节一致 → 既有测试
+  与 8 个仪表盘部件零影响。`stores/stats.ts` 带上当前库并在切库后失效重载；`views/StatsView.vue`
+  加「统计范围」选择器（默认跟随当前库）。
+- **本地转换放开多格式**（含两条既有 bug）：`LocalConvertView.vue` 的 `accept` 与文案跟随后端允许集
+  （`.txt` ∪ `pipeline.EBOOK_EXT` ∪ `audio.AUDIO_EXTS`），拖拽/选择做扩展名**前端预校验**；下载名
+  改为读响应头 `Content-Disposition`（`api.ts` 的 `requestBlob` 现在返回 `{blob, filename}`，兼容
+  `filename*=UTF-8''` 与裸 `filename=`），根除「x.epub.epub」；`/convert-path` 与 `/convert` 同口径
+  改为返回 `FileResponse`（后端给真实文件名），不新增第二套展开名逻辑。
+- **书籍详情补全**：`BookDetailView.vue` 版本信息区新增归属库（`library_id` → `libraryEntities` 名）、
+  入库日期（与导出 CSV 同源，皆文件 mtime）、页数（非 EPUB 恒 0 不展示，带来源标注 `estimate`/`archive`）；
+  删掉写死的「字数：未知」假值行（项目「不做假交互」约定）。
+- **阅读记录按书指标**：`core/db.py` 的 `session_by_book()` 在同一句 SQL 补 `avg_seconds`
+  （`AVG(seconds)`，不增查询）；前端「按书」卡加**平均单次时长**与**阅读速度（页/小时）**——
+  速度需可靠页数（来源为 `estimate`/`archive` 且 `pages>0`）才算并标注，否则不显示，不造假。
+- **外壳小项**：① 侧栏新增「帮助」分组（说明书 / 更新日志 / 关于，复用既有三路由，不新建页面）
+  （`data/nav.ts` + `components/AppSidebar.vue`）；② 删净 `shelfTag` 死入口（state + 过滤分支 +
+  三处清空 + 导出 + 所有调用点，题材筛选已由书架筛选面板承担）；③ 书架页加库级控制最小集
+  （切库 / 立即扫描 / 书库管理），重命名删除仍只在 `/tools/libraries`，避免第二处写入口。
+- **版本标识同源（后端为权威）**：收敛单一常量 `APP_VERSION = "0.6.0"`（`server.py:100` 附近），
+  `FastAPI(version=APP_VERSION)` 与 `GET /health` 的 `version` 同读它；前端 `HealthInfo` 加 `version`，
+  About 页与更新日志页渲染后端下发版本，`data/whatsNew.ts` 的 `version` 字段删除（不再手写版本号）；
+  新增契约测试钉住「展示版本 == 后端常量」。
+- **上游取证与文档校准**：对上游镜像做符号级取证（本环境无终端/网络，`client/` 与 `server/src/modules`
+  未能 fetch，降级为对 `packages/types` 补扫）。结论：缺失资源 `sweep` = `CoverSweep`（封面修复维护扫描，
+  详见 `packages/types/src/maintenance.ts`），本项目缺失资源概念不同（指向已消失书籍的 DB 行），且
+  客户端 UI 未取证 → **sweep 不做**；EDITIONS「版本编号」实为外部 Hardcover/Storygraph 的 `edition`
+  （`hardcoverEditionId`），**非自有顺序版本号**，本项目无该集成 → 不引入；通知 `Clear` 语义在
+  `notification.ts` 未取证（模型仅 `read`/`count`），且清空日志入口已在 Watcher/Logs 页存在 → **不做**；
+  成就 `dedication`/`devices` 分组标题确证（`packages/types/src/achievement.ts:1,9-10`），本项目成就未逐项对齐；
+  求书表格核心列确证为 `createdAt/title/mediaKind/requester/status`（`book-request.ts:534`），两页
+  Mine/All 范围由 `mine`/`allTotal` 区分，本项目无 Requests 功能。
+  `docs/bookorbit-capability-gap.md` 逐行改判（§1/§2/§3/§6/§7/§8/§11 等多行附 `文件:行`），并标注
+  上述「未取证 → 不做」项；三份停旧期文档（roadmap-verification / settings-inventory / feature-flows）
+  已在第 29 期加 ⏳ 时效标注，本期不整表翻转，以 capability-gap.md 为权威。
+
+#### 第 30 期验证
+
+- 后端 py_compile 已过；前端 `vue-tsc` 待用户在原环境跑（本会话命令授权超时，未能在本环境编译）。
+- 新增契约测试：`tests/test_version_contract.py`（`GET /health` 的 `version` 非空且 == `server.APP_VERSION`）、
+  `tests/test_stats_scope.py`（`/api/stats` 不传=全库 / 传库=只算该库 / 不存在的库=全库空集合）。
+- 待运行：全量 pytest、构建部署、playwright 逐路由冒烟（统计库选择器 / 本地转换非 txt 文件名 /
+  详情页新字段不出现 0/假值 / 阅读记录按书卡）。
+
+---
+
 ## 四、验证纪律（沿用 history）
 
 全量类型检查 → 构建 → 部署 `novelforge/static/v2` → 重启测试实例 → 端到端脚本验证「保存 → 读回 → 实际生效」→ 浏览器逐路由冒烟。
