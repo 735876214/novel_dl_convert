@@ -43,6 +43,32 @@ heatmap 用）、``genre_cooccurrence``（题材两两共现，弦图用）、``
 （格式 × 月份 的入库交叉序列）、``acquisition_lag``（出版年 → 入库的滞后年数点集）。
 分数分布要用的 P25 / P75 由 ``metascore`` 侧补（``metadata_score`` 增补两键，既有键不动）。
 
+第 33 期**阅读侧**再补 5 条（同样是新键）：
+
+``completion_latency``（开始读 → 读完的耗时分布，7 档 + P50/P75/P90）、``genre_reading``
+（题材 × 阅读时长，treemap 用）、``reading_pace``（按书的阅读速度点集）、``session_timeline``
+（会话时间轴明细）、``session_archetypes``（会话形态：小时 × 时长，按周几分色）。
+
+阅读侧三条**时间窗口**口径（各自照搬上游对应图的默认值，不统一成一个数）：
+
+- **完成耗时 5 年**：长尾很长，「买了三年才读完」不该被窗口切掉；
+- **题材阅读时长 / 会话形态 365 天**：回答的是「最近一年的阅读习惯」，拉太长会把
+  去年的口味混进来。两者的窗口各自独立，**不跟随 ``days`` 参数**（那个参数管的是
+  入库节奏与阅读节奏的粒度）。
+- **会话明细一次取 5 年**（``db.session_log``），上面三张图各自再筛自己的窗口 ——
+  一次扫表供三图派生，不为每张图各扫一遍。
+
+阅读侧三条**如实记下的口径差异 / 缺口**（不假装与上游一致）：
+
+- ``reading_pace`` **口径与上游不同**：上游要的是 per-session 的 ``progressDelta``
+  （这一次会话读了多少百分比），而本项目的 ``reading_sessions`` **没有这一列**、
+  历史会话也补不回来。故这里换成「按书聚合」：累计时长 × 当前进度 —— 散点形状
+  （读得快的靠左下）与上游同义，读数不同，前端脚注要写明。
+- ``session_timeline`` 本期**只读**：上游那张图是能拖拽改会话时间的编辑器，
+  拖动写库要新接口与冲突检测，作为独立缺口记在文档里。
+- ``genre_reading`` 里各题材之和 **≥ 窗口内实际总时长**：一本书的整段时长计入它的
+  每个题材（与上游内连接后 SUM 的扇出同义），且**没打题材的书完全不进这张图**。
+
 四条口径约定（写在这里免得以后各算各的）：
 
 - 一律**跟随 ``library_id``**：书库侧从 ``bs`` 算，阅读侧靠 ``ids`` 过滤
@@ -68,6 +94,36 @@ _LARGEST_N = 50
 #: 一团、什么都读不出来。收敛到计数最高的 12 个题材，且**只统计两端都在节点集里的
 #: 边** —— 否则会出现指向不存在节点的弦（ECharts 会把它们悄悄丢掉或画到原点）。
 _CHORD_NODES = 12
+
+#: 阅读侧三个时间窗（第 33 期）：都照搬上游各图的默认值，不自己拍。
+#: 完成耗时给 5 年 —— 「买了很久才读完」长尾很长，窗口短了会把它们全挤进最后一桶。
+_LATENCY_DAYS = 1825           # 上游 COMPLETION_LATENCY_DEFAULT_DAYS
+_GENRE_DAYS = 365              # 上游 GENRE_READING_TIME_DEFAULT_DAYS
+_ARCHETYPE_DAYS = 365          # 上游 SESSION_ARCHETYPES_DEFAULT_DAYS
+
+#: 完成耗时的分档边界（照搬上游 7 档）：落桶前先 round，上游也是 `Math.round(days)` 后比。
+_LATENCY_BUCKETS = (
+    ("0-7d", 0, 7),
+    ("8-30d", 8, 30),
+    ("31-90d", 31, 90),
+    ("91-180d", 91, 180),
+    ("181-365d", 181, 365),
+    ("366-730d", 366, 730),
+    ("731d+", 731, None),
+)
+
+#: 会话明细一次取数的窗口：比三张图各自需要的都宽（题材 / 形态 365 天，
+#: 会话时间轴要能往回翻），取一次供三者派生，不重复扫表。
+_SESSION_LOG_DAYS = 1825
+#: 会话时间轴下发的条数上限（只读周视图一次画不了更多）。
+_SESSION_LOG_N = 400
+#: 会话形态的两条收敛（照搬上游）：只收 ≥5 分钟的会话（翻两页就退出的碎片会把散点
+#: 糊在底部）、最多 2000 点。⚠️ 取**最近**的 2000 条，上游的 `ORDER BY startedAt LIMIT
+#: 2000` 取到的是最早的 2000 条 —— 那是它排序方向的副作用，不照搬。
+_ARCHETYPE_MIN_SECONDS = 300
+_ARCHETYPE_LIMIT = 2000
+#: 题材阅读时长的条数上限（照搬上游 service 里的 `slice(0, 30)`）。
+_GENRE_TOPN = 30
 
 
 def _top(counter: dict, n: int = 8) -> list:
@@ -372,6 +428,128 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         (b.get("language") or "").strip() for b in bs if (b.get("language") or "").strip()
     })
 
+    # ---- 第 33 期：阅读侧第二批图表序列 ----
+    # 会话明细取一次（`_SESSION_LOG_DAYS` 天窗），下面三张图各自再筛自己的窗口
+    recs = db.session_log(_SESSION_LOG_DAYS, ids)
+    genre_cut = now - _GENRE_DAYS * 86400
+    arch_cut = now - _ARCHETYPE_DAYS * 86400
+
+    # 完成耗时：开始读 → 读完 实际花了多少天。两个时间戳都在的话才是一段完整的
+    # 「读完」经历（`set_status` 进 reading/finished 时记 started_at，离开 finished
+    # 时把 finished_at 清零），故只取两个都 > 0 的状态行 —— 缺开始日期的行（旧库 /
+    # 手工改库造得出：started_at 那列的 schema 默认值就是 0）没有可测的耗时。
+    lat: list = []
+    for b in bs:
+        st = statuses.get(b["id"]) or {}
+        sta = float(st.get("started_at") or 0)
+        fin = float(st.get("finished_at") or 0)
+        # 结束早于开始 = 脏数据（日期被手工改过）；上游 where 里也有 `endedOn >= startedOn`。
+        # 跳过而不是记成负数 —— 负数会把 P50 拉到 0 附近、整张图失去意义。
+        if sta > 0 and fin >= sta:
+            lat.append((fin - sta) / 86400.0)
+    rounded_days = [round(d) for d in lat]
+    completion_latency = {
+        "total": len(lat),
+        # 分位数复用 metascore.percentile（与元数据分数分布同一套插值口径，不另立一套）；
+        # 无数据给 None 而不是 0 —— 前端据此显示「—」，0 天会被读成「当天就读完」。
+        "median_days": metascore.percentile(lat, 50) if lat else None,
+        "p75_days": metascore.percentile(lat, 75) if lat else None,
+        "p90_days": metascore.percentile(lat, 90) if lat else None,
+        "buckets": [
+            {
+                "label": label,
+                "min_days": lo,
+                "max_days": hi,
+                "count": sum(1 for d in rounded_days if d >= lo and (hi is None or d <= hi)),
+            }
+            for label, lo, hi in _LATENCY_BUCKETS
+        ],
+    }
+
+    # 题材 × 阅读时长：一本书的**整段时长计入它的每个题材**（上游是 bookGenres 内连接
+    # 后 SUM(durationSeconds)，扇出同义）—— 各题材之和 ≥ 窗口内实际总时长，界面脚注
+    # 要写明，否则会被当成「时长算重了」的 bug。
+    # 没打题材的书**完全不进这张图**（题材是它唯一的维度），它们的时间不在这里 ——
+    # 与上游内连接（未打题材的行根本不参与）同待遇。
+    sec_by_book: dict = {}
+    for r in recs:
+        if r["started_at"] < genre_cut:
+            continue
+        bid = r["book_id"]
+        sec_by_book[bid] = sec_by_book.get(bid, 0.0) + float(r["seconds"])
+    genre_secs: dict = {}
+    for b in bs:
+        s = sec_by_book.get(b["id"])
+        if not s:
+            continue
+        # 去重（同一本书里重复的题材不该把时长算两遍），排序只为可复现
+        for g in sorted({str(x).strip() for x in (b.get("tags") or []) if str(x).strip()}):
+            genre_secs[g] = genre_secs.get(g, 0.0) + s
+    genre_reading = [
+        {"genre": g, "seconds": round(v, 1)}
+        for g, v in sorted(genre_secs.items(), key=lambda kv: (-kv[1], kv[0]))[:_GENRE_TOPN]
+    ]
+
+    # 阅读速度：**按书聚合**（累计阅读时长 × 当前进度）。
+    # ⚠️ 口径与上游**不同**（见文件头）：上游要 per-session 的 progressDelta，
+    # 本项目没有那一列、历史会话也补不回来。与其编一个增量，不如换成「这本书读到
+    # 现在花了多久、读到了多少」—— 散点形状（快书靠左下、难啃的靠右下）与上游同义。
+    sec_all: dict = {}
+    for r in recs:
+        bid = r["book_id"]
+        sec_all[bid] = sec_all.get(bid, 0.0) + float(r["seconds"])
+    reading_pace: list = []
+    for b in bs:
+        s = sec_all.get(b["id"], 0.0)
+        p = prog.get(b["id"])
+        pct = float(p["percent"]) if p else 0.0
+        # 没读过（0 秒）与没进度（0%）的点没有意义：前者全挤在 y 轴左侧、后者贴底，
+        # 上游前端也是 `durationSeconds > 0 && progressDelta > 0` 才画。
+        if s <= 0 or pct <= 0:
+            continue
+        reading_pace.append({
+            "book_id": b["id"],
+            "title": b["title"],
+            "format": b.get("format") or "",
+            "seconds": round(s, 1),
+            "percent": round(pct, 2),
+        })
+    reading_pace.sort(key=lambda x: (-x["seconds"], x["title"]))
+
+    # 会话时间轴：最近 `_SESSION_LOG_N` 条（`recs` 已按 ended_at 倒序），带书名 / 格式
+    # 供 tooltip 用。本期只做**只读周视图**（见文件头）。
+    title_of = {b["id"]: b["title"] for b in bs}
+    fmt_of = {b["id"]: (b.get("format") or "") for b in bs}
+    session_timeline = [
+        {
+            "book_id": r["book_id"],
+            "title": title_of.get(r["book_id"], ""),
+            "format": fmt_of.get(r["book_id"], ""),
+            "started_at": r["started_at"],
+            "ended_at": r["ended_at"],
+            "seconds": round(float(r["seconds"]), 1),
+        }
+        for r in recs[:_SESSION_LOG_N]
+    ]
+
+    # 会话形态：一天内的时刻（小数小时）× 该次时长（分钟），散点按周几分色 ——
+    # 回答「我几点读得多、周末是不是读得久」。
+    session_archetypes: list = []
+    for r in recs:
+        sec = float(r["seconds"])
+        if r["started_at"] < arch_cut or sec < _ARCHETYPE_MIN_SECONDS:
+            continue
+        lt = time.localtime(r["started_at"])
+        session_archetypes.append({
+            # 小数小时（9:30 → 9.5）：上游是 extract(hour) + extract(minute)/60，同义
+            "hour": round(lt.tm_hour + lt.tm_min / 60.0, 2),
+            "minutes": round(sec / 60.0, 1),
+            # 0 = 周日（与 weekdays 序列、上游的 extract(dow) 一致）
+            "weekday": (lt.tm_wday + 1) % 7,
+        })
+        if len(session_archetypes) >= _ARCHETYPE_LIMIT:
+            break
+
     # ---- 第 32 期：把上面累加的字典整理成有序列表（图表直接吃）----
     pages_list = [
         {"format": f, "count": len(v), **_five_number(v), "sources": page_sources.get(f, {})}
@@ -508,6 +686,12 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         "weekdays": weekdays,
         "progress_funnel": funnel,
         "completion_monthly": completions,
+        # ---- 第 33 期图表序列（阅读侧）：同样是新键，既有键一个不动 ----
+        "completion_latency": completion_latency,
+        "genre_reading": genre_reading,
+        "reading_pace": reading_pace,
+        "session_timeline": session_timeline,
+        "session_archetypes": session_archetypes,
         "reading_28d": read_daily,
         "recent": recent[:12],
     }

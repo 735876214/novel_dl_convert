@@ -1073,6 +1073,39 @@ def session_feed(book_ids: set | None = None, limit: int = 500) -> list:
     return out[: max(1, int(limit))]
 
 
+def session_log(days: int = 1825, book_ids: set | None = None) -> list:
+    """按时间窗取会话**明细**（新 → 旧）：``{book_id, seconds, started_at, ended_at}``。
+
+    与 ``session_feed`` 的差别有二，都是统计页第二批图表要的：
+
+    - **带时间窗**（最近 ``days`` 天，按 ``started_at`` 起算）：题材阅读时长与会话形态
+      各自只看 365 天，没有窗就得把全部历史读进内存再扔掉绝大部分。
+    - **多给 ``started_at``**：会话形态要按**开始时刻**算小时与星期，只看 ``ended_at``
+      会把跨零点的会话算到第二天（23:50 读的那一段会被记成 00:10）。
+
+    ``book_ids`` 语义同 ``reading_totals``（None = 全部）：过滤在 Python 里做，
+    与 ``reading_totals`` / ``session_feed`` 一致（``IN (?,?..)`` 的占位符拼接收在
+    ``annotation_feed`` 一处，不在这里复用）。**先排序再过滤**不会错位 ——
+    降序序列里滤掉若干条后，前 N 条仍是「这些书里最近的 N 条」。
+    """
+    since = time.time() - max(1, int(days)) * 86400
+    rows = _connect().execute(
+        "SELECT book_id, seconds, started_at, ended_at FROM reading_sessions "
+        "WHERE started_at >= ? ORDER BY ended_at DESC",
+        (since,),
+    ).fetchall()
+    return [
+        {
+            "book_id": r["book_id"],
+            "seconds": float(r["seconds"]),
+            "started_at": float(r["started_at"]),
+            "ended_at": float(r["ended_at"]),
+        }
+        for r in rows
+        if book_ids is None or r["book_id"] in book_ids
+    ]
+
+
 def annotation_feed(book_ids: set | None = None, limit: int = 500) -> list:
     """最近的批注（软删除除外），新 → 旧，时间轴用。
 
