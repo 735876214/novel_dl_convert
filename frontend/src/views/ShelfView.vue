@@ -40,6 +40,28 @@ const prefs = useShelfPrefsStore()
 const router = useRouter()
 const ui = useUiStore()
 
+/** 当前书库（书架页库级控制：切库 / 扫描 / 管理）。空串 = 全部书库 */
+const currentLib = computed<string>({
+  get: () => library.currentLibraryId || '',
+  set: (v: string) => {
+    void library.setCurrentLibrary(v)
+  },
+})
+
+function scanShelf(): void {
+  api
+    .scanNow()
+    .then(() => {
+      ui.toast('已触发一次扫描')
+      void library.loadBooks(true)
+    })
+    .catch((e: Error) => ui.toast(e.message))
+}
+
+function manageLibs(): void {
+  router.push('/tools/libraries')
+}
+
 /** 导出全部书目 CSV（含阅读进度/状态/评分），交给系统下载 */
 async function onExport(): Promise<void> {
   try {
@@ -397,6 +419,19 @@ const INPUT_CLS =
       :title="library.shelfTitle"
       :desc="`共 ${sorted.length} 本${sorted.length !== source.length ? ` · 已筛掉 ${source.length - sorted.length} 本` : ''}`"
     />
+    <!-- 库级控制（最小集：切库 / 扫描 / 管理；重命名与删除仍在「书库管理」页，避免第二处写入口） -->
+    <div class="mb-3 flex flex-wrap items-center gap-2 text-[12.5px]">
+      <span class="text-muted-foreground">书库</span>
+      <select
+        v-model="currentLib"
+        class="h-8 rounded-md border border-border bg-muted px-2 text-foreground outline-none transition-colors focus:border-ring"
+      >
+        <option value="">全部书库</option>
+        <option v-for="lib in library.libraryEntities" :key="lib.id" :value="lib.id">{{ lib.name }}</option>
+      </select>
+      <Button size="sm" variant="ghost" @click="scanShelf">立即扫描</Button>
+      <Button size="sm" variant="ghost" @click="manageLibs">书库管理</Button>
+    </div>
     <p v-if="isFiltered && filterHint" class="-mt-2 mb-3 text-[12px] text-muted-foreground">
       {{ filterHint }}
     </p>

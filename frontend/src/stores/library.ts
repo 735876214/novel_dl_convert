@@ -74,9 +74,8 @@ export const useLibraryStore = defineStore('library', () => {
     return features.value.length === 0 || features.value.includes(key)
   }
 
-  /** 书库页标题与当前标签筛选（对应 v2 的 state.libTitle / state.libTag） */
+  /** 书库页标题（对应 v2 的 state.libTitle） */
   const shelfTitle = ref('全部书库')
-  const shelfTag = ref('')
   /** 智能书架筛选键（非空时优先于标签筛选） */
   const smartKey = ref('')
   /** 「库」分组筛选键（如 fmt:EPUB / issues:1），优先级最高 */
@@ -165,7 +164,6 @@ export const useLibraryStore = defineStore('library', () => {
   const shelfBooks = computed(() => {
     if (shelfFacet.value) return facetBooks(shelfFacet.value)
     if (smartKey.value) return smartBooks(smartKey.value)
-    if (shelfTag.value) return scopedBooks.value.filter((b) => (b.tags || []).includes(shelfTag.value))
     return scopedBooks.value
   })
 
@@ -274,10 +272,9 @@ export const useLibraryStore = defineStore('library', () => {
     }
   }
 
-  /** 进入书库页并可选带标签筛选 */
-  function openShelf(title: string, tag = ''): void {
+  /** 进入书库页（题材筛选已由书架筛选面板承担；不再有按标签筛选的入口） */
+  function openShelf(title: string): void {
     shelfTitle.value = title || '全部书库'
-    shelfTag.value = tag
     smartKey.value = ''
     shelfFacet.value = ''
   }
@@ -286,7 +283,6 @@ export const useLibraryStore = defineStore('library', () => {
   function openSmart(title: string, key: string): void {
     shelfTitle.value = title || '智能书架'
     smartKey.value = key
-    shelfTag.value = ''
     shelfFacet.value = ''
   }
 
@@ -295,7 +291,6 @@ export const useLibraryStore = defineStore('library', () => {
     shelfTitle.value = title || '书库'
     shelfFacet.value = key
     smartKey.value = ''
-    shelfTag.value = ''
   }
 
   /** 切到某书库并进入书库页（侧栏「库」组点击的语义：**切库 + 进书架**） */
@@ -310,7 +305,6 @@ export const useLibraryStore = defineStore('library', () => {
     loaded,
     loading,
     shelfTitle,
-    shelfTag,
     smartKey,
     shelfFacet,
     libraryFacets,

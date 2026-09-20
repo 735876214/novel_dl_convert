@@ -31,6 +31,10 @@ const PATH_BY_ID: Record<string, string> = {
   notify: '/notify',
   achievements: '/achievements',
   log: '/log',
+  // 帮助组（复用既有页面，不新建）
+  docs: '/docs',
+  whatsnew: '/whats-new',
+  about: '/settings/ext/about',
 }
 
 function pathFor(id: string): string {
@@ -50,6 +54,9 @@ const PATH_TO_ID: Array<[string, string]> = [
   ['/notify', 'notify'],
   ['/achievements', 'achievements'],
   ['/log', 'log'],
+  ['/docs', 'docs'],
+  ['/whats-new', 'whatsnew'],
+  ['/settings/ext/about', 'about'],
 ]
 
 const activeId = computed(() => {

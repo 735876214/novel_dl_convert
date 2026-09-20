@@ -79,6 +79,16 @@ export const NAV_GROUPS: NavGroup[] = [
     items: COLLECTIONS,
     empty: '尚无收藏',
   },
+  {
+    title: '帮助',
+    collapsible: true,
+    items: [
+      // 全部复用既有路由，不新建页面（说明书 / 更新日志 / 关于 三页已存在）
+      { id: 'docs', label: '说明书', icon: 'book' },
+      { id: 'whatsnew', label: '更新日志', icon: 'file' },
+      { id: 'about', label: '关于', icon: 'user' },
+    ],
+  },
 ]
 
 /** 「库 / 智能书架 / 收藏夹」的条目都进书库页 */
