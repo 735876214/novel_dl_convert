@@ -31,6 +31,7 @@ const PATH_BY_ID: Record<string, string> = {
   notify: '/notify',
   achievements: '/achievements',
   log: '/log',
+  'reading-activity': '/reading-activity',
   // 帮助组（复用既有页面，不新建）
   docs: '/docs',
   whatsnew: '/whats-new',
@@ -54,6 +55,7 @@ const PATH_TO_ID: Array<[string, string]> = [
   ['/notify', 'notify'],
   ['/achievements', 'achievements'],
   ['/log', 'log'],
+  ['/reading-activity', 'reading-activity'],
   ['/docs', 'docs'],
   ['/whats-new', 'whatsnew'],
   ['/settings/ext/about', 'about'],

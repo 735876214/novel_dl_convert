@@ -998,6 +998,36 @@ export interface AchievementsOverview {
   backfilled?: boolean
 }
 
+// ---------- 阅读活动（热力图 + 时间轴）----------
+
+export interface ReadingHeatmapDay {
+  date: string
+  minutes: number
+  sessions: number
+}
+
+export interface ReadingHeatmap {
+  library_id: string
+  year: number | null
+  days: ReadingHeatmapDay[]
+  total_minutes: number
+  active_days: number
+}
+
+export type ReadingEvent =
+  | { type: 'session'; ts: number; book_id: string; title: string; seconds: number }
+  | { type: 'annotation'; ts: number; book_id: string; title: string; note: string; quote: string }
+  | { type: 'achievement'; ts: number; key: string; name: string }
+
+export interface ReadingActivity {
+  heatmap: ReadingHeatmap
+  timeline: {
+    library_id: string
+    events: ReadingEvent[]
+    total: number
+  }
+}
+
 /** 孤儿记录：引用了已不存在的书的数据库行（`GET /api/maintenance/orphans`） */
 export interface OrphansInfo {
   /** 表名 → 孤儿书数 + 样例 book_id（便于确认清的是什么） */
@@ -2813,5 +2843,10 @@ export const api = {
   stats: (days = 28, libraryId = '') =>
     request<StatsOverview>(
       `/api/stats?days=${days}&top=50${libraryId ? `&library_id=${encodeURIComponent(libraryId)}` : ''}`,
+    ),
+
+  readingActivity: (libraryId = '', year?: number, limit = 120) =>
+    request<ReadingActivity>(
+      `/api/reading-activity?limit=${limit}${libraryId ? `&library_id=${encodeURIComponent(libraryId)}` : ''}${year ? `&year=${year}` : ''}`,
     ),
 }

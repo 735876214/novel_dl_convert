@@ -42,6 +42,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: 'stats', label: '数据统计', icon: 'chart' },
       // Reading Log：reading_sessions 表的展示层（按天 / 按书 / 最近会话）
       { id: 'log', label: '阅读记录', icon: 'clock' },
+      { id: 'reading-activity', label: '阅读活动', icon: 'note' },
       { id: 'notify', label: '通知中心', icon: 'bell' },
       // 成就：上游放在顶栏（`/achievements`）。本项目与「数据统计」同层并列，
       // 数据来自 /api/achievements（单用户口径，见 core/achievements.py）。

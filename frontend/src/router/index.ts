@@ -2,6 +2,7 @@ import type { Component } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 
 import AchievementsView from '@/views/AchievementsView.vue'
+import ReadingActivityView from '@/views/ReadingActivityView.vue'
 import BookDetailView from '@/views/BookDetailView.vue'
 import ReaderView from '@/views/ReaderView.vue'
 import AudioPlayerView from '@/views/AudioPlayerView.vue'
@@ -170,6 +171,7 @@ const router = createRouter({
     { path: '/log', name: 'log', component: ReadingLogView },
     { path: '/notify', name: 'notify', component: NotificationsView },
     { path: '/achievements', name: 'achievements', component: AchievementsView },
+    { path: '/reading-activity', name: 'reading-activity', component: ReadingActivityView },
     { path: '/whats-new', name: 'whats-new', component: WhatsNewView },
     { path: '/docs', name: 'docs', component: DocumentationView },
 
