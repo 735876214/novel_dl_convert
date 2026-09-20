@@ -1,6 +1,7 @@
 import type { CoverPrefs } from '@/stores/coverPrefs'
 
 import { COVER_PREFS_DEFAULT } from '@/stores/coverPrefs'
+import { DISPLAY_PREFS_DEFAULT, type DisplayPrefs } from '@/stores/displayPrefs'
 import { AUDIO_PREFS_DEFAULT, type AudioPrefs } from './audioPrefs'
 import { COMIC_PREFS_DEFAULT, type ComicPrefs } from './comicPrefs'
 import { PDF_PREFS_DEFAULT, type PdfPrefs } from './pdfPrefs'
@@ -16,7 +17,18 @@ import { READER_PREFS_DEFAULT, type ReaderPrefs } from './readerPrefs'
  * 丢掉未知键，保证「同一份配置」比较结果稳定（键序无关）。
  */
 
-export interface AppearancePrefs {
+/**
+ * 外观块：主题三件套 + 布局 / 显示（第 32 期并入）。
+ *
+ * 布局字段（`DisplayPrefs`）**平铺**在这里而不是嵌一层子对象 —— `normalizePayload`
+ * 是浅合并，嵌套会在旧载荷缺该键时把整层默认值丢掉。平铺则天然向后兼容：
+ * 老客户端推上来的外观块没有这几个键，`{...APPEARANCE_DEFAULT, ...old}` 会把它们补成默认值，
+ * 且服务端只认块名（`PREFS_BLOCKS` 六块），故**零服务端改动**。
+ *
+ * ⚠️ 用 `extends` 而不是逐字段抄一遍：以后 `DisplayPrefs` 加字段会自动进入载荷，
+ * 不会出现「store 加了、载荷漏了」的静默不同步。
+ */
+export interface AppearancePrefs extends DisplayPrefs {
   theme: string
   accent: string
   radius: string
@@ -34,11 +46,15 @@ export interface PrefsPayload {
 /** 与后端一致的块名白名单（第 9 期起含 audio） */
 export const PAYLOAD_BLOCKS = ['reader', 'pdf', 'comic', 'audio', 'appearance', 'cover'] as const
 
-/** 外观默认值：与 stores/theme.ts 的初值保持一致（system / neutral / default） */
+/**
+ * 外观默认值：主题部分与 stores/theme.ts 的初值一致（system / neutral / default）；
+ * 布局部分直接摊开 `DISPLAY_PREFS_DEFAULT`，避免两处默认值各写一遍后走样。
+ */
 export const APPEARANCE_DEFAULT: AppearancePrefs = {
   theme: 'system',
   accent: 'neutral',
   radius: 'default',
+  ...DISPLAY_PREFS_DEFAULT,
 }
 
 /** 补齐缺省字段、丢弃未知块，得到一份可用于比较与推送的完整载荷 */

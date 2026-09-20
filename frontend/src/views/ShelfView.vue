@@ -16,6 +16,7 @@ import {
   sortBySeriesIndex,
   tagsLabel,
 } from '@/lib/bookInfo'
+import { useDisplayPrefsStore } from '@/stores/displayPrefs'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 import {
@@ -37,8 +38,26 @@ import {
  */
 const library = useLibraryStore()
 const prefs = useShelfPrefsStore()
+const display = useDisplayPrefsStore()
 const router = useRouter()
 const ui = useUiStore()
+
+/**
+ * 网格由**封面尺寸**驱动（对应上游 `外观 → Layout` 的封面尺寸 / 网格间距）。
+ *
+ * 这里刻意舍弃了原来的固定断点列数（`grid-cols-2 … 2xl:grid-cols-8`）：
+ * 「封面尺寸可调」与「列数写死」在数学上不可兼得 —— 列数固定时封面宽度只能由容器
+ * 宽度决定，那个滑块就成了摆设（防回归要点 5：不做假交互）。改成 `auto-fill` 后
+ * 列数仍随容器宽连续变化（窄屏自动 2 列、宽屏自动 9 列），响应式行为没有丢，
+ * 只是从硬断点变成了连续函数；默认值已按改造前的实际列数校准（见 displayPrefs）。
+ *
+ * 封面尺寸是**最小宽度**：实际每列会被 `1fr` 均分得略宽一些，与上游语义一致。
+ */
+const gridStyle = computed(() => ({
+  gridTemplateColumns: `repeat(auto-fill, minmax(${display.prefs.coverSize}px, 1fr))`,
+  columnGap: `${display.prefs.gridGap}px`,
+  rowGap: `${display.prefs.gridGap}px`,
+}))
 
 /** 当前书库（书架页库级控制：切库 / 扫描 / 管理）。空串 = 全部书库 */
 const currentLib = computed<string>({
@@ -615,16 +634,20 @@ const INPUT_CLS =
       :desc="source.length ? '试试清除搜索词或筛选条件。' : '换个入口看看，或到「探索发现」把书下载进来。'"
     />
 
-    <!-- 网格视图 -->
-    <div
-      v-else-if="prefs.prefs.view === 'grid'"
-      class="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8"
-    >
+    <!-- 网格视图：列数与间距由 displayPrefs 驱动（见 gridStyle） -->
+    <div v-else-if="prefs.prefs.view === 'grid'" class="grid" :style="gridStyle">
       <button
         v-for="r in rows"
         :key="r.key"
         type="button"
         class="group cursor-pointer text-left"
+        :aria-label="
+          display.prefs.cardInfoMode === 'off'
+            ? isSeriesRow(r)
+              ? seriesName(r)
+              : r.book.title || r.book.name
+            : undefined
+        "
         @click="onGridClick(r)"
       >
         <div class="relative">
@@ -649,39 +672,58 @@ const INPUT_CLS =
           >
             {{ formatLabel(r.book) }}
           </span>
-        </div>
-        <div class="mt-2 truncate text-[12.5px] font-medium text-foreground">
-          <template v-if="isSeriesRow(r)">{{ seriesName(r) }}</template>
-          <template v-else>
-            {{ r.book.title || r.book.name }}
-            <span v-if="seriesIndexLabel(r.book)" class="ml-1 font-mono text-[11px] text-muted-foreground">
-              {{ seriesIndexLabel(r.book) }}
-            </span>
-          </template>
-        </div>
-        <div v-if="showAuthor()" class="truncate text-[11.5px] text-muted-foreground">
-          {{ isSeriesRow(r) ? `${r.members.length} 本` : r.book.author || '未知作者' }}
-        </div>
-        <div v-if="showMeta() && !isSeriesRow(r)" class="truncate text-[10.5px] text-muted-foreground">
-          {{ metaOf(r.book) }}
-        </div>
-        <div
-          v-if="showMeta() && !isSeriesRow(r) && tagsLabel(r.book)"
-          class="truncate text-[10.5px] text-muted-foreground/80"
-        >
-          {{ tagsLabel(r.book) }}
-        </div>
-        <div
-          v-if="!isSeriesRow(r) && (r.book.percent ?? 0) > 0 && prefs.cardInfo !== 'compact'"
-          class="mt-1.5 flex items-center gap-1.5"
-        >
-          <div class="h-1 flex-1 overflow-hidden rounded-full bg-muted">
-            <div class="h-full rounded-full bg-primary" :style="{ width: `${r.book.percent}%` }" />
+          <!--
+            卡片信息位置（上游「外观 → Layout」的卡片信息模式）：
+            hover-overlay = 压在封面底部、鼠标移上去才浮出来（触屏上不显示，这是该模式的固有权衡）
+          -->
+          <div
+            v-if="display.prefs.cardInfoMode === 'hover-overlay'"
+            class="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent px-2 pt-6 pb-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+          >
+            <div class="truncate text-[12px] font-medium text-white">
+              <template v-if="isSeriesRow(r)">{{ seriesName(r) }}</template>
+              <template v-else>{{ r.book.title || r.book.name }}</template>
+            </div>
+            <div class="truncate text-[11px] text-white/75">
+              {{ isSeriesRow(r) ? `${r.members.length} 本` : r.book.author || '未知作者' }}
+            </div>
           </div>
-          <span class="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">
-            {{ Math.round(r.book.percent ?? 0) }}%
-          </span>
         </div>
+        <!-- below-cover = 封面下方（改造前的行为）；off = 只画封面，信息进详情页看 -->
+        <template v-if="display.prefs.cardInfoMode === 'below-cover'">
+          <div class="mt-2 truncate text-[12.5px] font-medium text-foreground">
+            <template v-if="isSeriesRow(r)">{{ seriesName(r) }}</template>
+            <template v-else>
+              {{ r.book.title || r.book.name }}
+              <span v-if="seriesIndexLabel(r.book)" class="ml-1 font-mono text-[11px] text-muted-foreground">
+                {{ seriesIndexLabel(r.book) }}
+              </span>
+            </template>
+          </div>
+          <div v-if="showAuthor()" class="truncate text-[11.5px] text-muted-foreground">
+            {{ isSeriesRow(r) ? `${r.members.length} 本` : r.book.author || '未知作者' }}
+          </div>
+          <div v-if="showMeta() && !isSeriesRow(r)" class="truncate text-[10.5px] text-muted-foreground">
+            {{ metaOf(r.book) }}
+          </div>
+          <div
+            v-if="showMeta() && !isSeriesRow(r) && tagsLabel(r.book)"
+            class="truncate text-[10.5px] text-muted-foreground/80"
+          >
+            {{ tagsLabel(r.book) }}
+          </div>
+          <div
+            v-if="!isSeriesRow(r) && (r.book.percent ?? 0) > 0 && prefs.cardInfo !== 'compact'"
+            class="mt-1.5 flex items-center gap-1.5"
+          >
+            <div class="h-1 flex-1 overflow-hidden rounded-full bg-muted">
+              <div class="h-full rounded-full bg-primary" :style="{ width: `${r.book.percent}%` }" />
+            </div>
+            <span class="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">
+              {{ Math.round(r.book.percent ?? 0) }}%
+            </span>
+          </div>
+        </template>
       </button>
     </div>
 
@@ -774,9 +816,10 @@ const INPUT_CLS =
         </thead>
         <tbody>
           <tr
-            v-for="row in tableRows"
+            v-for="(row, i) in tableRows"
             :key="row.key"
             class="cursor-pointer border-b border-border/60 transition-colors last:border-b-0 hover:bg-muted/50"
+            :class="display.prefs.zebraStriping && i % 2 === 1 ? 'bg-muted/30' : ''"
             @click="onTableRowClick(row)"
           >
             <td v-if="selectMode" class="px-3 py-2">

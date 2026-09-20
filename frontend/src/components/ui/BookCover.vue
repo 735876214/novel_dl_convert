@@ -25,8 +25,13 @@ const props = withDefaults(
     /** 仅在**没有真实封面**时作为占位文字，否则会压在封面上 */
     showTitle?: boolean
     interactive?: boolean
+    /**
+     * 封面比例与圆角。默认竖版 3:4 圆角矩形；`circle` 供作者页的圆形头像用
+     * （由「设置 → 外观 → Layout」的作者封面形状驱动）。
+     */
+    shape?: 'portrait' | 'circle'
   }>(),
-  { showTitle: true, interactive: true },
+  { showTitle: true, interactive: true, shape: 'portrait' },
 )
 
 const prefs = useCoverPrefsStore()
@@ -89,8 +94,11 @@ const statusLabel = computed(() => {
 
 <template>
   <div
-    class="book-cover-surface relative aspect-3/4 w-full overflow-hidden rounded-md transition-transform duration-200 ease-out"
-    :class="interactive ? 'group-hover:-translate-y-0.5' : ''"
+    class="book-cover-surface relative w-full overflow-hidden transition-transform duration-200 ease-out"
+    :class="[
+      shape === 'circle' ? 'aspect-square rounded-full' : 'aspect-3/4 rounded-md',
+      interactive ? 'group-hover:-translate-y-0.5' : '',
+    ]"
     :data-cover-spine="spineMode === 'off' ? undefined : spineMode"
     :data-cover-shadow="prefs.prefs.shadow === 'strong' ? 'strong' : undefined"
     :data-cover-fit="natural ? 'natural-bottom' : undefined"

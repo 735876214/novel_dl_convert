@@ -124,14 +124,14 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
         },
         note: '未实现：图标风格统一由设计系统决定，不提供自定义图标 / 上传图标风格选项。此页仅作上游对照。',
       }),
-      p('appearance/layout', 'Layout', '布局', 'placeholder', {
+      p('appearance/layout', 'Layout', '布局', 'ready', {
         upstream: {
           title: 'Layout',
           desc: 'Default library view, density, and spacing.',
           groups: ['LIBRARY GRID LAYOUT', 'SERIES DISPLAY', 'AUTHOR GRID', 'LIST AND TABLE VIEWS'],
           items: ['Cover size behavior（全部同步 / 各视图独立）', 'Portrait cover size（130px）', 'Square cover size（150px）', 'Portrait grid spacing（28px）', 'Square grid spacing（28px）', 'Card info mode（On hover / Below cover / Off）', 'Collapsed series cover（Stack / Mosaic / First / Latest / First Unread）', 'Author cover size（120px）/ shape（Circle / Square）', 'Zebra striping'],
         },
-        note: '未实现：书库视图密度 / 封面尺寸 / 网格间距 / 卡片信息模式等由前端统一定制，不暴露为逐项设置。此页仅作上游对照。',
+        note: '已实现封面尺寸 / 网格间距 / 卡片信息位置 / 作者封面尺寸与形状 / 表格隔行底色五项，均真作用于书架与作者页。上游的「尺寸同步方式」「方形封面尺寸」「方形网格间距」在本项目没有对应实体（只有一套网格、只有竖版封面），卡片主次标签与折叠系列封面形态暂缓 —— 四条均在页尾对照卡列明，不造假控件。这几项属外观，随账号同步（并入 appearance 块，未新增第七块）。',
       }),
       p('appearance/behavior', 'Behavior', '浏览行为', 'ready', {
         upstream: {

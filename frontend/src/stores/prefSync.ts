@@ -10,6 +10,7 @@ import { onPrefsChanged, suppressing } from '@/lib/prefsBridge'
 import { normalizePayload, payloadEqual, type PrefsPayload } from '@/lib/prefsPayload'
 import { readReaderPrefs, saveReaderPrefs } from '@/lib/readerPrefs'
 import { useCoverPrefsStore } from '@/stores/coverPrefs'
+import { useDisplayPrefsStore } from '@/stores/displayPrefs'
 import { useThemeStore, type RadiusMode, type ThemeMode } from '@/stores/theme'
 
 /**
@@ -34,6 +35,7 @@ const PUSH_DEBOUNCE_MS = 800
 export const usePrefSyncStore = defineStore('prefSync', () => {
   const theme = useThemeStore()
   const cover = useCoverPrefsStore()
+  const display = useDisplayPrefsStore()
 
   const deviceId = ref(deviceIdOf())
   const deviceName = ref(deviceNameOf())
@@ -56,7 +58,13 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       pdf: readPdfPrefs(),
       comic: readComicPrefs(),
       audio: readAudioPrefs(),
-      appearance: { theme: theme.theme, accent: theme.accent, radius: theme.radius },
+      // 外观块 = 主题/点缀色/圆角 + 布局显示（第 32 期并入，见 prefsPayload 的说明）
+      appearance: {
+        theme: theme.theme,
+        accent: theme.accent,
+        radius: theme.radius,
+        ...display.prefs,
+      },
       cover: { ...cover.prefs },
     })
   }
@@ -75,6 +83,9 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
         accent: p.appearance.accent,
         radius: p.appearance.radius as RadiusMode,
       })
+      // 同一个 appearance 块喂两个 store：各自只挑自己认识的键（theme 只取三件套，
+      // display 只取布局字段），互不污染 —— 两边的 applyRemote 都做了逐键校验
+      display.applyRemote(p.appearance)
     })
   }
 

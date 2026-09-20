@@ -7,6 +7,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import Segment from '@/components/ui/Segment.vue'
 import { api, type AuthorItem } from '@/lib/api'
+import { useDisplayPrefsStore } from '@/stores/displayPrefs'
 
 /** 作者总览：按 EPUB 元数据里的 author 聚合（见 library.authors_list）。
  *  有头像的作者显示抓取到的真实头像（网络头像已本地缓存），否则沿用书封占位。
@@ -14,6 +15,21 @@ import { api, type AuthorItem } from '@/lib/api'
 const router = useRouter()
 const items = ref<AuthorItem[]>([])
 const loading = ref(true)
+
+/**
+ * 作者封面尺寸 / 形状来自「设置 → 外观 → Layout」（上游该页的作者网格组）。
+ * ⚠️ store 实例叫 `displayPrefs` 而不是 `display` —— 后者已被下面那个
+ * 「筛选后的作者列表」computed 占用。
+ */
+const displayPrefs = useDisplayPrefsStore()
+const coverShape = computed(() => displayPrefs.prefs.authorCoverShape)
+
+/** 与书架网格同源（都吃 `gridGap`），只是行距按改造前的 16:24 比例放大 —— 作者卡封面下还有姓名与书量两行 */
+const authorGridStyle = computed(() => ({
+  gridTemplateColumns: `repeat(auto-fill, minmax(${displayPrefs.prefs.authorCoverSize}px, 1fr))`,
+  columnGap: `${displayPrefs.prefs.gridGap}px`,
+  rowGap: `${displayPrefs.prefs.gridGap * 1.5}px`,
+}))
 
 const sortMode = ref<'count' | 'name'>('count')
 const onlyMulti = ref(false)
@@ -88,10 +104,7 @@ function open(name: string): void {
         <span class="ml-auto text-[11.5px] text-muted-foreground">显示 {{ display.length }} 位</span>
       </div>
 
-      <div
-        v-if="display.length"
-        class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
-      >
+      <div v-if="display.length" class="grid" :style="authorGridStyle">
         <button
           v-for="a in display"
           :key="a.name"
@@ -103,7 +116,8 @@ function open(name: string): void {
             <!-- 有真实头像时显示头像（本地缓存，零外链），否则回退到书封占位 -->
             <div
               v-if="a.has_photo && !photoFailed[a.name]"
-              class="relative aspect-3/4 w-full overflow-hidden rounded-md bg-muted shadow-sm transition-transform duration-200 ease-out group-hover:-translate-y-0.5"
+              class="relative w-full overflow-hidden bg-muted shadow-sm transition-transform duration-200 ease-out group-hover:-translate-y-0.5"
+              :class="coverShape === 'circle' ? 'aspect-square rounded-full' : 'aspect-3/4 rounded-md'"
             >
               <img
                 :src="api.authorPhotoUrl(a.name)"
@@ -115,16 +129,22 @@ function open(name: string): void {
               >
               <div class="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/55 to-transparent" />
             </div>
-            <BookCover v-else :book="a.covers[0] ?? FALLBACK" :show-title="false" />
+            <BookCover v-else :book="a.covers[0] ?? FALLBACK" :show-title="false" :shape="coverShape" />
 
+            <!--
+              圆形封面时两个徽章会压到圆外 —— 这是头像徽章的常规做法（像「头像上的勋章」），
+              给它们加一圈背景色描边把徽章与底色分开即可；不为此挪位置，挪进去会显得过于靠里。
+            -->
             <span
-              class="absolute right-1.5 bottom-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[11px] font-medium text-white tabular-nums"
+              class="absolute right-1.5 bottom-1.5 bg-black/55 px-1.5 py-0.5 text-[11px] font-medium text-white tabular-nums"
+              :class="coverShape === 'circle' ? 'rounded-full ring-2 ring-background' : 'rounded'"
             >
               {{ a.count }} 本
             </span>
             <span
               v-if="isNew(a)"
-              class="absolute top-1.5 left-1.5 rounded bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground"
+              class="absolute top-1.5 left-1.5 bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground"
+              :class="coverShape === 'circle' ? 'rounded-full ring-2 ring-background' : 'rounded'"
             >
               新
             </span>
