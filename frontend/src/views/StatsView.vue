@@ -17,8 +17,12 @@ import { useStatsChartPrefsStore } from '@/stores/statsChartPrefs'
 /**
  * 数据统计：**两个分区**（对齐上游的 Library Stats / My Reading）。
  *
- * - **书库统计**：规模、入库节奏、Top 作者/系列/出版社/题材、出版年份、格式分布、
- *   书库体检（百分比口径 + 可照修的计数）、体积榜（Top 50 Largest Books）；
+ * - **书库统计**：图表区在上（第 32 期起，目录见 `lib/statistics-charts.ts`），
+ *   手写明细卡片在下 —— 规模、入库节奏、Top 作者/系列/出版社/题材的列表、
+ *   体检明细（可照修的计数）、体积榜（Top 50 Largest Books）。
+ *   其中「格式分布」与「出版年份」第 33 期迁到了图表区（卡片已删，不再两份）；
+ *   保留下来的卡片都是**图给不了的下钻能力**（展开全部 / 跳转 / 0 字节告警），
+ *   不是没迁干净的残留 —— 别把它们也删了；
  * - **我的阅读**：阅读状态、阅读时长节奏、最近在读。
  *
  * 分区是第 29 期补的：此前是十几个 `<h3>` 平铺在一页里，「书库长什么样」与
@@ -77,10 +81,6 @@ const TABS = [
 
 const s = computed(() => data.value)
 
-const formats = computed(() =>
-  Object.entries(s.value?.books.by_format ?? {}).sort((a, b) => b[1] - a[1]),
-)
-
 const reading = computed(() => s.value?.reading ?? { unread: 0, reading: 0, finished: 0, annotations: 0 })
 const readingTotal = computed(
   () => reading.value.unread + reading.value.reading + reading.value.finished || 1,
@@ -118,11 +118,6 @@ function toggleTop(key: string): void {
 function hasMore(items: StatsTop[] | undefined): boolean {
   return (items?.length ?? 0) > 8
 }
-
-// ---- 年份分布（十年一档）----
-const decadePeak = computed(() =>
-  Math.max(1, ...(s.value?.years.decades ?? []).map((d) => d.count)),
-)
 
 // ---- 书库体检 ----
 // 上一排是**百分比口径**（对齐上游 LibraryIntegrityGauge：Integrity 综合分 + Present/Primary/Metadata
@@ -266,8 +261,9 @@ const readingCharts = computed<StatisticsChartTile[]>(() => chartsOf('reading'))
       </div>
 
       <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <!-- 入库节奏 -->
-        <Card class="lg:col-span-2">
+        <!-- 入库节奏（近 N 天逐日，跟随页首的范围选择器）—— 与图表区的「入库趋势」
+             （全时段月度）是两个视角。格式分布第 33 期迁到图表区后这行只剩它，故占满 -->
+        <Card class="lg:col-span-3">
           <div class="flex items-baseline justify-between">
             <h3 class="text-[13px] font-semibold text-foreground">入库节奏</h3>
             <span class="text-[11px] text-muted-foreground tabular-nums">
@@ -283,21 +279,6 @@ const readingCharts = computed<StatisticsChartTile[]>(() => chartsOf('reading'))
               :style="{ height: rhythmHeight(n) }"
               :title="`${s.window - 1 - i} 天前：${n} 本`"
             />
-          </div>
-        </Card>
-
-        <!-- 格式分布 -->
-        <Card>
-          <h3 class="mb-2.5 text-[13px] font-semibold text-foreground">格式分布</h3>
-          <p v-if="!formats.length" class="text-[12px] text-muted-foreground">暂无数据。</p>
-          <div v-else class="flex flex-wrap gap-1.5">
-            <span
-              v-for="[fmt, n] in formats"
-              :key="fmt"
-              class="rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground tabular-nums"
-            >
-              {{ fmt }} · {{ n }}
-            </span>
           </div>
         </Card>
       </div>
@@ -372,7 +353,7 @@ const readingCharts = computed<StatisticsChartTile[]>(() => chartsOf('reading'))
         </Card>
       </div>
 
-      <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <!-- Top 题材 -->
         <Card>
           <h3 class="mb-2.5 text-[13px] font-semibold text-foreground">Top 题材</h3>
@@ -395,33 +376,12 @@ const readingCharts = computed<StatisticsChartTile[]>(() => chartsOf('reading'))
           </button>
         </Card>
 
-        <!-- 年份分布 -->
-        <Card>
-          <h3 class="mb-2.5 text-[13px] font-semibold text-foreground">出版年份</h3>
-          <p v-if="!s.years.decades.length" class="text-[12px] text-muted-foreground">
-            书目里没有可解析的出版年份。
-          </p>
-          <template v-else>
-            <div v-for="d in s.years.decades" :key="d.decade" class="mb-1.5 flex items-center gap-2">
-              <span class="w-12 shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ d.decade }}s</span>
-              <div class="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-                <div
-                  class="h-full rounded-full bg-primary/70"
-                  :style="{ width: `${(d.count / decadePeak) * 100}%` }"
-                />
-              </div>
-              <span class="w-7 shrink-0 text-right text-[11px] text-muted-foreground tabular-nums">{{ d.count }}</span>
-            </div>
-            <p v-if="s.years.unknown" class="mt-2 text-[11px] text-muted-foreground">
-              另有 {{ s.years.unknown }} 本未标注年份。
-            </p>
-          </template>
-        </Card>
-
-        <!-- 书库体检 -->
+        <!-- 书库体检 —— 「体检」的概览（仪表盘 + 三项覆盖率）第 33 期交给图表区的
+             `library-integrity-gauge` 了，这张卡因此改叫「体检明细」：留下图给不了的
+             可照修计数（哪一类有问题、各几本）与补元数据的去处 -->
         <Card>
           <div class="flex items-baseline justify-between">
-            <h3 class="text-[13px] font-semibold text-foreground">书库体检</h3>
+            <h3 class="text-[13px] font-semibold text-foreground">体检明细</h3>
             <span class="text-[11px] text-muted-foreground">Integrity</span>
           </div>
 

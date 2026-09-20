@@ -2,10 +2,17 @@
 import type { Component } from 'vue'
 
 import BooksAddedOverTimeChart from '@/components/charts/library/BooksAddedOverTimeChart.vue'
+import FormatDistributionChart from '@/components/charts/library/FormatDistributionChart.vue'
+import GenreDistributionChart from '@/components/charts/library/GenreDistributionChart.vue'
 import LanguageDistributionChart from '@/components/charts/library/LanguageDistributionChart.vue'
+import LargestBooksChart from '@/components/charts/library/LargestBooksChart.vue'
+import LibraryIntegrityGaugeChart from '@/components/charts/library/LibraryIntegrityGaugeChart.vue'
 import PageCountDistributionChart from '@/components/charts/library/PageCountDistributionChart.vue'
+import PublicationDecadeChart from '@/components/charts/library/PublicationDecadeChart.vue'
 import PublicationYearTimelineChart from '@/components/charts/library/PublicationYearTimelineChart.vue'
 import StorageByFormatChart from '@/components/charts/library/StorageByFormatChart.vue'
+import TopAuthorsChart from '@/components/charts/library/TopAuthorsChart.vue'
+import TopSeriesChart from '@/components/charts/library/TopSeriesChart.vue'
 import CompletionTimelineChart from '@/components/charts/reading/CompletionTimelineChart.vue'
 import FavoriteReadingDaysChart from '@/components/charts/reading/FavoriteReadingDaysChart.vue'
 import PeakReadingHoursChart from '@/components/charts/reading/PeakReadingHoursChart.vue'
@@ -21,9 +28,9 @@ import type { StatisticsChartId, StatisticsChartSize, StatisticsChartTile } from
  *
  * 1. **去掉拖拽排序**。上游把整块网格包在 `VueDraggable` 里；本项目不引拖拽库，
  *    排序改到 Configure 面板里用上移/下移按钮（功能等价，零新依赖）。
- * 2. **不做 `defineAsyncComponent`**。上游 33 张图各自异步加载；本项目本期 10 张图
- *    在同一屏同时渲染，拆成 10 个 chunk 只是把一次请求变成 11 次。等图多起来
- *    （尤其是 Configure 里默认隐藏的那些）再考虑。
+ * 2. **不做 `defineAsyncComponent`**。上游 33 张图各自异步加载；本项目第 33 期共
+ *    17 张，单屏最多 12 张（书库侧）同时渲染，拆成十几个 chunk 只是把一次请求变成
+ *    十几次。等第二批缺口图落地（总数到 30 张）连同包体积一起评估。
  */
 defineProps<{
   /** 已解析的图（窄 id + 元信息）。窄 id 是刻意的，见 `CHART_COMPONENTS` 的注释 */
@@ -39,16 +46,25 @@ defineProps<{
  * `<div>` 照占栅格、里面什么都没有）。
  */
 const CHART_COMPONENTS: Record<StatisticsChartId, Component> = {
-  'language-distribution': LanguageDistributionChart,
+  // ---- 书库侧 ----
+  'library-integrity-gauge': LibraryIntegrityGaugeChart,
+  'format-distribution': FormatDistributionChart,
+  'largest-books': LargestBooksChart,
+  'genre-distribution': GenreDistributionChart,
+  'top-authors': TopAuthorsChart,
   'storage-by-format': StorageByFormatChart,
+  'language-distribution': LanguageDistributionChart,
   'page-count-distribution': PageCountDistributionChart,
+  'publication-decade': PublicationDecadeChart,
+  'top-series': TopSeriesChart,
   'books-added-over-time': BooksAddedOverTimeChart,
   'publication-year-timeline': PublicationYearTimelineChart,
-  'reading-clock': ReadingClockChart,
+  // ---- 阅读侧 ----
   'peak-reading-hours': PeakReadingHoursChart,
-  'progress-funnel': ProgressFunnelChart,
-  'completion-timeline': CompletionTimelineChart,
   'favorite-reading-days': FavoriteReadingDaysChart,
+  'completion-timeline': CompletionTimelineChart,
+  'progress-funnel': ProgressFunnelChart,
+  'reading-clock': ReadingClockChart,
 }
 
 /** 尺寸 → 栅格跨度（逐条照搬上游 `StatisticsGrid.vue:53-60`） */

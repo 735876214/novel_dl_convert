@@ -23,7 +23,15 @@
  * **不维护第二份 accent 数值表**（那份表必然与 `accents.css` 漂移）。OKLCH→sRGB 的
  * 数学照搬上游（`client/src/lib/echarts.ts:82-109`）：ECharts 的颜色解析器不认 oklch()。
  */
-import { BarChart, BoxplotChart, FunnelChart, LineChart, PieChart } from 'echarts/charts'
+import {
+  BarChart,
+  BoxplotChart,
+  FunnelChart,
+  GaugeChart,
+  LineChart,
+  PieChart,
+  TreemapChart,
+} from 'echarts/charts'
 import {
   DataZoomInsideComponent,
   DataZoomSliderComponent,
@@ -53,11 +61,13 @@ import { useThemeStore } from '@/stores/theme'
 echartsUse([
   SVGRenderer,
   // 图型
-  BarChart, // 入库节奏 / 时段分布 / 周几分布 / 漏斗的 dropoff 模式
+  BarChart, // 入库节奏 / 时段分布 / 周几分布 / 漏斗的 dropoff 模式 / 出版年代 / Top 作者 / Top 系列 / 体积榜
   BoxplotChart, // 页数分布（上游是箱线图，不是直方图）
   FunnelChart, // 进度漏斗
-  LineChart, // 出版年时间轴 / 按月读完
-  PieChart, // 语言分布 / 格式体积
+  GaugeChart, // 书库体检（半环仪表盘）
+  LineChart, // 出版年时间轴 / 按月读完 / Top 作者与 Top 系列的累计占比折线
+  PieChart, // 语言分布 / 格式分布
+  TreemapChart, // 题材分布（矩形树图）
   // 组件
   GridComponent,
   TooltipComponent,
