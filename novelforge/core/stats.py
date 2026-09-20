@@ -9,6 +9,17 @@
 统计页可传 7/28/90 天与更长榜单。历史字段名 added_28d / reading_28d 保留
 （dashboard 契约不变），实际长度跟随 days，响应里的 window 是权威口径。
 
+第 30 期补的按库筛选（``library_id``）：
+
+- **空串 = 全部书库**，输出与加该参数之前**逐字节一致**（既有测试与 8 个仪表盘
+  部件零影响）；给了库 id 就只统计该库（未知库 = 空库，不 404 —— 与
+  ``library.books()`` 及 ``/api/duplicates`` 等既有接口同待遇）。
+- 书目派生的一切（规模/格式/作者/系列/出版社/题材/年份/体检/体积榜/入库节奏/
+  阅读状态/最近在读/平均进度/批注数）随库收窄。
+- **阅读会话没有库维度**（``reading_sessions`` 只有 book_id），故「某库的阅读时长」
+  靠「这本书属于哪个库」判定 —— 由这里算出该书库的书 id 集合，传给 db 侧过滤。
+  口径写在响应里（``library_id`` 回显），界面据此标注。
+
 第 29 期补的两件（都是**增补**，不删既有键）：
 - ``integrity`` 在原有 5 个计数键之外增补百分比口径（``total_books`` / ``present`` /
   ``primary`` / ``metadata`` 三项覆盖率 + ``score``），对齐上游 ``LibraryIntegrityGauge``；
@@ -30,7 +41,7 @@ def _top(counter: dict, n: int = 8) -> list:
     ]
 
 
-def overview(days: int = 28, top: int = 8) -> dict:
+def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     # 越界值收敛到安全范围，而不是 400 —— 统计是展示型接口，宁可得体降级
     try:
         days = max(7, min(int(days), 365))
@@ -41,7 +52,10 @@ def overview(days: int = 28, top: int = 8) -> dict:
     except (TypeError, ValueError):
         top = 8
 
-    bs = library.books()
+    lid = (library_id or "").strip()
+    bs = library.books(lid or None)
+    # 按库筛选时的书 id 集合（None = 不按书过滤）；供「阅读会话→库」的归属判定用
+    ids = {b["id"] for b in bs} if lid else None
     total = len(bs)
     size = sum(b.get("size") or 0 for b in bs)
 
@@ -182,10 +196,10 @@ def overview(days: int = 28, top: int = 8) -> dict:
         if 0 <= d < days:
             buckets[days - 1 - d] += 1
 
-    tot = db.reading_totals()
-    read_daily = db.daily_seconds(days)
-    hours = db.hour_histogram()
-    active = db.active_days()
+    tot = db.reading_totals(ids)
+    read_daily = db.daily_seconds(days, ids)
+    hours = db.hour_histogram(ids)
+    active = db.active_days(ids)
     day_set = set(active)
 
     # 连续阅读天数：今天有阅读就从今天算起，否则从昨天算起
@@ -237,7 +251,8 @@ def overview(days: int = 28, top: int = 8) -> dict:
             "unread": unread,
             "reading": reading,
             "finished": finished,
-            "annotations": sum(annos.values()),
+            # 按库筛选时必须按 bs 取（annos 是全部书的批注计数）；全库时两者相等
+            "annotations": sum(annos.get(b["id"], 0) for b in bs),
             "seconds": tot["seconds"],
             "sessions": tot["sessions"],
             "avg_seconds": (tot["seconds"] / tot["sessions"]) if tot["sessions"] else 0.0,
@@ -246,6 +261,8 @@ def overview(days: int = 28, top: int = 8) -> dict:
         },
         # 历史字段名保留；长度跟随 days，window 是权威口径
         "window": days,
+        # 统计范围回显：空串 = 全部书库（第 30 期按库筛选；界面据此标注口径）
+        "library_id": lid,
         "added_28d": buckets,
         "added_month": added_month,
         "hours": hours,

@@ -7,6 +7,7 @@ import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import Segment from '@/components/ui/Segment.vue'
 import { api, type StatsOverview, type StatsTop } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
 
 /**
  * 数据统计：**两个分区**（对齐上游的 Library Stats / My Reading）。
@@ -22,6 +23,23 @@ import { api, type StatsOverview, type StatsTop } from '@/lib/api'
  * 本页的窗口切换若写回 store，dashboard 的「近 28 天」标注就会失真。
  */
 const router = useRouter()
+const library = useLibraryStore()
+
+/**
+ * 统计范围（第 30 期按库筛选）：**页内局部选择**，不改动应用当前库（与上游
+ * All Libraries 筛选同口径）。
+
+ *默认跟随应用当前库；用户在侧栏切库时这里同步，但手动选了「全部书库」后不会被
+ * 侧栏的同一选择覆盖——侧栏的「全部书库」本来就是默认态。
+ */
+const scope = ref(library.currentLibraryId || '')
+const libraryList = computed(() => library.libraryEntities)
+watch(
+  () => library.currentLibraryId,
+  (v) => {
+    scope.value = v || ''
+  },
+)
 
 const data = ref<StatsOverview | null>(null)
 const days = ref(28)
@@ -30,7 +48,8 @@ const loading = ref(false)
 async function load(): Promise<void> {
   loading.value = true
   try {
-    data.value = await api.stats(days.value)
+    // 空串 = 全部书库（与不加参数时逐字节一致）；否则只统计该库
+    data.value = await api.stats(days.value, scope.value)
   } catch {
     /* 未登录或后端不可用时保持为空 */
   } finally {
@@ -39,6 +58,7 @@ async function load(): Promise<void> {
 }
 onMounted(load)
 watch(days, load)
+watch(scope, load)
 
 const DAY_OPTIONS = [7, 28, 90] as const
 
@@ -166,6 +186,18 @@ const largestShown = computed(() =>
 <template>
   <div>
     <PageHead title="数据统计" desc="书库规模、阅读状态、入库节奏与书库体检" />
+
+    <!-- 统计范围（第 30 期按库筛选）：页内局部选择，默认跟随当前库 -->
+    <div class="mb-3 flex flex-wrap items-center gap-2 text-[13px]">
+      <span class="text-muted-foreground">统计范围</span>
+      <select
+        v-model="scope"
+        class="cursor-pointer rounded-md border border-border bg-muted px-2.5 py-1.5 text-foreground outline-none transition-colors hover:bg-muted/70"
+      >
+        <option value="">全部书库</option>
+        <option v-for="lib in libraryList" :key="lib.id" :value="lib.id">{{ lib.name }}</option>
+      </select>
+    </div>
 
     <!-- 两分区（对齐上游 Library Stats / My Reading） -->
     <div class="-mt-3 mb-3 flex flex-wrap items-center gap-2">
