@@ -14,7 +14,6 @@ import CollectionsView from '@/views/CollectionsView.vue'
 import NotificationsView from '@/views/NotificationsView.vue'
 import SeriesDetailView from '@/views/SeriesDetailView.vue'
 import SeriesView from '@/views/SeriesView.vue'
-import StatsView from '@/views/StatsView.vue'
 import ReadingLogView from '@/views/ReadingLogView.vue'
 import DashboardView from '@/views/DashboardView.vue'
 import DocumentationView from '@/views/DocumentationView.vue'
@@ -167,7 +166,10 @@ const router = createRouter({
     { path: '/annotations', name: 'annotations', component: AnnotationsView },
     { path: '/collections', name: 'collections', component: CollectionsView },
     { path: '/collections/:id', name: 'collection-detail', component: CollectionDetailView },
-    { path: '/stats', name: 'stats', component: StatsView },
+    // 统计页懒加载：它是全站唯一引 ECharts 的页面（第 32 期），动态 import 让它
+    // 单独成 chunk，图表库不进主包。同属「重依赖不进主包」的思路 ——
+    // 另一处是 PdfReader.vue:222 在组件内动态 import pdfjs（那个是组件级，不在路由层）。
+    { path: '/stats', name: 'stats', component: () => import('@/views/StatsView.vue') },
     { path: '/log', name: 'log', component: ReadingLogView },
     { path: '/notify', name: 'notify', component: NotificationsView },
     { path: '/achievements', name: 'achievements', component: AchievementsView },

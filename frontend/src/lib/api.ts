@@ -826,6 +826,25 @@ export interface RecentRead {
   updated_at: number
 }
 
+/**
+ * 页数的五数概括（箱线图用），按格式分组。
+ *
+ * ⚠️ `pages` 的 0 是「不知道」不是「0 页」（EPUB 是估算值、漫画是归档实际值、
+ * 其余格式恒 0），所以**只有 pages > 0 的书进这个序列** —— 否则 PDF / 有声书
+ * 会在箱线图上压出一根假底线。`sources` 是页数来源构成，界面据此如实标注。
+ */
+export interface StatsPagesByFormat {
+  format: string
+  count: number
+  min: number
+  q1: number
+  median: number
+  q3: number
+  max: number
+  /** 来源构成：estimate（估算）/ archive（归档实际值）/ unknown */
+  sources: Record<string, number>
+}
+
 export interface StatsOverview {
   books: {
     total: number
@@ -904,6 +923,42 @@ export interface StatsOverview {
   /** 统计范围回显：**空串 = 全部书库**（第 30 期按库筛选）；界面据此标注口径 */
   library_id: string
   recent: RecentRead[]
+
+  // ---- 第 32 期图表序列 ----
+  // 上游统计页是「一张图一个 composable 一次请求」，本项目是单接口共享一份 overview，
+  // 故这些序列一次算齐。全部是**新键**，上面那些一个都没动（8 个仪表盘部件读它们）。
+  // 一律**跟随 `library_id`**：书库侧从书目算，阅读侧靠「这本书属于哪个库」过滤。
+
+  /** 语言分布（未知语言归到 `"?"`，照 by_format 的惯例）；书库侧 */
+  by_language: Record<string, number>
+  /** 按格式的体积（字节）；书库侧。各值之和 = `books.size` */
+  by_format_size: Record<string, number>
+  /** 按格式的页数五数概括（箱线图）；只含 pages > 0 的书，见 StatsPagesByFormat */
+  pages_by_format: StatsPagesByFormat[]
+  /** 全时段按月入库（按成品文件 mtime 的日历月），年月升序；书库侧 */
+  added_monthly: Array<{ year: number; month: number; count: number }>
+  /** 逐年出版（年份合法且已知的书），年份升序；书库侧 */
+  publication_yearly: Array<{ year: number; count: number; top_titles: string[] }>
+  /**
+   * 进度漏斗五档（阅读侧）。⚠️ **只走进度、不走真实状态** —— 真实状态允许把
+   * 20% 的书标成 finished，跟着它走会出现「后档比前档多」的畸形图。
+   * 故各档**单调包含**：started ≥ reached25 ≥ reached50 ≥ reached75 ≥ completed。
+   */
+  progress_funnel: {
+    started: number
+    reached25: number
+    reached50: number
+    reached75: number
+    completed: number
+  }
+  /** 按月读完（`finished_at`，本地日），年月升序；阅读侧 */
+  completion_monthly: Array<{ year: number; month: number; count: number }>
+  /**
+   * 周几读多久，**索引 0 = 周日**（与 `Date.getDay()` 一致，不是 ISO 的周一）。
+   * `days` = 该星期几在统计窗口里出现过几天 —— 界面算日均要用它，
+   * 直接比总时长会在窗口不整除 7 天时造出「某个星期几总是最多」的假信号。
+   */
+  weekdays: Array<{ weekday: number; seconds: number; days: number }>
 }
 
 // ---------- 应用设置（服务端持久化） ----------
