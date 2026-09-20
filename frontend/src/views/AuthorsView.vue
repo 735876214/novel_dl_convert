@@ -34,6 +34,8 @@ const authorGridStyle = computed(() => ({
 const sortMode = ref<'count' | 'name'>('count')
 const onlyMulti = ref(false)
 const onlyRecent = ref(false)
+/** 「无头像」—— 用来找出还没抓到在线头像的作者，好逐个补 */
+const onlyNoPhoto = ref(false)
 
 /** 头像加载失败的作者名集合：失败后回退到书封，避免坏图反复请求 */
 const photoFailed = ref<Record<string, boolean>>({})
@@ -66,12 +68,38 @@ const display = computed(() => {
   let list = items.value
   if (onlyMulti.value) list = list.filter((a) => a.count >= 2)
   if (onlyRecent.value) list = list.filter(isNew)
+  if (onlyNoPhoto.value) list = list.filter((a) => !a.has_photo)
   return [...list].sort((a, b) =>
     sortMode.value === 'name'
       ? sortKeyOf(a).localeCompare(sortKeyOf(b), 'zh')
       : b.count - a.count,
   )
 })
+
+/** 当前开启的筛选项（空串 = 一个没开）。三个筛选可叠加，故空态文案按**实际开着的项**拼 */
+const activeFilters = computed(() =>
+  [
+    onlyMulti.value ? '2+ 本' : '',
+    onlyRecent.value ? '本周新增' : '',
+    onlyNoPhoto.value ? '无头像' : '',
+  ]
+    .filter(Boolean)
+    .join('、'),
+)
+
+const emptyTitle = computed(() => (activeFilters.value ? '没有符合筛选的作者' : '还没有作者'))
+const emptyDesc = computed(() =>
+  activeFilters.value
+    ? `关掉「${activeFilters.value}」看看全部作者。`
+    : 'EPUB 元数据里带「作者」的书会自动归到这里。',
+)
+
+/** 三个筛选按钮（可叠加，故各带自己的 active，而非一组互斥的选中态） */
+const filterButtons = computed(() => [
+  { label: '2+ 本', active: onlyMulti.value, toggle: () => { onlyMulti.value = !onlyMulti.value } },
+  { label: '本周新增', active: onlyRecent.value, toggle: () => { onlyRecent.value = !onlyRecent.value } },
+  { label: '无头像', active: onlyNoPhoto.value, toggle: () => { onlyNoPhoto.value = !onlyNoPhoto.value } },
+])
 
 onMounted(async () => {
   try {
@@ -97,20 +125,14 @@ function open(name: string): void {
       <div class="mb-4 flex flex-wrap items-center gap-2">
         <Segment :options="sortOptions" :model-value="sortMode" @update:model-value="(v: string) => (sortMode = v as 'count' | 'name')" />
         <button
+          v-for="f in filterButtons"
+          :key="f.label"
           type="button"
           class="cursor-pointer rounded-full border px-3 py-1 text-[12px] font-medium transition-colors"
-          :class="onlyMulti ? 'border-primary/40 bg-[var(--shell-accent-tint)] text-primary' : 'border-border bg-muted text-muted-foreground hover:text-foreground'"
-          @click="onlyMulti = !onlyMulti"
+          :class="f.active ? 'border-primary/40 bg-[var(--shell-accent-tint)] text-primary' : 'border-border bg-muted text-muted-foreground hover:text-foreground'"
+          @click="f.toggle()"
         >
-          2+ 本
-        </button>
-        <button
-          type="button"
-          class="cursor-pointer rounded-full border px-3 py-1 text-[12px] font-medium transition-colors"
-          :class="onlyRecent ? 'border-primary/40 bg-[var(--shell-accent-tint)] text-primary' : 'border-border bg-muted text-muted-foreground hover:text-foreground'"
-          @click="onlyRecent = !onlyRecent"
-        >
-          本周新增
+          {{ f.label }}
         </button>
         <span class="ml-auto text-[11.5px] text-muted-foreground">显示 {{ display.length }} 位</span>
       </div>
@@ -167,14 +189,7 @@ function open(name: string): void {
         </button>
       </div>
 
-      <EmptyState
-        v-else
-        icon="users"
-        :title="onlyRecent ? '本周没有新增作者' : onlyMulti ? '没有 2 本以上的作者' : '还没有作者'"
-        :desc="onlyRecent
-          ? '关掉「本周新增」看看全部作者。'
-          : onlyMulti ? '关掉「2+ 本」筛选看看全部作者。' : 'EPUB 元数据里带「作者」的书会自动归到这里。'"
-      />
+      <EmptyState v-else icon="users" :title="emptyTitle" :desc="emptyDesc" />
     </template>
   </div>
 </template>
