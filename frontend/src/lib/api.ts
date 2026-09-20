@@ -17,6 +17,8 @@ export interface HealthInfo {
   input: string
   output: string
   watcher: boolean
+  /** 应用版本（后端单一真值源下发；前端 About / 更新日志据此渲染，不再手写版本号） */
+  version: string
   /** 活动日志目录（后端 /health 会返回） */
   logs?: string
 }
@@ -899,6 +901,8 @@ export interface StatsOverview {
   reading_28d: number[]
   /** 本次返回的节奏图窗口（天）——两个 28d 命名的数组的实际长度 */
   window: number
+  /** 统计范围回显：**空串 = 全部书库**（第 30 期按库筛选）；界面据此标注口径 */
+  library_id: string
   recent: RecentRead[]
 }
 
@@ -1119,6 +1123,12 @@ export interface ReadingLogBook {
   author: string
   seconds: number
   sessions: number
+  /** 平均单次时长（秒），后端 AVG(seconds) 算出 */
+  avg_seconds: number
+  /** 页数：非 EPUB 恒 0；阅读速度按此算 */
+  pages: number
+  /** 页数来源：'estimate'（EPUB 估算）/ 'archive'（漫画归档真实值）/ 空串（无可靠页数） */
+  pages_source: string
   last_ended: number
 }
 
@@ -1612,15 +1622,46 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
-/** 下载类接口返回文件流，直接交给浏览器 */
-function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
-  return fetch(path, init).then((res) => {
-    if (!res.ok) {
-      console.error(`[api] POST ${path} → ${res.status}`)
-      throw new Error(`请求失败（HTTP ${res.status}）`)
+/** 下载类接口返回文件流（后端用 FileResponse(filename=...) 在 Content-Disposition 给真实文件名）。 */
+export interface BlobResult {
+  blob: Blob
+  /** 解析自 Content-Disposition 的文件名（filename*=UTF-8'' 优先，回落裸 filename=）；无则用 URL 兜底 */
+  filename: string
+}
+
+/**
+ * 从 Content-Disposition 取文件名。
+ * 兼容性：上游/本服务两种写法都要认 ——
+ *   `filename*=UTF-8''%E4%B9%A6.epub`（RFC 5987，百分号编码）
+ *   `filename="书.epub"`（裸 filename=，可能带引号）
+ */
+function _parseDispositionFilename(cd: string | null, fallback: string): string {
+  if (!cd) return fallback
+  const star = /filename\*\s*=\s*[^']*''((?:[^;]|%[^;])+)/i.exec(cd)
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/\+/g, ' '))
+    } catch {
+      /* 编码损坏则回落裸 filename */
     }
-    return res.blob()
-  })
+  }
+  const plain = /filename\s*=\s*("([^"]*)"|([^;]*))/i.exec(cd)
+  if (plain) {
+    const v = (plain[2] ?? plain[3] ?? '').trim()
+    if (v) return v
+  }
+  return fallback
+}
+
+async function requestBlob(path: string, init?: RequestInit): Promise<BlobResult> {
+  const res = await fetch(path, init)
+  if (!res.ok) {
+    console.error(`[api] POST ${path} → ${res.status}`)
+    throw new Error(`请求失败（HTTP ${res.status}）`)
+  }
+  const fallback = (path.split('/').pop() || 'download').split('?')[0] || 'download'
+  const blob = await res.blob()
+  return { blob, filename: _parseDispositionFilename(res.headers.get('Content-Disposition'), fallback) }
 }
 
 export const api = {
@@ -2767,5 +2808,10 @@ export const api = {
 
   // ---------- 数据统计 ----------
   // top=50：让「展开全部」真的能展开到 50（服务端已收敛 1–50）；体积榜固定 50 条、与之无关
-  stats: (days = 28) => request<StatsOverview>(`/api/stats?days=${days}&top=50`),
+  // libraryId 为空 = 全部书库：**此时 URL 与加参数之前逐字节相同**（不带空参数），
+  // 既有缓存与断言不受影响；给了才附加 library_id。
+  stats: (days = 28, libraryId = '') =>
+    request<StatsOverview>(
+      `/api/stats?days=${days}&top=50${libraryId ? `&library_id=${encodeURIComponent(libraryId)}` : ''}`,
+    ),
 }
