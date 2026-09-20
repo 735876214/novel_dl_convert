@@ -75,7 +75,7 @@
 - **作者传记 / 作者头像 → 移入 D1/D2**（此前记「依赖外部作者元数据服务」，实为可复用已有抓取管线，成本中等）。
 - **有声书播放器 → 移入 D7**（`BOOK_EXTS` 不含音频，`reader/audio` 页为 placeholder）。
 - **多书库 → 移入 D8**（`collections.ts` 的 `LIBRARIES = []` 为空，侧栏「库」组无数据；`libraries` 设置页为 placeholder）。
-- **CBR 阅读 → 移入 D6**（`comics.py` 明确只支持 CBZ，`.cbr` 不在 `BOOK_EXTS`，`library.py:31-32`）。
+- **CBR 阅读 → 移入 D6**（`comics.py` 明确只支持 CBZ，`.cbr` 不在 `BOOK_EXTS`，`library.py:35`）。
 
 ---
 
@@ -562,7 +562,7 @@
 **主题**：用户拍板「梳理下一期」，范围经多选确认为**残留缺口清账 + 统计按库筛选 + 上游取证与基线校准**；
 成就体系对齐上游本轮**明确不做**。版本标识口径：**后端为权威**（前端不再手写版本号）。
 
-- **统计按库筛选**：`GET /api/stats`（`server.py:3205-3209`）增 `library_id: str = Query("")`；
+- **统计按库筛选**：`GET /api/stats`（`server.py:3232-3236`）增 `library_id: str = Query("")`；
   `core/stats.py` 的 `overview(days, top, library_id="")` 据此取书（沿用既有 `library.by_library` 缓存，
   `invalidate(library_id)` 不新增扫描）；**空串 = 全库**，不传参输出与改动前逐字节一致 → 既有测试
   与 8 个仪表盘部件零影响。`stores/stats.ts` 带上当前库并在切库后失效重载；`views/StatsView.vue`
@@ -582,7 +582,7 @@
   （`data/nav.ts` + `components/AppSidebar.vue`）；② 删净 `shelfTag` 死入口（state + 过滤分支 +
   三处清空 + 导出 + 所有调用点，题材筛选已由书架筛选面板承担）；③ 书架页加库级控制最小集
   （切库 / 立即扫描 / 书库管理），重命名删除仍只在 `/tools/libraries`，避免第二处写入口。
-- **版本标识同源（后端为权威）**：收敛单一常量 `APP_VERSION = "0.6.0"`（`server.py:100` 附近），
+- **版本标识同源（后端为权威）**：收敛单一常量 `APP_VERSION = "0.6.0"`（`server.py:102` 附近），
   `FastAPI(version=APP_VERSION)` 与 `GET /health` 的 `version` 同读它；前端 `HealthInfo` 加 `version`，
   About 页与更新日志页渲染后端下发版本，`data/whatsNew.ts` 的 `version` 字段删除（不再手写版本号）；
   新增契约测试钉住「展示版本 == 后端常量」。
@@ -593,7 +593,7 @@
   （`hardcoverEditionId`），**非自有顺序版本号**，本项目无该集成 → 不引入；通知 `Clear` 语义在
   `notification.ts` 未取证（模型仅 `read`/`count`），且清空日志入口已在 Watcher/Logs 页存在 → **不做**；
   成就 `dedication`/`devices` 分组标题确证（`packages/types/src/achievement.ts:1,9-10`），本项目成就未逐项对齐；
-  求书表格核心列确证为 `createdAt/title/mediaKind/requester/status`（`book-request.ts:534`），两页
+  求书表格核心列确证为 `createdAt/title/mediaKind/requester/status`（`packages/types/src/book-request.ts:534`），两页
   Mine/All 范围由 `mine`/`allTotal` 区分，本项目无 Requests 功能。
   `docs/bookorbit-capability-gap.md` 逐行改判（§1/§2/§3/§6/§7/§8/§11 等多行附 `文件:行`），并标注
   上述「未取证 → 不做」项；三份停旧期文档（roadmap-verification / settings-inventory / feature-flows）
@@ -622,12 +622,12 @@
   按 ts 倒序、`reading_activity()` 一次返回；`core/db.py` 增 `reading_day_minutes` / `session_feed` /
   `annotation_feed`（读批注**必须** `deleted_at=0`；空集合直接返回 `[]`，避免 `IN ()` 语法错）/
   `list_achievements` / `unlocked_map` / `upsert_achievement` / `clear_unlocked`。
-  接口 `GET /api/reading-activity`（`server.py:3231`）：`library_id` **空串 = 全部书库**（与 `/api/stats`
+  接口 `GET /api/reading-activity`（`server.py:3248`）：`library_id` **空串 = 全部书库**（与 `/api/stats`
   同惯例），**未知库返回空集合不 404**；`year` 过滤热力图年份、`limit` 限时间轴条数；按库过滤复用
   `library.books(lid)` 取 id 集合（同 `core/stats.py` 范式，**不新增扫描**）。
   前端 `stores/activity.ts`（跟随 `library.currentLibraryId` 失效重载）+ `views/ReadingActivityView.vue`
   （GitHub 式**纯 CSS Grid** 53×7 热力图、5 档色阶、hover 放大 + `title` 提示、时间轴按日分组 + 类型图标 +
-  `HH:MM`、范围选择「今年 / 去年 / 全部」、空态如实显示「还没有阅读记录」）；接线在 `router/index.ts:174`、
+  `HH:MM`、范围选择「今年 / 去年 / 全部」、空态如实显示「还没有阅读记录」）；接线在 `router/index.ts:180`、
   `data/nav.ts:45`、`AppSidebar.vue:34/58`、`lib/api.ts`。**零假数据、零外链、无 `Math.random()`**（确定性）。
 - **成就对齐上游**：`core/achievements.py` 由 3 组（LIBRARY / READING / ANNOTATION）改为上游的 4 组
   （library / reading / exploration，批注归入 exploration）+ 新增 `dedication` 档（`streak_100` /
@@ -652,7 +652,7 @@
   §1 全局搜索 / 收藏等锚点更新。
 - **修一条第 30 期遗留真 bug**：`tests/test_version_contract.py` 打的是 `/api/health`，而路由是 `/health`
   （`server.py:248`；白名单 `server.py:160` 只有 `/health` + `/api/auth/login` + `/api/logout`；
-  前端 `lib/api.ts:1698` 也走 `/health`）⇒ 401。全仓 `/api/health` **仅此一处**，改为 `/health` 后通过。
+  前端 `lib/api.ts:1793` 也走 `/health`）⇒ 401。全仓 `/api/health` **仅此一处**，改为 `/health` 后通过。
   根因：第 30 期本机跑不了测试，错误路径一直没暴露。
 - **顺带修 TypeScript 报错**：`BookDetailView.vue` 重复 `fmtDate` 触发 TS2393（第 30 期 `bf6a8ab` 引入，
   非本期）；新版改名 `fmtDateSlash`。
@@ -776,7 +776,7 @@ tooltip 标注样本数。
     `client/src/features/settings/BookDockSettings.vue`（295 行）逐行核对后重写：上游 AUTO-FINALIZE 组 =
     开关 + 0–100 分阈值 + 目标库 + 合并模式 + 目标文件夹（`:207-287`），本项目缺的是「目标库 / 文件夹 /
     合并模式」这组配置，而本项目的 0–1 置信度阈值只是**候选筛选**阈值，两者不是一回事；
-    `BookDetailView.vue:23` 原写「引入 SQLite 后（Batch 2）接入」（已改写为「阅读进度 `:259` `api.getProgress`」）；`data/nav.ts` 的「`_` 开头的 id」说法
+    `BookDetailView.vue:23` 原写「引入 SQLite 后（Batch 2）接入」（已改写为「阅读进度 `:260` `api.getProgress`」）；`data/nav.ts` 的「`_` 开头的 id」说法
     与**整个 `VIEW_META` 死表**（7 个 key 一个都到不了）+ `PlaceholderView.vue` / `router/index.ts`
     相应改写为「未知路由兜底」。
 
