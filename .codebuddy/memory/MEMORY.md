@@ -32,8 +32,9 @@
 - Windows 上 IDE 的 safe-delete shim 也拦 PowerShell `Remove-Item`（报 `SAFE_DELETE_BULK_GUARD_ERROR`，静默不删）⇒ 清临时产物用删除工具；`Out-File` 不带 `-Encoding` 同样被拦。
 
 ## 自动化测试（硬前提）
-- 完全离线：`.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。基线：POSIX 270 passed；**win32 全量 388 例 / 1 failed**（第32期实测；第31期为 346 例。唯一失败=`test_watcher_auto_fetch::test_audiobook_library_scan_triggers_auto_fetch`，既有 win32 不通，单跑也挂）。计数按环境取，别混引。
-- win32 本机已有项目 venv `.venv\Scripts\python.exe`；跑全量前确认 `novelforge/static` 存在（缺它 import `server` 即 `ensure_dirs()` 失败）。另有 `test_scrape_publish::test_接口_扫描后按开关自动入队` 属**顺序依赖 flaky**（单跑该文件必过，全量里随机挂，别当回归）。
+- 完全离线：`.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。基线：POSIX 270 passed；**win32 全量 404 例 / 0 failed**（第33期实测 4 轮全绿；第32期为 388 例 / 1 failed、第31期为 346 例）。计数按环境取，别混引。
+- win32 本机已有项目 venv `.venv\Scripts\python.exe`；跑全量前确认 `novelforge/static` 存在（缺它 import `server` 即 `ensure_dirs()` 失败）。`test_scrape_publish::test_接口_扫描后按开关自动入队` 属**顺序依赖 flaky**（单跑该文件必过，全量里随机挂，别当回归）：第33期4轮全量未复现，机制=残留 worker（`scrape.stop(timeout=2.0)` 超时后仍在）取到 `isolated` 换过的**新库**，经 `scrape_delete` 删行或 upsert 插行 ⇒ 断言全局 `total`（`scrape_items` 全表行数）落空；按拍板不改测试逻辑、不动 `total` 口径。
+- **「长期稳定失败」不是 flaky，是产品 bug 的症状**（第33期教训）：真 flaky 不会次次都挂。报错不指向根因时（如只有 `calls == []`）要**逐层打印中间返回值**定位（第33期靠打印 `_scan_locked` 的 `{'scanned': 1, 'skipped': 1}` 才锁定）；修完**临时回退那一行**确认「恰好相关用例失败」，证明断言真能捕获该 bug。e2e 层同理做对照（改前 FAIL / 改后 PASS 各跑一次，唯一变量是那一行）。
 - ⚠️ **PowerShell 下 pytest 的汇总行与失败清单抓不到**（stdout 尾段丢失，落盘文件里也只有进度条）⇒ 定位失败**改用 `--junitxml` 再解析**：`& .\.venv\Scripts\python.exe -m pytest -q --tb=line --junitxml="$env:TEMP\nf.xml" > $null 2>$null`，然后 `.\.venv\Scripts\python.exe -c "import os,xml.etree.ElementTree as ET; ..."` 取 `//testcase[failure]` 的 `.text`（`--tb=line` 一行、默认给完整回溯）。**别再用 `Select-Object -Last N` 抓汇总，白耗时间**；且别用 PowerShell 的 `[xml]` 直接解析（编码会崩），交给 Python。
 - 曾全量后半程 segfault→现由 `tests/conftest.py` 的 `_quiesce_background()`（`watcher.wait_pending`+`scrape.stop`）在 `isolated` 夹具 `db.close()` **之前**收尾。
 - 硬前提：①环境变量须在 import 业务模块前设（`config` 导入固化目录、`server` 导入即 `ensure_dirs()`）；②`db._conn`/`_db_path` 模块级缓存→隔离靠 `db.close()`。
@@ -42,12 +43,14 @@
 ## 后端约束与踩坑
 - core 内引用配置一律 `from .. import config`；`import config` 被同名命名空间包劫持（py_compile 抓不到，启动才炸）。
 - 写磁盘只用 rename/move，删除移 `CACHE_DIR/recycle`；路径用 `library.root_of(b)/b["name"]`，禁 `config.OUTPUT_DIR/b["name"]`。
-- 库根限 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR`（`safe_path`）；`book_id`=basename 派生+库维度化（`库$哈希`）。
+- 库根限 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR`（`safe_path`，建库时**强校验**，三者之外一律 400）；`book_id`=basename 派生+库维度化（`库$哈希`）。⚠️ 库存储根放在 `OUTPUT_DIR` 之下时，`default` 默认书库（root 即 `OUTPUT_DIR`、inplace、watch=1）会把这副本**再收一次** ⇒ 同一本书登记两条（名字形如 `audio-store/<书名>`）—— 属预期行为，别当「重复入库」bug；断言按 `library_id` 过滤。
 - 新增库表列须同进 `db._LIBRARY_COLS`，否则 `update_library` 静默写不进。
 - 统计接口（`core/stats.py`）：`overview.integrity` **原有 5 个计数键一个都不能少**（第29期百分比是增补）；`largest`（体积榜）独立新键、与作者/系列榜共用 `top`，但**不要塞进 `_top`**（排序 `(-count, name)`）；0 字节书如实上榜。
 - **统计接口新序列口径（第32期立）**：`GET /api/stats` 共用一份 `overview`（**不照搬上游 per-chart 取数层**）；一切新序列**只增键不删键**（既有 16 键有测试钉住）；新聚合**必须跟随 `library_id`** —— 书库侧从 `bs` 算、阅读侧靠 `core/stats.py:97` 的 `ids` 集合过滤（`lid` 空时 `ids=None`=全库），**不新增扫描路径**。序列真名照代码：`weekdays`（**不是** `weekday_minutes`）、`pages_by_format`（**boxplot 五数概括**，非直方图）。
 - **写进文档/注释的「文件:行号」必须收尾实测复核**（第32期，两轮共核 71 处、修 10 处漂移）：行号写的时候是对的，代码一长就错位。核对法是**并排打印「文档上下文 + 源码实际行」**再判定 —— 别凭记忆改，也别因为「上次核过」就跳过；区间端点与注释行起点都算命中，期望写太严会出假警报。
+  - 第33期全文核 312 处、修 28 处（行号 25 + 路径补全 2 + 作废标注 1），方法与四条局限见 `docs/bookorbit-capability-gap.md` §0.4。两条硬教训：① **别记偏移量，只记当前真实行号**（曾把一段漂移写成「整体偏移 1 行」，实测偏移 44–54 行）；② 自动核对的窗口宽窄是两难 —— ±6 会吞掉偏 4 行的漂移（漏报）、±2 假阳性约 80%（噪声）⇒ **脚本只能生成待核清单，不能判定**；区间引用（`a.ts:487-505`）两套脚本都测不出漂移，只能按「它声称是什么」反向 grep 找。
 - 共用锁嵌套用 `RLock`；`mark_processed`/`mark_recent` 走 `asyncio.to_thread`，watcher 独立 `_scan_lock`。
+- ⚠️ **win32 上目录的 `st_size` 恒为 0**（NTFS 目录大小字段）：任何「空文件」判据都必须**排除目录**（`if not p.is_dir() and p.stat().st_size == 0`）。第33期实测后果：`FolderWatcher.handle_file` 把音频目录（有声书）当空文件跳过 ⇒ **win32 上有声书永远不入库**；Linux 目录 st_size 非 0 ⇒ CI/开发机永不暴露，只在 win32 稳定复现。要目录体积就用 `watcher._sig()`（对目录 `rglob` 递归汇总，它本来就是对的）。
 - `write_epub` 前先 `mkdir`（父目录不存在只 warn 不抛）；批量端点注册在 `/api/books/{bid}` 之前、字面量路径在 `{param}` 之前；目录型条目用 `path.exists()` 不用 `is_file()`；模板替换先长后短（`{series_index}` 排 `{series}`/`{index}` 前）。
 - **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**：路由是 `@app.get("/health")`（`server.py`），**没有 `/api/health`**；鉴权白名单只含 `/health`+`/api/auth/login`+`/api/logout`，打 `/api/health` 会被中间件拦成 401。前端 `lib/api.ts` 的 `health()` 也走 `/health`。三处必须同口径（第31期修掉了一条把路径写成 `/api/health` 的契约测试）。
 
