@@ -230,28 +230,28 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| Cover size behavior | 分段（2） | 未能采集 | `Sync all views` / `Per-view sizes`；Per-view 时在各自视图的 Display 面板调 | ⬜（本项目不暴露为设置） |
-| Portrait cover size | 滑杆/数字 | 130px | 竖向书库与视图的封面尺寸 | ⬜（本项目不暴露为设置） |
-| Square cover size | 滑杆/数字 | 150px | 方形书库与视图的封面尺寸 | ⬜（本项目不暴露为设置） |
-| Portrait grid spacing | 滑杆/数字 | 28px | 竖向封面的网格间距 | ⬜（本项目不暴露为设置） |
-| Square grid spacing | 滑杆/数字 | 28px | 方形封面的网格间距 | ⬜（本项目不暴露为设置） |
-| Card info mode | 分段（3） | **On hover** | `On hover` / `Below cover` / `Off`：网格卡上标题作者的显示位置 | ⬜（本项目不暴露为设置） |
-| Collapsed series cover | 分段（5） | **Stack** | `Stack` / `Mosaic` / `First` / `Latest` / `First Unread`：系列折叠时用哪张封面 | ⬜（本项目不暴露为设置） |
-| Author grid → Cover size | 滑杆/数字 | 120px | 作者网格封面宽度 | ⬜（本项目不暴露为设置） |
-| Author grid → Cover shape | 分段（2） | 未能采集 | `Circle` / `Square` | ⬜（本项目不暴露为设置） |
-| List and table → Zebra striping | 开关 | 未能采集 | 表格斑马纹 | ⬜（本项目表格已实现斑马纹，但不作为设置暴露） |
+| Cover size behavior | 分段（2） | 未能采集 | `Sync all views` / `Per-view sizes`；Per-view 时在各自视图的 Display 面板调 | ⬜ **主动不做**（第 32 期）—— 本项目书架只有一套网格，没有第二个视图可供联动，做出来就是个空开关；列在 Layout 页尾对照卡 |
+| Portrait cover size | 滑杆/数字 | 130px | 竖向书库与视图的封面尺寸 | ✅ **第 32 期已实现**（`stores/displayPrefs.ts` 的 `coverSize`，默认 140px；书架网格按它自动决定每行放几本） |
+| Square cover size | 滑杆/数字 | 150px | 方形书库与视图的封面尺寸 | ⬜ **主动不做**（第 32 期）—— 本项目三种视图一律用竖版 3:4 封面，没有方形缩略图这一实体；列在 Layout 页尾对照卡 |
+| Portrait grid spacing | 滑杆/数字 | 28px | 竖向封面的网格间距 | ✅ **第 32 期已实现**（`displayPrefs.ts` 的 `gridGap`，默认 16px） |
+| Square grid spacing | 滑杆/数字 | 28px | 方形封面的网格间距 | ⬜ **主动不做**（第 32 期）—— 同上，无方形封面实体；列在 Layout 页尾对照卡 |
+| Card info mode | 分段（3） | **On hover** | `On hover` / `Below cover` / `Off`：网格卡上标题作者的显示位置 | ✅ **第 32 期已实现**（`displayPrefs.ts` 的 `cardInfoMode`，三档一一对应：悬停浮层 / 封面下方 / 不显示）。⚠️ 同组的「**卡片主标签 / 次标签可选**」（书名 / 系列名 / 作者 / 隐藏）是**另一项**，仍**暂缓** —— 现固定显示书名 + 作者，列在页尾对照卡 |
+| Collapsed series cover | 分段（5） | **Stack** | `Stack` / `Mosaic` / `First` / `Latest` / `First Unread`：系列折叠时用哪张封面 | ⬜ **暂缓**（第 32 期）—— 现固定用系列首册封面，五种形态的渲染成本较高；列在 Layout 页尾对照卡 |
+| Author grid → Cover size | 滑杆/数字 | 120px | 作者网格封面宽度 | ✅ **第 32 期已实现**（`displayPrefs.ts` 的 `authorCoverSize`，默认 170px） |
+| Author grid → Cover shape | 分段（2） | 未能采集 | `Circle` / `Square` | ✅ **第 32 期已实现**（`displayPrefs.ts` 的 `authorCoverShape`，本项目两档为竖版 / 圆形） |
+| List and table → Zebra striping | 开关 | 未能采集 | 表格斑马纹 | ✅ **第 32 期已实现**（`displayPrefs.ts` 的 `zebraStriping`，作用于书架表格视图） |
 
-**本项目落地**：书库视图密度 / 封面尺寸 / 网格间距 / 卡片信息模式 / 系列折叠 / 作者网格外观等由前端统一定制，不暴露为逐项设置；此页仅作上游对照（`settingsNav` 标 `placeholder`）。
+**本项目落地**（**第 32 期改判**）：本页已由 `placeholder` 改 **`ready`** —— 6 项**真的驱动界面**（封面尺寸 / 网格间距 / 卡片信息位置 / 作者封面尺寸 / 作者封面形状 / 斑马纹，落在 `stores/displayPrefs.ts`，落盘键 `nf-display-prefs` 且**并入既有 `appearance` 偏好块**随「外观与阅读偏好整套同步」，不新增第七块），改完立即生效。**未支持的 4 项集中列在页尾对照卡里、逐条写明理由**（切视图独立尺寸 / 方形封面尺寸与间距 = 无对应实体，主动不做；折叠系列封面形态 / 卡片主次标签可选 = 暂缓），**不造只动不响的控件**。
 
 ### 2.6 YOU → Display → Behavior（`/settings/appearance/behavior`）
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| Thumbnail clicks | 分段（2） | 未能采集 | `Read first`（有可读文件直接进阅读器）/ `Open details`（进详情页） | ⬜（本项目有阅读入口，但无此开关，不暴露为设置） |
-| Show filter preview by default | 开关 | 未能采集 | 打开智能书架时自动展开筛选与排序摘要 | ⬜（本项目不暴露为设置） |
-| Collapse series by default | 开关 | 未能采集 | 在书库/收藏夹/智能书架中把同系列书折叠为一张卡 | ⬜（本项目不暴露为设置） |
+| Thumbnail clicks | 分段（2） | 未能采集 | `Read first`（有可读文件直接进阅读器）/ `Open details`（进详情页） | ✅ **第 32 期已实现**（`stores/shelfPrefs.ts` 的 `thumbnailClick`，默认 `details`；书架网格 / 列表 / 表格三处点击都走它） |
+| Show filter preview by default | 开关 | 未能采集 | 打开智能书架时自动展开筛选与排序摘要 | ✅ **第 32 期已实现**（`shelfPrefs.ts` 的 `filtersOpenByDefault`，默认关；只定初值，之后开合跟随用户操作） |
+| Collapse series by default | 开关 | 未能采集 | 在书库/收藏夹/智能书架中把同系列书折叠为一张卡 | ✅ **第 32 期已实现**（`shelfPrefs.ts` 的 `collapseSeries`，默认关） |
 
-**本项目落地**：缩略图点击行为 / 筛选预览默认展开 / 系列默认折叠等浏览行为由前端固定，不暴露为设置；此页仅作上游对照（`settingsNav` 标 `placeholder`）。
+**本项目落地**（**第 32 期改判**）：本页已由 `placeholder` 改 **`ready`**，**上游三项全部做实** —— 缩略图点击行为 / 筛选预览默认展开 / 系列默认折叠，字段落在 `stores/shelfPrefs.ts`（落盘键 `nf-shelf-prefs`，与 `coverPrefs` / `theme` 一样走 localStorage，**不进服务端偏好同步**：这是书架级偏好，归属边界与 `displayPrefs` 不同）。因三项全做，**页尾没有「上游还有、本项目未支持」的对照卡**。
 
 ### 2.7 YOU → Display → Language（`/settings/appearance/language`）
 
@@ -842,7 +842,7 @@ SERVER
 | BookOrbit 分区 | 本项目现有分区 | 差异判定 |
 |---|---|---|
 | YOU → Profile | **账户 / Profile 页** | ✅ 已实现：账号展示、改密码、头像上传/移除、显示名、时区（接通时间类成就）、成就开关、引导重放；OIDC / Email / Username（不可改）单用户无意义，不实现 |
-| YOU → Display（Theme/Book Covers/Icons/Layout/Behavior/Language） | **外观**（Theme / Book Covers 已实现；Icons / Layout / Behavior / Language 为只读占位页） | ✅ Theme / Book Covers 已实现；Icons / Layout / Behavior 由设计系统统一、不暴露为设置（`placeholder` 对照）；Language 本项目中文单语，`placeholder` 对照 |
+| YOU → Display（Theme/Book Covers/Icons/Layout/Behavior/Language） | **外观**（Theme / Book Covers / Layout / Behavior 已实现；Icons / Language 为只读占位页） | ✅ Theme / Book Covers 早已实现；**Layout / Behavior 第 32 期由 `placeholder` 改 `ready`**（详见 2.5 / 2.6）；**Icons 主动不做** —— 本项目图标是内联 SVG 常量集，做「风格 / 上传」需多套图标集 + 存储覆盖机制，成本远超收益，保持 `placeholder` 如实标注；Language 本项目中文单语，`placeholder` 对照 |
 | YOU → Reader（eBook/PDF/Comics/Audiobook/Fonts/General） | **阅读**（六页均实现） | ✅ 六页均 `ready`；eBook 个别项未支持（新书套用设置 / 固定版式页宽 / 字重样式 / 文本区左右内边距） |
 | YOU → Notifications | **通知** 页 | ✅ 已实现：按类 Off / Problems / All 客户端过滤（生效范围 = 通知中心与日志） |
 | YOU → Privacy & Sharing | **隐私与共享** 只读占位页 | ➖ 单用户部署下没有可分享对象（无其它账号、无管理员角色），整页不提供 |
