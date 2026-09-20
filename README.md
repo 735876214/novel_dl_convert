@@ -13,7 +13,7 @@ TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub 
 - 文本精排、繁体转简体（opencc）
 - 三级元数据（文件名 / 正文头部 / 在线补全）
 - 基于 ebooklib 的 EPUB 组装（HTML 净化 + 封面）
-- **可插拔书源适配器**：已含 Gutenberg 公版源，并附 `generic.py` 扩展模板
+- **可插拔书源适配器**：已含 Gutenberg 公版源 + JSON 规则源（`CONFIG_DIR/sources/*.json`），另附 `generic.py` 扩展模板（供必须写 Python 时复制）
 - **下载加固**：类浏览器标头伪造、Cookie 持久化（LWPCookieJar 落盘）、429 退避重试、域名替换、**原生 JS eval**（Node 执行站点解密脚本）
 - **增量更新**：为下载得到的 txt 写 sidecar，日后只爬取新增章节再重转
 - **内容预览 API**：`/content?url=...` 即时抓取清洗（不落盘即可完美预览），`/supported` 判断 URL 归属
@@ -283,7 +283,7 @@ novel_dl_convert/
                        + opds.py（对外 OPDS 目录）
                        + komga.py（Komga 库布局与系列推断）· koreader.py（kosync 进度互通）
                        + integrations.py（Hardcover / Readwise / StoryGraph 凭据与验证）
-    sources/           书源适配器（gutenberg 公版 / generic 模板 / rules 数据驱动 / store 用户源管理 / manager）
+    sources/           书源适配器（gutenberg 公版 / generic 模板·不注册 / rules 数据驱动 / store 用户源管理 / manager）
     static/v2/          前端构建产物（Vue + Tailwind，由 frontend/ 构建，不入库）
   frontend/           前端工程（Vue 3 SFC + TypeScript + Vite 8 + Tailwind v4 + Pinia）
     src/views/          仪表盘 / 探索发现 / 任务中心 / 数据统计 / 阅读记录 / 通知 / 成就 /
@@ -426,11 +426,19 @@ docker build --build-arg NODE_VERSION=22 -t novelforge .
 不带 npm/文档；按路径精确 COPY 配合 `.dockerignore`。若不需要 JS 解密能力，删掉 runtime
 阶段 `COPY --from=nodejs` 那一行可再省约 90~110MB（镜像里最大的单个文件）。
 
-## 扩展一个新书源（代码方式）
+## 扩展一个新书源
 
-复制 `novelforge/sources/generic.py` 为 `my_site.py`，改 `name` / `domains`，实现 `search()` 与
-`fetch_book()`；若有字体加密 / 内容混淆，在 `decryption_js()` 返回解密片段，`render()` 会自动调用
-Node 执行。加 `@register` 即可被 `/search`、`/download`、`/supported` 自动识别，零改核心。
+**首选：JSON 规则（不写代码）** —— 在设置页「书源」粘贴规则，或往 `CONFIG_DIR/sources/<name>.json`
+放一个文件，启动时自动加载。字段约定见 `novelforge/sources/rules.py` 的模块 docstring（搜索 / 取书 /
+正文提取各支持 css 与 regex 两种模式，可离线用正则）。
+
+**进阶：Python 适配器** —— 复制 `novelforge/sources/generic.py` 为 `my_site.py`，改 `name` / `domains`，
+实现 `search()` 与 `fetch_book()`；若有字体加密 / 内容混淆，在 `decryption_js()` 返回解密片段，
+`render()` 会自动调用 Node 执行。**给自己的类加 `@register`** 即可被 `/search`、`/download`、`/supported`
+自动识别，零改核心。
+
+> 模板本身带 `@register` 会让每次 `/api/search` 都命中一个未实现的 `search()`，被吞成一条
+> 「书源 generic 搜索失败」的假失败日志，并让它那个占位域名混进书源清单 —— 所以模板**不注册**。
 
 ## 合规说明
 

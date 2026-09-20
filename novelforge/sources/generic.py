@@ -9,12 +9,20 @@ denovel 的核心体验之一是「写扩展脚本即可增加站点支持」。
 2. 在 search() 里用 BeautifulSoup/lxml 解析搜索结果列表。
 3. 在 fetch_book() 里取目录页 → 列出章节 URL → 并发抓取正文 → 拼接。
 4. 若站点有字体加密 / 内容混淆，在 decryption_js() 返回解密片段，render() 会自动调用。
+5. **给自己的类加 `@register`**（本文件刻意不加，见下）。
+
+⚠️ 本模板类**不注册**：它的 `search()` / `fetch_book()` 都是 `NotImplementedError`，
+一旦进 `REGISTRY`，`DownloadManager.search()` 就会每次都命中它、抛异常，被吞成一条
+「书源 generic 搜索失败」的**假失败日志**（还会白建一次 BrowserClient）；同时它那个
+占位域名 `example-novel.com` 会混进 `/api/sources` 的书源清单，看着像一个真书源。
+
+不写代码就加站点，走 `rules.py` 的 JSON 规则（`CONFIG_DIR/sources/*.json`，见 `store.py`）：
+那才是当前的推荐路径，本模板只服务「规则表达不了、必须写 Python」的场景。
 """
-from .base import SourceAdapter, register
+from .base import SourceAdapter
 from ..core import network
 
 
-@register
 class GenericHtmlSource(SourceAdapter):
     name = "generic"
     # 改成你的站点主域名（用于 /supported 自动选源）
