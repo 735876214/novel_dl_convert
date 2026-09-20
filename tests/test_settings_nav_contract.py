@@ -37,8 +37,8 @@ UPSTREAM_TITLES = [
 # 「又决定不做一页」，应当显式改这里，避免悄悄退化）。
 EXPECTED_PLACEHOLDERS = {
     "appearance/icons",
-    "appearance/layout",
-    "appearance/behavior",
+    # appearance/layout 与 appearance/behavior 已于第 32 期做实（改标 ready + 注册组件），
+    # 从本清单移出 —— 它们不再是占位页。
     "appearance/language",
     "account/privacy",
     "account/restrictions",
