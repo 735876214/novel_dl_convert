@@ -6,8 +6,10 @@ from novelforge import server
 
 
 def test_health_exposes_version_matching_single_source(client):
-    # /health 在鉴权中间件白名单内（server.py 的 _auth_middleware），免鉴权
-    r = client.get("/api/health")
+    # ⚠️ 路径是 `/health`，**不是** `/api/health`：`/health` 在鉴权中间件白名单内
+    # （`server.py` 的 `_auth_middleware`），`/api/health` 根本没有这个路由、且会被中间件拦成 401。
+    # 前端也调 `/health`（`lib/api.ts` 的 `health()`），三处必须同口径。
+    r = client.get("/health")
     assert r.status_code == 200, r.text
     body = r.json()
     assert "version" in body, "/health 必须下发 version"
