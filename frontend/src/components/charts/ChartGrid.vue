@@ -6,6 +6,11 @@ import LanguageDistributionChart from '@/components/charts/library/LanguageDistr
 import PageCountDistributionChart from '@/components/charts/library/PageCountDistributionChart.vue'
 import PublicationYearTimelineChart from '@/components/charts/library/PublicationYearTimelineChart.vue'
 import StorageByFormatChart from '@/components/charts/library/StorageByFormatChart.vue'
+import CompletionTimelineChart from '@/components/charts/reading/CompletionTimelineChart.vue'
+import FavoriteReadingDaysChart from '@/components/charts/reading/FavoriteReadingDaysChart.vue'
+import PeakReadingHoursChart from '@/components/charts/reading/PeakReadingHoursChart.vue'
+import ProgressFunnelChart from '@/components/charts/reading/ProgressFunnelChart.vue'
+import ReadingClockChart from '@/components/charts/reading/ReadingClockChart.vue'
 import type { StatsOverview } from '@/lib/api'
 import type { StatisticsChartMeta, StatisticsChartSize } from '@/lib/statistics-charts'
 
@@ -32,6 +37,11 @@ const CHART_COMPONENTS: Record<string, Component> = {
   'page-count-distribution': PageCountDistributionChart,
   'books-added-over-time': BooksAddedOverTimeChart,
   'publication-year-timeline': PublicationYearTimelineChart,
+  'reading-clock': ReadingClockChart,
+  'peak-reading-hours': PeakReadingHoursChart,
+  'progress-funnel': ProgressFunnelChart,
+  'completion-timeline': CompletionTimelineChart,
+  'favorite-reading-days': FavoriteReadingDaysChart,
 }
 
 /** 尺寸 → 栅格跨度（逐条照搬上游 `StatisticsGrid.vue:53-60`） */

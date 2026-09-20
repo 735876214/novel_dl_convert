@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
+import ChartConfigPanel from '@/components/charts/ChartConfigPanel.vue'
 import ChartGrid from '@/components/charts/ChartGrid.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -9,8 +10,9 @@ import PageHead from '@/components/ui/PageHead.vue'
 import Segment from '@/components/ui/Segment.vue'
 import { api, type StatsOverview, type StatsTop } from '@/lib/api'
 import { fmtBytes, fmtDuration } from '@/lib/format'
-import { DEFAULT_CHART_ORDER, STATISTICS_CHART_META, type StatisticsChartMeta } from '@/lib/statistics-charts'
+import { STATISTICS_CHART_META, type StatisticsChartMeta, type StatisticsTab } from '@/lib/statistics-charts'
 import { useLibraryStore } from '@/stores/library'
+import { useStatsChartPrefsStore } from '@/stores/statsChartPrefs'
 
 /**
  * 数据统计：**两个分区**（对齐上游的 Library Stats / My Reading）。
@@ -165,13 +167,19 @@ const largestShown = computed(() =>
 )
 
 // ---- 图表（第 32 期）----
-// 目录（标题 / 图标 / 尺寸）与默认顺序都在 lib/statistics-charts.ts，这里只按顺序取。
-// Configure 上线后这里会换成「用户排过序 + 过滤过显隐」的列表，届时这行也跟着改。
-const libraryCharts = computed<StatisticsChartMeta[]>(() =>
-  DEFAULT_CHART_ORDER.library
+// 目录（标题 / 图标 / 尺寸）在 lib/statistics-charts.ts；顺序与显隐来自用户配置
+// （stores/statsChartPrefs，默认即 lib 里的默认顺序）—— Configure 面板写的就是它。
+const chartPrefs = useStatsChartPrefsStore()
+const configOpen = ref(false)
+
+function chartsOf(tab: StatisticsTab): StatisticsChartMeta[] {
+  return chartPrefs.prefs.order[tab]
+    .filter((id) => chartPrefs.isVisible(id))
     .map((id) => STATISTICS_CHART_META[id])
-    .filter((m): m is StatisticsChartMeta => Boolean(m)),
-)
+    .filter((m): m is StatisticsChartMeta => Boolean(m))
+}
+const libraryCharts = computed<StatisticsChartMeta[]>(() => chartsOf('library'))
+const readingCharts = computed<StatisticsChartMeta[]>(() => chartsOf('reading'))
 </script>
 
 <template>
@@ -208,15 +216,34 @@ const libraryCharts = computed<StatisticsChartMeta[]>(() =>
           近 {{ d }} 天
         </button>
       </div>
+      <!-- 图表配置（第 32 期）：页内展开，不用抽屉 —— 本项目没有 Sheet 组件，
+           也不值得为一个面板新造一套遮罩 + 焦点陷阱 -->
+      <button
+        type="button"
+        class="cursor-pointer rounded-md px-2.5 py-1.5 text-[12px] font-medium transition-colors"
+        :class="configOpen
+          ? 'bg-primary text-primary-foreground'
+          : 'bg-muted text-muted-foreground hover:text-foreground'"
+        @click="configOpen = !configOpen"
+      >
+        图表配置
+      </button>
     </div>
 
+    <ChartConfigPanel v-if="configOpen" :tab="tab" />
     <div v-if="!s" class="py-20 text-center text-[13px] text-muted-foreground">
       {{ loading ? '加载中…' : '暂无数据' }}
     </div>
 
     <template v-else-if="tab === 'library'">
       <!-- 图表（第 32 期）：概览在上、明细卡片在下 —— 与上游「统计页即图表页」的层次一致 -->
-      <ChartGrid :charts="libraryCharts" :data="s" />
+      <div
+        v-if="!libraryCharts.length"
+        class="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[12.5px] text-muted-foreground"
+      >
+        这个分区的图表都被隐藏了 —— 展开上面的「图表配置」可以把它们放回来。
+      </div>
+      <ChartGrid v-else :charts="libraryCharts" :data="s" />
 
       <!-- 规模卡片 -->
       <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -498,9 +525,18 @@ const libraryCharts = computed<StatisticsChartMeta[]>(() =>
     </template>
 
     <template v-else>
+      <!-- 图表（第 32 期）：与书库统计侧对称，图表在上、明细卡片在下 -->
+      <div
+        v-if="!readingCharts.length"
+        class="rounded-lg border border-dashed border-border px-4 py-6 text-center text-[12.5px] text-muted-foreground"
+      >
+        这个分区的图表都被隐藏了 —— 展开上面的「图表配置」可以把它们放回来。
+      </div>
+      <ChartGrid v-else :charts="readingCharts" :data="s" />
+
       <!-- 规模卡片（我的阅读侧）。连续天数 / 有记录天数不在这里重复：
            仪表盘已有「连续天数」部件（ReadingStreakWidget），同一数字放两处会各说各话。 -->
-      <div class="grid grid-cols-2 gap-3">
+      <div class="mt-4 grid grid-cols-2 gap-3">
         <Card v-for="c in [
           { label: '平均进度', value: `${Math.round(s.avg_progress)}%`, icon: 'chart' },
           { label: '阅读时长', value: fmtDuration(s.reading.seconds), icon: 'clock' },
