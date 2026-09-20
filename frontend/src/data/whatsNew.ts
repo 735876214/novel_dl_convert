@@ -1,5 +1,5 @@
 export interface WhatsNewEntry {
-  version: string
+  /** 发布日期（YYYY-MM-DD）；版本号统一从后端 /health 取，不在前端手写 */
   date: string
   title: string
   items: string[]
@@ -8,7 +8,6 @@ export interface WhatsNewEntry {
 /** 静态更新日志（上游 BookOrbit 的 What's New 同类）。新增功能时在此追加一条即可。 */
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
-    version: 'v0.6',
     date: '2026-09-18',
     title: '补齐上游缺口（第 6 期）',
     items: [
@@ -19,7 +18,6 @@ export const WHATS_NEW: WhatsNewEntry[] = [
     ],
   },
   {
-    version: 'v0.5',
     date: '2026-09-17',
     title: '元数据抓取与 Komga 兼容服务端',
     items: [
@@ -28,7 +26,6 @@ export const WHATS_NEW: WhatsNewEntry[] = [
     ],
   },
   {
-    version: 'v0.0 – v0.4',
     date: '—',
     title: '基础能力与生态对接',
     items: [

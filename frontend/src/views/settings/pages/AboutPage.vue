@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import Badge from '@/components/ui/Badge.vue'
 import Card from '@/components/ui/Card.vue'
+import { api } from '@/lib/api'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 
 /**
@@ -15,7 +16,16 @@ import { useSettingsConfig } from '@/composables/useSettingsConfig'
 
 const { files, loadConfig } = useSettingsConfig()
 
-onMounted(() => loadConfig())
+/** 版本（后端 /health 下发，全站唯一真值源；不再在前端手写版本号） */
+const version = ref('')
+
+onMounted(() => {
+  loadConfig()
+  api
+    .health()
+    .then((h) => (version.value = h.version))
+    .catch(() => {})
+})
 </script>
 
 <template>
@@ -31,6 +41,7 @@ onMounted(() => loadConfig())
         <div
           v-for="item in [
             { k: '应用', v: 'NovelForge · 书籍轨道' },
+            { k: '版本', v: version || '—' },
             { k: '定位', v: 'TXT → EPUB 转换 + 在线阅读平台' },
             { k: '前端', v: 'Vue 3 + Pinia + Tailwind v4' },
             { k: '后端', v: 'FastAPI + SQLite' },
