@@ -110,6 +110,8 @@ export interface LogQuery {
   action?: string
   status?: string
   q?: string
+  /** 操作者（登录账号名），**精确匹配**；空/不传 = 不过滤 */
+  actor?: string
 }
 
 export interface WatcherStatus {
@@ -1870,10 +1872,14 @@ export const api = {
     if (query.action) p.set('action', query.action)
     if (query.status) p.set('status', query.status)
     if (query.q) p.set('q', query.q)
+    if (query.actor) p.set('actor', query.actor)
     const qs = p.toString()
     // 注意：后端的 count 字段未必是数字（activity_log.count() 可能返回聚合对象），
     // 因此类型放宽为 unknown，由调用方归一化。
-    return request<{ items: LogItem[]; count: unknown; dir: string }>(`/api/logs${qs ? `?${qs}` : ''}`)
+    // actors 是操作者下拉的候选，**不受 query.actor 影响**（后端另行取全量）。
+    return request<{ items: LogItem[]; count: unknown; dir: string; actors: string[] }>(
+      `/api/logs${qs ? `?${qs}` : ''}`,
+    )
   },
 
   clearLogs: () =>

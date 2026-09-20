@@ -17,6 +17,8 @@ import { api, type LogItem } from '@/lib/api'
  * 与上游的差异：上游是独立的审计子系统（操作者 / 类别 / Details / 筛选器齐全）；
  * 本项目复用活动日志，**类别由动作归并**，且没有独立的历史留存策略。
  * 历史条目没有 actor 字段 —— 一律按「未记录」渲染，不报错、不臆测。
+ * 筛选支持动作 / 结果 / 操作者 / 关键字四维；操作者候选由后端从日志里**实际出现过的
+ * 名字**汇总（`/api/logs` 的 `actors`），不受当前筛选影响，故选中后仍能切回来。
  */
 
 const items = ref<LogItem[]>([])
@@ -26,6 +28,9 @@ const err = ref('')
 const fAction = ref('')
 const fStatus = ref('')
 const fQ = ref('')
+const fActor = ref('')
+/** 操作者下拉的候选（后端另行取全量，**不受当前筛选影响** —— 否则选中一个就切不回来） */
+const actors = ref<string[]>([])
 
 const ACTIONS = ['转换', '添加', '跳过', '重命名', '清理', '刮削']
 const STATUSES = ['成功', '失败']
@@ -53,8 +58,10 @@ async function load(): Promise<void> {
       action: fAction.value || undefined,
       status: fStatus.value || undefined,
       q: fQ.value.trim() || undefined,
+      actor: fActor.value || undefined,
     })
     items.value = r.items
+    actors.value = r.actors ?? []
   } catch (e) {
     err.value = e instanceof Error ? e.message : '读取失败'
     items.value = []
@@ -67,6 +74,7 @@ function resetFilters(): void {
   fAction.value = ''
   fStatus.value = ''
   fQ.value = ''
+  fActor.value = ''
   void load()
 }
 
@@ -129,6 +137,15 @@ function downloadLog(): void {
         >
           <option value="">全部结果</option>
           <option v-for="s in STATUSES" :key="s" :value="s">{{ s }}</option>
+        </select>
+        <select
+          v-model="fActor"
+          aria-label="按操作者筛选"
+          class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+          @change="load"
+        >
+          <option value="">全部操作者</option>
+          <option v-for="a in actors" :key="a" :value="a">{{ a }}</option>
         </select>
         <input
           v-model="fQ"
@@ -225,9 +242,9 @@ function downloadLog(): void {
         '上游的 Details 列是结构化对象（如 Book #301 / Library #3），本项目是自由文本',
         '上游按「账号 + 设备 + 会话」维度记录（如 Stromboid#1），本项目只有账号名',
         '审计记录的留存策略与导出格式（本项目仅保留单个 activity.log / .jsonl 并支持下载）',
-        '按操作者筛选（本项目已记录 actor，但日志接口尚未支持按 actor 过滤）',
+        '筛「无操作者」的条目（历史条目 actor 为空，按名字筛不到它们；页面顶部有单独计数提示）',
       ]"
-      note="本项目复用活动日志作为审计视图：类别由动作归并得出，不是独立体系；操作者字段是本次新增，历史条目缺失属正常。"
+      note="本项目复用活动日志作为审计视图：类别由动作归并得出，不是独立体系；操作者字段是本次新增，历史条目缺失属正常。筛选支持动作 / 结果 / 操作者 / 关键字四维。"
     />
   </div>
 </template>
