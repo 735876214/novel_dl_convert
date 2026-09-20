@@ -248,8 +248,9 @@ def log_add_fail(file, detail, **kw):
 
 # ---------------- 读取 ----------------
 
-def recent(limit: int = 200, action: str = "", status: str = "", q: str = "") -> list:
-    """读取最近的活动记录（新→旧），支持按操作 / 结果 / 关键字过滤。
+def recent(limit: int = 200, action: str = "", status: str = "", q: str = "",
+           actor: str = "") -> list:
+    """读取最近的活动记录（新→旧），支持按操作 / 结果 / 关键字 / 操作者过滤。
 
     内存缓冲只含**本次进程**写入的记录。原实现仅在「内存为空」时才回填 jsonl，
     于是重启后只要发生一次新写入，内存就不再为空，历史条目被整体遮蔽 ——
@@ -276,7 +277,24 @@ def recent(limit: int = 200, action: str = "", status: str = "", q: str = "") ->
                  if ql in str(e.get("file", "")).lower()
                  or ql in str(e.get("output", "")).lower()
                  or ql in str(e.get("detail", "")).lower()]
+    if actor:
+        # 精确匹配（操作者是账号名或「系统」，不是搜索词）—— 与 q 的子串语义刻意不同
+        items = [e for e in items if str(e.get("actor") or "").strip() == actor]
     return items[:limit] if limit and limit > 0 else items
+
+
+def actors(scan: int = 1000) -> list:
+    """出现过的操作者清单（去重 + 排序），供审计视图的操作者下拉用。
+
+    取最近 scan 条 —— 与 `api_notifications` 的 `unread_total` 同一口径（内存缓冲
+    2000 条，一半足以覆盖实际使用）。**不受当前筛选影响**：否则选中一个操作者后
+    候选清单会塌缩成一项，再也切不回去。
+
+    ⚠️ 空 actor（历史条目 / 未鉴权路径）不列入 —— 那是「没有记录」，不是一个可选项。
+    """
+    seen = {str(e.get("actor") or "").strip() for e in recent(limit=scan)}
+    seen.discard("")
+    return sorted(seen)
 
 
 def _read_tail(n: int) -> list:

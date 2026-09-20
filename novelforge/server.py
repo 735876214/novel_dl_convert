@@ -3854,11 +3854,14 @@ def api_metadata_score(force: bool = False):
 
 @app.get("/api/logs")
 def api_logs(limit: int = Query(200, ge=1, le=5000), action: str = "",
-             status: str = "", q: str = ""):
+             status: str = "", q: str = "", actor: str = ""):
     return {
-        "items": activity_log.recent(limit=limit, action=action, status=status, q=q),
+        "items": activity_log.recent(limit=limit, action=action, status=status, q=q,
+                                     actor=actor),
         "count": activity_log.count(),
         "dir": str(activity_log.log_dir()),
+        # 操作者下拉的候选：**不受 actor 参数影响**（否则选中一个就切不回来）。
+        "actors": activity_log.actors(),
     }
 
 
