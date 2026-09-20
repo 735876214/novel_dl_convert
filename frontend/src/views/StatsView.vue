@@ -2,11 +2,14 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
+import ChartGrid from '@/components/charts/ChartGrid.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import Segment from '@/components/ui/Segment.vue'
 import { api, type StatsOverview, type StatsTop } from '@/lib/api'
+import { fmtBytes, fmtDuration } from '@/lib/format'
+import { DEFAULT_CHART_ORDER, STATISTICS_CHART_META, type StatisticsChartMeta } from '@/lib/statistics-charts'
 import { useLibraryStore } from '@/stores/library'
 
 /**
@@ -72,18 +75,6 @@ const TABS = [
 
 const s = computed(() => data.value)
 
-function fmtBytes(bytes: number): string {
-  if (!bytes) return '0 B'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let v = bytes
-  let i = 0
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024
-    i += 1
-  }
-  return `${v.toFixed(v >= 10 || i === 0 ? 0 : 1)} ${units[i]}`
-}
-
 const formats = computed(() =>
   Object.entries(s.value?.books.by_format ?? {}).sort((a, b) => b[1] - a[1]),
 )
@@ -103,15 +94,6 @@ const rhythmPeak = computed(() => Math.max(1, ...rhythm.value))
 function rhythmHeight(n: number): string {
   if (n <= 0) return '3%'
   return `${Math.max(8, (n / rhythmPeak.value) * 100).toFixed(1)}%`
-}
-
-/** 阅读时长（秒）→ 可读文案 */
-function fmtDuration(seconds: number): string {
-  if (!seconds) return '0 分'
-  const h = Math.floor(seconds / 3600)
-  const m = Math.round((seconds % 3600) / 60)
-  if (h > 0) return `${h} 小时 ${m} 分`
-  return `${Math.max(1, m)} 分`
 }
 
 const readRhythm = computed(() => s.value?.reading_28d ?? [])
@@ -181,6 +163,15 @@ const largest = computed(() => s.value?.largest ?? [])
 const largestShown = computed(() =>
   expanded.value.largest ? largest.value : largest.value.slice(0, 8),
 )
+
+// ---- 图表（第 32 期）----
+// 目录（标题 / 图标 / 尺寸）与默认顺序都在 lib/statistics-charts.ts，这里只按顺序取。
+// Configure 上线后这里会换成「用户排过序 + 过滤过显隐」的列表，届时这行也跟着改。
+const libraryCharts = computed<StatisticsChartMeta[]>(() =>
+  DEFAULT_CHART_ORDER.library
+    .map((id) => STATISTICS_CHART_META[id])
+    .filter((m): m is StatisticsChartMeta => Boolean(m)),
+)
 </script>
 
 <template>
@@ -224,8 +215,11 @@ const largestShown = computed(() =>
     </div>
 
     <template v-else-if="tab === 'library'">
+      <!-- 图表（第 32 期）：概览在上、明细卡片在下 —— 与上游「统计页即图表页」的层次一致 -->
+      <ChartGrid :charts="libraryCharts" :data="s" />
+
       <!-- 规模卡片 -->
-      <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div class="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Card v-for="c in [
           { label: '书籍', value: String(s.books.total), icon: 'book' },
           { label: '占用', value: fmtBytes(s.books.size), icon: 'file' },
