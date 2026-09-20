@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .core import pipeline, activity_log, library, fileops, publish, scrape
 from .core import watcher as watcher_mod
-from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, recommend,
+from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, activity, recommend,
                    fonts, comics, audio, opds, komga, koreader, integrations,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, migrate, library_rules, features, series_meta,
@@ -3226,6 +3226,21 @@ def api_stats(
     的 `library_id: str = ""` 同一条惯例）。阅读会话没有库维度，按「书属于哪个库」判。
     """
     return stats.overview(days, top, library_id)
+
+
+@app.get("/api/reading-activity")
+def api_reading_activity(
+    library_id: str = Query(""),
+    year: int = Query(None),
+    limit: int = Query(120, ge=1, le=500),
+):
+    """阅读活动：贡献热力图（按日阅读分钟）+ 时间轴（会话/批注/成就合并）。
+
+    第 31 期新增。``library_id`` 空串 = 全部书库（与 ``/api/stats`` 同惯例）；
+    ``year`` 过滤热力图年份（None = 不过滤）；``limit`` 限制时间轴条数。
+    空库时 heatmap.days / timeline.events 均为空列表，不补假数据。
+    """
+    return activity.reading_activity(library_id, year, limit)
 
 
 # ---------------- 应用设置（服务端持久化 → settings.json）----------------

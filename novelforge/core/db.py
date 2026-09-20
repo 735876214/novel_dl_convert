@@ -929,6 +929,65 @@ def session_by_book() -> dict:
     }
 
 
+def reading_day_minutes(book_ids: set | None = None) -> list:
+    """按本地日聚合阅读分钟数（贡献热力图源）。
+
+    返回 ``[(day 'YYYY-MM-DD', minutes, sessions), ...]``（已排序）。
+    对齐上游 ``reading-session.ts`` 的 ``dailySummary{day,totalMinutes}[]``。
+    ``book_ids`` 语义同 ``reading_totals``（None = 全部）。
+    """
+    c = _connect()
+    rows = c.execute(
+        "SELECT book_id, seconds, started_at FROM reading_sessions"
+    ).fetchall()
+    agg: dict = {}
+    for r in rows:
+        if book_ids is not None and r["book_id"] not in book_ids:
+            continue
+        day = time.strftime("%Y-%m-%d", time.localtime(r["started_at"]))
+        a = agg.setdefault(day, [0.0, 0])
+        a[0] += float(r["seconds"]) / 60.0
+        a[1] += 1
+    return [(d, round(m, 1), s) for d, (m, s) in sorted(agg.items())]
+
+
+def session_feed(book_ids: set | None = None, limit: int = 500) -> list:
+    """最近的阅读会话（新 → 旧），时间轴用。``book_ids`` 语义同 ``reading_totals``。"""
+    c = _connect()
+    rows = c.execute(
+        "SELECT book_id, seconds, ended_at FROM reading_sessions ORDER BY ended_at DESC"
+    ).fetchall()
+    out = []
+    for r in rows:
+        if book_ids is not None and r["book_id"] not in book_ids:
+            continue
+        out.append({
+            "book_id": r["book_id"],
+            "seconds": float(r["seconds"]),
+            "ended_at": float(r["ended_at"]),
+        })
+    return out[: max(1, int(limit))]
+
+
+def annotation_feed(book_ids: set | None = None, limit: int = 500) -> list:
+    """最近的批注（软删除除外），新 → 旧，时间轴用。
+
+    ``book_ids`` 非空集合才过滤（空集合 = 该库无书，直接返回空，避免 ``IN ()`` 语法错）。
+    """
+    c = _connect()
+    sql = "SELECT book_id, note, quote, created_at FROM annotations WHERE deleted_at=0 "
+    if book_ids is not None:
+        if not book_ids:
+            return []
+        sql += "AND book_id IN ({}) ".format(",".join("?" * len(book_ids)))
+        args: tuple = tuple(book_ids)
+    else:
+        args = ()
+    sql += "ORDER BY created_at DESC LIMIT ?"
+    rows = c.execute(sql, args + (max(1, int(limit)),)).fetchall()
+    return [dict(r) for r in rows]
+
+
 # ---------------- 任务（下载 / 转换）----------------
 # 任务原先只存在 server.py 的**进程内字典**里（重启即清空），前端还混了 6 条演示种子数据
 # 并按固定步进「假推进」进度条。现在落 SQLite：
