@@ -821,31 +821,46 @@ def add_session(book_id: str, seconds: float, started_at=None, ended_at=None) ->
         c.commit()
 
 
-def reading_totals() -> dict:
+def reading_totals(book_ids: set | None = None) -> dict:
+    """阅读总时长与会话数。
+
+    ``book_ids`` 为 **None = 不按书过滤**（与加库维度之前逐字节一致）；给了集合
+    就只算这些书的会话 —— 阅读会话本身**没有库维度**，「某库的阅读时长」只能靠
+    「这本书属于哪个库」判定，故由调用方（``core/stats.py``）传入该书库的书 id 集合。
+    """
     c = _connect()
-    r = c.execute(
-        "SELECT COALESCE(SUM(seconds), 0) AS s, COUNT(*) AS n FROM reading_sessions"
-    ).fetchone()
-    return {"seconds": float(r["s"]), "sessions": int(r["n"])}
+    rows = c.execute("SELECT book_id, seconds FROM reading_sessions").fetchall()
+    picked = rows if book_ids is None else [r for r in rows if r["book_id"] in book_ids]
+    return {
+        "seconds": float(sum(float(r["seconds"]) for r in picked)),
+        "sessions": len(picked),
+    }
 
 
-def daily_seconds(days: int = 28) -> list:
-    """近 days 天每日阅读秒数（索引 0 = days-1 天前，末尾 = 今天）。"""
+def daily_seconds(days: int = 28, book_ids: set | None = None) -> list:
+    """近 days 天每日阅读秒数（索引 0 = days-1 天前，末尾 = 今天）。
+
+    ``book_ids`` 语义同 ``reading_totals``（None = 全部）。
+    """
     c = _connect()
     now = time.time()
     buckets = [0.0] * days
-    for r in c.execute("SELECT seconds, ended_at FROM reading_sessions").fetchall():
+    for r in c.execute("SELECT book_id, seconds, ended_at FROM reading_sessions").fetchall():
+        if book_ids is not None and r["book_id"] not in book_ids:
+            continue
         d = int((now - r["ended_at"]) // 86400)
         if 0 <= d < days:
             buckets[days - 1 - d] += float(r["seconds"])
     return buckets
 
 
-def hour_histogram() -> list:
+def hour_histogram(book_ids: set | None = None) -> list:
     """会话开始时段的 24 小时分布。
 
     第 25 期起按账号时区归一：设置过 timezone 才转换，否则回落服务器本地时
     （保持历史口径，避免老库无时区时分布突变）。时区解析失败同样回落本地时。
+
+    ``book_ids`` 语义同 ``reading_totals``（None = 全部）。
     """
     c = _connect()
     tz = (get_user_profile().get("timezone") or "").strip()
@@ -856,7 +871,9 @@ def hour_histogram() -> list:
         except Exception:
             zone = None
     buckets = [0] * 24
-    for r in c.execute("SELECT started_at FROM reading_sessions").fetchall():
+    for r in c.execute("SELECT book_id, started_at FROM reading_sessions").fetchall():
+        if book_ids is not None and r["book_id"] not in book_ids:
+            continue
         ts = r["started_at"]
         if zone is not None:
             hr = datetime.fromtimestamp(ts, tz=zone).hour
@@ -866,12 +883,17 @@ def hour_histogram() -> list:
     return buckets
 
 
-def active_days() -> list:
-    """有阅读会话的日期（本地时区 YYYY-MM-DD，已排序）。"""
+def active_days(book_ids: set | None = None) -> list:
+    """有阅读会话的日期（本地时区 YYYY-MM-DD，已排序）。
+
+    ``book_ids`` 语义同 ``reading_totals``（None = 全部）。
+    """
     c = _connect()
+    rows = c.execute("SELECT book_id, ended_at FROM reading_sessions").fetchall()
     return sorted({
         time.strftime("%Y-%m-%d", time.localtime(r["ended_at"]))
-        for r in c.execute("SELECT ended_at FROM reading_sessions").fetchall()
+        for r in rows
+        if book_ids is None or r["book_id"] in book_ids
     })
 
 
@@ -886,16 +908,22 @@ def recent_sessions(limit: int = 50) -> list:
 
 
 def session_by_book() -> dict:
-    """按书聚合的阅读会话：``{book_id: {seconds, sessions, last_ended}}``。"""
+    """按书聚合的阅读会话：``{book_id: {seconds, sessions, last_ended, avg_seconds}}``。
+
+    ``avg_seconds`` 在同一句 SQL 里用 ``AVG(seconds)`` 算出（= seconds/sessions），
+    不新增查询。
+    """
     rows = _connect().execute(
         "SELECT book_id, SUM(seconds) AS seconds, COUNT(*) AS sessions, "
-        "MAX(ended_at) AS last_ended FROM reading_sessions GROUP BY book_id"
+        "MAX(ended_at) AS last_ended, AVG(seconds) AS avg_seconds "
+        "FROM reading_sessions GROUP BY book_id"
     ).fetchall()
     return {
         r["book_id"]: {
             "seconds": float(r["seconds"]),
             "sessions": int(r["sessions"]),
             "last_ended": float(r["last_ended"]),
+            "avg_seconds": round(float(r["avg_seconds"]), 1),
         }
         for r in rows
     }

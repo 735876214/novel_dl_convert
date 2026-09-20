@@ -95,6 +95,28 @@ function human(sec: number): string {
   return `${Math.floor(m / 60)} 小时 ${m % 60} 分`
 }
 
+/** 平均单次时长（秒 → 「23 分钟/次」） */
+function avgText(sec: number): string {
+  if (!sec || sec <= 0) return '—'
+  const m = Math.round(sec / 60)
+  if (m < 60) return `${m} 分钟/次`
+  return `${Math.floor(m / 60)} 小时 ${m % 60} 分/次`
+}
+
+/**
+ * 阅读速度（页/小时）：有可靠页数才显示，否则返回空（不造假）。
+ * 可靠 = pages_source 为 'estimate'（EPUB 估算）或 'archive'（漫画真实值）且 pages>0。
+ */
+function paceText(b: ReadingLogBook): string {
+  if (!b.pages || b.pages <= 0) return ''
+  if (b.pages_source !== 'estimate' && b.pages_source !== 'archive') return ''
+  const hours = (b.seconds || 0) / 3600
+  if (hours <= 0) return ''
+  const pph = b.pages / hours
+  const src = b.pages_source === 'archive' ? '真实页数' : '估算页数'
+  return `${pph.toFixed(0)} 页/小时（${src}）`
+}
+
 const peak = computed(() => Math.max(1, ...items.value.map((d) => d.seconds)))
 function barHeight(sec: number): string {
   return `${Math.max(4, (sec / peak.value) * 100).toFixed(1)}%`
@@ -218,7 +240,10 @@ function dayLabel(d: ReadingLogDay): string {
             <div class="min-w-0 flex-1">
               <p class="truncate text-[12.5px] text-foreground">{{ b.title }}</p>
               <p class="truncate text-[11px] text-muted-foreground">
-                {{ b.author || '未知作者' }} · {{ b.sessions }} 次 · 最近 {{ new Date(b.last_ended * 1000).toLocaleDateString() }}
+                {{ b.author || '未知作者' }} · {{ b.sessions }} 次 · 平均 {{ avgText(b.avg_seconds) }}
+              </p>
+              <p class="truncate text-[11px] text-muted-foreground">
+                最近 {{ new Date(b.last_ended * 1000).toLocaleDateString() }}<template v-if="paceText(b)"> · {{ paceText(b) }}</template>
               </p>
             </div>
             <span class="shrink-0 text-[12px] tabular-nums text-muted-foreground">{{ human(b.seconds) }}</span>
