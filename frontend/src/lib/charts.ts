@@ -36,7 +36,7 @@ import {
 } from 'echarts/components'
 import { use as echartsUse } from 'echarts/core'
 import { SVGRenderer } from 'echarts/renderers'
-import { onMounted, onScopeDispose, shallowRef, watch } from 'vue'
+import { onMounted, onScopeDispose, ref, shallowRef, watch } from 'vue'
 
 import { useThemeStore } from '@/stores/theme'
 
@@ -185,7 +185,15 @@ export interface ChartThemeParts {
   border: string
   /** 轴标签色（比正文弱一档） */
   axisLabel: string
-  /** 轴样式，展开进 xAxis / yAxis：`{ ...t.axis, type: 'category', data }` */
+  /**
+   * 轴标签样式。要改字号 / 旋转角时展开它 —— 例如：
+   * `axisLabel: { ...t.axisLabelStyle, fontSize: 11, rotate: 35 }`
+   */
+  axisLabelStyle: { show: boolean; color: string }
+  /**
+   * 轴样式，展开进 xAxis / yAxis：`{ ...t.axis, type: 'category', data }`。
+   * ⚠️ 先展开它**再**覆盖 `axisLabel` —— 反过来会被它自带的 `axisLabel` 盖回去。
+   */
   axis: Record<string, unknown>
   /** legend 文字色，展开进 legend：`{ ...t.legend, data: [...] }` */
   legend: { textStyle: { color: string } }
@@ -206,10 +214,11 @@ export interface ChartThemeParts {
 export function chartTheme(dark: boolean): ChartThemeParts {
   const border = dark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)'
   const axisLabel = dark ? '#9CA3AF' : '#6B7280'
+  const axisLabelStyle = { show: true, color: axisLabel }
   const axis = {
     axisLine: { show: true, lineStyle: { color: border } },
     axisTick: { show: false },
-    axisLabel: { show: true, color: axisLabel },
+    axisLabel: axisLabelStyle,
     splitLine: { show: true, lineStyle: { color: [border] } },
     splitArea: { show: false },
   }
@@ -217,6 +226,7 @@ export function chartTheme(dark: boolean): ChartThemeParts {
   return {
     border,
     axisLabel,
+    axisLabelStyle,
     axis,
     legend: { textStyle: { color: dark ? '#F3F4F6' : '#111827' } },
     tooltip: {
@@ -270,4 +280,26 @@ export function useChartTheme() {
   }
 
   return { dark, palette, theme }
+}
+
+/**
+ * `matchMedia` 的响应式封装 —— 图上要按容器宽度改布局（饼图 legend 横排还是竖排、
+ * 圆心偏左还是居中）时用它。
+ *
+ * 上游用的是 `@vueuse/core` 的 `useBreakpoints`；本项目不引那个库，这十几行够用。
+ * 默认断点与 Tailwind 的 `md` 一致，与栅格 `md:grid-cols-2` 同一条线。
+ */
+export function useIsWide(query = '(min-width: 768px)') {
+  const matches = ref(false)
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return matches
+
+  const mq = window.matchMedia(query)
+  matches.value = mq.matches
+  const onChange = (e: MediaQueryListEvent): void => {
+    matches.value = e.matches
+  }
+  mq.addEventListener?.('change', onChange)
+  onScopeDispose(() => mq.removeEventListener?.('change', onChange))
+
+  return matches
 }
