@@ -21,7 +21,7 @@ export interface StatisticsChartMeta {
   tab: StatisticsTab
 }
 
-export const STATISTICS_CHART_META: Record<string, StatisticsChartMeta> = {
+export const STATISTICS_CHART_META = {
   // ---- 书库侧 ----
   'language-distribution': {
     id: 'language-distribution',
@@ -99,10 +99,36 @@ export const STATISTICS_CHART_META: Record<string, StatisticsChartMeta> = {
     size: '1x1',
     tab: 'reading',
   },
+} satisfies Record<string, StatisticsChartMeta>
+
+/**
+ * 全部合法图表 id —— 由目录的**键**推导，所以「加图」只有这一处真相。
+ *
+ * 它的用处是把「注册了 id 却忘了登记组件」变成**编译错误**：`ChartGrid.vue` 的
+ * `CHART_COMPONENTS` 标了 `Record<StatisticsChartId, Component>`，少登记一个 id
+ * 就通不过类型检查。此前那是**静默空白** —— tile 的 `<div>` 照占栅格、里面什么都没有。
+ *
+ * ⚠️ 目录本身不再标 `Record<string, …>`：那样 `keyof` 会塌成 `string`，守卫就失效了。
+ * 需要按**不可信的** string 查表时（localStorage 归一，见 `stores/statsChartPrefs`），
+ * 先用 `in` 做运行时收窄，别用 `as` 绕过去。
+ */
+export type StatisticsChartId = keyof typeof STATISTICS_CHART_META
+
+/**
+ * 一张「已解析」的图：**窄 id** + 它的元信息。
+ *
+ * `ChartGrid` 的 props 用它而不是 `StatisticsChartMeta[]` —— 后者的 `id` 是宽 `string`，
+ * 拿它索引 `CHART_COMPONENTS`（`Record<StatisticsChartId, …>`）通不过类型检查，而**正是
+ * 那道检查**在防「登记了 id 却没加组件」的静默空白。让 id 的窄类型顺着 props 传下去，
+ * 下游就不必写断言、也不必在运行时兜底。
+ */
+export interface StatisticsChartTile {
+  id: StatisticsChartId
+  meta: StatisticsChartMeta
 }
 
 /** 分区内的默认顺序（也是 Configure 面板的初始顺序） */
-export const DEFAULT_CHART_ORDER: Record<StatisticsTab, string[]> = {
+export const DEFAULT_CHART_ORDER: Record<StatisticsTab, StatisticsChartId[]> = {
   library: [
     'language-distribution',
     'storage-by-format',

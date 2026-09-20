@@ -12,7 +12,7 @@ import PeakReadingHoursChart from '@/components/charts/reading/PeakReadingHoursC
 import ProgressFunnelChart from '@/components/charts/reading/ProgressFunnelChart.vue'
 import ReadingClockChart from '@/components/charts/reading/ReadingClockChart.vue'
 import type { StatsOverview } from '@/lib/api'
-import type { StatisticsChartMeta, StatisticsChartSize } from '@/lib/statistics-charts'
+import type { StatisticsChartId, StatisticsChartSize, StatisticsChartTile } from '@/lib/statistics-charts'
 
 /**
  * 图表栅格（照搬上游 `StatisticsGrid.vue` 的栅格与跨度映射）。
@@ -26,12 +26,19 @@ import type { StatisticsChartMeta, StatisticsChartSize } from '@/lib/statistics-
  *    （尤其是 Configure 里默认隐藏的那些）再考虑。
  */
 defineProps<{
-  charts: StatisticsChartMeta[]
+  /** 已解析的图（窄 id + 元信息）。窄 id 是刻意的，见 `CHART_COMPONENTS` 的注释 */
+  charts: StatisticsChartTile[]
   data: StatsOverview
 }>()
 
-/** 加图时在这里登记，id 与 `lib/statistics-charts.ts` 的目录一致 */
-const CHART_COMPONENTS: Record<string, Component> = {
+/**
+ * id → 组件。加图时在**这里**与 `lib/statistics-charts.ts` 的目录**两处一起加**。
+ *
+ * 标成 `Record<StatisticsChartId, …>` 是刻意的：`StatisticsChartId` 由目录的键推导，
+ * 于是「目录里有 id、这里没组件」会**直接编译失败** —— 此前那是静默空白（tile 的
+ * `<div>` 照占栅格、里面什么都没有）。
+ */
+const CHART_COMPONENTS: Record<StatisticsChartId, Component> = {
   'language-distribution': LanguageDistributionChart,
   'storage-by-format': StorageByFormatChart,
   'page-count-distribution': PageCountDistributionChart,
@@ -58,13 +65,14 @@ function tileClass(size: StatisticsChartSize): string {
 <template>
   <div class="grid grid-flow-row-dense grid-cols-1 gap-4 md:grid-cols-2 md:auto-rows-[360px] xl:grid-cols-4">
     <div
-      v-for="(chart, index) in charts"
-      :key="chart.id"
-      :class="tileClass(chart.size)"
+      v-for="(tile, index) in charts"
+      :key="tile.id"
+      :class="tileClass(tile.meta.size)"
       class="animate-fade-up min-w-0"
       :style="{ animationDelay: `${index * 60}ms` }"
     >
-      <component :is="CHART_COMPONENTS[chart.id]" v-if="CHART_COMPONENTS[chart.id]" :data="data" />
+      <!-- 不需要 `v-if` 兜底：`tile.id` 是窄类型，`CHART_COMPONENTS[tile.id]` 类型上有值 -->
+      <component :is="CHART_COMPONENTS[tile.id]" :data="data" />
     </div>
   </div>
 </template>

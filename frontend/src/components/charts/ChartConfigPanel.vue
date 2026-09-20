@@ -26,11 +26,15 @@ const props = defineProps<{
 
 const prefs = useStatsChartPrefsStore()
 
-/** 本分区的全部图（**含被隐藏的**），按用户排定的顺序 */
+/**
+ * 本分区的全部图（**含被隐藏的**），按用户排定的顺序。
+ *
+ * `order` 里的 id 已经是收窄过的 `StatisticsChartId`，查表必定命中 —— 所以这里
+ * **不需要**再 filter 一遍「查不到就丢掉」（那层过滤在 `stores/statsChartPrefs` 的
+ * `read()` 里，存档入口做一次就够）。
+ */
 const rows = computed<StatisticsChartMeta[]>(() =>
-  prefs.prefs.order[props.tab]
-    .map((id) => STATISTICS_CHART_META[id])
-    .filter((m): m is StatisticsChartMeta => Boolean(m)),
+  prefs.prefs.order[props.tab].map((id) => STATISTICS_CHART_META[id]),
 )
 
 const visibleCount = computed(() => rows.value.filter((m) => prefs.isVisible(m.id)).length)

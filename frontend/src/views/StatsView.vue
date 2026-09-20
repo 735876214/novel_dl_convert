@@ -10,7 +10,7 @@ import PageHead from '@/components/ui/PageHead.vue'
 import Segment from '@/components/ui/Segment.vue'
 import { api, type StatsOverview, type StatsTop } from '@/lib/api'
 import { fmtBytes, fmtDuration } from '@/lib/format'
-import { STATISTICS_CHART_META, type StatisticsChartMeta, type StatisticsTab } from '@/lib/statistics-charts'
+import { STATISTICS_CHART_META, type StatisticsChartTile, type StatisticsTab } from '@/lib/statistics-charts'
 import { useLibraryStore } from '@/stores/library'
 import { useStatsChartPrefsStore } from '@/stores/statsChartPrefs'
 
@@ -172,14 +172,16 @@ const largestShown = computed(() =>
 const chartPrefs = useStatsChartPrefsStore()
 const configOpen = ref(false)
 
-function chartsOf(tab: StatisticsTab): StatisticsChartMeta[] {
+// 把 id 解析成 { id, meta }：`order` 里的 id 已经是收窄过的 `StatisticsChartId`
+// （存档入口 `stores/statsChartPrefs` 的 `read()` 归一过），故查表必定命中、无需再过滤。
+// 顺带把窄 id 传给 `ChartGrid` —— 它的 `CHART_COMPONENTS` 靠这个类型防「登记漏了组件」。
+function chartsOf(tab: StatisticsTab): StatisticsChartTile[] {
   return chartPrefs.prefs.order[tab]
     .filter((id) => chartPrefs.isVisible(id))
-    .map((id) => STATISTICS_CHART_META[id])
-    .filter((m): m is StatisticsChartMeta => Boolean(m))
+    .map((id) => ({ id, meta: STATISTICS_CHART_META[id] }))
 }
-const libraryCharts = computed<StatisticsChartMeta[]>(() => chartsOf('library'))
-const readingCharts = computed<StatisticsChartMeta[]>(() => chartsOf('reading'))
+const libraryCharts = computed<StatisticsChartTile[]>(() => chartsOf('library'))
+const readingCharts = computed<StatisticsChartTile[]>(() => chartsOf('reading'))
 </script>
 
 <template>

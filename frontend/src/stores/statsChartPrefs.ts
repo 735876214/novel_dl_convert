@@ -1,7 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
-import { DEFAULT_CHART_ORDER, STATISTICS_CHART_META, type StatisticsTab } from '@/lib/statistics-charts'
+import {
+  DEFAULT_CHART_ORDER,
+  STATISTICS_CHART_META,
+  type StatisticsChartId,
+  type StatisticsTab,
+} from '@/lib/statistics-charts'
 
 /**
  * 统计页图表配置（对应上游统计页的 Configure 面板：显隐 + 顺序）。
@@ -22,9 +27,14 @@ import { DEFAULT_CHART_ORDER, STATISTICS_CHART_META, type StatisticsTab } from '
  */
 
 export interface StatsChartPrefs {
-  /** 每个分区的顺序。**含被隐藏的图** —— 隐藏只是不画，它排在第几位要记着 */
-  order: Record<StatisticsTab, string[]>
-  /** 被隐藏的图表 id（顺序里仍在，只是不渲染） */
+  /**
+   * 每个分区的顺序。**含被隐藏的图** —— 隐藏只是不画，它排在第几位要记着。
+   *
+   * 类型收窄成 `StatisticsChartId[]`（而不是 `string[]`）：这个数组的每个元素都要拿去
+   * 查 `STATISTICS_CHART_META`，而目录的键现在是字面量联合，宽类型查不动。
+   */
+  order: Record<StatisticsTab, StatisticsChartId[]>
+  /** 被隐藏的图表 id（顺序里仍在，只是不渲染）。宽成 string：只做集合查询，不查表 */
   hidden: string[]
 }
 
@@ -42,6 +52,17 @@ function defaults(): StatsChartPrefs {
   }
 }
 
+/** 存档是**不可信输入**（版本回退、手改过 localStorage）：一律先当 unknown 读，再逐项收窄 */
+interface RawPrefs {
+  order?: Partial<Record<StatisticsTab, unknown>>
+  hidden?: unknown
+}
+
+/** 非数组一律当空 */
+function asList(v: unknown): unknown[] {
+  return Array.isArray(v) ? v : []
+}
+
 /**
  * 读取时归一（照上游 `normalizeCharts` 的语义）：
  * 丢掉不认识的 id（版本回退、手改过 localStorage），给**新增的图补位**到末尾，
@@ -52,20 +73,29 @@ function read(): StatsChartPrefs {
   try {
     const raw = localStorage.getItem(KEY)
     if (!raw) return fallback
-    const p = JSON.parse(raw) as Partial<StatsChartPrefs>
-    const known = new Set(Object.keys(STATISTICS_CHART_META))
+    const p = JSON.parse(raw) as RawPrefs
+    // 白名单用 `Object.keys` 的集合，**不用 `id in META`** —— 后者会命中原型链上的名字
+    // （存档里手写一个 "constructor" 就会被当成合法 id）
+    const known = new Set<string>(Object.keys(STATISTICS_CHART_META))
 
-    const order = { library: [], reading: [] } as Record<StatisticsTab, string[]>
+    /** 收窄成一个合法 id；不合法（含原型链上的名字）返回 null */
+    const asId = (v: unknown): StatisticsChartId | null =>
+      typeof v === 'string' && known.has(v) ? (v as StatisticsChartId) : null
+
+    const order = { library: [], reading: [] } as Record<StatisticsTab, StatisticsChartId[]>
     for (const tab of TABS) {
-      const saved = (p.order?.[tab] ?? []).filter(
-        (id) => typeof id === 'string' && known.has(id) && STATISTICS_CHART_META[id]?.tab === tab,
-      )
+      const saved = asList(p.order?.[tab])
+        .map(asId)
+        .filter((id): id is StatisticsChartId => id !== null)
+        .filter((id) => STATISTICS_CHART_META[id].tab === tab)
       // 去重：存档里重复的 id 会让同一张图渲染两次（`v-for` 的 key 还会撞）
       const unique = [...new Set(saved)]
       order[tab] = [...unique, ...DEFAULT_CHART_ORDER[tab].filter((id) => !unique.includes(id))]
     }
 
-    const hidden = (p.hidden ?? []).filter((id) => typeof id === 'string' && known.has(id))
+    const hidden = asList(p.hidden)
+      .map(asId)
+      .filter((id): id is StatisticsChartId => id !== null)
     return { order, hidden: [...new Set(hidden)] }
   } catch {
     return fallback
@@ -100,7 +130,8 @@ export const useStatsChartPrefsStore = defineStore('statsChartPrefs', () => {
   /** 在分区内上移 / 下移一位；已经在头尾则不动 */
   function move(tab: StatisticsTab, id: string, delta: -1 | 1): void {
     const list = [...prefs.value.order[tab]]
-    const from = list.indexOf(id)
+    // 用 `===` 找而不是 `indexOf(id)`：id 是宽 string，直接 indexOf 通不过类型检查
+    const from = list.findIndex((x) => x === id)
     const to = from + delta
     if (from < 0 || to < 0 || to >= list.length) return
     const a = list[from]
