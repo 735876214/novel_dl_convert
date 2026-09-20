@@ -97,7 +97,11 @@ async def lifespan(app: FastAPI):
     scrape.stop()
 
 
-app = FastAPI(title="NovelForge", version="0.5.0", lifespan=lifespan)
+# 应用版本（**唯一真值源**：FastAPI 与 /health 同读它；前端 About / 更新日志从后端取，
+# 不再手写版本号）。第 30 期收敛为单一常量，结束「后端 0.5.0 / 前端 v0.6」两套真值源。
+APP_VERSION = "0.6.0"
+
+app = FastAPI(title="NovelForge", version=APP_VERSION, lifespan=lifespan)
 
 STATIC_DIR = pathlib.Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -248,6 +252,8 @@ def health():
         "input": str(INPUT_DIR),
         "output": str(OUTPUT_DIR),
         "watcher": bool(WATCHER and WATCHER.is_running()),
+        # 应用版本（**只读**、免鉴权端点，不含任何敏感信息）；前端 About / 更新日志据此渲染
+        "version": APP_VERSION,
         "logs": str(activity_log.log_dir()),
     }
 
@@ -1572,10 +1578,14 @@ def api_reading_log(days: int = Query(60, ge=7, le=365)):
     by_book = []
     for bid, v in db.session_by_book().items():
         b = bs.get(bid)
+        # 页数（非 EPUB 恒 0）与来源标签一并带上，供前端算「阅读速度」并标注口径；
+        # 无可靠页数（pages_source 为空）时前端不显示该项，不造假。
         by_book.append({
             "id": bid,
             "title": (b or {}).get("title") or bid,
             "author": (b or {}).get("author") or "",
+            "pages": (b or {}).get("pages") or 0,
+            "pages_source": (b or {}).get("pages_source") or "",
             **v,
         })
     by_book.sort(key=lambda x: -x["seconds"])
@@ -3203,10 +3213,19 @@ def api_record_session(bid: str, payload: dict = Body(...)):
 # ---------------- 数据统计 ----------------
 
 @app.get("/api/stats")
-def api_stats(days: int = Query(28, ge=7, le=365), top: int = Query(8, ge=1, le=50)):
+def api_stats(
+    days: int = Query(28, ge=7, le=365),
+    top: int = Query(8, ge=1, le=50),
+    library_id: str = Query(""),
+):
     """统计聚合。days 控制节奏图窗口（dashboard 用默认 28，统计页可传 7/28/90）；
-    top 控制 Top 榜长度（统计页可展开到 50）。"""
-    return stats.overview(days, top)
+    top 控制 Top 榜长度（统计页可展开到 50）。
+
+    ``library_id`` 第 30 期新增：**空串 = 全部书库**（默认，输出与加该参数之前逐字节
+    一致）；给了库 id 就只统计该库。未知库 = 空库，不 404（与 `/api/duplicates`
+    的 `library_id: str = ""` 同一条惯例）。阅读会话没有库维度，按「书属于哪个库」判。
+    """
+    return stats.overview(days, top, library_id)
 
 
 # ---------------- 应用设置（服务端持久化 → settings.json）----------------
@@ -5248,7 +5267,10 @@ async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)
         activity_log.log_convert_fail(src.name, f"{type(e).__name__}: {e}", source="api")
         raise
     await _log_dispatch(src, action, result, "api", size=src.stat().st_size, detail=opts.get("_notice", ""))
-    return {"action": action, "result": str(result)}
+    # 与 /convert 同口径：直接返回文件流，真实文件名由 FileResponse 在
+    # Content-Disposition 里给（前端据此命名，杜绝「x.epub.epub」这类错名；
+    # 也不在前端再发明一套展开名逻辑）。src 已校验为单文件，result 必为文件。
+    return FileResponse(result, filename=pathlib.Path(result).name)
 
 
 @app.get("/content")
