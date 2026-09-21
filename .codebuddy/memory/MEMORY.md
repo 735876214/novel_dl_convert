@@ -31,6 +31,7 @@
 - 行尾必须 **LF**（`.gitattributes` 锁；CRLF ⇒ 容器 `sh /app/start.sh` 报 `set: Illegal option -` 反复重启）。
 - Python 3.10+（**PEP 604，系统 python3.9 不可用**）；Node v20/22、Docker daemon 可用；本机对外网络有限。
 - 认证走 GCM；**勿再引入** token 内嵌/insteadof 明文重写；推送失败先查认证/网络，**别改 git config**。
+- **入库的配置不得含机器相关绝对路径**（`.vscode/settings.json` 的 `python.pythonPath` 是前例）：要指向 `.venv` 的各人配在本机用户设置里。
 - `.gitignore` 清单、macOS 建环境与首跑、`npm install` 的 lock 噪声、Windows 删除 shim ⇒ **见 REF「环境与构建」**。
 
 ## 自动化测试（硬前提）
