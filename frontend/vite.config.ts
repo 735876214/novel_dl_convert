@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { fileURLToPath, URL } from 'node:url'
 
 import tailwindcss from '@tailwindcss/vite'
@@ -46,5 +47,25 @@ export default defineConfig(({ command }) => ({
       '/download': { target: BACKEND, changeOrigin: true },
       '/convert': { target: BACKEND, changeOrigin: true },
     },
+  },
+
+  /**
+   * 前端单测（第 39 期）。
+   *
+   * 刻意**不新建 `vitest.config.ts`**：上面 `resolve.alias` 的 `@` 是**唯一**的 `@` 定义，
+   * 另起一个配置文件就得把它复制一份 —— 那正是本仓库一直在避免的「两处各写一遍」。
+   * 用 `/// <reference types="vitest/config" />` 让 `defineConfig` 认 `test` 字段即可。
+   *
+   * 也刻意**不开 `globals`**：spec 一律显式 `import { describe, it, expect } from 'vitest'`。
+   * 开了就得往 tsconfig 的 `types` 里加东西，而 spec 文件在 `src/**` 下、本来就被
+   * `vue-tsc --build` 类型检查 —— 显式 import 让这条检查保持干净。
+   */
+  test: {
+    environment: 'happy-dom',
+    include: ['src/**/*.spec.ts'],
+    clearMocks: true,
+    restoreMocks: true,
+    // 组件测试不校验样式产物；关掉省掉一条 tailwind 处理链
+    css: false,
   },
 }))
