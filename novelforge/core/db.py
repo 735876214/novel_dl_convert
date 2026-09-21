@@ -2,7 +2,8 @@
 
 设计要点：
 - 数据库文件落在 ``config.DATA_DIR/novelforge.db``（NAS 持久卷，零额外服务）。
-- 全进程共享一个连接（check_same_thread=False + 写锁），单机单用户足够。
+- 全进程共享一个连接（check_same_thread=False），**读写一律经 ``_lock`` 串行**
+  （见 :class:`_Conn`）—— 只有写路径持锁是不够的，见该类文档。
 - 表：users（轻登录账号）、progress（每本书当前阅读位置）、annotations（高亮/笔记）、
   bookmarks（书签，与批注同构的软删除 + 位置去重）、meta_locks（元数据字段级锁定）、
   custom_field_defs（自定义字段定义）+ book_custom_values（按书的值）。
@@ -24,8 +25,11 @@ from .. import config
 
 
 _db_path: "pathlib.Path | None" = None
-_lock = threading.Lock()
-_conn = None
+#: 第 39 期改 ``RLock``：`_Conn` 的每条语句都要拿它，而既有的 ``with _lock:``
+#: 块里还会再调 ``c.execute(...)`` —— 非重入锁会自己把自己锁死。
+_lock = threading.RLock()
+_conn = None          # 裸 sqlite3 连接（只有 `_connect` / `close` 碰它）
+_conn_proxy = None    # 对上暴露的持锁代理
 
 
 def db_path() -> pathlib.Path:
@@ -37,15 +41,108 @@ def db_path() -> pathlib.Path:
     return _db_path
 
 
+class _Result:
+    """一条语句的结果 —— **在锁内就已完全物化**，出锁后再读也安全。
+
+    代理绝不能把「还没取完的语句」留到锁外：同一连接上另一个线程的
+    ``execute`` 会让它抛 ``InterfaceError``（SQLITE_MISUSE）。所以这里
+    只是内存里的一段行，接口照着 ``sqlite3.Cursor`` 的常用面做窄。
+    """
+
+    __slots__ = ("_rows", "_i", "rowcount", "lastrowid", "description")
+
+    def __init__(self, rows, rowcount, lastrowid, description=None):
+        self._rows = rows
+        self._i = 0
+        self.rowcount = rowcount
+        self.lastrowid = lastrowid
+        self.description = description
+
+    def fetchone(self):
+        if self._i >= len(self._rows):
+            return None
+        row = self._rows[self._i]
+        self._i += 1
+        return row
+
+    def fetchall(self):
+        rows = self._rows[self._i:]
+        self._i = len(self._rows)
+        return rows
+
+    def fetchmany(self, size=1):
+        rows = self._rows[self._i:self._i + int(size)]
+        self._i += len(rows)
+        return rows
+
+    def __iter__(self):
+        while self._i < len(self._rows):
+            row = self._rows[self._i]
+            self._i += 1
+            yield row
+
+
+class _Conn:
+    """连接代理：**每条语句都在 ``_lock`` 内跑完，并把结果取干净**。
+
+    为什么要有这层（第 39 期，实测）：
+
+    CPython 的 ``sqlite3`` 模块**不保证同一个连接可被多线程并发使用**。本模块
+    全进程共享一个连接（``check_same_thread=False``），原先只有**写路径**持锁，
+    读路径裸调 ``_connect().execute(...)`` —— 于是两个线程同时进这个连接时抛
+    ``InterfaceError: bad parameter or other API misuse``（底层是 SQLITE_MISUSE），
+    急起来还能把解释器**打成段错误**。
+
+    后果不是「报个错」那么轻：``library.get_library`` 把这个异常吞成 ``None``，
+    于是 `lib_settings.overrides()` 得空 dict ⇒ **每库覆写静默回落全局值**
+    （实测：用户关掉某库的「自动刮削」，读回来又是开的；放大探针下 5 秒复现
+    两千余次）。这正是 `test_scrape_publish.py` 那例「扫描后按开关自动入队」
+    偶发失败的根因。
+
+    169 处调用点一行不改就同时纳入锁，靠的就是这层代理 —— 比逐处手改更不容易漏。
+    语句抛错时异常照常向外传（锁由 ``with`` 释放）。
+    """
+
+    __slots__ = ("_raw",)
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    def execute(self, sql, parameters=()):
+        with _lock:
+            cur = self._raw.execute(sql, parameters)
+            return _Result(cur.fetchall(), cur.rowcount, cur.lastrowid,
+                           cur.description)
+
+    def executemany(self, sql, seq_of_parameters):
+        with _lock:
+            cur = self._raw.executemany(sql, seq_of_parameters)
+            return _Result([], cur.rowcount, cur.lastrowid, cur.description)
+
+    def executescript(self, sql):
+        with _lock:
+            self._raw.executescript(sql)
+            return _Result([], -1, None, None)
+
+    def commit(self):
+        with _lock:
+            self._raw.commit()
+
+    def rollback(self):
+        with _lock:
+            self._raw.rollback()
+
+
 def _connect():
-    global _conn
+    global _conn, _conn_proxy
     if _conn is None:
         import sqlite3
 
         c = sqlite3.connect(str(db_path()), check_same_thread=False)
         c.row_factory = sqlite3.Row
         _conn = c
-    return _conn
+        _conn_proxy = _Conn(c)
+    return _conn_proxy
 
 
 def close() -> None:
@@ -53,8 +150,12 @@ def close() -> None:
 
     供**测试**（每个用例一套独立空库）与「运行时切换 DATA_DIR」使用。
     正常请求流程不会调用它 —— 生产路径下连接始终复用，行为与之前完全一致。
+
+    ⚠️ 第 39 期：本函数持 ``_lock``，因此**不会**再撞上在飞语句（原先会段错误）；
+    但 ``close()`` 之后仍攥着旧代理的线程会拿到 ``ProgrammingError`` —— 那是
+    真错误，别吞（测试侧的根因见 ``tests/conftest.py::_quiesce_background``）。
     """
-    global _conn, _db_path
+    global _conn, _conn_proxy, _db_path
     with _lock:
         if _conn is not None:
             try:
@@ -62,6 +163,7 @@ def close() -> None:
             except Exception:
                 pass
         _conn = None
+        _conn_proxy = None
         _db_path = None
 
 
