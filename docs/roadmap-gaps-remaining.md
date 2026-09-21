@@ -857,7 +857,7 @@ tooltip 标注样本数。
 （`test_scrape_publish.py:442`）断言的是**全局**队列，而
 
 - `total` = `sum(db.scrape_counts().values())`（`server.py:3050`）= **`scrape_items` 表全表行数**；
-- `_quiesce_background` 收尾走 `scrape.stop(timeout=2.0)`（`conftest.py:98`）—— **超时后线程仍在**；
+- `_quiesce_background` 收尾走 `scrape.stop(timeout=2.0)`（`conftest.py:109`）—— **超时后线程仍在**；
 - `isolated` 会 `db.close()` + `db.init()` 换一套空库，但**残留线程下次取连接拿到的是新库**。
 
 ⇒ 残留 worker 要么经 `db.scrape_delete`（`scrape.py:278`「书库已不在」/ `:380`「源与副本都不在」）
@@ -1074,9 +1074,9 @@ T1→T4 串行（T1 / T1.5 都是**先修既有真 bug**，不修的话新功能
 **与计划的「有意偏离」**（如实记录，都不是省略，是落点不同）：
 
 1. **`preview` / `plan` 未被加参数，改为一对平行入口**：计划写「`preview` / `plan` / `execute`
-   增显式选择集 + 显式目标库入参」；实施为 `migrate.move_preview`（`migrate.py:571`）/
-   `move_plan`（`:594`），与既有 `preview`（`:172`）/ `plan`（`:258`）并列，**共用**
-   `execute`（`:947`）/ `rollback`（`:1041`）。理由：自动归库那条路径的入参**冻结着既有回滚入口**
+   增显式选择集 + 显式目标库入参」；实施为 `migrate.move_preview`（`migrate.py:572`）/
+   `move_plan`（`:595`），与既有 `preview`（`:172`）/ `plan`（`:258`）并列，**共用**
+   `execute`（`:955`）/ `rollback`（`:1035`）。理由：自动归库那条路径的入参**冻结着既有回滚入口**
    （`migration_last_batch("move")`），两套语义塞进同一个函数就得在每个分支里判断「这次是哪种调用」；
    平行入口 + 共用执行层既满足防回归 #3（既有行为逐字不变），也不产生第二套规则展开。
    代价：`execute` 多一个 `direction` 判别，接口层据此拒收别的方向的批次。
@@ -1366,7 +1366,141 @@ Book Dock 投递 / 书架「立即扫描」/ 任务中心空态 …）都在把�
 
 ---
 
-## 四、验证纪律（沿用 history）
+#### 第 39 期实施记录（前端回归护栏 + 未关闭观察项三例 + 归库↔移动语义统一）
+
+**主题**：**还款期，不是新增能力期**。第 38 期收尾时三条缺口轴已实质耗尽 ——
+`bookorbit-capability-gap.md` 四组全 `[x]`（全文仅剩 `:493` 一条属**决策未定**的 Komga 方向，
+不是「工作未做」）、`bookorbit-module-inventory.md` §4.2 剩的 4 项都属「与本项目定位无关」、
+本文件无「待落地」档位。缺口没有了不等于没活干，本期还三笔债：**前端零单测框架**
+（历史上每一个前端 bug —— 第 34 期侧栏计数、第 36 期 SPA 标题、第 38 期 `librariesLoaded` ——
+都只能靠浏览器冒烟抓，632 例 pytest 对 `frontend/src/**` 一行都覆盖不到）、
+三个当轮如实记录却未修的观察项、以及一笔**代码自己写明「要改它得单独一期」**的语义债
+（`migrate.py` 原文：「要改它得单独一期」—— 第 39 期正是这一期）。
+
+三条口径由用户逐项拍板（AskUserQuestion）：
+
+| 争点 | 拍板 |
+| --- | --- |
+| 落地域 | **前端回归护栏 ＋ 未关闭观察项三例 ＋ 归库↔移动语义统一**（备份与恢复**未选** —— `README.md:127` 已写明「备份它等于备份全部阅读数据」＋ compose 显式挂载 `./data`，该候选本身不成立） |
+| 前端单测口径 | **vitest + @vue/test-utils**（非纯逻辑测试、非纯文本契约） |
+| T5 的 db 层修复形态 | **单点代理：`_connect()` 按语句持锁**（一处改动覆盖全部 169 处调用点，不逐处手改） |
+
+**前端护栏（T1/T2）**：`vitest 5.0.1 + @vue/test-utils 2.5.1 + happy-dom 20.14.5`。
+**不另起 `vitest.config.ts`**（`vite.config.ts` 的 `resolve.alias['@']` 是唯一真值源，
+另起一份就是复制它）；**不启用 `globals`**（spec 在 `src/**` 下会被 `vue-tsc --build` 一并检查，
+开 `globals` 就得往 `types` 里加东西、污染构建期类型环境）；脚本名 **`test:unit`** 而非 `test`
+（本仓「测试」传统上专指 pytest，改名会造成口径混淆）。
+`ChartGrid` 的一致性**不写运行期用例** —— `StatisticsChartId = keyof typeof STATISTICS_CHART_META`
+⇒ `Record<StatisticsChartId, Component>` 让「目录有 id、组件没登记」**直接编译失败**，
+再写一条运行期断言只是重复 `type-check`；真正该钉的是**别有人把它放宽成 `Record<string, Component>`**。
+
+**T5 的真结论（本期最有价值的一条，与计划假设不同，如实记）**：
+
+计划里 H1 的写法是「写线程持锁 `commit()` 会重置该连接上的所有语句 ⇒ 另一线程中途 `fetchone()`
+抛 `InterfaceError`」。**这条被直接实验证伪**：`executescript` / `rollback` / `commit` 三种操作
+各自与一个整窗口持有游标的读线程对撞 2 秒 —— **全是 0 异常**。`commit()` 根本不会重置别人的语句；
+而常见的 sqlite3 误用（cursor 关后用、连接关后用、参数错、`row_factory` 非 callable …）
+产出的都是 `ProgrammingError` / `TypeError`，**没有一种能造出 `InterfaceError`**。
+（该消息本身不在 `_sqlite3.pyd` 里 —— 它是 SQLite C 库 `sqlite3_errmsg` 的文本，
+即 `SQLITE_MISUSE` 的默认描述。）
+
+真机制是**同一连接上的无锁并发访问**，而且**不需要 `close()` 就能造出来**：
+
+| 探针（放大版，非原样） | 修复前 | 修复后 |
+| --- | --- | --- |
+| 三线程裸读 `db.get_library` + 一线程锁内 `db.create_library`（4s） | **3/3 轮全 `InterfaceError`**，各 400–500 次 | **0**（3/3 轮） |
+| 同上再加「读该库生效设置」= 用户可见症状 | **1973 / 2303 / 2509 次每 5s**，另加写失败 269/298/254 次 | **未发生** |
+| 三线程裸读 + `db.close()`（4s） | **6/6 段错误**（exit 139） | **exit 0**（不崩） |
+
+**它是生产可达的**：`db.create_library` / `update_library` 持锁写，而 `db.get_library` 裸读，
+生产里 watcher 线程、scrape worker、`server.py:3343` 的 `asyncio.to_thread(migrate.execute)`
+与请求线程都会同时进这个连接。**用户可见后果**不是「报个错」——
+`library.get_library` 把这个异常吞成 `None` ⇒ `lib_settings.overrides()` 得空 dict ⇒
+**每库覆写静默回落全局值**：用户关掉某库的「自动刮削」，读回来又是开的。
+
+**它还解释了第 38 期 F 小节记的那条偶发**：`test_scrape_publish.py` 的
+「扫描后按开关自动入队」断言 `auto_enabled is False` 却拿到 `True` ——
+`:452` 刚设完 `scrape.enabled: False`，`:458` 读回时撞上并发写，覆写被吃，回落成全局的 `True`。
+**逐字吻合，两件事本是同一个根因。**
+
+修法（用户拍板的单点代理）：`_connect()` 返回 `db._Conn` —— **每条语句都在 `_lock` 内跑完、
+并把结果取干净**（`db._Result` 是内存里的一段行，接口照 `sqlite3.Cursor` 的常用面做窄）；
+`_lock` 改 `RLock`（`with _lock:` 块里还会再调 `c.execute`，非重入锁会自锁死）。
+169 处调用点**一行不改**。代理绝不能把「还没取完的语句」留到锁外 —— 那正是竞态本身。
+`db.close()` 也持锁 ⇒ 原先那条段错误路径一并封死。
+
+**H2（坐实并已修）**：`tests/conftest.py::_quiesce_background` 此前**丢弃**
+`watcher.wait_pending(5.0)` 的返回值（它返回「超时后仍未结束的数量」），并把一切包进
+`except Exception: pass` —— 于是「收尾没干净」只表现为后面某个**无关**用例偶发变红。
+已改成非 0 就 `pytest.fail` 把这件事说出来（失败信息里明说「泄漏点可能在更早的用例」）。
+**改硬失败前先量过**：全量跑里该值**恒为 0**（`scrape.stop(2.0)` 也从未残留），故不误伤。
+
+**观察项三例的最终状态**：
+
+| 观察项 | 最终状态 |
+| --- | --- |
+| ① 侧边栏库计数首次加载显示为 0（第 34 期记录） | **未复现 ⇒ 按纪律只补覆盖、不硬改**。新增 `tests/test_library_count_contract.py` 6 例 —— `book_count` 此前**全仓零覆盖** |
+| ② SPA hash 导航标题过期（第 36 期记录） | **已修**（`ReaderView.vue`：抽 `load()` 由 `onMounted` 与 `watch(bookId, …)` 共用；**不加 `:key`** —— 与本项目「局部更新不重建 DOM」的既有做法冲突） |
+| ③ `InterfaceError` 间歇失败（第 33/38 期记录） | **根因查明并已修**（见上）。计划假设（H1）被证伪，真机制另有其人且**生产可达** |
+
+**与计划的「有意偏离」**：一处 —— T5 的修复形态由「`db._lock` 改 `RLock` + 把读路径逐处纳入锁」
+改为**单点代理**（用户拍板）。理由是逐处手改 169 个调用点靠人工找全，漏一处等于没修。
+计划第 17 条的**前提**（H1）不成立，但**修法方向（读路径纳入锁）恰好正确** —— 实验已直接验证。
+
+**A. 单测**：全量 **651 例 / 0 failed / 0 err**（本期基线 647 ⇒ **+4**，全部来自新增的
+`tests/test_db_concurrency_contract.py`）。本期共 5 个 commit，基线轨迹
+632（第 38 期）⇒ 647（T1/T2 前端自守契约 5 + T3 计数契约 6 + T6 归库统一契约 4）⇒ **651**。
+前端用例**单独计数**、**不并入 pytest 基线**（两套跑法、两套前提）。
+新护栏做了**变异验证**：把 `_connect()` 退回裸连接 ⇒ 4 例中 **3 例变红**
+（第 4 例守的是「锁是重入锁」，本就该保持绿），撤销变异 ⇒ **4/4 全绿**；
+H2 那条也验过：伪造 `wait_pending` 返回 1 ⇒ `Failed: 收尾没干净…`，撤销 ⇒ 全绿。
+全量连跑 **4 轮**（3 轮验 db 改动 + 1 轮验 conftest 改动）**全部 651/0/0**。
+
+**B. 集成冒烟（真实 uvicorn 实例 8802 + 独立临时根，**保留 watcher 后台线程**）**：
+登录 → 建库 → 写覆写 → 读回 `auto_enabled=False` → **三线程猛读 + 一线程反复重写、压 6 秒**
+⇒ **GET/PUT 出错 0 次、覆写被吃 0 次**，压完再读回仍是 `False`，服务端日志
+`traceback|InterfaceError|ProgrammingError` **0 行**。
+（顺带撞了两次产品自己的护栏，都属正常拒绝：「库根必须是绝对路径」——
+Windows 下 `/tmp/…` 不算；「库根必须位于书库来源 / 导出 / 数据目录之内」。）
+
+**C. 浏览器冒烟**：**本轮未跑**。本轮改动只有 db 层并发修复 + 文档 / 记忆 / 锚点；
+T5 的症状（并发下每库覆写被吃）在浏览器里**单用户操作触发不到**（它需要多线程同时进连接），
+故以「真实实例 + 并发压测」替代（见 B）。
+
+**D. 文档**：本节 + 锚点全文复查。⚠️ `novelforge/core/db.py` 本期**净增 102 行**（`_Conn` /
+`_Result` / docstring），它此前是锚点密集文件 ⇒ 指向它的锚点**整体后移**。
+`tests/check_doc_anchors.py` 实测：修前 **硬错 0 / 疑似漂移 11**，逐条打开核实（不记偏移量、
+只写实测行号）后修 12 处 ⇒ 修后 **硬错 0 / 疑似漂移 0**，符号命中由 37 升到 49。
+修的清单（旧 → 新，全部实测）：`collection_map` 961→1063（两处）、`reset_reading_state`
+3370→3472（两处）、`notifications_read` 表 156→258、`book_dock_items` 表 236→338、
+`idx_dock_status` 248→350、`DOCK_TABS` 2160→2262、`set_review` 1889→1991、
+`save_bookmark` 792→894、`meta_locks` 277→379 与其建表注释 272-276→374-378、
+`conftest.py:98`→`:109`（`_quiesce_background` 里的 `scrape.stop`）。
+**历史记录里的旧行号一律不动** —— `capability-gap.md:86-99` 那张「原引用 / 实测应为」表
+是第 33 期的核验记录，改它等于篡改历史。
+
+**E. 三个坑（都不是产品缺陷，但下次会再踩）**：
+
+1. **`-qq` 会吞掉汇总行**：`pytest.ini:6` 已有 `addopts = -q`，命令行**再加一个 `-q`**
+   就是 `-qq`，`N passed in Xs` **整行消失**。此前把「抓不到汇总行」归因成「重定向后只剩 warnings」
+   **是错的**，真因就是这个。判据只能靠 `--junitxml`：且 pytest 的根元素是 `<testsuites>`
+   而非 `<testsuite>`，`r.get('tests')` 在根上返回 `None`，必须 `r.iter('testsuite')` 再求和。
+2. **探针脚本别用 `grep` 猜结果**：`grep "FAILED"` 区分大小写，匹配不上小写的 `failed`；
+   `tail -8` / `head -40` 也看不到汇总行（它排在 warnings 摘要**之前**）。
+   要么落全量日志到文件再解析，要么走 junitxml。
+3. **`InterfaceError` 的文本不在 `_sqlite3.pyd` 里** —— 第一反应去二进制里找那条消息会扑空
+   （实测偏移 -1）。它是 SQLite C 库自己的 `sqlite3_errmsg` 文本。想定位就该抓**抛出点**：
+   `traceback.format_stack()` 拿不到（异常已抛出栈），必须 `format_exc()` ——
+   且 Python 3.11+ 会带 `^^^^` 精细定位，链式表达式（`_connect().execute(...).fetchone()`）
+   也能指出是哪一段调用。
+
+**F. 一条方法论的收获（值得单独记一笔）**：本轮**四次**基于「读码看起来对」的推测被实验或读码推翻 ——
+① 「旧自动归库路的 `old_id` 算错（传了绝对路径）」：读 `library._book_id` 发现**只用 basename**，
+两条路算出同一个 id；② 「`update_library` 整行覆盖导致覆写被旧快照盖掉」：读 `db.py` 发现
+**只写传入的列**；③ 「`ltype` 回落成 `mixed` 会让 `allows_setting` 丢掉 `scrape.enabled`」：
+读 `FEATURES_BY_TYPE` 发现 `mixed` **有** `komga` 能力；④ 计划里的 H1 机制（`commit()` 重置语句）。
+**这四条一条都没写进文档**。结论：**「读起来像」不构成证据，动手前先造能证伪它的探针** ——
+这也正是本仓「无复现不改」那条纪律值钱的地方。
 
 全量类型检查 → 构建 → 部署 `novelforge/static/v2` → 重启测试实例 → 端到端脚本验证「保存 → 读回 → 实际生效」→ 浏览器逐路由冒烟。
 

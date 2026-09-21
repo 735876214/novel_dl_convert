@@ -35,12 +35,13 @@
 - `.gitignore` 清单、macOS 建环境与首跑、`npm install` 的 lock 噪声、Windows 删除 shim ⇒ **见 REF「环境与构建」**。
 
 ## 自动化测试（硬前提）
-- 完全离线 `.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。**基线按环境取**：POSIX 38 期 632 例 / 0 failed（37 期 619）；win32 33 期 404 例 / 0 failed（**未随 POSIX 重取**）。
-- ⚠️ **`pytest -q` 汇总行抓不到**（重定向后只剩 warnings）⇒ 一律 `--junitxml=/tmp/nf.xml` + Python 解析 `//testcase[failure|error]`（**别用 `[xml]`**）；跑全量前确认 `novelforge/static` 存在。
+- 完全离线 `.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。**基线按环境取**：win32 39 期 **651** 例 / 0 failed / 0 err（= 632 + 前端守卫契约 5 + 计数契约 6 + 归库统一契约 4 + db 并发契约 4）；POSIX 38 期 632。**前端用例另计、不并入此基线**（`npm run test:unit`，本期 12 例：两套跑法两套前提，混在一起基线就没意义了）。
+- ⚠️ **汇总行抓不到的真正原因：`pytest.ini` 里已有 `addopts = -q`，命令行再加一个 `-q` 就是 `-qq` —— 那会连「N passed in Xs」一起吞掉**（第 39 期实测坐实；此前「重定向后只剩 warnings」那个归因是错的）。⇒ 跑测试**别再加 `-q`**；要计数量一律 `--junitxml=…` + Python 解析（**别用 `[xml]`**，pytest 的根是 `<testsuites>` 而非 `<testsuite>`，属性在子元素上）；跑全量前确认 `novelforge/static` 存在。
+- ⚠️ **探针脚本别用 `grep` 猜结果**：`-qq` 下无汇总行 ⇒ 匹配为空会被误读成「没复现」；而 grep 默认区分大小写，`FAILED` 也匹配不上 `failed`。要看真相就**落全量日志到文件**再读。
 - **「长期稳定失败」不是 flaky，是产品 bug 的症状**：报错不指向根因就逐层打印中间返回值；修完临时回退那一处确认「恰好相关用例失败」；e2e 做改前 FAIL / 改后 PASS 对照。
 - 硬前提：①环境变量须在 import 业务模块**前**设（`config` 导入即固化目录、`server` 导入即 `ensure_dirs()`）；②`db._conn`/`_db_path` 是模块级缓存 ⇒ 隔离靠 `db.close()`。
 - 碰库/DB 用例必须 `isolated`、接口一律 `client`+`auth_headers`；假 EPUB（`b"EPUB"`）够扫描类，元数据写回/系列解析要真 EPUB（`epub_builder.build_epub`）；测试库根须在 `LIBRARY_SOURCE_DIR` 下；断言留余地。⚠️ `isolated` 换库=改 `DATA_DIR`+`db.close()`（只 `close()+init()` 会重开**同一个文件**）。
-- 全量后半程曾 segfault ⇒ `tests/conftest.py` 的 `_quiesce_background()` 在夹具 `db.close()` **之前**收尾。
+- 全量后半程曾 segfault ⇒ `tests/conftest.py` 的 `_quiesce_background()` 在夹具 `db.close()` **之前**收尾。⚠️ 第 39 期起它**不再静默**：`watcher.wait_pending(5.0)` 的返回值（=超时后仍未结束的数量）非 0 就 `pytest.fail` 把这件事说出来 —— 此前被 `except Exception: pass` 吞掉，于是「收尾没干净」只表现为**后面某个无关用例**偶发变红（`pytest.fail` 抛的 `Failed` 继承 `BaseException` ⇒ 不会被那个 `except` 吞）。干净运行下该值**恒为 0**，不误伤。
 
 ## 后端约束与踩坑
 - core 内一律 `from .. import config`（`import config` 被同名命名空间包劫持，启动才炸）。
@@ -49,11 +50,14 @@
 - 写磁盘只用 rename/move，删除移 `CACHE_DIR/recycle`；路径用 `library.root_of(b)/b["name"]`，**禁** `config.OUTPUT_DIR/b["name"]`；`write_epub` 前先 `mkdir`。
 - 库根限 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR`（`safe_path`，建库强校验，之外 400）；`book_id`=basename 派生+库维度化。⚠️ 库存储根在 `OUTPUT_DIR` 之下时 `default` 库会把副本**再收一次** ⇒ 同一本书两条（预期行为，断言按 `library_id` 过滤）。
 - 新增库表列须同进 `db._LIBRARY_COLS`，否则 `update_library` 静默写不进。
-- **给既有表加唯一约束/PK 要回头看 `db.remap_book_id`**：整体 `UPDATE` 撞约束会抛异常并被外层 `except` 吞成「搬 0 行」⇒ **静默丢数据** ⇒ 必须**逐行搬 + 冲突时取舍**。**新增含 book_id 的表必须过三处**：`ORPHAN_TABLES`、`REMAP_TABLES`、有软删的再进 `REMAP_PROBE_FILTER`。
+- **给既有表加唯一约束/PK 要回头看 `db.remap_book_id`**：整体 `UPDATE` 撞约束会抛异常并被外层 `except` 吞成「搬 0 行」⇒ **静默丢数据** ⇒ 必须**逐行搬 + 冲突时取舍**。**新增含 book_id 的表必须过四处**：`ORPHAN_TABLES`、`REMAP_TABLES`、有软删的再进 `REMAP_PROBE_FILTER`、**含库相关列的再进 `REMAP_EXPLICIT_TABLES`**（现有唯一成员 `scrape_items` —— 它另有 `library_id`/`source_rel`/`link_rel`，走 `db.scrape_remap_item`，**刻意不在** `remap_book_id` 的搬迁清单里）。⚠️ 有契约测试（`tests/test_remap_tables.py`）钉「凡含 book_id 列的表必须出现在某个清单里」，**漏了它会在换库时静默断链**（第 39 期实测：自动归库后台账行留在旧 id 上，旧库对账把「已出版」判成 orphan/removed）。
+- ⚠️ **`migrate.execute` / `rollback` 不再按 `direction` 分支**（第 39 期统一）：自动归库（`move`）与用户移动（`bookmove`）共用 `_after_bookmove`/`_after_bookmove_back`，差别只剩「谁选源集合、谁定目标库」。回程**必须与去程对称**。⚠️ `DIR_AUTO = "move"` 字面量**不能改**（`migration_last_batch("move")` 依赖），`server.py` 拒绝用 bookmove 入口执行自动归库批次那两处**保留**。反查所属库一律用 `_lib_id_of_path`（取**最长**匹配；旧的「取第一个」实现已删 —— `library.libraries()` 顺序不保证）。
 - ⚠️ **win32 上目录 `st_size` 恒为 0**：「空文件」判据都要**排除目录**（`if not p.is_dir() and p.stat().st_size == 0`），否则 win32 有声书永不入库；目录体积用 `watcher._sig()`。
 - 批量端点注册在 `/api/books/{bid}` 之前、字面量路径在 `{param}` 之前；目录型条目用 `path.exists()` 不用 `is_file()`。
 - **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**：**没有 `/api/health`**（白名单只含 `/health`+`/api/auth/login`+`/api/logout`）；前端 `api.ts` 的 `health()` 也走 `/health`。
 - 共用锁嵌套用 `RLock`；`mark_processed`/`mark_recent` 走 `asyncio.to_thread`；watcher 独立 `_scan_lock`。
+- ⚠️ **`db` 连接是全进程一个 `check_same_thread=False` 的裸连接 ⇒ 读写一律经 `_lock` 串行**（第 39 期根治）。`db._connect()` 返回的是**持锁代理** `db._Conn`，**不是** `sqlite3.Connection`；`_lock` 是 **`RLock`**（`with _lock:` 块里还会再调 `c.execute`，非重入锁会自锁死）。**光给写路径加锁是不够的** —— 真凶正是「锁内写 + 裸读」并发：实测 3 读线程 + 1 锁内写，**3/3 轮全 `InterfaceError`**（各 400–500 次）；用户可见后果是 `library.get_library` 把它吞成 `None` ⇒ `lib_settings.overrides()` 得空 dict ⇒ **每库覆写静默回落全局值**；三线程裸读 + `db.close()` 则 **6/6 段错误**。⇒ **新增任何 db 访问只走 `db._connect()`，别去抓 `sqlite3` 原连接、别绕开 `_lock`**；`db._Result` 的接口面**刻意收窄**（`execute/executemany/executescript/commit/rollback` + 行标量/`fetchone`/`fetchall`/迭代），**新增需要的游标属性要显式补进去**。契约测试 `tests/test_db_concurrency_contract.py`（全仓唯一主动开线程的测试）。
+- ⚠️ **`db.close()` 生产上无人调**（只有 `server.py` 的 `db.init()` 和测试用）—— 但「锁内写 + 裸读」**不需要 `close()` 就能触发**，所以上面那条竞态**生产可达**（watcher 线程 / scrape worker / `asyncio.to_thread` 与请求线程同时进连接）。`close()` 现在也持 `_lock` ⇒ 段错误那条路已封死，但之后仍攥着旧代理的线程会拿到 `ProgrammingError` —— **那是真错误，别吞**。
 - `core/stats.py`：`overview` 既有键**只增不删**、**必须跟随 `library_id`**、**不新增扫描路径**；真名照代码（`weekdays`/`pages_by_format`）。
 - **「文件:行号」收尾必须实测复核**：工具=`tests/check_doc_anchors.py`（**非 `test_` 前缀 ⇒ pytest 不收集**），用法与局限见 capability-gap §0.5。①**别记偏移量，只记当前真实行号**；②脚本**只生成待核清单、不能判定**（「行号合法但内容换了」天生测不出）⇒ 判据是「0 硬错 + 0 漂移」**且**人工过完 `--todo` 清单。先例：32 期核 71 修 10、33 期核 312 修 28、35 期核 706 修 37、36 期核 719 修 7（**7 处全部落在本期自己动过的 `core/db.py` / `server.py` 上** ⇒ 动了锚点密集的文件就顺手重核那一份）。
 

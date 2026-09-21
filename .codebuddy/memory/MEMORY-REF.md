@@ -30,7 +30,7 @@
 ### 环境与构建
 - `.gitignore`：`.codebuddy/*` + `!.codebuddy/memory/`；忽略 `data/`、`*.db`、`novelforge/static/v2/`、`dist/`、`.playwright-cli/`。
 - macOS 首次跑测试：`/Users/stromboid/.local/bin/python3.12 -m venv .venv` → `.venv/bin/pip install -r requirements-dev.txt` → **再** `mkdir -p novelforge/static`（缺目录在 **import 期**就抛）。**别建 `static/v2/index.html`**，否则 `GET /` 不再是 503。
-- ⚠️ `npm install` 会删掉 `frontend/package-lock.json` 里一批 optional 的 `"dev": true`（纯噪声）⇒ 提交前 `git checkout -- frontend/package-lock.json`。
+- ⚠️ `npm install` 会删掉 `frontend/package-lock.json` 里一批 optional 的 `"dev": true`（纯噪声）。**规则（第 39 期修订，取代此前「提交前一律 `git checkout --`」）**：不再无脑还原 —— 那会把**本期真要加的新依赖一起丢掉**（第 39 期加 vitest 三件套时就会）。改为：提交前**逐段 `git diff frontend/package-lock.json`**，只放行「本期新增依赖引入的改动」，其余 `"dev": true` 增减照旧还原。
 - Windows：IDE safe-delete shim 拦 PowerShell `Remove-Item`（静默不删）⇒ 清临时产物用删除工具；`Out-File` 不带 `-Encoding` 同样被拦。
 
 ### 命名与出版细节
@@ -43,8 +43,14 @@
 - 可覆盖项（每库）：`output.format`/`output.layout`、`watcher.recursive`/`watcher.copy_non_txt`、`metadata_fetch.*`、`naming.pattern`/`naming.scope`、`scrape.enabled`、`opds.expose`/`komga.expose`；`core/lib_settings.py` 的 `effective`/`config_for`/`apply_to`/`set_overrides`/`clear_overrides`/`schema()`。
 - 可见性判定的唯一落点是 `_opds_visible_libraries`/`_ko_visible_libraries`（「不可见」=「不存在」→ 直连 404）。
 - ⚠️ **判断「某能力有没有页面入口」要两头查**：先查 `server.py` 的 `EDITABLE` 白名单，再查前端 `settingsFields.ts` 的字段定义（只看配置文件会误判，`upload.max_bytes` 是一例）。
+- **`sqlite3.InterfaceError: bad parameter or other API misuse` 的定位法**（第 39 期查了半天，记下来省下次）：它就是 SQLite C 库 `sqlite3_errmsg` 里 **`SQLITE_MISUSE` 的文本** —— **不在** `_sqlite3.pyd` 里（去二进制里 `strings` 会扑空，实测偏移 -1）。它**与常见的 sqlite3 误用无关**：cursor 关后用 / 连接关后用 / 参数错 / `row_factory` 非 callable 产出的都是 `ProgrammingError`/`TypeError`，**没有一种能造出 `InterfaceError`**。本仓实测的唯一成因是「**同一连接上的无锁并发访问**」（`commit()` 重置语句那条假设已被实验证伪：三种操作各自对撞读线程，全 0 异常）。想抓抛出点用 `traceback.format_exc()`（Python 3.11+ 带 `^^^^` 精细定位，链式调用也能指出是哪一段）—— `format_stack()` 拿不到，异常已抛出栈。
 
 ### 前端细节
+- **前端单测（第 39 期起）**：`cd frontend && npm run test:unit`（= `vitest run`）。脚本名**刻意不叫 `test`** —— 本仓库「测试」历来专指 pytest 那套。配置**不另起 `vitest.config.ts`**（`vite.config.ts` 的 `@` alias 是唯一真值源），就加在既有 `defineConfig` 的 `test` 块里；**不开 `globals`**（spec 在 `src/**` 下会被 `vue-tsc --build` 一并检查，显式 `import { describe, it, expect } from 'vitest'` 即可）。
+  - ⚠️ **前端用例数独立计数**，**不得并入 pytest 基线**（两套跑法、两套前提）。
+  - ⚠️ 要伪造时钟用 `vi.useFakeTimers({ toFake: ['Date'] })` —— **只伪造 `Date`**。全套假时钟会让 `flushPromises()` 自己挂住（它内部就靠一个 `setTimeout` 落地）。
+  - ⚠️ happy-dom 没实现 `scrollIntoView`，挂载阅读器类组件前先 `Element.prototype.scrollIntoView = vi.fn()`，否则滚到章节时抛。
+  - 挂载 harness 的坑：`vi.mock('@/lib/api')` 要**一次给齐所有**被调接口 —— 少一个就在 `onMounted` 里抛，异常被当成「加载失败」渲染成空态，用例最后以「找不到按钮」报错，**离真正原因很远**。
 - `bridge.css` 须 `@theme inline`；`main.css` 须 `@custom-variant dark (&:is(.dark *));`。
 - ⚠️ **设置页 `note` 是纯文本插值**（`SettingsPlaceholder.vue` 的 `{{ page.note }}`）⇒ 写 `**`、反引号、`<strong>` 都会**原样显示给用户**；有契约测试钉住。
 - 工具页 `ToolsLayout.vue` 子页用 `onActivated`（非 `onMounted`）；改磁盘工具「先预览再应用」、删除移回收站。例外：页面内 `v-if` 子组件（如 `ScrapePanel`）需 `onMounted` 首载、`onActivated` 只刷新。
@@ -60,3 +66,4 @@
 - 自动核对的 ±6 窗口会吞掉偏 4 行的漂移、±2 假阳性约 80% ⇒ **脚本只能生成待核清单、不能判定**；区间引用只能按「它声称是什么」反向 grep。
 - 追加一类误报：**「文档写 `x.py:1`，真值 `:2`」这种更正句式**前半截是记录旧错，不该按漂移判。
 - ⚠️ **同期内「先写锚点、后改代码」也会让锚点作废**（第 34 期四笔代码落在最后、文档先行）⇒ 收尾必须按「当前真实行号」重测，**不记偏移量**。
+- 各期核验规模（判「这算多还是少」的参照）：32 期核 71 修 10、33 期核 312 修 28、35 期核 706 修 37、36 期核 719 修 7、**39 期核 11 疑似漂移全修（12 处）** —— 39 期那一批**全部由 `core/db.py` 净增 102 行引起**（`_Conn`/`_Result` + 长 docstring），再次印证「动了锚点密集文件就顺手重核那一份」。健康线 = **硬错 0 + 疑似漂移 0**（`--todo` 那几百条是「没点符号/历史引用」，属正常，不用全看）。
