@@ -8,6 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import { api, type SearchHit } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
 import { useTasksStore } from '@/stores/tasks'
 import { useUiStore } from '@/stores/ui'
 
@@ -19,6 +20,7 @@ import { useUiStore } from '@/stores/ui'
  */
 const ui = useUiStore()
 const tasks = useTasksStore()
+const library = useLibraryStore()
 
 const keyword = ref('')
 const searching = ref(false)
@@ -97,6 +99,13 @@ function openPreview(hit: SearchHit): void {
 
 /** 发起下载：交给后端，然后让任务 store 从服务端刷新真实状态 */
 function startDownload(hit: SearchHit): void {
+  // 0 库时**提前拦下**（第 38 期）：后端此时会收下任务再在后台失败
+  //（`_run_download` 里 `no_library_reason()` ⇒ 任务标 failed），用户看到的是
+  //「已加入下载队列」，失败却要跑到任务中心才发现 —— 一次注定失败的往返没必要发。
+  if (library.hasNoLibraries) {
+    ui.toast('还没有书库：先到「工具 → 书库管理」新建一个书库，下载才有地方落')
+    return
+  }
   api
     .download({ ...hit })
     .then(() => {
@@ -112,7 +121,14 @@ function startDownload(hit: SearchHit): void {
 
 <template>
   <div>
-    <PageHead title="探索发现" desc="跨全部已启用书源聚合检索，选中结果可直接下载" />
+    <PageHead
+      title="探索发现"
+      :desc="
+        library.hasNoLibraries
+          ? '跨全部已启用书源聚合检索 —— 但还没有书库，下载前请先到「工具 → 书库管理」新建一个'
+          : '跨全部已启用书源聚合检索，选中结果可直接下载'
+      "
+    />
 
     <Card class="mb-4">
       <div class="flex items-center gap-2">

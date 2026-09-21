@@ -546,7 +546,16 @@ async function remove(l: LibraryEntity): Promise<void> {
       </div>
 
       <div v-if="loading && !libs.length" class="px-4 py-6 text-[12.5px] text-muted-foreground">加载中…</div>
-      <div v-else-if="!libs.length" class="px-4 py-6 text-[12.5px] text-muted-foreground">还没有书库</div>
+      <!-- 0 库是**全新部署的正常初始态**（第 37 期起不设默认库），所以这里不是
+           「出错了」而是「第一步在这」：说清建库要填什么、点哪里（第 38 期）。 -->
+      <div v-else-if="!libs.length" class="px-4 py-6">
+        <div class="text-[12.5px] font-medium text-foreground">还没有书库</div>
+        <p class="mt-1 max-w-[62ch] text-[12.5px] leading-relaxed text-muted-foreground">
+          书要落进书库才有位置：新建一个书库、选好它的来源目录，之后从「探索发现」下载、
+          在「本地转换」上传、或往投递目录里放文件才会被接收 —— 在此之前它们一律会被拒收。
+          点右上角「新建书库」开始。
+        </p>
+      </div>
       <div
         v-else-if="!visibleLibs.length"
         class="px-4 py-6 text-[12.5px] text-muted-foreground"

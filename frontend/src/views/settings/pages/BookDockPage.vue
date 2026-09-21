@@ -10,6 +10,7 @@ import Icon from '@/components/ui/Icon.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type BookDockResponse, type HealthInfo, type WatcherStatus } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -38,6 +39,7 @@ interface WatcherInfo extends WatcherStatus {
 }
 
 const ui = useUiStore()
+const library = useLibraryStore()
 const { cfg, val, setVal, loadConfig, saveSection, saving } = useSettingsConfig()
 
 const watcher = ref<WatcherInfo | null>(null)
@@ -192,6 +194,13 @@ async function onDrop(e: DragEvent): Promise<void> {
   dragDepth.value = 0
   const files = [...e.dataTransfer.files]
   if (!files.length) return
+  // 0 库时提前拦下（第 38 期）：投递链路按「没有可接收的库」拒收，
+  // 文件会落在投递目录里被反复扫描却永远不进库 —— 与其留下这种状态，
+  // 不如当场说清「先去建库」。（后端仍会兜底拒收，这里只是把话说在前面。）
+  if (library.hasNoLibraries) {
+    ui.toast('还没有书库：先到「书库管理」新建一个书库，投递的文件才有地方归')
+    return
+  }
   dropping.value = true
   let ok = 0
   for (const file of files) {
@@ -236,7 +245,9 @@ onBeforeUnmount(() => {
     <div class="mb-3 flex flex-wrap items-baseline gap-2">
       <h2 class="text-[14px] font-semibold text-foreground">收书目录</h2>
       <span class="font-mono text-[11.5px] text-muted-foreground">Book Dock</span>
-      <span class="text-[11.5px] text-muted-foreground">把文件丢进目录即自动处理</span>
+      <span class="text-[11.5px] text-muted-foreground">
+        {{ library.hasNoLibraries ? '还没有书库，投递的文件无处归库' : '把文件丢进目录即自动处理' }}
+      </span>
       <Button size="sm" class="ml-auto" :disabled="saving" @click="scanNow">立即扫描</Button>
       <Button size="sm" :variant="running ? 'danger' : 'primary'" @click="toggleWatcher">
         {{ running ? '暂停' : '开始监听' }}
@@ -261,9 +272,16 @@ onBeforeUnmount(() => {
           {{ dropDir }}
         </div>
         <p class="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">
-          把 <code class="font-mono">.txt</code> 放进该目录会自动转成 EPUB 并归入成品目录；
-          其它格式按设置原样导出。子目录是否递归、写入稳定判定等参数见
-          <RouterLink to="/settings/ext/watcher" class="underline">本项目扩展 → 监听</RouterLink>。
+          <template v-if="library.hasNoLibraries">
+            还没有书库：文件放进来会被<strong>拒收</strong>（没有可接收的库）。请先到
+            <RouterLink to="/tools/libraries" class="underline">工具 → 书库管理</RouterLink>
+            新建一个书库并指定它的来源目录。
+          </template>
+          <template v-else>
+            把 <code class="font-mono">.txt</code> 放进该目录会自动转成 EPUB 并归入成品目录；
+            其它格式按设置原样导出。子目录是否递归、写入稳定判定等参数见
+            <RouterLink to="/settings/ext/watcher" class="underline">本项目扩展 → 监听</RouterLink>。
+          </template>
         </p>
       </div>
 
@@ -359,7 +377,11 @@ onBeforeUnmount(() => {
         dashed
         class="m-4"
         :title="activeTab === 'all' ? '投递目录里还没有文件' : '该状态下没有条目'"
-        desc="把 .txt / EPUB / PDF / CBZ 拖进本页任意位置，或直接放进投递目录，文件会在这里按状态流转。"
+        :desc="
+          library.hasNoLibraries
+            ? '还没有书库 —— 现在投递进来的文件会被拒收。先到「工具 → 书库管理」新建一个书库，再往这里放文件。'
+            : '把 .txt / EPUB / PDF / CBZ 拖进本页任意位置，或直接放进投递目录，文件会在这里按状态流转。'
+        "
       />
     </Card>
 
@@ -397,7 +419,13 @@ onBeforeUnmount(() => {
           <Icon name="upload" class="h-9 w-9 text-primary" />
           <div class="text-[15px] font-semibold text-foreground">松开投递到收书目录</div>
           <div class="text-[12px] text-muted-foreground">
-            {{ dropping ? '正在处理…' : '.txt 会被转换，其它电子书格式（EPUB/PDF/CBZ 等）直接入库' }}
+            {{
+              dropping
+                ? '正在处理…'
+                : library.hasNoLibraries
+                  ? '还没有书库 —— 现在松开会被拒收，请先新建书库'
+                  : '.txt 会被转换，其它电子书格式（EPUB/PDF/CBZ 等）直接入库'
+            }}
           </div>
         </div>
       </div>

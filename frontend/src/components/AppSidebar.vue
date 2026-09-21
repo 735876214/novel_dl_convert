@@ -363,6 +363,19 @@ async function onGroupAction(title: string, action: 'add' | 'more'): Promise<voi
             {{ group.empty ?? '暂无内容' }}
           </div>
 
+          <!-- 「库」组**永远不为空**（恒有「全部书库」一项），所以上面的 `group.empty`
+               对它永远走不到 —— 0 库时这里单独补一行明示（第 38 期）。
+               没有它，全新部署的侧栏「库」组就只有一个筛选框和「查看全部书库（0）」。 -->
+          <button
+            v-if="group.title === '库' && library.hasNoLibraries"
+            type="button"
+            class="mt-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-md px-[0.625rem] py-1.5 text-left text-[11.5px] text-muted-foreground transition-colors hover:bg-[var(--shell-accent-wash)] hover:text-primary"
+            @click="onGroupAction('库', 'add')"
+          >
+            <Icon name="plus" class="h-3 w-3 shrink-0" />
+            <span>还没有书库，先建一个</span>
+          </button>
+
           <div
             v-if="group.more"
             class="mt-0.5 flex cursor-pointer items-center gap-1 rounded-md px-[0.625rem] py-2 text-[11.5px] text-muted-foreground transition-colors hover:bg-[var(--shell-accent-wash)] hover:text-primary"

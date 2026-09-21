@@ -5,10 +5,12 @@ import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import { api, type FileEntry, type WatcherStatus } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /** 本地转换：拖拽上传 TXT → EPUB；监听目录状态与手动扫描。接真实 /convert、/api/watcher、/api/scan */
 const ui = useUiStore()
+const library = useLibraryStore()
 
 const dragging = ref(false)
 const busy = ref(false)
@@ -85,6 +87,13 @@ function convertFiles(fileList: FileList | File[]): void {
   const files = Array.from(fileList)
   if (!files.length) return
 
+  // 0 库时提前拦下（第 38 期）：`/convert` 会 400 拒收（「还没有书库…」），
+  // 与其把文件读进内存再让后端退回来，不如先把话说明白。
+  if (library.hasNoLibraries) {
+    ui.toast('还没有书库：先到「工具 → 书库管理」新建一个书库，转换结果才有地方落')
+    return
+  }
+
   // 前端预校验：跳出不支持的格式，给可读提示（不再写死 .txt）
   const allowed = files.filter((f) => ALLOWED_EXT.includes(extOf(f.name)))
   const skipped = files.length - allowed.length
@@ -132,6 +141,10 @@ function convertByPath(): void {
   const p = pathValue.value.trim()
   if (!p) {
     ui.toast('请填写 input 目录下的相对路径')
+    return
+  }
+  if (library.hasNoLibraries) {
+    ui.toast('还没有书库：先到「工具 → 书库管理」新建一个书库，转换结果才有地方落')
     return
   }
   if (!ALLOWED_EXT.includes(extOf(p))) {
@@ -182,7 +195,13 @@ function scan(): void {
       <Card>
         <h3 class="text-[13px] font-semibold text-foreground">拖拽上传</h3>
         <p class="mt-1 mb-2.5 text-[11.5px] text-muted-foreground">
-          把 TXT 或常见电子书/漫画/音频交给流水线；TXT 会转成带目录的 EPUB，其余格式按原样入库，或交给下方监听目录自动处理。
+          <template v-if="library.hasNoLibraries">
+            还没有书库：转换结果需要有地方落，现在上传会被拒收。请先到
+            <RouterLink to="/tools/libraries" class="underline">工具 → 书库管理</RouterLink> 新建一个书库。
+          </template>
+          <template v-else>
+            把 TXT 或常见电子书/漫画/音频交给流水线；TXT 会转成带目录的 EPUB，其余格式按原样入库，或交给下方监听目录自动处理。
+          </template>
         </p>
 
         <label

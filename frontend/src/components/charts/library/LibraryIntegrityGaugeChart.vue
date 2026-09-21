@@ -5,6 +5,7 @@ import ChartCard from '@/components/charts/ChartCard.vue'
 import ChartFrame from '@/components/charts/ChartFrame.vue'
 import type { StatsOverview } from '@/lib/api'
 import { useChartTheme } from '@/lib/charts'
+import { useLibraryStore } from '@/stores/library'
 
 /**
  * 书库体检（上游 `LibraryIntegrityGaugeChart.vue`）：半环仪表盘 + 三格覆盖率。
@@ -21,9 +22,19 @@ import { useChartTheme } from '@/lib/charts'
 const props = defineProps<{ data: StatsOverview }>()
 
 const { theme } = useChartTheme()
+const library = useLibraryStore()
 
 const integrity = computed(() => props.data.integrity)
 const totalBooks = computed(() => integrity.value.total_books ?? 0)
+
+/**
+ * 空态标题跟着真实状态走（第 38 期）。
+ *
+ * 原来固定写「书库还是空的」—— 可第 37 期起全新部署**一个书库都没有**，
+ * 此时说「书库还是空的」会让人以为库已经存在、只是没往里放书。
+ * 0 库时说「还没有书库」，口径与首屏、书架、侧栏一致。
+ */
+const emptyTitle = computed(() => (library.hasNoLibraries ? '还没有书库' : '书库还是空的'))
 
 /** 三格：标签与明细卡的 `GAUGES` 逐字一致 */
 const stats = computed(() => {
@@ -108,7 +119,7 @@ const option = computed(() => {
     icon="wrench"
     :color-index="4"
     :empty="totalBooks === 0"
-    empty-title="书库还是空的"
+    :empty-title="emptyTitle"
     empty-description="入库后这里按文件在位、可解析、元数据达标三项算一个综合分。"
     note="综合分 = 三项覆盖率的算术平均；下方「书库体检」卡片列的是可照修的计数明细。"
   >

@@ -6,10 +6,19 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { api, type FileEntry } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /** 导出目录：列出 output/ 下的成品文件，支持下载。接真实 /api/files + /download/{name} */
 const ui = useUiStore()
+const library = useLibraryStore()
+
+/** 空态说明按真实状态分两种：0 库时「去下载/上传」是条走不通的路（第 38 期） */
+const emptyDesc = computed(() =>
+  library.hasNoLibraries
+    ? '成品文件来自入库的书。先去「工具 → 书库管理」新建一个书库，下载与上传才会有地方落。'
+    : '到「探索发现」下载一本书，或在「本地转换」上传一个 TXT。',
+)
 
 const files = ref<FileEntry[]>([])
 const loading = ref(true)
@@ -94,11 +103,8 @@ function download(name: string): void {
       </div>
     </Card>
 
-    <EmptyState
-      v-else
-      icon="file"
-      title="还没有成品文件"
-      desc="到「探索发现」下载一本书，或在「本地转换」上传一个 TXT。"
-    />
+    <!-- 0 库时那句「到探索发现下载 / 本地转换上传」是**错的**：这两条路都要求
+         先有可接收的书库，否则 400 拒收（第 38 期）。 -->
+    <EmptyState v-else icon="file" title="还没有成品文件" :desc="emptyDesc" />
   </div>
 </template>

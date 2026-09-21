@@ -4,9 +4,11 @@ import { useRouter } from 'vue-router'
 
 import { highlightHex } from '@/data/annotationColors'
 import { api, type AllAnnotation } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
 
 /** 每日划线：按当天日期确定性地抽一条批注（同一天刷新不变）。 */
 const router = useRouter()
+const library = useLibraryStore()
 const items = ref<AllAnnotation[]>([])
 
 onMounted(async () => {
@@ -26,15 +28,23 @@ const today = computed<AllAnnotation | null>(() => {
   const seed = d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate()
   return items.value[seed % items.value.length] ?? null
 })
+
+/**
+ * 空态分两种情况说（第 38 期）。
+ *
+ * 「在阅读器里选中文字即可添加」在**一个书库都没有**时做不到 —— 没有书就没有
+ * 阅读器可进。0 库时改说「还没有书库」，不指一条走不通的路。
+ */
+const emptyText = computed(() =>
+  library.hasNoLibraries ? '还没有书库。' : '还没有批注。在阅读器里选中文字即可添加。',
+)
 </script>
 
 <template>
   <div class="flex h-full flex-col rounded-lg border border-border bg-card p-4 shadow-sm">
     <h3 class="text-[13px] font-semibold text-foreground">每日划线</h3>
 
-    <p v-if="!today" class="mt-2 text-[11.5px] text-muted-foreground">
-      还没有批注。在阅读器里选中文字即可添加。
-    </p>
+    <p v-if="!today" class="mt-2 text-[11.5px] text-muted-foreground">{{ emptyText }}</p>
 
     <template v-else>
       <div class="mt-2.5 flex-1 border-l-2 pl-2.5" :style="{ borderColor: highlightHex(today.color) }">

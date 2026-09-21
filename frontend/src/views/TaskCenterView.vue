@@ -10,6 +10,7 @@ import PageHead from '@/components/ui/PageHead.vue'
 import { statusMeta } from '@/lib/format'
 import type { TaskStatus } from '@/data/tasks'
 import type { TaskItem } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
 import { useTasksStore } from '@/stores/tasks'
 
 /**
@@ -20,6 +21,7 @@ import { useTasksStore } from '@/stores/tasks'
  * 1% 的数字等于编造）；跨库移动逐本回调「已完成 / 总数」，运行中就该显示。
  */
 const tasks = useTasksStore()
+const library = useLibraryStore()
 
 const FILTERS: Array<{ value: TaskStatus | ''; label: string }> = [
   { value: '', label: '全部' },
@@ -162,11 +164,16 @@ onMounted(() => {
       </div>
     </Card>
 
+    <!-- 0 库时「到探索发现发起下载」也是错的：那一步必然失败（第 38 期） -->
     <EmptyState
       v-else
       icon="task"
       title="没有符合条件的任务"
-      desc="换个筛选条件，或到「探索发现」发起一次下载。"
+      :desc="
+        library.hasNoLibraries
+          ? '还没有书库 —— 下载任务要有地方落才排得进来。先去「工具 → 书库管理」新建一个书库。'
+          : '换个筛选条件，或到「探索发现」发起一次下载。'
+      "
     />
 
     <Card class="mt-4" padding="sm">

@@ -4,6 +4,7 @@ import DashboardSettingsSheet from '@/components/dashboard/DashboardSettingsShee
 import DashboardShelfRow from '@/components/dashboard/DashboardShelfRow.vue'
 import DashboardWelcome from '@/components/dashboard/DashboardWelcome.vue'
 import DashboardWidgetRow from '@/components/dashboard/DashboardWidgetRow.vue'
+import FirstRunNotice from '@/components/dashboard/FirstRunNotice.vue'
 import { useDashboardStore } from '@/stores/dashboard'
 
 /**
@@ -18,6 +19,9 @@ const dashboard = useDashboardStore()
 
 <template>
   <DashboardScroller>
+    <!-- 0 库时的首屏引导：压在部件之上，第一个看见的就是「先建书库」（第 38 期） -->
+    <FirstRunNotice />
+
     <DashboardWidgetRow />
 
     <DashboardShelfRow v-for="shelf in dashboard.enabledShelves" :key="shelf.id" :shelf="shelf" />

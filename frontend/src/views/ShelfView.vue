@@ -468,6 +468,44 @@ const filterHint = computed(() => {
 
 const isFiltered = computed(() => Boolean(library.shelfFacet) || library.isSmart)
 
+/**
+ * 空态三态（第 38 期）。**判据只有这一处**，模板里不许再写条件表达式：
+ *
+ * · `no-library` —— 一个书库都没有（全新部署的初始态）。此时让人去「探索发现」
+ *   下载 / 上传 / 投递全是**错的**：`/convert` 会 400 拒收，书没有地方可落。
+ *   唯一正确的指引是去建一个书库。
+ * · `no-books`   —— 有书库，但这个书架/这个库里就是没有书。这时说「换个入口看看」
+ *   是成立的（别的书架、别的库可能真有书）。
+ * · `filtered`   —— 有书，只是被搜索词/筛选条件挡掉了。
+ */
+const emptyKind = computed<'no-library' | 'no-books' | 'filtered'>(() => {
+  if (library.hasNoLibraries) return 'no-library'
+  return source.value.length ? 'filtered' : 'no-books'
+})
+
+const emptyTitle = computed(() => {
+  switch (emptyKind.value) {
+    case 'no-library':
+      return '还没有书库'
+    case 'filtered':
+      return '没有符合条件的书'
+    default:
+      return '这个书架还是空的'
+  }
+})
+
+const emptyDesc = computed(() => {
+  switch (emptyKind.value) {
+    case 'no-library':
+      // 说清「为什么别去下载」——否则用户下一步必然去点「探索发现」，然后吃一个 400
+      return '书要落进书库才有位置：先新建一个书库并指定它的来源目录，之后的下载、上传与投递才有地方可放。'
+    case 'filtered':
+      return '试试清除搜索词或筛选条件。'
+    default:
+      return '换个入口看看，或到「探索发现」把书下载进来。'
+  }
+})
+
 function chip(active: boolean): string {
   return active
     ? 'bg-primary text-primary-foreground'
@@ -514,15 +552,22 @@ const INPUT_CLS =
         <option value="">全部书库</option>
         <option v-for="lib in library.libraryEntities" :key="lib.id" :value="lib.id">{{ lib.name }}</option>
       </select>
-      <Button size="sm" variant="ghost" @click="scanShelf">立即扫描</Button>
+      <!-- 一个书库都没有时「立即扫描」扫不出任何东西（投递会被拒收），收起它；
+           「书库管理」反而要**留在最显眼处** —— 它是本期引导指向的那个出口。 -->
+      <Button v-if="!library.hasNoLibraries" size="sm" variant="ghost" @click="scanShelf">
+        立即扫描
+      </Button>
       <Button size="sm" variant="ghost" @click="manageLibs">书库管理</Button>
     </div>
     <p v-if="isFiltered && filterHint" class="-mt-2 mb-3 text-[12px] text-muted-foreground">
       {{ filterHint }}
     </p>
 
-    <!-- 工具栏 -->
-    <Card class="mb-3" padding="sm">
+    <!-- 工具栏：**一本书都没有时整条收起**（第 38 期）——搜索 / 视图 / 排序 / 多选 /
+         导出 CSV 在空书架上一个作用对象都没有，摆着只会让人以为「点了会有反应」。
+         判据用 `source`（筛选**前**的列表）而不是 `sorted`：有书但筛选没命中时，
+         用户正需要这条工具栏来清除筛选条件。 -->
+    <Card v-if="source.length" class="mb-3" padding="sm">
       <div class="flex flex-wrap items-center gap-2">
         <div class="relative min-w-[12rem] flex-1">
           <Icon
@@ -605,8 +650,8 @@ const INPUT_CLS =
       </div>
     </Card>
 
-    <!-- 统一筛选面板 -->
-    <Card v-if="prefs.filtersOpen" class="mb-3" padding="sm">
+    <!-- 统一筛选面板（与工具栏同进同出：0 本书时「清除筛选」也是空按钮） -->
+    <Card v-if="source.length && prefs.filtersOpen" class="mb-3" padding="sm">
       <div class="flex flex-wrap items-end gap-3">
         <label class="flex flex-col gap-1">
           <span class="text-[11px] text-muted-foreground">格式</span>
@@ -700,12 +745,15 @@ const INPUT_CLS =
       @moved="onMoved"
     />
 
-    <EmptyState
-      v-if="!sorted.length"
-      icon="library"
-      :title="source.length ? '没有符合条件的书' : '这个书架还是空的'"
-      :desc="source.length ? '试试清除搜索词或筛选条件。' : '换个入口看看，或到「探索发现」把书下载进来。'"
-    />
+    <!-- 空态**三态**（第 38 期）：0 库 / 有库但没书 / 有筛选没命中。
+         原来只有后两态、且把「没书」一概说成「换个入口看看，或到「探索发现」把书下载进来」
+         —— 全新部署（0 个书库）时那句话是**错的**：此时下载/上传/投递一律被后端
+         400 拒收，书根本没有地方可落。第 38 期起三态各说各的话，0 库直接给出口。 -->
+    <EmptyState v-if="!sorted.length" icon="library" :title="emptyTitle" :desc="emptyDesc">
+      <template v-if="library.hasNoLibraries" #action>
+        <Button size="sm" variant="primary" @click="manageLibs">新建书库</Button>
+      </template>
+    </EmptyState>
 
     <!-- 网格视图：列数与间距由 displayPrefs 驱动（见 gridStyle） -->
     <div v-else-if="prefs.prefs.view === 'grid'" class="grid" :style="gridStyle">

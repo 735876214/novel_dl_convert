@@ -11,6 +11,17 @@ const router = useRouter()
 onMounted(() => library.loadBooks())
 
 const items = computed(() => library.continueReading.slice(0, 3))
+
+/**
+ * 空态分两种情况说（第 38 期）。
+ *
+ * 「打开一本开始阅读吧」在**一个书库都没有**时是句空话：没有书可打开，
+ * 也没有阅读器可进。0 库时改说「还没有书库」，别让人去找一本不存在的书。
+ */
+const emptyText = computed(() => {
+  if (!library.loaded) return '正在载入…'
+  return library.hasNoLibraries ? '还没有书库。' : '还没有在读的书，打开一本开始阅读吧。'
+})
 </script>
 
 <template>
@@ -22,9 +33,7 @@ const items = computed(() => library.continueReading.slice(0, 3))
       </span>
     </div>
 
-    <p v-if="!items.length" class="mt-2 text-[11.5px] text-muted-foreground">
-      还没有在读的书，打开一本开始阅读吧。
-    </p>
+    <p v-if="!items.length" class="mt-2 text-[11.5px] text-muted-foreground">{{ emptyText }}</p>
 
     <button
       v-for="b in items"

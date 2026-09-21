@@ -947,8 +947,12 @@ function pickConfirm(): void {
     <EmptyState
       v-else-if="data && !data.publish_configured"
       icon="alert"
-      title="还没设置成品目录"
-      desc="刮削会把抓到的元数据写进成品目录里的硬链接副本（原书文件保持原样），外部阅读器挂载该目录即可读到整理完成的书。请先到「书库管理」为该库设置成品目录。"
+      :title="library.hasNoLibraries ? '还没有书库' : '还没设置成品目录'"
+      :desc="
+        library.hasNoLibraries
+          ? '刮削是按书库来的，而现在一个书库都没有。请先到「工具 → 书库管理」新建一个书库，再设置它的成品目录。'
+          : '刮削会把抓到的元数据写进成品目录里的硬链接副本（原书文件保持原样），外部阅读器挂载该目录即可读到整理完成的书。请先到「书库管理」为该库设置成品目录。'
+      "
     />
 
     <EmptyState

@@ -155,6 +155,19 @@ const integrityTotal = computed(() =>
 )
 const totalBooks = computed(() => s.value?.integrity.total_books ?? 0)
 
+/**
+ * 「没有问题」是**体检结论**，只在真的有书时才算数（第 38 期）。
+ *
+ * `integrityTotal` 在 0 本书时同样是 0，于是全新部署会看到一句
+ *「没有发现问题 —— 元数据、封面与文件都齐整。」—— 一本书都没有，
+ * 无从谈起齐整。这句话必须按「有没有书可体检」分开说。
+ */
+const integrityCleanText = computed(() =>
+  totalBooks.value
+    ? '没有发现问题 —— 元数据、封面与文件都齐整。'
+    : '还没有书目可体检 —— 有书入库后，这里才会给出结论。',
+)
+
 // ---- 体积榜（Top 50 Largest Books）：与上面几个榜同一条「默认 8 条、可展开」的规矩 ----
 const largest = computed(() => s.value?.largest ?? [])
 const largestShown = computed(() =>
@@ -418,7 +431,7 @@ const readingCharts = computed<StatisticsChartTile[]>(() => chartsOf('reading'))
           <!-- 可照修的计数（原有口径，一个都没删） -->
           <div class="mt-4 border-t border-border pt-2.5">
             <p v-if="!integrityTotal" class="text-[12px] text-muted-foreground">
-              没有发现问题 —— 元数据、封面与文件都齐整。
+              {{ integrityCleanText }}
             </p>
             <template v-else>
               <div
