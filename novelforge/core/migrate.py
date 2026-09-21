@@ -89,22 +89,6 @@ def libraries_of_type(ltype: str) -> list:
     return [l for l in library.libraries() if str(l.get("type") or "") == t]
 
 
-def _src_library_id_of(src: pathlib.Path) -> str:
-    """由源文件绝对路径反查它所属的书库 id（搬库前它在哪个库）。"""
-    try:
-        want = src.resolve()
-    except Exception:
-        return ""
-    for l in library.libraries():
-        try:
-            root = pathlib.Path(l.get("root_path") or "").resolve()
-        except Exception:
-            continue
-        if root and str(want).startswith(str(root)):
-            return str(l.get("id") or "")
-    return ""
-
-
 def _suggest_name(root: pathlib.Path, name: str) -> str:
     """冲突时的建议名：``三体 (2).epub``（递增到不冲突为止）。
 
@@ -293,14 +277,22 @@ def pending_batches() -> list:
 
 
 # ---------------- 用户发起的跨库移动（第 36 期）----------------
-# 与上面「按格式自动归库」共用同一台机器（manifest 批次 / 逐条独立 / remap / 回滚），
-# 差别只有三处：**谁选源集合**（用户点选 vs 全库扫描）、**谁定目标库**（显式指定 vs 按
-# 格式推导）、**副本怎么处理**（随书搬 vs 不动）。所以不另开模块 —— 另开就得把
-# 「逐条独立 / 幂等 / 回滚口径」再抄一遍，两处迟早会写歪。
+# 与上面「按格式自动归库」共用同一台机器（manifest 批次 / 逐条独立 / remap / 回滚）。
+# 差别**只**在两处：**谁选源集合**（用户点选 vs 全库扫描）、**谁定目标库**（显式指定
+# vs 按格式推导）。所以不另开模块 —— 另开就得把「逐条独立 / 幂等 / 回滚口径」再抄一遍，
+# 两处迟早会写歪。
 #
-# ⚠️ 自动归库那条路（``preview`` / ``plan`` / ``direction="move"``）**行为一字不改**：
-# 它仍然不动副本、不改台账 —— 这是本期**有意**留下的边界（存量批次可能正躺在 pending
-# 里等执行），不是漏做。要改它得单独一期。
+# ⚠️ 第 39 期改掉了**第三处**差别：原先自动归库「不动副本、不改台账」，与 bookmove 走
+# 两套账目完整度。那不是设计，是第 36 期**有意留下的边界**（存量批次可能正躺在 pending
+# 里等执行，改行为要单独一期）—— 第 39 期就是那一期。现在两条路都走
+# ``_after_bookmove`` / ``_after_bookmove_back`` 同一套链：remap + 副本随迁 + 台账改挂
+# + 通知 watcher。
+#
+# 为什么当初的边界**必须**收掉：``db.remap_book_id``（``db.py:1731``）的 docstring 明写
+# ``scrape_items`` **刻意不在这里**（它另有 ``library_id`` / ``source_rel`` / ``link_rel``
+# 三个库相关列）⇒ 自动归库后那本书的 id 换了库前缀，**台账行却还挂在旧 id 上**，
+# 新库看不到它、旧库的对账会把它判成 ``orphan`` / ``removed`` —— 一次正常搬迁
+# 变成一次误报事故。
 
 #: ``library_migrations.direction`` 的取值，如实记录迁移是**谁发起的**。
 #: ⚠️ 自动归库落库时写的就是字面量 ``"move"``，**不能改** ——
@@ -343,10 +335,19 @@ def compat_reason(book: dict, dst_lib: dict) -> str:
 def _lib_id_of_path(path) -> str:
     """由绝对路径反查所属库 —— **取路径最长（最具体）的那个库根**。
 
-    与 :func:`_src_library_id_of` 只差一处：嵌套库根时（``库A/子目录`` 又被登记成一个库）
-    取最长匹配，而不是「谁先遍历到算谁」。用户点名的源路径必须判准 —— 判错会算出错的
-    旧 id（数据搬到不存在的 id 上），副本也会落到错的成品目录。``_src_library_id_of``
-    的历史行为**不动**（自动归库路径照旧）。
+    嵌套库根时（``库A/子目录`` 又被登记成一个库）必须取最长匹配，不能「谁先遍历到算谁」：
+    ``library.libraries()`` 的顺序不保证，取第一个会让同一个文件**每次算出不同的库**。
+    判错会算出错的旧 id（数据搬到不存在的 id 上），副本也会落到错的成品目录。
+
+    ⚠️ 第 39 期之前，自动归库那条路走的是另一个实现（取**第一个**匹配，即上面那个不定序的
+    版本），而用户点选的移动走这里 —— 同一个文件两条路可能判成两个库。第 39 期把两条路
+    收成一条（见模块头）时，那个「第一个匹配」的实现就没人用了，已删；**两条路现在都走这里**。
+
+    ⚠️ **嵌套库根至今没有用例覆盖**（第 39 期如实记下，未改）：平铺库根下两条判据结果一致，
+    差别只在「库A/子目录」又被单独登记成一个库时。而那种布局下扫描侧本身就有自己的歧义
+    （``library._books_of`` 逐库打 ``library_id`` ⇒ 同一份文件会被两个库各扫到一次、
+    ``preview`` 于是为它产出两条指向同一 ``src`` 的条目）—— 那是**独立的既有问题**，
+    不该混进本期这条用例里。真要动它得单独一期。
     """
     try:
         want = str(pathlib.Path(str(path)).resolve())
@@ -947,10 +948,9 @@ def _notify(on_row, done: int, total: int, dst) -> None:
 def execute(batch_id: str, *, on_row=None, watcher=None) -> dict:
     """执行批次：逐条移动，**一条失败不影响其余**。已处理过的条目跳过（幂等）。
 
-    按 manifest 行的 ``direction`` 分两条路（同一批次只可能是其中一种）：
-
-    - ``move``（自动归库）：只搬正本、remap 关联数据 —— 第 10 期口径，本期**一字不改**。
-    - ``bookmove``（用户点选的跨库移动）：正本 + **副本随书搬** + 台账改挂 + 通知 watcher。
+    两条 ``direction``（``move`` = 自动归库 / ``bookmove`` = 用户点选的跨库移动）走
+    **同一套**收尾 —— 第 39 期起账目完整度不再有差别：都做 remap + **副本随迁** +
+    **台账改挂** + 通知 watcher。差别只在**谁选源集合 / 谁定目标库**（见模块头）。
 
     ``on_row``：``fn(done, total, name)``，每条**走到终态后**回调一次（成功 / 失败 / 早已
     处理过的都会调，所以进度条最后一定停在 ``total/total``）。
@@ -974,7 +974,6 @@ def execute(batch_id: str, *, on_row=None, watcher=None) -> dict:
             continue
         src = pathlib.Path(str(r["src"]))
         dst = pathlib.Path(str(r["dst"]))
-        is_bookmove = str(r.get("direction") or "") == DIR_BOOKMOVE
         try:
             if not src.exists():
                 raise ValueError("源文件已不存在")
@@ -983,7 +982,7 @@ def execute(batch_id: str, *, on_row=None, watcher=None) -> dict:
             dst.parent.mkdir(parents=True, exist_ok=True)
             # 要用的东西必须在**搬之前**取齐：搬完扫描树就变了，书名 / 元数据 / 旧 id
             # 都取不到（``_bookmove_ctx`` 里有详述）
-            ctx = _bookmove_ctx(src, r) if is_bookmove else None
+            ctx = _bookmove_ctx(src, r)
             shutil.move(str(src), str(dst))       # 跨卷时自动退化为「复制 + 删除」
         except Exception as e:                    # noqa: BLE001 —— 逐条兜底，继续搬其它
             reason = str(e) or e.__class__.__name__
@@ -993,29 +992,17 @@ def execute(batch_id: str, *, on_row=None, watcher=None) -> dict:
             done += 1
             _notify(on_row, done, total, dst)
             continue
-        if is_bookmove:
-            res = _after_bookmove(r, dst, ctx, watcher)
-            # 副本的账**按磁盘结果记**，不按「打算做什么」记：计划搬但搬失败的要算没搬，
-            # 目标库没配成品目录的要单独说出来 —— 否则日志会报出一句用户核对不上的数字。
-            if res["copied"]:
-                copies += 1
-            elif res["copy"] == "left":
-                copies_left += 1
-            if res["note"]:
-                notes.append({"src": str(src), "note": res["note"]})
-        else:
-            # 库维度 id：搬库后 basename 不变但库前缀变了 → 关联数据搬到新 id，避免断链
-            src_lib = _src_library_id_of(src)
-            old_id = library.book_id(str(src), src_lib)
-            new_id = library.book_id(str(dst), r["library_id"])
-            if old_id != new_id:
-                db.remap_book_id(old_id, new_id)
-        if watcher is not None and not is_bookmove:
-            # 自动归库这条路**只**补登记、不改其它行为（副本 / 台账照旧不动）
-            try:
-                watcher.mark_processed(dst)
-            except Exception as e:                # noqa: BLE001
-                notes.append({"src": str(src), "note": f"watcher 登记失败（{e}）"})
+        # **两条路走同一套收尾**（第 39 期统一）：remap 关联数据 → 副本随迁 → 台账改挂
+        # → 通知 watcher。差别只在触发方式与呈现，不在账目完整度（见模块头那段）。
+        res = _after_bookmove(r, dst, ctx, watcher)
+        # 副本的账**按磁盘结果记**，不按「打算做什么」记：计划搬但搬失败的要算没搬，
+        # 目标库没配成品目录的要单独说出来 —— 否则日志会报出一句用户核对不上的数字。
+        if res["copied"]:
+            copies += 1
+        elif res["copy"] == "left":
+            copies_left += 1
+        if res["note"]:
+            notes.append({"src": str(src), "note": res["note"]})
         db.migration_mark(r["id"], "done")
         moved += 1
         done += 1
@@ -1041,7 +1028,7 @@ def execute(batch_id: str, *, on_row=None, watcher=None) -> dict:
 def rollback(batch_id: str, *, watcher=None) -> dict:
     """一键回滚：把该批次**已搬走**的文件移回原位（仅限 status=done 的条目）。
 
-    ``bookmove`` 批次还要把**副本一起带回来**并把台账改挂回原库 —— 只搬正本的话，
+    **两条路都把副本一起带回来**并让台账改挂回原库（第 39 期统一）—— 只搬正本的话，
     原库的架上少一本、新库多一本不在那儿的书，等于把移动做了一半。
     """
     rows = [r for r in db.migration_batch(batch_id) if r["status"] == "done"]
@@ -1054,7 +1041,6 @@ def rollback(batch_id: str, *, watcher=None) -> dict:
     for r in rows:
         src = pathlib.Path(str(r["src"]))
         dst = pathlib.Path(str(r["dst"]))
-        is_bookmove = str(r.get("direction") or "") == DIR_BOOKMOVE
         try:
             if not dst.exists():
                 raise ValueError("文件已不在目标位置")
@@ -1063,8 +1049,8 @@ def rollback(batch_id: str, *, watcher=None) -> dict:
             src.parent.mkdir(parents=True, exist_ok=True)
             # 与 execute 同理：**搬之前**取齐 —— 副本要按书目的元数据算原落点，而文件
             # 一搬回去，扫描树里就查不到这本书了（``_book_of`` 会返回 None）。
-            ctx = _move_ids(src, dst, str(r["library_id"])) if is_bookmove else None
-            book = _book_of(ctx["new_id"]) if is_bookmove else None
+            ctx = _move_ids(src, dst, str(r["library_id"]))
+            book = _book_of(ctx["new_id"])
             shutil.move(str(dst), str(src))
         except Exception as e:                    # noqa: BLE001
             reason = str(e) or e.__class__.__name__
@@ -1077,19 +1063,14 @@ def rollback(batch_id: str, *, watcher=None) -> dict:
         # 却「干干净净」，读点还都不报错，与本期 T1 修的静默断链同一个病。
         # 两侧 id 都用 id 的**定义式**重算（``库$basename 哈希``），不猜、不存快照：
         # 这样即使 manifest 行是上一版写下、或文件被手工挪过，算出来的也是当下真值。
-        if is_bookmove:
-            res = _after_bookmove_back(r, src, dst, ctx, book, watcher)
-            if res["copied"]:
-                copies_back += 1
-            if res["note"]:
-                notes.append({"src": str(src), "note": res["note"]})
-        else:
-            # 自动归库：只反向搬关联数据（它本来就没动副本与台账，见模块头「有意留下的边界」）
-            src_lib = _src_library_id_of(src)
-            old_id = library.book_id(str(src), src_lib)
-            new_id = library.book_id(str(dst), r["library_id"])
-            if old_id != new_id:
-                db.remap_book_id(new_id, old_id)
+        # 与 execute **对称**：两条路都走同一套回滚收尾（反向 remap + 副本带回原库 +
+        # 台账改挂回原库 + 通知 watcher）。去程统一了、回程不统一，就会「搬过去齐了、
+        # 滚回来又散了」—— 比两边都不齐更难查。
+        res = _after_bookmove_back(r, src, dst, ctx, book, watcher)
+        if res["copied"]:
+            copies_back += 1
+        if res["note"]:
+            notes.append({"src": str(src), "note": res["note"]})
         db.migration_mark(r["id"], "rolled_back")
         back += 1
 
