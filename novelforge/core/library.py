@@ -103,6 +103,40 @@ def _tag_text(xml: str, tag: str) -> str:
     return re.sub(r"<[^>]+>", "", m.group(1)).strip()
 
 
+def _fixed_layout_of(opf: str) -> bool:
+    """EPUB 是不是**固定版式**（pre-paginated）。
+
+    固定版式的书每一页是**已经排好版的整页**（常见实现是整页 SVG / 绝对定位），
+    字号 / 行高 / 首行缩进这类重排设置对它没有意义，页宽也由书本身决定。
+    阅读器据此**不套用重排偏好、不改页宽**，否则会把整页排版揉烂。
+
+    **只认显式声明**：读不到就当可重排（reflowable），不靠「有没有 SVG」这类特征猜 ——
+    猜错会让一本正常的书被夺走排版设置，比不做判定更糟。
+
+    三种写法都认，因为它们在真实书里都出现过：
+    - EPUB3 正式写法：``<meta property="rendition:layout">pre-paginated</meta>``
+    - EPUB3 属性写法：``<meta property="rendition:layout" content="pre-paginated"/>``
+    - 早期 Apple 固定版式约定：``<meta name="fixed-layout" content="true"/>``
+    """
+    for m in re.finditer(r"<meta\b[^>]*>", opf, re.I):
+        tag = m.group(0)
+        key = re.search(r'(?:property|name)="([^"]*)"', tag, re.I)
+        if not key:
+            continue
+        if key.group(1).strip().lower() not in ("rendition:layout", "fixed-layout"):
+            continue
+        cm = re.search(r'content="([^"]*)"', tag, re.I)
+        if cm:
+            val = cm.group(1)
+        else:
+            # 值也可以写在标签体内（EPUB3 的 property 写法允许）
+            body = re.match(r"\s*([^<]*)", opf[m.end():])
+            val = body.group(1) if body else ""
+        if val.strip().lower() in ("pre-paginated", "true"):
+            return True
+    return False
+
+
 def _series_of(opf: str) -> str:
     """系列名：兼容 calibre 与 EPUB3 的两种写法。"""
     for pat in (
@@ -803,7 +837,7 @@ def probe_epub(path: pathlib.Path) -> dict:
     out = {
         "title": "", "author": "", "series": "", "has_cover": False, "unparsable": False,
         "year": "", "publisher": "", "isbn": "", "language": "", "description": "", "tags": [],
-        "cover": "", "pages": 0, "pages_source": "", "series_index": "",
+        "cover": "", "pages": 0, "pages_source": "", "series_index": "", "fixed_layout": False,
     }
     try:
         with zipfile.ZipFile(path) as z:
@@ -838,6 +872,7 @@ def probe_epub(path: pathlib.Path) -> dict:
             out["language"] = _tag_text(opf, "dc:language")
             out["description"] = _tag_text(opf, "dc:description")
             out["tags"] = _subjects_of(opf)
+            out["fixed_layout"] = _fixed_layout_of(opf)
             out["pages"] = _pages_in(z, opf, opf_path)
             if out["pages"]:
                 out["pages_source"] = "estimate"
@@ -1068,7 +1103,7 @@ def _scan_once(lib: dict = None) -> list:
         info = {
             "title": "", "author": "", "series": "", "has_cover": False, "unparsable": False,
             "year": "", "publisher": "", "isbn": "", "language": "", "description": "", "tags": [],
-            "cover": "", "pages": 0, "pages_source": "", "series_index": "",
+            "cover": "", "pages": 0, "pages_source": "", "series_index": "", "fixed_layout": False,
         }
         tracks = 0
         size = st.st_size
@@ -1129,6 +1164,9 @@ def _scan_once(lib: dict = None) -> list:
             "language": info.get("language", ""),
             "description": info.get("description", ""),
             "tags": info.get("tags", []),
+            # 固定版式（pre-paginated）：阅读器据此**不套用重排偏好、不改页宽**（见 _fixed_layout_of）；
+            # 非 EPUB 恒 false（本项目不解析它们的内容）
+            "fixed_layout": bool(info.get("fixed_layout")),
             "c1": c1,
             "c2": c2,
             "issues": issues,
