@@ -40,7 +40,7 @@
 ### C 类 · 重（架构/外部依赖，周级，按需）
 
 - [x] ~~**C1 Requests 完整功能**~~ — **已决策不做（2026-09-18，用户决策）**。理由：本项目的「从外部获取书」由**数据驱动书源规则**覆盖（`sources/rules.py` + `sources/store.py`），插件式索引器 / 下载客户端与之形态重叠、维护成本高。**页面与接口骨架已从代码中删除**：后端 `REQUEST_SECTIONS` + `GET /api/requests/config`；前端 `RequestsPage.vue` / 路由 / 设置注册项 / API 方法（`admin/requests` 页数 48 → 47）。⚠️ 旧理由「`Add to library` 依赖多库 → 不落地」在**第 10 期多库完成后已失效**，不再引用。
-  ⚠️ **第 27 期复核（2026-09-19）**：此处「48 → 47」只是**当次删除动作**的增量记录，不是当前页数。当前设置页为 **48 页**（41 上游 + 7 本项目补充），见 `tests/test_settings_nav_contract.py:96` 的双向断言；`admin/requests` 仍在 `EXPECTED_PLACEHOLDERS`（`:47`）里，即该页骨架被删除后**又以只读占位页形式存在**
+  ⚠️ **第 27 期复核（2026-09-19）**：此处「48 → 47」只是**当次删除动作**的增量记录，不是当前页数。当前设置页为 **48 页**（41 上游 + 7 本项目补充），见 `tests/test_settings_nav_contract.py:96` 的双向断言；`admin/requests` 仍在 `EXPECTED_PLACEHOLDERS`（`:38` 起、该项在 `:53`）里，即该页骨架被删除后**又以只读占位页形式存在**
 - [x] **C2 系列详情 Group by media** — 第 10 期完成：`GET /api/series/{name}` 增 `groups`（复用 `migrate.target_type_of` 按媒体归类，含 media/label/count/books）；`SeriesDetailView` 按组分段渲染，**仅多于一组时**才加组标题（单媒体系列不加噪音），组内仍按系列序号排序并保留首册标记与倒序切换
 - [x] **C3 SYNOPSIS 外部源** — **第 12 期完成**：新增 `core/series_meta.py` + `series_meta` 表（在线值与本地覆盖**分列**，与 `authors` 表同构）；`metasources.search_series` 用**系列名检索 + 成员书一致性打分**挑候选（⚠️ 外部源**没有「系列」实体**，OpenLibrary 的 `search.json` 既不返回系列字段也无系列详情接口 —— 可靠性天然低于作者侧；一致性分低于 `MIN_MATCH=0.6` 就**如实回「未找到」**，不编造简介，并把来源与置信度一并交给界面展示）；字段分层取 **本地覆盖 > 本地聚合 > 在线补空**（总册数 / 首发年 / 出版社 / 题材**优先**用成员书 OPF 聚合出的**事实**，在线值仅补空）；生效点是三处注入：`GET /api/series/{name}`、`komga_api.series_dto`（`metadata.summary` 原先恒为空串）、OPDS 系列入口（列表 `<summary>` / 系列内 `<subtitle>`）。
   ⚠️ **系列级字段只存本项目 DB、绝不写回 EPUB**（用户 2026-09-18 拍板）：OPF 里没有「系列简介」这个字段，唯一近似 `dc:description` 属于**单册**，写进去就是用系列简介覆盖掉某一册自己的简介；「系列首发年」写进各册 `dc:date` 还会让某本 2019 年出版的第 7 册变成 2015 年。**已知代价（已确认接受）**：把书库目录直接用 SMB 挂给别的软件（如 Calibre）时看不到系列简介与系列出版社；**连服务读**（Komga 客户端 / OPDS / 应用界面）则全部可见 —— 且写回方案**同样送不出「系列简介」**，故不为此动用户文件。
@@ -585,7 +585,7 @@
   （`data/nav.ts` + `components/AppSidebar.vue`）；② 删净 `shelfTag` 死入口（state + 过滤分支 +
   三处清空 + 导出 + 所有调用点，题材筛选已由书架筛选面板承担）；③ 书架页加库级控制最小集
   （切库 / 立即扫描 / 书库管理），重命名删除仍只在 `/tools/libraries`，避免第二处写入口。
-- **版本标识同源（后端为权威）**：收敛单一常量 `APP_VERSION = "0.6.0"`（`server.py:102` 附近），
+- **版本标识同源（后端为权威）**：收敛单一常量 `APP_VERSION = "0.6.0"`（`server.py:113`），
   `FastAPI(version=APP_VERSION)` 与 `GET /health` 的 `version` 同读它；前端 `HealthInfo` 加 `version`，
   About 页与更新日志页渲染后端下发版本，`data/whatsNew.ts` 的 `version` 字段删除（不再手写版本号）；
   新增契约测试钉住「展示版本 == 后端常量」。
@@ -726,7 +726,7 @@ tooltip 标注样本数。
 - **后端 · 统计序列**（`43fb435`）：`core/stats.py` 增补 8 条序列、`core/db.py` 配套聚合 ——
   `by_language` / `by_format_size` / `pages_by_format` / `added_monthly` / `publication_yearly` /
   `progress_funnel` / `completion_monthly` / `weekdays`（周几读多久，与 `hours` 同族）。
-  **全部跟随 `library_id`**（复用 `core/stats.py:97` 的 `ids` 集合，**不新增扫描路径**）；
+  **全部跟随 `library_id`**（复用 `core/stats.py:166-169` 的 `ids` 集合，**不新增扫描路径**）；
   **全部是新键**，既有键**一个未删**。新增 `tests/test_stats_charts.py`（295 行）。
 - **前端 · 图表基建**（`604ddd9` + `b12bcf9`）：装 `echarts` + `vue-echarts`；`lib/charts.ts` 是**全站唯一**
   的图型注册 / 主题适配入口（按需注册 + 动态 import，跟随 `stores/theme.ts` 深色 / 浅色）；
@@ -856,11 +856,11 @@ tooltip 标注样本数。
 **② 第二例 = 未复现，机制如下（不改测试逻辑，如实记录）**：该用例 `assert st["total"] == 1`
 （`test_scrape_publish.py:442`）断言的是**全局**队列，而
 
-- `total` = `sum(db.scrape_counts().values())`（`server.py:2700`）= **`scrape_items` 表全表行数**；
+- `total` = `sum(db.scrape_counts().values())`（`server.py:3024`）= **`scrape_items` 表全表行数**；
 - `_quiesce_background` 收尾走 `scrape.stop(timeout=2.0)`（`conftest.py:98`）—— **超时后线程仍在**；
 - `isolated` 会 `db.close()` + `db.init()` 换一套空库，但**残留线程下次取连接拿到的是新库**。
 
-⇒ 残留 worker 要么经 `db.scrape_delete`（`scrape.py:230`「书库已不在」/ `:316`「源与副本都不在」）
+⇒ 残留 worker 要么经 `db.scrape_delete`（`scrape.py:278`「书库已不在」/ `:380`「源与副本都不在」）
 **删行**（total 变 0），要么 upsert **插行**（total 变 2）。两种都让断言落空，**且时序决定是否发生**
 —— 这正是「单跑必过、全量偶挂」的形状。
 
@@ -876,7 +876,7 @@ tooltip 标注样本数。
 测试）。第 33 期共跑 4 轮全量，**全部 0 failed**。
 
 **⑤ 端到端对照实验**：接口级测试**覆盖不到**这条路径 —— 测试里 `AUTO_WATCH=false`（`conftest.py:57`）
-⇒ watcher 不跑 ⇒ `/api/libraries/{lid}/scan` 里 `WATCHER.is_running()`（`server.py:2522`）为假
+⇒ watcher 不跑 ⇒ `/api/libraries/{lid}/scan` 里 `WATCHER.is_running()`（`server.py:2846`）为假
 ⇒ 走不到音频目录的摄入分支。故另起独立实例（**8796 端口** + 独立临时根 + `AUTO_WATCH=true`）做对照，
 **唯一的变量就是那一行**：
 
@@ -1007,3 +1007,14 @@ tooltip 标注样本数。
 ## 四、验证纪律（沿用 history）
 
 全量类型检查 → 构建 → 部署 `novelforge/static/v2` → 重启测试实例 → 端到端脚本验证「保存 → 读回 → 实际生效」→ 浏览器逐路由冒烟。
+
+**文档锚点核验（第 35 期起，与上面同列为收尾必做）**：`.venv/bin/python tests/check_doc_anchors.py`
+（工具本身与它的五类误报、两类漏报见 `docs/bookorbit-capability-gap.md` §0.5）。
+
+- **判据是两条，不是一条**：「工具报 0 条硬错 + 0 条漂移」**且**人工过完 `--todo` 清单。
+  「行号合法、内容已换」这一类**工具天生测不出**（第 35 期 `DOCK_TABS` 差了 568 行就是工具漏报、
+  人工捞出来的）。所以「工具不报错」永远不等于「核完了」。
+- **只记当前真实行号，不记偏移量**（第 33 期 §0.4 的血教训：`:278` 写「偏移 1 行」，实测 44–54 行）。
+- **改动落在锚点密集的文件上时，顺手把该文件相关锚点重核一遍**：第 34 期只改了 6 个文件，
+  第 35 期就从中捞出 37 处漂移 —— 其中 `core/stats.py` 是**上一轮刚「逐个重取」过**、这一轮又整体后移
+  275–305 行的（新键插在中间）。**「上期刚核过」不构成免检理由。**
