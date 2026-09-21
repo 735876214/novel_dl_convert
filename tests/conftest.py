@@ -92,12 +92,23 @@ def _quiesce_background() -> None:
     本套测试的 DB 是**用例级隔离**的（`db.close()` + `db.init()`）：线程晚一步动手就会
     在已关闭的连接上查库 —— 全量跑实测到过 **segfault**（跑到后半程解释器直接崩、
     连汇总行都打不出来）。与既有的「测试不养后台轮询」是同一条纪律。
+
+    ⚠️ 第 39 期两处变化：
+
+    - `db.close()` 现在自己持锁（读路径也纳入锁了），**段错误那条路已封死**；
+      但残留线程仍会攥着旧连接去查下一个用例的库 ⇒ 用例级隔离照样破，仍必须收干净。
+    - **`wait_pending()` 的返回值不再丢掉**：它返回「超时后仍未结束的数量」，
+      非 0 就把这件事**说出来**。此前它被静默吞掉 —— 于是「收尾没干净」只表现为
+      后面某个**无关**用例偶发变红（第 39 期实测：5 轮全量里 2 轮
+      `library.get_library` 抛 `InterfaceError` 并被吞成 `None`，用户可见的后果是
+      每库覆写静默回落全局值）。全量实测该值在干净运行下**恒为 0** ⇒ 硬失败不误伤。
     """
+    left = 0
     try:
         from novelforge.core import scrape, watcher
         scrape.stop(timeout=2.0)
-        watcher.wait_pending(5.0)
-    except Exception:                                 # noqa: BLE001 —— 收尾失败不该让用例变红
+        left = watcher.wait_pending(5.0)
+    except Exception:                                 # noqa: BLE001 —— 收尾动作本身失败不该让用例变红
         pass
     try:
         from novelforge import server
@@ -106,6 +117,12 @@ def _quiesce_background() -> None:
             w.stop()
     except Exception:                                 # noqa: BLE001
         pass
+    if left:
+        # `pytest.fail` 抛的 `Failed` 继承 BaseException ⇒ 不会被上面的 except 吞掉
+        pytest.fail(
+            f"收尾没干净：还有 {left} 个旁路线程没退出（等满 5s）。它们会攥着旧连接"
+            "去查下一个用例的库。⚠️ 泄漏点可能在**更早**的用例，未必是当前这条 —— "
+            "别再把这件事吞掉，去把那个线程收干净（见本函数与 `isolated` 的说明）。")
 
 
 @pytest.fixture(autouse=True)
