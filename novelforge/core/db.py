@@ -4,7 +4,8 @@
 - 数据库文件落在 ``config.DATA_DIR/novelforge.db``（NAS 持久卷，零额外服务）。
 - 全进程共享一个连接（check_same_thread=False + 写锁），单机单用户足够。
 - 表：users（轻登录账号）、progress（每本书当前阅读位置）、annotations（高亮/笔记）、
-  bookmarks（书签，与批注同构的软删除 + 位置去重）、meta_locks（元数据字段级锁定）。
+  bookmarks（书签，与批注同构的软删除 + 位置去重）、meta_locks（元数据字段级锁定）、
+  custom_field_defs（自定义字段定义）+ book_custom_values（按书的值）。
 """
 import ast
 import hashlib
@@ -331,6 +332,45 @@ def init():
                 score             REAL NOT NULL DEFAULT 0.0,
                 fetched_at        REAL NOT NULL DEFAULT 0
             );
+            -- 自定义元数据（第 35 期）：把原先「抓取配置里写死的一串键值对」升级为
+            -- **可管理的字段定义**（上游 custom-metadata 的建字段 / 排序 / 改标签 /
+            -- 切适用书库 / 归档 / 软删恢复六项）。
+            -- 定义与值分两张表：定义是全局的，值是**按书**的。
+            -- ⚠️ `key` 与 `label` 分离是「改显示名不动值」的前提：值表按 **key** 引用，
+            --    改 label 不会动任何一本书的值（改 key 则等于换了一个字段，故不提供）。
+            -- 旧配置项 `metadata_fetch.custom_fields` 由 ``core.customfields.migrate_from_config``
+            -- 一次性迁成定义（幂等），之后该配置项下线、不再有人读它。
+            CREATE TABLE IF NOT EXISTS custom_field_defs (
+                id            INTEGER PRIMARY KEY,
+                key           TEXT NOT NULL UNIQUE,
+                label         TEXT NOT NULL,
+                -- text / number / date / list（校验在 core/customfields.py，DB 只存字符串）
+                type          TEXT NOT NULL DEFAULT 'text',
+                position      INTEGER NOT NULL DEFAULT 0,
+                -- 适用书库（字面量列表，空 = 全部书库）；不是所有字段都对每个库有意义
+                library_ids   TEXT NOT NULL DEFAULT '',
+                -- 抓取时给「还没有这一项」的书补的值（空 = 不参与抓取，只做手工字段）
+                default_value TEXT NOT NULL DEFAULT '',
+                -- 归档：不进编辑界面（值不丢），但定义本身仍可管理
+                archived      INTEGER NOT NULL DEFAULT 0,
+                created_at    REAL NOT NULL,
+                updated_at    REAL NOT NULL,
+                -- 垃圾桶（软删，与批注 / 书签同构：删除 = 移入垃圾桶，真删走 purge）
+                deleted_at    REAL NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_custom_field_pos ON custom_field_defs(position, id);
+            -- 按书的自定义字段值。
+            -- ⚠️ **「行存在」本身就是语义**：抓到默认值只在**没有行**时写入 ——
+            --    行存在即「这本书的这一项被管过了」（哪怕值是空串，也不该被默认值填回来）。
+            --    这与批注/书签那套软删除无关：值表不做软删，清空 = 写空串而不是删行。
+            CREATE TABLE IF NOT EXISTS book_custom_values (
+                book_id    TEXT NOT NULL,
+                key        TEXT NOT NULL,
+                value      TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                PRIMARY KEY(book_id, key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_custom_value_book ON book_custom_values(book_id);
             -- 多书库（第 10 期 D8）：库实体。type 决定功能显隐矩阵。
             -- root_path **永远是实际库根**（扫描 / 落盘 / 路径解析的唯一根），两种模式一致。
             -- mode='inplace' 就地引用来源子目录（不搬文件）；'import' 库另有独立存储（root_path 就是它）。
@@ -1526,7 +1566,7 @@ def unlock_achievement(key) -> bool:
 #    也就是说：清理掉的是「可能还有用」的数据，因此必须由用户显式确认。
 
 ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
-                 "collection_items", "reading_sessions")
+                 "book_custom_values", "collection_items", "reading_sessions")
 
 
 def book_id_refs() -> dict:
@@ -1577,8 +1617,8 @@ def delete_orphans(orphans: dict) -> dict:
 #: koreader_docs：ratings / reading_status 在删书时会主动清理，但改名时同样必须跟着走；
 #: koreader_docs 是 KOReader 进度映射，id 换了必须一起搬，否则 KOReader 关联全断）。
 REMAP_TABLES = (
-    "progress", "annotations", "bookmarks", "meta_locks", "collection_items",
-    "reading_sessions", "ratings", "reading_status", "koreader_docs",
+    "progress", "annotations", "bookmarks", "meta_locks", "book_custom_values",
+    "collection_items", "reading_sessions", "ratings", "reading_status", "koreader_docs",
 )
 
 #: 目标 id 上**已有数据**时也**不整表跳过**的表：它们的行是「标记」而不是「值」。
@@ -1586,6 +1626,11 @@ REMAP_TABLES = (
 #: 「这个字段别让抓取动」—— 张冠李戴的代价仅是少更新一个字段，反过来漏搬却会让用户
 #: 显式设过的锁无声消失。所以这类表**逐行合并**（同一 field 冲突时保留目标行）。
 REMAP_MERGE_TABLES = ("meta_locks",)
+
+# ⚠️ `book_custom_values` 的 `PRIMARY KEY(book_id, key)` 与书签同形，但**不需要**逐行搬：
+#    书签要逐行是因为它的探测过滤了 `deleted_at=0`（墓碑行不算「已有数据」），
+#    于是整体 UPDATE 会撞上墓碑；而值表**没有软删除** ⇒ 探测即精确判据 ——
+#    探测说「目标没有数据」，就真的没有行可撞。多写一段逐行逻辑只会是死代码。
 
 #: 「新 id 是否已有数据」这个探测要**按表**加过滤：annotations 第 27 期起有软删除、
 #: bookmarks 第 34 期起同样有（两者都是「删除=移入垃圾桶」），
@@ -2359,6 +2404,244 @@ def all_locks() -> dict:
     for r in rows:
         out.setdefault(r["book_id"], set()).add(r["field"])
     return out
+
+
+# ---------------- 自定义字段定义与值（第 35 期）----------------
+# 定义表（全局）与值表（按书）分开：
+#   · 定义：建字段 / 排序 / 改标签 / 切适用书库 / 归档 / 软删恢复（上游 custom-metadata 六项）；
+#   · 值：按书存，**「行存在」即「这本书的这一项被管过了」**（见建表注释的说明）。
+# 读定义一律 `deleted_at=0`（垃圾桶条目只在垃圾桶视图里出），与批注 / 书签同一套纪律。
+_CUSTOM_FIELD_COLS = ("id, key, label, type, position, library_ids, default_value, "
+                      "archived, created_at, updated_at, deleted_at")
+
+#: 允许的字段类型。校验落在 ``core/customfields.py``（domain 层），这里留一份供上层引用。
+CUSTOM_TYPES = ("text", "number", "date", "list")
+
+
+def _as_list(text) -> list:
+    """把「字面量列表」列解析成 list（与 tags 等列同一套存法）。
+
+    空值 / 坏值一律给**空列表**：单条脏数据不该让整页报错。
+    """
+    if isinstance(text, (list, tuple)):
+        return [str(x) for x in text]
+    s = str(text or "").strip()
+    if not s:
+        return []
+    try:
+        val = ast.literal_eval(s)
+    except (ValueError, SyntaxError):
+        return []
+    return [str(x) for x in val] if isinstance(val, (list, tuple)) else []
+
+
+def _custom_field_out(row) -> dict:
+    return {
+        "id": int(row["id"]),
+        "key": row["key"],
+        "label": row["label"],
+        "type": row["type"],
+        "position": int(row["position"]),
+        "library_ids": _as_list(row["library_ids"]),
+        "default_value": row["default_value"] or "",
+        "archived": bool(row["archived"]),
+        "created_at": float(row["created_at"]),
+        "updated_at": float(row["updated_at"]),
+        "deleted_at": float(row["deleted_at"]),
+    }
+
+
+def list_custom_fields() -> list:
+    """全部**活跃**定义（含归档项 —— 归档只是不进编辑界面，定义本身仍要可管理）。
+
+    排序：position 升序、再按 id（position 相同时保持创建次序）。
+    """
+    rows = _connect().execute(
+        "SELECT %s FROM custom_field_defs WHERE deleted_at=0 ORDER BY position, id"
+        % _CUSTOM_FIELD_COLS
+    ).fetchall()
+    return [_custom_field_out(r) for r in rows]
+
+
+def trashed_custom_fields() -> list:
+    """垃圾桶里的定义（``deleted_at`` 倒序 = 最近丢弃的在前）。"""
+    rows = _connect().execute(
+        "SELECT %s FROM custom_field_defs WHERE deleted_at!=0 ORDER BY deleted_at DESC"
+        % _CUSTOM_FIELD_COLS
+    ).fetchall()
+    return [_custom_field_out(r) for r in rows]
+
+
+def get_custom_field(cid) -> "dict | None":
+    row = _connect().execute(
+        "SELECT %s FROM custom_field_defs WHERE id=?" % _CUSTOM_FIELD_COLS, (int(cid),)
+    ).fetchone()
+    return _custom_field_out(row) if row else None
+
+
+def custom_field_by_key(key) -> "dict | None":
+    """按 key 查定义，**含垃圾桶条目**（key 全局唯一，迁移判重就是查它）。"""
+    row = _connect().execute(
+        "SELECT %s FROM custom_field_defs WHERE key=?" % _CUSTOM_FIELD_COLS, (str(key),)
+    ).fetchone()
+    return _custom_field_out(row) if row else None
+
+
+def create_custom_field(key, label, type="text", library_ids=None,
+                        default_value="", position=None) -> dict:
+    """新建字段定义（同 key 已存在 ⇒ 抛 ``ValueError``，由接口层转 400）。"""
+    k = str(key or "").strip()
+    if not k:
+        raise ValueError("key 不能为空")
+    now = time.time()
+    c = _connect()
+    with _lock:
+        if c.execute("SELECT 1 FROM custom_field_defs WHERE key=?", (k,)).fetchone():
+            raise ValueError(f"字段键已存在：{k}")
+        if position is None:
+            row = c.execute("SELECT MAX(position) AS m FROM custom_field_defs").fetchone()
+            position = int((row["m"] if row and row["m"] is not None else -1)) + 1
+        cur = c.execute(
+            "INSERT INTO custom_field_defs(key, label, type, position, library_ids, "
+            "default_value, archived, created_at, updated_at) VALUES(?,?,?,?,?,?,0,?,?)",
+            (k, str(label or k), str(type or "text"), int(position),
+             repr([str(x) for x in (library_ids or [])]), str(default_value or ""), now, now),
+        )
+        c.commit()
+        cid = int(cur.lastrowid or 0)
+    return get_custom_field(cid) or {}
+
+
+def update_custom_field(cid, **patch) -> "dict | None":
+    """改定义：``label / type / position / library_ids / default_value / archived``。
+
+    **不含 key**：改 key 等于换了一个字段（值表按 key 引用，改了会让所有值失去归属）。
+    """
+    allowed = {"label", "type", "position", "library_ids", "default_value", "archived"}
+    sets, args = [], []
+    for k, v in (patch or {}).items():
+        if k not in allowed:
+            continue
+        if k == "library_ids":
+            v = repr([str(x) for x in (v or [])])
+        elif k == "archived":
+            v = 1 if v else 0
+        elif k == "position":
+            v = int(v)
+        else:
+            v = str(v or "")
+        sets.append("%s=?" % k)
+        args.append(v)
+    if not sets:
+        return get_custom_field(cid)
+    sets.append("updated_at=?")
+    args.extend([time.time(), int(cid)])
+    c = _connect()
+    with _lock:
+        c.execute("UPDATE custom_field_defs SET %s WHERE id=?" % ", ".join(sets), tuple(args))
+        c.commit()
+    return get_custom_field(cid)
+
+
+def reorder_custom_fields(ids: list) -> int:
+    """按给定 id 次序重排（position = 下标），返回改动的行数。
+
+    只认**活跃**定义：列表里给出的垃圾桶条目会被忽略（不给已删除的项留位置）。
+    """
+    moved = 0
+    c = _connect()
+    with _lock:
+        for pos, cid in enumerate(ids or []):
+            cur = c.execute(
+                "UPDATE custom_field_defs SET position=?, updated_at=? "
+                "WHERE id=? AND deleted_at=0",
+                (int(pos), time.time(), int(cid)),
+            )
+            moved += int(cur.rowcount or 0)
+        c.commit()
+    return moved
+
+
+def delete_custom_field(cid) -> int:
+    """**软删除**：移入垃圾桶（值保留 —— 恢复后值还在）。返回受影响行数。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "UPDATE custom_field_defs SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at=0",
+            (time.time(), time.time(), int(cid)),
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
+def restore_custom_field(cid) -> int:
+    """从垃圾桶恢复（值一直都在，故恢复即完整还原）。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "UPDATE custom_field_defs SET deleted_at=0, updated_at=? WHERE id=? AND deleted_at!=0",
+            (time.time(), int(cid)),
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
+def purge_custom_field(cid) -> int:
+    """**彻底删除**（真 DELETE，且只肯删垃圾桶里的），并**连带清掉所有书上的值**。
+
+    值必须一起删：定义没了之后，值表的那些行既没人读、也不可能再被恢复，
+    留着只是看不见的垃圾（且会跟着 book_id 在改名时被搬来搬去）。
+    """
+    row = _connect().execute(
+        "SELECT key FROM custom_field_defs WHERE id=? AND deleted_at!=0", (int(cid),)
+    ).fetchone()
+    if not row:
+        return 0
+    c = _connect()
+    with _lock:
+        c.execute("DELETE FROM book_custom_values WHERE key=?", (row["key"],))
+        cur = c.execute("DELETE FROM custom_field_defs WHERE id=? AND deleted_at!=0", (int(cid),))
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
+def custom_field_values(book_id) -> dict:
+    """某本书的自定义字段值：``{key: 原始字符串}``（类型转换在 domain 层做）。"""
+    rows = _connect().execute(
+        "SELECT key, value FROM book_custom_values WHERE book_id=?", (str(book_id),)
+    ).fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def all_custom_field_values() -> dict:
+    """全量值：``{book_id: {key: value}}``（``metafetch.plan`` 一次取全，避免逐书查询）。"""
+    rows = _connect().execute("SELECT book_id, key, value FROM book_custom_values").fetchall()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["book_id"], {})[r["key"]] = r["value"]
+    return out
+
+
+def set_custom_field_values(book_id, values: dict) -> int:
+    """写入某本书的自定义字段值（**写空串也算「管过了」**，见值表建注释）。
+
+    只 upsert 传进来的键；不传的键保持不动（调用方负责按适用范围裁剪）。
+    """
+    bid = str(book_id)
+    now = time.time()
+    n = 0
+    c = _connect()
+    with _lock:
+        for k, v in (values or {}).items():
+            c.execute(
+                "INSERT INTO book_custom_values(book_id, key, value, updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(book_id, key) DO UPDATE SET value=excluded.value, "
+                "updated_at=excluded.updated_at",
+                (bid, str(k), str(v if v is not None else ""), now),
+            )
+            n += 1
+        c.commit()
+    return n
 
 
 # ---------------- 书籍封面（第 17 期 T3）----------------

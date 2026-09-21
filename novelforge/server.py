@@ -26,7 +26,7 @@ from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, act
                    fonts, comics, audio, opds, komga, koreader, integrations,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, migrate, library_rules, features, series_meta,
-                   lib_settings, browse_counts)
+                   lib_settings, browse_counts, customfields)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -77,6 +77,17 @@ async def lifespan(app: FastAPI):
             )
     except Exception as e:  # 迁移失败不应阻断启动
         logging.getLogger("novelforge").exception("book_id 迁移失败：%s", e)
+    # 第 35 期：旧配置项 metadata_fetch.custom_fields → 自定义字段定义（幂等，跑过即跳过）。
+    # 迁移同时把 settings.json 里那枚旧键删掉（配置项下线）。
+    try:
+        created_fields = customfields.migrate_from_config(cfg)
+        if created_fields:
+            logging.getLogger("novelforge").info(
+                "自定义字段迁移完成：%s 个字段（%s）",
+                len(created_fields), "、".join(created_fields),
+            )
+    except Exception as e:  # noqa: BLE001 —— 迁移失败不该阻断启动
+        logging.getLogger("novelforge").exception("自定义字段迁移失败：%s", e)
     if (cfg.get("watcher") or {}).get("enabled", True):
         w = _start_watcher(cfg)
         # 启动信息只进标准日志（docker logs），不污染「转换 / 添加」活动日志
@@ -1180,6 +1191,9 @@ def api_book_metadata(bid: str):
     ``locked``（第 35 期）是同一份锁的**扁平清单**：``meta`` 只覆盖 10 个可编辑字段，
     而锁还能落在**封面**（独立键 ``cover``）上 —— 编辑器要用一条清单同时驱动
     「逐字段开关」与「封面开关」，不必为封面另开一次往返。
+
+    ``custom``（第 35 期）是**该书适用**的自定义字段（含定义、类型与当前值），
+    顺序即定义的 position 顺序 —— 详情页照着渲染即可，不需要再拉一次定义列表。
     """
     b = library.by_id(bid)
     if not b:
@@ -1198,6 +1212,8 @@ def api_book_metadata(bid: str):
         "meta": metastore.state(b),
         # 锁的扁平清单（含封面用的 `cover`），按字段表顺序
         "locked": metastore.locked_fields(b),
+        # 自定义字段：只给**该书适用且未归档**的定义 + 这本书的当前值（按定义顺序）
+        "custom": customfields.state(b),
     }
 
 
@@ -1218,17 +1234,24 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
       · **不动文件名**：改名只剩「按命名规则重出版副本」一条路，源文件名
         没有任何入口可改（第 28 期起）；
       · ``orig`` 记的是**编辑前的生效值**（供撤销覆盖后无在线值时回退）。
+
+    ``custom``（第 35 期）是**另一套值**：``{字段键: 值}``，写进 ``book_custom_values``
+    而不是 ``meta_override``。也只接受**该书适用**的定义（不适用 / 不存在的键如实回报在
+    ``custom_ignored`` 里）。两套可以同一次请求一起提交 —— 详情页保存的就是一整张表单。
     """
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
 
-    raw = (payload or {}).get("fields")
+    raw = (payload or {}).get("fields") or {}
+    cust_raw = (payload or {}).get("custom") or {}
     if not isinstance(raw, dict):
         raise HTTPException(400, "fields 必须是对象")
+    if not isinstance(cust_raw, dict):
+        raise HTTPException(400, "custom 必须是对象")
     unknown = sorted(k for k in raw if k not in fileops.METADATA_FIELDS)
     accepted = {k: v for k, v in raw.items() if k in fileops.METADATA_FIELDS}
-    if not accepted:
+    if not accepted and not cust_raw:
         raise HTTPException(
             400, "没有可改写的字段" + (f"（不支持：{', '.join(unknown)}）" if unknown else "")
         )
@@ -1249,11 +1272,20 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
             db.set_override(bid, f, "")
 
     library.invalidate()
+    # 自定义字段（第 35 期）：按定义的类型校验后写进 book_custom_values。
+    # 值与 OPF 字段同批提交、却存两张表 —— 这里做完再统一回写状态，前端一次刷新。
+    try:
+        cust_res = customfields.write(b, cust_raw)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
     fresh = library.by_id(bid) or {}
     changed = sorted(f for f in accepted if before.get(f) != _meta_value(fresh, f))
+    detail = "编辑元数据：" + ("、".join(changed) if changed else "无实际变化")
+    if cust_res["saved"]:
+        detail += "；自定义字段：" + "、".join(cust_res["saved"])
     activity_log.log(activity_log.ACTION_RENAME, b["name"], activity_log.STATUS_OK,
-                     detail="编辑元数据：" + ("、".join(changed) if changed else "无实际变化"),
-                     source="api")
+                     detail=detail, source="api")
     return {
         "ok": True,
         # 不再写文件：written 恒为空（保留字段以兼容前端），实际生效见 changed
@@ -1263,6 +1295,10 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
         # 回写生效值 + 逐字段明细，前端直接据此刷新表单
         "fields": metastore.effective(fresh),
         "meta": metastore.state(fresh),
+        # 自定义字段：写完后的全量状态（前端直接替换）+ 本次实际写入与忽略的键
+        "custom": cust_res["custom"],
+        "custom_saved": cust_res["saved"],
+        "custom_ignored": cust_res["ignored"],
     }
 
 
@@ -1340,6 +1376,144 @@ def api_lock_book_metadata(bid: str, payload: dict = Body(...)):
         "locked": locked,
         "locked_fields": metastore.locked_fields(b),
     }
+
+
+# ---------------- 自定义字段定义（第 35 期）----------------
+# 定义是**全局**的（不属于某本书），值才是按书的 —— 值走 metadata 那两个端点。
+# 六项操作与上游 custom-metadata 对齐：建字段 / 排序 / 改标签 / 切适用书库 / 归档 / 软删恢复。
+# ⚠️ 路由注册顺序：`/reorder` 是字面量路径，必须排在 `/{cid}` 之前（否则被当成 cid 吃掉）。
+
+
+def _custom_types() -> list:
+    return [{"key": k, "label": v} for k, v in customfields.TYPES]
+
+
+def _valid_library_ids(raw) -> list:
+    """校验适用书库：只留**真实存在**的库 id。
+
+    不存在的 id 一律丢掉而不是报错：库可能先删、定义后改，硬报错会让一条历史配置
+    把整个定义锁死不能编辑。丢掉后语义退化成「对所有库生效」这件事不会发生 ——
+    空列表就是「全部书库」，所以这里宁可返回空也要如实（调用方会把它当默认）。
+    """
+    if not isinstance(raw, list):
+        return []
+    known = {str(x["id"]) for x in db.list_libraries()}
+    return [str(x) for x in raw if str(x) in known]
+
+
+@app.get("/api/custom-fields")
+def api_list_custom_fields(include_trashed: int = 0):
+    """自定义字段定义列表（含归档项；`include_trashed=1` 时额外给 `trashed`）。"""
+    out = {"items": db.list_custom_fields(), "types": _custom_types()}
+    if include_trashed:
+        out["trashed"] = db.trashed_custom_fields()
+    return out
+
+
+@app.post("/api/custom-fields/reorder")
+def api_reorder_custom_fields(payload: dict = Body(...)):
+    """按给定 id 次序重排（这就是上游的「排序」）。"""
+    ids = (payload or {}).get("ids")
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(400, "ids 必须是非空数组")
+    return {"ok": True, "moved": db.reorder_custom_fields(ids),
+            "items": db.list_custom_fields()}
+
+
+@app.post("/api/custom-fields")
+def api_create_custom_field(payload: dict = Body(...)):
+    """新建字段定义。``key`` 缺省由显示名派生（稳定 slug，见 customfields.slug）。"""
+    p = payload or {}
+    label = str(p.get("label") or "").strip()
+    if not label:
+        raise HTTPException(400, "label 不能为空")
+    type_ = str(p.get("type") or "text")
+    if type_ not in customfields.TYPE_KEYS:
+        raise HTTPException(400, f"不支持的类型：{type_}（可选 {', '.join(customfields.TYPE_KEYS)}）")
+    try:
+        default_value = customfields.normalize(type_, p.get("default_value"))
+    except ValueError as e:
+        raise HTTPException(400, f"默认值{e}") from None
+    key = str(p.get("key") or "").strip() or customfields.slug(label)
+    try:
+        item = db.create_custom_field(
+            key=key, label=label, type=type_,
+            library_ids=_valid_library_ids(p.get("library_ids")),
+            default_value=default_value,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    return {"ok": True, "item": item, "items": db.list_custom_fields()}
+
+
+@app.patch("/api/custom-fields/{cid}")
+def api_update_custom_field(cid: int, payload: dict = Body(...)):
+    """改定义：label / 类型 / 适用书库 / 默认值 / 归档 / 位置。
+
+    **不改 key**（值表按 key 引用，改 key 等于换一个字段）—— 见 customfields 的模块说明。
+    """
+    row = db.get_custom_field(cid)
+    if not row or row["deleted_at"]:
+        raise HTTPException(404, "字段不存在或已在垃圾桶中")
+    p = payload or {}
+    patch: dict = {}
+    if "label" in p:
+        label = str(p.get("label") or "").strip()
+        if not label:
+            raise HTTPException(400, "label 不能为空")
+        patch["label"] = label
+    if "type" in p:
+        t = str(p.get("type") or "text")
+        if t not in customfields.TYPE_KEYS:
+            raise HTTPException(400, f"不支持的类型：{t}")
+        patch["type"] = t
+    if "library_ids" in p:
+        patch["library_ids"] = _valid_library_ids(p.get("library_ids"))
+    if "archived" in p:
+        patch["archived"] = bool(p.get("archived"))
+    if "position" in p:
+        try:
+            patch["position"] = int(p.get("position"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, "position 必须是整数") from None
+    if "default_value" in p:
+        # 按**改后的**类型校验（同一次请求里既改类型又改默认值时要按新类型判）
+        try:
+            patch["default_value"] = customfields.normalize(
+                patch.get("type", row["type"]), p.get("default_value"))
+        except ValueError as e:
+            raise HTTPException(400, f"默认值{e}") from None
+    return {"ok": True, "item": db.update_custom_field(cid, **patch),
+            "items": db.list_custom_fields()}
+
+
+@app.delete("/api/custom-fields/{cid}")
+def api_delete_custom_field(cid: int):
+    """**移入垃圾桶**（软删除）。值保留 —— 恢复之后值还在。彻底删除走 `/purge`。"""
+    n = db.delete_custom_field(cid)
+    return {"ok": True, "trashed": n > 0, "items": db.list_custom_fields(),
+            "trashed_items": db.trashed_custom_fields()}
+
+
+@app.post("/api/custom-fields/{cid}/restore")
+def api_restore_custom_field(cid: int):
+    n = db.restore_custom_field(cid)
+    if not n:
+        raise HTTPException(404, "字段不存在或不在垃圾桶中")
+    return {"ok": True, "items": db.list_custom_fields()}
+
+
+@app.delete("/api/custom-fields/{cid}/purge")
+def api_purge_custom_field(cid: int):
+    """彻底删除（不可恢复），**并连带清掉所有书上的值**（定义没了，值就再没有归属）。
+
+    只允许删垃圾桶里的条目 —— 与批注 / 书签同一条纪律。
+    """
+    n = db.purge_custom_field(cid)
+    if not n:
+        raise HTTPException(400, "只能彻底删除垃圾桶中的字段（该条目不存在或仍为活跃状态）")
+    return {"ok": True, "items": db.list_custom_fields(),
+            "trashed_items": db.trashed_custom_fields()}
 
 
 @app.get("/api/books/{bid}/cover")
@@ -3444,13 +3618,16 @@ EDITABLE: dict = {
     "koreader": {"enabled", "username", "key"},
     # 整块覆盖：三家服务的字段各不相同，逐键白名单只会让新增字段时漏改
     "integrations": {"hardcover", "readwise", "storygraph"},
-    # 元数据抓取：顶层子键白名单（`fields` / `custom_fields` 这类嵌套结构不再逐层校验 ——
+    # 元数据抓取：顶层子键白名单（`fields` 这类嵌套结构不再逐层校验 ——
     # 它们的形状由前端页面保证，后端只在应用时逐字段判定合法性）。
     # 注意 `None` 是「标量/整块取值」的意思（见 _sanitize_config），这里**刻意不用 None**，
     # 免得将来有人往前端配置里塞任意键。
+    # ⚠️ 第 35 期起 `custom_fields` **不在白名单里**了（自定义字段改为 DB 里的定义 + 按书值）。
+    #    顺带的好处：保存端点是段级合并，而不在白名单里的子键会被 _sanitize_config 丢掉 ——
+    #    所以下一次保存设置就会把盘上残留的旧键自然清掉。
     "metadata_fetch": {
         "enabled", "sources", "limit", "threshold", "fields", "auto_on_import",
-        "genre_blocklist", "custom_fields", "googlebooks_api_key", "authors",
+        "genre_blocklist", "googlebooks_api_key", "authors",
     },
     # Komga 兼容服务端：开关 + Basic 用户名 + 可选 API Key
     # `expose` = 全局默认「书库是否对客户端暴露」（每库可在书库管理里覆写）

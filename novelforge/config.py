@@ -163,8 +163,11 @@ DEFAULTS = {
         "auto_on_import": False,         # 新书入库时自动抓（仍受阈值与字段策略约束）
         # 题材黑名单：抓到的 tags 里命中这些词的**不写入**（过滤「小说」这类无信息量的值）
         "genre_blocklist": ["小说", "文学", "General", "Fiction"],
-        # 自定义元数据：写入 EPUB 的 <meta name="…" content="…"/>，给书打业务标记
-        "custom_fields": [],
+        # 自定义元数据（第 35 期起**已下线**这个配置项）：改由 core/customfields.py 管理 ——
+        # 定义与按书的值都在 DB（custom_field_defs / book_custom_values），
+        # 老配置里的这串 {name, value} 会在启动时被 migrate_from_config 迁成字段定义。
+        # 原来那句注释「写入 EPUB 的 <meta>」是**从未兑现**的：全仓没有任何一处把它应用出去，
+        # 而「元数据只存服务端、不写文件」是硬约定 —— 所以这是一项死配置，删掉无损。
         # Google Books 匿名额度很低（实测常撞 429），填 Key 可提高
         "googlebooks_api_key": "",
         # 作者级元数据（第 8 期 D1/D2/D5）：独立于书籍抓取开关，默认关

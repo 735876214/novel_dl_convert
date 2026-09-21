@@ -22,7 +22,7 @@
 """
 import httpx
 
-from . import db, fileops, lib_settings, library, metasources
+from . import customfields, db, fileops, lib_settings, library, metasources
 from .library import norm_key
 
 #: 封面下载上限：常见封面 100KB–2MB，超过 8MB 基本是异常图
@@ -88,6 +88,26 @@ def _candidate_values(cand: dict, blocklist: set) -> dict:
     return out
 
 
+def _custom_changes(book: dict, defs: list, values: dict, locked: set) -> dict:
+    """自定义字段该补的默认值：``{key: {from, to, source, score}}``。
+
+    三道闸里的**两道**在这里以另一种形式成立：
+      · 「改过就保护」等价于「**已经有值行**就不动」—— 值表的「行存在」本身就表示
+        用户管过这一项（哪怕值是空串），所以不需要再查 override；
+      · 「显式锁」照挡（自定义字段的锁键就是字段键本身，与封面的 `cover` 无关）；
+      · 「字段策略」**不适用**：`metadata_fetch.fields` 是按 OPF 字段名建的，没有自定义
+        字段的键，所以这里固定「只在没有值行时写默认值」= fill_only 语义，界面也这么写。
+    """
+    out = {}
+    for d in customfields.applicable(defs, book.get("library_id")):
+        key = d["key"]
+        if not d.get("default_value") or key in values or key in locked:
+            continue
+        out[key] = {"from": "", "to": d["default_value"],
+                    "source": "自定义字段", "score": 1.0}
+    return out
+
+
 def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: float = None) -> dict:
     """生成抓取预览（**只算不改**）。``names`` 为空表示整个书库。"""
     mf = _cfg(cfg)
@@ -119,6 +139,9 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
     overrides = db.all_overrides()
     # 第 35 期：字段级锁定同样一次取全（与覆盖同一批范式，不逐书查库）
     locks = db.all_locks()
+    # 第 35 期：自定义字段定义（含默认值）与各书现有值，同样一次取全
+    defs = db.list_custom_fields()
+    custom_values = db.all_custom_field_values()
     for b in books:
         locked = locks.get(b["id"], set())
         base = {
@@ -142,6 +165,10 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             items.append(base)
             continue
 
+        # 自定义字段该补的默认值：与在线候选**无关**（值来自定义本身），所以先算好 ——
+        # 下面「没有候选」那条早退出也要带上它，否则没候选的书永远补不上自定义字段。
+        cust_changes = _custom_changes(b, defs, custom_values.get(b["id"], {}), locked)
+
         # 不按格式跳过：结果**只写服务端 DB**，与文件能不能改无关 —— PDF / 漫画 / 有声书一视同仁。
         # （曾按 `format != "EPUB"` 跳过，理由是「没有可写的 OPF」；该前提在本链路改为只落库后已失效。）
 
@@ -158,13 +185,16 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         if not best:
             errs = [v.get("error") for v in res["sources"].values() if v.get("error")]
             base["error"] = errs[0] if errs else "没有找到候选"
+            # 没有在线候选 ≠ 没有可写的东西：自定义字段的默认值不依赖在线源
+            base["changes"] = dict(cust_changes)
             items.append(base)
             continue
 
         base["best_score"] = best["score"]
         base["auto_ok"] = best["score"] >= b_threshold
         vals = _candidate_values(best, blocklist)
-        changes = {}
+        # 自定义字段先放进来（键空间不同：它们不是 OPF 字段名，必不与下面重名）
+        changes = dict(cust_changes)
         for field, value in vals.items():
             pol = b_policy.get(field) or DEFAULT_POLICY
             if pol == "skip" or not value:
@@ -273,8 +303,12 @@ def apply(items: list, cfg: dict = None) -> dict:
 
     第 17 期 T3：结果**只存服务器 DB**（数值 → ``meta_online``，封面 → ``meta_cover``），
     **绝不改写 Epub 文件**。列表 / 详情 / 封面接口都从服务端读取生效值。
+
+    ``fields`` 里可能混着**自定义字段**（第 35 期）：它们按定义的类型校验后落到
+    ``book_custom_values``，与 OPF 字段走不同的表 —— 两者靠「键是否在定义表里」分流。
     """
     applied, failed, covers = [], [], 0
+    defs = db.list_custom_fields()      # 一次取全：每本书都要按适用书库筛一遍
     for it in items or []:
         it = it if isinstance(it, dict) else {}
         name = str(it.get("name") or "").strip()
@@ -287,14 +321,15 @@ def apply(items: list, cfg: dict = None) -> dict:
             # 不能默认落到默认库根 —— 否则非默认库的书会被误判「文件不存在」。
             # ⚠️ 只校验「确实在这本书所属的库根下」（`safe_path` 的安全边界），**不再限定必须是
             # EPUB 文件**：有声书是**目录**、漫画 / PDF 是各自的容器，而结果本来就只写 DB。
-            path = fileops.safe_path(name, fileops._lib_of(name, it))
+            lid = fileops._lib_of(name, it)
+            path = fileops.safe_path(name, lid)
             if not path.exists():
                 raise ValueError("文件不存在")
 
             updates = {k: v for k, v in fields.items()
                        if k in fileops.METADATA_FIELDS and (v not in ("", None, []))}
 
-            bid = it.get("book_id") or library.book_id(name, fileops._lib_of(name, it))
+            bid = it.get("book_id") or library.book_id(name, lid)
             # 第 35 期：被锁的字段一律不写。前端回传的是**具体值**，而这份值可能来自
             # 一个「上锁之前渲染的」预览页 —— 这里再挡一道，锁的语义才不会被过期页面绕过。
             locked = db.get_locks(bid)
@@ -303,6 +338,19 @@ def apply(items: list, cfg: dict = None) -> dict:
             # 在线值只记服务端（供展示与「恢复在线」回退），不下写文件
             if updates:
                 db.set_online(bid, {k: (v, "") for k, v in updates.items()})
+
+            # 第 35 期：自定义字段走**另一张表**（book_custom_values），按定义的类型校验后写入。
+            # 与元数据字段的区别：空串对自定义字段是**有意义的**（= 用户显式清空，
+            # 抓取不会再补默认值），所以这里不做「空值跳过」。
+            cdefs = {d["key"]: d for d in customfields.applicable(defs, lid)}
+            blocked += sorted(k for k in fields if k in cdefs and k in locked)
+            cust = {}
+            for k, v in fields.items():
+                if k not in cdefs or k in locked:
+                    continue
+                cust[k] = customfields.normalize(cdefs[k]["type"], v)
+            if cust:
+                db.set_custom_field_values(bid, cust)
 
             # 封面同样只存服务端缓存；下载失败不阻断元数据写回
             has_cover = False
@@ -314,16 +362,19 @@ def apply(items: list, cfg: dict = None) -> dict:
                 except Exception:                    # noqa: BLE001 —— 封面失败不阻断
                     has_cover = False
 
-            if not updates and not has_cover:
+            if not updates and not cust and not has_cover:
                 # 被锁挡下的情况要说清楚「为什么没写」—— 否则前端只能看到一句
                 # 「没有需要写入的内容」，会误以为是自己传空了
                 if blocked:
-                    raise ValueError("字段已锁定，未写入：" + "、".join(blocked))
+                    raise ValueError("字段已锁定，未写入：" + "、".join(sorted(set(blocked))))
                 raise ValueError("没有需要写入的内容")
         except Exception as e:                       # noqa: BLE001 —— 单本失败不影响其余
             failed.append({"name": name, "error": str(e)})
             continue
-        applied.append({"name": name, "fields": sorted(updates.keys()), "cover": has_cover})
+        # fields 里如实列出**这一本实际写了什么**（含自定义字段 —— 它们落在另一张表，
+        # 但对调用方来说「这本书的这些字段写进去了」是同一件事）
+        applied.append({"name": name, "fields": sorted([*updates.keys(), *cust.keys()]),
+                        "cover": has_cover})
         if has_cover:
             covers += 1
 
