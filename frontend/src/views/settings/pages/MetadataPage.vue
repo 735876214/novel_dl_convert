@@ -5,7 +5,7 @@ import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import MetadataScoreCard from '@/components/MetadataScoreCard.vue'
-import { api, type MetadataPlanItem, type MetadataSource } from '@/lib/api'
+import { api, type CustomFieldDef, type MetadataPlanItem, type MetadataSource } from '@/lib/api'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
@@ -236,13 +236,138 @@ function short(v: unknown): string {
   return s.length > 28 ? s.slice(0, 28) + '…' : s
 }
 
+// ---------------- 自定义字段定义（第 35 期）----------------
+// 定义存在应用数据库（不再是设置配置里的那串键值对），所以**本区改动立即生效**，
+// 不走上方的「保存」（那条路只写配置文件）。每本书的值在详情页「编辑元数据」里填。
+const defs = ref<CustomFieldDef[]>([])
+const defsTrashed = ref<CustomFieldDef[]>([])
+const defTypes = ref<Array<{ key: string; label: string }>>([])
+const defBusy = ref(false)
+const defDraft = ref({ label: '', type: 'text', default_value: '' })
+
+async function loadDefs(): Promise<void> {
+  try {
+    const r = await api.customFields(true)
+    defs.value = r.items
+    defsTrashed.value = r.trashed ?? []
+    defTypes.value = r.types
+  } catch { /* 未登录 / 后端未就绪：与本节其它请求一样静默 */ }
+}
+
+/** 定义里的书库 id → 显示名（库被删掉时回落成 id，不隐藏） */
+function libName(id: string): string {
+  return library.libraryEntities.find((l) => l.id === id)?.name ?? id
+}
+
+async function createDef(): Promise<void> {
+  const label = defDraft.value.label.trim()
+  if (!label) {
+    ui.toast('先填字段名')
+    return
+  }
+  defBusy.value = true
+  try {
+    const r = await api.createCustomField({ ...defDraft.value, label })
+    defs.value = r.items
+    defDraft.value = { label: '', type: 'text', default_value: '' }
+    ui.toast(`已新建字段「${r.item.label}」（键 ${r.item.key}）`)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '新建失败')
+  } finally {
+    defBusy.value = false
+  }
+}
+
+/** 改一项定义（label / 类型 / 默认值 / 归档 / 适用书库都会走到这里） */
+async function patchDef(d: CustomFieldDef, patch: Record<string, unknown>): Promise<void> {
+  defBusy.value = true
+  try {
+    defs.value = (await api.updateCustomField(d.id, patch)).items
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    defBusy.value = false
+  }
+}
+
+function toggleDefLib(d: CustomFieldDef, lid: string): void {
+  const cur = d.library_ids.slice()
+  const i = cur.indexOf(lid)
+  if (i >= 0) cur.splice(i, 1)
+  else cur.push(lid)
+  void patchDef(d, { library_ids: cur })
+}
+
+async function moveDef(d: CustomFieldDef, delta: number): Promise<void> {
+  const ids = defs.value.map((x) => x.id)
+  const i = ids.indexOf(d.id)
+  const j = i + delta
+  if (i < 0 || j < 0 || j >= ids.length) return
+  ;[ids[i], ids[j]] = [ids[j], ids[i]]
+  defBusy.value = true
+  try {
+    defs.value = (await api.reorderCustomFields(ids)).items
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '排序失败')
+  } finally {
+    defBusy.value = false
+  }
+}
+
+async function trashDef(d: CustomFieldDef): Promise<void> {
+  defBusy.value = true
+  try {
+    const r = await api.deleteCustomField(d.id)
+    defs.value = r.items
+    defsTrashed.value = r.trashed_items
+    ui.toast(`「${d.label}」已移入垃圾桶（各本书上的值仍保留）`)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '删除失败')
+  } finally {
+    defBusy.value = false
+  }
+}
+
+async function restoreDef(d: CustomFieldDef): Promise<void> {
+  defBusy.value = true
+  try {
+    defs.value = (await api.restoreCustomField(d.id)).items
+    defsTrashed.value = defsTrashed.value.filter((x) => x.id !== d.id)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '恢复失败')
+  } finally {
+    defBusy.value = false
+  }
+}
+
+async function purgeDef(d: CustomFieldDef): Promise<void> {
+  defBusy.value = true
+  try {
+    const r = await api.purgeCustomField(d.id)
+    defs.value = r.items
+    defsTrashed.value = r.trashed_items
+    ui.toast(`「${d.label}」已彻底删除（所有书上的值一并清除）`)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '彻底删除失败')
+  } finally {
+    defBusy.value = false
+  }
+}
+
 onMounted(() => {
   void loadConfig()
   void loadSources()
   void library.loadBooks()
+  if (props.section === 'custom-fields') void loadDefs()
 })
 /** 7 页共用组件：**必须监听 prop**，否则路由切换时组件实例被复用、数据不重载 */
-watch(() => props.section, () => { void loadSources(); planItems.value = []; picked.value = new Set() })
+watch(() => props.section, () => {
+  void loadSources()
+  planItems.value = []
+  picked.value = new Set()
+  defDraft.value = { label: '', type: 'text', default_value: '' }
+  if (props.section === 'custom-fields') void loadDefs()
+})
 </script>
 
 <template>
@@ -534,32 +659,117 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
     </Card>
 
     <Card v-if="has('custom')" class="mt-4" padding="none">
-      <div class="flex items-center gap-2 border-b border-border px-4 py-3">
-        <div class="min-w-0 flex-1">
-          <div class="text-[13px] font-medium text-foreground">自定义元数据</div>
-          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
-            存入应用数据库，每次应用抓取时一并写入（不改写任何文件）
-          </div>
+      <div class="border-b border-border px-4 py-3">
+        <div class="text-[13px] font-medium text-foreground">自定义字段</div>
+        <div class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+          定义字段本身（名字 / 类型 / 适用书库 / 默认值 / 顺序 / 归档）。
+          <strong>本区改动立即生效</strong>，不走上方的「保存」。
+          每本书的值在详情页「编辑元数据」里填；抓取只会给<strong>还没有值</strong>的书补默认值
+          —— 清空成空值也算「填过了」，不会再被补回来。
         </div>
-        <Button size="sm" @click="setVal('metadata_fetch.custom_fields', [...(mf.custom_fields ?? []), { name: '', value: '' }])">
-          添加一项
-        </Button>
       </div>
-      <div v-if="!(mf.custom_fields ?? []).length" class="px-4 py-6 text-center text-[12.5px] text-muted-foreground">
+
+      <!-- 新建：字段名是必填，key 由它派生（显示名改了不影响已存的值的归属） -->
+      <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+        <input
+          v-model="defDraft.label"
+          placeholder="字段名（如 目录号）"
+          class="h-8 w-52 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+        >
+        <select
+          v-model="defDraft.type"
+          class="h-8 rounded-md border border-border bg-muted px-2 text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
+        >
+          <option v-for="t in defTypes" :key="t.key" :value="t.key">{{ t.label }}</option>
+        </select>
+        <input
+          v-model="defDraft.default_value"
+          placeholder="默认值（可空；空则不参与抓取）"
+          class="h-8 min-w-[12rem] flex-1 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+        >
+        <Button size="sm" variant="primary" :disabled="defBusy" @click="createDef">新建字段</Button>
+      </div>
+
+      <div v-if="!defs.length" class="px-4 py-6 text-center text-[12.5px] text-muted-foreground">
         还没有自定义字段。
       </div>
-      <div v-for="(c, idx) in (mf.custom_fields ?? [])" :key="idx"
-           class="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2.5 last:border-b-0">
-        <input :value="c.name" placeholder="字段名（如 catalog）"
-               class="w-56 rounded-md border border-border bg-muted px-3 py-1.5 font-mono text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
-               @input="setVal(`metadata_fetch.custom_fields[${idx}].name`, ($event.target as HTMLInputElement).value)" />
-        <input :value="c.value" placeholder="值"
-               class="flex-1 rounded-md border border-border bg-muted px-3 py-1.5 text-[12.5px] text-foreground outline-none focus:border-ring focus:bg-card"
-               @input="setVal(`metadata_fetch.custom_fields[${idx}].value`, ($event.target as HTMLInputElement).value)" />
-        <Button size="sm" variant="ghost"
-                @click="setVal('metadata_fetch.custom_fields', (mf.custom_fields ?? []).filter((_: unknown, i: number) => i !== idx))">
-          删除
-        </Button>
+      <div v-for="(d, idx) in defs" :key="d.id" class="border-b border-border px-4 py-3 last:border-b-0">
+        <div class="flex flex-wrap items-center gap-2">
+          <input
+            :value="d.label"
+            class="h-8 w-52 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none focus:border-ring focus:bg-card"
+            @change="patchDef(d, { label: ($event.target as HTMLInputElement).value })"
+          >
+          <span class="font-mono text-[11px] text-muted-foreground">{{ d.key }}</span>
+          <Badge v-if="d.archived">已归档</Badge>
+          <div class="ml-auto flex items-center gap-1">
+            <Button size="sm" variant="ghost" :disabled="defBusy || idx === 0" @click="moveDef(d, -1)">上移</Button>
+            <Button size="sm" variant="ghost" :disabled="defBusy || idx === defs.length - 1" @click="moveDef(d, 1)">下移</Button>
+            <Button size="sm" variant="ghost" :disabled="defBusy" @click="patchDef(d, { archived: !d.archived })">
+              {{ d.archived ? '取消归档' : '归档' }}
+            </Button>
+            <Button size="sm" variant="ghost" :disabled="defBusy" @click="trashDef(d)">移入垃圾桶</Button>
+          </div>
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-2">
+          <select
+            :value="d.type"
+            class="h-8 rounded-md border border-border bg-muted px-2 text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
+            @change="patchDef(d, { type: ($event.target as HTMLSelectElement).value })"
+          >
+            <option v-for="t in defTypes" :key="t.key" :value="t.key">{{ t.label }}</option>
+          </select>
+          <input
+            :value="d.default_value"
+            placeholder="默认值（抓取补空用；留空则不参与抓取）"
+            class="h-8 min-w-[12rem] flex-1 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+            @change="patchDef(d, { default_value: ($event.target as HTMLInputElement).value })"
+          >
+        </div>
+
+        <div class="mt-2 flex flex-wrap items-center gap-2 text-[11.5px] text-muted-foreground">
+          <span>适用书库（都不选 = 全部书库）</span>
+          <button
+            v-for="l in library.libraryEntities"
+            :key="l.id"
+            type="button"
+            class="cursor-pointer rounded-md border px-2 py-0.5 text-[11px] transition-colors"
+            :class="d.library_ids.includes(l.id)
+              ? 'border-primary bg-primary/10 text-primary'
+              : 'border-border hover:text-foreground'"
+            @click="toggleDefLib(d, l.id)"
+          >
+            {{ l.name }}
+          </button>
+          <span v-if="!library.libraryEntities.length" class="text-[11px]">（还没有书库）</span>
+          <!-- 库先删、定义后改的历史 id：如实标出来（写入端只收真实存在的库 id） -->
+          <span
+            v-for="id in d.library_ids.filter((x: string) => !library.libraryEntities.some((l) => l.id === x))"
+            :key="id"
+            class="rounded-md border border-warning/40 px-2 py-0.5 text-[11px] text-warning"
+          >
+            {{ libName(id) }}（书库已不存在）
+          </span>
+        </div>
+      </div>
+
+      <!-- 垃圾桶：软删的字段定义（值保留），恢复即完整还原；彻底删除会连带清掉所有书上的值 -->
+      <div v-if="defsTrashed.length" class="border-t border-border px-4 py-3">
+        <div class="mb-1.5 text-[12.5px] font-medium text-foreground">垃圾桶</div>
+        <div class="mb-2 text-[11px] text-muted-foreground">
+          恢复后各本书上的值原样回来；「彻底删除」不可恢复，并会清掉所有书上的值
+        </div>
+        <div v-for="d in defsTrashed" :key="d.id" class="flex flex-wrap items-center gap-2 py-1.5">
+          <span class="text-[12.5px] text-muted-foreground">
+            {{ d.label }}
+            <span class="ml-2 font-mono text-[11px]">{{ d.key }}</span>
+          </span>
+          <div class="ml-auto flex items-center gap-1">
+            <Button size="sm" variant="ghost" :disabled="defBusy" @click="restoreDef(d)">恢复</Button>
+            <Button size="sm" variant="ghost" :disabled="defBusy" @click="purgeDef(d)">彻底删除</Button>
+          </div>
+        </div>
       </div>
     </Card>
 
@@ -571,7 +781,7 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
         '元数据源插件市场 / 更多第三方源（当前内置 OpenLibrary 与 Google Books）',
         '系列级元数据（当前只写单本）',
       ]"
-      note="已实现：源选择与顺序、连通性自检、Google Books API Key、入库自动抓取、ISBN 精确匹配、字段级写入策略、字段级锁定（单本书逐字段 / 封面，只挡抓取）、置信度阈值、题材黑名单、自定义元数据、「先预览再应用」的手动抓取面板，以及作者传记 / 头像抓取与本地覆盖编辑。"
+      note="已实现：源选择与顺序、连通性自检、Google Books API Key、入库自动抓取、ISBN 精确匹配、字段级写入策略、字段级锁定（单本书逐字段 / 封面，只挡抓取）、置信度阈值、题材黑名单、自定义字段（定义管理 + 按书的值 + 抓取补默认值）、「先预览再应用」的手动抓取面板，以及作者传记 / 头像抓取与本地覆盖编辑。"
     />
   </div>
 </template>

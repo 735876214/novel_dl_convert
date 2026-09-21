@@ -72,6 +72,7 @@ async function load(): Promise<void> {
     meta.value = await api.bookMetadata(props.bookId)
     form.value = { ...(meta.value?.fields as BookMetadataFields) }
     tagText.value = (form.value.tags || []).join('、')
+    resetCustom()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '元数据加载失败')
     meta.value = null
@@ -89,14 +90,15 @@ const hasOverrides = computed(() =>
   !!meta.value && Object.values(meta.value.meta).some((m) => m.overridden),
 )
 
-/** 是否有未保存的改动（与加载时的生效值比对） */
+/** 是否有未保存的改动（与加载时的生效值比对；**含自定义字段**——它们是同一张表单） */
 const dirty = computed(() => {
   if (!meta.value || !form.value) return false
   const a = meta.value.fields
   const b = { ...form.value, tags: parseTags() }
-  return (Object.keys(a) as (keyof BookMetadataFields)[]).some((k) =>
+  const changedCore = (Object.keys(a) as (keyof BookMetadataFields)[]).some((k) =>
     k === 'tags' ? JSON.stringify(a.tags) !== JSON.stringify(b.tags) : String(a[k]) !== String(b[k]),
   )
+  return changedCore || customDirty.value
 })
 
 function fmt(v: string | string[]): string {
@@ -172,22 +174,63 @@ function parseTags(): string[] {
     .filter(Boolean)
 }
 
+// ---------------- 自定义字段（第 35 期）----------------
+// 值不落在 OPF 字段那套里，而是按**字段定义**存到 book_custom_values；
+// 详情页只显示「该书所属书库适用且未归档」的定义（后端已筛好，这里照着渲染即可）。
+// 编辑草稿是纯文本：`list` 类型也用「、」分隔的原文本提交 —— 后端负责切分并校验，
+// 前端不自己拆（规则若在两端各写一遍，迟早会不一致）。
+const customForm = ref<Record<string, string>>({})
+
+function customToText(v: string | string[]): string {
+  return Array.isArray(v) ? v.join('、') : String(v ?? '')
+}
+
+/** 用服务端下发的值重置草稿（加载 / 保存 / 恢复之后都要跟着走一遍） */
+function resetCustom(): void {
+  const out: Record<string, string> = {}
+  for (const c of meta.value?.custom ?? []) out[c.key] = customToText(c.value)
+  customForm.value = out
+}
+
+/** 自定义字段是否有改动（与 `dirty` 一起决定「保存」是否可点） */
+const customDirty = computed(() =>
+  (meta.value?.custom ?? []).some((c) => (customForm.value[c.key] ?? '') !== customToText(c.value)),
+)
+
+function customHint(c: { type: string }): string {
+  if (c.type === 'list') return '多个值用「、」或逗号分隔'
+  if (c.type === 'number') return '只接受数字'
+  if (c.type === 'date') return '日期（如 2024-01-02）'
+  return ''
+}
+
 async function save(): Promise<void> {
   if (!form.value || !meta.value) return
   saving.value = true
   try {
     const fields = { ...form.value, tags: parseTags() }
-    const r = await api.setBookMetadata(props.bookId, fields)
+    // 自定义字段与 OPF 字段同批提交（同一张表单、同一个保存按钮）；没有定义时不带这个键
+    const custom = (meta.value.custom ?? []).length ? { ...customForm.value } : undefined
+    const r = await api.setBookMetadata(props.bookId, fields, custom)
     changed.value = r.changed
     if (r.unknown.length) {
       ui.toast(`已保存；不支持的字段已忽略：${r.unknown.join('、')}`)
+    } else if (r.custom_ignored?.length) {
+      ui.toast(`已保存；不适用的自定义字段已忽略：${r.custom_ignored.join('、')}`)
     } else {
-      ui.toast(r.changed.length ? `已保存，实际改动 ${r.changed.length} 项` : '没有实际改动')
+      const n = r.changed.length + (r.custom_saved?.length ?? 0)
+      ui.toast(n ? `已保存，实际改动 ${n} 项` : '没有实际改动')
     }
     // 用服务端回读的值刷新表单与分层明细（后端会做规整，如 3.00 → 3）
-    meta.value = { ...meta.value, fields: { ...r.fields }, meta: { ...r.meta } }
+    meta.value = {
+      ...meta.value,
+      fields: { ...r.fields },
+      meta: { ...r.meta },
+      custom: r.custom ?? meta.value.custom,
+    }
     form.value = { ...r.fields }
     tagText.value = (r.fields.tags || []).join('、')
+    resetCustom()
     emit('saved')
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '保存失败')
@@ -225,9 +268,15 @@ async function clearOne(k: keyof BookMetadataFields): Promise<void> {
   clearing.value = true
   try {
     const r = await api.setBookMetadata(props.bookId, { [k]: null } as BookMetadataWriteFields)
-    meta.value = { ...meta.value, fields: { ...r.fields }, meta: { ...r.meta } }
+    meta.value = {
+      ...meta.value,
+      fields: { ...r.fields },
+      meta: { ...r.meta },
+      custom: r.custom ?? meta.value.custom,
+    }
     form.value = { ...r.fields }
     tagText.value = (r.fields.tags || []).join('、')
+    resetCustom()
     ui.toast(r.changed.length ? `已清空：${FIELD_LABELS[k] ?? k}` : '该字段本来就是空的')
     emit('saved')
   } catch (e) {
@@ -269,6 +318,8 @@ const INPUT_CLS =
             <strong>「清空」</strong>是让这个字段真的没有值（之后抓取也不会把它填回来）。
             <strong>「锁定」</strong>又是另一回事：它不改变任何值，只是告诉抓取「这个字段别动」——
             即使该字段的策略写着「总是覆盖」也不会被改写；而手动编辑照旧可改。
+            最下方的<strong>自定义字段</strong>是你在设置页定义过的字段，同样只存服务端；
+            它们的值一起由这个「保存」提交。
           </p>
         </div>
 
@@ -446,6 +497,36 @@ const INPUT_CLS =
               锁上后在线抓取不会替换这张封面图。
             </span>
           </div>
+
+          <!--
+            自定义字段（第 35 期）：由**字段定义**驱动，只显示该书所属书库适用、且未归档的那些
+            （后端已按适用书库筛好）。值存 book_custom_values，与上面的 OPF 字段是两套存储，
+            但同属这一张表单、由同一个「保存」提交。
+          -->
+          <label
+            v-for="c in meta.custom"
+            :key="c.key"
+            class="flex flex-col gap-1 border-b border-border/60 py-2.5"
+          >
+            <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+              {{ c.label }}
+              <span class="rounded bg-muted px-1.5 py-0.5 text-[10px]">自定义</span>
+              <span v-if="customHint(c)" class="text-[10.5px]">{{ customHint(c) }}</span>
+            </span>
+            <input
+              v-model="customForm[c.key]"
+              :type="c.type === 'number' ? 'number' : 'text'"
+              :disabled="!editable"
+              :placeholder="c.default_value ? `默认：${c.default_value}` : ''"
+              :class="INPUT_CLS"
+            >
+            <span
+              v-if="!customForm[c.key] && c.default_value"
+              class="text-[10.5px] text-muted-foreground"
+            >
+              留空即「没有值」；抓取会补上默认值 {{ c.default_value }}（已保存过值的不再补）
+            </span>
+          </label>
         </div>
 
         <div class="flex flex-wrap items-center gap-3 border-t border-border px-4 py-3">

@@ -1368,6 +1368,11 @@ export interface BookMetadata {
    * 比 `meta` 多一项：**封面**用独立键 `cover`（不在 `BookMetadataFields` 里）。
    */
   locked: string[]
+  /**
+   * 自定义字段（第 35 期）：**只含该书适用且未归档**的定义 + 这本书的当前值，
+   * 顺序即定义的排序。值不是 OPF 字段 —— 它们存 `book_custom_values`。
+   */
+  custom: CustomFieldState[]
 }
 
 /** `GET /api/books/{bid}/metadata/online` */
@@ -1512,6 +1517,44 @@ export interface MetadataWriteResult {
   fields: BookMetadataFields
   /** 回写的逐字段明细 */
   meta: MetaStateMap
+  /** 第 35 期：写完后的自定义字段全量状态（含定义与值），前端直接替换 */
+  custom: CustomFieldState[]
+  /** 本次实际写入的自定义字段键 */
+  custom_saved: string[]
+  /** 提交了但该书不适用的自定义字段键（不静默丢，如实回报） */
+  custom_ignored: string[]
+}
+
+/**
+ * 自定义字段的**定义**（第 35 期，`/api/custom-fields`）。
+ *
+ * `key` 是稳定标识（值表按它引用，改 label 不动值），`label` 才是给人看的显示名。
+ * `library_ids` 为空 = 全部书库；`archived` = 不进编辑界面（值不丢）；
+ * `deleted_at > 0` = 在垃圾桶里（软删，可恢复，彻底删除走 purge）。
+ */
+export interface CustomFieldDef {
+  id: number
+  key: string
+  label: string
+  /** text / number / date / list（只约束录入，不是存储类型） */
+  type: string
+  position: number
+  library_ids: string[]
+  /** 抓取时给「还没有这一项」的书补的值（空 = 不参与抓取） */
+  default_value: string
+  archived: boolean
+  created_at: number
+  updated_at: number
+  deleted_at?: number
+}
+
+/** 详情页里该书的自定义字段：定义 + 这本书当前的值（`list` 类型给数组） */
+export interface CustomFieldState {
+  key: string
+  label: string
+  type: string
+  default_value: string
+  value: string | string[]
 }
 
 export interface ConfigPayload {
@@ -2192,12 +2235,20 @@ export const api = {
    * 编辑单本书的元数据：**只写服务端，不改写任何书文件**（第 18 期口径）。
    * 值语义见 `BookMetadataWriteFields`（`null` = 显式清空，空串 = 撤销覆盖）。
    * 返回的 `changed` 只含**实际发生变化**的字段（同值重写不会出现在里面）。
+   *
+   * `custom`（第 35 期）是**同一张表单里的另一套值**（自定义字段，存 `book_custom_values`）：
+   * 详情页一次保存把两者一起提交。只传 `custom`、不传 `fields` 也合法
+   * （后端只在两者都空时才拒绝）。
    */
-  setBookMetadata: (bid: string, fields: BookMetadataWriteFields) =>
+  setBookMetadata: (
+    bid: string,
+    fields: BookMetadataWriteFields,
+    custom?: Record<string, string | string[]>,
+  ) =>
     request<MetadataWriteResult>(`/api/books/${encodeURIComponent(bid)}/metadata`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields }),
+      body: JSON.stringify(custom ? { fields, custom } : { fields }),
     }),
 
   /** 实时在线建议（编辑器「在线建议 / 重新获取」用，不写库）。 */
@@ -2225,6 +2276,82 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ field, locked }),
       },
+    ),
+
+  // ---------- 自定义字段定义（第 35 期）----------
+  // 定义是**全局**的（不属于某本书）；每本书的值走上面 `bookMetadata` / `setBookMetadata`。
+
+  /** 定义列表（含归档项）；`includeTrashed` 时额外带回垃圾桶条目。`types` 供下拉直接用。 */
+  customFields: (includeTrashed = false) =>
+    request<{
+      items: CustomFieldDef[]
+      types: Array<{ key: string; label: string }>
+      trashed?: CustomFieldDef[]
+    }>(`/api/custom-fields${includeTrashed ? '?include_trashed=1' : ''}`),
+
+  /** 新建定义。`key` 缺省由显示名派生（纯中文名会派生出一个名字摘要，不是随机值）。 */
+  createCustomField: (payload: {
+    label: string
+    key?: string
+    type?: string
+    library_ids?: string[]
+    default_value?: string
+  }) =>
+    request<{ ok: boolean; item: CustomFieldDef; items: CustomFieldDef[] }>('/api/custom-fields', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 改定义（**不含 key**：改 key 等于换一个字段，值会失去归属）。 */
+  updateCustomField: (
+    cid: number,
+    patch: {
+      label?: string
+      type?: string
+      library_ids?: string[]
+      default_value?: string
+      archived?: boolean
+      position?: number
+    },
+  ) =>
+    request<{ ok: boolean; item: CustomFieldDef; items: CustomFieldDef[] }>(
+      `/api/custom-fields/${cid}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    ),
+
+  /** 按给定 id 次序重排（position = 下标）—— 这就是「排序」那一项操作的落点。 */
+  reorderCustomFields: (ids: number[]) =>
+    request<{ ok: boolean; moved: number; items: CustomFieldDef[] }>(
+      '/api/custom-fields/reorder',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      },
+    ),
+
+  /** **移入垃圾桶**（软删除）。值保留，恢复后一切照旧；彻底删除走 `purgeCustomField`。 */
+  deleteCustomField: (cid: number) =>
+    request<{ ok: boolean; trashed: boolean; items: CustomFieldDef[]; trashed_items: CustomFieldDef[] }>(
+      `/api/custom-fields/${cid}`,
+      { method: 'DELETE' },
+    ),
+
+  restoreCustomField: (cid: number) =>
+    request<{ ok: boolean; items: CustomFieldDef[] }>(`/api/custom-fields/${cid}/restore`, {
+      method: 'POST',
+    }),
+
+  /** 彻底删除（不可恢复），并**连带清掉所有书上的值**。只对垃圾桶里的条目成立。 */
+  purgeCustomField: (cid: number) =>
+    request<{ ok: boolean; items: CustomFieldDef[]; trashed_items: CustomFieldDef[] }>(
+      `/api/custom-fields/${cid}/purge`,
+      { method: 'DELETE' },
     ),
 
   // ---------- 阅读状态 / 书评 / 相似书 ----------
