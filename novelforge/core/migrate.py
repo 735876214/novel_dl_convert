@@ -466,6 +466,9 @@ def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
 
     返回 ``(dst_lib, items)``。``status`` 取值：``ready`` 可搬 / ``conflict`` 目标同名待用户
     决定 / ``blocked`` 搬不了（不相容、源已不在、已在目标库）/ ``skip`` 用户主动跳过。
+    ``blocked`` 时另带 ``blocked_kind`` 说明**拦的原因属于哪一类**（``compat`` 相容闸门 /
+    ``source`` 源或 id 状态 / ``name`` 用户给的改名不合法）—— 接口层要按这个字段决定
+    「整批拒绝（400）」还是「逐本跳过」：相容闸门是契约，别的都只是这一本的事。
     """
     dst_lib = library.get_library(dst_library_id) if dst_library_id else None
     if not dst_lib:
@@ -487,7 +490,7 @@ def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
             "library_id": "", "library_name": "",
             "src": "", "is_dir": False,
             "dst_library_id": dst_lib_id, "dst_library_name": str(dst_lib.get("name") or ""),
-            "dst": "", "status": "", "reason": "", "suggest": "",
+            "dst": "", "status": "", "blocked_kind": "", "reason": "", "suggest": "",
             "copy": {"action": "none", "old_copy": "", "new_copy": "", "rel": "",
                      "reason": ""},
         }
@@ -495,9 +498,10 @@ def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
             b = library.by_id(bid)
         except library.BookIdConflict as e:
             b = None
-            it.update(status="blocked", reason=str(e))
+            it.update(status="blocked", blocked_kind="source", reason=str(e))
         if b is None and not it["status"]:
-            it.update(status="blocked", reason="这本书已不在库里（可能刚被移动或删除）")
+            it.update(status="blocked", blocked_kind="source",
+                      reason="这本书已不在库里（可能刚被移动或删除）")
         if it["status"]:
             items.append(it)
             continue
@@ -509,13 +513,14 @@ def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
                   library_name=str((library.get_library(src_lib) or {}).get("name") or ""),
                   src=str(src), is_dir=publish.is_dir_entry(b))
         if src_lib == dst_lib_id:
-            it.update(status="blocked", reason="这本书已经在目标库里")
+            it.update(status="blocked", blocked_kind="source", reason="这本书已经在目标库里")
         elif not src.exists():
-            it.update(status="blocked", reason="源已不在磁盘上（可能被移动或删除了）")
+            it.update(status="blocked", blocked_kind="source",
+                      reason="源已不在磁盘上（可能被移动或删除了）")
         else:
             why = compat_reason(b, dst_lib)
             if why:
-                it.update(status="blocked", reason=why)
+                it.update(status="blocked", blocked_kind="compat", reason=why)
         if it["status"]:
             items.append(it)
             continue
@@ -531,7 +536,7 @@ def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
             try:
                 name = _clean_new_name((dec.get(bid) or {}).get("new_name"), b, dst_lib)
             except ValueError as e:
-                it.update(status="blocked", reason=str(e))
+                it.update(status="blocked", blocked_kind="name", reason=str(e))
                 items.append(it)
                 continue
         dst = dst_root / name
@@ -540,7 +545,7 @@ def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
         if dst.exists():
             hit = clash["name"] if clash else ""
             if action == "rename":
-                it.update(status="blocked",
+                it.update(status="blocked", blocked_kind="name",
                           suggest=library.suggest_name(name, dst_lib_id, dst_root),
                           reason=f"「{name}」在目标库里也被占着"
                                  + (f"（与「{hit}」撞同一 id）" if hit else ""))
@@ -606,6 +611,101 @@ def move_plan(book_ids, dst_library_id: str, decisions=None) -> dict:
             db.migration_add(batch_id, DIR_BOOKMOVE, i["dst_library_id"], i["src"], i["dst"])
     return {"batch_id": batch_id, "created": len(movable), "reused": reused,
             "items": movable, "preview": pv, "message": ""}
+
+
+def move_targets(book_ids) -> dict:
+    """选择集 → **可选的目标库**清单（给前端的库选择器用）。**只读**。
+
+    每个库带上「这几本能不能全进得去」：判据同样只走 :func:`compat_reason`，
+    与 :func:`_move_items` 用的是同一句话 —— **前端拿到的理由与后端拒绝的理由逐字相同**，
+    不会出现「置灰说 A、真搬报 B」。
+
+    ``blocked_count`` 数的是**进不去这个库的书目数**（不是原因数），``reason`` 取第一句
+    理由给人看 —— 一本不相容时前端能直接显示原因，多本时显示「N 本不相容」更有用，
+    所以两个字段都给。
+
+    源库自身也在清单里（``same_as_source=True``）—— 由前端决定藏还是置灰，后端不替它
+    做这个决定；真搬过去了 :func:`_move_items` 会按「已经在目标库里」拦下。
+    """
+    books, missing = [], 0
+    for bid in (book_ids or []):
+        b = _book_of(str(bid))
+        if b is None:
+            missing += 1
+        else:
+            books.append(b)
+    src_libs = {str(b.get("library_id") or library.DEFAULT_LIBRARY_ID) for b in books}
+
+    items: list = []
+    for l in library.libraries():
+        lid = str(l.get("id") or "")
+        blocked = 0
+        reason = ""
+        for b in books:
+            why = compat_reason(b, l)
+            if why:
+                blocked += 1
+                if not reason:
+                    reason = why
+        items.append({
+            "id": lid, "name": str(l.get("name") or ""),
+            "type": str(l.get("type") or ""),
+            "type_label": TYPE_LABELS.get(str(l.get("type") or ""), str(l.get("type") or "")),
+            "compatible": blocked == 0 and bool(books),
+            "blocked_count": blocked,
+            "reason": reason,
+            "same_as_source": bool(books) and src_libs == {lid},
+            # 没配成品目录 ⇒ 副本会留在原库（口径③的边界）；提前说，别等搬完才发现
+            "publish_configured": publish.publish_dir(lid) is not None,
+        })
+    return {
+        "items": items,
+        "total_books": len(books),
+        "missing_books": missing,
+        # 整批书都来自同一个库时给出源库 id；混库时置空（前端据此决定文案）
+        "source_library_id": (next(iter(src_libs)) if len(src_libs) == 1 else ""),
+        "message": "选中的书都已不在库里" if missing and not books else "",
+    }
+
+
+def move_summary(batch_id: str) -> dict:
+    """批次 → 结构化摘要（源库 / 目标库 / 本数）。**只读**，不改任何状态。
+
+    源库由**源路径**反查（manifest 里只存了源路径，不存源库 id —— 存了就会与文件实际
+    位置漂移），用 :func:`_lib_id_of_path` 取最长匹配那个库根。
+    """
+    rows = db.migration_batch(batch_id)
+    if not rows:
+        raise ValueError("迁移批次不存在")
+    dst_id = str(rows[0].get("library_id") or "")
+    src_id = _lib_id_of_path(rows[0].get("src"))
+    return {
+        "batch_id": batch_id,
+        "direction": str(rows[0].get("direction") or ""),
+        "total": len(rows),
+        "src_library_id": src_id,
+        "src_library_name": str((library.get_library(src_id) or {}).get("name") or ""),
+        "dst_library_id": dst_id,
+        "dst_library_name": str((library.get_library(dst_id) or {}).get("name") or ""),
+    }
+
+
+def move_batches(limit: int = 10) -> list:
+    """用户发起的跨库移动批次（新 → 旧），带进度计数 —— 书架的「撤销本次移动」用它。
+
+    只列 ``bookmove``：自动归库的批次有自己的入口（书库管理页的门禁与回滚），
+    混在一起会让「撤销」按错批次。
+    """
+    out: list = []
+    for b in pending_batches():
+        if str(b.get("direction") or "") != DIR_BOOKMOVE:
+            continue
+        s = move_summary(b["batch_id"])
+        out.append({**b, **s, "can_rollback": b["done"] > 0,
+                    "label": f"{s['src_library_name']} → {s['dst_library_name']}"})
+        if len(out) >= int(limit):
+            break
+    return out
 
 
 # ---------------- 移动的落盘细节 ----------------
@@ -687,17 +787,27 @@ def _ledger_after_copy(src, copy_path, is_dir: bool) -> dict:
 def _after_bookmove(r: dict, dst: pathlib.Path, ctx: dict, watcher) -> dict:
     """一本搬完之后的收尾：remap 关联数据 → 副本随书搬 → 台账改挂 → 通知 watcher。
 
-    顺序有讲究：**先 remap、再动副本、最后写台账** —— 台账那一行要按「副本最终落在哪」
-    写，写早了还得再改一次；而 remap 与副本无关，先做完它，副本那步即使失败，
-    用户的进度 / 批注也已经在正确的位置上了。
+    顺序有讲究，三条都得守：
 
-    返回 ``{"copy": action, "note": "给人看的一句话"}``。
+    1. **先 remap、再动副本、最后写台账** —— 台账那一行要按「副本最终落在哪」写，写早了
+       还得再改一次；而 remap 与副本无关，先做完它，副本那步即使失败，用户的进度 / 批注
+       也已经在正确的位置上了。
+    2. **台账必须在**对账（``scrape.verify`` / ``_lost``）**之前**改挂到新库**：那两处只在
+       **同一库内**对账 —— 若此时台账还挂在旧库，它按旧库根找源文件自然找不到，
+       会把一行好好的「已出版」判成 ``orphan`` / ``removed``，把搬迁变成一次误报事故。
+       本函数与 ``shutil.move`` 在同一条流水线里同步跑完，中间没有让对账插进来的窗口。
+    3. 台账的 ``status`` **本函数不主动降级**，唯一例外是目标库没配成品目录（``left``）——
+       那种状态下这本书在目标库确实没有副本，如实标 ``skipped`` 才是真话。
+
+    返回 ``{"copy": action, "copied": 副本是否真的落到了目标库, "note": "给人看的一句话"}``。
+    ``copied`` 是**看过磁盘结果之后**的结论，不是打算做什么 —— 汇总日志要报的是结果。
     """
     old_id, new_id, dst_lib = ctx["old_id"], ctx["new_id"], ctx["dst_lib"]
     if old_id != new_id:
         db.remap_book_id(old_id, new_id)
 
     note = ""
+    copied = False
     book = ctx["book"]
     cp = (copy_plan(book, dst_lib, ctx["dst_rel"], ledger_id=old_id) if book else
           {"action": "none", "old_copy": "", "new_copy": "", "rel": "", "reason":
@@ -721,6 +831,7 @@ def _after_bookmove(r: dict, dst: pathlib.Path, ctx: dict, watcher) -> dict:
             fields.update(_ledger_after_copy(dst, cp["new_copy"],
                                             bool(book and publish.is_dir_entry(book))))
             note = cp["reason"]
+            copied = True
 
     n = db.scrape_remap_item(old_id, new_id, **fields)
     if not n and (db.scrape_get(old_id) or {}).get("book_id"):
@@ -733,7 +844,7 @@ def _after_bookmove(r: dict, dst: pathlib.Path, ctx: dict, watcher) -> dict:
             watcher.mark_processed(dst)
         except Exception as e:                 # noqa: BLE001 —— 登记失败不该让已经搬好的书变失败
             note = _join_note(note, f"watcher 登记失败（{e}），可能被重复入库")
-    return {"copy": cp["action"], "note": note}
+    return {"copy": cp["action"], "copied": copied, "note": note}
 
 
 def _copy_back(book, src_lib: str, dst_lib: str, src_rel: str, dst_rel: str,
@@ -765,12 +876,15 @@ def _copy_back(book, src_lib: str, dst_lib: str, src_rel: str, dst_rel: str,
 
 
 def _after_bookmove_back(r: dict, src: pathlib.Path, dst: pathlib.Path, ctx: dict,
-                         book, watcher) -> str:
+                         book, watcher) -> dict:
     """回滚一本搬回去之后的收尾：反向 remap → 副本带回原库 → 台账改挂回原库 → 通知 watcher。
 
     与 :func:`_after_bookmove` 是同一件事的**镜像**，但刻意不复用它：那边的每一步方向都是
     反的，参数化到「一个函数两个方向」只会让两边都读不懂。真正该共用的是**判据**
     （落点退让、link_mode 重量、台账改挂），那几处本来就是共用函数。
+
+    返回 ``{"copied": 副本是否真的回到了原库, "note": ...}``（同 :func:`_after_bookmove`，
+    ``copied`` 是看过磁盘之后的结论）。
     """
     old_id, new_id = ctx["old_id"], ctx["new_id"]
     src_lib, dst_lib = ctx["src_lib"], ctx["dst_lib"]
@@ -809,7 +923,9 @@ def _after_bookmove_back(r: dict, src: pathlib.Path, dst: pathlib.Path, ctx: dic
             watcher.mark_processed(src)
         except Exception as e:                 # noqa: BLE001 —— 登记失败不该让回滚变失败
             note = _join_note(note, f"watcher 登记失败（{e}）")
-    return note
+    # 副本回到原库 = 磁盘上它确在 ``原库成品目录 / rel``（``moved`` 只说明「这次搬了」，
+    # 本来就躺在原处的那份同样算数 —— 汇总要报的是结果）
+    return {"copied": copy is not None and copy.exists(), "note": note}
 
 
 def _join_note(note: str, extra: str) -> str:
@@ -845,7 +961,7 @@ def execute(batch_id: str, *, on_row=None, watcher=None) -> dict:
     if not rows:
         raise ValueError("迁移批次不存在")
 
-    moved = failed = skipped = copies = 0
+    moved = failed = skipped = copies = copies_left = 0
     errors: list = []
     notes: list = []
     total = len(rows)
@@ -879,8 +995,12 @@ def execute(batch_id: str, *, on_row=None, watcher=None) -> dict:
             continue
         if is_bookmove:
             res = _after_bookmove(r, dst, ctx, watcher)
-            if res["copy"] in ("move", "reuse"):
+            # 副本的账**按磁盘结果记**，不按「打算做什么」记：计划搬但搬失败的要算没搬，
+            # 目标库没配成品目录的要单独说出来 —— 否则日志会报出一句用户核对不上的数字。
+            if res["copied"]:
                 copies += 1
+            elif res["copy"] == "left":
+                copies_left += 1
             if res["note"]:
                 notes.append({"src": str(src), "note": res["note"]})
         else:
@@ -902,14 +1022,19 @@ def execute(batch_id: str, *, on_row=None, watcher=None) -> dict:
         _notify(on_row, done, total, dst)
 
     library.invalidate()
-    extra = f"、副本随迁 {copies} 本" if copies else ""
+    # 日志要能回答「我的副本到底跟过来了没有」——三项分开写，不合并成一句含糊的话
+    extra = "".join((
+        f"、副本随迁 {copies} 本" if copies else "",
+        f"、副本留在原库 {copies_left} 本" if copies_left else "",
+    ))
     activity_log.log(
         activity_log.ACTION_LAYOUT, f"书库迁移 {batch_id}",
         activity_log.STATUS_OK if not failed else activity_log.STATUS_FAIL,
         detail=f"迁移 {moved} 本、失败 {failed} 本、跳过 {skipped} 本{extra}", source="api",
     )
     return {"ok": not failed, "batch_id": batch_id, "moved": moved, "failed": failed,
-            "skipped": skipped, "copies": copies, "errors": errors[:20], "notes": notes[:20],
+            "skipped": skipped, "copies": copies, "copies_left": copies_left,
+            "errors": errors[:20], "notes": notes[:20],
             "items": db.migration_batch(batch_id)}
 
 
@@ -923,7 +1048,7 @@ def rollback(batch_id: str, *, watcher=None) -> dict:
     if not rows:
         raise ValueError("该批次没有可回滚的条目")
 
-    back = failed = 0
+    back = failed = copies_back = 0
     errors: list = []
     notes: list = []
     for r in rows:
@@ -953,9 +1078,11 @@ def rollback(batch_id: str, *, watcher=None) -> dict:
         # 两侧 id 都用 id 的**定义式**重算（``库$basename 哈希``），不猜、不存快照：
         # 这样即使 manifest 行是上一版写下、或文件被手工挪过，算出来的也是当下真值。
         if is_bookmove:
-            note = _after_bookmove_back(r, src, dst, ctx, book, watcher)
-            if note:
-                notes.append({"src": str(src), "note": note})
+            res = _after_bookmove_back(r, src, dst, ctx, book, watcher)
+            if res["copied"]:
+                copies_back += 1
+            if res["note"]:
+                notes.append({"src": str(src), "note": res["note"]})
         else:
             # 自动归库：只反向搬关联数据（它本来就没动副本与台账，见模块头「有意留下的边界」）
             src_lib = _src_library_id_of(src)
@@ -967,13 +1094,15 @@ def rollback(batch_id: str, *, watcher=None) -> dict:
         back += 1
 
     library.invalidate()
+    extra = f"、副本随回滚 {copies_back} 本" if copies_back else ""
     activity_log.log(
         activity_log.ACTION_LAYOUT, f"书库迁移回滚 {batch_id}",
         activity_log.STATUS_OK if not failed else activity_log.STATUS_FAIL,
-        detail=f"回滚 {back} 本、失败 {failed} 本", source="api",
+        detail=f"回滚 {back} 本、失败 {failed} 本{extra}", source="api",
     )
     return {"ok": not failed, "batch_id": batch_id, "restored": back, "failed": failed,
-            "errors": errors[:20], "notes": notes[:20], "items": db.migration_batch(batch_id)}
+            "copies": copies_back, "errors": errors[:20], "notes": notes[:20],
+            "items": db.migration_batch(batch_id)}
 
 
 def last_batch(direction: str = "move") -> str:

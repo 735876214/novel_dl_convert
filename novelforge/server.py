@@ -3190,6 +3190,186 @@ def api_mig_reset_gate():
     return {"ok": True, "gate": migrate.reset_gate()}
 
 
+# ---- 跨库移动（用户点选：可选目标库 / 预检 / 计划 / 执行 / 回滚）----
+# 与上面的「自动归库」共用 core/migrate.py 里同一台机器（manifest 批次 / 逐条独立 /
+# remap / 回滚），但**入口刻意分开**：自动归库的批次槽位（``last_batch("move")``）与
+# 门禁是第 10 期定下的，用户的点选移动不去占用它，两边的回滚也不会互相按错批次。
+#
+# 全部走 POST：选择集可能几十本、book_id 里带 ``$`` 与哈希，塞进 query string 迟早
+# 撞长度上限；这组接口没有缓存需求，用 body 传更省事。
+
+def _book_move_ids(payload: dict) -> list:
+    """请求体里的 ``book_ids`` → 去重保序的字符串列表（空 / 非法一律 400）。"""
+    ids = (payload or {}).get("book_ids")
+    if not isinstance(ids, list):
+        raise HTTPException(400, "book_ids 必须是数组")
+    out: list = []
+    seen: set = set()
+    for x in ids:
+        s = str(x or "").strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    if not out:
+        raise HTTPException(400, "没有选中的书")
+    return out
+
+
+def _book_move_dst(payload: dict) -> str:
+    """请求体里的目标库 id，立即校验存在性（不存在是客户端错误，400）。"""
+    dst = str((payload or {}).get("dst_library_id") or "").strip()
+    if not dst or not library.get_library(dst):
+        raise HTTPException(400, "目标书库不存在")
+    return dst
+
+
+@app.post("/api/book-move/targets")
+def api_book_move_targets(payload: dict = Body(...)):
+    """**可选的目标库**清单（含相容判定与理由）—— 前端据此置灰并原样显示原因。
+
+    理由由 :func:`migrate.compat_reason` 给出，与 ``/plan`` 拒绝时用的是同一句话：
+    前端置灰说的原因与后端真拒绝的原因不会两样。
+    """
+    return migrate.move_targets(_book_move_ids(payload))
+
+
+@app.post("/api/book-move/preflight")
+def api_book_move_preflight(payload: dict = Body(...)):
+    """逐本预检：「能不能搬 / 为什么不能 / 副本会去哪」。**只读**，正常一律 200。
+
+    这里**不**因为「某本不相容」而报错 —— 预检的职责就是把逐本的理由如实列出来给用户看
+    （让他去掉那一本或换个库）。真正不许发生的事由 ``/plan`` 拦（见下）。
+    """
+    ids = _book_move_ids(payload)
+    dst = _book_move_dst(payload)
+    try:
+        return migrate.move_preview(ids, dst, (payload or {}).get("decisions"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/book-move/plan")
+def api_book_move_plan(payload: dict = Body(...)):
+    """落成批次（只写台账，不搬文件）。
+
+    **相容闸门在这里翻 400**：请求里只要混进一本进不去这个库的书，整批拒绝、不落行 ——
+    不「悄悄搬能搬的那几本」，否则用户会以为全搬好了。前端把不相容的库置灰是体验，
+    这道闸门才是契约（库扫描白名单决定文件在那个库里**根本不出现在书目中**，
+    不是半可见，所以放过去就是把书搬没了）。
+    """
+    ids = _book_move_ids(payload)
+    dst = _book_move_dst(payload)
+    decisions = (payload or {}).get("decisions")
+    try:
+        pv = migrate.move_preview(ids, dst, decisions)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    bad = [i for i in pv["items"] if i.get("blocked_kind") == "compat"]
+    if bad:
+        raise HTTPException(400, f"{len(bad)} 本不能进「{pv['dst_library_name']}」："
+                                 f"{bad[0]['reason']}")
+    try:
+        return migrate.move_plan(ids, dst, decisions)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/book-move/apply")
+async def api_book_move_apply(payload: dict = Body(...)):
+    """执行批次（**真移文件**）：立刻返回 ``task_id``，搬运在后台跑，前端照旧轮询任务行。
+
+    不引入 SSE：进度就是「已完成 / 总数」两个真值，任务表足够表达。
+    """
+    bid = str((payload or {}).get("batch_id") or "").strip()
+    if not bid:
+        raise HTTPException(400, "缺少 batch_id")
+    try:
+        s = migrate.move_summary(bid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if s["direction"] != migrate.DIR_BOOKMOVE:
+        # 自动归库的批次有它自己的执行入口（书库管理页）；从这里执行会把两套语义混起来
+        raise HTTPException(400, "这个批次不是跨库移动，请到「书库管理」执行")
+    tid = uuid.uuid4().hex
+    db.task_create(tid, "bookmove", f"移动到「{s['dst_library_name']}」",
+                   detail=f"{s['src_library_name']} → {s['dst_library_name']} · {s['total']} 本")
+    db.task_prune()
+    asyncio.create_task(_run_book_move(tid, bid, s["total"]))
+    return {"task_id": tid, "batch_id": bid}
+
+
+def _book_move_progress(tid: str, total: int):
+    """逐本进度回调：每搬完一条就把 ``done/total`` 的真实比例写进任务行。
+
+    回调在**工作线程**里跑（``asyncio.to_thread``），写库走 ``db`` 的锁 —— 与刮削工作线程
+    同一套既有做法，不是为了这个功能新开的口子。
+    """
+    def cb(done: int, total_now: int, name: str) -> None:
+        db.task_update(tid, progress=round(done * 100.0 / max(1, total_now), 1),
+                       detail=f"正在移动：{name}")
+    return cb
+
+
+async def _run_book_move(tid: str, batch_id: str, total: int):
+    db.task_update(tid, status="running", progress=0.0)
+    try:
+        res = await asyncio.to_thread(
+            migrate.execute, batch_id,
+            on_row=_book_move_progress(tid, total), watcher=WATCHER)
+    except Exception as e:
+        db.task_update(tid, status="failed", progress=100.0, error=str(e))
+        return
+    # 只报真值：搬了几本、副本跟没跟过来、跳过了几本 —— 三项都是 execute 数出来的
+    parts = [f"移动 {res['moved']} 本"]
+    if res["copies"]:
+        parts.append(f"副本随迁 {res['copies']} 本")
+    if res["copies_left"]:
+        parts.append(f"副本留在原库 {res['copies_left']} 本")
+    if res["skipped"]:
+        parts.append(f"跳过 {res['skipped']} 本")
+    if res["failed"]:
+        parts.append(f"失败 {res['failed']} 本")
+    notice = "、".join(parts)
+    if res["notes"]:
+        notice = f"{notice}；{res['notes'][0]['note']}"
+    if res["failed"]:
+        err = (res["errors"] or [{}])[0].get("error") or "未知原因"
+        db.task_update(tid, status="failed", progress=100.0, notice=notice,
+                       error=f"{res['failed']} 本没搬成：{err}")
+        return
+    # 刻意**不写 result**：任务行在有 result 时会渲染成「下载」按钮，而移动没有产物可下
+    db.task_update(tid, status="done", progress=100.0, notice=notice)
+
+
+@app.post("/api/book-move/rollback")
+def api_book_move_rollback(payload: dict = Body(None)):
+    """一键撤回本次移动（不传 batch_id 则取最近一次跨库移动批次）。
+
+    同步执行：回滚要马上把「文件回来了没 / 副本回来了没」如实答出来，中途状态对用户没有
+    意义。搬回的量级与搬过去相同，都是本地 rename（跨卷时才退化为复制）。
+    """
+    bid = (str((payload or {}).get("batch_id") or "").strip()
+           or migrate.last_batch(migrate.DIR_BOOKMOVE))
+    if not bid:
+        raise HTTPException(400, "没有可回滚的移动批次")
+    try:
+        s = migrate.move_summary(bid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if s["direction"] != migrate.DIR_BOOKMOVE:
+        raise HTTPException(400, "这个批次不是跨库移动")
+    try:
+        return migrate.rollback(bid, watcher=WATCHER)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/book-move/batches")
+def api_book_move_batches(limit: int = 10):
+    """最近的跨库移动批次 —— 书架的「撤销本次移动」条用它（带 real 计数）。"""
+    return {"items": migrate.move_batches(limit)}
+
+
 # ---------------- 收藏夹（用户自建，持久化于 SQLite）----------------
 
 @app.get("/api/collections")

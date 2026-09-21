@@ -367,3 +367,205 @@ def test_回滚把副本与关联数据一起带回来(env):
         "原库成品目录里不多不少就这一份"
     assert db.scrape_get(new_id) is None
     assert [b["id"] for b in library.books() if b["name"] == "三体.epub"] == [old_id]
+
+
+# ---------------------------------------------------------------------------
+# 接口层：可选目标库 / 预检 / 计划 / 执行 / 回滚
+# ---------------------------------------------------------------------------
+# 两条纪律在接口层要**再成立一次**：
+#
+# 1. **相容闸门后端必须自己拦**（前端把不相容的库置灰只是体验）——
+#    请求里混进一本进不去这个库的书，整批 400，不许「悄悄搬能搬的那几本」；
+# 2. 任务行报的进度与结果**都是真值**：``done/total`` 逐本回调，结果抄 ``execute``
+#    数出来的数；``result`` 刻意留空（有它前端就会渲染成「下载」按钮，而移动没有产物）。
+
+def _move(client, headers, url, **payload):
+    return client.post(url, headers=headers, json=payload)
+
+
+def _wait_task(client, headers, tid, timeout: float = 10.0) -> dict:
+    """等后台任务走到终态。搬运是本地 rename，毫秒级结束；这个上界只为兜底。"""
+    import time
+    end = time.time() + timeout
+    while time.time() < end:
+        row = client.get(f"/api/tasks/{tid}", headers=headers).json()
+        if row.get("status") in ("done", "failed"):
+            return row
+        time.sleep(0.02)
+    raise AssertionError(f"任务 {tid} 超时未结束：{row}")
+
+
+def test_可选目标库带相容判定与理由(client, auth_headers, env):
+    """目标库清单：不相容的置灰，理由与真搬被拒时**逐字相同**（同一份 ``compat_reason``）。"""
+    _epub(env["a"]["root"], "三体.epub")
+    bid = _book(env["a"], "三体.epub")["id"]
+
+    r = _move(client, auth_headers, "/api/book-move/targets", book_ids=[bid])
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["total_books"] == 1 and body["missing_books"] == 0
+    assert body["source_library_id"] == "a"
+    libs = {i["id"]: i for i in body["items"]}
+    assert libs["b"]["compatible"] is True and libs["b"]["reason"] == ""
+    assert libs["a"]["same_as_source"] is True, "源库自己也在清单里（由前端决定藏或置灰）"
+    assert libs["audio"]["compatible"] is False and libs["audio"]["blocked_count"] == 1
+    assert "EPUB" in libs["audio"]["reason"]
+    # 与真拒绝说的是同一句（不新写第二处相容表 → 也就不会说两样的话）
+    r = _move(client, auth_headers, "/api/book-move/plan",
+              book_ids=[bid], dst_library_id="audio")
+    assert r.status_code == 400
+    assert libs["audio"]["reason"] in r.json()["detail"]
+
+
+def test_预检逐本条列理由_计划才整批拦(client, auth_headers, env):
+    """预检 200 逐本说理由（用户据此去掉那一本）；计划一律 400 —— 契约在后端。"""
+    _epub(env["a"]["root"], "三体.epub")
+    bid = _book(env["a"], "三体.epub")["id"]
+
+    pv = _move(client, auth_headers, "/api/book-move/preflight",
+               book_ids=[bid], dst_library_id="audio")
+    assert pv.status_code == 200, "预检的职责就是把理由列出来，不是报错"
+    item = pv.json()["items"][0]
+    assert item["status"] == "blocked" and item["blocked_kind"] == "compat"
+    assert "EPUB" in item["reason"]
+
+    r = _move(client, auth_headers, "/api/book-move/plan",
+              book_ids=[bid], dst_library_id="audio")
+    assert r.status_code == 400
+    assert "不能进" in r.json()["detail"]
+    # 真的没落行（不是「报了 400 却偷偷建了批次」）
+    assert db.migration_batches(5) == []
+
+
+def test_计划到执行_任务行报真值与真进度(client, auth_headers, env):
+    _epub(env["a"]["root"], "三体.epub")
+    old = _book(env["a"], "三体.epub")
+    row = _publish(env["a"], "三体.epub")
+    old_rel = row["link_rel"]
+    db.set_progress(old["id"], 5, 20.0)
+
+    planned = _move(client, auth_headers, "/api/book-move/plan",
+                    book_ids=[old["id"]], dst_library_id="b")
+    assert planned.status_code == 200, planned.text
+    batch_id = planned.json()["batch_id"]
+    new_rel = planned.json()["items"][0]["copy"]["new_copy"]
+
+    r = _move(client, auth_headers, "/api/book-move/apply", batch_id=batch_id)
+    assert r.status_code == 200, r.text
+    t = _wait_task(client, auth_headers, r.json()["task_id"])
+    assert t["status"] == "done", t
+    assert t["progress"] == 100.0 and t["type"] == "bookmove"
+    assert t["notice"] == "移动 1 本、副本随迁 1 本", t["notice"]
+    assert t["result"] == "", "移动没有产物可下，result 留空（否则前端渲染成下载按钮）"
+
+    new_id = library.book_id("三体.epub", "b")
+    library.invalidate()
+    assert (env["b"]["root"] / "三体.epub").is_file()
+    assert not (env["a"]["root"] / "三体.epub").exists()
+    assert (env["b"]["pdir"] / new_rel).is_file(), "预览说的副本落点就是落盘的那一个"
+    assert not (env["a"]["pdir"] / old_rel).exists()
+    assert db.get_progress(new_id)["locator"] == 5
+    assert [b["id"] for b in library.books("b") if b["name"] == "三体.epub"] == [new_id]
+
+
+def test_冲突用建议名移入(client, auth_headers, env):
+    """目标库已有同名文件：拒绝覆盖 → 用户选「用建议名移入」→ 搬过去，原文件不动。"""
+    _epub(env["a"]["root"], "三体.epub")
+    _epub(env["b"]["root"], "三体.epub")
+    bid = _book(env["a"], "三体.epub")["id"]
+
+    pv = _move(client, auth_headers, "/api/book-move/preflight",
+               book_ids=[bid], dst_library_id="b").json()
+    item = pv["items"][0]
+    assert item["status"] == "conflict" and item["suggest"] == "三体 (2).epub"
+    # 不给处置 → 冲突条目不进计划
+    assert _move(client, auth_headers, "/api/book-move/plan",
+                 book_ids=[bid], dst_library_id="b").json()["batch_id"] == ""
+    # 跳过 → 也不进
+    assert _move(client, auth_headers, "/api/book-move/plan", book_ids=[bid],
+                 dst_library_id="b",
+                 decisions=[{"id": bid, "action": "skip"}]).json()["batch_id"] == ""
+    # 用建议名移入 → 搬
+    planned = _move(client, auth_headers, "/api/book-move/plan", book_ids=[bid],
+                    dst_library_id="b",
+                    decisions=[{"id": bid, "action": "rename",
+                                "new_name": item["suggest"]}]).json()
+    assert planned["batch_id"], planned
+    r = _move(client, auth_headers, "/api/book-move/apply", batch_id=planned["batch_id"])
+    assert _wait_task(client, auth_headers, r.json()["task_id"])["status"] == "done"
+
+    library.invalidate()
+    assert (env["b"]["root"] / "三体 (2).epub").is_file()
+    assert (env["b"]["root"] / "三体.epub").read_bytes() != b"", "目标库原有的那本不许被覆盖"
+    assert not (env["a"]["root"] / "三体.epub").exists()
+
+
+def test_任务行进度按真实条数换算(client, auth_headers, env):
+    """进度是 ``已完成 / 总数`` 的真值 —— 不写死里程碑、不估百分比。"""
+    from novelforge import server
+    db.task_create("t-prog", "bookmove", "移动到「乙库」")
+    cb = server._book_move_progress("t-prog", 4)
+    cb(1, 4, "三体.epub")
+    row = client.get("/api/tasks/t-prog", headers=auth_headers).json()
+    assert row["progress"] == 25.0
+    assert "三体.epub" in row["detail"]
+    cb(4, 4, "流浪地球.epub")
+    assert client.get("/api/tasks/t-prog", headers=auth_headers).json()["progress"] == 100.0
+
+
+def test_参数不对一律400(client, auth_headers, env):
+    _epub(env["a"]["root"], "三体.epub")
+    bid = _book(env["a"], "三体.epub")["id"]
+
+    assert _move(client, auth_headers, "/api/book-move/targets",
+                 book_ids=[]).status_code == 400
+    assert _move(client, auth_headers, "/api/book-move/targets",
+                 book_ids="三体.epub").status_code == 400
+    assert _move(client, auth_headers, "/api/book-move/preflight",
+                 book_ids=[bid], dst_library_id="没有这个库").status_code == 400
+    assert _move(client, auth_headers, "/api/book-move/apply",
+                 batch_id="不存在的批次").status_code == 400
+    assert _move(client, auth_headers, "/api/book-move/rollback",
+                 batch_id="不存在的批次").status_code == 400
+
+
+def test_执行别的方向的批次要被拒(client, auth_headers, env):
+    """自动归库的批次有它自己的执行入口，从这里执行会把两套语义混起来。"""
+    _epub(env["a"]["root"], "三体.epub")
+    bid = _book(env["a"], "三体.epub")["id"]
+    db.migration_add("auto-1", migrate.DIR_AUTO, "a",
+                     str(env["a"]["root"] / "三体.epub"),
+                     str(env["b"]["root"] / "三体.epub"))
+    assert bid
+    for url in ("/api/book-move/apply", "/api/book-move/rollback"):
+        r = _move(client, auth_headers, url, batch_id="auto-1")
+        assert r.status_code == 400 and "不是跨库移动" in r.json()["detail"], r.text
+
+
+def test_批次列表只列跨库移动且可撤销(client, auth_headers, env):
+    _epub(env["a"]["root"], "三体.epub")
+    old = _book(env["a"], "三体.epub")
+    row = _publish(env["a"], "三体.epub")
+    planned = _move(client, auth_headers, "/api/book-move/plan",
+                    book_ids=[old["id"]], dst_library_id="b").json()
+    r = _move(client, auth_headers, "/api/book-move/apply", batch_id=planned["batch_id"])
+    assert _wait_task(client, auth_headers, r.json()["task_id"])["status"] == "done"
+    # 自动归库的批次不该出现在这里（它有书库管理页自己的入口）
+    db.migration_add("auto-1", migrate.DIR_AUTO, "a", str(env["a"]["root"] / "三体.epub"),
+                     str(env["b"]["root"] / "三体.epub"))
+
+    items = client.get("/api/book-move/batches", headers=auth_headers).json()["items"]
+    assert [i["batch_id"] for i in items] == [planned["batch_id"]]
+    assert items[0]["label"] == "甲库 → 乙库"
+    assert items[0]["done"] == 1 and items[0]["can_rollback"] is True
+
+    r = _move(client, auth_headers, "/api/book-move/rollback", batch_id=planned["batch_id"])
+    assert r.status_code == 200, r.text
+    assert r.json()["restored"] == 1 and r.json()["copies"] == 1
+    library.invalidate()
+    assert (env["a"]["root"] / "三体.epub").is_file()
+    assert not (env["b"]["root"] / "三体.epub").exists()
+    assert not (env["b"]["pdir"] / row["link_rel"]).exists(), "副本也要带回来"
+    assert db.scrape_get(old["id"]) is not None
+    assert client.get("/api/book-move/batches",
+                      headers=auth_headers).json()["items"][0]["can_rollback"] is False
