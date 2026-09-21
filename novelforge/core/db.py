@@ -3,7 +3,8 @@
 设计要点：
 - 数据库文件落在 ``config.DATA_DIR/novelforge.db``（NAS 持久卷，零额外服务）。
 - 全进程共享一个连接（check_same_thread=False + 写锁），单机单用户足够。
-- 表：users（轻登录账号）、progress（每本书当前阅读位置）、annotations（高亮/笔记）。
+- 表：users（轻登录账号）、progress（每本书当前阅读位置）、annotations（高亮/笔记）、
+  bookmarks（书签，与批注同构的软删除 + 位置去重）。
 """
 import ast
 import hashlib
@@ -93,6 +94,25 @@ def init():
                 created_at REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_anno_book ON annotations(book_id);
+            -- 书签（第 34 期）：软删除语义与批注**同构**（删除 = 移入垃圾桶写 deleted_at，
+            -- 真删走独立的 purge 出口）。两处只属于书签的口径：
+            --   · UNIQUE(book_id, anchor) ⇒ **同一位置不会产生第二条**（位置去重）；
+            --   · 墓碑行（deleted_at != 0）留在原地，同位置再加书签时**复活那一行**
+            --     而不是插新行（上游 bookmark.service.ts 的 tombstone 语义）。
+            -- updated_at 是**并发合并**的比较基准（客户端回传它看到的版本，服务端据此判谁新）。
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                id         INTEGER PRIMARY KEY,
+                book_id    TEXT NOT NULL,
+                anchor     TEXT NOT NULL,
+                chapter    INTEGER NOT NULL DEFAULT 0,
+                percent    REAL NOT NULL DEFAULT 0,
+                label      TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                deleted_at REAL NOT NULL DEFAULT 0,
+                UNIQUE(book_id, anchor)
+            );
+            CREATE INDEX IF NOT EXISTS idx_bookmark_book ON bookmarks(book_id);
             CREATE TABLE IF NOT EXISTS collections (
                 id         INTEGER PRIMARY KEY,
                 name       TEXT UNIQUE NOT NULL,
@@ -639,6 +659,191 @@ def trashed_annotations(book_id: str | None = None) -> list:
         args = (book_id,)
     rows = c.execute(sql + " ORDER BY deleted_at DESC", args).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------------- 书签（第 34 期）----------------
+# 软删除语义照抄批注那一套（第 27 期）：删除 = 移入垃圾桶（写 deleted_at），
+# 真删是独立出口 ``purge_bookmark``，且**只肯删垃圾桶里的条目**。
+#
+# 与批注的两处差异都是**书签本身的性质**，不是新机制：
+#   1. **位置去重**：``UNIQUE(book_id, anchor)`` —— 同一个位置反复加书签只会有一条；
+#   2. **tombstone 复活**：位置被删过（墓碑行还在），再加同位置是「复活那一行」，
+#      于是它的 created_at 得以保留（用户看到的是「还是原来那个书签」）。
+#
+# **并发冲突合并**用一个版本戳做乐观并发：客户端回传它看到的那一版 ``updated_at``，
+# 服务端拿它跟库里现值比 —— 库里更新 ⇒ 服务端胜（``applied=False``，把服务端版本回给
+# 客户端让它自己合并），否则落库。**比较只用服务端时钟**（客户端给的是「我基于哪一版」，
+# 不是它自己的当前时间），否则两端时钟一歪就会误判。
+
+_BOOKMARK_COLS = ("id, book_id, anchor, chapter, percent, label, "
+                  "created_at, updated_at, deleted_at")
+
+
+def _bookmark_out(row) -> dict:
+    return {
+        "id": int(row["id"]),
+        "book_id": row["book_id"],
+        "anchor": row["anchor"],
+        "chapter": int(row["chapter"]),
+        "percent": float(row["percent"]),
+        "label": row["label"] or "",
+        "created_at": float(row["created_at"]),
+        "updated_at": float(row["updated_at"]),
+        "deleted_at": float(row["deleted_at"]),
+    }
+
+
+def list_bookmarks(book_id: str) -> list:
+    """某本书的**活跃**书签（按章序 / 位置升序；垃圾桶条目不在内）。"""
+    rows = _connect().execute(
+        "SELECT %s FROM bookmarks WHERE book_id=? AND deleted_at=0 "
+        "ORDER BY chapter, percent, id" % _BOOKMARK_COLS,
+        (str(book_id),),
+    ).fetchall()
+    return [_bookmark_out(r) for r in rows]
+
+
+def trashed_bookmarks(book_id: str | None = None) -> list:
+    """垃圾桶里的书签（``deleted_at`` 倒序 = 最近丢弃的在前）。"""
+    c = _connect()
+    sql = "SELECT %s FROM bookmarks WHERE deleted_at!=0" % _BOOKMARK_COLS
+    args: tuple = ()
+    if book_id is not None:
+        sql += " AND book_id=?"
+        args = (str(book_id),)
+    rows = c.execute(sql + " ORDER BY deleted_at DESC", args).fetchall()
+    return [_bookmark_out(r) for r in rows]
+
+
+def bookmark_counts() -> dict:
+    """每本书的**活跃**书签数（垃圾桶不计入）。"""
+    rows = _connect().execute(
+        "SELECT book_id, COUNT(*) AS n FROM bookmarks WHERE deleted_at=0 GROUP BY book_id"
+    ).fetchall()
+    return {r["book_id"]: r["n"] for r in rows}
+
+
+def _bookmark_apply(c, row, percent, chapter, label) -> dict:
+    """把一次写入落到既有行上（活跃行更新 / 墓碑行复活），返回出参。"""
+    now = time.time()
+    c.execute(
+        "UPDATE bookmarks SET deleted_at=0, percent=?, chapter=?, label=?, updated_at=? WHERE id=?",
+        (float(percent), int(chapter), str(label or ""), now, int(row["id"])),
+    )
+    c.commit()
+    out = _bookmark_out(row)
+    out.update({"percent": float(percent), "chapter": int(chapter),
+                "label": str(label or ""), "updated_at": now, "deleted_at": 0.0})
+    return out
+
+
+def save_bookmark(book_id: str, anchor: str, percent: float = 0.0, chapter: int = 0,
+                  label: str = "", base_updated_at: float = 0.0) -> dict:
+    """加书签 / 复活墓碑 / 合并冲突 —— 一个入口对应一条 ``UNIQUE(book_id, anchor)`` 行。
+
+    返回 ``{ok, id, created, revived, applied, server}``：
+
+    - ``created`` 新插入了一行；``revived`` 复活了同位置的墓碑行；
+      两者皆 False ⇒ 同位置本来就有活跃书签（**不产生第二条**）；
+    - ``applied=False`` ⇒ 并发冲突且**服务端更新**，库里未被改写，
+      ``server`` 是服务端现值（客户端据此合并本地状态）。
+      注意：此时若 ``server.deleted_at != 0``，说明那条书签在客户端快照之后被删了。
+    """
+    bid, pos = str(book_id), str(anchor or "").strip()
+    if not pos:
+        raise ValueError("anchor 不能为空")
+    c = _connect()
+    with _lock:
+        row = c.execute(
+            "SELECT %s FROM bookmarks WHERE book_id=? AND anchor=?" % _BOOKMARK_COLS, (bid, pos)
+        ).fetchone()
+        base = float(base_updated_at or 0.0)
+        if row is None:
+            now = time.time()
+            cur = c.execute(
+                "INSERT INTO bookmarks(book_id, anchor, chapter, percent, label, "
+                "created_at, updated_at) VALUES(?,?,?,?,?,?,?)",
+                (bid, pos, int(chapter), float(percent), str(label or ""), now, now),
+            )
+            c.commit()
+            return {
+                "ok": True, "id": int(cur.lastrowid or 0), "created": True,
+                "revived": False, "applied": True,
+                "server": {"id": int(cur.lastrowid or 0), "book_id": bid, "anchor": pos,
+                           "chapter": int(chapter), "percent": float(percent),
+                           "label": str(label or ""), "created_at": now,
+                           "updated_at": now, "deleted_at": 0.0},
+            }
+        # 库里已有同位置的行：客户端带着旧版本回来 ⇒ 服务端胜，不覆盖
+        if base and base < float(row["updated_at"]):
+            return {"ok": True, "id": int(row["id"]), "created": False,
+                    "revived": False, "applied": False, "server": _bookmark_out(row)}
+        revived = float(row["deleted_at"]) != 0
+        server = _bookmark_apply(c, row, percent, chapter, label)
+        return {"ok": True, "id": int(row["id"]), "created": False,
+                "revived": revived, "applied": True, "server": server}
+
+
+def update_bookmark(book_id: str, bookmark_id: int, label=None, percent=None, chapter=None,
+                    base_updated_at: float = 0.0) -> dict:
+    """改书签的备注 / 位置（**只对活跃条目**）。并发口径同 :func:`save_bookmark`。"""
+    bid = str(book_id)
+    c = _connect()
+    with _lock:
+        row = c.execute(
+            "SELECT %s FROM bookmarks WHERE id=? AND book_id=? AND deleted_at=0" % _BOOKMARK_COLS,
+            (int(bookmark_id), bid),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "found": False}
+        base = float(base_updated_at or 0.0)
+        if base and base < float(row["updated_at"]):
+            return {"ok": True, "found": True, "applied": False, "server": _bookmark_out(row)}
+        server = _bookmark_apply(
+            c, row,
+            row["percent"] if percent is None else percent,
+            row["chapter"] if chapter is None else chapter,
+            row["label"] if label is None else label,
+        )
+        return {"ok": True, "found": True, "applied": True, "server": server}
+
+
+def delete_bookmark(book_id: str, bookmark_id: int) -> int:
+    """**软删除**：移入垃圾桶。返回受影响行数；0 = 不存在或本就在垃圾桶里。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "UPDATE bookmarks SET deleted_at=?, updated_at=? "
+            "WHERE id=? AND book_id=? AND deleted_at=0",
+            (time.time(), time.time(), int(bookmark_id), str(book_id)),
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
+def restore_bookmark(book_id: str, bookmark_id: int) -> int:
+    """从垃圾桶恢复。返回受影响行数；0 = 不存在或本就不在垃圾桶里。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "UPDATE bookmarks SET deleted_at=0, updated_at=? "
+            "WHERE id=? AND book_id=? AND deleted_at!=0",
+            (time.time(), int(bookmark_id), str(book_id)),
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
+def purge_bookmark(book_id: str, bookmark_id: int) -> int:
+    """**彻底删除**（真 DELETE），且**只允许删垃圾桶里的条目**（与批注同一条纪律）。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "DELETE FROM bookmarks WHERE id=? AND book_id=? AND deleted_at!=0",
+            (int(bookmark_id), str(book_id)),
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
 
 
 # ---------------- 收藏夹 ----------------
@@ -1285,14 +1490,14 @@ def unlock_achievement(key) -> bool:
 # ---------------- 孤儿记录（引用了已不存在的书的行）----------------
 # 上游 Maintenance 页把这类东西叫 orphans。本项目的对应物不是「孤儿封面目录」
 # （封面在 EPUB 内部，没有独立目录），而是**引用了已消失书籍的数据库行**：
-# 书从 OUTPUT_DIR 移走后，progress / annotations / reading_sessions / collection_items
-# 里仍留着它的行 —— 界面上再也走不到，却一直占着库。
+# 书从 OUTPUT_DIR 移走后，progress / annotations / bookmarks / reading_sessions /
+# collection_items 里仍留着它的行 —— 界面上再也走不到，却一直占着库。
 #
 # ⚠️ 清理是**不可恢复**的，但这些行的 key 是文件名派生的 book_id，
 #    所以如果把同一个文件放回 OUTPUT_DIR，进度与批注会**重新关联上**。
 #    也就是说：清理掉的是「可能还有用」的数据，因此必须由用户显式确认。
 
-ORPHAN_TABLES = ("progress", "annotations", "collection_items", "reading_sessions")
+ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "collection_items", "reading_sessions")
 
 
 def book_id_refs() -> dict:
@@ -1343,15 +1548,39 @@ def delete_orphans(orphans: dict) -> dict:
 #: koreader_docs：ratings / reading_status 在删书时会主动清理，但改名时同样必须跟着走；
 #: koreader_docs 是 KOReader 进度映射，id 换了必须一起搬，否则 KOReader 关联全断）。
 REMAP_TABLES = (
-    "progress", "annotations", "collection_items", "reading_sessions",
+    "progress", "annotations", "bookmarks", "collection_items", "reading_sessions",
     "ratings", "reading_status", "koreader_docs",
 )
 
-#: 「新 id 是否已有数据」这个探测要**按表**加过滤：annotations 第 27 期起有软删除，
+#: 「新 id 是否已有数据」这个探测要**按表**加过滤：annotations 第 27 期起有软删除、
+#: bookmarks 第 34 期起同样有（两者都是「删除=移入垃圾桶」），
 #: 新 id 上只躺着**垃圾桶**条目时不该算作「已有数据」—— 否则整张表被跳过搬迁，
-#: 旧 id 的**活跃**批注会被搁浅成孤儿（静默丢失，不报错）。
+#: 旧 id 的**活跃**条目会被搁浅成孤儿（静默丢失，不报错）。
 #: ⚠️ 搬迁本身（UPDATE）**不加**这个谓词：活跃与垃圾桶条目都属于同一本书，都该跟着走。
-REMAP_PROBE_FILTER = {"annotations": " AND deleted_at=0"}
+REMAP_PROBE_FILTER = {"annotations": " AND deleted_at=0", "bookmarks": " AND deleted_at=0"}
+
+
+def _remap_bookmarks(c, old: str, new: str) -> int:
+    """书签的搬迁**必须逐行做**：``UNIQUE(book_id, anchor)`` 让整体 UPDATE 会撞唯一约束。
+
+    撞上时整条 UPDATE 抛异常、被外层 ``except`` 吞成「搬了 0 行」—— 旧书签静默丢失。
+    所以这里逐行搬：同位置已经有行就**先扔掉那一条再搬**。
+
+    走到这里时目标 id 上**没有活跃书签**（有的话整张表已被探测跳过），
+    故冲突方只可能是**墓碑**：它记录的是「这个位置曾被删过」，
+    而旧 id 上那条（活跃或墓碑）是更完整的历史，让位即可。
+    """
+    moved = 0
+    rows = c.execute("SELECT id, anchor FROM bookmarks WHERE book_id=?", (old,)).fetchall()
+    for row in rows:
+        clash = c.execute(
+            "SELECT id FROM bookmarks WHERE book_id=? AND anchor=?", (new, row["anchor"])
+        ).fetchone()
+        if clash:
+            c.execute("DELETE FROM bookmarks WHERE id=?", (int(clash["id"]),))
+        cur = c.execute("UPDATE bookmarks SET book_id=? WHERE id=?", (new, int(row["id"])))
+        moved += int(cur.rowcount or 0)
+    return moved
 
 
 def remap_book_id(old_id, new_id) -> dict:
@@ -1359,7 +1588,8 @@ def remap_book_id(old_id, new_id) -> dict:
 
     某张表在 ``new_id`` 上**已有数据**时该表跳过：那通常意味着目标文件名上已经有
     一本书的历史（用户先删旧文件、又放了同名新文件），覆盖会张冠李戴 ——
-    宁可少搬，不可错搬。
+    宁可少搬，不可错搬。**例外是 bookmarks**（见 :func:`_remap_bookmarks`）：
+    它有唯一索引，整体 UPDATE 会直接抛异常被吞掉，只能逐行搬。
     """
     old, new = str(old_id), str(new_id)
     if not old or not new or old == new:
@@ -1375,6 +1605,9 @@ def remap_book_id(old_id, new_id) -> dict:
                 ).fetchone()
                 if exists:
                     moved[t] = 0
+                    continue
+                if t == "bookmarks":
+                    moved[t] = _remap_bookmarks(c, old, new)
                     continue
                 cur = c.execute(
                     "UPDATE %s SET book_id=? WHERE book_id=?" % t, (new, old)

@@ -20,9 +20,17 @@ def test_有声书库能力集():
 
 def test_电子书库能力集():
     got = set(features.features_for("ebook"))
-    assert {"ebook", "pdf", "annotations", "metadata", "authors",
+    assert {"ebook", "pdf", "annotations", "bookmarks", "metadata", "authors",
             "convert", "sources", "komga"} <= got
     assert "comic" not in got and "audio" not in got
+
+
+def test_书签与批注同档只给文字阅读器的库():
+    # 书签长在文字阅读器里：漫画（ComicReader）/ 有声书（播放器）没有这个入口
+    assert "bookmarks" in features.features_for("ebook")
+    assert "bookmarks" in features.features_for("mixed")
+    assert "bookmarks" not in features.features_for("comic")
+    assert "bookmarks" not in features.features_for("audiobook")
 
 
 def test_元数据抓取能力覆盖电子书漫画与有声书():

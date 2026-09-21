@@ -1707,6 +1707,91 @@ def api_purge_annotation(bid: str, aid: int):
     return {"ok": True}
 
 
+# ---------------- 书签（第 34 期）----------------
+# 三条与批注不同的口径，都在 db 层实现，这里只做参数搬运与错误码：
+#   · **位置去重 + 墓碑复活**：同位置反复加书签恒为同一条；删过再加是「复活那一行」
+#     （`revived=True`，created_at 得以保留）；
+#   · **并发合并**：客户端回传 `updated_at`（它看到的那一版）⇒ 库里更新则服务端胜，
+#     `applied=False` 并把服务端现值回给客户端；
+#   · 删除仍是**软删除**（移入垃圾桶），真删走 `/purge`。
+
+@app.get("/api/books/{bid}/bookmarks")
+def api_list_bookmarks(bid: str, include_trashed: int = 0):
+    """某本书的书签。默认只给活跃条目；``include_trashed=1`` 时额外给 ``trashed``。"""
+    active = db.list_bookmarks(bid)
+    out = {"items": active, "total": len(active)}
+    if include_trashed:
+        out["trashed"] = db.trashed_bookmarks(bid)
+    return out
+
+
+@app.post("/api/books/{bid}/bookmarks")
+def api_add_bookmark(bid: str, payload: dict = Body(...)):
+    """加书签（或复活同位置的墓碑 / 合并并发冲突）。
+
+    ``anchor`` 是**位置锚**（前端按「章序号 + 章内归一化位置」生成），它是去重键：
+    传同一个 anchor 绝不会产生第二条书签。
+    """
+    try:
+        percent = float(payload.get("percent", 0.0) or 0.0)
+        chapter = int(payload.get("chapter", 0) or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "chapter/percent 必须为数字")
+    try:
+        return db.save_bookmark(
+            bid,
+            str(payload.get("anchor", "") or ""),
+            percent=percent,
+            chapter=chapter,
+            label=str(payload.get("label", "") or ""),
+            base_updated_at=float(payload.get("updated_at", 0.0) or 0.0),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch("/api/books/{bid}/bookmarks/{bmid}")
+def api_update_bookmark(bid: str, bmid: int, payload: dict = Body(...)):
+    """改备注 / 位置（只对活跃书签）。并发口径同 POST。"""
+    try:
+        res = db.update_bookmark(
+            bid, bmid,
+            label=payload.get("label"),
+            percent=payload.get("percent"),
+            chapter=payload.get("chapter"),
+            base_updated_at=float(payload.get("updated_at", 0.0) or 0.0),
+        )
+    except (TypeError, ValueError):
+        raise HTTPException(400, "chapter/percent 必须为数字")
+    if not res.get("found"):
+        raise HTTPException(404, "书签不存在或已在垃圾桶中")
+    return res
+
+
+@app.delete("/api/books/{bid}/bookmarks/{bmid}")
+def api_delete_bookmark(bid: str, bmid: int):
+    """**移入垃圾桶**（软删除），不是真删；彻底删除走 `/purge`。"""
+    n = db.delete_bookmark(bid, bmid)
+    return {"ok": True, "trashed": n > 0}
+
+
+@app.post("/api/books/{bid}/bookmarks/{bmid}/restore")
+def api_restore_bookmark(bid: str, bmid: int):
+    n = db.restore_bookmark(bid, bmid)
+    if not n:
+        raise HTTPException(404, "书签不存在或不在垃圾桶中")
+    return {"ok": True}
+
+
+@app.delete("/api/books/{bid}/bookmarks/{bmid}/purge")
+def api_purge_bookmark(bid: str, bmid: int):
+    """彻底删除（不可恢复）。**只允许删垃圾桶里的条目** —— 与批注同一条纪律。"""
+    n = db.purge_bookmark(bid, bmid)
+    if not n:
+        raise HTTPException(400, "只能彻底删除垃圾桶中的书签（该条目不存在或仍为活跃状态）")
+    return {"ok": True}
+
+
 # ---------------- 系列（浏览 / 系列详情）----------------
 # 系列名来自 EPUB 元数据（见 library.series_list），**没有独立实体表**；
 # 系列级元数据（简介 / 出版社 / 首发年 / 题材）另存 `series_meta` 表（第 12 期 C3）。

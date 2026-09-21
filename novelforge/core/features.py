@@ -26,6 +26,7 @@ FEATURE_LABELS = {
     "comic": "漫画阅读",
     "audio": "有声书播放",
     "annotations": "批注",
+    "bookmarks": "书签",
     "metadata": "元数据抓取",
     "authors": "作者元数据",
     "convert": "本地转换（TXT → EPUB）",
@@ -52,13 +53,15 @@ _COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"
 #:   · 本地转换产出 EPUB → 仅 ebook
 #:   · 书源下载产出 EPUB → 仅 ebook
 #:   · Komga 布局整理针对系列化目录（电子书 / 漫画）→ ebook + comic
+#:   · 批注与书签都长在**文字阅读器**里（漫画 / PDF 是另外两个阅读器、有声书是播放器）
+#:     → 与 annotations 同一档：仅 ebook / mixed
 FEATURES_BY_TYPE = {
-    "ebook": _COMMON | {"ebook", "pdf", "annotations", "metadata", "authors",
+    "ebook": _COMMON | {"ebook", "pdf", "annotations", "bookmarks", "metadata", "authors",
                         "convert", "sources", "komga"},
     "comic": _COMMON | {"comic", "metadata", "komga"},
     "audiobook": _COMMON | {"audio", "metadata"},
-    "mixed": _COMMON | {"ebook", "pdf", "comic", "audio", "annotations", "metadata",
-                        "authors", "convert", "sources", "komga"},
+    "mixed": _COMMON | {"ebook", "pdf", "comic", "audio", "annotations", "bookmarks",
+                        "metadata", "authors", "convert", "sources", "komga"},
 }
 
 #: 全部能力的并集（「全部书库」与未知类型都用它）
