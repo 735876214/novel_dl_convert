@@ -1419,6 +1419,11 @@ export interface SimilarBook {
   series_index: string
   cover_url: string
   has_cover: boolean
+  /**
+   * **0–1 的加权总分**（第 35 期起；此前是 3.0 / 2.0 这样的裸分值）。
+   * 口径：0.5·元数据余弦 + 0.1·同作者 + 0.25·题材 Jaccard + 0.1·同系列 + 0.05·评分接近度。
+   * 界面只用 `reasons` 解释「为什么相似」，不展示这个数（换口径不会影响观感）。
+   */
   score: number
   reasons: string[]
 }
@@ -2387,7 +2392,10 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  /** 相似书：内容重合度派生（同作者 / 题材 / 同系列），得分为 0 的不返回 */
+  /**
+   * 相似书：五路加权打分派生（第 35 期）。至少要有一条实质重合（同作者 / 题材 / 同系列）
+   * 才返回；``limit`` 上限 25（后端 Query 会拦，超过即 422）。
+   */
   similarBooks: (bid: string, limit = 6) =>
     request<{ items: SimilarBook[] }>(`/api/books/${encodeURIComponent(bid)}/similar?limit=${limit}`),
 

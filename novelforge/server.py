@@ -1769,10 +1769,14 @@ def api_set_review(bid: str, payload: dict = Body(...)):
 
 
 @app.get("/api/books/{bid}/similar")
-def api_similar(bid: str, limit: int = Query(6, ge=1, le=24)):
-    """相似书：内容重合度派生（同作者 / 题材 / 同系列），不落库。
+def api_similar(bid: str, limit: int = Query(6, ge=1, le=25)):
+    """相似书：五路加权打分（第 35 期），纯派生、不落库、不额外查库。
 
-    得分为 0 的书不返回 —— 毫无关系的推荐只会消耗界面的信任。
+    打分与「该不该出现」的门槛都在 ``core/recommend.py``：至少要有一条实质重合
+    （同作者 / 共同题材 / 同系列），否则不返回 —— 毫无关系的推荐只会消耗界面的信任。
+
+    ``limit`` 默认 6、**上限 25**（第 35 期对齐上游）：详情页先显示 6 条，
+    点「查看全部」再按 25 要一次。
     """
     return {"items": recommend.similar_books(bid, library.books(), limit)}
 

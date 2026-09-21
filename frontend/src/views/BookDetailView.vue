@@ -145,11 +145,27 @@ const volumes = computed(() => {
 
 const files = computed(() => detail.value?.files ?? [])
 
-// 相似书：内容重合度派生（同作者 / 题材 / 同系列）。无信号时后端返回空，整块不显示。
+// 相似书：五路加权打分派生（第 35 期）。至少要有一条实质重合（同作者 / 题材 / 同系列）
+// 才会返回，所以无信号时后端给空数组 —— 整块不显示，不摆一个空壳。
+// 条数：先要 6 条（详情页的观感），点「查看全部」再按上限 25 拉一次；不满 6 条说明没有更多。
+const SIMILAR_PREVIEW = 6
+/** 与后端 `core/recommend.MAX_LIMIT` 对齐（改一处要改两处：这是接口上限，不是随便取的数） */
+const SIMILAR_ALL = 25
 const similar = ref<SimilarBook[]>([])
+const similarExpanded = ref(false)
 function loadSimilar(id: string): void {
   similar.value = []
-  api.similarBooks(id).then((r) => (similar.value = r.items)).catch(() => {})
+  similarExpanded.value = false
+  api.similarBooks(id, SIMILAR_PREVIEW).then((r) => (similar.value = r.items)).catch(() => {})
+}
+/** 展开到上限。拉失败就保持现状 —— 不把 preview 的 6 条清掉假装展开过 */
+async function expandSimilar(): Promise<void> {
+  try {
+    similar.value = (await api.similarBooks(bookId.value, SIMILAR_ALL)).items
+    similarExpanded.value = true
+  } catch {
+    /* 保持现状 */
+  }
 }
 loadSimilar(bookId.value)
 watch(bookId, loadSimilar)
@@ -469,6 +485,15 @@ onMounted(async () => {
                 <span class="block truncate text-[12.5px] text-foreground">{{ s.title }}</span>
                 <span class="block truncate text-[11px] text-muted-foreground">{{ s.reasons.join(' · ') }}</span>
               </span>
+            </button>
+            <!-- 满 6 条才可能有更多（不满就是真的只有这些），所以只在满的时候给这个入口 -->
+            <button
+              v-if="!similarExpanded && similar.length >= SIMILAR_PREVIEW"
+              type="button"
+              class="mt-0.5 cursor-pointer self-start text-[11.5px] text-primary transition-opacity hover:opacity-80"
+              @click="expandSimilar"
+            >
+              查看全部（最多 {{ SIMILAR_ALL }} 本）
             </button>
           </div>
         </template>
