@@ -713,11 +713,15 @@ function accrueSession(): void {
 }
 
 async function flushSession(): Promise<void> {
-  if (pendingSeconds < 5 || !book.value) return
+  // 用**已加载的那本书**的 id，不用 route.params.id：离开阅读器时路由参数先变空，
+  // 那一刻 `String(undefined)` 会发出 POST /api/books/undefined/session（404），
+  // 这段时长又被 catch 塞回一个已经没人再上报的变量 ⇒ 悄悄丢掉。
+  const bid = book.value?.id
+  if (pendingSeconds < 5 || !bid) return
   const secs = Math.round(pendingSeconds)
   pendingSeconds = 0
   try {
-    await api.recordSession(bookId.value, secs)
+    await api.recordSession(bid, secs)
   } catch {
     pendingSeconds += secs // 上报失败留待下次
   }
