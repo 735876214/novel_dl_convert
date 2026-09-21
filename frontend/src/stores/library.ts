@@ -29,6 +29,15 @@ export const useLibraryStore = defineStore('library', () => {
 
   /** 书库**实体**（`/api/libraries` 第 10 期起的语义） */
   const libraryEntities = ref<LibraryEntity[]>([])
+  /**
+   * `/api/libraries` 是否**成功**取回过。
+   *
+   * 第 38 期加：`libraryEntities` 初值是 `[]`、拉取失败也被 `catch` 吞掉，
+   * 所以单看 `.length === 0` **分不清**「一个书库都没有」和「还没拉到 / 拉失败」。
+   * 首屏引导必须只认前者 —— 否则每次进页面都会先闪一下「还没有书库」，
+   * 而后端明明是通的。失败时**保持 false**（不知道就是不知道，不猜成 0）。
+   */
+  const librariesLoaded = ref(false)
   /** 格式分面（`/api/library-facets`）：侧栏已不再用它，保留给需要按格式筛选的页面 */
   const libraryFacets = ref<LibraryFacet[]>([])
   /** 素材来源父目录（`LIBRARY_SOURCE_DIR`，新建「就地引用」库的默认位置） */
@@ -55,6 +64,15 @@ export const useLibraryStore = defineStore('library', () => {
   /** 当前库的能力清单（后端 `core/features.py` 是真值源）；空数组 = 不裁剪 */
   const features = ref<string[]>([])
   const featureLabels = ref<Record<string, string>>({})
+
+  /**
+   * **确实一个书库都没有**（第 37 期起这是全新部署的初始态）。
+   *
+   * 首屏引导 / 空态文案 / 摄入前置拦截**一律只认这一个判据**：它把「拉取失败」
+   * 与「真的是 0 库」分开了，也把「0 库」与「有库但没书」分开了 ——
+   * 第 38 期修的就是这两件事被混成一句话的病。
+   */
+  const hasNoLibraries = computed(() => librariesLoaded.value && libraryEntities.value.length === 0)
 
   /** 当前库实体（「全部书库」时为 null） */
   const currentLibrary = computed(
@@ -173,8 +191,10 @@ export const useLibraryStore = defineStore('library', () => {
       const res = await api.libraries()
       libraryEntities.value = res.items
       sourceDir.value = res.source_dir
+      librariesLoaded.value = true
     } catch {
-      /* ignore */
+      // 拉失败 ⇒ `librariesLoaded` 保持 false，`hasNoLibraries` 跟着为假：
+      // 不知道有几个库时**不说**「还没有书库」，也不假装是 0。
     }
   }
 
@@ -307,6 +327,8 @@ export const useLibraryStore = defineStore('library', () => {
     openLibraryById,
     // 多书库（第 10 期）
     libraryEntities,
+    librariesLoaded,
+    hasNoLibraries,
     sourceDir,
     currentLibraryId,
     currentLibrary,
