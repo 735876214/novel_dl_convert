@@ -2186,6 +2186,16 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  /**
+   * 从头开始（第 34 期）：清掉这本书的阅读会话 / 进度 / 状态。
+   * 只删服务端记录，**不动文件**；批注 / 书签 / 评分 / 收藏也不受影响。
+   */
+  resetReadingState: (bid: string) =>
+    request<{ ok: boolean; removed: Record<string, number>; total: number }>(
+      `/api/books/${encodeURIComponent(bid)}/reset-reading-state`,
+      { method: 'POST' },
+    ),
+
   bookReview: (bid: string) =>
     request<BookReview>(`/api/books/${encodeURIComponent(bid)}/review`),
 

@@ -127,6 +127,31 @@ async function save(): Promise<void> {
 
 const INPUT_CLS =
   'h-8 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none focus:border-ring focus:bg-card'
+
+// ---------------- 从头开始（第 34 期）----------------
+// 「试读了几页想重新来过」原本没有出口。口径（与后端 db.reset_reading_state 一致）：
+// 只删**读出来的痕迹**（会话 / 进度 / 状态），批注 / 书签 / 评分 / 收藏 / 元数据都不动，
+// 磁盘上的文件更是分毫不碰。不可撤销 ⇒ 先 `window.confirm`（与全站既有确认同一写法）。
+const resetting = ref(false)
+
+async function resetReadingState(): Promise<void> {
+  const ok = window.confirm(
+    '从头开始？会清空这本书的阅读时长、阅读进度与阅读状态。\n\n' +
+      '批注、书签、评分与书评都会保留，磁盘上的文件也不会被改动。此操作不可撤销。',
+  )
+  if (!ok) return
+  resetting.value = true
+  try {
+    const r = await api.resetReadingState(props.bookId)
+    ui.toast(`已重置：清掉 ${r.total} 条阅读记录`)
+    await load()          // 状态与日期回读（status 变回 unread、日期清空）
+    emit('changed')       // 父级刷新进度条 / 阅读记录卡
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '重置失败')
+  } finally {
+    resetting.value = false
+  }
+}
 </script>
 
 <template>
@@ -216,6 +241,23 @@ const INPUT_CLS =
             @click="save"
           >
             {{ saving ? '保存中…' : '保存' }}
+          </Button>
+        </div>
+      </Card>
+
+      <!-- 从头开始：只清阅读痕迹，不碰笔记与文件 -->
+      <Card padding="none" class="mt-3">
+        <div class="border-b border-border px-4 py-3">
+          <h3 class="text-[13px] font-semibold text-foreground">从头开始</h3>
+          <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
+            清空这本书的阅读时长、阅读进度与阅读状态，回到还没读过的样子。
+            <br>
+            批注、书签、评分与书评都会保留；磁盘上的文件不会被改动。此操作不可撤销。
+          </p>
+        </div>
+        <div class="flex items-center gap-3 px-4 py-3">
+          <Button size="sm" :disabled="resetting" @click="resetReadingState">
+            {{ resetting ? '重置中…' : '重置阅读状态' }}
           </Button>
         </div>
       </Card>

@@ -2875,3 +2875,34 @@ def set_status(book_id, status, started_at=None, finished_at=None) -> dict:
         c.commit()
     return {"book_id": str(book_id), "status": status,
             "started_at": st, "finished_at": fin, "updated_at": now}
+
+
+def reset_reading_state(book_id) -> dict:
+    """**从头开始**：删掉这本书的阅读会话、阅读进度与阅读状态（第 34 期）。
+
+    只清这三处「读出来的痕迹」，因为它们的语义都是「这一次阅读」：
+      · ``reading_sessions`` —— 时长与会话数（阅读记录 / 统计 / 成就都读它）；
+      · ``progress`` —— 停在哪儿；
+      · ``reading_status`` —— 读到什么程度（连行一起删，回到「没有状态行」的初态）。
+
+    **刻意不动**的东西：批注 / 书签 / 评分 / 收藏 / 元数据覆盖 ——
+    它们是**关于这本书的内容**，不是「读过」的痕迹；顺手删掉就是把用户的笔记一起清了。
+    也不动已解锁的成就：成就的既定机制是「只解锁不回退」（见 core/achievements.py）。
+
+    ⚠️ 只删 DB 行，**绝不碰磁盘上的文件**（源不可变是全局硬约定）。
+    返回 ``{sessions, progress, status}`` 三处的删除行数（``progress`` / ``status`` 是 0/1）。
+    """
+    bid = str(book_id)
+    c = _connect()
+    with _lock:
+        n_sessions = int(c.execute(
+            "DELETE FROM reading_sessions WHERE book_id=?", (bid,)
+        ).rowcount or 0)
+        n_progress = int(c.execute(
+            "DELETE FROM progress WHERE book_id=?", (bid,)
+        ).rowcount or 0)
+        n_status = int(c.execute(
+            "DELETE FROM reading_status WHERE book_id=?", (bid,)
+        ).rowcount or 0)
+        c.commit()
+    return {"sessions": n_sessions, "progress": n_progress, "status": n_status}

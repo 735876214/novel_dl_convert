@@ -1511,6 +1511,28 @@ def api_set_status(bid: str, payload: dict = Body(...)):
         raise HTTPException(400, str(e))
 
 
+@app.post("/api/books/{bid}/reset-reading-state")
+def api_reset_reading_state(bid: str):
+    """**从头开始**：清掉这本书的阅读会话 / 进度 / 状态（第 34 期）。
+
+    只清「读出来的痕迹」，批注 / 书签 / 评分 / 收藏 / 元数据一律不动 ——
+    它们是关于这本书的内容，不是「读过」的记录（见 ``db.reset_reading_state``）。
+    ⚠️ 只删 DB 行，**不碰磁盘上的任何文件**；不可撤销，故写一条审计日志留痕。
+    """
+    book = library.by_id(bid)
+    if not book:
+        raise HTTPException(404, "找不到这本书")
+    removed = db.reset_reading_state(bid)
+    total = sum(removed.values())
+    activity_log.log(
+        activity_log.ACTION_RESET, book.get("name") or bid, activity_log.STATUS_OK,
+        detail=f"重置阅读状态：会话 {removed['sessions']} 条 / 进度 {removed['progress']} 条 / "
+               f"状态 {removed['status']} 条（共 {total} 行，仅服务端记录，未动文件）",
+        source="api",
+    )
+    return {"ok": True, "removed": removed, "total": total}
+
+
 @app.get("/api/books/{bid}/review")
 def api_get_review(bid: str):
     return db.get_review(bid)
