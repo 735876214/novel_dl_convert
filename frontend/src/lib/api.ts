@@ -256,6 +256,13 @@ export interface MetadataPlanItem {
   /** 字段级改动：{字段: {from, to, source, score}}（字段名是 OPF 口径，年份叫 date） */
   changes: Record<string, { from: unknown; to: unknown; source: string; score: number }>
   cover: { url: string; action: string; source: string; score: number } | null
+  /**
+   * 该书被**显式锁定**的字段（第 35 期，含封面用的独立键 `cover`）。
+   *
+   * 锁定字段不会出现在 `changes` 里（锁比字段策略更硬），这份清单是让预览页能
+   * 如实标注「为什么这次没动它」，而不是让用户以为抓取漏了。
+   */
+  locked: string[]
   /** 跳过原因（例如该库关闭了在线元数据抓取、或没有够格的候选） */
   skipped: string
   error: string
@@ -1321,6 +1328,14 @@ export interface MetaFieldState {
   opf: string | string[]
   /** 是否已被用户本地覆盖（受抓取保护，再抓取不冲掉） */
   overridden: boolean
+  /**
+   * 第 35 期：该字段是否被**显式锁定**。
+   *
+   * 与 `overridden` **正交**（两种组合都成立）：`overridden` 是「改过就受保护」的隐式保护，
+   * `locked` 是显式开关 —— 能锁住一个从没改过的字段，也能在改过之后解锁让抓取重新接管。
+   * 作用面只到**抓取**：锁不挡手动编辑。
+   */
+  locked: boolean
 }
 
 /** 字段名 → 分层状态 */
@@ -1346,8 +1361,13 @@ export interface BookMetadata {
   editable: boolean
   /** 生效值（override > online > opf） */
   fields: BookMetadataFields
-  /** 逐字段明细（在线建议 / 是否已本地覆盖） */
+  /** 逐字段明细（在线建议 / 是否已本地覆盖 / 是否已锁定） */
   meta: MetaStateMap
+  /**
+   * 被锁定的字段清单（第 35 期，按字段表顺序）。
+   * 比 `meta` 多一项：**封面**用独立键 `cover`（不在 `BookMetadataFields` 里）。
+   */
+  locked: string[]
 }
 
 /** `GET /api/books/{bid}/metadata/online` */
@@ -2191,6 +2211,21 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fields }),
     }),
+
+  /**
+   * 字段级锁定开关（第 35 期）：`field` 取可编辑字段名，或封面用的 `cover`。
+   *
+   * 锁只挡**抓取**（即使该字段策略是「总是覆盖」），手动编辑照旧可用。
+   */
+  lockBookMetadata: (bid: string, field: string, locked = true) =>
+    request<{ ok: boolean; field: string; locked: boolean; locked_fields: string[] }>(
+      `/api/books/${encodeURIComponent(bid)}/metadata/lock`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ field, locked }),
+      },
+    ),
 
   // ---------- 阅读状态 / 书评 / 相似书 ----------
   bookStatus: (bid: string) =>

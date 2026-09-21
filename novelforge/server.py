@@ -1174,8 +1174,12 @@ def api_book_metadata(bid: str):
     """单书当前的生效元数据（详情页「编辑元数据」标签用）。
 
     返回的 ``fields`` 是分层后的生效值（override > online > opf）；
-    ``meta`` 是逐字段明细（在线建议值 / 是否已被用户本地覆盖），供编辑器渲染
-    「已本地修改」徽标与「恢复为在线值」按钮。
+    ``meta`` 是逐字段明细（在线建议值 / 是否已被用户本地覆盖 / 是否被锁定），供编辑器渲染
+    「已本地修改」「已锁定」徽标与「恢复为在线值」按钮。
+
+    ``locked``（第 35 期）是同一份锁的**扁平清单**：``meta`` 只覆盖 10 个可编辑字段，
+    而锁还能落在**封面**（独立键 ``cover``）上 —— 编辑器要用一条清单同时驱动
+    「逐字段开关」与「封面开关」，不必为封面另开一次往返。
     """
     b = library.by_id(bid)
     if not b:
@@ -1190,8 +1194,10 @@ def api_book_metadata(bid: str):
         "editable": True,
         # 生效值：用户覆盖 > 在线抓取 > OPF 原值
         "fields": metastore.effective(b),
-        # 逐字段明细（含在线建议 / 是否已本地覆盖）
+        # 逐字段明细（含在线建议 / 是否已本地覆盖 / 是否已锁定）
         "meta": metastore.state(b),
+        # 锁的扁平清单（含封面用的 `cover`），按字段表顺序
+        "locked": metastore.locked_fields(b),
     }
 
 

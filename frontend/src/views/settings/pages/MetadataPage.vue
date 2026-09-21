@@ -70,11 +70,21 @@ const FIELDS: Array<{ key: string; zh: string }> = [
   { key: 'description', zh: '简介' }, { key: 'tags', zh: '题材' },
   { key: 'cover', zh: '封面' },
 ]
+/**
+ * 字段写入策略。⚠️ 顺序与标注按**引擎真实默认**排：`metafetch.DEFAULT_POLICY = "overwrite"`
+ * （第 8 期起改为「在线优先覆盖本地」，用户改过的字段另有保护），
+ * 所以「总是覆盖」才是默认档 —— 别再写成「仅补空（推荐）」。
+ */
 const POLICIES = [
-  { value: 'fill_only', label: '仅补空（推荐）' },
-  { value: 'overwrite', label: '总是覆盖' },
+  { value: 'overwrite', label: '总是覆盖（默认）' },
+  { value: 'fill_only', label: '仅补空（只在原值为空时写）' },
   { value: 'skip', label: '不修改' },
 ]
+
+/** 字段键 → 中文名（预览区两处都用它，免得一处写 `FIELDS.find` 一处写死） */
+function fieldZh(k: string): string {
+  return FIELDS.find((f) => f.key === k)?.zh ?? k
+}
 
 const sources = ref<MetadataSource[]>([])
 const probes = ref<Record<string, { ok: boolean; message: string; ms: number }>>({})
@@ -442,7 +452,7 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
               <td class="px-3 py-2 align-top">
                 <div v-if="Object.keys(i.changes).length" class="text-[11.5px]">
                   <div v-for="(v, k) in i.changes" :key="k" class="text-muted-foreground">
-                    <span class="text-foreground">{{ FIELDS.find((f) => f.key === k)?.zh ?? k }}</span>：
+                    <span class="text-foreground">{{ fieldZh(k) }}</span>：
                     {{ short((v as any).to) }}
                   </div>
                 </div>
@@ -450,6 +460,10 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
                 <div v-else class="text-[11.5px] text-muted-foreground">无改动</div>
                 <div v-if="i.cover && Object.keys(i.changes).length" class="mt-0.5 text-[11px] text-muted-foreground">
                   + 封面（{{ i.cover.action === 'add' ? '新增' : '替换' }}）
+                </div>
+                <!-- 锁比字段策略更硬：被锁的字段压根不会出现在上面，这里如实说明是「锁住了」而非「没抓到」 -->
+                <div v-if="i.locked?.length" class="mt-0.5 text-[11px] text-warning">
+                  ⚿ 已锁定、抓取不改：{{ i.locked.map(fieldZh).join('、') }}
                 </div>
               </td>
               <td class="px-3 py-2 align-top">
@@ -482,13 +496,19 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
     </Card>
 
     <Card v-if="has('fields')" class="mt-4" padding="none">
-      <div class="border-b border-border px-4 py-3 text-[13px] font-medium text-foreground">字段写入策略</div>
+      <div class="border-b border-border px-4 py-3">
+        <div class="text-[13px] font-medium text-foreground">字段写入策略</div>
+        <div class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+          这里定的是<strong>按库的默认</strong>。单本书还能在详情页「编辑元数据」里对某个字段
+          <strong>上锁</strong>—— 锁比这里的策略更硬：即使选了「总是覆盖」，被锁的字段也不会被改写。
+        </div>
+      </div>
       <div v-for="f in FIELDS" :key="f.key"
            class="flex items-center gap-3 border-b border-border px-4 py-2.5 last:border-b-0">
         <span class="w-24 text-[12.5px] text-foreground">{{ f.zh }}</span>
         <span class="w-28 font-mono text-[11px] text-muted-foreground">{{ f.key }}</span>
         <select
-          :value="(mf.fields ?? {})[f.key] ?? 'fill_only'"
+          :value="(mf.fields ?? {})[f.key] ?? 'overwrite'"
           class="rounded-md border border-border bg-muted px-3 py-1.5 text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
           @change="setVal(`metadata_fetch.fields.${f.key}`, ($event.target as HTMLSelectElement).value)"
         >
@@ -551,7 +571,7 @@ watch(() => props.section, () => { void loadSources(); planItems.value = []; pic
         '元数据源插件市场 / 更多第三方源（当前内置 OpenLibrary 与 Google Books）',
         '系列级元数据（当前只写单本）',
       ]"
-      note="已实现：源选择与顺序、连通性自检、Google Books API Key、入库自动抓取、ISBN 精确匹配、字段级写入策略、置信度阈值、题材黑名单、自定义元数据、「先预览再应用」的手动抓取面板，以及作者传记 / 头像抓取与本地覆盖编辑。"
+      note="已实现：源选择与顺序、连通性自检、Google Books API Key、入库自动抓取、ISBN 精确匹配、字段级写入策略、字段级锁定（单本书逐字段 / 封面，只挡抓取）、置信度阈值、题材黑名单、自定义元数据、「先预览再应用」的手动抓取面板，以及作者传记 / 头像抓取与本地覆盖编辑。"
     />
   </div>
 </template>
