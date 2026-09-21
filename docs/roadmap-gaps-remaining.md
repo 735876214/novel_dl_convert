@@ -1514,3 +1514,195 @@ T5 的症状（并发下每库覆写被吃）在浏览器里**单用户操作触
 - **改动落在锚点密集的文件上时，顺手把该文件相关锚点重核一遍**：第 34 期只改了 6 个文件，
   第 35 期就从中捞出 37 处漂移 —— 其中 `core/stats.py` 是**上一轮刚「逐个重取」过**、这一轮又整体后移
   275–305 行的（新键插在中间）。**「上期刚核过」不构成免检理由。**
+
+#### 第 40 期实施记录（新建书库向导 5 步 + 允许格式 / 排除图案 / 图标 + 阅读阈值可配）
+
+**主题**：不是补缺口，是**改造既有流程**。第 38–39 期把三条缺口轴走完、把债还清，本期回到
+**产品形态本身** —— 用户拿上游 BookOrbit「Create a library」7 步向导的 9 张截图，要求照它的
+**信息结构**重排本项目的「新增书库」。
+
+**开工前实测得出的判断（本期省掉一半活的原因）**：上游 7 步里，第 2 步 Folders、
+第 5 步 Reading 的「何时算读完」、第 6 步 Automation 在本项目**都已是现成后端** ——
+`api_create_library`（`novelforge/server.py:2808`）本就收 `name / type / mode / root_path /
+source_subdir / publish_path / rules / watch / scan_interval / scan_cron` 十项，而第 6 步的
+「自动扫描计划」是**第 17 期 T2 的真实调度**（`watcher._should_scan`，`novelforge/core/watcher.py:668`），
+不是占位。**真正新增的只有 3 个库表列 + 2 个配置项**，其余是把已有能力摆成向导的样子。
+
+**用户拍板（AskUserQuestion，4 轮）**：
+
+| 争点 | 拍板 |
+| --- | --- |
+| 落地范围 | 「1、第一步是库名称和图标…3、扫描模式不全做，原有的电子库、漫画库、有声库的文件格式，按照书库类型放在允许的格式中，给出默认选择格式和格式增选。4、源优先级和格式优先级不做。其余的功能全做」 |
+| 将元数据写入文件 | **不做**（铁律：只落服务端 DB，绝不写回文件） |
+| 扫描模式的开关 | 「这一步不做扫描模式的开关，也不体现」 |
+| Step 7 File updates | 「这一步整体取消」 |
+| 阅读阈值 | 「全局配置 + 每库可覆盖」 |
+| 阈值同步范围 | 「**全量同步**」—— 后端 + 前端全部硬编码 `99.5` 改读配置 |
+| 排除图案 | 「新增库级列，复用同一套 glob 语义」 |
+| DATE ADDED | 「不做，向导里不出现这一项」 |
+| 隐形文件防护 | 「加防护」—— 入库路由跳过「收了也看不见」的库 |
+
+**向导骨架**（`frontend/src/components/tools/LibraryWizard.vue`，新建 748 行 + spec 368 行）：
+`?new=1` 时渲染全屏 5 步向导替代「列表 + 弹窗」，**`?new=1` 之外一律走原路径** ——
+编辑沿用既有弹窗（只补齐新字段），22+ 条既有编辑用例一条不动。
+步骤条 `STEPS`（`frontend/src/components/tools/LibraryWizard.vue:69`）：
+`基本信息`（必填）→ `内容来源`（必填）→ `扫描` → `阅读` → `自动化`，对应上游
+Details / Folders / Scanning / Reading / Automation。
+
+**两条由我提出、写进计划、用户未反对的实现决策**：
+
+1. **Step 4 Metadata（源优先级 / 格式优先级）与 Step 7 File updates 从步骤条里整个去掉，不留空壳。**
+   这是「不做假交互」的直接推论：留一个点进去是空白的步骤，比少一步更糟。
+2. **向导状态只在前端内存里，最后一次 POST 建库** —— 不做「建一半的库」。
+   底部「立即创建」= 用当前已填值 + 其余默认值**真建库**（对应上游 Any step 的 *Create now*），
+   且**必填两步仍然要过**（它减的是「不用再往后点了」，不是「可以不填名字」）。
+   有变异验证钉住「只关弹窗不建库 ⇒ 用例必须变红」。
+
+**新增 3 列**（`icon` / `allowed_exts` / `exclude`，均 `TEXT NOT NULL DEFAULT ''`），
+**七处同步点**：① CREATE TABLE ② 迁移块 ③ `create_library` 签名与 INSERT
+（`novelforge/core/db.py:3304`）④ **`_LIBRARY_COLS`（`novelforge/core/db.py:3349`）**
+⑤ `_library_dto`（`novelforge/server.py:2548`）⑥ POST（`server.py:2808`）⑦ PATCH（`server.py:2873`）。
+第 ④ 处**最易漏且不报错**：`update_library`（`novelforge/core/db.py:3357`）是「过滤后为空就原样返回」，
+漏了的表现是**界面显示「已保存」而值没变**。⚠️ sqlite 的 `ALTER TABLE ADD COLUMN` 只接受
+**常量**默认值 ⇒「按库类型推导扩展名」**不能**写成列默认值，只能靠 `''` 哨兵 + 读时回落。
+
+**「空串 = 没设过」是刻意与「空集合」不同的语义**：`allowed_exts` 为 `''` ⇒ 回落该库类型的
+默认白名单（`library.exts_for_library`，`novelforge/core/library.py:1024`）；坏 JSON 一律当没设过
+（不抛异常、更不留一个一本也扫不出来的**死库**）。向导里「一个都不勾」发的正是空数组 ⇒
+界面语义是「继承默认」。`allowed_exts` 与 `exclude` 的空串/坏值/列表去重保序，
+另有 `tests/test_library_scan_scope.py` 12 例钉住（本期新建）。
+
+**允许格式 / 排除图案的扫描语义**（`library.py:1014-1068`）：与 `watcher.ignore` **同族，
+但有两处明写的差异** —— ① 用 `fnmatch.fnmatchcase`（`watcher._ignored` 用的 `fnmatch.fnmatch`
+在 Windows 上**大小写不敏感**，而库级排除是用户显式写下的可见规则，不能随平台变）；
+② 图案**含 `/`** 时匹**相对库根**的路径，否则只匹 basename（watcher 那套是纯 basename）。
+`watcher.ignore` 本期**一行不改**：它的作用域是 `INPUT_DIR`，与库扫描是两条不同的轴。
+
+**隐形文件防护**：`library_rules.decide`（`novelforge/core/library_rules.py:172`）的候选过滤里
+跳过「收了也看不见」的库（判据 = `library.accepts_ext`，`novelforge/core/library.py:1035`）⇒
+返回 `None` 走**既有拒收路径**。这是**既有问题**而非本期引入：`type=ebook` 的库把 `source_subdir`
+指向漫画目录，今天就能造出「文件落了盘、书目里却没有」的隐形文件；`allowed_exts` 可配之后
+撞上的概率大幅提高。⚠️ 实际行为是**改判到其它合格库（fall-through）**，**不是**「一起拒收」——
+只有**所有**候选库都看不见它时才拒收。跨库移动的相容闸门（`novelforge/core/migrate.py`）同样
+改判**目标库**的生效格式集，否则用户能把书移进一个看不见它的库。
+
+**阅读阈值可配（本期最值钱的一步）**：新增 `percent` 类型（`novelforge/core/lib_settings.py:282`，
+值域 **0–100** —— 既有的 `number` 是 0–1，不能复用）+ `reading_thresholds()`
+（`novelforge/core/lib_settings.py:235`，**全仓唯一入口**）+ `GET /api/reading-thresholds?library_id=`
+（`novelforge/server.py:2740`，空 = 全局，带库 = 生效值）。
+默认值**刻意不改既有行为**：`finished_threshold = 99.5`（**不是**上游的 99）、
+`started_threshold = 0.0`（等价改造前的 `pct > 0`）。**改默认值等于静默改变既有的「已读完」判定**，
+会让用户的书一夜之间从「读完」变回「在读」。
+「全量同步」的落点：后端 `stats.py` / `komga_api.py` / `server.py` / `achievements.py`；
+前端新增 `frontend/src/lib/readingThresholds.ts`（唯一入口 `statusFromPercent`，`:101`），
+把原先**同一段逻辑的三份拷贝**（`bookInfo.statusLabel` / `library.derivedStatus` / `smartScope`）
+收敛到它，8 处全部改调。**不新造第二处推导** —— 半改就是「两个真相源」，
+会出现「统计里算已读完、书架上还是在读」。
+
+**图标**：选择器数据源 = `Object.keys(ICONS)`，后端只做形状校验（`_norm_icon`，
+`novelforge/server.py:2664`）。契约测试把 `frontend/src/lib/icons.ts` 的键**逐个喂给后端**
+（纯文本断言，不拉 node —— 全量测试离线的硬前提），两边一旦不合，用户能在向导里选出这个图标、
+点「创建」却拿到 400，且看不出为什么。建库后图标出现在**书库列表卡片与侧栏库项两处**。
+
+**设置页**：全局阈值控件落在「设置 → 个人资料 → 阅读进度口径」卡（`ProfilePage.vue`），
+**放在成就卡旁边不是随手摆的** —— 成就的「已读完」判定读的就是这个阈值。
+
+**计划外发现的两个既有缺陷（都已修，均与本期主线无关）**：
+
+1. **Windows 上 `C:\…` 被判成非绝对路径 ⇒ 向导卡在第 2 步。** 原实现两处各写一遍
+   `raw.startsWith('/')`，抄的是后端 `pathlib.Path.resolve()` 的 **POSIX 版**口径。
+   已抽成 `frontend/src/lib/paths.ts`（`isAbsolutePath` `:31` / `pathsOverlap` `:58`），两处改调；
+   `pathsOverlap` 顺带修掉「只认 `/`，分隔符混写下重叠检测**恒为假**」。
+   **生产跑在 Linux 上，所以这个 bug 从没露头。**
+2. **全局阅读阈值写不进去。** `reading` 不在 `server.EDITABLE`（`novelforge/server.py:3938`）里，
+   `_sanitize_config` 整块丢掉 ⇒ patch 为空 ⇒ 400「没有可保存的配置项」；
+   `GET /api/config` 里那把**硬编码键列表**也缺它；前端 `SECTION_KEYS` 同样缺。
+   漏了的表现极隐蔽：界面上的开关正常切换（本地草稿改了），只有一条 toast 一闪而过。
+   而 `settingsNav.ts` 的 note 当时写着「是设置项」—— **那是一句假陈述**，
+   本期补上控件把它变成真的。⇒ 新增可保存配置分区是**三处**同步点（见记忆）。
+
+**A. 单测**：全量 **691 例 / 0 failed / 0 err**。基线 651（第 39 期）⇒ **+40**：
+`tests/test_reading_thresholds.py` 新建 22 例（13 个函数，1 个 `parametrize` × 10）
++ `tests/test_library_scan_scope.py` 新建 12 例 + `tests/test_api_smoke.py` +4（向导 payload 契约）
++ `tests/test_library_rules.py` +2（隐形文件防护）。
+前端用例**单独计数、不并入 pytest 基线**：**52 例 / 5 个 spec 文件**（本期新建 3 个：
+`LibraryWizard.spec.ts` / `paths.spec.ts` / `readingThresholds.spec.ts`）；
+`npm run type-check`（`vue-tsc --build`）exit 0；`npm run build && npm run deploy` 之后
+`git status` 里 **`novelforge/static/v2` 未出现**（已在 `.gitignore:28`）。
+
+**变异验证（强制纪律，本期 6 组，全部先红后绿）**：
+
+| 目标 | 变异 | 期望 | 实测 |
+| --- | --- | --- | --- |
+| `_LIBRARY_COLS` | 从白名单里删掉 `icon` | 红 | **红**（`test_编辑弹窗的payload也能改这三个新列`） |
+| 隐形文件防护 | `library_rules._accepts` 直接 `return True` | 红 | **红**（`test_没有库收得了的格式一律拒收不隐形`） |
+| 排除图案 | `fnmatchcase` → `fnmatch` | 红 | **红**（`test_图案大小写敏感`，Windows 上唯一会红的一条） |
+| 阈值默认值 | `finished_threshold` `99.5` → `99` | 红 | **红**（`test_默认阈值与改造前的硬编码逐字节等价`，10 个档位全红） |
+| 阈值分发 | 前端 `thresholdsFor()` 恒返兜底值（= 只有后端可配） | 红 | **红**（`readingThresholds.spec.ts` 3/12） |
+| 假交互 | 「立即创建」不调 `api.createLibrary` | 红 | **红**（`LibraryWizard.spec.ts` 12/21） |
+
+撤销全部变异后：后端四文件 **92 例全绿**、前端 **52 例全绿**。
+
+**B. 浏览器冒烟（T5-29，真实 uvicorn 实例 8794 + 独立临时根，未碰 8791 / 8993）**：
+走完 5 步建一个库，四项逐条核对 ——
+
+① **图标在列表与侧栏都可见**（两处 `svg path` 相同 `M4 19.5A2.5 2.5 0 016.5 17H20`）；
+② **只有勾选的格式入库**（`普通卷.cbz` 进，`该被拒.cbr` 不进）；
+③ **排除图案生效**（`草稿.draft.cbz` 不进）；
+④ **阈值改动后统计与书架口径一致**，含**反向翻转**：
+
+| 全局「已读完」阈值 | 后端统计 `finished` | 书架筛选「已读完」 | 书架筛选「在读」 |
+| --- | --- | --- | --- |
+| 50 | 1 | 1 本 | 0 本 |
+| 99.5 | 0 | 0 本 | 1 本 |
+
+冒烟全程**数据完全隔离**（DB 在 `%TEMP%\nf40e2e\config\data\novelforge.db`，未污染用户真实数据）。
+
+**C. 锚点核验**：`tests/check_doc_anchors.py` 实测 —— 修前 **硬错 0 / 疑似漂移 17**，
+逐条打开核实（**只写实测行号、不记偏移量**）后改 **29 处**（分布在 13 行上：
+工具点名 14 条 + 在**同一批行**上顺带实测捞出 15 条），修后 **硬错 0 / 疑似漂移 3**，
+符号命中由 33 升到 47。剩下的 3 条（`roadmap-gaps-remaining.md:859` / `:879` / `:1416`）
+**全部落在本文件的历史实施记录里**（第 33 / 33 / 39 期）—— 按既有纪律**不动**：
+改历史记录里的旧行号等于篡改历史。
+
+⚠️ 本期又摸到工具的一个**漏报面**（补进 §0.5 的局限清单）：它只对
+`` `路径:行号` ``**后面跟着反引号符号名**的锚点做自动核对，**符号写在锚点之前**的
+（如旧文档里 `core/stats.py` 的那条 —— 它把 `books.by_format` 写在**行号之前**，写成「第 635 行」而不是「`:635`」）不进核对 ⇒ 那 15 处漂移**工具一条都没报**。
+判据「0 硬错 + 0 漂移」因此**只能是下限**，动了锚点密集文件仍必须人工过一遍该文件的锚点。
+
+**D. 一条方法论实证（「不记偏移量」的由来）**：本期 `core/db.py` 的 6 个 hunk 合计
+**+38 / −7**，但文件里不同锚点的位移**互不相同** —— `save_bookmark` 后移 **22** 行
+（894→916）、`set_review` 后移 22 行（1991→2013）、`collection_map` 后移 22 行（1063→1085），
+而 `reset_reading_state` 后移 **31** 行（3472→3503）、`DOCK_TABS` 后移 23 行（2262→2285）。
+因为「落在该锚点**之前**的 hunk 才影响它」，`+38/−7` 分摊到各锚点上是不同的数。
+**同一个文件、同一期改动，偏移量可以有五种值** —— 这就是「只写实测行号」那条纪律的实证。
+
+**E. 三个坑（都不是产品缺陷，但下次会再踩）**：
+
+1. **Git Bash 的 `/tmp` 与 Python 看到的 `/tmp` 不是同一个目录。** 前者是 MSYS 的
+   `C:\Users\<用户>\AppData\Local\Temp`，后者（原生 Windows 版）解析成 `C:\tmp`。
+   `pytest --junitxml=/tmp/x.xml` 落盘后 bash 里 `ls /tmp/x.xml` 找得到、
+   Python 里 `open('/tmp/x.xml')` 报 `FileNotFoundError` —— 本轮被这个卡过一次。
+   判据：先用 `cygpath -w /tmp/...` 看真实路径，或干脆给 Windows 原生绝对路径。
+2. **`-q` 会加成 `-qq` 吞掉汇总行**（第 39 期已记，本轮又踩一次）：`pytest.ini:6` 已有
+   `addopts = -q`。计数一律走 `--junitxml` + 解析 XML。
+3. **中文用例名在 GBK 控制台下会显示成乱码**，`FAILED tests/...::test_????` 看不出是哪个用例。
+   抓失败详情时给 `PYTHONIOENCODING=utf-8`，或统一落 UTF-8 文件再读。
+
+**F. 与计划的偏离（如实记）**：
+
+1. 计划把「允许格式 / 排除图案」的用例挂在 `tests/test_library_rules.py`；实施时发现
+   `_excluded` 的语义（`fnmatchcase` / 含 `/` 走相对路径）**在计划里没有任何靶子能钉**，
+   故新建 `tests/test_library_scan_scope.py` 专门承载 12 例（含 3 条大小写用例）。
+   这也让变异验证第 3 组有了可红的靶子 —— 原计划那条变异**本来无处可验**。
+2. 新增 `GET /api/reading-thresholds` 时发现 `GET /api/config` 的**硬编码键列表**
+   才是漏点的第三处（计划只列了两处）—— 见「计划外发现」第 2 条。
+
+**G. 未接项与既有分歧（本期未改，逐条留档）**：
+
+1. **隐形文件防护的实际行为是 fall-through 改判**，不是选型时「一起拒收」的措辞（见上）。
+2. `ShelfView` 的「阅读状态」筛选与 `BookCover` 角标**只按进度判**，而书卡文案
+   （`bookInfo.statusLabel`）**状态优先** ⇒ 同一本书手动标「已读完」后，角标与筛选可能不一致。
+   （**既有分歧**，本期只统一了阈值来源，没有统一这个优先级。）
+3. 「浏览服务器文件夹」**没接** —— `GET /api/libraries/source-dirs` 前端从来无调用点，
+   向导里保持文本输入；另有 `?new=1` 与首次引导 `GuidedTourModal` 会叠加（既有行为）。

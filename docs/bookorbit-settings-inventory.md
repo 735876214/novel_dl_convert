@@ -588,7 +588,7 @@ SERVER
 | SYNC PREFERENCES | Include Kobo store titles | 开关 | 未能采集 | 一并投递 Kobo 商店（含 Kobo Plus 与已购）书目，不进本库 | ➖ |
 | SYNC PREFERENCES | Convert to KEPUB | 开关 | 未能采集 | 符合条件的 EPUB 转 KEPUB；开启进度/高亮同步时强制保持 | ➖ |
 | SYNC PREFERENCES | Force hyphenation | 开关 | 未能采集 | 统一两端对齐，会重建缓存 KEPUB | ➖ |
-| Progress Thresholds | MARK AS READING | 数字(%) | **1%** | 超过该比例置为「在读」 | ✅（本项目有 readingThreshold 同构概念） |
+| Progress Thresholds | MARK AS READING | 数字(%) | **1%** | 超过该比例置为「在读」 | ✅ **已落地可配（第 40 期）**：全局「在读下界」（设置 → 个人资料 → 阅读进度口径）+ 每库覆写；默认 **0%**（等价改造前的「pct > 0」），**不是**上游的 1% |
 | Progress Thresholds | MARK AS FINISHED | 数字(%) | **99%** | 达到该比例标记「已读完」 | ✅（本项目统计口径为 ≥99.5%） |
 | KEPUB CONVERSION LIMIT | 大小上限 | 数字 | **100 MB** | 超限则按普通 EPUB 发送，届时不同步阅读位置 | ➖ |
 | 底部 | `Save Sync Settings` | 按钮 | 提示 `Changes must be saved to take effect.` | — | — |
@@ -851,7 +851,7 @@ SERVER
 | LIBRARY → Metadata（7 页） | **元数据**（7 页均实现） | ✅ Providers / Field Rules / Custom Fields / Confidence Score / Books / Authors / Genre Blocklist 均 `ready` |
 | LIBRARY → File Naming | **工具 → 批量重命名** | 🔵 命名规则存服务端 + 4 配方 + 预览；上游 13 token / 7 修饰符 / 结构语法未支持 |
 | LIBRARY → Maintenance | 部分散落 **监听** / **工具** | ✅ 上传上限 / 成就重算 / 索引重建 / 缓存 / 回收站已实现；IMPORT / RECOMMENDATIONS / UPDATES 未实现（只读列出） |
-| DEVICES → Kobo | **Kobo 同步** 只读占位页 | ➖ 不做 Kobo 设备同步（注册 / 双向进度 / KEPUB 投递 / 书店书目混投）；上游的 Progress Thresholds 在本项目无可配置对应项（已读完固定口径 ≥99.5%） |
+| DEVICES → Kobo | **Kobo 同步** 只读占位页 | ➖ 不做 Kobo 设备同步（注册 / 双向进度 / KEPUB 投递 / 书店书目混投）；⚠️ **上游的 Progress Thresholds 第 40 期起已可配置**（全局 + 每库覆写，设置 → 个人资料 → 阅读进度口径）—— 原文记的「本项目无可配置对应项（已读完固定口径 ≥99.5%）」**已被本期推翻** |
 | DEVICES → KOReader | **KOReader 进度互通**（kosync 服务端）+ **KOReader 上游对照** 占位页（本项目补充） | ✅ kosync 协议服务端已实现；上游结构页为 `placeholder` 对照，该页本身标 `own: true`（上游只有一个 KOReader 页，对照页是本项目拆出来的） |
 | DEVICES → OPDS | **OPDS** 页 | ✅ 已实现（目录 / 端点 / 排序 / 逐库暴露） |
 | DEVICES → Komga | **Komga 库布局** 页（**本项目补充**，标 `own: true`） | ✅ 上游无此页（原 `/settings/komga` 已消失，见 §2.42 🔄）；本项目实现输出侧布局 + 逐库暴露 + 进度迁移 |

@@ -49,7 +49,8 @@
 - **ISBN 形状唯一真值源=`metadata.isbn_digits`**：10 位末位可 X / 13 位纯数字，允许分隔符与 `urn:isbn:`；**UUID 不认**。`library._isbn_of` 与 `fileops._set_isbn` 都调它（契约测试钉「全仓只剩一处判据」）。
 - 写磁盘只用 rename/move，删除移 `CACHE_DIR/recycle`；路径用 `library.root_of(b)/b["name"]`，**禁** `config.OUTPUT_DIR/b["name"]`；`write_epub` 前先 `mkdir`。
 - 库根限 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR`（`safe_path`，建库强校验，之外 400）；`book_id`=basename 派生+库维度化。⚠️ 库存储根在 `OUTPUT_DIR` 之下时 `default` 库会把副本**再收一次** ⇒ 同一本书两条（预期行为，断言按 `library_id` 过滤）。
-- 新增库表列须同进 `db._LIBRARY_COLS`，否则 `update_library` 静默写不进。
+- ⚠️ **新增库表列须同进 `db._LIBRARY_COLS`**（第 40 期三列 `icon`/`allowed_exts`/`exclude` 均在其内），否则 `update_library` **静默写不进** —— 它是「过滤后为空就原样返回」，既不报错也不生效，**界面还会显示「已保存」**。全七处同步点见 `2026-09-22.md` §A。
+- ⚠️ **列里的 `''` 是「没设过」，不是「空集合」**：`allowed_exts=''` ⇒ 回落该库类型的默认白名单（`library.exts_for_library`）；`exclude=''` ⇒ 不过滤；**坏 JSON 一律当没设过**（不抛、不留死库）。sqlite 的 `ALTER TABLE ADD COLUMN` 只吃常量默认值 ⇒ 这层回落**只能放在读时**，别想写成列默认值。
 - **给既有表加唯一约束/PK 要回头看 `db.remap_book_id`**：整体 `UPDATE` 撞约束会抛异常并被外层 `except` 吞成「搬 0 行」⇒ **静默丢数据** ⇒ 必须**逐行搬 + 冲突时取舍**。**新增含 book_id 的表必须过四处**：`ORPHAN_TABLES`、`REMAP_TABLES`、有软删的再进 `REMAP_PROBE_FILTER`、**含库相关列的再进 `REMAP_EXPLICIT_TABLES`**（现有唯一成员 `scrape_items` —— 它另有 `library_id`/`source_rel`/`link_rel`，走 `db.scrape_remap_item`，**刻意不在** `remap_book_id` 的搬迁清单里）。⚠️ 有契约测试（`tests/test_remap_tables.py`）钉「凡含 book_id 列的表必须出现在某个清单里」，**漏了它会在换库时静默断链**（第 39 期实测：自动归库后台账行留在旧 id 上，旧库对账把「已出版」判成 orphan/removed）。
 - ⚠️ **`migrate.execute` / `rollback` 不再按 `direction` 分支**（第 39 期统一）：自动归库（`move`）与用户移动（`bookmove`）共用 `_after_bookmove`/`_after_bookmove_back`，差别只剩「谁选源集合、谁定目标库」。回程**必须与去程对称**。⚠️ `DIR_AUTO = "move"` 字面量**不能改**（`migration_last_batch("move")` 依赖），`server.py` 拒绝用 bookmove 入口执行自动归库批次那两处**保留**。反查所属库一律用 `_lib_id_of_path`（取**最长**匹配；旧的「取第一个」实现已删 —— `library.libraries()` 顺序不保证）。
 - ⚠️ **win32 上目录 `st_size` 恒为 0**：「空文件」判据都要**排除目录**（`if not p.is_dir() and p.stat().st_size == 0`），否则 win32 有声书永不入库；目录体积用 `watcher._sig()`。
@@ -59,6 +60,8 @@
 - ⚠️ **`db` 连接是全进程一个 `check_same_thread=False` 的裸连接 ⇒ 读写一律经 `_lock` 串行**（第 39 期根治）。`db._connect()` 返回的是**持锁代理** `db._Conn`，**不是** `sqlite3.Connection`；`_lock` 是 **`RLock`**（`with _lock:` 块里还会再调 `c.execute`，非重入锁会自锁死）。**光给写路径加锁是不够的** —— 真凶正是「锁内写 + 裸读」并发：实测 3 读线程 + 1 锁内写，**3/3 轮全 `InterfaceError`**（各 400–500 次）；用户可见后果是 `library.get_library` 把它吞成 `None` ⇒ `lib_settings.overrides()` 得空 dict ⇒ **每库覆写静默回落全局值**；三线程裸读 + `db.close()` 则 **6/6 段错误**。⇒ **新增任何 db 访问只走 `db._connect()`，别去抓 `sqlite3` 原连接、别绕开 `_lock`**；`db._Result` 的接口面**刻意收窄**（`execute/executemany/executescript/commit/rollback` + 行标量/`fetchone`/`fetchall`/迭代），**新增需要的游标属性要显式补进去**。契约测试 `tests/test_db_concurrency_contract.py`（全仓唯一主动开线程的测试）。
 - ⚠️ **`db.close()` 生产上无人调**（只有 `server.py` 的 `db.init()` 和测试用）—— 但「锁内写 + 裸读」**不需要 `close()` 就能触发**，所以上面那条竞态**生产可达**（watcher 线程 / scrape worker / `asyncio.to_thread` 与请求线程同时进连接）。`close()` 现在也持 `_lock` ⇒ 段错误那条路已封死，但之后仍攥着旧代理的线程会拿到 `ProgrammingError` —— **那是真错误，别吞**。
 - `core/stats.py`：`overview` 既有键**只增不删**、**必须跟随 `library_id`**、**不新增扫描路径**；真名照代码（`weekdays`/`pages_by_format`）。
+- ⚠️ **「在哪读 / 已读完」的阈值只有两个入口**：后端 `lib_settings.reading_thresholds(library_id)`、前端 `lib/readingThresholds.ts`（`statusFromPercent`）。**别在别处再判一次**——原先那三份拷贝（`bookInfo.statusLabel` / `library.derivedStatus` / `smartScope`）第 40 期已收敛。默认值**刻意不动既有行为**（finished **99.5** 不是上游的 99、started **0.0** ≡ `pct > 0`），改它等于静默改变用户的「已读完」。
+- ⚠️ **路径判据只有 `frontend/src/lib/paths.ts`**（`isAbsolutePath` / `pathsOverlap`）：原来两处各写一遍 `startsWith('/')`，抄的是后端 `pathlib.resolve()` 的 POSIX 口径 ⇒ **Windows 上 `C:\…` 被判非绝对**（生产在 Linux 上，所以一直没露头）。
 - **「文件:行号」收尾必须实测复核**：工具=`tests/check_doc_anchors.py`（**非 `test_` 前缀 ⇒ pytest 不收集**），用法与局限见 capability-gap §0.5。①**别记偏移量，只记当前真实行号**；②脚本**只生成待核清单、不能判定**（「行号合法但内容换了」天生测不出）⇒ 判据是「0 硬错 + 0 漂移」**且**人工过完 `--todo` 清单。先例：32 期核 71 修 10、33 期核 312 修 28、35 期核 706 修 37、36 期核 719 修 7（**7 处全部落在本期自己动过的 `core/db.py` / `server.py` 上** ⇒ 动了锚点密集的文件就顺手重核那一份）。
 
 ## 配置分层（四层 + 每库覆盖）
@@ -66,7 +69,7 @@
 - `core/lib_settings.py` 与 `features.SETTING_CAPS` 是唯一真值源；接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（`?keys=` 按项恢复）；**可覆盖项清单见 REF**。
 - 可见性=能力矩阵（库类型有没有）∩ 每库开关，判定**只留一处**；「不可见」=「不存在」→ 404。
 - ⚠️ **能力键的判隐显轴要挑对**：`library.hasFeature(k)` 判的是「侧栏**当前选着**哪个库」，只适合**全局导航项/设置页**；读者侧要判「**这本书**属于哪个库」。
-- ⚠️ **判断「某能力有没有页面入口」两头查**：先查 `server.py` 的 `EDITABLE` 白名单，再查前端 `settingsFields.ts`（只看配置文件会误判）。
+- ⚠️ **新增「可保存的配置分区」是 `三处`同步点**：① `server.EDITABLE` 白名单 ② **`GET /api/config` 里那把硬编码键列表** ③ 前端 `settingsFields.ts` 的 `SECTION_KEYS`。漏任一处都**不报错**：①漏 ⇒ `PUT /api/config` 400「没有可保存的配置项」；②漏 ⇒ 能写进 settings.json 却读不回来；③漏 ⇒ 界面开关正常切换但收集到空 patch。**表现都只有一条 toast 一闪而过**。（第 40 期的 `reading` 三处全缺。判「某能力有没有页面入口」也照这三处查，只看配置文件一定误判。）
 
 ## 前端
 - Vue3 SFC+TS+Vite8+Tailwind v4+Pinia4+vue-router5(hash)；产物 `novelforge/static/v2/`（`/` 服务其 index.html，缺失 503）；**勿往 `novelforge/static/` 加手写页**。
