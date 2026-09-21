@@ -8,6 +8,8 @@
 > 做出来的对照，**从未按上游代码模块系统对照过**。一旦缺口是「整块模块从未进过视野」，
 > 按页面对照永远发现不了 —— 本文件就是为堵这个口子。
 > **本期只产出清单，不实现清单里的任何项**（供第 34 期排期）。
+> **第 34 期更新（2026-09-21）**：§4.1「值得做」的 4 项**已全部落地**（逐项锚点见 §4.1 表）；
+> §4.2「有价值但不做」8 项本轮**未改判**（仍不做）。
 
 ---
 
@@ -187,14 +189,20 @@
 - **4.3 与定位不容 / 无关 3 项** ＝ 其中 `migration` 属那 13 个，**另外 2 项（`file-write` / `seed`）
   是首次记录但不属漏项候选**。
 
-### 4.1 值得做（4 项）
+### 4.1 值得做（4 项）—— **第 34 期已全部落地**
 
-| 模块 | 上游形态（证据） | 本项目现状 | 为什么值得 |
+> 落地账目（第 34 期，2026-09-21）：四项全部实现并各有测试钉住。
+> 与本节原判的两处偏差**如实记录**：① `catalog` 的七维里「题材 / 标签」在本项目是**同一个字段**
+> （`tags` = OPF `dc:subject`，上游分 genre / tag 两个）⇒ 只做一个题材维度、六个维度上线，
+> **不把同一份数据换个名字列两遍**；② 侧栏计数**刻意不带 `library_id`** —— 三个目标页都是跨库的，
+> 计数跨库才对得上（否则会出现「侧栏 3、页面 12」）。
+
+| 模块 | 上游形态（证据） | 本项目现状（第 34 期后） | 落地锚点 |
 | --- | --- | --- | --- |
-| `bookmark` | `bookmark.service.ts`：按 CFI / 位置创建、软删、tombstone 复活、并发冲突合并 | **零**（KOReader 设置页只写「注解/书签同步未支持」，那是设备同步，不是本地书签） | 阅读器缺一个最基础的「存个位置」动作。**后端表 + 一个位置字段 + 前端一个按钮**，成本最低的一项 |
-| `reading-state` | `reading-state.service.ts`：`POST /books/:bookId/reset-reading-state`，删会话 + 删进度 + 重置状态 | **零** | 「试读了几页想从头开始」是真实需求，本项目现在没有出口。落地面 = 1 个接口 + 详情页 1 个按钮 |
-| `catalog` | `catalog.service.ts`：7 个实体维度的搜索（作者/题材/标签/演播者/出版社/系列/语言）+ 收藏；按可见库收窄 | 全局搜索（⌘K）**只跨书检索**，不跨实体 | 多库 + 实体体系都已在（第 10 / 28 期），补的是「按实体找入口」。**纯查询，无新表** |
-| `browse-counts` | `browse-counts.service.ts`：侧栏 Browse 三计数，60 s 缓存 | 侧栏「浏览」组已有作者/系列/批注三入口，**无计数** | 最小的一项（3 个 `COUNT`）。价值也最小，但成本几乎为零 |
+| `bookmark` | `bookmark.service.ts`：按 CFI / 位置创建、软删、tombstone 复活、并发冲突合并 | **已落地**（原为「零」）：`bookmarks` 表 + 六条路由 + 阅读器工具条开关与书签档（活跃 / 垃圾桶）；对齐上游三形态：**位置去重 / 墓碑复活 / 并发合并** | `novelforge/core/db.py:740` `save_bookmark`、`novelforge/server.py:1744-1818`、`frontend/src/views/ReaderView.vue:479`/`:565`；能力键 `bookmarks`（仅 ebook / mixed） |
+| `reading-state` | `reading-state.service.ts`：`POST /books/:bookId/reset-reading-state`，删会话 + 删进度 + 重置状态 | **已落地**（原为「零」）：详情页「我的记录 → 从头开始」；**只删读出来的痕迹**，批注 / 书签 / 评分 / 收藏与磁盘文件一律不碰 | `novelforge/core/db.py:2896` `reset_reading_state`、`novelforge/server.py:1518`、`frontend/src/components/book/ReadingRecord.vue:137` |
+| `catalog` | `catalog.service.ts`：7 个实体维度的搜索（作者/题材/标签/演播者/出版社/系列/语言）+ 收藏；按可见库收窄 | **已落地**（原为「全局搜索只跨书」）：新页 `/browse`「实体总览」按**六个**维度浏览本地书目、按当前书库收窄；**不新增聚合接口**（这些维度本就是同一份书目的投影） | `frontend/src/views/BrowseView.vue:51`（维度表）、`frontend/src/router/index.ts:174`、`frontend/src/data/nav.ts:72`；「收藏」维度靠 `/api/books` 附带的 `collection_ids`（`novelforge/core/db.py:909` `collection_map()`） |
+| `browse-counts` | `browse-counts.service.ts`：侧栏 Browse 三计数，60 s 缓存 | **已落地**（原为「无计数」）：三计数与目标页**同源**、60 秒节流、按库可选收窄；读失败不显示胶囊 | `novelforge/core/browse_counts.py:25`/`:65`、`novelforge/server.py:3359`、`frontend/src/data/nav.ts` 的 `countSource: 'browse'` + `frontend/src/components/AppSidebar.vue` 的 `navCount()` |
 
 ### 4.2 有价值但不做（8 项）
 

@@ -21,7 +21,6 @@ import {
 } from '@/lib/readerPrefs'
 import { customFontValue, readerFontStack } from '@/lib/fonts'
 import { useFontsStore } from '@/stores/fonts'
-import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -73,7 +72,6 @@ watch(prefs, (v) => saveReaderPrefs(v), { deep: true })
 const fonts = useFontsStore()
 void fonts.load()
 
-const library = useLibraryStore()
 const ui = useUiStore()
 
 // ---------------- 翻页模式 ----------------
@@ -459,6 +457,14 @@ async function jumpTo(a: Annotation): Promise<void> {
 //   · **位置去重**：位置锚 = 「章序号 + 章内归一化位置」，同一位置反复点也只有一条；
 //   · **可跳回**：点列表项按锚里的章内位置落回原处（批注靠 quote 重新包 span，书签靠坐标）。
 // 锚的小数位固定 —— 否则同一处会因浮点尾数差异算出两个不同的锚，去重就失效了。
+//
+// ⚠️ **这里刻意不做能力闸门**（浏览器冒烟实测踩到）：本组 UI 只长在**章节流阅读器**里，
+// 而漫画 / PDF / 有声书在模板里各走各的分支（`ComicReader` / `PdfReader` / 播放器），
+// 根本到不了这里。若按「**当前库**的能力清单」判显隐，就会出现
+// 「当前库选着漫画库、却打开一本电子书的阅读器 ⇒ 书签按钮消失」这种错判 ——
+// 判隐显的轴应该是「这本书属于什么库」，而不是「侧栏当前选着哪个库」。
+// 后端 `features` 里的 `bookmarks` 键仍然有用：它是书库管理页**能力矩阵**的一行
+// （说明哪类库支持书签），只是不该用来藏这个按钮。
 const ANCHOR_PRECISION = 4
 
 const bookmarks = ref<Bookmark[]>([])
@@ -466,9 +472,6 @@ const bookmarkTrash = ref<Bookmark[]>([])
 const panelTab = ref<'notes' | 'bookmarks'>('notes')
 const bookmarkView = ref<'active' | 'trashed'>('active')
 const bookmarkDraft = ref('')
-
-/** 书签是文字阅读器的能力（漫画 / 有声书没有这个入口）—— 与后端能力矩阵同判据 */
-const canBookmark = computed(() => library.hasFeature('bookmarks'))
 
 /** 当前阅读位置的锚（与 `saveProgress` 用的是同一套坐标：章序号 + 章内比例） */
 const currentAnchor = computed(
@@ -927,7 +930,6 @@ onBeforeUnmount(() => {
         </Button>
 
         <Button
-          v-if="canBookmark"
           size="sm"
           variant="ghost"
           :title="bookmarkHere ? '移除当前位置的书签' : '在当前位置加书签'"
@@ -1014,7 +1016,7 @@ onBeforeUnmount(() => {
           v-if="showNotes"
           class="w-72 shrink-0 overflow-y-auto border-l border-border py-3 pl-3"
         >
-          <div v-if="canBookmark" class="mb-3 flex items-center gap-1 rounded-md border border-border p-0.5">
+          <div class="mb-3 flex items-center gap-1 rounded-md border border-border p-0.5">
             <button
               type="button"
               class="flex-1 cursor-pointer rounded px-2 py-1 text-[12px] transition-colors"
