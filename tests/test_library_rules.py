@@ -1,6 +1,7 @@
 """入库归库规则（`core/library_rules.py`）。
 
-判决优先级是**契约**（第 10 期确认）：来源子目录名 > 格式 > 元数据关键词 > 回退默认库。
+判决优先级是**契约**（第 10 期确认）：来源子目录名 > 格式 > 元数据关键词 > **拒收**。
+（第 37 期改口：末档从「回退默认库」改成「拒收」，因为没有默认库了。）
 这里逐条钉住它 —— 顺序一变，用户的书就会悄无声息地落进别的库。
 """
 import pathlib
@@ -8,7 +9,7 @@ import pathlib
 import pytest
 
 from novelforge import config
-from novelforge.core import library, library_rules
+from novelforge.core import db, library, library_rules
 
 
 @pytest.fixture
@@ -61,10 +62,29 @@ def test_decide_for_path与decide同源(typed_libraries):
 # 边界与异常
 # ---------------------------------------------------------------------------
 
-def test_都不命中时回退默认库(typed_libraries, default_root):
-    # 未知格式 + 无关键词 → 不给结论，由调用方回退默认库（宁可落默认库也不乱归）
+def test_都不命中时拒收而不是猜一个库(typed_libraries):
+    """第 37 期：没有默认库可退，规则不命中 ⇒ `target_root` 返回 None，调用方拒收。
+
+    以前这里会回退「默认库 = OUTPUT_DIR」。现在宁可拒收 + 报清楚原因，
+    也不把文件塞进一个用户没指定的库 —— 猜错的代价是书进了没人管的目录。
+    """
     assert library_rules.decide(name="未知文件.xyz") is None
-    assert library_rules.target_root(name="未知文件.xyz") == default_root
+    assert library_rules.target_root(name="未知文件.xyz") is None
+    d = library_rules.resolve_target(name="未知文件.xyz")
+    assert d["library"] is None and d["library_id"] == "" and d["root"] is None
+    assert "没有可接收这个文件的书库" in library_rules.no_library_reason()
+
+
+def test_一个库都没有时的原因文案不一样(isolated, default_root):  # noqa: ARG001
+    """「一个库都没建」和「有库但规则不命中」要分开说 —— 否则用户不知道去改哪儿。"""
+    libs = library.libraries()
+    assert libs, "前置：夹具会建一条本用例的库"
+    assert "没有可接收这个文件的书库" in library_rules.no_library_reason()
+    for l in libs:                       # 真删干净，模拟全新部署的 0 库状态
+        db.delete_library(l["id"])
+    library.invalidate()
+    assert library.libraries() == []
+    assert "还没有书库" in library_rules.no_library_reason()
 
 
 def test_未知扩展名不产生格式结论(typed_libraries):

@@ -116,13 +116,13 @@ def test_库归属_回传优先(isolated, tmp_path, make_library):  # noqa: ARG0
     assert fileops._lib_of("随便什么.epub", {"library_id": "comic"}) == "comic"
 
 
-def test_库归属_按名反查回退(isolated, default_root, make_book):  # noqa: ARG001
+def test_库归属_按名反查回退(isolated, default_root, make_book, test_lib_id):  # noqa: ARG001
     make_book(default_root, "三体.epub")
     library.invalidate()
-    assert fileops._lib_of("三体.epub", None) == library.DEFAULT_LIBRARY_ID
-    assert fileops._lib_of("三体.epub", {}) == library.DEFAULT_LIBRARY_ID
+    assert fileops._lib_of("三体.epub", None) == test_lib_id
+    assert fileops._lib_of("三体.epub", {}) == test_lib_id
 
 
 def test_库归属_查不到时交给调用方兜底(isolated):  # noqa: ARG001
-    # 不能瞎猜一个库：返回 None 让 safe_path 退回默认库根（多库下猜错会改错文件）
+    # 不能瞎猜一个库：返回 None 让 safe_path 退回 OUTPUT_DIR（多库下猜错会改错文件）
     assert fileops._lib_of("不存在的书.epub", None) is None

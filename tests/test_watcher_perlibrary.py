@@ -8,9 +8,10 @@
 
 全部离线、不依赖真 EPUB（扫描只按扩展名收书）。
 """
+import pathlib
 import time
 
-from novelforge import config
+from novelforge import config, server
 from novelforge.core import db, library
 from novelforge.core.watcher import FolderWatcher
 
@@ -111,14 +112,80 @@ def test_closed_library_source_not_scanned_by_scheduler(isolated, make_library, 
     assert (src / "clsrc" / "不应被收.epub").exists(), "关库文件应留在来源目录"
 
 
-def test_global_input_dir_routing_unchanged(isolated, tmp_path):
-    """全局 INPUT_DIR 行为不变：里面的文件仍按格式/关键词路由（这里落默认库 = OUTPUT_DIR）。"""
+def test_global_input_dir_still_routes_to_a_matching_library(isolated, tmp_path, make_library):
+    """全局 INPUT_DIR 的文件仍按「格式」路由到**命中的那个库**。
+
+    第 37 期前这里断的是「落默认库 = OUTPUT_DIR」；默认库没了，但路由本身不变 ——
+    换成一个 `ebook` 库来收，验证命中后落的是**它的根**（不是 OUTPUT_DIR）。
+    """
     inp = config.INPUT_DIR
     inp.mkdir(parents=True, exist_ok=True)
     (inp / "全局书.epub").write_bytes(b"EPUB")
-    out = config.OUTPUT_DIR
+    lib = make_library("ebook", "电子书库", "ebook", tmp_path / "ebooks")
 
     w = _make_watcher()
     w.scan_once()  # 只扫全局 INPUT_DIR
 
-    assert (out / "全局书.epub").exists(), "全局 INPUT_DIR 文件应被路由摄入默认库"
+    assert (pathlib.Path(lib["root_path"]) / "全局书.epub").exists(), \
+        "命中了 ebook 库就该落进它的根"
+
+
+def test_global_input_dir_不收不命中任何库的文件(isolated, tmp_path, make_library):
+    """规则不命中 ⇒ **拒收**：文件留在原地、记一次带原因的失败，绝不猜一个库塞进去。
+
+    这是第 37 期新立的规矩（以前会兜底进默认库）。用户选的语义是「库的 rules 就是
+    路由表，路由表不命中就不猜」——猜错的话书会进一个没人管的目录，还得手工找回来。
+    """
+    inp = config.INPUT_DIR
+    inp.mkdir(parents=True, exist_ok=True)
+    (inp / "没人要.xyz").write_bytes(b"EPUB")   # 扩展名不认识，也不命中任何库的关键词规则
+    lib = make_library("ebook", "电子书库", "ebook", tmp_path / "ebooks")
+
+    w = _make_watcher()
+    res = w.scan_once()                 # 只扫全局 INPUT_DIR
+
+    assert (inp / "没人要.xyz").exists(), "拒收时**不许**动原文件"
+    assert not (pathlib.Path(lib["root_path"]) / "没人要.xyz").exists()
+    assert res["failed"], "拒收要如实进失败清单，不能静默跳过"
+    assert "没有可接收的书库" in res["failed"][0]["error"]
+
+
+def test_建库后被拒收过的文件会自动重新收走(client, auth_headers, isolated,
+                                            monkeypatch, tmp_path):
+    """照着提示建完库，原先被拒收的文件应当**自己**就被收进去。
+
+    这条钉的是 `server._libraries_changed()`（= `library.invalidate()` +
+    `WATCHER.forget_failures()`）里的后半截。没有它的话，拒收与「重试到上限就
+    永久跳过」叠加会变成：用户在提示的指导下建好了库，文件却**再也不被尝试**——
+    他只能删了重投一遍。这与「库的 rules 就是路由表」这个语义毫无关系，
+    纯属失败计数这个实现的副作用。
+
+    刻意把 `max_retries` 设成 1：第一轮就到达上限，于是「再扫一轮」**不会**重试，
+    成败只取决于建库时有没有清计数 —— 否则本用例就算掉了 `forget_failures`
+    也会因为「还没到上限、本来就会重试」而误过。
+    """
+    # 清空书库表：本用例要的是「一个库都没有」这个起点（`isolated` 会建一条）
+    for l in library.libraries():
+        db.delete_library(l["id"])
+    library.invalidate()
+    assert library.libraries() == []
+
+    inp = config.INPUT_DIR
+    inp.mkdir(parents=True, exist_ok=True)
+    (inp / "后来才有人要.epub").write_bytes(b"EPUB")
+
+    w = _make_watcher(max_retries=1)
+    # 让 API 侧的书库增删改作用在**这个**实例上（否则钩子清的是另一个 watcher 的账）
+    monkeypatch.setattr(server, "WATCHER", w)
+
+    assert w.scan_once()["failed"], "前置：没有库时应当拒收"
+    assert not w.scan_once()["failed"], "前置：到上限后就不该再试 —— 否则本用例不成立"
+
+    root = config.LIBRARY_SOURCE_DIR / "ebooks"
+    r = client.post("/api/libraries", headers=auth_headers,
+                    json={"name": "电子书库", "type": "ebook", "root_path": str(root)})
+    assert r.status_code == 200, r.text
+
+    res = w.scan_once()
+    assert res["added"] or res["converted"], f"建库后应被收走，实际 {res}"
+    assert (root / "后来才有人要.epub").exists(), "应当落进新建那条库的根"

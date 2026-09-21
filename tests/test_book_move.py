@@ -106,7 +106,7 @@ class _Watcher:
 # ① 相容闸门：判据只有库扫描白名单
 # ---------------------------------------------------------------------------
 
-def test_相容判据与库扫描白名单一致(env):
+def test_相容判据与库扫描白名单一致(env, test_lib_id):
     """拦与放行都只由 ``library._exts_for_type`` 决定 —— 不新写第二处相容表。
 
     尤其钉住**目录型有声书**：它只有在白名单含音频扩展名时才被算作一本书
@@ -127,9 +127,9 @@ def test_相容判据与库扫描白名单一致(env):
 
     assert migrate.compat_reason(books["三体.epub"], libs["c"]) == ""
     assert migrate.compat_reason(books["活着"], libs["audio2"]) == ""
-    # 默认库是 mixed（全量白名单）：搬回它永远可行
-    default = next(l for l in library.libraries() if l["id"] == library.DEFAULT_LIBRARY_ID)
-    assert all(migrate.compat_reason(b, default) == "" for b in books.values())
+    # mixed 库是全量白名单：什么都搬得进去（第 37 期前这条挂在「默认库」上，
+    # 默认库没了，但判据本身不变 —— 它就是「选 mixed 等于不设限」的契约）
+    assert all(migrate.compat_reason(b, libs[test_lib_id]) == "" for b in books.values())
 
 
 # ---------------------------------------------------------------------------

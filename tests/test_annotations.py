@@ -177,7 +177,7 @@ def test_remap_does_not_strand_active_annotations(isolated):
     assert len(db.trashed_annotations(new)) == 1
 
 
-def test_orphan_clear_spares_live_book_trash_but_reaps_dead_book(client, auth_headers, default_root):
+def test_orphan_clear_spares_live_book_trash_but_reaps_dead_book(client, auth_headers, default_root, test_lib_id):
     """孤儿判据是「book_id 已不在书库」，与垃圾桶状态无关。
 
     - 书**仍存在** → 它的垃圾桶批注不算孤儿，清理不许碰（否则用户一确认，
@@ -188,7 +188,9 @@ def test_orphan_clear_spares_live_book_trash_but_reaps_dead_book(client, auth_he
     live_aid = _add(client, auth_headers, live)
     client.delete(f"/api/books/{live}/annotations/{live_aid}", headers=auth_headers)
 
-    dead = "lib$deleted-book"
+    # ⚠️ 必须挂在**真实存在**的库上：第 37 期起「库已不存在的行」不算孤儿
+    #    （那些书只是界面上看不见，进度/批注还得留着），见 server._orphan_refs。
+    dead = f"{test_lib_id}$deleted-book"
     db.add_annotation(dead, 1, "已删书的批注", "yellow", "")
     dead_trashed = db.add_annotation(dead, 1, "已删书的垃圾桶批注", "yellow", "")
     db.delete_annotation(dead, dead_trashed)
@@ -204,6 +206,30 @@ def test_orphan_clear_spares_live_book_trash_but_reaps_dead_book(client, auth_he
     assert _row(live_aid) is not None, "书还在，它的垃圾桶批注不该被孤儿清理带走"
     assert db.list_annotations(dead) == []
     assert db.trashed_annotations(dead) == []
+
+
+def test_库被移除登记后它的书不算孤儿(client, auth_headers, default_root, test_lib_id):
+    """第 37 期加的第二道判据：**库已不存在**的行不是孤儿，清理**不许**碰。
+
+    场景是真实存在的：用户把一条库「移除登记」（或压根没建库），文件与进度都还在
+    磁盘上，只是界面上看不见了。把「书目为空」当成「所有的书都没了」，一次
+    「清理孤儿记录」就是一次不可恢复的进度/批注大清洗 —— 这条测试就是那道闸门。
+    """
+    bid = _scan_one(default_root)
+    aid = _add(client, auth_headers, bid)
+    assert bid.startswith(f"{test_lib_id}$"), "前置：书的 id 应当带库前缀"
+
+    # 把库移除登记（库里还有书，走 force 只移除登记、不动文件）
+    r = client.delete(f"/api/libraries/{test_lib_id}?force=1", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    library.invalidate()
+
+    listed = client.get("/api/maintenance/orphans", headers=auth_headers).json()
+    assert listed["tables"]["annotations"]["books"] == 0, "库没了 ≠ 书没了，不该算孤儿"
+
+    assert client.post("/api/maintenance/orphans/clear",
+                       headers=auth_headers).status_code == 200
+    assert _row(aid) is not None, "库只是移除登记，进度/批注必须原样留着"
 
 
 # ---------------------------------------------------------------------------

@@ -97,15 +97,27 @@ def test_求书接口已随决策移除(client, auth_headers):
 # 书库：列表 / 新建 / 修改 / 扫描 / 来源目录
 # ---------------------------------------------------------------------------
 
-def test_书库列表含默认库(client, auth_headers):
+def test_书库列表不再有默认库(client, auth_headers, test_lib_id):
+    """第 37 期：产品不再播种任何书库，列表里**只有用户建的**，「默认库」概念整个下线。
+
+    `is_default` 字段被删掉了（不再有「不可删除的那一个」），所以这里直接断言它不存在 ——
+    否则前端会顺手读一个恒为 undefined 的字段，把「谁都不能删」的旧假设留在代码里。
+    """
     data = client.get("/api/libraries", headers=auth_headers).json()
-    default = next((i for i in data["items"] if i["id"] == "default"), None)
-    assert default is not None
-    assert default["is_default"] is True
-    assert default["type"] == "mixed" and default["mode"] == "inplace"
+    items = data["items"]
+    assert [i["id"] for i in items] == [test_lib_id], "只有夹具建的那一条，没有自动播种的库"
+    assert all("is_default" not in i for i in items)
+    assert items[0]["type"] == "mixed" and items[0]["mode"] == "inplace"
     # 新建向导要靠它给默认路径
     assert data["source_dir"] == str(config.LIBRARY_SOURCE_DIR)
     assert {t["value"] for t in data["types"]} == {"ebook", "comic", "audiobook", "mixed"}
+
+
+def test_一个书库都没有时列表真的为空(client, auth_headers, test_lib_id):
+    """全新部署的真实形态：0 个书库。以前这里会自动合成一条「默认书库」，永远不为空。"""
+    r = client.delete(f"/api/libraries/{test_lib_id}", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert client.get("/api/libraries", headers=auth_headers).json()["items"] == []
 
 
 def test_新建书库并改属性与扫描(client, auth_headers):
@@ -170,10 +182,16 @@ def test_空库名被拒(client, auth_headers, tmp_path):
     assert "库名" in r.json()["detail"]
 
 
-def test_默认库不可删除(client, auth_headers):
-    r = client.delete("/api/libraries/default", headers=auth_headers)
-    assert r.status_code == 400
-    assert "默认书库不可删除" in r.json()["detail"]
+def test_没有任何库是不可删除的(client, auth_headers, test_lib_id, make_library):
+    """第 37 期：以前那条「默认书库不可删除」的护栏随默认库概念一起下线。
+
+    现在**每一**条库都能删 —— 但「库里还有书」的拦截仍在（那才是真正的数据保护，
+    见 test_非空库需force才移除登记且不删文件）。
+    """
+    empty = make_library("comic2", "空漫画库", "comic", pathlib.Path(config.LIBRARY_SOURCE_DIR) / "c2")
+    for lid in (test_lib_id, empty["id"]):
+        r = client.delete(f"/api/libraries/{lid}", headers=auth_headers)
+        assert r.status_code == 200, f"{lid} 应当可以移除登记：{r.text}"
 
 
 def test_非空库需force才移除登记且不删文件(client, auth_headers):

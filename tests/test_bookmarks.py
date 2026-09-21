@@ -275,12 +275,14 @@ def test_改名时同位置的墓碑不挡住搬迁(isolated):
     assert db.list_bookmarks(old) == []
 
 
-def test_孤儿清理不碰仍在书库的书(client, auth_headers, default_root):
+def test_孤儿清理不碰仍在书库的书(client, auth_headers, default_root, test_lib_id):
     live = _scan_one(default_root)
     live_bmid = _add(client, auth_headers, live)["id"]
     client.delete(f"/api/books/{live}/bookmarks/{live_bmid}", headers=auth_headers)
 
-    dead = "lib$deleted-book"
+    # ⚠️ 必须挂在**真实存在**的库上：第 37 期起「库已不存在的行」不算孤儿
+    #    （那些书只是界面上看不见，进度/批注还得留着），见 server._orphan_refs。
+    dead = f"{test_lib_id}$deleted-book"
     db.save_bookmark(dead, "1:0.1", label="已删书的书签")
     dead_trashed = db.save_bookmark(dead, "2:0.1", label="已删书的垃圾桶书签")["id"]
     db.delete_bookmark(dead, dead_trashed)

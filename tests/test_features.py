@@ -4,7 +4,7 @@
 例如元数据抓取只写 EPUB 的 OPF，所以漫画库不该显示那些设置页。
 把边界钉住，是为了防止以后有人顺手把能力加宽，让用户点进一个用不了的入口。
 """
-from novelforge.core import features, library
+from novelforge.core import features
 
 #: 与格式无关的通用能力（三类库都有）
 COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"}
@@ -76,7 +76,10 @@ def test_能力矩阵与中文标签():
     assert features.labels()["convert"] == "本地转换（TXT → EPUB）"
 
 
-def test_默认库是混合库所以不裁剪(isolated):  # noqa: ARG001
-    default = library.default_library()
-    assert default["type"] == "mixed"
-    assert features.features_for(default["type"]) == features.ALL_FEATURES
+def test_混合库不裁剪任何能力(isolated):  # noqa: ARG001
+    """`mixed` 库的能力集 = 全部。
+
+    第 37 期前这条测的是「合成出来的默认库是 mixed」；默认库没了，但**判据本身**
+    （mixed ⇒ 全量白名单）仍要钉住 —— 它是「新建库时选 mixed 就等于不裁剪」的契约。
+    """
+    assert features.features_for("mixed") == features.ALL_FEATURES

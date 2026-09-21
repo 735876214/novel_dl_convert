@@ -125,10 +125,22 @@ def _stop_scrape_worker():
     _quiesce_background()
 
 
+#: 夹具 `isolated` 建的**本用例书库** id（根 = 该用例的 `OUTPUT_DIR`）。
+#: 以前这行是产品自己播种的；第 37 期起产品不再建任何库，改由夹具显式建。
+#: 值叫 "default" 纯属省事，**没有特殊含义**（产品侧已无「默认库」概念）。
+TEST_LIB_ID = "default"
+
+
 @pytest.fixture(scope="session")
 def session_root() -> pathlib.Path:
     """会话级临时根（所有测试数据的父目录）。"""
     return _SESSION_ROOT
+
+
+@pytest.fixture
+def test_lib_id() -> str:
+    """本用例那条书库的 id（= `TEST_LIB_ID`）；需要断言「书归到了这条库」时用它。"""
+    return TEST_LIB_ID
 
 
 @pytest.fixture
@@ -147,7 +159,15 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     monkeypatch.setattr(config, "LIBRARY_SOURCE_DIR", tmp_path / "libraries")
     db.close()
     db.init()
-    library.ensure_default_library()
+    # 第 37 期：产品**不再播种任何书库**（全新部署就是 0 个库，等用户手建），
+    # 所以这套测试自己建一条 —— 绝大多数用例都靠「往 `default_root` 放本书再扫描」
+    # 起手，没有库就没有根可扫，`library.books()` 会直接是空的。
+    #
+    # id 沿用 "default" 只是省事：它**没有任何特殊含义**了，产品侧「默认库」
+    # 这个概念已经整个下线（`DEFAULT_LIBRARY_ID` / `default_library()` /
+    # `ensure_default_library()` 都已删除），`"default"` 现在只是个普通 id 字符串。
+    db.create_library(TEST_LIB_ID, "测试书库", "mixed", "inplace",
+                      str(config.OUTPUT_DIR), sort_order=0)
     library.invalidate()
     try:
         yield
@@ -160,13 +180,16 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
 
 @pytest.fixture
 def default_root(isolated) -> pathlib.Path:  # noqa: ARG001 —— 依赖 isolated 完成目录切换
-    """默认书库的根目录（= 本用例的 `OUTPUT_DIR`）。"""
+    """本用例那条书库的根目录（= 本用例的 `OUTPUT_DIR`）。
+
+    名字带 default 是历史包袱（产品侧已无「默认库」）；语义就是「起手那个库」。
+    """
     return pathlib.Path(config.OUTPUT_DIR)
 
 
 @pytest.fixture
 def client(isolated) -> Iterator[TestClient]:  # noqa: ARG001
-    """走过 lifespan 的 TestClient（自动建表 + 落默认书库）。
+    """走过 lifespan 的 TestClient（自动建表；**不再播种书库**，见 `isolated`）。
 
     依赖 `isolated`：去掉它就会连到会话级共享库上，断言互相污染。
     """
