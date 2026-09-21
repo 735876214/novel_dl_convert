@@ -106,6 +106,18 @@ def test_status_values_are_legal() -> None:
     assert not bad, f"status 取值非法：{bad}"
 
 
+def test_说明文案是纯文本不带标记符号() -> None:
+    """`note` 由 `SettingsPlaceholder.vue` 用 `{{ page.note }}` **插值**渲染。
+
+    也就是说 markdown 与 HTML 都不会被解析：写 `**重点**` 会把星号原样显示给用户。
+    想做强调得改渲染方式（v-html + 受控标签），那是另一件事 —— 在那之前这里必须保持纯文本。
+    """
+    notes = re.findall(r"note:\s*'([^']*)'", _read(NAV_TS))
+    assert notes, "一个 note 都没解析到，正则大概过期了"
+    bad = [n for n in notes if "**" in n or "`" in n or "<strong>" in n]
+    assert not bad, f"这些说明文案带了会被原样显示的标记符号：{bad[:2]}"
+
+
 def test_every_upstream_page_has_a_landing() -> None:
     text = _read(NAV_TS)
     missing = [t for t in UPSTREAM_TITLES if f"title: '{t}'" not in text]

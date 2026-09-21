@@ -122,7 +122,9 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['图标风格', '自定义图标上传', '排序（Newest / Name）'],
           uncaptured: '该页正文仅 134 字符，图标风格选项未渲染为可判定控件。',
         },
-        note: '未实现：图标风格统一由设计系统决定，不提供自定义图标 / 上传图标风格选项。此页仅作上游对照。',
+        // ⚠️ note 是**纯文本插值**（SettingsPlaceholder.vue 用 {{ page.note }} 渲染），
+        // 写 ** 或反引号会原样显示，所以这里不用任何标记符号。
+        note: '已结项（不做）：上游这一页是「图标风格（多套图标集切换）+ 自定义图标上传 + 排序」。本项目的图标是前端的内联 SVG 常量表（lib/icons.ts，约 60 个键，运行时零外部请求 —— 这是 NAS 内网部署的硬要求）：做「风格」要备多套图标集，做「上传」要存储与覆盖机制，成本远超收益。故此页保持只读说明，不新增控件，也不再列为待做项。',
       }),
       p('appearance/layout', 'Layout', '布局', 'ready', {
         upstream: {
@@ -319,7 +321,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['每书库命名模式（Folder as Book / File as Book）', 'File as Book 默认模式', '13 个 TOKENS', '7 个 MODIFIERS', '4 类 STRUCTURE（optional / fallback / folder / or）', '4 个配方', '元数据缺失时的降级预览', 'Cross-platform path sanitization'],
         },
         link: { to: '/tools/logs?tab=scrape', label: '刮削面板 → 命名规则' },
-        note: '已实现：命名规则存服务端（config.naming，**每库可覆写**）+ 4 个配方 + 生效预览，支持 9 个占位符（书名 / 作者 / 系列 / 系列序号 / 卷号 / 出版年 / 出版社 / 语言 / 扩展名）。第 28 期起规则只作用于**副本名**（改名不再动源文件，批量重命名工具已并入刮削面板的「命名规则」区块，可预览并一键重出版）。上游的 13 token / 7 修饰符 / 结构语法未支持。',
+        note: '已实现：命名规则存服务端（config.naming，每库可覆写）+ 4 个配方 + 生效预览，支持 9 个占位符（书名 / 作者 / 系列 / 系列序号 / 卷号 / 出版年 / 出版社 / 语言 / 扩展名）。第 28 期起规则只作用于「副本名」（改名不再动源文件，批量重命名工具已并入刮削面板的「命名规则」区块，可预览并一键重出版）。上游的 13 token / 7 修饰符 / 结构语法未支持。',
       }),
       p('library/maintenance', 'Maintenance', '维护', 'ready', {
         upstream: {
@@ -414,7 +416,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           desc: 'Sync reading status and reviews with Hardcover.',
           items: ['API Token（已设置 / 未设置）', 'Validate token', 'Save'],
         },
-        note: '已实现：API Token 存储（掩码回显，提交掩码 = 不修改）+ 真实连通性验证（向 Hardcover GraphQL 发 `{ me { id username } }` 探针）。⚠️ 其鉴权失败也可能返回 200 + `errors`，所以不能只看状态码。未支持：状态 / 书评同步（需先做书籍匹配）。',
+        note: '已实现：API Token 存储（掩码回显，提交掩码 = 不修改）+ 真实连通性验证（向 Hardcover GraphQL 发 { me { id username } } 探针）。⚠️ 其鉴权失败也可能返回 200 + errors 字段，所以不能只看状态码。未支持：状态 / 书评同步（需先做书籍匹配）。',
       }),
       p('readwise', 'Readwise', 'Readwise', 'ready', {
         upstream: {
@@ -422,7 +424,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           desc: 'Send your highlights to Readwise automatically.',
           items: ['Access Token（已设置 / 未设置）', 'Test', 'Enable sync（自动推送高亮）', 'Save'],
         },
-        note: '已实现：Access Token 存储 + 真实验证（`GET /api/v2/auth/`）。⚠️ Readwise 用 204 表示验证通过（不是 200）——按 200 判定会把有效凭据误判为失败。未支持：自动推送高亮与「Enable sync」开关。',
+        note: '已实现：Access Token 存储 + 真实验证（向 GET /api/v2/auth/ 发探针）。⚠️ Readwise 用 204 表示验证通过（不是 200）——按 200 判定会把有效凭据误判为失败。未支持：自动推送高亮与「Enable sync」开关。',
       }),
       p('storygraph', 'StoryGraph', 'StoryGraph', 'ready', {
         upstream: {
