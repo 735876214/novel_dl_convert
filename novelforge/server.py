@@ -26,7 +26,7 @@ from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, act
                    fonts, comics, audio, opds, komga, koreader, integrations,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, migrate, library_rules, features, series_meta,
-                   lib_settings)
+                   lib_settings, browse_counts)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -3350,6 +3350,20 @@ def api_stats(
     的 `library_id: str = ""` 同一条惯例）。阅读会话没有库维度，按「书属于哪个库」判。
     """
     return stats.overview(days, top, library_id)
+
+
+@app.get("/api/browse-counts")
+def api_browse_counts(library_id: str = Query("")):
+    """侧栏「浏览」组的三计数：作者 / 系列 / 批注（第 34 期）。
+
+    **刻意不塞进 `/api/stats`**：那个接口的既有键有测试钉住、只增不删，
+    而这个计数要 60 秒节流（统计接口不能缓存，否则切库/改数据后页面就是旧的）。
+
+    ``library_id`` 空串 = 全部书库（侧栏用这个 —— 作者 / 系列 / 批注三页目前都是跨库的，
+    计数必须跨库才对得上）；浏览页传当前库，取该库自己的数字。
+    未知库 → 空集合（全 0），**不 404**，与 `/api/stats` / `/api/reading-activity` 同惯例。
+    """
+    return browse_counts.counts(library_id)
 
 
 @app.get("/api/reading-activity")

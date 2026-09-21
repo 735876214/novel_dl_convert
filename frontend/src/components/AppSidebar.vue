@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import Icon from '@/components/ui/Icon.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
-import { isShelfGroup, type NavItem } from '@/data/nav'
-import { apiErrorMessage } from '@/lib/api'
+import { isShelfGroup, type NavGroup, type NavItem } from '@/data/nav'
+import { api, apiErrorMessage, type BrowseCounts } from '@/lib/api'
 import { useCollectionsStore } from '@/stores/collections'
 import { useLibraryStore } from '@/stores/library'
 import { useNavStore } from '@/stores/nav'
@@ -82,6 +82,23 @@ const { cfg, loadConfig } = useSettingsConfig()
  */
 const achievementsEnabled = computed(() => cfg.value?.achievements?.enabled !== false)
 
+/**
+ * 「浏览」组的三计数（作者 / 系列 / 批注）。**刻意不传 library_id**：
+ * 作者 / 系列 / 批注三页目前都是**跨库**的，计数也跨库才能与页面上列出的条数对得上
+ * （传了当前库就会出现「侧栏 3、页面 12」）。服务端 60 秒节流，故跟着路由刷新几乎零开销。
+ *
+ * 读失败 ⇒ 保持 null（**不渲染胶囊**）：显示 0 是个具体的数字，会与「真的没有」混淆。
+ */
+const browseCounts = ref<BrowseCounts | null>(null)
+
+async function loadBrowseCounts(): Promise<void> {
+  try {
+    browseCounts.value = await api.browseCounts()
+  } catch {
+    browseCounts.value = null
+  }
+}
+
 onMounted(() => {
   collections.load()
   library.loadBooks()
@@ -90,7 +107,10 @@ onMounted(() => {
   // 能力清单要跟着**当前库**走（含刷新后恢复上次选中的库）
   void library.loadFeatures()
   void loadConfig(false, true)
+  void loadBrowseCounts()
 })
+
+watch(() => route.path, () => void loadBrowseCounts())
 
 /** 菜单项 → 所需能力（**不声明 = 通用能力**，任何库类型都显示）。菜单归前端所有，所以这张表在前端。 */
 const ITEM_FEATURE: Record<string, string> = {
@@ -157,8 +177,21 @@ const groups = computed(() =>
   })),
 )
 
+/** 「浏览」组三项的计数键 = 菜单 id（与后端响应的字段名逐字一致，别改名） */
+const BROWSE_COUNT_KEYS: Record<string, 'authors' | 'series' | 'annotations'> = {
+  authors: 'authors',
+  series: 'series',
+  annotations: 'annotations',
+}
+
 function navCount(item: NavItem): number | null {
   if (item.countSource === 'running') return tasks.runningCount
+  if (item.countSource === 'browse') {
+    const key = BROWSE_COUNT_KEYS[item.id]
+    const c = browseCounts.value
+    // 数字还没到 / 读失败 → null（不渲染胶囊），而不是拿 0 冒充「没有」
+    return key && c ? c[key] : null
+  }
   return item.count ?? null
 }
 
@@ -190,6 +223,23 @@ function onItemClick(groupTitle: string | null, item: NavItem): void {
     return
   }
   router.push(pathFor(item.id))
+}
+
+/** 组底部「更多」行括号里的数字：申报了来源就用真实数，没申报才回退到本组条数 */
+function groupMoreCount(group: NavGroup): number {
+  if (group.more?.countSource === 'libraries') return library.libraryEntities.length
+  return group.items.length
+}
+
+/** 组底部「更多」行的去向：申报了 `to` 就按路由去，否则沿用「进书架看全部」 */
+function onGroupMore(group: NavGroup): void {
+  const to = group.more?.to
+  if (to) {
+    router.push(to)
+    return
+  }
+  library.openShelf(group.more?.label ?? '')
+  router.push('/shelf')
 }
 
 /** 分组头部的「新增 / 更多」：三组各自接到真实去处，不再有演示态动作 */
@@ -322,9 +372,9 @@ async function onGroupAction(title: string, action: 'add' | 'more'): Promise<voi
           <div
             v-if="group.more"
             class="mt-0.5 flex cursor-pointer items-center gap-1 rounded-md px-[0.625rem] py-2 text-[11.5px] text-muted-foreground transition-colors hover:bg-[var(--shell-accent-wash)] hover:text-primary"
-            @click="library.openShelf(group.more.label); router.push('/shelf')"
+            @click="onGroupMore(group)"
           >
-            <span>{{ group.more.label }}（{{ group.items.length }}）</span>
+            <span>{{ group.more.label }}（{{ groupMoreCount(group) }}）</span>
             <Icon name="arrowRight" class="ml-auto h-[0.8125rem] w-[0.8125rem]" />
           </div>
         </div>

@@ -836,6 +836,22 @@ export interface AnnotationOverview {
   longest_quiet_weeks: number
 }
 
+/**
+ * 侧栏「浏览」组的三计数（第 34 期）。
+ * `authors` / `series` / `annotations` 与各自目标页**同源**（等于页面上会列出的条数）；
+ * `cached` = 服务端 60 秒节流命中了缓存（数字可能比数据晚至多一分钟）。
+ */
+export interface BrowseCounts {
+  /** 空串 = 全部书库 */
+  library_id: string
+  authors: number
+  series: number
+  annotations: number
+  books: number
+  computed_at: number
+  cached: boolean
+}
+
 // ---------- 收藏夹 ----------
 
 export interface CollectionItem {
@@ -2878,6 +2894,15 @@ export const api = {
     ),
 
   annotationOverview: () => request<AnnotationOverview>('/api/annotations/overview'),
+
+  /**
+   * 侧栏「浏览」组的三计数。不传库 = 全部书库（侧栏用这个：三个目标页都是跨库的，
+   * 计数跨库才对得上）；浏览页传当前库，取该库自己的数字。服务端 60 秒节流。
+   */
+  browseCounts: (libraryId = '') =>
+    request<BrowseCounts>(
+      `/api/browse-counts${libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : ''}`,
+    ),
 
   // ---------- 书库（第 10 期：库实体 / 分面 / 能力 / 迁移） ----------
 

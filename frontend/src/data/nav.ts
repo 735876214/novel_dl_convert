@@ -17,8 +17,13 @@ export interface NavItem {
   icon: string
   /** 静态计数；不写则不渲染胶囊 */
   count?: number
-  /** 动态计数来源：目前只有任务中心用它取「运行中 + 排队中」 */
-  countSource?: 'running'
+  /**
+   * 动态计数来源（**不要把数字写死**，写死即假数据）：
+   *   · `running` —— 任务中心的「运行中 + 排队中」；
+   *   · `browse`  —— 「浏览」组三项，取 `/api/browse-counts`（第 34 期；
+   *      数字与目标页同源，服务端 60 秒节流，按 id 到响应里取同名字段）。
+   */
+  countSource?: 'running' | 'browse'
 }
 
 export interface NavGroup {
@@ -27,7 +32,14 @@ export interface NavGroup {
   actions?: Array<'add' | 'more'>
   search?: { placeholder: string }
   items: NavItem[]
-  more?: { label: string }
+  /**
+   * 组底部的「更多」行。三件必须**一起**声明，否则就会出现
+   * 「括号里是书库数、点下去是书架」这种读数与去向不一致的含糊：
+   *   · `label`       —— 文案；
+   *   · `to`          —— 真实去向（路由路径）；
+   *   · `countSource` —— 括号里的数字是什么（`libraries` = 书库实体个数）。
+   */
+  more?: { label: string; to?: string; countSource?: 'libraries' }
   empty?: string
 }
 
@@ -55,9 +67,11 @@ export const NAV_GROUPS: NavGroup[] = [
     title: '浏览',
     collapsible: true,
     items: [
-      { id: 'authors', label: '作者', icon: 'users' },
-      { id: 'series', label: '系列', icon: 'layers' },
-      { id: 'annotations', label: '批注', icon: 'pencil' },
+      // 三项的计数都来自 /api/browse-counts，**与各自目标页同源**：
+      // 侧栏写「作者 3」而作者页列出 12 位就是在说假话（见 core/browse_counts.py）。
+      { id: 'authors', label: '作者', icon: 'users', countSource: 'browse' },
+      { id: 'series', label: '系列', icon: 'layers', countSource: 'browse' },
+      { id: 'annotations', label: '批注', icon: 'pencil', countSource: 'browse' },
     ],
   },
   {
@@ -66,7 +80,10 @@ export const NAV_GROUPS: NavGroup[] = [
     actions: ['add', 'more'],
     search: { placeholder: '筛选书库…' },
     items: LIBRARIES as NavEntry[],
-    more: { label: '查看全部书库' },
+    // ⚠️ 括号里原来是 `items.length`（= 真实书库数 + 1，因为「全部书库」也是一项），
+    //    而点下去进的是书架 ⇒ 读的是书库数、看的是全部书。现在口径统一为
+    //    「书库实体个数 + 进书库管理页」（与上游同款：`查看全部书库(9)` → /libraries）。
+    more: { label: '查看全部书库', to: '/tools/libraries', countSource: 'libraries' },
   },
   {
     title: '智能书架',
