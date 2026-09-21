@@ -284,8 +284,13 @@ def _year_of(opf: str) -> str:
 
 
 def _isbn_of(opf: str) -> str:
+    """从 ``dc:identifier`` 里挑 ISBN，返回**原始文本**（保留连字符等写法）。
+
+    ⚠️ 形状判定走 ``metadata.isbn_digits``（唯一真值源，与 ``fileops._set_isbn`` 同一处）。
+    这里原先用的是 `[\\dxX-]{10,17}` 的**子串**匹配，会把 UUID 当 ISBN —— 见该函数的注释。
+    """
     for t in _tag_all(opf, "dc:identifier"):
-        if re.search(r"[\dxX-]{10,17}", t):
+        if metadata.isbn_digits(t):
             return re.sub(r"<[^>]+>", "", t).strip()
     return ""
 

@@ -315,13 +315,16 @@ def _set_tags(opf: str, values: list) -> str:
 def _set_isbn(opf: str, value: str) -> str:
     """改写 ISBN。
 
-    只认「值看起来像 ISBN」的那个 ``dc:identifier``（判定与 ``library._isbn_of`` 一致）——
-    不能无脑改第一个 identifier，那可能是 UUID / URI 之类的书标识符。
+    只认「值看起来像 ISBN」的那个 ``dc:identifier``（形状判定走 ``metadata.isbn_digits``，
+    与 ``library._isbn_of`` **同一处**）—— 不能无脑改第一个 identifier，
+    那可能是 UUID / URI 之类的书标识符。
+    ⚠️ 第 34 期修：此处原先用的 `[\\dxX-]{10,17}` 子串判据会把随机 UUID 当 ISBN，
+    于是**把书自己的标识符覆盖掉**（实测约 1/3 命中）。现在 UUID 一律不认，只会新增一条。
     """
     val = escape(value)
     for m in re.finditer(r"<dc:identifier[^>]*>(.*?)</dc:identifier>", opf, re.S | re.I):
         text = re.sub(r"<[^>]+>", "", m.group(1))
-        if re.search(r"[\dxX-]{10,17}", text):
+        if metadata.isbn_digits(text):
             return opf[: m.start()] + f'<dc:identifier id="isbn">{val}</dc:identifier>' + opf[m.end():]
     return opf.replace("</metadata>", f'<dc:identifier id="isbn">{val}</dc:identifier></metadata>', 1)
 
