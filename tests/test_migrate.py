@@ -248,3 +248,24 @@ def test_台账可见(default_with_books, typed_libraries):
     assert batches[0]["batch_id"] == planned["batch_id"]
     assert batches[0]["done"] == 5
     assert batches[0]["failed"] == 0
+
+
+def test_回滚要把关联数据也搬回来(default_with_books, typed_libraries):
+    """回滚若只把文件移回原位、**不把关联数据搬回**，用户的进度 / 批注会留在新 id 上 ——
+    文件回到了原处，书却「干干净净」，与 T1 修的那类静默断链是同一个病。"""
+    before = {b["name"]: b["id"] for b in library.books()}
+    old_id = next(iter(before.values()))
+    db.set_progress(old_id, 5, 20.0)
+    db.set_override(old_id, "title", "用户改过的书名")
+
+    planned = migrate.plan()
+    migrate.execute(planned["batch_id"])
+    migrate.rollback(planned["batch_id"])
+
+    assert db.get_progress(old_id) is not None, "回滚后进度要回到原位对应的 id 上"
+    assert db.get_progress(old_id)["locator"] == 5
+    assert db.get_overrides(old_id)["title"] == "用户改过的书名"
+    after = {b["name"]: b["id"] for b in library.books()}
+    assert after == before
+    for nid in set(after.values()) - {old_id}:
+        assert db.get_progress(nid) is None, "新 id 上不残留（否则是走不到的孤儿行）"

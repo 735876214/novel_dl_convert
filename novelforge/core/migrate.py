@@ -355,6 +355,16 @@ def rollback(batch_id: str) -> dict:
             errors.append({"src": str(src), "dst": str(dst), "error": reason})
             failed += 1
             continue
+        # 反向 remap：与 execute 的搬过去**必须成对**。缺了这一半，回滚就是
+        # 「文件回来了、进度 / 批注 / 元数据留在废 id 上」—— 用户看到的是书回到了原处
+        # 却「干干净净」，读点还都不报错，与本期 T1 修的静默断链同一个病。
+        # 两侧 id 都用 id 的**定义式**重算（``库$basename 哈希``），不猜、不存快照：
+        # 这样即使 manifest 行是上一版写下、或文件被手工挪过，算出来的也是当下真值。
+        src_lib = _src_library_id_of(src)
+        old_id = library.book_id(str(src), src_lib)
+        new_id = library.book_id(str(dst), r["library_id"])
+        if old_id != new_id:
+            db.remap_book_id(new_id, old_id)
         db.migration_mark(r["id"], "rolled_back")
         back += 1
 
