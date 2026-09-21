@@ -50,6 +50,21 @@ _thread: "threading.Thread | None" = None
 _last_verify = 0.0
 _current = ""
 
+#: **worker 世代号**（第 34 期定位到的真根因的修法）。
+#:
+#: 为什么需要它：``stop(timeout)`` 只等一段时间就走，而**单条处理是不可中断的整段调用**
+#: （外呼 / 重试 / 写副本都可能远超 timeout）—— 于是 worker 会带着 ``_stop`` 检查不到的
+#: 进度把那条跑完，然后**照常写库**。
+#: 而测试的库是**用例级隔离**的（``db.close()`` + ``db.init()`` 换一套空库），
+#: 残留线程的写就落到**下一个用例的库**上：删行让全局总数变 0、插行变 2 ——
+#: 这正是「单跑必过、全量偶挂」的形状（受害断言是全局 ``total``）。
+#:
+#: 有了世代号，「**已被作废的那一轮不得落库**」成为可强制的事实：
+#: `stop()` / `start()` 推进世代 ⇒ 旧世代的一切写入被拒。
+#: 代价只是「那条留到下次重来」—— 而它本来就是既有恢复路径
+#: （``start()`` 会 ``scrape_reset_running()`` 把 running 打回 pending）。
+_epoch = 0
+
 
 # ---------------- 配置 / 状态查询 ----------------
 
@@ -74,6 +89,29 @@ def _max_attempts(library_id=None) -> int:
 def is_running() -> bool:
     with _lock:
         return bool(_thread and _thread.is_alive())
+
+
+def epoch() -> int:
+    """当前 worker 世代号（`stop()` / `start()` 都会推进它）。
+
+    给「想确认自己那一轮是否已作废」的调用方用（worker 内部走 :func:`_stale`）。
+    """
+    with _lock:
+        return _epoch
+
+
+def _stale(gen) -> bool:
+    """worker 的一轮是否**已作废**（停机过、或又起了一轮）。
+
+    ``gen is None`` = 不受世代约束 —— 同步调用与接口触发的处理都属于这一类
+    （它们由当前请求驱动，没有「停机」这回事），所以这个守卫对它们完全透明。
+    """
+    return gen is not None and (_stop or gen != _epoch)
+
+
+def _aborted() -> dict:
+    """本轮已作废：**一个字都不写库**，条目留给下一轮重来。"""
+    return {"ok": False, "aborted": True, "error": "worker 已停机，本轮结果未落库"}
 
 
 def worker_state() -> dict:
@@ -216,39 +254,55 @@ def _norm_field(field: str, value):
     return str(value or "").strip()
 
 
-def process(bid, *, fetch: bool = None) -> dict:
+def process(bid, *, fetch: bool = None, gen: int = None) -> dict:
     """处理一本书：可选在线刮削 → 出版副本 → 落状态。**不抛异常**。
 
     ``fetch``：``None`` = 按配置自动判断（启用且没抓过、或队列标了强制重抓）；
     ``False`` = 只做文件操作（重建副本走这条，不外呼、够快）。
+
+    ``gen``：调用方的 worker 世代号（见 ``_epoch``）。**只有后台 worker 传**；
+    同步调用与接口触发一律 ``None`` = 不受世代约束。传入时，一旦那一轮被作废，
+    本函数在**每个落库点**停手并返回 ``{"aborted": True}`` —— 条目留待下轮重来。
     """
     bid = str(bid)
+
+    def stale() -> bool:
+        return _stale(gen)
+
     row = db.scrape_get(bid) or {}
     lib_id = str(row.get("library_id") or "")
     lib = library.get_library(lib_id) if lib_id else None
     if not lib:
+        if stale():
+            return _aborted()
         db.scrape_delete(bid)
         return {"ok": False, "error": "书库已不在（台账已清）"}
     pdir = publish.publish_dir(lib_id)
     if pdir is None:
+        if stale():
+            return _aborted()
         db.scrape_set(bid, status="skipped", error="该库未配置成品目录")
         return {"ok": False, "skipped": True, "error": "该库未配置成品目录"}
 
     try:
         book = library.by_id(bid)
     except Exception as e:                            # noqa: BLE001 —— book_id 冲突等
+        if stale():
+            return _aborted()
         db.scrape_set(bid, status="failed", error=f"书目冲突：{e}")
         return {"ok": False, "error": str(e)}
     if not book:
-        return _lost(bid, row, lib, "源已不在书目里")
+        return _lost(bid, row, lib, "源已不在书目里", gen=gen)
 
     name = str(book.get("name") or row.get("source_rel") or "")
     src = library.root_of(book) / name
     if not src.exists():
-        return _lost(bid, row, lib, "源文件已不在")
+        return _lost(bid, row, lib, "源文件已不在", gen=gen)
 
     cfg = lib_settings.config_for(lib_id)
     sig = publish.source_sig(src)
+    if stale():
+        return _aborted()
     db.scrape_set(bid, status="running", library_id=lib_id, source_rel=name)
     _set_current(name)
     try:
@@ -270,6 +324,10 @@ def process(bid, *, fetch: bool = None) -> dict:
         res = publish.publish(book, cfg=cfg, updates=updates,
                               cover=db.get_cover(bid) or None,
                               prev_rel=str(row.get("link_rel") or ""))
+        # ⚠️ 这段可能跑很久（外呼 / 重试 / 写副本），期间 stop() 可能已经把本轮作废
+        #    —— 落库前必须再校验一次，否则残留线程会把结果写进**换过的那套库**。
+        if stale():
+            return _aborted()
         if res.get("ok"):
             db.scrape_set(bid, status="ok", link_rel=res.get("rel") or "",
                           link_mode=res.get("mode") or "",
@@ -288,48 +346,57 @@ def process(bid, *, fetch: bool = None) -> dict:
                           force_fetch=0)
             _log(name, f"跳过刮削：{res.get('error')}", ok=True)
             return {"ok": False, "skipped": True, **res}
-        return _failed(bid, row, lib_id, res.get("error") or "未知失败", name)
+        return _failed(bid, row, lib_id, res.get("error") or "未知失败", name, gen=gen)
     finally:
         _set_current("")
 
 
-def _failed(bid, row, lib_id, error: str, name: str) -> dict:
+def _failed(bid, row, lib_id, error: str, name: str, gen: int = None) -> dict:
     """失败：未到上限打回 pending（下轮再试），到上限标 failed 等人工。"""
     attempts = int(row.get("attempts") or 0) + 1
     over = attempts >= _max_attempts(lib_id)
+    if _stale(gen):
+        return _aborted()
     db.scrape_set(bid, status="failed" if over else "pending", attempts=attempts,
                   error=error)
     _log(name, f"刮削失败（第 {attempts} 次）：{error}", ok=False)
     return {"ok": False, "error": error, "attempts": attempts, "give_up": over}
 
 
-def _lost(bid, row, lib, why: str) -> dict:
+def _lost(bid, row, lib, why: str, gen: int = None) -> dict:
     """源不见了：副本还在 → 孤本待处置；副本也没了 → 台账没有意义，清掉。"""
     pdir = publish.publish_dir(str(lib.get("id")))
     rel = str(row.get("link_rel") or "")
     copy = (pdir / rel) if (pdir and rel) else None
     name = str(row.get("source_rel") or bid)
     if copy is not None and copy.exists():
+        if _stale(gen):
+            return _aborted()
         db.scrape_set(bid, status="orphan", error=f"{why}，副本为唯一留存")
         _log(name, f"原文件已不在（{why}），副本为唯一留存：{copy}")
         return {"ok": False, "orphan": True, "error": why}
+    if _stale(gen):
+        return _aborted()
     db.scrape_delete(bid)
     return {"ok": False, "error": f"{why}，且副本也不在（台账已清）"}
 
 
 # ---------------- 校验（只标记，不处置）----------------
 
-def verify(library_id=None) -> dict:
+def verify(library_id=None, gen: int = None) -> dict:
     """校验已出版副本与源文件是否还在。**只降级标记 + 记日志，绝不处置。**
 
     - 副本缺失 → ``removed``（待确认：是否连原文件一起删）
     - 源缺失而副本在 → ``orphan``（副本是唯一留存了）
 
     返回 ``{checked, removed: [...], orphan: [...]}``，供接口回显。
+    ``gen`` 口径同 :func:`process`：worker 传世代号，作废后不再落库（见 ``_epoch``）。
     """
     rows = db.scrape_list(library_id=library_id, status="ok")
     removed, orphan = [], []
     for row in rows:
+        if _stale(gen):
+            break
         bid = str(row.get("book_id"))
         lib = library.get_library(row.get("library_id"))
         if not lib:
@@ -557,11 +624,12 @@ def start() -> bool:
     启动时把残留的 ``running`` 打回 ``pending`` —— 上次进程被 kill 时进行中的
     条目不该永远卡住。
     """
-    global _thread, _stop
+    global _thread, _stop, _epoch
     with _lock:
         if _thread and _thread.is_alive():
             return False
         _stop = False
+        _epoch += 1                     # 新一轮 = 新世代（上一轮的残留写入从此被拒）
         try:
             db.scrape_reset_running()
         except Exception:                             # noqa: BLE001
@@ -577,9 +645,14 @@ def stop(timeout: float = 0.0) -> None:
     ⚠️ 测试里**必须**带 timeout 收尾：worker 是 daemon 线程，而测试的 DB 是
     用例级隔离的（``db.close()`` + ``db.init()``）——一个跨用例活着的线程会拿着
     旧连接去查新库，制造「单独跑必过、全量跑随机挂」的假故障。
+
+    ⚠️ 但 timeout **等不到它真的退出**（单条处理不可中断，见 ``_epoch``）。
+    所以本函数一定会推进世代号：那之后残留线程即使跑完手上这条，也**写不进库**。
     """
-    global _stop
+    global _stop, _epoch
     _stop = True
+    with _lock:
+        _epoch += 1                     # 作废当前世代 —— 这一步才是「收尾干净」的保证
     _wake.set()
     t = _thread
     if timeout > 0 and t is not None and t.is_alive():
@@ -587,16 +660,20 @@ def stop(timeout: float = 0.0) -> None:
 
 
 def _loop() -> None:
-    """worker 主循环：有活就串行干，空闲按周期校验副本是否还在。"""
+    """worker 主循环：有活就串行干，空闲按周期校验副本是否还在。
+
+    ``gen`` 是本轮的世代号：**每次碰库前后都校验**，作废即停手且不落库。
+    """
     global _last_verify
-    while not _stop:
+    gen = epoch()
+    while not _stop and not _stale(gen):
         try:
             rows = db.scrape_pending(limit=_BATCH)
             if rows:
                 for r in rows:
-                    if _stop:
+                    if _stale(gen):
                         break
-                    process(r.get("book_id"))
+                    process(r.get("book_id"), gen=gen)
                 continue                              # 立刻看下一批，不等
             try:
                 interval = float(_section().get("verify_interval") or 0)
@@ -604,7 +681,7 @@ def _loop() -> None:
                 interval = 0.0
             if interval > 0 and time.time() - _last_verify >= interval:
                 _last_verify = time.time()
-                verify()
+                verify(gen=gen)
             _wake.wait(timeout=_IDLE_WAIT)
             _wake.clear()
         except Exception as e:                        # noqa: BLE001 —— worker 不能死
