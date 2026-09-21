@@ -20,7 +20,9 @@ INPUT_DIR = pathlib.Path(os.getenv("INPUT_DIR", "/app/input"))
 OUTPUT_DIR = pathlib.Path(os.getenv("OUTPUT_DIR", "/app/output"))
 # 多书库（第 10 期）：书库来源根目录 —— 其下的子文件夹可被「新建书库」就地引用，
 # 或作为导入源（扫描后复制/移入该库自己的存储目录）。
-# OUTPUT_DIR 不废弃：当书库表为空时它是**默认书库**的根（兼容既有部署）。
+# OUTPUT_DIR 不废弃：没有库归属的条目（老部署遗留在 OUTPUT_DIR 的书、或某个库被
+# 移除登记之后）路径解析仍以它为根。第 37 期起它**不再是**「默认书库」的根 ——
+# 本项目不再有默认库，也不会自动在 OUTPUT_DIR 上建库。
 LIBRARY_SOURCE_DIR = pathlib.Path(os.getenv("LIBRARY_SOURCE_DIR", "/app/libraries"))
 COOKIE_DIR = pathlib.Path(os.getenv("COOKIE_DIR", str(CONFIG_DIR / "cookies")))
 CACHE_DIR = pathlib.Path(os.getenv("CACHE_DIR", str(CONFIG_DIR / "cache")))

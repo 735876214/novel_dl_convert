@@ -64,9 +64,12 @@ async def lifespan(app: FastAPI):
     _init_logging(cfg)
     # 初始化 SQLite 持久层（进度 / 批注 / 账号），表与默认账号在此落地
     db.init()
-    # 多书库：库表为空时落一条「默认库 = OUTPUT_DIR」，保证老部署升级后书目不为空。
-    # ⚠️ 若这里漏掉，书目会为空 → 孤儿判定会把**所有** book_id 当孤儿（会真删进度/批注）。
-    library.ensure_default_library()
+    # 多书库：**这里不再播种任何书库** —— 全新部署的书库表就是空的，等用户手动新建。
+    # ⚠️ 由此推出两条必须守住的不变量（第 37 期）：
+    #   ① 书目为空**不等于**记录都成了孤儿 ⇒ `db.orphans()` 必须把「库已不存在」的书
+    #      排除在孤儿之外，否则「清空全部书库 → 点清理孤儿」会把进度 / 批注真删；
+    #   ② 没有可接收的库时摄入链路**拒收**（`library_rules.resolve_target` 返回 root=None），
+    #      不再往 OUTPUT_DIR 塞「未归类」的书。
     # 第 17 期：book_id 库维度化的一次性迁移（跨库同名不再串 id）。幂等，跑过即跳过。
     try:
         res = db.upgrade_book_ids()
@@ -118,9 +121,9 @@ STATIC_DIR = pathlib.Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 INPUT_DIR = config.INPUT_DIR
-# ⚠️ 多书库（第 10 期）后这是**默认库的根**，不是「唯一根」。
-# 按书取路径一律用 `library.root_of(b) / b["name"]`；只有「新书落哪个库还没判定」的
-# 摄入/下载入口（上传转换、下载落盘）才回退到这里。
+# ⚠️ 多书库（第 10 期）后这**不是**「唯一的根」，第 37 期起也不再是「默认库的根」
+# （默认库这个概念已下线）。按书取路径一律用 `library.root_of(b) / b["name"]` ——
+# 它对「库已被移除登记」的书会回退到 OUTPUT_DIR，正是这里。
 OUTPUT_DIR = config.OUTPUT_DIR
 
 
@@ -408,12 +411,14 @@ async def _run_download(tid: str, item: dict, actor: str = "系统"):
     db.task_update(tid, status="running", progress=50.0)
     try:
         mgr = _manager()
-        # 多书库：书源下载走产出 EPUB，按「来源子目录名 → 格式 → 关键词」归库，不中则落默认库
+        # 多书库：书源下载走产出 EPUB，按「来源子目录名 → 格式 → 关键词」归库。
+        # 没有可接收的库（一个库都没有，或规则不命中）⇒ 拒收，如实报错，不猜落点。
         tgt = library_rules.resolve_target(
             name=f"{item.get('title') or 'book'}.epub",
             meta={"title": item.get("title"), "author": item.get("author")},
-            default=OUTPUT_DIR,
         )
+        if tgt["root"] is None:
+            raise RuntimeError(library_rules.no_library_reason())
         # 第 13 期：产物格式 / 落盘布局按**目标库**取（库没覆写时等于全局值）
         opts = {"force": True, "merge": True,
                 "cfg": lib_settings.config_for(tgt["library_id"] or None)}
@@ -2567,17 +2572,34 @@ def _library_dto(lib: dict, counts: dict = None) -> dict:
         "book_count": int((counts or {}).get(str(lib.get("id")), 0)),
         "exists": root.is_dir(),
         "writable": _writable_dir(root) if root.is_dir() else False,
-        "is_default": str(lib.get("id")) == library.DEFAULT_LIBRARY_ID,
         "last_scan_at": float(lib.get("last_scan_at") or 0),
         "last_scan_note": lib.get("last_scan_note") or "",
     }
+
+
+def _libraries_changed() -> None:
+    """书库**增 / 删 / 改**之后统一要做的两件事。
+
+    ① 失效扫描缓存（否则界面继续显示旧口径）；
+    ② 清掉 watcher 的失败计数 —— 第 37 期必需：没有可接收的库时投递会被**拒收**
+       （`library_rules.resolve_target` 的 root 为 None），而失败计数到上限就永久跳过。
+       用户照着提示建完库，原先投递过的文件应当自己就被收进去，
+       而不是要求他再投一次 —— 那与本期的语义无关，纯属实现的副作用。
+    """
+    library.invalidate()
+    w = WATCHER
+    if w is not None:
+        try:
+            w.forget_failures()
+        except Exception:                              # noqa: BLE001
+            pass
 
 
 def _book_counts() -> dict:
     """``{library_id: 书数}``（一次扫描全库，避免逐库重扫）。"""
     out: dict = {}
     for b in library.books():
-        k = str(b.get("library_id") or library.DEFAULT_LIBRARY_ID)
+        k = str(b.get("library_id") or "")
         out[k] = out.get(k, 0) + 1
     return out
 
@@ -2731,7 +2753,7 @@ def api_create_library(payload: dict = Body(...)):
                             rules=_norm_rules(p.get("rules")), sort_order=sort_order,
                             watch=watch, scan_interval=scan_interval, scan_cron=scan_cron,
                             publish_path=str(publish or ""))
-    library.invalidate()
+    _libraries_changed()
     activity_log.log(activity_log.ACTION_LAYOUT, name, activity_log.STATUS_OK,
                      detail=f"新建书库：{ltype} / {mode} / {root}"
                             + (f" / 成品目录 {publish}" if publish else ""), source="api")
@@ -2800,7 +2822,7 @@ def api_update_library(lid: str, payload: dict = Body(...)):
     if not fields:
         raise HTTPException(400, "没有可更新的字段")
     lib = db.update_library(lid, **fields)
-    library.invalidate()
+    _libraries_changed()
     activity_log.log(activity_log.ACTION_LAYOUT, str(p.get("name") or lid),
                      activity_log.STATUS_OK,
                      detail="更新书库：" + "、".join(sorted(fields)), source="api")
@@ -2809,9 +2831,13 @@ def api_update_library(lid: str, payload: dict = Body(...)):
 
 @app.delete("/api/libraries/{lid}")
 def api_delete_library(lid: str, force: bool = False):
-    """**只移除登记，绝不删文件**。库里还有书时默认拒绝（先迁移或清空）。"""
-    if str(lid) == library.DEFAULT_LIBRARY_ID:
-        raise HTTPException(400, "默认书库不可删除（它承接未归类的书）")
+    """**只移除登记，绝不删文件**。库里还有书时默认拒绝（先迁移或清空）。
+
+    第 37 期起**没有任何库是不可删的**：以前那条「默认书库不可删除」的护栏随默认库
+    概念一起下线。book_id 形如 ``库$哈希``，库没了它的书就从书目里消失（进度 / 批注
+    变成「库不存在的行」，孤儿清理**刻意不碰**它们，见 `_orphan_refs`）。
+    「库里还有书」的拦截仍在下面，那才是真正的数据保护。
+    """
     if not db.get_library(lid):
         raise HTTPException(404, "书库不存在")
     n = _book_counts().get(str(lid), 0)
@@ -2822,7 +2848,7 @@ def api_delete_library(lid: str, force: bool = False):
     # 库没了，刮削台账行也没有意义（UI 会显示一堆属于不存在书库的条目）。
     # **只删登记，副本文件留在成品目录里**，与「移除库不删文件」一致。
     db.scrape_delete_by_library(lid)
-    library.invalidate()
+    _libraries_changed()
     activity_log.log(activity_log.ACTION_LAYOUT, str(lid), activity_log.STATUS_OK,
                      detail=f"移除书库登记（文件保留在原地）· 当时 {n} 本", source="api")
     return {"ok": True, "removed": str(lid), "books_left_on_disk": n}
@@ -3434,6 +3460,11 @@ def api_book_collections(bid: str):
 SCOPE_FIELDS = {
     "title", "author", "series", "publisher", "language",
     "tag", "format", "status", "stars", "year",
+    # 第 37 期补的两个数值字段：侧栏那 5 条内置智能书架下线之后，「最近添加」「有批注」
+    # 这两个视图**只能**靠规则重建，所以字段必须补齐（否则是能力净损失）。
+    #   · `annotations` = 批注数（`at_least 1` 就是「有批注」）
+    #   · `added`       = 入库天数（距今天数，`at_most 30` 就是「最近 30 天入库」）
+    "annotations", "added",
 }
 SCOPE_OPS = {
     "title": {"contains", "not_contains", "equals"},
@@ -3446,6 +3477,8 @@ SCOPE_OPS = {
     "status": {"equals"},
     "stars": {"at_least", "at_most"},
     "year": {"at_least", "at_most"},
+    "annotations": {"at_least", "at_most"},
+    "added": {"at_least", "at_most"},
 }
 
 
@@ -4149,17 +4182,43 @@ def api_achievements_backfill():
 # 书从 OUTPUT_DIR 移走后，progress / annotations / reading_sessions / collection_items
 # 里仍留着它 —— 界面上再也走不到，却一直占着库。
 
+def _orphan_refs() -> dict:
+    """各表里**真正的**孤儿 book_id：``{表名: [book_id]}``。
+
+    ⚠️ 第 37 期新增的第二道判据：「**书所属的库已经不存在**」的行不算孤儿。
+    那之前书库表为空会自动播一条默认库，所以「书目为空」≈「书真没了」；现在没有
+    默认库了，用户可以一个库都不建、也可以把库移除登记 —— 那时它的书只是**界面上
+    看不见**，文件和进度 / 批注都还在原地。漏掉这道判据，「清空全部书库 → 点清理
+    孤儿」就是一次不可恢复的数据大清洗。
+
+    ``book_id`` 形如 ``库$哈希``（见 `library._book_id`）；没有 ``$`` 的是第 17 期
+    库维度化之前的旧 id，无法归属到任何库，按老口径处理（不在书目里就算孤儿）。
+    """
+    valid = {b["id"] for b in library.books()}
+    try:
+        lib_ids = {str(l.get("id") or "") for l in library.libraries()}
+    except Exception:
+        lib_ids = set()
+    refs = db.book_id_refs()
+    return {
+        name: [i for i in ids
+               if i not in valid and str(i).split("$", 1)[0] in lib_ids]
+        for name, ids in refs.items()
+    }
+
+
 def _orphans() -> dict:
     """算出各表中的孤儿 book_id（不改任何数据）。"""
-    valid = {b["id"] for b in library.books()}
     refs = db.book_id_refs()
+    orphans = _orphan_refs()
     tables: dict = {}
     total = 0
     for name, ids in refs.items():
-        bad = [i for i in ids if i not in valid]
+        bad = orphans.get(name) or []
         total += len(bad)
         tables[name] = {"books": len(bad), "sample": bad[:10]}
-    return {"tables": tables, "total": total, "library_books": len(valid)}
+    return {"tables": tables, "total": total,
+            "library_books": len(library.books())}
 
 
 @app.get("/api/maintenance/orphans")
@@ -4176,9 +4235,7 @@ def api_orphans_clear():
     把同一个文件放回 OUTPUT_DIR，进度与批注会**重新关联上**。
     也就是说清掉的是「可能还有用」的数据，因此必须由用户在界面上显式确认。
     """
-    valid = {b["id"] for b in library.books()}
-    refs = db.book_id_refs()
-    orphans = {t: [i for i in ids if i not in valid] for t, ids in refs.items()}
+    orphans = _orphan_refs()          # 与扫描口径**同源**，绝不各写一份判据
     removed = db.delete_orphans(orphans)
     total = sum(removed.values())
     activity_log.log(activity_log.ACTION_RECYCLE, "孤儿记录", activity_log.STATUS_OK,
@@ -4992,9 +5049,11 @@ def _ko_read_filter(payload: dict):
             want = ((cl["libraryId"] or {}).get("in") or [])
             if want:
                 wset = {str(x) for x in want}
-                # 老客户端可能仍发兜底常量；此时把默认库也算命中（否则它看到的永远是空列表）
+                # 老客户端可能仍发兜底常量（单库时代的「就那一个库」）；第 37 期起没有
+                # 默认库可对应，改成**展开成全部书库** —— 它想表达的就是「别筛」。
                 if komga_api.LIBRARY_ID in wset:
-                    wset.add(library.DEFAULT_LIBRARY_ID)
+                    wset.discard(komga_api.LIBRARY_ID)
+                    wset.update(str(l.get("id") or "") for l in library.libraries())
                 tests.append(lambda b, _w=wset: komga_api.book_library_id(b) in _w)
         if "readStatus" in cl:
             want = [str(s).upper() for s in ((cl["readStatus"] or {}).get("in") or [])]
@@ -5129,8 +5188,9 @@ def _ko_find_series(key: str):
 def _ko_library_id_of(payload: dict) -> str:
     """从 Komga 的 SearchCondition 里取 libraryId（取第一个即可）。
 
-    老客户端会发单库时代的兜底常量 `komga_api.LIBRARY_ID` —— 按 `_ko_read_filter` 的
-    既有约定，此时当作默认库。
+    老客户端会发单库时代的兜底常量 `komga_api.LIBRARY_ID` —— 那个常量想表达的是
+    「就那一个库」。第 37 期起没有默认库可对应，映射成**空串 = 全部可见书库**
+    （与 `_ko_read_filter` 里「展开成全部书库」同一个口径）。
     """
     cond = (payload or {}).get("condition") or {}
     for cl in (cond.get("allOf") or ([cond] if cond else [])):
@@ -5140,7 +5200,7 @@ def _ko_library_id_of(payload: dict) -> str:
             lid = str(raw or "").strip()
             if not lid:
                 continue
-            return library.DEFAULT_LIBRARY_ID if lid == komga_api.LIBRARY_ID else lid
+            return "" if lid == komga_api.LIBRARY_ID else lid
     return ""
 
 
@@ -5789,13 +5849,16 @@ async def convert(file: UploadFile = File(...), traditionalize: bool = Form(Fals
     if _ext not in _allowed:
         raise HTTPException(400, "仅支持 .txt 与电子书格式：" + ", ".join(sorted(_allowed)))
     src = INPUT_DIR / file.filename
+    opts = {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()}
+    # 多书库：上传件按归库规则决定落点。**先判落点在不在**，没有可接收的库就直接 400 ——
+    # 免得先把文件写进 input/ 再拒，留下一个每轮扫描都被拒一次的孤儿。
+    out_dir = library_rules.target_root(src=src, name=_name, meta=opts.get("meta"),
+                                        base_dir=INPUT_DIR)
+    if out_dir is None:
+        raise HTTPException(400, library_rules.no_library_reason())
     data = await _read_capped(file, _upload_limit("max_bytes"))
     with open(src, "wb") as f:
         f.write(data)
-    opts = {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()}
-    # 多书库：上传件按归库规则决定落点，不中则落默认库（单库时行为与改造前一致）
-    out_dir = library_rules.target_root(src=src, name=_name, meta=opts.get("meta"),
-                                        base_dir=INPUT_DIR, default=OUTPUT_DIR)
     try:
         # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环（其它请求无响应）
         action, result = await asyncio.to_thread(pipeline.dispatch, src, out_dir, opts)
@@ -5813,9 +5876,11 @@ async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)
     if not src.exists() or not src.is_file():
         raise HTTPException(404, "文件不存在")
     opts = {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()}
-    # 多书库：按归库规则决定落点（来源子目录名 → 格式 → 关键词），不中则落默认库
+    # 多书库：按归库规则决定落点（来源子目录名 → 格式 → 关键词）；判不出 ⇒ 400 拒收
     out_dir = library_rules.target_root(src=src, name=src.name, meta=opts.get("meta"),
-                                        base_dir=INPUT_DIR, default=OUTPUT_DIR)
+                                        base_dir=INPUT_DIR)
+    if out_dir is None:
+        raise HTTPException(400, library_rules.no_library_reason())
     try:
         # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环
         action, result = await asyncio.to_thread(pipeline.dispatch, src, out_dir, opts)

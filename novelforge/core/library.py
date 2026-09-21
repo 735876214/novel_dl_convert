@@ -931,11 +931,17 @@ def _iter_book_entries(d: pathlib.Path, exts=None) -> list:
 
 
 # ---------------- 书库注册表（第 10 期 D8）----------------
-# 库是**数据**（存 SQLite），不是配置常量：库表为空时回退到「默认库 = OUTPUT_DIR」，
-# 保证老部署升级后书目不为空（否则孤儿判定会把所有 id 当孤儿）。
-
-#: 库表为空时合成的默认库 id
-DEFAULT_LIBRARY_ID = "default"
+# 库是**数据**（存 SQLite），不是配置常量，而且**没有「默认库」这种东西**：
+# 全新部署的书库表就是空的，所有书库都由用户手动新建（启动不再播种）。
+#
+# ⚠️ 因此「库表为空」是**合法且常见**的初始状态，不再是需要兜底的异常：
+#   · `libraries()` 老老实实返回空列表（不合成、不假装有一条库）；
+#   · `books()` 随之返回空（没有根可扫），孤儿判定因此必须改用
+#     `db.orphans()` 里的「库不存在 ⇒ 不算孤儿」规则，否则「清空书库 →
+#     点清理孤儿」会把所有进度 / 批注当成孤儿真删（启动注释里警告过这条）；
+#   · 摄入侧一律拒收（没有可接收的库，见 `core/library_rules.py`）。
+# 归属解析（`library_of` / `root_of`）仍对**留在磁盘上的旧书**保留 OUTPUT_DIR 兜底：
+# 只是不再把它伪装成一个库。
 
 _COMIC_EXTS = (".cbz", ".cbr")
 _EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt")
@@ -953,60 +959,33 @@ def _exts_for_type(ltype) -> tuple:
     return BOOK_EXTS
 
 
-def default_library() -> dict:
-    """默认库：老部署的 ``OUTPUT_DIR``（库表为空时使用）。
-
-    字段与 ``db.list_libraries()`` 的行**保持同形**（含第 13 期的 ``settings``），
-    否则「库表为空」这条回退路径上的消费者会拿到缺键的 dict。
-    """
-    return {"id": DEFAULT_LIBRARY_ID, "name": "默认书库", "type": "mixed",
-            "mode": "inplace", "root_path": str(config.OUTPUT_DIR),
-            "storage_path": "", "source_subdir": "", "rules": "", "settings": "",
-            "sort_order": 0,
-            # 第 18 期：刮削出版成品目录（空 = 不产出副本）
-            "publish_path": "",
-            # 第 17 期 T2 的逐库扫描调度，同形补齐：老部署的库表为空时走这里，
-            # 缺键会让 watcher._derive_targets 的 l.get("watch", 1) 之外
-            # 其它直接下标读取的调用方炸掉。
-            "watch": 1, "scan_interval": 0, "scan_cron": ""}
-
-
 def libraries() -> list:
-    """全部书库（库表为空时回退为单条默认库）。"""
+    """全部书库 —— **真实行**，没有默认库兜底：库表为空就是空列表。"""
     try:
-        rows = db.list_libraries()
+        return db.list_libraries() or []
     except Exception:
-        rows = []
-    return rows or [default_library()]
+        return []
 
 
 def get_library(lid) -> "dict | None":
-    if str(lid) == DEFAULT_LIBRARY_ID:
-        rows = [l for l in libraries() if l["id"] == DEFAULT_LIBRARY_ID]
-        return rows[0] if rows else None
-    return db.get_library(lid)
-
-
-def ensure_default_library() -> None:
-    """库表为空时落一条默认库（启动调用一次），使 DB 成为单一真值源。"""
+    """按 id 取库实体；空 id / 查不到一律 ``None``（不再有合成默认库）。"""
+    if not lid:
+        return None
     try:
-        if db.list_libraries():
-            return
-        lib = default_library()
-        db.create_library(lib["id"], lib["name"], lib["type"], lib["mode"],
-                          lib["root_path"], sort_order=0)
+        return db.get_library(lid)
     except Exception:
-        pass
+        return None
 
 
-def library_of(book: dict) -> dict:
-    """书目所属的库；按 ``library_id`` 查，查不到回退默认库。"""
+def library_of(book: dict) -> "dict | None":
+    """书目所属的库；按 ``library_id`` 查，**查不到返回 None**。
+
+    查不到只会发生在「这个库被移除登记、书还留在磁盘上」的情形 —— 调用方必须
+    自己决定怎么办（刮削 / 出版两条链路都按「该库未配置成品目录」跳过），
+    **不要**在这里合成一个假库，那会让「库管理页看不到它、别的页却当它存在」。
+    """
     lid = (book or {}).get("library_id")
-    if lid:
-        lib = get_library(lid)
-        if lib:
-            return lib
-    return default_library()
+    return get_library(lid) if lid else None
 
 
 def root_of(book_or_id) -> pathlib.Path:
@@ -1014,30 +993,12 @@ def root_of(book_or_id) -> pathlib.Path:
 
     ⚠️ 这是多库后「取文件路径」的唯一入口。直接用 ``config.OUTPUT_DIR / name``
     会取到错的库（同名书跨库时甚至取到别的书）。
+
+    无库归属（该库已移除登记）时回退 ``OUTPUT_DIR``：这类书虽然不在列表里，
+    但文件确实可能还躺在那里，改名 / 回收 / 删除都要能算对路径，不能炸在 None 上。
     """
-    if isinstance(book_or_id, dict):
-        lib = library_of(book_or_id)
-    else:
-        lib = get_library(book_or_id) or default_library()
-    return pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
-
-
-def resolve(name: str, library_id=None) -> dict:
-    """库内相对路径 → ``{library_id, library_type, root, path}``。
-
-    不给 ``library_id`` 时按名字在所有库中查找（命中多个库会报错，见 :func:`find`）。
-    """
-    if library_id:
-        lib = get_library(library_id) or default_library()
-    else:
-        b = find(name)
-        if not b:
-            lib = default_library()
-        else:
-            lib = library_of(b)
-    root = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
-    return {"library_id": lib.get("id"), "library_type": lib.get("type"),
-            "root": root, "path": root / name}
+    lib = library_of(book_or_id) if isinstance(book_or_id, dict) else get_library(book_or_id)
+    return pathlib.Path((lib or {}).get("root_path") or config.OUTPUT_DIR)
 
 
 def _entry_mtime(p: pathlib.Path) -> float:
@@ -1086,7 +1047,8 @@ def _scan_once(lib: dict = None) -> list:
     此前只有迁移侧会拦（旧注释把两件事写成了一件）。已经产生的冲突用
     :func:`id_conflicts` 列出来，走工具页一键改名修复。
     """
-    lib = lib or default_library()
+    if not lib:
+        return []                      # 没有库就没有根可扫（不再合成默认库）
     d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
     exts = _exts_for_type(lib.get("type"))
     books = []
@@ -1171,7 +1133,7 @@ def _scan_once(lib: dict = None) -> list:
             "c2": c2,
             "issues": issues,
             # 多书库：归属信息。`name` 相对**所属库根**，故协议层与前端无需改
-            "library_id": lib.get("id") or DEFAULT_LIBRARY_ID,
+            "library_id": lib.get("id") or "",
             "library_type": lib.get("type") or "mixed",
         })
 
@@ -1198,7 +1160,7 @@ def _books_of(lib: dict, force: bool = False) -> list:
     """单个库的书目（带**按库**的短期缓存）。"""
     d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
     sig = _dir_signature(d, _exts_for_type(lib.get("type")))
-    key = str(lib.get("id") or DEFAULT_LIBRARY_ID)
+    key = str(lib.get("id") or "")
     with _lock:
         cur = _cache.get(key) or {}
         if not force and cur.get("sig") == sig and (time.time() - cur.get("at", 0)) < _CACHE_TTL:

@@ -134,7 +134,12 @@ def _by_keywords(text: str) -> "dict | None":
 
 
 def decide(src=None, name: str = "", meta: dict = None, base_dir=None) -> "dict | None":
-    """判定落库；返回库实体（dict）或 ``None``（表示「用默认库」）。"""
+    """判定落库；返回库实体（dict）或 ``None``（表示**没有可接收的库**）。
+
+    ``None`` 有两种成因，调用方看到的处理完全一样（拒收）：书库表为空，
+    或者这个文件谁家的规则都不命中。判据就是「库的 ``rules`` 是不是路由表」——
+    路由表不命中就不猜，见 :func:`resolve_target`。
+    """
     filename = name or pathlib.PurePosixPath(str(src or "")).name
     if not filename:
         return None
@@ -155,7 +160,7 @@ def decide(src=None, name: str = "", meta: dict = None, base_dir=None) -> "dict 
     if hit:
         return hit
 
-    # 4) 都不可靠 → 让调用方回退默认库（宁可落到默认库，也不要乱归）
+    # 4) 都不可靠 → None。**没有默认库可退**，调用方一律拒收（见 resolve_target）
     return None
 
 
@@ -218,7 +223,9 @@ def guard_conflict(out_dir, rel: str) -> None:
     base = pathlib.PurePosixPath(str(rel or "")).name
     if not base:
         return
-    lib_id = library_id_of_root(out_dir) or library.DEFAULT_LIBRARY_ID
+    lib_id = library_id_of_root(out_dir)
+    if not lib_id:
+        return          # 落点不属于任何已登记库 ⇒ 谈不上「跨库同名」，放行给上游拒收
     hit = library.id_conflict_with(base, lib_id)
     if not hit:
         return
@@ -238,34 +245,36 @@ def guard_conflict(out_dir, rel: str) -> None:
     )
 
 
-def resolve_target(src=None, name: str = "", meta: dict = None, base_dir=None,
-                   default=None) -> dict:
+def resolve_target(src=None, name: str = "", meta: dict = None, base_dir=None) -> dict:
     """摄入目标的**决策结构**：``{library, library_id, root, conflict, suggest, existing}``。
 
     判据与 :func:`target_root` 完全同源，只是把「命中的库实体」也交出来 ——
     调用方需要库 id 才能取**该库的生效配置**（第 13 期「每库覆盖」：
     落盘布局 / 转换产物 / 非 txt 收取都可能逐库不同，见 :mod:`core.lib_settings`）。
 
-    ``library`` 为 ``None`` 表示没命中任何规则、落到 ``default``（默认库），
-    此时 ``library_id`` 也是空串（调用方按「无覆写」处理即可）；
-    ``effective_library_id`` 则是**真正拥有该根目录的库**，冲突判据用它。
+    ⚠️ ``library`` 为 ``None``（连带 ``root=None``、``library_id=""``）表示
+    **没有可接收的书库**：书库表为空，或者这个文件谁家的规则都不命中。
 
+    本项目**没有默认库**（见 `core/library.py` 顶部说明），所以这时调用方
+    **必须拒收**：文件留在原地、按可读原因记日志。**不许**自己猜一个库当落点 ——
+    猜错的代价是书进了没人管的目录，用户还得手工找回来。
+
+    ``effective_library_id`` 是**真正拥有该根目录的库**，冲突判据用它。
     ``conflict`` 为真 = ``name`` 的 basename 已经在**别的库**里（同名同扩展，
     见 :func:`guard_conflict`）；此时 ``suggest`` 是建议的新名字，``existing``
     是撞上的那本。**同库同名不算冲突**，一定放行。
     """
     lib = decide(src=src, name=name, meta=meta, base_dir=base_dir)
-    if lib:
-        root = pathlib.Path(lib.get("root_path") or default or config.OUTPUT_DIR)
-    elif default is not None:
-        root = pathlib.Path(default)
-    else:
-        root = library.root_of(library.DEFAULT_LIBRARY_ID)
     lib_id = str((lib or {}).get("id") or "")
-    effective_id = lib_id or library_id_of_root(root) or library.DEFAULT_LIBRARY_ID
+    if lib:
+        root = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+        effective_id = lib_id or library_id_of_root(root) or ""
+    else:
+        root = None
+        effective_id = ""
 
     base = name or pathlib.PurePosixPath(str(src or "")).name
-    hit = library.id_conflict_with(base, effective_id) if base else None
+    hit = library.id_conflict_with(base, effective_id) if (base and effective_id) else None
     return {
         "library": lib,
         "library_id": lib_id,
@@ -277,12 +286,23 @@ def resolve_target(src=None, name: str = "", meta: dict = None, base_dir=None,
     }
 
 
-def target_root(src=None, name: str = "", meta: dict = None, base_dir=None,
-                default=None) -> pathlib.Path:
-    """落库根目录：命中规则用命中的库，否则回退 ``default``（再退默认库根）。
+def target_root(src=None, name: str = "", meta: dict = None,
+                base_dir=None) -> "pathlib.Path | None":
+    """落库根目录；**没有可接收的库时返回 None**（调用方拒收）。
 
     这是**摄入侧**取目标目录的唯一入口（上传 / 下载 / 监听三条链路共用），
     与读取侧 ``library.root_of()`` 对称。需要库实体 / 冲突信息时用 :func:`resolve_target`。
     """
-    return resolve_target(src=src, name=name, meta=meta, base_dir=base_dir,
-                          default=default)["root"]
+    return resolve_target(src=src, name=name, meta=meta, base_dir=base_dir)["root"]
+
+
+def no_library_reason(libs=None) -> str:
+    """拒收时给人看的原因：库表为空和「规则不命中」要分开说，否则用户不知道去改哪儿。"""
+    try:
+        n = len(library.libraries() if libs is None else libs)
+    except Exception:
+        n = 0
+    if not n:
+        return "还没有书库：请先到「工具 → 书库管理」新建一个书库并指定它的来源目录"
+    return ("没有可接收这个文件的书库：现有书库的来源子目录 / 格式 / 关键词规则都不命中。"
+            "把它放进某个库的来源子目录，或到书库管理给该库补一条规则")

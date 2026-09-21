@@ -209,10 +209,11 @@ class FolderWatcher:
             pass
 
     def _target(self, src: Path):
-        """该来源条目应落进哪个库：返回 ``(库实体 | None, 库根)``。
+        """该来源条目应落进哪个库：返回 ``(库实体 | None, 库根 | None)``。
 
         归库判据在 ``core/library_rules.py``（**来源子目录名 > 格式 > 关键词**）；
-        判不出（或没有对应类型的库）时返回 ``(None, 默认库根)`` —— 与改造前一致。
+        判不出（没有库，或规则全不命中）时返回 ``(None, None)`` —— 调用方**拒收**。
+        本项目没有默认库可以兜底（见 `core/library.py` 顶部说明）。
 
         第 13 期起调用方还用它拿到**库 id**，进而取该库的生效配置
         （投递布局 / 是否转换 / 非 txt 收取都可能逐库不同，见 :mod:`core.lib_settings`）。
@@ -222,13 +223,9 @@ class FolderWatcher:
             lib = library_rules.decide_for_path(src, self.input_dir)
         except Exception:
             lib = None
-        if lib:
-            return lib, Path(lib.get("root_path") or self.output_dir)
-        return None, self.output_dir
-
-    def target_root(self, src: Path) -> Path:
-        """该来源条目应落进**哪个库根**（多书库）。兼容薄壳 —— 需要库实体时用 :meth:`_target`。"""
-        return self._target(src)[1]
+        if not lib:
+            return None, None
+        return lib, Path(lib.get("root_path") or self.output_dir)
 
     def _sig(self, p: Path) -> tuple:
         """条目指纹 ``(size, mtime)``。
@@ -412,6 +409,11 @@ class FolderWatcher:
             root = Path(lib.get("root_path") or self.output_dir)
         else:
             lib, root = self._target(p)
+            if lib is None:
+                # 没有可接收的库 ⇒ **拒收**，文件留在原地（不删、不挪、不猜一个库）。
+                # 以前这里会落到「默认库 = OUTPUT_DIR」，第 37 期起没有默认库了。
+                from . import library_rules as _lr
+                return ("failed", "没有可接收的书库：" + _lr.no_library_reason())
         cfg = lib_settings.config_for((lib or {}).get("id") or None)
         layout = str((cfg.get("output") or {}).get("layout") or "flat").strip().lower()
         # 非 txt 是否原样收取：按库取值，取不到时回落到构造时的全局判定
@@ -507,6 +509,27 @@ class FolderWatcher:
         with self._scan_lock:
             return self._scan_locked(self.input_dir, owner_lib=None,
                                      tkey="input", library_id=None)
+
+    def forget_failures(self) -> None:
+        """**忘掉**失败过的条目，让它们下一轮当新文件重新尝试。
+
+        第 37 期必需：没有可接收的库时投递会被拒收（`handle_file` 返回 failed），
+        而失败计数到 `max_retries` 就永久跳过。用户照着提示建完库，原先那些文件
+        应当自己就被收进去 —— 否则他还得再投一次，而这跟「库是路由表」的语义
+        完全无关，纯属本实现的副作用。库的增删改都会调它（见 server `_libraries_changed`）。
+
+        ⚠️ 必须是**删条目**，不能只把 `failed` 清零：扫描侧把 `failed == 0` 当成
+        「这文件已经成功处理过」（见 `_scan_locked` 里 `if fails == 0 or fails >= max_retries`），
+        清零等于**再也不会被扫**，正好与这里的意图相反。只动 `failed > 0` 的条目，
+        处理成功的条目原样留着 —— 否则重扫会把已收的书又收一遍。
+        """
+        with self._lock:
+            keys = [k for k, st in self.state.items()
+                    if isinstance(st, dict) and st.get("failed")]
+            for k in keys:
+                del self.state[k]
+            if keys:
+                self._save_state()
 
     def _state_key(self, p: Path, root: Path) -> str:
         """state 字典的键：相对扫描根的路径（按根分桶，避免多目标互相覆盖）。"""

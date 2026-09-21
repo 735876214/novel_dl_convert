@@ -148,7 +148,7 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             "name": b["name"], "book_id": b["id"], "title": b.get("title") or "",
             "author": b.get("author") or "", "format": b.get("format") or "",
             # 多书库：回传库 id，`apply` 才能把路径解析到**该书的库根**（否则默认库误判）
-            "library_id": b.get("library_id") or library.DEFAULT_LIBRARY_ID,
+            "library_id": b.get("library_id") or "",
             "candidates": [], "sources": {}, "best_score": 0.0,
             "auto_ok": False, "changes": {}, "cover": None, "skipped": "", "error": "",
             # 该书被显式锁定的字段（含封面的独立键 `cover`）：界面逐字段标注「已锁定」，

@@ -57,8 +57,8 @@ PATTERN_FIELDS = ("{title}", "{author}", "{series}", "{series_index}", "{index}"
 def output_dir(library_id=None) -> pathlib.Path:
     """**库根目录**（多书库）。
 
-    不给 ``library_id`` 时返回默认库根（= 既有 ``OUTPUT_DIR``，兼容单库调用方）。
-    ⚠️ 不要再用 ``config.OUTPUT_DIR`` 直接拼路径：多库下它只是**默认库**的根，
+    不给 ``library_id``（或该库已被移除登记）时返回 ``OUTPUT_DIR`` 兜底。
+    ⚠️ 不要再用 ``config.OUTPUT_DIR`` 直接拼路径：多库下它只是**无归属条目**的根，
     对其它库的书会解析到错位置 —— 改名 / 回收 / 改元数据都会动到错文件。
     """
     if library_id:
@@ -191,7 +191,7 @@ def _mark_conflicts(items: list) -> list:
     """标出冲突：新名与原名相同、两条目撞名、目标已存在、新名非法。
 
     ⚠️ 条目带 ``library_id`` 时必须按**该库根**解析（第 13 期）：库内相对路径在
-    别的库可能是同名文件，用默认库根去判会误报「目标文件已存在」或漏报。
+    别的库可能是同名文件，用 OUTPUT_DIR 去判会误报「目标文件已存在」或漏报。
     """
     olds = {it["old"] for it in items}
     taken: dict = {}
@@ -566,7 +566,7 @@ def _lib_of(name: str, item: dict = None):
     """条目所属的库 id：优先取前端回传的 ``library_id``，否则按名字反查书目。
 
     多书库下 `safe_path` 必须知道基根；这样即使预览项没带库信息，
-    后端也能自己反查出来（避免默认落到默认库上改错文件）。
+    后端也能自己反查出来（避免退到 OUTPUT_DIR 上改错文件）。
     """
     if isinstance(item, dict) and item.get("library_id"):
         return item["library_id"]

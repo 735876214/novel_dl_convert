@@ -147,10 +147,10 @@ def verify(request) -> str:
 def library_dto(lib: dict = None) -> dict:
     """LibraryDto（**每库一份**）。
 
-    多书库后 id / name / root 都来自库实体；不传则用默认库（兼容既有单库调用方）。
+    多书库后 id / name / root 都来自库实体；不传（库已被移除登记）时退到兜底常量。
     客户端多数只读 id/name，但字段缺失会让某些实现直接崩 —— 一律给全。
     """
-    lib = lib or library.default_library()
+    lib = lib or {}
     root = str(lib.get("root_path") or library.root_of(lib.get("id")))
     return {
         "id": lib.get("id") or LIBRARY_ID, "name": lib.get("name") or LIBRARY_NAME, "root": root,
@@ -172,11 +172,12 @@ def library_dto(lib: dict = None) -> dict:
 def book_library_id(b: dict) -> str:
     """书归属的**真实**库 id —— 必须与 ``/api/v1/libraries`` 返回的 id 一致。
 
-    书目自带 ``library_id``（扫描时写入，见 core/library.py）。缺失时回退**默认库 id**
-    而非 :data:`LIBRARY_ID` 常量：后者只用于兜底展示，若拿它当归属，客户端点进任一库
-    都会得到空列表（id 对不上）。
+    书目自带 ``library_id``（扫描时写入，见 core/library.py）。缺失（库已被移除登记）
+    时返回**空串**，不回退 :data:`LIBRARY_ID` 常量：后者只用于兜底展示，若拿它当归属，
+    客户端点进任一库都会得到空列表（id 对不上）。第 37 期前这里回退的是「默认库 id」；
+    默认库没了之后，空串才是诚实的答案 —— 它匹配不上任何一个真实库，客户端自然筛不到。
     """
-    return str((b or {}).get("library_id") or library.DEFAULT_LIBRARY_ID)
+    return str((b or {}).get("library_id") or "")
 
 
 def series_name_of(b: dict) -> str:

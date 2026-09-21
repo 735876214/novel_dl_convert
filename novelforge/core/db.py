@@ -1796,7 +1796,7 @@ def upgrade_book_ids() -> dict:
     from . import library as _lib  # 延迟导入，避开与 library 的循环依赖
     index: dict = {}
     for lib in _lib.libraries():
-        lid = str(lib.get("id") or _lib.DEFAULT_LIBRARY_ID)
+        lid = str(lib.get("id") or "")
         d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
         if not d.is_dir():
             continue

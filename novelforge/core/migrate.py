@@ -94,15 +94,15 @@ def _src_library_id_of(src: pathlib.Path) -> str:
     try:
         want = src.resolve()
     except Exception:
-        return library.DEFAULT_LIBRARY_ID
+        return ""
     for l in library.libraries():
         try:
             root = pathlib.Path(l.get("root_path") or "").resolve()
         except Exception:
             continue
         if root and str(want).startswith(str(root)):
-            return str(l.get("id") or library.DEFAULT_LIBRARY_ID)
-    return library.DEFAULT_LIBRARY_ID
+            return str(l.get("id") or "")
+    return ""
 
 
 def _suggest_name(root: pathlib.Path, name: str) -> str:
@@ -180,7 +180,7 @@ def preview(targets: dict = None) -> dict:
         t = target_type_of(b)
         if not t:
             continue                          # 不认识的格式：不动它（宁可漏迁，不可乱迁）
-        cur_id = str(b.get("library_id") or library.DEFAULT_LIBRARY_ID)
+        cur_id = str(b.get("library_id") or "")
         dsts = libraries_of_type(t)
         if any(str(l.get("id")) == cur_id for l in dsts):
             continue                          # 已在同类型库里 → 无需迁移
@@ -351,8 +351,8 @@ def _lib_id_of_path(path) -> str:
     try:
         want = str(pathlib.Path(str(path)).resolve())
     except Exception:                          # pragma: no cover —— 只有畸形路径才走到
-        return library.DEFAULT_LIBRARY_ID
-    best, best_len = library.DEFAULT_LIBRARY_ID, -1
+        return ""
+    best, best_len = "", -1
     for l in library.libraries():
         raw = str(l.get("root_path") or "")
         if not raw:
@@ -362,7 +362,7 @@ def _lib_id_of_path(path) -> str:
         except Exception:                      # pragma: no cover
             continue
         if want.startswith(root) and len(root) > best_len:
-            best, best_len = str(l.get("id") or library.DEFAULT_LIBRARY_ID), len(root)
+            best, best_len = str(l.get("id") or ""), len(root)
     return best
 
 
@@ -401,7 +401,7 @@ def copy_plan(book: dict, dst_library_id: str, final_name: str,
     - ``reuse``：目标落点已经是**同一个 inode**（同一份数据的另一个硬链接）⇒ 回收旧链接
     - ``move``：搬过去（落点被外来文件占着时**退让改名**，绝不覆盖）
     """
-    lib_id = str(book.get("library_id") or library.DEFAULT_LIBRARY_ID)
+    lib_id = str(book.get("library_id") or "")
     out = {"action": "none", "old_copy": "", "new_copy": "", "rel": "", "reason": ""}
     led = db.scrape_get(ledger_id if ledger_id is not None else book.get("id")) or {}
     old_rel = str(led.get("link_rel") or "")
@@ -506,7 +506,7 @@ def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
             items.append(it)
             continue
 
-        src_lib = str(b.get("library_id") or library.DEFAULT_LIBRARY_ID)
+        src_lib = str(b.get("library_id") or "")
         src = pathlib.Path(library.root_of(b)) / str(b.get("name") or "")
         it.update(name=str(b.get("name") or ""), title=str(b.get("title") or ""),
                   format=str(b.get("format") or "").upper(), library_id=src_lib,
@@ -634,7 +634,7 @@ def move_targets(book_ids) -> dict:
             missing += 1
         else:
             books.append(b)
-    src_libs = {str(b.get("library_id") or library.DEFAULT_LIBRARY_ID) for b in books}
+    src_libs = {str(b.get("library_id") or "") for b in books}
 
     items: list = []
     for l in library.libraries():
