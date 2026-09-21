@@ -267,13 +267,13 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| NEW BOOKS → Apply my settings to new books | 开关 | 未能采集 | 关闭时新书沿用出版方字体与排版，改动后才应用设置 | ⬜（未支持） |
+| NEW BOOKS → Apply my settings to new books | 开关 | 未能采集 | 关闭时新书沿用出版方字体与排版，改动后才应用设置 | 🟡（**第 36 期改判**：本项目排版偏好是**全局单一来源**（`lib/readerPrefs.ts`，阅读器与设置页读写同一份 localStorage），不存在「每书排版」这第二层 ⇒ 上游这个开关要解决的问题在本项目天然成立，故不造开关；不是没做） |
 | LAYOUT → Reading flow | 分段（2） | 未能采集 | `Paginated`（翻页）/ `Scrolled`（滚动） | ✅（本项目阅读模式＝滚动） |
-| Fixed-layout page spreads | 分段（3） | 未能采集 | `Book default` / `Single page` / `Columns`（漫画、图像型 EPUB 默认值） | ⬜（未支持） |
+| Fixed-layout page spreads | 分段（3） | 未能采集 | `Book default` / `Single page` / `Columns`（漫画、图像型 EPUB 默认值） | 🟡（**第 36 期改判**：固定版式已能识别 —— 后端读 OPF 的 `rendition:layout`（`core/library.py:_fixed_layout_of`），这类书在阅读器里停用重排设置、页宽交给书本身；但不提供上游这三档页宽选择） |
 | Columns | 数字 | 2 | 每页文本列数 | ✅（本项目分栏） |
 | THEME → Dark mode | 分段（13） | 未能采集 | 深色变体：`Default, Gray, Sepia, Crimson, Meadow, Rosewood, Azure, Dawnlight, Ember, Aurora, Ocean, Mist, AMOLED` | ✅（本项目 13 档主题） |
 | TYPOGRAPHY → Font | 分段（4） | 未能采集 | `Book default` / `Serif` / `Sans-serif` / `Monospace` | ✅（本项目 3 档字体） |
-| Font style | 分段（4） | 未能采集 | `Regular` / `Bold` / `Regular Italic` / `Bold Italic` | ⬜（未支持：字重样式） |
+| Font style | 分段（4） | 未能采集 | `Regular` / `Bold` / `Regular Italic` / `Bold Italic` | ✅（本项目字重样式；**第 36 期落地**） |
 | Font size | 滑杆 | 16px | 基准字号 | ✅ |
 | Line height | 滑杆 | 1.5 | 行高 | ✅ |
 | Paragraph spacing | 分段 | 未能采集 | `Book default` / 自定义 | ✅（本项目段落间距） |
@@ -283,10 +283,10 @@ SERVER
 | Word spacing | 分段 | 未能采集 | `Book default` / `Custom` | ✅（本项目词距） |
 | First-line indent | 分段 | 未能采集 | `Book default` / `Custom` | ✅（本项目首行缩进） |
 | Max content width | 滑杆 | 720px | 文本区最大宽度 | ✅（本项目内容宽度，单位 rem） |
-| Column gap | 滑杆 | 5% | 文本区左右内边距 | ⬜（未支持：文本区左右内边距） |
+| Column gap | 滑杆 | 5% | 文本区左右内边距 | ✅（本项目文本区左右内边距；**第 36 期落地**） |
 | Reset to defaults | 按钮 | — | 恢复默认 | ✅ |
 
-**本项目落地**：已实现「阅读模式 / 13 档主题 / 字体 / 字号 / 行高 / 内容宽度 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 13 项；未支持：新书套用设置（Apply my settings to new books）、固定版式页宽（Fixed-layout page spreads）、字重样式（Font style）、文本区左右内边距（Column gap）。
+**本项目落地**：已实现「阅读模式 / 13 档主题 / 字体 / 字重样式 / 字号 / 行高 / 内容宽度 / 文本区左右内边距 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 15 项。**〔第 36 期改判〕**上一版记的「未支持：字重样式、文本区左右内边距」两项**本期落地**（`lib/readerPrefs.ts` 的 `fontStyle` / `gutter`，阅读器面板与设置页两处都能调）；「新书套用设置」经核实**天然成立**（全局单一来源，无每书排版层），故不造开关；「固定版式页宽」三档未做，但**固定版式本身已识别**（见上表该行）。
 
 ### 2.9 YOU → Reader → PDF（`/settings/reader/pdf`）
 
@@ -843,7 +843,7 @@ SERVER
 |---|---|---|
 | YOU → Profile | **账户 / Profile 页** | ✅ 已实现：账号展示、改密码、头像上传/移除、显示名、时区（接通时间类成就）、成就开关、引导重放；OIDC / Email / Username（不可改）单用户无意义，不实现 |
 | YOU → Display（Theme/Book Covers/Icons/Layout/Behavior/Language） | **外观**（Theme / Book Covers / Layout / Behavior 已实现；Icons / Language 为只读占位页） | ✅ Theme / Book Covers 早已实现；**Layout / Behavior 第 32 期由 `placeholder` 改 `ready`**（详见 2.5 / 2.6）；**Icons 主动不做** —— 本项目图标是内联 SVG 常量集，做「风格 / 上传」需多套图标集 + 存储覆盖机制，成本远超收益，保持 `placeholder` 如实标注；Language 本项目中文单语，`placeholder` 对照 |
-| YOU → Reader（eBook/PDF/Comics/Audiobook/Fonts/General） | **阅读**（六页均实现） | ✅ 六页均 `ready`；eBook 个别项未支持（新书套用设置 / 固定版式页宽 / 字重样式 / 文本区左右内边距） |
+| YOU → Reader（eBook/PDF/Comics/Audiobook/Fonts/General） | **阅读**（六页均实现） | ✅ 六页均 `ready`；eBook **已实现 15 项排版设置**（**第 36 期**补上字重样式 / 文本区左右内边距）；余下两项为口径改判：新书套用设置（全局单一来源 ⇒ 天然成立）、固定版式页宽三档（固定版式已识别，仅不提供页宽档位） |
 | YOU → Notifications | **通知** 页 | ✅ 已实现：按类 Off / Problems / All 客户端过滤（生效范围 = 通知中心与日志） |
 | YOU → Privacy & Sharing | **隐私与共享** 只读占位页 | ➖ 单用户部署下没有可分享对象（无其它账号、无管理员角色），整页不提供 |
 | YOU → Restrictions | **内容限制** 只读占位页 | ➖ 单用户部署下无内容限制的应用对象，整页不提供 |
