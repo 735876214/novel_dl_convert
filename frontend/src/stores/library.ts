@@ -11,6 +11,12 @@ import {
 } from '@/lib/api'
 import { COLLECTIONS, LIBRARIES, SMART_SHELVES } from '@/data/collections'
 import { evaluateScope, type SmartScope } from '@/lib/smartScope'
+import {
+  ensureThresholds,
+  isInProgress,
+  statusFromPercent,
+  thresholdsFor,
+} from '@/lib/readingThresholds'
 
 /**
  * 书库 store：组合真实书目数据与书库页的筛选状态。
@@ -136,11 +142,14 @@ export const useLibraryStore = defineStore('library', () => {
     }
   }
 
-  /** 无状态行时的进度推导（与后端 stats 口径一致：≥99.5% 读完） */
+  /**
+   * 进度推导（第 40 期起阈值可配，判定收敛到 `lib/readingThresholds.ts`）。
+   *
+   * ⚠️ 语义与前身一致：**只看进度**（不看 `b.status`）—— 这个函数的下游是书架的
+   * 分面计数，历史上就这么定的，本期不顺手改判据。要看真实状态优先用 `statusLabelOf`。
+   */
   function derivedStatus(b: BookCard): 'unread' | 'reading' | 'finished' {
-    const p = b.percent ?? 0
-    if (p >= 99.5) return 'finished'
-    return p > 0 ? 'reading' : 'unread'
+    return statusFromPercent(b.percent, thresholdsFor(currentLibraryId.value))
   }
 
   const isSmart = computed(() => Boolean(smartKey.value))
@@ -165,16 +174,19 @@ export const useLibraryStore = defineStore('library', () => {
     return scopedBooks.value
   })
 
-  /** 继续阅读：有进度且未读完，按最近阅读倒序（限定在当前库内） */
+  /** 继续阅读：翻过但还没读完，按最近阅读倒序（限定在当前库内） */
   const continueReading = computed(() =>
     scopedBooks.value
-      .filter((b) => (b.percent ?? 0) > 0 && (b.percent ?? 0) < 99.5)
+      .filter((b) => isInProgress(b.percent, currentLibraryId.value))
       .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)),
   )
 
   async function loadBooks(force = false): Promise<void> {
     if (loaded.value && !force) return
     loading.value = true
+    // 第 40 期：阈值是判「读没读完」的依据，**先拿到再判**。
+    // 不 await 也能跑（有兜底值），但那是「先按默认值渲染一帧再跳」，不如等一下。
+    await Promise.all([ensureThresholds(), ensureThresholds(currentLibraryId.value)])
     try {
       const res = await api.books()
       books.value = res.items
@@ -232,7 +244,8 @@ export const useLibraryStore = defineStore('library', () => {
     } catch {
       /* 隐私模式下 localStorage 可能不可用，不影响本次会话 */
     }
-    await loadFeatures()
+    // 切库 ⇒ 判定口径也跟着切（每库可覆写）。全局值不重取（切库不改全局）。
+    await Promise.all([loadFeatures(), ensureThresholds(currentLibraryId.value)])
   }
 
   /** 自定义智能书架（smart_scopes 表）：规则存后端、求值在前端 */

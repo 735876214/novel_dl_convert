@@ -359,7 +359,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           ],
           uncaptured: '页内有 Sync Settings / Activity Log 两个标签，只采集了默认标签；各开关的当前值未能采集。',
         },
-        note: '未支持：不做 Kobo 设备同步（设备注册、双向进度、KEPUB 投递、书店书目混投均不做）。上游的 Progress Thresholds（标记在读 1% / 已读完 99%）在本项目没有可配置的对应项：本项目「已读完」按进度 ≥ 99.5% 的固定口径统计（core/stats.py），而阅读状态是落表的真实字段（想读 / 在读 / 搁置 / 弃读），不由百分比推导。',
+        note: '未支持：不做 Kobo 设备同步（设备注册、双向进度、KEPUB 投递、书店书目混投均不做）。上游的 Progress Thresholds（标记在读 1% / 已读完 99%）在本项目已可配置：阅读阈值的「在读下界」与「已读完阈值」是设置项，每库可单独覆写，默认 0% 与 99.5%（默认值沿用本项目既有口径，不是上游的 1% / 99%）。统计、书架、成就、Komga 客户端同源，入口在 core/lib_settings.reading_thresholds。阅读状态本身仍是落表的真实字段（想读 / 在读 / 搁置 / 弃读），阈值只管没有状态行时的进度兜底。',
       }),
       p('koreader-upstream', 'KOReader (upstream)', 'KOReader 上游对照', 'placeholder', {
         upstream: {

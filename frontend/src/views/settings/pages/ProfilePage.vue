@@ -9,7 +9,7 @@ import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vu
 import GuidedTourModal from '@/components/settings/GuidedTourModal.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { useSettingsDirty } from '@/composables/useSettingsDirty'
-import { ACHIEVEMENTS_FIELDS } from '@/data/settingsFields'
+import { ACHIEVEMENTS_FIELDS, READING_FIELDS } from '@/data/settingsFields'
 import { api } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -296,6 +296,42 @@ function logout(): void {
 
       <div class="flex items-center justify-end border-t border-border px-4 py-3">
         <Button size="sm" variant="primary" :disabled="saving" @click="saveSection('achievements')">
+          保存
+        </Button>
+      </div>
+    </Card>
+
+    <!--
+      阅读进度口径（第 40 期，对应上游 Kobo 页的 Progress Thresholds）。
+      放在成就旁边不是随手摆的：成就的「已读完」判定读的就是这个阈值
+      （`core/achievements.py` → `lib_settings.reading_thresholds`），两者是一族。
+    -->
+    <Card padding="none" class="mt-4">
+      <div class="border-b border-border px-4 py-3">
+        <div class="flex flex-wrap items-baseline gap-2">
+          <h3 class="text-[13px] font-semibold text-foreground">阅读进度口径</h3>
+          <span class="ml-auto font-mono text-[11px] text-muted-foreground">READING THRESHOLDS</span>
+        </div>
+        <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
+          决定「在读 / 已读完」怎么算。统计、书架、成就、Komga 客户端<strong>四处同源</strong> ——
+          改这里会同时改变它们的结果，不是只影响某一页。
+          每个书库还能在「工具 → 书库管理 → 每库设置」里单独覆写。
+        </p>
+      </div>
+
+      <template v-if="cfg">
+        <SettingsFieldRow
+          v-for="f in READING_FIELDS"
+          :key="f.path"
+          :field="f"
+          :value="val(f.path)"
+          @update="setVal(f.path, $event)"
+        />
+      </template>
+      <div v-else class="px-4 py-6 text-center text-[12px] text-muted-foreground">加载中…</div>
+
+      <div class="flex items-center justify-end border-t border-border px-4 py-3">
+        <Button size="sm" variant="primary" :disabled="saving" @click="saveSection('reading')">
           保存
         </Button>
       </div>

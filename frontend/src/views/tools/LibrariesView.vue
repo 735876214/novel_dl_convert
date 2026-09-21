@@ -13,8 +13,11 @@ import { useRoute } from 'vue-router'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import Icon from '@/components/ui/Icon.vue'
+import ExtChips from '@/components/tools/ExtChips.vue'
 import LibraryConflictPanel from '@/components/tools/LibraryConflictPanel.vue'
 import LibrarySettingsPanel from '@/components/tools/LibrarySettingsPanel.vue'
+import LibraryWizard from '@/components/tools/LibraryWizard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import {
   api,
@@ -24,6 +27,8 @@ import {
   type MigrationPreview,
   type MigrationRow,
 } from '@/lib/api'
+import { ICONS } from '@/lib/icons'
+import { isAbsolutePath, pathsOverlap } from '@/lib/paths'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -33,7 +38,9 @@ const library = useLibraryStore()
 const { cfg, setVal, saveSection, saving, loadConfig } = useSettingsConfig()
 
 const libs = ref<LibraryEntity[]>([])
-const types = ref<{ value: LibraryType; label: string }[]>([])
+// `exts` = 该库类型的**默认扫描白名单**（后端 `/api/libraries` 下发）。前端不自己抄一份 ——
+// 抄了就会与扫描口径走散（第 40 期「允许的格式」chips 的默认勾选集就是它）。
+const types = ref<{ value: LibraryType; label: string; exts: string[] }[]>([])
 const modes = ref<{ value: LibraryMode; label: string }[]>([])
 const sourceDir = ref('')
 const preview = ref<MigrationPreview | null>(null)
@@ -80,8 +87,8 @@ async function reload(force = false): Promise<void> {
 onMounted(() => {
   void reload()
   void loadConfig(false, true)
-  // 侧栏「库」组的「新增」按钮带 `?new=1` 进来，直达新建弹窗（见 AppSidebar.onGroupAction）
-  if (route.query.new) openCreate()
+  // 侧栏「库」组的「新增」按钮带 `?new=1` 进来，直达新建向导（见 AppSidebar.onGroupAction）
+  if (route.query.new) openWizard()
 })
 
 // ---------------- 迁移 ----------------
@@ -205,7 +212,24 @@ const form = ref({
   scan_cron: '',
   /** 刮削出版开关（**每库覆盖项**，不是库实体列 → 建库后单独 PUT） */
   scrape_enabled: true,
+  // ---- 第 40 期新增的三个库实体列（编辑态用；新建那三个字段在向导里）----
+  /** 图标 key（取自 `lib/icons.ts` 的 `ICONS`；空 = 不显示图标） */
+  icon: '',
+  /** 允许的格式；**空数组 = 继承该库类型的默认白名单**（不是「一个格式都不收」） */
+  allowed_exts: [] as string[],
+  /**
+   * 排除图案的**文本框原样**（换行分隔）。
+   *
+   * ⚠️ 这里刻意不存 `string[]`：glob 里可能有逗号（`*.{epub,mobi}` 这类
+   *   brace 扩展），拿逗号当分隔符会把模式切坏。换行不属于 glob 语法，安全。
+   */
+  exclude_text: '',
 })
+
+/** 用户在编辑弹窗里动过格式勾选没有（同 `ExtChips` 的语义：没动过 = 继承类型默认） */
+const fmtTouched = ref(false)
+/** 新建向导是否打开（第 40 期；`?new=1` 与「新建书库」按钮都走它） */
+const wizardOpen = ref(false)
 
 /** 编辑态：当前正在改的库实体（「上次扫描」页签要读它的历史） */
 const editingLib = computed(() => libs.value.find((l) => l.id === editingId.value) || null)
@@ -277,6 +301,14 @@ function defaultPublish(type: LibraryType): string {
   return `${sourceDir.value}/../output/${type}-sorted`
 }
 
+/** 图标 key 的**唯一真相源**在前端（`lib/icons.ts`）；后端只存 key，不维护白名单。 */
+const ICON_NAMES = Object.keys(ICONS)
+
+/** 某库类型的**默认扫描白名单**（来自 `/api/libraries` 的 `types[].exts`，不在前端抄一份） */
+function extsOf(type: LibraryType): string[] {
+  return types.value.find((t) => t.value === type)?.exts ?? []
+}
+
 /**
  * 成品目录的**本地预检**（后端仍会再校验一次，这里只为即时反馈）。
  * 与后端 `_publish_path_allowed` 同口径：不得与任何库根 / 扫描源目录相交 ——
@@ -285,9 +317,9 @@ function defaultPublish(type: LibraryType): string {
 const publishIssue = computed(() => {
   const raw = form.value.publish_path.trim()
   if (!raw) return ''
-  if (!raw.startsWith('/')) return '请输入绝对路径'
-  const norm = (s: string) => s.replace(/\/+$/, '')
-  const p = norm(raw)
+  // 判据与归一化都在 `@/lib/paths`（与向导共用一份）—— 原来这里写死 `startsWith('/')`、
+  // 比较时只认 `/`，Windows 上既会把 `C:\…` 判成非法、又让重叠检测恒为假。
+  if (!isAbsolutePath(raw)) return '请输入绝对路径'
   for (const l of libs.value) {
     const guards: Array<{ label: string; path: string }> = []
     if (l.root_path) guards.push({ label: `书库「${l.name}」的库根`, path: l.root_path })
@@ -298,8 +330,7 @@ const publishIssue = computed(() => {
       })
     }
     for (const g of guards) {
-      const gp = norm(g.path)
-      if (p === gp || p.startsWith(`${gp}/`) || gp.startsWith(`${p}/`)) {
+      if (pathsOverlap(raw, g.path)) {
         return `与${g.label}重叠（${g.path}）：副本会被扫描回来变成重复书`
       }
     }
@@ -307,28 +338,27 @@ const publishIssue = computed(() => {
   return ''
 })
 
-function openCreate(): void {
-  editingId.value = ''
-  dlgTab.value = 'contents'
-  form.value = {
-    name: '',
-    type: 'ebook',
-    mode: 'inplace',
-    root_path: '',
-    source_subdir: '',
-    rules: '',
-    publish_path: '',
-    watch: true,
-    scan_interval: 0,
-    scan_cron: '',
-    scrape_enabled: true,
-  }
-  dialogOpen.value = true
+/**
+ * 第 40 期：**新建走向导**（`LibraryWizard`），编辑仍走下面这个三页签弹窗。
+ *
+ * 上游那份向导就叫 *Create a library* —— 它回答的是「建库那一刻该回答哪些问题」；
+ * 编辑要回答的是另一组问题（「上次扫描健康吗」只在编辑态才有内容）。共用一套表单
+ * 会互相将就，所以分成两条路。
+ */
+function openWizard(): void {
+  wizardOpen.value = true
+}
+
+/** 向导建库成功：关掉浮层并把列表 / 迁移预览整体刷一遍（新库会影响它们）。 */
+async function onWizardCreated(): Promise<void> {
+  wizardOpen.value = false
+  await reload()
 }
 
 async function openEdit(l: LibraryEntity): Promise<void> {
   editingId.value = l.id
   dlgTab.value = 'contents'
+  fmtTouched.value = l.allowed_exts.length > 0
   form.value = {
     name: l.name,
     type: l.type,
@@ -341,6 +371,10 @@ async function openEdit(l: LibraryEntity): Promise<void> {
     scan_interval: l.scan_interval ?? 0,
     scan_cron: l.scan_cron ?? '',
     scrape_enabled: true,
+    icon: l.icon ?? '',
+    allowed_exts: [...(l.allowed_exts ?? [])],
+    // 排除图案在编辑弹窗里用**换行分隔的文本框**（见模板注释），这里做一次往返转换
+    exclude_text: (l.exclude ?? []).join('\n'),
   }
   dialogOpen.value = true
   // 刮削出版开关是**每库覆盖项**（不是库实体列），单独取一次生效值
@@ -352,7 +386,14 @@ async function openEdit(l: LibraryEntity): Promise<void> {
   }
 }
 
+/** 编辑保存（第 40 期起这里**只管编辑** —— 新建在 `LibraryWizard` 里）。 */
 async function submitDialog(): Promise<void> {
+  const lid = editingId.value
+  if (!lid) {
+    // 弹窗只在编辑态打开；真走到这里说明打开了空弹窗 —— 宁可什么都不做也不许建出半个库
+    ui.toast('没有正在编辑的书库')
+    return
+  }
   busy.value = 'save'
   try {
     const payload = {
@@ -366,14 +407,15 @@ async function submitDialog(): Promise<void> {
       watch: form.value.watch ? 1 : 0,
       scan_interval: Number(form.value.scan_interval) || 0,
       scan_cron: form.value.scan_cron.trim(),
+      icon: form.value.icon,
+      // 没动过勾选 ⇒ 发空数组 = 恢复「继承类型默认」（同 `ExtChips` 的语义）
+      allowed_exts: fmtTouched.value ? form.value.allowed_exts : [],
+      exclude: form.value.exclude_text
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean),
     }
-    let lid = editingId.value
-    if (lid) {
-      await api.updateLibrary(lid, payload)
-    } else {
-      const res = await api.createLibrary(payload)
-      lid = res.library.id
-    }
+    await api.updateLibrary(lid, payload)
     // 「刮削出版」是**每库覆盖项**，只能建库之后再写：
     // 与全局一致 → 恢复继承（不留覆盖，以后全局改了它跟着变）；
     // 与全局不同 → 写死覆盖（这正是「这个库单独关掉」的表达）。
@@ -382,7 +424,7 @@ async function submitDialog(): Promise<void> {
     } else {
       await api.librarySettingsReset(lid, ['scrape.enabled'])
     }
-    ui.toast(editingId.value ? '书库已更新' : '书库已创建')
+    ui.toast('书库已更新')
     dialogOpen.value = false
     await reload()
   } catch (e) {
@@ -537,7 +579,7 @@ async function remove(l: LibraryEntity): Promise<void> {
             <Button size="sm" :disabled="!!busy" @click="scanAll">
               {{ busy === 'scan-all' ? '扫描中…' : '全部扫描' }}
             </Button>
-            <Button size="sm" variant="primary" @click="openCreate">新建书库</Button>
+            <Button size="sm" variant="primary" @click="openWizard">新建书库</Button>
           </div>
         </div>
         <div class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
@@ -573,6 +615,13 @@ async function remove(l: LibraryEntity): Promise<void> {
         class="border-b border-border px-4 py-3 last:border-b-0"
       >
         <div class="flex flex-wrap items-center gap-2">
+          <!-- 第 40 期：建库时选的图标要在**这里**看得见，否则那个选择器就是假交互 -->
+          <Icon
+            v-if="l.icon"
+            :name="l.icon"
+            class="h-4 w-4 shrink-0 text-muted-foreground"
+            :title="l.icon"
+          />
           <span class="text-[12.5px] font-medium text-foreground">{{ l.name }}</span>
           <Badge v-if="l.publish_path" tone="ok">刮削出版</Badge>
           <div class="ml-auto flex shrink-0 gap-1">
@@ -718,7 +767,21 @@ async function remove(l: LibraryEntity): Promise<void> {
       </div>
     </Card>
 
-    <!-- 新建 / 编辑弹窗 -->
+    <!--
+      新建向导（第 40 期）。与下面那个编辑弹窗**互斥**：同一个时刻只该有一层浮层，
+      否则两个 z-50 叠在一起，用户按 Esc 或点空白关掉上面那个之后会以为「关不掉」。
+    -->
+    <LibraryWizard
+      v-if="wizardOpen"
+      :types="types"
+      :modes="modes"
+      :source-dir="sourceDir"
+      :libs="libs"
+      @close="wizardOpen = false"
+      @created="onWizardCreated"
+    />
+
+    <!-- 编辑弹窗（第 40 期起**只管编辑** —— 新建一律走向导） -->
     <div
       v-if="dialogOpen"
       class="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4"
@@ -726,7 +789,7 @@ async function remove(l: LibraryEntity): Promise<void> {
     >
       <div class="w-[min(34rem,94vw)] rounded-lg border border-border bg-card p-5 shadow-2xl">
         <h3 class="font-serif text-[16px] font-semibold text-foreground">
-          {{ editingId ? '编辑书库' : '新建书库' }}
+          编辑书库
         </h3>
 
         <!-- 三页签：内容 / 自动化 / 上次扫描（对齐上游的 LIBRARY-CONTENTS / AUTOMATION / LAST SCAN） -->
@@ -851,6 +914,50 @@ async function remove(l: LibraryEntity): Promise<void> {
             <div class="mt-1 text-[11px] text-muted-foreground">
               副本文件名沿用命名规则 + 系列布局；想为本库单独指定规则，保存后在列表里点
               「设置 → 命名规则」。
+            </div>
+          </div>
+
+          <!-- 第 40 期新增的三个库实体列：图标 / 允许的格式 / 排除图案。
+               ⚠️ 这三个字段**只在编辑态有**（新建走 `LibraryWizard`），所以这里不必有默认值逻辑。 -->
+          <div>
+            <div class="mb-1 text-[11.5px] text-muted-foreground">图标（书库列表与侧栏的库项上显示）</div>
+            <select
+              v-model="form.icon"
+              class="w-full rounded-md border border-border bg-card px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+            >
+              <option value="">不显示图标</option>
+              <option v-for="n in ICON_NAMES" :key="n" :value="n">{{ n }}</option>
+            </select>
+          </div>
+
+          <div>
+            <div class="mb-1 text-[11.5px] text-muted-foreground">允许的格式</div>
+            <ExtChips
+              v-model="form.allowed_exts"
+              v-model:touched="fmtTouched"
+              :defaults="extsOf(form.type)"
+              :type-label="types.find((t) => t.value === form.type)?.label ?? ''"
+            />
+          </div>
+
+          <div>
+            <div class="mb-1 text-[11.5px] text-muted-foreground">
+              排除图案（每行一条 glob；含 / 时匹库内相对路径，否则只匹文件名；大小写敏感）
+            </div>
+            <!--
+              这里用**换行分隔的文本框**而不是向导里那种「添加 → 列表」：
+              弹窗已经挤了 9 个字段，而编辑时通常是微调一两条。
+              ⚠️ 分隔符必须是换行，不是逗号 —— glob 的 brace 扩展里就有逗号
+              （`*.{epub,mobi}`），拿逗号切会把模式切坏。
+            -->
+            <textarea
+              v-model="form.exclude_text"
+              rows="3"
+              :placeholder="'如：\n*.draft.epub\n备份/*'"
+              class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+            />
+            <div class="mt-1 text-[11px] text-muted-foreground">
+              排除只影响<strong>扫描</strong>：被排除的文件不进书目，文件本身一个字节都不动。
             </div>
           </div>
         </div>

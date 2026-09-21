@@ -1,4 +1,5 @@
 import type { BookCard } from './api'
+import { statusOf as statusOfBook } from './readingThresholds'
 
 /**
  * 自定义智能书架：规则的**存储在后端**（smart_scopes 表），**求值在前端**——
@@ -71,12 +72,14 @@ export const OP_LABELS: Record<ScopeOp, string> = {
   at_most: '至多',
 }
 
-/** 阅读状态口径：与 bookInfo.statusLabel / library.derivedStatus 一致（≥99.5% 读完） */
+/**
+ * 阅读状态口径：**真实状态优先**，没有状态行才按进度兜底。
+ *
+ * ⚠️ 第 40 期起收敛到 `lib/readingThresholds.ts` —— 这里原来是同一段逻辑的三份拷贝之一，
+ * 而阈值现在可配（设置页 / 每库覆写），三份拷贝必然走散。
+ */
 function statusOf(b: BookCard): string {
-  if (b.status) return b.status
-  const p = b.percent ?? 0
-  if (p >= 99.5) return 'finished'
-  return p > 0 ? 'reading' : 'unread'
+  return statusOfBook(b)
 }
 
 function norm(v: unknown): string {

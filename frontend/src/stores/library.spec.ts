@@ -9,7 +9,13 @@ import { useLibraryStore } from '@/stores/library'
  * 不关心 HTTP 细节（那由后端的接口用例负责）。
  */
 vi.mock('@/lib/api', () => ({
-  api: { libraries: vi.fn() },
+  // `readingThresholds` 是第 40 期加的：store 的 `loadBooks` / `setCurrentLibrary`
+  // 会先取阈值（见 `lib/readingThresholds.ensureThresholds`）。本组用例没走到那两条路径，
+  // 但 mock 缺了它，将来谁加一条就会炸在「不是函数」上，所以一并给出可用的桩。
+  api: {
+    libraries: vi.fn(),
+    readingThresholds: vi.fn().mockResolvedValue({ library_id: '', started: 0, finished: 99.5 }),
+  },
 }))
 
 const mockLibraries = vi.mocked(api.libraries)
@@ -39,6 +45,11 @@ function makeLibrary(over: Partial<LibraryEntity> = {}): LibraryEntity {
     watch: 0,
     scan_interval: 0,
     scan_cron: '',
+    // 第 40 期新库向导三列
+    icon: '',
+    allowed_exts: [],
+    exts_effective: ['.epub'],
+    exclude: [],
     book_count: 0,
     exists: true,
     writable: true,
@@ -53,7 +64,8 @@ function makeResult(items: LibraryEntity[]): LibrariesResult {
     items,
     total: items.length,
     source_dir: '/srv/library',
-    types: [{ value: 'ebook', label: '电子书' }],
+    // `exts` = 该类型的默认扫描白名单（第 40 期「允许的格式」chips 的默认勾选集）
+    types: [{ value: 'ebook', label: '电子书', exts: ['.epub', '.mobi'] }],
     modes: [{ value: 'inplace', label: '就地引用' }],
   }
 }

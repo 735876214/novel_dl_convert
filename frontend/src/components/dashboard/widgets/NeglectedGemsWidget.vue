@@ -2,6 +2,7 @@
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
+import { isInProgress } from '@/lib/readingThresholds'
 import { useLibraryStore } from '@/stores/library'
 
 /** 被遗忘的佳作：已开始却最久未触碰的一本书。 */
@@ -11,8 +12,9 @@ const router = useRouter()
 onMounted(() => library.loadBooks())
 
 const gem = computed(() => {
+  // 「在读但没读完」用唯一入口判（第 40 期起阈值可配），不自己写死 99.5
   const list = library.books.filter(
-    (b) => (b.percent ?? 0) > 0 && (b.percent ?? 0) < 99.5 && (b.updated_at ?? 0) > 0,
+    (b) => isInProgress(b.percent, library.currentLibraryId) && (b.updated_at ?? 0) > 0,
   )
   if (!list.length) return null
   return [...list].sort((a, b) => (a.updated_at ?? 0) - (b.updated_at ?? 0))[0]

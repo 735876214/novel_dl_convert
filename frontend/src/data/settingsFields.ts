@@ -95,6 +95,30 @@ export const ACHIEVEMENTS_FIELDS: FieldDef[] = [
   },
 ]
 
+/**
+ * 偏好与同步 → 阅读进度口径（第 40 期，对应上游的 Progress Thresholds）。
+ *
+ * 这是全站「在读 / 已读完」判定的**全局默认值** —— 统计、书架、成就、Komga 客户端
+ * 四处同源（都读 `core/lib_settings.reading_thresholds`），所以改这里会**同时**改变
+ * 四处的结果，不是只影响某一页。每个书库还能单独覆写（书库管理 → 每库设置 → 阅读）。
+ *
+ * ⚠️ 值域是 **0–100**（百分比），不是 `confidence` 那类 0–1 的小数。
+ */
+export const READING_FIELDS: FieldDef[] = [
+  {
+    path: 'reading.started_threshold',
+    label: '在读下界（%）',
+    type: 'number',
+    hint: '进度高于该值即算「在读」。默认 0 = 有一点进度就算在读',
+  },
+  {
+    path: 'reading.finished_threshold',
+    label: '已读完阈值（%）',
+    type: 'number',
+    hint: '进度达到该值即算「已读完」。默认 99.5（本项目既有口径，不是上游的 99）',
+  },
+]
+
 /** 保存某个分区时提交的顶层配置键 */
 /**
  * 分区 → 该分区保存时要提交的**顶层配置键**。
@@ -119,6 +143,8 @@ export const SECTION_KEYS: Record<string, string[]> = {
   metadata: ['metadata_fetch'],
   // 多书库：跨库策略开关（库实体存 SQLite，见「工具 → 书库管理」）
   libraries: ['libraries'],
+  // 阅读进度口径的全局默认值（页面在「偏好与同步」；每库覆写在书库管理里）
+  reading: ['reading'],
 }
 
 /** 命名规则的格式筛选取值（与后端 naming.scope 的取值一致：all 或某个扩展名） */

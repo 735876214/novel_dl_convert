@@ -136,7 +136,9 @@ const groups = computed(() =>
           ...library.libraryEntities.map((x) => ({
             id: `lib:${x.id}`,
             label: x.name,
-            icon: 'library',
+            // 第 40 期：建库时选的图标（空 = 用通用的书架图标兜底）。
+            // 未知 key 由 `iconPath()` 返回空串降级，不会渲染出半个图标。
+            icon: x.icon || 'library',
             count: x.book_count,
           })),
         ] as NavItem[],

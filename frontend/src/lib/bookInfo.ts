@@ -1,4 +1,5 @@
 import type { BookCard } from '@/lib/api'
+import { statusLabelOf } from '@/lib/readingThresholds'
 
 /**
  * 书卡上要展示哪几类信息 —— **单一来源**。
@@ -53,15 +54,14 @@ export function tagsLabel(b: BookCard, max = 2): string {
   return `${tags.slice(0, max).join(' · ')} +${tags.length - max}`
 }
 
-/** 阅读状态文案：**真实状态优先**；没有状态行（status 为 null）才按进度兜底推导 */
+/**
+ * 阅读状态文案：**真实状态优先**；没有状态行（status 为 null）才按进度兜底推导。
+ *
+ * ⚠️ 第 40 期起判定收敛到 `lib/readingThresholds.ts`（阈值可配，三份拷贝就是三个真相源）。
+ * 本函数的「状态优先」语义**原样保留**，只是兜底那一半不再自己算。
+ */
 export function statusLabel(b: BookCard): string {
-  if (b.status) {
-    const map = { unread: '未读', reading: '在读', finished: '已读完', paused: '搁置', abandoned: '弃读' }
-    return map[b.status] ?? ''
-  }
-  const p = b.percent ?? 0
-  if (p >= 99.5) return '已读完'
-  return p > 0 ? '在读' : '未读'
+  return statusLabelOf(b)
 }
 
 /**

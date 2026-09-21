@@ -39,6 +39,13 @@ REQUIRED_DEV_DEPS = ("vitest", "@vue/test-utils", "happy-dom")
 EXPECTED_SPECS = (
     "src/views/ReaderView.spec.ts",
     "src/stores/library.spec.ts",
+    # 第 40 期：阅读阈值是「全前端唯一的判定入口」，它的行为由这条 spec 兜住
+    "src/lib/readingThresholds.spec.ts",
+    # 第 40 期：新建向导。「立即创建」必须**真的建库**（不是只关浮层），这条 spec 兜住
+    "src/components/tools/LibraryWizard.spec.ts",
+    # 第 40 期：路径判据（向导与编辑弹窗共用一份）。原来两处各写一遍 `startsWith('/')`，
+    # Windows 上把 `C:\…` 判成非绝对 ⇒ 向导卡在第 2 步。
+    "src/lib/paths.spec.ts",
 )
 
 

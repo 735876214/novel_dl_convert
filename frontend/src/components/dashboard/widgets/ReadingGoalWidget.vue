@@ -6,7 +6,7 @@ import { useStatsStore } from '@/stores/stats'
 
 /**
  * 阅读目标（对应 BookOrbit 的 ReadingGoalWidget）。
- * 已完成本数来自 /api/stats（进度 ≥ 99.5% 记为已读完）；目标本数本地记忆。
+ * 已完成本数来自 /api/stats（按「已读完阈值」判定，第 40 期起可配）；目标本数本地记忆。
  * 数据未接入前（stats.data 为空）显示 0，避免闪回演示值。
  */
 const stats = useStatsStore()

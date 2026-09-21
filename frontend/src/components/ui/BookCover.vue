@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 
 import { api, type BookCard } from '@/lib/api'
+import { percentLabel } from '@/lib/readingThresholds'
 import { useCoverPrefsStore, type CoverOverlay, type CoverSpine } from '@/stores/coverPrefs'
 
 /**
@@ -85,11 +86,11 @@ const styleVars = computed<Record<string, string>>(() => {
 /** 自然比例：frame 贴住卡片底边（CSS 未给定位，这里补上） */
 const natural = computed(() => mode.value === 'natural')
 
-const statusLabel = computed(() => {
-  const p = props.book.percent ?? 0
-  if (p >= 99.5) return '已读完'
-  return p > 0 ? '在读' : '未读'
-})
+/**
+ * 封面角标文案：**只看进度**（与改造前一致，不看 `book.status`）。
+ * ⚠️ 第 40 期起阈值走唯一入口（可配），不再写死 99.5。
+ */
+const statusLabel = computed(() => percentLabel(props.book.percent))
 </script>
 
 <template>

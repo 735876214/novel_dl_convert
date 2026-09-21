@@ -1656,6 +1656,17 @@ export interface LibraryEntity {
   scan_interval: number
   /** 定时表达式（空 = 不启用）；坏表达式会退化为间隔扫描 */
   scan_cron: string
+  /**
+   * 图标 key（第 40 期）。**仅用于展示** —— 值取自 `lib/icons.ts` 的 `ICONS`，
+   * 后端刻意不维护白名单（图标表的唯一真相源在前端，未知 key 由 `AppIcon` 懒降级）。
+   */
+  icon: string
+  /** 「允许的格式」原始设值（空数组 = **没设过**，看 `exts_effective`） */
+  allowed_exts: string[]
+  /** **生效**的扩展名集合（`allowed_exts` 为空时 = 库类型默认白名单） */
+  exts_effective: string[]
+  /** 「排除图案」glob 列表（空数组 = 不过滤） */
+  exclude: string[]
   book_count: number
   exists: boolean
   writable: boolean
@@ -1668,7 +1679,12 @@ export interface LibrariesResult {
   total: number
   /** `LIBRARY_SOURCE_DIR` —— 新建「就地引用」库时的父目录 */
   source_dir: string
-  types: { value: LibraryType; label: string }[]
+  /**
+   * 库类型。`exts` = 该类型的**默认扫描白名单**（第 40 期）——
+   * 新建向导的「允许的格式」选完类型就用它带出默认勾选集。
+   * ⚠️ 别在前端抄一份：抄了就会与后端的扫描口径走散。
+   */
+  types: { value: LibraryType; label: string; exts: string[] }[]
   modes: { value: LibraryMode; label: string }[]
 }
 
@@ -1677,8 +1693,12 @@ export interface LibrarySettingItem {
   /** 全局配置的点分路径（如 `output.layout`）—— 覆写就以它为键 */
   key: string
   label: string
-  /** `str` 是自由文本（命名规则 / 适用格式） */
-  kind: 'bool' | 'enum' | 'number' | 'str' | 'policy_map'
+  /**
+   * `str` 是自由文本（命名规则 / 适用格式）。
+   * ⚠️ `number` 的区间是 **0–1**（比例），`percent` 是 **0–100** ——
+   * 两者不能混用（第 40 期新增 `percent`，阅读阈值就是它）。
+   */
+  kind: 'bool' | 'enum' | 'number' | 'percent' | 'str' | 'policy_map'
   /** `kind = enum` 时的候选项 */
   options: string[]
   note: string
@@ -3200,6 +3220,17 @@ export const api = {
   /** 格式分面（原 `/api/libraries` 语义，第 10 期改址到 `/api/library-facets`）。 */
   libraryFacets: () => request<{ items: LibraryFacet[] }>('/api/library-facets'),
 
+  /**
+   * 阅读阈值（第 40 期）：`{started, finished}`，0–100。
+   *
+   * 不给库 id = **全局值**（书架 / 仪表盘这类跨库视图用）；给了 = 该库的**生效值**
+   * （每库覆写 ?? 全局）。⚠️ 别在界面里再写 `99.5` —— 见 `lib/readingThresholds.ts`。
+   */
+  readingThresholds: (libraryId = '') =>
+    request<{ library_id: string; started: number; finished: number }>(
+      `/api/reading-thresholds${libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : ''}`,
+    ),
+
   /** `LIBRARY_SOURCE_DIR` 下的候选来源子目录（新建向导给默认值用）。 */
   librarySourceDirs: () =>
     request<{ root: string; exists: boolean; dirs: { name: string; path: string; entries: number }[] }>(
@@ -3221,6 +3252,12 @@ export const api = {
     watch?: number
     scan_interval?: number
     scan_cron?: string
+    /** 图标 key（取自 `lib/icons.ts` 的 `ICONS`；空 = 不显示图标） */
+    icon?: string
+    /** 允许的格式（空数组 = 继承库类型默认白名单） */
+    allowed_exts?: string[]
+    /** 排除图案（glob；含 `/` 匹相对库根的路径，否则只匹文件名） */
+    exclude?: string[]
   }) =>
     request<{ ok: boolean; library: LibraryEntity }>('/api/libraries', {
       method: 'POST',
@@ -3244,6 +3281,12 @@ export const api = {
       watch: number
       scan_interval: number
       scan_cron: string
+      /** 图标 key；空串 = 不显示图标 */
+      icon: string
+      /** 空数组 = 恢复「继承库类型默认白名单」（**不是**「一个格式都不收」） */
+      allowed_exts: string[]
+      /** 空数组 = 不过滤 */
+      exclude: string[]
     }>,
   ) =>
     request<{ ok: boolean; library: LibraryEntity }>(`/api/libraries/${encodeURIComponent(id)}`, {
