@@ -244,3 +244,74 @@ describe('ReaderView · 工具条书签按钮', () => {
     expect(wrapper.find(BTN_REMOVE).exists()).toBe(true)
   })
 })
+
+describe('ReaderView · 同路由换书（第 36 期观察项 2）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    Element.prototype.scrollIntoView = vi.fn()
+    stubApi(makeBook())
+  })
+
+  /**
+   * 第 36 期记录原文：「SPA 内直接改 hash 从一本书的阅读页跳到另一本，正文与 `nf-fixed`
+   * 会更新，但**头部书名停在上一本**；整页刷新正常。应用自身导航不走这条，故只记下待复现。」
+   * —— 这条用例就是那次的「待复现」。
+   *
+   * 机制：两条路由都是同一个记录 `/read/:id`，而 `App.vue:138` 是裸 `<RouterView />`
+   * （**没有 `:key`**）⇒ 组件**不重新挂载**。而组件里
+   * `bookId`（`:37`）是 computed、跟着路由走，
+   * `book`（`:39`）却**只在 `onMounted` 里赋值** —— 于是 :857 的 `{{ book.title }}`
+   * 停在上一本。正文侧因为 `loadChapter` 直接读 `bookId.value`（`:344`），所以是新的，
+   * 这正好解释了原文「正文会更新、书名不更新」那个自相矛盾的现象。
+   */
+  it('换书后头部书名跟着换，不能停在上一本', async () => {
+    m.bookDetail.mockImplementation(async (id: string) =>
+      id === 'book-b'
+        ? makeBook({ id: 'book-b', title: '第二本' })
+        : makeBook({ id: 'book-a', title: '第一本' }),
+    )
+
+    const { wrapper, router } = await mountReader('book-a')
+    expect(wrapper.text()).toContain('第一本')
+
+    // 同一条路由记录，只换参数 —— 不是重新挂载
+    await router.push('/read/book-b')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('第二本')
+    expect(wrapper.text()).not.toContain('第一本')
+  })
+
+  /**
+   * 换书时那一段阅读时长必须结给**上一本**。
+   *
+   * 这是上面那个 `watch` 里最容易搞反的一处：`flushSession` 读的是 `book.value.id`，
+   * 只要把 `stopSession()` 挪到 `await load()` **之后**，这段时长就会记到新书头上 ——
+   * 而「书 A 读了 12 秒」被记成「书 B 读了 12 秒」是个**不会报错、也没有任何界面提示**
+   * 的错误，事后只能靠人翻阅读统计才看得出来。所以它值得一条专门的用例。
+   */
+  it('换书时把上一本的时长结给上一本，不记到新书头上', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-21T10:00:00Z'))
+    try {
+      m.bookDetail.mockImplementation(async (id: string) =>
+        id === 'book-b'
+          ? makeBook({ id: 'book-b', title: '第二本' })
+          : makeBook({ id: 'book-a', title: '第一本' }),
+      )
+
+      const { router } = await mountReader('book-a')
+      vi.setSystemTime(new Date('2026-09-21T10:00:12Z'))   // 在这本书上读了 12 秒
+
+      await router.push('/read/book-b')
+      await flushPromises()
+
+      expect(m.recordSession).toHaveBeenCalledTimes(1)
+      const [bid, secs] = m.recordSession.mock.calls[0]
+      expect(bid).toBe('book-a')
+      expect(secs).toBe(12)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

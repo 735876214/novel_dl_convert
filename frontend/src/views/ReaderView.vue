@@ -751,7 +751,10 @@ function stopSession(): void {
 
 // ---------------- 生命周期 ----------------
 
-onMounted(async () => {
+/** 取数并铺好**这一本**书的阅读现场。抽成函数是为了让首次挂载与同路由换书共用同一条路。 */
+async function load(): Promise<void> {
+  loading.value = true
+  error.value = ''
   try {
     book.value = await api.bookDetail(bookId.value)
   } catch (e) {
@@ -813,6 +816,37 @@ onMounted(async () => {
     }
   }
   await loadChapter(start, restore)
+}
+
+/**
+ * 同一条路由记录内换参数（`/read/A` → `/read/B`）时**重新取数**。
+ *
+ * 原实现只在 `onMounted` 里赋值 `book`，而 `App.vue:138` 是裸 `<RouterView />`
+ * （**没有 `:key`**）⇒ 同记录内换参数组件**不重新挂载**，`book` 停在上一本，
+ * 于是头部书名（`:857` 的 `{{ book.title }}`）**停在上一本**；
+ * 正文却因为 `loadChapter` 直接读路由驱动的 `bookId`（`:344`）而是新的 ——
+ * 第 36 期记下的那个「正文会更新、书名不更新」的自相矛盾现象，根因就在这里。
+ *
+ * ⚠️ 刻意**不**给 `RouterView` 加 `:key`：那会连整棵 DOM 一起重建（丢滚动位置、
+ * 重建滚动/分页观察器），与本项目「局部更新不重建」的既有做法冲突。这里只重跑取数。
+ */
+watch(bookId, async () => {
+  // 先把上一本的阅读时长结清：`flushSession` 读的是 `book.value.id`，
+  // 必须在 `load()` 换掉它**之前**调，否则这段时长会记到新书头上。
+  stopSession()
+  // 清掉上一本的现场 —— 否则新书取数期间会露着上一本的书签 / 批注 / 正文
+  annotations.value = []
+  bookmarks.value = []
+  bookmarkTrash.value = []
+  pos.value = 0
+  html.value = ''
+  chapterTitle.value = ''
+  local.value = 0
+  await load()
+})
+
+onMounted(() => {
+  void load()
 })
 
 onBeforeUnmount(() => {
