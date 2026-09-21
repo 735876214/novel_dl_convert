@@ -631,7 +631,7 @@
   前端 `stores/activity.ts`（跟随 `library.currentLibraryId` 失效重载）+ `views/ReadingActivityView.vue`
   （GitHub 式**纯 CSS Grid** 53×7 热力图、5 档色阶、hover 放大 + `title` 提示、时间轴按日分组 + 类型图标 +
   `HH:MM`、范围选择「今年 / 去年 / 全部」、空态如实显示「还没有阅读记录」）；接线在 `router/index.ts:180`、
-  `data/nav.ts:45`、`AppSidebar.vue:34/58`、`lib/api.ts`。**零假数据、零外链、无 `Math.random()`**（确定性）。
+  `data/nav.ts:45`、`AppSidebar.vue:36/61`、`lib/api.ts`。**零假数据、零外链、无 `Math.random()`**（确定性）。
 - **成就对齐上游**：`core/achievements.py` 由 3 组（LIBRARY / READING / ANNOTATION）改为上游的 4 组
   （library / reading / exploration，批注归入 exploration）+ 新增 `dedication` 档（`streak_100` /
   `hours_500` / `active_days_100` / `finished_50`），共 21 条；`devices` **不引入**（本项目无 `source` 列）。
@@ -1253,6 +1253,116 @@ COLLECTIONS 行改成「本组从不预置」+ 实测锚点；另修 3 处漂移
 （例如存在一条格式相符的库）时才落地，否则拒收并在失败清单里说明原因。
 这是「不猜一个库」的直接代价，配套的 `forget_failures()` 保证用户照着提示建完库之后，
 **原先投过的文件会自己进来**，不必重投。
+
+---
+
+#### 第 38 期实施记录（首次使用引导 + 0 库边界收尾）
+
+**主题**：第 37 期把「书库表为空」扶正成全新部署的**正常初始态**，可前端**一处都没说这件事**。
+后果是首屏一整页的 0（0 本 / 0 B / 0 / 30 本）都在陈述「你还没有书」，而真相是
+**这些数字背后连一个能放书的地方都还没有**；更糟的是十几个入口（探索发现下载 / 本地转换上传 /
+Book Dock 投递 / 书架「立即扫描」/ 任务中心空态 …）都在把人往「下载 / 上传 / 投递」上引，
+而这三个动作在「没有可接收的库」时**全都会被后端 400 拒收** —— 下载还会先报「已加入下载队列」、
+再在后台悄悄失败。本期收的就是这个口子。
+
+三条口径由用户逐项拍板（AskUserQuestion）：
+
+| 争点 | 拍板 |
+| --- | --- |
+| 引导用什么载体 | **复用既有 `GuidedTourModal`**，不新建引导组件（它此前只能从「设置 → 个人资料」手动重放） |
+| 首屏那些 0 要不要改 | **一个数字都不改** —— 它们是真值；改成「—」或藏起来本身就是伪造，改为**加一条横幅解释这些 0 从哪来** |
+| 三个导入入口怎么处理 | **抢先拦截**（前端提前返回 + 给出口），而不是等后端 400 再解释 |
+
+- **判据（这是全期的地基）**：`libraryEntities.length === 0` **判不了**这件事 ——
+  `libraryEntities` 初值就是 `[]`，拉取失败还被 `catch` 吞掉，于是「还没拉到 / 拉失败」与
+  「真的一个库都没有」长得一模一样。拿它当判据，每次进页面都会**闪一下**「还没有书库」，
+  而后端明明是通的。`stores/library.ts` 因此新增 `librariesLoaded`（**只在成功取回后**置真，
+  失败保持 false —— 不知道就是不知道，不猜成 0），零库判据统一收敛成
+  `hasNoLibraries = librariesLoaded && libraryEntities.length === 0`。**判据只有一个**，
+  十来个改口的宿主全部走它，谁都不许再直接拿 `length` 判空。
+- **空态三态分开**（`ShelfView.vue`）：`0 库` ≠ `有库但没书` ≠ `有筛选没命中`。
+  第 38 期之前只有后两态，且把「没书」一概说成「到「探索发现」把书下载进来」—— 0 库时那是句错话。
+  0 库态另带一个 `新建书库` 出口（复用既有 `manageLibs()`），并**收起「立即扫描」**
+  （扫不出任何东西）、**保留「书库管理」在最显眼处**（它就是本期引导指向的那个出口）。
+- **引导挂在 shell 层**（`App.vue`）：只在 `hasNoLibraries` 成立时弹一次，用 `nf_tour_seen` 记
+  「弹过就算看过」（打开即写标记，不按「是否点完」记 —— 里面那套步骤可以随时从个人资料页重放，
+  反过来按「没看完就再弹」会变成每次刷新糊一个弹窗）。0 库时第一步换成「先建一个书库」并带一个
+  `新建书库` CTA；**常驻指引不依赖它** —— 仪表盘提示条、书架空态、侧栏、书库管理页各自都会说。
+- **改口的宿主（十处）**：仪表盘 `FirstRunNotice`（新增的虚线提示条，**刻意不注册进部件表** ——
+  能被关掉的提示条等于没有）、`LongWaitWidget` / `CurrentlyReadingWidget` / `HighlightOfTheDayWidget`
+  （三处空态加「正在载入…」，把「还没拉到」与「真的没有」也分开）、`StatsView.integrityCleanText`、
+  `LibraryIntegrityGaugeChart`（原来是「书库还是空的」，读起来像「库已存在、只是没放书」）、
+  `TaskCenterView`、`OutputView`、`ScrapePanel`、`ExploreView`、`LocalConvertView`、`BookDockPage`、
+  `LibrariesView`、`AppSidebar`。
+- **`AppSidebar` 里的一处死代码**：原打算照其它组一样改 `group.empty`，读代码发现**「库」组永远不为空**
+  （恒有「全部书库」一项），那个分支对它**永远走不到** —— 改也是白改。改成显式补一行
+  「还没有书库，先建一个」，否则全新部署的侧栏「库」组就只有一个筛选框和「查看全部书库（0）」。
+- **三个入口的拦截**（`ExploreView.startDownload` / `LocalConvertView` 的 `convertFiles` 与
+  `convertByPath` / `BookDockPage.onDrop`）：都在**发请求之前**判 `hasNoLibraries` 并 `return`，
+  再弹一条带出口的 toast，而不是让用户先看到「已加入下载队列」再在任务中心读失败原因。
+
+**与计划的「有意偏离」**：无。三条口径都是用户拍板后逐条照做。
+
+**A. 单测**：全量 **632 例 / 0 failed**（第 37 期基线 619 ⇒ 本期 **+13**，全部来自新增的
+`tests/test_first_run_contract.py`）。仓内前端没有 vitest，所以沿用 `test_no_defaults_contract.py`
+那套**纯文本契约**（读源码断言），五组：判据唯一 / 三态文案 / 引导分支 / 三处拦截点在请求之前 /
+出口指向同一处 `/tools/libraries`。
+改动前跑出 **11 例真失败 + 2 例前向守卫**（后两条读的是本期新增的文件，改前不存在，属预期）。
+写这组断言时自纠了三处**是我自己的正则错**、不是产品缺陷：`\n\)\n` 匹配不到 `\n})\n`；
+`body.index("api.")` 抛 ValueError（真实代码是换行后的 `api\n    .download(`，改用
+`re.search(r"\.download\(")` 取 `head`）；`WIDGET_META` 出现在 `FirstRunNotice` 自己的说明注释里
+⇒ 加 `_code()` 先剥注释再断言「不许出现某标识符」（解释「为什么不许」的注释必然要提到它）。
+
+**B. 端到端（真实实例 8796 + `/tmp/nf-test38`）**：先以**全新根**启动 ⇒ 仪表盘提示条、
+书架「还没有书库」+「新建书库」且**无**「立即扫描」与工具栏、侧栏「还没有书库，先建一个」、
+书库管理页引导段、引导弹窗「先建一个书库 · 1 / 3」；点引导 CTA ⇒ 落到
+`#/tools/libraries?new=1` 且**新建弹窗已打开**。随后在该弹窗里建一条 `ebook` 库 ⇒
+**四个翻转点同时成立**：提示条消失、书架变成「这个书架还是空的 / 换个入口看看，或到「探索发现」
+把书下载进来」且工具栏（切库 + 立即扫描 + 书库管理）恢复、引导不再弹、三个入口的拦截不再触发
+（探索发现副标题与本地转换 / Book Dock 的说明都回到正常口径）。
+
+**C. 浏览器冒烟（`playwright-cli` + chromium，实例 8796 / `/tmp/nf-test38`）**：
+
+| 点的是什么 | 实测结论 |
+| --- | --- |
+| 0 库首屏（仪表盘） | 提示条「还没有书库 / 下面的数字全是 0，是因为书还没有地方可放…」+`新建书库`；**下方所有 0 值照旧显示**（口径：不改真值） |
+| 首屏自动弹引导 | 「先建一个书库 · 新手引导 1 / 3」，带「跳过」与「新建书库」 |
+| 引导 CTA | 落 `#/tools/libraries?new=1`，**新建弹窗已打开**（`?new=1` 直达生效） |
+| 侧栏「库」组 | 「全部书库 0」下有「还没有书库，先建一个」；组底仍是「查看全部书库（0）」 |
+| 书架（0 库） | 「还没有书库」+ 说明 +「新建书库」；**无「立即扫描」、无工具栏** |
+| 建库后重进 | 书架「这个书架还是空的」+ 工具栏恢复；仪表盘提示条消失；「正在阅读」=「还没有在读的书，打开一本开始阅读吧」；引导不再弹 |
+
+**D. 文档**：本节 + 锚点核验两处漂移（`ShelfView.vue:457-469 → 545-560`、
+`AppSidebar.vue:34/58 → 36/61`，均为**实测行号**）。
+`tests/check_doc_anchors.py` ⇒ 硬错 **0** / 疑似漂移 **0**，`--todo` 清单逐条过完。
+本期**不动** `tests/test_settings_nav_contract.py` 的 48 与 `tests/test_features.py` 的 18
+两处契约断言 —— **未新增表 / 能力键 / 设置页 / 页面 / 路由**，全部改动都在既有文件里改口。
+
+**E. 两个坑（都不是产品缺陷，但下次会再踩）**：
+
+1. **`onMounted` 在「登录之前」就跑完了** —— 这是本期唯一一个**靠浏览器实测才发现的真 bug**。
+   引导最初写成在 `App.vue` 的 `onMounted` 里采样一次 `hasNoLibraries`，结果**一次都没弹过**
+   （`nf_tour_seen` 始终为空）。根因：`App` 早在**登录之前**就挂载好了（登录是覆盖层 `LoginGate`，
+   **不是路由**），那一刻 `loadLibraries()` 拿到的是 **401**、`librariesLoaded` 仍是 false，
+   于是「0 库」这个判断当时根本不成立；等用户登进来，`onMounted` 早已跑完，不会再跑第二次。
+   改成盯 `hasNoLibraries` 的 `watch(..., { immediate: true })`：无论库是登录后才拉到的、
+   还是用户把最后一个库删掉才变成 0 的，都会在**成立的那一刻**触发。
+2. **`playwright-cli` 的几个用法**（第 37 期记过 `fill` 的坑，本期补三条）：
+   ① `--browser=chromium` **只对 `open` 有效**，`snapshot` / `click` 带上它一律
+   `Unknown option: --browser`；② `open` 每次起的是**新上下文**（localStorage 清空 ⇒ 要重新登录），
+   **同一个会话里再 `open` 会失败**，此后所有命令都报 `browser 'default' is not open` ——
+   改用 `goto <url>` 做页内跳转；③ 本机默认浏览器是 chrome、**没装**，不开 `--browser=chromium`
+   直接 `Chromium distribution 'chrome' is not found`。
+   另记一笔**工具的假象**：`click` 之后紧跟 `type` 时，第一次 `type` 可能落在**焦点尚未切换**的空档里，
+   DOM 里没有值、稍后快照才发现 —— 表现为「字段看着没填上」。重 `click` 一次再 `type` 就好；
+   本轮那条库的 `source_subdir` 因此成了 `ebooksebooks`（冒烟实例的数据问题，不是产品行为）。
+
+**F. 全量回归里的一例偶发（与本期的前端改动无关，如实记一笔）**：第一轮全量 632 例中
+`test_watcher_perlibrary::test_open_library_source_is_scanned_and_writes_last_scan` 失败在
+`db.get_library` 的 `sqlite3.InterfaceError: bad parameter or other API misuse`（**文件已摄入成功**，
+挂在读回 `last_scan_at` 那一刻），单跑该文件 8 例全绿、**第二轮全量 632 / 0 / 0**。
+该用例在**干净 HEAD worktree** 上也偶发过（第 33 期 §C 有同样的记录），属既有顺序 / 线程时序问题；
+本期改动全在前端 + 一个纯文本测试文件，不触碰 DB。
 
 ---
 

@@ -35,7 +35,7 @@
 - `.gitignore` 清单、macOS 建环境与首跑、`npm install` 的 lock 噪声、Windows 删除 shim ⇒ **见 REF「环境与构建」**。
 
 ## 自动化测试（硬前提）
-- 完全离线 `.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。**基线按环境取**：POSIX 37 期 619 例 / 0 failed（36 期 595）；win32 33 期 404 例 / 0 failed（**未随 POSIX 重取**）。
+- 完全离线 `.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。**基线按环境取**：POSIX 38 期 632 例 / 0 failed（37 期 619）；win32 33 期 404 例 / 0 failed（**未随 POSIX 重取**）。
 - ⚠️ **`pytest -q` 汇总行抓不到**（重定向后只剩 warnings）⇒ 一律 `--junitxml=/tmp/nf.xml` + Python 解析 `//testcase[failure|error]`（**别用 `[xml]`**）；跑全量前确认 `novelforge/static` 存在。
 - **「长期稳定失败」不是 flaky，是产品 bug 的症状**：报错不指向根因就逐层打印中间返回值；修完临时回退那一处确认「恰好相关用例失败」；e2e 做改前 FAIL / 改后 PASS 对照。
 - 硬前提：①环境变量须在 import 业务模块**前**设（`config` 导入即固化目录、`server` 导入即 `ensure_dirs()`）；②`db._conn`/`_db_path` 是模块级缓存 ⇒ 隔离靠 `db.close()`。
