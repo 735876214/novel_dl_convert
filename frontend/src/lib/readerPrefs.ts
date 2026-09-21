@@ -18,6 +18,27 @@ export type ReaderThemeKey =
 /** 滚动 = 纵向连续；翻页 = 定高分栏 + 横向翻页（分栏只在翻页下有意义） */
 export type ReaderMode = 'scroll' | 'paged'
 
+/** 字重样式（上游的 Font style 四档）：常规 / 加粗 / 斜体 / 粗斜体 */
+export type ReaderFontStyleKey = 'regular' | 'bold' | 'italic' | 'boldItalic'
+
+export const READER_FONT_STYLES: Array<{
+  key: ReaderFontStyleKey
+  label: string
+  weight: string
+  style: string
+}> = [
+  { key: 'regular', label: '常规', weight: '400', style: 'normal' },
+  { key: 'bold', label: '加粗', weight: '700', style: 'normal' },
+  { key: 'italic', label: '斜体', weight: '400', style: 'italic' },
+  { key: 'boldItalic', label: '粗斜体', weight: '700', style: 'italic' },
+]
+
+/** 字重样式键 → 实际 CSS 值。未知键回落到常规（老数据 / 手改 localStorage 不至于变粗体） */
+export function readerFontStyle(key: string): { weight: string; style: string } {
+  const f = READER_FONT_STYLES.find((s) => s.key === key) ?? READER_FONT_STYLES[0]
+  return { weight: f.weight, style: f.style }
+}
+
 export interface ReaderPrefs {
   /** 内置 serif / sans / system，或 `custom:<字体 id>`（上传的字体，见 lib/fonts.ts） */
   font: string
@@ -41,6 +62,14 @@ export interface ReaderPrefs {
   indent: number
   /** 分栏数（仅翻页模式生效：1 = 单栏，2 = 双栏） */
   columns: number
+  /** 字重样式（常规 / 加粗 / 斜体 / 粗斜体） */
+  fontStyle: ReaderFontStyleKey
+  /**
+   * 正文区左右内边距（rem）。与 `width`（内容宽度）是**两个独立的量**：
+   * `width` 是文本块自身的宽度上限，本项是文本块与阅读区边缘之间的留白 ——
+   * 窄屏上把 `width` 调大不会自动得到边距，反之亦然。
+   */
+  gutter: number
 }
 
 export const READER_PREFS_KEY = 'reader-prefs'
@@ -59,6 +88,9 @@ export const READER_PREFS_DEFAULT: ReaderPrefs = {
   wordSpacing: 0,
   indent: 2,
   columns: 1,
+  fontStyle: 'regular',
+  // 1.5rem = 阅读区原先写死的 px-6（Tailwind 的 6 = 1.5rem），默认值因此**不改现有观感**
+  gutter: 1.5,
 }
 
 export const READER_FONTS = [
@@ -113,6 +145,7 @@ export const READER_RANGES = {
   wordSpacing: { min: 0, max: 0.5, step: 0.05, unit: 'em' },
   indent: { min: 0, max: 3, step: 0.5, unit: 'em' },
   columns: { min: 1, max: 2, step: 1, unit: '栏' },
+  gutter: { min: 0, max: 6, step: 0.5, unit: 'rem' },
 } as const
 
 export function readReaderPrefs(): ReaderPrefs {

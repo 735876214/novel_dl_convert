@@ -6,6 +6,7 @@ import Card from '@/components/ui/Card.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import {
   READER_FONTS,
+  READER_FONT_STYLES,
   READER_MODES,
   READER_PREFS_DEFAULT,
   READER_RANGES,
@@ -20,9 +21,10 @@ import { useUiStore } from '@/stores/ui'
  * YOU → Reader → eBook（`/settings/reader/ebook`）
  *
  * 真实实现（与阅读器共享同一份 localStorage 偏好）：
- *   阅读模式（滚动/翻页）、13 档主题、字体、字号、行高、内容宽度、
- *   段落间距、首行缩进、字距、词距、分栏、两端对齐、断词。
- * 未支持：新书套用设置、固定版式页宽、字重样式、文本区左右内边距。
+ *   阅读模式（滚动/翻页）、13 档主题、字体、字重样式、字号、行高、内容宽度、
+ *   文本区左右内边距、段落间距、首行缩进、字距、词距、分栏、两端对齐、断词。
+ * 未支持：新书套用设置（本项目排版是全局单一来源，该问题天然不存在 —— 见卡片说明）、
+ *   固定版式页宽三档（固定版式**已识别**并对它停用重排设置，但不提供页宽档位）。
  */
 
 const ui = useUiStore()
@@ -49,6 +51,7 @@ const SLIDERS = (
     ['letterSpacing', '字距', 2],
     ['wordSpacing', '词距', 2],
     ['width', '内容宽度', 0],
+    ['gutter', '文本区左右内边距', 1],
     ['columns', '分栏（仅翻页模式生效）', 0],
   ] as Array<[NumPrefKey, string, number]>
 ).map(([key, label, digits]) => ({ key, label, digits, ...READER_RANGES[key] }))
@@ -120,6 +123,23 @@ function setNum(key: NumPrefKey, value: number): void {
         </div>
       </div>
 
+      <div class="flex items-center gap-4 border-b border-border px-4 py-3.5">
+        <div class="w-24 shrink-0 text-[13px] font-medium text-foreground">字重样式</div>
+        <div class="flex flex-1 gap-1.5">
+          <button
+            v-for="s in READER_FONT_STYLES"
+            :key="s.key"
+            type="button"
+            class="flex-1 cursor-pointer rounded-md border px-2 py-1.5 text-[12px] transition-colors"
+            :class="prefs.fontStyle === s.key ? 'border-ring text-foreground' : 'border-border text-muted-foreground hover:text-foreground'"
+            :style="{ fontWeight: s.weight, fontStyle: s.style }"
+            @click="prefs.fontStyle = s.key; persistPrefs()"
+          >
+            {{ s.label }}
+          </button>
+        </div>
+      </div>
+
       <div
         v-for="(s, i) in SLIDERS"
         :key="s.key"
@@ -159,12 +179,10 @@ function setNum(key: NumPrefKey, value: number): void {
       label="eBook"
       :groups="['NEW BOOKS', 'ADVANCED']"
       :items="[
-        'Apply my settings to new books（新书是否套用我的设置）',
-        'Fixed-layout page spreads（Book default / Single page / Columns）',
-        'Font style（Regular / Bold / Regular Italic / Bold Italic）',
-        'Column gap（文本区左右内边距）',
+        'Apply my settings to new books（新书是否套用我的设置）—— 本项目排版设置是「全局单一来源」，阅读器与设置页读写同一份，新书一律套用；上游这个开关要解决的问题在这里天然不存在（不是没做）',
+        'Fixed-layout page spreads（固定版式页宽：Book default / Single page / Columns）—— 固定版式「已识别」（后端读 OPF 的 rendition:layout），这类书停用重排设置、页宽交给书本身决定；只是不提供上游这三档页宽选择',
       ]"
-      note="本项目已实现「阅读模式 / 13 档主题 / 字体 / 字号 / 行高 / 内容宽度 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 13 项；其余为未支持。"
+      note="本项目已实现「阅读模式 / 13 档主题 / 字体 / 字重样式 / 字号 / 行高 / 内容宽度 / 文本区左右内边距 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 15 项；其余为未支持。"
     />
   </div>
 </template>

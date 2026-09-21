@@ -11,9 +11,11 @@ import { HIGHLIGHT_COLORS, highlightHex as hex } from '@/data/annotationColors'
 import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark } from '@/lib/api'
 import {
   READER_FONTS,
+  READER_FONT_STYLES,
   READER_MODES,
   READER_RANGES,
   READER_THEMES,
+  readerFontStyle,
   readerThemeStyle,
   readReaderPrefs,
   saveReaderPrefs,
@@ -89,14 +91,44 @@ const columnWidth = computed(() => {
   return Math.max(160, (w - (c - 1) * PAGE_GAP) / c)
 })
 
+/**
+ * 这本书是不是**固定版式**（pre-paginated）。
+ *
+ * 由后端读 OPF 的 `rendition:layout` 判定（`core/library._fixed_layout_of`），随书目 / 详情下发；
+ * 读不到就是 false（默认按可重排处理，见那边的说明）。
+ */
+const fixedLayout = computed(() => book.value?.fixed_layout === true)
+
+/** 正文的左右内边距：偏好驱动（原先写死 px-6），翻页模式下不额外叠加 */
+const gutterStyle = computed(() => {
+  const g = `${prefs.value.gutter}rem`
+  return { paddingLeft: g, paddingRight: g }
+})
+
 const contentStyle = computed(() => {
   const p = prefs.value
+  // 固定版式：整页已排好版（常见实现是整页 SVG），页宽由书本身决定 ——
+  // 这里**只给容器尺寸**，字号 / 行高 / 缩进 / 字距 / 字体一概不注入：
+  // 那些是重排设置，对一页排好的版式没有意义，套上去只会把整页排版揉烂。
+  if (fixedLayout.value) {
+    return {
+      maxWidth: 'none',
+      height: paged.value ? '100%' : 'auto',
+      columnWidth: 'auto',
+      columnGap: 'normal',
+      columnFill: 'auto',
+      ...gutterStyle.value,
+    } as Record<string, string>
+  }
+  const fs = readerFontStyle(p.fontStyle)
   return {
     fontSize: `${p.size}px`,
     lineHeight: String(p.lineHeight),
     // 翻页模式铺满一屏，内容宽度交由「分栏」决定
     maxWidth: paged.value ? 'none' : `${p.width}rem`,
     fontFamily: readerFontStack(p.font),
+    fontWeight: fs.weight,
+    fontStyle: fs.style,
     textAlign: p.justify ? 'justify' : 'start',
     hyphens: p.hyphens ? 'auto' : 'manual',
     letterSpacing: `${p.letterSpacing}em`,
@@ -108,10 +140,14 @@ const contentStyle = computed(() => {
     columnWidth: paged.value ? `${columnWidth.value}px` : 'auto',
     columnGap: paged.value ? `${PAGE_GAP}px` : 'normal',
     columnFill: 'auto',
+    ...gutterStyle.value,
   } as Record<string, string>
 })
 
-const widthStyle = computed(() => ({ maxWidth: `${prefs.value.width}rem` }))
+const widthStyle = computed(() => ({
+  maxWidth: `${prefs.value.width}rem`,
+  ...gutterStyle.value,
+}))
 
 const scrollStyle = computed(() => {
   const t = readerThemeStyle(prefs.value.theme)
@@ -212,6 +248,9 @@ watch(
     () => prefs.value.paragraphSpacing,
     () => prefs.value.width,
     () => prefs.value.font,
+    () => prefs.value.fontStyle,
+    () => prefs.value.gutter,
+    () => fixedLayout.value,
   ],
   () => nextTick(measurePages),
 )
@@ -236,6 +275,7 @@ const SLIDERS = (
     ['wordSpacing', '词距', 2],
     ['width', '内容宽度', 0],
     ['columns', '分栏', 0],
+    ['gutter', '文本区左右内边距', 1],
   ] as Array<[NumPrefKey, string, number]>
 ).map(([key, label, digits]) => ({ key, label, digits, ...READER_RANGES[key] }))
 
@@ -245,8 +285,16 @@ function setNum(key: NumPrefKey, value: number): void {
   ;(prefs.value as unknown as Record<string, number>)[key] = value
 }
 
-/** 分栏只在翻页模式下有意义 */
+/**
+ * 分栏只在翻页模式下有意义；固定版式下「内容宽度」也无意义（页宽由书本身决定）——
+ * 但**照列不隐藏**，只是禁用并给出理由：抹掉会让用户以为设置项丢了。
+ */
 const showSlider = (key: NumPrefKey): boolean => !(key === 'width' && paged.value) && !(key === 'columns' && !paged.value)
+
+/** 该设置项在当前这本书上是否生效（固定版式只吃主题 / 模式 / 内边距） */
+function prefApplies(key: NumPrefKey): boolean {
+  return !fixedLayout.value || key === 'gutter'
+}
 
 const showSettings = ref(false)
 const showToc = ref(false)
@@ -814,6 +862,19 @@ onBeforeUnmount(() => {
             v-if="showSettings"
             class="absolute right-0 z-30 mt-1 max-h-[75vh] w-72 overflow-y-auto rounded-lg border border-border bg-card p-3 shadow-lg"
           >
+            <!-- 固定版式：重排设置对这本书没有意义，如实说清并把它们禁用（不装作能调） -->
+            <div
+              v-if="fixedLayout"
+              class="mb-3 flex gap-1.5 rounded-md border border-border p-2 text-[10.5px] leading-snug text-muted-foreground"
+            >
+              <Icon name="alert" class="mt-0.5 h-3 w-3 shrink-0" />
+              <span>
+                这本是<strong class="text-foreground/80">固定版式</strong>（整页已排好版）：
+                页宽由书本身决定，字号 / 行高 / 缩进 / 分栏等重排设置对它不适用，只有主题、
+                阅读模式与左右内边距会生效。
+              </span>
+            </div>
+
             <div class="mb-3">
               <div class="mb-1.5 text-[11px] text-muted-foreground">阅读模式</div>
               <div class="flex gap-1.5">
@@ -858,11 +919,28 @@ onBeforeUnmount(() => {
                   v-for="f in READER_FONTS"
                   :key="f.key"
                   type="button"
-                  class="flex-1 cursor-pointer rounded-md border px-2 py-1 text-[12px] transition-colors"
+                  class="flex-1 cursor-pointer rounded-md border px-2 py-1 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                   :class="prefs.font === f.key ? 'border-ring font-medium text-foreground' : 'border-border text-muted-foreground hover:text-foreground'"
+                  :disabled="fixedLayout"
                   @click="prefs.font = f.key"
                 >
                   {{ f.label }}
+                </button>
+              </div>
+
+              <!-- 字重样式：四档，按钮自身按该档渲染（所见即所得） -->
+              <div class="mt-1.5 flex gap-1.5">
+                <button
+                  v-for="s in READER_FONT_STYLES"
+                  :key="s.key"
+                  type="button"
+                  class="flex-1 cursor-pointer rounded-md border px-1 py-1 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  :class="prefs.fontStyle === s.key ? 'border-ring text-foreground' : 'border-border text-muted-foreground hover:text-foreground'"
+                  :style="{ fontWeight: s.weight, fontStyle: s.style }"
+                  :disabled="fixedLayout"
+                  @click="prefs.fontStyle = s.key"
+                >
+                  {{ s.label }}
                 </button>
               </div>
 
@@ -872,9 +950,10 @@ onBeforeUnmount(() => {
                   v-for="f in fonts.items"
                   :key="f.id"
                   type="button"
-                  class="flex cursor-pointer items-center justify-between rounded-md border px-2 py-1 text-[12px] transition-colors"
+                  class="flex cursor-pointer items-center justify-between rounded-md border px-2 py-1 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
                   :class="prefs.font === customFontValue(f.id) ? 'border-ring font-medium text-foreground' : 'border-border text-muted-foreground hover:text-foreground'"
                   :title="f.style"
+                  :disabled="fixedLayout"
                   @click="prefs.font = customFontValue(f.id)"
                 >
                   <span class="truncate" :style="{ fontFamily: `'NF-${f.id}', serif` }">{{ f.name }}</span>
@@ -894,11 +973,12 @@ onBeforeUnmount(() => {
               </span>
               <input
                 type="range"
-                class="w-full"
+                class="w-full disabled:cursor-not-allowed disabled:opacity-50"
                 :min="s.min"
                 :max="s.max"
                 :step="s.step"
                 :value="prefs[s.key]"
+                :disabled="!prefApplies(s.key)"
                 @input="setNum(s.key, ($event.target as HTMLInputElement).valueAsNumber)"
               >
             </label>
@@ -906,11 +986,11 @@ onBeforeUnmount(() => {
             <div class="mt-2 flex flex-col gap-1.5 border-t border-border pt-2.5">
               <label class="flex cursor-pointer items-center justify-between text-[12px] text-muted-foreground">
                 <span>两端对齐</span>
-                <input v-model="prefs.justify" type="checkbox" class="accent-[var(--primary)]">
+                <input v-model="prefs.justify" type="checkbox" class="accent-[var(--primary)]" :disabled="fixedLayout">
               </label>
               <label class="flex cursor-pointer items-center justify-between text-[12px] text-muted-foreground">
                 <span>断词（西文长词换行）</span>
-                <input v-model="prefs.hyphens" type="checkbox" class="accent-[var(--primary)]">
+                <input v-model="prefs.hyphens" type="checkbox" class="accent-[var(--primary)]" :disabled="fixedLayout">
               </label>
             </div>
           </div>
@@ -989,16 +1069,17 @@ onBeforeUnmount(() => {
         >
           <!-- 翻页模式：外层按「一屏」横向位移，内层 article 用 CSS 多栏切分 -->
           <div :style="pageShiftStyle">
+            <!-- 左右内边距由偏好驱动（见 contentStyle）；固定版式另有 nf-fixed 中和重排样式 -->
             <article
               ref="contentRef"
-              class="reader-content px-6 py-8"
-              :class="paged ? '' : 'mx-auto'"
+              class="reader-content py-8"
+              :class="[paged ? '' : 'mx-auto', fixedLayout ? 'nf-fixed' : '']"
               :style="contentStyle"
               v-html="html"
             />
           </div>
 
-          <div v-if="!paged" class="mx-auto flex items-center justify-between gap-3 px-6 pb-12" :style="widthStyle">
+          <div v-if="!paged" class="mx-auto flex items-center justify-between gap-3 pb-12" :style="widthStyle">
             <Button size="sm" :disabled="pos <= 0" @click="prev">
               <Icon name="arrowLeft" class="h-3.5 w-3.5" />上一章
             </Button>
@@ -1245,5 +1326,20 @@ onBeforeUnmount(() => {
 .reader-content :deep(.nf-hl) {
   border-radius: 2px;
   padding: 0 1px;
+}
+
+/* 固定版式（pre-paginated）：整页已排好版，这里把**上面那套重排样式全部中和掉** ——
+   页面里的元素本来就按绝对坐标排好，再加缩进 / 段距 / 图片外边距会把排版揉烂。
+   页宽同理由书本身决定（contentStyle 在该分支不设 maxWidth / 分栏）。 */
+.reader-content.nf-fixed :deep(p),
+.reader-content.nf-fixed :deep(img),
+.reader-content.nf-fixed :deep(svg) {
+  margin: 0;
+  text-indent: 0;
+}
+.reader-content.nf-fixed :deep(img),
+.reader-content.nf-fixed :deep(svg) {
+  margin-left: auto;
+  margin-right: auto;
 }
 </style>

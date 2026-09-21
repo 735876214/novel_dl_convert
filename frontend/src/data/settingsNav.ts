@@ -164,7 +164,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['NEW BOOKS', 'LAYOUT', 'THEME', 'TYPOGRAPHY', 'ADVANCED'],
           items: ['Apply my settings to new books', 'Reading flow（Paginated / Scrolled）', 'Fixed-layout page spreads', 'Columns', 'Dark mode（13 档变体）', 'Font', 'Font style', 'Font size', 'Line height', 'Paragraph spacing', 'Justify text', 'Hyphenation', 'Letter / Word spacing', 'First-line indent', 'Max content width', 'Column gap'],
         },
-        note: '本项目实现「阅读模式 / 13 档主题 / 字体 / 字号 / 行高 / 内容宽度 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 13 项；未支持：新书套用设置（Apply my settings to new books）、固定版式页宽（Fixed-layout page spreads）、字重样式（Font style）、文本区左右内边距（Column gap）。',
+        note: '本项目实现「阅读模式 / 13 档主题 / 字体 / 字重样式 / 字号 / 行高 / 内容宽度 / 文本区左右内边距 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 15 项；未支持：新书套用设置（Apply my settings to new books，本项目排版是全局单一来源、新书一律套用，该开关要解决的问题天然不存在）、固定版式页宽三档（Fixed-layout page spreads：固定版式已能识别并对这类书停用重排设置，但不提供页宽档位）。',
       }),
       p('reader/pdf', 'PDF', 'PDF', 'ready', {
         upstream: {

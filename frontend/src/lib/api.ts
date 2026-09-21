@@ -564,6 +564,13 @@ export interface BookCard {
   pages?: number
   /** 页数来源：'estimate'（EPUB 估算）/ 'archive'（漫画归档真实页数）/ 空串 */
   pages_source?: string
+  /**
+   * 固定版式（pre-paginated）：整页已排好版，重排设置（字号 / 行高 / 首行缩进 / 分栏…）
+   * 对它没有意义，页宽也由书本身决定 —— 阅读器据此不套用重排偏好。
+   * 由后端读 OPF 的 `rendition:layout` 判定（core/library._fixed_layout_of）；
+   * 非 EPUB 恒 false。
+   */
+  fixed_layout?: boolean
   /** 有声书轨数（单文件 1、目录 n）；非音频为 0 或未定义 */
   tracks?: number
   /** 所属书库 id（第 10 期多书库；`name` 仍是**相对该库根**的路径） */
