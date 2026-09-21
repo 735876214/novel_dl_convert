@@ -1,96 +1,106 @@
 # 长期记忆（novel_dl_convert / NovelForge）
 
 > 真值源=`.codebuddy/memory/`；本文件只记不变式/约定/踩坑。某期做了什么写当天 `YYYY-MM-DD.md`，不进本文件（2026-09-19 约定）。
+> 2026-09-21 结构整理：合并重复条目、删掉已被代码/文档吸收的历史细节（第 30 期前的过程性内容），保留全部仍然成立的不变式。
 
 ## 项目与硬约定
 - TXT→EPUB 工具，NAS/容器部署；input/output 物理分离；FastAPI+CLI；可插拔书源。镜像 `ghcr.io/735876214/novel_dl_convert:latest`。
 - 删功能要删干净（路由+模块+db CRUD+能力键+前端页/路由/api+文档+记忆+「接口404」防回归断言）。
 - 写计划只写四块：需求来源/功能范围/防回归要点/任务清单（不要架构/目录/代码结构）。
-- 提交即推送：中文 commit、按能力拆多 commit；收尾工作区不留未提交改动。
-- 视觉严格照搬 BookOrbit；零外部请求；局部更新不重建 DOM。
-- 可能同时有另一 AI 会话：改前 `git status`；别人改动不回退/不顺手提交；临时文件放 `/tmp`；记忆只追加。
+- 提交即推送：中文 commit、**按能力拆多 commit**；收尾工作区不留未提交改动。临时文件放 `/tmp`（别落仓库根）。
+- 视觉严格照搬 BookOrbit；**零外部请求**；局部更新不重建 DOM；不做假交互（宁可空态也别放假数字）。
+- 可能同时有另一 AI 会话：改前 `git status`；别人改动不回退/不顺手提交；记忆只追加。
 - 新增书库用户手动操作（不自动建库）；每库来源=挂载 `LIBRARY_SOURCE_DIR/<source_subdir>`；库 `type` 只决定功能显隐矩阵。
 
 ## 元数据与出版（终局口径）
 - 元数据只落服务端 DB（meta_override/online/cover），一切编辑/revert/抓取/重排册号/改名/合并均不写回文件。
-- **源不可变**（贯穿全局不可动摇）：源只读、副本禁原地写（共享 inode，须「临时文件+Path.replace」）；刮削出版三不可动摇（源只读/副本禁原地写/副本被删只标记待确认+记日志绝不自删源）；硬链接副本内嵌过元数据会换独立 inode，界面如实标注而非宣称省空间；成品目录不得与库根/扫描源重叠（建库即拦）。
-- **源文件名无写入口**（第28期终局）：改名只剩「按命名规则重出版副本」一条落盘路径；实体改名/合并退化为纯元数据写入。
-  - 命名规则**唯一实现**=`fileops.fill_pattern`（9 占位符、先长后短），`publish.relpath_for` 调它；`PATTERN_FIELDS` 唯一真值源，前端 `RENAME_TOKENS` 须逐字一致（有契约测试）。**别再让第二处展开规则出现**。
-  - `{index}`=系列卷号（两位补零，非流水号）；`{ext}` 展开已带扩展名，模式以 `{ext}` 收尾才摘尾扩展名（否则 `书名.m4b.m4b`）。
+- **源不可变**（不可动摇）：源只读、副本禁原地写（共享 inode，须「临时文件+`Path.replace`」）；刮削出版三原则（源只读/副本禁原地写/副本被删只标记待确认+记日志、绝不自删源）；硬链接副本内嵌过元数据会换独立 inode，界面**如实标注**而非宣称省空间；成品目录不得与库根/扫描源重叠（建库即拦）。
+- **源文件名无写入口**（第 28 期终局）：改名只剩「按命名规则重出版副本」一条落盘路径；实体改名/合并退化为纯元数据写入。
+- 命名规则**唯一实现**=`fileops.fill_pattern`（9 占位符、**先长后短**），`publish.relpath_for` 调它；`PATTERN_FIELDS` 是唯一真值源，前端 `RENAME_TOKENS` 须逐字一致（有契约测试）。**别再让第二处展开规则出现**。
+  - `{index}`=系列卷号（两位补零，非流水号）；`{ext}` 展开已带扩展名 ⇒ 只有模式**以 `{ext}` 收尾**时才摘尾扩展名（否则 `书名.m4b.m4b`）。
   - 「预览==落盘」硬不变量：共用 `publish.relpath_for`+`publish.rel_verdict`（REL_REUSE/REBUILD/DECLINE）；UI 拒「有未保存草稿时重出版」。
-  - `apply_*` 目标一律服务端算，客户端 `book_ids` 只当收窄条件；仍改 basename 的只剩 `apply_conflict_rename`/`apply_komga_layout`（成对调 `db.remap_book_id`）。
-- 在线抓取与手动编辑不按格式分流→结果只写 DB，EPUB/PDF/漫画/有声书一视同仁（有声书是目录型条目）；非 EPUB 无 OPF 兜底，「恢复」=撤销覆盖回落在线值。
-- `core/publish.py` 是唯一仍写文件模块（硬链接副本+原子替换）；`fileops.patch_epub_meta`/`rewrite_epub` 已退出生产路径。
-- **目录型条目（有声书一章一文件）同样出版**（第29期）：副本真目录、内部逐文件硬链接（`publish.link_tree_or_copy`）；形态判据=名字带不带 `library.BOOK_EXTS` 扩展名（不看 format/不 stat 磁盘）；副本名不带扩展名；源指纹=整树指纹（`source_sig._tree_files`）；目录名带扩展名时跳过出版。
+  - `apply_*` 目标一律**服务端自己算**，客户端 `book_ids` 只当收窄条件；仍改 basename 的只剩 `apply_conflict_rename`/`apply_komga_layout`（成对调 `db.remap_book_id`）。
+- 在线抓取与手动编辑**不按格式分流**→结果只写 DB，EPUB/PDF/漫画/有声书一视同仁（有声书是目录型条目）；非 EPUB 无 OPF 兜底，「恢复」=撤销覆盖回落在线值。
+- `core/publish.py` 是唯一仍写文件的模块（硬链接副本+原子替换）；`fileops.patch_epub_meta` 只服务测试与旧路径。
+- **目录型条目（有声书一章一文件）同样出版**（第 29 期）：副本真目录、内部逐文件硬链接（`publish.link_tree_or_copy`）；形态判据=**名字带不带 `library.BOOK_EXTS` 扩展名**（不看 format、不 stat 磁盘）；副本名不带扩展名；源指纹=整树指纹（`source_sig._tree_files`）。
 - 无值哨兵 `db.META_CLEAR="-"`（`_CLEARABLE` 全字段、有测试钉住）：空串=撤销覆盖；接口层 `null`=显式清空（写哨兵）。翻译三处一致：`db.get_effective_meta`/`metastore.effective`/`metastore.state`。
 
 ## Git / 环境 / 构建
-- `.gitignore`：`.codebuddy/*`+`!.codebuddy/memory/`；忽略 `data/`、`*.db`、`novelforge/static/v2/`。
+- `.gitignore`：`.codebuddy/*`+`!.codebuddy/memory/`；忽略 `data/`、`*.db`、`novelforge/static/v2/`、`dist/`、`.playwright-cli/`。
 - 认证走 GCM；已清 token 内嵌/insteadof 明文重写，勿再引入；推送失败先查认证/网络，别改 git config。
-- Python 3.10+（本机 `python3`）；Node v20/22；Docker daemon 可用，本机对外网络有限（推送/拉取常需代理优先策略）。
+- Python 3.10+（**PEP 604 语法，系统 python3.9 不可用**）；Node v20/22（本机 nvm 有 v24，实测可用）；Docker daemon 可用；本机对外网络有限（推送/拉取偶需代理 `-c http.proxy=…`）。
 - 行尾必须 LF（`.gitattributes` 锁）；CRLF 让容器 `sh /app/start.sh` 报 `set: Illegal option -` 反复重启。
-- Windows 上 IDE 的 safe-delete shim 也拦 PowerShell `Remove-Item`（报 `SAFE_DELETE_BULK_GUARD_ERROR`，静默不删）⇒ 清临时产物用删除工具；`Out-File` 不带 `-Encoding` 同样被拦。
+- **macOS 工作区首次跑测试要自建环境**（工作区不含 venv）：`/Users/stromboid/.local/bin/python3.12 -m venv .venv` + `.venv/bin/pip install -r requirements-dev.txt`；再 `mkdir -p novelforge/static`（`StaticFiles(directory=…)` 目录不存在会在 **import 期**直接抛）。**别建 `static/v2/index.html`**，否则 `GET /` 不再是 503。
+- ⚠️ `npm install` 会把 `frontend/package-lock.json` 里一批 optional 包的 `"dev": true` 删掉（纯 npm 版本噪声）⇒ **提交前 `git checkout -- frontend/package-lock.json`**。
+- Windows 上 IDE 的 safe-delete shim 也拦 PowerShell `Remove-Item`（`SAFE_DELETE_BULK_GUARD_ERROR`，静默不删）⇒ 清临时产物用删除工具；`Out-File` 不带 `-Encoding` 同样被拦。
 
 ## 自动化测试（硬前提）
-- 完全离线：`.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。基线：POSIX 270 passed；**win32 全量 404 例 / 0 failed**（第33期实测 4 轮全绿；第32期为 388 例 / 1 failed、第31期为 346 例）。计数按环境取，别混引。
-- win32 本机已有项目 venv `.venv\Scripts\python.exe`；跑全量前确认 `novelforge/static` 存在（缺它 import `server` 即 `ensure_dirs()` 失败）。`test_scrape_publish::test_接口_扫描后按开关自动入队` 属**顺序依赖 flaky**（单跑该文件必过，全量里随机挂，别当回归）：第33期4轮全量未复现，机制=残留 worker（`scrape.stop(timeout=2.0)` 超时后仍在）取到 `isolated` 换过的**新库**，经 `scrape_delete` 删行或 upsert 插行 ⇒ 断言全局 `total`（`scrape_items` 全表行数）落空；按拍板不改测试逻辑、不动 `total` 口径。
-- **「长期稳定失败」不是 flaky，是产品 bug 的症状**（第33期教训）：真 flaky 不会次次都挂。报错不指向根因时（如只有 `calls == []`）要**逐层打印中间返回值**定位（第33期靠打印 `_scan_locked` 的 `{'scanned': 1, 'skipped': 1}` 才锁定）；修完**临时回退那一行**确认「恰好相关用例失败」，证明断言真能捕获该 bug。e2e 层同理做对照（改前 FAIL / 改后 PASS 各跑一次，唯一变量是那一行）。
-- ⚠️ **PowerShell 下 pytest 的汇总行与失败清单抓不到**（stdout 尾段丢失，落盘文件里也只有进度条）⇒ 定位失败**改用 `--junitxml` 再解析**：`& .\.venv\Scripts\python.exe -m pytest -q --tb=line --junitxml="$env:TEMP\nf.xml" > $null 2>$null`，然后 `.\.venv\Scripts\python.exe -c "import os,xml.etree.ElementTree as ET; ..."` 取 `//testcase[failure]` 的 `.text`（`--tb=line` 一行、默认给完整回溯）。**别再用 `Select-Object -Last N` 抓汇总，白耗时间**；且别用 PowerShell 的 `[xml]` 直接解析（编码会崩），交给 Python。
-- 曾全量后半程 segfault→现由 `tests/conftest.py` 的 `_quiesce_background()`（`watcher.wait_pending`+`scrape.stop`）在 `isolated` 夹具 `db.close()` **之前**收尾。
+- 完全离线：`.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。**基线按环境取，别混引**：
+  - **POSIX（macOS）475 例 / 0 failed**（第 34 期实测，连跑 6 轮全绿）；
+  - win32 **404 例 / 0 failed**（第 33 期 4 轮全绿）；第 31/32 期的 346/388 例是旧数。
+- ⚠️ **`pytest -q` 的汇总行抓不到**（PowerShell 与 zsh 同样，重定向后只剩 warnings summary）⇒ 一律用
+  `--junitxml=/tmp/nf.xml` + Python 解析 `//testcase[failure|error]`（别用 `Select-Object -Last N`，也别拿 `[xml]` 解析）。
+- **跑全量前确认 `novelforge/static` 存在**（缺它 import `server` 即 `ensure_dirs()` 失败）。
+- **「长期稳定失败」不是 flaky，是产品 bug 的症状**（第 33 期）：真 flaky 不会次次都挂。报错不指向根因时（如只有 `calls == []`）要**逐层打印中间返回值**定位；修完**临时回退那一处**确认「恰好相关用例失败」。e2e 层同理做对照（改前 FAIL / 改后 PASS，唯一变量是那一处）。
+  - 第 34 期两条实例：① 残留刮削 worker 越库写（修法见下）；② `_isbn_of` 把随机 UUID 当 ISBN（≈1/3 命中，修法见下）。定位手法都是「打印中间值 → 锁定漂移项」。
 - 硬前提：①环境变量须在 import 业务模块前设（`config` 导入固化目录、`server` 导入即 `ensure_dirs()`）；②`db._conn`/`_db_path` 模块级缓存→隔离靠 `db.close()`。
-- 碰库/DB 用例必须 `isolated`；接口用 `client`+`auth_headers`。假 EPUB（`b"EPUB"`）够扫描类；元数据写回/系列解析要真 EPUB（`epub_builder.build_epub`）。不测会外呼接口。`GET /` 会 503。库 id 由名称派生（中文 slug 空→`lib-<sha1[:8]>`）；测试库根须在 `LIBRARY_SOURCE_DIR` 下；断言终态留余地。
+- 碰库/DB 用例必须 `isolated`；接口用 `client`+`auth_headers`。假 EPUB（`b"EPUB"`）够扫描类；元数据写回/系列解析要真 EPUB（`epub_builder.build_epub`）。不测会外呼的接口。库 id 由名称派生（中文 slug 空→`lib-<sha1[:8]>`）；测试库根须在 `LIBRARY_SOURCE_DIR` 下；断言终态留余地。
+  - ⚠️ **`isolated` 的「换库」= 改 `DATA_DIR` + `db.close()`**；只调 `db.close()+init()` 会重开**同一个文件**（写复现脚本时踩过，断言会失去意义）。
+- 曾全量后半程 segfault→现由 `tests/conftest.py` 的 `_quiesce_background()`（`watcher.wait_pending`+`scrape.stop`）在 `isolated` 夹具 `db.close()` **之前**收尾。
 
 ## 后端约束与踩坑
 - core 内引用配置一律 `from .. import config`；`import config` 被同名命名空间包劫持（py_compile 抓不到，启动才炸）。
+- **`scrape._epoch` 世代号（第 34 期，停机收尾的保证）**：`stop(timeout)` 等不到 worker 真退出（单条处理不可中断：外呼/重试/写副本），故它**必定推进世代**；`process`/`_failed`/`_lost`/`verify` 的**每个落库点**都校验世代，作废即停手不落库（返回 `aborted`，条目留待下轮 `reset_running` 重来）。`gen=None` = 同步/接口调用，守卫完全透明。**新增 worker 落库点时必须一并加守卫**，否则又会「残留线程写到换过的那套库」。
+- **ISBN 形状唯一真值源 = `metadata.isbn_digits`**（第 34 期）：10 位末位可 X / 13 位纯数字，允许分隔符与 `urn:isbn:`；**UUID 一律不认**。`library._isbn_of` 与 `fileops._set_isbn` 都调它 —— 原先两处各写了一遍 `[\dxX-]{10,17}` 子串判据，会把 EPUB 的随机 UUID 当 ISBN（界面冒假 ISBN + 完整度白送 10 分 + **覆盖掉书自己的标识符**）。有契约测试钉「全仓只剩一处判据」。
 - 写磁盘只用 rename/move，删除移 `CACHE_DIR/recycle`；路径用 `library.root_of(b)/b["name"]`，禁 `config.OUTPUT_DIR/b["name"]`。
-- 库根限 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR`（`safe_path`，建库时**强校验**，三者之外一律 400）；`book_id`=basename 派生+库维度化（`库$哈希`）。⚠️ 库存储根放在 `OUTPUT_DIR` 之下时，`default` 默认书库（root 即 `OUTPUT_DIR`、inplace、watch=1）会把这副本**再收一次** ⇒ 同一本书登记两条（名字形如 `audio-store/<书名>`）—— 属预期行为，别当「重复入库」bug；断言按 `library_id` 过滤。
+- 库根限 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR`（`safe_path`，建库时**强校验**，三者之外一律 400）；`book_id`=basename 派生+库维度化（`库$哈希`）。⚠️ 库存储根放在 `OUTPUT_DIR` 之下时，`default` 默认书库（root 即 `OUTPUT_DIR`、inplace、watch=1）会把这副本**再收一次** ⇒ 同一本书登记两条 —— 属预期行为，断言按 `library_id` 过滤。
 - 新增库表列须同进 `db._LIBRARY_COLS`，否则 `update_library` 静默写不进。
-- 统计接口（`core/stats.py`）：`overview.integrity` **原有 5 个计数键一个都不能少**（第29期百分比是增补）；`largest`（体积榜）独立新键、与作者/系列榜共用 `top`，但**不要塞进 `_top`**（排序 `(-count, name)`）；0 字节书如实上榜。
-- **统计接口新序列口径（第32期立）**：`GET /api/stats` 共用一份 `overview`（**不照搬上游 per-chart 取数层**）；一切新序列**只增键不删键**（既有 16 键有测试钉住）；新聚合**必须跟随 `library_id`** —— 书库侧从 `bs` 算、阅读侧靠 `core/stats.py:97` 的 `ids` 集合过滤（`lid` 空时 `ids=None`=全库），**不新增扫描路径**。序列真名照代码：`weekdays`（**不是** `weekday_minutes`）、`pages_by_format`（**boxplot 五数概括**，非直方图）。
-- **写进文档/注释的「文件:行号」必须收尾实测复核**（第32期，两轮共核 71 处、修 10 处漂移）：行号写的时候是对的，代码一长就错位。核对法是**并排打印「文档上下文 + 源码实际行」**再判定 —— 别凭记忆改，也别因为「上次核过」就跳过；区间端点与注释行起点都算命中，期望写太严会出假警报。
-  - 第33期全文核 312 处、修 28 处（行号 25 + 路径补全 2 + 作废标注 1），方法与四条局限见 `docs/bookorbit-capability-gap.md` §0.4。两条硬教训：① **别记偏移量，只记当前真实行号**（曾把一段漂移写成「整体偏移 1 行」，实测偏移 44–54 行）；② 自动核对的窗口宽窄是两难 —— ±6 会吞掉偏 4 行的漂移（漏报）、±2 假阳性约 80%（噪声）⇒ **脚本只能生成待核清单，不能判定**；区间引用（`a.ts:487-505`）两套脚本都测不出漂移，只能按「它声称是什么」反向 grep 找。
+- **给既有表加唯一约束要回头看 `db.remap_book_id`**（第 34 期书签踩到）：整体 `UPDATE` 撞唯一约束会抛异常并被外层 `except` 吞成「搬了 0 行」⇒ 关联数据静默丢失。做法是**逐行搬 + 冲突时弃墓碑**（`_remap_bookmarks`）；同时该表要进 `ORPHAN_TABLES`/`REMAP_TABLES`，有软删的还要进 `REMAP_PROBE_FILTER`（加 ` AND deleted_at=0`）。
+- 统计接口（`core/stats.py`）：`overview.integrity` **原有 5 个计数键一个都不能少**；`largest`（体积榜）独立新键、与作者/系列榜共用 `top`，但**不要塞进 `_top`**；0 字节书如实上榜。**新序列只增键不删键**（既有 16 键有测试钉住），**必须跟随 `library_id`**（书库侧从 `bs` 算、阅读侧靠 `core/stats.py:97` 的 `ids` 集合过滤，`lid` 空时 `ids=None`=全库），**不新增扫描路径**。真名照代码：`weekdays`（不是 `weekday_minutes`）、`pages_by_format`（boxplot 五数概括）。
+- ⚠️ **win32 上目录的 `st_size` 恒为 0**（NTFS）：任何「空文件」判据都必须**排除目录**（`if not p.is_dir() and p.stat().st_size == 0`）；第 33 期实测后果=win32 上有声书永不入库（Linux 目录 st_size 非 0 ⇒ 永不暴露）。要目录体积用 `watcher._sig()`。
+- `write_epub` 前先 `mkdir`；批量端点注册在 `/api/books/{bid}` 之前、字面量路径在 `{param}` 之前；目录型条目用 `path.exists()` 不用 `is_file()`；模板替换先长后短。
+- **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**：路由是 `@app.get("/health")`，**没有 `/api/health`**（白名单只含 `/health`+`/api/auth/login`+`/api/logout`，打 `/api/health` 会被拦成 401）。前端 `lib/api.ts` 的 `health()` 也走 `/health`。三处必须同口径。
 - 共用锁嵌套用 `RLock`；`mark_processed`/`mark_recent` 走 `asyncio.to_thread`，watcher 独立 `_scan_lock`。
-- ⚠️ **win32 上目录的 `st_size` 恒为 0**（NTFS 目录大小字段）：任何「空文件」判据都必须**排除目录**（`if not p.is_dir() and p.stat().st_size == 0`）。第33期实测后果：`FolderWatcher.handle_file` 把音频目录（有声书）当空文件跳过 ⇒ **win32 上有声书永远不入库**；Linux 目录 st_size 非 0 ⇒ CI/开发机永不暴露，只在 win32 稳定复现。要目录体积就用 `watcher._sig()`（对目录 `rglob` 递归汇总，它本来就是对的）。
-- `write_epub` 前先 `mkdir`（父目录不存在只 warn 不抛）；批量端点注册在 `/api/books/{bid}` 之前、字面量路径在 `{param}` 之前；目录型条目用 `path.exists()` 不用 `is_file()`；模板替换先长后短（`{series_index}` 排 `{series}`/`{index}` 前）。
-- **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**：路由是 `@app.get("/health")`（`server.py`），**没有 `/api/health`**；鉴权白名单只含 `/health`+`/api/auth/login`+`/api/logout`，打 `/api/health` 会被中间件拦成 401。前端 `lib/api.ts` 的 `health()` 也走 `/health`。三处必须同口径（第31期修掉了一条把路径写成 `/api/health` 的契约测试）。
+- **写进文档/注释的「文件:行号」收尾必须实测复核**（第 32 期核 71 处修 10；第 33 期核 312 处修 28）：方法是**并排打印「文档上下文 + 源码实际行」**再判定。两条硬教训：① **别记偏移量，只记当前真实行号**；② 自动核对的窗口 ±6 会吞掉偏 4 行的漂移、±2 假阳性约 80% ⇒ **脚本只能生成待核清单，不能判定**；区间引用只能按「它声称是什么」反向 grep。方法与四条局限见 `docs/bookorbit-capability-gap.md` §0.4。
 
 ## 配置分层（四层 + 每库覆盖）
 - `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时 `生效值=每库覆写 ?? 全局`，落 `libraries.settings`（稀疏 JSON，键=全局点分路径）。
 - `core/lib_settings.py`（`effective`/`config_for`/`apply_to`/`set_overrides`/`clear_overrides`/`schema()`）与 `features.SETTING_CAPS` 唯一真值源；接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（`?keys=` 按项恢复）。
-- 覆盖项：`output.format`/`output.layout`、`watcher.recursive`/`watcher.copy_non_txt`、`metadata_fetch.*`、`naming.pattern`/`naming.scope`、`scrape.enabled`、`opds.expose`、`komga.expose`。
-- 可见性=能力矩阵（库类型有没有）∩每库开关，判定只留一处（OPDS `_opds_visible_libraries`/Komga `_ko_visible_libraries`）。「不可见」=「不存在」→直连 404（用 `_ko_book`/`_ko_find_series`）。`features.FEATURES_BY_TYPE` 决定库类型能力。
+- 覆盖项：`output.format`/`output.layout`、`watcher.recursive`/`watcher.copy_non_txt`、`metadata_fetch.*`、`naming.pattern`/`naming.scope`、`scrape.enabled`、`opds.expose`/`komga.expose`。
+- 可见性=能力矩阵（库类型有没有）∩每库开关，判定只留一处（`_opds_visible_libraries`/`_ko_visible_libraries`）。「不可见」=「不存在」→直连 404。
+- ⚠️ **能力键的判隐显轴要挑对**（第 34 期实测）：`library.hasFeature(k)` 判的是「侧栏**当前选着**哪个库」，只适合**全局导航项/设置页**这类入口；读者侧（如阅读器工具条）要判的是「**这本书**属于哪个库」。书签按钮曾因此被误藏（选着漫画库、读电子书）。`features` 里 `bookmarks` 键**只作能力矩阵的一行**，别拿它藏按钮。
 
 ## 前端栈与规范
 - `frontend/`=Vue3 SFC+TS+Vite8+Tailwind v4+Pinia4+vue-router5(hash)。产物 `novelforge/static/v2/`，`/` 服务其 index.html（缺失 503）。勿往 `novelforge/static/` 加手写页。
 - `bridge.css` 须 `@theme inline`；`main.css` 须 `@custom-variant dark (&:is(.dark *));`。
-- 演示数据确定性常量禁 `Math.random()`；`p()` 路由 path 全局唯一（同 path 两条被静默覆盖+侧栏重复 key）；`settingsNav`/router 注册表与组件同批改。
+- 演示数据确定性常量禁 `Math.random()`；路由 path 全局唯一（同 path 两条被静默覆盖+侧栏重复 key）；`settingsNav`/router 注册表/侧栏三处与组件同批改。
+- ⚠️ **设置页 `note` 是纯文本插值**（`SettingsPlaceholder.vue` 用 `{{ page.note }}`）⇒ 写 `**`、反引号、`<strong>` 都会**原样显示给用户**；有契约测试钉住（第 34 期当场揪出 3 处既有违规）。
 - 工具页 `ToolsLayout.vue` 子页用 `onActivated`（非 `onMounted`）；改磁盘工具「先预览再应用」、删除移回收站。例外：页面内 `v-if` 子组件（如 `ScrapePanel`）需 `onMounted` 首载、`onActivated` 只刷新。
 - 表格窄屏：宽屏 `<table class="hidden md:block">`+窄屏 `<ul class="md:hidden">`；纯装饰增强取不到就不设变量→CSS 整条失效→天然回退。
-- **图表栈（第32期立）**：`echarts` + `vue-echarts`；`frontend/src/lib/charts.ts` 是**全站唯一**的注册/主题适配入口（**组件里别各自 `use()`** —— 会重复注册且主题不同步），按需 `use()` 用到的图型 + 页面级动态 import；SVGRenderer（上游注释：消除 canvas 命中测试坐标错位导致的 hover 闪烁）+ `oklchToHex()`（ECharts 不认 oklch 变量）+ 幂等主题注册（`themeRegistered` 守卫）。**零外部请求**：不得 CDN、不得运行时拉地图/主题/字体。
-- **外观偏好归属边界（第32期立）**：`stores/displayPrefs.ts`（Layout 页六项；落盘键 `nf-display-prefs`）**并入 `appearance` 偏好块**随「外观与阅读偏好整套同步」走服务端（不新增第七块；应用远端值时**逐键挑**，因为传进来的是整块）；`stores/shelfPrefs.ts`（Behavior 三项 + 卡片信息；键 `nf-shelf-prefs`）走 localStorage、**不进服务端同步** —— 书架级偏好与服务端偏好是两条边界，别混。新偏好写入经 `notifyPrefsChanged`、应用远端值走 `suppressing`（同 `theme.ts`）。
+- **图表栈**：`echarts` + `vue-echarts`；`frontend/src/lib/charts.ts` 是**全站唯一**的注册/主题适配入口（组件里别各自 `use()`），按需注册 + 页面级动态 import；SVGRenderer + `oklchToHex()`（ECharts 不认 oklch）+ 幂等主题注册。**零外部请求**：不得 CDN、不得运行时拉地图/主题/字体。
+- **外观偏好归属边界**：`stores/displayPrefs.ts`（Layout 页六项）**并入 `appearance` 块**随整套偏好走服务端（不新增第七块；应用远端值时**逐键挑**）；`stores/shelfPrefs.ts`（Behavior 三项 + 卡片信息）走 localStorage、**不进服务端同步**。写入经 `notifyPrefsChanged`、应用远端值走 `suppressing`。
+- **侧栏导航契约**（`data/nav.ts` + `AppSidebar.vue`，有 `tests/test_nav_contract.py`）：① 动态计数项**不许写死数字**（`countSource: 'running' | 'browse'`，写死即假数据）；② 菜单 id 全局唯一；③ 组底部 `more` 行必须 **`label` + `to` + `countSource` 三件一起声明**（第 34 期统一：书库实体数 + 进书库管理页），别再用 `items.length` 当计数。
+- **命名避让**：`/explore` =「探索发现」= **外部书源检索**（`POST /api/search`）；`/browse` =「实体总览」= **本地书目按元数据维度浏览**（零外网）。两者不能合并、不能互相借名；侧栏「浏览」是**分组标题**，新页 label 别叫「浏览」。
+- **实体总览只有六个维度**（作者/系列/题材/出版社/语言/收藏）：本项目**只有 `tags`（OPF `dc:subject`）一个题材类字段**，上游的 genre/tag 两维在此会变成同一份数据列两遍 ⇒ 只做一个；演播者无实体（不做）。数据一律来自 `library.scopedBooks`（+`/api/books` 的 `collection_ids`），**不为它新增聚合接口**。
 
 ## 运行 / UI 验证
-- 本地实例：`*_DIR→/tmp/nf-test/…`，`LIBRARY_SOURCE_DIR=/tmp/nf-test/libraries`，`AUTO_WATCH=false`，auth admin/test1234，`uvicorn novelforge.server:app --port 8791`，token 落 `/tmp/nf-test/token.txt`（⚠️目录可能被清→e2e 自带数据）。
-- 登录接口字段是 `{"user","pin"}`（**不是** username/password）。**全新 `DATA_DIR` 首次启动由 `db.init()` 按 `AUTH_USER`/`AUTH_PIN` 建默认账号，缺省 `admin/changeme`**（`test1234` 只是 8791 那个旧实例自设的，自建实例别混用）。
-- 端口 8791 常被前几期留下的实例占着（跑的是旧代码、无新路由）⇒ 冒烟**另起端口 + 独立临时目录**（如 8795），别 kill 别人的实例。
-- Docker：`docker-compose.yml` 端口 **8992**；`docker-compose.test.yml` 挂 `./novelforge` 端口 **8993**；断网无法 `--build`；数据隔离。
-- 构建：`cd frontend && npm run type-check && npm run build && npm run deploy`，核对 `/static/v2/assets/index-*.js` 实际内容（HMR 源码≠服务端产物）。
-- UI 验证：playwright 注入 `nf_token`（`add_init_script`+`localstorage-set`+**`reload`**）；迁移弹窗 `force=True` 点暂不迁移；CLI 加 `--browser=chromium`；快照落 `.playwright-cli/page-*.yml`。
+- 本地实例：`*_DIR→/tmp/<自建>/…`，`LIBRARY_SOURCE_DIR=…/libraries`，`AUTO_WATCH=false`，`uvicorn novelforge.server:app --port <新端口>`（**别 kill 别人的实例**：8791 常被旧代码实例占、8993 是用户 Docker 容器）。
+- 登录接口字段是 `{"user","pin"}`（**不是** username/password）。全新 `DATA_DIR` 首次启动由 `db.init()` 按 `AUTH_USER`/`AUTH_PIN` 建默认账号（缺省 `admin/changeme`）。
+- 建库接口要 **`root_path` 绝对路径**（`{name,type,mode,root_path}`，响应里是 `{"library": {...}}`），只给 `source_subdir` 会 400「库根必须是绝对路径」。
+- Docker：`docker-compose.yml` 端口 **8992**；`docker-compose.test.yml` 挂 `./novelforge` 端口 **8993**；断网无法 `--build`。
+- 构建：`cd frontend && npm run type-check && npm run build && npm run deploy`，核对 `/static/v2/assets/index-*.js` **实际内容**（HMR 源码≠服务端产物）。
+- 浏览器冒烟：`npm i -g @playwright/cli` + `playwright-cli install-browser chromium`；注入 `nf_token`（`localstorage-set` + **`reload`**）；⚠️ **`snapshot` 现在直接打到 stdout**（`--filename` 可能不落盘），要重定向到 `/tmp` 自己读，别再落仓库根；⚠️ 换了产物要**带 `?nc=N` 缓存破坏参数 goto**（普通 `reload` 会用旧 bundle，会误判成「改动没生效」）。
+- e2e 自查顺序：接口账目（curl）→ 界面文本（`eval innerText`）→ `console`（应为 0 errors）→ `network`（不应有非本地请求）。
 
 ## 上游取证与待办（跨会话）
-- 外部同步（Hardcover/Readwise/StoryGraph）：**2026-09-19 拍板不做**；设置页维持未支持。
-- 上游取证第30期 sparse-checkout 失败，降级扫 `%TEMP%\bookorbit-ref` 的 `packages/types`；结论落 `docs/bookorbit-capability-gap.md`：sweep=`CoverSweep`（非本项目缺失资源语义）、EDITIONS=外部 `edition`（非自有版本号）、通知 `Clear` 未取证、成就 `dedication/devices` 分组确证、Requests 列确证（`createdAt/title/mediaKind/requester/status`）。文档须标来源，冲突以源码为准。
-- 参考仓库 `735876214/bookorbit` @ `main` @ `c292d6cc`，镜像 `%TEMP%\bookorbit-ref`（`packages/types`+`packages/plugin-api`）；**取证扫符号别按文件名猜**（第28期 bulk-rename 漏检教训）。
-- 批注 Hub 四分组 UI 第27期落地（月/书/颜色/来源，纯前端）；**无数据源故不做**：`koreader`/`kobo`/`needsReview`/`devices`/跨端降色（kosync 纯进度、无批注端点）。
-- **批注软删除既定语义**（第27期）：`DELETE`=移垃圾桶（`deleted_at`），`purge` 才真删且只对垃圾桶内开放；读点必须 `WHERE deleted_at=0`（曾 `remap_book_id` 踩过，`REMAP_PROBE_FILTER`）。
-- **文档过期是常态，改前先核验代码**：`docs/bookorbit-capability-gap.md` 曾把「本项目无」写在已实现能力上，§0.3 基线自身先过期（68→260 路由、6→28 表）；复核先重取基线再逐条核验，**不做整表翻转**（StatsView 双分区、Integrity 百分比、「孤儿封面目录」为刻意不同设计）。
-- **判断「某能力有没有页面入口」要两头查**（第32期踩坑）：只看配置文件会误判 —— `upload.max_bytes` 曾被写成「本项目没做成维护页可编辑项」，实际 `server.py` 的 `EDITABLE` 白名单（含 `"upload"`）、`/api/maintenance` 回传、前端 `settingsFields.ts` 的 `UPLOAD_FIELDS` 三处都在。**先查白名单，再查前端字段定义**。
-- ⚠️ **`docs/roadmap-verification.md` 的「27/27 通过」里有 1 项不实**（第32期发现）：第 0 期「审计日志」行把**计划**写成了**实证**（「`/api/logs` 支持 actor 过滤」当时不成立，到第 32 期才真落地）。**该文件正文结论不采信**（「核查方法」章节仍有价值）；已在原行就地更正 + 结论段补记。
-- 第31期取证仍无终端/网络，`client/` 与 `server/src/modules` **仍未 fetch**（同第30期），真值源限 `%TEMP%\bookorbit-ref` 的 `packages/types`。⚠️ **`account-activity.ts` = 管理端账号活跃度（admin 用户列表），不是阅读时间轴**，别拿它当热力图依据；阅读会话模型看 `reading-session.ts` 的 `dailySummary{day,totalMinutes}[]`（含 `READING_SESSION_SOURCES` 分桶）。
-- **【第32期突破】上游源码可取证了**：镜像 `%TEMP%\bookorbit-ref` 的 **tree 对象本地已在** ⇒ 零网络即可列出上游全部文件清单（第30/31期只扫了 `packages/types`，所以缺口清单**系统性漏掉模块级能力**）；读文件内容按需拉单个 blob，**直连坏、走代理成功**：`git -C $REF -c http.proxy=http://127.0.0.1:7897 cat-file -p HEAD:<path>`（勿改持久 git 配置）。
-- **统计页图表与上游的三处硬差异（第32期取证）**：①本项目无 `reading_sessions.source` 列、无按格式分桶 ⇒ 上游 `reading-clock`/`peak-reading-hours`/`favorite-reading-days` 的 `BreakdownSelect`（format/source 维度）**无数据源、不做该控件**（三图降级单序列）；②本项目是**单接口** `GET /api/stats`，不照搬上游 per-chart 取数层；③本项目**无** vue-i18n / shadcn(Sheet/Popover) / `@lucide/vue` / `@vueuse/core` / `vue-draggable-plus` ⇒ 用既有 `Icon.vue`/`Card.vue`/原生 `<select>`，Configure 重排用**上移/下移按钮**（不引拖拽库）。上游图表元数据真值源=`client/src/features/statistics/statistics-chart-meta.ts`（**33 张**：Library 19 / User 14，带 `label`/`size`/`category`）；低数据量阈值逐图照搬（`MIN_EVENTS` 20/14、`MIN_STARTED` 10、`MIN_COMPLETIONS` 3），不足走空态**不画噪声图**。
-
-## 阅读活动与成就（第31期）
-- 阅读活动页：后端 `core/activity.py` + `GET /api/reading-activity`（`library_id` 空串=全库、未知库=空集合不 404，与 `/api/stats` 同惯例；`year`/`limit` 可选）；聚合 `reading_sessions`（按 `started_at` **本地日**）+ `annotations`（必须 `WHERE deleted_at=0`）+ `user_achievements`；前端 `/reading-activity`（`stores/activity.ts` + `ReadingActivityView.vue`，纯 CSS Grid 热力图、零外链）。热力图数据模型对齐上游 `dailySummary`；**无 `source` 列 ⇒ 无分设备热力图**，属刻意分流。
-- 成就分组对齐上游 5 分类中的 **4 个**（`library`/`reading`/`exploration`/`dedication`）；**`devices` 刻意不做**（上游靠 `reading_sessions.source` 分桶，本项目无该列）。`rarity/tier/hidden/iconName` 为上游展示层概念，本项目有意简化为无。**成就 key 不可改名**（前端/统计引用），只扩 `ACHIEVEMENTS` 目录 + `_metrics()`。
-- 第31期新增测试 `tests/test_reading_activity.py`(3) 与 `tests/test_achievements_align.py`(4)；全量 win32 **346 例 / 1 failed**（详见「自动化测试」节）。同期末修掉第30期写错路径的 `tests/test_version_contract.py`（`/api/health`→`/health`；第30期本机跑不了测试，所以这条错误路径一直没暴露）。
+- **`docs/bookorbit-module-inventory.md` 是第三条轴**（按上游**代码模块**对照，67 目录/33 feature，第 33 期产出）：只按页面对照会系统性漏掉「整块模块从未进视野」的能力。⚠️ **按模块名 grep 文档得出的覆盖结论是错的**（假阴性过半）——判定只能按语义找 + 落到 `文件:行`。第 34 期已把 §4.1「值得做」4 项全部落地（书签/重置阅读状态/跨实体浏览/侧栏计数），§4.2「有价值但不做」8 项**未改判**。
+- 外部同步（Hardcover/Readwise/StoryGraph）**2026-09-19 拍板不做**；设置页维持未支持。Requests（求书）**已决策不做**（走数据驱动书源规则）。
+- 参考仓库 `735876214/bookorbit` @ `main` @ `c292d6cc`，镜像 `%TEMP%\bookorbit-ref`；**取证扫符号别按文件名猜**；上游源码可取证（tree 对象本地已在，读 blob 走代理 `cat-file -p HEAD:<path>`，勿改持久 git 配置）。
+- 统计页图表：上游 33 张，本项目 **30/33**；**其余 3 张已归档（不做且不补死 UI）**：`reading-source-distribution`（无 `source` 列）、`goal-trajectory`（无阅读目标）、`metadata-freshness-gauge`（价值低）。上游 3 图的 `BreakdownSelect`（format/source）**不造控件**。
+- 批注/书签的**软删除既定语义**：`DELETE`=移垃圾桶（`deleted_at`），`purge` 才真删且只对垃圾桶内开放；一切读点必须 `WHERE deleted_at=0`（`annotation_counts`/`trashed_*`/`remap` 探测）。
+- **批注 Hub 四分组**（月/书/颜色/来源，纯前端）+ **本地书签**已落地；**无数据源故不做**：`koreader`/`kobo` 批注导入、`needsReview`、`devices`、跨端降色（kosync 纯进度、无批注端点）。
+- **文档过期是常态，改前先核验代码**：`docs/bookorbit-capability-gap.md` 的 §0.3 基线要**重取**（第 34 期：路由 262→270、表 27→28；表数要数**缩进 12 空格的**建表语句，直接 grep 会把迁移注释里的字样多算 2）；复核**不做整表翻转**（StatsView 双分区、Integrity 百分比、「孤儿封面目录」是刻意不同设计）。
+- **判断「某能力有没有页面入口」要两头查**：只看配置文件会误判（`upload.max_bytes` 一例）⇒ **先查 `server.py` 的 `EDITABLE` 白名单，再查前端 `settingsFields.ts` 的字段定义**。
+- ⚠️ `docs/roadmap-verification.md` 的「27/27 通过」里有 1 项不实（第 0 期「审计日志」把**计划**写成**实证**）⇒ **该文件正文结论不采信**（「核查方法」章节仍有价值）。
+- ⚠️ **`account-activity.ts` = 管理端账号活跃度，不是阅读时间轴**，别当热力图依据；阅读会话模型看 `reading-session.ts` 的 `dailySummary{day,totalMinutes}[]`（含 `READING_SESSION_SOURCES` 分桶）。
+- **阅读活动与成就**：`core/activity.py` + `GET /api/reading-activity`（`library_id` 空串=全库、未知库=空集合不 404）；热力图对齐上游 `dailySummary`；**无 `source` 列 ⇒ 无分设备热力图**（刻意分流）。成就对齐上游 5 分类中的 4 个（无 `devices`），**成就 key 不可改名**，只扩 `ACHIEVEMENTS` + `_metrics()`。
