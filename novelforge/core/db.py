@@ -4,7 +4,7 @@
 - 数据库文件落在 ``config.DATA_DIR/novelforge.db``（NAS 持久卷，零额外服务）。
 - 全进程共享一个连接（check_same_thread=False + 写锁），单机单用户足够。
 - 表：users（轻登录账号）、progress（每本书当前阅读位置）、annotations（高亮/笔记）、
-  bookmarks（书签，与批注同构的软删除 + 位置去重）。
+  bookmarks（书签，与批注同构的软删除 + 位置去重）、meta_locks（元数据字段级锁定）。
 """
 import ast
 import hashlib
@@ -268,6 +268,18 @@ def init():
             );
             CREATE INDEX IF NOT EXISTS idx_override_book ON meta_override(book_id);
             CREATE INDEX IF NOT EXISTS idx_online_book ON meta_online(book_id);
+            -- 字段级锁定（第 35 期）：用户显式说「这个字段别让抓取动」。
+            -- ⚠️ **刻意与 meta_override 分表**：override 行只在**有值**时存在，
+            --    所以它无法表达「我没改过、但也不想让抓取动它」；而锁必须能落在
+            --    一个从没被编辑过的字段上（也能在编辑过之后解锁、让抓取重新接管）。
+            -- field 取值 = ``fileops.METADATA_FIELDS`` 的 10 个 + 独立的 ``cover``。
+            CREATE TABLE IF NOT EXISTS meta_locks (
+                book_id    TEXT NOT NULL,
+                field      TEXT NOT NULL,
+                locked_at  REAL NOT NULL,
+                PRIMARY KEY(book_id, field)
+            );
+            CREATE INDEX IF NOT EXISTS idx_meta_lock_book ON meta_locks(book_id);
             -- 书籍封面（第 17 期 T3）：元数据写回改为只存服务端，封面同样不写进 EPUB，
             -- 而是按 book_id 缓存到本表（BLOB 直接落库，零外链、零独立目录）。
             -- 展示 / OPDS 封面接口优先取服务端缓存，无则回退 EPUB 内嵌图。
@@ -1506,14 +1518,15 @@ def unlock_achievement(key) -> bool:
 # ---------------- 孤儿记录（引用了已不存在的书的行）----------------
 # 上游 Maintenance 页把这类东西叫 orphans。本项目的对应物不是「孤儿封面目录」
 # （封面在 EPUB 内部，没有独立目录），而是**引用了已消失书籍的数据库行**：
-# 书从 OUTPUT_DIR 移走后，progress / annotations / bookmarks / reading_sessions /
-# collection_items 里仍留着它的行 —— 界面上再也走不到，却一直占着库。
+# 书从 OUTPUT_DIR 移走后，progress / annotations / bookmarks / meta_locks /
+# reading_sessions / collection_items 里仍留着它的行 —— 界面上再也走不到，却一直占着库。
 #
 # ⚠️ 清理是**不可恢复**的，但这些行的 key 是文件名派生的 book_id，
 #    所以如果把同一个文件放回 OUTPUT_DIR，进度与批注会**重新关联上**。
 #    也就是说：清理掉的是「可能还有用」的数据，因此必须由用户显式确认。
 
-ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "collection_items", "reading_sessions")
+ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
+                 "collection_items", "reading_sessions")
 
 
 def book_id_refs() -> dict:
@@ -1564,9 +1577,15 @@ def delete_orphans(orphans: dict) -> dict:
 #: koreader_docs：ratings / reading_status 在删书时会主动清理，但改名时同样必须跟着走；
 #: koreader_docs 是 KOReader 进度映射，id 换了必须一起搬，否则 KOReader 关联全断）。
 REMAP_TABLES = (
-    "progress", "annotations", "bookmarks", "collection_items", "reading_sessions",
-    "ratings", "reading_status", "koreader_docs",
+    "progress", "annotations", "bookmarks", "meta_locks", "collection_items",
+    "reading_sessions", "ratings", "reading_status", "koreader_docs",
 )
+
+#: 目标 id 上**已有数据**时也**不整表跳过**的表：它们的行是「标记」而不是「值」。
+#: 其余表跳过是因为「搬过去会张冠李戴」（把旧书的内容盖到同名新书上）；而锁只意味着
+#: 「这个字段别让抓取动」—— 张冠李戴的代价仅是少更新一个字段，反过来漏搬却会让用户
+#: 显式设过的锁无声消失。所以这类表**逐行合并**（同一 field 冲突时保留目标行）。
+REMAP_MERGE_TABLES = ("meta_locks",)
 
 #: 「新 id 是否已有数据」这个探测要**按表**加过滤：annotations 第 27 期起有软删除、
 #: bookmarks 第 34 期起同样有（两者都是「删除=移入垃圾桶」），
@@ -1599,13 +1618,40 @@ def _remap_bookmarks(c, old: str, new: str) -> int:
     return moved
 
 
+def _remap_meta_locks(c, old: str, new: str) -> int:
+    """字段锁的搬迁：逐行做，**同 field 冲突时保留目标行**。
+
+    与 :func:`_remap_bookmarks` 同一个理由（``PRIMARY KEY(book_id, field)`` 会让整体
+    UPDATE 撞主键、异常被外层 ``except`` 吞成「搬 0 行」⇒ 用户的锁静默消失）；
+    但冲突取舍相反：书签那一行是**内容**（旧 id 的更完整，让目标让位），
+    锁只是**标记**（两行语义相同，留着目标行即可）。
+    """
+    moved = 0
+    rows = c.execute("SELECT field FROM meta_locks WHERE book_id=?", (old,)).fetchall()
+    for row in rows:
+        f = row["field"]
+        clash = c.execute(
+            "SELECT 1 FROM meta_locks WHERE book_id=? AND field=?", (new, f)
+        ).fetchone()
+        if clash:
+            c.execute("DELETE FROM meta_locks WHERE book_id=? AND field=?", (old, f))
+            continue
+        cur = c.execute(
+            "UPDATE meta_locks SET book_id=? WHERE book_id=? AND field=?", (new, old, f)
+        )
+        moved += int(cur.rowcount or 0)
+    return moved
+
+
 def remap_book_id(old_id, new_id) -> dict:
     """把关联数据从 ``old_id`` 搬到 ``new_id``，返回 ``{表名: 搬迁行数}``。
 
     某张表在 ``new_id`` 上**已有数据**时该表跳过：那通常意味着目标文件名上已经有
     一本书的历史（用户先删旧文件、又放了同名新文件），覆盖会张冠李戴 ——
-    宁可少搬，不可错搬。**例外是 bookmarks**（见 :func:`_remap_bookmarks`）：
-    它有唯一索引，整体 UPDATE 会直接抛异常被吞掉，只能逐行搬。
+    宁可少搬，不可错搬。两处例外：
+    **bookmarks**（见 :func:`_remap_bookmarks`）有唯一索引，整体 UPDATE 会直接抛异常
+    被吞掉，只能逐行搬；**meta_locks**（见 :func:`_remap_meta_locks` 与
+    :data:`REMAP_MERGE_TABLES`）存的是标记而非值，连跳过探测也一并豁免。
     """
     old, new = str(old_id), str(new_id)
     if not old or not new or old == new:
@@ -1615,6 +1661,10 @@ def remap_book_id(old_id, new_id) -> dict:
     with _lock:
         for t in REMAP_TABLES:
             try:
+                # 「标记型」表**不做整表跳过探测**：目标上已有别的锁不该让旧书的锁丢掉
+                if t in REMAP_MERGE_TABLES:
+                    moved[t] = _remap_meta_locks(c, old, new)
+                    continue
                 exists = c.execute(
                     "SELECT 1 FROM %s WHERE book_id=?%s LIMIT 1"
                     % (t, REMAP_PROBE_FILTER.get(t, "")), (new,)
@@ -2256,6 +2306,58 @@ def all_online() -> dict:
     out: dict = {}
     for r in rows:
         out.setdefault(r["book_id"], {})[r["field"]] = {"value": r["value"], "source": r["source"]}
+    return out
+
+
+# ---------------- 元数据字段级锁定（第 35 期）----------------
+# 与「用户改过就受保护」（:func:`all_overrides` 那道闸）**互相独立、可以并存**：
+#   · override 那道是**隐式**的 —— 改过就保护，没改过不保护；
+#   · 锁是**显式开关** —— 能锁住一个从没改过的字段，也能在改过之后解锁、
+#     让抓取重新接管该字段。
+# 作用面刻意只到**抓取**（用户口径）：锁定不挡手动编辑 —— 手动编辑是用户当下
+# 的直接意志，本就走在最顶层（override），没有理由被一个更早的标记拦住。
+
+#: 可锁的字段 = 全部可编辑字段 + 封面。
+#: ⚠️ 封面用的是**独立键** ``cover``（抓取侧的策略键名就是它，见
+#: ``metafetch.plan`` 的 ``cover_pol``），它不属于 ``METADATA_FIELDS``。
+LOCK_COVER = "cover"
+
+
+def set_lock(book_id, field, locked: bool = True) -> bool:
+    """给某本书的某个字段上锁 / 解锁，返回**写入后的状态**。
+
+    ``locked=True`` 用 upsert（重复上锁只刷新时间戳），``False`` 直接删行
+    —— 与 :func:`set_override` 的「空值即撤销」是同一套「不留空行」的做法。
+    """
+    bid, f = str(book_id), str(field)
+    c = _connect()
+    with _lock:
+        if locked:
+            c.execute(
+                "INSERT INTO meta_locks(book_id, field, locked_at) VALUES(?,?,?) "
+                "ON CONFLICT(book_id, field) DO UPDATE SET locked_at=excluded.locked_at",
+                (bid, f, time.time()),
+            )
+        else:
+            c.execute("DELETE FROM meta_locks WHERE book_id=? AND field=?", (bid, f))
+        c.commit()
+    return bool(locked)
+
+
+def get_locks(book_id) -> set:
+    """某本书被锁的字段集合（无锁 = 空集）。"""
+    rows = _connect().execute(
+        "SELECT field FROM meta_locks WHERE book_id=?", (str(book_id),)
+    ).fetchall()
+    return {r["field"] for r in rows}
+
+
+def all_locks() -> dict:
+    """全量锁：``{book_id: {field, …}}``（``metafetch.plan`` 一次取全，避免逐书查询）。"""
+    rows = _connect().execute("SELECT book_id, field FROM meta_locks").fetchall()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["book_id"], set()).add(r["field"])
     return out
 
 

@@ -42,14 +42,19 @@ def effective(book: dict) -> dict:
 
 
 def state(book: dict) -> dict:
-    """编辑器的逐字段明细：生效值 / 在线建议值 / OPF 原值 / 是否已被用户覆盖。
+    """编辑器的逐字段明细：生效值 / 在线建议值 / OPF 原值 / 是否已覆盖 / 是否已锁定。
 
     供 ``GET /api/books/{bid}/metadata`` 一次性下发，前端据此渲染
     "已本地修改" 徽标与"恢复为在线值"按钮，无需额外往返。
+
+    第 35 期起多下发 ``locked``（字段级锁定，只挡抓取、不挡手动编辑）。它**不是**
+    ``overridden`` 的别名：两者可以任意组合 —— 没改过但锁上（抓取别动）、
+    改过但没锁（抓取之后可以再接管）都成立。
     """
     bid = book.get("id")
     ov = db.get_overrides(bid) if bid else {}
     on = db.get_online(bid) if bid else {}
+    locks = db.get_locks(bid) if bid else set()
     out = {}
     for f in fileops.METADATA_FIELDS:
         opf = _opf_value(book, f)
@@ -63,5 +68,21 @@ def state(book: dict) -> dict:
             "online": online,
             "opf": opf,
             "overridden": overridden,
+            "locked": f in locks,
         }
+    return out
+
+
+def locked_fields(book: dict) -> list:
+    """该书被锁的字段（含 ``cover``，按 :data:`fileops.METADATA_FIELDS` 的次序 + 封面）。
+
+    供详情页/抓取预览标注用：只返回**该书确实存在的锁**，不补空位。
+    """
+    bid = (book or {}).get("id")
+    if not bid:
+        return []
+    locks = db.get_locks(bid)
+    out = [f for f in fileops.METADATA_FIELDS if f in locks]
+    if db.LOCK_COVER in locks:
+        out.append(db.LOCK_COVER)
     return out

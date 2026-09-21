@@ -48,6 +48,7 @@ def test_用户覆盖优先于在线值(isolated):  # noqa: ARG001
     assert metastore.effective(BOOK)["title"] == "用户标题"
     assert metastore.state(BOOK)["title"] == {
         "value": "用户标题", "online": "在线标题", "opf": "本地标题", "overridden": True,
+        "locked": False,                     # 第 35 期：字段级锁定（与 overridden 正交）
     }
 
 
@@ -84,7 +85,7 @@ def test_state同时给出在线建议值(isolated):  # noqa: ARG001
     db.set_online("b1", {"publisher": ("在线出版社", "googlebooks")})
     st = metastore.state(BOOK)["publisher"]
     assert st == {"value": "在线出版社", "online": "在线出版社",
-                  "opf": "本地出版社", "overridden": False}
+                  "opf": "本地出版社", "overridden": False, "locked": False}
 
 
 def test_没有在线值时online为空串(isolated):  # noqa: ARG001

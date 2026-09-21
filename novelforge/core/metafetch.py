@@ -13,8 +13,12 @@
    ``fileops`` 的 OPF/zip 重写能力保留给结构性重排（改名 / 系列），不在本链路调用。
    第 22 期起**手动编辑元数据也不再限 EPUB**（非 EPUB 没有 OPF 兜底原值层，「恢复」= 撤销覆盖后
    回落在线的抓取值、没有在线值即为空；「清空」= 写无值哨兵，抓取也不会把它填回来）。
-2. **字段策略先于一切**：`fill_only`（默认，只在原值为空时写）→ `overwrite` → `skip`。
-   默认 fill_only 是刻意的：抓取来的元数据**没有用户自己写/改过的值可信**。
+2. **字段策略先于一切**：`fill_only`（只在原值为空时写）→ `overwrite`（第 8 期起的默认，
+   见 :data:`DEFAULT_POLICY`）→ `skip`。策略按**每库**可覆写（见 :func:`_mf_of`）。
+   但仍有两道闸压在策略之上，且**都比策略更硬**（第 35 期补记）：
+   - **用户改过的字段**（``meta_override``）不覆盖 —— 抓来的没有用户自己的可信；
+   - **显式锁定的字段**（``meta_locks``）永不改写 —— 即使策略写着 ``overwrite``。
+     两者可叠加：没改过但上锁的字段，抓取同样不碰。
 """
 import httpx
 
@@ -113,7 +117,10 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
     items = []
     # 一次性取出全部用户覆盖，避免逐书查库；plan 只算不改，这里只读不写
     overrides = db.all_overrides()
+    # 第 35 期：字段级锁定同样一次取全（与覆盖同一批范式，不逐书查库）
+    locks = db.all_locks()
     for b in books:
+        locked = locks.get(b["id"], set())
         base = {
             "name": b["name"], "book_id": b["id"], "title": b.get("title") or "",
             "author": b.get("author") or "", "format": b.get("format") or "",
@@ -121,6 +128,9 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             "library_id": b.get("library_id") or library.DEFAULT_LIBRARY_ID,
             "candidates": [], "sources": {}, "best_score": 0.0,
             "auto_ok": False, "changes": {}, "cover": None, "skipped": "", "error": "",
+            # 该书被显式锁定的字段（含封面的独立键 `cover`）：界面逐字段标注「已锁定」，
+            # 抓取侧一律不给这些字段产生改动（见下方两道闸）。
+            "locked": sorted(locked),
         }
         # 第 13 期：策略（开关 / 字段 / 阈值）按**该书所属库**取。
         # 库没覆写过时 `_mf_of` 原样返回传入值 → 行为与改造前逐字段一致。
@@ -162,6 +172,10 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             # 用户改过的字段受保护：抓取不覆盖，否则会冲掉本地修正
             if field in overrides.get(b["id"], {}):
                 continue
+            # 第 35 期：**显式锁定** —— 抓取永不改写该字段，即使策略是 ``overwrite``。
+            # 与上一道闸独立：那道是「改过就保护」，这道能锁住一个从没改过的字段。
+            if field in locked:
+                continue
             cur = _current_value(b, field)
             if pol == "fill_only" and cur:
                 continue          # 原值非空 → 默认不动（抓来的没有用户自己的可信）
@@ -174,7 +188,8 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         base["changes"] = changes
 
         cover_pol = b_policy.get("cover") or DEFAULT_POLICY
-        if best.get("cover_url") and cover_pol != "skip":
+        # 封面锁用独立键 `cover`（第 35 期）：策略说覆盖也没用，锁在就不动它
+        if best.get("cover_url") and cover_pol != "skip" and db.LOCK_COVER not in locked:
             has = bool(b.get("has_cover"))
             if (not has) or cover_pol == "overwrite":
                 base["cover"] = {"url": best["cover_url"],
@@ -280,13 +295,18 @@ def apply(items: list, cfg: dict = None) -> dict:
                        if k in fileops.METADATA_FIELDS and (v not in ("", None, []))}
 
             bid = it.get("book_id") or library.book_id(name, fileops._lib_of(name, it))
+            # 第 35 期：被锁的字段一律不写。前端回传的是**具体值**，而这份值可能来自
+            # 一个「上锁之前渲染的」预览页 —— 这里再挡一道，锁的语义才不会被过期页面绕过。
+            locked = db.get_locks(bid)
+            blocked = sorted(k for k in updates if k in locked)
+            updates = {k: v for k, v in updates.items() if k not in locked}
             # 在线值只记服务端（供展示与「恢复在线」回退），不下写文件
             if updates:
                 db.set_online(bid, {k: (v, "") for k, v in updates.items()})
 
             # 封面同样只存服务端缓存；下载失败不阻断元数据写回
             has_cover = False
-            if cover and str(cover.get("url") or "").strip():
+            if cover and str(cover.get("url") or "").strip() and db.LOCK_COVER not in locked:
                 try:
                     data, ctype = _download_cover(str(cover["url"]))
                     db.set_cover(bid, data, ctype)
@@ -295,6 +315,10 @@ def apply(items: list, cfg: dict = None) -> dict:
                     has_cover = False
 
             if not updates and not has_cover:
+                # 被锁挡下的情况要说清楚「为什么没写」—— 否则前端只能看到一句
+                # 「没有需要写入的内容」，会误以为是自己传空了
+                if blocked:
+                    raise ValueError("字段已锁定，未写入：" + "、".join(blocked))
                 raise ValueError("没有需要写入的内容")
         except Exception as e:                       # noqa: BLE001 —— 单本失败不影响其余
             failed.append({"name": name, "error": str(e)})

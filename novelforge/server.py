@@ -1307,6 +1307,35 @@ def api_revert_book_metadata(bid: str, payload: dict = Body(None)):
     }
 
 
+@app.post("/api/books/{bid}/metadata/lock")
+def api_lock_book_metadata(bid: str, payload: dict = Body(...)):
+    """给单本书的**一个字段**上锁 / 解锁（第 35 期）。
+
+    锁只挡**抓取**：上锁后在线抓取永不改写该字段（即使该字段策略写着「总是覆盖」），
+    手动编辑照旧可改（用户当下的直接意志走在最顶层 override，不该被更早的标记拦住）。
+
+    ``field`` 取 ``fileops.METADATA_FIELDS`` 的 10 个之一，或独立键 ``cover``（封面）。
+    一次只处理一个字段：界面上就是一个开关，批量语义（全锁 / 全解）留给前端循环，
+    服务端不发明「部分成功」的响应。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    field = str((payload or {}).get("field") or "").strip()
+    if field != db.LOCK_COVER and field not in fileops.METADATA_FIELDS:
+        raise HTTPException(400, f"不支持锁定的字段：{field or '（空）'}")
+    locked = bool((payload or {}).get("locked", True))
+    db.set_lock(bid, field, locked)
+    # 刻意**不** library.invalidate()：锁只影响抓取的写入决策，不参与任何展示值
+    # （生效值仍是 override > online > opf），无需让扫描缓存失效。
+    return {
+        "ok": True,
+        "field": field,
+        "locked": locked,
+        "locked_fields": metastore.locked_fields(b),
+    }
+
+
 @app.get("/api/books/{bid}/cover")
 def api_book_cover(bid: str):
     """书籍封面。
