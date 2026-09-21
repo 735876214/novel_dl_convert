@@ -35,7 +35,7 @@
 - `.gitignore` 清单、macOS 建环境与首跑、`npm install` 的 lock 噪声、Windows 删除 shim ⇒ **见 REF「环境与构建」**。
 
 ## 自动化测试（硬前提）
-- 完全离线 `.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。**基线按环境取**：POSIX 34 期 475 例 / 0 failed；win32 33 期 404 例 / 0 failed。
+- 完全离线 `.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。**基线按环境取**：POSIX 36 期 595 例 / 0 failed（34 期记 475 → 36 期开工时实测基线 548 → 595）；win32 33 期 404 例 / 0 failed（**未随 POSIX 重取**）。
 - ⚠️ **`pytest -q` 汇总行抓不到**（重定向后只剩 warnings）⇒ 一律 `--junitxml=/tmp/nf.xml` + Python 解析 `//testcase[failure|error]`（**别用 `[xml]`**）；跑全量前确认 `novelforge/static` 存在。
 - **「长期稳定失败」不是 flaky，是产品 bug 的症状**：报错不指向根因就逐层打印中间返回值；修完临时回退那一处确认「恰好相关用例失败」；e2e 做改前 FAIL / 改后 PASS 对照。
 - 硬前提：①环境变量须在 import 业务模块**前**设（`config` 导入即固化目录、`server` 导入即 `ensure_dirs()`）；②`db._conn`/`_db_path` 是模块级缓存 ⇒ 隔离靠 `db.close()`。
@@ -55,7 +55,7 @@
 - **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**：**没有 `/api/health`**（白名单只含 `/health`+`/api/auth/login`+`/api/logout`）；前端 `api.ts` 的 `health()` 也走 `/health`。
 - 共用锁嵌套用 `RLock`；`mark_processed`/`mark_recent` 走 `asyncio.to_thread`；watcher 独立 `_scan_lock`。
 - `core/stats.py`：`overview` 既有键**只增不删**、**必须跟随 `library_id`**、**不新增扫描路径**；真名照代码（`weekdays`/`pages_by_format`）。
-- **「文件:行号」收尾必须实测复核**：工具=`tests/check_doc_anchors.py`（**非 `test_` 前缀 ⇒ pytest 不收集**），用法与局限见 capability-gap §0.5。①**别记偏移量，只记当前真实行号**；②脚本**只生成待核清单、不能判定**（「行号合法但内容换了」天生测不出）⇒ 判据是「0 硬错 + 0 漂移」**且**人工过完 `--todo` 清单。先例：32 期核 71 修 10、33 期核 312 修 28、35 期核 706 修 37。
+- **「文件:行号」收尾必须实测复核**：工具=`tests/check_doc_anchors.py`（**非 `test_` 前缀 ⇒ pytest 不收集**），用法与局限见 capability-gap §0.5。①**别记偏移量，只记当前真实行号**；②脚本**只生成待核清单、不能判定**（「行号合法但内容换了」天生测不出）⇒ 判据是「0 硬错 + 0 漂移」**且**人工过完 `--todo` 清单。先例：32 期核 71 修 10、33 期核 312 修 28、35 期核 706 修 37、36 期核 719 修 7（**7 处全部落在本期自己动过的 `core/db.py` / `server.py` 上** ⇒ 动了锚点密集的文件就顺手重核那一份）。
 
 ## 配置分层（四层 + 每库覆盖）
 - `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时 `生效值=每库覆写 ?? 全局`，落 `libraries.settings`（稀疏 JSON，键=全局点分路径）。
