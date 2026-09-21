@@ -2,13 +2,14 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import BookMoveDialog from '@/components/book/BookMoveDialog.vue'
 import BookCover from '@/components/ui/BookCover.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
-import { api, type BookCard } from '@/lib/api'
+import { api, type BookCard, type BookMoveBatch } from '@/lib/api'
 import {
   formatLabel,
   metaOf,
@@ -175,6 +176,55 @@ function batchRating(n: number): void { runBatch('set_rating', { stars: n }) }
 async function batchAddToCollection(): Promise<void> {
   if (batchCollection.value === '') { ui.toast('先选一个收藏夹'); return }
   await runBatch('add_to_collection', { collection_id: batchCollection.value })
+}
+
+// ---------------- 跨库移动（第 36 期 T4）----------------
+// 与上面的批量动作不同：这几步会**真动磁盘**（正本 + 副本 + 关联数据一起搬），
+// 所以不塞进批量条一键跑完，而是开一个三段式弹窗（挑库 → 预检 → 确认）。
+const moveOpen = ref(false)
+const moveIds = ref<string[]>([])
+/** 最近一次可撤销的移动批次（书架上给一条「撤销」，不藏在别处） */
+const moveBatch = ref<BookMoveBatch | null>(null)
+
+async function loadMoveBatch(): Promise<void> {
+  try {
+    const r = await api.bookMoveBatches(1)
+    moveBatch.value = r.items.find((b) => b.can_rollback) ?? null
+  } catch {
+    moveBatch.value = null      // 读不到就不显示这条：移动是增强流程，不该堵住书架
+  }
+}
+onMounted(loadMoveBatch)
+
+function openMove(): void {
+  if (!selected.value.size) { ui.toast('先选几本书'); return }
+  moveIds.value = [...selected.value]
+  moveOpen.value = true
+}
+
+/** 弹窗里点了「开始移动」：关掉多选态并刷新（搬完的书换了库，列表必须重取） */
+async function onMoved(): Promise<void> {
+  selected.value = new Set()
+  selectMode.value = false
+  await library.loadBooks(true)
+  await library.loadLibraries(true)
+  await loadMoveBatch()
+}
+
+async function undoMove(): Promise<void> {
+  const b = moveBatch.value
+  if (!b) return
+  try {
+    const r = await api.bookMoveRollback(b.batch_id)
+    ui.toast(
+      `已撤销：${r.restored ?? 0} 本搬回原库${r.copies ? `，副本 ${r.copies} 本随回滚` : ''}` +
+        (r.failed ? `，${r.failed} 本失败` : ''),
+    )
+    await library.loadBooks(true)
+    await loadMoveBatch()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '撤销失败')
+  }
 }
 function statusText(s: string): string {
   return ({ unread: '未读', reading: '在读', finished: '已读完', paused: '搁置', abandoned: '弃读' } as Record<string, string>)[s] ?? s
@@ -623,9 +673,32 @@ const INPUT_CLS =
           <option v-for="c in collections" :key="c.id" :value="c.id">{{ c.name }}</option>
         </select>
         <Button size="sm" :disabled="!batchCollection" @click="batchAddToCollection">加入</Button>
+        <span class="h-4 w-px bg-border" />
+        <Button size="sm" variant="ghost" :disabled="!selected.size" @click="openMove">
+          移动到书库
+        </Button>
         <Button size="sm" variant="primary" class="ml-auto" @click="enterSelect">完成</Button>
       </div>
     </Card>
+
+    <!-- 移动是会改磁盘位置的事：撤销入口就放在书架上，不藏在别的页 -->
+    <Card v-if="moveBatch" class="mb-3" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12px] text-muted-foreground">
+        <Icon name="undo" class="h-3.5 w-3.5" />
+        <span>
+          上次移动：<b class="text-foreground">{{ moveBatch.label }}</b>
+          · {{ moveBatch.done }} 本
+        </span>
+        <Button size="sm" variant="ghost" class="ml-auto" @click="undoMove">撤销本次移动</Button>
+      </div>
+    </Card>
+
+    <BookMoveDialog
+      :open="moveOpen"
+      :book-ids="moveIds"
+      @close="moveOpen = false"
+      @moved="onMoved"
+    />
 
     <EmptyState
       v-if="!sorted.length"

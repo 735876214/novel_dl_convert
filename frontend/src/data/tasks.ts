@@ -11,4 +11,5 @@
  */
 
 export type TaskStatus = 'running' | 'done' | 'queued' | 'failed'
-export type TaskType = 'download' | 'convert'
+/** `bookmove` = 跨库移动（第 36 期）：逐本回调真进度，因此运行中也显示百分比 */
+export type TaskType = 'download' | 'convert' | 'bookmove'

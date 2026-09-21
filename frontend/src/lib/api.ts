@@ -1947,6 +1947,117 @@ export interface MigrationBatch {
   rolled_back: number
 }
 
+// ---------- 跨库移动（用户点选；`/api/book-move/*`） ----------
+
+/** 可选的目标库（`/api/book-move/targets`）：不相容的置灰，`reason` 就是后端拒绝时的那句 */
+export interface BookMoveTarget {
+  id: string
+  name: string
+  type: LibraryType
+  type_label: string
+  /** 选中的书能不能**全**进得去这个库 */
+  compatible: boolean
+  /** 进不去这个库的书目数（不是原因数） */
+  blocked_count: number
+  reason: string
+  /** 选中的书现在就在这个库里 */
+  same_as_source: boolean
+  /** 没配成品目录 ⇒ 副本会留在原库（提前说，别等搬完才发现） */
+  publish_configured: boolean
+}
+
+export interface BookMoveTargets {
+  items: BookMoveTarget[]
+  total_books: number
+  missing_books: number
+  /** 选中的书都在同一个库时给出源库 id，混库为空 */
+  source_library_id: string
+  message: string
+}
+
+/** 副本随书搬的处置（`none` 没有副本 / `left` 目标库没配成品目录 ⇒ 留在原库） */
+export type BookMoveCopyAction = 'none' | 'left' | 'same' | 'reuse' | 'move'
+
+export interface BookMoveCopy {
+  action: BookMoveCopyAction
+  old_copy: string
+  new_copy: string
+  rel: string
+  reason: string
+}
+
+/** 逐本预检的一条（`/api/book-move/preflight`） */
+export interface BookMoveItem {
+  name: string
+  book_id: string
+  title: string
+  format: string
+  target_type: LibraryType
+  target_label: string
+  library_id: string
+  library_name: string
+  src: string
+  is_dir: boolean
+  dst_library_id: string
+  dst_library_name: string
+  dst: string
+  status: 'ready' | 'conflict' | 'blocked' | 'skip'
+  /** blocked 的原因属于哪一类：compat=相容闸门（契约）/ source=源与 id 状态 / name=改名不合法 */
+  blocked_kind: '' | 'compat' | 'source' | 'name'
+  reason: string
+  suggest: string
+  copy: BookMoveCopy
+}
+
+export interface BookMovePreview {
+  items: BookMoveItem[]
+  total: number
+  ready: number
+  conflict: number
+  blocked: number
+  skip: number
+  movable: number
+  dst_library_id: string
+  dst_library_name: string
+  copy_counts: Record<BookMoveCopyAction, number>
+  /** 真会动磁盘的数量（照这两个数写文案，别自己加） */
+  will_move_files: number
+  will_move_copies: number
+}
+
+export interface BookMovePlanResult {
+  batch_id: string
+  created: number
+  reused: boolean
+  items: BookMoveItem[]
+  message: string
+}
+
+/** 冲突 / 跳过时用户对单本的处置：不传 = 冲突即不搬 */
+export interface BookMoveDecision {
+  id: string
+  action: 'move' | 'rename' | 'skip'
+  new_name?: string
+}
+
+export interface BookMoveBatch {
+  batch_id: string
+  direction: string
+  /** 批次里的条目总数（含已回滚的） */
+  total: number
+  /** 真正搬过去的本数 —— 文案照它写 */
+  done: number
+  failed: number
+  rolled_back: number
+  can_rollback: boolean
+  label: string
+  src_library_id: string
+  src_library_name: string
+  dst_library_id: string
+  dst_library_name: string
+  at: number
+}
+
 function _authToken(): string {
   try {
     return localStorage.getItem('nf_token') || ''
@@ -3308,6 +3419,53 @@ export const api = {
     request<{ ok: boolean; gate: MigrationGate }>('/api/library-migrations/reset-gate', {
       method: 'POST',
     }),
+
+  // ---------- 跨库移动（用户点选） ----------
+  // 一律 POST：选择集可能几十本、book_id 里带 `$`，塞进 query string 迟早撞长度上限。
+
+  /** 可选的目标库（含逐库相容判定与理由 —— 前端照原样显示，别自己编一套说法）。 */
+  bookMoveTargets: (bookIds: string[]) =>
+    request<BookMoveTargets>('/api/book-move/targets', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ book_ids: bookIds }),
+    }),
+
+  /** 逐本预检：能不能搬 / 为什么不能 / 副本会去哪。**只读**。 */
+  bookMovePreflight: (bookIds: string[], dstLibraryId: string, decisions?: BookMoveDecision[]) =>
+    request<BookMovePreview>('/api/book-move/preflight', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ book_ids: bookIds, dst_library_id: dstLibraryId, decisions }),
+    }),
+
+  /** 落成批次（只写台账，不搬文件）。有书进不去目标库时后端翻 400。 */
+  bookMovePlan: (bookIds: string[], dstLibraryId: string, decisions?: BookMoveDecision[]) =>
+    request<BookMovePlanResult>('/api/book-move/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ book_ids: bookIds, dst_library_id: dstLibraryId, decisions }),
+    }),
+
+  /** 执行（**真移文件**）：立刻返回 task_id，进度去任务中心看。 */
+  bookMoveApply: (batchId: string) =>
+    request<{ task_id: string; batch_id: string }>('/api/book-move/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ batch_id: batchId }),
+    }),
+
+  /** 撤回本次移动（不传 = 最近一次跨库移动批次）。同步返回真实结果。 */
+  bookMoveRollback: (batchId = '') =>
+    request<MigrationRunResult & { copies?: number }>('/api/book-move/rollback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ batch_id: batchId }),
+    }),
+
+  /** 最近的跨库移动批次（书架的「撤销本次移动」条用它）。 */
+  bookMoveBatches: (limit = 10) =>
+    request<{ items: BookMoveBatch[] }>(`/api/book-move/batches?limit=${limit}`),
 
   // ---------- 阅读时长（会话上报） ----------
   recordSession: (bookId: string, seconds: number) =>

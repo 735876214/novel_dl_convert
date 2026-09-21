@@ -13,11 +13,11 @@ import type { TaskItem } from '@/lib/api'
 import { useTasksStore } from '@/stores/tasks'
 
 /**
- * 任务中心：下载 / 转换任务的统一列表。
+ * 任务中心：下载 / 转换 / 跨库移动任务的统一列表。
  *
  * 数据全部来自服务端任务表（`GET /api/tasks`），**不含任何演示数据**。
- * 进度只显示真实里程碑，因此运行中的任务不显示百分比 —— 下载器不报细分进度，
- * 给出一个精确到 1% 的数字等于编造。
+ * 进度只显示**真数字**：下载器不报细分进度，所以它运行中不给百分比（给一个精确到
+ * 1% 的数字等于编造）；跨库移动逐本回调「已完成 / 总数」，运行中就该显示。
  */
 const tasks = useTasksStore()
 
@@ -39,6 +39,13 @@ function countOf(v: TaskStatus | ''): number {
   return v ? tasks.countByStatus(v) : tasks.tasks.length
 }
 
+/** 任务类型 → 图标（`bookmove` 是「把书挪个库」，用 shelf 比 convert 贴切） */
+const TYPE_ICON: Record<string, string> = {
+  download: 'download',
+  convert: 'convert',
+  bookmove: 'shelf',
+}
+
 const DOT: Record<string, string> = {
   run: 'bg-info',
   done: 'bg-success',
@@ -52,8 +59,14 @@ const BAR: Record<string, string> = {
   '': 'bg-primary',
 }
 
-/** 仅「已结束」的任务才显示百分比；进行中不显示（避免伪造精确度） */
+/**
+ * 什么时候显示百分比。
+ *
+ * 下载器**不报**细分进度（只有一个「已开始」），所以进行中不给数字，避免伪造精确度；
+ * 跨库移动不一样：它逐本回调 `已完成 / 总数`，是**真数字**，进行中就该显示。
+ */
 function showPct(t: TaskItem): boolean {
+  if (t.type === 'bookmove') return t.status === 'running' || t.status === 'done' || t.status === 'failed'
   return t.status === 'done' || t.status === 'failed'
 }
 
@@ -106,7 +119,7 @@ onMounted(() => {
           class="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-muted"
           :class="t.type === 'download' ? 'text-info' : 'text-primary'"
         >
-          <Icon :name="t.type === 'download' ? 'download' : 'convert'" class="h-4 w-4" />
+          <Icon :name="TYPE_ICON[t.type] ?? 'convert'" class="h-4 w-4" />
         </span>
 
         <div class="min-w-0 flex-1">
@@ -160,8 +173,9 @@ onMounted(() => {
       <div class="flex gap-2 text-[11.5px] leading-relaxed text-muted-foreground">
         <Icon name="alert" class="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
-          任务已落 SQLite，重启后仍可查。进度只显示真实里程碑（已入队 / 已开始 / 已结束），
-          因此运行中不给出百分比。失败的任务需要在「探索发现」重新发起下载 ——
+          任务已落 SQLite，重启后仍可查。进度只显示真实数字：下载只报「已入队 / 已开始 /
+          已结束」三个里程碑，所以运行中不给出百分比；跨库移动逐本回调「已完成 / 总数」，
+          运行中就是真百分比。失败的任务需要在「探索发现」重新发起下载 ——
           本页不提供「重试」，因为任务里没有保存可重放的源数据，做成一键重试只会是假的。
         </span>
       </div>
