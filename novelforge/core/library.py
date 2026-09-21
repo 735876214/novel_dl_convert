@@ -16,8 +16,10 @@ TTL + 目录指纹（文件数 + 最新 mtime）双重判定；任何写操作�
 """
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import html.parser
+import json
 import pathlib
 from urllib.parse import quote, unquote
 import re
@@ -885,7 +887,7 @@ def probe_epub(path: pathlib.Path) -> dict:
 # Komga 布局是「一层系列目录 + 书文件」（core/komga.py），所以扫描要跟着下探一层。
 # **只下一层**：Komga 自己也不递归系列目录的子目录，再深只会扫到它不认的文件。
 
-def _iter_book_entries(d: pathlib.Path, exts=None) -> list:
+def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None) -> list:
     """**一个书库根目录**下的书目条目（平铺 + 一层系列目录），按遍历顺序返回。
 
     条目有两种形态，二者都算「一本书」：
@@ -896,10 +898,15 @@ def _iter_book_entries(d: pathlib.Path, exts=None) -> list:
     不传则用全量 ``BOOK_EXTS``。音频目录的识别也随之收窄：白名单里没有音频扩展名时
     不再把目录当有声书。
 
+    ``exclude`` 是该库的**排除图案**（第 40 期，语义见 :func:`_excluded`）：命中的条目
+    直接跳过，连进都不进书目。它的判据与白名单**正交** —— 白名单管「哪些格式要」，
+    排除图案管「这些名字不要」（如 `*.draft.*` / `sample/*`）。
+
     `_scan_once` 与 `_dir_signature` 共用它，保证「扫到哪些」与「什么变化会让缓存失效」
     永远一致 —— 这两处若各写一套，很容易出现「新书已入库但列表还是旧的」。
     """
     allowed = tuple(exts) if exts else BOOK_EXTS
+    patterns = tuple(exclude or ())
     allow_audio_dir = any(e in allowed for e in audio.AUDIO_EXTS)
     out: list = []
     try:
@@ -908,13 +915,14 @@ def _iter_book_entries(d: pathlib.Path, exts=None) -> list:
         return out
     for f in entries:
         if f.is_file():
-            if f.suffix.lower() in allowed:
+            if f.suffix.lower() in allowed and not _excluded(f.name, f.name, patterns):
                 out.append(f)
             continue
         if not f.is_dir() or f.name.startswith("."):
             continue
         # 顶层目录本身就是一个音频目录 → 整目录算一本书
-        if allow_audio_dir and audio.is_audio_dir(f):
+        if allow_audio_dir and audio.is_audio_dir(f) \
+                and not _excluded(f.name, f.name, patterns):
             out.append(f)
             continue
         try:
@@ -922,10 +930,12 @@ def _iter_book_entries(d: pathlib.Path, exts=None) -> list:
         except Exception:
             continue
         for x in children:
-            if x.is_file() and x.suffix.lower() in allowed:
+            rel = f"{f.name}/{x.name}"
+            if x.is_file() and x.suffix.lower() in allowed \
+                    and not _excluded(rel, x.name, patterns):
                 out.append(x)
             elif allow_audio_dir and x.is_dir() and not x.name.startswith(".") \
-                    and audio.is_audio_dir(x):
+                    and audio.is_audio_dir(x) and not _excluded(rel, x.name, patterns):
                 out.append(x)
     return out
 
@@ -957,6 +967,108 @@ def _exts_for_type(ltype) -> tuple:
     if t == "ebook":
         return _EBOOK_EXTS
     return BOOK_EXTS
+
+
+# ---------------- 新库向导：格式白名单 / 排除图案（第 40 期）----------------
+# ⚠️ **两条读时回落规则**：库表里这两列的空串都表示「没设过」，不是空集合 ——
+#   allowed_exts='' ⇒ 继承库类型默认（_exts_for_type），**不是**「一个格式都不收」；
+#   exclude=''      ⇒ 不过滤。
+# 空集合会让库变成**永远扫不出东西的死库**，而界面上完全看不出原因（用户只会觉得
+# 「我明明把书放进去了」），故一律当「没设过」。坏 JSON 同理。
+
+def norm_ext(s) -> str:
+    """扩展名归一：无前导点就补上、统一小写（``EPUB`` / ``epub`` → ``.epub``）。
+
+    **公开**是因为写入口（``server.api_create_library`` 等）也要用同一套归一 ——
+    各写一份必然会漂移（``EPUB`` 与 ``.epub`` 在同一个库里被当成两个格式）。
+    """
+    s = str(s or "").strip().lower()
+    if not s:
+        return ""
+    return s if s.startswith(".") else "." + s
+
+
+def _parse_str_list(raw, norm) -> tuple:
+    """解析库表里的「JSON 数组文本」列。坏值 / 空一律当**没设过**（返回 ``()``）。
+
+    与 ``lib_settings.overrides`` / ``library_rules.rules_of`` 同口径：手改坏一个字符
+    不该把扫描整条链路打崩，更不该留下一个死库。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        return ()
+    try:
+        data = json.loads(s)
+    except Exception:                       # noqa: BLE001 —— 坏数据降级为「没设过」
+        return ()
+    if not isinstance(data, list):
+        return ()
+    out: list = []
+    for v in data:
+        n = norm(v)
+        if n and n not in out:              # 去重且保序（用户填的顺序要留着）
+            out.append(n)
+    return tuple(out)
+
+
+def parse_exts(raw) -> tuple:
+    """``libraries.allowed_exts`` → 扩展名元组；空 / 坏值 ⇒ ``()``（=没设过）。"""
+    return _parse_str_list(raw, norm_ext)
+
+
+def parse_excludes(raw) -> tuple:
+    """``libraries.exclude`` → glob 图案元组；空 / 坏值 ⇒ ``()``（=不过滤）。"""
+    return _parse_str_list(raw, lambda v: str(v or "").strip())
+
+
+def exts_for_library(lib) -> tuple:
+    """某库**生效**的扫描白名单：设过就用设过的，没设过回落库类型默认。
+
+    这是「这个库扫得到哪些格式」的**唯一真值源** —— 扫描、目录指纹、
+    跨库相容闸门、入库路由都调它。别在别处再判一次 :func:`_exts_for_type`，
+    否则「设过了」的那一层会被绕过。
+    """
+    lib = lib or {}
+    return parse_exts(lib.get("allowed_exts")) or _exts_for_type(lib.get("type"))
+
+
+def accepts_ext(lib, filename) -> bool:
+    """该库扫不扫得到这个条目（按**扩展名**判）。
+
+    给**入库路由**用：把一个文件路由到「收了也看不见」的库 = **隐形文件**
+    （文件落盘了、书目里却找不到），比直接拒收更糟 —— 用户看得见失败，看不见消失。
+
+    ⚠️ **没有扩展名的条目一律不拦**：有声书「一章一文件」的**目录**形态在这里判不了，
+    它扫不扫得到由 :func:`_iter_book_entries` 的 ``allow_audio_dir`` 按**类型**决定。
+    本函数的用途是防隐形文件，判不了就放过 —— 误拒比漏判更烦人。
+    """
+    ext = pathlib.PurePosixPath(str(filename or "")).suffix.lower()
+    if not ext:
+        return True
+    return ext in exts_for_library(lib)
+
+
+def _excluded(rel, name, patterns) -> bool:
+    """条目是否命中库级排除图案（第 40 期）。
+
+    语义与 ``watcher.ignore`` **同族但有两处明写的差异**（见建库表的 ``exclude`` 列注释）：
+
+    ① 用 :func:`fnmatch.fnmatchcase`（**平台无关**）—— ``watcher._ignored`` 用的
+       :func:`fnmatch.fnmatch` 在 Windows 上大小写不敏感，而库级排除是用户显式写的
+       可见规则，不能随平台变（``*.DRAFT.*`` 在 Windows 上默默吞掉 ``draft``）；
+    ② 图案**含 ``/``** 时匹**相对库根**的路径，否则只匹 basename（watcher 那套是纯 basename）。
+    """
+    if not patterns:
+        return False
+    name = str(name or "")
+    rel = str(rel or "")
+    for pat in patterns:
+        p = str(pat or "")
+        if not p:
+            continue
+        if fnmatch.fnmatchcase(rel if "/" in p else name, p):
+            return True
+    return False
 
 
 def libraries() -> list:
@@ -1015,15 +1127,17 @@ def _entry_mtime(p: pathlib.Path) -> float:
         return 0.0
 
 
-def _dir_signature(d: pathlib.Path, exts=None) -> tuple:
+def _dir_signature(d: pathlib.Path, exts=None, exclude=None) -> tuple:
     """目录指纹：(书目条目数, 目录内文件总数, 最新 mtime)。任一变化即让缓存失效。
 
-    ⚠️ 必须与 :func:`_iter_book_entries` 同源（含 ``exts`` 白名单）。有声书是**目录**，
-    往目录里加一集既不改变条目数、也不一定改目录自身 mtime —— 所以目录内部的文件数
-    也要计入，否则会出现「新音频已入库但列表还是旧的」。
+    ⚠️ 必须与 :func:`_iter_book_entries` 同源（含 ``exts`` 白名单与 ``exclude`` 排除图案）。
+    有声书是**目录**，往目录里加一集既不改变条目数、也不一定改目录自身 mtime ——
+    所以目录内部的文件数也要计入，否则会出现「新音频已入库但列表还是旧的」。
+
+    同理 ``exclude`` 也要传：改了排除图案就得让指纹变，否则用户改完规则看不见效果。
     """
     n, inner, newest = 0, 0, 0.0
-    for p in _iter_book_entries(d, exts):
+    for p in _iter_book_entries(d, exts, exclude):
         n += 1
         if p.is_dir():
             try:
@@ -1050,9 +1164,11 @@ def _scan_once(lib: dict = None) -> list:
     if not lib:
         return []                      # 没有库就没有根可扫（不再合成默认库）
     d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
-    exts = _exts_for_type(lib.get("type"))
+    # 第 40 期：白名单与排除图案都按**该库生效值**取（设过就用设过的，没设过回落类型默认）
+    exts = exts_for_library(lib)
+    patterns = parse_excludes(lib.get("exclude"))
     books = []
-    for f in _iter_book_entries(d, exts):
+    for f in _iter_book_entries(d, exts, patterns):
         is_dir = f.is_dir()
         try:
             st = f.stat()
@@ -1159,7 +1275,9 @@ def _scan_once(lib: dict = None) -> list:
 def _books_of(lib: dict, force: bool = False) -> list:
     """单个库的书目（带**按库**的短期缓存）。"""
     d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
-    sig = _dir_signature(d, _exts_for_type(lib.get("type")))
+    # ⚠️ 指纹与 _scan_once 必须同源（同一份 exts + exclude）—— 否则「改了排除图案但
+    # 指纹没变 ⇒ 缓存不失效 ⇒ 用户改完看不见效果」，正是本函数上面注释警告的那类 bug。
+    sig = _dir_signature(d, exts_for_library(lib), parse_excludes(lib.get("exclude")))
     key = str(lib.get("id") or "")
     with _lock:
         cur = _cache.get(key) or {}

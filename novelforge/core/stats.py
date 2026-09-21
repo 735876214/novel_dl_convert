@@ -1,7 +1,11 @@
 """阅读 / 书库统计聚合：把 library（书目）与 db（进度、批注）合成统计视图。
 
 口径说明：
-- 「已读完」＝ 阅读进度 ≥ 99.5%（阅读器按整章推进，末章末尾即 100%）。
+- 「已读完」＝ 阅读进度 ≥ `reading.finished_threshold`（默认 **99.5%**；阅读器按整章推进，
+  末章末尾即 100%）。⚠️ 第 40 期起该阈值**可配**（全局 + 每库覆写，见
+  `core/lib_settings.reading_thresholds`），本模块不再自己写死数字 ——
+  全仓凡是要判「已读完 / 在读 / 未读」的地方都从同一处取，否则会出现
+  「统计里算已读完、书架上还是在读」。
 - 「入库节奏」＝ 按成品文件 mtime 落在最近 N 天内的数量（与阅读无关）。
 - 「最近在读」＝ progress 表里按 updated_at 倒序的书。
 
@@ -84,7 +88,7 @@ heatmap 用）、``genre_cooccurrence``（题材两两共现，弦图用）、``
 """
 import time
 
-from . import db, library, metascore
+from . import db, lib_settings, library, metascore
 
 #: 体积榜固定长度（上游该榜名为「Top 50 Largest Books」）。
 #: 刻意**不**跟随 `top` 参数：那个参数管的是作者/系列/出版社/题材四个计数器榜。
@@ -164,6 +168,10 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         top = 8
 
     lid = (library_id or "").strip()
+    # 第 40 期：阅读阈值改由配置下发（全局 `reading.*` + 每库覆写）。
+    # 按库筛选时取**该库的生效值**，不筛选时取全局 —— 与书目列表 / 书架的判定同源，
+    # 否则会出现「统计里算已读完、书架上还是在读」。
+    started_th, finished_th = lib_settings.reading_thresholds(lid or None)
     bs = library.books(lid or None)
     # 按库筛选时的书 id 集合（None = 不按书过滤）；供「阅读会话→库」的归属判定用
     ids = {b["id"] for b in bs} if lid else None
@@ -349,13 +357,14 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     # 进度漏斗（对齐上游 ProgressFunnel 的五档）：**走进度，不走真实状态** ——
     # 漏斗要求各档单调包含（开始 ⊇ 25% ⊇ 50% ⊇ 75% ⊇ 读完），而真实状态允许把
     # 一本 20% 的书手动标成 finished，那会让漏斗出现「后档比前档多」的畸形。
-    # 「读完」阈值沿用本模块既有口径 99.5%（见文件头）。
+    # 「开始」/「读完」两档走配置阈值（第 40 期起可配，默认 0 / 99.5 与改造前逐字节等价）；
+    # 中间的 25/50/75 是**固定档位**，不是用户口径，不随配置变。
     funnel = {"started": 0, "reached25": 0, "reached50": 0, "reached75": 0, "completed": 0}
     for b in bs:
         p = prog.get(b["id"])
         pct = float(p["percent"]) if p else 0.0
         psum += pct
-        if pct > 0:
+        if pct > started_th:
             funnel["started"] += 1
         if pct >= 25:
             funnel["reached25"] += 1
@@ -363,7 +372,7 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
             funnel["reached50"] += 1
         if pct >= 75:
             funnel["reached75"] += 1
-        if pct >= 99.5:
+        if pct >= finished_th:
             funnel["completed"] += 1
         # 真实状态优先；没有状态行的书才按进度兜底推导（与 stats 口径一致）。
         # paused/abandoned 归入在读：它们都「翻过」，和未读不是一回事。
@@ -374,9 +383,9 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
             unread += 1
         elif raw in ("reading", "paused", "abandoned"):
             reading += 1
-        elif pct <= 0:
+        elif pct <= started_th:
             unread += 1
-        elif pct >= 99.5:
+        elif pct >= finished_th:
             finished += 1
         else:
             reading += 1

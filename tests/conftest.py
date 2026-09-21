@@ -262,11 +262,13 @@ def make_library(isolated) -> "callable":  # noqa: ARG001
     """
 
     def _make(lid: str, name: str, ltype: str, root, mode: str = "inplace",
-              source_subdir: str = "", rules: str = "") -> dict:
+              source_subdir: str = "", rules: str = "",
+              allowed_exts: str = "", exclude: str = "") -> dict:
         r = pathlib.Path(root)
         r.mkdir(parents=True, exist_ok=True)
         lib = db.create_library(lid, name, ltype, mode, str(r),
-                               source_subdir=source_subdir, rules=rules)
+                               source_subdir=source_subdir, rules=rules,
+                               allowed_exts=allowed_exts, exclude=exclude)
         library.invalidate()
         return lib
 

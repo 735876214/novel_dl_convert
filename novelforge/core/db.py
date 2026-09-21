@@ -505,7 +505,21 @@ def init():
                 -- （Komga 等）直接挂载读取。空 = 该库不产出副本。
                 -- ⚠️ 副本只读源、只写自己：源文件永不改写。该目录不得位于任何库根 /
                 -- 扫描源目录内部（否则会被扫回来，书列表出现重复），由 server 侧校验。
-                publish_path    TEXT NOT NULL DEFAULT ''
+                publish_path    TEXT NOT NULL DEFAULT '',
+                -- 新库向导（第 40 期）三列：
+                -- icon=库图标名（前端 lib/icons.ts 的 ICONS 键；空 = 不显示图标）。
+                -- allowed_exts=该库扫描白名单，JSON 数组文本（如 [".epub",".pdf"]）。
+                --   ⚠️ ''=**没设过**（读时回落库类型默认，见 library.exts_for_library），
+                --   不是「一个格式都不收」——空集合会让库变成永远扫不出东西的死库。
+                --   ⚠️ 也不能把「按类型推导的扩展名」写成列默认值：SQLite 的
+                --   ALTER TABLE ADD COLUMN 只接受常量默认值。
+                -- exclude=库级排除图案，JSON 数组文本。glob 语义与 watcher.ignore **同族**
+                --   但有两处明写的差异：用 fnmatchcase（平台无关；watcher 那套用的 fnmatch
+                --   在 Windows 上大小写不敏感），且含 '/' 的模式匹相对库根的路径。
+                --   ⚠️ 两者是**两条不同的轴**：watcher.ignore 只管 INPUT_DIR 投递。
+                icon            TEXT NOT NULL DEFAULT '',
+                allowed_exts    TEXT NOT NULL DEFAULT '',
+                exclude         TEXT NOT NULL DEFAULT ''
             );
             -- 迁移台账：既做**幂等**依据（重复启动不重复搬），也做**回滚**依据。
             -- 迁移是破坏性操作，故逐条落库：src/dst 都要记全，供反向移动。
@@ -590,6 +604,14 @@ def init():
         # 与上面同理：老库不补列则 update_library / 刮削读取会报 no such column。
         if lcols and "publish_path" not in lcols:
             c.execute("ALTER TABLE libraries ADD COLUMN publish_path TEXT NOT NULL DEFAULT ''")
+        # 第 40 期：libraries 加新库向导三列（图标 / 允许格式 / 排除图案）。
+        # 与上面同理：老库不补列则 update_library / 建库向导读取会报 no such column。
+        if lcols and "icon" not in lcols:
+            c.execute("ALTER TABLE libraries ADD COLUMN icon TEXT NOT NULL DEFAULT ''")
+        if lcols and "allowed_exts" not in lcols:
+            c.execute("ALTER TABLE libraries ADD COLUMN allowed_exts TEXT NOT NULL DEFAULT ''")
+        if lcols and "exclude" not in lcols:
+            c.execute("ALTER TABLE libraries ADD COLUMN exclude TEXT NOT NULL DEFAULT ''")
         # 第 25 期：users 表补账号资料列（展示名 / 时区 / 头像相对文件名）。
         # 老库不补列则读写会报 no such column（与上方同理）。
         ucols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
@@ -2228,7 +2250,8 @@ def delete_device(did) -> bool:
 
 
 # ---------------- 阅读状态 ----------------
-# ⚠️ 之前**没有真实状态字段**：前端用 percent 推导（p>0 = 在读、≥99.5% = 读完）。
+# ⚠️ 之前**没有真实状态字段**：前端用 percent 推导（p>0 = 在读、≥99.5% = 读完；
+#    第 40 期起这两个数字可配，见 core/lib_settings.reading_thresholds）。
 #     那是「进度」不是「状态」—— 想读、搁置、弃读根本表达不出来；
 #     起止日期也没有任何落点。现在落表，进度推导只作为**无状态行时的兜底**。
 #
@@ -3281,13 +3304,17 @@ def get_library(lid) -> "dict | None":
 def create_library(lid, name, type_, mode="inplace", root_path="",
                    storage_path="", source_subdir="", rules="", sort_order=0,
                    settings="", watch=1, scan_interval=0, scan_cron="",
-                   publish_path="") -> dict:
+                   publish_path="", icon="", allowed_exts="", exclude="") -> dict:
     """建库。``settings`` 是每库覆盖的 JSON 文本（第 13 期）。
 
     ``watch`` / ``scan_interval`` / ``scan_cron`` 是逐库扫描调度（第 17 期 T2）：
     默认 watch=1（开）、scan_interval=0（继承全局）、scan_cron=""（不启用定时）。
 
     ``publish_path`` 是刮削出版的成品目录（第 18 期）：空 = 该库不产出硬链接副本。
+
+    ``icon`` / ``allowed_exts`` / ``exclude`` 是新库向导三列（第 40 期）：分别是图标名、
+    该库扫描白名单（JSON 数组文本）、库级排除图案（JSON 数组文本）。后两者空串 =
+    **没设过**（读时回落库类型默认 / 不过滤），不是空集合 —— 见建表处的列注释。
     """
     try:
         w = int(watch or 0)
@@ -3303,12 +3330,14 @@ def create_library(lid, name, type_, mode="inplace", root_path="",
             "INSERT OR REPLACE INTO libraries"
             "(id, name, type, mode, root_path, storage_path, source_subdir, rules,"
             " settings, sort_order, created_at, last_scan_at, last_scan_note,"
-            " watch, scan_interval, scan_cron, publish_path) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,0,'',?,?,?,?)",
+            " watch, scan_interval, scan_cron, publish_path,"
+            " icon, allowed_exts, exclude) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,0,'',?,?,?,?,?,?,?)",
             (str(lid), str(name), str(type_), str(mode), str(root_path),
              str(storage_path or ""), str(source_subdir or ""), str(rules or ""),
              str(settings or ""), int(sort_order or 0), time.time(),
-             w, si, str(scan_cron or ""), str(publish_path or "")),
+             w, si, str(scan_cron or ""), str(publish_path or ""),
+             str(icon or ""), str(allowed_exts or ""), str(exclude or "")),
         )
         c.commit()
     return get_library(lid) or {}
@@ -3320,7 +3349,9 @@ def create_library(lid, name, type_, mode="inplace", root_path="",
 _LIBRARY_COLS = {"name", "type", "mode", "root_path", "storage_path",
                  "source_subdir", "rules", "settings", "sort_order",
                  "watch", "scan_interval", "scan_cron", "publish_path",
-                 "last_scan_at", "last_scan_note"}
+                 "last_scan_at", "last_scan_note",
+                 # 第 40 期新库向导三列
+                 "icon", "allowed_exts", "exclude"}
 
 
 def update_library(lid, **fields) -> "dict | None":

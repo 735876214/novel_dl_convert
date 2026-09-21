@@ -14,10 +14,12 @@
 """
 import json
 import pathlib
+import re
 
 import pytest
+from fastapi import HTTPException
 
-from novelforge import config
+from novelforge import config, server
 from novelforge.core import db, epub_builder, library
 
 
@@ -582,3 +584,120 @@ def test_OPDS系列入口带简介(client, enable_services, auth_headers, defaul
     # 作者 / 标签列表不该被顺带注入（那里没有系列简介的概念）
     auth_nav = client.get("/opds/authors", auth=enable_services)
     assert auth_nav.status_code == 200 and "<summary" not in auth_nav.text
+
+
+# ---------------------------------------------------------------------------
+# 新建向导的 payload 契约（第 40 期）
+# ---------------------------------------------------------------------------
+
+def test_新建向导发出的payload被原样接收(client, auth_headers):
+    """向导 `submit()` 里那一段字面量，必须**一个字段不差**地被后端收下。
+
+    为什么这条不能只留在前端：向导的 spec 把 `api` mock 掉了，
+    所以把 `allowed_exts` 写成 `allowedExts` 在那边**照样是绿的** ——
+    字段名对不对齐，只有后端这一侧能钉。
+
+    ⚠️ 改 `frontend/src/components/tools/LibraryWizard.vue` 的 `submit()` 时请同步改这里：
+       这条用例的价值就在于它是那份 payload 的**字面拷贝**。
+    """
+    base = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    root = base / "guide"
+    payload = {                      # ← 与 LibraryWizard.submit() 逐字对应
+        "name": "向导库",
+        "type": "comic",
+        "mode": "inplace",
+        "root_path": str(root),
+        "source_subdir": "comics",
+        "rules": "",
+        # 成品目录必须与**所有**库根 / 扫描源目录错开（`_publish_path_allowed`，
+        # 不只校验自己那一个）：`client` 夹具起手就有一条根在 `OUTPUT_DIR` 的库，
+        # 所以这里不能用 `OUTPUT_DIR/xxx`。放成同级目录 —— 与
+        # `test_scrape_publish.py` 的 `_sorted` 同手法。
+        "publish_path": str(base / "_sorted"),
+        "watch": 1,
+        "scan_interval": 0,
+        "scan_cron": "0 4 * * *",
+        "icon": "book",
+        "allowed_exts": [".cbz", ".cbr"],
+        "exclude": ["*.draft.epub", "备份/*"],
+    }
+    r = client.post("/api/libraries", headers=auth_headers, json=payload)
+    assert r.status_code == 200, r.text
+    lib = r.json()["library"]
+    assert (lib["icon"], lib["allowed_exts"], lib["exclude"]) == (
+        "book", [".cbz", ".cbr"], ["*.draft.epub", "备份/*"])
+    # `exts_effective` 是**回落之后**的真实白名单：设过就照发的来，不再是类型默认
+    assert lib["exts_effective"] == [".cbz", ".cbr"]
+
+    # 再读回一遍（列表接口），确认不是只在这一次响应里拼出来的
+    one = next(x for x in client.get("/api/libraries", headers=auth_headers).json()["items"]
+               if x["id"] == lib["id"])
+    assert one["icon"] == "book" and one["exclude"] == ["*.draft.epub", "备份/*"]
+
+
+def test_向导没动格式时发的空数组等于继承而不是拒收(client, auth_headers):
+    """`allowed_exts: []` 必须落成「没设过」，读时回落到**该库类型的默认白名单**。
+
+    向导里「一个都不勾」与「没动过」发的是同一个 payload（都是 `[]`），
+    而它在界面上的含义是「继承默认」。若后端把它存成 `'[]'`，
+    这个库会一本也扫不出来 —— 而且不会有任何报错。
+    """
+    r = client.post("/api/libraries", headers=auth_headers, json={
+        "name": "继承库", "type": "comic", "mode": "inplace",
+        "root_path": str(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "inherit"),
+        "icon": "", "allowed_exts": [], "exclude": []})
+    assert r.status_code == 200, r.text
+    lib = r.json()["library"]
+    assert lib["allowed_exts"] == [], "用户没设过"
+    assert lib["exts_effective"] == list(library._exts_for_type("comic")), "但要收得了默认那批"
+    assert lib["exts_effective"], "类型的默认白名单不该是空的"
+    assert lib["icon"] == "" and lib["exclude"] == []
+
+
+def test_编辑弹窗的payload也能改这三个新列(client, auth_headers):
+    """编辑走的是 PATCH —— 新列同样得进 `_LIBRARY_COLS`。
+
+    漏进白名单的后果是**静默丢弃**：`update_library` 是「过滤后为空就原样返回」，
+    既不报错也不生效，界面还会显示「已保存」。
+    """
+    lib = client.post("/api/libraries", headers=auth_headers, json={
+        "name": "改前", "type": "ebook", "mode": "inplace",
+        "root_path": str(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "patch")}).json()["library"]
+
+    got = client.patch(f"/api/libraries/{lib['id']}", headers=auth_headers, json={
+        "icon": "star", "allowed_exts": [".epub"], "exclude": ["备份/*"]}).json()["library"]
+    assert (got["icon"], got["allowed_exts"], got["exclude"]) == ("star", [".epub"], ["备份/*"])
+
+    # 再改回「继承」：空数组 ⇒ 空串哨兵 ⇒ 回落到类型默认
+    got = client.patch(f"/api/libraries/{lib['id']}", headers=auth_headers,
+                       json={"icon": "", "allowed_exts": [], "exclude": []}).json()["library"]
+    assert (got["icon"], got["allowed_exts"], got["exclude"]) == ("", [], [])
+    assert got["exts_effective"] == list(library._exts_for_type("ebook"))
+
+
+#: `frontend/src/lib/icons.ts` 里图标键的写法（与 `ICONS` 的字面量同形）
+_ICON_KEY = re.compile(r"^\s{2}([A-Za-z0-9_-]+):", re.M)
+_ICONS_TS = pathlib.Path(__file__).resolve().parents[1] / "frontend" / "src" / "lib" / "icons.ts"
+
+
+def test_图标表里的每个key后端都收():
+    """`lib/icons.ts` 的键与后端 `_ICON_RE` 必须相容。
+
+    图标表的唯一真相源在前端，后端只做形状校验 —— 两边一旦不合，
+    用户能在向导里选出这个图标、点「创建」却拿到 400，而且看不出为什么。
+
+    纯文本断言（不拉 node），与 `tests/test_frontend_unit_contract.py` 同手法：
+    本仓库的硬前提是全量测试离线。
+    """
+    keys = _ICON_KEY.findall(_ICONS_TS.read_text(encoding="utf-8"))
+    assert len(keys) >= 30, f"只解析到 {len(keys)} 个图标键，正则大概过期了：{keys[:5]}"
+    bad = []
+    for k in keys:
+        try:
+            assert server._norm_icon(k) == k
+        except HTTPException as e:  # noqa: PERF203 —— 逐条收集，比第一个就炸更好定位
+            bad.append(f"{k}: {e.detail}")
+    assert not bad, (
+        "这些图标键后端不收（`_ICON_RE` 只允许字母开头的字母数字）："
+        + "；".join(bad)
+        + " —— 改 `frontend/src/lib/icons.ts` 的键名，或放宽 server.py 的 `_ICON_RE`。")

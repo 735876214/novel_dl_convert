@@ -413,12 +413,13 @@ async def _run_download(tid: str, item: dict, actor: str = "系统"):
         mgr = _manager()
         # 多书库：书源下载走产出 EPUB，按「来源子目录名 → 格式 → 关键词」归库。
         # 没有可接收的库（一个库都没有，或规则不命中）⇒ 拒收，如实报错，不猜落点。
+        _dl_name = f"{item.get('title') or 'book'}.epub"
         tgt = library_rules.resolve_target(
-            name=f"{item.get('title') or 'book'}.epub",
+            name=_dl_name,
             meta={"title": item.get("title"), "author": item.get("author")},
         )
         if tgt["root"] is None:
-            raise RuntimeError(library_rules.no_library_reason())
+            raise RuntimeError(library_rules.no_library_reason(name=_dl_name))
         # 第 13 期：产物格式 / 落盘布局按**目标库**取（库没覆写时等于全局值）
         opts = {"force": True, "merge": True,
                 "cfg": lib_settings.config_for(tgt["library_id"] or None)}
@@ -2569,6 +2570,14 @@ def _library_dto(lib: dict, counts: dict = None) -> dict:
         "watch": int(lib.get("watch", 1) or 0),
         "scan_interval": int(lib.get("scan_interval", 0) or 0),
         "scan_cron": lib.get("scan_cron") or "",
+        # 新库向导三列（第 40 期）：图标 / 允许的格式 / 排除图案
+        "icon": str(lib.get("icon") or ""),
+        # ⚠️ 空数组 = **没设过**（读时回落库类型默认），不是「一个格式都不收」：
+        # 前端据此显示「继承默认」态。`exts_effective` 是回落之后的**真实**白名单 ——
+        # 界面要展示「默认会收哪些」就用它，别在前端再推一遍（那是第二个真相源）。
+        "allowed_exts": list(library.parse_exts(lib.get("allowed_exts"))),
+        "exts_effective": list(library.exts_for_library(lib)),
+        "exclude": list(library.parse_excludes(lib.get("exclude"))),
         "book_count": int((counts or {}).get(str(lib.get("id")), 0)),
         "exists": root.is_dir(),
         "writable": _writable_dir(root) if root.is_dir() else False,
@@ -2640,6 +2649,78 @@ def _norm_rules(raw) -> str:
     return ""
 
 
+# ---------------- 新库向导三列（第 40 期）----------------
+#: 图标名的**形状**校验。⚠️ 刻意**不校验白名单** —— 44 个合法键的唯一真值源在前端
+#: `lib/icons.ts` 的 `ICONS`（`IconName = keyof typeof ICONS` 是编译期闭合）。
+#: 在 Python 里再抄一份就是第二个真相源，加图标时必然漂移。前端渲染是**常量表查表**，
+#: 未知键查不到就是「没有图标」（惰性失败），不会注入任何东西。
+_ICON_RE = re.compile(r"^[a-z][A-Za-z0-9]{0,31}$")
+#: 扩展名形状：点 + 1–8 位小写字母数字（先经 ``library.norm_ext`` 归一才判）。
+_EXT_RE = re.compile(r"^\.[a-z0-9]{1,8}$")
+#: 列表上限 —— 只防手滑塞进一坨，不是产品约束（上游那份格式清单是 16 项）。
+_MAX_LIST = 64
+
+
+def _norm_icon(raw) -> str:
+    """图标名：形状合法才收；空串 = 不显示图标。"""
+    s = str(raw or "").strip()
+    if not s:
+        return ""
+    if not _ICON_RE.match(s):
+        raise HTTPException(400, "图标名非法（只允许字母开头的字母数字，如 book / arrowLeft）")
+    return s
+
+
+def _norm_exts(raw) -> str:
+    """「允许的格式」→ JSON 数组文本。
+
+    ⚠️ 空列表归一成 ``''``（=**没设过**，读时回落库类型默认），**不是** ``'[]'`` ——
+    后者在扫描侧的含义是「一个格式都不收」，会造出一个永远扫不出东西的死库。
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        raw = [p for p in re.split(r"[,、;\s]+", raw) if p]
+    if not isinstance(raw, (list, tuple)):
+        raise HTTPException(400, "允许的格式必须是数组")
+    if len(raw) > _MAX_LIST:
+        raise HTTPException(400, f"允许的格式最多 {_MAX_LIST} 项")
+    out: list = []
+    for v in raw:
+        e = library.norm_ext(v)
+        if not _EXT_RE.match(e):
+            raise HTTPException(400, f"允许的格式里有非法扩展名：{v!r}")
+        if e not in out:
+            out.append(e)
+    return json.dumps(out, ensure_ascii=False) if out else ""
+
+
+def _norm_excludes(raw) -> str:
+    """「排除图案」→ JSON 数组文本；空列表 ⇒ ``''``（=不过滤）。
+
+    图案可以含 ``/``（含斜杠的按**相对库根的路径**匹，见 ``library._excluded``），
+    所以这里**只**挡控制字符与超长 —— 不挡分隔符。
+    """
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        raw = [p for p in re.split(r"[,、;]", raw) if p.strip()]
+    if not isinstance(raw, (list, tuple)):
+        raise HTTPException(400, "排除图案必须是数组")
+    if len(raw) > _MAX_LIST:
+        raise HTTPException(400, f"排除图案最多 {_MAX_LIST} 项")
+    out: list = []
+    for v in raw:
+        p = str(v or "").strip()
+        if not p:
+            continue
+        if len(p) > 128 or any(ch in p for ch in "\x00\r\n"):
+            raise HTTPException(400, f"排除图案非法：{p!r}")
+        if p not in out:
+            out.append(p)
+    return json.dumps(out, ensure_ascii=False) if out else ""
+
+
 @app.get("/api/libraries")
 def api_libraries():
     """**库实体**列表（含书数 / 是否存在 / 可写）。格式分面见 ``/api/library-facets``。"""
@@ -2648,9 +2729,31 @@ def api_libraries():
     items.sort(key=lambda x: (x["sort_order"], x["name"]))
     return {
         "items": items, "total": len(items), "source_dir": str(config.LIBRARY_SOURCE_DIR),
-        "types": [{"value": t, "label": _LIB_TYPE_LABELS.get(t, t)} for t in db.LIBRARY_TYPES],
+        # 第 40 期：`exts` = 该类型的**默认扫描白名单**，供新建向导的「允许的格式」
+        # 一选类型就带出默认勾选集（前端不许自己抄一份 —— 抄了就会与扫描口径走散）。
+        "types": [{"value": t, "label": _LIB_TYPE_LABELS.get(t, t),
+                   "exts": list(library._exts_for_type(t))} for t in db.LIBRARY_TYPES],
         "modes": [{"value": m, "label": _MODE_LABELS[m]} for m in db.LIBRARY_MODES],
     }
+
+
+@app.get("/api/reading-thresholds")
+def api_reading_thresholds(library_id: str = ""):
+    """阅读状态口径（第 40 期）：``{library_id, started, finished}``。
+
+    ``library_id`` 为空 → **全局值**（书架 / 仪表盘这类跨库视图用）；
+    给了库 → 该库的**生效值**（每库覆写 ?? 全局，与 ``lib_settings`` 同口径）。
+
+    这是全站取阅读阈值的**唯一入口** —— 前端 ``lib/readingThresholds.ts`` 消费它。
+    ⚠️ 界面别自己再写 ``99.5``：那会与统计 / 成就对不上（同一本书在统计里算已读完、
+    在书架上还是在读）。「哪几项被本库覆写过」看既有的
+    ``GET /api/libraries/{lid}/settings`` 的 ``overridden``，不在这里重复一套。
+    """
+    lid = str(library_id or "").strip()
+    if lid and not db.get_library(lid):
+        raise HTTPException(404, "书库不存在")
+    started, finished = lib_settings.reading_thresholds(lid or None)
+    return {"library_id": lid, "started": started, "finished": finished}
 
 
 @app.get("/api/features")
@@ -2714,6 +2817,11 @@ def api_create_library(payload: dict = Body(...)):
     mode = str(p.get("mode") or "inplace")
     if mode not in db.LIBRARY_MODES:
         raise HTTPException(400, "归属模式非法")
+    # 新库向导三列（第 40 期）：形状校验放在**建目录之前** ——
+    # 参数非法就不该留下一个空的库根目录。
+    icon = _norm_icon(p.get("icon"))
+    allowed_exts = _norm_exts(p.get("allowed_exts"))
+    exclude = _norm_excludes(p.get("exclude"))
     root = _library_root_allowed(p.get("root_path"))
     lid = _new_library_id(p.get("id") or name)
     if db.get_library(lid):
@@ -2752,7 +2860,8 @@ def api_create_library(payload: dict = Body(...)):
                             source_subdir=str(p.get("source_subdir") or "").strip(),
                             rules=_norm_rules(p.get("rules")), sort_order=sort_order,
                             watch=watch, scan_interval=scan_interval, scan_cron=scan_cron,
-                            publish_path=str(publish or ""))
+                            publish_path=str(publish or ""),
+                            icon=icon, allowed_exts=allowed_exts, exclude=exclude)
     _libraries_changed()
     activity_log.log(activity_log.ACTION_LAYOUT, name, activity_log.STATUS_OK,
                      detail=f"新建书库：{ltype} / {mode} / {root}"
@@ -2819,6 +2928,16 @@ def api_update_library(lid: str, payload: dict = Body(...)):
             except Exception as e:                      # noqa: BLE001
                 raise HTTPException(400, f"无法创建成品目录：{e}")
         fields["publish_path"] = str(pub or "")
+    # 新库向导三列（第 40 期）：传空串 / 空数组 = 恢复「没设过」（继承库类型默认）。
+    # ⚠️ 收窄 allowed_exts 会让原本扫得到的书**从书目里消失**（排除图案同理）——
+    # 这是用户显式操作的结果，不额外拦；但 `library._books_of` 的目录指纹含这两项，
+    # 所以缓存会失效、列表当场刷新（不然用户改完看不见效果，会以为没生效）。
+    if "icon" in p:
+        fields["icon"] = _norm_icon(p.get("icon"))
+    if "allowed_exts" in p:
+        fields["allowed_exts"] = _norm_exts(p.get("allowed_exts"))
+    if "exclude" in p:
+        fields["exclude"] = _norm_excludes(p.get("exclude"))
     if not fields:
         raise HTTPException(400, "没有可更新的字段")
     lib = db.update_library(lid, **fields)
@@ -3851,6 +3970,11 @@ EDITABLE: dict = {
     "komga": {"enabled", "username", "api_key", "expose"},
     # 多书库：跨库策略开关（库实体本身存 SQLite，不走 config）
     "libraries": {"auto_migrate"},
+    # 阅读状态口径（第 40 期）：全站「在读 / 已读完」判定的**全局默认值**。
+    # 每库可在「书库管理 → 每库设置」覆写（走 lib_settings），这里只管全局。
+    # ⚠️ 值域 0–100（`percent` 类型，**不是** number 的 0–1）。越界不在这里拦 ——
+    #    `lib_settings._pct` 读时一律回落默认值，与「手改坏 config 不该把统计弄挂」同口径。
+    "reading": {"started_threshold", "finished_threshold"},
 }
 
 # api_key 掩码：前端回显该值即表示「不修改」
@@ -3983,6 +4107,9 @@ def api_get_config():
             "libraries": {
                 "auto_migrate": bool((cfg.get("libraries") or {}).get("auto_migrate")),
             },
+            # 阅读状态口径的全局默认值（第 40 期）。每库生效值另走
+            # `GET /api/reading-thresholds?library_id=`（含覆写合并），不在这里算。
+            "reading": cfg.get("reading") or {},
         },
         "overrides": config.load_overrides(),
         "overridden": _flatten_overrides(config.load_overrides()),
@@ -5041,6 +5168,9 @@ def _ko_read_filter(payload: dict):
     """
     cond = (payload or {}).get("condition") or {}
     clauses = cond.get("allOf") or ([cond] if cond else [])
+    # 第 40 期：readStatus 的三档也走配置阈值。过滤函数是**逐本**调用的，所以解析器
+    # 在这里建一次、闭包捕获（见 komga_api.threshold_resolver）。
+    th = komga_api.threshold_resolver()
     tests = []
     for cl in clauses:
         if not isinstance(cl, dict):
@@ -5058,9 +5188,11 @@ def _ko_read_filter(payload: dict):
         if "readStatus" in cl:
             want = [str(s).upper() for s in ((cl["readStatus"] or {}).get("in") or [])]
             if want:
-                def _read(b, _w=want):
+                def _read(b, _w=want, _th=th):
                     pct = float((db.get_progress(b["id"]) or {}).get("percent") or 0)
-                    st = "READ" if pct >= 99.5 else ("IN_PROGRESS" if pct > 0 else "UNREAD")
+                    started, finished = komga_api.thresholds_of(_th, b)
+                    st = ("READ" if pct >= finished
+                          else ("IN_PROGRESS" if pct > started else "UNREAD"))
                     return st in _w
                 tests.append(_read)
         if "mediaStatus" in cl:
@@ -5252,7 +5384,9 @@ def _ko_series_page(page: int, size: int, sort: str, library_id: str = "") -> di
     """``library_id`` 为空 = 全部**可见**书库（与加参数前一致）。"""
     # 列表端点遍历**全部**系列 → 走轻量分层（不聚合），一次取全元数据行
     rows = db.all_series_meta()
-    items = [komga_api.series_dto(name, bs, series_meta.effective_light(name, rows.get(name) or {}))
+    th = komga_api.threshold_resolver()      # 第 40 期：一次解析、逐系列复用（见 komga_api）
+    items = [komga_api.series_dto(name, bs, series_meta.effective_light(name, rows.get(name) or {}),
+                                  th)
              for name, bs in _ko_grouped(library_id).items()]
     return komga_api.paginate(_ko_sorted(items, sort, "name"), page, size)
 
@@ -5281,7 +5415,8 @@ def ko_series_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZ
                      library_id: str = ""):
     _ko_guard(request)
     rows = db.all_series_meta()
-    items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}))
+    th = komga_api.threshold_resolver()
+    items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}), th)
              for n, bs in _ko_grouped(library_id).items()]
     return komga_api.paginate(_ko_sorted(items, "lastModifiedDate,desc"), page, size)
 
@@ -5294,7 +5429,8 @@ def ko_series_one(request: Request, series_id: str):
         _ko_404("系列不存在")
     name, items = found
     # 单系列查询：完整分层（含成员书聚合），成本可接受
-    return komga_api.series_dto(name, items, series_meta.effective(name))
+    return komga_api.series_dto(name, items, series_meta.effective(name),
+                                komga_api.threshold_resolver())
 
 
 @app.get("/api/v1/series/{series_id}/books")
@@ -5305,7 +5441,8 @@ def ko_series_books(request: Request, series_id: str, page: int = _KO_PAGE,
     if not found:
         _ko_404("系列不存在")
     name, items = found
-    dtos = [komga_api.book_dto(b, name) for b in items]
+    th = komga_api.threshold_resolver()
+    dtos = [komga_api.book_dto(b, name, th) for b in items]
     return komga_api.paginate(_ko_sorted(dtos, sort, "name"), page, size)
 
 
@@ -5326,7 +5463,8 @@ def ko_series_thumb(request: Request, series_id: str):
 # ---- 书籍（latest / ondeck 必须先于 {book_id}）----
 
 def _ko_books_dto(sort: str = "", library_id: str = "") -> list:
-    return _ko_sorted([komga_api.book_dto(b) for b in _ko_books(library_id)], sort, "name")
+    th = komga_api.threshold_resolver()      # 第 40 期：逐本构造 DTO，解析器必须只建一次
+    return _ko_sorted([komga_api.book_dto(b, th=th) for b in _ko_books(library_id)], sort, "name")
 
 
 @app.get("/api/v1/books")
@@ -5348,7 +5486,8 @@ def ko_books_list(request: Request, payload: dict = Body(None),
     flt = _ko_read_filter(payload)
     if flt:
         bs = [b for b in bs if flt(b)]
-    items = _ko_sorted([komga_api.book_dto(b) for b in bs], sort, "name")
+    th = komga_api.threshold_resolver()
+    items = _ko_sorted([komga_api.book_dto(b, th=th) for b in bs], sort, "name")
     return komga_api.paginate(items, page, size)
 
 
@@ -5364,14 +5503,18 @@ def ko_books_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE
 def ko_books_ondeck(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE):
     """待读：**系列里已有在读书**时，该系列的第一本未读书（Komga 的语义）。"""
     _ko_guard(request)
+    th = komga_api.threshold_resolver()
     out = []
     for name, items in _ko_grouped().items():
         pcts = [float((db.get_progress(b["id"]) or {}).get("percent") or 0) for b in items]
-        if not any(0 < p < 99.5 for p in pcts):
+        # 「在读」= 过了该书的开始阈值、且还没到它的读完阈值（第 40 期：口径随书所属库）
+        fin = [komga_api.thresholds_of(th, b)[1] for b in items]
+        sta = [komga_api.thresholds_of(th, b)[0] for b in items]
+        if not any(s < p < f for p, s, f in zip(pcts, sta, fin)):
             continue
-        nxt = next((b for b, p in zip(items, pcts) if p < 99.5), None)
+        nxt = next((b for b, p, f in zip(items, pcts, fin) if p < f), None)
         if nxt:
-            out.append(komga_api.book_dto(nxt, name))
+            out.append(komga_api.book_dto(nxt, name, th))
     return komga_api.paginate(out, page, size)
 
 
@@ -5405,7 +5548,7 @@ def ko_series_mark_unread(request: Request, series_id: str):
 def ko_book_one(request: Request, book_id: str):
     _ko_guard(request)
     b = _ko_book(book_id) or _ko_404("书不存在")
-    return komga_api.book_dto(b)
+    return komga_api.book_dto(b, th=komga_api.threshold_resolver())
 
 
 @app.get("/api/v1/books/{book_id}/thumbnail")
@@ -5584,7 +5727,8 @@ def ko_collection_series(request: Request, cid: int, page: int = _KO_PAGE,
     _ko_guard(request)
     _ko_collection_or_404(cid)
     rows = db.all_series_meta()
-    items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}))
+    th = komga_api.threshold_resolver()
+    items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}), th)
              for n, bs in _ko_collection_groups(cid).items()]
     return komga_api.paginate(_ko_sorted(items, "", "name"), page, size)
 
@@ -5729,7 +5873,8 @@ def ko_book_previous(request: Request, book_id: str):
     prev = _ko_sibling(b, -1)
     if not prev:
         _ko_404("没有上一本")
-    return komga_api.book_dto(prev, komga_api.series_name_of(prev))
+    return komga_api.book_dto(prev, komga_api.series_name_of(prev),
+                              komga_api.threshold_resolver())
 
 
 @app.get("/api/v1/books/{book_id}/next")
@@ -5739,7 +5884,8 @@ def ko_book_next(request: Request, book_id: str):
     nxt = _ko_sibling(b, 1)
     if not nxt:
         _ko_404("没有下一本")
-    return komga_api.book_dto(nxt, komga_api.series_name_of(nxt))
+    return komga_api.book_dto(nxt, komga_api.series_name_of(nxt),
+                              komga_api.threshold_resolver())
 
 
 @app.post("/api/v1/series/{series_id}/analyze")
@@ -5855,7 +6001,7 @@ async def convert(file: UploadFile = File(...), traditionalize: bool = Form(Fals
     out_dir = library_rules.target_root(src=src, name=_name, meta=opts.get("meta"),
                                         base_dir=INPUT_DIR)
     if out_dir is None:
-        raise HTTPException(400, library_rules.no_library_reason())
+        raise HTTPException(400, library_rules.no_library_reason(name=_name))
     data = await _read_capped(file, _upload_limit("max_bytes"))
     with open(src, "wb") as f:
         f.write(data)
@@ -5880,7 +6026,7 @@ async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)
     out_dir = library_rules.target_root(src=src, name=src.name, meta=opts.get("meta"),
                                         base_dir=INPUT_DIR)
     if out_dir is None:
-        raise HTTPException(400, library_rules.no_library_reason())
+        raise HTTPException(400, library_rules.no_library_reason(name=src.name))
     try:
         # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环
         action, result = await asyncio.to_thread(pipeline.dispatch, src, out_dir, opts)

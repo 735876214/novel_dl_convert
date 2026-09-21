@@ -309,16 +309,19 @@ def _fmt_exts(exts) -> str:
 def compat_reason(book: dict, dst_lib: dict) -> str:
     """这本书能不能进那个库：能则返回 ``""``，不能则返回一句给人看的理由。
 
-    判据**只有** :func:`library._exts_for_type` —— 库扫描白名单的唯一真值源，不新写
+    判据**只有** :func:`library.exts_for_library` —— 库扫描白名单的唯一真值源，不新写
     第二处相容表（写了就一定会跟扫描漂移，然后「预览说能搬、搬完扫不到」）。
+    ⚠️ 第 40 期起判据从 ``_exts_for_type(dst_type)`` 换成 ``exts_for_library(dst_lib)``：
+    白名单现在可以**逐库**收窄（新库向导），只看类型会放过「移进一个设过白名单、
+    恰好不收这个格式的库」—— 那正是本闸门要拦的事。仍是同一个模块的同一个判据，
+    不违反「不新写第二处相容表」。
     为什么不留「先搬过去试试」的口子：白名单决定扫描认不认这个文件，
     **不相容不是「半可见」，是根本不出现在那个库的书目里**（``library.books()`` 扫不到），
     它的行当场变成孤儿。所以这是数据完整性闸门，不是 UX 偏好 —— 后端必须自己再拦一次，
     不能只靠前端把按钮置灰。
     """
-    dst_type = str((dst_lib or {}).get("type") or "")
     label = str((dst_lib or {}).get("name") or "") or "目标库"
-    allowed = library._exts_for_type(dst_type)
+    allowed = library.exts_for_library(dst_lib)
     if publish.is_dir_entry(book):
         # 目录型条目（有声书一章一文件）只在白名单含音频扩展名时才被算作一本书
         # —— 与 ``library._iter_book_entries`` 的 ``allow_audio_dir`` 同一判据。

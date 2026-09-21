@@ -28,7 +28,9 @@ from .. import config
 from . import db, features, library
 
 #: 允许每库覆写的项：(键, 标签, 类型, 枚举选项, 说明)。
-#: 类型：``bool`` / ``enum`` / ``number`` / ``str`` / ``policy_map``（逐字段策略，按字段合并）。
+#: 类型：``bool`` / ``enum`` / ``number`` / ``str`` / ``percent`` / ``policy_map``（逐字段策略，按字段合并）。
+#: ⚠️ ``percent`` 与 ``number`` 是**两种类型**：``number`` 的合法区间是 0–1（如置信度阈值），
+#: ``percent`` 是 0–100（如阅读百分比）。混用会让「98%」被判成越界。
 ITEMS = (
     ("output.format", "转换产物格式", "enum", ("epub", "mobi", "azw3"),
      "派生 MOBI / AZW3 需要 Calibre，缺失时自动降级为 EPUB"),
@@ -57,6 +59,12 @@ ITEMS = (
      "关闭后该书库不出现在对外 OPDS 目录里，直连它的单库地址也返回 404"),
     ("komga.expose", "对 Komga 暴露", "bool", None,
      "关闭后该书库不出现在 Komga 客户端的书库列表里，它的系列 / 书籍 / 单本直连地址也一并 404"),
+    # 阅读状态口径（第 40 期）：全仓「在读 / 已读完」判定的唯一真值源。
+    # ⚠️ 改这两项会**同时**改变统计 / 成就 / 书架的判定 —— 它们不再各自硬编码。
+    ("reading.started_threshold", "在读下界", "percent", None,
+     "进度高于该值即算「在读」（0–100）。默认 0 = 任何一点进度都算在读"),
+    ("reading.finished_threshold", "已读完阈值", "percent", None,
+     "进度达到该值即算「已读完」（0–100）。它同时决定统计 / 成就 / 书架状态的判定"),
 )
 
 _ITEM_MAP = {spec[0]: spec for spec in ITEMS}
@@ -214,6 +222,40 @@ def config_for(library_id=None) -> dict:
     return cfg
 
 
+def _pct(raw, fallback: float) -> float:
+    """百分比归一：坏值 / 越界一律回落 ``fallback``（与 :func:`overrides` 同口径 ——
+    手改坏 config 一个字符不该把统计整页弄挂）。"""
+    try:
+        f = float(raw)
+    except (TypeError, ValueError):
+        return float(fallback)
+    return f if 0 <= f <= 100 else float(fallback)
+
+
+def reading_thresholds(library_id=None) -> tuple:
+    """某库**生效**的阅读阈值 ``(started, finished)``（0–100）—— 全局 + 每库覆写。
+
+    **全仓取阅读阈值的唯一入口**：后端消费者（``stats`` / ``komga_api`` / ``server`` /
+    ``achievements``）一律调它，前端经 ``GET /api/reading-thresholds`` 拿同一份。
+    ⚠️ 别在别处再硬编码 ``99.5`` / ``pct > 0`` —— 第 40 期正是把这些字面量收敛到此处，
+    否则会出现「统计里算已读完、书架上还是在读」两个真相源。
+    """
+    r = config_for(library_id).get("reading") or {}
+    return (_pct(r.get("started_threshold"), 0.0),
+            _pct(r.get("finished_threshold"), 99.5))
+
+
+#: 阅读阈值的两个键（第 40 期）—— 跨字段校验要用到。
+_READING_KEYS = ("reading.started_threshold", "reading.finished_threshold")
+
+
+def _reading_pair_from(ov: dict) -> tuple:
+    """给定一份**即将写入的**覆写 dict，算出生效阈值对（供跨字段校验用）。"""
+    g = config.load_config().get("reading") or {}
+    return (_pct(ov.get("reading.started_threshold", g.get("started_threshold")), 0.0),
+            _pct(ov.get("reading.finished_threshold", g.get("finished_threshold")), 99.5))
+
+
 # ---------------- 写 ----------------
 
 def _validate(key: str, raw):
@@ -237,6 +279,15 @@ def _validate(key: str, raw):
         if not 0 <= f <= 1:
             raise ValueError(f"{key} 必须在 0–1 之间")
         return round(f, 4)
+    if kind == "percent":
+        # 0–100（**不是** number 的 0–1）。留两位小数：向导滑杆最小步长是 0.05%。
+        try:
+            f = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} 需要数字") from None
+        if not 0 <= f <= 100:
+            raise ValueError(f"{key} 必须在 0–100 之间")
+        return round(f, 2)
     if kind == "policy_map":
         if not isinstance(raw, dict):
             raise ValueError(f"{key} 需要对象（字段 → 策略）")
@@ -292,6 +343,17 @@ def set_overrides(library_id, values: dict) -> dict:
                 ov.pop(key, None)
             continue
         ov[key] = _validate(key, raw)
+
+    # 跨字段校验：生效的「在读下界」必须 < 「已读完阈值」。
+    # ⚠️ 两处刻意的设计：① 按**合并后**的生效值判，不只看本次提交的键 —— 本次可能只改了
+    # 其中一项，另一项来自全局，只看提交项会放过「改完就自相矛盾」的组合；
+    # ② 只在**本次确实动了阅读阈值**时才判 —— 否则全局配置被手改坏之后，
+    # 改任何一个无关项（如 output.format）都会报一个莫名其妙的阅读阈值错误。
+    if any(k in values for k in _READING_KEYS):
+        started, finished = _reading_pair_from(ov)
+        if started >= finished:
+            raise ValueError(
+                f"「在读下界」必须小于「已读完阈值」（当前 {started}% / {finished}%）")
 
     db.update_library(lib.get("id"), settings=json.dumps(ov, ensure_ascii=False))
     return effective(lib.get("id"))

@@ -35,13 +35,52 @@ from urllib.parse import unquote
 
 from .. import config          # ⚠️ config 在上一级（novelforge/），不在 core/ 里
 from . import auth as auth_mod
-from . import db, library
+from . import db, lib_settings, library
 from .library import norm_key
 
 #: 库 id / 名字的**兜底**常量：多书库后真实值来自 ``libraries`` 表，
 #: 只在拿不到库实体时使用（例如库表为空的老部署）。
 LIBRARY_ID = "novelforge"
 LIBRARY_NAME = "NovelForge"
+
+
+def threshold_resolver():
+    """返回一个 **按库记忆化**的阅读阈值解析器：``lid -> (started, finished)``（第 40 期）。
+
+    **为什么不能直接调 `lib_settings.reading_thresholds`**：本模块的 DTO 是**逐本**
+    构造的（`_ko_books_dto` 一个书库就是几千次），而 `reading_thresholds` 每次都要
+    重读 config.yaml / settings.json 再做一次深拷贝 —— 逐本调用 = 每个请求几千次磁盘 I/O。
+
+    **为什么不做成模块级缓存**：阈值是用户随时可改的（设置页 / 每库覆写），
+    进程级缓存会让 Komga 客户端一直显示旧口径，且没有任何失效信号。
+    所以记忆化的作用域是**一次调用链**（每个端点自己建一个），改完立刻生效。
+
+    ``lid`` 传空 = 全局值（与 `lib_settings.reading_thresholds` 同口径）。
+    """
+    cache: dict = {}
+
+    def get(library_id) -> tuple:
+        key = str(library_id or "")
+        if key not in cache:
+            cache[key] = lib_settings.reading_thresholds(key or None)
+        return cache[key]
+
+    return get
+
+
+def thresholds_of(th, b) -> tuple:
+    """一本书的**生效**阈值：取它自己那个库的（``th`` 为 ``None`` 时回落全局）。
+
+    ⚠️ 与 ``series_dto`` 的 ``libraryId`` 字段**故意不同**：那个字段是「系列归属于哪个库」
+    的展示兜底（取系列第一本），而「读没读完」是**每本书自己的事**。逐本按各自库判，
+    系列级计数才与成员书的 ``readProgress.completed`` 自洽 —— 否则客户端会看到
+    ``booksReadCount`` 与列表里每本的完成状态打架。
+    """
+    if th is None:
+        return lib_settings.reading_thresholds(None)
+    return th(book_library_id(b))
+
+
 #: 会话 cookie（Komga 官方 Web 用这个；第三方 App 多数直接用 Basic）
 SESSION_COOKIE = "KOMGA-SESSION"
 #: 会话签名密钥：复用部署时已有的 AUTH_SECRET，不新增配置项
@@ -226,18 +265,27 @@ def find_series(name: str, library_id=None):
     return None
 
 
-def series_dto(name: str, items: list, meta: dict = None) -> dict:
+def series_dto(name: str, items: list, meta: dict = None, th=None) -> dict:
     """SeriesDto。读完/在读计数客户端会显示，所以要认真算（按 percent 判定）。
 
     ``meta`` 是**已解析好的**系列生效元数据（``series_meta.effective`` 或
     ``series_meta.effective_light``）。刻意由调用方传入、不在这里自己查库：
     列表端点会对**每个**系列调本函数，若在函数内做聚合（扫一遍成员书目），
     N 个系列就是 N 次全库扫描 —— 所以「用完整分层还是轻量分层」由调用方决定。
+
+    ``th`` = :func:`threshold_resolver` 的产物，同理由调用方建一次传进来
+    （逐系列自己解析会退化成逐系列读配置）。``None`` → 全局阈值。
     """
     meta = meta or {}
     progs = {b["id"]: (db.get_progress(b["id"]) or {}) for b in items}
-    read = sum(1 for p in progs.values() if float(p.get("percent") or 0) >= 99.5)
-    inprog = sum(1 for p in progs.values() if 0 < float(p.get("percent") or 0) < 99.5)
+    read = inprog = 0
+    for b in items:
+        pct = float((progs.get(b["id"]) or {}).get("percent") or 0)
+        started, finished = thresholds_of(th, b)
+        if pct >= finished:
+            read += 1
+        elif pct > started:
+            inprog += 1
     latest = max([b.get("mtime") or 0 for b in items] or [0])
     first = items[0] if items else {}
     return {
@@ -295,8 +343,11 @@ def collection_dto(cid, name: str, created, groups: dict) -> dict:
     }
 
 
-def book_dto(b: dict, series_name: str = "") -> dict:
-    """BookDto —— 客户端依赖最多的结构，字段名必须逐字对齐。"""
+def book_dto(b: dict, series_name: str = "", th=None) -> dict:
+    """BookDto —— 客户端依赖最多的结构，字段名必须逐字对齐。
+
+    ``th`` 见 :func:`threshold_resolver`：**列表端点务必传**，否则逐本解析配置。
+    """
     fmt = str(b.get("format") or "").upper()
     prog = db.get_progress(b["id"]) or {}
     pages = int(b.get("pages") or 0)
@@ -339,7 +390,7 @@ def book_dto(b: dict, series_name: str = "") -> dict:
             "isbn": str(b.get("isbn") or ""), "isbnLock": False,
             "links": [], "linksLock": False,
         },
-        "readProgress": read_progress_dto(b, prog),
+        "readProgress": read_progress_dto(b, prog, th),
         "deleted": False,
         "fileHash": "", "oneshot": False,
     }
@@ -383,13 +434,16 @@ def _is_paged(b: dict) -> bool:
     return str(b.get("format") or "").upper() in ("CBZ", "PDF")
 
 
-def read_progress_dto(b: dict, prog: dict) -> dict:
-    """本项目进度 → Komga 的 readProgress（客户端据此显示「读到第几页/百分之多少」）。"""
+def read_progress_dto(b: dict, prog: dict, th=None) -> dict:
+    """本项目进度 → Komga 的 readProgress（客户端据此显示「读到第几页/百分之多少」）。
+
+    ``completed`` 的判据是**配置阈值**（第 40 期，默认 99.5%），与统计 / 书架 / 成就同源。
+    """
     percent = float((prog or {}).get("percent") or 0)
     locator = int((prog or {}).get("locator") or 0)
     updated = (prog or {}).get("updated_at") or 0
     out = {
-        "completed": percent >= 99.5,
+        "completed": percent >= thresholds_of(th, b)[1],
         "readDate": iso(updated) if updated else None,
         "lastModified": iso(updated) if updated else None,
     }
@@ -470,7 +524,7 @@ def mark_series_read(items: list, completed: bool = True) -> int:
     否则它就等于「回到第一页」。未读则按既有 DELETE 路由的做法归零。
 
     返回写入条数。`series_dto` 的 booksReadCount / booksUnreadCount 是**每次实时算**的
-    （读完阈值 99.5，与 `read_progress_dto`、`_ko_read_filter` 三处同一口径），
+    （读完阈值走配置，第 40 期起可配；与 `read_progress_dto`、`_ko_read_filter` 同一口径），
     所以写完立即生效，不需要给 SeriesDto 加字段。
     """
     n = 0

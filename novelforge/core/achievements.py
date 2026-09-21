@@ -62,8 +62,11 @@ ACHIEVEMENTS: list = [
      "name": "阅读十小时", "desc": "累计阅读 10 小时"},
     {"key": "hours_100", "group": GROUP_READING, "metric": "hours", "target": 100,
      "name": "阅读一百小时", "desc": "累计阅读 100 小时"},
+    # ⚠️ 文案里**不写死百分比**（第 40 期起阈值可配，见 core/lib_settings.reading_thresholds）：
+    # 写死就会出现「说明书说 99.5%、实际按用户设的值判」的自相矛盾。
+    # 判定本身走 `_metrics()["finished"]` → `stats.overview()`，与统计 / 书架同源。
     {"key": "finished_1", "group": GROUP_READING, "metric": "finished", "target": 1,
-     "name": "读完第一本", "desc": "读完第一本书（进度 ≥ 99.5%）"},
+     "name": "读完第一本", "desc": "读完第一本书（进度达到「已读完阈值」）"},
     {"key": "finished_10", "group": GROUP_READING, "metric": "finished", "target": 10,
      "name": "读完十本", "desc": "读完 10 本书"},
     {"key": "streak_3", "group": GROUP_READING, "metric": "streak", "target": 3,

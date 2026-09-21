@@ -2,6 +2,16 @@
 
 优先级从「显式」到「推测」，越靠前越不该被后面的规则推翻：
 
+0. **前置闸门：收了必须看得见**（第 40 期）—— 库的**生效扫描白名单**收不了的格式，
+   三条规则都不算它（见 :func:`_accepts`）。这不是一条「优先级」，而是所有规则共同的
+   **候选条件**：路由到一个扫不到它的库＝**隐形文件**（文件落盘了、书目里却没有），
+   比直接拒收更糟 —— 用户看得见失败，看不见消失。
+
+   ⚠️ 这条**也管第 1 条**（来源子目录）。第 40 期明确改过这个语义：以前把 ``.epub``
+   放进一个 ``type=comic`` 的库的来源目录，系统会照办并让文件消失（`test_library_rules`
+   曾把这个行为断言为「显式摆放意图高于格式推断」）。**显式意图能让系统「不猜」，
+   但不能让系统「装作收下了」** —— 现在改为拒收，并用 :func:`no_library_reason`
+   说清「是格式不匹配」而不是「规则不命中」。
 1. **来源子文件夹名** —— 文件放在 ``LIBRARY_SOURCE_DIR/<子目录>/``（或监听目录的子目录）
    里，且子目录名等于某库的 ``source_subdir`` 或库名 → 直接用那个库。
    这是用户最明确的意图表达，不猜。
@@ -39,6 +49,26 @@ def _type_of_name(name: str) -> str:
     if ext in _audio.AUDIO_EXTS:
         return "audiobook"
     return ""
+
+
+def _accepts(lib: dict, filename: str) -> bool:
+    """这个库**收了也看得见**吗 —— 判据是该库的生效扫描白名单（第 40 期）。
+
+    路由到一个扫不到它的库 = **隐形文件**：文件落盘了、书目里却找不到。这比
+    **直接拒收更糟** —— 用户看得见失败（日志 + 失败计数），看不见消失。所以候选
+    过滤里就把它排掉，让 :func:`decide` 返回 ``None`` 走既有拒收路径。
+
+    ⚠️ 库的 ``allowed_exts`` 收窄之后才可能撞上，但**这不是本期引入的新问题**：
+    白名单按**类型**推导时就已存在（``type=ebook`` 的库把 ``source_subdir``
+    指向漫画目录，投进去的 ``.cbz`` 当场隐形）。本条只是把这条路封死。
+
+    容错：判不了就**放行** —— 这是旁路增强，不该把入库主流程打崩（判错了顶多
+    退回改造前的行为，而不是把一个本来能入库的文件拒掉）。
+    """
+    try:
+        return library.accepts_ext(lib, filename)
+    except Exception:                       # noqa: BLE001
+        return True
 
 
 def rules_of(lib: dict) -> dict:
@@ -81,27 +111,31 @@ def _subdir_of(src, base) -> str:
     return rel.parts[0] if len(rel.parts) > 1 else ""
 
 
-def _by_subdir(sub: str) -> "dict | None":
+def _by_subdir(sub: str, filename: str = "") -> "dict | None":
     """按来源子目录名匹配库：先比 ``source_subdir``，再宽容地比库名。"""
     if not sub:
         return None
     key = _norm(sub)
     libs = library.libraries()
     for l in libs:
-        if _norm(l.get("source_subdir")) == key:
+        if _norm(l.get("source_subdir")) == key and _accepts(l, filename):
             return l
     for l in libs:
-        if _norm(l.get("name")) == key:
+        if _norm(l.get("name")) == key and _accepts(l, filename):
             return l
     return None
 
 
 def _by_format(name: str) -> "dict | None":
-    """按格式匹配：优先**类型专用**库，其次 ``mixed``（含默认库）。"""
+    """按格式匹配：优先**类型专用**库，其次 ``mixed``（含默认库）。
+
+    候选**先按生效白名单过滤**（第 40 期）：库收窄过格式之后，「类型对得上」不再
+    等于「扫得到」—— 不过滤就会把 ``.pdf`` 送进一个只收 ``.epub`` 的 ebook 库。
+    """
     t = _type_of_name(name)
     if not t:
         return None
-    libs = library.libraries()
+    libs = [l for l in library.libraries() if _accepts(l, name)]
     exact = [l for l in libs if str(l.get("type") or "") == t]
     if len(exact) == 1:
         return exact[0]
@@ -123,10 +157,12 @@ def _haystack(src, name: str, meta: dict = None) -> str:
     return _norm(" ".join(bits))
 
 
-def _by_keywords(text: str) -> "dict | None":
+def _by_keywords(text: str, filename: str = "") -> "dict | None":
     if not text:
         return None
     for l in library.libraries():
+        if not _accepts(l, filename):
+            continue
         for kw in rules_of(l)["keywords"]:
             if _norm(kw) in text:
                 return l
@@ -139,6 +175,10 @@ def decide(src=None, name: str = "", meta: dict = None, base_dir=None) -> "dict 
     ``None`` 有两种成因，调用方看到的处理完全一样（拒收）：书库表为空，
     或者这个文件谁家的规则都不命中。判据就是「库的 ``rules`` 是不是路由表」——
     路由表不命中就不猜，见 :func:`resolve_target`。
+
+    ⚠️ 第 40 期起多了一条**候选过滤**：库的生效扫描白名单收不了这个格式的，
+    直接不算候选（见 :func:`_accepts`）—— 路由到一个「收了也看不见」的库会造出
+    **隐形文件**（文件落盘了、书目里没有），比拒收更糟。三条规则都用它。
     """
     filename = name or pathlib.PurePosixPath(str(src or "")).name
     if not filename:
@@ -146,7 +186,7 @@ def decide(src=None, name: str = "", meta: dict = None, base_dir=None) -> "dict 
 
     # 1) 来源子文件夹名（显式意图）
     for base in (base_dir, config.LIBRARY_SOURCE_DIR):
-        hit = _by_subdir(_subdir_of(src, base))
+        hit = _by_subdir(_subdir_of(src, base), filename)
         if hit:
             return hit
 
@@ -156,7 +196,7 @@ def decide(src=None, name: str = "", meta: dict = None, base_dir=None) -> "dict 
         return hit
 
     # 3) 元数据 / 文件名关键词（最容易误判，最后才用）
-    hit = _by_keywords(_haystack(src, filename, meta))
+    hit = _by_keywords(_haystack(src, filename, meta), filename)
     if hit:
         return hit
 
@@ -296,13 +336,25 @@ def target_root(src=None, name: str = "", meta: dict = None,
     return resolve_target(src=src, name=name, meta=meta, base_dir=base_dir)["root"]
 
 
-def no_library_reason(libs=None) -> str:
-    """拒收时给人看的原因：库表为空和「规则不命中」要分开说，否则用户不知道去改哪儿。"""
+def no_library_reason(libs=None, name: str = "") -> str:
+    """拒收时给人看的原因。**三种成因分开说**，否则用户不知道该去改哪儿：
+
+    ① 一个书库都没有；② 有库但规则都不命中；③ **规则命中了，但那个库的
+    「允许的格式」收不了它**（第 40 期新增，见 :func:`_accepts`）。
+
+    ⚠️ ③ 尤其不能并进 ② —— 那是**假话**：用户明明把文件放进了对的来源目录，
+    却被告知「规则不命中」，于是他去改规则，而真正该改的是那个库的允许格式。
+    """
     try:
-        n = len(library.libraries() if libs is None else libs)
-    except Exception:
-        n = 0
-    if not n:
+        all_libs = list(library.libraries() if libs is None else libs)
+    except Exception:                       # noqa: BLE001
+        all_libs = []
+    if not all_libs:
         return "还没有书库：请先到「工具 → 书库管理」新建一个书库并指定它的来源目录"
+    if name and not any(_accepts(l, name) for l in all_libs):
+        ext = pathlib.PurePosixPath(str(name)).suffix.lower()
+        return (f"没有收得了「{name}」的书库：现有书库的「允许的格式」里都没有 "
+                f"{ext or '（无扩展名的文件）'}。到「书库管理」编辑对应书库的格式清单"
+                "把它加进去，或换一个受支持的格式")
     return ("没有可接收这个文件的书库：现有书库的来源子目录 / 格式 / 关键词规则都不命中。"
             "把它放进某个库的来源子目录，或到书库管理给该库补一条规则")
