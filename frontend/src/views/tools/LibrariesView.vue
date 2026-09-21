@@ -565,7 +565,6 @@ async function remove(l: LibraryEntity): Promise<void> {
       >
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-[12.5px] font-medium text-foreground">{{ l.name }}</span>
-          <Badge v-if="l.is_default">默认</Badge>
           <Badge v-if="l.publish_path" tone="ok">刮削出版</Badge>
           <div class="ml-auto flex shrink-0 gap-1">
             <Button size="sm" variant="ghost" @click="toggleSettings(l.id)">
@@ -576,7 +575,6 @@ async function remove(l: LibraryEntity): Promise<void> {
             </Button>
             <Button size="sm" variant="ghost" @click="openEdit(l)">编辑</Button>
             <Button
-              v-if="!l.is_default"
               size="sm"
               variant="ghost"
               :disabled="!!busy"

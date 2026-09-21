@@ -6,10 +6,14 @@ import type { BookCard } from './api'
  * 规则口径必须与后端校验一致（server.py 的 SCOPE_FIELDS / SCOPE_OPS），改动要两边同步。
  */
 
-/** 规则字段。文本类用 contains 族，format/status 只支持 equals，stars/year 数值比较 */
+/** 规则字段。文本类用 contains 族，format/status 只支持 equals，其余数值比较 */
 export type ScopeField =
   | 'title' | 'author' | 'series' | 'publisher' | 'language'
   | 'tag' | 'format' | 'status' | 'stars' | 'year'
+  /** 批注数（`at_least 1` 即「有批注」） */
+  | 'annotations'
+  /** 入库天数（距今天数，`at_most 30` 即「最近 30 天入库」）；口径 = 条目 mtime，与仪表盘的「最近添加」一致 */
+  | 'added'
 
 export type ScopeOp = 'contains' | 'not_contains' | 'equals' | 'at_least' | 'at_most'
 
@@ -40,6 +44,8 @@ export const FIELD_OPS: Record<ScopeField, ScopeOp[]> = {
   status: ['equals'],
   stars: ['at_least', 'at_most'],
   year: ['at_least', 'at_most'],
+  annotations: ['at_least', 'at_most'],
+  added: ['at_least', 'at_most'],
 }
 
 export const FIELD_LABELS: Record<ScopeField, string> = {
@@ -53,6 +59,8 @@ export const FIELD_LABELS: Record<ScopeField, string> = {
   status: '阅读状态',
   stars: '评分',
   year: '出版年',
+  annotations: '批注数',
+  added: '入库天数',
 }
 
 export const OP_LABELS: Record<ScopeOp, string> = {
@@ -109,6 +117,16 @@ function ruleHit(b: BookCard, r: ScopeRule): boolean {
       const y = Number(String(b.year ?? '').replace(/\D/g, ''))
       if (!y) return false // 没标年份的书不参与年份比较，别被 0 归到「至多」
       return r.op === 'at_most' ? y <= Number(v) : y >= Number(v)
+    }
+    case 'annotations': {
+      const n = Number(b.annotation_count ?? 0)
+      return r.op === 'at_most' ? n <= Number(v) : n >= Number(v)
+    }
+    case 'added': {
+      const t = Number(b.mtime ?? 0)
+      if (!t) return false // 没有 mtime 的条目不参与「库里放了多少天」的比较
+      const days = (Date.now() / 1000 - t) / 86400
+      return r.op === 'at_most' ? days <= Number(v) : days >= Number(v)
     }
     default:
       return true

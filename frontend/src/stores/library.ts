@@ -65,7 +65,7 @@ export const useLibraryStore = defineStore('library', () => {
   /** **当前库**的书目（`currentLibraryId` 为空 = 全部，不裁剪） */
   const scopedBooks = computed(() =>
     currentLibraryId.value
-      ? books.value.filter((b) => (b.library_id || 'default') === currentLibraryId.value)
+      ? books.value.filter((b) => (b.library_id || '') === currentLibraryId.value)
       : books.value,
   )
 
@@ -91,19 +91,6 @@ export const useLibraryStore = defineStore('library', () => {
     })
     return seen
   })
-
-  /** 智能书架：侧栏标签 → 筛选键 */
-  const SMART_KEYS: Record<string, string> = {
-    '最近添加': 'recent',
-    '未读': 'unread',
-    '在读': 'reading',
-    '已完成': 'finished',
-    '有批注': 'annotated',
-  }
-
-  function smartKeyOf(label: string): string {
-    return SMART_KEYS[label] ?? ''
-  }
 
   /** 按阅读状态筛书（真实状态优先，无状态行的书按进度兜底推导）。**限定在当前库内**。 */
   function smartBooks(key: string): BookCard[] {
@@ -139,13 +126,6 @@ export const useLibraryStore = defineStore('library', () => {
   }
 
   const isSmart = computed(() => Boolean(smartKey.value))
-
-  /** 侧栏「智能书架」计数：label → 数量 */
-  const smartCounts = computed<Record<string, number>>(() => {
-    const out: Record<string, number> = {}
-    for (const label of Object.keys(SMART_KEYS)) out[label] = smartBooks(SMART_KEYS[label]).length
-    return out
-  })
 
   /** 按**分面键**筛书（格式 / 待修复 / 无封面）。限定在当前库内。 */
   function facetBooks(key: string): BookCard[] {
@@ -312,8 +292,6 @@ export const useLibraryStore = defineStore('library', () => {
     shelfBooks,
     continueReading,
     isSmart,
-    smartCounts,
-    smartKeyOf,
     smartBooks,
     loadBooks,
     loadLibraries,

@@ -154,18 +154,15 @@ const groups = computed(() =>
       }
     }
     if (g.title === '智能书架') {
+      // **只有用户手建的**（smart_scopes 表）；第 37 期起不再预置那 5 条内置书架
       return {
         ...g,
-        items: [
-          ...g.items.map((it) => ({ ...it, count: library.smartCounts[it.label] ?? 0 })),
-          // 自定义智能书架：smart_scopes 表里的规则书架
-          ...library.scopes.map((s) => ({
-            id: `scope:${s.id}`,
-            label: s.name,
-            icon: 'search',
-            count: library.scopeCounts[`scope:${s.id}`] ?? 0,
-          })),
-        ],
+        items: library.scopes.map((s) => ({
+          id: `scope:${s.id}`,
+          label: s.name,
+          icon: 'search',
+          count: library.scopeCounts[`scope:${s.id}`] ?? 0,
+        })),
       }
     }
     return g
@@ -211,11 +208,6 @@ function onItemClick(groupTitle: string | null, item: NavItem): void {
   if (item.id.startsWith('lib:')) {
     // 切库 + 进书架（`lib:` 后为空 = 全部书库）；能力清单随库类型变化
     void library.openLibraryById(item.id.slice(4), item.label)
-    router.push('/shelf')
-    return
-  }
-  if (groupTitle === '智能书架') {
-    library.openSmart(item.label, library.smartKeyOf(item.label))
     router.push('/shelf')
     return
   }

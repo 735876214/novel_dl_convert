@@ -1,10 +1,17 @@
 /**
  * 侧栏三组导航条目的静态骨架（库 / 智能书架 / 收藏夹）。
  *
- * 计数一律不写死在数据里：
- *   · 智能书架 —— 由 stores/library.ts 按真实阅读状态（进度 / 批注数）计算。
- *   · 收藏夹   —— 由后端 SQLite 提供（见 stores/collections.ts）。
- *   · 库       —— 暂无真实分类数据源，只保留入口、不显示计数（避免假数字）。
+ * **三组都不预置任何条目**（第 37 期口径）：全新部署时侧栏这三组是空的，
+ * 建什么、叫什么名字，全部由用户手动新增。所以这里的 `LIBRARIES` /
+ * `SMART_SHELVES` / `COLLECTIONS` 一律是空骨架，条目分别由：
+ *   · 库       —— 后端 `/api/libraries`（用户建的库实体）；
+ *   · 智能书架 —— 后端 `/api/smart-scopes`（用户建的规则书架）；
+ *   · 收藏夹   —— 后端 `/api/collections`。
+ * 计数也一律不写死在数据里，用后端回来的真实数字。
+ *
+ * ⚠️ 以前「智能书架」这组硬编码过 5 条（最近添加 / 未读 / 在读 / 已完成 / 有批注），
+ * 现在它们不再是默认项 —— 想重建请到「智能书架」页用规则自己建，规则字段已补上
+ * `批注数` 与 `入库天数`（见 lib/smartScope.ts），够重建这 5 条。
  */
 
 export interface NavEntry {
@@ -15,17 +22,11 @@ export interface NavEntry {
   count?: number
 }
 
-/** 书库（侧栏「库」组）：条目由后端按格式/元数据真实聚合，这里仅保留空占位 */
+/** 书库（侧栏「库」组）：整组由侧栏用后端库实体覆盖，这里只留空骨架 */
 export const LIBRARIES: NavEntry[] = []
 
-/** 智能书架：标签与 store 的筛选键一一对应（见 SMART_KEYS） */
-export const SMART_SHELVES: NavEntry[] = [
-  { id: 'ss-recent', label: '最近添加', icon: 'sparkle' },
-  { id: 'ss-unread', label: '未读', icon: 'sparkle' },
-  { id: 'ss-reading', label: '在读', icon: 'sparkle' },
-  { id: 'ss-done', label: '已完成', icon: 'sparkle' },
-  { id: 'ss-annotated', label: '有批注', icon: 'sparkle' },
-]
+/** 智能书架：**不预置**任何书架，条目全部来自后端 smart_scopes（用户手建） */
+export const SMART_SHELVES: NavEntry[] = []
 
-/** 收藏夹：条目来自后端 SQLite，这里仅保留空占位（侧栏会用真实数据覆盖） */
+/** 收藏夹：**不预置**任何收藏夹，条目全部来自后端 collections（用户手建） */
 export const COLLECTIONS: NavEntry[] = []

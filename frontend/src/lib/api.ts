@@ -1659,8 +1659,6 @@ export interface LibraryEntity {
   book_count: number
   exists: boolean
   writable: boolean
-  /** 默认书库（承接未归类的书）不可删除 */
-  is_default: boolean
   last_scan_at: number
   last_scan_note: string
 }
