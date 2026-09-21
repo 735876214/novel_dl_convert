@@ -906,6 +906,22 @@ def delete_collection(cid: int):
         c.commit()
 
 
+def collection_map() -> dict:
+    """一次取回「书 → 所属收藏夹 id 列表」：``{book_id: [cid, ...]}``。
+
+    给书目列表批量附带归属用（第 34 期的实体浏览页要按「收藏」维度分组）。
+    ⚠️ **必须批量**：逐本调 :func:`collections_of_book` 会在书目列表热路径上
+    产生 N 次查询，而这份数据一条 SQL 就能拿全。
+    """
+    rows = _connect().execute(
+        "SELECT book_id, collection_id FROM collection_items"
+    ).fetchall()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(r["book_id"], []).append(int(r["collection_id"]))
+    return out
+
+
 def collection_book_ids(cid: int) -> list:
     c = _connect()
     rows = c.execute(

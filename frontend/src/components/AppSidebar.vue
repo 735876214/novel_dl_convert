@@ -25,6 +25,7 @@ const PATH_BY_ID: Record<string, string> = {
   tasks: '/tasks',
   // 「工具」是唯一入口，8 个工具在工具页内用标签栏切换
   tools: '/tools',
+  browse: '/browse',
   series: '/series',
   authors: '/authors',
   annotations: '/annotations',
@@ -49,6 +50,7 @@ const PATH_TO_ID: Array<[string, string]> = [
   ['/tasks', 'tasks'],
   // 前缀匹配：/tools 覆盖全部 8 个工具子路径，故任意标签下「工具」项都保持高亮
   ['/tools', 'tools'],
+  ['/browse', 'browse'],
   ['/series', 'series'],
   ['/authors', 'authors'],
   ['/annotations', 'annotations'],

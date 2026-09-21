@@ -958,6 +958,7 @@ def api_books():
     annos = db.annotation_counts()
     ratings = db.all_ratings()
     statuses = db.all_statuses()
+    colls = db.collection_map()
     items = []
     for b in library.books():
         p = prog.get(b["id"])
@@ -975,6 +976,9 @@ def api_books():
             "status": st["status"] if st else None,
             "started_at": (st or {}).get("started_at") or 0,
             "finished_at": (st or {}).get("finished_at") or 0,
+            # 所属收藏夹 id（第 34 期）：实体浏览页按「收藏」维度分组要用；
+            # 一次批量取（**不逐本查**），不在任何夹里就是空数组。
+            "collection_ids": colls.get(b["id"], []),
         })
     return {"items": items, "total": len(items)}
 

@@ -18,6 +18,7 @@ import ReadingLogView from '@/views/ReadingLogView.vue'
 import DashboardView from '@/views/DashboardView.vue'
 import DocumentationView from '@/views/DocumentationView.vue'
 import ExploreView from '@/views/ExploreView.vue'
+import BrowseView from '@/views/BrowseView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 import LibrariesView from '@/views/tools/LibrariesView.vue'
 import SettingsLayout from '@/views/settings/SettingsLayout.vue'
@@ -167,6 +168,10 @@ const router = createRouter({
     { path: '/series/:name', name: 'series-detail', component: SeriesDetailView },
     { path: '/authors', name: 'authors', component: AuthorsView },
     { path: '/authors/:name', name: 'author-detail', component: AuthorDetailView },
+    // 实体总览（第 34 期）：按元数据维度浏览**本地**书目。
+    // ⚠️ 与 /explore「探索发现」是两件事 —— 那个是外部书源检索（POST /api/search），
+    //    路径与名字都要分开，别合并。
+    { path: '/browse', name: 'browse', component: BrowseView },
     { path: '/annotations', name: 'annotations', component: AnnotationsView },
     { path: '/collections', name: 'collections', component: CollectionsView },
     { path: '/collections/:id', name: 'collection-detail', component: CollectionDetailView },

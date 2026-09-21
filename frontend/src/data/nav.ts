@@ -67,6 +67,9 @@ export const NAV_GROUPS: NavGroup[] = [
     title: '浏览',
     collapsible: true,
     items: [
+      // 「实体总览」= 按元数据维度浏览本地书目（第 34 期）。
+      // ⚠️ 名字避开本组标题「浏览」，也避开 `/explore`「探索发现」（那是外部书源检索）。
+      { id: 'browse', label: '实体总览', icon: 'shelf' },
       // 三项的计数都来自 /api/browse-counts，**与各自目标页同源**：
       // 侧栏写「作者 3」而作者页列出 12 位就是在说假话（见 core/browse_counts.py）。
       { id: 'authors', label: '作者', icon: 'users', countSource: 'browse' },

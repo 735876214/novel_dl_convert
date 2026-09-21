@@ -549,6 +549,8 @@ export interface BookCard {
   updated_at?: number
   /** 批注数量 */
   annotation_count?: number
+  /** 所属收藏夹 id 列表（由 /api/books 附加；不在任何夹里 = 空数组） */
+  collection_ids?: number[]
   /** 评分 1–5；**0 = 未评分**（未评分不用 0 星表示，见 core/db.py 的说明） */
   stars?: number
   /** 页数——**估算值**：EPUB 没有固定页数概念，见 core/library._pages_in */

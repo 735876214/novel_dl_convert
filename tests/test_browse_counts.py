@@ -155,3 +155,31 @@ def test_批注计数只算活跃(isolated):  # noqa: ARG001
     db.delete_annotation(bid, dropped)
 
     assert db.annotation_counts()[bid] == 1, "软删的批注被算进了侧栏计数"
+
+
+# ---------------------------------------------------------------------------
+# 实体总览的「收藏」维度要靠 /api/books 附带的归属（第 34 期）
+# ---------------------------------------------------------------------------
+
+def test_书目列表批量附带收藏夹归属(client, auth_headers, default_root):
+    """「收藏」维度不能逐本查归属 —— 所以书目列表要一次带上 `collection_ids`。
+
+    ⚠️ 断言里必须有一本「在两个夹里」的书：只测单夹的话，把 `collection_ids`
+    写成「首个命中的夹」也能通过。
+    """
+    a = _book(default_root, "甲.epub")
+    b = _book(default_root, "乙.epub")
+    one = client.post("/api/collections", json={"name": "夹一"}, headers=auth_headers).json()["id"]
+    two = client.post("/api/collections", json={"name": "夹二"}, headers=auth_headers).json()["id"]
+    for cid in (one, two):
+        r = client.post(f"/api/collections/{cid}/books", json={"book_id": a}, headers=auth_headers)
+        assert r.status_code == 200, r.text
+    assert client.post(f"/api/collections/{one}/books", json={"book_id": b},
+                       headers=auth_headers).status_code == 200
+
+    owned = {x["id"]: sorted(x["collection_ids"]) for x in
+             client.get("/api/books", headers=auth_headers).json()["items"]}
+    assert owned[a] == sorted([one, two]), "一本书在多个夹里时归属要全给"
+    assert owned[b] == [one]
+    # 与逐本查的既有接口口径一致（不许出现「列表说在、详情说不在」）
+    assert db.collections_of_book(a) == owned[a]
