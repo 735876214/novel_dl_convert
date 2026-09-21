@@ -1565,8 +1565,15 @@ def unlock_achievement(key) -> bool:
 #    所以如果把同一个文件放回 OUTPUT_DIR，进度与批注会**重新关联上**。
 #    也就是说：清理掉的是「可能还有用」的数据，因此必须由用户显式确认。
 
+# ⚠️ **第 36 期补齐**：``meta_override`` / ``meta_online`` / ``meta_cover`` 也一直不在这里。
+#    书被删（文件没了）之后，这三张表的行同样「界面上再也走不到却一直占着库」——
+#    ``meta_cover`` 存的是封面 BLOB，占的正是大头。判据与上面一致：**凡含 book_id 的表
+#    都该可清理、可被告知**（``tests/test_remap_tables.py`` 的契约测试钉住搬迁那一半）。
+#    刻意**不含** ``scrape_items``：它是出版物台账，行被删等于把「磁盘上可能还留着一个
+#    副本」这件事静默遗忘（刮削流程自己的对账/待确认负责它的生死），不归孤儿清理管。
 ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
-                 "book_custom_values", "collection_items", "reading_sessions")
+                 "book_custom_values", "collection_items", "reading_sessions",
+                 "meta_override", "meta_online", "meta_cover")
 
 
 def book_id_refs() -> dict:
@@ -1616,21 +1623,48 @@ def delete_orphans(orphans: dict) -> dict:
 #: 需要跟着 book_id 迁移的表（与 ORPHAN_TABLES 相比多出 ratings / reading_status /
 #: koreader_docs：ratings / reading_status 在删书时会主动清理，但改名时同样必须跟着走；
 #: koreader_docs 是 KOReader 进度映射，id 换了必须一起搬，否则 KOReader 关联全断）。
+#:
+#: ⚠️ **第 36 期补齐**：``meta_override`` / ``meta_online`` / ``meta_cover`` 一直漏在这里。
+#: 它们同样按 book_id 存，而换库（库前缀变）与改名 / 加卷号（basename 变）都会换 id ⇒
+#: 移动或改名之后，用户的元数据编辑、在线抓取值、封面缓存**静默失联** —— 读点全按新 id
+#: 查，查不到不抛异常、不回滚，只是无声回落成抓取值或文件原值（无痕的数据丢失）。
+#: 判据由契约测试钉住（``tests/test_remap_tables.py``）：**凡含 book_id 列的表，必须
+#: 出现在本清单或 :data:`REMAP_EXPLICIT_TABLES` 里**。
 REMAP_TABLES = (
     "progress", "annotations", "bookmarks", "meta_locks", "book_custom_values",
     "collection_items", "reading_sessions", "ratings", "reading_status", "koreader_docs",
+    "meta_override", "meta_online", "meta_cover",
 )
 
-#: 目标 id 上**已有数据**时也**不整表跳过**的表：它们的行是「标记」而不是「值」。
-#: 其余表跳过是因为「搬过去会张冠李戴」（把旧书的内容盖到同名新书上）；而锁只意味着
-#: 「这个字段别让抓取动」—— 张冠李戴的代价仅是少更新一个字段，反过来漏搬却会让用户
-#: 显式设过的锁无声消失。所以这类表**逐行合并**（同一 field 冲突时保留目标行）。
-REMAP_MERGE_TABLES = ("meta_locks",)
+#: **不走通用搬迁**、改用自己那套函数的含 book_id 表（契约测试同样要认它们）。
+#: 目前只有 ``scrape_items``：它除了 ``book_id`` 还有 ``library_id`` / ``source_rel`` /
+#: ``link_rel`` 三个**库相关**列要一起改（换库改全部，改名只改 ``source_rel``），
+#: 而通用搬迁不该知道出版物语义 ⇒ 走 :func:`scrape_remap_item`，由移动与改名两条路径共用。
+REMAP_EXPLICIT_TABLES = ("scrape_items",)
+
+#: 目标 id 上**已有数据**时也**不整表跳过**的表：逐行搬，只对**同一字段**取舍。
+#: 这几张表的 PK 都是 ``(book_id, field)`` ⇒ 搬迁的粒度本就是**字段**，目标上某个字段
+#: 已有行，不该让这本书**其余字段**统统搁浅（整表跳过一次丢全部）。冲突一律
+#: **保留目标行**（从不覆盖新 id 上已有的值 —— 「宁可少搬，不可错搬」）：
+#:
+#: - ``meta_locks``：两行语义相同（都是「这个字段别让抓取动」），留着目标行即可；
+#:   反过来漏搬会让用户显式设过的锁无声消失。
+#: - ``meta_override`` / ``meta_online``：行是**值**，但 ``new`` 上的行只可能来自一本
+#:   已消失的书（``remap_book_id`` 的调用方都在「该 id 的槽位空着」时才搬），覆盖它没有
+#:   收益却可能顶掉别人；代价是同字段冲突时牺牲旧 id 那一行（见 :func:`_remap_merge_fields`）。
+REMAP_MERGE_TABLES = ("meta_locks", "meta_override", "meta_online")
 
 # ⚠️ `book_custom_values` 的 `PRIMARY KEY(book_id, key)` 与书签同形，但**不需要**逐行搬：
 #    书签要逐行是因为它的探测过滤了 `deleted_at=0`（墓碑行不算「已有数据」），
 #    于是整体 UPDATE 会撞上墓碑；而值表**没有软删除** ⇒ 探测即精确判据 ——
 #    探测说「目标没有数据」，就真的没有行可撞。多写一段逐行逻辑只会是死代码。
+#    ⚠️ 但「不逐行」并非没有代价：目标上只要有一个**别的** key，整张表就被跳过，
+#    旧书的**其余** key 会一起搁浅。meta_override / meta_online 与它同为
+#    `(book_id, 字段)` 形，本期**选择付那份代码代价**（见 REMAP_MERGE_TABLES）——
+#    理由是元数据编辑是用户显式改过的痕迹，丢一条比留一条陈旧值更糟。
+#    两处口径不一致是**已知的**（第 35 期定的是这里注释的这条），
+#    要统一就把本表也加进 REMAP_MERGE_TABLES，并把 `_remap_merge_fields` 的列名
+#    从写死的 `field` 参数化（本表列名是 `key`）—— 本期不动它（不在移动的关键路径上）。
 
 #: 「新 id 是否已有数据」这个探测要**按表**加过滤：annotations 第 27 期起有软删除、
 #: bookmarks 第 34 期起同样有（两者都是「删除=移入垃圾桶」），
@@ -1663,26 +1697,32 @@ def _remap_bookmarks(c, old: str, new: str) -> int:
     return moved
 
 
-def _remap_meta_locks(c, old: str, new: str) -> int:
-    """字段锁的搬迁：逐行做，**同 field 冲突时保留目标行**。
+def _remap_merge_fields(c, t: str, old: str, new: str) -> int:
+    """``PRIMARY KEY(book_id, field)`` 的表逐行搬，**同 field 冲突时保留目标行**。
 
-    与 :func:`_remap_bookmarks` 同一个理由（``PRIMARY KEY(book_id, field)`` 会让整体
-    UPDATE 撞主键、异常被外层 ``except`` 吞成「搬 0 行」⇒ 用户的锁静默消失）；
-    但冲突取舍相反：书签那一行是**内容**（旧 id 的更完整，让目标让位），
-    锁只是**标记**（两行语义相同，留着目标行即可）。
+    为什么必须逐行：整体 ``UPDATE`` 撞主键会抛异常、被 :func:`remap_book_id` 的
+    ``except`` 吞成「搬 0 行」—— 用户显式设过的东西**无声消失**（第 34 期书签同一个坑）。
+
+    为什么连整表跳过也一并豁免（见 :data:`REMAP_MERGE_TABLES`）：这些表的搬迁粒度本就
+    是**字段**，目标上某个字段已有行不该让这本书**其余字段**统统搁浅。
+
+    冲突取舍与 :func:`_remap_bookmarks` 相反：书签那一行是**内容**（旧 id 的更完整，
+    让目标让位），这几张表的目标行则**原样留存**、把旧 id 那一行删掉。
+
+    ⚠️ 表名一律取自 :data:`REMAP_TABLES` 常量，**不拼接外部输入**。
     """
     moved = 0
-    rows = c.execute("SELECT field FROM meta_locks WHERE book_id=?", (old,)).fetchall()
+    rows = c.execute("SELECT field FROM %s WHERE book_id=?" % t, (old,)).fetchall()
     for row in rows:
         f = row["field"]
         clash = c.execute(
-            "SELECT 1 FROM meta_locks WHERE book_id=? AND field=?", (new, f)
+            "SELECT 1 FROM %s WHERE book_id=? AND field=?" % t, (new, f)
         ).fetchone()
         if clash:
-            c.execute("DELETE FROM meta_locks WHERE book_id=? AND field=?", (old, f))
+            c.execute("DELETE FROM %s WHERE book_id=? AND field=?" % t, (old, f))
             continue
         cur = c.execute(
-            "UPDATE meta_locks SET book_id=? WHERE book_id=? AND field=?", (new, old, f)
+            "UPDATE %s SET book_id=? WHERE book_id=? AND field=?" % t, (new, old, f)
         )
         moved += int(cur.rowcount or 0)
     return moved
@@ -1695,8 +1735,13 @@ def remap_book_id(old_id, new_id) -> dict:
     一本书的历史（用户先删旧文件、又放了同名新文件），覆盖会张冠李戴 ——
     宁可少搬，不可错搬。两处例外：
     **bookmarks**（见 :func:`_remap_bookmarks`）有唯一索引，整体 UPDATE 会直接抛异常
-    被吞掉，只能逐行搬；**meta_locks**（见 :func:`_remap_meta_locks` 与
-    :data:`REMAP_MERGE_TABLES`）存的是标记而非值，连跳过探测也一并豁免。
+    被吞掉，只能逐行搬；**合并型表**（见 :data:`REMAP_MERGE_TABLES` 与
+    :func:`_remap_merge_fields`：meta_locks / meta_override / meta_online）逐行搬、
+    只对**同一字段**取舍，连跳过探测也一并豁免（目标上某个字段有行不该让其余字段搁浅）。
+
+    ``scrape_items``（见 :func:`scrape_remap_item`）**刻意不在这里**：它在 book_id 之外
+    还有 ``library_id`` / ``source_rel`` / ``link_rel`` 三个库相关列要一起改，
+    而通用搬迁不该知道出版物语义。
     """
     old, new = str(old_id), str(new_id)
     if not old or not new or old == new:
@@ -1706,9 +1751,10 @@ def remap_book_id(old_id, new_id) -> dict:
     with _lock:
         for t in REMAP_TABLES:
             try:
-                # 「标记型」表**不做整表跳过探测**：目标上已有别的锁不该让旧书的锁丢掉
+                # 「合并型」表**不做整表跳过探测**：目标上已有别的字段，
+                # 不该让旧书其余字段的编辑丢掉
                 if t in REMAP_MERGE_TABLES:
-                    moved[t] = _remap_meta_locks(c, old, new)
+                    moved[t] = _remap_merge_fields(c, t, old, new)
                     continue
                 exists = c.execute(
                     "SELECT 1 FROM %s WHERE book_id=?%s LIMIT 1"
@@ -2966,6 +3012,49 @@ def scrape_get(book_id) -> "dict | None":
         "SELECT * FROM scrape_items WHERE book_id=?", (str(book_id),)
     ).fetchone()
     return dict(row) if row else None
+
+
+def scrape_remap_item(old_id, new_id, **fields) -> int:
+    """把出版物台账从 ``old_id`` 改挂到 ``new_id``，并顺带改写库相关列。返回搬动行数。
+
+    为什么不进 :func:`remap_book_id`：台账在 ``book_id`` 之外还有 ``library_id`` /
+    ``source_rel`` / ``link_rel`` 三个**库相关**列 —— 换库时「在哪个库、源相对哪个库根、
+    副本在哪个成品目录」全变，改名时至少 ``source_rel`` 变。通用搬迁只改 book_id，
+    让它顺手改这三列等于把出版物语义塞进一个只认 id 的函数。所以走这里，
+    由**移动**与**改名**两条路径共用（见 :data:`REMAP_EXPLICIT_TABLES`）。
+
+    行为约定：
+
+    - **没有台账行就什么都不做**（返回 0）：不造假行 —— 书可能压根没经过刮削。
+    - ``old_id == new_id`` 时是「**只改列**」：只换了目录（层级整理）时 id 并不变，
+      但 ``source_rel`` 变了，台账不能还指着一条已经不在的路径。
+    - 目标 id 上**已有台账行则不搬**（返回 0），且**两边都不动**：那行可能正挂着
+      「副本被删、待用户确认」（``status='removed'``），静默顶掉等于把待办藏起来；
+      旧行也原样留着 —— 它仍如实描述着原库那份副本，而目标库下一轮入库/刮削
+      会按书重建台账（自愈），不需要在这里替用户删。
+    - 列过滤沿用 :data:`_SCRAPE_COLS` 同一道白名单（拼 SQL 前过滤，不认任意键）。
+    - ``status`` **不由本函数转运**：状态机只由检测逻辑降级、或用户显式动作回升
+      （见 :data:`SCRAPE_STATUSES`）。这里只负责把「这行属于哪本书、在哪」改对。
+    """
+    old, new = str(old_id), str(new_id)
+    if not old or not new:
+        return 0
+    cols = {k: v for k, v in (fields or {}).items() if k in _SCRAPE_COLS}
+    cols["updated_at"] = time.time()
+    c = _connect()
+    with _lock:
+        if not c.execute("SELECT 1 FROM scrape_items WHERE book_id=?", (old,)).fetchone():
+            return 0
+        if new != old and c.execute(
+                "SELECT 1 FROM scrape_items WHERE book_id=?", (new,)).fetchone():
+            return 0
+        cur = c.execute(
+            "UPDATE scrape_items SET book_id=?, %s WHERE book_id=?"
+            % ", ".join(f"{k}=?" for k in cols),
+            [new, *cols.values(), old],
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
 
 
 def scrape_list(library_id=None, status=None, limit=0) -> list:

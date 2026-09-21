@@ -232,8 +232,8 @@ def test_改名时同字段冲突保留目标锁(isolated):  # noqa: ARG001
 
 
 def test_改名时目标已有别的锁也不跳过(isolated):  # noqa: ARG001
-    """「标记型」表刻意豁免整表跳过探测（见 `REMAP_MERGE_TABLES`）：
-    目标上别的锁不该让旧书的锁丢掉。"""
+    """「合并型」表刻意豁免整表跳过探测（见 `REMAP_MERGE_TABLES`）：
+    目标上别的字段有行不该让旧书这个字段的行丢掉。"""
     old, new = "lib$oldbook", "lib$newbook"
     db.set_lock(old, "author")
     db.set_lock(new, "title")            # 目标已有**另一个**字段的锁

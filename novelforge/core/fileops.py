@@ -704,6 +704,9 @@ def apply_komga_layout(items: list) -> dict:
         if old_id != new_id:
             db.remap_book_id(old_id, new_id)
             remapped += 1
+        # 出版物台账跟着走：这里**无论 id 变没变都要调** —— 加卷号改 basename（id 变），
+        # 只挪进系列目录则 id 不变、但 source_rel 变了（见 db.scrape_remap_item）。
+        db.scrape_remap_item(old_id, new_id, source_rel=new)
         moved.append({"old": old, "new": new})
         activity_log.log(activity_log.ACTION_LAYOUT, old, activity_log.STATUS_OK,
                          output=new, source="api")
@@ -819,6 +822,8 @@ def apply_conflict_rename(items: list) -> dict:
                              detail=str(e), source="api")
             continue
         db.remap_book_id(old_id, new_id)
+        # 台账里的 source_rel 也指着刚才那条路径（同上：改名路径每条都改了 basename）
+        db.scrape_remap_item(old_id, new_id, source_rel=new)
         remapped += 1
         renamed.append({"old": old, "new": new, "library_id": lib_id})
         activity_log.log(activity_log.ACTION_RENAME, old, activity_log.STATUS_OK,

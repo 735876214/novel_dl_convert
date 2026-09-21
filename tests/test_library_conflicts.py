@@ -151,6 +151,13 @@ def test_conflicts_api_lists_intra_library_and_apply_moves_progress(
 
     same_id = library.book_id("三体.epub", a)    # 两本共用这一行（撞车）
     db.set_progress(same_id, 7, 33.0)
+    # 第 36 期：这条路径（以及布局整理）此前只搬 REMAP_TABLES 里那几张表，
+    # 用户改过的元数据 / 封面 / 出版物台账会**静默断链**（读点按新 id 查不到，
+    # 不报错、只是回落成文件原值）—— 一并钉住。
+    db.set_override(same_id, "title", "用户改过的书名")
+    db.set_cover(same_id, b"\xff\xd8cover")
+    db.scrape_set(same_id, library_id=a, source_rel="三体.epub", status="ok",
+                  link_rel="三体.epub")
 
     r = client.get("/api/library-conflicts", headers=auth_headers)
     assert r.status_code == 200, r.text
@@ -170,6 +177,13 @@ def test_conflicts_api_lists_intra_library_and_apply_moves_progress(
     new_id = library.book_id(item["suggest"], a)
     assert db.get_progress(new_id)["locator"] == 7, "进度跟着新 id 走"
     assert db.get_progress(same_id) is None, "旧 id 上不残留数据"
+    assert db.get_overrides(new_id)["title"] == "用户改过的书名", "用户改过的元数据跟着走"
+    assert db.get_cover(new_id)[0] == b"\xff\xd8cover", "封面缓存跟着走"
+    led = db.scrape_get(new_id)
+    assert led is not None and led["source_rel"] == item["suggest"], \
+        "台账改挂新 id，且 source_rel 指向改名后的真实路径"
+    assert led["status"] == "ok", "搬迁不改状态"
+    assert db.scrape_get(same_id) is None, "旧 id 上不残留台账行"
 
 
 def test_apply_conflict_rename_rejects_bad_targets(
