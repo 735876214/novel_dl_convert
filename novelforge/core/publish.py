@@ -67,7 +67,7 @@ def _tree_files(root) -> list:
     return sorted(out)
 
 
-def _is_dir_entry(book) -> bool:
+def is_dir_entry(book) -> bool:
     """目录型条目（有声书一章一文件）判定：**条目名不带书库认识的扩展名**。
 
     目录型条目的 ``name`` 是目录名（``书名`` / ``系列/书名``），没有扩展名；单文件条目
@@ -102,7 +102,7 @@ def relpath_for(book: dict, cfg: dict = None) -> str:
     让磁盘上的目录名变脏。口径与入库侧（``pipeline`` / ``watcher``）完全一致。
     """
     name = str(book.get("name") or "")
-    is_dir = _is_dir_entry(book)
+    is_dir = is_dir_entry(book)
     if is_dir:
         # 目录名里的「点」不是扩展名（``书.名`` 是一本书，不是 ``.名`` 格式）——
         # 真去猜哪个点是扩展名只会更常猜错
@@ -321,7 +321,7 @@ def rel_verdict(pdir: pathlib.Path, rel: str, src=None, prev_rel: str = "") -> s
     return REL_DECLINE
 
 
-def _free_rel(pdir: pathlib.Path, rel: str) -> str:
+def free_rel(pdir: pathlib.Path, rel: str) -> str:
     """目标已被**非本系统生成**的文件占用时，找一个不冲突的新名字。
 
     绝不静默覆盖用户自己的文件 —— 成品目录是给人看的普通目录，用户完全可能往
@@ -368,7 +368,7 @@ def publish(book: dict, *, cfg: dict = None, updates: dict = None, cover=None,
             out["skipped"] = True
             out["error"] = "源既不是普通文件也不是目录"
             return out
-        if is_dir != _is_dir_entry(book):
+        if is_dir != is_dir_entry(book):
             # 名字算得出扩展名、磁盘上却是目录（如 ``书.epub`` 里装音轨）：命名规则与
             # 落盘形态会各说各话。与其产出一个名字算错的书，不如**明确跳过**让人看见。
             out["skipped"] = True
@@ -385,7 +385,7 @@ def publish(book: dict, *, cfg: dict = None, updates: dict = None, cover=None,
             # 上次我们自己产的副本（复制模式，或源换过 inode）→ 移入回收后重建
             recycle(dst, why="重建副本")
         elif verdict == REL_DECLINE:
-            rel = _free_rel(pdir, rel)
+            rel = free_rel(pdir, rel)
             dst = pdir / rel
 
         if not dst.exists():
