@@ -856,7 +856,7 @@ tooltip 标注样本数。
 **② 第二例 = 未复现，机制如下（不改测试逻辑，如实记录）**：该用例 `assert st["total"] == 1`
 （`test_scrape_publish.py:442`）断言的是**全局**队列，而
 
-- `total` = `sum(db.scrape_counts().values())`（`server.py:3024`）= **`scrape_items` 表全表行数**；
+- `total` = `sum(db.scrape_counts().values())`（`server.py:3050`）= **`scrape_items` 表全表行数**；
 - `_quiesce_background` 收尾走 `scrape.stop(timeout=2.0)`（`conftest.py:98`）—— **超时后线程仍在**；
 - `isolated` 会 `db.close()` + `db.init()` 换一套空库，但**残留线程下次取连接拿到的是新库**。
 
@@ -876,7 +876,7 @@ tooltip 标注样本数。
 测试）。第 33 期共跑 4 轮全量，**全部 0 failed**。
 
 **⑤ 端到端对照实验**：接口级测试**覆盖不到**这条路径 —— 测试里 `AUTO_WATCH=false`（`conftest.py:57`）
-⇒ watcher 不跑 ⇒ `/api/libraries/{lid}/scan` 里 `WATCHER.is_running()`（`server.py:2846`）为假
+⇒ watcher 不跑 ⇒ `/api/libraries/{lid}/scan` 里 `WATCHER.is_running()`（`server.py:2872`）为假
 ⇒ 走不到音频目录的摄入分支。故另起独立实例（**8796 端口** + 独立临时根 + `AUTO_WATCH=true`）做对照，
 **唯一的变量就是那一行**：
 
@@ -1154,6 +1154,105 @@ T3 接口 8 例 + 小轨固定版式 12 例等）。新增用例**全部做过�
 印证 §四那条纪律「改动落在锚点密集的文件上时，顺手把该文件相关锚点重核一遍」。
 另：本期属「只改代码不新增能力键 / 设置页」的相位，`tests/test_settings_nav_contract.py` 的
 48 与 `tests/test_features.py` 的 18 两处契约断言**未动**。
+
+---
+
+#### 第 37 期实施记录（书库 / 智能书架 / 收藏夹一律**不设默认**）
+
+**主题**：用户拍板的口径 —— **全新部署时这三组都是空的，建什么、叫什么全部手工新增**。
+这不是「清一下种子数据」，而是拆掉一条贯穿全仓的隐含前提：此前 `libraries` 表为空时，
+产品会**合成一个 `DEFAULT_LIBRARY_ID` 的假库**（root = `OUTPUT_DIR`）兜底，于是
+「书库表为空」这个状态在代码里**根本不存在**，而它现在成了默认状态。
+
+四条口径由用户逐项拍板（AskUserQuestion）：
+
+| 争点 | 拍板 |
+| --- | --- |
+| 书库「默认」这个概念 | **彻底去掉** —— 不播种、不合成、去掉「默认」徽章与删除守卫；`default` 退化成一条**普通可删**的库 |
+| 一个库都没有时投递 `input/` | **拒收**，提示先建库 |
+| 有库但规则全不命中 | **也不收，如实报错**（库的 `rules` 就是路由表，路由表不命中就不猜） |
+| 智能书架的 5 条内置 | **删掉，但补 `added` + `annotations` 两个规则字段**，保证能手搓重建 |
+
+- **内核**（`core/library.py` / `core/library_rules.py`）：删掉 `DEFAULT_LIBRARY_ID` /
+  `default_library()` / `ensure_default_library()` / 无人调用的 `resolve()`；`libraries()`
+  改为**老老实实返回真实行**（空表 = 空列表），`get_library("")` 一律 `None`。归库判定的
+  最后一档从「回退默认库」改成 **`None` = 拒收**，新增 `no_library_reason()` 把
+  「一个库都没有」与「规则不命中」**分开说话**（不说清，用户不知道该去建库还是改规则）。
+  `guard_conflict` 也跟着改：落点不属于任何已登记库时**放行给上游拒收**，而不是拿空 id 去查撞名。
+- **摄入链路**（`server.py` / `core/watcher.py`）：上传 / `/convert` / `/convert-path` /
+  下载任务都改成**先解析目标、拿不到就 400 拒收**（且都在**写文件之前**判断）；
+  watcher 的 `handle_file` 拒收时**原文件留在原地**，如实记一次带原因的失败。
+  ⚠️ 由此牵出一个必须配套的东西：拒收也走**失败计数**，到 `max_retries` 就永久跳过 ——
+  于是「建库 → 文件自己进来」这条链条本来是断的。补 `FolderWatcher.forget_failures()`，
+  由新的 `server._libraries_changed()`（= `library.invalidate()` + `forget_failures()`）在
+  书库**增 / 删 / 改**三处统一调用。**必须是「删条目」而不是「把 failed 清零」** ——
+  扫描侧把 `failed == 0` 当成「已成功处理过」，清零等于**再也不会被扫**，与意图正好相反
+  （这一点是写测试时被一条真失败打出来的，见下方 A）。
+- **孤儿清理的第二道判据**（`server._orphan_refs()`）：不能再拿「书目列表为空」当
+  「所有记录都成了孤儿」。`book_id` 形如 `库$哈希`，**库已不存在的行不算孤儿** ——
+  否则「移除全部书库 → 点清理孤儿」就是一次不可恢复的进度 / 批注大清洗。
+  扫描口径与清理口径**同源**（`_orphans()` 与 `api_orphans_clear` 都调 `_orphan_refs()`），
+  不做两份判据。没有 `$` 的旧 id（第 17 期库维度化之前）无法归属任何库，按老口径处理。
+- **前端**：`data/collections.ts` 三个骨架数组清空（`LIBRARIES` / `SMART_SHELVES` /
+  `COLLECTIONS`），侧栏改吃各自的空态文案（「尚无智能书架」/「尚无收藏」，两者本就存在）；
+  `stores/library.ts` 删掉 `SMART_KEYS` / `smartKeyOf()` / `smartCounts` 这套**内置键盘**
+  （仪表盘仍在用的 `smartBooks()` 保留）；`LibrariesView.vue` 去掉「默认」徽章与移除按钮上的
+  `v-if`；`api.ts` 的 `LibraryEntity` 去掉 `is_default`。
+- **规则字段补齐**（`server.SCOPE_FIELDS` / `SCOPE_OPS` ↔ `lib/smartScope.ts` 的
+  `FIELD_OPS` / `FIELD_LABELS`）：新增 **`annotations`（批注数）** 与 **`added`（入库天数，
+  值 = 距今天数，取 `mtime`）**，两者都是 `至少 / 至多`。没有它们，「有批注」「最近添加」
+  这两条内置书架删掉后**造不回来** —— 那才是真的能力净损失。
+
+**与计划的「有意偏离」**：无。四条口径都是用户拍板后**逐条照做**，没有中途改判。
+
+**A. 单测**：全量 **619 例 / 0 failed**（第 36 期基线 595 ⇒ 本期 **+24**）。新增用例分布：
+`test_no_defaults_contract.py`（10 例，纯文本 / 常量契约）、`test_smart_scopes.py`（9 例，
+这组接口**此前一个测试都没有**）、本文件相关 5 例（孤儿放过 / 原因文案 / 空表 / 拒收 / 建库后自动收走）。
+两处补做的**改前 FAIL / 改后 PASS**：
+① 临时摘掉 `_orphan_refs()` 里的 `and str(i).split("$", 1)[0] in lib_ids` ⇒
+`test_库被移除登记后它的书不算孤儿` 当场断言失败（`assert 1 == 0`），文件随后按字节还原；
+② 临时让 `_libraries_changed()` 不调 `forget_failures()` ⇒ `test_建库后被拒收过的文件会自动重新收走`
+失败（`scanned: 0`）。该用例刻意把 `max_retries` 设成 1：第一轮就触顶，
+**再扫一轮本来就不会重试**，成败只取决于建库时有没有清计数 —— 否则漏掉钩子也会因
+「还没到上限、本来就会重试」而误过。
+顺带记一笔：**先写的 `forget_failures()` 是错的**（清零而非删条目），正是这条测试把它打出来的。
+
+**B. 端到端（真实实例，非 TestClient，8796 + `/tmp/nf-test37`）**：全新根启动 ⇒
+`libraries` / `smart-scopes` / `collections` **三处都是空列表**；投 `.epub` 进 `input/` 再 `/api/scan` ⇒
+`failed` 里原文带着「没有可接收的书库：还没有书库：请先到「工具 → 书库管理」新建一个书库并指定它的来源目录」，
+**文件留在原地、导出目录为空**；`/convert` ⇒ **400** 且是同一句话；随后建一条 `ebook` 库 ⇒
+**原先被拒收的文件自己进了新库的根**（这正是 `forget_failures` 的端到端证据）；
+`/api/libraries` 的 DTO 里**没有 `is_default`**，书目 id 带上了库前缀。
+
+**C. 浏览器冒烟（`playwright-cli` + chromium，实例 8796 / `/tmp/nf-test37`）**：
+
+| 点的是什么 | 实测结论 |
+| --- | --- |
+| 首次进入（已登录） | 侧栏「库」组 1 条真实库 + 「全部书库」；**「智能书架」组 = 「尚无智能书架」**、**「收藏夹」组 = 「尚无收藏」** |
+| 工具 → 书库管理 | `1 / 1`、「电子书库」；按钮组 **设置 / 扫描 / 编辑 / 移除** 四件齐（第 37 期前默认库只有三件、且挂「默认」徽章）；「来源父目录」是真实路径 |
+| 智能书架 → 新建 | 字段下拉里 **「批注数」「入库天数」在列**；选「批注数」后算子自动切成 **至少 / 至多**（字段-算子耦合生效）；值填 `1` ⇒ 预览 **命中 0 本**（这本书确实没有批注） |
+| 保存「有批注」 | 列表出现「全部 · 批注数 至少 11 / 0 本」—— 值 `11` 是**冒烟工具的车祸**（见下方坑 1），不是产品行为；删掉后重来 |
+| 手搓「最近添加」= 入库天数 **至多 30** | 预览 **命中 1 本**（今天入库）→ 保存 → 侧栏「智能书架」组**出现「最近添加」、计数 1** → 点进书架「**最近添加 · 共 1 本**」 |
+
+**从浏览器里捞出来的一件工具坑（不是产品缺陷）**：`playwright-cli fill <ref> <text>` **不会触发 Vue 的
+`v-model`** —— DOM 里 value 有了、组件状态仍是空，表现为「输入框明明填了，`保存` 一直 disabled、
+实时预览毫无反应」。改用 `type` / `press`（走真实按键事件）立刻正常。第一轮那个 `11` 就是
+`fill "1"` 与 `type "1"` 叠加的结果。⚠️ 记一笔给下次冒烟的人：**这个仓的前端一律用 `type`，别用 `fill`。**
+
+**D. 文档**：`bookorbit-capability-gap.md`（SMART SCOPES 行改判「固定 5 个已下线」并补两个新字段的去处；
+COLLECTIONS 行改成「本组从不预置」+ 实测锚点；另修 3 处漂移行号 `notifications/read` `4429→4486`、
+`GET /api/logs` `4377→4433`、`EDITABLE` `3786→3819`、`/api/maintenance` `3890-3893→4103-4106`、
+`_upload_limit` `323-334→326-335` 及用法 `339/5612→342/5859`）、
+`roadmap-gaps-remaining.md`（`total` 口径 `3024→3050`、`WATCHER.is_running()` `2846→2872`；本节）。
+**锚点核验**：`tests/check_doc_anchors.py` ⇒ 硬错 **0** / 疑似漂移 **0**（收尾修掉 5 处，
+全部落在本期自己动过的 `server.py` 上）。本期同样**不动** `tests/test_settings_nav_contract.py` 的
+48 与 `tests/test_features.py` 的 18 两处契约断言（未新增能力键 / 设置页）。
+
+**E. 已知后果（有意为之，不是遗漏）**：按用户拍板的「rules 就是路由表」语义，
+往全局 `input/` 投一个 `.txt` / `.epub` **不再必然被收** —— 只有当某条库的规则命中它
+（例如存在一条格式相符的库）时才落地，否则拒收并在失败清单里说明原因。
+这是「不猜一个库」的直接代价，配套的 `forget_failures()` 保证用户照着提示建完库之后，
+**原先投过的文件会自己进来**，不必重投。
 
 ---
 
