@@ -8,7 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex } from '@/data/annotationColors'
-import { api, type Annotation, type BookDetail } from '@/lib/api'
+import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark } from '@/lib/api'
 import {
   READER_FONTS,
   READER_MODES,
@@ -21,6 +21,8 @@ import {
 } from '@/lib/readerPrefs'
 import { customFontValue, readerFontStack } from '@/lib/fonts'
 import { useFontsStore } from '@/stores/fonts'
+import { useLibraryStore } from '@/stores/library'
+import { useUiStore } from '@/stores/ui'
 
 /**
  * 在线阅读器（Batch 2）。
@@ -70,6 +72,9 @@ watch(prefs, (v) => saveReaderPrefs(v), { deep: true })
 // 否则「上次选的自定义字体」会先回落内置字体、字体加载完再跳变。
 const fonts = useFontsStore()
 void fonts.load()
+
+const library = useLibraryStore()
+const ui = useUiStore()
 
 // ---------------- 翻页模式 ----------------
 // 定高 + CSS 多栏：每栏高度 = 容器高，栏宽 = 一屏宽 / 栏数；翻页 = 按「一屏」横向位移。
@@ -448,6 +453,168 @@ async function jumpTo(a: Annotation): Promise<void> {
   el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
 }
 
+// ---------------- 书签（第 34 期）----------------
+// 与批注**同构**的软删除（删除 = 移入垃圾桶 → 可恢复 → 可彻底删除），
+// 但书签另有两处只属于它的性质，都是服务端口径，前端照用即可：
+//   · **位置去重**：位置锚 = 「章序号 + 章内归一化位置」，同一位置反复点也只有一条；
+//   · **可跳回**：点列表项按锚里的章内位置落回原处（批注靠 quote 重新包 span，书签靠坐标）。
+// 锚的小数位固定 —— 否则同一处会因浮点尾数差异算出两个不同的锚，去重就失效了。
+const ANCHOR_PRECISION = 4
+
+const bookmarks = ref<Bookmark[]>([])
+const bookmarkTrash = ref<Bookmark[]>([])
+const panelTab = ref<'notes' | 'bookmarks'>('notes')
+const bookmarkView = ref<'active' | 'trashed'>('active')
+const bookmarkDraft = ref('')
+
+/** 书签是文字阅读器的能力（漫画 / 有声书没有这个入口）—— 与后端能力矩阵同判据 */
+const canBookmark = computed(() => library.hasFeature('bookmarks'))
+
+/** 当前阅读位置的锚（与 `saveProgress` 用的是同一套坐标：章序号 + 章内比例） */
+const currentAnchor = computed(
+  () => `${currentIndex.value}:${local.value.toFixed(ANCHOR_PRECISION)}`,
+)
+
+/** 当前位置已有的书签：有 ⇒ 工具条图标变实心，再点就是移入垃圾桶 */
+const bookmarkHere = computed(() => bookmarks.value.find((b) => b.anchor === currentAnchor.value))
+
+const bookmarkList = computed(() =>
+  bookmarkView.value === 'trashed' ? bookmarkTrash.value : bookmarks.value,
+)
+
+function anchorChapter(anchor: string): number {
+  return Number(String(anchor).split(':')[0])
+}
+
+function anchorFraction(anchor: string): number {
+  const f = Number(String(anchor).split(':')[1])
+  return Number.isFinite(f) ? Math.min(1, Math.max(0, f)) : 0
+}
+
+function bookmarkPlace(b: Bookmark): string {
+  return titleOf(anchorChapter(b.anchor))
+}
+
+async function reloadBookmarks(): Promise<void> {
+  try {
+    const r = await api.listBookmarks(bookId.value, true)
+    bookmarks.value = r.items
+    bookmarkTrash.value = r.trashed ?? []
+  } catch {
+    /* 离线或未登录时保持现状 */
+  }
+}
+
+/** 备注输入框跟随「当前位置那条书签」：
+ *   · 走到一条已有书签上 → 填入它的备注（好改）；
+ *   · 离开它 → 清空（否则会把上一条的备注顺手贴到新位置的书签上）。
+ * 只在**书签身份变化**时动手 —— 每次重载都会换对象引用，不加这道判据就会边滚动边丢草稿。 */
+let syncedBookmarkId = 0
+watch(bookmarkHere, (b) => {
+  const id = b?.id ?? 0
+  if (!id) {
+    if (syncedBookmarkId) {
+      syncedBookmarkId = 0
+      bookmarkDraft.value = ''
+    }
+    return
+  }
+  if (id !== syncedBookmarkId) {
+    syncedBookmarkId = id
+    bookmarkDraft.value = b?.label ?? ''
+  }
+})
+
+/** 加书签 / 保存备注（同位置已有则是改备注，走 PATCH 的并发合并口径） */
+async function submitBookmark(): Promise<void> {
+  const here = bookmarkHere.value
+  const label = bookmarkDraft.value.trim()
+  try {
+    if (here) {
+      if (label === here.label) return
+      const r = await api.updateBookmark(bookId.value, here.id, {
+        label,
+        updated_at: here.updated_at,
+      })
+      // `applied=false` ⇒ 这条书签在别处刚被改过：服务端胜，界面跟着取最新版本
+      if (r.applied === false && r.server) {
+        const srv = r.server
+        bookmarks.value = bookmarks.value.map((x) => (x.id === srv.id ? srv : x))
+        ui.toast('这条书签在别处刚改过，已采用较新的版本')
+      } else {
+        ui.toast('备注已保存')
+      }
+    } else {
+      const r = await api.addBookmark(bookId.value, {
+        anchor: currentAnchor.value,
+        chapter: currentIndex.value,
+        percent: overallPercent.value,
+        label,
+      })
+      ui.toast(r.revived ? '已恢复该位置的书签' : r.created ? '已加入书签' : '该位置已有书签')
+    }
+    bookmarkDraft.value = ''
+  } catch (e) {
+    ui.toast(apiErrorMessage(e, '书签操作失败'))
+    return
+  }
+  await reloadBookmarks()
+}
+
+/** 工具条上的快捷开关：当前位置有 ⇒ 移入垃圾桶；没有 ⇒ 加一个（备注留空） */
+async function toggleBookmark(): Promise<void> {
+  const here = bookmarkHere.value
+  if (!here) {
+    await submitBookmark()
+    return
+  }
+  try {
+    await api.deleteBookmark(bookId.value, here.id)
+    ui.toast('书签已移入垃圾桶')
+  } catch (e) {
+    ui.toast(apiErrorMessage(e, '移入垃圾桶失败'))
+    return
+  }
+  await reloadBookmarks()
+}
+
+async function jumpToBookmark(b: Bookmark): Promise<void> {
+  const p = flat.value.findIndex((f) => f.index === anchorChapter(b.anchor))
+  if (p < 0) return
+  await loadChapter(p, anchorFraction(b.anchor))
+}
+
+function onBookmarkClick(b: Bookmark): void {
+  if (bookmarkView.value === 'active') void jumpToBookmark(b)
+}
+
+async function trashBookmark(b: Bookmark): Promise<void> {
+  try {
+    await api.deleteBookmark(bookId.value, b.id)
+  } catch {
+    /* ignore */
+  }
+  await reloadBookmarks()
+}
+
+async function restoreBookmark(b: Bookmark): Promise<void> {
+  try {
+    await api.restoreBookmark(bookId.value, b.id)
+  } catch {
+    /* ignore */
+  }
+  await reloadBookmarks()
+}
+
+async function purgeBookmark(b: Bookmark): Promise<void> {
+  try {
+    await api.purgeBookmark(bookId.value, b.id)
+  } catch {
+    /* ignore */
+  }
+  await reloadBookmarks()
+}
+
 // ---------------- 批注导出 ----------------
 
 function exportMarkdown(): void {
@@ -538,7 +705,14 @@ onMounted(async () => {
     return
   }
   try {
-    annotations.value = (await api.listAnnotations(bookId.value)).items
+    // 批注与书签一次取回（书签连垃圾桶一起 —— 两个档共用一份数据，切档不必再打请求）
+    const [annos, bms] = await Promise.all([
+      api.listAnnotations(bookId.value),
+      api.listBookmarks(bookId.value, true),
+    ])
+    annotations.value = annos.items
+    bookmarks.value = bms.items
+    bookmarkTrash.value = bms.trashed ?? []
   } catch {
     /* ignore */
   }
@@ -752,6 +926,22 @@ onBeforeUnmount(() => {
           <Icon name="layers" class="h-4 w-4" />
         </Button>
 
+        <Button
+          v-if="canBookmark"
+          size="sm"
+          variant="ghost"
+          :title="bookmarkHere ? '移除当前位置的书签' : '在当前位置加书签'"
+          @click="toggleBookmark"
+        >
+          <!-- 已加书签时给 svg 上加 fill：path 是闭合形状，实心/描边一眼可辨 -->
+          <Icon
+            name="bookmark"
+            class="h-4 w-4"
+            :class="bookmarkHere ? 'text-primary' : ''"
+            :style="bookmarkHere ? { fill: 'currentColor' } : undefined"
+          />
+        </Button>
+
         <Button size="sm" variant="ghost" title="笔记" @click="showNotes = !showNotes">
           <Icon name="note" class="h-4 w-4" />
         </Button>
@@ -819,51 +1009,164 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <!-- 笔记面板 -->
+        <!-- 笔记 / 书签面板：两者都是「阅读时留下的记号」，共用一个侧栏（不新增导航项） -->
         <aside
           v-if="showNotes"
           class="w-72 shrink-0 overflow-y-auto border-l border-border py-3 pl-3"
         >
-          <div class="mb-2 flex items-center gap-2">
-            <h3 class="text-[12px] font-semibold text-foreground">
-              笔记 · 高亮 <span class="text-muted-foreground tabular-nums">{{ annotations.length }}</span>
-            </h3>
+          <div v-if="canBookmark" class="mb-3 flex items-center gap-1 rounded-md border border-border p-0.5">
             <button
-              v-if="annotations.length"
               type="button"
-              class="ml-auto cursor-pointer text-[11px] text-primary transition-opacity hover:opacity-80"
-              title="导出为 Markdown"
-              @click="exportMarkdown"
+              class="flex-1 cursor-pointer rounded px-2 py-1 text-[12px] transition-colors"
+              :class="panelTab === 'notes' ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'"
+              @click="panelTab = 'notes'"
             >
-              导出
+              笔记 · 高亮 {{ annotations.length }}
+            </button>
+            <button
+              type="button"
+              class="flex-1 cursor-pointer rounded px-2 py-1 text-[12px] transition-colors"
+              :class="panelTab === 'bookmarks' ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'"
+              @click="panelTab = 'bookmarks'"
+            >
+              书签 {{ bookmarks.length }}
             </button>
           </div>
-          <p v-if="!annotations.length" class="text-[12px] text-muted-foreground">
-            在正文里选中文字即可添加高亮与笔记。
-          </p>
-          <div
-            v-for="a in annotations"
-            :key="a.id"
-            class="group mb-2 cursor-pointer rounded-lg border border-border px-2.5 py-2 transition-colors hover:bg-muted"
-            @click="jumpTo(a)"
-          >
-            <div class="flex items-start gap-2">
-              <span class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full" :style="{ background: hex(a.color) }" />
-              <div class="min-w-0 flex-1">
-                <p class="line-clamp-3 text-[12px] leading-relaxed text-foreground">「{{ a.quote }}」</p>
-                <p v-if="a.note" class="mt-1 text-[11.5px] text-muted-foreground">{{ a.note }}</p>
-                <p class="mt-1 text-[10.5px] text-muted-foreground">{{ titleOf(a.chapter) }}</p>
-              </div>
+
+          <template v-if="panelTab === 'notes'">
+            <div class="mb-2 flex items-center gap-2">
+              <h3 class="text-[12px] font-semibold text-foreground">
+                笔记 · 高亮 <span class="text-muted-foreground tabular-nums">{{ annotations.length }}</span>
+              </h3>
               <button
+                v-if="annotations.length"
                 type="button"
-                class="shrink-0 cursor-pointer text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
-                title="移入垃圾桶（可在「批注」页的垃圾桶里恢复）"
-                @click.stop="removeAnnotation(a.id)"
+                class="ml-auto cursor-pointer text-[11px] text-primary transition-opacity hover:opacity-80"
+                title="导出为 Markdown"
+                @click="exportMarkdown"
               >
-                <Icon name="trash" class="h-3.5 w-3.5" />
+                导出
               </button>
             </div>
-          </div>
+            <p v-if="!annotations.length" class="text-[12px] text-muted-foreground">
+              在正文里选中文字即可添加高亮与笔记。
+            </p>
+            <div
+              v-for="a in annotations"
+              :key="a.id"
+              class="group mb-2 cursor-pointer rounded-lg border border-border px-2.5 py-2 transition-colors hover:bg-muted"
+              @click="jumpTo(a)"
+            >
+              <div class="flex items-start gap-2">
+                <span class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full" :style="{ background: hex(a.color) }" />
+                <div class="min-w-0 flex-1">
+                  <p class="line-clamp-3 text-[12px] leading-relaxed text-foreground">「{{ a.quote }}」</p>
+                  <p v-if="a.note" class="mt-1 text-[11.5px] text-muted-foreground">{{ a.note }}</p>
+                  <p class="mt-1 text-[10.5px] text-muted-foreground">{{ titleOf(a.chapter) }}</p>
+                </div>
+                <button
+                  type="button"
+                  class="shrink-0 cursor-pointer text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+                  title="移入垃圾桶（可在「批注」页的垃圾桶里恢复）"
+                  @click.stop="removeAnnotation(a.id)"
+                >
+                  <Icon name="trash" class="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          </template>
+
+          <template v-else>
+            <!-- 活跃 / 垃圾桶：与批注总览同一套两段式（垃圾桶里才能彻底删） -->
+            <div class="mb-2 flex items-center gap-1 rounded-md border border-border p-0.5">
+              <button
+                type="button"
+                class="flex-1 cursor-pointer rounded px-2 py-0.5 text-[11.5px] transition-colors"
+                :class="bookmarkView === 'active' ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'"
+                @click="bookmarkView = 'active'"
+              >
+                活跃 {{ bookmarks.length }}
+              </button>
+              <button
+                type="button"
+                class="flex-1 cursor-pointer rounded px-2 py-0.5 text-[11.5px] transition-colors"
+                :class="bookmarkView === 'trashed' ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'"
+                @click="bookmarkView = 'trashed'"
+              >
+                垃圾桶 {{ bookmarkTrash.length }}
+              </button>
+            </div>
+
+            <!-- 当前位置的书签：没有则加（备注可选），已有则改备注 -->
+            <div v-if="bookmarkView === 'active'" class="mb-2 flex items-center gap-1.5">
+              <input
+                v-model="bookmarkDraft"
+                type="text"
+                :placeholder="bookmarkHere ? '改这条书签的备注…' : '备注（可空）…'"
+                class="h-8 min-w-0 flex-1 rounded-md border border-border bg-muted px-2 text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+                @keyup.enter="submitBookmark"
+              >
+              <Button size="sm" @click="submitBookmark">
+                {{ bookmarkHere ? '保存备注' : '加书签' }}
+              </Button>
+            </div>
+
+            <p v-if="!bookmarkList.length" class="text-[12px] text-muted-foreground">
+              {{ bookmarkView === 'trashed'
+                ? '垃圾桶是空的。删除的书签会先放到这里，可以恢复，也可以彻底删除。'
+                : '还没有书签。滚动或翻页到想记住的位置，点工具条上的书签图标即可。' }}
+            </p>
+            <div
+              v-for="b in bookmarkList"
+              :key="b.id"
+              class="group mb-2 rounded-lg border border-border px-2.5 py-2 transition-colors"
+              :class="bookmarkView === 'active' ? 'cursor-pointer hover:bg-muted' : ''"
+              @click="onBookmarkClick(b)"
+            >
+              <div class="flex items-start gap-2">
+                <Icon
+                  name="bookmark"
+                  class="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary"
+                  :style="{ fill: 'currentColor' }"
+                />
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-[12px] text-foreground">{{ bookmarkPlace(b) }}</p>
+                  <p v-if="b.label" class="mt-1 text-[11.5px] text-muted-foreground">{{ b.label }}</p>
+                  <p class="mt-1 text-[10.5px] text-muted-foreground tabular-nums">
+                    全书 {{ b.percent.toFixed(1) }}%
+                  </p>
+                </div>
+
+                <div v-if="bookmarkView === 'trashed'" class="flex shrink-0 items-center gap-0.5">
+                  <button
+                    type="button"
+                    class="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    title="恢复这条书签"
+                    @click.stop="restoreBookmark(b)"
+                  >
+                    <Icon name="undo" class="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    class="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
+                    title="彻底删除（不可恢复）"
+                    @click.stop="purgeBookmark(b)"
+                  >
+                    <Icon name="trash" class="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                <button
+                  v-else
+                  type="button"
+                  class="shrink-0 cursor-pointer text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+                  title="移入垃圾桶（可在垃圾桶里恢复）"
+                  @click.stop="trashBookmark(b)"
+                >
+                  <Icon name="trash" class="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          </template>
         </aside>
       </div>
 

@@ -623,6 +623,37 @@ export interface Annotation {
   origin?: string
 }
 
+/**
+ * 本地书签（第 34 期）。软删除语义与批注同构：`deleted_at` 0 = 活跃、> 0 = 在垃圾桶。
+ * `anchor` 是**位置锚**（章序号 + 章内归一化位置），服务端按它去重 ⇒ 同一位置恒为同一条。
+ */
+export interface Bookmark {
+  id: number
+  book_id: string
+  anchor: string
+  chapter: number
+  /** 全书百分比（列表排序 / 展示用） */
+  percent: number
+  label: string
+  created_at: number
+  /** 版本戳：并发合并时客户端回传它 */
+  updated_at: number
+  /** 0 = 活跃；> 0 = 在垃圾桶 */
+  deleted_at?: number
+}
+
+/** 加书签的返回。`applied=false` = 并发冲突且服务端更新 ⇒ 库里未被改写，看 `server`。 */
+export interface BookmarkSaveResult {
+  ok: boolean
+  id: number
+  /** 新插入了一行 */
+  created: boolean
+  /** 复活了同位置的墓碑行 */
+  revived: boolean
+  applied: boolean
+  server: Bookmark
+}
+
 // ---------- 系列 ----------
 
 export interface SeriesCover {
@@ -2612,6 +2643,60 @@ export const api = {
   purgeAnnotation: (id: string, aid: number) =>
     request<{ ok: boolean }>(
       `/api/books/${encodeURIComponent(id)}/annotations/${aid}/purge`,
+      { method: 'DELETE' },
+    ),
+
+  // ---------- 书签（第 34 期） ----------
+
+  /** 某本书的书签。默认只给活跃条目；`includeTrashed` 时额外带回有序的 `trashed`。 */
+  listBookmarks: (id: string, includeTrashed = false) =>
+    request<{ items: Bookmark[]; total: number; trashed?: Bookmark[] }>(
+      `/api/books/${encodeURIComponent(id)}/bookmarks${includeTrashed ? '?include_trashed=1' : ''}`,
+    ),
+
+  /** 加书签（或复活同位置的墓碑、合并并发冲突）。`anchor` 是去重键。 */
+  addBookmark: (
+    id: string,
+    b: { anchor: string; chapter: number; percent: number; label?: string; updated_at?: number },
+  ) =>
+    request<BookmarkSaveResult>(`/api/books/${encodeURIComponent(id)}/bookmarks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(b),
+    }),
+
+  /** 改备注 / 位置（只对活跃书签）。返回体同加书签：`applied=false` 即服务端胜。 */
+  updateBookmark: (
+    id: string,
+    bmid: number,
+    b: { label?: string; percent?: number; chapter?: number; updated_at?: number },
+  ) =>
+    request<{ ok: boolean; found: boolean; applied?: boolean; server?: Bookmark }>(
+      `/api/books/${encodeURIComponent(id)}/bookmarks/${bmid}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(b),
+      },
+    ),
+
+  /** **移入垃圾桶**（软删除）。彻底删除走 `purgeBookmark`。 */
+  deleteBookmark: (id: string, bmid: number) =>
+    request<{ ok: boolean; trashed: boolean }>(
+      `/api/books/${encodeURIComponent(id)}/bookmarks/${bmid}`,
+      { method: 'DELETE' },
+    ),
+
+  restoreBookmark: (id: string, bmid: number) =>
+    request<{ ok: boolean }>(
+      `/api/books/${encodeURIComponent(id)}/bookmarks/${bmid}/restore`,
+      { method: 'POST' },
+    ),
+
+  /** 彻底删除（不可恢复）。只对垃圾桶里的条目成立，活跃条目会 400。 */
+  purgeBookmark: (id: string, bmid: number) =>
+    request<{ ok: boolean }>(
+      `/api/books/${encodeURIComponent(id)}/bookmarks/${bmid}/purge`,
       { method: 'DELETE' },
     ),
 

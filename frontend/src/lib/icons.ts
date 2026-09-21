@@ -27,6 +27,8 @@ export const ICONS = {
   more: '<circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/><circle cx="5" cy="12" r="1.5"/>',
   // 批注垃圾桶（第 27 期）：从垃圾桶恢复
   undo: '<path d="M3 8h11a5.5 5.5 0 010 11h-6"/><path d="M7 4L3 8l4 4"/>',
+  // 书签（第 34 期）：闭合的绶带形，**已加书签**时由调用方给 svg 加 fill 变成实心
+  bookmark: '<path d="M6.5 3h11a1.5 1.5 0 011.5 1.5V21l-7-4.4L5 21V4.5A1.5 1.5 0 016.5 3z"/>',
   arrowLeft: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   bell: '<path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/>',
