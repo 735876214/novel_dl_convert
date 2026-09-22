@@ -1704,5 +1704,61 @@ Details / Folders / Scanning / Reading / Automation。
 2. `ShelfView` 的「阅读状态」筛选与 `BookCover` 角标**只按进度判**，而书卡文案
    （`bookInfo.statusLabel`）**状态优先** ⇒ 同一本书手动标「已读完」后，角标与筛选可能不一致。
    （**既有分歧**，本期只统一了阈值来源，没有统一这个优先级。）
+   **第 41 期已收口**：见下方「第 41 期实施记录」（`statusBucket` 统一三处口径）。
 3. 「浏览服务器文件夹」**没接** —— `GET /api/libraries/source-dirs` 前端从来无调用点，
    向导里保持文本输入；另有 `?new=1` 与首次引导 `GuidedTourModal` 会叠加（既有行为）。
+   **第 41 期已收口**：向导步骤②两处「浏览」按钮已接入该端点（见下方「第 41 期实施记录」）。
+
+---
+
+#### 第 41 期实施记录（收口 phase 40 未接项：浏览服务器文件夹 + 阅读状态优先级统一）
+
+**主题**：收口第 40 期新建书库向导留下的两处未接项（见第 40 期 §G 第 2、3 条），**不新增产品形态**。
+① 向导「内容来源」步骤接入 `GET /api/libraries/source-dirs`，让用户从服务器目录清单里挑来源目录，替代纯手输；
+② 统一阅读状态判定优先级 —— `ShelfView` 筛选与 `BookCover` 角标复用 `readingThresholds.statusBucket`
+（真实状态优先），消除「手动标已读完但书架筛选 / 封面角标仍显示在读」的不一致。
+
+**后端零改动**：`api_library_source_dirs`（`novelforge/server.py:2784`）与前端 `api.librarySourceDirs`
+（`frontend/src/lib/api.ts:3234`）第 40 期已实现，本期只是把后者接到界面；`tests/test_api_smoke.py:150`
+那条「`/api/libraries/source-dirs` 返回 200」的接口契约**本来就在**，本期不新增后端用例。
+
+**1. 浏览服务器文件夹**（`frontend/src/components/tools/LibraryWizard.vue`）：
+- 步骤②「库根目录」「来源子目录」两输入框各加一个「浏览」幽灵按钮（`wizard-browse-root` /
+  `wizard-browse-sub`），点击 `await api.librarySourceDirs()` 取回 `LIBRARY_SOURCE_DIR` 下的真实子目录清单
+  （`{root, exists, dirs:[{name, path, entries}]}`），在该行下方弹**局部**浮层（v-if，不重建整页 DOM），
+  每条显示子目录名 + 条目数（`wizard-browse-item`）。状态 `browse`（`LibraryWizard.vue:220`）、
+  `openBrowse`（`LibraryWizard.vue:228`）、`pickBrowseDir`（`LibraryWizard.vue:245`）。
+- 选中回填：`root` 目标用绝对 `path`；`sub` 目标用 `path` 剥离 `root` 前缀得到的相对子目录名
+  （与 `props.sourceDir` 同口径，沿用第 40 期「来源子目录相对 `LIBRARY_SOURCE_DIR`」的语义）。
+- 保留 `touched.root` / `touched.sub` 既有手改标记语义：用户从清单选了就不被 `resyncDefaults` 覆盖。
+- 加载中显示「加载中…」、空清单显示「无可用子目录」、拉取失败走 `ui.toast` 不崩（弹层不打开）。
+
+**2. 阅读状态优先级统一**（`frontend/src/lib/readingThresholds.ts`）：
+- 新增 `statusBucket(b, libraryId)`（`readingThresholds.ts:133`）：**真实状态行优先**，把 5 状态压成筛选三档 ——
+  `finished` → 已读完；`reading` / `paused` / `abandoned` → 在读（过滤器 UI 仅三档，已开始的都进在读桶）；
+  无状态行时按进度阈值兜底（含 percent 够高 → 已读完）。与 `statusOf` / `statusLabelOf` 同文件同源，
+  **不造第三份三态拷贝**（项目铁律：判据只此一处）。
+- `ShelfView.vue` 删除本地只按进度的 `statusOf`（`ShelfView.vue:280`），改调 `statusBucket(b, library.currentLibraryId)`
+  驱动 `fStatus` 筛选；书卡文案 `bookInfo.statusLabel` 本就走 `statusLabelOf`，由此三处口径统一。
+- `BookCover.vue` 角标由 `percentLabel(book.percent)`（只看进度）改为 `statusLabelOf(book, libraryStore.currentLibraryId)`
+  （`BookCover.vue:96`），`CoverBook` 类型补 `status` 字段；跨库组件取当前库阈值当上下文、无当前库退回全局
+  （与原有 `percentLabel` 的 fallback 一致）。
+- **范围外（不动）**：`stores/library.ts` 的 `derivedStatus` 分面计数（进度口径，第 40 期已明确不在此期范围）。
+
+**A. 单测**：前端用例数 **56 / 5 个 spec**（第 40 期 52 ⇒ +4：`readingThresholds.spec.ts` +4 状态桶用例 +
+`LibraryWizard.spec.ts` +4 浏览契约）；`npm run test:unit` 全过；`vue-tsc --build` exit 0。
+后端零改动 ⇒ pytest 基线 **691 例**维持绿（本期未碰后端）。
+变异验证（强制）：① `statusBucket` 把 `finished` 也判成 `reading`（退化回旧逻辑）⇒ `readingThresholds.spec.ts` 相关用例红；
+② `ShelfView` 的 `statusOf` 改回 `statusFromPercent(b.percent)`（忽略 status）⇒ 手动 `finished` 不进「已读完」桶的断言红；
+③ 向导「浏览」按钮不调 `openBrowse`（`@click` 删掉）⇒ 弹层不出现、回填用例红。撤销后全绿。
+
+**B. 浏览器冒烟**（真实 uvicorn 实例 + 独立临时根）：
+- 向导步骤②点「库根目录」旁的「浏览」⇒ 弹出 `LIBRARY_SOURCE_DIR` 下子目录清单（含条目数）；点选一个 ⇒
+  库根输入框回填绝对路径；「来源子目录」旁的「浏览」点选 ⇒ 回填相对子目录名（如 `comics`）。
+- 一本书在详情页手动标「已读完」（`status=finished`，`percent` 仍 20%）⇒ 书架「阅读状态」筛「已读完」命中它、
+  封面左下角角标显示「已读完」，与书卡文案一致（改前角标显示「在读」、筛选漏掉）。
+
+**C. 锚点 / 文档**：本期新增的 `path:line` 锚点（LibraryWizard `:220/:228/:245`、readingThresholds `:133`、
+BookCover `:96`、ShelfView `:280`）均按实测行号写入；`tests/check_doc_anchors.py` 复核 **硬错 0 / 疑似漂移 0**
+（本期只在 `LibraryWizard.vue` 内新增、未改既有带锚点行，故不引入漂移）。
+第 40 期 §G 第 2、3 条已反向标注「**第 41 期已收口**」。

@@ -1,8 +1,8 @@
 # 长期记忆（novel_dl_convert / NovelForge）
 
-> 只留**仍然成立的不变式/约定/踩坑**，写成规则、不带故事；某期做了什么写当天 `YYYY-MM-DD.md`；口径依据与逐项清单在 `docs/bookorbit-capability-gap.md`、`module-inventory.md`、`roadmap-gaps-remaining.md`。
-> 立规 09-19；09-21 两轮压缩（删叙事、合并同类、指针化、域细节外移）。
-> **`MEMORY-REF.md`**＝运行/UI 验证手册 + 域细节 + 跨会话待办 ⇒ **动到那些领域前先读它**。
+> 只留仍成立的不变式/约定/踩坑，写成规则、不带故事；某期做了什么写当天 `YYYY-MM-DD.md`；域细节/逐项清单见 `docs/bookorbit-capability-gap.md`、`module-inventory.md`、`roadmap-gaps-remaining.md`。
+> 立规 09-19；09-21、09-22 三轮压缩（删叙事、合并同类、指针化）。
+> **`MEMORY-REF.md`**＝运行/UI 验证手册 + 域细节 + 跨会话待办 ⇒ 动到那些领域前先读它。
 
 ## 项目与硬约定
 1. TXT→EPUB 工具，NAS/容器部署；input/output 物理分离；FastAPI+CLI；可插拔书源。
@@ -14,65 +14,65 @@
 7. 新增书库由用户手动操作；每库来源=`LIBRARY_SOURCE_DIR/<source_subdir>`；库 `type` 只决定功能显隐矩阵。
 
 ## 元数据与出版
-- **只落服务端 DB，绝不写回文件**：`meta_override`/`meta_online`/`meta_cover`/`meta_locks`/`book_custom_values`。编辑、revert、抓取、重排册号、改名、合并一视同仁；`core/publish.py` 是**唯一**仍写文件的模块。
-- **源不可变**：源只读；副本禁原地写（共享 inode ⇒ 临时文件+`Path.replace`）；副本被删只标记待确认+记日志、**绝不自删源**；成品目录不得与库根/扫描源重叠（建库即拦）。硬链接副本内嵌元数据会变独立 inode ⇒ 如实标注、**不得宣称省空间**。
-- **源文件名无写入口**：改名只剩「按命名规则重出版副本」；实体改名/合并退化为纯元数据写入。
-- 命名规则**唯一实现**=`fileops.fill_pattern`（**先长后短**），`publish.relpath_for` 调它；`PATTERN_FIELDS` 为唯一真值源、前端 `RENAME_TOKENS` 须逐字一致（契约测试）。**不许第二处展开规则**。
-- 「预览==落盘」硬不变量：共用 `publish.relpath_for`+`rel_verdict`（REL_REUSE/REBUILD/DECLINE）；UI 拒「有未保存草稿时重出版」；`apply_*` 目标**一律服务端自己算**，客户端 `book_ids` 只当收窄条件。
+- **只落服务端 DB，绝不写回文件**：`meta_override`/`meta_online`/`meta_cover`/`meta_locks`/`book_custom_values`；`core/publish.py` 是**唯一**仍写文件的模块。
+- **源不可变**：源只读；副本禁原地写（临时文件+`Path.replace`）；副本被删只标记待确认+记日志、**绝不自删源**；成品目录不得与库根/扫描源重叠（建库即拦）；硬链接副本内嵌元数据变独立 inode ⇒ 如实标注、不得宣称省空间。
+- 源文件名无写入口：改名只剩「按命名规则重出版副本」；实体改名/合并退化为纯元数据写入。
+- 命名规则**唯一实现**=`fileops.fill_pattern`（先长后短），`publish.relpath_for` 调它；`PATTERN_FIELDS` 唯一真值源、前端 `RENAME_TOKENS` 须逐字一致（契约）；**不许第二处展开规则**。
+- 「预览==落盘」硬不变量：`publish.relpath_for`+`rel_verdict`（REL_REUSE/REBUILD/DECLINE）；UI 拒「有未保存草稿时重出版」；`apply_*` 目标服务端自算，客户端 `book_ids` 只当收窄条件。
 - 抓取与手工编辑**不按格式分流**；非 EPUB 无 OPF 兜底，「恢复」=撤销覆盖回落在线值。
 - **目录型条目（有声书一章一文件）同样出版**：副本真目录+内部逐文件硬链接；形态判据=**名字带不带 `library.BOOK_EXTS` 扩展名**（不看 format、不 stat 磁盘）；副本名不带扩展名。
 - 无值哨兵 `db.META_CLEAR="-"`（`_CLEARABLE` 全字段、有测试）：空串=撤销覆盖、接口 `null`=显式清空；三处翻译须一致：`db.get_effective_meta`/`metastore.effective`/`metastore.state`。
-- **三层** `override > online > opf`。抓取写入受**三道正交闸**：①字段策略 `metadata_fetch.fields[key]∈{overwrite(默认)/fill_only/skip}`（全局+每库）②**`meta_locks` 显式字段锁**（**只挡抓取、不挡手工编辑**；能锁「没改过」的字段，解锁后抓取重新接管）③「改过就不动」（`field in overrides` 隐式）。**自定义字段默认值同受这三道闸**。
-- `metadata_fetch.custom_fields` 配置项**已下线**（定义移 `custom_field_defs`，一处权威；`key`(slug) 与 `label` 分离 ⇒ 改标签不动值；`library_ids` 空=全部书库）；`custom_fields` 仍在 `metascore.NOT_SCORED`、**权重表未动**。
-- 相似书权重 `0.5·词袋余弦 + 0.1·同作者 + 0.25·题材 Jaccard + 0.1·同系列 + 0.05·评分接近度`；`limit`≤**25**、详情页默认 6 可展开；任一方未评分 ⇒ 该路**不进分母**；词袋**简介刻意不进**；0 分不返回；`SimilarBook.score`=**0–1**（前端不显示）。
-- **软删除语义**：`DELETE`=移垃圾桶（`deleted_at`），`purge` 才真删且只对垃圾桶内开放；**一切读点必须 `WHERE deleted_at=0`**（含 `annotation_counts`/`trashed_*`/remap 探测）。
+- **三层** `override > online > opf`；抓取受**三道正交闸**：①字段策略 `metadata_fetch.fields[key]∈{overwrite(默认)/fill_only/skip}`（全局+每库）②**`meta_locks` 显式字段锁**（只挡抓取、不挡手工编辑；解锁后抓取重新接管）③「改过就不动」（`field in overrides` 隐式）；**自定义字段默认值同受这三道闸**。
+- `metadata_fetch.custom_fields` 已下线（移 `custom_field_defs`，`key`/`label` 分离）；`custom_fields` 仍在 `metascore.NOT_SCORED`、权重表未动。
+- 相似书权重 `0.5·词袋余弦 + 0.1·同作者 + 0.25·题材 Jaccard + 0.1·同系列 + 0.05·评分接近度`；`limit`≤25、详情页默认 6 可展开；任一方未评分不进分母；词袋**简介不进**；0 分不返回；`SimilarBook.score`=0–1（前端不显示）。
+- **软删除**：`DELETE`=移垃圾桶（`deleted_at`），`purge` 才真删且只对垃圾桶开放；**一切读点须 `WHERE deleted_at=0`**（含 `annotation_counts`/`trashed_*`/remap 探测）。
 
 ## Git / 环境 / 构建
 - 行尾必须 **LF**（`.gitattributes` 锁；CRLF ⇒ 容器 `sh /app/start.sh` 报 `set: Illegal option -` 反复重启）。
-- Python 3.10+（**PEP 604，系统 python3.9 不可用**）；Node v20/22、Docker daemon 可用；本机对外网络有限。
+- Python 3.10+（PEP 604，系统 python3.9 不可用）；Node v20/22、Docker daemon 可用；本机对外网络有限。
 - 认证走 GCM；**勿再引入** token 内嵌/insteadof 明文重写；推送失败先查认证/网络，**别改 git config**。
-- **入库的配置不得含机器相关绝对路径**（`.vscode/settings.json` 的 `python.pythonPath` 是前例）：要指向 `.venv` 的各人配在本机用户设置里。
-- `.gitignore` 清单、macOS 建环境与首跑、`npm install` 的 lock 噪声、Windows 删除 shim ⇒ **见 REF「环境与构建」**。
+- **入库配置不得含机器相关绝对路径**（`.vscode/settings.json` 的 `python.pythonPath` 是前例）：指向 `.venv` 的各人配在本机用户设置。
+- `.gitignore`/macOS 建环境/首跑/`npm install` 的 lock 噪声/Windows 删除 shim ⇒ **见 REF「环境与构建」**。
 
-## 自动化测试（硬前提）
-- 完全离线 `.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`。**基线按环境取**：win32 39 期 **651** 例 / 0 failed / 0 err（= 632 + 前端守卫契约 5 + 计数契约 6 + 归库统一契约 4 + db 并发契约 4）；POSIX 38 期 632。**前端用例另计、不并入此基线**（`npm run test:unit`，本期 12 例：两套跑法两套前提，混在一起基线就没意义了）。
-- ⚠️ **汇总行抓不到的真正原因：`pytest.ini` 里已有 `addopts = -q`，命令行再加一个 `-q` 就是 `-qq` —— 那会连「N passed in Xs」一起吞掉**（第 39 期实测坐实；此前「重定向后只剩 warnings」那个归因是错的）。⇒ 跑测试**别再加 `-q`**；要计数量一律 `--junitxml=…` + Python 解析（**别用 `[xml]`**，pytest 的根是 `<testsuites>` 而非 `<testsuite>`，属性在子元素上）；跑全量前确认 `novelforge/static` 存在。
-- ⚠️ **探针脚本别用 `grep` 猜结果**：`-qq` 下无汇总行 ⇒ 匹配为空会被误读成「没复现」；而 grep 默认区分大小写，`FAILED` 也匹配不上 `failed`。要看真相就**落全量日志到文件**再读。
-- **「长期稳定失败」不是 flaky，是产品 bug 的症状**：报错不指向根因就逐层打印中间返回值；修完临时回退那一处确认「恰好相关用例失败」；e2e 做改前 FAIL / 改后 PASS 对照。
-- 硬前提：①环境变量须在 import 业务模块**前**设（`config` 导入即固化目录、`server` 导入即 `ensure_dirs()`）；②`db._conn`/`_db_path` 是模块级缓存 ⇒ 隔离靠 `db.close()`。
-- 碰库/DB 用例必须 `isolated`、接口一律 `client`+`auth_headers`；假 EPUB（`b"EPUB"`）够扫描类，元数据写回/系列解析要真 EPUB（`epub_builder.build_epub`）；测试库根须在 `LIBRARY_SOURCE_DIR` 下；断言留余地。⚠️ `isolated` 换库=改 `DATA_DIR`+`db.close()`（只 `close()+init()` 会重开**同一个文件**）。
-- 全量后半程曾 segfault ⇒ `tests/conftest.py` 的 `_quiesce_background()` 在夹具 `db.close()` **之前**收尾。⚠️ 第 39 期起它**不再静默**：`watcher.wait_pending(5.0)` 的返回值（=超时后仍未结束的数量）非 0 就 `pytest.fail` 把这件事说出来 —— 此前被 `except Exception: pass` 吞掉，于是「收尾没干净」只表现为**后面某个无关用例**偶发变红（`pytest.fail` 抛的 `Failed` 继承 `BaseException` ⇒ 不会被那个 `except` 吞）。干净运行下该值**恒为 0**，不误伤。
+## 自动化测试
+- 完全离线 `.venv/bin/python -m pytest`；dev 依赖在 `requirements-dev.txt`；**基线** win32 **651** / POSIX **632**，0 failed/0 err；**前端另计**（`npm run test:unit`），两套跑法两套前提、不并入此基线。
+- ⚠️ `pytest.ini` 已有 `addopts=-q`，命令行**别再加 `-q`**（变 `-qq` 吞掉汇总行）；计数量一律 `--junitxml=…` + Python 解析（根 `<testsuites>`，非 `<testsuite>`）；跑全量前确认 `novelforge/static` 存在。
+- ⚠️ 看真相**落全量日志到文件再读**，别用 `grep` 猜（`-qq` 下无汇总行、grep 大小写敏感会误读）。
+- **「长期稳定失败」是产品 bug 症状**：逐层打印中间返回值找根因；e2e 做改前 FAIL/改后 PASS 对照。
+- 环境变量须在 import 业务模块**前**设（`config` 固化目录、`server` 导入即 `ensure_dirs()`）；`db._conn`/`_db_path` 模块级缓存 ⇒ 隔离靠 `db.close()`。
+- 碰库/DB 用例必须 `isolated`、接口 `client`+`auth_headers`；假 EPUB(`b"EPUB"`)够扫描类，元数据写回/系列解析要真 EPUB(`epub_builder.build_epub`)；测试库根须在 `LIBRARY_SOURCE_DIR` 下；断言留余地。⚠️ `isolated` 换库=改 `DATA_DIR`+`db.close()`（只 `close()+init()` 重开同一文件）。
+- 全量后半程曾 segfault ⇒ `tests/conftest.py` 的 `_quiesce_background()` 须在夹具 `db.close()` **之前**收尾；`watcher.wait_pending(5.0)` 非 0 就 `pytest.fail`（干净运行恒为 0，不误伤）。
 
 ## 后端约束与踩坑
 - core 内一律 `from .. import config`（`import config` 被同名命名空间包劫持，启动才炸）。
-- **`scrape._epoch` 世代号**：`stop(timeout)` 等不到 worker 真退出 ⇒ 它**必定推进世代**；`process`/`_failed`/`_lost`/`verify` 每个落库点都校验世代，作废即停手不落库（返回 `aborted`，留待下轮 `reset_running`）；`gen=None`=同步调用。**新增 worker 落库点必须一并加守卫**。
-- **ISBN 形状唯一真值源=`metadata.isbn_digits`**：10 位末位可 X / 13 位纯数字，允许分隔符与 `urn:isbn:`；**UUID 不认**。`library._isbn_of` 与 `fileops._set_isbn` 都调它（契约测试钉「全仓只剩一处判据」）。
+- **`scrape._epoch` 世代号**：`stop(timeout)` 等不到 worker 退出⇒推进世代；`process`/`_failed`/`_lost`/`verify` 每个落库点都校验世代，作废即停手（返回 `aborted`）；`gen=None`=同步调用；**新增 worker 落库点必须加守卫**。
+- **ISBN 形状唯一真值源=`metadata.isbn_digits`**（10 位末位可 X / 13 位纯数字，允许分隔符与 `urn:isbn:`；UUID 不认）；`library._isbn_of`/`fileops._set_isbn` 都调它（契约钉「全仓一处判据」）。
 - 写磁盘只用 rename/move，删除移 `CACHE_DIR/recycle`；路径用 `library.root_of(b)/b["name"]`，**禁** `config.OUTPUT_DIR/b["name"]`；`write_epub` 前先 `mkdir`。
-- 库根限 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR`（`safe_path`，建库强校验，之外 400）；`book_id`=basename 派生+库维度化。⚠️ 库存储根在 `OUTPUT_DIR` 之下时 `default` 库会把副本**再收一次** ⇒ 同一本书两条（预期行为，断言按 `library_id` 过滤）。
-- ⚠️ **新增库表列须同进 `db._LIBRARY_COLS`**（第 40 期三列 `icon`/`allowed_exts`/`exclude` 均在其内），否则 `update_library` **静默写不进** —— 它是「过滤后为空就原样返回」，既不报错也不生效，**界面还会显示「已保存」**。全七处同步点见 `2026-09-22.md` §A。
-- ⚠️ **列里的 `''` 是「没设过」，不是「空集合」**：`allowed_exts=''` ⇒ 回落该库类型的默认白名单（`library.exts_for_library`）；`exclude=''` ⇒ 不过滤；**坏 JSON 一律当没设过**（不抛、不留死库）。sqlite 的 `ALTER TABLE ADD COLUMN` 只吃常量默认值 ⇒ 这层回落**只能放在读时**，别想写成列默认值。
-- **给既有表加唯一约束/PK 要回头看 `db.remap_book_id`**：整体 `UPDATE` 撞约束会抛异常并被外层 `except` 吞成「搬 0 行」⇒ **静默丢数据** ⇒ 必须**逐行搬 + 冲突时取舍**。**新增含 book_id 的表必须过四处**：`ORPHAN_TABLES`、`REMAP_TABLES`、有软删的再进 `REMAP_PROBE_FILTER`、**含库相关列的再进 `REMAP_EXPLICIT_TABLES`**（现有唯一成员 `scrape_items` —— 它另有 `library_id`/`source_rel`/`link_rel`，走 `db.scrape_remap_item`，**刻意不在** `remap_book_id` 的搬迁清单里）。⚠️ 有契约测试（`tests/test_remap_tables.py`）钉「凡含 book_id 列的表必须出现在某个清单里」，**漏了它会在换库时静默断链**（第 39 期实测：自动归库后台账行留在旧 id 上，旧库对账把「已出版」判成 orphan/removed）。
-- ⚠️ **`migrate.execute` / `rollback` 不再按 `direction` 分支**（第 39 期统一）：自动归库（`move`）与用户移动（`bookmove`）共用 `_after_bookmove`/`_after_bookmove_back`，差别只剩「谁选源集合、谁定目标库」。回程**必须与去程对称**。⚠️ `DIR_AUTO = "move"` 字面量**不能改**（`migration_last_batch("move")` 依赖），`server.py` 拒绝用 bookmove 入口执行自动归库批次那两处**保留**。反查所属库一律用 `_lib_id_of_path`（取**最长**匹配；旧的「取第一个」实现已删 —— `library.libraries()` 顺序不保证）。
-- ⚠️ **win32 上目录 `st_size` 恒为 0**：「空文件」判据都要**排除目录**（`if not p.is_dir() and p.stat().st_size == 0`），否则 win32 有声书永不入库；目录体积用 `watcher._sig()`。
+- 库根限 `LIBRARY_SOURCE_DIR`/`OUTPUT_DIR`/`DATA_DIR`（`safe_path`，之外 400）；`book_id`=basename 派生+库维度化。⚠️ 库存储根在 `OUTPUT_DIR` 下时 `default` 库把副本再收一次（断言按 `library_id` 过滤）。
+- ⚠️ **新增库表列须同进 `db._LIBRARY_COLS`**，否则 `update_library` **静默写不进**（过滤后为空就原样返回，界面还显「已保存」）；第 40 期 `icon`/`allowed_exts`/`exclude` 三列均在其内。
+- ⚠️ **列里的 `''`=「没设过」**：`allowed_exts=''`⇒回落库类型默认白名单；`exclude=''`⇒不过滤；**坏 JSON 当没设过**（不抛、不留死库）；sqlite `ALTER TABLE ADD COLUMN` 只吃常量默认值 ⇒ 回落**只能放读时**。
+- ⚠️ **加唯一约束/PK 看 `db.remap_book_id`**：整体 `UPDATE` 撞约束被 `except` 吞成「搬 0 行」⇒静默丢数据 ⇒ 必须**逐行搬+冲突取舍**。**含 book_id 的表必过四处**：`ORPHAN_TABLES`/`REMAP_TABLES`/有软删进 `REMAP_PROBE_FILTER`/含库相关列进 `REMAP_EXPLICIT_TABLES`（唯一成员 `scrape_items`）。契约 `tests/test_remap_tables.py` 钉「含 book_id 列的表必在某一清单」。
+- ⚠️ **`migrate.execute`/`rollback` 不再按 `direction` 分支**：自动归库(`move`)与用户移动(`bookmove`)共用 `_after_bookmove`/`_after_bookmove_back`，回程对称。`DIR_AUTO="move"` 字面量**不能改**；`server.py` 拒用 bookmove 执行自动归库批次那两处**保留**；反查所属库用 `_lib_id_of_path`（取**最长**匹配）。
+- ⚠️ **win32 目录 `st_size` 恒 0**：「空文件」判据须 `if not p.is_dir() and p.stat().st_size==0`；目录体积用 `watcher._sig()`。
 - 批量端点注册在 `/api/books/{bid}` 之前、字面量路径在 `{param}` 之前；目录型条目用 `path.exists()` 不用 `is_file()`。
-- **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**：**没有 `/api/health`**（白名单只含 `/health`+`/api/auth/login`+`/api/logout`）；前端 `api.ts` 的 `health()` 也走 `/health`。
+- **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**；**无 `/api/health`**（白名单仅 `/health`+`/api/auth/login`+`/api/logout`）；前端 `api.ts` 的 `health()` 走 `/health`。
 - 共用锁嵌套用 `RLock`；`mark_processed`/`mark_recent` 走 `asyncio.to_thread`；watcher 独立 `_scan_lock`。
-- ⚠️ **`db` 连接是全进程一个 `check_same_thread=False` 的裸连接 ⇒ 读写一律经 `_lock` 串行**（第 39 期根治）。`db._connect()` 返回的是**持锁代理** `db._Conn`，**不是** `sqlite3.Connection`；`_lock` 是 **`RLock`**（`with _lock:` 块里还会再调 `c.execute`，非重入锁会自锁死）。**光给写路径加锁是不够的** —— 真凶正是「锁内写 + 裸读」并发：实测 3 读线程 + 1 锁内写，**3/3 轮全 `InterfaceError`**（各 400–500 次）；用户可见后果是 `library.get_library` 把它吞成 `None` ⇒ `lib_settings.overrides()` 得空 dict ⇒ **每库覆写静默回落全局值**；三线程裸读 + `db.close()` 则 **6/6 段错误**。⇒ **新增任何 db 访问只走 `db._connect()`，别去抓 `sqlite3` 原连接、别绕开 `_lock`**；`db._Result` 的接口面**刻意收窄**（`execute/executemany/executescript/commit/rollback` + 行标量/`fetchone`/`fetchall`/迭代），**新增需要的游标属性要显式补进去**。契约测试 `tests/test_db_concurrency_contract.py`（全仓唯一主动开线程的测试）。
-- ⚠️ **`db.close()` 生产上无人调**（只有 `server.py` 的 `db.init()` 和测试用）—— 但「锁内写 + 裸读」**不需要 `close()` 就能触发**，所以上面那条竞态**生产可达**（watcher 线程 / scrape worker / `asyncio.to_thread` 与请求线程同时进连接）。`close()` 现在也持 `_lock` ⇒ 段错误那条路已封死，但之后仍攥着旧代理的线程会拿到 `ProgrammingError` —— **那是真错误，别吞**。
-- `core/stats.py`：`overview` 既有键**只增不删**、**必须跟随 `library_id`**、**不新增扫描路径**；真名照代码（`weekdays`/`pages_by_format`）。
-- ⚠️ **「在哪读 / 已读完」的阈值只有两个入口**：后端 `lib_settings.reading_thresholds(library_id)`、前端 `lib/readingThresholds.ts`（`statusFromPercent`）。**别在别处再判一次**——原先那三份拷贝（`bookInfo.statusLabel` / `library.derivedStatus` / `smartScope`）第 40 期已收敛。默认值**刻意不动既有行为**（finished **99.5** 不是上游的 99、started **0.0** ≡ `pct > 0`），改它等于静默改变用户的「已读完」。
-- ⚠️ **路径判据只有 `frontend/src/lib/paths.ts`**（`isAbsolutePath` / `pathsOverlap`）：原来两处各写一遍 `startsWith('/')`，抄的是后端 `pathlib.resolve()` 的 POSIX 口径 ⇒ **Windows 上 `C:\…` 被判非绝对**（生产在 Linux 上，所以一直没露头）。
-- **「文件:行号」收尾必须实测复核**：工具=`tests/check_doc_anchors.py`（**非 `test_` 前缀 ⇒ pytest 不收集**），用法与局限见 capability-gap §0.5。①**别记偏移量，只记当前真实行号**；②脚本**只生成待核清单、不能判定**（「行号合法但内容换了」天生测不出）⇒ 判据是「0 硬错 + 0 漂移」**且**人工过完 `--todo` 清单。先例：32 期核 71 修 10、33 期核 312 修 28、35 期核 706 修 37、36 期核 719 修 7（**7 处全部落在本期自己动过的 `core/db.py` / `server.py` 上** ⇒ 动了锚点密集的文件就顺手重核那一份）。
+- ⚠️ **`db` 访问只走 `db._connect()`**（持 `_lock` 的代理 `db._Conn`，非裸 `sqlite3.Connection`）；`_lock` 是 **RLock**（非重入锁会自锁死）；`with _lock:` 块内还会再 `c.execute`。**别抓裸连接、别绕开 `_lock`**（「锁内写+裸读」实测全 `InterfaceError`、裸读+`close()` 全段错误）；`db._Result` 接口面收窄（execute/executemany/executescript/commit/rollback + 标量/fetchone/fetchall/迭代），新增游标属性要补。契约 `tests/test_db_concurrency_contract.py`。
+- ⚠️ **`db.close()` 生产无人调**，但「锁内写+裸读」生产可达（watcher/scrape/asyncio.to_thread 并发）；旧代理线程拿 `ProgrammingError` 是**真错误、别吞**。
+- `core/stats.py`：`overview` 键**只增不删**、**须跟随 `library_id`**、**不新增扫描路径**；真名照代码（`weekdays`/`pages_by_format`）。
+- ⚠️ **阅读状态阈值只有两入口**：后端 `lib_settings.reading_thresholds(library_id)`、前端 `lib/readingThresholds.ts`（`statusFromPercent`/`statusBucket`/`statusLabelOf`）；**别再第三处判**。默认值刻意不动既有行为（finished **99.5**、started **0.0**≡`pct>0`）。第 41 期把 `ShelfView` 筛选与 `BookCover` 角标收口到 `statusBucket`/`statusLabelOf`（与书卡 `bookInfo.statusLabel` 同源）；`stores/library.ts` 的 `derivedStatus` 分面计数保持进度口径、不在其列。
+- ⚠️ **路径判据只有 `frontend/src/lib/paths.ts`**（`isAbsolutePath`/`pathsOverlap`）；原来两处各写 `startsWith('/')` 抄 POSIX 口径 ⇒ Windows `C:\…` 被判非绝对。
+- **「文件:行号」收尾必须实测复核**：`tests/check_doc_anchors.py`（非 `test_` 前缀⇒pytest 不收集）。①别记偏移量、只记真实行号；②脚本只生成待核清单、不能判定「行号合法但内容换了」⇒ 判据「0 硬错+0 漂移」**且**人工过完 `--todo`。
 
 ## 配置分层（四层 + 每库覆盖）
 - `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时 `生效值=每库覆写 ?? 全局`，落 `libraries.settings`（稀疏 JSON，键=全局点分路径）。
-- `core/lib_settings.py` 与 `features.SETTING_CAPS` 是唯一真值源；接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（`?keys=` 按项恢复）；**可覆盖项清单见 REF**。
-- 可见性=能力矩阵（库类型有没有）∩ 每库开关，判定**只留一处**；「不可见」=「不存在」→ 404。
-- ⚠️ **能力键的判隐显轴要挑对**：`library.hasFeature(k)` 判的是「侧栏**当前选着**哪个库」，只适合**全局导航项/设置页**；读者侧要判「**这本书**属于哪个库」。
-- ⚠️ **新增「可保存的配置分区」是 `三处`同步点**：① `server.EDITABLE` 白名单 ② **`GET /api/config` 里那把硬编码键列表** ③ 前端 `settingsFields.ts` 的 `SECTION_KEYS`。漏任一处都**不报错**：①漏 ⇒ `PUT /api/config` 400「没有可保存的配置项」；②漏 ⇒ 能写进 settings.json 却读不回来；③漏 ⇒ 界面开关正常切换但收集到空 patch。**表现都只有一条 toast 一闪而过**。（第 40 期的 `reading` 三处全缺。判「某能力有没有页面入口」也照这三处查，只看配置文件一定误判。）
+- `core/lib_settings.py` 与 `features.SETTING_CAPS` 唯一真值源；接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（`?keys=` 按项恢复）；可覆盖项清单见 REF。
+- 可见性=能力矩阵（库类型有没有）∩ 每库开关，判定**只留一处**；「不可见」=「不存在」→404。
+- ⚠️ **能力键判隐显轴**：`library.hasFeature(k)` 判「侧栏当前选着哪个库」，只适合全局导航/设置页；读者侧要判「**这本书**属于哪个库」。
+- ⚠️ **新增「可保存的配置分区」=三处同步点**：① `server.EDITABLE` 白名单 ② `GET /api/config` 里硬编码键列表 ③ 前端 `settingsFields.ts` 的 `SECTION_KEYS`。漏任一处都**不报错**（①漏⇒400「无可保存项」；②漏⇒写进读不回；③漏⇒开关正常但 patch 空），表现都只一条 toast。判「某能力有没有页面入口」也照这三处查。
 
 ## 前端
 - Vue3 SFC+TS+Vite8+Tailwind v4+Pinia4+vue-router5(hash)；产物 `novelforge/static/v2/`（`/` 服务其 index.html，缺失 503）；**勿往 `novelforge/static/` 加手写页**。
 - 演示数据确定性常量禁 `Math.random()`；**路由 path 全局唯一**（同 path 两条被静默覆盖+侧栏重复 key）；`settingsNav`/router 注册表/侧栏**三处与组件同批改**；**零外部请求零 CDN**。
-- ⚠️ **设置页 `note` 是纯文本插值** ⇒ 写 `**`/反引号/`<strong>` 会**原样显示**（有契约测试钉住）。
-- 图表（唯一入口 `lib/charts.ts`）、偏好归属、侧栏导航契约、命名避让（`/explore` vs `/browse`）、实体总览六维、窄屏双写法、`ToolsLayout` 用 `onActivated` —— **域细节见 REF**，动前先读。
+- ⚠️ 设置页 `note` 纯文本插值 ⇒ `**`/反引号/`<strong>` 原样显示（契约钉住）。
+- 图表唯一入口 `lib/charts.ts`、偏好归属、侧栏导航契约、命名避让（`/explore` vs `/browse`）、实体总览六维、窄屏双写法、`ToolsLayout` 用 `onActivated` ⇒ **域细节见 REF**，动前先读。
