@@ -52,7 +52,11 @@ def _find_book(client, headers, title: str) -> dict:
 
 
 def _create_library(client, headers, name: str, ltype: str, root, **extra) -> dict:
-    payload = {"name": name, "type": ltype, "mode": "inplace", "root_path": str(root)}
+    # 第 41 期：内容来源 = 多个文件夹的绝对路径（就地引用）。`source_subdir` 是老接口的
+    # 相对子目录写法，这里拼成绝对路径落到 `source_dirs`；`mode` / `root_path` 已废弃。
+    sub = extra.pop("source_subdir", "")
+    dirs = str(pathlib.Path(root) / sub) if sub else str(root)
+    payload = {"name": name, "type": ltype, "source_dirs": [dirs]}
     payload.update(extra)
     r = client.post("/api/libraries", headers=headers, json=payload)
     assert r.status_code == 200, r.text
@@ -109,9 +113,10 @@ def test_书库列表不再有默认库(client, auth_headers, test_lib_id):
     items = data["items"]
     assert [i["id"] for i in items] == [test_lib_id], "只有夹具建的那一条，没有自动播种的库"
     assert all("is_default" not in i for i in items)
-    assert items[0]["type"] == "mixed" and items[0]["mode"] == "inplace"
-    # 新建向导要靠它给默认路径
-    assert data["source_dir"] == str(config.LIBRARY_SOURCE_DIR)
+    assert items[0]["type"] == "mixed"
+    assert "source_dirs" in items[0]
+    # 新建向导按已配置来源根浏览 / 下钻
+    assert any(r["path"] == str(config.LIBRARY_SOURCE_DIR) for r in data["source_roots"])
     assert {t["value"] for t in data["types"]} == {"ebook", "comic", "audiobook", "mixed"}
 
 
@@ -125,12 +130,13 @@ def test_一个书库都没有时列表真的为空(client, auth_headers, test_l
 def test_新建书库并改属性与扫描(client, auth_headers):
     # 库根必须落在白名单内（来源目录 / 导出目录 / 数据目录），这里用来源目录下的子目录
     root = pathlib.Path(config.LIBRARY_SOURCE_DIR) / "ebooks"
+    root.mkdir(parents=True, exist_ok=True)
     lib = _create_library(client, auth_headers, "电子书库", "ebook", root,
-                          source_subdir="ebooks", rules="科幻, 太空")
+                          rules="科幻, 太空")
     # 中文名派生不出 ASCII slug → 回退 `lib-<hash>`（URL 安全、单段，避免路径里出现中文）
     assert lib["id"].startswith("lib-")
     assert lib["type_label"] == "电子书库"
-    assert lib["mode_label"] == "就地引用"
+    assert lib["source_dirs"]
     assert lib["exists"] is True and lib["writable"] is True
     assert json.loads(lib["rules"])["keywords"] == ["科幻", "太空"]
 
@@ -147,9 +153,18 @@ def test_来源目录列举(client, auth_headers):
     (src / "comics").mkdir(parents=True, exist_ok=True)
     (src / "comics" / "某漫画.cbz").write_bytes(b"CBZ")
 
+    # 不传参：列出已配置来源根（每张含索引 / 名称 / 路径 / 直接子项数量）
     data = client.get("/api/libraries/source-dirs", headers=auth_headers).json()
-    assert data["exists"] is True
-    assert {d["name"]: d["entries"] for d in data["dirs"]}.get("comics") == 1
+    assert data["roots"]
+    root0 = next(r for r in data["roots"] if r["path"] == str(src))
+    assert root0["entries"] == 1  # comics 这一个子目录
+
+    # 下钻：取该根下 comics 目录的子项
+    d = client.get("/api/libraries/source-dirs",
+                   params={"root": root0["index"], "path": "comics"},
+                   headers=auth_headers).json()
+    names = {e["name"] for e in d["entries"]}
+    assert "某漫画.cbz" in names
 
 
 # ---------------------------------------------------------------------------
@@ -159,27 +174,24 @@ def test_来源目录列举(client, auth_headers):
 @pytest.mark.parametrize("bad_root", ["/etc", "/tmp", "relative/path", ""])
 def test_库根越界被拒(client, auth_headers, bad_root):
     r = client.post("/api/libraries", headers=auth_headers, json={
-        "name": "坏库", "type": "ebook", "mode": "inplace", "root_path": bad_root})
+        "name": "坏库", "type": "ebook", "source_dirs": [bad_root]})
     assert r.status_code == 400
-    assert "库根" in r.json()["detail"]
+    assert "库文件夹" in r.json()["detail"]
 
 
 @pytest.mark.parametrize("bad", [
-    ("name", "非法类型", {"type": "nope"}),
-    ("mode", "非法模式", {"mode": "somewhere"}),
+    ("type", "非法类型", {"type": "nope"}),
 ])
-def test_非法类型与模式被拒(client, auth_headers, tmp_path, bad):
+def test_非法类型被拒(client, auth_headers, tmp_path, bad):
     _, _, extra = bad
-    payload = {"name": "某库", "type": "ebook", "mode": "inplace",
-               "root_path": str(tmp_path / "libs" / "x")}
+    payload = {"name": "某库", "type": "ebook", "source_dirs": [str(tmp_path / "libs" / "x")]}
     payload.update(extra)
     assert client.post("/api/libraries", headers=auth_headers, json=payload).status_code == 400
 
 
 def test_空库名被拒(client, auth_headers, tmp_path):
     r = client.post("/api/libraries", headers=auth_headers, json={
-        "name": "   ", "type": "ebook", "mode": "inplace",
-        "root_path": str(tmp_path / "libs" / "x")})
+        "name": "   ", "type": "ebook", "source_dirs": [str(tmp_path / "libs" / "x")]})
     assert r.status_code == 400
     assert "库名" in r.json()["detail"]
 
@@ -605,9 +617,7 @@ def test_新建向导发出的payload被原样接收(client, auth_headers):
     payload = {                      # ← 与 LibraryWizard.submit() 逐字对应
         "name": "向导库",
         "type": "comic",
-        "mode": "inplace",
-        "root_path": str(root),
-        "source_subdir": "comics",
+        "source_dirs": [str(root)],
         "rules": "",
         # 成品目录必须与**所有**库根 / 扫描源目录错开（`_publish_path_allowed`，
         # 不只校验自己那一个）：`client` 夹具起手就有一条根在 `OUTPUT_DIR` 的库，
@@ -643,8 +653,8 @@ def test_向导没动格式时发的空数组等于继承而不是拒收(client,
     这个库会一本也扫不出来 —— 而且不会有任何报错。
     """
     r = client.post("/api/libraries", headers=auth_headers, json={
-        "name": "继承库", "type": "comic", "mode": "inplace",
-        "root_path": str(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "inherit"),
+        "name": "继承库", "type": "comic",
+        "source_dirs": [str(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "inherit")],
         "icon": "", "allowed_exts": [], "exclude": []})
     assert r.status_code == 200, r.text
     lib = r.json()["library"]
@@ -661,8 +671,8 @@ def test_编辑弹窗的payload也能改这三个新列(client, auth_headers):
     既不报错也不生效，界面还会显示「已保存」。
     """
     lib = client.post("/api/libraries", headers=auth_headers, json={
-        "name": "改前", "type": "ebook", "mode": "inplace",
-        "root_path": str(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "patch")}).json()["library"]
+        "name": "改前", "type": "ebook",
+        "source_dirs": [str(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "patch")]}).json()["library"]
 
     got = client.patch(f"/api/libraries/{lib['id']}", headers=auth_headers, json={
         "icon": "star", "allowed_exts": [".epub"], "exclude": ["备份/*"]}).json()["library"]

@@ -85,8 +85,7 @@ def test_comic_library_scan_triggers_auto_fetch(isolated, make_library, monkeypa
     calls = _patch_auto_fetch(monkeypatch)
     monkeypatch.setattr("novelforge.core.scrape.enabled", lambda lid: False)  # 隔离：本测试只验 auto_fetch
     src = config.LIBRARY_SOURCE_DIR
-    storage = config.OUTPUT_DIR
-    make_library("comic1", "漫画库", "comic", storage, mode="import", source_subdir="comics")
+    make_library("comic1", "漫画库", "comic", src / "comics")
     lib_settings.set_overrides("comic1", {
         "metadata_fetch.enabled": True,
         "metadata_fetch.auto_on_import": True,
@@ -107,8 +106,7 @@ def test_audiobook_library_scan_triggers_auto_fetch(isolated, make_library, make
     calls = _patch_auto_fetch(monkeypatch)
     monkeypatch.setattr("novelforge.core.scrape.enabled", lambda lid: False)  # 隔离：本测试只验 auto_fetch
     src = config.LIBRARY_SOURCE_DIR
-    storage = config.OUTPUT_DIR
-    make_library("audio1", "有声书库", "audiobook", storage, mode="import", source_subdir="audios")
+    make_library("audio1", "有声书库", "audiobook", src / "audios")
     lib_settings.set_overrides("audio1", {
         "metadata_fetch.enabled": True,
         "metadata_fetch.auto_on_import": True,
@@ -127,8 +125,7 @@ def test_auto_fetch_not_triggered_when_disabled(isolated, make_library, monkeypa
     """未开 auto_on_import 时，漫画入库不触发（默认行为零变化）。"""
     calls = _patch_auto_fetch(monkeypatch)
     src = config.LIBRARY_SOURCE_DIR
-    storage = config.OUTPUT_DIR
-    make_library("comic2", "漫画库2", "comic", storage, mode="import", source_subdir="comics2")
+    make_library("comic2", "漫画库2", "comic", src / "comics2")
     (src / "comics2").mkdir(parents=True, exist_ok=True)
     (src / "comics2" / "不抓的漫画.cbz").write_bytes(b"CBZ")
 
@@ -155,12 +152,12 @@ def test_audio_dir_not_mistaken_for_empty_file(isolated, make_library, make_audi
     """
     monkeypatch.setattr("novelforge.core.scrape.enabled", lambda lid: False)
     src = config.LIBRARY_SOURCE_DIR
-    storage = config.OUTPUT_DIR
-    make_library("audio9", "有声书库9", "audiobook", storage, mode="import", source_subdir="audios9")
+    lib = make_library("audio9", "有声书库9", "audiobook", src / "audios9")
     d = make_audio_dir(src / "audios9", "回归有声书", tracks=2)
 
     w = _make_watcher()
-    kind, detail = w.handle_file(d)
+    # 走逐库来源文件夹扫描的真实路径：目录直接归属该库（跳过大局路由，避免被按格式改派）
+    kind, detail = w.handle_file(d, owner_lib=lib)
 
     assert not (kind == "skipped" and detail == "空文件"), (
         "音频目录被误判为空文件 —— Windows 上目录 st_size 恒为 0，"

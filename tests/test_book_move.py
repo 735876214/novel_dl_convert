@@ -51,7 +51,7 @@ def env(isolated, tmp_path):                       # noqa: ARG001 —— 依赖 
     def _lib(lid, name, ltype, sub, publish=False):
         root = tmp_path / "libraries" / sub
         pdir = tmp_path / "out" / sub
-        db.create_library(lid, name, ltype, "inplace", str(root), source_subdir=sub,
+        db.create_library(lid, name, ltype, source_dirs=str(root),
                           publish_path=str(pdir) if publish else "")
         return {"id": lid, "name": name, "root": root,
                 "pdir": pdir if publish else None}

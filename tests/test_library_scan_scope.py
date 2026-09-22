@@ -169,5 +169,5 @@ def test_排除图案与允许格式互不影响(scope_lib):
 def test_库根不存在只是扫不到不抛(scope_lib, tmp_path):
     """库根被删掉时扫描返回空列表 —— 一条库的扫描不该把调用方打崩。"""
     lib, _ = scope_lib
-    pathlib.Path(lib["root_path"]).rename(tmp_path / "gone")
+    pathlib.Path(library.roots_of(lib)[0]).rename(tmp_path / "gone")
     assert _names(lib["id"]) == set()

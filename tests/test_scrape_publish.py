@@ -39,8 +39,8 @@ def env(isolated, tmp_path: pathlib.Path) -> dict:  # noqa: ARG001 —— 依赖
     root = tmp_path / "libraries" / "novels"
     pdir = tmp_path / "libraries" / "_sorted"
     root.mkdir(parents=True, exist_ok=True)
-    db.create_library("novels", "小说库", "ebook", "inplace", str(root),
-                      source_subdir="novels", publish_path=str(pdir))
+    db.create_library("novels", "小说库", "ebook", source_dirs=str(root),
+                      publish_path=str(pdir))
     library.invalidate()
     return {"lid": "novels", "root": root, "pdir": pdir}
 
@@ -143,7 +143,7 @@ def test_已是最新时不重复刮削(env):
 def test_未配置成品目录的库不入队也不建台账(env):
     root = env["root"].parent / "nolink"
     root.mkdir(parents=True, exist_ok=True)
-    db.create_library("nolink", "无成品库", "ebook", "inplace", str(root))
+    db.create_library("nolink", "无成品库", "ebook", source_dirs=str(root))
     _epub(root, "无成品.epub", title="无成品")
     library.invalidate()
     book = next(x for x in library.books("nolink") if x["name"] == "无成品.epub")
@@ -383,8 +383,8 @@ def test_接口_建库校验成品目录边界(client, auth_headers, tmp_path):
     base = pathlib.Path(config.LIBRARY_SOURCE_DIR)
     root = base / "comics"
     ok = client.post("/api/libraries", headers=auth_headers, json={
-        "name": "漫画库", "type": "comic", "mode": "inplace",
-        "root_path": str(root), "source_subdir": "comics",
+        "name": "漫画库", "type": "comic",
+        "source_dirs": [str(root)],
         "publish_path": str(base / "_sorted"),
     })
     assert ok.status_code == 200, ok.text
@@ -394,8 +394,8 @@ def test_接口_建库校验成品目录边界(client, auth_headers, tmp_path):
 
     # 与**自己**的库根重叠 → 400（副本会被扫回来变成重复书）
     bad = client.post("/api/libraries", headers=auth_headers, json={
-        "name": "坏库", "type": "comic", "mode": "inplace",
-        "root_path": str(base / "bad"), "source_subdir": "bad",
+        "name": "坏库", "type": "comic",
+        "source_dirs": [str(base / "bad")],
         "publish_path": str(base / "bad" / "sorted"),
     })
     assert bad.status_code == 400
@@ -403,8 +403,8 @@ def test_接口_建库校验成品目录边界(client, auth_headers, tmp_path):
 
     # 扫描源目录本身也不行
     bad2 = client.post("/api/libraries", headers=auth_headers, json={
-        "name": "坏库2", "type": "comic", "mode": "inplace",
-        "root_path": str(base / "bad2"), "source_subdir": "bad2",
+        "name": "坏库2", "type": "comic",
+        "source_dirs": [str(base / "bad2")],
         "publish_path": str(base / "bad2"),
     })
     assert bad2.status_code == 400
@@ -426,8 +426,8 @@ def test_接口_扫描后按开关自动入队(client, auth_headers):
     root.mkdir(parents=True, exist_ok=True)
     _epub(root, "扫描.epub", title="扫描")
     created = client.post("/api/libraries", headers=auth_headers, json={
-        "name": "小说库", "type": "ebook", "mode": "inplace",
-        "root_path": str(root), "source_subdir": "novels",
+        "name": "小说库", "type": "ebook",
+        "source_dirs": [str(root)],
         "publish_path": str(base / "_sorted"),
     })
     assert created.status_code == 200, created.text

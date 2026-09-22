@@ -88,8 +88,8 @@ def test_并发读写下不抛异常且每库覆写不丢(isolated):  # noqa: AR
 
     原实现下这里必红 —— `InterfaceError` 满屏，且覆写被读成全局的 True。
     """
-    db.create_library(CONC_LIB, "并发库", "ebook", "inplace",
-                      str(config.OUTPUT_DIR),
+    db.create_library(CONC_LIB, "并发库", "ebook",
+                      source_dirs=str(config.OUTPUT_DIR),
                       settings=json.dumps({"scrape.enabled": False}))
 
     pre = lib_settings.effective(CONC_LIB)

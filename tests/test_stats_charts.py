@@ -309,13 +309,11 @@ def two_libs(make_library, tmp_path):  # noqa: ARG001 —— 依赖 isolated 切
     """
     src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
     for lid, lang, year in (("sc-a", "zh", "2012"), ("sc-b", "en", "1998")):
-        make_library(lid, lid, "ebook", tmp_path / f"st_{lid}",
-                     mode="import", source_subdir=lid)
+        make_library(lid, lid, "ebook", src / lid)
         d = src / lid
         d.mkdir(parents=True, exist_ok=True)
         _epub(d, f"{lid}.epub", title=lid, language=lang,
               meta={"date": year, "tags": [f"题-{lid}"]})
-        watcher.FolderWatcher(cfg=config.load_config()).scan_library_now(lid)
     library.invalidate()
 
 

@@ -49,20 +49,20 @@ def test_target_root落在命中的库根(typed_libraries):
     assert library_rules.target_root(name="测试漫画.cbz") == src / "comics"
 
 
-def test_来源子目录名优先于格式推断(isolated, tmp_path, make_library):  # noqa: ARG001
-    """放在 `comics/` 下的 .epub 进漫画库 —— 显式摆放意图高于格式推断。
+def test_库名优先于格式推断(isolated, tmp_path, make_library):  # noqa: ARG001
+    """放在与库同名的子目录下的 .epub 进漫画库 —— 显式摆放意图（库名）高于格式推断。
 
-    ⚠️ **第 40 期改过这个用例的写法**，原来用的是默认白名单的漫画库
-    （`_COMIC_EXTS = .cbz/.cbr`）。那样 `.epub` 落进漫画库就是**隐形文件**
-    （文件落盘了、书目里却没有），现在会被前置闸门拦下（见下一条用例）。
-    把 `.epub` 加进漫画库的「允许的格式」之后，「子目录 > 格式」这条契约本体
-    才测得出来：按格式推断它该进电子书库，按摆放意图它进漫画库。
+    第 41 期起「来源子目录名」概念移除，改为按**库名**匹配：文件所在子目录名等于某库的
+    库名即命中该库，优先级高于按扩展名推断类型。
     """
     src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
-    make_library("ebook", "电子书库", "ebook", src / "ebooks", source_subdir="ebooks")
-    make_library("comic", "漫画库", "comic", src / "comics", source_subdir="comics",
+    make_library("ebook", "电子书库", "ebook", src / "ebooks")
+    make_library("comic", "漫画库", "comic", src / "漫画库",
                  allowed_exts='[".cbz", ".cbr", ".epub"]')
-    hit = library_rules.decide(src=src / "comics" / "随便什么.epub")
+    # .epub 按格式应进电子书库；但放进名为「漫画库」的子目录（与库名相同，且是该库来源
+    # 目录的第一层）→ 按库名命中漫画库，显式摆放意图高于格式推断。
+    (src / "漫画库").mkdir(parents=True, exist_ok=True)
+    hit = library_rules.decide(src=src / "漫画库" / "随便什么.epub")
     assert hit is not None
     assert hit["id"] == "comic"
 

@@ -77,14 +77,21 @@ def test_向导建议只为缺失类型给出(typed_libraries, default_with_book
     assert migrate.preview()["suggest_specs"] == []
 
 
-def test_向导建议的两种存放方案(default_with_books):
+def test_向导建议只为缺失类型给出就地引用来源(default_with_books):
+    """第 41 期：建议只给「缺失类型」库，且内容来源是就地引用的绝对路径（多文件夹）。
+
+    不再有「独立存储（import）」方案 —— 只有一个就地引用方案，来源根下的同名子目录。
+    """
     specs = migrate.preview()["suggest_specs"]
     assert [s["type"] for s in specs] == ["ebook", "comic", "audiobook"]
     for s in specs:
-        assert s["inplace"]["root_path"] == str(pathlib.Path(config.LIBRARY_SOURCE_DIR)
-                                                / s["source_subdir"])
-        # 独立存储必须落在 DATA_DIR 之内（库根白名单的另一半）
-        assert s["import"]["root_path"].startswith(str(config.DATA_DIR))
+        assert s["source_dirs"], "就地引用：建议必须有内容来源文件夹"
+        assert isinstance(s["source_dirs"], list)
+        for d in s["source_dirs"]:
+            dp = pathlib.Path(d)
+            assert dp.is_absolute(), "就地引用：来源必须是绝对路径"
+            assert dp.is_relative_to(pathlib.Path(config.LIBRARY_SOURCE_DIR)), \
+                "就地引用：来源必须落在已配置来源根内"
 
 
 # ---------------------------------------------------------------------------

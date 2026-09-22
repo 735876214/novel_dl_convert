@@ -174,6 +174,10 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "output")
     monkeypatch.setattr(config, "LIBRARY_SOURCE_DIR", tmp_path / "libraries")
+    # 第 41 期：多来源根。测试里就一个来源根（即上面这个）；同步让服务端的边界校验
+    # （normalize_source_dirs 只认 LIBRARY_SOURCE_ROOTS）放行 tmp_path 下的库根。
+    monkeypatch.setattr(config, "LIBRARY_SOURCE_ROOTS",
+                        [{"name": "libraries", "path": str(tmp_path / "libraries")}])
     db.close()
     db.init()
     # 第 37 期：产品**不再播种任何书库**（全新部署就是 0 个库，等用户手建），
@@ -183,8 +187,8 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     # id 沿用 "default" 只是省事：它**没有任何特殊含义**了，产品侧「默认库」
     # 这个概念已经整个下线（`DEFAULT_LIBRARY_ID` / `default_library()` /
     # `ensure_default_library()` 都已删除），`"default"` 现在只是个普通 id 字符串。
-    db.create_library(TEST_LIB_ID, "测试书库", "mixed", "inplace",
-                      str(config.OUTPUT_DIR), sort_order=0)
+    db.create_library(TEST_LIB_ID, "测试书库", "mixed",
+                      source_dirs=str(config.OUTPUT_DIR), sort_order=0)
     library.invalidate()
     try:
         yield
@@ -266,8 +270,11 @@ def make_library(isolated) -> "callable":  # noqa: ARG001
               allowed_exts: str = "", exclude: str = "") -> dict:
         r = pathlib.Path(root)
         r.mkdir(parents=True, exist_ok=True)
-        lib = db.create_library(lid, name, ltype, mode, str(r),
-                               source_subdir=source_subdir, rules=rules,
+        # 第 41 期：内容来源 = 多个文件夹的绝对路径（就地引用）。老接口的 `root_path` 即扫描
+        # 文件夹本体，`source_subdir` 只是展示用的相对子目录（不拼进路径、不落库）；`mode`
+        # 参数已无意义（只剩就地引用），保留签名兼容、忽略之。
+        dirs = str(r)
+        lib = db.create_library(lid, name, ltype, source_dirs=dirs, rules=rules,
                                allowed_exts=allowed_exts, exclude=exclude)
         library.invalidate()
         return lib

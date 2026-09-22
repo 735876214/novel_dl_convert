@@ -43,8 +43,7 @@ def _audio_dir(root, name: str) -> pathlib.Path:
 
 def _new_library(client, headers, name: str, root, ltype: str) -> dict:
     r = client.post("/api/libraries", headers=headers,
-                    json={"name": name, "type": ltype, "mode": "inplace",
-                          "root_path": str(root)})
+                    json={"name": name, "type": ltype, "source_dirs": [str(root)]})
     assert r.status_code == 200, r.text
     library.invalidate()
     return r.json()["library"]

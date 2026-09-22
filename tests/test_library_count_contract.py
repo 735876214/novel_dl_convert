@@ -59,7 +59,7 @@ def test_新建库之后立刻查计数就是真实值(client, auth_headers, mak
     make_book(manga, "第二卷.epub")
 
     r = client.post("/api/libraries", headers=auth_headers,
-                    json={"name": "漫画库", "type": "mixed", "root_path": str(manga)})
+                    json={"name": "漫画库", "type": "mixed", "source_dirs": [str(manga)]})
     assert r.status_code == 200, r.text
     lid = r.json()["library"]["id"]
 
@@ -86,7 +86,7 @@ def test_空库真的是_0_而不是别的库的数(client, auth_headers, defaul
     empty = tmp_path / "libraries" / "empty"
     empty.mkdir(parents=True, exist_ok=True)
     r = client.post("/api/libraries", headers=auth_headers,
-                    json={"name": "空库", "type": "mixed", "root_path": str(empty)})
+                    json={"name": "空库", "type": "mixed", "source_dirs": [str(empty)]})
     assert r.status_code == 200, r.text
 
     counts = _counts(client, auth_headers)
@@ -127,7 +127,7 @@ def test_改库根之后计数立刻跟着走(client, auth_headers, default_root
         make_book(fresh, f"{n}.epub")
 
     r = client.patch(f"/api/libraries/{START_LIB}", headers=auth_headers,
-                     json={"root_path": str(fresh)})
+                     json={"source_dirs": [str(fresh)]})
     assert r.status_code == 200, r.text
 
     assert _counts(client, auth_headers)[START_LIB] == 3, \

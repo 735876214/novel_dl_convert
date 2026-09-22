@@ -11,14 +11,11 @@ from novelforge.core import library, watcher
 
 
 def _make_lib_and_book(make_library, tmp_path, lid: str, book_name: str) -> None:
-    """建一个 import 模式库，并把一本书导入它的 storage（与上位测试同口径）。"""
+    """建一个就地引用库，并把一本书放进它的来源文件夹（与上位测试同口径）。"""
     src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
-    storage = tmp_path / f"storage_{lid}"
-    make_library(lid, lid, "ebook", storage, mode="import", source_subdir=lid)
+    make_library(lid, lid, "ebook", src / lid)
     (src / lid).mkdir(parents=True, exist_ok=True)
     (src / lid / book_name).write_bytes(b"EPUB")
-    w = watcher.FolderWatcher(cfg=config.load_config())
-    w.scan_library_now(lid)
     library.invalidate()
 
 

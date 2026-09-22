@@ -33,8 +33,8 @@ def env(isolated, tmp_path: pathlib.Path) -> dict:  # noqa: ARG001 —— 依赖
     root = tmp_path / "libraries" / "novels"
     pdir = tmp_path / "libraries" / "_sorted"
     root.mkdir(parents=True, exist_ok=True)
-    db.create_library("novels", "小说库", "ebook", "inplace", str(root),
-                      source_subdir="novels", publish_path=str(pdir))
+    db.create_library("novels", "小说库", "ebook", source_dirs=str(root),
+                      publish_path=str(pdir))
     library.invalidate()
     return {"lid": "novels", "root": root, "pdir": pdir}
 

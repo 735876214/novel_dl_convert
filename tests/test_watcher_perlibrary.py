@@ -2,8 +2,8 @@
 
 核心断言（取自方案拍板）：
 - 全局 INPUT_DIR 行为不变（格式/关键词路由）；
-- 每个库的 LIBRARY_SOURCE_DIR/<source_subdir> 是独立扫描目标，带该库 watch/interval/cron；
-- 关掉的库（watch=0）不扫它的来源子目录；开的库按间隔扫、设 cron 的只在定时窗口扫；
+- 每个库的每个来源文件夹（source_dirs，就地引用）是独立扫描目标，带该库 watch/interval/cron；
+- 关掉的库（watch=0）不扫它的来源文件夹；开的库按间隔扫、设 cron 的只在定时窗口扫；
 - 坏 cron 退化为 interval，不崩；每库目标扫完回写 last_scan_at（LAST SCAN）。
 
 全部离线、不依赖真 EPUB（扫描只按扩展名收书）。
@@ -29,8 +29,8 @@ def _make_watcher(**kw):
 def test_derive_targets_honors_per_library_watch(isolated, make_library):
     """关库 (watch=0) 的目标 watch=False；开库与全局 INPUT_DIR 目标 watch=True。"""
     src = config.LIBRARY_SOURCE_DIR
-    make_library("open1", "开库", "ebook", src / "open1", source_subdir="open1")
-    make_library("closed1", "关库", "ebook", src / "closed1", source_subdir="closed1")
+    make_library("open1", "开库", "ebook", src / "open1")
+    make_library("closed1", "关库", "ebook", src / "closed1")
     db.update_library("closed1", watch=0)
 
     w = _make_watcher()
@@ -40,14 +40,14 @@ def test_derive_targets_honors_per_library_watch(isolated, make_library):
     assert targets["closed1"]["watch"] is False
     # 全局 INPUT_DIR 目标（library_id=None）始终 watch=True（沿用全局 enabled）
     assert targets[None]["watch"] is True
-    # 默认库没有 source_subdir，不应成为逐库目标
-    assert all(t["library_id"] is not None for t in targets.values() if t["library_id"] != "open1" and t["library_id"] != "closed1") or targets[None]["library_id"] is None
+    # 默认库（mixed，来源=OUTPUT_DIR）也会成为一个逐库目标
+    assert targets["default"]["watch"] is True
 
 
 def test_derive_targets_per_library_interval_and_cron(isolated, make_library):
     """逐库目标的 interval / cron 取自该库列；scan_interval=0 时继承全局。"""
     src = config.LIBRARY_SOURCE_DIR
-    make_library("lib1", "库1", "ebook", src / "lib1", source_subdir="lib1")
+    make_library("lib1", "库1", "ebook", src / "lib1")
     db.update_library("lib1", scan_interval=120, scan_cron="0 3 * * *")
 
     w = _make_watcher()
@@ -79,28 +79,28 @@ def test_should_scan_cron_window_and_bad_cron_fallback(isolated):
 # ---------------------------------------------------------------------------
 
 def test_open_library_source_is_scanned_and_writes_last_scan(isolated, make_library, tmp_path):
-    """开库（import 模式）的来源子目录被扫描，文件收进 storage，并回写 last_scan_at。"""
+    """开库（就地引用）的来源文件夹被扫描，文件登记入库，并回写 last_scan_at。"""
     src = config.LIBRARY_SOURCE_DIR
-    storage = tmp_path / "storage"
-    make_library("eb1", "电子书", "ebook", storage, mode="import", source_subdir="ebooks")
-    (src / "ebooks").mkdir(parents=True, exist_ok=True)
-    (src / "ebooks" / "测试书.epub").write_bytes(b"EPUB")
+    folder = src / "ebooks"
+    make_library("eb1", "电子书", "ebook", folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "测试书.epub").write_bytes(b"EPUB")
 
     w = _make_watcher()
     w.scan_library_now("eb1")
 
-    assert (storage / "测试书.epub").exists(), "开库来源子目录的文件应被摄入 storage"
+    assert (folder / "测试书.epub").exists(), "就地引用库的文件应在原地被登记"
     assert db.get_library("eb1")["last_scan_at"] > 0, "应回写 LAST SCAN"
 
 
 def test_closed_library_source_not_scanned_by_scheduler(isolated, make_library, tmp_path):
-    """复刻 _loop 的调度判定：关库（watch=0）的来源子目录不应被扫（文件留在原地）。"""
+    """复刻 _loop 的调度判定：关库（watch=0）的来源文件夹不应被扫（文件留在原地）。"""
     src = config.LIBRARY_SOURCE_DIR
-    storage = tmp_path / "storage"
-    make_library("cl1", "关库", "ebook", storage, mode="import", source_subdir="clsrc")
+    folder = src / "clsrc"
+    make_library("cl1", "关库", "ebook", folder)
     db.update_library("cl1", watch=0)
-    (src / "clsrc").mkdir(parents=True, exist_ok=True)
-    (src / "clsrc" / "不应被收.epub").write_bytes(b"EPUB")
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "不应被收.epub").write_bytes(b"EPUB")
 
     w = _make_watcher()
     # 与 FolderWatcher._loop 一致的判定：只扫 watch=True 的目标
@@ -108,8 +108,7 @@ def test_closed_library_source_not_scanned_by_scheduler(isolated, make_library, 
         if t["watch"]:
             w._scan_target(t)
 
-    assert not (storage / "不应被收.epub").exists(), "关库不应扫其来源子目录"
-    assert (src / "clsrc" / "不应被收.epub").exists(), "关库文件应留在来源目录"
+    assert (folder / "不应被收.epub").exists(), "关库文件应留在来源目录"
 
 
 def test_global_input_dir_still_routes_to_a_matching_library(isolated, tmp_path, make_library):
@@ -126,7 +125,7 @@ def test_global_input_dir_still_routes_to_a_matching_library(isolated, tmp_path,
     w = _make_watcher()
     w.scan_once()  # 只扫全局 INPUT_DIR
 
-    assert (pathlib.Path(lib["root_path"]) / "全局书.epub").exists(), \
+    assert (library.roots_of(lib)[0] / "全局书.epub").exists(), \
         "命中了 ebook 库就该落进它的根"
 
 
@@ -145,7 +144,7 @@ def test_global_input_dir_不收不命中任何库的文件(isolated, tmp_path, 
     res = w.scan_once()                 # 只扫全局 INPUT_DIR
 
     assert (inp / "没人要.xyz").exists(), "拒收时**不许**动原文件"
-    assert not (pathlib.Path(lib["root_path"]) / "没人要.xyz").exists()
+    assert not (library.roots_of(lib)[0] / "没人要.xyz").exists()
     assert res["failed"], "拒收要如实进失败清单，不能静默跳过"
     assert "没有可接收的书库" in res["failed"][0]["error"]
 
@@ -183,7 +182,8 @@ def test_建库后被拒收过的文件会自动重新收走(client, auth_header
 
     root = config.LIBRARY_SOURCE_DIR / "ebooks"
     r = client.post("/api/libraries", headers=auth_headers,
-                    json={"name": "电子书库", "type": "ebook", "root_path": str(root)})
+                    json={"name": "电子书库", "type": "ebook",
+                          "source_dirs": [str(root)]})
     assert r.status_code == 200, r.text
 
     res = w.scan_once()

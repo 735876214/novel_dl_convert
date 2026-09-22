@@ -37,8 +37,8 @@ def env(isolated, tmp_path: pathlib.Path) -> dict:  # noqa: ARG001 —— 依赖
     root = tmp_path / "libraries" / "audio"
     pdir = tmp_path / "libraries" / "_sorted"
     root.mkdir(parents=True, exist_ok=True)
-    db.create_library("audio", "有声书库", "audiobook", "inplace", str(root),
-                      source_subdir="audio", publish_path=str(pdir))
+    db.create_library("audio", "有声书库", "audiobook", source_dirs=str(root),
+                      publish_path=str(pdir))
     library.invalidate()
     return {"lid": "audio", "root": root, "pdir": pdir}
 

@@ -43,6 +43,7 @@
 （等价于「回程不统一」）⇒ 两条回滚用例**都红**，且分别是
 「副本没跟着回来」与「关联数据没从新 id 搬回来」；另两条不碰回滚的用例保持绿。
 """
+import json
 import pathlib
 import shutil
 
@@ -238,7 +239,7 @@ def test_存量批次回滚不造假台账(published, ebook_target):
     target_lib, _target_pdir = ebook_target
     old_book, row_before, start_pdir = published["book"], published["row"], published["pdir"]
     src_path = pathlib.Path(published["src"])
-    dst_path = pathlib.Path(target_lib["root_path"]) / "三体.epub"
+    dst_path = pathlib.Path(json.loads(target_lib["source_dirs"])[0]) / "三体.epub"
 
     # —— 手工复刻旧版 execute 的终态（不调 execute，因为它现在已经是新语义）
     batch_id = "auto-legacy-fixture"
