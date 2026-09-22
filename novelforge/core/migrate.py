@@ -187,7 +187,8 @@ def preview(targets: dict = None) -> dict:
             it["status"] = "ambiguous"
             it["reason"] = "存在多个同类库，需要指定目标库"
         else:
-            root = pathlib.Path(dst.get("root_path") or config.OUTPUT_DIR)
+            _dst_roots = library.roots_of(dst)
+            root = _dst_roots[0] if _dst_roots else pathlib.Path(config.OUTPUT_DIR)
             it["dst_library_id"] = str(dst.get("id") or "")
             it["dst_library_name"] = str(dst.get("name") or "")
             it["dst"] = str(root / b["name"])
@@ -216,23 +217,23 @@ def preview(targets: dict = None) -> dict:
 
 
 def suggest_specs() -> list:
-    """向导用：为**缺失**的类型库给出两套位置方案（就地引用 / 独立存储）。
+    """向导用：为**缺失**的类型库给出就地引用的默认内容来源（多文件夹，绝对路径）。
 
     只给默认值，不落库；用户选定后由调用方建库（见 server 的书库 CRUD）。
 
-    ⚠️ 库里只存**来源子目录名**（相对 ``LIBRARY_SOURCE_DIR``），不存来源的绝对路径 ——
-    挂载点换了之后绝对路径会失效，相对子目录不会。``import`` 模式另有自己的存储根
-    （``DATA_DIR/libraries/<id>``，与配置同卷、随备份）。
+    第 41 期：库持有多个文件夹（``source_dirs``，绝对路径数组），不再有「来源子目录名」
+    与「独立存储（import）」概念。默认建议取第一个来源根下的同名子目录作为内容来源，
+    用户可在向导里增删 / 改选。
     """
     out = []
     for t in TARGET_TYPES:
         if libraries_of_type(t):
             continue
         name, sub = SUGGEST[t]
+        default_root = config.LIBRARY_SOURCE_ROOTS[0]["path"] if config.LIBRARY_SOURCE_ROOTS else config.OUTPUT_DIR
         out.append({
-            "id": t, "type": t, "name": name, "source_subdir": sub,
-            "inplace": {"mode": "inplace", "root_path": str(config.LIBRARY_SOURCE_DIR / sub)},
-            "import": {"mode": "import", "root_path": str(config.DATA_DIR / "libraries" / t)},
+            "id": t, "type": t, "name": name,
+            "source_dirs": [str(pathlib.Path(str(default_root)) / sub)],
         })
     return out
 
@@ -358,24 +359,31 @@ def _lib_id_of_path(path) -> str:
         return ""
     best, best_len = "", -1
     for l in library.libraries():
-        raw = str(l.get("root_path") or "")
-        if not raw:
-            continue                           # 空根会 resolve 成 cwd，误匹配一大片
-        try:
-            root = str(pathlib.Path(raw).resolve())
-        except Exception:                      # pragma: no cover
-            continue
-        if want.startswith(root) and len(root) > best_len:
-            best, best_len = str(l.get("id") or ""), len(root)
+        for root_p in library.roots_of(l):
+            try:
+                root = str(root_p)
+            except Exception:                   # pragma: no cover
+                continue
+            if want.startswith(root) and len(root) > best_len:
+                best, best_len = str(l.get("id") or ""), len(root)
     return best
 
 
 def _rel_of(path, library_id: str) -> str:
-    """绝对路径 → **库内相对路径**（``name`` 的口径）。取不到就退化成 basename。"""
+    """绝对路径 → **库内相对路径**（``name`` 的口径）。取不到就退化成 basename。
+
+    第 41 期：库有多个文件夹，需找到该路径实际所属的那个根再算相对名。
+    """
     try:
-        return pathlib.Path(str(path)).relative_to(library.root_of(library_id)).as_posix()
+        p = pathlib.Path(str(path)).resolve()
     except Exception:
         return pathlib.PurePosixPath(str(path)).name
+    for d in library.roots_of(library.get_library(library_id) or {}):
+        try:
+            return p.relative_to(d).as_posix()
+        except Exception:
+            continue
+    return pathlib.PurePosixPath(str(path)).name
 
 
 def _copy_rel(book: dict, name: str, library_id: str) -> str:
@@ -478,7 +486,8 @@ def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
     if not dst_lib:
         raise ValueError("目标书库不存在")
     dst_lib_id = str(dst_lib.get("id") or "")
-    dst_root = pathlib.Path(dst_lib.get("root_path") or config.OUTPUT_DIR)
+    _dst_roots = library.roots_of(dst_lib)
+    dst_root = _dst_roots[0] if _dst_roots else pathlib.Path(config.OUTPUT_DIR)
     dec = {}
     for d in (decisions or []):
         if isinstance(d, dict) and d.get("id"):

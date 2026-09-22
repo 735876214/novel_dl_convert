@@ -13,6 +13,7 @@ import hashlib
 import pathlib
 import re
 import threading
+import json
 import time
 from datetime import datetime, timedelta
 
@@ -474,19 +475,18 @@ def init():
             );
             CREATE INDEX IF NOT EXISTS idx_custom_value_book ON book_custom_values(book_id);
             -- 多书库（第 10 期 D8）：库实体。type 决定功能显隐矩阵。
-            -- root_path **永远是实际库根**（扫描 / 落盘 / 路径解析的唯一根），两种模式一致。
-            -- mode='inplace' 就地引用来源子目录（不搬文件）；'import' 库另有独立存储（root_path 就是它）。
-            -- source_subdir 来源子目录名（相对 LIBRARY_SOURCE_DIR）—— **只存相对名**：
-            --   挂载点换了之后存绝对路径会失效，存相对子目录不会。
-            -- storage_path 预留（当前为空）：将来「来源与存储在物理上分开记」时才用。
+            -- 第 41 期重构：库不再有单一 root_path，**持有多个文件夹的绝对路径**
+            -- （source_dirs，JSON 数组）。每个文件夹必须落在某个已配置来源根之内
+            -- （就地引用语义，跨根合法）。扫描 / 落盘 / 路径解析均遍历这些绝对路径。
+            -- 原 mode('inplace'/'import') / root_path / storage_path / source_subdir
+            -- 概念已移除——本项目只保留「就地引用」，相对子目录信息由前端展示层持有，不落库。
             CREATE TABLE IF NOT EXISTS libraries (
                 id             TEXT PRIMARY KEY,
                 name           TEXT NOT NULL,
                 type           TEXT NOT NULL DEFAULT 'mixed',
-                mode           TEXT NOT NULL DEFAULT 'inplace',
-                root_path      TEXT NOT NULL,
-                storage_path   TEXT NOT NULL DEFAULT '',
-                source_subdir  TEXT NOT NULL DEFAULT '',
+                -- 第 41 期：该库所有文件夹的绝对路径（JSON 数组文本）。空 = 尚未配置内容来源。
+                -- 每个路径必须落在某个来源根之内（server 建/改库时校验）。
+                source_dirs    TEXT NOT NULL DEFAULT '',
                 rules          TEXT NOT NULL DEFAULT '',
                 -- 每库覆盖（第 13 期）：JSON 文本，键 = 全局配置的**点分路径**（如 "output.layout"）。
                 -- 只存**被本库覆写**的键；未出现的键一律继承全局 ——
@@ -496,7 +496,7 @@ def init():
                 created_at     REAL NOT NULL,
                 last_scan_at   REAL NOT NULL DEFAULT 0,
                 last_scan_note TEXT NOT NULL DEFAULT '',
-                -- 逐库扫描调度（第 17 期 T2）：watch=是否监听该库来源子目录；
+                -- 逐库扫描调度（第 17 期 T2）：watch=是否监听该库文件夹；
                 -- scan_interval=轮询间隔秒（0=继承全局）；scan_cron=定时表达式（空=不启用）。
                 watch           INTEGER NOT NULL DEFAULT 1,
                 scan_interval   INTEGER NOT NULL DEFAULT 0,
@@ -612,6 +612,33 @@ def init():
             c.execute("ALTER TABLE libraries ADD COLUMN allowed_exts TEXT NOT NULL DEFAULT ''")
         if lcols and "exclude" not in lcols:
             c.execute("ALTER TABLE libraries ADD COLUMN exclude TEXT NOT NULL DEFAULT ''")
+        # 第 41 期：libraries 重构为「多文件夹就地引用」，取代单一 root_path。
+        #   - 新增 source_dirs（JSON 数组，存每个文件夹的绝对路径）；
+        #   - 删除 mode / root_path / storage_path / source_subdir。
+        # 老库迁移：先把 inplace/import 库的 root_path（import 回退 storage_path）
+        # 回填进 source_dirs（不丢库），再删旧列。幂等可重跑。
+        lcols41 = {r["name"] for r in c.execute("PRAGMA table_info(libraries)")}
+        if "source_dirs" not in lcols41:
+            c.execute("ALTER TABLE libraries ADD COLUMN source_dirs TEXT NOT NULL DEFAULT ''")
+        # 回填（与旧列是否存在无关，幂等：source_dirs 已填过的不动）
+        if "root_path" in lcols41:
+            rows = c.execute(
+                "SELECT id, root_path, storage_path FROM libraries "
+                "WHERE (source_dirs IS NULL OR source_dirs = '') "
+                "AND (root_path IS NOT NULL AND root_path <> '')"
+            ).fetchall()
+            for r in rows:
+                rp = r["root_path"] or r["storage_path"] or ""
+                if rp:
+                    c.execute("UPDATE libraries SET source_dirs=? WHERE id=?",
+                              (json.dumps([str(rp)], ensure_ascii=False), r["id"]))
+        # 删旧列（SQLite 3.35+ 支持 DROP COLUMN；老版本静默跳过，不影响运行）。
+        for _col in ("mode", "root_path", "storage_path", "source_subdir"):
+            if _col in lcols41:
+                try:
+                    c.execute(f"ALTER TABLE libraries DROP COLUMN {_col}")
+                except Exception:
+                    pass
         # 第 25 期：users 表补账号资料列（展示名 / 时区 / 头像相对文件名）。
         # 老库不补列则读写会报 no such column（与上方同理）。
         ucols = {r["name"] for r in c.execute("PRAGMA table_info(users)")}
@@ -1921,9 +1948,15 @@ def upgrade_book_ids() -> dict:
     index: dict = {}
     for lib in _lib.libraries():
         lid = str(lib.get("id") or "")
-        d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
-        if not d.is_dir():
-            continue
+        _dirs = lib.get("source_dirs") or ""
+        try:
+            _dir_list = json.loads(_dirs) if _dirs else []
+        except Exception:
+            _dir_list = []
+        for _dp in _dir_list:
+            d = pathlib.Path(str(_dp))
+            if not d.is_dir():
+                continue
         for f in d.rglob("*"):
             if not f.is_file():
                 continue
@@ -3285,8 +3318,8 @@ def scrape_books_in(library_id, book_ids) -> dict:
 
 #: 库类型：电子书 / 漫画 / 有声书 / 混合通用（决定功能显隐矩阵）
 LIBRARY_TYPES = ("ebook", "comic", "audiobook", "mixed")
-#: 归属模式：inplace = 就地引用来源子目录（不搬文件）；import = 另有存储目录（复制/移入）
-LIBRARY_MODES = ("inplace", "import")
+#: 归属模式：本项目仅保留「就地引用」。mode 列已移除；保留常量仅作历史引用占位。
+LIBRARY_MODES = ("inplace",)
 
 
 def list_libraries() -> list:
@@ -3301,8 +3334,25 @@ def get_library(lid) -> "dict | None":
     return dict(row) if row else None
 
 
-def create_library(lid, name, type_, mode="inplace", root_path="",
-                   storage_path="", source_subdir="", rules="", sort_order=0,
+def _norm_source_dirs(value) -> str:
+    """把 source_dirs 入参规整为 JSON 数组文本（入库统一形态）。
+
+    接受：list / tuple / JSON 文本；空或非法则回落为空数组文本。
+    """
+    if isinstance(value, (list, tuple)):
+        arr = [str(x) for x in value]
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            arr = [str(x) for x in parsed] if isinstance(parsed, (list, tuple)) else [value]
+        except Exception:
+            arr = [value]
+    else:
+        arr = []
+    return json.dumps(arr, ensure_ascii=False)
+
+
+def create_library(lid, name, type_, source_dirs="", rules="", sort_order=0,
                    settings="", watch=1, scan_interval=0, scan_cron="",
                    publish_path="", icon="", allowed_exts="", exclude="") -> dict:
     """建库。``settings`` 是每库覆盖的 JSON 文本（第 13 期）。
@@ -3328,14 +3378,13 @@ def create_library(lid, name, type_, mode="inplace", root_path="",
     with _lock:
         c.execute(
             "INSERT OR REPLACE INTO libraries"
-            "(id, name, type, mode, root_path, storage_path, source_subdir, rules,"
+            "(id, name, type, source_dirs, rules,"
             " settings, sort_order, created_at, last_scan_at, last_scan_note,"
             " watch, scan_interval, scan_cron, publish_path,"
             " icon, allowed_exts, exclude) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,0,'',?,?,?,?,?,?,?)",
-            (str(lid), str(name), str(type_), str(mode), str(root_path),
-             str(storage_path or ""), str(source_subdir or ""), str(rules or ""),
-             str(settings or ""), int(sort_order or 0), time.time(),
+            "VALUES(?,?,?,?,?,?,?,?,0,'',?,?,?,?,?,?,?)",
+            (str(lid), str(name), str(type_), _norm_source_dirs(source_dirs),
+             str(rules or ""), str(settings or ""), int(sort_order or 0), time.time(),
              w, si, str(scan_cron or ""), str(publish_path or ""),
              str(icon or ""), str(allowed_exts or ""), str(exclude or "")),
         )
@@ -3346,8 +3395,7 @@ def create_library(lid, name, type_, mode="inplace", root_path="",
 #: update_library 允许改的列（白名单，避免把任意键拼进 SQL）。
 #: ⚠️ 新增列**必须**同时加进来，否则 update_library 会**静默写不进**
 #: （它是「过滤后为空就原样返回」，不报错）。
-_LIBRARY_COLS = {"name", "type", "mode", "root_path", "storage_path",
-                 "source_subdir", "rules", "settings", "sort_order",
+_LIBRARY_COLS = {"name", "type", "source_dirs", "rules", "settings", "sort_order",
                  "watch", "scan_interval", "scan_cron", "publish_path",
                  "last_scan_at", "last_scan_note",
                  # 第 40 期新库向导三列

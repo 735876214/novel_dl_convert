@@ -18,12 +18,63 @@ import yaml
 CONFIG_DIR = pathlib.Path(os.getenv("CONFIG_DIR", "/app/config"))
 INPUT_DIR = pathlib.Path(os.getenv("INPUT_DIR", "/app/input"))
 OUTPUT_DIR = pathlib.Path(os.getenv("OUTPUT_DIR", "/app/output"))
-# 多书库（第 10 期）：书库来源根目录 —— 其下的子文件夹可被「新建书库」就地引用，
-# 或作为导入源（扫描后复制/移入该库自己的存储目录）。
+# 多书库来源根（第 10 期起）：其下的子文件夹可被「新建书库」就地引用。
+# 第 41 期增强为**不定数量的来源根**：compose 用多个独立环境变量声明，
+#   LIBRARY_SOURCE_DIRS1=/电子书1、LIBRARY_SOURCE_DIRS2=/电子书2 …（序号从 1 连续，首个缺号即停）
+#   可选 LIBRARY_SOURCE_DIRS1_NAME=主库 覆盖显示名（默认取路径最后一级）。
+# 未配置任何编号变量时回退到单根 LIBRARY_SOURCE_DIR（默认 /app/libraries），保持老部署兼容。
 # OUTPUT_DIR 不废弃：没有库归属的条目（老部署遗留在 OUTPUT_DIR 的书、或某个库被
 # 移除登记之后）路径解析仍以它为根。第 37 期起它**不再是**「默认书库」的根 ——
 # 本项目不再有默认库，也不会自动在 OUTPUT_DIR 上建库。
-LIBRARY_SOURCE_DIR = pathlib.Path(os.getenv("LIBRARY_SOURCE_DIR", "/app/libraries"))
+_LIBRARY_SOURCE_ROOTS: "list[dict]" = []
+_i = 1
+while True:
+    _raw = os.getenv(f"LIBRARY_SOURCE_DIRS{_i}")
+    if _raw is None:
+        break
+    _i += 1
+    _raw = _raw.strip()
+    if not _raw:
+        continue
+    _p = pathlib.Path(_raw)
+    _nm = os.getenv(f"LIBRARY_SOURCE_DIRS{_i - 1}_NAME", "").strip()
+    if not _nm:
+        _nm = _p.name or _raw
+    _LIBRARY_SOURCE_ROOTS.append({"name": _nm, "path": _p})
+
+if not _LIBRARY_SOURCE_ROOTS:
+    _fb = pathlib.Path(os.getenv("LIBRARY_SOURCE_DIR", "/app/libraries"))
+    _fb_name = os.getenv("LIBRARY_SOURCE_DIR_NAME", "").strip() or _fb.name or "libraries"
+    _LIBRARY_SOURCE_ROOTS.append({"name": _fb_name, "path": _fb})
+
+# 来源根集合：每个元素 {"name": 显示名, "path": Path}。
+LIBRARY_SOURCE_ROOTS = _LIBRARY_SOURCE_ROOTS
+# 兼容别名：指向第一个来源根（老代码 / 测试可能仍引用 LIBRARY_SOURCE_DIR，后续清理）。
+LIBRARY_SOURCE_DIR = LIBRARY_SOURCE_ROOTS[0]["path"]
+
+
+def _is_under_source_root(p: "pathlib.Path") -> bool:
+    """p 是否落在某个来源根之内（含根本身）。仅用于一次性的就地引用边界校验。"""
+    for r in LIBRARY_SOURCE_ROOTS:
+        if p == r["path"] or p.is_relative_to(r["path"]):
+            return True
+    return False
+
+
+def normalize_source_dirs(paths) -> "list[pathlib.Path]":
+    """就地引用边界：每个路径必须是绝对路径且落在某来源根内（跨根合法）。
+    返回规整后的 Path 列表；非法抛 ValueError（由 server 转 400）。
+    注意：本函数**不反查所属根名、也不计算相对子目录**——那部分信息由前端
+    在下钻选择时持有，绝对路径即唯一真值。"""
+    out: "list[pathlib.Path]" = []
+    for p in (paths or []):
+        pp = pathlib.Path(str(p).strip())
+        if not pp.is_absolute():
+            raise ValueError(f"库文件夹必须是绝对路径：{p}")
+        if not _is_under_source_root(pp):
+            raise ValueError(f"库文件夹不在任何来源根内：{p}")
+        out.append(pp)
+    return out
 COOKIE_DIR = pathlib.Path(os.getenv("COOKIE_DIR", str(CONFIG_DIR / "cookies")))
 CACHE_DIR = pathlib.Path(os.getenv("CACHE_DIR", str(CONFIG_DIR / "cache")))
 SOURCES_DIR = pathlib.Path(os.getenv("SOURCES_DIR", str(CONFIG_DIR / "sources")))
@@ -215,9 +266,15 @@ DEFAULTS = {
 
 def ensure_dirs():
     """确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在（容器启动时调用）。"""
-    for d in (INPUT_DIR, OUTPUT_DIR, CONFIG_DIR, COOKIE_DIR, CACHE_DIR, SOURCES_DIR, LOG_DIR, DATA_DIR, BACKUP_DIR, FONTS_DIR, LIBRARY_SOURCE_DIR):
+    for d in (INPUT_DIR, OUTPUT_DIR, CONFIG_DIR, COOKIE_DIR, CACHE_DIR, SOURCES_DIR, LOG_DIR, DATA_DIR, BACKUP_DIR, FONTS_DIR):
         try:
             d.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+    # 每个来源根也要确保存在（就地引用直接读这些目录）
+    for r in LIBRARY_SOURCE_ROOTS:
+        try:
+            r["path"].mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
 

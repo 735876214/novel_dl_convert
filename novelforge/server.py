@@ -2454,7 +2454,6 @@ def api_annotations_overview():
 #   /api/library-migrations → 现有书「按格式迁移」的预览 / 计划 / 执行 / 回滚
 
 _LIB_TYPE_LABELS = migrate.TYPE_LABELS
-_MODE_LABELS = {"inplace": "就地引用", "import": "独立存储"}
 
 
 def _library_root_allowed(raw) -> pathlib.Path:
@@ -2468,7 +2467,8 @@ def _library_root_allowed(raw) -> pathlib.Path:
     if not p.is_absolute():
         raise HTTPException(400, "库根必须是绝对路径")
     rp = p.resolve()
-    for base in (config.LIBRARY_SOURCE_DIR, config.OUTPUT_DIR, config.DATA_DIR):
+    bases = [r["path"] for r in config.LIBRARY_SOURCE_ROOTS] + [config.OUTPUT_DIR, config.DATA_DIR]
+    for base in bases:
         try:
             br = pathlib.Path(base).resolve()
         except Exception:
@@ -2479,14 +2479,34 @@ def _library_root_allowed(raw) -> pathlib.Path:
                              "（否则可能误扫、甚至误移系统文件）")
 
 
-def _own_roots(root_path, source_subdir) -> list:
-    """「本书库自己」的库根与扫描源目录 → 成品目录校验的守卫项。"""
+def _roots_from_json(raw) -> "list[pathlib.Path]":
+    """把库行的 source_dirs（JSON 数组文本）解析为已 resolve 的绝对路径列表。"""
+    try:
+        arr = json.loads(raw) if raw else []
+    except Exception:
+        arr = []
     out = []
-    if str(root_path or "").strip():
-        out.append(("本书库的库根", pathlib.Path(str(root_path)).resolve()))
-    sub = str(source_subdir or "").strip()
-    if sub:
-        out.append(("本书库的扫描源目录", (config.LIBRARY_SOURCE_DIR / sub).resolve()))
+    for x in arr:
+        try:
+            out.append(pathlib.Path(str(x)).resolve())
+        except Exception:
+            pass
+    return out
+
+
+def _roots_of(lib: dict) -> "list[pathlib.Path]":
+    """库实体的所有文件夹绝对路径（已 resolve）。空库返回空列表。"""
+    return _roots_from_json(lib.get("source_dirs") or "")
+
+
+def _own_roots(roots) -> list:
+    """「本书库自己」的库根 → 成品目录校验的守卫项。roots = 绝对路径可迭代。"""
+    out = []
+    for p in (roots or []):
+        try:
+            out.append(("本书库的库根", pathlib.Path(str(p)).resolve()))
+        except Exception:
+            pass
     return out
 
 
@@ -2515,14 +2535,8 @@ def _publish_path_allowed(raw, extra_roots=()) -> "pathlib.Path | None":
         pass
     try:
         for lib in library.libraries():
-            root = str(lib.get("root_path") or "").strip()
-            if root:
-                guards.append((f"书库「{lib.get('name') or lib.get('id')}」的库根",
-                               pathlib.Path(root).resolve()))
-            sub = str(lib.get("source_subdir") or "").strip()
-            if sub:
-                guards.append((f"书库「{lib.get('name') or lib.get('id')}」的扫描源目录",
-                               (config.LIBRARY_SOURCE_DIR / sub).resolve()))
+            for lr in _roots_of(lib):
+                guards.append((f"书库「{lib.get('name') or lib.get('id')}」的库根", lr))
     except Exception:                                   # noqa: BLE001
         pass
     for label, g in guards:
@@ -2546,9 +2560,8 @@ def _writable_dir(p: pathlib.Path) -> bool:
 
 
 def _library_dto(lib: dict, counts: dict = None) -> dict:
-    root = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+    roots = _roots_of(lib)
     t = str(lib.get("type") or "mixed")
-    m = str(lib.get("mode") or "inplace")
     # 刮削出版成品目录（第 18 期）：空串 = 该库不产出硬链接副本。
     # ⚠️ 不能用 pathlib.Path("") 兜底 —— 那会解析成 "." 并被 is_dir() 判真。
     pub_raw = str(lib.get("publish_path") or "").strip()
@@ -2556,10 +2569,8 @@ def _library_dto(lib: dict, counts: dict = None) -> dict:
     return {
         "id": lib.get("id"), "name": lib.get("name") or "", "type": t,
         "type_label": _LIB_TYPE_LABELS.get(t, "混合库"),
-        "mode": m, "mode_label": _MODE_LABELS.get(m, m),
-        "root_path": str(root),
-        # 只存**相对**来源子目录名（挂载点换了绝对路径会失效，见 db.libraries 的列注释）
-        "source_subdir": lib.get("source_subdir") or "",
+        # 第 41 期：该库所有文件夹的绝对路径（就地引用语义，跨根合法）。
+        "source_dirs": [str(r) for r in roots],
         "rules": lib.get("rules") or "",
         "sort_order": int(lib.get("sort_order") or 0),
         # 刮削出版成品目录（第 18 期）：副本落点，供外部阅读器挂载；空 = 未启用
@@ -2579,8 +2590,8 @@ def _library_dto(lib: dict, counts: dict = None) -> dict:
         "exts_effective": list(library.exts_for_library(lib)),
         "exclude": list(library.parse_excludes(lib.get("exclude"))),
         "book_count": int((counts or {}).get(str(lib.get("id")), 0)),
-        "exists": root.is_dir(),
-        "writable": _writable_dir(root) if root.is_dir() else False,
+        "exists": any(r.is_dir() for r in roots),
+        "writable": any(_writable_dir(r) for r in roots if r.is_dir()),
         "last_scan_at": float(lib.get("last_scan_at") or 0),
         "last_scan_note": lib.get("last_scan_note") or "",
     }
@@ -2728,12 +2739,14 @@ def api_libraries():
     items = [_library_dto(l, counts) for l in library.libraries()]
     items.sort(key=lambda x: (x["sort_order"], x["name"]))
     return {
-        "items": items, "total": len(items), "source_dir": str(config.LIBRARY_SOURCE_DIR),
+        "items": items, "total": len(items),
         # 第 40 期：`exts` = 该类型的**默认扫描白名单**，供新建向导的「允许的格式」
         # 一选类型就带出默认勾选集（前端不许自己抄一份 —— 抄了就会与扫描口径走散）。
         "types": [{"value": t, "label": _LIB_TYPE_LABELS.get(t, t),
                    "exts": list(library._exts_for_type(t))} for t in db.LIBRARY_TYPES],
-        "modes": [{"value": m, "label": _MODE_LABELS[m]} for m in db.LIBRARY_MODES],
+        # 第 41 期：已配置的来源根（向导按这些根浏览 / 下钻，数量不定）。
+        "source_roots": [{"name": r["name"], "path": str(r["path"])}
+                         for r in config.LIBRARY_SOURCE_ROOTS],
     }
 
 
@@ -2782,14 +2795,17 @@ def api_library_facets():
 
 
 @app.get("/api/libraries/source-dirs")
-def api_library_source_dirs():
-    """``LIBRARY_SOURCE_DIR`` 下的候选来源子目录（新建向导给默认值用）。"""
-    base = config.LIBRARY_SOURCE_DIR
-    dirs = []
-    try:
-        for p in sorted(base.iterdir()):
-            if not p.is_dir() or p.name.startswith("."):
-                continue
+def api_library_source_dirs(root: int = None, path: str = ""):
+    """多来源根目录树。
+
+    - 不传参数：返回所有已配置来源根（``roots``），每张含索引 / 名称 / 路径 / 子项数。
+    - 传 ``root=索引&path=相对子目录``：返回该根下某目录的子项（下钻），供向导弹出下一级文件夹。
+    """
+    roots = config.LIBRARY_SOURCE_ROOTS
+    if root is None:
+        out = []
+        for i, r in enumerate(roots):
+            p = pathlib.Path(r["path"])
             n = 0
             try:
                 for _c in p.iterdir():
@@ -2798,15 +2814,40 @@ def api_library_source_dirs():
                         break
             except Exception:
                 pass
-            dirs.append({"name": p.name, "path": str(p), "entries": n})
+            out.append({"index": i, "name": r["name"], "path": str(p),
+                        "exists": p.is_dir(), "entries": n})
+        return {"roots": out}
+    if root < 0 or root >= len(roots):
+        raise HTTPException(400, "来源根索引越界")
+    base = pathlib.Path(roots[root]["path"])
+    target = (base / path) if path else base
+    if not target.is_absolute():
+        raise HTTPException(400, "路径非法")
+    # 安全：必须位于该来源根之内（不能越界到其它根 / 系统目录）
+    try:
+        target.resolve().relative_to(base.resolve())
+    except Exception:
+        raise HTTPException(400, "路径必须位于来源根内")
+    entries = []
+    try:
+        for p in sorted(target.iterdir()):
+            if p.name.startswith("."):
+                continue
+            entries.append({"name": p.name, "path": str(p),
+                            "type": "dir" if p.is_dir() else "file"})
     except Exception:
         pass
-    return {"root": str(base), "exists": base.is_dir(), "dirs": dirs}
+    return {"root_index": root, "root_name": roots[root]["name"],
+            "base": str(base), "path": str(target), "entries": entries}
 
 
 @app.post("/api/libraries")
 def api_create_library(payload: dict = Body(...)):
-    """新建书库。**只登记，不动文件**（文件搬迁归迁移流程管）。"""
+    """新建书库。**只登记，不动文件**（文件搬迁归迁移流程管）。
+
+    第 41 期：内容来源改为**多个文件夹**（source_dirs，绝对路径数组），每个文件夹必须
+    落在某个已配置来源根之内（就地引用语义，跨根合法）。不再有「归属模式」概念。
+    """
     p = payload or {}
     name = str(p.get("name") or "").strip()
     if not name:
@@ -2814,22 +2855,27 @@ def api_create_library(payload: dict = Body(...)):
     ltype = str(p.get("type") or "mixed")
     if ltype not in db.LIBRARY_TYPES:
         raise HTTPException(400, "库类型非法")
-    mode = str(p.get("mode") or "inplace")
-    if mode not in db.LIBRARY_MODES:
-        raise HTTPException(400, "归属模式非法")
     # 新库向导三列（第 40 期）：形状校验放在**建目录之前** ——
     # 参数非法就不该留下一个空的库根目录。
     icon = _norm_icon(p.get("icon"))
     allowed_exts = _norm_exts(p.get("allowed_exts"))
     exclude = _norm_excludes(p.get("exclude"))
-    root = _library_root_allowed(p.get("root_path"))
+    # 第 41 期：内容来源 = 多个文件夹（就地引用）。边界校验在 config.normalize_source_dirs 内。
+    raw_dirs = p.get("source_dirs") or []
+    if isinstance(raw_dirs, str):
+        try:
+            raw_dirs = json.loads(raw_dirs)
+        except Exception:
+            raw_dirs = []
+    try:
+        dirs = config.normalize_source_dirs(raw_dirs)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not dirs:
+        raise HTTPException(400, "至少选择一个内容来源文件夹")
     lid = _new_library_id(p.get("id") or name)
     if db.get_library(lid):
         raise HTTPException(400, f"库标识已存在：{lid}")
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        raise HTTPException(400, f"无法创建库根目录：{e}")
     try:
         sort_order = int(p.get("sort_order") or 0)
     except (TypeError, ValueError):
@@ -2849,29 +2895,32 @@ def api_create_library(payload: dict = Body(...)):
     scan_cron = (str(p.get("scan_cron") or "").strip()) if "scan_cron" in p else ""
     # 刮削出版成品目录（第 18 期）：可选。给了就校验边界并预先建出来，
     # 免得界面显示「已配置」、首次刮削才发现目录不存在。
-    sub = str(p.get("source_subdir") or "").strip()
-    publish = _publish_path_allowed(p.get("publish_path"), _own_roots(str(root), sub))
+    publish = _publish_path_allowed(p.get("publish_path"),
+                                   _own_roots([str(d) for d in dirs]))
     if publish:
         try:
             publish.mkdir(parents=True, exist_ok=True)
         except Exception as e:                          # noqa: BLE001
             raise HTTPException(400, f"无法创建成品目录：{e}")
-    lib = db.create_library(lid, name, ltype, mode, str(root),
-                            source_subdir=str(p.get("source_subdir") or "").strip(),
+    lib = db.create_library(lid, name, ltype,
+                            source_dirs=[str(d) for d in dirs],
                             rules=_norm_rules(p.get("rules")), sort_order=sort_order,
                             watch=watch, scan_interval=scan_interval, scan_cron=scan_cron,
                             publish_path=str(publish or ""),
                             icon=icon, allowed_exts=allowed_exts, exclude=exclude)
     _libraries_changed()
     activity_log.log(activity_log.ACTION_LAYOUT, name, activity_log.STATUS_OK,
-                     detail=f"新建书库：{ltype} / {mode} / {root}"
+                     detail=f"新建书库：{ltype} / 多文件夹 {len(dirs)}"
                             + (f" / 成品目录 {publish}" if publish else ""), source="api")
     return {"ok": True, "library": _library_dto(lib or {}, {})}
 
 
 @app.patch("/api/libraries/{lid}")
 def api_update_library(lid: str, payload: dict = Body(...)):
-    """改库属性。改 ``root_path`` **只改登记，不搬文件**（搬用迁移流程）。"""
+    """改库属性。改 ``source_dirs`` **只改登记，不搬文件**（搬用迁移流程）。
+
+    第 41 期：内容来源改为多文件夹（source_dirs）；不再有归属模式 / 单 root_path。
+    """
     if not db.get_library(lid):
         raise HTTPException(404, "书库不存在")
     p = payload or {}
@@ -2885,14 +2934,19 @@ def api_update_library(lid: str, payload: dict = Body(...)):
         if str(p["type"]) not in db.LIBRARY_TYPES:
             raise HTTPException(400, "库类型非法")
         fields["type"] = str(p["type"])
-    if "mode" in p:
-        if str(p["mode"]) not in db.LIBRARY_MODES:
-            raise HTTPException(400, "归属模式非法")
-        fields["mode"] = str(p["mode"])
-    if "root_path" in p:
-        fields["root_path"] = str(_library_root_allowed(p.get("root_path")))
-    if "source_subdir" in p:
-        fields["source_subdir"] = str(p.get("source_subdir") or "").strip()
+    # 第 41 期：内容来源 = 多文件夹（就地引用）。边界校验在 config.normalize_source_dirs 内。
+    if "source_dirs" in p:
+        raw_dirs = p["source_dirs"]
+        if isinstance(raw_dirs, str):
+            try:
+                raw_dirs = json.loads(raw_dirs)
+            except Exception:
+                raw_dirs = []
+        try:
+            dirs = config.normalize_source_dirs(raw_dirs)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        fields["source_dirs"] = json.dumps([str(d) for d in dirs], ensure_ascii=False)
     if "rules" in p:
         fields["rules"] = _norm_rules(p.get("rules"))
     if "sort_order" in p:
@@ -2917,11 +2971,10 @@ def api_update_library(lid: str, payload: dict = Body(...)):
     # ⚠️ 改这一项**不动已有副本**（副本的清理由刮削页显式操作），只影响后续刮削落点。
     if "publish_path" in p:
         cur = db.get_library(lid) or {}
-        # 用**改完之后**的库根 / 来源目录做校验：同一次请求里同时改了 root_path 与
+        # 用**改完之后**的库根做校验：同一次请求里同时改了 source_dirs 与
         # publish_path 时，只按旧值校验会放过「改完就重叠」的组合。
-        pub = _publish_path_allowed(p.get("publish_path"), _own_roots(
-            str(fields.get("root_path") or cur.get("root_path") or ""),
-            str(fields.get("source_subdir", cur.get("source_subdir") or "") or "")))
+        new_roots = _roots_of({"source_dirs": fields.get("source_dirs", cur.get("source_dirs", ""))})
+        pub = _publish_path_allowed(p.get("publish_path"), _own_roots([str(r) for r in new_roots]))
         if pub:
             try:
                 pub.mkdir(parents=True, exist_ok=True)
@@ -3140,8 +3193,8 @@ def api_scrape_state(library_id: str = "", status: str = "", q: str = ""):
             "library_name": lib_names.get(l_id, ""),
             "name": name, "title": title, "author": author,
             "status": st, "status_label": _SCRAPE_LABELS.get(st, st),
-            "source_path": str(pathlib.Path(
-                (library.get_library(l_id) or {}).get("root_path") or "") / name),
+            # 第 41 期：直接用书籍自身记录的绝对路径（多文件夹库下 root_path 已无意义）。
+            "source_path": str(b.get("path") or ""),
             "copy_path": str(pdir / rel) if (pdir and rel) else "",
             "link_rel": rel, "link_mode": str(r.get("link_mode") or ""),
             "shared": bool(r.get("link_shared")),
@@ -4932,8 +4985,8 @@ def api_koreader_scan():
     # 多书库：按**各自的库根**建索引（partialMD5 与路径相关，用错根会把进度同步到错书）
     rows: list = []
     for lib in library.libraries():
-        root = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
-        rows.extend(koreader.scan_books(library.books(lib["id"]), root))
+        for root in _roots_of(lib):
+            rows.extend(koreader.scan_books(library.books(lib["id"]), root))
     return {"ok": True, "scanned": db.replace_koreader_docs(rows)}
 
 

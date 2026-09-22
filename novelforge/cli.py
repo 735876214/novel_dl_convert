@@ -54,7 +54,9 @@ def _resolve_out(args=None, default=None) -> pathlib.Path:
         from .core import library as _library
         lib = _library.get_library(lid)
         if lib:
-            return pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+            # 第 41 期：库持有多个文件夹，默认导出位置取第一个来源文件夹；无则回落 OUTPUT_DIR。
+            roots = _library.roots_of(lib)
+            return roots[0] if roots else pathlib.Path(config.OUTPUT_DIR)
     return pathlib.Path(default or config.OUTPUT_DIR)
 
 

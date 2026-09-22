@@ -21,7 +21,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import activity_log, audio, komga, lib_settings, pipeline
+from . import activity_log, audio, komga, lib_settings, library, pipeline
 from .. import config
 
 STATE_FILENAME = "watcher_state.json"
@@ -225,7 +225,8 @@ class FolderWatcher:
             lib = None
         if not lib:
             return None, None
-        return lib, Path(lib.get("root_path") or self.output_dir)
+        rs = library.roots_of(lib)
+        return lib, (rs[0] if rs else Path(self.output_dir))
 
     def _sig(self, p: Path) -> tuple:
         """条目指纹 ``(size, mtime)``。
@@ -406,7 +407,8 @@ class FolderWatcher:
         # 库没覆写过时 `config_for` 就是全局值 → 行为与改造前逐字段一致。
         if owner_lib is not None:
             lib = owner_lib
-            root = Path(lib.get("root_path") or self.output_dir)
+            _rs = library.roots_of(lib)
+            root = Path(_rs[0]) if _rs else Path(self.output_dir)
         else:
             lib, root = self._target(p)
             if lib is None:
@@ -627,9 +629,9 @@ class FolderWatcher:
         return self._emit(result)
 
     # ---------------- 多目标调度（第 17 期 T2）----------------
-    # 监听对象从一个全局 INPUT_DIR 扩展为「N 个来源目录」：
+    # 监听对象从一个全局 INPUT_DIR 扩展为「每个库的每个文件夹」：
     #   · 全局 INPUT_DIR（library_id=None）行为完全不变（格式/关键词路由）；
-    #   · 每个库的 LIBRARY_SOURCE_DIR/<source_subdir> 作为独立目标，带该库自己的
+    #   · 每个库的每个文件夹（roots_of）作为独立目标，带该库自己的
     #     watch / scan_interval / scan_cron；关掉的库不扫、设 cron 的库只在定时窗口扫。
     # 目标在每个 tick 轻量重读 libraries() 派生 —— 增 / 删 / 改库即时热重载。
 
@@ -645,22 +647,20 @@ class FolderWatcher:
         try:
             from . import library as _lib
             for l in _lib.libraries():
-                sub = (l.get("source_subdir") or "").strip()
-                if not sub:
-                    continue
-                root = config.LIBRARY_SOURCE_DIR / sub
-                try:
-                    watch = int(l.get("watch", 1) or 0)
-                except (TypeError, ValueError):
-                    watch = 1
-                interval = float(l.get("scan_interval") or 0) or global_interval
-                cron = (l.get("scan_cron") or "").strip() or None
-                targets.append({
-                    "root": root, "library_id": str(l.get("id")), "watch": bool(watch),
-                    "interval": interval, "cron": cron,
-                    "tkey": "lib:" + str(l.get("id")), "name": l.get("name"),
-                    "owner_lib": l,
-                })
+                for root in _lib.roots_of(l):
+                    try:
+                        watch = int(l.get("watch", 1) or 0)
+                    except (TypeError, ValueError):
+                        watch = 1
+                    interval = float(l.get("scan_interval") or 0) or global_interval
+                    cron = (l.get("scan_cron") or "").strip() or None
+                    targets.append({
+                        "root": root, "library_id": str(l.get("id")), "watch": bool(watch),
+                        "interval": interval, "cron": cron,
+                        "tkey": "lib:" + str(l.get("id")) + ":" + str(root),
+                        "name": l.get("name"),
+                        "owner_lib": l,
+                    })
         except Exception:
             pass
         return targets

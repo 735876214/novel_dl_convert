@@ -190,7 +190,8 @@ def library_dto(lib: dict = None) -> dict:
     客户端多数只读 id/name，但字段缺失会让某些实现直接崩 —— 一律给全。
     """
     lib = lib or {}
-    root = str(lib.get("root_path") or library.root_of(lib.get("id")))
+    rs = library.roots_of(lib)
+    root = str(rs[0]) if rs else str(library.root_of(lib.get("id")))
     return {
         "id": lib.get("id") or LIBRARY_ID, "name": lib.get("name") or LIBRARY_NAME, "root": root,
         "importComicInfoBook": False, "importComicInfoSeries": False,

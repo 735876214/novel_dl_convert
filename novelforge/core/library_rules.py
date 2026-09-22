@@ -12,9 +12,9 @@
    曾把这个行为断言为「显式摆放意图高于格式推断」）。**显式意图能让系统「不猜」，
    但不能让系统「装作收下了」** —— 现在改为拒收，并用 :func:`no_library_reason`
    说清「是格式不匹配」而不是「规则不命中」。
-1. **来源子文件夹名** —— 文件放在 ``LIBRARY_SOURCE_DIR/<子目录>/``（或监听目录的子目录）
-   里，且子目录名等于某库的 ``source_subdir`` 或库名 → 直接用那个库。
-   这是用户最明确的意图表达，不猜。
+1. **来源子目录名** —— 文件放在 ``LIBRARY_SOURCE_DIR/<子目录>/``（或监听目录的子目录、
+   或某库来源文件夹的子目录）里，且子目录名等于某库的**库名** → 直接用那个库。
+   （第 41 期起不再有 ``source_subdir`` 概念，只按库名匹配。）这是用户最明确的意图表达，不猜。
 2. **格式** —— 扩展名 → 库类型（电子书 / 漫画 / 有声书）→ **类型匹配**的库。
    确定性最高（.cbz 就是漫画，没有歧义）；优先类型专用库，其次 ``mixed``。
 3. **元数据关键词** —— 库 ``rules`` 里配的关键词命中书名 / 作者 / 系列 / 文件名 → 用该库。
@@ -59,7 +59,7 @@ def _accepts(lib: dict, filename: str) -> bool:
     过滤里就把它排掉，让 :func:`decide` 返回 ``None`` 走既有拒收路径。
 
     ⚠️ 库的 ``allowed_exts`` 收窄之后才可能撞上，但**这不是本期引入的新问题**：
-    白名单按**类型**推导时就已存在（``type=ebook`` 的库把 ``source_subdir``
+    白名单按**类型**推导时就已存在（``type=ebook`` 的库把来源文件夹
     指向漫画目录，投进去的 ``.cbz`` 当场隐形）。本条只是把这条路封死。
 
     容错：判不了就**放行** —— 这是旁路增强，不该把入库主流程打崩（判错了顶多
@@ -112,15 +112,12 @@ def _subdir_of(src, base) -> str:
 
 
 def _by_subdir(sub: str, filename: str = "") -> "dict | None":
-    """按来源子目录名匹配库：先比 ``source_subdir``，再宽容地比库名。"""
+    """按库名匹配库（第 41 期：来源子目录名概念已移除，来源文件夹是绝对路径、
+    不再有相对子目录名；此处回落为直接比库名）。"""
     if not sub:
         return None
     key = _norm(sub)
-    libs = library.libraries()
-    for l in libs:
-        if _norm(l.get("source_subdir")) == key and _accepts(l, filename):
-            return l
-    for l in libs:
+    for l in library.libraries():
         if _norm(l.get("name")) == key and _accepts(l, filename):
             return l
     return None
@@ -184,8 +181,9 @@ def decide(src=None, name: str = "", meta: dict = None, base_dir=None) -> "dict 
     if not filename:
         return None
 
-    # 1) 来源子文件夹名（显式意图）
-    for base in (base_dir, config.LIBRARY_SOURCE_DIR):
+    # 1) 库名（显式意图）—— 来源子目录名概念已移除（第 41 期），此处回落为按库名匹配
+    bases = [base_dir] + [r["path"] for r in config.LIBRARY_SOURCE_ROOTS]
+    for base in bases:
         hit = _by_subdir(_subdir_of(src, base), filename)
         if hit:
             return hit
@@ -239,11 +237,12 @@ def library_id_of_root(root) -> str:
     except Exception:
         return ""
     for l in library.libraries():
-        try:
-            if pathlib.Path(l.get("root_path") or "").resolve() == want:
-                return str(l.get("id") or "")
-        except Exception:
-            continue
+        for d in library.roots_of(l):
+            try:
+                if d == want:
+                    return str(l.get("id") or "")
+            except Exception:
+                continue
     return ""
 
 
@@ -307,7 +306,8 @@ def resolve_target(src=None, name: str = "", meta: dict = None, base_dir=None) -
     lib = decide(src=src, name=name, meta=meta, base_dir=base_dir)
     lib_id = str((lib or {}).get("id") or "")
     if lib:
-        root = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+        rs = library.roots_of(lib)
+        root = rs[0] if rs else pathlib.Path(config.OUTPUT_DIR)
         effective_id = lib_id or library_id_of_root(root) or ""
     else:
         root = None

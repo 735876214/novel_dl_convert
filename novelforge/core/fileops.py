@@ -64,7 +64,8 @@ def output_dir(library_id=None) -> pathlib.Path:
     if library_id:
         lib = library.get_library(library_id)
         if lib:
-            return pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+            rs = library.roots_of(lib)
+            return rs[0] if rs else config.OUTPUT_DIR
     return config.OUTPUT_DIR
 
 

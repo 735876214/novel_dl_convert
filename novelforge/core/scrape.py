@@ -404,7 +404,7 @@ def verify(library_id=None, gen: int = None) -> dict:
         pdir = publish.publish_dir(str(lib.get("id")))
         rel = str(row.get("link_rel") or "")
         name = str(row.get("source_rel") or bid)
-        src = pathlib.Path(lib.get("root_path") or "") / name
+        src = _lib_source_path(lib, name)
         copy = (pdir / rel) if (pdir and rel) else None
         if copy is not None and not copy.exists():
             db.scrape_set(bid, status="removed", removed_at=time.time(),
@@ -432,6 +432,17 @@ ACTIONS = {
 }
 
 
+def _lib_source_path(lib: dict, name: str) -> "pathlib.Path":
+    """库有多个文件夹（第 41 期）时，返回实际存在的那个根下的同名文件绝对路径；
+    都不存在则退到第一个根（仅用于日志 / 提示）。"""
+    roots = library.roots_of(lib)
+    for d in roots:
+        cand = d / name
+        if cand.exists():
+            return cand
+    return (roots[0] / name) if roots else pathlib.Path(str(name))
+
+
 def resolve(bid, action: str) -> dict:
     """执行用户在某本书上的显式处置。**任何状态流转都只能从这里回到 ok**。"""
     action = str(action or "").strip()
@@ -444,9 +455,8 @@ def resolve(bid, action: str) -> dict:
         return process(bid, fetch=False)
 
     lib = library.get_library(row.get("library_id")) or {}
-    root = pathlib.Path(lib.get("root_path") or "")
     name = str(row.get("source_rel") or bid)
-    src = root / name
+    src = _lib_source_path(lib, name)
     pdir = publish.publish_dir(str(lib.get("id")))
     rel = str(row.get("link_rel") or "")
     copy = (pdir / rel) if (pdir and rel) else None

@@ -1100,17 +1100,38 @@ def library_of(book: dict) -> "dict | None":
     return get_library(lid) if lid else None
 
 
+def roots_of(lib) -> "list[pathlib.Path]":
+    """库的所有文件夹绝对路径（已 resolve）。空库 / 无归属返回空列表。
+
+    第 41 期：库持有多个文件夹（``source_dirs``，绝对路径数组）。这是「取库的所有根」
+    的唯一入口，取代旧的单一 ``root_path``。
+    """
+    raw = (lib or {}).get("source_dirs") or ""
+    try:
+        arr = json.loads(raw) if raw else []
+    except Exception:
+        arr = []
+    out = []
+    for x in arr:
+        try:
+            out.append(pathlib.Path(str(x)).resolve())
+        except Exception:
+            pass
+    return out
+
+
 def root_of(book_or_id) -> pathlib.Path:
     """书目（或库 id）的**库根目录** —— 替代全仓 ``config.OUTPUT_DIR``。
 
-    ⚠️ 这是多库后「取文件路径」的唯一入口。直接用 ``config.OUTPUT_DIR / name``
-    会取到错的库（同名书跨库时甚至取到别的书）。
+    ⚠️ 多文件夹库下返回**第一个文件夹**作为代表根（best-effort）；需要精确根请用
+    :func:`roots_of` 结合书的绝对路径判断。这是多库后「取文件路径」的主要入口之一。
 
     无库归属（该库已移除登记）时回退 ``OUTPUT_DIR``：这类书虽然不在列表里，
     但文件确实可能还躺在那里，改名 / 回收 / 删除都要能算对路径，不能炸在 None 上。
     """
     lib = library_of(book_or_id) if isinstance(book_or_id, dict) else get_library(book_or_id)
-    return pathlib.Path((lib or {}).get("root_path") or config.OUTPUT_DIR)
+    rs = roots_of(lib)
+    return rs[0] if rs else pathlib.Path(config.OUTPUT_DIR)
 
 
 def _entry_mtime(p: pathlib.Path) -> float:
@@ -1163,95 +1184,98 @@ def _scan_once(lib: dict = None) -> list:
     """
     if not lib:
         return []                      # 没有库就没有根可扫（不再合成默认库）
-    d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+    # 第 41 期：库持有多个文件夹（roots_of），逐个扫描后合并。
+    roots = roots_of(lib)
     # 第 40 期：白名单与排除图案都按**该库生效值**取（设过就用设过的，没设过回落类型默认）
     exts = exts_for_library(lib)
     patterns = parse_excludes(lib.get("exclude"))
     books = []
-    for f in _iter_book_entries(d, exts, patterns):
-        is_dir = f.is_dir()
-        try:
-            st = f.stat()
-        except OSError:
-            continue
+    for d in roots:
+        for f in _iter_book_entries(d, exts, patterns):
+            is_dir = f.is_dir()
+            try:
+                st = f.stat()
+            except OSError:
+                continue
 
-        # 音频（单文件或目录）统一成 format="AUDIO"，前端据此进播放器
-        is_audio_entry = is_dir or audio.is_audio(f)
-        name_meta = metadata.from_filename(f.name)
-        info = {
-            "title": "", "author": "", "series": "", "has_cover": False, "unparsable": False,
-            "year": "", "publisher": "", "isbn": "", "language": "", "description": "", "tags": [],
-            "cover": "", "pages": 0, "pages_source": "", "series_index": "", "fixed_layout": False,
-        }
-        tracks = 0
-        size = st.st_size
-        mtime = _entry_mtime(f)
-        if is_audio_entry:
-            tracks = audio.tracks(f)["total"]
-            if is_dir:
-                size, dm = audio.dir_size_and_mtime(f)
-                mtime = dm or mtime
-                cover = audio.cover_in_dir(f)
-                info.update({"has_cover": bool(cover), "cover": cover})
-            if tracks == 0:
-                info["unparsable"] = True
-        elif f.suffix.lower() == ".epub":
-            info = probe_epub(f)
-        elif comics.is_comic(f):
-            # 漫画（CBZ / CBR）：页数与封面都是**真实值**（不是估算），pages_source = "archive"
-            info.update(comics.probe(f))
+            # 音频（单文件或目录）统一成 format="AUDIO"，前端据此进播放器
+            is_audio_entry = is_dir or audio.is_audio(f)
+            name_meta = metadata.from_filename(f.name)
+            info = {
+                "title": "", "author": "", "series": "", "has_cover": False, "unparsable": False,
+                "year": "", "publisher": "", "isbn": "", "language": "", "description": "", "tags": [],
+                "cover": "", "pages": 0, "pages_source": "", "series_index": "", "fixed_layout": False,
+            }
+            tracks = 0
+            size = st.st_size
+            mtime = _entry_mtime(f)
+            if is_audio_entry:
+                tracks = audio.tracks(f)["total"]
+                if is_dir:
+                    size, dm = audio.dir_size_and_mtime(f)
+                    mtime = dm or mtime
+                    cover = audio.cover_in_dir(f)
+                    info.update({"has_cover": bool(cover), "cover": cover})
+                if tracks == 0:
+                    info["unparsable"] = True
+            elif f.suffix.lower() == ".epub":
+                info = probe_epub(f)
+            elif comics.is_comic(f):
+                # 漫画（CBZ / CBR）：页数与封面都是**真实值**（不是估算），pages_source = "archive"
+                info.update(comics.probe(f))
 
-        issues = []
-        if not is_dir and size == 0:
-            issues.append("zero-bytes")
-        if info["unparsable"]:
-            issues.append("unparsable")
-        elif not info["has_cover"] and f.suffix.lower() == ".epub":
-            issues.append("no-cover")
-        # 非 EPUB（mobi/pdf/txt/漫画/音频）本项目不去解析封面，不计为缺失
+            issues = []
+            if not is_dir and size == 0:
+                issues.append("zero-bytes")
+            if info["unparsable"]:
+                issues.append("unparsable")
+            elif not info["has_cover"] and f.suffix.lower() == ".epub":
+                issues.append("no-cover")
+            # 非 EPUB（mobi/pdf/txt/漫画/音频）本项目不去解析封面，不计为缺失
 
-        # 相对路径（Komga 布局下形如 "系列/书.epub"，平铺时就是文件名；音频目录形如 "系列/书名"）；
-        # id 由 basename 派生（见 _book_id），所以挪进系列目录不会换 id
-        rel = f.relative_to(d).as_posix()
-        bid = _book_id(rel, lib.get("id"))
-        c1, c2 = _gradient(bid)
-        fmt = "AUDIO" if is_audio_entry else f.suffix.lstrip(".").upper()
-        books.append({
-            "id": bid,
-            "name": rel,
-            "size": size,
-            "mtime": mtime,
-            "format": fmt,
-            "title": info["title"] or name_meta["title"],
-            "author": info["author"] or name_meta["author"],
-            "series": info["series"],
-            # 系列内序号（字符串，空串 = 无）。解析见 _series_index_of
-            "series_index": info.get("series_index", ""),
-            "has_cover": info["has_cover"],
-            # 封面来源（EPUB = zip 内路径；漫画 = 归档内条目名；音频 = 目录内文件名；空串 = 无）
-            "cover": info.get("cover", ""),
-            # 页数：**估算值**（见 _pages_in），pages_source 恒为 "estimate"；
-            # 漫画为归档真实页数（"archive"）；非 EPUB / 漫画恒为 0，前端据此不显示页数
-            "pages": info.get("pages", 0),
-            "pages_source": info.get("pages_source", ""),
-            # 音频轨数（单文件 1、目录 n）；非音频恒 0
-            "tracks": tracks,
-            "year": info.get("year", ""),
-            "publisher": info.get("publisher", ""),
-            "isbn": info.get("isbn", ""),
-            "language": info.get("language", ""),
-            "description": info.get("description", ""),
-            "tags": info.get("tags", []),
-            # 固定版式（pre-paginated）：阅读器据此**不套用重排偏好、不改页宽**（见 _fixed_layout_of）；
-            # 非 EPUB 恒 false（本项目不解析它们的内容）
-            "fixed_layout": bool(info.get("fixed_layout")),
-            "c1": c1,
-            "c2": c2,
-            "issues": issues,
-            # 多书库：归属信息。`name` 相对**所属库根**，故协议层与前端无需改
-            "library_id": lib.get("id") or "",
-            "library_type": lib.get("type") or "mixed",
-        })
+            # 相对路径（Komga 布局下形如 "系列/书.epub"，平铺时就是文件名；音频目录形如 "系列/书名"）；
+            # id 由 basename 派生（见 _book_id），所以挪进系列目录不会换 id
+            rel = f.relative_to(d).as_posix()
+            bid = _book_id(rel, lib.get("id"))
+            c1, c2 = _gradient(bid)
+            fmt = "AUDIO" if is_audio_entry else f.suffix.lstrip(".").upper()
+            books.append({
+                "id": bid,
+                "name": rel,
+                "size": size,
+                "mtime": mtime,
+                "format": fmt,
+                "title": info["title"] or name_meta["title"],
+                "author": info["author"] or name_meta["author"],
+                "series": info["series"],
+                # 系列内序号（字符串，空串 = 无）。解析见 _series_index_of
+                "series_index": info.get("series_index", ""),
+                "has_cover": info["has_cover"],
+                # 封面来源（EPUB = zip 内路径；漫画 = 归档内条目名；音频 = 目录内文件名；空串 = 无）
+                "cover": info.get("cover", ""),
+                # 页数：**估算值**（见 _pages_in），pages_source 恒为 "estimate"；
+                # 漫画为归档真实页数（"archive"）；非 EPUB / 漫画恒为 0，前端据此不显示页数
+                "pages": info.get("pages", 0),
+                "pages_source": info.get("pages_source", ""),
+                # 音频轨数（单文件 1、目录 n）；非音频恒 0
+                "tracks": tracks,
+                "year": info.get("year", ""),
+                "publisher": info.get("publisher", ""),
+                "isbn": info.get("isbn", ""),
+                "language": info.get("language", ""),
+                "description": info.get("description", ""),
+                "tags": info.get("tags", []),
+                # 固定版式（pre-paginated）：阅读器据此**不套用重排偏好、不改页宽**（见 _fixed_layout_of）；
+                # 非 EPUB 恒 false（本项目不解析它们的内容）
+                "fixed_layout": bool(info.get("fixed_layout")),
+                "c1": c1,
+                "c2": c2,
+                "issues": issues,
+                # 多书库：归属信息。`name` 相对**所属库根**，故协议层与前端无需改
+                "path": str(f),
+                "library_id": lib.get("id") or "",
+                "library_type": lib.get("type") or "mixed",
+            })
 
     # 第 17 期 T3：合并服务端元数据（override > online > opf）与封面，使列表 / 卡片 /
     # 搜索 / OPDS 全部以服务器为准（详情页早已由 metastore 合并，这里补齐批量热路径）。
@@ -1274,10 +1298,11 @@ def _scan_once(lib: dict = None) -> list:
 
 def _books_of(lib: dict, force: bool = False) -> list:
     """单个库的书目（带**按库**的短期缓存）。"""
-    d = pathlib.Path(lib.get("root_path") or config.OUTPUT_DIR)
+    # 第 41 期：库可能有多文件夹，指纹按每个文件夹分别取、再组合，任一变化即失效。
     # ⚠️ 指纹与 _scan_once 必须同源（同一份 exts + exclude）—— 否则「改了排除图案但
     # 指纹没变 ⇒ 缓存不失效 ⇒ 用户改完看不见效果」，正是本函数上面注释警告的那类 bug。
-    sig = _dir_signature(d, exts_for_library(lib), parse_excludes(lib.get("exclude")))
+    sig = tuple(_dir_signature(d, exts_for_library(lib), parse_excludes(lib.get("exclude")))
+               for d in roots_of(lib))
     key = str(lib.get("id") or "")
     with _lock:
         cur = _cache.get(key) or {}
