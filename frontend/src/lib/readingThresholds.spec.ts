@@ -6,6 +6,7 @@ import {
   ensureThresholds,
   isInProgress,
   refreshThresholds,
+  statusBucket,
   statusFromPercent,
   statusLabelOf,
   statusOf,
@@ -117,6 +118,31 @@ describe('阅读阈值 · 状态优先与兜底', () => {
 
   it('未知状态回空串（与改造前一致，不凭空造词）', () => {
     expect(statusLabelOf({ status: '什么状态', percent: 50 })).toBe('')
+  })
+})
+
+describe('阅读阈值 · statusBucket（5 状态→筛选三档，第 41 期）', () => {
+  it('finished 状态优先：percent 很低也归「已读完」桶', () => {
+    expect(statusBucket({ status: 'finished', percent: 20 })).toBe('finished')
+  })
+
+  it('reading / paused / abandoned 都进「在读」桶（过滤器 UI 仅三档）', () => {
+    expect(statusBucket({ status: 'reading', percent: 0 })).toBe('reading')
+    expect(statusBucket({ status: 'paused', percent: 0 })).toBe('reading')
+    expect(statusBucket({ status: 'abandoned', percent: 0 })).toBe('reading')
+  })
+
+  it('没有状态行时按进度阈值兜底（含 percent 够高 → 已读完）', () => {
+    expect(statusBucket({ status: null, percent: 0 })).toBe('unread')
+    expect(statusBucket({ status: null, percent: 20 })).toBe('reading')
+    expect(statusBucket({ status: null, percent: 100 })).toBe('finished')
+  })
+
+  it('库级阈值影响无状态行的兜底桶', async () => {
+    await freshThresholds('lib-z', 0, 50)
+    // percent 40 < 50 ⇒ 在读；若退化成全局 99.5 这里就是未读
+    expect(statusBucket({ status: null, percent: 40 }, 'lib-z')).toBe('reading')
+    expect(statusBucket({ status: null, percent: 60 }, 'lib-z')).toBe('finished')
   })
 })
 

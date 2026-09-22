@@ -2,8 +2,9 @@
 import { computed, ref, watch } from 'vue'
 
 import { api, type BookCard } from '@/lib/api'
-import { percentLabel } from '@/lib/readingThresholds'
+import { statusLabelOf } from '@/lib/readingThresholds'
 import { useCoverPrefsStore, type CoverOverlay, type CoverSpine } from '@/stores/coverPrefs'
+import { useLibraryStore } from '@/stores/library'
 
 /**
  * 书封。显示方式 / 书脊 / 阴影 / 叠加层全部由「设置 → 封面样式」的偏好驱动
@@ -18,7 +19,7 @@ import { useCoverPrefsStore, type CoverOverlay, type CoverSpine } from '@/stores
  * `blurred` 上游没有对应类，是本项目自己实现的（模糊底图 + 居中完整封面）。
  */
 type CoverBook = Pick<BookCard, 'title' | 'c1' | 'c2'> &
-  Partial<Pick<BookCard, 'id' | 'has_cover' | 'percent' | 'format' | 'stars' | 'series'>>
+  Partial<Pick<BookCard, 'id' | 'has_cover' | 'percent' | 'status' | 'format' | 'stars' | 'series'>>
 
 const props = withDefaults(
   defineProps<{
@@ -36,6 +37,7 @@ const props = withDefaults(
 )
 
 const prefs = useCoverPrefsStore()
+const libraryStore = useLibraryStore()
 
 /** 加载失败后不再重试（避免坏图反复触发 onerror），直接走占位 */
 const failed = ref(false)
@@ -87,10 +89,11 @@ const styleVars = computed<Record<string, string>>(() => {
 const natural = computed(() => mode.value === 'natural')
 
 /**
- * 封面角标文案：**只看进度**（与改造前一致，不看 `book.status`）。
- * ⚠️ 第 40 期起阈值走唯一入口（可配），不再写死 99.5。
+ * 封面角标文案：**真实状态优先**（与书卡文案 `statusLabelOf` 同源，第 41 期统一）。
+ * 有 `status` 行就以它为权威；没有才按进度阈值兜底。跨库组件拿当前库阈值当上下文，
+ * 无当前库时退回全局（与改造前 `percentLabel` 的 fallback 一致）。
  */
-const statusLabel = computed(() => percentLabel(props.book.percent))
+const statusLabel = computed(() => statusLabelOf(props.book, libraryStore.currentLibraryId))
 </script>
 
 <template>

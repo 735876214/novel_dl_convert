@@ -119,6 +119,30 @@ export function statusOf(
   return statusFromPercent(b.percent, thresholdsFor(libraryId))
 }
 
+/**
+ * 把一本书收敛到**筛选三档**（未读 / 在读 / 已读完），**真实状态优先**。
+ *
+ * 与 `statusOf` 同源（`status` 有值即以它为权威），但把 5 状态压成 3 档：
+ * `finished` → 已读完；`reading` / `paused` / `abandoned` → 在读
+ *（过滤器 UI 仅三档，已开始的都进「在读」桶）；没有状态行时按进度阈值兜底
+ *（percent 够高也判「已读完」）。
+ *
+ * 第 41 期新增：`ShelfView` 的「阅读状态」筛选与 `BookCover` 角标改用它，
+ * 与书卡文案（`statusLabelOf`）口径统一 —— 手动标「已读完」后筛选与角标都认。
+ */
+export function statusBucket(
+  b: { status?: string | null; percent?: number | null },
+  libraryId = '',
+): DerivedStatus {
+  const s = b.status
+  if (s) {
+    if (s === 'finished') return 'finished'
+    // reading / paused / abandoned：已开始的都进「在读」桶
+    return 'reading'
+  }
+  return statusFromPercent(b.percent, thresholdsFor(libraryId))
+}
+
 /** 中文文案（`lib/bookInfo.ts` 的 `statusLabel` 与它同源）。 */
 const LABELS: Record<string, string> = {
   unread: '未读',

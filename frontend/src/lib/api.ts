@@ -1620,8 +1620,6 @@ export interface LibraryFacet {
   kind: string
 }
 
-/** 归属模式：就地引用来源子目录（不搬文件）/ 独立存储 */
-export type LibraryMode = 'inplace' | 'import'
 /** 库类型：决定功能显隐矩阵（见后端 core/features.py） */
 export type LibraryType = 'ebook' | 'comic' | 'audiobook' | 'mixed'
 
@@ -1631,12 +1629,8 @@ export interface LibraryEntity {
   name: string
   type: LibraryType
   type_label: string
-  mode: LibraryMode
-  mode_label: string
-  /** **实际库根**（扫描 / 落盘 / 路径解析的唯一根） */
-  root_path: string
-  /** 来源子目录名（相对 `LIBRARY_SOURCE_DIR`；只存相对名，挂载点换了也不失效） */
-  source_subdir: string
+  /** 第 41 期：该库所有文件夹的绝对路径（就地引用语义，跨根合法） */
+  source_dirs: string[]
   /** 归类规则（JSON 字符串：`{"keywords":[...],"subdirs":[...]}`） */
   rules: string
   sort_order: number
@@ -1677,15 +1671,14 @@ export interface LibraryEntity {
 export interface LibrariesResult {
   items: LibraryEntity[]
   total: number
-  /** `LIBRARY_SOURCE_DIR` —— 新建「就地引用」库时的父目录 */
-  source_dir: string
   /**
    * 库类型。`exts` = 该类型的**默认扫描白名单**（第 40 期）——
    * 新建向导的「允许的格式」选完类型就用它带出默认勾选集。
    * ⚠️ 别在前端抄一份：抄了就会与后端的扫描口径走散。
    */
   types: { value: LibraryType; label: string; exts: string[] }[]
-  modes: { value: LibraryMode; label: string }[]
+  /** 第 41 期：已配置的来源根（向导按这些根浏览 / 下钻，数量不定） */
+  source_roots: { name: string; path: string }[]
 }
 
 /** 每库可覆写项中的一项（`/api/libraries/{id}/settings` 的 `schema`）。 */
@@ -1900,14 +1893,12 @@ export interface MigrationGate {
   auto_migrate: boolean
 }
 
-/** 向导建议：为缺失的类型库给出的两套位置方案（逐库选：就地引用 / 独立存储） */
+/** 向导建议：为缺失的类型库给出的就地引用默认内容来源（多文件夹，绝对路径）。第 41 期 */
 export interface LibrarySpecSuggestion {
   id: string
   type: LibraryType
   name: string
-  source_subdir: string
-  inplace: { mode: LibraryMode; root_path: string }
-  import: { mode: LibraryMode; root_path: string }
+  source_dirs: string[]
 }
 
 export interface MigrationPreview {
@@ -3231,19 +3222,32 @@ export const api = {
       `/api/reading-thresholds${libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : ''}`,
     ),
 
-  /** `LIBRARY_SOURCE_DIR` 下的候选来源子目录（新建向导给默认值用）。 */
-  librarySourceDirs: () =>
-    request<{ root: string; exists: boolean; dirs: { name: string; path: string; entries: number }[] }>(
-      '/api/libraries/source-dirs',
+  /**
+   * 来源根目录树（第 41 期，支持不定数量来源根）。
+   * - 不传参：返回所有已配置来源根 `roots`（每张含 index / name / path / exists / entries）。
+   * - 传 `root` + `path`：返回该根下某目录的子项 `entries`（下钻）。
+   */
+  librarySourceDirs: (params?: { root?: number; path?: string }) =>
+    request<{
+      roots?: { index: number; name: string; path: string; exists: boolean; entries: number }[]
+      root_index?: number
+      root_name?: string
+      base?: string
+      path?: string
+      entries?: { name: string; path: string; type: 'dir' | 'file' }[]
+    }>(
+      '/api/libraries/source-dirs' +
+        (params?.root != null
+          ? `?root=${params.root}&path=${encodeURIComponent(params.path ?? '')}`
+          : ''),
     ),
 
-  /** 新建书库（**只登记，不搬文件**）。 */
+  /** 新建书库（**只登记，不搬文件**）。第 41 期：内容来源为多个文件夹（source_dirs）。 */
   createLibrary: (payload: {
     name: string
     type: LibraryType
-    mode: LibraryMode
-    root_path: string
-    source_subdir?: string
+    /** 第 41 期：内容来源 = 多个文件夹的绝对路径（就地引用，跨根合法） */
+    source_dirs: string[]
     rules?: unknown
     sort_order?: number
     /** 刮削出版成品目录（可选；空 = 该库不产出硬链接副本） */
@@ -3265,15 +3269,14 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  /** 改库属性（改 `root_path` 只改登记，不搬文件）。 */
+  /** 改库属性（改 `source_dirs` 只改登记，不搬文件）。 */
   updateLibrary: (
     id: string,
     payload: Partial<{
       name: string
       type: LibraryType
-      mode: LibraryMode
-      root_path: string
-      source_subdir: string
+      /** 第 41 期：改内容来源 = 多个文件夹的绝对路径 */
+      source_dirs: string[]
       rules: unknown
       sort_order: number
       /** 传空串 = 关闭该库的副本产出（不动已有副本） */

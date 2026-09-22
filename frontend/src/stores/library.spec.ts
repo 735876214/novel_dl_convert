@@ -33,10 +33,7 @@ function makeLibrary(over: Partial<LibraryEntity> = {}): LibraryEntity {
     name: '主库',
     type: 'ebook',
     type_label: '电子书',
-    mode: 'inplace',
-    mode_label: '就地引用',
-    root_path: '/srv/library/main',
-    source_subdir: 'main',
+    source_dirs: ['/srv/library/main'],
     rules: '',
     sort_order: 0,
     publish_path: '',
@@ -63,10 +60,10 @@ function makeResult(items: LibraryEntity[]): LibrariesResult {
   return {
     items,
     total: items.length,
-    source_dir: '/srv/library',
+    // 第 41 期：已配置的来源根（向导按这些根浏览 / 下钻）
+    source_roots: [{ name: '来源根', path: '/srv/library' }],
     // `exts` = 该类型的默认扫描白名单（第 40 期「允许的格式」chips 的默认勾选集）
     types: [{ value: 'ebook', label: '电子书', exts: ['.epub', '.mobi'] }],
-    modes: [{ value: 'inplace', label: '就地引用' }],
   }
 }
 

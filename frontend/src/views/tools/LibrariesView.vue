@@ -7,7 +7,7 @@
  *   2. 书库列表 —— 建/改/扫/移除；
  *   3. 当前库能力 —— 解释「为什么某些菜单不见了」（否则用户会以为功能丢了）。
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 import Badge from '@/components/ui/Badge.vue'
@@ -22,7 +22,6 @@ import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import {
   api,
   type LibraryEntity,
-  type LibraryMode,
   type LibraryType,
   type MigrationPreview,
   type MigrationRow,
@@ -41,8 +40,7 @@ const libs = ref<LibraryEntity[]>([])
 // `exts` = 该库类型的**默认扫描白名单**（后端 `/api/libraries` 下发）。前端不自己抄一份 ——
 // 抄了就会与扫描口径走散（第 40 期「允许的格式」chips 的默认勾选集就是它）。
 const types = ref<{ value: LibraryType; label: string; exts: string[] }[]>([])
-const modes = ref<{ value: LibraryMode; label: string }[]>([])
-const sourceDir = ref('')
+const sourceRoots = ref<{ name: string; path: string }[]>([])
 const preview = ref<MigrationPreview | null>(null)
 const batches = ref<{ batch_id: string; at: number; done: number; pending: number; failed: number }[]>([])
 const loading = ref(false)
@@ -58,9 +56,6 @@ function toggleSettings(id: string): void {
   settingsFor.value = settingsFor.value === id ? '' : id
 }
 
-/** 向导里为「缺失的类型库」逐库选择的位置方案：`{ 类型: 'inplace' | 'import' }` */
-const specMode = ref<Record<string, LibraryMode>>({})
-
 const autoMigrate = computed(() => cfg.value?.libraries?.auto_migrate === true)
 
 async function reload(force = false): Promise<void> {
@@ -69,11 +64,9 @@ async function reload(force = false): Promise<void> {
     const res = await api.libraries()
     libs.value = res.items
     types.value = res.types
-    modes.value = res.modes
-    sourceDir.value = res.source_dir
+    sourceRoots.value = res.source_roots ?? []
     await library.loadLibraries(true)
     preview.value = await api.migrationPreview()
-    for (const s of preview.value.suggest_specs) specMode.value[s.id] ??= 'inplace'
     const b = await api.migrationBatches()
     batches.value = b.items
     if (force) await library.loadBooks(true)
@@ -100,14 +93,10 @@ async function createSuggested(): Promise<void> {
   busy.value = 'create'
   try {
     for (const s of specs) {
-      const mode = specMode.value[s.id] ?? 'inplace'
-      const loc = s[mode]
       await api.createLibrary({
         name: s.name,
         type: s.type,
-        mode,
-        root_path: loc.root_path,
-        source_subdir: s.source_subdir,
+        source_dirs: s.source_dirs,
       })
     }
     ui.toast(`已创建 ${specs.length} 个书库`)
@@ -200,9 +189,8 @@ const DLG_TABS: Array<{ value: DlgTab; label: string }> = [
 const form = ref({
   name: '',
   type: 'ebook' as LibraryType,
-  mode: 'inplace' as LibraryMode,
-  root_path: '',
-  source_subdir: '',
+  /** 第 41 期：内容来源 = 多个文件夹的绝对路径（就地引用，跨根合法） */
+  source_dirs: [] as string[],
   rules: '',
   /** 刮削出版成品目录（第 18 期）：留空 = 该库不产出硬链接副本 */
   publish_path: '',
@@ -252,7 +240,7 @@ const SORTS = [
 const visibleLibs = computed(() => {
   const kw = filter.value.trim().toLowerCase()
   const list = libs.value.filter(
-    (l) => !kw || `${l.name} ${l.root_path} ${l.source_subdir}`.toLowerCase().includes(kw),
+    (l) => !kw || `${l.name} ${(l.source_dirs ?? []).join(' ')}`.toLowerCase().includes(kw),
   )
   const by = sortBy.value
   if (by === 'name') return [...list].sort((a, b) => a.name.localeCompare(b.name, 'zh'))
@@ -292,13 +280,77 @@ async function scanAll(): Promise<void> {
   }
 }
 
-function defaultRoot(mode: LibraryMode, type: LibraryType): string {
-  return mode === 'inplace' ? `${sourceDir.value}/${type}s` : `${sourceDir.value}/../data/libraries/${type}`
+function defaultPublish(type: LibraryType): string {
+  const base = sourceRoots.value[0]?.path ?? ''
+  if (!base) return ''
+  const parent = base.replace(/\/[^/]*$/, '')
+  return `${parent}/output/${type}-sorted`
 }
 
-/** 成品目录建议位置：与库根平级（**不能**放在库根或扫描源目录里面，否则副本会被扫回来） */
-function defaultPublish(type: LibraryType): string {
-  return `${sourceDir.value}/../output/${type}-sorted`
+// ---- 编辑弹窗里的「内容来源」文件夹浏览（复用同一套多来源根下钻）----
+const editBrowse = reactive<{
+  open: boolean
+  loading: boolean
+  rootIndex: number
+  rootName: string
+  rootPath: string
+  path: string
+  entries: { name: string; path: string; type: 'dir' | 'file' }[]
+}>({ open: false, loading: false, rootIndex: -1, rootName: '', rootPath: '', path: '', entries: [] })
+
+const editBrowseAbsPath = computed(() =>
+  editBrowse.rootPath ? `${editBrowse.rootPath}${editBrowse.path ? '/' + editBrowse.path : ''}` : '',
+)
+
+async function editFetchEntries(): Promise<void> {
+  editBrowse.loading = true
+  editBrowse.entries = []
+  try {
+    const res = await api.librarySourceDirs({ root: editBrowse.rootIndex, path: editBrowse.path })
+    editBrowse.entries = res.entries ?? []
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '读取服务器目录失败')
+  } finally {
+    editBrowse.loading = false
+  }
+}
+
+function editOpenRoot(i: number): void {
+  const r = sourceRoots.value[i]
+  if (!r) return
+  editBrowse.rootIndex = i
+  editBrowse.rootName = r.name
+  editBrowse.rootPath = r.path
+  editBrowse.path = ''
+  editBrowse.open = true
+  void editFetchEntries()
+}
+
+function editDrill(d: { name: string; path: string; type: 'dir' | 'file' }): void {
+  if (d.type !== 'dir') return
+  editBrowse.path = editBrowse.path ? `${editBrowse.path}/${d.name}` : d.name
+  void editFetchEntries()
+}
+
+function editBrowseUp(): void {
+  if (!editBrowse.path) {
+    editBrowse.open = false
+    return
+  }
+  const parts = editBrowse.path.split('/')
+  parts.pop()
+  editBrowse.path = parts.join('/')
+  void editFetchEntries()
+}
+
+function editAddFolder(): void {
+  const abs = editBrowseAbsPath.value
+  if (!abs) return
+  if (!form.value.source_dirs.includes(abs)) form.value.source_dirs.push(abs)
+}
+
+function editRemoveDir(p: string): void {
+  form.value.source_dirs = form.value.source_dirs.filter((d) => d !== p)
 }
 
 /** 图标 key 的**唯一真相源**在前端（`lib/icons.ts`）；后端只存 key，不维护白名单。 */
@@ -321,17 +373,9 @@ const publishIssue = computed(() => {
   // 比较时只认 `/`，Windows 上既会把 `C:\…` 判成非法、又让重叠检测恒为假。
   if (!isAbsolutePath(raw)) return '请输入绝对路径'
   for (const l of libs.value) {
-    const guards: Array<{ label: string; path: string }> = []
-    if (l.root_path) guards.push({ label: `书库「${l.name}」的库根`, path: l.root_path })
-    if (l.source_subdir) {
-      guards.push({
-        label: `书库「${l.name}」的扫描源目录`,
-        path: `${sourceDir.value}/${l.source_subdir}`,
-      })
-    }
-    for (const g of guards) {
-      if (pathsOverlap(raw, g.path)) {
-        return `与${g.label}重叠（${g.path}）：副本会被扫描回来变成重复书`
+    for (const g of l.source_dirs ?? []) {
+      if (pathsOverlap(raw, g)) {
+        return `与书库「${l.name}」的内容来源文件夹（${g}）重叠：副本会被扫描回来变成重复书`
       }
     }
   }
@@ -362,9 +406,7 @@ async function openEdit(l: LibraryEntity): Promise<void> {
   form.value = {
     name: l.name,
     type: l.type,
-    mode: l.mode,
-    root_path: l.root_path,
-    source_subdir: l.source_subdir,
+    source_dirs: [...(l.source_dirs ?? [])],
     rules: l.rules,
     publish_path: l.publish_path ?? '',
     watch: l.watch !== 0,
@@ -399,9 +441,7 @@ async function submitDialog(): Promise<void> {
     const payload = {
       name: form.value.name.trim(),
       type: form.value.type,
-      mode: form.value.mode,
-      root_path: form.value.root_path.trim() || defaultRoot(form.value.mode, form.value.type),
-      source_subdir: form.value.source_subdir.trim(),
+      source_dirs: form.value.source_dirs,
       rules: form.value.rules,
       publish_path: form.value.publish_path.trim(),
       watch: form.value.watch ? 1 : 0,
@@ -487,11 +527,11 @@ async function remove(l: LibraryEntity): Promise<void> {
         </div>
       </div>
 
-      <!-- 缺失的类型库：逐库选位置 -->
+      <!-- 缺失的类型库：列出默认内容来源（就地引用，多文件夹） -->
       <div v-if="preview.suggest_specs.length" class="border-b border-border px-4 py-3">
         <div class="text-[12.5px] text-foreground">
           还缺 {{ preview.suggest_specs.length }} 个类型库（{{ preview.missing_labels.join('、') }}）——
-          逐个选存放方式，再一并创建
+          默认内容来源已给出，确认后一并创建（建完可在书库管理里调整）
         </div>
         <div
           v-for="s in preview.suggest_specs"
@@ -499,26 +539,9 @@ async function remove(l: LibraryEntity): Promise<void> {
           class="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2"
         >
           <Badge>{{ s.name }}</Badge>
-          <span class="text-[11.5px] text-muted-foreground">
-            {{ specMode[s.id] === 'import' ? '独立存储' : '就地引用' }}:
-            {{ s[specMode[s.id] ?? 'inplace'].root_path }}
-          </span>
-          <div class="ml-auto flex gap-1">
-            <Button
-              size="sm"
-              :variant="(specMode[s.id] ?? 'inplace') === 'inplace' ? 'primary' : 'ghost'"
-              @click="specMode[s.id] = 'inplace'"
-            >
-              就地引用
-            </Button>
-            <Button
-              size="sm"
-              :variant="specMode[s.id] === 'import' ? 'primary' : 'ghost'"
-              @click="specMode[s.id] = 'import'"
-            >
-              独立存储
-            </Button>
-          </div>
+          <code class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+            {{ s.source_dirs.join('、') || '（未给出内容来源）' }}
+          </code>
         </div>
         <div class="mt-2">
           <Button size="sm" :disabled="busy === 'create'" @click="createSuggested">
@@ -583,7 +606,7 @@ async function remove(l: LibraryEntity): Promise<void> {
           </div>
         </div>
         <div class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
-          来源父目录：<code>{{ sourceDir || '—' }}</code>（「就地引用」直接引用它下面的子目录，不搬文件）
+          内容来源父目录（已配置的来源根，就地引用直接引用其下级子目录，不搬文件）：<code>{{ sourceRoots.length ? sourceRoots.map(r => r.name).join('、') : '—' }}</code>
         </div>
       </div>
 
@@ -648,21 +671,24 @@ async function remove(l: LibraryEntity): Promise<void> {
             <div class="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground">书库</div>
             <div class="mt-1 flex flex-wrap items-center gap-1">
               <Badge tone="accent">{{ l.type_label }}</Badge>
-              <Badge>{{ l.mode_label }}</Badge>
-              <Badge v-if="!l.exists">根目录不存在</Badge>
+              <Badge v-if="!(l.source_dirs ?? []).length">未设内容来源</Badge>
+              <Badge v-else-if="!l.exists">内容来源不存在</Badge>
               <Badge v-else-if="!l.writable">只读</Badge>
             </div>
           </div>
 
           <div class="min-w-0">
-            <div class="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground">内容</div>
+            <div class="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground">内容来源</div>
             <div class="mt-1 text-[11.5px] text-foreground">{{ l.book_count }} 本</div>
-            <div class="truncate text-[11px] text-muted-foreground" :title="l.root_path">
-              {{ l.root_path }}
+            <div v-if="(l.source_dirs ?? []).length" class="mt-0.5 flex flex-col gap-0.5">
+              <div
+                v-for="d in l.source_dirs"
+                :key="d"
+                class="truncate text-[11px] text-muted-foreground"
+                :title="d"
+              >{{ d }}</div>
             </div>
-            <div v-if="l.source_subdir" class="truncate text-[11px] text-muted-foreground">
-              来源子目录 {{ l.source_subdir }}
-            </div>
+            <div v-else class="mt-0.5 text-[11px] text-muted-foreground">（未设内容来源）</div>
             <div
               v-if="l.publish_path"
               class="truncate text-[11px] text-muted-foreground"
@@ -774,8 +800,7 @@ async function remove(l: LibraryEntity): Promise<void> {
     <LibraryWizard
       v-if="wizardOpen"
       :types="types"
-      :modes="modes"
-      :source-dir="sourceDir"
+      :source-roots="sourceRoots"
       :libs="libs"
       @close="wizardOpen = false"
       @created="onWizardCreated"
@@ -838,52 +863,95 @@ async function remove(l: LibraryEntity): Promise<void> {
           </div>
 
           <div>
-            <div class="mb-1 text-[11.5px] text-muted-foreground">存放方式</div>
-            <div class="flex flex-wrap gap-1">
-              <Button
-                v-for="m in modes"
-                :key="m.value"
-                size="sm"
-                :variant="form.mode === m.value ? 'primary' : 'ghost'"
-                @click="form.mode = m.value; form.root_path = defaultRoot(m.value, form.type)"
-              >
-                {{ m.label }}
-              </Button>
+            <div class="mb-1 text-[11.5px] text-muted-foreground">
+              内容来源（就地引用，可从多个来源根选多个文件夹）
             </div>
-            <div class="mt-1 text-[11px] text-muted-foreground">
-              就地引用 = 直接引用来源子目录（不搬文件）；独立存储 = 库有自己的存储目录，「来源目录」的文件会导入进来。
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                v-for="(r, i) in sourceRoots"
+                :key="r.path"
+                type="button"
+                class="flex flex-col items-start gap-0.5 rounded-md border border-border bg-transparent px-3 py-2 text-left transition-colors hover:border-primary hover:bg-muted"
+                @click="editOpenRoot(i)"
+              >
+                <span class="text-[12.5px] font-medium text-foreground">{{ r.name }}</span>
+                <span class="truncate text-[11px] text-muted-foreground">{{ r.path }}</span>
+                <span class="mt-0.5 text-[10.5px] text-primary">浏览…</span>
+              </button>
+            </div>
+            <div v-if="!sourceRoots.length" class="mt-1 text-[11px] text-muted-foreground">
+              未检测到已配置的来源根，请在 compose 中配置 LIBRARY_SOURCE_DIRS1..N 后重试。
+            </div>
+          </div>
+
+          <div v-if="editBrowse.open" class="rounded-md border border-border">
+            <div class="flex items-center gap-2 border-b border-border px-3 py-2">
+              <button
+                type="button"
+                class="rounded px-1.5 py-0.5 text-[11.5px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                @click="editBrowseUp"
+              >
+                ↑ 返回
+              </button>
+              <span class="min-w-0 flex-1 truncate text-[11.5px] text-foreground">
+                {{ editBrowse.rootName }} / {{ editBrowse.path || '（根）' }}
+              </span>
+            </div>
+            <div class="max-h-48 overflow-y-auto p-1">
+              <div v-if="editBrowse.loading" class="px-2 py-2 text-[11.5px] text-muted-foreground">加载中…</div>
+              <template v-else-if="editBrowse.entries.length">
+                <button
+                  v-for="d in editBrowse.entries"
+                  :key="d.path"
+                  type="button"
+                  class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px]"
+                  :class="d.type === 'dir' ? 'cursor-pointer text-foreground hover:bg-muted' : 'cursor-default text-muted-foreground'"
+                  @click="editDrill(d)"
+                >
+                  <Icon :name="d.type === 'dir' ? 'folder' : 'file'" class="h-3.5 w-3.5 shrink-0" />
+                  <span class="min-w-0 flex-1 truncate">{{ d.name }}</span>
+                </button>
+              </template>
+              <div v-else class="px-2.5 py-2 text-[11.5px] text-muted-foreground">（此目录下没有子项）</div>
+            </div>
+            <div class="border-t border-border px-3 py-2">
+              <Button size="sm" variant="primary" :disabled="!editBrowseAbsPath" @click="editAddFolder">
+                添加此文件夹{{ editBrowseAbsPath ? `（${editBrowseAbsPath}）` : '' }}
+              </Button>
             </div>
           </div>
 
           <div>
-            <div class="mb-1 text-[11.5px] text-muted-foreground">库根目录（留空用默认）</div>
-            <input
-              v-model="form.root_path"
-              :placeholder="defaultRoot(form.mode, form.type)"
-              class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
-            />
-            <div class="mt-1 text-[11px] text-muted-foreground">
-              必须在「书库来源目录 / 导出目录 / 数据目录」之内 —— 否则可能误扫、甚至误移系统文件。
+            <div class="mb-1 text-[11.5px] text-muted-foreground">
+              已选内容来源（{{ form.source_dirs.length }} 个）
             </div>
+            <div v-if="form.source_dirs.length" class="flex flex-wrap gap-1.5">
+              <span
+                v-for="d in form.source_dirs"
+                :key="d"
+                class="flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2.5 py-1 text-[11.5px] text-foreground"
+              >
+                <Icon name="folder" class="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span class="min-w-0 flex-1 truncate">{{ d }}</span>
+                <button
+                  type="button"
+                  class="ml-0.5 text-muted-foreground hover:text-destructive"
+                  @click="editRemoveDir(d)"
+                >
+                  ✕
+                </button>
+              </span>
+            </div>
+            <div v-else class="text-[11px] text-muted-foreground">尚未选择任何文件夹。</div>
           </div>
 
-          <div class="flex flex-wrap gap-3">
-            <div class="min-w-[10rem] flex-1">
-              <div class="mb-1 text-[11.5px] text-muted-foreground">来源子目录名</div>
-              <input
-                v-model="form.source_subdir"
-                placeholder="如：comics"
-                class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
-              />
-            </div>
-            <div class="min-w-[10rem] flex-[2]">
-              <div class="mb-1 text-[11.5px] text-muted-foreground">归类关键词（逗号分隔）</div>
-              <input
-                v-model="form.rules"
-                placeholder="如：科幻, 太空"
-                class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
-              />
-            </div>
+          <div>
+            <div class="mb-1 text-[11.5px] text-muted-foreground">归类关键词（逗号分隔）</div>
+            <input
+              v-model="form.rules"
+              placeholder="如：科幻, 太空"
+              class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+            />
           </div>
 
           <!-- 成品目录（第 18 期）：刮削后的硬链接副本落点，供外部阅读器挂载 -->

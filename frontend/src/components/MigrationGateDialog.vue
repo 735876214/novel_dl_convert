@@ -28,7 +28,6 @@ const open = ref(false)
 const preview = ref<MigrationPreview | null>(null)
 const busy = ref('')
 const result = ref('')
-const specMode = ref<Record<string, string>>({})
 
 /** 待迁移按目标类型分组计数（给用户一个「到底要搬什么」的概览） */
 const byType = computed(() => {
@@ -46,7 +45,6 @@ async function load(): Promise<void> {
   try {
     const pv = await api.migrationPreview()
     preview.value = pv
-    for (const s of pv.suggest_specs) specMode.value[s.id] ??= 'inplace'
     // 勾了「以后自动执行」→ 不再打扰，直接安静地把事做完
     if (pv.needs_confirm && pv.gate.auto_migrate) {
       await runMigration()
@@ -67,14 +65,10 @@ async function createSuggested(): Promise<void> {
   busy.value = 'create'
   try {
     for (const s of specs) {
-      const mode = (specMode.value[s.id] ?? 'inplace') as 'inplace' | 'import'
-      const loc = s[mode]
       await api.createLibrary({
         name: s.name,
         type: s.type,
-        mode,
-        root_path: loc.root_path,
-        source_subdir: s.source_subdir,
+        source_dirs: s.source_dirs,
       })
     }
     await library.loadLibraries(true)
@@ -151,10 +145,10 @@ function goManage(): void {
         <Badge v-if="preview.ambiguous">需指定目标 {{ preview.ambiguous }}</Badge>
       </div>
 
-      <!-- 缺目标库：逐库选位置（就地引用 / 独立存储） -->
+      <!-- 缺目标库：列出默认内容来源（就地引用，多文件夹） -->
       <div v-if="preview.suggest_specs.length" class="mt-3 rounded-md border border-border p-3">
         <div class="text-[12.5px] text-foreground">
-          需要先建 {{ preview.suggest_specs.length }} 个类型库 —— 逐个选存放方式
+          需要先建 {{ preview.suggest_specs.length }} 个类型库（默认内容来源已给出，建完可在书库管理里调整）
         </div>
         <div
           v-for="s in preview.suggest_specs"
@@ -163,22 +157,8 @@ function goManage(): void {
         >
           <span class="text-[12px] font-medium text-foreground">{{ s.name }}</span>
           <code class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-            {{ s[(specMode[s.id] ?? 'inplace') as 'inplace' | 'import'].root_path }}
+            {{ s.source_dirs.join('、') || '（未给出内容来源）' }}
           </code>
-          <Button
-            size="sm"
-            :variant="(specMode[s.id] ?? 'inplace') === 'inplace' ? 'primary' : 'ghost'"
-            @click="specMode[s.id] = 'inplace'"
-          >
-            就地引用
-          </Button>
-          <Button
-            size="sm"
-            :variant="specMode[s.id] === 'import' ? 'primary' : 'ghost'"
-            @click="specMode[s.id] = 'import'"
-          >
-            独立存储
-          </Button>
         </div>
         <div class="mt-2">
           <Button size="sm" :disabled="busy === 'create'" @click="createSuggested">

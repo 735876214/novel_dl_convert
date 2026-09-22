@@ -17,7 +17,7 @@ import {
   sortBySeriesIndex,
   tagsLabel,
 } from '@/lib/bookInfo'
-import { statusFromPercent, thresholdsFor } from '@/lib/readingThresholds'
+import { statusBucket } from '@/lib/readingThresholds'
 import { useDisplayPrefsStore } from '@/stores/displayPrefs'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
@@ -272,12 +272,13 @@ function clearFilters(): void {
 }
 
 /**
- * 状态筛选用的判定：**只看进度**（与改造前一致，不看 `b.status`）。
+ * 状态筛选用的判定：**真实状态优先**（与书卡文案 `statusLabelOf` 同源）。
  *
- * ⚠️ 第 40 期起阈值走 `lib/readingThresholds.ts`（可配），这里不再写死 99.5。
+ * ⚠️ 第 41 期起走 `lib/readingThresholds.ts` 的 `statusBucket`—— 手动标「已读完」
+ * 后筛选也认，不再只看进度。
  */
 function statusOf(b: BookCard): 'unread' | 'reading' | 'finished' {
-  return statusFromPercent(b.percent, thresholdsFor(library.currentLibraryId))
+  return statusBucket(b, library.currentLibraryId)
 }
 
 const searched = computed(() => {

@@ -46,8 +46,8 @@ export const useLibraryStore = defineStore('library', () => {
   const librariesLoaded = ref(false)
   /** 格式分面（`/api/library-facets`）：侧栏已不再用它，保留给需要按格式筛选的页面 */
   const libraryFacets = ref<LibraryFacet[]>([])
-  /** 素材来源父目录（`LIBRARY_SOURCE_DIR`，新建「就地引用」库的默认位置） */
-  const sourceDir = ref('')
+  /** 已配置的来源根（compose 的 `LIBRARY_SOURCE_DIRS1..N`，向导按这些根浏览 / 下钻） */
+  const sourceRoots = ref<{ name: string; path: string }[]>([])
 
   const LIB_KEY = 'nf_current_library'
 
@@ -202,7 +202,7 @@ export const useLibraryStore = defineStore('library', () => {
     try {
       const res = await api.libraries()
       libraryEntities.value = res.items
-      sourceDir.value = res.source_dir
+      sourceRoots.value = res.source_roots ?? []
       librariesLoaded.value = true
     } catch {
       // 拉失败 ⇒ `librariesLoaded` 保持 false，`hasNoLibraries` 跟着为假：
@@ -342,7 +342,7 @@ export const useLibraryStore = defineStore('library', () => {
     libraryEntities,
     librariesLoaded,
     hasNoLibraries,
-    sourceDir,
+    sourceRoots,
     currentLibraryId,
     currentLibrary,
     currentLibraryName,

@@ -10,7 +10,7 @@
  *
  * ## 五步
  *
- * ① 基本信息（名称 / 类型 / 图标，必填）② 内容来源（存放方式 / 库根 / 来源子目录 / 归类关键词 /
+ * ① 基本信息（名称 / 类型 / 图标，必填）② 内容来源（从多个来源根选多个文件夹 / 归类关键词 /
  * 成品目录，必填）③ 扫描（允许的格式 / 排除图案）④ 阅读（阅读阈值）⑤ 自动化（监听 / 间隔 / 定时）。
  *
  * 上游的 Step 4 Metadata（源优先级 / 格式优先级）与 Step 7 File updates **整步不做**
@@ -33,7 +33,6 @@ import Icon from '@/components/ui/Icon.vue'
 import {
   api,
   type LibraryEntity,
-  type LibraryMode,
   type LibraryType,
 } from '@/lib/api'
 import { ICONS } from '@/lib/icons'
@@ -44,9 +43,8 @@ import { useUiStore } from '@/stores/ui'
 const props = defineProps<{
   /** `/api/libraries` 的 `types`（含 `exts` = 该类型的默认扫描白名单） */
   types: { value: LibraryType; label: string; exts: string[] }[]
-  modes: { value: LibraryMode; label: string }[]
-  /** `LIBRARY_SOURCE_DIR` */
-  sourceDir: string
+  /** 已配置的来源根（向导按这些根浏览 / 下钻，数量不定） */
+  sourceRoots: { name: string; path: string }[]
   /** 已有书库（成品目录重叠预检要拿它们的库根） */
   libs: LibraryEntity[]
 }>()
@@ -82,7 +80,7 @@ const step = computed<StepId>(() => STEPS[stepIndex.value].id)
 /** 前 i 步是否都填完了（步骤条上的勾） */
 const done = computed(() => (i: number) => {
   if (i === 0) return Boolean(form.name.trim())
-  if (i === 1) return Boolean(form.root_path.trim())
+  if (i === 1) return selectedDirs.value.length > 0
   return i < stepIndex.value
 })
 
@@ -95,10 +93,7 @@ const form = reactive({
   name: '',
   type: 'ebook' as LibraryType,
   icon: '',
-  // ② 内容来源
-  mode: 'inplace' as LibraryMode,
-  root_path: '',
-  source_subdir: '',
+  // ② 内容来源（第 41 期：多个文件夹的绝对路径，就地引用）
   rules: '',
   publish_path: '',
   // ③ 扫描
@@ -113,6 +108,12 @@ const form = reactive({
   scan_interval: 0,
   scan_cron: '',
 })
+
+/**
+ * 已选内容来源文件夹（跨多个来源根多选）。每个条目前端持有「根名 / 相对子目录」用于
+ * 展示，**不落库**——落库只存绝对路径（`source_dirs`）。相对子目录由下钻选择时算出。
+ */
+const selectedDirs = ref<{ path: string; rootName: string; relSubdir: string }[]>([])
 
 /** 用户在第三步**动过**格式勾选没有。没动过就发空数组 = 继承类型默认。 */
 const fmtTouched = ref(false)
@@ -135,7 +136,7 @@ watch(() => form.type, () => {
 })
 
 // ---------------------------------------------------------------------------
-// 三个「建议值」（库根 / 来源子目录 / 成品目录）
+// 「建议值」（成品目录）
 // ---------------------------------------------------------------------------
 
 /**
@@ -143,56 +144,33 @@ watch(() => form.type, () => {
  * 前面填的会被悄悄冲掉。
  *
  * ⚠️ 别用「当前值等不等于默认值」来判断用户动没动过：那样一旦默认值自己变了
- * （换类型 / `sourceDir` 后到），判断的基准就跟着变，结果既留不住用户输入、
+ * （换类型 / `sourceRoots` 后到），判断的基准就跟着变，结果既留不住用户输入、
  * 也跟不上下拉变化。**记一个显式的 touched 才是唯一稳的**。
  */
-const touched = reactive({ root: false, sub: false, publish: false })
+const touched = reactive({ publish: false })
 
 /**
  * 把没被手改过的建议值重算一遍。
  *
- * 三件事都会触发它：
- *   · 用户换了库类型 / 存放方式；
- *   · `sourceDir` 从空变成真实值 —— ⚠️ 向导挂载时父组件的 `reload()` 还没回来，
- *     这时算出来的默认值会丢掉来源目录前缀（实测得到一个 `/ebooks` 这种根路径），
- *     所以**必须**等它到位后重算一次。
+ * 来源根到位（或换类型）后重算成品目录默认位置 —— ⚠️ 向导挂载时父组件的 `reload()`
+ * 还没回来，这时 `sourceRoots` 是空，算出来的默认值会丢掉来源根前缀，
+ * 所以**必须**等它到位后重算一次。
  */
 function resyncDefaults(): void {
-  if (!touched.root) form.root_path = defaultRoot(form.mode, form.type)
-  if (!touched.sub) form.source_subdir = defaultSourceSubdir()
   if (!touched.publish) form.publish_path = defaultPublish(form.type)
 }
 
 watch(
-  [() => props.sourceDir, () => form.type],
+  [() => props.sourceRoots, () => form.type],
   () => resyncDefaults(),
   { immediate: true },
 )
 
-function defaultSourceSubdir(): string {
-  return `${form.type}s`
-}
-
-function defaultRoot(mode: LibraryMode, type: LibraryType): string {
-  return mode === 'inplace'
-    ? `${props.sourceDir}/${type}s`
-    : `${props.sourceDir}/../data/libraries/${type}`
-}
-
 function defaultPublish(type: LibraryType): string {
-  return `${props.sourceDir}/../output/${type}-sorted`
-}
-
-/**
- * 切「存放方式」⇒ 库根必须跟着重算（两种模式的库根不是同一个概念）。
- *
- * 这一点与编辑弹窗既有行为一致：**换存放方式不保留旧库根**。
- * 来源子目录 / 成品目录则不受影响（它们与模式无关）。
- */
-function pickMode(m: LibraryMode): void {
-  form.mode = m
-  touched.root = false
-  resyncDefaults()
+  const base = props.sourceRoots[0]?.path ?? ''
+  if (!base) return ''
+  const parent = base.replace(/\/[^/]*$/, '')
+  return `${parent}/output/${type}-sorted`
 }
 
 function addExclude(): void {
@@ -204,6 +182,92 @@ function addExclude(): void {
 
 function removeExclude(i: number): void {
   form.exclude.splice(i, 1)
+}
+
+// ---------------------------------------------------------------------------
+// 服务器目录浏览（第 41 期）—— 多来源根下钻 + 跨根多选文件夹
+// ---------------------------------------------------------------------------
+
+/**
+ * 内容来源浏览：调用 `GET /api/libraries/source-dirs` 按**来源根**下钻真实服务器目录。
+ * 不传参返回所有来源根；传 `root`+`path` 返回该根下某目录的子项（仅目录可继续下钻）。
+ * 选中「当前文件夹」即把它的绝对路径加进 `selectedDirs`，前端同时持有根名 / 相对子目录用于展示。
+ *
+ * ⚠️ 弹层只依赖接口已返回的数据，不引入异步状态机、不重建整页 DOM（局部显隐）。
+ */
+const browse = reactive<{
+  open: boolean
+  loading: boolean
+  rootIndex: number
+  rootName: string
+  rootPath: string
+  path: string
+  entries: { name: string; path: string; type: 'dir' | 'file' }[]
+}>({ open: false, loading: false, rootIndex: -1, rootName: '', rootPath: '', path: '', entries: [] })
+
+/** 当前正在浏览的文件夹的绝对路径（添加此文件夹用） */
+const browseAbsPath = computed(() =>
+  browse.rootPath ? `${browse.rootPath}${browse.path ? '/' + browse.path : ''}` : '',
+)
+
+async function fetchEntries(): Promise<void> {
+  browse.loading = true
+  browse.entries = []
+  try {
+    const res = await api.librarySourceDirs({ root: browse.rootIndex, path: browse.path })
+    browse.entries = res.entries ?? []
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '读取服务器目录失败')
+  } finally {
+    browse.loading = false
+  }
+}
+
+/** 点来源根卡片 ⇒ 从该根顶层开始下钻。 */
+function openBrowseRoot(i: number): void {
+  const r = props.sourceRoots[i]
+  if (!r) return
+  browse.rootIndex = i
+  browse.rootName = r.name
+  browse.rootPath = r.path
+  browse.path = ''
+  browse.open = true
+  void fetchEntries()
+}
+
+/** 点目录项 ⇒ 下钻一层（文件不可下钻）。 */
+function drillInto(d: { name: string; path: string; type: 'dir' | 'file' }): void {
+  if (d.type !== 'dir') return
+  browse.path = browse.path ? `${browse.path}/${d.name}` : d.name
+  void fetchEntries()
+}
+
+/** 返回上一层（已到根则关掉弹层）。 */
+function browseUp(): void {
+  if (!browse.path) {
+    browse.open = false
+    return
+  }
+  const parts = browse.path.split('/')
+  parts.pop()
+  browse.path = parts.join('/')
+  void fetchEntries()
+}
+
+/** 把当前浏览的文件夹加进已选（跨根合法；同一路径不重复添加）。 */
+function addCurrentFolder(): void {
+  const abs = browseAbsPath.value
+  if (!abs) return
+  if (selectedDirs.value.some((d) => d.path === abs)) {
+    ui.toast('该文件夹已在列表中')
+    return
+  }
+  selectedDirs.value.push({ path: abs, rootName: browse.rootName, relSubdir: browse.path })
+}
+
+/** 从已选里移除某个文件夹。 */
+function removeDir(p: string): void {
+  selectedDirs.value = selectedDirs.value.filter((d) => d.path !== p)
 }
 
 // ---- 定时扫描预设（**只是 `scan_cron` 的选择器，不新增调度能力**）----
@@ -229,17 +293,9 @@ const publishIssue = computed(() => {
   if (!raw) return ''
   if (!isAbsolutePath(raw)) return '请输入绝对路径'
   for (const l of props.libs) {
-    const guards: Array<{ label: string; path: string }> = []
-    if (l.root_path) guards.push({ label: `书库「${l.name}」的库根`, path: l.root_path })
-    if (l.source_subdir) {
-      guards.push({
-        label: `书库「${l.name}」的扫描源目录`,
-        path: `${props.sourceDir}/${l.source_subdir}`,
-      })
-    }
-    for (const g of guards) {
-      if (pathsOverlap(raw, g.path)) {
-        return `与${g.label}重叠（${g.path}）：副本会被扫描回来变成重复书`
+    for (const g of l.source_dirs ?? []) {
+      if (pathsOverlap(raw, g)) {
+        return `与书库「${l.name}」的内容来源文件夹（${g}）重叠：副本会被扫描回来变成重复书`
       }
     }
   }
@@ -253,7 +309,7 @@ const blocked = computed(() => {
     return ''
   }
   if (step.value === 'folders') {
-    if (!form.root_path.trim()) return '请填写库根目录'
+    if (!selectedDirs.value.length) return '请至少选择一个内容来源文件夹'
     if (publishIssue.value) return publishIssue.value
     return ''
   }
@@ -300,9 +356,9 @@ async function submit(createNow = false): Promise<void> {
       ui.toast('请填写库名称')
       return
     }
-    if (!form.root_path.trim()) {
+    if (!selectedDirs.value.length) {
       stepIndex.value = 1
-      ui.toast('请填写库根目录')
+      ui.toast('请至少选择一个内容来源文件夹')
       return
     }
   }
@@ -316,9 +372,8 @@ async function submit(createNow = false): Promise<void> {
     const res = await api.createLibrary({
       name: form.name.trim(),
       type: form.type,
-      mode: form.mode,
-      root_path: form.root_path.trim() || defaultRoot(form.mode, form.type),
-      source_subdir: form.source_subdir.trim(),
+      // 第 41 期：内容来源 = 多个文件夹的绝对路径（就地引用，跨根合法）。
+      source_dirs: selectedDirs.value.map((d) => d.path),
       rules: form.rules,
       publish_path: form.publish_path.trim(),
       watch: form.watch ? 1 : 0,
@@ -370,8 +425,8 @@ const iconChoices = computed(() => {
 // ---------------------------------------------------------------------------
 
 onMounted(async () => {
-  // 三个建议值不在这里设 —— 那会在 `sourceDir` 还没到位时算出一个丢掉前缀的路径。
-  // 交给上面那个盯 `props.sourceDir` 的 watch（它带 `immediate`，且来源目录到位后会再跑一次）。
+  // 成品目录默认值不在这里设 —— 那会在 `sourceRoots` 还没到位时算出一个丢掉前缀的路径。
+  // 交给上面那个盯 `props.sourceRoots` 的 watch（它带 `immediate`，且来源目录到位后会再跑一次）。
   //
   // 第 ④ 步要显示「继承全局」的实际值，所以先把全局阈值取回来
   await ensureThresholds()
@@ -494,45 +549,95 @@ onMounted(async () => {
           <!-- ② 内容来源 -->
           <div v-else-if="step === 'folders'" class="space-y-4">
             <div>
-              <div class="mb-1 text-[11.5px] text-muted-foreground">存放方式</div>
-              <div class="flex flex-wrap gap-1">
-                <Button
-                  v-for="m in modes"
-                  :key="m.value"
-                  size="sm"
-                  :variant="form.mode === m.value ? 'primary' : 'ghost'"
-                  @click="pickMode(m.value)"
-                >
-                  {{ m.label }}
-                </Button>
+              <div class="mb-1 text-[11.5px] text-muted-foreground">
+                内容来源（就地引用，不搬文件）—— 可从多个来源根选多个文件夹，一个库对应多个文件夹
               </div>
-              <div class="mt-1 text-[11px] text-muted-foreground">
-                就地引用 = 直接引用来源子目录（不搬文件）；独立存储 = 库有自己的存储目录，来源目录的文件会导入进来。
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  v-for="(r, i) in sourceRoots"
+                  :key="r.path"
+                  type="button"
+                  data-test="wizard-root-card"
+                  class="flex flex-col items-start gap-0.5 rounded-md border border-border bg-transparent px-3 py-2 text-left transition-colors hover:border-primary hover:bg-muted"
+                  @click="openBrowseRoot(i)"
+                >
+                  <span class="text-[12.5px] font-medium text-foreground">{{ r.name }}</span>
+                  <span class="truncate text-[11px] text-muted-foreground">{{ r.path }}</span>
+                  <span class="mt-0.5 text-[10.5px] text-primary">浏览…</span>
+                </button>
+              </div>
+              <div v-if="!sourceRoots.length" class="mt-1 text-[11px] text-muted-foreground">
+                未检测到已配置的来源根，请在 compose 中配置 LIBRARY_SOURCE_DIRS1..N 后重试。
               </div>
             </div>
 
-            <div>
-              <div class="mb-1 text-[11.5px] text-muted-foreground">库根目录 *</div>
-              <input
-                v-model="form.root_path"
-                data-test="wizard-root"
-                :placeholder="defaultRoot(form.mode, form.type)"
-                class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
-                @input="touched.root = true"
-              />
+            <!-- 下钻浏览面板 -->
+            <div v-if="browse.open" class="rounded-md border border-border">
+              <div class="flex items-center gap-2 border-b border-border px-3 py-2">
+                <button
+                  type="button"
+                  data-test="wizard-browse-up"
+                  class="rounded px-1.5 py-0.5 text-[11.5px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  @click="browseUp"
+                >
+                  ↑ 返回
+                </button>
+                <span class="min-w-0 flex-1 truncate text-[11.5px] text-foreground">
+                  {{ browse.rootName }} / {{ browse.path || '（根）' }}
+                </span>
+              </div>
+              <div class="max-h-56 overflow-y-auto p-1">
+                <div v-if="browse.loading" class="px-2 py-2 text-[11.5px] text-muted-foreground">加载中…</div>
+                <template v-else-if="browse.entries.length">
+                  <button
+                    v-for="d in browse.entries"
+                    :key="d.path"
+                    type="button"
+                    :data-test="`wizard-browse-${d.type}`"
+                    class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12.5px]"
+                    :class="d.type === 'dir' ? 'cursor-pointer text-foreground hover:bg-muted' : 'cursor-default text-muted-foreground'"
+                    @click="drillInto(d)"
+                  >
+                    <Icon :name="d.type === 'dir' ? 'folder' : 'file'" class="h-3.5 w-3.5 shrink-0" />
+                    <span class="min-w-0 flex-1 truncate">{{ d.name }}</span>
+                  </button>
+                </template>
+                <div v-else class="px-2.5 py-2 text-[11.5px] text-muted-foreground">（此目录下没有子项）</div>
+              </div>
+              <div class="border-t border-border px-3 py-2">
+                <Button size="sm" variant="primary" data-test="wizard-pick-folder" :disabled="!browseAbsPath" @click="addCurrentFolder">
+                  添加此文件夹{{ browseAbsPath ? `（${browseAbsPath}）` : '' }}
+                </Button>
+              </div>
             </div>
 
             <div>
               <div class="mb-1 text-[11.5px] text-muted-foreground">
-                来源子目录（相对 {{ sourceDir }}；放在它里面的文件会自动归入本库）
+                已选内容来源（跨根合计 {{ selectedDirs.length }} 个）
               </div>
-              <input
-                v-model="form.source_subdir"
-                data-test="wizard-sub"
-                class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
-                :placeholder="defaultSourceSubdir()"
-                @input="touched.sub = true"
-              />
+              <div v-if="selectedDirs.length" class="flex flex-wrap gap-1.5">
+                <span
+                  v-for="d in selectedDirs"
+                  :key="d.path"
+                  data-test="wizard-selected-item"
+                  class="flex items-center gap-1.5 rounded-full border border-border bg-muted/50 px-2.5 py-1 text-[11.5px] text-foreground"
+                >
+                  <Icon name="folder" class="h-3 w-3 shrink-0 text-muted-foreground" />
+                  <span class="font-medium">{{ d.rootName }}</span>
+                  <span class="text-muted-foreground">/ {{ d.relSubdir || '（根）' }}</span>
+                  <button
+                    type="button"
+                    data-test="wizard-selected-del"
+                    class="ml-0.5 text-muted-foreground hover:text-destructive"
+                    @click="removeDir(d.path)"
+                  >
+                    ✕
+                  </button>
+                </span>
+              </div>
+              <div v-else class="text-[11px] text-muted-foreground">
+                尚未选择任何文件夹。点击上方来源根浏览并「添加此文件夹」。
+              </div>
             </div>
 
             <div>
