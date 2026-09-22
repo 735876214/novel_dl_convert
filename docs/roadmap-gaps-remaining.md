@@ -1762,3 +1762,40 @@ Details / Folders / Scanning / Reading / Automation。
 BookCover `:96`、ShelfView `:280`）均按实测行号写入；`tests/check_doc_anchors.py` 复核 **硬错 0 / 疑似漂移 0**
 （本期只在 `LibraryWizard.vue` 内新增、未改既有带锚点行，故不引入漂移）。
 第 40 期 §G 第 2、3 条已反向标注「**第 41 期已收口**」。
+
+---
+
+#### 第 41 期实施记录（续）：书库存放改造 —— 多来源根 `source_dirs`、移除 import 模式
+
+**主题**：库数据模型从「单 `root_path` + `source_subdir` + `mode(inplace/import)`」改为
+「多个文件夹绝对路径 `source_dirs`（JSON 数组），仅就地引用」。compose 用
+`LIBRARY_SOURCE_DIRS1..N`（+ 可选 `<N>_NAME`）声明**不定数量**来源根，序号从 1 连续、
+首个缺号即停；未配置任何编号变量时回退单根 `LIBRARY_SOURCE_DIR`（默认 `/app/libraries`），老部署兼容。
+
+`config.LIBRARY_SOURCE_ROOTS`（`[{name, path}]`）**仅用于两件事**：① 向导浏览树的根
+② 建库 / 改库时一次性的边界校验（`config.normalize_source_dirs` 拒非来源根内的路径，跨根合法）。
+**后端不反查「所属根名 / 相对子目录」** —— 绝对路径即唯一真值，层级信息由前端下钻选择时持有。
+
+- **配置层** `config.py`：循环扫 `LIBRARY_SOURCE_DIRS1..N` → `LIBRARY_SOURCE_ROOTS`；
+  `ensure_dirs()` 遍历多根；保留 `LIBRARY_SOURCE_DIR` 兼容别名（指向首根）。
+- **数据层** `core/db.py`：`libraries` 加 `source_dirs TEXT`（JSON 绝对路径数组），
+  删 `mode` / `root_path` / `storage_path` / `source_subdir` 四列；迁移**先 backfill 再 DROP**
+  （现存 inplace 库 `source_dirs = json([root_path])`）。`source_dirs` 已进 `_LIBRARY_COLS`。
+- **接口层** `server.py`：`GET /api/libraries/source-dirs` 返回多根 + `?root=<idx>&path=<sub>` 下钻；
+  create / update 收 `source_dirs` 多根校验；`_library_dto` 输出 `source_dirs`（取代 `root_path` / `source_subdir` / `mode`）。
+- **核心** `library` / `library_rules` / `migrate` / `watcher` / `server`：扫描 / 落盘 / 路径解析 /
+  `_lib_id_of_path`（最长匹配）一律遍历 `source_dirs` 的绝对路径，移除 import 分支；
+  `library.roots_of(lib)` = 解析 `source_dirs` JSON 得 Path 列表。
+- **前端** `LibraryWizard` 移除「归属模式」步骤；内容来源步骤改为**多来源根浏览 + 逐层下钻 + 跨根多选**，
+  提交 `source_dirs`（绝对路径），前端持有根名 / 相对子目录用于 chips 展示；
+  `api.ts` / `LibrariesView` / 设置页同步。
+
+**两个会让测试静默失败的真实 bug（本轮定位并修复）**：
+1. `core/watcher.py` 模块顶层漏 `from . import library` ⇒ `_derive_targets` / `handle_file` 里
+   裸名 `library.roots_of(...)` 抛 `NameError`，被 `except Exception: pass` 吞掉，**逐库扫描目标整组消失**。
+2. `server.py` 的 `_publish_path_allowed` 内层 `for rp in _roots_of(lib)` 覆盖了外层成品目录变量 `rp`
+   ⇒ 之后 `rp == g` 恒真，**建库时成品目录校验一律误报「与库根重叠」400**。内层改名 `lr`。
+
+**验证**：后端全量 **690 passed / 0 failed**；前端 `npm run test:unit` **58 passed**、
+`vue-tsc --build` exit 0。旧 `root_path` / `source_subdir` / `mode` / `import` 契约的用例全部改写为 `source_dirs`。
+`docker-compose.yml` 改 `LIBRARY_SOURCE_DIRS1=/app/libraries` 并示范 `2/3` + `_NAME` 扩展。

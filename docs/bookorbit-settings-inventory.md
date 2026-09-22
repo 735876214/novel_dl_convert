@@ -405,7 +405,7 @@ SERVER
 | LAST SCAN | `Scanned 2 days ago` / `Failed 17 hours ago` + 小字（如 `Server restarted during scan`）+ 原因标签（`Schedule - no change` / `Manual - no change`） | 扫描状态与原因 | ✅ |
 | 行动按钮 | `Scan` | 单库扫描 | ✅ |
 
-**本项目落地**：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用 / 独立存储）、来源子目录投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、自动归库、库类型→功能显隐、每库独立覆盖（第 13 期）均在「工具 → 书库管理」实现；此设置页仅作上游结构对照（`settingsNav` 标 `placeholder`，link→/tools/libraries）。
+**本项目落地**：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用，一个库可引用多个来源文件夹）、来源文件夹投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、自动归库、库类型→功能显隐、每库独立覆盖（第 13 期）均在「工具 → 书库管理」实现；此设置页仅作上游结构对照（`settingsNav` 标 `placeholder`，link→/tools/libraries）。
 
 ### 2.18 LIBRARY → Metadata → Providers（`/settings/metadata/providers`）
 

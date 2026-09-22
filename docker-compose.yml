@@ -33,9 +33,11 @@ services:
       - ./cache:/app/config/cache
       # 阅读端持久化：SQLite（阅读进度 / 批注 / 账号），跨重启与多端共享
       - ./data:/app/data
-      # 多书库（第 10 期）书库来源根目录：其下的子文件夹可被「新建书库」**就地引用**，
-      # 或作为投递 / 导入源。不挂也能跑（默认 /app/libraries 在容器层），但重建即丢，故显式挂出。
+      # 多书库来源根目录（第 41 期起支持**不定数量**）：其下的子文件夹可被「新建书库」**就地引用**
+      # （直接扫描、不搬文件）；一个库可跨多个来源根选多个文件夹。不挂也能跑（回退默认
+      # /app/libraries 在容器层），但重建即丢，故显式挂出。需要多个来源根时按需再加挂载。
       - ./libraries:/app/libraries
+      # - ./libraries2:/app/libraries2
     environment:
       - TZ=Asia/Shanghai
       - INPUT_DIR=/app/input
@@ -45,7 +47,12 @@ services:
       - CACHE_DIR=/app/config/cache
       - LOG_DIR=/app/config/logs
       - DATA_DIR=/app/data
-      - LIBRARY_SOURCE_DIR=/app/libraries
+      # 书库来源根（就地引用）：序号从 1 连续、首个缺号即停；可选 <N>_NAME 覆盖显示名
+      # （默认取路径最后一级）。未配置任何编号变量时回退单根 LIBRARY_SOURCE_DIR，老部署兼容。
+      - LIBRARY_SOURCE_DIRS1=/app/libraries
+      # - LIBRARY_SOURCE_DIRS1_NAME=主库
+      # - LIBRARY_SOURCE_DIRS2=/app/libraries2
+      # - LIBRARY_SOURCE_DIRS2_NAME=备份根
       # 阅读端单用户轻登录（仅首次启动初始化；之后在「设置 → 账户」改，生产务必改默认值）
       - AUTH_USER=admin
       - AUTH_PIN=changeme
