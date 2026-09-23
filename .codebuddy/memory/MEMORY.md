@@ -26,10 +26,13 @@
 - `metadata_fetch.custom_fields` 已下线（移 `custom_field_defs`，`key`/`label` 分离）；`custom_fields` 仍在 `metascore.NOT_SCORED`、权重表未动。
 - 相似书权重 `0.5·词袋余弦 + 0.1·同作者 + 0.25·题材 Jaccard + 0.1·同系列 + 0.05·评分接近度`；`limit`≤25、详情页默认 6 可展开；任一方未评分不进分母；词袋**简介不进**；0 分不返回；`SimilarBook.score`=0–1（前端不显示）。
 - **软删除**：`DELETE`=移垃圾桶（`deleted_at`），`purge` 才真删且只对垃圾桶开放；**一切读点须 `WHERE deleted_at=0`**（含 `annotation_counts`/`trashed_*`/remap 探测）。
+- **作者排序名两列**：`sort_name`（**派生 / 在线**）与 `sort_name_local`（**用户覆盖**）；展示取 覆盖 > 派生（`authors.sort_name_of`）。⚠️ **派生 / 回填只写 `sort_name`，绝不动 `sort_name_local`**（写后者＝冒充用户改过，界面误显示「已覆盖」并挡住抓取）。派生规则 `authors.derive_sort_name`：拉丁两名 →「姓, 名」、多名带小词表（`Le Guin`），**CJK 原样返回 ⇒ 跳过**（填了等于没填）。
+- **系列缺册**：唯一实现 `library.series_gaps` —— 按 `series_index` 数字集合求 `[1..max]` 补集；**无序号 / 非数字序号各自单列、不并入缺册**（前端不再自己算）。
+- **阅读尝试（轮次）**：`reading_attempts` 表；一轮 =「开始读 → 读完」，读完再开始＝新一轮（`round` 递增）。⚠️ 自动维护挂 `db.set_status`（进 reading 开轮 / finished 收尾；**搁置·弃读不动轮次**）；`reset_reading_state` **四清**（含 attempts）；表已进 `ORPHAN_TABLES`/`REMAP_TABLES`。
 
 ## Git / 环境 / 构建
 - 行尾必须 **LF**（`.gitattributes` 锁；CRLF ⇒ 容器 `sh /app/start.sh` 报 `set: Illegal option -` 反复重启）。
-- Python 3.10+（PEP 604，系统 python3.9 不可用）；Node v20/22、Docker daemon 可用；本机对外网络有限。
+- Python 3.10+（PEP 604，系统 python3.9 不可用）；Node v20/22、Docker daemon 可用；本机对外网络有限。⚠️ **本机 `nvm` 是空的另一套**，可用的 Node 是 IDE 管理的 `.workbuddy/binaries/node/versions/<ver>`——跑 npm 前把它加进 PATH，见 REF「运行 / UI 验证」。
 - 认证走 GCM；**勿再引入** token 内嵌/insteadof 明文重写；推送失败先查认证/网络，**别改 git config**。
 - **入库配置不得含机器相关绝对路径**（`.vscode/settings.json` 的 `python.pythonPath` 是前例）：指向 `.venv` 的各人配在本机用户设置。
 - `.gitignore`/macOS 建环境/首跑/`npm install` 的 lock 噪声/Windows 删除 shim ⇒ **见 REF「环境与构建」**。
@@ -70,6 +73,7 @@
 - 可见性=能力矩阵（库类型有没有）∩ 每库开关，判定**只留一处**；「不可见」=「不存在」→404。
 - ⚠️ **能力键判隐显轴**：`library.hasFeature(k)` 判「侧栏当前选着哪个库」，只适合全局导航/设置页；读者侧要判「**这本书**属于哪个库」。
 - ⚠️ **新增「可保存的配置分区」=三处同步点**：① `server.EDITABLE` 白名单 ② `GET /api/config` 里硬编码键列表 ③ 前端 `settingsFields.ts` 的 `SECTION_KEYS`。漏任一处都**不报错**（①漏⇒400「无可保存项」；②漏⇒写进读不回；③漏⇒开关正常但 patch 空），表现都只一条 toast。判「某能力有没有页面入口」也照这三处查。
+- ⚠️ **偏好块的块名清单是前后端两处真值源**：`server.PREFS_BLOCKS` ↔ 前端 `lib/prefsPayload.ts` 的 `PAYLOAD_BLOCKS`（连带 `PrefsPayload` / `normalizePayload` / `prefSync` 的 `collect`·`applyPayload`）。**新增块必须两端同批改**；漂移表现很隐蔽（推上去 400 / 拉回来静默丢字段）。契约测试 `tests/test_prefs_shelf_block.py`（第 43 期加的第 7 块 `shelf`：只承载 `collapseSeries`）。
 
 ## 前端
 - Vue3 SFC+TS+Vite8+Tailwind v4+Pinia4+vue-router5(hash)；产物 `novelforge/static/v2/`（`/` 服务其 index.html，缺失 503）；**勿往 `novelforge/static/` 加手写页**。
