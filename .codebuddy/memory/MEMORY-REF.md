@@ -18,7 +18,7 @@
   ⚠️ **跑 `npm run build` / `deploy` 前必须先 `$env:NODE_OPTIONS=''`** —— IDE 注入的 safe-delete shim 会拦 Vite 的
   `fs.rmSync`（清 outDir）与 `deploy.mjs` 的删除，报 `checkBulkDeleteGuard` / 「No active Node.js version」。
   同一条「先清 `NODE_OPTIONS`」对 pytest 也适用（此前几期的命令都带它，原因就在这里）。
-- 浏览器冒烟：`playwright-cli install-browser chromium`；注入 `nf_token`（`localstorage-set` + **`reload`**）；⚠️ `snapshot` 直接打到 stdout（`--filename` 可能不落盘）⇒ 重定向到 `/tmp` 自己读，别落仓库根；⚠️ 换了产物要**带 `?nc=N` goto**（普通 `reload` 用旧 bundle，会误判成「改动没生效」）。
+- 浏览器冒烟：本机（win32）**无 chromium 也能跑** —— `playwright-cli open --browser=msedge`（走系统 Edge 通道，免下载；直接 `open` 会失败）；也可 `playwright-cli install-browser chromium`；注入 `nf_token`（`localstorage-set` + **必须再 `reload`**，否则首屏未授权请求 401、且应用会把刚注入的 token 清掉）；⚠️ `snapshot` 直接打到 stdout（`--filename` 可能不落盘）⇒ 重定向到 `/tmp` 自己读，别落仓库根；⚠️ 换了产物要**带 `?nc=N` goto**（普通 `reload` 用旧 bundle，会误判成「改动没生效」）。
 - e2e 自查顺序：接口账目（curl）→ 界面文本（`eval innerText`）→ `console`（0 errors）→ `network`（无非本地请求）。
 
 ## 上游取证与待办（跨会话）
