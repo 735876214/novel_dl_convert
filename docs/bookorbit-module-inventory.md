@@ -451,3 +451,30 @@
 - **文档锚点**：本期改 `router/index.ts`、`data/settingsNav.ts` 等被引用文件 ⇒ 重跑 `tests/check_doc_anchors.py`，
   修正 `capability-gap.md`（8 处）与 `module-inventory.md`（4 处）的**实测行号**，**硬错 0**；余 14 条「疑似漂移」
   全在 `docs/roadmap-gaps-remaining.md` 的**历史实施记录**内，按约定（历史行号不改写）保留。
+
+## 第 50 期更新（2026-09-23）：服务端组三页做深 + Komga 页深化 + 遗留文案订正
+
+- **订正第 49 期漏改的指引文案**：`frontend/src/` 内共 14 处「工具 → 书库管理」→「设置 → 书库管理」
+  （`TaskCenterView` / `ExploreView` ×2 / `ProfilePage` / `OpdsPage` ×2 / `KomgaPage` / `BookDockPage` /
+  `settingsNav.ts` ×2 / `settingsFields.ts` / `MigrationGateDialog` / `GuidedTourModal` / `ScrapePanel`）。
+  **刻意不改**：`settingsNav.ts` 与 `router/index.ts` 里的「**原**「工具 → 书库管理」入口已并入 / 已移除」
+  （正确历史陈述）、`docs/roadmap-gaps-remaining.md` 的历史实施记录、各 inventory 的记录性表述。
+- **收书目录（Book Dock）做深**：`loadDock()` 由静默 `catch` 改为**可重试错误态**（此前失败会渲染成空态
+  「投递目录里还没有文件」，属「失败冒充空态」）+ 首屏加载态（消除空态闪烁）；投递目录路径一键复制；
+  条目补「入库 / 更新」时间（`created_at`，`updated_at` 晚于其 60s 以上才另标）；全选 / 清空 +
+  批量「重扫 / 忽略」（无批量端点，逐条调用既有单条接口，失败逐条汇总后统一刷新）。
+- **服务端字体（Server Fonts）做深**：新增**行内字体预览** —— 列表行可点选，用 store 已注入的 `@font-face`
+  以 `customFontFamily(id)` 渲染样例文本（中文 / 拉丁 / 数字 / 标点）并可调字号，**零额外请求**；
+  未支持清单相应下调为仅剩「按字重 / 斜体派生变体」。
+- **审计日志（Audit Log）做深**：类别筛选 chips（**客户端**派生，由动作归并反向得出并带计数）、
+  「仅看未记录操作者」筛选（客户端）、「加载更多」（后端只有 `limit` 无 `offset` ⇒ 200/500/1000/2000
+  四档抬高重取）、「导出当前筛选结果为 CSV」（客户端 Blob + BOM 保中文）。客户端两维的作用范围在页面上
+  如实标注为「当前已加载的 N 条」，与服务端四维（动作 / 结果 / 操作者 / 关键字）区分。既有 `err` 兜底保留。
+- **Komga 库布局页深化**（不新增子系统）：整理预览加搜索 / 只看冲突 / 全选可见项 / 排序（系列 · 路径），
+  全部 `computed` 派生、**不改 `plan.items` 原数组**，并注明「筛选与排序只影响展示，提交范围 = 已勾选」；
+  `preview()` 失败由「只 toast」改为**页面级错误态 + 重试**；兼容服务端区加开启状态徽章，
+  未开启时地址与凭据区弱化并说明「先填好备用，开启后生效」。
+- **验证**：前端 `type-check` 0 错 + `test:unit` 62 + `build` + `deploy`；后端全量 pytest（基线 725）；
+  `tests/check_doc_anchors.py` 判硬错 0；无头浏览器冒烟四页控制台 0 错误。
+- 提交：`80c56b4`（文案）+ `9e8b989`（收书目录）+ `7fe4657`（服务端字体）+ `b38306d`（审计日志）+
+  `d85a007`（Komga）。
