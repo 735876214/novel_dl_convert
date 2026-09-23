@@ -76,5 +76,5 @@
 - Vue3 SFC+TS+Vite8+Tailwind v4+Pinia4+vue-router5(hash)；产物 `novelforge/static/v2/`（`/` 服务其 index.html，缺失 503）；**勿往 `novelforge/static/` 加手写页**。
 - 演示数据禁 `Math.random()`；**路由 path 全局唯一**；`settingsNav`/router 注册表/侧栏**三处与组件同批改**（设置页由注册表生成路由 ⇒ **删条目即删路由**）；**零外部请求零 CDN**。⚠️ 第 49 期后**设置页共 36 页**（删除 12 个上游对照占位页、占位页清零）；**「书库管理」在 `/settings/libraries`**（工具页不再单列该书签）。
 - ⚠️ **前端收尾必须 `npm run type-check` + `npm run build` + `npm run deploy`**：`vitest` 不校验模块导出完整性（第 44 期曾把两个文件误提交成 0 B，62 个单测全过、只有构建才报断链）；且 `build` 只落 `frontend/dist`，**`deploy` 才同步到 `novelforge/static/v2`**（漏 deploy ⇒ 服务端仍服务旧 bundle，改动看似「没生效」）。
-- ⚠️ 设置页 `note` 纯文本插值 ⇒ `**`/反引号/`<strong>` 原样显示（契约钉住）。
+- ⚠️ 设置页 `note` 纯文本插值 ⇒ `**`/反引号/`<strong>` 原样显示（契约钉住）；且**只有 `placeholder` 页会渲染 `note`**（`SettingsPlaceholder.vue` 里的 `{{ page.note }}`），`ready` 页的 note **用户看不到** —— 但它仍是「本项目落地口径」的来源，改能力时应同步（第 50 期实测）。
 - 图表入口 `lib/charts.ts`、偏好归属、侧栏导航契约、命名避让（`/explore` vs `/browse`）、实体总览六维、窄屏双写法、`ToolsLayout` 用 `onActivated` ⇒ **域细节见 REF**。
