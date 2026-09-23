@@ -187,7 +187,7 @@
 | `dashboard` | §6 | 已覆盖 | `statistics` | §6 | 已覆盖 |
 | `email` | §7 | **漏项候选**（同第 26 行模块） | `storygraph` | 三方 | 已拍板不做 |
 | `hardcover` | 三方 | 已拍板不做 | `tools` | §5 | 已覆盖 |
-| `kobo` | §10 | 已覆盖 | `whats-new` | §7 | 已覆盖 |
+| `kobo` | §10 | **未实现**（同 §2；仅设置页占位） | `whats-new` | §7 | 已覆盖 |
 | `koreader` | §10 | 已覆盖 | | | |
 
 ---
@@ -369,3 +369,29 @@
 **契约测试**：`tests/test_annotations.py` 增 `test_annotation_style_roundtrips`（创建带 style → 列表/导出含 style → 老库迁移补 style 列，后者并入既有 `test_legacy_db_gets_new_columns_without_losing_rows` 断言集）。
 
 后端全量 **721 例 / 0 failed**（含本期 +1）；前端 `npm run test:unit` **62 例**（无新增）。
+
+## 九、第 46 期更新（2026-09-23）：16 漏项模块裁决复核（无新增可做项）
+
+对第 33 期遗留的「16 个从未进过对照视野」模块做**逐模块复核**（语义 + 文本检索核实到当前代码），
+结论：**值得做的都已在往期落地，无新增可做项，无新增表 / 路由 / 含 `book_id` 的表**。
+
+| 模块 | 现判定 | 代码现状（证据） |
+| --- | --- | --- |
+| `book-metadata-lock` / `bookmark` / `browse-counts` / `catalog` / `custom-metadata` / `reading-state` / `recommendation` / `book-move` | 已覆盖（第 34–36 期） | 8 项均有表 / 路由 / 前端锚点（详见 §4.1、§7、§8） |
+| `email` | 不做 | 全仓无 SMTP / 邮件链路；设置页为占位 |
+| `embedding` | 不做 | `core/recommend.py` 刻意用元数据词袋，不做语义向量 |
+| `migration` | 不做 | `core/migrate.py` 只做**本地库间搬迁**；无四家外部系统迁移 |
+| `narrator` | 不做 | 后端零 `narrator`；仅命名模板记 `{narrators}` 缺失 |
+| `position-converter` | 不做 | 仅进度级 `core/koreader.py`（XPointer↔章节）；无 CFI / kobo span / kepub DOM |
+| `file-write` | 永久不做 | `core/fileops.py` 的写回函数已**退出生产路径**；元数据只落 DB 是硬约束 |
+| `seed` | 不做 | 演示种子已主动移除 |
+| `architecture` | 非能力 | 无等价物 |
+
+**本期文档订正 2 处**：
+
+- §3 前端 feature 表的 `kobo` 行原标「已覆盖」，与 §2 第 33 行（第 42 期订正为**未实现**）及代码矛盾
+  ⇒ 已就地改为「未实现」（本项目仅设置页占位，Kobo 同步 2026-09-17 决策不做）。
+- §1 的「13 个漏项候选 / 值得做 4 / 有价值但不做 8」是**第 33 期一次性口径**；§2 判定列已在第 42 期回填
+  （8 项转为「已覆盖」）⇒ 引用 §1 计数时**以 §2 逐行判定为准**（§1 已自带该提示，此处再点明）。
+
+**本期零运行时改动**。
