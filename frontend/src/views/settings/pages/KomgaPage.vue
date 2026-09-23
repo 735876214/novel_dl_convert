@@ -304,7 +304,7 @@ async function apply(): Promise<void> {
           书库维度也已打通 —— 客户端点进某个书库只看到该库的内容，系列上还能直接标「全部已读」。
         </p>
         <p class="mt-2 text-[11.5px] text-muted-foreground">
-          想让某个书库<strong>不出现在</strong>客户端里（例如只给孩子设备看的那台）？去「工具 → 书库管理 → 每库设置」
+          想让某个书库<strong>不出现在</strong>客户端里（例如只给孩子设备看的那台）？去「设置 → 书库管理 → 每库设置」
           关掉它的「对 Komga 暴露」—— 关掉后它不进书库列表，直连它的系列 / 书籍地址也一并 404。
         </p>
         <p class="mt-2 text-[11.5px] text-amber-600 dark:text-amber-400">

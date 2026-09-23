@@ -315,7 +315,7 @@ function logout(): void {
         <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
           决定「在读 / 已读完」怎么算。统计、书架、成就、Komga 客户端<strong>四处同源</strong> ——
           改这里会同时改变它们的结果，不是只影响某一页。
-          每个书库还能在「工具 → 书库管理 → 每库设置」里单独覆写。
+          每个书库还能在「设置 → 书库管理 → 每库设置」里单独覆写。
         </p>
       </div>
 

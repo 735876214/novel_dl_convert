@@ -19,7 +19,7 @@ import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vu
  *
  * 第 14 期起**按书库暴露**：可见库多于一个时，根 feed 会多一个「按书库」入口，
  * 每个书库有独立地址 `/opds/lib/<库 id>`，可以只订阅其中一个。逐库开关在
- * 「工具 → 书库管理 → 每库设置」的「对 OPDS 暴露」（默认全部暴露）。
+ * 「设置 → 书库管理 → 每库设置」的「对 OPDS 暴露」（默认全部暴露）。
  *
  * 未支持：独立的 OPDS 账号体系（上游可为不同客户端建不同账号与权限）。
  */
@@ -129,7 +129,7 @@ async function toggle(): Promise<void> {
         </ul>
         <p class="mt-2 text-[11.5px] text-muted-foreground">
           书库导航：<code class="font-mono">{{ origin }}/opds/libraries</code>；
-          逐库开关在「工具 → 书库管理 → 每库设置」。
+          逐库开关在「设置 → 书库管理 → 每库设置」。
         </p>
       </div>
 

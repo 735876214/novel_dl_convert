@@ -110,7 +110,7 @@ async function dismiss(): Promise<void> {
   try {
     await api.migrationDismiss('启动确认时选择暂不迁移')
     open.value = false
-    ui.toast('已记下「暂不迁移」；随时可在「工具 → 书库管理」里再来一次')
+    ui.toast('已记下「暂不迁移」；随时可在「设置 → 书库管理」里再来一次')
   } finally {
     busy.value = ''
   }

@@ -141,7 +141,7 @@ export const SECTION_KEYS: Record<string, string[]> = {
   komga: ['output', 'komga'],
   // 元数据抓取的 7 个页面共用同一配置段（同一份 cfg 草稿，各页只改自己的子键）
   metadata: ['metadata_fetch'],
-  // 多书库：跨库策略开关（库实体存 SQLite，见「工具 → 书库管理」）
+  // 多书库：跨库策略开关（库实体存 SQLite，见「设置 → 书库管理」）
   libraries: ['libraries'],
   // 阅读进度口径的全局默认值（页面在「偏好与同步」；每库覆写在书库管理里）
   reading: ['reading'],
