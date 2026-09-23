@@ -24,6 +24,16 @@ const ui = useUiStore()
 const data = ref<AchievementsOverview | null>(null)
 const loading = ref(true)
 const busy = ref(false)
+/** 加载失败信息：给可重试的错误态，不混进空态（否则「拉不到」被误读成「没有成就」）。 */
+const error = ref('')
+/** 展示筛选：全部 / 已解锁 / 未解锁 */
+const filter = ref<'all' | 'unlocked' | 'locked'>('all')
+
+const FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'unlocked', label: '已解锁' },
+  { key: 'locked', label: '未解锁' },
+] as const
 
 const GROUP_LABELS: Record<string, string> = {
   library: '书库',
@@ -35,11 +45,19 @@ const GROUP_LABELS: Record<string, string> = {
 const grouped = computed(() => {
   const d = data.value
   if (!d) return []
-  return d.groups.map((g) => ({
-    ...g,
-    label: GROUP_LABELS[g.group] ?? g.group,
-    items: d.items.filter((i) => i.group === g.group),
-  }))
+  return d.groups
+    .map((g) => ({
+      ...g,
+      label: GROUP_LABELS[g.group] ?? g.group,
+      pct: g.total ? Math.round((g.unlocked / g.total) * 100) : 0,
+      items: d.items.filter(
+        (i) =>
+          i.group === g.group &&
+          (filter.value === 'all' ||
+            (filter.value === 'unlocked' ? i.unlocked : !i.unlocked)),
+      ),
+    }))
+    .filter((g) => g.items.length > 0)
 })
 
 const pct = computed(() => {
@@ -50,10 +68,12 @@ const pct = computed(() => {
 
 async function load(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     data.value = await api.achievements()
   } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '成就加载失败')
+    data.value = null
+    error.value = e instanceof Error ? e.message : '成就加载失败'
   }
   loading.value = false
 }
@@ -106,7 +126,7 @@ onMounted(load)
       />
       <!-- 关闭时不显示「重算」：后端此时也不执行回填，按钮留着只会产生一个空动作 -->
       <Button
-        v-if="data?.enabled !== false"
+        v-if="data && data.enabled"
         size="sm"
         class="ml-auto"
         :disabled="busy"
@@ -117,6 +137,17 @@ onMounted(load)
     </div>
 
     <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+
+    <!-- 加载失败：可重试的错误态（不与「没有成就」空态混淆） -->
+    <Card v-else-if="error" padding="sm" class="mb-4">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>成就加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" :disabled="busy" @click="load">
+          重试
+        </Button>
+      </div>
+    </Card>
 
     <!-- 关闭态：明确说明「关闭期间不统计」，并给出开启入口 -->
     <Card v-else-if="data && !data.enabled" padding="none">
@@ -157,6 +188,26 @@ onMounted(load)
         </div>
       </Card>
 
+      <div class="mb-3 flex flex-wrap gap-1.5">
+        <button
+          v-for="f in FILTERS"
+          :key="f.key"
+          type="button"
+          class="cursor-pointer rounded-full px-3 py-1 text-[12px] font-medium transition-colors"
+          :class="filter === f.key ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground'"
+          @click="filter = f.key"
+        >
+          {{ f.label }}
+        </button>
+      </div>
+
+      <EmptyState
+        v-if="!grouped.length"
+        icon="star"
+        title="没有符合条件的成就"
+        desc="换个筛选条件看看。"
+      />
+
       <div v-for="g in grouped" :key="g.group" class="mb-4">
         <div class="mb-2 flex items-baseline gap-2 px-0.5">
           <h3 class="text-[13px] font-semibold text-foreground">{{ g.label }}</h3>
@@ -164,6 +215,9 @@ onMounted(load)
           <span class="ml-auto text-[11.5px] text-muted-foreground tabular-nums">
             {{ g.unlocked }} / {{ g.total }}
           </span>
+        </div>
+        <div class="mb-2.5 h-1 w-full overflow-hidden rounded-full bg-muted">
+          <div class="h-full rounded-full bg-primary transition-[width] duration-500" :style="{ width: `${g.pct}%` }" />
         </div>
 
         <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
