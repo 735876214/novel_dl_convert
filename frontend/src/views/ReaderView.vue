@@ -8,7 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
-import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark } from '@/lib/api'
+import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem } from '@/lib/api'
 import {
   READER_FONTS,
   READER_FONT_STYLES,
@@ -21,7 +21,7 @@ import {
   saveReaderPrefs,
   type ReaderPrefs,
 } from '@/lib/readerPrefs'
-import { customFontValue, readerFontStack } from '@/lib/fonts'
+import { fontPrefValue, readerFontStack } from '@/lib/fonts'
 import { useFontsStore } from '@/stores/fonts'
 import { useUiStore } from '@/stores/ui'
 
@@ -75,6 +75,20 @@ const fonts = useFontsStore()
 void fonts.load()
 
 const ui = useUiStore()
+
+// 上传字体按族分组：同一 family_key 的变体（Regular / Bold…）合并为一个可选项 ——
+// 选族后阅读器套用「加粗 / 斜体」时，浏览器会在同一 family 下挑中真实变体文件。
+// 解析不出族名（family_key 为空）时各文件独立，回落改造前单文件行为。
+const fontFamilies = computed(() => {
+  const map = new Map<string, { value: string; name: string; variants: FontItem[] }>()
+  for (const f of fonts.items) {
+    const value = fontPrefValue(f)
+    const cur = map.get(value)
+    if (cur) cur.variants.push(f)
+    else map.set(value, { value, name: f.name, variants: [f] })
+  }
+  return [...map.values()]
+})
 
 // ---------------- 翻页模式 ----------------
 // 定高 + CSS 多栏：每栏高度 = 容器高，栏宽 = 一屏宽 / 栏数；翻页 = 按「一屏」横向位移。
@@ -1046,19 +1060,20 @@ onBeforeUnmount(() => {
                 </button>
               </div>
 
-              <!-- 上传的字体（后端 /api/fonts）：用字体自身的族名渲染按钮，所见即所得 -->
-              <div v-if="fonts.items.length" class="mt-1.5 flex flex-col gap-1">
+              <!-- 上传的字体（后端 /api/fonts）：按族分组，族名即所见即所得的按钮；选族后加粗/斜体命中真实变体 -->
+              <div v-if="fontFamilies.length" class="mt-1.5 flex flex-col gap-1">
                 <button
-                  v-for="f in fonts.items"
-                  :key="f.id"
+                  v-for="fam in fontFamilies"
+                  :key="fam.value"
                   type="button"
-                  class="flex cursor-pointer items-center justify-between rounded-md border px-2 py-1 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-                  :class="prefs.font === customFontValue(f.id) ? 'border-ring font-medium text-foreground' : 'border-border text-muted-foreground hover:text-foreground'"
-                  :title="f.style"
+                  class="flex cursor-pointer items-center justify-between gap-2 rounded-md border px-2 py-1 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  :class="prefs.font === fam.value ? 'border-ring font-medium text-foreground' : 'border-border text-muted-foreground hover:text-foreground'"
+                  :title="fam.variants.map((v) => v.style).filter(Boolean).join(' / ')"
                   :disabled="fixedLayout"
-                  @click="prefs.font = customFontValue(f.id)"
+                  @click="prefs.font = fam.value"
                 >
-                  <span class="truncate" :style="{ fontFamily: `'NF-${f.id}', serif` }">{{ f.name }}</span>
+                  <span class="truncate" :style="{ fontFamily: `'NF-${fam.variants[0].family_key || fam.variants[0].id}', serif` }">{{ fam.name }}</span>
+                  <span v-if="fam.variants.length > 1" class="shrink-0 text-[10.5px] text-muted-foreground">{{ fam.variants.length }} 变体</span>
                 </button>
               </div>
               <p v-else class="mt-1.5 text-[10.5px] leading-snug text-muted-foreground">

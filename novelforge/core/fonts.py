@@ -91,6 +91,95 @@ def _ttf_names(data: bytes) -> tuple:
         return ("", "")
 
 
+def _style_to_weight_italic(subfamily: str) -> tuple:
+    """子样式串 → (weight:int|None, italic:bool|None)。
+
+    只解析**明确**的字重 / 斜体词；组合式（"Bold Italic"）二者都给；
+    未知串（如 "Caption" / "Display"）一律不猜，返回 (None, None) 让调用方回落 OS/2。
+    """
+    if not subfamily:
+        return (None, None)
+    s = subfamily.lower()
+    italic = ("italic" in s) or ("oblique" in s)
+    base = s.replace("italic", " ").replace("oblique", " ")
+    table = {
+        "thin": 100, "hairline": 100,
+        "extralight": 200, "ultralight": 200,
+        "light": 300,
+        "regular": 400, "normal": 400, "book": 400, "roman": 400,
+        "medium": 500,
+        "semibold": 600, "demibold": 600,
+        "bold": 700,
+        "extrabold": 800, "ultrabold": 800,
+        "black": 900, "heavy": 900,
+    }
+    weight = None
+    for tok in "".join(c if c.isalnum() else " " for c in base).split():
+        if tok in table:
+            weight = table[tok]
+            break
+    return (weight, italic)
+
+
+def _metrics(data: bytes) -> tuple:
+    """从 OS/2 表读 usWeightClass，从 head 表读 macStyle（bit1 = 斜体）。读不到返回 (None, False)。"""
+    try:
+        if len(data) < 12 or data[:4] not in (b"\x00\x01\x00\x00", b"OTTO", b"true"):
+            return (None, False)
+        num = struct.unpack(">H", data[4:6])[0]
+        table_off: dict = {}
+        for i in range(min(num, 64)):
+            off = 12 + i * 16
+            if off + 16 > len(data):
+                break
+            rec = data[off:off + 16]
+            table_off[rec[:4]] = struct.unpack(">I", rec[8:12])[0]
+        weight = None
+        italic = False
+        if b"OS/2" in table_off:
+            o = table_off[b"OS/2"]
+            if o + 4 <= len(data):
+                w = struct.unpack(">H", data[o + 2:o + 4])[0]  # version(2) 之后即 usWeightClass
+                if 1 <= w <= 1000:
+                    weight = w
+        if b"head" in table_off:
+            o = table_off[b"head"]
+            if o + 46 <= len(data):
+                mac = struct.unpack(">H", data[o + 44:o + 46])[0]
+                italic = bool(mac & 0x2)
+        return (weight, italic)
+    except Exception:
+        return (None, False)
+
+
+def _font_meta(data: bytes) -> tuple:
+    """解析一个字体文件，返回 (family, style, weight, italic, family_key)。
+
+    family_key 是族名归一（小写去空白），用于把同一族的多个变体**归为一组**，
+    让 @font-face 共享同一个 font-family 名、按 font-weight / font-style 区分 ——
+    这样阅读器里「选加粗」能命中真实的 Bold 文件，而不是浏览器合成的伪粗体。
+
+    字重 / 斜体的来源优先级：子样式串（人写标签）> OS/2 / head 表（机器可读）。
+    族名解析不出（如 WOFF / WOFF2，或 name 表缺失）则 family_key = "" —— 不强行归组，
+    退回「每个文件一条」的现状。
+    """
+    family, style = _ttf_names(data)
+    sub_weight, sub_italic = _style_to_weight_italic(style)
+    weight, italic = sub_weight, sub_italic
+    if data[:4] in (b"\x00\x01\x00\x00", b"OTTO", b"true"):
+        os2_w, head_italic = _metrics(data)
+        if weight is None and os2_w is not None:
+            weight = os2_w
+        # 子样式没能给出斜体信息时，回落 head 表（有些字体只在 head 标 italic）
+        if style:
+            if sub_italic is False and head_italic:
+                italic = True
+        else:
+            italic = head_italic
+    family_key = "".join(family.lower().split())
+    return family, style, weight, italic, family_key
+
+
 def list_fonts() -> dict:
     """字体列表。id = 文件名（前端用它拼 /api/fonts/{id}/file）。"""
     items = []
@@ -102,7 +191,7 @@ def list_fonts() -> dict:
             data = p.read_bytes() if p.suffix.lower() in (".ttf", ".otf") else b""
         except OSError:
             continue
-        family, style = _ttf_names(data)
+        family, style, weight, italic, family_key = _font_meta(data)
         items.append({
             "id": p.name,
             "name": family or p.stem,
@@ -111,6 +200,9 @@ def list_fonts() -> dict:
             "size": st.st_size,
             "format": p.suffix.lower().lstrip("."),
             "mtime": st.st_mtime,
+            "weight": weight,
+            "italic": italic,
+            "family_key": family_key,
         })
     return {"items": items, "max_bytes": MAX_FONT_BYTES, "max_count": MAX_FONTS}
 
@@ -137,7 +229,9 @@ def save_font(filename: str, data: bytes) -> dict:
         target = d / f"{stem}-{i}{suffix}"
         i += 1
     target.write_bytes(data)
-    family, style = _ttf_names(data) if ext in (".ttf", ".otf") else ("", "")
+    family, style, weight, italic, family_key = (
+        _font_meta(data) if ext in (".ttf", ".otf") else ("", "", None, None, "")
+    )
     return {
         "id": target.name,
         "name": family or target.stem,
@@ -145,6 +239,9 @@ def save_font(filename: str, data: bytes) -> dict:
         "size": len(data),
         "format": ext.lstrip("."),
         "mtime": time.time(),
+        "weight": weight,
+        "italic": italic,
+        "family_key": family_key,
     }
 
 

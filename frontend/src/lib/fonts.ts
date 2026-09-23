@@ -1,10 +1,11 @@
+import type { FontItem } from '@/lib/api'
 import { READER_FONT_STACK } from './readerPrefs'
 
 /**
  * 字体相关的**纯函数**（对应后端 `/api/fonts`）。
  *
  * 分层：这里不碰响应式状态，store（列表 + @font-face 注入）与 UI 都能用；
- * 偏好里的字体值形如 `serif` / `sans` / `system` / `custom:<字体文件名>`。
+ * 偏好里的字体值形如 `serif` / `sans` / `system` / `custom:<族名或文件名>`。
  */
 
 /** 自定义字体在偏好里的前缀 */
@@ -18,6 +19,16 @@ export function customFontFamily(id: string): string {
 /** 字体 id → 偏好值 */
 export function customFontValue(id: string): string {
   return CUSTOM_FONT_PREFIX + id
+}
+
+/**
+ * 字体 → 偏好值。
+ * 同一族的多个变体（family_key 相同）归为一组，只存族名 —— 这样阅读器套用
+ * 「加粗 / 斜体」时，浏览器能在同一 family 下挑中真实变体文件。
+ * 解析不出族名（family_key 为空）时回落到旧口径 `custom:<文件名>`。
+ */
+export function fontPrefValue(f: FontItem): string {
+  return f.family_key ? `${CUSTOM_FONT_PREFIX}${f.family_key}` : customFontValue(f.id)
 }
 
 /** 偏好值 → CSS font-family 栈。自定义字体回落内置衬线，即使字体被删也不会变成默认无衬线 */

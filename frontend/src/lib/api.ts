@@ -1586,6 +1586,12 @@ export interface FontItem {
   /** ttf / otf / woff / woff2 */
   format: string
   mtime: number
+  /** 字重 100–900；解析不出为 null（回落浏览器合成 / 默认 400） */
+  weight: number | null
+  /** 是否斜体；解析不出为 null */
+  italic: boolean | null
+  /** 族名归一键；同一族的不同变体（Regular/Bold…）共享同一键以便分组。空串=不归组 */
+  family_key: string
 }
 
 /** POST /api/books/batch 的返回：逐本执行，单本失败不影响其余 */

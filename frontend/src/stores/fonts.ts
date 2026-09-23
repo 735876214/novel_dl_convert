@@ -41,13 +41,29 @@ export const useFontsStore = defineStore('fonts', () => {
       /* 隐私模式 */
     }
     const q = token ? `?token=${encodeURIComponent(token)}` : ''
-    el.textContent = list
-      .map(
-        (f) =>
-          `@font-face{font-family:'${customFontFamily(f.id)}';` +
-          `src:url('/api/fonts/${encodeURIComponent(f.id)}/file${q}');font-display:swap}`,
+    const blocks: string[] = []
+    for (const f of list) {
+      const src = `/api/fonts/${encodeURIComponent(f.id)}/file${q}`
+      // 1) 每个文件仍注册一个「按 id 命名」的 family —— 兼容旧的 `custom:<id>` 偏好
+      //    （旧偏好只命中单个文件，无同族变体可用，行为等同改造前）。
+      blocks.push(
+        `@font-face{font-family:'${customFontFamily(f.id)}';` +
+          `src:url('${src}');font-display:swap}`,
       )
-      .join('\n')
+      // 2) 若解析出了族（family_key），再注册一个「按族命名」的 family，并带上
+      //    font-weight / font-style —— 同一族的所有变体共享此 family，浏览器据此在
+      //    阅读器套用「加粗 / 斜体」时自动挑中真实变体文件，而非合成。
+      if (f.family_key) {
+        const fam = customFontFamily(f.family_key)
+        const w = f.weight ?? 400
+        const style = f.italic ? 'italic' : 'normal'
+        blocks.push(
+          `@font-face{font-family:'${fam}';src:url('${src}');` +
+            `font-weight:${w};font-style:${style};font-display:swap}`,
+        )
+      }
+    }
+    el.textContent = blocks.join('\n')
   }
 
   async function load(force = false): Promise<void> {

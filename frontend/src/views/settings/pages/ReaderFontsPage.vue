@@ -77,6 +77,22 @@ const RESET_SIZE = 20
 const current = computed(
   () => fonts.items.find((f) => f.id === selectedId.value) ?? fonts.items[0] ?? null,
 )
+/** 字体按族分组：同一 family_key 的变体（Regular / Bold…）聚到一起，族名只显示一次。
+ *  解析不出族名（family_key 为空）的文件各自成组（单条）。 */
+const groups = computed(() => {
+  const map = new Map<string, typeof fonts.items>()
+  for (const f of fonts.items) {
+    const key = f.family_key || `__${f.id}`
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(f)
+  }
+  return [...map.entries()].map(([key, items]) => ({
+    key,
+    name: items[0].name,
+    grouped: items.length > 1 && !!items[0].family_key,
+    items,
+  }))
+})
 /** 样例文本覆盖中文/拉丁/数字/标点，便于判断字形的完整度 */
 const SAMPLE =
   '永和九年，岁在癸丑，暮春之初，会于会稽山阴之兰亭。' +
@@ -125,32 +141,66 @@ const SAMPLE =
         还没有字体。上传后即可在阅读器的「字体」里选用。
       </p>
 
-      <div
-        v-for="f in fonts.items"
-        :key="f.id"
-        role="button"
-        tabindex="0"
-        class="flex cursor-pointer items-center gap-3 border-b border-border/60 px-4 py-2.5 transition-colors last:border-b-0 hover:bg-muted/40"
-        :class="current?.id === f.id ? 'bg-muted/60' : ''"
-        @click="selectedId = f.id"
-        @keydown.enter="selectedId = f.id"
-      >
-        <div class="min-w-0 flex-1">
-          <div class="truncate text-[13px] text-foreground" :style="{ fontFamily: `'${customFontFamily(f.id)}', serif` }">
-            {{ f.name }}
+      <template v-for="g in groups" :key="g.key">
+        <!-- 同族多变体（Regular / Bold / Italic…）：族名只显示一次，下面列出每个变体文件 -->
+        <div v-if="g.grouped" class="border-b border-border/60 px-4 py-2.5">
+          <div class="flex items-center gap-2">
+            <span
+              class="truncate text-[13px] font-medium text-foreground"
+              :style="{ fontFamily: `'NF-${g.items[0].family_key}', serif` }"
+            >{{ g.name }}</span>
+            <span class="shrink-0 text-[10.5px] text-muted-foreground">{{ g.items.length }} 变体</span>
           </div>
-          <div class="truncate text-[11px] text-muted-foreground">
-            {{ f.style }} · {{ f.format.toUpperCase() }} · {{ fmtSize(f.size) }}
+          <div
+            v-for="f in g.items"
+            :key="f.id"
+            role="button"
+            tabindex="0"
+            class="mt-1.5 flex cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 transition-colors"
+            :class="current?.id === f.id ? 'bg-muted/60' : 'hover:bg-muted/40'"
+            @click="selectedId = f.id"
+            @keydown.enter="selectedId = f.id"
+          >
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-[12.5px] text-foreground">{{ f.style || '（默认样式）' }}</div>
+              <div class="truncate text-[11px] text-muted-foreground">{{ f.format.toUpperCase() }} · {{ fmtSize(f.size) }}</div>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 cursor-pointer text-[12px] text-muted-foreground transition-colors hover:text-destructive"
+              @click.stop="remove(f.id, f.name)"
+            >
+              删除
+            </button>
           </div>
         </div>
-        <button
-          type="button"
-          class="shrink-0 cursor-pointer text-[12px] text-muted-foreground transition-colors hover:text-destructive"
-          @click.stop="remove(f.id, f.name)"
+        <!-- 单文件（无变体 / 未解析出族名）：保持改造前的一行卡片，按文件名显示 -->
+        <div
+          v-else
+          role="button"
+          tabindex="0"
+          class="flex cursor-pointer items-center gap-3 border-b border-border/60 px-4 py-2.5 transition-colors last:border-b-0 hover:bg-muted/40"
+          :class="current?.id === g.items[0].id ? 'bg-muted/60' : ''"
+          @click="selectedId = g.items[0].id"
+          @keydown.enter="selectedId = g.items[0].id"
         >
-          删除
-        </button>
-      </div>
+          <div class="min-w-0 flex-1">
+            <div class="truncate text-[13px] text-foreground" :style="{ fontFamily: `'NF-${g.items[0].family_key || g.items[0].id}', serif` }">
+              {{ g.items[0].name }}
+            </div>
+            <div class="truncate text-[11px] text-muted-foreground">
+              {{ g.items[0].style }} · {{ g.items[0].format.toUpperCase() }} · {{ fmtSize(g.items[0].size) }}
+            </div>
+          </div>
+          <button
+            type="button"
+            class="shrink-0 cursor-pointer text-[12px] text-muted-foreground transition-colors hover:text-destructive"
+            @click.stop="remove(g.items[0].id, g.items[0].name)"
+          >
+            删除
+          </button>
+        </div>
+      </template>
     </Card>
 
     <!-- 行内预览：用 store 已注入的 @font-face 实时渲染样例文本（零额外请求） -->
@@ -219,8 +269,8 @@ const SAMPLE =
     <SettingsUnsupportedCard
       label="Fonts"
       :groups="['UPLOAD FONTS', 'YOUR FONTS']"
-      :items="['按字重 / 斜体派生变体（Regular / Bold / Italic 自动匹配）']"
-      note="本项目已实现：字体上传 / 列表 / 删除 / 在阅读器中选用（族名从字体 name 表解析，解析不出时回落文件名），以及行内字体预览（第 50 期：选中任一字体即用字体文件本身渲染样例文本并可调字号；上游的「预览大图」未做，本项目以行内样例替代）。"
+      :items="['预览大图（上游独立预览弹层）—— 本项目以行内样例文本替代']"
+      note="本项目已实现：字体上传 / 列表 / 删除 / 在阅读器中选用（族名从字体 name 表解析，解析不出时回落文件名）；第 52 期起同族字体的 Regular / Bold / Italic 变体会按字重 / 斜体归组并注入对应的 @font-face，阅读器套用「加粗 / 斜体」时命中真实变体文件而非浏览器合成；并支持行内字体预览（第 50 期：选中任一字体即用字体文件本身渲染样例文本并可调字号）。"
     />
   </div>
 </template>
