@@ -217,14 +217,15 @@ python -m novelforge logs -n 50 --action 转换 --status 失败
 
 镜像 `ghcr.io/735876214/novel_dl_convert:latest` 由 GitHub Actions 在每次推送到 `main` 时自动构建并发布，
 **源码与全部 Python 依赖已在「构建镜像时」烤进镜像**——不需要 NAS 本地 build，也不需要容器启动时 clone 源码。
-因此在 NAS 上**只需要一个 `docker-compose.yml` 文件**，一条命令即可运行：
+因此在 NAS 上**只需要 `docker-compose.yml` 一个文件**（配置全部写在文件里，不依赖任何 `.env`），一条命令即可运行：
 
 ```bash
-# 在 NAS 上建个目录，只放 docker-compose.yml（整份文件已含镜像地址与挂载配置）
-mkdir -p novel_dl_convert && cd novel_dl_convert
-# 把本仓库的 docker-compose.yml 下载/拷到这个目录
+# 1) 在 NAS 上建个部署目录，把本仓库的 docker-compose.yml 拷进去（只要这一个文件）
+mkdir -p /volume1/docker/novelforge && cd /volume1/docker/novelforge
 
-# 启动：自动从 ghcr.io 拉取「已含源码+依赖」的镜像并运行（无需 git / 无需 build / 无运行时 clone）
+# 2) 按需修改文件里标了「可改」的几处：端口 / 数据路径 / 登录密码（不改也能直接跑）
+
+# 3) 启动：自动从 ghcr.io 拉取「已含源码+依赖」的镜像并运行（无需 git / 无需 build / 无运行时 clone）
 docker compose up -d
 ```
 
@@ -232,14 +233,28 @@ docker compose up -d
 > 镜像下载完成即**秒级启动**，彻底告别之前「启动时 git clone 源码」的 2~4 分钟等待。
 > 之后日常重启 / NAS 重启恢复都是秒级。
 
-> 数据目录（`input/` `output/` `config/` `cookies/` `cache/`）首次启动由 Docker 自动创建，无需手动 `mkdir`；
-> 配置放 `./config/config.yaml`（留空则应用回退到内置默认值）。
+> 数据目录（`input/` `output/` `config/` `cookies/` `cache/` `data/` `libraries/`）首次启动由 Docker 自动创建，
+> 无需手动 `mkdir`；配置放 `./config/config.yaml`（留空则应用回退到内置默认值）。
 
-- 访问 http://<NAS-IP>:8000 上传 txt 转 EPUB
+**NAS 上常改的几项**（都在 `docker-compose.yml` 里，改完 `docker compose up -d` 生效）：
+
+| 改哪里 | 默认 | 说明 |
+|--------|------|------|
+| `ports` | `8992:8000` | 冒号左边是 NAS 对外端口，与系统占用端口冲突时改它（右边是容器内端口，别动） |
+| `./libraries:/app/libraries` | `./libraries` | 书库**来源根**：填 NAS 上已有的书库共享目录绝对路径（如 `/volume1/books`），其下文件夹可被「新建书库」就地引用 |
+| `./input` / `./output` | 部署目录下同名子目录 | 输入与成品目录，**必须分开** |
+| `./data` | `./data` | SQLite（阅读进度 / 批注 / 账号 / 书库登记），务必落在持久盘 |
+| `AUTH_USER` / `AUTH_PIN` / `AUTH_SECRET` | `admin` / `changeme` / 占位串 | **仅首次启动初始化**，之后在界面「设置 → 账户」里改 |
+| `pull_policy` | `missing` | 本地已有镜像就不联网检查，断网也能启动；想让每次启动都追最新镜像改成 `always` |
+| `# user: "1026:100"` | 注释掉（=root） | 想让挂载目录里的文件归某个 NAS 用户所有时取消注释（群晖常见 `1026:100`） |
+| `# - HTTP_PROXY=…` | 注释掉（直连） | 容器要走代理才能访问书源 / 在线元数据时取消注释（Clash 跑在 NAS 主机上则填 `http://host.docker.internal:7890`） |
+
+- 访问 `http://<NAS-IP>:8992` 上传 txt 转 EPUB
 - **文件直接丢进 `./input` 即可**：txt 自动转 EPUB，其它文件自动导出到 `./output`，全程记日志（网页「转换日志」页可看）
 - **输入放 `./input`，成品落 `./output`**，互不影响
 - 在线书源：`POST /search`、`POST /download`；内容预览：`GET /content?url=`、`GET /supported?url=`
-- Synology Container Manager / QNAP Container Station：直接导入本目录的 `docker-compose.yml` 即可
+- Synology Container Manager / QNAP Container Station：新建「项目 / 应用」，目录选上面那个部署目录即可
+- ⚠️ 部署目录里**不要**放 `docker-compose.override.yml`：Compose 会自动合并它并静默改掉端口与拉取策略（本仓库那份已改名为 `docker-compose.offline.yml`，只有显式 `-f` 才生效）
 
 ### 更新代码
 
@@ -248,6 +263,9 @@ docker compose up -d
 ```bash
 docker compose pull && docker compose up -d
 ```
+
+> 只执行 `docker compose up -d` 不会拉新镜像（`docker-compose.yml` 里默认 `pull_policy: missing`，这是刻意的：
+> 断网或 ghcr.io 访问受限时容器照样能启动）。想恢复「每次启动都自动追新」，把该值改成 `always`。
 
 ### 为什么既没有本地 build、也没有运行时 clone
 
@@ -260,12 +278,12 @@ docker compose pull && docker compose up -d
 
 ```
 novel_dl_convert/
-  docker-compose.yml   真实版：拉 ghcr 预构建镜像，input / output / config / cookies / cache / data 六处挂载
-  docker-compose.test.yml  测试版：本地 build + 挂源码、端口 8993、数据隔离到 ./data-test
-  start.sh             启动脚本（依赖已内置，自检后 exec uvicorn，秒级拉起）
-  Dockerfile           多阶段构建：builder(venv 依赖) + node(仅取二进制) + frontend(Vue 构建) + runtime(python-slim)
-  config.yaml          转换行为配置
-  .env.example         环境变量示例
+  docker-compose.yml        部署版（NAS 只需这一个文件）：拉 ghcr 预构建镜像；端口 / 挂载 / 账号都写在本文件里
+  docker-compose.test.yml   本地测试版：本地 build + 挂源码、端口 8993、数据隔离到 ./data-test
+  docker-compose.offline.yml 离线叠加件：断网 / 无测试镜像时用 `-f` 显式叠加，**不会自动生效**
+  start.sh                  启动脚本（依赖已内置，自检后 exec uvicorn，秒级拉起）
+  Dockerfile                多阶段构建：builder(venv 依赖) + node(仅取二进制) + frontend(Vue 构建) + runtime(python-slim)
+  config.yaml               转换行为配置（目录路径由 compose 的环境变量控制）
   novelforge/          Python 包
     cli.py             命令行入口（convert / search / download / update / watch / scan / logs）
     server.py          FastAPI 服务（NAS 部署 + 内容预览 API）

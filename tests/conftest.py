@@ -197,7 +197,7 @@ def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ARG001
     shutil.rmtree(_SESSION_ROOT, ignore_errors=True)
     # 防回归：跑完后确认仓库根关键跟踪文件没被误删（非致命告警）。
     _expected = [
-        "config.yaml", "Dockerfile", ".gitattributes", ".gitignore", ".env.example",
+        "config.yaml", "Dockerfile", ".gitattributes", ".gitignore",
         ".dockerignore", "README.md", "pytest.ini", "start.sh",
     ]
     import glob as _glob

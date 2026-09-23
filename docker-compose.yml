@@ -1,20 +1,33 @@
-# NovelForge — NAS / 容器部署（拉取预构建镜像，源码 + 依赖已烤进镜像）
+# NovelForge — NAS / 容器部署（拉取预构建镜像，NAS 端不需要 build、不需要 clone 源码）
 #
-# 镜像 ghcr.io/735876214/novel_dl_convert:latest 由 GitHub Actions 在每次推送 main 时自动构建发布，
-# 源码与全部 Python 依赖已在「构建镜像时」烤进镜像，因此 NAS 端：
-#   - 不要求本地 build
-#   - 容器启动时不再 git clone 源码（告别之前 2~4 分钟的部署后等待）
-#   - 只需 docker compose up -d 一条命令，自动从 ghcr.io 拉取镜像并运行
+# 部署只要这一个文件（**不需要任何额外的 .env / 配置文件**）：
+#   1) NAS 上建一个部署目录（如 /volume1/docker/novelforge），把本文件放进去
+#   2) 按需修改下面标了「可改」的几处（端口 / 数据路径 / 登录密码）
+#   3) docker compose up -d
 #
-# 挂载仅保留「数据 / 配置」目录，源码来自镜像本身：
-#   ./input     输入源文件（不存在自动创建）
-#   ./output    导出成品
-#   ./config    配置目录（./config/config.yaml；留空则应用回退内置默认）
-#   ./cookies   书源登录态持久化（跨重启保留）
-#   ./cache     AI 分章结果缓存
-#
-# 用法：在 docker-compose.yml 所在目录执行  docker compose up -d
+# 访问：http://<NAS-IP>:8992
 # 更新：docker compose pull && docker compose up -d
+# 日志：docker compose logs -f
+# 停止：docker compose down      （不会删挂载出来的数据目录）
+# 群晖 Container Manager：新建「项目」→ 选择本目录 → 启动
+#
+# 镜像 ghcr.io/735876214/novel_dl_convert:latest 由 GitHub Actions 在每次推送 main 时
+# 构建（linux/amd64 + linux/arm64 双架构），**源码与全部 Python 依赖已烤进镜像** ⇒
+# 容器启动秒级，不需要本地 build，也不需要运行时 clone。
+#
+# 挂载出来的宿主机目录（相对路径＝部署目录下，首次启动自动创建，无需手动 mkdir）：
+#   ./input     输入源文件（txt 自动转 EPUB）
+#   ./output    导出成品
+#   ./config    配置（config.yaml / settings.json / 书源 / 日志 / 备份 / 字体）
+#   ./cookies   书源登录态（跨重启保留）
+#   ./cache     AI 分章结果缓存
+#   ./data      SQLite：阅读进度 / 批注 / 账号 / 书库登记（丢了要重建，务必留在持久盘）
+#   ./libraries 书库来源根：其下的子文件夹可被「新建书库」就地引用
+#   要指到 NAS 上已有的共享目录，把这些相对路径改成绝对路径即可（如 /volume1/books）。
+#
+# ⚠️ 部署目录里不要放 docker-compose.override.yml：Compose 会**自动合并**它，在你不察觉的
+#    情况下改掉端口与拉取策略。本仓库那份临时文件已改名 docker-compose.offline.yml，只有
+#    显式 `-f` 才生效。
 
 services:
   novel_dl_convert:
@@ -22,24 +35,36 @@ services:
     container_name: novel_dl_convert
     restart: unless-stopped
     working_dir: /app
-    pull_policy: always
+    # 可改：missing ＝ 镜像已在本地就不再联网检查，NAS 断网 / ghcr.io 访问受限时照样能启动；
+    # 改成 always ＝ 每次 up 都去 registry 追最新镜像（那时 `docker compose up -d` 即等于更新）。
+    pull_policy: missing
+
     ports:
+      # 可改：左边＝NAS 上对外端口（与系统占用端口冲突时改这里）；右边＝容器内固定 8000，别动
       - "8992:8000"
+
     volumes:
+      # 可改：左边是宿主机路径（要换位置就改这里），右边是容器内固定路径，别动
+      # —— 输入 / 成品（两者物理分离，切勿指向同一个目录）——
       - ./input:/app/input
       - ./output:/app/output
+      # —— 配置：config.yaml / settings.json / sources / logs / backups / fonts 都在这一层下 ——
       - ./config:/app/config
+      # —— 书源登录态、AI 分章缓存：刻意与 config 平级，便于单独备份 / 迁移 ——
       - ./cookies:/app/config/cookies
       - ./cache:/app/config/cache
-      # 阅读端持久化：SQLite（阅读进度 / 批注 / 账号），跨重启与多端共享
+      # —— SQLite：阅读进度 / 批注 / 账号 / 书库登记 ——
       - ./data:/app/data
-      # 多书库来源根目录（第 41 期起支持**不定数量**）：其下的子文件夹可被「新建书库」**就地引用**
-      # （直接扫描、不搬文件）；一个库可跨多个来源根选多个文件夹。不挂也能跑（回退默认
-      # /app/libraries 在容器层），但重建即丢，故显式挂出。需要多个来源根时按需再加挂载。
+      # —— 书库来源根（就地引用，只扫描、不搬文件）——
+      # 需要第二个来源根：取消下面一行的注释，并在 environment 里同时打开 LIBRARY_SOURCE_DIRS2*
       - ./libraries:/app/libraries
       # - ./libraries2:/app/libraries2
+
     environment:
+      # 可改：时区（日志时间 / 热力图按天聚合都会用到）
       - TZ=Asia/Shanghai
+
+      # ———— 目录：容器内路径，一般无需改动；要换位置请改上面的 volumes ————
       - INPUT_DIR=/app/input
       - OUTPUT_DIR=/app/output
       - CONFIG_DIR=/app/config
@@ -47,28 +72,47 @@ services:
       - CACHE_DIR=/app/config/cache
       - LOG_DIR=/app/config/logs
       - DATA_DIR=/app/data
-      # 书库来源根（就地引用）：序号从 1 连续、首个缺号即停；可选 <N>_NAME 覆盖显示名
-      # （默认取路径最后一级）。未配置任何编号变量时回退单根 LIBRARY_SOURCE_DIR，老部署兼容。
+
+      # ———— 书库来源根：序号从 1 连续，遇到首个缺号即停 ————
       - LIBRARY_SOURCE_DIRS1=/app/libraries
+      # 想给来源根起个界面显示名就取消注释（留空／注释掉＝取路径最后一级，即 libraries）
       # - LIBRARY_SOURCE_DIRS1_NAME=主库
       # - LIBRARY_SOURCE_DIRS2=/app/libraries2
       # - LIBRARY_SOURCE_DIRS2_NAME=备份根
-      # 阅读端单用户轻登录（仅首次启动初始化；之后在「设置 → 账户」改，生产务必改默认值）
+
+      # ———— 可改：登录账号。**仅首次启动**（账号尚不存在时）写入 SQLite ————
+      # 之后请在界面「设置 → 账户」里改，改完这里的 AUTH_PIN 不再生效；
+      # 但 AUTH_SECRET 每次启动都会用到 —— 改过密码后请勿改动它，否则已登录的端全被踢下线。
       - AUTH_USER=admin
       - AUTH_PIN=changeme
       - AUTH_SECRET=change-this-to-a-long-random-string
-      # 可选：MOBI / AZW3 派生所需的 Calibre ebook-convert 路径
-      # （缺失时对应任务自动降级为 EPUB，日志会说明原因）
+
+      # ———— 目录自动监听：往 input 里丢文件即自动转换；只想手动触发就填 false ————
+      - AUTO_WATCH=true
+      # 轮询间隔（秒）。NAS 上 input 多为 SMB / NFS 挂载，建议 >= 3
+      - WATCH_INTERVAL=5
+
+      # ———— 可选：MOBI / AZW3 派生需要 Calibre 的 ebook-convert ————
+      # 镜像默认不含它；注释掉／留空时，输出格式为 mobi / azw3 的任务自动降级为 EPUB（日志写明原因）
       # - EBOOK_CONVERT_BIN=/usr/bin/ebook-convert
-      # 目录自动监听（默认开）：input 里的 txt 自动转 EPUB，非 txt 原样导出
-      # - AUTO_WATCH=true
-      # - WATCH_INTERVAL=5
-      # 可选：AI 分章兜底（不填则不联网）
-      # - LLM_API_KEY=
-      # - LLM_BASE_URL=https://api.openai.com/v1
-      # - LLM_MODEL=gpt-4o-mini
-    # 镜像已含源码与依赖，直接以 start.sh 幂等启动（依赖已装则跳过安装、秒级拉起）
+
+      # ———— 可选：容器要走代理才能访问书源 / 在线元数据时（Clash 类跑在 NAS 主机上）————
+      # host.docker.internal 需要 Docker 20.10+，老引擎请改填 NAS 的局域网 IP
+      # - HTTP_PROXY=http://host.docker.internal:7890
+      # - HTTPS_PROXY=http://host.docker.internal:7890
+      # - NO_PROXY=localhost,127.0.0.1
+
+      # ⚠️ AI 分章兜底（LLM）**不走环境变量**，请在「设置 → 转换 → 分章」页或
+      #    config.yaml 的 llm 段（api_key / base_url / model）里配置。
+
+    # 可选：以指定 UID/GID 运行，避免挂载目录里落下一堆 root 属主文件（群晖常见 1026:100）。
+    # 不写这一行＝按镜像默认的 root 运行。⚠️ 填非 root 时，上面那些宿主机目录的属主必须匹配，
+    # 否则容器写不进去（启动即报权限错）。
+    # user: "1026:100"
+
+    # 镜像已含源码与依赖；start.sh 只做一次依赖自检再 exec uvicorn（幂等、秒级）
     command: ["sh", "/app/start.sh"]
+
     healthcheck:
       test:
         - "CMD"

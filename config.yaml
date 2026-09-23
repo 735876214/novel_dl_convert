@@ -1,4 +1,4 @@
-# 转换行为配置（目录路径由环境变量 INPUT_DIR / OUTPUT_DIR / CONFIG_DIR 控制，见 .env.example）
+# 转换行为配置（目录路径由环境变量 INPUT_DIR / OUTPUT_DIR / CONFIG_DIR 控制，见 docker-compose.yml）
 
 chapter_detection:
   mode: hybrid            # regex | ai | hybrid（hybrid=正则+缩进优先，疑难再调 AI）
