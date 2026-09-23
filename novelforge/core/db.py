@@ -289,6 +289,22 @@ def init():
                 finished_at REAL NOT NULL DEFAULT 0,
                 updated_at  REAL NOT NULL
             );
+            -- 阅读尝试 / 重读（第 43 期）：把「一轮阅读」记成一行。
+            -- 语义：一轮 = 「开始读 → 读完」；读完后重新开始就是**新一轮**（round 递增）
+            -- ⇒ 它比 reading_status 的单一状态行更能表达「这本书读过几遍」。
+            -- 与既有三处的关系：reading_status = 当前状态、reading_sessions = 会话碎片、
+            -- progress = 停在哪儿；本表是**轮次**的上位记录（reset_reading_state 一并清）。
+            -- finished_at=0 表示该轮尚未读完；status ∈ {reading, finished}。
+            CREATE TABLE IF NOT EXISTS reading_attempts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                book_id     TEXT NOT NULL,
+                round       INTEGER NOT NULL DEFAULT 1,
+                started_at  REAL NOT NULL DEFAULT 0,
+                finished_at REAL NOT NULL DEFAULT 0,
+                status      TEXT NOT NULL DEFAULT 'reading',
+                created_at  REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_attempt_book ON reading_attempts(book_id);
             CREATE TABLE IF NOT EXISTS smart_scopes (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 name       TEXT NOT NULL,
@@ -1724,7 +1740,7 @@ def unlock_achievement(key) -> bool:
 #    副本」这件事静默遗忘（刮削流程自己的对账/待确认负责它的生死），不归孤儿清理管。
 ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
                  "book_custom_values", "collection_items", "reading_sessions",
-                 "meta_override", "meta_online", "meta_cover")
+                 "reading_attempts", "meta_override", "meta_online", "meta_cover")
 
 
 def book_id_refs() -> dict:
@@ -1783,8 +1799,8 @@ def delete_orphans(orphans: dict) -> dict:
 #: 出现在本清单或 :data:`REMAP_EXPLICIT_TABLES` 里**。
 REMAP_TABLES = (
     "progress", "annotations", "bookmarks", "meta_locks", "book_custom_values",
-    "collection_items", "reading_sessions", "ratings", "reading_status", "koreader_docs",
-    "meta_override", "meta_online", "meta_cover",
+    "collection_items", "reading_sessions", "reading_attempts", "ratings", "reading_status",
+    "koreader_docs", "meta_override", "meta_online", "meta_cover",
 )
 
 #: **不走通用搬迁**、改用自己那套函数的含 book_id 表（契约测试同样要认它们）。
@@ -3054,6 +3070,23 @@ def set_author_sort_name_local(name, value) -> None:
         c.commit()
 
 
+def set_author_sort_name(name, value) -> None:
+    """写入**派生/在线**排序名（``sort_name`` 列，第 43 期回填用）。
+
+    与 :func:`set_author_sort_name_local` **分列**：后者是用户覆盖、前者是系统派生值；
+    展示取 本地覆盖 > 派生（见 ``core/authors.sort_name_of``）。回填只碰这一列，
+    绝不把派生死值写进用户覆盖列（否则界面会误显示成「用户改过」）。
+    """
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO authors(name, sort_name) VALUES(?,?) "
+            "ON CONFLICT(name) DO UPDATE SET sort_name=excluded.sort_name",
+            (str(name), str(value or "").strip()),
+        )
+        c.commit()
+
+
 # ---------------- 系列元数据（第 12 期 C3）----------------
 # 与作者侧同构：在线值与本地覆盖分列。系列**没有独立实体表**（系列名来自各册
 # calibre:series），故本表以系列名为键、按需创建行 —— 一律 upsert。
@@ -3506,6 +3539,46 @@ def state_delete(key) -> None:
         c.commit()
 
 
+def _sync_attempt(c, bid, status, st, fin, now) -> None:
+    """阅读状态变化时同步「阅读尝试（轮次）」（第 43 期）。**复用调用方的游标与锁**。
+
+    · 进入 reading  → 没有进行中的那一轮就开一轮（有则不动，避免重复开）；
+    · 进入 finished → 有进行中的那一轮就收尾；一轮都没有就补一条「已完成」的单轮；
+    · paused / abandoned / unread → 不动（搁置不是「读完」，历史轮次也不该被状态回退抹掉）。
+    """
+    if status not in ("reading", "finished"):
+        return
+    cur = c.execute(
+        "SELECT id FROM reading_attempts WHERE book_id=? AND finished_at=0 "
+        "ORDER BY round DESC, id DESC LIMIT 1", (bid,)
+    ).fetchone()
+    if status == "reading":
+        if cur:
+            return
+        mx = c.execute(
+            "SELECT COALESCE(MAX(round), 0) AS m FROM reading_attempts WHERE book_id=?", (bid,)
+        ).fetchone()
+        c.execute(
+            "INSERT INTO reading_attempts(book_id, round, started_at, finished_at, status, created_at) "
+            "VALUES(?,?,?,?,?,?)", (bid, int(mx["m"] or 0) + 1, st, 0.0, "reading", now),
+        )
+        return
+    # finished
+    if cur:
+        c.execute(
+            "UPDATE reading_attempts SET finished_at=?, status='finished' WHERE id=?",
+            (fin, cur["id"]),
+        )
+        return
+    mx = c.execute(
+        "SELECT COALESCE(MAX(round), 0) AS m FROM reading_attempts WHERE book_id=?", (bid,)
+    ).fetchone()
+    c.execute(
+        "INSERT INTO reading_attempts(book_id, round, started_at, finished_at, status, created_at) "
+        "VALUES(?,?,?,?,?,?)", (bid, int(mx["m"] or 0) + 1, st, fin, "finished", now),
+    )
+
+
 def set_status(book_id, status, started_at=None, finished_at=None) -> dict:
     """设置阅读状态并维护起止日期。
 
@@ -3543,25 +3616,140 @@ def set_status(book_id, status, started_at=None, finished_at=None) -> dict:
             "updated_at=excluded.updated_at",
             (str(book_id), status, st, fin, now),
         )
+        _sync_attempt(c, str(book_id), status, st, fin, now)
         c.commit()
     return {"book_id": str(book_id), "status": status,
             "started_at": st, "finished_at": fin, "updated_at": now}
 
 
-def reset_reading_state(book_id) -> dict:
-    """**从头开始**：删掉这本书的阅读会话、阅读进度与阅读状态（第 34 期）。
+# ---------------- 阅读尝试 / 重读（第 43 期）----------------
+# 一轮 = 「开始读 → 读完」；读完后重新开始＝新一轮。轮次由 db.set_status 自动维护
+# （见 _sync_attempt），也可由用户显式「再来一遍」（start_attempt）或从历史补录（backfill_attempts）。
 
-    只清这三处「读出来的痕迹」，因为它们的语义都是「这一次阅读」：
+def list_attempts(book_id) -> list:
+    """按轮次升序返回这本书的阅读尝试。"""
+    rows = _connect().execute(
+        "SELECT * FROM reading_attempts WHERE book_id=? ORDER BY round ASC, id ASC",
+        (str(book_id),),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def current_attempt(book_id) -> "dict | None":
+    """当前**进行中**（未读完）的那一轮，没有则 None。"""
+    r = _connect().execute(
+        "SELECT * FROM reading_attempts WHERE book_id=? AND finished_at=0 "
+        "ORDER BY round DESC, id DESC LIMIT 1", (str(book_id),)
+    ).fetchone()
+    return dict(r) if r else None
+
+
+def start_attempt(book_id, started_at=None) -> dict:
+    """开新一轮阅读（「再来一遍」）。**幂等**：已有进行中的那一轮就原样返回，不重复开。"""
+    bid = str(book_id)
+    now = time.time()
+    st = float(started_at) if started_at else now
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "SELECT * FROM reading_attempts WHERE book_id=? AND finished_at=0 "
+            "ORDER BY round DESC, id DESC LIMIT 1", (bid,)
+        ).fetchone()
+        if cur:
+            return dict(cur)
+        mx = c.execute(
+            "SELECT COALESCE(MAX(round), 0) AS m FROM reading_attempts WHERE book_id=?", (bid,)
+        ).fetchone()
+        rnd = int(mx["m"] or 0) + 1
+        c.execute(
+            "INSERT INTO reading_attempts(book_id, round, started_at, finished_at, status, created_at) "
+            "VALUES(?,?,?,?,?,?)", (bid, rnd, st, 0.0, "reading", now),
+        )
+        c.commit()
+        r = c.execute(
+            "SELECT * FROM reading_attempts WHERE book_id=? AND round=?", (bid, rnd)
+        ).fetchone()
+    return dict(r)
+
+
+def finish_attempt(book_id, finished_at=None) -> "dict | None":
+    """收尾进行中的那一轮。**没有进行中的轮次就返回 None**（不凭空造行）。"""
+    bid = str(book_id)
+    fin = float(finished_at) if finished_at else time.time()
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "SELECT id FROM reading_attempts WHERE book_id=? AND finished_at=0 "
+            "ORDER BY round DESC, id DESC LIMIT 1", (bid,)
+        ).fetchone()
+        if not cur:
+            return None
+        c.execute(
+            "UPDATE reading_attempts SET finished_at=?, status='finished' WHERE id=?",
+            (fin, cur["id"]),
+        )
+        c.commit()
+        r = c.execute("SELECT * FROM reading_attempts WHERE id=?", (cur["id"],)).fetchone()
+    return dict(r)
+
+
+def delete_attempts(book_id) -> int:
+    c = _connect()
+    with _lock:
+        n = int(c.execute(
+            "DELETE FROM reading_attempts WHERE book_id=?", (str(book_id),)
+        ).rowcount or 0)
+        c.commit()
+    return n
+
+
+def backfill_attempts() -> dict:
+    """从既有 ``reading_status`` 的起止日期补录**一轮**尝试（第 43 期一次性历史补录）。
+
+    只补「一轮都没有」的书；不动 ``reading_status``，也不覆盖已有轮次。
+    ``finished_at > 0`` 的补成已完成轮，否则补成进行中轮。返回 ``{created: n}``。
+    """
+    c = _connect()
+    now = time.time()
+    created = 0
+    with _lock:
+        rows = c.execute(
+            "SELECT book_id, started_at, finished_at FROM reading_status "
+            "WHERE started_at > 0 OR finished_at > 0"
+        ).fetchall()
+        for r in rows:
+            bid = str(r["book_id"])
+            if c.execute(
+                "SELECT 1 FROM reading_attempts WHERE book_id=? LIMIT 1", (bid,)
+            ).fetchone():
+                continue
+            fin = float(r["finished_at"] or 0)
+            st = float(r["started_at"] or 0) or fin or now
+            c.execute(
+                "INSERT INTO reading_attempts(book_id, round, started_at, finished_at, status, created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (bid, 1, st, fin, "finished" if fin else "reading", now),
+            )
+            created += 1
+        c.commit()
+    return {"created": created}
+
+
+def reset_reading_state(book_id) -> dict:
+    """**从头开始**：删掉这本书的阅读会话、阅读进度、阅读状态与阅读尝试（第 34 期，第 43 期加尝试）。
+
+    只清这些「读出来的痕迹」，因为它们的语义都是「这一次阅读」：
       · ``reading_sessions`` —— 时长与会话数（阅读记录 / 统计 / 成就都读它）；
       · ``progress`` —— 停在哪儿；
-      · ``reading_status`` —— 读到什么程度（连行一起删，回到「没有状态行」的初态）。
+      · ``reading_status`` —— 读到什么程度（连行一起删，回到「没有状态行」的初态）；
+      · ``reading_attempts`` —— 轮次历史（「读过几遍」的计数，第 43 期）。
 
     **刻意不动**的东西：批注 / 书签 / 评分 / 收藏 / 元数据覆盖 ——
     它们是**关于这本书的内容**，不是「读过」的痕迹；顺手删掉就是把用户的笔记一起清了。
     也不动已解锁的成就：成就的既定机制是「只解锁不回退」（见 core/achievements.py）。
 
     ⚠️ 只删 DB 行，**绝不碰磁盘上的文件**（源不可变是全局硬约定）。
-    返回 ``{sessions, progress, status}`` 三处的删除行数（``progress`` / ``status`` 是 0/1）。
+    返回 ``{sessions, progress, status, attempts}`` 四处的删除行数。
     """
     bid = str(book_id)
     c = _connect()
@@ -3575,5 +3763,9 @@ def reset_reading_state(book_id) -> dict:
         n_status = int(c.execute(
             "DELETE FROM reading_status WHERE book_id=?", (bid,)
         ).rowcount or 0)
+        n_attempts = int(c.execute(
+            "DELETE FROM reading_attempts WHERE book_id=?", (bid,)
+        ).rowcount or 0)
         c.commit()
-    return {"sessions": n_sessions, "progress": n_progress, "status": n_status}
+    return {"sessions": n_sessions, "progress": n_progress, "status": n_status,
+            "attempts": n_attempts}

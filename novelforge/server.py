@@ -1,7 +1,9 @@
 import asyncio
 import base64
 import contextlib
+import csv
 import hashlib
+import io
 import hmac
 import json
 import logging
@@ -1746,10 +1748,49 @@ def api_reset_reading_state(bid: str):
     activity_log.log(
         activity_log.ACTION_RESET, book.get("name") or bid, activity_log.STATUS_OK,
         detail=f"重置阅读状态：会话 {removed['sessions']} 条 / 进度 {removed['progress']} 条 / "
-               f"状态 {removed['status']} 条（共 {total} 行，仅服务端记录，未动文件）",
+               f"状态 {removed['status']} 条 / 尝试 {removed['attempts']} 条"
+               f"（共 {total} 行，仅服务端记录，未动文件）",
         source="api",
     )
     return {"ok": True, "removed": removed, "total": total}
+
+
+# ---- 阅读尝试 / 重读（第 43 期）----
+# 一轮 = 「开始读 → 读完」；轮次由 db.set_status 自动维护，也可由用户显式重开或从历史补录。
+
+@app.get("/api/books/{bid}/reading-attempts")
+def api_list_reading_attempts(bid: str):
+    """这本书的阅读尝试（轮次）清单 + 当前进行中的那一轮。"""
+    items = db.list_attempts(bid)
+    current = next((a for a in items if not a.get("finished_at")), None)
+    return {"items": items, "total": len(items), "current": current}
+
+
+@app.post("/api/books/{bid}/reading-attempts")
+def api_start_reading_attempt(bid: str, payload: dict = Body(default=None)):
+    """开新一轮阅读（「再来一遍」）。**幂等**：已有进行中的那一轮就原样返回，不重复开。"""
+    if not library.by_id(bid):
+        raise HTTPException(404, "找不到这本书")
+    started_at = (payload or {}).get("started_at")
+    return {"ok": True, "attempt": db.start_attempt(bid, started_at=started_at)}
+
+
+@app.post("/api/books/{bid}/reading-attempts/finish")
+def api_finish_reading_attempt(bid: str, payload: dict = Body(default=None)):
+    """收尾进行中的那一轮。没有进行中的轮次返回 404（**不凭空造行**）。"""
+    if not library.by_id(bid):
+        raise HTTPException(404, "找不到这本书")
+    finished_at = (payload or {}).get("finished_at")
+    row = db.finish_attempt(bid, finished_at=finished_at)
+    if row is None:
+        raise HTTPException(404, "没有进行中的阅读尝试")
+    return {"ok": True, "attempt": row}
+
+
+@app.post("/api/reading-attempts/backfill")
+def api_backfill_reading_attempts():
+    """一次性历史补录：给既有 ``reading_status`` 但**一轮都没有**的书各补一轮（第 43 期）。"""
+    return {"ok": True, **db.backfill_attempts()}
 
 
 @app.get("/api/books/{bid}/review")
@@ -2100,6 +2141,8 @@ def api_series_detail(name: str):
         # 单系列查询：这里做**完整**分层（含成员书聚合），成本可接受
         "meta": series_meta.effective(name),
         "meta_state": series_meta.state(name),
+        # 第 43 期：缺册（按 series_index 数字集合求 [1..max] 的补集；无序号/非数字另计）
+        "gaps": library.series_gaps(name),
     }
 
 
@@ -2286,6 +2329,17 @@ def api_set_author_bio(name: str, payload: dict = Body(...)):
     return {"ok": True, **authors_mod.set_bio(name, str(bio))}
 
 
+@app.post("/api/authors/sort-name/backfill")
+def api_backfill_author_sort_names():
+    """为还没有**派生排序键**的作者补 ``sort_name``（第 43 期）。
+
+    上游 ``book-author-sort-key-backfill.service.ts`` 的等价物。⚠️ 只写派生态列
+    ``sort_name``，**绝不动** ``sort_name_local``（用户覆盖）—— 写后者等于冒充用户改过、
+    界面会误显示「已覆盖」。返回 ``{ok, total, filled, skipped, details}``。
+    """
+    return {"ok": True, **authors_mod.backfill_sort_names()}
+
+
 @app.post("/api/authors/{name}/sort-name")
 def api_set_author_sort_name(name: str, payload: dict = Body(...)):
     """设置作者排序名的本地覆盖（空串 = 撤销覆盖，排序回退到在线排序名 / 显示名）。"""
@@ -2429,6 +2483,62 @@ def api_all_annotations(include_trashed: int = 0):
             "book_author": b["author"] if b else "",
         })
     return {"items": out, "total": len(out)}
+
+
+@app.get("/api/annotations/export")
+def api_annotation_export(format: str = "markdown", library_id: str = "", book_id: str = ""):
+    """导出批注（第 43 期）：``format`` ∈ markdown / json / csv，可按书库或单书收窄。
+
+    只导**活跃**批注（``deleted_at=0``）—— 垃圾桶里的是已丢弃的内容，不该出现在导出的
+    书摘里。需补书名 / 作者供阅读，故与 ``/api/annotations`` 同一套 ``library.by_id`` 口径。
+    """
+    fmt = str(format or "markdown").lower()
+    if fmt not in ("markdown", "json", "csv"):
+        raise HTTPException(400, "format 只支持 markdown / json / csv")
+    rows = []
+    for a in db.all_annotations(include_trashed=False):
+        b = library.by_id(a["book_id"])
+        if book_id and str(a["book_id"]) != str(book_id):
+            continue
+        if library_id and str((b or {}).get("library_id") or "") != str(library_id):
+            continue
+        rows.append({
+            **a,
+            "book_title": (b or {}).get("title") or a["book_id"],
+            "book_author": (b or {}).get("author") or "",
+        })
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    if fmt == "json":
+        body = json.dumps({"items": rows, "total": len(rows)}, ensure_ascii=False, indent=2)
+        return Response(
+            content=body, media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="annotations-{stamp}.json"'})
+    if fmt == "csv":
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["book_title", "book_author", "chapter", "quote", "note", "color", "created_at"])
+        for r in rows:
+            w.writerow([r.get("book_title", ""), r.get("book_author", ""), r.get("chapter", ""),
+                        r.get("quote", ""), r.get("note", ""), r.get("color", ""),
+                        r.get("created_at", "")])
+        return Response(
+            content=buf.getvalue(), media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="annotations-{stamp}.csv"'})
+    lines = ["# 批注导出", "", f"共 {len(rows)} 条", ""]
+    cur_book = None
+    for r in rows:
+        bt = r.get("book_title") or ""
+        if bt != cur_book:
+            cur_book = bt
+            suffix = f"（{r.get('book_author')}）" if r.get("book_author") else ""
+            lines += ["", f"## {bt}{suffix}", ""]
+        quote = str(r.get("quote") or "").strip()
+        note = str(r.get("note") or "").strip()
+        lines.append(f"- {quote}" + (f"  \n  > {note}" if note else ""))
+    body = "\n".join(lines) + "\n"
+    return Response(
+        content=body, media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="annotations-{stamp}.md"'})
 
 
 # ⚠️ 字面量路径 `/api/annotations/overview` 与参数化路径不冲突（该前缀下没有
@@ -3724,7 +3834,7 @@ def api_delete_smart_scope(sid: int):
 #   · 删模式只把引用设备的 active_profile_id 置空（来源标记），设备配置不动；
 #   · 设备上报（PUT）不写活动日志（每次启动都发生，无审计价值），只有模式变更写。
 
-PREFS_BLOCKS = {"reader", "pdf", "comic", "audio", "appearance", "cover"}
+PREFS_BLOCKS = {"reader", "pdf", "comic", "audio", "appearance", "cover", "shelf"}
 PREFS_MAX_BYTES = 64 * 1024
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 

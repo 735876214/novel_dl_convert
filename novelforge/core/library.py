@@ -787,6 +787,52 @@ def series_books(name: str) -> list:
     return [b for b in books() if (b.get("series") or "").strip() == name]
 
 
+def series_gaps(name: str) -> dict:
+    """按 ``calibre:series_index`` 找出该系列**缺失的册号**（第 43 期）。
+
+    判据（**唯一真值源**，前端不再自己算）：
+      · 只对**数字序号**判定：把各册 ``series_index`` 解析成整数集合，取 ``[1..max]``
+        上的补集 —— 中间空洞与尾部缺口都算（上游 series-gaps 的语义）；
+      · **无序号**（空串）在 ``unnumbered`` 单独计数，**不**并入缺册：否则每本没序号的书
+        都会凭空造出一个「缺 1」；
+      · **非数字 / 非整数序号**（如 ``"特典"``、``"1.5"``）在 ``non_numeric`` 单独计数，
+        同样不参与数字补集（不硬猜它在第几册）。
+
+    返回 ``{missing, max_index, numbered, unnumbered, has_unnumbered,
+    non_numeric, has_non_numeric, total}``。
+    """
+    bs = series_books(name)
+    nums: set = set()
+    unnumbered = 0
+    non_numeric = 0
+    for b in bs:
+        raw = str(b.get("series_index") or "").strip()
+        if not raw:
+            unnumbered += 1
+            continue
+        try:
+            f = float(raw)
+        except ValueError:
+            non_numeric += 1
+            continue
+        if f == int(f) and f >= 1:
+            nums.add(int(f))
+        else:
+            non_numeric += 1
+    mx = max(nums) if nums else 0
+    missing = [i for i in range(1, mx + 1) if i not in nums]
+    return {
+        "missing": missing,
+        "max_index": mx,
+        "numbered": len(nums),
+        "unnumbered": unnumbered,
+        "has_unnumbered": unnumbered > 0,
+        "non_numeric": non_numeric,
+        "has_non_numeric": non_numeric > 0,
+        "total": len(bs),
+    }
+
+
 def authors_list() -> list:
     """按作者聚合：[{name, count, books:[BookCard, ...]}]，按册数降序。"""
     bucket: dict = {}

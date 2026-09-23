@@ -11,6 +11,7 @@
 import difflib
 import hashlib
 import pathlib
+import re
 import time
 
 import httpx
@@ -137,6 +138,73 @@ def fetch_all() -> dict:
         else:
             failed += 1
     return {"total": len(names), "ok": ok, "failed": failed}
+
+
+# ---------------- 排序键派生与回填（第 43 期）----------------
+# 排序名两列：``sort_name``（派生 / 在线）与 ``sort_name_local``（用户覆盖）。
+# 本模块负责**从显示名派生**一个写进 ``sort_name`` 的值 —— 上游
+# ``book-author-sort-key-backfill.service.ts`` 的等价物。
+
+#: 多词姓氏里的小词：``Ursula K. Le Guin`` 的姓是 ``Le Guin``（不是 ``Guin``）。
+#: 识别不了就原样保留（**不硬拆**）—— 宁可少填，也不给作者一个错的排序键。
+_NAME_PARTICLES = frozenset((
+    "de", "del", "della", "der", "di", "da", "das", "dos", "du", "la", "le",
+    "van", "von", "st", "st.", "bin", "ibn", "ter", "ten", "op",
+))
+
+
+def derive_sort_name(display_name: str) -> str:
+    """从显示名派生排序键：拉丁名转 ``姓, 名``，其余原样返回（第 43 期）。
+
+    规则（刻意保守）：
+      · 已含逗号 → 当作已是「姓, 名」，原样返回；
+      · 全拉丁、恰好两段（``John Doe``）→ ``Doe, John``；
+      · 全拉丁、≥3 段：末段为姓；倒数第二段若是小词则并入
+        （``Ursula K. Le Guin`` → ``Le Guin, Ursula K.``）；
+      · 含中日韩等非拉丁字符、或只有一段（``刘慈欣``）→ 原样返回
+        （CJK 没有「姓, 名」写法，排序键就用原名的千序）。
+    """
+    s = str(display_name or "").strip()
+    if not s or "," in s:
+        return s
+    parts = s.split()
+    if len(parts) < 2:
+        return s
+    if not all(re.fullmatch(r"[A-Za-z][A-Za-z.'\-]*", p) for p in parts):
+        return s
+    if len(parts) == 2:
+        return f"{parts[1]}, {parts[0]}"
+    if parts[-2].lower() in _NAME_PARTICLES:
+        return f"{parts[-2]} {parts[-1]}, {' '.join(parts[:-2])}"
+    return f"{parts[-1]}, {' '.join(parts[:-1])}"
+
+
+def backfill_sort_names() -> dict:
+    """为**还没有派生排序键**的作者补一个 ``sort_name``（第 43 期一次性回填）。
+
+    只写 ``sort_name``（派生态列），**绝不动** ``sort_name_local``（用户覆盖）：
+    写后者等于冒充用户改过、界面会误显示「已覆盖」。
+    已有 ``sort_name`` 的作者跳过；派生结果与显示名相同的（CJK 等）也跳过（填了等于没填）。
+    返回 ``{total, filled, skipped, details:[{name, sort_name}]}``。
+    """
+    rows = db.all_authors()
+    total = filled = 0
+    details: list = []
+    for a in library.authors_list():
+        name = str(a.get("name") or "").strip()
+        if not name:
+            continue
+        total += 1
+        row = rows.get(name) or {}
+        if str(row.get("sort_name") or "").strip():
+            continue
+        derived = derive_sort_name(name)
+        if not derived or derived == name:
+            continue
+        db.set_author_sort_name(name, derived)
+        filled += 1
+        details.append({"name": name, "sort_name": derived})
+    return {"total": total, "filled": filled, "skipped": total - filled, "details": details}
 
 
 def sort_name_of(row: dict) -> str:
