@@ -7,7 +7,7 @@ import Card from '@/components/ui/Card.vue'
 import BookCover from '@/components/ui/BookCover.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { findSettingsPage } from '@/data/settingsNav'
-import { useCoverPrefsStore, COVER_DISPLAY_OPTIONS, COVER_SHADOW_OPTIONS, COVER_SPINE_OPTIONS, COVER_OVERLAY_OPTIONS } from '@/stores/coverPrefs'
+import { useCoverPrefsStore, COVER_DISPLAY_OPTIONS, COVER_SHADOW_OPTIONS, COVER_SPINE_OPTIONS, COVER_OVERLAY_OPTIONS, COVER_TINT_OPTIONS } from '@/stores/coverPrefs'
 import { useLibraryStore } from '@/stores/library'
 
 /**
@@ -164,6 +164,32 @@ function chip(active: boolean): string {
       </div>
     </Card>
 
+    <!-- 详情页封面取色（第 51 期，对齐上游 Book details cover tint） -->
+    <Card padding="none" class="mb-4">
+      <div class="border-b border-border px-4 py-3">
+        <h3 class="text-[13px] font-semibold text-foreground">详情页封面取色</h3>
+        <p class="mt-1 text-[11.5px] text-muted-foreground">
+          用封面自身的颜色给详情页顶部染一层底色（前端取色，不改数据、不外发）。
+          「单色」只取主色染一层，「双色」主色 + 次色各染一角（加档位之前的行为）。
+        </p>
+      </div>
+      <div class="flex flex-wrap items-center gap-1.5 px-4 py-3">
+        <button
+          v-for="o in COVER_TINT_OPTIONS"
+          :key="o.value"
+          type="button"
+          class="cursor-pointer rounded-full px-3 py-1 text-[12px] font-medium transition-colors"
+          :class="chip(prefs.prefs.tint === o.value)"
+          @click="prefs.patch({ tint: o.value })"
+        >
+          {{ o.label }}
+        </button>
+        <span class="ml-1 text-[11.5px] text-muted-foreground">
+          {{ COVER_TINT_OPTIONS.find((o) => o.value === prefs.prefs.tint)?.hint }}
+        </span>
+      </div>
+    </Card>
+
     <!-- 卡片叠加层 -->
     <Card padding="none" class="mb-4">
       <div class="border-b border-border px-4 py-3">
@@ -198,7 +224,7 @@ function chip(active: boolean): string {
       :label="upstream?.title ?? 'Book Covers'"
       :groups="upstream?.groups"
       :items="unsupportedItems"
-      note="以下条目在上游该页存在，本项目未实现。「封面搜索提供者」依赖在线封面抓取（本项目不做封面搜索）。漫画书脊与详情页封面取色已于第 20 期实现。"
+      note="以下条目在上游该页存在，本项目未实现。「封面搜索提供者」依赖在线封面抓取（本项目不做封面搜索）；上游叠加层里的「锁定状态」本项目没有对应实体（没有锁定概念），故未提供。漫画书脊与详情页封面取色已于第 20 期实现；取色档位（关闭 / 单色 / 双色）与叠加层「系列号」于第 51 期补齐。"
     />
   </div>
 </template>

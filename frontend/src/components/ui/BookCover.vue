@@ -19,7 +19,12 @@ import { useLibraryStore } from '@/stores/library'
  * `blurred` 上游没有对应类，是本项目自己实现的（模糊底图 + 居中完整封面）。
  */
 type CoverBook = Pick<BookCard, 'title' | 'c1' | 'c2'> &
-  Partial<Pick<BookCard, 'id' | 'has_cover' | 'percent' | 'status' | 'format' | 'stars' | 'series'>>
+  Partial<
+    Pick<
+      BookCard,
+      'id' | 'has_cover' | 'percent' | 'status' | 'format' | 'stars' | 'series' | 'series_index'
+    >
+  >
 
 const props = withDefaults(
   defineProps<{
@@ -155,6 +160,14 @@ const statusLabel = computed(() => statusLabelOf(props.book, libraryStore.curren
       class="absolute inset-x-0 top-0 z-3 truncate bg-black/55 px-1.5 py-0.5 text-[10px] text-white"
     >
       {{ book.series }}
+    </span>
+
+    <!-- 系列号（第 51 期）：上游 Card overlays 的第 6 项；放右下角，与「格式」/「状态」错开位置 -->
+    <span
+      v-if="has('series_index') && book.series_index"
+      class="absolute right-1 bottom-1 z-3 rounded bg-black/55 px-1.5 py-0.5 font-mono text-[9.5px] text-white"
+    >
+      #{{ book.series_index }}
     </span>
 
     <span

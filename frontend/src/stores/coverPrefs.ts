@@ -16,11 +16,26 @@ import { notifyPrefsChanged, suppressing } from '@/lib/prefsBridge'
 export type CoverDisplay = 'fill' | 'natural' | 'blurred'
 export type CoverSpine = 'off' | 'subtle' | 'strong'
 export type CoverShadow = 'off' | 'normal' | 'strong'
-export type CoverOverlay = 'progress' | 'format' | 'stars' | 'status' | 'series'
+/**
+ * 详情页封面取色档位（第 51 期，对齐上游 `Book details cover tint`）：
+ * `off` 不染色 / `one` 单色 / `two` 双色。
+ * ⚠️ 默认必须是 `two` —— 这是加档位**之前**的实际行为（恒定两色），否则就是静默改观感。
+ */
+export type CoverTint = 'off' | 'one' | 'two'
+export type CoverOverlay =
+  | 'progress'
+  | 'format'
+  | 'stars'
+  | 'status'
+  | 'series'
+  /** 系列内序号（第 51 期；上游 Card overlays 的第 6 项） */
+  | 'series_index'
 
 export interface CoverPrefs {
   /** 封面填充方式：填满卡片 / 自然比例贴底 / 模糊底图居中 */
   display: CoverDisplay
+  /** 详情页封面取色档位（第 51 期；默认 `two` = 改造前的恒定两色） */
+  tint: CoverTint
   /** 书脊覆盖层 */
   spine: CoverSpine
   /** 漫画（CBZ / CBR）是否也显示书脊；电子书不受此项影响（第 20 期） */
@@ -34,11 +49,12 @@ export interface CoverPrefs {
 const KEY = 'nf-cover-prefs'
 
 /**
- * 默认值与「改造前的实际观感」一致：填满卡片、书脊 subtle、阴影 normal、无叠加层。
+ * 默认值与「改造前的实际观感」一致：填满卡片、取色两色、书脊 subtle、阴影 normal、无叠加层。
  * 刻意不默认打开叠加层 —— 书架本来就在封面下方显示进度条，默认再叠一个就成了重复信息。
  */
 export const COVER_PREFS_DEFAULT: CoverPrefs = {
   display: 'fill',
+  tint: 'two',
   spine: 'subtle',
   // 默认显示：与加这个开关之前的观感完全一致（此前漫画也走同一个 spine 设置）
   spineComics: true,
@@ -64,12 +80,19 @@ export const COVER_SHADOW_OPTIONS: { value: CoverShadow; label: string }[] = [
   { value: 'strong', label: '加强' },
 ]
 
+export const COVER_TINT_OPTIONS: { value: CoverTint; label: string; hint: string }[] = [
+  { value: 'off', label: '关闭', hint: '详情页不按封面染色' },
+  { value: 'one', label: '单色', hint: '只取封面主色染一层' },
+  { value: 'two', label: '双色', hint: '主色 + 次色各染一角（加档位之前的行为）' },
+]
+
 export const COVER_OVERLAY_OPTIONS: { value: CoverOverlay; label: string; hint: string }[] = [
   { value: 'progress', label: '阅读进度', hint: '封面底部显示进度条' },
   { value: 'format', label: '格式', hint: '右上角显示 EPUB / MOBI 等' },
   { value: 'stars', label: '评分', hint: '左上角显示星级（0 星不显示）' },
   { value: 'status', label: '阅读状态', hint: '未读 / 在读 / 已读完' },
   { value: 'series', label: '系列名', hint: '封面顶部显示所属系列' },
+  { value: 'series_index', label: '系列号', hint: '右下角显示系列内序号（无序号不显示）' },
 ]
 
 function read(): CoverPrefs {
@@ -81,6 +104,10 @@ function read(): CoverPrefs {
       display: COVER_DISPLAY_OPTIONS.some((o) => o.value === p.display)
         ? (p.display as CoverDisplay)
         : COVER_PREFS_DEFAULT.display,
+      // 旧数据没有 tint 键 → 取默认双色（与旧观感一致）
+      tint: COVER_TINT_OPTIONS.some((o) => o.value === p.tint)
+        ? (p.tint as CoverTint)
+        : COVER_PREFS_DEFAULT.tint,
       spine: COVER_SPINE_OPTIONS.some((o) => o.value === p.spine)
         ? (p.spine as CoverSpine)
         : COVER_PREFS_DEFAULT.spine,

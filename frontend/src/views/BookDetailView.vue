@@ -12,6 +12,7 @@ import MetadataEditor from '@/components/book/MetadataEditor.vue'
 import ReadingRecord from '@/components/book/ReadingRecord.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useCollectionsStore } from '@/stores/collections'
+import { useCoverPrefsStore } from '@/stores/coverPrefs'
 import { highlightHex as highlightColor, highlightStyleLabel } from '@/data/annotationColors'
 import { api, type Annotation, type BookDetail, type ProgressState, type SimilarBook } from '@/lib/api'
 import { extractCoverTint, type CoverTint } from '@/lib/coverTint'
@@ -26,6 +27,7 @@ import { extractCoverTint, type CoverTint } from '@/lib/coverTint'
 const route = useRoute()
 const router = useRouter()
 const library = useLibraryStore()
+const coverPrefs = useCoverPrefsStore()
 
 const bookId = computed(() => String(route.params.id))
 const detail = ref<BookDetail | null>(null)
@@ -33,26 +35,35 @@ const loading = ref(true)
 const book = computed(() => detail.value ?? library.findBook(bookId.value))
 
 /**
- * 封面取色（第 20 期）：从封面图取两个色相，喂给照搬来的 `.book-detail-cover-tint`。
+ * 封面取色（第 20 期；第 51 期加档位）：从封面图取色相，喂给照搬来的 `.book-detail-cover-tint`。
  * 取不到（无封面 / 加载失败 / 画布不可用）就**不设变量** —— CSS 那条 hsl() 整条失效，
  * 于是不染色，不会留下黑块。**纯装饰，绝不阻塞或报错**。
+ *
+ * 档位（对齐上游 `Book details cover tint`）：`off` 连取色都跳过；`one` 只写第一套变量 ——
+ * CSS 里本就写了 `--cover-tint-hue-2: var(--cover-tint-hue)`，第二角会自动收成同一色；
+ * `two`（默认）写两套，与加档位之前逐像素一致。
  */
 const tint = ref<CoverTint | null>(null)
-const tintStyle = computed(() =>
-  tint.value
-    ? {
-        '--cover-tint-hue': `${tint.value.hue}`,
-        '--cover-tint-saturation': `${tint.value.saturation}%`,
-        '--cover-tint-hue-2': `${tint.value.hue2}`,
-        '--cover-tint-saturation-2': `${tint.value.saturation2}%`,
-      }
-    : undefined,
-)
+const tintOn = computed(() => coverPrefs.prefs.tint !== 'off')
+const tintStyle = computed(() => {
+  if (!tint.value || !tintOn.value) return undefined
+  const first = {
+    '--cover-tint-hue': `${tint.value.hue}`,
+    '--cover-tint-saturation': `${tint.value.saturation}%`,
+  }
+  if (coverPrefs.prefs.tint === 'one') return first
+  return {
+    ...first,
+    '--cover-tint-hue-2': `${tint.value.hue2}`,
+    '--cover-tint-saturation-2': `${tint.value.saturation2}%`,
+  }
+})
 watch(
-  () => [book.value?.id, book.value?.has_cover] as const,
-  async ([bid, hasCover]) => {
+  // 档位也进依赖：从「关闭」切回单色 / 双色时要重新取色，否则会一直不染色
+  () => [book.value?.id, book.value?.has_cover, coverPrefs.prefs.tint] as const,
+  async ([bid, hasCover, tintMode]) => {
     tint.value = null
-    if (!bid || !hasCover) return
+    if (!bid || !hasCover || tintMode === 'off') return
     const result = await extractCoverTint(api.coverUrl(String(bid)))
     // 竞态：取色是异步的，回来时可能已经切到别的书了
     if (String(book.value?.id ?? '') === String(bid)) tint.value = result
@@ -312,7 +323,7 @@ onMounted(async () => {
     <!-- hero：背景取封面主色染色（取不到就不染色，见 tint / coverTint.ts） -->
     <div
       class="mb-6 flex flex-col gap-5 sm:flex-row sm:gap-7"
-      :class="tint ? 'book-detail-cover-tint' : ''"
+      :class="tint && tintOn ? 'book-detail-cover-tint' : ''"
       :style="tintStyle"
     >
       <div class="relative w-[140px] shrink-0 sm:w-[176px]">
