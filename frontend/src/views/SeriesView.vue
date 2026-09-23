@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import BookCover from '@/components/ui/BookCover.vue'
@@ -8,6 +8,7 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
+import Segment from '@/components/ui/Segment.vue'
 import { api, type SeriesItem } from '@/lib/api'
 
 /**
@@ -19,6 +20,18 @@ const items = ref<SeriesItem[]>([])
 const loading = ref(true)
 /** 加载失败信息：失败不能退化成「还没有系列」。 */
 const error = ref('')
+
+/** 排序：册数多的在前（默认）/ 按名称。只在 computed 里做，不动原始数组。 */
+const sortMode = ref<'count' | 'name'>('count')
+const SORT_OPTIONS = [
+  { value: 'count', label: '按册数' },
+  { value: 'name', label: '按名称' },
+]
+const display = computed(() =>
+  [...items.value].sort((a, b) =>
+    sortMode.value === 'name' ? a.name.localeCompare(b.name, 'zh') : b.count - a.count,
+  ),
+)
 
 const FALLBACK = { title: '—', c1: 'oklch(0.62 0.16 260)', c2: 'oklch(0.48 0.13 300)' }
 
@@ -56,12 +69,19 @@ function open(name: string): void {
       </div>
     </Card>
 
-    <div
-      v-else-if="items.length"
-      class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
-    >
+    <template v-else-if="items.length">
+      <div class="mb-3 flex flex-wrap items-center gap-2">
+        <Segment
+          :options="SORT_OPTIONS"
+          :model-value="sortMode"
+          @update:model-value="(v: string) => (sortMode = v as 'count' | 'name')"
+        />
+        <span class="ml-auto text-[11.5px] text-muted-foreground">共 {{ display.length }} 个系列</span>
+      </div>
+
+      <div class="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
       <button
-        v-for="s in items"
+        v-for="s in display"
         :key="s.name"
         type="button"
         class="group cursor-pointer text-left"
@@ -87,7 +107,8 @@ function open(name: string): void {
           {{ s.description }}
         </div>
       </button>
-    </div>
+      </div>
+    </template>
 
     <EmptyState
       v-else

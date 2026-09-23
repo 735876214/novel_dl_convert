@@ -27,6 +27,28 @@ const error = ref('')
 
 const totalSize = computed(() => files.value.reduce((s, f) => s + f.size, 0))
 
+/** 格式筛选（空 = 全部）与排序：都只在 computed 里做，不动原始数组。 */
+const fmtFilter = ref('')
+const sortMode = ref<'mtime' | 'name' | 'size'>('mtime')
+const SORT_OPTIONS = [
+  { value: 'mtime', label: '按时间' },
+  { value: 'name', label: '按名称' },
+  { value: 'size', label: '按体积' },
+]
+const formats = computed(() => [...new Set(files.value.map((f) => ext(f.name)))].sort())
+const display = computed(() => {
+  const list = fmtFilter.value
+    ? files.value.filter((f) => ext(f.name) === fmtFilter.value)
+    : files.value
+  return [...list].sort((a, b) =>
+    sortMode.value === 'name'
+      ? a.name.localeCompare(b.name, 'zh')
+      : sortMode.value === 'size'
+        ? b.size - a.size
+        : b.mtime - a.mtime,
+  )
+})
+
 function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
@@ -90,16 +112,52 @@ function download(name: string): void {
       </div>
     </Card>
 
-    <Card v-else-if="files.length" padding="none">
+    <template v-else-if="files.length">
+    <!-- 格式筛选 + 排序（本地计算，不改观感：沿用既有 chips 语言） -->
+    <div class="mb-3 flex flex-wrap items-center gap-1.5">
+      <button
+        type="button"
+        class="cursor-pointer rounded-full px-3 py-1 text-[12px] font-medium transition-colors"
+        :class="fmtFilter === '' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground'"
+        @click="fmtFilter = ''"
+      >
+        全部
+      </button>
+      <button
+        v-for="f in formats"
+        :key="f"
+        type="button"
+        class="cursor-pointer rounded-full px-3 py-1 text-[12px] font-medium transition-colors"
+        :class="fmtFilter === f ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground'"
+        @click="fmtFilter = f"
+      >
+        {{ f }}
+      </button>
+      <div class="ml-auto flex items-center gap-1.5">
+        <span class="text-[11.5px] text-muted-foreground">排序</span>
+        <button
+          v-for="o in SORT_OPTIONS"
+          :key="o.value"
+          type="button"
+          class="cursor-pointer rounded-full px-3 py-1 text-[12px] font-medium transition-colors"
+          :class="sortMode === o.value ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground'"
+          @click="sortMode = o.value as 'mtime' | 'name' | 'size'"
+        >
+          {{ o.label }}
+        </button>
+      </div>
+    </div>
+
+    <Card padding="none">
       <div class="flex items-center gap-2 border-b border-border px-4 py-3">
         <h3 class="text-[13px] font-semibold text-foreground">成品文件</h3>
         <span class="text-[11.5px] text-muted-foreground">
-          {{ files.length }} 个 · 合计 {{ fmtSize(totalSize) }}
+          {{ display.length }} 个 · 合计 {{ fmtSize(totalSize) }}
         </span>
       </div>
 
       <div
-        v-for="f in files"
+        v-for="f in display"
         :key="f.name"
         class="flex items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
       >
@@ -116,6 +174,12 @@ function download(name: string): void {
         <Button size="sm" @click="download(f.name)">下载</Button>
       </div>
     </Card>
+
+    <!-- 有文件但被筛选滤空：给一条提示，而不是空白 -->
+    <p v-if="!display.length" class="py-8 text-center text-[12.5px] text-muted-foreground">
+      没有符合筛选的成品文件。
+    </p>
+    </template>
 
     <!-- 0 库时那句「到探索发现下载 / 本地转换上传」是**错的**：这两条路都要求
          先有可接收的书库，否则 400 拒收（第 38 期）。 -->

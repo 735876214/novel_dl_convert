@@ -1,10 +1,24 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import PageHead from '@/components/ui/PageHead.vue'
 import Card from '@/components/ui/Card.vue'
+import { api } from '@/lib/api'
 
 /** Documentation：帮助总览（对应上游 Help → Documentation）。链接指向应用内真实路由。 */
+
+/** 真实版本号（/health 下发，全站唯一真值源）。取不到就不显示 —— 装饰性信息，不阻塞页面。 */
+const version = ref('')
+onMounted(() => {
+  api
+    .health()
+    .then((h) => (version.value = h.version))
+    .catch(() => {
+      /* 装饰性版本号：失败静默（非主数据） */
+    })
+})
+
 const sections = [
   {
     title: '开始使用',
@@ -43,12 +57,24 @@ const sections = [
       { to: '/settings/komga', label: 'Komga' },
     ],
   },
+  {
+    title: '关于与更新',
+    desc: '版本信息、更新日志与配置原文入口。',
+    links: [
+      { to: '/whats-new', label: '更新日志' },
+      { to: '/settings/ext/about', label: '关于' },
+      { to: '/settings/ext/advanced', label: '高级（配置原文）' },
+    ],
+  },
 ]
 </script>
 
 <template>
   <div>
-    <PageHead title="帮助" desc="Documentation · 应用内导航与说明" />
+    <PageHead
+      title="帮助"
+      :desc="`Documentation · 应用内导航与说明${version ? ` · 当前版本 ${version}` : ''}`"
+    />
 
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <Card v-for="s in sections" :key="s.title" padding="none">
