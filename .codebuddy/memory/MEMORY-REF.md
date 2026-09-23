@@ -10,9 +10,10 @@
 - 建库接口收 **`source_dirs`（绝对路径 JSON 数组，第 41 期起）**；路径须在 `config.LIBRARY_SOURCE_ROOTS` 内（「就地引用」，跨根合法）。⚠️ 已无 `mode`/`root_path`/`source_subdir`。
 - Docker：`docker-compose.yml` 端口 **8992**；`docker-compose.test.yml` 挂 `./novelforge` 端口 **8993**；断网无法 `--build`。
 - 构建：`cd frontend && npm run type-check && npm run build && npm run deploy`，核对 `/static/v2/assets/index-*.js` **实际内容**（HMR 源码≠服务端产物）。
-- ⚠️ **本机 Node 要手动挂 PATH**：`nvm list` 显示「No versions installed」（那是另一套空的 nvm），可用的 Node 是 IDE 管理的
-  `C:\Users\qingr\.workbuddy\binaries\node\versions\22.22.2-3`（其 `versions\current` 文件写着当前版本号）。
-  ⇒ 跑 npm 先 `$env:Path="$nodeDir;$env:Path"`，用 `npm.cmd`；`npm install` 等下载动作仍受本机网络限制。
+- ⚠️ **本机 Node 由 nvm 管理（09-23 订正，取代此前「nvm 是空的、用 IDE 托管」的旧结论）**：nvm v2.0.0 位于
+  `C:\Users\qingr\AppData\Local\Author Software\nvm`，已 `nvm install 24.19.0` + `nvm use 24.19.0`（设为默认），
+  `node`/`npm` 现解析为 **v24.19.0 / 11.17.0**。winget 直装的 node 落在 WinGet 包目录、PATH 检索会跳过且被 nvm 抢注
+  ⇒ **不能靠 winget 直装落地，须走 nvm**（那份 winget node 是无害残留）。`npm install` 等下载动作仍受本机网络限制（走系统代理）。
   ⚠️ `install_binary`（node）在本机会因 EPERM（rename 失败）装不上，**别在它上面反复试**。
   ⚠️ **跑 `npm run build` / `deploy` 前必须先 `$env:NODE_OPTIONS=''`** —— IDE 注入的 safe-delete shim 会拦 Vite 的
   `fs.rmSync`（清 outDir）与 `deploy.mjs` 的删除，报 `checkBulkDeleteGuard` / 「No active Node.js version」。
@@ -78,3 +79,19 @@
   ⚠️ **40 期摸到的漏报面：工具只核对「`` `路径:行号` `` **后面**跟着反引号符号名」的锚点** ——符号写在锚点**之前**的（「… `books.by_format`（`core/stats.py:635`）」）**根本不进核对**，那一批 15 处漂移工具**一条都没报**，全靠人工在同一批行上捞。⇒ 判据「0 硬错 + 0 漂移」**只能是下限**。
   ⚠️ **「不记偏移量」的实证（40 期）**：同一期 `core/db.py` 的 hunk 合计 +38/−7，但各锚点位移互不相同 —— 22 / 22 / 22 / 23 / **31** 行都有（只有落在该锚点**之前**的 hunk 才影响它）。
   ⚠️ **被动产生的漂移**：写「第 40 期实施记录」时引用了旧锚点做例子，工具**立刻**把它算成一条新漂移 ⇒ 记录里引旧行号不要写成 `` `path:行号` `` 的形式，写「第 N 行」。历史实施记录里的旧行号（roadmap `:859` / `:879` / `:1416`）**一律不动** —— 改它等于篡改历史。
+
+---
+
+## 出版 / 元数据细节（09-23 压缩自 `MEMORY.md`；动这些领域前先读）
+
+- 硬链接副本内嵌元数据会变独立 inode ⇒ **不得宣称省空间**。
+- **目录型条目**（有声书一章一文件）同样出版：副本是**真目录 + 内部逐文件硬链接**；形态判据 = **名字带不带 `library.BOOK_EXTS` 扩展名**（不看 `format`、不 stat 磁盘）；**副本名不带扩展名**。
+- 无值哨兵 `db.META_CLEAR="-"`（`_CLEARABLE` 全字段、有测试）的三处翻译须一致：`db.get_effective_meta` / `metastore.effective` / `metastore.state`。
+- **抓取三道正交闸**：①字段策略 `metadata_fetch.fields[key] ∈ {overwrite(默认)/fill_only/skip}`（全局 + 每库）②`meta_locks` 显式字段锁（**只挡抓取、不挡手工编辑**；解锁后抓取重新接管）③「改过就不动」（`field in overrides` 隐式）；**自定义字段默认值同受此三闸**。
+- 相似书五路权重：`0.5·词袋余弦 + 0.1·同作者 + 0.25·题材 Jaccard + 0.1·同系列 + 0.05·评分接近度`；**任一方未评分时那一路不进分母**（不当 0 分）；词袋**简介不进**；`limit`≤25、详情页默认 6 可展开；0 分不返回；`SimilarBook.score`=0–1（前端不显示）；另有「实质重合」门（至少同作者 / 同题材 / 同系列之一才进候选）。
+- 作者排序名派生 `authors.derive_sort_name`：拉丁两名 →「姓, 名」、多名带小词表（`Le Guin`）、**CJK 原样返回 ⇒ 跳过**（填了等于没填）。
+- 阅读尝试（轮次）：一轮 =「开始读 → 读完」，读完再开始 = 新一轮（`round` 递增）；⚠️ 自动维护挂 `db.set_status`（进 reading 开轮 / finished 收尾；**搁置·弃读不动轮次**）；`reset_reading_state` **四清**（删 `reading_sessions` + `progress` + `reading_status` + `reading_attempts`，**不动批注/书签/评分/文件**）。
+- **remap 四处清单**：`ORPHAN_TABLES` / `REMAP_TABLES` / 有软删进 `REMAP_PROBE_FILTER` / 含库相关列进 `REMAP_EXPLICIT_TABLES`（唯一成员 `scrape_items`）。整体 `UPDATE` 撞唯一约束会被外层 `except` 吞成「搬 0 行」⇒ 必须**逐行搬 + 冲突取舍**。
+- `migrate.execute`/`rollback` 不按 `direction` 分支：自动归库(`move`)与用户移动(`bookmove`)共用 `_after_bookmove`/`_after_bookmove_back`，回程对称；`DIR_AUTO="move"` 字面量**不能改**；`server.py` 拒用 bookmove 执行自动归库批次那两处**保留**；反查所属库用 `_lib_id_of_path`（取**最长**匹配）。
+- ⚠️ **`db` 访问只走 `db._connect()`**：返回持 `_lock` 的代理 `db._Conn`（非裸 `sqlite3.Connection`）；`_lock` 是 **RLock**（非重入会自锁死）；「锁内写 + 裸读」实测全 `InterfaceError`、裸读 + `close()` 全段错误；`db._Result` 接口面收窄（execute/executemany/executescript/commit/rollback + 标量/fetchone/fetchall/迭代），新增游标属性要补。契约 `tests/test_db_concurrency_contract.py`。`db.close()` 生产无人调，但「锁内写 + 裸读」生产可达；旧代理线程拿 `ProgrammingError` 是**真错误、别吞**。
+- ⚠️ **win32 目录 `st_size` 恒 0**：「空文件」判据须 `if not p.is_dir() and p.stat().st_size==0`；目录体积用 `watcher._sig()`。
