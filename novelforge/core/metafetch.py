@@ -68,6 +68,36 @@ def _threshold_of(mf: dict, fallback: float) -> float:
     return t if 0 < t <= 1 else fallback
 
 
+#: AUTO-FINALIZE 的合并模式预设（第 52 期）：上游有 safe_merge / embedded_only 等多档，
+#: 本项目复用既有的 `fields` 逐字段策略来表达。预设与逐字段策略**互斥呈现**——
+#: 选预设即把 `fields` 整体写成该模式对应的策略。
+FINALIZE_PRESETS = {
+    "overwrite": "覆盖（在线值优先）",
+    "fill_only": "安全合并（仅补空值）",
+    "embedded_only": "仅用内嵌（不下载在线封面与远程字段）",
+}
+#: `fields` 字典包含的字段键（与 config.DEFAULTS.metadata_fetch.fields 一致）
+_FINALIZE_FIELDS = ["title", "author", "publisher", "year", "language",
+                    "isbn", "description", "tags", "cover"]
+
+
+def preset_to_fields(preset: str) -> dict:
+    """合并模式预设 → 既有的 `fields` 逐字段策略字典。
+
+    - overwrite            → 所有字段 overwrite（在线优先覆盖本地，即 DEFAULT_POLICY）
+    - fill_only / safe_merge → 所有字段 fill_only（只补原值为空的字段）
+    - embedded_only        → 所有字段 skip（不下载在线封面 / 远程字段，只用文件内嵌元数据）
+    - 未知预设             → 回落 overwrite，绝不静默丢配置
+    """
+    if preset in ("fill_only", "safe_merge"):
+        mode = "fill_only"
+    elif preset == "embedded_only":
+        mode = "skip"
+    else:
+        mode = "overwrite"
+    return {k: mode for k in _FINALIZE_FIELDS}
+
+
 def _current_value(book: dict, field: str):
     if field == "tags":
         return list(book.get("tags") or [])

@@ -264,6 +264,41 @@ async function saveAuto(): Promise<void> {
   if (ok) await refresh()
 }
 
+// ---- AUTO-FINALIZE（第 52 期）：映射到既有 metadata_fetch，不改入库流程 ----
+// 开关 → auto_on_import（开启时一并打开 enabled，否则投递即抓不会跑）；
+// 阈值界面 0–100 ↔ 内部 0–1；合并预设 → metadata_fetch.fields 整体重写（预设与逐字段互斥呈现）。
+const FINALIZE_PRESETS: Array<{ key: string; label: string }> = [
+  { key: 'overwrite', label: '覆盖（在线值优先）' },
+  { key: 'fill_only', label: '安全合并（仅补空值）' },
+  { key: 'embedded_only', label: '仅用内嵌（不下载在线）' },
+]
+const finalizeOn = computed({
+  get: () => Boolean(val('metadata_fetch.auto_on_import')),
+  set: (v: boolean) => setVal('metadata_fetch.auto_on_import', v),
+})
+const finalizeThreshold = computed({
+  get: () => Math.round((Number(val('metadata_fetch.threshold') ?? 0.75)) * 100),
+  set: (v: number) => setVal('metadata_fetch.threshold', Math.max(0, Math.min(100, Number(v))) / 100),
+})
+const finalizePreset = ref('fill_only')
+const presetTouched = ref(false)
+
+async function saveFinalize(): Promise<void> {
+  // 选预设即整体重写 fields；未动预设则不覆盖用户在元数据页的逐字段微调。
+  if (presetTouched.value) {
+    const mode = finalizePreset.value === 'embedded_only' ? 'skip'
+      : finalizePreset.value === 'fill_only' ? 'fill_only'
+      : 'overwrite'
+    const fields: Record<string, string> = {}
+    for (const k of ['title', 'author', 'publisher', 'year', 'language', 'isbn', 'description', 'tags', 'cover']) {
+      fields[k] = mode
+    }
+    setVal('metadata_fetch.fields', fields)
+  }
+  if (finalizeOn.value) setVal('metadata_fetch.enabled', true)
+  await saveSection('metadata')
+}
+
 // ---- 整页拖拽投递（A8）：把文件拖进窗口即丢进 INPUT_DIR 处理 ----
 const dragDepth = ref(0)
 const dragging = computed(() => dragDepth.value > 0)
@@ -543,13 +578,77 @@ onBeforeUnmount(() => {
       />
     </Card>
 
+    <!-- AUTO-FINALIZE（第 52 期）：映射到既有 metadata_fetch，不改入库流程 -->
+    <Card class="mt-4" padding="none">
+      <div class="flex items-center justify-between border-b border-border px-4 py-3">
+        <span class="text-[13px] font-medium text-foreground">自动定稿（AUTO-FINALIZE）</span>
+        <span class="text-[11.5px] text-muted-foreground">投递即抓并按置信度定稿</span>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">新书入库即自动抓取并定稿</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            开启后，新书入库会按置信度阈值自动抓取元数据并写回；低于阈值的候选只列在
+            <RouterLink to="/settings/metadata/auto-fetch" class="underline">设置 → 元数据 → 书籍自动抓取</RouterLink>
+            的预览页。等同于该页的「新书入库自动抓」。
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          :aria-checked="finalizeOn"
+          class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors"
+          :class="finalizeOn ? 'bg-primary' : 'bg-muted'"
+          @click="finalizeOn = !finalizeOn"
+        >
+          <span
+            class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
+            :class="finalizeOn ? 'translate-x-[16px]' : 'translate-x-[2px]'"
+          />
+        </button>
+      </div>
+
+      <div class="flex flex-wrap items-end gap-4 border-b border-border px-4 py-3.5">
+        <label class="text-[12px] text-muted-foreground">
+          <span class="mb-1 block text-[12.5px] font-medium text-foreground">置信度阈值（%）</span>
+          <input
+            v-model.number="finalizeThreshold"
+            type="number"
+            min="0"
+            max="100"
+            step="1"
+            class="h-8 w-24 rounded-md border border-border bg-muted px-2 text-[12px] text-foreground outline-none focus:border-ring"
+          >
+        </label>
+        <label class="text-[12px] text-muted-foreground">
+          <span class="mb-1 block text-[12.5px] font-medium text-foreground">合并模式</span>
+          <select
+            v-model="finalizePreset"
+            class="h-8 rounded-md border border-border bg-muted px-2 text-[12px] text-foreground outline-none focus:border-ring"
+            @change="presetTouched = true"
+          >
+            <option v-for="p in FINALIZE_PRESETS" :key="p.key" :value="p.key">{{ p.label }}</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="flex items-center gap-3 px-4 py-3.5">
+        <p class="flex-1 text-[11.5px] leading-relaxed text-muted-foreground">
+          入库目标沿用各库自己的来源目录 —— 本项目没有单点「目标库 / 文件夹」设置。
+          合并模式与元数据页的逐字段策略互斥呈现：选预设即整体套用，逐字段微调请到元数据页。
+        </p>
+        <Button size="sm" variant="primary" :disabled="saving" @click="saveFinalize">保存定稿设置</Button>
+      </div>
+    </Card>
+
     <SettingsUnsupportedCard
       label="Book Dock"
-      :groups="['AUTO-FINALIZE']"
+      :groups="['目标库 / 文件夹']"
       :items="[
-        'Enable auto-finalize（置信度达标即无人值守定稿）—— 上游开着后还要选 0–100 分阈值 / 目标库 / 元数据合并模式（safe_merge、embedded_only 等）/ 目标文件夹四项（上游 BookDockSettings.vue:207-287）；本项目入库目标是各库自己的来源目录（没有单点「目标库」设置），元数据侧的置信度阈值是 0–1 的**候选筛选**阈值、只决定哪些字段自动写回，两者不是一回事',
+        '上游 auto-finalize 可指定单一目标库与目标文件夹；本项目入库目标 = 各库自己的来源目录（按设计不做单点设置），故该组配置不提供',
       ]"
-      note="上游 Book Dock 是「投递目录 + 元数据抓取 + 置信度定稿」的完整流水线。本项目的「投递目录 + 自动处理 + 五态复核（待复核 / 待处理 / 就绪 / 出错）」已落地；投递即抓也已接线（metadata_fetch.auto_on_import，与 metadata_fetch.enabled 双重门控，开关在 设置 → 元数据），本卡只剩上游 auto-finalize 那组「目标库 / 文件夹 + 合并模式」配置未做。"
+      note="上游 Book Dock 是「投递目录 + 元数据抓取 + 置信度定稿」的完整流水线。本项目「投递目录 + 自动处理 + 五态复核（待复核 / 待处理 / 就绪 / 出错）」已落地，投递即抓已接线（metadata_fetch.auto_on_import 与 enabled 双门控）；第 52 期起「自动定稿」已落地：开关映射 auto_on_import、阈值界面 0–100 内部换算 0–1、合并模式预设（覆盖 / 安全合并 / 仅用内嵌）映射既有 fields 逐字段策略。"
     />
 
     <Card class="mt-4">
