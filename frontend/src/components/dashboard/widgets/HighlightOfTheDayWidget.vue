@@ -10,12 +10,15 @@ import { useLibraryStore } from '@/stores/library'
 const router = useRouter()
 const library = useLibraryStore()
 const items = ref<AllAnnotation[]>([])
+/** 取批注失败：与「还没有批注」是两回事，别把错误混成空态。 */
+const failed = ref(false)
 
 onMounted(async () => {
   try {
     items.value = (await api.allAnnotations()).items
+    failed.value = false
   } catch {
-    /* ignore */
+    failed.value = true
   }
 })
 
@@ -44,7 +47,8 @@ const emptyText = computed(() =>
   <div class="flex h-full flex-col rounded-lg border border-border bg-card p-4 shadow-sm">
     <h3 class="text-[13px] font-semibold text-foreground">每日划线</h3>
 
-    <p v-if="!today" class="mt-2 text-[11.5px] text-muted-foreground">{{ emptyText }}</p>
+    <p v-if="failed" class="mt-2 text-[11.5px] text-muted-foreground">暂时无法加载划线，请稍后重试。</p>
+    <p v-else-if="!today" class="mt-2 text-[11.5px] text-muted-foreground">{{ emptyText }}</p>
 
     <template v-else>
       <div class="mt-2.5 flex-1 border-l-2 pl-2.5" :style="{ borderColor: highlightHex(today.color) }">

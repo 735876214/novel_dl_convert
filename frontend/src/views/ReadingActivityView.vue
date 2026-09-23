@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 
+import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -34,6 +35,8 @@ function yearOf(r: 'this' | 'last' | 'all'): number | undefined {
 }
 
 const headDesc = computed(() => {
+  if (loading.value) return '加载中…'
+  if (activity.error) return '加载失败'
   const h = data.value?.heatmap
   if (!h) return '加载中…'
   return h.active_days ? '按日阅读分钟贡献与活动时间流' : '尚无阅读记录'
@@ -133,6 +136,19 @@ function hhmm(ts: number): string {
   const d = new Date(ts * 1000)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
+
+/** 时间轴上**实际渲染**的条数。后端默认只回最近 120 条，靠 `timeline.total` 才知道有没有被截断。 */
+const shownCount = computed(() => grouped.value.reduce((n, g) => n + g.items.length, 0))
+const timelineTotal = computed(() => data.value?.timeline.total ?? 0)
+
+/** 「加载更多」每步 +200，上限对齐后端的 500。 */
+const LOAD_MORE_STEP = 200
+const TIMELINE_MAX = 500
+
+function loadMore(): void {
+  const next = Math.min(TIMELINE_MAX, activity.limit + LOAD_MORE_STEP)
+  void activity.load(true, yearOf(range.value), next)
+}
 </script>
 
 <template>
@@ -161,6 +177,8 @@ function hhmm(ts: number): string {
               <div
                 v-for="(c, di) in week"
                 :key="di"
+                role="img"
+                :aria-label="c.future ? '未来日期' : tip(c)"
                 class="h-[11px] w-[11px] rounded-[2px] transition-transform duration-150 hover:scale-125 hover:ring-2 hover:ring-primary/30"
                 :style="{ backgroundColor: levelColor(c.minutes, calendar.max) }"
                 :title="c.future ? '' : tip(c)"
@@ -168,7 +186,7 @@ function hhmm(ts: number): string {
             </div>
           </div>
         </div>
-        <div class="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div class="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground" aria-hidden="true">
           <span>少</span>
           <span
             v-for="(col, i) in LEVEL_COLORS"
@@ -205,9 +223,27 @@ function hhmm(ts: number): string {
             </div>
           </div>
         </div>
+        <div
+          v-if="timelineTotal > shownCount"
+          class="mt-4 flex items-center justify-between border-t border-border pt-3 text-[11.5px] text-muted-foreground"
+        >
+          <span>已显示最近 {{ shownCount }} 条 · 共 {{ timelineTotal }} 条</span>
+          <Button
+            variant="secondary"
+            size="sm"
+            :disabled="activity.limit >= TIMELINE_MAX"
+            @click="loadMore"
+          >
+            加载更多
+          </Button>
+        </div>
       </Card>
     </template>
 
-    <EmptyState v-else icon="clock" title="阅读活动加载失败" desc="请稍后重试，或检查后端日志。" />
+    <EmptyState v-else icon="clock" title="阅读活动加载失败" desc="请稍后重试，或检查后端日志。">
+      <template #action>
+        <Button variant="secondary" size="sm" @click="activity.load(true, yearOf(range))">重试</Button>
+      </template>
+    </EmptyState>
   </div>
 </template>

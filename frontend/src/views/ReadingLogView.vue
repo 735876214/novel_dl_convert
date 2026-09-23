@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import { api, type ReadingLogBook, type ReadingLogDay, type ReadingLogSession } from '@/lib/api'
+import { api, apiErrorMessage, type ReadingLogBook, type ReadingLogDay, type ReadingLogSession } from '@/lib/api'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -25,6 +25,8 @@ const days = ref(60)
 const items = ref<ReadingLogDay[]>([])
 const byBook = ref<ReadingLogBook[]>([])
 const recent = ref<ReadingLogSession[]>([])
+/** 加载失败：与「还没有阅读记录」分开渲染，别把错误当空态。 */
+const failed = ref(false)
 
 async function load(): Promise<void> {
   loading.value = true
@@ -33,6 +35,10 @@ async function load(): Promise<void> {
     items.value = r.items
     byBook.value = r.by_book
     recent.value = r.recent
+    failed.value = false
+  } catch (e) {
+    failed.value = true
+    ui.toast(apiErrorMessage(e, '阅读记录加载失败'))
   } finally {
     loading.value = false
   }
@@ -183,6 +189,17 @@ function dayLabel(d: ReadingLogDay): string {
     </Card>
 
     <div v-if="loading" class="py-16 text-center text-[13px] text-muted-foreground">加载中…</div>
+
+    <EmptyState
+      v-else-if="failed"
+      icon="alert"
+      title="阅读记录加载失败"
+      desc="请稍后重试，或检查后端日志。"
+    >
+      <template #action>
+        <Button size="sm" variant="secondary" @click="load">重试</Button>
+      </template>
+    </EmptyState>
 
     <EmptyState
       v-else-if="!items.length"
