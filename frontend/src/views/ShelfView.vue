@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import BookMoveDialog from '@/components/book/BookMoveDialog.vue'
@@ -18,6 +18,7 @@ import {
   tagsLabel,
 } from '@/lib/bookInfo'
 import { statusBucket } from '@/lib/readingThresholds'
+import { bucketKeyOf, buildBuckets } from '@/lib/shelfBuckets'
 import { useDisplayPrefsStore } from '@/stores/displayPrefs'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
@@ -368,6 +369,39 @@ const rows = computed<Row[]>(() => {
     isSeriesRow(r) && r.members.length > 1 ? { ...r, members: sortBySeriesIndex(r.members) } : r,
   )
 })
+
+/** 首字母分桶（第 43 期）：以每行的代表本（系列折叠行取首本）的书名首字分桶 */
+const buckets = computed(() => buildBuckets(rows.value.map((r) => r.book.title || r.book.name)))
+
+/** 当前视口所在的桶（滚动时更新；用于高亮跳转条） */
+const activeBucket = ref('')
+
+function jumpToBucket(key: string): void {
+  activeBucket.value = key
+  // 桶内第一个渲染元素即该桶起点（行序与渲染序一致）
+  const el = document.querySelector<HTMLElement>(`[data-bucket="${key}"]`)
+  el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
+/** 高亮「已滚过顶部」的最后一个桶 —— 取真实滚动位置，不猜、不预设 */
+function updateActiveBucket(): void {
+  const els = Array.from(document.querySelectorAll<HTMLElement>('[data-bucket]'))
+  if (!els.length) {
+    activeBucket.value = ''
+    return
+  }
+  let cur = els[0].dataset.bucket || ''
+  for (const el of els) {
+    if (el.getBoundingClientRect().top <= 140) cur = el.dataset.bucket || cur
+    else break
+  }
+  activeBucket.value = cur
+}
+
+onMounted(() => window.addEventListener('scroll', updateActiveBucket, { passive: true }))
+onBeforeUnmount(() => window.removeEventListener('scroll', updateActiveBucket))
+watch(rows, () => void nextTick(updateActiveBucket))
+watch(() => prefs.prefs.view, () => void nextTick(updateActiveBucket))
 
 function isSeriesRow(r: Row): boolean {
   return r.key.startsWith('series:')
@@ -750,6 +784,27 @@ const INPUT_CLS =
       @moved="onMoved"
     />
 
+    <!-- 首字母分桶跳转（第 43 期）：按书名首字分桶，非拉丁字符统一归 # 桶。
+         桶数不足 3 时不显示 —— 两三个桶的「跳转」只是噪音。 -->
+    <div
+      v-if="sorted.length && buckets.length >= 3"
+      class="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-1 rounded-lg bg-background/85 px-1 py-1.5 backdrop-blur"
+    >
+      <button
+        v-for="bk in buckets"
+        :key="bk.key"
+        type="button"
+        class="min-w-[1.6rem] cursor-pointer rounded px-1.5 py-0.5 text-center text-[11.5px] font-semibold tabular-nums transition-colors"
+        :class="activeBucket === bk.key
+          ? 'bg-primary text-primary-foreground'
+          : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
+        :title="`跳到 ${bk.label === '#' ? '其它' : bk.label}（${bk.count} 本）`"
+        @click="jumpToBucket(bk.key)"
+      >
+        {{ bk.label }}
+      </button>
+    </div>
+
     <!-- 空态**三态**（第 38 期）：0 库 / 有库但没书 / 有筛选没命中。
          原来只有后两态、且把「没书」一概说成「换个入口看看，或到「探索发现」把书下载进来」
          —— 全新部署（0 个书库）时那句话是**错的**：此时下载/上传/投递一律被后端
@@ -767,6 +822,7 @@ const INPUT_CLS =
         :key="r.key"
         type="button"
         class="group cursor-pointer text-left"
+        :data-bucket="bucketKeyOf(r.book.title || r.book.name)"
         :aria-label="
           display.prefs.cardInfoMode === 'off'
             ? isSeriesRow(r)
@@ -859,6 +915,7 @@ const INPUT_CLS =
         v-for="e in listEntries"
         :key="e.key"
         padding="sm"
+        :data-bucket="e.book ? bucketKeyOf(e.book.title || e.book.name) : undefined"
         :class="e.kind === 'book' ? 'cursor-pointer transition-colors hover:bg-muted/50' : 'border-dashed'"
         @click="onEntryClick(e)"
       >
@@ -944,6 +1001,7 @@ const INPUT_CLS =
           <tr
             v-for="(row, i) in tableRows"
             :key="row.key"
+            :data-bucket="bucketKeyOf(row.book.title || row.book.name)"
             class="cursor-pointer border-b border-border/60 transition-colors last:border-b-0 hover:bg-muted/50"
             :class="display.prefs.zebraStriping && i % 2 === 1 ? 'bg-muted/30' : ''"
             @click="onTableRowClick(row)"

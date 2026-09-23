@@ -6,12 +6,14 @@ import { AUDIO_PREFS_DEFAULT, type AudioPrefs } from './audioPrefs'
 import { COMIC_PREFS_DEFAULT, type ComicPrefs } from './comicPrefs'
 import { PDF_PREFS_DEFAULT, type PdfPrefs } from './pdfPrefs'
 import { READER_PREFS_DEFAULT, type ReaderPrefs } from './readerPrefs'
+import { SHELF_PREFS_DEFAULT } from '@/stores/shelfPrefs'
 
 /**
- * 偏好载荷：**六块**，与服务端 `PREFS_BLOCKS` 一一对应。
+ * 偏好载荷：**七块**，与服务端 `PREFS_BLOCKS` 一一对应。
  *
- * ⚠️ 六块背后其实是 **8 个 localStorage 键**（`appearance` 一块 = 主题 / 点缀色 / 圆角
- * 三个独立键）—— 按「模块」枚举会漏键，所以这里按块定义、在同步层里逐块读写。
+ * ⚠️ 七块背后其实是 **9 个 localStorage 键**（`appearance` 一块 = 主题 / 点缀色 / 圆角
+ * 三个独立键；`shelf` 一块 = 系列默认折叠，第 43 期并入）—— 按「模块」枚举会漏键，
+ * 所以这里按块定义、在同步层里逐块读写。
  *
  * 归一化（`normalizePayload`）是 dirty 判定与推送的前提：把缺省字段补齐、
  * 丢掉未知键，保证「同一份配置」比较结果稳定（键序无关）。
@@ -41,10 +43,22 @@ export interface PrefsPayload {
   audio: AudioPrefs
   appearance: AppearancePrefs
   cover: CoverPrefs
+  shelf: ShelfSyncPrefs
 }
 
-/** 与后端一致的块名白名单（第 9 期起含 audio） */
-export const PAYLOAD_BLOCKS = ['reader', 'pdf', 'comic', 'audio', 'appearance', 'cover'] as const
+/**
+ * 书架同步块：**只承载「随账号走」的那一项** —— 系列默认折叠（第 43 期）。
+ *
+ * 其余书架偏好（视图 / 排序 / 缩略图点击 / 筛选默认展开 / 书卡密度）仍**只存本机**：
+ * 它们是「这台设备怎么看书架」，换设备本就该各是各的；只有「系列是否默认折叠」
+ * 属于「我怎么看这个书库」，与上游 `series-collapse-prefs` 同口径。
+ */
+export interface ShelfSyncPrefs {
+  collapseSeries: boolean
+}
+
+/** 与后端一致的块名白名单（第 9 期起含 audio；第 43 期加 shelf） */
+export const PAYLOAD_BLOCKS = ['reader', 'pdf', 'comic', 'audio', 'appearance', 'cover', 'shelf'] as const
 
 /**
  * 外观默认值：主题部分与 stores/theme.ts 的初值一致（system / neutral / default）；
@@ -57,6 +71,11 @@ export const APPEARANCE_DEFAULT: AppearancePrefs = {
   ...DISPLAY_PREFS_DEFAULT,
 }
 
+/** 书架同步块默认值：与 `shelfPrefs` 的 `collapseSeries` 初值同源（缺省关闭） */
+export const SHELF_SYNC_DEFAULT: ShelfSyncPrefs = {
+  collapseSeries: SHELF_PREFS_DEFAULT.collapseSeries,
+}
+
 /** 补齐缺省字段、丢弃未知块，得到一份可用于比较与推送的完整载荷 */
 export function normalizePayload(raw: Partial<PrefsPayload> | null | undefined): PrefsPayload {
   const r = (raw || {}) as Partial<PrefsPayload>
@@ -67,6 +86,7 @@ export function normalizePayload(raw: Partial<PrefsPayload> | null | undefined):
     audio: { ...AUDIO_PREFS_DEFAULT, ...(r.audio || {}) },
     appearance: { ...APPEARANCE_DEFAULT, ...(r.appearance || {}) },
     cover: { ...COVER_PREFS_DEFAULT, ...(r.cover || {}) },
+    shelf: { ...SHELF_SYNC_DEFAULT, ...(r.shelf || {}) },
   }
 }
 

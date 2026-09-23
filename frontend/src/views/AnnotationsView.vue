@@ -2,12 +2,15 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import { HIGHLIGHT_COLORS, highlightHex } from '@/data/annotationColors'
 import { api, type AllAnnotation, type AnnotationOverview } from '@/lib/api'
+import { useLibraryStore } from '@/stores/library'
+import { useUiStore } from '@/stores/ui'
 
 /**
  * 批注总览：跨全部书籍的高亮与笔记。
@@ -19,6 +22,8 @@ import { api, type AllAnnotation, type AnnotationOverview } from '@/lib/api'
  * 需要跨全量历史聚合的只有顶部的统计条，那个走服务端 `/api/annotations/overview`。
  */
 const router = useRouter()
+const library = useLibraryStore()
+const ui = useUiStore()
 const items = ref<AllAnnotation[]>([])
 const overview = ref<AnnotationOverview | null>(null)
 const loading = ref(true)
@@ -175,37 +180,27 @@ async function purge(a: AllAnnotation): Promise<void> {
   await load()
 }
 
-/** 导出只导**活跃**批注：垃圾桶里的是已丢弃的内容，不该出现在导出的书摘里。 */
-function exportMarkdown(): void {
-  const active = items.value.filter((a) => a.deleted_at === 0)
-  if (!active.length) return
-  const byBook = new Map<string, AllAnnotation[]>()
-  for (const a of active) {
-    const list = byBook.get(a.book_title) ?? []
-    list.push(a)
-    byBook.set(a.book_title, list)
+// ---------- 导出（第 43 期：改为走后端，支持格式与范围）----------
+// 后端 `/api/annotations/export` 只导**活跃**批注（`deleted_at=0`）——
+// 垃圾桶里是已丢弃的内容，不该出现在导出的书摘里。格式 markdown / json / csv。
+
+const exportFormat = ref<'markdown' | 'json' | 'csv'>('markdown')
+/** 只在「当前选中了某个书库」时可勾：全部书库时它没有意义，勾了也不该假装收窄 */
+const exportLibraryOnly = ref(false)
+const exporting = ref(false)
+
+async function doExport(): Promise<void> {
+  exporting.value = true
+  try {
+    await api.exportAnnotations(exportFormat.value, {
+      libraryId: exportLibraryOnly.value ? library.currentLibraryId : undefined,
+    })
+    ui.toast('已导出批注')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '导出失败')
+  } finally {
+    exporting.value = false
   }
-  const lines: string[] = [
-    '# 全部批注',
-    '',
-    `> 共 ${active.length} 条 · 导出于 ${new Date().toLocaleString()}`,
-    '',
-  ]
-  for (const [title, list] of byBook) {
-    const author = list[0]?.book_author
-    lines.push(`## ${title}${author ? ` · ${author}` : ''}`, '')
-    for (const a of list) {
-      lines.push(`> ${a.quote}`, '', `— 第 ${a.chapter + 1} 章`, '')
-      if (a.note) lines.push(a.note, '')
-    }
-  }
-  const blob = new Blob([lines.join('\n')], { type: 'text/markdown;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const el = document.createElement('a')
-  el.href = url
-  el.download = `全部批注-${new Date().toISOString().slice(0, 10)}.md`
-  el.click()
-  URL.revokeObjectURL(url)
 }
 </script>
 
@@ -267,15 +262,32 @@ function exportMarkdown(): void {
         >
       </div>
 
-      <button
-        v-if="view === 'active' && overview?.active"
-        type="button"
-        class="shrink-0 cursor-pointer text-[12px] text-primary transition-opacity hover:opacity-80"
-        title="导出全部活跃批注为 Markdown"
-        @click="exportMarkdown"
-      >
-        导出 Markdown
-      </button>
+      <div v-if="view === 'active' && overview?.active" class="ml-auto flex shrink-0 items-center gap-2">
+        <label
+          class="flex items-center gap-1 text-[11.5px]"
+          :class="library.currentLibraryId ? 'text-muted-foreground' : 'text-muted-foreground/50'"
+          :title="library.currentLibraryId ? '只导出当前书库的批注' : '当前是「全部书库」，无法按库收窄'"
+        >
+          <input
+            v-model="exportLibraryOnly"
+            type="checkbox"
+            class="h-3.5 w-3.5 cursor-pointer accent-primary"
+            :disabled="!library.currentLibraryId"
+          >
+          仅当前书库
+        </label>
+        <select
+          v-model="exportFormat"
+          class="h-8 cursor-pointer rounded-md border border-border bg-muted px-2 text-[12px] text-foreground outline-none focus:border-ring"
+        >
+          <option value="markdown">Markdown</option>
+          <option value="json">JSON</option>
+          <option value="csv">CSV</option>
+        </select>
+        <Button size="sm" variant="ghost" :disabled="exporting" @click="doExport">
+          {{ exporting ? '导出中…' : '导出' }}
+        </Button>
+      </div>
     </div>
 
     <!-- 分组切换 -->

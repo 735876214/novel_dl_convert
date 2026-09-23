@@ -11,6 +11,7 @@ import { normalizePayload, payloadEqual, type PrefsPayload } from '@/lib/prefsPa
 import { readReaderPrefs, saveReaderPrefs } from '@/lib/readerPrefs'
 import { useCoverPrefsStore } from '@/stores/coverPrefs'
 import { useDisplayPrefsStore } from '@/stores/displayPrefs'
+import { useShelfPrefsStore } from '@/stores/shelfPrefs'
 import { useThemeStore, type RadiusMode, type ThemeMode } from '@/stores/theme'
 
 /**
@@ -36,6 +37,7 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
   const theme = useThemeStore()
   const cover = useCoverPrefsStore()
   const display = useDisplayPrefsStore()
+  const shelf = useShelfPrefsStore()
 
   const deviceId = ref(deviceIdOf())
   const deviceName = ref(deviceNameOf())
@@ -51,7 +53,7 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
   let pushing = false
   let requeue = false
 
-  /** 收集六块当前值（服务端 payload 的形状） */
+  /** 收集七块当前值（服务端 payload 的形状） */
   function collect(): PrefsPayload {
     return normalizePayload({
       reader: readReaderPrefs(),
@@ -66,6 +68,8 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
         ...display.prefs,
       },
       cover: { ...cover.prefs },
+      // 书架块 = 只挑随账号走的那一项（系列默认折叠，第 43 期）
+      shelf: { collapseSeries: shelf.prefs.collapseSeries },
     })
   }
 
@@ -86,6 +90,8 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       // 同一个 appearance 块喂两个 store：各自只挑自己认识的键（theme 只取三件套，
       // display 只取布局字段），互不污染 —— 两边的 applyRemote 都做了逐键校验
       display.applyRemote(p.appearance)
+      // shelf 块同理：只喂可同步键（collapseSeries），本机专属的书架字段不动
+      shelf.applyRemote(p.shelf)
     })
   }
 

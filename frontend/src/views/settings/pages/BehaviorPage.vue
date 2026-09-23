@@ -10,9 +10,10 @@ import { useUiStore } from '@/stores/ui'
  * 上游这一页只有三项（LIBRARY BEHAVIOR 组），本项目**三项全做实**，故页面末尾
  * 没有「上游还有、本项目未支持」那张对照卡。
  *
- * ⚠️ 这三项存**本机**（`stores/shelfPrefs` 的 `nf-shelf-prefs`），不进偏好同步载荷 ——
+ * ⚠️ 这三项默认存**本机**（`stores/shelfPrefs` 的 `nf-shelf-prefs`）——
  * 与书架的视图/排序偏好同一档：它们是「书架怎么反应」，不是「外观长什么样」。
- * 页尾写明了这一点，免得用户以为换台设备会跟过来。
+ * **例外**：第 43 期起「系列默认折叠」额外进偏好同步的 `shelf` 块（换台设备一致），
+ * 页尾写明了这一点。
  */
 const prefs = useShelfPrefsStore()
 const ui = useUiStore()
@@ -102,8 +103,8 @@ function setCollapseSeries(v: boolean): void {
     </Card>
 
     <p class="mt-3 text-[11.5px] leading-relaxed text-muted-foreground">
-      这三项存在本机，与书架的视图 / 排序偏好同一份，不随账号同步 ——「偏好与同步」管的是
-      阅读与外观偏好（主题、字号、版式等）。
+      前两项（缩略图点击 / 筛选预览默认展开）存在本机，与书架的视图 / 排序偏好同一份，不随账号同步；
+      「系列默认折叠」随账号同步，换台设备也一致。
     </p>
   </div>
 </template>

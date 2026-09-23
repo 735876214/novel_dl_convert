@@ -760,6 +760,37 @@ export interface SeriesDetail {
   /** 系列级元数据（单系列查询走完整分层，含成员书聚合） */
   meta?: SeriesMeta
   meta_state?: SeriesMetaState
+  /** 缺册（第 43 期）：见 SeriesGaps —— 后端唯一真值源，前端不再自己算 */
+  gaps?: SeriesGaps
+}
+
+/**
+ * 系列缺册（第 43 期）。`missing` 是 `[1..max_index]` 里缺的数字册号（中间空洞与尾部缺口都算）；
+ * 无序号 / 非数字序号各自单列、**不**并入缺册（否则每本没序号的书都会凭空造出一个「缺 1」）。
+ */
+export interface SeriesGaps {
+  missing: number[]
+  max_index: number
+  numbered: number
+  unnumbered: number
+  has_unnumbered: boolean
+  non_numeric: number
+  has_non_numeric: boolean
+  total: number
+}
+
+/**
+ * 阅读尝试（轮次，第 43 期）：一轮 = 「开始读 → 读完」。
+ * `finished_at === 0` 表示该轮进行中；读完后重新开始 = 新一轮（`round` 递增）。
+ */
+export interface ReadingAttempt {
+  id: number
+  book_id: string
+  round: number
+  started_at: number
+  finished_at: number
+  status: 'reading' | 'finished'
+  created_at: number
 }
 
 // ---------- 作者 ----------
@@ -2519,6 +2550,31 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  // ---------- 阅读尝试 / 重读（第 43 期）----------
+  /** 这本书的阅读尝试清单 + 当前进行中的那一轮 */
+  readingAttempts: (bid: string) =>
+    request<{ items: ReadingAttempt[]; total: number; current: ReadingAttempt | null }>(
+      `/api/books/${encodeURIComponent(bid)}/reading-attempts`,
+    ),
+
+  /** 开新一轮阅读（「再来一遍」）。幂等：已有进行中的那一轮则原样返回。 */
+  startReadingAttempt: (bid: string) =>
+    request<{ ok: boolean; attempt: ReadingAttempt }>(
+      `/api/books/${encodeURIComponent(bid)}/reading-attempts`,
+      { method: 'POST' },
+    ),
+
+  /** 收尾进行中的那一轮；没有进行中的轮次后端返回 404。 */
+  finishReadingAttempt: (bid: string) =>
+    request<{ ok: boolean; attempt: ReadingAttempt }>(
+      `/api/books/${encodeURIComponent(bid)}/reading-attempts/finish`,
+      { method: 'POST' },
+    ),
+
+  /** 一次性历史补录：给既有阅读状态但无轮次的书各补一轮。 */
+  backfillReadingAttempts: () =>
+    request<{ ok: boolean; created: number }>('/api/reading-attempts/backfill', { method: 'POST' }),
+
   /**
    * 相似书：五路加权打分派生（第 35 期）。至少要有一条实质重合（同作者 / 题材 / 同系列）
    * 才返回；``limit`` 上限 25（后端 Query 会拦，超过即 422）。
@@ -2542,6 +2598,32 @@ export const api = {
     const a = document.createElement('a')
     a.href = url
     a.download = `library-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
+  /**
+   * 导出批注（第 43 期）：`format` ∈ markdown / json / csv，可按书库或单书收窄。
+   * 同样走 blob 下载（`/api` 要求 Bearer 头，`<a download>` 带不了）。
+   * 只导活跃批注（后端按 `deleted_at=0` 过滤）。
+   */
+  exportAnnotations: async (
+    format: 'markdown' | 'json' | 'csv' = 'markdown',
+    opts: { libraryId?: string; bookId?: string } = {},
+  ): Promise<void> => {
+    const q = new URLSearchParams({ format })
+    if (opts.libraryId) q.set('library_id', opts.libraryId)
+    if (opts.bookId) q.set('book_id', opts.bookId)
+    const headers = new Headers()
+    const token = _authToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    const res = await fetch(`/api/annotations/export?${q.toString()}`, { headers })
+    if (!res.ok) throw new Error(`导出失败（${res.status}）`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `annotations-${new Date().toISOString().slice(0, 10)}.${format === 'markdown' ? 'md' : format}`
     a.click()
     URL.revokeObjectURL(url)
   },
@@ -3160,6 +3242,19 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sort_name: sortName }),
     }),
+
+  /**
+   * 批量回填作者派生排序键（第 43 期）。只写派生态列 `sort_name`，**不动**用户覆盖列。
+   * 返回 `{total, filled, skipped, details}` —— details 只列真正补上的。
+   */
+  backfillAuthorSortNames: () =>
+    request<{
+      ok: boolean
+      total: number
+      filled: number
+      skipped: number
+      details: { name: string; sort_name: string }[]
+    }>('/api/authors/sort-name/backfill', { method: 'POST' }),
 
   /** 上传作者头像作为本地覆盖。 */
   uploadAuthorPhoto: (name: string, file: File) => {

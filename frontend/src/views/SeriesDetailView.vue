@@ -17,7 +17,7 @@ import {
   sortBySeriesIndex,
   tagsLabel,
 } from '@/lib/bookInfo'
-import { api, type BookCard, type SeriesGroup, type SeriesMeta } from '@/lib/api'
+import { api, type BookCard, type SeriesGaps, type SeriesGroup, type SeriesMeta } from '@/lib/api'
 
 /**
  * 系列详情：该系列下的全部书目。
@@ -43,6 +43,9 @@ const groups = ref<SeriesGroup[]>([])
 const loading = ref(true)
 /** 系列级元数据（第 12 期 C3）：简介 / 出版社 / 首发年 / 题材 / 册数 */
 const meta = ref<SeriesMeta | null>(null)
+/** 缺册（第 43 期）：后端算好的补集，前端只展示，不自己判 */
+const gaps = ref<SeriesGaps | null>(null)
+const gapsOpen = ref(false)
 const renumberOpen = ref(false)
 
 const dir = ref<'asc' | 'desc'>('asc')
@@ -88,10 +91,12 @@ async function load(): Promise<void> {
     books.value = res.books
     groups.value = res.groups ?? []
     meta.value = res.meta ?? null
+    gaps.value = res.gaps ?? null
   } catch {
     books.value = []
     groups.value = []
     meta.value = null
+    gaps.value = null
   }
   loading.value = false
 }
@@ -111,7 +116,37 @@ watch(name, load)
     </button>
 
     <PageHead :title="name" :desc="`共 ${books.length} 册 · 按系列序号排序`" />
-    <p v-if="!loading && hasMissingIndex" class="-mt-2 mb-3 text-[11.5px] text-muted-foreground">
+    <!-- 缺册（第 43 期）：按 series_index 数字集合求 [1..max] 的补集；无序号 / 非数字另行说明。
+         判定全在后端（library.series_gaps），前端只展示，避免两处口径走样。 -->
+    <div
+      v-if="!loading && gaps && (gaps.missing.length || gaps.has_unnumbered || gaps.has_non_numeric)"
+      class="-mt-2 mb-3 text-[11.5px] leading-relaxed text-muted-foreground"
+    >
+      <span v-if="gaps.missing.length">
+        缺少 <b class="text-foreground">{{ gaps.missing.length }}</b> 册（{{ gaps.missing.join('、') }} 号）
+        <button
+          type="button"
+          class="ml-1 cursor-pointer underline underline-offset-2 hover:text-foreground"
+          @click="gapsOpen = !gapsOpen"
+        >
+          {{ gapsOpen ? '收起' : '查看' }}
+        </button>
+      </span>
+      <span v-if="gaps.has_unnumbered" :class="gaps.missing.length ? 'ml-1' : ''">
+        · 另有 {{ gaps.unnumbered }} 本没有系列序号（已排末尾）
+      </span>
+      <span v-if="gaps.has_non_numeric" class="ml-1">
+        · {{ gaps.non_numeric }} 本序号不是数字，不参与缺册判定
+      </span>
+      <div v-if="gapsOpen && gaps.missing.length" class="mt-1.5 flex flex-wrap gap-1">
+        <span
+          v-for="n in gaps.missing"
+          :key="n"
+          class="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-foreground"
+        >{{ n }}</span>
+      </div>
+    </div>
+    <p v-else-if="!loading && hasMissingIndex" class="-mt-2 mb-3 text-[11.5px] text-muted-foreground">
       部分书目在 EPUB 元数据里没有系列序号，已排在末尾并标注「序号未知」。
     </p>
 

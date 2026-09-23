@@ -1,11 +1,15 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+
+import { notifyPrefsChanged, suppressing } from '@/lib/prefsBridge'
 
 /**
  * 书架偏好（对应上游书架的 Display 面板）。
  *
- * 存 localStorage，与 `stores/coverPrefs`、`stores/theme` 一致 ——
- * 本项目的「外观 / 布局」类偏好都在前端；偏好同步是第 3 期（见 capability-gap §14）。
+ * 存 localStorage，与 `stores/coverPrefs`、`stores/theme` 一致 —— 本项目的「书架状态」类
+ * 偏好都在前端。⚠️ 第 43 期起 `collapseSeries`（系列默认折叠）**额外**进偏好同步载荷的
+ * `shelf` 块（与上游 `series-collapse-prefs` 同口径，换设备一致）；其余字段（视图 / 排序 /
+ * 缩略图点击 / 筛选默认展开）仍**只存本机** —— 它们是「这台设备怎么看书架」。
  *
  * 用 pinia store 是为了让**侧栏进入书架时的设定**与书架页共用一份状态：
  * 从侧栏点不同的库 / 智能书架进来，视图与排序不该被重置。
@@ -116,6 +120,7 @@ export const useShelfPrefsStore = defineStore('shelfPrefs', () => {
     } catch {
       /* 隐私模式下不可写：本次会话仍生效 */
     }
+    notifyPrefsChanged()
   }
 
   function patch(p: Partial<ShelfPrefs>): void {
@@ -140,5 +145,25 @@ export const useShelfPrefsStore = defineStore('shelfPrefs', () => {
     save()
   }
 
-  return { prefs, cardInfo, filtersOpen, patch, sortBy, reset }
+  /**
+   * 应用远端 `shelf` 块（第 43 期）：**只挑可同步键** `collapseSeries`，逐键校验后写入。
+   *
+   * 传进来的是整个 shelf 块；其余字段都是本机专属的（视图 / 排序 / 缩略图点击 / 筛选默认展开），
+   * 整体 merge 会把它们冲成远端默认值 —— 故逐键挑、不整体 merge。做法对齐 `displayPrefs.applyRemote`。
+   * 期间抑制通知，避免把刚拉下来的值又推回去（回环）。
+   */
+  function applyRemote(next: Partial<{ collapseSeries: boolean }>): void {
+    suppressing(() => {
+      if (typeof next.collapseSeries === 'boolean') {
+        prefs.value = { ...prefs.value, collapseSeries: next.collapseSeries }
+      }
+      save()
+    })
+  }
+
+  // 兜底：本 store 直接暴露了 `prefs` ref，`prefs.prefs.x = v` 这种写法不经过 patch。
+  // 照 `displayPrefs` 的写法，watcher 保证它仍然落盘并通知同步层。
+  watch(prefs, () => suppressing(() => save()), { deep: true })
+
+  return { prefs, cardInfo, filtersOpen, patch, sortBy, reset, applyRemote }
 })
