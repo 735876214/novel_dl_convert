@@ -165,6 +165,13 @@ async function save(): Promise<void> {
 }
 
 function go(n: number): void {
+  // 越过末页 = 想继续往后：交给「自动翻下一本」（未开启则原地不动，不再 clamp 成同一页空转）。
+  // ⚠️ 这一判断必须放在 `go()` 里 —— 键盘（ArrowRight / PageDown）走的是 `go()` 而**不是** `next()`，
+  // 只在 `next()` 里挂钩会让最常用的翻页方式静默失效。
+  if (n > total.value) {
+    void maybeAutoNext()
+    return
+  }
   const next = Math.min(Math.max(1, n), total.value)
   if (next === page.value) return
   page.value = next
@@ -175,13 +182,7 @@ function go(n: number): void {
 }
 
 function next(): void {
-  const target = page.value + (double.value ? 2 : 1)
-  // 已到末页：开了「自动翻下一本」就换书，否则原地不动（不再 clamp 成同一页空转）
-  if (target > total.value) {
-    void maybeAutoNext()
-    return
-  }
-  go(target)
+  go(page.value + (double.value ? 2 : 1))
 }
 function prev(): void {
   go(page.value - (double.value ? 2 : 1))
