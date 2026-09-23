@@ -61,6 +61,127 @@ os.environ.update({
 })
 
 # ---------------------------------------------------------------------------
+# ③ 仓库根防删除守卫（防回归：任何测试都不得删除 / 移走仓库根内文件）
+# ---------------------------------------------------------------------------
+# 背景：第 44 期曾出现「全量 pytest 后 14 个仓库根跟踪文件从工作树消失」的事故。
+# 根因是测试运行期的目录重定向（见 ①）在某些启动方式下未生效，导致某个清理逻辑
+# 把仓库根当成了它的数据 / 配置目录来清空。本守卫作为**最后一道防线**：
+# 无论 ① 的环境重定向是否生效，只要路径解析到仓库根内，删除 / 移走一律拒绝。
+# 测试本就只在 tmp_path / 会话临时根里增删文件，命中本守卫即说明有测试越界，应修测试。
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def _path_under_repo_root(p) -> bool:
+    """p 解析后是否落在仓库根内（含仓库根本身）。"""
+    try:
+        return pathlib.Path(p).resolve().is_relative_to(_REPO_ROOT)
+    except (OSError, ValueError):
+        return False
+
+
+def _repo_root_guard_fail(verb, p):
+    import traceback
+
+    pytest.fail(
+        "[REPO-ROOT GUARD] 拒绝{verb}仓库根内路径 {p}\n调用栈：\n{stack}".format(
+            verb=verb, p=p, stack="".join(traceback.format_stack())
+        )
+    )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _repo_root_guard():
+    """会话级守卫：拦截任何指向仓库根的删除 / 移走操作。
+
+    只拦「删除类」（remove / unlink / rmdir / rmtree）与「移走类」
+    （rename / replace / move，且**源**在仓库根内）—— 这两类会让仓库根文件从工作树
+    消失。读 / 写（open、Path.write_text）不拦，测试合法读取源码 / 前端文件不受影响。
+
+    注：手动打补丁而非用 monkeypatch 夹具——后者是 function 作用域，
+    无法在 session 级夹具里请求（会 ScopeMismatch）。进程退出即自然还原。
+    """
+    _orig = {
+        "os.remove": os.remove,
+        "os.unlink": os.unlink,
+        "os.rmdir": os.rmdir,
+        "shutil.rmtree": shutil.rmtree,
+        "os.rename": os.rename,
+        "os.replace": os.replace,
+        "shutil.move": shutil.move,
+        "Path.unlink": pathlib.Path.unlink,
+        "Path.rmdir": pathlib.Path.rmdir,
+    }
+
+    def _g_remove(path, *a, **k):
+        if _path_under_repo_root(path):
+            _repo_root_guard_fail("os.remove 于", path)
+        return _orig["os.remove"](path, *a, **k)
+
+    def _g_unlink(path, *a, **k):
+        if _path_under_repo_root(path):
+            _repo_root_guard_fail("os.unlink 于", path)
+        return _orig["os.unlink"](path, *a, **k)
+
+    def _g_rmdir(path, *a, **k):
+        if _path_under_repo_root(path):
+            _repo_root_guard_fail("os.rmdir 于", path)
+        return _orig["os.rmdir"](path, *a, **k)
+
+    def _g_rmtree(path, *a, **k):
+        if _path_under_repo_root(path):
+            _repo_root_guard_fail("shutil.rmtree 于", path)
+        return _orig["shutil.rmtree"](path, *a, **k)
+
+    def _g_rename(src, dst, *a, **k):
+        if _path_under_repo_root(src):
+            _repo_root_guard_fail("os.rename 于", src)
+        return _orig["os.rename"](src, dst, *a, **k)
+
+    def _g_replace(src, dst, *a, **k):
+        if _path_under_repo_root(src):
+            _repo_root_guard_fail("os.replace 于", src)
+        return _orig["os.replace"](src, dst, *a, **k)
+
+    def _g_move(src, dst, *a, **k):
+        if _path_under_repo_root(src):
+            _repo_root_guard_fail("shutil.move 于", src)
+        return _orig["shutil.move"](src, dst, *a, **k)
+
+    def _g_path_unlink(self, *a, **k):
+        if _path_under_repo_root(self):
+            _repo_root_guard_fail("Path.unlink 于", self)
+        return _orig["Path.unlink"](self, *a, **k)
+
+    def _g_path_rmdir(self, *a, **k):
+        if _path_under_repo_root(self):
+            _repo_root_guard_fail("Path.rmdir 于", self)
+        return _orig["Path.rmdir"](self, *a, **k)
+
+    os.remove = _g_remove
+    os.unlink = _g_unlink
+    os.rmdir = _g_rmdir
+    shutil.rmtree = _g_rmtree
+    os.rename = _g_rename
+    os.replace = _g_replace
+    shutil.move = _g_move
+    pathlib.Path.unlink = _g_path_unlink
+    pathlib.Path.rmdir = _g_path_rmdir
+    try:
+        yield
+    finally:
+        os.remove = _orig["os.remove"]
+        os.unlink = _orig["os.unlink"]
+        os.rmdir = _orig["os.rmdir"]
+        shutil.rmtree = _orig["shutil.rmtree"]
+        os.rename = _orig["os.rename"]
+        os.replace = _orig["os.replace"]
+        shutil.move = _orig["shutil.move"]
+        pathlib.Path.unlink = _orig["Path.unlink"]
+        pathlib.Path.rmdir = _orig["Path.rmdir"]
+
+
+# ---------------------------------------------------------------------------
 # ② 到这里才可以 import 业务模块
 # ---------------------------------------------------------------------------
 
@@ -74,6 +195,21 @@ from novelforge.server import app  # noqa: E402
 def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ARG001
     """整轮跑完删掉会话级临时根：测试不该在磁盘上留东西。"""
     shutil.rmtree(_SESSION_ROOT, ignore_errors=True)
+    # 防回归：跑完后确认仓库根关键跟踪文件没被误删（非致命告警）。
+    _expected = [
+        "config.yaml", "Dockerfile", ".gitattributes", ".gitignore", ".env.example",
+        ".dockerignore", "README.md", "pytest.ini", "start.sh",
+    ]
+    import glob as _glob
+
+    _missing = [f for f in _expected if not (_REPO_ROOT / f).is_file()]
+    _req = _glob.glob(str(_REPO_ROOT / "requirements*.txt"))
+    _compose = _glob.glob(str(_REPO_ROOT / "docker-compose*.yml"))
+    if _missing or not _req or not _compose:
+        print(
+            "\n[REPO-ROOT GUARD] ⚠️ 仓库根关键文件缺失（可能被测试误删）："
+            f" 缺失固定文件={_missing}  requirements*.txt={_req}  docker-compose*.yml={_compose}"
+        )
 
 
 # ---------------------------------------------------------------------------
