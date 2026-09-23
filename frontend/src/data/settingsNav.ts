@@ -334,7 +334,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           desc: 'Sync reading status and reviews with Hardcover.',
           items: ['API Token（已设置 / 未设置）', 'Validate token', 'Save'],
         },
-        note: '已实现：API Token 存储（掩码回显，提交掩码 = 不修改）+ 真实连通性验证（向 Hardcover GraphQL 发 { me { id username } } 探针）。⚠️ 其鉴权失败也可能返回 200 + errors 字段，所以不能只看状态码。未支持：状态 / 书评同步（需先做书籍匹配）。',
+        note: '已实现：API Token 存储（掩码回显，提交掩码 = 不修改）+ 真实连通性验证（向 Hardcover GraphQL 发 { me { id username } } 探针）；第 52 期起支持推送阅读状态与书评（按 ISBN → 规范化书名+作者 匹配对方书，匹配不上则跳过并记原因，绝不模糊强推），以及预览 / 立即同步 / 自动推送开关（默认关）。⚠️ 其鉴权失败也可能返回 200 + errors，故每次响应都查 errors 字段。',
       }),
       p('readwise', 'Readwise', 'Readwise', 'ready', {
         upstream: {
@@ -342,7 +342,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           desc: 'Send your highlights to Readwise automatically.',
           items: ['Access Token（已设置 / 未设置）', 'Test', 'Enable sync（自动推送高亮）', 'Save'],
         },
-        note: '已实现：Access Token 存储 + 真实验证（向 GET /api/v2/auth/ 发探针）。⚠️ Readwise 用 204 表示验证通过（不是 200）——按 200 判定会把有效凭据误判为失败。未支持：自动推送高亮与「Enable sync」开关。',
+        note: '已实现：Access Token 存储 + 真实验证（GET /api/v2/auth/ 探针，204 即通过，不是 200）；第 52 期起支持推送书摘（按批 ≤100、外带稳定 id 作去重键、限流退避），Enable sync 即 auto_push 开关（默认关）+ 预览 / 立即同步 / 自动推送。⚠️ 仍按 204 判定成功。',
       }),
       p('storygraph', 'StoryGraph', 'StoryGraph', 'ready', {
         upstream: {
@@ -351,7 +351,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['_storygraph_session（Cookie，已设置 / 未设置）', 'remember_user_token（Cookie，已设置 / 未设置）', 'Validate cookies', 'Save'],
           uncaptured: '上游说明：StoryGraph 无公开 API，此集成复用登录态 Cookie，可能因对方改版失效。',
         },
-        note: '已实现：两个 Cookie 的存储（掩码回显）。不做自动验证与同步 —— StoryGraph 没有公开 API，上游自己也只能用登录态 Cookie 并注明可能失效；本项目如实标注，而不是放一个点了没用的「Validate cookies」。',
+        note: '已实现：两个 Cookie 存储（掩码回显）+ 第 52 期起提供真实可用的 Cookie 有效性校验（用两个 Cookie 请求对方站点，最终跳登录页 / 命中登录表单即失效，200 且无障碍即有效，连接异常单独归类；纯启发式，对方改版即可能失效）。不做同步 —— StoryGraph 无公开 API，上游亦只能靠登录态 Cookie。',
       }),
     ],
   },
@@ -362,7 +362,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
     icon: 'settings',
     pages: [
       p('admin/book-dock', 'Book Dock', '收书目录', 'ready', {
-        note: '已实现：投递目录（= 输入目录）+ 监听状态与启停 + 自动处理开关 + 处理计数 + 入库后自动抓元数据（watcher 旁路调用 auto_fetch，按所属库的策略执行；达到置信度阈值的字段自动定稿，低于阈值的只列在预览页等人工确认）。',
+        note: '已实现：投递目录（= 输入目录）+ 监听状态与启停 + 自动处理开关 + 处理计数 + 入库后自动抓元数据（watcher 旁路调用 auto_fetch，按所属库的策略执行）；第 52 期起支持自动定稿（开关映射 auto_on_import、阈值界面 0–100 内部换算 0–1、合并模式预设 覆盖 / 安全合并 / 仅用内嵌 映射既有 fields 逐字段策略），入库目标沿用各库自己的来源目录（不做单点目标库 / 文件夹设置）。',
         upstream: {
           title: 'Book Dock',
           desc: 'Quick actions shown on book pages.',
@@ -378,10 +378,10 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['UPLOAD FONTS', 'SERVER FONTS'],
           items: ['上传字体（TTF / OTF / WOFF / WOFF2，单个 ≤50MB）', '字体列表（上限 200，对所有用户生效）'],
         },
-        note: '已实现：与「阅读字体」共用同一份字体库（本项目单用户部署，无「每用户 / 服务端」两级），上限 200。',
+        note: '已实现：与「阅读字体」共用同一份字体库（本项目单用户部署，无「每用户 / 服务端」两级），上限 200；第 52 期起同族字体的 Regular / Bold / Italic 变体按字重 / 斜体归组并注入对应 @font-face，阅读器套用加粗 / 斜体时命中真实变体而非浏览器合成。',
       }),
       p('admin/audit-log', 'Audit Log', '审计日志', 'ready', {
-        note: '已实现：直接读活动日志并显示操作者（actor 为本次新增，历史条目按「未记录」渲染）+ 类别归并 + 按动作/结果/关键字筛选。上游是独立审计子系统，本项目复用活动日志。',
+        note: '已实现：直接读活动日志并显示操作者（actor 为本次新增，历史条目按「未记录」渲染）+ 类别归并 + 按动作/结果/关键字筛选 + 第 50 期加载更多与导出 CSV；第 52 期起支持留存策略（按大小轮转 / 保留 N 份 / 可选压缩，默认关闭 = 单文件一直追加）。',
         upstream: {
           title: 'Audit Log',
           desc: '带操作者与类别的审计流水。',

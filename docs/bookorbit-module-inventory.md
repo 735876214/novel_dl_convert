@@ -494,3 +494,21 @@
 - 验证：前端 `type-check` 0 错 + `test:unit` 62 + `build` + `deploy`；后端全量 pytest（基线 725）；`check_doc_anchors.py` 硬错 0；无头浏览器冒烟 6 页控制台 0 错误。
 - 提交：`cd9e63f`（封面样式）+ `3ebb529`（布局）+ `b88d271`（漫画）+ `7a7d133`（电子书）+ `d2ca0f4`（有声书 / PDF）+ 文档与记忆（见后续提交）。
 - ⚠️ **锚点披露**：本期在 `views/ShelfView.vue`（+约 120 行）、`components/reader/ComicReader.vue`、`views/ReaderView.vue` 上加了较多行 ⇒ `docs/bookorbit-capability-gap.md` §2「书架与浏览」里指向 `ShelfView.vue` 的若干「实测行号」**整体后移**。本期未逐条重取 —— 那些锚点本就落在工具的「需人工看（该句没点名符号）」桶内（该桶 265 条、历史引用 465 条，与前两期**逐条一致**），`check_doc_anchors.py` 判「**硬错 0 / 疑似漂移 14**」与前一期**完全相同**。**下次触碰书架域时应整域重测**（对齐第 33 期的做法）。
+
+## 第 52 期更新（2026-09-24）：外部账号同步闭环 + 服务端三项补齐
+
+把「外部账号」与「服务端」两组设置页的剩余能力补齐为「真的能用」。全部新增能力**默认关闭**；失败不阻塞主流程；前端零外部请求（出网一律后端发起）；无真实凭据不做真实外呼验证（推送逻辑以「打桩 httpx + 断言请求形状与映射」的契约测试钉住）。
+
+- **集成同步层（新增 `core/sync.py`）**：与 `core/integrations.py`（凭据 + 探针）分工 —— 前者管匹配 + 推送编排，后者只管凭据与探针。`SERVICES` 元数据补 `sync` / `auto_push` 默认字段，前端据此渲染。
+  - 书籍匹配（三方共用）：`match()` 两段式 —— ISBN 精确 → 规范化书名+作者 → 跳过并记原因，绝不模糊强推；匹配结果仅过程内使用，不新增持久化字段。
+  - Hardcover 推送：GraphQL 按 ISBN / 书名+作者 search 取对方 `book_id`（取不到跳过），写阅读状态 + 评分 + 书评；状态映射（unread/reading/finished/paused/abandoned → want_to_read/currently_reading/read/paused）；**每次响应都查 `errors`**（鉴权失败也可能是 200）。
+  - Readwise 推送：`POST /api/v2/highlights/`，每批 ≤100，`external_id` 用批注稳定 id 作去重键；带笔记无划线的批注 `text` 回落章节名、`note` 放正文；限流退避，**204 才是成功**。
+  - StoryGraph Cookie 校验：`verify_storygraph()` 用两个 Cookie 请求对方站点，跳登录页 / 命中登录表单即失效，200 无障碍即有效，连接异常单独归类；纯启发式，页面如实写明可能失效。
+  - 统一结果 `{ok,service,matched,pushed,skipped:[{id,reason}],failed:[{id,error}],at}` + 写 1 条 `tasks` 表记录（`type='sync'`，不新增表）；自动推送（默认关）在批注 / 状态写入口旁路触发，捕获全部异常绝不阻塞。
+  - 接口：`POST /api/integrations/{svc}/preview`、`POST /api/integrations/{svc}/sync`、`POST /api/integrations/storygraph/verify`；前端 `IntegrationPage.vue` 补预览 / 立即同步 / 自动推送开关 / StoryGraph 校验，未支持卡收敛（移除「同步任务」「同步历史与失败重试」，保留「反向同步」）。
+- **审计日志留存（`core/activity_log.py`）**：新增 `logs.retention.{enabled,max_bytes,keep,compress}`（沿用 config 默认段 + 设置覆盖层）。`log()` 追加后按**大小**阈值（非时间）滚动归档（`activity-YYYYMMDD-HHMMSS.log[.gz]`），超 `keep` 份删最旧；用既有 `_lock` 包住。`_read_tail` 改为「当前 + 最新归档」合并再取尾 N，保证 `recent/actors` 滚动后仍连续；`clear()` 连归档一起删；`GET /api/logs/download` 仍下当前文件。降级一律吞掉不阻塞。后端随 `GET /api/logs` 返回 `storage`（bytes/archives/retention），审计页新增留存策略卡；保存配置后清 5 秒缓存。测试 `tests/test_activity_log_retention.py`（22 项）。
+- **服务端字体变体（`core/fonts.py` + `stores/fonts.ts`）**：`_style_to_weight_italic` 解析子样式串 → 字重(100–900)+斜体，`_metrics` 交叉校验 OS/2 `usWeightClass` + head `macStyle`；`list_fonts`/`save_font` 项补 `weight/italic/family_key`（族名归一，解析不出留空 = 不猜）。`injectFontFaces` 为每个变体输出带 `font-weight`/`font-style` 的 `@font-face`，同族归到同一 family；阅读器选加粗/斜体命中真实变体而非合成。前端字体选择器按族分组。测试 `tests/test_font_variants.py`（7 项）。
+- **收书目录 AUTO-FINALIZE（`core/metafetch.py`）**：新增 `preset_to_fields(preset)` 把合并模式预设映射到既有 `fields` 逐字段策略（overwrite/fill_only/safe_merge→fill_only/embedded_only→skip，未知回落 overwrite）。Book Dock 页新增自动定稿卡：开关→`metadata_fetch.auto_on_import`（开时一并开 `enabled`）、阈值界面 0–100↔内部 0–1、合并预设→`fields`；入库目标沿用各库自己的来源目录（不做单点设置）。测试 `tests/test_metafetch_presets.py`（5 项）。
+- **配置层**：`integrations.<svc>.auto_push`、`logs.retention.*` 入 `config.py` 默认段；`EDITABLE` / `GET /api/config` / `settingsFields.SECTION_KEYS` 三处同步点已含相关键（`logs` 单开分区只提交 `logging`，避免连带提交 network/download 草稿）。
+- **验证**：前端 `type-check` 0 错 + `build` + `deploy`；后端全量 pytest（**762 通过 / 0 失败**，基线 725 + 本期 34 项新测试）；`check_doc_anchors.py` 硬错 0。提交：审计留存 `ad51dee`、字体变体 `5ed287b`、自动定稿 `f99cc70`；settingsNav 六条 note 与三份文档同步。
+- ⚠️ **锚点披露**：本期在 `core/fonts.py` / `core/metafetch.py` / `core/activity_log.py` / `core/sync.py` / `server.py` / `lib/api.ts` 上加了较多行 ⇒ `capability-gap.md` 指向这些文件的「实测行号」**整体后移**；本期未逐条重取，沿用「硬错 0 / 疑似漂移保留」口径，历史实施记录不改写。
