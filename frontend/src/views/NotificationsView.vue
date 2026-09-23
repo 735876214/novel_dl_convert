@@ -25,15 +25,19 @@ const ui = useUiStore()
 const items = ref<NotificationItem[]>([])
 const loading = ref(true)
 const busy = ref(false)
+/** 加载失败信息：失败不能当空态（否则「拉不到」会被误读成「没有通知」）。 */
+const error = ref('')
 const filter = ref<'all' | 'fail' | 'ok'>('all')
 const prefs = ref<NotifyPrefs>(readNotifyPrefs())
 
 async function load(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     items.value = (await api.notifications(200)).items
-  } catch {
+  } catch (e) {
     items.value = []
+    error.value = e instanceof Error ? e.message : '加载失败'
   }
   loading.value = false
 }
@@ -125,6 +129,17 @@ const TABS = [
     </div>
 
     <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+
+    <!-- 加载失败：给错误文案 + 重试，不得退化成「暂无通知」 -->
+    <Card v-else-if="error" padding="sm" class="mb-4">
+      <div class="flex flex-wrap items-center gap-2 text-[12px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>加载通知失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" :disabled="busy" @click="load">
+          重试
+        </Button>
+      </div>
+    </Card>
 
     <div v-else-if="filtered.length" class="flex flex-col gap-2">
       <Card
