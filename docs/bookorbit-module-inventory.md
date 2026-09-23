@@ -414,3 +414,17 @@
   （与第 46 期 ReadingLog / HighlightOfTheDay 同修法）。
 - **浏览器冒烟**：无头浏览器认证后加载 `/annotations`、`/reading-activity`、`/collections`、`/whats-new`，
   控制台 0 错误（第 44 期误清空回归在**运行时**确认已修复，此前只跑了 type-check + build）。
+
+## 十一、第 48 期更新（2026-09-23）：三页质量一过（成就 / 探索发现 / 智能书架）
+
+第 47 期滚动项的落地。三页此前均已「已覆盖」，本期只做**质量 / 深化一过**，零后端改动、无新路由 / 表：
+
+- **智能书架**（`SmartScopesView`）：`load()` 原用 `catch { /* ignore */ }` 吞错 ⇒ 失败被当成「还没有自定义书架」。
+  改为**错误态 + 重试**；规则编辑器各控件补 `aria-label`（名称 / 匹配方式 / 字段 / 操作符 / 值）。
+- **成就**（`AchievementsView`）：加载失败原只 `ui.toast`、底部兜底成「成就加载失败」空态 ⇒ 改为**可重试的错误态**
+  （与空态分离）；新增**解锁状态筛选**（全部 / 已解锁 / 未解锁）+ **分组进度条**；「重算成就」按钮改为仅在
+  数据已加载且开启时显示（原先 `data?.enabled !== false` 在加载失败时也会显示）。
+- **探索发现**（`ExploreView`）：预览弹窗补 `role="dialog"` / `aria-modal` / `aria-labelledby` 与 **Esc 关闭**
+  （`onMounted` / `onUnmounted` 挂卸监听）；结果区新增「共 N 条结果」计数。
+- **验证**：前端 `type-check` 0 错 + `test:unit` 62 + `build` + `deploy` 全绿；playwright 冒烟三页认证后
+  **控制台 0 错误**；后端全量 **725 passed / 0 failed**（本期无新增后端用例）。
