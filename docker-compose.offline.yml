@@ -1,0 +1,32 @@
+# 离线 / 本地调试用「叠加文件」—— **不会自动生效**，必须显式叠加在基础文件之上：
+#
+#   docker compose -f docker-compose.yml -f docker-compose.offline.yml up -d
+#
+# 用途：没有外网、或测试版镜像缺失时，用本机已存在的真实版镜像启动，并复用宿主机
+# ./novelforge 目录（含本地 `npm run build && npm run deploy` 产出的 static/v2），
+# 这样改前端只需刷新浏览器、改 Python 只需 restart 容器，无需重建镜像。
+#
+# 它相对基础文件的差异只有三处：
+#   1. pull_policy: never      禁掉一切拉取（断网也能起）
+#   2. 端口 8992 → 8993        便于与真实容器同时运行、互相不抢端口
+#   3. 挂载 ./novelforge       用宿主机源码覆盖镜像内源码
+#
+# ⚠️ 本文件原名为 docker-compose.override.yml，那个名字会被 Compose **自动合并**进
+#    docker-compose.yml —— 结果是 NAS 上一条普通的 `docker compose up -d` 会静默变成
+#    「8993 端口 + 不拉镜像 + 挂一个 NAS 上并不存在的 ./novelforge」。故改名，
+#    只有显式 `-f` 才生效。
+#
+# 常用命令：
+#   docker compose -f docker-compose.yml -f docker-compose.offline.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.offline.yml logs -f
+#   docker compose -f docker-compose.yml -f docker-compose.offline.yml restart
+#   docker compose -f docker-compose.yml -f docker-compose.offline.yml down
+
+services:
+  novel_dl_convert:
+    pull_policy: never
+    # !override：整段替换基础文件的 ports，否则 Compose 会把 8992 一起并进来（两个都监听）
+    ports: !override
+      - "8993:8000"
+    volumes:
+      - ./novelforge:/app/novelforge
