@@ -493,24 +493,37 @@ async function addHighlight(color: string): Promise<void> {
       style,
       created_at: Date.now() / 1000,
     })
-  } catch {
-    /* ignore */
+    // 只包裹**新增的这条**：整章重扫会对已包裹文本重复包裹（span 套 span）。
+    await nextTick()
+    const root = contentRef.value
+    if (root) wrapQuote(root, quote, color, style, r.id)
+  } catch (e) {
+    ui.toast(apiErrorMessage(e, '添加批注失败'))
   }
-  await nextTick()
-  applyHighlights()
+}
+
+/** 只解包目标批注的 span，**不重建正文 DOM** —— 保住滚动位置 / 选区 / 阅读进度。 */
+function unwrapAnnotation(id: number): void {
+  const root = contentRef.value
+  if (!root) return
+  root.querySelectorAll(`[data-anno-id="${id}"]`).forEach((el) => {
+    const parent = el.parentNode
+    if (!parent) return
+    while (el.firstChild) parent.insertBefore(el.firstChild, el)
+    parent.removeChild(el)
+    if (parent instanceof HTMLElement) parent.normalize()
+  })
 }
 
 async function removeAnnotation(id: number): Promise<void> {
   try {
     await api.deleteAnnotation(bookId.value, id)
-  } catch {
-    /* ignore */
+  } catch (e) {
+    ui.toast(apiErrorMessage(e, '移入垃圾桶失败'))
+    return
   }
   annotations.value = annotations.value.filter((a) => a.id !== id)
-  // v-html 已渲染的高亮 span 无法精确回滚，直接按源 HTML 重绘再套用剩余高亮
-  if (contentRef.value) contentRef.value.innerHTML = html.value
-  await nextTick()
-  applyHighlights()
+  unwrapAnnotation(id)
 }
 
 async function jumpTo(a: Annotation): Promise<void> {
