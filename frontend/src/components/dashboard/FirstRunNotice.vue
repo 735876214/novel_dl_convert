@@ -23,7 +23,7 @@ const library = useLibraryStore()
 
 function createLibrary(): void {
   // 直达新建弹窗（`?new=1`，见 LibrariesView 的 onMounted）
-  void router.push('/tools/libraries?new=1')
+  void router.push('/settings/libraries?new=1')
 }
 </script>
 

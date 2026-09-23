@@ -664,7 +664,7 @@ def by_id(bid: str) -> "dict | None":
         libs = "、".join(sorted({str(h.get("library_id")) for h in hits}))
         raise BookIdConflict(
             f"《{names}》在多个书库中同名（{libs}），本服务无法确定是哪一本。"
-            f"请到「工具 → 书库管理 → 跨库同名冲突」一键改名消除冲突后重试"
+            f"请到「设置 → 书库管理 → 跨库同名冲突」一键改名消除冲突后重试"
         )
     return hits[0] if hits else None
 

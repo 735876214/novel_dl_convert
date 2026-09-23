@@ -124,7 +124,7 @@ async function enableAuto(): Promise<void> {
 
 function goManage(): void {
   open.value = false
-  router.push({ name: 'tools-libraries' })
+  router.push({ name: 'settings-libraries' })
 }
 </script>
 

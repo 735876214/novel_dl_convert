@@ -37,7 +37,7 @@ const STEPS = computed<TourStep[]>(() => {
         icon: 'plus',
         title: '先建一个书库',
         body: '书要落进书库才有位置。新建一个书库并指定它的来源目录，之后的下载、上传与投递才有地方可放 —— 在此之前它们会被拒收。',
-        cta: { label: '新建书库', to: '/tools/libraries?new=1' },
+        cta: { label: '新建书库', to: '/settings/libraries?new=1' },
       }
     : {
         icon: 'library',

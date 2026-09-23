@@ -6,10 +6,11 @@
 即随现有门禁执行。
 
 钉住的四件事：
-1. 上游 41 页逐页有落点（用只读占位页承载「本项目不做」的那些页）；
+1. 上游 41 页「要么有落点，要么在 `REMOVED_UPSTREAM` 里显式声明已移除」—— 放行已裁决
+   移除的页（对照记录在 `docs/bookorbit-settings-inventory.md`），但不放过静默漏页；
 2. `path` / `name` 全局唯一（重复会被 vue-router 静默覆盖，侧栏还会出现重复 key）；
 3. `status === 'ready'` 的页必须已注册组件，且组件表里没有多余条目；
-4. 占位页必须同时带 `upstream` 与 `note`（禁止只放空页面）。
+4. 占位页（第 49 期后应为**空集**）必须同时带 `upstream` 与 `note`。
 """
 
 from __future__ import annotations
@@ -35,14 +36,34 @@ UPSTREAM_TITLES = [
 
 # 上游有、本项目不做 → 只读占位页。双向断言：既不能少（漏页），也不能多（新增占位页属于
 # 「又决定不做一页」，应当显式改这里，避免悄悄退化）。
-EXPECTED_PLACEHOLDERS = {
+# 第 49 期：libraries 转为真实操作页（设置页承载书库管理），其余 12 个占位页经裁决**删除**
+# ⇒ 占位页集合清零（机制保留，供将来复用）。
+EXPECTED_PLACEHOLDERS: set[str] = set()
+
+# 第 49 期裁决移除的 11 个上游页（按上游标题声明）：删条目即删路由，逐页理由与上游结构
+# 对照保留在 docs/bookorbit-settings-inventory.md。**显式列出**是为保住「上游页不静默漏掉」
+# 的性质：上游若新增一页，必须二选一 —— 给它落点，或加进这里并说明为何不做。
+REMOVED_UPSTREAM = {
+    "Icons",
+    "Language",
+    "Privacy & Sharing",
+    "Restrictions",
+    "Kobo",
+    "Email",
+    "Users",
+    "Account Activity",
+    "Magic Links",
+    "OIDC / SSO",
+    "Requests",
+}
+
+#: 第 49 期移除页的**设置页 path**（与 REMOVED_UPSTREAM 对应；含本项目补充的 koreader-upstream）。
+#: 断言它们既不在注册表、也不在组件表 —— 防止「删了条目却漏删组件」的半删状态。
+REMOVED_PAGE_PATHS = {
     "appearance/icons",
-    # appearance/layout 与 appearance/behavior 已于第 32 期做实（改标 ready + 注册组件），
-    # 从本清单移出 —— 它们不再是占位页。
     "appearance/language",
     "account/privacy",
     "account/restrictions",
-    "libraries",
     "kobo",
     "koreader-upstream",
     "email",
@@ -54,7 +75,8 @@ EXPECTED_PLACEHOLDERS = {
 }
 
 # 本项目补充项：上游没有这一页，界面上要标「本项目补充」
-EXPECTED_OWN = {"komga", "koreader-upstream"}
+# 第 49 期：koreader-upstream 随「上游对照占位页清理」一并删除，只剩 komga。
+EXPECTED_OWN = {"komga"}
 
 PAGE_RE = re.compile(r"^\s*p\('([^']+)', '([^']+)', '([^']+)', '(ready|placeholder)', \{", re.M)
 COMPONENT_RE = re.compile(r"^\s{2}'?([\w\-/]+)'?:", re.M)
@@ -93,7 +115,9 @@ def _registered_components() -> set[str]:
 
 def test_page_count_and_uniqueness() -> None:
     pages = _pages()
-    assert len(pages) == 48, f"设置页数量应为 48（41 上游 + 7 本项目补充），实际 {len(pages)}"
+    assert len(pages) == 36, (
+        f"设置页数量应为 36（第 49 期删 12 页后：上游 30 有落点 + 本项目补充 6），实际 {len(pages)}"
+    )
     paths = [p[0] for p in pages]
     assert len(set(paths)) == len(paths), f"路由 path 重复：{_dups(paths)}"
     # name 由 path 派生（settings- + path 里的 / 换成 -），path 唯一即 name 唯一
@@ -118,10 +142,18 @@ def test_说明文案是纯文本不带标记符号() -> None:
     assert not bad, f"这些说明文案带了会被原样显示的标记符号：{bad[:2]}"
 
 
-def test_every_upstream_page_has_a_landing() -> None:
+def test_every_upstream_page_is_landed_or_explicitly_removed() -> None:
+    """上游 41 页：要么有落点，要么在 `REMOVED_UPSTREAM` 里显式声明已移除。
+
+    第 49 期把「逐页有落点」放宽为「有落点或显式已移除」—— 删除是**裁决**，不是遗忘；
+    上游新增一页时这条测试会逼出一个明确决定。两侧都查：既不许漏，也不许自相矛盾。
+    """
     text = _read(NAV_TS)
-    missing = [t for t in UPSTREAM_TITLES if f"title: '{t}'" not in text]
-    assert not missing, f"上游设置页在本项目无落点（需补占位页）：{missing}"
+    landed = {t for t in UPSTREAM_TITLES if f"title: '{t}'" in text}
+    missing = [t for t in UPSTREAM_TITLES if t not in landed and t not in REMOVED_UPSTREAM]
+    assert not missing, f"上游设置页既无落点也未声明移除：{missing}"
+    both = landed & REMOVED_UPSTREAM
+    assert not both, f"这些页既声明已移除、又仍是落点：{sorted(both)}"
 
 
 def test_placeholder_pages_have_upstream_and_note() -> None:
@@ -147,22 +179,14 @@ def test_ready_pages_match_registered_components() -> None:
     )
 
 
-def test_no_console_error_path_for_new_pages() -> None:
-    """新增的 10 个上游未支持页一律不得登记组件（登记了就不是占位页了）。"""
+def test_removed_pages_are_gone() -> None:
+    """第 49 期移除的 12 页：既不在注册表，也不注册组件（防「删条目漏删组件」的半删状态）。"""
+    pages = {p[0] for p in _pages()}
     registered = _registered_components()
-    new_pages = {
-        "appearance/language",
-        "account/privacy",
-        "account/restrictions",
-        "kobo",
-        "email",
-        "admin/users",
-        "admin/account-activity",
-        "admin/magic-links",
-        "admin/oidc",
-        "admin/requests",
-    }
-    assert not (new_pages & registered), f"未支持页不应注册组件：{sorted(new_pages & registered)}"
+    still_pages = sorted(REMOVED_PAGE_PATHS & pages)
+    still_registered = sorted(REMOVED_PAGE_PATHS & registered)
+    assert not still_pages, f"已移除页仍在注册表：{still_pages}"
+    assert not still_registered, f"已移除页仍注册了组件：{still_registered}"
 
 
 def test_settings_home_points_to_existing_page() -> None:

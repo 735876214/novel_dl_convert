@@ -90,7 +90,7 @@ function convertFiles(fileList: FileList | File[]): void {
   // 0 库时提前拦下（第 38 期）：`/convert` 会 400 拒收（「还没有书库…」），
   // 与其把文件读进内存再让后端退回来，不如先把话说明白。
   if (library.hasNoLibraries) {
-    ui.toast('还没有书库：先到「工具 → 书库管理」新建一个书库，转换结果才有地方落')
+    ui.toast('还没有书库：先到「设置 → 书库管理」新建一个书库，转换结果才有地方落')
     return
   }
 
@@ -144,7 +144,7 @@ function convertByPath(): void {
     return
   }
   if (library.hasNoLibraries) {
-    ui.toast('还没有书库：先到「工具 → 书库管理」新建一个书库，转换结果才有地方落')
+    ui.toast('还没有书库：先到「设置 → 书库管理」新建一个书库，转换结果才有地方落')
     return
   }
   if (!ALLOWED_EXT.includes(extOf(p))) {
@@ -197,7 +197,7 @@ function scan(): void {
         <p class="mt-1 mb-2.5 text-[11.5px] text-muted-foreground">
           <template v-if="library.hasNoLibraries">
             还没有书库：转换结果需要有地方落，现在上传会被拒收。请先到
-            <RouterLink to="/tools/libraries" class="underline">工具 → 书库管理</RouterLink> 新建一个书库。
+            <RouterLink to="/settings/libraries" class="underline">设置 → 书库管理</RouterLink> 新建一个书库。
           </template>
           <template v-else>
             把 TXT 或常见电子书/漫画/音频交给流水线；TXT 会转成带目录的 EPUB，其余格式按原样入库，或交给下方监听目录自动处理。

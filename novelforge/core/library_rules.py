@@ -278,7 +278,7 @@ def guard_conflict(out_dir, rel: str) -> None:
     raise IngestConflict(
         f"已存在同名文件「{base}」（在「{lib_name or other}」中，不同路径）——"
         f"同 id 不同路径会撞车，阅读进度 / 批注无法区分归属。"
-        f"建议改名为「{suggest}」，或到「工具 → 书库管理 → 同名冲突」一键修复",
+        f"建议改名为「{suggest}」，或到「设置 → 书库管理 → 同名冲突」一键修复",
         suggest=suggest,
         existing={"name": hit.get("name"), "library_id": other, "library_name": lib_name},
     )
@@ -350,7 +350,7 @@ def no_library_reason(libs=None, name: str = "") -> str:
     except Exception:                       # noqa: BLE001
         all_libs = []
     if not all_libs:
-        return "还没有书库：请先到「工具 → 书库管理」新建一个书库并指定它的来源目录"
+        return "还没有书库：请先到「设置 → 书库管理」新建一个书库并指定它的来源目录"
     if name and not any(_accepts(l, name) for l in all_libs):
         ext = pathlib.PurePosixPath(str(name)).suffix.lower()
         return (f"没有收得了「{name}」的书库：现有书库的「允许的格式」里都没有 "

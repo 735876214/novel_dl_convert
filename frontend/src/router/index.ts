@@ -87,6 +87,8 @@ export const SETTINGS_PAGE_COMPONENTS: Record<string, Component> = {
   'admin/server-fonts': ReaderFontsPage,
   'library/file-naming': FileNamingPage,
   'library/maintenance': MaintenancePage,
+  // 第 49 期：书库管理并入设置页（原「工具 → 书库管理」入口已移除）
+  libraries: LibrariesView,
   'admin/audit-log': AuditLogPage,
   'admin/book-dock': BookDockPage,
   'ext/conversion': ConversionPage,
@@ -199,14 +201,14 @@ const router = createRouter({
       ],
     },
 
-    // 工具：单页 + 顶部下划线标签栏（ToolsLayout），8 个子路由。
+    // 工具：单页 + 顶部下划线标签栏（ToolsLayout），7 个子路由。
     // 子路由 name 沿用 BookOrbit 的命名（tools-entity-manager 等），便于与上游对照。
+    // 第 49 期：书库管理迁到设置页（settings-libraries），不再占工具页标签。
     {
       path: '/tools',
       component: ToolsLayout,
       children: [
         { path: '', redirect: { name: 'tools-entity-manager' } },
-        { path: 'libraries', name: 'tools-libraries', component: LibrariesView },
         { path: 'entities', name: 'tools-entity-manager', component: EntityManagerView },
         { path: 'duplicates', name: 'tools-duplicate-books', component: DuplicateBooksView },
         { path: 'missing', name: 'tools-missing-resources', component: MissingResourcesView },

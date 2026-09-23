@@ -18,7 +18,8 @@ import { useLibraryStore } from '@/stores/library'
  *      LRU 淘汰，列表 / 筛选 / 滚动位置会反复重建。
  *   3. 上游用 hasPermission 过滤标签，本项目用**库类型的能力清单**过滤
  *      （第 10 期）：漫画库里不显示「本地转换」，有声书库里不显示「书源管理」。
- *   4. 多了「书库管理」一页（上游在设置页里，本项目提到工具页更好找）。
+ *   4. 本项目原有「书库管理」一页，**第 49 期已迁回设置页**（settings-libraries），
+ *      工具页不再单列 —— 与上游一致：书库管理本就属于设置页。
  */
 
 interface ToolSection {
@@ -28,9 +29,8 @@ interface ToolSection {
   feature?: string
 }
 
-/** 声明顺序：书库管理 → BookOrbit 的 4 个工具 → 本项目原有的功能页 */
+/** 声明顺序：BookOrbit 的 4 个工具 → 本项目原有的功能页（书库管理第 49 期已迁到设置页） */
 const SECTIONS: ToolSection[] = [
-  { label: '书库管理', routeName: 'tools-libraries' },
   { label: '实体管理', routeName: 'tools-entity-manager' },
   { label: '重复书籍', routeName: 'tools-duplicate-books' },
   { label: '缺失资源', routeName: 'tools-missing-resources' },

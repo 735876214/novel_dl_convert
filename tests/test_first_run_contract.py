@@ -4,7 +4,7 @@
 可当时全前端没有一处告诉用户「先建书库」—— 反而有十几处把他指向「下载 / 上传 /
 投递」，而那些动作在没有可接收的库时**全都会被后端 400 拒收**：
 
-    {"detail":"还没有书库：请先到「工具 → 书库管理」新建一个书库并指定它的来源目录"}
+    {"detail":"还没有书库：请先到「设置 → 书库管理」新建一个书库并指定它的来源目录"}
 
 第 38 期修的就是这件事。这条修法有两个**极易回潮**的点，所以用纯文本断言钉住
 （仓内前端没有 vitest，配置契约就用 pytest 校验，与 `test_no_defaults_contract.py`
@@ -24,7 +24,7 @@
    后端的拒收是对的，但发生在**用户看不见的地方**：下载会先报「已加入下载队列」
    再在后台失败，投递会把文件留在目录里被反复扫描却永不进库。
 
-4. **所有「去建库」出口指向同一处** `/tools/libraries`。
+4. **所有「去建库」出口指向同一处** `/settings/libraries`（第 49 期起书库管理并入设置页）。
 """
 
 from __future__ import annotations
@@ -48,7 +48,8 @@ DASH = SRC / "views" / "DashboardView.vue"
 NOTICE = SRC / "components" / "dashboard" / "FirstRunNotice.vue"
 
 #: 建库的唯一去处（`?new=1` 直达新建弹窗，见 LibrariesView 的 onMounted）
-LIBRARIES_ROUTE = "/tools/libraries"
+#: 第 49 期起：书库管理从工具页并入设置页，路径 /tools/libraries → /settings/libraries
+LIBRARIES_ROUTE = "/settings/libraries"
 
 #: 必须按 0 库改口的文案宿主 —— 它们要么指错路，要么陈述错误事实
 NO_LIBRARY_CALL_SITES = (SHELF, EXPLORE, LOCAL, DOCK, SIDEBAR, LIBS_VIEW, NOTICE)
@@ -208,7 +209,7 @@ def test_book_dock_投递前先拦():
 # ---------------------------------------------------------------------------
 
 def test_建库出口都指向书库管理页():
-    """0 库时给的出口必须是 `/tools/libraries`，不许另开页面或指向设置页。"""
+    """0 库时给的出口必须是 `/settings/libraries`（设置页的书库管理），不许另开页面。"""
     for f in (NOTICE, TOUR, DOCK, LOCAL):
         src = _read(f)
         assert LIBRARIES_ROUTE in src, f"{f.relative_to(ROOT)} 的建库出口没指向 {LIBRARIES_ROUTE}"

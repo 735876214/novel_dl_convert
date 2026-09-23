@@ -4,8 +4,12 @@ import type { IconName } from '@/lib/icons'
  * 设置页分区注册表 —— 上游（BookOrbit）设置页信息架构的单一数据源。
  *
  * 对齐依据：`docs/bookorbit-settings-inventory.md`（线上实例逐页采集）。
- * 结构刻意与上游一致：6 个分组 / 48 个叶子页，路由为 `/settings/<path>`。
- * 其中上游 41 页**逐页有落点**（含只读占位），另 7 页为本项目补充（标 `own`）。
+ * 结构整体与上游一致：6 个分组 / 36 个叶子页，路由为 `/settings/<path>`。
+ * 上游 41 页里 **30 页有落点**，另 11 页经**第 49 期裁决已移除**（Icons / Language /
+ * Privacy & Sharing / Restrictions / Kobo / Email / Users / Account Activity /
+ * Magic Links / OIDC·SSO / Requests）—— 均为单用户本地库下**永无对象**或**已决策不做**
+ * 的页；逐页理由与上游结构对照保留在 `docs/bookorbit-settings-inventory.md`。
+ * 本项目补充 6 页（`ext` 组 5 页 + `komga`，标 `own`）。
  *
  * 命名约定（迁移要点 2：不自创中文名）：
  *   - `label` = 上游英文原名，**作为对齐基准，不翻译**
@@ -14,6 +18,7 @@ import type { IconName } from '@/lib/icons'
  * 状态约定（迁移要点 3：占位项统一呈现）：
  *   - `ready`       已有真实实现
  *   - `placeholder` 本项目无该后端能力，页面只读展示上游结构并标注「未支持」
+ *     （第 49 期后占位页**清零**，机制保留，供将来新增未支持页时复用）
  */
 
 export interface UpstreamPage {
@@ -114,18 +119,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['Default cover search provider（DuckDuckGo / iTunes / All Sources）', 'Cover display mode（Blurred fit / Fill card / Natural bottom）', 'Book spine overlay（Off / Subtle / Strong）', 'Show spine on comics', 'Book details cover tint（Off / One / Two colours）', 'Cover shadow strength', 'Card overlays（进度条 / 格式 / 评分 / 阅读状态 / 系列号 / 锁定）'],
         },
       }),
-      p('appearance/icons', 'Icons', '图标', 'placeholder', {
-        upstream: {
-          title: 'Icons',
-          desc: 'Choose the icon style used across the app.',
-          groups: ['UPLOAD ICONS', 'CUSTOM ICONS'],
-          items: ['图标风格', '自定义图标上传', '排序（Newest / Name）'],
-          uncaptured: '该页正文仅 134 字符，图标风格选项未渲染为可判定控件。',
-        },
-        // ⚠️ note 是**纯文本插值**（SettingsPlaceholder.vue 用 {{ page.note }} 渲染），
-        // 写 ** 或反引号会原样显示，所以这里不用任何标记符号。
-        note: '已结项（不做）：上游这一页是「图标风格（多套图标集切换）+ 自定义图标上传 + 排序」。本项目的图标是前端的内联 SVG 常量表（lib/icons.ts，约 60 个键，运行时零外部请求 —— 这是 NAS 内网部署的硬要求）：做「风格」要备多套图标集，做「上传」要存储与覆盖机制，成本远超收益。故此页保持只读说明，不新增控件，也不再列为待做项。',
-      }),
       p('appearance/layout', 'Layout', '布局', 'ready', {
         upstream: {
           title: 'Layout',
@@ -143,19 +136,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['Thumbnail clicks（Read first / Open details）', 'Show filter preview by default', 'Collapse series by default'],
         },
         note: '已实现上游该页全部三项（缩略图点击 / 筛选预览默认展开 / 系列默认折叠）—— 故无「未支持」对照卡。三项存本机，与书架视图偏好同一份，不随账号同步。',
-      }),
-      p('appearance/language', 'Language', '界面语言', 'placeholder', {
-        upstream: {
-          title: 'Language',
-          desc: 'Choose the language used across the interface.',
-          groups: ['LANGUAGE'],
-          items: [
-            'Language（下拉，采集实例当前值 English）',
-            'SUGGESTED：English / 简体中文',
-            'ALL LANGUAGES 共 25 项（Bahasa Indonesia、Čeština、Dansk、Deutsch、English、Español、Français、Italiano、Magyar、Nederlands、Polski、Português、Română、Slovenčina、Slovenščina、Suomi、Svenska、Türkçe、Ελληνικά、Русский、Українська、한국어、日本語、简体中文、繁體中文）',
-          ],
-        },
-        note: '未支持：本项目界面文案以中文硬编码，没有 i18n 词表与语言包，切换语言无处可落。上游另有一层「服务端默认语言 + 账号语言覆盖」（未登录时登录页为中文、登录后按账号语言显示），单用户单语场景下这一层同样不存在。',
       }),
       p('reader/ebook', 'eBook', '电子书', 'ready', {
         upstream: {
@@ -220,28 +200,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['Library scanning', 'Metadata fetching', 'Author enrichment', 'File write-back', 'File rename', 'Bulk rename', 'Data migration', 'Book Dock', 'Book requests', 'Email delivery', '（以上每条为 Off / Problems / All 三档）', 'Achievements（Off / All）', "Show \"What's New\" after updates"],
         },
       }),
-      p('account/privacy', 'Privacy & Sharing', '隐私与共享', 'placeholder', {
-        upstream: {
-          title: 'Privacy & Sharing',
-          desc: '控制阅读洞察的共享级别，以及谁能看你的共享主页。',
-          groups: ['PRIVACY & SHARING', 'Profile access history'],
-          items: [
-            'Reading insights sharing level（单选，采集实例当前值 Private）：Private（仅自己可见统计）/ Share summary（只共享聚合习惯，不含书名、作者、系列）/ Share detailed insights（含近期与 Top 书目、作者、系列、题材）',
-            'Profile access history（只读，当前值「No administrator has viewed your shared reading profile.」）',
-          ],
-        },
-        note: '未支持：分享级别与访问记录都以多用户为前提——把阅读洞察共享给其它账号、由管理员查看共享主页。本项目是单用户部署，没有可分享的对象，也没有管理员角色，故整页不提供。',
-      }),
-      p('account/restrictions', 'Restrictions', '内容限制', 'placeholder', {
-        upstream: {
-          title: 'Restrictions',
-          desc: 'Your account has full access to all content within your assigned libraries.',
-          groups: ['（空态 No content restrictions）'],
-          items: ['内容限制（只读，采集实例当前值 No content restrictions）'],
-          uncaptured: '采集账号本身无内容限制，限制项的具体控件形态（如分级 / 按书库屏蔽）未能采集。',
-        },
-        note: '未支持：内容限制建立在「每账号可见书库」这套权限模型上，本项目单用户可访问全部书库，没有可配的限制项，故整页不提供。',
-      }),
     ],
   },
   {
@@ -250,15 +208,14 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
     zh: '书库',
     icon: 'library',
     pages: [
-      p('libraries', 'Libraries', '书库管理', 'placeholder', {
+      p('libraries', 'Libraries', '书库管理', 'ready', {
         upstream: {
           title: 'Libraries',
           desc: 'Scan paths, watched folders, and ingest rules.',
           groups: ['LIBRARY', 'CONTENTS', 'AUTOMATION', 'LAST SCAN'],
           items: ['书库列表（组织模式 / 文件夹 / 书数 / 占用 / 格式分布）', 'Watch folders', 'Scheduled scan', 'Write to file', 'Rename files', '最后扫描状态与原因', 'Scan All', 'Add Library', '排序（默认 / 名称 / 书数 / 占用 / 最后扫描）'],
         },
-        link: { to: '/tools/libraries', label: '工具 → 书库管理' },
-        note: '已实现（第 10 期）：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用，一个库可引用多个来源文件夹）、来源文件夹投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、按子目录名 / 格式 / 关键词自动归库、以及「库类型 → 功能显隐」。已实现（第 13 期）：每库独立覆盖投递布局 / 产物格式、递归与复制非 txt、元数据抓取策略与字段、命名规则（未覆写则继承全局）；以及入库时的跨库同名拦截与工具页一键改名。本页只作上游结构对照，实际操作在「工具 → 书库管理」。',
+        note: '本页即操作页（第 49 期起，原「工具 → 书库管理」入口已并入此处，工具页不再单列）。已实现（第 10 期）：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用，一个库可引用多个来源文件夹）、来源文件夹投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、按子目录名 / 格式 / 关键词自动归库、以及「库类型 → 功能显隐」。已实现（第 13 期）：每库独立覆盖投递布局 / 产物格式、递归与复制非 txt、元数据抓取策略与字段、命名规则（未覆写则继承全局）；以及入库时的跨库同名拦截与一键改名。',
       }),
       p('metadata/providers', 'Providers', '元数据来源', 'ready', {
         upstream: {
@@ -341,36 +298,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
     zh: '设备',
     icon: 'layers',
     pages: [
-      p('kobo', 'Kobo', 'Kobo 同步', 'placeholder', {
-        upstream: {
-          title: 'Kobo',
-          desc: 'Kobo 设备注册、双向进度同步与 KEPUB 投递。',
-          groups: ['REGISTERED DEVICES', 'SYNC PREFERENCES', 'Progress Thresholds', 'KEPUB CONVERSION LIMIT'],
-          items: [
-            '设备列表 + Add device（每台显示名称与最后同步时间）',
-            'Two-way progress sync（双向同步阅读进度，需 KEPUB 投递；收藏夹需先开启 Sync to Kobo，未开启的收藏夹不同步）',
-            'Sync BookOrbit highlights to Kobo（反向始终导入；开启后支持双向编辑 / 删除）',
-            'Include Kobo store titles（一并投递 Kobo 商店 / Kobo Plus / 已购书目，不进本库）',
-            'Convert to KEPUB（符合条件的 EPUB 转 KEPUB；开启进度或高亮同步时强制保持）',
-            'Force hyphenation（统一两端对齐，会重建缓存的 KEPUB）',
-            'MARK AS READING 阈值（采集实例当前值 1%）/ MARK AS FINISHED 阈值（当前值 99%）',
-            'KEPUB 转换大小上限（当前值 100 MB；超限则按普通 EPUB 发送，届时不同步阅读位置）',
-            '底部 Save Sync Settings（提示 Changes must be saved to take effect.）',
-          ],
-          uncaptured: '页内有 Sync Settings / Activity Log 两个标签，只采集了默认标签；各开关的当前值未能采集。',
-        },
-        note: '未支持：不做 Kobo 设备同步（设备注册、双向进度、KEPUB 投递、书店书目混投均不做）。上游的 Progress Thresholds（标记在读 1% / 已读完 99%）在本项目已可配置：阅读阈值的「在读下界」与「已读完阈值」是设置项，每库可单独覆写，默认 0% 与 99.5%（默认值沿用本项目既有口径，不是上游的 1% / 99%）。统计、书架、成就、Komga 客户端同源，入口在 core/lib_settings.reading_thresholds。阅读状态本身仍是落表的真实字段（想读 / 在读 / 搁置 / 弃读），阈值只管没有状态行时的进度兜底。',
-      }),
-      p('koreader-upstream', 'KOReader (upstream)', 'KOReader 上游对照', 'placeholder', {
-        upstream: {
-          title: 'KOReader',
-          desc: 'Progress sync and document matching.',
-          groups: ['KOREADER STATUS', 'SETUP', 'DEVICES', 'PLUGIN ACTIVITY', 'UNMATCHED KOREADER BOOKS', 'MANUAL KOREADER LINKS', 'SETUP GUIDE', 'DANGER ZONE'],
-          items: ['Progress sync 开关', '同步账号与凭据', 'KOReader sync URL', '预置 BookOrbit 插件下载', '设备管理（退役 / 删除数据）', '未匹配书目与手动链接', '删除同步凭据'],
-        },
-        note: '对照上游 KOReader 设置页；本项目实际对接在「KOReader 进度互通」（kosync 协议服务端），此页仅列上游结构供比对。',
-        own: true,
-      }),
       p('opds', 'OPDS', 'OPDS', 'ready', {
         upstream: {
           title: 'OPDS',
@@ -380,22 +307,13 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
         },
         note: '已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页（?page=）与排序（?sort=recent|title|author|series&order=）。第 14 期起支持按书库分别暴露：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 /opds/lib/<库 id>，可在「工具 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404）。鉴权用 HTTP Basic + 应用账号（OPDS 客户端只会发 Basic，所以 /opds 不走 /api 的 Bearer 中间件）。未支持：独立 OPDS 账号体系。',
       }),
-      p('email', 'Email', '邮件投递', 'placeholder', {
-        upstream: {
-          title: 'Email',
-          desc: 'SMTP 提供者、收件人、分组、模板、偏好与发送历史。',
-          groups: ['SMTP PROVIDERS', 'PROVIDER NOTES'],
-          items: [
-            'SMTP 提供者列表 + Add provider（采集实例为空态：No providers yet. Add an SMTP provider to start sending emails.）',
-            'System 提供者（仅超级用户可见，用于密码重置邮件）',
-            'Default 提供者（未显式指定提供者时用于送书）',
-            'Shared 标记（标记后对所有用户可用）',
-          ],
-          uncaptured: '页内有 Providers / Recipients / Groups / Templates / Preferences / History 六个标签；实例无 SMTP 提供者，其余 5 个标签均为空态，未能采集。',
-        },
-        note: '未支持：本项目没有邮件投递链路——不发通知邮件、不做邮件送书、也不需要密码重置邮件（账号在本机维护）。上游「通知」页的多档开关在本项目同样只做客户端过滤，没有投递渠道。',
-      }),
       p('koreader', 'KOReader', 'KOReader 进度互通', 'ready', {
+        upstream: {
+          title: 'KOReader',
+          desc: 'Progress sync and document matching.',
+          groups: ['KOREADER STATUS', 'SETUP', 'DEVICES', 'PLUGIN ACTIVITY', 'UNMATCHED KOREADER BOOKS', 'MANUAL KOREADER LINKS', 'SETUP GUIDE', 'DANGER ZONE'],
+          items: ['Progress sync 开关', '同步账号与凭据', 'KOReader sync URL', '预置 BookOrbit 插件下载', '设备管理（退役 / 删除数据）', '未匹配书目与手动链接', '删除同步凭据'],
+        },
         note: '本项目实现 kosync 协议的服务端：healthcheck / users/auth / users/create / syncs/progress（GET+PUT）。三个必须精确的协议细节：①鉴权头是 x-auth-user / x-auth-key，key = 密码的 MD5（不是 Basic，服务端也只存这个哈希）；②文档标识是 partialMD5（只采样 12 个点，偏移 1024×4^i，i=-1..10，不读第 0 字节、读不满即停），另有 checksum_method=FILENAME 的 md5(basename) 变体，两种都索引；③percentage 是 0–1，progress 对 EPUB 是 XPointer、PDF/漫画是页码。进度映射：DocFragment[N] ↔ 本项目章节序号（N-1），PDF/漫画用页码；反向的 XPointer 只定位到章首，准确位置由 percentage 兜底。未支持：多设备管理、注解/书签同步。',
       }),
       p('komga', 'Komga', 'Komga 库布局', 'ready', {
@@ -443,79 +361,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
     zh: '服务端',
     icon: 'settings',
     pages: [
-      p('admin/users', 'Users', '用户', 'placeholder', {
-        upstream: {
-          title: 'Users',
-          desc: '账号列表、活跃度筛选与新账号默认值。',
-          groups: ['DEFAULTS FOR NEW ACCOUNTS'],
-          items: [
-            '概览统计（采集实例：1 account · 1 with administrator access）',
-            '筛选与搜索（All users / Administrators / Active / Inactive）+ Create user',
-            '账号表列：User（显示名 / 账号）｜Email｜ACCESS（角色，如 Superuser）｜LIBRARIES（如 All 9）｜Last active｜STATUS｜ACTIONS',
-            'Allow self-registration（开启后登录页出现「创建账号」入口）',
-            'Starting libraries（新账号自动获得 Viewer 权限的书库）',
-            'Save（说明：Applies to self-registration and OIDC）',
-          ],
-          uncaptured: '账号表内的邮箱与显示名属个人数据，脱敏未记录；Allow self-registration 的当前值未能采集。',
-        },
-        note: '未支持：本项目是单用户部署——只有一份应用账号，没有角色 / 权限、没有「每账号可见书库」，也没有自助注册与账号创建。用户管理整页不提供。',
-      }),
-      p('admin/account-activity', 'Account Activity', '账号活动', 'placeholder', {
-        upstream: {
-          title: 'Account Activity',
-          desc: '各账号的活跃状态、最后登录与认证方式总览。',
-          groups: ['（概览统计 + 筛选 + 账号活动表）'],
-          items: [
-            '概览统计卡（采集实例：1 Recently active / 0 Dormant / 0 No recorded activity / 0 Disabled）',
-            '筛选：Search accounts、Activity state（Recently active / Dormant / No recorded activity / Disabled）、Authentication method（Local / Administrator-created / OIDC / SSO / Shared magic link）、Sort accounts（Most recently active / Least recently active / Most recent login / Newest accounts / Oldest accounts / Name）+ Apply',
-            '表格列：User｜Account state｜Last login｜Last authenticated｜Created｜Reading insights（如 Not shared）',
-          ],
-          uncaptured: 'Sort accounts 的当前值未能采集。',
-        },
-        link: { to: '/settings/admin/audit-log', label: '本项目对应口径：审计日志' },
-        note: '未支持：本页统计的是多个账号的活跃度与认证方式（含 OIDC / SSO / 免密链接等本项目不存在的登录方式），单用户部署下没有可统计的对象。与之最接近的是本项目「审计日志」——那条流水记录了每次操作与其结果。',
-      }),
-      p('admin/magic-links', 'Magic Links', '免密链接', 'placeholder', {
-        upstream: {
-          title: 'Magic Links',
-          desc: 'Create a shared account from the Users page first to generate magic links.',
-          groups: ['ACTIVE LINKS'],
-          items: [
-            'ACTIVE LINKS 列表 + Create link（采集实例为空态：No shared accounts found）',
-            '免密分享 / 免密码登录链接（先要在 Users 页创建共享账号）',
-          ],
-        },
-        note: '未支持：免密链接是「共享账号」体系的一部分——为他人签发一个无需密码即可访问的链接。本项目单用户部署，没有共享账号，也没有签发对象，故整页不提供。',
-      }),
-      p('admin/oidc', 'OIDC / SSO', 'OIDC / SSO', 'placeholder', {
-        upstream: {
-          title: 'OIDC / SSO',
-          desc: 'Add an OIDC provider to enable single sign-on for your users.',
-          groups: ['PROVIDERS'],
-          items: [
-            'PROVIDERS 列表 + Add Provider（采集实例为空态：No providers yet）',
-            'OIDC provider / claims / 账号开通（provisioning）配置',
-          ],
-          uncaptured: '实例未配置任何 provider，逐项配置表单未能采集。',
-        },
-        note: '未支持：单点登录以「多个用户 + 企业统一身份」为前提。本项目单用户、账号在本机维护，OIDC / SSO 无处可接，故整页不提供。',
-      }),
-      p('admin/requests', 'Requests', '求书', 'placeholder', {
-        upstream: {
-          title: 'Requests',
-          desc: '书源（indexer）与下载客户端配置，用于自动求书与投递。',
-          groups: ['Sources', 'Download clients', 'Automation'],
-          items: [
-            '顶部警告（采集实例：BOOK_REQUEST_ENCRYPTION_KEY is not set, so a client password cannot be saved.）',
-            'Sources：Install a plugin（单文件插件，自己提供并填配置）、Add an indexer（指向自有的 Torznab / Newznab feed，每 feed 一份配置）',
-            '免责声明：BookOrbit 不提供也不背书任何 indexer 源，源全部由你自行配置',
-            'Download clients / Automation（采集实例为空态）',
-          ],
-          uncaptured: 'Download clients 与 Automation 两个标签在实例上为空态，未能采集。',
-        },
-        link: { to: '/settings/ext/network', label: '本项目对应口径：网络与下载' },
-        note: '未支持：上游这套「indexer（Torznab / Newznab）+ 下载客户端 + 自动化规则」的求书体系已决策不做（2026-09-18，见 docs/bookorbit-capability-gap.md 第 9 节）。功能定位相同的等价能力在本项目是「网络与下载」里的书源管理 + 书源下载，入口不同、形态也不同。',
-      }),
       p('admin/book-dock', 'Book Dock', '收书目录', 'ready', {
         note: '已实现：投递目录（= 输入目录）+ 监听状态与启停 + 自动处理开关 + 处理计数 + 入库后自动抓元数据（watcher 旁路调用 auto_fetch，按所属库的策略执行；达到置信度阈值的字段自动定稿，低于阈值的只列在预览页等人工确认）。',
         upstream: {

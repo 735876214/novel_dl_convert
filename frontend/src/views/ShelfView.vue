@@ -81,7 +81,7 @@ function scanShelf(): void {
 }
 
 function manageLibs(): void {
-  router.push('/tools/libraries')
+  router.push('/settings/libraries')
 }
 
 /** 导出全部书目 CSV（含阅读进度/状态/评分），交给系统下载 */

@@ -274,7 +274,7 @@ onBeforeUnmount(() => {
         <p class="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">
           <template v-if="library.hasNoLibraries">
             还没有书库：文件放进来会被<strong>拒收</strong>（没有可接收的库）。请先到
-            <RouterLink to="/tools/libraries" class="underline">工具 → 书库管理</RouterLink>
+            <RouterLink to="/settings/libraries" class="underline">设置 → 书库管理</RouterLink>
             新建一个书库并指定它的来源目录。
           </template>
           <template v-else>

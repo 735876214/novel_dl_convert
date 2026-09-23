@@ -243,7 +243,7 @@ async function onGroupAction(title: string, action: 'add' | 'more'): Promise<voi
   if (title === '库') {
     // 「新增」直达书库管理页的新建弹窗（`?new=1`，见 LibrariesView 的 onMounted）；
     // 「更多」进同一页 —— 库的增删改都在那里，本项目没有第二个书库管理界面。
-    router.push(action === 'add' ? '/tools/libraries?new=1' : '/tools/libraries')
+    router.push(action === 'add' ? '/settings/libraries?new=1' : '/settings/libraries')
     return
   }
   if (title === '智能书架' && action === 'add') {

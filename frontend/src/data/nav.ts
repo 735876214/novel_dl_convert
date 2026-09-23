@@ -86,7 +86,7 @@ export const NAV_GROUPS: NavGroup[] = [
     // ⚠️ 括号里原来是 `items.length`（= 真实书库数 + 1，因为「全部书库」也是一项），
     //    而点下去进的是书架 ⇒ 读的是书库数、看的是全部书。现在口径统一为
     //    「书库实体个数 + 进书库管理页」（与上游同款：`查看全部书库(9)` → /libraries）。
-    more: { label: '查看全部书库', to: '/tools/libraries', countSource: 'libraries' },
+    more: { label: '查看全部书库', to: '/settings/libraries', countSource: 'libraries' },
   },
   {
     title: '智能书架',
