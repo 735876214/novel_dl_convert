@@ -62,20 +62,25 @@ const photoSrc = computed(() => {
 
 const initial = computed(() => name.value.slice(0, 1))
 
+/** 加载失败信息：失败不能退化成「这位作者名下的书被移除了」。 */
+const error = ref('')
+
 async function load(): Promise<void> {
   loading.value = true
   photoFailed.value = false
   editingBio.value = false
   editingSortName.value = false
+  error.value = ''
   try {
     const d = await api.authorDetail(name.value)
     detail.value = d
     books.value = d.books
     bioDraft.value = d.bio
     sortNameDraft.value = d.sort_name
-  } catch {
+  } catch (e) {
     detail.value = null
     books.value = []
+    error.value = e instanceof Error ? e.message : '加载失败'
   }
   loading.value = false
 }
@@ -220,6 +225,15 @@ function pickPhoto(): void {
     <PageHead :title="name" :desc="`共 ${books.length} 本`" />
 
     <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+
+    <!-- 加载失败：可重试的错误态（不与「这位作者名下的书被移除了」空态混淆） -->
+    <Card v-else-if="error" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>作者资料加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
+    </Card>
 
     <template v-else>
       <!-- 作者资料卡：头像 + 传记（在线优先，可本地覆盖） -->

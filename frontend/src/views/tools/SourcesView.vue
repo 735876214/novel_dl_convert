@@ -19,6 +19,8 @@ const ui = useUiStore()
 
 const sources = ref<SourceStatus[]>([])
 const loading = ref(true)
+/** 加载失败信息：失败不能退化成「还没有书源」。 */
+const error = ref('')
 const pasteText = ref('')
 const busy = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -37,12 +39,16 @@ const publicOnly = computed(() => sources.value[0]?.public_only ?? true)
 
 function load(): void {
   loading.value = true
+  error.value = ''
   api
     .sourcesStatus()
     .then((r) => {
       sources.value = r.items ?? []
     })
-    .catch((e: Error) => ui.toast(e.message))
+    .catch((e: Error) => {
+      sources.value = []
+      error.value = e.message
+    })
     .finally(() => {
       loading.value = false
     })
@@ -169,6 +175,13 @@ function fmtTime(ts: number | null): string {
         </p>
 
         <div v-if="loading" class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
+
+        <!-- 加载失败：可重试的错误态（不与「还没有书源」空态混淆） -->
+        <div v-else-if="error" class="flex flex-wrap items-center gap-2 px-4 py-6 text-[12.5px] text-destructive">
+          <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+          <span>书源加载失败：{{ error }}</span>
+          <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+        </div>
 
         <div v-else-if="sources.length" class="max-h-[30rem] overflow-y-auto">
           <div

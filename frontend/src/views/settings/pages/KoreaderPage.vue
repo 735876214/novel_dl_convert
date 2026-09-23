@@ -25,6 +25,8 @@ const st = ref<KoreaderStatus | null>(null)
 const docs = ref<KoreaderDoc[]>([])
 const loading = ref(true)
 const busy = ref(false)
+/** 加载失败信息：失败时头部原会渲染成「已关闭」（假象），须显式报错。 */
+const error = ref('')
 
 const username = ref('')
 const password = ref('')
@@ -34,12 +36,15 @@ const copied = ref(false)
 
 async function load(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     st.value = await api.koreaderStatus()
     username.value = st.value.username
     docs.value = (await api.koreaderDocs()).items
   } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '加载失败')
+    st.value = null
+    docs.value = []
+    error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
     loading.value = false
   }
@@ -110,7 +115,17 @@ async function copyEndpoint(): Promise<void> {
       <span v-else class="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">已关闭</span>
     </div>
 
-    <Card padding="none">
+    <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
+
+    <!-- 加载失败：可重试的错误态（不与「已关闭」混淆） -->
+    <Card v-else-if="error" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <span>KOReader 状态加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
+    </Card>
+
+    <Card v-else padding="none">
       <div class="flex items-center gap-4 border-b border-border px-4 py-3.5">
         <div class="min-w-0 flex-1">
           <div class="text-[13px] font-medium text-foreground">进度同步服务</div>

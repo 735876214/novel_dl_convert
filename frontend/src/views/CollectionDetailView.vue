@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import BookCover from '@/components/ui/BookCover.vue'
 import Button from '@/components/ui/Button.vue'
+import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
@@ -18,13 +19,17 @@ const collections = useCollectionsStore()
 const cid = computed(() => Number(route.params.id))
 const detail = ref<CollectionDetail | null>(null)
 const loading = ref(true)
+/** 加载失败信息：失败不能退化成「这个收藏夹还是空的」。 */
+const error = ref('')
 
 async function load(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     detail.value = await api.collectionDetail(cid.value)
-  } catch {
+  } catch (e) {
     detail.value = null
+    error.value = e instanceof Error ? e.message : '加载失败'
   }
   loading.value = false
 }
@@ -72,6 +77,15 @@ async function removeCollection(): Promise<void> {
     </div>
 
     <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+
+    <!-- 加载失败：可重试的错误态（不与「这个收藏夹还是空的」空态混淆） -->
+    <Card v-else-if="error" padding="sm" class="mb-4">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>收藏夹加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
+    </Card>
 
     <div
       v-else-if="detail && detail.books.length"

@@ -166,6 +166,15 @@ async function commitRename(id: number): Promise<void> {
       </Card>
     </div>
 
+    <!-- 加载失败：可重试的错误态（不与「还没有收藏夹」空态混淆） -->
+    <Card v-else-if="collections.error" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>收藏夹加载失败：{{ collections.error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="collections.load(true)">重试</Button>
+      </div>
+    </Card>
+
     <EmptyState
       v-else
       icon="star"

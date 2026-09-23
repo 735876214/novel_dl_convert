@@ -28,18 +28,22 @@ const form = ref<Record<string, string>>({})
 const loading = ref(true)
 const busy = ref(false)
 const result = ref<IntegrationTestResult | null>(null)
+/** 加载失败信息：失败不能让表单区整个不渲染（会被读成「这家没有可配项」）。 */
+const error = ref('')
 
 const isStorygraph = computed(() => props.service === 'storygraph')
 
 async function load(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     const all = (await api.integrations()).items
     svc.value = all.find((s) => s.id === props.service) ?? null
     // 回显的是掩码：不动它 = 不修改（后端按此约定处理）
     form.value = { ...(svc.value?.values ?? {}) }
   } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '加载失败')
+    svc.value = null
+    error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
     loading.value = false
   }
@@ -97,6 +101,10 @@ async function test(): Promise<void> {
 
     <Card padding="none">
       <div v-if="loading" class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
+      <div v-else-if="error" class="flex flex-wrap items-center gap-2 px-4 py-6 text-[12.5px] text-destructive">
+        <span>凭据配置加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
       <template v-else-if="svc">
         <div
           v-for="f in svc.fields"

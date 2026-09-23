@@ -273,14 +273,20 @@ export const useLibraryStore = defineStore('library', () => {
     return books.value.find((b) => b.id === id) ?? null
   }
 
+  /** 最近一次 `getBookDetail` 的失败原因（空 = 无失败）。详情页据此区分「加载失败」与「找不到」。 */
+  const detailError = ref('')
+
   async function getBookDetail(id: string, force = false): Promise<BookDetail | null> {
     // force：元数据编辑后必须重取 —— 否则概览标签仍显示改之前的标题/作者/简介
     if (!force && details.value[id]) return details.value[id]
+    detailError.value = ''
     try {
       const d = await api.bookDetail(id)
       details.value[id] = d
       return d
-    } catch {
+    } catch (e) {
+      // 失败与「真的没有这本书」必须可区分：详情页据此显示「加载失败 + 重试」而非「找不到」
+      detailError.value = e instanceof Error ? e.message : '加载失败'
       return null
     }
   }
@@ -334,6 +340,7 @@ export const useLibraryStore = defineStore('library', () => {
     scopeCounts,
     findBook,
     getBookDetail,
+    detailError,
     openShelf,
     openSmart,
     openLibrary,

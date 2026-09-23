@@ -30,6 +30,8 @@ const groups = ref<DuplicateGroup[]>([])
 const total = ref(0)
 const loading = ref(true)
 const busy = ref(false)
+/** 加载失败信息：失败不能退化成「没有发现重复书籍」。 */
+const error = ref('')
 /** 书名相似度阈值（%）。变更后重新扫描 —— 分组结果由它决定 */
 const threshold = ref(85)
 const THRESHOLD_PRESETS = [70, 85, 95] as const
@@ -109,6 +111,7 @@ const sections = computed<Array<{ label: string; hint: string; items: DuplicateG
 
 function load(): void {
   loading.value = true
+  error.value = ''
   // 侧栏已拉过；这里防的是直接刷新进工具页时 store 仍为空（内部会早退）
   void library.loadLibraries()
   api
@@ -125,7 +128,11 @@ function load(): void {
       }
       keep.value = next
     })
-    .catch((e: Error) => ui.toast(e.message))
+    .catch((e: Error) => {
+      groups.value = []
+      total.value = 0
+      error.value = e.message
+    })
     .finally(() => {
       loading.value = false
     })
@@ -208,6 +215,14 @@ function apply(): void {
     </p>
 
     <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
+
+    <!-- 加载失败：可重试的错误态（不与「没有发现重复书籍」空态混淆） -->
+    <Card v-else-if="error" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <span>重复书籍加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
+    </Card>
 
     <template v-else-if="groups.length">
       <template v-for="s in sections" :key="s.label || 'all'">

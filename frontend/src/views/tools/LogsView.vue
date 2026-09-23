@@ -48,9 +48,12 @@ const logDir = ref('')
 const keyword = ref('')
 const status = ref('')
 const loading = ref(false)
+/** 加载失败信息：失败不能退化成「没有日志记录」。 */
+const error = ref('')
 
 function load(): void {
   loading.value = true
+  error.value = ''
   api
     .logs({ limit: 300, q: keyword.value, status: status.value })
     .then((r) => {
@@ -59,7 +62,10 @@ function load(): void {
       total.value = typeof r.count === 'number' ? r.count : (r.items?.length ?? 0)
       logDir.value = r.dir ?? ''
     })
-    .catch((e: Error) => ui.toast(e.message))
+    .catch((e: Error) => {
+      items.value = []
+      error.value = e.message
+    })
     .finally(() => {
       loading.value = false
     })
@@ -152,6 +158,14 @@ function downloadLogs(): void {
     </div>
 
     <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
+
+    <!-- 加载失败：可重试的错误态（不与「没有日志记录」空态混淆） -->
+    <Card v-else-if="error" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <span>日志加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
+    </Card>
 
     <Card v-else-if="items.length" padding="none">
       <div class="flex items-center gap-2 border-b border-border px-4 py-3">

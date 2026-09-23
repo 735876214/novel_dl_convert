@@ -22,6 +22,8 @@ const emptyDesc = computed(() =>
 
 const files = ref<FileEntry[]>([])
 const loading = ref(true)
+/** 加载失败信息：失败不能退化成「还没有成品文件」。 */
+const error = ref('')
 
 const totalSize = computed(() => files.value.reduce((s, f) => s + f.size, 0))
 
@@ -43,12 +45,16 @@ function ext(name: string): string {
 
 function load(): void {
   loading.value = true
+  error.value = ''
   api
     .files()
     .then((r) => {
       files.value = r.output ?? []
     })
-    .catch((e: Error) => ui.toast(e.message))
+    .catch((e: Error) => {
+      files.value = []
+      error.value = e.message
+    })
     .finally(() => {
       loading.value = false
     })
@@ -74,6 +80,14 @@ function download(name: string): void {
 
     <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">
       加载中…
+    </Card>
+
+    <!-- 加载失败：可重试的错误态（不与「还没有成品文件」空态混淆） -->
+    <Card v-else-if="error" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <span>成品文件加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
     </Card>
 
     <Card v-else-if="files.length" padding="none">

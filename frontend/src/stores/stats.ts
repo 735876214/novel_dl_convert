@@ -14,17 +14,24 @@ import { useLibraryStore } from '@/stores/library'
 export const useStatsStore = defineStore('stats', () => {
   const data = ref<StatsOverview | null>(null)
   const loaded = ref(false)
+  /**
+   * 加载失败信息。8 个仪表盘部件都吃这份数据，失败后它们会各自退化成 0 / 空
+   * ⇒ 在仪表盘**页级**给一条可重试提示（第 49 期），而不是逐部件改。
+   */
+  const error = ref('')
   const library = useLibraryStore()
 
   async function load(force = false): Promise<void> {
     const lid = library.currentLibraryId || ''
     // 同一库且已加载则跳过；切库或强制时重拉（避免把「全部书库」的统计误当成某库）
     if (loaded.value && !force && data.value?.library_id === lid) return
+    error.value = ''
     try {
       data.value = await api.stats(28, lid)
       loaded.value = true
-    } catch {
-      /* 未登录或后端不可用时保持为空 */
+    } catch (e) {
+      /* 未登录或后端不可用：保持为空，但记下错误供仪表盘提示 */
+      error.value = e instanceof Error ? e.message : '加载失败'
     }
   }
 
@@ -36,5 +43,5 @@ export const useStatsStore = defineStore('stats', () => {
     },
   )
 
-  return { data, loaded, load }
+  return { data, loaded, error, load }
 })

@@ -27,6 +27,8 @@ const ui = useUiStore()
 const items = ref<AllAnnotation[]>([])
 const overview = ref<AnnotationOverview | null>(null)
 const loading = ref(true)
+/** 加载失败信息：失败不能退化成「还没有批注」。 */
+const error = ref('')
 const view = ref<'active' | 'trashed'>('active')
 
 type GroupMode = 'month' | 'book' | 'color' | 'source'
@@ -135,14 +137,16 @@ const showSourceNote = computed(() => groupBy.value === 'source')
 
 async function load(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     // 一次把垃圾桶也取回来：两个视图共用一份数据，切视图不必再打请求
     const [list, ov] = await Promise.all([api.allAnnotations(true), api.annotationOverview()])
     items.value = list.items
     overview.value = ov
-  } catch {
+  } catch (e) {
     items.value = []
     overview.value = null
+    error.value = e instanceof Error ? e.message : '加载失败'
   }
   loading.value = false
 }
@@ -313,6 +317,15 @@ async function doExport(): Promise<void> {
     </p>
 
     <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+
+    <!-- 加载失败：可重试的错误态（不与「还没有批注」空态混淆） -->
+    <Card v-else-if="error" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>批注加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
+    </Card>
 
     <template v-else-if="filtered.length">
       <section v-for="g in groups" :key="g.key" class="mb-5">

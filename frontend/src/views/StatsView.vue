@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 
 import ChartConfigPanel from '@/components/charts/ChartConfigPanel.vue'
 import ChartGrid from '@/components/charts/ChartGrid.vue'
+import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
@@ -53,14 +54,18 @@ watch(
 const data = ref<StatsOverview | null>(null)
 const days = ref(28)
 const loading = ref(false)
+/** 加载失败信息：失败不能退化成「暂无数据」。 */
+const error = ref('')
 
 async function load(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     // 空串 = 全部书库（与不加参数时逐字节一致）；否则只统计该库
     data.value = await api.stats(days.value, scope.value)
-  } catch {
-    /* 未登录或后端不可用时保持为空 */
+  } catch (e) {
+    data.value = null
+    error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
     loading.value = false
   }
@@ -241,9 +246,19 @@ const readingCharts = computed<StatisticsChartTile[]>(() => chartsOf('reading'))
     </div>
 
     <ChartConfigPanel v-if="configOpen" :tab="tab" />
-    <div v-if="!s" class="py-20 text-center text-[13px] text-muted-foreground">
-      {{ loading ? '加载中…' : '暂无数据' }}
-    </div>
+
+    <div v-if="loading && !s" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+
+    <!-- 加载失败：可重试的错误态（不与「暂无数据」空态混淆） -->
+    <Card v-else-if="error && !s" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>统计加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
+    </Card>
+
+    <div v-else-if="!s" class="py-20 text-center text-[13px] text-muted-foreground">暂无数据</div>
 
     <template v-else-if="tab === 'library'">
       <!-- 图表（第 32 期）：概览在上、明细卡片在下 —— 与上游「统计页即图表页」的层次一致 -->

@@ -38,6 +38,8 @@ const items = ref<EntityItem[]>([])
 const total = ref(0)
 const loading = ref(true)
 const keyword = ref('')
+/** 加载失败信息：失败不能退化成「还没有可管理的实体」。 */
+const error = ref('')
 /** 统计范围（第 13 期）：**空串 = 全部书库**，等于加库维度之前的行为 */
 const scope = ref('')
 
@@ -83,6 +85,7 @@ const spreadLibraries = computed<Record<string, number>>(() => {
 
 function load(): void {
   loading.value = true
+  error.value = ''
   // 侧栏已拉过；这里防的是「直接刷新进工具页」时 store 仍为空（内部会早退，不产生额外请求）
   void library.loadLibraries()
   void library.loadBooks()
@@ -92,7 +95,11 @@ function load(): void {
       items.value = r.items ?? []
       total.value = r.total ?? 0
     })
-    .catch((e: Error) => ui.toast(e.message))
+    .catch((e: Error) => {
+      items.value = []
+      total.value = 0
+      error.value = e.message
+    })
     .finally(() => {
       loading.value = false
     })
@@ -190,6 +197,14 @@ function applyPlan(): void {
     </div>
 
     <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
+
+    <!-- 加载失败：可重试的错误态（不与空态混淆） -->
+    <Card v-else-if="error" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <span>实体加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
+    </Card>
 
     <Card v-else-if="filtered.length" padding="none">
       <div v-for="it in filtered" :key="it.name" class="border-b border-border last:border-b-0">

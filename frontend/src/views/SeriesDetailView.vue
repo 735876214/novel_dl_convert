@@ -6,6 +6,7 @@ import SeriesMetaPanel from '@/components/book/SeriesMetaPanel.vue'
 import SeriesRenumberDialog from '@/components/book/SeriesRenumberDialog.vue'
 import BookCover from '@/components/ui/BookCover.vue'
 import Button from '@/components/ui/Button.vue'
+import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
@@ -41,6 +42,8 @@ const name = computed(() => String(route.params.name))
 const books = ref<BookCard[]>([])
 const groups = ref<SeriesGroup[]>([])
 const loading = ref(true)
+/** 加载失败信息：失败不能退化成「这个系列暂时没有书」。 */
+const error = ref('')
 /** 系列级元数据（第 12 期 C3）：简介 / 出版社 / 首发年 / 题材 / 册数 */
 const meta = ref<SeriesMeta | null>(null)
 /** 缺册（第 43 期）：后端算好的补集，前端只展示，不自己判 */
@@ -86,17 +89,19 @@ const sections = computed(() => {
 
 async function load(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     const res = await api.seriesDetail(name.value)
     books.value = res.books
     groups.value = res.groups ?? []
     meta.value = res.meta ?? null
     gaps.value = res.gaps ?? null
-  } catch {
+  } catch (e) {
     books.value = []
     groups.value = []
     meta.value = null
     gaps.value = null
+    error.value = e instanceof Error ? e.message : '加载失败'
   }
   loading.value = false
 }
@@ -151,6 +156,15 @@ watch(name, load)
     </p>
 
     <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+
+    <!-- 加载失败：可重试的错误态（不与「这个系列暂时没有书」空态混淆） -->
+    <Card v-else-if="error" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>系列详情加载失败：{{ error }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
+      </div>
+    </Card>
 
     <template v-else>
       <!-- 系列简介与系列级字段：数据只存服务端，**不写入书本文件** -->

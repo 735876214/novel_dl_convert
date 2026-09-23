@@ -45,6 +45,8 @@ const preview = ref<MigrationPreview | null>(null)
 const batches = ref<{ batch_id: string; at: number; done: number; pending: number; failed: number }[]>([])
 const loading = ref(false)
 const busy = ref('')
+/** 主数据（书库清单）加载失败信息：失败不能退化成「还没有书库」（0 库是正常初始态）。 */
+const error = ref('')
 const detailBatch = ref<MigrationRow[]>([])
 const detailOpen = ref(false)
 /** 正在展开「每库设置」的书库 id（空 = 收起）：同时只开一个，免得一屏堆满控件 */
@@ -60,6 +62,7 @@ const autoMigrate = computed(() => cfg.value?.libraries?.auto_migrate === true)
 
 async function reload(force = false): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     const res = await api.libraries()
     libs.value = res.items
@@ -71,7 +74,7 @@ async function reload(force = false): Promise<void> {
     batches.value = b.items
     if (force) await library.loadBooks(true)
   } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '加载书库信息失败')
+    error.value = e instanceof Error ? e.message : '加载书库信息失败'
   } finally {
     loading.value = false
   }
@@ -611,6 +614,12 @@ async function remove(l: LibraryEntity): Promise<void> {
       </div>
 
       <div v-if="loading && !libs.length" class="px-4 py-6 text-[12.5px] text-muted-foreground">加载中…</div>
+      <!-- 加载失败：可重试的错误态（不能与「还没有书库」这个正常初始态混淆） -->
+      <div v-else-if="error && !libs.length" class="px-4 py-6">
+        <div class="text-[12.5px] font-medium text-destructive">书库信息加载失败</div>
+        <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">{{ error }}</p>
+        <Button size="sm" variant="secondary" class="mt-2" @click="reload()">重试</Button>
+      </div>
       <!-- 0 库是**全新部署的正常初始态**（第 37 期起不设默认库），所以这里不是
            「出错了」而是「第一步在这」：说清建库要填什么、点哪里（第 38 期）。 -->
       <div v-else-if="!libs.length" class="px-4 py-6">

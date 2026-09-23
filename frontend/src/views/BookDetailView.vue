@@ -204,6 +204,13 @@ async function onMetaSaved(): Promise<void> {
   await library.loadBooks(true)
 }
 
+/** 「加载失败」态的重试：强制重取详情（失败与「找不到这本书」在模板里分开渲染） */
+async function retryDetail(): Promise<void> {
+  loading.value = true
+  detail.value = await library.getBookDetail(bookId.value, true)
+  loading.value = false
+}
+
 function fmtSize(n: number): string {
   if (!n && n !== 0) return '—'
   if (n < 1024) return `${n} B`
@@ -610,9 +617,16 @@ onMounted(async () => {
     </div>
   </div>
 
-  <EmptyState v-else icon="alert" title="找不到这本书" desc="它可能已被移除，或链接有误。">
+  <!-- 区分「拉取失败」与「真的没有这本书」：前者给重试，后者才说「找不到」（第 49 期） -->
+  <EmptyState
+    v-else
+    icon="alert"
+    :title="library.detailError ? '这本书加载失败' : '找不到这本书'"
+    :desc="library.detailError || '它可能已被移除，或链接有误。'"
+  >
     <template #action>
-      <Button variant="primary" @click="router.push('/shelf')">回到书库</Button>
+      <Button v-if="library.detailError" variant="primary" @click="retryDetail">重试</Button>
+      <Button v-else variant="primary" @click="router.push('/shelf')">回到书库</Button>
     </template>
   </EmptyState>
 </template>

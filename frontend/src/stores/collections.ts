@@ -12,14 +12,21 @@ import { api, type CollectionItem } from '@/lib/api'
 export const useCollectionsStore = defineStore('collections', () => {
   const items = ref<CollectionItem[]>([])
   const loaded = ref(false)
+  /**
+   * 加载失败信息。⚠️ 这是**主数据**（侧栏「收藏夹」组与收藏页都吃它），
+   * 失败必须能被页面区分出来 —— 否则「拉不到」会被读成「还没有收藏夹」。
+   */
+  const error = ref('')
 
   async function load(force = false): Promise<void> {
     if (loaded.value && !force) return
+    error.value = ''
     try {
       items.value = (await api.collections()).items
       loaded.value = true
-    } catch {
-      /* 未登录或后端不可用时保持空列表 */
+    } catch (e) {
+      /* 未登录或后端不可用：保持空列表，但记下错误供页面显示错误态 */
+      error.value = e instanceof Error ? e.message : '加载失败'
     }
   }
 
@@ -39,5 +46,5 @@ export const useCollectionsStore = defineStore('collections', () => {
     await load(true)
   }
 
-  return { items, loaded, load, create, remove, rename }
+  return { items, loaded, error, load, create, remove, rename }
 })
