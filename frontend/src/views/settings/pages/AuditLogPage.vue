@@ -32,6 +32,20 @@ const fActor = ref('')
 /** 操作者下拉的候选（后端另行取全量，**不受当前筛选影响** —— 否则选中一个就切不回来） */
 const actors = ref<string[]>([])
 
+/**
+ * 类别筛选：**客户端**筛选（后端只接受单个 `action`，而类别是多动作集合）。
+ * 作用范围是「当前已加载的条目」，UI 上如实标注。
+ */
+const fCategory = ref('')
+/** 仅看「未记录操作者」的条目（历史条目 actor 为空，按名字筛不到它们） */
+const onlyNoActor = ref(false)
+
+/** 每档条数：后端只有 limit、没有 offset，故「加载更多」= 抬高 limit 重取 */
+const LOAD_STEPS = [200, 500, 1000, 2000]
+const stepIdx = ref(0)
+const limit = computed(() => LOAD_STEPS[stepIdx.value])
+const canLoadMore = computed(() => stepIdx.value < LOAD_STEPS.length - 1)
+
 const ACTIONS = ['转换', '添加', '跳过', '重命名', '清理', '刮削']
 const STATUSES = ['成功', '失败']
 
@@ -54,7 +68,7 @@ async function load(): Promise<void> {
   err.value = ''
   try {
     const r = await api.logs({
-      limit: 200,
+      limit: limit.value,
       action: fAction.value || undefined,
       status: fStatus.value || undefined,
       q: fQ.value.trim() || undefined,
@@ -75,6 +89,8 @@ function resetFilters(): void {
   fStatus.value = ''
   fQ.value = ''
   fActor.value = ''
+  fCategory.value = ''
+  onlyNoActor.value = false
   void load()
 }
 
@@ -86,6 +102,68 @@ const failCount = computed(() => items.value.filter((i) => String(i.status) === 
 const noActor = computed(
   () => items.value.filter((i) => !String(i.actor ?? '').trim()).length,
 )
+
+/** 类别筛选可选项（顺序固定，配合上方 CATEGORY 归并） */
+const CATEGORIES = ['内容生成', '文件变更', '清理', '跳过', '其它']
+
+/** 类别分布：按**已加载**条目统计，与 chips 上的数字一致 */
+const categoryCounts = computed<Record<string, number>>(() => {
+  const m: Record<string, number> = {}
+  for (const i of items.value) {
+    const c = categoryOf(i.action)
+    m[c] = (m[c] ?? 0) + 1
+  }
+  return m
+})
+
+/**
+ * 客户端筛选后的可见条目（类别 + 仅未记录）。
+ * ⚠️ 与上方「动作 / 结果 / 操作者 / 关键字」不同 —— 那四维是**服务端**筛选，
+ * 这两维后端不支持，故只作用于当前已加载的 N 条（UI 上已标注作用范围）。
+ */
+const visible = computed(() =>
+  items.value.filter(
+    (i) =>
+      (!fCategory.value || categoryOf(i.action) === fCategory.value) &&
+      (!onlyNoActor.value || !String(i.actor ?? '').trim()),
+  ),
+)
+
+function loadMore(): void {
+  if (!canLoadMore.value) return
+  stepIdx.value += 1
+  void load()
+}
+
+/** 导出**当前筛选结果**为 CSV（BOM 保中文；与既有「下载 activity.log」并列，后者是原始日志文件） */
+function exportCsv(): void {
+  const esc = (v: unknown): string => {
+    const s = v === undefined || v === null ? '' : String(v)
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  }
+  const head = ['时间', '操作者', '类别', '动作', '结果', '文件', '输出', '详情']
+  const body = visible.value.map((i) =>
+    [
+      str(i, 'ts'),
+      actorOf(i),
+      categoryOf(i.action),
+      str(i, 'action'),
+      str(i, 'status'),
+      str(i, 'file'),
+      str(i, 'output'),
+      str(i, 'detail'),
+    ]
+      .map(esc)
+      .join(','),
+  )
+  const csv = `\uFEFF${[head.join(','), ...body].join('\r\n')}`
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 function str(i: LogItem, k: string): string {
   const v = i[k]
@@ -111,9 +189,11 @@ function downloadLog(): void {
       <h2 class="text-[14px] font-semibold text-foreground">审计日志</h2>
       <span class="font-mono text-[11.5px] text-muted-foreground">Audit Log</span>
       <span class="text-[11.5px] text-muted-foreground">
-        共 {{ items.length }} 条 · 成功 {{ okCount }} · 失败 {{ failCount }}
+        已加载 {{ items.length }} 条 · 成功 {{ okCount }} · 失败 {{ failCount }}
+        <span v-if="visible.length !== items.length"> · 当前筛出 {{ visible.length }} 条</span>
       </span>
       <Button size="sm" class="ml-auto" :disabled="loading" @click="load">刷新</Button>
+      <Button size="sm" :disabled="!visible.length" @click="exportCsv">导出当前筛选 CSV</Button>
       <Button size="sm" @click="downloadLog">下载 activity.log</Button>
     </div>
 
@@ -158,13 +238,49 @@ function downloadLog(): void {
         <Button :disabled="loading" @click="load">查询</Button>
         <Button variant="ghost" @click="resetFilters">重置</Button>
       </div>
+
+      <!-- 客户端筛选（后端不支持这两维）：作用范围 = 当前已加载的条目，如实标注 -->
+      <div class="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-border pt-2.5">
+        <span class="text-[11px] text-muted-foreground">类别</span>
+        <button
+          type="button"
+          class="cursor-pointer rounded-full px-2.5 py-1 text-[12px] transition-colors"
+          :class="fCategory === ''
+            ? 'bg-primary text-primary-foreground'
+            : 'bg-muted text-muted-foreground hover:text-foreground'"
+          @click="fCategory = ''"
+        >
+          全部
+        </button>
+        <button
+          v-for="c in CATEGORIES"
+          :key="c"
+          type="button"
+          class="cursor-pointer rounded-full px-2.5 py-1 text-[12px] transition-colors"
+          :class="fCategory === c
+            ? 'bg-primary text-primary-foreground'
+            : 'bg-muted text-muted-foreground hover:text-foreground'"
+          @click="fCategory = fCategory === c ? '' : c"
+        >
+          {{ c }}<span class="ml-1 tabular-nums opacity-70">{{ categoryCounts[c] ?? 0 }}</span>
+        </button>
+
+        <label class="ml-auto flex cursor-pointer items-center gap-1.5 text-[11.5px] text-muted-foreground">
+          <input v-model="onlyNoActor" type="checkbox" class="h-3.5 w-3.5 cursor-pointer accent-primary">
+          仅看未记录操作者（{{ noActor }}）
+        </label>
+        <span class="basis-full text-[11px] text-muted-foreground">
+          类别与「仅看未记录」在<strong>当前已加载的 {{ items.length }} 条</strong>内筛选（后端不支持这两维）；
+          动作 / 结果 / 操作者 / 关键字仍由服务端筛选。
+        </span>
+      </div>
     </Card>
 
     <p v-if="err" class="mb-3 text-[11.5px] text-destructive">{{ err }}</p>
 
     <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
 
-    <Card v-else-if="items.length" padding="none">
+    <Card v-else-if="visible.length" padding="none">
       <!-- 表头 -->
       <div
         class="hidden items-center gap-3 border-b border-border px-4 py-2.5 text-[11px] text-muted-foreground lg:flex"
@@ -178,7 +294,7 @@ function downloadLog(): void {
       </div>
 
       <div
-        v-for="(i, idx) in items"
+        v-for="(i, idx) in visible"
         :key="idx"
         class="flex flex-wrap items-start gap-x-3 gap-y-1 border-b border-border/60 px-4 py-2.5 last:border-b-0"
       >
@@ -219,8 +335,22 @@ function downloadLog(): void {
     </Card>
 
     <Card v-else class="py-12 text-center text-[12.5px] text-muted-foreground">
-      没有符合条件的记录。
+      <template v-if="!items.length">没有符合条件的记录。</template>
+      <template v-else>
+        已加载的 {{ items.length }} 条里没有符合「{{ fCategory || '全部类别'
+        }}{{ onlyNoActor ? ' · 仅未记录操作者' : '' }}」的条目 —— 可放宽类别筛选，或点「加载更多」扩大范围。
+      </template>
     </Card>
+
+    <!-- 加载更多：后端只有 limit、没有 offset，故抬高 limit 重取 -->
+    <div v-if="!loading && items.length" class="mt-3 flex flex-wrap items-center justify-center gap-2">
+      <Button :disabled="!canLoadMore" @click="loadMore">
+        {{ canLoadMore ? `加载更多（当前 ${items.length} 条）` : `已到单次上限（${items.length} 条）` }}
+      </Button>
+      <span class="text-[11.5px] text-muted-foreground">
+        单次最多 {{ LOAD_STEPS[LOAD_STEPS.length - 1] }} 条；更早的记录请用「下载 activity.log」
+      </span>
+    </div>
 
     <!-- 无操作者记录时的解释：避免被误解为「系统没记」 -->
     <Card v-if="!loading && noActor" class="mt-4" padding="sm">
@@ -241,10 +371,9 @@ function downloadLog(): void {
         '上游有独立的审计子系统与类别体系（Authentication / Books / Libraries / Settings / Integrations）',
         '上游的 Details 列是结构化对象（如 Book #301 / Library #3），本项目是自由文本',
         '上游按「账号 + 设备 + 会话」维度记录（如 Stromboid#1），本项目只有账号名',
-        '审计记录的留存策略与导出格式（本项目仅保留单个 activity.log / .jsonl 并支持下载）',
-        '筛「无操作者」的条目（历史条目 actor 为空，按名字筛不到它们；页面顶部有单独计数提示）',
+        '审计记录的留存策略（轮转 / 压缩 / 保留天数）—— 本项目只保留单个 activity.log / .jsonl',
       ]"
-      note="本项目复用活动日志作为审计视图：类别由动作归并得出，不是独立体系；操作者字段是本次新增，历史条目缺失属正常。筛选支持动作 / 结果 / 操作者 / 关键字四维。"
+      note="本项目复用活动日志作为审计视图：类别由动作归并得出，不是独立体系；操作者字段为后续新增，历史条目缺失属正常。筛选维度：动作 / 结果 / 操作者 / 关键字走服务端，类别与「仅看未记录操作者」走客户端（作用范围 = 当前已加载条目）。第 50 期起支持「加载更多」（抬高 limit）与「导出当前筛选结果为 CSV」。"
     />
   </div>
 </template>
