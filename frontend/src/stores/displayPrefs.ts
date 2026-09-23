@@ -25,6 +25,18 @@ import { notifyPrefsChanged, suppressing } from '@/lib/prefsBridge'
 export type CardInfoMode = 'hover-overlay' | 'below-cover' | 'off'
 /** 作者封面形状。上游是 circle|square，本项目作者封面是竖版 3:4 ⇒ 对应为 竖版 / 圆形 */
 export type AuthorCoverShape = 'portrait' | 'circle'
+/**
+ * 卡片主标签候选（第 51 期，对齐上游卡片信息可配）。
+ * 默认 `title` = 改造前的行为；取不到值的书会回退到书名，不会渲染成空行。
+ */
+export type CardPrimaryLabel = 'title' | 'series' | 'series_index' | 'author' | 'none'
+/** 卡片次标签候选（第 51 期）。默认 `author` = 改造前的行为 */
+export type CardSecondaryLabel = 'author' | 'series' | 'series_index' | 'title' | 'none'
+/**
+ * 折叠系列行的封面形态（第 51 期，对齐上游 `Collapsed series cover`）。
+ * `first` = 改造前的行为（取外层排序里首次出现的那本）。
+ */
+export type CollapsedCover = 'first' | 'latest' | 'first_unread' | 'stack' | 'mosaic'
 
 export interface DisplayPrefs {
   /** 网格封面**最小宽度**（px）—— 网格按此自动排列表数，见 ShelfView 的 auto-fill 网格 */
@@ -33,6 +45,12 @@ export interface DisplayPrefs {
   gridGap: number
   /** 卡片信息位置 */
   cardInfoMode: CardInfoMode
+  /** 卡片主标签（第 51 期；默认书名） */
+  primaryLabel: CardPrimaryLabel
+  /** 卡片次标签（第 51 期；默认作者） */
+  secondaryLabel: CardSecondaryLabel
+  /** 折叠系列行的封面形态（第 51 期；默认首册） */
+  collapsedCover: CollapsedCover
   /** 作者页封面最小宽度（px） */
   authorCoverSize: number
   /** 作者页封面形状 */
@@ -63,6 +81,11 @@ export const DISPLAY_PREFS_DEFAULT: DisplayPrefs = {
   coverSize: 140,
   gridGap: 16,
   cardInfoMode: 'below-cover',
+  // 第 51 期新增：默认「书名 + 作者」，与加这两项之前一字不差
+  primaryLabel: 'title',
+  secondaryLabel: 'author',
+  // 折叠系列行默认取「首次出现的那本」= 改造前的行为
+  collapsedCover: 'first',
   authorCoverSize: 170,
   authorCoverShape: 'portrait',
   zebraStriping: false,
@@ -79,6 +102,39 @@ export const AUTHOR_COVER_SHAPE_OPTIONS: { value: AuthorCoverShape; label: strin
     { value: 'portrait', label: '竖版', hint: '3:4 圆角矩形（默认）' },
     { value: 'circle', label: '圆形', hint: '裁成 1:1 圆形头像' },
   ]
+
+/** 卡片主标签候选（第 51 期）。`none` = 不显示主标签（卡片只剩封面） */
+export const CARD_PRIMARY_LABEL_OPTIONS: {
+  value: CardPrimaryLabel
+  label: string
+}[] = [
+  { value: 'title', label: '书名' },
+  { value: 'series', label: '系列名' },
+  { value: 'series_index', label: '系列号' },
+  { value: 'author', label: '作者' },
+  { value: 'none', label: '不显示' },
+]
+
+/** 卡片次标签候选（第 51 期） */
+export const CARD_SECONDARY_LABEL_OPTIONS: {
+  value: CardSecondaryLabel
+  label: string
+}[] = [
+  { value: 'author', label: '作者' },
+  { value: 'series', label: '系列名' },
+  { value: 'series_index', label: '系列号' },
+  { value: 'title', label: '书名' },
+  { value: 'none', label: '不显示' },
+]
+
+/** 折叠系列行的封面形态（第 51 期，对齐上游五档） */
+export const COLLAPSED_COVER_OPTIONS: { value: CollapsedCover; label: string; hint: string }[] = [
+  { value: 'first', label: '首册', hint: '用系列里首次出现的那本做封面（默认）' },
+  { value: 'latest', label: '最新', hint: '用系列末册做封面' },
+  { value: 'first_unread', label: '首册未读', hint: '用第一本没读完的做封面；都读完则回退首册' },
+  { value: 'stack', label: '堆叠', hint: '前几册错位叠放（纯 CSS 位移）' },
+  { value: 'mosaic', label: '马赛克', hint: '前 4 册 2×2 拼贴，不足则留空位' },
+]
 
 /** 取整并夹到量程内；非数字落回默认值 */
 function readSize(v: unknown, fallback: number, r: { min: number; max: number }): number {
@@ -97,6 +153,16 @@ function read(): DisplayPrefs {
       cardInfoMode: CARD_INFO_MODE_OPTIONS.some((o) => o.value === p.cardInfoMode)
         ? (p.cardInfoMode as CardInfoMode)
         : DISPLAY_PREFS_DEFAULT.cardInfoMode,
+      // 第 51 期新增三项：旧数据没有这些键 → 一律取默认（= 改造前行为）
+      primaryLabel: CARD_PRIMARY_LABEL_OPTIONS.some((o) => o.value === p.primaryLabel)
+        ? (p.primaryLabel as CardPrimaryLabel)
+        : DISPLAY_PREFS_DEFAULT.primaryLabel,
+      secondaryLabel: CARD_SECONDARY_LABEL_OPTIONS.some((o) => o.value === p.secondaryLabel)
+        ? (p.secondaryLabel as CardSecondaryLabel)
+        : DISPLAY_PREFS_DEFAULT.secondaryLabel,
+      collapsedCover: COLLAPSED_COVER_OPTIONS.some((o) => o.value === p.collapsedCover)
+        ? (p.collapsedCover as CollapsedCover)
+        : DISPLAY_PREFS_DEFAULT.collapsedCover,
       authorCoverSize: readSize(
         p.authorCoverSize,
         DISPLAY_PREFS_DEFAULT.authorCoverSize,
@@ -160,6 +226,16 @@ export const useDisplayPrefsStore = defineStore('displayPrefs', () => {
         cardInfoMode: CARD_INFO_MODE_OPTIONS.some((o) => o.value === next.cardInfoMode)
           ? (next.cardInfoMode as CardInfoMode)
           : cur.cardInfoMode,
+        // 第 51 期新增三项：远端没带就保持本机值（与其它字段同口径）
+        primaryLabel: CARD_PRIMARY_LABEL_OPTIONS.some((o) => o.value === next.primaryLabel)
+          ? (next.primaryLabel as CardPrimaryLabel)
+          : cur.primaryLabel,
+        secondaryLabel: CARD_SECONDARY_LABEL_OPTIONS.some((o) => o.value === next.secondaryLabel)
+          ? (next.secondaryLabel as CardSecondaryLabel)
+          : cur.secondaryLabel,
+        collapsedCover: COLLAPSED_COVER_OPTIONS.some((o) => o.value === next.collapsedCover)
+          ? (next.collapsedCover as CollapsedCover)
+          : cur.collapsedCover,
         authorCoverSize:
           typeof next.authorCoverSize === 'number'
             ? readSize(next.authorCoverSize, cur.authorCoverSize, AUTHOR_COVER_SIZE_RANGE)

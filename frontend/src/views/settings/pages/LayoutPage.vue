@@ -5,6 +5,9 @@ import {
   AUTHOR_COVER_SHAPE_OPTIONS,
   AUTHOR_COVER_SIZE_RANGE,
   CARD_INFO_MODE_OPTIONS,
+  CARD_PRIMARY_LABEL_OPTIONS,
+  CARD_SECONDARY_LABEL_OPTIONS,
+  COLLAPSED_COVER_OPTIONS,
   COVER_SIZE_RANGE,
   GRID_GAP_RANGE,
   useDisplayPrefsStore,
@@ -18,6 +21,8 @@ import {
  *
  * - 封面尺寸 / 网格间距：真的驱动书架网格（`auto-fill` 列宽 + 间距）。
  * - 卡片信息位置：真作用于书架网格卡（悬停浮层 / 封面下方 / 不显示）。
+ * - 卡片主 / 次标签（第 51 期）：真作用于书架网格卡的两行文字（默认书名 + 作者）。
+ * - 折叠系列封面形态（第 51 期）：真作用于书架折叠行（默认首册；堆叠 / 马赛克为多封面组合）。
  * - 作者封面尺寸 / 形状：真作用于作者页。
  * - 斑马纹：真作用于书架表格视图。
  *
@@ -193,6 +198,82 @@ function num(e: Event): number {
       </div>
     </Card>
 
+    <!-- CARD INFO（第 51 期补充：主 / 次标签）与 SERIES DISPLAY（折叠封面形态） -->
+    <div class="mb-1.5 text-[11.5px] font-semibold tracking-wider text-muted-foreground uppercase">
+      系列显示
+    </div>
+    <Card padding="none" class="mb-5">
+      <div class="border-b border-border px-4 py-3.5 md:flex md:items-center md:gap-4">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">主标签</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            卡片第一行显示什么。取不到值的书会回退成书名，不会留空行
+          </div>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-1.5 md:mt-0">
+          <button
+            v-for="o in CARD_PRIMARY_LABEL_OPTIONS"
+            :key="o.value"
+            type="button"
+            class="cursor-pointer rounded-full px-3 py-1 text-[12px] font-medium transition-colors"
+            :class="prefs.prefs.primaryLabel === o.value
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-muted text-muted-foreground hover:text-foreground'"
+            @click="prefs.patch({ primaryLabel: o.value })"
+          >
+            {{ o.label }}
+          </button>
+        </div>
+      </div>
+
+      <div class="border-b border-border px-4 py-3.5 md:flex md:items-center md:gap-4">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">次标签</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            卡片第二行显示什么。取不到值会回退成作者，作者也缺则显示「未知作者」
+          </div>
+        </div>
+        <div class="mt-3 flex flex-wrap gap-1.5 md:mt-0">
+          <button
+            v-for="o in CARD_SECONDARY_LABEL_OPTIONS"
+            :key="o.value"
+            type="button"
+            class="cursor-pointer rounded-full px-3 py-1 text-[12px] font-medium transition-colors"
+            :class="prefs.prefs.secondaryLabel === o.value
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-muted text-muted-foreground hover:text-foreground'"
+            @click="prefs.patch({ secondaryLabel: o.value })"
+          >
+            {{ o.label }}
+          </button>
+        </div>
+      </div>
+
+      <div class="px-4 py-3.5">
+        <div class="text-[13px] font-medium text-foreground">折叠系列的封面形态</div>
+        <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+          书架折叠同系列时用哪张封面；「堆叠」「马赛克」用系列内前几册拼合（纯 CSS，不额外请求）
+        </div>
+        <div class="mt-2.5 flex flex-wrap gap-1.5">
+          <button
+            v-for="o in COLLAPSED_COVER_OPTIONS"
+            :key="o.value"
+            type="button"
+            class="cursor-pointer rounded-full px-3 py-1 text-[12px] font-medium transition-colors"
+            :class="prefs.prefs.collapsedCover === o.value
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-muted text-muted-foreground hover:text-foreground'"
+            @click="prefs.patch({ collapsedCover: o.value })"
+          >
+            {{ o.label }}
+          </button>
+        </div>
+        <div class="mt-2 text-[11.5px] text-muted-foreground">
+          {{ COLLAPSED_COVER_OPTIONS.find((o) => o.value === prefs.prefs.collapsedCover)?.hint }}
+        </div>
+      </div>
+    </Card>
+
     <!-- LIST AND TABLE VIEWS -->
     <div class="mb-1.5 text-[11.5px] font-semibold tracking-wider text-muted-foreground uppercase">
       列表与表格
@@ -222,14 +303,12 @@ function num(e: Event): number {
 
     <SettingsUnsupportedCard
       label="Layout"
-      :groups="['LIBRARY GRID LAYOUT', 'CARD INFO', 'SERIES DISPLAY']"
+      :groups="['LIBRARY GRID LAYOUT']"
       :items="[
         '封面尺寸行为（全部同步 / 各视图独立）—— 本项目书架只有一套网格，没有第二个视图可供联动，做出来就是个空开关。',
         '方形封面尺寸与方形网格间距 —— 本项目三种视图一律用竖版 3:4 封面，没有方形缩略图这一实体。',
-        '卡片主标签 / 次标签可选（书名 / 系列名 / 作者 / 隐藏）—— 卡片信息目前固定显示书名 + 作者，字段可配留待后续。',
-        '折叠系列的封面形态（堆叠 / 马赛克 / 首册 / 最新 / 首册未读）—— 现固定用系列首册封面，五种形态的渲染成本较高，本期未做。',
       ]"
-      note="前两项是上游有、本项目没有对应实体（主动不做）；后两项是暂缓。此处不列只动不响的控件。"
+      note="上面两项是上游有、本项目没有对应实体（主动不做），不制造只动不响的控件。卡片主 / 次标签与折叠系列封面五形态已于第 51 期补齐。"
     />
   </div>
 </template>

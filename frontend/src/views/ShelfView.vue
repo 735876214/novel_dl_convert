@@ -19,7 +19,11 @@ import {
 } from '@/lib/bookInfo'
 import { statusBucket } from '@/lib/readingThresholds'
 import { bucketKeyOf, buildBuckets } from '@/lib/shelfBuckets'
-import { useDisplayPrefsStore } from '@/stores/displayPrefs'
+import {
+  useDisplayPrefsStore,
+  type CardPrimaryLabel,
+  type CardSecondaryLabel,
+} from '@/stores/displayPrefs'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 import {
@@ -365,10 +369,31 @@ const rows = computed<Row[]>(() => {
     groups.get(s)!.push(b)
   }
   // 系列内部按序号重排：整理结果继承了外层排序，系列内顺序仍可能是乱的
-  return out.map((r) =>
-    isSeriesRow(r) && r.members.length > 1 ? { ...r, members: sortBySeriesIndex(r.members) } : r,
-  )
+  return out.map((r) => {
+    if (!isSeriesRow(r) || r.members.length <= 1) return r
+    const members = sortBySeriesIndex(r.members)
+    return { ...r, members, book: representativeOf(members, r.book) }
+  })
 })
+
+/**
+ * 折叠系列行的代表本（第 51 期，对齐上游 `Collapsed series cover` 五档）。
+ * `first` = **首本**（外层排序里首次出现的那本，即加这项之前的行为）；`latest` = 系列末册；
+ * `first_unread` = 第一本没读完的，都读完则回退首本；`stack` / `mosaic` 只是**渲染形态**，
+ * 代表本仍取首本 —— 标题、首字母分桶与滚动锚点都基于它，换掉会让跳转条看起来「乱跳」。
+ */
+function representativeOf(members: BookCard[], fallback: BookCard): BookCard {
+  const mode = display.prefs.collapsedCover
+  if (mode === 'latest') return members[members.length - 1] ?? fallback
+  if (mode === 'first_unread') return members.find((b) => !isFinishedOf(b)) ?? fallback
+  return fallback
+}
+
+/** 是否已读完：**真实状态优先**，没设状态才按进度兜底（与书卡文案同口径） */
+function isFinishedOf(b: BookCard): boolean {
+  if (b.status) return b.status === 'finished'
+  return (b.percent ?? 0) >= 100
+}
 
 /** 首字母分桶（第 43 期）：以每行的代表本（系列折叠行取首本）的书名首字分桶 */
 const buckets = computed(() => buildBuckets(rows.value.map((r) => r.book.title || r.book.name)))
@@ -480,6 +505,47 @@ function showAuthor(): boolean {
 
 function showMeta(): boolean {
   return prefs.cardInfo === 'detailed'
+}
+
+/**
+ * 卡片主 / 次标签（第 51 期，对齐上游可配的卡片信息）。
+ * 取不到值就回退到该位置的**默认口径**（主 = 书名、次 = 作者），再不行才给占位 ——
+ * 绝不因为选了「系列号」而把卡片渲染成空行。
+ */
+function labelOf(b: BookCard, kind: CardPrimaryLabel | CardSecondaryLabel): string {
+  switch (kind) {
+    case 'title':
+      return b.title || b.name || ''
+    case 'series':
+      return (b.series || '').trim()
+    case 'series_index':
+      return (b.series_index || '').trim()
+    case 'author':
+      return (b.author || '').trim()
+    default:
+      return ''
+  }
+}
+
+function primaryLabelOf(b: BookCard): string {
+  return labelOf(b, display.prefs.primaryLabel) || b.title || b.name || ''
+}
+
+function secondaryLabelOf(b: BookCard): string {
+  const chosen = labelOf(b, display.prefs.secondaryLabel)
+  if (chosen) return chosen
+  // 回退到默认口径（作者）；作者也缺就沿用改造前的「未知作者」
+  return labelOf(b, 'author') || '未知作者'
+}
+
+/** 堆叠形态最多画 3 册（再多就糊成一团），按系列序号顺序、后画者在上 */
+function stackMembers(r: Row): BookCard[] {
+  return r.members.slice(0, 3)
+}
+
+/** 马赛克形态取前 4 册做 2×2；不足 4 册由模板补占位格 */
+function mosaicMembers(r: Row): BookCard[] {
+  return r.members.slice(0, 4)
 }
 
 const TABLE_COLS = ['书名', '作者', '系列', '格式', '页数', '进度', '评分']
@@ -840,7 +906,42 @@ const INPUT_CLS =
             :checked="selected.has(r.book.id)"
             @click.stop="toggleSelect(r.book.id)"
           />
-          <BookCover :book="r.book" :show-title="!showAuthor()" />
+          <!--
+            折叠系列行的封面形态（第 51 期）：stack / mosaic 是**多封面组合**；
+            其余三种形态仍走单张 BookCover（代表本由 rows 里的 representativeOf 决定）
+          -->
+          <template
+            v-if="isSeriesRow(r) && r.members.length > 1 && display.prefs.collapsedCover === 'stack'"
+          >
+            <div class="relative aspect-3/4 w-full">
+              <div
+                v-for="(m, i) in stackMembers(r)"
+                :key="m.id"
+                class="absolute inset-0"
+                :style="{
+                  zIndex: i + 1,
+                  transform: `translate(${(stackMembers(r).length - 1 - i) * 7}px, ${(stackMembers(r).length - 1 - i) * -7}px) scale(${1 - (stackMembers(r).length - 1 - i) * 0.045})`,
+                }"
+              >
+                <BookCover :book="m" :interactive="false" :show-title="false" />
+              </div>
+            </div>
+          </template>
+          <template
+            v-else-if="isSeriesRow(r) && r.members.length > 1 && display.prefs.collapsedCover === 'mosaic'"
+          >
+            <div class="grid aspect-3/4 w-full grid-cols-2 grid-rows-2 gap-0.5 overflow-hidden rounded-md bg-muted">
+              <BookCover
+                v-for="m in mosaicMembers(r)"
+                :key="m.id"
+                :book="m"
+                :interactive="false"
+                :show-title="false"
+              />
+              <div v-for="n in 4 - mosaicMembers(r).length" :key="`pad-${n}`" class="bg-muted" />
+            </div>
+          </template>
+          <BookCover v-else :book="r.book" :show-title="!showAuthor()" />
           <span
             v-if="isSeriesRow(r)"
             class="absolute right-1.5 bottom-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10.5px] font-medium text-white tabular-nums"
@@ -862,28 +963,44 @@ const INPUT_CLS =
             v-if="display.prefs.cardInfoMode === 'hover-overlay'"
             class="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent px-2 pt-6 pb-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
           >
-            <div class="truncate text-[12px] font-medium text-white">
+            <div
+              v-if="isSeriesRow(r) || display.prefs.primaryLabel !== 'none'"
+              class="truncate text-[12px] font-medium text-white"
+            >
               <template v-if="isSeriesRow(r)">{{ seriesName(r) }}</template>
-              <template v-else>{{ r.book.title || r.book.name }}</template>
+              <template v-else>{{ primaryLabelOf(r.book) }}</template>
             </div>
-            <div class="truncate text-[11px] text-white/75">
-              {{ isSeriesRow(r) ? `${r.members.length} 本` : r.book.author || '未知作者' }}
+            <div
+              v-if="isSeriesRow(r) || display.prefs.secondaryLabel !== 'none'"
+              class="truncate text-[11px] text-white/75"
+            >
+              {{ isSeriesRow(r) ? `${r.members.length} 本` : secondaryLabelOf(r.book) }}
             </div>
           </div>
         </div>
         <!-- below-cover = 封面下方（改造前的行为）；off = 只画封面，信息进详情页看 -->
         <template v-if="display.prefs.cardInfoMode === 'below-cover'">
-          <div class="mt-2 truncate text-[12.5px] font-medium text-foreground">
+          <div
+            v-if="isSeriesRow(r) || display.prefs.primaryLabel !== 'none'"
+            class="mt-2 truncate text-[12.5px] font-medium text-foreground"
+          >
             <template v-if="isSeriesRow(r)">{{ seriesName(r) }}</template>
             <template v-else>
-              {{ r.book.title || r.book.name }}
-              <span v-if="seriesIndexLabel(r.book)" class="ml-1 font-mono text-[11px] text-muted-foreground">
+              {{ primaryLabelOf(r.book) }}
+              <!-- 主标签是书名时，保留原有的「系列号」后缀（默认档与改造前一字不差） -->
+              <span
+                v-if="display.prefs.primaryLabel === 'title' && seriesIndexLabel(r.book)"
+                class="ml-1 font-mono text-[11px] text-muted-foreground"
+              >
                 {{ seriesIndexLabel(r.book) }}
               </span>
             </template>
           </div>
-          <div v-if="showAuthor()" class="truncate text-[11.5px] text-muted-foreground">
-            {{ isSeriesRow(r) ? `${r.members.length} 本` : r.book.author || '未知作者' }}
+          <div
+            v-if="showAuthor() && (isSeriesRow(r) || display.prefs.secondaryLabel !== 'none')"
+            class="truncate text-[11.5px] text-muted-foreground"
+          >
+            {{ isSeriesRow(r) ? `${r.members.length} 本` : secondaryLabelOf(r.book) }}
           </div>
           <div v-if="showMeta() && !isSeriesRow(r)" class="truncate text-[10.5px] text-muted-foreground">
             {{ metaOf(r.book) }}
