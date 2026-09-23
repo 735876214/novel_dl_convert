@@ -11,7 +11,7 @@
 4. 提交即推送：中文 commit、按能力拆多笔；收尾不留未提交改动；临时文件放 `/tmp`。
 5. 视觉照搬 BookOrbit；零外部请求；局部更新不重建 DOM；**不做假交互**（宁可空态也别放假数字）。
 6. 可能同时有另一 AI 会话：改前 `git status`；别人改动不回退、不顺手提交；记忆只追加。
-7. 新增书库由用户手动操作；每库来源=`LIBRARY_SOURCE_DIR/<source_subdir>`；库 `type` 只决定功能显隐矩阵。
+7. 新增书库由用户手动操作；每库来源=**多个绝对路径 `source_dirs`（JSON 数组，第 41 期起）**，来源根用 `LIBRARY_SOURCE_DIRS1..N` 声明（未配则回退单根 `LIBRARY_SOURCE_DIR`）；库 `type` 只决定功能显隐矩阵。
 
 ## 元数据与出版
 - **只落服务端 DB，绝不写回文件**：`meta_override`/`meta_online`/`meta_cover`/`meta_locks`/`book_custom_values`；`core/publish.py` 是**唯一**仍写文件的模块。
