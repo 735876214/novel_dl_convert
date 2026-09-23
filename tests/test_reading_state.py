@@ -1,7 +1,7 @@
 """第 34 期：重置阅读状态（「从头开始」）。
 
-这项能力**只删服务端 DB 里的三处「读出来的痕迹」**（会话 / 进度 / 状态），
-所以两件事最容易做错，各钉一批：
+这项能力**只删服务端 DB 里的四处「读出来的痕迹」**（会话 / 进度 / 状态 / 阅读尝试
+—— 最后一处是第 43 期加的），所以两件事最容易做错，各钉一批：
 
 1. **删过头**：批注 / 书签 / 评分 / 收藏 / 元数据覆盖都是「关于这本书的内容」，
    不是「读过」的痕迹；顺手删掉就是把用户的笔记一起清了。已解锁的成就同样不回退。
@@ -32,7 +32,7 @@ def _fingerprint(path: pathlib.Path) -> tuple:
 
 
 def _seed(client, headers, bid: str) -> None:
-    """把三处记录都铺上：会话一条、进度一条、状态 reading。"""
+    """把四处记录都铺上：会话一条、进度一条、状态 reading（进 reading 会自动开一轮阅读尝试）。"""
     assert client.put(f"/api/books/{bid}/progress", json={"locator": 3, "percent": 42.0},
                       headers=headers).status_code == 200
     assert client.post(f"/api/books/{bid}/session", json={"seconds": 600},
@@ -51,7 +51,7 @@ def test_三处记录归零(client, auth_headers, default_root):
 
     r = client.post(f"/api/books/{bid}/reset-reading-state", headers=auth_headers)
     assert r.status_code == 200, r.text
-    assert r.json()["removed"] == {"sessions": 1, "progress": 1, "status": 1}
+    assert r.json()["removed"] == {"sessions": 1, "progress": 1, "status": 1, "attempts": 1}
 
     assert client.get(f"/api/books/{bid}/progress", headers=auth_headers).json() == \
         {"locator": 0, "percent": 0}, "进度该回到零"
@@ -65,7 +65,7 @@ def test_幂等_空状态重置不报错(client, auth_headers, default_root):
     bid = _scan_one(default_root)
     r = client.post(f"/api/books/{bid}/reset-reading-state", headers=auth_headers)
     assert r.status_code == 200, r.text
-    assert r.json()["removed"] == {"sessions": 0, "progress": 0, "status": 0}
+    assert r.json()["removed"] == {"sessions": 0, "progress": 0, "status": 0, "attempts": 0}
 
 
 def test_不碰文件指纹(client, auth_headers, default_root):
