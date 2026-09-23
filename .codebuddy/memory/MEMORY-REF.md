@@ -8,7 +8,7 @@
 - 本地实例：`*_DIR→/tmp/<自建>/…`、`LIBRARY_SOURCE_DIR=…/libraries`、`AUTO_WATCH=false`、`.venv/bin/python -m uvicorn novelforge.server:app --port <新端口>`（**别 kill 别人的实例**：8791 常被旧代码实例占、8993 是用户 Docker 容器）。
 - 登录字段是 `{"user","pin"}`（**不是** username/password）；全新 `DATA_DIR` 首启由 `db.init()` 按 `AUTH_USER`/`AUTH_PIN` 建默认账号（缺省 `admin/changeme`）。
 - 建库接口收 **`source_dirs`（绝对路径 JSON 数组，第 41 期起）**；路径须在 `config.LIBRARY_SOURCE_ROOTS` 内（「就地引用」，跨根合法）。⚠️ 已无 `mode`/`root_path`/`source_subdir`。
-- Docker：`docker-compose.yml` 端口 **8992**；`docker-compose.test.yml` 挂 `./novelforge` 端口 **8993**；断网无法 `--build`。
+- Docker：`docker-compose.yml` 是**自足的 NAS 单文件**（镜像 / 端口 **8992** / 挂载 `./input ./output ./config ./cookies ./cache ./data ./libraries` / `AUTH_*` / `AUTO_WATCH` / `WATCH_INTERVAL` 全部写字面量，**不读 `.env`**；`.env.example` 已删，`.env`/`.env.*` 仅留在 `.dockerignore` 里做卫生）。可选开关一律是**注释行**：`user: "1026:100"`、`EBOOK_CONVERT_BIN=`、`HTTP_PROXY/HTTPS_PROXY/NO_PROXY=`、`LIBRARY_SOURCE_DIRS1_NAME`/`DIRS2*`；`pull_policy: missing`（非 always）是刻意的。⚠️ 原 `docker-compose.override.yml` 被 Compose **自动合并**（静默改 8993 + 禁拉取）⇒ 已改名 `docker-compose.offline.yml`，只能 `-f docker-compose.yml -f docker-compose.offline.yml` 显式叠加（其 `ports` 用 `!override` 才不会并出两个端口）。`docker-compose.test.yml`（本地 build + 挂 `./novelforge` + 8993 + `./data-test`）同样自足；断网无法 `--build`。
 - 构建：`cd frontend && npm run type-check && npm run build && npm run deploy`，核对 `/static/v2/assets/index-*.js` **实际内容**（HMR 源码≠服务端产物）。
 - ⚠️ **本机 Node 由 nvm 管理（09-23 订正，取代此前「nvm 是空的、用 IDE 托管」的旧结论）**：nvm v2.0.0 位于
   `C:\Users\qingr\AppData\Local\Author Software\nvm`，已 `nvm install 24.19.0` + `nvm use 24.19.0`（设为默认），

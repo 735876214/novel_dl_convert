@@ -34,10 +34,11 @@
 - 认证走 GCM；**勿再引入** token 内嵌/insteadof 明文；推送失败先查认证/网络，**别改 git config**。
 - 入库配置禁含机器相关绝对路径（前例 `.vscode/settings.json` 的 `python.pythonPath`）：指向 `.venv` 的各人配在本机用户设置。
 - `.gitignore`/建环境/首跑/lock 噪声/Windows 删除 shim ⇒ **见 REF**。
+- ⚠️ **切勿恢复 `docker-compose.override.yml` 这个名字**（Compose 会自动合并 ⇒ NAS 上 `docker compose up -d` 静默变成 8993 + 禁拉取 + 挂不存在的 `./novelforge`），该用途已改名 `docker-compose.offline.yml` 且须显式 `-f`。NAS 部署 = **`docker-compose.yml` 单文件**（配置全写字面量、**不读 `.env`**；`.env.example` 已删），细节见 REF。
 
 ## 自动化测试
 - 完全离线 `.venv/bin/python -m pytest`；**后端基线（win32）721**、0 failed/0 err；**前端另计**（`npm run test:unit`=**62**）、不并入。
-- ⚠️ `pytest.ini` 已含 `addopts=-q`，**别再加 `-q`**（变 `-qq` 吞汇总行）；计数一律 `--junitxml=…`+脚本解析；跑全量前确认 `novelforge/static` 存在；**落全量日志到文件再读**，别 `grep` 猜。
+- ⚠️ `pytest.ini` 已含 `addopts=-q`，**别再加 `-q`**（变 `-qq` 吞汇总行）；计数一律 `--junitxml=…`+脚本解析；跑全量前确认 `novelforge/static` 存在；**落全量日志到文件再读**，别 `grep` 猜。⚠️ 本机 safe-delete shim 会拦 pytest 会话末对 `%TEMP%\pytest-of-*` 的清理 ⇒ `$LASTEXITCODE=1` 而 junit 全绿，**别据此判失败**（清 `NODE_OPTIONS` 也拦不住，只有 junit 权威）。
 - **「长期稳定失败」是产品 bug 症状**：逐层打印中间返回值找根因；e2e 做改前 FAIL/改后 PASS 对照。
 - 环境变量须在 import 业务模块**前**设（`config` 固化目录、`server` 导入即 `ensure_dirs()`）；`db._conn`/`_db_path` 模块级缓存⇒隔离靠 `db.close()`。
 - 碰库/DB 用例必须 `isolated`、接口 `client`+`auth_headers`；假 EPUB(`b"EPUB"`)够扫描类，元数据写回/系列解析要真 EPUB(`epub_builder.build_epub`)；测试库根须在 `LIBRARY_SOURCE_DIR` 下；断言留余地。
