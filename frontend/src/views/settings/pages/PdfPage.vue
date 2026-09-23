@@ -14,7 +14,6 @@ import {
   type PdfPrefs,
 } from '@/lib/pdfPrefs'
 import { useUiStore } from '@/stores/ui'
-import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 
 /**
  * YOU → Reader → PDF（`/settings/reader/pdf`）
@@ -118,11 +117,10 @@ function reset(): void {
       不影响书架与 EPUB 阅读器的加载体积。
     </p>
 
-    <SettingsUnsupportedCard
-      label="PDF"
-      :groups="['LAYOUT', 'ZOOM']"
-      :items="['页与页之间的自定义间距（Spread gap）']"
-      note="本项目已实现：滚动模式 / 页展 / 适配方式 / 自定义缩放 / 阅读进度记录。"
-    />
+    <p class="mt-3 text-[11.5px] leading-relaxed text-muted-foreground">
+      说明：上游该页的三项（滚动模式 / 页展 / 适配方式）连同自定义缩放、阅读进度记录均已实现，
+      故不再有「未支持」对照卡。第 51 期订正：此前卡片里列过一条「页与页之间的自定义间距」，
+      那其实是<strong>漫画页</strong>的上游条目（PDF 页的上游清单里没有它），已移除以免口径串页。
+    </p>
   </div>
 </template>

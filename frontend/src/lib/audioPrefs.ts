@@ -30,8 +30,8 @@ export const AUDIO_PREFS_DEFAULT: AudioPrefs = {
   sleepMinutes: 0,
 }
 
-/** 倍速档位（对齐上游 0.75x–2x） */
-export const AUDIO_SPEEDS = [0.75, 1, 1.25, 1.5, 2] as const
+/** 倍速档位（对齐上游 0.75x–2x；第 51 期补回 1.75x） */
+export const AUDIO_SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2] as const
 /** 快退间隔档位（秒） */
 export const AUDIO_SKIP_BACKS = [5, 10, 15, 30] as const
 /** 快进间隔档位（秒） */
