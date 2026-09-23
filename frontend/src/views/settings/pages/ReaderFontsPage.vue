@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import { customFontFamily } from '@/lib/fonts'
 import { useFontsStore } from '@/stores/fonts'
 import { useUiStore } from '@/stores/ui'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
@@ -66,6 +67,20 @@ function fmtSize(bytes: number): string {
 }
 
 const MAX_MB = () => Math.round(fonts.maxBytes / 1024 / 1024)
+
+// ---------------- 行内预览：用真实字体文件渲染样例文本 ----------------
+/** 选中的字体 id；空串时回落到列表第一条（避免删除后预览区空掉） */
+const selectedId = ref('')
+const previewSize = ref(20)
+const RESET_SIZE = 20
+/** 预览目标：选中项优先，否则第一条；一条都没有时为 null */
+const current = computed(
+  () => fonts.items.find((f) => f.id === selectedId.value) ?? fonts.items[0] ?? null,
+)
+/** 样例文本覆盖中文/拉丁/数字/标点，便于判断字形的完整度 */
+const SAMPLE =
+  '永和九年，岁在癸丑，暮春之初，会于会稽山阴之兰亭。' +
+  'The quick brown fox jumps over the lazy dog. 0123456789 !?;:「」（）、。'
 </script>
 
 <template>
@@ -113,10 +128,15 @@ const MAX_MB = () => Math.round(fonts.maxBytes / 1024 / 1024)
       <div
         v-for="f in fonts.items"
         :key="f.id"
-        class="flex items-center gap-3 border-b border-border/60 px-4 py-2.5 last:border-b-0"
+        role="button"
+        tabindex="0"
+        class="flex cursor-pointer items-center gap-3 border-b border-border/60 px-4 py-2.5 transition-colors last:border-b-0 hover:bg-muted/40"
+        :class="current?.id === f.id ? 'bg-muted/60' : ''"
+        @click="selectedId = f.id"
+        @keydown.enter="selectedId = f.id"
       >
         <div class="min-w-0 flex-1">
-          <div class="truncate text-[13px] text-foreground" :style="{ fontFamily: `'NF-${f.id}', serif` }">
+          <div class="truncate text-[13px] text-foreground" :style="{ fontFamily: `'${customFontFamily(f.id)}', serif` }">
             {{ f.name }}
           </div>
           <div class="truncate text-[11px] text-muted-foreground">
@@ -126,10 +146,63 @@ const MAX_MB = () => Math.round(fonts.maxBytes / 1024 / 1024)
         <button
           type="button"
           class="shrink-0 cursor-pointer text-[12px] text-muted-foreground transition-colors hover:text-destructive"
-          @click="remove(f.id, f.name)"
+          @click.stop="remove(f.id, f.name)"
         >
           删除
         </button>
+      </div>
+    </Card>
+
+    <!-- 行内预览：用 store 已注入的 @font-face 实时渲染样例文本（零额外请求） -->
+    <Card class="mt-4" padding="none">
+      <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+        <span class="text-[13px] font-medium text-foreground">字体预览</span>
+        <span class="text-[11.5px] text-muted-foreground">
+          {{ current ? `用「${current.name}」渲染` : '上传字体后可预览' }}
+        </span>
+        <div class="ml-auto flex items-center gap-2">
+          <label class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+            字号
+            <input
+              v-model.number="previewSize"
+              type="range"
+              min="14"
+              max="40"
+              step="1"
+              aria-label="预览字号"
+              class="h-1 w-28 cursor-pointer accent-primary"
+            >
+            <span class="w-9 text-right tabular-nums">{{ previewSize }}px</span>
+          </label>
+          <Button
+            size="sm"
+            variant="ghost"
+            :disabled="previewSize === RESET_SIZE"
+            @click="previewSize = RESET_SIZE"
+          >
+            重置
+          </Button>
+        </div>
+      </div>
+      <div class="px-4 py-4">
+        <p v-if="!current" class="text-center text-[12.5px] text-muted-foreground">
+          还没有字体可预览。上传后点上方任一字体即可在这里看字形。
+        </p>
+        <template v-else>
+          <p
+            class="break-words text-foreground"
+            :style="{
+              fontFamily: `'${customFontFamily(current.id)}', serif`,
+              fontSize: `${previewSize}px`,
+              lineHeight: 1.6,
+            }"
+          >
+            {{ SAMPLE }}
+          </p>
+          <p class="mt-2 text-[11.5px] text-muted-foreground">
+            预览用的是字体文件本身；阅读器里选中它后，正文即按此字形渲染。
+          </p>
+        </template>
       </div>
     </Card>
 
@@ -146,11 +219,8 @@ const MAX_MB = () => Math.round(fonts.maxBytes / 1024 / 1024)
     <SettingsUnsupportedCard
       label="Fonts"
       :groups="['UPLOAD FONTS', 'YOUR FONTS']"
-      :items="[
-        '按字重/斜体派生变体（Regular / Bold / Italic 自动匹配）',
-        '字体预览大图（上游展示字形样本，本项目只显示族名）',
-      ]"
-      note="本项目已实现：字体上传 / 列表 / 删除 / 在阅读器中选用（族名从字体 name 表解析，解析不出时回落文件名）。"
+      :items="['按字重 / 斜体派生变体（Regular / Bold / Italic 自动匹配）']"
+      note="本项目已实现：字体上传 / 列表 / 删除 / 在阅读器中选用（族名从字体 name 表解析，解析不出时回落文件名），以及行内字体预览（第 50 期：选中任一字体即用字体文件本身渲染样例文本并可调字号；上游的「预览大图」未做，本项目以行内样例替代）。"
     />
   </div>
 </template>
