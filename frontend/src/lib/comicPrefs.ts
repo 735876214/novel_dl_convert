@@ -7,14 +7,21 @@
  */
 import { notifyPrefsChanged } from './prefsBridge'
 
-/** Paginated = 一页一屏（翻页）；Infinite = 纵向连续（无限滚动） */
-export type ComicMode = 'paginated' | 'infinite'
+/**
+ * Paginated = 一页一屏（翻页）；Infinite = 纵向连续（无限滚动）；
+ * InfiniteNogap = 纵向连续但**页间不留白**（第 51 期，对齐上游 `Infinite no gaps`）。
+ */
+export type ComicMode = 'paginated' | 'infinite' | 'infinite_nogap'
 /** Single = 单页；Double = 双页并排 */
 export type ComicPageView = 'single' | 'double'
 /** Page = 整页可见；Width = 适配宽度；Height = 适配高度；Actual = 原始尺寸 */
 export type ComicFit = 'page' | 'width' | 'height' | 'actual'
 /** 日漫常见右到左 */
 export type ComicDirection = 'ltr' | 'rtl'
+/** 跨页对齐（第 51 期）：normal = 奇数页起（改造前行为）；shifted = 偶数页起（整体偏移一页） */
+export type ComicSpreadAlign = 'normal' | 'shifted'
+/** 宽页处理（第 51 期）：disable = 宽页照常并排（改造前行为）；auto = 检测到宽页时改单页显示 */
+export type ComicWidePage = 'disable' | 'auto'
 
 export interface ComicPrefs {
   mode: ComicMode
@@ -25,6 +32,14 @@ export interface ComicPrefs {
   gap: number
   /** 阅读背景色（漫画常用纯黑或灰） */
   bg: 'black' | 'dark' | 'gray' | 'white'
+  /** 跨页对齐（第 51 期；默认奇数页起 = 改造前） */
+  spreadAlign: ComicSpreadAlign
+  /** 宽页处理（第 51 期；默认不处理 = 改造前） */
+  widePage: ComicWidePage
+  /** 小屏强制双页（第 51 期）：**默认 true** —— 改造前双页与屏宽无关，关掉后才小屏回落单页 */
+  forceTwoPage: boolean
+  /** 自动翻到下一本（第 51 期；默认关）：读到末页后按系列序号进下一册 */
+  autoNext: boolean
 }
 
 export const COMIC_PREFS_KEY = 'comic-prefs'
@@ -36,11 +51,29 @@ export const COMIC_PREFS_DEFAULT: ComicPrefs = {
   direction: 'ltr',
   gap: 8,
   bg: 'dark',
+  // 第 51 期新增四项：默认值一律取「加这些项之前的行为」
+  spreadAlign: 'normal',
+  widePage: 'disable',
+  forceTwoPage: true,
+  autoNext: false,
 }
 
 export const COMIC_MODES = [
   { key: 'paginated', label: '翻页' },
   { key: 'infinite', label: '纵向连续' },
+  { key: 'infinite_nogap', label: '纵向连续（无间隙）' },
+] as const
+
+/** 跨页对齐（第 51 期，对齐上游 Spread alignment） */
+export const COMIC_SPREAD_ALIGNS = [
+  { key: 'normal', label: '奇数页起' },
+  { key: 'shifted', label: '偶数页起' },
+] as const
+
+/** 宽页处理（第 51 期，对齐上游 Wide-page handling） */
+export const COMIC_WIDE_PAGES = [
+  { key: 'disable', label: '照常并排' },
+  { key: 'auto', label: '宽页单页' },
 ] as const
 
 export const COMIC_PAGE_VIEWS = [

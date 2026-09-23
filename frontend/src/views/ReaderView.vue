@@ -912,7 +912,7 @@ onBeforeUnmount(() => {
            用嵌套 template 包裹 EPUB 分支：template 渲染时透明，不会破坏根 div 的
            flex 高度链（换成 div 会让 h-full 失效）。为免整块重排缩进，内部保持原缩进。 -->
       <PdfReader v-if="isPdf" :book-id="bookId" :title="book.title" />
-      <ComicReader v-else-if="isComic" :book-id="bookId" :title="book.title" />
+      <ComicReader v-else-if="isComic" :book-id="bookId" :title="book.title" :series="book.series" />
 
       <template v-else>
       <!-- 工具栏 -->

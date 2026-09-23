@@ -4,7 +4,8 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api } from '@/lib/api'
+import { api, type BookCard } from '@/lib/api'
+import { sortBySeriesIndex } from '@/lib/bookInfo'
 import {
   COMIC_BGS,
   COMIC_DIRECTIONS,
@@ -17,18 +18,22 @@ import {
   saveComicPrefs,
   type ComicPrefs,
 } from '@/lib/comicPrefs'
+import { useUiStore } from '@/stores/ui'
 
 /**
- * 漫画阅读器（CBZ）。
+ * 漫画阅读器（CBZ / CBR）。
  *
  * 页图按需取：`/api/books/{id}/comic/{index}`，**不一次拉整本**（一话可能几十 MB）。
  * ⚠️ 该接口必须允许 `?token=`（见 server._MEDIA_TOKEN_PATHS）——`<img src>` 是浏览器
  * 原生请求，带不了 Authorization 头，与封面/字体同一约束。
  *
- * 只支持 CBZ；CBR（RAR）需要额外解压依赖，后端会直接拒绝。
+ * 格式：CBZ（zip）与 **CBR（RAR）都支持** —— CBR 由服务端 zip/rar 双后端解压
+ * （`core/comics.py`，依赖 `bsdtar` / `unrar`），**缺解压器时接口明确返回 503**。
+ * 第 51 期订正了此处原先「只支持 CBZ、CBR 后端会直接拒绝」的过期注释。
  */
-const props = defineProps<{ bookId: string; title: string }>()
+const props = defineProps<{ bookId: string; title: string; series?: string }>()
 const router = useRouter()
+const ui = useUiStore()
 
 const prefs = ref<ComicPrefs>(readComicPrefs())
 watch(prefs, (v) => saveComicPrefs(v), { deep: true })
@@ -38,26 +43,78 @@ const loading = ref(true)
 const error = ref('')
 const total = ref(0)
 const page = ref(1)
+/** 容器宽度：小屏强制双页的判定依据（ResizeObserver 维护） */
+const boxW = ref(0)
+/** 已加载页图的自然尺寸：宽页判定用（取不到就不判定，按现状渲染） */
+const pageSizes = ref<Record<number, { w: number; h: number }>>({})
+/** 自动翻下一本的并发闸 + 滚动触底去抖闩 */
+const autoNextBusy = ref(false)
+const autoNextArmed = ref(true)
 
 const bgStyle = computed(() => ({ background: comicBg(prefs.value) }))
-const double = computed(() => prefs.value.pageView === 'double')
 const rtl = computed(() => prefs.value.direction === 'rtl')
+/** 纵向连续（含「无间隙」档） */
+const isInfinite = computed(() => prefs.value.mode !== 'paginated')
+/** 双页并排时每页至少要有这么宽，低于它就回落单页（仅当用户关掉「小屏强制双页」时生效） */
+const DOUBLE_MIN_WIDTH = 700
+
+/**
+ * 是否双页并排。
+ * ⚠️ `forceTwoPage` **默认 true** —— 改造前双页与屏宽无关，默认必须保持这一点；
+ * 只有用户主动关掉后才在小屏回落单页。宽度还没量到时按「够宽」处理，避免闪一下单页。
+ */
+const double = computed(() => {
+  if (prefs.value.pageView !== 'double') return false
+  if (prefs.value.forceTwoPage) return true
+  return boxW.value === 0 || boxW.value >= DOUBLE_MIN_WIDTH
+})
+
+/** 实际生效的页间距：「无间隙」档恒为 0（对齐上游 `Infinite no gaps`） */
+const gapPx = computed(() => (prefs.value.mode === 'infinite_nogap' ? 0 : prefs.value.gap))
 
 /** 页图 URL（index 从 0 起）。带 token 的拼法集中在 api.comicPageUrl（那里解释了为什么需要） */
 function pageUrl(index: number): string {
   return api.comicPageUrl(props.bookId, index)
 }
 
+/** 记录页图自然尺寸（宽页判定用）；取不到尺寸就忽略，回退成「照常并排」 */
+function rememberSize(n: number, e: Event): void {
+  const img = e.target as HTMLImageElement
+  if (!img.naturalWidth || !img.naturalHeight) return
+  pageSizes.value = { ...pageSizes.value, [n]: { w: img.naturalWidth, h: img.naturalHeight } }
+}
+
+/** 宽页阈值：宽高比超过它即视为「跨页大图」——并排会把它和邻页一起挤扁 */
+const WIDE_RATIO = 1.15
+function isWide(n: number): boolean {
+  const s = pageSizes.value[n]
+  if (!s || !s.h) return false
+  return s.w / s.h > WIDE_RATIO
+}
+
 /** 翻页模式下当前要显示的页（1-based）；双页时含下一页，并按阅读方向排列 */
 const shown = computed(() => {
   if (!total.value) return [] as number[]
   if (!double.value) return [page.value]
-  // 双页从奇数页开始更符合装订：左=奇数、右=偶数（ltr）；rtl 时左右互换由 CSS 处理
-  const first = page.value % 2 === 0 ? page.value - 1 : page.value
+  // 双页起点：normal = 奇数页起（改造前行为）；shifted = 偶数页起（整体偏移一页）
+  const shifted = prefs.value.spreadAlign === 'shifted'
+  const odd = page.value % 2 === 1
+  const first = shifted ? (odd ? page.value - 1 : page.value) : odd ? page.value : page.value - 1
   const a = Math.max(1, first)
   const b = a + 1
   const arr = [a, b].filter((n) => n <= total.value)
   return rtl.value ? [...arr].reverse() : arr
+})
+
+/**
+ * 真正渲染的页：`widePage === 'auto'` 时，并排里只要有宽页就只显示那一页。
+ * 尺寸没加载完时 `isWide` 恒 false ⇒ 先按并排渲染，量到尺寸后再收敛（不会误判成单页）。
+ */
+const shownPages = computed(() => {
+  const base = shown.value
+  if (prefs.value.widePage !== 'auto' || base.length < 2) return base
+  const wide = base.find((n) => isWide(n))
+  return wide ? [wide] : base
 })
 
 /** 图片适配：page = 整页可见，width/height 分别锁一边，actual = 原始像素 */
@@ -108,22 +165,58 @@ async function save(): Promise<void> {
 }
 
 function go(n: number): void {
-  const step = double.value ? 2 : 1
   const next = Math.min(Math.max(1, n), total.value)
   if (next === page.value) return
   page.value = next
   void save()
-  if (prefs.value.mode === 'infinite') {
+  if (isInfinite.value) {
     boxRef.value?.querySelector(`[data-p="${next}"]`)?.scrollIntoView({ block: 'start' })
   }
-  void step
 }
 
 function next(): void {
-  go(page.value + (double.value ? 2 : 1))
+  const target = page.value + (double.value ? 2 : 1)
+  // 已到末页：开了「自动翻下一本」就换书，否则原地不动（不再 clamp 成同一页空转）
+  if (target > total.value) {
+    void maybeAutoNext()
+    return
+  }
+  go(target)
 }
 function prev(): void {
   go(page.value - (double.value ? 2 : 1))
+}
+
+/**
+ * 读到末页后自动翻到系列下一本（第 51 期；默认关）。
+ * 数据用既有 `GET /api/series/{name}`（`api.seriesDetail`），**不新增后端接口**；
+ * 无系列 / 已是末册 / 请求失败都明确提示且**不跳转**（失败不得静默）。
+ */
+async function maybeAutoNext(): Promise<void> {
+  if (!prefs.value.autoNext || autoNextBusy.value) return
+  const series = (props.series || '').trim()
+  if (!series) {
+    ui.toast('这本没有系列信息，无法自动翻下一本')
+    return
+  }
+  autoNextBusy.value = true
+  try {
+    const d = await api.seriesDetail(series)
+    const list: BookCard[] = sortBySeriesIndex(d.books)
+    const i = list.findIndex((b) => String(b.id) === String(props.bookId))
+    const nxt = i >= 0 ? list[i + 1] : undefined
+    if (!nxt) {
+      ui.toast('已经是系列最后一本')
+      return
+    }
+    // 先把当前进度落盘再跳：save 是异步的，跳转后组件卸载时的 save 可能来不及
+    await save()
+    router.push(`/read/${nxt.id}`)
+  } catch (e) {
+    ui.toast(e instanceof Error ? `找不到系列下一本：${e.message}` : '找不到系列下一本')
+  } finally {
+    autoNextBusy.value = false
+  }
 }
 
 /** 点击左右区域翻页；rtl（日漫）时语义反转 —— 右到左读就是「点右边看下一页」反过来的直觉 */
@@ -161,7 +254,23 @@ function onScroll(): void {
     page.value = cur
     scheduleSave()
   }
+  maybeAutoNextAtBottom(el)
 }
+
+/** 连续模式滚到底且已到末页时换书；用闩避免同一次触底反复触发 */
+function maybeAutoNextAtBottom(el: HTMLElement): void {
+  if (!prefs.value.autoNext) return
+  const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8
+  if (atBottom && page.value >= total.value) {
+    if (!autoNextArmed.value) return
+    autoNextArmed.value = false
+    void maybeAutoNext()
+  } else if (!atBottom) {
+    autoNextArmed.value = true
+  }
+}
+
+let ro: ResizeObserver | null = null
 
 onMounted(async () => {
   await load()
@@ -171,6 +280,14 @@ onMounted(async () => {
       /* 连续模式的重活交给浏览器原生 loading="lazy"；这里只用于保持引用 */
     })
   }
+  // 容器宽度 = 小屏强制双页的判定依据；不支持或量不到就按「够宽」处理（保持既有行为）
+  if (typeof ResizeObserver === 'function' && boxRef.value) {
+    ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width ?? 0
+      if (w) boxW.value = w
+    })
+    ro.observe(boxRef.value)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -178,6 +295,7 @@ onBeforeUnmount(() => {
   void save()
   window.removeEventListener('keydown', onKeydown)
   io?.disconnect()
+  ro?.disconnect()
 })
 
 // 双页/方向变化时页码要落到「双页起点」，否则会停在第 2、4 页这类看着别扭的位置
@@ -267,21 +385,22 @@ watch([double, rtl], () => {
       <div
         v-if="prefs.mode === 'paginated'"
         class="flex h-full items-center justify-center"
-        :style="{ gap: `${prefs.gap}px` }"
+        :style="{ gap: `${gapPx}px` }"
       >
         <img
-          v-for="n in shown"
+          v-for="n in shownPages"
           :key="n"
           :src="pageUrl(n - 1)"
           :style="imgStyle"
           class="block select-none"
           draggable="false"
           :alt="`第 ${n} 页`"
+          @load="rememberSize(n, $event)"
         >
       </div>
 
-      <!-- 纵向连续：全部页懒加载（原生 loading="lazy"），页间距可调 -->
-      <div v-else class="flex flex-col items-center" :style="{ gap: `${prefs.gap}px`, paddingBottom: '1.5rem' }">
+      <!-- 纵向连续：全部页懒加载（原生 loading="lazy"）；间距可调，无间隙档恒为 0 -->
+      <div v-else class="flex flex-col items-center" :style="{ gap: `${gapPx}px`, paddingBottom: '1.5rem' }">
         <img
           v-for="n in total"
           :key="n"
