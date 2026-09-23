@@ -18,6 +18,11 @@
 > 该行**保留原位**以留档原始判断（原判「做全了是独立一期」正是本期的立项理由），行内以 ⚠️ 标注落地锚点
 > ⇒ §4.2 剩余真·不做 **4 项**。另有一条**刻意差异**如实记在该行内：不引入 SSE，逐本进度走既有的
 > 「SQLite 任务行 + 前端轮询」范式。
+> **第 42 期更新（2026-09-23）**：⚠️ **上游复核：`refs/heads/main` 仍为 `c292d6cc`**（与第 33 期取证时同一
+> commit，无新提交、无新 tag）⇒ 「上游出了新版本、有新模块」的前提**不成立**。本期转为**同一版本上的深挖**：
+> ① **刷新 §2 逐行判定**（多条「漏项候选」其实已在第 34–36 期落地，表未同步）；② **订正 3 处文档错误**
+> （`health` 路由 / `kobo`「可用子集」/ `metadata`「对等 6 类」）；③ 新增 **第六节**「已覆盖模块的部分缺口」。
+> **本期零运行时改动**（纯取证/文档）。
 
 ---
 
@@ -101,17 +106,17 @@
 | 11 | `book-dock` | 33 | §10 收书目录 | ✓ | 已覆盖 | 第 30 期（含整页拖拽投递） |
 | 12 | `book-duplicates` | 10 | §5 工具 | ✓ | 已覆盖 | 第 28 期（相似度阈值 85%） |
 | 13 | `book-metadata-fetch` | 18 | §3 书籍详情 | ✓ | 已覆盖 | 第 30 期「先预览再应用」的手动抓取面板 |
-| 14 | `book-metadata-lock` | 8 | §3 | **✗** | **漏项候选** | **字段级锁定**：13 个 provider id + 11 个漫画字段可锁，防自动抓取覆盖 |
+| 14 | `book-metadata-lock` | 8 | §3 | **✗** | **已覆盖**（第 35 期） | **字段级锁定**：⚠️ **第 42 期复核已落地** —— `meta_locks` 表（`novelforge/core/db.py:380`）+ 接口 `POST /api/books/{bid}/metadata/lock`（`novelforge/server.py:1358`）+ 抓取双重挡锁（`novelforge/core/metafetch.py:140/206/334`）；范围 = `fileops.METADATA_FIELDS` 10 字段 + `cover`，**只挡抓取、不挡手工编辑** |
 | 15 | `book-move` | 12 | §2 书架 | ✓ | 已覆盖 | **第 36 期已落地**（原为漏项候选）：跨库移动（预检 + 逐本进度 + 目标库相容闸门）；「目标库权限」在单用户下的等价物 = **库类型相容闸门**，原判与落地见 §4.2 该行 |
 | 16 | `book-request` | 131 | §9 求书 | ✓ | 已拍板不做 | 第 32 期已决策不做（含 indexers / download-clients / plugins 三大子树） |
 | 17 | `book` | 56 | §3 | ✓ | 已覆盖 | 含 `reading-attempt`（重读尝试）⇒ 见第 64 行 `user-book-status` |
-| 18 | `bookmark` | 14 | §4 | ✓ | **漏项候选** | **书签**（CFI 定位 / 软删 / tombstone 复活 / 冲突合并），本项目**零出现** |
-| 19 | `browse-counts` | 6 | §1 | ✓ | **漏项候选** | 侧栏 Browse 徽标三计数（作者 / 系列 / 批注），60 s 缓存 |
-| 20 | `catalog` | 9 | §10 | ✓ | **漏项候选** | **跨实体搜索**（作者 / 题材 / 标签 / 演播者 / 出版社 / 系列 / 语言 / 收藏） |
+| 18 | `bookmark` | 14 | §4 | ✓ | **已覆盖** | **书签**：⚠️ **第 42 期复核已落地** —— `bookmarks` 表（`novelforge/core/db.py:207-219`，`UNIQUE(book_id, anchor)` + 软删/墓碑）+ 全套 CRUD（`:899-1049`）+ 路由（`novelforge/server.py:1963-2037`）+ 前端（`frontend/src/views/ReaderView.vue:516-667`）。**刻意差异**：定位用**章节坐标**（`章序号:章内比例`）**非 CFI** |
+| 19 | `browse-counts` | 6 | §1 | ✓ | **已覆盖**（第 34 期） | 侧栏 Browse 徽标三计数（作者 / 系列 / 批注），60 s 缓存：⚠️ **第 42 期复核已落地** —— `novelforge/core/browse_counts.py:25/65`、`GET /api/browse-counts`（`novelforge/server.py:3957`） |
+| 20 | `catalog` | 9 | §10 | ✓ | **已覆盖**（第 34 期） | **跨实体搜索**：⚠️ **第 42 期复核已落地为 `/browse` 实体总览，六维度**（作者 / 系列 / 题材 / 出版社 / 语言 / 收藏；`frontend/src/views/BrowseView.vue:51-64`）。**刻意差异**：上游 8 维里的「演播者」本项目无实体故不做、「题材/标签」合并为同一字段只做一维 |
 | 21 | `collection` | 13 | §1 | ✓ | 已覆盖 | 收藏夹（含拖拽排序） |
 | 22 | `cover` | 22 | §3 | ✓ | 已覆盖 | 4 个封面 provider（audiobookcovers / duckduckgo / itunes）—— 本项目封面抓取已落地 |
 | 23 | `custom-icon` | 11 | §1 | ✓ | 已拍板不做 | 图标风格 + 上传 + 排序：`roadmap-gaps-remaining.md:785-787` 已判「成本远超收益」 |
-| 24 | `custom-metadata` | 9 | §3 | ✓ | **漏项候选** | **自定义字段的「定义」**（建字段 / 排序 / 改标签 / 切适用书库 / 归档 / 软删恢复永久删） |
+| 24 | `custom-metadata` | 9 | §3 | ✓ | **已覆盖**（第 35 期） | **自定义字段的「定义」**（建字段 / 排序 / 改标签 / 切适用书库 / 归档 / 软删恢复永久删）：⚠️ **第 42 期复核已落地** —— `novelforge/core/customfields.py` + 七条路由（`novelforge/server.py:1410-1522`）+ 两张新表 `custom_field_defs`（`novelforge/core/db.py:446`）/ `book_custom_values`（`novelforge/core/db.py:469`）；同名配置项 `metadata_fetch.custom_fields` 已下线 |
 | 25 | `dashboard` | 22 | §6 | ✓ | 已覆盖 | 第 32 期已对齐 12 件部件 |
 | 26 | `email` | 79 | §7 通知与更新 | ✓ | **漏项候选** | **邮件分发整块**（书籍附件 / 模板 / 收件人组 / 发送日志 / 加密凭据 / SMTP） |
 | 27 | `embedding` | 9 | §6 | **✗** | **漏项候选** | **元数据特征向量**（作者 / 题材 / 评分构成，非语义 embedding），服务第 52 行推荐 |
@@ -119,15 +124,15 @@
 | 29 | `file-write` | 94 | §5 | **✗** | **不与本项目定位相容** | **把元数据写回文件本身**（EPUB/FB2/MOBI/PDF/CBZ/音频 6 类 writer）—— 与发布三原则冲突 |
 | 30 | `font` | 18 | §1 | ✓ | 已覆盖 | 阅读器自定义字体上传 / 校验 / 元数据解析 |
 | 31 | `hardcover` | 32 | 三方同步 | ✓ | 已拍板不做 | 用户 2026-09-20 拍板本轮不做（§13） |
-| 32 | `health` | 9 | §1 | ✓ | 已覆盖 | 健康检查（本项目有 `/api/health`） |
-| 33 | `kobo` | 67 | §10 | ✓ | 已覆盖 | 本项目已实现 Kobo 同步的可用子集（第 7 / 31 期） |
+| 32 | `health` | 9 | §1 | ✓ | 已覆盖 | 健康检查：⚠️ **第 42 期订正** —— 本项目路由是 **`GET /health`**（`novelforge/server.py:262`），**没有 `/api/health`**（打它会经鉴权中间件被拦成 401；白名单 `novelforge/server.py` 的 `_auth_middleware` 只含 `/health` + `/api/auth/login` + `/api/logout`）。原记「本项目有 `/api/health`」为笔误 |
+| 33 | `kobo` | 67 | §10 | ✓ | **未实现** | ⚠️ **第 42 期订正**（原记「已实现可用子集」**与代码、`capability-gap.md`、`README.md` 三处矛盾**）：Kobo 同步 **2026-09-17 已决策不做**（`README.md:113`、`docs/bookorbit-capability-gap.md:435`、设置页占位 `frontend/src/data/settingsNav.ts:344-363`）。全仓无 `kobo*.py`；`kobo` 只作批注来源枚举（`novelforge/server.py:1917`，实际只写 `web`）与 Komga 占位字段（`novelforge/core/komga_api.py:458` 的 `koboSpan` 恒空） |
 | 34 | `koreader` | 62 | §10 | ✓ | 已覆盖 | 本项目已实现 kosync 协议服务端（`settingsNav.ts:397` 有完整口径记录） |
 | 35 | `library` | 26 | §2 | ✓ | 已覆盖 | 多库实体 + 定时扫描（第 10 期） |
 | 36 | `maintenance` | 11 | §5 | ✓ | 已覆盖 | 缺失资源巡检（含孤儿封面目录） |
 | 37 | `metadata-fetch` | 121 | §3 | ✓ | 已覆盖 | 13 个 provider（aladin / amazon / audible / audnexus / comicvine / goodreads / google / hardcover / itunes / kobo / librofm / lubimyczytac / open-library / ranobedb） |
 | 38 | `metadata-preferences` | 20 | §3 | ✓ | 已覆盖 | 字段级写入策略 + provider 开关 + provider 链接设置（第 30 期） |
 | 39 | `metadata-score` | 9 | §3 | ✓ | 已覆盖 | 第 29 期（`core/metascore.py` 12 字段加权） |
-| 40 | `metadata` | 70 | §3 | **✗** | 已覆盖 | 提取器 + 解析器（epub / fb2 / mobi / pdf / cbz / 音频 6 类）—— 本项目 `core/metadata.py` 对等 |
+| 40 | `metadata` | 70 | §3 | **✗** | **部分实现** | 提取器 + 解析器（上游 epub / fb2 / mobi / pdf / cbz / 音频 6 类）。⚠️ **第 42 期订正**（原记「本项目 `core/metadata.py` 对等」为**高估**）：`novelforge/core/metadata.py` 实际只做 **ISBN 形状判定**（`:23`）+ **文件名解析**（`:45`）；真解析仅 **EPUB**（`novelforge/core/library.py:833` `probe_epub`，完整 OPF）+ **漫画/音频结构**（`comics.py:156` `probe` 页数封面 / `audio.py:68` `tracks` 轨数）；**MOBI/AZW3/PDF 仅按文件名兜底、FB2 完全不支持**（`library.py:37` 的 `BOOK_EXTS` 不含 `.fb2`） |
 | 41 | `migration` | 89 | — | ✓ | **漏项候选** | **从其他系统迁移整块**（Audiobookshelf / Booklore / Calibre-Web-Automated / Grimmory） |
 | 42 | `narrator` | 5 | §11 | **✗** | **漏项候选** | **演播者实体**（规范化 / sort name / 按书替换）—— 本项目仅命名模板有 `{narrators}` 且**已记缺失** |
 | 43 | `notification` | 11 | §7 | ✓ | 已覆盖 | 通知浮层 + 已读 + 清理 job |
@@ -137,9 +142,9 @@
 | 47 | `reader` | 12 | §4 | ✓ | 已覆盖 | 阅读器服务端（epub + cbz 两子树） |
 | 48 | `reader-preferences` | 7 | §4 | ✓ | 已覆盖 | 第 32 期已落地 |
 | 49 | `reading-session` | 17 | §4 / §6 | ✓ | 已覆盖 | 阅读会话（本项目 `reading_sessions` 表对等） |
-| 50 | `reading-state` | 7 | §4 | ✓ | **漏项候选** | **重置一本书的阅读状态**（删会话 + 删进度 + 重置状态），本项目零出现 |
+| 50 | `reading-state` | 7 | §4 | ✓ | **已覆盖** | **重置一本书的阅读状态**（删会话 + 删进度 + 重置状态）：⚠️ **第 42 期复核已落地** —— `POST /api/books/{bid}/reset-reading-state`（`novelforge/server.py:1733`）+ `reset_reading_state`（`novelforge/core/db.py:3551-3579`，删 `reading_sessions` + `progress` + `reading_status` 三处，**不动批注/书签/评分/文件**） |
 | 51 | `readwise` | 20 | 三方同步 | ✓ | 已拍板不做 | 同上（§13） |
-| 52 | `recommendation` | 8 | §3 / §6 | ✓ | **漏项候选** | **打分排序的推荐**（元数据向量余弦 0.5 + 作者 0.1 + 题材 0.25 + 系列 0.1 + 评分距 0.05，上限 25） |
+| 52 | `recommendation` | 8 | §3 / §6 | ✓ | **已覆盖**（第 35 期） | **打分排序的推荐**（五路权重：元数据词袋余弦 0.5 + 同作者 0.1 + 题材 0.25 + 同系列 0.1 + 评分距 0.05，上限 25）：⚠️ **第 42 期复核已落地** —— `novelforge/core/recommend.py:28-33`（权重）/`:123-197`（打分排序）、`GET /api/books/{bid}/similar`（`novelforge/server.py:1777`）；`embedding`（语义向量）仍不做 |
 | 53 | `release-notes` | 11 | §7 | ✓ | 已覆盖 | What's New（本项目第 30 期已收敛为单一版本常量） |
 | 54 | `scanner` | 28 | §2 | ✓ | 已覆盖 | 文件监听 + 稳定性判定 + 扫描任务（本项目第 30 期已落地） |
 | 55 | `seed` | 6 | §1 | ✗ | 与定位无关 | 演示数据播种 + 清理 —— 本项目已删除演示种子（见 §8 域「任务真实性」条目） |
@@ -156,8 +161,7 @@
 | 66 | `user-statistics` | 18 | §6 | ✓ | 已覆盖 | 阅读统计聚合 job + 时区回填 |
 | 67 | `user` | 33 | §1 | ✓ | 已拍板不做 | 多用户实体 + 头像 + 内容过滤 ⇒ 多用户（§0.2） |
 
-**计数核对**：已覆盖 40 ＋ 已拍板不做 11（含 `custom-icon` / `path`）＋ 漏项候选 13 ＋ 非能力 1 ＋ 与定位无关 1
-（`seed`）＋ 与定位不容 1（`file-write`）＝ **67** ✓
+**计数核对（第 42 期刷新口径）**：已覆盖 **46**（原 40 − `kobo` 1 − `metadata` 1 + 第 34–36 期落地 8）＋ **部分实现 1**（`metadata`）＋ 已拍板不做 **16**（原 11 + `email` / `embedding` / `narrator` / `position-converter` / `kobo`）＋ 非能力 **1** ＋ 与定位无关/不容 **3**（`seed` / `file-write` / `migration`）＝ **67** ✓
 
 ---
 
@@ -208,9 +212,9 @@
 
 | 模块 | 上游形态（证据） | 本项目现状（第 34 期后） | 落地锚点 |
 | --- | --- | --- | --- |
-| `bookmark` | `bookmark.service.ts`：按 CFI / 位置创建、软删、tombstone 复活、并发冲突合并 | **已落地**（原为「零」）：`bookmarks` 表 + 六条路由 + 阅读器工具条开关与书签档（活跃 / 垃圾桶）；对齐上游三形态：**位置去重 / 墓碑复活 / 并发合并** | `novelforge/core/db.py:916` `save_bookmark`、`novelforge/server.py:1963-2037`、`frontend/src/views/ReaderView.vue:1053`/`:1150`（工具条开关 / 书签档面板）；能力键 `bookmarks`（仅 ebook / mixed） |
-| `reading-state` | `reading-state.service.ts`：`POST /books/:bookId/reset-reading-state`，删会话 + 删进度 + 重置状态 | **已落地**（原为「零」）：详情页「我的记录 → 从头开始」；**只删读出来的痕迹**，批注 / 书签 / 评分 / 收藏与磁盘文件一律不碰 | `novelforge/core/db.py:3503` `reset_reading_state`、`novelforge/server.py:1733`、`frontend/src/components/book/ReadingRecord.vue:137` |
-| `catalog` | `catalog.service.ts`：7 个实体维度的搜索（作者/题材/标签/演播者/出版社/系列/语言）+ 收藏；按可见库收窄 | **已落地**（原为「全局搜索只跨书」）：新页 `/browse`「实体总览」按**六个**维度浏览本地书目、按当前书库收窄；**不新增聚合接口**（这些维度本就是同一份书目的投影） | `frontend/src/views/BrowseView.vue:51`（维度表）、`frontend/src/router/index.ts:174`、`frontend/src/data/nav.ts:72`；「收藏」维度靠 `/api/books` 附带的 `collection_ids`（`novelforge/core/db.py:1085` `collection_map()`） |
+| `bookmark` | `bookmark.service.ts`：按 CFI / 位置创建、软删、tombstone 复活、并发冲突合并 | **已落地**（原为「零」）：`bookmarks` 表 + 六条路由 + 阅读器工具条开关与书签档（活跃 / 垃圾桶）；对齐上游三形态：**位置去重 / 墓碑复活 / 并发合并** | `novelforge/core/db.py:943` `save_bookmark`、`novelforge/server.py:1963-2037`、`frontend/src/views/ReaderView.vue:1053`/`:1150`（工具条开关 / 书签档面板）；能力键 `bookmarks`（仅 ebook / mixed） |
+| `reading-state` | `reading-state.service.ts`：`POST /books/:bookId/reset-reading-state`，删会话 + 删进度 + 重置状态 | **已落地**（原为「零」）：详情页「我的记录 → 从头开始」；**只删读出来的痕迹**，批注 / 书签 / 评分 / 收藏与磁盘文件一律不碰 | `novelforge/core/db.py:3551` `reset_reading_state`、`novelforge/server.py:1733`、`frontend/src/components/book/ReadingRecord.vue:137` |
+| `catalog` | `catalog.service.ts`：7 个实体维度的搜索（作者/题材/标签/演播者/出版社/系列/语言）+ 收藏；按可见库收窄 | **已落地**（原为「全局搜索只跨书」）：新页 `/browse`「实体总览」按**六个**维度浏览本地书目、按当前书库收窄；**不新增聚合接口**（这些维度本就是同一份书目的投影） | `frontend/src/views/BrowseView.vue:51`（维度表）、`frontend/src/router/index.ts:174`、`frontend/src/data/nav.ts:72`；「收藏」维度靠 `/api/books` 附带的 `collection_ids`（`novelforge/server.py:998`）+ `collection_map()`（`novelforge/core/db.py:1112`） |
 | `browse-counts` | `browse-counts.service.ts`：侧栏 Browse 三计数，60 s 缓存 | **已落地**（原为「无计数」）：三计数与目标页**同源**、60 秒节流、按库可选收窄；读失败不显示胶囊 | `novelforge/core/browse_counts.py:25`/`:65`、`novelforge/server.py:3572`、`frontend/src/data/nav.ts` 的 `countSource: 'browse'` + `frontend/src/components/AppSidebar.vue` 的 `navCount()` |
 
 ### 4.2 有价值但不做（8 项；其中 3 项第 35 期、1 项第 36 期改判为做并落地，行内 ⚠️ 标注）
@@ -245,3 +249,79 @@
 3. **`capability-gap.md` 顶部加一行指引**指向本文件（避免下次又只按页面找缺口）。
 4. **本期不实现清单里的任何项**。第四节「值得做」的 4 项是第 34 期的候选输入，
    **排期与否由用户决定**，本文件只提供事实与成本判断。
+
+---
+
+## 六、第 42 期更新（2026-09-23）：上游无新增 → 判定刷新 + 部分缺口
+
+**背景**：本期按「重新取证上游找新缺口」立项，先代理优先复核上游
+`https://github.com/735876214/bookorbit` 的 `refs/heads/main` —— **仍为 `c292d6cc`**
+（与第 33 期取证时**同一个 commit**，无新提交、无新 tag）⇒ 「上游出了新版本、有新模块/新页面」
+的前提**不成立**。于是本期做两件**在同一版本上就能完成、且此前未系统做过**的事：
+① **刷新 §2 逐行判定**（多条「漏项候选」其实已在第 34–36 期落地，表未同步；另订正 3 处文档错误）；
+② **补一类此前未单独成表的「部分缺口」** —— 上游模块有、本项目**只做了子集**的子能力。
+**本期零运行时改动**（不实现清单里的任何项）。
+
+### 6.1 §2 判定刷新（10 处，已就地改在第二节表内）
+
+| # | 模块 | 原判定 | 第 42 期判定 | 一句话依据 |
+| --- | --- | --- | --- | --- |
+| 14 | `book-metadata-lock` | 漏项候选 | 已覆盖（第 35 期） | `meta_locks` 表 + `/metadata/lock` 路由 + 抓取双重挡锁 |
+| 18 | `bookmark` | 漏项候选 | 已覆盖 | `bookmarks` 表 + 全套 CRUD（定位=章节坐标，非 CFI） |
+| 19 | `browse-counts` | 漏项候选 | 已覆盖（第 34 期） | `core/browse_counts.py` + `GET /api/browse-counts` |
+| 20 | `catalog` | 漏项候选 | 已覆盖（第 34 期） | `/browse` 实体总览，**六**维度（上游 8） |
+| 24 | `custom-metadata` | 漏项候选 | 已覆盖（第 35 期） | `custom_field_defs` + `book_custom_values` + 七路由 |
+| 50 | `reading-state` | 漏项候选 | 已覆盖 | `reset-reading-state` 路由 + `reset_reading_state` |
+| 52 | `recommendation` | 漏项候选 | 已覆盖（第 35 期） | `core/recommend.py` 五路权重 + `/similar` |
+| 32 | `health` | 已覆盖（**备注错**） | 已覆盖（**订正**） | 路由是 `GET /health`，**无 `/api/health`** |
+| 33 | `kobo` | 已覆盖 | **未实现** | Kobo 同步 2026-09-17 决策不做，全仓无 `kobo*.py` |
+| 40 | `metadata` | 已覆盖 | **部分实现** | 仅 EPUB 全解析；FB2 不支持、MOBI/AZW3/PDF 无内容解析 |
+
+**为何原表会陈旧**：§2 的「判定」列是第 33 期一次性写就的，第 34–36 期的落地只写在**各行的 ⚠️ 备注**
+与 §4.2 里，**没有回填判定列** ⇒ 直接读表会得出「这么多还没做」的错误印象。**这一条是本期最重要的方法学收获**：
+**判定列必须与落地记录同批回写**，否则表越大越不可信。
+
+### 6.2 已覆盖模块的部分缺口（新候选，三类）
+
+对「上游有、本项目只做了子集」的子能力逐条核实（锚点为实测）。**排期与否由用户决定**，本节只给事实与成本。
+
+**A. 值得做（候选，成本低、与现有定位相容）**
+
+| 子能力 | 上游模块 | 本项目现状（锚点） | 成本 |
+| --- | --- | --- | --- |
+| 系列缺册工具（series-gaps） | `series` | **未实现**；仅有「缺序号」提示（`frontend/src/views/SeriesDetailView.vue:55`），不是「找出缺的册号」 | 低：按系列序号找空洞，纯读 |
+| 作者排序键回填（author sort-key backfill） | `book` | **部分**：字段 + 手改有（`novelforge/core/db.py:405`、`POST /api/authors/{name}/sort-name` `novelforge/server.py:2289`），**无批量回填** | 低 |
+| 书架首字母/分桶跳转（jump buckets） | `book` | **未实现** | 中：需排序键 + 前端跳转条 |
+| 阅读尝试/重读（reading-attempt） | `book` / `user-book-status` | **未实现**：`reading_sessions` 无重读语义 | 中：新表/列 + 状态机（上游另有 backfill） |
+| 批注导出增强（格式 / 范围） | `annotation` | **部分**：前端仅 Markdown 导出（`frontend/src/views/AnnotationsView.vue:179`），无后端接口、无其它格式 | 低 |
+| 系列折叠偏好上云（series-collapse-prefs） | `book` | **部分**：仅存 `localStorage`（键 `nf-shelf-prefs`，`frontend/src/stores/shelfPrefs.ts:40`），不随账号偏好同步 | 低 |
+
+**B. 有价值但不做（收益面窄 / 上游语义与本项目不匹配）**
+
+| 子能力 | 上游模块 | 本项目现状 | 不做的理由 |
+| --- | --- | --- | --- |
+| 批注颜色 ↔ 样式映射 + 跨端降色 | `annotation` | **部分**：10 色调色板（`frontend/src/data/annotationColors.ts:27`），无样式映射 | 单端阅读器，无跨端降色需求 |
+| 批注级位置换算（CFI / kobo span / kepub DOM） | `annotation` / `position-converter` | **部分**：仅进度级 XPointer↔章（`novelforge/core/koreader.py:63`） | 与 §4.2 `position-converter` 同判：单用户单设备收益低 |
+| 实体**删除**策略 | `entity-manager` | **部分**：仅作者/系列的改名 + 合并（`novelforge/core/fileops.py:218/254`） | 源文件名无写入口 ⇒ 删除退化为纯元数据操作，收益窄 |
+| 元数据提取器扩到 6 类 | `metadata` | **部分**：仅 EPUB 全解析（见 §2 第 40 行） | 非 EPUB 本项目**刻意不解析**（`novelforge/core/library.py:1234`） |
+| 在线 provider 扩到 13 个 | `metadata-fetch` | **2 源**（OpenLibrary / Google Books，`novelforge/core/metasources.py:36-48`） | 刻意维持内置 2 源（`docs/roadmap-gaps-remaining.md:72`） |
+
+**C. 与定位或既有决策不容（不做）**
+
+| 子能力 | 上游模块 | 本项目现状 | 判定依据 |
+| --- | --- | --- | --- |
+| 批注跨端同步 / 导入 | `annotation` | **未实现** | kosync 只同步进度、**无批注端点**（`novelforge/server.py:2443`）；无数据源 |
+| 按设备重建批注位置（device-position-rebuilder） | `annotation` | **未实现**：批注表无设备维度（`novelforge/core/db.py:191-199`） | 无设备来源 |
+| Kobo 阅读状态投影 | `user-book-status` | **未实现** | Kobo 同步已决策不做（见 §2 第 33 行） |
+| 通知清理 job | `notification` | **未实现**（刻意不做） | 本项目**无通知产生端**（`novelforge/server.py:4666-4672` 明写不做自动清理） |
+| 通知推送网关（SSE） | `notification` | **未实现**（走轮询，`novelforge/server.py:4638`） | 全仓**刻意不上 SSE**（与 §4.2 `book-move` 同一口径） |
+| 孤儿封面清扫（cover-sweep） | `maintenance` | **未实现**：仅有孤儿**记录**清理（`novelforge/server.py:4410`） | 已决策不做（`docs/bookorbit-capability-gap.md:283`） |
+
+### 6.3 联动文档时效
+
+- `docs/bookorbit-settings-inventory.md` / `docs/bookorbit-feature-flows.md` /
+  `docs/bookorbit-library-contract.md`：按第 41 期库模型关键字（`root_path` / `source_subdir` /
+  `inplace`）**复核后零命中** ⇒ 无需改动。
+- `docs/roadmap-gaps-remaining.md`：逐期历史记录里的旧 `root_path` / `source_subdir` / `mode` 表述
+  **属历史事实，一律不动**（按锚点核验约定，改它等于篡改历史）。
+- `docs/bookorbit-capability-gap.md` §0.3 基线已随本期重取（路由 284 → **285**）。
