@@ -973,3 +973,25 @@ SERVER
 
 移除后设置页共 **36 页**（上游 30 页有落点 + 本项目补充 6 页），**占位页清零**（`SettingsPlaceholder` 机制保留兜底）。
 另：`libraries`（LIBRARY → Libraries）**转为真实操作页**（承载原「工具 → 书库管理」的全部能力），工具页不再单列该书签。
+
+---
+
+## 第 51 期更新（2026-09-24）：外观与阅读器五页照上游补齐
+
+本轮对 7 个与外观 / 阅读器相关的设置页逐条对照上游，**只有 4 页存在真实差额**（另 3 页已达上游覆盖）。所有新增档位的**默认值一律等于改造前行为**，观感 1:1 不变。
+
+| 页 | 本轮补齐 | 未支持（仍列对照卡） |
+| --- | --- | --- |
+| `appearance/book-covers` 封面样式 | 详情页取色三档（关闭 / 单色 / 双色）；卡片叠加层补「系列号」（共 6 项） | 封面搜索提供者（需在线抓取）、叠加层「锁定状态」（无实体） |
+| `appearance/layout` 布局 | 卡片主 / 次标签可选；折叠系列封面五形态（首册 / 最新 / 首册未读 / 堆叠 / 马赛克） | 尺寸同步方式、方形封面尺寸与间距（均无实体）—— 由 4 条减为 **2 条** |
+| `reader/ebook` 电子书 | 固定版式页宽三档（跟随书籍 / 单页 / 并排两页，仅 `fixed_layout` 生效） | 新书套用设置（本项目排版本就全局单一来源）—— 由 2 条减为 **1 条** |
+| `reader/comics` 漫画 | 纵向连续「无间隙」档、跨页对齐、宽页处理、小屏强制双页、自动翻到下一本 | **无**（上游 10 项全覆盖，对照卡已移除） |
+| `reader/audio` 有声书 | 倍速补回 1.75x（上游 0.75x–2x 六档齐） | 无（上游 4 项本就全覆盖） |
+| `reader/pdf` PDF | 不新增功能；**订正口径**：移除错挂的「页与页之间的自定义间距」（那是漫画页的上游条目） | 无（上游 3 项本就全覆盖） |
+| `appearance/behavior` 浏览行为 | **未改动**（上游 3 项早已全覆盖、无对照卡） | 无 |
+
+实现落点：`stores/coverPrefs.ts`（`tint`）、`components/ui/BookCover.vue`（`series_index` 角标）、`views/BookDetailView.vue`（取色按档注入变量）、`stores/displayPrefs.ts`（`primaryLabel` / `secondaryLabel` / `collapsedCover`）、`views/ShelfView.vue`（卡片标签 + 折叠行代表本与堆叠 / 马赛克渲染）、`lib/comicPrefs.ts`（`mode` 第三档 + `spreadAlign` / `widePage` / `forceTwoPage` / `autoNext`）、`components/reader/ComicReader.vue`（五项 + `ResizeObserver` 量容器宽 + 按图片自然尺寸判宽页 + 系列下一本）、`lib/readerPrefs.ts`（`fixedLayoutWidth`）、`views/ReaderView.vue`（固定版式分支按档给容器尺寸，**仍不注入重排设置**）、`lib/audioPrefs.ts`（`AUDIO_SPEEDS` 补 1.75）。
+
+「自动翻到下一本」**零新增后端**：用既有 `GET /api/series/{name}` 取系列成员，按 `series_index` 定序取下一册；无系列 / 已是末册 / 请求失败都只提示、**不跳转**。
+
+另订正两处陈旧文本：`components/reader/ComicReader.vue` 的「只支持 CBZ；CBR 后端会直接拒绝」（后端早已 CBZ + CBR 双后端，缺解压器时返 503）；`views/settings/pages/PdfPage.vue` 的串页未支持项。
