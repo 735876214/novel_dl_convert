@@ -4,7 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
-import { api, type KomgaLayoutPlan } from '@/lib/api'
+import { api, type KomgaLayoutItem, type KomgaLayoutPlan } from '@/lib/api'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { useUiStore } from '@/stores/ui'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
@@ -57,16 +57,25 @@ async function toggleLayout(): Promise<void> {
 const plan = ref<KomgaLayoutPlan | null>(null)
 const picked = ref<Set<string>>(new Set())
 const busy = ref(false)
+/** 预览失败信息：留在页面内并可重试，而不是只弹一条转瞬即逝的 toast */
+const planError = ref('')
+/** 展示层筛选 / 排序：只影响展示，不影响提交范围（提交 = 已勾选项） */
+const q = ref('')
+const onlyConflict = ref(false)
+const sortBy = ref<'series' | 'path'>('series')
 
 async function preview(): Promise<void> {
   busy.value = true
+  planError.value = ''
   try {
     const p = await api.komgaLayoutPreview()
     plan.value = p
     // 默认勾选全部无冲突条目：整理是个「我全都要」的动作
     picked.value = new Set(p.items.filter((i) => !i.conflict).map((i) => i.old))
   } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '预览失败')
+    // 预览失败必须留在页面上（可重试），不能只弹一条转瞬即逝的提示
+    plan.value = null
+    planError.value = e instanceof Error ? e.message : '预览失败'
   } finally {
     busy.value = false
   }
@@ -83,6 +92,41 @@ const pickedItems = computed(() =>
   (plan.value?.items ?? []).filter((i) => picked.value.has(i.old) && !i.conflict),
 )
 const pickedIdChanges = computed(() => pickedItems.value.filter((i) => i.id_changes).length)
+
+// ---- 预览列表的展示层筛选 / 排序（computed 派生，不改 plan.items 原数组） ----
+const conflictCount = computed(() => (plan.value?.items ?? []).filter((i) => i.conflict).length)
+
+const visibleItems = computed<KomgaLayoutItem[]>(() => {
+  const kw = q.value.trim().toLowerCase()
+  const list = (plan.value?.items ?? []).filter((i) => {
+    if (onlyConflict.value && !i.conflict) return false
+    if (!kw) return true
+    return [i.title, i.series, i.old, i.new].some((s) => String(s ?? '').toLowerCase().includes(kw))
+  })
+  return [...list].sort((a, b) =>
+    sortBy.value === 'series'
+      ? String(a.series ?? '').localeCompare(String(b.series ?? ''), 'zh') ||
+        (Number(a.index) || 0) - (Number(b.index) || 0) ||
+        String(a.old).localeCompare(String(b.old), 'zh')
+      : String(a.old).localeCompare(String(b.old), 'zh'),
+  )
+})
+
+/** 可见项里的可勾选项（冲突项后端会拒，勾了也没意义） */
+const selectableVisible = computed(() => visibleItems.value.filter((i) => !i.conflict))
+const allVisiblePicked = computed(
+  () =>
+    selectableVisible.value.length > 0 &&
+    selectableVisible.value.every((i) => picked.value.has(i.old)),
+)
+
+/** 全选/清空只作用于**当前可见**项；筛选隐藏的已勾选项不受影响（提交范围始终 = 已勾选） */
+function toggleAllVisible(): void {
+  const s = new Set(picked.value)
+  if (allVisiblePicked.value) for (const i of selectableVisible.value) s.delete(i.old)
+  else for (const i of selectableVisible.value) s.add(i.old)
+  picked.value = s
+}
 
 async function apply(): Promise<void> {
   if (!pickedItems.value.length) {
@@ -152,6 +196,14 @@ async function apply(): Promise<void> {
       </div>
     </Card>
 
+    <!-- 预览失败：页面内错误态 + 重试（不再只弹 toast） -->
+    <Card v-if="planError" class="mt-4" padding="sm">
+      <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+        <span>整理预览失败：{{ planError }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" :disabled="busy" @click="preview">重试</Button>
+      </div>
+    </Card>
+
     <Card v-if="plan" class="mt-4" padding="none">
       <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <span class="text-[13px] font-medium text-foreground">整理预览</span>
@@ -168,8 +220,49 @@ async function apply(): Promise<void> {
         </div>
       </div>
 
+      <!-- 展示层筛选 / 排序：只影响展示，提交范围仍是「已勾选」 -->
+      <div
+        v-if="plan.items.length"
+        class="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-4 py-2"
+      >
+        <input
+          v-model="q"
+          type="text"
+          aria-label="搜索待整理的书"
+          placeholder="搜索书名 / 系列 / 路径…"
+          class="h-7 min-w-0 flex-1 rounded-md border border-border bg-card px-2.5 text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring"
+        >
+        <select
+          v-model="sortBy"
+          aria-label="排序方式"
+          class="h-7 rounded-md border border-border bg-card px-2 text-[12px] text-foreground outline-none focus:border-ring"
+        >
+          <option value="series">按系列</option>
+          <option value="path">按当前路径</option>
+        </select>
+        <label class="flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground">
+          <input v-model="onlyConflict" type="checkbox" class="h-3.5 w-3.5 cursor-pointer accent-primary">
+          只看冲突（{{ conflictCount }}）
+        </label>
+        <button
+          type="button"
+          class="cursor-pointer rounded-md border border-border px-2.5 py-1 text-[12px] text-foreground transition-colors hover:bg-muted"
+          @click="toggleAllVisible"
+        >
+          {{ allVisiblePicked ? '清空可见项' : '全选可见项' }}
+        </button>
+        <span class="basis-full text-[11px] text-muted-foreground">
+          展示 {{ visibleItems.length }} / {{ plan.items.length }} 条；筛选与排序只影响展示，
+          提交范围是「已勾选」的 {{ pickedItems.length }} 本。
+        </span>
+      </div>
+
       <div v-if="!plan.items.length" class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">
         没有需要整理的书（要么已经符合 Komga 结构，要么判不出系列）。
+      </div>
+
+      <div v-else-if="!visibleItems.length" class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">
+        当前筛选下没有条目 —— 清空搜索或取消「只看冲突」。
       </div>
 
       <div v-else class="max-h-[460px] overflow-auto">
@@ -185,7 +278,7 @@ async function apply(): Promise<void> {
           </thead>
           <tbody>
             <tr
-              v-for="it in plan.items"
+              v-for="it in visibleItems"
               :key="it.old"
               class="border-t border-border/60"
               :class="it.conflict ? 'bg-destructive/5' : ''"
@@ -238,7 +331,13 @@ async function apply(): Promise<void> {
     <Card class="mt-4" padding="none">
       <div class="flex items-center gap-4 border-b border-border px-4 py-3.5">
         <div class="min-w-0 flex-1">
-          <div class="text-[13px] font-medium text-foreground">Komga 兼容服务端</div>
+          <div class="flex items-center gap-2">
+            <span class="text-[13px] font-medium text-foreground">Komga 兼容服务端</span>
+            <span v-if="komga.enabled" class="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] text-emerald-600 dark:text-emerald-400">
+              已开启
+            </span>
+            <span v-else class="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">未开启</span>
+          </div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
             开启后，第三方 Komga 客户端（Mihon / Panels / 官方 App）把服务器地址填成本应用即可：
             浏览书库、读漫画与 PDF、下载 EPUB、双向同步阅读进度
@@ -250,7 +349,12 @@ async function apply(): Promise<void> {
         </Button>
       </div>
 
-      <div class="border-b border-border px-4 py-3.5">
+      <!-- 未开启时地址与凭据只是先填好备用，如实说明，避免误以为此刻已能连上 -->
+      <div v-if="!komga.enabled" class="border-b border-border bg-muted/40 px-4 py-2 text-[11.5px] text-muted-foreground">
+        当前<strong>未开启</strong>：下面的地址与凭据只是先填好备用，客户端此刻连不上；点上方「开启」后立即生效。
+      </div>
+
+      <div class="border-b border-border px-4 py-3.5" :class="komga.enabled ? '' : 'opacity-55'">
         <div class="mb-1.5 text-[13px] font-medium text-foreground">服务器地址</div>
         <div class="flex flex-wrap items-center gap-2">
           <code class="flex-1 truncate rounded-md border border-border bg-muted px-3 py-2 font-mono text-[12px] text-foreground">
@@ -263,7 +367,7 @@ async function apply(): Promise<void> {
         </div>
       </div>
 
-      <div class="border-b border-border px-4 py-3.5">
+      <div class="border-b border-border px-4 py-3.5" :class="komga.enabled ? '' : 'opacity-55'">
         <div class="mb-1.5 text-[13px] font-medium text-foreground">凭据</div>
         <div class="grid gap-3 md:grid-cols-2">
           <label class="block">
