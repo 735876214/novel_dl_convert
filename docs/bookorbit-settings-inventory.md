@@ -405,7 +405,7 @@ SERVER
 | LAST SCAN | `Scanned 2 days ago` / `Failed 17 hours ago` + 小字（如 `Server restarted during scan`）+ 原因标签（`Schedule - no change` / `Manual - no change`） | 扫描状态与原因 | ✅ |
 | 行动按钮 | `Scan` | 单库扫描 | ✅ |
 
-**本项目落地**：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用，一个库可引用多个来源文件夹）、来源文件夹投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、自动归库、库类型→功能显隐、每库独立覆盖（第 13 期）均在「工具 → 书库管理」实现；此设置页仅作上游结构对照（`settingsNav` 标 `placeholder`，link→/tools/libraries）。
+**本项目落地**：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用，一个库可引用多个来源文件夹）、来源文件夹投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、自动归库、库类型→功能显隐、每库独立覆盖（第 13 期）均在「设置 → 书库管理」实现；此设置页**第 49 期起即操作页**（`settingsNav` 标 `ready`，组件 = `views/tools/LibrariesView.vue`；原「工具 → 书库管理」入口已移除）。
 
 ### 2.18 LIBRARY → Metadata → Providers（`/settings/metadata/providers`）
 
@@ -623,7 +623,7 @@ SERVER
 | OPDS ACCOUNTS | 排序选项 | 下拉 | 未能采集 | `Recently Added / Title (A-Z) / Title (Z-A) / Author (A-Z) / Author (Z-A) / Series (A-Z) / Series (Z-A)` | ✅（本项目支持排序） |
 | OPDS NOTES | 只读 | — | — | 「Use OPDS accounts in reader apps. Keep credentials private and rotate passwords if shared accidentally.」 | — |
 
-**本项目落地**：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页（`?page=`）与排序（`?sort=recent|title|author|series&order=`）均已实现。第 14 期起支持按书库分别暴露：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 `/opds/lib/<库 id>`，可在「工具 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404）。鉴权用 HTTP Basic + 应用账号（OPDS 客户端只会发 Basic，所以 `/opds` 不走 `/api` 的 Bearer 中间件）。未支持：独立 OPDS 账号体系。
+**本项目落地**：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页（`?page=`）与排序（`?sort=recent|title|author|series&order=`）均已实现。第 14 期起支持按书库分别暴露：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 `/opds/lib/<库 id>`，可在「设置 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404）。鉴权用 HTTP Basic + 应用账号（OPDS 客户端只会发 Basic，所以 `/opds` 不走 `/api` 的 Bearer 中间件）。未支持：独立 OPDS 账号体系。
 
 ### 2.30 DEVICES → Email（`/settings/email`）
 
@@ -758,7 +758,7 @@ SERVER
 - **输出布局开关**（`output.layout`）：有系列的书落 `系列名/系列名 #N.ext`，无系列保持平铺；
 - **既有库整理**：先预览、再应用；会改 basename 的条目在应用时自动迁移阅读进度 / 批注 / 评分 / 收藏（按 `book_id` 搬迁），整理库不会把进度清零；
 - **系列来源**：EPUB 的 `calibre:series` 优先，判不出则从文件名推断（`系列 第01卷` / `系列 #1` / `系列 (01)` / `系列 - 01`），都判不出就原地不动；
-- **逐库暴露**（第 22 期起）：在「工具 → 书库管理 → 每库设置」关掉某库的「对 Komga 暴露」，它就不进客户端书库列表，直连它的系列 / 书籍地址也一并 404（默认全部暴露）；
+- **逐库暴露**（第 22 期起）：在「设置 → 书库管理 → 每库设置」关掉某库的「对 Komga 暴露」，它就不进客户端书库列表，直连它的系列 / 书籍地址也一并 404（默认全部暴露）；
 - **兼容服务端补齐**：客户端可按书库浏览（系列与书籍都按库过滤），系列级「全部已读 / 全部未读」（只把百分比顶到 100，不清除读者位置），CBR 拿到正确的媒体类型；
 - 有声书库不进 Komga（Komga 没有音频模型）。
 
@@ -847,7 +847,7 @@ SERVER
 | YOU → Notifications | **通知** 页 | ✅ 已实现：按类 Off / Problems / All 客户端过滤（生效范围 = 通知中心与日志） |
 | YOU → Privacy & Sharing | **隐私与共享** 只读占位页 | ➖ 单用户部署下没有可分享对象（无其它账号、无管理员角色），整页不提供 |
 | YOU → Restrictions | **内容限制** 只读占位页 | ➖ 单用户部署下无内容限制的应用对象，整页不提供 |
-| LIBRARY → Libraries | **工具 → 书库管理**（设置页仅对照） | 🔵 多书库实体 / 自动归库 / 每库覆盖均在工具页；设置页 `placeholder` 对照 |
+| LIBRARY → Libraries | **设置 → 书库管理**（本页即操作页） | 🔵 多书库实体 / 自动归库 / 每库覆盖均在本页（第 49 期起；原工具页入口已移除） |
 | LIBRARY → Metadata（7 页） | **元数据**（7 页均实现） | ✅ Providers / Field Rules / Custom Fields / Confidence Score / Books / Authors / Genre Blocklist 均 `ready` |
 | LIBRARY → File Naming | **工具 → 批量重命名** | 🔵 命名规则存服务端 + 4 配方 + 预览；上游 13 token / 7 修饰符 / 结构语法未支持 |
 | LIBRARY → Maintenance | 部分散落 **监听** / **工具** | ✅ 上传上限 / 成就重算 / 索引重建 / 缓存 / 回收站已实现；IMPORT / RECOMMENDATIONS / UPDATES 未实现（只读列出） |
@@ -947,3 +947,29 @@ SERVER
 
 - **非管理员角色的可见性**：实例只有唯一一个 Superuser 账号，创建第二个账号属写操作，为遵守只读约束未执行（详见第 3 节）。
 - 个别开关的当前值（如「缩略图点击行为」）仍标注「未能采集」，**未做推测补全**。
+
+---
+
+## 8. 第 49 期：从设置页移除的 12 页（2026-09-23）
+
+以下 12 个上游对照只读占位页经裁决**从设置页移除**（`settingsNav` 删条目 ⇒ 路由随生成逻辑消失；旧 URL 落未知路由兜底页）。
+逐页的上游结构、采集缺口与「为何不做」仍保留在本文件前文；代码侧以 `tests/test_settings_nav_contract.py` 的
+`REMOVED_UPSTREAM` / `REMOVED_PAGE_PATHS` 显式声明，防止静默漂移。
+
+| # | 页面 | 上游能力 | 移除理由 |
+| --- | --- | --- | --- |
+| 1 | `appearance/icons` 图标 | 多图标集切换 + 自定义上传 | 本项目图标是内联 SVG 常量表（零外部请求），做风格 / 上传成本远超收益；已结项不做 |
+| 2 | `appearance/language` 界面语言 | 25 语言切换 | 界面文案中文硬编码、无 i18n；单语场景无对象 |
+| 3 | `account/privacy` 隐私与共享 | 阅读洞察共享级别 | 以多用户为前提 |
+| 4 | `account/restrictions` 内容限制 | 每账号内容 / 分级限制 | 以多用户 + 权限模型为前提 |
+| 5 | `kobo` Kobo 同步 | 设备注册 / 双向进度 / KEPUB | 已决策不做 Kobo（2026-09-17） |
+| 6 | `koreader-upstream` KOReader 上游对照 | 上游 KOReader 页结构 | 与已实现的「KOReader 进度互通」重复；其上游结构已并入该页 |
+| 7 | `email` 邮件投递 | SMTP 提供者与投递 | 本项目无邮件投递链路 |
+| 8 | `admin/users` 用户 | 多账号 + 角色 | 单用户部署 |
+| 9 | `admin/account-activity` 账号活动 | 多账号活跃度 | 单用户；对应口径是「审计日志」 |
+| 10 | `admin/magic-links` 免密链接 | 共享账号免密链接 | 无共享账号体系 |
+| 11 | `admin/oidc` OIDC / SSO | 企业单点登录 | 单用户、账号本机维护 |
+| 12 | `admin/requests` 求书 | indexer + 下载客户端 | 已决策不做（2026-09-18） |
+
+移除后设置页共 **36 页**（上游 30 页有落点 + 本项目补充 6 页），**占位页清零**（`SettingsPlaceholder` 机制保留兜底）。
+另：`libraries`（LIBRARY → Libraries）**转为真实操作页**（承载原「工具 → 书库管理」的全部能力），工具页不再单列该书签。

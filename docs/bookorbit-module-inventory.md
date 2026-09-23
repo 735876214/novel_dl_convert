@@ -142,7 +142,7 @@
 | 47 | `reader` | 12 | §4 | ✓ | 已覆盖 | 阅读器服务端（epub + cbz 两子树） |
 | 48 | `reader-preferences` | 7 | §4 | ✓ | 已覆盖 | 第 32 期已落地 |
 | 49 | `reading-session` | 17 | §4 / §6 | ✓ | 已覆盖 | 阅读会话（本项目 `reading_sessions` 表对等） |
-| 50 | `reading-state` | 7 | §4 | ✓ | **已覆盖** | **重置一本书的阅读状态**（删会话 + 删进度 + 重置状态）：⚠️ **第 42 期复核已落地** —— `POST /api/books/{bid}/reset-reading-state`（`novelforge/server.py:1733`）+ `reset_reading_state`（`novelforge/core/db.py:3738`，删 `reading_sessions` + `progress` + `reading_status` **+ `reading_attempts`（第 43 期起）四处**，**不动批注/书签/评分/文件**） |
+| 50 | `reading-state` | 7 | §4 | ✓ | **已覆盖** | **重置一本书的阅读状态**（删会话 + 删进度 + 重置状态）：⚠️ **第 42 期复核已落地** —— `POST /api/books/{bid}/reset-reading-state`（`novelforge/server.py:1733`）+ `reset_reading_state`（`novelforge/core/db.py:3767`，删 `reading_sessions` + `progress` + `reading_status` **+ `reading_attempts`（第 43 期起）四处**，**不动批注/书签/评分/文件**） |
 | 51 | `readwise` | 20 | 三方同步 | ✓ | 已拍板不做 | 同上（§13） |
 | 52 | `recommendation` | 8 | §3 / §6 | ✓ | **已覆盖**（第 35 期） | **打分排序的推荐**（五路权重：元数据词袋余弦 0.5 + 同作者 0.1 + 题材 0.25 + 同系列 0.1 + 评分距 0.05，上限 25）：⚠️ **第 42 期复核已落地** —— `novelforge/core/recommend.py:28-33`（权重）/`:123-197`（打分排序）、`GET /api/books/{bid}/similar`（`novelforge/server.py:1777`）；`embedding`（语义向量）仍不做 |
 | 53 | `release-notes` | 11 | §7 | ✓ | 已覆盖 | What's New（本项目第 30 期已收敛为单一版本常量） |
@@ -212,9 +212,9 @@
 
 | 模块 | 上游形态（证据） | 本项目现状（第 34 期后） | 落地锚点 |
 | --- | --- | --- | --- |
-| `bookmark` | `bookmark.service.ts`：按 CFI / 位置创建、软删、tombstone 复活、并发冲突合并 | **已落地**（原为「零」）：`bookmarks` 表 + 六条路由 + 阅读器工具条开关与书签档（活跃 / 垃圾桶）；对齐上游三形态：**位置去重 / 墓碑复活 / 并发合并** | `novelforge/core/db.py:959` `save_bookmark`、`novelforge/server.py:1963-2037`、`frontend/src/views/ReaderView.vue:1053`/`:1150`（工具条开关 / 书签档面板）；能力键 `bookmarks`（仅 ebook / mixed） |
-| `reading-state` | `reading-state.service.ts`：`POST /books/:bookId/reset-reading-state`，删会话 + 删进度 + 重置状态 | **已落地**（原为「零」）：详情页「我的记录 → 从头开始」；**只删读出来的痕迹**，批注 / 书签 / 评分 / 收藏与磁盘文件一律不碰 | `novelforge/core/db.py:3738` `reset_reading_state`、`novelforge/server.py:1733`、`frontend/src/components/book/ReadingRecord.vue:137` |
-| `catalog` | `catalog.service.ts`：7 个实体维度的搜索（作者/题材/标签/演播者/出版社/系列/语言）+ 收藏；按可见库收窄 | **已落地**（原为「全局搜索只跨书」）：新页 `/browse`「实体总览」按**六个**维度浏览本地书目、按当前书库收窄；**不新增聚合接口**（这些维度本就是同一份书目的投影） | `frontend/src/views/BrowseView.vue:51`（维度表）、`frontend/src/router/index.ts:174`、`frontend/src/data/nav.ts:72`；「收藏」维度靠 `/api/books` 附带的 `collection_ids`（`novelforge/server.py:998`）+ `collection_map()`（`novelforge/core/db.py:1128`） |
+| `bookmark` | `bookmark.service.ts`：按 CFI / 位置创建、软删、tombstone 复活、并发冲突合并 | **已落地**（原为「零」）：`bookmarks` 表 + 六条路由 + 阅读器工具条开关与书签档（活跃 / 垃圾桶）；对齐上游三形态：**位置去重 / 墓碑复活 / 并发合并** | `novelforge/core/db.py:970` `save_bookmark`、`novelforge/server.py:1963-2037`、`frontend/src/views/ReaderView.vue:1053`/`:1150`（工具条开关 / 书签档面板）；能力键 `bookmarks`（仅 ebook / mixed） |
+| `reading-state` | `reading-state.service.ts`：`POST /books/:bookId/reset-reading-state`，删会话 + 删进度 + 重置状态 | **已落地**（原为「零」）：详情页「我的记录 → 从头开始」；**只删读出来的痕迹**，批注 / 书签 / 评分 / 收藏与磁盘文件一律不碰 | `novelforge/core/db.py:3767` `reset_reading_state`、`novelforge/server.py:1733`、`frontend/src/components/book/ReadingRecord.vue:137` |
+| `catalog` | `catalog.service.ts`：7 个实体维度的搜索（作者/题材/标签/演播者/出版社/系列/语言）+ 收藏；按可见库收窄 | **已落地**（原为「全局搜索只跨书」）：新页 `/browse`「实体总览」按**六个**维度浏览本地书目、按当前书库收窄；**不新增聚合接口**（这些维度本就是同一份书目的投影） | `frontend/src/views/BrowseView.vue:51`（维度表）、`frontend/src/router/index.ts:174`、`frontend/src/data/nav.ts:72`；「收藏」维度靠 `/api/books` 附带的 `collection_ids`（`novelforge/server.py:998`）+ `collection_map()`（`novelforge/core/db.py:1154`） |
 | `browse-counts` | `browse-counts.service.ts`：侧栏 Browse 三计数，60 s 缓存 | **已落地**（原为「无计数」）：三计数与目标页**同源**、60 秒节流、按库可选收窄；读失败不显示胶囊 | `novelforge/core/browse_counts.py:25`/`:65`、`novelforge/server.py:3572`、`frontend/src/data/nav.ts` 的 `countSource: 'browse'` + `frontend/src/components/AppSidebar.vue` 的 `navCount()` |
 
 ### 4.2 有价值但不做（8 项；其中 3 项第 35 期、1 项第 36 期改判为做并落地，行内 ⚠️ 标注）
@@ -428,3 +428,26 @@
   （`onMounted` / `onUnmounted` 挂卸监听）；结果区新增「共 N 条结果」计数。
 - **验证**：前端 `type-check` 0 错 + `test:unit` 62 + `build` + `deploy` 全绿；playwright 冒烟三页认证后
   **控制台 0 错误**；后端全量 **725 passed / 0 failed**（本期无新增后端用例）。
+
+## 十二、第 49 期更新（2026-09-23）：设置页信息架构 + 错误态收敛 + 偏简视图做深
+
+- **书库管理并入设置页**：`settingsNav` 的 `libraries` 由 placeholder 转 `ready`（组件 = `views/tools/LibrariesView.vue`），
+  删工具页「书库管理」标签与 `tools/libraries` 路由；8 处入口改指 `/settings/libraries`（侧栏 / 书架 / 首屏提示条 /
+  引导弹窗 / 迁移门禁 / 本地转换 / 收书目录 / `nav.ts`）；用户可见文案「工具 → 书库管理」→「设置 → 书库管理」
+  （含后端 `core/library_rules.py`、`core/library.py`）。契约 `tests/test_first_run_contract.py` 的 `LIBRARIES_ROUTE` 已同步。
+- **删除 12 个上游对照只读占位页**（图标 / 界面语言 / 隐私与共享 / 内容限制 / Kobo / KOReader 上游对照 / 邮件投递 /
+  用户 / 账号活动 / 免密链接 / OIDC·SSO / 求书）：设置页 48 → **36 页**，占位页清零；
+  `tests/test_settings_nav_contract.py` 重构（页数 36、`EXPECTED_PLACEHOLDERS` 空集、新增 `REMOVED_UPSTREAM` /
+  `REMOVED_PAGE_PATHS` 显式「已移除」清单、`EXPECTED_OWN` 收缩为 `{komga}`）。逐页理由见
+  `docs/bookorbit-settings-inventory.md` §8。
+- **全站错误态收敛（19 处）**：把「主数据加载失败被静默当成空态」的页面改为**可重试错误态** ——
+  `AuthorsView` / `SeriesView` / `SeriesDetailView` / `AuthorDetailView` / `AnnotationsView` / `StatsView` /
+  `CollectionDetailView` / `BookDetailView`（区分「拉取失败」与「找不到」）/ `tools/{SourcesView, OutputView,
+  MissingResourcesView, DuplicateBooksView, EntityManagerView, LogsView, LibrariesView}` /
+  `settings/pages/{IntegrationPage, KoreaderPage}` / `stores/{collections, stats, library}`（后者供仪表盘页级提示）。
+  有意静默降级（离线进度 / 可选增强 / 非阻塞状态预取）**保留**不动。
+- **偏简视图做深**：`SeriesView` 加排序（册数 / 名称）；`tools/OutputView` 加格式筛选 + 排序（时间 / 名称 / 体积）；
+  `DocumentationView` 接 `/health` 真实版本号并补「更新日志 / 关于 / 高级」入口。
+- **文档锚点**：本期改 `router/index.ts`、`data/settingsNav.ts` 等被引用文件 ⇒ 重跑 `tests/check_doc_anchors.py`，
+  修正 `capability-gap.md`（8 处）与 `module-inventory.md`（4 处）的**实测行号**，**硬错 0**；余 14 条「疑似漂移」
+  全在 `docs/roadmap-gaps-remaining.md` 的**历史实施记录**内，按约定（历史行号不改写）保留。
