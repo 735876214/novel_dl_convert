@@ -111,7 +111,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
         note: '本项目实现主题 / 点缀色（65 档）/ 圆角；「保存位置」已由「偏好与同步」页统管（外观与阅读偏好整套同步，也可按设备各用各的）；「背景图案」为未支持。',
       }),
       p('appearance/book-covers', 'Book Covers', '封面样式', 'ready', {
-        note: '已实现：真实内嵌封面 + 填充方式（填满 / 自然贴底 / 模糊底图）+ 书脊（含第 20 期的「漫画是否显示书脊」开关）+ 阴影强度 + 5 种卡片叠加层 + 详情页封面取色（第 20 期），存本机、改完立即生效。未支持：封面搜索提供者（依赖在线封面抓取）。',
+        note: '已实现：真实内嵌封面 + 填充方式（填满 / 自然贴底 / 模糊底图）+ 书脊（含第 20 期的「漫画是否显示书脊」开关）+ 阴影强度 + 6 种卡片叠加层（第 51 期补「系列号」）+ 详情页封面取色（第 20 期；第 51 期加「关闭 / 单色 / 双色」三档），存本机、改完立即生效。未支持：封面搜索提供者（依赖在线封面抓取，本项目不做封面搜索）、叠加层「锁定状态」（本项目没有锁定这一实体）。',
         upstream: {
           title: 'Book Covers',
           desc: 'Cover shadows, spine effects, and placeholder art.',
@@ -126,7 +126,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['LIBRARY GRID LAYOUT', 'SERIES DISPLAY', 'AUTHOR GRID', 'LIST AND TABLE VIEWS'],
           items: ['Cover size behavior（全部同步 / 各视图独立）', 'Portrait cover size（130px）', 'Square cover size（150px）', 'Portrait grid spacing（28px）', 'Square grid spacing（28px）', 'Card info mode（On hover / Below cover / Off）', 'Collapsed series cover（Stack / Mosaic / First / Latest / First Unread）', 'Author cover size（120px）/ shape（Circle / Square）', 'Zebra striping'],
         },
-        note: '已实现封面尺寸 / 网格间距 / 卡片信息位置 / 作者封面尺寸与形状 / 表格隔行底色五项，均真作用于书架与作者页。上游的「尺寸同步方式」「方形封面尺寸」「方形网格间距」在本项目没有对应实体（只有一套网格、只有竖版封面），卡片主次标签与折叠系列封面形态暂缓 —— 四条均在页尾对照卡列明，不造假控件。这几项属外观，随账号同步（并入 appearance 块，未新增第七块）。',
+        note: '已实现封面尺寸 / 网格间距 / 卡片信息位置 / 卡片主次标签（第 51 期）/ 折叠系列封面五形态（第 51 期：首册 / 最新 / 首册未读 / 堆叠 / 马赛克）/ 作者封面尺寸与形状 / 表格隔行底色，均真作用于书架与作者页；卡片主次标签取不到值时回退成书名 / 作者（不留空行），「堆叠」「马赛克」是纯 CSS 多封面组合（不额外请求）。上游的「尺寸同步方式」「方形封面尺寸」「方形网格间距」在本项目没有对应实体（只有一套网格、只有竖版封面），仍在页尾对照卡列明，不造假控件。这几项属外观，随账号同步（并入 appearance 块，未新增第七块）。',
       }),
       p('appearance/behavior', 'Behavior', '浏览行为', 'ready', {
         upstream: {
@@ -144,7 +144,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['NEW BOOKS', 'LAYOUT', 'THEME', 'TYPOGRAPHY', 'ADVANCED'],
           items: ['Apply my settings to new books', 'Reading flow（Paginated / Scrolled）', 'Fixed-layout page spreads', 'Columns', 'Dark mode（13 档变体）', 'Font', 'Font style', 'Font size', 'Line height', 'Paragraph spacing', 'Justify text', 'Hyphenation', 'Letter / Word spacing', 'First-line indent', 'Max content width', 'Column gap'],
         },
-        note: '本项目实现「阅读模式 / 13 档主题 / 字体 / 字重样式 / 字号 / 行高 / 内容宽度 / 文本区左右内边距 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 15 项；未支持：新书套用设置（Apply my settings to new books，本项目排版是全局单一来源、新书一律套用，该开关要解决的问题天然不存在）、固定版式页宽三档（Fixed-layout page spreads：固定版式已能识别并对这类书停用重排设置，但不提供页宽档位）。',
+        note: '本项目实现「阅读模式 / 13 档主题 / 字体 / 字重样式 / 字号 / 行高 / 内容宽度 / 文本区左右内边距 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 15 项，以及第 51 期补齐的「固定版式页宽」（跟随书籍 / 单页 / 并排两页；只对 fixed_layout 的书生效，且仍不注入任何重排设置）；未支持：新书套用设置（Apply my settings to new books，本项目排版是全局单一来源、新书一律套用，该开关要解决的问题天然不存在）。',
       }),
       p('reader/pdf', 'PDF', 'PDF', 'ready', {
         upstream: {
@@ -153,7 +153,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['LAYOUT', 'ZOOM'],
           items: ['Scroll mode（Page / Scrolled / Horizontal）', 'Page spread（None / Odd / Even / Auto）', 'Default fit（Fit Page / Fit Width / Automatic / Custom）'],
         },
-        note: '已实现：滚动模式（翻页 / 纵向 / 横向）、页展（单页 / 双页奇右 / 偶右 / 自动）、适配方式、自定义缩放、阅读进度。渲染用 pdf.js，懒加载（打开 PDF 才下载）。',
+        note: '已实现：滚动模式（翻页 / 纵向 / 横向）、页展（单页 / 双页奇右 / 偶右 / 自动）、适配方式、自定义缩放、阅读进度 —— 上游该页三项至此全覆盖，故无「未支持」对照卡。渲染用 pdf.js，懒加载（打开 PDF 才下载）。⚠️ 第 51 期订正：此前未支持卡里那条「页与页之间的自定义间距（Spread gap）」实为「漫画页」的上游条目（PDF 页的上游清单里没有它），已移除以免口径串页。',
       }),
       p('reader/comics', 'Comics', '漫画', 'ready', {
         upstream: {
@@ -162,7 +162,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['VIEW', 'DISPLAY'],
           items: ['Reading mode（Paginated / Infinite spaced / Infinite no gaps）', 'Page view（Single / Two-page）', 'Fit mode（Page / Width / Height / Actual）', 'Reading direction（L to R / R to L）', 'Spread alignment', 'Spread gap', 'Wide-page handling', 'Force two-page on small screens', 'Auto-advance to next book', 'Background color'],
         },
-        note: '已实现：阅读模式（翻页 / 纵向连续）、页视图（单页 / 双页）、适配方式、阅读方向（含日漫右→左）、页间距、背景色、阅读进度。支持 CBZ 与 CBR：CBR 由服务端的 zip/rar 双后端解压（bsdtar，容器内由 libarchive-tools 提供），两种格式在阅读器里体验完全一致。',
+        note: '已实现：阅读模式（翻页 / 纵向连续 / 纵向连续无间隙）、页视图（单页 / 双页）、适配方式、阅读方向（含日漫右→左）、跨页对齐、宽页处理、小屏强制双页、自动翻到下一本（第 51 期补齐，四项都真作用于阅读器）、页间距、背景色、阅读进度 —— 上游该页 10 项至此全覆盖，故无「未支持」对照卡。自动翻下一本按 series_index 取下一册（用既有的 GET /api/series/{name}，不新增接口），无系列或已是末册时只提示、不跳转。支持 CBZ 与 CBR：CBR 由服务端的 zip/rar 双后端解压（bsdtar，容器内由 libarchive-tools 提供），两种格式在阅读器里体验完全一致。',
       }),
       p('reader/audio', 'Audiobook', '有声书', 'ready', {
         upstream: {
@@ -171,7 +171,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['PLAYBACK', 'SKIP CONTROLS'],
           items: ['Default playback speed（0.75x–2x）', 'Default volume', 'Skip back duration（5/10/15/30s）', 'Skip forward duration（10/15/30/60s）'],
         },
-        note: '已实现：默认倍速（0.75x–2x）、默认音量、快退间隔（5/10/15/30 秒）、快进间隔（10/15/30/60 秒）、睡眠定时默认时长。播放器另提供轨道列表与按秒进度保存（跨设备同步）；有声书支持「一个目录 = 一本书」（一章一文件）与单个音频文件两种形态。',
+        note: '已实现：默认倍速（0.75x–2x，第 51 期补回 1.75x 档）、默认音量、快退间隔（5/10/15/30 秒）、快进间隔（10/15/30/60 秒）、睡眠定时默认时长 —— 上游该页 4 项全覆盖。播放器另提供轨道列表与按秒进度保存（跨设备同步）；有声书支持「一个目录 = 一本书」（一章一文件）与单个音频文件两种形态。',
       }),
       p('reader/fonts', 'Fonts', '阅读字体', 'ready', {
         upstream: {
