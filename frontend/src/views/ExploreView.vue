@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -39,7 +39,14 @@ const HOT_WORDS = ['三体', '诡秘之主', '长安的荔枝', '凡人修仙传
 
 const hasResults = computed(() => hits.value.length > 0)
 
+/** Esc 关闭预览弹窗（无障碍：弹窗应可键盘关闭） */
+function onKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape' && previewOpen.value) previewOpen.value = false
+}
+onMounted(() => window.addEventListener('keydown', onKeydown))
+
 onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
   inflight?.abort()
 })
 
@@ -166,6 +173,10 @@ function startDownload(hit: SearchHit): void {
       <p class="text-[11.5px] text-warning">部分书源检索失败：{{ errors.join('；') }}</p>
     </div>
 
+    <p v-if="!searching && hasResults" class="mb-2 text-[11.5px] text-muted-foreground">
+      共 {{ hits.length }} 条结果
+    </p>
+
     <Card v-if="searching" class="py-10 text-center text-[12.5px] text-muted-foreground">
       正在并发检索各书源…
     </Card>
@@ -203,10 +214,17 @@ function startDownload(hit: SearchHit): void {
     />
 
     <!-- 预览弹窗 -->
-    <div v-if="previewOpen" class="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4" @click.self="previewOpen = false">
+    <div
+      v-if="previewOpen"
+      class="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="explore-preview-title"
+      @click.self="previewOpen = false"
+    >
       <div class="w-[min(32rem,92vw)] rounded-lg border border-border bg-card p-5 shadow-2xl">
         <div class="mb-3 flex items-start gap-2">
-          <h3 class="min-w-0 flex-1 font-serif text-[16px] font-semibold text-foreground">{{ previewTitle }}</h3>
+          <h3 id="explore-preview-title" class="min-w-0 flex-1 font-serif text-[16px] font-semibold text-foreground">{{ previewTitle }}</h3>
           <button
             type="button"
             class="grid h-6 w-6 cursor-pointer place-items-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
