@@ -63,7 +63,7 @@
 - `core/stats.py`：`overview` 键**只增不删**、**跟随 `library_id`**、**不新增扫描路径**（细节见 REF）。
 - ⚠️ **阅读状态阈值只有两入口**：后端 `lib_settings.reading_thresholds(library_id)`、前端 `lib/readingThresholds.ts`；**别第三处判**。默认值不动既有行为（finished 99.5、started 0.0≡`pct>0`）。
 - ⚠️ **路径判据只有 `frontend/src/lib/paths.ts`**（`isAbsolutePath`/`pathsOverlap`）；别处抄 `startsWith('/')` ⇒ Windows `C:\…` 被判非绝对。
-- **「文件:行号」收尾必须实测复核**（工具/局限见 REF）：只记真实行号、不记偏移量；判据「0 硬错+0 漂移」**且**人工过完 `--todo`。
+- **「文件:行号」收尾必须实测复核**（工具/局限见 REF）：只记真实行号、不记偏移量；判据「0 硬错+0 漂移」**且**人工过完 `--todo`；⚠️ **历史实施记录里的旧行号不改写**（改它=篡改历史）——`roadmap-gaps-remaining.md` 里那批「疑似漂移」属此类，保留即可。
 
 ## 配置分层（四层 + 每库覆盖）
 - `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时 `生效值=每库覆写 ?? 全局`，落 `libraries.settings`；真值源 `core/lib_settings.py`+`features.SETTING_CAPS`；接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（细节见 REF）。
@@ -74,7 +74,7 @@
 
 ## 前端
 - Vue3 SFC+TS+Vite8+Tailwind v4+Pinia4+vue-router5(hash)；产物 `novelforge/static/v2/`（`/` 服务其 index.html，缺失 503）；**勿往 `novelforge/static/` 加手写页**。
-- 演示数据禁 `Math.random()`；**路由 path 全局唯一**；`settingsNav`/router 注册表/侧栏**三处与组件同批改**；**零外部请求零 CDN**。
+- 演示数据禁 `Math.random()`；**路由 path 全局唯一**；`settingsNav`/router 注册表/侧栏**三处与组件同批改**（设置页由注册表生成路由 ⇒ **删条目即删路由**）；**零外部请求零 CDN**。⚠️ 第 49 期后**设置页共 36 页**（删除 12 个上游对照占位页、占位页清零）；**「书库管理」在 `/settings/libraries`**（工具页不再单列该书签）。
 - ⚠️ **前端收尾必须 `npm run type-check` + `npm run build` + `npm run deploy`**：`vitest` 不校验模块导出完整性（第 44 期曾把两个文件误提交成 0 B，62 个单测全过、只有构建才报断链）；且 `build` 只落 `frontend/dist`，**`deploy` 才同步到 `novelforge/static/v2`**（漏 deploy ⇒ 服务端仍服务旧 bundle，改动看似「没生效」）。
 - ⚠️ 设置页 `note` 纯文本插值 ⇒ `**`/反引号/`<strong>` 原样显示（契约钉住）。
 - 图表入口 `lib/charts.ts`、偏好归属、侧栏导航契约、命名避让（`/explore` vs `/browse`）、实体总览六维、窄屏双写法、`ToolsLayout` 用 `onActivated` ⇒ **域细节见 REF**。
