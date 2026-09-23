@@ -46,6 +46,9 @@ EXPECTED_SPECS = (
     # 第 40 期：路径判据（向导与编辑弹窗共用一份）。原来两处各写一遍 `startsWith('/')`，
     # Windows 上把 `C:\…` 判成非绝对 ⇒ 向导卡在第 2 步。
     "src/lib/paths.spec.ts",
+    # 第 43 期：书架首字母分桶（跳转条的唯一判据源）。分错桶不会报错、只是跳错位置，
+    # 故用 spec 把「拉丁按首字 / 非拉丁归 # / 桶序升序」钉死。
+    "src/lib/shelfBuckets.spec.ts",
 )
 
 
