@@ -9,7 +9,13 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
-import { api, type BookDockResponse, type HealthInfo, type WatcherStatus } from '@/lib/api'
+import {
+  api,
+  type BookDockItem,
+  type BookDockResponse,
+  type HealthInfo,
+  type WatcherStatus,
+} from '@/lib/api'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -62,6 +68,14 @@ const counters = computed(() => [
 const dock = ref<BookDockResponse | null>(null)
 const activeTab = ref('all')
 const busyId = ref('')
+/** 流水线（主数据）加载失败信息：失败不能退化成「投递目录里还没有文件」。 */
+const dockError = ref('')
+/** 首屏加载标记：避免数据未到时先闪一下空态。 */
+const dockLoading = ref(true)
+/** 批量选择集合；仅作用于当前 tab 的条目，切 tab / 批量完成后清空。 */
+const picked = ref<Set<string>>(new Set())
+const batchBusy = ref(false)
+const copiedDir = ref(false)
 
 const STATUS_LABEL: Record<string, string> = {
   pending: '待处理',
@@ -86,16 +100,100 @@ function fmtSize(n: number): string {
 }
 
 async function loadDock(): Promise<void> {
+  dockLoading.value = true
+  dockError.value = ''
   try {
     dock.value = await api.bookDock(activeTab.value)
-  } catch {
-    /* 列表取不到时不阻塞上方开关 */
+  } catch (e) {
+    // 主数据失败：必须给错误态 + 重试，不得渲染成「投递目录里还没有文件」
+    dock.value = null
+    dockError.value = e instanceof Error ? e.message : '加载失败'
+  } finally {
+    dockLoading.value = false
   }
 }
 
 async function switchTab(key: string): Promise<void> {
   activeTab.value = key
+  picked.value = new Set()
   await loadDock()
+}
+
+// ---- 时间维度：入库（created_at）总是显示，处理过才另标更新（updated_at） ----
+function fmtTime(ts?: number): string {
+  const n = Number(ts) || 0
+  if (!n) return ''
+  const d = new Date(n * 1000)
+  const p = (x: number) => String(x).padStart(2, '0')
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`
+  const md = `${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  const now = new Date()
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+    return `今天 ${hm}`
+  }
+  return d.getFullYear() === now.getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}-${md}`
+}
+
+/** 入库时间总是展示；updated_at 明显晚于 created_at（>60s）才额外标「更新」。 */
+function timeText(it: BookDockItem): string {
+  const created = fmtTime(it.created_at)
+  if (!created) return ''
+  const updated = fmtTime(it.updated_at)
+  if (updated && Number(it.updated_at) - Number(it.created_at) > 60) {
+    return `入库 ${created} · 更新 ${updated}`
+  }
+  return `入库 ${created}`
+}
+
+// ---- 批量操作：无批量端点，按既有单条端点逐条 await，失败逐条汇总 ----
+const dockItems = computed<BookDockItem[]>(() => dock.value?.items ?? [])
+const pickedIds = computed(() =>
+  dockItems.value.filter((i) => picked.value.has(i.id)).map((i) => i.id),
+)
+const allPicked = computed(
+  () => dockItems.value.length > 0 && pickedIds.value.length === dockItems.value.length,
+)
+
+function togglePick(id: string): void {
+  const s = new Set(picked.value)
+  if (s.has(id)) s.delete(id)
+  else s.add(id)
+  picked.value = s
+}
+
+function toggleAll(): void {
+  picked.value = allPicked.value ? new Set() : new Set(dockItems.value.map((i) => i.id))
+}
+
+async function batch(fn: (id: string) => Promise<unknown>, okMsg: string): Promise<void> {
+  const ids = pickedIds.value
+  if (!ids.length) return
+  batchBusy.value = true
+  let ok = 0
+  const errs: string[] = []
+  for (const id of ids) {
+    try {
+      await fn(id)
+      ok += 1
+    } catch (e) {
+      errs.push(e instanceof Error ? e.message : '操作失败')
+    }
+  }
+  batchBusy.value = false
+  if (ok) ui.toast(`${okMsg} ${ok} 条`)
+  if (errs.length) ui.toast(`${errs.length} 条失败：${errs[0]}`)
+  picked.value = new Set()
+  await refresh()
+}
+
+async function copyDir(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(dropDir.value)
+    copiedDir.value = true
+    setTimeout(() => (copiedDir.value = false), 1500)
+  } catch {
+    ui.toast('复制失败，请手动选中路径')
+  }
 }
 
 /** 单项操作统一收尾：提示 + 重载（服务端已把新状态写回条目） */
@@ -268,8 +366,14 @@ onBeforeUnmount(() => {
           </div>
           <Badge :tone="running ? 'ok' : 'neutral'">{{ running ? '运行中' : '已暂停' }}</Badge>
         </div>
-        <div class="mt-2 truncate rounded bg-muted px-2 py-1.5 font-mono text-[11.5px] text-foreground" :title="dropDir">
-          {{ dropDir }}
+        <div class="mt-2 flex items-center gap-2">
+          <div
+            class="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1.5 font-mono text-[11.5px] text-foreground"
+            :title="dropDir"
+          >
+            {{ dropDir }}
+          </div>
+          <Button size="sm" @click="copyDir">{{ copiedDir ? '已复制' : '复制' }}</Button>
         </div>
         <p class="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">
           <template v-if="library.hasNoLibraries">
@@ -343,12 +447,65 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-if="dock && dock.items.length" class="divide-y divide-border">
+      <!-- 主数据失败：给错误态 + 重试，不得退化成 EmptyState「投递目录里还没有文件」 -->
+      <div v-if="dockError" class="flex flex-wrap items-center gap-2 px-4 py-4 text-[12.5px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>投递流水线加载失败：{{ dockError }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" @click="loadDock">重试</Button>
+      </div>
+
+      <p v-else-if="dockLoading" class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">
+        加载中…
+      </p>
+
+      <!-- 批量操作条：无批量端点，逐条调用既有单条端点 -->
+      <div
+        v-else-if="dock && dock.items.length"
+        class="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-4 py-2"
+      >
+        <button
+          type="button"
+          class="cursor-pointer rounded-md border border-border px-2.5 py-1 text-[12px] text-foreground transition-colors hover:bg-muted"
+          @click="toggleAll"
+        >
+          {{ allPicked ? '清空选择' : '全选本页' }}
+        </button>
+        <span class="text-[11.5px] tabular-nums text-muted-foreground">
+          已选 {{ pickedIds.length }} / {{ dock.items.length }}
+        </span>
+        <div class="ml-auto flex items-center gap-1.5">
+          <Button
+            size="sm"
+            variant="secondary"
+            :disabled="batchBusy || !pickedIds.length"
+            @click="batch(api.bookDockRescan, '已重新处理')"
+          >
+            批量重扫
+          </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            :disabled="batchBusy || !pickedIds.length"
+            @click="batch(api.bookDockIgnore, '已忽略')"
+          >
+            批量忽略
+          </Button>
+        </div>
+      </div>
+
+      <div v-else-if="dock && dock.items.length" class="divide-y divide-border">
         <div
           v-for="it in dock.items"
           :key="it.id"
           class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3"
         >
+          <input
+            type="checkbox"
+            class="h-4 w-4 shrink-0 cursor-pointer accent-primary"
+            :checked="picked.has(it.id)"
+            :aria-label="`选择 ${it.name}`"
+            @change="togglePick(it.id)"
+          >
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
               <Icon name="book" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -360,13 +517,14 @@ onBeforeUnmount(() => {
             <div class="mt-1 truncate text-[11.5px] text-muted-foreground" :title="it.output || it.detail">
               {{ it.output ? `成品：${it.output}` : it.detail || '等待自动处理' }}
               <span class="ml-1 opacity-70">{{ fmtSize(it.size) }}</span>
+              <span v-if="timeText(it)" class="ml-1 opacity-70">· {{ timeText(it) }}</span>
               <span v-if="it.retries" class="ml-1 text-warning">· 已重试 {{ it.retries }} 次</span>
             </div>
           </div>
           <div class="flex items-center gap-1.5">
-            <Button size="sm" :disabled="busyId === it.id" @click="rescanItem(it.id)">重扫</Button>
-            <Button size="sm" :disabled="busyId === it.id" @click="ignoreItem(it.id)">忽略</Button>
-            <Button size="sm" variant="danger" :disabled="busyId === it.id" @click="deleteItem(it.id)">移出</Button>
+            <Button size="sm" :disabled="busyId === it.id || batchBusy" @click="rescanItem(it.id)">重扫</Button>
+            <Button size="sm" :disabled="busyId === it.id || batchBusy" @click="ignoreItem(it.id)">忽略</Button>
+            <Button size="sm" variant="danger" :disabled="busyId === it.id || batchBusy" @click="deleteItem(it.id)">移出</Button>
           </div>
         </div>
       </div>
