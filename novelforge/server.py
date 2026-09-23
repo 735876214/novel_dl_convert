@@ -4146,7 +4146,9 @@ EDITABLE: dict = {
     },
     "network": {"max_retries", "host_replace"},
     "download": {"enabled", "public_only"},
-    "logging": {"dir", "max_entries"},
+    # retention 是嵌套块（第 52 期）：与 integrations 同口径，整块取值，
+    # 免得将来往留存策略里加键时还要再改一次白名单。
+    "logging": {"dir", "max_entries", "retention"},
     "upload": {"max_bytes", "max_source_rules_bytes"},
     "achievements": {"enabled"},
     "opds": {"enabled", "expose"},
@@ -4362,6 +4364,9 @@ def api_put_config(payload: dict = Body(...)):
 
     config.save_overrides(ov)
     _apply_watcher_config()
+    # 第 52 期：留存策略在日志模块里有 5 秒缓存，配置一改就必须失效 ——
+    # 否则刚开启留存，页面上的「存盘情况」仍按旧值显示未启用。
+    activity_log.invalidate_retention_cache()
     return {"ok": True, "overrides": ov}
 
 
@@ -4766,6 +4771,8 @@ def api_logs(limit: int = Query(200, ge=1, le=5000), action: str = "",
         "dir": str(activity_log.log_dir()),
         # 操作者下拉的候选：**不受 actor 参数影响**（否则选中一个就切不回来）。
         "actors": activity_log.actors(),
+        # 第 52 期：存盘情况（当前字节数 / 归档份数 / 生效的留存策略）—— 审计页据此展示。
+        "storage": activity_log.storage_info(),
     }
 
 

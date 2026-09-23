@@ -166,6 +166,15 @@ DEFAULTS = {
     "logging": {
         "dir": "",                  # 留空则用 LOG_DIR（默认 <CONFIG_DIR>/logs）
         "max_entries": 2000,        # 内存缓冲条数（API 读取用，落盘不受限）
+        # 留存策略（第 52 期）。**默认关闭** —— 关着就是原来的「单文件一直追加」，
+        # 不改变任何既有行为；打开后当前文件超过 max_bytes 就轮转成带时间戳的归档，
+        # 只保留最近 keep 份（可选 gzip），读取会自动跨归档，审计页仍连续。
+        "retention": {
+            "enabled": False,
+            "max_bytes": 5 * 1024 * 1024,
+            "keep": 5,
+            "compress": True,
+        },
     },
     # 上传上限。⚠️ 此前**完全没有任何限制**：POST /convert 与 POST /api/sources/upload
     # 都直接 `await file.read()`，把整个请求体一次性读进内存 —— 一个几 GB 的请求

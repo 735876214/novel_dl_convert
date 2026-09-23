@@ -105,6 +105,20 @@ export interface LogItem {
   [key: string]: unknown
 }
 
+/** 日志存盘情况（第 52 期；审计页「留存策略」区展示） */
+export interface LogStorage {
+  /** 当前 activity.log + activity.jsonl 的合计字节数 */
+  bytes: number
+  /** 已归档的份数（文件名带时间戳，读取端会跨归档） */
+  archives: number
+  retention: {
+    enabled: boolean
+    max_bytes: number
+    keep: number
+    compress: boolean
+  }
+}
+
 export interface LogQuery {
   limit?: number
   action?: string
@@ -2336,6 +2350,7 @@ export const api = {
     ),
 
   // ---------- 日志 ----------
+  // 存盘情况随 `logs()` 一起返回（第 52 期），无需单独请求。
   logs: (query: LogQuery = {}) => {
     const p = new URLSearchParams()
     if (query.limit) p.set('limit', String(query.limit))
@@ -2347,9 +2362,13 @@ export const api = {
     // 注意：后端的 count 字段未必是数字（activity_log.count() 可能返回聚合对象），
     // 因此类型放宽为 unknown，由调用方归一化。
     // actors 是操作者下拉的候选，**不受 query.actor 影响**（后端另行取全量）。
-    return request<{ items: LogItem[]; count: unknown; dir: string; actors: string[] }>(
-      `/api/logs${qs ? `?${qs}` : ''}`,
-    )
+    return request<{
+      items: LogItem[]
+      count: unknown
+      dir: string
+      actors: string[]
+      storage: LogStorage
+    }>(`/api/logs${qs ? `?${qs}` : ''}`)
   },
 
   clearLogs: () =>

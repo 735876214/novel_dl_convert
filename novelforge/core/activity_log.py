@@ -9,10 +9,12 @@
 """
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import os
 import pathlib
+import shutil
 import tempfile
 import threading
 import time
@@ -144,6 +146,112 @@ def jsonl_path() -> pathlib.Path:
     return log_dir() / JSONL_FILENAME
 
 
+# ---------------- 留存策略（第 52 期）----------------
+# 默认**关闭**：关着就是原来的「单文件一直追加」。打开后按**大小**轮转（不看时间，
+# 不依赖任何后台调度），读取自动跨归档 —— 否则一重启审计页就只剩轮转之后的条目。
+
+ARCHIVE_PREFIX = "activity-"
+
+#: `logging.retention` 的短缓存：日志写入是热路径，不能每次读盘取配置
+_cfg_cache: dict = {"at": 0.0, "val": None}
+
+
+def retention_cfg() -> dict:
+    """当前留存策略。读不到配置就返回「关闭」——与加这项之前的行为完全一致。"""
+    now = time.time()
+    cached = _cfg_cache.get("val")
+    if cached is not None and now - float(_cfg_cache.get("at") or 0) < 5:
+        return cached
+    try:
+        from .. import config
+        r = ((config.load_config().get("logging") or {}).get("retention")) or {}
+    except Exception:
+        r = {}
+    out = {
+        "enabled": bool(r.get("enabled")),
+        "max_bytes": max(64 * 1024, int(r.get("max_bytes") or 5 * 1024 * 1024)),
+        "keep": max(1, int(r.get("keep") or 5)),
+        "compress": bool(r.get("compress", True)),
+    }
+    _cfg_cache.update(at=now, val=out)
+    return out
+
+
+def invalidate_retention_cache() -> None:
+    """配置变更后必须调用：清掉留存策略缓存。
+
+    否则最长 5 秒内仍按**旧值**判断是否轮转 —— 表现很难查：用户刚开了留存，
+    页面上的存盘情况却还显示「未启用」（`GET /api/logs` 的 storage 走同一个缓存）。
+    """
+    _cfg_cache.update(at=0.0, val=None)
+
+
+def _archive_jsonls() -> list:
+    """归档的 jsonl 路径，**新 → 旧**（文件名带时间戳，倒序即时间倒序）。"""
+    d = log_dir()
+    out = []
+    for pat in (f"{ARCHIVE_PREFIX}*.jsonl", f"{ARCHIVE_PREFIX}*.jsonl.gz"):
+        try:
+            out.extend(d.glob(pat))
+        except OSError:
+            continue
+    return sorted(out, key=lambda p: p.name, reverse=True)
+
+
+def _prune_archives(d: pathlib.Path, keep: int) -> None:
+    """每类归档只保留最近 keep 份。"""
+    for kind in (".log.gz", ".jsonl.gz", ".log", ".jsonl"):
+        try:
+            files = sorted(d.glob(f"{ARCHIVE_PREFIX}*{kind}"))
+        except OSError:
+            continue
+        for old in (files[:-keep] if len(files) > keep else []):
+            try:
+                old.unlink()
+            except OSError:
+                pass
+
+
+def _rotate_if_needed(d: pathlib.Path) -> None:
+    """当前文件超过阈值就轮转。**任何失败都吞掉**，绝不打断主流程（与 ``log()`` 同纪律）。"""
+    cfg = retention_cfg()
+    if not cfg["enabled"]:
+        return
+    try:
+        p = d / LOG_FILENAME
+        if not p.is_file() or p.stat().st_size < cfg["max_bytes"]:
+            return
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        for name, kind in ((LOG_FILENAME, "log"), (JSONL_FILENAME, "jsonl")):
+            src = d / name
+            if not src.is_file() or src.stat().st_size == 0:
+                continue
+            dst = d / f"{ARCHIVE_PREFIX}{stamp}.{kind}"
+            if cfg["compress"]:
+                with open(src, "rb") as fi, gzip.open(str(dst) + ".gz", "wb") as fo:
+                    shutil.copyfileobj(fi, fo)
+                src.unlink(missing_ok=True)
+            else:
+                src.rename(dst)
+        _prune_archives(d, cfg["keep"])
+    except Exception:
+        pass
+
+
+def storage_info() -> dict:
+    """存盘情况（审计页显示用）：当前字节数、归档份数、生效的留存策略。"""
+    d = log_dir()
+    size = 0
+    for name in (LOG_FILENAME, JSONL_FILENAME):
+        p = d / name
+        try:
+            if p.is_file():
+                size += p.stat().st_size
+        except OSError:
+            pass
+    return {"bytes": size, "archives": len(_archive_jsonls()), "retention": retention_cfg()}
+
+
 # ---------------- 写入 ----------------
 
 def _fmt_size(size) -> str:
@@ -227,6 +335,8 @@ def log(action: str, file: str, status: str, output: str = "", detail: str = "",
                 f.write(line_json + "\n")
         except Exception:
             pass
+        # 写完再看要不要轮转（同一把可重入锁内，避免与并发写入交叉）
+        _rotate_if_needed(d)
 
     # 同步输出到标准日志（docker logs 可见）
     if status == STATUS_FAIL:
@@ -304,26 +414,48 @@ def actors(scan: int = 1000) -> list:
     return sorted(seen)
 
 
-def _read_tail(n: int) -> list:
-    """从 jsonl 尾部读 n 条（旧→新）。"""
-    p = jsonl_path()
-    if not p.is_file():
-        return []
+def _tail_lines(p: pathlib.Path, n: int) -> list:
     try:
+        if p.suffix == ".gz":
+            with gzip.open(p, "rt", encoding="utf-8", errors="ignore") as f:
+                return [ln.strip() for ln in f.readlines()[-n:]]
+        if not p.is_file():
+            return []
         with open(p, "r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()[-n:]
+            return [ln.strip() for ln in f.readlines()[-n:]]
     except Exception:
         return []
+
+
+def _read_tail(n: int) -> list:
+    """从「当前 jsonl + 最新归档」的尾部读 n 条（旧→新）。
+
+    第 52 期：留存策略会轮转文件，所以这里**必须跨归档**。此前只读单一
+    ``activity.jsonl``，一旦轮转，重启后的审计页就只剩轮转之后的条目。
+    """
+    if n <= 0:
+        return []
+    chunks: list = []
+    total = 0
+    for p in [jsonl_path(), *_archive_jsonls()]:
+        lines = _tail_lines(p, n)
+        if not lines:
+            continue
+        chunks.append(lines)
+        total += len(lines)
+        if total >= n:
+            break
+    chunks.reverse()                       # 归档在时间上更旧，拼回「旧 → 新」
     out = []
-    for ln in lines:
-        ln = ln.strip()
-        if not ln:
-            continue
-        try:
-            out.append(json.loads(ln))
-        except Exception:
-            continue
-    return out
+    for lines in chunks:
+        for raw in lines:
+            if not raw:
+                continue
+            try:
+                out.append(json.loads(raw))
+            except Exception:
+                continue
+    return out[-n:]
 
 
 def count() -> dict:
@@ -334,14 +466,26 @@ def count() -> dict:
 
 
 def clear() -> bool:
-    """清空日志文件与内存缓冲。"""
+    """清空日志文件、**归档**与内存缓冲。
+
+    ⚠️ 归档必须一起删：读取端已跨归档（见 `_read_tail`），只删当前文件会让
+    「清空」之后历史条目从归档里复活 —— 那比不删更糟（用户以为清掉了）。
+    """
     with _lock:
         _memory.clear()
     try:
+        d = log_dir()
         for name in (LOG_FILENAME, JSONL_FILENAME):
-            p = log_dir() / name
+            p = d / name
             if p.is_file():
                 p.unlink()
+        for pat in (f"{ARCHIVE_PREFIX}*",):
+            for p in d.glob(pat):
+                try:
+                    if p.is_file():
+                        p.unlink()
+                except OSError:
+                    pass
         return True
     except Exception:
         return False

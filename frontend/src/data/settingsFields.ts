@@ -143,6 +143,10 @@ export const SECTION_KEYS: Record<string, string[]> = {
   metadata: ['metadata_fetch'],
   // 多书库：跨库策略开关（库实体存 SQLite，见「设置 → 书库管理」）
   libraries: ['libraries'],
+  // 审计日志留存（第 52 期）：**只**提交 logging 段。
+  // 刻意不复用 network 分区 —— 那个分区还含 network / download，连带提交会把别页
+  // 未保存的草稿一起写进去（草稿是跨页共享的单例，见 useSettingsConfig）。
+  logs: ['logging'],
   // 阅读进度口径的全局默认值（页面在「偏好与同步」；每库覆写在书库管理里）
   reading: ['reading'],
 }
