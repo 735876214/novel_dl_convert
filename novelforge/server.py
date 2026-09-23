@@ -3689,7 +3689,12 @@ def api_book_move_batches(limit: int = 10):
 
 @app.get("/api/collections")
 def api_collections():
-    return {"items": db.list_collections()}
+    items = db.list_collections()
+    for it in items:
+        bid = it.get("first_book_id")
+        b = library.by_id(bid) if bid else None
+        it["first_book_has_cover"] = bool(b and b.get("has_cover"))
+    return {"items": items}
 
 
 @app.post("/api/collections")
@@ -3717,6 +3722,22 @@ def api_collection_detail(cid: int):
 def api_delete_collection(cid: int):
     db.delete_collection(cid)
     return {"ok": True}
+
+
+@app.patch("/api/collections/{cid}")
+def api_rename_collection(cid: int, payload: dict = Body(...)):
+    """重命名收藏夹（第 47 期：收藏夹总览行内重命名用）。"""
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise HTTPException(400, "收藏夹名称不能为空")
+    try:
+        ok = db.update_collection(cid, name)
+    except Exception:
+        # UNIQUE(name) 冲突：同名收藏夹已存在
+        raise HTTPException(409, "同名收藏夹已存在")
+    if not ok:
+        raise HTTPException(404, "收藏夹不存在")
+    return {"ok": True, "id": cid, "name": name}
 
 
 @app.post("/api/collections/{cid}/books")

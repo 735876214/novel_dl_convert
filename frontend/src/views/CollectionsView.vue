@@ -2,6 +2,7 @@
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import BookCover from '@/components/ui/BookCover.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -9,7 +10,7 @@ import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import { useCollectionsStore } from '@/stores/collections'
 
-/** 收藏夹总览：自建收藏夹的增删与进入。 */
+/** 收藏夹总览：自建收藏夹的增删改与进入。 */
 const router = useRouter()
 const collections = useCollectionsStore()
 
@@ -17,7 +18,19 @@ const draft = ref('')
 const error = ref('')
 const creating = ref(false)
 
+/** 行内重命名：正在编辑的收藏夹 id 与输入框内容 */
+const editingId = ref<number | null>(null)
+const editName = ref('')
+const renameError = ref('')
+
 onMounted(() => collections.load(true))
+
+function fmtDate(sec: number): string {
+  if (!sec) return '—'
+  const d = new Date(sec * 1000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
 
 async function create(): Promise<void> {
   const name = draft.value.trim()
@@ -40,6 +53,30 @@ async function remove(id: number, name: string): Promise<void> {
     await collections.remove(id)
   } catch {
     /* ignore */
+  }
+}
+
+function startRename(id: number, name: string): void {
+  editingId.value = id
+  editName.value = name
+  renameError.value = ''
+}
+
+function cancelRename(): void {
+  editingId.value = null
+  editName.value = ''
+  renameError.value = ''
+}
+
+async function commitRename(id: number): Promise<void> {
+  const name = editName.value.trim()
+  if (!name) return
+  renameError.value = ''
+  try {
+    await collections.rename(id, name)
+    cancelRename()
+  } catch (e) {
+    renameError.value = e instanceof Error ? e.message : '重命名失败'
   }
 }
 </script>
@@ -68,25 +105,63 @@ async function remove(id: number, name: string): Promise<void> {
       <Card
         v-for="c in collections.items"
         :key="c.id"
-        class="cursor-pointer transition-colors hover:border-ring"
-        @click="router.push(`/collections/${c.id}`)"
+        class="transition-colors hover:border-ring"
       >
         <div class="flex items-center gap-3">
-          <span class="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-            <Icon name="star" class="h-4 w-4" />
-          </span>
-          <div class="min-w-0 flex-1">
-            <div class="truncate text-[13px] font-medium text-foreground">{{ c.name }}</div>
-            <div class="text-[11.5px] text-muted-foreground tabular-nums">{{ c.count }} 本</div>
+          <!-- 首书封面预览（无成员时回退星标占位） -->
+          <div class="h-16 w-12 shrink-0 overflow-hidden rounded-md bg-muted">
+            <BookCover
+              v-if="c.first_book_id"
+              :book="{ id: c.first_book_id, title: c.name, c1: '', c2: '', has_cover: c.first_book_has_cover }"
+              :interactive="false"
+              :show-title="false"
+            />
+            <div v-else class="grid h-full w-full place-items-center text-muted-foreground">
+              <Icon name="star" class="h-5 w-5" />
+            </div>
           </div>
-          <button
-            type="button"
-            class="shrink-0 cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
-            title="删除收藏夹"
-            @click.stop="remove(c.id, c.name)"
-          >
-            <Icon name="trash" class="h-3.5 w-3.5" />
-          </button>
+
+          <div class="min-w-0 flex-1" @click="router.push(`/collections/${c.id}`)">
+            <!-- 行内重命名 -->
+            <input
+              v-if="editingId === c.id"
+              v-model="editName"
+              type="text"
+              class="w-full rounded-md border border-ring bg-card px-2 py-1 text-[13px] font-medium text-foreground outline-none"
+              @keyup.enter="commitRename(c.id)"
+              @keyup.esc="cancelRename"
+              @click.stop
+            >
+            <div
+              v-else
+              class="cursor-pointer truncate text-[13px] font-medium text-foreground"
+            >{{ c.name }}</div>
+            <div class="mt-0.5 text-[11.5px] text-muted-foreground tabular-nums">
+              {{ c.count }} 本 · 最后修改 {{ fmtDate(c.updated_at) }}
+            </div>
+            <p v-if="editingId === c.id && renameError" class="mt-1 text-[11px] text-destructive">
+              {{ renameError }}
+            </p>
+          </div>
+
+          <div class="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              class="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              title="重命名"
+              @click.stop="startRename(c.id, c.name)"
+            >
+              <Icon name="edit" class="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              class="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
+              title="删除收藏夹"
+              @click.stop="remove(c.id, c.name)"
+            >
+              <Icon name="trash" class="h-3.5 w-3.5" />
+            </button>
+          </div>
         </div>
       </Card>
     </div>

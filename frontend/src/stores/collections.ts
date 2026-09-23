@@ -34,5 +34,10 @@ export const useCollectionsStore = defineStore('collections', () => {
     await load(true)
   }
 
-  return { items, loaded, load, create, remove }
+  async function rename(id: number, name: string): Promise<void> {
+    await api.renameCollection(id, name)
+    await load(true)
+  }
+
+  return { items, loaded, load, create, remove, rename }
 })

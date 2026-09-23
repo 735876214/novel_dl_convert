@@ -678,6 +678,12 @@ def init():
         # 'highlight'，读时无需额外补偿；该列不加 book_id，不影响 remap 契约。
         if acols and "style" not in acols:
             c.execute("ALTER TABLE annotations ADD COLUMN style TEXT NOT NULL DEFAULT 'highlight'")
+        # 第 47 期：collections 补 updated_at（最后修改时间），供收藏夹总览展示。
+        # 存量行回填为 created_at（首次创建即最后一次改动），与加列前语义一致。
+        ccols = {r["name"] for r in c.execute("PRAGMA table_info(collections)")}
+        if "updated_at" not in ccols:
+            c.execute("ALTER TABLE collections ADD COLUMN updated_at REAL NOT NULL DEFAULT 0")
+            c.execute("UPDATE collections SET updated_at = created_at WHERE updated_at = 0")
         # 第 32 期：authors 补「排序名」两列（在线值 / 本地覆盖分列，与 bio 同构）。
         # 老库不补列则作者排序与覆盖读写会报 no such column。两列都有 NOT NULL DEFAULT ''，
         # 存量行照旧可读 —— 空串即「没有排序名」，排序回退到 name，与加列前完全一致。
@@ -1075,8 +1081,10 @@ def purge_bookmark(book_id: str, bookmark_id: int) -> int:
 def list_collections() -> list:
     c = _connect()
     rows = c.execute(
-        """SELECT c.id, c.name, c.created_at,
-                  (SELECT COUNT(*) FROM collection_items i WHERE i.collection_id = c.id) AS count
+        """SELECT c.id, c.name, c.created_at, c.updated_at,
+                  (SELECT COUNT(*) FROM collection_items i WHERE i.collection_id = c.id) AS count,
+                  (SELECT book_id FROM collection_items i
+                    WHERE i.collection_id = c.id ORDER BY i.rowid LIMIT 1) AS first_book_id
            FROM collections c ORDER BY c.created_at"""
     ).fetchall()
     return [dict(r) for r in rows]
@@ -1091,8 +1099,10 @@ def get_collection(cid: int):
 def create_collection(name: str) -> int:
     c = _connect()
     with _lock:
+        now = time.time()
         cur = c.execute(
-            "INSERT INTO collections(name, created_at) VALUES(?,?)", (name, time.time())
+            "INSERT INTO collections(name, created_at, updated_at) VALUES(?,?,?)",
+            (name, now, now),
         )
         c.commit()
         return cur.lastrowid or 0
@@ -1107,10 +1117,21 @@ def update_collection(cid: int, name: str) -> bool:
     c = _connect()
     with _lock:
         cur = c.execute(
-            "UPDATE collections SET name=? WHERE id=?", (str(name).strip(), int(cid))
+            "UPDATE collections SET name=?, updated_at=? WHERE id=?",
+            (str(name).strip(), time.time(), int(cid)),
         )
         c.commit()
         return int(cur.rowcount or 0) > 0
+
+
+def _touch_collection(cid: int) -> None:
+    """成员变动后刷新收藏夹的 updated_at（最后修改时间）。"""
+    c = _connect()
+    with _lock:
+        c.execute(
+            "UPDATE collections SET updated_at=? WHERE id=?", (time.time(), int(cid))
+        )
+        c.commit()
 
 
 def clear_collection(cid: int) -> int:
@@ -1158,11 +1179,14 @@ def collection_book_ids(cid: int) -> list:
 def add_book_to_collection(cid: int, book_id: str):
     c = _connect()
     with _lock:
-        c.execute(
+        cur = c.execute(
             "INSERT OR IGNORE INTO collection_items(collection_id, book_id, added_at) VALUES(?,?,?)",
             (cid, book_id, time.time()),
         )
         c.commit()
+        # 只有真插入了新成员才刷新「最后修改」（已存在则 INSERT OR IGNORE 不动行）
+        if cur.rowcount:
+            _touch_collection(cid)
 
 
 def remove_book_from_collection(cid: int, book_id: str):
@@ -1171,7 +1195,7 @@ def remove_book_from_collection(cid: int, book_id: str):
         c.execute(
             "DELETE FROM collection_items WHERE collection_id=? AND book_id=?", (cid, book_id)
         )
-        c.commit()
+        _touch_collection(cid)
 
 
 def collections_of_book(book_id: str) -> list:
