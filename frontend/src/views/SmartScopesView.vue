@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import Card from '@/components/ui/Card.vue'
+import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import { api, type BookCard } from '@/lib/api'
 import {
@@ -30,14 +31,18 @@ const ui = useUiStore()
 
 const scopes = ref<SmartScope[]>([])
 const loading = ref(true)
+/** 加载失败信息：失败不能退化成「还没有自定义书架」（否则「拉不到」被误读成「一条都没有」）。 */
+const error = ref('')
 
 async function load(): Promise<void> {
   loading.value = true
+  error.value = ''
   try {
     scopes.value = (await api.smartScopes()).items
     library.scopes.splice(0, library.scopes.length, ...scopes.value)
-  } catch {
-    /* ignore */
+  } catch (e) {
+    scopes.value = []
+    error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
     loading.value = false
   }
@@ -160,13 +165,14 @@ function opLabel(op: ScopeOp): string {
           <input
             v-model="fName"
             type="text"
+            aria-label="智能书架名称"
             placeholder="如：近年科幻"
             class="h-8 w-48 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
           >
         </label>
         <label class="flex items-center gap-2 text-[12.5px] text-muted-foreground">
           <span>匹配</span>
-          <select v-model="fMatch" class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring">
+          <select v-model="fMatch" aria-label="匹配方式" class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring">
             <option value="all">满足全部规则（且）</option>
             <option value="any">满足任一规则（或）</option>
           </select>
@@ -178,15 +184,16 @@ function opLabel(op: ScopeOp): string {
 
       <div class="mt-3 flex flex-col gap-2">
         <div v-for="(r, i) in fRules" :key="i" class="flex flex-wrap items-center gap-2">
-          <select v-model="r.field" class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring" @change="onFieldChange(r)">
+          <select v-model="r.field" aria-label="规则字段" class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring" @change="onFieldChange(r)">
             <option v-for="f in FIELD_OPTIONS" :key="f" :value="f">{{ FIELD_LABELS[f] }}</option>
           </select>
-          <select v-model="r.op" class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring">
+          <select v-model="r.op" aria-label="规则操作符" class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring">
             <option v-for="o in opOptions(r.field)" :key="o" :value="o">{{ opLabel(o) }}</option>
           </select>
           <input
             v-model="r.value"
             type="text"
+            aria-label="规则值"
             placeholder="值"
             class="h-8 w-52 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
           >
@@ -239,6 +246,17 @@ function opLabel(op: ScopeOp): string {
       </div>
 
       <p v-if="loading" class="py-6 text-center text-[12.5px] text-muted-foreground">加载中…</p>
+      <div v-else-if="error" class="flex flex-wrap items-center gap-2 py-4 text-[12.5px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>加载智能书架失败：{{ error }}</span>
+        <button
+          type="button"
+          class="ml-auto cursor-pointer rounded-md border border-border px-2.5 py-1 text-[12px] text-foreground transition-colors hover:bg-muted"
+          @click="load"
+        >
+          重试
+        </button>
+      </div>
       <p v-else-if="!scopes.length" class="py-8 text-center text-[12.5px] text-muted-foreground">
         还没有自定义书架。点「新建」，把常用筛选（比如「作者包含某某 且 评分至少 4」）存成规则。
       </p>
