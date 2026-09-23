@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from .core import pipeline, activity_log, library, fileops, publish, scrape
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, activity, recommend,
-                   fonts, comics, audio, opds, komga, koreader, integrations,
+                   fonts, comics, audio, opds, komga, koreader, integrations, sync,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, migrate, library_rules, features, series_meta,
                    lib_settings, browse_counts, customfields)
@@ -1045,20 +1045,24 @@ def api_export_books():
 
 
 @app.put("/api/books/{bid}/rating")
-def api_set_rating(bid: str, payload: dict = Body(...)):
+def api_set_rating(bid: str, request: Request, payload: dict = Body(...)):
     """给书评分（1–5 星）。对应上游成就体系里 4 条依赖评分的条目。"""
     if not library.by_id(bid):
         raise HTTPException(404, "书籍不存在")
     try:
-        return db.set_rating(bid, (payload or {}).get("stars"))
+        r = db.set_rating(bid, (payload or {}).get("stars"))
     except ValueError as e:
         raise HTTPException(400, str(e))
+    _sync_auto_push(bid, request)
+    return r
 
 
 @app.delete("/api/books/{bid}/rating")
-def api_clear_rating(bid: str):
+def api_clear_rating(bid: str, request: Request):
     """取消评分。"""
-    return {"ok": True, "cleared": db.clear_rating(bid)}
+    n = db.clear_rating(bid)
+    _sync_auto_push(bid, request)
+    return {"ok": True, "cleared": n}
 
 
 # ⚠️ 批量端点必须注册在 /api/books/{bid} **之前**：
@@ -1719,15 +1723,17 @@ def api_get_status(bid: str):
 
 
 @app.put("/api/books/{bid}/status")
-def api_set_status(bid: str, payload: dict = Body(...)):
+def api_set_status(bid: str, request: Request, payload: dict = Body(...)):
     """设置阅读状态。可选 `started_at` / `finished_at`（epoch 秒，0 = 清除后按规则重记）。"""
     try:
-        return db.set_status(
+        r = db.set_status(
             bid,
             str(payload.get("status") or ""),
             started_at=payload.get("started_at"),
             finished_at=payload.get("finished_at"),
         )
+        _sync_auto_push(bid, request)
+        return r
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -1799,7 +1805,7 @@ def api_get_review(bid: str):
 
 
 @app.put("/api/books/{bid}/review")
-def api_set_review(bid: str, payload: dict = Body(...)):
+def api_set_review(bid: str, request: Request, payload: dict = Body(...)):
     """评分与书评一起保存。stars 传 0 = 清除评分；review 传空串 = 清除书评。"""
     try:
         stars = int(payload.get("stars", 0))
@@ -1812,6 +1818,7 @@ def api_set_review(bid: str, payload: dict = Body(...)):
     else:
         db.clear_rating(bid)
     db.set_review(bid, payload.get("review") or "")
+    _sync_auto_push(bid, request)
     return {"ok": True, **db.get_review(bid)}
 
 
@@ -1950,7 +1957,7 @@ def api_list_annotations(bid: str):
 
 
 @app.post("/api/books/{bid}/annotations")
-def api_add_annotation(bid: str, payload: dict = Body(...)):
+def api_add_annotation(bid: str, request: Request, payload: dict = Body(...)):
     quote = str(payload.get("quote", "") or "").strip()
     if not quote:
         raise HTTPException(400, "quote 不能为空")
@@ -1968,6 +1975,7 @@ def api_add_annotation(bid: str, payload: dict = Body(...)):
         origin,
         style,
     )
+    _sync_auto_push(bid, request)
     return {"id": rid, "ok": True}
 
 
@@ -5151,11 +5159,19 @@ _INTEGRATION_SERVICES = ("hardcover", "readwise", "storygraph")
 
 
 def _mask_integrations(sec: dict) -> dict:
-    """整块掩码：字段有值给掩码、无值给空串（供 GET /api/config 回显）。"""
+    """整块掩码：**凭据字段**有值给掩码、无值给空串（供 GET /api/config 回显）。
+
+    ⚠️ 非凭据字段（第 52 期的 ``auto_push`` 布尔）必须**原样回显** ——
+    否则配置页会把 `True` 当成「已设置的密钥」渲染成一串掩码。
+    """
     out = {}
     for name in _INTEGRATION_SERVICES:
         cur = sec.get(name) or {}
-        out[name] = {k: (_KEY_MASK if str(v or "").strip() else "") for k, v in cur.items()}
+        keys = set(_integration_field_keys(name))
+        out[name] = {
+            k: ((_KEY_MASK if str(v or "").strip() else "") if k in keys else bool(v))
+            for k, v in cur.items()
+        }
     return out
 
 
@@ -5189,6 +5205,9 @@ def api_integrations():
             "verify": bool(meta.get("verify")),
             "doc": meta.get("doc") or "",
             "note": meta.get("note") or "",
+            # 第 52 期：同步能力。sync=False 的服务（StoryGraph）前端不渲染预览/同步按钮。
+            "sync": bool(meta.get("sync")),
+            "auto_push": bool(cur.get("auto_push")),
             # values 是掩码（用于显示「已设置」），has 是布尔（用于逻辑判断）
             "values": {k: (_KEY_MASK if str(cur.get(k) or "").strip() else "") for k in keys},
             "has": {k: bool(str(cur.get(k) or "").strip()) for k in keys},
@@ -5211,9 +5230,49 @@ def api_integration_save(service: str, payload: dict = Body(None)):
         if v == _KEY_MASK:      # 掩码 = 保持原值
             continue
         cur[k] = v.strip()
+    # 第 52 期：自动推送开关（布尔，不是掩码字段，故单独处理；不传 = 保持原值）
+    if "auto_push" in (payload or {}):
+        cur["auto_push"] = bool((payload or {}).get("auto_push"))
     ov["integrations"] = {**(ov.get("integrations") or {}), service: cur}
     config.save_overrides(ov)
     return {"ok": True}
+
+
+def _sync_auto_push(book_id: str, request: Request) -> None:
+    """写入后触发外部服务同步（**旁路、默认关、失败不影响本次写入**）。
+
+    操作者必须在**请求线程内**取好再交给后台线程 —— 新线程的 ContextVar 是空的，
+    不传会把「谁做的」记成未记录。
+    """
+    sync.auto_push(book_id, base_url=str(request.base_url),
+                   actor=activity_log.current_actor())
+
+
+@app.post("/api/integrations/{service}/preview")
+def api_integration_preview(service: str):
+    """同步预览：**只算不改、零外呼**。
+
+    Hardcover 侧的匹配要查对方库才知道有没有这本，所以预览给的是「本地待推条数」，
+    匹配发生在同步时（结果里带跳过计数）。
+    """
+    if service not in _INTEGRATION_SERVICES:
+        raise HTTPException(404, "未知服务")
+    if not integrations.spec(service).get("sync"):
+        raise HTTPException(400, "该服务不支持同步")
+    return sync.preview(service)
+
+
+@app.post("/api/integrations/{service}/sync")
+def api_integration_sync(service: str, request: Request, payload: dict = Body(None)):
+    """执行一次同步（**会向对方写入**）。未配置凭据 → 400 并说明原因。"""
+    if service not in _INTEGRATION_SERVICES:
+        raise HTTPException(404, "未知服务")
+    if not integrations.spec(service).get("sync"):
+        raise HTTPException(400, "该服务不支持同步")
+    ids = (payload or {}).get("book_ids")
+    book_ids = [str(x) for x in ids] if isinstance(ids, list) and ids else None
+    return sync.run(service, book_ids, base_url=str(request.base_url),
+                    actor=activity_log.current_actor())
 
 
 @app.post("/api/integrations/{service}/test")

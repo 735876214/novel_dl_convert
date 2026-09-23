@@ -204,9 +204,11 @@ DEFAULTS = {
     #   StoryGraph  → **没有公开 API**：上游存的也是登录态 Cookie，且自己注明可能失效
     # 凭据一律掩码回显，提交掩码 = 不修改。
     "integrations": {
-        "hardcover": {"token": ""},
-        "readwise": {"token": ""},
-        "storygraph": {"session": "", "remember_token": ""},
+        # auto_push（第 52 期）：新增批注 / 改状态 / 改评分书评时**自动**推给该服务。
+        # 默认一律 False —— 这是「写向第三方」的动作，必须由用户显式打开。
+        "hardcover": {"token": "", "auto_push": False},
+        "readwise": {"token": "", "auto_push": False},
+        "storygraph": {"session": "", "remember_token": "", "auto_push": False},
     },
     # 元数据自动抓取与治理（第 5 期）。
     # 会**外呼公网**（OpenLibrary / Google Books），所以默认关闭，由用户显式打开。

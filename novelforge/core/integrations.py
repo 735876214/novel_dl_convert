@@ -31,6 +31,9 @@ SERVICES = {
         "fields": [{"key": "token", "label": "API Token", "type": "password",
                     "hint": "在 Hardcover 账号设置 → API 里生成"}],
         "verify": True,
+        # 第 52 期：同步能力（前端据此决定是否渲染「预览 / 立即同步 / 自动推送」）
+        "sync": True,
+        "auto_push": False,
         "doc": "https://docs.hardcover.app/api/getting-started/",
     },
     "readwise": {
@@ -39,6 +42,8 @@ SERVICES = {
         "fields": [{"key": "token", "label": "API Token", "type": "password",
                     "hint": "在 readwise.io/access_token 获取"}],
         "verify": True,
+        "sync": True,
+        "auto_push": False,
         "doc": "https://readwise.io/api_deets",
     },
     "storygraph": {
@@ -50,10 +55,15 @@ SERVICES = {
             {"key": "remember_token", "label": "remember_user_token", "type": "password",
              "hint": "同上，另一个 Cookie"},
         ],
-        "verify": False,
+        # 第 52 期：由「不可验证」改为**启发式校验**（见 core/sync.verify_storygraph）
+        "verify": True,
+        # 仍然不做同步：没有公开 API，向第三方站点的非官方写入极易因改版失效
+        "sync": False,
+        "auto_push": False,
         "doc": "https://app.thestorygraph.com/",
-        "note": "StoryGraph **没有公开 API**：这里存的是登录态 Cookie，无法自动验证，"
-                "且可能因对方改版而失效（上游同样如此说明）。",
+        "note": "StoryGraph 没有公开 API：这里存的是登录态 Cookie。第 52 期起提供**启发式**校验"
+                "（带 Cookie 请求站点、被引导到登录页即判失效，网络异常单独归类为连接失败），"
+                "但**不做同步** —— 向对方站点的非官方写入会因改版随时失效。",
     },
 }
 
@@ -74,12 +84,9 @@ def verify(service: str, creds: dict) -> dict:
     if service == "readwise":
         return _verify_readwise(str(creds.get("token") or ""))
     if service == "storygraph":
-        return {
-            "ok": False,
-            "unsupported": True,
-            "message": "StoryGraph 没有公开 API，无法自动验证",
-            "detail": "凭据会照常保存；是否仍然有效只能在 StoryGraph 网页上确认。",
-        }
+        # 第 52 期起改为**启发式**校验（延迟导入避免与 sync 模块互相 import）
+        from . import sync
+        return sync.verify_storygraph(creds)
     return {"ok": False, "message": f"未知服务：{service}"}
 
 

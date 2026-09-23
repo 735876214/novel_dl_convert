@@ -351,8 +351,12 @@ export interface IntegrationService {
   label: string
   desc: string
   fields: IntegrationField[]
-  /** 能否自动验证凭据（StoryGraph 无公开 API → false，前端不显示验证按钮） */
+  /** 能否验证凭据（第 52 期起 StoryGraph 也可**启发式**校验） */
   verify: boolean
+  /** 是否支持同步（StoryGraph 无公开 API → false，前端不渲染预览/同步） */
+  sync: boolean
+  /** 「自动推送」开关（默认关）：新增批注 / 改状态 / 改评分书评时自动推 */
+  auto_push: boolean
   doc: string
   note?: string
   /** 当前值：已保存回显掩码，未保存为空串 */
@@ -365,8 +369,34 @@ export interface IntegrationTestResult {
   ok: boolean
   message: string
   detail?: string
-  /** StoryGraph 这类无法验证的服务会带这个标记 */
+  /** 无法验证的服务会带这个标记（当前三家都已提供校验，保留兼容） */
   unsupported?: boolean
+}
+
+/** 同步预览（`POST /api/integrations/{svc}/preview`）：**只算不改、零外呼** */
+export interface SyncPreview {
+  service: string
+  /** 计量单位（Hardcover = 本书；Readwise = 批注） */
+  unit: string
+  books: number
+  total: number
+  /**
+   * Hardcover 侧要查对方库才知道有没有这本 ⇒ 预览**不做匹配**，
+   * 匹配发生在同步时（结果里带跳过计数）。此项为 true 时前端如实说明。
+   */
+  remote_match_at_sync: boolean
+}
+
+/** 同步结果（`POST /api/integrations/{svc}/sync`） */
+export interface SyncResult {
+  ok: boolean
+  service: string
+  message?: string
+  matched: number
+  pushed: number
+  skipped: Array<{ book_id: string; title: string; reason: string }>
+  failed: Array<{ book_id: string; title: string; error: string }>
+  at: number
 }
 
 /** KOReader 进度互通状态（`GET /api/koreader`） */
@@ -2907,17 +2937,25 @@ export const api = {
   // ---------- 外部服务集成（Hardcover / Readwise / StoryGraph）----------
   integrations: () => request<{ items: IntegrationService[] }>('/api/integrations'),
 
-  /** 提交掩码 = 不修改（与其它凭据同一约定） */
-  saveIntegration: (service: string, payload: Record<string, string>) =>
+  /** 提交掩码 = 不修改（与其它凭据同一约定）；`auto_push` 是布尔开关，单独处理 */
+  saveIntegration: (service: string, payload: Record<string, string | boolean>) =>
     request<{ ok: boolean }>(`/api/integrations/${service}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
 
-  /** 真实连通性验证。StoryGraph 无公开 API，会返回 `unsupported: true` */
+  /** 连通性验证（三家都提供；StoryGraph 是启发式判定，返回文案里会说明） */
   testIntegration: (service: string) =>
     request<IntegrationTestResult>(`/api/integrations/${service}/test`, { method: 'POST' }),
+
+  /** 同步预览：只算不改、零外呼 */
+  previewIntegration: (service: string) =>
+    request<SyncPreview>(`/api/integrations/${service}/preview`, { method: 'POST' }),
+
+  /** 执行一次同步（会向对方写入） */
+  syncIntegration: (service: string) =>
+    request<SyncResult>(`/api/integrations/${service}/sync`, { method: 'POST' }),
 
   // ---------- KOReader 进度互通 ----------
   koreaderStatus: () => request<KoreaderStatus>('/api/koreader'),
