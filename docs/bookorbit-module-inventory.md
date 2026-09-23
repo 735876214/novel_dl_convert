@@ -395,3 +395,22 @@
   （8 项转为「已覆盖」）⇒ 引用 §1 计数时**以 §2 逐行判定为准**（§1 已自带该提示，此处再点明）。
 
 **本期零运行时改动**。
+
+## 十、第 47 期更新（2026-09-23）：闭环遗留 + 深化占位视图
+
+- **热力图时区口径统一**：`core/activity.py` 的 `timeline` 为三类事件（session/annotation/achievement）补
+  server-local `date`（`YYYY-MM-DD`，与 `db.reading_day_minutes` 的 heatmap 同 `time.localtime` 口径）；
+  前端 `ReadingActivityView` 的日分组改读 `e.date`，删除 `new Date(ts*1000)` 的浏览器时区换算
+  ⇒ 消除 server/browser 跨时区 ±1 天错位。契约 `tests/test_reading_activity.py::test_timeline_events_carry_server_local_date`。
+- **Dashboard 确定性**：`DashboardShelfRow` 的 `discover` 行去掉 `Math.random()` 洗牌，改按 book id 稳定升序
+  （刷新顺序固定、无运行时随机）。
+- **收藏夹做深**（对应上游 collections 总览）：`db.collections` 补 `updated_at` 列（老库迁移回填 `created_at`，
+  成员增删 / 重命名均刷新）；`list_collections` 返 `first_book_id`（由 API 层补 `first_book_has_cover`）；
+  新增 `PATCH /api/collections/{cid}` 重命名端点；前端 `CollectionsView` 加首书封面预览 / 最后修改 / 行内重命名。
+  契约 `tests/test_collections.py`。
+- **更新日志做深**：`data/whatsNew.ts` 条目补 `tag` 分类；`WhatsNewView` 渲染版本徽章（`/health` 真实版本）+
+  分类 chip + 空态 + 「自上次访问以来」高亮（localStorage，确定性）。
+- **通知中心错误态**：`NotificationsView` 加载失败不再退化成「暂无通知」，给错误文案 + 重试
+  （与第 46 期 ReadingLog / HighlightOfTheDay 同修法）。
+- **浏览器冒烟**：无头浏览器认证后加载 `/annotations`、`/reading-activity`、`/collections`、`/whats-new`，
+  控制台 0 错误（第 44 期误清空回归在**运行时**确认已修复，此前只跑了 type-check + build）。
