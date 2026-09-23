@@ -329,10 +329,38 @@ def test_legacy_db_gets_new_columns_without_losing_rows(client, auth_headers, de
     db.init()  # 触发轻量迁移
 
     cols = {r["name"] for r in db._connect().execute("PRAGMA table_info(annotations)")}
-    assert {"origin", "deleted_at"} <= cols
+    assert {"origin", "deleted_at", "style"} <= cols
 
     items = db.list_annotations("lib$legacy")
     assert len(items) == 1, "存量行必须照旧可见"
     assert items[0]["quote"] == "老批注" and items[0]["note"] == "老笔记"
     assert items[0]["origin"] == "web", "老批注确实都来自 Web 阅读器"
     assert db.list_annotations("lib$legacy")[0]["color"] == "green", "颜色值不该被迁移改动"
+
+
+def test_annotation_style_roundtrips(client, auth_headers, default_root):
+    """第 44 期：批注新增「样式类型」维度。
+
+    创建带 style → 列表 / 导出（csv / json）都带回；不传 style 回落默认 'highlight'。
+    与既有 `color` 列正交：新增列不改变存量读写口径。
+    """
+    bid = _scan_one(default_root)
+
+    _add(client, auth_headers, bid, quote="下划线摘录", style="underline")
+    items = _active(client, auth_headers, bid)
+    assert items[0]["style"] == "underline"
+
+    # 不传 style → 回落默认 highlight
+    _add(client, auth_headers, bid, quote="默认高亮")
+    styles = {a["style"] for a in _active(client, auth_headers, bid)}
+    assert styles == {"underline", "highlight"}
+
+    # csv 导出带 style 列
+    csv_r = client.get("/api/annotations/export?format=csv", headers=auth_headers)
+    assert csv_r.status_code == 200, csv_r.text
+    rows = list(csv.DictReader(io.StringIO(csv_r.text.lstrip("﻿"))))
+    assert rows and rows[0]["style"] in ("underline", "highlight")
+
+    # json 导出同样带回
+    j = client.get("/api/annotations/export?format=json", headers=auth_headers).json()
+    assert {it["style"] for it in j["items"]} == {"underline", "highlight"}

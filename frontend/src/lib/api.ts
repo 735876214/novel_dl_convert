@@ -634,6 +634,7 @@ export interface Annotation {
   quote: string
   color: string
   note: string
+  style: string
   created_at: number
   /** 来源枚举：`web` / `koreader` / `kobo`。当前只有 Web 阅读器会写入。 */
   origin?: string
@@ -866,6 +867,7 @@ export interface AllAnnotation {
   quote: string
   color: string
   note: string
+  style: string
   created_at: number
   /** 来源枚举：`web` / `koreader` / `kobo`。当前只有 Web 阅读器会写入。 */
   origin: string

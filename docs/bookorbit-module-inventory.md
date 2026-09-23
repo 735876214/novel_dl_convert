@@ -300,7 +300,7 @@
 
 | 子能力 | 上游模块 | 本项目现状 | 不做的理由 |
 | --- | --- | --- | --- |
-| 批注颜色 ↔ 样式映射 + 跨端降色 | `annotation` | **部分**：10 色调色板（`frontend/src/data/annotationColors.ts:27`），无样式映射 | 单端阅读器，无跨端降色需求 |
+| ⚠️ 批注颜色 ↔ 样式映射 + 跨端降色 | `annotation` | **部分→第 44 期改判为做（样式类型部分）**：10 色调色板（`frontend/src/data/annotationColors.ts:27` 的 `HIGHLIGHT_COLORS`）新增并列「样式类型」维度（高亮/下划线/删除线/纯笔记，`HIGHLIGHT_STYLES`），阅读器/批注总览/书详情/每日划线四处统一引用；「跨端降色」仍不做 | 单端阅读器，无跨端降色需求（该部分仍不做） |
 | 批注级位置换算（CFI / kobo span / kepub DOM） | `annotation` / `position-converter` | **部分**：仅进度级 XPointer↔章（`novelforge/core/koreader.py:63`） | 与 §4.2 `position-converter` 同判：单用户单设备收益低 |
 | 实体**删除**策略 | `entity-manager` | **部分**：仅作者/系列的改名 + 合并（`novelforge/core/fileops.py:218/254`） | 源文件名无写入口 ⇒ 删除退化为纯元数据操作，收益窄 |
 | 元数据提取器扩到 6 类 | `metadata` | **部分**：仅 EPUB 全解析（见 §2 第 40 行） | 非 EPUB 本项目**刻意不解析**（`novelforge/core/library.py:1234`） |
@@ -347,3 +347,25 @@
 `tests/test_annotation_export.py`、`tests/test_author_sort_backfill.py`、
 `tests/test_prefs_shelf_block.py`、`frontend/src/lib/shelfBuckets.spec.ts`。
 后端全量 **720 例 / 0 failed**（含本期 +30）；前端 `npm run test:unit` **62 例**（含 +4）。
+
+## 八、第 44 期更新（2026-09-23）：重审 §6.2-B「有价值但不做」5 项
+
+第 44 期对 §6.2-B 五项逐条重审（依据当前代码现状与当初「不做」理由），结论如下：
+
+| 子能力 | 第 44 期结论 | 依据 |
+| --- | --- | --- |
+| 批注颜色 ↔ 样式映射 + 跨端降色 | **改判为做（仅「样式类型」部分）** | 当前批注模型只有 `color`（`annotationColors.ts` 的 `HIGHLIGHT_COLORS`），无「样式」维度；单端阅读器里增加**样式类型**（高亮/下划线/删除线/纯笔记）是真实可用功能。理由里的「跨端降色」因无 Kobo 设备**仍不做** |
+| 批注级位置换算（CFI / kobo span / kepub DOM） | 仍不做 | 需完整 EPUB DOM/CFI 解析器，单用户单设备收益低，理由仍成立（`core/koreader.py` 仅进度级 XPointer↔章） |
+| 实体删除策略 | 仍不做 | 源文件名无写入口，删除退化为纯元数据操作且书仍引用作者/系列（`core/fileops.py` 仅改名+合并），收益窄 |
+| 元数据提取器扩到 6 类 | 仍不做 | 非 EPUB 刻意不解析（`core/library.py`） |
+| 在线 provider 扩到 13 个 | 仍不做 | 刻意维持内置 2 源（`core/metasources.py` + `roadmap-gaps-remaining.md`） |
+
+**批注样式类型落地实现**（第 44 期）：
+- 数据层：`annotations` 表加列 `style TEXT NOT NULL DEFAULT 'highlight'`（`db.py` 建表 + 轻量迁移）；加列不加 `book_id`，不影响 remap 契约。
+- 后端：`db.add_annotation` 透传 `style`；`list_annotations` / `all_annotations` / `trashed_annotations` 一并返回；`POST /api/books/{bid}/annotations` 接收 `style`；`GET /api/annotations/export` 的 csv/json/markdown 一并输出。
+- 前端单一来源：在 `annotationColors.ts` 同文件新增 `HIGHLIGHT_STYLES`（高亮/下划线/删除线/纯笔记 + 中文 `label`）与 `highlightStyleLabel()`；四处 UI（阅读器选区浮层、批注总览、书详情批注 tab、每日划线）统一引用。
+- 阅读器 `wrapQuote` 按 `style` 分流渲染（下划线 `text-decoration: underline`、删除线 `line-through`、纯笔记虚线下沿、高亮铺底色）；选区浮层在色板旁加样式类型切换。
+
+**契约测试**：`tests/test_annotations.py` 增 `test_annotation_style_roundtrips`（创建带 style → 列表/导出含 style → 老库迁移补 style 列，后者并入既有 `test_legacy_db_gets_new_columns_without_losing_rows` 断言集）。
+
+后端全量 **721 例 / 0 failed**（含本期 +1）；前端 `npm run test:unit` **62 例**（无新增）。

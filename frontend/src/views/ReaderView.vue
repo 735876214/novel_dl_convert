@@ -7,7 +7,7 @@ import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
-import { HIGHLIGHT_COLORS, highlightHex as hex } from '@/data/annotationColors'
+import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
 import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark } from '@/lib/api'
 import {
   READER_FONTS,
@@ -308,6 +308,8 @@ const contentRef = ref<HTMLElement | null>(null)
 const selText = ref('')
 const selPos = ref<{ x: number; y: number } | null>(null)
 const noteDraft = ref('')
+// 样式类型（高亮/下划线/删除线/纯笔记）单一来源来自 data/annotationColors.ts，与 COLORS 同文件。
+const selStyle = ref<HighlightStyle>(DEFAULT_HIGHLIGHT_STYLE)
 
 // 调色板与取色统一来自 data/annotationColors.ts（唯一一份）：
 // 这里此前自己写了一份四色表，扩容时与另外三处（批注总览 / 图书详情 / 每日划线）
@@ -416,7 +418,25 @@ function onSelect(): void {
   selPos.value = { x: rect.left + rect.width / 2, y: rect.top }
 }
 
-function wrapQuote(root: HTMLElement, quote: string, color: string, id: number): boolean {
+function applyAnnoStyle(span: HTMLElement, color: string, style: string): void {
+  const c = hex(color)
+  if (style === 'underline') {
+    span.style.textDecoration = 'underline'
+    span.style.textDecorationColor = c
+    span.style.textDecorationThickness = '2px'
+  } else if (style === 'strikethrough') {
+    span.style.textDecoration = 'line-through'
+    span.style.textDecorationColor = c
+    span.style.textDecorationThickness = '2px'
+  } else if (style === 'note') {
+    // 纯笔记：不铺底色，仅用虚线下沿锚定，与「下划线」实线区分
+    span.style.borderBottom = `2px dotted ${c}`
+  } else {
+    span.style.background = c
+  }
+}
+
+function wrapQuote(root: HTMLElement, quote: string, color: string, style: string, id: number): boolean {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   const nodes: Text[] = []
   let n: Node | null
@@ -430,7 +450,7 @@ function wrapQuote(root: HTMLElement, quote: string, color: string, id: number):
     const span = document.createElement('span')
     span.className = 'nf-hl'
     span.dataset.annoId = String(id)
-    span.style.background = hex(color)
+    applyAnnoStyle(span, color, style)
     try {
       range.surroundContents(span)
       return true
@@ -444,13 +464,14 @@ function wrapQuote(root: HTMLElement, quote: string, color: string, id: number):
 function applyHighlights(): void {
   const root = contentRef.value
   if (!root) return
-  for (const a of chapterAnnotations.value) wrapQuote(root, a.quote, a.color, a.id)
+  for (const a of chapterAnnotations.value) wrapQuote(root, a.quote, a.color, a.style, a.id)
 }
 
 async function addHighlight(color: string): Promise<void> {
   const quote = selText.value
   if (!quote) return
   const note = noteDraft.value.trim()
+  const style = selStyle.value
   selPos.value = null
   noteDraft.value = ''
   selText.value = ''
@@ -461,6 +482,7 @@ async function addHighlight(color: string): Promise<void> {
       quote,
       color,
       note,
+      style,
     })
     annotations.value.push({
       id: r.id,
@@ -468,6 +490,7 @@ async function addHighlight(color: string): Promise<void> {
       quote,
       color,
       note,
+      style,
       created_at: Date.now() / 1000,
     })
   } catch {
@@ -1180,6 +1203,7 @@ onBeforeUnmount(() => {
             >
               <div class="flex items-start gap-2">
                 <span class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full" :style="{ background: hex(a.color) }" />
+                <span class="mt-1 text-[10.5px] text-muted-foreground">{{ highlightStyleLabel(a.style) }}</span>
                 <div class="min-w-0 flex-1">
                   <p class="line-clamp-3 text-[12px] leading-relaxed text-foreground">「{{ a.quote }}」</p>
                   <p v-if="a.note" class="mt-1 text-[11.5px] text-muted-foreground">{{ a.note }}</p>
@@ -1297,24 +1321,36 @@ onBeforeUnmount(() => {
         class="fixed z-50 -translate-x-1/2 -translate-y-full pb-2"
         :style="{ left: `${selPos.x}px`, top: `${selPos.y}px` }"
       >
-        <div class="flex items-center gap-1.5 rounded-lg border border-border bg-card px-2 py-1.5 shadow-lg">
-          <button
-            v-for="c in COLORS"
-            :key="c.key"
-            type="button"
-            class="h-5 w-5 cursor-pointer rounded-full border border-black/10 transition-transform hover:scale-110"
-            :style="{ background: hex(c.key) }"
-            :title="c.label"
-            @click="addHighlight(c.key)"
-          />
-          <span class="mx-1 h-4 w-px bg-border" />
-          <input
-            v-model="noteDraft"
-            type="text"
-            placeholder="写点笔记…"
-            class="w-28 bg-transparent text-[12px] text-foreground outline-none placeholder:text-muted-foreground"
-            @keyup.enter="addHighlight('yellow')"
-          />
+        <div class="flex flex-col gap-1.5 rounded-lg border border-border bg-card px-2 py-1.5 shadow-lg">
+          <div class="flex items-center gap-1">
+            <button
+              v-for="s in HIGHLIGHT_STYLES"
+              :key="s.key"
+              type="button"
+              class="rounded px-1.5 py-0.5 text-[11px] transition-colors"
+              :class="selStyle === s.key ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'"
+              @click="selStyle = s.key"
+            >{{ s.label }}</button>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button
+              v-for="c in COLORS"
+              :key="c.key"
+              type="button"
+              class="h-5 w-5 cursor-pointer rounded-full border border-black/10 transition-transform hover:scale-110"
+              :style="{ background: hex(c.key) }"
+              :title="c.label"
+              @click="addHighlight(c.key)"
+            />
+            <span class="mx-1 h-4 w-px bg-border" />
+            <input
+              v-model="noteDraft"
+              type="text"
+              placeholder="写点笔记…"
+              class="w-28 bg-transparent text-[12px] text-foreground outline-none placeholder:text-muted-foreground"
+              @keyup.enter="addHighlight('yellow')"
+            />
+          </div>
         </div>
       </div>
       </template>

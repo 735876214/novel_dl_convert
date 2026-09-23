@@ -1957,6 +1957,8 @@ def api_add_annotation(bid: str, payload: dict = Body(...)):
     # origin 固定来源枚举（web / koreader / kobo）。当前只有 Web 阅读器会写入，
     # 允许显式传入是为将来批注导入留出契约，但**不校验也不编造**：不传就是 web。
     origin = str(payload.get("origin", "web") or "web").strip() or "web"
+    # 第 44 期：样式类型（高亮/下划线/删除线/纯笔记），未知/空回落 'highlight'。
+    style = str(payload.get("style", "highlight") or "highlight").strip() or "highlight"
     rid = db.add_annotation(
         bid,
         int(payload.get("chapter", 0) or 0),
@@ -1964,6 +1966,7 @@ def api_add_annotation(bid: str, payload: dict = Body(...)):
         str(payload.get("color", "yellow") or "yellow"),
         str(payload.get("note", "") or ""),
         origin,
+        style,
     )
     return {"id": rid, "ok": True}
 
@@ -2516,11 +2519,11 @@ def api_annotation_export(format: str = "markdown", library_id: str = "", book_i
     if fmt == "csv":
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["book_title", "book_author", "chapter", "quote", "note", "color", "created_at"])
+        w.writerow(["book_title", "book_author", "chapter", "quote", "note", "color", "style", "created_at"])
         for r in rows:
             w.writerow([r.get("book_title", ""), r.get("book_author", ""), r.get("chapter", ""),
                         r.get("quote", ""), r.get("note", ""), r.get("color", ""),
-                        r.get("created_at", "")])
+                        r.get("style", ""), r.get("created_at", "")])
         return Response(
             content=buf.getvalue(), media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="annotations-{stamp}.csv"'})
@@ -2534,7 +2537,11 @@ def api_annotation_export(format: str = "markdown", library_id: str = "", book_i
             lines += ["", f"## {bt}{suffix}", ""]
         quote = str(r.get("quote") or "").strip()
         note = str(r.get("note") or "").strip()
-        lines.append(f"- {quote}" + (f"  \n  > {note}" if note else ""))
+        style = str(r.get("style") or "highlight").strip() or "highlight"
+        line = f"- {quote}" + (f"  \n  > {note}" if note else "")
+        if style != "highlight":
+            line += f"  （样式：{style}）"
+        lines.append(line)
     body = "\n".join(lines) + "\n"
     return Response(
         content=body, media_type="text/markdown; charset=utf-8",

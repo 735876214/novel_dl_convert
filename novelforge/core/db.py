@@ -194,6 +194,7 @@ def init():
                 chapter    INTEGER NOT NULL,
                 quote      TEXT NOT NULL,
                 color      TEXT NOT NULL DEFAULT 'yellow',
+                style      TEXT NOT NULL DEFAULT 'highlight',
                 note       TEXT NOT NULL DEFAULT '',
                 created_at REAL NOT NULL
             );
@@ -673,6 +674,10 @@ def init():
             c.execute("ALTER TABLE annotations ADD COLUMN origin TEXT NOT NULL DEFAULT 'web'")
         if acols and "deleted_at" not in acols:
             c.execute("ALTER TABLE annotations ADD COLUMN deleted_at REAL NOT NULL DEFAULT 0")
+        # 第 44 期：annotations 补「样式类型」一列（高亮/下划线/删除线/纯笔记）。存量行回落
+        # 'highlight'，读时无需额外补偿；该列不加 book_id，不影响 remap 契约。
+        if acols and "style" not in acols:
+            c.execute("ALTER TABLE annotations ADD COLUMN style TEXT NOT NULL DEFAULT 'highlight'")
         # 第 32 期：authors 补「排序名」两列（在线值 / 本地覆盖分列，与 bio 同构）。
         # 老库不补列则作者排序与覆盖读写会报 no such column。两列都有 NOT NULL DEFAULT ''，
         # 存量行照旧可读 —— 空串即「没有排序名」，排序回退到 name，与加列前完全一致。
@@ -798,7 +803,7 @@ def set_progress(book_id: str, locator: int, percent: float):
 def list_annotations(book_id: str) -> list:
     c = _connect()
     rows = c.execute(
-        "SELECT id, chapter, quote, color, note, created_at, origin "
+        "SELECT id, chapter, quote, color, note, created_at, origin, style "
         "FROM annotations WHERE book_id=? AND deleted_at=0 ORDER BY chapter, created_at",
         (book_id,),
     ).fetchall()
@@ -806,13 +811,13 @@ def list_annotations(book_id: str) -> list:
 
 
 def add_annotation(book_id: str, chapter: int, quote: str, color: str, note: str,
-                   origin: str = "web") -> int:
+                   origin: str = "web", style: str = "highlight") -> int:
     c = _connect()
     with _lock:
         cur = c.execute(
-            "INSERT INTO annotations(book_id, chapter, quote, color, note, created_at, origin) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (book_id, chapter, quote, color, note, time.time(), origin),
+            "INSERT INTO annotations(book_id, chapter, quote, color, note, created_at, origin, style) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (book_id, chapter, quote, color, note, time.time(), origin, style),
         )
         c.commit()
         return cur.lastrowid or 0
@@ -870,7 +875,7 @@ def trashed_annotations(book_id: str | None = None) -> list:
     传 ``book_id`` 则只看某本书。``include_trashed`` 的总览查询也走这里。
     """
     c = _connect()
-    sql = ("SELECT id, book_id, chapter, quote, color, note, created_at, origin, deleted_at "
+    sql = ("SELECT id, book_id, chapter, quote, color, note, created_at, origin, deleted_at, style "
            "FROM annotations WHERE deleted_at!=0")
     args: tuple = ()
     if book_id is not None:
@@ -1209,7 +1214,7 @@ def all_annotations(include_trashed: bool = False) -> list:
     无参调用的几处（图书详情「批注」tab、每日划线 widget）不该看到已丢弃的条目。
     """
     c = _connect()
-    sql = ("SELECT id, book_id, chapter, quote, color, note, created_at, origin, deleted_at "
+    sql = ("SELECT id, book_id, chapter, quote, color, note, created_at, origin, deleted_at, style "
            "FROM annotations")
     if not include_trashed:
         sql += " WHERE deleted_at=0"

@@ -12,7 +12,7 @@ import MetadataEditor from '@/components/book/MetadataEditor.vue'
 import ReadingRecord from '@/components/book/ReadingRecord.vue'
 import { useLibraryStore } from '@/stores/library'
 import { useCollectionsStore } from '@/stores/collections'
-import { highlightHex as highlightColor } from '@/data/annotationColors'
+import { highlightHex as highlightColor, highlightStyleLabel } from '@/data/annotationColors'
 import { api, type Annotation, type BookDetail, type ProgressState, type SimilarBook } from '@/lib/api'
 import { extractCoverTint, type CoverTint } from '@/lib/coverTint'
 
@@ -582,6 +582,7 @@ onMounted(async () => {
             class="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
             :style="{ background: highlightColor(a.color) }"
           />
+          <span class="mt-1 text-[10.5px] text-muted-foreground">{{ highlightStyleLabel(a.style) }}</span>
           <div class="min-w-0 flex-1">
             <p class="text-[12.5px] leading-relaxed text-foreground">「{{ a.quote }}」</p>
             <p v-if="a.note" class="mt-1 text-[12px] text-muted-foreground">{{ a.note }}</p>

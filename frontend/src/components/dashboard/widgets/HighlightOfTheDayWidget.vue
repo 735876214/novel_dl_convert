@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
-import { highlightHex } from '@/data/annotationColors'
+import { highlightHex, highlightStyleLabel } from '@/data/annotationColors'
 import { api, type AllAnnotation } from '@/lib/api'
 import { useLibraryStore } from '@/stores/library'
 
@@ -50,6 +50,7 @@ const emptyText = computed(() =>
       <div class="mt-2.5 flex-1 border-l-2 pl-2.5" :style="{ borderColor: highlightHex(today.color) }">
         <p class="text-[12.5px] leading-relaxed text-foreground">「{{ today.quote }}」</p>
         <p v-if="today.note" class="mt-1 text-[11.5px] text-muted-foreground">{{ today.note }}</p>
+        <p class="mt-1 text-[10.5px] text-muted-foreground">{{ highlightStyleLabel(today.style) }}</p>
       </div>
       <button
         type="button"
