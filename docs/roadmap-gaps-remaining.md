@@ -1799,3 +1799,44 @@ BookCover `:96`、ShelfView `:280`）均按实测行号写入；`tests/check_doc
 **验证**：后端全量 **690 passed / 0 failed**；前端 `npm run test:unit` **58 passed**、
 `vue-tsc --build` exit 0。旧 `root_path` / `source_subdir` / `mode` / `import` 契约的用例全部改写为 `source_dirs`。
 `docker-compose.yml` 改 `LIBRARY_SOURCE_DIRS1=/app/libraries` 并示范 `2/3` + `_NAME` 扩展。
+
+---
+
+#### 第 42 期实施记录（上游无新增 → 判定刷新 + 部分缺口；纯取证/文档）
+
+**主题**：用户拍板「重新取证上游找新缺口」。先代理优先复核上游 `735876214/bookorbit` 的
+`refs/heads/main` —— **仍为 `c292d6cc`**（与第 33 期取证同一 commit，无新提交、无新 tag），
+「上游出了新版本、有新模块」的前提**不成立**。转而做**同一版本上的两件此前未系统做过的事**：
+① 刷新 `bookorbit-module-inventory.md` §2 的逐行「判定」列；② 补一类此前未单独成表的
+「**部分缺口**」（上游模块有、本项目只做了子集）。**本期零运行时改动**（不实现清单里的任何项）。
+
+**A. 上游取证结论**：`git ls-tree` 对比 `c292d6cc..FETCH_HEAD` **0 提交 / 0 文件**；
+`ls-remote` 权威确认 `refs/heads/main == c292d6cc`。⇒ 「按新版本找新模块」这条路本期**不可用**，
+如实记录（**不虚构新缺口**）。
+
+**B. §2 判定刷新（10 处，均已就地改在清单第二节表内）**：`book-metadata-lock` / `bookmark` /
+`browse-counts` / `catalog` / `custom-metadata` / `reading-state` / `recommendation` 七项由
+「漏项候选」改为「**已覆盖**」（第 34–36 期其实已落地，**判定列未回填**）；另订正 3 处**文档错误**：
+1. 第 32 行 `health`：原记「本项目有 `/api/health`」——**没有**该路由，真路由是 `GET /health`
+   （`novelforge/server.py:262`；白名单只含 `/health` + `/api/auth/login` + `/api/logout`）。
+   第 31 期早已订正代码侧（并修了打错路径的契约测试），此表漏改。
+2. 第 33 行（上游模块 `kobo`）：原记「已实现可用子集」——**未实现**。依据：`README.md:113` 明写
+   「未做：Kobo 同步」、`docs/bookorbit-capability-gap.md:435`、设置页占位 `frontend/src/data/settingsNav.ts:344-363`；全仓无 `kobo*.py`。
+3. 第 40 行 `metadata`：原记「`core/metadata.py` 对等（6 类）」——**高估**，实际仅 EPUB 全解析
+   （+ 漫画/音频结构），**FB2 完全不支持**、MOBI/AZW3/PDF 无内容解析。
+
+**C. 新增第六节「已覆盖模块的部分缺口」**（14 项，三分类）：**值得做 6**（系列缺册 / 作者排序键回填 /
+书架首字母跳转 / 阅读尝试即重读 / 批注导出增强 / 系列折叠偏好上云）、**有价值但不做 5**、
+**与定位或既有决策不容 6**（批注跨端同步 / 按设备重建位置 / Kobo 状态投影 / 通知清理 job /
+通知 SSE 网关 / 孤儿封面清扫）。逐项带本项目 `文件:行` 锚点，**排期与否由用户决定**。
+
+**D. 基线重取**：`bookorbit-capability-gap.md` §0.3 路由 **284 → 285**（第 41 期 +`GET /api/libraries/source-dirs`）、
+表仍 **31 张**、`APP_VERSION="0.6.0"`。联动文档（`settings-inventory` / `feature-flows` /
+`library-contract`）按第 41 期库模型关键字（`root_path`/`source_subdir`/`inplace`）复核**零命中**，无需改；
+路线图历史记录里的旧表述**属历史事实，不动**。
+
+**E. 验证**：后端全量 pytest **690 例 / 0 failed**（与第 41 期基线一致，纯文档改动无回归）；
+文档锚点核验 **硬错 0**，疑似漂移 **26 → 11** —— 修掉 **15 处活跃文档锚点**（`bookorbit-capability-gap.md` 10 处、
+`bookorbit-module-inventory.md` 5 处），**剩余 11 条全部位于逐期历史实施记录内**
+（`roadmap-gaps-remaining.md` 的 `:859` / `:879` / `:1077` / `:1416` / `:1526` / `:1563-1565` / `:1617` / `:1721` / `:1730`），
+按「历史实施记录里的旧行号一律不动 —— 改它等于篡改历史」的约定**不修**。
