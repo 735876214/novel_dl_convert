@@ -21,6 +21,12 @@ export type ReaderMode = 'scroll' | 'paged'
 /** 字重样式（上游的 Font style 四档）：常规 / 加粗 / 斜体 / 粗斜体 */
 export type ReaderFontStyleKey = 'regular' | 'bold' | 'italic' | 'boldItalic'
 
+/**
+ * 固定版式（不可重排）书的页宽档位（第 51 期，对齐上游 `Fixed-layout page spreads`）：
+ * `book` 跟随书籍（**改造前行为**）/ `single` 收成一页宽居中 / `columns` 按 50% 列宽并排两页。
+ */
+export type ReaderFixedLayoutWidth = 'book' | 'single' | 'columns'
+
 export const READER_FONT_STYLES: Array<{
   key: ReaderFontStyleKey
   label: string
@@ -70,6 +76,12 @@ export interface ReaderPrefs {
    * 窄屏上把 `width` 调大不会自动得到边距，反之亦然。
    */
   gutter: number
+  /**
+   * 固定版式页宽（第 51 期）：只对 `fixed_layout === true` 的书生效 ——
+   * 这类书整页已排好版，本项目**仍不注入字号 / 行高 / 缩进等重排设置**，
+   * 本项只决定容器宽度。默认 `book` = 加这项之前的行为。
+   */
+  fixedLayoutWidth: ReaderFixedLayoutWidth
 }
 
 export const READER_PREFS_KEY = 'reader-prefs'
@@ -91,6 +103,8 @@ export const READER_PREFS_DEFAULT: ReaderPrefs = {
   fontStyle: 'regular',
   // 1.5rem = 阅读区原先写死的 px-6（Tailwind 的 6 = 1.5rem），默认值因此**不改现有观感**
   gutter: 1.5,
+  // 第 51 期：默认「跟随书籍」= 固定版式原本的行为（页宽交给书本身决定）
+  fixedLayoutWidth: 'book',
 }
 
 export const READER_FONTS = [
@@ -102,6 +116,13 @@ export const READER_FONTS = [
 export const READER_MODES = [
   { key: 'scroll', label: '滚动' },
   { key: 'paged', label: '翻页' },
+] as const
+
+/** 固定版式页宽三档（第 51 期，对齐上游 Book default / Single page / Columns） */
+export const READER_FIXED_LAYOUT_WIDTHS = [
+  { key: 'book', label: '跟随书籍' },
+  { key: 'single', label: '单页' },
+  { key: 'columns', label: '并排两页' },
 ] as const
 
 /**

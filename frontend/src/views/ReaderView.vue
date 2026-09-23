@@ -111,14 +111,42 @@ const contentStyle = computed(() => {
   // 这里**只给容器尺寸**，字号 / 行高 / 缩进 / 字距 / 字体一概不注入：
   // 那些是重排设置，对一页排好的版式没有意义，套上去只会把整页排版揉烂。
   if (fixedLayout.value) {
-    return {
-      maxWidth: 'none',
+    // 固定版式「页宽」三档（第 51 期，对齐上游 Fixed-layout page spreads）：
+    //   book    = 页宽由书本身决定（**改造前行为**）
+    //   single  = 收成一页宽并居中
+    //   columns = 按 50% 列宽并排两页（与「分栏」同一套 CSS 多列机制）
+    // ⚠️ 这里**仍然只给容器尺寸**，绝不注入字号 / 行高 / 缩进 / 字距 / 字体 ——
+    // 那些是重排设置，套到「整页已排好版」的书上只会把版式揉烂。
+    const base: Record<string, string> = {
       height: paged.value ? '100%' : 'auto',
+      ...gutterStyle.value,
+    }
+    if (p.fixedLayoutWidth === 'single') {
+      return {
+        ...base,
+        maxWidth: `${p.width}rem`,
+        marginInline: 'auto',
+        columnWidth: 'auto',
+        columnGap: 'normal',
+        columnFill: 'auto',
+      }
+    }
+    if (p.fixedLayoutWidth === 'columns') {
+      return {
+        ...base,
+        maxWidth: 'none',
+        columnWidth: '50%',
+        columnGap: `${p.gutter}rem`,
+        columnFill: 'auto',
+      }
+    }
+    return {
+      ...base,
+      maxWidth: 'none',
       columnWidth: 'auto',
       columnGap: 'normal',
       columnFill: 'auto',
-      ...gutterStyle.value,
-    } as Record<string, string>
+    }
   }
   const fs = readerFontStyle(p.fontStyle)
   return {
