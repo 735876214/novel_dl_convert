@@ -60,3 +60,30 @@ def test_reading_activity_empty_is_all_and_filters(client, auth_headers, make_li
     assert none["timeline"]["total"] == 0
     assert none["heatmap"]["days"] == []
     assert none["timeline"]["events"] == []
+
+
+def test_timeline_events_carry_server_local_date(client, auth_headers, make_library, tmp_path):
+    """时间轴每个事件都带 server-local date，且与热力图同日口径一致（消跨时区 ±1 天错位）。
+
+    这是第 47 期修复的契约：前端时间轴分组改读 ``e.date``，不再用浏览器时区从 ``ts`` 重算。
+    """
+    aid = _make_lib_and_book(make_library, tmp_path, "act-d", "书D.epub")
+    day = time.mktime(time.strptime("2024-05-01", "%Y-%m-%d"))
+    db.add_session(aid, 3600, day, day + 1800)                 # 会话落在 2024-05-01
+    db.add_annotation(aid, 1, "划线", "yellow", "一条笔记")       # 批注分支也要带 date
+
+    resp = client.get("/api/reading-activity", headers=auth_headers,
+                     params={"library_id": "act-d"}).json()
+    events = resp["timeline"]["events"]
+    assert events, "应有事件"
+
+    heat_days = {d["date"] for d in resp["heatmap"]["days"]}
+    for e in events:
+        assert "date" in e and isinstance(e["date"], str), "事件缺 date 字段"
+        assert e["date"] == time.strftime("%Y-%m-%d", time.localtime(e["ts"])), \
+            "date 须等于 ts 的 server-local 日"
+        assert len(e["date"]) == 10 and e["date"][4] == "-" == e["date"][7], "date 形如 YYYY-MM-DD"
+
+    session_days = {e["date"] for e in events if e["type"] == "session"}
+    assert session_days == {"2024-05-01"}, "会话事件须归入 2024-05-01"
+    assert session_days <= heat_days, "会话事件的 date 须与热力图同日集合一致"

@@ -11,7 +11,19 @@
 """
 from __future__ import annotations
 
+import time
+
 from . import db, library
+
+
+def _day(ts: float) -> str:
+    """ts → 服务端本地日 ``YYYY-MM-DD``。
+
+    与 ``db.reading_day_minutes`` 的 heatmap 口径**完全一致**（都用 ``time.localtime``
+    在服务端本地时区算日），作为时间轴分组的唯一真值源；前端不再用浏览器时区重算，
+    彻底消除 server/browser 跨时区 ±1 天错位。
+    """
+    return time.strftime("%Y-%m-%d", time.localtime(ts))
 
 
 def _book_ids(library_id: str):
@@ -49,9 +61,11 @@ def timeline(library_id: str = "", limit: int = 120) -> dict:
     """合并阅读会话 / 批注 / 成就解锁为时间轴 feed（新 → 旧）。
 
     返回 ``{library_id, events[], total}``；``events`` 为统一形状：
-      - session:     ``{type, ts, book_id, title, seconds}``
-      - annotation:  ``{type, ts, book_id, title, note, quote}``
-      - achievement: ``{type, ts, key, name}``
+      - session:     ``{type, ts, date, book_id, title, seconds}``
+      - annotation:  ``{type, ts, date, book_id, title, note, quote}``
+      - achievement: ``{type, ts, date, key, name}``
+    ``date`` = 服务端本地日 ``YYYY-MM-DD``（与 ``heatmap.days[].date`` 同口径），
+    前端时间轴分组只读它，不自行按浏览器时区换算。
     空库时 events 为空列表（不补假数据）。
     """
     lid = (library_id or "").strip()
@@ -65,6 +79,7 @@ def timeline(library_id: str = "", limit: int = 120) -> dict:
         events.append({
             "type": "session",
             "ts": float(r["ended_at"]),
+            "date": _day(r["ended_at"]),
             "book_id": r["book_id"],
             "title": titles.get(r["book_id"], ""),
             "seconds": float(r["seconds"]),
@@ -74,6 +89,7 @@ def timeline(library_id: str = "", limit: int = 120) -> dict:
         events.append({
             "type": "annotation",
             "ts": float(r["created_at"]),
+            "date": _day(r["created_at"]),
             "book_id": r["book_id"],
             "title": titles.get(r["book_id"], ""),
             "note": (r.get("note") or "").strip(),
@@ -85,6 +101,7 @@ def timeline(library_id: str = "", limit: int = 120) -> dict:
         events.append({
             "type": "achievement",
             "ts": float(ts),
+            "date": _day(ts),
             "key": k,
             "name": ach_names.get(k, k),
         })
