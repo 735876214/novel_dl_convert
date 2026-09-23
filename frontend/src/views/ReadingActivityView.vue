@@ -111,8 +111,8 @@ const grouped = computed(() => {
   const evs: ReadingEvent[] = data.value?.timeline.events ?? []
   const byDay = new Map<string, ReadingEvent[]>()
   for (const e of evs) {
-    const d = new Date(e.ts * 1000)
-    const key = isoLocal(d)
+    // 直接读后端下发的 server-local date，不再用浏览器时区重算（消除跨时区 ±1 天错位）
+    const key = e.date
     if (!byDay.has(key)) byDay.set(key, [])
     byDay.get(key)!.push(e)
   }

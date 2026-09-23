@@ -908,6 +908,12 @@ export interface CollectionItem {
   name: string
   count: number
   created_at: number
+  /** 最后修改时间（秒）；成员增删或重命名都会刷新（第 47 期） */
+  updated_at: number
+  /** 首本成员的书 id（用于总览卡封面预览）；无成员为 null */
+  first_book_id: string | null
+  /** 首本成员是否有真实封面 */
+  first_book_has_cover: boolean
 }
 
 export interface CollectionDetail {
@@ -1321,9 +1327,9 @@ export interface ReadingHeatmap {
 }
 
 export type ReadingEvent =
-  | { type: 'session'; ts: number; book_id: string; title: string; seconds: number }
-  | { type: 'annotation'; ts: number; book_id: string; title: string; note: string; quote: string }
-  | { type: 'achievement'; ts: number; key: string; name: string }
+  | { type: 'session'; ts: number; date: string; book_id: string; title: string; seconds: number }
+  | { type: 'annotation'; ts: number; date: string; book_id: string; title: string; note: string; quote: string }
+  | { type: 'achievement'; ts: number; date: string; key: string; name: string }
 
 export interface ReadingActivity {
   heatmap: ReadingHeatmap
@@ -3198,6 +3204,13 @@ export const api = {
 
   deleteCollection: (id: number) =>
     request<{ ok: boolean }>(`/api/collections/${id}`, { method: 'DELETE' }),
+
+  renameCollection: (id: number, name: string) =>
+    request<{ ok: boolean; id: number; name: string }>(`/api/collections/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
 
   addToCollection: (id: number, bookId: string) =>
     request<{ ok: boolean }>(`/api/collections/${id}/books`, {

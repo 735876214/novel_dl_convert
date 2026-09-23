@@ -36,6 +36,7 @@ export const ICONS = {
   arrowLeft: '<path d="M19 12H5M12 19l-7-7 7-7"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   bell: '<path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z"/>',
   chart: '<path d="M3 20h18"/><rect x="4.5" y="11" width="3.6" height="6.5" rx="1"/><rect x="10.2" y="5" width="3.6" height="12.5" rx="1"/><rect x="15.9" y="14" width="3.6" height="3.5" rx="1"/>',
   wrench: '<path d="M15.5 3.2a5.2 5.2 0 00-4.7 7.4l-7 7a1.9 1.9 0 002.7 2.7l7-7a5.2 5.2 0 007.4-4.7l-3 3-3-.8-.8-3z"/>',
   users: '<path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/>',

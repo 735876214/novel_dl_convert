@@ -16,17 +16,12 @@ const router = useRouter()
 onMounted(() => library.loadBooks())
 
 /**
- * 「随机发现」的洗牌：书目加载完成后算一次（刷新页面会重新洗牌，符合 BookOrbit 行为）。
- * 用 computed 依赖 library.books，仅在数据变化时重算，避免每次渲染乱跳。
+ * 「随机发现」改为确定性排序：按 book id 稳定升序，刷新页面顺序固定、无运行时随机。
+ * 用 computed 依赖 library.books，仅在数据变化时重算。
  */
-const shuffled = computed<BookCard[]>(() => {
-  const list = [...library.books]
-  for (let i = list.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1))
-    ;[list[i], list[j]] = [list[j], list[i]]
-  }
-  return list
-})
+const discoverBooks = computed<BookCard[]>(() =>
+  [...library.books].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)),
+)
 
 /** 每行最多展示 20 个封面（与 BookOrbit 一致） */
 const MAX_COVERS = 20
@@ -36,7 +31,7 @@ const books = computed<BookCard[]>(() => {
     case 'continue':
       return library.continueReading
     case 'discover':
-      return shuffled.value
+      return discoverBooks.value
     case 'recent':
       return [...library.books].sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
     case 'scope':
