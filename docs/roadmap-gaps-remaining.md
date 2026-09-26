@@ -2045,6 +2045,55 @@ BookCover `:96`、ShelfView `:280`）均按实测行号写入；`tests/check_doc
    默认顺序只含已实现、分组排序、未实现源检索不抛、端点形状与计数、探测跳过未实现
    （spy 断言**零外呼**）、配置混入未实现源时 plan 不炸。
 
-**B 段（下一段开工，同一期）**：手动个性化书源**表单化**（含逐源连通性自检）+
-声明式**插件市场**（本地/远端索引 + 声明式规则包，复用 `sources/rules.py` 的现成 schema，
-不执行远端任意代码）+ 系列级元数据补全（`publisher/first_year/tags` 编辑入口与陈旧文案订正）。
+**B 段（本期已落地）：14 家提供商全部接入 + 书源表单化；插件市场取消**
+
+用户拍板（逐字）：「全部 14 家都写（免 Key 的直接可用；需 Key 的做成「填 Key 即可用」；
+抓取型的也写但标注「易失效」）」「同页但保留「提供商」分区标题（页面仍叫「元数据来源」）」
+「**市场的任务取消**」「做：表单化 + 逐源连通性自检」。
+
+1. **14 家全部真能抓**（原判「只维持内置 2 源」作废）：
+   - 出网收口：新增 `metasources._get_json` / `_get_text` —— 14 家**只经这两个函数**访问公网，
+     于是解析逻辑可完全离线回归（契约测试只 monkeypatch 这两个口），错误码文案也只有一处
+     （429 / 401 / 403 有专门中文说明）。
+   - 免密钥即用 5 家：Open Library、Google Books、**iTunes**（Search API）、**AudNexus**、
+     **RanobeDB**（`/api/v0`，两段式：`/books` 拿 id → `/book/{id}` 补作者/出版社/简介；
+     官方未公布封面 CDN 前缀 ⇒ **封面留空而不是拼猜测 URL**）。
+   - 填密钥即用 3 家：**Hardcover**（`api.hardcover.app/v1/graphql` Bearer Token）、
+     **Comic Vine**（`api_key`）、**Aladin**（TTBKey，`output=js` 的响应带前后缀 ⇒ `_first_json`
+     用 `raw_decode` 抠第一个 JSON 值）。
+   - **页面抓取型 6 家**：Amazon、Goodreads、Kobo、Audible、Libro.fm、Lubimyczytac
+     （Kobo 走 `__NEXT_DATA__` 递归扫描；其余正则提取）。⚠️ **如实标注 `fragile=True`**
+     （页面「易失效」徽标）——真实可用性**无法离线验证**（反爬 / 改版），代码只保证
+     「结构未变时解析正确 + 失败一律回落空列表」。
+   - 注册表 `SOURCES` 14 家全 `implemented=True`，新增 `fragile` 与 `key_field`；
+     `IMPLEMENTED == _FETCHERS.keys()` 契约继续钉住（防漏接）；`DEFAULT_ORDER` 仍只开
+     2 家（14 家都能用 ≠ 默认全开：每家多一轮外呼且易被限流）。
+2. **密钥通用化（三处同步）**：`config.DEFAULTS["metadata_fetch"]` 新增
+   `hardcover_api_token` / `comicvine_api_key` / `aladin_ttbkey`；`server.EDITABLE` 同步；
+   `_mask_metadata_fetch` 改为**按注册表 `key_field` 循环掩码** + 回显 `has_<键名>`；
+   `metasources.options_for(mf, sources)` 成为唯一拼装口（`metafetch.plan` / `online_candidate` /
+   `series_meta.fetch_one` 共用，原先各自写死 googlebooks 的写法一并删除）。
+   `/api/metadata/probe` 对**缺密钥的家不发外呼**（如实回报「需要设置」）。
+3. **设置页「元数据来源」收尾**：行内新增「易失效」徽标；底部密钥区**按注册表渲染**
+   （哪家有 `key_field` 就出现哪个输入框 + 已设置/未设置）；未接入分支保留为防御；
+   「未支持」卡订正为真实剩余缺口（跨源字段级合并、按语种自动重排源序）。
+4. **插件市场取消**：57-A 引入的「可经插件市场安装」措辞与断言全部清除（页面、测试、文档、
+   记忆），并在 MEMORY 记明**取消**（不再排期）。出网口径因此收敛为
+   **「默认零外部请求；仅已启用的元数据源按用户显式配置出网」**。
+5. **书源表单化 + 逐源自检**：`SourcesView` 新增「手动添加（表单）」卡片（基础 / 搜索 /
+   取书 / 分章 四段，字段与 `sources/rules.py` schema 一一对应）+ 前端必填校验
+   （另加写盘文件名字符集）+ 「测试（不保存）」；列表每条加「测试」按钮。后端新增
+   `POST /api/sources/test`：先 `validate_rule` 逐条回错误，通过则用 `make_rule_class` 建
+   **临时类**经 `DownloadManager.test_source` 试搜一次 —— **绝不写盘**（写盘唯一入口仍是
+   `store.add_rule`），运行期错误转成文案而不是 500。
+
+**契约测试**：`tests/test_metadata_providers.py` 改写为 14 家全实现口径（含
+「密钥键名三处同步」「探测对缺密钥的家零外呼」「回显按注册表掩码」）+
+新增 `tests/test_metasources_parsers.py`（14 家解析全离线：注入假响应断言字段映射、
+空响应/异形响应回落空列表不抛、两个解析小工具）+ 新增 `tests/test_sources_test_endpoint.py`
+（校验错误逐条、试搜返回命中且**不落盘**、按名字试已注册源、未知名字 404、运行期错误转文案）。
+修测试时顺带修掉三个**真实缺陷**：全称语言（"english"）未归一、`_first_json` 吃不掉尾随分号、
+列表里混入非对象元素会抛。
+
+**验证**：后端全量 **870 例 / 0 failed / 0 error**（57-A 的 845 + 本期 33 - 改写 8）；
+前端 `type-check` / `test:unit`（75）/ `build` / `deploy` 全绿并同步 `novelforge/static/v2`。

@@ -105,8 +105,9 @@
 - 前端 spec 假时钟约定：伪造计时器时**保留真 `setTimeout`**（只 fake `setInterval`/`clearInterval`/`Date`），否则 `flushPromises()` 自挂。
 
 ## 第 57 期铁律（元数据提供商 / 插件市场 / 书源）
-- **提供商注册表 = 上游 14 家目录，`implemented` 是诚实标记**：`core/metasources.SOURCES` 列全 14 家（四组），真正能抓的只有 `openlibrary`/`googlebooks`；⚠️ **契约 `IMPLEMENTED == _FETCHERS.keys()`**（`tests/test_metadata_providers.py`）—— 加一家实现必须同时改注册表 `implemented=True`、`IMPLEMENTED`、`_FETCHERS` 三处。**未实现的家绝不给开关**（能点但没用 = 假交互），前端渲染 `—` + 「未实现 · 可经插件市场安装」。
-- **未实现的源不发外呼**：`/api/metadata/probe` 如实回报「未实现」（spy 测试断言零外呼）；`metafetch.plan`/`online_candidate` 只选 `is_implemented()` 的源（配置里混入未实现 id 不白跑、不炸）。
-- **启用状态的真值源仍是 `metadata_fetch.sources`**（在列表里 = 启用，顺序 = 优先级）；`GET /api/metadata/providers` 只做聚合，**不新开一份状态**；设置页 `已启用 N/总数` 读配置草稿（未保存即时可见）。
-- 出网口径（本期修订）：**默认零外部请求；仅插件市场与已启用的元数据源按用户显式配置出网**，其余（前端 CDN/字体/更新检查）仍严格零外部。插件包必须是**声明式规则**（复用 `sources/rules.py` schema），**不执行远端任意代码**。
-- zlibrary 专用下载**不做**（盗版分发平台）；书源获取走通用声明式规则 + 投递目录。
+- **14 家提供商全部接入**（B 段）：`core/metasources.SOURCES` 与 `_FETCHERS` **必须逐字一致**（契约 `IMPLEMENTED == _FETCHERS.keys()`，`tests/test_metadata_providers.py`）—— 加一家 = 注册表条目 + fetcher + `IMPLEMENTED` 三处同改。三档如实标注：免密钥即用（open-library / googlebooks / itunes / audnexus / ranobedb）、**需密钥**（hardcover / comicvine / aladin，`needs_config=True` + `key_field`）、**页面抓取型**（amazon / goodreads / kobo / audible / librofm / lubimyczytac，`fragile=True` → 前端「易失效」徽标；站点改版可能失效，**真实可用性无法离线验证**）。
+- **出网收口**：14 家只经 `metasources._get_json` / `_get_text` 出网 —— 契约测试 monkeypatch 这两个函数即可离线测全部解析（`tests/test_metasources_parsers.py` 33 项）。失败码统一翻中文（429/401/403 有专门文案）；**单源异常绝不冒泡**（解析器一律 `isinstance` 过滤 + 空响应回落 `[]`）。
+- **密钥三处同步**：`config.DEFAULTS["metadata_fetch"]` + `server.EDITABLE["metadata_fetch"]` + 注册表 `key_field`；回显一律经 `_mask_metadata_fetch`（**按注册表循环掩码** + `has_<键名>`）。`metasources.options_for(mf, sources)` 是唯一的密钥拼装口（metafetch 的 plan/online_candidate 与 series_meta 共用）。缺密钥的家：抓取回明确中文错误、`/api/metadata/probe` **不发外呼**。
+- **启用状态真值源仍是 `metadata_fetch.sources`**（默认只开 2 家：openlibrary + googlebooks；`GET /api/metadata/providers` 只聚合不新开状态）。
+- **声明式插件市场已取消**（用户拍板，2026-09-26）：不要再提「可经插件市场安装」，也不要有任何市场/插件包代码。zlibrary 专用下载同样不做（盗版分发平台）。
+- 书源侧：**表单化添加**（`SourcesView` 三段式）+ `POST /api/sources/test`（校验 + **不落盘**试搜，写盘唯一入口仍是 `store.add_rule`）；前端必填校验与 `rules.validate_rule` 同口径（另加写盘文件名字符集）。

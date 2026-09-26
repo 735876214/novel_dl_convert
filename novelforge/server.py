@@ -33,6 +33,7 @@ from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, act
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
+from .sources import rules as source_rules
 
 # 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在
 # （用户书源在 novelforge.sources 包导入时已自动加载）
@@ -355,6 +356,43 @@ def api_delete_source(name: str):
     if not store.remove_rule(name):
         raise HTTPException(404, "书源不存在或为内置源（不可删）")
     return {"ok": True}
+
+
+@app.post("/api/sources/test")
+async def api_sources_test(payload: dict = Body(...)):
+    """书源试搜（**不落盘**）：保存前先确认「这条规则真的能搜到东西」。
+
+    body 两种形态：
+    - ``{"rule": {...}, "query": "关键词"}``：表单模式 —— 规则先过 `validate_rule` 逐条校验，
+      通过后用 `make_rule_class` 建**临时类**跑一次搜索；
+    - ``{"name": "已注册源", "query": ...}``：测已有源（含用户源与内置源）。
+
+    ⚠️ 测试用的规则**只存在于本次请求**，绝不写进 `SOURCES_DIR` —— 写盘的唯一入口仍是
+    `store.add_rule`（`/api/sources`）。失败原因如实回给前端（校验错误 / 网络错误 / 解析不到结果），
+    而不是像批量搜索那样静默跳过。
+    """
+    p = payload or {}
+    query = str(p.get("query") or "").strip() or "三体"
+    name = str(p.get("name") or "").strip()
+    if name and not p.get("rule"):
+        cls = REGISTRY.get(name)
+        if cls is None:
+            raise HTTPException(404, f"书源不存在：{name}")
+    else:
+        errors = source_rules.validate_rule(p.get("rule"))
+        if errors:
+            return {"ok": False, "errors": errors, "count": 0, "items": [], "error": ""}
+        try:
+            cls = source_rules.make_rule_class(p["rule"])
+        except ValueError as e:
+            return {"ok": False, "errors": [str(e)], "count": 0, "items": [], "error": ""}
+    try:
+        items = await _manager().test_source(cls, query)
+    except Exception as e:                              # noqa: BLE001 —— 试搜失败要把原因给人看
+        return {"ok": False, "errors": [], "count": 0, "items": [], "error": f"{e}"}
+    out = [{"title": str(it.get("title") or ""), "author": str(it.get("author") or ""),
+            "url": str(it.get("url") or "")} for it in items[:5]]
+    return {"ok": True, "errors": [], "count": len(items), "items": out, "error": ""}
 
 
 # ---------------- 搜索 / 预览 / 下载 ----------------
@@ -4345,6 +4383,8 @@ EDITABLE: dict = {
     "metadata_fetch": {
         "enabled", "sources", "limit", "threshold", "fields", "auto_on_import",
         "genre_blocklist", "googlebooks_api_key", "authors",
+        # 第 57 期：另三家的密钥（与 core/metasources 注册表的 key_field 对应）
+        "hardcover_api_token", "comicvine_api_key", "aladin_ttbkey",
     },
     # Komga 兼容服务端：开关 + Basic 用户名 + 可选 API Key
     # `expose` = 全局默认「书库是否对客户端暴露」（每库可在书库管理里覆写）
@@ -5363,11 +5403,19 @@ def _mask_integrations(sec: dict) -> dict:
 
 
 def _mask_metadata_fetch(sec: dict) -> dict:
-    """元数据抓取的配置回显：**只掩码 API Key**，其余原样（都是普通配置项）。"""
+    """元数据抓取的配置回显：**按注册表循环掩码所有密钥**，其余原样。
+
+    第 57 期起密钥不止一个（Google Books / Hardcover / Comic Vine / Aladin），所以这里
+    改成**跟着 `metasources.SOURCES[*].key_field` 走** —— 注册表加一家带 Key 的源，
+    掩码与 `has_<键名>` 回显自动跟上，不会出现「前端渲染了输入框、后端却回显明文/漏掩」。
+    """
     out = dict(sec or {})
-    has_key = bool(str(out.get("googlebooks_api_key") or "").strip())
-    out["googlebooks_api_key"] = _KEY_MASK if has_key else ""
-    out["has_googlebooks_key"] = has_key
+    for field in sorted({metasources.key_field_of(s) for s in metasources.SOURCES} - {""}):
+        has = bool(str(out.get(field) or "").strip())
+        out[field] = _KEY_MASK if has else ""
+        out[f"has_{field}"] = has
+    # 兼容旧字段名（前端历史版本可能还在读），值等同于 googlebooks 那项
+    out["has_googlebooks_key"] = bool(out.get("has_googlebooks_api_key"))
     return out
 
 
@@ -5542,20 +5590,18 @@ def api_metadata_providers():
 def api_metadata_probe(payload: dict = Body(None)):
     """源连通性自检（真的外呼：点一次测一次，结果只回给这次请求）。"""
     mf = config.load_config().get("metadata_fetch") or {}
-    key = str(mf.get("googlebooks_api_key") or "")
-    wanted = (payload or {}).get("sources") or list(metasources.IMPLEMENTED)
+    wanted = (payload or {}).get("sources") or list(metasources.SOURCES)
     out = {}
     for sid in wanted:
-        if not metasources.is_implemented(sid):
-            # 未实现的源不发外呼（也没得测）：如实回报，别让「不可用」看起来像网络故障
-            out[sid] = {"ok": False, "message": "未实现（可经插件市场安装）", "ms": 0}
+        if sid not in metasources.SOURCES:
             continue
-        if sid in metasources.SOURCES:
-            cfg = {}
-            key_field = (metasources.SOURCES[sid].get("key_field") or "")
-            if key_field:
-                cfg = {"api_key": key}
-            out[sid] = metasources.probe(sid, cfg or None)
+        key_field = metasources.key_field_of(sid)
+        cfg = {"api_key": str(mf.get(key_field) or "")} if key_field else None
+        # 需要 Key 却没填 ⇒ 直接如实回报，**不发外呼**（省一次注定失败的请求）
+        if metasources.needs_key(sid) and not (cfg or {}).get("api_key"):
+            out[sid] = {"ok": False, "message": "需要设置：尚未填写该来源的密钥", "ms": 0}
+            continue
+        out[sid] = metasources.probe(sid, cfg)
     return {"items": out}
 
 

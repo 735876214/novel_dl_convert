@@ -129,7 +129,7 @@
 | 34 | `koreader` | 62 | §10 | ✓ | 已覆盖 | 本项目已实现 kosync 协议服务端（`settingsNav.ts:397` 有完整口径记录） |
 | 35 | `library` | 26 | §2 | ✓ | 已覆盖 | 多库实体 + 定时扫描（第 10 期） |
 | 36 | `maintenance` | 11 | §5 | ✓ | 已覆盖 | 缺失资源巡检（含孤儿封面目录） |
-| 37 | `metadata-fetch` | 121 | §3 | ✓ | 已覆盖 | 13 个 provider（aladin / amazon / audible / audnexus / comicvine / goodreads / google / hardcover / itunes / kobo / librofm / lubimyczytac / open-library / ranobedb） |
+| 37 | `metadata-fetch` | 121 | §3 | ✓ | 已覆盖 | **14 家 provider 全部接入**（第 57 期，此前只有 2 家）：aladin / amazon / audible / audnexus / comicvine / goodreads / google / hardcover / itunes / kobo / librofm / lubimyczytac / open-library / ranobedb。分三档：免密钥即用 5 家（open-library / google / itunes / audnexus / ranobedb）、填密钥即用 3 家（hardcover / comicvine / aladin，注册表 `key_field`）、**页面抓取型 6 家**（amazon / goodreads / kobo / audible / librofm / lubimyczytac，注册表 `fragile=True`，站点改版可能失效） |
 | 38 | `metadata-preferences` | 20 | §3 | ✓ | 已覆盖 | 字段级写入策略 + provider 开关 + provider 链接设置（第 30 期） |
 | 39 | `metadata-score` | 9 | §3 | ✓ | 已覆盖 | 第 29 期（`core/metascore.py` 12 字段加权） |
 | 40 | `metadata` | 70 | §3 | **✗** | **部分实现** | 提取器 + 解析器（上游 epub / fb2 / mobi / pdf / cbz / 音频 6 类）。⚠️ **第 42 期订正**（原记「本项目 `core/metadata.py` 对等」为**高估**）：`novelforge/core/metadata.py` 实际只做 **ISBN 形状判定**（`:23`）+ **文件名解析**（`:45`）；真解析仅 **EPUB**（`novelforge/core/library.py:879` `probe_epub`，完整 OPF）+ **漫画/音频结构**（`comics.py:156` `probe` 页数封面 / `audio.py:68` `tracks` 轨数）；**MOBI/AZW3/PDF 仅按文件名兜底、FB2 完全不支持**（`library.py:37` 的 `BOOK_EXTS` 不含 `.fb2`） |
@@ -304,7 +304,7 @@
 | 批注级位置换算（CFI / kobo span / kepub DOM） | `annotation` / `position-converter` | **部分**：仅进度级 XPointer↔章（`novelforge/core/koreader.py:63`） | 与 §4.2 `position-converter` 同判：单用户单设备收益低 |
 | 实体**删除**策略 | `entity-manager` | **部分**：仅作者/系列的改名 + 合并（`novelforge/core/fileops.py:218/254`） | 源文件名无写入口 ⇒ 删除退化为纯元数据操作，收益窄 |
 | 元数据提取器扩到 6 类 | `metadata` | **部分**：仅 EPUB 全解析（见 §2 第 40 行） | 非 EPUB 本项目**刻意不解析**（`novelforge/core/library.py:1234`） |
-| 在线 provider 扩到 13 个 | `metadata-fetch` | **2 源**（OpenLibrary / Google Books，`novelforge/core/metasources.py:36-48`） | 刻意维持内置 2 源（`docs/roadmap-gaps-remaining.md:72`） |
+| 在线 provider 扩到 13 个 | `metadata-fetch` | **已覆盖（第 57 期）**：14 家全部接入（`novelforge/core/metasources.py` 注册表 + `_FETCHERS`，契约 `tests/test_metadata_providers.py` 钉住 `IMPLEMENTED == _FETCHERS.keys()`） | 原判「刻意维持内置 2 源」已被用户改判：**全部接入**；页面抓取型 6 家如实标「易失效」，单源失败不打断整轮 |
 
 **C. 与定位或既有决策不容（不做）**
 

@@ -100,6 +100,9 @@ const PROV_FILTERS = [
 const provFilter = ref<'all' | 'active' | 'needs'>('all')
 const provQuery = ref('')
 
+/** 需要密钥的提供商（密钥区按它渲染输入框；顺序跟注册表） */
+const keyProviders = computed(() => providers.value.filter((p) => !!p.key_field))
+
 /** 按分组过滤后的可见条目（组内保持注册表顺序） */
 const filteredGroups = computed(() => {
   const q = provQuery.value.trim().toLowerCase()
@@ -491,17 +494,25 @@ watch(() => props.section, () => {
               <span class="text-[12.5px] font-medium text-foreground">{{ p.label }}</span>
               <Badge v-if="inOrder(p.id)" tone="accent">启用</Badge>
               <Badge v-if="orderOf(p.id)">顺序 {{ orderOf(p.id) }}</Badge>
-              <Badge v-if="!p.implemented">未实现</Badge>
+              <!-- 页面抓取型：站点改版就可能失效 —— 如实标出来，别让用户以为是自己的问题 -->
               <span
-                v-else-if="p.needs_setup"
+                v-if="p.fragile"
+                class="rounded-full bg-muted px-2 py-0.5 text-[10.5px] text-muted-foreground"
+                title="页面抓取型：站点改版后可能失效"
+              >
+                易失效
+              </span>
+              <span
+                v-if="p.needs_setup"
                 class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10.5px] text-amber-600 dark:text-amber-400"
               >
                 需要设置
               </span>
+              <Badge v-if="!p.implemented">未接入</Badge>
             </div>
             <div class="mt-0.5 text-[11.5px] text-muted-foreground">{{ p.note }}</div>
             <div v-if="!p.implemented" class="mt-0.5 text-[11px] text-muted-foreground">
-              本项目尚未接入；插件市场（第 57 期）装好对应的声明式插件后即可启用。
+              本项目尚未实现该家的抓取器，不会出现在抓取计划里。
             </div>
             <div v-else-if="p.config_hint && !p.has_config" class="mt-0.5 text-[11px] text-muted-foreground">
               {{ p.config_hint }}
@@ -539,17 +550,32 @@ watch(() => props.section, () => {
         没有匹配的提供商
       </div>
 
-      <div class="border-t border-border px-4 py-3.5">
-        <div class="mb-1.5 text-[12.5px] font-medium text-foreground">Google Books API Key（可选）</div>
-        <div class="mb-2 text-[11.5px] text-muted-foreground">
-          匿名额度很低（实测常撞 429），填 Key 可显著提高；掩码表示已设置，清空即删除
+      <!-- 密钥区**按注册表渲染**（第 57 期）：哪家要 Key 就出现哪家的输入框，
+           后端加一家带 key_field 的源，这里自动跟上，不需要改前端 -->
+      <div v-if="keyProviders.length" class="border-t border-border px-4 py-3.5">
+        <div class="mb-1.5 text-[12.5px] font-medium text-foreground">密钥</div>
+        <div class="mb-3 text-[11.5px] text-muted-foreground">
+          只列出需要密钥的提供商；掩码表示已设置，清空即删除。未填写的家在列表里显示「需要设置」，
+          抓取时不会白跑一次注定失败的请求。
         </div>
-        <input
-          :value="val('metadata_fetch.googlebooks_api_key')"
-          type="password" placeholder="未设置"
-          class="w-[420px] max-w-full rounded-md border border-border bg-muted px-3 py-1.5 font-mono text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
-          @input="setVal('metadata_fetch.googlebooks_api_key', ($event.target as HTMLInputElement).value)"
-        />
+        <div v-for="p in keyProviders" :key="p.id" class="mb-3 last:mb-0">
+          <div class="mb-1 flex items-center gap-2">
+            <span class="text-[12.5px] text-foreground">{{ p.label }}</span>
+            <span
+              class="text-[11px]"
+              :class="p.has_config ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'"
+            >
+              {{ p.has_config ? '已设置' : '未设置' }}
+            </span>
+          </div>
+          <div v-if="p.config_hint" class="mb-1.5 text-[11px] text-muted-foreground">{{ p.config_hint }}</div>
+          <input
+            :value="val(`metadata_fetch.${p.key_field}`)"
+            type="password" placeholder="未设置"
+            class="w-[420px] max-w-full rounded-md border border-border bg-muted px-3 py-1.5 font-mono text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
+            @input="setVal(`metadata_fetch.${p.key_field}`, ($event.target as HTMLInputElement).value)"
+          />
+        </div>
       </div>
     </Card>
 
@@ -890,10 +916,10 @@ watch(() => props.section, () => {
       :label="`元数据 · ${meta.zh}`"
       :groups="['PROVIDERS', 'RULES', 'SCORE']"
       :items="[
-        '元数据源插件市场 / 更多第三方源（当前内置 OpenLibrary 与 Google Books）',
-        '系列级元数据（当前只写单本）',
+        '跨源字段级合并（当前取匹配分最高的一条候选，不逐字段向不同源各取最优）',
+        '按书籍语种自动重排来源顺序（当前严格按你设定的顺序依次检索）',
       ]"
-      note="已实现：源选择与顺序、连通性自检、Google Books API Key、入库自动抓取、ISBN 精确匹配、字段级写入策略、字段级锁定（单本书逐字段 / 封面，只挡抓取）、置信度阈值、题材黑名单、自定义字段（定义管理 + 按书的值 + 抓取补默认值）、「先预览再应用」的手动抓取面板，以及作者传记 / 头像抓取与本地覆盖编辑。"
+      note="已实现：14 家提供商全部接入（Open Library / Google Books / iTunes / AudNexus / RanobeDB 免密钥即用；Hardcover / Comic Vine / Aladin 填密钥即用；Amazon / Goodreads / Kobo / Audible / Libro.fm / Lubimyczytac 为页面抓取型、站点改版可能失效）、源选择与顺序、连通性自检、按注册表渲染的密钥配置、入库自动抓取、ISBN 精确匹配、字段级写入策略、字段级锁定（单本书逐字段 / 封面，只挡抓取）、置信度阈值、题材黑名单、自定义字段（定义管理 + 按书的值 + 抓取补默认值）、「先预览再应用」的手动抓取面板，以及作者传记 / 头像抓取与本地覆盖编辑。"
     />
   </div>
 </template>

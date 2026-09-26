@@ -297,8 +297,10 @@ def fetch_one(name: str, cfg: dict = None) -> dict:
     mf = _fetch_cfg(cfg, _owner_library(members))
     if not mf.get("enabled"):
         return {"name": name, "ok": False, "error": "在线元数据抓取未启用"}
-    sources = mf.get("sources") or list(metasources.DEFAULT_ORDER)
-    options = {"googlebooks": {"api_key": mf.get("googlebooks_api_key") or ""}}
+    # 与书籍抓取同一口径：只用真的能抓的源，密钥按注册表 key_field 拼装（第 57 期）
+    sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
+               if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)
+    options = metasources.options_for(mf, sources)
 
     try:
         res = metasources.search_series(name, members, sources=sources, limit=5, options=options)

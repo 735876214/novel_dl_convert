@@ -45,6 +45,17 @@ class DownloadManager:
             max_retries=self.max_retries,
         )
 
+    async def test_source(self, cls, title: str) -> list[dict]:
+        """用**给定的书源类**试搜一次（不注册、不落盘）：给「手动添加书源」的自检按钮用。
+
+        与 :meth:`search` 同一条链路（同一个 `BrowserClient` 口径：Cookie 目录 / host_replace /
+        重试），差别只有两点：只跑这一类；**失败直接抛出** —— 试搜的目的是把原因如实显示给
+        写规则的人看，不能像批量搜索那样静默跳过。
+        """
+        src = cls()
+        async with self._client(src) as c:
+            return await src.search(c, title) or []
+
     def _visible_sources(self):
         for name, cls in REGISTRY.items():
             if self.public_only and not getattr(cls, "public", True):

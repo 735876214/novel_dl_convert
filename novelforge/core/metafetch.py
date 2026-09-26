@@ -143,8 +143,8 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
     mf = _cfg(cfg)
     if not mf.get("enabled"):
         return {"enabled": False, "items": [], "message": "元数据抓取未启用"}
-    # 第 57 期：注册表列了 14 家（含 12 家未实现），这里只认**真的能抓**的源 ——
-    # 否则给未实现的源白跑一次外呼（`search` 会返回「源不可用」，纯浪费往返）。
+    # 第 57 期：只认**真的能抓**的源（14 家都有 fetcher ⇒ 恒真）—— 留着这道过滤是防
+    # 「将来注册表先加条目、fetcher 还没写」的空档，那时也别白跑一次注定失败的外呼。
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
                if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)
     limit = max(1, min(int(limit or mf.get("limit") or 5), 20))
@@ -159,7 +159,7 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
     # 字段策略不在这里一次性取：它可能**按库不同**（见循环里的 `b_policy`），
     # 这里只留库级都取不到时的兜底值（DEFAULT_POLICY）。
     blocklist = {norm_key(x) for x in (mf.get("genre_blocklist") or []) if str(x).strip()}
-    options = {"googlebooks": {"api_key": mf.get("googlebooks_api_key") or ""}}
+    options = metasources.options_for(mf, sources)
 
     books = library.books()
     if names:
@@ -279,13 +279,13 @@ def online_candidate(book: dict, cfg: dict = None, limit: int = None) -> "dict |
     mf = _mf_of(book, mf)
     if not mf.get("enabled"):
         return None
-    # 第 57 期：注册表列了 14 家（含 12 家未实现），这里只认**真的能抓**的源 ——
-    # 否则给未实现的源白跑一次外呼（`search` 会返回「源不可用」，纯浪费往返）。
+    # 第 57 期：只认**真的能抓**的源（14 家都有 fetcher ⇒ 恒真）—— 留着这道过滤是防
+    # 「将来注册表先加条目、fetcher 还没写」的空档，那时也别白跑一次注定失败的外呼。
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
                if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)
     limit = max(1, min(int(limit or mf.get("limit") or 5), 20))
     blocklist = {norm_key(x) for x in (mf.get("genre_blocklist") or []) if str(x).strip()}
-    options = {"googlebooks": {"api_key": mf.get("googlebooks_api_key") or ""}}
+    options = metasources.options_for(mf, sources)
     # ISBN 精确匹配优先，否则回退书名 + 作者检索
     best = metasources.search_by_isbn(book.get("isbn") or "", sources, 3, options)
     if not best:

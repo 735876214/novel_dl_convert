@@ -245,6 +245,11 @@ DEFAULTS = {
         # 而「元数据只存服务端、不写文件」是硬约定 —— 所以这是一项死配置，删掉无损。
         # Google Books 匿名额度很低（实测常撞 429），填 Key 可提高
         "googlebooks_api_key": "",
+        # 第 57 期：另外三家的密钥（键名与 `core/metasources.SOURCES[*].key_field` 一一对应，
+        # 「元数据来源」页按注册表渲染输入框）。填了才能用那一家，留空即该家返回明确错误。
+        "hardcover_api_token": "",       # Hardcover（GraphQL Bearer Token）
+        "comicvine_api_key": "",         # Comic Vine（免费申请，限流 200 次/小时）
+        "aladin_ttbkey": "",             # Aladin（韩国书店 TTB API）
         # 作者级元数据（第 8 期 D1/D2/D5）：独立于书籍抓取开关，默认关
         "authors": {
             "enabled": False,      # 是否抓取作者传记 / 头像

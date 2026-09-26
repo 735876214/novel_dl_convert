@@ -49,6 +49,16 @@ export interface FileEntry {
   mtime: number
 }
 
+/** 书源试搜结果（/api/sources/test）：`errors` = 规则校验错，`error` = 运行期错误（网络/解析） */
+export interface SourceTestResult {
+  ok: boolean
+  errors: string[]
+  /** 命中条数（可能大于 items 的长度 —— items 最多回前 5 条） */
+  count: number
+  items: Array<{ title: string; author: string; url: string }>
+  error: string
+}
+
 export interface FileListing {
   input: FileEntry[]
   output: FileEntry[]
@@ -252,8 +262,10 @@ export interface MetadataProvider {
   group: string
   home: string
   note: string
-  /** 本项目是否真的实现了抓取 */
+  /** 本项目是否真的实现了抓取（14 家全实现 ⇒ 恒 true；留着以防注册表先加条目） */
   implemented: boolean
+  /** 页面抓取型（站点改版就可能失效）⇒ 前端给「易失效」徽标 */
+  fragile: boolean
   /** 是否需要 API Key / 账号 */
   needs_config?: boolean
   /** 需要 Key 但还没填 ⇒ 归到「需要设置」过滤器 */
@@ -2318,19 +2330,25 @@ export const api = {
   listSources: () => request<{ sources: SourceItem[] }>('/api/sources'),
 
   addSourcesText: (text: string) =>
-    request<{ added?: number; ok?: boolean }>('/api/sources', {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-      body: text,
-    }),
+    request<{ added?: number; ok?: boolean; errors?: Array<{ name?: string; error?: string }> }>(
+      '/api/sources',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+        body: text,
+      },
+    ),
 
   uploadSourcesFile: (file: File) => {
     const form = new FormData()
     form.append('file', file)
-    return request<{ added?: number; ok?: boolean }>('/api/sources/upload', {
-      method: 'POST',
-      body: form,
-    })
+    return request<{ added?: number; ok?: boolean; errors?: Array<{ name?: string; error?: string }> }>(
+      '/api/sources/upload',
+      {
+        method: 'POST',
+        body: form,
+      },
+    )
   },
 
   /** 收书目录整页拖拽投递：把文件丢进 INPUT_DIR（监听目录）并按现有管线处理。
@@ -2351,6 +2369,17 @@ export const api = {
 
   /** 书源运行状态：Cookie 是否已持久化、当前配置下是否可用 */
   sourcesStatus: () => request<{ items: SourceStatus[] }>('/api/sources/status'),
+
+  /**
+   * 书源试搜（第 57 期，**不落盘**）：`{rule}` 试表单里正在填的规则，`{name}` 试已注册的源。
+   * 校验错误逐条回 `errors`，网络/解析失败回 `error`。
+   */
+  testSource: (payload: { rule?: Record<string, unknown>; name?: string; query: string }) =>
+    request<SourceTestResult>('/api/sources/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
 
   // ---------- 搜索 / 预览 / 下载 ----------
   search: (title: string, signal?: AbortSignal) =>
