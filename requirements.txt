@@ -24,3 +24,6 @@ numpy>=1.26
 # 报错失败，不会静默回落，见 core/pg.py::PgUnavailable）。
 # `[binary]` 后缀装的是预编译 wheel：不带它就得在本机编 libpq，NAS/arm64 上尤其麻烦。
 psycopg[binary]>=3.2
+# 缓存层（第 62 期阶段 C）：`NOVELFORGE_REDIS_URL` 不设时**整层是空操作**，
+# 所以离线环境同样不装也能跑全量。纯 Python，无系统库依赖。
+redis>=5.0

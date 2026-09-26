@@ -374,6 +374,55 @@ NOVELFORGE_DB=pg NOVELFORGE_PG_DSN=postgresql://novelforge:novelforge@127.0.0.1:
 ⚠️ `NOVELFORGE_PG_RESET=1` 下**每个用例都会把整个 schema 删掉重建** —— 只对测试库这么跑；
 不设这个开关就直接跑，conftest 会拒绝启动（而不是悄悄用一个没有隔离的库）。
 
+### 缓存层：Redis（可选）
+
+第 62 期起可以再叠一层 Redis 读缓存。**它是可选的，而且是可缺席的**：不配就整层关闭，
+Redis 中途挂掉会自动降级为直读数据库 —— 两种情况下业务都照常。
+
+```yaml
+      # docker-compose.yml 的 novel_dl_convert.environment 里：
+      - NOVELFORGE_REDIS_URL=redis://redis:6379/0
+```
+
+仓库自带的 `docker-compose.yml` 里有一个 `redis` 服务（**不落盘**：纯缓存，丢了重建就是），
+上面这行**已经默认打开**；注释掉它就等于关掉缓存。
+
+**先说清楚它解决什么、不解决什么**（与数据库那节一样的口径）：本项目是单进程、单用户，
+Redis 的跨进程优势在这里用不上 —— **它同样不是「书架 42 秒」的解药**（那是书目索引）。
+三处缓存里只有一处收益明显：
+
+| 缓存 | 内容 | 收益 |
+|---|---|---|
+| `nf:chapter:*` | 章节正文 HTML | **明显**：省掉开 zip / 解压 / 解码 / 正文资源 URL 改写，书库挂在 NAS 上时这些每一步都在付网络往返 |
+| `nf:book:list:*` | 书目列表（含元数据覆盖层） | 有限：省一次查询 + 一次覆盖层 + 序列化，与直读同一量级 |
+| `nf:cover:*` | 封面字节 | 有限：HTTP 层本就有 `max-age=86400`，收益只在「换设备 / 清缓存」那几次 |
+
+**失效只有一处入口**：所有写操作（改名 / 上传封面 / 元数据编辑 / 刮削落库 / 搬迁 / 建库…）
+本来就会调 `library.invalidate()`，缓存层挂在那条路上；另外「用户绕过 App 直接往 NAS
+目录里丢文件」这类**没有写操作**的变更，由增量扫描报告 `added / removed` 来失效
+（`unchanged` 的一轮**不清缓存** —— 否则每轮刷新都把缓存清一次，等于没有）。章节与封面
+的键里带着**源文件指纹**，文件一变键就变，不需要手动失效。
+
+Redis 挂掉时：连着失败几次就**熔断 30 秒**，期间一次网络都不发、所有读当未命中，
+到点自动重连 —— 不会出现「Redis 没了，每个请求都去等一次超时」。缓存层也**不会**
+让服务起不来：驱动缺失只提示不拦（`NOVELFORGE_REDIS_URL` 配了却没装 `redis` 包时，
+`start.sh` 会打一条 `[WARN]` 然后照常启动）。
+
+看命中率与内存占用：
+
+```bash
+docker compose exec redis redis-cli INFO memory | grep used_memory_human
+docker compose exec redis redis-cli --scan --pattern 'nf:*' | wc -l
+```
+
+跑测试时想验缓存那几条（**没有 Redis 会自动跳过**，离线全量不受影响）：
+
+```bash
+NOVELFORGE_TEST_REDIS_URL=redis://127.0.0.1:6380/15 python -m pytest tests/test_cache.py -v
+```
+
+⚠️ 测试用**独立的 db 15**（`NOVELFORGE_TEST_REDIS_URL` 可改），不会碰生产用的 db 0。
+
 ## 数据驱动书源（可视化批量添加，无需写代码）
 
 除了写 Python 适配器，还可以用一段 **JSON 规则** 描述站点，在 Web 界面「书源管理」里**批量粘贴 / 上传**即可生效，无需改代码、无需重启。规则存到 `config/sources/<name>.json`（挂载目录，重建镜像不丢）。

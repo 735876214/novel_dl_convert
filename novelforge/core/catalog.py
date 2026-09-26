@@ -53,7 +53,7 @@ import pathlib
 import threading
 import time
 
-from . import db
+from . import cache, db
 
 #: pathlib 在 Windows 上比较路径时会把整串小写（``PurePath._str_normcase``），
 #: 而 ``_iter_book_entries`` 用的是 ``sorted(d.iterdir())`` —— 排序口径必须跟着平台走，
@@ -135,6 +135,12 @@ _state_lock = threading.Lock()
 #: 那就等于把刚省下来的开销又还回去一截。
 _ready: set = set()
 
+#: 本进程往 Redis 写过「书目列表」键的库 id —— 「全库失效」时按它精确 DEL。
+#: 用这个集合而不是 ``KEYS nf:book:list:*``：本层是挂在**共享 Redis** 上的，
+#: 按图案扫全库键空间是给别人添堵的动作，而库的集合我们本来就知道。
+#: 它是「可能写过」而不是「此刻确实有」—— 已被删掉的键再 DEL 一次是无害的空动作。
+_cached_libs: set = set()
+
 
 def _exec(sql: str, params=()):
     """走 ``db`` 的连接代理 —— 与全仓共用同一条连接、同一把锁。
@@ -179,16 +185,42 @@ def reset_state() -> None:
         _refreshed_at.clear()
         _ready.clear()
         _dirty_all_at = 0.0
+    # Redis 里的列表键也得丢：本函数是「换了一套库」的信号（`db.close()` 调它），
+    # 而**库 id 会被重用**（测试里每个用例都叫 'novels'）—— 留着旧值，下一个用例
+    # 会读到上一个用例的书。生产上这条不走，但代价是一次 DEL，不值得为它开分支。
+    _drop_list()
 
 
 # ---------------- 脏标记 ----------------
 
+def _drop_list(library_id=None) -> None:
+    """丢掉书目列表的缓存键。
+
+    ``library_id`` 给定时只丢该库；不给则丢本进程写过键的**每个库**
+    （``_cached_libs``）—— 见该集合上关于「不按图案扫键空间」的说明。
+
+    ⚠️ 只丢「列表」这一种键：章节与封面**不在这里失效** —— 它们的键里带着源文件指纹
+    （章节用被读的那个文件、封面用归档文件），文件一变键就变，不需要谁去清。
+    列表没有这样的抓手（它掺了服务端元数据覆盖层），所以必须显式失效。
+    """
+    if library_id:
+        cache.drop(cache.book_list_key(library_id))
+        return
+    with _state_lock:
+        lids = sorted(_cached_libs)
+    cache.drop(*[cache.book_list_key(l) for l in lids])
+
+
 def invalidate(library_id=None) -> None:
-    """标脏（**不**立刻扫盘）。
+    """标脏（**不**立刻扫盘）+ 丢 Redis 里的书目列表。
 
     这是 ``library.invalidate()`` 的实现 —— 全仓 20 多处写操作之后都会调它。
     改造前它是「清空进程内扫描缓存」，所以下一个请求必然冷扫一遍；现在它只是
     一个内存赋值，真正的开销被推迟到**下一次读**（且那时是增量的）。
+
+    第 62 期 C：这是**失效的唯一汇聚点** —— 20 多个写调用点（改名 / 上传封面 /
+    元数据编辑 / 刮削落库 / 搬迁 / 监听线程发现新文件 …）全都走这里到 Redis。
+    在别处再挂一遍 DEL 是**冗余且危险**的：漏一处就变成「改了元数据但列表还是旧的」。
     """
     global _dirty_all_at
     with _state_lock:
@@ -197,6 +229,7 @@ def invalidate(library_id=None) -> None:
         else:
             _dirty_all_at = time.time()
             _dirty.clear()
+    _drop_list(library_id)
 
 
 def _is_stale(lid: str) -> bool:
@@ -247,6 +280,15 @@ def refresh_library(lib: dict, force: bool = False, blocking: bool = True) -> di
     _mark_fresh(lid)
     with _state_lock:
         _ready.add(lid)
+    # 索引**真的变了**才丢 Redis 的列表 —— 这条覆盖了「用户绕过 App 直接往目录里
+    # 丢文件」：监听线程的定时刷新会走到这儿，added/removed 一非零，下一次请求
+    # 就看不到旧列表了（那种变更**没有** invalidate() 可挂）。
+    # unchanged 那种「扫了一遍但什么都没变」是稳态下的绝大多数，绝不能丢 ——
+    # 丢了就等于每轮刷新都把列表缓存清一次，缓存等于不存在。
+    if out.get("added") or out.get("removed"):
+        with _state_lock:
+            _cached_libs.discard(lid)      # 下一个写键的人会重新记上
+        cache.drop(cache.book_list_key(lid))
     out["seconds"] = round(time.time() - t0, 3)
     return out
 
@@ -396,6 +438,10 @@ def forget(library_id) -> None:
         _dirty.pop(lid, None)
         _refreshed_at.pop(lid, None)
         _ready.discard(lid)
+        _cached_libs.discard(lid)
+    # 库没了，它那本「列表」也得走 —— 这条**不经过 invalidate()**（库被删时不调它），
+    # 所以必须自己删一次，否则 `/api/books` 会拿着一本已经不存在的库的书目。
+    cache.drop(cache.book_list_key(lid))
 
 
 # ---------------- 读取 ----------------
@@ -541,13 +587,32 @@ def books_of(lib: dict) -> list:
 
     稳态下这是「一次 SELECT + 一次内存判断」，与书本数、与书库是不是挂在
     NAS 上都没有关系。
+
+    第 62 期 C：外面再套一层 Redis。**收益如实说 —— 这一处有限**：省掉的是
+    「一次 SELECT + 一次覆盖层批量查询 + 一遍 Python 拼装 + JSON 序列化」，
+    在没有索引的时代这些相比扫盘可以忽略，现在它们就是这条路剩下的成本。
+    254 KB 走局域网本身也要时间，所以它与「直读」是同一量级，**不必期待数量级的差别**
+    （章节那一处的差别才是明显的：那边省掉的是开 zip + 解压 + 正则改写）。
+
+    顺序要紧：``_settle()`` 必须在**读缓存之前** —— 它可能触发一次刷新、而刷新在
+    「索引真的变了」时会丢缓存键。反过来的话就会「先读到旧值、再把旧值写回缓存」。
     """
     from . import library as _lib
     if not lib:
         return []
     _settle(lib)
+    lid = str(lib.get("id") or "")
+    key = cache.book_list_key(lid)
+    hit = cache.get_json(key) if key else None
+    if hit is not None:
+        return hit
     rows = _rows_of(lib)
-    return _lib._apply_overlay([_book_of_row(lib, r) for r in rows])
+    out = _lib._apply_overlay([_book_of_row(lib, r) for r in rows])
+    if key:
+        cache.set_json(key, out, cache.TTL_LIST)
+        with _state_lock:
+            _cached_libs.add(lid)
+    return out
 
 
 def books(library_id=None) -> list:

@@ -23,6 +23,7 @@
 #   ./cache     AI 分章结果缓存
 #   ./data      老的 SQLite（第 62 期起首次启动会整库搬进 PG，之后只读、不删）
 #   ./pgdata    PostgreSQL 数据目录（第 62 期起业务数据的家，务必留在持久盘）
+#               （Redis 是纯缓存、不落盘，所以**没有**对应目录 —— 见下面的 redis 服务）
 #   ./libraries 书库来源根：其下的子文件夹可被「新建书库」就地引用
 #   要指到 NAS 上已有的共享目录，把这些相对路径改成绝对路径即可（如 /volume1/books）。
 #
@@ -68,6 +69,44 @@ services:
     # 可能已有的 PG）。
     # ports:
     #   - "5433:5432"
+
+  # ———— Redis（第 62 期阶段 C）：章节正文 / 书目列表 / 封面的读缓存 ————
+  #
+  # **先说清楚它不是什么**：本项目单进程单用户，Redis 不是「书架 42 秒」的解药
+  # （解药是书目索引落库）。它真正明显的一处在**章节正文**（省掉开 zip + 解压 +
+  # 正则改写），其余两处收益有限，见 novelforge/core/cache.py 的模块文档。
+  #
+  # **这一层是可选的**：注释掉下面 novel_dl_convert 里的 NOVELFORGE_REDIS_URL，
+  # 缓存整层变空操作，一切照旧。挂掉也一样 —— 连不上就静默降级为直读 PG，
+  # 不会因此让服务不可用（见 cache.py 的熔断）。
+  #
+  # 不落盘、不配持久化：缓存丢了重建就是，把 RDB/AOF 打开只会让 NAS 的盘多写东西。
+  redis:
+    image: redis:7-alpine
+    container_name: novelforge-redis
+    restart: unless-stopped
+    command:
+      - redis-server
+      # 只做缓存，不落盘
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      # 内存上限 + 满了按「最久未用」淘汰。本项目的键都带 TTL，正常不会撞上限；
+      # 这条只是兜底，免得异常情况下把这台机器吃干净。
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+    # 同样不暴露端口：只有应用要连它。要看内存占用（验收要用）取消注释：
+    # ports:
+    #   - "6380:6379"
 
   novel_dl_convert:
     image: ghcr.io/735876214/novel_dl_convert:latest
@@ -121,6 +160,12 @@ services:
       #    那是测试用例级隔离用的开关（见 novelforge/core/pg.py）。
       # - NOVELFORGE_PG_RESET=1
 
+      # ———— 缓存（第 62 期阶段 C）：指向上面的 redis 容器；注释掉 = 整层缓存关闭 ————
+      # 这是**可选**的一层：不设它时行为与第 62 期之前一致（每次直读 PG）。
+      # Redis 中途挂掉也不会让服务不可用 —— 连着失败几次就熔断 30 秒，
+      # 期间一次网络都不发、全部当未命中，到点自动重连（见 core/cache.py）。
+      - NOVELFORGE_REDIS_URL=redis://redis:6379/0
+
       # ———— 目录：容器内路径，一般无需改动；要换位置请改上面的 volumes ————
       - INPUT_DIR=/app/input
       - OUTPUT_DIR=/app/output
@@ -173,6 +218,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # ⚠️ Redis 只等「启动」，**不等健康**：它是可选的加速层，为了它没起来而把应用
+      #    拦在门口是本末倒置（真连不上会自动降级）。
+      redis:
+        condition: service_started
 
     # 镜像已含源码与依赖；start.sh 只做一次依赖自检再 exec uvicorn（幂等、秒级）
     command: ["sh", "/app/start.sh"]

@@ -64,6 +64,10 @@ services:
       # 首次启动会自动把 ./data-test/novelforge.db 搬过去，幂等且不动原文件）。
       # - NOVELFORGE_DB=pg
       # - NOVELFORGE_PG_DSN=postgresql://novelforge:novelforge@host.docker.internal:5433/novelforge
+      # 缓存层（第 62 期 C）**同样刻意留空**：不设 NOVELFORGE_REDIS_URL 时整层是空操作，
+      # 这里是「缓存缺席」那条路唯一的日常演练场（Redis 挂掉时走的就是同一条路）。
+      # 想在本地验缓存，取消下面一行的注释（指向宿主机上另起的 Redis 容器）：
+      # - NOVELFORGE_REDIS_URL=redis://host.docker.internal:6380/0
       - INPUT_DIR=/app/input
       - OUTPUT_DIR=/app/output
       - CONFIG_DIR=/app/config

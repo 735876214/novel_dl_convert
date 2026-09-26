@@ -32,5 +32,20 @@ case "$(echo "${NOVELFORGE_DB:-sqlite}" | tr 'A-Z' 'a-z')" in
     ;;
 esac
 
+# 第 62 期 C：缓存层是**可选**的，所以驱动缺失这里**只提示、不拦** ——
+# 没装 redis 包时整层缓存自动变空操作（每次直读 PG），业务照常。
+# 与 PG 那条的区别是有意的：PG 是数据后端，缺驱动 = 数据没地方去，必须失败；
+# 缓存缺驱动 = 只是慢一点，不该让服务起不来。
+if [ -n "${NOVELFORGE_REDIS_URL:-}" ]; then
+  if python -c "import redis" 2>/dev/null; then
+    echo "[start] 缓存层：Redis（${NOVELFORGE_REDIS_URL}）"
+  else
+    echo "[start] [WARN] 配了 NOVELFORGE_REDIS_URL 但没装 redis 包 —— 本次启动缓存整层关闭。"
+    echo "[start] [WARN] 镜像应包含 redis；若自行裁剪过依赖，请把 requirements.txt 里的 redis 装回来。"
+  fi
+else
+  echo "[start] 缓存层：关闭（未设 NOVELFORGE_REDIS_URL）"
+fi
+
 echo "[start] 启动 uvicorn :${PORT:-8000}"
 exec uvicorn novelforge.server:app --host 0.0.0.0 --port "${PORT:-8000}"

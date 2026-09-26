@@ -30,7 +30,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
-                   catalog)
+                   catalog, cache)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -1579,6 +1579,46 @@ def api_purge_custom_field(cid: int):
             "trashed_items": db.trashed_custom_fields()}
 
 
+def _cover_response(data: bytes, media: str) -> Response:
+    """封面的统一出口（HTTP 层的缓存头也在这里，别在分支里各写一遍）。"""
+    return Response(content=data, media_type=media or "image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+def _cover_cached(bid: str, src, produce):
+    """封面字节的读缓存（第 62 期 C）。``src`` = 封面**从中读出的那个文件**。
+
+    存的是 ``媒体类型 + b"\\n" + 字节``：媒体类型只有几十字节，为它把整张图 base64
+    一遍（+33%）不划算，而媒体类型里不可能有换行 —— 第一个 ``\\n`` 就是分界。
+
+    ⚠️ **只覆盖「从文件里读封面」的分支**（EPUB 内嵌图 / 漫画归档首页），它们各自的
+    文件指纹能自失效。服务端封面（``meta_cover``）那一支**不进这里**：那张表没有
+    版本列，缓存它就只能靠 TTL 猜「用户重抓过封面没有」，而它本来就躺在 PG 里、
+    一次主键读就能取回来 —— 收益（省一次主键读）远小于代价（拿旧封面顶一天）。
+    这是对计划书 ``cover:{book_id}`` 的一处**收窄**，理由如实记在这里。
+    """
+    fp = cache.fingerprint(src)
+    key = cache.cover_key(bid, fp) if fp else ""
+    if key:
+        # 信封的拆装包一层兜底：缓存层本身（get/set）已经不会抛，但**上面这几行解码**
+        # 是我们自己写的，脏数据不该让「取封面」这个动作失败 —— 读不通就当未命中。
+        try:
+            hit = cache.get_bytes(key)
+            if hit:
+                ct, sep, data = hit.partition(b"\n")
+                if sep and data:
+                    return _cover_response(data, ct.decode("latin-1"))
+        except Exception:                      # noqa: BLE001
+            pass
+    data, media = produce()
+    if key:
+        try:
+            cache.set_bytes(key, media.encode("latin-1") + b"\n" + data, cache.TTL_COVER)
+        except Exception:                      # noqa: BLE001
+            pass
+    return _cover_response(data, media)
+
+
 @app.get("/api/books/{bid}/cover")
 def api_book_cover(bid: str):
     """书籍封面。
@@ -1591,6 +1631,10 @@ def api_book_cover(bid: str):
       · 其余非 EPUB（mobi/pdf/txt）不解析封面，直接 404 —— 与 has_cover 的口径一致。
 
     为什么单独开接口：前端只需要一个不含内部路径的稳定 URL，拿不到就 404、回退渐变占位。
+
+    第 62 期 C：CBZ/CBR 与 EPUB 内嵌图这两条**从文件里读**的分支套了一层 Redis 读缓存
+    （键带文件指纹，见 ``_cover_cached``）；服务端封面与有声书封面不套 —— 前者没有
+    版本列可挂、后者本来就是 ``FileResponse``。
     """
     b = library.by_id(bid)
     if not b:
@@ -1599,11 +1643,12 @@ def api_book_cover(bid: str):
     path = library.root_of(b) / b["name"]
 
     if fmt in ("CBZ", "CBR"):
-        data, media = comics.cover_bytes(path)
-        if data is None:
-            raise HTTPException(404, "该漫画没有图片")
-        return Response(content=data, media_type=media,
-                        headers={"Cache-Control": "public, max-age=86400"})
+        def _comic_cover():
+            data, media = comics.cover_bytes(path)
+            if data is None:
+                raise HTTPException(404, "该漫画没有图片")
+            return data, media
+        return _cover_cached(bid, path, _comic_cover)
 
     if fmt == "AUDIO":
         name = audio.cover_in_dir(path) if path.is_dir() else ""
@@ -1620,25 +1665,24 @@ def api_book_cover(bid: str):
     server_cover = db.get_cover(bid)
     if server_cover:
         data, sct = server_cover
-        return Response(content=data, media_type=sct or "image/jpeg",
-                        headers={"Cache-Control": "public, max-age=86400"})
+        return _cover_response(data, sct or "image/jpeg")
     cover = library.cover_path(path)
     if not cover:
         raise HTTPException(404, "该书没有封面")
-    try:
-        with zipfile.ZipFile(path) as z:
-            if cover not in z.namelist():
-                raise HTTPException(404, "封面资源不存在")
-            data = z.read(cover)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(500, f"读取封面失败：{e}")
-    ct = mimetypes.guess_type(cover)[0] or "image/jpeg"
-    return Response(
-        content=data, media_type=ct,
-        headers={"Cache-Control": "public, max-age=86400"},
-    )
+
+    def _embedded():
+        try:
+            with zipfile.ZipFile(path) as z:
+                if cover not in z.namelist():
+                    raise HTTPException(404, "封面资源不存在")
+                data = z.read(cover)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(500, f"读取封面失败：{e}")
+        return data, mimetypes.guess_type(cover)[0] or "image/jpeg"
+
+    return _cover_cached(bid, path, _embedded)
 
 
 @app.get("/api/books/{bid}/file")
@@ -1735,6 +1779,42 @@ def api_audio_track(bid: str, index: int):
                         headers={"Cache-Control": "private, max-age=3600"})
 
 
+def _chapter_read(produce):
+    """跑真正取章节的那段，把「越界」翻成 404（唯一的翻译点）。"""
+    try:
+        return produce()
+    except IndexError:
+        raise HTTPException(404, "章节不存在")
+
+
+def _chapter_cached(bid: str, index: int, src, kind: str, produce, extra: str = ""):
+    """章节正文的读缓存（第 62 期 C）。``src`` = **真正被读的那个文件**。
+
+    ⚠️ TXT 派生路线传的是**派生 EPUB** 的路径而不是源 txt：指纹必须跟着被读的
+    字节走。分章规则一改，派生 EPUB 会被重建、它的 ``(大小, mtime)`` 随之改变，
+    键也就变了 —— 拿源 txt 的指纹当键的话，「规则改了但源文件没动」会一直命中旧
+    缓存，改规则**看不见效果**（正是 D2 要避免的那种）。
+
+    ``extra`` 补的是**指纹看不出来的那部分输入**：原生分章路线的正文由「源文件 +
+    分章规则」共同决定，规则改了源文件却一个字节没动（``txtcache._chapters`` 的
+    内存缓存键里正带着 ``v{RULE_VERSION}``）—— 所以这条路把规则版本一并塞进键。
+
+    取不到指纹（文件刚被别人删了等）就直接不缓存 —— 那种情况下面本来也会抛。
+    """
+    fp = cache.fingerprint(src)
+    if fp and extra:
+        fp = f"{fp}:{extra}"
+    if not fp:
+        return _chapter_read(produce)
+    key = cache.chapter_key(bid, index, fp, kind)
+    hit = cache.get_json(key)
+    if hit is not None:
+        return hit
+    out = _chapter_read(produce)
+    cache.set_json(key, out, cache.TTL_CHAPTER)
+    return out
+
+
 @app.get("/api/books/{bid}/chapter/{index}")
 def api_book_chapter(bid: str, index: int):
     b = library.by_id(bid)
@@ -1748,20 +1828,15 @@ def api_book_chapter(bid: str, index: int):
         # 由缓存里的源指纹锁定形态，绝不中途混用。
         ep = txtcache.derived_epub(b, path=path)
         if ep is not None:
-            try:
-                return library.chapter_html(ep, index, bid)
-            except IndexError:
-                raise HTTPException(404, "章节不存在")
-        try:
-            return txtcache.native_chapter_html(b, index, path=path)
-        except IndexError:
-            raise HTTPException(404, "章节不存在")
+            return _chapter_cached(bid, index, ep, "epub",
+                                   lambda: library.chapter_html(ep, index, bid))
+        return _chapter_cached(bid, index, path, "native",
+                               lambda: txtcache.native_chapter_html(b, index, path=path),
+                               extra=f"v{txtcache.RULE_VERSION}")
     if suffix != ".epub":
         raise HTTPException(400, "仅 EPUB / TXT 支持在线阅读")
-    try:
-        return library.chapter_html(path, index, bid)
-    except IndexError:
-        raise HTTPException(404, "章节不存在")
+    return _chapter_cached(bid, index, path, "epub",
+                           lambda: library.chapter_html(path, index, bid))
 
 
 @app.get("/api/books/{bid}/progress")
