@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import Icon from '@/components/ui/Icon.vue'
 import MetadataScoreCard from '@/components/MetadataScoreCard.vue'
 import { api, type CustomFieldDef, type MetadataPlanItem, type MetadataProvider } from '@/lib/api'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
@@ -88,8 +89,14 @@ function fieldZh(k: string): string {
 
 /** 提供商目录（第 57 期）：分四组；未实现的家只列出、不给开关 */
 const providers = ref<MetadataProvider[]>([])
+const providersLoading = ref(false)
+/** 目录加载失败/回落的原因（**不静默**：空列表必须能解释自己） */
+const providersError = ref('')
 const probes = ref<Record<string, { ok: boolean; message: string; ms: number }>>({})
 const probing = ref(false)
+
+/** 目录总数：正常取到目录就用目录长度；回落旧接口时退化用「已启用条数」，避免显示 `N/0` */
+const providerTotal = computed(() => providers.value.length || activeSources.value.length)
 
 /** 过滤器（对齐上游那页的「全部 / 已启用 / 需要设置」）+ 搜索框 */
 const PROV_FILTERS = [
@@ -146,9 +153,41 @@ async function runAuthorFetch(): Promise<void> {
 }
 
 async function loadProviders(): Promise<void> {
+  providersLoading.value = true
+  providersError.value = ''
   try {
     providers.value = (await api.metadataProviders()).items
-  } catch { /* 未登录或后端未就绪：静默 */ }
+  } catch (e) {
+    // ⚠️ 失败**不能静默**：第 57 期曾在旧后端（没有 /api/metadata/providers）下静默变空，
+    // 用户看到的是「已启用：2/0 + 没有匹配的提供商」这种一头雾水的空列表。
+    // 两道兜底：① 回落旧接口 /api/metadata/sources（一直存在）保住列表；
+    // ② 把原因写在界面上（含「重启后端」这种要用户动手的动作）。
+    try {
+      const legacy = await api.metadataSources()
+      const activeIds = legacy.items.filter((s) => s.active).map((s) => s.id)
+      providers.value = legacy.items.map((s) => ({
+        id: s.id,
+        label: s.label,
+        group: '元数据来源',
+        home: s.home,
+        note: s.note,
+        implemented: true,
+        fragile: false,
+        needs_config: false,
+        needs_setup: false,
+        active: s.active,
+        order: activeIds.indexOf(s.id) + 1,
+        has_config: false,
+      }))
+      providersError.value = '未能读取完整的提供商目录（后端可能是旧版本）：已回落读取旧接口，'
+        + '分组、易失效标记与密钥区暂不可用 —— 重启后端进程后刷新即可。'
+    } catch {
+      providers.value = []
+      providersError.value = e instanceof Error ? e.message : '提供商目录加载失败'
+    }
+  } finally {
+    providersLoading.value = false
+  }
 }
 
 async function probeAll(): Promise<void> {
@@ -444,13 +483,13 @@ watch(() => props.section, () => {
 
     <!--
       提供商（第 57 期）：按上游「设置 → 书库 → 元数据 → 提供商」那页重做 ——
-      分组列出全部提供商（含本项目**尚未实现**的家），逐家给状态 / 配置 / 开关。
-      ⚠️ 未实现的家**不给开关**（能点但点了没用 = 假交互），只如实标注「未实现」。
+      分组列出全部提供商（14 家），逐家给状态 / 配置 / 开关。
+      ⚠️ 目录拉取失败时**不静默变空**：回落旧接口 + 在界面上写明原因（含「重启后端」）。
     -->
     <Card v-if="has('sources')" class="mt-4" padding="none">
       <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <span class="text-[13px] font-medium text-foreground">提供商</span>
-        <Badge tone="accent">已启用：{{ activeSources.length }}/{{ providers.length }}</Badge>
+        <Badge tone="accent">已启用：{{ activeSources.length }}/{{ providerTotal }}</Badge>
         <span class="text-[11.5px] text-muted-foreground">按顺序依次检索，单源失败不影响其它源</span>
         <input
           v-model="provQuery"
@@ -474,6 +513,18 @@ watch(() => props.section, () => {
         </div>
         <Button size="sm" :disabled="probing" @click="probeAll">
           {{ probing ? '检测中…' : '检测连通性' }}
+        </Button>
+      </div>
+
+      <!-- 目录没取全时说清楚为什么（旧后端 / 未登录 / 网络），并给一键重试 -->
+      <div
+        v-if="providersError"
+        class="flex flex-wrap items-center gap-2 border-b border-border bg-warning/10 px-4 py-2 text-[11.5px] text-foreground"
+      >
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>{{ providersError }}</span>
+        <Button size="sm" variant="secondary" class="ml-auto" :disabled="providersLoading" @click="loadProviders">
+          重试
         </Button>
       </div>
 
@@ -546,8 +597,17 @@ watch(() => props.section, () => {
           <span v-else class="w-9 shrink-0 text-center text-[11px] text-muted-foreground">—</span>
         </div>
       </div>
-      <div v-if="!filteredGroups.length" class="px-4 py-6 text-center text-[11.5px] text-muted-foreground">
-        没有匹配的提供商
+      <div
+        v-if="providersLoading && !providers.length"
+        class="px-4 py-6 text-center text-[11.5px] text-muted-foreground"
+      >
+        加载中…
+      </div>
+      <div
+        v-else-if="!filteredGroups.length"
+        class="px-4 py-6 text-center text-[11.5px] text-muted-foreground"
+      >
+        {{ providers.length ? '没有匹配的提供商' : '提供商目录为空 —— 请点上方「重试」' }}
       </div>
 
       <!-- 密钥区**按注册表渲染**（第 57 期）：哪家要 Key 就出现哪家的输入框，
