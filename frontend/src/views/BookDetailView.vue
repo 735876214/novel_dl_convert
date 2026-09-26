@@ -184,11 +184,14 @@ async function expandSimilar(): Promise<void> {
 loadSimilar(bookId.value)
 watch(bookId, loadSimilar)
 
-/** 阅读器支持的格式：EPUB 需抽到章节；PDF / 漫画（CBZ·CBR）由各自阅读器就地处理 */
+/**
+ * 阅读器支持的格式：EPUB / TXT 需抽到章节（TXT 走派生 EPUB 或原生分章，见后端 txtcache）；
+ * PDF / 漫画（CBZ·CBR）由各自阅读器就地处理。
+ */
 const canRead = computed(() => {
   if (!detail.value) return false
   const f = (detail.value.format || '').toUpperCase()
-  if (f === 'EPUB') return chapterCount.value > 0
+  if (f === 'EPUB' || f === 'TXT') return chapterCount.value > 0
   return f === 'PDF' || f === 'CBZ' || f === 'CBR'
 })
 
@@ -356,7 +359,7 @@ onMounted(async () => {
             :disabled="!canStart"
             :title="canStart
               ? (canListen ? '进入播放器' : '进入阅读器')
-              : 'EPUB（含章节）/ PDF / 漫画 / 有声书可在线打开'"
+              : 'EPUB / TXT（含章节）/ PDF / 漫画 / 有声书可在线打开'"
             @click="startReading"
           >
             <Icon name="play" class="h-3.5 w-3.5" />

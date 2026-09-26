@@ -1,3 +1,10 @@
+"""分章判据的**唯一真值源**（第 55 期起明确）。
+
+「正文 → 章节列表」只有这一处实现：转换管线（`core/pipeline.py`）、书源
+（`sources/*`）、AI 兜底（`core/ai_detect.py` 复用本模块的 bounds/split）与
+原生 TXT 阅读器全部经此。改这里 = 同时改出版成品目录与阅读器章节流，
+所以契约由 `tests/test_detect_chapters.py` 钉住，别在别处再写第二份切分。
+"""
 import re
 
 # 多正则：覆盖常见章节标记（中文数字/阿拉伯/No./Chapter/序章番外等）
@@ -30,8 +37,14 @@ def split_by_offsets(text: str, bounds: list[tuple[int, str]], merge: bool = Fal
     """按 (偏移, 标题) 切分正文为章节；带卷/章层级。
 
     边界 (pos_i, title_i) 表示 title_i 在文本中的位置；title_i 的正文是
-    [pos_i, pos_{i+1})，末章正文为 [pos_n, 文末)。首个边界之前的内容（书名/作者）
-    作为前言并入首章正文，不单独成章。merge=True 时按 MERGE_MIN_LEN 合并极小碎片章。
+    [pos_i, pos_{i+1})，末章正文为 [pos_n, 文末)。
+
+    ⚠️ **首个边界之前的内容（书名 / 作者行）会被丢弃**，不并入首章 ——
+    这是实现的实际行为（首章 body 在下一轮循环里被 [pos_0, pos_1) 覆写）；
+    此前注释写「作为前言并入首章正文」，与实现不符，第 55 期按实际行为订正。
+    契约由 `tests/test_detect_chapters.py` 钉住（改它是改出版成品，别顺手改）。
+
+    merge=True 时按 MERGE_MIN_LEN 合并极小碎片章。
     """
     chaps, start = [], 0
     for i, (pos, title) in enumerate(bounds):

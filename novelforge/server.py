@@ -29,7 +29,7 @@ from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, act
                    fonts, comics, audio, opds, komga, koreader, integrations, sync,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
-                   lib_settings, browse_counts, customfields, embed, epub_cfi)
+                   lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -1691,8 +1691,23 @@ def api_book_chapter(bid: str, index: int):
     if not b:
         raise HTTPException(404, "书籍不存在")
     path = library.root_of(b) / b["name"]
-    if path.suffix.lower() != ".epub":
-        raise HTTPException(400, "仅 EPUB 支持在线阅读")
+    suffix = path.suffix.lower()
+    if suffix == ".txt":
+        # 第 55 期：TXT 优先读**派生 EPUB**（与详情页下发的目录同一形态，索引空间一致）；
+        # 转不动（超大 / 编码坏 / 构建失败）回落原生分章 —— 两条路线 index 语义各自内聚，
+        # 由缓存里的源指纹锁定形态，绝不中途混用。
+        ep = txtcache.derived_epub(b, path=path)
+        if ep is not None:
+            try:
+                return library.chapter_html(ep, index, bid)
+            except IndexError:
+                raise HTTPException(404, "章节不存在")
+        try:
+            return txtcache.native_chapter_html(b, index, path=path)
+        except IndexError:
+            raise HTTPException(404, "章节不存在")
+    if suffix != ".epub":
+        raise HTTPException(400, "仅 EPUB / TXT 支持在线阅读")
     try:
         return library.chapter_html(path, index, bid)
     except IndexError:

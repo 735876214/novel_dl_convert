@@ -1925,3 +1925,54 @@ BookCover `:96`、ShelfView `:280`）均按实测行号写入；`tests/check_doc
 6. **验证**：后端全量 **820 例 / 0 failed**（基线 794 + 本期 26：test_embeddings 14 +
    test_epub_cfi 12）；前端 `type-check` / `build` / `deploy` 全绿并同步
    `novelforge/static/v2`；`requirements.txt` 新增 `numpy>=1.26`。
+
+## 第 55 期（2026-09-26）：新增书库就地弹窗 + TXT 阅读（三期路线图第一期）
+
+用户提了五项需求并拍板分期：**55 期 = ②就地弹窗 + ⑤TXT 阅读**（56 期 = 偏好同步 +
+进度轮询提示；57 期 = 元数据提供商页 + 插件市场 + 手动书源）。①③④ 的口径与边界见
+对话记录，本文件只记本期落地。
+
+### ② 新增书库就地弹窗（不跳设置页）
+
+- 方案：`LibraryWizard` 本就自带 z-50 遮罩外壳，缺的只是各宿主页没有 `types` /
+  `sourceRoots` / `libs` 三份数据（此前只有书库管理页的 `reload()` 拉过）。收拢为
+  **全局单实例**：新 store `frontend/src/stores/libraryWizard.ts`（`show()` 现拉
+  `/api/libraries` 再开浮层；`created()` 关浮层 + 刷新全局书库实体 + 宿主一次性回调），
+  App.vue 挂**一份**（多处各自挂会叠两层 z-50 关不掉 —— LibrariesView 第 40 期注释的
+  互斥约定由此天然满足）。
+- 改造入口（8 处里 7 处）：书架空态（新 `createLib`；顶栏 `manageLibs` 保留为「管理」语义）、
+  首屏提示条、引导第一步 CTA（`cta.to` 变可选，缺省 = 就地弹窗）、侧栏「库·新增」、
+  本地转换 0 库文案、收书目录 0 库文案、探索发现与两处拦截 toast 文案（去掉「去设置页」指向）。
+  `?new=1` 老入口经 store 继续可用；LibrariesView 不再自带一份向导。
+- 契约测试同步：《tests/test_first_run_contract.py》`test_建库出口就地弹窗不跳设置页`
+  （改断言「四个文件都 import useLibraryWizardStore」+ NOTICE/TOUR 不得残留
+  `/settings/libraries`）、书架用例补 `createLib` 断言。新增
+  `frontend/src/stores/libraryWizard.spec.ts`（4 例）。
+
+### ⑤ TXT 阅读（转 EPUB 为主 / 原生分章兜底）
+
+- **分章真值源**：`core/detect.py`（regex 非锚定 + 缩进降级 + AI 可选）本就是唯一实现，
+  本期**新增契约测试** `tests/test_detect_chapters.py`（7 例）钉住出参形状、首个边界前
+  内容被丢弃（docstring 原先写反，已按实际行为订正）、置信判据、缩进降级、merge 与
+  cfg 无 key 等同正则；并显式钉住「**正文里出现「第 N 章」也会被当边界**」这条现状口径
+  （它同时决定出版成品目录，要改必须独立评估）。
+- **派生 EPUB 缓存**：新增 `core/txtcache.py` —— TXT 优先转一本最小 EPUB 落
+  `CACHE_DIR/txt-epub/<book_id>/`（**派生缓存**：不进书库、不落成品目录、可重建），
+  阅读器于是走**完整 EPUB 链路**（目录 / 批注 / 进度 / 资源全免费复用）；转不动
+  （空文本 / 编码全坏 / >20 MB / 构建失败）则记**失败标记**并回落**原生分章**
+  （`native_chapters` / `native_chapter_html`，与 `library._reading_list` 同形状）。
+  形态由缓存里的**源文件指纹**锁定（源没变不换路线，避免章节号漂移让批注跳错章）；
+  缓存重建走「临时文件 + `Path.replace`」原子落盘。
+- **`epub_builder.build_epub(..., nav=False)`**（新增向后兼容开关，默认 `True` 逐字不变）：
+  派生 EPUB 不把 nav 页放进 spine ⇒ 章节 index 0 基，**与原生兜底索引空间对齐**；
+  NCX/目录照常写入（标题不丢）。
+- **接口/前端**：`library.book_detail` 为 TXT 下发章节树（派生优先）；`GET /api/books/{bid}/chapter/{index}`
+  打通 TXT（派生优先、原生兜底，其它格式仍 400）；`BookDetailView.canRead` 放行 TXT。
+  **前端阅读器零改动**（后端归一成同一形状）。
+- 契约测试：`tests/test_txt_reading.py`（6 例：详情+可读、超大回落且无半成品残留、
+  形态锁定、源变更重建、非 EPUB/TXT 仍 400、缓存不落库根）。
+
+### 验证
+- 后端全量 **833 例 / 0 failed**（基线 820 + 本期 13：test_detect_chapters 7 + test_txt_reading 6）；
+  前端 `test:unit` **66**（62 + libraryWizard 4）、`type-check` / `build` / `deploy` 全绿
+  （已同步 `novelforge/static/v2`）。

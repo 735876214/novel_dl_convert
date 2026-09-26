@@ -1462,7 +1462,17 @@ def book_detail(name: str, library_id=None) -> dict | None:
         return None
     root = root_of(b)
     path = root / name
-    chapters = _reading_list(path) if path.suffix.lower() == ".epub" else []
+    suffix = path.suffix.lower()
+    if suffix == ".epub":
+        chapters = _reading_list(path)
+    elif suffix == ".txt":
+        # 第 55 期：TXT 优先用**派生 EPUB** 的目录（与阅读内容同一形态，索引空间也一致）；
+        # 转不动（超大 / 编码坏 / 构建失败）回落原生分章目录。形态由缓存里的源指纹锁定。
+        from . import txtcache  # 延迟导入：txtcache 反向依赖本模块的 root_of
+        ep = txtcache.derived_epub(b, path=path, root=root)
+        chapters = _reading_list(ep) if ep else txtcache.native_chapters(b, path=path, root=root)
+    else:
+        chapters = []
     files = []
     # 音频目录没有「同 stem 兄弟文件」的概念，跳过枚举（否则会把别的目录当成文件列出来）
     if not path.is_dir():
