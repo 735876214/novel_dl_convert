@@ -58,6 +58,12 @@ services:
       - ./cache:/app/config/cache
     environment:
       - TZ=Asia/Shanghai
+      # 第 62 期：**这里刻意留在 SQLite 上**（不设 NOVELFORGE_DB）—— 本地测试容器
+      # 是 SQLite 那条路唯一的日常演练场，两边都还在被使用，别把老后端变成没人跑的代码。
+      # 想在本地验 PG 那条路，取消下面两行的注释（DSN 指向宿主机上另起的 PG 容器；
+      # 首次启动会自动把 ./data-test/novelforge.db 搬过去，幂等且不动原文件）。
+      # - NOVELFORGE_DB=pg
+      # - NOVELFORGE_PG_DSN=postgresql://novelforge:novelforge@host.docker.internal:5433/novelforge
       - INPUT_DIR=/app/input
       - OUTPUT_DIR=/app/output
       - CONFIG_DIR=/app/config

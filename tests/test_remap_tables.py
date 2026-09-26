@@ -11,17 +11,26 @@
 """
 import pytest
 
-from novelforge.core import db
+from novelforge.core import db, sqlcompat
 
 def _tables_with_book_id() -> set:
-    """当前库里**真的**含 book_id 列的表（取自 sqlite_master，不写死清单）。
+    """当前库里**真的**含 book_id 列的表（问库本身，不写死清单）。
 
     ⚠️ 断言的是「代码声明的清单」与「库的实际形状」一致，所以必须问库本身，
     不能拿常量互相对 —— 那样只是把常量抄了两遍。
     """
     c = db._connect()
-    names = [r["name"] for r in c.execute(
-        "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    # 第 62 期：枚举「有哪些表」这一步两边方言不同（sqlite_master vs
+    # information_schema），而**不是**能给 sqlcompat 抹平的那种差异 ——
+    # sqlite_master 是个真实存在的表名，没有字符串级的等价改写。所以在这里分叉。
+    # （下一句 `PRAGMA table_info` 不用分叉：它已经在 sqlcompat 里映射过去了。）
+    if sqlcompat.is_pg():
+        names = [r["name"] for r in c.execute(
+            "SELECT table_name AS name FROM information_schema.tables "
+            "WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'").fetchall()]
+    else:
+        names = [r["name"] for r in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
     out = set()
     for n in names:
         if n.startswith("sqlite_"):

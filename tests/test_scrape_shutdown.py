@@ -24,7 +24,7 @@ import time
 import pytest
 
 from novelforge import config
-from novelforge.core import db, epub_builder, library, publish, scrape
+from novelforge.core import db, epub_builder, library, pg, publish, scrape, sqlcompat
 
 
 @pytest.fixture
@@ -75,6 +75,12 @@ def test_停机后残留worker写不进换过的那套库(env, monkeypatch, tmp_
         #    只调 close()+init() 会重开同一个文件，断言就失去意义了。
         monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data-next")
         db.close()
+        if sqlcompat.is_pg():
+            # ⚠️ PG 后端下「换一套空库」不是换目录 —— 业务数据在 PG 里，`DATA_DIR`
+            #    对它没有意义，只关连接的话上面那条入队记录还在。这里照抄
+            #    `tests/conftest.py::isolated` 的动作：重建 schema。第 62 期实测，
+            #    少了这一句，本用例在全量里必挂（断言拿到 {'running': 1}）。
+            pg.drop_schema()
         db.init()
         assert db.scrape_counts() == {}, "换库后应当是新空库"
 

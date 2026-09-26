@@ -21,7 +21,8 @@
 #   ./config    配置（config.yaml / settings.json / 书源 / 日志 / 备份 / 字体）
 #   ./cookies   书源登录态（跨重启保留）
 #   ./cache     AI 分章结果缓存
-#   ./data      SQLite：阅读进度 / 批注 / 账号 / 书库登记（丢了要重建，务必留在持久盘）
+#   ./data      老的 SQLite（第 62 期起首次启动会整库搬进 PG，之后只读、不删）
+#   ./pgdata    PostgreSQL 数据目录（第 62 期起业务数据的家，务必留在持久盘）
 #   ./libraries 书库来源根：其下的子文件夹可被「新建书库」就地引用
 #   要指到 NAS 上已有的共享目录，把这些相对路径改成绝对路径即可（如 /volume1/books）。
 #
@@ -30,6 +31,44 @@
 #    显式 `-f` 才生效。
 
 services:
+  # ———— PostgreSQL（第 62 期）：书目索引 + 全部业务表的落库后端 ————
+  #
+  # 为什么要有它：SQLite 的文件锁把读也串行化了，而书库挂在 NAS 上时「书架一次要
+  # 查 266 本书的元数据」这类批量读会互相排队。PG 把读写分开，也顺带给将来多实例
+  # 留了余量（本项目的缓存层还会再叠一个 Redis，见第 62 期阶段 C）。
+  #
+  # 首次启动时，服务端会自动把老的 ./data/novelforge.db **整库搬进来**（幂等，
+  # 只搬一次，原文件一个字节都不动），所以升级不需要手工操作 —— 见
+  # novelforge/core/pgmigrate.py。
+  postgres:
+    image: postgres:16-alpine
+    container_name: novelforge-pg
+    restart: unless-stopped
+    # 可改：口令。改这里的同时**必须**改下面 novel_dl_convert 的 NOVELFORGE_PG_DSN。
+    # ⚠️ 只在**首次**启动（数据目录还是空的时候）生效：改口令要连 ./pgdata 一起重来。
+    environment:
+      - POSTGRES_USER=novelforge
+      - POSTGRES_PASSWORD=novelforge
+      - POSTGRES_DB=novelforge
+      # 中文书名 / 作者名的排序与比较（PG 默认 C 排序对中文是「按字节」）
+      - POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale=C.UTF-8
+      - TZ=Asia/Shanghai
+    volumes:
+      # 可改：PG 的数据目录。**务必留在持久盘上** —— 这里是升级后全部业务数据的家，
+      # 丢了要重建（虽然能再从 ./data/novelforge.db 重搬一次）。
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U novelforge -d novelforge"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    # 默认不把 PG 端口暴露到宿主机：只有同一个 compose 网络里的应用要连它。
+    # 想用 psql / 图形客户端连进去看数，取消下面两行的注释（用 5433 避开宿主机上
+    # 可能已有的 PG）。
+    # ports:
+    #   - "5433:5432"
+
   novel_dl_convert:
     image: ghcr.io/735876214/novel_dl_convert:latest
     container_name: novel_dl_convert
@@ -53,7 +92,10 @@ services:
       # —— 书源登录态、AI 分章缓存：刻意与 config 平级，便于单独备份 / 迁移 ——
       - ./cookies:/app/config/cookies
       - ./cache:/app/config/cache
-      # —— SQLite：阅读进度 / 批注 / 账号 / 书库登记 ——
+      # —— 阅读进度 / 批注 / 账号 / 书库登记 ——
+      # 第 62 期起这里是**双份**的：切到 PG 之后 ./data 里那份 SQLite 只是「老库」，
+      # 首次搬迁时被读一次、之后不再写（见下面的 NOVELFORGE_DB）。**不要删它** ——
+      # 它是回滚唯一的路。
       - ./data:/app/data
       # —— 书库来源根（就地引用，只扫描、不搬文件）——
       # 需要第二个来源根：取消下面一行的注释，并在 environment 里同时打开 LIBRARY_SOURCE_DIRS2*
@@ -63,6 +105,21 @@ services:
     environment:
       # 可改：时区（日志时间 / 热力图按天聚合都会用到）
       - TZ=Asia/Shanghai
+
+      # ———— 后端（第 62 期）：pg = 用上面的 postgres 容器；注释掉 = 回到 SQLite ————
+      # 首次切过来时，服务端会自动把 ./data/novelforge.db 整库搬进 PG（幂等、只搬一次、
+      # 原文件不动），搬完在「活动日志」里会有一条 `migrate` 记录。搬迁没成功就**不会**
+      # 写标记、服务也会带着明确的报错启动失败 —— 不会出现「界面空的，其实是没连上」。
+      #
+      # 回滚：把下面两行注释掉，`docker compose up -d`。老 SQLite 一直是全的，
+      # 直接就能回去（切过去之后在 PG 里产生的增量会丢，这点要有数）。
+      - NOVELFORGE_DB=pg
+      - NOVELFORGE_PG_DSN=postgresql://novelforge:novelforge@postgres:5432/novelforge
+      # 表建在哪个 schema 里（默认 public，一般不用改）
+      # - NOVELFORGE_PG_SCHEMA=public
+      # ⚠️ 别打开下面这个：它会让本进程把「schema 整个删掉重建」当成正常操作，
+      #    那是测试用例级隔离用的开关（见 novelforge/core/pg.py）。
+      # - NOVELFORGE_PG_RESET=1
 
       # ———— 目录：容器内路径，一般无需改动；要换位置请改上面的 volumes ————
       - INPUT_DIR=/app/input
@@ -109,6 +166,13 @@ services:
     # 不写这一行＝按镜像默认的 root 运行。⚠️ 填非 root 时，上面那些宿主机目录的属主必须匹配，
     # 否则容器写不进去（启动即报权限错）。
     # user: "1026:100"
+
+    # 等 PG 真的能接受连接再起应用：不等的话启动那一刻必然连不上（容器起来了、
+    # PG 还在 initdb），`db.init()` 会带着报错失败、容器重启一轮，日志里留一串
+    # 「连不上」的噪音 —— 明明什么都没坏。
+    depends_on:
+      postgres:
+        condition: service_healthy
 
     # 镜像已含源码与依赖；start.sh 只做一次依赖自检再 exec uvicorn（幂等、秒级）
     command: ["sh", "/app/start.sh"]

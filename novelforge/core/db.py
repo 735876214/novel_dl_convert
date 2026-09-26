@@ -135,14 +135,37 @@ class _Conn:
 
 
 def _connect():
+    """取连接代理。后端由 ``NOVELFORGE_DB`` 选（默认 sqlite，见 core/sqlcompat）。
+
+    两条路返回的代理**同形**（``execute`` / ``executemany`` / ``executescript`` /
+    ``commit`` / ``rollback`` → ``_Result``），所以上层 169 处调用点一行不改。
+    语句串行靠上面那把 ``_lock``：SQLite 侧由 ``_Conn`` 自己持锁，**PG 侧由
+    ``pg.connect(_Result, _lock)`` 把同一把锁交给它**（第 62 期）——同一把锁，不是
+    两把，所以不存在锁序问题。
+
+    ⚠️ **建连接这一段也要持锁**（第 62 期实测到过的真实泄漏）：原先这里裸判
+    ``_conn is None``，两个线程可以同时判空、各自建一条连接，后一个把前一个**覆盖掉**
+    —— 那条被覆盖的连接再也没人拿得到句柄，于是它上面挂着的事务（psycopg 对每条语句
+    都隐式 BEGIN）永远没人提交，攥着锁直到进程退出。测试侧的现场是
+    ``DROP SCHEMA … CASCADE`` 在 ``wait_event_type=Lock`` 上无限等待。
+    """
     global _conn, _conn_proxy
     if _conn is None:
-        import sqlite3
+        from . import sqlcompat, pg
 
-        c = sqlite3.connect(str(db_path()), check_same_thread=False)
-        c.row_factory = sqlite3.Row
-        _conn = c
-        _conn_proxy = _Conn(c)
+        # RLock：本函数常在本模块其它持锁路径里被调（169 处调用点里有一批在
+        # ``with _lock:`` 内），所以这里必须是可重入的。
+        with _lock:
+            if _conn is None:                      # 双检：锁外那次判空只是快路径
+                if sqlcompat.is_pg():
+                    _conn = _conn_proxy = pg.connect(_Result, _lock)
+                else:
+                    import sqlite3
+
+                    c = sqlite3.connect(str(db_path()), check_same_thread=False)
+                    c.row_factory = sqlite3.Row
+                    _conn = c
+                    _conn_proxy = _Conn(c)
     return _conn_proxy
 
 
@@ -166,6 +189,14 @@ def close() -> None:
         _conn = None
         _conn_proxy = None
         _db_path = None
+    # 第 62 期：**PG 后端下 close() 不删表**（`pg.drop_schema()` 由测试夹具显式调，
+    # 见 tests/conftest.py::isolated）。第一版把「换一套空库」挂在 close() 上，被
+    # 三个「关掉再重开」的升级用例当场抓住：SQLite 那边换空库靠的是**换 DATA_DIR**
+    # （`isolated` 每个用例指向一个新的 tmp 目录，close 只是关连接），而 close() 本身
+    # 从不删数据。把这个动作挪到 close() 里，等于让「`close()` + `init()` 模拟一次重启」
+    # 变成「把库删了重建」—— 被测的那份数据在重启之前就已经没了，用例测的是空气。
+    # 结论：close 就是 close。删 schema 是**夹具的**动作，不是连接的。
+    #
     # 第 62 期：书目索引（catalog）的进程内状态必须跟着一起重置 ——
     # 它的「建过表了」标记与「这个库已刷过」集都是**进程级**的，而本函数换的是
     # **库级**的隔离（测试每个用例一套空库）。不重置的话下一个用例会跳过建表，
@@ -289,7 +320,10 @@ def init():
             CREATE TABLE IF NOT EXISTS achievements (
                 key        TEXT PRIMARY KEY,
                 name       TEXT NOT NULL,
-                desc       TEXT NOT NULL DEFAULT '',
+                -- ⚠️ 列名加双引号（第 62 期）：``desc`` 是**保留字**（ORDER BY … DESC）。
+                -- 双引号里的标识符在 SQLite 与 PG 上都是「这是列名」，两边都认；
+                -- 不加的话 SQLite 侥幸能过，PG 直接语法错误。同一个理由见 smart_scopes.match。
+                "desc"     TEXT NOT NULL DEFAULT '',
                 group_name TEXT NOT NULL DEFAULT '',
                 metric     TEXT NOT NULL DEFAULT '',
                 target     REAL NOT NULL DEFAULT 1,
@@ -335,7 +369,7 @@ def init():
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 name       TEXT NOT NULL,
                 rules      TEXT NOT NULL,                      -- JSON: [{field, op, value}]
-                match      TEXT NOT NULL DEFAULT 'all',        -- all = 且 / any = 或
+                "match"    TEXT NOT NULL DEFAULT 'all',        -- all = 且 / any = 或（保留字，见上）
                 created_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS opds_sources (
@@ -732,6 +766,17 @@ def init():
             c.execute("ALTER TABLE authors ADD COLUMN sort_name TEXT NOT NULL DEFAULT ''")
         if aucols and "sort_name_local" not in aucols:
             c.execute("ALTER TABLE authors ADD COLUMN sort_name_local TEXT NOT NULL DEFAULT ''")
+        # 第 62 期：**一次性数据搬迁必须排在建账号之前**（这一行位置是有讲究的）。
+        # 老库里的 `users` 行带着用户真正在用的口令散列；`_seed_user` 只在
+        # 「用户名不存在」时才按 AUTH_USER/AUTH_PIN 建号。顺序反过来的话，
+        # 空 PG 上会先冒出 `admin/changeme` 这个壳，随后搬迁的 `users` 行撞上
+        # UNIQUE(username) 被 DO NOTHING 丢掉 —— 用户升级完发现口令被**静默重置成
+        # changeme**，且没有任何报错。搬在前面，`_seed_user` 自然认账、什么都不做。
+        #
+        # 只在 PG 后端且没搬过时生效；非 PG / 测试（NOVELFORGE_PG_RESET）/ 老库
+        # 不存在这三条路径都直接返回 None，SQLite 部署的行为与第 61 期逐字节一致。
+        from . import pgmigrate
+        pgmigrate.auto_migrate()
         _seed_user(c)
         c.commit()
     # 第 62 期：书目索引表（``core/catalog``）随建库一起建。
@@ -1144,8 +1189,12 @@ def list_collections() -> list:
     rows = c.execute(
         """SELECT c.id, c.name, c.created_at, c.updated_at,
                   (SELECT COUNT(*) FROM collection_items i WHERE i.collection_id = c.id) AS count,
+                  -- 第 62 期：原为 `ORDER BY i.rowid`（SQLite 的隐式插入序）。
+                  -- 本表的 id 就是 `INTEGER PRIMARY KEY`，在 SQLite 里**与 rowid
+                  -- 同值**，所以改成 i.id 两边语义完全一致；而 PG 根本没有 rowid，
+                  -- 照搬会在整段 SQL 上抛 `column i.rowid does not exist`。
                   (SELECT book_id FROM collection_items i
-                    WHERE i.collection_id = c.id ORDER BY i.rowid LIMIT 1) AS first_book_id
+                    WHERE i.collection_id = c.id ORDER BY i.id LIMIT 1) AS first_book_id
            FROM collections c ORDER BY c.created_at"""
     ).fetchall()
     return [dict(r) for r in rows]
@@ -1704,9 +1753,21 @@ def task_create(task_id, type_, title, detail="", actor="", status="queued", pro
     c = _connect()
     with _lock:
         c.execute(
-            "INSERT OR REPLACE INTO tasks"
+            # 第 62 期：`INSERT OR REPLACE` → 显式 upsert（PG 没有 OR REPLACE 这种拼写，
+            # 而 SQLite 3.24+ 就支持 ON CONFLICT … DO UPDATE，同一份 SQL 两边都跑）。
+            # ⚠️ DO UPDATE 里**必须把表上所有列都写上**（含没进 INSERT 列表的
+            # error/result/fname/notice）：SQLite 的 REPLACE 语义是「删旧插新」，
+            # 没提到的列会回到默认值；只更新提到的那几列会**留着上一轮的 error/result**,
+            # 那不是等价改写。PG 的 `excluded.<未列出的列>` 正好等于该列的默认值。
+            "INSERT INTO tasks"
             "(id, type, title, detail, status, progress, actor, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
+            "VALUES(?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "type=excluded.type, title=excluded.title, detail=excluded.detail, "
+            "status=excluded.status, progress=excluded.progress, error=excluded.error, "
+            "result=excluded.result, fname=excluded.fname, notice=excluded.notice, "
+            "actor=excluded.actor, created_at=excluded.created_at, "
+            "updated_at=excluded.updated_at",
             (str(task_id), str(type_), str(title), str(detail or ""), str(status),
              float(progress), str(actor or ""), now, now),
         )
@@ -1810,9 +1871,9 @@ def upsert_achievement(key, name, desc, group_name, metric, target, sort) -> Non
     c = _connect()
     with _lock:
         c.execute(
-            "INSERT INTO achievements(key, name, desc, group_name, metric, target, sort) "
+            'INSERT INTO achievements(key, name, "desc", group_name, metric, target, sort) '
             "VALUES(?,?,?,?,?,?,?) "
-            "ON CONFLICT(key) DO UPDATE SET name=excluded.name, desc=excluded.desc, "
+            'ON CONFLICT(key) DO UPDATE SET name=excluded.name, "desc"=excluded."desc", '
             "group_name=excluded.group_name, metric=excluded.metric, "
             "target=excluded.target, sort=excluded.sort",
             (str(key), str(name), str(desc or ""), str(group_name or ""),
@@ -2246,7 +2307,7 @@ def create_scope(name, rules_json, match="all") -> dict:
     c = _connect()
     with _lock:
         cur = c.execute(
-            "INSERT INTO smart_scopes(name, rules, match, created_at) VALUES(?,?,?,?)",
+            'INSERT INTO smart_scopes(name, rules, "match", created_at) VALUES(?,?,?,?)',
             (str(name), str(rules_json), str(match), time.time()),
         )
         c.commit()
@@ -2257,7 +2318,7 @@ def update_scope(scope_id, name, rules_json, match="all") -> dict:
     c = _connect()
     with _lock:
         c.execute(
-            "UPDATE smart_scopes SET name=?, rules=?, match=? WHERE id=?",
+            'UPDATE smart_scopes SET name=?, rules=?, "match"=? WHERE id=?',
             (str(name), str(rules_json), str(match), int(scope_id)),
         )
         c.commit()
@@ -2315,8 +2376,13 @@ def replace_koreader_docs(rows: list) -> int:
         n = 0
         for r in rows or []:
             c.execute(
-                "INSERT OR REPLACE INTO koreader_docs"
-                "(book_id, doc_md5, alt_md5, size, mtime, computed_at) VALUES(?,?,?,?,?,?)",
+                # upsert 写法同 task_create；上一条 DELETE 已经清过表，这里的冲突
+                # 分支实际走不到，写全列只是为了让「改回不带 DELETE 的写法」也安全。
+                "INSERT INTO koreader_docs"
+                "(book_id, doc_md5, alt_md5, size, mtime, computed_at) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(book_id) DO UPDATE SET doc_md5=excluded.doc_md5, "
+                "alt_md5=excluded.alt_md5, size=excluded.size, mtime=excluded.mtime, "
+                "computed_at=excluded.computed_at",
                 (str(r["book_id"]), str(r["doc_md5"]), str(r.get("alt_md5") or ""),
                  int(r.get("size") or 0), float(r.get("mtime") or 0), now),
             )
@@ -3582,12 +3648,24 @@ def create_library(lid, name, type_, source_dirs="", rules="", sort_order=0,
     c = _connect()
     with _lock:
         c.execute(
-            "INSERT OR REPLACE INTO libraries"
+            # upsert 写法同 task_create；libraries 的 17 列在 INSERT 列表里全给了，
+            # 所以逐列 DO UPDATE 与 SQLite 的「删旧插新」**逐字段等价**
+            # （last_scan_at / last_scan_note 在 VALUES 里就是字面量 0 与 ''）。
+            "INSERT INTO libraries"
             "(id, name, type, source_dirs, rules,"
             " settings, sort_order, created_at, last_scan_at, last_scan_note,"
             " watch, scan_interval, scan_cron, publish_path,"
             " icon, allowed_exts, exclude) "
-            "VALUES(?,?,?,?,?,?,?,?,0,'',?,?,?,?,?,?,?)",
+            "VALUES(?,?,?,?,?,?,?,?,0,'',?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "name=excluded.name, type=excluded.type, source_dirs=excluded.source_dirs, "
+            "rules=excluded.rules, settings=excluded.settings, "
+            "sort_order=excluded.sort_order, created_at=excluded.created_at, "
+            "last_scan_at=excluded.last_scan_at, last_scan_note=excluded.last_scan_note, "
+            "watch=excluded.watch, scan_interval=excluded.scan_interval, "
+            "scan_cron=excluded.scan_cron, publish_path=excluded.publish_path, "
+            "icon=excluded.icon, allowed_exts=excluded.allowed_exts, "
+            "exclude=excluded.exclude",
             (str(lid), str(name), str(type_), _norm_source_dirs(source_dirs),
              str(rules or ""), str(settings or ""), int(sort_order or 0), time.time(),
              w, si, str(scan_cron or ""), str(publish_path or ""),

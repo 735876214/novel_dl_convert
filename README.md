@@ -298,7 +298,10 @@ novel_dl_convert/
                        + activity_log.py（活动日志）· watcher.py（输入目录监听）
                        + library.py（扫描导出目录，聚合书目 / 作者 / 系列 / 重复 / 缺失）
                        + fileops.py（安全改名与移动、冲突检测、回收目录；不做 unlink）
-                       + db.py（SQLite：进度 / 批注 / 评分 / 收藏 / 状态 / 偏好 / 凭据）
+                       + db.py（持久层：进度 / 批注 / 评分 / 收藏 / 状态 / 偏好 / 凭据）
+                       + catalog.py（书目索引：增量扫盘 + 落库，请求路径不再扫盘）
+                       + sqlcompat.py（SQL 方言适配）· pg.py（PostgreSQL 后端）
+                       + pgmigrate.py（SQLite → PostgreSQL 一次性数据搬迁）
                        + publish.py（刮削出版：硬链接副本 / 原子写副本 / 回收）
                        + scrape.py（刮削台账状态机与单线程 worker，含「待确认」处置）
                        + stats.py（统计聚合）· achievements.py · recommend.py（相似书）
@@ -322,6 +325,54 @@ novel_dl_convert/
                         智能书架求值（smartScope）、偏好同步桥（prefsBridge / prefsPayload）
     src/assets/theme/   照搬 BookOrbit 的 tokens / accents / radius / bridge / cover-effects
 ```
+
+### 数据库后端：SQLite（默认）与 PostgreSQL
+
+第 62 期起，业务数据可以由 **PostgreSQL** 承载。**不配置时行为与之前完全一致**（内置
+SQLite），所以老部署升级上来不会被动改后端。
+
+```yaml
+      # docker-compose.yml 的 novel_dl_convert.environment 里：
+      - NOVELFORGE_DB=pg
+      - NOVELFORGE_PG_DSN=postgresql://novelforge:novelforge@postgres:5432/novelforge
+```
+
+仓库自带的 `docker-compose.yml` 里已经有一个 `postgres` 服务（数据落在 `./pgdata`），
+上面两行也**已经默认打开**。想把数据库换回 SQLite，把这两行注释掉再 `docker compose up -d`
+即可 —— 老的 `./data/novelforge.db` 一直在，随时能回去（切过去之后在 PG 里产生的增量会丢）。
+
+| 环境变量 | 默认 | 说明 |
+|---|---|---|
+| `NOVELFORGE_DB` | `sqlite` | 后端选择。取 `pg` / `postgres` / `postgresql` 走 PostgreSQL |
+| `NOVELFORGE_PG_DSN` | 空 | 选了 `pg` 就必须给。**留空会带着明确报错启动失败**，不会静默回落 SQLite |
+| `NOVELFORGE_PG_SCHEMA` | `public` | 表建在哪个 schema 里 |
+| `NOVELFORGE_PG_RESET` | 关 | **只给测试用**：打开后允许「整个 schema 删掉重建」。别在生产打开 |
+
+**老数据怎么办：自动搬迁。** 首次用 PG 启动时，服务端会把 `DATA_DIR/novelforge.db`
+**整库搬进 PG**（逐行、幂等、只搬一次），搬完在「活动日志」里留一条 `migrate` 记录。
+
+- 原 SQLite 文件**一个字节都不改** —— 它是回滚唯一的路，别删；
+- 搬迁的幂等标记写在 **PG 那边**的 `app_state` 表里，所以重装 PG 会重新触发一次搬迁；
+- 重跑不会覆盖 PG 上已有的行（`ON CONFLICT DO NOTHING`）—— 切过去之后读的进度、
+  改的批注不会被旧库盖回去；
+- **搬迁失败会直接启动失败**，不会出现「界面空的但其实没连上」；
+- 想手动搬 / 换个源库：`python -m novelforge.core.pgmigrate [--force] [源库路径]`。
+
+书目索引（`book_index`）**不搬**：它是磁盘的投影，行里存的是绝对路径，换机器就不成立；
+它对增量扫描是自愈的，第一次刷新会自己重建（所以搬迁后第一次进书架可能稍慢一拍）。
+
+**注意：把接口从 42 秒降到亚秒的是「书目索引落库」（见「书库与阅读」一节），
+与选哪个数据库无关** —— 索引在 SQLite 上一样快。PG 解决的是容量与并发余量。
+
+跑测试时想验 PG 那条路：
+
+```bash
+NOVELFORGE_DB=pg NOVELFORGE_PG_DSN=postgresql://novelforge:novelforge@127.0.0.1:5433/novelforge \
+  NOVELFORGE_PG_RESET=1 python -m pytest
+```
+
+⚠️ `NOVELFORGE_PG_RESET=1` 下**每个用例都会把整个 schema 删掉重建** —— 只对测试库这么跑；
+不设这个开关就直接跑，conftest 会拒绝启动（而不是悄悄用一个没有隔离的库）。
 
 ## 数据驱动书源（可视化批量添加，无需写代码）
 

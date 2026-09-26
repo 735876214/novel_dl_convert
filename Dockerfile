@@ -97,7 +97,7 @@ FROM python:${PY_VERSION}-slim AS runtime
 ARG APP_VERSION
 
 LABEL org.opencontainers.image.title="NovelForge" \
-      org.opencontainers.image.description="TXT 小说转 EPUB：FastAPI 服务 + CLI，支持可插拔书源" \
+      org.opencontainers.image.description="个人书库与在线阅读：FastAPI 服务 + CLI，TXT/EPUB/PDF/漫画/有声书就地入库，支持可插拔书源" \
       org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.source="https://github.com/735876214/novel_dl_convert" \
       org.opencontainers.image.licenses="MIT"

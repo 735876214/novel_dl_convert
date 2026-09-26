@@ -61,6 +61,26 @@ os.environ.update({
 })
 
 # ---------------------------------------------------------------------------
+# ② 后端开关（第 62 期）：默认 sqlite；PG 侧跑法见 README「第 62 期」
+# ---------------------------------------------------------------------------
+
+#: 本轮是不是跑在 PostgreSQL 上。**不设 NOVELFORGE_DB 时是 False**，
+#: 离线全量（939 例基线）的行为与第 61 期逐字节一致。
+_PG = (os.environ.get("NOVELFORGE_DB") or "").strip().lower() in (
+    "pg", "postgres", "postgresql")
+
+if _PG and (os.environ.get("NOVELFORGE_PG_RESET") or "").strip() not in ("1", "true", "yes", "on"):
+    # 没有商量的余地：PG 侧的用例级隔离**就是**每个用例重建 schema，而那个动作会
+    # 把库里现有的东西全删掉。不开这个开关就跑，等于悄悄对着一个没隔离的库写
+    # 一千多个用例 —— 失败会以「随机某例挂掉」的面目出现，没人查得出来。
+    pytest.exit(
+        "在 PostgreSQL 后端下跑测试必须设 NOVELFORGE_PG_RESET=1"
+        "（例：NOVELFORGE_DB=pg NOVELFORGE_PG_DSN=… NOVELFORGE_PG_RESET=1 python -m pytest）。"
+        "⚠️ 这个库里的数据会**每个用例被整库删除**，请只对测试库使用。",
+        returncode=2,
+    )
+
+# ---------------------------------------------------------------------------
 # ③ 仓库根防删除守卫（防回归：任何测试都不得删除 / 移走仓库根内文件）
 # ---------------------------------------------------------------------------
 # 背景：第 44 期曾出现「全量 pytest 后 14 个仓库根跟踪文件从工作树消失」的事故。
@@ -188,7 +208,7 @@ def _repo_root_guard():
 from fastapi.testclient import TestClient  # noqa: E402
 
 from novelforge import config  # noqa: E402
-from novelforge.core import db, library  # noqa: E402
+from novelforge.core import db, library, pg  # noqa: E402
 from novelforge.server import app  # noqa: E402
 
 
@@ -339,6 +359,15 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     monkeypatch.setattr(config, "LIBRARY_SOURCE_ROOTS",
                         [{"name": "libraries", "path": str(tmp_path / "libraries")}])
     db.close()
+    # 第 62 期：PG 后端下「换一套空库」= 把 schema 整个重建。
+    # SQLite 那条路不需要这一步 —— 上面那行 monkeypatch 已经把 DATA_DIR 指到一个
+    # 全新的临时目录，`close()` 之后 `db_path()` 现算出来的就是一个空文件。
+    # PG 没有「文件」这个抓手，于是把等价动作显式写在这里。
+    #
+    # ⚠️ 必须是**夹具**做，不能塞进 `db.close()`：`close()` 同时被那些「关掉再重开
+    # 模拟一次重启」的升级用例用着，一删数据它们测的就是空气（见 db.close 的注释）。
+    if _PG:
+        pg.drop_schema()
     db.init()
     # 第 37 期：产品**不再播种任何书库**（全新部署就是 0 个库，等用户手建），
     # 所以这套测试自己建一条 —— 绝大多数用例都靠「往 `default_root` 放本书再扫描」

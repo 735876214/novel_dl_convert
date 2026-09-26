@@ -1,0 +1,223 @@
+"""SQLite → PostgreSQL 的**一次性**数据搬迁（第 62 期）。
+
+为什么需要它
+------------
+换成 PG 之后，老部署里那份 ``config/data/novelforge.db`` 不会自己长腿走过去 ——
+阅读进度、批注、书签、评分、收藏、每库设置、刮削台账、成就解锁……**全在那里面**。
+没有这一步，「切到 PG」就等于「把用户的数据留在原地假装没有」。
+
+幂等靠 ``app_state`` 里的一个标记
+--------------------------------
+``pg_migrated_v1`` 写进 PG 的 ``app_state`` 表（不是 SQLite —— 标记必须跟着**目标**
+走，才拦得住「重启一次搬一次」）。搬迁本身也顺手是幂等的：逐行
+``ON CONFLICT DO NOTHING``，重跑不会覆盖 PG 上已有的行（用户切过去之后改的数据
+不会被旧库盖回去）。
+
+**原 SQLite 文件不动**（一字节都不改）：它是回滚唯一的路。
+
+搬什么、不搬什么
+----------------
+- 搬：``sqlite_master`` 里除 ``sqlite_%`` 与 :data:`SKIP_TABLES` 之外的全部表；
+- 不搬 **book_index**（书目索引）：它是**磁盘的投影**，行里存着绝对的 ``root``
+  路径 —— 换一台机器、换一个挂载点就不再成立，搬过去只会得到一堆「指向不存在
+  路径」的行。它对增量刷新是**自愈**的（下次扫描按 (size, mtime) 判一遍，
+  路径没了的直接删、新路径重新探测），但既然能自愈，就没必要先把错的行灌进去。
+  （与 ``db.REMAP_DERIVED_TABLES`` 是同一条判据：派生表跟着真相走，不跟着搬迁走。）
+- 列取**源表与目标表的交集**：老 SQLite 库可能少几列（它是靠 ``db.init()`` 的
+  补列迁移逐步长起来的），多出来的列一并忽略，不会因为对不上就整表失败。
+"""
+from __future__ import annotations
+
+import json
+import pathlib
+import sqlite3
+import time
+
+from . import db, sqlcompat
+
+#: 幂等标记的键名。带版本号：将来真需要再搬一次时换个键，而不是去猜「这行是什么时候写的」。
+MARKER = "pg_migrated_v1"
+
+#: 不搬的表 —— 派生表，见模块文档。
+SKIP_TABLES = ("book_index",)
+
+#: 每批提交的行数。整库搬可能上万行，逐行 commit 在网络存储上要付几千次往返。
+BATCH = 500
+
+
+def source_path() -> pathlib.Path:
+    """老库位置（与 ``db.db_path()`` 同一处，但**不依赖当前后端**）。"""
+    from .. import config
+    return pathlib.Path(config.DATA_DIR) / "novelforge.db"
+
+
+def _sqlite_tables(conn) -> list:
+    rows = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    ).fetchall()
+    return [str(r[0]) for r in rows
+            if not str(r[0]).startswith("sqlite_") and str(r[0]) not in SKIP_TABLES]
+
+
+def _pg_columns(table: str) -> list:
+    rows = db._connect().execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name=?", (table,)
+    ).fetchall()
+    return [str(r["column_name"]) for r in rows]
+
+
+def already_migrated() -> bool:
+    """PG 里有没有那一行标记（**只查 PG**，见模块文档）。"""
+    try:
+        row = db._connect().execute(
+            "SELECT value FROM app_state WHERE key=?", (MARKER,)
+        ).fetchone()
+    except Exception:                              # noqa: BLE001 —— 表还没建 = 没搬过
+        return False
+    return bool(row)
+
+
+def mark(summary: dict) -> None:
+    db._connect().execute(
+        "INSERT INTO app_state(key, value, updated_at) VALUES(?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (MARKER, json.dumps(summary, ensure_ascii=False), time.time()),
+    )
+    db._connect().commit()
+
+
+def migrate(src: "pathlib.Path | None" = None, force: bool = False) -> dict:
+    """把老 SQLite 库逐表搬进 PG。返回 ``{表名: 行数}`` 与元信息。
+
+    ``force=True`` 时无视标记重跑（仍逐行 ``DO NOTHING``，已有行不会被动）。
+    源库不存在时**不报错**：全新部署本来就没有老库，这是正常路径。
+    """
+    if not sqlcompat.is_pg():
+        raise RuntimeError("数据搬迁只在 PostgreSQL 后端下有意义（NOVELFORGE_DB=pg）")
+    path = pathlib.Path(src) if src else source_path()
+    out: dict = {"source": str(path), "exists": path.exists(), "tables": {}, "rows": 0}
+    if not path.exists():
+        return out
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)   # 只读打开：绝不改老库
+    conn.row_factory = sqlite3.Row
+    try:
+        for table in _sqlite_tables(conn):
+            cols_t = _pg_columns(table)
+            if not cols_t:
+                continue                           # PG 里没有这张表（老库有、新代码已删）
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+            if not rows:
+                out["tables"][table] = 0
+                continue
+            cols_s = [c for c in rows[0].keys()]
+            cols = [c for c in cols_t if c in cols_s]
+            if not cols:
+                continue
+            values = [tuple(r[c] for c in cols) for r in rows]
+            sql = (f"INSERT INTO {table} ({', '.join(cols)}) "
+                   f"VALUES ({', '.join(['?'] * len(cols))}) "
+                   f"ON CONFLICT DO NOTHING")
+            for i in range(0, len(values), BATCH):
+                db._connect().executemany(sql, values[i:i + BATCH])
+            out["tables"][table] = len(values)
+            out["rows"] += len(values)
+        out["migrated_at"] = time.time()
+        if not already_migrated() or force:
+            mark(out)
+    finally:
+        conn.close()
+    return out
+
+
+def auto_enabled() -> bool:
+    """自动搬迁在当前环境下是否允许跑。
+
+    ``NOVELFORGE_PG_RESET=1``（测试）时**关掉**。理由不是省那一次 stat：
+    那个开关的语义是「这个 PG 库是测试的草稿纸，随时会被 DROP」。在草稿纸上
+    自动去盘上找老库并搬进来，等于给测试开了一条「顺手把真实数据搬进测试库」
+    的路 —— 它今天不会发生（测试的 DATA_DIR 是临时目录、里面没有老库），
+    但让一条**默认就可能动真实数据**的路径靠「恰好没有文件」来兜底，
+    是不该有的设计。
+
+    做成函数而不是模块常量：测试要覆盖自动搬迁这条路径时
+    ``monkeypatch.setattr(pgmigrate, "auto_enabled", lambda: True)`` 一句话即可，
+    不必去动那个一旦忘了还原就会污染整轮测试的环境变量。
+    """
+    if not sqlcompat.is_pg():
+        return False
+    from . import pg
+    return not pg.reset_enabled()
+
+
+def auto_migrate() -> "dict | None":
+    """``db.init()`` 里调的自动搬迁。没得搬就返回 None（静默）。
+
+    三条**前置闸**，任一不成立就什么都不做：
+
+    1. 后端不是 pg / 测试环境 → 见 :func:`auto_enabled`；
+    2. 盘上没有老库 → 全新部署，正常路径（**不报错**，也不写标记）；
+    3. 已经搬过（``app_state`` 里有 ``pg_migrated_v1``）→ 不做事。
+
+    搬迁**失败会往外抛**（不吞）：此时 PG 是空的而 SQLite 里躺着全部数据，
+    静默放行等于让用户对着一排空书架以为数据丢了。标记也只在全部搬完之后才写，
+    所以重跑一次就是干净的续做。
+    """
+    if not auto_enabled():
+        return None
+    path = source_path()
+    if not path.exists() or already_migrated():
+        return None
+    out = migrate(path)
+    _log(out)
+    return out
+
+
+def _log(out: dict) -> None:
+    """把搬迁结果写进活动日志。日志写不进去**不能**拖垮搬迁本身。"""
+    try:
+        from . import activity_log
+        filled = [f"{t} {n}" for t, n in sorted(out["tables"].items()) if n]
+        activity_log.log(
+            "migrate", str(out["source"]), "ok",
+            detail=(f"SQLite → PostgreSQL：{out['rows']} 行 / {len(filled)} 张非空表"
+                    + (f"（{', '.join(filled[:12])}…）" if len(filled) > 12 else
+                       (f"（{', '.join(filled)}）" if filled else ""))),
+        )
+    except Exception:                              # noqa: BLE001
+        pass
+
+
+def main() -> int:
+    """命令行入口：``python -m novelforge.core.pgmigrate [--force] [源库路径]``。"""
+    import argparse
+
+    from .. import config
+    from . import db as _db
+
+    ap = argparse.ArgumentParser(description="把老 SQLite 库搬进 PostgreSQL（第 62 期）")
+    ap.add_argument("source", nargs="?", default=None, help="SQLite 文件（默认 config.DATA_DIR/novelforge.db）")
+    ap.add_argument("--force", action="store_true", help="无视已搬标记重跑")
+    args = ap.parse_args()
+    if not sqlcompat.is_pg():
+        print("请先设置 NOVELFORGE_DB=pg 与 NOVELFORGE_PG_DSN")
+        return 2
+    _db.init()                                     # 目标表要先在
+    if already_migrated() and not args.force:
+        print(f"已经搬迁过（{MARKER} 在案）。要重跑请加 --force。")
+        return 0
+    out = migrate(args.source, force=args.force)
+    if not out["exists"]:
+        print(f"没有找到老库：{out['source']}（全新部署属正常，不做事）")
+        return 0
+    for t, n in sorted(out["tables"].items()):
+        if n:
+            print(f"  {t:<24} {n:>7}")
+    print(f"共 {out['rows']} 行 / {len([1 for n in out['tables'].values() if n])} 张非空表"
+          f"（源：{out['source']}，data_dir={config.DATA_DIR}）")
+    print("老 SQLite 文件保留未动 —— 它是回滚唯一的路。")
+    return 0
+
+
+if __name__ == "__main__":                          # pragma: no cover
+    raise SystemExit(main())

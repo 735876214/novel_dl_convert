@@ -19,3 +19,8 @@ croniter>=2.0
 # 语义向量（第 54 期）：相似书的 LSA 后端（TF-IDF + SVD）用；纯 CPU 计算，
 # 无系统库依赖（wheel 自带），保持离线可用。
 numpy>=1.26
+# 外部数据库（第 62 期）：`NOVELFORGE_DB=pg` 时走这条后端，默认仍是内置 SQLite，
+# 所以**离线的测试与开发环境不装它也能跑全量**（没装而选了 pg ⇒ 启动即带着明确
+# 报错失败，不会静默回落，见 core/pg.py::PgUnavailable）。
+# `[binary]` 后缀装的是预编译 wheel：不带它就得在本机编 libpq，NAS/arm64 上尤其麻烦。
+psycopg[binary]>=3.2

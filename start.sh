@@ -16,5 +16,21 @@ if ! python -c "import fastapi, uvicorn, ebooklib" 2>/dev/null; then
   exit 1
 fi
 
+# 第 62 期：选了 PostgreSQL 就得有驱动。不在镜像里做「有就装」的兜底 —— 启动时
+# 悄悄 pip install 会让「镜像里到底有什么」变得不可知；缺了就直接说清楚怎么补。
+case "$(echo "${NOVELFORGE_DB:-sqlite}" | tr 'A-Z' 'a-z')" in
+  pg|postgres|postgresql)
+    if ! python -c "import psycopg" 2>/dev/null; then
+      echo "[start] [FATAL] 选了 PostgreSQL（NOVELFORGE_DB=${NOVELFORGE_DB}）但没装驱动。"
+      echo "[start] [FATAL] 镜像应包含 psycopg[binary]；请确认 requirements.txt 已生效并重建镜像。"
+      exit 1
+    fi
+    echo "[start] 数据库后端：PostgreSQL（${NOVELFORGE_PG_SCHEMA:-public} schema）"
+    ;;
+  *)
+    echo "[start] 数据库后端：SQLite（内置，默认）"
+    ;;
+esac
+
 echo "[start] 启动 uvicorn :${PORT:-8000}"
 exec uvicorn novelforge.server:app --host 0.0.0.0 --port "${PORT:-8000}"

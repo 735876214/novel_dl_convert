@@ -53,7 +53,7 @@ import pathlib
 import threading
 import time
 
-from . import db, sqlcompat
+from . import db
 
 #: pathlib 在 Windows 上比较路径时会把整串小写（``PurePath._str_normcase``），
 #: 而 ``_iter_book_entries`` 用的是 ``sorted(d.iterdir())`` —— 排序口径必须跟着平台走，
@@ -136,10 +136,6 @@ _state_lock = threading.Lock()
 _ready: set = set()
 
 
-def _adapt(sql: str) -> str:
-    return sqlcompat.adapt(sql)
-
-
 def _exec(sql: str, params=()):
     """走 ``db`` 的连接代理 —— 与全仓共用同一条连接、同一把锁。
 
@@ -147,8 +143,14 @@ def _exec(sql: str, params=()):
     都这么用，它是事实上的内部接口。绕开 ``db`` 自己开一条连接是不行的 ——
     那会多出一把锁、多一个事务域，``db.close()``（测试的用例级隔离靠它）
     也管不到它。
+
+    ⚠️ SQL 一律**原样**交给代理，本模块不做任何方言处理（第 62 期修正）：
+    适配发生在代理那一层（`db._Conn` / `pg.PgConn`），这里再 `adapt` 一次会
+    变成**两遍**——第一遍把 `?` 换成 `%s`、把 `%` 转义成 `%%`，第二遍再把
+    `%%` 转义成 `%%%%`，SQL 当场跑不通。SQLite 后端下 adapt 是恒等函数，
+    所以这个错只在 PG 上现形。
     """
-    return db._connect().execute(_adapt(sql), params)
+    return db._connect().execute(sql, params)
 
 
 def _commit() -> None:
@@ -277,13 +279,11 @@ def _refresh_locked(lib: dict, force: bool) -> dict:
         if pending:
             # execute 一次只能带一组参数；``executemany`` 正好（_Conn 也代理了它）。
             _conn = db._connect()
-            sql = _adapt(
-                f"INSERT INTO {TABLE} ({', '.join(_COLS)}) "
-                f"VALUES ({', '.join(['?'] * len(_COLS))}) "
-                f"ON CONFLICT (library_id, root, rel) DO UPDATE SET "
-                + ", ".join(f"{c}=excluded.{c}" for c in _COLS
-                            if c not in ("library_id", "root", "rel"))
-            )
+            sql = (f"INSERT INTO {TABLE} ({', '.join(_COLS)}) "
+                   f"VALUES ({', '.join(['?'] * len(_COLS))}) "
+                   f"ON CONFLICT (library_id, root, rel) DO UPDATE SET "
+                   + ", ".join(f"{c}=excluded.{c}" for c in _COLS
+                               if c not in ("library_id", "root", "rel")))
             _conn.executemany(sql, pending)
             _commit()
             pending = []
