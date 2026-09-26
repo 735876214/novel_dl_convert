@@ -149,6 +149,9 @@ SOURCES = {
         "needs_config": False,
         "key_field": "googlebooks_api_key",
         "config_hint": "可选：填 API Key 可显著提高额度（匿名常撞 429）",
+        # 行内「配置」区的输入框文案（上游那页即如此：标签 + 占位提示都在行内）
+        "key_label": "API 密钥",
+        "key_placeholder": "未设置（可选）",
     },
     "amazon": {
         "label": "Amazon",
@@ -180,6 +183,8 @@ SOURCES = {
         "needs_config": True,
         "key_field": "hardcover_api_token",
         "config_hint": "需要 Hardcover API Token（网页版账号设置 → Hardcover API）",
+        "key_label": "API 密钥",
+        "key_placeholder": "eyJ...（在 hardcover.app/account/api 获取的令牌）",
     },
     "openlibrary": {
         "label": "Open Library",
@@ -253,6 +258,8 @@ SOURCES = {
         "needs_config": True,
         "key_field": "comicvine_api_key",
         "config_hint": "需要 Comic Vine API Key（免费申请，注意其限流 200 次/小时）",
+        "key_label": "API 密钥",
+        "key_placeholder": "在 comicvine.gamespot.com/api 免费申请的密钥",
     },
     "ranobedb": {
         "label": "RanobeDB",
@@ -285,6 +292,8 @@ SOURCES = {
         "needs_config": True,
         "key_field": "aladin_ttbkey",
         "config_hint": "需要 Aladin TTBKey（aladin.co.kr 开放 API 页面申请）",
+        "key_label": "TTB 密钥",
+        "key_placeholder": "ttb...（在 aladin.co.kr 开放 API 页面申请）",
     },
 }
 

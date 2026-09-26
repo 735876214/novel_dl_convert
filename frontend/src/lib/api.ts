@@ -274,6 +274,9 @@ export interface MetadataProvider {
   config_hint?: string
   /** 配置落在 `metadata_fetch.<key_field>`（后端注册表给的键名） */
   key_field?: string
+  /** 行内「配置」区的输入框标签 / 占位提示（注册表给，前端不另写一份） */
+  key_label?: string
+  key_placeholder?: string
   /** 是否在启用顺序里 */
   active: boolean
   /** 启用时的优先级（1 起；0 = 未启用） */
@@ -3011,14 +3014,19 @@ export const api = {
   /** 提供商目录（第 57 期：分组 + 启用 / 配置现状；设置页「提供商」页的唯一数据源） */
   metadataProviders: () => request<MetadataProvidersResult>('/api/metadata/providers'),
 
-  /** 源连通性自检（真的外呼；被点的源才测） */
-  metadataProbe: (sources?: string[]) =>
+  /**
+   * 源连通性自检（真的外呼；被点的源才测）。
+   *
+   * `keys` 是**按源 id 给的临时凭据**（行内「测试」用）：优先于已保存配置，且**不落盘** ——
+   * 否则只能测「上次保存的旧值」，或被迫为了测试先保存一次。
+   */
+  metadataProbe: (sources?: string[], keys?: Record<string, string>) =>
     request<{ items: Record<string, { ok: boolean; message: string; ms: number }> }>(
       '/api/metadata/probe',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sources }),
+        body: JSON.stringify(keys && Object.keys(keys).length ? { sources, keys } : { sources }),
       },
     ),
 

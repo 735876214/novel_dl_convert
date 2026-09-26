@@ -135,6 +135,45 @@ def test_连通性探测对未填密钥的家不发外呼(client, auth_headers, 
         assert items[sid]["ok"] is False and "需要设置" in items[sid]["message"], items[sid]
 
 
+def test_行内测试用输入框里的凭据且不落盘(client, auth_headers, isolated, monkeypatch):  # noqa: ARG001
+    """行内「测试」的语义：**用当前输入框的值**试一次，且**不写进配置**。
+
+    否则只有两条烂路：测的是上次保存的旧值，或者为了测试先保存一次（把「试一下」
+    变成写操作）。这里同时钉住「传了 keys 就用 keys」与「没传就沿用已保存值」。
+    """
+    seen: list = []
+
+    def spy(sid, opts=None):
+        seen.append((sid, (opts or {}).get("api_key")))
+        return {"ok": True, "message": "stub", "ms": 1}
+
+    monkeypatch.setattr(metasources, "probe", spy)
+
+    # ① 带着「刚输入、还没保存」的凭据 → 用它，且配置里不该出现它
+    r = client.post("/api/metadata/probe", headers=auth_headers,
+                    json={"sources": ["hardcover"], "keys": {"hardcover": "draft-token"}})
+    assert r.status_code == 200, r.text
+    assert seen == [("hardcover", "draft-token")], seen
+    mf = client.get("/api/config", headers=auth_headers).json()["config"]["metadata_fetch"]
+    assert mf["has_hardcover_api_token"] is False, "行内测试绝不能把凭据写进配置"
+
+    # ② 不传 keys → 沿用已保存值（先保存一个）
+    client.put("/api/config", headers=auth_headers,
+               json={"metadata_fetch": {"hardcover_api_token": "saved-token"}})
+    seen.clear()
+    client.post("/api/metadata/probe", headers=auth_headers, json={"sources": ["hardcover"]})
+    assert seen == [("hardcover", "saved-token")], seen
+
+
+def test_需要密钥的家都带行内配置文案():
+    """行内「配置」区的标签 / 占位提示由注册表给（前端不另写一份）—— 别漏字段。"""
+    for sid in ("googlebooks", "hardcover", "comicvine", "aladin"):
+        meta = metasources.SOURCES[sid]
+
+        assert meta.get("key_label"), f"{sid} 缺少 key_label"
+        assert meta.get("key_placeholder"), f"{sid} 缺少 key_placeholder"
+
+
 def test_配置回显按注册表掩码所有密钥(client, auth_headers, isolated):  # noqa: ARG001
     token = "secret-hardcover-token"
     saved = client.put("/api/config", headers=auth_headers,

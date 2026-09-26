@@ -107,8 +107,76 @@ const PROV_FILTERS = [
 const provFilter = ref<'all' | 'active' | 'needs'>('all')
 const provQuery = ref('')
 
-/** 需要密钥的提供商（密钥区按它渲染输入框；顺序跟注册表） */
-const keyProviders = computed(() => providers.value.filter((p) => !!p.key_field))
+// ---------------- 行内「配置」（密钥搬到对应提供商那一行）----------------
+// 形态对齐上游那页：每行右侧「配置 ▾」，展开后在**该行下方**给凭据输入 + 「测试」。
+// 测试用**输入框里的当前值**（后端 `keys` 覆盖、不落盘）；只有「保存」才写进配置，
+// 所以「改一下试试」不会污染已保存的凭据，也不会为了测试先保存一次。
+const openConfig = ref<Set<string>>(new Set())
+/** 凭据草稿：**只有用户改过才发** —— 没改就沿用已保存值，绝不把掩码当密钥写回去 */
+const keyDraft = ref<Record<string, string>>({})
+const rowBusy = ref<Record<string, boolean>>({})
+
+function hasConfigSection(p: MetadataProvider): boolean {
+  return !!p.key_field
+}
+function toggleConfig(id: string): void {
+  const next = new Set(openConfig.value)
+  if (next.has(id)) next.delete(id)
+  else next.add(id)
+  openConfig.value = next
+}
+function keyDraftOf(id: string): string {
+  return keyDraft.value[id] ?? ''
+}
+function setKeyDraft(id: string, v: string): void {
+  keyDraft.value = { ...keyDraft.value, [id]: v }
+}
+function rowIsBusy(id: string): boolean {
+  return rowBusy.value[id] === true
+}
+function setRowBusy(id: string, v: boolean): void {
+  rowBusy.value = { ...rowBusy.value, [id]: v }
+}
+
+/** 行内「测试」：把输入框里的当前凭据带给后端试一次（不改配置、不落盘） */
+async function testRow(p: MetadataProvider): Promise<void> {
+  setRowBusy(p.id, true)
+  try {
+    const draft = keyDraft.value[p.id]
+    const keys = draft ? { [p.id]: draft } : undefined
+    probes.value = { ...probes.value, ...(await api.metadataProbe([p.id], keys)).items }
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '测试失败')
+  } finally {
+    setRowBusy(p.id, false)
+  }
+}
+
+/** 该行凭据的「清除」：先清空草稿再保存（后端语义：空串 = 删除） */
+async function clearRow(p: MetadataProvider): Promise<void> {
+  setKeyDraft(p.id, '')
+  await saveRow(p)
+}
+
+/** 保存该行凭据（空串 = 清除，与后端「清空即删除」一致）；保存后重拉目录刷新状态 */
+async function saveRow(p: MetadataProvider): Promise<void> {
+  if (!p.key_field) return
+  const clearing = !keyDraftOf(p.id)
+  setRowBusy(p.id, true)
+  try {
+    setVal(`metadata_fetch.${p.key_field}`, keyDraftOf(p.id))
+    await saveSection('metadata')
+    const rest = { ...keyDraft.value }
+    delete rest[p.id]                       // 已落库 ⇒ 清草稿，输入框回到「未改」态
+    keyDraft.value = rest
+    await loadProviders()
+    ui.toast(clearing ? '已清除该来源的凭据' : '已保存')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '保存失败')
+  } finally {
+    setRowBusy(p.id, false)
+  }
+}
 
 /** 按分组过滤后的可见条目（组内保持注册表顺序） */
 const filteredGroups = computed(() => {
@@ -535,66 +603,126 @@ watch(() => props.section, () => {
         <div
           v-for="p in g.items"
           :key="p.id"
-          class="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+          class="border-b border-border last:border-b-0"
         >
-          <span class="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-muted text-[11px] font-semibold text-foreground">
-            {{ p.label.slice(0, 1) }}
-          </span>
-          <div class="min-w-0 flex-1">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="text-[12.5px] font-medium text-foreground">{{ p.label }}</span>
-              <Badge v-if="inOrder(p.id)" tone="accent">启用</Badge>
-              <Badge v-if="orderOf(p.id)">顺序 {{ orderOf(p.id) }}</Badge>
-              <!-- 页面抓取型：站点改版就可能失效 —— 如实标出来，别让用户以为是自己的问题 -->
-              <span
-                v-if="p.fragile"
-                class="rounded-full bg-muted px-2 py-0.5 text-[10.5px] text-muted-foreground"
-                title="页面抓取型：站点改版后可能失效"
-              >
-                易失效
-              </span>
-              <span
-                v-if="p.needs_setup"
-                class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10.5px] text-amber-600 dark:text-amber-400"
-              >
-                需要设置
-              </span>
-              <Badge v-if="!p.implemented">未接入</Badge>
+          <div class="flex flex-wrap items-center gap-3 px-4 py-3">
+            <span class="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-muted text-[11px] font-semibold text-foreground">
+              {{ p.label.slice(0, 1) }}
+            </span>
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-[12.5px] font-medium text-foreground">{{ p.label }}</span>
+                <Badge v-if="inOrder(p.id)" tone="accent">启用</Badge>
+                <Badge v-if="orderOf(p.id)">顺序 {{ orderOf(p.id) }}</Badge>
+                <!-- 页面抓取型：站点改版就可能失效 —— 如实标出来，别让用户以为是自己的问题 -->
+                <span
+                  v-if="p.fragile"
+                  class="rounded-full bg-muted px-2 py-0.5 text-[10.5px] text-muted-foreground"
+                  title="页面抓取型：站点改版后可能失效"
+                >
+                  易失效
+                </span>
+                <span
+                  v-if="p.needs_setup"
+                  class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10.5px] text-amber-600 dark:text-amber-400"
+                >
+                  需要设置
+                </span>
+                <Badge v-if="!p.implemented">未接入</Badge>
+              </div>
+              <div class="mt-0.5 text-[11.5px] text-muted-foreground">{{ p.note }}</div>
+              <div v-if="!p.implemented" class="mt-0.5 text-[11px] text-muted-foreground">
+                本项目尚未实现该家的抓取器，不会出现在抓取计划里。
+              </div>
+              <div v-else-if="p.config_hint && !p.has_config" class="mt-0.5 text-[11px] text-muted-foreground">
+                {{ p.config_hint }}
+              </div>
             </div>
-            <div class="mt-0.5 text-[11.5px] text-muted-foreground">{{ p.note }}</div>
-            <div v-if="!p.implemented" class="mt-0.5 text-[11px] text-muted-foreground">
-              本项目尚未实现该家的抓取器，不会出现在抓取计划里。
+            <span
+              v-if="probes[p.id]"
+              class="text-[11.5px]"
+              :class="probes[p.id].ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'"
+            >
+              {{ probes[p.id].ok ? '可用' : '不可用' }} · {{ probes[p.id].message }}
+            </span>
+            <Button size="sm" variant="ghost" :disabled="!inOrder(p.id)" @click="move(p.id, -1)">上移</Button>
+            <Button size="sm" variant="ghost" :disabled="!inOrder(p.id)" @click="move(p.id, 1)">下移</Button>
+            <a :href="p.home" target="_blank" rel="noreferrer" class="text-[11.5px] text-muted-foreground underline">官网</a>
+            <!-- 行内配置（上游那页的「配置 ▾」）：凭据就挂在这家自己身上，不另开一处 -->
+            <button
+              v-if="hasConfigSection(p)"
+              type="button"
+              class="cursor-pointer rounded-md px-2 py-1 text-[11.5px] transition-colors"
+              :class="openConfig.has(p.id)
+                ? 'bg-primary/12 text-primary'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
+              @click="toggleConfig(p.id)"
+            >
+              配置 {{ openConfig.has(p.id) ? '▴' : '▾' }}
+            </button>
+            <button
+              v-if="p.implemented"
+              type="button"
+              role="switch"
+              :aria-checked="inOrder(p.id)"
+              :title="inOrder(p.id) ? '停用' : '启用'"
+              class="relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors"
+              :class="inOrder(p.id) ? 'bg-primary' : 'bg-muted'"
+              @click="toggleSource(p.id)"
+            >
+              <span
+                class="absolute top-0.5 h-4 w-4 rounded-full bg-card shadow-xs transition-[left]"
+                :class="inOrder(p.id) ? 'left-[1.125rem]' : 'left-0.5'"
+              />
+            </button>
+            <span v-else class="w-9 shrink-0 text-center text-[11px] text-muted-foreground">—</span>
+          </div>
+
+          <!-- 行内配置面板：凭据输入 + 测试（用当前输入值试，不落盘）+ 保存 / 清除 -->
+          <div
+            v-if="hasConfigSection(p) && openConfig.has(p.id)"
+            class="border-t border-border/60 bg-muted/20 px-4 py-3"
+          >
+            <div
+              v-if="p.needs_setup"
+              class="mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11.5px] text-amber-700 dark:text-amber-400"
+            >
+              ⚠ 该来源需要一个密钥才能启用
             </div>
-            <div v-else-if="p.config_hint && !p.has_config" class="mt-0.5 text-[11px] text-muted-foreground">
-              {{ p.config_hint }}
+            <label class="mb-1 block text-[11px] text-muted-foreground">
+              {{ p.key_label || 'API 密钥' }}
+              <span
+                class="ml-1"
+                :class="p.has_config ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'"
+              >
+                {{ p.has_config ? '已设置' : '未设置' }}
+              </span>
+            </label>
+            <input
+              :value="keyDraftOf(p.id)"
+              type="password"
+              :placeholder="p.has_config ? '已设置（留空 = 保持，输入新值可覆盖）' : (p.key_placeholder || '未设置')"
+              class="w-[420px] max-w-full rounded-md border border-border bg-muted px-3 py-1.5 font-mono text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
+              @input="setKeyDraft(p.id, ($event.target as HTMLInputElement).value)"
+            >
+            <div v-if="p.config_hint" class="mt-1 text-[11px] text-muted-foreground">{{ p.config_hint }}</div>
+            <div class="mt-2 flex flex-wrap items-center gap-2">
+              <Button size="sm" :disabled="rowIsBusy(p.id)" @click="testRow(p)">
+                {{ rowIsBusy(p.id) ? '测试中…' : '测试' }}
+              </Button>
+              <Button size="sm" variant="primary" :disabled="rowIsBusy(p.id)" @click="saveRow(p)">保存</Button>
+              <Button
+                v-if="p.has_config"
+                size="sm"
+                variant="ghost"
+                :disabled="rowIsBusy(p.id)"
+                @click="clearRow(p)"
+              >
+                清除
+              </Button>
+              <span class="text-[11px] text-muted-foreground">测试只按当前输入试一次，不保存任何凭据</span>
             </div>
           </div>
-          <span
-            v-if="probes[p.id]"
-            class="text-[11.5px]"
-            :class="probes[p.id].ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'"
-          >
-            {{ probes[p.id].ok ? '可用' : '不可用' }} · {{ probes[p.id].message }}
-          </span>
-          <Button size="sm" variant="ghost" :disabled="!inOrder(p.id)" @click="move(p.id, -1)">上移</Button>
-          <Button size="sm" variant="ghost" :disabled="!inOrder(p.id)" @click="move(p.id, 1)">下移</Button>
-          <a :href="p.home" target="_blank" rel="noreferrer" class="text-[11.5px] text-muted-foreground underline">官网</a>
-          <button
-            v-if="p.implemented"
-            type="button"
-            role="switch"
-            :aria-checked="inOrder(p.id)"
-            :title="inOrder(p.id) ? '停用' : '启用'"
-            class="relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors"
-            :class="inOrder(p.id) ? 'bg-primary' : 'bg-muted'"
-            @click="toggleSource(p.id)"
-          >
-            <span
-              class="absolute top-0.5 h-4 w-4 rounded-full bg-card shadow-xs transition-[left]"
-              :class="inOrder(p.id) ? 'left-[1.125rem]' : 'left-0.5'"
-            />
-          </button>
-          <span v-else class="w-9 shrink-0 text-center text-[11px] text-muted-foreground">—</span>
         </div>
       </div>
       <div
@@ -610,33 +738,6 @@ watch(() => props.section, () => {
         {{ providers.length ? '没有匹配的提供商' : '提供商目录为空 —— 请点上方「重试」' }}
       </div>
 
-      <!-- 密钥区**按注册表渲染**（第 57 期）：哪家要 Key 就出现哪家的输入框，
-           后端加一家带 key_field 的源，这里自动跟上，不需要改前端 -->
-      <div v-if="keyProviders.length" class="border-t border-border px-4 py-3.5">
-        <div class="mb-1.5 text-[12.5px] font-medium text-foreground">密钥</div>
-        <div class="mb-3 text-[11.5px] text-muted-foreground">
-          只列出需要密钥的提供商；掩码表示已设置，清空即删除。未填写的家在列表里显示「需要设置」，
-          抓取时不会白跑一次注定失败的请求。
-        </div>
-        <div v-for="p in keyProviders" :key="p.id" class="mb-3 last:mb-0">
-          <div class="mb-1 flex items-center gap-2">
-            <span class="text-[12.5px] text-foreground">{{ p.label }}</span>
-            <span
-              class="text-[11px]"
-              :class="p.has_config ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'"
-            >
-              {{ p.has_config ? '已设置' : '未设置' }}
-            </span>
-          </div>
-          <div v-if="p.config_hint" class="mb-1.5 text-[11px] text-muted-foreground">{{ p.config_hint }}</div>
-          <input
-            :value="val(`metadata_fetch.${p.key_field}`)"
-            type="password" placeholder="未设置"
-            class="w-[420px] max-w-full rounded-md border border-border bg-muted px-3 py-1.5 font-mono text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
-            @input="setVal(`metadata_fetch.${p.key_field}`, ($event.target as HTMLInputElement).value)"
-          />
-        </div>
-      </div>
     </Card>
 
     <Card v-if="has('fetch')" class="mt-4" padding="none">

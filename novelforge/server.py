@@ -5589,16 +5589,22 @@ def api_metadata_providers():
 @app.post("/api/metadata/probe")
 def api_metadata_probe(payload: dict = Body(None)):
     """源连通性自检（真的外呼：点一次测一次，结果只回给这次请求）。"""
+    p = payload or {}
     mf = config.load_config().get("metadata_fetch") or {}
-    wanted = (payload or {}).get("sources") or list(metasources.SOURCES)
+    wanted = p.get("sources") or list(metasources.SOURCES)
+    # 行内「测试」把**输入框里当前的凭据**带进来（按源 id 给）：有覆盖就用覆盖、
+    # **不落盘** —— 否则「测试」要么测的是上次保存的旧值，要么被迫先保存一次。
+    overrides = p.get("keys") or {}
     out = {}
     for sid in wanted:
         if sid not in metasources.SOURCES:
             continue
         key_field = metasources.key_field_of(sid)
-        cfg = {"api_key": str(mf.get(key_field) or "")} if key_field else None
+        override = str(overrides.get(sid) or "").strip() if isinstance(overrides, dict) else ""
+        key = override or (str(mf.get(key_field) or "") if key_field else "")
+        cfg = {"api_key": key} if key_field else None
         # 需要 Key 却没填 ⇒ 直接如实回报，**不发外呼**（省一次注定失败的请求）
-        if metasources.needs_key(sid) and not (cfg or {}).get("api_key"):
+        if metasources.needs_key(sid) and not key:
             out[sid] = {"ok": False, "message": "需要设置：尚未填写该来源的密钥", "ms": 0}
             continue
         out[sid] = metasources.probe(sid, cfg)
