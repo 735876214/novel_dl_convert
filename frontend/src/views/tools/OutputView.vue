@@ -17,7 +17,7 @@ const library = useLibraryStore()
 const emptyDesc = computed(() =>
   library.hasNoLibraries
     ? '成品文件来自入库的书。先去「设置 → 书库管理」新建一个书库，下载与上传才会有地方落。'
-    : '到「探索发现」下载一本书，或在「本地转换」上传一个 TXT。',
+    : '到「探索发现」下载一本书，或在「本地导入」上传一个 TXT。',
 )
 
 const files = ref<FileEntry[]>([])
@@ -181,7 +181,7 @@ function download(name: string): void {
     </p>
     </template>
 
-    <!-- 0 库时那句「到探索发现下载 / 本地转换上传」是**错的**：这两条路都要求
+    <!-- 0 库时那句「到探索发现下载 / 本地导入上传」是**错的**：这两条路都要求
          先有可接收的书库，否则 400 拒收（第 38 期）。 -->
     <EmptyState v-else icon="file" title="还没有成品文件" :desc="emptyDesc" />
   </div>

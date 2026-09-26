@@ -73,7 +73,9 @@ def test_能力矩阵与中文标签():
     assert m["all"] == list(features.ALL_FEATURES)
     # 每个能力都要有中文名：书库管理页直接展示这份标签
     assert set(m["labels"]) == set(features.ALL_FEATURES)
-    assert features.labels()["convert"] == "本地转换（TXT → EPUB）"
+    # 第 62 期改标签（键名不变，含义收敛为「手动投递入库」）：TXT 已「只入库不转换」，
+    # 这个页面不再产出转换件 —— 标签必须跟着实际行为走，否则是明着骗用户。
+    assert features.labels()["convert"] == "本地导入（手动投递）"
 
 
 def test_混合库不裁剪任何能力(isolated):  # noqa: ARG001

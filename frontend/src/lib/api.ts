@@ -1450,7 +1450,6 @@ export interface MaintenanceInfo {
     recycle: DirUsage
   }
   library: { books: number }
-  capabilities: { ebook_convert: EbookConvertCap }
 }
 
 /** 通知条目 = 活动日志条目 + 稳定 id 与已读态（`GET /api/notifications`） */
@@ -1807,16 +1806,6 @@ export interface ConfigPayload {
   config_file: string
   settings_file: string
   backup_dir: string
-  capabilities: { ebook_convert: EbookConvertCap }
-}
-
-/** Calibre ebook-convert 能力探测 */
-export interface EbookConvertCap {
-  available: boolean
-  path: string
-  version: string
-  env_var: string
-  supported: string[]
 }
 
 /** config.yaml 原文 */

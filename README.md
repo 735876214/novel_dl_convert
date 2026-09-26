@@ -1,15 +1,21 @@
 # NovelForge（novel_dl_convert）
 
-TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub / denovel 的思路。
-面向 NAS / 服务器部署，输入与导出目录**物理分离**，避免源文件与成品混在一起。
+TXT 小说入库 + 阅读工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub / denovel 的思路。
+面向 NAS / 服务器部署，输入与书库目录**物理分离**，避免源文件与读到的书混在一起。
+
+> 第 62 期起 **TXT 只入库不转换**：投进 `input/` 的 `.txt` 与 EPUB / PDF 一样原样进书库，
+> 在线阅读时才按需生成派生 EPUB（带目录、可批注、有进度）；不再落一份转换产物到 `output/`。
+> 转换链路本身仍在 —— **书源下载**拿到的正文没有磁盘文件，仍由它组装成 EPUB。
 
 除此之外，Web 端本身是一个可用的**书库 + 阅读器**：管理成品（书架 / 元数据 / 统计 / 工具），
 直接在浏览器里读 ePub、PDF 与漫画，并把书库喂给第三方阅读器（OPDS / Komga / KOReader）。
 
 ## 功能
 
-- 多正则 + 缩进降级 + **AI 兜底**的章节识别（`-t` 可调试正则；配置 `llm.api_key` 后疑难章节自动调 LLM）
-- 编码多层 fallback（utf-8-sig / utf-8 / gb18030 / gbk / big5）
+- 多正则 + 缩进降级 + **AI 兜底**的章节识别（`-t` 可调试正则；配置 `llm.api_key` 后疑难章节自动调 LLM）；
+  第 62 期起**行首锚定**（正文中间提到「第 3 章」不再误切）+ 卷 / `【第1章】` / `（一）` 等新形态，规则版本写进派生缓存指纹
+- 编码探测按**字符分布判据**择优（utf-8-sig / utf-8 / gb18030 / big5hkscs / big5）——
+  「能解码」不等于「解对了」：繁体 Big5 书以前会被 GB18030 解成满屏乱码却「成功」
 - 文本精排、繁体转简体（opencc）
 - 三级元数据（文件名 / 正文头部 / 在线补全）
 - 基于 ebooklib 的 EPUB 组装（HTML 净化 + 封面）
@@ -17,11 +23,11 @@ TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub 
 - **下载加固**：类浏览器标头伪造、Cookie 持久化（LWPCookieJar 落盘）、429 退避重试、域名替换、**原生 JS eval**（Node 执行站点解密脚本）
 - **增量更新**：为下载得到的 txt 写 sidecar，日后只爬取新增章节再重转
 - **内容预览 API**：`/content?url=...` 即时抓取清洗（不落盘即可完美预览），`/supported` 判断 URL 归属
-- **输入目录自动监听**：扔进 `input` 的文件自动处理——`txt` 转 EPUB，非 `txt` 原样导出到 `output`
+- **输入目录自动监听**：扔进 `input` 的文件自动收进书库（原样入库，`.txt` 也不再转换）
 - **活动日志**：每一次「转换 / 添加 / 刮削」都记录时间、文件名、操作、成功或失败（Web 可查、可下载、CLI 可看）
 - **刮削出版**：扫描入库后自动刮元数据，并在**每库独立的成品目录**里硬链接出一份副本、
   把元数据写进**副本**——原书文件逐字节不变，外部阅读器（Komga 等）挂载成品目录即可读到整理完成的书
-- FastAPI 服务：上传即转、按路径转换、列出文件、下载成品、搜索、下载
+- FastAPI 服务：上传即入库、按路径入库、列出文件、下载成品、搜索、下载
 - **书库与阅读**：书架三视图 / 真实封面、ePub+PDF+漫画阅读器、进度与状态追踪、批注与收藏夹、数据统计、智能书架、九个工具 —— 见下两节
 
 ## 书库与阅读
@@ -72,7 +78,7 @@ TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub 
   **序号只存服务端、不改文件名、也不改写 EPUB 文件** —— 因此阅读进度 / 批注 / 评分 / 收藏都不会断链，
   可随时再排或还原（代价：用别的软件直读文件看到的是文件里的原始序号）
 - **工具**（9 个标签）：实体管理、批量重命名、重复书籍（同作者 + 书名相似度阈值可调）、缺失资源、
-  书源管理、导出目录、本地转换、转换日志（内含「日志 / 刮削」两个子标签）。
+  书源管理、导出目录、本地导入、转换日志（内含「日志 / 刮削」两个子标签）。
   会改磁盘的三个工具一律**先预览、再应用**，且「删除」是移入回收站（`CONFIG_DIR/cache/recycle`），
   **从不直接删文件**
 
@@ -137,7 +143,7 @@ TXT 小说转 EPUB 工具，融合 Fanqie-novel-Downloader / kaf-cli / txt2epub 
 
 | 放到 input 的文件 | 处理动作 | 日志 |
 |------------------|---------|------|
-| `*.txt` | 走转换管线生成 EPUB，落到 output | `转换` |
+| `*.txt` | **原样收进书库**（第 62 期起不再转 EPUB） | `添加` |
 | 其它文件（pdf / epub / zip / 图片…） | 原样复制到 output | `添加` |
 | 隐藏文件、临时文件（`.*`、`*.tmp`、`*.crdownload`、`*.meta.json`…） | 忽略 | — |
 
@@ -169,7 +175,7 @@ watcher:
   recursive: false        # 是否递归子目录
   settle_seconds: 1       # 文件写入稳定判定的单次等待
   stable_rounds: 2        # 连续 N 次大小不变才认为上传完成
-  copy_non_txt: true      # 非 txt 原样导出到 output
+  copy_non_txt: true      # 除 txt 外的格式是否也收（关掉 = 只收 txt）
   process_existing: true  # 启动时处理 input 里已有的存量文件
   max_retries: 3          # 单文件失败重试上限
   ignore: [".*", "*.tmp", "*.part", "*.crdownload", "*.meta.json", "*.log"]
@@ -201,7 +207,7 @@ python -m novelforge download --item '{"_source":"gutenberg","url":"...","title"
 # 增量更新本地 txt（需先经 download 生成 .meta.json sidecar）
 python -m novelforge update ./input/某书.txt
 
-# 监听 input 目录：txt 自动转 EPUB，非 txt 自动导出（前台常驻，Ctrl+C 停止）
+# 监听 input 目录：文件自动收进书库（前台常驻，Ctrl+C 停止）
 python -m novelforge watch --interval 5 --recursive
 
 # 只扫描一轮就退出（适合放进 cron / 任务计划）
@@ -249,8 +255,8 @@ docker compose up -d
 | `# user: "1026:100"` | 注释掉（=root） | 想让挂载目录里的文件归某个 NAS 用户所有时取消注释（群晖常见 `1026:100`） |
 | `# - HTTP_PROXY=…` | 注释掉（直连） | 容器要走代理才能访问书源 / 在线元数据时取消注释（Clash 跑在 NAS 主机上则填 `http://host.docker.internal:7890`） |
 
-- 访问 `http://<NAS-IP>:8992` 上传 txt 转 EPUB
-- **文件直接丢进 `./input` 即可**：txt 自动转 EPUB，其它文件自动导出到 `./output`，全程记日志（网页「转换日志」页可看）
+- 访问 `http://<NAS-IP>:8992` 上传文件入库
+- **文件直接丢进 `./input` 即可**：自动收进书库并记日志（网页「转换日志」页可看），在线阅读 TXT 时按需生成目录
 - **输入放 `./input`，成品落 `./output`**，互不影响
 - 在线书源：`POST /search`、`POST /download`；内容预览：`GET /content?url=`、`GET /supported?url=`
 - Synology Container Manager / QNAP Container Station：新建「项目 / 应用」，目录选上面那个部署目录即可
@@ -297,7 +303,7 @@ novel_dl_convert/
                        + scrape.py（刮削台账状态机与单线程 worker，含「待确认」处置）
                        + stats.py（统计聚合）· achievements.py · recommend.py（相似书）
                        + auth.py（单用户轻登录）· comics.py（CBZ 解包）· fonts.py（字体管理）
-                       + ebook_convert.py（Calibre 派生兜底，缺失时降级 EPUB）
+
                        + opds.py（对外 OPDS 目录）
                        + komga.py（Komga 库布局与系列推断）· koreader.py（kosync 进度互通）
                        + integrations.py（Hardcover / Readwise / StoryGraph 凭据与验证）
@@ -347,8 +353,8 @@ novel_dl_convert/
     相似的书聚成一组，每组选一项保留、其余移入回收目录。
   - **缺失资源**：列出零字节 / 无法解析 / 缺封面的成品文件，并逐条说明原因。
   - **书源管理**：查看已注册书源，粘贴 JSON 或上传文件批量添加，可删除用户源。
-  - **导出目录**：列出 EPUB 成品与下载留档的 txt，提供下载。
-  - **本地转换**：拖拽上传本地 txt 直接转 EPUB、按路径转换、监听目录启停与立即扫描。
+  - **导出目录**：列出成品与下载留档的 txt，提供下载。
+  - **本地导入**：拖拽上传本地文件直接入库、按路径入库、监听目录启停与立即扫描。
   - **转换日志**：全部活动日志（时间 / 文件名 / 操作 / 成败，支持过滤、下载、清空）。
 - **书架**：三视图（网格 / 列表 / 表格）+ 搜索 / 排序 / 系列折叠 / 多选批量；书卡用真实内嵌封面。
 - **单书详情**：概览 / 目录 / 文件 / 批注 / 阅读状态（评分与书评、相似书推荐）等标签，

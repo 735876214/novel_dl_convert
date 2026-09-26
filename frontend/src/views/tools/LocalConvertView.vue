@@ -9,7 +9,14 @@ import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useUiStore } from '@/stores/ui'
 
-/** 本地转换：拖拽上传 TXT → EPUB；监听目录状态与手动扫描。接真实 /convert、/api/watcher、/api/scan */
+/**
+ * 本地导入（路由名仍是 tools-local）：拖拽上传 / 按路径把文件交给 `pipeline.dispatch`
+ * 收进书库，并展示监听目录状态与手动扫描。接真实 /convert、/api/watcher、/api/scan。
+ *
+ * 第 62 期起 TXT **只入库不转换**（阅读时按需生成派生 EPUB，见 core/txtcache.py），
+ * 所以这里不再有「转成繁体」开关 —— 它只对转换链路有意义，而这条链路已经没有了。
+ * 页面标题仍是历史命名，路由与键名不动（`features.labels()` 里的标签已改名）。
+ */
 const ui = useUiStore()
 const library = useLibraryStore()
 const wizard = useLibraryWizardStore()
@@ -21,17 +28,15 @@ function openWizard(): void {
 
 const dragging = ref(false)
 const busy = ref(false)
-const traditionalize = ref(false)
 const watcher = ref<WatcherStatus | null>(null)
 const inputFiles = ref<FileEntry[]>([])
 const pathValue = ref('')
 const lastResult = ref('')
 
 /**
- * 上传/拖拽允许的扩展名（与后端 `POST /convert` 的允许集一致：
- * `.txt` ∪ `core/pipeline.EBOOK_EXT`，EBOOK_EXT 含 .epub/.mobi/.azw3/.pdf/.fb2/.cbz/.cbr
- * 与 `core/audio.AUDIO_EXTS`）。这里不再写死 .txt——前端只做**预校验**（后端 400 才报错，
- * 但前端应提前给出可读提示，不留「点了没反应」）。
+ * 上传/拖拽允许的扩展名（与后端 `POST /convert` 的允许集一致 = `core/pipeline.EBOOK_EXT`，
+ * 含 .txt/.epub/.mobi/.azw3/.pdf/.fb2/.cbz/.cbr 与 `core/audio.AUDIO_EXTS`）。
+ * 前端只做**预校验**（后端 400 才报错，但前端应提前给出可读提示，不留「点了没反应」）。
  */
 const ALLOWED_EXT = [
   '.txt', '.epub', '.mobi', '.azw3', '.pdf', '.fb2', '.cbz', '.cbr',
@@ -115,7 +120,7 @@ function convertFiles(fileList: FileList | File[]): void {
 
   allowed.forEach((file) => {
     api
-      .convertFile(file, traditionalize.value)
+      .convertFile(file)
       .then(({ blob, filename }) => {
         // 文件名用后端给的真实产物名（Content-Disposition），不再自己拼 .epub（避免 x.epub.epub）
         saveBlob(blob, filename)
@@ -160,7 +165,7 @@ function convertByPath(): void {
   }
   busy.value = true
   api
-    .convertPath(p, traditionalize.value)
+    .convertPath(p)
     .then(({ blob, filename }) => {
       // /convert-path 与 /convert 同口径返回文件流，文件名由后端给（不会是 x.epub.epub）
       saveBlob(blob, filename)
@@ -200,14 +205,14 @@ function scan(): void {
     <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
       <!-- 上传区 -->
       <Card>
-        <h3 class="text-[13px] font-semibold text-foreground">拖拽上传</h3>
+        <h3 class="text-[13px] font-semibold text-foreground">拖拽上传（收进书库）</h3>
         <p class="mt-1 mb-2.5 text-[11.5px] text-muted-foreground">
           <template v-if="library.hasNoLibraries">
-            还没有书库：转换结果需要有地方落，现在上传会被拒收。请先
+            还没有书库：收到的东西需要有地方落，现在上传会被拒收。请先
             <button type="button" class="underline" @click="openWizard">新建一个书库</button>。
           </template>
           <template v-else>
-            把 TXT 或常见电子书/漫画/音频交给流水线；TXT 会转成带目录的 EPUB，其余格式按原样入库，或交给下方监听目录自动处理。
+            把 TXT 或常见电子书/漫画/音频交给流水线，**一律按原样入库**（TXT 的目录在阅读时按需生成，见阅读器），或交给下方监听目录自动处理。
           </template>
         </p>
 
@@ -225,32 +230,27 @@ function scan(): void {
             </svg>
           </span>
           <span class="mt-3 text-[13px] font-medium text-foreground">把文件拖到这里，或点击选择</span>
-          <span class="mt-1 text-[11.5px] text-muted-foreground">支持 TXT / EPUB / MOBI / PDF / CBZ 等电子书与常见音频；支持多选，逐个转换并下载</span>
-        </label>
-
-        <label class="mt-3 flex cursor-pointer items-center gap-2 text-[12.5px] text-foreground">
-          <input v-model="traditionalize" type="checkbox" class="h-3.5 w-3.5 accent-[var(--primary)]">
-          转成繁体
+          <span class="mt-1 text-[11.5px] text-muted-foreground">支持 TXT / EPUB / MOBI / PDF / CBZ 等电子书与常见音频；支持多选，逐个入库并下载</span>
         </label>
 
         <p v-if="lastResult" class="mt-2 text-[11.5px] text-success">{{ lastResult }}</p>
-        <p v-if="busy" class="mt-2 text-[11.5px] text-muted-foreground">转换中…</p>
+        <p v-if="busy" class="mt-2 text-[11.5px] text-muted-foreground">处理中…</p>
       </Card>
 
       <!-- 路径转换 + 监听 -->
       <div class="flex min-w-0 flex-col gap-4">
         <Card>
-          <h3 class="mb-2.5 text-[13px] font-semibold text-foreground">按路径转换</h3>
+          <h3 class="mb-2.5 text-[13px] font-semibold text-foreground">按路径入库</h3>
           <div class="flex items-center gap-2">
             <input
               v-model="pathValue"
               type="text"
               placeholder="相对 input 目录，例如 小说/某书.txt 或 漫画.cbz"
-              aria-label="待转换文件路径"
+              aria-label="待入库文件路径"
               class="h-8 min-w-0 flex-1 rounded-md border border-border bg-muted px-3 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
               @keydown.enter="convertByPath"
             >
-            <Button variant="primary" :disabled="busy" @click="convertByPath">转换</Button>
+            <Button variant="primary" :disabled="busy" @click="convertByPath">入库</Button>
           </div>
 
           <h3 class="mt-5 mb-2 text-[13px] font-semibold text-foreground">input 目录</h3>
@@ -277,7 +277,7 @@ function scan(): void {
             </Badge>
           </div>
           <p class="mb-3 text-[11.5px] text-muted-foreground">
-            开启后，放进 input/ 的 TXT 会被自动转换并输出到 output/。
+            开启后，放进 input/ 的文件会被自动收进书库（按原样入库，TXT 也不会被转换）。
           </p>
           <div class="flex items-center gap-2">
             <Button :variant="watcherRunning ? 'ghost' : 'primary'" @click="toggleWatcher">

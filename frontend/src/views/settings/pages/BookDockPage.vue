@@ -662,7 +662,7 @@ onBeforeUnmount(() => {
       <div class="text-[12.5px] leading-relaxed text-muted-foreground">
         上游对应入口：侧栏 <span class="font-mono">Book Dock</span>。
         相关页：<RouterLink to="/settings/ext/watcher" class="underline">监听</RouterLink>（
-        轮询与稳定判定参数）、<RouterLink to="/tools/local" class="underline">工具 → 本地转换</RouterLink>（单文件投递）。
+        轮询与稳定判定参数）、<RouterLink to="/tools/local" class="underline">工具 → 本地导入</RouterLink>（单文件投递）。
       </div>
     </Card>
 

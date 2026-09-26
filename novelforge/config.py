@@ -100,7 +100,9 @@ os.environ.setdefault("LOG_DIR", str(LOG_DIR))
 DEFAULTS = {
     "chapter_detection": {"mode": "hybrid", "context_lines": 3, "fallback": "regex"},
     "traditionalize": False,
-    # format: epub；mobi/azw3 需本机 Calibre ebook-convert
+    # format: **只剩 epub**（第 62 期）。派生 MOBI / AZW3 依赖本机 Calibre，而产物不进书目，
+    #         收益抵不上成本，整条派生链路已删。键保留是为了兼容旧 settings.json ——
+    #         值域校验（server.FORMAT_CHOICES）与前端下拉都还从它取值。
     # layout: flat  = 全部平铺在 OUTPUT_DIR（原行为）
     #         komga = 有系列的书放 ``系列名/系列名 #N.ext``，让 Komga 扫描后正确成系列
     #                 （Komga 不递归系列目录的子目录，故最多一层；无系列的书仍平铺）
@@ -110,7 +112,10 @@ DEFAULTS = {
     # 可用占位符见 core/fileops.PATTERN_FIELDS；扩展名由后端自动追加，模式里不要写 {ext} 之外的后缀
     "naming": {
         "pattern": "{author} - {title}",
-        "scope": "all",             # all / epub / mobi / azw3 / pdf / txt
+        # 作用范围：all，或某个扩展名（epub / pdf / txt …）。第 62 期 epub 是唯一的
+        # **转换产物**格式，但 scope 照样可以按扩展名筛 —— 它是「副本命名规则对哪些
+        # 条目生效」，与转换无关（pdf / txt / cbz 这些原样入库的照样按它命名）。
+        "scope": "all",
     },
     # 刮削出版（第 18 期）：把刮削结果写进**硬链接副本**，源文件永不改动 ——
     # 这样外部阅读器（Komga 等）能读到整理完成的书，而原作逐字节保持原样。

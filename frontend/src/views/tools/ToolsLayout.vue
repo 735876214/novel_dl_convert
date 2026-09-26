@@ -17,7 +17,7 @@ import { useLibraryStore } from '@/stores/library'
  *   2. `KeepAlive :max` 由 3 提到 8（标签从 4 个变 8 个），否则轮换时缓存被
  *      LRU 淘汰，列表 / 筛选 / 滚动位置会反复重建。
  *   3. 上游用 hasPermission 过滤标签，本项目用**库类型的能力清单**过滤
- *      （第 10 期）：漫画库里不显示「本地转换」，有声书库里不显示「书源管理」。
+ *      （第 10 期）：漫画库里不显示「本地导入」，有声书库里不显示「书源管理」。
  *   4. 本项目原有「书库管理」一页，**第 49 期已迁回设置页**（settings-libraries），
  *      工具页不再单列 —— 与上游一致：书库管理本就属于设置页。
  */
@@ -36,7 +36,9 @@ const SECTIONS: ToolSection[] = [
   { label: '缺失资源', routeName: 'tools-missing-resources' },
   { label: '书源管理', routeName: 'tools-sources', feature: 'sources' },
   { label: '导出目录', routeName: 'tools-output' },
-  { label: '本地转换', routeName: 'tools-local', feature: 'convert' },
+  // 标签跟 `features.labels()["convert"]` 同步：第 62 期 TXT 改成「只入库不转换」后，
+  // 这个页面（路由名仍是 tools-local）做的是**手动投递入库**，不再是转换。
+  { label: '本地导入', routeName: 'tools-local', feature: 'convert' },
   { label: '转换日志', routeName: 'tools-logs' },
 ]
 

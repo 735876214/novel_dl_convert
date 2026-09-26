@@ -42,7 +42,10 @@ export const CONVERSION_FIELDS: FieldDef[] = [
     hint: 'AI 调用失败时回退到正则',
     options: [{ value: 'regex', label: 'regex' }],
   },
-  { path: 'traditionalize', label: '繁体转简体', type: 'bool', hint: '转换时用 opencc 繁转简' },
+  // 第 62 期起 TXT 只入库不转换，这个开关**对投递/入库链路不再生效** —— 现在只有
+  // 书源下载与 CLI（`--traditionalize`）还走转换。hint 里如实写明，别让人以为
+  // 打开它就能把库里那本繁体 TXT 转过来。
+  { path: 'traditionalize', label: '繁体转简体', type: 'bool', hint: '仅对书源下载与 CLI 转换生效；投递入库已不转换，故对它无效' },
   { path: 'llm.api_key', label: 'LLM API Key', type: 'password', hint: '已配置时留空即可，不会覆盖原值' },
   { path: 'llm.base_url', label: 'LLM 接口地址', type: 'text', placeholder: 'https://api.openai.com/v1' },
   { path: 'llm.model', label: 'LLM 模型', type: 'text', placeholder: 'gpt-4o-mini' },

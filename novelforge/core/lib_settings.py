@@ -32,8 +32,9 @@ from . import db, features, library
 #: ⚠️ ``percent`` 与 ``number`` 是**两种类型**：``number`` 的合法区间是 0–1（如置信度阈值），
 #: ``percent`` 是 0–100（如阅读百分比）。混用会让「98%」被判成越界。
 ITEMS = (
-    ("output.format", "转换产物格式", "enum", ("epub", "mobi", "azw3"),
-     "派生 MOBI / AZW3 需要 Calibre，缺失时自动降级为 EPUB"),
+    # 第 62 期删掉了 ``output.format``（只剩 epub，没得选）：派生 MOBI / AZW3 依赖本机
+    # Calibre，而它的产物**不进书目**（书库只读 EPUB 章节树），却要常驻一条外部依赖 +
+    # 一套降级提示。TXT 同期也改成「只入库不转换」，转换链路只剩书源下载在用。
     ("output.layout", "落盘布局", "enum", ("flat", "komga"),
      "komga = 有系列的书落「系列名/系列名 #N.ext」"),
     ("watcher.recursive", "递归子目录", "bool", None,
@@ -348,7 +349,7 @@ def set_overrides(library_id, values: dict) -> dict:
     # ⚠️ 两处刻意的设计：① 按**合并后**的生效值判，不只看本次提交的键 —— 本次可能只改了
     # 其中一项，另一项来自全局，只看提交项会放过「改完就自相矛盾」的组合；
     # ② 只在**本次确实动了阅读阈值**时才判 —— 否则全局配置被手改坏之后，
-    # 改任何一个无关项（如 output.format）都会报一个莫名其妙的阅读阈值错误。
+    # 改任何一个无关项（如 output.layout）都会报一个莫名其妙的阅读阈值错误。
     if any(k in values for k in _READING_KEYS):
         started, finished = _reading_pair_from(ov)
         if started >= finished:

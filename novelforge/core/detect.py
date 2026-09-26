@@ -4,33 +4,102 @@
 （`sources/*`）、AI 兜底（`core/ai_detect.py` 复用本模块的 bounds/split）与
 原生 TXT 阅读器全部经此。改这里 = 同时改出版成品目录与阅读器章节流，
 所以契约由 `tests/test_detect_chapters.py` 钉住，别在别处再写第二份切分。
+
+**第 62 期两处口径变化**（都在 `CHAPTER_RULE_VERSION` 里记了一笔）：
+
+1. **行首锚定**：所有模式都要求标记落在**行首**（允许行首空白，但不跨行）。
+   此前「第 N 章」在正文段落中间照样算边界，于是正文里提一句「第 3 章讲过」
+   就把段落切成了两章 —— 目录凭空多出条目，且正文被拦腰截断。
+2. **补模式**：卷单独成行 / `卷一 起风` / `【第1章】` / `（一）` / 全角句点 `1．风`，
+   并把 `序章|楔子|番外` 一类从「只捕获标记本身」改成**捕获整行**
+   （`番外一 开始` 原先只拿到「番外」，「一 开始」被丢掉）。
 """
 import re
 
+#: 分章**规则版本号**：规则一改就 +1。``core/txtcache.py`` 把它写进派生缓存的指纹 ——
+#: 否则存量 TXT 书的派生 EPUB 会一直沿用旧目录，改了规则**看不见效果**（缓存命中就返回，
+#: 不会重切）；版本号一变即触发重建，活动日志里也留得下痕迹。
+CHAPTER_RULE_VERSION = 2
+
+#: 行首锚定：允许行首的行内空白（**含全角空格**，中文文本常用它缩进），但用
+#: ``[ \t　]*`` 而**不是** ``\s*`` —— 后者能吃掉换行，等于没锚定（``^`` 从上一行
+#: 行首起步、一路吃过空行再命中下一行的 `第`，起点也落在错误的位置上）。
+_LEAD = r"^[ \t　]*"
+#: 行尾（允许行尾空白与 CRLF 的 ``\r``：读盘时通用换行会吃掉它，但书源给的正文不会）
+_END = r"[ \t　]*\r?$"
+_SP = r"[ \t　]*"
+_NUM = r"[零一二三四五六七八九十百千万亿两0-9]+"
+_CHAP_UNIT = r"[章节回话集幕篇]"
+_VOL_UNIT = r"[卷部]"
+#: 卷标题 / 括号标题允许的**附加文字上限**：真正的标题行是短行，长段落不是。
+#: 上限之外一律不认 —— 宁可漏一个标题，也不要让正文段落被误判成卷首。
+_TITLE_MAX = 20
+#: 卷首的两种写法：**数字在「卷/部」之前**（第一卷 / 第二部）与**在「卷」之后**（卷一）。
+#: 两者都得列，不能写成「第?数字卷」—— ``第?`` 取空以后 ``_NUM`` 要去匹配「卷」，
+#: 那是字符集外的字，整条模式在这个位置上直接失败（``卷一 起风`` 就是这么漏掉的）。
+_VOL_HEAD = rf"(?:第{_SP}{_NUM}{_SP}{_VOL_UNIT}|卷{_SP}{_NUM})"
+#: 卷首后面跟的标题：必须有**真分隔符**（分隔号或至少一个空格）。否则
+#: 「一部分……」「第一卷的内容……」这类普通句子会被整行判成卷首。
+_VOL_TAIL = rf"(?:[：:、\-——]{_SP}[^\n]{{1,{_TITLE_MAX}}}|[ \t　]+[^\n]{{1,{_TITLE_MAX}}})?"
+
 # 多正则：覆盖常见章节标记（中文数字/阿拉伯/No./Chapter/序章番外等）
 CHAPTER_PATTERNS = [
-    re.compile(r"第\s*[零一二三四五六七八九十百千万亿0-9]+\s*[卷部]\s*[：:]*\s*第\s*[零一二三四五六七八九十百千万亿0-9]+\s*[章节回话集幕篇]"),
-    re.compile(r"第\s*[零一二三四五六七八九十百千万亿0-9]+\s*[章节回话集幕篇]"),
-    re.compile(r"^\s*No[、.．]\s*\d+\s*.+", re.M),
-    re.compile(r"^\s*Chapter\s+\d+", re.M | re.I),
-    re.compile(r"^\s*(序章|楔子|引子|前言|后记|番外)", re.M),
-    re.compile(r"^\s*[0-9]+\s*[\.、]\s*.+", re.M),
-    re.compile(r"^\s*[一二三四五六七八九十]+\s*[\.、]\s*.+", re.M),
+    # 卷 + 章 一行写全：第二卷 第三章 / 第二卷：第三章
+    re.compile(_LEAD + rf"第{_SP}{_NUM}{_SP}{_VOL_UNIT}{_SP}[：:、]{_SP}第{_SP}{_NUM}{_SP}{_CHAP_UNIT}", re.M),
+    # 第N章 / 第N回 / 第N节 …（**行首**）
+    re.compile(_LEAD + rf"第{_SP}{_NUM}{_SP}{_CHAP_UNIT}", re.M),
+    # 卷单独成行：第一卷 / 第二部 / 卷一 起风 / 第二部：风起
+    re.compile(_LEAD + _VOL_HEAD + _VOL_TAIL + _END, re.M),
+    # 括号形式：【第1章】/ [第三章] / （十二）
+    re.compile(_LEAD + rf"[【\[（(]{_SP}第{_SP}{_NUM}{_SP}{_CHAP_UNIT}{_SP}[】\]）)]", re.M),
+    # （一）这种整行括号数字：**只认中文数字** —— 「（1）」在正文里更像列表项 / 脚注编号，
+    # 认它得不偿失（漏掉的「（1）」正文多半另有「第一章」可切）。
+    re.compile(_LEAD + r"[（(]" + _SP + r"[零一二三四五六七八九十百千万亿两]+" + _SP
+               + r"[）)][^\n]{0,12}" + _END, re.M),
+    re.compile(_LEAD + r"No[、.．]" + _SP + r"\d+" + _SP + r".+", re.M),
+    re.compile(_LEAD + r"Chapter" + _SP + r"\d+", re.M | re.I),
+    # 序章 / 楔子 / 引子 / 前言 / 后记 / 番外 / 尾声：**捕获整行**（此前只捕获标记本身，
+    # `番外一 开始` 的「一 开始」会被丢掉）。代价是「番外」开头且整行 ≤24 字的正文行
+    # 会被误判成章首，而标题超过 24 字的真章首会被漏掉 —— 两头都罕见，比丢字强。
+    re.compile(_LEAD + rf"(?:序章|序言|楔子|引子|前言|后记|后記|尾声|终章|番外)"
+               rf"[^\n]{{0,{_TITLE_MAX}}}{_END}", re.M),
+    re.compile(_LEAD + r"[0-9]+" + _SP + r"[\.、．·]" + _SP + r".+", re.M),
+    re.compile(_LEAD + r"[一二三四五六七八九十]+" + _SP + r"[\.、．·]" + _SP + r".+", re.M),
 ]
-MIN_CHARS, MAX_CHARS = 80, 50_000
+#: :func:`_is_volume` 用的锚定版（``re.match`` 自带行首锚定，不需要 ``re.M``）
+_VOL_HEAD_RE = re.compile(_VOL_HEAD)
 # 仅当章节正文短于此值时才并入上一章（避免吞掉真实短章），默认不合并由调用方控制
 MERGE_MIN_LEN = 20
 
 
 def regex_bounds(text: str) -> list[tuple[int, str]]:
-    """返回正则命中的 (字符偏移, 标题) 列表，已按偏移排序去重。"""
-    return sorted(
-        {(m.start(), m.group(0).strip()) for p in CHAPTER_PATTERNS for m in p.finditer(text)}
-    )
+    """返回正则命中的 (字符偏移, 标题) 列表，已按偏移排序去重。
+
+    去重口径：**同一个起点只留一个边界，取标题更长的那个**。同一个位置被两条模式
+    同时命中是常态（``第二卷 第三章 风起`` 既被「卷+章」命中、又被「卷单独成行」
+    整行命中），留下两个同偏移的边界会在 :func:`split_by_offsets` 里切出一个
+    正文为空的假章（``text[pos:pos]``）。
+    """
+    best: dict[int, str] = {}
+    for p in CHAPTER_PATTERNS:
+        for m in p.finditer(text):
+            title = m.group(0).strip()
+            if not title:
+                continue
+            cur = best.get(m.start())
+            if cur is None or len(title) > len(cur):
+                best[m.start()] = title
+    return sorted(best.items())
 
 
 def _is_volume(title: str) -> bool:
-    return bool(re.match(r"第.+[卷部]", title))
+    """这条边界是不是**卷首**（决定 ``vol`` 字段，供阅读器/成品做卷分组）。
+
+    第 62 期放宽了两处：① ``卷一 起风`` 这种数字在后的写法此前不认；
+    ② ``第.+[卷部]`` 的 ``.+`` 贪婪又要求**以**卷/部收尾，于是「第二卷 第一章」
+    这种「卷+章写在一行」的写法反而不算卷首 —— 改成**前缀匹配**。
+    """
+    return bool(_VOL_HEAD_RE.match(title))
 
 
 def split_by_offsets(text: str, bounds: list[tuple[int, str]], merge: bool = False) -> list[dict]:

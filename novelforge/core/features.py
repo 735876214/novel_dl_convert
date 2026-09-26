@@ -33,7 +33,11 @@ FEATURE_LABELS = {
     "bookmarks": "书签",
     "metadata": "元数据抓取",
     "authors": "作者元数据",
-    "convert": "本地转换（TXT → EPUB）",
+    # 「convert」这个键名是第 21 期定的，含义自第 62 期起收敛为**手动投递入库**
+    # （第 62 期 TXT 改成「只入库不转换」，「本地转换」这个页面已不再产出转换件，
+    # 只把上传 / 指定路径的文件交给 `pipeline.dispatch` 收进书库）—— 与 `rename`
+    # 一样：键名保留（它同时是导航门槛与能力矩阵的列名），标签按当下含义写。
+    "convert": "本地导入（手动投递）",
     "sources": "书源搜索与下载",
     "komga": "Komga 布局整理",
     # 「rename」这个键名是第 13 期定的，含义自第 28 期起收敛为**副本命名规则**
@@ -54,7 +58,9 @@ _COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"
 #:   · 元数据抓取与手动编辑：都只存服务端 DB、与文件格式无关 → ebook / comic / audiobook 都适用
 #:     （手动编辑自第 22 期起不限格式；非 EPUB 没有 OPF 兜底原值层，「恢复」即回落在线的抓取值）
 #:   · 作者元数据：与作者检索绑定，目前只有 ebook / mixed（`authors` 键仍只给 ebook）
-#:   · 本地转换产出 EPUB → 仅 ebook
+#:   · 手动投递（上传 / 按路径入库）→ 仅 ebook（第 62 期起它的产出不再限于转换件，
+#:     但门槛沿用旧口径**没放宽** —— 放宽等于给漫画 / 有声书库也开一个工具入口，
+#:     那是独立一期的评估，不在本期「TXT 收敛」的范围内）
 #:   · 书源下载产出 EPUB → 仅 ebook
 #:   · Komga 布局整理针对系列化目录（电子书 / 漫画）→ ebook + comic
 #:   · 批注与书签都长在**文字阅读器**里（漫画 / PDF 是另外两个阅读器、有声书是播放器）
@@ -76,7 +82,7 @@ ALL_FEATURES = sorted(set().union(*FEATURES_BY_TYPE.values()))
 #: 键是全局配置的**点分路径**（与 `libraries.settings` 里存的一致）。
 #: 未登记的键 = 无条件可用（如递归子目录 / 非 TXT 收取，任何类型的库投递时都可能需要）。
 SETTING_CAPS = {
-    "output.format": "convert",              # 派生 MOBI/AZW3 依赖 Calibre 转换能力
+    # 第 62 期去掉 ``output.format``：格式收敛为 epub，不再依赖 Calibre 转换能力。
     "output.layout": "komga",                # Komga 布局（系列目录）只对电子书 / 漫画有意义
     "metadata_fetch.enabled": "metadata",     # 在线元数据抓取（服务侧存储，不下写 EPUB）
     "metadata_fetch.auto_on_import": "metadata",

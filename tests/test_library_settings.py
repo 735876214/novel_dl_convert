@@ -143,39 +143,56 @@ def test_policy_map_all_fields_reset_drops_the_override(isolated, make_library, 
 
 
 # ---------------------------------------------------------------------------
-# 能力联动：漫画库没有元数据能力
+# 能力联动：漫画库也有元数据能力；有声书库没有 Komga 那一档
 # ---------------------------------------------------------------------------
+#
+# ⚠️ 第 62 期换了**受测主体**：此前拿「漫画库没有 ``output.format``（派生 MOBI 要 Calibre）」
+# 当反例，而本期把 ``output.format`` 从覆盖项里整个删掉了 —— 它会因为「未登记项」被拒，
+# 于是这两条用例**照样会绿，却不再证明任何事**（gating 就算整段坏掉也看不出来）。
+# 换成有声书库 + ``komga`` 档（``output.layout`` / ``scrape.enabled`` / ``komga.expose``）：
+# 有声书库确实没有 Komga 能力（Komga 不收有声书），而它是**仍然登记着**的覆盖项。
 
-def test_comic_library_exposes_metadata_but_not_convert(isolated, make_library, tmp_path):
-    """第 21 期：抓取不再按格式分流 → 漫画库也暴露并接受它；**本地转换**仍只给电子书库。"""
+def test_comic_library_exposes_metadata(isolated, make_library, tmp_path):
+    """第 21 期：抓取不再按格式分流 → 漫画库也暴露并接受它。"""
     lid = "comic-a"
     make_library(lid, "漫画库", "comic", tmp_path / "libraries" / lid)
 
     keys = [s["key"] for s in lib_settings.schema("comic")]
     assert "metadata_fetch.fields" in keys        # 抓取对漫画库同样适用
-    assert "output.format" not in keys            # 派生 MOBI 依赖 Calibre 转换能力，漫画库没有
+    assert "output.layout" in keys                # 漫画库有 komga 能力（漫画是 Komga 的主力）
     assert "watcher.recursive" in keys            # 未登记能力的项 = 无条件可用
 
     lib_settings.set_overrides(lid, {"metadata_fetch.enabled": True})
     assert lib_settings.effective(lid)["values"]["metadata_fetch.enabled"] is True
 
-    with pytest.raises(ValueError):
-        lib_settings.set_overrides(lid, {"output.format": "mobi"})
 
-    assert "output.format" not in lib_settings.effective(lid)["values"]
+def test_audiobook_library_hides_komga_settings(isolated, make_library, tmp_path):
+    """有声书库没有 ``komga`` 能力 ⇒ 三个 Komga 档的覆盖项**不返回也不接受也不生效**。"""
+    lid = "audio-a"
+    make_library(lid, "有声书库", "audiobook", tmp_path / "libraries" / lid)
+
+    keys = [s["key"] for s in lib_settings.schema("audiobook")]
+    for key in ("output.layout", "scrape.enabled", "komga.expose"):
+        assert key not in keys, key
+    assert "metadata_fetch.fields" in keys        # 抓取与格式无关，有声书库照样有
+    assert "watcher.recursive" in keys
+
+    with pytest.raises(ValueError):
+        lib_settings.set_overrides(lid, {"output.layout": "komga"})
+
+    assert "output.layout" not in lib_settings.effective(lid)["values"]
 
 
 def test_stale_override_does_not_activate_after_type_change(isolated, make_library, tmp_path):
     """库里残留着「类型改过之前」写的覆写：能力不匹配 → **不生效**（也不应该突然活过来）。"""
-    lid = "comic-a"
-    make_library(lid, "漫画库", "comic", tmp_path / "libraries" / lid)
-    # 用**仍然不匹配**的能力项：漫画库没有 convert（第 21 期起它已经有了 metadata）
-    db.update_library(lid, settings=json.dumps({"output.format": "mobi"}))
+    lid = "audio-a"
+    make_library(lid, "有声书库", "audiobook", tmp_path / "libraries" / lid)
+    db.update_library(lid, settings=json.dumps({"output.layout": "komga"}))
 
     res = lib_settings.effective(lid)
-    assert "output.format" not in res["values"]
-    assert lib_settings.config_for(lid)["output"]["format"] == \
-        config.load_config()["output"]["format"]
+    assert "output.layout" not in res["values"]
+    assert lib_settings.config_for(lid)["output"]["layout"] == \
+        config.load_config()["output"]["layout"]
 
 
 # ---------------------------------------------------------------------------
@@ -183,8 +200,8 @@ def test_stale_override_does_not_activate_after_type_change(isolated, make_libra
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("patch", [
-    {"output.format": "pdf"},                       # 枚举外
     {"output.layout": "tree"},                      # 枚举外
+    {"output.layout": 5},                           # 枚举外（非字符串也走同一条路）
     {"metadata_fetch.threshold": 1.5},              # 区间外
     {"metadata_fetch.threshold": "abc"},            # 非数字
     {"naming.pattern": "a/b.epub"},                 # 路径分隔符（会被当文件名用）

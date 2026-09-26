@@ -1,8 +1,9 @@
-"""输入目录监听：上传到 input 的文件自动处理并导出到 output。
+"""输入目录监听：上传到 input 的文件自动处理并收入书库。
 
-规则（需求）：
-1. ``.txt``  → 走转换管线生成 EPUB，导出到导出目录（日志记为「转换」）
-2. 非 ``.txt`` → 原样复制到导出目录（日志记为「添加」）
+规则：
+1. 已知格式（``pipeline.EBOOK_EXT``，第 62 期起**含 ``.txt``**）→ 原样复制到目标
+   书库根（日志记为「添加」）；``.txt`` 不再转成 EPUB，理由见 `core/pipeline.dispatch`
+2. 其余格式 → 看 ``watcher.copy_non_txt``，开启则同样原样复制，关闭则跳过
 3. 每一次处理都写活动日志：时间 / 文件名 / 操作 / 成功或失败
 
 实现说明：
@@ -181,6 +182,14 @@ class FolderWatcher:
         self.last_scan = 0.0
         # 主循环 tick 间隔（秒）：短间隔轮询，各目标按自己的 interval/cron 决定是否真扫
         self.tick_interval = float(self.interval)
+        # 第 62 期：书目索引的**全量兜底**间隔（秒）。脏库每轮都刷，但「用户绕过 App
+        # 直接往 NAS 目录里丢文件」不会标脏 —— 那类变更只能靠定时全量兜住。
+        self.index_interval = float(
+            kw.get("index_interval")
+            or ((self.cfg or {}).get("libraries", {}) or {}).get("index_interval")
+            or 60.0
+        )
+        self._index_last = 0.0
         # 各扫描目标的上次实际扫描时刻（按 tkey 分桶，避免跨目标互相干扰）
         self._target_last: dict = {}
         self.stats = {"converted": 0, "added": 0, "failed": 0, "scans": 0}
@@ -450,26 +459,17 @@ class FolderWatcher:
                 activity_log.log_add_fail(p.name, f"{type(e).__name__}: {e}", size=0, source="watcher")
                 return ("failed", str(e))
 
-        if p.suffix.lower() == ".txt":
-            try:
-                opts = self._opts(cfg)
-                # 转换产物也落**目标库根**（原来固定写默认库根，绕过了归库规则：
-                # 投到 libraries/ebooks/ 的 txt 会被转进默认库，与「按子目录名归库」相矛盾）
-                out = pipeline.convert_txt(p, root, opts)
-                activity_log.log_convert_ok(
-                    p.name, Path(out).name, size=size, duration_ms=dur(),
-                    source="watcher", detail=opts.get("_notice", ""),
-                )
-                auto_fetch_async(Path(out).name, cfg)
-                enqueue_scrape_async(Path(out).name, lib, cfg)
-                return ("converted", str(out))
-            except Exception as e:
-                activity_log.log_convert_fail(
-                    p.name, f"{type(e).__name__}: {e}", size=size, duration_ms=dur(), source="watcher"
-                )
-                return ("failed", str(e))
-
-        if not copy_non_txt:
+        # 第 62 期：``.txt`` 不再走转换 —— 与 EPUB / PDF 同路**原样复制**入目标库根。
+        # 理由见 `pipeline.dispatch`：阅读链路本来就走 txtcache 的派生 EPUB 缓存，
+        # 入库时再转一份是重复劳动，还多一条「转不动（超大 / 编码坏）就整本进不来」
+        # 的失败路径。于是原来那条 ``.txt → pipeline.convert_txt`` 分支整个删掉，
+        # TXT 与其它格式共用下面同一段复制逻辑（布局、同名闸门、auto_fetch 一并继承）。
+        #
+        # ``copy_non_txt`` 的语义随之收窄为「**除 TXT 外**的格式收不收」（见 lib_settings
+        # 的对应文案）—— 关掉它仍旧是「只收 TXT」，而 TXT 现在也是复制入库，正是这个
+        # 开关本来的意思；若照旧写成「非 txt 一律跳过」，关掉它的用户会发现**连 TXT
+        # 都收不进来**，与开关的名字正好相反。
+        if not copy_non_txt and p.suffix.lower() != ".txt":
             return ("skipped", "非 txt 且已关闭 copy_non_txt")
 
         try:
@@ -705,8 +705,39 @@ class FolderWatcher:
                         continue
                     if self._should_scan(t):
                         self._scan_target(t)
+                if self._stop.is_set():
+                    break
+                self._catalog_tick()
             except Exception:                     # 单轮异常不能让监听线程死掉
                 time.sleep(self.tick_interval)
+
+    def _catalog_tick(self) -> None:
+        """书目索引的增量刷新（第 62 期）。跑在**本监听线程**里，**不新起线程**。
+
+        线程纪律：仓库有一条「新增旁路线程必须进 ``tests/conftest.py::
+        _quiesce_background`` 的收尾清单」的硬规矩（第 39 期实测过残留线程攥着
+        已关闭的连接去查下一个用例的库，全量跑后半程 segfault）。把索引刷新挂在
+        既有线程上，就不给测试收尾清单添新条目。
+
+        两条路：
+
+        - **脏库**（写操作后 ``library.invalidate()`` 标过）→ 每轮都刷，
+          ``blocking=False`` —— 请求线程若正在刷同一个库，这里直接跳过、下一轮再来，
+          谁都不等谁（单飞见 ``catalog._lib_lock``）；
+        - **全量兜底**：用户绕过 App 直接往 NAS 目录里丢文件时**没有任何**
+          ``invalidate()``，库永远不脏，只能定时无条件全量刷一遍
+          （间隔 ``index_interval``，默认 60s）。验收里「往库目录丢一本新 EPUB →
+          在预期间隔内自动出现」那条就是靠它。
+        """
+        try:
+            from . import catalog
+        except Exception:                     # noqa: BLE001
+            return
+        if time.time() - self._index_last >= self.index_interval:
+            self._index_last = time.time()
+            catalog.refresh_all(blocking=False)
+        else:
+            catalog.refresh_stale(blocking=False)
 
     def start(self) -> bool:
         if self._thread and self._thread.is_alive():

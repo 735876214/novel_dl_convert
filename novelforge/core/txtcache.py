@@ -12,10 +12,12 @@ TXT 直接阅读缺的不止是渲染 —— 目录、批注、CFI 精确位置�
   返回 ``None``，由调用方回落**原生 TXT 分章**（:func:`native_chapters` /
   :func:`native_chapter_html`）。
 
-⚠️ **形态一经确定就锁定**（`state.json` 记源文件指纹）：两条路线的章节 index 都是
-0 基、索引空间已对齐（派生 EPUB 用 ``nav=False`` 组装，spine 不含 nav 目录页），
-但**目录条目数仍可能因分章细节而不同**；为免「今天有 EPUB、清个缓存变原生」时
-章节号漂移让既有批注跳错章，只在**源文件本身变化**（mtime/size 变）时才可能换形态。
+⚠️ **形态一经确定就锁定**（`state.json` 记**源文件指纹 + 分章规则版本**）：两条路线的
+章节 index 都是 0 基、索引空间已对齐（派生 EPUB 用 ``nav=False`` 组装，spine 不含 nav
+目录页），但**目录条目数仍可能因分章细节而不同**；为免「今天有 EPUB、清个缓存变原生」时
+章节号漂移让既有批注跳错章，只在**源文件本身变化**（mtime/size 变）**或分章规则版本变化**
+时才重建。后者是第 62 期补的：规则改了而源一个字没动时，光比源指纹会一直命中旧派生件，
+**改了规则看不见效果**。
 
 分章/编码/组装三处都不另写实现：`detect`（唯一分章真值源）、
 `pipeline._detect_encoding`（唯一编码探测）、`epub_builder.build_epub`（唯一组装）。
@@ -39,6 +41,14 @@ STATE_NAME = "state.json"
 _SPLIT_CACHE: dict = {}
 _SPLIT_CACHE_MAX = 8
 
+#: **分章规则版本**（跟随 `detect.CHAPTER_RULE_VERSION`）。第 62 期加：只比源指纹不够 ——
+#: 规则改了而源文件一个字节没动时，旧派生 EPUB 的目录与新口径不一致，可缓存照样命中、
+#: 原样返回，**用户改了规则却看不见效果**。版本号进指纹即触发重建。
+RULE_VERSION = detect.CHAPTER_RULE_VERSION
+
+#: 规则升级导致重建时，活动日志里 `file` 一栏用的**固定主体**。见 :func:`_log_rule_rebuild`。
+FILE_LABEL = "TXT 派生缓存"
+
 
 def _cache_dir(book_id: str) -> pathlib.Path:
     return config.CACHE_DIR / CACHE_SUBDIR / str(book_id)
@@ -47,6 +57,22 @@ def _cache_dir(book_id: str) -> pathlib.Path:
 def _fingerprint(path: pathlib.Path) -> str:
     st = path.stat()
     return f"{st.st_mtime_ns}:{st.st_size}"
+
+
+def _log_rule_rebuild(path: pathlib.Path) -> None:
+    """分章规则升级引起的重建：记一条活动日志。
+
+    ``file`` 传**固定标签**而不是书名 —— 活动日志的合并键是「动作 + 结果 + 主体」
+    （见 `activity_log._merge_key`），主体固定才能把一次升级里逐本发生的重建并成
+    **一条**（第 61 期合并，默认 10s 尾随窗口，每来一条窗口从头计时），界面上一行
+    「已按新规则重建 ×N」。逐本各写一条会把活动日志刷屏，反而没人看得见。
+    """
+    try:
+        from . import activity_log as al
+        al.log(al.ACTION_CONVERT, FILE_LABEL, al.STATUS_OK,
+               detail=f"分章规则 v{RULE_VERSION} 已生效：{path.name}", source="txtcache")
+    except Exception:                                  # noqa: BLE001 —— 记日志失败不该影响阅读
+        pass
 
 
 def _read_state(cdir: pathlib.Path) -> dict:
@@ -82,8 +108,12 @@ def _read_text(path: pathlib.Path) -> "tuple[str, str]":
 
 
 def _chapters(book: dict, path: pathlib.Path) -> list:
-    """（带指纹缓存的）原生分章结果 —— 两条路线共用同一份切分。"""
-    fp = _fingerprint(path)
+    """（带指纹缓存的）原生分章结果 —— 两条路线共用同一份切分。
+
+    缓存键里必须带上 ``RULE_VERSION``：否则规则升级后即使派生件重建了，
+    切分仍会从这份缓存里原样取出**旧规则的结果**（源指纹没变，键就一样）。
+    """
+    fp = f"{_fingerprint(path)}|v{RULE_VERSION}"
     key = (str(path), fp)
     hit = _SPLIT_CACHE.get(key)
     if hit is not None:
@@ -116,14 +146,18 @@ def derived_epub(book: dict, *, path=None, root=None):
 
     cdir = _cache_dir(bid)
     state = _read_state(cdir)
-    if state.get("fingerprint") == fp:
+    if state.get("fingerprint") == fp and state.get("rule") == RULE_VERSION:
         if state.get("status") != "ok":
             return None
         epub = cdir / EPUB_NAME
         return epub if epub.exists() else None
+    # 走到这里有两种可能：源变了，或**分章规则版本变了**（源指纹没动）。后者要留痕 ——
+    # 否则用户升完级只看到目录变了，不知道是谁改的。
+    if state.get("fingerprint") == fp:
+        _log_rule_rebuild(p)
 
     if p.stat().st_size > SOURCE_MAX_BYTES:
-        _write_state(cdir, {"status": "failed", "fingerprint": fp,
+        _write_state(cdir, {"status": "failed", "fingerprint": fp, "rule": RULE_VERSION,
                             "reason": f"source > {SOURCE_MAX_BYTES} bytes"})
         return None
 
@@ -147,10 +181,11 @@ def derived_epub(book: dict, *, path=None, root=None):
         epub_builder.build_epub(meta, chapters, str(tmp), nav=False)
         final = cdir / EPUB_NAME
         tmp.replace(final)          # 原子落盘：半成品绝不留在最终路径上
-        _write_state(cdir, {"status": "ok", "fingerprint": fp, "chapters": len(chapters)})
+        _write_state(cdir, {"status": "ok", "fingerprint": fp, "rule": RULE_VERSION,
+                            "chapters": len(chapters)})
         return final
     except Exception as e:
-        _write_state(cdir, {"status": "failed", "fingerprint": fp,
+        _write_state(cdir, {"status": "failed", "fingerprint": fp, "rule": RULE_VERSION,
                             "reason": str(e)[:160]})
         return None
 

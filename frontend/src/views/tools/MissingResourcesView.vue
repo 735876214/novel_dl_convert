@@ -126,7 +126,7 @@ watch(libScope, load)
 // 工具页子页在 KeepAlive 下不会重新挂载，刷新挂 onActivated（首次挂载也会触发）
 onActivated(load)
 
-/** 「重新转换」落到本地转换页 —— 那里才能真的重新生成成品 */
+/** 「重新转换」落到本地导入页 —— 那条流水线才是重新生成成品的入口 */
 function goConvert(): void {
   router.push({ name: 'tools-local' })
 }
@@ -220,7 +220,7 @@ function goConvert(): void {
       desc="所有成品文件都能正常解析、有封面、且不是空文件 —— 这正是期望的状态。"
     >
       <template #action>
-        <Button @click="goConvert">去本地转换</Button>
+        <Button @click="goConvert">去本地导入</Button>
       </template>
     </EmptyState>
   </div>

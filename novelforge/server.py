@@ -25,7 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .core import pipeline, activity_log, library, fileops, publish, scrape
 from .core import watcher as watcher_mod
-from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, activity, recommend,
+from .core import (db, stats, auth as auth_mod, achievements, activity, recommend,
                    fonts, comics, audio, opds, komga, koreader, integrations, sync,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
@@ -4374,13 +4374,14 @@ def api_reading_activity(
 
 # ---------------- 应用设置（服务端持久化 → settings.json）----------------
 # 与上游 BookOrbit 的 settings 一致：设置存服务端、前端读写。
-# 只暴露**真正生效**的配置键（见 config.DEFAULTS 与 detect / watcher / network 的读取处）；
-# output.format 目前固定 epub，故只做只读展示，不开放编辑。
+# 只暴露**真正生效**的配置键（见 config.DEFAULTS 与 detect / watcher / network 的读取处）。
+# `output.format` 第 62 期起值域只剩 epub（见 FORMAT_CHOICES），保留可写只是为了兼容
+# 旧 settings.json 里可能存着的 mobi/azw3 —— 写进来会被值域校验挡下并给出可读提示。
 
 EDITABLE: dict = {
     "chapter_detection": {"mode", "context_lines", "fallback"},
     "traditionalize": None,  # None = 标量键，直接取值
-    "output": {"format", "layout"},
+    "output": {"format", "layout"},   # format 已收敛为 epub，留着键只为兼容旧 settings.json
     "naming": {"pattern", "scope"},
     "llm": {"api_key", "base_url", "model"},
     "watcher": {
@@ -4435,8 +4436,10 @@ EDITABLE: dict = {
 # api_key 掩码：前端回显该值即表示「不修改」
 _KEY_MASK = "••••••••"
 
-# 允许的输出格式：epub 必产；mobi/azw3 需 Calibre 派生
-FORMAT_CHOICES = ("epub", *ebook_convert.SUPPORTED)
+# 允许的输出格式。第 62 期收敛为只剩 epub：派生 MOBI / AZW3 要常驻一条本机 Calibre 依赖，
+# 而它的产物不进书目（书库只读 EPUB 章节树），收益抵不上成本。常量本身保留 —— 校验点、
+# 前端下拉、`lib_settings` 的枚举都从它取值，保留一处真值源比散落字面量好。
+FORMAT_CHOICES = ("epub",)
 
 
 def _flatten_overrides(data: dict, prefix: str = "") -> list:
@@ -4572,7 +4575,6 @@ def api_get_config():
         "config_file": str(config.CONFIG_FILE),
         "settings_file": str(config.SETTINGS_FILE),
         "backup_dir": str(config.BACKUP_DIR),
-        "capabilities": {"ebook_convert": ebook_convert.capability()},
     }
 
 
@@ -4701,7 +4703,6 @@ def api_maintenance():
             "recycle": {"path": str(recycle), **rec},
         },
         "library": {"books": len(library.books())},
-        "capabilities": {"ebook_convert": ebook_convert.capability()},
     }
 
 
@@ -6608,11 +6609,12 @@ async def _log_dispatch(src: pathlib.Path, action: str, result, source: str, siz
 
 @app.post("/convert")
 async def convert(file: UploadFile = File(...), traditionalize: bool = Form(False)):
-    # B1 上传多格式：放开 .txt 限制，允许 pipeline.EBOOK_EXT 直接入库（.txt 仍走转换）。
-    # 第 9 期起 EBOOK_EXT 含漫画（.cbz/.cbr）与音频（.mp3/.m4b…）；其余类型（如 .docx）明确拒绝。
+    # B1 上传多格式：允许 pipeline.EBOOK_EXT 直接入库。
+    # 第 9 期起 EBOOK_EXT 含漫画（.cbz/.cbr）与音频（.mp3/.m4b…）；第 62 期起 **.txt 也在里面**
+    # （TXT 改为「只入库不转换」），所以这里不再单独并一个 .txt；其余类型（如 .docx）明确拒绝。
     _name = file.filename or ""
     _ext = pathlib.Path(_name).suffix.lower()
-    _allowed = {".txt", *pipeline.EBOOK_EXT}
+    _allowed = set(pipeline.EBOOK_EXT)
     if _ext not in _allowed:
         raise HTTPException(400, "仅支持 .txt 与电子书格式：" + ", ".join(sorted(_allowed)))
     src = INPUT_DIR / file.filename

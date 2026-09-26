@@ -621,7 +621,7 @@ async function remove(l: LibraryEntity): Promise<void> {
         <div class="text-[12.5px] font-medium text-foreground">还没有书库</div>
         <p class="mt-1 max-w-[62ch] text-[12.5px] leading-relaxed text-muted-foreground">
           书要落进书库才有位置：新建一个书库、选好它的来源目录，之后从「探索发现」下载、
-          在「本地转换」上传、或往投递目录里放文件才会被接收 —— 在此之前它们一律会被拒收。
+          在「本地导入」上传、或往投递目录里放文件才会被接收 —— 在此之前它们一律会被拒收。
           点右上角「新建书库」开始。
         </p>
       </div>

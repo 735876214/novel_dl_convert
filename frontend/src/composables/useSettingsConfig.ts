@@ -1,7 +1,7 @@
 import { computed, ref } from 'vue'
 
 import { SECTION_KEYS } from '@/data/settingsFields'
-import { api, type AppConfig, type EbookConvertCap } from '@/lib/api'
+import { api, type AppConfig } from '@/lib/api'
 import { payloadEqual } from '@/lib/prefsPayload'
 import { useUiStore } from '@/stores/ui'
 
@@ -22,7 +22,6 @@ const files = ref<{ config_file: string; settings_file: string; backup_dir: stri
   settings_file: '',
   backup_dir: '',
 })
-const capabilities = ref<{ ebook_convert: EbookConvertCap } | null>(null)
 /** 被 settings.json 覆盖的点号键 */
 const overridden = ref<string[]>([])
 const saving = ref(false)
@@ -94,7 +93,6 @@ export function useSettingsConfig() {
         const r = await api.getConfig()
         cfg.value = r.config
         baseline.value = clone(r.config)
-        capabilities.value = r.capabilities
         overridden.value = r.overridden ?? []
         files.value = {
           config_file: r.config_file,
@@ -172,8 +170,6 @@ export function useSettingsConfig() {
     },
   })
 
-  const calibreOk = computed(() => capabilities.value?.ebook_convert.available ?? false)
-
   /**
    * 有未保存改动的分区 id（按 `SECTION_KEYS` 的顶层键逐组比对草稿与基线）。
    *
@@ -207,12 +203,10 @@ export function useSettingsConfig() {
     // 状态
     cfg,
     files,
-    capabilities,
     overridden,
     saving,
     loading,
     loadError,
-    calibreOk,
     // 未保存改动（草稿 vs 基线）
     dirtySections,
     hasDirty,
