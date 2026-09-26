@@ -18,7 +18,8 @@ import {
   sortBySeriesIndex,
   tagsLabel,
 } from '@/lib/bookInfo'
-import { api, type BookCard, type SeriesGaps, type SeriesGroup, type SeriesMeta } from '@/lib/api'
+import { api, type BookCard, type SeriesGaps, type SeriesGroup, type SeriesMeta,
+         type SeriesMetaState } from '@/lib/api'
 
 /**
  * 系列详情：该系列下的全部书目。
@@ -32,7 +33,7 @@ import { api, type BookCard, type SeriesGaps, type SeriesGroup, type SeriesMeta 
  * 第 6 期补充（A4/A5）：首册标记（FIRST IN SERIES）+ 顺序/倒序切换。
  *
  * 第 12 期 C3：系列简介与系列级字段（出版社 / 首发年 / 题材 / 册数）已接入，
- * 由 `SeriesMetaPanel` 承载（简介可编辑、可「恢复在线」、可抓取）；
+ * 由 `SeriesMetaPanel` 承载（**四个字段都可编辑**、每个字段可单独「恢复在线」、可抓取，第 57 期补齐）；
  * 重排册号在 `SeriesRenumberDialog` 里先预览再应用。
  * 这些数据**只存服务端数据库、不写回 EPUB** —— 详见后端 `core/series_meta.py`。
  */
@@ -46,6 +47,8 @@ const loading = ref(true)
 const error = ref('')
 /** 系列级元数据（第 12 期 C3）：简介 / 出版社 / 首发年 / 题材 / 册数 */
 const meta = ref<SeriesMeta | null>(null)
+/** 逐字段明细（第 57 期）：编辑面板据此标「本地覆盖 / 成员书聚合 / 在线」 */
+const metaState = ref<SeriesMetaState | null>(null)
 /** 缺册（第 43 期）：后端算好的补集，前端只展示，不自己判 */
 const gaps = ref<SeriesGaps | null>(null)
 const gapsOpen = ref(false)
@@ -95,11 +98,13 @@ async function load(): Promise<void> {
     books.value = res.books
     groups.value = res.groups ?? []
     meta.value = res.meta ?? null
+    metaState.value = res.meta_state ?? null
     gaps.value = res.gaps ?? null
   } catch (e) {
     books.value = []
     groups.value = []
     meta.value = null
+    metaState.value = null
     gaps.value = null
     error.value = e instanceof Error ? e.message : '加载失败'
   }
@@ -167,8 +172,8 @@ watch(name, load)
     </Card>
 
     <template v-else>
-      <!-- 系列简介与系列级字段：数据只存服务端，**不写入书本文件** -->
-      <SeriesMetaPanel :name="name" :meta="meta" class="mb-4" @changed="load" />
+      <!-- 系列元数据（简介 / 出版社 / 首发年 / 题材）：数据只存服务端，**不写入书本文件** -->
+      <SeriesMetaPanel :name="name" :meta="meta" :state="metaState" class="mb-4" @changed="load" />
 
       <div v-if="books.length" class="mb-4 flex flex-wrap items-center gap-2">
         <Segment
