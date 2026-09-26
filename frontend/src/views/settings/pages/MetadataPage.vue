@@ -6,8 +6,8 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import MetadataScoreCard from '@/components/MetadataScoreCard.vue'
-import { api, type CustomFieldDef, type MetadataConfigField, type MetadataPlanItem,
-         type MetadataProvider } from '@/lib/api'
+import { api, type CustomFieldDef, type MetadataConfigField, type MetadataHealthResult,
+         type MetadataPlanItem, type MetadataProvider } from '@/lib/api'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
@@ -297,6 +297,42 @@ async function probeAll(): Promise<void> {
   }
 }
 
+// ---------------- 真联网体检（第 59 期）----------------
+// 一次看清「谁能用、谁为什么不能用」：「检测连通性」只回可用/不可用，
+// 体检回的是**分类**（限流 / 拒绝 / 反爬拦截 / 能连通但解析不到 / 未填密钥），
+// 因为这几件事要求用户做的动作完全不同（等一会 / 降频率 / 填 Key / 等修复）。
+const health = ref<MetadataHealthResult | null>(null)
+const healthQuery = ref('')
+const healthRunning = ref(false)
+
+/** 结论 → 颜色：绿=能出结果；灰=只是没配密钥；琥珀=等一会或站点可能改版；红=被拒/异常 */
+function healthClass(kind: string): string {
+  if (kind === 'ok') return 'text-emerald-600 dark:text-emerald-400'
+  if (kind === 'missing_key') return 'text-muted-foreground'
+  if (kind === 'empty' || kind === 'rate_limited') return 'text-amber-600 dark:text-amber-400'
+  return 'text-destructive'
+}
+
+async function runHealth(): Promise<void> {
+  healthRunning.value = true
+  try {
+    health.value = await api.metadataHealth(healthQuery.value.trim() || undefined)
+    const s = health.value.summary
+    ui.toast(`体检完成：可用 ${s.usable ?? 0} / 待处理 ${s.problems ?? 0}`)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '体检失败')
+  } finally {
+    healthRunning.value = false
+  }
+}
+
+/** 回看上次体检结果（后端进程内缓存；没体检过是常态，失败静默） */
+async function loadHealth(): Promise<void> {
+  try {
+    health.value = await api.metadataHealthLast()
+  } catch { /* 未登录 / 后端未就绪：静默 */ }
+}
+
 const activeSources = computed<string[]>(() => mf.value.sources ?? [])
 function inOrder(id: string): boolean {
   return activeSources.value.includes(id)
@@ -534,11 +570,13 @@ onMounted(() => {
   void loadConfig()
   void loadProviders()
   void library.loadBooks()
+  if (props.section === 'providers') void loadHealth()
   if (props.section === 'custom-fields') void loadDefs()
 })
 /** 7 页共用组件：**必须监听 prop**，否则路由切换时组件实例被复用、数据不重载 */
 watch(() => props.section, () => {
   void loadProviders()
+  if (props.section === 'providers') void loadHealth()
   planItems.value = []
   picked.value = new Set()
   defDraft.value = { label: '', type: 'text', default_value: '' }
@@ -775,6 +813,71 @@ watch(() => props.section, () => {
         {{ providers.length ? '没有匹配的提供商' : '提供商目录为空 —— 请点上方「重试」' }}
       </div>
 
+    </Card>
+
+    <!--
+      真联网体检（第 59 期）：一次看清 14 家「谁能用、谁为什么不能用」。
+      ⚠️ 会**真出网**（每家检索一次）；关键词留空时用**各家样本** ——
+      地区性目录（Aladin / Lubimyczytac / RanobeDB）必须用当地书名，否则会把好家误报成「无结果」。
+    -->
+    <Card v-if="has('sources')" class="mt-4" padding="none">
+      <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+        <span class="text-[13px] font-medium text-foreground">联网体检</span>
+        <span class="text-[11.5px] text-muted-foreground">
+          每家真检索一次，按「限流 / 拒绝 / 反爬拦截 / 能连通但解析不到」分门别类 ——
+          「检测连通性」只说能不能用，这里说**该做什么**
+        </span>
+        <input
+          v-model="healthQuery"
+          type="text"
+          placeholder="关键词（留空 = 用各家样本）"
+          class="ml-auto h-7 w-[190px] rounded-md border border-border bg-muted px-2.5 text-[11.5px] text-foreground outline-none focus:border-ring focus:bg-card"
+        >
+        <Button size="sm" :disabled="healthRunning" @click="runHealth">
+          {{ healthRunning ? '体检中…（14 家约 1 分钟）' : '开始体检' }}
+        </Button>
+      </div>
+
+      <div v-if="health?.ran_at" class="border-b border-border px-4 py-2 text-[11.5px] text-muted-foreground">
+        可用 <span class="text-emerald-600 dark:text-emerald-400">{{ health.summary.usable ?? 0 }}</span>
+        · 未填密钥 {{ health.summary.missing_key ?? 0 }}
+        · 待处理 <span class="text-destructive">{{ health.summary.problems ?? 0 }}</span>
+        · 耗时 {{ (health.elapsed_ms / 1000).toFixed(1) }}s
+        · {{ health.samples ? '关键词：各家样本' : '关键词：' + health.query }}
+        · 结果只存在内存里（后端重启即清空）
+      </div>
+      <div v-else class="px-4 py-2 text-[11.5px] text-muted-foreground">尚未体检过。</div>
+
+      <table v-if="health?.ran_at" class="w-full text-[11.5px]">
+        <thead>
+          <tr class="border-b border-border text-left text-muted-foreground">
+            <th class="px-3 py-2 font-medium">来源</th>
+            <th class="px-3 py-2 font-medium">结论</th>
+            <th class="px-3 py-2 font-medium">耗时</th>
+            <th class="px-3 py-2 font-medium">条数</th>
+            <th class="px-3 py-2 font-medium">首条结果 / 原因</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="sid in health.order" :key="sid" class="border-b border-border/60 last:border-b-0">
+            <td class="px-3 py-1.5 text-foreground">
+              {{ health.items[sid].label }}
+              <span
+                v-if="health.items[sid].fragile"
+                class="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+              >易失效</span>
+            </td>
+            <td class="px-3 py-1.5" :class="healthClass(health.items[sid].kind)">
+              {{ health.kind_labels[health.items[sid].kind] || health.items[sid].kind }}
+            </td>
+            <td class="px-3 py-1.5 text-muted-foreground">{{ health.items[sid].ms }} ms</td>
+            <td class="px-3 py-1.5 text-muted-foreground">{{ health.items[sid].count }}</td>
+            <td class="px-3 py-1.5 text-muted-foreground">
+              {{ health.items[sid].first || health.items[sid].error }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </Card>
 
     <Card v-if="has('fetch')" class="mt-4" padding="none">

@@ -19,6 +19,8 @@ import difflib
 import json
 import re
 import time
+from concurrent import futures
+from html import unescape as html_unescape
 
 import httpx
 
@@ -67,11 +69,29 @@ def _get_json(url: str, params: dict = None, headers: dict = None, method: str =
 
 
 def _get_text(url: str, params: dict = None, headers: dict = None, hints: dict = None) -> str:
-    """**唯一出网口（HTML/文本）**。页面抓取型走它（浏览器 UA），失败同样翻中文。"""
+    """**唯一出网口（HTML/文本）**。页面抓取型走它（浏览器 UA），失败同样翻中文。
+
+    顺带识别**反爬拦截页**（「请完成人机验证」这类）：站点这时回的是 **200 + 验证页**，
+    若不当场判掉，解析器只会「解析不到结果」，用户就分不清「站点改版」与「被拦截」——
+    这两件事要做的处置完全不同（前者等修复，后者降频率 / 带 Cookie）。
+    """
     r = httpx.request("GET", url, params=params, timeout=TIMEOUT,
                       headers={**_BROWSER_HEADERS, **(headers or {})})
     _raise_for_status(r, hints)
-    return r.text or ""
+    # HTTP 202 + 极小响应体 = 站点的 JS 挑战页（实测 Libro.fm 就是这样回的）。
+    # 它**不是** 4xx/5xx，若不在这里判掉，解析器只会得到「解析不到结果」，
+    # 用户就分不清「站点改版」与「被拦」——两者要做的事完全不同。
+    if r.status_code == 202:
+        raise RuntimeError("被反爬拦截（站点返回挑战页 HTTP 202）")
+    text = r.text or ""
+    low = text[:4000].lower()
+    for marker in ("validatecaptcha", "enter the characters you see below", "robot check",
+                   "g-recaptcha", "cf-challenge", "checking your browser",
+                   "attention required! | cloudflare", "人机验证", "访问验证"):
+        if marker in low:
+            raise RuntimeError("被反爬拦截（验证码 / 机器人校验）：该来源需要降低频率，"
+                               "或按需提供 Cookie")
+    return text
 
 
 def _first_json(text: str) -> dict:
@@ -456,14 +476,14 @@ _HTML_TAG = re.compile(r"<[^>]+>")
 
 
 def _strip_html(text) -> str:
-    """剥掉 HTML 标签并还原常见实体（**不是**完整的 HTML 解析，够用且零依赖）。"""
+    """剥掉 HTML 标签并还原实体（**不是**完整的 HTML 解析，够用且零依赖）。
+
+    实体还原用标准库 :func:`html.unescape`：手写对照表会漏（实测 Amazon 书名里有
+    ``Frank Herbert&#x27;s``，只列几个常见实体的话它会原样留在书名里）。
+    """
     if text is None:
         return ""
-    s = _HTML_TAG.sub(" ", str(text))
-    for ent, ch in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
-                    ("&quot;", '"'), ("&#39;", "'"), ("&apos;", "'")):
-        s = s.replace(ent, ch)
-    return _clean(s)
+    return _clean(html_unescape(_HTML_TAG.sub(" ", str(text))))
 
 
 def _year_of(value) -> str:
@@ -848,21 +868,31 @@ def _search_aladin(title: str, author: str, limit: int, opts: dict) -> list:
 #    也绝不能让它的异常打断整轮抓取（调用方 `search()` 已兜，但这里也自己兜一层）。
 
 def _search_amazon(title: str, author: str, limit: int, opts: dict) -> list:
-    # 行内配的 Cookie（可选）：Amazon 的反爬对「带登录 Cookie 的请求」宽松得多。
-    # 只在真填了时才带这个头 —— 空串会变成一个空 Cookie 头，反而更容易被拦。
+    """Amazon 搜索结果页抓取。
+
+    ⚠️ 选择器**照真实页面校准**（第 59 期体检发现旧写法一条都匹配不到；改后又发现
+    用 ``a-text-normal`` 会抓到「Aug 25, 2020」这类辅助 span ⇒ **错字段比缺字段更糟**）：
+    结果项 = ``data-asin="<10 位 ASIN>"`` 切片，**书名取该切片里 ``<h2>`` 的文本**
+    （实测 16/16 都是真书名），封面取 ``s-image``。**作者尽力而为**：拿不到就留空，不猜。
+    """
     cookie = _clean((opts or {}).get("cookie"))
     html = _get_text(AMAZON, params={"k": f"{_clean(title)} {_clean(author)}".strip(),
                                      "i": "stripbooks"},
                      headers={"Cookie": cookie} if cookie else None)
     out = []
-    for asin, block in re.findall(r'data-asin="([A-Z0-9]{10})"(.*?)(?=data-asin=|$)', html, re.S):
-        t = re.search(r'<span class="a-size-(?:medium|base-2|large) a-color-base a-text-normal">'
-                      r'([^<]+)</span>', block)
-        if not t:
+    # 按「带真实 ASIN 的结果项」切片；页面上还有 data-asin="" 的占位块，跳过
+    for m in re.finditer(r'data-asin="([A-Z0-9]{10})"(.*?)(?=data-asin="|$)', html, re.S):
+        asin, block = m.group(1), m.group(2)
+        h = re.search(r"<h2[^>]*>(.*?)</h2>", block, re.S)
+        name = _strip_html(h.group(1)) if h else ""
+        if len(name) < 2:
             continue
-        a = re.search(r'class="a-size-base[^"]*"[^>]*>([^<]+)</span>', block)
-        out.append(_entry("amazon", title=t.group(1), author=a.group(1) if a else "",
-                          raw_id=asin))
+        a = re.search(r'class="a-size-base[^"]*a-color-secondary[^"]*"[^>]*>([^<]{2,80})</span>',
+                      block)
+        cover = re.search(r'class="s-image"[^>]*src="([^"]+)"', block) \
+            or re.search(r'src="([^"]+)"[^>]*class="s-image"', block)
+        out.append(_entry("amazon", title=name, author=a.group(1) if a else "",
+                          cover_url=cover.group(1) if cover else "", raw_id=asin))
         if len(out) >= limit:
             break
     return out
@@ -979,14 +1009,25 @@ def _search_librofm(title: str, author: str, limit: int, opts: dict) -> list:
 
 
 def _search_lubimyczytac(title: str, author: str, limit: int, opts: dict) -> list:
+    """Lubimyczytac 搜索结果页抓取。
+
+    ⚠️ 选择器同样照真实页面校准过（第 59 期体检：旧的 ``authorAllBooks__*`` 早已废弃，
+    现站用 ``book-card__title`` / ``book-card__author``）。书名优先取 ``title="…"`` 属性
+    （比锚文本干净，锚文本带首尾空格），封面在 ``book-card__cover-image`` 的 ``src``。
+    """
     html = _get_text(LUBIMYCZYTAC, params={"phrase": _clean(title)})
-    titles = re.findall(r'class="authorAllBooks__singleTextTitle[^"]*"[^>]*href="([^"]+)"'
-                        r'[^>]*>([^<]+)<', html)
-    authors = re.findall(r'class="authorAllBooks__singleTextAuthor[^"]*"[^>]*>([^<]+)<', html)
+    covers = re.findall(r'class="book-card__cover-image"[^>]*src="([^"]+)"', html)
+    cards = re.findall(r'<a class="book-card__title"[^>]*?title="([^"]+)"[^>]*?href="([^"]+)"'
+                       r'[^>]*>(.*?)</a>', html, re.S)
+    authors = re.findall(r'class="book-card__author"[^>]*>\s*<a[^>]*>([^<]+)</a>', html)
     out = []
-    for i, (href, t) in enumerate(titles[:limit]):
-        out.append(_entry("lubimyczytac", title=t,
-                          author=authors[i] if i < len(authors) else "", raw_id=href))
+    for i, (attr_title, href, inner) in enumerate(cards[:limit]):
+        name = _clean(attr_title) or _clean(inner)
+        if not name:
+            continue
+        out.append(_entry("lubimyczytac", title=name,
+                          author=authors[i] if i < len(authors) else "",
+                          cover_url=covers[i] if i < len(covers) else "", raw_id=href))
     return out
 
 
@@ -1073,6 +1114,16 @@ def search(source: str, title: str, author: str, limit: int = 5, opts: dict = No
         return {"ok": False, "entries": [], "error": "源不可用或书名为空"}
     try:
         entries = fn(_clean(title), _clean(author), max(1, min(int(limit or 5), 20)), opts or {})
+    except httpx.TimeoutException as e:
+        return {"ok": False, "entries": [], "error": f"请求超时：{e}"}
+    except httpx.HTTPStatusError as e:
+        # ⚠️ 这里必须按状态码分开说：3xx（httpx 的 raise_for_status 也管）多半是被反爬
+        # 重定向到验证页，4xx/5xx 是接口本身的问题，两者要做的处置不一样。
+        code = e.response.status_code
+        if 300 <= code < 400:
+            return {"ok": False, "entries": [],
+                    "error": f"被重定向（HTTP {code}）：多半被反爬拦到验证页，需要降低频率或带 Cookie"}
+        return {"ok": False, "entries": [], "error": f"接口返回错误（HTTP {code}）"}
     except httpx.HTTPError as e:
         return {"ok": False, "entries": [], "error": f"连接失败：{e}"}
     except Exception as e:                                   # noqa: BLE001 —— 单源失败不能影响别的源
@@ -1163,3 +1214,189 @@ def probe(source: str, opts: dict = None) -> dict:
     if not res["entries"]:
         return {"ok": False, "message": "能连通但没返回结果（可能被限流）", "ms": ms}
     return {"ok": True, "message": f"可用（{ms} ms）", "ms": ms}
+
+
+# ---------------- 14 家真联网体检（第 59 期）----------------
+# 把「这家现在到底能不能用、为什么不能用」变成**一次可复现的检查**，而不是让用户一家家
+# 点「测试」自己拼印象。**只读**：不改配置、不写库、不注册任何东西（与 `probe` 同一纪律）。
+#
+# 为什么不直接复用 `probe`：
+#   ① probe 只回「可用/不可用」不分原因 —— 而「被限流」和「站点改版导致解析不到」
+#      要用户做的事完全不同（前者等一会或填 Key，后者只能等修复 / 换源）；
+#   ② 抓取型（`fragile`）**请求成功但 0 条结果**才是它出故障的典型信号，
+#      probe 把这种情况算成不可用却不解释；
+#   ③ 14 家要一起看（谁掉线、谁限流），逐个点「测试」看不出整体。
+
+#: 体检样本 = **每一家最容易命中的书名**。
+#: ⚠️ 地区性目录必须用当地书名：拿 "Dune" 去查 Aladin（韩）/ Lubimyczytac（波兰）/
+#: RanobeDB（轻小说）本来就搜不到，那会把「这家是好的」误报成「无结果」——
+#: 误报比不测更糟：用户会去修一个根本没坏的东西。
+HEALTH_SAMPLES = {
+    "googlebooks": ("Dune", "Frank Herbert"),
+    "amazon": ("Dune", "Frank Herbert"),
+    "goodreads": ("Dune", "Frank Herbert"),
+    "hardcover": ("Dune", "Frank Herbert"),
+    "openlibrary": ("Dune", "Frank Herbert"),
+    "itunes": ("Dune", "Frank Herbert"),
+    "kobo": ("Dune", "Frank Herbert"),
+    "audible": ("Dune", "Frank Herbert"),
+    "audnexus": ("Dune", "Frank Herbert"),
+    "librofm": ("Dune", "Frank Herbert"),
+    "comicvine": ("Saga", ""),
+    "ranobedb": ("狼と香辛料", "支倉凍砂"),
+    "lubimyczytac": ("Wiedźmin", "Andrzej Sapkowski"),
+    "aladin": ("채식주의자", "한강"),
+}
+
+#: 体检结论分类（界面直接用这份文案，不要在两端各写一套说法）。
+#: `ok` 与 `empty` 是两种不同的「通」：前者有结果，后者请求成功但解析不到东西。
+HEALTH_KINDS = {
+    "ok": "可用（有结果）",
+    "empty": "能连通但没解析到结果",
+    "missing_key": "未填密钥",
+    "rate_limited": "被限流（429）",
+    "denied": "被拒绝（401/403）",
+    "blocked": "被反爬拦截（验证码）",
+    "redirect": "被重定向（多为反爬）",
+    "http": "接口返回错误",
+    "timeout": "超时",
+    "network": "网络不可达",
+    "parse": "响应解析失败",
+    "error": "其它错误",
+}
+
+
+def _classify_error(err: str, exc: Exception = None) -> str:
+    """把失败归到 :data:`HEALTH_KINDS` 的一类 —— 分类的意义是「告诉用户该做什么」。
+
+    ⚠️ 关键词匹配是**必需的**：`search()` 会把各家抛出的异常统一折成字符串（单源失败不能
+    影响别的源），所以到这里时异常类型已经丢了，只能靠 `_raise_for_status` 写下的中文口径
+    与 `json` 解析器的英文消息识别（两条都要跟住，改一处就得改另一处的文案）。
+    """
+    text = str(err or "")
+    low = text.lower()
+    if "被限流" in text or "429" in text:
+        return "rate_limited"
+    if "被反爬拦截" in text or "captcha" in low or "robot" in low:
+        return "blocked"
+    if "被重定向" in text or "redirect response" in low:
+        return "redirect"
+    if "被拒绝" in text or "401" in text or "403" in text:
+        return "denied"
+    if "接口返回错误" in text or "http 4" in low or "http 5" in low:
+        return "http"
+    if "需要 api key" in low or "需要 ttbkey" in low or "需要密钥" in text or "需要设置" in text:
+        return "missing_key"
+    if "超时" in text or "timeout" in low:
+        return "timeout"
+    # JSON 解析失败的原文是英文（json.JSONDecodeError）：换个报错口径这里就会漏分类，
+    # 所以除了关键词还看异常类型（直接调 `health_one` 的路径拿得到异常对象）。
+    if isinstance(exc, ValueError) or "json" in low or "expecting value" in low \
+            or "expecting ',' delimiter" in low or "extra data" in low:
+        return "parse"
+    if "连接失败" in text or "connect" in low or "网络" in text:
+        return "network"
+    return "error"
+
+
+def health_one(source: str, opts: dict = None, title: str = "", author: str = "",
+               limit: int = 3) -> dict:
+    """单家体检：``{id, label, group, fragile, needs_config, ok, kind, ms, count, first, error}``。
+
+    `first` 回「命中的第一条：书名 · 作者」—— 让人一眼确认它返回的**确实是这本书**，
+    而不是只看「可用」两个字就放心（可用但答非所问也是问题）。
+    """
+    meta = SOURCES.get(source) or {}
+    base = {"id": source, "label": meta.get("label") or source,
+            "group": meta.get("group") or "", "fragile": bool(meta.get("fragile")),
+            "needs_config": bool(meta.get("needs_config"))}
+    if source not in _FETCHERS:
+        return {**base, "ok": False, "kind": "error", "ms": 0, "count": 0, "first": "",
+                "error": "本项目没有该来源的抓取器"}
+    if needs_key(source) and not _clean((opts or {}).get("api_key")):
+        # 与抓取口径一致：没填密钥就**不发外呼** —— 体检也不该拿一次注定失败的请求当「测试」
+        return {**base, "ok": False, "kind": "missing_key", "ms": 0, "count": 0, "first": "",
+                "error": "未填密钥：填好后再体检这一家"}
+    t0 = time.time()
+    res = search(source, title, author, limit, opts)
+    ms = int((time.time() - t0) * 1000)
+    entries = res.get("entries") or []
+    if not res.get("ok"):
+        err = res.get("error") or "不可用"
+        return {**base, "ok": False, "kind": _classify_error(err), "ms": ms, "count": 0,
+                "first": "", "error": err}
+    if not entries:
+        return {**base, "ok": False, "kind": "empty", "ms": ms, "count": 0, "first": "",
+                "error": "请求成功但没解析到结果：站点结构可能变了，或这家确实没有这本样本"}
+    e = entries[0]
+    return {**base, "ok": True, "kind": "ok", "ms": ms, "count": len(entries),
+            "first": " · ".join(x for x in (str(e.get("title") or ""),
+                                            str(e.get("author") or "")) if x),
+            "error": ""}
+
+
+def health_check(mf: dict = None, sources: list = None, query: str = "",
+                 per_timeout: float = 12.0, workers: int = 4, limit: int = 3) -> dict:
+    """全部（或指定几家）**真联网**体检：并发跑、单家超时、失败分类。
+
+    - `query` 非空 ⇒ 所有家都用这个关键词；为空 ⇒ 用 :data:`HEALTH_SAMPLES` 的**各家样本**
+      （地区性目录用当地书名，否则会误报「无结果」）；
+    - 单家超时（默认 12s）到点即记为 `timeout`，**不拖住整轮** —— 体检的价值是「一次看清」，
+      某一家卡住不该让另外 13 家的结论也拿不到；
+    - 并发 4 路（`workers`）：14 家串行最坏要几分钟，用户会以为界面卡死；
+    - **只读**：不改配置、不写库。
+    """
+    mf = mf or {}
+    order = [s for s in (sources or list(SOURCES)) if s in SOURCES]
+    options = options_for(mf, order)
+    ask = _clean(query)
+    t0 = time.time()
+    items: dict = {}
+    if not order:
+        return {"items": {}, "order": [], "summary": {"total": 0}, "kind_labels": HEALTH_KINDS,
+                "query": ask, "samples": not ask, "elapsed_ms": 0, "ran_at": time.time()}
+
+    workers = max(1, int(workers))
+    waves = (len(order) + workers - 1) // workers
+    tasks = {}
+    with futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        for sid in order:
+            title, author = HEALTH_SAMPLES.get(sid, ("Pride and Prejudice", "Jane Austen"))
+            if ask:
+                title, author = ask, ""
+            tasks[pool.submit(health_one, sid, options.get(sid), title, author, limit)] = sid
+        done, _pending = futures.wait(list(tasks), timeout=per_timeout * waves + 2.0)
+        for fut in done:
+            sid = tasks[fut]
+            try:
+                items[sid] = fut.result()
+            except Exception as e:                      # noqa: BLE001 —— 体检本身绝不能被一家带崩
+                meta = SOURCES.get(sid) or {}
+                items[sid] = {"id": sid, "label": meta.get("label") or sid,
+                              "group": meta.get("group") or "",
+                              "fragile": bool(meta.get("fragile")),
+                              "needs_config": bool(meta.get("needs_config")),
+                              "ok": False, "kind": _classify_error(str(e), e), "ms": 0,
+                              "count": 0, "first": "", "error": str(e)}
+    # 到点还没回来的：如实记「超时」，而不是留空让界面显示成「可用」
+    for fut, sid in tasks.items():
+        if sid in items:
+            continue
+        meta = SOURCES.get(sid) or {}
+        items[sid] = {"id": sid, "label": meta.get("label") or sid,
+                      "group": meta.get("group") or "",
+                      "fragile": bool(meta.get("fragile")),
+                      "needs_config": bool(meta.get("needs_config")),
+                      "ok": False, "kind": "timeout", "ms": int(per_timeout * 1000),
+                      "count": 0, "first": "", "error": f"超过 {per_timeout:.0f}s 未返回"}
+
+    kinds = [i["kind"] for i in items.values()]
+    summary = {k: kinds.count(k) for k in HEALTH_KINDS}
+    summary["total"] = len(order)
+    # 「真能用」= 有结果；`empty` 单列（要么样本不适用，要么站点结构变了）；
+    # 「待处理」= 除了 ok / missing_key 之外的都算问题（missing_key 是配置未做，不是故障）
+    summary["usable"] = kinds.count("ok")
+    summary["problems"] = sum(1 for k in kinds if k not in ("ok", "missing_key"))
+    return {"items": items, "order": order, "summary": summary, "kind_labels": HEALTH_KINDS,
+            "query": ask, "samples": not ask, "elapsed_ms": int((time.time() - t0) * 1000),
+            "ran_at": time.time()}

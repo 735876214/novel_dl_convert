@@ -5591,6 +5591,44 @@ def api_metadata_providers():
     }
 
 
+#: 上次体检结果：**只放进程内**，不落库。
+#: 体检结论是「此刻的真相」——存进库会让人把旧结论当现状（限流与站点改版都随时间变）。
+#: 代价是重启后为空，接口如实说明「尚未体检过」，不假装有历史。
+_METADATA_HEALTH: dict = {}
+
+
+@app.post("/api/metadata/health")
+def api_metadata_health(payload: dict = Body(None)):
+    """全部（或指定几家）元数据来源**真联网体检**：并发跑、单家超时、失败分门别类。
+
+    body：``{"query": "关键词"?}`` —— 不传就用**各家样本**（地区性目录用当地书名，
+    否则会把「这家是好的」误报成「无结果」）。**只读**：不改配置、不写库。
+    """
+    p = payload or {}
+    mf = config.load_config().get("metadata_fetch") or {}
+    srcs = p.get("sources") if isinstance(p.get("sources"), list) else None
+    out = metasources.health_check(mf=mf, sources=srcs, query=str(p.get("query") or ""))
+    _METADATA_HEALTH.clear()
+    _METADATA_HEALTH.update(out)
+    activity_log.log(activity_log.ACTION_METADATA, "metadata-health", activity_log.STATUS_OK,
+                     detail=(f"体检 {out['summary'].get('total', 0)} 家："
+                             f"可用 {out['summary'].get('usable', 0)}、"
+                             f"待处理 {out['summary'].get('problems', 0)}、"
+                             f"耗时 {out['elapsed_ms']} ms"),
+                     source="api")
+    return out
+
+
+@app.get("/api/metadata/health")
+def api_metadata_health_last():
+    """上次体检结果（进程内缓存；重启后为空 —— 如实说明，不假装有历史）。"""
+    if not _METADATA_HEALTH:
+        return {"items": {}, "order": [], "summary": {}, "kind_labels": metasources.HEALTH_KINDS,
+                "query": "", "samples": True, "elapsed_ms": 0, "ran_at": 0,
+                "message": "尚未体检过"}
+    return _METADATA_HEALTH
+
+
 @app.post("/api/metadata/probe")
 def api_metadata_probe(payload: dict = Body(None)):
     """源连通性自检（真的外呼：点一次测一次，结果只回给这次请求）。"""

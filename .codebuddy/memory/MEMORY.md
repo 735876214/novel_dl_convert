@@ -110,6 +110,14 @@
 - **前端改动后必须 `type-check` + `test:unit` + `build` + `deploy`**（部署产物落 `novelforge/static/v2`，不入库）；**后端改动必须重启进程才生效**（用户遇到的「空列表」根因就是后端没重启）→ 交付说明里要写清重启/重建镜像这一步。
 - 浏览器冒烟用 `playwright-cli open --browser=msedge <url>`（本机没装 Chrome，Chromium 会报 distribution not found）；用 `CONFIG_DIR/INPUT_DIR/OUTPUT_DIR` 指向 `.codebuddy/tmp-*` 隔离，`admin/changeme` 登录；`route "**/api/xxx" --status=404` 可复现旧后端场景。
 
+## 第 59 期铁律（14 家真联网体检）
+- **体检 = 只读 + 分类 + 首条结果**：`metasources.health_check()`（并发 4、单家超时 12s）；`POST /api/metadata/health` 跑一次、`GET` 回上次（**进程内缓存**，重启即空，如实回「尚未体检过」）。**分类是给用户的动作指南**：限流=等一会/填 Key、拒绝=填 Key、反爬拦截=降频率/带 Cookie、重定向=被拦到验证页、`empty`=站点可能改版、`http`=接口报错。不要退化成「可用/不可用」。
+- **样本按家给**（`HEALTH_SAMPLES`）：地区性目录用当地书名（Aladin `채식주의자` / Lubimyczytac `Wiedźmin` / RanobeDB `狼と香辛料`），否则**好家会被误报成无结果**。
+- **必须回「命中的第一条」**：只报状态会漏掉「可用但答非所问」——Amazon 第一版抓到 `Aug 25, 2020` 却显示可用。**错字段比缺字段更糟**。
+- 真实站点事实（本机实测，别再当 bug 修）：Google Books 匿名 **429**、Kobo **403**、Goodreads **302**（反爬验证页）、Audible **400**、AudNexus SSL 中断、Libro.fm **HTTP 202 + 挑战页**（`_get_text` 已判 202 与验证码页 → `blocked`）、Open Library 偶发 SSL 握手超时。Amazon 书名在**结果项 `<h2>`** 里；Lubimyczytac 用 `book-card__title/__author`（`authorAllBooks__*` 早已废弃）。
+- `_strip_html` 的实体还原用标准库 `html.unescape`：手写对照表会漏（Amazon 书名有 `&#x27;`）。
+- 写「只读」类断言要**前后对比**（`before == after`），别断言绝对值为空/为假 —— 同进程里别的用例可能已改过同一份隔离配置，那样写会变成依赖执行顺序的假失败。
+
 ## 第 58 期铁律（跨源字段级合并）
 - **合并有门槛**：只有 `score >= max(0.7, 0.9×最佳分)` 的候选才参与（`metafetch.MERGE_MIN_SCORE/MERGE_RELATIVE`）—— 拼错书的字段不可逆。不够格**逐字回到旧行为**（只用最佳候选）；`metadata_fetch.merge_sources` 可整体关掉。
 - **`FIELD_TRUST` 的键必须是字段名，不是书对象键**：年份是 `date`（书目里才叫 `year`）。写成 `year` **不报错、只静默失效**（信任表形同虚设）—— 有契约钉住这条。

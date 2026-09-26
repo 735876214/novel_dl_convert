@@ -309,6 +309,37 @@ export interface MetadataProvidersResult {
   implemented_count: number
 }
 
+/** 单家体检结论（第 59 期） */
+export interface MetadataHealthItem {
+  id: string
+  label: string
+  group: string
+  /** 页面抓取型（易失效）—— 它报「能连通但没解析到结果」时多半是站点改版 */
+  fragile: boolean
+  needs_config: boolean
+  ok: boolean
+  /** 结论分类键（文案见 `kind_labels`，由后端给，前端不另写一套） */
+  kind: string
+  ms: number
+  count: number
+  /** 命中的第一条「书名 · 作者」——用来确认它返回的确实是这本书 */
+  first: string
+  error: string
+}
+
+export interface MetadataHealthResult {
+  items: Record<string, MetadataHealthItem>
+  order: string[]
+  summary: Record<string, number>
+  kind_labels: Record<string, string>
+  query: string
+  /** true = 用的是**各家样本**（地区性目录用当地书名，否则会误报「无结果」） */
+  samples: boolean
+  elapsed_ms: number
+  ran_at: number
+  message?: string
+}
+
 /** 一次抓取给出的候选 */
 export interface MetadataCandidate {
   source: string
@@ -3037,6 +3068,20 @@ export const api = {
 
   /** 提供商目录（第 57 期：分组 + 启用 / 配置现状；设置页「提供商」页的唯一数据源） */
   metadataProviders: () => request<MetadataProvidersResult>('/api/metadata/providers'),
+
+  /**
+   * 元数据来源**真联网体检**（第 59 期）：并发跑、单家超时、失败分门别类。**只读**。
+   * 不传 `query` ⇒ 用**各家样本**（地区性目录用当地书名，否则会误报「无结果」）。
+   */
+  metadataHealth: (query?: string) =>
+    request<MetadataHealthResult>('/api/metadata/health', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(query ? { query } : {}),
+    }),
+
+  /** 上次体检结果（进程内缓存；后端重启后为空 —— 界面如实显示「尚未体检过」） */
+  metadataHealthLast: () => request<MetadataHealthResult>('/api/metadata/health'),
 
   /**
    * 源连通性自检（真的外呼；被点的源才测）。

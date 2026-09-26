@@ -9,7 +9,12 @@
 
 ⚠️ 样例是**手工按各站文档/页面结构写的**，不是实时抓的：它们钉住的是「我们的解析器对这份
 结构怎么解」，**不**代表站点现在就是这个结构（这也是注册表 `fragile` 标记的意义）。
+
+📌 第 59 期体检的实测修正：Amazon 的书名类名、Lubimyczytac 的卡片类名都已与页面真实结构
+对齐（旧写法在真实页面上**一条都匹配不到**），fixture 同步换成了真实结构。
 """
+import pytest
+
 import novelforge.core.metasources as m
 
 
@@ -69,6 +74,8 @@ def test_带HTML的简介会被剥标签(monkeypatch):
     assert "<" not in e["description"] and ">" not in e["description"], e["description"]
     assert "Frank Herbert's classic masterpiece & more" in e["description"]
     assert e["tags"] == ["Sci-Fi"], e["tags"]
+    # 数字实体也要还原（实测 Amazon 书名里有 `Frank Herbert&#x27;s`）
+    assert m._strip_html("<h2>Frank Herbert&#x27;s Dune</h2>") == "Frank Herbert's Dune"
 
 
 def test_audnexus_解析对象数组作者(monkeypatch):
@@ -153,18 +160,27 @@ def test_aladin_能从带前缀的响应里抠出JSON(monkeypatch):
 
 # ---------------- 页面抓取型（易失效）----------------
 
-def test_amazon_按data_asin解析(monkeypatch):
+def test_amazon_书名取h2且跳过辅助span(monkeypatch):
+    """第 59 期体检实测两条：① 书名在 `<h2>` 里；② 用 `a-text-normal` 会抓到
+    「Aug 25, 2020 / Check each product page」这类辅助 span —— **错字段比缺字段更糟**，
+    所以 fixture 里特意放了这些干扰项，外加一个 `data-asin=""` 的占位块。
+    """
     html = (
-        '<div data-asin="B000000001"><span class="a-size-medium a-color-base a-text-normal">三体</span>'
-        '<span class="a-size-base">刘慈欣</span></div>'
-        '<div data-asin="B000000002"><span class="a-size-medium a-color-base a-text-normal">三体 II</span>'
-        '<span class="a-size-base">刘慈欣</span></div>'
+        '<div data-asin="" class="s-result-item">'
+        '<span class="a-size-base a-color-secondary">Check each product page</span></div>'
+        '<div data-asin="B000000001" class="s-result-item s-asin">'
+        '<h2 class="a-size-base-plus"><span>三体</span></h2>'
+        '<span class="a-size-base a-color-secondary">刘慈欣</span>'
+        '<img class="s-image" src="https://x/1.jpg"></div>'
+        '<div data-asin="B000000002" class="s-result-item s-asin">'
+        '<h2><span>三体 II</span></h2></div>'
     )
     _patch(monkeypatch, text_router={"amazon": html})
     items = _one("amazon")
 
     assert [i["title"] for i in items] == ["三体", "三体 II"]
     assert items[0]["author"] == "刘慈欣" and items[0]["raw_id"] == "B000000001"
+    assert items[0]["cover_url"] == "https://x/1.jpg"
 
 
 def test_goodreads_按tr块解析(monkeypatch):
@@ -216,17 +232,23 @@ def test_librofm_标题与作者配对(monkeypatch):
     assert items[0]["author"] == "Frank Herbert"
 
 
-def test_lubimyczytac_标题作者配对(monkeypatch):
+def test_lubimyczytac_按book_card解析(monkeypatch):
+    """fixture 照**真实页面校准**（第 59 期体检发现旧类名 `authorAllBooks__*` 已废弃）。"""
     html = (
-        '<a class="authorAllBooks__singleTextTitle" href="/ksiazka/1">Dune</a>'
-        '<a class="authorAllBooks__singleTextTitle" href="/ksiazka/2">Mesjasz Diuny</a>'
-        '<a class="authorAllBooks__singleTextAuthor">Frank Herbert</a>'
+        '<div class="book-card"><img class="book-card__cover-image" src="https://s/1.jpg">'
+        '<a class="book-card__title" title="Wiedźmin" href="/ksiazka/1/wiedzmin"> Wiedźmin </a>'
+        '<div class="book-card__author"><a href="/autor/1">Andrzej Sapkowski</a></div></div>'
+        '<div class="book-card"><img class="book-card__cover-image" src="https://s/2.jpg">'
+        '<a class="book-card__title" title="Mesjasz Diuny" href="/ksiazka/2/mesjasz">Mesjasz</a>'
+        '<div class="book-card__author"><a href="/autor/2">Frank Herbert</a></div></div>'
     )
     _patch(monkeypatch, text_router={"lubimyczytac": html})
     items = _one("lubimyczytac")
 
-    assert [i["title"] for i in items] == ["Dune", "Mesjasz Diuny"]
-    assert items[0]["author"] == "Frank Herbert" and items[1]["author"] == ""
+    assert [i["title"] for i in items] == ["Wiedźmin", "Mesjasz Diuny"]
+    assert items[0]["author"] == "Andrzej Sapkowski" and items[1]["author"] == "Frank Herbert"
+    assert items[0]["cover_url"] == "https://s/1.jpg"
+    assert items[0]["raw_id"] == "/ksiazka/1/wiedzmin"
 
 
 # ---------------- 边界：坏响应 / 空响应 ----------------
@@ -312,6 +334,34 @@ def test_audible_地区决定分站(monkeypatch):
 
     assert seen[0].startswith("https://api.audible.co.uk/"), seen[0]
     assert seen[1].startswith("https://api.audible.com/"), "没见过的地区回落美站"
+
+
+def test_挑战页与验证码页会被判成拦截(monkeypatch):
+    """站点这时回的是 **200 + 验证页**（或 202 挑战页）：不当场判掉，
+    解析器只会「解析不到结果」，用户就分不清「站点改版」与「被拦」。
+    """
+    class _Resp:
+        def __init__(self, text, status=200):
+            self.text = text
+            self.status_code = status
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(m.httpx, "request", lambda *a, **k: _Resp(
+        "<html><body>Enter the characters you see below</body></html>"))
+    with pytest.raises(RuntimeError) as e1:
+        m._get_text("https://www.amazon.com/s")
+    assert "被反爬拦截" in str(e1.value)
+
+    monkeypatch.setattr(m.httpx, "request", lambda *a, **k: _Resp("", status=202))
+    with pytest.raises(RuntimeError) as e2:
+        m._get_text("https://libro.fm/search")
+    assert "202" in str(e2.value) and "被反爬拦截" in str(e2.value)
+
+    # 正常页面照常返回
+    monkeypatch.setattr(m.httpx, "request", lambda *a, **k: _Resp("<html>正常</html>"))
+    assert m._get_text("https://example.com") == "<html>正常</html>"
 
 
 def test_两个解析小工具行为():
