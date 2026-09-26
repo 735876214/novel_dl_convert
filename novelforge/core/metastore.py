@@ -15,7 +15,13 @@ from . import db, fileops
 
 def _opf_value(book: dict, field: str):
     """从 library 的书对象读 OPF 原值。字段名对齐 ``fileops.METADATA_FIELDS``
-    （注意 ``date`` 在书目里叫 ``year``）。"""
+    （注意 ``date`` 在书目里叫 ``year``）。
+
+    ⚠️ **传进来的必须是「不过覆盖层」的书**（``library.by_id_raw`` / ``catalog.raw_book``）。
+    卡片上的字段是生效值（override > online > opf），拿生效值当 OPF 原值，只要用户改过
+    书名，``value`` 与 ``opf`` 就永远相等 —— 「与文件原值不同才写进副本」的判据恒为假，
+    刮削**静默不再内嵌任何元数据**（不报错、只是副本里什么都没有）。
+    """
     if field == "tags":
         return list(book.get("tags") or [])
     if field == "narrators":
@@ -25,11 +31,29 @@ def _opf_value(book: dict, field: str):
     return str(book.get(field) or "").strip()
 
 
+def _raw(book: dict) -> dict:
+    """这本书的**文件派生值**（索引里那一份）；取不到就退回传进来的卡片。
+
+    退回是刻意的：``state()`` 也会被喂**手搓的书对象**（测试、``series_meta`` 那类
+    只带部分字段的构造），那些 id 在索引里查不到。取不到时退回卡片 = 与第 62 期
+    之前的行为一致（那时卡片恰好带着改之前的值），不会比原来更糟。
+    """
+    bid = (book or {}).get("id")
+    if not bid:
+        return book
+    try:
+        from . import library                      # 延迟导入：library 反向依赖本模块
+        return library.by_id_raw(str(bid)) or book
+    except Exception:                              # noqa: BLE001 —— 取值失败不该让编辑器炸
+        return book
+
+
 def effective(book: dict) -> dict:
     """返回该书每个可编辑字段的生效值（override > online > opf）。"""
     bid = book.get("id")
     ov = db.get_overrides(bid) if bid else {}
     on = db.get_online(bid) if bid else {}
+    raw = _raw(book)
     out = {}
     for f in fileops.METADATA_FIELDS:
         if ov.get(f) and str(ov[f]).strip():
@@ -39,7 +63,7 @@ def effective(book: dict) -> dict:
         elif on.get(f) and str((on[f].get("value") or "")).strip():
             out[f] = on[f]["value"]
         else:
-            out[f] = _opf_value(book, f)
+            out[f] = _opf_value(raw, f)
     return out
 
 
@@ -57,9 +81,10 @@ def state(book: dict) -> dict:
     ov = db.get_overrides(bid) if bid else {}
     on = db.get_online(bid) if bid else {}
     locks = db.get_locks(bid) if bid else set()
+    raw = _raw(book)
     out = {}
     for f in fileops.METADATA_FIELDS:
-        opf = _opf_value(book, f)
+        opf = _opf_value(raw, f)
         online = (on.get(f) or {}).get("value") or ""
         online = str(online).strip()
         overridden = bool(ov.get(f) and str(ov[f]).strip())

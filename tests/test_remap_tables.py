@@ -37,11 +37,20 @@ def _tables_with_book_id() -> set:
 # ---------------------------------------------------------------------------
 
 def test_搬迁清单覆盖所有含book_id的表(isolated):  # noqa: ARG001
-    covered = set(db.REMAP_TABLES) | set(db.REMAP_EXPLICIT_TABLES)
+    """含 book_id 的表必须落进三份清单之一：通用搬 / 自有一套 / **衍生不搬**。
+
+    第三份（``REMAP_DERIVED_TABLES``，第 62 期加）不是「还没补」，是**明确决定不搬**：
+    ``book_index`` 是磁盘的投影，搬迁只改 ``book_id`` 不改 ``rel``，搬完那行就自称指向
+    一本路径不存在的书（见 db.py 该常量的说明）。所以这里要求的是「**声明过**」，
+    而不是「必须搬」—— 漏声明的后果仍然是静默断链，与漏搬一样不可接受。
+    """
+    covered = (set(db.REMAP_TABLES) | set(db.REMAP_EXPLICIT_TABLES)
+               | set(db.REMAP_DERIVED_TABLES))
     missing = _tables_with_book_id() - covered
     assert missing == set(), (
-        "这些表按 book_id 存却不在搬迁清单里 ⇒ 换库 / 改名后静默断链，"
-        "补进 REMAP_TABLES（或 REMAP_EXPLICIT_TABLES）：%s" % sorted(missing)
+        "这些表按 book_id 存却哪份清单都没进 ⇒ 换库 / 改名后静默断链，"
+        "补进 REMAP_TABLES（搬）/ REMAP_EXPLICIT_TABLES（自有一套）/ "
+        "REMAP_DERIVED_TABLES（衍生，随重扫重算）：%s" % sorted(missing)
     )
 
 

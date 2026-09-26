@@ -127,19 +127,52 @@ def test_源目录逐文件指纹与目录名分毫未动(env):
 
 
 def test_元数据只落服务端不写副本目录(env):
-    """音频目录没有 OPF 可写 —— 元数据照旧只存 DB，副本里不许凭空多出文件。"""
+    """音频目录没有 OPF 可写 —— 元数据照旧只存 DB，副本里不许凭空多出文件。
+
+    ⚠️ 本用例此前还断言过 ``republish(...)["total"] == 0``（"名字没变，一本都不动"），
+    第 62 期删掉：默认命名规则是 ``{author} - {title}``，而这里把两个字段都覆盖了 ⇒
+    算出来的落点**确实变了**，重出版理当改这一本的副本名。它当年能过，靠的是扫描
+    缓存里那张「标脏之前扫出来的」旧卡片（身上还带着改之前的书名）—— 是缓存时序的
+    巧合，不是语义。现在覆盖层在**读取时**叠加，卡片永远是新的，这份巧合没有了。
+    本用例关心的只是「副本里不许多出文件」，改名与否不在其列（另见
+    ``test_改元数据后重出版按新名字落副本``）。
+    """
     src = _audio_dir(env["root"], "不写盘")
     row = _publish(env, "不写盘")
     db.set_override(row["book_id"], "title", "用户改过的名字")
     db.set_override(row["book_id"], "author", "用户改过的作者")
 
-    assert scrape.republish(None, env["lid"])["total"] == 0     # 名字没变，一本都不动
+    scrape.republish(None, env["lid"])
     assert scrape.resolve(row["book_id"], "rebuild")["ok"] is True
 
     dst = env["pdir"] / db.scrape_get(row["book_id"])["link_rel"]
     assert [p.name for p in sorted(dst.rglob("*")) if p.is_file()] \
         == [p.name for p in sorted(src.rglob("*")) if p.is_file()], "副本里不许多出元数据文件"
     assert db.get_overrides(row["book_id"])["title"] == "用户改过的名字"
+
+
+def test_改元数据后重出版按新名字落副本(env):
+    """改书名 / 作者 ⇒ 重出版要把副本落到**新名字**上（源目录名一个字都不动）。
+
+    这条钉的是「覆盖层什么时候生效」这个时序问题：命名规则用 ``{author} - {title}``，
+    而这两个字段正是被覆盖的 —— 只要读到的卡片还是标脏之前的旧值，重出版就会
+    认为「落到哪儿都没变」而**什么都不做**：用户改完书名，副本名却永远停在旧名字上，
+    且不报任何错。改元数据的接口后面紧跟 ``library.invalidate()``，就是为了这条链路。
+    """
+    src = _audio_dir(env["root"], "改名前")
+    before = src.name
+    row = _publish(env, "改名前")
+    old_rel = db.scrape_get(row["book_id"])["link_rel"]
+    assert "改名前" in old_rel
+
+    db.set_override(row["book_id"], "title", "改过的名字")
+    library.invalidate(env["lid"])
+
+    out = scrape.republish(None, env["lid"])
+    assert out["total"] == 1, "改完书名，重出版应当认定落点变了"
+    new_rel = db.scrape_get(row["book_id"])["link_rel"]
+    assert new_rel != old_rel and "改过的名字" in new_rel, f"副本没落到新名字上：{new_rel}"
+    assert src.name == before, "源目录名不许跟着改（源文件永远只读）"
 
 
 # ---------------------------------------------------------------------------

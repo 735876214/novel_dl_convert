@@ -166,6 +166,15 @@ def close() -> None:
         _conn = None
         _conn_proxy = None
         _db_path = None
+    # 第 62 期：书目索引（catalog）的进程内状态必须跟着一起重置 ——
+    # 它的「建过表了」标记与「这个库已刷过」集都是**进程级**的，而本函数换的是
+    # **库级**的隔离（测试每个用例一套空库）。不重置的话下一个用例会跳过建表，
+    # 然后在一条 `SELECT * FROM book_index` 上撞 no such table。
+    try:
+        from . import catalog
+        catalog.reset_state()
+    except Exception:                         # noqa: BLE001 —— 收尾动作不该让 close 失败
+        pass
 
 
 def init():
@@ -725,6 +734,14 @@ def init():
             c.execute("ALTER TABLE authors ADD COLUMN sort_name_local TEXT NOT NULL DEFAULT ''")
         _seed_user(c)
         c.commit()
+    # 第 62 期：书目索引表（``core/catalog``）随建库一起建。
+    # ⚠️ 挂在这里而不是 server 启动处，是因为**测试也走 db.init()**（用例级隔离：
+    # `db.close()` + `db.init()` 换一套空库），挂在启动处会让全部用例的索引表缺失。
+    # 延迟导入避免 `db ↔ catalog` 的模块级循环（catalog 模块级要用本模块的连接）。
+    # 建表失败**不吞**：索引读不出来等于整个书架不可用，静默降级只会让问题
+    # 在几千行之后以一个「no such table」的面目出现。
+    from . import catalog
+    catalog.ensure_schema()
 
 
 def _seed_user(c):
@@ -1914,6 +1931,19 @@ REMAP_TABLES = (
 #: ``link_rel`` 三个**库相关**列要一起改（换库改全部，改名只改 ``source_rel``），
 #: 而通用搬迁不该知道出版物语义 ⇒ 走 :func:`scrape_remap_item`，由移动与改名两条路径共用。
 REMAP_EXPLICIT_TABLES = ("scrape_items",)
+
+#: **衍生表**：同样含 ``book_id``，但**刻意不搬** —— 它们是磁盘的投影，随重扫自然重算。
+#:
+#: ``book_index``（第 62 期）的每一行都是「某个根下、某个相对路径」的探测结果，判据
+#: （``root`` / ``rel`` / ``size`` / ``mtime``）就写在行里。改名 / 换库之后旧行因为
+#: **那条路径已经不存在**，被下一次增量刷新直接删掉，新行按新路径重新探测出来 ——
+#: 这才是「索引跟着磁盘走」，比搬准得多。
+#:
+#: ⚠️ 反过来把它加进 :data:`REMAP_TABLES` 会**搬坏**：搬迁只改 ``book_id``、不改 ``rel``，
+#: 于是行变成「book_id 已经是新名字了，rel 还是旧路径」，正好破坏
+#: ``book_id == _book_id(rel, library_id)`` 这条派生不变式 —— ``by_id`` 会拿着一行
+#: 自称指向某本书、路径却指向不存在文件的记录去开文件。契约测试认这份清单。
+REMAP_DERIVED_TABLES = ("book_index",)
 
 #: 目标 id 上**已有数据**时也**不整表跳过**的表：逐行搬，只对**同一字段**取舍。
 #: 这几张表的 PK 都是 ``(book_id, field)`` ⇒ 搬迁的粒度本就是**字段**，目标上某个字段

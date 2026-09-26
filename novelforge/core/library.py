@@ -10,9 +10,12 @@
 - 命名规则     → 只读 :func:`books`；预览 / 重出版副本见 ``core/scrape.plan_naming``
                 （第 28 期起改名只改硬链接副本，源文件名不再有任何入口可改）
 
-EPUB 解析是 IO 密集（要解开 zip 读 OPF），因此扫描结果做进程内短期缓存：
-TTL + 目录指纹（文件数 + 最新 mtime）双重判定；任何写操作后调用
-:func:`invalidate` 立即失效，保证下一个请求读到新状态。
+EPUB 解析是 IO 密集（要解开 zip 读 OPF）。**第 62 期起书目落库**（``core/catalog``）：
+进程内 TTL 5 秒 + 目录指纹那套缓存整个删掉了 —— 它的致命处在「先算指纹再查缓存」，
+于是**缓存命中也要付一次全目录 stat**，而未命中时在锁外全量重扫、还没有单飞
+（线上 266 本书 = 42 秒/请求，见 ``catalog`` 模块文档）。现在请求路径只读一张表，
+扫盘交给后台增量刷新；写操作后仍调 :func:`invalidate`，但它的语义已从
+「清空扫描缓存」变成「标脏，下次读时增量刷一次」。
 """
 from __future__ import annotations
 
@@ -45,12 +48,7 @@ _COVER_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
 # 这类书如果算作「有封面」，就会从「无封面」分组里消失，用户根本找不到它们。
 _COVER_MIN_BYTES = 1024
 
-_CACHE_TTL = 5.0
-
 _lock = threading.RLock()
-#: 缓存按**书库**分桶：``{library_id: {"at", "sig", "books"}}``。
-#: 单份缓存 + 单根指纹在多库下会让「另一个库新增的书」不触发失效（列表长期陈旧）。
-_cache: dict = {}
 
 # 文件名噪声：括号里的版本说明 + 空白/连字符
 _NOISE_RE = re.compile(r"[（(][^）)]*(?:校对|全本|完结|精校|未删减|典藏|合集)[^）)]*[）)]|[\s\-_·]+")
@@ -657,16 +655,28 @@ def by_id(bid: str) -> "dict | None":
     已经躺着这种数据 —— 旧注释写的「入库与迁移都已拦掉」与实况不符。命中时抛
     :class:`BookIdConflict`（是 ``RuntimeError`` 的子类，原有 except 不受影响），
     提示语直接指向修复入口。
+
+    ⚠️ 第 62 期起走 ``catalog.find_by_id``（**带索引的一条 SELECT**，不是全库扫描）。
+    改造前这里是 `[b for b in books() if b["id"] == bid]` —— 而 `books()` 会扫全部库，
+    于是**书架一屏 30 本 = 30 次全库扫描**，封面接口叠加起来就是线上那份 42 秒。
+    两条语义（多命中抛冲突、只认在册的库）在 catalog 里原样保留，见其文档。
     """
-    hits = [b for b in books() if b["id"] == bid]
-    if len(hits) > 1:
-        names = " / ".join(sorted({str(h.get("name")) for h in hits}))
-        libs = "、".join(sorted({str(h.get("library_id")) for h in hits}))
-        raise BookIdConflict(
-            f"《{names}》在多个书库中同名（{libs}），本服务无法确定是哪一本。"
-            f"请到「设置 → 书库管理 → 跨库同名冲突」一键改名消除冲突后重试"
-        )
-    return hits[0] if hits else None
+    from . import catalog
+    return catalog.find_by_id(bid)
+
+
+def by_id_raw(bid: str) -> "dict | None":
+    """按 id 取书，**不过服务端元数据覆盖层** —— 「文件里原本是什么」。
+
+    只给需要「原值」的少数调用方用（目前是 ``metastore``）：卡片上的字段是
+    **生效值**（override > online > opf），拿它当 OPF 原值会让「与文件原值不同才写」
+    这类判据恒为假。详见 :func:`catalog.raw_book`。
+
+    命中多本（``BookIdConflict`` 那种）时返回 None，与 :func:`by_id` 的抛异常不同：
+    这个入口是**取值**不是取书，拿不到交给调用方退回卡片即可。
+    """
+    from . import catalog
+    return catalog.raw_book(bid)
 
 
 # ---------------- 同名冲突（book_id 撞车）----------------
@@ -1204,164 +1214,212 @@ def root_of(book_or_id) -> pathlib.Path:
     return rs[0] if rs else pathlib.Path(config.OUTPUT_DIR)
 
 
-def _entry_mtime(p: pathlib.Path) -> float:
-    """条目的「最新修改时间」：文件取自身 mtime；目录取内部最新文件的 mtime。"""
-    try:
-        if p.is_dir():
-            newest = 0.0
-            for c in p.rglob("*"):
-                if c.is_file():
-                    newest = max(newest, c.stat().st_mtime)
-            return newest or p.stat().st_mtime
-        return p.stat().st_mtime
-    except OSError:
-        return 0.0
+def _cheap_facts(f: pathlib.Path) -> "tuple | None":
+    """条目的**便宜事实** ``(size, mtime, is_dir)``：不打开文件就能拿到的全部信息。
 
+    ⚠️ 这是增量刷新的**唯一闸门**：``catalog.refresh_library`` 拿它与索引现值比，
+    相同就整段跳过、不调 :func:`_probe_entry`（那次调用要开 zip 读 OPF，
+    NAS 上几十毫秒）。所以本函数与 :func:`_probe_entry` **必须同源** ——
+    后者算出的 ``size``/``mtime`` 就是写进索引的那两个值。为此两边共用本函数，
+    而不是各写一套公式；否则会出现「明明变了却永远不重探」这种查不出来的陈旧。
 
-def _dir_signature(d: pathlib.Path, exts=None, exclude=None) -> tuple:
-    """目录指纹：(书目条目数, 目录内文件总数, 最新 mtime)。任一变化即让缓存失效。
+    音频目录的 ``(体积, mtime)`` 取**音频文件**的合计与最新（``audio.dir_size_and_mtime``），
+    与改造前 ``_scan_once`` 里生效的那两个值逐字节一致 —— 改造前它先跑了一次
+    ``_entry_mtime`` 的递归 rglob，但那笔结果在本分支**必被覆盖**
+    （``_iter_book_entries`` 只把「含音频文件的目录」当条目返回 ⇒ dm 恒非 0），
+    所以删掉它纯粹是省下一次整子树的递归遍历，不改任何值。
 
-    ⚠️ 必须与 :func:`_iter_book_entries` 同源（含 ``exts`` 白名单与 ``exclude`` 排除图案）。
-    有声书是**目录**，往目录里加一集既不改变条目数、也不一定改目录自身 mtime ——
-    所以目录内部的文件数也要计入，否则会出现「新音频已入库但列表还是旧的」。
-
-    同理 ``exclude`` 也要传：改了排除图案就得让指纹变，否则用户改完规则看不见效果。
+    条目不可读（``stat`` 失败）返回 ``None``。
     """
-    n, inner, newest = 0, 0, 0.0
-    for p in _iter_book_entries(d, exts, exclude):
-        n += 1
-        if p.is_dir():
-            try:
-                for c in p.rglob("*"):
-                    if c.is_file():
-                        inner += 1
-                        newest = max(newest, c.stat().st_mtime)
-            except OSError:
-                pass
-        else:
-            newest = max(newest, _entry_mtime(p))
-    return (n, inner, round(newest, 3))
+    try:
+        st = f.stat()
+    except OSError:
+        return None
+    if f.is_dir():
+        size, dm = audio.dir_size_and_mtime(f)
+        return (size, dm or st.st_mtime, True)
+    return (st.st_size, st.st_mtime, False)
 
 
-def _scan_once(lib: dict = None) -> list:
-    """扫描**一个书库**的根目录，返回书目条目。
+def _issues_of(rel: str, size: int, is_dir: bool, unparsable: bool, has_cover: bool) -> list:
+    """条目的**文件派生**缺失项（第 5 期「缺失资源」工具的判定依据）。
 
-    ``name`` 仍是**相对该库根**的 posix 路径 —— BookCard 契约不变，前端 / OPDS / Komga
-    都不必连锁改；跨库同名由入库侧（``core/library_rules.resolve_target``）与迁移侧
-    （``core/migrate.py``）**两道**冲突检测拦住 —— 入库侧的拦截是第 13 期才补上的，
-    此前只有迁移侧会拦（旧注释把两件事写成了一件）。已经产生的冲突用
+    ⚠️ 判据必须**只依赖文件自身**（体积 / 是否目录 / 能否解析 / 有没有封面），
+    这样它才能在读取时从索引列现算，而不必入库 —— 一旦有服务端状态掺进来
+    （如「服务端有没有封面」），索引里那份就会过期。
+
+    「服务端封面存在 ⇒ 撤掉 ``no-cover``」是**另一层**的事，在
+    :func:`_apply_overlay` 里做（那里才查得到 ``db.cover_ids``）。
+    """
+    issues = []
+    if not is_dir and size == 0:
+        issues.append("zero-bytes")
+    if unparsable:
+        issues.append("unparsable")
+    elif not has_cover and pathlib.PurePosixPath(rel).suffix.lower() == ".epub":
+        issues.append("no-cover")
+    # 非 EPUB（mobi/pdf/txt/漫画/音频）本项目不去解析封面，不计为缺失
+    return issues
+
+
+def _probe_entry(f: pathlib.Path) -> "dict | None":
+    """单个书目条目的**昂贵探测**：开 zip 读 OPF / 解归档数页 / 读音频标签。
+
+    这是扫描链路上唯一的重 IO 环节 —— NAS 上开一次 ``probe_epub`` 要几十毫秒，
+    而线上 266 本书的整轮扫描因此要 42 秒。所以它被单独摘出来给两条链路共用：
+
+    - :func:`_scan_once`（**无索引**时的全量扫描，仍是 catalog 的兜底与对拍基准）；
+    - ``catalog.refresh_library``（增量刷新）—— **只在条目的 ``(size, mtime)``
+      与索引现值不同时才调它**，没变就整段跳过。
+
+    ⚠️ 因此本函数**只能依赖文件自身**。任何库级 / 服务端状态（元数据覆盖层、
+    服务端封面、库名、库类型…）都不许掺进来 —— 掺了结果就不能跨请求复用，
+    「文件没变 ⇒ 探测结果没变」这条增量刷新的立足点当场失效。库级的东西
+    （``name`` / ``path`` / ``library_id`` / 渐变占位色）一律由 :func:`_row_of`
+    在**读取时**现拼。
+
+    ``title`` / ``author`` 在这里就把文件名兜底（``metadata.from_filename``）算完，
+    存储的是**最终值** —— 否则读回索引时得重新拿文件名解析一遍，等于把探测成本
+    又搬回了读取路径。
+
+    条目不可读（``stat`` 失败）返回 ``None``，调用方跳过。
+    """
+    facts = _cheap_facts(f)
+    if facts is None:
+        return None
+    size, mtime, is_dir = facts
+    # 音频（单文件或目录）统一成 format="AUDIO"，前端据此进播放器
+    is_audio_entry = is_dir or audio.is_audio(f)
+    name_meta = metadata.from_filename(f.name)
+    info = {
+        "title": "", "author": "", "series": "", "has_cover": False, "unparsable": False,
+        "year": "", "publisher": "", "isbn": "", "language": "", "description": "", "tags": [],
+        "cover": "", "pages": 0, "pages_source": "", "series_index": "", "fixed_layout": False,
+        # 演播者（第 53 期）：扫描期从音频标签解析，列表形态与 tags 同构
+        "narrators": [],
+    }
+    tracks = 0
+    if is_audio_entry:
+        tracks = audio.tracks(f)["total"]
+        # 演播者：解析音频标签（第 53 期补的「前置缺失」）。目录形态取首轨文件；
+        # 解析失败只降级为空，绝不让一本书因标签坏而入库失败。
+        try:
+            _probe = audio.first_audio_file(f)
+            if _probe is not None:
+                info["narrators"] = audio_meta.extract(_probe).get("narrators") or []
+        except Exception:
+            info["narrators"] = []
+        if is_dir:
+            cover = audio.cover_in_dir(f)
+            info.update({"has_cover": bool(cover), "cover": cover})
+        if tracks == 0:
+            info["unparsable"] = True
+    elif f.suffix.lower() == ".epub":
+        info = probe_epub(f)
+    elif comics.is_comic(f):
+        # 漫画（CBZ / CBR）：页数与封面都是**真实值**（不是估算），pages_source = "archive"
+        info.update(comics.probe(f))
+
+    return {
+        "is_dir": is_dir,
+        "size": size,
+        "mtime": mtime,
+        "tracks": tracks,
+        "format": "AUDIO" if is_audio_entry else f.suffix.lstrip(".").upper(),
+        "title": info["title"] or name_meta["title"],
+        "author": info["author"] or name_meta["author"],
+        "series": info.get("series", ""),
+        # 系列内序号（字符串，空串 = 无）。解析见 _series_index_of
+        "series_index": info.get("series_index", ""),
+        "has_cover": bool(info.get("has_cover")),
+        # 封面来源（EPUB = zip 内路径；漫画 = 归档内条目名；音频 = 目录内文件名；空串 = 无）
+        "cover": info.get("cover", ""),
+        # 页数：**估算值**（见 _pages_in），pages_source 恒为 "estimate"；
+        # 漫画为归档真实页数（"archive"）；非 EPUB / 漫画恒为 0，前端据此不显示页数
+        "pages": info.get("pages", 0),
+        "pages_source": info.get("pages_source", ""),
+        "year": info.get("year", ""),
+        "publisher": info.get("publisher", ""),
+        "isbn": info.get("isbn", ""),
+        "language": info.get("language", ""),
+        "description": info.get("description", ""),
+        "tags": info.get("tags", []),
+        # 演播者（第 53 期）：扫描期自音频标签解析，列表形态与 tags 同构
+        "narrators": info.get("narrators", []),
+        # 固定版式（pre-paginated）：阅读器据此**不套用重排偏好、不改页宽**（见 _fixed_layout_of）；
+        # 非 EPUB 恒 false（本项目不解析它们的内容）
+        "fixed_layout": bool(info.get("fixed_layout")),
+        "unparsable": bool(info.get("unparsable")),
+    }
+
+
+def _row_of(lib: dict, root: pathlib.Path, f: pathlib.Path, p: dict) -> dict:
+    """探测结果 + 库级信息 → BookCard 契约的书目条目。
+
+    ``c1``/``c2``（渐变占位色）由 ``book_id`` 派生、``path`` 由 ``root``/``rel``
+    现拼、``library_type`` 取自库实体 —— 这三样（连同 ``name`` 与 ``id`` 本身）
+    都**不入库**：入库就等于把「库改名 / 挪根 / 换类型」变成一次需要回填索引的
+    数据迁移，而它们本来就是一次哈希或一次字符串拼接的成本。
+
+    ``name`` 是**相对该库根**的 posix 路径 —— BookCard 契约不变，前端 / OPDS /
+    Komga 都不必连锁改；跨库同名由入库侧（``core/library_rules.resolve_target``）
+    与迁移侧（``core/migrate.py``）**两道**冲突检测拦住 —— 入库侧的拦截是第 13 期
+    才补上的，此前只有迁移侧会拦（旧注释把两件事写成了一件）。已经产生的冲突用
     :func:`id_conflicts` 列出来，走工具页一键改名修复。
     """
-    if not lib:
-        return []                      # 没有库就没有根可扫（不再合成默认库）
-    # 第 41 期：库持有多个文件夹（roots_of），逐个扫描后合并。
-    roots = roots_of(lib)
-    # 第 40 期：白名单与排除图案都按**该库生效值**取（设过就用设过的，没设过回落类型默认）
-    exts = exts_for_library(lib)
-    patterns = parse_excludes(lib.get("exclude"))
-    books = []
-    for d in roots:
-        for f in _iter_book_entries(d, exts, patterns):
-            is_dir = f.is_dir()
-            try:
-                st = f.stat()
-            except OSError:
-                continue
+    rel = f.relative_to(root).as_posix()
+    # id 由 basename 派生（见 _book_id），所以挪进系列目录不会换 id
+    bid = _book_id(rel, lib.get("id"))
+    c1, c2 = _gradient(bid)
+    return {
+        "id": bid,
+        "name": rel,
+        "size": p["size"],
+        "mtime": p["mtime"],
+        "format": p["format"],
+        "title": p["title"],
+        "author": p["author"],
+        "series": p["series"],
+        "series_index": p["series_index"],
+        "has_cover": p["has_cover"],
+        "cover": p["cover"],
+        "pages": p["pages"],
+        "pages_source": p["pages_source"],
+        # 音频轨数（单文件 1、目录 n）；非音频恒 0
+        "tracks": p["tracks"],
+        "year": p["year"],
+        "publisher": p["publisher"],
+        "isbn": p["isbn"],
+        "language": p["language"],
+        "description": p["description"],
+        "tags": p["tags"],
+        "narrators": p["narrators"],
+        "fixed_layout": p["fixed_layout"],
+        "c1": c1,
+        "c2": c2,
+        "issues": _issues_of(rel, p["size"], p["is_dir"], p["unparsable"], p["has_cover"]),
+        # 多书库：归属信息。`name` 相对**所属库根**，故协议层与前端无需改
+        "path": str(f),
+        "library_id": lib.get("id") or "",
+        "library_type": lib.get("type") or "mixed",
+    }
 
-            # 音频（单文件或目录）统一成 format="AUDIO"，前端据此进播放器
-            is_audio_entry = is_dir or audio.is_audio(f)
-            name_meta = metadata.from_filename(f.name)
-            info = {
-                "title": "", "author": "", "series": "", "has_cover": False, "unparsable": False,
-                "year": "", "publisher": "", "isbn": "", "language": "", "description": "", "tags": [],
-                "cover": "", "pages": 0, "pages_source": "", "series_index": "", "fixed_layout": False,
-                # 演播者（第 53 期）：扫描期从音频标签解析，列表形态与 tags 同构
-                "narrators": [],
-            }
-            tracks = 0
-            size = st.st_size
-            mtime = _entry_mtime(f)
-            if is_audio_entry:
-                tracks = audio.tracks(f)["total"]
-                # 演播者：解析音频标签（第 53 期补的「前置缺失」）。目录形态取首轨文件；
-                # 解析失败只降级为空，绝不让一本书因标签坏而入库失败。
-                try:
-                    _probe = audio.first_audio_file(f)
-                    if _probe is not None:
-                        info["narrators"] = audio_meta.extract(_probe).get("narrators") or []
-                except Exception:
-                    info["narrators"] = []
-                if is_dir:
-                    size, dm = audio.dir_size_and_mtime(f)
-                    mtime = dm or mtime
-                    cover = audio.cover_in_dir(f)
-                    info.update({"has_cover": bool(cover), "cover": cover})
-                if tracks == 0:
-                    info["unparsable"] = True
-            elif f.suffix.lower() == ".epub":
-                info = probe_epub(f)
-            elif comics.is_comic(f):
-                # 漫画（CBZ / CBR）：页数与封面都是**真实值**（不是估算），pages_source = "archive"
-                info.update(comics.probe(f))
 
-            issues = []
-            if not is_dir and size == 0:
-                issues.append("zero-bytes")
-            if info["unparsable"]:
-                issues.append("unparsable")
-            elif not info["has_cover"] and f.suffix.lower() == ".epub":
-                issues.append("no-cover")
-            # 非 EPUB（mobi/pdf/txt/漫画/音频）本项目不去解析封面，不计为缺失
+def _apply_overlay(books: list) -> list:
+    """合并服务端元数据（override > online > opf）与封面。
 
-            # 相对路径（Komga 布局下形如 "系列/书.epub"，平铺时就是文件名；音频目录形如 "系列/书名"）；
-            # id 由 basename 派生（见 _book_id），所以挪进系列目录不会换 id
-            rel = f.relative_to(d).as_posix()
-            bid = _book_id(rel, lib.get("id"))
-            c1, c2 = _gradient(bid)
-            fmt = "AUDIO" if is_audio_entry else f.suffix.lstrip(".").upper()
-            books.append({
-                "id": bid,
-                "name": rel,
-                "size": size,
-                "mtime": mtime,
-                "format": fmt,
-                "title": info["title"] or name_meta["title"],
-                "author": info["author"] or name_meta["author"],
-                "series": info["series"],
-                # 系列内序号（字符串，空串 = 无）。解析见 _series_index_of
-                "series_index": info.get("series_index", ""),
-                "has_cover": info["has_cover"],
-                # 封面来源（EPUB = zip 内路径；漫画 = 归档内条目名；音频 = 目录内文件名；空串 = 无）
-                "cover": info.get("cover", ""),
-                # 页数：**估算值**（见 _pages_in），pages_source 恒为 "estimate"；
-                # 漫画为归档真实页数（"archive"）；非 EPUB / 漫画恒为 0，前端据此不显示页数
-                "pages": info.get("pages", 0),
-                "pages_source": info.get("pages_source", ""),
-                # 音频轨数（单文件 1、目录 n）；非音频恒 0
-                "tracks": tracks,
-                "year": info.get("year", ""),
-                "publisher": info.get("publisher", ""),
-                "isbn": info.get("isbn", ""),
-                "language": info.get("language", ""),
-                "description": info.get("description", ""),
-                "tags": info.get("tags", []),
-                # 演播者（第 53 期）：扫描期自音频标签解析，列表形态与 tags 同构
-                "narrators": info.get("narrators", []),
-                # 固定版式（pre-paginated）：阅读器据此**不套用重排偏好、不改页宽**（见 _fixed_layout_of）；
-                # 非 EPUB 恒 false（本项目不解析它们的内容）
-                "fixed_layout": bool(info.get("fixed_layout")),
-                "c1": c1,
-                "c2": c2,
-                "issues": issues,
-                # 多书库：归属信息。`name` 相对**所属库根**，故协议层与前端无需改
-                "path": str(f),
-                "library_id": lib.get("id") or "",
-                "library_type": lib.get("type") or "mixed",
-            })
+    第 17 期 T3：使列表 / 卡片 / 搜索 / OPDS 全部以服务器为准（详情页早已由
+    metastore 合并，这里补齐批量热路径）。
 
-    # 第 17 期 T3：合并服务端元数据（override > online > opf）与封面，使列表 / 卡片 /
-    # 搜索 / OPDS 全部以服务器为准（详情页早已由 metastore 合并，这里补齐批量热路径）。
-    # **一次批量查询**，靠扫描缓存（TTL 5s）摊销，严禁逐书查库（get_overrides/get_online）。
+    **一次批量查询**摊销到整批书上，严禁逐书查库（get_overrides/get_online）。
+    无索引时它挂在扫描上（靠 TTL 摊销）；有索引后挂在**读取**上 —— 这是这笔
+    查询成本必须留意的变化：一次 `/api/books` 两次查询，与书本数无关。
+
+    第 62 期从 :func:`_scan_once` 摘出来给 ``catalog`` 共用 —— 索引化的书目
+    也必须过这一层，否则「服务端改过的元数据在列表里看不见」。
+    """
+    if not books:
+        return books
     bids = [b["id"] for b in books]
     eff = db.get_effective_meta(bids)
     cids = db.cover_ids(bids)
@@ -1378,50 +1436,86 @@ def _scan_once(lib: dict = None) -> list:
     return books
 
 
+def _scan_once(lib: dict = None) -> list:
+    """**全量扫盘**一个书库，返回书目条目（第 62 期起不再挂在请求路径上）。
+
+    ⚠️ 这是「没有索引」时的实现，第 62 期之后**唯一的常规调用方是
+    ``catalog.refresh_library`` 的冷启动/强制刷新**；请求路径一律走
+    ``catalog.books``（读索引）。保留它是因为对拍脚本（改造前后逐字段比对）
+    与索引损坏时的兜底都要拿它当基准 —— 它是「正确结果」的定义。
+    """
+    if not lib:
+        return []                      # 没有库就没有根可扫（不再合成默认库）
+    # 第 41 期：库持有多个文件夹（roots_of），逐个扫描后合并。
+    roots = roots_of(lib)
+    # 第 40 期：白名单与排除图案都按**该库生效值**取（设过就用设过的，没设过回落类型默认）
+    exts = exts_for_library(lib)
+    patterns = parse_excludes(lib.get("exclude"))
+    books = []
+    for d in roots:
+        for f in _iter_book_entries(d, exts, patterns):
+            p = _probe_entry(f)
+            if p is None:
+                continue
+            books.append(_row_of(lib, d, f, p))
+    return _apply_overlay(books)
+
+
 def _books_of(lib: dict, force: bool = False) -> list:
-    """单个库的书目（带**按库**的短期缓存）。"""
-    # 第 41 期：库可能有多文件夹，指纹按每个文件夹分别取、再组合，任一变化即失效。
-    # ⚠️ 指纹与 _scan_once 必须同源（同一份 exts + exclude）—— 否则「改了排除图案但
-    # 指纹没变 ⇒ 缓存不失效 ⇒ 用户改完看不见效果」，正是本函数上面注释警告的那类 bug。
-    sig = tuple(_dir_signature(d, exts_for_library(lib), parse_excludes(lib.get("exclude")))
-               for d in roots_of(lib))
-    key = str(lib.get("id") or "")
-    with _lock:
-        cur = _cache.get(key) or {}
-        if not force and cur.get("sig") == sig and (time.time() - cur.get("at", 0)) < _CACHE_TTL:
-            return cur.get("books", [])
-    result = _scan_once(lib)
-    with _lock:
-        _cache[key] = {"at": time.time(), "sig": sig, "books": result}
-    return result
+    """单个库的书目 —— 第 62 期起**读索引**，不再扫盘。
+
+    改造前这里是「先算目录指纹（全目录 rglob）再查 TTL 5 秒的缓存」，
+    所以**缓存命中也要付一次全量 stat**；未命中则 `_scan_once`，且那一步在锁外、
+    没有单飞 —— 并发请求各自重扫。线上 266 本书 42 秒就是这么来的。
+
+    现在：索引命中即返回（一条 SELECT），扫盘交给 ``catalog`` 的后台增量刷新。
+    冷启动（索引空）由 ``catalog`` 内部同步扫一次，之后永不再等。
+    """
+    if not lib:
+        return []
+    from . import catalog            # 延迟导入：catalog 反过来要用本模块的探测函数
+    if force:
+        catalog.refresh_library(lib, force=True)
+    return catalog.books_of(lib)
 
 
 def books(library_id=None, force: bool = False) -> list:
     """书目列表（**多库合并**；可按库过滤）。
 
     - ``library_id`` 为空 → 合并全部库（保持既有「全库」语义，供统计 / 搜索 / 推荐用）；
-    - 缓存与指纹**按库**：任一库变化只让该库失效（单份缓存会让别的库新书不出现）。
+    - ``force=True`` → 先强制重扫该库（忽略索引里的 ``(size, mtime)`` 判据）。
+
+    第 62 期起实现整体搬进 ``catalog``：读索引，不扫盘。**逐字段口径不变** ——
+    存的是「只依赖文件自身」的那部分，读取时再拼库级字段并过服务端元数据覆盖层
+    （与改造前 ``_scan_once`` 的两段完全同构，见 ``catalog._book_of_row``）。
     """
-    libs = libraries()
-    if library_id:
-        libs = [l for l in libs if l["id"] == library_id]
-    out: list = []
-    for lib in libs:
-        out.extend(_books_of(lib, force))
-    return out
+    from . import catalog
+    if force:
+        # 只强制重扫**点名的那个库**：`_scan_once` 是「立即扫描」按钮的语义，
+        # 而对全部库做一次强制全量正是本期要消掉的那笔开销。
+        if library_id:
+            lib = get_library(library_id)
+            if lib:
+                catalog.refresh_library(lib, force=True)
+        else:
+            catalog.refresh_all(force=True)
+    return catalog.books(library_id)
 
 
 def invalidate(library_id=None) -> None:
-    """让缓存立即失效（任何改文件的操作之后都要调）。
+    """让书目缓存失效（任何改文件的操作之后都要调）。
 
     给 ``library_id`` 时只失效该库；不给则全部失效（调用方多数不关心库，
     但按库失效能在多库下避免「改一个库、全库重扫」）。
+
+    ⚠️ 第 62 期起语义从「清空进程内扫描缓存」变成「**标脏**」：下一个读该库的
+    请求（或监听线程的下一轮）会做一次**增量**刷新 —— 一次目录遍历 + 每文件一次
+    stat，不开 zip。改造前这里是直接清缓存，于是 `_libraries_changed()` 一调
+    （**新建书库**时会调），紧接着前端连打的 `/api/libraries`、`/api/books`、
+    `migration/preview` 每次都是**冷缓存全量重扫** —— 那正是「新建书库很慢」的根因。
     """
-    with _lock:
-        if library_id:
-            _cache.pop(str(library_id), None)
-        else:
-            _cache.clear()
+    from . import catalog
+    catalog.invalidate(library_id)
 
 
 def export_rows() -> list:

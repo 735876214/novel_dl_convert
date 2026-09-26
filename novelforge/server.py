@@ -29,7 +29,8 @@ from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, act
                    fonts, comics, audio, opds, komga, koreader, integrations, sync,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
-                   lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache)
+                   lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
+                   catalog)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -1160,12 +1161,23 @@ def api_batch(payload: dict = Body(...)):
 
 @app.get("/api/books/{bid}")
 def api_book_detail(bid: str):
-    for b in library.books():
-        if b["id"] == bid:
-            detail = library.book_detail(b["name"])
-            if detail:
-                return detail
-    raise HTTPException(404, "书籍不存在")
+    """单本详情。第 62 期：改走**索引直查**（``by_id``），不再遍历整个书目。
+
+    老写法是 ``for b in library.books()`` 再比对 id —— 打开一本书要把**所有**库的
+    书目全部构造出来（含元数据 overlay），线上 266 本时这就是「点击图书反应很慢」
+    的大头。``by_id`` 是一条按 ``book_id`` 的索引查询，另加一次单本的 overlay。
+
+    另外这里给 ``book_detail`` 补上了 ``library_id``：只按 ``name``（库内相对路径）
+    找，在两个库存在同名相对路径时会翻出**另一本**的章节树 —— 而 ``by_id`` 的冲突
+    语义只管 ``book_id``，管不到 ``name``。限定到命中那本所属的库才是对的。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    detail = library.book_detail(b["name"], b.get("library_id"))
+    if not detail:
+        raise HTTPException(404, "书籍不存在")
+    return detail
 
 
 # ---------------- 账户（单用户轻登录）----------------
@@ -2938,16 +2950,21 @@ def _library_dto(lib: dict, counts: dict = None) -> dict:
     }
 
 
-def _libraries_changed() -> None:
+def _libraries_changed(lid=None) -> None:
     """书库**增 / 删 / 改**之后统一要做的两件事。
 
-    ① 失效扫描缓存（否则界面继续显示旧口径）；
+    ① 失效书目索引（否则界面继续显示旧口径）；
     ② 清掉 watcher 的失败计数 —— 第 37 期必需：没有可接收的库时投递会被**拒收**
        （`library_rules.resolve_target` 的 root 为 None），而失败计数到上限就永久跳过。
        用户照着提示建完库，原先投递过的文件应当自己就被收进去，
        而不是要求他再投一次 —— 那与本期的语义无关，纯属实现的副作用。
+
+    ``lid``（第 62 期）：**只失效这一个库**。三个调用点（新建 / 改 / 删）都已经知道
+    是哪个库，而「全部失效」在下一次 `/api/libraries` 上会触发**每个库各刷一遍** ——
+    「新建书库很慢」的一半就出在这里（另一半见 `library.invalidate` 的文档：
+    改造前它是直接清空缓存，于是紧接着的每一次请求都是冷扫）。
     """
-    library.invalidate()
+    library.invalidate(lid)
     w = WATCHER
     if w is not None:
         try:
@@ -2957,12 +2974,12 @@ def _libraries_changed() -> None:
 
 
 def _book_counts() -> dict:
-    """``{library_id: 书数}``（一次扫描全库，避免逐库重扫）。"""
-    out: dict = {}
-    for b in library.books():
-        k = str(b.get("library_id") or "")
-        out[k] = out.get(k, 0) + 1
-    return out
+    """``{library_id: 书数}`` —— 一次 GROUP BY（``catalog.counts``）。
+
+    改造前是「遍历 ``library.books()`` 数一遍」，而 ``books()`` 要扫全部库 ——
+    `/api/libraries` 为了列个清单返回 1.8 KB 却要 41.9 秒，就是它。
+    """
+    return catalog.counts()
 
 
 def _new_library_id(seed: str) -> str:
@@ -3249,7 +3266,7 @@ def api_create_library(payload: dict = Body(...)):
                             watch=watch, scan_interval=scan_interval, scan_cron=scan_cron,
                             publish_path=str(publish or ""),
                             icon=icon, allowed_exts=allowed_exts, exclude=exclude)
-    _libraries_changed()
+    _libraries_changed(lid)
     activity_log.log(activity_log.ACTION_LAYOUT, name, activity_log.STATUS_OK,
                      detail=f"新建书库：{ltype} / 多文件夹 {len(dirs)}"
                             + (f" / 成品目录 {publish}" if publish else ""), source="api")
@@ -3324,8 +3341,9 @@ def api_update_library(lid: str, payload: dict = Body(...)):
         fields["publish_path"] = str(pub or "")
     # 新库向导三列（第 40 期）：传空串 / 空数组 = 恢复「没设过」（继承库类型默认）。
     # ⚠️ 收窄 allowed_exts 会让原本扫得到的书**从书目里消失**（排除图案同理）——
-    # 这是用户显式操作的结果，不额外拦；但 `library._books_of` 的目录指纹含这两项，
-    # 所以缓存会失效、列表当场刷新（不然用户改完看不见效果，会以为没生效）。
+    # 这是用户显式操作的结果，不额外拦；但必须让该库的索引失效，否则用户改完
+    # 看不见效果、会以为没生效（第 62 期前靠「目录指纹含这两项」实现，
+    # 现在靠下面 `_libraries_changed(lid)` 显式标脏 —— 索引里没有指纹这一层了）。
     if "icon" in p:
         fields["icon"] = _norm_icon(p.get("icon"))
     if "allowed_exts" in p:
@@ -3335,7 +3353,7 @@ def api_update_library(lid: str, payload: dict = Body(...)):
     if not fields:
         raise HTTPException(400, "没有可更新的字段")
     lib = db.update_library(lid, **fields)
-    _libraries_changed()
+    _libraries_changed(lid)
     activity_log.log(activity_log.ACTION_LAYOUT, str(p.get("name") or lid),
                      activity_log.STATUS_OK,
                      detail="更新书库：" + "、".join(sorted(fields)), source="api")
@@ -3361,7 +3379,14 @@ def api_delete_library(lid: str, force: bool = False):
     # 库没了，刮削台账行也没有意义（UI 会显示一堆属于不存在书库的条目）。
     # **只删登记，副本文件留在成品目录里**，与「移除库不删文件」一致。
     db.scrape_delete_by_library(lid)
-    _libraries_changed()
+    # 第 62 期：索引行也要跟着删。不删的话它们会一直躺在表里 ——
+    # `catalog.books/find_by_id` 都会按「仍登记在册的库」过滤掉它们（读不出错），
+    # 但那是靠过滤兜的，攒久了就是一张只增不减的表。
+    try:
+        catalog.forget(lid)
+    except Exception:                                  # noqa: BLE001 —— 清索引失败不该让删库回滚
+        logging.getLogger("novelforge").exception("清理书目索引失败：%s", lid)
+    _libraries_changed(lid)
     activity_log.log(activity_log.ACTION_LAYOUT, str(lid), activity_log.STATUS_OK,
                      detail=f"移除书库登记（文件保留在原地）· 当时 {n} 本", source="api")
     return {"ok": True, "removed": str(lid), "books_left_on_disk": n}

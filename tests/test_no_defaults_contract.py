@@ -165,12 +165,16 @@ def test_书库增删改都走_libraries_changed_钩子():
     漏掉任何一个写接口的表现是「明明建好了库，input 里的文件却再也不进来」，
     而且**不报任何错**。行为侧由 `test_watcher_perlibrary` 的建库用例覆盖，
     这里只钉「新增写接口时别忘记接上」。
+
+    第 62 期起钩子带上库 id（``_libraries_changed(lid)``）：书目索引的存在让
+    「全库失效」的代价从「白扫一遍」变成了「白刷所有库的索引」，而增删改只动一个库。
+    断言相应放宽成「调了这个钩子」，语义（别裸调 invalidate）不变。
     """
     src = _read(SERVER_PY)
     for fn in ("api_create_library", "api_update_library", "api_delete_library"):
         m = re.search(rf"\ndef {fn}\(.*?(?=\n@app\.|\ndef )", src, re.S)
         assert m, f"{fn} 的形状变了，请同步本测试"
         body = m.group(0)
-        assert "_libraries_changed()" in body, f"{fn} 没接上 _libraries_changed 钩子"
+        assert re.search(r"_libraries_changed\(", body), f"{fn} 没接上 _libraries_changed 钩子"
         assert "library.invalidate()" not in body, f"{fn} 应改用 _libraries_changed()"
-    assert "def _libraries_changed()" in src and "forget_failures()" in src
+    assert re.search(r"def _libraries_changed\(", src) and "forget_failures()" in src
