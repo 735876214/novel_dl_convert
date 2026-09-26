@@ -44,6 +44,40 @@ _VALUE_KEYS = dict(_CURRENT)
 #: 仍可在配置的 `fields` 里逐项改回 `fill_only` / `skip`。
 DEFAULT_POLICY = "overwrite"
 
+# ---------------- 跨源字段级合并（第 58 期）----------------
+# 现状曾是「取匹配分最高的**一条**候选，所有字段都用它」—— 于是 A 源简介好、B 源年份规范时，
+# 落库的只有赢家的那一套。本段改成**逐字段择优**，但合并是有前提的：
+# **只有「确实像同一本书」的候选才允许参与** —— 把同名不同书的字段拼在一起，比不合并更糟。
+#
+#: 参与合并的**绝对**下限（与 `threshold` 无关，这里是「够不够像同一本」的独立闸）
+MERGE_MIN_SCORE = 0.7
+#: 参与合并的**相对**下限：距最佳候选不能太远（两道闸取严）
+MERGE_RELATIVE = 0.9
+#: 合并后的题材上限（与单候选 `_entry` 的 8 个同口径）
+MERGE_MAX_TAGS = 8
+
+#: 字段 → **该字段更可信的源**（命中者在该字段上插队，未命中按候选分数排）。
+#: 依据是各家**返回内容本身**的取舍，不是主观偏好：
+#:   · date / language / isbn：Open Library 的字段最规范（它的多语言列表还专门挑过）
+#:   · description / cover：Google Books 的简介与封面通常更全
+#:   · tags：Open Library 的 subject 拆开后更像书目题材
+#: 表里没有的字段（title / author）按候选分数取 —— 「像不像同一本书」已经由分数保证。
+#:
+#: ⚠️ 键必须是**字段名**（与 `_VALUE_KEYS` 的键一致），不是书对象里的键 ——
+#: 「年份」的字段名是 `date`（书目里才叫 `year`）。写成 `year` 不会报错，只会**静默失效**
+#: （信任表查不到 ⇒ 退回按分数排），所以有专门测试钉住它。
+FIELD_TRUST = {
+    "date": ("openlibrary",),
+    "language": ("openlibrary",),
+    "isbn": ("openlibrary", "googlebooks"),
+    "publisher": ("openlibrary", "googlebooks"),
+    "description": ("googlebooks", "openlibrary"),
+    "cover": ("googlebooks",),
+    "tags": ("openlibrary", "googlebooks"),
+    "title": (),
+    "author": (),
+}
+
 
 def _cfg(cfg: dict) -> dict:
     return ((cfg or {}).get("metadata_fetch") or {})
@@ -118,6 +152,82 @@ def _candidate_values(cand: dict, blocklist: set) -> dict:
     return out
 
 
+def merge_eligible(cands: list, best: dict) -> list:
+    """挑出**允许参与合并**的候选：分数够高，且不显著低于最佳候选（两道闸取严）。
+
+    这道闸是刻意的保守：合并的收益是「字段更全」，风险是「把同名不同书的字段拼起来」——
+    后者是**不可逆的元数据污染**（用户看到的是一个真实存在但从未出版过的组合）。
+    所以宁可只用最佳候选，也不放低分候选进来。
+    """
+    top = float((best or {}).get("score") or 0.0)
+    if top <= 0:
+        return []
+    floor = max(MERGE_MIN_SCORE, MERGE_RELATIVE * top)
+    return [c for c in (cands or []) if float(c.get("score") or 0.0) >= floor]
+
+
+def merge_values(cands: list, blocklist: set) -> tuple:
+    """逐字段合并：``({字段: 值}, {字段: {来源, 分数}}, 参与源, 封面)``。
+
+    规则都能解释给人听，不搞黑箱：
+
+    1. 每个字段先看 :data:`FIELD_TRUST` 里的**信任源**（按该表顺序），再看候选分数，
+       取第一个非空值 —— 所以「简介来自 Google Books、年份来自 Open Library」是**可预期**的；
+    2. **题材是合并而非择优**：多源题材按出现顺序去重拼起来（上限 :data:`MERGE_MAX_TAGS`）——
+       各家的题材本来就不重合，取某一个源反而信息更少；
+    3. 逐字段回传 `来源 / 分数`：写库账目对得上（谁给的值、多可信）；封面同理单列。
+    """
+    sources: list = []
+    for c in cands:
+        s = str(c.get("source") or "")
+        if s and s not in sources:
+            sources.append(s)
+
+    def order(field: str) -> list:
+        trust = FIELD_TRUST.get(field, ())
+        rank = {s: i for i, s in enumerate(trust)}
+        # 信任源优先；其余按分数倒序（sorted 稳定 ⇒ 同分时保持传入顺序 = 用户在页面排的源顺序）
+        return sorted(cands,
+                      key=lambda c: (0 if str(c.get("source") or "") in rank else 1,
+                                     rank.get(str(c.get("source") or ""), 0),
+                                     -float(c.get("score") or 0.0)))
+
+    values: dict = {}
+    origin: dict = {}
+    for field, key in _VALUE_KEYS.items():
+        if field == "tags":
+            merged: list = []
+            first = None
+            for c in order("tags"):
+                for t in (c.get("tags") or []):
+                    t = str(t).strip()
+                    if t and norm_key(t) not in blocklist and t not in merged:
+                        merged.append(t)
+                        if first is None:
+                            first = c
+            if merged:
+                values["tags"] = merged[:MERGE_MAX_TAGS]
+                origin["tags"] = {"source": str((first or {}).get("source") or ""),
+                                  "score": float((first or {}).get("score") or 0.0)}
+            continue
+        for c in order(field):
+            v = str(c.get(key) or "").strip()
+            if v:
+                values[field] = v
+                origin[field] = {"source": str(c.get("source") or ""),
+                                 "score": float(c.get("score") or 0.0)}
+                break
+
+    cover = None
+    for c in order("cover"):
+        url = str(c.get("cover_url") or "").strip()
+        if url:
+            cover = {"url": url, "source": str(c.get("source") or ""),
+                     "score": float(c.get("score") or 0.0)}
+            break
+    return values, origin, sources, cover
+
+
 def _custom_changes(book: dict, defs: list, values: dict, locked: set) -> dict:
     """自定义字段该补的默认值：``{key: {from, to, source, score}}``。
 
@@ -182,6 +292,8 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             # 多书库：回传库 id，`apply` 才能把路径解析到**该书的库根**（否则默认库误判）
             "library_id": b.get("library_id") or "",
             "candidates": [], "sources": {}, "best_score": 0.0,
+            # 第 58 期：参与跨源字段级合并的源（空 = 未合并，只用最佳候选）
+            "merged_from": [],
             "auto_ok": False, "changes": {}, "cover": None, "skipped": "", "error": "",
             # 该书被显式锁定的字段（含封面的独立键 `cover`）：界面逐字段标注「已锁定」，
             # 抓取侧一律不给这些字段产生改动（见下方两道闸）。
@@ -224,7 +336,17 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
 
         base["best_score"] = best["score"]
         base["auto_ok"] = best["score"] >= b_threshold
-        vals = _candidate_values(best, blocklist)
+        # 第 58 期：**跨源字段级合并** —— 够格的候选不止一条、且来自 ≥2 家时逐字段择优，
+        # 否则退回「只用最佳候选」的旧行为（逐字一致，含封面）。
+        pool = merge_eligible(res["entries"], best) if mfb.get("merge_sources", True) else []
+        if len({str(c.get("source") or "") for c in pool}) >= 2:
+            vals, origin, merged_sources, cover_pick = merge_values(pool, blocklist)
+            base["merged_from"] = merged_sources
+        else:
+            vals = _candidate_values(best, blocklist)
+            origin = {f: {"source": best["source"], "score": best["score"]} for f in vals}
+            cover_pick = ({"url": best["cover_url"], "source": best["source"],
+                           "score": best["score"]} if best.get("cover_url") else None)
         # 自定义字段先放进来（键空间不同：它们不是 OPF 字段名，必不与下面重名）
         changes = dict(cust_changes)
         for field, value in vals.items():
@@ -245,18 +367,22 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
                 continue
             if not isinstance(value, list) and str(value) == str(cur):
                 continue
-            changes[field] = {"from": cur, "to": value, "source": best["source"],
-                              "score": best["score"]}
+            # 来源 / 分数**逐字段**记（合并后同一本书的不同字段可能来自不同源）——
+            # 预览界面据此如实展示「这个值是谁给的」，出了问题也追得回来。
+            meta_src = origin.get(field) or {}
+            changes[field] = {"from": cur, "to": value,
+                              "source": meta_src.get("source") or best["source"],
+                              "score": meta_src.get("score") or best["score"]}
         base["changes"] = changes
 
         cover_pol = b_policy.get("cover") or DEFAULT_POLICY
         # 封面锁用独立键 `cover`（第 35 期）：策略说覆盖也没用，锁在就不动它
-        if best.get("cover_url") and cover_pol != "skip" and db.LOCK_COVER not in locked:
+        if cover_pick and cover_pol != "skip" and db.LOCK_COVER not in locked:
             has = bool(b.get("has_cover"))
             if (not has) or cover_pol == "overwrite":
-                base["cover"] = {"url": best["cover_url"],
+                base["cover"] = {"url": cover_pick["url"],
                                  "action": "replace" if has else "add",
-                                 "source": best["source"], "score": best["score"]}
+                                 "source": cover_pick["source"], "score": cover_pick["score"]}
         items.append(base)
 
     return {
@@ -287,15 +413,33 @@ def online_candidate(book: dict, cfg: dict = None, limit: int = None) -> "dict |
     blocklist = {norm_key(x) for x in (mf.get("genre_blocklist") or []) if str(x).strip()}
     options = metasources.options_for(mf, sources)
     # ISBN 精确匹配优先，否则回退书名 + 作者检索
-    best = metasources.search_by_isbn(book.get("isbn") or "", sources, 3, options)
-    if not best:
+    exact = metasources.search_by_isbn(book.get("isbn") or "", sources, 3, options)
+    if exact:
+        pool_raw = [exact]
+    else:
         res = metasources.search_all(sources, book.get("title") or book.get("name") or "",
                                      book.get("author") or "", limit, options)
-        best = res.get("best")
-    if not best:
+        pool_raw = res.get("entries") or []
+    if not pool_raw:
         return None
-    vals = _candidate_values(best, blocklist)
-    return {"values": vals, "source": best.get("source"), "score": best.get("score")}
+    best = pool_raw[0]                 # search_all 已按分数倒序 ⇒ 第一条即最佳候选
+    # 与 `plan` **同一套**门槛与择优规则：两处口径必须一致，否则「详情页的在线建议」与
+    # 「抓取预览」会各说各话（同一条数据两种答案，比少一个功能更糟）。
+    pool = merge_eligible(pool_raw, best) if mf.get("merge_sources", True) else []
+    if len({str(c.get("source") or "") for c in pool}) >= 2:
+        vals, origin, merged_sources, cover = merge_values(pool, blocklist)
+    else:
+        vals = _candidate_values(best, blocklist)
+        origin = {f: {"source": best.get("source"), "score": best.get("score")} for f in vals}
+        merged_sources = [str(best.get("source") or "")]
+        cover = ({"url": best["cover_url"], "source": best.get("source"),
+                  "score": best.get("score")} if best.get("cover_url") else None)
+    return {"values": vals, "source": best.get("source"), "score": best.get("score"),
+            "merged_from": merged_sources,
+            # 逐字段来源：界面如实展示「这个值是哪个源给的」
+            "field_sources": {f: (origin.get(f) or {}).get("source") or best.get("source")
+                              for f in vals},
+            "cover": cover}
 
 
 def _download_cover(url: str) -> tuple:

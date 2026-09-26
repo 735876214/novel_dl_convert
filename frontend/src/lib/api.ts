@@ -335,6 +335,11 @@ export interface MetadataPlanItem {
   candidates: MetadataCandidate[]
   sources: Record<string, { ok: boolean; count: number; error: string }>
   best_score: number
+  /**
+   * 参与**跨源字段级合并**的源（第 58 期）；空数组 = 本次没有合并（只用最佳候选）。
+   * 每字段自己的来源在 `changes[field].source` 里 —— 合并后同一本书不同字段可能来自不同源。
+   */
+  merged_from?: string[]
   /** 最佳候选是否达到置信度阈值 */
   auto_ok: boolean
   /** 字段级改动：{字段: {from, to, source, score}}（字段名是 OPF 口径，年份叫 date） */
@@ -1555,6 +1560,10 @@ export interface MetadataOnlineResult {
   values: Partial<BookMetadataFields>
   source: string
   score: number
+  /** 参与跨源字段级合并的源（第 58 期）；空 = 未合并 */
+  merged_from?: string[]
+  /** 逐字段来源（合并后不同字段可能来自不同源） */
+  field_sources?: Record<string, string>
   message?: string
 }
 

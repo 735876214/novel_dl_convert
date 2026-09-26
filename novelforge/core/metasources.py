@@ -449,6 +449,23 @@ def _clean(text) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+#: 少数源（实测 iTunes，Goodreads/Amazon 的抓取也可能）**返回带 HTML 的简介**：
+#: ``<b><b>Frank Herbert's classic masterpiece…`` —— 直接落库会把标签带进书目，
+#: 界面上就是一串 ``<b>``。所以候选入口统一剥标签 + 还原实体。
+_HTML_TAG = re.compile(r"<[^>]+>")
+
+
+def _strip_html(text) -> str:
+    """剥掉 HTML 标签并还原常见实体（**不是**完整的 HTML 解析，够用且零依赖）。"""
+    if text is None:
+        return ""
+    s = _HTML_TAG.sub(" ", str(text))
+    for ent, ch in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+                    ("&quot;", '"'), ("&#39;", "'"), ("&apos;", "'")):
+        s = s.replace(ent, ch)
+    return _clean(s)
+
+
 def _year_of(value) -> str:
     """从各种形态里抠出 4 位年份（源里可能是 2008 / '2008-05-01' / 2008.0）。"""
     m = re.search(r"(1[5-9]\d{2}|20\d{2})", str(value or ""))
@@ -513,17 +530,21 @@ def score_candidate(want_title: str, want_author: str, cand: dict) -> float:
 
 
 def _entry(source: str, **kw) -> dict:
-    """统一候选结构 —— 前端与写回逻辑都只认这一种形状。"""
+    """统一候选结构 —— 前端与写回逻辑都只认这一种形状。
+
+    ⚠️ 文本字段一律走 :func:`_strip_html`（实测 iTunes 的简介带 ``<b>`` 标签，
+    落库会把标签带进书目）；`tags` 里也见过带标签的值，同样处理。
+    """
     return {
         "source": source,
-        "title": _clean(kw.get("title")),
-        "author": _clean(kw.get("author")),
-        "publisher": _clean(kw.get("publisher")),
+        "title": _strip_html(kw.get("title")),
+        "author": _strip_html(kw.get("author")),
+        "publisher": _strip_html(kw.get("publisher")),
         "year": _year_of(kw.get("year")),
         "language": _lang_of(kw.get("language")),
-        "isbn": _clean(kw.get("isbn")),
-        "description": _clean(kw.get("description")),
-        "tags": [t for t in (_clean(x) for x in (kw.get("tags") or [])) if t][:8],
+        "isbn": _strip_html(kw.get("isbn")),
+        "description": _strip_html(kw.get("description")),
+        "tags": [t for t in (_strip_html(x) for x in (kw.get("tags") or [])) if t][:8],
         "cover_url": _clean(kw.get("cover_url")),
         "raw_id": _clean(kw.get("raw_id")),
         "score": 0.0,

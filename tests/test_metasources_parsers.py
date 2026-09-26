@@ -57,6 +57,20 @@ def test_itunes_解析并放大封面(monkeypatch):
     assert e["cover_url"] == "https://x/1000x1000bb.jpg", "封面应换成大图尺寸"
 
 
+def test_带HTML的简介会被剥标签(monkeypatch):
+    """实测发现：iTunes 的简介带 `<b>` 标签，直接落库会把标签带进书目（真实联网验证时抓到）。"""
+    _patch(monkeypatch, json_router={"itunes": {"results": [{
+        "trackName": "Dune",
+        "description": "<b><b>Frank Herbert's</b> classic masterpiece &amp; more</b><br/>Second line",
+        "genres": ["<i>Sci-Fi</i>"],
+    }]}})
+    e = _one("itunes")[0]
+
+    assert "<" not in e["description"] and ">" not in e["description"], e["description"]
+    assert "Frank Herbert's classic masterpiece & more" in e["description"]
+    assert e["tags"] == ["Sci-Fi"], e["tags"]
+
+
 def test_audnexus_解析对象数组作者(monkeypatch):
     _patch(monkeypatch, json_router={"audnexus": {"books": [{
         "asin": "B01N", "title": "Project Hail Mary",

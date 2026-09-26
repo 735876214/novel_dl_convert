@@ -790,6 +790,29 @@ watch(() => props.section, () => {
           {{ mf.auto_on_import ? '关闭' : '开启' }}
         </Button>
       </div>
+
+      <!-- 跨源字段级合并（第 58 期）：默认开，且只在「够格的候选来自 ≥2 家」时才真的合并 -->
+      <div class="flex items-center gap-4 border-t border-border px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">跨源字段级合并</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            同一本书在多家都有候选时<strong>逐字段择优</strong>（简介信 Google Books、年份/语言信 Open Library…），
+            题材多源合并去重 —— 而不是「谁的匹配分最高就全用谁」。
+            <span class="text-muted-foreground">
+              只有与最佳候选足够接近（匹配分 ≥ 0.7 且 ≥ 最佳分的 90%）的候选才参与，
+              避免把同名不同书的字段拼在一起；关掉即回到只用最佳候选。
+            </span>
+          </div>
+        </div>
+        <Button
+          size="sm"
+          :variant="mf.merge_sources === false ? 'primary' : 'ghost'"
+          :disabled="saving"
+          @click="setVal('metadata_fetch.merge_sources', mf.merge_sources === false); saveSection('metadata')"
+        >
+          {{ mf.merge_sources === false ? '开启' : '关闭' }}
+        </Button>
+      </div>
       <div class="flex flex-wrap items-center gap-3 px-4 py-3.5">
         <span class="text-[12.5px] text-foreground">每个源取候选数</span>
         <input :value="val('metadata_fetch.limit')" type="number" min="1" max="20"
@@ -911,10 +934,22 @@ watch(() => props.section, () => {
                 </span>
               </td>
               <td class="px-3 py-2 align-top">
+                <!-- 合并自 N 源（第 58 期）：说明这次的值不止来自一家、逐字段择优 -->
+                <div
+                  v-if="i.merged_from?.length"
+                  class="mb-0.5 text-[10.5px] text-primary"
+                  :title="`逐字段择优：${i.merged_from.join(' + ')}`"
+                >
+                  合并自 {{ i.merged_from.length }} 源（{{ i.merged_from.join(' + ') }}）
+                </div>
                 <div v-if="Object.keys(i.changes).length" class="text-[11.5px]">
                   <div v-for="(v, k) in i.changes" :key="k" class="text-muted-foreground">
                     <span class="text-foreground">{{ fieldZh(k) }}</span>：
                     {{ short((v as any).to) }}
+                    <!-- 每个字段各自标来源：合并后「简介来自 Google Books、年份来自 Open Library」要看得见 -->
+                    <span v-if="(v as any).source" class="text-[10.5px] opacity-70">
+                      · {{ (v as any).source }}
+                    </span>
                   </div>
                 </div>
                 <div v-else-if="i.cover" class="text-[11.5px] text-muted-foreground">仅封面</div>

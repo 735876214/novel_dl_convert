@@ -4382,6 +4382,8 @@ EDITABLE: dict = {
     #    所以下一次保存设置就会把盘上残留的旧键自然清掉。
     "metadata_fetch": {
         "enabled", "sources", "limit", "threshold", "fields", "auto_on_import",
+        # 第 58 期：跨源字段级合并开关
+        "merge_sources",
         "genre_blocklist", "googlebooks_api_key", "authors",
         # 第 57 期：另三家的密钥（与 core/metasources 注册表的 key_field 对应）
         "hardcover_api_token", "comicvine_api_key", "aladin_ttbkey",

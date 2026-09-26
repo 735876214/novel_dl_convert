@@ -236,6 +236,10 @@ DEFAULTS = {
             "description": "overwrite", "tags": "overwrite", "cover": "overwrite",
         },
         "auto_on_import": False,         # 新书入库时自动抓（仍受阈值与字段策略约束）
+        # 跨源字段级合并（第 58 期）：够格的候选来自 ≥2 家时**逐字段择优**
+        # （简介信 Google Books、年份/语言信 Open Library…，题材多源合并去重）。
+        # 关掉即回到「只用匹配分最高的那一条候选」的旧行为。
+        "merge_sources": True,
         # 题材黑名单：抓到的 tags 里命中这些词的**不写入**（过滤「小说」这类无信息量的值）
         "genre_blocklist": ["小说", "文学", "General", "Fiction"],
         # 自定义元数据（第 35 期起**已下线**这个配置项）：改由 core/customfields.py 管理 ——

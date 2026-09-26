@@ -110,6 +110,13 @@
 - **前端改动后必须 `type-check` + `test:unit` + `build` + `deploy`**（部署产物落 `novelforge/static/v2`，不入库）；**后端改动必须重启进程才生效**（用户遇到的「空列表」根因就是后端没重启）→ 交付说明里要写清重启/重建镜像这一步。
 - 浏览器冒烟用 `playwright-cli open --browser=msedge <url>`（本机没装 Chrome，Chromium 会报 distribution not found）；用 `CONFIG_DIR/INPUT_DIR/OUTPUT_DIR` 指向 `.codebuddy/tmp-*` 隔离，`admin/changeme` 登录；`route "**/api/xxx" --status=404` 可复现旧后端场景。
 
+## 第 58 期铁律（跨源字段级合并）
+- **合并有门槛**：只有 `score >= max(0.7, 0.9×最佳分)` 的候选才参与（`metafetch.MERGE_MIN_SCORE/MERGE_RELATIVE`）—— 拼错书的字段不可逆。不够格**逐字回到旧行为**（只用最佳候选）；`metadata_fetch.merge_sources` 可整体关掉。
+- **`FIELD_TRUST` 的键必须是字段名，不是书对象键**：年份是 `date`（书目里才叫 `year`）。写成 `year` **不报错、只静默失效**（信任表形同虚设）—— 有契约钉住这条。
+- ⚠️ 查询题：**`_VALUE_KEYS`/`_CURRENT` 的键是字段名**，`changes` 里也是字段名（`date`）；`_candidate_values`/`merge_values` 遍历的是字段名，候选里的值键才是 `year`。
+- 合并**只改选值，不改写不写**：字段策略 / `meta_locks` / `meta_overrides` 三闸照旧；`plan` 与 `online_candidate` **必须同一套规则**（否则同一数据两种答案）；逐字段回传 `source/score`，整条回 `merged_from`（空 = 未合并）。
+- **候选入口一律剥 HTML**（`metasources._strip_html`）：实测 iTunes 的简介带 `<b>` 标签，不剥就落库成字面标签。**真实联网能抓到单测抓不到的问题**（假响应是自己写的）。
+
 ## 第 57 期铁律（元数据提供商 / 插件市场 / 书源）
 - **14 家提供商全部接入**（B 段）：`core/metasources.SOURCES` 与 `_FETCHERS` **必须逐字一致**（契约 `IMPLEMENTED == _FETCHERS.keys()`，`tests/test_metadata_providers.py`）—— 加一家 = 注册表条目 + fetcher + `IMPLEMENTED` 三处同改。三档如实标注：免密钥即用（open-library / googlebooks / itunes / audnexus / ranobedb）、**需密钥**（hardcover / comicvine / aladin，`needs_config=True` + `key_field`）、**页面抓取型**（amazon / goodreads / kobo / audible / librofm / lubimyczytac，`fragile=True` → 前端「易失效」徽标；站点改版可能失效，**真实可用性无法离线验证**）。
 - **出网收口**：14 家只经 `metasources._get_json` / `_get_text` 出网 —— 契约测试 monkeypatch 这两个函数即可离线测全部解析（`tests/test_metasources_parsers.py` 33 项）。失败码统一翻中文（429/401/403 有专门文案）；**单源异常绝不冒泡**（解析器一律 `isinstance` 过滤 + 空响应回落 `[]`）。
