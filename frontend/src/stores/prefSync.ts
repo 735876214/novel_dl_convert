@@ -32,6 +32,26 @@ import { useThemeStore, type RadiusMode, type ThemeMode } from '@/stores/theme'
 const PENDING_KEY = 'nf-prefs-pending'
 /** 本机改动合并推送的防抖时长（整包 payload 只有数 KB，整包推比差量简单可靠） */
 const PUSH_DEBOUNCE_MS = 800
+/** 远端变更检查间隔（第 56 期）：15s 够「感觉到」，又不至于频繁打扰服务端 */
+const REMOTE_POLL_MS = 15000
+
+/**
+ * 「远端是否比本机新」的判定（第 56 期，**纯函数**，便于单测）。
+ *
+ * - `noop`：远端没更新（含 1s 容差 —— 时间戳是秒级 float，自身回环不该误判）；
+ * - `apply-remote`：本机没有未推送改动 ⇒ 沿用既有「服务端为准」策略静默应用；
+ * - `conflict`：本机有未推送改动 ⇒ **只提示、绝不覆盖**（用户显式选保留哪边）。
+ */
+export type PrefsSyncDecision = 'noop' | 'apply-remote' | 'conflict'
+
+export function prefsSyncDecision(opts: {
+  remoteSeen: number
+  localSeen: number
+  hasPending: boolean
+}): PrefsSyncDecision {
+  if (!opts.remoteSeen || opts.remoteSeen <= opts.localSeen + 1) return 'noop'
+  return opts.hasPending ? 'conflict' : 'apply-remote'
+}
 
 export const usePrefSyncStore = defineStore('prefSync', () => {
   const theme = useThemeStore()
@@ -48,6 +68,14 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
   const booted = ref(false)
   const offline = ref(false)
   const busy = ref(false)
+  /** 第 56 期：远端比本机新、而本机也有未推送改动（只提示，等用户选） */
+  const conflict = ref(false)
+  /** 第 56 期：刚静默同步过远端偏好（UI 提示一次后自隐） */
+  const remoteFresh = ref(false)
+  /** 本机「已认账」的远端时间戳（boot / push 后更新），远端是否更新的比较基准 */
+  const acceptedSeen = ref(0)
+  let remoteTimer: ReturnType<typeof setInterval> | null = null
+  let freshTimer: ReturnType<typeof setTimeout> | null = null
 
   let pushTimer: ReturnType<typeof setTimeout> | null = null
   let pushing = false
@@ -151,6 +179,7 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       })
       device.value = row
       upsertLocalDeviceRow(row)
+      acceptedSeen.value = row.last_seen
       clearPending()
       offline.value = false
     } catch {
@@ -189,11 +218,13 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
         devices.value.find((d) => d.id === deviceId.value) ?? null
       if (remote) {
         device.value = remote
+        acceptedSeen.value = remote.last_seen
         if (hasPending()) {
           booted.value = true
           await push()
         } else {
           applyPayload(remote.payload)
+          conflict.value = false
         }
       } else {
         device.value = await api.prefDeviceUpsert(deviceId.value, {
@@ -201,6 +232,7 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
           payload: collect(),
         })
         upsertLocalDeviceRow(device.value)
+        acceptedSeen.value = device.value.last_seen
         clearPending()
       }
       offline.value = false
@@ -277,6 +309,7 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       })
       device.value = row
       upsertLocalDeviceRow(row)
+      acceptedSeen.value = row.last_seen
       clearPending()
       offline.value = false
       return prof
@@ -334,14 +367,58 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
     await refresh()
   }
 
+  /**
+   * 远端变更检查（第 56 期）：周期性问一次「本设备那行有没有被别人写新」。
+   *
+   * 与 boot 的两条规则同源，但**多一层保护**：本机有未推送改动时只置 `conflict`
+   * （界面给提示），**绝不静默覆盖** —— boot 是启动那一刻的裁决，而这里可能正
+   * 有用户在改偏好。只在 boot 完成且页面可见时跑；失败静默（离线照常用本机缓存）。
+   */
+  async function checkRemote(): Promise<void> {
+    if (!booted.value || document.visibilityState !== 'visible') return
+    try {
+      const row = (await api.prefDevices()).items.find((d) => d.id === deviceId.value) ?? null
+      const decision = prefsSyncDecision({
+        remoteSeen: row?.last_seen ?? 0,
+        localSeen: acceptedSeen.value,
+        hasPending: hasPending(),
+      })
+      if (decision === 'noop') {
+        conflict.value = false
+        return
+      }
+      if (decision === 'conflict' || !row) {
+        conflict.value = true
+        return
+      }
+      applyPayload(row.payload)
+      device.value = row
+      acceptedSeen.value = row.last_seen
+      conflict.value = false
+      remoteFresh.value = true
+      if (freshTimer) clearTimeout(freshTimer)
+      freshTimer = setTimeout(() => (remoteFresh.value = false), 8000)
+    } catch {
+      /* 离线 / 服务端不可用：静默，下一轮再试 */
+    }
+  }
+
   /** 应用级入口：注册桥回调并启动（幂等） */
   function init(): void {
     onPrefsChanged(onLocalChange)
     void boot()
+    // 第 56 期：起远端变更轮询（app 级单例：随外壳存活；visible 才真正发请求）
+    if (!remoteTimer) remoteTimer = setInterval(() => void checkRemote(), REMOTE_POLL_MS)
   }
 
   return {
     deviceId,
+    /** 第 56 期：远端与本机都有改动（只提示，等用户选，不自动覆盖） */
+    conflict,
+    /** 第 56 期：刚静默同步过远端偏好（UI 提示一次后自隐） */
+    remoteFresh,
+    /** 第 56 期：手动触发一次远端检查（设置页可用） */
+    checkRemote,
     deviceName,
     device,
     profiles,

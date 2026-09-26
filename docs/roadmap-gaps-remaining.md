@@ -1976,3 +1976,42 @@ BookCover `:96`、ShelfView `:280`）均按实测行号写入；`tests/check_doc
 - 后端全量 **833 例 / 0 failed**（基线 820 + 本期 13：test_detect_chapters 7 + test_txt_reading 6）；
   前端 `test:unit` **66**（62 + libraryWizard 4）、`type-check` / `build` / `deploy` 全绿
   （已同步 `novelforge/static/v2`）。
+
+## 第 56 期（2026-09-26）：多设备进度提示 + 偏好同步感知（三期路线图第二期）
+
+用户拍板：③ 走**轮询 + 提示**，**不上 SSE**（全仓既有禁令维持：通知网关 / book-move 逐本
+进度都因此走轮询）、**绝不静默挪动阅读位置**。
+
+### A. 多设备进度提示（阅读器内）
+
+- **后端加法**：`PUT /api/books/{bid}/progress` 回带本次写入的 `updated_at`（`db.set_progress`
+  改为返回时间戳）；`GET` 也带回 `updated_at`（第 54 期以前它只在 db 层存在、API 层丢掉了）。
+  **没有进度行时不给 `updated_at`** —— 不能造一个 0 当基准（否则首次进阅读器就弹提示）。
+- **前端**：`ReaderView` 记 `ownWriteAt`（载入时读到的 + 每次 PUT 回带的），每 **8s** 轮询
+  `getProgress`；只有「时间戳更新（>1s 容差）**且位置确实不同**」才渲染提示条
+  「其他设备更新了进度：第二章 · 50.0% → 跳过去 / 忽略」。**只在用户点「跳过去」时**
+  才 `loadChapter` 并立刻把本机位置写回（避免下一轮重复提示）；点「忽略」保持不动。
+  `document.visibilityState !== 'visible'` 不轮询（与阅读时长 accrual 同一条纪律）；
+  `onBeforeUnmount` 停轮询。提示条插在进度条与正文容器之间，**不触碰 `html`/`contentRef`** ⇒ 不重排正文。
+- 契约：`tests/test_progress_updated_at.py`（4 例：写入回带且递增 / GET 同值 / 无行不给基准 /
+  其它来源（KOReader·Komga·完成标记）写进度同样刷新时间戳且仍清 cfi）；
+  `frontend/src/views/ReaderView.remoteProgress.spec.ts`（4 例：只提示不自动跳 / 跳过去才跳且写回 /
+  忽略保持不动 / 时间戳未更新不打扰）。⚠️ 该 spec 只伪造 `setInterval`+`Date`（保留真
+  `setTimeout`），否则 `flushPromises()` 会挂住 —— 与既有 `ReaderView.spec.ts` 的假时钟约定一致。
+
+### B. 偏好同步感知（跨设备「感觉得到」）
+
+- **变更信号**：不新增表/列 —— 设备行本来就有 `last_seen`（每次上报刷新），用它当「远端是否更新」。
+- **判定抽成纯函数** `prefsSyncDecision({remoteSeen, localSeen, hasPending})`
+  ⇒ `noop`（≤1s 容差，本机回环不误判）/ `apply-remote`（本机无未推送改动：沿用既有
+  「服务端为准」静默应用 + 顶栏「已同步其他设备偏好」胶囊 8 秒自隐）/ `conflict`
+  （本机有未推送改动：**只置提示、绝不覆盖**，顶栏「偏好有更新」胶囊点进设置页显式选）。
+- **时机**：`init()` 起 15s 轮询（app 级单例；`booted` 且页面可见才真发请求）；`boot`/`push`/
+  `applyProfile` 后更新「已认账」时间戳 `acceptedSeen`。⚠️ `boot()` 的启动裁决语义**不变**
+  （启动那一刻本机 pending ⇒ 本机为准并推；否则服务端为准）—— 本期加的只是一层「运行中感知」。
+- 契约：`frontend/src/stores/prefSync.spec.ts`（5 例，纯函数：远端旧/同 ⇒ noop、1s 容差、
+  无 pending ⇒ apply、有 pending ⇒ conflict、无基准 ⇒ noop）。
+
+### 验证
+- 后端全量 **837 例 / 0 failed**（基线 833 + 本期 4）；前端 `test:unit` **75**
+  （66 + prefSync 5 + ReaderView.remoteProgress 4）、`type-check` / `build` / `deploy` 全绿。

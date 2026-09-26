@@ -75,6 +75,25 @@ const ICON_BTN =
     </div>
 
     <div class="ml-auto flex items-center gap-[0.3125rem]">
+      <!-- 其他设备更新过偏好、而本机也有未推送改动（第 56 期）：**只提示不覆盖**，
+           点进去显式选择保留哪边 -->
+      <button
+        v-if="sync.conflict"
+        type="button"
+        class="flex h-7 cursor-pointer items-center rounded-full bg-amber-500/15 px-2.5 text-[11.5px] text-amber-600 transition-colors hover:bg-amber-500/25 dark:text-amber-400"
+        title="另一台设备更新了偏好，而本机也有未同步的改动。点此选择保留哪边（不会自动覆盖）"
+        @click="router.push('/settings/reader/general')"
+      >
+        偏好有更新
+      </button>
+      <!-- 刚静默同步了其他设备的偏好（8 秒自隐） -->
+      <span
+        v-else-if="sync.remoteFresh"
+        class="flex h-7 items-center rounded-full bg-primary/10 px-2.5 text-[11.5px] text-primary"
+      >
+        已同步其他设备偏好
+      </span>
+
       <!-- 偏好未同步（离线 / 服务端不可用）：恢复后自动消失；点击去「偏好与同步」 -->
       <button
         v-if="sync.offline"
