@@ -17,7 +17,6 @@ import Icon from '@/components/ui/Icon.vue'
 import ExtChips from '@/components/tools/ExtChips.vue'
 import LibraryConflictPanel from '@/components/tools/LibraryConflictPanel.vue'
 import LibrarySettingsPanel from '@/components/tools/LibrarySettingsPanel.vue'
-import LibraryWizard from '@/components/tools/LibraryWizard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import {
   api,
@@ -29,11 +28,13 @@ import {
 import { ICONS } from '@/lib/icons'
 import { isAbsolutePath, pathsOverlap } from '@/lib/paths'
 import { useLibraryStore } from '@/stores/library'
+import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useUiStore } from '@/stores/ui'
 
 const route = useRoute()
 const ui = useUiStore()
 const library = useLibraryStore()
+const wizard = useLibraryWizardStore()
 const { cfg, setVal, saveSection, saving, loadConfig } = useSettingsConfig()
 
 const libs = ref<LibraryEntity[]>([])
@@ -219,8 +220,6 @@ const form = ref({
 
 /** 用户在编辑弹窗里动过格式勾选没有（同 `ExtChips` 的语义：没动过 = 继承类型默认） */
 const fmtTouched = ref(false)
-/** 新建向导是否打开（第 40 期；`?new=1` 与「新建书库」按钮都走它） */
-const wizardOpen = ref(false)
 
 /** 编辑态：当前正在改的库实体（「上次扫描」页签要读它的历史） */
 const editingLib = computed(() => libs.value.find((l) => l.id === editingId.value) || null)
@@ -393,13 +392,9 @@ const publishIssue = computed(() => {
  * 会互相将就，所以分成两条路。
  */
 function openWizard(): void {
-  wizardOpen.value = true
-}
-
-/** 向导建库成功：关掉浮层并把列表 / 迁移预览整体刷一遍（新库会影响它们）。 */
-async function onWizardCreated(): Promise<void> {
-  wizardOpen.value = false
-  await reload()
+  // 第 55 期：向导收拢为**全局单实例**（App.vue 挂载），本页只负责开浮层；
+  // 建库成功后的刷新走 onCreated 回调（列表 / 迁移预览都要重算，新库会影响它们）。
+  void wizard.show({ onCreated: () => void reload() })
 }
 
 async function openEdit(l: LibraryEntity): Promise<void> {
@@ -802,18 +797,8 @@ async function remove(l: LibraryEntity): Promise<void> {
       </div>
     </Card>
 
-    <!--
-      新建向导（第 40 期）。与下面那个编辑弹窗**互斥**：同一个时刻只该有一层浮层，
-      否则两个 z-50 叠在一起，用户按 Esc 或点空白关掉上面那个之后会以为「关不掉」。
-    -->
-    <LibraryWizard
-      v-if="wizardOpen"
-      :types="types"
-      :source-roots="sourceRoots"
-      :libs="libs"
-      @close="wizardOpen = false"
-      @created="onWizardCreated"
-    />
+    <!-- 新建向导（第 55 期起）：收拢为全局单实例，挂在 App.vue —— 本页不再自带一份，
+         免得两处各自挂 z-50 浮层、叠在一起关不掉（原第 40 期的互斥约定）。 -->
 
     <!-- 编辑弹窗（第 40 期起**只管编辑** —— 新建一律走向导） -->
     <div

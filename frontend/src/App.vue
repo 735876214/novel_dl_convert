@@ -10,11 +10,13 @@ import TaskDrawer from '@/components/TaskDrawer.vue'
 import LoginGate from '@/components/LoginGate.vue'
 import MigrationGateDialog from '@/components/MigrationGateDialog.vue'
 import GuidedTourModal from '@/components/settings/GuidedTourModal.vue'
+import LibraryWizard from '@/components/tools/LibraryWizard.vue'
 import { useTasksStore } from '@/stores/tasks'
 import { useThemeStore } from '@/stores/theme'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { useLibraryStore } from '@/stores/library'
+import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useSettingsSearch } from '@/composables/useSettingsSearch'
 
 const ui = useUiStore()
@@ -22,6 +24,7 @@ const tasks = useTasksStore()
 const theme = useThemeStore()
 const auth = useAuthStore()
 const library = useLibraryStore()
+const wizard = useLibraryWizardStore()
 const route = useRoute()
 const showLogin = ref(false)
 const showTour = ref(false)
@@ -147,6 +150,18 @@ onUnmounted(() => {
 
   <!-- 首次使用引导（第 38 期）：0 个书库时弹一次，见上面 showTour 的说明 -->
   <GuidedTourModal v-model:open="showTour" />
+
+  <!-- 「新增书库」全局向导（第 55 期）：各入口就地弹窗、不再跳设置页。
+       ⚠️ 全局只挂这一份 —— LibraryWizard 是 z-50 浮层，多处各自挂会叠两层
+       关不掉（LibrariesView 第 40 期注释的同一条互斥约定，收拢到这里后天然只有一层）。 -->
+  <LibraryWizard
+    v-if="wizard.open"
+    :types="wizard.types"
+    :source-roots="wizard.sourceRoots"
+    :libs="wizard.libs"
+    @close="wizard.close()"
+    @created="wizard.created"
+  />
 
   <div
     v-if="ui.drawerOpen"

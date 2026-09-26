@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { useRouter } from 'vue-router'
-
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { useLibraryStore } from '@/stores/library'
+import { useLibraryWizardStore } from '@/stores/libraryWizard'
 
 /**
  * 首屏「还没有书库」提示条（第 38 期）。
@@ -18,12 +17,13 @@ import { useLibraryStore } from '@/stores/library'
  * ⚠️ 不注册成 `WIDGET_META` 部件：那套注册表带自定义面板、开关与布局持久化，
  * 用户一旦把这条关掉，首屏就又回到「什么都没有」；它也不该和阅读部件并列被统计。
  */
-const router = useRouter()
 const library = useLibraryStore()
+const wizard = useLibraryWizardStore()
 
 function createLibrary(): void {
-  // 直达新建弹窗（`?new=1`，见 LibrariesView 的 onMounted）
-  void router.push('/settings/libraries?new=1')
+  // 就地弹窗（第 55 期）：不再跳设置页的新建弹窗 —— 建库这件事
+  // 在哪儿发生，向导就在哪儿打开
+  void wizard.show()
 }
 </script>
 

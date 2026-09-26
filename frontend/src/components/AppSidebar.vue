@@ -8,12 +8,14 @@ import { isShelfGroup, type NavGroup, type NavItem } from '@/data/nav'
 import { api, apiErrorMessage, type BrowseCounts } from '@/lib/api'
 import { useCollectionsStore } from '@/stores/collections'
 import { useLibraryStore } from '@/stores/library'
+import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useNavStore } from '@/stores/nav'
 import { useTasksStore } from '@/stores/tasks'
 import { useUiStore } from '@/stores/ui'
 
 const nav = useNavStore()
 const library = useLibraryStore()
+const wizard = useLibraryWizardStore()
 const tasks = useTasksStore()
 const ui = useUiStore()
 const route = useRoute()
@@ -241,9 +243,13 @@ function onGroupMore(group: NavGroup): void {
 /** 分组头部的「新增 / 更多」：三组各自接到真实去处，不再有演示态动作 */
 async function onGroupAction(title: string, action: 'add' | 'more'): Promise<void> {
   if (title === '库') {
-    // 「新增」直达书库管理页的新建弹窗（`?new=1`，见 LibrariesView 的 onMounted）；
-    // 「更多」进同一页 —— 库的增删改都在那里，本项目没有第二个书库管理界面。
-    router.push(action === 'add' ? '/settings/libraries?new=1' : '/settings/libraries')
+    // 「新增」就地弹窗（第 55 期）：不再跳 `?new=1` —— 建库在哪儿发生，向导就在哪儿打开；
+    // 「更多」仍进书库管理页 —— 库的增删改都在那里，本项目没有第二个书库管理界面。
+    if (action === 'add') {
+      void wizard.show()
+      return
+    }
+    router.push('/settings/libraries')
     return
   }
   if (title === '智能书架' && action === 'add') {

@@ -110,7 +110,7 @@ function startDownload(hit: SearchHit): void {
   //（`_run_download` 里 `no_library_reason()` ⇒ 任务标 failed），用户看到的是
   //「已加入下载队列」，失败却要跑到任务中心才发现 —— 一次注定失败的往返没必要发。
   if (library.hasNoLibraries) {
-    ui.toast('还没有书库：先到「设置 → 书库管理」新建一个书库，下载才有地方落')
+    ui.toast('还没有书库：先新建一个书库，下载才有地方落')
     return
   }
   api
@@ -132,7 +132,7 @@ function startDownload(hit: SearchHit): void {
       title="探索发现"
       :desc="
         library.hasNoLibraries
-          ? '跨全部已启用书源聚合检索 —— 但还没有书库，下载前请先到「设置 → 书库管理」新建一个'
+          ? '跨全部已启用书源聚合检索 —— 但还没有书库，下载前请先新建一个'
           : '跨全部已启用书源聚合检索，选中结果可直接下载'
       "
     />

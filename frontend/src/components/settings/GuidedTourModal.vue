@@ -7,11 +7,13 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { useLibraryStore } from '@/stores/library'
+import { useLibraryWizardStore } from '@/stores/libraryWizard'
 
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ 'update:open': [boolean] }>()
 
 const library = useLibraryStore()
+const wizard = useLibraryWizardStore()
 const router = useRouter()
 
 /**
@@ -27,8 +29,8 @@ interface TourStep {
   icon: string
   title: string
   body: string
-  /** 该步自带的可选出口；没有就只显示正文 */
-  cta?: { label: string; to: string }
+  /** 该步自带的可选出口；没有就只显示正文。`to` 缺省 = 就地打开「新增书库」向导（第 55 期） */
+  cta?: { label: string; to?: string }
 }
 
 const STEPS = computed<TourStep[]>(() => {
@@ -37,7 +39,7 @@ const STEPS = computed<TourStep[]>(() => {
         icon: 'plus',
         title: '先建一个书库',
         body: '书要落进书库才有位置。新建一个书库并指定它的来源目录，之后的下载、上传与投递才有地方可放 —— 在此之前它们会被拒收。',
-        cta: { label: '新建书库', to: '/settings/libraries?new=1' },
+        cta: { label: '新建书库' },
       }
     : {
         icon: 'library',
@@ -64,9 +66,15 @@ const step = computed(() => STEPS.value[i.value])
 const last = computed(() => i.value === STEPS.value.length - 1)
 
 /** 步骤自带的出口（目前只有 0 库时的「新建书库」）：点了就关掉引导再去，不叠两层浮层 */
-function goCta(to: string): void {
+function goCta(cta: TourStep['cta']): void {
   close()
-  void router.push(to)
+  if (cta?.to) {
+    void router.push(cta.to)
+    return
+  }
+  // 缺省出口 = 就地打开「新增书库」向导（第 55 期）：建库这件事在哪儿发生，
+  // 弹窗就在哪儿打开，不再跳设置页
+  void wizard.show()
 }
 
 function close(): void {
@@ -126,7 +134,7 @@ watch(
       <!-- 步骤自带的出口（0 库时的「新建书库」）：引导的落点是**做那件事**，
            不是让用户记住一句话然后自己找入口 -->
       <div v-if="step.cta" class="px-5 pb-4">
-        <Button size="sm" variant="primary" @click="goCta(step.cta.to)">{{ step.cta.label }}</Button>
+        <Button size="sm" variant="primary" @click="goCta(step.cta)">{{ step.cta.label }}</Button>
       </div>
 
       <div class="flex items-center gap-2 border-t border-border px-5 py-3">

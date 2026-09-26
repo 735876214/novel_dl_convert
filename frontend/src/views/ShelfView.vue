@@ -25,6 +25,7 @@ import {
   type CardSecondaryLabel,
 } from '@/stores/displayPrefs'
 import { useLibraryStore } from '@/stores/library'
+import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useUiStore } from '@/stores/ui'
 import {
   CARD_INFO_OPTIONS,
@@ -74,6 +75,8 @@ const currentLib = computed<string>({
   },
 })
 
+const wizard = useLibraryWizardStore()
+
 function scanShelf(): void {
   api
     .scanNow()
@@ -86,6 +89,11 @@ function scanShelf(): void {
 
 function manageLibs(): void {
   router.push('/settings/libraries')
+}
+
+/** 空态「新建书库」：就地弹窗（第 55 期）——建库在哪儿发生，向导就在哪儿打开 */
+function createLib(): void {
+  void wizard.show({ onCreated: () => void library.loadBooks(true) })
 }
 
 /** 导出全部书目 CSV（含阅读进度/状态/评分），交给系统下载 */
@@ -877,7 +885,7 @@ const INPUT_CLS =
          400 拒收，书根本没有地方可落。第 38 期起三态各说各的话，0 库直接给出口。 -->
     <EmptyState v-if="!sorted.length" icon="library" :title="emptyTitle" :desc="emptyDesc">
       <template v-if="library.hasNoLibraries" #action>
-        <Button size="sm" variant="primary" @click="manageLibs">新建书库</Button>
+        <Button size="sm" variant="primary" @click="createLib">新建书库</Button>
       </template>
     </EmptyState>
 

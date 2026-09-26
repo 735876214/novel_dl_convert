@@ -146,7 +146,9 @@ def test_书架空态分三态且文案互不相同():
 def test_零库时书架给出建库出口():
     src = _read(SHELF)
     assert "hasNoLibraries" in src and "新建书库" in src
-    assert "manageLibs" in src, "出口按钮要复用既有的书库管理跳转"
+    # 第 55 期：空态出口就地弹窗（不跳设置页）；顶栏「书库管理」跳转保留（管理语义不变）
+    assert "createLib" in src, "空态「新建书库」要就地打开向导"
+    assert "manageLibs" in src, "顶栏的书库管理入口保留"
 
 
 # ---------------------------------------------------------------------------
@@ -208,11 +210,21 @@ def test_book_dock_投递前先拦():
 # ⑤ 出口：所有「去建库」指向同一处
 # ---------------------------------------------------------------------------
 
-def test_建库出口都指向书库管理页():
-    """0 库时给的出口必须是 `/settings/libraries`（设置页的书库管理），不许另开页面。"""
+def test_建库出口就地弹窗不跳设置页():
+    """第 55 期：0 库时的建库出口是**就地打开的新建书库向导**，不再跳 `/settings/libraries`。
+
+    「管理」语义的入口（书架顶栏 manageLibs / 侧栏「更多」）仍指向设置页 —— 改的只是「新建」。
+    """
     for f in (NOTICE, TOUR, DOCK, LOCAL):
         src = _read(f)
-        assert LIBRARIES_ROUTE in src, f"{f.relative_to(ROOT)} 的建库出口没指向 {LIBRARIES_ROUTE}"
+        assert "useLibraryWizardStore" in src, (
+            f"{f.relative_to(ROOT)} 的建库出口没有就地打开向导"
+        )
+    for f in (NOTICE, TOUR):
+        src = _read(f)
+        assert LIBRARIES_ROUTE not in src, (
+            f"{f.relative_to(ROOT)} 仍残留指向 {LIBRARIES_ROUTE} 的建库跳转（应改为就地弹窗）"
+        )
 
 
 def test_首屏提示条不在部件注册表里():
