@@ -1719,7 +1719,10 @@ def api_get_progress(bid: str):
     p = db.get_progress(bid)
     if not p:
         return {"locator": 0, "percent": 0, "cfi": ""}
-    out = {"locator": p["locator"], "percent": p["percent"], "cfi": p.get("cfi") or ""}
+    out = {"locator": p["locator"], "percent": p["percent"], "cfi": p.get("cfi") or "",
+           # 第 56 期：多设备进度提示的**新旧比较基准**（前端把它当作「本机已知的最新
+           # 写入时间」，只有比它更新的写入才可能是别的设备）。
+           "updated_at": p["updated_at"]}
     if out["cfi"]:
         # 附带把 CFI 反解成章内字符偏移（与保存侧同一坐标系）：前端拿到 offset
         # 直接换滚动位置，不需要在 JS 里再实现一遍 CFI 解析。
@@ -1754,8 +1757,10 @@ def api_set_progress(bid: str, payload: dict = Body(...)):
         b = library.by_id(bid)
         if b and (b.get("format") or "").upper() == "EPUB":
             cfi = epub_cfi.cfi_for_position(library.root_of(b) / b["name"], locator, offset)
-    db.set_progress(bid, locator, percent, cfi)
-    return {"ok": True}
+    at = db.set_progress(bid, locator, percent, cfi)
+    # 回带写入时间戳（第 56 期）：前端据此更新「本机上次写入」，避免把自己的保存
+    # 当成本机之外的更新而弹提示。
+    return {"ok": True, "updated_at": at}
 
 
 # ---------------- 阅读状态 / 书评 / 相似书 ----------------

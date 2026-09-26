@@ -820,14 +820,18 @@ def get_progress(book_id: str):
              "cfi": row["cfi"] or "", "updated_at": row["updated_at"]} if row else None)
 
 
-def set_progress(book_id: str, locator: int, percent: float, cfi: str = ""):
-    """写阅读进度。``cfi`` = 精确位置（EPUB CFI，core/epub_cfi.py 生成）。
+def set_progress(book_id: str, locator: int, percent: float, cfi: str = "") -> float:
+    """写阅读进度；**返回写入的 ``updated_at``**（秒级 float）。
 
     ⚠️ 默认空串即「**清掉精确坐标**」：进度有多个写入来源（NF 阅读器 / KOReader
     同步 / Komga / 完成标记），只有 NF 阅读器算得出与 locator 配套的 CFI ——
     其它来源不传 cfi 时旧行必须清空，否则「章序号已变、CFI 还挂在旧章」的
     矛盾行会让恢复跳回错误位置。
+
+    第 56 期起把时间戳返回给调用方：阅读器要拿它当「本机上次写入」的基准，
+    轮询到比它更新的写入才提示「其他设备更新了进度」（见 ReaderView 的进度提示）。
     """
+    now = time.time()
     c = _connect()
     with _lock:
         c.execute(
@@ -838,9 +842,10 @@ def set_progress(book_id: str, locator: int, percent: float, cfi: str = ""):
                  percent=excluded.percent,
                  cfi=excluded.cfi,
                  updated_at=excluded.updated_at""",
-            (book_id, locator, percent, str(cfi or ""), time.time()),
+            (book_id, locator, percent, str(cfi or ""), now),
         )
         c.commit()
+    return now
 
 
 # ---------------- annotations ----------------

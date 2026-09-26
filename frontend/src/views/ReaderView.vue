@@ -442,10 +442,81 @@ async function saveProgress(): Promise<void> {
     // 算不出（正文未挂载）就不带 —— 进度本身照常保存，恢复侧回落百分比。
     const len = contentRef.value?.textContent?.length ?? 0
     const offset = len > 0 ? Math.round(local.value * len) : undefined
-    await api.setProgress(bookId.value, currentIndex.value, overallPercent.value, offset)
+    const r = await api.setProgress(bookId.value, currentIndex.value, overallPercent.value, offset)
+    // 第 56 期：记下本机这次写入的时间戳 —— 轮询时只有比它更新的写入才可能是别的设备
+    if (typeof r?.updated_at === 'number') ownWriteAt.value = r.updated_at
   } catch {
     /* 离线或未登录时静默 */
   }
+}
+
+// ---------------- 多设备进度提示（第 56 期）----------------
+// 语义：**只提示、绝不静默挪阅读位置**。轮询到「别的设备写过、且位置确实不同」时
+// 只渲染一条可点提示；用户点「跳过去」才跳，点「忽略」则本机位置原样不动。
+
+/** 本机已知的最新写入时间（载入时读到的 / 每次 PUT 回来的） */
+const ownWriteAt = ref(0)
+/** 待处理的「别的设备进度」；null = 没有提示 */
+const remoteNote = ref<{ locator: number; percent: number; offset?: number } | null>(null)
+/** 轮询间隔：8s（本地单用户场景，够快又不至于打扰服务端） */
+const PROGRESS_POLL_MS = 8000
+let progressTimer: ReturnType<typeof setInterval> | null = null
+
+/** 提示条里的目标位置文案 */
+const remoteLabel = computed(() => {
+  const n = remoteNote.value
+  if (!n) return ''
+  const pct = Math.max(0, Math.min(100, n.percent || 0))
+  return `${titleOf(n.locator)} · ${pct.toFixed(1)}%`
+})
+
+async function checkRemoteProgress(): Promise<void> {
+  // 后台标签页不轮询：看不见就没有必要打扰服务端（与阅读时长 accrual 同一条纪律）
+  if (document.visibilityState !== 'visible' || !book.value || !total.value) return
+  try {
+    const p = await api.getProgress(bookId.value)
+    const at = typeof p.updated_at === 'number' ? p.updated_at : 0
+    if (!at || at <= ownWriteAt.value + 1) {
+      remoteNote.value = null
+      return
+    }
+    // 位置其实一样（别的设备只是路过同一处）⇒ 不打扰
+    const sameChapter = p.locator === currentIndex.value
+    const drift = Math.abs((p.percent || 0) - overallPercent.value)
+    if (sameChapter && drift < 0.5) {
+      remoteNote.value = null
+      return
+    }
+    remoteNote.value = { locator: p.locator, percent: p.percent || 0, offset: p.offset }
+  } catch {
+    /* 离线 / 未登录：静默，下一轮再试 */
+  }
+}
+
+function startProgressWatch(): void {
+  stopProgressWatch()
+  progressTimer = setInterval(() => void checkRemoteProgress(), PROGRESS_POLL_MS)
+}
+
+function stopProgressWatch(): void {
+  if (progressTimer) clearInterval(progressTimer)
+  progressTimer = null
+}
+
+/** 采纳别的设备的进度（**只有用户显式点击才走这里**） */
+async function applyRemoteProgress(): Promise<void> {
+  const n = remoteNote.value
+  if (!n) return
+  const t = flat.value.findIndex((f) => f.index === n.locator)
+  if (t >= 0) {
+    const restore = n.offset === undefined
+      ? Math.min(1, Math.max(0, (n.percent / 100) * total.value - t))
+      : undefined
+    await loadChapter(t, restore, n.offset)
+    // 立刻把本机位置写回去：下一轮轮询若还比对本机旧时间戳，会重复提示同一件事
+    void saveProgress()
+  }
+  remoteNote.value = null
 }
 
 // ---------------- 高亮 / 批注 ----------------
@@ -882,12 +953,16 @@ async function load(): Promise<void> {
   }
 
   startSession()
+  // 第 56 期：起「其他设备是否更新了进度」的轮询（只提示、不自动跳）
+  startProgressWatch()
 
   let start = 0
   let restore: number | undefined
   let restoreOffset: number | undefined
   try {
     const p = await api.getProgress(bookId.value)
+    // 恢复的这一刻本机就认账了：把它记成「本机已知的最新写入」，之后只有更新的才算别人的
+    ownWriteAt.value = typeof p.updated_at === 'number' ? p.updated_at : 0
     const t = flat.value.findIndex((f) => f.index === p.locator)
     if (t >= 0) {
       start = t
@@ -945,6 +1020,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (saveTimer) clearTimeout(saveTimer)
   void saveProgress()
+  stopProgressWatch()
   stopSession()
 })
 </script>
@@ -1164,6 +1240,24 @@ onBeforeUnmount(() => {
       <!-- 进度条 -->
       <div class="h-0.5 w-full bg-muted">
         <div class="h-full bg-primary transition-[width] duration-300" :style="{ width: `${overallPercent}%` }" />
+      </div>
+
+      <!-- 其他设备更新过进度：**只提示、绝不静默挪位置**（第 56 期）。
+           点「跳过去」才采纳；「忽略」保持本机位置不动。 -->
+      <div
+        v-if="remoteNote"
+        class="mb-2 flex items-center gap-2 rounded-md border border-border bg-muted/60 px-3 py-1.5 text-[11.5px]"
+      >
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0 text-primary" />
+        <span class="min-w-0 flex-1 truncate">其他设备更新了进度：{{ remoteLabel }}</span>
+        <Button size="sm" variant="primary" @click="applyRemoteProgress">跳过去</Button>
+        <button
+          type="button"
+          class="cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
+          @click="remoteNote = null"
+        >
+          忽略
+        </button>
       </div>
 
       <div class="relative flex min-h-0 flex-1">

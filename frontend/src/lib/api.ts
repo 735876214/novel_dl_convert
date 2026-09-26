@@ -676,6 +676,11 @@ export interface ProgressState {
   cfi?: string
   /** 服务端把 CFI 反解出的章内字符偏移（textContent 坐标）；仅在能反解时返回 */
   offset?: number
+  /**
+   * 服务端写入时间戳（第 56 期）：多设备进度提示的比较基准 ——
+   * 比「本机已知的最新写入」更新的写入才可能是别的设备。
+   */
+  updated_at?: number
 }
 
 export interface Annotation {
@@ -3091,7 +3096,8 @@ export const api = {
     request<ProgressState>(`/api/books/${encodeURIComponent(id)}/progress`),
 
   setProgress: (id: string, locator: number, percent: number, offset?: number) =>
-    request<{ ok: boolean }>(`/api/books/${encodeURIComponent(id)}/progress`, {
+    // updated_at（第 56 期）：服务端写入时间戳，前端据此更新「本机上次写入」基准
+    request<{ ok: boolean; updated_at?: number }>(`/api/books/${encodeURIComponent(id)}/progress`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       // offset（第 54 期）：章内字符偏移（textContent 坐标），服务端据此生成 CFI；
