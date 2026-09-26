@@ -86,7 +86,14 @@ describe('ReaderView · 其他设备进度提示（第 56 期）', () => {
     m.bookDetail.mockResolvedValue(makeBook())
     m.listAnnotations.mockResolvedValue({ items: [] })
     m.listBookmarks.mockResolvedValue({ items: [], total: 0, trashed: [] })
-    m.chapter.mockResolvedValue({ index: 0, total: 2, title: '第一章', html: '<p>正文</p>' })
+    // 第 61 期：阅读器会把下一章**预先取好**（滚动到底无缝接续），所以「最后一次取数」
+  // 不再等于「当前显示的章」。正文内容因此必须**按章号区分**，断言改看渲染结果。
+  m.chapter.mockImplementation(async (_bid: string, index: number) => ({
+    index,
+    total: 2,
+    title: index === 0 ? '第一章' : '第二章',
+    html: index === 0 ? '<p>第一章节正文</p>' : '<p>第二章节正文</p>',
+  }))
     m.recordSession.mockResolvedValue({ ok: true })
     m.fonts.mockResolvedValue({ items: [], max_bytes: 0, max_count: 0 })
     m.setProgress.mockResolvedValue({ ok: true, updated_at: 100 })
@@ -109,8 +116,9 @@ describe('ReaderView · 其他设备进度提示（第 56 期）', () => {
 
     expect(w.text()).toContain('其他设备更新了进度')
     expect(w.text()).toContain('第二章')
-    // 不自动跳：正文仍停在第 1 章
-    expect(m.chapter).toHaveBeenLastCalledWith('book-a', 0)
+    // 不自动跳：**正文**仍停在第 1 章（不看取数顺序 —— 下一章已被预取，见 stubApi 说明）
+    expect(w.html()).toContain('第一章节正文')
+    expect(w.html()).not.toContain('第二章节正文')
   })
 
   it('点「跳过去」才真的跳，并立刻把本机位置写回', async () => {
@@ -137,7 +145,7 @@ describe('ReaderView · 其他设备进度提示（第 56 期）', () => {
     await flushPromises()
 
     expect(w.text()).not.toContain('其他设备更新了进度')
-    expect(m.chapter).toHaveBeenLastCalledWith('book-a', 0)
+    expect(w.html()).toContain('第一章节正文')   // 本机位置原样不动
   })
 
   it('时间戳没有更新（只是路过同一处）⇒ 不打扰', async () => {

@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import atexit
 import gzip
 import json
 import logging
@@ -186,6 +187,85 @@ def invalidate_retention_cache() -> None:
     _cfg_cache.update(at=0.0, val=None)
 
 
+# ---------------- 同类型通知合并（第 61 期）----------------
+# 需求：同一类型（**同一动作 + 同一结果 + 同一主体**）的通知在窗口内重复多次 →
+# 合并成**一条**统一推送；且**每来一条同类型消息，窗口都从头计时**（尾随去抖）。
+#
+# 两个必须答的问题：
+# 1. **何时落盘**：窗口是尾随的，所以只能**延迟写** —— 风暴持续期间不写，
+#    安静下来（窗口走完）才写一次带 `merged` 计数的条目。代价是「窗口内进程退出会丢」，
+#    故注册 `atexit` 兜底 flush。
+# 2. **角标为何不再失准**：合并后只有一条记录，`unread_total` 因此不会因刷屏虚高 ——
+#    这正是合并的意义（12 次失败 ≠ 12 条未读）。
+
+#: 待落盘的合并缓冲：key → {"entry": 条目, "count": 次数, "at": 最后一次时间（秒）}
+_pending: dict = {}
+#: `notifications` 配置的短缓存（与留存策略同款：日志写入是热路径）
+_merge_cfg_cache: dict = {"at": 0.0, "val": None}
+
+
+def merge_cfg() -> dict:
+    """合并策略。读不到配置 ⇒ **10s 且开启**（需求给的默认值）。"""
+    now = time.time()
+    cached = _merge_cfg_cache.get("val")
+    if cached is not None and now - float(_merge_cfg_cache.get("at") or 0) < 5:
+        return cached
+    try:
+        from .. import config
+        r = (config.load_config().get("notifications") or {}) or {}
+    except Exception:
+        r = {}
+    out = {
+        "enabled": bool(r.get("merge_enabled", True)),
+        "window": max(0.0, float(r.get("merge_window") or 10)),
+    }
+    _merge_cfg_cache.update(at=now, val=out)
+    return out
+
+
+def invalidate_merge_cache() -> None:
+    """配置变更后调用：否则最长 5 秒内仍按**旧窗口**判断是否合并。"""
+    _merge_cfg_cache.update(at=0.0, val=None)
+
+
+def _merge_key(entry: dict) -> str:
+    """「同类型」的判据：动作 + 结果 + 主体（主体 = 文件名 / 书名 / 库名）。"""
+    return "|".join(str(entry.get(k) or "") for k in ("action", "status", "file"))
+
+
+def flush_pending(force: bool = False) -> list:
+    """把「窗口已走完」的待合并条目写盘；`force=True` 全部写出（退出 / 测试用）。"""
+    cfg = merge_cfg()
+    out: list = []
+    if not cfg["enabled"] and not force:
+        return out
+    now = time.time()
+    with _lock:
+        for key in list(_pending):
+            item = _pending.get(key)
+            if not item:
+                continue
+            if force or now - item["at"] >= cfg["window"]:
+                entry = item["entry"]
+                if item["count"] > 1:
+                    entry["merged"] = item["count"]
+                _emit(entry)
+                out.append(entry)
+                del _pending[key]
+    return out
+
+
+def _flush_at_exit() -> None:
+    """进程退出前把待合并的通知补写：窗口是尾随的，不补就会丢掉最后一次风暴。"""
+    try:
+        flush_pending(force=True)
+    except Exception:                      # noqa: BLE001 —— 退出路径绝不能再抛
+        pass
+
+
+atexit.register(_flush_at_exit)
+
+
 def _archive_jsonls() -> list:
     """归档的 jsonl 路径，**新 → 旧**（文件名带时间戳，倒序即时间倒序）。"""
     d = log_dir()
@@ -316,14 +396,41 @@ def log(action: str, file: str, status: str, output: str = "", detail: str = "",
         # 后台任务取不到 → 空串，界面按「未记录」渲染。
         "actor": (actor or current_actor()).strip(),
     }
+    # 第 61 期：开启合并时**延迟落盘** —— 同类型的重复消息先并入同一条，窗口走完才写一次。
+    # 首条也会先进缓冲（内存缓冲里已可见，界面上因此始终只有**一条**，计数随重复次数涨）。
+    cfg = merge_cfg()
+    if cfg["enabled"] and cfg["window"] > 0:
+        with _lock:
+            flush_pending()                    # 先结算「窗口已走完」的那些
+            key = _merge_key(entry)
+            hit = _pending.get(key)
+            if hit is not None:
+                hit["count"] += 1
+                hit["at"] = time.time()        # ⚠️ 每来一条，窗口从头计时（尾随去抖）
+                hit["entry"]["ts"] = entry["ts"]
+                hit["entry"]["ts_epoch"] = entry["ts_epoch"]
+                if entry["detail"]:
+                    hit["entry"]["detail"] = entry["detail"]   # 说明取最新的一条
+                hit["entry"]["merged"] = hit["count"]
+                return hit["entry"]
+            _pending[key] = {"entry": entry, "count": 1, "at": time.time()}
+            _memory.append(entry)
+        return entry
+
+    with _lock:
+        _memory.append(entry)
+    _emit(entry)
+    return entry
+
+
+def _emit(entry: dict) -> None:
+    """落盘 + 同步到标准日志。**不**碰内存缓冲 —— 那条由 :func:`log` 负责（合并时要先入缓冲）。"""
     line_txt = _text_line(entry)
     try:
         line_json = json.dumps(entry, ensure_ascii=False)
     except Exception:
         line_json = "{}"
-
     with _lock:
-        _memory.append(entry)
         d = log_dir()
         try:
             with open(d / LOG_FILENAME, "a", encoding="utf-8") as f:
@@ -339,11 +446,10 @@ def log(action: str, file: str, status: str, output: str = "", detail: str = "",
         _rotate_if_needed(d)
 
     # 同步输出到标准日志（docker logs 可见）
-    if status == STATUS_FAIL:
+    if entry.get("status") == STATUS_FAIL:
         _logger.error(line_txt)
     else:
         _logger.info(line_txt)
-    return entry
 
 
 # 便捷写法：语义化封装，调用处不必记常量

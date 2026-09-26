@@ -13,6 +13,7 @@ import {
   savePdfPrefs,
   type PdfPrefs,
 } from '@/lib/pdfPrefs'
+import { useLibraryStore } from '@/stores/library'
 
 /**
  * PDF 阅读器。
@@ -24,8 +25,16 @@ import {
  * 渲染策略：滚动模式按 IntersectionObserver 懒渲染每页 canvas（长文档不会一次性画几百页）；
  * 翻页模式只渲染当前页（双页时含下一页）。缩放/适配变化时清空重画。
  */
-const props = defineProps<{ bookId: string; title: string }>()
+const props = defineProps<{
+  bookId: string
+  title: string
+  /** 这本书是否属于**漫画库**（第 61 期）：是则给出「漫画视图」入口，两边共用页进度 */
+  comicLib?: boolean
+}>()
+/** 交回上层切换阅读器（偏好由上层统一落库） */
+const emit = defineEmits<{ pdfMode: ['comic' | 'pdf'] }>()
 const router = useRouter()
+const library = useLibraryStore()
 
 const prefs = ref<PdfPrefs>(readPdfPrefs())
 watch(prefs, (v) => savePdfPrefs(v), { deep: true })
@@ -179,7 +188,9 @@ async function save(): Promise<void> {
   if (!total.value) return
   const percent = Math.min(100, (page.value / total.value) * 100)
   try {
-    await api.setProgress(props.bookId, page.value - 1, percent)
+    const r = await api.setProgress(props.bookId, page.value - 1, percent)
+    // 第 61 期：进度就地回写 store —— 首页「继续阅读」不必等一次整库重拉
+    library.patchProgress(props.bookId, percent, r?.updated_at)
   } catch {
     /* 静默：离线或未登录时不打断阅读 */
   }
@@ -322,6 +333,17 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
         <Icon name="arrowLeft" class="h-4 w-4" />
       </Button>
       <div class="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{{ props.title }}</div>
+
+      <!-- 第 61 期：漫画库里的 PDF 可以切回「漫画形态」读（单/双页、右到左、无间隙连续） -->
+      <Button
+        v-if="props.comicLib"
+        size="sm"
+        variant="ghost"
+        title="按漫画形态打开（单/双页、右到左、无间隙连续；当前页进度保留）"
+        @click="emit('pdfMode', 'comic')"
+      >
+        漫画视图
+      </Button>
 
       <Button size="sm" variant="ghost" title="上一页" :disabled="page <= 1" @click="prev">
         <Icon name="arrowLeft" class="h-3.5 w-3.5" />

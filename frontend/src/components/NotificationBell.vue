@@ -159,6 +159,13 @@ onUnmounted(() => {
               <div class="flex items-baseline gap-1.5">
                 <span v-if="!n.read" class="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
                 <span class="truncate text-[12px] font-medium text-foreground">{{ n.action || '活动' }}</span>
+                <!-- 第 61 期：同类型 10s 内重复 N 次 ⇒ 这一条代表 N 次 -->
+                <span
+                  v-if="(n.merged ?? 1) > 1"
+                  class="shrink-0 rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground tabular-nums"
+                >
+                  ×{{ n.merged }}
+                </span>
                 <span class="ml-auto shrink-0 text-[10.5px] text-muted-foreground tabular-nums">{{ n.ts }}</span>
               </div>
               <div class="truncate text-[11.5px] text-foreground/85">{{ n.file }}</div>

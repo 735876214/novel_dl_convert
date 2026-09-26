@@ -1019,7 +1019,11 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None) -> list:
 # 归属解析（`library_of` / `root_of`）仍对**留在磁盘上的旧书**保留 OUTPUT_DIR 兜底：
 # 只是不再把它伪装成一个库。
 
-_COMIC_EXTS = (".cbz", ".cbr")
+# ⚠️ 第 61 期：漫画库**也收 .pdf** —— 要求「漫画库支持 PDF」。
+# 收进来后按漫画形态读（前端 pdf.js 逐页渲染），设置页里另有「用 PDF 阅读器读」的开关。
+# .pdf 同时仍属于电子书类型（`_EBOOK_EXTS`）：**自动归库**按类型路由时它优先去电子书库，
+# 要进漫画库就把它放在漫画库的来源文件夹里 —— 不猜用户意图。
+_COMIC_EXTS = (".cbz", ".cbr", ".pdf")
 _EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt")
 
 

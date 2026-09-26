@@ -71,6 +71,14 @@ export interface ReaderPrefs {
   /** 字重样式（常规 / 加粗 / 斜体 / 粗斜体） */
   fontStyle: ReaderFontStyleKey
   /**
+   * **滚动模式**读到底部时自动接上下一章（第 61 期；默认开）。
+   *
+   * ⚠️ 只管**滚动模式**：翻页模式本来就有「翻到末页进下一章」，两者不是一回事 ——
+   * 这个开关的语义是「读到一章末尾不必手动点下一章」，做法是把下一章**先预取**好，
+   * 到底部即就地接上，中间不留加载空档（这正是「无缝」的全部内容）。
+   */
+  autoNextChapter: boolean
+  /**
    * 正文区左右内边距（rem）。与 `width`（内容宽度）是**两个独立的量**：
    * `width` 是文本块自身的宽度上限，本项是文本块与阅读区边缘之间的留白 ——
    * 窄屏上把 `width` 调大不会自动得到边距，反之亦然。
@@ -105,6 +113,8 @@ export const READER_PREFS_DEFAULT: ReaderPrefs = {
   gutter: 1.5,
   // 第 51 期：默认「跟随书籍」= 固定版式原本的行为（页宽交给书本身决定）
   fixedLayoutWidth: 'book',
+  // 第 61 期：滚动到底自动接下一章（预取 → 就地切换，无加载空档）
+  autoNextChapter: true,
 }
 
 export const READER_FONTS = [

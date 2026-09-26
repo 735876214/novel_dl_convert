@@ -9,6 +9,7 @@ import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
 import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem } from '@/lib/api'
+import { readComicPrefs, saveComicPrefs } from '@/lib/comicPrefs'
 import {
   READER_FONTS,
   READER_FONT_STYLES,
@@ -23,6 +24,7 @@ import {
 } from '@/lib/readerPrefs'
 import { fontPrefValue, readerFontStack } from '@/lib/fonts'
 import { useFontsStore } from '@/stores/fonts'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -45,6 +47,23 @@ const fmt = computed(() => (book.value?.format || '').toUpperCase())
 const isPdf = computed(() => fmt.value === 'PDF')
 const isComic = computed(() => fmt.value === 'CBZ' || fmt.value === 'CBR')
 
+/**
+ * **漫画库里的 PDF 按漫画形态读**（第 61 期；默认开，可在阅读器里一键切回 PDF 视图）。
+ *
+ * 为什么看库类型而不是看格式：PDF 既可以是电子书也可以是「扫描版漫画」，格式本身说明不了
+ * 用户想怎么读 —— **放在漫画库里**才是明确意图，所以按库类型判，且两个阅读器都保留当前页进度。
+ */
+const pdfAsComic = ref(readComicPrefs().pdfMode !== 'pdf')
+const comicPdf = computed(() => isPdf.value && book.value?.library_type === 'comic' && pdfAsComic.value)
+
+/** 切换「PDF 用哪个阅读器」：落库到漫画偏好，下次打开还是用户选的那个 */
+function setPdfMode(mode: 'comic' | 'pdf'): void {
+  pdfAsComic.value = mode === 'comic'
+  const p = readComicPrefs()
+  p.pdfMode = mode
+  saveComicPrefs(p)
+}
+
 /** 扁平化章节（按 spine 顺序，带 index） */
 const flat = computed(() => {
   const out: { index: number; title: string; volume: string }[] = []
@@ -63,6 +82,8 @@ const currentIndex = computed(() => flat.value[pos.value]?.index ?? 0)
 const html = ref('')
 const chapterTitle = ref('')
 const local = ref(0)
+/** 章节加载中（第 61 期）：连点目录时必须有反馈，否则「点了没反应」 */
+const chapterLoading = ref(false)
 
 // ---------------- 阅读偏好（与设置页共享，见 lib/readerPrefs.ts）----------------
 
@@ -75,6 +96,9 @@ const fonts = useFontsStore()
 void fonts.load()
 
 const ui = useUiStore()
+// ⚠️ 这里用 store **只为了进度回写**（`patchProgress`）：不拿书库能力清单做任何门控 ——
+// 阅读是「这本书已经打开了」之后的事，再拿能力拦一次只会造成「明明能读却不能用」。
+const library = useLibraryStore()
 
 // 上传字体按族分组：同一 family_key 的变体（Regular / Bold…）合并为一个可选项 ——
 // 选族后阅读器套用「加粗 / 斜体」时，浏览器会在同一 family 下挑中真实变体文件。
@@ -99,11 +123,38 @@ const page = ref(0)
 const pageCount = ref(1)
 const paged = computed(() => prefs.value.mode === 'paged')
 
+/**
+ * 正文左右内边距的**像素值**（偏好里是 rem）。
+ *
+ * 第 61 期修「翻页右缘露出下一页」时用到的关键量：CSS 多栏的**可用宽**必须先扣掉内边距，
+ * 否则算出的栏宽与浏览器实际排出来的不一致 —— 位移步长一歪，右缘就露下一栏。
+ */
+const rootRem = (() => {
+  const v = typeof window !== 'undefined'
+    ? parseFloat(getComputedStyle(document.documentElement).fontSize)
+    : NaN
+  return Number.isFinite(v) && v > 0 ? v : 16
+})()
+const gutterPx = computed(() => Math.max(0, prefs.value.gutter * rootRem))
+/** 一屏总宽减去左右内边距 = 多栏真正可用的宽度 */
+const availW = computed(() => Math.max(0, (viewportW.value || 700) - 2 * gutterPx.value))
+
 const columnWidth = computed(() => {
   const c = Math.max(1, Math.round(prefs.value.columns))
-  const w = viewportW.value || 700
-  return Math.max(160, (w - (c - 1) * PAGE_GAP) / c)
+  return Math.max(160, (availW.value - (c - 1) * PAGE_GAP) / c)
 })
+
+/**
+ * 每翻一页横向位移的距离 = **栏宽 + 栏距**（实测口径）。
+ *
+ * 修之前用的是「容器宽 + 栏距」—— 容器宽包含内边距，且浏览器会把 `column-width` 这个
+ * **提示值**拉伸到填满内容盒，两个偏差叠起来就表现为「翻一页后右侧露出下一栏」。
+ * 现在正文宽度被定死、栏宽恰好铺满（见 contentStyle），步长因此是确定的。
+ * 固定版式（pre-paginated）页宽由书本身决定，仍按一屏位移。
+ */
+const pageStep = computed(() => (fixedLayout.value
+  ? (viewportW.value || 700) + PAGE_GAP
+  : columnWidth.value + PAGE_GAP))
 
 /**
  * 这本书是不是**固定版式**（pre-paginated）。
@@ -182,6 +233,11 @@ const contentStyle = computed(() => {
     columnWidth: paged.value ? `${columnWidth.value}px` : 'auto',
     columnGap: paged.value ? `${PAGE_GAP}px` : 'normal',
     columnFill: 'auto',
+    // 翻页模式把正文宽度**定死**：注意口径 —— 宽度是 border-box（含内边距），
+    // 所以这里要给**整屏宽**，内容盒才恰好等于 `availW`（含内边距地写 availW 会让内容盒再窄掉
+    // 两个内边距，栏宽随之被浏览器压小，步长与实际栏距又差开 —— 实测栽在这上面一次）。
+    // 定死之后 cols*栏宽+(cols-1)*栏距 恰好铺满内容盒，浏览器不会再拉伸栏宽。
+    width: paged.value && !fixedLayout.value ? `${viewportW.value || 700}px` : 'auto',
     ...gutterStyle.value,
   } as Record<string, string>
 })
@@ -206,15 +262,18 @@ function measurePages(): void {
     return
   }
   viewportW.value = el.clientWidth
-  const step = viewportW.value + PAGE_GAP
-  const totalCols = Math.max(1, Math.round(art.scrollWidth / step))
+  // 栏距用**实测步长**（见 pageStep）：`scrollWidth` 不含最后一栏之后的栏距，
+  // 所以补一个 PAGE_GAP 再除才对得上「总栏数」。固定版式的栏宽由书本身决定，维持原式。
+  const step = pageStep.value
+  const raw = fixedLayout.value ? art.scrollWidth / step : (art.scrollWidth + PAGE_GAP) / step
+  const totalCols = Math.max(1, Math.round(raw))
   const perPage = Math.max(1, Math.round(prefs.value.columns))
   pageCount.value = Math.max(1, Math.ceil(totalCols / perPage))
   page.value = Math.min(page.value, pageCount.value - 1)
 }
 
 const pageShiftStyle = computed(() => ({
-  transform: paged.value ? `translateX(-${page.value * (viewportW.value + PAGE_GAP)}px)` : 'none',
+  transform: paged.value ? `translateX(-${page.value * pageStep.value}px)` : 'none',
   transition: 'transform 180ms ease',
   height: paged.value ? '100%' : 'auto',
 }))
@@ -255,6 +314,29 @@ function onKeydown(e: KeyboardEvent): void {
   if (!paged.value) return
   if (e.key === 'ArrowRight' || e.key === 'PageDown') flip(1)
   else if (e.key === 'ArrowLeft' || e.key === 'PageUp') flip(-1)
+}
+
+// ---------------- 滚轮翻页（第 61 期）----------------
+// 只在**翻页模式**生效；滚动模式原样交给浏览器滚动，绝不抢。
+// 触控板会连发小 delta 且带惯性，所以累计到阈值才算一次「翻页意图」，并在翻完后加一道
+// 时间锁 —— 否则轻轻一划会连翻好几页。
+const WHEEL_STEP = 24        // 累计到这么多像素才翻一页
+const WHEEL_LOCK_MS = 220    // 翻页后的锁：惯性余量在锁内一律忽略
+let wheelAcc = 0
+let wheelLockUntil = 0
+
+function onWheel(e: WheelEvent): void {
+  if (!paged.value || chapterLoading.value) return
+  if (showSettings.value) return            // 面板开着时不翻页（与点击热区同一纪律）
+  e.preventDefault()
+  const now = Date.now()
+  wheelAcc += e.deltaY
+  if (now < wheelLockUntil) return
+  if (Math.abs(wheelAcc) < WHEEL_STEP) return
+  const dir = wheelAcc > 0 ? 1 : -1
+  wheelAcc = 0
+  wheelLockUntil = now + WHEEL_LOCK_MS
+  flip(dir)
 }
 
 let pageObserver: ResizeObserver | null = null
@@ -346,6 +428,14 @@ const annotations = ref<Annotation[]>([])
 const scrollRef = ref<HTMLElement | null>(null)
 const contentRef = ref<HTMLElement | null>(null)
 
+// 滚轮翻页的监听必须**手动**注册在滚动容器上（且 non-passive）：
+// 浏览器对 wheel 的默认被动策略会让 `preventDefault()` 静默失效，页面便会同时滚动。
+// 容器是条件渲染的（书加载完才出现）→ 用 watch 挂/摘，别在 onMounted 里抢时间点。
+watch(scrollRef, (el, old) => {
+  old?.removeEventListener('wheel', onWheel)
+  el?.addEventListener('wheel', onWheel, { passive: false })
+})
+
 // 选中文字浮层
 const selText = ref('')
 const selPos = ref<{ x: number; y: number } | null>(null)
@@ -379,18 +469,66 @@ function localFraction(): number {
 
 // ---------------- 章节加载 ----------------
 
+/**
+ * 章节正文缓存（键 = 它在 `flat` 里的位置；容量很小）。
+ *
+ * 它只为**一件事**服务：滚动读到一章末尾时能**立刻接上**下一章。下一章先取好，
+ * 到底部时就地切换，中间不再有「请求往返 → 空白 → 新正文」那一段 ——
+ * 这正是「无缝」的全部内容（也正是不预取时最容易被说成「卡一下」的地方）。
+ */
+const chapterCache = new Map<number, { html: string; title: string }>()
+const CACHE_MAX = 4
+
+async function chapterAt(p: number): Promise<{ html: string; title: string }> {
+  const cached = chapterCache.get(p)
+  if (cached) return cached
+  const ch = flat.value[p]
+  const data = await api.chapter(bookId.value, ch.index)
+  const item = { html: data.html, title: ch.title || data.title }
+  chapterCache.set(p, item)
+  // 只留最近几章：缓存的是整章 HTML，留太多是真金白银的内存
+  while (chapterCache.size > CACHE_MAX) {
+    const oldest = chapterCache.keys().next().value
+    if (oldest === undefined) break
+    chapterCache.delete(oldest)
+  }
+  return item
+}
+
+/**
+ * 章节加载的**请求序号**：只有最后一次发起的请求才允许落地。
+ *
+ * 这是「目录点了跳错位置」的一个真实成因：连点两个条目时，先发的慢响应可能后到，
+ * 把后发的那一章覆盖掉 —— 界面显示 A、高亮与进度却在 B。
+ */
+let loadSeq = 0
+
 async function loadChapter(p: number, restore?: number, restoreOffset?: number): Promise<void> {
   if (!total.value) return
   p = Math.min(Math.max(0, p), total.value - 1)
-  pos.value = p
   const ch = flat.value[p]
+  if (!ch || ch.index === undefined) {
+    error.value = '目录里的这一条没有可定位的章节序号'
+    return
+  }
+  pos.value = p
+  const seq = ++loadSeq
+  // 已预取的章节**不再闪「加载中」**：那一刻并没有在等网络
+  chapterLoading.value = !chapterCache.has(p)
   try {
-    const data = await api.chapter(bookId.value, ch.index)
-    html.value = data.html
-    chapterTitle.value = ch.title || data.title
+    const item = await chapterAt(p)
+    if (seq !== loadSeq) return              // 过期响应：丢弃，绝不覆盖后发的那一章
+    html.value = item.html
+    chapterTitle.value = ch.title || item.title
+    error.value = ''
+    // 预取下一章（静默）：滚到底时才接得上（失败不影响当前章）
+    if (p + 1 < total.value) void chapterAt(p + 1).catch(() => {})
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = e instanceof Error ? e.message : '章节加载失败'
     return
+  } finally {
+    if (seq === loadSeq) chapterLoading.value = false
   }
   await nextTick()
   applyHighlights()
@@ -417,12 +555,37 @@ function next(): void {
   if (pos.value < total.value - 1) loadChapter(pos.value + 1)
 }
 
-function goto(index: number): void {
-  const p = flat.value.findIndex((f) => f.index === index)
-  if (p >= 0) {
-    loadChapter(p)
-    showToc.value = false
+/**
+ * 目录视图模型（第 61 期修「点了不跳 / 跳错位置」）：**每项自带它在 `flat` 里的位置**，
+ * 点击只按位置跳，不再回查后端的章节序号。
+ *
+ * 为什么不按后端 `index` 找：`flat` 会跳过 `index === undefined` 的条目，而目录面板用的是
+ * 后端原始结构 —— 两边一旦不同步，`findIndex` 就找不到（⇐ 表现为「点了没反应」），
+ * 或命中同序号的另一条（⇐ 表现为「跳错位置」）。位置是同序遍历出来的，天然对齐。
+ */
+const tocView = computed(() => {
+  let k = 0
+  const groups: Array<{ volume: string; items: Array<{ title: string; pos: number }> }> = []
+  for (const v of book.value?.chapters ?? []) {
+    const items: Array<{ title: string; pos: number }> = []
+    for (const c of v.chapters) {
+      if (c.index === undefined) continue
+      items.push({ title: c.title, pos: k })
+      k += 1
+    }
+    if (items.length || v.volume) groups.push({ volume: v.volume, items })
   }
+  return groups
+})
+
+/** 跳转（按 `flat` 位置）：越界即忽略并给出反馈，不做静默无事发生 */
+function gotoPos(p: number): void {
+  if (p < 0 || p >= total.value) {
+    ui.toast('该目录项无法定位（章节序号缺失）')
+    return
+  }
+  showToc.value = false
+  void loadChapter(p)
 }
 
 // ---------------- 进度 ----------------
@@ -433,6 +596,49 @@ function onScroll(): void {
   local.value = localFraction()
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(saveProgress, 800)
+  void maybeAutoNext()
+}
+
+/** 距底部多少像素就算「读到了这一章的末尾」（留一点余量，别要求滚到最后一像素） */
+const AUTO_NEXT_PX = 160
+let advancing = false
+
+function atChapterEnd(): boolean {
+  const el = scrollRef.value
+  if (!el) return false
+  return el.scrollTop + el.clientHeight >= el.scrollHeight - AUTO_NEXT_PX
+}
+
+/**
+ * 滚动读到一章末尾 → 自动接上下一章（第 61 期）。
+ *
+ * 两条纪律：
+ * 1. **先确保下一章已在缓存里，再切换** —— 反过来写就退化成「自动点了一下下一章」，
+ *    该有的加载空档一个不少，那就不是无缝；
+ * 2. **翻页模式不在这里处理** —— 它走 `flip()` 的末页判定，用户明确没要改那条路径。
+ */
+async function maybeAutoNext(): Promise<void> {
+  if (advancing || paged.value || isPdf.value || isComic.value) return
+  if (!prefs.value.autoNextChapter || !total.value) return
+  if (pos.value >= total.value - 1 || !atChapterEnd()) return
+  advancing = true
+  try {
+    const next = pos.value + 1
+    await chapterAt(next)
+    if (pos.value < total.value - 1) await loadChapter(next)
+  } catch {
+    /* 预取失败就保持现状：用户滚到底时还能看到「下一章」按钮，不会卡死在读了一半的地方 */
+  } finally {
+    advancing = false
+  }
+}
+
+/** 去抖里还没发出的那一次，立刻补发（切后台 / 关页面 / 离开阅读器时用） */
+function flushPendingProgress(): void {
+  if (!saveTimer) return
+  clearTimeout(saveTimer)
+  saveTimer = null
+  void saveProgress()
 }
 
 async function saveProgress(): Promise<void> {
@@ -445,6 +651,8 @@ async function saveProgress(): Promise<void> {
     const r = await api.setProgress(bookId.value, currentIndex.value, overallPercent.value, offset)
     // 第 56 期：记下本机这次写入的时间戳 —— 轮询时只有比它更新的写入才可能是别的设备
     if (typeof r?.updated_at === 'number') ownWriteAt.value = r.updated_at
+    // 第 61 期：把刚写下的进度**就地**同步给书库 store —— 返回首页时「继续阅读」立刻是新值
+    library.patchProgress(bookId.value, overallPercent.value, r?.updated_at)
   } catch {
     /* 离线或未登录时静默 */
   }
@@ -890,7 +1098,11 @@ async function flushSession(): Promise<void> {
 
 function onVisibilityChange(): void {
   accrueSession()
-  if (document.visibilityState === 'hidden') void flushSession()
+  if (document.visibilityState === 'hidden') {
+    // 第 61 期：进度也要**当场**落库 —— 800ms 去抖里被打断（切后台/关页面）就会白丢一段位置
+    flushPendingProgress()
+    void flushSession()
+  }
 }
 
 function startSession(): void {
@@ -1015,6 +1227,10 @@ watch(bookId, async () => {
 
 onMounted(() => {
   void load()
+  // 第 61 期「进度要实时/不丢」：页面切后台或关闭时，把 800ms 去抖里还没发出的那一次立刻补上 ——
+  // 否则「滚到底 → 直接关标签页」这类最自然的收尾动作会把最后一段位置白白丢掉。
+  // 页面关闭（含 bfcache 前）也要把待写的进度补上：`visibilitychange` 在关标签页时不一定来得及
+  window.addEventListener('pagehide', flushPendingProgress)
 })
 
 onBeforeUnmount(() => {
@@ -1022,6 +1238,7 @@ onBeforeUnmount(() => {
   void saveProgress()
   stopProgressWatch()
   stopSession()
+  window.removeEventListener('pagehide', flushPendingProgress)
 })
 </script>
 
@@ -1044,8 +1261,21 @@ onBeforeUnmount(() => {
       <!-- PDF：独立阅读器（pdf.js 懒加载）。
            用嵌套 template 包裹 EPUB 分支：template 渲染时透明，不会破坏根 div 的
            flex 高度链（换成 div 会让 h-full 失效）。为免整块重排缩进，内部保持原缩进。 -->
-      <PdfReader v-if="isPdf" :book-id="bookId" :title="book.title" />
-      <ComicReader v-else-if="isComic" :book-id="bookId" :title="book.title" :series="book.series" />
+      <ComicReader
+        v-if="isComic || comicPdf"
+        :book-id="bookId"
+        :title="book.title"
+        :series="book.series"
+        :source="isComic ? 'archive' : 'pdf'"
+        @pdf-mode="setPdfMode"
+      />
+      <PdfReader
+        v-else-if="isPdf"
+        :book-id="bookId"
+        :title="book.title"
+        :comic-lib="book.library_type === 'comic'"
+        @pdf-mode="setPdfMode"
+      />
 
       <template v-else>
       <!-- 工具栏 -->
@@ -1096,8 +1326,23 @@ onBeforeUnmount(() => {
                   {{ m.label }}
                 </button>
               </div>
+              <!-- 第 61 期：滚动模式的自动续章开关（翻页模式的末页判定不归它管） -->
+              <label
+                v-if="!isPdf && !isComic"
+                class="mt-2 flex cursor-pointer items-start gap-2 text-[11px] leading-snug text-muted-foreground"
+              >
+                <input
+                  v-model="prefs.autoNextChapter"
+                  type="checkbox"
+                  class="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
+                >
+                <span>
+                  滚动读到底时<strong class="text-foreground/80">自动接上下一章</strong>
+                  （下一章已预先取好，切换不留加载空档；只作用于滚动模式）
+                </span>
+              </label>
               <p v-if="paged" class="mt-1 text-[10.5px] leading-snug text-muted-foreground">
-                点正文左右两侧或按 ← → 翻页，翻到底自动跳下一章。
+                点正文左右两侧、滚动鼠标滚轮或按 ← → 翻页，翻到底自动跳下一章。
               </p>
             </div>
 
@@ -1266,22 +1511,33 @@ onBeforeUnmount(() => {
           v-if="showToc"
           class="w-60 shrink-0 overflow-y-auto border-r border-border pr-2 py-2"
         >
-          <div v-for="v in book.chapters" :key="v.volume" class="mb-2">
+          <div v-for="(v, vi) in tocView" :key="vi" class="mb-2">
             <div v-if="v.volume" class="px-2 py-1 text-[11px] font-semibold text-muted-foreground">
               {{ v.volume }}
             </div>
             <button
-              v-for="c in v.chapters"
-              :key="c.index"
+              v-for="c in v.items"
+              :key="c.pos"
               type="button"
               class="block w-full cursor-pointer truncate rounded-md px-2 py-1 text-left text-[12.5px] transition-colors"
-              :class="c.index === currentIndex ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
-              @click="c.index !== undefined && goto(c.index)"
+              :class="c.pos === pos ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
+              @click="gotoPos(c.pos)"
             >
               {{ c.title }}
             </button>
           </div>
+          <div v-if="!tocView.length" class="px-2 py-3 text-[11.5px] text-muted-foreground">
+            这本书没有可用目录
+          </div>
         </aside>
+
+        <!-- 章节加载中（第 61 期）：连点目录/翻到边界时给出反馈，避免「点了没反应」的错觉 -->
+        <div
+          v-if="chapterLoading"
+          class="pointer-events-none absolute top-3 right-4 z-10 rounded-full bg-muted/90 px-2.5 py-1 text-[11px] text-muted-foreground"
+        >
+          加载章节…
+        </div>
 
         <!-- 正文 -->
         <div

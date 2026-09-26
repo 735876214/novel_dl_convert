@@ -176,6 +176,12 @@ DEFAULTS = {
             "compress": True,
         },
     },
+    # 通知合并（第 61 期）：同类型（动作 + 结果 + 主体）在窗口内重复 → 合并成一条推送，
+    # 且**每来一条同类型消息窗口都重新计时**（尾随去抖）。默认 10s 且开启 —— 这正是需求给的口径。
+    "notifications": {
+        "merge_enabled": True,
+        "merge_window": 10,
+    },
     # 上传上限。⚠️ 此前**完全没有任何限制**：POST /convert 与 POST /api/sources/upload
     # 都直接 `await file.read()`，把整个请求体一次性读进内存 —— 一个几 GB 的请求
     # 就能把容器内存打满（不需要鉴权绕过，走正常接口即可）。

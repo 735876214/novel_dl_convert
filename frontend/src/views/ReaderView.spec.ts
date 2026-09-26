@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 import { api, type BookDetail, type Bookmark, type BookVolume } from '@/lib/api'
+import { READER_PREFS_KEY } from '@/lib/readerPrefs'
 import { useLibraryStore } from '@/stores/library'
 import ReaderView from '@/views/ReaderView.vue'
 
@@ -25,6 +26,8 @@ vi.mock('@/lib/api', () => ({
     deleteBookmark: vi.fn(),
     updateBookmark: vi.fn(),
     saveProgress: vi.fn(),
+    // 第 61 期：进度写入（`setProgress`）与就地回写 store 的用例需要它
+    setProgress: vi.fn(),
   },
   apiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
@@ -38,6 +41,7 @@ const m = {
   recordSession: vi.mocked(api.recordSession),
   fonts: vi.mocked(api.fonts),
   addBookmark: vi.mocked(api.addBookmark),
+  setProgress: vi.mocked(api.setProgress),
 }
 
 /** 两章的一卷 EPUB —— `total.value` 非空，`startSession()` 才会被调用。 */
@@ -88,6 +92,7 @@ function stubApi(book: BookDetail): void {
   m.chapter.mockResolvedValue({ index: 0, total: 2, title: '第一章', html: '<p>正文</p>' })
   m.recordSession.mockResolvedValue({ ok: true })
   m.fonts.mockResolvedValue({ items: [], max_bytes: 0, max_count: 0 })
+  m.setProgress.mockResolvedValue({ ok: true, updated_at: 1000 })
 }
 
 /**
@@ -314,5 +319,194 @@ describe('ReaderView · 同路由换书（第 36 期观察项 2）', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('ReaderView · 目录跳转与滚轮翻页（第 61 期）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    Element.prototype.scrollIntoView = vi.fn()
+    localStorage.removeItem(READER_PREFS_KEY)
+    stubApi(makeBook())
+  })
+
+  afterEach(() => {
+    localStorage.removeItem(READER_PREFS_KEY)
+  })
+
+  /**
+   * 滚动容器 = `.reader-content`（article）→ 位移层 → 滚动容器。
+   *
+   * 滚轮监听是**手动**注册在滚动容器上的（要 `passive: false` 才能 preventDefault），
+   * 所以用例必须把事件派发到**那个元素**上；派发到 wrapper 根节点不会冒泡过去。
+   */
+  function scrollerOf(wrapper: VueWrapper): HTMLElement {
+    const art = wrapper.find('.reader-content').element
+    return art.parentElement!.parentElement as HTMLElement
+  }
+
+  /**
+   * 目录跳转必须按 **`flat` 里的位置**走，而不是回查后端 `index`。
+   *
+   * 后端结构里可能出现没有 `index` 的条目（此处模拟）：`flat` 会跳过它、目录面板的
+   * `findIndex(c => c.index === idx)` 却可能因此落空 —— 表现就是「点了没反应」。
+   * 位置是同序遍历出来的，天然对齐；无序号条目**不渲染**（而不是渲染一个点了没反应的死项）。
+   */
+  it('目录按位置跳转：后端 index 有跳号时也不会点不动', async () => {
+    stubApi(makeBook({
+      chapters: [
+        {
+          volume: '第一卷',
+          chapters: [{ num: 1, index: 0, title: '第一章' }, { num: 2, title: '无序号页' }],
+        },
+        { volume: '第二卷', chapters: [{ num: 1, index: 7, title: '第七章' }] },
+      ],
+    }))
+    const { wrapper } = await mountReader()
+
+    await wrapper.find('button[title="目录"]').trigger('click')
+    expect(wrapper.text()).toContain('第一卷')
+    expect(wrapper.text()).not.toContain('无序号页')       // 死项不渲染
+
+    const target = wrapper.findAll('aside button').find((b) => b.text() === '第七章')
+    expect(target, '目录里应能找到「第七章」').toBeTruthy()
+    await target!.trigger('click')
+    await flushPromises()
+
+    expect(m.chapter).toHaveBeenLastCalledWith('book-a', 7)
+  })
+
+  /**
+   * **慢响应后到不能覆盖后跳的那一章**（第 61 期「目录点了跳错位置」的真实成因之一）。
+   *
+   * 场景：连点两个目录项，先发的那次响应更慢。没有请求序号守卫时，慢响应落地后会把画面
+   * 覆盖回旧章节 —— 界面显示 A、高亮与进度却在 B，而且**没有任何报错**。
+   */
+  it('连点目录：慢响应后到也不会覆盖后跳的那一章', async () => {
+    stubApi(makeBook())
+    // 第 0 章永远慢（1.5s 后才有结果），第 1 章立刻返回
+    m.chapter.mockImplementation(async (_bid: string, index: number) => {
+      if (index === 0) {
+        await new Promise((r) => setTimeout(r, 1500))
+        return { index: 0, total: 2, title: '第一章', html: '<h1>第一章</h1>' }
+      }
+      return { index, total: 2, title: '第二章', html: '<h1>第二章</h1>' }
+    })
+    const { wrapper } = await mountReader()
+
+    await wrapper.find('button[title="目录"]').trigger('click')
+    const items = wrapper.findAll('aside button')
+    // 第 0 章（慢）+ 第 1 章（快）：先点慢的，再点快的
+    await items[0].trigger('click')
+    await items[1].trigger('click')
+    await vi.waitFor(() => expect(m.chapter).toHaveBeenCalledTimes(3))   // 首屏 + 两次点击
+    await new Promise((r) => setTimeout(r, 1700))                        // 等慢响应真的回来
+    await flushPromises()
+
+    expect(wrapper.find('.reader-content h1').exists()).toBe(true)
+    expect(wrapper.find('.reader-content h1').text()).toBe('第二章')
+  })
+
+  /**
+   * 进度写完要**就地**回写书库 store（第 61 期「进度实时」）。
+   *
+   * 这守的是首页「继续阅读」的新鲜度：不重拉整库（几百本一次往返），
+   * 只改内存里那一条 —— 用户读完一段切回首页，百分比与排序立刻是新的。
+   */
+  it('进度写完就地回写书库 store', async () => {
+    const lib = useLibraryStore()
+    lib.$patch({ books: [makeBook({ id: 'book-a', percent: 12, updated_at: 1 })] })
+    localStorage.setItem(READER_PREFS_KEY, JSON.stringify({ mode: 'paged' }))
+
+    const { wrapper } = await mountReader()
+    // 翻页模式翻一页 → 越过末页判定 → 切到第 2 章（2 章书 = 50%）
+    scrollerOf(wrapper).dispatchEvent(new WheelEvent('wheel', { deltaY: 160, cancelable: true }))
+    await flushPromises()
+    // 滚动 → onScroll 800ms 去抖后写进度
+    scrollerOf(wrapper).dispatchEvent(new Event('scroll'))
+    await new Promise((r) => setTimeout(r, 900))
+    await flushPromises()
+
+    expect(m.setProgress).toHaveBeenCalled()
+    expect(lib.books[0].percent).toBe(50)
+    expect(lib.books[0].updated_at).toBe(1000)      // 服务端回传的时间戳
+  })
+
+  /**
+   * 滚动读到一章末尾 → **自动接上下一章**（第 61 期，用户选的 A）。
+   *
+   * 「无缝」的全部内容都在这一条里：**下一章必须先已在缓存里**，切换时才不会再发一次请求
+   * （不发请求 ⇒ 没有往返等待、没有空白、没有「加载章节…」一闪）。
+   * 所以断言的落点是取数次数：首屏那次 + 预取那次 = 2，滚到底**不新增**请求。
+   */
+  it('滚动到底自动接上下一章，且切换时不再发请求（预取在先）', async () => {
+    localStorage.removeItem(READER_PREFS_KEY)     // 默认就是滚动模式
+    const { wrapper } = await mountReader()
+
+    expect(m.chapter).toHaveBeenCalledTimes(2)    // 首屏(0) + 预取下一章(1)
+
+    // happy-dom 没有布局：直接给出「已滚到底」的尺寸
+    const el = scrollerOf(wrapper)
+    Object.defineProperty(el, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    Object.defineProperty(el, 'scrollTop', { value: 1500, configurable: true })
+    el.dispatchEvent(new Event('scroll'))
+    await flushPromises()
+
+    expect(m.chapter).toHaveBeenCalledTimes(2)    // 已在缓存 ⇒ 不多一次请求
+    expect(m.chapter).toHaveBeenLastCalledWith('book-a', 1)
+    expect(wrapper.text()).toContain('2 / 2')
+  })
+
+  /** 关掉开关后，滚到底就停在原地（不替用户做决定）。 */
+  it('关掉自动续章后滚到底不自动跳', async () => {
+    localStorage.setItem(READER_PREFS_KEY, JSON.stringify({ autoNextChapter: false }))
+    const { wrapper } = await mountReader()
+    const el = scrollerOf(wrapper)
+    Object.defineProperty(el, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
+    Object.defineProperty(el, 'scrollTop', { value: 1500, configurable: true })
+
+    el.dispatchEvent(new Event('scroll'))
+    await flushPromises()
+    expect(wrapper.text()).toContain('1 / 2')
+  })
+
+  /** 边界：书不在列表里就**别**凭空插一条；更旧的时间戳也别把新的覆盖回去。 */
+  it('进度回写的两条边界：未知书忽略、旧时间戳不倒退', () => {
+    const lib = useLibraryStore()
+    lib.$patch({ books: [makeBook({ id: 'book-a', percent: 10, updated_at: 500 })] })
+
+    lib.patchProgress('不存在的书', 50, 999)
+    expect(lib.books).toHaveLength(1)
+
+    lib.patchProgress('book-a', 999, 100)           // 越界百分比 + 更旧的时间戳
+    expect(lib.books[0].percent).toBe(100)
+    expect(lib.books[0].updated_at).toBe(500)
+  })
+
+  /**
+   * 滚轮翻页：**只在翻页模式**生效，滚动模式绝不抢滚轮。
+   *
+   * happy-dom 没有真实布局 ⇒ `pageCount` 恒为 1，于是「向后翻一页」会走到末页判定并切章。
+   * 这正好让断言落在**可观测的取数**上：滚动模式不产生第二次 `chapter` 调用，
+   * 翻页模式切到下一章（index 1）。
+   */
+  it('翻页模式滚轮翻页；滚动模式不抢滚轮', async () => {
+    const scrollMode = await mountReader()
+    // 首屏 + 预取下一章 = 2（第 61 期：滚动模式会先把下一章取好，见「自动续章」用例）
+    expect(m.chapter).toHaveBeenCalledTimes(2)
+    scrollerOf(scrollMode.wrapper).dispatchEvent(
+      new WheelEvent('wheel', { deltaY: 120, cancelable: true }))
+    await flushPromises()
+    expect(m.chapter).toHaveBeenCalledTimes(2)             // 滚动模式：滚轮不触发取数
+
+    localStorage.setItem(READER_PREFS_KEY, JSON.stringify({ mode: 'paged' }))
+    m.chapter.mockClear()
+    const pagedMode = await mountReader()
+    scrollerOf(pagedMode.wrapper).dispatchEvent(
+      new WheelEvent('wheel', { deltaY: 120, cancelable: true }))
+    await flushPromises()
+    expect(m.chapter).toHaveBeenLastCalledWith('book-a', 1)  // 翻页模式：向后翻 = 下一章
   })
 })

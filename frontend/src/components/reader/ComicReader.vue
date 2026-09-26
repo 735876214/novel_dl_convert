@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
@@ -18,6 +18,7 @@ import {
   saveComicPrefs,
   type ComicPrefs,
 } from '@/lib/comicPrefs'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -31,9 +32,18 @@ import { useUiStore } from '@/stores/ui'
  * （`core/comics.py`，依赖 `bsdtar` / `unrar`），**缺解压器时接口明确返回 503**。
  * 第 51 期订正了此处原先「只支持 CBZ、CBR 后端会直接拒绝」的过期注释。
  */
-const props = defineProps<{ bookId: string; title: string; series?: string }>()
+const props = defineProps<{
+  bookId: string
+  title: string
+  series?: string
+  /** 数据源：`archive` = CBZ/CBR 归档（默认）；`pdf` = PDF（漫画库里的 PDF 按漫画形态读） */
+  source?: 'archive' | 'pdf'
+}>()
+/** 交回上层切换阅读器（偏好由上层统一落库，避免两个组件各写一份 `comic-prefs`） */
+const emit = defineEmits<{ pdfMode: ['comic' | 'pdf'] }>()
 const router = useRouter()
 const ui = useUiStore()
+const library = useLibraryStore()
 
 const prefs = ref<ComicPrefs>(readComicPrefs())
 watch(prefs, (v) => saveComicPrefs(v), { deep: true })
@@ -75,6 +85,103 @@ const gapPx = computed(() => (prefs.value.mode === 'infinite_nogap' ? 0 : prefs.
 /** 页图 URL（index 从 0 起）。带 token 的拼法集中在 api.comicPageUrl（那里解释了为什么需要） */
 function pageUrl(index: number): string {
   return api.comicPageUrl(props.bookId, index)
+}
+
+// ---------------- PDF 源（第 61 期：漫画库也收 PDF）----------------
+/**
+ * 这一路的取舍：**PDF 按漫画形态读，但不是服务端重渲图**。
+ *
+ * 服务端没有 PDF 光栅化能力（也不该为了这一条引入新依赖），所以这里在浏览器里用
+ * pdf.js 把每一页画到 canvas，再转成 blob URL 交回**同一套 `<img>` 布局** ——
+ * 于是单/双页、左右方向、整页/宽度适配、连续与无间隙这些漫画形态**原样生效**，
+ * 不必再写一份并行的 PDF 布局。渲染是**按需**的（翻页模式只画当页，连续模式滚到才画），
+ * 长文档不会一打开就画几百页。
+ */
+const isPdfSource = computed(() => props.source === 'pdf')
+let pdfDoc: any = null
+/** 页号(1 起) → 已渲染出的 blob URL */
+const pdfUrls = ref<Record<number, string>>({})
+const pdfPending = new Set<number>()
+
+function pdfScale(baseW: number): number {
+  // 按「容器宽 + 设备像素比」出图，够清晰又不过分；显示尺寸仍由 imgStyle 的适配规则决定
+  const target = Math.max(600, boxW.value || 900)
+  const dpr = Math.min(2, window.devicePixelRatio || 1)
+  return Math.min(4, (target * dpr) / Math.max(1, baseW))
+}
+
+async function ensurePdfPage(n: number): Promise<void> {
+  if (!isPdfSource.value || n < 1) return
+  // ⚠️ 上界检查要**在 total 已知之后才生效**：PDF 的总页数正是第一次渲染时才拿到的
+  // （`total` 初始为 0），写成 `n > total` 会让第一次调用永远被挡在门外 —— 自锁。
+  if (total.value && n > total.value) return
+  if (pdfUrls.value[n] || pdfPending.has(n)) return
+  pdfPending.add(n)
+  try {
+    if (!pdfDoc) {
+      const pdfjs: any = await import('pdfjs-dist')
+      const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default
+      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
+      let token = ''
+      try {
+        token = localStorage.getItem('nf_token') || ''
+      } catch {
+        /* 隐私模式 */
+      }
+      pdfDoc = await pdfjs.getDocument({
+        url: `/api/books/${encodeURIComponent(props.bookId)}/file`,
+        httpHeaders: token ? { Authorization: `Bearer ${token}` } : {},
+      }).promise
+      total.value = pdfDoc.numPages || total.value
+    }
+    const page = await pdfDoc.getPage(n)
+    const base = page.getViewport({ scale: 1 })
+    const vp = page.getViewport({ scale: pdfScale(base.width) })
+    const cv = document.createElement('canvas')
+    cv.width = Math.max(1, Math.floor(vp.width))
+    cv.height = Math.max(1, Math.floor(vp.height))
+    const ctx = cv.getContext('2d')
+    if (!ctx) return
+    await page.render({ canvasContext: ctx, viewport: vp as never }).promise
+    cv.toBlob((blob) => {
+      if (blob) pdfUrls.value = { ...pdfUrls.value, [n]: URL.createObjectURL(blob) }
+    }, 'image/webp', 0.92)
+  } catch {
+    /* 单页渲染失败不整页报错：留空图，用户可切回 PDF 阅读器 */
+  } finally {
+    pdfPending.delete(n)
+  }
+}
+
+/** 页图来源：PDF 用渲染出的 blob URL（还没渲染出来时为空串，img 显示占位） */
+function pageSrc(n: number): string {
+  return isPdfSource.value ? (pdfUrls.value[n] || '') : pageUrl(n - 1)
+}
+
+function revokePdfUrls(): void {
+  for (const url of Object.values(pdfUrls.value)) {
+    try {
+      URL.revokeObjectURL(url)
+    } catch {
+      /* 忽略 */
+    }
+  }
+  pdfUrls.value = {}
+}
+
+/** 连续模式：滚到哪一页才渲染哪一页（IO 此前是保持引用的空实现，这里改造成真正的按需渲染） */
+function observePdfPages(): void {
+  if (typeof IntersectionObserver !== 'function') return
+  const box = boxRef.value
+  if (!box) return
+  io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue
+      const n = Number((e.target as HTMLElement).dataset.p || 0)
+      if (n) void ensurePdfPage(n)
+    }
+  }, { root: box, rootMargin: '600px 0px' })
+  for (const el of box.querySelectorAll('[data-p]')) io.observe(el)
 }
 
 /** 记录页图自然尺寸（宽页判定用）；取不到尺寸就忽略，回退成「照常并排」 */
@@ -129,6 +236,25 @@ const imgStyle = computed(() => {
 async function load(): Promise<void> {
   loading.value = true
   try {
+    // PDF 源：先打开文档拿总页数（页图是按需渲染的，见 ensurePdfPage）
+    if (isPdfSource.value) {
+      await ensurePdfPage(1)
+      if (!total.value) {
+        error.value = '这个 PDF 打不开（可用工具栏切回 PDF 阅读器试试）'
+        loading.value = false
+        return
+      }
+      try {
+        const p = await api.getProgress(props.bookId)
+        page.value = Math.min(total.value, Math.max(1, (p.locator || 0) + 1))
+      } catch {
+        /* 无进度则从第 1 页开始 */
+      }
+      loading.value = false
+      await nextTick()
+      if (isInfinite.value) observePdfPages()
+      return
+    }
     const r = await api.comicPages(props.bookId)
     total.value = r.total
     if (!r.total) {
@@ -157,8 +283,11 @@ function scheduleSave(): void {
 
 async function save(): Promise<void> {
   if (!total.value) return
+  const percent = (page.value / total.value) * 100
   try {
-    await api.setProgress(props.bookId, page.value - 1, (page.value / total.value) * 100)
+    const r = await api.setProgress(props.bookId, page.value - 1, percent)
+    // 第 61 期：进度就地回写 store（首页「继续阅读」实时）
+    library.patchProgress(props.bookId, percent, r?.updated_at)
   } catch {
     /* 静默 */
   }
@@ -297,12 +426,26 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeydown)
   io?.disconnect()
   ro?.disconnect()
+  // 渲染出的 blob URL 必须显式释放：它们是整页位图，留着就是实打实的内存
+  revokePdfUrls()
+  pdfDoc = null
 })
 
 // 双页/方向变化时页码要落到「双页起点」，否则会停在第 2、4 页这类看着别扭的位置
 watch([double, rtl], () => {
   if (double.value && page.value % 2 === 0) page.value = Math.max(1, page.value - 1)
 })
+
+/**
+ * PDF 源的**按需渲染**：翻页模式只画当前（双页时两页），连续模式交给 IO 滚到才画。
+ *
+ * 归档源不受影响（那是 `<img src>` 直接取后端页图，本来就有原生 lazy）。
+ */
+watch([shownPages, isInfinite, () => total.value], () => {
+  if (!isPdfSource.value || !total.value) return
+  if (isInfinite.value) observePdfPages()
+  else for (const n of shownPages.value) void ensurePdfPage(n)
+}, { immediate: true })
 </script>
 
 <template>
@@ -320,6 +463,17 @@ watch([double, rtl], () => {
       <span class="shrink-0 text-[11.5px] text-muted-foreground tabular-nums">{{ page }} / {{ total }}</span>
       <Button size="sm" variant="ghost" title="下一页" :disabled="page >= total" @click="next">
         <Icon name="arrowRight" class="h-3.5 w-3.5" />
+      </Button>
+
+      <!-- PDF 源：一键切回 PDF 阅读器（原样保留「当前读到第几页」——进度是按页存的，两边通用） -->
+      <Button
+        v-if="isPdfSource"
+        size="sm"
+        variant="ghost"
+        title="改用 PDF 阅读器打开（保留原版式与文字选择）"
+        @click="emit('pdfMode', 'pdf')"
+      >
+        PDF 视图
       </Button>
 
       <span class="mx-1 h-4 w-px bg-border" />
@@ -391,7 +545,7 @@ watch([double, rtl], () => {
         <img
           v-for="n in shownPages"
           :key="n"
-          :src="pageUrl(n - 1)"
+          :src="pageSrc(n)"
           :style="imgStyle"
           class="block select-none"
           draggable="false"
@@ -406,10 +560,10 @@ watch([double, rtl], () => {
           v-for="n in total"
           :key="n"
           :data-p="n"
-          :src="pageUrl(n - 1)"
+          :src="pageSrc(n)"
           :style="imgStyle"
           class="block select-none"
-          loading="lazy"
+          :loading="isPdfSource ? 'eager' : 'lazy'"
           draggable="false"
           :alt="`第 ${n} 页`"
         >

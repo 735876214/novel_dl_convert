@@ -5,6 +5,7 @@ import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, type AudioTrack } from '@/lib/api'
 import { AUDIO_SKIP_BACKS, AUDIO_SKIP_FORWARDS, AUDIO_SLEEPS, AUDIO_SPEEDS, readAudioPrefs } from '@/lib/audioPrefs'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -17,6 +18,7 @@ import { useUiStore } from '@/stores/ui'
 const props = defineProps<{ bookId: string; tracks: AudioTrack[] }>()
 
 const ui = useUiStore()
+const library = useLibraryStore()
 const prefs = readAudioPrefs()
 
 const audio = ref<HTMLAudioElement | null>(null)
@@ -136,7 +138,12 @@ function onPause(): void {
 }
 
 function saveProgress(): void {
-  void api.setProgress(props.bookId, Math.round(currentTime.value), Math.round(percent.value))
+  const pct = Math.round(percent.value)
+  void api.setProgress(props.bookId, Math.round(currentTime.value), pct)
+    .then((r) => {
+      // 第 61 期：进度就地回写 store（首页「继续阅读」实时）
+      library.patchProgress(props.bookId, pct, r?.updated_at)
+    })
     .catch(() => {})
 }
 

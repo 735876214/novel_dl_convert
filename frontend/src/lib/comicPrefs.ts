@@ -40,6 +40,17 @@ export interface ComicPrefs {
   forceTwoPage: boolean
   /** 自动翻到下一本（第 51 期；默认关）：读到末页后按系列序号进下一册 */
   autoNext: boolean
+  /**
+   * **漫画库里的 PDF 用哪个阅读器**（第 61 期）。
+   *
+   * `comic` = 按**漫画形态**读（pdf.js 逐页渲染成图，于是单/双页、左→右或右→左、
+   * 整页适配、无间隙连续这些漫画设置全部适用；代价是**不能选文字**）；
+   * `pdf`   = 用 PDF 阅读器读（保留原版式与文字选择、可搜索）。
+   *
+   * 默认 `comic` —— 这正是「漫画库支持 PDF」要的效果；两个阅读器都保留当前页进度
+   * （进度按页存），可随时来回切。
+   */
+  pdfMode: 'comic' | 'pdf'
 }
 
 export const COMIC_PREFS_KEY = 'comic-prefs'
@@ -56,6 +67,8 @@ export const COMIC_PREFS_DEFAULT: ComicPrefs = {
   widePage: 'disable',
   forceTwoPage: true,
   autoNext: false,
+  // 第 61 期：漫画库里的 PDF 默认按漫画形态读（用户可在阅读器工具栏一键切回 PDF 视图）
+  pdfMode: 'comic',
 }
 
 export const COMIC_MODES = [

@@ -43,6 +43,11 @@ const books = computed<BookCard[]>(() => {
 
 const visibleBooks = computed(() => books.value.slice(0, MAX_COVERS))
 
+/** 进度百分比（夹到 0–100；缺值当 0） */
+function pct(b: BookCard): number {
+  return Math.min(100, Math.max(0, Number(b.percent ?? 0)))
+}
+
 /** 「查看全部」：继续阅读行跳到「在读」智能书架，其余按标题进书库页 */
 function openAll(): void {
   if (props.shelf.type === 'continue') library.openSmart('在读', 'reading')
@@ -75,9 +80,29 @@ function openAll(): void {
         class="group w-[104px] shrink-0 cursor-pointer text-left"
         @click="router.push(`/book/${b.id}`)"
       >
-        <BookCover :book="b" />
+        <div class="relative">
+          <BookCover :book="b" />
+          <!--
+            继续阅读行显示进度（第 61 期）：封面底部细条 + 下方百分比。
+            只在这一行显示 —— 其它行（最近添加 / 发现）的百分比没有意义。
+          -->
+          <div
+            v-if="shelf.type === 'continue'"
+            class="absolute inset-x-1 bottom-1 h-1 overflow-hidden rounded-full bg-black/45"
+          >
+            <div class="h-full rounded-full bg-primary" :style="{ width: `${pct(b)}%` }" />
+          </div>
+        </div>
         <div class="mt-1.5 truncate text-[12px] font-medium text-foreground">{{ b.title }}</div>
-        <div class="truncate text-[11px] text-muted-foreground">{{ b.author }}</div>
+        <div class="flex items-baseline gap-1">
+          <span class="truncate text-[11px] text-muted-foreground">{{ b.author }}</span>
+          <span
+            v-if="shelf.type === 'continue'"
+            class="ml-auto shrink-0 text-[10.5px] text-muted-foreground tabular-nums"
+          >
+            {{ Math.round(pct(b)) }}%
+          </span>
+        </div>
       </button>
 
       <div v-if="!visibleBooks.length" class="py-6 text-[12px] text-muted-foreground">

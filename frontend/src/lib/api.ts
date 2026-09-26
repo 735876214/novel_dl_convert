@@ -108,6 +108,11 @@ export interface LogItem {
   status?: string
   message?: string
   /**
+   * 合并计数（第 61 期）：同类型（动作 + 结果 + 主体）在 10s 窗口内重复了 N 次 ⇒
+   * **只有这一条**通知，`merged` = N。界面据此显示「×N」，而角标不会因刷屏虚高。
+   */
+  merged?: number
+  /**
    * 操作者（登录账号名）。由后端鉴权中间件写入（见 `core/activity_log.py` 的 actor）。
    * 历史条目没有该字段（字段是后加的），读取端必须按「未记录」渲染而非报错。
    */

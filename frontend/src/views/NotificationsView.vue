@@ -162,6 +162,14 @@ const TABS = [
               <!-- 未读圆点：已读条目不再显示 -->
               <span v-if="!n.read" class="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" title="未读" />
               <span class="text-[12.5px] font-medium text-foreground">{{ str(n, 'action') || '活动' }}</span>
+              <!-- 第 61 期：同类型 10s 内重复 N 次 ⇒ 只留一条、标注发生次数 -->
+              <span
+                v-if="(n.merged ?? 1) > 1"
+                class="shrink-0 rounded-full bg-muted px-1.5 text-[10.5px] text-muted-foreground tabular-nums"
+                title="该类型在合并窗口内发生了这么多次"
+              >
+                ×{{ n.merged }}
+              </span>
               <span class="truncate text-[12.5px] text-foreground">{{ str(n, 'file') }}</span>
               <span class="ml-auto shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ str(n, 'ts') }}</span>
             </div>

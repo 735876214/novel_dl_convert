@@ -181,6 +181,23 @@ export const useLibraryStore = defineStore('library', () => {
       .sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)),
   )
 
+  /**
+   * 就地更新某本书的阅读进度（第 61 期「进度要实时」）。
+   *
+   * 阅读器每成功写一次进度就调它：**不重拉整库**（那是几百本的往返），只改内存里那一条 ——
+   * 于是读着书切回首页时，「继续阅读」的百分比与排序立刻是新的，不必等一次 `loadBooks`。
+   *
+   * 边界：书不在当前列表里（换了库 / 列表还没加载）⇒ **静默忽略**，不新建条目 ——
+   * 凭空插一条没有封面/元数据的残书比不显示更糟；下次 `loadBooks` 自会带上服务端真值。
+   */
+  function patchProgress(id: string, percent: number, at?: number): void {
+    const hit = books.value.find((b) => b.id === id)
+    if (!hit) return
+    hit.percent = Math.min(100, Math.max(0, Number(percent) || 0))
+    const ts = Number(at) || 0
+    if (ts > 0) hit.updated_at = Math.max(ts, hit.updated_at || 0)
+  }
+
   async function loadBooks(force = false): Promise<void> {
     if (loaded.value && !force) return
     loading.value = true
@@ -330,6 +347,7 @@ export const useLibraryStore = defineStore('library', () => {
     allTags,
     shelfBooks,
     continueReading,
+    patchProgress,
     isSmart,
     smartBooks,
     loadBooks,

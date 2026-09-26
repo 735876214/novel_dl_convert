@@ -4367,6 +4367,8 @@ EDITABLE: dict = {
     # retention 是嵌套块（第 52 期）：与 integrations 同口径，整块取值，
     # 免得将来往留存策略里加键时还要再改一次白名单。
     "logging": {"dir", "max_entries", "retention"},
+    # 第 61 期：通知合并窗口（同类型 10s 内重复 → 合并为一条）
+    "notifications": {"merge_enabled", "merge_window"},
     "upload": {"max_bytes", "max_source_rules_bytes"},
     "achievements": {"enabled"},
     "opds": {"enabled", "expose"},
@@ -4506,6 +4508,7 @@ def api_get_config():
             "network": cfg.get("network") or {},
             "download": cfg.get("download") or {},
             "logging": cfg.get("logging") or {},
+            "notifications": cfg.get("notifications") or {},
             # 注意：这里是**硬编码键列表**，不随 EDITABLE 自动同步 ——
             # 新增可写配置项时，EDITABLE 与本列表都要加，否则会出现「能写进 settings.json 但读不回来」。
             "naming": cfg.get("naming") or {},

@@ -299,6 +299,27 @@ def test_lib_id() -> str:
     return TEST_LIB_ID
 
 
+@pytest.fixture(autouse=True)
+def _no_notification_merge():
+    """用例**默认关闭通知合并**（第 61 期）。
+
+    合并窗口是**尾随去抖**：写一条不再立即落盘，同类型重复还会并成一条 ——
+    这对大量既有用例是破坏性的（日志留存 / 轮转 / 按操作者过滤 / 清理都建立在
+    「写一条即落一条」这个前提上）。合并本身由 `tests/test_notification_merge.py`
+    专门钉住（那里显式打开窗口并断言合并与重置），这里只需要保证其余用例的确定性。
+    """
+    from novelforge.core import activity_log as al
+
+    orig = al.merge_cfg
+    al._pending.clear()
+    al.merge_cfg = lambda: {"enabled": False, "window": 0}
+    try:
+        yield
+    finally:
+        al.merge_cfg = orig
+        al._pending.clear()
+
+
 @pytest.fixture
 def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     """**用例级隔离**：数据 / 导出 / 来源目录指向本用例专属路径，并重建一套空库。
