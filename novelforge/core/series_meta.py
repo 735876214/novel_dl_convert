@@ -300,6 +300,10 @@ def fetch_one(name: str, cfg: dict = None) -> dict:
     # 与书籍抓取同一口径：只用真的能抓的源，密钥按注册表 key_field 拼装（第 57 期）
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
                if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)
+    # 第 60 期：系列**没有自己的语种** → 由成员书投票（全空就不重排，不猜）
+    sources = metasources.reorder_for_language(
+        sources, metasources.dominant_language(members),
+        bool(mf.get("auto_order_by_language", True)))
     options = metasources.options_for(mf, sources)
 
     try:

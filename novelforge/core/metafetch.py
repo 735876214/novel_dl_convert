@@ -304,6 +304,14 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         mfb = _mf_of(b, mf)
         b_policy = mfb.get("fields") or {}
         b_threshold = _threshold_of(mfb, threshold)
+        # 第 60 期：**按本书语种重排来源顺序**（专精本语种 → 通吃 → 专精别语种）。
+        # 语种来自书自己的 `language`（没填就不知道 ⇒ 原样用你设的顺序，不猜）。
+        # 每本书各算一次：整个书库混着中英日书，用一个顺序显然不合理。
+        b_sources = metasources.reorder_for_language(
+            sources, b.get("language"), bool(mfb.get("auto_order_by_language", True)))
+        b_options = options if b_sources == sources else metasources.options_for(mf, b_sources)
+        # 如实回传**本次实际顺序**：界面据此说明「为什么先问了它」
+        base["sources_order"] = b_sources
         if not mfb.get("enabled"):
             base["skipped"] = "该库已关闭在线元数据抓取（每库覆盖）"
             items.append(base)
@@ -316,13 +324,15 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         # 不按格式跳过：结果**只写服务端 DB**，与文件能不能改无关 —— PDF / 漫画 / 有声书一视同仁。
         # （曾按 `format != "EPUB"` 跳过，理由是「没有可写的 OPF」；该前提在本链路改为只落库后已失效。）
 
-        # ISBN 精确匹配优先（第 8 期 D4）：有 ISBN 且在线查得到就直接用，置信度视为最高
-        exact = metasources.search_by_isbn(b.get("isbn") or "", sources, 3, options)
+        # ISBN 精确匹配优先（第 8 期 D4）：有 ISBN 且在线查得到就直接用，置信度视为最高。
+        # ⚠️ 顺序在这里是有意义的：第一个命中的精确匹配就赢（不再往后问），
+        # 所以「按语种重排」对 ISBN 路径的效果最直接。
+        exact = metasources.search_by_isbn(b.get("isbn") or "", b_sources, 3, b_options)
         if exact:
             res = {"entries": [exact], "sources": {}, "best": exact}
         else:
-            res = metasources.search_all(sources, b.get("title") or b["name"],
-                                         b.get("author") or "", limit, options)
+            res = metasources.search_all(b_sources, b.get("title") or b["name"],
+                                         b.get("author") or "", limit, b_options)
         best = res.get("best")
         base["candidates"] = res["entries"]
         base["sources"] = res["sources"]
@@ -389,6 +399,8 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         "enabled": True, "items": items, "sources": sources, "threshold": threshold,
         "auto": sum(1 for i in items if i["auto_ok"]),
         "total": len(items),
+        # 本次是否开了「按语种重排」（界面据此解释逐书的 `sources_order`）
+        "auto_order_by_language": bool(mf.get("auto_order_by_language", True)),
     }
 
 
@@ -409,6 +421,9 @@ def online_candidate(book: dict, cfg: dict = None, limit: int = None) -> "dict |
     # 「将来注册表先加条目、fetcher 还没写」的空档，那时也别白跑一次注定失败的外呼。
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
                if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)
+    # 第 60 期：这本书的语种决定来源顺序（与 `plan` 同一口径，否则两处会说两套话）
+    sources = metasources.reorder_for_language(
+        sources, book.get("language"), bool(mf.get("auto_order_by_language", True)))
     limit = max(1, min(int(limit or mf.get("limit") or 5), 20))
     blocklist = {norm_key(x) for x in (mf.get("genre_blocklist") or []) if str(x).strip()}
     options = metasources.options_for(mf, sources)

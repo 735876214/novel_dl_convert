@@ -285,6 +285,12 @@ export interface MetadataProvider {
   order: number
   /** 需要的配置是否已填 */
   has_config: boolean
+  /**
+   * 语种亲和（第 60 期）：这家**专精**的语种短码（空 + `lang_broad=true` = 多语种通吃）。
+   * 「按语种自动重排来源顺序」就是据此分档：专精本语种 → 通吃 → 专精别的语种。
+   */
+  langs?: string[]
+  lang_broad?: boolean
 }
 
 /** 提供商的一个**行内配置项**（注册表声明：`type=secret` 掩码输入，`select` 下拉） */
@@ -386,6 +392,11 @@ export interface MetadataPlanItem {
   /** 跳过原因（例如该库关闭了在线元数据抓取、或没有够格的候选） */
   skipped: string
   error: string
+  /**
+   * **本次实际检索顺序**（第 60 期）：开了「按语种自动重排」且本书语种已知时，
+   * 它会与配置里的 `sources` 不同 —— 界面据此解释「为什么先问了它」。
+   */
+  sources_order?: string[]
 }
 
 export interface MetadataPlan {
@@ -396,6 +407,8 @@ export interface MetadataPlan {
   /** 达到阈值可自动应用的本数 */
   auto?: number
   total?: number
+  /** 本次是否开了「按书籍语种自动重排来源顺序」（第 60 期） */
+  auto_order_by_language?: boolean
   message?: string
 }
 

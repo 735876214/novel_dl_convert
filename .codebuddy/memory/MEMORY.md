@@ -110,6 +110,13 @@
 - **前端改动后必须 `type-check` + `test:unit` + `build` + `deploy`**（部署产物落 `novelforge/static/v2`，不入库）；**后端改动必须重启进程才生效**（用户遇到的「空列表」根因就是后端没重启）→ 交付说明里要写清重启/重建镜像这一步。
 - 浏览器冒烟用 `playwright-cli open --browser=msedge <url>`（本机没装 Chrome，Chromium 会报 distribution not found）；用 `CONFIG_DIR/INPUT_DIR/OUTPUT_DIR` 指向 `.codebuddy/tmp-*` 隔离，`admin/changeme` 登录；`route "**/api/xxx" --status=404` 可复现旧后端场景。
 
+## 第 60 期铁律（按语种重排来源顺序）
+- 规则：`专精本语种(0) → 多语种通吃(1) → 专精别的语种(2)`，**档内保持用户设的顺序**（`sorted` 稳定）；**只排序、不筛源**（任何启用的家都仍会被查到）；**未知语种不重排**。亲和表 `metasources.LANG_AFFINITY` + `LANG_BROAD`，契约 `∪ == SOURCES`（新增一家源必须显式表态）。
+- ⚠️ **占位语种陷阱**：`_lang_of("未知")` 返回非空串（它服务于「写进书目时归一」），重排前必须再拦一道 `LANG_UNKNOWN`，否则会拿占位符当真实语种、把所有源判成「专精别的语种」→ 凭一个占位值瞎重排。
+- 调用点三处必须同口径：`metafetch.plan`（**逐本**算）、`metafetch.online_candidate`（单本）、`series_meta`（系列无自身语种 → 成员书投票，平票取先出现者以保证可复现）。`plan` 每本回传 `sources_order`，界面据此解释「为什么先问它」。
+- 配置键新增要动三处：`config.DEFAULTS`、`server.EDITABLE`（`GET /api/config` 的 metadata_fetch 走掩码函数整体回传，不用手列），前端 `data/settingsFields.ts` 的 `SECTION_KEYS`（metadata 段已有 → 无需改）。
+- **前端自动化踩坑（差点误报产品 bug）**：用 DOM 遍历点某个设置行里的按钮时，向上找「含 button 的容器」会拿到祖先容器、点到**邻近按钮**，现象是「标签翻了但值没落库」——看着像产品 bug。正确定位：`filter(元素包含该行标题 && 元素内恰好 1 个 button)` 取**最深**那个。另外 SPA 同路由 `page.goto` 不会重挂组件，草稿会串场，验证开关前要带 `?fresh=timestamp` 强制重挂。
+
 ## 第 59 期铁律（14 家真联网体检）
 - **体检 = 只读 + 分类 + 首条结果**：`metasources.health_check()`（并发 4、单家超时 12s）；`POST /api/metadata/health` 跑一次、`GET` 回上次（**进程内缓存**，重启即空，如实回「尚未体检过」）。**分类是给用户的动作指南**：限流=等一会/填 Key、拒绝=填 Key、反爬拦截=降频率/带 Cookie、重定向=被拦到验证页、`empty`=站点可能改版、`http`=接口报错。不要退化成「可用/不可用」。
 - **样本按家给**（`HEALTH_SAMPLES`）：地区性目录用当地书名（Aladin `채식주의자` / Lubimyczytac `Wiedźmin` / RanobeDB `狼と香辛料`），否则**好家会被误报成无结果**。

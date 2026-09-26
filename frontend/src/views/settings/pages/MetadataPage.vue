@@ -363,6 +363,27 @@ const planItems = ref<MetadataPlanItem[]>([])
 const picked = ref<Set<string>>(new Set())
 const running = ref(false)
 const progress = ref({ done: 0, total: 0 })
+/** 预览时**配置里的**来源顺序（后端随结果回传）：用来判断某本的 `sources_order` 是否被重排过 */
+const planConfiguredOrder = ref<string[]>([])
+
+/** 语种短码 → 中文名（提供商行标「韩语 / 波兰语 / …」） */
+const LANG_ZH: Record<string, string> = {
+  zh: '中文', en: '英语', ja: '日语', ko: '韩语', pl: '波兰语',
+  fr: '法语', de: '德语', ru: '俄语', es: '西班牙语', it: '意大利语',
+}
+/** 语种亲和徽标：专精某语种 → 「韩语」；多语种通吃 → 「多语种」；两者都没有 → 空 */
+function langBadge(p: MetadataProvider): string {
+  const langs = p.langs ?? []
+  if (langs.length) return langs.map((c) => LANG_ZH[c] || c).join('/')
+  return p.lang_broad ? '多语种' : ''
+}
+
+/** 本书的检索顺序是否被「按语种重排」改过（与配置顺序逐位比较） */
+function reordered(i: MetadataPlanItem): boolean {
+  const cfg = planConfiguredOrder.value
+  const o = i.sources_order ?? []
+  return cfg.length > 0 && o.join('|') !== cfg.join('|')
+}
 
 /** 「有缺口」= 该补的书：缺封面 / 缺语言 / 缺出版社 / 缺简介（**不限格式** —— 抓取对非 EPUB 同样适用） */
 const missing = computed(() =>
@@ -386,6 +407,7 @@ async function runPlan(): Promise<void> {
     // 逐本调用：每本要外呼每个源，一次全库必然超时；逐本还能实时显示进度
     for (const b of targets) {
       const r = await api.metadataPlan([b.name])
+      if (r.sources?.length) planConfiguredOrder.value = r.sources
       acc.push(...(r.items ?? []))
       planItems.value = [...acc]
       progress.value = { done: progress.value.done + 1, total: targets.length }
@@ -680,6 +702,15 @@ watch(() => props.section, () => {
                 <span class="text-[12.5px] font-medium text-foreground">{{ p.label }}</span>
                 <Badge v-if="inOrder(p.id)" tone="accent">启用</Badge>
                 <Badge v-if="orderOf(p.id)">顺序 {{ orderOf(p.id) }}</Badge>
+                <!-- 语种亲和（第 60 期）：让「按语种重排」的结果可预期（这家会排在哪一档） -->
+                <span
+                  v-if="langBadge(p)"
+                  class="rounded-full bg-muted px-2 py-0.5 text-[10.5px] text-muted-foreground"
+                  :title="langBadge(p) === '多语种' ? '多语种通吃：任何语种都排在不相关专精之前'
+                                                     : `专精 ${langBadge(p)}：书的语种与之相同时排最前`"
+                >
+                  {{ langBadge(p) }}
+                </span>
                 <!-- 页面抓取型：站点改版就可能失效 —— 如实标出来，别让用户以为是自己的问题 -->
                 <span
                   v-if="p.fragile"
@@ -916,6 +947,27 @@ watch(() => props.section, () => {
           {{ mf.merge_sources === false ? '开启' : '关闭' }}
         </Button>
       </div>
+      <!-- 按语种自动重排（第 60 期）：只改顺序、不筛源；每档内保持你设的顺序 -->
+      <div class="flex items-center gap-4 border-t border-border px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">按书籍语种自动重排来源顺序</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            语种已知时，把<strong>专精该语种</strong>的家排到最前（韩 → Aladin、波 → Lubimyczytac、
+            日 → RanobeDB），<strong>多语种通吃</strong>的居中（Google Books / Open Library / Kobo），
+            专精别的语种的排最后 —— <span class="text-muted-foreground">每档内仍保持你上面设的顺序，
+            且<strong>不会少问任何一家</strong>（只是先问相关的）。书的语种来自书目里的「语言」，
+            没填就按原顺序检索。</span>
+          </div>
+        </div>
+        <Button
+          size="sm"
+          :variant="mf.auto_order_by_language === false ? 'primary' : 'ghost'"
+          :disabled="saving"
+          @click="setVal('metadata_fetch.auto_order_by_language', mf.auto_order_by_language === false); saveSection('metadata')"
+        >
+          {{ mf.auto_order_by_language === false ? '开启' : '关闭' }}
+        </Button>
+      </div>
       <div class="flex flex-wrap items-center gap-3 px-4 py-3.5">
         <span class="text-[12.5px] text-foreground">每个源取候选数</span>
         <input :value="val('metadata_fetch.limit')" type="number" min="1" max="20"
@@ -1030,6 +1082,14 @@ watch(() => props.section, () => {
                     {{ i.candidates[0].author || '—' }}
                     <span v-if="i.candidates[0].publisher"> · {{ i.candidates[0].publisher }}</span>
                     · {{ i.candidates[0].source }}
+                  </div>
+                  <!-- 本次实际检索顺序（第 60 期）：只在被语种重排过时才显示，避免噪音 -->
+                  <div
+                    v-if="reordered(i)"
+                    class="mt-0.5 text-[10.5px] text-muted-foreground"
+                    :title="`按本书语种重排后的检索顺序：${(i.sources_order ?? []).join(' → ')}`"
+                  >
+                    按语种重排：{{ (i.sources_order ?? []).join(' → ') }}
                   </div>
                 </template>
                 <span v-else class="text-[11px] text-muted-foreground">
@@ -1252,10 +1312,10 @@ watch(() => props.section, () => {
       :label="`元数据 · ${meta.zh}`"
       :groups="['PROVIDERS', 'RULES', 'SCORE']"
       :items="[
-        '跨源字段级合并（当前取匹配分最高的一条候选，不逐字段向不同源各取最优）',
-        '按书籍语种自动重排来源顺序（当前严格按你设定的顺序依次检索）',
+        '按书的语种翻译 / 本地化检索词（当前只按语种重排来源顺序，不做跨语言检索）',
+        '自定义来源权重（当前固定三档：专精本语种 → 多语种通吃 → 专精别的语种，档内保持你设的顺序）',
       ]"
-      note="已实现：14 家提供商全部接入（Open Library / Google Books / iTunes / AudNexus / RanobeDB 免密钥即用；Hardcover / Comic Vine / Aladin 填密钥即用；Amazon / Goodreads / Kobo / Audible / Libro.fm / Lubimyczytac 为页面抓取型、站点改版可能失效）、源选择与顺序、连通性自检、按注册表渲染的密钥配置、入库自动抓取、ISBN 精确匹配、字段级写入策略、字段级锁定（单本书逐字段 / 封面，只挡抓取）、置信度阈值、题材黑名单、自定义字段（定义管理 + 按书的值 + 抓取补默认值）、「先预览再应用」的手动抓取面板，以及作者传记 / 头像抓取与本地覆盖编辑。"
+      note="已实现：14 家提供商全部接入（Open Library / Google Books / iTunes / AudNexus / RanobeDB 免密钥即用；Hardcover / Comic Vine / Aladin 填密钥即用；Amazon / Goodreads / Kobo / Audible / Libro.fm / Lubimyczytac 为页面抓取型、站点改版可能失效）、联网体检（逐家分门别类：限流 / 拒绝 / 反爬拦截 / 能连通但解析不到）、源选择与顺序、按书籍语种自动重排来源顺序（专精本语种 → 多语种通吃 → 专精别语种，档内保持你的顺序且不筛掉任何一家）、连通性自检、按注册表渲染的密钥与参数配置、入库自动抓取、ISBN 精确匹配、跨源字段级合并（逐字段择优 + 题材合并，仅够格候选参与）、字段级写入策略、字段级锁定（单本书逐字段 / 封面，只挡抓取）、置信度阈值、题材黑名单、自定义字段（定义管理 + 按书的值 + 抓取补默认值）、「先预览再应用」的手动抓取面板（逐本显示本次实际检索顺序），以及作者传记 / 头像抓取与本地覆盖编辑。"
     />
   </div>
 </template>

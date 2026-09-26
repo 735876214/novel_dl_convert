@@ -449,7 +449,11 @@ def provider_catalog() -> list:
         items.append({**meta, "id": sid, "config_fields": fields,
                       "key_field": key_field_of(sid),
                       "key_label": head.get("label") or "API 密钥",
-                      "key_placeholder": head.get("placeholder") or "未设置"})
+                      "key_placeholder": head.get("placeholder") or "未设置",
+                      # 语种亲和（第 60 期）：界面可标「韩语 / 英语」或「多语种」，
+                      # 让用户看得懂「按语种重排」会怎么排
+                      "langs": list(LANG_AFFINITY.get(sid) or []),
+                      "lang_broad": sid in LANG_BROAD})
     items.sort(key=lambda x: (order.get(x.get("group") or "", 99), list(SOURCES).index(x["id"])))
     return items
 #: 语言代码归一：源里见过 "chi"/"zh"/"zh-CN"/"eng"… 统一成本项目用的短码
@@ -500,10 +504,94 @@ def _lang_of(value) -> str:
     return _LANG_MAP.get(v) or _LANG_MAP.get(head) or head
 
 
+def language_tier(source: str, language: str) -> int:
+    """源相对**某语种**的相关度档：0 专精本语种 / 1 通吃 / 2 专精别的语种。"""
+    langs = LANG_AFFINITY.get(source)
+    if not langs:
+        return LANG_TIER_BROAD
+    return LANG_TIER_SPECIFIC if language in langs else LANG_TIER_OTHER
+
+
+def reorder_for_language(sources: list, language: str, enabled: bool = True) -> list:
+    """按书语种**稳定分档**重排来源：专精本语种 → 通吃 → 专精别的语种。
+
+    三点刻意设计：
+
+    1. **每档内保持你设定的顺序**（`sorted` 稳定）—— 这不是「覆盖你的配置」，
+       只是把明显不相关的家挪到后面；你在「元数据来源」里排的优先级仍然生效；
+    2. **只排序、不筛选**：所有启用的家最终都会被查到（第 59 期体检也证明了
+       「专精别的语种」的家偶尔真能命中），所以这里绝不因为语种丢掉任何一家；
+    3. 语种**未知 / 空**、或 `enabled=False` ⇒ **原样返回**（不猜、也不动用户顺序）。
+       语种来自书的 `language` 字段（OPF `dc:language`），没填就是不知道 —— 那就别重排。
+    """
+    srcs = [s for s in (sources or []) if s in SOURCES]
+    lang = _lang_of(language)
+    # 「未知」也算不知道：书目里这种占位很常见，若当成一个真实的语种码去分档，
+    # 会把所有家有专精的都判成「专精别的语种」—— 那就是凭一个占位值瞎重排。
+    if not enabled or not lang or lang.lower() in LANG_UNKNOWN or len(srcs) < 2:
+        return srcs
+    return sorted(srcs, key=lambda s: language_tier(s, lang))
+
+
+def dominant_language(items: list) -> str:
+    """一组书里出现最多的语种（系列**没有自己的语种** → 由成员书投票）。
+
+    平票时取**先出现**的那个（`max` 稳定 + 首次出现顺序），保证同一批数据每次结果一致 ——
+    否则「重排」会变成不可复现的行为。
+    """
+    count: dict = {}
+    for it in items or []:
+        lang = _lang_of((it or {}).get("language"))
+        if lang:
+            count[lang] = count.get(lang, 0) + 1
+    if not count:
+        return ""
+    top = max(count.values())
+    for lang, n in count.items():
+        if n == top:
+            return lang
+    return ""
+
+
 #: 语言优先级。OpenLibrary 的 `language` 是一个**无序**的列表（一本书有几十种译本的
 #: 语言代码混在一起），直接取第一个会得到「德语版《傲慢与偏见》」这种荒谬结果 —— 实测踩到过。
 #: 所以按「常见目标语言」优先挑，都不在里面才退回第一个。
 _LANG_PRIORITY = ("zh", "en", "ja", "ko")
+
+# ---------------- 语种亲和 → 「按语种重排来源顺序」（第 60 期）----------------
+# 目的：中文书不该先等波兰/韩国的目录转一圈，轻小说也不该先去 Google Books 试。
+#
+# ⚠️ 这张表是**人工写的判断**（依据是各站主营语种 / 抓的是哪个域名的站），**不是实测统计**。
+# 所以它只用来「把明显不相关的家排到后面」，**不是**断言「这家查不到这本书」：
+# 重排**只改顺序、不筛掉任何源** —— 所有启用的家最终都会被查到，只是先问相关的、后问不相关的。
+#
+# 契约：`set(LANG_AFFINITY) | set(LANG_BROAD) == set(SOURCES)` 且两者不相交（测试钉住）——
+# 新增一家源必须显式表态「专精哪些语种」还是「通吃」，不能默默漏过。
+#: 专精某些语种的源（语种码经 `_lang_of` 归一，如 "zh-CN"→"zh"）
+LANG_AFFINITY = {
+    "aladin": ("ko",),          # 韩国 Aladin 书店（TTB 接口）
+    "lubimyczytac": ("pl",),    # 波兰最大书评 / 书店站
+    "ranobedb": ("ja",),        # 轻小说数据库（日文原版）
+    "comicvine": ("en",),       # 漫画卷 / 期目录（英文为主）
+    "audible": ("en",),         # 有声书目录（区域站点，默认 us）
+    "audnexus": ("en",),
+    "librofm": ("en",),
+    "amazon": ("en",),          # 抓的是 amazon.com
+    "goodreads": ("en",),
+    "hardcover": ("en",),       # 英文书目社区（hardcover.app）
+    "itunes": ("en",),          # 默认 US 店（未配 country 时）
+}
+#: 语种通吃：多语种都有一定覆盖 —— 任何语种都该排在「专精别的语种」之前
+LANG_BROAD = ("googlebooks", "openlibrary", "kobo")   # Kobo 的站点语种由配置项决定
+
+#: 分档常量（数字只用于排序，别在别处引用其数值）
+LANG_TIER_SPECIFIC, LANG_TIER_BROAD, LANG_TIER_OTHER = 0, 1, 2
+
+#: 「等于没说」的语种值（书目里常见「未知 / unknown / n/a」这类占位）。
+#: ⚠️ 只在**重排**时当作「不知道」处理（`_lang_of` 本身不动 —— 它还要负责把源返回的值
+#: 如实写进书目，改它的口径会波及落库）。
+LANG_UNKNOWN = {"未知", "unknown", "n/a", "na", "none", "null", "-", "?", "??", "???",
+                "undefined", "unk"}
 
 
 def _pick_lang(values) -> str:

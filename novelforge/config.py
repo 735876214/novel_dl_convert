@@ -240,6 +240,11 @@ DEFAULTS = {
         # （简介信 Google Books、年份/语言信 Open Library…，题材多源合并去重）。
         # 关掉即回到「只用匹配分最高的那一条候选」的旧行为。
         "merge_sources": True,
+        # 按书籍语种自动重排来源顺序（第 60 期）：专精本语种的（韩→Aladin、波→Lubimyczytac、
+        # 日→RanobeDB）排最前，多语种通吃的（Google Books / Open Library / Kobo）居中，
+        # 专精别的语种的排最后；**每档内保持你在「元数据来源」里设的顺序**。
+        # 语种取自书的 language 字段，未知就不重排（不猜）。关掉即严格按你设的顺序依次检索。
+        "auto_order_by_language": True,
         # 题材黑名单：抓到的 tags 里命中这些词的**不写入**（过滤「小说」这类无信息量的值）
         "genre_blocklist": ["小说", "文学", "General", "Fiction"],
         # 自定义元数据（第 35 期起**已下线**这个配置项）：改由 core/customfields.py 管理 ——
