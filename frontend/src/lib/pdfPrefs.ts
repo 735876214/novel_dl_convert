@@ -19,6 +19,12 @@ export interface PdfPrefs {
   fit: PdfFit
   /** 仅 fit = custom 时生效（0.5–3） */
   zoom: number
+  /**
+   * 自动翻到下一册（第 61 期；默认关）：
+   * 读到末页（翻页模式）或滚到底（滚动模式）后，按系列序号自动打开下一册；
+   * 无系列 / 已是末册 / 请求失败都只提示、不跳转（与漫画 `autoNext` 同款约定）。
+   */
+  autoNext: boolean
 }
 
 export const PDF_PREFS_KEY = 'pdf-prefs'
@@ -28,6 +34,7 @@ export const PDF_PREFS_DEFAULT: PdfPrefs = {
   spread: 'none',
   fit: 'width',
   zoom: 1,
+  autoNext: false,
 }
 
 export const PDF_SCROLL_MODES = [

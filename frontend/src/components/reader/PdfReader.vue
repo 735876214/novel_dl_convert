@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api } from '@/lib/api'
+import { api, type BookCard } from '@/lib/api'
 import {
   PDF_FITS,
   PDF_SCROLL_MODES,
@@ -13,7 +13,9 @@ import {
   savePdfPrefs,
   type PdfPrefs,
 } from '@/lib/pdfPrefs'
+import { sortBySeriesIndex } from '@/lib/bookInfo'
 import { useLibraryStore } from '@/stores/library'
+import { useUiStore } from '@/stores/ui'
 
 /**
  * PDF 阅读器。
@@ -30,11 +32,14 @@ const props = defineProps<{
   title: string
   /** 这本书是否属于**漫画库**（第 61 期）：是则给出「漫画视图」入口，两边共用页进度 */
   comicLib?: boolean
+  /** 所属系列名（第 61 期）：用于「读完自动进下一册」 */
+  series?: string
 }>()
 /** 交回上层切换阅读器（偏好由上层统一落库） */
 const emit = defineEmits<{ pdfMode: ['comic' | 'pdf'] }>()
 const router = useRouter()
 const library = useLibraryStore()
+const ui = useUiStore()
 
 const prefs = ref<PdfPrefs>(readPdfPrefs())
 watch(prefs, (v) => savePdfPrefs(v), { deep: true })
@@ -49,6 +54,10 @@ const boxH = ref(0)
 /** 第一页的基准尺寸（PDF 单位），用于在没有 canvas 时推算占位高度 */
 const base = ref({ w: 612, h: 792 })
 const drawn = ref<Set<number>>(new Set())
+
+/** 自动翻下一册的并发闸 + 滚动触底去抖闩（第 61 期） */
+const autoNextBusy = ref(false)
+const autoNextArmed = ref(true)
 
 let pdfDoc: any = null
 const canvases = new Map<number, HTMLCanvasElement>()
@@ -177,6 +186,8 @@ function onScroll(): void {
     page.value = cur
     scheduleSave()
   }
+  // 滚到底且已是末页：尝试自动换册
+  maybeAutoNextAtBottom()
 }
 
 function scheduleSave(): void {
@@ -197,6 +208,13 @@ async function save(): Promise<void> {
 }
 
 function go(n: number): void {
+  // 越过末页 = 想继续往后：交给「自动翻下一册」（未开启则原地不动，不再 clamp 成同一页空转）。
+  // ⚠️ 这一判断必须放在 `go()` 里 —— 键盘（ArrowRight / PageDown）走的是 `go()` 而**不是** `next()`，
+  // 只在 `next()` 里挂钩会让最常用的翻页方式静默失效。
+  if (n > total.value) {
+    void maybeAutoNext()
+    return
+  }
   const step = spreadOn.value ? 2 : 1
   page.value = Math.min(Math.max(1, n), total.value)
   void save()
@@ -213,6 +231,53 @@ function next(): void {
 }
 function prev(): void {
   go(page.value - (spreadOn.value ? 2 : 1))
+}
+
+/**
+ * 读到末页后自动翻到系列下一册（第 61 期；默认关，与漫画 `autoNext` 同款）。
+ * 数据用既有 `GET /api/series/{name}`（`api.seriesDetail`），**不新增后端接口**；
+ * 无系列 / 已是末册 / 请求失败都明确提示且**不跳转**（失败不得静默）。
+ */
+async function maybeAutoNext(): Promise<void> {
+  if (!prefs.value.autoNext || autoNextBusy.value) return
+  const series = (props.series || '').trim()
+  if (!series) {
+    ui.toast('这本没有系列信息，无法自动翻下一册')
+    return
+  }
+  autoNextBusy.value = true
+  try {
+    const d = await api.seriesDetail(series)
+    const list: BookCard[] = sortBySeriesIndex(d.books)
+    const i = list.findIndex((b) => String(b.id) === String(props.bookId))
+    const nxt = i >= 0 ? list[i + 1] : undefined
+    if (!nxt) {
+      ui.toast('已经是系列最后一本')
+      return
+    }
+    // 先把当前进度落盘再跳：save 是异步的，跳转后组件卸载时的 save 可能来不及
+    await save()
+    router.push(`/read/${nxt.id}`)
+  } catch (e) {
+    ui.toast(e instanceof Error ? `找不到系列下一册：${e.message}` : '找不到系列下一册')
+  } finally {
+    autoNextBusy.value = false
+  }
+}
+
+/** 连续滚动模式滚到底且已到末页时换册；用闩避免同一次触底反复触发 */
+function maybeAutoNextAtBottom(): void {
+  if (!prefs.value.autoNext) return
+  const box = boxRef.value
+  if (!box) return
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 8
+  if (atBottom && page.value >= total.value) {
+    if (!autoNextArmed.value) return
+    autoNextArmed.value = false
+    void maybeAutoNext()
+  } else if (!atBottom) {
+    autoNextArmed.value = true
+  }
 }
 
 function zoomBy(d: number): void {

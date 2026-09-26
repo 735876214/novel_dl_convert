@@ -94,6 +94,29 @@ function reset(): void {
         </div>
       </div>
 
+      <div class="flex items-center gap-4 border-b border-border px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">自动翻到下一册</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            读到末页（翻页模式）或滚到底（滚动模式）后，按系列序号自动打开下一册；
+            无系列、已是最后一册时只提示、不跳转
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          :aria-checked="prefs.autoNext"
+          class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors"
+          :class="prefs.autoNext ? 'bg-primary' : 'bg-muted'"
+          @click="prefs.autoNext = !prefs.autoNext; persist()"
+        >
+          <span
+            class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
+            :class="prefs.autoNext ? 'translate-x-[16px]' : 'translate-x-[2px]'"
+          />
+        </button>
+      </div>
+
       <div class="px-4 py-3.5">
         <div class="mb-2 flex items-baseline justify-between">
           <span class="text-[13px] font-medium text-foreground">自定义缩放</span>

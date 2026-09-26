@@ -1274,6 +1274,7 @@ onBeforeUnmount(() => {
         :book-id="bookId"
         :title="book.title"
         :comic-lib="book.library_type === 'comic'"
+        :series="book.series"
         @pdf-mode="setPdfMode"
       />
 

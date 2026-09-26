@@ -115,7 +115,7 @@ function fmtSize(n: number): string {
 
       <Card v-if="tracks.length" padding="none">
         <div class="p-4">
-          <AudioPlayer :book-id="bookId" :tracks="tracks" />
+          <AudioPlayer :book-id="bookId" :tracks="tracks" :series="book?.series" />
         </div>
       </Card>
 

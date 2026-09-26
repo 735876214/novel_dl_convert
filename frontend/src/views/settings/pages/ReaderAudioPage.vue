@@ -124,6 +124,29 @@ const LABEL = 'w-24 shrink-0 text-[13px] font-medium text-foreground'
           </button>
         </div>
       </div>
+
+      <div class="flex items-center gap-4 border-t border-border px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">自动翻到下一册</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            本册最后一轨放完后，按系列序号自动打开下一册；
+            无系列、已是最后一册时只提示、不跳转（同册内「轨与轨」续接是内置行为）
+          </div>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          :aria-checked="prefs.autoNextBook"
+          class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors"
+          :class="prefs.autoNextBook ? 'bg-primary' : 'bg-muted'"
+          @click="prefs.autoNextBook = !prefs.autoNextBook; persist()"
+        >
+          <span
+            class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
+            :class="prefs.autoNextBook ? 'translate-x-[16px]' : 'translate-x-[2px]'"
+          />
+        </button>
+      </div>
     </Card>
 
     <p class="mt-3 text-[11.5px] leading-relaxed text-muted-foreground">

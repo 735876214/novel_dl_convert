@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type AudioTrack } from '@/lib/api'
+import { api, type AudioTrack, type BookCard } from '@/lib/api'
 import { AUDIO_SKIP_BACKS, AUDIO_SKIP_FORWARDS, AUDIO_SLEEPS, AUDIO_SPEEDS, readAudioPrefs } from '@/lib/audioPrefs'
+import { sortBySeriesIndex } from '@/lib/bookInfo'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -15,10 +17,11 @@ import { useUiStore } from '@/stores/ui'
  * 恢复时由 percent 反推轨号、再由 locator 定位秒数 —— 单轨书（最常见）完全精确，
  * 多轨书在轨长相近时也够用。
  */
-const props = defineProps<{ bookId: string; tracks: AudioTrack[] }>()
+const props = defineProps<{ bookId: string; tracks: AudioTrack[]; series?: string }>()
 
 const ui = useUiStore()
 const library = useLibraryStore()
+const router = useRouter()
 const prefs = readAudioPrefs()
 
 const audio = ref<HTMLAudioElement | null>(null)
@@ -117,11 +120,42 @@ function onTime(): void {
 }
 
 function onEnded(): void {
-  if (index.value + 1 < total.value) goto(index.value + 1)
-  else {
+  if (index.value + 1 < total.value) {
+    // 同册内「轨与轨」续接是内置行为，直接进下一轨
+    goto(index.value + 1)
+    return
+  }
+  // 最后一轨放完：先落盘，再决定跨册续接还是停下
+  saveProgress()
+  flushSession()
+  if (prefs.autoNextBook && (props.series || '').trim()) {
+    void maybeAutoNextBook()
+  } else {
     playing.value = false
-    saveProgress()
-    flushSession()
+  }
+}
+
+/**
+ * 本册最后一轨放完后自动翻到系列下一册（第 61 期；默认关）。
+ * 复用既有 `GET /api/series/{name}`（`api.seriesDetail`）；
+ * 无系列 / 已是末册 / 请求失败都只提示、不跳转。
+ */
+async function maybeAutoNextBook(): Promise<void> {
+  const series = (props.series || '').trim()
+  try {
+    const d = await api.seriesDetail(series)
+    const list: BookCard[] = sortBySeriesIndex(d.books)
+    const i = list.findIndex((b) => String(b.id) === String(props.bookId))
+    const nxt = i >= 0 ? list[i + 1] : undefined
+    if (!nxt) {
+      ui.toast('已经是系列最后一本')
+      playing.value = false
+      return
+    }
+    router.push(`/listen/${nxt.id}`)
+  } catch (e) {
+    ui.toast(e instanceof Error ? `找不到系列下一本：${e.message}` : '找不到系列下一本')
+    playing.value = false
   }
 }
 
