@@ -5487,7 +5487,7 @@ def api_integration_test(service: str, payload: dict = Body(None)):
 
 @app.get("/api/metadata/sources")
 def api_metadata_sources():
-    """可用元数据源 + 当前启用情况（设置页据此渲染）。"""
+    """可用元数据源 + 当前启用情况（兼容端点；第 57 期起设置页改用 /providers）。"""
     mf = config.load_config().get("metadata_fetch") or {}
     active = mf.get("sources") or list(metasources.DEFAULT_ORDER)
     return {
@@ -5498,16 +5498,64 @@ def api_metadata_sources():
     }
 
 
+@app.get("/api/metadata/providers")
+def api_metadata_providers():
+    """提供商目录 + 启用 / 配置现状（第 57 期「提供商」页的唯一数据源）。
+
+    出参形状对齐上游那页要的字段：分组、每组条目、`已启用 N/总数`、以及每个源的
+    「是否已实现 / 是否需要设置 / 是否已配置」。**未实现的源照常列出但不给开关** ——
+    目录本身是信息（用户能看到「这家还没接」），可点的开关才是承诺。
+
+    `enabled` 的真值源仍是 `metadata_fetch.sources`（启用 = 在列表里，顺序即优先级）；
+    本端点只做「注册表 + 配置」的聚合，不新开一份状态。
+    """
+    mf = config.load_config().get("metadata_fetch") or {}
+    active = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
+              if s in metasources.SOURCES]
+    catalog = metasources.provider_catalog()
+    items = []
+    for meta in catalog:
+        sid = meta["id"]
+        key_field = meta.get("key_field") or ""
+        has_key = bool(str(mf.get(key_field) or "").strip()) if key_field else False
+        items.append({
+            **meta,
+            "active": sid in active,
+            "order": (active.index(sid) + 1) if sid in active else 0,
+            "has_config": has_key,
+            # 「需要设置」= 需要 Key 但还没填。已实现的源即便 needs_config=False 也可能有
+            # 可选的 Key（Google Books），那种情况归到「已配置/未配置」而不阻断使用。
+            "needs_setup": bool(meta.get("needs_config")) and not has_key,
+        })
+    groups = {g: [i for i in items if i.get("group") == g] for g in metasources.GROUPS}
+    return {
+        "items": items,
+        "groups": [{"name": g, "items": v} for g, v in groups.items() if v],
+        "enabled": bool(mf.get("enabled")),
+        "active_count": len(active),
+        "total": len(items),
+        "implemented_count": sum(1 for i in items if i.get("implemented")),
+    }
+
+
 @app.post("/api/metadata/probe")
 def api_metadata_probe(payload: dict = Body(None)):
     """源连通性自检（真的外呼：点一次测一次，结果只回给这次请求）。"""
     mf = config.load_config().get("metadata_fetch") or {}
     key = str(mf.get("googlebooks_api_key") or "")
-    wanted = (payload or {}).get("sources") or list(metasources.SOURCES)
+    wanted = (payload or {}).get("sources") or list(metasources.IMPLEMENTED)
     out = {}
     for sid in wanted:
+        if not metasources.is_implemented(sid):
+            # 未实现的源不发外呼（也没得测）：如实回报，别让「不可用」看起来像网络故障
+            out[sid] = {"ok": False, "message": "未实现（可经插件市场安装）", "ms": 0}
+            continue
         if sid in metasources.SOURCES:
-            out[sid] = metasources.probe(sid, {"api_key": key} if sid == "googlebooks" else None)
+            cfg = {}
+            key_field = (metasources.SOURCES[sid].get("key_field") or "")
+            if key_field:
+                cfg = {"api_key": key}
+            out[sid] = metasources.probe(sid, cfg or None)
     return {"items": out}
 
 

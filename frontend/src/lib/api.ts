@@ -239,6 +239,46 @@ export interface MetadataSource {
   active: boolean
 }
 
+/**
+ * 元数据**提供商**（第 57 期「设置 → 书库 → 元数据 → 提供商」页）。
+ *
+ * 目录 = 上游那 14 家（分四组）；⚠️ `implemented=false` 的家**只列出、不给开关** ——
+ * 「能点但点了没用」就是假交互，它们的备注里写清「可经插件市场安装」。
+ */
+export interface MetadataProvider {
+  id: string
+  label: string
+  /** 分组（与上游同构：一般书籍目录 / 有声读物 / 漫画和小说 / 极权目录） */
+  group: string
+  home: string
+  note: string
+  /** 本项目是否真的实现了抓取 */
+  implemented: boolean
+  /** 是否需要 API Key / 账号 */
+  needs_config?: boolean
+  /** 需要 Key 但还没填 ⇒ 归到「需要设置」过滤器 */
+  needs_setup: boolean
+  /** 配置提示（给用户看的一句话） */
+  config_hint?: string
+  /** 配置落在 `metadata_fetch.<key_field>`（后端注册表给的键名） */
+  key_field?: string
+  /** 是否在启用顺序里 */
+  active: boolean
+  /** 启用时的优先级（1 起；0 = 未启用） */
+  order: number
+  /** 需要的配置是否已填 */
+  has_config: boolean
+}
+
+export interface MetadataProvidersResult {
+  items: MetadataProvider[]
+  groups: Array<{ name: string; items: MetadataProvider[] }>
+  enabled: boolean
+  active_count: number
+  total: number
+  implemented_count: number
+}
+
 /** 一次抓取给出的候选 */
 export interface MetadataCandidate {
   source: string
@@ -2938,6 +2978,9 @@ export const api = {
     request<{ items: MetadataSource[]; enabled: boolean; has_googlebooks_key: boolean }>(
       '/api/metadata/sources',
     ),
+
+  /** 提供商目录（第 57 期：分组 + 启用 / 配置现状；设置页「提供商」页的唯一数据源） */
+  metadataProviders: () => request<MetadataProvidersResult>('/api/metadata/providers'),
 
   /** 源连通性自检（真的外呼；被点的源才测） */
   metadataProbe: (sources?: string[]) =>

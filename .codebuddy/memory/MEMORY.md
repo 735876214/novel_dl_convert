@@ -103,3 +103,10 @@
 - **`updated_at` 是公开契约**：`GET/PUT /api/books/{bid}/progress` 都带；⚠️ **没有进度行时不得给**（造 0 当基准会让首次进阅读器就弹提示）。任何写进度的来源（KOReader/Komga/完成标记）都经 `db.set_progress` ⇒ 自动刷新时间戳（语义：也算「别处读过」）。
 - **偏好同步感知**：设备行 `last_seen` 就是变更信号（勿另建表/列）；判定**必须走纯函数** `prefsSyncDecision`（noop / apply-remote / conflict，1s 容差）；`conflict`（本机有未推送改动）**只提示不覆盖**（顶栏胶囊 → 设置页显式选）。`boot()` 的启动裁决语义不变（启动那刻 pending⇒本机为准并推）。
 - 前端 spec 假时钟约定：伪造计时器时**保留真 `setTimeout`**（只 fake `setInterval`/`clearInterval`/`Date`），否则 `flushPromises()` 自挂。
+
+## 第 57 期铁律（元数据提供商 / 插件市场 / 书源）
+- **提供商注册表 = 上游 14 家目录，`implemented` 是诚实标记**：`core/metasources.SOURCES` 列全 14 家（四组），真正能抓的只有 `openlibrary`/`googlebooks`；⚠️ **契约 `IMPLEMENTED == _FETCHERS.keys()`**（`tests/test_metadata_providers.py`）—— 加一家实现必须同时改注册表 `implemented=True`、`IMPLEMENTED`、`_FETCHERS` 三处。**未实现的家绝不给开关**（能点但没用 = 假交互），前端渲染 `—` + 「未实现 · 可经插件市场安装」。
+- **未实现的源不发外呼**：`/api/metadata/probe` 如实回报「未实现」（spy 测试断言零外呼）；`metafetch.plan`/`online_candidate` 只选 `is_implemented()` 的源（配置里混入未实现 id 不白跑、不炸）。
+- **启用状态的真值源仍是 `metadata_fetch.sources`**（在列表里 = 启用，顺序 = 优先级）；`GET /api/metadata/providers` 只做聚合，**不新开一份状态**；设置页 `已启用 N/总数` 读配置草稿（未保存即时可见）。
+- 出网口径（本期修订）：**默认零外部请求；仅插件市场与已启用的元数据源按用户显式配置出网**，其余（前端 CDN/字体/更新检查）仍严格零外部。插件包必须是**声明式规则**（复用 `sources/rules.py` schema），**不执行远端任意代码**。
+- zlibrary 专用下载**不做**（盗版分发平台）；书源获取走通用声明式规则 + 投递目录。

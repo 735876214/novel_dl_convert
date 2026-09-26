@@ -143,8 +143,10 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
     mf = _cfg(cfg)
     if not mf.get("enabled"):
         return {"enabled": False, "items": [], "message": "元数据抓取未启用"}
+    # 第 57 期：注册表列了 14 家（含 12 家未实现），这里只认**真的能抓**的源 ——
+    # 否则给未实现的源白跑一次外呼（`search` 会返回「源不可用」，纯浪费往返）。
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
-               if s in metasources.SOURCES] or list(metasources.DEFAULT_ORDER)
+               if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)
     limit = max(1, min(int(limit or mf.get("limit") or 5), 20))
     # 阈值可能来自配置段（也可能整段缺失 / 被填成非法值）→ 一律兜底，不让 float(None) 把整页打崩
     raw_thr = threshold if threshold is not None else mf.get("threshold")
@@ -277,8 +279,10 @@ def online_candidate(book: dict, cfg: dict = None, limit: int = None) -> "dict |
     mf = _mf_of(book, mf)
     if not mf.get("enabled"):
         return None
+    # 第 57 期：注册表列了 14 家（含 12 家未实现），这里只认**真的能抓**的源 ——
+    # 否则给未实现的源白跑一次外呼（`search` 会返回「源不可用」，纯浪费往返）。
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
-               if s in metasources.SOURCES] or list(metasources.DEFAULT_ORDER)
+               if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)
     limit = max(1, min(int(limit or mf.get("limit") or 5), 20))
     blocklist = {norm_key(x) for x in (mf.get("genre_blocklist") or []) if str(x).strip()}
     options = {"googlebooks": {"api_key": mf.get("googlebooks_api_key") or ""}}

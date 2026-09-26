@@ -32,20 +32,172 @@ OPENLIBRARY = "https://openlibrary.org/search.json"
 OPENLIBRARY_COVER = "https://covers.openlibrary.org/b/id/{cover}-L.jpg"
 GOOGLEBOOKS = "https://www.googleapis.com/books/v1/volumes"
 
-#: 源元数据（前端据此渲染开关与说明，避免前后端各写一份）
+#: 提供商分组顺序（第 57 期：设置页「提供商」按组渲染，与上游 BookOrbit 同构）
+GROUPS = ("一般书籍目录", "有声读物", "漫画和小说", "极权目录")
+
+#: 源元数据（前端据此渲染分组列表 / 开关 / 配置入口，避免前后端各写一份）。
+#:
+#: ⚠️ **`implemented` 是诚实标记**（第 57 期）：注册表列的是**上游那 14 家的目录**，
+#: 本项目真正能抓的只有 `implemented=True` 那两家。未实现的**不给开关**（前端渲染成
+#: 「未实现 · 可经插件市场安装」），因为「能点但点了没用」就是假交互。
+#: 新增一家实现 = 加 `_FETCHERS` / `_ISBN_FETCHERS` 条目并把这里改 True（契约测试会钉住
+#: 两者一致：`IMPLEMENTED` 必须与 `_FETCHERS` 的键完全相等）。
+#:
+#: `needs_config` = 该源要 API Key / 账号才能用（前端归到「需要设置」过滤器）；
+#: `key_field` = 配置落在 `metadata_fetch.<key_field>`（键名复用既有配置，不新造一份）。
 SOURCES = {
-    "openlibrary": {
-        "label": "OpenLibrary",
-        "home": "https://openlibrary.org",
-        "note": "无需 API Key。中文书的覆盖率一般，但语种/年份/ISBN 较规范。",
-    },
+    # ---- 一般书籍目录 ----
     "googlebooks": {
         "label": "Google Books",
+        "group": "一般书籍目录",
         "home": "https://books.google.com",
         "note": "无需 API Key。简介与封面通常更全；部分地区会被拒绝（返回 403）。",
+        "implemented": True,
+        # 匿名额度低（实测常撞 429），填 Key 显著改善 —— 属「可选配置」而非「必须」
+        "needs_config": False,
+        "key_field": "googlebooks_api_key",
+        "config_hint": "可选：填 API Key 可显著提高额度（匿名常撞 429）",
+    },
+    "amazon": {
+        "label": "Amazon",
+        "group": "一般书籍目录",
+        "home": "https://www.amazon.com/books",
+        "note": "图书页面反爬严格，上游走的是自有接口。",
+        "implemented": False,
+        "needs_config": False,
+        "config_hint": "",
+    },
+    "goodreads": {
+        "label": "Goodreads",
+        "group": "一般书籍目录",
+        "home": "https://www.goodreads.com",
+        "note": "简介与评分齐全；官方 API 已停发新 Key。",
+        "implemented": False,
+        "needs_config": False,
+        "config_hint": "",
+    },
+    "hardcover": {
+        "label": "Hardcover",
+        "group": "一般书籍目录",
+        "home": "https://hardcover.app",
+        "note": "GraphQL，需要个人 Token。",
+        "implemented": False,
+        "needs_config": True,
+        "config_hint": "需要 Hardcover API Token",
+    },
+    "openlibrary": {
+        "label": "Open Library",
+        "group": "一般书籍目录",
+        "home": "https://openlibrary.org",
+        "note": "无需 API Key。中文书的覆盖率一般，但语种/年份/ISBN 较规范。",
+        "implemented": True,
+        "needs_config": False,
+        "config_hint": "",
+    },
+    "itunes": {
+        "label": "iTunes",
+        "group": "一般书籍目录",
+        "home": "https://itunes.apple.com",
+        "note": "公开检索接口（无需 Key），图书分类覆盖以英文为主。",
+        "implemented": False,
+        "needs_config": False,
+        "config_hint": "",
+    },
+    "kobo": {
+        "label": "Kobo",
+        "group": "一般书籍目录",
+        "home": "https://www.kobo.com",
+        "note": "书店接口非公开；本项目 Kobo 同步仍不做（2026-09-17 决策）。",
+        "implemented": False,
+        "needs_config": False,
+        "config_hint": "",
+    },
+    # ---- 有声读物 ----
+    "audible": {
+        "label": "Audible",
+        "group": "有声读物",
+        "home": "https://www.audible.com",
+        "note": "有声书目录（时长 / 演播者 / 系列），区域站点各不相同。",
+        "implemented": False,
+        "needs_config": False,
+        "config_hint": "",
+    },
+    "audnexus": {
+        "label": "AudNexus",
+        "group": "有声读物",
+        "home": "https://audnexus.browserbase.com",
+        "note": "有声书元数据聚合（演播者 / 章节 / 系列），公开接口。",
+        "implemented": False,
+        "needs_config": False,
+        "config_hint": "",
+    },
+    "librofm": {
+        "label": "Libro.fm",
+        "group": "有声读物",
+        "home": "https://libro.fm",
+        "note": "独立书店有声书平台，接口未公开。",
+        "implemented": False,
+        "needs_config": False,
+        "config_hint": "",
+    },
+    # ---- 漫画和小说 ----
+    "comicvine": {
+        "label": "Comic Vine",
+        "group": "漫画和小说",
+        "home": "https://comicvine.gamespot.com",
+        "note": "漫画卷/期元数据，需要免费 API Key。",
+        "implemented": False,
+        "needs_config": True,
+        "config_hint": "需要 Comic Vine API Key",
+    },
+    "ranobedb": {
+        "label": "RanobeDB",
+        "group": "漫画和小说",
+        "home": "https://ranobedb.org",
+        "note": "轻小说数据库（含系列册序），公开接口。",
+        "implemented": False,
+        "needs_config": False,
+        "config_hint": "",
+    },
+    # ---- 极权目录（上游分区名，指「波兰/阿拉伯等地区性目录」）----
+    "lubimyczytac": {
+        "label": "Lubimyczytac",
+        "group": "极权目录",
+        "home": "https://lubimyczytac.pl",
+        "note": "波兰语书籍目录，页面抓取。",
+        "implemented": False,
+        "needs_config": False,
+        "config_hint": "",
+    },
+    "aladin": {
+        "label": "Aladin",
+        "group": "极权目录",
+        "home": "https://www.aladin.co.kr",
+        "note": "韩国 Aladin 书店目录，需要 TTB Key。",
+        "implemented": False,
+        "needs_config": True,
+        "config_hint": "需要 Aladin TTB Key",
     },
 }
+
+#: 真正实现（有 fetcher）的源 id —— **必须与 `_FETCHERS` 的键完全一致**（契约测试钉住）。
+IMPLEMENTED = ("openlibrary", "googlebooks")
+
+#: 默认启用顺序（只含已实现的源；新增实现时同步加进来）
 DEFAULT_ORDER = ("openlibrary", "googlebooks")
+
+
+def is_implemented(source: str) -> bool:
+    """该源是否真的能抓（未实现的源不会出现在抓取计划里，也不要浪费一次外呼）。"""
+    return source in _FETCHERS
+
+
+def provider_catalog() -> list:
+    """提供商目录（注册表 → 列表，按 `GROUPS` 分组顺序）。前端「提供商」页直接吃它。"""
+    order = {g: i for i, g in enumerate(GROUPS)}
+    items = [{**meta, "id": sid} for sid, meta in SOURCES.items()]
+    items.sort(key=lambda x: (order.get(x.get("group") or "", 99), list(SOURCES).index(x["id"])))
+    return items
 
 #: 语言代码归一：源里见过 "chi"/"zh"/"zh-CN"/"eng"… 统一成本项目用的短码
 _LANG_MAP = {

@@ -2015,3 +2015,36 @@ BookCover `:96`、ShelfView `:280`）均按实测行号写入；`tests/check_doc
 ### 验证
 - 后端全量 **837 例 / 0 failed**（基线 833 + 本期 4）；前端 `test:unit` **75**
   （66 + prefSync 5 + ReaderView.remoteProgress 4）、`type-check` / `build` / `deploy` 全绿。
+
+## 第 57 期（2026-09-26）：元数据提供商目录与「提供商」页（三期路线图第三期 · A 段）
+
+范围（用户拍板）：① 元数据源插件市场 / 更多第三方源 / 系列级元数据；④ 手动个性化书源
+（**zlibrary 专用下载不做**——盗版分发平台，已向用户说明，以「通用书源 + 投递」替代）。
+出网口径修订：**默认零外部请求；仅插件市场与已启用的元数据源按用户显式配置出网**，
+其余（前端 CDN / 字体 / 更新检查）仍严格零外部。
+
+**A 段（本期已落地）：提供商目录 + 设置页「提供商」按上游截图 1:1 重做**
+
+1. `core/metasources.SOURCES` 从 2 条扩成**上游那 14 家的目录**（四组：一般书籍目录 7 /
+   有声读物 3 / 漫画和小说 2 / 极权目录 2），每条带 `group / home / note / implemented /
+   needs_config / key_field / config_hint`。⚠️ **`implemented` 是诚实标记**：本项目真正能抓的
+   只有 `openlibrary` / `googlebooks`，其余 12 家只列出、**不给开关**（能点但没用 = 假交互），
+   前端如实渲染成「未实现 · 可经插件市场安装」。契约 `IMPLEMENTED == _FETCHERS.keys()` 钉住
+   两侧一致（`tests/test_metadata_providers.py`）。
+2. 新端点 `GET /api/metadata/providers`：目录 + 分组 + `已启用 N/总数` + `needs_setup`
+   （「需要设置」过滤器的唯一数据源）。`enabled` 的真值源仍是 `metadata_fetch.sources`
+   （启用 = 在列表里、顺序即优先级），不新开一份状态。
+3. `/api/metadata/probe` **对未实现的家不发外呼**（如实回报「未实现」）——否则用户会以为
+   自己网络坏了；`metafetch.plan` / `online_candidate` 也只在**已实现**的源里选（配置里
+   混入未实现 id 不会白跑往返，也不会炸）。
+4. 设置页 `MetadataPage.vue` 的 providers 区块按上游那页重做：分组标题 + 每行
+   「图标首字 / 名称 / 启用与顺序徽标 / 需要设置 / 未实现 / 备注」+ 上移下移 + 官网 +
+   **开关**（未实现的家渲染成 `—` 而不是开关）+ 顶部「已启用：N/14」+ 过滤器
+   （全部 / 已启用 / 需要设置）+ 搜索框 + 连通性检测。
+5. 契约测试 `tests/test_metadata_providers.py`（8 项）：注册表 14 家 / 四组、实现清单一致、
+   默认顺序只含已实现、分组排序、未实现源检索不抛、端点形状与计数、探测跳过未实现
+   （spy 断言**零外呼**）、配置混入未实现源时 plan 不炸。
+
+**B 段（下一段开工，同一期）**：手动个性化书源**表单化**（含逐源连通性自检）+
+声明式**插件市场**（本地/远端索引 + 声明式规则包，复用 `sources/rules.py` 的现成 schema，
+不执行远端任意代码）+ 系列级元数据补全（`publisher/first_year/tags` 编辑入口与陈旧文案订正）。

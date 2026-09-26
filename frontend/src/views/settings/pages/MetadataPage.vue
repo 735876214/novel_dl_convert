@@ -5,7 +5,7 @@ import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import MetadataScoreCard from '@/components/MetadataScoreCard.vue'
-import { api, type CustomFieldDef, type MetadataPlanItem, type MetadataSource } from '@/lib/api'
+import { api, type CustomFieldDef, type MetadataPlanItem, type MetadataProvider } from '@/lib/api'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
@@ -86,9 +86,42 @@ function fieldZh(k: string): string {
   return FIELDS.find((f) => f.key === k)?.zh ?? k
 }
 
-const sources = ref<MetadataSource[]>([])
+/** 提供商目录（第 57 期）：分四组；未实现的家只列出、不给开关 */
+const providers = ref<MetadataProvider[]>([])
 const probes = ref<Record<string, { ok: boolean; message: string; ms: number }>>({})
 const probing = ref(false)
+
+/** 过滤器（对齐上游那页的「全部 / 已启用 / 需要设置」）+ 搜索框 */
+const PROV_FILTERS = [
+  { key: 'all', label: '全部' },
+  { key: 'active', label: '已启用' },
+  { key: 'needs', label: '需要设置' },
+] as const
+const provFilter = ref<'all' | 'active' | 'needs'>('all')
+const provQuery = ref('')
+
+/** 按分组过滤后的可见条目（组内保持注册表顺序） */
+const filteredGroups = computed(() => {
+  const q = provQuery.value.trim().toLowerCase()
+  const hit = (p: MetadataProvider): boolean => {
+    if (provFilter.value === 'active' && !inOrder(p.id)) return false
+    if (provFilter.value === 'needs' && !p.needs_setup) return false
+    if (!q) return true
+    return `${p.label} ${p.group} ${p.note}`.toLowerCase().includes(q)
+  }
+  const order: string[] = []
+  const bucket: Record<string, MetadataProvider[]> = {}
+  for (const p of providers.value) {
+    if (!hit(p)) continue
+    const g = p.group || '其它'
+    if (!bucket[g]) {
+      bucket[g] = []
+      order.push(g)
+    }
+    bucket[g].push(p)
+  }
+  return order.map((name) => ({ name, items: bucket[name] }))
+})
 
 // ---------------- 作者元数据（第 8 期 D1/D2/D5）----------------
 const af = computed<Record<string, any>>(() => mf.value.authors ?? {})
@@ -109,9 +142,9 @@ async function runAuthorFetch(): Promise<void> {
   }
 }
 
-async function loadSources(): Promise<void> {
+async function loadProviders(): Promise<void> {
   try {
-    sources.value = (await api.metadataSources()).items
+    providers.value = (await api.metadataProviders()).items
   } catch { /* 未登录或后端未就绪：静默 */ }
 }
 
@@ -129,6 +162,11 @@ async function probeAll(): Promise<void> {
 const activeSources = computed<string[]>(() => mf.value.sources ?? [])
 function inOrder(id: string): boolean {
   return activeSources.value.includes(id)
+}
+/** 启用顺序（1 起；0 = 未启用）。开关与顺序都**只读配置草稿** —— 未保存前也即时可见 */
+function orderOf(id: string): number {
+  const i = activeSources.value.indexOf(id)
+  return i >= 0 ? i + 1 : 0
 }
 function toggleSource(id: string): void {
   const cur = activeSources.value.slice()
@@ -356,13 +394,13 @@ async function purgeDef(d: CustomFieldDef): Promise<void> {
 
 onMounted(() => {
   void loadConfig()
-  void loadSources()
+  void loadProviders()
   void library.loadBooks()
   if (props.section === 'custom-fields') void loadDefs()
 })
 /** 7 页共用组件：**必须监听 prop**，否则路由切换时组件实例被复用、数据不重载 */
 watch(() => props.section, () => {
-  void loadSources()
+  void loadProviders()
   planItems.value = []
   picked.value = new Set()
   defDraft.value = { label: '', type: 'text', default_value: '' }
@@ -401,32 +439,106 @@ watch(() => props.section, () => {
       </div>
     </Card>
 
+    <!--
+      提供商（第 57 期）：按上游「设置 → 书库 → 元数据 → 提供商」那页重做 ——
+      分组列出全部提供商（含本项目**尚未实现**的家），逐家给状态 / 配置 / 开关。
+      ⚠️ 未实现的家**不给开关**（能点但点了没用 = 假交互），只如实标注「未实现」。
+    -->
     <Card v-if="has('sources')" class="mt-4" padding="none">
-      <div class="flex items-center gap-2 border-b border-border px-4 py-3">
-        <span class="text-[13px] font-medium text-foreground">元数据源</span>
+      <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+        <span class="text-[13px] font-medium text-foreground">提供商</span>
+        <Badge tone="accent">已启用：{{ activeSources.length }}/{{ providers.length }}</Badge>
         <span class="text-[11.5px] text-muted-foreground">按顺序依次检索，单源失败不影响其它源</span>
-        <Button size="sm" class="ml-auto" :disabled="probing" @click="probeAll">
+        <input
+          v-model="provQuery"
+          type="text"
+          placeholder="搜索提供商…"
+          class="ml-auto h-7 w-[170px] rounded-md border border-border bg-muted px-2.5 text-[11.5px] text-foreground outline-none focus:border-ring focus:bg-card"
+        >
+        <div class="flex items-center gap-1">
+          <button
+            v-for="f in PROV_FILTERS"
+            :key="f.key"
+            type="button"
+            class="cursor-pointer rounded-full px-2.5 py-1 text-[11.5px] transition-colors"
+            :class="provFilter === f.key
+              ? 'bg-primary/12 text-primary'
+              : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
+            @click="provFilter = f.key"
+          >
+            {{ f.label }}
+          </button>
+        </div>
+        <Button size="sm" :disabled="probing" @click="probeAll">
           {{ probing ? '检测中…' : '检测连通性' }}
         </Button>
       </div>
-      <div v-for="s in sources" :key="s.id" class="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-b-0">
-        <input type="checkbox" class="h-4 w-4 cursor-pointer accent-primary"
-               :checked="inOrder(s.id)" @change="toggleSource(s.id)" />
-        <div class="min-w-0 flex-1">
-          <div class="flex items-center gap-2">
-            <span class="text-[12.5px] font-medium text-foreground">{{ s.label }}</span>
-            <Badge v-if="inOrder(s.id)">顺序 {{ activeSources.indexOf(s.id) + 1 }}</Badge>
-          </div>
-          <div class="mt-0.5 text-[11.5px] text-muted-foreground">{{ s.note }}</div>
+
+      <div v-for="g in filteredGroups" :key="g.name" class="border-b border-border last:border-b-0">
+        <div class="bg-muted/40 px-4 py-1.5 text-[11px] font-semibold text-muted-foreground">
+          {{ g.name }}
         </div>
-        <span v-if="probes[s.id]" class="text-[11.5px]"
-              :class="probes[s.id].ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'">
-          {{ probes[s.id].ok ? '可用' : '不可用' }} · {{ probes[s.id].message }}
-        </span>
-        <Button size="sm" variant="ghost" :disabled="!inOrder(s.id)" @click="move(s.id, -1)">上移</Button>
-        <Button size="sm" variant="ghost" :disabled="!inOrder(s.id)" @click="move(s.id, 1)">下移</Button>
-        <a :href="s.home" target="_blank" rel="noreferrer" class="text-[11.5px] text-muted-foreground underline">官网</a>
+        <div
+          v-for="p in g.items"
+          :key="p.id"
+          class="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3 last:border-b-0"
+        >
+          <span class="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-muted text-[11px] font-semibold text-foreground">
+            {{ p.label.slice(0, 1) }}
+          </span>
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-[12.5px] font-medium text-foreground">{{ p.label }}</span>
+              <Badge v-if="inOrder(p.id)" tone="accent">启用</Badge>
+              <Badge v-if="orderOf(p.id)">顺序 {{ orderOf(p.id) }}</Badge>
+              <Badge v-if="!p.implemented">未实现</Badge>
+              <span
+                v-else-if="p.needs_setup"
+                class="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10.5px] text-amber-600 dark:text-amber-400"
+              >
+                需要设置
+              </span>
+            </div>
+            <div class="mt-0.5 text-[11.5px] text-muted-foreground">{{ p.note }}</div>
+            <div v-if="!p.implemented" class="mt-0.5 text-[11px] text-muted-foreground">
+              本项目尚未接入；插件市场（第 57 期）装好对应的声明式插件后即可启用。
+            </div>
+            <div v-else-if="p.config_hint && !p.has_config" class="mt-0.5 text-[11px] text-muted-foreground">
+              {{ p.config_hint }}
+            </div>
+          </div>
+          <span
+            v-if="probes[p.id]"
+            class="text-[11.5px]"
+            :class="probes[p.id].ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-destructive'"
+          >
+            {{ probes[p.id].ok ? '可用' : '不可用' }} · {{ probes[p.id].message }}
+          </span>
+          <Button size="sm" variant="ghost" :disabled="!inOrder(p.id)" @click="move(p.id, -1)">上移</Button>
+          <Button size="sm" variant="ghost" :disabled="!inOrder(p.id)" @click="move(p.id, 1)">下移</Button>
+          <a :href="p.home" target="_blank" rel="noreferrer" class="text-[11.5px] text-muted-foreground underline">官网</a>
+          <button
+            v-if="p.implemented"
+            type="button"
+            role="switch"
+            :aria-checked="inOrder(p.id)"
+            :title="inOrder(p.id) ? '停用' : '启用'"
+            class="relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors"
+            :class="inOrder(p.id) ? 'bg-primary' : 'bg-muted'"
+            @click="toggleSource(p.id)"
+          >
+            <span
+              class="absolute top-0.5 h-4 w-4 rounded-full bg-card shadow-xs transition-[left]"
+              :class="inOrder(p.id) ? 'left-[1.125rem]' : 'left-0.5'"
+            />
+          </button>
+          <span v-else class="w-9 shrink-0 text-center text-[11px] text-muted-foreground">—</span>
+        </div>
       </div>
+      <div v-if="!filteredGroups.length" class="px-4 py-6 text-center text-[11.5px] text-muted-foreground">
+        没有匹配的提供商
+      </div>
+
       <div class="border-t border-border px-4 py-3.5">
         <div class="mb-1.5 text-[12.5px] font-medium text-foreground">Google Books API Key（可选）</div>
         <div class="mb-2 text-[11.5px] text-muted-foreground">
