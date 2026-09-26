@@ -16,3 +16,6 @@ pypdfium2>=4.30
 rarfile>=4.0
 # 逐库定时扫描（第 17 期 T2）：轻量纯 Py，解析 5 段 cron 表达式，仅在后端用。
 croniter>=2.0
+# 语义向量（第 54 期）：相似书的 LSA 后端（TF-IDF + SVD）用；纯 CPU 计算，
+# 无系统库依赖（wheel 自带），保持离线可用。
+numpy>=1.26

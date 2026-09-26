@@ -185,8 +185,24 @@ def init():
                 book_id    TEXT NOT NULL,
                 locator    INTEGER NOT NULL,
                 percent    REAL NOT NULL DEFAULT 0,
+                -- 精确阅读位置（第 54 期）：EPUB CFI，由服务端按 (locator, 章内字符偏移)
+                -- 经 core/epub_cfi.py 生成；空串 = 没有精确坐标（非 EPUB / 生成失败 /
+                -- 非 NF 阅读器来源的写入），恢复侧回落「章 + 全书百分比」。
+                cfi        TEXT NOT NULL DEFAULT '',
                 updated_at REAL NOT NULL,
                 UNIQUE(book_id)
+            );
+            -- 语义向量（第 54 期）：每本书一行，vec = core/embed.py 按「当前语料 + 模型」
+            -- 派生的 float32 小端定长向量。它是**纯派生缓存**（删了随时可由 recompute
+            -- 重建），但行丢了 ⇒ 相似书的余弦一路静默回落词袋，所以仍按含 book_id 表的
+            -- 纪律进 REMAP_TABLES / ORPHAN_TABLES —— 搬走比重算省事，清掉比留着诚实。
+            -- model_tag 标「这行向量是哪套模型算的」：读点只认当前 tag（embed.load_vectors），
+            -- 换模型 / 换语料口径后旧行自然失效，recompute 全量覆写，不必清表。
+            CREATE TABLE IF NOT EXISTS book_embeddings (
+                book_id    TEXT PRIMARY KEY,
+                vec        BLOB NOT NULL,
+                model_tag  TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL
             );
             CREATE TABLE IF NOT EXISTS annotations (
                 id         INTEGER PRIMARY KEY,
@@ -427,6 +443,15 @@ def init():
                 photo_local_path TEXT NOT NULL DEFAULT '',
                 fetched_at       REAL NOT NULL DEFAULT 0
             );
+            -- 演播者级元数据（第 53 期）：与 authors 表同源同构，但**刻意精简** ——
+            -- 能力矩阵 hasPhoto=—，故无 bio/photo；本项目作者侧亦未实现真·软删，故不引入
+            -- deleted_at（与 authors 保持一致，杜绝双标）。只保留排序名两列：
+            -- 在线派生值与本地覆盖**分列**，生效取 本地覆盖 > 在线（派生），两者皆空回退 name。
+            CREATE TABLE IF NOT EXISTS narrators (
+                name             TEXT PRIMARY KEY,
+                sort_name        TEXT NOT NULL DEFAULT '',
+                sort_name_local  TEXT NOT NULL DEFAULT ''
+            );
             -- 系列级元数据（第 12 期 C3 SYNOPSIS）：与 authors 表同构 —— 在线抓取值与
             -- 用户本地覆盖**分列**，展示取 本地覆盖 > 在线，用户改过的不会被再次抓取冲掉。
             --
@@ -600,6 +625,12 @@ def init():
         cols = {r["name"] for r in c.execute("PRAGMA table_info(ratings)")}
         if "review" not in cols:
             c.execute("ALTER TABLE ratings ADD COLUMN review TEXT NOT NULL DEFAULT ''")
+        # 第 54 期：progress 补「精确位置」列（EPUB CFI）。存量行回落 ''＝没有精确
+        # 坐标，恢复侧回落「章 + 全书百分比」，与加列前行为一致；该列不含 book_id
+        # 语义变化，progress 本就在 REMAP/ORPHAN 清单里，契约不受影响。
+        pcols = {r["name"] for r in c.execute("PRAGMA table_info(progress)")}
+        if pcols and "cfi" not in pcols:
+            c.execute("ALTER TABLE progress ADD COLUMN cfi TEXT NOT NULL DEFAULT ''")
         # 第 8 期：meta_override 后来加了 orig 列（编辑前原值），老库同样要补
         ocols = {r["name"] for r in c.execute("PRAGMA table_info(meta_override)")}
         if ocols and "orig" not in ocols:
@@ -780,26 +811,34 @@ def clear_user_avatar() -> None:
 def get_progress(book_id: str):
     c = _connect()
     row = c.execute(
-        "SELECT locator, percent, updated_at FROM progress WHERE book_id=?", (book_id,)
+        "SELECT locator, percent, cfi, updated_at FROM progress WHERE book_id=?", (book_id,)
     ).fetchone()
     # updated_at 是为 KOReader 互通加的：它用时间戳判断「服务端进度是否比本机新」
     # （见 server.ko_get_progress → core/koreader.from_nf）。前端只读 locator/percent，
-    # 多一个字段没有任何影响。
+    # 多一个字段没有任何影响。cfi 是第 54 期的精确位置（EPUB），空串 = 没有。
     return ({"locator": row["locator"], "percent": row["percent"],
-             "updated_at": row["updated_at"]} if row else None)
+             "cfi": row["cfi"] or "", "updated_at": row["updated_at"]} if row else None)
 
 
-def set_progress(book_id: str, locator: int, percent: float):
+def set_progress(book_id: str, locator: int, percent: float, cfi: str = ""):
+    """写阅读进度。``cfi`` = 精确位置（EPUB CFI，core/epub_cfi.py 生成）。
+
+    ⚠️ 默认空串即「**清掉精确坐标**」：进度有多个写入来源（NF 阅读器 / KOReader
+    同步 / Komga / 完成标记），只有 NF 阅读器算得出与 locator 配套的 CFI ——
+    其它来源不传 cfi 时旧行必须清空，否则「章序号已变、CFI 还挂在旧章」的
+    矛盾行会让恢复跳回错误位置。
+    """
     c = _connect()
     with _lock:
         c.execute(
-            """INSERT INTO progress(book_id, locator, percent, updated_at)
-               VALUES(?,?,?,?)
+            """INSERT INTO progress(book_id, locator, percent, cfi, updated_at)
+               VALUES(?,?,?,?,?)
                ON CONFLICT(book_id) DO UPDATE SET
                  locator=excluded.locator,
                  percent=excluded.percent,
+                 cfi=excluded.cfi,
                  updated_at=excluded.updated_at""",
-            (book_id, locator, percent, time.time()),
+            (book_id, locator, percent, str(cfi or ""), time.time()),
         )
         c.commit()
 
@@ -1212,6 +1251,38 @@ def all_progress() -> dict:
     c = _connect()
     rows = c.execute("SELECT book_id, locator, percent, updated_at FROM progress").fetchall()
     return {r["book_id"]: dict(r) for r in rows}
+
+
+# ---------------- 语义向量（第 54 期，core/embed.py 的落库层）----------------
+# 存的只是 float32 BLOB + model_tag；解码 / 过滤旧 tag / 余弦一律在 embed.py 做，
+# db 层不懂向量语义（与封面 BLOB 存 bytes、解析归调用方同一个分界）。
+
+def get_embeddings() -> dict:
+    """全部语义向量：``{book_id: (bytes, model_tag)}``。空库 / 无行 ⇒ ``{}``。"""
+    rows = _connect().execute(
+        "SELECT book_id, vec, model_tag FROM book_embeddings"
+    ).fetchall()
+    return {r["book_id"]: (bytes(r["vec"]), r["model_tag"]) for r in rows}
+
+
+def set_embeddings(items: dict) -> None:
+    """批量写向量：``{book_id: (bytes, model_tag)}``。重算任务一次提交一批。
+
+    upsert（``ON CONFLICT``）：同一本书重算 = 覆写，不靠先删后插 —— 少一次事务，
+    也避免 recompute 中途失败把库留在「删了旧的、没写新的」的空档。
+    """
+    if not items:
+        return
+    now = time.time()
+    c = _connect()
+    with _lock:
+        c.executemany(
+            "INSERT INTO book_embeddings(book_id, vec, model_tag, updated_at) "
+            "VALUES(?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET "
+            "vec=excluded.vec, model_tag=excluded.model_tag, updated_at=excluded.updated_at",
+            [(str(bid), bytes(vec), str(tag), now) for bid, (vec, tag) in items.items()],
+        )
+        c.commit()
 
 
 def annotation_counts() -> dict:
@@ -1769,7 +1840,8 @@ def unlock_achievement(key) -> bool:
 #    副本」这件事静默遗忘（刮削流程自己的对账/待确认负责它的生死），不归孤儿清理管。
 ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
                  "book_custom_values", "collection_items", "reading_sessions",
-                 "reading_attempts", "meta_override", "meta_online", "meta_cover")
+                 "reading_attempts", "meta_override", "meta_online", "meta_cover",
+                 "book_embeddings")
 
 
 def book_id_refs() -> dict:
@@ -1829,7 +1901,7 @@ def delete_orphans(orphans: dict) -> dict:
 REMAP_TABLES = (
     "progress", "annotations", "bookmarks", "meta_locks", "book_custom_values",
     "collection_items", "reading_sessions", "reading_attempts", "ratings", "reading_status",
-    "koreader_docs", "meta_override", "meta_online", "meta_cover",
+    "koreader_docs", "meta_override", "meta_online", "meta_cover", "book_embeddings",
 )
 
 #: **不走通用搬迁**、改用自己那套函数的含 book_id 表（契约测试同样要认它们）。
@@ -2498,7 +2570,7 @@ META_CLEAR = "-"
 #: （db 不能 import fileops —— 后者 import 前者会成环，故此处显式列一遍），
 #: 三者一致性有测试钉住（``tests/test_metadata_server_side.py``）。
 _CLEARABLE = ("title", "author", "series", "series_index", "date",
-              "publisher", "language", "description", "tags", "isbn")
+              "publisher", "language", "description", "tags", "isbn", "narrators")
 
 
 def clearable(field: str) -> bool:
@@ -2512,9 +2584,9 @@ def is_cleared(field: str, value) -> bool:
 
 
 def _meta_out(field: str, value):
-    """把覆盖值翻译成对外形态：哨兵 → 「无值」（``tags`` 给空列表，其余给空串）。"""
+    """把覆盖值翻译成对外形态：哨兵 → 「无值」（``tags`` / ``narrators`` 给空列表，其余给空串）。"""
     if is_cleared(field, value):
-        return [] if str(field) == "tags" else ""
+        return [] if str(field) in ("tags", "narrators") else ""
     return value
 
 
@@ -2938,7 +3010,7 @@ def cover_ids(bids) -> set:
 #
 #: 服务端可参与合并的字段（对齐 ``fileops.METADATA_FIELDS``，无封面）
 _META_FIELDS = ("title", "author", "series", "series_index", "date",
-                "publisher", "language", "description", "tags", "isbn")
+                "publisher", "language", "description", "tags", "isbn", "narrators")
 #: DB 字段名 → 书对象键（``date`` 在书目里叫 ``year``）
 _META_BOOK_KEY = {"date": "year"}
 
@@ -3020,8 +3092,8 @@ def get_effective_meta(bids) -> dict:
                 v = n[f]
             else:
                 continue
-            if f == "tags":
-                merged["tags"] = _parse_tags(v)
+            if f in ("tags", "narrators"):
+                merged[_META_BOOK_KEY.get(f, f)] = _parse_tags(v)
             else:
                 merged[_META_BOOK_KEY.get(f, f)] = str(v)
         if merged:
@@ -3058,6 +3130,42 @@ def all_authors() -> dict:
     """``{name: row}``，供批量操作一次取全。"""
     rows = _connect().execute("SELECT * FROM authors").fetchall()
     return {r["name"]: dict(r) for r in rows}
+
+
+def all_narrators() -> dict:
+    """``{name: row}``，供批量操作一次取全（第 53 期，镜像 all_authors）。"""
+    rows = _connect().execute("SELECT * FROM narrators").fetchall()
+    return {r["name"]: dict(r) for r in rows}
+
+
+def get_narrator(name) -> "dict | None":
+    """取单个演播者行（第 53 期，镜像 get_author）。"""
+    row = _connect().execute("SELECT * FROM narrators WHERE name=?", (str(name),)).fetchone()
+    return dict(row) if row else None
+
+
+def set_narrator_sort_name_local(name, value) -> None:
+    """设置/清除演播者排序名的本地覆盖（空串 = 撤销覆盖，回退到派生排序名/显示名）。用 upsert。"""
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO narrators(name, sort_name_local) VALUES(?,?) "
+            "ON CONFLICT(name) DO UPDATE SET sort_name_local=excluded.sort_name_local",
+            (str(name), str(value or "").strip()),
+        )
+        c.commit()
+
+
+def set_narrator_sort_name(name, value) -> None:
+    """写入派生/在线排序名（``sort_name`` 列，第 53 期回填用）。与本地覆盖列**分列**，回填只碰这一列。"""
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO narrators(name, sort_name) VALUES(?,?) "
+            "ON CONFLICT(name) DO UPDATE SET sort_name=excluded.sort_name",
+            (str(name), str(value or "").strip()),
+        )
+        c.commit()
 
 
 def set_author_bio_local(name, bio) -> None:

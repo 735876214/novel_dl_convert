@@ -251,6 +251,9 @@ def _quiesce_background() -> None:
         w = getattr(server, "WATCHER", None)
         if w is not None and w.is_running():
             w.stop()
+        # 第 54 期：语义向量后台重算线程（/similar 自愈 / 扫描钩子派生）也要收干净
+        if not server.wait_embed_refresh(5.0):
+            left += 1
     except Exception:                                 # noqa: BLE001
         pass
     if left:

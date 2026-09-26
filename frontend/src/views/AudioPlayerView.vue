@@ -101,6 +101,9 @@ function fmtSize(n: number): string {
             <p class="mt-0.5 truncate text-[12.5px] text-muted-foreground">
               {{ book.author || '未知作者' }}
             </p>
+            <p v-if="book.narrators && book.narrators.length" class="mt-0.5 truncate text-[12.5px] text-muted-foreground">
+              演播：{{ book.narrators.join('、') }}
+            </p>
             <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-muted-foreground tabular-nums">
               <span>{{ tracks.length }} 轨</span>
               <span v-if="totalSize">{{ fmtSize(totalSize) }}</span>

@@ -182,7 +182,7 @@ onMounted(() => loadConfig())
       label="File Naming"
       :groups="['TOKENS', 'MODIFIERS', 'STRUCTURE', 'OR START FROM A RECIPE', 'IF METADATA IS MISSING']"
       :items="[
-        '上游 13 个 token 中本项目缺 5 个：{subtitle} {narrators} {isbn} {library} {originalFilename}',
+        '上游 13 个 token 中本项目缺 4 个：{subtitle} {isbn} {library} {originalFilename}',
         'token 名不同：本项目是 {author} / {series_index} / {ext}，上游是 {authors} / {seriesIndex} / {extension}',
         '7 个修饰符：:first :sort :initial :fixed2 :max3 :upper :lower',
         '4 类结构语法：optional（可选段）/ fallback（回退）/ folder（目录分隔）/ or（或）',

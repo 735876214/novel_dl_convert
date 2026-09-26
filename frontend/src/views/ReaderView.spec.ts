@@ -67,6 +67,7 @@ function makeBook(over: Partial<BookDetail> = {}): BookDetail {
     c1: '',
     c2: '',
     tags: [],
+    narrators: [],
     year: '',
     publisher: '',
     isbn: '',

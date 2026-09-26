@@ -422,7 +422,7 @@ SERVER
 | SERIES | Series name | `Goodreads → Google → Amazon → Kobo`（Kobo 关闭，跳过）`→ Open Lib` | 同上 |
 | SERIES | Series index | 同上 | 同上 |
 | CLASSIFICATION | Genres | `Goodreads → Google → iTunes`（Kobo 关闭，跳过） | `Fill gaps` / `Merge` / `If provided` / `Always` |
-| AUDIOBOOK | Narrators | `Goodreads → Google → Amazon → Kobo`（跳过）`→ Open Lib` | 同上 |
+| AUDIOBOOK | Narrators | 上游：`Goodreads → Google → Amazon → Kobo`（跳过）`→ Open Lib`；**本项目：演播者不入抓取链路，由 `core/audio_meta.py` 本地解析音频标签落 `books.narrators`，命名 token `{narrators}` 已打通（第 53 期）** | 同上 |
 | AUDIOBOOK | Duration | 同上 | 同上 |
 | AUDIOBOOK | Abridged | 同上 | 同上 |
 
@@ -546,6 +546,8 @@ SERVER
 ```
 
 **TOKENS（13）**：`{title} {subtitle} {authors} {narrators} {year} {series} {seriesIndex} {publisher} {isbn} {language} {library} {originalFilename} {extension}`
+
+> 本项目 `fileops.PATTERN_FIELDS` 现已支持其中 **10** 个：`{title} {author} {narrators} {series} {series_index} {index} {year} {publisher} {language} {ext}`（`{narrators}` 于第 53 期补齐，前端 `RENAME_TOKENS` 同源同步）。上游 13 个里仍缺 4 个：`{subtitle} {isbn} {library} {originalFilename}`（FileNamingPage 缺口说明同步）。注意上游 token 名与本项目键名的细微差异（如本项目用 `{author}` / `{series_index}` / `{ext}` 而非 `{authors}` / `{seriesIndex}` / `{extension}`）。
 
 **MODIFIERS（7）**：`:first :sort :initial :fixed2 :max3 :upper :lower`
 

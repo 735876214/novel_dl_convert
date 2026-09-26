@@ -1875,3 +1875,53 @@ BookCover `:96`、ShelfView `:280`）均按实测行号写入；`tests/check_doc
 
 **验证**：后端全量 **720 例 / 0 failed**（第 42 期基线 690 + 本期 30）；前端 `npm run test:unit` **62 例**（58 + 4）；
 `vue-tsc --build` exit 0；浏览器冒烟（书架跳转条 / 系列缺册 / 阅读尝试 / 批注导出）见本期提交信息。
+
+---
+
+## 第 53 期 · 演播者实体补全（2026-09-24）
+
+**需求来源**：用户从四个候选中拍板「演播者实体补全」—— 上游 13 个命名 token 中本项目 `fileops.PATTERN_FIELDS` 仅 9 个，`{narrators}` 是已记录的缺失 token；后端 `novelforge/**.py` 零 `narrator` 字样；`audio.py` 只做轨道统计、从不解析标签，演播者从未被提取，重命名规则无法用上。
+
+**功能范围**：
+1. **音频标签解析（前置，零依赖）**：新增 `core/audio_meta.py`，纯标准库解析 m4b/mp3/m4a/opus/ogg/flac 的演播者（MP4 `©nrt` / Vorbis `NARRATOR` / ID3v2 `TXXX`·演播·旁白），解析失败降级为空；扫描期经 `audio.first_audio_file` 落 `books.narrators`（列表列，与 `tags` 同构）。
+2. **演播者实体 + 排序名**：新增 `core/narrators.py`（镜像 `authors.py`：derive_sort_name / backfill_sort_names / sort_name_of / effective / set_sort_name / narrator_books）+ db `narrators` 表（`name` PK + `sort_name` / `sort_name_local` 两列分列；无头像 `hasPhoto=—`、软删同作者现状即不做）；`library.narrators_list()` / `narrator_books()` 聚合（无关联表，扫 `books()`）。
+3. **命名 token `{narrators}`**：`fileops.PATTERN_FIELDS` 与前端 `RENAME_TOKENS` 同步加 `{narrators}`，`fill_pattern` 多值 `", "` 连接；`FileNamingPage` 缺口说明由「缺 5」改「缺 4」。
+4. **按书替换**：`fileops.METADATA_FIELDS` 加 `narrators`，`/api/books/{bid}/metadata` 经 override 层接受（与 `tags` 同构：非空=覆盖、空串=撤销、null=清空）；详情页 `MetadataEditor` 编辑元数据表单加「演播者」字段。
+5. **展示**：`BookDetailView` 信息栅格 + `AudioPlayerView` 作者下方展示演播者（零外部请求）。
+6. **接口**：`/api/narrators`、`/api/narrators/{name}`、`/api/narrators/{name}/sort-name`、`/api/narrators/sort-name/backfill`（形态对齐 authors 端点）。
+
+**防回归要点**：① 命名 token 两处必须一致（`PATTERN_FIELDS` ↔ `RENAME_TOKENS`），`tests/test_naming_tokens.py` 钉死（本期顺带把断言 9→10 + 增 `{narrators}` 展开测试）；② 排序名两列分列，派生/回填**只写 `sort_name`、绝不动 `sort_name_local`**（写后者=冒充用户改过、误显「已覆盖」并挡抓取），与 `authors` 铁律逐字对齐；③ 元数据只落 DB、绝不写回文件，override>online>opf 三层 + 三道正交闸同样适用；④ 列表型字段（tags/narrators）清空哨兵回退空列表、批量合并按列表解析，须同进 `_CLEARABLE` / `_META_FIELDS` / `_meta_out` / `metastore._opf_value`；⑤ 刻意差异：不新增独立浏览维度（BrowseView 第 34 期已定不做）、无头像。
+
+**验证**：后端全量 **794 例 / 0 failed / 0 error**（第 42 期基线 690 + 第 52 期 30 + 本期 26 + 其它）；新增 `tests/test_audio_narrators.py`（解析器 + 扫描落盘）、`tests/test_narrator_entity.py`（实体/排序名/软删/接口）；`vue-tsc --build` exit 0、`npm run build` + `npm run deploy` 已同步 `novelforge/static/v2`；文档（module-inventory / settings-inventory）narrator 由「漏项候选/不做」改判「已覆盖」，计数 已覆盖 46→47、不做 16→15。
+
+## 第 54 期（2026-09-26）：重开两项判「不做」的能力 —— 语义向量 + 精确阅读位置
+
+用户拍板把 module-inventory §4.2 仅剩的两项「有价值但不做」重开：**`embedding` 语义向量**
+与 **`position-converter` 阅读位置换算**。至此「有价值但不做」清单实质清零
+（`email` / `migration` / `file-write` / `seed` / kobo span / kepub DOM 等仍按原判不做，
+理由未变）。详细落地锚点见 `docs/bookorbit-module-inventory.md` 第 54 期一节，此处只记
+决策与防回归要点。
+
+1. **语义向量（`core/embed.py`）**：默认 LSA（TF-IDF + SVD，纯 numpy、离线零下载），
+   可选本地 transformer（`CACHE_DIR/embedding-model` + 自备依赖），**绝不引远程 API**；
+   新表 `book_embeddings`（float32 BLOB + `model_tag`）进 `REMAP_TABLES` / `ORPHAN_TABLES`；
+   `POST /api/embeddings/recompute` + 两条自愈钩子（`/similar` 缺向量、扫描完成后；
+   单飞闸 + 600s 节流，收尾进 conftest `_quiesce_background`）。
+2. **推荐整合**：`similar_books(…, vectors=)` 两书都有向量走语义余弦、缺向量**逐对回落**
+   词袋；「实质重合」门不动 —— 向量只管排得好不好，门管该不该出现。接口出参不变。
+3. **精确位置（`core/epub_cfi.py`，唯一真值源）**：CFI 生成/解析 + CFI→XPointer 兼容层；
+   标准库 `xml.etree` 解析（坏书一律安全回落）；**字符偏移 = textContent 坐标系**
+   （后端 ET text/tail 模拟 DOM childNodes，前端 `textContent.length`，同尺度才能往返）；
+   `progress` 加 `cfi` 列，**非 NF 来源的进度写入一律清空 cfi**（防「章已变、CFI 挂旧章」）；
+   进度端点 `offset` 进 / `cfi`+`offset` 出，前端不在 JS 里解析 CFI。
+4. **KOReader 刻意保守**：`from_nf` 下发仍为章首 XPointer（kosync 只认 XPointer，
+   真 CFI 反而破坏解析）；`to_nf` 仅兼容识别 `epubcfi` 取章序号；kobo span / kepub DOM
+   仍不做。
+5. **防回归要点**：① `book_embeddings` 漏登记搬迁/孤儿清单会被 `test_remap_tables.py`
+   直接红（契约按 sqlite_master 实测断言）；② 语义向量必须确定性（词表显式定序，
+   否则两次重算余弦漂移 → 推荐列表跳）；③ 恢复链路换算不了精确偏移必须回落
+   「章 + 全书百分比」（与改造前行为逐字一致），保存进度绝不因 CFI 失败；④
+   `test_reading_state.py` 进度归零断言随响应加法演进更新（恒带 `cfi`）。
+6. **验证**：后端全量 **820 例 / 0 failed**（基线 794 + 本期 26：test_embeddings 14 +
+   test_epub_cfi 12）；前端 `type-check` / `build` / `deploy` 全绿并同步
+   `novelforge/static/v2`；`requirements.txt` 新增 `numpy>=1.26`。

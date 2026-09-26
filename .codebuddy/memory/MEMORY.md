@@ -37,12 +37,12 @@
 - ⚠️ **切勿恢复 `docker-compose.override.yml` 这个名字**（Compose 会自动合并 ⇒ NAS 上 `docker compose up -d` 静默变成 8993 + 禁拉取 + 挂不存在的 `./novelforge`），该用途已改名 `docker-compose.offline.yml` 且须显式 `-f`。NAS 部署 = **`docker-compose.yml` 单文件**（配置全写字面量、**不读 `.env`**；`.env.example` 已删），细节见 REF。
 
 ## 自动化测试
-- 完全离线 `.venv/bin/python -m pytest`；**后端基线（win32）721**、0 failed/0 err；**前端另计**（`npm run test:unit`=**62**）、不并入。
-- ⚠️ `pytest.ini` 已含 `addopts=-q`，**别再加 `-q`**（变 `-qq` 吞汇总行）；计数一律 `--junitxml=…`+脚本解析；跑全量前确认 `novelforge/static` 存在；**落全量日志到文件再读**，别 `grep` 猜。⚠️ 本机 safe-delete shim 会拦 pytest 会话末对 `%TEMP%\pytest-of-*` 的清理 ⇒ `$LASTEXITCODE=1` 而 junit 全绿，**别据此判失败**（清 `NODE_OPTIONS` 也拦不住，只有 junit 权威）。
+- 完全离线 `.venv/bin/python -m pytest`；**后端基线（win32）820**（第 54 期）、0 failed/0 err；**前端另计**（`npm run test:unit`=**62**）、不并入。
+- ⚠️ `pytest.ini` 已含 `addopts=-q`，**别再加 `-q`**（变 `-qq` 吞汇总行）；计数一律 `--junitxml=…`+脚本解析；跑全量前确认 `novelforge/static` 存在；**落全量日志到文件再读**，别 `grep` 猜。⚠️ 本机 safe-delete shim 会拦 pytest 会话末对 `%TEMP%\pytest-of-*` 的清理 ⇒ `$LASTEXITCODE=1` 而 junit 全绿，**别据此判失败**（清 `NODE_OPTIONS` 也拦不住，只有 junit 权威）；**Remove-Item 传多个文件时一个不存在会整批中止**（先确认存在再删）。
 - **「长期稳定失败」是产品 bug 症状**：逐层打印中间返回值找根因；e2e 做改前 FAIL/改后 PASS 对照。
 - 环境变量须在 import 业务模块**前**设（`config` 固化目录、`server` 导入即 `ensure_dirs()`）；`db._conn`/`_db_path` 模块级缓存⇒隔离靠 `db.close()`。
-- 碰库/DB 用例必须 `isolated`、接口 `client`+`auth_headers`；假 EPUB(`b"EPUB"`)够扫描类，元数据写回/系列解析要真 EPUB(`epub_builder.build_epub`)；测试库根须在 `LIBRARY_SOURCE_DIR` 下；断言留余地。
-- 全量后半程曾 segfault ⇒ `_quiesce_background()` 须在夹具 `db.close()` **之前**收尾；`watcher.wait_pending(5.0)` 非 0 即 `pytest.fail`（干净运行恒 0）。
+- 碰库/DB 用例必须 `isolated`、接口 `client`+`auth_headers`；假 EPUB(`b"EPUB"`)够扫描类，元数据写回/系列解析要真 EPUB(`epub_builder.build_epub`)；⚠️ 隔离夹具**不预建库根目录**，写真 EPUB 前先 `mkdir(parents=True)`（ebooklib 写失败只发 UserWarning、文件静默缺失）；测试库根须在 `LIBRARY_SOURCE_DIR` 下；断言留余地。
+- 全量后半程曾 segfault ⇒ `_quiesce_background()` 须在夹具 `db.close()` **之前**收尾；`watcher.wait_pending(5.0)` 非 0 即 `pytest.fail`（干净运行恒 0）；**新增旁路线程必须进收尾清单**（第 54 期先例：`server.wait_embed_refresh`）。
 - **仓库根防删除守卫（第 45 期，`tests/conftest.py`）**：会话级 autouse 夹具补丁删除/移走入口，目标解析到仓库根内即 `pytest.fail`；`pytest_sessionfinish` 对根文件完整性告警 ⇒ **不依赖目录重定向的最后防线**（曾出现全量 pytest 后 14 个根文件被误删）。
 
 ## 后端踩坑
@@ -63,7 +63,7 @@
 - `core/stats.py`：`overview` 键**只增不删**、**跟随 `library_id`**、**不新增扫描路径**（细节见 REF）。
 - ⚠️ **阅读状态阈值只有两入口**：后端 `lib_settings.reading_thresholds(library_id)`、前端 `lib/readingThresholds.ts`；**别第三处判**。默认值不动既有行为（finished 99.5、started 0.0≡`pct>0`）。
 - ⚠️ **路径判据只有 `frontend/src/lib/paths.ts`**（`isAbsolutePath`/`pathsOverlap`）；别处抄 `startsWith('/')` ⇒ Windows `C:\…` 被判非绝对。
-- **「文件:行号」收尾必须实测复核**（工具/局限见 REF）：只记真实行号、不记偏移量；判据「0 硬错+0 漂移」**且**人工过完 `--todo`；⚠️ **历史实施记录里的旧行号不改写**（改它=篡改历史）——`roadmap-gaps-remaining.md` 里那批「疑似漂移」属此类，保留即可。
+- **「文件:行号」收尾必须实测复核**（工具/局限见 REF）：只记真实行号、不记偏移量；判据「0 硬错」**且**人工过完 `--todo`；⚠️ **历史实施记录里的旧行号不改写**（改它=篡改历史）；改了大文件后跑 `tests/check_doc_anchors.py` 并按先例在文档里做「锚点披露」（硬错 0 / 疑似漂移保留）。
 
 ## 配置分层（四层 + 每库覆盖）
 - `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时 `生效值=每库覆写 ?? 全局`，落 `libraries.settings`；真值源 `core/lib_settings.py`+`features.SETTING_CAPS`；接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（细节见 REF）。
@@ -74,9 +74,19 @@
 
 ## 前端
 - Vue3 SFC+TS+Vite8+Tailwind v4+Pinia4+vue-router5(hash)；产物 `novelforge/static/v2/`（`/` 服务其 index.html，缺失 503）；**勿往 `novelforge/static/` 加手写页**。
-- 演示数据禁 `Math.random()`；**路由 path 全局唯一**；`settingsNav`/router 注册表/侧栏**三处与组件同批改**（设置页由注册表生成路由 ⇒ **删条目即删路由**）；**零外部请求零 CDN**。⚠️ 第 49 期后**设置页共 36 页**（删除 12 个上游对照占位页、占位页清零）；**「书库管理」在 `/settings/libraries`**（工具页不再单列该书签）。
+- 演示数据禁 `Math.random()`；**路由 path 全局唯一**；`settingsNav`/router 注册表/侧栏**三处与组件同批改**（设置页由注册表生成路由 ⇒ **删条目即删路由**）；**零外部请求零 CDN**。⚠️ 第 49 期后**设置页共 36 页**（占位页清零）；**「书库管理」在 `/settings/libraries`**。
 - ⚠️ **前端收尾必须 `npm run type-check` + `npm run build` + `npm run deploy`**：`vitest` 不校验模块导出完整性（第 44 期曾把两个文件误提交成 0 B，62 个单测全过、只有构建才报断链）；且 `build` 只落 `frontend/dist`，**`deploy` 才同步到 `novelforge/static/v2`**（漏 deploy ⇒ 服务端仍服务旧 bundle，改动看似「没生效」）。
-- ⚠️ 设置页 `note` 纯文本插值 ⇒ `**`/反引号/`<strong>` 原样显示（契约钉住）；且**只有 `placeholder` 页会渲染 `note`**（`SettingsPlaceholder.vue` 里的 `{{ page.note }}`），`ready` 页的 note **用户看不到** —— 但它仍是「本项目落地口径」的来源，改能力时应同步（第 50 期实测）。
+- ⚠️ 设置页 `note` 纯文本插值 ⇒ `**`/反引号/`<strong>` 原样显示（契约钉住）；且**只有 `placeholder` 页会渲染 `note`**，`ready` 页的 note **用户看不到** —— 但它仍是「本项目落地口径」的来源，改能力时应同步（第 50 期实测）。
 - 冒烟改偏好**必须走 UI 点击**：直接 `localstorage-set comic-prefs '{…}'` 会被**偏好同步层**拉回默认值（第 51 期实测）。另：阅读器偏好只在组件 setup 读一次，改完需重开阅读器。
 - 阅读器翻页路径：`ComicReader` 的 `go()` 是**唯一汇聚点**（键盘 / 点击 / 工具栏都走它）⇒ 挂钩子（如「自动翻下一本」）必须放 `go()`，放 `next()` 会让键盘前进静默失效（第 51 期真缺陷）。
 - 图表入口 `lib/charts.ts`、偏好归属、侧栏导航契约、命名避让（`/explore` vs `/browse`）、实体总览六维、窄屏双写法、`ToolsLayout` 用 `onActivated` ⇒ **域细节见 REF**。
+
+## 演播者实体（第 53 期，2026-09-24）
+- `books.narrators`（列表列，与 `tags` 同构）+ `narrators` 实体表（`sort_name`/`sort_name_local` 两列分列，镜像 `authors`；**派生/回填只写 `sort_name`**）；扫描期 `core/audio_meta.py` **零依赖**解析音频标签落盘（m4b/mp3/m4a/opus/ogg/flac），解析失败降级空、绝不挡入库；接口 `/api/narrators*` 形态对齐 authors；命名 token `{narrators}` 与 `RENAME_TOKENS` 契约钉死；**刻意差异**：不新增浏览维度、无头像。
+
+## 语义向量与精确位置（第 54 期，2026-09-26）
+- **`core/embed.py`**：相似书余弦一路优先语义向量 —— 默认 **LSA**（TF-IDF+SVD，纯 numpy **离线零下载**；词表按 df 封顶并**显式定序**，否则两次重算余弦漂移 ⇒ 推荐列表跳）；可选本地 transformer（`CACHE_DIR/embedding-model` + 自备依赖）；**绝不引远程 embedding API**。`book_embeddings` 表（float32 BLOB + `model_tag`）进 REMAP/ORPHAN；读端 `load_vectors` **只认当前 tag**（旧 tag 不混排）；重算=全量批式（`POST /api/embeddings/recompute` + `/similar` 缺向量·扫描完成两条自愈钩子，单飞闸 `threading.Event`+600s 节流，线程收尾走 `server.wait_embed_refresh` 进 conftest）。
+- **`recommend.similar_books(…, vectors=)`**：两书都有向量走语义余弦、缺向量**逐对回落**词袋；「实质重合」门不动 —— 向量管排得好不好、门管该不该出现；出参结构不变。
+- **`core/epub_cfi.py` = 位置换算唯一真值源**：CFI 生成/解析 + CFI→XPointer 兼容层；`xml.etree` 解析（坏书一律安全回落空 CFI）；⚠️ **字符偏移 = 渲染正文 textContent 坐标系**（后端 ET text/tail 模拟 DOM childNodes 数步序，前端 `contentRef.textContent.length`，两侧同尺度才能往返）；`progress.cfi` **只由 NF 阅读器写入，其它来源写进度一律清空 cfi**（防「章已变、CFI 挂旧章」）；进度端点 `offset` 进 / `cfi`+`offset` 出（前端不在 JS 里解析 CFI）；恢复换算不了必须回落「章+全书百分比」。
+- **KOReader 刻意保守**：`from_nf` 下发仍为**章首 XPointer**（kosync 只认 XPointer，真 CFI 会破坏解析，章内精度由 percentage 兜底）；`to_nf` 仅兼容识别 `epubcfi` 取章序号（crengine 字符坐标不同尺度，不换算不落库）；kobo span / kepub DOM 仍不做；Kobo 同步仍不做（2026-09-17 决策）。
+- 依赖：`requirements.txt` 新增 `numpy>=1.26`。文档：module-inventory §2/§4.2/§9 两行改判（embedding 已覆盖；position-converter 已覆盖·子集）+ 第 54 期记录；roadmap 同步。

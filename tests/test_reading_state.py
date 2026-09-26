@@ -54,7 +54,8 @@ def test_三处记录归零(client, auth_headers, default_root):
     assert r.json()["removed"] == {"sessions": 1, "progress": 1, "status": 1, "attempts": 1}
 
     assert client.get(f"/api/books/{bid}/progress", headers=auth_headers).json() == \
-        {"locator": 0, "percent": 0}, "进度该回到零"
+        {"locator": 0, "percent": 0, "cfi": ""}, \
+        "进度该回到零（第 54 期起响应恒带 cfi 字段，重置即精确坐标一并清除）"
     assert client.get(f"/api/books/{bid}/status", headers=auth_headers).json()["status"] == "unread"
     # 阅读记录里这本书应当消失（会话没了就聚合不出来）
     log = client.get("/api/reading-log", headers=auth_headers).json()

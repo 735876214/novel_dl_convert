@@ -50,7 +50,7 @@ _BAD_TAIL = re.compile(r"[. ]+$")
 #: 展开逻辑只有 :func:`fill_pattern` 一份（第 28 期合并，设置页预览与刮削出版共用）。
 #: 第 20 期扩到 9 个 —— **只加书目里真实存在的字段**（`library.books()` 的
 #: year / publisher / language / series_index）；加不出真实值的一律不加。
-PATTERN_FIELDS = ("{title}", "{author}", "{series}", "{series_index}", "{index}",
+PATTERN_FIELDS = ("{title}", "{author}", "{narrators}", "{series}", "{series_index}", "{index}",
                   "{year}", "{publisher}", "{language}", "{ext}")
 
 
@@ -172,6 +172,9 @@ def fill_pattern(pattern: str, book: dict, ext: str = "", seq: str = "") -> str:
         .replace("{series_index}", str(b.get("series_index") or ""))
         .replace("{title}", str(b.get("title") or "") or stem)
         .replace("{author}", str(b.get("author") or "") or "未知")
+        # 演播者（第 53 期）：多值列表用 「, 」连接；空列表 → 空串（保留字面量待用户填充）
+        .replace("{narrators}", ", ".join(
+            str(x).strip() for x in (b.get("narrators") or []) if str(x).strip()))
         .replace("{series}", str(b.get("series") or "") or "无系列")
         .replace("{index}", index_text(b))
         .replace("{year}", str(b.get("year") or ""))
@@ -259,9 +262,10 @@ def plan_merge(kind: str, source: str, target: str, library_id=None) -> dict:
 # ---------------- EPUB 元数据改写 ----------------
 
 # 可改写的字段全集。接口层据此校验，避免写进意料之外的东西。
+# 第 53 期新增 ``narrators``（与 tags 同构的列表字段，经 meta_override 落库、绝不写回文件）。
 METADATA_FIELDS = (
     "title", "author", "series", "series_index",
-    "date", "publisher", "language", "description", "tags", "isbn",
+    "date", "publisher", "language", "description", "tags", "isbn", "narrators",
 )
 
 # 单值字段 → OPF 元素。集中成一张表，而不是每个字段各写一段正则。

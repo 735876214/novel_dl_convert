@@ -119,7 +119,7 @@
 | 24 | `custom-metadata` | 9 | §3 | ✓ | **已覆盖**（第 35 期） | **自定义字段的「定义」**（建字段 / 排序 / 改标签 / 切适用书库 / 归档 / 软删恢复永久删）：⚠️ **第 42 期复核已落地** —— `novelforge/core/customfields.py` + 七条路由（`novelforge/server.py:1410-1522`）+ 两张新表 `custom_field_defs`（`novelforge/core/db.py:462`）/ `book_custom_values`（`novelforge/core/db.py:485`）；同名配置项 `metadata_fetch.custom_fields` 已下线 |
 | 25 | `dashboard` | 22 | §6 | ✓ | 已覆盖 | 第 32 期已对齐 12 件部件 |
 | 26 | `email` | 79 | §7 通知与更新 | ✓ | **漏项候选** | **邮件分发整块**（书籍附件 / 模板 / 收件人组 / 发送日志 / 加密凭据 / SMTP） |
-| 27 | `embedding` | 9 | §6 | **✗** | **漏项候选** | **元数据特征向量**（作者 / 题材 / 评分构成，非语义 embedding），服务第 52 行推荐 |
+| 27 | `embedding` | 9 | §6 | ✓ | **已覆盖**（第 54 期） | **语义向量**：⚠️ **第 54 期由用户改判为做并已落地**（原判「向量是元数据特征、非语义 embedding」就此翻转）—— `core/embed.py`（默认 LSA：TF-IDF + 截断 SVD，纯 numpy、离线零下载；可选本地 transformer 模型，用户自备文件于 `CACHE_DIR/embedding-model`、运行时不联网）+ `book_embeddings` 表（float32 BLOB + `model_tag`，进 `REMAP_TABLES`/`ORPHAN_TABLES`）+ `POST /api/embeddings/recompute` + `/similar` 余弦一路优先取向量（缺向量逐对回落词袋）、/similar 出参结构不变 |
 | 28 | `entity-manager` | 30 | §5 | ✓ | 已覆盖 | 9 个实体策略（作者 / 题材 / 语言 / 演播者 / 出版社 / 系列 / 标签 / 内联 / 联结） |
 | 29 | `file-write` | 94 | §5 | **✗** | **不与本项目定位相容** | **把元数据写回文件本身**（EPUB/FB2/MOBI/PDF/CBZ/音频 6 类 writer）—— 与发布三原则冲突 |
 | 30 | `font` | 18 | §1 | ✓ | 已覆盖 | 阅读器自定义字体上传 / 校验 / 元数据解析 |
@@ -134,11 +134,11 @@
 | 39 | `metadata-score` | 9 | §3 | ✓ | 已覆盖 | 第 29 期（`core/metascore.py` 12 字段加权） |
 | 40 | `metadata` | 70 | §3 | **✗** | **部分实现** | 提取器 + 解析器（上游 epub / fb2 / mobi / pdf / cbz / 音频 6 类）。⚠️ **第 42 期订正**（原记「本项目 `core/metadata.py` 对等」为**高估**）：`novelforge/core/metadata.py` 实际只做 **ISBN 形状判定**（`:23`）+ **文件名解析**（`:45`）；真解析仅 **EPUB**（`novelforge/core/library.py:879` `probe_epub`，完整 OPF）+ **漫画/音频结构**（`comics.py:156` `probe` 页数封面 / `audio.py:68` `tracks` 轨数）；**MOBI/AZW3/PDF 仅按文件名兜底、FB2 完全不支持**（`library.py:37` 的 `BOOK_EXTS` 不含 `.fb2`） |
 | 41 | `migration` | 89 | — | ✓ | **漏项候选** | **从其他系统迁移整块**（Audiobookshelf / Booklore / Calibre-Web-Automated / Grimmory） |
-| 42 | `narrator` | 5 | §11 | **✗** | **漏项候选** | **演播者实体**（规范化 / sort name / 按书替换）—— 本项目仅命名模板有 `{narrators}` 且**已记缺失** |
+| 42 | `narrator` | 5 | §11 | ✓ | **已覆盖**（第 53 期） | **演播者实体**（规范化 / sort name / 按书替换）—— 零依赖音频标签解析（m4b/mp3/m4a/opus/ogg/flac，提取 ©nrt / NARRATOR / TXXX·演播 / 旁白）落 `books.narrators`；`narrators` 实体表（排序名 `sort_name` / `sort_name_local` 两列分列，镜像 `authors`，无头像 `hasPhoto=—`、软删同作者现状）；`/api/narrators*` 端点 + 命名 token `{narrators}` 打通。⚠️ 刻意差异：不新增独立浏览维度（BrowseView 第 34 期已定不做）、无头像 |
 | 43 | `notification` | 11 | §7 | ✓ | 已覆盖 | 通知浮层 + 已读 + 清理 job |
 | 44 | `opds` | 23 | §10 | ✓ | 已覆盖 | 第 7 期（OPDS 1.2 + 独立凭据） |
 | 45 | `path` | 9 | §5 | ✓ | 已拍板不做 | 路径策略（`GET config` / `GET` / `POST`）—— 服务于第 16 行求书的远程路径映射 |
-| 46 | `position-converter` | 17 | §4 / §10 | **✗** | **漏项候选** | **跨阅读器位置换算**（CFI / kobo span / XPointer / kepub DOM），服务 Kobo 与 KOReader 的进度互通 |
+| 46 | `position-converter` | 17 | §4 / §10 | ✓ | **已覆盖**（第 54 期·子集） | **阅读位置换算**：⚠️ **第 54 期改判为做并已落地（CFI ↔ XPointer ↔ NF 章内偏移）** —— `core/epub_cfi.py`（生成/解析/兼容层，位置换算唯一真值源）+ `progress.cfi` 列 + `/api/books/{bid}/progress` 的 `offset` 进 `cfi`/`offset` 出 + `to_nf` 兼容识别 `epubcfi`。**刻意差异**：kobo span / kepub DOM 两向仍不做（沿用原判「单用户单设备收益低」，Kobo 同步 2026-09-17 决策不做）；KOReader **下发仍用章首 XPointer**（kosync 只认 XPointer，真 CFI 会破坏其解析），精确坐标的收益落在本项目自己的阅读器 |
 | 47 | `reader` | 12 | §4 | ✓ | 已覆盖 | 阅读器服务端（epub + cbz 两子树） |
 | 48 | `reader-preferences` | 7 | §4 | ✓ | 已覆盖 | 第 32 期已落地 |
 | 49 | `reading-session` | 17 | §4 / §6 | ✓ | 已覆盖 | 阅读会话（本项目 `reading_sessions` 表对等） |
@@ -161,7 +161,7 @@
 | 66 | `user-statistics` | 18 | §6 | ✓ | 已覆盖 | 阅读统计聚合 job + 时区回填 |
 | 67 | `user` | 33 | §1 | ✓ | 已拍板不做 | 多用户实体 + 头像 + 内容过滤 ⇒ 多用户（§0.2） |
 
-**计数核对（第 42 期刷新口径）**：已覆盖 **46**（原 40 − `kobo` 1 − `metadata` 1 + 第 34–36 期落地 8）＋ **部分实现 1**（`metadata`）＋ 已拍板不做 **16**（原 11 + `email` / `embedding` / `narrator` / `position-converter` / `kobo`）＋ 非能力 **1** ＋ 与定位无关/不容 **3**（`seed` / `file-write` / `migration`）＝ **67** ✓
+**计数核对（第 42 期刷新口径，第 53 期 `narrator` 由「已拍板不做」移入「已覆盖」）**：已覆盖 **47**（原 40 − `kobo` 1 − `metadata` 1 + 第 34–36 期落地 8 + `narrator` 第 53 期 1）＋ **部分实现 1**（`metadata`）＋ 已拍板不做 **15**（原 11 + `email` / `embedding` / `position-converter` / `kobo`）＋ 非能力 **1** ＋ 与定位无关/不容 **3**（`seed` / `file-write` / `migration`）＝ **67** ✓
 
 ---
 
@@ -217,17 +217,17 @@
 | `catalog` | `catalog.service.ts`：7 个实体维度的搜索（作者/题材/标签/演播者/出版社/系列/语言）+ 收藏；按可见库收窄 | **已落地**（原为「全局搜索只跨书」）：新页 `/browse`「实体总览」按**六个**维度浏览本地书目、按当前书库收窄；**不新增聚合接口**（这些维度本就是同一份书目的投影） | `frontend/src/views/BrowseView.vue:51`（维度表）、`frontend/src/router/index.ts:174`、`frontend/src/data/nav.ts:72`；「收藏」维度靠 `/api/books` 附带的 `collection_ids`（`novelforge/server.py:998`）+ `collection_map()`（`novelforge/core/db.py:1154`） |
 | `browse-counts` | `browse-counts.service.ts`：侧栏 Browse 三计数，60 s 缓存 | **已落地**（原为「无计数」）：三计数与目标页**同源**、60 秒节流、按库可选收窄；读失败不显示胶囊 | `novelforge/core/browse_counts.py:25`/`:65`、`novelforge/server.py:3572`、`frontend/src/data/nav.ts` 的 `countSource: 'browse'` + `frontend/src/components/AppSidebar.vue` 的 `navCount()` |
 
-### 4.2 有价值但不做（8 项；其中 3 项第 35 期、1 项第 36 期改判为做并落地，行内 ⚠️ 标注）
+### 4.2 有价值但不做（8 项；其中 3 项第 35 期、1 项第 36 期、1 项第 53 期（narrator）改判为做并落地，行内 ⚠️ 标注）
 
 | 模块 | 上游形态 | 不做的理由 |
 | --- | --- | --- |
 | `book-move` | 跨库移动（preview + SSE 逐本进度 + 目标库权限） | 本项目多库是**独立目录**（`LIBRARY_SOURCE_DIR`），移动 = 真搬文件 + 处理同书冲突 + 回滚。上游那种「先预览再流式搬」的完整度不做会留半成品，做全了是独立一期。⚠️ **第 36 期由用户改判为做并已落地**（原判末句「做全了是独立一期」正是本期立项理由）：**两条入口共用一个执行层** —— 自动归库 `migrate.preview:172` / `plan:258`（行为逐字未动）与用户发起的移动 `migrate.move_preview:571` / `move_plan:594`，共用 `execute:947` / `rollback:1041`（批次用既有 `library_migrations.direction` 列区分）—— 接口 `POST /api/book-move/{targets,preflight,plan,apply,rollback}` + `GET /api/book-move/batches`（`novelforge/server.py:3226`/`:3236`/`:3251`/`:3277`/`:3344`/`:3367`），前端书架批量条「移动到书库」+ 三段式弹窗（`frontend/src/views/ShelfView.vue:678`、`frontend/src/components/book/BookMoveDialog.vue`）+ 「撤销本次移动」（`ShelfView.vue:692`）。**三处刻意差异**：① **不引入 SSE**（全仓零先例），逐本进度走既有「SQLite 任务行 + 前端轮询」；② 「目标库权限」在单用户下的等价物 = **库类型相容闸门**（判据只许来自 `library._exts_for_type`，前端禁选是体验、后端 400 才是契约）；③ 同名冲突按用户口径「拒绝覆盖 + 一键用建议名移入」。**开工前先修掉一条既有缺陷**：`meta_override` / `meta_online` / `meta_cover` / `scrape_items` 四张按 `book_id` 存的表原先**不在搬迁清单**里 ⇒ 移动或改名一次就断链（修法见 `core/db.py:1633` 的 `REMAP_TABLES` / `:1643` 的 `REMAP_EXPLICIT_TABLES` / `:1655` 的 `REMAP_MERGE_TABLES`） |
 | `book-metadata-lock` | 13 个 provider id + 11 个漫画字段的**字段级**锁定 | 本项目已有**单书级**「覆盖 / 保留」三态语义（`server.py:1183-1350` 的元数据 GET / POST / online / revert 四个端点）。字段级锁定是把它拆细，收益主要是自动化抓取场景 —— 而本项目的自动抓取默认关，收益面窄。⚠️ **第 35 期由用户改判为做并已落地**：新表 `meta_locks`（`core/db.py:396`，`PRIMARY KEY(book_id, field)`；「刻意与 `meta_override` 分表」的理由在 `:374-378` 的建表注释里 —— override 行只在**有值**时存在，表达不了「我没改过、但也不想让抓取动它」）。抓取闸门落在 `core/metafetch.py:207`（10 个字段）与 `:222`（封面，独立键 `cover`），在线确认写入另在 `:335-349` 再挡一道；接口 `POST /api/books/{bid}/metadata/lock`（`server.py:1352`）。**可锁对象 = `fileops.METADATA_FIELDS` 的 10 个 + 封面**（上游是「13 provider id + 11 漫画字段」，本项目无多 provider / 漫画字段之分，换算后即这 11 项）。**与三态互不干涉**：三态管「取谁的值」，锁管「让不让抓取写」 |
 | `custom-metadata` | 自定义字段的**定义**（建字段 / 排序 / 改标签 / 切适用书库 / 归档 / 软删恢复） | 本项目 `custom_fields` 是**抓取时的固定键值对**，不是用户可定义的字段 schema；原判另称「做成 schema 要动元数据模型 + 12 字段的 metascore 权重表」。⚠️ **第 35 期由用户改判为做并已落地，且原判理由有一处经核为误**：① 实测那次再核时 `custom_fields` 的编辑入口**已经不存在**（`frontend/src/views/settings/pages/MetadataPage.vue` 里零命中），原锚点已失效；② 「要动 12 字段的 metascore 权重表」**不成立** —— `custom_fields` 本就在 `NOT_SCORED`（`novelforge/core/metascore.py:80-84`，why =「用户自定义键值，不参与完整度」），**权重表一行没动**。落地 = 定义表 `custom_field_defs`（`core/db.py:343`，`key` 与 `label` 分离、`type` / `position` / `library_ids` / `archived` / `deleted_at` 垃圾桶）+ 值表 `book_custom_values`（`:366`）+ 七条路由 `server.py:1404-1516`；同名配置项 `metadata_fetch.custom_fields` **已整体下线**（默认值 / 顶层白名单 / 编辑器 / note 文案 / 文档引用一并清理）。**级联**：`book_custom_values` 与 `meta_locks` 均已进 `ORPHAN_TABLES`（`core/db.py:1568-1569`）与 `REMAP_TABLES`（`:1619-1622`），改名时**逐行搬迁、撞主键保留目标行** —— 照第 34 期书签的范式（整体 `UPDATE` 撞唯一约束会被外层 `except` 吞成「搬 0 行」而静默丢数据） |
-| `recommendation` + `embedding` | 元数据特征向量 + 加权打分（余弦 0.5 / 作者 0.1 / 题材 0.25 / 系列 0.1 / 评分距 0.05），上限 25 | 本项目 `core/recommend.py` 已有**规则式**相似书（同作者 / 题材 / 系列）。上游那套的价值全在**排序质量**，而它的向量是元数据特征（不是语义 embedding）。⚠️ **第 35 期改判「`recommendation` 做、`embedding` 仍不做」并已落地**：权重与形态对齐上游（`core/recommend.py:29-33` 的五个权重、`:36-37` 上限 25 / 默认 6）；原判顾虑「没有评分数据的库里会退化到接近规则式」**用降级口径化解** —— 任一方未评分时**那一路不进分母**（`:116-120`、`:163-166`），而不是当 0 分。**刻意差异两处已写进模块 docstring（`:10-22`）**：向量用元数据词袋（作者 / 题材 / 系列 / 出版社 / 语言 / 十年段 / 书名词元，**简介刻意不进**），且保留一道「实质重合」门（至少同作者 / 同题材 / 同系列之一才算候选）—— 上游权重决定**排得好不好**，这道门决定**该不该出现**。`embedding`（语义向量）**仍然不做** |
-| `position-converter` | CFI / kobo span / XPointer / kepub DOM 四向换算 | 只服务多设备进度互通。本项目的 Kobo / KOReader 支持**已按可用子集落地**（`settingsNav.ts:397` 记了完整口径与「反向只定位到章首、准确位置由 percentage 兜底」的取舍）—— 补全的收益在单用户单设备下很低 |
+| `recommendation` + `embedding` | 元数据特征向量 + 加权打分（余弦 0.5 / 作者 0.1 / 题材 0.25 / 系列 0.1 / 评分距 0.05），上限 25 | 本项目 `core/recommend.py` 已有**规则式**相似书（同作者 / 题材 / 系列）。上游那套的价值全在**排序质量**，而它的向量是元数据特征（不是语义 embedding）。⚠️ **第 35 期改判「`recommendation` 做、`embedding` 仍不做」并已落地**：权重与形态对齐上游（`core/recommend.py:29-33` 的五个权重、`:36-37` 上限 25 / 默认 6）；原判顾虑「没有评分数据的库里会退化到接近规则式」**用降级口径化解** —— 任一方未评分时**那一路不进分母**（`:116-120`、`:163-166`），而不是当 0 分。**刻意差异两处已写进模块 docstring（`:10-22`）**：向量用元数据词袋（作者 / 题材 / 系列 / 出版社 / 语言 / 十年段 / 书名词元，**简介刻意不进**），且保留一道「实质重合」门（至少同作者 / 同题材 / 同系列之一才算候选）—— 上游权重决定**排得好不好**，这道门决定**该不该出现**。⚠️ **第 54 期 `embedding` 由用户改判为做并已落地**：`core/embed.py`（LSA 默认 / 本地 transformer 可选，离线零下载）+ `book_embeddings` 表 + `POST /api/embeddings/recompute`；`similar_books` 余弦一路**优先取向量、缺向量逐对回落词袋**，词元集合降为回落路径 —— 「实质重合」门原样保留，上游那句「权重决定排得好不好、门决定该不该出现」继续成立。**简介进向量语料**（TF-IDF + L2 归一下「谁的字数多」的偏差不存在了，取舍记在 embed.py） |
+| `position-converter` | CFI / kobo span / XPointer / kepub DOM 四向换算 | 只服务多设备进度互通。本项目的 Kobo / KOReader 支持**已按可用子集落地**（`settingsNav.ts:397` 记了完整口径与「反向只定位到章首、准确位置由 percentage 兜底」的取舍）—— 补全的收益在单用户单设备下很低。⚠️ **第 54 期由用户改判为做并已落地（子集）**：`core/epub_cfi.py`（CFI 生成 / 解析 / CFI→XPointer 兼容层）+ `progress.cfi` 列（非 NF 来源写入一律清空，防「章已变、CFI 挂旧章」矛盾行）+ 阅读器保存 / 恢复精确到章内字符偏移（textContent 坐标系，前后端同尺度）；KOReader 下发**仍为章首 XPointer**（kosync 只认 XPointer），`to_nf` 仅兼容识别 `epubcfi` 取章序号；kobo span / kepub DOM 仍不做 |
 | `email` | 邮件分发整块（附件 / 模板 / 收件人组 / 发送日志 / 凭据加密 / SMTP） | 79 个文件。价值是「把书发到 Kindle 邮箱」这类，但需要 SMTP 凭据管理 + 失败重试 + 附件大小限制一整摊。**与「本地单用户书库」的定位偏离**，且本项目离线优先 |
-| `narrator` | 演播者实体（规范化 / sort name / 按书整体替换），5 个文件、**无对外路由** | 实测本项目后端**一个 `narrator` 字样都没有**（`novelforge/**.py` 零命中），前端只在命名模板里记着 `{narrators}` 属缺失 token（`FileNamingPage.vue:185`）。要立实体得**先有音频标签的演播者解析**这一环，前置缺失；而演播者不像作者需要独立浏览页 ⇒ 收益面窄 |
+| `narrator` | 演播者实体（规范化 / sort name / 按书整体替换），5 个文件 | ⚠️ **第 53 期改判「做」并已落地**：零依赖音频标签解析（m4b/mp3/m4a/opus/ogg/flac）落 `books.narrators` + `narrators` 实体表（排序名两列分列，对齐 `authors`）+ `/api/narrators*` 端点 + 命名 token `{narrators}` 打通；前置「音频标签演播者解析」已同步补齐。⚠️ 刻意差异：不新增独立浏览维度、无头像（`hasPhoto=—`） |
 
 ### 4.3 与本项目定位不相容 / 无关（3 项）
 
@@ -379,10 +379,10 @@
 | --- | --- | --- |
 | `book-metadata-lock` / `bookmark` / `browse-counts` / `catalog` / `custom-metadata` / `reading-state` / `recommendation` / `book-move` | 已覆盖（第 34–36 期） | 8 项均有表 / 路由 / 前端锚点（详见 §4.1、§7、§8） |
 | `email` | 不做 | 全仓无 SMTP / 邮件链路；设置页为占位 |
-| `embedding` | 不做 | `core/recommend.py` 刻意用元数据词袋，不做语义向量 |
+| `embedding` | 已覆盖（第 54 期） | `core/embed.py`（LSA 默认 / 本地 transformer 可选，离线零下载）+ `book_embeddings` 表 + `POST /api/embeddings/recompute`；`/similar` 余弦一路优先取向量、缺向量逐对回落词袋 |
 | `migration` | 不做 | `core/migrate.py` 只做**本地库间搬迁**；无四家外部系统迁移 |
-| `narrator` | 不做 | 后端零 `narrator`；仅命名模板记 `{narrators}` 缺失 |
-| `position-converter` | 不做 | 仅进度级 `core/koreader.py`（XPointer↔章节）；无 CFI / kobo span / kepub DOM |
+| `narrator` | 已覆盖（第 53 期） | 零依赖音频标签解析 + `narrators` 实体表（排序名两列分列，对齐 `authors`）+ `/api/narrators*` 端点 + 命名 token `{narrators}` 打通；不新增独立浏览维度、无头像（`hasPhoto=—`） |
+| `position-converter` | 已覆盖（第 54 期·子集） | `core/epub_cfi.py`（CFI↔XPointer↔NF 章内偏移，唯一真值源）+ `progress.cfi` 列 + 进度端点 `offset` 进 `cfi`/`offset` 出；kobo span / kepub DOM 仍不做，KOReader 下发仍为章首 XPointer |
 | `file-write` | 永久不做 | `core/fileops.py` 的写回函数已**退出生产路径**；元数据只落 DB 是硬约束 |
 | `seed` | 不做 | 演示种子已主动移除 |
 | `architecture` | 非能力 | 无等价物 |
@@ -512,3 +512,58 @@
 - **配置层**：`integrations.<svc>.auto_push`、`logs.retention.*` 入 `config.py` 默认段；`EDITABLE` / `GET /api/config` / `settingsFields.SECTION_KEYS` 三处同步点已含相关键（`logs` 单开分区只提交 `logging`，避免连带提交 network/download 草稿）。
 - **验证**：前端 `type-check` 0 错 + `build` + `deploy`；后端全量 pytest（**762 通过 / 0 失败**，基线 725 + 本期 34 项新测试）；`check_doc_anchors.py` 硬错 0。提交：审计留存 `ad51dee`、字体变体 `5ed287b`、自动定稿 `f99cc70`；settingsNav 六条 note 与三份文档同步。
 - ⚠️ **锚点披露**：本期在 `core/fonts.py` / `core/metafetch.py` / `core/activity_log.py` / `core/sync.py` / `server.py` / `lib/api.ts` 上加了较多行 ⇒ `capability-gap.md` 指向这些文件的「实测行号」**整体后移**；本期未逐条重取，沿用「硬错 0 / 疑似漂移保留」口径，历史实施记录不改写。
+
+## 十三、第 54 期更新（2026-09-26）：重开两项「不做」—— 语义向量 + 精确阅读位置
+
+用户拍板把 §4.2 里仅剩的两项「有价值但不做」重开落地（`embedding` 与 `position-converter`），
+module-inventory 三处判定同步改写（§2 第 27 / 46 行、§4.2 两行、§9 两行）。
+
+**① `embedding` 语义向量（改判 已覆盖）**：
+
+- 新增 `core/embed.py`：默认 **LSA 后端**（TF-IDF + 截断 SVD，纯 numpy、离线零下载；
+  语料 = 题名 / 作者 / 系列 / 出版社 / 语言 / 年份 + **简介**（TF-IDF + L2 下「谁的字数多」
+  的偏差不存在了，简介词元按 0.25 降权）；词表按文档频率封顶 4096、显式定序保证确定性；
+  Gram 口径下同批书两次重算的两两余弦一致）。可选 **本地 transformer 后端**（用户自备模型
+  于 `CACHE_DIR/embedding-model` 且装了 `sentence-transformers` 才启用，运行时不联网），
+  缺一即回落 LSA —— **绝不引远程 embedding API**。
+- 新表 `book_embeddings(book_id PK, vec BLOB, model_tag, updated_at)`：float32 小端 BLOB +
+  模型标识，读端（`embed.load_vectors`）**只认当前后端 tag**，换模型后旧行自然失效不混排；
+  已进 `REMAP_TABLES` / `ORPHAN_TABLES`（契约 `tests/test_remap_tables.py` 自动钉住）。
+- 新端点 `POST /api/embeddings/recompute`（全量重算落库）+ 两条自愈钩子（`/similar` 缺向量
+  后台补算、单库扫描完成后补算；单飞闸 `threading.Event` + 600s 节流，收尾经
+  `server.wait_embed_refresh` 进 conftest `_quiesce_background` 清单）。
+- `recommend.similar_books` 新增可选 `vectors` 参：两书**都有**向量 ⇒ 余弦路取语义向量
+  （理由「语义相似 N%」），任一侧缺 ⇒ **逐对回落**原词袋集合余弦（理由「元数据重合 N%」）；
+  「实质重合」门原样保留 —— 向量只影响排序，不改变「该不该出现」。接口出参结构不变。
+
+**② `position-converter` 阅读位置换算（改判 已覆盖·子集）**：
+
+- 新增 `core/epub_cfi.py`（位置换算**唯一真值源**）：`cfi_for_position` /
+  `position_from_cfi`（spine 步 + 元素步 + 文本步 + 字符偏移，标准 `epubcfi(…)`）、
+  `cfi_to_xpointer` / `locator_from_cfi`（兼容层）。解析用标准库 `xml.etree`
+  （EPUB 内容文档本就要求良构 XML，不引新依赖；HTML 实体预处理，坏书解析失败一律
+  安全回落）。**字符偏移 = 渲染正文 textContent 坐标系**（前后端同尺度：
+  后端 ET text/tail 还原 DOM childNodes 数步序，前端 `contentRef.textContent.length`）。
+- `progress` 表加 `cfi` 列（老库补列迁移，存量行回落 `''`）；**来源纪律**：CFI 只由
+  NF 阅读器进度写入，**其它来源（KOReader / Komga / 完成标记）写入一律清空** ——
+  防「章序号已变、CFI 挂旧章」的矛盾行让恢复跳错位置。
+- 进度端点：PUT 可带 `offset`（章内字符偏移）⇒ 服务端生成 CFI 落库（生成失败存空串，
+  **保存进度绝不因 CFI 失败**）；GET 返回 `cfi` + 服务端反解的 `offset`（前端无需在
+  JS 里再实现 CFI 解析）。`ReaderView` 保存附带 offset、恢复优先用 offset 换滚动位置
+  （换算不了回落「全书百分比反推」，与改造前行为逐字一致）。
+- **KOReader 兼容（相对原计划的刻意保守）**：`from_nf` 下发**仍为章首 XPointer** ——
+  kosync 只按 XPointer 定位 EPUB，真 CFI 它解析不了，反而不如「章首 + 精确 percentage」
+  可靠；`to_nf` 仅兼容识别客户端回传的 `epubcfi(...)` 取 spine 步当章序号（crengine 的
+  章内字符坐标与源 DOM 不同尺度，**不换算不落库**，那是假精度）。kobo span / kepub DOM
+  仍不做（沿用原判）。
+
+**契约测试**：`tests/test_embeddings.py`（14 项：LSA 方向性 / 确定性 / 小语料回落 /
+DB 三件套 / tag 过滤 / 逐对回落 / 端点非 404）+ `tests/test_epub_cfi.py`（12 项：CFI 往返
+不变量 / 坏输入 / koreader 兼容 / progress.cfi 来源纪律 / 端点往返）。另更新
+`test_reading_state.py` 的进度归零断言（响应加法演进，恒带 `cfi` 字段）。
+依赖：`requirements.txt` 新增 `numpy>=1.26`。
+验证：后端全量 **820 passed / 0 failed**（基线 794 + 本期 26）；前端 `type-check` /
+`build` / `deploy` 全绿。
+- ⚠️ **锚点披露**：本期在 `core/db.py` / `server.py` / `core/koreader.py` 上加行 ⇒
+  指向这些文件的既有「实测行号」整体后移（`check_doc_anchors.py` 硬错 0 / 疑似漂移 37，
+  与前两期口径一致）；历史实施记录不改写。

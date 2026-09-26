@@ -46,6 +46,8 @@ const locking = ref('')
 const form = ref<BookMetadataFields | null>(null)
 const changed = ref<string[]>([])
 const tagText = ref('')
+/** 演播者草稿（第 53 期，与题材同构：用「、」或逗号分隔，保存时自动去重保序） */
+const narratorText = ref('')
 
 const FIELD_LABELS: Record<keyof BookMetadataFields, string> = {
   title: '书名',
@@ -58,6 +60,7 @@ const FIELD_LABELS: Record<keyof BookMetadataFields, string> = {
   description: '简介',
   isbn: 'ISBN',
   tags: '题材',
+  narrators: '演播者',
 }
 
 /** 界面上的展示顺序（后端返回是按字母序的字典，直接遍历会很乱） */
@@ -72,6 +75,7 @@ async function load(): Promise<void> {
     meta.value = await api.bookMetadata(props.bookId)
     form.value = { ...(meta.value?.fields as BookMetadataFields) }
     tagText.value = (form.value.tags || []).join('、')
+    narratorText.value = (form.value.narrators || []).join('、')
     resetCustom()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '元数据加载失败')
@@ -94,9 +98,11 @@ const hasOverrides = computed(() =>
 const dirty = computed(() => {
   if (!meta.value || !form.value) return false
   const a = meta.value.fields
-  const b = { ...form.value, tags: parseTags() }
+  const b = { ...form.value, tags: parseTags(), narrators: parseNarrators() }
   const changedCore = (Object.keys(a) as (keyof BookMetadataFields)[]).some((k) =>
-    k === 'tags' ? JSON.stringify(a.tags) !== JSON.stringify(b.tags) : String(a[k]) !== String(b[k]),
+    k === 'tags' || k === 'narrators'
+      ? JSON.stringify(a[k]) !== JSON.stringify(b[k])
+      : String(a[k]) !== String(b[k]),
   )
   return changedCore || customDirty.value
 })
@@ -174,6 +180,14 @@ function parseTags(): string[] {
     .filter(Boolean)
 }
 
+/** 演播者草稿解析（第 53 期，与题材同规则） */
+function parseNarrators(): string[] {
+  return narratorText.value
+    .split(/[、,，]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
 // ---------------- 自定义字段（第 35 期）----------------
 // 值不落在 OPF 字段那套里，而是按**字段定义**存到 book_custom_values；
 // 详情页只显示「该书所属书库适用且未归档」的定义（后端已筛好，这里照着渲染即可）。
@@ -208,7 +222,7 @@ async function save(): Promise<void> {
   if (!form.value || !meta.value) return
   saving.value = true
   try {
-    const fields = { ...form.value, tags: parseTags() }
+    const fields = { ...form.value, tags: parseTags(), narrators: parseNarrators() }
     // 自定义字段与 OPF 字段同批提交（同一张表单、同一个保存按钮）；没有定义时不带这个键
     const custom = (meta.value.custom ?? []).length ? { ...customForm.value } : undefined
     const r = await api.setBookMetadata(props.bookId, fields, custom)
@@ -230,6 +244,7 @@ async function save(): Promise<void> {
     }
     form.value = { ...r.fields }
     tagText.value = (r.fields.tags || []).join('、')
+    narratorText.value = (r.fields.narrators || []).join('、')
     resetCustom()
     emit('saved')
   } catch (e) {
@@ -247,6 +262,7 @@ async function restoreFields(fields: string[]): Promise<void> {
     meta.value = { ...meta.value, fields: { ...r.fields }, meta: { ...r.meta } }
     form.value = { ...r.fields }
     tagText.value = (r.fields.tags || []).join('、')
+    narratorText.value = (r.fields.narrators || []).join('、')
     ui.toast(`已恢复 ${r.recovered.length} 个字段为在线值`)
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '恢复失败')
@@ -276,6 +292,7 @@ async function clearOne(k: keyof BookMetadataFields): Promise<void> {
     }
     form.value = { ...r.fields }
     tagText.value = (r.fields.tags || []).join('、')
+    narratorText.value = (r.fields.narrators || []).join('、')
     resetCustom()
     ui.toast(r.changed.length ? `已清空：${FIELD_LABELS[k] ?? k}` : '该字段本来就是空的')
     emit('saved')
@@ -419,6 +436,54 @@ const INPUT_CLS =
                 ✕ 清空
               </button>
               <span v-if="meta.meta.tags?.overridden" class="text-muted-foreground">{{ onlineText('tags') }}</span>
+            </div>
+          </label>
+
+          <!-- 演播者（第 53 期）：与题材同构的列表字段，用「、」或逗号分隔，保存时自动去重保序 -->
+          <label class="flex flex-col gap-1 border-b border-border/60 py-2.5 sm:col-span-2">
+            <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+              演播者（用「、」或逗号分隔，保存时自动去重）
+              <span
+                v-if="meta.meta.narrators?.overridden"
+                class="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] text-primary"
+              >已本地修改</span>
+              <button
+                type="button"
+                :disabled="!editable || locking === 'narrators'"
+                class="ml-auto flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] transition-colors disabled:opacity-50"
+                :class="meta.meta.narrators?.locked
+                  ? 'bg-warning/14 text-warning'
+                  : 'text-muted-foreground hover:text-foreground'"
+                :title="lockTitle('narrators')"
+                @click="toggleLock('narrators')"
+              >
+                <Icon :name="meta.meta.narrators?.locked ? 'lock' : 'unlock'" class="h-3 w-3" />
+                {{ meta.meta.narrators?.locked ? '已锁定' : '锁定' }}
+              </button>
+            </span>
+            <input v-model="narratorText" type="text" :disabled="!editable" :class="INPUT_CLS" placeholder="张三、李四">
+            <div
+              v-if="meta.meta.narrators?.overridden || narratorText.trim()"
+              class="mt-1 flex flex-wrap items-center gap-2 text-[11px]"
+            >
+              <button
+                v-if="meta.meta.narrators?.overridden"
+                type="button"
+                :disabled="!editable || restoring || clearing"
+                class="cursor-pointer rounded text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
+                @click="restoreOne('narrators')"
+              >
+                ↺ 恢复在线
+              </button>
+              <button
+                type="button"
+                :disabled="!editable || clearing"
+                class="cursor-pointer rounded text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                @click="clearOne('narrators')"
+              >
+                ✕ 清空
+              </button>
+              <span v-if="meta.meta.narrators?.overridden" class="text-muted-foreground">{{ onlineText('narrators') }}</span>
             </div>
           </label>
 

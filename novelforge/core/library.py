@@ -29,7 +29,7 @@ import uuid
 import zipfile
 
 from .. import config
-from . import audio, comics, db, metadata
+from . import audio, audio_meta, comics, db, metadata
 
 # 只把这些扩展名当成「书」；与 /api/files 的全量列表不同，这里是有意收窄的。
 # .cbr（RAR 漫画）自第 9 期起在列 —— 由 core/comics.py 的 zip/rar 双后端解压。
@@ -851,6 +851,26 @@ def author_books(name: str) -> list:
     return [b for b in books() if (b.get("author") or "").strip() == name]
 
 
+def narrators_list() -> list:
+    """按演播者聚合：[{name, count, books:[BookCard, ...]}]，按册数降序（第 53 期，镜像 authors_list）。"""
+    bucket: dict = {}
+    for b in books():
+        for n in (b.get("narrators") or []):
+            n = str(n or "").strip()
+            if n:
+                bucket.setdefault(n, []).append(b)
+    return [
+        {"name": name, "count": len(items), "books": items}
+        for name, items in sorted(bucket.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+    ]
+
+
+def narrator_books(name: str) -> list:
+    """某演播者名下的书目（保持扫描顺序，第 53 期，镜像 author_books）。"""
+    name = (name or "").strip()
+    return [b for b in books() if name in [str(x or "").strip() for x in (b.get("narrators") or [])]]
+
+
 def library_groups() -> list:
     """「库」的真实分组：按文件格式，外加元数据维度的「待修复 / 无封面」。
 
@@ -1251,12 +1271,22 @@ def _scan_once(lib: dict = None) -> list:
                 "title": "", "author": "", "series": "", "has_cover": False, "unparsable": False,
                 "year": "", "publisher": "", "isbn": "", "language": "", "description": "", "tags": [],
                 "cover": "", "pages": 0, "pages_source": "", "series_index": "", "fixed_layout": False,
+                # 演播者（第 53 期）：扫描期从音频标签解析，列表形态与 tags 同构
+                "narrators": [],
             }
             tracks = 0
             size = st.st_size
             mtime = _entry_mtime(f)
             if is_audio_entry:
                 tracks = audio.tracks(f)["total"]
+                # 演播者：解析音频标签（第 53 期补的「前置缺失」）。目录形态取首轨文件；
+                # 解析失败只降级为空，绝不让一本书因标签坏而入库失败。
+                try:
+                    _probe = audio.first_audio_file(f)
+                    if _probe is not None:
+                        info["narrators"] = audio_meta.extract(_probe).get("narrators") or []
+                except Exception:
+                    info["narrators"] = []
                 if is_dir:
                     size, dm = audio.dir_size_and_mtime(f)
                     mtime = dm or mtime
@@ -1311,6 +1341,8 @@ def _scan_once(lib: dict = None) -> list:
                 "language": info.get("language", ""),
                 "description": info.get("description", ""),
                 "tags": info.get("tags", []),
+                # 演播者（第 53 期）：扫描期自音频标签解析，列表形态与 tags 同构
+                "narrators": info.get("narrators", []),
                 # 固定版式（pre-paginated）：阅读器据此**不套用重排偏好、不改页宽**（见 _fixed_layout_of）；
                 # 非 EPUB 恒 false（本项目不解析它们的内容）
                 "fixed_layout": bool(info.get("fixed_layout")),

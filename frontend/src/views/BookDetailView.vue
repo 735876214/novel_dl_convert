@@ -104,6 +104,9 @@ const versionRows = computed<Array<{ k: string; v: string; hint?: string }>>(() 
   rows.push({ k: '出版社', v: b.publisher || '未知' })
   rows.push({ k: '语言', v: b.language || '未知' })
   rows.push({ k: 'ISBN', v: b.isbn || '未知' })
+  if (Array.isArray(b.narrators) && b.narrators.length) {
+    rows.push({ k: '演播', v: b.narrators.join('、') })
+  }
   if (b.pages && b.pages > 0) {
     const src =
       b.pages_source === 'archive'

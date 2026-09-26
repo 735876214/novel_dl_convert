@@ -91,9 +91,20 @@ def test_缺字段时输出空串(named_books):
 
 def test_占位符清单与前端一致(named_books):  # noqa: ARG001 —— 仅借用隔离目录
     """`PATTERN_FIELDS` 是唯一真值源，前端提示表必须与它逐字一致。"""
-    assert len(fileops.PATTERN_FIELDS) == 9
-    for token in ("{series_index}", "{year}", "{publisher}", "{language}"):
+    assert len(fileops.PATTERN_FIELDS) == 10  # 第 53 期新增 {narrators}
+    for token in ("{series_index}", "{year}", "{publisher}", "{language}", "{narrators}"):
         assert token in fileops.PATTERN_FIELDS
+
+
+def test_narrators多值用逗号连接(named_books):  # noqa: ARG001 —— 仅借用隔离目录
+    """第 53 期：``{narrators}`` 多值列表用「, 」连接；空列表 → 空串（不残留字面量）。"""
+    b = {"title": "x", "narrators": ["张三", "李四"], "author": "某",
+         "series": "", "series_index": "", "index": "01", "year": "",
+         "publisher": "", "language": "", "ext": "m4b"}
+    assert fileops.fill_pattern("{narrators}", b) == "张三, 李四"
+    assert fileops.fill_pattern("{narrators}", {**b, "narrators": []}) == ""
+    assert fileops.fill_pattern("{narrators} - {title}", {**b, "narrators": ["A"]}) == "A - x"
+
 
     # ⚠️ 先切到 `= [` 再切 `]`：类型注解 `{ token: string; desc: string }[]` 里也有 `]`，
     # 直接按 `]` 切会切在注解上，抓出空清单（这个测试自身踩过一次）。

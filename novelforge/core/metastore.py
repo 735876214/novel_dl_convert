@@ -18,6 +18,8 @@ def _opf_value(book: dict, field: str):
     （注意 ``date`` 在书目里叫 ``year``）。"""
     if field == "tags":
         return list(book.get("tags") or [])
+    if field == "narrators":
+        return list(book.get("narrators") or [])
     if field == "date":
         return str(book.get("year") or "").strip()
     return str(book.get(field) or "").strip()

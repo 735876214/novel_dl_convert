@@ -9,13 +9,15 @@
 
 两处与上游的**刻意差异**（都写在这里，免得下一个人以为是漏做）：
 
-1. **特征向量不用语义 embedding，也用不上简介**。上游那套向量是元数据特征（不是语义
-   模型），本项目就按「手上真有的短字段」建**词元集合**：作者 / 题材 / 系列 / 出版社 /
-   语言 / 出版年十年段 / 书名词元（中文取二元组，英文取 ≥2 字母的词）。
-   **简介刻意不进向量**：它是抓来的自由文本，同一本书在不同源的简介几乎不重合，
-   塞进去只会让余弦被「谁的字数多」带偏。
-   用集合而非词频（TF）也是同一个理由：书目的元数据太短，词频只会放大
-   「同一句写了两遍」这种噪音。
+1. **余弦一路用语义向量（第 54 期起），词元集合是回落路径**。``core/embed.py`` 提供
+   离线向量后端：默认 LSA（TF-IDF + SVD，纯 numpy、零下载），可选本地 transformer
+   模型（用户自备文件，运行时不联网）。两书**都有**当前模型的向量 ⇒ 余弦取向量；
+   任一侧缺（新书未补算 / 语料过小 / 换了模型旧 tag 失效）⇒ 该一对回落到下面的
+   词元集合余弦 —— 半套向量也比没有强，但绝不因缺向量让推荐整个失效。
+   **简介进向量语料**（它是「语义」的主要来源；集合余弦怕「谁的字数多」，TF-IDF +
+   L2 归一下不存在这个偏差，取舍细节记在 embed.py）。词元集合本身只吃短字段：
+   作者 / 题材 / 系列 / 出版社 / 语言 / 出版年十年段 / 书名词元（中文取二元组，
+   英文取 ≥2 字母的词）。
 2. **保留一道「实质重合」门**：余弦能靠「同语言 + 同出版社」这种弱重合冲到 0.3–0.4，
    那种推荐没有信息量（原有注释那句话仍然成立：**「毫无关系」的推荐只会消耗界面信任**）。
    所以候选必须**至少有作者 / 题材 / 系列之一重合**，在这批候选里再按五路加权排序 ——
@@ -120,10 +122,14 @@ def _rating_closeness(a: "float | None", b: "float | None") -> "float | None":
     return max(0.0, 1.0 - abs(a - b) / _RATING_MAX)
 
 
-def similar_books(book_id: str, books: list, limit: int = DEFAULT_LIMIT) -> list:
+def similar_books(book_id: str, books: list, limit: int = DEFAULT_LIMIT,
+                  vectors: "dict | None" = None) -> list:
     """返回与 ``book_id`` 最相似的若干本（不含自身）。
 
-    ``books`` 传 /api/books 同构的书目（含 author/tags/series/publisher/language/year/rating）。
+    ``books`` 传 /api/books 同构的书目（含 author/tags/series/publisher/language/year/rating，
+    ``description`` 有则更好 —— 它进向量语料）。
+    ``vectors`` 可选，``{book_id: float32 数组}``（``embed.load_vectors`` 已按当前模型
+    tag 过滤解码）；不给或缺个别本的向量 ⇒ 那一对回落词元集合余弦。
     只返回**至少一条实质重合**（同作者 / 共同题材 / 同系列）的书 ——
     「毫无关系」的推荐只会消耗界面信任。
 
@@ -137,7 +143,11 @@ def similar_books(book_id: str, books: list, limit: int = DEFAULT_LIMIT) -> list
     # 0 / None = 「没给条数」⇒ 用默认；给了就夹在 1..MAX_LIMIT 之间（负数也算没给够）
     limit = max(1, min(int(limit) if limit else DEFAULT_LIMIT, MAX_LIMIT))
 
-    my_vec = _vector(me)
+    # 延迟导入：embed 顶层要复用本模块的词元判据（_text_tokens），顶层互引成环
+    from . import embed
+
+    my_bag = _vector(me)
+    my_vec = vectors.get(book_id) if vectors else None
     my_tags = {_norm(t) for t in (me.get("tags") or []) if _norm(t)}
     my_author = _norm(me.get("author"))
     my_series = _norm(me.get("series"))
@@ -155,7 +165,13 @@ def similar_books(book_id: str, books: list, limit: int = DEFAULT_LIMIT) -> list
         if not (same_author or shared or same_series):
             continue
 
-        cos = _cosine(my_vec, _vector(b))
+        their_vec = vectors.get(b["id"]) if vectors else None
+        if my_vec is not None and their_vec is not None:
+            cos = embed.vec_cosine(my_vec, their_vec)
+            semantic = True
+        else:
+            cos = _cosine(my_bag, _vector(b))
+            semantic = False
         tag_sim = _jaccard(my_tags, their_tags)
         rating_sim = _rating_closeness(my_rating, _rating(b))
         parts = [(W_COSINE, cos), (W_AUTHOR, 1.0 if same_author else 0.0),
@@ -173,7 +189,8 @@ def similar_books(book_id: str, books: list, limit: int = DEFAULT_LIMIT) -> list
         if same_series:
             reasons.append("同系列")
         if cos >= MIN_COSINE_REASON:
-            reasons.append(f"元数据重合 {round(cos * 100)}%")
+            reasons.append(("语义相似 %d%%" if semantic else "元数据重合 %d%%")
+                           % round(cos * 100))
         if rating_sim is not None and rating_sim >= 0.8:
             reasons.append("评分接近")
 

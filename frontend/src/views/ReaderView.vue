@@ -379,7 +379,7 @@ function localFraction(): number {
 
 // ---------------- 章节加载 ----------------
 
-async function loadChapter(p: number, restore?: number): Promise<void> {
+async function loadChapter(p: number, restore?: number, restoreOffset?: number): Promise<void> {
   if (!total.value) return
   p = Math.min(Math.max(0, p), total.value - 1)
   pos.value = p
@@ -396,7 +396,15 @@ async function loadChapter(p: number, restore?: number): Promise<void> {
   applyHighlights()
   const el = scrollRef.value
   if (el) {
-    el.scrollTop = restore !== undefined ? Math.max(0, restore * (el.scrollHeight - el.clientHeight)) : 0
+    // 第 54 期：优先用精确偏移（CFI 反解的章内字符偏移，与保存时同一 textContent
+    // 坐标系）；换算不了（正文未挂载 / 长度为 0）再回落「全书百分比反推」的章内
+    // 比例 —— 后者与改造前行为逐字一致。
+    let frac = restore
+    if (restoreOffset !== undefined) {
+      const len = contentRef.value?.textContent?.length ?? 0
+      if (len > 0) frac = Math.min(1, Math.max(0, restoreOffset / len))
+    }
+    el.scrollTop = frac !== undefined ? Math.max(0, frac * (el.scrollHeight - el.clientHeight)) : 0
   }
   local.value = localFraction()
 }
@@ -430,7 +438,11 @@ function onScroll(): void {
 async function saveProgress(): Promise<void> {
   if (!book.value || !total.value) return
   try {
-    await api.setProgress(bookId.value, currentIndex.value, overallPercent.value)
+    // 第 54 期：EPUB 附带章内字符偏移（textContent 坐标），服务端据此生成 CFI；
+    // 算不出（正文未挂载）就不带 —— 进度本身照常保存，恢复侧回落百分比。
+    const len = contentRef.value?.textContent?.length ?? 0
+    const offset = len > 0 ? Math.round(local.value * len) : undefined
+    await api.setProgress(bookId.value, currentIndex.value, overallPercent.value, offset)
   } catch {
     /* 离线或未登录时静默 */
   }
@@ -873,12 +885,15 @@ async function load(): Promise<void> {
 
   let start = 0
   let restore: number | undefined
+  let restoreOffset: number | undefined
   try {
     const p = await api.getProgress(bookId.value)
     const t = flat.value.findIndex((f) => f.index === p.locator)
     if (t >= 0) {
       start = t
       restore = Math.min(1, Math.max(0, (p.percent / 100) * total.value - t))
+      // 第 54 期：有 CFI 反解出的精确偏移就用它（loadChapter 内换算滚动位置）
+      if (typeof p.offset === 'number' && p.offset >= 0) restoreOffset = p.offset
     }
   } catch {
     /* ignore */
@@ -893,7 +908,7 @@ async function load(): Promise<void> {
       return
     }
   }
-  await loadChapter(start, restore)
+  await loadChapter(start, restore, restoreOffset)
 }
 
 /**

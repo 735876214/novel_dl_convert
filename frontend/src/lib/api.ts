@@ -588,6 +588,8 @@ export interface BookCard {
   c1: string
   c2: string
   tags: string[]
+  /** 演播者（第 53 期）；有声书才可能有值，列表形态与 tags 同构 */
+  narrators: string[]
   year: string
   publisher: string
   isbn: string
@@ -670,6 +672,10 @@ export interface ChapterContent {
 export interface ProgressState {
   locator: number
   percent: number
+  /** 精确阅读位置（第 54 期）：EPUB CFI，空串 = 没有（回落「章 + 全书百分比」） */
+  cfi?: string
+  /** 服务端把 CFI 反解出的章内字符偏移（textContent 坐标）；仅在能反解时返回 */
+  offset?: number
 }
 
 export interface Annotation {
@@ -1406,6 +1412,8 @@ export interface BookMetadataFields {
   isbn: string
   /** 题材；后端写入时会**去重且保序** */
   tags: string[]
+  /** 演播者（第 53 期）；多值列表，写入时去重且保序 */
+  narrators: string[]
 }
 
 /** 单字段的分层状态（编辑器渲染「已本地修改」徽标 / 恢复在线按钮用） */
@@ -3082,11 +3090,15 @@ export const api = {
   getProgress: (id: string) =>
     request<ProgressState>(`/api/books/${encodeURIComponent(id)}/progress`),
 
-  setProgress: (id: string, locator: number, percent: number) =>
+  setProgress: (id: string, locator: number, percent: number, offset?: number) =>
     request<{ ok: boolean }>(`/api/books/${encodeURIComponent(id)}/progress`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ locator, percent }),
+      // offset（第 54 期）：章内字符偏移（textContent 坐标），服务端据此生成 CFI；
+      // 不给就是旧行为（恢复回落「章 + 全书百分比」）
+      body: JSON.stringify(
+        offset === undefined ? { locator, percent } : { locator, percent, offset },
+      ),
     }),
 
   listAnnotations: (id: string) =>

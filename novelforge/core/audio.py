@@ -42,6 +42,18 @@ def _audio_files(d: pathlib.Path) -> list:
             if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in AUDIO_EXTS]
 
 
+def first_audio_file(entry) -> "pathlib.Path | None":
+    """取「代表文件」用于标签解析（第 53 期）：单文件形态即自身；音频目录取自然序首轨；
+    非音频 / 无音频文件返回 ``None``。"""
+    p = pathlib.Path(entry)
+    if p.is_file() and p.suffix.lower() in AUDIO_EXTS:
+        return p
+    if p.is_dir():
+        fs = _audio_files(p)
+        return fs[0] if fs else None
+    return None
+
+
 def is_audio_dir(path) -> bool:
     """目录内直接包含至少一个音频文件 → 视作一本有声书。
 

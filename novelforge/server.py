@@ -11,6 +11,7 @@ import mimetypes
 import pathlib
 import re
 import shutil
+import threading
 import time
 import uuid
 import zipfile
@@ -27,8 +28,8 @@ from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, ebook_convert, achievements, activity, recommend,
                    fonts, comics, audio, opds, komga, koreader, integrations, sync,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
-                   authors as authors_mod, migrate, library_rules, features, series_meta,
-                   lib_settings, browse_counts, customfields)
+                   authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
+                   lib_settings, browse_counts, customfields, embed, epub_cfi)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import store
@@ -1701,7 +1702,18 @@ def api_book_chapter(bid: str, index: int):
 @app.get("/api/books/{bid}/progress")
 def api_get_progress(bid: str):
     p = db.get_progress(bid)
-    return p or {"locator": 0, "percent": 0}
+    if not p:
+        return {"locator": 0, "percent": 0, "cfi": ""}
+    out = {"locator": p["locator"], "percent": p["percent"], "cfi": p.get("cfi") or ""}
+    if out["cfi"]:
+        # 附带把 CFI 反解成章内字符偏移（与保存侧同一坐标系）：前端拿到 offset
+        # 直接换滚动位置，不需要在 JS 里再实现一遍 CFI 解析。
+        b = library.by_id(bid)
+        if b and (b.get("format") or "").upper() == "EPUB":
+            pos = epub_cfi.position_from_cfi(library.root_of(b) / b["name"], out["cfi"])
+            if pos:
+                out["offset"] = int(pos[1])
+    return out
 
 
 @app.put("/api/books/{bid}/progress")
@@ -1711,7 +1723,23 @@ def api_set_progress(bid: str, payload: dict = Body(...)):
         percent = float(payload.get("percent", 0.0))
     except (TypeError, ValueError):
         raise HTTPException(400, "locator/percent 必须为数字")
-    db.set_progress(bid, locator, percent)
+    # 第 54 期：EPUB 可带「章内字符偏移」（前端 textContent 坐标）⇒ 服务端生成 CFI
+    # 落库 —— CFI 格式真值源在 core/epub_cfi.py，前端不自己拼。生成不了（坏书 /
+    # 非 EPUB / spine 越界）就存空串：恢复侧回落「章 + 全书百分比」，
+    # 保存进度本身绝不能因 CFI 失败。
+    cfi = ""
+    offset = payload.get("offset")
+    if offset is not None and locator >= 0:
+        try:
+            offset = int(offset)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "offset 必须为整数")
+        if offset < 0:
+            raise HTTPException(400, "offset 必须 ≥ 0")
+        b = library.by_id(bid)
+        if b and (b.get("format") or "").upper() == "EPUB":
+            cfi = epub_cfi.cfi_for_position(library.root_of(b) / b["name"], locator, offset)
+    db.set_progress(bid, locator, percent, cfi)
     return {"ok": True}
 
 
@@ -1822,17 +1850,81 @@ def api_set_review(bid: str, request: Request, payload: dict = Body(...)):
     return {"ok": True, **db.get_review(bid)}
 
 
+# ---------------- 语义向量（第 54 期）----------------
+# book_embeddings 的生命周期：写只发生在 recompute（手动端点 / 后台自愈），
+# 读只发生在 /similar（embed.load_vectors 按 tag 过滤 + 解码）。
+_EMBED_REFRESHING = threading.Event()
+_EMBED_LAST_RUN = 0.0
+#: 自愈触发的最小间隔（秒）。向量是缓存，缺几本不影响可用性（逐对回落词袋），
+#: 不值得为它频繁做 SVD；手动 recompute 端点不受此限。
+_EMBED_MIN_INTERVAL = 600.0
+
+
+def _schedule_embed_refresh() -> None:
+    """后台线程跑一次全量重算（fire-and-forget）：新书入库 / 换模型后的自愈路径。
+
+    在跑或距上次自愈不足间隔 ⇒ 跳过 —— 调用方（/similar）是热路径，
+    这里绝不允许排队多个 SVD 或阻塞请求。
+    """
+    global _EMBED_LAST_RUN
+    if _EMBED_REFRESHING.is_set():
+        return
+    if time.time() - _EMBED_LAST_RUN < _EMBED_MIN_INTERVAL:
+        return
+    _EMBED_REFRESHING.set()
+    _EMBED_LAST_RUN = time.time()
+
+    def _run():
+        try:
+            embed.refresh()
+        except Exception:  # noqa: BLE001 —— 自愈是旁路，失败只留日志
+            logging.getLogger("novelforge").exception("语义向量后台重算失败")
+        finally:
+            _EMBED_REFRESHING.clear()
+
+    threading.Thread(target=_run, name="embed-refresh", daemon=True).start()
+
+
+def wait_embed_refresh(timeout: float = 5.0) -> bool:
+    """等后台语义向量重算结束：结束 / 没在跑 ⇒ True，超时 ⇒ False。
+
+    供 ``tests/conftest.py::_quiesce_background`` 用 —— 与 watcher / scrape 同一条
+    「测试不养旁路线程」的纪律：夹具必须在 ``db.close()`` 之前等它退出，
+    否则线程会攥着旧连接去查下一个用例的库。
+    """
+    return not _EMBED_REFRESHING.is_set() or _EMBED_REFRESHING.wait(timeout)
+
+
+@app.post("/api/embeddings/recompute")
+async def api_embeddings_recompute():
+    """全量重算语义向量并落 ``book_embeddings`` 表。
+
+    手动触发口（新书 / 元数据大改 / 换模型后）；``/similar`` 也有自愈式补算
+    （节流见 :func:`_schedule_embed_refresh`）。重算期间旧向量继续可用 ——
+    ``set_embeddings`` 一次事务覆写，不存在「删了旧的、没写新的」空档。
+    """
+    return {"ok": True, **(await asyncio.to_thread(embed.refresh))}
+
+
 @app.get("/api/books/{bid}/similar")
 def api_similar(bid: str, limit: int = Query(6, ge=1, le=25)):
-    """相似书：五路加权打分（第 35 期），纯派生、不落库、不额外查库。
+    """相似书：五路加权打分（第 35 期），纯派生、不落库。
 
     打分与「该不该出现」的门槛都在 ``core/recommend.py``：至少要有一条实质重合
     （同作者 / 共同题材 / 同系列），否则不返回 —— 毫无关系的推荐只会消耗界面的信任。
+    第 54 期起余弦一路优先取语义向量（``book_embeddings``，当前模型 tag），
+    缺向量的一对回落词袋，接口出参结构不变 —— 前端零改动。
 
     ``limit`` 默认 6、**上限 25**（第 35 期对齐上游）：详情页先显示 6 条，
     点「查看全部」再按 25 要一次。
     """
-    return {"items": recommend.similar_books(bid, library.books(), limit)}
+    books = library.books()
+    vectors = embed.load_vectors()
+    items = recommend.similar_books(bid, books, limit, vectors=vectors)
+    # 自愈：有书没向量（新书 / 语料首次达 MIN_BOOKS / 换了模型）⇒ 后台补一轮
+    if len(vectors) < len(books):
+        _schedule_embed_refresh()
+    return {"items": items}
 
 
 # ---------------- Reading Log（阅读记录）----------------
@@ -2383,6 +2475,72 @@ def api_clear_author_photo(name: str):
     if not library.author_books(name):
         raise HTTPException(404, "作者不存在")
     return {"ok": True, **authors_mod.clear_photo_override(name)}
+
+
+# ---------------- 演播者（浏览 / 详情 / 排序名，第 53 期，镜像 authors）----------------
+# 能力矩阵 hasPhoto=— 且本项目作者侧未实现真·软删，故无头像 / 软删端点；
+# 也不新增前端独立浏览维度（第 34 期已明确不做），仅保留排序名管理能力。
+
+@app.get("/api/narrators")
+def api_narrators():
+    items = library.narrators_list()
+    rows = db.all_narrators()
+    out = []
+    for n in items:
+        row = rows.get(n["name"]) or {}
+        stamps = [b.get("mtime") or 0 for b in n["books"]]
+        out.append({
+            "name": n["name"],
+            "count": n["count"],
+            "covers": [
+                {"id": b["id"], "title": b["title"], "c1": b["c1"], "c2": b["c2"],
+                 "has_cover": b.get("has_cover", False)}
+                for b in n["books"][:4]
+            ],
+            # 排序名（本地覆盖 > 在线；空串 = 没设，前端排序时回退到 name）。
+            # 复用 narrators.sort_name_of 与详情页同一个口径。
+            "sort_name": narrators_mod.sort_name_of(row),
+            "added_ts": min(stamps) if stamps else 0,
+        })
+    return {"items": out, "total": len(items)}
+
+
+@app.get("/api/narrators/{name}")
+def api_narrator_detail(name: str):
+    bs = library.narrator_books(name)
+    if not bs:
+        raise HTTPException(404, "演播者不存在")
+    info = narrators_mod.effective(name)
+    stamps = [b.get("mtime") or 0 for b in bs]
+    return {
+        "name": name,
+        "count": len(bs),
+        "books": bs,
+        "sort_name": info["sort_name"],
+        "sort_name_overridden": info["sort_name_overridden"],
+        "added_ts": min(stamps) if stamps else 0,
+    }
+
+
+@app.post("/api/narrators/sort-name/backfill")
+def api_backfill_narrator_sort_names():
+    """为还没有派生排序键的演播者补 ``sort_name``（第 53 期，镜像作者）。
+
+    ⚠️ 只写派生态列 ``sort_name``，**绝不动** ``sort_name_local``（用户覆盖）—— 写后者等于
+    冒充用户改过、界面会误显示「已覆盖」。返回 ``{ok, total, filled, skipped, details}``。
+    """
+    return {"ok": True, **narrators_mod.backfill_sort_names()}
+
+
+@app.post("/api/narrators/{name}/sort-name")
+def api_set_narrator_sort_name(name: str, payload: dict = Body(...)):
+    """设置演播者排序名的本地覆盖（空串 = 撤销覆盖，排序回退到在线排序名 / 显示名）。"""
+    if not library.narrator_books(name):
+        raise HTTPException(404, "演播者不存在")
+    value = (payload or {}).get("sort_name")
+    if value is None:
+        raise HTTPException(400, "缺少 sort_name 字段")
+    return {"ok": True, **narrators_mod.set_sort_name(name, str(value))}
 
 
 # ---------------- 账号资料（第 25 期）----------------
@@ -3176,6 +3334,8 @@ def api_scan_library(lid: str):
     except Exception as e:  # noqa: BLE001 —— 刮削是旁路，绝不因它让扫描报错
         logging.getLogger("novelforge").exception("扫描后入队刮削失败：%s", e)
         queued = 0
+    # 扫描 = 书集可能变了 ⇒ 后台补算一轮语义向量（有单飞闸 + 节流，扫描不受它拖慢）
+    _schedule_embed_refresh()
     return {"ok": True, "id": lid, "count": len(bs), "scrape_queued": queued}
 
 

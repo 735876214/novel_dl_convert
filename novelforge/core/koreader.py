@@ -36,6 +36,8 @@ import hashlib
 import pathlib
 import re
 
+from . import epub_cfi
+
 #: XPointer 里的 DocFragment 序号（KOReader 对 EPUB 的分片标识）
 _FRAGMENT = re.compile(r"DocFragment\[(\d+)\]")
 
@@ -85,14 +87,22 @@ def to_nf(payload: dict) -> tuple:
 
     locator 优先取 XPointer 的章节序号；PDF/漫画的 ``progress`` 是页码字符串，
     此时退回用「页码 - 1」。percent 一律用 ``percentage``（更权威）。
+
+    第 54 期起也认 ``epubcfi(...)``：取 spine 步当章序号即可对上章。章内偏移
+    **不换算、不落库** —— crengine 的字符坐标与源 DOM 的 textContent 不是同一
+    坐标系，硬换是假精度；章内准确性仍由 ``percentage`` 兜底。
     """
-    locator = xpointer_chapter(payload.get("progress"))
-    if locator < 0:
-        raw = str(payload.get("progress") or "").strip()
-        if raw.isdigit():
-            locator = max(0, int(raw) - 1)
-        else:
-            locator = 0
+    cfi_loc = epub_cfi.locator_from_cfi(payload.get("progress"))
+    if cfi_loc >= 0:
+        locator = cfi_loc
+    else:
+        locator = xpointer_chapter(payload.get("progress"))
+        if locator < 0:
+            raw = str(payload.get("progress") or "").strip()
+            if raw.isdigit():
+                locator = max(0, int(raw) - 1)
+            else:
+                locator = 0
     try:
         percent = float(payload.get("percentage") or 0) * 100.0
     except (TypeError, ValueError):
@@ -105,6 +115,11 @@ def from_nf(book: dict, prog: dict, device: str = "") -> dict:
     """本项目的进度 → KOReader 的 GET 响应体。
 
     ``timestamp`` 必须给：KOReader 用它做新旧比较，缺了会退回「百分比更大者胜」的旧逻辑。
+
+    ⚠️ ``progress`` 刻意维持**章首 XPointer**，即使库里有更精确的 CFI（progress.cfi）
+    也不下发：KOReader 的 kosync 只按 XPointer 定位 EPUB，真 CFI 它解析不了，
+    反而不如「章首 + 精确 percentage」可靠。CFI 的精确性收益落在本项目自己的
+    阅读器（/api/books/{bid}/progress 的 cfi/offset 字段）。
     """
     percent = float((prog or {}).get("percent") or 0)
     locator = int((prog or {}).get("locator") or 0)
