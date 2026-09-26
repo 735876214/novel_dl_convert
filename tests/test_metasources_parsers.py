@@ -53,7 +53,8 @@ def test_itunes_解析并放大封面(monkeypatch):
 
     assert e["title"] == "Dune" and e["author"] == "Frank Herbert"
     assert e["year"] == "1965" and e["tags"] == ["科幻", "冒险"]
-    assert e["cover_url"] == "https://x/600x600bb.jpg", "封面应换成大图尺寸"
+    # 默认分辨率 = high（1000×1000）；standard 的取值在下面的专门用例里验
+    assert e["cover_url"] == "https://x/1000x1000bb.jpg", "封面应换成大图尺寸"
 
 
 def test_audnexus_解析对象数组作者(monkeypatch):
@@ -235,6 +236,68 @@ def test_异形响应不让单源炸整轮(monkeypatch):
     for sid in ("itunes", "ranobedb", "amazon"):
         r = m.search(sid, "x", "y", 5, {"api_key": "k"})
         assert r["ok"] is True, (sid, r)
+
+
+# ---------------- 行内抓取参数**真的被用上**（不是摆设）----------------
+
+def test_amazon_配了Cookie才带Cookie头(monkeypatch):
+    seen: list = []
+
+    def spy(url, params=None, headers=None, hints=None):
+        seen.append(headers or {})
+        return '<div data-asin="B000000001"><span class="a-size-medium a-color-base a-text-normal">三体</span></div>'
+
+    monkeypatch.setattr(m, "_get_text", spy)
+
+    m.search("amazon", "三体", "", 5, {"cookie": "session-id=1; ubid-main=2"})
+    assert seen[0].get("Cookie") == "session-id=1; ubid-main=2", seen[0]
+
+    seen.clear()
+    m.search("amazon", "三体", "", 5, {})
+    assert "Cookie" not in seen[0], "没配就别带空 Cookie 头（更容易被拦）"
+
+
+def test_itunes_封面尺寸按配置(monkeypatch):
+    _patch(monkeypatch, json_router={"itunes": {"results": [
+        {"trackName": "Dune", "artworkUrl100": "https://x/100x100bb.jpg"}]}})
+
+    hi = _one("itunes", opts={"resolution": "high"})[0]
+    std = _one("itunes", opts={"resolution": "standard"})[0]
+
+    assert hi["cover_url"] == "https://x/1000x1000bb.jpg"
+    assert std["cover_url"] == "https://x/100x100bb.jpg"
+
+
+def test_kobo_区域与语言进URL(monkeypatch):
+    seen: list = []
+
+    def spy(url, params=None, headers=None, hints=None):
+        seen.append(url)
+        return ""
+
+    monkeypatch.setattr(m, "_get_text", spy)
+
+    m.search("kobo", "Dune", "", 5, {"region": "uk", "language": "en"})
+    m.search("kobo", "Dune", "", 5, {})
+
+    assert seen[0] == "https://www.kobo.com/uk/en/search", seen[0]
+    assert seen[1] == "https://www.kobo.com/us/en/search", "缺配置要回落 us/en"
+
+
+def test_audible_地区决定分站(monkeypatch):
+    seen: list = []
+
+    def spy(url, params=None, headers=None, method="GET", data=None, hints=None):
+        seen.append(url)
+        return {"products": []}
+
+    monkeypatch.setattr(m, "_get_json", spy)
+
+    m.search("audible", "Dune", "", 5, {"region": "uk"})
+    m.search("audible", "Dune", "", 5, {"region": "未知区域"})
+
+    assert seen[0].startswith("https://api.audible.co.uk/"), seen[0]
+    assert seen[1].startswith("https://api.audible.com/"), "没见过的地区回落美站"
 
 
 def test_两个解析小工具行为():

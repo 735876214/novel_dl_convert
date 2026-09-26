@@ -6,7 +6,8 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import MetadataScoreCard from '@/components/MetadataScoreCard.vue'
-import { api, type CustomFieldDef, type MetadataPlanItem, type MetadataProvider } from '@/lib/api'
+import { api, type CustomFieldDef, type MetadataConfigField, type MetadataPlanItem,
+         type MetadataProvider } from '@/lib/api'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
@@ -112,12 +113,14 @@ const provQuery = ref('')
 // 测试用**输入框里的当前值**（后端 `keys` 覆盖、不落盘）；只有「保存」才写进配置，
 // 所以「改一下试试」不会污染已保存的凭据，也不会为了测试先保存一次。
 const openConfig = ref<Set<string>>(new Set())
-/** 凭据草稿：**只有用户改过才发** —— 没改就沿用已保存值，绝不把掩码当密钥写回去 */
-const keyDraft = ref<Record<string, string>>({})
+/** 草稿：键 = `${源 id}.${配置键名}` —— **只有用户改过才发**（没改就沿用已保存值，
+ *  绝不把掩码当密钥写回去；空串也算「改过」= 本次按清空 / 回落默认处理） */
+const draft = ref<Record<string, string>>({})
 const rowBusy = ref<Record<string, boolean>>({})
 
+/** 该行有可配置项才显示「配置」（项由注册表 `config_fields` 声明） */
 function hasConfigSection(p: MetadataProvider): boolean {
-  return !!p.key_field
+  return (p.config_fields?.length ?? 0) > 0
 }
 function toggleConfig(id: string): void {
   const next = new Set(openConfig.value)
@@ -125,11 +128,31 @@ function toggleConfig(id: string): void {
   else next.add(id)
   openConfig.value = next
 }
-function keyDraftOf(id: string): string {
-  return keyDraft.value[id] ?? ''
+function fieldKey(sid: string, key: string): string {
+  return `${sid}.${key}`
 }
-function setKeyDraft(id: string, v: string): void {
-  keyDraft.value = { ...keyDraft.value, [id]: v }
+function setDraft(sid: string, key: string, v: string): void {
+  draft.value = { ...draft.value, [fieldKey(sid, key)]: v }
+  // 同时写进**页面级配置草稿**：这样页面自己的「保存」也能把行内改动一起落库。
+  // （否则行内改动只存在于组件局部，用户点页面的「保存」会以为存了、其实没存。）
+  // 静默态（用户没动过的 secret）不会被写进来 —— 它仍是后端的掩码值，而掩码值
+  // 在后端是「不修改」语义（见 server 的 _KEY_MASK 注释），所以不会被覆盖成掩码字符串。
+  setVal(`metadata_fetch.${key}`, v)
+}
+/** 控件当前值：改过 → 草稿；没改 → select 显示已保存值、secret 留空（占位符提示已设置） */
+function fieldValue(p: MetadataProvider, f: MetadataConfigField): string {
+  const d = draft.value[fieldKey(p.id, f.key)]
+  if (d !== undefined) return d
+  return f.type === 'select' ? String(val(`metadata_fetch.${f.key}`) || '') : ''
+}
+/** 该行**被改过**的字段（只有这些会被发送/保存） */
+function rowDrafts(p: MetadataProvider): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const f of p.config_fields ?? []) {
+    const k = fieldKey(p.id, f.key)
+    if (k in draft.value) out[f.key] = draft.value[k]
+  }
+  return out
 }
 function rowIsBusy(id: string): boolean {
   return rowBusy.value[id] === true
@@ -138,13 +161,13 @@ function setRowBusy(id: string, v: boolean): void {
   rowBusy.value = { ...rowBusy.value, [id]: v }
 }
 
-/** 行内「测试」：把输入框里的当前凭据带给后端试一次（不改配置、不落盘） */
+/** 行内「测试」：把输入框里的当前值带给后端试一次（不改配置、不落盘） */
 async function testRow(p: MetadataProvider): Promise<void> {
   setRowBusy(p.id, true)
   try {
-    const draft = keyDraft.value[p.id]
-    const keys = draft ? { [p.id]: draft } : undefined
-    probes.value = { ...probes.value, ...(await api.metadataProbe([p.id], keys)).items }
+    const drafts = rowDrafts(p)
+    const configs = Object.keys(drafts).length ? { [p.id]: drafts } : undefined
+    probes.value = { ...probes.value, ...(await api.metadataProbe([p.id], undefined, configs)).items }
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '测试失败')
   } finally {
@@ -152,25 +175,30 @@ async function testRow(p: MetadataProvider): Promise<void> {
   }
 }
 
-/** 该行凭据的「清除」：先清空草稿再保存（后端语义：空串 = 删除） */
+/** 「重置」该行：所有字段置空并保存（secret = 删除；select = 回落 fetcher 默认） */
 async function clearRow(p: MetadataProvider): Promise<void> {
-  setKeyDraft(p.id, '')
+  for (const f of p.config_fields ?? []) setDraft(p.id, f.key, '')
   await saveRow(p)
 }
 
-/** 保存该行凭据（空串 = 清除，与后端「清空即删除」一致）；保存后重拉目录刷新状态 */
+/** 保存该行被改过的字段（空串 = 清除 / 回落默认）；保存后重拉目录刷新状态 */
 async function saveRow(p: MetadataProvider): Promise<void> {
-  if (!p.key_field) return
-  const clearing = !keyDraftOf(p.id)
+  const changed = rowDrafts(p)
+  if (!Object.keys(changed).length) {
+    ui.toast('没有改动')
+    return
+  }
   setRowBusy(p.id, true)
   try {
-    setVal(`metadata_fetch.${p.key_field}`, keyDraftOf(p.id))
+    for (const [key, value] of Object.entries(changed)) {
+      setVal(`metadata_fetch.${key}`, value)
+    }
     await saveSection('metadata')
-    const rest = { ...keyDraft.value }
-    delete rest[p.id]                       // 已落库 ⇒ 清草稿，输入框回到「未改」态
-    keyDraft.value = rest
+    const rest = { ...draft.value }
+    for (const key of Object.keys(changed)) delete rest[fieldKey(p.id, key)]
+    draft.value = rest                          // 已落库 ⇒ 清草稿，控件回到「未改」态
     await loadProviders()
-    ui.toast(clearing ? '已清除该来源的凭据' : '已保存')
+    ui.toast('已保存')
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '保存失败')
   } finally {
@@ -678,7 +706,11 @@ watch(() => props.section, () => {
             <span v-else class="w-9 shrink-0 text-center text-[11px] text-muted-foreground">—</span>
           </div>
 
-          <!-- 行内配置面板：凭据输入 + 测试（用当前输入值试，不落盘）+ 保存 / 清除 -->
+          <!--
+            行内配置面板（第 57 期 E 段）：按注册表 `config_fields` 渲染 —— secret 走掩码输入、
+            select 走下拉，于是「凭据」与「抓取参数」都挂在这一家自己身上（上游同款形态）。
+            「测试」用当前输入值试一次、**不落盘**；只有「保存」才写配置。
+          -->
           <div
             v-if="hasConfigSection(p) && openConfig.has(p.id)"
             class="border-t border-border/60 bg-muted/20 px-4 py-3"
@@ -689,38 +721,43 @@ watch(() => props.section, () => {
             >
               ⚠ 该来源需要一个密钥才能启用
             </div>
-            <label class="mb-1 block text-[11px] text-muted-foreground">
-              {{ p.key_label || 'API 密钥' }}
-              <span
-                class="ml-1"
-                :class="p.has_config ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'"
+            <div v-for="f in p.config_fields" :key="f.key" class="mb-2.5 last:mb-0">
+              <label class="mb-1 block text-[11px] text-muted-foreground">
+                {{ f.label }}
+                <span
+                  v-if="f.type === 'secret'"
+                  class="ml-1"
+                  :class="p.has_config ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'"
+                >
+                  {{ p.has_config ? '已设置' : '未设置' }}
+                </span>
+              </label>
+              <select
+                v-if="f.type === 'select'"
+                :value="fieldValue(p, f)"
+                class="w-[220px] rounded-md border border-border bg-muted px-2.5 py-1.5 text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
+                @change="setDraft(p.id, f.key, ($event.target as HTMLSelectElement).value)"
               >
-                {{ p.has_config ? '已设置' : '未设置' }}
-              </span>
-            </label>
-            <input
-              :value="keyDraftOf(p.id)"
-              type="password"
-              :placeholder="p.has_config ? '已设置（留空 = 保持，输入新值可覆盖）' : (p.key_placeholder || '未设置')"
-              class="w-[420px] max-w-full rounded-md border border-border bg-muted px-3 py-1.5 font-mono text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
-              @input="setKeyDraft(p.id, ($event.target as HTMLInputElement).value)"
-            >
-            <div v-if="p.config_hint" class="mt-1 text-[11px] text-muted-foreground">{{ p.config_hint }}</div>
+                <option v-for="o in f.options || []" :key="o.value" :value="o.value">{{ o.label }}</option>
+              </select>
+              <input
+                v-else
+                :value="fieldValue(p, f)"
+                type="password"
+                :placeholder="p.has_config ? '已设置（留空 = 保持，输入新值可覆盖）' : (f.placeholder || '未设置')"
+                class="w-[420px] max-w-full rounded-md border border-border bg-muted px-3 py-1.5 font-mono text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
+                @input="setDraft(p.id, f.key, ($event.target as HTMLInputElement).value)"
+              >
+              <div v-if="f.hint" class="mt-1 text-[11px] text-muted-foreground">{{ f.hint }}</div>
+            </div>
+            <div v-if="p.config_hint" class="mb-2 text-[11px] text-muted-foreground">{{ p.config_hint }}</div>
             <div class="mt-2 flex flex-wrap items-center gap-2">
               <Button size="sm" :disabled="rowIsBusy(p.id)" @click="testRow(p)">
                 {{ rowIsBusy(p.id) ? '测试中…' : '测试' }}
               </Button>
               <Button size="sm" variant="primary" :disabled="rowIsBusy(p.id)" @click="saveRow(p)">保存</Button>
-              <Button
-                v-if="p.has_config"
-                size="sm"
-                variant="ghost"
-                :disabled="rowIsBusy(p.id)"
-                @click="clearRow(p)"
-              >
-                清除
-              </Button>
-              <span class="text-[11px] text-muted-foreground">测试只按当前输入试一次，不保存任何凭据</span>
+              <Button size="sm" variant="ghost" :disabled="rowIsBusy(p.id)" @click="clearRow(p)">重置</Button>
+              <span class="text-[11px] text-muted-foreground">测试只按当前输入试一次，不保存任何设置</span>
             </div>
           </div>
         </div>

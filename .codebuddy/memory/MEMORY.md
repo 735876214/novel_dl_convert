@@ -115,9 +115,10 @@
 - **出网收口**：14 家只经 `metasources._get_json` / `_get_text` 出网 —— 契约测试 monkeypatch 这两个函数即可离线测全部解析（`tests/test_metasources_parsers.py` 33 项）。失败码统一翻中文（429/401/403 有专门文案）；**单源异常绝不冒泡**（解析器一律 `isinstance` 过滤 + 空响应回落 `[]`）。
 - **密钥三处同步**：`config.DEFAULTS["metadata_fetch"]` + `server.EDITABLE["metadata_fetch"]` + 注册表 `key_field`；回显一律经 `_mask_metadata_fetch`（**按注册表循环掩码** + `has_<键名>`）。`metasources.options_for(mf, sources)` 是唯一的密钥拼装口（metafetch 的 plan/online_candidate 与 series_meta 共用）。缺密钥的家：抓取回明确中文错误、`/api/metadata/probe` **不发外呼**。
 - **启用状态真值源仍是 `metadata_fetch.sources`**（默认只开 2 家：openlibrary + googlebooks；`GET /api/metadata/providers` 只聚合不新开状态）。
-- **凭据挂在对应提供商那一行**（第 57 期 D 段，用户要求对齐上游）：每行「配置 ▾」展开后在该行下方给密钥输入 + 测试/保存/清除，**不再有底部集中密钥区**（同一件事不留两个入口）。输入框标签 / 占位提示由注册表 `key_label` / `key_placeholder` 给。
-  - ⚠️ **行内「测试」必须只读**：把输入框当前（可能未保存）的值经 `POST /api/metadata/probe` 的 `keys` 覆盖传进去，**不落盘** —— 否则只能测到上次保存的旧值，或被迫先保存一次。只有「保存」才 `setVal` + `saveSection('metadata')`；空串 = 清除。
-  - 浏览器验证时注意：页面可能有多个同名「保存」按钮，**必须用面板内 scoped 定位**（曾因此误判「保存无效」）。
+- **凭据/参数挂在对应提供商那一行**（第 57 期 D/E 段，用户要求对齐上游）：每行「配置 ▾」展开后在该行下方给控件 + 测试/保存/重置，**不再有底部集中密钥区**。**注册表 `config_fields` 是唯一真值源**：`{key, opt, label, type: secret|select, options?, placeholder?, hint?}`；`provider_catalog()` 把头一项派生成 `key_field`/`key_label`/`key_placeholder`（前端旧字段名可用），`key_field_of()` 同样派生 —— **不要**再单独写这三个字面量。掩码遍历 `metasources.secret_fields()`（Cookie 也是凭据）。
+  - ⚠️ **行内「测试」必须只读**：把输入框当前（可能未保存）的值经 `POST /api/metadata/probe` 的 `configs`（整行草稿，早期 `keys` 兼容）传进去，**不落盘** —— 否则只能测到上次保存的旧值，或被迫先保存一次。
+  - ⚠️ **行内改动必须同时写进页面级配置草稿**（`setDraft` 里 `setVal`）：否则点页面自己的「保存」不落库，用户会以为存了。静默态 secret 仍是掩码值，后端把掩码当「不修改」语义，安全。
+  - 每个配置项必须**真的被 fetcher 用上**（Amazon Cookie 头 / iTunes 尺寸段 / Kobo URL 两段 / Audible 分站域名），否则就是假交互。
 - **声明式插件市场已取消**（用户拍板，2026-09-26）：不要再提「可经插件市场安装」，也不要有任何市场/插件包代码。zlibrary 专用下载同样不做（盗版分发平台）。
 - 书源侧：**表单化添加**（`SourcesView` 三段式）+ `POST /api/sources/test`（校验 + **不落盘**试搜，写盘唯一入口仍是 `store.add_rule`）；前端必填校验与 `rules.validate_rule` 同口径（另加写盘文件名字符集）。
 - **系列级元数据**（第 57 期 C 段）：`series_meta.FIELDS` = description / publisher / first_year / tags **四个字段都可本地覆盖**；⚠️ **`set_local` 的空串语义 = 清除该字段覆盖**，所以「恢复在线」必须**只提交那一个字段**（顺手带上别的字段会清掉用户的其它覆盖）—— `SeriesMetaPanel.spec.ts` 盯死这条；未覆盖时来源是「成员书聚合」（`_aggregate` 零猜测）或在线，界面要标出来源；「册数」两个概念不可合并（owned_count 实际拥有 / declared_count 外部声明）。改前端面板后**必跑** `npm run test:unit`：面板展示改了不会被测试发现，payload 改了才会。

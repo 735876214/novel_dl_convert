@@ -277,12 +277,27 @@ export interface MetadataProvider {
   /** 行内「配置」区的输入框标签 / 占位提示（注册表给，前端不另写一份） */
   key_label?: string
   key_placeholder?: string
+  /** 行内配置项**列表**（secret 输入 / select 下拉；空 = 该行不显示「配置」） */
+  config_fields?: MetadataConfigField[]
   /** 是否在启用顺序里 */
   active: boolean
   /** 启用时的优先级（1 起；0 = 未启用） */
   order: number
   /** 需要的配置是否已填 */
   has_config: boolean
+}
+
+/** 提供商的一个**行内配置项**（注册表声明：`type=secret` 掩码输入，`select` 下拉） */
+export interface MetadataConfigField {
+  /** `metadata_fetch` 下的配置键名 */
+  key: string
+  /** 传给后端 fetcher 的 opts 键名（缺省 api_key） */
+  opt?: string
+  label: string
+  type: 'secret' | 'select'
+  options?: Array<{ value: string; label: string }>
+  placeholder?: string
+  hint?: string
 }
 
 export interface MetadataProvidersResult {
@@ -3017,16 +3032,27 @@ export const api = {
   /**
    * 源连通性自检（真的外呼；被点的源才测）。
    *
-   * `keys` 是**按源 id 给的临时凭据**（行内「测试」用）：优先于已保存配置，且**不落盘** ——
-   * 否则只能测「上次保存的旧值」，或被迫为了测试先保存一次。
+   * - `keys`：按源 id 给的**主密钥**覆盖（早期接口，保留兼容）；
+   * - `configs`：按源 id 给的**整行配置草稿** `{sid: {字段键: 值}}`（行内「配置」区用）。
+   *
+   * 两者都**优先于已保存配置、且不落盘** —— 否则只能测「上次保存的旧值」，
+   * 或被迫为了测试先保存一次。
    */
-  metadataProbe: (sources?: string[], keys?: Record<string, string>) =>
+  metadataProbe: (
+    sources?: string[],
+    keys?: Record<string, string>,
+    configs?: Record<string, Record<string, string>>,
+  ) =>
     request<{ items: Record<string, { ok: boolean; message: string; ms: number }> }>(
       '/api/metadata/probe',
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(keys && Object.keys(keys).length ? { sources, keys } : { sources }),
+        body: JSON.stringify({
+          sources,
+          ...(keys && Object.keys(keys).length ? { keys } : {}),
+          ...(configs && Object.keys(configs).length ? { configs } : {}),
+        }),
       },
     ),
 

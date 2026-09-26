@@ -11,8 +11,10 @@
 from novelforge import config
 from novelforge.core import metasources
 
-#: 需要密钥的家（注册表 key_field 覆盖的键名）
-_KEY_FIELDS = {"googlebooks_api_key", "hardcover_api_token", "comicvine_api_key", "aladin_ttbkey"}
+#: 注册表声明的**全部**配置键（4 个密钥 + Amazon Cookie + 4 个抓取参数）
+_KEY_FIELDS = {"googlebooks_api_key", "hardcover_api_token", "comicvine_api_key", "aladin_ttbkey",
+               "amazon_cookie", "itunes_cover_resolution", "kobo_region", "kobo_language",
+               "audible_region"}
 #: 页面抓取型（易失效）：站点改版就可能断，前端给「易失效」徽标
 _FRAGILE = {"amazon", "goodreads", "kobo", "audible", "librofm", "lubimyczytac"}
 
@@ -50,19 +52,31 @@ def test_需要密钥与易失效两档标记准确():
     assert {metasources.key_field_of(s) for s in ("openlibrary", "itunes", "ranobedb")} == {""}
 
 
-def test_密钥键名三处登记一致():
-    """注册表 key_field ∪ {googlebooks} = DEFAULTS 的键 ⊂ EDITABLE 允许写 —— 三处必须同步。"""
-    fields = {metasources.key_field_of(s) for s in metasources.SOURCES} - {""}
-    assert fields == _KEY_FIELDS, fields
+def test_配置键三处登记一致():
+    """注册表声明的**所有**配置键 = DEFAULTS 的键 ⊂ EDITABLE 允许写 —— 三处必须同步。
+
+    第 57 期 E 段起不止「四个密钥」：还有 5 个抓取参数（含 Amazon 的 Cookie，
+    它也是 secret、也要掩码）。所以这里按**注册表的全部 config_fields** 比，
+    而不是手写一份键名清单（手写清单正是漏项的来源）。
+    """
+    declared = {f["key"] for s in metasources.SOURCES for f in metasources.config_fields_of(s)}
+
+    assert declared == _KEY_FIELDS, declared ^ _KEY_FIELDS
+    # 掩码集合 = 全部 secret（含 Cookie）；非 secret 的抓取参数不该被掩码
+    assert set(metasources.secret_fields()) == {
+        "googlebooks_api_key", "hardcover_api_token", "comicvine_api_key",
+        "aladin_ttbkey", "amazon_cookie",
+    }
 
     defaults = config.DEFAULTS["metadata_fetch"]
-    for field in _KEY_FIELDS:
+    for field in declared:
         assert field in defaults, f"config.DEFAULTS 缺少 {field}"
-        assert defaults[field] == "", f"{field} 的默认值应当是空串"
+    for field in metasources.secret_fields():
+        assert defaults[field] == "", f"敏感项 {field} 的默认值应当是空串"
 
     from novelforge import server
     editable = server.EDITABLE["metadata_fetch"]
-    assert _KEY_FIELDS <= set(editable), _KEY_FIELDS - set(editable)
+    assert declared <= set(editable), declared - set(editable)
 
 
 def test_默认启用顺序只含已实现的源():
@@ -165,13 +179,46 @@ def test_行内测试用输入框里的凭据且不落盘(client, auth_headers, 
     assert seen == [("hardcover", "saved-token")], seen
 
 
-def test_需要密钥的家都带行内配置文案():
-    """行内「配置」区的标签 / 占位提示由注册表给（前端不另写一份）—— 别漏字段。"""
-    for sid in ("googlebooks", "hardcover", "comicvine", "aladin"):
-        meta = metasources.SOURCES[sid]
+def test_行内配置项由注册表声明_前端文案从它派生():
+    """`config_fields` 是唯一真值源：目录端点把首项派生成 key_label/key_placeholder。
 
-        assert meta.get("key_label"), f"{sid} 缺少 key_label"
-        assert meta.get("key_placeholder"), f"{sid} 缺少 key_placeholder"
+    这样注册表只维护一份声明，前端也不必自己写文案。
+    """
+    catalog = {i["id"]: i for i in metasources.provider_catalog()}
+
+    for sid in ("googlebooks", "hardcover", "comicvine", "aladin", "amazon"):
+        item = catalog[sid]
+
+        assert item["config_fields"], f"{sid} 缺少 config_fields"
+        assert item["key_label"] and item["key_placeholder"], f"{sid} 未派生出文案"
+        assert item["config_fields"][0]["label"] == item["key_label"]
+
+    # 只配抓取参数、没有 secret 的家：仍要有配置项（否则前端不给「配置」按钮）
+    for sid in ("itunes", "kobo", "audible"):
+        fields = metasources.config_fields_of(sid)
+
+        assert fields and all(f["type"] == "select" for f in fields), (sid, fields)
+        assert metasources.key_field_of(sid) == "", f"{sid} 没有密钥字段"
+
+    # 掩码要覆盖所有 secret（含 Amazon 的 Cookie）
+    assert "amazon_cookie" in metasources.secret_fields()
+
+
+def test_options_按配置项拼装且空值不进opts():
+    """`options_for` 只把**非空**值装进 opts —— 缺键与空串行为一致（fetcher 自带默认）。"""
+    mf = {"googlebooks_api_key": "gb", "hardcover_api_token": "",
+          "amazon_cookie": "session-id=1;", "itunes_cover_resolution": "standard",
+          "kobo_region": "uk", "kobo_language": "en", "audible_region": ""}
+
+    opts = metasources.options_for(mf, ["googlebooks", "hardcover", "amazon", "itunes",
+                                        "kobo", "audible", "openlibrary"])
+
+    assert opts["googlebooks"] == {"api_key": "gb"}
+    assert "hardcover" not in opts, "空密钥不该进 opts"
+    assert opts["amazon"] == {"cookie": "session-id=1;"}
+    assert opts["itunes"] == {"resolution": "standard"}
+    assert opts["kobo"] == {"region": "uk", "language": "en"}
+    assert "audible" not in opts and "openlibrary" not in opts
 
 
 def test_配置回显按注册表掩码所有密钥(client, auth_headers, isolated):  # noqa: ARG001

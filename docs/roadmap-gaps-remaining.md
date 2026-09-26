@@ -2151,3 +2151,42 @@ Hardcover 行内给琥珀警告 + 「API 密钥」、Comic Vine / Aladin 同理�
 
 **验证**：后端 `test_metadata_providers` **13 项**全过（11 + 新增 2）；前端 `type-check` /
 `test:unit`（82）/ `build` / `deploy` 全绿。
+
+**E 段（续做）：行内配置从「一个密钥」升级为「注册表声明的配置项列表」**
+
+D 段只支持每行一个密钥，而上游那页每家的配置项并不一样（Amazon 要 Cookie、iTunes 给封面
+分辨率、Kobo 给国家/语言、Audible 给地区）。所以把机制做成通用的：
+
+1. **注册表 `config_fields` 是唯一真值源**：每项 `{key, opt, label, type, options?, placeholder?, hint?}`
+   —— `key` = `metadata_fetch` 下的配置键名，`opt` = 传给 fetcher 的 `opts` 键名
+   （缺省 `api_key`），`type` ∈ `secret | select`。四家密钥家的声明照旧，只是从
+   `key_field` / `key_label` / `key_placeholder` 三个散字段**收敛成一份**：
+   `provider_catalog()` 把头一项派生成这三个旧字段（前端零改动），`key_field_of()` 也从它派生。
+2. **新增 5 个抓取参数并让抓取器真的用上**（不是摆设）：
+   - `amazon_cookie` → 真的加 `Cookie` 请求头（空串不加，避免空头更容易被拦）；
+   - `itunes_cover_resolution`（high 1000×1000 / standard 100×100）→ 改 `artworkUrl100` 尺寸段；
+   - `kobo_region` + `kobo_language` → 拼进搜索 URL 的「/区域/语言/」两段（缺配置回落 us/en）；
+   - `audible_region` → 决定分站域名（`api.audible.com` / `.co.uk` / `.de` / `.co.jp`，未知回落 us）。
+   五处配置键同步进 `config.DEFAULTS` + `server.EDITABLE`；**掩码改为遍历
+   `metasources.secret_fields()`**（Cookie 也是凭据，一并掩码）。
+3. `POST /api/metadata/probe` 新增 `configs`（整行字段草稿覆盖，**不落盘**；早期 `keys` 仍兼容）；
+   行内「测试」把该行**所有**字段的当前值带过去。
+4. 前端行内面板按 `type` 渲染：`secret` → 掩码输入（标签带「已设置/未设置」）、`select` → 下拉；
+   「保存」写被改过的字段、「重置」把整行置空（secret = 删除，select = 回落默认）。
+5. **修掉一处真实的不一致**（浏览器验证时发现）：行内改动原先只存在组件局部，点**页面自己的
+   「保存」**不会落库（用户会以为存了）。现在 `setDraft` 同时写进页面级配置草稿 ——
+   两种保存路径都生效；静默态 secret 仍是后端的掩码值，而掩码值在后端是「不修改」语义，安全。
+6. 契约：`test_metadata_providers` 改为**按注册表全量比**（配置键 = DEFAULTS 键 ⊂ EDITABLE，
+   掩码集合 = 全部 secret），彻底消灭「手写键名清单漏项」；`test_metasources_parsers` 新增
+   4 项盯「参数真的进了请求」（Cookie 头 / 尺寸段 / URL 两段 / 分站域名）。
+
+**真浏览器实测**（playwright + Edge + 隔离后端）：8 个「配置」按钮（= 注册表里有
+`config_fields` 的家）；Amazon 面板 = COOKIE 密文输入 + 复制提示；iTunes = `high/standard` 下拉；
+Kobo = 国家/语言双下拉且当前值取自配置；改国家 → **行内「保存」落库** `kobo_region=uk`；
+再改 → **页面全局「保存」也落库** `ca`（第 5 条修复的直接验证）。
+
+**验证**：后端全量 **877 例 / 0 failed**；前端 `type-check` / `test:unit`（82）/ `build` / `deploy` 全绿。
+
+⚠️ 期间踩到两个**验证方法**上的坑（已记入记忆）：① 页面上有多个同名「保存」按钮，
+必须 scoped 定位或按序 nth，否则点到页面的全局保存；② 空闲书库会弹新手引导遮罩，
+会拦掉所有点击（先关掉再操作）。

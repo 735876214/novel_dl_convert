@@ -117,8 +117,17 @@ COMICVINE = "https://comicvine.gamespot.com/api/volumes/"
 ALADIN = "https://www.aladin.co.kr/ttb/api/ItemSearch.aspx"
 AMAZON = "https://www.amazon.com/s"
 GOODREADS = "https://www.goodreads.com/search"
-KOBO = "https://www.kobo.com/{region}/en/search"
-AUDIBLE = "https://api.audible.com/1.0/catalog/products"
+#: Kobo 的搜索 URL 是「/区域/语言/」两段（机器人在两者不匹配时会拦）—— 两段都可配
+KOBO = "https://www.kobo.com/{region}/{language}/search"
+#: Audible 的 catalog 接口**按区域域名**分站（没有 marketplace 参数）
+AUDIBLE_HOSTS = {
+    "us": "api.audible.com",
+    "uk": "api.audible.co.uk",
+    "de": "api.audible.de",
+    "jp": "api.audible.co.jp",
+}
+#: iTunes 封面：Apple 允许直接改 ``artworkUrl100`` 里的尺寸段
+ITUNES_COVER_SIZES = {"high": "1000x1000", "standard": "100x100"}
 LIBROFM = "https://libro.fm/search"
 LUBIMYCZYTAC = "https://lubimyczytac.pl/szukaj/ksiazki"
 
@@ -147,11 +156,13 @@ SOURCES = {
         "fragile": False,
         # 匿名额度低（实测常撞 429），填 Key 显著改善 —— 属「可选配置」而非「必须」
         "needs_config": False,
-        "key_field": "googlebooks_api_key",
         "config_hint": "可选：填 API Key 可显著提高额度（匿名常撞 429）",
-        # 行内「配置」区的输入框文案（上游那页即如此：标签 + 占位提示都在行内）
-        "key_label": "API 密钥",
-        "key_placeholder": "未设置（可选）",
+        # 行内「配置」项（第 57 期 E 段）：**注册表是唯一真值源**，前端只按 type 渲染。
+        # `opt` = 传给 fetcher 的 `opts` 键名（缺省 api_key）；`type` = 控件形态。
+        "config_fields": [
+            {"key": "googlebooks_api_key", "opt": "api_key", "label": "API 密钥",
+             "type": "secret", "placeholder": "未设置（可选）"},
+        ],
     },
     "amazon": {
         "label": "Amazon",
@@ -162,6 +173,13 @@ SOURCES = {
         "fragile": True,
         "needs_config": False,
         "config_hint": "",
+        # Amazon 反爬严格：带上登录后的 Cookie 能显著提高成功率（上游同款做法）。
+        # 它**不是必需**（不填也能试），所以 needs_config 仍为 False。
+        "config_fields": [
+            {"key": "amazon_cookie", "opt": "cookie", "label": "COOKIE", "type": "secret",
+             "placeholder": "session-id=…; ubid-main=…; x-main=…",
+             "hint": "从浏览器复制 amazon.com 的 Cookie，不必带「Cookie」前缀"},
+        ],
     },
     "goodreads": {
         "label": "Goodreads",
@@ -181,10 +199,11 @@ SOURCES = {
         "implemented": True,
         "fragile": False,
         "needs_config": True,
-        "key_field": "hardcover_api_token",
         "config_hint": "需要 Hardcover API Token（网页版账号设置 → Hardcover API）",
-        "key_label": "API 密钥",
-        "key_placeholder": "eyJ...（在 hardcover.app/account/api 获取的令牌）",
+        "config_fields": [
+            {"key": "hardcover_api_token", "opt": "api_key", "label": "API 密钥", "type": "secret",
+             "placeholder": "eyJ...（在 hardcover.app/account/api 获取的令牌）"},
+        ],
     },
     "openlibrary": {
         "label": "Open Library",
@@ -205,6 +224,13 @@ SOURCES = {
         "fragile": False,
         "needs_config": False,
         "config_hint": "",
+        "config_fields": [
+            {"key": "itunes_cover_resolution", "opt": "resolution", "label": "封面分辨率",
+             "type": "select", "options": [
+                 {"value": "high", "label": "high（1000×1000，默认）"},
+                 {"value": "standard", "label": "standard（100×100，接口原图）"},
+             ]},
+        ],
     },
     "kobo": {
         "label": "Kobo",
@@ -215,6 +241,18 @@ SOURCES = {
         "fragile": True,
         "needs_config": False,
         "config_hint": "",
+        # Kobo 的 URL 分段是「/区域/语言/」—— 机器人在区域/语言不匹配时会拦（上游同款做法）
+        "config_fields": [
+            {"key": "kobo_region", "opt": "region", "label": "国家", "type": "select", "options": [
+                {"value": "us", "label": "us"}, {"value": "uk", "label": "uk"},
+                {"value": "ca", "label": "ca"}, {"value": "au", "label": "au"},
+                {"value": "jp", "label": "jp"},
+            ]},
+            {"key": "kobo_language", "opt": "language", "label": "语言", "type": "select", "options": [
+                {"value": "en", "label": "en"}, {"value": "zh", "label": "zh"},
+                {"value": "ja", "label": "ja"},
+            ]},
+        ],
     },
     # ---- 有声读物 ----
     "audible": {
@@ -226,6 +264,15 @@ SOURCES = {
         "fragile": True,
         "needs_config": False,
         "config_hint": "",
+        # Audible 的 catalog 接口按**区域域名**分站（api.audible.com / .co.uk / .de …）
+        "config_fields": [
+            {"key": "audible_region", "opt": "region", "label": "地区", "type": "select", "options": [
+                {"value": "us", "label": "us（api.audible.com）"},
+                {"value": "uk", "label": "uk（api.audible.co.uk）"},
+                {"value": "de", "label": "de（api.audible.de）"},
+                {"value": "jp", "label": "jp（api.audible.co.jp）"},
+            ]},
+        ],
     },
     "audnexus": {
         "label": "AudNexus",
@@ -256,10 +303,11 @@ SOURCES = {
         "implemented": True,
         "fragile": False,
         "needs_config": True,
-        "key_field": "comicvine_api_key",
         "config_hint": "需要 Comic Vine API Key（免费申请，注意其限流 200 次/小时）",
-        "key_label": "API 密钥",
-        "key_placeholder": "在 comicvine.gamespot.com/api 免费申请的密钥",
+        "config_fields": [
+            {"key": "comicvine_api_key", "opt": "api_key", "label": "API 密钥", "type": "secret",
+             "placeholder": "在 comicvine.gamespot.com/api 免费申请的密钥"},
+        ],
     },
     "ranobedb": {
         "label": "RanobeDB",
@@ -290,10 +338,11 @@ SOURCES = {
         "implemented": True,
         "fragile": False,
         "needs_config": True,
-        "key_field": "aladin_ttbkey",
         "config_hint": "需要 Aladin TTBKey（aladin.co.kr 开放 API 页面申请）",
-        "key_label": "TTB 密钥",
-        "key_placeholder": "ttb...（在 aladin.co.kr 开放 API 页面申请）",
+        "config_fields": [
+            {"key": "aladin_ttbkey", "opt": "api_key", "label": "TTB 密钥", "type": "secret",
+             "placeholder": "ttb...（在 aladin.co.kr 开放 API 页面申请）"},
+        ],
     },
 }
 
@@ -319,31 +368,68 @@ def needs_key(source: str) -> bool:
     return bool(meta.get("needs_config"))
 
 
+def config_fields_of(source: str) -> list:
+    """该源的**行内配置项**（注册表声明）。空列表 = 没有可配置项 ⇒ 前端不显示「配置」按钮。
+
+    每项形状：``{key, opt, label, type, options?, placeholder?, hint?}``
+    —— `key` 是 `metadata_fetch` 下的配置键名，`opt` 是传给 fetcher 的 `opts` 键名
+    （缺省 ``api_key``），`type` ∈ ``secret | select``（secret 一律掩码回显）。
+    """
+    return [dict(f) for f in ((SOURCES.get(source) or {}).get("config_fields") or [])]
+
+
+def secret_fields() -> tuple:
+    """所有 **secret** 配置键名（掩码与 `has_<键名>` 回显按它循环，别漏一家）。"""
+    return tuple(f["key"] for meta in SOURCES.values()
+                 for f in (meta.get("config_fields") or []) if f.get("type") == "secret")
+
+
 def key_field_of(source: str) -> str:
-    """该源的密钥配置键名（`metadata_fetch.<键名>`）；不需要 Key 的家返回空串。"""
-    return str((SOURCES.get(source) or {}).get("key_field") or "")
+    """该源的**主密钥**键名（= 第一个 secret 项）；没有则空串。
+
+    保留这个入口是为了兼容既有调用（掩码 / metafetch / probe / 系列抓取都按
+    「一家一个主密钥」写的）；但它现在是**从 `config_fields` 派生**的，注册表里不再单独写一份。
+    """
+    for f in config_fields_of(source):
+        if f.get("type") == "secret":
+            return str(f["key"])
+    return ""
 
 
 def options_for(mf: dict, sources: list) -> dict:
-    """按**注册表**给启用源拼检索配置：``{源: {"api_key": <密钥值>}}``。
+    """按注册表给启用源拼检索配置：``{源: {opt 键: 值}}``。
 
-    第 57 期起需要密钥的家不止 Google Books（还有 Hardcover / Comic Vine / Aladin），
-    键名统一由 :func:`key_field_of` 给 —— 新增一家带 Key 的源只要在注册表写 `key_field`，
-    书籍抓取（`metafetch.plan` / `online_candidate`）与系列抓取（`series_meta`）自动跟上。
-    不需要密钥的家不进 options（fetcher 只认 ``opts["api_key"]``）。
+    值取每个配置项的 ``key`` 在 `metadata_fetch` 下的配置；**空值不进 opts** ——
+    fetcher 自带默认（如 iTunes 的分辨率、Kobo 的区域），缺键与空串行为一致。
+    书籍抓取（`metafetch.plan` / `online_candidate`）与系列抓取（`series_meta`）共用这一份。
     """
     out = {}
     for sid in sources or []:
-        field = key_field_of(sid)
-        if field:
-            out[sid] = {"api_key": str((mf or {}).get(field) or "")}
+        opts = {}
+        for f in config_fields_of(sid):
+            val = str((mf or {}).get(f["key"]) or "").strip()
+            if val:
+                opts[str(f.get("opt") or "api_key")] = val
+        if opts:
+            out[sid] = opts
     return out
 
 
 def provider_catalog() -> list:
-    """提供商目录（注册表 → 列表，按 `GROUPS` 分组顺序）。前端「元数据来源」页直接吃它。"""
+    """提供商目录（注册表 → 列表，按 `GROUPS` 分组顺序）。前端「元数据来源」页直接吃它。
+
+    顺带把 `config_fields` 的**头一项**派生成 `key_field` / `key_label` / `key_placeholder`：
+    前端旧字段名照旧可用，而注册表只维护 `config_fields` 一份声明。
+    """
     order = {g: i for i, g in enumerate(GROUPS)}
-    items = [{**meta, "id": sid} for sid, meta in SOURCES.items()]
+    items = []
+    for sid, meta in SOURCES.items():
+        fields = config_fields_of(sid)
+        head = fields[0] if fields else {}
+        items.append({**meta, "id": sid, "config_fields": fields,
+                      "key_field": key_field_of(sid),
+                      "key_label": head.get("label") or "API 密钥",
+                      "key_placeholder": head.get("placeholder") or "未设置"})
     items.sort(key=lambda x: (order.get(x.get("group") or "", 99), list(SOURCES).index(x["id"])))
     return items
 #: 语言代码归一：源里见过 "chi"/"zh"/"zh-CN"/"eng"… 统一成本项目用的短码
@@ -525,11 +611,11 @@ def _search_googlebooks(title: str, author: str, limit: int, opts: dict) -> list
 
 # ---------------- iTunes（公开 JSON，免 Key）----------------
 
-def _itunes_entry(it: dict) -> dict:
+def _itunes_entry(it: dict, size: str = "1000x1000") -> dict:
     """iTunes 单条 result → 统一候选。
 
     图书检索（``entity=ebook``）用 ``trackName``，有声书/合集可能只有 ``collectionName``；
-    ``artworkUrl100`` 把尺寸段换掉即可拿到大图（Apple 允许改这段）。
+    ``artworkUrl100`` 的尺寸段可任改（Apple 允许），默认取 1000×1000。
     """
     art = _clean(it.get("artworkUrl100"))
     return _entry(
@@ -541,16 +627,18 @@ def _itunes_entry(it: dict) -> dict:
         language="",                    # 该接口不返回语言，别瞎猜
         description=it.get("description"),
         tags=it.get("genres") or [],
-        cover_url=art.replace("100x100", "600x600") if art else "",
+        cover_url=art.replace("100x100", size) if art else "",
         raw_id=it.get("trackId") or it.get("collectionId") or "",
     )
 
 
 def _search_itunes(title: str, author: str, limit: int, opts: dict) -> list:
     term = f"{_clean(title)} {_clean(author)}".strip()
+    # 封面分辨率（行内可配）：只认注册表给的取值，给了没见过的值就回落 high
+    size = ITUNES_COVER_SIZES.get(_clean((opts or {}).get("resolution")).lower(), "1000x1000")
     data = _get_json(ITUNES, params={"term": term, "entity": "ebook",
                                      "limit": str(limit), "media": "ebook"})
-    return [_itunes_entry(it) for it in (data.get("results") or [])[:limit]
+    return [_itunes_entry(it, size) for it in (data.get("results") or [])[:limit]
             if isinstance(it, dict)]
 
 
@@ -739,8 +827,12 @@ def _search_aladin(title: str, author: str, limit: int, opts: dict) -> list:
 #    也绝不能让它的异常打断整轮抓取（调用方 `search()` 已兜，但这里也自己兜一层）。
 
 def _search_amazon(title: str, author: str, limit: int, opts: dict) -> list:
+    # 行内配的 Cookie（可选）：Amazon 的反爬对「带登录 Cookie 的请求」宽松得多。
+    # 只在真填了时才带这个头 —— 空串会变成一个空 Cookie 头，反而更容易被拦。
+    cookie = _clean((opts or {}).get("cookie"))
     html = _get_text(AMAZON, params={"k": f"{_clean(title)} {_clean(author)}".strip(),
-                                     "i": "stripbooks"})
+                                     "i": "stripbooks"},
+                     headers={"Cookie": cookie} if cookie else None)
     out = []
     for asin, block in re.findall(r'data-asin="([A-Z0-9]{10})"(.*?)(?=data-asin=|$)', html, re.S):
         t = re.search(r'<span class="a-size-(?:medium|base-2|large) a-color-base a-text-normal">'
@@ -772,8 +864,17 @@ def _search_goodreads(title: str, author: str, limit: int, opts: dict) -> list:
 
 
 def _search_kobo(title: str, author: str, limit: int, opts: dict) -> list:
-    """Kobo 搜索结果页把数据塞在 ``__NEXT_DATA__`` 里 → 抠 JSON 后按「像书的 dict」扫。"""
-    html = _get_text(KOBO.format(region="us"), params={"query": _clean(title)})
+    """Kobo 搜索结果页把数据塞在 ``__NEXT_DATA__`` 里 → 抠 JSON 后按「像书的 dict」扫。
+
+    URL 的「区域 / 语言」两段取行内配置（默认 us/en）—— 上游同款做法：机器人对
+    「区域与语言不匹配」的请求会拦。
+    """
+    o = opts or {}
+    html = _get_text(
+        KOBO.format(region=_clean(o.get("region")) or "us",
+                    language=_clean(o.get("language")) or "en"),
+        params={"query": _clean(title)},
+    )
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html, re.S)
     if not m:
         return []
@@ -807,8 +908,13 @@ def _search_kobo(title: str, author: str, limit: int, opts: dict) -> list:
 
 
 def _search_audible(title: str, author: str, limit: int, opts: dict) -> list:
-    """Audible 走 catalog 接口（JSON）而不是抓页面：更稳，但仍是**非公开**接口 → fragile。"""
-    data = _get_json(AUDIBLE, params={
+    """Audible 走 catalog 接口（JSON）而不是抓页面：更稳，但仍是**非公开**接口 → fragile。
+
+    区域（行内可配，默认 us）决定打哪个分站域名；没见过的取值回落 us。
+    """
+    region = _clean((opts or {}).get("region")).lower() or "us"
+    host = AUDIBLE_HOSTS.get(region, AUDIBLE_HOSTS["us"])
+    data = _get_json(f"https://{host}/1.0/catalog/products", params={
         "keywords": _clean(title), "num_results": str(limit),
         "products_sort_by": "Relevance",
         "response_groups": "product_desc,contributors,media,series,publisher",

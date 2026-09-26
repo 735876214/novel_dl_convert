@@ -250,6 +250,12 @@ DEFAULTS = {
         "hardcover_api_token": "",       # Hardcover（GraphQL Bearer Token）
         "comicvine_api_key": "",         # Comic Vine（免费申请，限流 200 次/小时）
         "aladin_ttbkey": "",             # Aladin（韩国书店 TTB API）
+        # 行内抓取参数（第 57 期 E 段，值域与注册表 config_fields 的 options 对齐）
+        "amazon_cookie": "",             # Amazon：登录后的 Cookie（可选，降低反爬拦截率）
+        "itunes_cover_resolution": "high",   # iTunes 封面：high(1000) / standard(100)
+        "kobo_region": "us",             # Kobo：URL 的区域段
+        "kobo_language": "en",           # Kobo：URL 的语言段（要与区域匹配才不被拦）
+        "audible_region": "us",          # Audible：分站域名 us/uk/de/jp
         # 作者级元数据（第 8 期 D1/D2/D5）：独立于书籍抓取开关，默认关
         "authors": {
             "enabled": False,      # 是否抓取作者传记 / 头像

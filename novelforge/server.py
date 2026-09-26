@@ -4385,6 +4385,9 @@ EDITABLE: dict = {
         "genre_blocklist", "googlebooks_api_key", "authors",
         # 第 57 期：另三家的密钥（与 core/metasources 注册表的 key_field 对应）
         "hardcover_api_token", "comicvine_api_key", "aladin_ttbkey",
+        # 第 57 期 E 段：行内抓取参数（同样与注册表 config_fields 一一对应）
+        "amazon_cookie", "itunes_cover_resolution", "kobo_region", "kobo_language",
+        "audible_region",
     },
     # Komga 兼容服务端：开关 + Basic 用户名 + 可选 API Key
     # `expose` = 全局默认「书库是否对客户端暴露」（每库可在书库管理里覆写）
@@ -5403,14 +5406,14 @@ def _mask_integrations(sec: dict) -> dict:
 
 
 def _mask_metadata_fetch(sec: dict) -> dict:
-    """元数据抓取的配置回显：**按注册表循环掩码所有密钥**，其余原样。
+    """元数据抓取的配置回显：**按注册表循环掩码所有 secret**，其余原样。
 
-    第 57 期起密钥不止一个（Google Books / Hardcover / Comic Vine / Aladin），所以这里
-    改成**跟着 `metasources.SOURCES[*].key_field` 走** —— 注册表加一家带 Key 的源，
+    第 57 期起「要掩码的键」不止密钥：Amazon 的 Cookie 同样是凭据（`type=secret`）。
+    所以这里跟着 `metasources.secret_fields()` 走 —— 注册表加一项带 `secret` 类型的配置，
     掩码与 `has_<键名>` 回显自动跟上，不会出现「前端渲染了输入框、后端却回显明文/漏掩」。
     """
     out = dict(sec or {})
-    for field in sorted({metasources.key_field_of(s) for s in metasources.SOURCES} - {""}):
+    for field in sorted(metasources.secret_fields()):
         has = bool(str(out.get(field) or "").strip())
         out[field] = _KEY_MASK if has else ""
         out[f"has_{field}"] = has
@@ -5592,22 +5595,33 @@ def api_metadata_probe(payload: dict = Body(None)):
     p = payload or {}
     mf = config.load_config().get("metadata_fetch") or {}
     wanted = p.get("sources") or list(metasources.SOURCES)
-    # 行内「测试」把**输入框里当前的凭据**带进来（按源 id 给）：有覆盖就用覆盖、
-    # **不落盘** —— 否则「测试」要么测的是上次保存的旧值，要么被迫先保存一次。
-    overrides = p.get("keys") or {}
+    # 行内「测试」把**输入框里当前的值**带进来（按源 id）：有草稿就用草稿、**不落盘** ——
+    # 否则「测试」要么测的是上次保存的旧值，要么被迫先保存一次。
+    # 两种形态都认：`keys`（主密钥，早期接口）与 `configs`（整行字段，E 段起）。
+    legacy_keys = p.get("keys") if isinstance(p.get("keys"), dict) else {}
+    drafts = p.get("configs") if isinstance(p.get("configs"), dict) else {}
     out = {}
     for sid in wanted:
         if sid not in metasources.SOURCES:
             continue
-        key_field = metasources.key_field_of(sid)
-        override = str(overrides.get(sid) or "").strip() if isinstance(overrides, dict) else ""
-        key = override or (str(mf.get(key_field) or "") if key_field else "")
-        cfg = {"api_key": key} if key_field else None
+        fields = metasources.config_fields_of(sid)
+        if fields:
+            merged = dict(mf)
+            row = drafts.get(sid) if isinstance(drafts.get(sid), dict) else {}
+            for f in fields:
+                if f["key"] in row:                      # 草稿优先（空串 = 本次按清空试）
+                    merged[f["key"]] = str(row[f["key"]] or "")
+            main_key = metasources.key_field_of(sid)
+            if main_key and str(legacy_keys.get(sid) or "").strip():
+                merged[main_key] = str(legacy_keys[sid]).strip()
+            opts = metasources.options_for(merged, [sid]).get(sid) or {}
+        else:
+            opts = {}
         # 需要 Key 却没填 ⇒ 直接如实回报，**不发外呼**（省一次注定失败的请求）
-        if metasources.needs_key(sid) and not key:
+        if metasources.needs_key(sid) and not opts.get("api_key"):
             out[sid] = {"ok": False, "message": "需要设置：尚未填写该来源的密钥", "ms": 0}
             continue
-        out[sid] = metasources.probe(sid, cfg)
+        out[sid] = metasources.probe(sid, opts or None)
     return {"items": out}
 
 
