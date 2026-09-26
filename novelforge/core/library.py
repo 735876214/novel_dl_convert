@@ -23,9 +23,11 @@ import fnmatch
 import hashlib
 import html.parser
 import json
+import os
 import pathlib
 from urllib.parse import quote, unquote
 import re
+import stat
 import threading
 import time
 import uuid
@@ -978,23 +980,37 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None) -> list:
     直接跳过，连进都不进书目。它的判据与白名单**正交** —— 白名单管「哪些格式要」，
     排除图案管「这些名字不要」（如 `*.draft.*` / `sample/*`）。
 
-    `_scan_once` 与 `_dir_signature` 共用它，保证「扫到哪些」与「什么变化会让缓存失效」
-    永远一致 —— 这两处若各写一套，很容易出现「新书已入库但列表还是旧的」。
+    `_scan_once`（老的全量扫盘，仍在）与 `catalog.refresh_library`（第 62 期起的增量刷新）
+    共用它，保证「扫到哪些」与「什么算变化」永远一致 —— 这两处若各写一套，
+    很容易出现「新书已入库但列表还是旧的」。
+
+    **顶层与系列目录层都用 `os.scandir` 而不是 `Path.iterdir`**（第 62 期）：
+    `DirEntry.is_file()/.is_dir()` 读的是目录项自带的类型（Linux 的 `d_type`、Windows 内联在
+    返回结构里），**不发 syscall**；`Path.is_file()` 每次都要单发一个 stat。线上书库在 NAS 上，
+    42.4s ÷ 266 本 ≈ 158ms/本 反推每次 syscall 都在付毫秒级往返（本机 SSD 上是微秒级）
+    —— 每文件省一次，266 本一次刷新就省 266 次往返。`d_type` 不可用的文件系统
+    （部分 SMB 挂载报 `DT_UNKNOWN`）会自动回落到一次内部 stat，**只是不更快，不会更错**。
+    排序仍按 ``Path`` 比（`pathlib` 在 Windows 上大小写不敏感），与改造前逐项同序。
     """
     allowed = tuple(exts) if exts else BOOK_EXTS
     patterns = tuple(exclude or ())
     allow_audio_dir = any(e in allowed for e in audio.AUDIO_EXTS)
     out: list = []
     try:
-        entries = sorted(d.iterdir())
+        with os.scandir(d) as it:
+            entries = sorted(((pathlib.Path(e.path), e) for e in it), key=lambda t: t[0])
     except Exception:
         return out
-    for f in entries:
-        if f.is_file():
+    for f, ent in entries:
+        try:
+            is_file, is_dir = ent.is_file(), ent.is_dir()
+        except OSError:                       # 目录项在遍历途中消失：跳过，下一轮再说
+            continue
+        if is_file:
             if f.suffix.lower() in allowed and not _excluded(f.name, f.name, patterns):
                 out.append(f)
             continue
-        if not f.is_dir() or f.name.startswith("."):
+        if not is_dir or f.name.startswith("."):
             continue
         # 顶层目录本身就是一个音频目录 → 整目录算一本书
         if allow_audio_dir and audio.is_audio_dir(f) \
@@ -1002,15 +1018,21 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None) -> list:
             out.append(f)
             continue
         try:
-            children = sorted(f.iterdir())
+            with os.scandir(f) as it2:        # 同上：系列目录里的书也要一次 stat 都不发
+                children = sorted(((pathlib.Path(x.path), x) for x in it2),
+                                  key=lambda t: t[0])
         except Exception:
             continue
-        for x in children:
+        for x, xent in children:
             rel = f"{f.name}/{x.name}"
-            if x.is_file() and x.suffix.lower() in allowed \
+            try:
+                x_is_file, x_is_dir = xent.is_file(), xent.is_dir()
+            except OSError:
+                continue
+            if x_is_file and x.suffix.lower() in allowed \
                     and not _excluded(rel, x.name, patterns):
                 out.append(x)
-            elif allow_audio_dir and x.is_dir() and not x.name.startswith(".") \
+            elif allow_audio_dir and x_is_dir and not x.name.startswith(".") \
                     and audio.is_audio_dir(x) and not _excluded(rel, x.name, patterns):
                 out.append(x)
     return out
@@ -1230,12 +1252,17 @@ def _cheap_facts(f: pathlib.Path) -> "tuple | None":
     所以删掉它纯粹是省下一次整子树的递归遍历，不改任何值。
 
     条目不可读（``stat`` 失败）返回 ``None``。
+
+    判「是不是目录」用**已经拿到的那个 stat**（``S_ISDIR``），不调 ``f.is_dir()``
+    —— 后者会再发一次同样的 stat（第 62 期实测：那是增量刷新里每文件 3 次 stat 中的
+    第 3 次，而增量刷新每次写操作后都要跑一遍，线上一次往返就是几毫秒）。语义不变：
+    ``Path.stat()`` 与 ``Path.is_dir()`` 都跟随符号链接。
     """
     try:
         st = f.stat()
     except OSError:
         return None
-    if f.is_dir():
+    if stat.S_ISDIR(st.st_mode):
         size, dm = audio.dir_size_and_mtime(f)
         return (size, dm or st.st_mtime, True)
     return (st.st_size, st.st_mtime, False)

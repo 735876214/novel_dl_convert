@@ -196,6 +196,41 @@ def test_没变化时不重探任何条目(cat_lib, monkeypatch):
     assert again["added"] == 0 and again["removed"] == 0
 
 
+def test_增量刷新每文件只问一次文件系统(cat_lib, monkeypatch):
+    """每文件 1 次 stat —— 拿**计数**钉住，因为这一条在本机怎么改都是绿的。
+
+    第 62 期实测（300 本的书库）：增量刷新改造前对书库目录发 903 次 syscall
+    （每文件 3 次：``is_file`` + ``stat`` + ``is_dir``），改后 304 次（每文件 1 次）。
+    线上 42.4s ÷ 266 本 ≈ 158ms/本 反推每次 syscall 都在付毫秒级往返 —— 3 次与 1 次
+    在那边就是一倍的时间差；而本机 SSD 上两者都是几十毫秒，上面那些功能用例一条都不红。
+    所以这里与「不重探」那条同样手法：钉住「**没有**做某件昂贵的事」。
+
+    只数 ``Path.stat``：``Path.is_file()`` / ``Path.is_dir()`` 内部走的也是它，
+    所以退回「每文件问三遍」的写法会让计数直接翻三倍。
+    """
+    lib, root = cat_lib
+    for i in range(5):
+        _put(root, f"书{i}.epub", b"EPUB")
+    lib = db.get_library(lib["id"])
+    catalog.refresh_library(lib, force=True)           # 先建索引，这一轮不计入
+
+    hits: list = []
+    root_s = str(pathlib.Path(root).resolve())
+    real_stat = pathlib.Path.stat
+
+    def counting_stat(self, *a, **kw):
+        if str(self).startswith(root_s):
+            hits.append(str(self))
+        return real_stat(self, *a, **kw)
+
+    monkeypatch.setattr(pathlib.Path, "stat", counting_stat)
+    out = catalog.refresh_library(lib)                 # unchanged 的那一轮 = 线上每 60 秒走的路
+    assert out["unchanged"] == 5
+
+    # 5 本各 1 次，外加库根解析之类的常数几次。留常数余量，但**不留**「每文件多一次」的余量。
+    assert len(hits) <= 8, f"增量刷新问了 {len(hits)} 次文件系统（目标每文件 1 次）：{hits}"
+
+
 def test_内容变了才重探并更新索引(cat_lib):
     """改一个字节 + 换 mtime ⇒ 那一本要重探并覆盖索引行（``ON CONFLICT DO UPDATE``）。"""
     lib, root = cat_lib
