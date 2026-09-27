@@ -4,9 +4,10 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type AudioTrack, type BookCard } from '@/lib/api'
+import { api, type AudioTrack, type BookCard, type SessionExtra } from '@/lib/api'
 import { AUDIO_SKIP_BACKS, AUDIO_SKIP_FORWARDS, AUDIO_SLEEPS, AUDIO_SPEEDS, readAudioPrefs } from '@/lib/audioPrefs'
 import { sortBySeriesIndex } from '@/lib/bookInfo'
+import { createSessionReporter } from '@/lib/readingSession'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -93,7 +94,22 @@ function goto(i: number, autoplay = true): void {
 
 // ---------------- 事件 ----------------
 
-let sessionSeconds = 0
+/**
+ * 会话上报（第 63 期）：一次连续收听 = 一段（同一个 `session_uid` = 数据库一行）。
+ *
+ * ⚠️ 与阅读器**不同**，这里不看 `document.visibilityState`：屏幕关掉、切到别的标签页时
+ * 有声书照常在放，那就是在听 —— 按可见性算会把「睡前戴着耳机听两小时」记成 0。
+ * 「是不是在读」的判据只有一条：**音频在不在播**。
+ */
+const session = createSessionReporter({
+  source: 'audio',
+  snapshot: () => ({ percent: percent.value, locator: index.value }),
+  // 多轨有声书带上当前轨的文件名，服务端据此把这段时长归到**这一轨**。
+  // 单轨书不给：空串的含义是「这本书自己」，不是「不知道哪一轨」。
+  fileRel: () => (total.value > 1 ? current.value?.name : undefined),
+  post: (secs, extra: SessionExtra) => api.recordSession(props.bookId, secs, extra),
+})
+
 let lastTick = 0
 
 function onLoaded(): void {
@@ -111,9 +127,10 @@ function onTime(): void {
   currentTime.value = el.currentTime
   if (playing.value) {
     const now = Date.now()
-    if (lastTick) sessionSeconds += (now - lastTick) / 1000
+    if (lastTick) session.accrue((now - lastTick) / 1000)
     lastTick = now
-    if (sessionSeconds >= 60) flushSession()
+    // 每满一分钟落一次（原来的节奏），免得长时间收听只在暂停时才上报
+    if (session.pending >= 60) void session.flush()
   }
   // 每 5 秒落一次进度，避免频繁写库
   if (Math.floor(currentTime.value) % 5 === 0) saveProgress()
@@ -127,7 +144,8 @@ function onEnded(): void {
   }
   // 最后一轨放完：先落盘，再决定跨册续接还是停下
   saveProgress()
-  flushSession()
+  session.pause()
+  void session.flush()
   if (prefs.autoNextBook && (props.series || '').trim()) {
     void maybeAutoNextBook()
   } else {
@@ -162,13 +180,16 @@ async function maybeAutoNextBook(): Promise<void> {
 function onPlay(): void {
   playing.value = true
   lastTick = Date.now()
+  // 暂停超过半小时再接着听，算新的一段（`pause()` 时记下了离开时刻）
+  session.resume()
 }
 
 function onPause(): void {
   playing.value = false
   lastTick = 0
   saveProgress()
-  flushSession()
+  session.pause()
+  void session.flush()
 }
 
 function saveProgress(): void {
@@ -179,13 +200,6 @@ function saveProgress(): void {
       library.patchProgress(props.bookId, pct, r?.updated_at)
     })
     .catch(() => {})
-}
-
-function flushSession(): void {
-  if (sessionSeconds < 5) return
-  const secs = Math.round(sessionSeconds)
-  sessionSeconds = 0
-  void api.recordSession(props.bookId, secs).catch(() => {})
 }
 
 // ---------------- 睡眠定时 ----------------
@@ -212,6 +226,7 @@ watch(volume, (v) => { if (audio.value) audio.value.volume = v })
 watch(src, () => { ready.value = false })
 
 onMounted(async () => {
+  session.begin()
   try {
     const p = await api.getProgress(props.bookId)
     if (p && p.percent > 0 && total.value > 1) {
@@ -232,7 +247,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (sleepTimer) window.clearInterval(sleepTimer)
   saveProgress()
-  flushSession()
+  void session.stop()
 })
 </script>
 

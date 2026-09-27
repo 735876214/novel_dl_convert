@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
-import { api, type BookDetail, type Bookmark, type BookVolume } from '@/lib/api'
+import { api, type BookDetail, type Bookmark, type BookVolume, type SessionExtra } from '@/lib/api'
 import { READER_PREFS_KEY } from '@/lib/readerPrefs'
 import { useLibraryStore } from '@/stores/library'
 import ReaderView from '@/views/ReaderView.vue'
@@ -90,7 +90,7 @@ function stubApi(book: BookDetail): void {
   m.listBookmarks.mockResolvedValue({ items: [], total: 0, trashed: [] })
   m.getProgress.mockResolvedValue({ locator: 0, percent: 0 })
   m.chapter.mockResolvedValue({ index: 0, total: 2, title: '第一章', html: '<p>正文</p>' })
-  m.recordSession.mockResolvedValue({ ok: true })
+  m.recordSession.mockResolvedValue({ ok: true, session_uid: 'stub-uid' })
   m.fonts.mockResolvedValue({ items: [], max_bytes: 0, max_count: 0 })
   m.setProgress.mockResolvedValue({ ok: true, updated_at: 1000 })
 }
@@ -175,6 +175,84 @@ describe('ReaderView · 阅读时长上报（flushSession）', () => {
     await flushPromises()
 
     expect(m.recordSession).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * 第 63 期：阅读器把「一次连续阅读」上报成**一段**（同一个 `session_uid`），
+ * 而不是每 30 秒一条独立记录。边界规则本身在 `lib/readingSession.spec.ts` 里单测，
+ * 这里只钉**接线**：阅读器有没有真的把 uid / 来源 / 位置快照发出去。
+ */
+describe('ReaderView · 会话边界（第 63 期）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-21T10:00:00Z'))
+    Element.prototype.scrollIntoView = vi.fn()
+    stubApi(makeBook())
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  /** 切后台/回前台。happy-dom 不提供真实可见性切换，用 get 拦截模拟。 */
+  function setVisibility(v: 'visible' | 'hidden'): void {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(v)
+    document.dispatchEvent(new Event('visibilitychange'))
+  }
+
+  /** 取第 n 次上报的附加字段（`recordSession(bookId, seconds, extra)` 的第三个参数） */
+  function extraOf(n: number): SessionExtra {
+    return m.recordSession.mock.calls[n][2] as SessionExtra
+  }
+
+  it('同一段阅读的两次心跳共用一个 session_uid，且带上来源与位置快照', async () => {
+    const { wrapper } = await mountReader('book-a')
+
+    vi.setSystemTime(new Date('2026-09-21T10:00:30Z'))
+    setVisibility('hidden')                     // 切后台 ⇒ 先落一次
+    vi.setSystemTime(new Date('2026-09-21T10:01:00Z'))
+    setVisibility('visible')
+    vi.setSystemTime(new Date('2026-09-21T10:01:30Z'))
+    setVisibility('hidden')                     // 短切回来 ⇒ 还是同一段
+    await flushPromises()
+
+    expect(m.recordSession).toHaveBeenCalledTimes(2)
+    // 切后台那一刻的这 30 秒**必须算进去**：事件是在状态已变之后才派的，
+    // 按「当前可见性」结算会把这 30 秒判成 0（那条路下这一整份上报根本不会发生）
+    expect(m.recordSession.mock.calls[0][1]).toBe(30)
+    expect(m.recordSession.mock.calls[1][1]).toBe(30)
+    const [first, second] = [extraOf(0), extraOf(1)]
+    expect(first.session_uid).toBeTruthy()
+    expect(second.session_uid).toBe(first.session_uid)
+    expect(first.source).toBe('web')
+    expect(typeof first.start_percent).toBe('number')
+    expect(typeof first.end_percent).toBe('number')
+    // 没有 id 就宁可不报：这条路径上永远是已加载的那本书
+    expect(m.recordSession.mock.calls[0][0]).toBe('book-a')
+    wrapper.unmount()
+  })
+
+  it('切后台超过半小时再回来算新的一段（uid 换新）', async () => {
+    const { wrapper } = await mountReader('book-a')
+
+    vi.setSystemTime(new Date('2026-09-21T10:00:30Z'))
+    setVisibility('hidden')
+    const before = extraOf(0).session_uid
+
+    // 离开 31 分钟：上一段到此为止（那一行已经落库），回来是另一段
+    vi.setSystemTime(new Date('2026-09-21T10:31:30Z'))
+    setVisibility('visible')
+    vi.setSystemTime(new Date('2026-09-21T10:32:00Z'))
+    setVisibility('hidden')
+    await flushPromises()
+
+    expect(m.recordSession).toHaveBeenCalledTimes(2)
+    expect(extraOf(1).session_uid).not.toBe(before)
+    expect(extraOf(1).session_uid).toBeTruthy()
+    wrapper.unmount()
   })
 })
 

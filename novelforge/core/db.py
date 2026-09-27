@@ -15,6 +15,7 @@ import re
 import threading
 import json
 import time
+import uuid
 from datetime import datetime, timedelta
 
 try:  # 时区归一（Python 3.9+ 标准库；极老环境或缺 tzdata 时回落本地时）
@@ -766,6 +767,53 @@ def init():
             c.execute("ALTER TABLE authors ADD COLUMN sort_name TEXT NOT NULL DEFAULT ''")
         if aucols and "sort_name_local" not in aucols:
             c.execute("ALTER TABLE authors ADD COLUMN sort_name_local TEXT NOT NULL DEFAULT ''")
+        # 第 63 期：reading_sessions 补「会话身份 + 进度锚点 + 来源」七列。
+        #
+        # 起因：阅读器每 30 秒上报一次心跳，**每次都是插新行** —— 读两小时就是 240 行，
+        # 报表里的「会话数」于是变成「心跳数」。改成「一段连续阅读 = 一行」得先给心跳
+        # 一个身份：前端开段时生成一个 uid，之后每次心跳带着它 upsert
+        #（见 :func:`upsert_session`）。30 秒这个间隔**不动** —— 它是「浏览器崩了最多
+        # 丢多少」的上界；改成「离开时写一行」会把上界变成「整段」。
+        #
+        # 数值列一律用 **-1 作「未知」哨兵**，不用 0：0% 是「读了但没动」这个**不同**的
+        # 结论，混用会让「本次读了多久」那一列把历史会话显示成「原地踏步」。
+        # 存量行全部回落 -1 / ''，界面如实显示「—」—— 历史会话的进度锚点补不回来，
+        # 不假装知道（与「没有数据源就返回恒 0 是假数据」同一条纪律）。
+        scols = {r["name"] for r in c.execute("PRAGMA table_info(reading_sessions)")}
+        if scols and "session_uid" not in scols:
+            c.execute("ALTER TABLE reading_sessions ADD COLUMN session_uid TEXT NOT NULL DEFAULT ''")
+            # 一次性回填：老行的 uid 取 'legacy-'||id，**必须唯一**（下面要建唯一索引）。
+            # ⚠️ PG 里 id 是 BIGINT，`text || bigint` 直接报错，非加 CAST 不可 ——
+            # sqlcompat 只做 `?`→`%s` 与类型名替换，不会替你补这个转换。
+            # 只在本列**刚被加上**时跑，这一行就是幂等的全部保证
+            #（与第 47 期 collections.updated_at 的回填同一种写法）。
+            c.execute("UPDATE reading_sessions SET session_uid = 'legacy-' || CAST(id AS TEXT) "
+                      "WHERE session_uid = ''")
+            # 唯一索引让「同一段会话的心跳」能 upsert 到同一行而不是插 240 行。
+            # ⚠️ 必须建在回填**之后**：PG 上对全为 '' 的列建唯一索引会直接失败，
+            # 而这段跑在启动路径上 —— 失败＝起不来。
+            # 外层 try 兜住「老库上次中断留下半成品」：宁可少一条索引也不能让 init() 抛
+            #（与上面 DROP COLUMN 同一种「尽力而为」处理）。
+            try:
+                c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_session_uid "
+                          "ON reading_sessions(book_id, session_uid)")
+            except Exception:
+                pass
+        if scols and "start_locator" not in scols:
+            c.execute("ALTER TABLE reading_sessions ADD COLUMN start_locator INTEGER NOT NULL DEFAULT -1")
+        if scols and "end_locator" not in scols:
+            c.execute("ALTER TABLE reading_sessions ADD COLUMN end_locator INTEGER NOT NULL DEFAULT -1")
+        if scols and "start_percent" not in scols:
+            c.execute("ALTER TABLE reading_sessions ADD COLUMN start_percent REAL NOT NULL DEFAULT -1")
+        if scols and "end_percent" not in scols:
+            c.execute("ALTER TABLE reading_sessions ADD COLUMN end_percent REAL NOT NULL DEFAULT -1")
+        if scols and "file_rel" not in scols:
+            c.execute("ALTER TABLE reading_sessions ADD COLUMN file_rel TEXT NOT NULL DEFAULT ''")
+        if scols and "source" not in scols:
+            # 来源（web / audio / koreader …）。存量行回落**空串 = 未知**，不猜 'web'：
+            # 改造前有声书播放器与网页阅读器走的是同一个上报接口，事后分不出来是哪一边。
+            # 给历史数据贴一个可能不准的标签，比承认不知道更糟。
+            c.execute("ALTER TABLE reading_sessions ADD COLUMN source TEXT NOT NULL DEFAULT ''")
         # 第 62 期：**一次性数据搬迁必须排在建账号之前**（这一行位置是有讲究的）。
         # 老库里的 `users` 行带着用户真正在用的口令散列；`_seed_user` 只在
         # 「用户名不存在」时才按 AUTH_USER/AUTH_PIN 建号。顺序反过来的话，
@@ -1432,16 +1480,111 @@ def annotation_overview() -> dict:
 
 # ---------------- 阅读时长（会话）----------------
 
-def add_session(book_id: str, seconds: float, started_at=None, ended_at=None) -> None:
-    """记录一次阅读会话（阅读器前台计时后上报）。"""
+#: 「未知」哨兵（第 63 期）。start/end 的 locator 与 percent 用它，**不用 0** ——
+#: 0% 是「读了但没动」这个不同的结论。出到 JSON 时由 read 侧转成 ``None``。
+SESSION_UNKNOWN = -1
+
+#: 会话来源（第 63 期）。**空串 = 未知**，不是「其他」—— 改造前的存量行分不出
+#: 阅读器与播放器（两者走同一个上报接口），事后猜一个值就是造假。接口层按这张表校验，
+#: 新增来源要同时加进这里。
+SESSION_SOURCES = ("web", "audio", "manual")
+
+
+def add_session(
+    book_id: str,
+    seconds: float,
+    started_at=None,
+    ended_at=None,
+    *,
+    session_uid: str = "",
+    start_locator: int = SESSION_UNKNOWN,
+    end_locator: int = SESSION_UNKNOWN,
+    start_percent: float = SESSION_UNKNOWN,
+    end_percent: float = SESSION_UNKNOWN,
+    file_rel: str = "",
+    source: str = "",
+) -> None:
+    """记录一次阅读会话（阅读器前台计时后上报）。
+
+    **前四个位置参数一字不改**（既有调用点全部零改动），新参数一律关键字传入。
+
+    ``session_uid`` 缺省时自动生成 ⇒ 每次调用都是一行新行，与加这些列之前**逐字节
+    一致**。要「同一段会话的心跳更新同一行」请用 :func:`upsert_session` —— 两者分开
+    而不是合成一个带开关的函数：调用方要表达的是「这是一次独立上报」还是「这是某一段
+    的又一次心跳」，那是两件事。
+    """
     now = time.time()
     started = float(started_at) if started_at else now - float(seconds)
     ended = float(ended_at) if ended_at else now
     c = _connect()
     with _lock:
         c.execute(
-            "INSERT INTO reading_sessions(book_id, seconds, started_at, ended_at) VALUES(?,?,?,?)",
-            (book_id, float(seconds), started, ended),
+            "INSERT INTO reading_sessions"
+            "(book_id, seconds, started_at, ended_at, session_uid, "
+            " start_locator, end_locator, start_percent, end_percent, file_rel, source) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                book_id, float(seconds), started, ended,
+                session_uid or uuid.uuid4().hex,
+                int(start_locator), int(end_locator),
+                float(start_percent), float(end_percent),
+                file_rel, source,
+            ),
+        )
+        c.commit()
+
+
+def upsert_session(
+    book_id: str,
+    session_uid: str,
+    seconds: float,
+    started_at=None,
+    ended_at=None,
+    *,
+    start_locator: int = SESSION_UNKNOWN,
+    end_locator: int = SESSION_UNKNOWN,
+    start_percent: float = SESSION_UNKNOWN,
+    end_percent: float = SESSION_UNKNOWN,
+    file_rel: str = "",
+    source: str = "",
+) -> None:
+    """**在线会话**：同一段会话的每次心跳更新同一行，而不是插新行。
+
+    这是「一段连续阅读 = 一行」的实现。30 秒心跳照旧（浏览器崩了最多丢 30 秒），
+    但不再每 30 秒留一行 —— 读两小时从 240 行变成 1 行。
+
+    ``started_at`` 缺省按 ``now - seconds`` 反推（与 :func:`add_session` 同一算法）：
+    心跳报上来的 ``seconds`` 是**这一段累计**，故反推出来就是会话起点，且只在首次心跳
+    （真正 INSERT 的那一次，``seconds`` 还很小）被写进去 —— 后续心跳走 UPDATE，
+    ``started_at`` 根本不在 SET 子句里，反推值再偏也落不了库。
+
+    ``ON CONFLICT(book_id, session_uid)`` 是**具名冲突目标**（不是 INSERT OR REPLACE）：
+    sqlcompat 明确拒绝机械翻译后者，而前者在 set_progress / set_embedding 里已经用了
+    七处、PG 路径实测可用。冲突目标依赖 :func:`init` 补列区建的那个唯一索引。
+
+    ⚠️ **``start_*`` 不进 SET 子句**（``file_rel`` / ``source`` 同理）：它们只在开段那
+    一次被写进去，之后每次心跳只有终点信息。放进 SET 会让心跳把起点一遍遍覆盖成当前
+    位置 —— 而 ``start_percent`` 正是「本次读了多少」的被减数，丢了它整列就没意义了。
+    """
+    now = time.time()
+    started = float(started_at) if started_at else now - float(seconds)
+    ended = float(ended_at) if ended_at else now
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO reading_sessions"
+            "(book_id, seconds, started_at, ended_at, session_uid, "
+            " start_locator, end_locator, start_percent, end_percent, file_rel, source) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(book_id, session_uid) DO UPDATE SET "
+            "seconds=excluded.seconds, ended_at=excluded.ended_at, "
+            "end_locator=excluded.end_locator, end_percent=excluded.end_percent",
+            (
+                book_id, float(seconds), started, ended, session_uid,
+                int(start_locator), int(end_locator),
+                float(start_percent), float(end_percent),
+                file_rel, source,
+            ),
         )
         c.commit()
 
@@ -1641,6 +1784,159 @@ def session_by_book() -> dict:
             "avg_seconds": round(float(r["avg_seconds"]), 1),
         }
         for r in rows
+    }
+
+
+def longest_streak(days) -> dict | None:
+    """有序日列表里**最长连续段**（纯函数，不碰库）：``{days, start, end}``；空输入 → ``None``。
+
+    ``days`` 是 ``['YYYY-MM-DD', ...]``，即 :func:`active_days` 的输出（已排序去重）。
+
+    ⚠️ 与 ``core/stats`` 里那段 streak 计数**不是一回事**，刻意不合并：那段算的是
+    **当前**连续天数（成就用，断一天就归零）；这里要的是**历史最长**的那一段（阅读记录用，
+    断了也不算丢）。同一本书上这两个数通常不相等 —— 所以调用方要拿同一份 ``days`` 喂进来，
+    两个数才在同一套日集合上比较（见 :func:`book_reading_summary`）。
+
+    平局取**更早**的那一段（先到先得）：与用户翻历史时的顺序一致，且结果稳定可测。
+    """
+    best = None
+    cur_n = 0
+    cur_start = ""
+    prev = None
+    for d in days:
+        try:
+            cur_day = datetime.strptime(str(d), "%Y-%m-%d").date()
+        except ValueError:
+            continue  # 脏数据跳过，不打断计数
+        if prev is not None and (cur_day - prev).days == 1:
+            cur_n += 1
+        else:
+            cur_n, cur_start = 1, str(d)
+        # 严格 ``>``（不是 ``>=``）：平局保留**先到**的那一段更有意义，
+        # 且遍历是升序的，先到的恒更早 ⇒ 结果与「取最早的那段最长连续」等价且稳定
+        if best is None or cur_n > best["days"]:
+            best = {"days": cur_n, "start": cur_start, "end": str(d)}
+        prev = cur_day
+    return best
+
+
+def _session_row(r) -> dict:
+    """会话行 → JSON 就绪的 dict（-1 哨兵在**这里**转 ``None``，出库即对外语义）。
+
+    ``start_percent`` / ``end_percent`` / ``change`` 在第 63 期之前的行上是 ``None``：
+    那些会话没记过进度锚点，补不回来。用 None 而不是 0 —— **0% 是「翻回开头了」，
+    与「没记过」是两个结论**；前端据此显示「—」而不是「0%」。
+
+    ``change`` 由服务端算：两端任一为 ``None`` 就整体 ``None``（「不知道」不是「0」）。
+    """
+    def num(v):
+        return None if v is None or float(v) == SESSION_UNKNOWN else float(v)
+
+    sp, ep = num(r["start_percent"]), num(r["end_percent"])
+    return {
+        "id": int(r["id"]),
+        "seconds": float(r["seconds"]),
+        "started_at": float(r["started_at"]),
+        "ended_at": float(r["ended_at"]),
+        "start_percent": sp,
+        "end_percent": ep,
+        "change": None if sp is None or ep is None else round(ep - sp, 2),
+        "start_locator": num(r["start_locator"]),
+        "end_locator": num(r["end_locator"]),
+        "file_rel": r["file_rel"] or "",
+        "source": r["source"] or "",
+    }
+
+
+def _book_day_rows(rows) -> list:
+    """会话行按本地日归并（纯函数，可直接喂 dict 做单测）。
+
+    返回 ``[{date, seconds, sessions, end_percent}]``，**按日期升序** —— 折线图 x 轴
+    从左到右；而会话列表是降序（新 → 旧）。两者刻意不同：一个是时间轴，一个是流水。
+
+    归日用 ``started_at``，与 :func:`reading_day_minutes`（热力图 / 全站日聚合）同一口径。
+    入参须按 ``ended_at`` 升序：``end_percent`` 取当天**最后一次**已知的进度位置。
+
+    ⚠️ :func:`active_days` 用的是 ``ended_at``，两者只在**跨零点的会话**上差一天。
+    本函数不跟随那个口径，是为了让「图上这一天」与「热力图这一天」指的是同一天。
+    """
+    agg: dict = {}
+    for r in rows:
+        day = time.strftime("%Y-%m-%d", time.localtime(r["started_at"]))
+        a = agg.setdefault(day, {"date": day, "seconds": 0.0, "sessions": 0, "end_percent": None})
+        a["seconds"] += float(r["seconds"])
+        a["sessions"] += 1
+        if r["end_percent"] is not None:
+            a["end_percent"] = r["end_percent"]
+    return [agg[d] for d in sorted(agg)]
+
+
+def book_reading_summary(book_id: str, limit: int = 200) -> dict | None:
+    """单书的阅读汇总 + 会话列表（**一次扫描算完**）；一条会话都没有时返回 ``None``。
+
+    ⚠️ 返回 None 而不是一个全 0 的对象。全 0 会让界面把「没记录」渲染成「读了 00:00」，
+    那是假数据 —— 与 :func:`reading_totals` 不同：那个是**全站**口径，0 是真实的求和；
+    单书场景下「0」与「没读过」必须分得开。
+
+    与 :func:`session_log` 的分工：那个是**全站的时间窗**（days），这里的 ``sessions``
+    是**单书的条数窗**（``limit``，新 → 旧）—— 一本书的会话数天然有限（几十到几百条），
+    按时间窗切反而会让「半年前读完的一本书」显示成完全没读过。上限只防「一天几百条
+    心跳」那种脏数据把响应撑爆，正常使用远到不了。
+
+    出参（**与接口响应同形**，路由层直接展开，不再拆一遍）::
+
+        {
+          "reading":  {seconds, sessions, avg_seconds, active_days,
+                       first_started, last_ended},
+          "records":  {longest_session, best_day, busiest_day, longest_streak},
+          "days":     [{date, seconds, sessions, end_percent}],   # 升序，见 _book_day_rows
+          "sessions": [ ... ≤limit 条，新 → 旧，见 _session_row ],
+        }
+
+    ⚠️ 累计值收进 ``reading`` 子字典而不是摊在顶层，是**故意的**：「累计会话数」与
+    「会话行列表」都叫 ``sessions``，摊平会撞成同一个键、后写的那个静默覆盖前面那个
+    （本函数第一版就这么错过，被 ``test_历史会话没有进度快照时如实给_null`` 逮住）。
+
+    ``records`` 里的每一个都可能是 ``None``（没有那个结论），界面按「不渲染」处理。
+    ``longest_streak`` 用的是 :func:`active_days` 的日集合，**与全站连续天数同一口径** ——
+    不然同一个用户会在两个页面上看到两套「连续」。
+    """
+    raw = _connect().execute(
+        "SELECT id, seconds, started_at, ended_at, start_locator, end_locator, "
+        "start_percent, end_percent, file_rel, source "
+        "FROM reading_sessions WHERE book_id=? ORDER BY ended_at",
+        (book_id,),
+    ).fetchall()
+    if not raw:
+        return None
+
+    rows = [_session_row(r) for r in raw]
+    days = _book_day_rows(rows)
+    total = sum(r["seconds"] for r in rows)
+    longest = max(rows, key=lambda r: r["seconds"])
+    return {
+        "reading": {
+            "seconds": total,
+            "sessions": len(rows),
+            "avg_seconds": round(total / len(rows), 1),
+            "active_days": len(days),
+            "first_started": rows[0]["started_at"],
+            "last_ended": rows[-1]["ended_at"],
+        },
+        "records": {
+            # 最长的一次：连日期一起给 —— 「3 小时」不带日期等于没说什么
+            "longest_session": {
+                "seconds": longest["seconds"],
+                "ended_at": longest["ended_at"],
+                "date": time.strftime("%Y-%m-%d", time.localtime(longest["ended_at"])),
+            },
+            "best_day": max(days, key=lambda d: d["seconds"]),
+            "busiest_day": max(days, key=lambda d: d["sessions"]),
+            "longest_streak": longest_streak(active_days({book_id})),
+        },
+        "days": days,
+        # 升序取出、降序切片：尾部即最近 limit 条，反转就是「新 → 旧」，不再查一次库
+        "sessions": list(reversed(rows[-max(1, int(limit)):])),
     }
 
 

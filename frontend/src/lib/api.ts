@@ -850,6 +850,86 @@ export interface BookmarkSaveResult {
   server: Bookmark
 }
 
+// ---------- 阅读会话（第 63 期）----------
+
+/**
+ * 会话上报的可选字段。**每一个都可以不给**，不给就是「这次没记录」——
+ * 服务端存「未知」哨兵，而不是 0。0% 与「没记录」是两个结论（前者是「翻回开头了」）。
+ *
+ * 带 `session_uid` = 「这是某一段阅读的又一次心跳」⇒ 服务端 upsert，一段只留**一行**；
+ * 不带 = 「这是一次独立上报」⇒ 插新行。见 `lib/readingSession.ts`。
+ */
+export interface SessionExtra {
+  session_uid?: string
+  /** 这一段开始时的全书百分比（0–100）；只在开段那一次被服务端采纳 */
+  start_percent?: number
+  /** 此刻的全书百分比 */
+  end_percent?: number
+  /** 起始章节 / 音轨序号 */
+  start_locator?: number
+  /** 此刻的章节 / 音轨序号 */
+  end_locator?: number
+  /**
+   * **书内**相对路径（多轨有声书的当前轨）。
+   *
+   * 空串 = **这本书自己**（单文件书 / PDF / 漫画都是这一类），不是「不知道哪一轨」——
+   * 所以单文件书**不必给**，缺省与显式给空串是同一件事。
+   */
+  file_rel?: string
+  /** `web`（阅读器）/ `audio`（播放器）/ `manual`（手工补录） */
+  source?: string
+}
+
+/** 一条阅读会话（服务端已把「未知」转成 `null`）。 */
+export interface ReadingSessionRow {
+  id: number
+  seconds: number
+  started_at: number
+  ended_at: number
+  start_percent: number | null
+  end_percent: number | null
+  /** 本次读了多少（`end - start`）；两端任一未知就是 `null` —— 界面显示「—」而不是 0% */
+  change: number | null
+  start_locator: number | null
+  end_locator: number | null
+  file_rel: string
+  source: string
+}
+
+/** 折线图上的一天：读了多少 + 那天结束时读到哪。 */
+export interface ReadingDayPoint {
+  date: string
+  seconds: number
+  sessions: number
+  /** 当天最后一次已知位置；当天全是老数据就是 `null`（图上断线，不画到 0%） */
+  end_percent: number | null
+}
+
+/** 单书阅读记录（`GET /api/books/{id}/stats`）。 */
+export interface BookReadingStats {
+  book_id: string
+  /** **没读过就是 `null`**，不是全 0 对象（全 0 会把「没记录」渲染成「读了 00:00」） */
+  reading: {
+    seconds: number
+    sessions: number
+    avg_seconds: number
+    active_days: number
+    first_started: number
+    last_ended: number
+  } | null
+  records: {
+    longest_session: { seconds: number; ended_at: number; date: string }
+    best_day: ReadingDayPoint
+    busiest_day: ReadingDayPoint
+    /** 历史**最长**连续天数（与全站「当前连续」不是一回事）；没有会话时为 `null` */
+    longest_streak: { days: number; start: string; end: string } | null
+  } | null
+  /** 升序（折线图 x 轴） */
+  days: ReadingDayPoint[]
+  /** 降序（流水表），最多 200 条 */
+  sessions: ReadingSessionRow[]
+}
+
 // ---------- 系列 ----------
 
 export interface SeriesCover {
@@ -3877,15 +3957,25 @@ export const api = {
     request<{ items: BookMoveBatch[] }>(`/api/book-move/batches?limit=${limit}`),
 
   // ---------- 阅读时长（会话上报） ----------
-  recordSession: (bookId: string, seconds: number) =>
-    request<{ ok: boolean }>(
+  /**
+   * 上报一段阅读时长（秒）。
+   *
+   * `extra` 全部可选（第 63 期）：**没给的字段不写进 body**，服务端据此记「未知」——
+   * 别在这里补 0 兜底，那会把「没记录」变成「读到 0%」（见 `SessionExtra` 的说明）。
+   */
+  recordSession: (bookId: string, seconds: number, extra: SessionExtra = {}) =>
+    request<{ ok: boolean; session_uid: string }>(
       `/api/books/${encodeURIComponent(bookId)}/session`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seconds }),
+        body: JSON.stringify({ seconds, ...extra }),
       },
     ),
+
+  /** 单书阅读记录（详情页「阅读日志」标签整页的数据源）。 */
+  bookReadingStats: (bookId: string) =>
+    request<BookReadingStats>(`/api/books/${encodeURIComponent(bookId)}/stats`),
 
   // ---------- 应用设置（服务端持久化） ----------
   getConfig: () => request<ConfigPayload>('/api/config'),

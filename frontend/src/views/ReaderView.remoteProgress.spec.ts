@@ -94,7 +94,7 @@ describe('ReaderView · 其他设备进度提示（第 56 期）', () => {
     title: index === 0 ? '第一章' : '第二章',
     html: index === 0 ? '<p>第一章节正文</p>' : '<p>第二章节正文</p>',
   }))
-    m.recordSession.mockResolvedValue({ ok: true })
+    m.recordSession.mockResolvedValue({ ok: true, session_uid: 'stub-uid' })
     m.fonts.mockResolvedValue({ items: [], max_bytes: 0, max_count: 0 })
     m.setProgress.mockResolvedValue({ ok: true, updated_at: 100 })
     // 载入时读到的进度 = 本机基准（updated_at = 100）

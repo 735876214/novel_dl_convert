@@ -2175,7 +2175,9 @@ def api_add_session(payload: dict = Body(...)):
     if ended > now + 60:                      # 1 分钟宽限：时钟轻微偏差不算错
         raise HTTPException(400, "不能补录未来的会话")
 
-    db.add_session(bid, seconds, started_at=started, ended_at=ended)
+    # source="manual"：补录的会话**确实**来自补录，标出来。留在空串的是改造前的存量行 ——
+    # 那些分不出来源，不猜（见 db.SESSION_SOURCES）
+    db.add_session(bid, seconds, started_at=started, ended_at=ended, source="manual")
     return {
         "ok": True,
         "session": {
@@ -4385,9 +4387,44 @@ def api_font_file(fid: str):
 
 # ---------------- 阅读时长（会话上报）----------------
 
+def _session_num(v, name: str, lo: float, hi: float) -> float:
+    """会话上报里的可选数值：**缺省 / 空串 → ``db.SESSION_UNKNOWN``（-1）**。
+
+    不给 0：``start_percent`` 记 0 是「从开头读的」这个**结论**，而「这次没上报位置」
+    是另一件事 —— 两者混了以后再也分不开，会话表里的 ``CHANGE`` 列会从「—」变成
+    「0%」（见 ``db._session_row``）。
+    """
+    if v is None or v == "":
+        return db.SESSION_UNKNOWN
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{name} 必须为数字")
+    if not (lo <= f <= hi):
+        raise HTTPException(400, f"{name} 须在 {lo:g}–{hi:g} 之间")
+    return f
+
+
 @app.post("/api/books/{bid}/session")
 def api_record_session(bid: str, payload: dict = Body(...)):
-    """阅读器前台计时后上报一段会话（秒）。仅接受合理范围，避免脏数据。"""
+    """阅读器 / 播放器前台计时后上报一段会话（秒）。仅接受合理范围，避免脏数据。
+
+    **两种上报语义，由一个字段区分**（第 63 期）：
+
+    - **带 ``session_uid``** = 「这是某一段阅读的又一次心跳」→ upsert，一段只留**一行**，
+      ``seconds`` 是该段的**累计值**。一次连续阅读 = 一行。
+    - **不带** = 「这是一次独立上报」→ 插新行，与加这些字段之前**逐字节一致**
+      （既有调用点零改动）。
+
+    ⚠️ 为什么不是「进入时开一段、离开时写一行」：30 秒心跳的抗崩溃是既有前提
+    （浏览器崩了最多丢 30 秒），改成结束才写会让整段阅读凭空消失。upsert 两头都要 ——
+    既不丢，也不把「读两小时」炸成 240 行。
+
+    进度快照缺省一律记「未知」（``-1`` 哨兵，见 :func:`_session_num` 与
+    ``db.SESSION_UNKNOWN``）—— **不默认 0%**：没上报就是没上报。
+    ``file_rel`` 是另一回事：**空串有明确含义**「这本书自己」（单文件书 / PDF / 漫画
+    全是这一类），不是「不知道哪一轨」，所以它可以安全地缺省。
+    """
     try:
         seconds = float(payload.get("seconds", 0))
     except (TypeError, ValueError):
@@ -4396,8 +4433,53 @@ def api_record_session(bid: str, payload: dict = Body(...)):
         raise HTTPException(400, "seconds 超出合理范围")
     if not library.by_id(bid):
         raise HTTPException(404, "书籍不存在")
-    db.add_session(bid, seconds)
-    return {"ok": True}
+
+    source = str(payload.get("source") or "").strip()
+    if source and source not in db.SESSION_SOURCES:
+        raise HTTPException(400, f"source 须为 {' / '.join(db.SESSION_SOURCES)} 之一")
+
+    extra = {
+        "start_percent": _session_num(payload.get("start_percent"), "start_percent", 0, 100),
+        "end_percent": _session_num(payload.get("end_percent"), "end_percent", 0, 100),
+        "start_locator": _session_num(payload.get("start_locator"), "start_locator", 0, 10**9),
+        "end_locator": _session_num(payload.get("end_locator"), "end_locator", 0, 10**9),
+        "file_rel": str(payload.get("file_rel") or "").strip()[:500],
+        "source": source,
+    }
+
+    uid = str(payload.get("session_uid") or "").strip()[:64]
+    if uid:
+        db.upsert_session(bid, uid, seconds, **extra)
+    else:
+        db.add_session(bid, seconds, **extra)
+    return {"ok": True, "session_uid": uid}
+
+
+@app.get("/api/books/{bid}/stats")
+def api_book_stats(bid: str):
+    """单书阅读记录 —— 详情页「阅读日志」标签一整页的数据源（第 63 期）。
+
+    **一个端点给一整页**，与 ``GET /api/reading-log``（全站那一页）同一惯例：那个也是
+    一次返回 ``{days, items, by_book, recent}`` 一整包。两者口径互补不重叠 —— 全站页回答
+    「我最近读了什么」，这里回答「这本书我读得怎么样」。
+
+    ⚠️ ``reading`` 在**这本书从没读过**时是 ``null``，不是全 0 的对象：全 0 会让界面把
+    「没记录」渲染成「读了 00:00」。前端据此渲染空状态，而不是渲染一排零。
+
+    ``sessions`` 最多 200 条（新 → 旧），``days`` 升序 —— 一个给流水表，一个给折线图。
+    ``attempts`` 不在这里再给一份：``GET /api/books/{bid}/reading-attempts`` 已经有
+    ``{items, total, current}``，同一份数据两种响应形状只会日后走样。
+
+    历史数据如实返回：第 63 期之前的会话没有进度快照，相关字段是 ``null``，
+    界面显示「—」而不是编造一个 0%。
+    """
+    if not library.by_id(bid):
+        raise HTTPException(404, "书籍不存在")
+    s = db.book_reading_summary(bid)
+    if s is None:
+        # 空书也带上全部键：前端只判 `reading === null` 一处，不用再防 undefined
+        return {"book_id": bid, "reading": None, "records": None, "days": [], "sessions": []}
+    return {"book_id": bid, **s}
 
 
 # ---------------- 数据统计 ----------------

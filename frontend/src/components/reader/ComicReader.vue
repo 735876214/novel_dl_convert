@@ -4,8 +4,9 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type BookCard } from '@/lib/api'
+import { api, type BookCard, type SessionExtra } from '@/lib/api'
 import { sortBySeriesIndex } from '@/lib/bookInfo'
+import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import {
   COMIC_BGS,
   COMIC_DIRECTIONS,
@@ -293,6 +294,25 @@ async function save(): Promise<void> {
   }
 }
 
+// ---------------- 阅读时长（会话上报）----------------
+
+/**
+ * 第 63 期：漫画也计入阅读时长了（此前 `ReaderView` 在 PDF / 漫画分支直接 `return`，
+ * 两者**一秒都不记**）。位置快照用**页码** —— 与 `save()` 写进 `progress` 的是同一个数。
+ *
+ * ⚠️ 这里**只看可见性**，不看「有没有在翻页」：停在某一页盯着看两分钟也是在读。
+ * 口径与章节流 / PDF 共用 `attachReaderClock`。
+ */
+const session = createSessionReporter({
+  source: 'web',
+  // 页数未知时**不给位置**（服务端记「未知」），不编一个 0%
+  snapshot: () => (total.value
+    ? { percent: Math.min(100, (page.value / total.value) * 100), locator: page.value - 1 }
+    : {}),
+  post: (secs, extra: SessionExtra) => api.recordSession(props.bookId, secs, extra),
+})
+let clock: ReaderClock | null = null
+
 function go(n: number): void {
   // 越过末页 = 想继续往后：交给「自动翻下一本」（未开启则原地不动，不再 clamp 成同一页空转）。
   // ⚠️ 这一判断必须放在 `go()` 里 —— 键盘（ArrowRight / PageDown）走的是 `go()` 而**不是** `next()`，
@@ -404,6 +424,11 @@ let ro: ResizeObserver | null = null
 
 onMounted(async () => {
   await load()
+  // 有内容真的能读了才开始计时（打不开 / 空的漫画不该留下零散会话）
+  if (!error.value && total.value) {
+    session.begin()
+    clock = attachReaderClock(session)
+  }
   window.addEventListener('keydown', onKeydown)
   if (typeof IntersectionObserver === 'function') {
     io = new IntersectionObserver(() => {
@@ -421,6 +446,10 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
+  clock?.accrue()          // 先把最后这几秒结掉，再拆管线
+  clock?.detach()
+  clock = null
+  void session.stop()
   if (saveTimer) clearTimeout(saveTimer)
   void save()
   window.removeEventListener('keydown', onKeydown)

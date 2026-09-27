@@ -8,7 +8,8 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
-import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem } from '@/lib/api'
+import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type SessionExtra } from '@/lib/api'
+import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import { readComicPrefs, saveComicPrefs } from '@/lib/comicPrefs'
 import {
   READER_FONTS,
@@ -1070,56 +1071,48 @@ function exportMarkdown(): void {
 
 // ---------------- 阅读时长（会话上报）----------------
 
-let lastTick = Date.now()
-let pendingSeconds = 0
-let sessionTimer: ReturnType<typeof setInterval> | null = null
+/**
+ * **一次连续阅读 = 一段 = 数据库里一行**（第 63 期）。边界规则、起点快照、失败重试
+ * 全在 `lib/readingSession.ts`（纯逻辑、有单测）；这里只负责一件事：
+ * **什么时候算「在读」** —— 前台且页面可见。
+ *
+ * 心跳仍是 30 秒：它的冗余是**故意的**（浏览器崩了最多丢最后 30 秒），
+ * 别为了「少发几个请求」把它改掉。
+ */
+const session = createSessionReporter({
+  source: 'web',
+  snapshot: () => ({ percent: overallPercent.value, locator: currentIndex.value }),
+  post: (secs, extra: SessionExtra) => {
+    // 用**已加载的那本书**的 id，不用 route.params.id：离开阅读器时路由参数先变空，
+    // 那一刻 `String(undefined)` 会发出 POST /api/books/undefined/session（404），
+    // 这段时长又被 catch 塞回一个已经没人再上报的变量 ⇒ 悄悄丢掉。
+    const bid = book.value?.id
+    // 没有 id 就**不报**（宁可丢掉这几秒，也不报一个错的）；拒绝 = 上报失败，
+    // 时长由 reporter 留着，下一段还开着的话会再试
+    if (!bid) return Promise.reject(new Error('书未加载'))
+    return api.recordSession(bid, secs, extra)
+  },
+})
 
-/** 仅在前台可见时累计阅读时长 */
-function accrueSession(): void {
-  const now = Date.now()
-  if (document.visibilityState === 'visible') pendingSeconds += (now - lastTick) / 1000
-  lastTick = now
-}
-
-async function flushSession(): Promise<void> {
-  // 用**已加载的那本书**的 id，不用 route.params.id：离开阅读器时路由参数先变空，
-  // 那一刻 `String(undefined)` 会发出 POST /api/books/undefined/session（404），
-  // 这段时长又被 catch 塞回一个已经没人再上报的变量 ⇒ 悄悄丢掉。
-  const bid = book.value?.id
-  if (pendingSeconds < 5 || !bid) return
-  const secs = Math.round(pendingSeconds)
-  pendingSeconds = 0
-  try {
-    await api.recordSession(bid, secs)
-  } catch {
-    pendingSeconds += secs // 上报失败留待下次
-  }
-}
-
-function onVisibilityChange(): void {
-  accrueSession()
-  if (document.visibilityState === 'hidden') {
-    // 第 61 期：进度也要**当场**落库 —— 800ms 去抖里被打断（切后台/关页面）就会白丢一段位置
-    flushPendingProgress()
-    void flushSession()
-  }
-}
+/**
+ * 计时管线（前台可见才累计 + 30 秒心跳 + 切后台结算）在 `lib/readingSession.ts` 里，
+ * PDF / 漫画两个阅读器共用同一份 —— 边界口径只写一遍，就没有「某一处走样」的余地。
+ */
+let clock: ReaderClock | null = null
 
 function startSession(): void {
-  lastTick = Date.now()
-  sessionTimer = setInterval(() => {
-    accrueSession()
-    void flushSession()
-  }, 30000)
-  document.addEventListener('visibilitychange', onVisibilityChange)
+  session.begin()
+  clock = attachReaderClock(session, {
+    // 第 61 期：进度也要**当场**落库 —— 800ms 去抖里被打断（切后台/关页面）就会白丢一段位置
+    onHidden: flushPendingProgress,
+  })
 }
 
 function stopSession(): void {
-  accrueSession()
-  void flushSession()
-  if (sessionTimer) clearInterval(sessionTimer)
-  sessionTimer = null
-  document.removeEventListener('visibilitychange', onVisibilityChange)
+  clock?.accrue()      // 收尾前把最后这几秒结掉，别丢
+  clock?.detach()
+  clock = null
+  void session.stop()
 }
 
 // ---------------- 生命周期 ----------------
@@ -1155,8 +1148,9 @@ async function load(): Promise<void> {
     return
   }
 
-  // PDF / 漫画不进章节流：书目已就绪，渲染与进度交给各自的阅读器。
-  // （两者都不计阅读时长会话——章节流的计时基于章节位置，套上去会得出错误的时长）
+  // PDF / 漫画不进章节流：书目已就绪，渲染、进度、**阅读时长**全交给各自的阅读器组件。
+  // （第 63 期起它们也计时了：`PdfReader` / `ComicReader` 各自挂一个 reporter，
+  //  位置快照是页码而不是章节号 —— 这里的 `currentIndex` 对它们是空的，接了也没意义）
   if (isPdf.value || isComic.value) return
 
   if (!total.value) {

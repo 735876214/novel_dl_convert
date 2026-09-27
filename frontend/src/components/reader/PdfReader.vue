@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type BookCard } from '@/lib/api'
+import { api, type BookCard, type SessionExtra } from '@/lib/api'
 import {
   PDF_FITS,
   PDF_SCROLL_MODES,
@@ -14,6 +14,7 @@ import {
   type PdfPrefs,
 } from '@/lib/pdfPrefs'
 import { sortBySeriesIndex } from '@/lib/bookInfo'
+import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -207,6 +208,26 @@ async function save(): Promise<void> {
   }
 }
 
+// ---------------- 阅读时长（会话上报）----------------
+
+/**
+ * 第 63 期：PDF 也计入阅读时长了。此前 `ReaderView` 在 PDF / 漫画分支直接 `return`，
+ * 两者**一秒都不记** —— 读了两个小时 PDF，日志里还是空的。
+ *
+ * 位置快照用**页码**（`locator` = 0 起页号，与 `save()` 写进 `progress` 的是同一个数），
+ * 不是章节号：在这里页就是位置本身。计时口径与章节流共用 `attachReaderClock`
+ * （前台可见才累计，30 秒心跳），边界规则不存在第二份实现。
+ */
+const session = createSessionReporter({
+  source: 'web',
+  // 页数未知时**不给位置**（服务端记「未知」），不编一个 0%
+  snapshot: () => (total.value
+    ? { percent: Math.min(100, (page.value / total.value) * 100), locator: page.value - 1 }
+    : {}),
+  post: (secs, extra: SessionExtra) => api.recordSession(props.bookId, secs, extra),
+})
+let clock: ReaderClock | null = null
+
 function go(n: number): void {
   // 越过末页 = 想继续往后：交给「自动翻下一册」（未开启则原地不动，不再 clamp 成同一页空转）。
   // ⚠️ 这一判断必须放在 `go()` 里 —— 键盘（ArrowRight / PageDown）走的是 `go()` 而**不是** `next()`，
@@ -334,6 +355,9 @@ onMounted(async () => {
     await new Promise((r) => setTimeout(r, 150))
     if (prefs.value.scrollMode !== 'page') slots.get(page.value)?.scrollIntoView({ block: 'start' })
     settled = true
+    // 文档真的打开了、能读了才开始计时（打不开的书不该留下零散会话）
+    session.begin()
+    clock = attachReaderClock(session)
   } catch (e) {
     error.value = e instanceof Error ? e.message : 'PDF 打开失败'
     loading.value = false
@@ -372,6 +396,10 @@ function measure(): void {
 }
 
 onBeforeUnmount(() => {
+  clock?.accrue()          // 先把最后这几秒结掉，再拆管线
+  clock?.detach()
+  clock = null
+  void session.stop()
   if (saveTimer) clearTimeout(saveTimer)
   void save()
   window.removeEventListener('keydown', onKeydown)
