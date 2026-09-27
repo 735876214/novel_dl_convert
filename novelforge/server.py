@@ -1839,23 +1839,60 @@ def api_book_chapter(bid: str, index: int):
                            lambda: library.chapter_html(path, index, bid))
 
 
+def _progress_file(b: dict, file_rel: str) -> tuple:
+    """这份进度对应的 ``(文件路径, 是不是 EPUB)``；解析不出来时 ``(None, False)``。
+
+    ``file_rel`` 为空 = 书级（= 主文件），与加这一列之前逐字节一致。
+
+    ⚠️ **只给生成 / 反解 CFI 用，不是保存进度的前置条件**：所以解析不出来时返回
+    ``(None, False)`` 而不是抛 —— 调用方据此「不生成 CFI」，进度本身照常落库。
+    这条边界很重要：CFI 是 EPUB 专有的锦上添花，**不能让它把一次进度保存弄失败**。
+
+    给了 ``file_rel`` 时**必须**走 :func:`fileops.safe_path`：这个值会被拿来拼路径，
+    而它是客户端传的。`safe_path` 会拒掉绝对路径、``..``、超过两层的层级，
+    并 resolve 之后复查是否仍在库根内（防符号链接）。过了它才敢往磁盘上指。
+    """
+    if not file_rel:
+        # 书级：沿用原来的判据（`format` 而不是扩展名）—— 老路径的行为不动它
+        return library.root_of(b) / b["name"], (b.get("format") or "").upper() == "EPUB"
+    try:
+        target = fileops.safe_path(file_rel, b.get("library_id"))
+    except ValueError:
+        return None, False
+    # 指定了文件就按**那个文件自己**的扩展名判是不是 EPUB（书级的 format 说的是主文件）
+    return target, target.suffix.lower() == ".epub"
+
+
 @app.get("/api/books/{bid}/progress")
-def api_get_progress(bid: str):
-    p = db.get_progress(bid)
+def api_get_progress(bid: str, file_rel: "str | None" = None):
+    """读阅读进度。两个口径（第 63 期 4/6）：
+
+    - **不给** ``file_rel`` = 书级：读者最后在看的那个文件的读点（书架 / Komga / KOReader 走这条）；
+    - **给** ``file_rel``（含给空串）= 精确到那个文件：阅读器恢复位置时用。
+
+    ⚠️ 「不给」与「给空串」在库里的落点**不同**，不能合并：给空串要的是 ``file_rel=''``
+    那一行（= 不知道文件的那次写入），不给要的是 ``updated_at`` 最新的那一行。
+    """
+    p = db.get_progress(bid, None if file_rel is None else file_rel.strip()[:500])
     if not p:
         return {"locator": 0, "percent": 0, "cfi": ""}
     out = {"locator": p["locator"], "percent": p["percent"], "cfi": p.get("cfi") or "",
            # 第 56 期：多设备进度提示的**新旧比较基准**（前端把它当作「本机已知的最新
            # 写入时间」，只有比它更新的写入才可能是别的设备）。
-           "updated_at": p["updated_at"]}
+           "updated_at": p["updated_at"],
+           # 这一行说的是**哪个文件**（第 63 期 4/6）。书级查询时它是**答案的一部分**：
+           # 「读到 60%」说的是哪个文件读到 60%，前端据此把「继续阅读」指向对的文件。
+           "file_rel": p["file_rel"]}
     if out["cfi"]:
         # 附带把 CFI 反解成章内字符偏移（与保存侧同一坐标系）：前端拿到 offset
         # 直接换滚动位置，不需要在 JS 里再实现一遍 CFI 解析。
         b = library.by_id(bid)
-        if b and (b.get("format") or "").upper() == "EPUB":
-            pos = epub_cfi.position_from_cfi(library.root_of(b) / b["name"], out["cfi"])
-            if pos:
-                out["offset"] = int(pos[1])
+        if b:
+            target, is_epub = _progress_file(b, p["file_rel"])
+            if is_epub:
+                pos = epub_cfi.position_from_cfi(target, out["cfi"])
+                if pos:
+                    out["offset"] = int(pos[1])
     return out
 
 
@@ -1870,6 +1907,13 @@ def api_set_progress(bid: str, payload: dict = Body(...)):
     # 落库 —— CFI 格式真值源在 core/epub_cfi.py，前端不自己拼。生成不了（坏书 /
     # 非 EPUB / spine 越界）就存空串：恢复侧回落「章 + 全书百分比」，
     # 保存进度本身绝不能因 CFI 失败。
+    # 这份进度属于哪个文件（第 63 期 4/6）：空串 = 书级（不知道文件。
+    # KOReader / Komga / 标记已读全都走这条，与加这一列之前逐字节一致）。
+    # 与 reading_sessions.file_rel 同一套取值约定（库内相对路径），同一处清洗方式：
+    # 它**只被当字符串存**，唯一的「当路径用」的场合是下面生成 CFI，而那一步走
+    # `fileops.safe_path`（见 `_progress_file`），所以这里不做路径校验 —— 也就不可能
+    # 因为一个奇怪的 file_rel 把普通的进度保存打成 400。
+    file_rel = str(payload.get("file_rel") or "").strip()[:500]
     cfi = ""
     offset = payload.get("offset")
     if offset is not None and locator >= 0:
@@ -1880,9 +1924,14 @@ def api_set_progress(bid: str, payload: dict = Body(...)):
         if offset < 0:
             raise HTTPException(400, "offset 必须 ≥ 0")
         b = library.by_id(bid)
-        if b and (b.get("format") or "").upper() == "EPUB":
-            cfi = epub_cfi.cfi_for_position(library.root_of(b) / b["name"], locator, offset)
-    at = db.set_progress(bid, locator, percent, cfi)
+        if b:
+            # CFI 必须按**正在读的那个文件**算：多文件的书里，拿主文件的 spine
+            # 去算另一个 EPUB 的偏移，得到的 CFI 指向的是错的位置 —— 而且是
+            # 一个「看起来很正常」的 CFI，恢复时才会发现跳错了地方。
+            target, is_epub = _progress_file(b, file_rel)
+            if is_epub:
+                cfi = epub_cfi.cfi_for_position(target, locator, offset)
+    at = db.set_progress(bid, locator, percent, cfi, file_rel=file_rel)
     # 回带写入时间戳（第 56 期）：前端据此更新「本机上次写入」，避免把自己的保存
     # 当成本机之外的更新而弹提示。
     return {"ok": True, "updated_at": at}
