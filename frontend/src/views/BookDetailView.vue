@@ -192,10 +192,17 @@ function goToAnnotation(a: Annotation): void {
   router.push(`/read/${bookId.value}?chapter=${a.chapter}`)
 }
 
+/**
+ * 下载一个成品文件（第 64 期：带上库维度，`files[].name` 是**库内相对路径**）。
+ *
+ * ⚠️ 路径与文件名都取**最后一段**：`files[].name` 在 Komga 布局下是 `三体/三体 #1.epub`，
+ * 而 `download` 属性里带 `/` 会被浏览器当成路径处理（文件名变成一串怪东西）。
+ * 服务端侧同一个名字是合法入参（`fileops.safe_path` 专门支持「系列/文件」）。
+ */
 function download(name: string): void {
   const a = document.createElement('a')
-  a.href = api.downloadUrl(name)
-  a.download = name
+  a.href = api.downloadUrl(name, detail.value?.library_id)
+  a.download = name.split('/').pop() || name
   a.click()
 }
 

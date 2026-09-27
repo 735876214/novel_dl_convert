@@ -110,6 +110,21 @@ def _repo_root_guard_fail(verb, p):
     )
 
 
+# 预热 `anyio.open_file`（第 64 期）。**必须在守卫安装之前**，所以是模块级而不是夹具 ——
+# 守卫是 session 级 fixture，写在夹具里已经晚了一步。
+#
+# 起因：`FileResponse` 第一次真正吐文件时，会在**事件循环线程里**惰性 import
+# `anyio._core._fileio`（`anyio/_lazyimport.py` → `import_module`），而 pytest 的断言
+# 重写钩子会给这次 import 写一个 `...-pytest-<版本>.pyc` —— 写 pyc 是「先写同目录临时文件、
+# 再 os.replace」。**`.venv` 就在仓库根内**，于是守卫把这次 replace 判成「移走仓库根内文件」
+# 并 fail：第一个真正返回文件的接口（`/download`）一测就红，报错还指在 conftest 上、
+# 完全看不出是被测代码的问题。（第 44 期那条守卫针对的是**跟踪文件从工作树消失**；
+# 而 `__pycache__` 里的字节码是生成物，不该走这条判据。）
+#
+# 先 import 一次就够：模块进了 `sys.modules`，重写钩子之后不再插手（谁先 import 谁说了算）。
+from anyio import open_file as _prewarm_anyio_open_file  # noqa: E402, F401
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _repo_root_guard():
     """会话级守卫：拦截任何指向仓库根的删除 / 移走操作。

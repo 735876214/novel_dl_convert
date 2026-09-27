@@ -525,12 +525,31 @@ def list_files():
     return {"input": _stat(INPUT_DIR), "output": _stat(OUTPUT_DIR)}
 
 
-@app.get("/download/{name}")
-def download_file(name: str):
-    target = OUTPUT_DIR / name
-    if not target.exists() or not target.is_file():
+@app.get("/download/{name:path}")
+def download_file(name: str, library_id: str = ""):
+    """下载成品文件（旧接口，不在 `/api` 前缀下，见中间件里那条「历史不强制鉴权」）。
+
+    ⚠️ 第 64 期修了两处，都是「详情页的下载按钮点了 404」的真因：
+
+    1. **基根**。原写法是 `OUTPUT_DIR / name`，而 `fileops.output_dir()` 的 docstring
+       明令禁止这么拼：多书库下 `OUTPUT_DIR` 只是**无归属条目**的根，对其它库的书一律
+       解析到错位置。改成 `fileops.safe_path(name, library_id)`，基根由库决定
+       （不传 `library_id` 时仍是 `OUTPUT_DIR`，与改造前一致）。
+    2. **路径形状**。原路由是 `{name}`，只匹配单段 —— 而详情页给的文件名是**库内相对
+       路径**（`library.book_detail` 的 `files[].name`，Komga 布局下形如 `三体/三体 #1.epub`），
+       单段路由接不住、必 404。改成 `{name:path}`。
+       `%2F` 那条路不必依赖：`api.downloadUrl` 已按段编码（见其实现）。
+
+    放宽到 `:path` **没有放宽安全性**：校验一手交给 `fileops.safe_path` ——
+    最多一层子目录、禁 `..` / 绝对路径、解析后必须落在该库根内（含符号链接复查）。
+    """
+    try:
+        target = fileops.safe_path(name, library_id or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not target.is_file():
         raise HTTPException(404, "文件不存在")
-    return FileResponse(target, filename=name)
+    return FileResponse(target, filename=target.name)
 
 
 # ---------------- OPDS 目录订阅源 ----------------
@@ -1205,6 +1224,80 @@ def api_book_detail(bid: str):
     # `GET /api/books/{bid}/local-paths`。注意 `files[].name` 是库内相对路径，不受影响。
     detail.pop("path", None)
     return detail
+
+
+@app.delete("/api/books/{bid}")
+def api_delete_book(bid: str):
+    """删除一本书：**文件移入回收站（不真删），关联数据保留**（第 64 期）。
+
+    两件事分开说清楚，免得后人「顺手」改掉其中一个：
+
+    **① 只回收，不 unlink。** 与全仓同一条约定（`core/publish.py` 顶部三条分工、
+    `fileops.recycle_dir`）。移动原语直接用 `publish.recycle` —— 它**已经**是
+    「用户确认后把某本书的源文件移入回收站」这条既有流程的实现
+    （`scrape.resolve('delete_source')`），而且收**绝对路径**、**文件与目录都行**：
+    这两点缺一不可，因为**有声书整本就是一个目录**。
+    （`fileops.recycle_items` 两条都不满足：它收库内相对名，基根写死 `roots_of[0]`，
+    且 `is_file()` 为假即报错 —— 删有声书会「点了没反应」。）
+
+    **② 不清关联数据**（进度 / 批注 / 书签 / 评分 / 阅读状态 / 收藏关系）。
+    判据是既有决策，不是省事：`DELETE /api/libraries/{lid}` 那条**更重**的路径都刻意
+    只移除登记、不清它们（见 `api_delete_library` 的 docstring 与 `_orphan_refs`），
+    删一本书不该比删整个库更狠。而且 `book_id` 由「库 id + 文件名」派生
+    （`library._book_id`）—— **文件从回收目录放回原路径，id 就复原、数据自然接回**，
+    保留数据让「删书」成为真正可撤销的动作；而清掉批注（用户手写的笔记）不可逆。
+
+    ⚠️ 绝对路径取 `by_id` 里的 ``path``（索引行按它实际落在的那个根拼出），
+    **不用** `library.root_of` —— 那是 best-effort 代表根，多根库里会指到另一个根的
+    同名路径（`api_book_local_paths` 已点名批评过那种写法）。
+
+    ⚠️ 同名冲突（两个库里同名文件撞同一个 id）时 `by_id` 抛 `BookIdConflict`，这里翻成
+    409 —— **绝不能**退回 `by_id_raw`（它在冲突时静默返回 None），那才是「删错书」的入口。
+    """
+    try:
+        b = library.by_id(bid)
+    except library.BookIdConflict as e:
+        raise HTTPException(409, f"这本书的 id 与另一本冲突，先修复冲突再删除：{e}")
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+
+    raw = str(b.get("path") or "")
+    src = pathlib.Path(raw) if raw else None
+    # 同 stem 的兄弟（同目录、同名的其它格式）**不一起删**：`三体.epub` 与 `三体.mobi`
+    # 是两张卡片、两个 id（`library._book_id` 取的是**含扩展名**的 basename），
+    # 替用户删掉他没确认的那一张是错的。名字回给前端，由确认文案点名。
+    siblings = []
+    if src and src.is_file():
+        siblings = [f["path"].name for f in library.sibling_files(src) if f["path"] != src]
+
+    # 文件已经不在磁盘上（手动删过 / NAS 上改过名）不是错误：书照样得能删掉，
+    # 只是没有东西可回收。这里**不必先探一次存在** —— `publish.recycle` 对不存在的
+    # 路径自己返回 None（那是它的既有语义，见其实现）。
+    recycled = None
+    if src:
+        try:
+            dst = publish.recycle(src, why="用户删除书籍")
+        except OSError as e:
+            # 文件没动成就什么都不动 —— 书保持完整，宁可没删成
+            raise HTTPException(500, f"移入回收站失败：{e}")
+        recycled = dst.name if dst else None
+
+    # 索引是磁盘的投影：标脏即可，下一次增量刷新会把这一行删掉
+    # （`refresh_library` 的返回里就有 `removed`）。**不做手工行删除** —— 那是删库才用的
+    # `catalog.forget`。
+    library.invalidate(b.get("library_id"))
+
+    # 刮削台账只**降级**、不删行：`source_removed` 是「只许降级」状态，且源文件哪天放回来
+    # 还能按状态机复活。与 `scrape.resolve('delete_source')` 走的是同一条路径。
+    if db.scrape_get(bid):
+        db.scrape_set(bid, status="source_removed", confirmed_at=time.time(),
+                      error=f"用户删除书籍，原文件已移入回收站：{recycled or ''}")
+
+    activity_log.log(activity_log.ACTION_RECYCLE, str(b.get("name") or bid),
+                     activity_log.STATUS_OK, output=recycled or "",
+                     detail="用户删除书籍，移入回收站（可在回收目录找回）", source="api")
+    return {"ok": True, "id": bid, "name": b.get("name") or "",
+            "recycled": recycled, "siblings": siblings}
 
 
 #: 出现这些头就说明请求**经过了一层转发** —— 见 :func:`_is_local_request` 第 1 条

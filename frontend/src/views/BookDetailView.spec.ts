@@ -33,7 +33,9 @@ vi.mock('@/lib/api', () => ({
     // TypeError（在它自己的 `.catch` 之前），整套用例会以「加载失败」的形式红掉
     readingThresholds: vi.fn().mockResolvedValue({ started: 1, finished: 99 }),
     coverUrl: (id: string) => `/api/books/${id}/cover`,
-    downloadUrl: (name: string) => `/api/download/${name}`,
+    // 与真实现同形（路径是 `/download/`，不在 `/api` 前缀下；见 `lib/downloadUrl.spec.ts`）。
+    // 这里只是个桩：本文件的用例盯的是页面编排，下载地址本身由那个 spec 负责。
+    downloadUrl: (name: string) => `/download/${name}`,
 
     // ---- 「我的记录」标签（ReadingRecord 自取数据，既有契约）----
     bookStatus: vi.fn(),

@@ -3167,7 +3167,18 @@ export const api = {
     return requestBlob('/convert-path', { method: 'POST', body: form })
   },
 
-  downloadUrl: (name: string) => `/download/${encodeURIComponent(name)}`,
+  /**
+   * 成品文件的下载地址（`<a download>` 用，浏览器原生请求带不了 Bearer —— 该路由与
+   * 其它旧接口一样**不强制鉴权**，见 server 中间件）。
+   *
+   * 第 64 期两处修正：① 加 `libraryId` —— 服务端原来写死 `OUTPUT_DIR` 拼路径，
+   * 多书库下对其它库的书必 404；② **按段编码**而不是整串 `encodeURIComponent`：
+   * `name` 是库内相对路径（Komga 布局下形如 `三体/三体 #1.epub`），整串编码会把 `/`
+   * 变成 `%2F`，能否还原取决于中间层怎么解 URL，按段编码则不依赖那件事。
+   */
+  downloadUrl: (name: string, libraryId = '') =>
+    `/download/${name.split('/').map(encodeURIComponent).join('/')}` +
+    (libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : ''),
 
   // ---------- 工具页：实体管理 / 重复书籍 / 缺失资源 ----------
   // 实体改名一律「先 preview、再 apply」；apply 只回传 {type, from, to} ——
