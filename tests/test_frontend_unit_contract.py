@@ -49,6 +49,10 @@ EXPECTED_SPECS = (
     # 第 43 期：书架首字母分桶（跳转条的唯一判据源）。分错桶不会报错、只是跳错位置，
     # 故用 spec 把「拉丁按首字 / 非拉丁归 # / 桶序升序」钉死。
     "src/lib/shelfBuckets.spec.ts",
+    # 第 63 期：详情页此前**零测试**。重做时修掉两个 bug（概览里那个挂错地方的 `v-else`、
+    # 面包屑读全局 `shelfTitle`），两条都不是崩溃型 —— 页面照常渲染，只是多一块 / 显示
+    # 上一次导航的标题。没有 spec 的话下次重排还会原样长回来。
+    "src/views/BookDetailView.spec.ts",
 )
 
 
