@@ -95,3 +95,84 @@
 - `migrate.execute`/`rollback` 不按 `direction` 分支：自动归库(`move`)与用户移动(`bookmove`)共用 `_after_bookmove`/`_after_bookmove_back`，回程对称；`DIR_AUTO="move"` 字面量**不能改**；`server.py` 拒用 bookmove 执行自动归库批次那两处**保留**；反查所属库用 `_lib_id_of_path`（取**最长**匹配）。
 - ⚠️ **`db` 访问只走 `db._connect()`**：返回持 `_lock` 的代理 `db._Conn`（非裸 `sqlite3.Connection`）；`_lock` 是 **RLock**（非重入会自锁死）；「锁内写 + 裸读」实测全 `InterfaceError`、裸读 + `close()` 全段错误；`db._Result` 接口面收窄（execute/executemany/executescript/commit/rollback + 标量/fetchone/fetchall/迭代），新增游标属性要补。契约 `tests/test_db_concurrency_contract.py`。`db.close()` 生产无人调，但「锁内写 + 裸读」生产可达；旧代理线程拿 `ProgrammingError` 是**真错误、别吞**。
 - ⚠️ **win32 目录 `st_size` 恒 0**：「空文件」判据须 `if not p.is_dir() and p.stat().st_size==0`；目录体积用 `watcher._sig()`。
+
+---
+
+## 逐期铁律原文（第 53–61 期；2026-09-28 由 `MEMORY.md` 下沉，内容未删减）
+
+> `MEMORY.md` 只留「每次都要遵守」的跨期铁律与一页索引；本节的逐期细节按需查阅（当期实施记录另见 `docs/roadmap-gaps-remaining.md`）。
+
+### 演播者实体（第 53 期，2026-09-24）
+- `books.narrators`（列表列，与 `tags` 同构）+ `narrators` 实体表（`sort_name`/`sort_name_local` 两列分列，镜像 `authors`；**派生/回填只写 `sort_name`**）；扫描期 `core/audio_meta.py` **零依赖**解析音频标签落盘（m4b/mp3/m4a/opus/ogg/flac），解析失败降级空、绝不挡入库；接口 `/api/narrators*` 形态对齐 authors；命名 token `{narrators}` 与 `RENAME_TOKENS` 契约钉死；**刻意差异**：不新增浏览维度、无头像。
+
+### 语义向量与精确位置（第 54 期，2026-09-26）
+- **`core/embed.py`**：相似书余弦一路优先语义向量 —— 默认 **LSA**（TF-IDF+SVD，纯 numpy **离线零下载**；词表按 df 封顶并**显式定序**，否则两次重算余弦漂移 ⇒ 推荐列表跳）；可选本地 transformer（`CACHE_DIR/embedding-model` + 自备依赖）；**绝不引远程 embedding API**。`book_embeddings` 表（float32 BLOB + `model_tag`）进 REMAP/ORPHAN；读端 `load_vectors` **只认当前 tag**（旧 tag 不混排）；重算=全量批式（`POST /api/embeddings/recompute` + `/similar` 缺向量·扫描完成两条自愈钩子，单飞闸 `threading.Event`+600s 节流，线程收尾走 `server.wait_embed_refresh` 进 conftest）。
+- **`recommend.similar_books(…, vectors=)`**：两书都有向量走语义余弦、缺向量**逐对回落**词袋；「实质重合」门不动 —— 向量管排得好不好、门管该不该出现；出参结构不变。
+- **`core/epub_cfi.py` = 位置换算唯一真值源**：CFI 生成/解析 + CFI→XPointer 兼容层；`xml.etree` 解析（坏书一律安全回落空 CFI）；⚠️ **字符偏移 = 渲染正文 textContent 坐标系**（后端 ET text/tail 模拟 DOM childNodes 数步序，前端 `contentRef.textContent.length`，两侧同尺度才能往返）；`progress.cfi` **只由 NF 阅读器写入，其它来源写进度一律清空 cfi**（防「章已变、CFI 挂旧章」）；进度端点 `offset` 进 / `cfi`+`offset` 出（前端不在 JS 里解析 CFI）；恢复换算不了必须回落「章+全书百分比」。
+- **KOReader 刻意保守**：`from_nf` 下发仍为**章首 XPointer**（kosync 只认 XPointer，真 CFI 会破坏解析，章内精度由 percentage 兜底）；`to_nf` 仅兼容识别 `epubcfi` 取章序号（crengine 字符坐标不同尺度，不换算不落库）；kobo span / kepub DOM 仍不做；Kobo 同步仍不做（2026-09-17 决策）。
+- 依赖：`requirements.txt` 新增 `numpy>=1.26`。文档：module-inventory §2/§4.2/§9 两行改判（embedding 已覆盖；position-converter 已覆盖·子集）+ 第 54 期记录；roadmap 同步。
+
+### 第 55 期铁律（就地建库 / TXT 阅读 / 分章真值源）
+- **「新增书库」= 就地弹窗**：全局单实例 `frontend/src/stores/libraryWizard.ts` + App.vue 挂**一份** `<LibraryWizard>`；各入口调 `wizard.show()`（`created()` 负责刷新全局书库实体 + 宿主回调）。⚠️ **禁再在别处挂 LibraryWizard 或另建第二份数据拉取**（z-50 浮层叠两层关不掉；`?new=1` 经 store 仍可用）。「管理」语义入口（书架顶栏 / 侧栏「更多」）仍跳 `/settings/libraries`。
+- **分章唯一真值源 = `core/detect.py`**（出版管线 / 书源 / TXT 阅读共用；契约 `tests/test_detect_chapters.py`）。⚠️ 两条现状口径别当 bug 顺手改（会同时改出版成品目录）：① 首个边界前的内容（书名/作者）**被丢弃**；② 正则是**非锚定**的 —— 正文里出现「第 N 章」字样也会被当边界。
+- **TXT 阅读 = 派生 EPUB 优先、原生分章兜底**（`core/txtcache.py`）：派生件落 `CACHE_DIR/txt-epub/<book_id>/`（**派生缓存**：不进书库、不落成品目录）；形态由**源文件指纹**锁定（源没变不换路线，防章节号漂移让批注跳错章）；失败写 state.json 标记。⚠️ 派生 EPUB 必须 `epub_builder.build_epub(..., nav=False)`（spine 不含 nav 页 ⇒ 章节 index 0 基，与原生兜底索引空间对齐）；`build_epub` 的 `nav` 参数默认 `True`，改动它前先看全部既有调用方。
+- 新增端点/接口形状不变原则：TXT 阅读**前端零改动**（后端把两条路线归一成 `chapters` + `/chapter/{index}` 同一形状）；`BookDetailView.canRead` 放行 TXT（需有章节）。
+- 设置页三处同步点、契约测试的「源码字符串断言」：改行为时**同步改断言**并在测试里写清新口径（第 55 期改了 `manageLibs`→`createLib`、`cta.to` 可选两处）。
+
+### 第 56 期铁律（多设备进度提示 / 偏好同步感知）
+- **进度同步 = 轮询 + 提示，绝不上 SSE、绝不静默挪阅读位置**：`ReaderView` 用服务端 `updated_at` 当基准（载入读到的 + PUT 回带的 `ownWriteAt`），8s 轮询且「时间戳更新 >1s **且位置确实不同**」才渲染提示条；**只有用户点「跳过去」才 `loadChapter`**（随即写回本机位置避免重复提示）。`hidden` 不轮询；卸载停轮询；提示条不碰 `html`/`contentRef`（不重排正文）。
+- **`updated_at` 是公开契约**：`GET/PUT /api/books/{bid}/progress` 都带；⚠️ **没有进度行时不得给**（造 0 当基准会让首次进阅读器就弹提示）。任何写进度的来源（KOReader/Komga/完成标记）都经 `db.set_progress` ⇒ 自动刷新时间戳（语义：也算「别处读过」）。
+- **偏好同步感知**：设备行 `last_seen` 就是变更信号（勿另建表/列）；判定**必须走纯函数** `prefsSyncDecision`（noop / apply-remote / conflict，1s 容差）；`conflict`（本机有未推送改动）**只提示不覆盖**（顶栏胶囊 → 设置页显式选）。`boot()` 的启动裁决语义不变（启动那刻 pending⇒本机为准并推）。
+- 前端 spec 假时钟约定：伪造计时器时**保留真 `setTimeout`**（只 fake `setInterval`/`clearInterval`/`Date`），否则 `flushPromises()` 自挂。
+
+### 前端约定（第 57 期补充，通用）
+- **设置页真实路由 = `#/settings/<page.path>`**（如 `#/settings/metadata/providers`），**不带分组段** —— 分组只是侧栏视觉分组。曾误写 `#/settings/library/metadata/providers` → 「未知路由」。
+- **目录/列表类数据拉取失败必须显式**：不许 `catch { /* 静默 */ }` 让块变空（用户看到「已启用：2/0 + 没有匹配的提供商」会一头雾水）。做法：① 尽量**回落旧接口**保住可用性；② 把原因写在界面上 + 「重试」按钮；③ 计数类显示要做兜底，别出现 `N/0`；④ 空态区分「加载中 / 无匹配 / 空」。
+- **前端改动后必须 `type-check` + `test:unit` + `build` + `deploy`**（部署产物落 `novelforge/static/v2`，不入库）；**后端改动必须重启进程才生效**（用户遇到的「空列表」根因就是后端没重启）→ 交付说明里要写清重启/重建镜像这一步。
+- 浏览器冒烟用 `playwright-cli open --browser=msedge <url>`（本机没装 Chrome，Chromium 会报 distribution not found）；用 `CONFIG_DIR/INPUT_DIR/OUTPUT_DIR` 指向 `.codebuddy/tmp-*` 隔离，`admin/changeme` 登录；`route "**/api/xxx" --status=404` 可复现旧后端场景。
+- ⚠️ **注入 token 不稳，直接走登录表单更可靠**（第 66 期实测：`localstorage-set nf_token` + 重载仍停在登录门禁；用表单填 `admin/changeme` 点「进入」即通）。
+
+### 第 60 期铁律（按语种重排来源顺序）
+- 规则：`专精本语种(0) → 多语种通吃(1) → 专精别的语种(2)`，**档内保持用户设的顺序**（`sorted` 稳定）；**只排序、不筛源**（任何启用的家都仍会被查到）；**未知语种不重排**。亲和表 `metasources.LANG_AFFINITY` + `LANG_BROAD`，契约 `∪ == SOURCES`（新增一家源必须显式表态）。
+- ⚠️ **占位语种陷阱**：`_lang_of("未知")` 返回非空串（它服务于「写进书目时归一」），重排前必须再拦一道 `LANG_UNKNOWN`，否则会拿占位符当真实语种、把所有源判成「专精别的语种」→ 凭一个占位值瞎重排。
+- 调用点三处必须同口径：`metafetch.plan`（**逐本**算）、`metafetch.online_candidate`（单本）、`series_meta`（系列无自身语种 → 成员书投票，平票取先出现者以保证可复现）。`plan` 每本回传 `sources_order`，界面据此解释「为什么先问它」。
+- 配置键新增要动三处：`config.DEFAULTS`、`server.EDITABLE`（`GET /api/config` 的 metadata_fetch 走掩码函数整体回传，不用手列），前端 `data/settingsFields.ts` 的 `SECTION_KEYS`（metadata 段已有 → 无需改）。
+- **前端自动化踩坑（差点误报产品 bug）**：用 DOM 遍历点某个设置行里的按钮时，向上找「含 button 的容器」会拿到祖先容器、点到**邻近按钮**，现象是「标签翻了但值没落库」——看着像产品 bug。正确定位：`filter(元素包含该行标题 && 元素内恰好 1 个 button)` 取**最深**那个。另外 SPA 同路由 `page.goto` 不会重挂组件，草稿会串场，验证开关前要带 `?fresh=timestamp` 强制重挂。
+
+### 第 61 期铁律（阅读器体验八项）
+- **翻页模式几何（修过一次又错一次的坑）**：正文 `width` 是 **border-box**（含内边距）⇒ 要设**整屏宽**，内容盒才等于「可用宽」；栏宽 = 可用宽/栏数；**位移步长 = 栏宽 + 栏距**（不是容器宽 + 栏距）。把 width 设成「可用宽」会让内容盒再窄两个内边距，右缘照旧露下一栏。
+- **目录跳转按 `flat` 位置、不回查后端 index**；**请求序号守卫**必须有（连点目录时慢响应后到会覆盖后跳的那一章 = 「跳错位置」真因）。无章节序号的目录项**不要渲染**成死项；切章要有加载反馈（否则用户认为「点了没反应」）。
+- **进度实时 = 就地回写 store**（`library.patchProgress`），四个阅读器都要调；不重拉整库。切后台/关页面要补发去抖里未发出的那一次（visibilitychange 复用会话的、另加 pagehide）。
+- **自动续章的「无缝」全靠预取**：`chapterCache` 先把下一章取好 ⇒ 切换时不发请求、不闪加载。**先确保缓存再切换**，反过来写就退化成「自动点下一章按钮」，空档一个不少。翻页模式的末页判定是另一条路径（本期未改）。
+- **通知合并（尾随去抖）必然要延迟落盘**：窗口内不写文件 ⇒ 必须 `atexit` 兜底 flush；且**测试默认关闭合并**（`tests/conftest.py` autouse），否则会破坏大批既有用例「写一条即落一条」的前提。合并键 = 动作 + 结果 + 主体。
+- **漫画库里的 PDF 按漫画形态读**：pdf.js 逐页渲染成 blob 图，交回同一套 `<img>` 漫画布局（单/双页、右到左、无间隙连续自动适用），**不要新写一份 PDF 布局**；`comicPrefs.pdfMode` 决定默认阅读器，两个阅读器互留切换入口并共用页进度。
+- **性能优化先量化**：本项目 3 本书的小库下全链路仅 59/66/119ms、接口 3–10ms —— 没有指标前不许「凭感觉优化」。
+- **验证技巧**：滚轮验证要把鼠标移到**视口中心**（用元素 boundingBox 会指到视口外 ⇒ 滚轮根本没落在阅读区）；后端改完必须**重启 uvicorn** 才生效；多实例共用同一 CONFIG_DIR 会共享日志目录 ⇒ 验证合并/日志类行为要换全新 CONFIG_DIR。
+
+### 第 59 期铁律（14 家真联网体检）
+- **体检 = 只读 + 分类 + 首条结果**：`metasources.health_check()`（并发 4、单家超时 12s）；`POST /api/metadata/health` 跑一次、`GET` 回上次（**进程内缓存**，重启即空，如实回「尚未体检过」）。**分类是给用户的动作指南**：限流=等一会/填 Key、拒绝=填 Key、反爬拦截=降频率/带 Cookie、重定向=被拦到验证页、`empty`=站点可能改版、`http`=接口报错。不要退化成「可用/不可用」。
+- **样本按家给**（`HEALTH_SAMPLES`）：地区性目录用当地书名（Aladin `채식주의자` / Lubimyczytac `Wiedźmin` / RanobeDB `狼と香辛料`），否则**好家会被误报成无结果**。
+- **必须回「命中的第一条」**：只报状态会漏掉「可用但答非所问」——Amazon 第一版抓到 `Aug 25, 2020` 却显示可用。**错字段比缺字段更糟**。
+- 真实站点事实（本机实测，别再当 bug 修）：Google Books 匿名 **429**、Kobo **403**、Goodreads **302**（反爬验证页）、Audible **400**、AudNexus SSL 中断、Libro.fm **HTTP 202 + 挑战页**（`_get_text` 已判 202 与验证码页 → `blocked`）、Open Library 偶发 SSL 握手超时。Amazon 书名在**结果项 `<h2>`** 里；Lubimyczytac 用 `book-card__title/__author`（`authorAllBooks__*` 早已废弃）。
+- `_strip_html` 的实体还原用标准库 `html.unescape`：手写对照表会漏（Amazon 书名有 `&#x27;`）。
+- 写「只读」类断言要**前后对比**（`before == after`），别断言绝对值为空/为假 —— 同进程里别的用例可能已改过同一份隔离配置，那样写会变成依赖执行顺序的假失败。
+
+### 第 58 期铁律（跨源字段级合并）
+- **合并有门槛**：只有 `score >= max(0.7, 0.9×最佳分)` 的候选才参与（`metafetch.MERGE_MIN_SCORE/MERGE_RELATIVE`）—— 拼错书的字段不可逆。不够格**逐字回到旧行为**（只用最佳候选）；`metadata_fetch.merge_sources` 可整体关掉。
+- **`FIELD_TRUST` 的键必须是字段名，不是书对象键**：年份是 `date`（书目里才叫 `year`）。写成 `year` **不报错、只静默失效**（信任表形同虚设）—— 有契约钉住这条。
+- ⚠️ 查询题：**`_VALUE_KEYS`/`_CURRENT` 的键是字段名**，`changes` 里也是字段名（`date`）；`_candidate_values`/`merge_values` 遍历的是字段名，候选里的值键才是 `year`。
+- 合并**只改选值，不改写不写**：字段策略 / `meta_locks` / `meta_overrides` 三闸照旧；`plan` 与 `online_candidate` **必须同一套规则**（否则同一数据两种答案）；逐字段回传 `source/score`，整条回 `merged_from`（空 = 未合并）。
+- **候选入口一律剥 HTML**（`metasources._strip_html`）：实测 iTunes 的简介带 `<b>` 标签，不剥就落库成字面标签。**真实联网能抓到单测抓不到的问题**（假响应是自己写的）。
+
+### 第 57 期铁律（元数据提供商 / 插件市场 / 书源）
+- **14 家提供商全部接入**（B 段）：`core/metasources.SOURCES` 与 `_FETCHERS` **必须逐字一致**（契约 `IMPLEMENTED == _FETCHERS.keys()`，`tests/test_metadata_providers.py`）—— 加一家 = 注册表条目 + fetcher + `IMPLEMENTED` 三处同改。三档如实标注：免密钥即用（open-library / googlebooks / itunes / audnexus / ranobedb）、**需密钥**（hardcover / comicvine / aladin，`needs_config=True` + `key_field`）、**页面抓取型**（amazon / goodreads / kobo / audible / librofm / lubimyczytac，`fragile=True` → 前端「易失效」徽标；站点改版可能失效，**真实可用性无法离线验证**）。
+- **出网收口**：14 家只经 `metasources._get_json` / `_get_text` 出网 —— 契约测试 monkeypatch 这两个函数即可离线测全部解析（`tests/test_metasources_parsers.py` 33 项）。失败码统一翻中文（429/401/403 有专门文案）；**单源异常绝不冒泡**（解析器一律 `isinstance` 过滤 + 空响应回落 `[]`）。
+- **密钥三处同步**：`config.DEFAULTS["metadata_fetch"]` + `server.EDITABLE["metadata_fetch"]` + 注册表 `key_field`；回显一律经 `_mask_metadata_fetch`（**按注册表循环掩码** + `has_<键名>`）。`metasources.options_for(mf, sources)` 是唯一的密钥拼装口（metafetch 的 plan/online_candidate 与 series_meta 共用）。缺密钥的家：抓取回明确中文错误、`/api/metadata/probe` **不发外呼**。
+- **启用状态真值源仍是 `metadata_fetch.sources`**（默认只开 2 家：openlibrary + googlebooks；`GET /api/metadata/providers` 只聚合不新开状态）。
+- **凭据/参数挂在对应提供商那一行**（第 57 期 D/E 段，用户要求对齐上游）：每行「配置 ▾」展开后在该行下方给控件 + 测试/保存/重置，**不再有底部集中密钥区**。**注册表 `config_fields` 是唯一真值源**：`{key, opt, label, type: secret|select, options?, placeholder?, hint?}`；`provider_catalog()` 把头一项派生成 `key_field`/`key_label`/`key_placeholder`（前端旧字段名可用），`key_field_of()` 同样派生 —— **不要**再单独写这三个字面量。掩码遍历 `metasources.secret_fields()`（Cookie 也是凭据）。
+  - ⚠️ **行内「测试」必须只读**：把输入框当前（可能未保存）的值经 `POST /api/metadata/probe` 的 `configs`（整行草稿，早期 `keys` 兼容）传进去，**不落盘** —— 否则只能测到上次保存的旧值，或被迫先保存一次。
+  - ⚠️ **行内改动必须同时写进页面级配置草稿**（`setDraft` 里 `setVal`）：否则点页面自己的「保存」不落库，用户会以为存了。静默态 secret 仍是掩码值，后端把掩码当「不修改」语义，安全。
+  - 每个配置项必须**真的被 fetcher 用上**（Amazon Cookie 头 / iTunes 尺寸段 / Kobo URL 两段 / Audible 分站域名），否则就是假交互。
+- **声明式插件市场已取消**（用户拍板，2026-09-26）：不要再提「可经插件市场安装」，也不要有任何市场/插件包代码。zlibrary 专用下载同样不做（盗版分发平台）。
+- 书源侧：**表单化添加**（`SourcesView` 三段式）+ `POST /api/sources/test`（校验 + **不落盘**试搜，写盘唯一入口仍是 `store.add_rule`）；前端必填校验与 `rules.validate_rule` 同口径（另加写盘文件名字符集）。
+- **系列级元数据**（第 57 期 C 段）：`series_meta.FIELDS` = description / publisher / first_year / tags **四个字段都可本地覆盖**；⚠️ **`set_local` 的空串语义 = 清除该字段覆盖**，所以「恢复在线」必须**只提交那一个字段**（顺手带上别的字段会清掉用户的其它覆盖）—— `SeriesMetaPanel.spec.ts` 盯死这条；未覆盖时来源是「成员书聚合」（`_aggregate` 零猜测）或在线，界面要标出来源；「册数」两个概念不可合并（owned_count 实际拥有 / declared_count 外部声明）。改前端面板后**必跑** `npm run test:unit`：面板展示改了不会被测试发现，payload 改了才会。
