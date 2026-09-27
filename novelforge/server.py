@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import hmac
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -1010,6 +1011,29 @@ def opds_lib_download(request: Request, lid: str, bid: str):
 # 数据源同样是扫描 OUTPUT_DIR（见 core/library.py）。列表走缓存，详情按需抽取
 # EPUB 章节树；任何写操作后 library.invalidate() 保证一致性。
 
+def _card(b: dict) -> dict:
+    """书目条目 → **对外卡片**：去掉服务器绝对路径（第 63 期 5/6）。
+
+    ``library._row_of`` / ``catalog._book_of_row`` 产出的条目里有一个 ``path``
+    字段（服务器上的**绝对路径**，内部要用它，例如刮削台账的 ``source_path``）。
+    它此前跟着 ``{**b}`` / ``dict(b)`` 一路发给了所有客户端 —— 不是任何一条决策的
+    产物，前端也从来没用过（``lib/api.ts`` 的 ``BookCard`` 里根本没有这个字段）。
+
+    第 63 期决策 6 定的是「路径**按访问来源区分**」：本机 / 局域网才给绝对路径，
+    其余降级为库内相对路径（``name`` 就是，一直都有）。要做到「远程不给」，就不能
+    让它继续躺在通用响应里 —— 否则详情页那边的降级只是一块遮羞布：随便打开
+    DevTools 就能在 ``/api/books`` 里读到全部绝对路径。
+
+    ⚠️ 这是**边界上的收口**，不是把 ``path`` 从数据层删掉：``library.books()`` /
+    ``by_id()`` / ``book_detail()`` 照旧带着它，服务端内部（``/api/scrape/state``
+    的 ``source_path``、迁移 / 移动的预览等）一个都没动。对外要给绝对路径，
+    唯一的出口是 ``GET /api/books/{bid}/local-paths``（那里有来源判据）。
+    """
+    out = dict(b)
+    out.pop("path", None)
+    return out
+
+
 @app.get("/api/books")
 def api_books():
     """书目列表：附带阅读进度 / 批注数 / 评分 / 阅读状态（来自 SQLite）。"""
@@ -1023,7 +1047,7 @@ def api_books():
         p = prog.get(b["id"])
         st = statuses.get(b["id"])
         items.append({
-            **b,
+            **_card(b),
             "percent": float(p["percent"]) if p else 0.0,
             "updated_at": p["updated_at"] if p else 0.0,
             "annotation_count": annos.get(b["id"], 0),
@@ -1177,7 +1201,107 @@ def api_book_detail(bid: str):
     detail = library.book_detail(b["name"], b.get("library_id"))
     if not detail:
         raise HTTPException(404, "书籍不存在")
+    # 第 63 期 5/6：绝对路径**按访问来源**给（`_card` 的说明），要它的地方是
+    # `GET /api/books/{bid}/local-paths`。注意 `files[].name` 是库内相对路径，不受影响。
+    detail.pop("path", None)
     return detail
+
+
+#: 出现这些头就说明请求**经过了一层转发** —— 见 :func:`_is_local_request` 第 1 条
+_FORWARD_HEADERS = ("x-forwarded-for", "x-real-ip", "forwarded", "x-forwarded-host")
+
+
+def _is_local_request(request: Request) -> bool:
+    """这个请求是不是来自**本机 / 局域网** —— 只回答一个问题：「要不要给服务器上的绝对路径」。
+
+    判据两层，**拿不准一律判否**（宁可少给，不可错给）：
+
+    1. **出现任何转发头就降级**。这一层不是多余的：本项目部署在 NAS 上，前面挂一层
+       反代是很常见的形态，而反代来的请求 ``request.client.host`` 是**反代自己的
+       地址**（通常正是 172.16/12 的容器网段），只看对端地址会把它误判成局域网。
+       ⚠️ 这里**不看** ``X-Forwarded-For`` 里写的来源 —— 那个头客户端可以随便写，
+       信它等于让任何远程客户端写一个 ``127.0.0.1`` 就把服务器目录结构拿走。
+       判据只取「这个头**存在**」这一个事实。
+    2. 没有转发头时看 **TCP 层对端地址**：回环或私网 ⇒ 本机 / 局域网。
+       IPv4-mapped IPv6（``::ffff:192.168.0.5``，双栈监听下很常见）先还原成 IPv4
+       再判，否则它既不是回环也不是私网、会被白白降级。
+
+    ⚠️ **边界条件**（同时记在 ``docs/bookorbit-capability-gap.md`` §3 的复核头里）：
+    这一层假定**没有任何反向代理**。将来若真在公网入口前架了反代、又希望仍能识别
+    来源，必须改成**显式配置的受信代理白名单**（例如环境变量给出代理地址，再取其
+    转发的来源），**不能**在这里放宽这两条 —— 放宽的代价是把绝对路径给到公网。
+    """
+    for h in _FORWARD_HEADERS:
+        if request.headers.get(h):
+            return False
+    host = (request.client.host if request.client else "") or ""
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        # 解析不出 IP 的 host（Starlette 的 TestClient 给的是 `testclient` 这类名字）
+        # 一律当作「不是本机」—— 判否只会少给一份便利，判是却会泄露目录结构
+        return False
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if mapped is not None:
+        ip = mapped
+    # 判据取「**不是全球可路由**」而不是 `is_private`：以「能不能从公网到达」为准，
+    # 落不进全球地址集合的（私网 / 回环 / 链路本地 / 保留段 / 文档段）都算本地 / 局域网。
+    # 方向是**从严** —— 宁可少给一份便利，不可错给一次目录结构。
+    return not ip.is_global
+
+
+@app.get("/api/books/{bid}/local-paths")
+def api_book_local_paths(bid: str, request: Request, response: Response):
+    """这本书在**服务器磁盘上**的绝对路径 —— **只给本机 / 局域网来源**（第 63 期 5/6）。
+
+    详情页的「文件」标签要回答「这个文件在磁盘上的哪里」，而这件事**按访问来源
+    区分**（用户第 63 期决策 6）：本机看得到完整路径（配复制按钮），远程只看库内
+    相对路径。第 33 期曾把「展示绝对路径」定为**已决策不做**（理由：远程 / 多端下
+    泄露服务器目录结构，见 ``docs/bookorbit-capability-gap.md`` §3）；本次是**有条件
+    放宽、不是推翻** —— 条件就是 :func:`_is_local_request`。
+
+    为什么单开一个端点、而不是往 ``GET /api/books/{bid}`` 里塞一个字段：那个响应是
+    **与请求者无关**的资源表示（同一个 book_id 对所有客户端逐字节相同），一旦混进
+    「取决于来源」的信息，判据就散到每个消费点上 —— 将来谁在前面加一层缓存，本机
+    路径就会被回放给远程。这里**一个端点、一处判据**，要审只有一处；响应也带
+    ``no-store``，不给任何中间层留下缓存它的机会。
+
+    返回 ``{local, paths}``：
+
+    - ``local`` 为假时 ``paths`` 是**空的** —— 远程不是「拿到一个降级的值」，而是
+      「这个问题在你这儿没有答案」，前端据此显示库内相对路径（它本来就有，
+      见 ``book_detail().files[].name``）；
+    - ``paths`` 的键与 ``files[].name`` 同一套取值（库内相对路径）。**主文件总是
+      在里面**（``book.name``）—— 「这本书自己在磁盘上的哪里」正是这个端点存在的
+      理由，有声书那种「整本书就是一个目录」的条目同样有答案。
+    - 主文件**不在磁盘上**（文件刚被挪走 / 索引比磁盘旧）时**一条都不给**：
+      **给一个不存在的路径比不给更糟** —— 用户照着去找，找不到，还会以为文件丢了。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    # 这个响应**取决于请求者**：任何中间层都不许缓存它（见上面 docstring）
+    response.headers["Cache-Control"] = "no-store"
+    if not _is_local_request(request):
+        return {"local": False, "paths": {}}
+    # ⚠️ 绝对路径取自**书目卡片里的 `path`**（`catalog` 的 `root` 列 + `rel` 拼出来的，
+    # 精确到这本书真正落在哪个根），**不用 `library.root_of`** —— 多文件夹库下
+    # `root_of` 只给「代表根」（best-effort），书在别的根上时拼出来的是**另一个根上的
+    # 同名路径**，那正是「给一个不存在的路径」。空值也要挡住：`pathlib.Path("")` 是
+    # 当前工作目录，`exists()` 会给你一个 True，然后把服务器的工作目录报出去。
+    raw = str(b.get("path") or "")
+    abs_main = pathlib.Path(raw)
+    if not raw or not abs_main.exists():
+        return {"local": True, "paths": {}}
+    # 兄弟文件与主文件**在同一个目录**（这正是 `sibling_files` 的判据），所以：
+    # 主文件的库内相对路径去掉文件名 = 它们的相对目录，再拼上各自文件名即可 ——
+    # 键与 `book_detail().files[].name` 逐字一致，又不必知道库根在哪。
+    rel_dir = b["name"].rpartition("/")[0]
+    paths = {b["name"]: str(abs_main)}
+    for f in library.sibling_files(abs_main):
+        name = f["path"].name
+        paths[f"{rel_dir}/{name}" if rel_dir else name] = str(f["path"])
+    return {"local": True, "paths": paths}
 
 
 # ---------------- 账户（单用户轻登录）----------------
@@ -2424,7 +2548,7 @@ def api_series_detail(name: str):
     第 12 期补 ``meta`` / ``meta_state``：系列级元数据的生效值与逐字段明细，
     供系列页展示简介与编辑器渲染「已本地修改 / 恢复在线」。
     """
-    bs = library.series_books(name)
+    bs = [_card(x) for x in library.series_books(name)]
     if not bs:
         raise HTTPException(404, "系列不存在")
     buckets: dict = {}
@@ -2580,7 +2704,7 @@ def api_authors():
 
 @app.get("/api/authors/{name}")
 def api_author_detail(name: str):
-    bs = library.author_books(name)
+    bs = [_card(x) for x in library.author_books(name)]
     if not bs:
         raise HTTPException(404, "作者不存在")
     info = authors_mod.effective(name)
@@ -2708,7 +2832,7 @@ def api_narrators():
 
 @app.get("/api/narrators/{name}")
 def api_narrator_detail(name: str):
-    bs = library.narrator_books(name)
+    bs = [_card(x) for x in library.narrator_books(name)]
     if not bs:
         raise HTTPException(404, "演播者不存在")
     info = narrators_mod.effective(name)
@@ -4096,7 +4220,8 @@ def api_collection_detail(cid: int):
     c = db.get_collection(cid)
     if not c:
         raise HTTPException(404, "收藏夹不存在")
-    books = [b for bid in db.collection_book_ids(cid) if (b := library.by_id(bid))]
+    books = [_card(b) for bid in db.collection_book_ids(cid)
+             if (b := library.by_id(bid))]
     return {"id": c["id"], "name": c["name"], "books": books}
 
 

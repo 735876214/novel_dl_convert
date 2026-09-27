@@ -290,7 +290,20 @@ onMounted(async () => {
 
     <ChaptersTab v-show="tab === 'chapters'" :chapters="detail?.chapters ?? []" />
 
-    <FilesTab v-show="tab === 'files'" :files="files" @download="download" />
+    <!--
+      文件标签：`active` 是**必须传的** —— 它要单独问一次 `/local-paths`（那个响应
+      取决于请求者，拿不到就整块不显示路径），没必要在每次进详情页时都问。
+      `main-name` / `main-format` 告诉它这一页说的是哪一份（同 stem 的成品各有各的页面）。
+    -->
+    <FilesTab
+      v-show="tab === 'files'"
+      :files="files"
+      :main-name="book.name"
+      :main-format="book.format"
+      :book-id="bookId"
+      :active="tab === 'files'"
+      @download="download"
+    />
 
     <AnnotationsTab v-show="tab === 'annotations'" :annotations="annotations" @go="startReading" />
 

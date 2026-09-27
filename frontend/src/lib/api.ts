@@ -691,6 +691,20 @@ export interface BookFile {
   mtime: number
 }
 
+/**
+ * 「这本书在磁盘上的位置」（第 63 期 5/6，决策 6）。
+ *
+ * 与 `BookDetail.files` 分开是有意的：`files` 是与请求者无关的资源表示，
+ * 这个响应**取决于谁在问**（本机/局域网才给绝对值），所以单独一个端点、
+ * 单独一次请求、`no-store`。键与 `files[].name` 同一套取值，两边能对上。
+ */
+export interface BookLocalPaths {
+  /** 服务端判定「这次请求来自本机/局域网」。false 时 `paths` 恒空 */
+  local: boolean
+  /** 库内相对路径 → 服务器绝对路径。含主文件本身与同 stem 的兄弟文件 */
+  paths: Record<string, string>
+}
+
 /** 书架网格与详情页共用的书籍卡片（对齐 docs/bookorbit-library-contract.md）。 */
 export interface BookCard {
   id: string
@@ -3293,6 +3307,10 @@ export const api = {
 
   bookDetail: (id: string) =>
     request<BookDetail>(`/api/books/${encodeURIComponent(id)}`),
+
+  /** 服务器上这本书的绝对路径（只有本机/局域网来源才拿得到，见 BookLocalPaths） */
+  bookLocalPaths: (id: string) =>
+    request<BookLocalPaths>(`/api/books/${encodeURIComponent(id)}/local-paths`),
 
   // ---------- 账户（单用户轻登录） ----------
   login: (user: string, pin: string) =>

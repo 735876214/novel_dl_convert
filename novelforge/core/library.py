@@ -1580,6 +1580,44 @@ def find(name: str, library_id=None) -> dict | None:
     return None
 
 
+def sibling_files(path: pathlib.Path) -> list:
+    """``path`` 的**同 stem 成品文件**清单（第 63 期 5/6 从 :func:`book_detail` 抽出）。
+
+    抽出来的理由：详情页的「文件」标签与「本机绝对路径」（``GET
+    /api/books/{bid}/local-paths``）都要这份清单，而「哪些算兄弟」的判据
+    （**同一个目录**里、**同 stem**、**是文件**）只能有一份 —— 两处各写一遍，
+    迟早在其中一处走样。三条判据都是有来由的：
+
+    - **同一个目录**：Komga 布局下同系列的书都躺在系列目录内，跨目录去找会串到别的系列；
+    - **同 stem**：``三体.epub`` 与 ``三体.mobi`` 是同一本书的两个成品，``三体2.epub`` 不是；
+    - **是文件**：目录不参与 —— 目录型的书是**有声书**，它自己就是一个目录，
+      枚举下去会把别的**目录**当成成品文件列出来。
+
+    ⚠️ 返回的项给的是 ``path``（**绝对路径对象**），**不给库内相对路径** ——
+    「相对哪个根」是调用方的事：``book_detail`` 相对库根取名（那是详情页契约），
+    ``local-paths`` 端点直接给绝对路径。本函数只管「在文件系统上找出兄弟文件」。
+
+    返回项 ``{path, format, size, mtime}``，按文件名排序；读不了目录时返回空
+    （**枚举**拿不到就是拿不到，不能因此让整个详情页打不开）。
+    """
+    if path.is_dir():
+        return []
+    stem = path.stem
+    out = []
+    try:
+        for f in sorted(path.parent.iterdir()):
+            if f.is_file() and f.stem == stem:
+                out.append({
+                    "path": f,
+                    "format": f.suffix.lstrip(".").upper() or "?",
+                    "size": f.stat().st_size,
+                    "mtime": f.stat().st_mtime,
+                })
+    except Exception:                         # noqa: BLE001
+        pass
+    return out
+
+
 def book_detail(name: str, library_id=None) -> dict | None:
     """单本详情：基础元数据 + 真实章节树 + 同 stem 的成品文件列表（音频另给轨道清单）。"""
     b = find(name, library_id)
@@ -1599,22 +1637,16 @@ def book_detail(name: str, library_id=None) -> dict | None:
     else:
         chapters = []
     files = []
-    # 音频目录没有「同 stem 兄弟文件」的概念，跳过枚举（否则会把别的目录当成文件列出来）
-    if not path.is_dir():
-        stem = path.stem
+    for f in sibling_files(path):
         try:
-            # 同 stem 的其它格式（epub/mobi/azw3）只在**同一个目录**里找：
-            # Komga 布局下同系列的书都躺在系列目录内，跨目录去找会串到别的系列
-            for f in sorted(path.parent.iterdir()):
-                if f.is_file() and f.stem == stem:
-                    files.append({
-                        "name": f.relative_to(root).as_posix(),
-                        "format": f.suffix.lstrip(".").upper() or "?",
-                        "size": f.stat().st_size,
-                        "mtime": f.stat().st_mtime,
-                    })
-        except Exception:
-            pass
+            name = f["path"].relative_to(root).as_posix()
+        except ValueError:
+            # 拼不出库内相对路径 ⇒ 这一条**不列**（与改造前 `except: pass` 的
+            # 行为一致）。多文件夹库下 `root_of` 只给「代表根」，书在别的根上时
+            # 就是这个情形 —— 漏列比列一个指向别处的假路径好。
+            continue
+        files.append({"name": name, "format": f["format"],
+                      "size": f["size"], "mtime": f["mtime"]})
     detail = dict(b)
     detail["chapters"] = chapters
     detail["files"] = files

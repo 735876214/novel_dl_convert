@@ -44,6 +44,9 @@ vi.mock('@/lib/api', () => ({
     // 一个看起来像真故障的假故障，排查起来离真正的原因很远。
     bookReadingStats: vi.fn(),
     readingAttempts: vi.fn(),
+    // ---- 「文件」标签（第 63 期 5/6；FilesTab 自取数据）----
+    // 默认 `active: false` 时它不动，但点开那个标签就会走到 —— 一次给齐（同上）
+    bookLocalPaths: vi.fn(),
   },
   apiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
@@ -61,6 +64,7 @@ const m = {
   bookReview: vi.mocked(api.bookReview),
   bookReadingStats: vi.mocked(api.bookReadingStats),
   readingAttempts: vi.mocked(api.readingAttempts),
+  bookLocalPaths: vi.mocked(api.bookLocalPaths),
 }
 
 const BOOK_ID = 'lib$aaa'
@@ -170,6 +174,9 @@ beforeEach(async () => {
     sessions: [],
   })
   m.readingAttempts.mockResolvedValue({ items: [], total: 0, current: null })
+  // 默认「本机来源但没能定位到」：详情页这几条用例盯的是标签编排，不是路径面板
+  // （两种来源的形态在 `FilesTab.spec.ts` 里逐个盯）
+  m.bookLocalPaths.mockResolvedValue({ local: true, paths: {} })
 
   router = createRouter({
     history: createMemoryHistory(),
