@@ -198,43 +198,76 @@ export const useLibraryStore = defineStore('library', () => {
     if (ts > 0) hit.updated_at = Math.max(ts, hit.updated_at || 0)
   }
 
+  /**
+   * 进行中的书目请求（第 67 期「单飞闸」）。
+   *
+   * ⚠️ 只有 `loaded` 守卫是**不够**的：`loadBooks` 在真正发请求前先 `await` 了阈值，
+   * 这是个让步点 —— 首屏上「侧栏 + 若干仪表盘部件」在同一批微任务里各调一次，
+   * 全都在任何人把 `loaded` 置真**之前**通过了守卫，于是同一份书目被并发拉了多次。
+   * 实测 600 本的库：**一次页面加载打了 7 次 `/api/books`**（2.8 MB、累计 3.6 s）。
+   * 现在并发调用共享同一个 Promise；`force` 期间若已有在飞的请求，也复用它
+   * （它拿回来的就是最新数据，再发一次没有意义）。
+   */
+  let booksInflight: Promise<void> | null = null
+
   async function loadBooks(force = false): Promise<void> {
     if (loaded.value && !force) return
-    loading.value = true
-    // 第 40 期：阈值是判「读没读完」的依据，**先拿到再判**。
-    // 不 await 也能跑（有兜底值），但那是「先按默认值渲染一帧再跳」，不如等一下。
-    await Promise.all([ensureThresholds(), ensureThresholds(currentLibraryId.value)])
-    try {
-      const res = await api.books()
-      books.value = res.items
-      loaded.value = true
-    } finally {
-      loading.value = false
-    }
+    if (booksInflight) return booksInflight
+    booksInflight = (async () => {
+      loading.value = true
+      // 第 40 期：阈值是判「读没读完」的依据，**先拿到再判**。
+      // 不 await 也能跑（有兜底值），但那是「先按默认值渲染一帧再跳」，不如等一下。
+      await Promise.all([ensureThresholds(), ensureThresholds(currentLibraryId.value)])
+      try {
+        const res = await api.books()
+        books.value = res.items
+        loaded.value = true
+      } finally {
+        loading.value = false
+        booksInflight = null
+      }
+    })()
+    return booksInflight
   }
 
-  /** 书库实体 + 来源父目录（空则拉取）。 */
+  /** 书库实体 + 来源父目录（空则拉取）。同 `loadBooks`，并发调用共享同一次请求（第 67 期）。 */
+  let libsInflight: Promise<void> | null = null
+
   async function loadLibraries(force = false): Promise<void> {
     if (libraryEntities.value.length && !force) return
-    try {
-      const res = await api.libraries()
-      libraryEntities.value = res.items
-      sourceRoots.value = res.source_roots ?? []
-      librariesLoaded.value = true
-    } catch {
-      // 拉失败 ⇒ `librariesLoaded` 保持 false，`hasNoLibraries` 跟着为假：
-      // 不知道有几个库时**不说**「还没有书库」，也不假装是 0。
-    }
+    if (libsInflight) return libsInflight
+    libsInflight = (async () => {
+      try {
+        const res = await api.libraries()
+        libraryEntities.value = res.items
+        sourceRoots.value = res.source_roots ?? []
+        librariesLoaded.value = true
+      } catch {
+        // 拉失败 ⇒ `librariesLoaded` 保持 false，`hasNoLibraries` 跟着为假：
+        // 不知道有几个库时**不说**「还没有书库」，也不假装是 0。
+      } finally {
+        libsInflight = null
+      }
+    })()
+    return libsInflight
   }
 
-  /** 格式分面（第 10 期改址到 `/api/library-facets`）。 */
+  /** 格式分面（第 10 期改址到 `/api/library-facets`）。同上，并发共享一次请求（第 67 期）。 */
+  let facetsInflight: Promise<void> | null = null
+
   async function loadLibraryFacets(force = false): Promise<void> {
     if (libraryFacets.value.length && !force) return
-    try {
-      libraryFacets.value = (await api.libraryFacets()).items
-    } catch {
-      /* ignore */
-    }
+    if (facetsInflight) return facetsInflight
+    facetsInflight = (async () => {
+      try {
+        libraryFacets.value = (await api.libraryFacets()).items
+      } catch {
+        /* ignore */
+      } finally {
+        facetsInflight = null
+      }
+    })()
+    return facetsInflight
   }
 
   /**

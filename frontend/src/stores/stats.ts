@@ -21,18 +21,35 @@ export const useStatsStore = defineStore('stats', () => {
   const error = ref('')
   const library = useLibraryStore()
 
+  /**
+   * 在飞的统计请求 + 它属于哪个书库（第 67 期单飞闸）。
+   *
+   * 仪表盘上有 6 个部件各自 `onMounted(() => stats.load())`，`loaded` 守卫要等
+   * **第一份返回之后**才生效 ⇒ 首屏会并发打多次 `/api/stats`（实测 **x3**，累计 0.9 s）。
+   * 按书库记在飞的请求：同一库共享，切库后是新的一发。
+   */
+  let inflight: Promise<void> | null = null
+  let inflightLid = ''
+
   async function load(force = false): Promise<void> {
     const lid = library.currentLibraryId || ''
     // 同一库且已加载则跳过；切库或强制时重拉（避免把「全部书库」的统计误当成某库）
     if (loaded.value && !force && data.value?.library_id === lid) return
-    error.value = ''
-    try {
-      data.value = await api.stats(28, lid)
-      loaded.value = true
-    } catch (e) {
-      /* 未登录或后端不可用：保持为空，但记下错误供仪表盘提示 */
-      error.value = e instanceof Error ? e.message : '加载失败'
-    }
+    if (inflight && inflightLid === lid) return inflight
+    inflightLid = lid
+    inflight = (async () => {
+      error.value = ''
+      try {
+        data.value = await api.stats(28, lid)
+        loaded.value = true
+      } catch (e) {
+        /* 未登录或后端不可用：保持为空，但记下错误供仪表盘提示 */
+        error.value = e instanceof Error ? e.message : '加载失败'
+      } finally {
+        inflight = null
+      }
+    })()
+    return inflight
   }
 
   // 切库后自动重载：只在我们曾经加载过时才重新请求，避免无人消费时也打接口

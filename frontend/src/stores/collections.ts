@@ -18,16 +18,39 @@ export const useCollectionsStore = defineStore('collections', () => {
    */
   const error = ref('')
 
+  /**
+   * 在飞的收藏夹请求（第 67 期单飞闸）。
+   *
+   * ⚠️ 与 `loadBooks` 的差别：这里的 `force` 来自 `create` / `remove` / `rename` ——
+   * 它们**刚改完服务端**，必须拿到改后的列表。若此时恰好有一次「页面加载时发出的」
+   * 旧请求在飞，直接复用它会把**新收藏夹吞掉**。所以 force 的分支是
+   * 「**等前一次落地，再跑一次**」，而不是复用在飞请求。
+   */
+  let inflight: Promise<void> | null = null
+
   async function load(force = false): Promise<void> {
     if (loaded.value && !force) return
-    error.value = ''
-    try {
-      items.value = (await api.collections()).items
-      loaded.value = true
-    } catch (e) {
-      /* 未登录或后端不可用：保持空列表，但记下错误供页面显示错误态 */
-      error.value = e instanceof Error ? e.message : '加载失败'
+    if (inflight) {
+      if (!force) return inflight
+      try {
+        await inflight
+      } catch {
+        /* 前一次失败不阻塞这一次 */
+      }
     }
+    inflight = (async () => {
+      error.value = ''
+      try {
+        items.value = (await api.collections()).items
+        loaded.value = true
+      } catch (e) {
+        /* 未登录或后端不可用：保持空列表，但记下错误供页面显示错误态 */
+        error.value = e instanceof Error ? e.message : '加载失败'
+      } finally {
+        inflight = null
+      }
+    })()
+    return inflight
   }
 
   async function create(name: string): Promise<number> {
