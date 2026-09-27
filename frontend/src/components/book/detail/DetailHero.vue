@@ -139,7 +139,7 @@ onMounted(loadBookCollections)
       </div>
 
       <!-- 进度：>0 才显示。0% 与「没读过」在这里是同一个结论，不显示两条 -->
-      <div v-if="percent > 0" class="mt-3 max-w-[24rem]">
+      <div v-if="percent > 0" data-test="hero-progress" class="mt-3 max-w-[24rem]">
         <ProgressBar :value="percent" :tone="progressTone" />
         <p class="mt-1 text-[11.5px] text-muted-foreground tabular-nums">
           已读 {{ Math.round(percent) }}%

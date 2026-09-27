@@ -34,6 +34,16 @@ vi.mock('@/lib/api', () => ({
     readingThresholds: vi.fn().mockResolvedValue({ started: 1, finished: 99 }),
     coverUrl: (id: string) => `/api/books/${id}/cover`,
     downloadUrl: (name: string) => `/api/download/${name}`,
+
+    // ---- 「我的记录」标签（ReadingRecord 自取数据，既有契约）----
+    bookStatus: vi.fn(),
+    bookReview: vi.fn(),
+    // ---- 「阅读日志」标签（第 63 期 3/6；ReadingLogTab 也是自取数据）----
+    // 默认 `active: false` 时它一个请求都不发，所以这两个桩目前只在有人点开那个标签时
+    // 才用得上。仍然一次给齐：**缺桩的失败不是崩溃，是「阅读记录加载失败」** ——
+    // 一个看起来像真故障的假故障，排查起来离真正的原因很远。
+    bookReadingStats: vi.fn(),
+    readingAttempts: vi.fn(),
   },
   apiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
@@ -47,6 +57,10 @@ const m = {
   listAnnotations: vi.mocked(api.listAnnotations),
   bookCollections: vi.mocked(api.bookCollections),
   collections: vi.mocked(api.collections),
+  bookStatus: vi.mocked(api.bookStatus),
+  bookReview: vi.mocked(api.bookReview),
+  bookReadingStats: vi.mocked(api.bookReadingStats),
+  readingAttempts: vi.mocked(api.readingAttempts),
 }
 
 const BOOK_ID = 'lib$aaa'
@@ -138,6 +152,24 @@ beforeEach(async () => {
   m.listAnnotations.mockResolvedValue({ items: [] })
   m.bookCollections.mockResolvedValue({ items: [] })
   m.collections.mockResolvedValue({ items: [] })
+  m.bookStatus.mockResolvedValue({
+    book_id: BOOK_ID,
+    status: 'unread',
+    started_at: 0,
+    finished_at: 0,
+    updated_at: 0,
+  })
+  m.bookReview.mockResolvedValue({ book_id: BOOK_ID, stars: 0, review: '' })
+  // 默认「这本书没读过」：`reading: null` 是服务端对「从没读过」的**明确回答**，
+  // 于是「阅读日志」标签渲染的是空态（另两种形态在 `ReadingLogTab.spec.ts` 里逐个盯）
+  m.bookReadingStats.mockResolvedValue({
+    book_id: BOOK_ID,
+    reading: null,
+    records: null,
+    days: [],
+    sessions: [],
+  })
+  m.readingAttempts.mockResolvedValue({ items: [], total: 0, current: null })
 
   router = createRouter({
     history: createMemoryHistory(),
@@ -200,17 +232,23 @@ describe('BookDetailView', () => {
     expect(breadcrumbSegments(w)).toEqual(['三体'])
   })
 
+  /**
+   * 断言收在 `[data-test="hero-progress"]` 那一块里，**不按整页文本判**：
+   * 「我的记录」标签的状态选项里有「已读完」，它含子串「已读」—— 按整页断言
+   * `not.toContain('已读')` 会被一个与 hero 毫不相干的文案绊倒（这条以前是绿的，
+   * 只因为那个标签当时没渲染出来）。
+   */
   it('进度 >0 时 hero 显示进度条与百分比，0% 时两样都不显示', async () => {
     m.getProgress.mockResolvedValue({ locator: 12, percent: 53.4 })
     let w = await mountDetail()
-    expect(w.text()).toContain('已读 53%')
+    expect(w.find('[data-test="hero-progress"]').text()).toContain('已读 53%')
     expect(w.text()).toContain('继续阅读')
 
     setActivePinia(createPinia())
     await router.push(`/book/${BOOK_ID}`)
     m.getProgress.mockResolvedValue({ locator: 0, percent: 0 })
     w = await mountDetail()
-    expect(w.text()).not.toContain('已读')
+    expect(w.find('[data-test="hero-progress"]').exists()).toBe(false)
     expect(w.text()).toContain('开始阅读')
   })
 
@@ -226,6 +264,30 @@ describe('BookDetailView', () => {
     // 「文件」标签的内容：文件名 + 大小（1 KB）
     expect(w.text()).toContain('三体.epub')
     expect(w.text()).toContain('1 KB')
+  })
+
+  /**
+   * 「阅读日志」标签是第 63 期 3/6 加的第 7 个标签，它**自取数据**（`bookReadingStats`
+   * / `readingAttempts`），不走父级传 props。所以这条用例盯着两件事：
+   *
+   * 1. 标签真的挂上去了，点得开、有内容；
+   * 2. 那两个接口在 `@/lib/api` 的桩里**确实存在**。少了桩不会有崩溃，只会让
+   *    `load()` 的 `catch` 把 TypeError 转成「阅读记录加载失败」—— 一个看起来像
+   *    真故障的假故障（这正是本文件开头那条「桩要一次给齐」的教训）。
+   */
+  it('「阅读日志」标签点得开，且自取数据没被漏掉的桩挡住', async () => {
+    const w = await mountDetail()
+    // `active: false` ⇒ 一个请求都不发（详情页是高频入口，这是刻意的）
+    expect(m.bookReadingStats).not.toHaveBeenCalled()
+
+    const btn = w.findAll('button').find((b) => b.text().startsWith('阅读日志'))
+    expect(btn).toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+
+    expect(m.bookReadingStats).toHaveBeenCalledWith(BOOK_ID)
+    expect(w.text()).toContain('还没有阅读记录')   // 默认桩 = 这本书没读过
+    expect(w.text()).not.toContain('阅读记录加载失败')
   })
 
   it('详情拉取失败时给出错误提示，而不是静默渲染成一本空书', async () => {

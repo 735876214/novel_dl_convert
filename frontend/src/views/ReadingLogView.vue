@@ -6,6 +6,7 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { api, apiErrorMessage, type ReadingLogBook, type ReadingLogDay, type ReadingLogSession } from '@/lib/api'
+import { paceText } from '@/lib/readingPace'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -109,20 +110,8 @@ function avgText(sec: number): string {
   return `${Math.floor(m / 60)} 小时 ${m % 60} 分/次`
 }
 
-/**
- * 阅读速度（页/小时）：有可靠页数才显示，否则返回空（不造假）。
- * 可靠 = pages_source 为 'estimate'（EPUB 估算）或 'archive'（漫画真实值）且 pages>0。
- */
-function paceText(b: ReadingLogBook): string {
-  if (!b.pages || b.pages <= 0) return ''
-  if (b.pages_source !== 'estimate' && b.pages_source !== 'archive') return ''
-  const hours = (b.seconds || 0) / 3600
-  if (hours <= 0) return ''
-  const pph = b.pages / hours
-  const src = b.pages_source === 'archive' ? '真实页数' : '估算页数'
-  return `${pph.toFixed(0)} 页/小时（${src}）`
-}
-
+// 阅读速度（页/小时）判据搬到了 `lib/readingPace.ts`：详情页「阅读日志」也用它，
+// 两处各写一遍的话，「哪些来源算可信」迟早会分叉（第 63 期 3/6）
 const peak = computed(() => Math.max(1, ...items.value.map((d) => d.seconds)))
 function barHeight(sec: number): string {
   return `${Math.max(4, (sec / peak.value) * 100).toFixed(1)}%`

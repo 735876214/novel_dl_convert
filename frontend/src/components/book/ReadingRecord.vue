@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
-import { api, type BookReview, type ReadingAttempt, type ReadingStatus } from '@/lib/api'
+import { api, type BookReview, type ReadingStatus } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -22,8 +22,6 @@ const loading = ref(true)
 const saving = ref(false)
 const st = ref<ReadingStatus | null>(null)
 const rv = ref<BookReview | null>(null)
-/** 阅读尝试（轮次，第 43 期）：一轮 = 开始读 → 读完 */
-const attempts = ref<ReadingAttempt[]>([])
 
 const STATUS_OPTIONS = [
   { value: 'unread', label: '未读' },
@@ -61,7 +59,6 @@ async function load(): Promise<void> {
     finished.value = toInput(s.finished_at)
     review.value = r.review
     stars.value = r.stars
-    await loadAttempts()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '记录加载失败')
   }
@@ -71,49 +68,10 @@ async function load(): Promise<void> {
 onMounted(load)
 watch(() => props.bookId, load)
 
-// ---- 阅读尝试 / 重读（第 43 期）----
-// 轮次由后端 `db.set_status` 自动维护（标记「在读 / 已读完」时开轮 / 收尾）；
-// 这里提供两个**用户显式**的出口：「再来一遍」（手动开新一轮）与「从历史补录」。
-
-async function loadAttempts(): Promise<void> {
-  try {
-    attempts.value = (await api.readingAttempts(props.bookId)).items
-  } catch {
-    attempts.value = []
-  }
-}
-
-async function startReRead(): Promise<void> {
-  try {
-    await api.startReadingAttempt(props.bookId)
-    await loadAttempts()
-    ui.toast('已开始新的一轮')
-    emit('changed')
-  } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '操作失败')
-  }
-}
-
-async function finishAttempt(): Promise<void> {
-  try {
-    await api.finishReadingAttempt(props.bookId)
-    await loadAttempts()
-    ui.toast('已标记这一轮读完')
-    emit('changed')
-  } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '操作失败')
-  }
-}
-
-async function backfillAttempts(): Promise<void> {
-  try {
-    const r = await api.backfillReadingAttempts()
-    await loadAttempts()
-    ui.toast(r.created ? `已从历史补录 ${r.created} 本` : '没有需要补录的书')
-  } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '补录失败')
-  }
-}
+// ---- 阅读尝试 / 重读 ----
+// 第 43 期在这里；**第 63 期 3/6 整块搬到了「阅读日志」标签**（`detail/ReadingLogTab.vue`）：
+// 轮次记的是「读的行为」，与那个标签下的时长 / 会话 / 进度是同一族，放在「我的记录」
+// （状态与评价）里反而割裂。这里只留一句指路：那个标签是详情页的第 7 个。
 
 const dirtyDates = computed(() => {
   if (!st.value) return false
@@ -140,7 +98,6 @@ async function setStatus(status: string): Promise<void> {
     st.value = r
     started.value = toInput(r.started_at)
     finished.value = toInput(r.finished_at)
-    await loadAttempts()
     ui.toast(`已标记为「${label(status)}」`)
     emit('changed')
   } catch (e) {
@@ -293,49 +250,16 @@ async function resetReadingState(): Promise<void> {
         </div>
       </Card>
 
-      <!-- 阅读尝试 / 重读（第 43 期）：一轮 = 「开始读 → 读完」，读完后再开始就是新一轮 -->
+      <!-- 阅读尝试 / 重读搬去了「阅读日志」标签（第 63 期 3/6），这里只留一句指路。
+           不做成链接不跳转：那是同一个页面上的另一个标签，`TabBar` 就在上面一格，
+           再给一个「去那儿」的按钮不如直接把话说清。 -->
       <Card padding="none" class="mt-3">
-        <div class="flex items-start gap-3 border-b border-border px-4 py-3">
-          <div class="min-w-0 flex-1">
-            <h3 class="text-[13px] font-semibold text-foreground">阅读尝试 / 重读</h3>
-            <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
-              一轮 = 「开始读 → 读完」；读完后再开始就是新一轮，这里记着读过几遍与每轮起止时间。
-              标记「在读 / 已读完」会自动维护轮次，也可以手动开一轮。
-            </p>
-          </div>
-          <Button size="sm" variant="ghost" @click="startReRead">再来一遍</Button>
-        </div>
-        <div v-if="attempts.length" class="divide-y divide-border">
-          <div
-            v-for="a in attempts"
-            :key="a.id"
-            class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5 text-[12.5px]"
-          >
-            <span class="font-mono text-[11px] tabular-nums text-muted-foreground">第 {{ a.round }} 轮</span>
-            <span class="text-foreground">{{ toInput(a.started_at) || '—' }}</span>
-            <span class="text-muted-foreground">→</span>
-            <span :class="a.finished_at ? 'text-foreground' : 'text-muted-foreground'">
-              {{ a.finished_at ? toInput(a.finished_at) : '进行中' }}
-            </span>
-            <Button v-if="!a.finished_at" size="sm" variant="ghost" class="ml-auto" @click="finishAttempt">
-              标记读完
-            </Button>
-            <span
-              v-else
-              class="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10.5px] text-muted-foreground"
-            >已完成</span>
-          </div>
-        </div>
-        <div v-else class="px-4 py-3 text-[11.5px] leading-relaxed text-muted-foreground">
-          还没有轮次记录。标记「在读 / 已读完」会自动记一轮，也可以点「再来一遍」手动开一轮。
-          <button
-            v-if="st && (st.started_at || st.finished_at)"
-            type="button"
-            class="ml-1 cursor-pointer underline underline-offset-2 hover:text-foreground"
-            @click="backfillAttempts"
-          >
-            从历史补录
-          </button>
+        <div class="px-4 py-3">
+          <h3 class="text-[13px] font-semibold text-foreground">阅读尝试 / 重读</h3>
+          <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
+            重读轮次记在「阅读日志」标签里 —— 那里是这本书的阅读行为（多久 / 几次 / 读到哪 /
+            读过几遍），这里是你的状态与评价。
+          </p>
         </div>
       </Card>
 

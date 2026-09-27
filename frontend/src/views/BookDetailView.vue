@@ -7,6 +7,7 @@ import ChaptersTab from '@/components/book/detail/ChaptersTab.vue'
 import DetailHero from '@/components/book/detail/DetailHero.vue'
 import FilesTab from '@/components/book/detail/FilesTab.vue'
 import OverviewTab from '@/components/book/detail/OverviewTab.vue'
+import ReadingLogTab from '@/components/book/detail/ReadingLogTab.vue'
 import MetadataEditor from '@/components/book/MetadataEditor.vue'
 import ReadingRecord from '@/components/book/ReadingRecord.vue'
 import Button from '@/components/ui/Button.vue'
@@ -19,13 +20,16 @@ import { api, type Annotation, type BookDetail, type ProgressState, type Similar
 import { extractCoverTint, type CoverTint } from '@/lib/coverTint'
 
 /**
- * 单书详情：面包屑 + hero + 六个标签（概览 / 目录 / 文件 / 批注 / 编辑元数据 / 我的记录）。
+ * 单书详情：面包屑 + hero + **七个**标签（概览 / 目录 / 文件 / 批注 / 编辑元数据 /
+ * 阅读日志 / 我的记录）。标签清单以文件末尾的 `TABS` 常量为准 —— 这行注释是散文，
+ * 加了标签忘了改它不会有任何提示（第 63 期 3/6 加了「阅读日志」才发现上一版写的是
+ * 「六个」，且已经漏了整整一期）。
  *
  * 第 63 期把各标签的渲染拆到了 `components/book/detail/`，本文件只留**取数与编排**：
  * `detail` / `progress` / `annotations` / `similar` 四份数据在这里加载一次，
  * 子组件全部收 props（不各自再请求一遍 —— 那样改完元数据 hero 与概览会各自过期）。
- * 例外是 `MetadataEditor` / `ReadingRecord`：它们自取数据是既有契约，靠
- * `saved` / `changed` 事件通知这里刷新。
+ * 例外是 `MetadataEditor` / `ReadingRecord` / `ReadingLogTab`：它们自取数据是既有契约，
+ * 靠 `saved` / `changed` 事件通知这里刷新。
  *
  * 数据全部来自后端 /api/books/{id}（真实 EPUB 元数据 + 章节树 + 成品文件）；
  * 阅读进度、批注、我的记录（状态 / 日期 / 评分 / 书评）都是真数据，落 SQLite。
@@ -101,6 +105,7 @@ const TABS = [
   { id: 'files', label: '文件' },
   { id: 'annotations', label: '批注' },
   { id: 'metadata', label: '编辑元数据' },
+  { id: 'reading', label: '阅读日志' },
   { id: 'record', label: '我的记录' },
 ] as const
 
@@ -292,6 +297,22 @@ onMounted(async () => {
     <div v-show="tab === 'metadata'">
       <MetadataEditor :book-id="bookId" @saved="onMetaSaved" />
     </div>
+
+    <!--
+      阅读日志（这本书的阅读行为：多久 / 几次 / 读到哪 / 读过几遍）。
+      `active` 是**必须传的**：这一页的数据与那张 ECharts 图都等到第一次点开才加载
+      （见 `ReadingLogTab` 的文件头）。标签用 `v-show` 而不是 `v-if`，所以「挂载了」
+      不等于「用户打开了」—— 光靠 `v-if` 是拦不住那个 800 kB 量级的 ECharts chunk 的。
+      `pages` / `pages-source` 用来算阅读速度，判据在 `lib/readingPace.ts`。
+    -->
+    <ReadingLogTab
+      v-show="tab === 'reading'"
+      :book-id="bookId"
+      :active="tab === 'reading'"
+      :pages="detail?.pages"
+      :pages-source="detail?.pages_source"
+      @changed="onMetaSaved"
+    />
 
     <!-- 我的记录（状态 / 日期 / 评分 / 书评） -->
     <div v-show="tab === 'record'">

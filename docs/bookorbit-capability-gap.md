@@ -220,10 +220,31 @@ MISSING / OOR / BLANK / COMMENT —— **这是预期噪声，不必再修**；�
 > ⚠️ 本域是**「档位列集体判反」**的典型：原判的「需新增后端能力」五项（Edit Metadata / 阅读状态起止 /
 > 书评 / 相似书 / 按书日志 / 手工补录）**后端全部已存在**，且都是**只写服务端、不碰源文件**的实现 ——
 > 与本项目「源文件只读」的硬约束一致。**原判理由里说「复用 `_patch_opf` 写 OPF」的那个方向，恰恰是错的**。
+>
+> **第 63 期复核（2026-09-27，3/6 详情页重做）**：本轮只有**一处改判**，但它推翻的是本域
+> 一行**写在「本项目现状」栏里的独立决策**，不是过期判断：
+>
+> **「Reading Log 按书日志**不在**详情页（避免与 `/log` 页重复入口）」→ 推翻，改为「在」。**
+> 第 30 期把它排掉的理由是「避免重复入口」。第 63 期 3/6 重做详情页后，这个理由**不再成立**，
+> 因为两个入口回答的**不是同一个问题**：
+>
+> - 左侧栏 `/log`（全站）回答「**我最近读了什么**」—— 跨书的时间线；
+> - 详情页「阅读日志」标签回答「**这本书我读得怎么样**」—— 单书的时长/会话/进度/轮次。
+>
+> 主语不同就不是重复入口。判据是**同一批数据换个地方再摆一遍**才算重复 —— 而这里
+> `/log` 的「按书」卡（`ReadingLogView.vue:237-252`）只给一行摘要，**会话级流水与那张
+> 双轴进度图只在详情页有**；反过来 `/log` 的跨书日历与热力图详情页也没有。
+> **保留 `/log` 的「按书」卡是有意的**：它是「扫一眼哪本书读得多」的地方，不是入口冗余。
+>
+> 实现：`components/book/detail/ReadingLogTab.vue`（第 7 个标签 `:105`，渲染 `:305-312`），
+> 数据源 `GET /api/books/{bid}/stats`；阅读速度判据抽成 `lib/readingPace.ts` 与 `/log` 页共用。
+> **同一处改判的第二个教训（记下来）**：详情页的标签用 `v-show` 而非 `v-if`，所以「组件挂载了」
+> **不等于**「用户打开了」—— 那个 800 kB 量级的 ECharts chunk **不能靠 `v-if` 拦**，必须显式传
+> `active` 并让子组件等到第一次点开才 import。这是「不造假」之外的**性能纪律**，同样值得写进文档。
 
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
-| 五标签（Details / Edit Metadata / Files / Reading Log / Highlights） | 5 个标签 | **已落地（且比上游多一档）**：今天 **6 个标签** —— 概览/目录/文件/批注/编辑元数据/我的记录（`TABS` 定义 `views/BookDetailView.vue:108-117`，渲染 `:336-353`）。与上游对应：Details=概览 `:356-436`、Edit Metadata=编辑元数据 `:536-538`、Files=文件 `:487-505`、Highlights=批注 `:508-533`、Reading Log ≈ 我的记录 `:541-543` | **已落地** | 原判「四标签」已过期，**锚点也错**（原引 `:30-35` 今天是文件头注释，且那段注释**自身也过期**：仍写「四标签」与「持久化字段将在引入 SQLite 后接入」，见下方「本轮发现」）。⚠️ 对应关系是**近似**：本项目的「我的记录」只有状态/起止日期/评分/书评，**会话级**日志在 `/log` 页 —— 不宜写成「已有 Reading Log 标签」 |
+| 五标签（Details / Edit Metadata / Files / Reading Log / Highlights） | 5 个标签 | **已落地（且比上游多两档，第 63 期 3/6 复核）**：今天 **7 个标签** —— 概览/目录/文件/批注/编辑元数据/**阅读日志**/我的记录（`TABS` 定义 `views/BookDetailView.vue:99-107`，渲染 `:276-317`）。与上游对应：Details=概览、Edit Metadata=编辑元数据、Files=文件、Highlights=批注、**Reading Log=阅读日志（第 63 期 3/6 新增，见下一行）** | **已落地** | 原判「四标签」已过期，**锚点也错**（原引 `:30-35` 今天是文件头注释）。**第 63 期 3/6 起本行不再打折**：此前那句「对应关系是**近似**：会话级日志在 `/log` 页，不宜写成已有 Reading Log 标签」**已作废** —— 详情页有了自己的第 7 个标签，会话级数据就在那儿 |
 | Edit Metadata | 单书元数据编辑 | **已落地**：后端 `GET`/`POST /api/books/{bid}/metadata`（`server.py:1162-1186`、`:1188-1251`，三种取值语义：覆盖 / `null` 清空 / 空串撤销），另有 `/metadata/online`（`:1253`）与 `/metadata/revert`（`:1266`）；**只写服务端覆盖、不改写任何文件**（`:1190-1196,1226-1233` 明写「不再写文件：written 恒为空」）；前端 `components/book/MetadataEditor.vue`（357 行）挂在「编辑元数据」标签（`BookDetailView.vue:536-538`） | **已落地** | 原判「无」已过期。⚠️ 原判理由「复用 `_patch_opf` 加 POST 接口」**方向就是错的** —— 那会写回 OPF，与「元数据仅存服务端」的既定原则冲突。`core/fileops.py:193-254` 今天只服务实体改名与命名规则重出版 |
 | 阅读状态 + Date Started / Finished | 显式状态字段 | **已落地**：表 `reading_status(book_id, status, started_at, finished_at, updated_at)`（`core/db.py:160-166`）；写入规则 `db.set_status`（`core/db.py:3239`：进 reading/finished 自动记 `started_at`，进 finished 记 `finished_at`，**离开 finished 清零**）；接口 `GET`/`PUT /api/books/{bid}/status`（`server.py:1489-1503`，可显式传起止日期）；前端 `components/book/ReadingRecord.vue:26-32`（5 档状态）、`:84-126`（保存）、`:138-172`（「开始于/读完于」date input） | **已落地** | 原判「无起止日期」已过期。⚠️ 进度推导**今天只是兜底**：真实状态优先，无状态行才按进度阈值推导（`core/stats.py:353-391`；该阈值**第 40 期起可配置** —— 全局 + 每库覆写，默认仍 99.5%，不再写死）—— 原引锚点 `core/stats.py:46-51` 今天是 `integrity` 计数块 |
 | YOUR REVIEW（书评 + 评分） | 可写书评 | **已落地**：后端 `GET`/`PUT /api/books/{bid}/review`（`server.py:1749-1768`，stars 与 review 一起保存，0/空串=清除）；落 `ratings` 表 review 列（`db.set_review` `core/db.py:1889`、`db.get_review` `:1909`）；前端「我的评分与书评」卡（5 星 + 清除 + textarea + 保存）`ReadingRecord.vue:200-246`；书架列表/表格也展示评分（`ShelfView.vue:863-865,934-935`） | **已落地** | 原判「无」「需新建 `reviews` 表」均过期 —— **没有新建表**，复用了既有的 `ratings` 表加列 |
@@ -231,7 +252,7 @@ MISSING / OOR / BLANK / COMMENT —— **这是预期噪声，不必再修**；�
 | EDITIONS（按格式列文件与大小） | 版本编号 + 格式 + 大小 | **已落地（格式/大小）；「版本编号」判定更正（第 30 期取证）**：「按格式列文件与大小」已落地（详情页「文件」标签 `BookDetailView.vue:528-545`、概览侧栏「成品文件」同源 `:445-475`；**原引 `:487-505` 今天是章节 tab 的搜索框与卷列表、原引 `:404-415` 是制版说明，均系第 33 期全文复核改正**）。上游取证显示所谓「版本编号」实为**外部书目版本**（Hardcover/StoryGraph 的 `edition`，如 `hardcoverEditionId`，见 `packages/types/src/book.ts:164`、`packages/types/src/hardcover.ts:139`），**非 BookOrbit 自有顺序版本号**；本项目无 Hardcover 集成，故**不引入「版本编号」概念**（也不造假数据）。「同 stem 文件枚举」后端在 `library.book_detail`（`core/library.py:1232-1263`） | 已落地（版本编号非本项目范围） | 原判锚点 `core/library.py:604-617` 今天是 `by_id`/`BookIdConflict` |
 | Files on disk | 磁盘文件 | **仍成立（结论对，锚点已漂移，第 33 期修）**：文件行只给**库内相对路径**名 + 格式 + 大小 + mtime + 下载，**不展示绝对路径**。文件行**有两处**：概览区 `BookDetailView.vue:446-455`（格式徽章 + `fmtSize(f.size) · fmtDate(f.mtime)` + 下载）、文件 tab `:528-545`（同四字段的卡片式列表）。**原引 `:487-505` 今天是「章节搜索框 + 章节总数」，完全不相干**。后端返回 `f.relative_to(root).as_posix()`（`core/library.py:1250`）；协议层 `BookFile` 只有 `name/format/size/mtime` 四字段、**无 path**（`lib/api.ts:508-513`） | **已决策不做** | **第 33 期把档位从「可直接落地」改为「已决策不做」**，理由：本项目是单用户本地库，展示绝对路径在**远程访问 / 多端**下没有任何收益，反而多一个**信息泄露面**（服务器目录结构）。当前「只给库内相对路径 + 下载按钮」既够用又不泄露，是**正确的终态而非待办** |
 | Similar Books | 相似书推荐 | **已落地**：后端 `GET /api/books/{bid}/similar`（`server.py:1530-1542`），实现 `core/recommend.py:18-24`（同作者/题材/系列，0 分不返回）；前端加载 `BookDetailView.vue:102-109`，渲染「相似书」块（标题 + reasons + 点击跳转）`:417-433` | **已落地** | 原判「无」「需新建 `core/recommend.py`」均过期 —— 该模块正是按原计划建的，只是文档没跟上 |
-| Reading Log（Total time / Sessions / Average / Active days / Pace / Last read） | 按书聚合 | **已落地（第 30 期补 Average·Pace）**：接口三块 `GET /api/reading-log` → `items`/`by_book`/`recent`（`server.py:1789`），按书聚合 `db.session_by_book`（现含 `seconds`/`sessions`/`last_ended`/`avg_seconds`，`core/db.py:886-899`，`avg_seconds` 由 `AVG(seconds)` 同一句 SQL 算出）；前端「按书」卡（`views/ReadingLogView.vue:208-226`）现显示 累计时长/次数/**平均单次时长**/最近日期，以及**阅读速度（页/小时）**—— 速度需页数，有可靠来源（`pages_source` 为 `estimate`/`archive` 且 `pages>0`）才算并标注，否则不显示（`paceText`）；**按书日志不在详情页**（避免与 `/log` 页重复入口） | 已落地 | 原判两个锚点均失效：`core/db.py:85-93` → 今天 session 表在 `db.py:112-118`；`core/db.py:1097` → 今天写入是 `db.add_session`（`core/db.py:1097`） |
+| Reading Log（Total time / Sessions / Average / Active days / Pace / Last read） | 按书聚合 | **已落地（第 30 期补 Average·Pace；第 63 期 3/6 补详情页入口）**：接口三块 `GET /api/reading-log` → `items`/`by_book`/`recent`（`server.py:1789`），按书聚合 `db.session_by_book`（现含 `seconds`/`sessions`/`last_ended`/`avg_seconds`，`core/db.py:886-899`，`avg_seconds` 由 `AVG(seconds)` 同一句 SQL 算出）；前端「按书」卡（`views/ReadingLogView.vue:237-252`）显示 累计时长/次数/**平均单次时长**/最近日期，以及**阅读速度（页/小时）**—— 速度需页数，有可靠来源（`pages_source` 为 `estimate`/`archive` 且 `pages>0`）才算并标注，否则不显示。速度判据第 63 期 3/6 抽到共享模块 `lib/readingPace.ts`（`views/ReadingLogView.vue` 与详情页**共用同一份**，不再各写一遍）。**⚠️「按书日志不在详情页」已作废，见下方复核头** | 已落地 | 原判两个锚点均失效：`core/db.py:85-93` → 今天 session 表在 `db.py:112-118`；`core/db.py:1097` → 今天写入是 `db.add_session`（`core/db.py:1097`） |
 | Add a session by hand | 手工补录 | **已落地**：后端 `POST /api/reading-log`（`server.py:1595-1649`，校验书存在 / 1–1440 分钟 / 日期 `YYYY-MM-DD` / 开始 `HH:MM` / **不补录未来**）；前端「补录」按钮 + 表单（书/日期/开始/时长）`ReadingLogView.vue:51-86,122-161` | **已落地** | 原判「无」已过期，锚点 `core/db.py:1097` 亦失效（`db.add_session` 今天在 `core/db.py:1097`） |
 
 ## 4. 域：阅读器
