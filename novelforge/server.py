@@ -1875,7 +1875,12 @@ def api_get_progress(bid: str, file_rel: "str | None" = None):
     """
     p = db.get_progress(bid, None if file_rel is None else file_rel.strip()[:500])
     if not p:
-        return {"locator": 0, "percent": 0, "cfi": ""}
+        # 这一行**不存在**。`file_rel` 回 `null`（而不是空串）：**空串是个合法取值**
+        #（=「不知道文件的那次写入」那一行确实存在），调用方必须能区分
+        # 「这一行不存在」与「这一行的 file_rel 恰好是空串」—— 前者该回落到书级，
+        # 后者不该（回落会把**另一个文件**的读点搬过来，落在另一套坐标系里）。
+        # 前端恢复阅读位置就靠这个判据（`lib/readingProgress.ts`）。
+        return {"locator": 0, "percent": 0, "cfi": "", "file_rel": None}
     out = {"locator": p["locator"], "percent": p["percent"], "cfi": p.get("cfi") or "",
            # 第 56 期：多设备进度提示的**新旧比较基准**（前端把它当作「本机已知的最新
            # 写入时间」，只有比它更新的写入才可能是别的设备）。

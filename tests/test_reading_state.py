@@ -53,8 +53,11 @@ def test_三处记录归零(client, auth_headers, default_root):
     assert r.status_code == 200, r.text
     assert r.json()["removed"] == {"sessions": 1, "progress": 1, "status": 1, "attempts": 1}
 
+    # 响应恒带四个键：第 54 期加 `cfi`，第 63 期（4/6）加 `file_rel`。
+    # 新增这个键让本断言**变强**了：`file_rel is None` 是「这一行**不存在**」的判据
+    #（见 `server.api_get_progress`）—— 光看三个零分不清「删干净了」与「留了一行零值」。
     assert client.get(f"/api/books/{bid}/progress", headers=auth_headers).json() == \
-        {"locator": 0, "percent": 0, "cfi": ""}, \
+        {"locator": 0, "percent": 0, "cfi": "", "file_rel": None}, \
         "进度该回到零（第 54 期起响应恒带 cfi 字段，重置即精确坐标一并清除）"
     assert client.get(f"/api/books/{bid}/status", headers=auth_headers).json()["status"] == "unread"
     # 阅读记录里这本书应当消失（会话没了就聚合不出来）

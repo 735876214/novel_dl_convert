@@ -15,6 +15,7 @@ import {
 } from '@/lib/pdfPrefs'
 import { sortBySeriesIndex } from '@/lib/bookInfo'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
+import { progressForFile } from '@/lib/readingProgress'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -35,6 +36,12 @@ const props = defineProps<{
   comicLib?: boolean
   /** 所属系列名（第 61 期）：用于「读完自动进下一册」 */
   series?: string
+  /**
+   * 正在读的那个文件（第 63 期 4/6）：库内相对路径。**不给 = 书级** —— 单文件的书
+   * 由上层算成 `undefined` 传下来，于是进度的读写与加这一列之前逐字节相同。
+   * 判据必须是 `!== undefined`（空串是合法取值，与「不给」落点不同），见 `api.getProgress`。
+   */
+  fileRel?: string
 }>()
 /** 交回上层切换阅读器（偏好由上层统一落库） */
 const emit = defineEmits<{ pdfMode: ['comic' | 'pdf'] }>()
@@ -200,7 +207,7 @@ async function save(): Promise<void> {
   if (!total.value) return
   const percent = Math.min(100, (page.value / total.value) * 100)
   try {
-    const r = await api.setProgress(props.bookId, page.value - 1, percent)
+    const r = await api.setProgress(props.bookId, page.value - 1, percent, undefined, props.fileRel)
     // 第 61 期：进度就地回写 store —— 首页「继续阅读」不必等一次整库重拉
     library.patchProgress(props.bookId, percent, r?.updated_at)
   } catch {
@@ -336,7 +343,7 @@ onMounted(async () => {
     base.value = { w: vp.width, h: vp.height }
     // 恢复进度
     try {
-      const p = await api.getProgress(props.bookId)
+      const p = await progressForFile(props.bookId, props.fileRel)
       const n = Math.min(total.value, Math.max(1, (p.locator || 0) + 1))
       page.value = n
     } catch {

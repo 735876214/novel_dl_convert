@@ -80,6 +80,8 @@ function makeAttempt(over: Partial<ReadingAttempt> = {}): ReadingAttempt {
     round: 1,
     started_at: Date.parse('2026-09-18T20:00:00') / 1000,
     finished_at: 0,
+    status: 'reading',
+    created_at: Date.parse('2026-09-18T20:00:00') / 1000,
     ...over,
   }
 }
@@ -102,7 +104,9 @@ beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
   m.stats.mockResolvedValue(makeStats())
-  m.attempts.mockResolvedValue({ items: [makeAttempt()], total: 1, current: 1 })
+  // `current` 是**进行中那一轮的对象**（后端 `next((a for a in items if not a.finished_at), None)`），
+  // 不是轮次号 —— `makeAttempt()` 的 `finished_at` 默认 0，它正是「进行中」那一轮。
+  m.attempts.mockResolvedValue({ items: [makeAttempt()], total: 1, current: makeAttempt() })
 })
 
 describe('阅读日志 · 不点开就不拉', () => {
@@ -149,7 +153,7 @@ describe('阅读日志 · 没有会话不等于没有这一页', () => {
   })
 
   it('没有轮次时给出空态与「从历史补录」出口', async () => {
-    m.attempts.mockResolvedValue({ items: [], total: 0, current: 0 })
+    m.attempts.mockResolvedValue({ items: [], total: 0, current: null })
     const w = await mountTab()
     expect(has(w, '还没有轮次记录')).toBe(true)
     expect(has(w, '从历史补录')).toBe(true)
@@ -161,7 +165,7 @@ describe('阅读日志 · 没有会话不等于没有这一页', () => {
    * 再被真的列表顶掉 —— 与 `loading` 初值为 `true` 是同一条纪律的两处。
    */
   it('轮次还没拉到时不说「还没有轮次记录」（空态要等请求落地）', async () => {
-    let release!: (v: { items: ReadingAttempt[]; total: number; current: number }) => void
+    let release!: (v: { items: ReadingAttempt[]; total: number; current: ReadingAttempt | null }) => void
     m.attempts.mockReturnValue(new Promise((r) => (release = r)))
 
     const w = await mountTab()
@@ -169,7 +173,7 @@ describe('阅读日志 · 没有会话不等于没有这一页', () => {
     expect(has(w, '阅读尝试 / 重读')).toBe(true)
     expect(has(w, '还没有轮次记录')).toBe(false)
 
-    release({ items: [], total: 0, current: 0 })
+    release({ items: [], total: 0, current: null })
     await flushPromises()
     expect(has(w, '还没有轮次记录')).toBe(true)
   })

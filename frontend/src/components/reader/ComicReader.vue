@@ -7,6 +7,7 @@ import Icon from '@/components/ui/Icon.vue'
 import { api, type BookCard, type SessionExtra } from '@/lib/api'
 import { sortBySeriesIndex } from '@/lib/bookInfo'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
+import { progressForFile } from '@/lib/readingProgress'
 import {
   COMIC_BGS,
   COMIC_DIRECTIONS,
@@ -39,6 +40,11 @@ const props = defineProps<{
   series?: string
   /** 数据源：`archive` = CBZ/CBR 归档（默认）；`pdf` = PDF（漫画库里的 PDF 按漫画形态读） */
   source?: 'archive' | 'pdf'
+  /**
+   * 正在读的那个文件（第 63 期 4/6）：库内相对路径。**不给 = 书级** —— 单文件的书
+   * 由上层算成 `undefined` 传下来，于是进度的读写与加这一列之前逐字节相同。
+   */
+  fileRel?: string
 }>()
 /** 交回上层切换阅读器（偏好由上层统一落库，避免两个组件各写一份 `comic-prefs`） */
 const emit = defineEmits<{ pdfMode: ['comic' | 'pdf'] }>()
@@ -246,7 +252,7 @@ async function load(): Promise<void> {
         return
       }
       try {
-        const p = await api.getProgress(props.bookId)
+        const p = await progressForFile(props.bookId, props.fileRel)
         page.value = Math.min(total.value, Math.max(1, (p.locator || 0) + 1))
       } catch {
         /* 无进度则从第 1 页开始 */
@@ -264,7 +270,7 @@ async function load(): Promise<void> {
       return
     }
     try {
-      const p = await api.getProgress(props.bookId)
+      const p = await progressForFile(props.bookId, props.fileRel)
       page.value = Math.min(r.total, Math.max(1, (p.locator || 0) + 1))
     } catch {
       /* 无进度则从第 1 页开始 */
@@ -286,7 +292,7 @@ async function save(): Promise<void> {
   if (!total.value) return
   const percent = (page.value / total.value) * 100
   try {
-    const r = await api.setProgress(props.bookId, page.value - 1, percent)
+    const r = await api.setProgress(props.bookId, page.value - 1, percent, undefined, props.fileRel)
     // 第 61 期：进度就地回写 store（首页「继续阅读」实时）
     library.patchProgress(props.bookId, percent, r?.updated_at)
   } catch {

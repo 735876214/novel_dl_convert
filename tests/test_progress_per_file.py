@@ -146,11 +146,11 @@ def test_同一本书的两个文件各存各的读点(isolated):  # noqa: ARG00
     db.set_progress("lib$a", 3, 30.0, cfi="cfi-epub", file_rel="x.epub")
     db.set_progress("lib$a", 900, 90.0, file_rel="y.pdf")
 
-    per_file = db.progress_of_files("lib$a")
-    assert set(per_file) == {"x.epub", "y.pdf"}, per_file
-    assert per_file["x.epub"]["locator"] == 3, "EPUB 的读点被 PDF 冲掉了"
-    assert per_file["x.epub"]["cfi"] == "cfi-epub"
-    assert per_file["y.pdf"]["locator"] == 900
+    # 直接查表（不走产品侧查询函数）：两行各是各的 locator 与 cfi ——
+    # 「PDF 的 900 把 EPUB 的 3 冲掉」在这条断言下无处可藏
+    assert {(r[1], r[2], r[4]) for r in _rows("lib$a")} == {
+        ("x.epub", 3, "cfi-epub"), ("y.pdf", 900, ""),
+    }
 
     # 精确取：给了 file_rel 就只认那个文件
     assert db.get_progress("lib$a", "x.epub")["locator"] == 3
@@ -264,8 +264,7 @@ def test_重建之后唯一约束变成按文件(isolated):  # noqa: ARG001
     db.set_progress("lib$k1", 50, 50.0, file_rel="x.epub")   # 老行是 file_rel=''
     db.set_progress("lib$k1", 60, 60.0, file_rel="y.pdf")
 
-    per_file = db.progress_of_files("lib$k1")
-    assert set(per_file) == {"", "x.epub", "y.pdf"}, per_file
+    assert {r[1] for r in _rows("lib$k1")} == {"", "x.epub", "y.pdf"}
     assert len(_rows("lib$k1")) == 3, "约束还是按书的话，第二、三次写入会互相覆盖"
 
 
@@ -436,7 +435,8 @@ def test_改书号时每个文件的进度都跟着走(isolated):  # noqa: ARG00
     assert _rows("lib$old") == [], "旧 id 上还剩着行"
     assert {(f, loc, pct, cfi) for _, f, loc, pct, cfi in _rows("lib$new")} == before, \
         "搬过去的行内容变了"
-    assert set(db.progress_of_files("lib$new")) == {"", "x.epub", "y.pdf"}
+    # 逐行确认「哪个键搬过来了」—— 直接查表，不走产品侧任何查询函数
+    assert {r[1] for r in _rows("lib$new")} == {"", "x.epub", "y.pdf"}
 
 
 # ---------------------------------------------------------------------------
@@ -461,8 +461,12 @@ def test_接口按文件维度读写(client, auth_headers):
     book = client.get("/api/books/lib$api/progress", headers=h).json()
     assert book["locator"] == 900 and book["file_rel"] == "y.pdf", \
         "书级要给出「最后在看的那个文件」，而且这个「哪个文件」本身也是答案的一部分"
+    # 从来没读过那个文件 ⇒ 全零，且 `file_rel` 是 **null**（这一行不存在）。
+    # 回 null 而不是空串：空串是「不知道文件的那次写入」自己的键，是个**存在的**行，
+    # 调用方要能区分两者（见 `test_接口给空串要的是书级那一行而不是最新那行`）。
     assert client.get("/api/books/lib$api/progress?file_rel=从来没读过.epub",
-                      headers=h).json() == {"locator": 0, "percent": 0, "cfi": ""}
+                      headers=h).json() == {"locator": 0, "percent": 0, "cfi": "",
+                                            "file_rel": None}
 
 
 def test_接口给空串要的是书级那一行而不是最新那行(client, auth_headers):
@@ -482,6 +486,22 @@ def test_接口给空串要的是书级那一行而不是最新那行(client, au
     latest = client.get("/api/books/lib$api2/progress", headers=h).json()
     assert empty["locator"] == 7 and empty["file_rel"] == "", empty
     assert latest["locator"] == 8 and latest["file_rel"] == "z.epub", latest
+
+    # 「这一行**不存在**」必须是可判的，而且**不能**用 locator == 0 代替：
+    # 第 0 章 / 第 1 页是合法位置，两者会混。`file_rel` 回 null 才是那个判据 ——
+    # 空串是个合法取值（上面刚断言过），它区分不出「不存在」。
+    # 前端恢复位置就靠它决定「要不要回落到书级」（`lib/readingProgress.ts`）。
+    missing = client.get("/api/books/lib$api2/progress?file_rel=没读过.epub", headers=h).json()
+    assert missing["file_rel"] is None, "这一行不存在时 file_rel 必须是 null：%r" % (missing,)
+    assert missing["locator"] == 0, missing
+    # 对照组：真的在**第 0 章**（合法位置）写过一行 ⇒ 它是存在的。两个响应都是
+    # `locator == 0`，所以「locator 是不是 0」根本区分不出「没读过」与「读在第 0 章」——
+    # 判据只能是 `file_rel` 是不是 null。
+    client.put("/api/books/lib$api2/progress", headers=h,
+               json={"locator": 0, "percent": 1.0, "file_rel": "开头.epub"})
+    zero = client.get("/api/books/lib$api2/progress?file_rel=开头.epub", headers=h).json()
+    assert zero["locator"] == 0 and zero["file_rel"] == "开头.epub", zero
+    assert empty["file_rel"] is not None, "存在的那一行（哪怕 file_rel 是空串）不许回 null"
 
 
 def test_奇怪的file_rel不会把进度保存弄失败(client, auth_headers):
@@ -578,7 +598,7 @@ def test_穿越的file_rel在真书上也不生成CFI(client, auth_headers, defa
         assert "offset" not in body, "没有 CFI 就没有 offset：%r" % (body,)
 
     # 孤儿键是**一行普通数据**：文件不存在不构成拒绝保存的理由
-    assert "旧名/已经改名了.epub" in db.progress_of_files(bid), "孤儿键那一行没落库"
+    assert any(r[1] == "旧名/已经改名了.epub" for r in _rows(bid)), "孤儿键那一行没落库"
     # 书级（不给 file_rel）取的是最新那行 = 最后写的那行（打平时 id 决胜，见
     # `get_progress`）。于是这里连「孤儿键那行把书级读数弄坏了」也一并排除了：
     # 它不但读得到，读到的还正是最后写的那个坏值那一行、且回带了它的 file_rel。

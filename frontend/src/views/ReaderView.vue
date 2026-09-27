@@ -10,6 +10,7 @@ import ComicReader from '@/components/reader/ComicReader.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
 import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type SessionExtra } from '@/lib/api'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
+import { progressForFile } from '@/lib/readingProgress'
 import { readComicPrefs, saveComicPrefs } from '@/lib/comicPrefs'
 import {
   READER_FONTS,
@@ -56,6 +57,34 @@ const isComic = computed(() => fmt.value === 'CBZ' || fmt.value === 'CBR')
  */
 const pdfAsComic = ref(readComicPrefs().pdfMode !== 'pdf')
 const comicPdf = computed(() => isPdf.value && book.value?.library_type === 'comic' && pdfAsComic.value)
+
+/**
+ * 本次阅读**正在读哪个文件**（第 63 期 4/6）：库内相对路径，与服务端 `progress.file_rel`
+ * 同一套取值约定（`library.detail()` 的 `files[].name` 就是它）。
+ *
+ * 这是「本书的哪个**成品文件**」（同 stem 的 EPUB + PDF + MOBI 并存），不是「书里的哪一章」——
+ * 章节号 / 页码 / 音轨号是各自的坐标系，这一维是**加**上去的，不改任何坐标系。
+ *
+ * ⚠️ **只在书有多个成品文件时才带**（照 `AudioPlayer` 给阅读时长上报那处的先例）：
+ * 单文件书带与不带在库里落的是同一个读点，带了只是把书级那行从 `''` 挪到文件名上 ——
+ * 收益为零，却让 KOReader / Komga 同步来的读点与 NF 读的读点分家。不带则与加这一列之前
+ * 逐字节相同。判据用 `files.length > 1` 而不是「有没有兄弟」：主文件自己也在 `files` 里
+ * （`library.book_detail` 按同 stem 枚举，`f.stem == stem` 对主文件成立）。
+ *
+ * 三个阅读器（章节流 / PDF / 漫画）读的都是**主文件** —— `/api/books/{id}/file`、
+ * `/chapter/*`、`/comic/*` 都固定取 `root_of(b) / b["name"]` —— 所以三者取值相同，
+ * 父组件算一次传下去即可（`PdfReader` / `ComicReader` 自己不请求详情）。
+ *
+ * ⚠️ **诚实边界**：正因如此，四个阅读器**都读不到非主文件** —— `files` 里那些同 stem
+ * 的兄弟（EPUB + PDF + MOBI）目前只能**下载**（走 `api.downloadUrl(name)` 那条独立
+ * 端点），没有任何接口能把它们的内容取出来读。所以「一本书的 EPUB 与 PDF 各存各的
+ * 读点」这件事现在**还没有第二个文件可供阅读**：这一维此刻的作用是**把数据契约与
+ * 落点先立住**，等 `/file` 支持选文件时读点已经在正确的键上、不必再迁移一次。
+ * 也正因如此，详情页的成品文件列表**不给「继续阅读」入口** —— 那是点不动的假交互。
+ */
+const fileRel = computed(() =>
+  (book.value?.files?.length ?? 0) > 1 ? book.value?.name : undefined,
+)
 
 /** 切换「PDF 用哪个阅读器」：落库到漫画偏好，下次打开还是用户选的那个 */
 function setPdfMode(mode: 'comic' | 'pdf'): void {
@@ -649,7 +678,9 @@ async function saveProgress(): Promise<void> {
     // 算不出（正文未挂载）就不带 —— 进度本身照常保存，恢复侧回落百分比。
     const len = contentRef.value?.textContent?.length ?? 0
     const offset = len > 0 ? Math.round(local.value * len) : undefined
-    const r = await api.setProgress(bookId.value, currentIndex.value, overallPercent.value, offset)
+    const r = await api.setProgress(
+      bookId.value, currentIndex.value, overallPercent.value, offset, fileRel.value,
+    )
     // 第 56 期：记下本机这次写入的时间戳 —— 轮询时只有比它更新的写入才可能是别的设备
     if (typeof r?.updated_at === 'number') ownWriteAt.value = r.updated_at
     // 第 61 期：把刚写下的进度**就地**同步给书库 store —— 返回首页时「继续阅读」立刻是新值
@@ -683,7 +714,13 @@ async function checkRemoteProgress(): Promise<void> {
   // 后台标签页不轮询：看不见就没有必要打扰服务端（与阅读时长 accrual 同一条纪律）
   if (document.visibilityState !== 'visible' || !book.value || !total.value) return
   try {
-    const p = await api.getProgress(bookId.value)
+    // ⚠️ 轮询**必须按本机正在读的那个文件**问（第 63 期 4/6），不能用书级：
+    // 提示条上那个「跳过去」按钮只能落在**本机的坐标系**里 —— 别处把 PDF 读到了
+    // 第 90 页，而本机是 EPUB 的章节流，拿那个 locator 去 `flat` 里找会跳到一个
+    // 毫不相干的章节（页码与 spine 序号是两套坐标系）。所以提示的语义是
+    // 「**这个文件**在别处被读到别的位置了」，不是「这本书在别处被读过」。
+    // 书级（不给 file_rel）只用于书架百分比 / Komga / KOReader 那些不需要跳转的地方。
+    const p = await api.getProgress(bookId.value, fileRel.value)
     const at = typeof p.updated_at === 'number' ? p.updated_at : 0
     if (!at || at <= ownWriteAt.value + 1) {
       remoteNote.value = null
@@ -1166,7 +1203,10 @@ async function load(): Promise<void> {
   let restore: number | undefined
   let restoreOffset: number | undefined
   try {
-    const p = await api.getProgress(bookId.value)
+    // 恢复位置按**本机正在读的那个文件**问，本文件还没有读点时保守回落到书级 ——
+    // 为什么、以及「只认不是别的文件的回落」，见 `lib/readingProgress.ts`（三个阅读器
+    // 共用那一份，别在这里另写一套）
+    const p = await progressForFile(bookId.value, fileRel.value)
     // 恢复的这一刻本机就认账了：把它记成「本机已知的最新写入」，之后只有更新的才算别人的
     ownWriteAt.value = typeof p.updated_at === 'number' ? p.updated_at : 0
     const t = flat.value.findIndex((f) => f.index === p.locator)
@@ -1261,6 +1301,7 @@ onBeforeUnmount(() => {
         :title="book.title"
         :series="book.series"
         :source="isComic ? 'archive' : 'pdf'"
+        :file-rel="fileRel"
         @pdf-mode="setPdfMode"
       />
       <PdfReader
@@ -1269,6 +1310,7 @@ onBeforeUnmount(() => {
         :title="book.title"
         :comic-lib="book.library_type === 'comic'"
         :series="book.series"
+        :file-rel="fileRel"
         @pdf-mode="setPdfMode"
       />
 

@@ -805,6 +805,17 @@ export interface ProgressState {
    * 比「本机已知的最新写入」更新的写入才可能是别的设备。
    */
   updated_at?: number
+  /**
+   * 这一行说的是**哪个文件**（第 63 期 4/6，库内相对路径，与
+   * `reading_sessions.file_rel` 同一套取值约定）。书级查询时它是**答案的一部分**：
+   * 「读到 60%」说的是哪个文件读到 60%，「继续阅读」据此指向对的文件。
+   * 空串 = 「这本书自己 / 不知道文件」（KOReader 同步 / Komga / 标记已读完的写入）。
+   *
+   * ⚠️ **`null` = 这一行压根不存在**（服务端在查不到行时回 null，见
+   * `server.api_get_progress`）。判「有没有读过」**必须**看它，不能看 `locator === 0`
+   * —— 第 0 章 / 第 1 页是合法位置，两者会混。
+   */
+  file_rel?: string | null
 }
 
 export interface Annotation {
@@ -3339,19 +3350,39 @@ export const api = {
       `/api/books/${encodeURIComponent(id)}/chapter/${index}`,
     ),
 
-  getProgress: (id: string) =>
-    request<ProgressState>(`/api/books/${encodeURIComponent(id)}/progress`),
+  /**
+   * 读阅读进度（第 63 期 4/6）。两个口径：
+   * - **不给** `fileRel` = 书级：读者最后在看的那个文件的读点（书架 / Komga 走这条）；
+   * - **给** `fileRel` = 精确到那个文件：阅读器恢复位置时用。
+   *
+   * ⚠️ 判据必须是 `fileRel !== undefined`，**不能**写成真值判断（`fileRel ? … : …`）：
+   * 「不给」与「给空串」在服务端是**两个不同的落点** —— 给空串要的是
+   * `file_rel=''` 那一行（= 不知道文件的那次写入），不给要的是 `updated_at`
+   * 最新的那一行。空串是个合法取值，不是「没有」。（后端由
+   * `tests/test_progress_per_file.py` 的接口层用例钉住。）
+   */
+  getProgress: (id: string, fileRel?: string) =>
+    request<ProgressState>(
+      `/api/books/${encodeURIComponent(id)}/progress` +
+        (fileRel !== undefined ? `?file_rel=${encodeURIComponent(fileRel)}` : ''),
+    ),
 
-  setProgress: (id: string, locator: number, percent: number, offset?: number) =>
+  setProgress: (id: string, locator: number, percent: number, offset?: number, fileRel?: string) =>
     // updated_at（第 56 期）：服务端写入时间戳，前端据此更新「本机上次写入」基准
     request<{ ok: boolean; updated_at?: number }>(`/api/books/${encodeURIComponent(id)}/progress`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      // offset（第 54 期）：章内字符偏移（textContent 坐标），服务端据此生成 CFI；
-      // 不给就是旧行为（恢复回落「章 + 全书百分比」）
-      body: JSON.stringify(
-        offset === undefined ? { locator, percent } : { locator, percent, offset },
-      ),
+      body: JSON.stringify({
+        locator,
+        percent,
+        // offset（第 54 期）：章内字符偏移（textContent 坐标），服务端据此生成 CFI；
+        // 不给就是旧行为（恢复回落「章 + 全书百分比」）
+        ...(offset === undefined ? {} : { offset }),
+        // file_rel（第 63 期 4/6）：这份进度属于哪个文件（库内相对路径）。
+        // **不给 = 书级** —— KOReader 同步 / Komga / 标记已读完这些不知道文件的
+        // 写入方走的正是这条，与加这一列之前逐字节相同
+        ...(fileRel === undefined ? {} : { file_rel: fileRel }),
+      }),
     }),
 
   listAnnotations: (id: string) =>

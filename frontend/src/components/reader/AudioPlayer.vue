@@ -194,6 +194,18 @@ function onPause(): void {
 
 function saveProgress(): void {
   const pct = Math.round(percent.value)
+  // ⚠️ 这里**刻意不带 file_rel**（第 63 期 4/6 给其余三个阅读器都加上了，音频不加），
+  // 三条理由，都不是「漏了」：
+  // 1. 有声书在库里是**一个目录**，`library.book_detail` 对目录**跳过**同 stem 枚举
+  //    （见那里的注释），于是 `files` 是空的 —— 「多文件」这件事在有声书上不存在，
+  //    带上只会把书级那行从 `''` 挪到一个没有意义的键上；
+  // 2. 下面 `session` 那边传给 `reading_sessions.file_rel` 的是 `AudioTrack.name`，
+  //    那是**文件名 basename**（`audio.py` 给的是 `f.name`），**不是库根相对路径**。
+  //    它当会话标签没问题，但当 `progress.file_rel` 不行 —— 服务端会拿它走
+  //    `fileops.safe_path` 拼路径（生成 CFI 那一步），basename 拼出来是错路径。
+  //    同一个列名在两处的**实际约束不同**：那边纯标签，这边会当路径用。
+  // 3. 音频的读点本来就只有一个：`percent`（全书百分比）已经编码了「第几轨」，
+  //    `locator` 是轨内秒数 —— 一轨一行反而把一件事拆成 N 行。
   void api.setProgress(props.bookId, Math.round(currentTime.value), pct)
     .then((r) => {
       // 第 61 期：进度就地回写 store（首页「继续阅读」实时）

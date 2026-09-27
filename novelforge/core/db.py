@@ -1080,21 +1080,6 @@ def get_progress(book_id: str, file_rel: "str | None" = None):
              "updated_at": row["updated_at"]} if row else None)
 
 
-def progress_of_files(book_id: str) -> dict:
-    """``{file_rel: 那一行}`` —— 这本书**每个文件**各自的读点（第 63 期 4/6）。
-
-    只给「文件」那一侧看（详情页的版本列表 / 每个文件的 Resume）。书级那行
-    （``file_rel=''``）**也在返回里**，键就是空串：它的语义是「不知道文件的那次写入」，
-    对调用方是个合法的「另一个位置」，不是要过滤掉的噪声。
-    """
-    c = _connect()
-    rows = c.execute(
-        "SELECT file_rel, locator, percent, cfi, updated_at FROM progress WHERE book_id=?",
-        (book_id,),
-    ).fetchall()
-    return {r["file_rel"] or "": dict(r) for r in rows}
-
-
 def set_progress(book_id: str, locator: int, percent: float, cfi: str = "",
                  file_rel: str = "") -> float:
     """写阅读进度；**返回写入的 ``updated_at``**（秒级 float）。
