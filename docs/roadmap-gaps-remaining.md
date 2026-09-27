@@ -2452,3 +2452,64 @@ PDF·漫画进下一册 / 有声书接下一轨，**翻页模式预取不做**�
 - 真浏览器（隔离实例 8412，Edge）实测三个设置页：开关标题均为「自动翻到下一册」且**默认 `aria-checked=true`**；把有声书开关**关掉后刷新仍是关**（证明「存过即尊重、不被新默认覆盖」）。
 - ⚠️ **未做端到端浏览器续接验证**：需一本多册同系列书（漫画 / PDF / 有声书），隔离实例无书库；该链路由上述 15 项单测覆盖（含节流 / 单飞闸 / 无系列 / 末册）。
 - ⚠️ **期号说明**：本条原计划编号「第 62 期」，落地时发现**其它会话已把第 62–65 期用掉**（全库失效判据、PG 迁移序列、文件维度读点、批注位置锚、书卡菜单与删书、Book Dock 入口等），故本段改排 **第 66 期**；内容与用户拍板范围不变。
+
+## 第 67 期（2026-09-28）：提速验证与收尾 —— 响应 gzip + 并发请求去重
+
+**动机**：第 61 期遗留的「③ 打开提速」本拟排本期，落地时发现**第 62 期已把它做完**（书目索引落库
+266 本 42 s → ms、PG 可选、Redis 缓存、增量 stat 3→1）。故本期改为**验证并收尾**：自建 500+ 合成书大库
+复现，核实提速真实有效、找残留热点，**只修有量化指标的**。
+
+### 复现方法（可重跑）
+- 合成库：`.venv` 的 `ebooklib` + `PIL` 生成 **600 本真实 EPUB**（元数据 / 长短不一的简介 / 封面 JPEG /
+  1/3 带系列与序号），落临时目录；`LIBRARY_SOURCE_DIR` 指过去，临时实例建库 → 扫描。
+- ⚠️ **计时一律用 `curl`**：PowerShell 的 `Invoke-RestMethod` 解析 1.3 MB JSON 会把 **65 ms 测成 613 ms** ——
+  那是客户端解析噪声，不是服务端慢（本轮第一版基线就差点被它带偏）。
+
+### 基线（600 本，热态，curl）
+| 项目 | 数值 |
+| --- | --- |
+| 冷扫描（建索引）| **600 ms** |
+| `GET /api/books` | **65–73 ms / 1.36 MB**（其中简介 `description` 占 **68%**）|
+| `GET /api/books/{id}` | 42 ms |
+| `/api/authors` | 37 ms / 61 KB |
+| `/api/library-facets` | 32 ms |
+| 单章 / 封面 | 5 ms / 4 ms |
+
+结论：**后端已经不慢**，第 62 期的索引确实生效（旧基线「266 本 42 s」再没出现）。另外确认两件事：
+封面是**懒加载**（仪表盘只取 18 张，不是 600 张）；全站**此前没有任何响应压缩**。
+
+### 修一：响应 gzip（`novelforge/server.py`）
+- 挂 Starlette `GZipMiddleware`（`minimum_size=1024`、`compresslevel=5`，额外排除
+  `application/octet-stream` / `epub+zip` / `pdf`）。
+- 安全性依据（读 Starlette 实现确认）：**206 部分响应永不压缩**（音轨 / PDF 的 Range 字节区间不受影响）、
+  `audio/*` / `image/*` / `video/*` / `font/*` / `application/zip` 默认排除、≥128 KiB 的响应走**工作线程**
+  压缩（不阻塞事件循环）。
+- 实测体积：`/api/books` **1,363,248 B → 490,878 B（−64%）**；前端主包 JS **1,018,573 → 301,000（−70%）**、
+  CSS **121,426 → 19,628（−84%）**。
+- ⚠️ **两面都记**：代价是该端点服务端 **+约 45–60 ms CPU**（大响应压缩）—— **LAN 上大致打平、
+  WAN/VPN 上显著更快**；小响应（<1 KiB）完全不受影响。
+
+### 修二：并发重复请求收敛为「单飞闸」（前端三个 store）
+- **根因**：各处守卫是 `if (loaded) return`，但它**在发请求之前先 `await` 了别的**（阅读阈值等）——
+  这是个让步点，于是首屏同一批微任务里的调用者**全都通过守卫**。实测一次页面加载
+  **`/api/books` 打了 7 次**（2.8 MB、累计 3.6 s），`/api/stats` ×3、`/api/libraries` ×3、`/api/collections` ×2。
+- **做法**：`stores/library.ts`（`loadBooks` / `loadLibraries` / `loadLibraryFacets`）、
+  `stores/stats.ts`（按**书库**记在飞请求）、`stores/collections.ts` 各持一个在飞 Promise，并发调用共享它。
+- ⚠️ **`collections` 的 `force` 语义必须不同**：`create` / `remove` / `rename` 刚改完服务端、必须拿新数据 ⇒
+  force 走「**等前一次落地、再拉一次**」而不是复用在飞请求 —— 否则会把**刚建的收藏夹吞掉**。
+- 实测（同一页面加载）：`/api/books` **7 → 1**（2.8 MB → 0.49 MB）、`stats` 3 → 1、`libraries` 3 → 1、
+  `collections` 2 → 1；整页首次加载 **≈4 MB → 1.04 MB / 54 个请求**。
+
+### 契约与验证
+- 新增 `frontend/src/stores/loadDedup.spec.ts`（6 项）：并发 3 次只打 1 次、已有数据短路（既有行为不回归）、
+  `collections` 的 force「等前一次再拉」且最终拿到新数据。
+- 后端全量 **1182 例 / 0 failed / 0 error**（163.9 s）；前端 `type-check` 0 错 + `test:unit` **340 例** +
+  `build` + `deploy` 全绿。
+- 真浏览器（隔离实例 8413，Edge）：gzip 生效（`transferSize` 491 KB vs `decodedBodySize` 1.36 MB）；
+  去重后「重复端点」表里只剩**登录前那一次 337 B 的探测请求**（不是数据拉取）。
+
+### 仍未做（如实记录，未修即未修）
+- **`/api/library-migrations/preview` 每次打开调 2 次、每次约 300 ms**（响应只有 1 KB）—— 出处是
+  `MigrationGateDialog.vue` 的全局 `onMounted(load)`。它既是**重复调用**又是**慢端点**，本轮没动。
+- `GET /api/books` 的 68% 体积是简介，理论上可从列表里摘掉，但**前端两处真在用**
+  （`MetadataPage.vue` 的元数据缺口筛选、`BookPreviewDialog.vue` 的快速预览）⇒ 属**契约变更**，留待有需求再议。
