@@ -110,7 +110,27 @@ const TABS = [
   { id: 'record', label: '我的记录' },
 ] as const
 
-const tab = ref<(typeof TABS)[number]['id']>('overview')
+type TabId = (typeof TABS)[number]['id']
+
+/**
+ * 当前标签。初值可以由 `?tab=` 指定（第 64 期）。
+ *
+ * 起因：书卡 ⋮ 菜单的「编辑元数据」要直接落到第 5 个标签。没有深链就只能再挂第二个
+ * `MetadataEditor` 实例 —— 同一个编辑器开两个入口更糟。
+ *
+ * ⚠️ `?tab=` 只当**初值**，之后标签的切换**不写回 URL**：写回意味着每点一次标签就压一条
+ * 历史记录（返回键要按七次才出得去）；也意味着 `/book/x?tab=files` 与 `/book/x` 变成
+ * 两个「不同」的地址，分享出去的链接会带着别人的浏览位置。
+ *
+ * 值不认识就落回概览 —— 不抛错、不留白屏：深链是别人手打的（或旧版本留下的），
+ * 打错一个字母不该把详情页变成空白。
+ */
+function initialTab(): TabId {
+  const q = String(route.query.tab || '')
+  return (TABS.find((t) => t.id === q)?.id ?? 'overview') as TabId
+}
+
+const tab = ref<TabId>(initialTab())
 
 // 阅读进度与批注（来自 SQLite，多端共享）
 const progress = ref<ProgressState | null>(null)

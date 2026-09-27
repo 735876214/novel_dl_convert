@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import { api, type BookReview, type ReadingStatus } from '@/lib/api'
+import { READ_STATUS_OPTIONS } from '@/lib/readingThresholds'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -23,13 +24,12 @@ const saving = ref(false)
 const st = ref<ReadingStatus | null>(null)
 const rv = ref<BookReview | null>(null)
 
-const STATUS_OPTIONS = [
-  { value: 'unread', label: '未读' },
-  { value: 'reading', label: '在读' },
-  { value: 'finished', label: '已读完' },
-  { value: 'paused', label: '搁置' },
-  { value: 'abandoned', label: '弃读' },
-] as const
+/**
+ * 五态清单来自 `lib/readingThresholds.ts`（第 64 期收敛）。
+ * 原来这里自己写了一份，而书卡的 ⋮ 菜单也要列同一组状态 —— 两份文案分头维护，
+ * 迟早出现「选的是同一项、显示的名字不同」。
+ */
+const STATUS_OPTIONS = READ_STATUS_OPTIONS
 
 const label = (v: string) => STATUS_OPTIONS.find((o) => o.value === v)?.label ?? v
 

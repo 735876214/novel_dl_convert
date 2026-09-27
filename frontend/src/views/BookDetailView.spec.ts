@@ -3,6 +3,10 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
+import MetadataEditor from '@/components/book/MetadataEditor.vue'
+import FilesTab from '@/components/book/detail/FilesTab.vue'
+import OverviewTab from '@/components/book/detail/OverviewTab.vue'
+import TabBar from '@/components/ui/TabBar.vue'
 import {
   api,
   type BookCard,
@@ -361,5 +365,80 @@ describe('BookDetailView', () => {
     // detailError 非空 ⇒ 仍是「加载失败」态（第 49 期的判据：失败与「没有」要分开）
     expect(w.text()).toContain('这本书加载失败')
     expect(w.text()).not.toContain('找不到这本书')
+  })
+})
+
+/**
+ * `?tab=` 深链（第 64 期 3/3）。
+ *
+ * 起因：书卡 ⋮ 菜单的「编辑元数据」要直接落到第 5 个标签，而此前 `tab` 是纯本地
+ * `ref` —— 从外面进不来，只能再挂第二个 `MetadataEditor` 实例。
+ *
+ * ⚠️ 这里断言的是**面板的显隐**，不是 `w.text()`：七个面板全都 `v-show` 而非 `v-if`，
+ * 它们的文字**始终在 DOM 里**（这正是「切回来不重建」的代价）。拿整页文本断言的话，
+ * `initialTab()` 就算永远返回 `'overview'`，用例也照样是绿的 —— 一个完全不盯事的
+ * 假哨兵。故本块一律查 `style.display`。
+ */
+describe('BookDetailView 的 ?tab= 深链', () => {
+  /** 面板的显隐：`v-show` 把 `display: none` 写在**面板自己**的元素上 */
+  function panelEl(w: VueWrapper, id: 'overview' | 'files' | 'metadata'): HTMLElement {
+    if (id === 'overview') return w.findComponent(OverviewTab).element as HTMLElement
+    if (id === 'files') return w.findComponent(FilesTab).element as HTMLElement
+    // 「编辑元数据」外面套了一层 `<div v-show>`（其余面板的 v-show 直接写在组件根元素上）
+    return w.findComponent(MetadataEditor).element.parentElement as HTMLElement
+  }
+  function shown(w: VueWrapper, id: 'overview' | 'files' | 'metadata'): boolean {
+    return panelEl(w, id).style.display !== 'none'
+  }
+
+  async function mountAt(query: string): Promise<VueWrapper> {
+    await router.push(`/book/${BOOK_ID}${query}`)
+    return mountDetail()
+  }
+
+  it('?tab=metadata 直接落在「编辑元数据」标签，而不是概览', async () => {
+    const w = await mountAt('?tab=metadata')
+
+    expect(shown(w, 'metadata')).toBe(true)
+    expect(shown(w, 'overview')).toBe(false)
+  })
+
+  it('任意标签 id 都能深链（不是给 metadata 开的后门）', async () => {
+    const w = await mountAt('?tab=files')
+
+    expect(shown(w, 'files')).toBe(true)
+    expect(shown(w, 'overview')).toBe(false)
+  })
+
+  /**
+   * 深链是别人手打的（或旧版本留下的），打错一个字母不该把详情页变成空白。
+   * 同时钉住「**只当初值**」：不认识就落回概览，而不是抛错 / 白屏 / 停在某个空标签。
+   */
+  it('?tab= 的值不认识时落回概览，页面照常渲染', async () => {
+    const w = await mountAt('?tab=不存在的标签')
+
+    expect(shown(w, 'overview')).toBe(true)
+    expect(shown(w, 'metadata')).toBe(false)
+    // 「没白屏」的正面证据：真正的书目内容还在
+    expect(w.text()).toContain('三体')
+    expect(w.findComponent(TabBar).exists()).toBe(true)
+  })
+
+  /**
+   * 切换标签**不写回 URL**。写回意味着每点一次标签就压一条历史（返回键要按七次才
+   * 出得去），也意味着 `/book/x?tab=files` 与 `/book/x` 成了两个地址 —— 分享出去的
+   * 链接会带着别人的浏览位置。
+   */
+  it('切换标签不写回 URL（只当初值）', async () => {
+    const w = await mountDetail()
+
+    const filesBtn = w.findAll('button').find((b) => b.text().startsWith('文件'))
+    expect(filesBtn).toBeTruthy()
+    await filesBtn!.trigger('click')
+    await flushPromises()
+
+    // 先确认这一下真的切过去了 —— 否则「路径没变」可能只是因为点击没生效
+    expect(shown(w, 'files')).toBe(true)
+    expect(router.currentRoute.value.fullPath).toBe(`/book/${BOOK_ID}`)
   })
 })

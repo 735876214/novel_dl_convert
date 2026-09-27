@@ -161,6 +161,24 @@ export function statusLabelOf(
 }
 
 /**
+ * 五态的**可选项清单**（值 + 文案），供「设置状态」这类要列出全部状态的界面用。
+ *
+ * 从 `LABELS` 派生，不另写一份 —— 文案两处不一样就会出现「选的是同一项、
+ * 显示的名字不同」。后端的 `db.READ_STATUSES` 是这张表的真值源，顺序与它一致。
+ *
+ * ⚠️ 它**只列可选项**，不判断「当前是哪一项」：`statusLabelOf` 在没有状态行时会
+ * 按进度兜底推导，拿它去给某一项打勾会把「从没设过状态」显示成「未读」。
+ * 打勾要拿 `book.status` 这个**原始值**比。
+ */
+export const READ_STATUS_OPTIONS: readonly { value: string; label: string }[] = [
+  'unread',
+  'reading',
+  'finished',
+  'paused',
+  'abandoned',
+].map((v) => ({ value: v, label: LABELS[v] }))
+
+/**
  * **只看进度**的文案（不看 `b.status`）—— 给拿不到库上下文的通用组件用（如 `BookCover`）。
  *
  * 与 `statusLabelOf` 的差别是真实存在的历史事实（见文件头「三份拷贝」）：
