@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type AudioTrack, type BookCard, type SessionExtra } from '@/lib/api'
+import { api, type AudioTrack, type SessionExtra } from '@/lib/api'
 import { AUDIO_SKIP_BACKS, AUDIO_SKIP_FORWARDS, AUDIO_SLEEPS, AUDIO_SPEEDS, readAudioPrefs } from '@/lib/audioPrefs'
-import { sortBySeriesIndex } from '@/lib/bookInfo'
 import { createSessionReporter } from '@/lib/readingSession'
+import { useSeriesNext } from '@/lib/seriesNext'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -22,7 +21,8 @@ const props = defineProps<{ bookId: string; tracks: AudioTrack[]; series?: strin
 
 const ui = useUiStore()
 const library = useLibraryStore()
-const router = useRouter()
+/** 自动翻到系列下一册（第 66 期）：实现收敛到 `lib/seriesNext.ts` 单一真值源 */
+const { goToNextVolume } = useSeriesNext()
 const prefs = readAudioPrefs()
 
 const audio = ref<HTMLAudioElement | null>(null)
@@ -136,7 +136,7 @@ function onTime(): void {
   if (Math.floor(currentTime.value) % 5 === 0) saveProgress()
 }
 
-function onEnded(): void {
+async function onEnded(): Promise<void> {
   if (index.value + 1 < total.value) {
     // 同册内「轨与轨」续接是内置行为，直接进下一轨
     goto(index.value + 1)
@@ -146,35 +146,15 @@ function onEnded(): void {
   saveProgress()
   session.pause()
   void session.flush()
-  if (prefs.autoNextBook && (props.series || '').trim()) {
-    void maybeAutoNextBook()
-  } else {
-    playing.value = false
-  }
-}
-
-/**
- * 本册最后一轨放完后自动翻到系列下一册（第 61 期；默认关）。
- * 复用既有 `GET /api/series/{name}`（`api.seriesDetail`）；
- * 无系列 / 已是末册 / 请求失败都只提示、不跳转。
- */
-async function maybeAutoNextBook(): Promise<void> {
-  const series = (props.series || '').trim()
-  try {
-    const d = await api.seriesDetail(series)
-    const list: BookCard[] = sortBySeriesIndex(d.books)
-    const i = list.findIndex((b) => String(b.id) === String(props.bookId))
-    const nxt = i >= 0 ? list[i + 1] : undefined
-    if (!nxt) {
-      ui.toast('已经是系列最后一本')
-      playing.value = false
-      return
-    }
-    router.push(`/listen/${nxt.id}`)
-  } catch (e) {
-    ui.toast(e instanceof Error ? `找不到系列下一本：${e.message}` : '找不到系列下一本')
-    playing.value = false
-  }
+  // 跨册续接（第 61 期起；第 66 期收敛到 `lib/seriesNext.ts` 单一真值源）：
+  // 开关关着时静默停下；开着则**无系列也会如实提示**（此前是静默停下）。
+  const advanced = await goToNextVolume({
+    enabled: prefs.autoNextBook,
+    series: props.series,
+    bookId: props.bookId,
+    routeBase: '/listen',
+  })
+  if (!advanced) playing.value = false
 }
 
 function onPlay(): void {

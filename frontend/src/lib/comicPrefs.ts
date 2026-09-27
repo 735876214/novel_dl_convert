@@ -38,7 +38,7 @@ export interface ComicPrefs {
   widePage: ComicWidePage
   /** 小屏强制双页（第 51 期）：**默认 true** —— 改造前双页与屏宽无关，关掉后才小屏回落单页 */
   forceTwoPage: boolean
-  /** 自动翻到下一本（第 51 期；默认关）：读到末页后按系列序号进下一册 */
+  /** 自动翻到下一册（第 51 期；**第 66 期起默认开**，与 PDF / 有声书 / EPUB 续章统一）：读到末页后按系列序号进下一册 */
   autoNext: boolean
   /**
    * **漫画库里的 PDF 用哪个阅读器**（第 61 期）。
@@ -66,7 +66,8 @@ export const COMIC_PREFS_DEFAULT: ComicPrefs = {
   spreadAlign: 'normal',
   widePage: 'disable',
   forceTwoPage: true,
-  autoNext: false,
+  // 第 66 期：默认关闭 → 默认开启（三处跨册续接统一为「开」，对齐 EPUB 续章）
+  autoNext: true,
   // 第 61 期：漫画库里的 PDF 默认按漫画形态读（用户可在阅读器工具栏一键切回 PDF 视图）
   pdfMode: 'comic',
 }

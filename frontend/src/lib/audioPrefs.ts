@@ -19,7 +19,7 @@ export interface AudioPrefs {
   /** 睡眠定时默认时长（分钟）；0 = 不启用 */
   sleepMinutes: number
   /**
-   * 自动翻到下一册（第 61 期；默认关）：
+   * 自动翻到下一册（第 61 期；**第 66 期起默认开**，与漫画 / PDF / EPUB 续章统一）：
    * 本册最后一轨放完后，按系列序号自动打开下一册；
    * 无系列 / 已是末册 / 请求失败都只提示、不跳转。
    * （同册内「轨与轨」的续接是播放器内置行为，不归此开关管。）
@@ -35,7 +35,8 @@ export const AUDIO_PREFS_DEFAULT: AudioPrefs = {
   skipBack: 15,
   skipForward: 30,
   sleepMinutes: 0,
-  autoNextBook: false,
+  // 第 66 期：默认关闭 → 默认开启（三处跨册续接统一为「开」，对齐 EPUB 续章）
+  autoNextBook: true,
 }
 
 /** 倍速档位（对齐上游 0.75x–2x；第 51 期补回 1.75x） */

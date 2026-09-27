@@ -194,7 +194,7 @@ function reset(): void {
 
       <div class="flex items-center gap-4 border-b border-border px-4 py-3.5">
         <div class="min-w-0 flex-1">
-          <div class="text-[13px] font-medium text-foreground">自动翻到下一本</div>
+          <div class="text-[13px] font-medium text-foreground">自动翻到下一册</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
             读到末页（或连续模式滚到底）后，按系列序号自动打开下一册；
             无系列、已是最后一册时只提示、不跳转
