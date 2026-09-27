@@ -16,6 +16,7 @@
 """
 import json
 import pathlib
+import time
 
 import pytest
 
@@ -39,6 +40,24 @@ def _put(root, rel: str, data: bytes = b"x") -> pathlib.Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(data)
     return p
+
+
+class _FrozenClock:
+    """只有 ``time()`` 冻住的 ``time`` 替身，其余属性照旧转发给真模块。
+
+    替换的是 ``catalog`` 命名空间里的那一个（``monkeypatch.setattr(catalog, "time", …)``）
+    —— 进程里别处的时间照走。冻全局的 ``time`` 会波及缓存 TTL、日志时戳、心跳，
+    而它们与本文件要钉的那条判据无关，白白多出几处莫名其妙的失败。
+    """
+
+    def __init__(self, now: float) -> None:
+        self._now = now
+
+    def time(self) -> float:
+        return self._now
+
+    def __getattr__(self, name):
+        return getattr(time, name)
 
 
 @pytest.fixture
@@ -292,6 +311,63 @@ def test_不标脏时读不会看到新书(cat_lib):
 
     _put(root, "偷偷加的.epub", b"EPUB")     # 不调 invalidate（模拟后台线程的视角）
     assert len(library.books(lib["id"])) == 1, "没有标脏却扫了盘：索引白建了"
+
+
+# ---------------------------------------------------------------------------
+# 全库失效的判据：比的是**计数**，不是**时刻**（第 63 期修正）
+# ---------------------------------------------------------------------------
+
+def test_同一时刻刻度内的全局失效也算脏(cat_lib, monkeypatch):
+    """全局标脏与刷新完成落在**同一个时钟刻度**里时，也必须判脏。
+
+    ``test_标脏后的读会看到新书`` 走的是**按库**失效（``invalidate(lib_id)`` →
+    ``_dirty`` 集合的成员判断），那条路不受时钟影响、一直是对的。这里走的是
+    **全局**失效分支，它的判据原本是 ``_dirty_all_at > _refreshed_at[lid]``
+    —— **两个 ``time.time()`` 比大小**。
+
+    同一个刻度里这两次调用返回**完全相同的浮点数**，``>`` 为假 ⇒ 库被判成不脏 ⇒
+    下一次读不刷新 ⇒ 刚写进去的文件**不在书目里**：不报错、也不为空，只是少一本。
+    不是理论风险 —— Windows + Python 3.12 上实测 ``time.time()`` 的粒度约
+    **15.6ms**（连续调 2000 次全部相同），而「写文件 → ``invalidate()`` → 立刻读书目」
+    这一串（上传 / 刮削落库 / 批量导入 / 建库）正好落在同一个刻度里。
+
+    把时钟**冻住**是关键：不冻就变成「看机器快慢」的 flake ——
+    ``tests/test_annotation_export.py::test_按单书收窄`` 正是这样偶尔红一次。
+    冻住之后，这个场景在任何平台、任何负载下都**必然**复现改动前的错。
+    """
+    lib, root = cat_lib
+    lid = lib["id"]
+    monkeypatch.setattr(catalog, "time", _FrozenClock(time.time()))
+
+    _put(root, "第一本.epub", b"EPUB")
+    library.invalidate()                       # 全局，不是按库
+    assert [b["name"] for b in library.books(lid)] == ["第一本.epub"]
+
+    _put(root, "第二本.epub", b"EPUB")
+    library.invalidate()
+    assert sorted(b["name"] for b in library.books(lid)) == ["第一本.epub", "第二本.epub"], \
+        "同一刻度内的全局失效被判成「不脏」⇒ 第二次写的文件没进书目"
+
+
+def test_is_stale比的是计数不是时刻(cat_lib, monkeypatch):
+    """``_is_stale`` 与 ``_needs_refresh`` 是**两处各自手写**的同一个比较。
+
+    上一条走的是请求路径（``catalog.books_of`` → ``_settle`` → ``_needs_refresh``）。
+    ``_is_stale`` 只被监听线程的 ``refresh_stale`` 用，**改漏它不会有任何界面表现** ——
+    只表现为「后台永远不再刷新」，而那正是「用户绕过 App 往目录里丢文件」唯一的兜底。
+    所以这里**单独**再钉一次，两处各钉各的。
+    """
+    lib, root = cat_lib
+    lid = lib["id"]
+    monkeypatch.setattr(catalog, "time", _FrozenClock(time.time()))
+    _put(root, "占位.epub", b"EPUB")
+
+    catalog.refresh_library(lib)               # 刷一次 ⇒ 记下「当时看到的序号」
+    assert catalog._is_stale(lid) is False, "刚刷完就判脏 ⇒ 监听线程每轮白刷一次"
+
+    library.invalidate()
+    assert catalog._is_stale(lid) is True, \
+        "同一刻度内的全局失效没被 _is_stale 看见（监听线程此后永远不刷）"
 
 
 # ---------------------------------------------------------------------------

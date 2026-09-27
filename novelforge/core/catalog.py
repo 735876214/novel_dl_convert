@@ -121,13 +121,14 @@ _ready_lock = threading.Lock()
 _locks: dict = {}
 _locks_guard = threading.Lock()
 
-#: 脏标记：库 id → 被标脏的时刻。``_dirty_all_at`` 是「全库标脏」的时刻戳。
-#: 用**时刻戳**而不是布尔，是因为全局失效必须对**每个**库生效 ——
+#: 脏标记：库 id → 被标脏的时刻。``_dirty_all_seq`` 是「全库标脏」的**序号**。
+#: 用**单调序号**而不是布尔，是因为全局失效必须对**每个**库生效 ——
 #: 用一个全局布尔的话，第一个来刷新的库会把它清掉，后面的库全都看不到这次失效。
 _dirty: dict = {}
-_dirty_all_at = 0.0
-#: 库 id → 上次成功刷新的时刻（用来和 ``_dirty_all_at`` 比大小）。
-_refreshed_at: dict = {}
+#: 全局失效序号。**故意不用 `time.time()`**（第 63 期修正，见 `_is_stale`）。
+_dirty_all_seq: int = 0
+#: 库 id → 上次成功刷新时看到的 ``_dirty_all_seq``。比它大就是「之后又被全局标脏过」。
+_refreshed_seq: dict = {}
 _state_lock = threading.Lock()
 
 #: 本进程内「已经至少完整刷过一次」的库。**冷启动的唯一判据** ——
@@ -177,14 +178,14 @@ def ensure_schema() -> None:
 
 def reset_state() -> None:
     """清掉进程内状态（脏标记 / 就绪集 / 建表标记）。**供测试**切库或换 DATA_DIR 后调用。"""
-    global _ready_done, _dirty_all_at
+    global _ready_done, _dirty_all_seq
     with _ready_lock:
         _ready_done = False
     with _state_lock:
         _dirty.clear()
-        _refreshed_at.clear()
+        _refreshed_seq.clear()
         _ready.clear()
-        _dirty_all_at = 0.0
+        _dirty_all_seq = 0
     # Redis 里的列表键也得丢：本函数是「换了一套库」的信号（`db.close()` 调它），
     # 而**库 id 会被重用**（测试里每个用例都叫 'novels'）—— 留着旧值，下一个用例
     # 会读到上一个用例的书。生产上这条不走，但代价是一次 DEL，不值得为它开分支。
@@ -222,27 +223,44 @@ def invalidate(library_id=None) -> None:
     元数据编辑 / 刮削落库 / 搬迁 / 监听线程发现新文件 …）全都走这里到 Redis。
     在别处再挂一遍 DEL 是**冗余且危险**的：漏一处就变成「改了元数据但列表还是旧的」。
     """
-    global _dirty_all_at
+    global _dirty_all_seq
     with _state_lock:
         if library_id:
             _dirty[str(library_id)] = time.time()
         else:
-            _dirty_all_at = time.time()
+            _dirty_all_seq += 1
             _dirty.clear()
     _drop_list(library_id)
 
 
 def _is_stale(lid: str) -> bool:
+    """这个库自上次刷新之后又被标脏了吗？
+
+    ⚠️ **这里的比较是两个计数，不是两个时刻**（第 63 期改正，原本是
+    ``_dirty_all_at > _refreshed_at.get(lid, 0.0)``）。
+
+    原写法在**同一时刻刻度内**判不出来：「全局标脏」与「刷新完成」两次
+    ``time.time()`` 会返回**完全相同的浮点数**，于是 ``>`` 为假、库被判成不脏。
+    这不是理论风险 —— Windows + Python 3.12 上实测 ``time.time()`` 的粒度约
+    **15.6ms**，连续两次调用 2000 次**全部相同**。而「写文件 → ``invalidate()``
+    → 立刻读一次书目」这一串（上传 / 刮削落库 / 批量导入 / 测试夹具）正好落在
+    同一个刻度里：第一次读触发的 ``_mark_fresh`` 与紧接着的 ``invalidate()``
+    时刻相等 ⇒ 下一次读不再刷新 ⇒ **刚写进去的文件在书目里看不见**，
+    不报错、也不为空，只是少一本。
+
+    序号不受时钟分辨率影响：每次全局标脏必然 +1，刷新时把「当时看到的号」记下来，
+    两者相等就是「刷新之后没再脏过」。
+    """
     with _state_lock:
         if lid in _dirty:
             return True
-        return _dirty_all_at > _refreshed_at.get(lid, 0.0)
+        return _dirty_all_seq > _refreshed_seq.get(lid, -1)
 
 
 def _mark_fresh(lid: str) -> None:
     with _state_lock:
         _dirty.pop(lid, None)
-        _refreshed_at[lid] = time.time()
+        _refreshed_seq[lid] = _dirty_all_seq
 
 
 def _lib_lock(lid: str) -> threading.Lock:
@@ -436,7 +454,7 @@ def forget(library_id) -> None:
     _commit()
     with _state_lock:
         _dirty.pop(lid, None)
-        _refreshed_at.pop(lid, None)
+        _refreshed_seq.pop(lid, None)
         _ready.discard(lid)
         _cached_libs.discard(lid)
     # 库没了，它那本「列表」也得走 —— 这条**不经过 invalidate()**（库被删时不调它），
@@ -553,11 +571,15 @@ def _rows_of(lib: dict) -> list:
 
 
 def _needs_refresh(lid: str) -> bool:
-    """这个库现在需要扫一次吗？**一次内存判断**（不查库）。"""
+    """这个库现在需要扫一次吗？**一次内存判断**（不查库）。
+
+    末一条判据与 ``_is_stale`` 是**同一个比较**（序号，不是时刻）——
+    两处都手写过一遍时刻戳版本，改一处漏一处就等于这条路径没修。
+    """
     with _state_lock:
         return (lid not in _ready
                 or lid in _dirty
-                or _dirty_all_at > _refreshed_at.get(lid, 0.0))
+                or _dirty_all_seq > _refreshed_seq.get(lid, -1))
 
 
 def _settle(lib: dict) -> None:
