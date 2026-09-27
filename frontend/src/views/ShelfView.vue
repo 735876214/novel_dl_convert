@@ -2,7 +2,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import BookActionsMenu from '@/components/book/BookActionsMenu.vue'
 import BookMoveDialog from '@/components/book/BookMoveDialog.vue'
+import BookPreviewDialog from '@/components/book/BookPreviewDialog.vue'
 import BookCover from '@/components/ui/BookCover.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
@@ -17,6 +19,7 @@ import {
   sortBySeriesIndex,
   tagsLabel,
 } from '@/lib/bookInfo'
+import { THUMBNAIL_READER_FORMATS } from '@/lib/bookOpen'
 import { statusBucket } from '@/lib/readingThresholds'
 import { bucketKeyOf, buildBuckets } from '@/lib/shelfBuckets'
 import {
@@ -626,23 +629,54 @@ function chip(active: boolean): string {
 }
 
 /**
- * 能**在线读**的格式 —— 与 `ReaderView` 的分流口径一致（章节流 / PDF / 漫画）。
- * 这不是「本项目支持的格式」清单，而是「点进去有东西看」的清单。
- */
-const READABLE_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR'])
-
-/**
  * 打开一本书。默认进详情；「浏览行为 → 缩略图点击」选了「直接阅读」时进阅读器。
  *
  * ⚠️ 打不开的格式（MOBI、有声书等）**仍进详情**：那个开关的语义是「先去哪儿」，
  * 不是「强制进阅读器」—— 让用户点一下只换来一句「点不了」是更差的体验。
+ *
+ * 第 64 期把格式清单搬去了 `lib/bookOpen.ts`（菜单的「阅读 / 收听」要用同一份判据），
+ * 这里取的是 `THUMBNAIL_READER_FORMATS` 而**不是** `READER_FORMATS` ——
+ * 前者少一个 TXT，那是这个设置项的既有口径，本期一个字不改（详见那里的注释）。
  */
 function openBook(id: string, format?: string): void {
-  if (prefs.prefs.thumbnailClick === 'reader' && READABLE_FORMATS.has((format || '').toUpperCase())) {
+  if (
+    prefs.prefs.thumbnailClick === 'reader' &&
+    THUMBNAIL_READER_FORMATS.has((format || '').toUpperCase())
+  ) {
     router.push(`/read/${id}`)
     return
   }
   router.push(`/book/${id}`)
+}
+
+// ---------------- 书卡 ⋮ 菜单（第 64 期）----------------
+// 菜单本身（组件 + 开合状态）都在别处；书架只做两件事：开预览浮层、按结果刷新列表。
+const previewBook = ref<BookCard | null>(null)
+
+function openPreview(b: BookCard): void {
+  previewBook.value = b
+}
+
+/** 预览浮层里的「详细信息」：先关浮层再跳（不关的话它会盖在详情页上面） */
+function openDetailFromPreview(b: BookCard): void {
+  previewBook.value = null
+  router.push(`/book/${b.id}`)
+}
+
+/**
+ * 菜单里某个动作改动了数据。**一律以服务端回答为准**，不在本地数组里 splice 出乐观结果
+ *（「计数立刻反映真实书目」是 `tests/test_library_count_contract.py` 立过的口径）。
+ */
+function onMenuChanged(b: BookCard, kind: 'status' | 'collection' | 'deleted'): void {
+  if (kind === 'deleted') {
+    // 多选里可能还勾着它：不摘掉的话批量动作会拿着一个已经不存在的 id 去发请求
+    const s = new Set(selected.value)
+    s.delete(b.id)
+    selected.value = s
+    // 详情缓存也得失效，否则从浏览器历史退回它的详情页会照常渲染一本已经没有的书
+    library.forgetDetail(b.id)
+  }
+  void library.loadBooks(true)
 }
 
 const INPUT_CLS =
@@ -891,103 +925,134 @@ const INPUT_CLS =
 
     <!-- 网格视图：列数与间距由 displayPrefs 驱动（见 gridStyle） -->
     <div v-else-if="prefs.prefs.view === 'grid'" class="grid" :style="gridStyle">
-      <button
+      <div
         v-for="r in rows"
         :key="r.key"
-        type="button"
-        class="group cursor-pointer text-left"
+        class="group"
         :data-bucket="bucketKeyOf(r.book.title || r.book.name)"
-        :aria-label="
-          display.prefs.cardInfoMode === 'off'
-            ? isSeriesRow(r)
-              ? seriesName(r)
-              : r.book.title || r.book.name
-            : undefined
-        "
-        @click="onGridClick(r)"
       >
+        <!--
+          封面盒 —— **⋮ 锚在它的右下角**，所以它必须只包着封面。
+
+          第 64 期的结构重构（原来是「一个 button 包住封面 + 封面下方那几行字」），两个理由：
+          1. 面板里的菜单项全是 `<button>`，把 ⋮ 塞进 button 里就是嵌套 button；
+          2. 若改成把 ⋮ 挂在外层 div 上（`bottom-1.5`），`below-cover` 模式下外层还含着
+             封面下方那几行字，⋮ 会落到文字上而不是封面上。
+
+          于是封面与封面下方各是一个按钮，点哪个都触发同一个 `onGridClick` ——
+          **可点区域与改造前一致**，只是拆成了两块。
+        -->
         <div class="relative">
-          <input
-            v-if="selectMode && r.book && !isSeriesRow(r)"
-            type="checkbox"
-            class="absolute left-1.5 top-1.5 z-10 h-4 w-4 cursor-pointer accent-primary"
-            :checked="selected.has(r.book.id)"
-            @click.stop="toggleSelect(r.book.id)"
-          />
-          <!--
-            折叠系列行的封面形态（第 51 期）：stack / mosaic 是**多封面组合**；
-            其余三种形态仍走单张 BookCover（代表本由 rows 里的 representativeOf 决定）
-          -->
-          <template
-            v-if="isSeriesRow(r) && r.members.length > 1 && display.prefs.collapsedCover === 'stack'"
+          <button
+            type="button"
+            class="block w-full cursor-pointer text-left"
+            :aria-label="
+              display.prefs.cardInfoMode === 'off'
+                ? isSeriesRow(r)
+                  ? seriesName(r)
+                  : r.book.title || r.book.name
+                : undefined
+            "
+            @click="onGridClick(r)"
           >
-            <div class="relative aspect-3/4 w-full">
+            <input
+              v-if="selectMode && r.book && !isSeriesRow(r)"
+              type="checkbox"
+              class="absolute left-1.5 top-1.5 z-10 h-4 w-4 cursor-pointer accent-primary"
+              :checked="selected.has(r.book.id)"
+              @click.stop="toggleSelect(r.book.id)"
+            />
+            <!--
+              折叠系列行的封面形态（第 51 期）：stack / mosaic 是**多封面组合**；
+              其余三种形态仍走单张 BookCover（代表本由 rows 里的 representativeOf 决定）
+            -->
+            <template
+              v-if="isSeriesRow(r) && r.members.length > 1 && display.prefs.collapsedCover === 'stack'"
+            >
+              <div class="relative aspect-3/4 w-full">
+                <div
+                  v-for="(m, i) in stackMembers(r)"
+                  :key="m.id"
+                  class="absolute inset-0"
+                  :style="{
+                    zIndex: i + 1,
+                    transform: `translate(${(stackMembers(r).length - 1 - i) * 7}px, ${(stackMembers(r).length - 1 - i) * -7}px) scale(${1 - (stackMembers(r).length - 1 - i) * 0.045})`,
+                  }"
+                >
+                  <BookCover :book="m" :interactive="false" :show-title="false" />
+                </div>
+              </div>
+            </template>
+            <template
+              v-else-if="isSeriesRow(r) && r.members.length > 1 && display.prefs.collapsedCover === 'mosaic'"
+            >
+              <div class="grid aspect-3/4 w-full grid-cols-2 grid-rows-2 gap-0.5 overflow-hidden rounded-md bg-muted">
+                <BookCover
+                  v-for="m in mosaicMembers(r)"
+                  :key="m.id"
+                  :book="m"
+                  :interactive="false"
+                  :show-title="false"
+                />
+                <div v-for="n in 4 - mosaicMembers(r).length" :key="`pad-${n}`" class="bg-muted" />
+              </div>
+            </template>
+            <BookCover v-else :book="r.book" :show-title="!showAuthor()" />
+            <!-- 系列行的「N 册」在右下角 —— 系列行**不给菜单**，所以右下角不会撞 -->
+            <span
+              v-if="isSeriesRow(r)"
+              class="absolute right-1.5 bottom-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10.5px] font-medium text-white tabular-nums"
+            >
+              {{ r.members.length }} 册
+            </span>
+            <!-- 格式徽章只在单本书上显示：系列行不给格式，因为一个系列可能含多种格式 -->
+            <span
+              v-else-if="formatLabel(r.book)"
+              class="absolute top-1 right-1 rounded bg-black/60 px-1.5 py-0.5 font-mono text-[9.5px] text-white"
+            >
+              {{ formatLabel(r.book) }}
+            </span>
+            <!--
+              卡片信息位置（上游「外观 → Layout」的卡片信息模式）：
+              hover-overlay = 压在封面底部、鼠标移上去才浮出来（触屏上不显示，这是该模式的固有权衡）
+              `pr-8`：右下角让给 ⋮，免得它压住文字的尾巴
+            -->
+            <div
+              v-if="display.prefs.cardInfoMode === 'hover-overlay'"
+              class="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent px-2 pr-8 pt-6 pb-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+            >
               <div
-                v-for="(m, i) in stackMembers(r)"
-                :key="m.id"
-                class="absolute inset-0"
-                :style="{
-                  zIndex: i + 1,
-                  transform: `translate(${(stackMembers(r).length - 1 - i) * 7}px, ${(stackMembers(r).length - 1 - i) * -7}px) scale(${1 - (stackMembers(r).length - 1 - i) * 0.045})`,
-                }"
+                v-if="isSeriesRow(r) || display.prefs.primaryLabel !== 'none'"
+                class="truncate text-[12px] font-medium text-white"
               >
-                <BookCover :book="m" :interactive="false" :show-title="false" />
+                <template v-if="isSeriesRow(r)">{{ seriesName(r) }}</template>
+                <template v-else>{{ primaryLabelOf(r.book) }}</template>
+              </div>
+              <div
+                v-if="isSeriesRow(r) || display.prefs.secondaryLabel !== 'none'"
+                class="truncate text-[11px] text-white/75"
+              >
+                {{ isSeriesRow(r) ? `${r.members.length} 本` : secondaryLabelOf(r.book) }}
               </div>
             </div>
-          </template>
-          <template
-            v-else-if="isSeriesRow(r) && r.members.length > 1 && display.prefs.collapsedCover === 'mosaic'"
-          >
-            <div class="grid aspect-3/4 w-full grid-cols-2 grid-rows-2 gap-0.5 overflow-hidden rounded-md bg-muted">
-              <BookCover
-                v-for="m in mosaicMembers(r)"
-                :key="m.id"
-                :book="m"
-                :interactive="false"
-                :show-title="false"
-              />
-              <div v-for="n in 4 - mosaicMembers(r).length" :key="`pad-${n}`" class="bg-muted" />
-            </div>
-          </template>
-          <BookCover v-else :book="r.book" :show-title="!showAuthor()" />
-          <span
-            v-if="isSeriesRow(r)"
-            class="absolute right-1.5 bottom-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10.5px] font-medium text-white tabular-nums"
-          >
-            {{ r.members.length }} 册
-          </span>
-          <!-- 格式徽章只在单本书上显示：系列行不给格式，因为一个系列可能含多种格式 -->
-          <span
-            v-else-if="formatLabel(r.book)"
-            class="absolute top-1 right-1 rounded bg-black/60 px-1.5 py-0.5 font-mono text-[9.5px] text-white"
-          >
-            {{ formatLabel(r.book) }}
-          </span>
-          <!--
-            卡片信息位置（上游「外观 → Layout」的卡片信息模式）：
-            hover-overlay = 压在封面底部、鼠标移上去才浮出来（触屏上不显示，这是该模式的固有权衡）
-          -->
-          <div
-            v-if="display.prefs.cardInfoMode === 'hover-overlay'"
-            class="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent px-2 pt-6 pb-2 opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-          >
-            <div
-              v-if="isSeriesRow(r) || display.prefs.primaryLabel !== 'none'"
-              class="truncate text-[12px] font-medium text-white"
-            >
-              <template v-if="isSeriesRow(r)">{{ seriesName(r) }}</template>
-              <template v-else>{{ primaryLabelOf(r.book) }}</template>
-            </div>
-            <div
-              v-if="isSeriesRow(r) || display.prefs.secondaryLabel !== 'none'"
-              class="truncate text-[11px] text-white/75"
-            >
-              {{ isSeriesRow(r) ? `${r.members.length} 本` : secondaryLabelOf(r.book) }}
-            </div>
-          </div>
+          </button>
+          <!-- 系列折叠行不给 ⋮：菜单里每一项都是**单本书的动词**（删除 / 状态 / 收藏） -->
+          <BookActionsMenu
+            v-if="r.book && !isSeriesRow(r)"
+            :book="r.book"
+            :menu-key="r.key"
+            variant="grid"
+            @preview="openPreview"
+            @changed="onMenuChanged"
+          />
         </div>
         <!-- below-cover = 封面下方（改造前的行为）；off = 只画封面，信息进详情页看 -->
-        <template v-if="display.prefs.cardInfoMode === 'below-cover'">
+        <button
+          v-if="display.prefs.cardInfoMode === 'below-cover'"
+          type="button"
+          class="block w-full cursor-pointer text-left"
+          @click="onGridClick(r)"
+        >
           <div
             v-if="isSeriesRow(r) || display.prefs.primaryLabel !== 'none'"
             class="mt-2 truncate text-[12.5px] font-medium text-foreground"
@@ -1030,8 +1095,8 @@ const INPUT_CLS =
               {{ Math.round(r.book.percent ?? 0) }}%
             </span>
           </div>
-        </template>
-      </button>
+        </button>
+      </div>
     </div>
 
     <!-- 列表视图 -->
@@ -1102,6 +1167,15 @@ const INPUT_CLS =
               {{ Math.round(e.book.percent ?? 0) }}%
             </span>
           </div>
+          <!-- ⋮：`Card` 是 `<div>`，嵌 button 合法；`.stop` 在触发器上（见 DropdownMenu），
+               所以点它不会触发外层 Card 的「打开这本书」 -->
+          <BookActionsMenu
+            :book="e.book"
+            :menu-key="e.key"
+            variant="list"
+            @preview="openPreview"
+            @changed="onMenuChanged"
+          />
         </div>
       </Card>
     </div>
@@ -1170,19 +1244,39 @@ const INPUT_CLS =
             <td class="px-3 py-2 text-[11.5px] text-amber-500">
               {{ (row.book.stars ?? 0) > 0 ? '★'.repeat(row.book.stars ?? 0) : '—' }}
             </td>
-            <td class="px-3 py-2 text-right">
-              <Button
-                v-if="row.toggle"
-                size="sm"
-                variant="ghost"
-                @click.stop="toggleByName(row.toggle.name)"
-              >
-                {{ expanded.includes(row.toggle.name) ? '收起' : '展开' }}
-              </Button>
+            <!-- 末列 = 行操作列：系列行放「展开 / 收起」，单本书行放 ⋮（表头一字不改） -->
+            <td class="px-3 py-2">
+              <div class="flex items-center justify-end gap-1">
+                <Button
+                  v-if="row.toggle"
+                  size="sm"
+                  variant="ghost"
+                  @click.stop="toggleByName(row.toggle.name)"
+                >
+                  {{ expanded.includes(row.toggle.name) ? '收起' : '展开' }}
+                </Button>
+                <BookActionsMenu
+                  v-else
+                  :book="row.book"
+                  :menu-key="row.key"
+                  variant="table"
+                  @preview="openPreview"
+                  @changed="onMenuChanged"
+                />
+              </div>
             </td>
           </tr>
         </tbody>
       </table>
     </Card>
+
+    <!-- 快速预览浮层（⋮ 菜单的「快速预览」）。挂在页面这一层而不是卡片里：
+         它是 `fixed` 居中的模态，与某一个卡片的位置无关 -->
+    <BookPreviewDialog
+      :open="!!previewBook"
+      :book="previewBook"
+      @close="previewBook = null"
+      @open-detail="openDetailFromPreview"
+    />
   </div>
 </template>

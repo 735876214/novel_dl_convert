@@ -308,6 +308,19 @@ export const useLibraryStore = defineStore('library', () => {
     }
   }
 
+  /**
+   * 丢掉某本书的详情缓存（第 64 期）。
+   *
+   * 起因是「删书」：`details` 是按 id 缓存且**没有失效机制**的，删完之后
+   * 从浏览器历史退回这本书的详情页，`getBookDetail` 会命中缓存、把一本
+   * 已经不存在的书照常渲染出来（读进度、开阅读器全都会再失败一次）。
+   *
+   * 只删这一条，**不整表清空** —— 清空会让其它书的详情页在返回时重拉一遍。
+   */
+  function forgetDetail(id: string): void {
+    delete details.value[id]
+  }
+
   /** 进入书库页（题材筛选已由书架筛选面板承担；不再有按标签筛选的入口） */
   function openShelf(title: string): void {
     shelfTitle.value = title || '全部书库'
@@ -358,6 +371,7 @@ export const useLibraryStore = defineStore('library', () => {
     scopeCounts,
     findBook,
     getBookDetail,
+    forgetDetail,
     detailError,
     openShelf,
     openSmart,

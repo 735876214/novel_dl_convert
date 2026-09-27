@@ -69,6 +69,22 @@ EXPECTED_SPECS = (
     # 把 `/` 变 `%2F`、`#` 不编码被当成锚点、漏传 `library_id` 使基根退回 OUTPUT_DIR）
     # 都不会有任何提示，故用 spec 逐条钉住。
     "src/lib/downloadUrl.spec.ts",
+    # 第 64 期：书卡 ⋮ 菜单的状态模块。三件事写错都不报错：两个面板一起亮（只是「有点怪」）、
+    # 每张卡各挂一份 document 监听（功能完全正常，只有处理器数量悄悄涨）、点菜单项时
+    # 面板先关掉而动作没执行（用户读成「点了没反应」）。
+    "src/lib/bookMenu.spec.ts",
+    # 第 64 期：⋮ 菜单的**哪些项出现**。菜单里多一项 / 少一项都不会报错，只是用户点下去
+    # 才发现「进了个打不开的阅读器」或「本来能下的书没有下载入口」。故用格式矩阵钉死
+    # EPUB / TXT / AUDIO / MOBI 四种情况，并钉住删除确认的文案与「取消就一个请求都不发」。
+    "src/components/book/BookActionsMenu.spec.ts",
+    # 第 64 期：书架的**接线**。这一页此前零 spec，而本期在它身上动了三处（网格卡结构重构
+    # + 三个视图各接一个 ⋮）。漏接一个视图 ⇒ 那个视图里没有入口，用户只会以为「这个视图
+    # 不支持」；系列折叠行误接上 ⋮ ⇒ 点下去会删掉整个系列。核心断言是触发器**数量**。
+    "src/views/ShelfView.spec.ts",
+    # 第 64 期：快速预览浮层。两条契约写错都只会悄悄给错信息：详情拉失败时把整块内容换成
+    # 错误页（把真数据说成「没有」）或照常写「0 章」（把「没拿到」说成「没有」）；
+    # 以及给 AUDIO 发一个没有可下文件的「下载」。
+    "src/components/book/BookPreviewDialog.spec.ts",
 )
 
 
@@ -127,6 +143,44 @@ def test_前端_spec_文件存在且不是空壳():
         assert re.search(r"\b(it|test)\(", body), (
             f"{rel} 里没有任何 `it(` / `test(` —— 空壳 spec 同样会让 vitest 报绿"
         )
+
+
+def test_书架三个视图各留了一个菜单入口():
+    """`ShelfView.vue` 里 `<BookActionsMenu` 必须**正好 3 处**（网格 / 列表 / 表格各一）。
+
+    为什么用源码计数而不是只靠 `ShelfView.spec.ts` 的数量断言：那三条用例是
+    「mount 起来数触发器」，**漏接一个视图时它数的是另外两个视图**——
+    三处都漏了才会红，漏一处时它是绿的（渲染出来的那一处照样有 ⋮）。
+    计数是唯一能一眼看出「少了一处」的判据。多出来（第 4 处）同样要拦：
+    多接一处意味着某处被渲染了两遍，两个 ⋮ 会互相串开。
+    """
+    view = FRONTEND / "src" / "views" / "ShelfView.vue"
+    body = view.read_text(encoding="utf-8")
+    n = len(re.findall(r"<BookActionsMenu\b", body))
+    assert n == 3, (
+        f"ShelfView.vue 里 `<BookActionsMenu` 出现 {n} 次，应为 3 次（网格 / 列表 / 表格各一）—— "
+        "少一处则那个视图里没有 ⋮ 入口（用户只会以为「这个视图不支持」）"
+    )
+
+
+def test_菜单里没有通过电子邮件发送这一项():
+    """用户明确不做这一项（第 64 期决策 3，逐字：「通过电子邮件发送不勾」）。
+
+    这条不是「还没做」，是**决定不做** —— 上游截图里有这一项，后人照着图补齐时
+    最顺手的做法就是把它加回来。加回来意味着一个真实的发信动作，
+    而本项目**没有任何邮件配置**，点了只会失败。
+    灰置也不行：灰置等于承认「本该有但不给你」，比没有更糟。
+    """
+    menu = FRONTEND / "src" / "components" / "book" / "BookActionsMenu.vue"
+    body = menu.read_text(encoding="utf-8")
+    # 只看 `<template>`（用户看得见的那半边）：`<script>` 顶部的注释**正是**在记录
+    # 「这一项不做」这个决策，把它一起禁掉等于禁止后人写下理由
+    tpl = body[body.index("<template>") :]
+    low = tpl.lower()
+    assert "邮件" not in tpl and "email" not in low and "mail" not in low, (
+        "BookActionsMenu.vue 的模板里出现了邮件相关项 —— 第 64 期决策是「不做」，"
+        "本项目没有邮件配置，这一项点下去只会失败"
+    )
 
 
 def test_chartgrid_的编译期穷尽性标注还在():

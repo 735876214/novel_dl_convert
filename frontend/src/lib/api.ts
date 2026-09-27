@@ -3408,6 +3408,25 @@ export const api = {
   bookDetail: (id: string) =>
     request<BookDetail>(`/api/books/${encodeURIComponent(id)}`),
 
+  /**
+   * 删除一本书（第 64 期）：文件**移入回收站**（可恢复，不是真删），
+   * 而进度 / 批注 / 书签 / 评分一律**保留** —— `book_id` 由「库 id + 文件名」派生，
+   * 文件放回原路径数据就接回来了（详见后端 `api_delete_book` 的 docstring）。
+   *
+   * 返回里的 `siblings` 是**同目录同 stem 的其它格式**（`三体.epub` 删了就剩 `三体.mobi`）：
+   * 它们是另外两张卡、两个 id，不会被一起删。⚠️ 这是**删完之后**才知道的，
+   * 确认文案里要点名兄弟文件，只能在删之前另拉一次详情（见 `BookActionsMenu`）。
+   */
+  deleteBook: (id: string) =>
+    request<{
+      ok: boolean
+      id: string
+      name: string
+      /** 回收目录里的文件名；文件本来就不在磁盘上时为 null（那样也算删成功） */
+      recycled: string | null
+      siblings: string[]
+    }>(`/api/books/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
   /** 服务器上这本书的绝对路径（只有本机/局域网来源才拿得到，见 BookLocalPaths） */
   bookLocalPaths: (id: string) =>
     request<BookLocalPaths>(`/api/books/${encodeURIComponent(id)}/local-paths`),
