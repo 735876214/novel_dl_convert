@@ -23,6 +23,7 @@ import yaml
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Body, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
 from .core import pipeline, activity_log, library, fileops, publish, scrape
 from .core import watcher as watcher_mod
@@ -122,6 +123,31 @@ async def lifespan(app: FastAPI):
 APP_VERSION = "0.6.0"
 
 app = FastAPI(title="NovelForge", version=APP_VERSION, lifespan=lifespan)
+
+# ---------------- 响应压缩（第 67 期）----------------
+# 「打开书架」最大的一块传输是 GET /api/books：实测 600 本 = **1.36 MB**（其中简介
+# `description` 占 68%），而全站此前**没有任何压缩**。gzip 后体积降到约 1/4，
+# 且对静态资源（index-*.js / css）同样生效。
+#
+# 为什么可以放心开：
+#   · Starlette 的 GZipMiddleware **跳过 206 部分响应**（音轨 / PDF 的 Range 请求）——
+#     字节区间语义不会被破坏（见其 `partial_response = status == 206` 分支）；
+#   · 默认排除 `audio/*`、`image/*`、`video/*`、`font/*`、`application/zip` —— 封面（JPEG）
+#     与已经压过的东西不会白压；
+#   · 大于 128 KiB 的响应走**工作线程**压缩（`thread_minimum_size`），不阻塞事件循环；
+#   · `minimum_size=1024`：小响应（如 /api/tasks 的 22 B）原样发出，不加无谓的头。
+# 额外排除项：`application/octet-stream`（各类原始下载）、`epub+zip`（本身即 zip）、
+# `application/pdf`（整体下载时压它只费 CPU）。
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1024,
+    compresslevel=5,
+    exclude_content_types=DEFAULT_EXCLUDED_CONTENT_TYPES + (
+        "application/octet-stream",
+        "application/epub+zip",
+        "application/pdf",
+    ),
+)
 
 STATIC_DIR = pathlib.Path(__file__).parent / "static"
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
