@@ -19,11 +19,14 @@ export interface NavItem {
   count?: number
   /**
    * 动态计数来源（**不要把数字写死**，写死即假数据）：
-   *   · `running` —— 任务中心的「运行中 + 排队中」；
-   *   · `browse`  —— 「浏览」组三项，取 `/api/browse-counts`（第 34 期；
+   *   · `browse` —— 「浏览」组三项，取 `/api/browse-counts`（第 34 期；
    *      数字与目标页同源，服务端 60 秒节流，按 id 到响应里取同名字段）。
+   *
+   * ⚠️ 原有一个 `running`（任务中心的「运行中 + 排队中」）**第 65 期已删** ——
+   * 它唯一的消费者「任务中心」那一项从侧栏搬到了顶栏，计数改由顶栏的任务按钮
+   * 自己显示角标（见 AppHeader 里的 TaskFlyout）。留在这里就是死代码。
    */
-  countSource?: 'running' | 'browse'
+  countSource?: 'browse'
 }
 
 export interface NavGroup {
@@ -49,18 +52,16 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { id: 'dashboard', label: '仪表盘', icon: 'dash' },
       { id: 'search', label: '探索发现', icon: 'search' },
-      { id: 'tasks', label: '任务中心', icon: 'task', countSource: 'running' },
-      // 「工具」与任务中心**并列**（同属主导航这一层），但**不自成一块** ——
-      // 它是工具页的统一入口，8 个工具在页内用标签栏切换（见 views/tools/ToolsLayout.vue）。
-      { id: 'tools', label: '工具', icon: 'wrench' },
-      { id: 'stats', label: '数据统计', icon: 'chart' },
-      // Reading Log：reading_sessions 表的展示层（按天 / 按书 / 最近会话）
-      { id: 'log', label: '阅读记录', icon: 'clock' },
-      { id: 'reading-activity', label: '阅读活动', icon: 'note' },
-      { id: 'notify', label: '通知中心', icon: 'bell' },
-      // 成就：上游放在顶栏（`/achievements`）。本项目与「数据统计」同层并列，
-      // 数据来自 /api/achievements（单用户口径，见 core/achievements.py）。
-      { id: 'achievements', label: '成就', icon: 'star' },
+      // 「收书目录」（Book Dock，第 65 期）：与「探索发现」**同级**的一级入口。
+      // 路由是**顶层**的 `/book-dock` 而不是 `/settings/admin/book-dock` ——
+      // 后者会让整个左栏换成设置侧栏（App.vue 按 `/settings` 前缀判断），
+      // 而这里是从首页侧栏点进来的，左栏不该变脸。设置里那一条**原样保留**
+      //（上游也是两处都有：设置里有 Book Dock，侧栏也有一级项）。
+      { id: 'book-dock', label: '收书目录', icon: 'upload' },
+      // ⚠️ 任务中心 / 工具 / 数据统计 / 阅读记录 / 阅读活动 / 通知中心 / 成就
+      //    **七项自第 65 期起不再在这里**，全部搬到顶栏图标行（与既有图标并排）。
+      //    顶栏是它们的**唯一入口** —— 别再往回加，那会变成同一页两个入口。
+      //    计数胶囊（任务运行中数）也随之搬到顶栏任务按钮的角标上。
     ],
   },
   {

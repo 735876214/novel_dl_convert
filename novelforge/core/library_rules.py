@@ -258,14 +258,22 @@ def guard_conflict(out_dir, rel: str) -> None:
 
     ``out_dir`` 必须是**目标库根**（摄入侧一律来自 :func:`resolve_target`）；
     同库内已有同名文件**一律放行**（覆盖是正常流程），这是本期最易误伤的点。
+
+    ⚠️ 交给 :func:`library.id_conflict_with` 的是**完整 rel**，不是 basename
+    （第 65 期修）：库里那本书的 ``name`` 是含系列目录的 rel
+    （``catalog._book_of_row``），只拿 basename 去比 ⇒ 两边一个取一个不取，
+    「同 id **同**路径」被判成「同 id **不同**路径」⇒ Komga 布局下重复投递
+    同一本书被误拦。平铺布局 ``rel == base``，所以这条路径一直没暴露。
+    ``_book_id`` 内部本来就只取 basename，故 id 那一半判据不变。
     """
-    base = pathlib.PurePosixPath(str(rel or "")).name
+    rel_posix = str(pathlib.PurePosixPath(str(rel or "").replace("\\", "/")))
+    base = pathlib.PurePosixPath(rel_posix).name
     if not base:
         return
     lib_id = library_id_of_root(out_dir)
     if not lib_id:
         return          # 落点不属于任何已登记库 ⇒ 谈不上「跨库同名」，放行给上游拒收
-    hit = library.id_conflict_with(base, lib_id)
+    hit = library.id_conflict_with(rel_posix, lib_id)
     if not hit:
         return
     other = str(hit.get("library_id") or "")
@@ -313,6 +321,11 @@ def resolve_target(src=None, name: str = "", meta: dict = None, base_dir=None) -
         root = None
         effective_id = ""
 
+    # ⚠️ 与 `guard_conflict` 的**不对称**（第 65 期写明）：这里只能用源文件名 /
+    # 显式 `name` 判，因为此刻最终落盘 rel 还没算出来（Komga 布局要等 `_emit` /
+    # `dispatch` 才知道是 `系列/系列 #N.epub`）。所以本处只能回答「这个 basename
+    # 在库里有没有**别的路径**」，判不了「同路径 ⇒ 覆盖」。落盘前的那道闸门在
+    # `guard_conflict`，它拿的是完整 rel —— 两处判据各自成立，不冲突。
     base = name or pathlib.PurePosixPath(str(src or "")).name
     hit = library.id_conflict_with(base, effective_id) if (base and effective_id) else None
     return {

@@ -160,6 +160,12 @@ const router = createRouter({
   routes: [
     { path: '/', name: 'dashboard', component: DashboardView },
     { path: '/explore', name: 'explore', component: ExploreView },
+    // 「收书目录」（Book Dock）的**侧栏一级入口**（第 65 期）。
+    // 与设置里那一条 `/settings/admin/book-dock` 指向**同一个组件** —— 上游也是
+    // 两处都有。之所以不能只留设置里那条：`/settings*` 前缀会让整个左栏换成
+    // 设置侧栏（App.vue 判断 `path.startsWith('/settings')`），而这里是从首页
+    // 侧栏点进来的，左栏不该变脸。
+    { path: '/book-dock', name: 'book-dock', component: BookDockPage },
     { path: '/tasks', name: 'tasks', component: TaskCenterView },
     { path: '/shelf', name: 'shelf', component: ShelfView },
     { path: '/smart-scopes', name: 'smart-scopes', component: SmartScopesView },

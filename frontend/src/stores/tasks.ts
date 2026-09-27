@@ -33,7 +33,10 @@ export const useTasksStore = defineStore('tasks', () => {
   const failed = computed(() => byStatus('failed'))
   const done = computed(() => byStatus('done'))
 
-  /** 「运行中 + 排队中」——侧栏任务中心计数胶囊用 */
+  /**
+   * 「运行中 + 排队中」——**顶栏任务入口的角标**（第 65 期从侧栏的计数胶囊搬来；
+   * 角标不含已完成：那个数只会越来越大，角标就失去意义了）。
+   */
   const runningCount = computed(() => running.value.length + queued.value.length)
 
   const lastError = computed(() => failed.value[0]?.error ?? '')

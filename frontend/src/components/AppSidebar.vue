@@ -3,39 +3,37 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import Icon from '@/components/ui/Icon.vue'
-import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { isShelfGroup, type NavGroup, type NavItem } from '@/data/nav'
 import { api, apiErrorMessage, type BrowseCounts } from '@/lib/api'
 import { useCollectionsStore } from '@/stores/collections'
 import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useNavStore } from '@/stores/nav'
-import { useTasksStore } from '@/stores/tasks'
 import { useUiStore } from '@/stores/ui'
 
 const nav = useNavStore()
 const library = useLibraryStore()
 const wizard = useLibraryWizardStore()
-const tasks = useTasksStore()
 const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
 
+/**
+ * ⚠️ 第 65 期：`tasks` / `tools` / `stats` / `log` / `reading-activity` / `notify`
+ * / `achievements` **七项已不在侧栏**（搬到顶栏图标行），故这张表里对应的七个键
+ * 也一并删掉 —— 留着它们只会让人以为侧栏还有那些入口。表里每个键都必须对应
+ * 侧栏上真实存在的一项；反过来，侧栏每一项也必须在表里有路由（否则退到
+ * `/placeholder/:id`，见 data/nav.ts 文件头）。
+ */
 const PATH_BY_ID: Record<string, string> = {
   dashboard: '/',
   search: '/explore',
-  tasks: '/tasks',
-  // 「工具」是唯一入口，8 个工具在工具页内用标签栏切换
-  tools: '/tools',
+  // 顶层路由（不是 /settings/admin/book-dock）：从侧栏点进去时左栏要保持是主侧栏
+  'book-dock': '/book-dock',
   browse: '/browse',
   series: '/series',
   authors: '/authors',
   annotations: '/annotations',
-  stats: '/stats',
-  notify: '/notify',
-  achievements: '/achievements',
-  log: '/log',
-  'reading-activity': '/reading-activity',
   // 帮助组（复用既有页面，不新建）
   docs: '/docs',
   whatsnew: '/whats-new',
@@ -46,21 +44,20 @@ function pathFor(id: string): string {
   return PATH_BY_ID[id] ?? `/placeholder/${id}`
 }
 
-/** 由路由路径反推当前高亮项 */
+/**
+ * 由路由路径反推当前高亮项。
+ *
+ * ⚠️ 第 65 期：原来那七条（`/tasks` `/tools` `/stats` `/notify` `/achievements`
+ * `/log` `/reading-activity`）随侧栏七项一起删了 —— 侧栏上没有这些项，高亮它们
+ * 也就无从谈起（那些页面现在从顶栏进，顶栏自己显示当前态）。
+ */
 const PATH_TO_ID: Array<[string, string]> = [
   ['/explore', 'search'],
-  ['/tasks', 'tasks'],
-  // 前缀匹配：/tools 覆盖全部 8 个工具子路径，故任意标签下「工具」项都保持高亮
-  ['/tools', 'tools'],
+  ['/book-dock', 'book-dock'],
   ['/browse', 'browse'],
   ['/series', 'series'],
   ['/authors', 'authors'],
   ['/annotations', 'annotations'],
-  ['/stats', 'stats'],
-  ['/notify', 'notify'],
-  ['/achievements', 'achievements'],
-  ['/log', 'log'],
-  ['/reading-activity', 'reading-activity'],
   ['/docs', 'docs'],
   ['/whats-new', 'whatsnew'],
   ['/settings/ext/about', 'about'],
@@ -76,15 +73,12 @@ const activeId = computed(() => {
 const isActive = computed(() => (id: string) => activeId.value === id)
 
 const collections = useCollectionsStore()
-const { cfg, loadConfig } = useSettingsConfig()
 
 /**
- * 成就开关会影响侧栏是否显示「成就」入口（上游语义：关闭后不显示成就相关界面）。
- *
- * 静默加载：读配置失败时**不弹提示**，并按「启用」处理 ——
- * 因为读不到配置就把入口藏起来，用户会以为功能没了，比多显示一个入口更糟。
+ * 原先这里按 `achievements.enabled` 决定侧栏要不要显示「成就」入口，
+ * 并为此 `loadConfig(false, true)`。**第 65 期整块搬走了** —— 侧栏不再有成就项，
+ * 门控改在顶栏（`AppHeader.vue` 里同一个判据、同一个「读不到也按启用」的口径）。
  */
-const achievementsEnabled = computed(() => cfg.value?.achievements?.enabled !== false)
 
 /**
  * 「浏览」组的三计数（作者 / 系列 / 批注）。**刻意不传 library_id**：
@@ -110,7 +104,6 @@ onMounted(() => {
   library.loadScopes()
   // 能力清单要跟着**当前库**走（含刷新后恢复上次选中的库）
   void library.loadFeatures()
-  void loadConfig(false, true)
   void loadBrowseCounts()
 })
 
@@ -188,7 +181,8 @@ const BROWSE_COUNT_KEYS: Record<string, 'authors' | 'series' | 'annotations'> = 
 }
 
 function navCount(item: NavItem): number | null {
-  if (item.countSource === 'running') return tasks.runningCount
+  // 原来还有一个 `'running'` 分支（任务中心的运行中数）—— 第 65 期随那一项
+  // 搬到顶栏，计数变成顶栏任务按钮上的角标（见 TaskFlyout.vue）
   if (item.countSource === 'browse') {
     const key = BROWSE_COUNT_KEYS[item.id]
     const c = browseCounts.value
@@ -346,7 +340,7 @@ async function onGroupAction(title: string, action: 'add' | 'more'): Promise<voi
           <div v-if="group.items.length">
             <div
               v-for="item in group.items"
-              v-show="nav.itemVisible(group.title ?? '', item) && (item.id !== 'achievements' || achievementsEnabled)"
+              v-show="nav.itemVisible(group.title ?? '', item)"
               :key="item.id"
               class="flex cursor-pointer items-center gap-[0.5625rem] rounded-md px-[0.625rem] py-[0.4375rem] text-[13px] transition-colors select-none"
               :class="

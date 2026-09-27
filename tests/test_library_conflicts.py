@@ -96,6 +96,42 @@ def test_guard_conflict_blocks_intra_library_diff_path(isolated, make_library, m
     library_rules.guard_conflict(root_a, "三体 (2).epub")
 
 
+def test_guard_conflict_passes_same_rel_in_komga_layout(isolated, make_library, make_book, tmp_path):
+    """Komga 布局下**同一本书重复投递**必须放行（覆盖是正常流程）。
+
+    原先 `guard_conflict` 只把 `rel` 的 basename 交给 `id_conflict_with`，而库里
+    那本书的 `name` 是**含系列目录的完整 rel**（`catalog._book_of_row`）—— 两边
+    一个取 basename、一个不取，「同 id **同**路径」被判成「同 id **不同**路径」，
+    于是重复入库被误拦。平铺布局下 `rel == base`，所以这条路径一直是绿的。
+    """
+    a = "lib-a"
+    root_a = tmp_path / "libraries" / a
+    make_library(a, "甲库", "ebook", root_a)
+    make_book(root_a, "三体/三体 #1.epub")
+    library.invalidate()
+
+    library_rules.guard_conflict(root_a, "三体/三体 #1.epub")   # 同路径 ⇒ 覆盖，放行
+
+
+def test_guard_conflict_blocks_same_basename_diff_path_in_komga_layout(
+    isolated, make_library, make_book, tmp_path
+):
+    """同 basename、**不同路径**仍须拦 —— 这是闸门的本意。
+
+    与上一条是同一处改动的两个方向：修「同路径放行」时把判据整个放宽（比如
+    直接 `return` 掉带 `/` 的 rel）就会在这里红。
+    """
+    a = "lib-a"
+    root_a = tmp_path / "libraries" / a
+    make_library(a, "甲库", "ebook", root_a)
+    make_book(root_a, "三体/三体 #1.epub")
+    library.invalidate()
+
+    with pytest.raises(library_rules.IngestConflict) as ei:
+        library_rules.guard_conflict(root_a, "别处/三体 #1.epub")
+    assert ei.value.suggest.endswith(".epub")
+
+
 def test_guard_conflict_passes_cross_library_same_basename(isolated, make_library, make_book, tmp_path):
     a, b = "lib-a", "lib-b"
     root_a, root_b = _roots(tmp_path)

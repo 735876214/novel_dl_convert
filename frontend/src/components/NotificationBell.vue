@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 import { api, type NotificationItem } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
@@ -25,10 +26,10 @@ const loading = ref(false)
 const busy = ref(false)
 const wrap = ref<HTMLElement | null>(null)
 
-const badge = computed(() => (unread.value > 99 ? '99+' : String(unread.value)))
-
-const ICON_BTN =
-  'grid h-[2.0625rem] w-[2.0625rem] cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
+/**
+ * 角标文案（含「>99 折成 99+」）与按钮类都收进了 `ui/IconButton`（第 65 期）——
+ * 原先这里各有一份，而顶栏那一行有六七个按钮，各留一份必然漂移。
+ */
 
 async function load(): Promise<void> {
   loading.value = true
@@ -82,7 +83,7 @@ function onDocClick(e: MouseEvent): void {
   if (wrap.value && !wrap.value.contains(t)) open.value = false
 }
 
-/** Esc 关闭（与任务抽屉一致） */
+/** Esc 关闭（与任务浮层一致） */
 function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') open.value = false
 }
@@ -101,23 +102,17 @@ onUnmounted(() => {
 
 <template>
   <div ref="wrap" class="relative">
-    <button
-      :class="[ICON_BTN, open ? 'bg-[var(--shell-accent-tint)] text-primary hover:text-primary' : '']"
-      type="button"
-      title="通知"
-      aria-label="通知"
-      :aria-expanded="open"
+    <!-- 角标直接用后端的全量未读数（见文件头 ⚠️）；`>99` 折叠与「0 不渲染」
+         由 IconButton 统一处理，这里不再自己算。原生 `title` 去掉 —— 有了自绘气泡。 -->
+    <IconButton
+      label="通知"
+      :active="open"
+      :expanded="open"
+      :badge="unread"
       @click.stop="toggle"
     >
       <Icon name="bell" class="h-[17px] w-[17px]" />
-      <!-- 未读角标 -->
-      <span
-        v-if="unread > 0"
-        class="pointer-events-none absolute -top-0.5 -right-0.5 min-w-[1rem] rounded-full bg-destructive px-1 text-[9.5px] leading-4 font-semibold text-white tabular-nums"
-      >
-        {{ badge }}
-      </span>
-    </button>
+    </IconButton>
 
     <!-- 浮层：点按钮切换，点外部 / Esc 关闭 -->
     <div

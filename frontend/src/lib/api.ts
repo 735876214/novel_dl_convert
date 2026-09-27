@@ -2680,10 +2680,36 @@ export const api = {
     request<BookDockResponse>(
       `/api/book-dock${status && status !== 'all' ? `?status=${encodeURIComponent(status)}` : ''}`,
     ),
-  bookDockRescan: (id: string) =>
+  /**
+   * 重跑单个条目。
+   *
+   * 第 65 期起多两个**可选**参数 = 界面上的「入库到…」：入库前当场指定目标库与
+   * 目标文件夹（口径：目标文件夹默认该库的第一个）。不传时发的 body 是 `{}`，
+   * 与第 65 期之前的请求等价（后端 `payload or {}`）—— 老调用点一个都不用改。
+   */
+  bookDockRescan: (id: string, opts?: { library_id?: string; root?: string }) =>
     request<{ ok: boolean; item: BookDockItem }>(
       `/api/book-dock/${encodeURIComponent(id)}/rescan`,
-      { method: 'POST' },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(opts ?? {}),
+      },
+    ),
+  /**
+   * 改投递目录里的文件名（第 65 期）。
+   *
+   * ⚠️ 条目 id **就是文件名**：成功之后 id 会变（用 `item.id`，或直接重载列表），
+   * 不能拿旧 id 接着操作。扩展名不许换、`ready` 条目不接受改名 —— 都在后端拦。
+   */
+  bookDockRename: (id: string, name: string) =>
+    request<{ ok: boolean; item: BookDockItem }>(
+      `/api/book-dock/${encodeURIComponent(id)}/rename`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      },
     ),
   bookDockIgnore: (id: string) =>
     request<{ ok: boolean; item: BookDockItem }>(

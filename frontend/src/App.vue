@@ -6,20 +6,19 @@ import AppHeader from '@/components/AppHeader.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import SettingsSidebar from '@/components/SettingsSidebar.vue'
 import AppToast from '@/components/AppToast.vue'
-import TaskDrawer from '@/components/TaskDrawer.vue'
 import LoginGate from '@/components/LoginGate.vue'
 import MigrationGateDialog from '@/components/MigrationGateDialog.vue'
 import GuidedTourModal from '@/components/settings/GuidedTourModal.vue'
 import LibraryWizard from '@/components/tools/LibraryWizard.vue'
 import { useTasksStore } from '@/stores/tasks'
 import { useThemeStore } from '@/stores/theme'
-import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useSettingsSearch } from '@/composables/useSettingsSearch'
 
-const ui = useUiStore()
+// ⚠️ 第 65 期：`useUiStore` 与 `ui` 已从这里删掉 —— 它在本文件唯一的用途是
+// 「Esc 关任务抽屉」，而抽屉已改成顶栏浮层（`TaskFlyout.vue`），Esc 由浮层自管。
 const tasks = useTasksStore()
 const theme = useThemeStore()
 const auth = useAuthStore()
@@ -61,19 +60,20 @@ const isSettingsRoute = computed(() => route.path.startsWith('/settings'))
 const settingsSearch = useSettingsSearch()
 
 /**
- * ⌘K / Ctrl+K 聚焦全局搜索；Esc 关闭任务抽屉。
+ * ⌘K / Ctrl+K 聚焦全局搜索。
  *
  * 设置区例外：那里由 `SettingsSearchPanel` 接管（上游同样是「设置区搜设置项」），
  * 否则一次按键会同时聚焦顶栏搜索框并弹出设置搜索浮层。
+ *
+ * 第 65 期去掉了这里原有的「Esc 关闭任务抽屉」：抽屉改成顶栏浮层后，
+ * 通知 / 任务 / 外观 / 账户四个浮层各自监听 Esc，全局再抢一次按键是重复的。
  */
 function onKeydown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault()
     if (isSettingsRoute.value) settingsSearch.togglePanel()
     else document.getElementById('globalSearch')?.focus()
-    return
   }
-  if (e.key === 'Escape') ui.setDrawer(false)
 }
 
 function onUnauthorized(): void {
@@ -132,6 +132,8 @@ onUnmounted(() => {
 
   <!-- 卡片式外壳：三块浮起卡片，块间一个 --shell-gap -->
   <div v-else class="flex h-[100dvh] gap-[var(--shell-gap)] overflow-hidden p-[var(--shell-gap)]">
+    <!-- 任务面板（第 65 期）：从这一层的 `<TaskDrawer />` 搬进了顶栏那一行
+         （`AppHeader.vue` 里的 `<TaskFlyout />`），随之删掉下面的全屏遮罩。 -->
     <SettingsSidebar v-if="isSettingsRoute" />
     <AppSidebar v-else />
 
@@ -141,8 +143,6 @@ onUnmounted(() => {
         <RouterView />
       </main>
     </div>
-
-    <TaskDrawer />
   </div>
 
   <!-- 首次「按格式归库」的阻塞确认（第 10 期）：登录后自己判断要不要弹 -->
@@ -161,12 +161,6 @@ onUnmounted(() => {
     :libs="wizard.libs"
     @close="wizard.close()"
     @created="wizard.created"
-  />
-
-  <div
-    v-if="ui.drawerOpen"
-    class="fixed inset-0 z-35 bg-black/28 backdrop-blur-[2px]"
-    @click="ui.setDrawer(false)"
   />
 
   <AppToast />

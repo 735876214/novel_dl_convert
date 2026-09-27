@@ -8,13 +8,13 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { POLICY_FIELDS } from '@/lib/metadataFields'
-import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import {
   api,
   type BookDockItem,
   type BookDockResponse,
   type HealthInfo,
+  type LibraryEntity,
   type WatcherStatus,
 } from '@/lib/api'
 import { useLibraryStore } from '@/stores/library'
@@ -28,9 +28,16 @@ import { useUiStore } from '@/stores/ui'
  * 把文件丢进去就会被自动处理。本页把「目录 + 监听状态 + 自动处理开关 + 处理计数」
  * 聚合展示（与上游 Book Dock 的「投递目录 + 自动处理」高度同构）。
  *
- * 上游还有两组：METADATA 的「投递后自动抓元数据」本项目**已实现**（`metadata_fetch.auto_on_import`
- * 与 `metadata_fetch.enabled` 双重门控，见 core/watcher.py:84；开关在 设置 → 元数据），
- * AUTO-FINALIZE 的「按置信度无人值守定稿」未做（缺的是上游那组目标库 / 文件夹 / 合并模式配置）。
+ * 上游还有两组，本项目**都已落地**：METADATA 的「投递后自动抓元数据」（`metadata_fetch.auto_on_import`
+ * 与 `metadata_fetch.enabled` 双重门控，见 core/watcher.py:84；开关在 设置 → 元数据）与
+ * AUTO-FINALIZE 的「按置信度无人值守定稿」（第 52 期，同样映射到 `metadata_fetch`，见下方卡片）。
+ *
+ * 第 65 期加了两个**条目级**动作（本页首次出现行内交互）：
+ *   · **重命名** —— 只改投递目录里的文件名，只对**未入库**的条目显示（`就绪` 没有这个按钮）；
+ *   · **入库到…** —— 入库前当场指定目标库与目标文件夹（默认该库第一个），选完即弃、**不落库**。
+ * ⚠️ 本页原先写着「本项目没有单点目标库 / 文件夹设置」，并据此把该组配置归入「不支持」。
+ * 那句话现在仍然成立（**设置项**确实没有），变的是多了这个**按次指定**的动作 —— 两者不矛盾，
+ * 别再把「按次指定」当成「没有」。
  *
  * 参数细节（轮询间隔 / 稳定判定 / 忽略规则等）在「本项目扩展 → 监听」，本页不重复。
  */
@@ -111,7 +118,15 @@ async function loadDock(): Promise<void> {
   dockLoading.value = true
   dockError.value = ''
   try {
-    dock.value = await api.bookDock(activeTab.value)
+    const r = await api.bookDock(activeTab.value)
+    dock.value = r
+    // 摘掉已不在列表里的选择（第 65 期）：改名会换 id，旧 id 若一直躺在选择集里，
+    // 那个条目**改名后又变回来**（id 撞回原值）时会莫名被勾上 —— `pickedIds` 是按
+    // id 过滤的，拦不住这种「复活」。
+    if (picked.value.size) {
+      const alive = new Set((r.items ?? []).map((i) => i.id))
+      picked.value = new Set([...picked.value].filter((id) => alive.has(id)))
+    }
   } catch (e) {
     // 主数据失败：必须给错误态 + 重试，不得渲染成「投递目录里还没有文件」
     dock.value = null
@@ -234,6 +249,136 @@ async function deleteItem(id: string): Promise<void> {
   busyId.value = id
   await act(() => api.bookDockDelete(id), '已移出到回收目录')
   busyId.value = ''
+}
+
+/** 行内动作的共用禁用判据：本行在忙 / 批量在忙 / 有别的行正在改名。 */
+function rowBusy(id: string): boolean {
+  return busyId.value === id || batchBusy.value || renameBusy.value
+}
+
+// ---- 重命名（第 65 期）：只改投递目录里的**文件名**，扩展名不许换 ----
+// 只对**未入库**的条目开放（`就绪` 不显示）：就绪条目的成品已经在书库里了，改投递目录里
+// 的源文件既改不到那本书、又让两者对不上；「改已入库的书名」是书架「编辑元数据」的地盘。
+// 后端另有一道同样的拒绝 —— 两边都拦，是为了「界面不出现假交互」且「直接打接口也拦得住」。
+const editingId = ref('')
+const editName = ref('')
+const renameBusy = ref(false)
+
+function startRename(it: BookDockItem): void {
+  editingId.value = it.id
+  // 预填**含扩展名的完整文件名**：所见即所得，改什么就是什么（扩展名后端会拦）
+  editName.value = it.name
+}
+
+function cancelRename(): void {
+  editingId.value = ''
+  editName.value = ''
+}
+
+async function commitRename(it: BookDockItem): Promise<void> {
+  const next = editName.value.trim()
+  if (!next) {
+    // 空名字不发请求，但**也不能静默关掉编辑框** —— 按了 Enter 什么都没发生
+    // 与「点了没反应」是同一种假交互。说清原因，编辑态留着。
+    ui.toast('名字不能为空')
+    return
+  }
+  if (next === it.name) {
+    cancelRename()                 // 没改（含只多了空白）：等同取消
+    return
+  }
+  renameBusy.value = true
+  let ok = false
+  try {
+    await api.bookDockRename(it.id, next)
+    ok = true
+    ui.toast('已重命名')
+  } catch (e) {
+    // 失败**保持编辑态**：用户改一个字符再试即可，不必把名字重敲一遍
+    ui.toast(e instanceof Error ? e.message : '重命名失败')
+  } finally {
+    renameBusy.value = false
+  }
+  if (ok) cancelRename()
+  // 条目 id **就是文件名** ⇒ 成功之后 id 变了，必须重载列表（否则旧行还挂在旧 id 上）
+  await refresh()
+}
+
+// ---- 入库到…（第 65 期）：入库前当场指定目标库与目标文件夹 ----
+// 数据取自库 store 现成的 `libraryEntities`（`source_dirs` = 该库的多个文件夹，
+// 口径：默认第一个）。**不落库、不记忆** —— 这是这一次动作的输入，不是条目的属性
+// （下一次扫描仍按各库自己的来源目录路由）。
+const ingestItem = ref<BookDockItem | null>(null)
+const ingestLibId = ref('')
+const ingestRoot = ref('')
+const ingestBusy = ref(false)
+
+/** 待入库条目的扩展名（判「这个库收不收得了它」用）。 */
+const ingestExt = computed(() => {
+  const n = ingestItem.value?.name ?? ''
+  const i = n.lastIndexOf('.')
+  return i > 0 ? n.slice(i).toLowerCase() : ''
+})
+
+/**
+ * 该库收不收得了这个格式 —— 与后端 `library.accepts_ext` 同口径（真值源是库的
+ * **生效**白名单 `exts_effective`）。**没有扩展名的放行**：后端也放行，
+ * 那种形态（有声书「一章一文件」的目录）在这里判不了，误拒比漏判更烦人。
+ */
+function libAccepts(l: LibraryEntity): boolean {
+  const ext = ingestExt.value
+  if (!ext) return true
+  return (l.exts_effective ?? []).includes(ext)
+}
+
+const ingestLib = computed(
+  () => library.libraryEntities.find((l) => l.id === ingestLibId.value) ?? null,
+)
+const ingestDirs = computed(() => ingestLib.value?.source_dirs ?? [])
+/** 能否提交：选了库、库收得了这个格式、且该库有落点文件夹。 */
+const ingestReady = computed(
+  () => Boolean(ingestLib.value) && libAccepts(ingestLib.value as LibraryEntity)
+    && Boolean(ingestRoot.value) && !ingestBusy.value,
+)
+
+async function openIngest(it: BookDockItem): Promise<void> {
+  ingestItem.value = it
+  // 现拉一次而不是吃缓存：目标文件夹取自 `source_dirs`，别拿一个已经被改过的库来选
+  await library.loadLibraries(true)
+  const libs = library.libraryEntities
+  // 默认选**第一个收得了这个格式的**库（都收不了才退到第一个，好在弹窗里当场看到原因）
+  const pick = libs.find(libAccepts) ?? libs[0]
+  ingestLibId.value = pick?.id ?? ''
+  ingestRoot.value = pick?.source_dirs?.[0] ?? ''
+}
+
+function closeIngest(): void {
+  ingestItem.value = null
+  ingestLibId.value = ''
+  ingestRoot.value = ''
+}
+
+function chooseIngestLib(l: LibraryEntity): void {
+  ingestLibId.value = l.id
+  // 换库就换文件夹：默认仍是该库的第一个（口径 7）
+  ingestRoot.value = l.source_dirs?.[0] ?? ''
+}
+
+async function confirmIngest(): Promise<void> {
+  const it = ingestItem.value
+  if (!it || !ingestReady.value) return
+  ingestBusy.value = true
+  try {
+    await api.bookDockRescan(it.id, { library_id: ingestLibId.value, root: ingestRoot.value })
+    ui.toast('已入库')
+    closeIngest()
+  } catch (e) {
+    // 失败**不关弹窗**：库管理里刚把格式加进去、或换个库，就地重试即可
+    ui.toast(e instanceof Error ? e.message : '入库失败')
+  } finally {
+    ingestBusy.value = false
+  }
+  await refresh()
 }
 
 async function refresh(): Promise<void> {
@@ -373,6 +518,10 @@ onMounted(async () => {
   } catch {
     /* ignore */
   }
+  // 本页多处按 `library.hasNoLibraries` 分岔文案，而那个判据要 `librariesLoaded`
+  // （拉取失败时保持 false ⇒ 一律按「有库」说）。App.vue 启动时已拉过，此处只是
+  // 兜住「直接进本页 / 上一步拉失败」两种情形：有数据就立刻返回，不额外发请求。
+  void library.loadLibraries()
   await loadConfig()
   await refresh()
 })
@@ -505,9 +654,15 @@ onBeforeUnmount(() => {
         加载中…
       </p>
 
+      <!-- ⚠️ 这两块必须在**同一个** `v-else-if` 分支里（第 65 期修）：原先批量条与
+           条目行各自写了一遍 `v-else-if="dock && dock.items.length"`，条件逐字相同
+           ⇒ 后一个分支**永不渲染** ⇒ 条目行一条都不显示；而复选框长在条目行里，
+           于是「批量重扫 / 批量忽略」永远禁用、单条的三个按钮点不到。
+           页面上看不出异常，只像「投递目录里还没有文件」。
+           `<template>` 不产生 DOM 节点；内层缩进沿用原样，好让 diff 只动这几行。 -->
+      <template v-else-if="dock && dock.items.length">
       <!-- 批量操作条：无批量端点，逐条调用既有单条端点 -->
       <div
-        v-else-if="dock && dock.items.length"
         class="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-4 py-2"
       >
         <button
@@ -540,10 +695,14 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <div v-else-if="dock && dock.items.length" class="divide-y divide-border">
+      <div class="divide-y divide-border">
+        <!-- `data-dock-row` 供 spec 计数（照 `[data-icon-button]` 的先例）：条目行
+             曾经因为两个 `v-else-if` 条件逐字相同而**永不渲染**，而那种失效方式
+             页面上只是「一条都不显示」—— 看起来与「投递目录里还没有文件」一模一样。 -->
         <div
           v-for="it in dock.items"
           :key="it.id"
+          data-dock-row
           class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3"
         >
           <input
@@ -556,10 +715,41 @@ onBeforeUnmount(() => {
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2">
               <Icon name="book" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span class="truncate text-[12.5px] font-medium text-foreground" :title="it.name">{{ it.name }}</span>
-              <Badge :tone="STATUS_TONE[it.status] ?? 'neutral'">
-                {{ STATUS_LABEL[it.status] ?? it.status }}
-              </Badge>
+              <!-- 行内重命名（第 65 期）：预填**含扩展名**的完整文件名 —— 所见即所得。
+                   只认 Enter / Esc 与两个按钮，**不做失焦提交**：点一下别处就把名字改掉
+                   的误伤，比「多点一下」贵得多。 -->
+              <template v-if="editingId === it.id">
+                <input
+                  v-model="editName"
+                  data-dock-rename-input
+                  :aria-label="`重命名 ${it.name}`"
+                  class="h-7 min-w-0 flex-1 rounded-md border border-border bg-muted px-2 font-mono text-[12px] text-foreground outline-none focus:border-ring"
+                  @keydown.enter.prevent="commitRename(it)"
+                  @keydown.esc.prevent="cancelRename()"
+                >
+                <button
+                  type="button"
+                  data-dock-act="rename-ok"
+                  aria-label="确认重命名"
+                  :disabled="renameBusy"
+                  class="shrink-0 cursor-pointer rounded-md border border-border px-1.5 py-0.5 text-[12px] text-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-55"
+                  @click="commitRename(it)"
+                >✓</button>
+                <button
+                  type="button"
+                  data-dock-act="rename-cancel"
+                  aria-label="取消重命名"
+                  :disabled="renameBusy"
+                  class="shrink-0 cursor-pointer rounded-md border border-border px-1.5 py-0.5 text-[12px] text-muted-foreground transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-55"
+                  @click="cancelRename()"
+                >✗</button>
+              </template>
+              <template v-else>
+                <span class="truncate text-[12.5px] font-medium text-foreground" :title="it.name">{{ it.name }}</span>
+                <Badge :tone="STATUS_TONE[it.status] ?? 'neutral'">
+                  {{ STATUS_LABEL[it.status] ?? it.status }}
+                </Badge>
+              </template>
             </div>
             <div class="mt-1 truncate text-[11.5px] text-muted-foreground" :title="it.output || it.detail">
               {{ it.output ? `成品：${it.output}` : it.detail || '等待自动处理' }}
@@ -569,12 +759,20 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="flex items-center gap-1.5">
-            <Button size="sm" :disabled="busyId === it.id || batchBusy" @click="rescanItem(it.id)">重扫</Button>
-            <Button size="sm" :disabled="busyId === it.id || batchBusy" @click="ignoreItem(it.id)">忽略</Button>
-            <Button size="sm" variant="danger" :disabled="busyId === it.id || batchBusy" @click="deleteItem(it.id)">移出</Button>
+            <!-- 两个只对**未入库**条目开放的动作（口径 5/6）：`就绪` 一律不显示 ——
+                 「不出现、不灰置、不占位」；已入库的改名去书架「编辑元数据」，
+                 改投它库是 migrate 的地盘。 -->
+            <template v-if="it.status !== 'ready'">
+              <Button size="sm" data-dock-act="rename" :disabled="rowBusy(it.id)" @click="startRename(it)">重命名</Button>
+              <Button size="sm" data-dock-act="ingest" :disabled="rowBusy(it.id)" @click="openIngest(it)">入库到…</Button>
+            </template>
+            <Button size="sm" data-dock-act="rescan" :disabled="rowBusy(it.id)" @click="rescanItem(it.id)">重扫</Button>
+            <Button size="sm" data-dock-act="ignore" :disabled="rowBusy(it.id)" @click="ignoreItem(it.id)">忽略</Button>
+            <Button size="sm" variant="danger" data-dock-act="delete" :disabled="rowBusy(it.id)" @click="deleteItem(it.id)">移出</Button>
           </div>
         </div>
       </div>
+      </template>
 
       <EmptyState
         v-else
@@ -647,29 +845,110 @@ onBeforeUnmount(() => {
 
       <div class="flex items-center gap-3 px-4 py-3.5">
         <p class="flex-1 text-[11.5px] leading-relaxed text-muted-foreground">
-          入库目标沿用各库自己的来源目录 —— 本项目没有单点「目标库 / 文件夹」设置。
-          合并模式与元数据页的逐字段策略互斥呈现：选预设即整体套用，逐字段微调请到元数据页。
+          <!-- 复核头（第 65 期）：这里原先写「入库目标沿用各库自己的来源目录 —— 本项目
+               没有单点「目标库 / 文件夹」设置」。**设置项仍然没有**（那句话本身没错），
+               但条目行现在有了「入库到…」这个**按次指定**的动作 —— 目标在那一刻由用户选、
+               随该次入库透传，不落库也不记忆，下一次扫描照旧按各库自己的来源目录路由。 -->
+          入库目标：默认沿用各库自己的来源目录；需要一次性改投时，用条目行的「入库到…」
+          当场指定目标库与文件夹（不保存、不影响后续扫描）。本项目仍然<strong>没有</strong>单点的
+          「目标库 / 文件夹」设置项。合并模式与元数据页的逐字段策略互斥呈现：选预设即整体套用，
+          逐字段微调请到元数据页。
         </p>
         <Button size="sm" variant="primary" :disabled="saving" @click="saveFinalize">保存定稿设置</Button>
       </div>
     </Card>
 
-    <SettingsUnsupportedCard
-      label="Book Dock"
-      :groups="['目标库 / 文件夹']"
-      :items="[
-        '上游 auto-finalize 可指定单一目标库与目标文件夹；本项目入库目标 = 各库自己的来源目录（按设计不做单点设置），故该组配置不提供',
-      ]"
-      note="上游 Book Dock 是「投递目录 + 元数据抓取 + 置信度定稿」的完整流水线。本项目「投递目录 + 自动处理 + 五态复核（待复核 / 待处理 / 就绪 / 出错）」已落地，投递即抓已接线（metadata_fetch.auto_on_import 与 enabled 双门控）；第 52 期起「自动定稿」已落地：开关映射 auto_on_import、阈值界面 0–100 内部换算 0–1、合并模式预设（覆盖 / 安全合并 / 仅用内嵌）映射既有 fields 逐字段策略。"
-    />
+    <!-- 复核头（第 65 期）：这里原先挂着 `SettingsUnsupportedCard label="Book Dock"
+         :groups="['目标库 / 文件夹']"`，把它归入「不支持」。那个功能已经做了
+         （条目行的「入库到…」，只是**按次**指定而不是设置项）⇒ 整块删掉 ——
+         做了就不是「不支持」。 -->
 
     <Card class="mt-4">
       <div class="text-[12.5px] leading-relaxed text-muted-foreground">
-        上游对应入口：侧栏 <span class="font-mono">Book Dock</span>。
+        上游对应入口：侧栏 <span class="font-mono">Book Dock</span>（本项目自第 65 期起
+        同样是侧栏一级项「收书目录」<span class="font-mono">/book-dock</span>，设置里这一条保留）。
         相关页：<RouterLink to="/settings/ext/watcher" class="underline">监听</RouterLink>（
         轮询与稳定判定参数）、<RouterLink to="/tools/local" class="underline">工具 → 本地导入</RouterLink>（单文件投递）。
       </div>
     </Card>
+
+    <!-- 入库到…（第 65 期）：居中弹窗，骨架照 BookMoveDialog 的范式
+         （fixed inset-0 z-50 grid place-items-center bg-black/35 + @click.self）。
+         一次性的**按次指定**：选完即透传给后端那次入库，不落库、不记忆。 -->
+    <div
+      v-if="ingestItem"
+      class="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4"
+      @click.self="closeIngest"
+    >
+      <div class="max-h-[88vh] w-[min(34rem,94vw)] overflow-y-auto rounded-lg border border-border bg-card p-5 shadow-2xl">
+        <h3 class="font-serif text-[17px] font-semibold text-foreground">入库到…</h3>
+        <p class="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+          把「<span class="font-medium text-foreground">{{ ingestItem.name }}</span>」放进指定书库的文件夹。
+          文件名与扩展名都不会变。目标库的「允许的格式」收不了它时不能选 —— 收进去也扫不到，
+          书会变成看不见的<strong>隐形文件</strong>。
+        </p>
+
+        <div class="mt-4 text-[12.5px] font-medium text-foreground">目标书库</div>
+        <p v-if="!library.libraryEntities.length" class="mt-1 text-[11.5px] text-muted-foreground">
+          还没有书库：先到
+          <RouterLink :to="{ name: 'settings-libraries' }" class="underline">设置 → 书库管理</RouterLink>
+          新建一个。
+        </p>
+        <div v-else class="mt-2 flex flex-wrap gap-2">
+          <button
+            v-for="l in library.libraryEntities"
+            :key="l.id"
+            type="button"
+            :data-dock-ingest-lib="l.id"
+            :disabled="!libAccepts(l) || ingestBusy"
+            class="rounded-md border px-2.5 py-1.5 text-left text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-55"
+            :class="ingestLibId === l.id
+              ? 'border-primary bg-primary/10 text-foreground'
+              : 'border-border text-muted-foreground hover:border-primary/60'"
+            @click="chooseIngestLib(l)"
+          >
+            <span class="font-medium">{{ l.name }}</span>
+            <span class="ml-1 opacity-70">{{ l.type_label }}</span>
+            <!-- 收不了的**照列 + 写明原因**（抹掉的话用户会以为书库没建好 / 建错了） -->
+            <span v-if="!libAccepts(l)" class="ml-1 text-[11px] opacity-70">
+              · 不收 {{ ingestExt || '这个格式' }}（先到书库管理把它加进「允许的格式」）
+            </span>
+          </button>
+        </div>
+
+        <template v-if="ingestLib">
+          <div class="mt-4 text-[12.5px] font-medium text-foreground">目标文件夹</div>
+          <select
+            v-if="ingestDirs.length"
+            v-model="ingestRoot"
+            data-dock-ingest-root
+            aria-label="目标文件夹"
+            class="mt-2 h-8 w-full rounded-md border border-border bg-muted px-2 text-[12px] text-foreground outline-none focus:border-ring"
+          >
+            <option v-for="d in ingestDirs" :key="d" :value="d">{{ d }}</option>
+          </select>
+          <p v-else class="mt-1 text-[11.5px] text-warning">
+            「{{ ingestLib.name }}」还没有文件夹：先到书库管理给它加一个来源目录。
+          </p>
+        </template>
+
+        <div class="mt-5 flex flex-wrap items-center gap-2">
+          <span class="text-[11.5px] text-muted-foreground">
+            {{ ingestRoot ? `将放进：${ingestRoot}` : '先选一个书库与文件夹' }}
+          </span>
+          <Button size="sm" variant="ghost" class="ml-auto" :disabled="ingestBusy" @click="closeIngest">取消</Button>
+          <Button
+            size="sm"
+            variant="primary"
+            data-dock-ingest-ok
+            :disabled="!ingestReady"
+            @click="confirmIngest"
+          >
+            {{ ingestBusy ? '入库中…' : '入库' }}
+          </Button>
+        </div>
+      </div>
+    </div>
 
     <!-- 整页拖拽投递遮罩（A8）：拖文件进窗口时浮层，松手即投递到收书目录 -->
     <transition

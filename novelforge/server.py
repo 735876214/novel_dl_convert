@@ -5437,7 +5437,30 @@ async def api_scan():
 # ---------------- 收书目录条目（Book Dock 五态流水线，第 7 期）----------------
 # 列表接口在 GET 时**懒对账**（bookdock.payload → reconcile）：把投递目录里
 # 尚未登记的文件补成 pending / needs_review，清掉文件已消失的悬空条目。
-# 三个单项操作：rescan（重跑管线）/ ignore（登记运行时忽略）/ delete（移入回收目录）。
+#
+# 四个单项操作：rescan（重跑管线）/ rename（改投递目录里的文件名）/ ignore（登记
+# 运行时忽略）/ delete（移入回收目录）。
+#
+# 第 65 期两处扩展，都**只加不减**（老调用点零改动）：
+#   · rescan 多了**可选** body ``{library_id?, root?}`` = 界面上的「入库到…」——
+#     入库前当场指定目标库与目标文件夹（给的是「这一次」的输入，不落库、不记忆）。
+#     这里原先写着「入库目标沿用各库自己的来源目录，本项目没有单点目标库 / 文件夹
+#     设置」：**那句仍然成立**（设置项确实没有），变的是多了这个**按次指定**的动作。
+#   · rename 把投递目录里的文件名改掉（只改未入库的条目，扩展名不许变）。
+
+def _dock_call(fn, *args, **kwargs):
+    """收书目录端点的统一异常映射：``DockError`` → 它自带的 status，``ValueError`` → 404。
+
+    ``ValueError`` 那条是既有语义（「条目不存在 / 文件已不在投递目录」→ 404），
+    这里只是收拢成一处，免得四个端点各写一遍、还越写越不一样。
+    """
+    try:
+        return fn(*args, **kwargs)
+    except bookdock.DockError as e:
+        raise HTTPException(e.status, str(e))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
 
 @app.get("/api/book-dock")
 def api_book_dock(status: str = ""):
@@ -5446,30 +5469,30 @@ def api_book_dock(status: str = ""):
 
 
 @app.post("/api/book-dock/{item_id}/rescan")
-def api_book_dock_rescan(item_id: str):
-    try:
-        item = bookdock.rescan(_get_watcher(), item_id)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
+def api_book_dock_rescan(item_id: str, payload: dict = Body(None)):
+    p = payload or {}
+    item = _dock_call(bookdock.rescan, _get_watcher(), item_id,
+                      library_id=str(p.get("library_id") or ""),
+                      root=str(p.get("root") or ""))
+    return {"ok": True, "item": item}
+
+
+@app.post("/api/book-dock/{item_id}/rename")
+def api_book_dock_rename(item_id: str, payload: dict = Body(...)):
+    item = _dock_call(bookdock.rename, _get_watcher(), item_id,
+                      (payload or {}).get("name") or "")
     return {"ok": True, "item": item}
 
 
 @app.post("/api/book-dock/{item_id}/ignore")
 def api_book_dock_ignore(item_id: str):
-    try:
-        item = bookdock.ignore(_get_watcher(), item_id)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
+    item = _dock_call(bookdock.ignore, _get_watcher(), item_id)
     return {"ok": True, "item": item}
 
 
 @app.post("/api/book-dock/{item_id}/delete")
 def api_book_dock_delete(item_id: str):
-    try:
-        res = bookdock.remove(_get_watcher(), item_id)
-    except ValueError as e:
-        raise HTTPException(404, str(e))
-    return res
+    return _dock_call(bookdock.remove, _get_watcher(), item_id)
 
 
 # ---------------- 元数据完整度评分（B2）----------------

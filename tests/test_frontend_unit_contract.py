@@ -26,10 +26,12 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
+SRC = FRONTEND / "src"
 PKG_JSON = FRONTEND / "package.json"
 VITE_CONFIG = FRONTEND / "vite.config.ts"
-CHART_GRID = FRONTEND / "src" / "components" / "charts" / "ChartGrid.vue"
-STATISTICS_CHARTS = FRONTEND / "src" / "lib" / "statistics-charts.ts"
+CHART_GRID = SRC / "components" / "charts" / "ChartGrid.vue"
+STATISTICS_CHARTS = SRC / "lib" / "statistics-charts.ts"
+ICONS_TS = SRC / "lib" / "icons.ts"
 
 #: 第 39 期的三个 devDependency。少任何一个，`npm run test:unit` 都跑不起来。
 REQUIRED_DEV_DEPS = ("vitest", "@vue/test-utils", "happy-dom")
@@ -85,6 +87,27 @@ EXPECTED_SPECS = (
     # 错误页（把真数据说成「没有」）或照常写「0 章」（把「没拿到」说成「没有」）；
     # 以及给 AUDIO 发一个没有可下文件的「下载」。
     "src/components/book/BookPreviewDialog.spec.ts",
+    # 第 65 期：侧栏结构（七个入口搬去顶栏、新增收书目录）。三种走样都是静默的：
+    # 少一项 ⇒ 入口凭空消失；多一项 ⇒ 同一页两个入口（都能走，于是没人发现多了一条）；
+    # 图标名拼错 ⇒ `iconPath()` 返回空串，渲染出看不见的空 <svg>。
+    "src/data/nav.spec.ts",
+    # 第 65 期：侧栏的**接线**。这一页此前零 spec，而本期在它身上动了三处（删七项、
+    # 加收书目录、删 `'running'` 计数分支），每处的失效方式都不会报错。
+    "src/components/AppSidebar.spec.ts",
+    # 第 65 期：顶栏图标行的**接线**（七个入口搬到这里），该组件此前零 spec。
+    # 四种走样全是静默的：少挂一个入口 ⇒ 那个页面从顶栏消失，用户只当「功能没了」；
+    # 路径写错 ⇒ 点下去是 404 白页；成就门控判据写反 ⇒ 关掉开关反而显示、或读不到
+    # 配置就整块消失；退回抽屉写法 ⇒ 浮层与全屏遮罩叠成两层。
+    "src/components/AppHeader.spec.ts",
+    # 第 65 期：任务面板从右侧抽屉改成顶栏浮层。两条契约写错都不会报错：
+    # 角标改回「全部任务数」——数字照跳，只是含了已完成、越滚越大没人察觉；
+    # 打开时不 `refresh()`——浮层照开，只是显示上一次拉到的旧数据。
+    "src/components/TaskFlyout.spec.ts",
+    # 第 65 期：收书目录页此前零 spec，而它当时是**坏的**（同一条 v-if 链里两个
+    # 分支条件逐字相同 ⇒ 条目行永不渲染，页面上只像「还没有文件」）。这条 spec
+    # 的核心断言就是条目行的条数；另钉住「批量条与条目行同时在场」与改名换 id 后
+    # 选择集里不许留下幽灵 id。
+    "src/views/settings/pages/BookDockPage.spec.ts",
 )
 
 
@@ -163,6 +186,30 @@ def test_书架三个视图各留了一个菜单入口():
     )
 
 
+def test_收书目录的条目行没有被重复的_v_else_if_顶掉():
+    """`BookDockPage.vue` 里 `v-else-if="dock && dock.items.length"` 必须只出现 **1 次**。
+
+    第 65 期 3/5 修掉的就是这条：批量操作条与条目行各写了一遍**逐字相同**的条件，
+    `v-if` 链里第一个命中的就终止了，于是后一个分支永不渲染 —— 条目行一条都不显示，
+    而复选框长在条目行里，「批量重扫 / 批量忽略」永远禁用、单条按钮点不到。
+    页面上看不出异常，只像「投递目录里还没有文件」。
+
+    `BookDockPage.spec.ts` 测的是「渲染出来是几条」，它证明不了**为什么**少；
+    而且这类死链是**回归型**的：合并之后有人再拆成两块、条件一复制就又踩一遍。
+    计数是唯一一眼可辨的判据（照 `test_书架三个视图各留了一个菜单入口` 的先例）。
+    """
+    p = FRONTEND / "src" / "views" / "settings" / "pages" / "BookDockPage.vue"
+    # ⚠️ 先剥掉 HTML 注释再数：这段代码的注释里**逐字引用**了原条件（用来说明它为什么
+    # 被合并），不剥的话注释本身会被数成一个「重复分支」—— 判据被自己的说明绊倒。
+    body = re.sub(r"<!--.*?-->", "", p.read_text(encoding="utf-8"), flags=re.S)
+    n = body.count('v-else-if="dock && dock.items.length"')
+    assert n == 1, (
+        f"BookDockPage.vue 里 `v-else-if=\"dock && dock.items.length\"` 出现 {n} 次，应为 1 次 —— "
+        "同一条件写两遍会让后一个分支永不渲染（条目行消失、批量按钮永远禁用），"
+        "而页面上只像「投递目录里还没有文件」"
+    )
+
+
 def test_菜单里没有通过电子邮件发送这一项():
     """用户明确不做这一项（第 64 期决策 3，逐字：「通过电子邮件发送不勾」）。
 
@@ -181,6 +228,66 @@ def test_菜单里没有通过电子邮件发送这一项():
         "BookActionsMenu.vue 的模板里出现了邮件相关项 —— 第 64 期决策是「不做」，"
         "本项目没有邮件配置，这一项点下去只会失败"
     )
+
+
+# ---------------------------------------------------------------------------
+# 图标表（第 65 期）
+# ---------------------------------------------------------------------------
+
+#: 收图标名的组件（全仓普查过：`<Icon name="…">` 与 `<EmptyState icon="…">`，
+#: 2026-09-27 无第三个宿主）。加新宿主时**必须**加进这里，别放宽成「跳过」。
+ICON_HOSTS = ("Icon", "EmptyState")
+
+
+def _icons_body() -> str:
+    src = ICONS_TS.read_text(encoding="utf-8")
+    return src[src.index("export const ICONS = {") : src.index("} as const")]
+
+
+def test_模板里的图标名都在_ICONS_表里():
+    """字面量的图标名必须都在表里 —— 这是两个**既存真 bug** 的根因防线。
+
+    `iconPath()` 对未知键**静默返回空串**（`icons.ts` 末行，沿袭 v2 的
+    `ICONS[name] || ''`）⇒ 名字拼错（或写了表里没有的图形）会渲染成一个
+    **看不见的空 `<svg>`**：不报错、不告警、不占位，页面上就是缺一块。
+    第 65 期就是这么发现 `upload` 与 `folder` 两个键从来没有过的
+    （`BookDockPage` 的拖拽遮罩大图标、书库向导的文件夹图标，一直是隐形的）。
+
+    ⚠️ 只扫**字面量**。`<Icon :name="item.icon">` 这类动态绑定静态扫不到 ——
+    它们由各自的数据源负责（侧栏那条见 `src/data/nav.spec.ts` 里对着
+    真实 NAV_GROUPS 跑的那一遍）。
+    """
+    known = set(re.findall(r"^\s{2}([A-Za-z][\w]*):\s*'", _icons_body(), flags=re.M))
+    assert known, "从 icons.ts 里一个图标键都没解析出来 —— 表的结构变了，这条断言已失效"
+    # ⚠️ 正则有三个**必须**的细节，少一个就会漏扫（都是实测出来的）：
+    #   · `[^>]*?` —— 允许 `icon=` 前面还有别的属性。写死成 `<Icon\s+icon=` 会漏掉
+    #     `<EmptyState v-else icon="upload">` 这种（本项目真有，且正好是隐形那处）；
+    #   · `(?<!:)`  —— 排除 `:name="…"` / `:icon="…"` 这些**动态绑定**：它们的值
+    #     是表达式（如 `:name="target.label === '收听' ? 'volume' : 'book'"`），
+    #     照字面抓下来必然误报；
+    #   · `[^>]` 不跨 `>` —— 保证只在本标签内找，不会把上一个标签的属性算进来。
+    pattern = re.compile(r"<(%s)\b[^>]*?(?<!:)\b(?:name|icon)=\"([^\"]+)\"" % "|".join(ICON_HOSTS))
+    bad: list[str] = []
+    for p in sorted(SRC.rglob("*.vue")):
+        for m in pattern.finditer(p.read_text(encoding="utf-8")):
+            if m.group(2) not in known:
+                bad.append(f"{p.relative_to(FRONTEND).as_posix()} → <{m.group(1)} {m.group(2)}>")
+    assert not bad, (
+        "这些图标名不在 ICONS 表里（渲染出来是看不见的空 svg）：\n  " + "\n  ".join(bad)
+    )
+
+
+def test_每个图标都有非空的_path():
+    """加了键但值是空串，与「键不存在」渲染出来是同一个东西 —— 都是空白。
+
+    这条守的是「补图标时抄了个空壳」这种半途而废。
+    """
+    empty = [
+        name
+        for name, path in re.findall(r"^\s{2}([A-Za-z][\w]*):\s*'([^']*)'", _icons_body(), flags=re.M)
+        if not path.strip()
+    ]
+    assert not empty, f"这些图标的 path 是空的（渲染出来是看不见的空 svg）：{empty}"
 
 
 def test_chartgrid_的编译期穷尽性标注还在():

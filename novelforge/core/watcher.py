@@ -390,12 +390,17 @@ class FolderWatcher:
             "cfg": c,
         }
 
-    def handle_file(self, p: Path, owner_lib=None) -> tuple:
+    def handle_file(self, p: Path, owner_lib=None, owner_root=None) -> tuple:
         """处理单个文件，返回 (结果类型, 详情)。结果类型：converted / added / failed / skipped
 
         ``owner_lib`` 非空 = 该文件来自某库**专属来源子目录**的扫描，直接归到该库
         （跳过来源子目录名路由，避免又被按格式/关键词改派到别的库）；为 ``None``
         时走既有 ``_target`` 路由（全局 INPUT_DIR 路径）。
+
+        ``owner_root``（第 65 期）= **该库的哪个文件夹**，只对 ``owner_lib`` 有意义
+        （收书目录的「入库到…」）。为 ``None`` 时沿用该库第一个文件夹 —— 既有调用
+        一字不改。⚠️ 校验放在这里而**不只放调用方**：落点必须真的属于 ``owner_lib``，
+        否则这个参数就是「往任意目录写文件」的洞。
         """
         # ⚠️ 空文件检查只对**文件**生效：Windows 上目录的 `st_size` **恒为 0**
         # （NTFS 的目录大小字段），若一并拦掉，音频目录（有声书）会在到达下面的
@@ -418,6 +423,13 @@ class FolderWatcher:
             lib = owner_lib
             _rs = library.roots_of(lib)
             root = Path(_rs[0]) if _rs else Path(self.output_dir)
+            if owner_root is not None:
+                want = Path(owner_root).resolve()
+                if want not in _rs:
+                    # 拒收而不是照写：落点不属于这个库 ⇒ 写进去就是一本**没登记的
+                    # 隐形书**（书目里查不到，用户还以为入库了）。
+                    return ("failed", f"目标文件夹不属于该书库：{owner_root}")
+                root = want
         else:
             lib, root = self._target(p)
             if lib is None:

@@ -80,7 +80,7 @@ export function useSettingsConfig() {
    * 拉取配置。
    * @param force 为 true 时忽略「已加载」标记强制重取（保存后、还原后使用）
    * @param silent 为 true 时失败不弹提示。用于「只是想知道某个开关状态」的调用方
-   *   （如侧栏据 achievements.enabled 决定是否显示成就入口）—— 那种场景下弹
+   *   （如顶栏据 achievements.enabled 决定是否显示成就入口）—— 那种场景下弹
    *   「配置加载失败」既打扰用户，也会让人误以为功能坏了。
    */
   async function loadConfig(force = false, silent = false): Promise<void> {

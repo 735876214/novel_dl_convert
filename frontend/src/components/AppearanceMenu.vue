@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 import Segment from '@/components/ui/Segment.vue'
 import SwatchGrid from '@/components/ui/SwatchGrid.vue'
 import { ACCENTS } from '@/data/accents'
@@ -27,9 +28,6 @@ const wrap = ref<HTMLElement | null>(null)
 const themeOptions = computed(() =>
   (['light', 'dark', 'system'] as const).map((v) => ({ value: v, label: THEME_LABEL[v] })),
 )
-
-const ICON_BTN =
-  'grid h-[2.0625rem] w-[2.0625rem] cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
 
 function toggle(): void {
   open.value = !open.value
@@ -84,26 +82,19 @@ onUnmounted(() => {
 
 <template>
   <div ref="wrap" class="relative">
-    <button
-      :class="[ICON_BTN, open ? 'bg-[var(--shell-accent-tint)] text-primary hover:text-primary' : '']"
-      type="button"
-      :title="`外观（当前：${THEME_LABEL[theme.theme]}）`"
-      aria-label="外观"
-      :aria-expanded="open"
+    <!-- 第 65 期起改用 `ui/IconButton`（圆形描边 + 气泡 + 角标三件事收在一处定义）。
+         原先这里内联的月亮 path 换成 `lib/icons.ts` 里已有的 `moon`：语义相同（都是
+         新月），少一份永不更新的复制。原生 `title` 一并去掉 —— 有了自绘气泡，
+         两个提示会一起冒出来（无障碍信息由 IconButton 的 `aria-label` 承担）。 -->
+    <IconButton
+      label="外观"
+      :tooltip="`外观（当前：${THEME_LABEL[theme.theme]}）`"
+      :active="open"
+      :expanded="open"
       @click.stop="toggle"
     >
-      <svg
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.7"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-        class="h-[17px] w-[17px]"
-      >
-        <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
-      </svg>
-    </button>
+      <Icon name="moon" class="h-[17px] w-[17px]" />
+    </IconButton>
 
     <!-- 浮层：点按钮切换，点外部 / Esc 关闭 -->
     <div

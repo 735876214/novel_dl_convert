@@ -66,10 +66,13 @@ onUnmounted(() => {
 
 <template>
   <div ref="wrap" class="relative">
+    <!-- 尺寸与顶栏那一排圆形按钮对齐（第 65 期「整行统一圆形」）：原先 `h-8 w-8`
+         比它们小 1px，混在一排里看得出来。刻意**不**换成 `IconButton` —— 它承载的是
+         用户身份（浮层里已显示全名），不是「一个图标动作」，也没有角标。 -->
     <button
       type="button"
       :class="[
-        'h-8 w-8 shrink-0 cursor-pointer rounded-full border border-border bg-muted shadow-[inset_0_0_0_3px_var(--card)] text-[12px] font-semibold text-foreground transition-colors',
+        'h-[2.0625rem] w-[2.0625rem] shrink-0 cursor-pointer rounded-full border border-border bg-muted shadow-[inset_0_0_0_3px_var(--card)] text-[12px] font-semibold text-foreground transition-colors',
         open ? 'bg-[var(--shell-accent-tint)] text-primary hover:text-primary' : 'hover:bg-muted',
       ]"
       :title="auth.display"

@@ -3210,6 +3210,29 @@ def dock_update(item_id, **fields) -> None:
         c.commit()
 
 
+def dock_rename(old_id, new_id, name, ext, detail="") -> bool:
+    """改名：**换主键**（条目 id 就是文件名）并顺带把失败计数清零。
+
+    为什么必须单开一个函数：``id`` **不在** :data:`_DOCK_FIELDS` 里 —— 那是给
+    :func:`dock_update` 的白名单，放它进去会做出「按 id 改 id」这种怪接口，而
+    改名的本体恰恰就是换主键。
+
+    ``retries`` 归零：新名字是**没试过**的条目，旧名字试到上限这件事不该继续拦它
+    （历史留在活动日志里）。``status`` / ``created_at`` / ``output`` 一概不动 ——
+    用户改的是名字，不是状态。
+    """
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "UPDATE book_dock_items SET id=?, name=?, ext=?, detail=?, retries=0, "
+            "updated_at=? WHERE id=?",
+            (str(new_id), str(name), str(ext or ""), str(detail or ""),
+             time.time(), str(old_id)),
+        )
+        c.commit()
+        return bool(cur.rowcount)
+
+
 def dock_get(item_id):
     r = _connect().execute(
         "SELECT * FROM book_dock_items WHERE id=?", (str(item_id),)
