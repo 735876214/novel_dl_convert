@@ -11,6 +11,7 @@ import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLI
 import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type SessionExtra } from '@/lib/api'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import { progressForFile } from '@/lib/readingProgress'
+import { rangeAt, selectionRange } from '@/lib/textAnchor'
 import { readComicPrefs, saveComicPrefs } from '@/lib/comicPrefs'
 import {
   READER_FONTS,
@@ -469,6 +470,14 @@ watch(scrollRef, (el, old) => {
 // 选中文字浮层
 const selText = ref('')
 const selPos = ref<{ x: number; y: number } | null>(null)
+/**
+ * 选区在**本章正文**里的字符偏移 `[start, end)`（第 63 期 6/6）。
+ *
+ * 它解决的是「同一章里同一句话出现两次 ⇒ 高亮画错那一处」—— 按文本搜索只能找到
+ * 第一个匹配，偏移没有二义性。取不到就是 `null`（回落按文本搜索）。
+ * 坐标定义与还原逻辑都在 `lib/textAnchor.ts`，**不要在这里另算一套**。
+ */
+const selRange = ref<{ start: number; end: number } | null>(null)
 const noteDraft = ref('')
 // 样式类型（高亮/下划线/删除线/纯笔记）单一来源来自 data/annotationColors.ts，与 COLORS 同文件。
 const selStyle = ref<HighlightStyle>(DEFAULT_HIGHLIGHT_STYLE)
@@ -772,20 +781,27 @@ function onSelect(): void {
   const content = contentRef.value
   if (!sel || sel.isCollapsed || !content) {
     selPos.value = null
+    selRange.value = null
     return
   }
   const text = sel.toString().trim()
   if (!text || text.length > 500) {
     selPos.value = null
+    selRange.value = null
     return
   }
   const anchor = sel.anchorNode
   if (!anchor || !content.contains(anchor)) {
     selPos.value = null
+    selRange.value = null
     return
   }
   const rect = sel.getRangeAt(0).getBoundingClientRect()
   selText.value = text
+  // 章内字符偏移锚（第 63 期 6/6）：**现在算**，等 DOM 被 `v-html` 重渲染过再算就晚了
+  //（选区锚点会随着 DOM 替换失效）。取不到就算了 —— 那只是回落成按文本搜索，
+  // 与加锚之前的行为一样，不是错误。
+  selRange.value = selectionRange(content)
   selPos.value = { x: rect.left + rect.width / 2, y: rect.top }
 }
 
@@ -807,7 +823,23 @@ function applyAnnoStyle(span: HTMLElement, color: string, style: string): void {
   }
 }
 
-function wrapQuote(root: HTMLElement, quote: string, color: string, style: string, id: number): boolean {
+function wrapRange(range: Range, color: string, style: string, id: number): boolean {
+  const span = document.createElement('span')
+  span.className = 'nf-hl'
+  span.dataset.annoId = String(id)
+  applyAnnoStyle(span, color, style)
+  try {
+    range.surroundContents(span)
+    return true
+  } catch {
+    // 区间跨到了元素边界（`surroundContents` 不接受部分选中的非文本节点）——
+    // 与「找不到」同样处理：交给下一种定位方式。
+    return false
+  }
+}
+
+/** 定位方式②：按引文搜索，用**第一个**匹配（第 63 期之前的唯一方式，现为回落）。 */
+function wrapByText(root: HTMLElement, quote: string, color: string, style: string, id: number): boolean {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
   const nodes: Text[] = []
   let n: Node | null
@@ -818,24 +850,40 @@ function wrapQuote(root: HTMLElement, quote: string, color: string, style: strin
     const range = document.createRange()
     range.setStart(node, idx)
     range.setEnd(node, idx + quote.length)
-    const span = document.createElement('span')
-    span.className = 'nf-hl'
-    span.dataset.annoId = String(id)
-    applyAnnoStyle(span, color, style)
-    try {
-      range.surroundContents(span)
-      return true
-    } catch {
-      return false
-    }
+    return wrapRange(range, color, style, id)
   }
   return false
+}
+
+/**
+ * 定位一条批注：**先按字符偏移锚，验不过再退回按文本搜索**。
+ *
+ * 顺序不能反。偏移锚能解决「同一章里同一句话出现两次 ⇒ 高亮错一处」，而文本搜索
+ * 正是那个会错的判据 —— 只有在锚不可用/对不上时才该用它兜底。
+ *
+ * ⚠️ **锚对不上就不画，绝不硬画**：书文件换了（重新制版 / 换译本 / 章节切分变了）之后，
+ * 老偏移仍是个合法下标，但会指到一段**无关的文字**上。照偏移直接画＝把用户的批注
+ * 悄悄挪到别处，比不画更糟。所以这里核对锚点处取出的文字**必须包含引文**才算数。
+ * 用 `includes` 而不是 `===`：`Range.toString()` 会把跨节点的空白原样拼出来，
+ * 而 `quote` 是 `sel.toString().trim()` 过的，两者未必逐字相等。
+ */
+function wrapQuote(root: HTMLElement, quote: string, color: string, style: string, id: number,
+                   startOff = -1, endOff = -1): boolean {
+  if (startOff >= 0 && endOff > startOff) {
+    const hit = rangeAt(root, startOff, endOff)
+    if (hit && hit.text.replace(/\s+/g, ' ').includes(quote.replace(/\s+/g, ' '))) {
+      if (wrapRange(hit.range, color, style, id)) return true
+    }
+  }
+  return wrapByText(root, quote, color, style, id)
 }
 
 function applyHighlights(): void {
   const root = contentRef.value
   if (!root) return
-  for (const a of chapterAnnotations.value) wrapQuote(root, a.quote, a.color, a.style, a.id)
+  for (const a of chapterAnnotations.value) {
+    wrapQuote(root, a.quote, a.color, a.style, a.id, a.start_off, a.end_off)
+  }
 }
 
 async function addHighlight(color: string): Promise<void> {
@@ -843,7 +891,9 @@ async function addHighlight(color: string): Promise<void> {
   if (!quote) return
   const note = noteDraft.value.trim()
   const style = selStyle.value
+  const span = selRange.value
   selPos.value = null
+  selRange.value = null
   noteDraft.value = ''
   selText.value = ''
   window.getSelection()?.removeAllRanges()
@@ -854,6 +904,8 @@ async function addHighlight(color: string): Promise<void> {
       color,
       note,
       style,
+      start_off: span ? span.start : -1,
+      end_off: span ? span.end : -1,
     })
     annotations.value.push({
       id: r.id,
@@ -863,11 +915,16 @@ async function addHighlight(color: string): Promise<void> {
       note,
       style,
       created_at: Date.now() / 1000,
+      anchor: '',
+      start_off: span ? span.start : -1,
+      end_off: span ? span.end : -1,
     })
     // 只包裹**新增的这条**：整章重扫会对已包裹文本重复包裹（span 套 span）。
     await nextTick()
     const root = contentRef.value
-    if (root) wrapQuote(root, quote, color, style, r.id)
+    if (root) {
+      wrapQuote(root, quote, color, style, r.id, span ? span.start : -1, span ? span.end : -1)
+    }
   } catch (e) {
     ui.toast(apiErrorMessage(e, '添加批注失败'))
   }

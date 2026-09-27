@@ -834,14 +834,38 @@ export interface ProgressState {
 
 export interface Annotation {
   id: number
+  /**
+   * 章节**序号**；**`-1` = 序号未知**（设备只给得出章节标题，见 `chapter_title`）。
+   *
+   * ⚠️ 别照 `chapter + 1` 硬渲染 —— 那会把「不知道」显示成「第 1 章」，是编造。
+   * 显示一律走 `chapterLabel()`（`lib/annotations.ts`）。
+   */
   chapter: number
   quote: string
   color: string
   note: string
   style: string
   created_at: number
-  /** 来源枚举：`web` / `koreader` / `kobo`。当前只有 Web 阅读器会写入。 */
+  /** 来源枚举：`web` / `koreader` / `kobo`。 */
   origin?: string
+  /**
+   * 来源给的章节**标题**（设备批注才有；本应用自己写的批注留空 —— 它知道序号）。
+   * 只在 `chapter < 0` 时有意义。
+   */
+  chapter_title?: string
+  /**
+   * 位置锚，**两列是两回事**（第 63 期 6/6，见 `lib/textAnchor.ts` 的文件头）：
+   *
+   * - `anchor`：**来源原生**的位置标识（KOReader 的 XPointer、Kobo 的 locator）。
+   *   本项目**解析不了它** —— 没有对方那套排版。只用于导入去重与「这条是哪来的」。
+   * - `start_off` / `end_off`：本应用**章内字符偏移**（半开区间 `[起, 止)`），
+   *   由阅读器自己算，**真能定位**。`-1` = 无锚。
+   *
+   * 三者在老批注上都是空/`-1` —— 当时没记，补不回来，界面如实说明按文本定位。
+   */
+  anchor?: string
+  start_off?: number
+  end_off?: number
 }
 
 /**
@@ -1142,19 +1166,18 @@ export interface AuthorMeta {
 
 // ---------- 批注总览 ----------
 
-export interface AllAnnotation {
-  id: number
+/**
+ * 批注总览的一行 = `Annotation` + 书名作者 + 墓碑。
+ *
+ * **继承而不是重抄一遍**：服务端 `GET /api/annotations` 走的是同一份列清单
+ * （`db._ANNO_COLS_FULL`），手抄一份就会漏 —— `chapter_title` / `anchor` /
+ * `start_off` / `end_off` 四列当初就漏在这份声明里，而运行时一直是有值的，
+ * 于是类型在骗人：按 `AllAnnotation` 写代码的人会以为没有章节标题可用。
+ */
+export interface AllAnnotation extends Annotation {
   book_id: string
   book_title: string
   book_author: string
-  chapter: number
-  quote: string
-  color: string
-  note: string
-  style: string
-  created_at: number
-  /** 来源枚举：`web` / `koreader` / `kobo`。当前只有 Web 阅读器会写入。 */
-  origin: string
   /** 0 = 活跃；> 0 = 在垃圾桶（软删除时刻）。仅在 `include_trashed=1` 时有意义。 */
   deleted_at: number
 }
@@ -1167,6 +1190,45 @@ export interface AnnotationOverview {
   weeks: number
   /** 最长的一段「连续无批注」周数，含最后一次批注到本周的空档 */
   longest_quiet_weeks: number
+}
+
+/**
+ * KOReader 批注导入（`POST /api/annotations/import-koreader`）的返回。
+ *
+ * `files` 只列出**真的找到了导出文件**的书 —— 没有导出文件的书不在里面，
+ * 这不是错误，只是没东西可导。`totals.skipped` 是文件里被**有意跳过**的条目数
+ * （没有引文的书签、没有位置的条目），每一项的原因在 `files[].stats` 里分开记。
+ */
+export interface KoreaderImportResult {
+  applied: boolean
+  /** 找到的导出文件数 */
+  scanned: number
+  /** 其中读得懂、能导的（`scanned - with_file` = 读不懂的那几个） */
+  with_file: number
+  /** ⚠️ 恒为空 —— 我们是「按书找文件」，书不在库里就不会去看它（见后端注释） */
+  unmatched: unknown[]
+  files: {
+    path: string
+    book: string
+    book_id: string
+    /** 非空表示这个文件没读成（整份跳过），原因写在这里 */
+    error: string
+    items: number
+    skipped: number
+    device_id: string
+    stats: Record<string, number>
+    imported?: Record<string, number>
+  }[]
+  totals: {
+    added: number
+    updated: number
+    unchanged: number
+    trashed: number
+    no_anchor: number
+    no_quote: number
+    skipped: number
+    files: number
+  }
 }
 
 /**
@@ -3707,6 +3769,21 @@ export const api = {
     ),
 
   annotationOverview: () => request<AnnotationOverview>('/api/annotations/overview'),
+
+  /**
+   * 从各书库里找 **KOReader 的批注导出文件**并导入（第 63 期 6/6）。
+   *
+   * ⚠️ 这不是 kosync。官方 kosync **只同步进度、没有批注端点** —— KOReader 的批注
+   * 跨设备同步走的是**文件**（关书时导出 `<书名>.annotations.lua`）。
+   *
+   * `apply = false`（默认）**只看不写**：先让用户看到「会导多少条」再落库。
+   * 导入是幂等的，但**永不删除** —— 格式里没有墓碑。
+   */
+  importKoreaderAnnotations: (apply = false) =>
+    request<KoreaderImportResult>(
+      `/api/annotations/import-koreader${apply ? '?apply=1' : ''}`,
+      { method: 'POST' },
+    ),
 
   /**
    * 侧栏「浏览」组的三计数。不传库 = 全部书库（侧栏用这个：三个目标页都是跨库的，

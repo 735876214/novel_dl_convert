@@ -183,6 +183,10 @@ beforeEach(async () => {
     routes: [
       { path: '/book/:id', name: 'book', component: BookDetailView },
       { path: '/shelf', name: 'shelf', component: { template: '<div />' } },
+      // 批注「前往」要跳这两个；不注册的话 `router.push` 匹配不到、静默留在原页，
+      // 用例就会以「路径没变」的形式红掉 —— 原因离真正的问题很远
+      { path: '/read/:id', name: 'read', component: { template: '<div />' } },
+      { path: '/listen/:id', name: 'listen', component: { template: '<div />' } },
     ],
   })
   await router.push(`/book/${BOOK_ID}`)
@@ -295,6 +299,42 @@ describe('BookDetailView', () => {
     expect(m.bookReadingStats).toHaveBeenCalledWith(BOOK_ID)
     expect(w.text()).toContain('还没有阅读记录')   // 默认桩 = 这本书没读过
     expect(w.text()).not.toContain('阅读记录加载失败')
+  })
+
+  /**
+   * 批注「前往」（第 63 期 6/6）。两条路必须分开：
+   *
+   * - 序号**已知**（本应用自己写的批注）⇒ 落到那一章；
+   * - 序号**未知**（设备回传的批注，后端记 `-1`）⇒ **只打开这本书**，不拼 `?chapter=-1`。
+   *
+   * 后者是这条用例真正盯的东西：`-1` 拼进 URL 阅读器会把它当章号，落到**章首** ——
+   * 用户点一条第十二章的批注，到的是第一章开头，而且界面上完全看不出错了。
+   */
+  it('批注「前往」：序号已知落到那一章，未知则只打开这本书（不猜章节）', async () => {
+    m.listAnnotations.mockResolvedValue({
+      items: [
+        { id: 1, chapter: 4, quote: '本应用划的', color: 'yellow', note: '', style: 'highlight', created_at: 0, origin: 'web' },
+        { id: 2, chapter: -1, chapter_title: '第十二章 夜航', quote: '设备来的', color: 'yellow', note: '', style: 'highlight', created_at: 0, origin: 'koreader' },
+      ],
+    })
+    const w = await mountDetail()
+
+    // 序号未知的那条显示的是**标题**，不是被 +1 编出来的「第 1 章」
+    expect(w.text()).toContain('第十二章 夜航')
+    expect(w.text()).not.toContain('第 1 章')
+
+    const go = w.findAll('button').filter((b) => b.text() === '前往')
+    expect(go).toHaveLength(2)
+
+    await go[0]!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe(`/read/${BOOK_ID}?chapter=4`)
+
+    await router.push(`/book/${BOOK_ID}`)
+    await flushPromises()
+    await go[1]!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe(`/read/${BOOK_ID}`)
   })
 
   it('详情拉取失败时给出错误提示，而不是静默渲染成一本空书', async () => {

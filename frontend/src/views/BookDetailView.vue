@@ -13,6 +13,7 @@ import ReadingRecord from '@/components/book/ReadingRecord.vue'
 import Button from '@/components/ui/Button.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import TabBar from '@/components/ui/TabBar.vue'
+import { canJumpTo } from '@/lib/annotations'
 import { useCollectionsStore } from '@/stores/collections'
 import { useCoverPrefsStore } from '@/stores/coverPrefs'
 import { useLibraryStore } from '@/stores/library'
@@ -177,6 +178,20 @@ function startReading(): void {
   router.push(`/read/${bookId.value}`)
 }
 
+/**
+ * 从批注列表「前往」：章节序号已知就直接落到那一章，否则回落到「打开这本书」。
+ *
+ * **不猜章节** —— 设备回传的批注序号是 -1（未知，见 `lib/annotations`），
+ * 拿它拼 `?chapter=-1` 会落到章首，用户以为去到的是那条批注的位置。
+ */
+function goToAnnotation(a: Annotation): void {
+  if (canListen.value || !canRead.value || !canJumpTo(a)) {
+    startReading()
+    return
+  }
+  router.push(`/read/${bookId.value}?chapter=${a.chapter}`)
+}
+
 function download(name: string): void {
   const a = document.createElement('a')
   a.href = api.downloadUrl(name)
@@ -305,7 +320,7 @@ onMounted(async () => {
       @download="download"
     />
 
-    <AnnotationsTab v-show="tab === 'annotations'" :annotations="annotations" @go="startReading" />
+    <AnnotationsTab v-show="tab === 'annotations'" :annotations="annotations" @go="goToAnnotation" />
 
     <div v-show="tab === 'metadata'">
       <MetadataEditor :book-id="bookId" @saved="onMetaSaved" />

@@ -2373,6 +2373,18 @@ def api_list_annotations(bid: str):
     return {"items": db.list_annotations(bid)}
 
 
+def _anchor_off(payload: dict, key: str) -> int:
+    """取章内字符偏移，缺省或非法一律 **-1**（「不知道」，见 `db` 建表处的锚注释）。
+
+    **不用 0 兜底**：``0`` 是「章首」这个合法偏移，兜成 0 会把每一条没带锚的批注
+    都画到章首去 —— 而且画得出来、不报错，没人会发现。
+    """
+    try:
+        return int(payload.get(key, -1))
+    except (TypeError, ValueError):
+        return -1
+
+
 @app.post("/api/books/{bid}/annotations")
 def api_add_annotation(bid: str, request: Request, payload: dict = Body(...)):
     quote = str(payload.get("quote", "") or "").strip()
@@ -2383,6 +2395,10 @@ def api_add_annotation(bid: str, request: Request, payload: dict = Body(...)):
     origin = str(payload.get("origin", "web") or "web").strip() or "web"
     # 第 44 期：样式类型（高亮/下划线/删除线/纯笔记），未知/空回落 'highlight'。
     style = str(payload.get("style", "highlight") or "highlight").strip() or "highlight"
+    # 第 63 期（6/6）位置锚，两个字段语义**不同**（见 db 建表处）：
+    # `anchor` 是来源原生标识（KOReader 的 XPointer 之类），本项目**定位不了它**，
+    # 只用于导入去重与「这条是哪来的」；`start_off`/`end_off` 才是本应用阅读器
+    # 自己算的章内字符偏移，是**真能定位**的那个。老客户端不传这两样，回落 -1/''。
     rid = db.add_annotation(
         bid,
         int(payload.get("chapter", 0) or 0),
@@ -2391,6 +2407,9 @@ def api_add_annotation(bid: str, request: Request, payload: dict = Body(...)):
         str(payload.get("note", "") or ""),
         origin,
         style,
+        anchor=str(payload.get("anchor", "") or ""),
+        start_off=_anchor_off(payload, "start_off"),
+        end_off=_anchor_off(payload, "end_off"),
     )
     _sync_auto_push(bid, request)
     return {"id": rid, "ok": True}
@@ -2977,6 +2996,24 @@ def api_all_annotations(include_trashed: int = 0):
             "book_author": b["author"] if b else "",
         })
     return {"items": out, "total": len(out)}
+
+
+@app.post("/api/annotations/import-koreader")
+def api_import_koreader_annotations(apply: int = 0):
+    """从各书库里找 KOReader 的批注导出文件并导入（第 63 期 6/6）。
+
+    ⚠️ **这不是 kosync**。官方 kosync 只同步阅读进度，**没有批注端点**（查证：客户端
+    ``plugins/kosync.koplugin/api.json`` 只有 4 个方法，服务端 ``routes.lua`` 同样只有
+    进度）。KOReader 的批注跨设备同步走的是**文件**：关书时导出
+    ``<书名>.annotations.lua``（需开 ``annotations_export_on_closing``），上游
+    PR #13372 起支持。所以这里做的是读那个文件，而不是接一个不存在的 HTTP 协议。
+
+    ``apply=0``（默认）**只看不写** —— 先让用户看到「会导多少条」再落库。
+    导入是幂等的（见 `db.import_annotations`），重复调用不会堆积副本；
+    但**永不删除**：格式里没有墓碑，用户在设备上删掉的那条会留在本项目里。
+    """
+    from .core import koreader_anno
+    return koreader_anno.scan_and_import(apply=bool(apply))
 
 
 @app.get("/api/annotations/export")

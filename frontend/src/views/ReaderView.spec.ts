@@ -3,7 +3,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
-import { api, type BookDetail, type Bookmark, type BookVolume, type SessionExtra } from '@/lib/api'
+import { api, type Annotation, type BookDetail, type Bookmark, type BookVolume, type SessionExtra } from '@/lib/api'
 import { READER_PREFS_KEY } from '@/lib/readerPrefs'
 import { useLibraryStore } from '@/stores/library'
 import ReaderView from '@/views/ReaderView.vue'
@@ -586,5 +586,77 @@ describe('ReaderView · 目录跳转与滚轮翻页（第 61 期）', () => {
       new WheelEvent('wheel', { deltaY: 120, cancelable: true }))
     await flushPromises()
     expect(m.chapter).toHaveBeenLastCalledWith('book-a', 1)  // 翻页模式：向后翻 = 下一章
+  })
+})
+
+/**
+ * 高亮的**定位链**（第 63 期 6/6）：先按章内字符偏移锚，验不过再退回按文本搜索。
+ *
+ * 这条链要防的错是「同一章里同一句话出现两次 ⇒ 高亮画在了第一次出现的地方」——
+ * 高亮确实画上去了，只是画错了位置，界面上看不出来。
+ *
+ * 章正文固定成 `<p>目标一</p><p>目标二</p>`，文本节点连起来是 `目标一目标二`
+ * （下标 0–6），所以「目标」这个词有两处：0–2（第一段）与 3–5（第二段）。
+ * 两个用例都断言那**唯一一个** `.nf-hl` 落在哪一段上 —— 只看有没有画，区分不出对错。
+ */
+describe('ReaderView · 高亮定位（偏移锚 vs 文本搜索）', () => {
+  const HTML = '<p>目标一</p><p>目标二</p>'
+
+  /** 取那唯一一个高亮 span 所在段落的文字（`目标一` / `目标二`） */
+  function highlightedParagraph(w: VueWrapper): string {
+    const spans = w.findAll('.nf-hl')
+    expect(spans).toHaveLength(1)
+    return spans[0]!.element.closest('p')!.textContent ?? ''
+  }
+
+  function anno(over: Partial<Annotation> = {}): Annotation {
+    return {
+      id: 1, chapter: 0, quote: '目标', color: 'yellow', note: '', style: 'highlight',
+      created_at: 0, origin: 'web', anchor: '', start_off: -1, end_off: -1, ...over,
+    }
+  }
+
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    stubApi(makeBook())
+    m.chapter.mockResolvedValue({ index: 0, total: 2, title: '第一章', html: HTML })
+  })
+
+  it('锚**验得过** ⇒ 按偏移画：同一句话的第二处也能高亮对', async () => {
+    // 第二段的「目标」在下标 3–5。文本搜索只会命中 0–2，所以这条断言能区分两种方式。
+    m.listAnnotations.mockResolvedValue({
+      items: [anno({ start_off: 3, end_off: 5 })],
+    })
+    const { wrapper } = await mountReader()
+    expect(highlightedParagraph(wrapper)).toBe('目标二')
+  })
+
+  it('锚**验不过**（偏移处不是那句引文）⇒ 当锚不存在，退回文本搜索', async () => {
+    // 下标 4–6 取出来是「标二」，与引文「目标」不符 —— 这正对应「书换过版本了，
+    // 老偏移仍是个合法下标，但指到了别的文字上」。此时**不能**照偏移画，
+    // 否则会把用户的批注悄悄挪到一段他从没划过的话上。
+    //
+    // ⚠️ 偏移特意选在**第二段**里：选第一段（比如 1–3 →「标一」）的话，照偏移画与
+    // 文本搜索**落在同一个段落上**，这条用例就分辨不出「验了没有」——
+    // 实测过，那个版本的用例抓不住「去掉引文核对」这个变异。
+    m.listAnnotations.mockResolvedValue({
+      items: [anno({ start_off: 4, end_off: 6 })],
+    })
+    const { wrapper } = await mountReader()
+    expect(highlightedParagraph(wrapper)).toBe('目标一')   // 文本搜索的第一个匹配
+  })
+
+  it('没有锚的老批注（-1）⇒ 直接走文本搜索，与加锚之前行为一致', async () => {
+    m.listAnnotations.mockResolvedValue({ items: [anno({})] })
+    const { wrapper } = await mountReader()
+    expect(highlightedParagraph(wrapper)).toBe('目标一')
+  })
+
+  it('偏移**越过整章**（书变短了）⇒ 同样退回文本搜索，不画一段空高亮', async () => {
+    m.listAnnotations.mockResolvedValue({
+      items: [anno({ start_off: 20, end_off: 25 })],
+    })
+    const { wrapper } = await mountReader()
+    expect(highlightedParagraph(wrapper)).toBe('目标一')
   })
 })

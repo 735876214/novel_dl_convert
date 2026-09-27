@@ -270,7 +270,25 @@ def init():
                 color      TEXT NOT NULL DEFAULT 'yellow',
                 style      TEXT NOT NULL DEFAULT 'highlight',
                 note       TEXT NOT NULL DEFAULT '',
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                -- 位置锚（第 63 期 6/6）。**两列是两回事，别合并**：
+                --   `anchor` 是**来源原生**的位置标识（KOReader 的 XPointer、Kobo 的 locator），
+                --     本项目**解析不了它** —— 我们没有 KOReader 那套排版，同一个
+                --     `/body/DocFragment[3]/body/div/p[5]` 在我们的 DOM 上落不到同一段文字上。
+                --     它只用于两件事：导入去重、给用户看这条是哪来的。
+                --   `start_off`/`end_off` 是**本应用章内字符偏移**（半开区间 `[起, 止)`），
+                --     由阅读器自己算，所以**真能定位**：同章重复的一句话靠它才不会高亮错那一处。
+                -- -1 = 无锚 / '' = 无原生标识。**不用 0 当哨兵** —— 0 是「章首」这个合法偏移。
+                anchor     TEXT NOT NULL DEFAULT '',
+                start_off  INTEGER NOT NULL DEFAULT -1,
+                end_off    INTEGER NOT NULL DEFAULT -1,
+                -- 来源给的是章节**标题**时存这里（设备批注），本项目自己写的批注留空。
+                -- 为什么要有它：`chapter` 是本项目的**章节序号**，而设备只知道标题
+                -- （KOReader 的 `chapter` 字段是 `getTocTitleByPage` 的结果）。拿标题
+                -- 去填序号只能是猜 —— 界面照 `chapter+1` 渲染出「第 1 章」就是**编造**。
+                -- 所以：`chapter = -1` 表示「序号未知」（与锚的 -1 同一套约定），
+                -- 此时界面显示这个标题、也不给「跳转到该章」的链接。
+                chapter_title TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_anno_book ON annotations(book_id);
             -- 书签（第 34 期）：软删除语义与批注**同构**（删除 = 移入垃圾桶写 deleted_at，
@@ -788,6 +806,28 @@ def init():
         # 'highlight'，读时无需额外补偿；该列不加 book_id，不影响 remap 契约。
         if acols and "style" not in acols:
             c.execute("ALTER TABLE annotations ADD COLUMN style TEXT NOT NULL DEFAULT 'highlight'")
+        # 第 63 期（6/6）：annotations 补位置锚三列。存量行全部回落 ''/-1/-1 ——
+        # 它们的**离线锚补不回来**（当时根本没有记），界面如实显示「按文本定位」，
+        # 高亮继续走既有的「搜索首个匹配」回落。不假装知道、也不回填一个猜的偏移。
+        #
+        # ⚠️ **刻意不加唯一索引**。看起来 `(book_id, origin, anchor)` 很该唯一（导入去重要用），
+        # 但那会精确复刻 bookmarks 那个坑（见 :func:`_remap_bookmarks`）：
+        # remap 的「目标已有数据」探测**带着 `deleted_at=0`**（:data:`REMAP_PROBE_FILTER`），
+        # 所以目标书上的**墓碑对它不可见** —— 整体 UPDATE 撞上唯一约束 → 异常被外层
+        # `except` 吞成「搬了 0 行」→ **整本书的批注静默丢失**。批注比书签更糟：
+        # 书签有墓碑可恢复，批注丢了就是丢了。
+        # 去重改在 :func:`import_annotations` 里用 SELECT 做（应用层 upsert），
+        # 代价是要自己保证幂等，收益是 remap 这条路径**不会**多出一个静默失效点。
+        if acols and "anchor" not in acols:
+            c.execute("ALTER TABLE annotations ADD COLUMN anchor TEXT NOT NULL DEFAULT ''")
+        if acols and "start_off" not in acols:
+            c.execute("ALTER TABLE annotations ADD COLUMN start_off INTEGER NOT NULL DEFAULT -1")
+        if acols and "end_off" not in acols:
+            c.execute("ALTER TABLE annotations ADD COLUMN end_off INTEGER NOT NULL DEFAULT -1")
+        # 章节标题列（同上）。存量行回落 '' —— 「没有标题」正是它们的真实状态：
+        # 本项目自己写的批注只知道序号，界面照旧显示「第 N 章」。
+        if acols and "chapter_title" not in acols:
+            c.execute("ALTER TABLE annotations ADD COLUMN chapter_title TEXT NOT NULL DEFAULT ''")
         # 第 47 期：collections 补 updated_at（最后修改时间），供收藏夹总览展示。
         # 存量行回填为 created_at（首次创建即最后一次改动），与加列前语义一致。
         ccols = {r["name"] for r in c.execute("PRAGMA table_info(collections)")}
@@ -1116,27 +1156,157 @@ def set_progress(book_id: str, locator: int, percent: float, cfi: str = "",
 
 # ---------------- annotations ----------------
 
+#: 批注的列清单（第 63 期 6/6 起含位置锚三列）。新增列请只改**这一处** ——
+#: 三个 SELECT 原先各手抄了一遍清单，漏改一处的表现是**静默**的：列读不出来、
+#: 前端回落成「按文本定位」，看起来只是「这条锚丢了」，没人会想到是查询少了一列。
+_ANNO_BASE = ("quote, color, note, created_at, origin, style, "
+              "anchor, start_off, end_off, chapter_title")
+#: 单书用（与改动前一致的形状：不含 book_id / deleted_at）
+_ANNO_COLS = "id, chapter, " + _ANNO_BASE
+#: 总览 / 垃圾桶 / 按锚查找用：多要 ``book_id``（跨书）与 ``deleted_at``（分档视图与墓碑判定）
+_ANNO_COLS_FULL = "id, book_id, chapter, " + _ANNO_BASE + ", deleted_at"
+
+
 def list_annotations(book_id: str) -> list:
     c = _connect()
     rows = c.execute(
-        "SELECT id, chapter, quote, color, note, created_at, origin, style "
-        "FROM annotations WHERE book_id=? AND deleted_at=0 ORDER BY chapter, created_at",
+        "SELECT %s FROM annotations WHERE book_id=? AND deleted_at=0 "
+        "ORDER BY chapter, created_at" % _ANNO_COLS,
         (book_id,),
     ).fetchall()
     return [dict(r) for r in rows]
 
 
 def add_annotation(book_id: str, chapter: int, quote: str, color: str, note: str,
-                   origin: str = "web", style: str = "highlight") -> int:
+                   origin: str = "web", style: str = "highlight",
+                   anchor: str = "", start_off: int = -1, end_off: int = -1,
+                   chapter_title: str = "") -> int:
+    """新增一条批注。
+
+    ``anchor`` / ``start_off`` / ``end_off`` / ``chapter_title`` 是第 63 期（6/6）的位置锚，
+    四个都有默认值 ⇒ 既有调用点不必改。含义见建表处的注释：``anchor`` 是来源原生标识
+    （**定位不了**，只用于去重与溯源），``start_off``/``end_off`` 是本应用章内字符偏移
+    （**真能定位**），``chapter_title`` 只在 ``chapter < 0``（序号未知）时有意义。
+    """
     c = _connect()
     with _lock:
         cur = c.execute(
-            "INSERT INTO annotations(book_id, chapter, quote, color, note, created_at, origin, style) "
-            "VALUES(?,?,?,?,?,?,?,?)",
-            (book_id, chapter, quote, color, note, time.time(), origin, style),
+            "INSERT INTO annotations(book_id, chapter, quote, color, note, created_at, origin, "
+            "style, anchor, start_off, end_off, chapter_title) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (book_id, chapter, quote, color, note, time.time(), origin,
+             style, anchor, int(start_off), int(end_off), str(chapter_title or "")),
         )
         c.commit()
         return cur.lastrowid or 0
+
+
+def find_annotation_by_anchor(book_id: str, origin: str, anchor: str):
+    """按 ``(book_id, origin, anchor)`` 找一条批注，**含垃圾桶里的**；没有返回 ``None``。
+
+    **含墓碑是刻意的**：设备反复上传同一批批注，其中一条用户在本项目里删过 ——
+    导入时若只看活跃行，会把它**复活**成一条新批注，用户删了又回来。
+    调用方拿到墓碑应当**跳过**（不导入、不复活），返回完整行让调用方自己决定。
+
+    ``anchor`` 为空串时一律返回 ``None``：空锚不构成身份，拿它去重会把
+    「两条都没有锚的批注」判成同一条。
+    """
+    if not str(anchor or "").strip():
+        return None
+    c = _connect()
+    row = c.execute(
+        "SELECT %s FROM annotations WHERE book_id=? AND origin=? AND anchor=? LIMIT 1"
+        % _ANNO_COLS_FULL,
+        (book_id, origin, str(anchor)),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def import_annotations(book_id: str, origin: str, items: list) -> dict:
+    """**幂等**导入设备回传的一批批注。
+
+    返回 ``{added, updated, unchanged, trashed, no_anchor, no_quote}`` —— 五个计数
+    **分开记不合并**：各自对应一种「这次同步为什么没多出一条」，合并了出问题就看不出来。
+    ``added + updated + unchanged + trashed + no_anchor + no_quote == len(items)``
+    （有测试按这条式子钉住，它同时也是「没有哪一类被静默吞掉」的证明）。
+
+    协议无关：调用方把设备报文解析成下面这几个键再进来，这里只管
+    「同一批数据反复上传要收敛成同一份」。``items`` 里每一项认的键：
+    ``anchor``（**必填**，无锚不收）、``quote``（必填）、``note`` / ``color`` / ``style``
+    / ``created_at``（可选，各有默认）、``start_off`` / ``end_off``（可选，默认 -1）、
+    ``chapter``（默认 **-1 = 序号未知**，不是 0）、``chapter_title``（序号未知时的落点）。
+
+    ## 幂等靠什么
+
+    靠 ``(book_id, origin, anchor)`` 这个**应用层**身份（不是唯一索引 —— 为什么不建索引
+    见 :func:`_remap_bookmarks` 与建表处那条注释：会复刻书签那个「搬了 0 行」的静默丢失）。
+    于是每一条进来先查一次 :func:`find_annotation_by_anchor`，查得到就按下面分派。
+
+    ## 四种不需要写库/写库的情形，都是刻意的
+
+    - **没有锚 → 不收**（``no_anchor``）。空锚不构成身份，收进来就等于「每次同步都多一份
+      副本」，且**每一次都成功**，没有任何报错。宁可少收（用户可以手抄一条），
+      不可重复堆积。
+    - **命中墓碑 → 不收**（``trashed``）。用户在本项目里把这条删了，设备端并不知道；
+      再导一次它就回来了 —— 那是「删了又回来」，比第一次就没导入更让人恼火。
+    - **命中活跃且内容一字不差 → 不写**（``unchanged``）。这是最常见的一种（设备每次
+      传全量），走 UPDATE 会白写一遍并刷新行版本，还会让「最近修改」这类展示失真。
+    - **命中活跃但内容变了 → 更新**（``updated``）。用户在设备上改过笔记。
+      ⚠️ **只更新内容，不动 ``created_at``** —— 那是「这条高亮是什么时候划的」，
+      是设备的事实；改成导入时刻会让「按月份」分组和历史时间线全部错位。
+    """
+    # 五个计数分开记，**不合并**：它们各自对应一种「这次同步为什么没多出一条」，
+    # 合起来就只剩一个数字，出问题时看不出是没锚、是被删过、还是本来就一样。
+    out = {"added": 0, "updated": 0, "unchanged": 0, "trashed": 0,
+           "no_anchor": 0, "no_quote": 0}
+    c = _connect()
+    with _lock:
+        for raw in items or []:
+            it = raw if isinstance(raw, dict) else {}
+            anchor = str(it.get("anchor") or "").strip()
+            if not anchor:
+                out["no_anchor"] += 1
+                continue
+            quote = str(it.get("quote") or "").strip()
+            if not quote:
+                # 没有引文的「批注」没有可显示的内容（纯笔记也带引文 —— 本项目
+                # 把纯笔记建成 style='note'，不是 quote 为空）。跳过，不建空壳。
+                out["no_quote"] += 1
+                continue
+            note = str(it.get("note") or "")
+            color = str(it.get("color") or "yellow")
+            style = str(it.get("style") or "highlight")
+            # `chapter` 缺省 **-1**（序号未知），不是 0 —— 0 是「第一章」这个合法序号，
+            # 兜成 0 会让界面把每条设备批注都渲染成「第 1 章」，而设备根本没这么说。
+            # 设备只给得出标题，那个走 `chapter_title`（见建表处）。
+            chapter = int(it.get("chapter", -1))
+            title = str(it.get("chapter_title") or "")
+            row = find_annotation_by_anchor(book_id, origin, anchor)
+            if row is not None:
+                if float(row.get("deleted_at") or 0) != 0:
+                    out["trashed"] += 1
+                    continue
+                if (row.get("quote") == quote and row.get("note") == note
+                        and row.get("color") == color and row.get("style") == style):
+                    out["unchanged"] += 1
+                    continue
+                c.execute(
+                    "UPDATE annotations SET quote=?, note=?, color=?, style=? WHERE id=?",
+                    (quote, note, color, style, row["id"]),
+                )
+                out["updated"] += 1
+                continue
+            created = it.get("created_at")
+            c.execute(
+                "INSERT INTO annotations(book_id, chapter, quote, color, note, created_at, "
+                "origin, style, anchor, start_off, end_off, chapter_title) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (book_id, chapter, quote, color, note,
+                 float(created) if created else time.time(), origin, style,
+                 anchor, int(it.get("start_off", -1)), int(it.get("end_off", -1)), title),
+            )
+            out["added"] += 1
+        c.commit()
+    return out
 
 
 def delete_annotation(book_id: str, anno_id: int) -> int:
@@ -1191,8 +1361,7 @@ def trashed_annotations(book_id: str | None = None) -> list:
     传 ``book_id`` 则只看某本书。``include_trashed`` 的总览查询也走这里。
     """
     c = _connect()
-    sql = ("SELECT id, book_id, chapter, quote, color, note, created_at, origin, deleted_at, style "
-           "FROM annotations WHERE deleted_at!=0")
+    sql = ("SELECT %s FROM annotations WHERE deleted_at!=0" % _ANNO_COLS_FULL)
     args: tuple = ()
     if book_id is not None:
         sql += " AND book_id=?"
@@ -1605,8 +1774,7 @@ def all_annotations(include_trashed: bool = False) -> list:
     无参调用的几处（图书详情「批注」tab、每日划线 widget）不该看到已丢弃的条目。
     """
     c = _connect()
-    sql = ("SELECT id, book_id, chapter, quote, color, note, created_at, origin, deleted_at, style "
-           "FROM annotations")
+    sql = "SELECT %s FROM annotations" % _ANNO_COLS_FULL
     if not include_trashed:
         sql += " WHERE deleted_at=0"
     rows = c.execute(sql + " ORDER BY created_at DESC").fetchall()
