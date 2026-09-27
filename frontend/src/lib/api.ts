@@ -1647,6 +1647,33 @@ export interface BookMetadataFields {
   tags: string[]
   /** 演播者（第 53 期）；多值列表，写入时去重且保序 */
   narrators: string[]
+  /** 副标题（第 63 期）。**不计入元数据完整度分**（与上游口径一致） */
+  subtitle: string
+  // ---- 提供商 ID（第 63 期，对齐上游的 CATALOG 组）----
+  //
+  // ⚠️ 这些字段**没有 OPF 对应物** —— 与 `narrators` 同一种待遇：经 `meta_override`
+  // 落库、不写回书文件。所以「恢复在线」对它们 = 回落到在线抓取值、没有就为空。
+  //
+  // 只有 9 家源有字段：另外 4 家（comicvine / ranobedb / librofm / lubimyczytac）
+  // 抓到的只是页面 URL，宁可留空也不把 URL 记成一个叫 `*_id` 的字段。
+  /** Google Books 卷 ID（形如 `zyTCAlFPjgYC`） */
+  google_books_id: string
+  /** Goodreads 书目 ID（数字） */
+  goodreads_id: string
+  /** Amazon ASIN（10 位） */
+  amazon_id: string
+  /** Hardcover 书目 ID（数字） */
+  hardcover_id: string
+  /** Open Library work key（形如 `/works/OL1234W`） */
+  openlibrary_id: string
+  /** iTunes trackId / collectionId（数字） */
+  itunes_id: string
+  /** Kobo 书目 slug（Kobo 不对外给数字 ID，它用详情页 URL 末段定位） */
+  kobo_id: string
+  /** Aladin itemId */
+  aladin_id: string
+  /** Audible ASIN（audible 与 audnexus 两家同填这一个） */
+  audible_id: string
 }
 
 /** 单字段的分层状态（编辑器渲染「已本地修改」徽标 / 恢复在线按钮用） */

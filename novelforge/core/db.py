@@ -3144,7 +3144,9 @@ META_CLEAR = "-"
 #: （db 不能 import fileops —— 后者 import 前者会成环，故此处显式列一遍），
 #: 三者一致性有测试钉住（``tests/test_metadata_server_side.py``）。
 _CLEARABLE = ("title", "author", "series", "series_index", "date",
-              "publisher", "language", "description", "tags", "isbn", "narrators")
+              "publisher", "language", "description", "tags", "isbn", "narrators",
+              "subtitle", "google_books_id", "goodreads_id", "amazon_id", "hardcover_id",
+              "openlibrary_id", "itunes_id", "kobo_id", "aladin_id", "audible_id")
 
 
 def clearable(field: str) -> bool:
@@ -3584,7 +3586,9 @@ def cover_ids(bids) -> set:
 #
 #: 服务端可参与合并的字段（对齐 ``fileops.METADATA_FIELDS``，无封面）
 _META_FIELDS = ("title", "author", "series", "series_index", "date",
-                "publisher", "language", "description", "tags", "isbn", "narrators")
+                "publisher", "language", "description", "tags", "isbn", "narrators",
+                "subtitle", "google_books_id", "goodreads_id", "amazon_id", "hardcover_id",
+                "openlibrary_id", "itunes_id", "kobo_id", "aladin_id", "audible_id")
 #: DB 字段名 → 书对象键（``date`` 在书目里叫 ``year``）
 _META_BOOK_KEY = {"date": "year"}
 

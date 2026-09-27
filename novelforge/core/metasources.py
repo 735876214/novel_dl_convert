@@ -637,12 +637,66 @@ def score_candidate(want_title: str, want_author: str, cand: dict) -> float:
     return round(0.7 * t_score + 0.3 * a_score, 4)
 
 
+#: 源 id → 它自己那条记录的**提供商 ID** 落在哪个元数据字段。
+#:
+#: ⚠️ 只有**真能拿到该源标识**的源才在这里。不在这里的 4 家（comicvine / ranobedb /
+#: librofm / lubimyczytac）不是漏了 —— 它们的 ``raw_id`` 今天只是个**定位串**
+#: （页面 URL），而本项目没有给它们开字段。「宁可少给不可错给」：把 URL 塞进一个叫
+#: ``*_id`` 的字段，比留空更糟。将来要收，先给它们开字段、再从 URL 里抠真 ID。
+#:
+#: ``audnexus`` 与 ``audible`` 同填 ``audible_id`` —— 两家的同一个 ASIN，
+#: 没有区分的意义（谁先命中谁写，合并时按信任表顺序）。
+SOURCE_ID_FIELD = {
+    "googlebooks": "google_books_id",
+    "goodreads": "goodreads_id",
+    "amazon": "amazon_id",
+    "hardcover": "hardcover_id",
+    "openlibrary": "openlibrary_id",
+    "itunes": "itunes_id",
+    "kobo": "kobo_id",
+    "aladin": "aladin_id",
+    "audible": "audible_id",
+    "audnexus": "audible_id",
+}
+
+
+def _goodreads_id(path: str) -> str:
+    """``/book/show/12345.三体`` → ``12345``。
+
+    Goodreads 的规范 ID 就是 URL 里那串数字，抓到的 ``href`` 是它唯一的载体。
+    抠不出来（Goodreads 偶尔给 ``/book/show/三体`` 这种老式路径）就**留空**，
+    不拿路径原样充数。
+    """
+    m = re.search(r"/book/show/(\d+)", _clean(path))
+    return m.group(1) if m else ""
+
+
+def _kobo_id(d: dict) -> str:
+    """Kobo 的标识是它详情页 URL 末段那个 slug（Kobo 不对外给数字 ID）。
+
+    取 ``slug`` 字段优先；只有 URL 时抠末段。**URL 抠不出来就留空**。
+    """
+    slug = _clean(d.get("slug"))
+    if slug:
+        return slug
+    url = _clean(d.get("url") or d.get("href"))
+    m = re.search(r"/(?:ebook|audiobook)/([^/?#]+)", url)
+    return m.group(1) if m else ""
+
+
 def _entry(source: str, **kw) -> dict:
     """统一候选结构 —— 前端与写回逻辑都只认这一种形状。
 
     ⚠️ 文本字段一律走 :func:`_strip_html`（实测 iTunes 的简介带 ``<b>`` 标签，
     落库会把标签带进书目）；`tags` 里也见过带标签的值，同样处理。
+
+    第 63 期起多带一个 ``provider_id``：**必须是该源自己那条记录的标识**，
+    由 fetcher 显式传（不要拿 ``raw_id`` 顶替 —— 后者对几家源是 URL）。
+    它经 :data:`SOURCE_ID_FIELD` 落到对应字段；源没有对应字段就整条丢掉，
+    绝不硬塞进别的字段。
     """
+    pid = _clean(kw.get("provider_id"))
+    field = SOURCE_ID_FIELD.get(source)
     return {
         "source": source,
         "title": _strip_html(kw.get("title")),
@@ -655,6 +709,9 @@ def _entry(source: str, **kw) -> dict:
         "tags": [t for t in (_strip_html(x) for x in (kw.get("tags") or [])) if t][:8],
         "cover_url": _clean(kw.get("cover_url")),
         "raw_id": _clean(kw.get("raw_id")),
+        #: 该源那条记录的标识 → 字段名由 SOURCE_ID_FIELD 决定；无字段的源恒为空
+        "provider_field": field or "",
+        "provider_id": pid if field else "",
         "score": 0.0,
     }
 
@@ -678,6 +735,8 @@ def _ol_entry(d: dict) -> dict:
         tags=_split_subjects(d.get("subject")),
         cover_url=OPENLIBRARY_COVER.format(cover=cover) if cover else "",
         raw_id=d.get("key") or "",
+        # OL 的 work key 本身就是它的标识（形如 /works/OL1234W）
+        provider_id=d.get("key") or "",
     )
 
 
@@ -701,6 +760,7 @@ def _gb_entry(it: dict) -> dict:
         # Google 的缩略图常是 http 且带 zoom 参数；统一成 https 并放大到最大尺寸
         cover_url=img.replace("http://", "https://").replace("&zoom=1", "&zoom=3") if img else "",
         raw_id=it.get("id") or "",
+        provider_id=it.get("id") or "",
     )
 
 
@@ -758,6 +818,7 @@ def _itunes_entry(it: dict, size: str = "1000x1000") -> dict:
         tags=it.get("genres") or [],
         cover_url=art.replace("100x100", size) if art else "",
         raw_id=it.get("trackId") or it.get("collectionId") or "",
+        provider_id=it.get("trackId") or it.get("collectionId") or "",
     )
 
 
@@ -790,6 +851,7 @@ def _audnexus_entry(d: dict) -> dict:
         tags=genres,
         cover_url=d.get("image") or d.get("imageUrl") or "",
         raw_id=d.get("asin") or "",
+        provider_id=d.get("asin") or "",
     )
 
 
@@ -854,6 +916,7 @@ def _search_ranobedb(title: str, author: str, limit: int, opts: dict) -> list:
 _HARDCOVER_Q = """
 query Search($q: String!, $n: Int!) {
   books(where: {title: {_ilike: $q}}, limit: $n, order_by: {users_count: desc}) {
+    id
     title
     description
     release_date
@@ -878,6 +941,9 @@ def _hardcover_entry(b: dict) -> dict:
         description=b.get("description"),
         cover_url=((b.get("image") or {}).get("url") or ""),
         raw_id=b.get("slug") or "",
+        # Hardcover 的规范 ID 是数字 ``id``（第 63 期把它加进 GraphQL 选择集）；
+        # ``slug`` 是另一回事，只留在 raw_id 里当定位串。
+        provider_id=str(b.get("id") or ""),
     )
 
 
@@ -934,6 +1000,7 @@ def _aladin_entry(it: dict) -> dict:
         tags=[t for t in _clean(it.get("categoryName")).split(">") if t],
         cover_url=it.get("cover"),
         raw_id=it.get("itemId") or "",
+        provider_id=it.get("itemId") or "",
     )
 
 
@@ -980,7 +1047,8 @@ def _search_amazon(title: str, author: str, limit: int, opts: dict) -> list:
         cover = re.search(r'class="s-image"[^>]*src="([^"]+)"', block) \
             or re.search(r'src="([^"]+)"[^>]*class="s-image"', block)
         out.append(_entry("amazon", title=name, author=a.group(1) if a else "",
-                          cover_url=cover.group(1) if cover else "", raw_id=asin))
+                          cover_url=cover.group(1) if cover else "", raw_id=asin,
+                          provider_id=asin))
         if len(out) >= limit:
             break
     return out
@@ -995,8 +1063,9 @@ def _search_goodreads(title: str, author: str, limit: int, opts: dict) -> list:
             continue
         a = re.search(r'class="authorName"[^>]*>\s*<span[^>]*>([^<]+)</span>', block)
         u = re.search(r'href="(/book/show/[^"]+)"', block)
+        href = u.group(1) if u else ""
         out.append(_entry("goodreads", title=t.group(1), author=a.group(1) if a else "",
-                          raw_id=(u.group(1) if u else "")))
+                          raw_id=href, provider_id=_goodreads_id(href)))
         if len(out) >= limit:
             break
     return out
@@ -1040,7 +1109,8 @@ def _search_kobo(title: str, author: str, limit: int, opts: dict) -> list:
                           publisher=_clean(d.get("publisher")),
                           description=_clean(d.get("description")),
                           cover_url=_clean(d.get("imageUrl") or d.get("cover")),
-                          raw_id=_clean(d.get("url") or d.get("slug"))))
+                          raw_id=_clean(d.get("url") or d.get("slug")),
+                          provider_id=_kobo_id(d)))
         if len(out) >= limit:
             break
     return out
@@ -1074,7 +1144,8 @@ def _search_audible(title: str, author: str, limit: int, opts: dict) -> list:
                           description=p.get("publisher_summary"),
                           tags=[s.get("title") for s in (p.get("series") or [])
                                 if isinstance(s, dict) and s.get("title")],
-                          cover_url=cover, raw_id=p.get("asin") or ""))
+                          cover_url=cover, raw_id=p.get("asin") or "",
+                          provider_id=p.get("asin") or ""))
     return out
 
 

@@ -36,9 +36,32 @@ _COVER_TIMEOUT = httpx.Timeout(20.0, connect=8.0)
 _CURRENT = {
     "title": "title", "author": "author", "publisher": "publisher", "date": "year",
     "language": "language", "isbn": "isbn", "description": "description", "tags": "tags",
+    # 第 63 期：副标题与 9 个提供商 ID —— 书对象里的键与字段名同名，
+    # 且**没有 OPF 原值**（``metastore._opf_value`` 会回落到空串，「恢复在线」对它们
+    # 就是「回落到在线抓取值、没有在线值即为空」，与第 22 期非 EPUB 的语义一致）。
+    "subtitle": "subtitle",
+    **{f: f for f in fileops.PROVIDER_ID_FIELDS},
 }
 #: 同上：字段名 → 候选里的键（候选结构里年份叫 year）
+#: ⚠️ 提供商 ID **不从这个键取值** —— 见 :func:`_cand_value`。
 _VALUE_KEYS = dict(_CURRENT)
+
+#: 提供商 ID 字段集合（加速判别；值取自 `fileops` 那张单一真源表）
+_PROVIDER_FIELDS = frozenset(fileops.PROVIDER_ID_FIELDS)
+
+
+def _cand_value(cand: dict, field: str, key: str) -> str:
+    """候选里取某字段的值。
+
+    提供商 ID 走的**不是**「候选的一个字段」，而是「**这一家源自己那条记录的标识**」：
+    候选带着 ``provider_field``（它属于哪个字段）与 ``provider_id``。所以只有当
+    ``provider_field == field`` 时才有值 —— Google Books 的候选不可能给出一个
+    Goodreads ID，硬填就是造假。这也是 :data:`FIELD_TRUST` 对它们没有意义的原因：
+    每个提供商 ID 字段**有且只有一个可能的来源**，不存在「更可信的源」这个选择。
+    """
+    if field in _PROVIDER_FIELDS:
+        return str(cand.get("provider_id") or "") if cand.get("provider_field") == field else ""
+    return str(cand.get(key) or "").strip()
 #: 第 8 期：默认改为「在线优先覆盖本地」——抓取来的元数据默认写回（覆盖 OPF 原值），
 #: 但**用户显式改过的字段（meta_override）受保护**，不会被再次抓取冲掉（见 plan/apply）。
 #: 仍可在配置的 `fields` 里逐项改回 `fill_only` / `skip`。
@@ -66,6 +89,10 @@ MERGE_MAX_TAGS = 8
 #: ⚠️ 键必须是**字段名**（与 `_VALUE_KEYS` 的键一致），不是书对象里的键 ——
 #: 「年份」的字段名是 `date`（书目里才叫 `year`）。写成 `year` 不会报错，只会**静默失效**
 #: （信任表查不到 ⇒ 退回按分数排），所以有专门测试钉住它。
+#:
+#: 表里**没有**提供商 ID（第 63 期）：那张表的语义是「哪个源对这个字段更可信」，
+#: 而每个提供商 ID 字段有且只有一个可能的来源（见 :func:`_cand_value`）——
+#: 没有可挑选的余地，写进来只会让人以为存在第二来源。
 FIELD_TRUST = {
     "date": ("openlibrary",),
     "language": ("openlibrary",),
@@ -111,8 +138,14 @@ FINALIZE_PRESETS = {
     "embedded_only": "仅用内嵌（不下载在线封面与远程字段）",
 }
 #: `fields` 字典包含的字段键（与 config.DEFAULTS.metadata_fetch.fields 一致）
-_FINALIZE_FIELDS = ["title", "author", "publisher", "year", "language",
-                    "isbn", "description", "tags", "cover"]
+#:
+#: ⚠️ 第 63 期起含副标题与 9 个提供商 ID。它们**必须**在这里 ——
+#: ``preset_to_fields("embedded_only")`` 是把整张表写成 ``skip``，
+#: 漏了新字段就会出现「选了『仅用内嵌（不下载远程字段）』，却仍然写回 9 个在线 ID」
+#: 的自相矛盾。漏一个字段的表现是**静默的**：预设页说一套、抓取做另一套。
+_FINALIZE_FIELDS = ["title", "author", "publisher", "date", "language",
+                    "isbn", "description", "tags", "cover",
+                    "subtitle", *fileops.PROVIDER_ID_FIELDS]
 
 
 def preset_to_fields(preset: str) -> dict:
@@ -132,6 +165,27 @@ def preset_to_fields(preset: str) -> dict:
     return {k: mode for k in _FINALIZE_FIELDS}
 
 
+def _field_policy(b_policy: dict, field: str) -> str:
+    """某字段的生效写入策略（``b_policy`` = 用户配置的 ``metadata_fetch.fields``）。
+
+    ⚠️ **老配置里没有新字段的键**（第 63 期加了副标题与 9 个提供商 ID）时，
+    不能一律按 :data:`DEFAULT_POLICY` 处理：``config.load_config`` 对 ``fields``
+    是**整体替换**，用户以前存过的「仅用内嵌（不下载远程字段）」预设里只有当时
+    那 9 个键 —— 新字段全按 ``overwrite`` 走的话，那个预设**静默作废**
+    （用户明明选了不下载远程字段，却仍然写回 9 个在线 ID）。
+
+    预设的写法是**把整张表写成同一个档**，所以「整张表的值全相同」就精确还原了
+    它的意图；表里值不一致（用户逐字段调过）就退回 ``DEFAULT_POLICY``，不猜。
+    """
+    pol = b_policy.get(field)
+    if pol:
+        return str(pol)
+    vals = {str(v) for v in b_policy.values()}
+    if len(vals) == 1:
+        return vals.pop()
+    return DEFAULT_POLICY
+
+
 def _current_value(book: dict, field: str):
     if field == "tags":
         return list(book.get("tags") or [])
@@ -148,7 +202,7 @@ def _candidate_values(cand: dict, blocklist: set) -> dict:
             # 去重保序（题材顺序有展示意义）
             out[field] = list(dict.fromkeys(vals))[:8]
         else:
-            out[field] = str(cand.get(key) or "").strip()
+            out[field] = _cand_value(cand, field, key)
     return out
 
 
@@ -211,7 +265,7 @@ def merge_values(cands: list, blocklist: set) -> tuple:
                                   "score": float((first or {}).get("score") or 0.0)}
             continue
         for c in order(field):
-            v = str(c.get(key) or "").strip()
+            v = _cand_value(c, field, key)
             if v:
                 values[field] = v
                 origin[field] = {"source": str(c.get("source") or ""),
@@ -360,7 +414,7 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         # 自定义字段先放进来（键空间不同：它们不是 OPF 字段名，必不与下面重名）
         changes = dict(cust_changes)
         for field, value in vals.items():
-            pol = b_policy.get(field) or DEFAULT_POLICY
+            pol = _field_policy(b_policy, field)
             if pol == "skip" or not value:
                 continue
             # 用户改过的字段受保护：抓取不覆盖，否则会冲掉本地修正
@@ -385,7 +439,7 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
                               "score": meta_src.get("score") or best["score"]}
         base["changes"] = changes
 
-        cover_pol = b_policy.get("cover") or DEFAULT_POLICY
+        cover_pol = _field_policy(b_policy, "cover")
         # 封面锁用独立键 `cover`（第 35 期）：策略说覆盖也没用，锁在就不动它
         if cover_pick and cover_pol != "skip" and db.LOCK_COVER not in locked:
             has = bool(b.get("has_cover"))

@@ -263,9 +263,31 @@ def plan_merge(kind: str, source: str, target: str, library_id=None) -> dict:
 
 # 可改写的字段全集。接口层据此校验，避免写进意料之外的东西。
 # 第 53 期新增 ``narrators``（与 tags 同构的列表字段，经 meta_override 落库、绝不写回文件）。
+#
+# ⚠️ 这张表是**元数据面的单一真源**：``metastore`` / ``server`` / ``metafetch`` /
+# ``publish`` 全部由它派生。db 那边因为不能 import 本模块（会成环）而手抄了两份
+# 同集合的字面量（``db._CLEARABLE`` / ``db._META_FIELDS``），三处必须同步，
+# 有测试钉住（``tests/test_metadata_server_side.py``）。
+#
+# 第 63 期新增 ``subtitle`` 与 9 个**提供商 ID**（对齐上游 Book Orbit 的 CATALOG 组）。
+# 这两类都**没有 OPF 对应物** —— 它们与 ``narrators`` 同一种待遇：经 meta_override
+# 落库、由 :func:`patch_opf_meta` 静默忽略（它只认下面那串 if/elif）。
+# 「恢复在线」对它们而言 = 回落到在线抓取值、没有在线值即为空（同第 22 期非 EPUB 的语义）。
+PROVIDER_ID_FIELDS = (
+    "google_books_id",     # Google Books 卷 ID（形如 zyTCAlFPjgYC）
+    "goodreads_id",        # Goodreads 书目 ID（数字，从 /book/show/<id> 抠出）
+    "amazon_id",           # Amazon ASIN（10 位）
+    "hardcover_id",        # Hardcover 书目 ID（数字）
+    "openlibrary_id",      # Open Library work key（形如 /works/OL1234W）
+    "itunes_id",           # iTunes trackId / collectionId（数字）
+    "kobo_id",             # Kobo 书目 slug（Kobo 页面用 /ebook/<slug> 定位，无数字 ID）
+    "aladin_id",           # Aladin itemId
+    "audible_id",          # Audible ASIN（audible 与 audnexus 两家同填这一个）
+)
 METADATA_FIELDS = (
     "title", "author", "series", "series_index",
     "date", "publisher", "language", "description", "tags", "isbn", "narrators",
+    "subtitle", *PROVIDER_ID_FIELDS,
 )
 
 # 单值字段 → OPF 元素。集中成一张表，而不是每个字段各写一段正则。

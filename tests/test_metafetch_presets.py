@@ -4,10 +4,52 @@ AUTO-FINALIZE 的「合并模式」在 Book Dock 页以预设呈现，落库时�
 metadata_fetch.fields 的逐字段策略；本测试钉住这层映射，确保 preset 名字变了
 行为也不飘。
 """
-from novelforge.core import metafetch
+from novelforge import config
+from novelforge.core import fileops, metafetch
 
-EXPECTED_KEYS = ["title", "author", "publisher", "year", "language",
-                 "isbn", "description", "tags", "cover"]
+#: 逐字列出，**不用** `set(metafetch._FINALIZE_FIELDS)` 生成 —— 那等于拿被测对象
+#: 断言它自己。这里要的是「加字段必须有意改一次这张表」。
+#: ⚠️ 出版年写 **`date`**（字段名）。第 63 期之前这里（以及 `_FINALIZE_FIELDS` /
+#: `config` 默认值）写的是 `year` —— 那是**书对象**里的名字，`metafetch.plan` 是按
+#: 字段名查策略的，于是预设里「出版年」那一档**从来没生效过**（查不到 ⇒ 回落默认），
+#: 而设置页的逐字段下拉写的是 `date`、一直是对的。两套键空间并存了整整若干期。
+EXPECTED_KEYS = ["title", "author", "publisher", "date", "language",
+                 "isbn", "description", "tags", "cover",
+                 "subtitle", *fileops.PROVIDER_ID_FIELDS]
+
+
+def test_每个策略键都必须是引擎真的会去查的字段名():
+    """策略表的键**必须**是 `metafetch._VALUE_KEYS` 的键（= `plan` 查策略用的名字），
+    外加封面那个独立键 `cover`。
+
+    写成书对象里的名字（`year` 而不是 `date`）不会报错、只会**静默失效**：
+    `plan` 查不到 ⇒ 回落 `DEFAULT_POLICY` ⇒ 用户设的那一档等于没设。
+    这条就是当年 `year`/`date` 两套键空间并存若干期的护栏。
+    """
+    valid = set(metafetch._VALUE_KEYS) | {"cover"}
+    assert set(metafetch._FINALIZE_FIELDS) <= valid, \
+        set(metafetch._FINALIZE_FIELDS) - valid
+    assert "date" in metafetch._FINALIZE_FIELDS and "year" not in metafetch._FINALIZE_FIELDS
+
+
+def test_预设对出版年真的生效():
+    """端到端复述上一条的**行为面**：预设说「不修改」，`plan` 就必须真的不动出版年。
+
+    只看键名对不对是不够的（键对了但 `plan` 读别处，照样失效）。
+    """
+    f = metafetch.preset_to_fields("embedded_only")
+    assert metafetch._field_policy(f, "date") == "skip"
+
+
+def test_引擎侧与配置侧的字段表必须同集合():
+    """两张手抄的表：`metafetch._FINALIZE_FIELDS`（引擎读策略）与
+    `config.DEFAULTS.metadata_fetch.fields`（新装用户的默认配置）。
+
+    漏一边的表现都是**静默的**：只加引擎侧 ⇒ 新字段没有默认策略（靠
+    `_field_policy` 兜底）；只加配置侧 ⇒ 那个键在 preset 展开时被丢掉。
+    """
+    assert set(metafetch._FINALIZE_FIELDS) == set(EXPECTED_KEYS)
+    assert set(config.DEFAULTS["metadata_fetch"]["fields"]) == set(EXPECTED_KEYS)
 
 
 def test_preset_overwrite_全字段覆盖():

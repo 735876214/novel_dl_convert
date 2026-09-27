@@ -8,6 +8,7 @@ import Icon from '@/components/ui/Icon.vue'
 import MetadataScoreCard from '@/components/MetadataScoreCard.vue'
 import { api, type CustomFieldDef, type MetadataConfigField, type MetadataHealthResult,
          type MetadataPlanItem, type MetadataProvider } from '@/lib/api'
+import { POLICY_FIELDS, policyLabel } from '@/lib/metadataFields'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
@@ -64,14 +65,16 @@ const meta = computed(() => SECTIONS[props.section] ?? { zh: '元数据', en: 'M
 const mf = computed<Record<string, any>>(() => (cfg.value as any)?.metadata_fetch ?? {})
 const has = (b: string) => meta.value.blocks.includes(b)
 
-/** 可写字段（与后端 fileops.METADATA_FIELDS 对齐；显示名给人看，键名给 OPF 用） */
-const FIELDS: Array<{ key: string; zh: string }> = [
-  { key: 'title', zh: '书名' }, { key: 'author', zh: '作者' },
-  { key: 'publisher', zh: '出版社' }, { key: 'date', zh: '出版年' },
-  { key: 'language', zh: '语言' }, { key: 'isbn', zh: 'ISBN' },
-  { key: 'description', zh: '简介' }, { key: 'tags', zh: '题材' },
-  { key: 'cover', zh: '封面' },
-]
+/**
+ * 可写字段（与后端 `metafetch._FINALIZE_FIELDS` / `config.DEFAULTS.metadata_fetch.fields`
+ * 对齐；显示名给人看，键名给引擎用）。
+ *
+ * ⚠️ 键必须是**后端字段名**：出版年是 `date`，不是书卡片上的 `year`。
+ * 这里一直是对的，但 Book Dock 那份抄成了 `year` —— 于是预设里「出版年」那一档
+ * 静默失效了若干个期（详见 `lib/metadataFields.ts` 的文件头）。
+ */
+const FIELDS: Array<{ key: string; zh: string }> =
+  POLICY_FIELDS.map((key) => ({ key, zh: policyLabel(key) }))
 /**
  * 字段写入策略。⚠️ 顺序与标注按**引擎真实默认**排：`metafetch.DEFAULT_POLICY = "overwrite"`
  * （第 8 期起改为「在线优先覆盖本地」，用户改过的字段另有保护），

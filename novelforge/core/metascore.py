@@ -10,7 +10,7 @@
     Core           title 14 · author 14 · has_cover 12            = 40
     Publishing     language 6 · publisher 7 · year 6 · pages 4    = 23
     Classification description 12 · tags 8                        = 20
-    Provider IDs   isbn 10                                        = 10
+    Provider IDs   isbn 5.5 · 9 个来源 ID × 0.5                   = 10
     Enrichment     series 4 · series_index 3                      =  7
     ------------------------------------------------------------------
     合计                                                          = 100
@@ -28,9 +28,25 @@
 与上游的差异（刻意且已标注）
 ----------------------------
 - 上游是 **24 个计分字段**（含大量 Provider 专有字段）；本项目只列**元数据管线真正能填**的
-  12 个 —— 凑成 24 只会得到一排永远 0 分、无法行动的行。
+  21 个 —— 凑成 24 只会得到一排永远 0 分、无法行动的行。
 - 上游把 **Series name / Series index 列为不计分**；本项目**计入 Enrichment**，
   因为系列信息决定 Komga 布局（见 core/komga.py）。页面上明确标注这条差异。
+
+第 63 期的权重调整（**会改变所有已展示的评分**，这是加计分字段的必然代价）
+--------------------------------------------------------------
+加进副标题与 9 个来源 ID 之后，``Provider IDs`` 组内重新分配，**组总分仍是 10**：
+
+- ``isbn`` 从 10.0 降到 **5.5**，让出 4.5 分给 9 个来源 ID（每个 0.5）；
+- 比例上对齐上游的取舍 —— 上游 ISBN-13 9.0% 是单个来源 ID（1.3%）的约 7 倍，
+  这里是 11 倍。**ISBN 仍是这个组里唯一有分量的那一项**：一个来源 ID 只值 0.5 分，
+  填满 9 个也才 4.5，抵不上一个 ISBN。这正是想要的读法：
+  来源 ID 是「顺带记下的账」，ISBN 才是「这本书的身份证」。
+- ``subtitle`` **不进计分表**（见 :data:`NOT_SCORED` 里那条改过的理由）。
+
+**其余 4 家源（comicvine / ranobedb / librofm / lubimyczytac）没有 ID 字段**，
+不是漏了：它们抓到的只是一个页面 URL，本项目没有给它们开字段
+（见 ``metasources.SOURCE_ID_FIELD`` 的说明）。「宁可少给不可错给」——
+把 URL 记成一个叫 ``*_id`` 的字段，比留空更糟。
 """
 from __future__ import annotations
 
@@ -45,7 +61,12 @@ GROUPS = (
     ("enrichment", "Enrichment", "系列增强"),
 )
 
-#: 计分字段 → (分组, 权重, 中文名)。权重加总 = 100（见模块 docstring）
+#: 单个来源 ID 的权重。9 个合计 4.5 —— 见模块 docstring 里第 63 期那段说明
+_PROVIDER_ID_WEIGHT = 0.5
+
+#: 计分字段 → (分组, 权重, 中文名)。权重加总 = 100（见模块 docstring）。
+#: ⚠️ 顺序**不是**排版：`tests/test_stats_charts.py` 有断言按本表的迭代顺序锁定
+#: 图表上的字段次序，改动顺序要同步那些断言。
 FIELDS = {
     "title":        ("core", 14.0, "书名"),
     "author":       ("core", 14.0, "作者"),
@@ -56,10 +77,24 @@ FIELDS = {
     "pages":        ("publishing", 4.0, "页数"),
     "description":  ("classification", 12.0, "简介"),
     "tags":         ("classification", 8.0, "题材"),
-    "isbn":         ("provider_ids", 10.0, "ISBN"),
+    "isbn":         ("provider_ids", 5.5, "ISBN"),
     "series":       ("enrichment", 4.0, "系列"),
     "series_index": ("enrichment", 3.0, "系列序号"),
 }
+
+#: 9 个来源 ID 的计分项（第 63 期）。**逐条列出而不是循环生成**：
+#: 中文名要一条条给，且这张表是统计页字段表的展示来源。
+FIELDS.update({
+    "google_books_id": ("provider_ids", _PROVIDER_ID_WEIGHT, "Google Books ID"),
+    "goodreads_id":    ("provider_ids", _PROVIDER_ID_WEIGHT, "Goodreads ID"),
+    "amazon_id":       ("provider_ids", _PROVIDER_ID_WEIGHT, "Amazon ASIN"),
+    "hardcover_id":    ("provider_ids", _PROVIDER_ID_WEIGHT, "Hardcover ID"),
+    "openlibrary_id":  ("provider_ids", _PROVIDER_ID_WEIGHT, "Open Library ID"),
+    "itunes_id":       ("provider_ids", _PROVIDER_ID_WEIGHT, "iTunes ID"),
+    "kobo_id":         ("provider_ids", _PROVIDER_ID_WEIGHT, "Kobo ID"),
+    "aladin_id":       ("provider_ids", _PROVIDER_ID_WEIGHT, "Aladin ID"),
+    "audible_id":      ("provider_ids", _PROVIDER_ID_WEIGHT, "Audible ASIN"),
+})
 
 #: 只有 EPUB 才有意义的字段：非 EPUB 不计入分母
 _EPUB_ONLY = {"has_cover", "pages"}
@@ -78,7 +113,11 @@ METADATA_OK = 70.0
 
 #: 明确不参与计分的项（页面上单独列出，避免「为什么它没算」的疑问）
 NOT_SCORED = (
-    {"key": "subtitle", "label": "副标题", "why": "本项目元数据面没有这个字段"},
+    # 第 63 期改口径：副标题**已经**是本项目元数据面的字段（可手填、可在线抓、
+    # 可锁定、可清空），原先那句「本项目元数据面没有这个字段」已经变成假话。
+    # 但它仍然**不计分** —— 理由与上游一致（上游也把副标题列在不计分里），
+    # 且这是这一期唯一能让既有评分少受影响的选择。
+    {"key": "subtitle", "label": "副标题", "why": "上游同样不计分；它不影响书目检索与同书判定"},
     {"key": "custom_fields", "label": "自定义元数据", "why": "用户自定义键值，不参与完整度"},
     {"key": "pages_source", "label": "页数来源", "why": "只是来源标记（estimate/…），不是内容"},
 )

@@ -5,6 +5,7 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, type BookMetadata, type BookMetadataFields, type BookMetadataWriteFields } from '@/lib/api'
+import { CATALOG_FIELDS, DB_ONLY_FIELDS, FIELD_LABELS, IDENTITY_FIELDS } from '@/lib/metadataFields'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -49,23 +50,25 @@ const tagText = ref('')
 /** 演播者草稿（第 53 期，与题材同构：用「、」或逗号分隔，保存时自动去重保序） */
 const narratorText = ref('')
 
-const FIELD_LABELS: Record<keyof BookMetadataFields, string> = {
-  title: '书名',
-  author: '作者',
-  series: '系列',
-  series_index: '系列序号',
-  date: '出版年',
-  publisher: '出版社',
-  language: '语言',
-  description: '简介',
-  isbn: 'ISBN',
-  tags: '题材',
-  narrators: '演播者',
-}
-
-/** 界面上的展示顺序（后端返回是按字母序的字典，直接遍历会很乱） */
-const TEXT_FIELDS: (keyof BookMetadataFields)[] = [
-  'title', 'author', 'series', 'series_index', 'date', 'publisher', 'language', 'isbn',
+/**
+ * 界面的两段（顺序与分组对齐上游编辑器）：
+ * **IDENTITY**（这本书是什么）与 **CATALOG**（它在外部数据库里的编号）。
+ *
+ * 字段名与中文名统一从 `lib/metadataFields.ts` 取 —— 那份清单原先在这里、
+ * 抓取抽屉、设置页、Book Dock 各抄了一遍，且已经抄出过事故（见该文件头）。
+ */
+const GROUPS: Array<{ title: string; hint: string; fields: (keyof BookMetadataFields)[] }> = [
+  {
+    title: '标识',
+    hint: '书名 / 作者 / 系列等 —— 决定它在书架上怎么显示',
+    fields: IDENTITY_FIELDS,
+  },
+  {
+    title: '目录号',
+    hint: 'ISBN 与各来源的编号。这些字段只存应用数据库，'
+      + '本项目的元数据抓取会填它们（填不到就留空，不猜）',
+    fields: CATALOG_FIELDS,
+  },
 ]
 
 async function load(): Promise<void> {
@@ -165,10 +168,12 @@ function onlineText(k: keyof BookMetadataFields): string {
   if (s?.overridden) {
     const o = fmt(s.online)
     if (o) return `在线：${o}`
-    // 非 EPUB 没有 OPF 那一层：撤掉覆盖之后这个字段就是空，别写成「回到原值」
-    return meta.value?.format === 'EPUB'
-      ? '（无在线建议，恢复后将回到文件原值）'
-      : '（无在线建议，恢复后该字段为空）'
+    // 撤掉覆盖之后这个字段还剩什么，取决于**它有没有 OPF 那一层** —— 不取决于格式：
+    // 演播者 / 副标题 / 提供商 ID 在文件里根本没有对应元素，EPUB 也一样没有。
+    // （早先按 `format === 'EPUB'` 判，对这几项说的是假话。）
+    return DB_ONLY_FIELDS.has(k) || meta.value?.format !== 'EPUB'
+      ? '（无在线建议，恢复后该字段为空）'
+      : '（无在线建议，恢复后将回到文件原值）'
   }
   return ''
 }
@@ -341,56 +346,66 @@ const INPUT_CLS =
         </div>
 
         <div class="grid grid-cols-1 gap-x-4 px-4 py-3 sm:grid-cols-2">
-          <label
-            v-for="k in TEXT_FIELDS"
-            :key="k"
-            class="flex flex-col gap-1 border-b border-border/60 py-2.5"
-          >
-            <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
-              {{ FIELD_LABELS[k] }}
-              <span
-                v-if="meta.meta[k]?.overridden"
-                class="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] text-primary"
-              >已本地修改</span>
-              <button
-                type="button"
-                :disabled="!editable || locking === k"
-                class="ml-auto flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] transition-colors disabled:opacity-50"
-                :class="meta.meta[k]?.locked
-                  ? 'bg-warning/14 text-warning'
-                  : 'text-muted-foreground hover:text-foreground'"
-                :title="lockTitle(k)"
-                @click="toggleLock(k)"
-              >
-                <Icon :name="meta.meta[k]?.locked ? 'lock' : 'unlock'" class="h-3 w-3" />
-                {{ meta.meta[k]?.locked ? '已锁定' : '锁定' }}
-              </button>
-            </span>
-            <input v-model="form[k] as string" type="text" :disabled="!editable" :class="INPUT_CLS">
-            <div
-              v-if="meta.meta[k]?.overridden || fmt(form[k] as string)"
-              class="mt-1 flex flex-wrap items-center gap-2 text-[11px]"
-            >
-              <button
-                v-if="meta.meta[k]?.overridden"
-                type="button"
-                :disabled="!editable || restoring || clearing"
-                class="cursor-pointer rounded text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
-                @click="restoreOne(k)"
-              >
-                ↺ 恢复在线
-              </button>
-              <button
-                type="button"
-                :disabled="!editable || clearing"
-                class="cursor-pointer rounded text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-                @click="clearOne(k)"
-              >
-                ✕ 清空
-              </button>
-              <span v-if="meta.meta[k]?.overridden" class="text-muted-foreground">{{ onlineText(k) }}</span>
+          <!-- 分组标题用 `sm:col-span-2` 横跨两列；`<template>` 本身不渲染元素，
+               所以网格里除标题外仍是平铺的字段 -->
+          <template v-for="g in GROUPS" :key="g.title">
+            <div class="border-b border-border pb-1.5 pt-1 sm:col-span-2">
+              <span class="text-[11px] font-semibold uppercase tracking-wide text-foreground">
+                {{ g.title }}
+              </span>
+              <span class="ml-2 text-[11px] text-muted-foreground">{{ g.hint }}</span>
             </div>
-          </label>
+            <label
+              v-for="k in g.fields"
+              :key="k"
+              class="flex flex-col gap-1 border-b border-border/60 py-2.5"
+            >
+              <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+                {{ FIELD_LABELS[k] }}
+                <span
+                  v-if="meta.meta[k]?.overridden"
+                  class="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] text-primary"
+                >已本地修改</span>
+                <button
+                  type="button"
+                  :disabled="!editable || locking === k"
+                  class="ml-auto flex cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px] transition-colors disabled:opacity-50"
+                  :class="meta.meta[k]?.locked
+                    ? 'bg-warning/14 text-warning'
+                    : 'text-muted-foreground hover:text-foreground'"
+                  :title="lockTitle(k)"
+                  @click="toggleLock(k)"
+                >
+                  <Icon :name="meta.meta[k]?.locked ? 'lock' : 'unlock'" class="h-3 w-3" />
+                  {{ meta.meta[k]?.locked ? '已锁定' : '锁定' }}
+                </button>
+              </span>
+              <input v-model="form[k] as string" type="text" :disabled="!editable" :class="INPUT_CLS">
+              <div
+                v-if="meta.meta[k]?.overridden || fmt(form[k] as string)"
+                class="mt-1 flex flex-wrap items-center gap-2 text-[11px]"
+              >
+                <button
+                  v-if="meta.meta[k]?.overridden"
+                  type="button"
+                  :disabled="!editable || restoring || clearing"
+                  class="cursor-pointer rounded text-primary transition-colors hover:text-primary/80 disabled:opacity-50"
+                  @click="restoreOne(k)"
+                >
+                  ↺ 恢复在线
+                </button>
+                <button
+                  type="button"
+                  :disabled="!editable || clearing"
+                  class="cursor-pointer rounded text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+                  @click="clearOne(k)"
+                >
+                  ✕ 清空
+                </button>
+                <span v-if="meta.meta[k]?.overridden" class="text-muted-foreground">{{ onlineText(k) }}</span>
+              </div>
+            </label>
+          </template>
 
           <label class="flex flex-col gap-1 border-b border-border/60 py-2.5 sm:col-span-2">
             <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">

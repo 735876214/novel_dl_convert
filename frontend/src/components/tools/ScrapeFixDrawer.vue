@@ -23,6 +23,7 @@ import {
   type MetadataPlanItem,
   type ScrapeItem,
 } from '@/lib/api'
+import { FIELD_LABELS, PROVIDER_ID_FIELDS } from '@/lib/metadataFields'
 import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{ item: ScrapeItem }>()
@@ -32,15 +33,18 @@ const ui = useUiStore()
 
 type FieldKey = keyof BookMetadataFields
 
+/**
+ * 这个抽屉要能审**抓取建议的每一个字段** —— 包括第 63 期新加的副标题与 9 个
+ * 提供商 ID（`CATALOG_FIELDS`）。漏一个的表现是静默的：抓回来了、也能写进去，
+ * 但用户在这一页**看不到**，于是「逐字段确认」这件事在这一项上形同虚设。
+ *
+ * 字段名与中文名统一取自 `lib/metadataFields.ts`（原先四处各抄一份，已抄出过事故）。
+ */
 const FIELDS: Array<{ key: FieldKey; label: string; multiline?: boolean }> = [
-  { key: 'title', label: '书名' },
-  { key: 'author', label: '作者' },
-  { key: 'series', label: '系列' },
-  { key: 'series_index', label: '卷号' },
-  { key: 'date', label: '出版年' },
-  { key: 'publisher', label: '出版社' },
-  { key: 'language', label: '语言' },
-  { key: 'isbn', label: 'ISBN' },
+  ...(['title', 'subtitle', 'author', 'series', 'series_index',
+    'date', 'publisher', 'language'] as FieldKey[]).map((key) => ({ key, label: FIELD_LABELS[key] })),
+  { key: 'isbn', label: FIELD_LABELS.isbn },
+  ...PROVIDER_ID_FIELDS.map((key) => ({ key: key as FieldKey, label: FIELD_LABELS[key] })),
   { key: 'tags', label: '题材（、分隔）' },
   { key: 'description', label: '简介', multiline: true },
 ]

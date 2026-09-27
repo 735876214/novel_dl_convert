@@ -271,11 +271,46 @@ MISSING / OOR / BLANK / COMMENT —— **这是预期噪声，不必再修**；�
 > 已一并收口（投影函数 `server._card` `:1014`，六处调用点）。
 > 这不是扩大范围 —— **决策 6 只要落到「前端不显示」而不是「服务端不给」，就是一个假动作**。
 > 三个协议层（OPDS / Komga / KOReader）经查本来就干净（逐字段手工序列化，无 `**b`）。
+>
+> **第 63 期复核（2026-09-27，5/6 元数据编辑器扩充）**：本轮**没有改判**，是把第 27 期就记下的
+> 一处欠账补齐 —— 元数据面从 11 项扩到 **21 项**（`subtitle` + 9 个提供商 ID，
+> 见 `core/fileops.py` 的 `METADATA_FIELDS` / `PROVIDER_ID_FIELDS`）。三件事值得记：
+>
+> **① 「加字段」在这个项目里不是一个地方的事。** `fileops.METADATA_FIELDS` 是单一真源，
+> `metastore` / `server` / `metafetch` / `publish` 都由它派生，但 `core/db.py` 的
+> `_CLEARABLE` / `_META_FIELDS` 是**手抄的两份**（db 不能 import fileops —— 会成环），
+> 三者必须同集合，有测试（`tests/test_metadata_server_side.py:209`）钉住。**下一轮加字段的人
+> 请从那张测试开始读**，它能一次点出所有该改的地方。
+>
+> **② 顺带修掉一处既有的静默失效**：元数据抓取的「出版年」那一档策略**此前从来没生效过** ——
+> 配置侧与 `metafetch._FINALIZE_FIELDS` 写的是 `year`，而引擎按**字段名** `date` 查策略，
+> 查不到就回默认档。两套键空间并存若干期，不报错、不告警，预设里「出版年：仅用内嵌」
+> 一直是句空话。本轮把引擎侧、配置侧、前端三处统一到 `date`（OPF 的 `dc:date`），
+> 并加了两条测试（`tests/test_metafetch_presets.py` 的「预设对出版年真的生效」与
+> 「引擎侧与配置侧的字段表必须同集合」）。**这是本文件反复记的那条通用教训的又一例：
+> 结论对、锚点/键名错，最危险。**
+>
+> **③ 有 4 家源是刻意「不开字段」的**：comicvine / ranobedb / librofm / lubimyczytac 抓回来的
+> 只是一个页面 URL，不是该站的原生标识。给它们造一个字段名等于**错给** ——
+> 项目纪律「宁可少给不可错给」在这里的落法就是**不开字段**，而不是开一个填 URL 的字段。
+> 另有一处同源取舍：`audible` 与 `audnexus` 两家**共用** `audible_id`（同一个 ASIN，
+> 不是两个标识）。
+>
+> 评分的连带影响如实记录：`core/metascore.py` 的权重合 100，ISBN 从 10.0 降到 **5.5**、
+> 9 个 ID 各 0.5（`5.5 + 9×0.5 = 10.0`，外部标识分组总量不变）。**已展示的评分会变**：
+> 一本「该填的都填了、但没有任何来源 ID」的书，得分从 88 降到 **83.5**
+> （满分的理论值仍是 100 —— 权重合 100 没动）。（`tests/test_stats_integrity.py` 的
+> 夹具与分位断言已同步；该夹具**没有**任何来源 ID，故拿不到那 4.5 分 ——
+> 这是如实结果，**没有**为了把数字凑回去而给夹具补假数据。）
+> `NOT_SCORED` 里那条「subtitle —— 本项目元数据面没有这个字段」随之下架，
+> 理由改为上游同款口径（副标题不影响书目检索与同书判定）。
+> ⚠️ **`isbn10` / `isbn13` 分离不在本期**：它要动被 Komga / CSV / Hardcover 匹配 /
+> 出版副本四条外部链路消费的 `isbn` 键，与「加 9 个新键」不是同一个风险档，另起一期。
 
 | 能力项 | 线上形态 | 本项目现状 | 档位 | 理由 |
 | --- | --- | --- | --- | --- |
 | 五标签（Details / Edit Metadata / Files / Reading Log / Highlights） | 5 个标签 | **已落地（且比上游多两档，第 63 期 3/6 复核）**：今天 **7 个标签** —— 概览/目录/文件/批注/编辑元数据/**阅读日志**/我的记录（`TABS` 定义 `views/BookDetailView.vue:102-110`，渲染 `:279-333`）。与上游对应：Details=概览、Edit Metadata=编辑元数据、Files=文件、Highlights=批注、**Reading Log=阅读日志（第 63 期 3/6 新增，见下一行）** | **已落地** | 原判「四标签」已过期，**锚点也错**（原引 `:30-35` 今天是文件头注释）。**第 63 期 3/6 起本行不再打折**：此前那句「对应关系是**近似**：会话级日志在 `/log` 页，不宜写成已有 Reading Log 标签」**已作废** —— 详情页有了自己的第 7 个标签，会话级数据就在那儿 |
-| Edit Metadata | 单书元数据编辑 | **已落地**：后端 `GET`/`POST /api/books/{bid}/metadata`（`server.py:1162-1186`、`:1188-1251`，三种取值语义：覆盖 / `null` 清空 / 空串撤销），另有 `/metadata/online`（`:1253`）与 `/metadata/revert`（`:1266`）；**只写服务端覆盖、不改写任何文件**（`:1190-1196,1226-1233` 明写「不再写文件：written 恒为空」）；前端 `components/book/MetadataEditor.vue`（357 行）挂在「编辑元数据」标签（`BookDetailView.vue:310-312`） | **已落地** | 原判「无」已过期。⚠️ 原判理由「复用 `_patch_opf` 加 POST 接口」**方向就是错的** —— 那会写回 OPF，与「元数据仅存服务端」的既定原则冲突。`core/fileops.py:193-254` 今天只服务实体改名与命名规则重出版 |
+| Edit Metadata | 单书元数据编辑 | **已落地（字段面第 63 期 5/6 扩到 21 项）**：后端 `GET`/`POST /api/books/{bid}/metadata`（`server.py:1370`、`:1407`，三种取值语义：覆盖 / `null` 清空 / 空串撤销），另有 `/metadata/online`（`:1492`）与 `/metadata/revert`（`:1505`）；**只写服务端覆盖、不改写任何文件**（`:1415-1421`、`:1451-1458` 明写「不再写文件：written 恒为空」）；前端 `components/book/MetadataEditor.vue`（639 行）挂在「编辑元数据」标签（`BookDetailView.vue:310-312`），**分「标识 / 目录号」两段**（对齐上游分组）。字段面 = `fileops.METADATA_FIELDS` 21 项：原 11 项 + `subtitle` + 9 个提供商 ID（`google_books_id` / `goodreads_id` / `amazon_id` / `hardcover_id` / `openlibrary_id` / `itunes_id` / `kobo_id` / `aladin_id` / `audible_id`）；其中 **10 项是「无 OPF 对应物」**（`narrators` + `subtitle` + 9 个 ID），写得进库、写不进文件 | **已落地** | 原判「无」已过期。⚠️ 原判理由「复用 `_patch_opf` 加 POST 接口」**方向就是错的** —— 那会写回 OPF，与「元数据仅存服务端」的既定原则冲突。`core/fileops.patch_opf_meta`（`:359`）今天只服务**重出版**一条链路（`fileops.py:512`、`:541`、`publish.py:292`）—— 文档原引的 `:193-254` 今天已是 `plan_entity_rename` / `plan_merge` 区。**本行锚点全部随第 63 期 5/6 重取**（`server.py` 原引 `:1162`/`:1188`/`:1253`/`:1266` 均已漂移）。新字段的取舍与事故见本域复核头第 63 期 5/6 那一段 |
 | 阅读状态 + Date Started / Finished | 显式状态字段 | **已落地**：表 `reading_status(book_id, status, started_at, finished_at, updated_at)`（`core/db.py:160-166`）；写入规则 `db.set_status`（`core/db.py:3239`：进 reading/finished 自动记 `started_at`，进 finished 记 `finished_at`，**离开 finished 清零**）；接口 `GET`/`PUT /api/books/{bid}/status`（`server.py:1489-1503`，可显式传起止日期）；前端 `components/book/ReadingRecord.vue:26-32`（5 档状态）、`:84-126`（保存）、`:138-172`（「开始于/读完于」date input） | **已落地** | 原判「无起止日期」已过期。⚠️ 进度推导**今天只是兜底**：真实状态优先，无状态行才按进度阈值推导（`core/stats.py:353-391`；该阈值**第 40 期起可配置** —— 全局 + 每库覆写，默认仍 99.5%，不再写死）—— 原引锚点 `core/stats.py:46-51` 今天是 `integrity` 计数块 |
 | YOUR REVIEW（书评 + 评分） | 可写书评 | **已落地**：后端 `GET`/`PUT /api/books/{bid}/review`（`server.py:1749-1768`，stars 与 review 一起保存，0/空串=清除）；落 `ratings` 表 review 列（`db.set_review` `core/db.py:1889`、`db.get_review` `:1909`）；前端「我的评分与书评」卡（5 星 + 清除 + textarea + 保存）`ReadingRecord.vue:200-246`；书架列表/表格也展示评分（`ShelfView.vue:863-865,934-935`） | **已落地** | 原判「无」「需新建 `reviews` 表」均过期 —— **没有新建表**，复用了既有的 `ratings` 表加列 |
 | DETAILS 字段 | Publisher / Published / Language / Pages / ISBN / File Size / Library / Added | **已落地（第 30 期补全）**：版本信息区（`BookDetailView.vue:371-384` 一带，现为 `versionRows` computed）显示系列/书库（归属库，`book.library_id` → 库名，来自 `stores/library.ts` 的 `libraryEntities`）/入库（与导出 CSV「入库日期」同源：都是文件 `mtime`，`core/library.py:1219`）/出版年/出版社/语言/ISBN；**Pages 已展示并带来源标注**（非 EPUB 恒 0 → 不显示；`pages_source='estimate'` 标「EPUB 估算页数」、`'archive'` 标「归档真实页数」） | 已落地 | 原判「Pages 无来源 → 不建议做」**已过期**。**上一轮记的「`:379` 的『字数』写死 `'未知'`」—— 第 30 期按「不做假交互」约定删除了该行**（不引入新数据源） |

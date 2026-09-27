@@ -22,10 +22,13 @@ import pytest
 
 from novelforge.core import epub_builder, fileops, library, metascore, stats
 
-#: 元数据拉满（封面写不进 OPF，那 12 分拿不到）→ 得分 = 14+14+6+7+6+12+8+10+4+3 = 88，
-#: 稳稳过 METADATA_OK(70)。
-#: ⚠️ 页数那 4 分**拿得到**：EPUB 扫描会给估算页数（``pages_source=estimate``），
-#: 故满分是 88 不是 84 —— 此处为第 33 期实测订正，原注释按「页数也拿不到」写、已过期。
+#: 元数据拉满（封面写不进 OPF，那 12 分拿不到）→ 得分 = 14+14+6+7+6+12+8+5.5+4+3 = 79.5，
+#: 加上页数那 4 分 = **83.5**，稳稳过 METADATA_OK(70)。
+#: ⚠️ 页数那 4 分**拿得到**：EPUB 扫描会给估算页数（``pages_source=estimate``）。
+#: ⚠️ 第 63 期由 88 降到 83.5：``isbn`` 的权重从 10.0 降为 5.5，让出 4.5 分给 9 个
+#: **来源 ID**（每个 0.5）。这本夹具没填任何来源 ID，所以净少 4.5 分。
+#: 这里**不**跟着补一笔 ``isbn13`` 之类的假数据来把数字凑回去 —— 夹具要如实反映
+#: 「一本只填了 ISBN、没填来源 ID 的书值多少分」。
 _FULL_META = {
     "publisher": "江苏凤凰文艺",
     "date": "2012",
@@ -62,7 +65,7 @@ def mixed(default_root):  # noqa: ARG001 —— 依赖 isolated 切目录
 
     | 文件 | 大小 | issues | 元数据分 |
     | --- | --- | --- | --- |
-    | ``满配.epub`` | >0 | 无 | 88（≥70，达标） |
+    | ``满配.epub`` | >0 | 无 | 83.5（≥70，达标） |
     | ``薄.epub``   | >0 | 无 | 32（<70，不达标） |
     | ``坏.epub``   | >0 | unparsable | 28（只有书名 / 作者两项命中） |
     | ``空.epub``   | 0  | zero-bytes + unparsable | 28（同上） |
@@ -155,7 +158,7 @@ def test_元数据达标的阈值就是分档边界70(mixed):  # noqa: ARG001
 
     g = stats.overview()["integrity"]
     bs = library.books()
-    # 满配 88 达标；薄 32 不达标；坏 / 空 28 也不达标
+    # 满配 83.5 达标；薄 32 不达标；坏 / 空 28 也不达标
     assert g["metadata"] == 1
     # 与逐书评分独立算一遍的结果一致
     assert g["metadata"] == sum(1 for b in bs if metascore.audit(b)["score"] >= 70.0)
@@ -164,14 +167,17 @@ def test_元数据达标的阈值就是分档边界70(mixed):  # noqa: ARG001
 def test_分位数增补p25与p75且既有两键不动(mixed):  # noqa: ARG001
     """第 33 期给 ``metadata_score`` 增补 P25 / P75 —— 分数分布图的阴影带两端。
 
-    ``mixed`` 四本的分是 28 / 28 / 32 / 88（见夹具说明），线性插值下四个分位都能手算：
-    P25 = 28、P50 = 30、P75 = 32+56×0.25 = 46、P90 = 32+56×0.7 = 71.2。
+    ``mixed`` 四本的分是 28 / 28 / 32 / 83.5（见夹具说明），线性插值下四个分位都能手算：
+    P25 = 28、P50 = 30、P75 = 32+51.5×0.25 = 44.9、P90 = 32+51.5×0.7 = 68.1。
     既有的 p50 / p90 必须**原地不动**（既有图表与测试都读它们），增补只加键、不改值 ——
     故这里把四个键**一起**断言：改坏了哪一个都会红。
+
+    第 63 期改了 p75 / p90 两个**值**（不是键）：满配书从 88 降到 83.5，插值端点随之下移。
+    p25 / p50 不受影响 —— 它们只由那三本低分书决定（28 / 28 / 32），与最高分无关。
     """
     ms = stats.overview()["metadata_score"]
 
-    assert (ms["p25"], ms["p50"], ms["p75"], ms["p90"]) == (28.0, 30.0, 46.0, 71.2)
+    assert (ms["p25"], ms["p50"], ms["p75"], ms["p90"]) == (28.0, 30.0, 44.9, 68.1)
     assert ms["p25"] <= ms["p50"] <= ms["p75"] <= ms["p90"], "分位必须单调"
     # 与逐书评分独立算一遍的结果一致（不是另起一套分位算法）
     scores = [metascore.audit(b)["score"] for b in library.books()]
@@ -183,7 +189,7 @@ def test_metadata_score与体检用同一遍评分(mixed):  # noqa: ARG001
     """两处都从同一份 scores 出，不该出现「直方图说 1 本 90+、体检测到 0 本达标」。"""
     ov = stats.overview()
     gte90 = next(b for b in ov["metadata_score"]["buckets"] if b["key"] == "gte90")
-    assert gte90["count"] == 0                       # 满分只有 88（封面写不进 OPF）
+    assert gte90["count"] == 0                       # 满分只有 83.5（封面写不进 OPF）
     assert ov["metadata_score"]["total"] == ov["books"]["total"]
 
 

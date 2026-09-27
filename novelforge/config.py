@@ -242,9 +242,23 @@ DEFAULTS = {
         # 字段策略：默认 overwrite（在线优先覆盖本地）；fill_only（仅原值空时写）/ skip 仍可用。
         # 无论哪种，用户通过编辑器显式改过的字段都会记入 meta_override 并受保护（再抓取不冲掉）。
         "fields": {
+            # ⚠️ 出版年这一项的键是 **`date`**（字段名），不是 `year`（书对象里的名字）——
+            # `metafetch.plan` 是按 `_VALUE_KEYS` 的字段名去查策略的，写成 `year`
+            # 不会报错，只会**静默失效**（查不到 ⇒ 回落默认），预设里那一档等于没有。
             "title": "overwrite", "author": "overwrite", "publisher": "overwrite",
-            "year": "overwrite", "language": "overwrite", "isbn": "overwrite",
+            "date": "overwrite", "language": "overwrite", "isbn": "overwrite",
             "description": "overwrite", "tags": "overwrite", "cover": "overwrite",
+            # 第 63 期：副标题与 9 个提供商 ID（与 metafetch._FINALIZE_FIELDS 同集合）。
+            # ⚠️ **老配置不会自动获得这 10 个键**：本函数对 `metadata_fetch` 只有**一层**
+            # 浅合并（`data[k].update(v)`，见 :func:`load_config`），用户 config.yaml 里
+            # 存过的 `fields` 子字典会**整体替换**这里的默认值。用户存过的是预设
+            # （整表同档），所以 `metafetch._field_policy` 负责把那个意图还原到新键上。
+            # 那句注释之所以写在这里：**加字段的人要记得去改那个函数**。
+            "subtitle": "overwrite", "google_books_id": "overwrite",
+            "goodreads_id": "overwrite", "amazon_id": "overwrite",
+            "hardcover_id": "overwrite", "openlibrary_id": "overwrite",
+            "itunes_id": "overwrite", "kobo_id": "overwrite",
+            "aladin_id": "overwrite", "audible_id": "overwrite",
         },
         "auto_on_import": False,         # 新书入库时自动抓（仍受阈值与字段策略约束）
         # 跨源字段级合并（第 58 期）：够格的候选来自 ≥2 家时**逐字段择优**

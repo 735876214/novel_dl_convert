@@ -7,6 +7,7 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
+import { POLICY_FIELDS } from '@/lib/metadataFields'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import {
@@ -296,8 +297,12 @@ async function saveFinalize(): Promise<void> {
     const mode = finalizePreset.value === 'embedded_only' ? 'skip'
       : finalizePreset.value === 'fill_only' ? 'fill_only'
       : 'overwrite'
+    // ⚠️ 字段清单取自 `lib/metadataFields.ts`（= 后端 `metafetch._FINALIZE_FIELDS`）。
+    // 这里原先是**手抄的 9 个键**，且把出版年抄成了 `year`（引擎按 `date` 查策略）——
+    // 于是「选预设」这一动作对出版年从来没生效过。写少一个键同样是静默的：
+    // 漏掉的那个字段会保留原策略，预设说的和做的对不上。
     const fields: Record<string, string> = {}
-    for (const k of ['title', 'author', 'publisher', 'year', 'language', 'isbn', 'description', 'tags', 'cover']) {
+    for (const k of POLICY_FIELDS) {
       fields[k] = mode
     }
     setVal('metadata_fetch.fields', fields)
