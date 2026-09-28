@@ -34,12 +34,24 @@ import uuid
 import zipfile
 
 from .. import config
-from . import audio, audio_meta, comics, db, metadata
+from . import audio, audio_meta, comics, db, metadata, units
 
 # 只把这些扩展名当成「书」；与 /api/files 的全量列表不同，这里是有意收窄的。
 # .cbr（RAR 漫画）自第 9 期起在列 —— 由 core/comics.py 的 zip/rar 双后端解压。
 # 单个音频文件也算一本书；「音频目录」（一章一文件）由 _iter_book_entries 单独识别。
 BOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".cbz", ".cbr", *audio.AUDIO_EXTS)
+
+#: 扫描口径版本（第 73 期）。**凡能改变「条目边界」或卡片字段口径的改动都要 +1**：
+#: 本期两处 —— ① 序号单元目录整棵树被合成一个条目（此前是每文件一本，更深的根本扫不到）；
+#: ② 书名剥掉「范围 / 话数备注」（`《书名（1-43话）》` → `《书名》`）。
+#:
+#: ⚠️ 它是**存量索引唯一的自愈通道**：增量刷新的闸门是每行的 ``(size, mtime)``，
+#: 磁盘上的文件一个字节都没变，所以口径升级后那些旧行**永远不会被重探** ——
+#: 用户在界面上看到的还是老样子（43 本各自独立），而且不报错、不重建。
+#: `catalog` 拿这个数与 `app_state` 里的标记（**按库**）比对，不一致就把该库的下一轮
+#: 刷新**当成 force**，全量重探一次后写回标记（见 `catalog` 里「扫描口径版本」那段）。
+#: 第 72 期在派生件那边踩过同一个坑（`pipeline.ENCODING_RULE_VERSION`）。
+SCAN_RULE_VERSION = 1
 
 # 可能作为封面出现的图片扩展名
 _COVER_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
@@ -965,12 +977,20 @@ def probe_epub(path: pathlib.Path) -> dict:
 # Komga 布局是「一层系列目录 + 书文件」（core/komga.py），所以扫描要跟着下探一层。
 # **只下一层**：Komga 自己也不递归系列目录的子目录，再深只会扫到它不认的文件。
 
-def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None) -> list:
+def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None, ltype=None) -> list:
     """**一个书库根目录**下的书目条目（平铺 + 一层系列目录），按遍历顺序返回。
 
-    条目有两种形态，二者都算「一本书」：
+    条目有三种形态，都算「一本书」：
     - **文件**：``suffix in exts`` 的电子书 / 漫画 / **单个音频文件**；
-    - **目录**：含音频文件的目录（有声书多轨，「一章一文件」）。
+    - **目录**：含音频文件的目录（有声书多轨，「一章一文件」）；
+    - **序号单元目录**（第 73 期）：整棵子树里 ≥2 个能解析出序号的文件
+      （`第1话` / `第二话` / `第03话` / `4 第4话` / `01`）⇒ **整棵树 = 一本书**，
+      话清单见 :mod:`core.units`。此前这种树的文件各成一本书（更深的根本扫不到）。
+
+    ``ltype`` 是库类型，**只用来决定要不要做序号单元合并**（`mixed` 与 `ebook` 都不做，
+    见下面 ``allow_units`` 的注释）。它必须由调用方传进来：本函数拿不到库实体，
+    而「哪些库要合并」是**库级**决定。两个调用点（``_scan_once`` / ``catalog``）
+    都手上有库实体。
 
     ``exts`` 按**库类型**收窄白名单（漫画库只收 `.cbz/.cbr`、有声书库只收音频…），
     不传则用全量 ``BOOK_EXTS``。音频目录的识别也随之收窄：白名单里没有音频扩展名时
@@ -994,7 +1014,16 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None) -> list:
     """
     allowed = tuple(exts) if exts else BOOK_EXTS
     patterns = tuple(exclude or ())
-    allow_audio_dir = any(e in allowed for e in audio.AUDIO_EXTS)
+    # 「这个库收不收音频目录」——`collected_by` 与下面「下探一层」的那一支共用同一判据
+    # （白名单含音频扩展名：漫画库不含 ⇒ 它既不把顶层音频目录当书，也不收子目录）。
+    allow_audio_dir = units.audio_allowed(allowed)
+    # 序号单元（第 73 期）：**只对漫画库与有声书库**合并。用户拍板的口径是「这类形态
+    # 只在漫画库 / 有声书库出现」。判据（哪些文件算一话）与库类型无关，但「要不要把
+    # 一棵树当成一本书」是**库的意图**：ebook 的语义就是「一个文件一本」，mixed 是
+    # 「什么都收」的兜底类型 —— 在兜底类型上猜意图，猜错就是把用户几本独立的书粘成
+    # 一本（那只能靠改名目录来救）。改类型即可启用，文档里写明。
+    # 判据在 `units.merges_for`（搬家闸门 `migrate.compat_reason` 读同一份）。
+    allow_units = units.merges_for(ltype)
     out: list = []
     try:
         with os.scandir(d) as it:
@@ -1012,9 +1041,15 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None) -> list:
             continue
         if not is_dir or f.name.startswith("."):
             continue
-        # 顶层目录本身就是一个音频目录 → 整目录算一本书
-        if allow_audio_dir and audio.is_audio_dir(f) \
-                and not _excluded(f.name, f.name, patterns):
+        # 目录型条目：**整棵子树 = 一本书**。两种形态（平铺音频 / 序号单元树）与
+        # 「这个库收不收」的判据全在 `units.collected_by` 一处 —— 本函数只负责加上
+        # 本库的排除图案。以前这里有两份字面量判据，与 `_probe_entry` 各写各的：
+        # 顺序一旦不一致（先单元还是先音频），平铺目录就会「卡片说 3 话、播放器 2 轨」。
+        # ⚠️ 必须 `continue` —— 不 continue 就会继续往下探一层，把同一棵树的文件
+        # 再登记成兄弟条目，于是「一本书」与「它的一话」同时出现在书架上。
+        # 书边界取**最外层**通过判据的那个目录（本函数只扫库根这一层，天然满足）。
+        if not _excluded(f.name, f.name, patterns) \
+                and units.collected_by(f, allowed, allow_units):
             out.append(f)
             continue
         try:
@@ -1140,8 +1175,9 @@ def accepts_ext(lib, filename) -> bool:
     给**入库路由**用：把一个文件路由到「收了也看不见」的库 = **隐形文件**
     （文件落盘了、书目里却找不到），比直接拒收更糟 —— 用户看得见失败，看不见消失。
 
-    ⚠️ **没有扩展名的条目一律不拦**：有声书「一章一文件」的**目录**形态在这里判不了，
-    它扫不扫得到由 :func:`_iter_book_entries` 的 ``allow_audio_dir`` 按**类型**决定。
+    ⚠️ **没有扩展名的条目一律不拦**：「一章一文件」的**目录**形态（有声书目录 /
+    第 73 期的序号单元树）在这里判不了，它扫不扫得到由 :func:`_iter_book_entries`
+    的 ``allow_audio_dir`` / ``allow_units`` 按**内容与类型**决定。
     本函数的用途是防隐形文件，判不了就放过 —— 误拒比漏判更烦人。
     """
     ext = pathlib.PurePosixPath(str(filename or "")).suffix.lower()
@@ -1236,6 +1272,26 @@ def root_of(book_or_id) -> pathlib.Path:
     return rs[0] if rs else pathlib.Path(config.OUTPUT_DIR)
 
 
+def _dir_facts(f: pathlib.Path) -> tuple:
+    """**目录型**条目的 ``(体积, mtime)`` —— 探测与闸门**共用这一处**。
+
+    两条支路，判据都来自 `units`：
+
+    - 序号单元树（第 73 期）⇒ ``units.dir_fingerprint``，**递归**整个子树；
+    - 其余（平铺音频目录 / 空目录）⇒ ``audio.dir_size_and_mtime``，只看直接子文件
+      —— 与改造前逐字一致。
+
+    ⚠️ 递归这件事是**必须**的：改造前目录条目用的是只看直接子文件的音频口径，
+    于是嵌套树里「新增了一话」在 ``(size, mtime)`` 上**完全看不见** —— 增量刷新
+    不会重探，用户加了一话、书架上是 0 变化，而且不报错。它在
+    `_cheap_facts` 与 `_probe_entry` 里同时生效，两边的值仍然同源。
+    """
+    fp = units.dir_fingerprint(f)
+    if fp is not None:
+        return fp[0], fp[1]
+    return audio.dir_size_and_mtime(f)
+
+
 def _cheap_facts(f: pathlib.Path) -> "tuple | None":
     """条目的**便宜事实** ``(size, mtime, is_dir)``：不打开文件就能拿到的全部信息。
 
@@ -1245,11 +1301,12 @@ def _cheap_facts(f: pathlib.Path) -> "tuple | None":
     后者算出的 ``size``/``mtime`` 就是写进索引的那两个值。为此两边共用本函数，
     而不是各写一套公式；否则会出现「明明变了却永远不重探」这种查不出来的陈旧。
 
-    音频目录的 ``(体积, mtime)`` 取**音频文件**的合计与最新（``audio.dir_size_and_mtime``），
-    与改造前 ``_scan_once`` 里生效的那两个值逐字节一致 —— 改造前它先跑了一次
-    ``_entry_mtime`` 的递归 rglob，但那笔结果在本分支**必被覆盖**
+    目录条目的 ``(体积, mtime)`` 见 :func:`_dir_facts`（改造前是
+    ``audio.dir_size_and_mtime`` —— 与 ``_scan_once`` 里生效的那两个值逐字节一致：
+    改造前它先跑了一次 ``_entry_mtime`` 的递归 rglob，但那笔结果在本分支**必被覆盖**
     （``_iter_book_entries`` 只把「含音频文件的目录」当条目返回 ⇒ dm 恒非 0），
-    所以删掉它纯粹是省下一次整子树的递归遍历，不改任何值。
+    所以删掉它纯粹是省下一次整子树的递归遍历，不改任何值。第 73 期把「序号单元树」
+    这一支换成了真正的递归指纹 —— 只影响那一类条目）。
 
     条目不可读（``stat`` 失败）返回 ``None``。
 
@@ -1263,7 +1320,7 @@ def _cheap_facts(f: pathlib.Path) -> "tuple | None":
     except OSError:
         return None
     if stat.S_ISDIR(st.st_mode):
-        size, dm = audio.dir_size_and_mtime(f)
+        size, dm = _dir_facts(f)
         return (size, dm or st.st_mtime, True)
     return (st.st_size, st.st_mtime, False)
 
@@ -1309,14 +1366,30 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
     存储的是**最终值** —— 否则读回索引时得重新拿文件名解析一遍，等于把探测成本
     又搬回了读取路径。
 
+    目录型条目的形态由 ``units.shape_of`` 定（第 73 期）：**平铺音频目录**（含编号轨，
+    改造前的全部行为逐字不变）或**序号单元树**（`一话一文件`，第 73 期新增）。
+    单元树的话数记在 ``tracks`` 列（复用既有列，不新增），``format`` 按内容定 ——
+    全音频仍是 ``AUDIO``（前端进播放器，嵌套有声书因此也修好了），混了 PDF / 漫画
+    才是 ``UNITS``。``pages`` 对它恒为 0：本项目的 ``pages`` 是**估算页数**，
+    一话一文件的树没有页的概念。
+
     条目不可读（``stat`` 失败）返回 ``None``，调用方跳过。
     """
     facts = _cheap_facts(f)
     if facts is None:
         return None
     size, mtime, is_dir = facts
-    # 音频（单文件或目录）统一成 format="AUDIO"，前端据此进播放器
-    is_audio_entry = is_dir or audio.is_audio(f)
+    # 目录型条目的**形态**（第 73 期）：判据与顺序都在 `units.shape_of` 一处，
+    # 枚举侧（`units.collected_by`）、`tracks_of`、增量闸门（`dir_fingerprint`）读的
+    # 也是它 —— 两边各写一套判据，就会出现「卡片说 3 话、播放器只列 2 轨」。
+    # 判据只读这棵树本身（`units` 不碰库级状态），与上面那条硬约束相容。
+    shape = units.shape_of(f) if is_dir else ""
+    unit_items = units.units(f) if shape == "units" else []
+    # 音频统一成 format="AUDIO"，前端据此进播放器：单个音频文件，以及**不是**序号单元树
+    # 的目录（平铺音频目录 / 空目录 / 树里的文件刚被删掉 —— 后两种走这一支才能保持与
+    # 改造前逐字相同，否则空目录会掉进下面按扩展名分流的漫画分支）。
+    # 全是音频话的单元树（嵌套有声书）在下面那一支里同样落到 AUDIO。
+    is_audio_entry = audio.is_audio(f) or (is_dir and shape != "units")
     name_meta = metadata.from_filename(f.name)
     info = {
         "title": "", "author": "", "series": "", "has_cover": False, "unparsable": False,
@@ -1326,8 +1399,26 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
         "narrators": [],
     }
     tracks = 0
-    if is_audio_entry:
+    fmt = f.suffix.lstrip(".").upper()
+    if shape == "units":
+        tracks = len(unit_items)
+        # 全是音频 ⇒ 仍是 AUDIO：嵌套有声书（`《书名》/第1卷/第1话.mp3`）因此进播放器，
+        # 话数就是轨数（`tracks_of` 读的也是同一份清单）；混进了 PDF / 漫画 ⇒ UNITS，
+        # 前端进「按话聚合」的阅读器。
+        fmt = "AUDIO" if all(it["kind"] == "audio" for it in unit_items) else "UNITS"
+        # 演播者：取树内第一个**音频**话（嵌套树里首轨可能在子目录里）
+        try:
+            _probe = units.first_audio(f)
+            if _probe is not None:
+                info["narrators"] = audio_meta.extract(_probe).get("narrators") or []
+        except Exception:
+            info["narrators"] = []
+        # 封面可能埋在子树里（`cover_in_tree` 在树根时与 `cover_in_dir` 同值）
+        cover = units.cover_in_tree(f)
+        info.update({"has_cover": bool(cover), "cover": cover})
+    elif is_audio_entry:
         tracks = audio.tracks(f)["total"]
+        fmt = "AUDIO"
         # 演播者：解析音频标签（第 53 期补的「前置缺失」）。目录形态取首轨文件；
         # 解析失败只降级为空，绝不让一本书因标签坏而入库失败。
         try:
@@ -1352,7 +1443,7 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
         "size": size,
         "mtime": mtime,
         "tracks": tracks,
-        "format": "AUDIO" if is_audio_entry else f.suffix.lstrip(".").upper(),
+        "format": fmt,
         "title": info["title"] or name_meta["title"],
         "author": info["author"] or name_meta["author"],
         "series": info.get("series", ""),
@@ -1480,7 +1571,7 @@ def _scan_once(lib: dict = None) -> list:
     patterns = parse_excludes(lib.get("exclude"))
     books = []
     for d in roots:
-        for f in _iter_book_entries(d, exts, patterns):
+        for f in _iter_book_entries(d, exts, patterns, lib.get("type")):
             p = _probe_entry(f)
             if p is None:
                 continue
@@ -1650,9 +1741,15 @@ def book_detail(name: str, library_id=None) -> dict | None:
     detail = dict(b)
     detail["chapters"] = chapters
     detail["files"] = files
-    # 有声书：把轨道清单随详情一起下发，播放器首屏无需再发一次请求
-    if (b.get("format") or "").upper() == "AUDIO":
-        detail["audio_tracks"] = audio.tracks(path)["items"]
+    fmt = (b.get("format") or "").upper()
+    # 有声书：把轨道清单随详情一起下发，播放器首屏无需再发一次请求。
+    # 第 73 期起走 `units.tracks_of` —— 嵌套有声书（`《书名》/第1卷/第1话.mp3`）的轨
+    # 在子目录里，`audio.tracks` 只看直接子文件、会给 0 条。平铺目录两处同值。
+    if fmt == "AUDIO":
+        detail["audio_tracks"] = units.tracks_of(path)["items"]
+    # 序号单元（第 73 期）：话清单随详情下发，与 `audio_tracks` 同一个道理
+    elif fmt == "UNITS":
+        detail["units"] = units.units(path)
     return detail
 
 

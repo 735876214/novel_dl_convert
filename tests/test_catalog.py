@@ -166,6 +166,27 @@ def test_顺序在父目录与同名文件共存时也对得上(cat_lib):
     assert [b["name"] for b in library.books(lib["id"])] == [b["name"] for b in ref]
 
 
+def test_顺序在序号单元目录上也对得上(isolated, tmp_path, make_library):  # noqa: ARG001
+    """一棵**序号单元树**是一个条目，它在书目里的位置也必须与遍历同序。
+
+    第 73 期把「一棵树 = 一本书」加进枚举之后，条目集合变了 —— ``_order_key``
+    是「精确复刻遍历顺序」的那份排序键，它必须同时容下「目录型条目」与平铺文件。
+    顺序不是美观问题（见上一条）：``id_conflicts`` 把每组第一条当**保留项**。
+    """
+    root = tmp_path / "comic"
+    lib = make_library("ord", "漫画库", "comic", root)
+    _put(root, "aaa.cbz", b"x")
+    _put(root, "abc/内页.cbz", b"x")           # 普通系列目录（不是单元树）
+    for n in ("第1卷/第1话.cbz", "第1卷/第2话.cbz"):
+        _put(root, f"《连载》/{n}", b"x")       # 序号单元树
+    _put(root, "zzz.cbz", b"x")
+    ref = library._scan_once(db.get_library(lib["id"]))
+    assert [b["name"] for b in ref] == [
+        "aaa.cbz", "abc/内页.cbz", "zzz.cbz", "《连载》"], \
+        "基准顺序与预期不符，说明 _iter_book_entries 的遍历语义又变了"
+    assert [b["name"] for b in library.books(lib["id"])] == [b["name"] for b in ref]
+
+
 def test_同库两个根下的同名书不合并_仍然报冲突(isolated, tmp_path, make_library):  # noqa: ARG001
     """⚠️ 索引主键是 ``(library_id, root, rel)`` 而**不是** ``(library_id, rel)``。
 

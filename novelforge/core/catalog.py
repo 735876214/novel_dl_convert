@@ -273,10 +273,52 @@ def _lib_lock(lid: str) -> threading.Lock:
 
 # ---------------- 刷新 ----------------
 
+# ---------------- 扫描口径版本（第 73 期）----------------
+# 增量闸门是**每行的 (size, mtime)**：磁盘上的文件一个字节都没变时，那些旧行
+# **永远不会被重探**。于是「扫描口径改了」（本期：序号单元合并 + 书名剥范围备注）
+# 对存量索引完全不可见 —— 用户升级后看到的还是 43 本各自独立的书，而且不报错、
+# 不重建。第 72 期在派生件那边踩过同一个坑（`pipeline.ENCODING_RULE_VERSION`）。
+#
+# 落点选 `app_state`（运行态 KV）而不是新表 / 新文件：它是**幂等标记**这一类东西
+# 既有的地方（`migrate.GATE_KEY`、`pgmigrate.MARKER` 都在那儿），SQLite 与 PG 两种
+# 后端自动都成立，不必新写一份「跑过一次」的持久化。丢了只是每库多扫一次全量，结果不变。
+#
+# ⚠️ 必须**按库**记（键里带库 id）：记成全局的话，第一个刷新完的库会把标记写成新版本，
+# 后面的库再也不全量重探 ⇒ 只有一本书被修好，比不修更难查。按库分键同时也免掉了
+# 「读—改—写」丢更新（两个库同时刷新各写各的键）。
+_RULE_KEY = "book_index_rule"
+
+
+def _rule_key(lid: str) -> str:
+    return f"{_RULE_KEY}:{lid}"
+
+
+def _rule_stale(lid: str) -> bool:
+    """这个库上次全量重探时的口径版本与当前常量是否不一致（读不到一律当不一致）。"""
+    from . import library as _lib        # 延迟导入：library 在模块级 import 本模块
+    try:
+        return int(db.state_get(_rule_key(lid)) or 0) != int(_lib.SCAN_RULE_VERSION)
+    except Exception:
+        return True
+
+
+def _mark_rule(lid: str) -> None:
+    """记下「这个库已按当前口径全量重探过」。写失败**不报错**（下次多扫一次而已）。"""
+    from . import library as _lib
+    try:
+        db.state_set(_rule_key(lid), str(int(_lib.SCAN_RULE_VERSION)))
+    except Exception:
+        pass
+
+
 def refresh_library(lib: dict, force: bool = False, blocking: bool = True) -> dict:
     """增量刷新一个库的索引。**幂等**，可在任意线程调。
 
     ``force=True`` 时无视 ``(size, mtime)`` 全部重探（「立即扫描」按钮 / 冷启动）。
+
+    ⚠️ **扫描口径版本不一致时本函数也会按 ``force`` 处理**（见上面那段说明）：
+    这是存量索引唯一的自愈通道，跑完只发生一次，之后回落增量。
+
     ``blocking=False`` 时若该库正有另一次刷新在跑就**直接跳过**（监听线程用这个 ——
     它没必要排在请求后面等，下一轮再来即可）。
 
@@ -291,10 +333,16 @@ def refresh_library(lib: dict, force: bool = False, blocking: bool = True) -> di
     if not lk.acquire(blocking=blocking):
         return {"scanned": 0, "added": 0, "removed": 0, "unchanged": 0,
                 "seconds": 0.0, "skipped": True}
+    # 判据放在锁内：同一库的并发刷新不该有两个线程各判一次
+    if not force and _rule_stale(lid):
+        force = True
     try:
         out = _refresh_locked(lib, force)
     finally:
         lk.release()
+    # 跑完一整遍全量才记版本 —— 增量那一轮没资格代表「这库已按新口径重探过」
+    if force and not out.get("skipped"):
+        _mark_rule(lid)
     _mark_fresh(lid)
     with _state_lock:
         _ready.add(lid)
@@ -350,7 +398,8 @@ def _refresh_locked(lib: dict, force: bool) -> dict:
 
     for d in roots:
         droot = str(d)
-        for f in _lib._iter_book_entries(d, exts, pats):
+        # ltype 传给枚举：库类型决定要不要做「序号单元」合并（第 73 期，见那里的注释）
+        for f in _lib._iter_book_entries(d, exts, pats, lib.get("type")):
             try:
                 rel = f.relative_to(d).as_posix()
             except ValueError:

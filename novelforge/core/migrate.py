@@ -34,7 +34,7 @@ import shutil
 import time
 
 from .. import config
-from . import activity_log, audio, db, fileops, lib_settings, library, publish
+from . import activity_log, audio, db, fileops, lib_settings, library, publish, units
 
 #: 迁移门禁在 app_state 里的键（存 JSON：用户答过就不再打扰）
 GATE_KEY = "library_migration_gate"
@@ -336,8 +336,9 @@ def _fmt_exts(exts) -> str:
 def compat_reason(book: dict, dst_lib: dict) -> str:
     """这本书能不能进那个库：能则返回 ``""``，不能则返回一句给人看的理由。
 
-    判据**只有** :func:`library.exts_for_library` —— 库扫描白名单的唯一真值源，不新写
-    第二处相容表（写了就一定会跟扫描漂移，然后「预览说能搬、搬完扫不到」）。
+    判据**只有**库扫描自己的那几处 —— :func:`library.exts_for_library`（白名单）与
+    :func:`units.collected_by`（目录型条目的形态：平铺音频 / 序号单元树），
+    不新写第二处相容表（写了就一定会跟扫描漂移，然后「预览说能搬、搬完扫不到」）。
     ⚠️ 第 40 期起判据从 ``_exts_for_type(dst_type)`` 换成 ``exts_for_library(dst_lib)``：
     白名单现在可以**逐库**收窄（新库向导），只看类型会放过「移进一个设过白名单、
     恰好不收这个格式的库」—— 那正是本闸门要拦的事。仍是同一个模块的同一个判据，
@@ -350,11 +351,17 @@ def compat_reason(book: dict, dst_lib: dict) -> str:
     label = str((dst_lib or {}).get("name") or "") or "目标库"
     allowed = library.exts_for_library(dst_lib)
     if publish.is_dir_entry(book):
-        # 目录型条目（有声书一章一文件）只在白名单含音频扩展名时才被算作一本书
-        # —— 与 ``library._iter_book_entries`` 的 ``allow_audio_dir`` 同一判据。
-        if set(audio.AUDIO_EXTS) & set(allowed):
+        # 目录型条目问的是「目标库扫不扫得出**这本书**」：判据直接调**扫描层那一个**
+        # （`units.collected_by` —— 枚举用的就是它），不新写第二处相容表。
+        # ⚠️ 第 73 期前这里只有一句「白名单含音频」的字面量，于是「漫画库 → 漫画库」搬一本
+        # 「一话一个 PDF」的书会被拒，理由还写着「认不出有声书目录」—— 判据与事实不符。
+        # 白名单必须用**目标库的**（不是 `units.UNIT_EXTS`）：问的就是「**它**扫不扫得到」。
+        # 路径不在磁盘上时也一律判为不相容：真搬会失败，理由不会比这更好。
+        path = library.root_of(book) / str(book.get("name") or "")
+        if units.collected_by(path, allowed, units.merges_for((dst_lib or {}).get("type"))):
             return ""
-        return f"「{label}」只收 {_fmt_exts(allowed)}，认不出「一章一文件」的有声书目录"
+        return (f"「{label}」只收 {_fmt_exts(allowed)}，"
+                f"认不出「一章一文件」的目录（有声书目录 / 序号单元树）")
     ext = pathlib.PurePosixPath(str(book.get("name") or "")).suffix.lower()
     if ext in allowed:
         return ""
