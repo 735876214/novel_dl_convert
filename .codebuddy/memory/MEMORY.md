@@ -84,3 +84,4 @@
 - **66** 跨册续接唯一真值源 `lib/seriesNext.ts`；**67** gzip（**206 永不压缩**）+ 并发**单飞**（在飞 Promise）+ 计时用 `curl`；**68** `server._card()` 不发简介正文 + 门控用 `authChecked`（**`auth.ready` 不行**）。
 - **69** 滚动跨章：锚取正文 article、补偿写绝对值、锚须已存在；`:key` 重复⇒**重读集合+按 id 去重+写入串行**。**70** 开关只 `ui/Switch.vue`；`v-model` 与监听器顺序不定⇒写 `:model-value` + `@update:model-value`；投递唯一链路 `api.convertDrop`。
 - **71** 探索发现：闸门**唯一判定** `gate_reason()`（三端点 400 + 原因；**试搜不拦**；前端提前置灰+出口）；来源名**唯一读法** `source_of()`；搜索真并发+逐源状态；`search_page`（**不支持分页的第 2 页必须回空**）；合并保守（缺作者/卷次差异**不并**）；**不做一键重试**。
+- **72** TXT 乱码根因是**三处判据**：①**按字节切的样本不能当「不是 UTF-8」的证据**（判**前缀**用 `getincrementaldecoder(..., final=False)`，严格 `bytes.decode` 会把尾部截断当失败；中段补采必须**对齐字符边界**）；②置信判据 `detect.regex_confident` = 密度 **或** 条数 ≥3（长章书不再退化）+ 降级产物全空**回退正则边界** + `_split_by_indent` 认**全角空格**；③派生缓存**每个影响正文的口径都要进指纹**（新增 `pipeline.ENCODING_RULE_VERSION` → `txtcache` 的 `state.enc_rule`/`_SPLIT_CACHE`/Redis `extra`）。⚠️ **同一判据不许第二份拷贝**（`ai_detect` 那份已收敛）；「正文读不出」必须留活动日志，不许静默。

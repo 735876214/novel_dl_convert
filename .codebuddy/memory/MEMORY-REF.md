@@ -216,3 +216,20 @@
 - ⚠️ **httpx 0.28 没有 `CookieJar`**（只有 `Cookies` / `CookieConflict`）⇒ `core/network.py` 必须用标准库 `http.cookiejar.CookieJar`；写成 `httpx.CookieJar()` 会让**每个书源一构造客户端就 AttributeError**（搜索恒 0 条 / 下载恒失败），而**单测全用桩 client 照不到**（第 71 期真机冒烟才现形）。
 - ⚠️ **规则源搜索命中地址必须补绝对**：`_absolutize` 按搜索页 url 做 urljoin（与章节目录 `_extract_links` 同口径）；不补则真实站点几乎都用相对链接 ⇒ 预览 / 取书以「Request URL is missing an 'http://'…」失败。
 - ⚠️ 冒烟坑：隔离 `CONFIG_DIR` 残留上一轮 `settings.json`（`download.enabled=true`）会让闸门**不触发** ⇒ 验「闸门关闭态」前先确认目录干净。
+
+### 第 72 期铁律（TXT 乱码：编码样本截断 / 长章书分章退化）
+
+**症状 → 根因链**（本机一本 1.1 MB 中文 UTF-8 TXT：阅读全文乱码、详情 3723 章、每章只有乱码 `<h2>`）：
+导入链路**无责**（`pipeline.dispatch` 只 `shutil.copy2`，源与库副本 md5 逐字节相同、文件本身是合法 UTF-8）。
+真因是**三处判据**，且**只修编码不够**（修好编码后仍是 3723 个空正文章 —— 实测）。
+
+- ⚠️ **按字节切出来的样本，不能当作「这不是 UTF-8」的证据**（缺陷 A，`pipeline._detect_encoding`）。`_sample_bytes` 按**字节**截 256 KiB，切点有 2/3 概率落在 3 字节汉字中间；老实现拿整段样本 `decode("utf-8-sig")` 自证（**严格**解码，尾部不完整即抛）⇒ 判 gb18030 ⇒ 解出满屏乱码且**全程不报错**（调用方还叠加 `errors="ignore"`）。判「前缀」的唯一写法：`codecs.getincrementaldecoder("utf-8")().decode(data, final=False)`（**每次新建实例**，解码器有状态）—— 只容忍**尾部**不足一个字符的序列，**中间**任何坏字节照旧抛（实测真 GBK / Big5 样本仍判 False，容错没放宽成「差不多就行」）。样本 >256 KiB 的中文 TXT 因此成片中招，而现有夹具都远小于 256 KiB。
+- ⚠️ **两段样本拼接，接缝处必须自己保证是字符边界**（缺陷 A2，同族第三处）。「开头纯 ASCII」时补采中段，起点 `size // 2` **按字节算**、多半落在字符中间 ⇒ 直接拼 `data + more` 会在**中间**造出一个假非法字节（续字节不能当字符开头）—— 前缀判定只容忍尾部，**救不了它**，真 UTF-8 书照样被判成 big5。修法 `_read_from_char_boundary`：① 窗口内先找换行（`0x0A` 在 UTF-8 / GBK / Big5 里都**不可能**做后继字节，换行后必是字符边界）；② 没有换行就跳过开头的续字节（`0x80–0xBF`）。头部那段全 ASCII ⇒ 尾部必然是边界，所以只需对齐中段起点。
+- ⚠️ **长章不是「命中太少」**（缺陷 B，`detect.detect_chapters`）：老置信闸门 `len(bounds) * 2000 >= len(text)` 会把一本 25 章、平均 1.5 万字/章的书判成「正则无效」（25×2000 = 50,000 < 373,187）⇒ 退化缩进切分。新判据 `detect.regex_confident(bounds, text)` = **密度 `len(bounds)*2000 >= len(text)` 或条数 `len(bounds) >= 3`**（行首锚定后 3 条以上行首章标记基本不可能是巧合）。它是**公开名**：消费者有两个 —— `detect_chapters`（用不用缩进降级）与 `ai_detect.HybridChapterDetector`（要不要花钱调 LLM），**同一判据不许有第二份拷贝**。
+- **降级产物一章正文都没有 ⇒ 回退正则边界**（保险）：全顶格文本在缩进降级下「每一行都成章首」⇒ N 个空正文假章，阅读器里表现为「满屏标题、点进去没有正文」。几个真边界好过 N 个空章。
+- **缩进降级认全角空格** `_split_by_indent`：`ln[:1] in (" ", "\t", "　")` —— 必须与 `_LEAD`（`[ \t　]*`）的字符集一致。中文文本用全角空格缩进是常态，只认半角会把**每一段**当成新章首（本机那本 3697 行用 `　　` 缩进）。
+- **`mode: regex` 的语义就是 `detect_chapters`**：直接委派，别在 `ai_detect` 里重写置信判据与降级逻辑（老写法少写「降级全空回退正则」那道保险 ⇒ 同一文本走管线与走检测器得到**不同目录**）。**行为变更**（写进 roadmap）：hybrid 模式下长章书不再触发 LLM（此前一本**已切对**的书每次都要花一次钱）。
+- ⚠️ **派生缓存：凡影响正文产出的口径都要进指纹**。第 62 期只放进了分章规则版本；本期新增 `pipeline.ENCODING_RULE_VERSION`，由 `txtcache.ENC_RULE_VERSION` 写进 `state.json`（`enc_rule`）与 `_SPLIT_CACHE` 键，`server.py` 原生路线的 Redis 章节缓存 `extra` 也带上（`v{RULE_VERSION}:e{ENC_RULE_VERSION}`）。漏掉的后果就是「判据改了、源文件一个字节没动」时**缓存永远命中、改了看不见效果**。
+- **老 `state.json` 缺 `enc_rule` 字段本身就是失效信号**（`state.get("enc_rule") != ENC_RULE_VERSION` ⇒ 不命中 ⇒ 重建）：这是「已缓存成 ok 的乱码派生件」与「失败状态永久粘住」唯一的自愈通道 —— 少了它，改完代码用户看到的还是老样子，且**不报错、不重建**。
+- **「正文读不出」必须留痕**（第 72 期可观测）：`txtcache.derived_epub` 失败分支写一条 `ACTION_CONVERT` + `STATUS_FAIL` 活动日志（主体 = **源文件名**，不同书不合并；`_log_rule_rebuild` 那种固定标签才合并成一条）。此前整条路**静默**：`state.json` 记个 `failed`，阅读器照渲染空章，用户在界面上拿不到任何提示。**同一（源指纹, 判据版本）只写一次**（第二次请求走 state 命中失败分支直接 `return None`），不会刷屏。
+- **不引 chardet / charset-normalizer**（项目铁律），也**不把 utf-8 放进打分循环**（那是第二条判据改动：本期容错只放宽「样本尾部被切断」，中间有坏字节仍判非 UTF-8）。**不做 UTF-16 / UTF-32 探测**（另一个独立缺口，无实例）。
