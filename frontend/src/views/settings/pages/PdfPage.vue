@@ -3,6 +3,7 @@ import { ref } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import Switch from '@/components/ui/Switch.vue'
 import {
   PDF_FITS,
   PDF_PREFS_DEFAULT,
@@ -102,19 +103,12 @@ function reset(): void {
             无系列、已是最后一册时只提示、不跳转
           </div>
         </div>
-        <button
-          type="button"
-          role="switch"
-          :aria-checked="prefs.autoNext"
-          class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors"
-          :class="prefs.autoNext ? 'bg-primary' : 'bg-muted'"
-          @click="prefs.autoNext = !prefs.autoNext; persist()"
-        >
-          <span
-            class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
-            :class="prefs.autoNext ? 'translate-x-[16px]' : 'translate-x-[2px]'"
-          />
-        </button>
+        <!-- 赋值与落盘写在**同一条**内联语句里：`v-model` 与本监听器的执行顺序不由我们决定，
+             分成两处会出现「先 persist 后赋值」⇒ 存下去的是旧值。 -->
+        <Switch
+          :model-value="prefs.autoNext"
+          @update:model-value="prefs.autoNext = $event; persist()"
+        />
       </div>
 
       <div class="px-4 py-3.5">

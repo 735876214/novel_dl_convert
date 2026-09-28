@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 
+import Switch from '@/components/ui/Switch.vue'
 import { useDndSort } from '@/composables/useDndSort'
 import { SCOPE_OPTIONS, SHELF_TYPE_LABEL, type ShelfType } from '@/data/dashboard'
 import { useDashboardStore } from '@/stores/dashboard'
@@ -196,21 +197,12 @@ function onReset(): void {
             >▼</button>
           </span>
 
-          <button
-            type="button"
-            role="switch"
-            :aria-checked="row.pref.enabled"
+          <Switch
+            :model-value="row.pref.enabled"
             :disabled="!row.def?.component"
             :title="`显示：${row.def?.title ?? row.pref.id}`"
-            class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors disabled:cursor-not-allowed"
-            :class="row.pref.enabled ? 'bg-primary' : 'bg-muted'"
-            @click="dashboard.toggleWidget(row.pref.id)"
-          >
-            <span
-              class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
-              :class="row.pref.enabled ? 'translate-x-[16px]' : 'translate-x-[2px]'"
-            />
-          </button>
+            @update:model-value="dashboard.toggleWidget(row.pref.id)"
+          />
         </div>
       </template>
 
@@ -251,20 +243,11 @@ function onReset(): void {
             @click="removeShelf(row.shelf.id)"
           >移除</button>
 
-          <button
-            type="button"
-            role="switch"
-            :aria-checked="row.shelf.enabled"
+          <Switch
+            :model-value="row.shelf.enabled"
             :title="`显示：${row.shelf.title}`"
-            class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors"
-            :class="row.shelf.enabled ? 'bg-primary' : 'bg-muted'"
-            @click="dashboard.toggleShelf(row.shelf.id)"
-          >
-            <span
-              class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
-              :class="row.shelf.enabled ? 'translate-x-[16px]' : 'translate-x-[2px]'"
-            />
-          </button>
+            @update:model-value="dashboard.toggleShelf(row.shelf.id)"
+          />
         </div>
 
         <div class="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border pt-3">

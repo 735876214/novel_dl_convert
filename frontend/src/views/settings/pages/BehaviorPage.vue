@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
+import Switch from '@/components/ui/Switch.vue'
 import { THUMBNAIL_CLICK_OPTIONS, useShelfPrefsStore, type ThumbnailClick } from '@/stores/shelfPrefs'
 import { useUiStore } from '@/stores/ui'
 
@@ -76,12 +77,10 @@ function setCollapseSeries(v: boolean): void {
             进书架页时，统一筛选面板默认是展开的（展开/收起一次只改当前状态，不改这里）
           </div>
         </div>
-        <input
-          type="checkbox"
-          class="h-4 w-4 shrink-0 cursor-pointer accent-primary"
-          :checked="prefs.prefs.filtersOpenByDefault"
+        <Switch
+          :model-value="prefs.prefs.filtersOpenByDefault"
           aria-label="筛选预览默认展开"
-          @change="setFiltersDefault(($event.target as HTMLInputElement).checked)"
+          @update:model-value="setFiltersDefault($event)"
         />
       </div>
 
@@ -92,12 +91,10 @@ function setCollapseSeries(v: boolean): void {
             同一系列的书在书架里默认合成一张卡 / 一行
           </div>
         </div>
-        <input
-          type="checkbox"
-          class="h-4 w-4 shrink-0 cursor-pointer accent-primary"
-          :checked="prefs.prefs.collapseSeries"
+        <Switch
+          :model-value="prefs.prefs.collapseSeries"
           aria-label="系列默认折叠"
-          @change="setCollapseSeries(($event.target as HTMLInputElement).checked)"
+          @update:model-value="setCollapseSeries($event)"
         />
       </div>
     </Card>

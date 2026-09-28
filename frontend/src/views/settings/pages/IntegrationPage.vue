@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import Switch from '@/components/ui/Switch.vue'
 import {
   api,
   type IntegrationService,
@@ -250,19 +251,7 @@ async function toggleAutoPush(): Promise<void> {
             {{ svc?.label }}；默认关闭，推送失败只记录，不影响你刚做的操作
           </div>
         </div>
-        <button
-          type="button"
-          role="switch"
-          :aria-checked="Boolean(svc?.auto_push)"
-          class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors"
-          :class="svc?.auto_push ? 'bg-primary' : 'bg-muted'"
-          @click="toggleAutoPush"
-        >
-          <span
-            class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
-            :class="svc?.auto_push ? 'translate-x-[16px]' : 'translate-x-[2px]'"
-          />
-        </button>
+        <Switch :model-value="Boolean(svc?.auto_push)" @update:model-value="toggleAutoPush" />
       </div>
 
       <!-- 同步结果：成功 / 跳过（含原因）/ 失败（含原因） -->

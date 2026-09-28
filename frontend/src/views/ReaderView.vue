@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import Switch from '@/components/ui/Switch.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
@@ -1941,11 +1942,7 @@ onBeforeUnmount(() => {
                 v-if="!isPdf && !isComic"
                 class="mt-2 flex cursor-pointer items-start gap-2 text-[11px] leading-snug text-muted-foreground"
               >
-                <input
-                  v-model="prefs.autoNextChapter"
-                  type="checkbox"
-                  class="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
-                >
+                <Switch v-model="prefs.autoNextChapter" class="mt-0.5" />
                 <span v-if="flowMode">
                   滚动模式<strong class="text-foreground/80">连续读（跨章无缝）</strong>
                   （相邻章接在一起，读到底自然进下一章、向上滚可回上一章；
@@ -2054,11 +2051,11 @@ onBeforeUnmount(() => {
             <div class="mt-2 flex flex-col gap-1.5 border-t border-border pt-2.5">
               <label class="flex cursor-pointer items-center justify-between text-[12px] text-muted-foreground">
                 <span>两端对齐</span>
-                <input v-model="prefs.justify" type="checkbox" class="accent-[var(--primary)]" :disabled="fixedLayout">
+                <Switch v-model="prefs.justify" :disabled="fixedLayout" />
               </label>
               <label class="flex cursor-pointer items-center justify-between text-[12px] text-muted-foreground">
                 <span>断词（西文长词换行）</span>
-                <input v-model="prefs.hyphens" type="checkbox" class="accent-[var(--primary)]" :disabled="fixedLayout">
+                <Switch v-model="prefs.hyphens" :disabled="fixedLayout" />
               </label>
             </div>
           </div>

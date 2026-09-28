@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import Card from '@/components/ui/Card.vue'
+import Switch from '@/components/ui/Switch.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import {
   AUTHOR_COVER_SHAPE_OPTIONS,
@@ -286,12 +287,10 @@ function num(e: Event): number {
             书架切到表格视图时，偶数行铺一层浅底色，横向读数不串行
           </div>
         </div>
-        <input
-          type="checkbox"
-          class="h-4 w-4 shrink-0 cursor-pointer accent-primary"
-          :checked="prefs.prefs.zebraStriping"
+        <Switch
+          :model-value="prefs.prefs.zebraStriping"
           aria-label="表格隔行底色"
-          @change="prefs.patch({ zebraStriping: ($event.target as HTMLInputElement).checked })"
+          @update:model-value="prefs.patch({ zebraStriping: $event })"
         />
       </div>
     </Card>

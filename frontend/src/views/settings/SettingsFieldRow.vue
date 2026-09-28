@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import Switch from '@/components/ui/Switch.vue'
 import type { FieldDef } from '@/data/settingsFields'
 
 /**
@@ -18,20 +19,11 @@ const emit = defineEmits<{ update: [value: string | number | boolean] }>()
       <div v-if="field.hint" class="mt-0.5 text-[11.5px] text-muted-foreground">{{ field.hint }}</div>
     </div>
 
-    <button
+    <Switch
       v-if="field.type === 'bool'"
-      type="button"
-      role="switch"
-      :aria-checked="Boolean(value)"
-      class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors"
-      :class="value ? 'bg-primary' : 'bg-muted'"
-      @click="emit('update', !value)"
-    >
-      <span
-        class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
-        :class="value ? 'translate-x-[16px]' : 'translate-x-[2px]'"
-      />
-    </button>
+      :model-value="Boolean(value)"
+      @update:model-value="emit('update', $event)"
+    />
 
     <select
       v-else-if="field.type === 'select'"

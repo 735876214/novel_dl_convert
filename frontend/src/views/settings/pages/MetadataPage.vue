@@ -5,6 +5,7 @@ import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
+import Switch from '@/components/ui/Switch.vue'
 import MetadataScoreCard from '@/components/MetadataScoreCard.vue'
 import { api, type CustomFieldDef, type MetadataConfigField, type MetadataHealthResult,
          type MetadataPlanItem, type MetadataProvider } from '@/lib/api'
@@ -762,21 +763,12 @@ watch(() => props.section, () => {
             >
               配置 {{ openConfig.has(p.id) ? '▴' : '▾' }}
             </button>
-            <button
+            <Switch
               v-if="p.implemented"
-              type="button"
-              role="switch"
-              :aria-checked="inOrder(p.id)"
+              :model-value="inOrder(p.id)"
               :title="inOrder(p.id) ? '停用' : '启用'"
-              class="relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors"
-              :class="inOrder(p.id) ? 'bg-primary' : 'bg-muted'"
-              @click="toggleSource(p.id)"
-            >
-              <span
-                class="absolute top-0.5 h-4 w-4 rounded-full bg-card shadow-xs transition-[left]"
-                :class="inOrder(p.id) ? 'left-[1.125rem]' : 'left-0.5'"
-              />
-            </button>
+              @update:model-value="toggleSource(p.id)"
+            />
             <span v-else class="w-9 shrink-0 text-center text-[11px] text-muted-foreground">—</span>
           </div>
 

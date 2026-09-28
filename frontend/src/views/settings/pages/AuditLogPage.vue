@@ -5,6 +5,7 @@ import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
+import Switch from '@/components/ui/Switch.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type LogItem, type LogStorage } from '@/lib/api'
@@ -426,19 +427,7 @@ function downloadLog(): void {
               读取会跨归档，列表仍连续。不开启就是原来的「单文件一直追加」
             </div>
           </div>
-          <button
-            type="button"
-            role="switch"
-            :aria-checked="retEnabled"
-            class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors"
-            :class="retEnabled ? 'bg-primary' : 'bg-muted'"
-            @click="setRet('enabled', !retEnabled)"
-          >
-            <span
-              class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
-              :class="retEnabled ? 'translate-x-[16px]' : 'translate-x-[2px]'"
-            />
-          </button>
+          <Switch :model-value="retEnabled" @update:model-value="setRet('enabled', $event)" />
         </div>
       </div>
 
@@ -468,12 +457,10 @@ function downloadLog(): void {
           >
         </label>
         <label class="flex cursor-pointer items-center gap-2 pb-2 text-[12.5px] text-foreground">
-          <input
-            :checked="retCompress"
-            type="checkbox"
-            class="h-4 w-4 cursor-pointer accent-primary"
-            @change="setRet('compress', ($event.target as HTMLInputElement).checked)"
-          >
+          <Switch
+            :model-value="retCompress"
+            @update:model-value="setRet('compress', $event)"
+          />
           归档时压缩（gzip）
         </label>
         <p class="basis-full text-[11.5px] text-muted-foreground">

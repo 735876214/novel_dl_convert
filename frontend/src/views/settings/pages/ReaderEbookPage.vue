@@ -3,6 +3,7 @@ import { ref } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import Switch from '@/components/ui/Switch.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import {
   READER_FIXED_LAYOUT_WIDTHS,
@@ -188,11 +189,17 @@ function setNum(key: NumPrefKey, value: number): void {
 
       <div class="flex items-center gap-8 border-t border-border px-4 py-3.5">
         <label class="flex cursor-pointer items-center gap-2 text-[13px] text-foreground">
-          <input v-model="prefs.justify" type="checkbox" class="accent-[var(--primary)]" @change="persistPrefs">
+          <Switch
+            :model-value="prefs.justify"
+            @update:model-value="prefs.justify = $event; persistPrefs()"
+          />
           <span>两端对齐</span>
         </label>
         <label class="flex cursor-pointer items-center gap-2 text-[13px] text-foreground">
-          <input v-model="prefs.hyphens" type="checkbox" class="accent-[var(--primary)]" @change="persistPrefs">
+          <Switch
+            :model-value="prefs.hyphens"
+            @update:model-value="prefs.hyphens = $event; persistPrefs()"
+          />
           <span>断词（西文长词换行）</span>
         </label>
       </div>
