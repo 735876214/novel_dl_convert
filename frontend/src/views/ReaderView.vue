@@ -11,6 +11,15 @@ import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLI
 import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type SessionExtra } from '@/lib/api'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import { progressForFile } from '@/lib/readingProgress'
+import {
+  canTrim,
+  chunkGeomOf,
+  computeWindow,
+  localFractionIn,
+  pickVisiblePos,
+  scrollCompensation,
+  type ChunkGeom,
+} from '@/lib/readerFlow'
 import { rangeAt, selectionRange } from '@/lib/textAnchor'
 import { readComicPrefs, saveComicPrefs } from '@/lib/comicPrefs'
 import {
@@ -194,6 +203,53 @@ const pageStep = computed(() => (fixedLayout.value
  * 读不到就是 false（默认按可重排处理，见那边的说明）。
  */
 const fixedLayout = computed(() => book.value?.fixed_layout === true)
+
+/**
+ * 滚动模式「跨章连续流」的章块（第 69 期）。
+ *
+ * 窗口只有 2–3 项（`lib/readerFlow.computeWindow`），所以一个数组 + 一张 `pos → 元素`
+ * 表就够，不需要虚拟列表。
+ */
+interface FlowChunk {
+  /** 在 `flat` 里的位置（章块窗口、目录高亮、底栏页码都用它） */
+  pos: number
+  /** 后端章节序号（进度与批注上报的 `chapter` 用它，不是 `pos`） */
+  index: number
+  title: string
+  html: string
+}
+
+const chunks = ref<FlowChunk[]>([])
+
+/**
+ * `pos → 该章块的 `<section>` 元素`。
+ *
+ * 用**普通 Map** 而非响应式对象：这里只在 `nextTick` 之后**命令式**取值
+ * （量几何 / 定位 / 挂批注），不参与渲染，做成响应式只会白白触发依赖收集。
+ */
+const chunkEls = new Map<number, HTMLElement>()
+
+/** 章块挂载/卸载时同步元素表（`v-for` 的函数式 ref 在卸载时会以 `null` 回调） */
+function setChunkEl(pos: number, el: unknown): void {
+  if (el instanceof HTMLElement) chunkEls.set(pos, el)
+  else chunkEls.delete(pos)
+}
+
+/**
+ * 是否走「跨章连续流」（第 69 期）。
+ *
+ * 只在 **EPUB + 滚动模式 + 可重排** 时启用。固定版式（pre-paginated）的页尺寸由书本身
+ * 决定、与 `nf-fixed` 的中和样式耦合，把「整页排好的版」纵向拼接风险高 ⇒
+ * 保守沿用旧的单章路径（取舍记在 `docs/roadmap-gaps-remaining.md`）。
+ */
+const flowMode = computed(() => (
+  !paged.value
+  && !isPdf.value
+  && !isComic.value
+  && !fixedLayout.value
+  && !!book.value
+  && total.value > 0
+))
 
 /** 正文的左右内边距：偏好驱动（原先写死 px-6），翻页模式下不额外叠加 */
 const gutterStyle = computed(() => {
@@ -467,6 +523,34 @@ watch(scrollRef, (el, old) => {
   el?.addEventListener('wheel', onWheel, { passive: false })
 })
 
+/**
+ * 滚动 ↔ 翻页 切换：两条路径维护的是**两份不同的正文状态**。
+ *
+ * 连续流只维护 `chunks`，单章路径只维护 `html` —— 切过去时另一份是空的，必须按当前章
+ * 重新取一次（已预取的章命中缓存，不会真的发请求），否则会露一屏空白。
+ * 顺手把另一份清干净：留着既占内存，也会让「切回来时先用旧内容闪一下」。
+ */
+watch(paged, async () => {
+  if (!total.value || !book.value || isPdf.value || isComic.value) return
+  if (paged.value) {
+    chunks.value = []
+    chunkEls.clear()
+  } else {
+    html.value = ''
+  }
+  await loadChapter(pos.value, local.value)
+})
+
+/**
+ * 开关一改就立刻按当前可见章校一趟窗口（第 69 期）。
+ *
+ * 少了这一步会有个很别扭的边角：用户正停在窗口末尾（读到底、没得再滚），此时打开「连续读」
+ * 不会补章 —— 补章只挂在滚动事件上，而那一刻**没有滚动事件**，用户只会觉得「开关没反应」。
+ */
+watch(() => prefs.value.autoNextChapter, () => {
+  if (flowMode.value) void maintainFlowWindow(pos.value)
+})
+
 // 选中文字浮层
 const selText = ref('')
 const selPos = ref<{ x: number; y: number } | null>(null)
@@ -516,22 +600,39 @@ function localFraction(): number {
  * 这正是「无缝」的全部内容（也正是不预取时最容易被说成「卡一下」的地方）。
  */
 const chapterCache = new Map<number, { html: string; title: string }>()
-const CACHE_MAX = 4
+/** 正在飞的章节请求（键 = `flat` 位置）：同一章的并发合成一次（见 `chapterAt`） */
+const chapterInflight = new Map<number, Promise<{ html: string; title: string }>>()
+// 第 69 期：4 → 6。连续流的窗口是 3 章，且「向上前插」与「向下后补」会同时发生 ——
+// 4 太紧，补一章就把正要用的邻章挤掉，于是滚回边界时又得重新请求（表现就是「卡一下」）。
+// 仍然是有界缓存，不随书长增长。
+const CACHE_MAX = 6
 
 async function chapterAt(p: number): Promise<{ html: string; title: string }> {
   const cached = chapterCache.get(p)
   if (cached) return cached
+  // 同一章的**并发**只发一次请求（第 69 期）：连续流里「补齐窗口」与「滚动补章」会同时
+  // 想要同一章，没有这道去重就会白发一次请求，两个结果回来还会互相覆盖。
+  const running = chapterInflight.get(p)
+  if (running) return running
   const ch = flat.value[p]
-  const data = await api.chapter(bookId.value, ch.index)
-  const item = { html: data.html, title: ch.title || data.title }
-  chapterCache.set(p, item)
-  // 只留最近几章：缓存的是整章 HTML，留太多是真金白银的内存
-  while (chapterCache.size > CACHE_MAX) {
-    const oldest = chapterCache.keys().next().value
-    if (oldest === undefined) break
-    chapterCache.delete(oldest)
+  const job = (async () => {
+    const data = await api.chapter(bookId.value, ch.index)
+    const item = { html: data.html, title: ch.title || data.title }
+    chapterCache.set(p, item)
+    // 只留最近几章：缓存的是整章 HTML，留太多是真金白银的内存
+    while (chapterCache.size > CACHE_MAX) {
+      const oldest = chapterCache.keys().next().value
+      if (oldest === undefined) break
+      chapterCache.delete(oldest)
+    }
+    return item
+  })()
+  chapterInflight.set(p, job)
+  try {
+    return await job
+  } finally {
+    chapterInflight.delete(p)
   }
-  return item
 }
 
 /**
@@ -542,12 +643,315 @@ async function chapterAt(p: number): Promise<{ html: string; title: string }> {
  */
 let loadSeq = 0
 
+// ---------------- 滚动模式：跨章连续流（第 69 期）----------------
+//
+// 与单章路径的分工：**滚动模式不替换正文**，而是把「可见章 + 前后各一章」挂在同一滚动
+// 容器里首尾相接。于是「读到底自动接下一章」不再是「换一章 + 滚回顶部」，而是**下方本来
+// 就有**；往上滚也能接着读上一章。可调参数的唯一真值源在 `lib/readerFlow.ts`（有单测）。
+
+/** 章块容器元素（量几何、定位用） */
+function chunkEl(p: number): HTMLElement | null {
+  return chunkEls.get(p) ?? null
+}
+
+/**
+ * 章块的**正文**元素（`.reader-content`）。
+ *
+ * 必须与量几何的容器分开：容器里还挂着我们加的章标题，`textContent` 会把标题也算进去 ——
+ * 而进度的 `offset` 与批注的 `start_off` 必须与**后端单章正文**同一把尺子量（见 `epub_cfi.py`）。
+ */
+function chunkArt(p: number): HTMLElement | null {
+  return chunkEl(p)?.querySelector<HTMLElement>('.reader-content') ?? null
+}
+
+/** 当前章的正文 root：单章路径是 `contentRef`，连续流是**可见章**那一块 */
+function currentChapterRoot(): HTMLElement | null {
+  return flowMode.value ? chunkArt(pos.value) : contentRef.value
+}
+
+/** 窗口内所有章块的正文 root（「不知道在哪一章」的操作扫这个，如按 id 解包批注） */
+function allChapterRoots(): HTMLElement[] {
+  if (!flowMode.value) {
+    const root = contentRef.value
+    return root ? [root] : []
+  }
+  const out: HTMLElement[] = []
+  for (const c of chunks.value) {
+    const el = chunkArt(c.pos)
+    if (el) out.push(el)
+  }
+  return out
+}
+
+/**
+ * 量出窗口内章块的几何（坐标系 = 滚动容器**内容坐标**，与 `scrollTop` 同一把尺子）。
+ *
+ * 每次现量、不缓存：章块里的图片是异步解码的，缓存下来的高度会过期 ——
+ * 而过期的高度会直接变成「跳一屏」。O(章块数=3) 的测量本身很便宜。
+ */
+function measureChunks(): ChunkGeom[] {
+  const box = scrollRef.value
+  if (!box) return []
+  const boxRect = box.getBoundingClientRect()
+  const out: ChunkGeom[] = []
+  for (const c of chunks.value) {
+    const el = chunkEl(c.pos)
+    if (!el) continue
+    const r = el.getBoundingClientRect()
+    out.push({ pos: c.pos, top: r.top - boxRect.top + box.scrollTop, height: r.height })
+  }
+  return out
+}
+
+/** 把话题滚到「第 `p` 章的章内 `frac` 处」 */
+function scrollToChunk(p: number, frac: number): void {
+  const box = scrollRef.value
+  const geom = chunkGeomOf(measureChunks(), p)
+  if (!box || !geom) return
+  box.scrollTop = Math.max(0, geom.top + frac * geom.height)
+}
+
+/** 该章正文是否**自带标题**（`chapter_html` 抽的是 body，多数书的 body 里就有 `<h1>`） */
+function bodyHasHeading(html: string): boolean {
+  return /^\s*<h[1-6][\s>]/i.test(html)
+}
+
+/** 由「位置 + 已取到的正文」造一个章块（标题优先用目录里的，与单章路径同一口径） */
+function flowChunkOf(p: number, item: { html: string; title: string }): FlowChunk {
+  const f = flat.value[p]
+  return { pos: p, index: f?.index ?? 0, title: f?.title || item.title, html: item.html }
+}
+
+/** 章块落地的串行链（见 `applyChunks`：并发补/裁会让锚点补偿互相穿插） */
+let chunkWriteChain: Promise<void> = Promise.resolve()
+
+/**
+ * 章块列表的规范化：按 `pos` 去重（后者胜）并升序。
+ *
+ * 去重不是洁癖而是**渲染层的硬要求**：`v-for` 的 `:key` 是 `pos`，一旦重复，Vue 的
+ * patch 行为就没有定义了 —— 实测会渲染出「上一章排在中间」这种错序 DOM。
+ * 补章有两条并发路径（`fillFlowWindow` 与 `maintainFlowWindow`），谁先谁后不由我们决定，
+ * 所以「绝不允许重复」必须在这里兜住，不能只指望调用方不撞车。
+ */
+function normalizeChunks(list: FlowChunk[]): FlowChunk[] {
+  const byPos = new Map<number, FlowChunk>()
+  for (const c of list) byPos.set(c.pos, c)
+  return [...byPos.values()].sort((a, b) => a.pos - b.pos)
+}
+
+/**
+ * 落章块并**保持视觉位置** —— 这就是「无缝」的物理实现。
+ *
+ * 向下**追加**不移动上方内容 ⇒ 锚块实测位移为 0 ⇒ 同一份代码天然覆盖「追加不补偿」；
+ * 向上**前插**会把锚块整体推下 ⇒ 同量加大 `scrollTop`；**裁掉上方**则反号回补。
+ *
+ * 为什么用**锚元素实测位移**而不是 `scrollHeight` 差值：标题留白、图片占位都会被一起算进去，
+ * 而算高度差需要事先知道「插了多少」，漏一项就会跳。`scrollCompensation` 收的是
+ * 「上方净增高度」，这里的 `delta` 正是它的实测值（负数 = 上方净减）。
+ *
+ * ⚠️ 两笔补/裁**不能并发**：补偿是「量一次 → 改 DOM → 再量一次」，穿插执行会让后一笔量到的
+ * 位移里含了前一笔的改动 ⇒ 补偿量算重。所有落地都排在同一条串行链上（`chunkWriteChain`）。
+ *
+ * 也因为这个排队：`next` 是**调用时**的快照，轮到它执行时窗口里可能已经多了别的章
+ * （另一条路径刚补的）。所以这里按语义合并 —— `replace` 表示「这就是全部」（跳转重建窗口），
+ * 否则默认**并入**（只丢掉 `drop` 明确指出要裁的那几块），不会拿旧快照覆盖掉新补的章。
+ */
+function applyChunks(
+  next: FlowChunk[],
+  anchorPos: number | null,
+  opts: { drop?: number[]; replace?: boolean } = {},
+): Promise<void> {
+  const run = async (): Promise<void> => {
+    const box = scrollRef.value
+    // 锚取**正文 article** 而不是外层 `<section>`：章节块的上下留白（`mt-10` / `pt-6`）会随
+    // 「是不是第一块」（`first:` 变体）变化，`<section>` 的 border-box 顶边量不到它自己的
+    // 内边距 —— 实测会漏掉 24px，读起来就是前插时正文被轻轻推了一下。article 的顶边把
+    // 外层 margin、边框与内边距**一起**算在内，正好是读者眼里「正文的位置」。
+    const anchorEl = anchorPos === null ? null : chunkArt(anchorPos)
+    const beforeTop = box?.scrollTop ?? 0
+    const beforeRect = anchorEl?.getBoundingClientRect().top ?? 0
+    const drop = new Set(opts.drop ?? [])
+    const base = opts.replace ? [] : chunks.value.filter((c) => !drop.has(c.pos))
+    chunks.value = normalizeChunks([...base, ...next])
+    await nextTick()
+    if (!box || !anchorEl || !anchorEl.isConnected) return
+    const delta = anchorEl.getBoundingClientRect().top - beforeRect
+    // `delta` 就是「上方净增高度」的实测值（负数 = 上方净减），与 `scrollCompensation` 同一口径。
+    // ⚠️ 必须写成**绝对值** `beforeTop + 补偿量`，不能 `scrollTop += 补偿量`：
+    // 浏览器自带的滚动锚定（scroll anchoring）很可能已经替我们把 scrollTop 调好了，那时
+    // `delta` 已≈0 —— 绝对写入是幂等的，相对累加会把同一段位移**补两次**，反倒跳得更凶。
+    if (Math.abs(delta) >= 1) box.scrollTop = Math.max(0, beforeTop + scrollCompensation(delta, 0))
+  }
+  chunkWriteChain = chunkWriteChain.then(run, run)
+  return chunkWriteChain
+}
+
+/** 续接单飞闸：一次只跑一趟补/裁，避免滚动连发把窗口搅乱 */
+let flowBusy = false
+
+/**
+ * 把窗口里**还缺的**那几章补齐（异步、静默）。
+ *
+ * 失败只当「少一块」：当前章已经能读了，邻章晚点会在滚动时由 `maintainFlowWindow` 再补一次。
+ */
+async function fillFlowWindow(p: number, seq: number): Promise<void> {
+  const want = computeWindow(p, total.value, prefs.value.autoNextChapter)
+  const have = new Set(chunks.value.map((c) => c.pos))
+  const missing = want.filter((q) => !have.has(q))
+  if (!missing.length) return
+  const got = await Promise.all(missing.map(async (q) => {
+    try { return flowChunkOf(q, await chapterAt(q)) } catch { return null }
+  }))
+  // 期间又跳了别处 ⇒ 这批结果作废（与单章路径同一套「请求序号」纪律）
+  if (seq !== loadSeq) return
+  // ⚠️ 必须**在 await 之后**重新看一眼窗口里已有什么：取数期间用户可能已经滚过，
+  // `maintainFlowWindow` 很可能把同一章补了进来 —— 沿用取数前那份 `have` 就会并入重复项。
+  const now = new Set(chunks.value.map((c) => c.pos))
+  const added = got.filter((c): c is FlowChunk => c !== null && !now.has(c.pos))
+  if (!added.length) return
+  await applyChunks(added, p)
+  applyHighlights()
+}
+
+/**
+ * 连续流：以 `p` 为中心重建章块窗口，并把阅读位置落到 `p`（第 69 期）。
+ *
+ * 「无缝」不在这里 —— 这里的每一次跳转都是**用户显式发起**的（目录 / 书签 / 批注 /
+ * 恢复位置 / 上一章下一章），落点就该是目标章（章内精确偏移由 `restoreOffset` 给）。
+ * 滚动过程中的相邻章补/裁见 `maintainFlowWindow`。
+ *
+ * 两段式渲染：**先只挂当前章**（首屏立刻可读，不被邻章的请求拖住），邻章到了再合并 ——
+ * 合并走 `applyChunks` 的锚点补偿，所以视觉上不会跳。
+ */
+async function loadFlowAt(p: number, restore?: number, restoreOffset?: number): Promise<void> {
+  const seq = ++loadSeq
+  chapterLoading.value = !chapterCache.has(p)
+  let item: { html: string; title: string }
+  try {
+    item = await chapterAt(p)
+  } catch (e) {
+    if (seq !== loadSeq) return
+    chapterLoading.value = false
+    error.value = e instanceof Error ? e.message : '章节加载失败'
+    return
+  }
+  if (seq !== loadSeq) return
+  chapterLoading.value = false
+  error.value = ''
+  pos.value = p
+  chapterTitle.value = flowChunkOf(p, item).title
+  await applyChunks([flowChunkOf(p, item)], null, { replace: true })
+  // 定位：优先用精确偏移（第 54 期 CFI 反解的**章内**字符偏移，与 `saveProgress` 同一
+  // 坐标系）；换算不了（正文未挂载 / 长度为 0）再回落 `restore`（全书百分比反推的章内比例）。
+  let frac = restore ?? 0
+  const len = chunkArt(p)?.textContent?.length ?? 0
+  if (restoreOffset !== undefined && len > 0) {
+    frac = Math.min(1, Math.max(0, restoreOffset / len))
+  }
+  scrollToChunk(p, frac)
+  local.value = frac
+  applyHighlights()
+  // 邻章与「静默预取」共用一条路：补齐窗口 = 顺带把下一章取进 `chapterCache`
+  void fillFlowWindow(p, seq)
+}
+
+/**
+ * 滚动中按可见章维护窗口：需要就补一章、离得够远就裁一章（第 69 期）。
+ *
+ * 两条边界纪律：
+ * 1. **向后（未来章）的自动扩展受开关管**，向前（历史章）始终补 ——「向上滚能读回上一章」
+ *    与开关无关，开关只管「要不要自动往后接」；
+ * 2. 裁剪必须过 `canTrim`（完全离开视口且上下各留一屏），不满足就留着 ——
+ *    惯性滚动甩出空白比「多挂一章」糟得多。
+ */
+async function maintainFlowWindow(v: number): Promise<void> {
+  if (flowBusy || !flowMode.value) return
+  const box = scrollRef.value
+  if (!box) return
+  flowBusy = true
+  try {
+    const want = computeWindow(v, total.value, prefs.value.autoNextChapter)
+    const have = new Set(chunks.value.map((c) => c.pos))
+    const toAdd = want.filter((q) => !have.has(q) && (q < v || prefs.value.autoNextChapter))
+    const geoms = measureChunks()
+    const toDrop = chunks.value
+      .filter((c) => !want.includes(c.pos))
+      .filter((c) => {
+        const g = chunkGeomOf(geoms, c.pos)
+        return !!g && canTrim(g, box.scrollTop, box.clientHeight)
+      })
+      .map((c) => c.pos)
+    if (!toAdd.length && !toDrop.length) return
+    const added: FlowChunk[] = []
+    for (const q of toAdd) {
+      try { added.push(flowChunkOf(q, await chapterAt(q))) } catch { /* 补章失败保持现状 */ }
+    }
+    const drop = new Set(toDrop)
+    if (!added.length && !toDrop.length) return
+    // 锚块 = 「补/裁之前就挂着、裁完之后仍在」的最靠上那一块（`chunks` 恒为升序）。
+    // ⚠️ 不能用「补完之后」里最靠上的一块：**新补进来的章块此刻还没有 DOM**，`chunkArt`
+    // 返回 `null` ⇒ 补偿量根本算不出来 ⇒ 前插时正文会被整体按下，看起来就是「向上跳了一屏」。
+    const anchorPos = chunks.value.find((c) => !drop.has(c.pos))?.pos ?? null
+    await applyChunks(added, anchorPos, { drop: toDrop })
+    applyHighlights()
+  } finally {
+    flowBusy = false
+  }
+  // 补章是异步的，期间可见章可能又往前走了（用户还在滚）⇒ 立刻按最新位置再校一趟。
+  // 少了这一步会卡在「窗口边界 + 没有新内容」：底部到头后滚动事件不再发，窗口也就不再补，
+  // 用户必须自己往上滚一下再滚下来才能继续读 —— 这正是「自由滚动」最不该有的那种别扭。
+  if (flowMode.value && pos.value !== v) void maintainFlowWindow(pos.value)
+}
+
+/**
+ * 连续流的滚动热路径：只做 O(章块数=3) 的测量与比较，**不写布局**。
+ * 会动 DOM 的补/裁交给 `maintainFlowWindow`（异步 + 单飞闸）。
+ */
+function onFlowScroll(): void {
+  const box = scrollRef.value
+  if (!box) return
+  const geoms = measureChunks()
+  const v = pickVisiblePos(geoms, box.scrollTop, box.clientHeight)
+  if (v !== pos.value) {
+    pos.value = v
+    chapterTitle.value = chunks.value.find((c) => c.pos === v)?.title ?? ''
+  }
+  local.value = localFractionIn(chunkGeomOf(geoms, v), box.scrollTop)
+  scheduleSave()
+  void maintainFlowWindow(v)
+}
+
+/**
+ * 跳/翻到第 `p` 章（上一章 / 下一章按钮）。
+ *
+ * 连续流下如果这一章**已经在窗口里**就地滚过去就好：不重建、不取数、不闪「加载中」——
+ * 用户点「下一章」的预期是「翻过去」，不是「重新加载一次」。
+ */
+function goToChunk(p: number): void {
+  if (p < 0 || p >= total.value) return
+  if (flowMode.value && chunkEl(p)) {
+    pos.value = p
+    chapterTitle.value = chunks.value.find((c) => c.pos === p)?.title ?? ''
+    local.value = 0
+    scrollToChunk(p, 0)
+    scheduleSave()
+    void maintainFlowWindow(p)
+    return
+  }
+  void loadChapter(p)
+}
+
 async function loadChapter(p: number, restore?: number, restoreOffset?: number): Promise<void> {
   if (!total.value) return
   p = Math.min(Math.max(0, p), total.value - 1)
   const ch = flat.value[p]
   if (!ch || ch.index === undefined) {
     error.value = '目录里的这一条没有可定位的章节序号'
+    return
+  }
+  // 滚动模式：不替换正文，改走「以 p 为中心重建章块窗口 + 章块内定位」
+  if (flowMode.value) {
+    await loadFlowAt(p, restore, restoreOffset)
     return
   }
   pos.value = p
@@ -587,11 +991,11 @@ async function loadChapter(p: number, restore?: number, restoreOffset?: number):
 }
 
 function prev(): void {
-  if (pos.value > 0) loadChapter(pos.value - 1)
+  if (pos.value > 0) goToChunk(pos.value - 1)
 }
 
 function next(): void {
-  if (pos.value < total.value - 1) loadChapter(pos.value + 1)
+  if (pos.value < total.value - 1) goToChunk(pos.value + 1)
 }
 
 /**
@@ -631,10 +1035,20 @@ function gotoPos(p: number): void {
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 
-function onScroll(): void {
-  local.value = localFraction()
+/** 进度写入的去抖：滚动会连发，必须合并成一次写 */
+function scheduleSave(): void {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(saveProgress, 800)
+}
+
+function onScroll(): void {
+  // 滚动模式：正文是「章块窗口」，位置口径变成**可见章 + 章内比例**（见 `onFlowScroll`）
+  if (flowMode.value) {
+    onFlowScroll()
+    return
+  }
+  local.value = localFraction()
+  scheduleSave()
   void maybeAutoNext()
 }
 
@@ -649,15 +1063,19 @@ function atChapterEnd(): boolean {
 }
 
 /**
- * 滚动读到一章末尾 → 自动接上下一章（第 61 期）。
+ * 滚动读到一章末尾 → 自动接上下一章（第 61 期；**第 69 期起连续流不再走这里**）。
  *
  * 两条纪律：
  * 1. **先确保下一章已在缓存里，再切换** —— 反过来写就退化成「自动点了一下下一章」，
  *    该有的加载空档一个不少，那就不是无缝；
  * 2. **翻页模式不在这里处理** —— 它走 `flip()` 的末页判定，用户明确没要改那条路径。
+ *
+ * ⚠️ 可重排 EPUB 的滚动模式改由「章块窗口」接续（下一章本来就挂在下方，不存在「切换」；
+ * 见 `maintainFlowWindow`），所以这里只剩**固定版式**那条旧路径在走。守卫里保留
+ * `flowMode` 判断是必须的：否则固定版式之外的路径还会再「换一次章」，把连续流打断。
  */
 async function maybeAutoNext(): Promise<void> {
-  if (advancing || paged.value || isPdf.value || isComic.value) return
+  if (advancing || paged.value || isPdf.value || isComic.value || flowMode.value) return
   if (!prefs.value.autoNextChapter || !total.value) return
   if (pos.value >= total.value - 1 || !atChapterEnd()) return
   advancing = true
@@ -685,7 +1103,9 @@ async function saveProgress(): Promise<void> {
   try {
     // 第 54 期：EPUB 附带章内字符偏移（textContent 坐标），服务端据此生成 CFI；
     // 算不出（正文未挂载）就不带 —— 进度本身照常保存，恢复侧回落百分比。
-    const len = contentRef.value?.textContent?.length ?? 0
+    // 第 69 期：连续流下「本章长度」= **可见章**那一块的长度，不是整条流的长度 ——
+    // `local` 与 `currentIndex` 也都是可见章口径，三者必须同一把尺子，否则 CFI 偏移会落错位置。
+    const len = currentChapterRoot()?.textContent?.length ?? 0
     const offset = len > 0 ? Math.round(local.value * len) : undefined
     const r = await api.setProgress(
       bookId.value, currentIndex.value, overallPercent.value, offset, fileRel.value,
@@ -776,24 +1196,55 @@ async function applyRemoteProgress(): Promise<void> {
 
 // ---------------- 高亮 / 批注 ----------------
 
+/**
+ * 某个节点落在窗口里的哪一章块（找不到返回 `null`；非连续流恒为 `null`）。
+ *
+ * 靠 `.nf-chunk` 往上找容器，再回查元素表 —— **不靠 `pos` 推算**：章块位置会随窗口
+ * 滑动整体变化，而 DOM 归属不会。
+ */
+function chunkPosOfNode(node: Node | null): number | null {
+  if (!flowMode.value || !node) return null
+  const el = node instanceof HTMLElement ? node : node.parentElement
+  const sect = el?.closest('.nf-chunk')
+  if (!sect) return null
+  for (const [p, e] of chunkEls) if (e === sect) return p
+  return null
+}
+
+/**
+ * 选区所在的章块位置（连续流）。
+ *
+ * 必须记下来：`selRange` 的字符偏移是**相对该章正文**算的，而选区完全可能落在
+ * 「可见章之外」的那一块（用户往上拖过章界），那时 `pos` 指的不是这一章。
+ */
+const selChunkPos = ref<number | null>(null)
+
 function onSelect(): void {
   const sel = window.getSelection()
-  const content = contentRef.value
+  const anchor = sel?.anchorNode ?? null
+  // 连续流下正文有 2–3 个 root，必须按**选区自己**落在哪一块来选 root：
+  // 继续用「全局唯一的 `contentRef`」会让往上拖过章界的选区直接判成无效。
+  const chunkPos = chunkPosOfNode(anchor)
+  const content = flowMode.value
+    ? (chunkPos === null ? null : chunkArt(chunkPos))
+    : contentRef.value
   if (!sel || sel.isCollapsed || !content) {
     selPos.value = null
     selRange.value = null
+    selChunkPos.value = null
     return
   }
   const text = sel.toString().trim()
   if (!text || text.length > 500) {
     selPos.value = null
     selRange.value = null
+    selChunkPos.value = null
     return
   }
-  const anchor = sel.anchorNode
   if (!anchor || !content.contains(anchor)) {
     selPos.value = null
     selRange.value = null
+    selChunkPos.value = null
     return
   }
   const rect = sel.getRangeAt(0).getBoundingClientRect()
@@ -802,6 +1253,7 @@ function onSelect(): void {
   //（选区锚点会随着 DOM 替换失效）。取不到就算了 —— 那只是回落成按文本搜索，
   // 与加锚之前的行为一样，不是错误。
   selRange.value = selectionRange(content)
+  selChunkPos.value = chunkPos
   selPos.value = { x: rect.left + rect.width / 2, y: rect.top }
 }
 
@@ -878,11 +1330,39 @@ function wrapQuote(root: HTMLElement, quote: string, color: string, style: strin
   return wrapByText(root, quote, color, style, id)
 }
 
+/**
+ * 把批注画到正文上。
+ *
+ * 第 69 期两处调整，都因为「正文不再只有一个 root」：
+ * 1. **按章块 root 分别画**（每块只画属于自己那一章的批注）—— 画错 root 会在别的章里
+ *    按文本搜到同一句话，把高亮画到不相干的位置；
+ * 2. 画之前**先解包该 root 里已有的批注 span**：窗口滑动时 Vue 会复用同一块 DOM
+ *    （`v-html` 内容没变就不重建），重复包裹会变成 span 套 span，颜色与选区都会坏掉。
+ */
 function applyHighlights(): void {
-  const root = contentRef.value
-  if (!root) return
-  for (const a of chapterAnnotations.value) {
-    wrapQuote(root, a.quote, a.color, a.style, a.id, a.start_off, a.end_off)
+  if (!flowMode.value) {
+    const root = contentRef.value
+    if (!root) return
+    unwrapAll(root)
+    for (const a of chapterAnnotations.value) {
+      wrapQuote(root, a.quote, a.color, a.style, a.id, a.start_off, a.end_off)
+    }
+    return
+  }
+  // 批注按章号索引一次：否则每块都要把全部批注筛一遍，章多时是无谓的开销
+  const byChapter = new Map<number, Annotation[]>()
+  for (const a of annotations.value) {
+    const list = byChapter.get(a.chapter)
+    if (list) list.push(a)
+    else byChapter.set(a.chapter, [a])
+  }
+  for (const c of chunks.value) {
+    const root = chunkArt(c.pos)
+    if (!root) continue
+    unwrapAll(root)
+    for (const a of byChapter.get(c.index) ?? []) {
+      wrapQuote(root, a.quote, a.color, a.style, a.id, a.start_off, a.end_off)
+    }
   }
 }
 
@@ -892,14 +1372,22 @@ async function addHighlight(color: string): Promise<void> {
   const note = noteDraft.value.trim()
   const style = selStyle.value
   const span = selRange.value
+  // 第 69 期：批注落在**选区所在的那一章**，而不是「此刻的可见章」——
+  // 往上拖过章界的选区，可见章可能已经不是它了（偏移则会落错章）。
+  const selChapterPos = selChunkPos.value
+  const selChunk = flowMode.value && selChapterPos !== null
+    ? chunks.value.find((c) => c.pos === selChapterPos)
+    : undefined
+  const chapterIdx = selChunk?.index ?? currentIndex.value
   selPos.value = null
   selRange.value = null
+  selChunkPos.value = null
   noteDraft.value = ''
   selText.value = ''
   window.getSelection()?.removeAllRanges()
   try {
     const r = await api.addAnnotation(bookId.value, {
-      chapter: currentIndex.value,
+      chapter: chapterIdx,
       quote,
       color,
       note,
@@ -909,7 +1397,7 @@ async function addHighlight(color: string): Promise<void> {
     })
     annotations.value.push({
       id: r.id,
-      chapter: currentIndex.value,
+      chapter: chapterIdx,
       quote,
       color,
       note,
@@ -921,7 +1409,7 @@ async function addHighlight(color: string): Promise<void> {
     })
     // 只包裹**新增的这条**：整章重扫会对已包裹文本重复包裹（span 套 span）。
     await nextTick()
-    const root = contentRef.value
+    const root = selChunk === undefined ? contentRef.value : chunkArt(selChunk.pos)
     if (root) {
       wrapQuote(root, quote, color, style, r.id, span ? span.start : -1, span ? span.end : -1)
     }
@@ -930,17 +1418,29 @@ async function addHighlight(color: string): Promise<void> {
   }
 }
 
-/** 只解包目标批注的 span，**不重建正文 DOM** —— 保住滚动位置 / 选区 / 阅读进度。 */
+/**
+ * 解包一个批注 span，**不重建正文 DOM** —— 保住滚动位置 / 选区 / 阅读进度。
+ *（`normalize()` 把拆开后相邻的文本节点并回去，否则同一段文字会碎成一堆文本节点，
+ * 之后按偏移定位就会差出几段。）
+ */
+function unwrapSpan(el: Element): void {
+  const parent = el.parentNode
+  if (!parent) return
+  while (el.firstChild) parent.insertBefore(el.firstChild, el)
+  parent.removeChild(el)
+  if (parent instanceof HTMLElement) parent.normalize()
+}
+
+/** 解包某条批注的 span；连续流下它可能落在窗口里任意一块，故扫全部章块 root */
 function unwrapAnnotation(id: number): void {
-  const root = contentRef.value
-  if (!root) return
-  root.querySelectorAll(`[data-anno-id="${id}"]`).forEach((el) => {
-    const parent = el.parentNode
-    if (!parent) return
-    while (el.firstChild) parent.insertBefore(el.firstChild, el)
-    parent.removeChild(el)
-    if (parent instanceof HTMLElement) parent.normalize()
-  })
+  for (const root of allChapterRoots()) {
+    root.querySelectorAll(`[data-anno-id="${id}"]`).forEach(unwrapSpan)
+  }
+}
+
+/** 清掉某个 root 里**全部**批注 span（重画前的清场，幂等的前提，见 `applyHighlights`） */
+function unwrapAll(root: HTMLElement): void {
+  root.querySelectorAll('[data-anno-id]').forEach(unwrapSpan)
 }
 
 async function removeAnnotation(id: number): Promise<void> {
@@ -957,6 +1457,15 @@ async function removeAnnotation(id: number): Promise<void> {
 async function jumpTo(a: Annotation): Promise<void> {
   const p = flat.value.findIndex((f) => f.index === a.chapter)
   if (p < 0) return
+  // 第 69 期：连续流下「正文只此一个 root」不再成立 —— 目标章不在窗口里就先重建窗口
+  // 把它带进来，再在**它自己那一块**里找 span。
+  if (flowMode.value) {
+    if (!chunkEl(p)) await loadChapter(p)
+    await nextTick()
+    chunkArt(p)?.querySelector(`[data-anno-id="${a.id}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    return
+  }
   if (p !== pos.value) await loadChapter(p)
   await nextTick()
   const el = contentRef.value?.querySelector(`[data-anno-id="${a.id}"]`)
@@ -1313,6 +1822,10 @@ watch(bookId, async () => {
   html.value = ''
   chapterTitle.value = ''
   local.value = 0
+  // 第 69 期：章块窗口也要清 —— 留着会露着上一本的正文，而 `chunkEls` 里的元素
+  // 随后会被卸载成死引用（量几何量出 0，可见章判定就全靠猜了）
+  chunks.value = []
+  chunkEls.clear()
   await load()
 })
 
@@ -1329,6 +1842,7 @@ onBeforeUnmount(() => {
   void saveProgress()
   stopProgressWatch()
   stopSession()
+  chunkEls.clear()
   window.removeEventListener('pagehide', flushPendingProgress)
 })
 </script>
@@ -1420,7 +1934,9 @@ onBeforeUnmount(() => {
                   {{ m.label }}
                 </button>
               </div>
-              <!-- 第 61 期：滚动模式的自动续章开关（翻页模式的末页判定不归它管） -->
+              <!-- 第 61 期：滚动模式的自动续章开关（翻页模式的末页判定不归它管）。
+                   第 69 期改「跨章连续流」后语义变成「要不要自动往后接」，文案随之改写；
+                   固定版式仍走旧的「预取 + 替换」路径，故那里保留原文案（不能写成连续读）。 -->
               <label
                 v-if="!isPdf && !isComic"
                 class="mt-2 flex cursor-pointer items-start gap-2 text-[11px] leading-snug text-muted-foreground"
@@ -1430,7 +1946,12 @@ onBeforeUnmount(() => {
                   type="checkbox"
                   class="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
                 >
-                <span>
+                <span v-if="flowMode">
+                  滚动模式<strong class="text-foreground/80">连续读（跨章无缝）</strong>
+                  （相邻章接在一起，读到底自然进下一章、向上滚可回上一章；
+                  关掉则读到底停下并显示「下一章」按钮）
+                </span>
+                <span v-else>
                   滚动读到底时<strong class="text-foreground/80">自动接上下一章</strong>
                   （下一章已预先取好，切换不留加载空档；只作用于滚动模式）
                 </span>
@@ -1644,16 +2165,52 @@ onBeforeUnmount(() => {
           @click="onReaderClick"
         >
           <!-- 翻页模式：外层按「一屏」横向位移，内层 article 用 CSS 多栏切分 -->
-          <div :style="pageShiftStyle">
-            <!-- 左右内边距由偏好驱动（见 contentStyle）；固定版式另有 nf-fixed 中和重排样式 -->
+          <template v-if="paged">
+            <div :style="pageShiftStyle">
+              <!-- 左右内边距由偏好驱动（见 contentStyle）；固定版式另有 nf-fixed 中和重排样式 -->
+              <article
+                ref="contentRef"
+                class="reader-content py-8"
+                :class="fixedLayout ? 'nf-fixed' : ''"
+                :style="contentStyle"
+                v-html="html"
+              />
+            </div>
+          </template>
+
+          <!-- 滚动模式：跨章连续流（第 69 期）。相邻章首尾相接挂在同一个滚动容器里 ——
+               滚到底就是下一章的正文，不再「换一章 + 滚回顶部」；向上滚也能接着读上一章。
+               章节位置随窗口滑动而变，脚本一律用 `chunkEls` 取元素（`data-pos` 只为人读）。 -->
+          <template v-else-if="flowMode">
+            <section
+              v-for="c in chunks"
+              :key="c.pos"
+              :ref="(el) => setChunkEl(c.pos, el)"
+              class="nf-chunk mt-10 border-t border-border/60 pt-6 first:mt-0 first:border-t-0 first:pt-0"
+              :data-pos="c.pos"
+            >
+              <!-- 章标题：正文自带的（多数书的 body 里就有 `<h1>`）不再叠一个，只留分隔留白 -->
+              <h2
+                v-if="!bodyHasHeading(c.html)"
+                class="mx-auto mb-5 text-center text-[13px] font-medium tracking-wide text-muted-foreground"
+                :style="widthStyle"
+              >
+                {{ c.title }}
+              </h2>
+              <article class="reader-content py-8 mx-auto" :style="contentStyle" v-html="c.html" />
+            </section>
+          </template>
+
+          <!-- 滚动模式但**固定版式**：页尺寸由书本身决定、与 nf-fixed 的中和样式耦合，
+               纵向拼接风险高 ⇒ 保守沿用单章路径（第 69 期的取舍，记在 roadmap） -->
+          <template v-else>
             <article
               ref="contentRef"
-              class="reader-content py-8"
-              :class="[paged ? '' : 'mx-auto', fixedLayout ? 'nf-fixed' : '']"
+              class="reader-content py-8 mx-auto nf-fixed"
               :style="contentStyle"
               v-html="html"
             />
-          </div>
+          </template>
 
           <div v-if="!paged" class="mx-auto flex items-center justify-between gap-3 pb-12" :style="widthStyle">
             <Button size="sm" :disabled="pos <= 0" @click="prev">
