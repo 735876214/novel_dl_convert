@@ -2513,3 +2513,43 @@ PDF·漫画进下一册 / 有声书接下一轨，**翻页模式预取不做**�
   `MigrationGateDialog.vue` 的全局 `onMounted(load)`。它既是**重复调用**又是**慢端点**，本轮没动。
 - `GET /api/books` 的 68% 体积是简介，理论上可从列表里摘掉，但**前端两处真在用**
   （`MetadataPage.vue` 的元数据缺口筛选、`BookPreviewDialog.vue` 的快速预览）⇒ 属**契约变更**，留待有需求再议。
+
+## 第 68 期（2026-09-28）：收掉第 67 期留下的两处 —— 列表不发简介 + 迁移预览提速去重
+
+**来源**：用户点名把第 67 期「仍未做」的两条做掉（原话见 TODO.md 的历史条目）。
+
+### 一、`/api/books` 不再下发简介正文（改发 `has_description`）
+- **做法**：`server._card()` 里把 `description` 换成布尔 `has_description`。
+  `_card` 是**所有**书目列表的统一出口（`/api/books`、系列、作者、演播者、收藏夹），所以口径一处改、各处一致。
+- **实测（600 本库）**：原始 **1,363,248 B → 417,189 B（−69%）**；
+  **gzip 后 491 KB → 37 KB** —— 去掉高熵的简介正文后，剩下的字段重复度极高、压缩率进一步提升。
+- **两处消费方同步改造**（这就是当初判「契约变更、需先确认」的原因）：
+  - `views/settings/pages/MetadataPage.vue` 的「元数据缺口」筛选：`!b.description` → `!b.has_description`；
+  - `components/book/BookPreviewDialog.vue` 的快速预览：简介改从**它本来就会调的详情接口**取
+    （浮层原本就为了章节数调 `GET /api/books/{bid}`），列表侧的 `book.description` 不再被读。
+  - `lib/api.ts` 的 `BookCard.description` 改为**可选**并新增 `has_description` ——
+    这一步让 `vue-tsc` 把所有「还以为列表带正文」的地方**一次性报出来**（实测只有上面两处）。
+- **契约**：新增 `tests/test_card_payload.py`（2 例）——列表里**没有** `description` 且 `has_description` 正确、
+  详情仍带正文；以及系列列表同口径。⚠️ 这条必须有契约：失效时不会报任何错，只有传输体积悄悄翻三倍。
+
+### 二、`/api/library-migrations/preview`：快 8 倍 + 调用次数减半
+- **慢的根因**：`core/migrate.preview()` 对**每一本书**都调一次 `libraries_of_type(t)`（= `library.libraries()`，
+  读库表 + 组装列表）。600 本的库实测仅这一项就约 200 ms（端点整体约 300 ms）。
+  改为**循环外算一次**「类型 → 同类库」与「id → 库」两张映射；目标库根也按库缓存（`roots_by_lib`）。
+  另把选目标库的逻辑抽成 `_pick_from(dsts, …)`，`_pick_dst` 保留为便捷包装。**口径不变**（`test_migrate.py` 全过）。
+  实测 **~300 ms → 37 ms**。
+- **被调 2 次的根因**：`App.vue` 里 `<MigrationGateDialog v-if="!showLogin">`，而 `showLogin` **初值是 `false`** ——
+  未登录时先挂载（打一次预览）→ `auth.init()` 失败置 `showLogin=true` 卸载 → 用户登录后再挂载（再打一次）。
+  改用新增的「鉴权已裁决」标记 `authChecked` 门控。
+  ⚠️ **不能直接用 `auth.ready`**：它在 `auth.init()` **内部**就先变真，而 `showLogin` 要等 `await init()` 回到 App.vue
+  才赋值 —— 中间那一个 tick 里 `ready=true && showLogin=false`，照样会多挂一次。实测改前 2 次 → 改后 **1 次**。
+
+### 验证
+- 后端全量 **1182 例 / 0 failed / 0 error**（163 s 级），另加本期新契约 2 例；前端 `type-check` 0 错 + `test:unit` **340 例** + `build` + `deploy` 全绿。
+- 真机（600 本合成库 + 隔离实例 + Edge）：`/api/library-migrations/preview` 一次页面加载**只调 1 次**；
+  `/api/books` 一次真实拉取（gzip **38 KB**）；`preview` curl 热态 37–41 ms。
+
+### 仍未做（顺延，已记入 TODO.md）
+- **未登录冷访问会先渲染一次外壳、白发约 10 个 401 探测请求**（每个 337 B）。成因与本期 `MigrationGateDialog` 同源
+  （外壳挂在 `v-else`，`showLogin` 初值 false）。没动的原因：这批是**廉价探测**，而把外壳也 gate 到 `authChecked`
+  会让**已登录用户的冷启动**多等一次 `api.me()` —— 要先量再决定（TODO.md P2）。

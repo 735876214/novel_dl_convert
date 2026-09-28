@@ -86,6 +86,12 @@
 - 阅读器翻页路径：`ComicReader`/`PdfReader` 的 `go()` 是**唯一汇聚点**（键盘 / 点击 / 工具栏都走它）⇒ 挂钩子（如「自动翻下一册」）必须放 `go()`，放 `next()` 会让键盘前进静默失效（第 51 期真缺陷）。
 - 浏览器冒烟用 `playwright-cli open --browser=msedge <url>`（本机无 Chrome）；隔离用 `CONFIG_DIR/INPUT_DIR/OUTPUT_DIR` 指向临时目录，`admin/changeme` 登录；⚠️ **注入 `nf_token` 不稳，走登录表单更可靠**。
 - 图表入口 `lib/charts.ts`、偏好归属、侧栏导航契约、命名避让（`/explore` vs `/browse`）、实体总览六维、窄屏双写法、`ToolsLayout` 用 `onActivated` ⇒ **域细节见 REF**。
+- ⚠️ **列表载荷不给「重字段」**：所有书目列表统一经 `server._card()`；**不在列表里发长文本**（简介正文曾占 `/api/books` 体积 68%，
+  第 68 期改为只发 `has_description` 布尔，正文只在详情接口）。加字段前先问「列表真的需要吗」——它会被每个页面反复拉。
+- ✅ **改契约时先让类型变严格**：把 `BookCard.description` 改成可选后，`vue-tsc` 一次就把所有「还以为列表带正文」的消费方报出来
+  （比人肉 grep 可靠）。新增/收紧契约优先走这条路。
+- ⚠️ **`App.vue` 里 `showLogin` 初值是 `false`** ⇒ 任何挂在 `v-else` / `v-if="!showLogin"` 上的东西都会**先挂载一次**（未登录时白拉一次）；
+  门控用 App 自己的 `authChecked`（**不能用 `auth.ready`** —— 它在 `init()` 内先变真，中间仍有一个 tick 会挂载）。
 
 ## 逐期铁律索引（原文见 `MEMORY-REF.md`）
 - **第 53 期** 演播者实体：`books.narrators`（与 tags 同构）+ `narrators` 表（两列镜像 authors）；`core/audio_meta.py` 零依赖解析标签；不新增浏览维度、无头像。
@@ -99,3 +105,4 @@
 - **第 61 期** 翻页几何（`width` 是 border-box ⇒ 设**整屏宽**；步长=栏宽+栏距）；目录按 `flat` **位置**跳 + **请求序号守卫**；进度实时=`library.patchProgress` 就地回写；通知合并尾随去抖 + `atexit` 兜底且**测试默认关闭**；漫画库 PDF 交回同一套 `<img>` 布局；**没有指标不许凭感觉优化**。
 - **第 66 期** 阅读器「自动续接」收尾：漫画/PDF/有声书三处跨册续接**收敛到唯一真值源 `frontend/src/lib/seriesNext.ts`**（`SERIES_NEXT_MSG` 文案 + 纯函数 `resolveNextVolume` + `useSeriesNext`，含 `enabled` 门/单飞闸/同类提示 2s 节流）——⚠️ 三处组件**不得再各写文案或各拼 `seriesDetail+sortBySeriesIndex+findIndex`**；三处默认值**统一为「开」**（只改 `*_PREFS_DEFAULT`，**不迁移存量**，读时 `{...DEFAULT,...stored}` 天然尊重用户已关的开关）；文案统一用「册」；触底闩 `autoNextArmed` 留在组件。
 - **第 67 期** 提速收尾：① **响应 gzip**（`server.py` 挂 `GZipMiddleware`；`/api/books` 1.36 MB→491 KB、主包 1.02 MB→301 KB；安全性靠 **206 永不压缩** + `audio/image/video/font/zip` 默认排除；代价是该端点 **+45–60 ms CPU**，LAN 打平 / WAN 受益）。② **并发请求必须单飞**：`if (loaded) return` 守卫**不足以**去重 —— 它在发请求前先 `await` 别的（阈值等）就是让步点，同批调用会全部通过 ⇒ 实测一次页面加载 `/api/books` 打了 **7 次**；各 store 的 loader 必须持**在飞 Promise**（`collections` 的 force 要「等前一次落地再拉」，否则吞掉刚建的收藏夹）。③ **测量纪律**：计时用 `curl`，**别用 PowerShell `Invoke-RestMethod`**（解析 1.3 MB JSON 会把 65 ms 测成 613 ms）。
+- **第 68 期** 列表载荷与迁移预览：① `server._card()` 是**所有书目列表的统一出口**，**不发简介正文**（曾占 `/api/books` 体积 68%），只发 `has_description` —— 原始 1.36 MB→417 KB、**gzip 后 491 KB→37 KB**；消费方改「筛选看布尔 / 预览从详情取」。② `core/migrate.preview()` 原先**每本书**都调一次 `libraries_of_type()`（读库表）⇒ 改为循环外算「类型→同类库」映射，**300 ms→37 ms**。③ `App.vue` 的 `showLogin` 初值 `false` 会让门控组件**先挂载一次**（未登录白拉一次预览）⇒ 门控要用 `authChecked`，**`auth.ready` 不行**（它在 `init()` 内先变真，中间仍有一个 tick 会挂载）。
