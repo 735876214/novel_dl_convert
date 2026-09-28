@@ -11,7 +11,8 @@ AI 兜底（`core/ai_detect.py` 复用其 bounds/split）、以及**原生 TXT �
    标题行的文字留在 `body` 里；
 2. **首个边界之前的内容（书名 / 作者行）会被丢弃** —— 注释曾写「并入首章正文」，
    与实现不符，第 55 期已把注释改成实际行为（不改正则，因为改它就是改出版成品）；
-3. 正则置信判据：命中数 × 2000 ≥ 文本长度才算「正则有效」，否则退化**缩进切分**；
+3. 正则置信判据：命中数 × 2000 ≥ 文本长度**或**命中数 ≥ 3 才算「正则有效」，
+   否则退化**缩进切分**（第 72 期加了后半个条件，见下）；
 4. 缩进降级：顶格行 = 章标题，其下的缩进行 = 该章正文；
 5. `merge=True` 把正文 < `MERGE_MIN_LEN` 的碎片章并入上一章；
 6. `detect_chapters_cfg` 在**没有 llm.api_key** 时分毫不差地等于 `detect_chapters`
@@ -23,6 +24,16 @@ AI 兜底（`core/ai_detect.py` 复用其 bounds/split）、以及**原生 TXT �
 7. **行首锚定**：标记必须落在行首（允许行首空白，不跨行）。正文段落中间提到
    「第 3 章」不再算边界 —— 这是第 55 期**刻意钉住的旧口径**，现按计划反转；
 8. 卷 / 括号 / 序章类新形态见下方用例。
+
+**第 72 期改了两条口径 + 加了一道保险**（见 `detect.CHAPTER_RULE_VERSION`）：
+
+9. **长章书的绝对条数兜底**：密度判据（第 3 条）单独用会误杀平均 >2000 字/章的
+   长章书 —— 边界条条属实却被判「正则无效」。补 `>= 3 条` 兜底：行首锚定之后，
+   3 条以上行首章标记基本不可能是巧合；
+10. **缩进降级认全角空格**：与 `_LEAD`（`[ \t　]*`）口径对齐 —— 中文文本用全角空格
+   缩进是常态，只认半角会把**每一段**都当成新章首；
+11. **降级产物一章正文都没有时回退正则边界**（保险）：全顶格文本在缩进降级下恒为
+   「满屏标题、点进去没有正文」，几个真边界好过 N 个空章。
 """
 from novelforge.core import detect
 
@@ -90,6 +101,51 @@ def test_cfg_无_api_key_时等于纯正则():
     assert detect.detect_chapters_cfg(text, {}) == detect.detect_chapters(text)
     assert detect.detect_chapters_cfg(text, {"chapter_detection": {"mode": "hybrid"}}) == \
         detect.detect_chapters(text)
+
+
+def test_ai_检测器读同一份置信判据(monkeypatch):
+    """第 72 期收敛：`core/ai_detect.py` 里曾有**第二份拷贝**（`bool(bounds) and
+    len(bounds) * 2000 >= len(text)`）—— AGENTS.md「同一判据只许有一处实现」。
+
+    用例挑一个**两份判据结论相反**的文本把它区分开：长章书（5 章 × 1.2 万字）在新判据下
+    自信（条数 ≥3），在老判据下不自信（密度不足）。老行为不只是多花钱：它会为一本**已经
+    切对**的书每次都调一次 LLM。
+    """
+    from novelforge.core import ai_detect
+
+    text = "\n".join(f"第{i}章 第{i}节\n" + "正文内容。" * 3000 for i in range(1, 6))
+    bounds = detect.regex_bounds(text)
+    assert len(bounds) == 5 and len(bounds) * 2000 < len(text), (len(bounds), len(text))
+    assert detect.regex_confident(bounds, text), "前置：新判据下这本长章书是自信的"
+
+    called: list = []
+
+    async def _fake_ai(self, t):                # noqa: ANN001, ARG001
+        called.append(1)
+        return []
+
+    monkeypatch.setattr(ai_detect.HybridChapterDetector, "_ai_bounds", _fake_ai)
+    cfg = {"chapter_detection": {"mode": "hybrid"}, "llm": {"api_key": "k"}}
+    chaps = ai_detect._run_in_thread(ai_detect.HybridChapterDetector(cfg).detect(text))
+
+    assert not called, "正则已经自信，hybrid 不该再去调 AI"
+    assert len(chaps) == 5
+
+
+def test_ai_检测器的纯正则模式与唯一真值源逐字一致():
+    """`mode: regex` 的语义就是「纯正则、无 AI」⇒ 必须**就是** `detect.detect_chapters`。
+
+    老写法把置信判据与降级逻辑各写一遍，于是少了「降级切出的章一个正文都没有时回退
+    正则边界」那道保险 —— 同一份文本，走管线（`detect_chapters_cfg`）与走 AI 检测器
+    的 `regex` 模式会得到不同的目录。
+    """
+    from novelforge.core import ai_detect
+
+    text = ("第一章 起\n" + "顶格正文行。\n" * 400
+            + "第二章 落\n" + "顶格正文行。\n" * 400)
+    detector = ai_detect.HybridChapterDetector({"chapter_detection": {"mode": "regex"}})
+
+    assert ai_detect._run_in_thread(detector.detect(text)) == detect.detect_chapters(text)
 
 
 def test_空文本与无边界文本不炸():
@@ -186,4 +242,64 @@ def test_同一位置被多条模式命中只留一个边界():
     assert len(bounds) == 1 and len(bounds[0]) == 2
     chaps = detect.detect_chapters(text)
     assert len(chaps) == 1 and chaps[0]["body"].strip()
+
+
+# ---------------------------------------------------------------------------
+# 第 72 期：长章书不得被降级 / 缩进认全角 / 降级全空要回头
+# ---------------------------------------------------------------------------
+
+def test_长章书不被降级为缩进切分():
+    """第 72 期口径 9：密度判据单独用会**误杀长章书**。
+
+    一本 25 章、平均 14k 字/章的书只有 25 个边界，`25 × 2000 < 360,240` 被判
+    「正则无效」⇒ 退化缩进切分 ⇒ 全顶格正文切成 N 个空章。实测本机一本 1.1 MB 的
+    TXT 就是这条路：本应 25 章 / 373,038 字，实得 3723 章 / 0 字。
+    """
+    text = "\n".join(f"第{i}章 第{i}节\n" + "正文内容写长一点。" * 1600
+                     for i in range(1, 26))
+    bounds = detect.regex_bounds(text)
+    # 前置条件（否则用例失去意义）：边界齐全，但**密度判据通不过**
+    assert len(bounds) == 25, len(bounds)
+    assert len(bounds) * 2000 < len(text), (len(bounds), len(text))
+
+    chaps = detect.detect_chapters(text)
+
+    assert len(chaps) == 25, f"长章书被降级了（切出 {len(chaps)} 章）"
+    assert all(c["body"].strip() for c in chaps), "每章都该有正文"
+
+
+def test_缩进降级认全角空格():
+    """第 72 期口径 10：缩进字符集必须与 `_LEAD`（`[ \\t　]*`）**一致**。
+
+    中文文本用全角空格缩进是常态。只认半角时，全角缩进行与顶格行**都**成了章首
+    （`_split_by_indent` 的 else 分支），切出「一段一章、正文全空」。
+    """
+    text = ("标题行\n" + "　　全角缩进正文一。\n" * 3
+            + "顶格行二\n" + "　　全角缩进正文二。\n" * 2)
+    assert detect.regex_bounds(text) == [], "前置条件：无正则边界 ⇒ 必走缩进降级"
+
+    chaps = detect.detect_chapters(text)
+
+    assert [c["title"] for c in chaps] == ["标题行", "顶格行二"]
+    assert "全角缩进正文一。" in chaps[0]["body"]
+    assert "全角缩进正文二。" in chaps[1]["body"]
+
+
+def test_降级切出的章一个正文都没有时回退正则边界():
+    """第 72 期口径 11（保险）：全顶格文本在缩进降级下**每一行都成章首**，
+    切出 N 个空正文假章 —— 阅读器里表现为「满屏标题、点进去没有正文」。
+    此时正则哪怕只有 2 个边界，也好过 N 个空章。
+    """
+    text = ("第一章 起\n" + "顶格正文行。\n" * 400
+            + "第二章 落\n" + "顶格正文行。\n" * 400)
+    bounds = detect.regex_bounds(text)
+    # 前置条件：正则**有**边界、但条数与密度都不够 ⇒ 走降级；且文本全顶格 ⇒ 降级必空
+    assert len(bounds) == 2 and not detect.regex_confident(bounds, text)
+    assert not [ln for ln in text.splitlines() if ln.strip() and ln[:1] in (" ", "\t", "　")], \
+        "前置条件：这段文本必须全顶格（否则降级切得出正文，保险用不上）"
+
+    chaps = detect.detect_chapters(text)
+
+    assert len(chaps) == 2, f"该回退正则边界，却切出 {len(chaps)} 章"
+    assert all(c["body"].strip() for c in chaps)
 

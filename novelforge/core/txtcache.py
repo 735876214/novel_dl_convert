@@ -81,6 +81,26 @@ def _log_rule_rebuild(path: pathlib.Path) -> None:
         pass
 
 
+def _log_unreadable(path: pathlib.Path, err: Exception) -> None:
+    """正文读不出（编码判错 / 分章只剩空正文 / 组装失败）时留一条活动日志。
+
+    第 72 期加：此前这条路是**静默**的 —— 只在 `state.json` 里记一个 ``failed``，
+    阅读器照样渲染空章节，用户看到满屏乱码/空白却没有任何提示。写一条日志让它在
+    「活动日志」页可见。
+
+    主体用**源文件名**（不像 :func:`_log_rule_rebuild` 那样用固定标签）：出问题的
+    通常是某一本书，用户要知道是**哪本**；不同书之间也不该互相合并。
+
+    写日志失败不该影响阅读，故整段包住。
+    """
+    try:
+        from . import activity_log as al
+        al.log(al.ACTION_CONVERT, path.name, al.STATUS_FAIL,
+               detail=f"正文读不出，已回落原生分章：{str(err)[:120]}", source="txtcache")
+    except Exception:                                  # noqa: BLE001
+        pass
+
+
 def _read_state(cdir: pathlib.Path) -> dict:
     try:
         return json.loads((cdir / STATE_NAME).read_text(encoding="utf-8")) or {}
@@ -202,6 +222,9 @@ def derived_epub(book: dict, *, path=None, root=None):
     except Exception as e:
         _write_state(cdir, {"status": "failed", "fingerprint": fp, "rule": RULE_VERSION,
                             "reason": str(e)[:160]})
+        # 只在**真正尝试过并失败**时记一条：状态落盘后，同一份源的下一次请求会走前面的
+        # 命中分支直接 ``return None``，不会重复写日志（与 `_log_rule_rebuild` 同量级）。
+        _log_unreadable(p, e)
         return None
 
 

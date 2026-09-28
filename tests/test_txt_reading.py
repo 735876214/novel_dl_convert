@@ -7,13 +7,19 @@
 - **转不动**（超大 / 编码坏 / 构建失败）⇒ 回落**原生分章**，目录与内容照样能出；
 - **形态锁定**：源文件指纹不变 ⇒ 两次请求必须给同一形态的章节树
   （两条路线索引空间不同，中途换形态会让章节号整体漂移、批注跳错章）。
+
+**第 72 期**：派生缓存的有效性多一个分量 —— **编码判据版本**（`txtcache.ENC_RULE_VERSION`）。
+正文是从源文件**解码**出来的，判据改了而源文件一个字节没动时，已缓存的正文（可能是乱码）
+必须失效，否则「改了判据看不见效果」（与分章规则版本同一个道理）。同一期还给
+「正文读不出」补了一条活动日志 —— 此前那条路整条是静默的。
 """
+import json
 import pathlib
 
 import pytest
 
 from novelforge import config
-from novelforge.core import detect, library, pipeline, txtcache
+from novelforge.core import activity_log, detect, library, pipeline, txtcache
 
 
 @pytest.fixture(autouse=True)
@@ -225,6 +231,39 @@ def test_纯ASCII开头的中文书仍能判出编码(tmp_path):
     assert enc in ("gb18030", "gbk"), f"被英文前言带偏成 {enc}"
 
 
+def test_ASCII前言的中文大书不再被判成非UTF8(tmp_path):
+    """第 72 期缺陷 A2：**中段采样的接缝**。
+
+    `_sample_bytes` 在「开头纯 ASCII」时补采一段中段，起点是 `size // 2` —— 按字节算，
+    多半落在字符中间。两段样本**直接拼接**，接缝处就凭空多出一个非法字节（续字节不能
+    当字符的开头）。前缀判定只容忍**尾部**不完整，接缝在中间 ⇒ 照样抛错 ⇒ 一本真 UTF-8
+    的书被判成 gb18030、满屏乱码且不报错 —— 与缺陷 A 同因同果，只是走另一条采样分支。
+
+    ⚠️ 现有 `test_纯ASCII开头的中文书仍能判出编码` 的夹具约 190 KB，`size > 256 KiB`
+    不成立，走不到拼接分支，所以一直没照到这里。
+    """
+    head = b"Copyright (c) 2026 Nobody. All rights reserved.\n" * 6800      # > 256 KiB
+    body = "第一章 起\n" + "风" * 60000 + "\n第二章 落\n" + "雨" * 60000
+    # 微调相位：`pad` 个 ASCII 字节让 `size // 2` 落在 3 字节汉字的中间（4 次内必中）
+    for pad in range(4):
+        raw = head + ("x" * pad + body).encode("utf-8")
+        if raw[len(raw) // 2] & 0xC0 == 0x80:
+            break
+    else:                                                   # pragma: no cover
+        pytest.fail("构造不出「中段起点落在字符中间」的夹具")
+
+    p = tmp_path / "前言书.txt"
+    p.write_bytes(raw)
+    # 前置条件：头部纯 ASCII 且 > 256 KiB ⇒ 必然走到「头 + 中段」的拼接分支
+    assert max(raw[:256 * 1024]) < 0x80
+    assert pipeline._utf8_prefix_ok(raw[:256 * 1024]), "前置：头部本身是合法 UTF-8 前缀"
+
+    enc = pipeline._detect_encoding(p)
+
+    assert enc == "utf-8", f"ASCII 前言的中文大书被判成 {enc}"
+    assert p.read_text(encoding=enc, errors="ignore").startswith("Copyright")
+
+
 def test_繁体Big5_TXT_端到端读出来不是乱码(client, auth_headers, default_root):  # noqa: ARG001
     """从磁盘走到阅读器：详情能列章、正文是**真繁体字**（派生 EPUB 与原生分章两条路线
     共用同一个编码探测，任一条乱码都算失败）。"""
@@ -240,3 +279,189 @@ def test_繁体Big5_TXT_端到端读出来不是乱码(client, auth_headers, def
 
     html = client.get(f"/api/books/{bid}/chapter/0", headers=auth_headers).json()["html"]
     assert "繁體" in html or "起風" in html, f"正文全是乱码：{html[:200]!r}"
+
+
+# ---------------------------------------------------------------------------
+# 第 72 期：采样窗口截断（缺陷 A）与长章书降级（缺陷 B）的合流点
+# ---------------------------------------------------------------------------
+
+def _big_utf8(chapters: int = 4, reps: int = 2000) -> str:
+    """**大于 256 KiB** 的中文 UTF-8 夹具 —— 现有夹具都远小于采样窗口，照不到缺陷 A。
+
+    正文用 3 字节汉字堆够体积，这样 262,144 这个字节切点才**有机会**落在字符中间
+    （实测本夹具正好落在：见 `test_大文件样本切在字符中间仍判UTF8` 的前置断言）。
+    """
+    return "\n".join(f"第{_CN_NUM[i - 1]}章 第{_CN_NUM[i - 1]}節\n"
+                     + "这是一本简体书，用 UTF-8 编码写成。他说：「风起了。」\n" * reps
+                     for i in range(1, chapters + 1))
+
+
+def test_大文件样本切在字符中间仍判UTF8(tmp_path):
+    """第 72 期缺陷 A：采样窗口按**字节**截 256 KiB，切点可能落在多字节字符中间。
+
+    老实现拿整段样本 `decode("utf-8-sig")` 自证 —— 那是**严格**解码，把「尾部被切断」
+    当成了「不是 UTF-8」。UTF-8 汉字 3 字节 ⇒ 任意切点有 2/3 概率落在字符中间，
+    **>256 KiB 的中文 TXT 成片中招**：判成 gb18030、解出满屏乱码，全程不报错
+    （调用方还叠加 `errors="ignore"`，连失败兜底都不触发）。
+    """
+    p = _enc_file(tmp_path, "大书.txt", _big_utf8(), "utf-8")
+    data = p.read_bytes()
+    # 前置条件（否则用例失去意义，沿用 test_繁体Big5… 钉前置的写法）：
+    # ① 必须真的超过采样窗口；② 切点必须落在续字节上；③ 老判据在这份样本上确实失败
+    assert len(data) > 256 * 1024, len(data)
+    assert data[256 * 1024] & 0xC0 == 0x80, "切点必须落在字符中间（否则老实现也不会判错）"
+    with pytest.raises(UnicodeDecodeError):
+        data[:256 * 1024].decode("utf-8-sig")
+
+    enc = pipeline._detect_encoding(p)
+
+    assert enc == "utf-8", f"切在字符中间的大 UTF-8 被判成 {enc}"
+    assert p.read_text(encoding=enc, errors="ignore").startswith("第一章 第一節")
+
+
+def test_大文件GBK与Big5不因容错被误判成UTF8(tmp_path):
+    """容错的反向边界：放宽「尾部截断」必须**只**放过合法 UTF-8 前缀 ——
+    真 GBK / Big5 的样本中间就有非法字节，照样判非 UTF-8（否则是拿一种乱码换另一种）。
+    """
+    big = 80                       # ×80 ⇒ 337 KB / 369 KB，双双越过 256 KiB 采样窗口
+    for name, text, enc in (("大简体.txt", _GBK_TEXT * big, "gb18030"),
+                            ("大繁體.txt", _BIG5_TEXT * big, "big5")):
+        p = _enc_file(tmp_path, name, text, enc)
+        raw = p.read_bytes()
+        assert len(raw) > 256 * 1024, (name, len(raw))
+        assert not pipeline._utf8_prefix_ok(raw[:256 * 1024]), f"{name} 的样本不该被当成 UTF-8 前缀"
+
+        got = pipeline._detect_encoding(p)
+
+        want = ("gb18030", "gbk") if enc == "gb18030" else ("big5", "big5hkscs")
+        assert got in want, f"{name} 被判成 {got}"
+        assert p.read_text(encoding=got, errors="ignore").startswith("第一章 第一節")
+
+
+def test_大UTF8长章书_端到端读出来是正确中文(client, auth_headers, default_root):  # noqa: ARG001
+    """**用户报告的那种书**从磁盘走到阅读器：>256 KiB 的中文 UTF-8 长章书。
+
+    两个缺陷在这里合流（编码判错 ⇒ 正文乱码；分章降级 ⇒ 满屏空章），任何一处没修
+    这条用例都会红：章数、正文内容、派生件状态三个断言分别钉住不同环节。
+    """
+    # 4 章 × 2000 行 ≈ 616 KB，平均 ~15 万字/章 ⇒ 密度判据必不通过（长章书）
+    _enc_file(default_root, "大書.txt", _big_utf8(), "utf-8")
+    library.invalidate()
+    books = [b for b in library.books() if b["name"] == "大書.txt"]
+    assert books, "扫描没找到 大書.txt"
+    bid = books[0]["id"]
+
+    detail = client.get(f"/api/books/{bid}", headers=auth_headers).json()
+    chaps = _flat_chapters(detail)
+    assert len(chaps) == 4, f"长章书被降级了：详情下发 {len(chaps)} 章"
+
+    html = client.get(f"/api/books/{bid}/chapter/0", headers=auth_headers).json()["html"]
+    assert "这是一本简体书" in html, f"正文全是乱码：{html[:200]!r}"
+    assert "�" not in html, "正文里有替换符（编码解错了）"
+
+    # 派生件建成 ok ⇒ 形态稳定在 EPUB 路线（此前正文读不出 ⇒ failed ⇒ 永远走原生兜底）
+    state = txtcache._read_state(txtcache._cache_dir(bid))
+    assert state.get("status") == "ok", state
+    assert state.get("chapters") == 4, state
+
+
+def test_编码判据升级会重读重切(tmp_path, monkeypatch):
+    """第 72 期：正文是从源文件**解码**出来的 ⇒ 编码判据变了、源文件一个字节没动时，
+    已缓存的正文（可能是乱码）必须失效。只比源指纹会一直命中 —— **改了看不见效果**
+    （与分章规则版本同一个道理：两份缓存都要带上这个分量）。
+    """
+    p = pathlib.Path(tmp_path) / "编码升级.txt"
+    p.write_text("第1章 甲\n" + "甲。" * 100 + "\n第2章 乙\n" + "乙。" * 100, encoding="utf-8")
+    book = {"id": "lib$encver", "title": "编码升级", "author": ""}
+
+    assert txtcache.derived_epub(book, path=p) is not None, "前置失败：这本该转得动"
+    calls: list = []
+    real = detect.detect_chapters_cfg
+
+    def _spy(text, cfg=None, merge=None):       # noqa: ANN001
+        calls.append(1)
+        return real(text, cfg, merge)
+
+    monkeypatch.setattr(detect, "detect_chapters_cfg", _spy)
+
+    # ① 版本没变 ⇒ 源指纹没变就命中缓存，连检测都不重跑（这正是缓存存在的意义）
+    assert txtcache.derived_epub(book, path=p) is not None
+    assert not calls, "源指纹没变却重切了"
+
+    # ② 版本 +1 ⇒ 切分缓存与派生件都得失效、重读重切重转
+    monkeypatch.setattr(txtcache, "ENC_RULE_VERSION", txtcache.ENC_RULE_VERSION + 1)
+    assert txtcache.derived_epub(book, path=p) is not None, "编码判据版本变了，派生件没重建"
+    assert calls, "编码判据版本变了，切分仍取到旧结果"
+    assert txtcache._read_state(txtcache._cache_dir(book["id"]))["enc_rule"] == \
+        txtcache.ENC_RULE_VERSION, "重建后该把新版本写进 state"
+
+
+def test_老state没有enc_rule字段就重建(tmp_path):
+    """**用户那本书的自愈路径**：第 72 期之前生成的 state.json 没有 `enc_rule` 字段，
+    而它记的失败状态会一直粘住（「形态一经确定就锁定」）。
+
+    「没有这个字段」本身就是失效信号 ⇒ 不命中 ⇒ 重建一次。少了这条，改完代码用户
+    看到的还是老样子（state 命中失败分支直接 return None，**不报错、不重建**）。
+    """
+    p = pathlib.Path(tmp_path) / "老缓存.txt"
+    p.write_text("第1章 甲\n" + "甲。" * 100 + "\n第2章 乙\n" + "乙。" * 100, encoding="utf-8")
+    book = {"id": "lib$oldstate", "title": "老缓存", "author": ""}
+    cdir = txtcache._cache_dir(book["id"])
+    cdir.mkdir(parents=True, exist_ok=True)
+    # 模拟第 72 期之前的产物：源指纹与分章规则都对得上，**只是没有 enc_rule**
+    (cdir / txtcache.STATE_NAME).write_text(json.dumps({
+        "status": "failed", "fingerprint": txtcache._fingerprint(p),
+        "rule": txtcache.RULE_VERSION, "reason": "文本读不出可读内容（空文本或编码全坏）",
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert txtcache.derived_epub(book, path=p) is not None, "老 state 该被判失效并重建"
+
+    state = txtcache._read_state(cdir)
+    assert state["enc_rule"] == txtcache.ENC_RULE_VERSION, state
+    assert state["status"] == "ok" and state["chapters"] == 2, state
+    assert (cdir / txtcache.EPUB_NAME).exists()
+
+
+@pytest.fixture
+def logdir(tmp_path):
+    """把活动日志目录切到临时目录，用完还原（含内存缓冲与合并缓冲）。
+
+    ⚠️ 日志目录是**模块级全局**，而 conftest 的 `LOG_DIR` 是全会话共用的 —— 不还原、
+    不清缓冲，后续用例的 `recent()` 会读到本用例的记录，且待合并条目会落到真实目录。
+    """
+    old = activity_log.log_dir()
+    activity_log.set_dir(tmp_path)
+    yield tmp_path
+    activity_log.set_dir(old)
+    activity_log._memory.clear()
+    activity_log._pending.clear()
+
+
+def test_正文读不出时留一条失败活动日志(tmp_path, logdir, monkeypatch):        # noqa: ARG001
+    """第 72 期可观测性：此前这条路整条是**静默**的 —— `state.json` 里记个 failed，
+    阅读器照样渲染空章（满屏标题、点进去没正文），用户在界面上拿不到任何提示。
+    """
+    p = pathlib.Path(tmp_path) / "空书.txt"
+    p.write_text("", encoding="utf-8")          # 解出来是空串 ⇒ 守卫「读不出可读内容」触发
+    book = {"id": "lib$unreadable", "title": "空书", "author": ""}
+
+    def _mine() -> list:
+        # `limit=0` = **只看内存缓冲**、不触发 jsonl 回填（回填会先清空缓冲再灌入盘上条目）；
+        # 且按本书名收窄 —— 日志目录与内存缓冲是全进程共享的，同会话其他用例也会写条目。
+        return [e for e in activity_log.recent(limit=0)
+                if e.get("status") == activity_log.STATUS_FAIL and e.get("file") == "空书.txt"]
+
+    assert txtcache.derived_epub(book, path=p) is None, "读不出内容时不该产出派生件"
+    mine = _mine()
+    assert mine, "正文读不出必须留一条失败日志（此前整条路静默）"
+    assert mine[0]["action"] == activity_log.ACTION_CONVERT, mine[0]
+    assert "读不出" in mine[0]["detail"], mine[0]
+
+    # 同一条源 + 同一版判据只写一次：第二次请求走 state 命中失败分支，直接 return None。
+    # 用 spy 钉「没再调」，而不是数条目 —— 合并开启时重复写也只会合并成一条，数条目没有区分力。
+    calls: list = []
+    real = txtcache._log_unreadable
+    monkeypatch.setattr(txtcache, "_log_unreadable",
+                        lambda path, err: (calls.append(1), real(path, err))[1])
+    assert txtcache.derived_epub(book, path=p) is None
+    assert not calls, "失败状态已落盘，第二次请求不该再写日志"
