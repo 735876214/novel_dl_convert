@@ -35,6 +35,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    catalog, cache)
 from . import config
 from .sources import REGISTRY, DownloadManager
+from .sources import source_of
 from .sources import store
 from .sources import rules as source_rules
 
@@ -398,6 +399,10 @@ async def api_sources_test(payload: dict = Body(...)):
     ⚠️ 测试用的规则**只存在于本次请求**，绝不写进 `SOURCES_DIR` —— 写盘的唯一入口仍是
     `store.add_rule`（`/api/sources`）。失败原因如实回给前端（校验错误 / 网络错误 / 解析不到结果），
     而不是像批量搜索那样静默跳过。
+
+    ⚠️ **刻意不过下载闸门**（第 71 期）：闸门管的是「真的去搜去下」，试搜管的是
+    「我写的这条规则还能不能用」——若一起拦，用户在下载关闭时就再也无法验证自己写的规则，
+    书源管理页的自检按钮会直接瘫掉。取舍有测试钉住（`tests/test_sources_gate.py`）。
     """
     p = payload or {}
     query = str(p.get("query") or "").strip() or "三体"
@@ -427,22 +432,57 @@ async def api_sources_test(payload: dict = Body(...)):
 
 @app.post("/api/search")
 async def api_search(payload: dict = Body(...)):
+    """跨源聚合检索（第 71 期：真并发 + 逐源状态 + 分页）。
+
+    响应形状（第 71 期起）：
+    - ``results``：本次这一页的命中并集，每条带 ``source``（书源名）/ ``source_name``；
+    - ``sources``：**逐源状态**，界面据此如实列出「成功 N 条 / 失败的原文原因 /
+      被闸门跳过的原因」—— 在第 71 期之前这里不返回它，于是前端那条
+      「部分书源检索失败」横幅永远不显示（后端压根没给数据）；
+    - ``has_more``：是否**任一**源还能取下一页。分页是逐源的，聚合口径只有后端知道，
+      所以由后端算好，前端不再自己数一遍（避免第二份真值源）；
+    - 旧的 ``errors`` 字段已移除：它是空的，且真实信息现在在 ``sources`` 里。
+
+    body 可选 ``page``（缺省 1）。
+    """
     title = (payload or {}).get("title", "").strip()
     if not title:
         raise HTTPException(400, "书名不能为空")
-    mgr = _manager()
     try:
-        results = await mgr.search(title)
+        page = max(1, int((payload or {}).get("page") or 1))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "page 必须是正整数") from None
+    mgr = _manager()
+    # 下载闸门（第 71 期）：设置页写着「关闭时书源仅做规则管理，不可搜索下载」，
+    # 而这里原先**没有检查** —— 那句承诺当时是假的。原因原文由 `gate_reason()` 产出，
+    # 前端原样显示（措辞只有一份）。
+    reason = mgr.gate_reason()
+    if reason:
+        raise HTTPException(400, reason)
+    try:
+        res = await mgr.search(title, page)
     except Exception as e:
         raise HTTPException(502, f"搜索失败: {e}")
-    return {"count": len(results), "results": results}
+    items = res["items"]
+    return {
+        "count": len(items),
+        "results": items,
+        "sources": res["sources"],
+        "has_more": any(s.get("has_more") for s in res["sources"]),
+        "page": page,
+    }
 
 
 @app.get("/api/preview")
 async def api_preview(source: str = Query(...), url: str = Query(...)):
     mgr = _manager()
+    # 预览也是**真的去外呼书源**（`mgr.preview` 会取书页/目录），同样过闸门 ——
+    # 否则它就成了「下载关了但还留着一扇窗」的后门。
+    reason = mgr.gate_reason(source)
+    if reason:
+        raise HTTPException(400, reason)
     try:
-        data = await mgr.preview({"_source": source, "url": url})
+        data = await mgr.preview({"source": source, "url": url})
     except Exception as e:
         raise HTTPException(502, f"预览失败: {e}")
     return data
@@ -462,12 +502,24 @@ def _task_out(row: dict | None) -> dict:
 
 @app.post("/api/download")
 async def api_download(request: Request, item: dict = Body(...)):
+    mgr = _manager()
+    src_name = source_of(item)
+    # 闸门先判（第 71 期）：不判的话「设置里关掉了下载」也照样能下 —— 那是假开关。
+    reason = mgr.gate_reason(src_name or None)
+    if reason:
+        raise HTTPException(400, reason)
+    # 源名对不上就直接拒，**不进队列**：原先会先建任务、再由后台失败，用户要跑到任务中心
+    # 才发现「未知书源」—— 一次注定失败的往返没必要发（与第 38 期 0 库拦截同一口径）。
+    if src_name not in REGISTRY:
+        raise HTTPException(400, f"未知书源：{src_name or '(空)'}")
     tid = uuid.uuid4().hex
     # 下载在后台任务里跑，届时可能已离开请求上下文 —— 因此在这里把操作者取出来显式带过去，
     # 保证审计日志里「谁发起的下载」是准确的。
     actor = getattr(request.state, "user", "") or "系统"
     title = item.get("title") or item.get("url") or "(未命名)"
-    detail = " · ".join(str(x) for x in (item.get("source"), item.get("format")) if x)
+    # 源名走 `source_of()` 统一读法：原先这里读 `item["source"]`，而那时的结果条目里
+    # 只有 `_source` ⇒ 任务详情里的来源一栏一直是空的（第 71 期一起修掉）。
+    detail = " · ".join(str(x) for x in (src_name, item.get("format")) if x)
     db.task_create(tid, "download", title, detail=detail, actor=actor)
     db.task_prune()          # 只留最近 200 条，避免表无限增长
     asyncio.create_task(_run_download(tid, item, actor))

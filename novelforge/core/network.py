@@ -13,6 +13,8 @@ import pathlib
 import subprocess
 import tempfile
 
+from http.cookiejar import CookieJar
+
 import httpx
 
 # urllib3 仅为关闭 InsecureRequestWarning 而引入；httpx 0.28 改用 httpcore，
@@ -53,7 +55,14 @@ class BrowserClient:
         self.cookie_dir = pathlib.Path(cookie_dir or ".")
         self.cookie_dir.mkdir(parents=True, exist_ok=True)
         self.cookie_path = self.cookie_dir / f"{source_name}.cookies.txt"
-        self.jar = httpx.CookieJar()
+        # ⚠️ 是**标准库** `http.cookiejar.CookieJar`，不是 `httpx.CookieJar` ——
+        # 后者根本不存在（httpx 0.28 的 cookie 相关导出只有 `Cookies` / `CookieConflict`），
+        # 写成 `httpx.CookieJar()` 的后果是**每个书源一构造客户端就 AttributeError**：
+        # 搜索恒返回 0 条、下载恒失败。这条路径没被测试挡住是因为单测都用桩 client
+        # （`tests/test_sources_registry.py` 的 `_NoNetworkClient`），所以只有真机会现形
+        # ——第 71 期把「逐源失败原因」显示出来时才顺带查到（见 roadmap 第 71 期）。
+        # httpx 的 `cookies=` 接受标准库 CookieJar，与下面 _load/_save_cookies 直接配套。
+        self.jar = CookieJar()
         # Cookie 持久化走下方 _load_cookies / _save_cookies（LWPCookieJar 落盘）
         self._load_cookies()
         merged = dict(DEFAULT_HEADERS)

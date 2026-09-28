@@ -28,6 +28,22 @@ class SourceAdapter(ABC):
         """返回候选列表，每条至少含 {title, author, url}。"""
         ...
 
+    # ---- 可选钩子 ----
+    async def search_page(self, client, title: str, page: int = 1) -> dict:
+        """按页搜索（第 71 期）：返回 ``{"items": [...], "has_more": bool}``。
+
+        默认实现给**不支持分页**的源兜底，关键在 ``page > 1`` 时返回空列表 ——
+        否则界面的「加载更多」会把第一页原样再取一遍，用户看到的是成片重复。
+        「没有更多」就如实说没有，不拿第一页冒充下一页。
+
+        适配器要用真分页时覆写本方法：``GutenbergSource`` 用 gutendex 自带的
+        ``next`` 字段判 ``has_more``；``RuleBasedSource`` 只在搜索 URL 模板含
+        ``{page}`` 时才替换（不含时第 1 页与现状逐字节一致）。
+        """
+        if page > 1:
+            return {"items": [], "has_more": False}
+        return {"items": await self.search(client, title) or [], "has_more": False}
+
     @abstractmethod
     async def fetch_book(self, client, item: dict) -> str:
         """抓取整本书的纯文本（已拼接各章），供后续分章 / 转 EPUB。"""

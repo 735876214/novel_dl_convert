@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .. import config
 from .base import REGISTRY, register
+from .manager import DownloadManager
 from .rules import make_rule_class, validate_rule
 
 
@@ -78,22 +79,24 @@ def sources_status() -> list[dict]:
 
     Cookie 文件命名见 core/network.py：``COOKIE_DIR/<name>.cookies.txt``。
     这些是**真实可得**的状态，替代此前界面里的演示成功率 / 延迟。
+
+    ⚠️ 「可用」的判据**只有一处**：``DownloadManager.gate_reason()``（第 71 期）。
+    这里原先自己写了一段 if/elif 复刻闸门规则 —— 而真实请求路径（`/api/search`、
+    `/api/download`、`/api/preview`）谁都不检查它，于是「设置说不可搜索下载、实际照搜照下」。
+    现在界面显示的原因与后端拦截时用的原因是同一句原文，不会两样。
     """
     cfg = config.load_config()
     dl = cfg.get("download") or {}
     enabled = bool(dl.get("enabled", False))
     public_only = bool(dl.get("public_only", True))
     cookie_dir = Path(config.COOKIE_DIR)
+    mgr = DownloadManager(cfg)
 
     out = []
     for s in list_sources():
         cpath = cookie_dir / f"{s['name']}.cookies.txt"
         has_cookie = cpath.is_file()
-        reasons = []
-        if not enabled:
-            reasons.append("下载功能未开启（config.yaml → download.enabled）")
-        elif public_only and not s["public"]:
-            reasons.append("仅放行公版源（download.public_only）")
+        reason = mgr.gate_reason(s["name"])
         out.append({
             **s,
             "download_enabled": enabled,
@@ -103,8 +106,8 @@ def sources_status() -> list[dict]:
                 "mtime": (cpath.stat().st_mtime if has_cookie else None),
                 "size": (cpath.stat().st_size if has_cookie else 0),
             },
-            "usable": not reasons,
-            "blocked_reason": "；".join(reasons),
+            "usable": not reason,
+            "blocked_reason": reason,
         })
     return out
 

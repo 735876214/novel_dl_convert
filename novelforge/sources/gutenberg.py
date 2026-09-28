@@ -13,14 +13,33 @@ class GutenbergSource(SourceAdapter):
     async def search(self, client, title):
         r = await client.get(self.BASE, params={"search": title}, timeout=15)
         r.raise_for_status()
+        return self._items(r.json())
+
+    async def search_page(self, client, title, page=1):
+        """真分页（第 71 期）：gutendex 响应自带 ``count/next/previous``，直接用它判「还有没有」。
+
+        ⚠️ ``page=1`` 时**不带** ``page`` 参数 —— 与加本方法之前逐字节同一个请求，
+        免得「支持了分页」这件事本身改变了首页结果（例如某些 API 对显式 page=1 的排序不同）。
+        """
+        page = max(1, int(page or 1))
+        params = {"search": title}
+        if page > 1:
+            params["page"] = page
+        r = await client.get(self.BASE, params=params, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        return {"items": self._items(data), "has_more": bool(data.get("next"))}
+
+    @staticmethod
+    def _items(data: dict) -> list[dict]:
         return [
             {
                 "title": b["title"],
                 "author": (b["authors"][0]["name"] if b["authors"] else "未知"),
                 "url": b.get("formats", {}).get("text/html"),
-                "formats": b["formats"],
+                "formats": b.get("formats", {}),
             }
-            for b in r.json()["results"]
+            for b in data.get("results", [])
         ]
 
     async def fetch_book(self, client, item) -> str:

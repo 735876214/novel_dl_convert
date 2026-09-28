@@ -6,7 +6,7 @@ import pathlib
 
 from .core import pipeline, activity_log, watcher as watcher_mod
 from . import config
-from .sources import DownloadManager
+from .sources import DownloadManager, source_of
 
 
 def _load_cfg():
@@ -122,24 +122,38 @@ def cmd_logs(args):
 async def cmd_search(args):
     cfg = _load_cfg()
     mgr = DownloadManager(cfg)
-    results = await mgr.search(args.title)
-    print(f"共 {len(results)} 条结果：")
-    for i, it in enumerate(results):
-        print(f"[{i}] ({it.get('_source')}) {it.get('title')} — {it.get('author')}")
+    # 子命令帮助里写的就是「需开启 download」：这里如实拒绝并给出出口，
+    # 而不是返回 0 条结果让人误以为「网上没有这本书」（第 71 期统一闸门口径）。
+    reason = mgr.gate_reason()
+    if reason:
+        print(reason)
+        return
+    res = await mgr.search(args.title)
+    items = res["items"]
+    print(f"共 {len(items)} 条结果：")
+    for i, it in enumerate(items):
+        print(f"[{i}] ({source_of(it)}) {it.get('title')} — {it.get('author')}")
+    # 逐源状态如实打印：某源失败 / 被闸门跳过时，这里就是唯一能看到原因的地方
+    for s in res["sources"]:
+        if s.get("ok"):
+            continue
+        why = s.get("reason") or s.get("error") or "未取到结果"
+        print(f"  · {s['display_name']}：{'跳过' if s.get('skipped') else '失败'} —— {why}")
 
 
 async def cmd_download(args):
     cfg = _load_cfg()
-    if not cfg.get("download", {}).get("enabled"):
-        print("download 未开启（见 config.yaml 的 download.enabled）")
-        return
     mgr = DownloadManager(cfg)
     if args.item:
         item = json.loads(args.item)
     else:
-        item = {"_source": args.source, "url": args.url,
+        item = {"source": args.source, "url": args.url,
                 "title": args.title or "book", "author": args.author or "未知",
                 "formats": {}}
+    reason = mgr.gate_reason(source_of(item) or None)
+    if reason:
+        print(reason)
+        return
     result = await mgr.fetch_and_convert(item, _resolve_out(args),
                                         {"force": True, "merge": True, "cfg": cfg})
     print(f"已生成：{result}")
@@ -197,7 +211,7 @@ def main():
     pd.add_argument("--url", help="书籍/目录页 URL")
     pd.add_argument("--title", help="书名（用于命名）")
     pd.add_argument("--author", help="作者")
-    pd.add_argument("--item", help="直接传入搜索结果 JSON（含 _source）")
+    pd.add_argument("--item", help="直接传入搜索结果 JSON（含 source / _source）")
 
     # update
     pu = sub.add_parser("update", help="增量更新本地 txt（需先经 download 生成 sidecar）")

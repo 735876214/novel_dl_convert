@@ -9,7 +9,7 @@
   "headers": {"User-Agent": "..."},        # 可选覆盖请求头
   "concurrency": 8,                        # 并发抓取章节上限
   "search": {                              # 搜索
-    "url": "https://x.com/search?kw={title}",
+    "url": "https://x.com/search?kw={title}",   # {title} 必用；{page} 可选（写了才支持翻页）
     "mode": "css",                         # css | regex
     "container": ".item",                  # css: 每条结果容器选择器
     "fields": {                            # 从容器内提取；值可写 "选择器" 或 "选择器::attr(href)"
@@ -38,6 +38,10 @@
 }
 
 说明：
+- `search.url` 里写 `{page}` 即支持翻页（如 `...&page={page}`）：只有写了它，「加载更多」
+  才会真的去取下一页；不写就只取第一页，界面上不会出现一个点了没反应的按钮。
+- 搜索结果里的 `url` / `cover` 写**相对地址也可以**：会按搜索页地址自动补成绝对地址
+  （章节目录一直是这个口径）。补全只对相对地址生效，绝对地址原样保留。
 - 书页 book.mode=toc 时，chapter 自动走「toc 结构化分章」（最干净）。
 - book.mode=single 时，chapter.mode=regex 用该书源正则切全文；=auto 用全局检测。
 - 所有解析支持 css / regex 双通道，离线可用（正则），也可写 CSS 选择器（需 beautifulsoup4）。
@@ -100,7 +104,23 @@ def _extract(html: str, rule: dict) -> str:
     return _extract_css(html, rule)
 
 
-def _parse_search(html: str, sp: dict) -> list[dict]:
+def _absolutize(item: dict, base_url: str) -> dict:
+    """把命中里的相对地址补成绝对地址（第 71 期）。
+
+    真实站点的搜索结果几乎都用相对链接（`/book/123`、`?id=9`），而**取书与预览都直接拿
+    `item["url"]` 去请求** —— 不补的话会以「Request URL is missing an 'http://' or
+    'https://' protocol.」失败，那句报错离真正的原因（规则抓到的是相对地址）很远。
+
+    与 `_extract_links`（章节目录一直就在做 urljoin）保持同一口径：
+    本来就是绝对地址时 `urljoin` 是幂等的，对既有规则零影响。
+    """
+    for key in ("url", "cover"):
+        if item.get(key):
+            item[key] = urljoin(base_url, str(item[key]))
+    return item
+
+
+def _parse_search(html: str, sp: dict, base_url: str = "") -> list[dict]:
     if sp.get("mode") == "regex":
         pat = re.compile(sp.get("pattern", ""), re.S | re.I)
         out = []
@@ -112,7 +132,7 @@ def _parse_search(html: str, sp: dict) -> list[dict]:
                 g = m.groups()
                 item = {"title": g[0] if g else "", "url": g[1] if len(g) > 1 else ""}
             if item.get("url"):
-                out.append(item)
+                out.append(_absolutize(item, base_url))
         return out
     # css
     soup = _soup(html)
@@ -122,7 +142,7 @@ def _parse_search(html: str, sp: dict) -> list[dict]:
     for n in nodes:
         item = {k: _field_value(n, spec) for k, spec in fields.items()}
         if item.get("url"):
-            out.append(item)
+            out.append(_absolutize(item, base_url))
     return out
 
 
@@ -165,12 +185,35 @@ class RuleBasedSource(SourceAdapter):
 
     # ---- 搜索 ----
     async def search(self, client, title: str) -> list[dict]:
+        return (await self.search_page(client, title, 1))["items"]
+
+    async def search_page(self, client, title: str, page: int = 1) -> dict:
+        """规则源分页（第 71 期）：**只在 ``search.url`` 模板含 ``{page}`` 时才替换**。
+
+        两条纪律：
+        1. **不含 ``{page}`` 的规则**，第 1 页按原模板取、``has_more=False`` ——
+           不知道是否还有下一页就如实说没有：猜成「还有」会让界面挂一个点了没反应的
+           「加载更多」，猜成「没有」只是少一个按钮，后者诚实得多；
+        2. ``page=1`` 且含 ``{page}`` 时替换成 ``1``，与不分页的写法取到的是同一页。
+
+        ``has_more`` 只有「模板支持分页**且**本页确实取到了结果」才为真：真到底了的那次
+        会返回 0 条，于是下一页自然收敛成 False（不靠猜、靠事实自纠）。
+        """
         sp = self._RULE.get("search") or {}
-        url = sp.get("url", "").replace("{title}", quote(title))
-        if not url:
-            return []
+        tpl = sp.get("url", "")
+        if not tpl:
+            return {"items": [], "has_more": False}
+        page = max(1, int(page or 1))
+        paged = "{page}" in tpl
+        if page > 1 and not paged:
+            return {"items": [], "has_more": False}
+        url = tpl.replace("{title}", quote(title))
+        if paged:
+            url = url.replace("{page}", str(page))
         html = await client.get_text(url)
-        return _parse_search(html, sp)
+        # 把**请求用的** url 作为基准传给解析：命中里的相对链接要按它补全（见 `_absolutize`）
+        items = _parse_search(html, sp, url)
+        return {"items": items, "has_more": bool(paged and items)}
 
     # ---- 取书：整页全文 ----
     async def fetch_book(self, client, item: dict) -> str:
