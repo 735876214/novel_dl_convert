@@ -114,27 +114,84 @@ def _score_text(text: str) -> float:
     return (ok + hits * 3 - rare * 8) / total
 
 
+#: 编码判据的采样窗口（字节）：开头取这么多；纯 ASCII 开头时再补一段中段。
+_SAMPLE_HEAD = 256 * 1024
+_SAMPLE_MID = 64 * 1024
+
+
+def _read_from_char_boundary(f, offset: int, n: int) -> bytes:
+    """从 ``offset`` 起读 ``n`` 字节，并让**起点落在字符边界**上。
+
+    ⚠️ 中段起点 ``size // 2`` 是按字节算的，多半落在某个多字节字符**中间**。两段样本
+    直接拼接时，接缝处那个续字节（``0x80–0xBF``）**不能当字符的开头** —— 而前缀判定
+    只容忍**尾部**不完整、接缝在中间 ⇒ 照样抛错 ⇒ 一本真 UTF-8 的书被判成
+    gb18030 / big5（实测：ASCII 前言 + 中文正文的书就中这一枪，与头部截断同因同果）。
+
+    对齐两步：① 窗口内先找换行 —— ``0x0A`` 在 UTF-8 / GBK / Big5 里都**不可能**做后继
+    字节，换行之后必然是字符边界；② 附近没有换行时跳过开头的续字节。
+    """
+    f.seek(offset)
+    probe = f.read(4096)
+    nl = probe.find(b"\n")
+    if nl >= 0:
+        f.seek(offset + nl + 1)
+    else:
+        skip = 0
+        while skip < len(probe) and 0x80 <= probe[skip] <= 0xBF:
+            skip += 1
+        f.seek(offset + skip)
+    return f.read(n)
+
+
 def _sample_bytes(path: Path) -> bytes:
     """取一段用于判编码的样本：开头 256 KB；若它全是 ASCII 再补中段（见下）。"""
-    head = 256 * 1024
     with open(path, "rb") as f:
-        data = f.read(head)
+        data = f.read(_SAMPLE_HEAD)
+        if not data or max(data) >= 0x80:
+            return data
         # 纯 ASCII 的开头（英文前言 / 版权页）判不出中文编码 —— 补一段中段再看。
         # 中段也是纯 ASCII 时**读全文**：宁可多读一次，也不把整本 GBK 判成 UTF-8
         # （错判的代价是满屏乱码，而它不会报错）。
-        if data and max(data) < 0x80:
-            try:
-                size = path.stat().st_size
-            except OSError:
-                return data
-            if size > head:
-                f.seek(size // 2)
-                more = f.read(64 * 1024)
-                if more and max(more) < 0x80:
-                    f.seek(0)
-                    return f.read()
-                return data + more
-        return data
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return data
+        if size <= _SAMPLE_HEAD:
+            return data
+        # ``data`` 全是 ASCII ⇒ 尾部必然是字符边界（ASCII 字节不可能是多字节字符的一部分），
+        # 所以只需把**中段起点**对齐，接缝两侧就都落在边界上。
+        more = _read_from_char_boundary(f, size // 2, _SAMPLE_MID)
+        if not more or max(more) < 0x80:
+            f.seek(0)
+            return f.read()
+        return data + more
+
+
+#: 编码探测**判据的版本号**：判据一改就 +1（与 `detect.CHAPTER_RULE_VERSION` 同理）。
+#: `core/txtcache.py` 把它写进派生缓存的 state 与内存缓存键，`server.py` 的章节读缓存
+#: 也带上它 —— 否则「判据改了、源文件一个字节没动」时，已缓存的正文（可能是乱码）
+#: 会一直命中，**改了看不见效果**。
+ENCODING_RULE_VERSION = 1
+
+
+def _utf8_prefix_ok(data: bytes) -> bool:
+    """``data`` 是否**可能是一段 UTF-8 的开头**。
+
+    ⚠️ 样本是**按字节切**的（见 :func:`_sample_bytes`），末尾可能切在多字节字符中间 ——
+    「尾部被切断」不构成「这不是 UTF-8」的证据。老实现直接 ``data.decode("utf-8-sig")``，
+    于是**切点落在续字节的文件整本被判成 GB18030**：本机一本 1.1 MB 的中文 TXT 正好切在
+    一个 3 字节字符的最后一字节之前（错位 262142-262143），整本解成乱码且**全程不报错**。
+    （UTF-8 汉字 3 字节 ⇒ 任意切点有 2/3 概率落在字符中间，>256 KiB 的中文 TXT 成片中招。）
+
+    改用**增量解码器**问「除尾部不完整序列外，是否全都合法」：尾部那段不完整序列被它
+    暂存，不算错；而**中间**任何坏字节照旧抛错 —— 真 GBK / Big5 样本实测仍判 ``False``，
+    容错没有放宽到「差不多就行」。解码器是**有状态**的，每次必须新建实例。
+    """
+    try:
+        codecs.getincrementaldecoder("utf-8")().decode(data, final=False)
+        return True
+    except UnicodeDecodeError:
+        return False
 
 
 def _detect_encoding(path: Path) -> str:
@@ -148,18 +205,18 @@ def _detect_encoding(path: Path) -> str:
     charset-normalizer，本项目**不引第三方依赖**，所以用字符分布判据自己判。）
 
     ``utf-8`` 仍然先试：它是**自证**的（非 UTF-8 字节几乎必然解失败），没有误判空间。
-    剩下的 GB18030 与 Big5 都能解汉字，才需要按标点 / 高频字 / 罕见字块算分择优。
+    但「自证」的判据必须是**前缀**意义上的（见 :func:`_utf8_prefix_ok`）—— 样本按字节切，
+    尾部被切断不等于编码不对。剩下的 GB18030 与 Big5 都能解汉字，才需要按标点 / 高频字 /
+    罕见字块算分择优。
     """
     data = _sample_bytes(path)
     if not data:
         return "utf-8"
-    try:
-        data.decode("utf-8-sig")               # ``utf-8-sig`` 兼容无 BOM 的输入，
-        # 所以「解得开」不等于「有 BOM」—— 回报的名字要如实：**有 BOM 才报 utf-8-sig**
-        # （两种编码读出来的文本都正确，区别只在开头那个 U+FEFF 会不会被吃掉）。
+    if _utf8_prefix_ok(data):
+        # ``utf-8-sig`` 兼容无 BOM 的输入，所以「解得开」不等于「有 BOM」——
+        # 回报的名字要如实：**有 BOM 才报 utf-8-sig**（两种编码读出来的文本都正确，
+        # 区别只在开头那个 U+FEFF 会不会被吃掉）。
         return "utf-8-sig" if data.startswith(codecs.BOM_UTF8) else "utf-8"
-    except Exception:                          # noqa: BLE001 —— 不是 UTF-8，往下按分布判
-        pass
     best, best_score = "utf-8", float("-inf")
     for enc in ("gb18030", "big5hkscs", "big5"):
         try:

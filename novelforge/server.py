@@ -2136,7 +2136,11 @@ def api_book_chapter(bid: str, index: int):
                                    lambda: library.chapter_html(ep, index, bid))
         return _chapter_cached(bid, index, path, "native",
                                lambda: txtcache.native_chapter_html(b, index, path=path),
-                               extra=f"v{txtcache.RULE_VERSION}")
+                               # 这条路线的正文由「源文件 + 分章规则 + **编码判据**」共同
+                               # 决定，后两者都是源指纹看不出来的输入 —— 缺了编码判据版本，
+                               # 判据改了而源文件没动时，缓存里那份（可能是乱码的）正文会
+                               # 一直命中（第 72 期）。
+                               extra=f"v{txtcache.RULE_VERSION}:e{txtcache.ENC_RULE_VERSION}")
     if suffix != ".epub":
         raise HTTPException(400, "仅 EPUB / TXT 支持在线阅读")
     return _chapter_cached(bid, index, path, "epub",

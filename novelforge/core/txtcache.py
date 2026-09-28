@@ -27,7 +27,7 @@ import pathlib
 import time
 
 from .. import config
-from . import detect, epub_builder, preprocess
+from . import detect, epub_builder, pipeline, preprocess
 
 #: 缓存子目录名（小写 / 连字符，与 `pdf/`、`authors/` 同风格）
 CACHE_SUBDIR = "txt-epub"
@@ -45,6 +45,12 @@ _SPLIT_CACHE_MAX = 8
 #: 规则改了而源文件一个字节没动时，旧派生 EPUB 的目录与新口径不一致，可缓存照样命中、
 #: 原样返回，**用户改了规则却看不见效果**。版本号进指纹即触发重建。
 RULE_VERSION = detect.CHAPTER_RULE_VERSION
+
+#: **编码判据版本**（跟随 `pipeline.ENCODING_RULE_VERSION`）。第 72 期加：正文是从源文件
+#: **解码**出来的，所以「判据改了、源文件一个字节没动」时，已缓存的正文（可能是乱码）
+#: 必须失效 —— 光比源指纹会一直命中，**改了看不见效果**（与 `RULE_VERSION` 同一个道理）。
+#: 它也进 `server._chapter_cached` 的 Redis 键（原生路线没有派生件指纹可用）。
+ENC_RULE_VERSION = pipeline.ENCODING_RULE_VERSION
 
 #: 规则升级导致重建时，活动日志里 `file` 一栏用的**固定主体**。见 :func:`_log_rule_rebuild`。
 FILE_LABEL = "TXT 派生缓存"
@@ -85,8 +91,11 @@ def _read_state(cdir: pathlib.Path) -> dict:
 def _write_state(cdir: pathlib.Path, state: dict) -> None:
     try:
         cdir.mkdir(parents=True, exist_ok=True)
+        # ``enc_rule`` 在这里**统一**写入（而不是让每个调用方各写一遍）：编码判据版本
+        # 是缓存有效性的一个分量，漏写就等于「判据改了但缓存照旧命中」。
         (cdir / STATE_NAME).write_text(
-            json.dumps({**state, "at": time.time()}, ensure_ascii=False),
+            json.dumps({**state, "enc_rule": ENC_RULE_VERSION, "at": time.time()},
+                       ensure_ascii=False),
             encoding="utf-8")
     except Exception:
         # 状态写不进去不是致命错：下次调用重新尝试（最坏是重复转换一次）
@@ -112,8 +121,10 @@ def _chapters(book: dict, path: pathlib.Path) -> list:
 
     缓存键里必须带上 ``RULE_VERSION``：否则规则升级后即使派生件重建了，
     切分仍会从这份缓存里原样取出**旧规则的结果**（源指纹没变，键就一样）。
+    ``ENC_RULE_VERSION`` 同理 —— 切分是在**解码后的文本**上做的，编码判据一变，
+    同一份字节切出来的章也不同。
     """
-    fp = f"{_fingerprint(path)}|v{RULE_VERSION}"
+    fp = f"{_fingerprint(path)}|v{RULE_VERSION}|e{ENC_RULE_VERSION}"
     key = (str(path), fp)
     hit = _SPLIT_CACHE.get(key)
     if hit is not None:
@@ -130,8 +141,8 @@ def _chapters(book: dict, path: pathlib.Path) -> list:
 def derived_epub(book: dict, *, path=None, root=None):
     """TXT 书 → 派生 EPUB 路径；不可转 / 失败 ⇒ ``None``（调用方回落原生分章）。
 
-    命中规则：源指纹没变且上次成功 ⇒ 直接返回既有缓存（**不重复转换**）；
-    源指纹没变但上次失败 ⇒ 仍返回 ``None``（保持形态稳定，别一会儿 EPUB 一会儿原生）。
+    命中规则：源指纹没变**且编码判据版本没变**且上次成功 ⇒ 直接返回既有缓存（**不重复转换**）；
+    源指纹没变、但上次失败 ⇒ 仍返回 ``None``（保持形态稳定，别一会儿 EPUB 一会儿原生）。
     """
     p = _src_path(book, path, root)
     if p.suffix.lower() != ".txt" or not p.is_file():
@@ -146,7 +157,11 @@ def derived_epub(book: dict, *, path=None, root=None):
 
     cdir = _cache_dir(bid)
     state = _read_state(cdir)
-    if state.get("fingerprint") == fp and state.get("rule") == RULE_VERSION:
+    # 三个分量缺一不可：源指纹（源变了）、分章规则（切法变了）、**编码判据**（解出来的
+    # 文本变了）。老 state.json 没有 ``enc_rule`` ⇒ 这里不命中 ⇒ 重建一次；这正是
+    # 「已缓存成 ok 的乱码派生件」唯一的失效通道。
+    if (state.get("fingerprint") == fp and state.get("rule") == RULE_VERSION
+            and state.get("enc_rule") == ENC_RULE_VERSION):
         if state.get("status") != "ok":
             return None
         epub = cdir / EPUB_NAME
