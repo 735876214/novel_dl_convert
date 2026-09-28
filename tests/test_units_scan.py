@@ -69,6 +69,9 @@ def test_用户实况的树在漫画库里是一本书(isolated, tmp_path, make_
     assert [b["name"] for b in books] == [BOOK_DIR], "树根目录本身就是**那本书**"
     b = books[0]
     assert b["format"] == "UNITS" and b["tracks"] == 4
+    # 书名自动修订为《转生魔女宣告毁灭》（用户要求的第二条）——剥备注在
+    # `metadata.from_filename` 里，判据本体见 `tests/test_book_title.py`
+    assert b["title"] == "转生魔女宣告毁灭", f"书名没剥掉集数备注：{b['title']!r}"
     # 卡片字段与全量扫盘逐字段一致（索引是副本，副本必须等于真相）
     assert b == library._scan_once(db.get_library(lib["id"]))[0]
 
@@ -97,6 +100,9 @@ def test_不合并的库类型里形态与改造前逐字相同(isolated, tmp_pa
     names = sorted(b["name"] for b in library.books(ebook["id"]))
     assert names == sorted(f"{BOOK_DIR}/{n}" for n in flat_files)
     assert all(b["format"] == "PDF" for b in library.books(ebook["id"]))
+    # 书名也不动：`第1话.pdf` 之类没有「集数备注」可剥（`（1-43话）` 那种才剥）
+    assert sorted(b["title"] for b in library.books(ebook["id"])) == \
+        sorted(pathlib.Path(n).stem for n in flat_files)
 
     mixed_root = tmp_path / "mixed"
     mixed = make_library("m1", "混合库", "mixed", mixed_root)

@@ -35,6 +35,39 @@ def isbn_digits(value) -> str:
     return ""
 
 
+# ---------------- 书名尾部的「范围 / 话数备注」（**唯一真值源**，第 73 期立）---------
+# 为什么要有一处统一剥：连载书在磁盘上常被写成 `《转生魔女宣告毁灭（1-43话）》`，
+# 括号里那段是**集数说明**，不是书名的一部分 —— 不剥的话书架上就是一长串
+# 「转生魔女宣告毁灭（1-43话）」，与别处（元数据提供商抓回来的书名）对不上，
+# 也就聚不到一起。判据放在 ``from_filename`` 里 ⇒ **对所有书生效**（含存量书，
+# 经 `library.SCAN_RULE_VERSION` 的自愈通道重探）。
+#
+# 判据**窄**（宁可不剥，也不剥掉真的书名）：
+#   · 括号里**整段**必须是「数 或 数-数（单位词可有可无）」，或「全N + 单位词」；
+#   · 单位词只有 `话/話/卷/回/册/集/部/篇/幕/章`（与 `units.UNIT_WORDS` 同一套写法）；
+#   · 反例一律**不剥**：`（0079）`（无范围、无单位词 —— 那是标题里的年份）、
+#     `（修订版）` / `（上册）` / `（全本）`（压根没有数字）。
+# 只剥**一处**（最靠后的那一处）：`（甲）（1-43话）` 这种多段备注不递归去剥，
+# 免得把书名里的正当括号一并吃掉。
+_COUNT_UNIT = "话話卷回册集部篇幕章"
+_COUNT_NOTE_RE = re.compile(
+    rf"^(?:第?全?\d*[-–~]\d+[{_COUNT_UNIT}]?|全?\d+[{_COUNT_UNIT}])$")
+#: 尾部括号（全角 / 半角都收）：head 必须非空 —— 整个书名就是括号里那点时不动它
+_TAIL_NOTE_RE = re.compile(r"^(?P<head>.+?)\s*[（(](?P<note>[^（()）]*)[）)]\s*$")
+
+
+def strip_count_note(title: str) -> str:
+    """剥掉书名尾部的范围 / 话数备注：``转生魔女宣告毁灭（1-43话）`` ⇒ ``转生魔女宣告毁灭``。
+
+    判据与反例见文件头那段注释。**剥不出来就原样返回**（这里不猜、不截断）。
+    """
+    s = str(title or "").strip()
+    m = _TAIL_NOTE_RE.match(s)
+    if not m or not _COUNT_NOTE_RE.match(m.group("note").strip()):
+        return s
+    return m.group("head").strip()
+
+
 # 知轩藏书等格式：《书名》（校对版全本）作者：远瞳
 FILENAME_RE = re.compile(
     r"^(?:《(?P<title>.+?)》)?\s*(?:（[^）]*）)?\s*(?:作者[：:]\s*(?P<author>[^\.]+))?",
@@ -43,6 +76,12 @@ FILENAME_RE = re.compile(
 
 
 def from_filename(name: str) -> dict:
+    """从文件名解析「书名 / 作者」—— **书名解析的唯一入口**（两分支都过 `strip_count_note`）。
+
+    两个分支指的是 `《…》` 命中与未命中（裸文件名）。它们必须都剥那道备注，
+    否则 `《甲（1-43话）》.cbz` 与 `甲（1-43话）.cbz` 会得到两个不同的书名 ——
+    而判据只有一份（`strip_count_note`）才不会走样。
+    """
     stem = pathlib.Path(name).stem
     m = FILENAME_RE.search(stem)
     if m and m.group("title"):
@@ -51,7 +90,7 @@ def from_filename(name: str) -> dict:
     else:
         title = stem.strip()
         author = "未知"
-    return {"title": title, "author": author}
+    return {"title": strip_count_note(title), "author": author}
 
 
 def from_body(head: str) -> dict:
