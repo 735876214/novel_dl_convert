@@ -101,6 +101,18 @@
   规律：两条异步路径可能同时想要同一份数据时，**合并前重读当前集合 + 落地前按 id 去重 + 写入串行**，三样都要有。
 - ⚠️ 冒烟时 `playwright-cli goto` **只改 hash 不重载产物**：验证新构建必须带 cache-busting 查询
   （如 `?v=69b#/read/...`），否则你量的是旧 bundle（第 69 期实测踩到：以为「改动没生效」，其实没加载）。
+- **全站开关只有一个实现**：`frontend/src/components/ui/Switch.vue`（`button[role=switch]` + `aria-checked`）。
+  改开关外观/尺寸/过渡/禁用**只改这一个文件**；配色必须走主题变量（`--primary`/`--muted`/`--card`/`--border`），
+  焦点环**不要自写** —— 全局 `:focus-visible`（`assets/main.css`）已统一，`prefers-reduced-motion` 也已全局接管。
+  ⚠️ 滑块用 `bg-card` 而非硬编码白色：深色主题下 `--primary` 是**浅色**，写死白滑块会糊在浅色轨道上。
+- ⚠️ **`v-model` 与同一个事件上的副作用监听器，执行顺序不由我们决定**（第 70 期）：写
+  `v-model="x" @update:model-value="persist()"` 可能先 persist 后赋值 ⇒ **存的是旧值**。
+  凡「改值后要落盘/上报」的组件，统一写成一条内联语句：`:model-value="x" @update:model-value="x = $event; persist()"`。
+- ⚠️ **`<label>` 包住自定义按钮时，点标签文字仍会切换**（第 70 期 Edge 实测）：把 `input[type=checkbox]`
+  换成 `button[role=switch]` **不会**丢「点文字也能切」这个既有行为，可以放心保留 `<label>` 外壳。
+- **收书目录投递只有一条链路**：`api.convertDrop(file)` → `POST /convert`（写进 `INPUT_DIR` 走既有管线）。
+  拖拽与工具栏「上传」按钮共用 `deliverToDock(files)`（第 70 期抽取）；隐藏的 `input[type=file]` 处理完
+  必须清空 `input.value`，否则连选同一个文件第二次不再触发 `change`。项目**没有 i18n**，文案写中文字面量。
 
 ## 逐期铁律索引（原文见 `MEMORY-REF.md`）
 - **第 53 期** 演播者实体：`books.narrators`（与 tags 同构）+ `narrators` 表（两列镜像 authors）；`core/audio_meta.py` 零依赖解析标签；不新增浏览维度、无头像。

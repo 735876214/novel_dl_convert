@@ -2619,3 +2619,70 @@ PDF·漫画进下一册 / 有声书接下一轨，**翻页模式预取不做**�
 - **章块内图片的异步解码**靠浏览器自带 scroll anchoring 兜底（本项目**未**改成 `overflow-anchor: none`
   + 自管）：实测两者的关系是**互补**而非冲突（谁先生效都不会补两次），自管反而会与它叠加。
 - 真机冒烟用的是每章纯文本的合成书；**插图很多的书**在前插后图片逐张解码时的手感未单独量过。
+
+## 第 70 期（2026-09-28）：收书目录「上传」按钮 + 全站开关胶囊收敛为唯一实现
+
+**来源**：用户点名两项前端任务（原文见下）。
+
+### 一、收书目录工具栏新增「上传」（`views/settings/pages/BookDockPage.vue`）
+- 「暂停」按钮在标题行工具栏内；新按钮紧随其后 ⇒ 顺序 `立即扫描 | 暂停·开始监听 | 上传`。
+- **复用既有接口，后端零改动**：`api.convertDrop(file)` → `POST /convert`（FormData，写进 `INPUT_DIR` 后走既有管线）——
+  这正是本页「整页拖拽投递」用的那条路。
+- **把拖拽的投递逻辑抽成 `deliverToDock(files)`**，拖拽（N 个文件）与上传（1 个文件）共用同一份
+  守卫 / 反馈 / 刷新（否则同一件事两套实现，迟早一处给明确原因、另一处静默）。0 库拦截抽成 `blockedByNoLibrary()`。
+- 按钮：`variant="primary"`（用户指定强调色）、`size="sm"`、纯文字、`title` 与 `aria-label` 均为「上传」；
+  `Button.vue` 未声明 `inheritAttrs:false`，`aria-label` 会落到根 `<button>`（实测 class 串与邻居逐字一致）。
+- 隐藏 `input[type=file]`：**不加 `multiple`**（单文件）、**不加 `accept`**（与拖拽同口径，由后端判格式）；
+  ⚠️ 处理完必须 `input.value = ''`，否则「连续两次选同一个文件」第二次不触发 `change`。
+- 上传中 `disabled` + 文案「上传中…」；0 库时不禁用而是 toast 说明原因；失败文案改用 `apiErrorMessage`
+  （原先拖拽直接用 `err.message`，会把后端 `{"detail":…}` 的括号原样露给用户）。
+- **项目没有 i18n**（`vue-i18n|useI18n|$t(` 零命中）⇒ 文案为中文字面量。
+
+### 二、开关胶囊抽成唯一组件 `components/ui/Switch.vue`
+- 改造前实测「各写各的」：小胶囊 `h-[18px] w-8` 在 **8 个文件 11 处**，另有大胶囊
+  `h-5 w-9 + transition-[left] + shadow-xs`（`MetadataPage` 书源开关，第 12 处），
+  以及 7 项**原生复选框充当开关**（落在 9 个 DOM 位上）。
+- 组件：`button[role=switch]` + `aria-checked` + 内嵌滑块；props `modelValue / disabled / title / ariaLabel`，
+  emits `update:modelValue`。空格与回车由原生 button 保证（不必自己补键盘处理）。
+  焦点环**不自写** —— 全局 `:focus-visible`（`assets/main.css`）已统一；`prefers-reduced-motion` 也由全局接管。
+- 配色全部走主题变量（`--primary` / `--muted` / `--card` / `--border`），**禁写死色值**；
+  滑块用 `bg-card` 而非硬编码白色：深色主题下 `--primary` 是**浅色**，写死白滑块会在浅色轨道上糊掉。
+- **迁移 21 处**（收尾用 `grep '<Switch'` 数准：21 个使用点、14 个文件）：
+  **12 处旧胶囊** —— `SettingsFieldRow`、`ReaderAudioPage`、`PdfPage`、`ComicsPage`×2、`BookDockPage`×2、
+  `AuditLogPage`、`IntegrationPage`、`MetadataPage`（原大胶囊）、`DashboardSettingsSheet`×2；
+  **9 处开关语义复选框** —— 表格隔行底色、筛选预览默认展开、系列默认折叠、归档时压缩、两端对齐×2
+  （`ReaderEbookPage` 与 `ReaderView`）、断词×2、连续读。
+- ⚠️ **`v-model` 与「落盘」监听器的执行顺序不由我们决定**：`v-model="x" @update:model-value="persist()"`
+  可能先 persist 后赋值 ⇒ 存下旧值。所有「赋值 + 副作用」站点统一写成一条内联语句
+  `:model-value="x" @update:model-value="x = $event; persist()"`。
+- ⚠️ **关态圆点在两种主题下都不够清楚**（实测浅色 `--muted` 0.955 vs `--card` 0.975、深色 0.245 vs 0.18），
+  故给滑块加一道 `border-border` 细边 —— 放大 6 倍对比图确认后才加的，不是凭感觉。
+
+### 验证
+- 前端 `type-check` + `build` + `deploy` 全绿；`test:unit` **384 例 / 34 文件全过**
+  （新增 `components/ui/Switch.spec.ts` 8 例契约 —— 含「不许出现写死色值」「尺寸/过渡唯一口径」「disabled 样式」
+  「title/aria-label 可选」；`BookDockPage.spec.ts` 新增 5 例：按钮属性、点击只开选择器、投递成功且 input 清空、
+  失败带文件名与原因、0 库不投递并说明）。
+- 真机（隔离实例 8414 + Edge），逐项实测：
+  - 上传按钮：`title`/`aria-label` 均为「上传」、class 串与邻居逐字一致、`variant=primary`；隐藏 input
+    `multiple=false`、无 `accept`；**真机投递一个 .txt 成功** —— 文件出现在 `INPUT_DIR`，随即被处理进库
+    （`/api/books` 出现 `upload-smoke`），整条链路打通；
+  - `role="switch"` 全仓只剩 `Switch.vue` 一处（自动化 grep 断言，杜绝再长出副本）；
+  - 四个页面共 **14+12+2+2+1 处**开关实测尺寸一律 **18×32**（含原 20×36 的元数据书源开关）；
+  - **空格键切换**实测生效（`aria-checked` false→true，轨道同时换 `bg-primary`、滑块 `translate-x-[16px]`）；
+  - **点标签文字仍能切换**（`<label>` 包住按钮时浏览器会把点击转给控件）—— 既有行为未退化；
+  - 浅/深主题下计算色分别等于 `--primary` / `--card` / `--muted`（跟随 token，不是编译期定值）。
+
+### 明确不动（本期范围外，附理由）
+- **多选/全选**：`ShelfView`×3、`BookDockPage` 条目行、`MetadataPage` 迁移行、`KomgaPage` 表行、`ScrapePanel`×3
+  —— 语义是「多选」，做成胶囊会让「勾了几本」失去含义。
+- **筛选**：`KomgaPage` 只看冲突、`AuditLogPage` 仅看未记录、`AnnotationsView` 仅当前书库。
+- **确认勾选** `ScrapePanel`「我已知晓原文件将被移入回收站」、**只读展示** `MigrationGateDialog`、
+  **菜单勾选** `BookActionsMenu`（`role=menuitemcheckbox`，不是胶囊）。
+- **身份也是布尔开关、但不在用户点名清单内**（一句话即可追加）：`tools/SourcesView`（公版/合规）、
+  `tools/LibrariesView`×3（自动执行 / 监听来源子目录 / 刮削出版）、`tools/LibraryWizard`×2、
+  `charts/ChartConfigPanel`（显示该模块）。
+
+### 未做
+- 「上传中…」与禁用态在本机**太快**（本地投递 1 秒内完成），真机没截到那一帧；逻辑与文案由单测 + 组件契约覆盖。
+- 上传失败的最新路径（例如后端拒收）只在单测里验证过（mock 抛错 ⇒ toast 带文件名与原因）。
