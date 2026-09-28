@@ -424,6 +424,42 @@ describe('ReaderView · 目录跳转与滚轮翻页（第 61 期）', () => {
   }
 
   /**
+   * happy-dom 没有布局：按给定的「章高」手工铺出章块的上下关系，并伪装滚动位置，
+   * 让连续流（第 69 期）的可见章判定**有据可依** —— 否则 `pickVisiblePos` 只会保守地
+   * 报第一块（量不到几何就绝不凭零值编位置），断言也就测不出「滚过去了」。
+   */
+  function stubFlowGeometry(
+    wrapper: VueWrapper,
+    opts: { scrollTop: number; clientHeight: number; heights: number[] },
+  ): HTMLElement {
+    const scroller = scrollerOf(wrapper)
+    Object.defineProperty(scroller, 'clientHeight', { value: opts.clientHeight, configurable: true })
+    Object.defineProperty(scroller, 'scrollTop', {
+      value: opts.scrollTop, configurable: true, writable: true,
+    })
+    scroller.getBoundingClientRect = () => ({
+      top: 0, left: 0, right: 0, bottom: opts.clientHeight, width: 0, height: opts.clientHeight,
+      x: 0, y: 0, toJSON: () => ({}),
+    }) as DOMRect
+
+    let cursor = 0
+    wrapper.findAll('.nf-chunk').forEach((c, i) => {
+      const h = opts.heights[i] ?? 0
+      const contentTop = cursor        // 每次迭代各自取值：闭包捕获的是「这一次」的 top
+      cursor += h
+      // ⚠️ `getBoundingClientRect()` 给的是**视口**坐标：滚动之后要减掉 scrollTop
+      //（真浏览器就是这个语义；不减会让每一块看起来都「跑到视口下方」）。
+      const viewTop = contentTop - opts.scrollTop
+      const el = c.element as HTMLElement
+      el.getBoundingClientRect = () => ({
+        top: viewTop, left: 0, right: 0, bottom: viewTop + h, width: 0, height: h,
+        x: 0, y: viewTop, toJSON: () => ({}),
+      }) as DOMRect
+    })
+    return scroller
+  }
+
+  /**
    * 目录跳转必须按 **`flat` 里的位置**走，而不是回查后端 `index`。
    *
    * 后端结构里可能出现没有 `index` 的条目（此处模拟）：`flat` 会跳过它、目录面板的
@@ -477,12 +513,14 @@ describe('ReaderView · 目录跳转与滚轮翻页（第 61 期）', () => {
     // 第 0 章（慢）+ 第 1 章（快）：先点慢的，再点快的
     await items[0].trigger('click')
     await items[1].trigger('click')
-    await vi.waitFor(() => expect(m.chapter).toHaveBeenCalledTimes(3))   // 首屏 + 两次点击
+    // 取数次数不再是稳定断点（连续流会按需补邻章，点一次可能多取一块）。能守的落点是
+    // 「**最后点的那一章**成为当前章」—— 慢响应后到也不许把它顶掉；
+    // 也不能再看「第一个 `.reader-content`」，因为窗口里本来就同时挂着两章。
+    await vi.waitFor(() => expect(wrapper.text()).toContain('2 / 2'))
     await new Promise((r) => setTimeout(r, 1700))                        // 等慢响应真的回来
     await flushPromises()
 
-    expect(wrapper.find('.reader-content h1').exists()).toBe(true)
-    expect(wrapper.find('.reader-content h1').text()).toBe('第二章')
+    expect(wrapper.text()).toContain('2 / 2')
   })
 
   /**
@@ -511,43 +549,73 @@ describe('ReaderView · 目录跳转与滚轮翻页（第 61 期）', () => {
   })
 
   /**
-   * 滚动读到一章末尾 → **自动接上下一章**（第 61 期，用户选的 A）。
+   * 滚动读到底就是下一章的正文（第 69 期：跨章连续流）。
    *
-   * 「无缝」的全部内容都在这一条里：**下一章必须先已在缓存里**，切换时才不会再发一次请求
-   * （不发请求 ⇒ 没有往返等待、没有空白、没有「加载章节…」一闪）。
-   * 所以断言的落点是取数次数：首屏那次 + 预取那次 = 2，滚到底**不新增**请求。
+   * 「无缝」的落点从「切换时不发请求」变成了「**根本不存在切换**」：首屏就把
+   * 可见章 + 下一章一起挂进同一个滚动容器（取数 2 次），滚到底只是继续往下滚 ——
+   * 正文没有被换掉、滚动位置也没被归零。这里用假几何把两章的上下关系量出来，
+   * 于是断言的落点能落在「真的滚过去了」上（底栏页码）。
    */
-  it('滚动到底自动接上下一章，且切换时不再发请求（预取在先）', async () => {
+  it('滚动到底即继续读下一章：不替换正文、不多发请求', async () => {
     localStorage.removeItem(READER_PREFS_KEY)     // 默认就是滚动模式
     const { wrapper } = await mountReader()
 
-    expect(m.chapter).toHaveBeenCalledTimes(2)    // 首屏(0) + 预取下一章(1)
+    expect(m.chapter).toHaveBeenCalledTimes(2)    // 可见章(0) + 下一章(1)
+    expect(wrapper.findAll('.nf-chunk')).toHaveLength(2)   // 两章**同时**在正文里
 
-    // happy-dom 没有布局：直接给出「已滚到底」的尺寸
-    const el = scrollerOf(wrapper)
-    Object.defineProperty(el, 'scrollHeight', { value: 2000, configurable: true })
-    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
-    Object.defineProperty(el, 'scrollTop', { value: 1500, configurable: true })
-    el.dispatchEvent(new Event('scroll'))
+    stubFlowGeometry(wrapper, { scrollTop: 1200, clientHeight: 500, heights: [1000, 1000] })
+    scrollerOf(wrapper).dispatchEvent(new Event('scroll'))
     await flushPromises()
 
-    expect(m.chapter).toHaveBeenCalledTimes(2)    // 已在缓存 ⇒ 不多一次请求
-    expect(m.chapter).toHaveBeenLastCalledWith('book-a', 1)
+    expect(m.chapter).toHaveBeenCalledTimes(2)    // 已在窗口里 ⇒ 不多一次请求
     expect(wrapper.text()).toContain('2 / 2')
+    expect(wrapper.findAll('.nf-chunk')).toHaveLength(2)   // 仍是两章：没有「换掉」
   })
 
-  /** 关掉开关后，滚到底就停在原地（不替用户做决定）。 */
-  it('关掉自动续章后滚到底不自动跳', async () => {
+  /**
+   * 向上滚能读回上一章（第 69 期）——「自由阅读上一章与下一章」的另一半。
+   *
+   * 打开时落在第二章，上一章**本来就已经挂在上面**；往上滚进它的范围，当前位置就跟着
+   * 回到它（而不是「滚到顶就没有了」）。
+   */
+  it('向上滚回上一章：上一章本就挂在上方，位置随之回到它', async () => {
+    m.getProgress.mockResolvedValue({ locator: 1, percent: 0 })   // 打开时在第 2 章
+    const { wrapper } = await mountReader()
+
+    expect(m.chapter).toHaveBeenCalledTimes(2)                    // 上一章(0) + 当前章(1)
+    expect(wrapper.text()).toContain('2 / 2')
+
+    stubFlowGeometry(wrapper, { scrollTop: 0, clientHeight: 500, heights: [1000, 1000] })
+    scrollerOf(wrapper).dispatchEvent(new Event('scroll'))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('1 / 2')     // 滚回上一章的范围 ⇒ 当前位置回到它
+  })
+
+  /**
+   * 关掉「连续读」后**不往后补章**：读到底就停在原地，露出「下一章」按钮由用户决定。
+   *
+   * 与旧行为的差别要留住：旧版是「预先把下一章取好、滚到底才切」，新版是**压根不挂**
+   * 下一章（连取都不取）—— 所以第一条断言是取数次数为 1。
+   */
+  it('关掉连续读后滚到底不往后接，按钮仍在', async () => {
     localStorage.setItem(READER_PREFS_KEY, JSON.stringify({ autoNextChapter: false }))
     const { wrapper } = await mountReader()
-    const el = scrollerOf(wrapper)
-    Object.defineProperty(el, 'scrollHeight', { value: 2000, configurable: true })
-    Object.defineProperty(el, 'clientHeight', { value: 500, configurable: true })
-    Object.defineProperty(el, 'scrollTop', { value: 1500, configurable: true })
 
-    el.dispatchEvent(new Event('scroll'))
+    expect(m.chapter).toHaveBeenCalledTimes(1)            // 只挂当前章，不预挂下一章
+    expect(wrapper.findAll('.nf-chunk')).toHaveLength(1)
+
+    stubFlowGeometry(wrapper, { scrollTop: 900, clientHeight: 500, heights: [1000] })
+    scrollerOf(wrapper).dispatchEvent(new Event('scroll'))
     await flushPromises()
+
+    expect(m.chapter).toHaveBeenCalledTimes(1)            // 滚到底也不补章
     expect(wrapper.text()).toContain('1 / 2')
+    expect(wrapper.findAll('.nf-chunk')).toHaveLength(1)  // 正文没有被换掉
+    expect(
+      wrapper.findAll('button').some((b) => b.text().includes('下一章')),
+      '读到底要能看见「下一章」按钮',
+    ).toBe(true)
   })
 
   /** 边界：书不在列表里就**别**凭空插一条；更旧的时间戳也别把新的覆盖回去。 */

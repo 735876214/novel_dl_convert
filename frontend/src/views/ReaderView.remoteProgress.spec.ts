@@ -86,9 +86,10 @@ describe('ReaderView · 其他设备进度提示（第 56 期）', () => {
     m.bookDetail.mockResolvedValue(makeBook())
     m.listAnnotations.mockResolvedValue({ items: [] })
     m.listBookmarks.mockResolvedValue({ items: [], total: 0, trashed: [] })
-    // 第 61 期：阅读器会把下一章**预先取好**（滚动到底无缝接续），所以「最后一次取数」
-  // 不再等于「当前显示的章」。正文内容因此必须**按章号区分**，断言改看渲染结果。
-  m.chapter.mockImplementation(async (_bid: string, index: number) => ({
+    // 第 61 期起阅读器会**先取好下一章**，第 69 期起更是**直接把它挂在正文里**
+    //（滚动模式 = 跨章连续流），所以「最后一次取数」不再等于「当前显示的章」，
+    // 正文里也**同时存在两章**。断言只能看「当前位置」（底栏页码）而不是「DOM 里有什么」。
+    m.chapter.mockImplementation(async (_bid: string, index: number) => ({
     index,
     total: 2,
     title: index === 0 ? '第一章' : '第二章',
@@ -116,9 +117,11 @@ describe('ReaderView · 其他设备进度提示（第 56 期）', () => {
 
     expect(w.text()).toContain('其他设备更新了进度')
     expect(w.text()).toContain('第二章')
-    // 不自动跳：**正文**仍停在第 1 章（不看取数顺序 —— 下一章已被预取，见 stubApi 说明）
+    // 不自动跳：**当前位置**仍停在第 1 章 —— 落点看底栏页码。
+    //（不能再用「DOM 里没有第二章」来断言：连续流下下一章本来就挂在下面 —— 那正是这个
+    //  功能要的效果，不是「跳过去了」。）
+    expect(w.text()).toContain('1 / 2')
     expect(w.html()).toContain('第一章节正文')
-    expect(w.html()).not.toContain('第二章节正文')
   })
 
   it('点「跳过去」才真的跳，并立刻把本机位置写回', async () => {
