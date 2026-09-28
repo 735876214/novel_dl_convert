@@ -92,6 +92,15 @@
   （比人肉 grep 可靠）。新增/收紧契约优先走这条路。
 - ⚠️ **`App.vue` 里 `showLogin` 初值是 `false`** ⇒ 任何挂在 `v-else` / `v-if="!showLogin"` 上的东西都会**先挂载一次**（未登录时白拉一次）；
   门控用 App 自己的 `authChecked`（**不能用 `auth.ready`** —— 它在 `init()` 内先变真，中间仍有一个 tick 会挂载）。
+- ⚠️ **滚动模式「跨章连续流」的补偿三条**（第 69 期，全是真机量出来的、不是推理）：① 锚取**正文 article**
+  而非外层 `<section>`（`first:` 变体的 `pt-6` 不在 border-box 里，实测漏 **24px**）；② 补偿写**绝对值**
+  `beforeTop + 补偿量`，**不能 `+=`**（浏览器自带 scroll anchoring 常已替我们调好 `scrollTop`，相对累加会
+  把同一段位移补两次）；③ 锚必须是**已存在**的块（新插入的块此刻还没有 DOM ⇒ `chunkArt` 返回 null ⇒ 等于
+  没有锚 ⇒ 正文被整体按下、看起来「跳了一屏」）。
+- ⚠️ **同一位置被并发并入 ⇒ `:key` 重复 ⇒ Vue patch 失去定义、渲染错序**（第 69 期实测出「上一章排在中间」）。
+  规律：两条异步路径可能同时想要同一份数据时，**合并前重读当前集合 + 落地前按 id 去重 + 写入串行**，三样都要有。
+- ⚠️ 冒烟时 `playwright-cli goto` **只改 hash 不重载产物**：验证新构建必须带 cache-busting 查询
+  （如 `?v=69b#/read/...`），否则你量的是旧 bundle（第 69 期实测踩到：以为「改动没生效」，其实没加载）。
 
 ## 逐期铁律索引（原文见 `MEMORY-REF.md`）
 - **第 53 期** 演播者实体：`books.narrators`（与 tags 同构）+ `narrators` 表（两列镜像 authors）；`core/audio_meta.py` 零依赖解析标签；不新增浏览维度、无头像。
