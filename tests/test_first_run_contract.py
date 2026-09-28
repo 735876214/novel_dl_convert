@@ -198,12 +198,26 @@ def test_本地转换上传前先拦():
 
 
 def test_book_dock_投递前先拦():
+    """0 库时不许真的走投递请求（第 38 期）。
+
+    ⚠️ 第 70 期把守卫抽成了 `blockedByNoLibrary()`、拖拽与工具栏「上传」**共用同一份**
+    （一页两套守卫迟早走样）。「拦截发生在投递之前」这条没变，变的是它不再以字面量
+    `hasNoLibraries` 的形式待在各入口函数体里 —— 所以断言分两层：
+    守卫本身问的是 `hasNoLibraries`，且**两个入口都先调守卫再投递**。
+    """
     src = _read(DOCK)
-    m = re.search(r"async function onDrop\(.*?\n\}", src, re.S)
-    assert m, "onDrop 的形状变了，请同步本测试"
-    body = m.group(0)
-    assert "hasNoLibraries" in body and "return" in body
-    assert body.index("hasNoLibraries") < body.index("api.convertDrop"), "拦截要发生在投递之前"
+    guard = re.search(r"function blockedByNoLibrary\(\)[^{]*\{(.*?)\n\}", src, re.S)
+    assert guard, "找不到 0 库守卫 blockedByNoLibrary，请同步本测试"
+    assert "hasNoLibraries" in guard.group(1), "守卫必须问的就是 0 库这个判据"
+    assert "return true" in guard.group(1), "守卫要能告诉调用方「已拦下」"
+
+    for fn in ("onDrop", "onPickedFile"):
+        m = re.search(rf"async function {fn}\(.*?\n\}}", src, re.S)
+        assert m, f"{fn} 的形状变了，请同步本测试"
+        body = m.group(0)
+        assert "blockedByNoLibrary()" in body, f"{fn} 在 0 库时应提前拦下"
+        assert body.index("blockedByNoLibrary()") < body.index("deliverToDock"), \
+            f"{fn} 的拦截要发生在投递之前"
 
 
 # ---------------------------------------------------------------------------
