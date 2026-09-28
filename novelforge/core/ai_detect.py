@@ -1,7 +1,9 @@
-"""AI 分章兜底：正则优先，疑难（零标记 / 命中率低）再调 LLM 核验与补漏。
+"""AI 分章兜底：正则优先，疑难（判据不自信）再调 LLM 核验与补漏。
 
 设计要点（避免全量丢给 AI 又贵又慢）：
-- 正则先把整本书压成候选标题行；只有「零命中」或「命中率过低」才触发 AI。
+- 正则先把整本书压成候选标题行；只有**正则判据不自信**才触发 AI —— 判据就是
+  `detect.regex_confident`（唯一实现，第 72 期从本模块收敛过去），
+  且只有 `mode: ai` 才会**无条件**复核。
 - 大书按窗口切片（带重叠）逐片让 AI 标出章节起始偏移，再合并去重。
 - 结果与 (model + 文本哈希) 绑定做文件缓存，重复文件不二次计费。
 - 用独立线程跑新事件循环，兼容 CLI（同步）与 Web 服务（已有运行中的 loop）。
@@ -56,10 +58,16 @@ class HybridChapterDetector:
     # ---- 公开入口 ----
     async def detect(self, text: str) -> list[dict]:
         bounds = regex_detect.regex_bounds(text)
-        confident = bool(bounds) and len(bounds) * 2000 >= len(text)
+        # 置信判据**不在这里第二份实现** —— 第 72 期收敛：读 `detect` 的那一份。
+        # 它决定「要不要花钱调 LLM」，与 `detect_chapters` 决定「用不用缩进降级」
+        # 必须是同一个答案；否则一本**已经切对**的长章书会被当成低命中、每次都调一次。
+        confident = regex_detect.regex_confident(bounds, text)
 
         if self.mode == "regex":
-            return regex_detect.split_by_offsets(text, bounds) if confident else regex_detect._split_by_indent(text)
+            # 「纯正则、无 AI」的语义**就是** `detect_chapters` ⇒ 直接委派：置信判据与
+            # 「降级切出的章一个正文都没有时回退正则边界」那道保险都不必在这里重写
+            # （第 72 期前正是少写后者，同一份文本走管线与走本检测器会得到不同的目录）。
+            return regex_detect.detect_chapters(text)
         if self.mode == "ai":
             ai = await self._ai_bounds(text)
             return regex_detect.split_by_offsets(text, ai)
@@ -68,7 +76,9 @@ class HybridChapterDetector:
             return regex_detect.split_by_offsets(text, bounds)
         ai = await self._ai_bounds(text)
         merged = self._merge_bounds(bounds, ai)
-        return regex_detect.split_by_offsets(text, merged) if merged else regex_detect._split_by_indent(text)
+        # AI 也没给出边界时回到唯一真值源的兜底（含上面那道保险），而不是自己再写一遍
+        return regex_detect.split_by_offsets(text, merged) if merged \
+            else regex_detect.detect_chapters(text)
 
     # ---- 合并正则与 AI 的边界（去近邻重复）----
     def _merge_bounds(self, a, b):

@@ -13,13 +13,24 @@
 2. **补模式**：卷单独成行 / `卷一 起风` / `【第1章】` / `（一）` / 全角句点 `1．风`，
    并把 `序章|楔子|番外` 一类从「只捕获标记本身」改成**捕获整行**
    （`番外一 开始` 原先只拿到「番外」，「一 开始」被丢掉）。
+
+**第 72 期三处口径变化**（同样记进 `CHAPTER_RULE_VERSION`）：
+
+1. **置信判据加绝对条数兜底**（:func:`regex_confident`）：密度判据单独用会**误杀长章书** ——
+   一本 25 章、平均 15k 字/章的书只有 25 个边界，`25×2000 < 373,187` 被判「正则无效」，
+   明明边界条条属实却被丢掉。
+2. **降级产物为空时回退正则边界**：缩进降级**一章正文都没读出来**（全顶格文本恒如此）时，
+   宁可回到正则边界 —— 几个真边界好过 N 个空正文的假章。
+3. **缩进降级认全角空格**：与 `_LEAD`（正则锚定那边，`[ \t　]*`）口径对齐。中文文本用
+   全角空格缩进是常态，只认半角会把**每一段**都当成新章首。
 """
 import re
 
 #: 分章**规则版本号**：规则一改就 +1。``core/txtcache.py`` 把它写进派生缓存的指纹 ——
 #: 否则存量 TXT 书的派生 EPUB 会一直沿用旧目录，改了规则**看不见效果**（缓存命中就返回，
 #: 不会重切）；版本号一变即触发重建，活动日志里也留得下痕迹。
-CHAPTER_RULE_VERSION = 2
+#: 第 72 期 +1：置信判据加绝对条数兜底、降级产物为空时回退正则、缩进降级认全角空格。
+CHAPTER_RULE_VERSION = 3
 
 #: 行首锚定：允许行首的行内空白（**含全角空格**，中文文本常用它缩进），但用
 #: ``[ \t　]*`` 而**不是** ``\s*`` —— 后者能吃掉换行，等于没锚定（``^`` 从上一行
@@ -132,12 +143,36 @@ def split_by_offsets(text: str, bounds: list[tuple[int, str]], merge: bool = Fal
     return _merge_small(chaps) if merge else chaps
 
 
+def regex_confident(bounds: list[tuple[int, str]], text: str) -> bool:
+    """正则边界是否可信：**密度**（平均 ≤2000 字/章）**或** 绝对条数（≥3 条）。
+
+    密度判据单独用会把**长章书**误判成「没有章节」：一本 25 章、平均 15k 字/章的书
+    只有 25 个边界，``25 × 2000 = 50,000 < 373,187`` ⇒ 判「正则无效」⇒ 退化缩进切分
+    ⇒ 3723 个空正文假章（实测）。长章不是「命中太少」，所以补一条绝对条数兜底：
+    行首锚定之后，3 条以上行首章标记基本不可能是巧合。
+
+    **公开名**：它有两个消费者 —— :func:`detect_chapters`（决定用不用缩进降级）与
+    ``core/ai_detect.HybridChapterDetector``（决定要不要花钱调 LLM）。第 72 期把后者
+    里那份 ``len(bounds) * 2000 >= len(text)`` 的**第二份拷贝**收敛到这里
+    （AGENTS.md：同一判据只许有一处实现），所以它不再是一个模块内部的细节。
+    """
+    return len(bounds) >= 3 or len(bounds) * 2000 >= len(text)
+
+
 def detect_chapters(text: str, merge: bool = False) -> list[dict]:
-    """章节识别：正则优先，命中率不足时退化为缩进切分。"""
+    """章节识别：正则优先，命中率不足时退化为缩进切分。
+
+    降级后若**一章正文都没读出来**（全顶格文本必然如此：顶格行全成了章标题、没有
+    缩进行当正文），而正则**有**边界，就回到正则边界 —— 几个真边界好过 N 个空正文的
+    假章（那种目录在阅读器里表现为「满屏标题、点进去没有正文」）。
+    """
     bounds = regex_bounds(text)
-    if bounds and len(bounds) * 2000 >= len(text):  # 正则有效
+    if bounds and regex_confident(bounds, text):  # 正则有效
         return split_by_offsets(text, bounds, merge)
-    return _split_by_indent(text)  # 缩进降级
+    chaps = _split_by_indent(text)  # 缩进降级
+    if bounds and not any((c.get("body") or "").strip() for c in chaps):
+        return split_by_offsets(text, bounds, merge)
+    return chaps
 
 
 def detect_chapters_cfg(text: str, cfg: dict | None = None, merge: bool | None = None) -> list[dict]:
@@ -166,9 +201,14 @@ def detect_chapters_cfg(text: str, cfg: dict | None = None, merge: bool | None =
 
 
 def _split_by_indent(text: str) -> list[dict]:
+    """缩进降级：顶格行 = 章标题，其下的缩进行 = 该章正文。
+
+    ⚠️ 缩进字符集必须与 `_LEAD`（正则锚定那边）**一致**：全角空格 `　` 也是缩进。
+    只认半角时，用全角缩进的中文文本会被切成「一段一章、正文全空」（第 72 期实测）。
+    """
     chaps, cur = [], None
     for ln in text.splitlines():
-        if ln[:1] in (" ", "\t") or not ln.strip():
+        if ln[:1] in (" ", "\t", "　") or not ln.strip():
             if cur is not None:
                 cur["body"] += "\n" + ln
         else:
