@@ -72,12 +72,21 @@ def _type_of_path(name: str) -> str:
 
 
 def target_type_of(book: dict) -> str:
-    """书 → 目标库类型（先看 ``format``，缺失才回退扩展名）。"""
+    """书 → 目标库类型（先看 ``format``，缺失才回退扩展名）。
+
+    第 73 期：``UNITS``（序号单元合集，一话一文件的**目录**）的归属类型取**它所在库的
+    类型** —— 合集自己没有扩展名可判，而「它能在哪一类库里出现」本身就是答案
+    （`library._iter_book_entries` 只在漫画库 / 有声书库里合并，见 `units.merges_for`；
+    搬家闸门 `compat_reason` 也据此拦下别处的去向）。少了这一条，合集在「自动归库」
+    里会被**静默跳过**、在系列页被分进「其它」—— 两个都是不报错的错。
+    """
     fmt = str((book or {}).get("format") or "").upper()
     if fmt in _COMIC_FMT:
         return "comic"
     if fmt == "AUDIO":
         return "audiobook"
+    if fmt == "UNITS":
+        return str((book or {}).get("library_type") or "")
     if fmt in _EBOOK_FMT:
         return "ebook"
     return _type_of_path((book or {}).get("name") or "")

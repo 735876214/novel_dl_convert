@@ -32,7 +32,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
-                   catalog, cache)
+                   catalog, cache, units)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -188,6 +188,11 @@ _MEDIA_TOKEN_PATHS = (
     re.compile(r"^/api/account/avatar$"),
     # 有声书单轨：<audio src> 同样是原生请求，带不了 Authorization（第 9 期）
     re.compile(r"^/api/books/[^/]+/audio/\d+$"),
+    # 序号单元书的单话 / 单页（第 73 期）：音频话是 <audio src>、漫画话的单页是
+    # <img src> —— 都是浏览器原生请求。PDF 话不在此列：它走 fetch + httpHeaders
+    # （与 `/file` 同款），鉴权面不扩大。
+    re.compile(r"^/api/books/[^/]+/units/\d+$"),
+    re.compile(r"^/api/books/[^/]+/units/\d+/page/\d+$"),
 )
 
 
@@ -1931,7 +1936,8 @@ def api_book_cover(bid: str):
       · **EPUB**：OPF 指定的内嵌图（`library.cover_path`）；
       · **漫画（CBZ / CBR）**：归档第一页 —— 走 `comics.cover_bytes`，zip/rar 双后端统一，
         避免这里再自己解一次 zip（那样 CBR 会「列得出封面名却读不出来」）；
-      · **有声书**：目录内的 `cover.jpg` / `folder.jpg` 之类；单文件音频无封面；
+      · **有声书 / 序号单元合集**：目录内的 `cover.jpg` / `folder.jpg` 之类
+        （**含子树里**的，见下面 `units.cover_in_tree` 那段）；单文件音频无封面；
       · 其余非 EPUB（mobi/pdf/txt）不解析封面，直接 404 —— 与 has_cover 的口径一致。
 
     为什么单独开接口：前端只需要一个不含内部路径的稳定 URL，拿不到就 404、回退渐变占位。
@@ -1954,10 +1960,15 @@ def api_book_cover(bid: str):
             return data, media
         return _cover_cached(bid, path, _comic_cover)
 
-    if fmt == "AUDIO":
-        name = audio.cover_in_dir(path) if path.is_dir() else ""
+    if fmt in ("AUDIO", "UNITS"):
+        # 目录型条目（有声书 / 序号单元树）的封面：找的是 `cover` / `folder` / `poster`
+        # 那几个名字。第 73 期起走 `units.cover_in_tree` —— 它**能在子树里找**
+        # （`第1卷/cover.jpg`），而 `audio.cover_in_dir` 只看直接子文件：嵌套树的封面
+        # 会被扫出来（`_probe_entry` 用的就是它）却在这里 404 —— 卡片说有封面、点开
+        # 没有，正是「两处判据」的典型症状。树根有封面时两者同值 ⇒ 平铺行为不变。
+        name = units.cover_in_tree(path) if path.is_dir() else ""
         if not name:
-            raise HTTPException(404, "该有声书没有封面")
+            raise HTTPException(404, "该有声书没有封面" if fmt == "AUDIO" else "该合集没有封面")
         return FileResponse(path / name,
                             media_type=mimetypes.guess_type(name)[0] or "image/jpeg",
                             headers={"Cache-Control": "public, max-age=86400"})
@@ -2052,13 +2063,18 @@ _AUDIO_MIME = {
 
 @app.get("/api/books/{bid}/audio")
 def api_audio_tracks(bid: str):
-    """有声书轨清单（单文件 1 轨 / 目录 n 轨，自然序）。"""
+    """有声书轨清单（单文件 1 轨 / 目录 n 轨，自然序）。
+
+    第 73 期起走 `units.tracks_of`：**平铺音频目录仍然走 `audio.tracks`（逐字不变）**，
+    只有嵌套的序号单元树（`《书名》/第1卷/第1话.mp3`）才改由话清单回答 —— 那种树
+    此前一条轨都列不出来（`audio.tracks` 只看直接子文件），前端播放器是空的。
+    """
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
     if (b.get("format") or "").upper() != "AUDIO":
         raise HTTPException(400, "该书不是有声书")
-    return audio.tracks(library.root_of(b) / b["name"])
+    return units.tracks_of(library.root_of(b) / b["name"])
 
 
 @app.get("/api/books/{bid}/audio/{index}")
@@ -2067,20 +2083,110 @@ def api_audio_track(bid: str, index: int):
 
     · 用 `FileResponse` → 自带 **Range（206）**，播放器拖拽跳转必需，且不必整份进内存；
     · 与 PDF 不同：`<audio src>` 是浏览器原生请求、带不了 Bearer，
-      所以该路径已在 `_MEDIA_TOKEN_PATHS` 里允许 `?token=`。
+      所以该路径已在 `_MEDIA_TOKEN_PATHS` 里允许 `?token=`；
+    · 取第 index 轨走 `units.track_at`（与上面那份清单**同一个判据**：清单说有几条、
+      这里就能取到第几条，两处各写一套迟早错位）。
     """
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
     if (b.get("format") or "").upper() != "AUDIO":
         raise HTTPException(400, "该书不是有声书")
-    track = audio.track_path(library.root_of(b) / b["name"], index)
+    track = units.track_at(library.root_of(b) / b["name"], index)
     if not track or not track.is_file():
         raise HTTPException(404, "轨道不存在")
     media = _AUDIO_MIME.get(track.suffix.lower()) \
         or mimetypes.guess_type(track.name)[0] or "application/octet-stream"
     return FileResponse(track, media_type=media,
                         headers={"Cache-Control": "private, max-age=3600"})
+
+
+# ---------------- 序号单元合集（一话一文件；漫画 / 有声书库，第 73 期）----------------
+# 一本「书」= 一棵目录树，树里每个媒体文件是一「话」（`第1话.pdf` / `第二话.pdf` /
+# `第03话.pdf` / `4 第4话.pdf`）。**什么算一话、怎么排序，判据全在 core/units.py** ——
+# 这里只做「取书 → 取路径 → 吐字节」，不自己判一遍（判据两处写 ⇒ 卡片与阅读器对不上）。
+#
+# 与 `/audio` 的关系：「轨」与「话」是同一份清单的两个名字。全音频的树 `format` 仍是
+# `AUDIO`（前端进播放器，走 `/audio`），混了 PDF / 漫画的树才是 `UNITS`（走这里）。
+
+def _unit_book(bid: str) -> dict:
+    """取这本序号单元合集。
+
+    - 不存在 ⇒ 404（软删除过的书由 `library.by_id` 过滤，这里**不自己写 SQL**）；
+    - 不是合集 ⇒ 400：前端只在 `format == "UNITS"` 时走这几个端点，走到这里说明
+      客户端持有的书目状态已过期 —— 如实说清楚，不去猜它想读什么。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    if (b.get("format") or "").upper() != "UNITS":
+        raise HTTPException(400, "该书不是序号单元合集")
+    return b
+
+
+def _unit_file(bid: str, index: int):
+    """第 index 话的绝对路径；越界 / 文件不在了 ⇒ 404。"""
+    b = _unit_book(bid)
+    p = units.unit_path(library.root_of(b) / b["name"], index)
+    if not p or not p.is_file():
+        raise HTTPException(404, "话不存在")
+    return p
+
+
+def _unit_comic(bid: str, index: int):
+    """这一话的归档路径（仅 CBZ / CBR 话）；缺 RAR 能力时 503（与 `/comic` 同款）。"""
+    path = _unit_file(bid, index)
+    if not comics.is_comic(path):
+        raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
+    if comics.is_cbr(path) and not comics.rar_available():
+        raise HTTPException(503, "服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）")
+    return path
+
+
+@app.get("/api/books/{bid}/units")
+def api_book_units(bid: str):
+    """话清单：`{"items": [{index, name, num, kind, size}], "total": n}`。
+
+    · `name` 是**相对树根**的 posix 路径（`第1卷/第1话.pdf`）—— 前端按 `index` 拼 URL，
+      用它显示目录；`kind` 决定用哪个渲染器（`pdf` / `comic` / `audio`）；
+    · `num` 是解析出的序号（解析不出的为 0，且**排在最后**，不猜位置）；
+    · 排序口径与 `library._probe_entry` 记的 `tracks`（话数）同源，卡片上说 4 话，
+      这里就必须是 4 条。
+    """
+    b = _unit_book(bid)
+    return units.tracks_of(library.root_of(b) / b["name"])
+
+
+@app.get("/api/books/{bid}/units/{index}")
+def api_book_unit_file(bid: str, index: int):
+    """单话字节流。
+
+    · `FileResponse` → 自带 **Range（206）**，音频话可直接进 `<audio>`；
+    · PDF 话由 pdf.js 用 `fetch` + `httpHeaders` 取（与 `/file` 同款，不必开 `?token=`）；
+    · 音频话与漫画话**已**在 `_MEDIA_TOKEN_PATHS` 里允许 `?token=`（原生 `<audio>` /
+      `<img>` 带不了 Bearer）。
+    """
+    p = _unit_file(bid, index)
+    media = _AUDIO_MIME.get(p.suffix.lower()) \
+        or mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+    return FileResponse(p, media_type=media,
+                        headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.get("/api/books/{bid}/units/{index}/pages")
+def api_unit_pages(bid: str, index: int):
+    """这一话的页清单（仅 CBZ / CBR 话）。形状与 `/comic` 逐字相同（`pages` + `total`）。"""
+    return comics.pages(_unit_comic(bid, index))
+
+
+@app.get("/api/books/{bid}/units/{index}/page/{n}")
+def api_unit_page(bid: str, index: int, n: int):
+    """这一话的第 n 页原始字节。越界 ⇒ 404。"""
+    data, media = comics.page_bytes(_unit_comic(bid, index), n)
+    if data is None:
+        raise HTTPException(404, "页不存在")
+    return Response(content=data, media_type=media,
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 def _chapter_read(produce):

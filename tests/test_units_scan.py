@@ -260,3 +260,22 @@ def test_搬家相容判据与扫描同源(isolated, tmp_path, make_library):  #
         "同一类型之间搬一本单元树必须相容（搬完还认得出这本书）"
     why = migrate.compat_reason(book, db.get_library(other["id"]))
     assert why.startswith("「有声书库」只收") and "目录" in why
+
+
+def test_合集的目标库类型取它所在的库(isolated, tmp_path, make_library):  # noqa: ARG001
+    """`migrate.target_type_of`：合集**没有扩展名可判** ⇒ 取它所在库的类型。
+
+    它是「自动归库」与「系列页按媒体分组」共用的判据。少了这一条，合集会被
+    **静默跳过**：自动归库预览里少一行（不报错），系列页里掉进「其它」分组。
+    """
+    root = tmp_path / "comic"
+    lib = make_library("c7", "漫画库", "comic", root)
+    _tree(root, BOOK_DIR, BOOK_FILES)
+    b = library.books(lib["id"])[0]
+    assert b["library_type"] == "comic" and migrate.target_type_of(b) == "comic"
+    assert migrate.TYPE_LABELS[migrate.target_type_of(b)] == "漫画库"
+
+    aroot = tmp_path / "audio"
+    alib = make_library("a4", "有声书库", "audiobook", aroot)
+    _tree(aroot, "《书名》", ["第1卷/第1话.mp3", "第1卷/第2话.mp3"])
+    assert migrate.target_type_of(library.books(alib["id"])[0]) == "audiobook"
