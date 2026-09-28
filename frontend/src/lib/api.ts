@@ -67,9 +67,39 @@ export interface FileListing {
 export interface SearchHit {
   title: string
   author?: string
+  /**
+   * 书源名（`manager._mark()` 打的，第 71 期起**同时**写 `_source` 与 `source`）。
+   * 结果行的来源徽章与「预览」都用它 —— 第 71 期之前后端只给了 `_source`，
+   * 于是 `hit.source` 恒为 `undefined`：徽章空白、预览必然报「未知书源: undefined」。
+   */
   source: string
   url: string
+  /** 书源的展示名（可选；缺省时前端回落 `source`） */
+  source_name?: string
   [key: string]: unknown
+}
+
+/**
+ * 逐源检索状态（第 71 期 `/api/search` 的 `sources[]`）。
+ *
+ * 存在的意义就是**如实**回答「这个源为什么没结果」：`ok` = 成功，
+ * `skipped` = 被闸门（下载未开启 / 仅放行公版源）跳过，其余为失败且 `error` 是原因原文。
+ * 第 71 期之前这些原因只进后端日志，界面那条「部分书源检索失败」横幅永远不显示。
+ */
+export interface SearchSourceState {
+  name: string
+  display_name: string
+  ok: boolean
+  /** 该源本页命中数（失败/跳过时为 0） */
+  count: number
+  /** 失败原因原文（`ok` 为真时是空串） */
+  error: string
+  /** 是否被闸门跳过（跳过 ≠ 失败，两者不能混为一谈） */
+  skipped: boolean
+  /** 被跳过的原因（`skipped` 为假时是空串） */
+  reason: string
+  /** 该源是否还能取下一页 */
+  has_more: boolean
 }
 
 export interface TaskState {
@@ -2647,11 +2677,26 @@ export const api = {
     }),
 
   // ---------- 搜索 / 预览 / 下载 ----------
-  search: (title: string, signal?: AbortSignal) =>
-    request<{ results?: SearchHit[]; items?: SearchHit[]; errors?: unknown[] }>('/api/search', {
+  /**
+   * 跨源聚合检索（第 71 期：`page` 分页 + 逐源状态）。
+   *
+   * - `results`：**本页**命中并集，每条带 `source`（书源名）指路 —— 下载与预览都要用它；
+   * - `sources`：逐源状态（成功 N 条 / 失败原因原文 / 被闸门跳过原因）。第 71 期之前
+   *   后端不返回它，于是界面那条「部分书源检索失败」永远不显示（旧字段 `errors` 已下线）；
+   * - `has_more`：由后端按「**任一**源还能取下一页」算好。分页是逐源的，聚合口径只有
+   *   后端知道，前端不自己再数一遍（那是第二份真值源）。
+   */
+  search: (title: string, page = 1, signal?: AbortSignal) =>
+    request<{
+      count: number
+      results: SearchHit[]
+      sources: SearchSourceState[]
+      has_more: boolean
+      page: number
+    }>('/api/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ title, page }),
       signal,
     }),
 
