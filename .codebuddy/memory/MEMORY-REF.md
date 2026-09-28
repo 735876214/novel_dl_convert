@@ -176,3 +176,43 @@
 - **声明式插件市场已取消**（用户拍板，2026-09-26）：不要再提「可经插件市场安装」，也不要有任何市场/插件包代码。zlibrary 专用下载同样不做（盗版分发平台）。
 - 书源侧：**表单化添加**（`SourcesView` 三段式）+ `POST /api/sources/test`（校验 + **不落盘**试搜，写盘唯一入口仍是 `store.add_rule`）；前端必填校验与 `rules.validate_rule` 同口径（另加写盘文件名字符集）。
 - **系列级元数据**（第 57 期 C 段）：`series_meta.FIELDS` = description / publisher / first_year / tags **四个字段都可本地覆盖**；⚠️ **`set_local` 的空串语义 = 清除该字段覆盖**，所以「恢复在线」必须**只提交那一个字段**（顺手带上别的字段会清掉用户的其它覆盖）—— `SeriesMetaPanel.spec.ts` 盯死这条；未覆盖时来源是「成员书聚合」（`_aggregate` 零猜测）或在线，界面要标出来源；「册数」两个概念不可合并（owned_count 实际拥有 / declared_count 外部声明）。改前端面板后**必跑** `npm run test:unit`：面板展示改了不会被测试发现，payload 改了才会。
+
+---
+
+## 逐期铁律原文（第 66–71 期；2026-09-28 由 `MEMORY.md` 下沉，内容未删减）
+
+### 第 66 期铁律（阅读器「自动续接」收尾）
+- 漫画 / PDF / 有声书三处跨册续接**收敛到唯一真值源 `frontend/src/lib/seriesNext.ts`**（`SERIES_NEXT_MSG` 文案 + 纯函数 `resolveNextVolume` + `useSeriesNext`，含 `enabled` 门 / 单飞闸 / 同类提示 2s 节流）—— ⚠️ 三处组件**不得再各写文案或各拼 `seriesDetail+sortBySeriesIndex+findIndex`**。
+- 三处默认值**统一为「开」**（只改 `*_PREFS_DEFAULT`，**不迁移存量**，读时 `{...DEFAULT,...stored}` 天然尊重用户已关的开关）；文案统一用「册」；触底闩 `autoNextArmed` 留在组件（滚动渲染态）。
+
+### 第 67 期铁律（提速收尾）
+- ① **响应 gzip**（`server.py` 挂 `GZipMiddleware`；`/api/books` 1.36 MB→491 KB、主包 JS 1.02 MB→301 KB；安全性靠 **206 永不压缩** + `audio/image/video/font/zip` 默认排除；代价是该端点 **+45–60 ms CPU**，LAN 打平 / WAN 受益）。
+- ② **并发请求必须单飞**：`if (loaded) return` 守卫**不足以**去重 —— 它在发请求前先 `await` 别的（阈值等）就是让步点，同批调用会全部通过 ⇒ 实测一次页面加载 `/api/books` 打了 **7 次**；各 store 的 loader 必须持**在飞 Promise**（`collections` 的 force 要「等前一次落地再拉」，否则吞掉刚建的收藏夹）。
+- ③ **测量纪律**：计时用 `curl`，**别用 PowerShell `Invoke-RestMethod`**（解析 1.3 MB JSON 会把 65 ms 测成 613 ms）。
+
+### 第 68 期铁律（列表载荷与迁移预览）
+- ① `server._card()` 是**所有书目列表的统一出口**，**不发简介正文**（曾占 `/api/books` 体积 68%），只发 `has_description` —— 原始 1.36 MB→417 KB、**gzip 后 491 KB→37 KB**；消费方改「筛选看布尔 / 预览从详情取」。
+- ② `core/migrate.preview()` 原先**每本书**都调一次 `libraries_of_type()`（读库表）⇒ 改为循环外算「类型→同类库」映射，**300 ms→37 ms**。
+- ③ `App.vue` 的 `showLogin` 初值 `false` 会让门控组件**先挂载一次**（未登录白拉一次预览）⇒ 门控要用 `authChecked`，**`auth.ready` 不行**（它在 `init()` 内先变真，中间仍有一个 tick 会挂载）。
+
+### 第 69 期铁律（滚动模式跨章连续流）
+- ⚠️ 补偿三条（全是真机量出来的、不是推理）：① 锚取**正文 article** 而非外层 `<section>`（`first:` 变体的 `pt-6` 不在 border-box 里，实测漏 **24px**）；② 补偿写**绝对值** `beforeTop + 补偿量`，**不能 `+=`**（浏览器自带 scroll anchoring 常已替我们调好 `scrollTop`，相对累加会把同一段位移补两次）；③ 锚必须是**已存在**的块（新插入的块此刻还没有 DOM ⇒ `chunkArt` 返回 null ⇒ 等于没有锚 ⇒ 正文被整体按下、看起来「跳了一屏」）。
+- ⚠️ **同一位置被并发并入 ⇒ `:key` 重复 ⇒ Vue patch 失去定义、渲染错序**（实测出「上一章排在中间」）。规律：两条异步路径可能同时想要同一份数据时，**合并前重读当前集合 + 落地前按 id 去重 + 写入串行**，三样都要有。
+- ⚠️ 冒烟时 `playwright-cli goto` **只改 hash 不重载产物**：验证新构建必须带 cache-busting 查询（如 `?v=69b#/read/...`）；且 SPA 内 `goto` **不一定重新挂载组件** ⇒ 验页面级状态要 `reload`（第 71 期验闸门时踩到：goto 后仍显示旧状态）。
+
+### 第 70 期铁律（全站开关统一 / 收书投递）
+- **全站开关只有一个实现**：`frontend/src/components/ui/Switch.vue`（`button[role=switch]` + `aria-checked`）。改外观 / 尺寸 / 过渡 / 禁用**只改这一个文件**；配色必须走主题变量，焦点环**不要自写**（全局 `:focus-visible` + `prefers-reduced-motion` 已接管）。⚠️ 滑块用 `bg-card` 而非硬编码白色（深色主题下 `--primary` 是**浅色**，写死白滑块会糊在浅色轨道上）。
+- ⚠️ **`v-model` 与同一事件上的副作用监听器，执行顺序不由我们决定**：写 `v-model="x" @update:model-value="persist()"` 可能先 persist 后赋值 ⇒ **存的是旧值**。凡「改值后要落盘 / 上报」的组件统一写成一条内联语句：`:model-value="x" @update:model-value="x = $event; persist()"`。
+- ⚠️ **`<label>` 包住自定义按钮时，点标签文字仍会切换**（Edge 实测）：`input[type=checkbox]` 换成 `button[role=switch]` **不会**丢这个既有行为，可放心保留 `<label>` 外壳。
+- **收书目录投递只有一条链路**：`api.convertDrop(file)` → `POST /convert`（写进 `INPUT_DIR` 走既有管线）；拖拽与工具栏「上传」按钮共用 `deliverToDock(files)`；隐藏的 `input[type=file]` 处理完**必须清空 `input.value`**，否则连选同一个文件第二次不再触发 `change`。项目**没有 i18n**，文案写中文字面量。
+
+### 第 71 期铁律（探索发现：闸门 / 逐源状态 / 合并 / 真分页）
+- **闸门判定只有一处** `DownloadManager.gate_reason(source=None)`（空串 = 放行）；`/api/search`、`/api/download`、`/api/preview` **请求入口**先问它、非空即 400 + 原因原文；`store.sources_status()` 的 `usable`/`blocked_reason` 由它产出（界面文案与接口拒绝原因**同源**）；**`/api/sources/test` 刻意不拦**（管理面自检，否则用户无法验证自己写的规则）；前端进页面先读状态、关着就**提前置灰**并给出出口（不允许「点了才报错」）。
+- **命中来源名只有一种读法** `sources.source_of(item)`（`source` / `_source` 都认、新键优先）；`manager._mark()` 一处写全 `source` / `source_name` / `_source`。⚠️ 此前只写 `_source` ⇒ 来源徽章空白 + 预览必 502「未知书源: undefined」。
+- **搜索必须真并发**：`asyncio.gather` + 每源 `asyncio.wait_for(SEARCH_TIMEOUT=20)`（模块常量，不进配置面板）；逐源状态 `sources=[{name,display_name,ok,count,error,skipped,reason,has_more}]` 如实回，失败原因用原文，不编造分类。
+- **分页契约** `SourceAdapter.search_page(client,title,page=1)`：**`page>1` 且源不支持分页必须回空**（否则「加载更多」会把第一页原样再显示一遍）；`RuleBasedSource` 仅在 `search.url` 含 `{page}` 时替换（不含 ⇒ `has_more=False`，「不知道就说不知道」）；前端「加载更多」是**追加**，且「本页无新条目」时收起按钮。
+- **合并刻意保守**（`frontend/src/lib/searchResults.ts` 纯函数）：书名与作者**都**归一化成功且分别相同才合并 —— 作者未知不并、卷次 / 副标题差异不猜；排序「书名完全相同 > 前缀 / 包含 > 其它，同档有作者信息优先，其余稳定保持后端序」。
+- **行内任务状态**复用既有 tasks store（**不新增轮询**）；**不做「一键重试」**（`tasks` 表没有可重放的源数据列，做出来只会是假按钮）。
+- ⚠️ **httpx 0.28 没有 `CookieJar`**（只有 `Cookies` / `CookieConflict`）⇒ `core/network.py` 必须用标准库 `http.cookiejar.CookieJar`；写成 `httpx.CookieJar()` 会让**每个书源一构造客户端就 AttributeError**（搜索恒 0 条 / 下载恒失败），而**单测全用桩 client 照不到**（第 71 期真机冒烟才现形）。
+- ⚠️ **规则源搜索命中地址必须补绝对**：`_absolutize` 按搜索页 url 做 urljoin（与章节目录 `_extract_links` 同口径）；不补则真实站点几乎都用相对链接 ⇒ 预览 / 取书以「Request URL is missing an 'http://'…」失败。
+- ⚠️ 冒烟坑：隔离 `CONFIG_DIR` 残留上一轮 `settings.json`（`download.enabled=true`）会让闸门**不触发** ⇒ 验「闸门关闭态」前先确认目录干净。
