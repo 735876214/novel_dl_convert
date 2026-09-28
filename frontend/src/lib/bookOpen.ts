@@ -22,14 +22,33 @@ export function isAudioBook(b: Formattable): boolean {
 }
 
 /**
+ * **目录型条目**（第 73 期）：磁盘上不是「一个文件」，而是「一棵目录树」。
+ *
+ * - `AUDIO`：有声书目录（或单文件 m4b，见下）；
+ * - `UNITS`：序号单元合集（`根目录/《书名》/第1卷/第1话.pdf`…，见 `core/units.py`）。
+ *
+ * 它的用处是**下载**：成品文件下载端点取的是**一个文件**（`/download/{name}` 要求
+ * `is_file()`），而目录型条目的 `name` 是目录路径 ⇒ 单文件下载对它 404。
+ * 所以菜单里那一项对目录型条目**整条不显示** —— 显示出来就是假交互。
+ *
+ * ⚠️ 这是格式级的**保守**判据（单文件 m4b 的可下载性也一并让掉了），与改造前
+ * `!isAudioBook(...)` 那一条的粒度一致；本期只是把同一件事收敛到一处、并把 `UNITS` 纳入。
+ */
+export function isDirEntry(b: Formattable): boolean {
+  const f = (b.format || '').toUpperCase()
+  return f === 'AUDIO' || f === 'UNITS'
+}
+
+/**
  * 阅读器**能就地打开**的格式 —— 「点进去有东西看」的清单，不是「本项目支持的格式」清单。
  *
  * - EPUB / TXT：章节流（TXT 自第 55 期起走派生 EPUB 或原生分章，见后端 `txtcache`）
  * - PDF / CBZ / CBR：由各自阅读器就地处理
+ * - UNITS（第 73 期）：序号单元合集，由 `UnitsReader` 逐话读（每话按种类换阅读器）
  *
  * MOBI / AZW3 之类**不在**其中：转换是另一条流水线的事，点开只会得到一句「点不了」。
  */
-export const READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT'])
+export const READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'UNITS'])
 
 /**
  * 「浏览行为 → 缩略图点击」选「直接阅读」时认的格式。
@@ -37,8 +56,12 @@ export const READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT'])
  * ⚠️ **刻意比 `READER_FORMATS` 少一个 TXT** —— 这不是漏了同步，是自第 32 期起的既有行为，
  * 本期不动（用户明确要求「封面行为一个字都不改」）。差别只体现在「点卡片先去哪儿」：
  * TXT 点卡片进详情页，但详情页里照样能读。菜单里的「阅读」按 `READER_FORMATS` 走。
+ *
+ * `UNITS`（第 73 期）**在**这里面：它与 PDF / 漫画同属「点开就是内容」的书，而且
+ * 改造前这套形态在书架上就是一堆 PDF / 漫画条目 —— 不纳入的话，同一批书升级后会
+ * 从「点卡片直接读」变成「点卡片进详情页」，那是用户没要求的行为倒退。
  */
-export const THUMBNAIL_READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR'])
+export const THUMBNAIL_READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'UNITS'])
 
 export interface OpenTarget {
   /** 按钮文案：有声书是「收听」，其余是「阅读」 */

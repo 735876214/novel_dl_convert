@@ -14,6 +14,7 @@ import Button from '@/components/ui/Button.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import TabBar from '@/components/ui/TabBar.vue'
 import { canJumpTo } from '@/lib/annotations'
+import { isAudioBook } from '@/lib/bookOpen'
 import { useCollectionsStore } from '@/stores/collections'
 import { useCoverPrefsStore } from '@/stores/coverPrefs'
 import { useLibraryStore } from '@/stores/library'
@@ -174,17 +175,20 @@ watch(bookId, loadSimilar)
 
 /**
  * 阅读器支持的格式：EPUB / TXT 需抽到章节（TXT 走派生 EPUB 或原生分章，见后端 txtcache）；
- * PDF / 漫画（CBZ·CBR）由各自阅读器就地处理。
+ * PDF / 漫画（CBZ·CBR）由各自阅读器就地处理；
+ * `UNITS`（序号单元合集，第 73 期）由 `UnitsReader` 逐话读 —— 判据是**有没有话**，
+ * 与 EPUB 判「有没有章节」同构（没有话的合集点进去只会看到一句「没有可读的话」）。
  */
 const canRead = computed(() => {
   if (!detail.value) return false
   const f = (detail.value.format || '').toUpperCase()
   if (f === 'EPUB' || f === 'TXT') return chapterCount.value > 0
+  if (f === 'UNITS') return (detail.value.units?.length ?? 0) > 0
   return f === 'PDF' || f === 'CBZ' || f === 'CBR'
 })
 
-/** 有声书走播放器而非阅读器 */
-const canListen = computed(() => (detail.value?.format || '').toUpperCase() === 'AUDIO')
+/** 有声书走播放器而非阅读器（判据在 `lib/bookOpen.ts` 一处，别在这里另写一遍） */
+const canListen = computed(() => !!detail.value && isAudioBook(detail.value))
 
 /** 能否「打开」（阅读或收听） */
 const canStart = computed(() => canRead.value || canListen.value)

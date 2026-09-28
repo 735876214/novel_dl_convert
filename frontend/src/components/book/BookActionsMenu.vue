@@ -6,7 +6,7 @@ import DropdownMenu from '@/components/ui/DropdownMenu.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, apiErrorMessage, type BookCard } from '@/lib/api'
 import { useBookMenu } from '@/lib/bookMenu'
-import { isAudioBook, openTargetOf } from '@/lib/bookOpen'
+import { isDirEntry, openTargetOf } from '@/lib/bookOpen'
 import { READ_STATUS_OPTIONS } from '@/lib/readingThresholds'
 import { useCollectionsStore } from '@/stores/collections'
 import { useLibraryStore } from '@/stores/library'
@@ -57,7 +57,7 @@ const target = computed(() => openTargetOf(props.book))
  *（单文件有声书 `.m4b` 在卡片上与目录型无法区分，见 `BookCard` 没有 `is_dir`）。
  * 属**少给**而不是错给 —— 点下去 404 才是错给。
  */
-const canDownload = computed(() => !isAudioBook(props.book) && !!props.book.name)
+const canDownload = computed(() => !isDirEntry(props.book) && !!props.book.name)
 
 /**
  * 触发器外观（按视图）。网格是压在封面右下角的小圆片 ——

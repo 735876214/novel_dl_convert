@@ -20,9 +20,15 @@ export function pubLabel(b: BookCard): string {
   return [b.year, b.language].filter(Boolean).join(' · ')
 }
 
-/** 格式徽章文本：`EPUB` */
+/**
+ * 格式徽章文本：`EPUB`。
+ *
+ * `UNITS` 是内部的**形态**标记（一个目录 = 一本书，见 core/units.py），不是文件格式 ——
+ * 把 `UNITS` 原样印在徽章上对用户没有意义，所以给它一个中文标签。
+ */
 export function formatLabel(b: BookCard): string {
-  return (b.format || '').toUpperCase()
+  const fmt = (b.format || '').toUpperCase()
+  return fmt === 'UNITS' ? '合集' : fmt
 }
 
 /**
@@ -31,11 +37,14 @@ export function formatLabel(b: BookCard): string {
  * 不标估算就等于把估算当事实展示。
  *
  * 有声书没有「页」的概念，改显示轨数（`12 轨`）——「0 页」是错误信息。
+ * 序号单元合集同理显示话数（`12 话`）：一话对应磁盘上的一个文件，
+ * 这个数是**实数**不是估算（`tracks` 就是话清单的长度，见 core/units.py）。
  */
 export function pagesLabel(b: BookCard): string {
-  if ((b.format || '').toUpperCase() === 'AUDIO') {
+  const fmt = (b.format || '').toUpperCase()
+  if (fmt === 'AUDIO' || fmt === 'UNITS') {
     const n = b.tracks ?? 0
-    return n > 0 ? `${n} 轨` : ''
+    return n > 0 ? `${n} ${fmt === 'UNITS' ? '话' : '轨'}` : ''
   }
   if (!b.pages) return ''
   return b.pages_source === 'estimate' ? `${b.pages}≈` : String(b.pages)

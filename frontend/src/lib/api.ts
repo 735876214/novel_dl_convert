@@ -804,6 +804,8 @@ export interface BookDetail extends BookCard {
   files: BookFile[]
   /** 有声书专有：轨清单（随详情一起下发，播放器首屏无需再请求一次） */
   audio_tracks?: AudioTrack[]
+  /** 序号单元合集的**话清单**（第 73 期；随详情下发，阅读器首屏无需再请求一次） */
+  units?: UnitItem[]
 }
 
 /** 单条音轨（目录型有声书里一章一文件） */
@@ -811,6 +813,53 @@ export interface AudioTrack {
   index: number
   name: string
   size: number
+}
+
+/**
+ * 一「话」（第 73 期）：序号单元合集里的一个文件。
+ *
+ * `name` 是**相对树根**的 posix 路径（`第1卷/第1话.pdf`）—— 目录里显示它，媒体 URL
+ * 只按 `index` 拼；`num` 是解析出的序号（解析不出的为 0，且排在最后，不猜位置）；
+ * `kind` 决定用哪个阅读器（`pdf` → PdfReader / `comic` → ComicReader / `audio` → AudioPlayer）。
+ */
+export interface UnitItem {
+  index: number
+  name: string
+  num: number
+  kind: 'pdf' | 'comic' | 'audio' | string
+  size: number
+}
+
+/**
+ * 交给单个阅读器的「当前话」（第 73 期）。
+ *
+ * 三个复用阅读器（ComicReader / PdfReader / AudioPlayer）拿到它就进入**单话模式**：
+ * 数据源换成 `/units/{index}/…`、进度**由上层记**（它们不读不写），读完发 `unitEnd`
+ * 让上层翻下一话。
+ *
+ * - `within`：这一话内要恢复到哪（0–1）—— 上层从跨话的 `percent` 反推出来
+ *   （见 `lib/unitsProgress.ts`），子阅读器自己换算成页码 / 秒数；
+ * - `total`：整本书有多少话 —— 子阅读器报**阅读时长**快照时要算全书百分比
+ *   （它只知道这一话的页码，不知道全书有多大）。
+ */
+export interface UnitRef {
+  index: number
+  total: number
+  name: string
+  within?: number
+}
+
+/**
+ * 子阅读器 → 上层的**话内进度上报**（第 73 期）。
+ *
+ * `index` 是「这是哪一话」—— 上层**必须**核对它：换话时旧话的那个组件会先卸载，
+ * 而卸载钩子里还有一次收尾上报（把最后位置落盘），那一刻上层手里的 `index` 已经
+ * 是新话了。不核对就会把「第 3 话读到一半」写成「第 4 话读到一半」。
+ */
+export interface UnitPos {
+  index: number
+  within: number
+  locator: number
 }
 
 // ---------- 账户（单用户轻登录） ----------
@@ -2828,6 +2877,40 @@ export const api = {
   comicPageUrl: (bid: string, index: number) => {
     const t = _authToken()
     return `/api/books/${encodeURIComponent(bid)}/comic/${index}${t ? `?token=${encodeURIComponent(t)}` : ''}`
+  },
+
+  // ---------- 序号单元合集（第 73 期：一话一文件的目录 = 一本书）----------
+  /** 话清单（按序号排序，解析不出序号的排最后）。条数与卡片上的 `tracks` 同源 */
+  units: (bid: string) =>
+    request<{ items: UnitItem[]; total: number }>(
+      `/api/books/${encodeURIComponent(bid)}/units`,
+    ),
+
+  /** 某一话的页清单（仅 CBZ / CBR 话；形状与 `comicPages` 相同） */
+  unitPages: (bid: string, index: number) =>
+    request<{ pages: Array<{ index: number; name: string; size: number }>; total: number }>(
+      `/api/books/${encodeURIComponent(bid)}/units/${index}/pages`,
+    ),
+
+  /**
+   * 某一话的字节流 URL —— 音频话直接给 `<audio src>`、PDF 话给 pdf.js。
+   *
+   * ⚠️ 必须带 `?token=`：音频话是浏览器原生请求（带不了 Authorization）。
+   * 该路径已在 `server._MEDIA_TOKEN_PATHS` 中（见那里的注释）。PDF 话走 pdf.js 的
+   * `httpHeaders` 时这个 query 也无害（多一种携带方式，令牌强度不变）。
+   */
+  unitFileUrl: (bid: string, index: number) => {
+    const t = _authToken()
+    return `/api/books/${encodeURIComponent(bid)}/units/${index}${t ? `?token=${encodeURIComponent(t)}` : ''}`
+  },
+
+  /**
+   * 某一话里第 n 页的图片 URL（0 起的页号，与 `/comic/{index}` 同一套约定）。
+   * ⚠️ 同样必须带 `?token=`：漫画页用 `<img>` 加载。
+   */
+  unitPageUrl: (bid: string, index: number, page: number) => {
+    const t = _authToken()
+    return `/api/books/${encodeURIComponent(bid)}/units/${index}/page/${page}${t ? `?token=${encodeURIComponent(t)}` : ''}`
   },
 
   // ---------- 有声书（单文件 / 多轨目录）----------

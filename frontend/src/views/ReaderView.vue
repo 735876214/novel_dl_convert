@@ -8,6 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Switch from '@/components/ui/Switch.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
+import UnitsReader from '@/components/reader/UnitsReader.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
 import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type SessionExtra } from '@/lib/api'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
@@ -59,6 +60,12 @@ const error = ref('')
 const fmt = computed(() => (book.value?.format || '').toUpperCase())
 const isPdf = computed(() => fmt.value === 'PDF')
 const isComic = computed(() => fmt.value === 'CBZ' || fmt.value === 'CBR')
+/**
+ * **序号单元合集**（第 73 期）：一棵目录树 = 一本书（`根目录/《书名》/第1卷/第1话.pdf`…）。
+ * 它既不是 PDF 也不是漫画 —— 整本书是「若干话」，每话自己是一种媒体（PDF / 漫画 / 音频），
+ * 所以分流交给 `UnitsReader`，由它按**当前话**的种类挑阅读器。见 `core/units.py`。
+ */
+const isUnits = computed(() => fmt.value === 'UNITS')
 
 /**
  * **漫画库里的 PDF 按漫画形态读**（第 61 期；默认开，可在阅读器里一键切回 PDF 视图）。
@@ -1752,10 +1759,11 @@ async function load(): Promise<void> {
     return
   }
 
-  // PDF / 漫画不进章节流：书目已就绪，渲染、进度、**阅读时长**全交给各自的阅读器组件。
-  // （第 63 期起它们也计时了：`PdfReader` / `ComicReader` 各自挂一个 reporter，
-  //  位置快照是页码而不是章节号 —— 这里的 `currentIndex` 对它们是空的，接了也没意义）
-  if (isPdf.value || isComic.value) return
+  // PDF / 漫画 / 序号单元合集不进章节流：书目已就绪，渲染、进度、**阅读时长**全交给各自的
+  // 阅读器组件。（第 63 期起 PDF / 漫画也计时了：各自挂一个 reporter，位置快照是页码而不是
+  // 章节号 —— 这里的 `currentIndex` 对它们是空的，接了也没意义。单元合集同理：`chapters` 为
+  // 空，「章」这个坐标不存在，跨话进度由 `UnitsReader` 用话号表达）
+  if (isPdf.value || isComic.value || isUnits.value) return
 
   if (!total.value) {
     error.value = '这本书没有可阅读的章节'
@@ -1884,6 +1892,15 @@ onBeforeUnmount(() => {
         :series="book.series"
         :file-rel="fileRel"
         @pdf-mode="setPdfMode"
+      />
+      <!-- 序号单元合集（第 73 期）：一棵树 = 一本书，逐话连续读。
+           话清单随详情下发（`book.units`），首屏不必再请求一次 -->
+      <UnitsReader
+        v-else-if="isUnits"
+        :book-id="bookId"
+        :title="book.title"
+        :series="book.series"
+        :units="book.units ?? []"
       />
 
       <template v-else>

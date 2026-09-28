@@ -3,10 +3,11 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type AudioTrack, type SessionExtra } from '@/lib/api'
+import { api, type AudioTrack, type SessionExtra, type UnitPos, type UnitRef } from '@/lib/api'
 import { AUDIO_SKIP_BACKS, AUDIO_SKIP_FORWARDS, AUDIO_SLEEPS, AUDIO_SPEEDS, readAudioPrefs } from '@/lib/audioPrefs'
 import { createSessionReporter } from '@/lib/readingSession'
 import { useSeriesNext } from '@/lib/seriesNext'
+import { fromPercent, toPercent } from '@/lib/unitsProgress'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -16,8 +17,24 @@ import { useUiStore } from '@/stores/ui'
  * 进度语义：`progress.locator` = **当前轨内的秒数**，`percent` = 按轨加权的全书进度。
  * 恢复时由 percent 反推轨号、再由 locator 定位秒数 —— 单轨书（最常见）完全精确，
  * 多轨书在轨长相近时也够用。
+ *
+ * **单话模式**（第 73 期）：给 `unit` 时本组件只播「序号单元合集里的这一话」——
+ * 数据源换成 `/units/{index}`、进度**不读不写**（整本书的 percent 由上层 `UnitsReader`
+ * 独占，见那里的说明），放完发 `unitEnd` 让上层翻下一话。
  */
-const props = defineProps<{ bookId: string; tracks: AudioTrack[]; series?: string }>()
+const props = defineProps<{
+  bookId: string
+  /** 多轨模式下的轨清单；单话模式（给了 `unit`）下**不使用**它 */
+  tracks: AudioTrack[]
+  series?: string
+  /** 单话模式：正在播的那一话（`index` / `total` / `within` 见 `api.UnitRef`） */
+  unit?: UnitRef | null
+  /** 单话模式：挂载后自动开播（上一话放完自动续过来时用；用户点目录换话时不自动播） */
+  autoplay?: boolean
+}>()
+
+/** 单话模式下的上报：话内进度 + 话内位置（秒）。上层据此拼整本书的 percent 并落盘 */
+const emit = defineEmits<{ unitPos: [UnitPos]; unitEnd: [] }>()
 
 const ui = useUiStore()
 const library = useLibraryStore()
@@ -41,14 +58,25 @@ const sleepMinutes = ref(prefs.sleepMinutes)
 const sleepLeft = ref(0)          // 剩余秒数（0 = 未启用）
 let sleepTimer: number | undefined
 
-const total = computed(() => props.tracks.length)
-const current = computed<AudioTrack | null>(() => props.tracks[index.value] ?? null)
-const src = computed(() => (current.value ? api.audioTrackUrl(props.bookId, index.value) : ''))
-const percent = computed(() => {
-  if (!duration.value) return 0
-  const within = (currentTime.value / duration.value) || 0
-  return ((index.value + within) / Math.max(1, total.value)) * 100
+/** 单话模式：播的是合集里的一个文件，不是「一本书的若干轨」 */
+const unitMode = computed(() => !!props.unit)
+const total = computed(() => (unitMode.value ? 1 : props.tracks.length))
+const current = computed<AudioTrack | null>(() => (unitMode.value ? null : props.tracks[index.value] ?? null))
+const src = computed(() => {
+  if (unitMode.value) return props.unit ? api.unitFileUrl(props.bookId, props.unit.index) : ''
+  return current.value ? api.audioTrackUrl(props.bookId, index.value) : ''
 })
+/** 这一轨（单话模式下 = 这一话）播到哪：0–1。时长还没读到按 0 算（= 这一话的开头） */
+const within = computed(() => (duration.value ? Math.min(1, Math.max(0, currentTime.value / duration.value)) : 0))
+/**
+ * 全书百分比。两个模式的算式**同一份**（`lib/unitsProgress.toPercent`）：
+ * 单话模式下 `total` 是**整本书的话数**、`index` 是这一话在书里的位置 ——
+ * 于是「第 3 话播到一半」落在同一把尺子上，与多轨模式逐字相同。
+ * ⚠️ 别在这里另写一遍除法：`AudioPlayer` 与 `UnitsReader` 各写一份就是两个真相源。
+ */
+const percent = computed(() => (unitMode.value
+  ? toPercent(props.unit?.index ?? 0, within.value, props.unit?.total ?? 1)
+  : toPercent(index.value, within.value, Math.max(1, total.value))))
 
 function fmt(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) sec = 0
@@ -103,10 +131,15 @@ function goto(i: number, autoplay = true): void {
  */
 const session = createSessionReporter({
   source: 'audio',
-  snapshot: () => ({ percent: percent.value, locator: index.value }),
+  // 位置快照的 `percent` 两个模式都是**整本书**的百分比（单话模式下由 `index/total` 换算，
+  // 见上面的 `percent`）；`locator` 是轨号 / 话号 —— 同一把尺子，阅读日志的「读到哪」才连得上。
+  snapshot: () => ({ percent: percent.value, locator: unitMode.value ? (props.unit?.index ?? 0) : index.value }),
   // 多轨有声书带上当前轨的文件名，服务端据此把这段时长归到**这一轨**。
   // 单轨书不给：空串的含义是「这本书自己」，不是「不知道哪一轨」。
-  fileRel: () => (total.value > 1 ? current.value?.name : undefined),
+  // 单话模式给的是**话的库内相对路径**（与 `UnitItem.name` 同源），它本身就是这条约定的取值。
+  fileRel: () => (unitMode.value
+    ? props.unit?.name
+    : total.value > 1 ? current.value?.name : undefined),
   post: (secs, extra: SessionExtra) => api.recordSession(props.bookId, secs, extra),
 })
 
@@ -137,6 +170,26 @@ function onTime(): void {
 }
 
 async function onEnded(): Promise<void> {
+  if (unitMode.value) {
+    // 单话模式：这一话放完了。先上报末尾位置，再决定「续下一话」还是「跨册续接」
+    reportUnitPos()
+    session.pause()
+    void session.flush()
+    const u = props.unit
+    if (u && u.index + 1 < u.total) {
+      emit('unitEnd')       // 书内还有下一话 ⇒ 交给上层换话（上层会决定要不要自动开播）
+      return
+    }
+    // 已经是最后一话：回到「读完 → 自动翻下一册」那套（开关 / 系列提示 / 跳转都不变）
+    const advanced = await goToNextVolume({
+      enabled: prefs.autoNextBook,
+      series: props.series,
+      bookId: props.bookId,
+      routeBase: '/listen',
+    })
+    if (!advanced) playing.value = false
+    return
+  }
   if (index.value + 1 < total.value) {
     // 同册内「轨与轨」续接是内置行为，直接进下一轨
     goto(index.value + 1)
@@ -172,7 +225,25 @@ function onPause(): void {
   void session.flush()
 }
 
+/**
+ * 单话模式的上报：把「这一话读到哪」交给上层（`UnitsReader`）。
+ *
+ * ⚠️ 单话模式下本组件**绝不写进度** —— 整本书只有一行 `percent`，写它需要
+ * 「第几话 + 这一话内多少」两个数（见 `lib/unitsProgress.ts`）；上层手里才有完整的那份。
+ * 子组件各写一半必然互相覆盖：「切到第 4 话时第 3 话的卸载钩子把进度写回第 3 话」。
+ *
+ * `locator` 沿用「轨内秒数」的语义（与多轨模式同一个字段、同一把尺子）。
+ */
+function reportUnitPos(): void {
+  if (!unitMode.value) return
+  emit('unitPos', { index: props.unit?.index ?? 0, within: within.value, locator: currentTime.value })
+}
+
 function saveProgress(): void {
+  if (unitMode.value) {
+    reportUnitPos()
+    return
+  }
   const pct = Math.round(percent.value)
   // ⚠️ 这里**刻意不带 file_rel**（第 63 期 4/6 给其余三个阅读器都加上了，音频不加），
   // 三条理由，都不是「漏了」：
@@ -217,19 +288,46 @@ watch(speed, (v) => { if (audio.value) audio.value.playbackRate = v })
 watch(volume, (v) => { if (audio.value) audio.value.volume = v })
 watch(src, () => { ready.value = false })
 
+/** 等元数据到了再跳转（时长是这时候才知道的） */
+function seekWhenReady(seconds: number): void {
+  if (!(seconds > 0)) return
+  const seek = () => {
+    seekTo(seconds)
+    duration.value = audio.value?.duration || 0
+    audio.value?.removeEventListener('loadedmetadata', seek)
+  }
+  audio.value?.addEventListener('loadedmetadata', seek)
+}
+
 onMounted(async () => {
   session.begin()
+  if (unitMode.value) {
+    // 单话模式：恢复到哪由上层给（`within`，0–1 的**话内**比例），**不问服务端** ——
+    // 书级的 percent 是整本书的坐标，子阅读器手里没有 `total` 语义（话数 ≠ 轨数）就换不出来。
+    const w = props.unit?.within ?? 0
+    if (w > 0) {
+      const el = audio.value
+      const seek = () => {
+        seekTo(w * (el?.duration || 0))
+        duration.value = el?.duration || 0
+        el?.removeEventListener('loadedmetadata', seek)
+      }
+      el?.addEventListener('loadedmetadata', seek)
+    }
+    // 上一话放完自动续过来的那一话自动开播（用户点目录换话时不自动播 —— 那是明确的「我要看这一话」）
+    if (props.autoplay) void audio.value?.play().catch(() => { /* 浏览器拦住就等用户点播放 */ })
+    applySleep()
+    return
+  }
   try {
     const p = await api.getProgress(props.bookId)
     if (p && p.percent > 0 && total.value > 1) {
-      const i = Math.min(total.value - 1, Math.max(0, Math.floor((p.percent / 100) * total.value)))
-      index.value = i
+      // 反推轨号走**唯一真值源**（`lib/unitsProgress`），别在这里再写一遍 floor ——
+      // 两份算式的浮点边界处理只要有一处走样，「书架说读到第 5 轨、点进去从第 4 轨开始」
+      // 就会重新出现，而且不报错。
+      index.value = fromPercent(p.percent, total.value).index
     }
-    if (p && p.locator > 0) {
-      // 等 canplay 后再定位
-      const seek = () => { seekTo(p.locator); duration.value = audio.value?.duration || 0; audio.value?.removeEventListener('loadedmetadata', seek) }
-      audio.value?.addEventListener('loadedmetadata', seek)
-    }
+    if (p && p.locator > 0) seekWhenReady(p.locator)
   } catch {
     /* 无进度从头发起 */
   }
@@ -275,6 +373,7 @@ onBeforeUnmount(() => {
     <!-- 主控件 -->
     <div class="mt-3 flex items-center justify-center gap-3">
       <button
+        v-if="!unitMode"
         type="button"
         class="cursor-pointer rounded-full p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
         :disabled="index === 0" title="上一轨" @click="goto(index - 1)"
@@ -303,6 +402,7 @@ onBeforeUnmount(() => {
         <span class="text-[11px] font-medium tabular-nums">+{{ skipForward }}s</span>
       </button>
       <button
+        v-if="!unitMode"
         type="button"
         class="cursor-pointer rounded-full p-2 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
         :disabled="index >= total - 1" title="下一轨" @click="goto(index + 1)"

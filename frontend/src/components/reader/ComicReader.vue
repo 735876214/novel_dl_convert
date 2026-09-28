@@ -4,10 +4,11 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type SessionExtra } from '@/lib/api'
+import { api, type SessionExtra, type UnitPos, type UnitRef } from '@/lib/api'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import { progressForFile } from '@/lib/readingProgress'
 import { useSeriesNext } from '@/lib/seriesNext'
+import { toPercent } from '@/lib/unitsProgress'
 import {
   COMIC_BGS,
   COMIC_DIRECTIONS,
@@ -42,11 +43,24 @@ const props = defineProps<{
   /**
    * 正在读的那个文件（第 63 期 4/6）：库内相对路径。**不给 = 书级** —— 单文件的书
    * 由上层算成 `undefined` 传下来，于是进度的读写与加这一列之前逐字节相同。
+   * 单话模式（给了 `unit`）下不使用：那时读的是合集里的一个文件，进度由上层独占（见下）。
    */
   fileRel?: string
+  /**
+   * **单话模式**（第 73 期）：正在读「序号单元合集」里的这一话（见 `api.UnitRef`）。
+   * 数据源换成 `/units/{index}/…`、进度**不读不写**（整本书的 percent 由 `UnitsReader`
+   * 独占），越过末页时发 `unitEnd` 让上层翻下一话。
+   */
+  unit?: UnitRef | null
 }>()
 /** 交回上层切换阅读器（偏好由上层统一落库，避免两个组件各写一份 `comic-prefs`） */
-const emit = defineEmits<{ pdfMode: ['comic' | 'pdf'] }>()
+const emit = defineEmits<{
+  pdfMode: ['comic' | 'pdf']
+  /** 单话模式：这一话内部的进度 + 位置（页号，0 起）。上层据此拼整本书的 percent */
+  unitPos: [UnitPos]
+  /** 单话模式：这一话读完了，且**书里还有下一话**（末话的跨册续接不走这里，见 `pastEnd`） */
+  unitEnd: []
+}>()
 const router = useRouter()
 const library = useLibraryStore()
 /** 自动翻到系列下一册（第 66 期）：实现收敛到 `lib/seriesNext.ts` 单一真值源 */
@@ -88,10 +102,43 @@ const double = computed(() => {
 /** 实际生效的页间距：「无间隙」档恒为 0（对齐上游 `Infinite no gaps`） */
 const gapPx = computed(() => (prefs.value.mode === 'infinite_nogap' ? 0 : prefs.value.gap))
 
+/** 单话模式：读的是合集里的一个文件，不是「这本书的主文件」 */
+const unitMode = computed(() => !!props.unit)
+
 /** 页图 URL（index 从 0 起）。带 token 的拼法集中在 api.comicPageUrl（那里解释了为什么需要） */
 function pageUrl(index: number): string {
-  return api.comicPageUrl(props.bookId, index)
+  return unitMode.value && props.unit
+    ? api.unitPageUrl(props.bookId, props.unit.index, index)
+    : api.comicPageUrl(props.bookId, index)
 }
+
+/**
+ * 话内进度 → 0–1 的比例（**单话模式的坐标**）。
+ *
+ * 用 `(page - 1) / total` 而不是非单话模式的 `page / total`：反解是 `floor(w × total) + 1`，
+ * 两边必须严格互逆 —— 第 1 页落在 0、末页落在 `(total-1)/total`（这一话还没读完）。
+ * 非单话模式那个 `page / total` 是**书级**百分比的口径（末页正好 100%），
+ * 两套坐标不是一回事，别互相套用。
+ */
+const withinUnit = computed(() => (total.value ? (page.value - 1) / total.value : 0))
+
+/** `within` 的反解：页码（1 起）。与 `withinUnit` 严格互逆（第 1 页 ↔ 0、末页 ↔ (total-1)/total） */
+function restorePage(): number {
+  const w = props.unit?.within ?? 0
+  return Math.min(total.value, Math.max(1, Math.floor(w * total.value) + 1))
+}
+
+/**
+ * 整本书的百分比。
+ * - 非单话模式：这一话就是全书（`page / total`，末页 100%）—— 改造前逐字相同；
+ * - 单话模式：这一话只是全书的一小段，位置由「第几话 + 话内比例」换算（同一份算式见
+ *   `lib/unitsProgress.ts`）。阅读时长的快照用它，阅读日志里的百分比才与书架同源。
+ */
+const bookPercent = computed(() => (total.value
+  ? (unitMode.value
+    ? toPercent(props.unit?.index ?? 0, withinUnit.value, props.unit?.total ?? 1)
+    : Math.min(100, (page.value / total.value) * 100))
+  : 0))
 
 // ---------------- PDF 源（第 61 期：漫画库也收 PDF）----------------
 /**
@@ -135,7 +182,11 @@ async function ensurePdfPage(n: number): Promise<void> {
         /* 隐私模式 */
       }
       pdfDoc = await pdfjs.getDocument({
-        url: `/api/books/${encodeURIComponent(props.bookId)}/file`,
+        // 单话模式取**这一话**的字节（`/file` 发的始终是这本书的主文件，对合集没有意义）；
+        // 那条 URL 自带 `?token=`，与 httpHeaders 里的 Bearer 并存不会互相干扰
+        url: unitMode.value && props.unit
+          ? api.unitFileUrl(props.bookId, props.unit.index)
+          : `/api/books/${encodeURIComponent(props.bookId)}/file`,
         httpHeaders: token ? { Authorization: `Bearer ${token}` } : {},
       }).promise
       total.value = pdfDoc.numPages || total.value
@@ -251,8 +302,14 @@ async function load(): Promise<void> {
         return
       }
       try {
-        const p = await progressForFile(props.bookId, props.fileRel)
-        page.value = Math.min(total.value, Math.max(1, (p.locator || 0) + 1))
+        // 单话模式：恢复到哪由上层从跨话 percent 反推后给下来（`within`）；
+        // 多文件 / 书级那套（`progressForFile`）在这里用不上 —— 合集的行是**整本书**的。
+        if (unitMode.value) {
+          page.value = restorePage()
+        } else {
+          const p = await progressForFile(props.bookId, props.fileRel)
+          page.value = Math.min(total.value, Math.max(1, (p.locator || 0) + 1))
+        }
       } catch {
         /* 无进度则从第 1 页开始 */
       }
@@ -261,7 +318,9 @@ async function load(): Promise<void> {
       if (isInfinite.value) observePdfPages()
       return
     }
-    const r = await api.comicPages(props.bookId)
+    const r = unitMode.value && props.unit
+      ? await api.unitPages(props.bookId, props.unit.index)
+      : await api.comicPages(props.bookId)
     total.value = r.total
     if (!r.total) {
       error.value = '这本漫画里没有可显示的图片'
@@ -269,8 +328,12 @@ async function load(): Promise<void> {
       return
     }
     try {
-      const p = await progressForFile(props.bookId, props.fileRel)
-      page.value = Math.min(r.total, Math.max(1, (p.locator || 0) + 1))
+      if (unitMode.value) {
+        page.value = restorePage()
+      } else {
+        const p = await progressForFile(props.bookId, props.fileRel)
+        page.value = Math.min(r.total, Math.max(1, (p.locator || 0) + 1))
+      }
     } catch {
       /* 无进度则从第 1 页开始 */
     }
@@ -289,6 +352,13 @@ function scheduleSave(): void {
 
 async function save(): Promise<void> {
   if (!total.value) return
+  // 单话模式：**不写进度**，把「话内读到哪」上报给上层（见 `api.UnitRef`）。
+  // 整本书只有一行 percent，写它需要「第几话 + 话内多少」两个数，上层手里才有完整的那份；
+  // 子组件各写一半必然互相覆盖（换话时旧话的卸载钩子会把进度写回旧话）。
+  if (unitMode.value) {
+    emit('unitPos', { index: props.unit?.index ?? 0, within: withinUnit.value, locator: page.value - 1 })
+    return
+  }
   const percent = (page.value / total.value) * 100
   try {
     const r = await api.setProgress(props.bookId, page.value - 1, percent, undefined, props.fileRel)
@@ -312,18 +382,19 @@ const session = createSessionReporter({
   source: 'web',
   // 页数未知时**不给位置**（服务端记「未知」），不编一个 0%
   snapshot: () => (total.value
-    ? { percent: Math.min(100, (page.value / total.value) * 100), locator: page.value - 1 }
+    ? { percent: bookPercent.value, locator: page.value - 1 }
     : {}),
   post: (secs, extra: SessionExtra) => api.recordSession(props.bookId, secs, extra),
 })
 let clock: ReaderClock | null = null
 
 function go(n: number): void {
-  // 越过末页 = 想继续往后：交给「自动翻下一本」（未开启则原地不动，不再 clamp 成同一页空转）。
+  // 越过末页 = 想继续往后：单话模式先看**书里还有没有下一话**，没有才交给「自动翻下一本」
+  // （未开启则原地不动，不再 clamp 成同一页空转）。
   // ⚠️ 这一判断必须放在 `go()` 里 —— 键盘（ArrowRight / PageDown）走的是 `go()` 而**不是** `next()`，
   // 只在 `next()` 里挂钩会让最常用的翻页方式静默失效。
   if (n > total.value) {
-    void advanceToNextVolume()
+    pastEnd()
     return
   }
   const next = Math.min(Math.max(1, n), total.value)
@@ -357,6 +428,26 @@ function advanceToNextVolume(): Promise<boolean> {
     routeBase: '/read',
     beforeJump: save,
   })
+}
+
+/**
+ * 读到这一「话」之外（单话模式）。
+ *
+ * 书里还有下一话 ⇒ 上报末尾位置后发 `unitEnd`，由 `UnitsReader` 换话 ——
+ * **必须先把这一话的位置上报掉**：换话会卸载本组件，而上层那行 percent 正是靠
+ * 这次上报才落到「第 3 话读完」上（少了它，退出时书架上停在第 3 话的开头）。
+ *
+ * 已经是最后一话 ⇒ 回到「读完自动翻下一册」那套（开关 / 系列提示 / 跳转都不变）。
+ * 非单话模式恒为后者 —— 那时「下一话」这个概念不存在。
+ */
+function pastEnd(): void {
+  const u = props.unit
+  if (unitMode.value && u && u.index + 1 < u.total) {
+    void save()
+    emit('unitEnd')
+    return
+  }
+  void advanceToNextVolume()
 }
 
 /** 点击左右区域翻页；rtl（日漫）时语义反转 —— 右到左读就是「点右边看下一页」反过来的直觉 */
@@ -397,14 +488,19 @@ function onScroll(): void {
   maybeAutoNextAtBottom(el)
 }
 
-/** 连续模式滚到底且已到末页时换册；用闩避免同一次触底反复触发 */
+/**
+ * 连续模式滚到底且已到末页时换册（单话模式下：换**下一话**）；用闩避免同一次触底反复触发。
+ *
+ * 单话模式仍受这个开关管：它管的是「读到末尾要不要自动往后走」——书内换话与跨册续接
+ * 在这一点上是同一件事（`pastEnd` 里的跨册那一半也受同一个开关管）。
+ */
 function maybeAutoNextAtBottom(el: HTMLElement): void {
   if (!prefs.value.autoNext) return
   const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 8
   if (atBottom && page.value >= total.value) {
     if (!autoNextArmed.value) return
     autoNextArmed.value = false
-    void advanceToNextVolume()
+    pastEnd()
   } else if (!atBottom) {
     autoNextArmed.value = true
   }

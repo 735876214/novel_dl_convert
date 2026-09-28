@@ -7,7 +7,7 @@ import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, type BookCard, type BookDetail } from '@/lib/api'
 import { formatLabel, seriesIndexLabel, tagsLabel } from '@/lib/bookInfo'
-import { isAudioBook, openTargetOf } from '@/lib/bookOpen'
+import { isDirEntry, openTargetOf } from '@/lib/bookOpen'
 import { fmtBytes } from '@/lib/format'
 import { statusLabelOf } from '@/lib/readingThresholds'
 import { useLibraryStore } from '@/stores/library'
@@ -52,7 +52,7 @@ const detailError = ref('')
 const loading = ref(false)
 
 const target = computed(() => (props.book ? openTargetOf(props.book) : null))
-const canDownload = computed(() => !!props.book && !isAudioBook(props.book) && !!props.book.name)
+const canDownload = computed(() => !!props.book && !isDirEntry(props.book) && !!props.book.name)
 
 const chapterCount = computed(() =>
   (detail.value?.chapters ?? []).reduce((s, v) => s + v.chapters.length, 0),
