@@ -2,6 +2,7 @@
 
 > 只放**每次都要遵守的铁律**（每会话自动注入、体积受限）；逐期事实写 `YYYY-MM-DD.md`；**逐期铁律原文（第 53–61 期）+ 运行手册 / 域细节 / 跨会话待办**见 **`MEMORY-REF.md`**；能力 / 模块 / 缺口清单见 `docs/bookorbit-*.md`（capability-gap / module-inventory / roadmap-gaps-remaining）。
 > ⚠️ 本文件**有体积上限**：新增内容尽量短；长解释一律写进 `MEMORY-REF.md`，此处只留一行索引。
+> 📚 **项目文档体系（2026-09-28 建）**：`AGENTS.md`（AI 入口 / 硬约束 / 三处同步点）、`TODO.md`（任务与进度）、`DESIGN.md`（视觉规则）、`docs/project-overview.md`（整体）、`docs/architecture.md`（架构与数据流）、`docs/user-guide.md`（使用者）、`docs/development.md`（命令与回归清单）、`docs/component-api.md`（组件 API）。**改动要同步对应那份**。
 
 ## 硬约定
 1. TXT→EPUB，NAS/容器；input/output 物理分离；FastAPI+CLI；可插拔书源。
@@ -75,6 +76,7 @@
 
 ## 前端
 - Vue3 SFC+TS+Vite+Tailwind v4+Pinia+vue-router(hash)；产物 `novelforge/static/v2/`（`/` 服务其 index.html，缺失 503）；**勿往 `novelforge/static/` 加手写页**。
+- ⚠️ **视觉层 = 逐字照搬 BookOrbit 的 oklch token**（`frontend/src/assets/theme/{tokens,accents,radius,bridge,cover-effects}.css`；默认档 `--tint-h: 80` 暖中性 + **65 档 accent** + 4 档圆角）。**不是** hex 的 `#2563eb`/`#6366f1` —— 那是**已作废的旧原型**（`novelforge/static/` 里的手写页）。组件里**禁写死颜色**，规则见 `DESIGN.md`。
 - 演示数据禁 `Math.random()`；**路由 path 全局唯一**；`settingsNav`/router 注册表/侧栏**三处与组件同批改**（设置页由 `data/settingsNav` 注册表生成 ⇒ **删条目即删路由**与侧栏项）；**零外部请求零 CDN**；「书库管理」在 `/settings/libraries`。
 - **设置页真实路由 = `#/settings/<page.path>`**（如 `#/settings/metadata/providers`），**不带分组段**（分组只是侧栏视觉分组）。曾误写 `#/settings/library/metadata/providers` → 「未知路由」。
 - ⚠️ **前端收尾必须 `npm run type-check` + `npm run build` + `npm run deploy`**（+ `test:unit`）：`vitest` 不校验模块导出完整性（第 44 期曾把两个文件误提交成 0 B，62 个单测全过、只有构建才报断链）；且 `build` 只落 `frontend/dist`，**`deploy` 才同步到 `novelforge/static/v2`**（漏 deploy ⇒ 服务端仍服务旧 bundle，改动看似「没生效」）；跑 build/deploy 前先 `$env:NODE_OPTIONS=''`。
