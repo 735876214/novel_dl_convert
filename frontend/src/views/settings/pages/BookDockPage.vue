@@ -7,10 +7,12 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
+import Switch from '@/components/ui/Switch.vue'
 import { POLICY_FIELDS } from '@/lib/metadataFields'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import {
   api,
+  apiErrorMessage,
   type BookDockItem,
   type BookDockResponse,
   type HealthInfo,
@@ -460,6 +462,8 @@ async function saveFinalize(): Promise<void> {
 const dragDepth = ref(0)
 const dragging = computed(() => dragDepth.value > 0)
 const dropping = ref(false)
+/** 工具栏「上传」正在投递（第 70 期）：与拖拽共用同一个投递函数，只是入口不同 */
+const uploading = ref(false)
 
 function hasFiles(e: DragEvent): boolean {
   return Boolean(e.dataTransfer && [...e.dataTransfer.types].includes('Files'))
@@ -478,33 +482,79 @@ function onDragLeave(e: DragEvent): void {
   e.preventDefault()
   dragDepth.value = Math.max(0, dragDepth.value - 1)
 }
-async function onDrop(e: DragEvent): Promise<void> {
-  if (!e.dataTransfer) return
-  e.preventDefault()
-  dragDepth.value = 0
-  const files = [...e.dataTransfer.files]
-  if (!files.length) return
-  // 0 库时提前拦下（第 38 期）：投递链路按「没有可接收的库」拒收，
-  // 文件会落在投递目录里被反复扫描却永远不进库 —— 与其留下这种状态，
-  // 不如当场说清「先去建库」。（后端仍会兜底拒收，这里只是把话说在前面。）
-  if (library.hasNoLibraries) {
-    ui.toast('还没有书库：先新建一个书库，投递的文件才有地方归')
-    return
-  }
-  dropping.value = true
+/**
+ * 0 库时提前拦下（第 38 期）：投递链路按「没有可接收的库」拒收，
+ * 文件会落在投递目录里被反复扫描却永远不进库 —— 与其留下这种状态，
+ * 不如当场说清「先去建库」。（后端仍会兜底拒收，这里只是把话说在前面。）
+ */
+function blockedByNoLibrary(): boolean {
+  if (!library.hasNoLibraries) return false
+  ui.toast('还没有书库：先新建一个书库，投递的文件才有地方归')
+  return true
+}
+
+/**
+ * 投递一批文件到收书目录（第 70 期从 `onDrop` 里抽出来）。
+ *
+ * 拖拽入口（N 个文件）与工具栏「上传」按钮（1 个文件）**共用这一份**守卫 / 反馈 / 刷新 ——
+ * 同一件事两套实现迟早走样（一个给明确原因、另一个静默，就是最常见的走样方式）。
+ */
+async function deliverToDock(files: File[]): Promise<number> {
   let ok = 0
   for (const file of files) {
     try {
       await api.convertDrop(file)
       ok++
     } catch (err) {
-      ui.toast(err instanceof Error ? `${file.name}：${err.message}` : `${file.name} 投递失败`)
+      // 用 `apiErrorMessage` 而不是 `err.message`：后者是后端响应原文（`{"detail":"…"}`），
+      // 原样塞进 toast 会把花括号和键名一起露给用户。
+      ui.toast(`${file.name}：${apiErrorMessage(err, '投递失败')}`)
     }
   }
-  dropping.value = false
   if (ok) {
     ui.toast(`已投递 ${ok} 个文件到收书目录`)
     await refresh()
+  }
+  return ok
+}
+
+async function onDrop(e: DragEvent): Promise<void> {
+  if (!e.dataTransfer) return
+  e.preventDefault()
+  dragDepth.value = 0
+  const files = [...e.dataTransfer.files]
+  if (!files.length) return
+  if (blockedByNoLibrary()) return
+  dropping.value = true
+  try {
+    await deliverToDock(files)
+  } finally {
+    dropping.value = false
+  }
+}
+
+// ---- 工具栏「上传」（第 70 期）：与拖拽同一条投递链路，只是把「选文件」交给系统选择器 ----
+
+const fileInput = ref<HTMLInputElement | null>(null)
+
+function pickFile(): void {
+  if (uploading.value) return
+  fileInput.value?.click()
+}
+
+async function onPickedFile(e: Event): Promise<void> {
+  const el = e.target as HTMLInputElement
+  const file = el.files?.[0]
+  // 先清空 input 的值：不清空的话「连续两次选同一个文件」第二次不会触发 `change`
+  //（`change` 只在值变化时发）。清空不会让上面取到的 `File` 句柄失效。
+  el.value = ''
+  if (!file) return
+  if (blockedByNoLibrary()) return
+  uploading.value = true
+  try {
+    await deliverToDock([file])
+  } finally {
+    uploading.value = false
   }
 }
 
@@ -546,6 +596,20 @@ onBeforeUnmount(() => {
       <Button size="sm" :variant="running ? 'danger' : 'primary'" @click="toggleWatcher">
         {{ running ? '暂停' : '开始监听' }}
       </Button>
+      <!-- 第 70 期：单文件投递入口。走的是与整页拖拽**同一个**接口（`convertDrop` → `POST /convert`），
+           只是把「选文件」交给系统选择器；`multiple` 刻意不加（只允许单个文件），也不加 `accept`
+           （与拖拽口径一致：格式由后端判，判不了会明确说明原因，不静默）。 -->
+      <Button
+        size="sm"
+        variant="primary"
+        :disabled="uploading"
+        title="上传"
+        aria-label="上传"
+        @click="pickFile"
+      >
+        {{ uploading ? '上传中…' : '上传' }}
+      </Button>
+      <input ref="fileInput" type="file" class="hidden" @change="onPickedFile">
     </div>
 
     <!-- 投递目录 -->
@@ -593,19 +657,7 @@ onBeforeUnmount(() => {
             关闭后目录不再自动扫描，只能手动「立即扫描」或从工具页逐个处理
           </div>
         </div>
-        <button
-          type="button"
-          role="switch"
-          :aria-checked="autoProcess"
-          class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors"
-          :class="autoProcess ? 'bg-primary' : 'bg-muted'"
-          @click="setVal('watcher.enabled', !autoProcess)"
-        >
-          <span
-            class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
-            :class="autoProcess ? 'translate-x-[16px]' : 'translate-x-[2px]'"
-          />
-        </button>
+        <Switch :model-value="autoProcess" @update:model-value="setVal('watcher.enabled', $event)" />
         <Button size="sm" variant="primary" :disabled="saving || !dirty" @click="saveAuto">保存</Button>
       </div>
 
@@ -804,19 +856,7 @@ onBeforeUnmount(() => {
             的预览页。等同于该页的「新书入库自动抓」。
           </div>
         </div>
-        <button
-          type="button"
-          role="switch"
-          :aria-checked="finalizeOn"
-          class="relative h-[18px] w-8 shrink-0 cursor-pointer rounded-full transition-colors"
-          :class="finalizeOn ? 'bg-primary' : 'bg-muted'"
-          @click="finalizeOn = !finalizeOn"
-        >
-          <span
-            class="absolute top-[2px] h-[14px] w-[14px] rounded-full bg-card transition-transform duration-200"
-            :class="finalizeOn ? 'translate-x-[16px]' : 'translate-x-[2px]'"
-          />
-        </button>
+        <Switch v-model="finalizeOn" />
       </div>
 
       <div class="flex flex-wrap items-end gap-4 border-b border-border px-4 py-3.5">

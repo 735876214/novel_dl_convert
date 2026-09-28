@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 import type { AppConfig, BookDockItem, BookDockResponse, LibraryEntity } from '@/lib/api'
 import { api } from '@/lib/api'
+import { useUiStore } from '@/stores/ui'
 import BookDockPage from '@/views/settings/pages/BookDockPage.vue'
 
 /**
@@ -422,5 +423,82 @@ describe('BookDockPage 第 65 期 5/5：重命名 + 入库到…', () => {
 
     expect(vi.mocked(api.bookDockRescan)).not.toHaveBeenCalled()
     expect(w.find('[data-dock-ingest-root]').exists()).toBe(false)
+  })
+})
+
+/**
+ * 第 70 期：工具栏「上传」按钮。
+ *
+ * 它必须与整页拖拽走**同一条**投递链路（`convertDrop` → `POST /convert`）——
+ * 否则会出现「拖进去行、点上传不行」这种最难查的不一致。所以断言落在
+ * 「`convertDrop` 被调用了几次、参数是什么」上，而不是「按钮上出现了什么字」。
+ */
+describe('BookDockPage · 工具栏「上传」（第 70 期）', () => {
+  /** 给隐藏的 file input 塞一个文件并触发 `change`（happy-dom 的 `files` 是只读的） */
+  async function pick(w: VueWrapper, file: File): Promise<HTMLInputElement> {
+    const input = w.find('input[type="file"]').element as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    await w.find('input[type="file"]').trigger('change')
+    await flushPromises()
+    return input
+  }
+
+  it('按钮带 title 与 aria-label；选择器只允许单个文件、不限制格式', async () => {
+    const w = await mountPage()
+    const btn = w.findAll('button').find((b) => b.text() === '上传')
+    expect(btn, '工具栏里没有「上传」按钮').toBeTruthy()
+    expect(btn!.attributes('title')).toBe('上传')
+    expect(btn!.attributes('aria-label')).toBe('上传')
+
+    const input = w.find('input[type="file"]')
+    expect(input.exists(), '缺少隐藏的文件选择器').toBe(true)
+    expect(input.attributes('multiple'), '只允许单个文件 ⇒ 不能加 multiple').toBeUndefined()
+    expect(input.attributes('accept'), '格式由后端判（与拖拽同口径）⇒ 不加 accept').toBeUndefined()
+  })
+
+  it('点按钮只负责打开系统选择器（投递发生在 change 上，点了不发请求）', async () => {
+    const w = await mountPage()
+    const input = w.find('input[type="file"]').element as HTMLInputElement
+    const click = vi.spyOn(input, 'click')
+    await w.findAll('button').find((b) => b.text() === '上传')!.trigger('click')
+    expect(click).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(api.convertDrop)).not.toHaveBeenCalled()
+  })
+
+  it('选中一个文件 ⇒ 投递一次、给成功反馈、并把 input 清空', async () => {
+    // 清空 input 是 2 秒级需求：不清空的话「连续两次选同一个文件」第二次**不会**触发
+    // `change`（浏览器只在值变化时发），用户会觉得按钮坏了。
+    vi.mocked(api.convertDrop).mockResolvedValue({ ok: true })
+    const w = await mountPage()
+    const ui = useUiStore()
+
+    const input = await pick(w, new File(['x'], '三体.epub', { type: 'application/epub+zip' }))
+
+    expect(vi.mocked(api.convertDrop)).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(api.convertDrop).mock.calls[0][0].name).toBe('三体.epub')
+    expect(input.value, 'input 没清空 ⇒ 再选同一个文件不会再触发 change').toBe('')
+    expect(ui.toastMessage).toContain('已投递')
+  })
+
+  it('投递失败：把文件名与后端给的原因一起说清，不静默', async () => {
+    vi.mocked(api.convertDrop).mockRejectedValue(new Error('没有可接收的库'))
+    const w = await mountPage()
+    const ui = useUiStore()
+
+    await pick(w, new File(['x'], '坏文件.xyz'))
+
+    expect(ui.toastMessage).toContain('坏文件.xyz')
+    expect(ui.toastMessage).toContain('没有可接收的库')
+  })
+
+  it('一个书库都没有：不投递，改成把原因说清（与拖拽同一句）', async () => {
+    vi.mocked(api.libraries).mockResolvedValue(libsResult([]))
+    const w = await mountPage()
+    const ui = useUiStore()
+
+    await pick(w, new File(['x'], '三体.epub'))
+
+    expect(vi.mocked(api.convertDrop)).not.toHaveBeenCalled()
+    expect(ui.toastMessage).toContain('还没有书库')
   })
 })
