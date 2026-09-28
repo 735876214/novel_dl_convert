@@ -21,7 +21,7 @@
 │  scrape · metadata · metasources · metafetch · metastore · series_meta ·  │
 │  authors · narrators · stats · achievements · activity · recommend ·      │
 │  embed · epub_cfi · comics · audio · audio_meta · detect · preprocess ·   │
-│  pipeline · watcher · txtcache · migrate · bookdock · features ·          │
+│  pipeline · watcher · txtcache · units · migrate · bookdock · features ·  │
 │  lib_settings · library_rules · opds · komga · komga_api · koreader ·     │
 │  koreader_anno · integrations · auth · fonts · customfields · metascore · │
 │  browse_counts · activity_log · ai_detect · network · migrate · pdfrender │
@@ -61,6 +61,10 @@ sequenceDiagram
 - 失效判据比「序号」不比「时刻」——同一刻度内判不出脏（历史坑）。
 - `library._scan_once` 是「正确结果」的定义（无索引兜底 + 对拍脚本基准）；`catalog` 是常规路径。
 - 读端 `catalog.books_of(lib)`；写端只在扫描/变更后刷新。`library.invalidate()` 是**统一的失效入口**。
+- **扫描口径版本**（`library.SCAN_RULE_VERSION`）：凡能改变「条目边界或卡片字段口径」的改动都要 +1。
+  `catalog` 把它**按库**记在 `app_state`（`book_index_rule:{lid}`），不一致 ⇒ 该库下一轮刷新**当作 force**
+  全量重探一次，之后回落增量。这是**存量索引唯一的自愈通道** —— 磁盘上一个字节都没变，
+  `(size, mtime)` 闸门永远不会重探那些旧行，改完口径用户看到的还是老样子，而且不报错、不重建。
 
 ## 4. 数据层
 
@@ -115,6 +119,13 @@ graph LR
 ```
 - 监听用**轮询**而非 inotify（NAS 上 SMB/NFS 事件不可靠）；`(size, mtime)` 存 `watcher_state.json`，重启不重复处理。
 - **分章唯一真值源 = `core/detect.py`**（出版 / 书源 / TXT 阅读共用）；行首锚定 + 卷/`【第1章】`/`（一）` 形态。
+- **条目的三种形态（第 73 期）**：普通文件；**平铺音频目录**（一章一文件，`01.mp3…12.mp3`）；
+  **序号单元树**（`《书名》/第1卷/第1话.pdf` —— 子树里 ≥2 个**不同序号**、能解析出序号的媒体文件
+  ⇒ 整棵树 = 一本书）。形态判据唯一真值源 = `core/units.py`（`shape_of` 的顺序是**先平铺音频、
+  后序号单元**，编号轨有声书的既有行为因此逐字不变），且只对**漫画库 / 有声书库**生效
+  （`units.merges_for`，电子书库与混合库不受影响）。话数**复用既有的 `tracks` 列**（零新列）。
+  ⚠️ 收书目录这条入口（`watcher`）**还不认**序号单元树 ⇒ 往 `INPUT_DIR` 丢一棵树仍会被拆成 N 本
+  散书（与「放进库根」不一致，留作独立一期）。
 - 归库规则：来源子目录名 > 格式 > 关键词；`type`（电子书/漫画/有声书/混合）只决定功能显隐。
 
 ## 7. 出版链路（给外部阅读器的第二份真相）
@@ -151,6 +162,12 @@ graph LR
 ## 9. 阅读链路
 
 - **进度按「文件」维度**（多文件的书各存各的读点），书级位置由文件级聚合。
+- **序号单元合集**（`format === 'UNITS'`，第 73 期）由 `UnitsReader` 逐话读（话目录 + 上/下一话 +
+  读完自动续）。进度**仍是 `progress` 那一行 `percent`**（零新列、零迁移，与有声书逐字相同），
+  口径 `percent = (话号 + 话内比例) / 话数 × 100`，换算唯一真值源 = 前端 `lib/unitsProgress.ts`。
+  **进度由上层独占**：`UnitsReader` 是唯一写它的地方；三个复用的子阅读器（PDF / 漫画 / 音频）
+  进入单话模式后**不读不写**，只上报 `unitPos`（带 `index` —— 上层据此丢弃换话时旧组件的过期上报）
+  与 `unitEnd`（读完续下一话；末话仍走 `seriesNext` 翻下一册）。
 - **位置换算唯一真值源 = `core/epub_cfi.py`**（CFI ↔ XPointer ↔ 章内字符偏移）；
   `progress.cfi` **只由 NF 阅读器写入**，其它来源（KOReader / Komga / 完成标记）写进度时**一律清空 cfi**（防「章已变、CFI 挂旧章」）。
 - **阅读尝试（轮次）**：`reading_attempts`，一轮 =「开始读 → 读完」；自动维护挂 `db.set_status`；`reset_reading_state` **四清**。
@@ -183,15 +200,16 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
   **设置页由注册表生成路由 ⇒ 删条目即删路由与侧栏项。**
 - **状态**：Pinia。store 分三类：外壳（ui/nav/theme/auth）、数据（library/stats/collections/activity/tasks…）、偏好（displayPrefs/shelfPrefs/coverPrefs/dashboard/statsChartPrefs/prefSync）。
 - **偏好同步**：`lib/prefsPayload.ts` 定义 **7 个载荷块**（reader/pdf/comic/audio/appearance/cover/shelf），与后端 `server.PREFS_BLOCKS` **必须同批改**（契约 `tests/test_prefs_shelf_block.py`）；变更经 `prefsBridge.notifyPrefsChanged` 广播，`suppressing` 防回环。
-- **单一判据集中在 `lib/`**：路径 `paths.ts`、阅读阈值 `readingThresholds.ts`、续接 `seriesNext.ts`、图表 `charts.ts`、书卡信息 `bookInfo.ts`、能否打开 `bookOpen.ts`、进度取哪行 `readingProgress.ts`、会话 `readingSession.ts`。
+- **单一判据集中在 `lib/`**：路径 `paths.ts`、阅读阈值 `readingThresholds.ts`、续接 `seriesNext.ts`、图表 `charts.ts`、书卡信息 `bookInfo.ts`、能否打开 `bookOpen.ts`、进度取哪行 `readingProgress.ts`、话↔百分比换算 `unitsProgress.ts`、会话 `readingSession.ts`。
 - 仪表盘部件走注册表（`components/dashboard/widgets/registry.ts`）；统计图表目录 `lib/statistics-charts.ts`（30 张）。
 
 ## 13. 关键不变量清单（改代码前扫一眼）
 
 1. 源文件只读；元数据只落 DB；删除移回收站；成品目录不与源重叠。
 2. 请求路径不扫盘（读索引）；书目列表并发只拉一次。
+   改了「条目边界或卡片字段口径」⇒ `library.SCAN_RULE_VERSION` +1（否则存量索引不自愈，改完看不到变化）。
 3. `db` 只经 `db._connect()`；软删除读点带 `deleted_at=0`。
-4. 命名规则 / 路径判据 / 阈值 / 续接 / ISBN / CFI 等判据各只有一处实现。
+4. 命名规则 / 路径判据 / 阈值 / 续接 / ISBN / CFI / 序号单元 / 话↔百分比 等判据各只有一处实现。
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端零外部请求；设置页/偏好块/库列 的同步点一处不漏。
 7. 新的后台线程必须进测试收尾清单（`_quiesce_background`）。

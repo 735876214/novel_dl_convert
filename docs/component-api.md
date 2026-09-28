@@ -9,7 +9,7 @@
 ```
 components/
   ui/            UI 原语（16 个）—— 新页面优先复用
-  reader/        阅读器：PdfReader / ComicReader / AudioPlayer
+  reader/        阅读器：PdfReader / ComicReader / AudioPlayer / **UnitsReader**（序号单元合集）
   book/          书籍域组件（编辑/预览/移动/记录/系列面板）+ detail/ 详情页子标签
   dashboard/     仪表盘外壳 + widgets/ 12 个部件 + registry.ts
   charts/        图表壳 + library/ 18 张 + reading/ 12 张（共 30）
@@ -45,12 +45,18 @@ components/
 
 | 组件 | props | emit | 备注 |
 |---|---|---|---|
-| `PdfReader` | `bookId: string`、`title: string`、`comicLib?: boolean`、`series?: string`、`fileRel?: string` | `pdfMode: ['comic' \| 'pdf']` | pdf.js **动态 import 懒加载**；滚动模式按 `IntersectionObserver` 逐页渲染；`fileRel` **不给 = 书级进度**（判据必须 `!== undefined`，空串合法） |
-| `ComicReader` | `bookId`、`title`、`series?`、`source?: 'archive' \| 'pdf'`、`fileRel?` | `pdfMode: ['comic' \| 'pdf']` | 页图按需 `/api/books/{id}/comic/{index}`（**允许 `?token=`**）；CBR 缺解压器时接口 503 |
-| `AudioPlayer` | `bookId: string`、`tracks: AudioTrack[]`、`series?: string` | — | 进度语义：`locator` = 轨内秒数、`percent` = 按轨加权全书进度；跨轨内置续接、跨册走 `seriesNext` |
+| `PdfReader` | `bookId: string`、`title: string`、`comicLib?: boolean`、`series?: string`、`fileRel?: string`、`unit?: UnitRef` | `pdfMode: ['comic' \| 'pdf']`、`unitPos`、`unitEnd` | pdf.js **动态 import 懒加载**；滚动模式按 `IntersectionObserver` 逐页渲染；`fileRel` **不给 = 书级进度**（判据必须 `!== undefined`，空串合法） |
+| `ComicReader` | `bookId`、`title`、`series?`、`source?: 'archive' \| 'pdf'`、`fileRel?`、`unit?: UnitRef` | `pdfMode`、`unitPos`、`unitEnd` | 页图按需 `/api/books/{id}/comic/{index}`（**允许 `?token=`**）；CBR 缺解压器时接口 503 |
+| `AudioPlayer` | `bookId: string`、`tracks: AudioTrack[]`、`series?: string`、`unit?: UnitRef`、`autoplay?: boolean` | `unitPos`、`unitEnd` | 进度语义：`locator` = 轨内秒数、`percent` = 按轨加权全书进度；跨轨内置续接、跨册走 `seriesNext` |
+| `UnitsReader` | `bookId: string`、`title: string`、`series?: string`、`units: UnitItem[]` | —（内部 `router` 跳详情） | 序号单元合集（第 73 期）：话目录 + 上/下一话 + 「N / M」；按当前话的 `kind` 挂上面三者之一（`:key` = 话号 ⇒ 换话重建） |
 
-**共性**：三者都通过 `useSeriesNext().goToNextVolume(...)` 做「读完进系列下一册」（唯一真值源见 §6）；
-进度都回写 `library.patchProgress()`；会话计时都走 `lib/readingSession.ts`。
+**共性**：四者都通过 `useSeriesNext().goToNextVolume(...)` 做「读完进系列下一册」（唯一真值源见 §6）；
+会话计时都走 `lib/readingSession.ts`。
+
+**单话模式（`unit?: UnitRef`，第 73 期）**：三个复用阅读器拿到它就换数据源（`/api/books/{bid}/units/{index}…`）、
+**进度不读不写**，只 `emit('unitPos', UnitPos)`（`{index, within, locator}`）与 `emit('unitEnd')`；
+**进度由上层独占**——`UnitsReader` 是整本书唯一写 `progress` 的地方（换来换去只有一把尺子），
+它按上报里的 `index` **丢弃过期上报**（换话时旧组件卸载还会再报一次）。不给 `unit` 则行为与以前逐字相同。
 
 ## 4. 书籍域（`components/book/`）
 
@@ -87,6 +93,7 @@ components/
 | `bookInfo.ts` | `seriesIndexLabel()`、`sortBySeriesIndex()`、`formatLabel()`、`tagsLabel()` | 书卡信息展示 |
 | `bookOpen.ts` | `openTargetOf()`、`isAudioBook()` | 「能否在线打开 / 去哪儿读」 |
 | `readingProgress.ts` | `progressForFile()` | 「恢复位置取哪行进度」（文件级优先） |
+| `unitsProgress.ts` | `toPercent(index, within, total)`、`fromPercent(percent, total)` | 「话 / 轨 ↔ 百分比」换算（合集与有声书**共用一份**；含 `BOUNDARY_EPS` 浮点边界容差） |
 | `readingSession.ts` | `createSessionReporter()`、`attachReaderClock()` | 阅读会话边界与累计（30s 心跳合一） |
 | `metadataFields.ts` | `FIELD_LABELS`、`CATALOG_FIELDS`、`IDENTITY_FIELDS`、`DB_ONLY_FIELDS` | 元数据字段名与顺序 |
 | `shelfBuckets.ts` | 首字母分桶（A–Z / `#`，不做拼音） | 书架分桶 |

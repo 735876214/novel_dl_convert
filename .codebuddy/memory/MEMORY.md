@@ -58,6 +58,8 @@
 - **版本唯一真值源=`server.APP_VERSION`，只由 `GET /health` 下发**；**无 `/api/health`**。共用锁嵌套用 `RLock`；⚠️ **`db` 只走 `db._connect()`**，别抓裸连接、别绕开 `_lock`。
 - `core/stats.py` `overview` 键**只增不删**、跟随 `library_id`、**不新增扫描路径**。⚠️ **阅读状态阈值只有两入口**（后端 `lib_settings.reading_thresholds` / 前端 `lib/readingThresholds.ts`）。⚠️ **路径判据只有 `frontend/src/lib/paths.ts`**（别处抄 `startsWith('/')` ⇒ Windows `C:\…` 判错）。
 - **「文件:行号」收尾必须实测复核**：只记真实行号；判据「0 硬错」**且**人工过完 `--todo`；⚠️ **历史实施记录里的旧行号不改写**；改大文件后跑 `tests/check_doc_anchors.py`。
+- ⚠️ **改「条目边界 / 卡片字段口径」⇒ `library.SCAN_RULE_VERSION` +1**：`catalog` 把它**按库**记在 `app_state`（`book_index_rule:{lid}`），不一致 ⇒ 该库下一轮刷新当 `force`（**存量索引唯一的自愈通道**；磁盘没变 ⇒ `(size,mtime)` 闸门永不重探旧行）。⚠️ **必须按库分键**：记成全局的话第一个刷新完的库写上新版本、**后面的库再也不重探**（只修好一本书，比不修更难查）。
+- **「一棵树 = 一本书」唯一真值源 = `core/units.py`**（`library`/`catalog`/`migrate`/`server` 全读它，别处不许再写「哪个目录算一本书」）；编排顺序 `shape_of` **先平铺音频、后序号单元**（编号轨有声书两套判据都命中，取音频形态才保既有行为逐字不变）。
 
 ## 配置分层（四层 + 每库覆盖）
 - `DEFAULTS → config.yaml → settings.json → 环境变量`；库已知时 `生效值=每库覆写 ?? 全局`，落 `libraries.settings`；真值源 `core/lib_settings.py`+`features.SETTING_CAPS`；接口 `GET/PUT/DELETE /api/libraries/{lid}/settings`（细节见 REF）。
@@ -85,3 +87,4 @@
 - **69** 滚动跨章：锚取正文 article、补偿写绝对值、锚须已存在；`:key` 重复⇒**重读集合+按 id 去重+写入串行**。**70** 开关只 `ui/Switch.vue`；`v-model` 与监听器顺序不定⇒写 `:model-value` + `@update:model-value`；投递唯一链路 `api.convertDrop`。
 - **71** 探索发现：闸门**唯一判定** `gate_reason()`（三端点 400 + 原因；**试搜不拦**；前端提前置灰+出口）；来源名**唯一读法** `source_of()`；搜索真并发+逐源状态；`search_page`（**不支持分页的第 2 页必须回空**）；合并保守（缺作者/卷次差异**不并**）；**不做一键重试**。
 - **72** TXT 乱码根因是**三处判据**：①**按字节切的样本不能当「不是 UTF-8」的证据**（判**前缀**用 `getincrementaldecoder(..., final=False)`，严格 `bytes.decode` 会把尾部截断当失败；中段补采必须**对齐字符边界**）；②置信判据 `detect.regex_confident` = 密度 **或** 条数 ≥3（长章书不再退化）+ 降级产物全空**回退正则边界** + `_split_by_indent` 认**全角空格**；③派生缓存**每个影响正文的口径都要进指纹**（新增 `pipeline.ENCODING_RULE_VERSION` → `txtcache` 的 `state.enc_rule`/`_SPLIT_CACHE`/Redis `extra`）。⚠️ **同一判据不许第二份拷贝**（`ai_detect` 那份已收敛）；「正文读不出」必须留活动日志，不许静默。
+- **73** 序号单元合并：`core/units.py` 判据（≥2 个**不同**序号、只认漫画/有声书库；**宁可少合并不可错合并**）；`SCAN_RULE_VERSION` 按库自愈；书名剥范围备注 `metadata.strip_count_note`（`（1-43话）`/`（全43话）`）；进度换算唯一真值源 `lib/unitsProgress.ts`（`BOUNDARY_EPS` 修浮点边界）+ **进度由上层独占**（子阅读器只上报，按 `index` 丢弃过期上报）。⚠️ 缺口：**watcher 入库路径不认单元树**；旧散书进度/评分/收藏不并。
