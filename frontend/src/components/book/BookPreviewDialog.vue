@@ -18,12 +18,13 @@ import { useLibraryStore } from '@/stores/library'
  * 居中的小弹窗而不是抽屉：仓库里零抽屉先例，而居中弹窗有现成骨架
  *（`BookMoveDialog.vue` / `ExploreView.vue` 的预览弹窗，类串与关闭按钮逐字同款）。
  *
- * ## 内容**全部取自书卡**，详情请求只用来补两项
+ * ## 内容**基本取自书卡**，详情请求补两项
  *
- * 封面 / 书名 / 作者 / 系列 / 格式 / 大小 / 状态 / 进度 / 简介都在 `BookCard` 上
+ * 封面 / 书名 / 作者 / 系列 / 格式 / 大小 / 状态 / 进度都在 `BookCard` 上
  *（书架已经加载好了），所以这个浮层**打开即有内容、不发请求也是完整的**。
- * 详情请求（`GET /api/books/{bid}`，`library.getBookDetail` 缓存优先）只用来补
- * **章节数**这一项 —— 它是卡片上没有、又确实属于「预览」的信息。
+ * 详情请求（`GET /api/books/{bid}`，`library.getBookDetail` 缓存优先）补两项：
+ * **章节数**（卡片上没有、又确实属于「预览」），以及 **简介正文** ——
+ * 第 68 期起列表接口不再下发简介（它曾占列表体积的 68%），正文只在详情里。
  *
  * 因此失败处理也就不一样：详情拉不到时，**不把整块内容换成错误页**（那会把一份
  * 真数据说成「没有」），只在那一行位置说清「详细目录没拿到」并给一个重试。
@@ -56,6 +57,9 @@ const canDownload = computed(() => !!props.book && !isAudioBook(props.book) && !
 const chapterCount = computed(() =>
   (detail.value?.chapters ?? []).reduce((s, v) => s + v.chapters.length, 0),
 )
+
+/** 简介取**详情**（第 68 期：列表接口不再下发正文）；详情没回来就不渲染这一块 */
+const description = computed(() => (detail.value?.description ?? '').trim())
 
 /** 状态与进度一行。状态走 `readingThresholds`（**不在浮层里另写一套文案**） */
 const statusLine = computed(() => {
@@ -191,12 +195,13 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
         </div>
       </div>
 
-      <!-- 没简介就整块不渲染（先例：BookDetailView 的概览简介块） -->
+      <!-- 没简介就整块不渲染（先例：BookDetailView 的概览简介块）。
+           简介来自**详情**（第 68 期起列表不发正文 ⇒ 打开瞬间可能还没有，回来再出现）。 -->
       <p
-        v-if="book.description"
+        v-if="description"
         class="mt-4 line-clamp-4 text-[12.5px] leading-relaxed text-muted-foreground"
       >
-        {{ book.description }}
+        {{ description }}
       </p>
 
       <div class="mt-5 flex flex-wrap items-center gap-2">

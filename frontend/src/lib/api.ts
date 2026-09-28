@@ -732,7 +732,13 @@ export interface BookCard {
   publisher: string
   isbn: string
   language: string
-  description: string
+  /**
+   * 简介。⚠️ **列表接口不下发正文**（第 68 期：它曾占 `/api/books` 体积的 68%），
+   * 只有详情接口（`/api/books/{bid}`）带它；列表侧要判「有没有简介」看 `has_description`。
+   */
+  description?: string
+  /** 列表侧判「这本书有没有简介」——正文只在详情里（第 68 期） */
+  has_description?: boolean
   issues: string[]
   /** 阅读进度 0-100（由 /api/books 附加，来自 SQLite） */
   percent?: number

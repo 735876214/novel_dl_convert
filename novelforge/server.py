@@ -1073,9 +1073,18 @@ def _card(b: dict) -> dict:
     ``by_id()`` / ``book_detail()`` 照旧带着它，服务端内部（``/api/scrape/state``
     的 ``source_path``、迁移 / 移动的预览等）一个都没动。对外要给绝对路径，
     唯一的出口是 ``GET /api/books/{bid}/local-paths``（那里有来源判据）。
+
+    **第 68 期：卡片不发简介正文，只发「有没有」**（``has_description``）。
+    简介是列表里最重的一个字段 —— 600 本的库实测它占 ``GET /api/books`` 体积的
+    **68%**（1.36 MB 里的 0.95 MB），而**任何列表界面都不需要正文**：
+      · 「元数据缺口」筛选只要知道有没有 ⇒ 用 ``has_description``；
+      · 快速预览浮层本来就会调 ``GET /api/books/{bid}``（详情里带正文）⇒ 从详情取。
+    需要正文的地方一律走详情接口，列表不再为它买单。
     """
     out = dict(b)
     out.pop("path", None)
+    desc = str(out.pop("description", "") or "").strip()
+    out["has_description"] = bool(desc)
     return out
 
 

@@ -144,37 +144,59 @@ def reset_gate() -> dict:
 
 # ---------------- 预览 ----------------
 
-def _pick_dst(ltype: str, targets: dict):
-    """选定目标库：显式指定优先 → 唯一同类库 → 否则 ``None``（缺失或需指定）。"""
-    dsts = libraries_of_type(ltype)
+def _pick_from(dsts: list, ltype: str, targets: dict):
+    """在**已给出的**同类库列表里选目标：显式指定优先 → 唯一同类库 → 否则 ``None``。
+
+    第 68 期从 ``_pick_dst`` 里抽出来：``preview`` 现在一次性把「类型 → 同类库」算好
+    （见那里的说明），每本书再调一次 ``libraries_of_type()`` 是纯浪费。
+    """
     want = str((targets or {}).get(ltype) or "")
     if want:
         return next((l for l in dsts if str(l.get("id")) == want), None)
     return dsts[0] if len(dsts) == 1 else None
 
 
+def _pick_dst(ltype: str, targets: dict):
+    """选定目标库（自取同类库列表的便捷版）。"""
+    return _pick_from(libraries_of_type(ltype), ltype, targets)
+
+
 def preview(targets: dict = None) -> dict:
     """待迁移概览（**只读**：不建库、不写台账）。
 
     ``targets``：``{类型: 库 id}``，用于「同类库有多个」时指定目标。
+
+    ⚠️ 第 68 期性能修正：原实现对**每一本书**都调一次 ``libraries_of_type(t)``
+    （= ``library.libraries()``，读库表 + 组装列表），600 本的库实测仅这一项就约
+    200 ms（整个端点约 300 ms）。现在把「全部库 / 类型 → 同类库 / id → 库」
+    **在循环外算一次**，目标库根也按下沉缓存。口径不变，只是不再重复问同一件事。
     """
     items: list = []
     missing: set = set()
+
+    all_libs = library.libraries()
+    by_type: dict = {}
+    by_id: dict = {}
+    for l in all_libs:
+        by_type.setdefault(str(l.get("type") or ""), []).append(l)
+        by_id[str(l.get("id") or "")] = l
+    roots_by_lib: dict = {}
+
     for b in library.books():
         t = target_type_of(b)
         if not t:
             continue                          # 不认识的格式：不动它（宁可漏迁，不可乱迁）
         cur_id = str(b.get("library_id") or "")
-        dsts = libraries_of_type(t)
+        dsts = by_type.get(t, [])
         if any(str(l.get("id")) == cur_id for l in dsts):
             continue                          # 已在同类型库里 → 无需迁移
-        dst = _pick_dst(t, targets)
+        dst = _pick_from(dsts, t, targets)
         it = {
             "name": b["name"], "book_id": b["id"], "title": b.get("title") or "",
             "format": str(b.get("format") or "").upper(), "target_type": t,
             "target_label": TYPE_LABELS.get(t, t),
             "library_id": cur_id,
-            "library_name": str((library.get_library(cur_id) or {}).get("name") or ""),
+            "library_name": str((by_id.get(cur_id) or {}).get("name") or ""),
             "src": str(library.root_of(b) / b["name"]),
             "dst_library_id": "", "dst_library_name": "", "dst": "",
             "status": "", "reason": "", "suggest": "",
@@ -187,9 +209,13 @@ def preview(targets: dict = None) -> dict:
             it["status"] = "ambiguous"
             it["reason"] = "存在多个同类库，需要指定目标库"
         else:
-            _dst_roots = library.roots_of(dst)
-            root = _dst_roots[0] if _dst_roots else pathlib.Path(config.OUTPUT_DIR)
-            it["dst_library_id"] = str(dst.get("id") or "")
+            dst_id = str(dst.get("id") or "")
+            root = roots_by_lib.get(dst_id)
+            if root is None:                  # 目标库根按库缓存（同一目标库只解析一次）
+                _dst_roots = library.roots_of(dst)
+                root = _dst_roots[0] if _dst_roots else pathlib.Path(config.OUTPUT_DIR)
+                roots_by_lib[dst_id] = root
+            it["dst_library_id"] = dst_id
             it["dst_library_name"] = str(dst.get("name") or "")
             it["dst"] = str(root / b["name"])
             if (root / b["name"]).exists():

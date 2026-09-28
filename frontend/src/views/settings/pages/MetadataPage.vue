@@ -391,7 +391,9 @@ function reordered(i: MetadataPlanItem): boolean {
 /** 「有缺口」= 该补的书：缺封面 / 缺语言 / 缺出版社 / 缺简介（**不限格式** —— 抓取对非 EPUB 同样适用） */
 const missing = computed(() =>
   library.books.filter(
-    (b) => !b.has_cover || !b.language || !b.publisher || !b.description,
+    // ⚠️ 用 `has_description` 而不是 `description`：第 68 期起列表接口**不再下发简介正文**
+    //（它占列表体积 68%），只给「有没有」这一个布尔。
+    (b) => !b.has_cover || !b.language || !b.publisher || !b.has_description,
   ),
 )
 
