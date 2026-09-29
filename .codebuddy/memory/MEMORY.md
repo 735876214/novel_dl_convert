@@ -15,7 +15,7 @@
 
 ## 元数据与出版
 - **只落服务端 DB、绝不写回文件**（override/online/cover/locks/custom_values）；`core/publish.py` 是唯一仍写文件的模块。
-- **源不可变**：源只读；副本禁原地写（临时文件+`Path.replace`）；副本被删只标记待确认+日志、**绝不删源**；成品目录禁与库根/扫描源重叠（建库即拦）；硬链接副本内嵌元数据成独立 inode ⇒ 不宣称省空间。
+- **源不可变**：源只读；副本禁原地写（临时文件+`Path.replace`）；副本被删只标记待确认+日志、**绝不删源**（⚠️ **第 75 期例外**：只限**用户显式**动作 —— 「删书」回收 ①收书目录里的本地原件+②书库内文件+③出版副本，「移除书库」回收 ②③ 而**保留 ①**；① 记在持久表 `book_origins`，逐份独立、`missing` 非错误、仍**从不 unlink**）；成品目录禁与库根/扫描源重叠（建库即拦）；硬链接副本内嵌元数据成独立 inode ⇒ 不宣称省空间。
 - 源文件名无写入口：改名只剩「按命名规则重出版副本」；实体改名/合并=纯元数据写入。
 - 命名规则**唯一实现**=`fileops.fill_pattern`（先长后短）；`PATTERN_FIELDS` 唯一真值源、前端 `RENAME_TOKENS` 逐字一致（契约）；**禁第二处展开**。
 - 「预览==落盘」不变量：`publish.relpath_for`+`rel_verdict`（REUSE/REBUILD/DECLINE）；有未保存草稿时 UI 拒重出版；`apply_*` 目标服务端自算。
@@ -72,7 +72,7 @@
 - ⚠️ **视觉层 = 逐字照搬 BookOrbit 的 oklch token**（`frontend/src/assets/theme/*.css`；默认 `--tint-h: 80` 暖中性 + 65 档 accent + 4 档圆角）。**不是** hex 的 `#2563eb`/`#6366f1`（那是**已作废旧原型**）。组件**禁写死颜色/圆角/阴影**，规则见 `DESIGN.md`。
 - 演示数据禁 `Math.random()`；**路由 path 全局唯一**；`settingsNav`/router 注册表/侧栏**三处与组件同批改**（**删条目即删路由**与侧栏项）；**零外部请求零 CDN**。**设置页真实路由 = `#/settings/<page.path>`**，**不带分组段**。
 - ⚠️ **收尾四连**：`type-check` + `test:unit` + `build` + `deploy`。`vitest` 不校验模块导出完整性（曾误提交 0 B 文件）；`build` 只落 `frontend/dist`，**`deploy` 才同步到 `novelforge/static/v2`**（漏 deploy ⇒ 服务端仍发旧 bundle）；跑前 `$env:NODE_OPTIONS=''`。
-- ⚠️ **形态与语义**：设置页 `note` 是**纯文本插值**且**只有 `placeholder` 页会渲染**。**全站开关唯一实现 = `ui/Switch.vue`**（滑块用 `bg-card`，别写死白色）。**冒烟改偏好必须走 UI 点击**（`localstorage-set` 会被同步层拉回）。
+- ⚠️ **形态与语义**：设置页 `note` 是**纯文本插值**且**只有 `placeholder` 页会渲染**。**全站开关唯一实现 = `ui/Switch.vue`**（⚠️ 第 75 期起圆点**固定白色** `bg-white` + 半透明黑细边 `border-black/15`，不再是随主题的 `bg-card`；**轨道**仍走主题变量）。**冒烟改偏好必须走 UI 点击**（`localstorage-set` 会被同步层拉回）。
 - ⚠️ **目录/列表类数据拉取失败必须显式**：不许静默 `catch` 让块变空；尽量回落旧接口 + 原因上屏 + 「重试」；计数别出 `N/0`。
 - 阅读器翻页 `ComicReader`/`PdfReader` 的 `go()` 是**唯一汇聚点**⇒挂钩子必须放 `go()`。⚠️ **列表载荷不给「重字段」**：书目列表统一经 `server._card()`，不发长文本（加字段前先问「列表真的需要吗」）。
 - ✅ **改契约时先让类型变严格**（字段改可选 ⇒ `vue-tsc` 一次报出全部消费方，比人肉 grep 可靠）。
@@ -88,3 +88,4 @@
 - **71** 探索发现：闸门**唯一判定** `gate_reason()`（三端点 400 + 原因；**试搜不拦**；前端提前置灰+出口）；来源名**唯一读法** `source_of()`；搜索真并发+逐源状态；`search_page`（**不支持分页的第 2 页必须回空**）；合并保守（缺作者/卷次差异**不并**）；**不做一键重试**。
 - **72** TXT 乱码根因是**三处判据**：①**按字节切的样本不能当「不是 UTF-8」的证据**（判**前缀**用 `getincrementaldecoder(..., final=False)`，严格 `bytes.decode` 会把尾部截断当失败；中段补采必须**对齐字符边界**）；②置信判据 `detect.regex_confident` = 密度 **或** 条数 ≥3（长章书不再退化）+ 降级产物全空**回退正则边界** + `_split_by_indent` 认**全角空格**；③派生缓存**每个影响正文的口径都要进指纹**（新增 `pipeline.ENCODING_RULE_VERSION` → `txtcache` 的 `state.enc_rule`/`_SPLIT_CACHE`/Redis `extra`）。⚠️ **同一判据不许第二份拷贝**（`ai_detect` 那份已收敛）；「正文读不出」必须留活动日志，不许静默。
 - **73** 序号单元合并：`core/units.py` 判据（≥2 个**不同**序号、只认漫画/有声书库；**宁可少合并不可错合并**）；`SCAN_RULE_VERSION` 按库自愈；书名剥范围备注 `metadata.strip_count_note`（`（1-43话）`/`（全43话）`）；进度换算唯一真值源 `lib/unitsProgress.ts`（`BOUNDARY_EPS` 修浮点边界）+ **进度由上层独占**（子阅读器只上报，按 `index` 丢弃过期上报）。⚠️ 缺口：**watcher 入库路径不认单元树**；旧散书进度/评分/收藏不并。
+- **75** 删除语义：**删书**回收**三份**（① 收书目录里的本地原件 = `book_origins`（入库时登记）/ ② 书库内文件 / ③ 出版副本），**移除书库**回收 ②③ 而**保留 ①**；逐份独立（`missing` 非错误、`failed` 如实回报），仍只进回收站**从不 unlink**。⚠️ ① 只对「从收书目录入库」的书成立（就地库 / 存量书记 `missing`，**不猜路径**）。`Switch` 圆点**固定白色** `bg-white` + `border-black/15`（推翻第 70 期「滑块别写死白色」）。
