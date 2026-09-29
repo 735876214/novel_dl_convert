@@ -1,40 +1,87 @@
-# 发布：推送 v* tag 时自动创建 GitHub Release，notes 取 CHANGELOG.md 对应版本段。
-# 版本约定：第 N 期 = V0.N.0（见 VERSION 文件）。打 tag 即发布：
-#   git tag v0.78.0 && git push origin v0.78.0
+# 发布自动化（第 79 期起「版本号一变就自动发 Release」）：
+#   · 推送到 main：读仓库根 `VERSION`（约定：第 N 期 = V0.N.0）；若 `v<版本>` tag 还不存在
+#     ⇒ **自动打 tag 并创建 Release**（绝大多数情况下人来推一次 main 就够，无需手动打 tag）；
+#     版本没变（tag 已存在）⇒ 什么都不做。
+#   · 推送 `v*` tag（人工手动发布 / 补发）⇒ 为那个 tag 创建 Release（已存在则跳过）。
+# notes 一律取 `CHANGELOG.md` 对应版本段，且**只经一个实现**：
+#   `python3 -m novelforge.core.changelog <版本>`（应用内「新功能」页读的也是这份数据 ⇒ 两处永远同源）。
+#   ⚠️ 别在 workflow 里再写一份正则切片（第 79 期把原先那份内联拷贝收敛掉了）。
+# ⚠️ **打 tag 与建 Release 必须在同一个 job 里完成**：用 `GITHUB_TOKEN` 推的 tag
+#    **不会**再触发其它 workflow（GitHub 的既有行为），拆成两个 workflow 互相触发是行不通的。
 name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: ["main"]
+    tags: ["v*"]
+  workflow_dispatch:      # 允许手动重跑一次发布
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0            # 需要看到仓库里已有的 tag
+
+      - name: 决定要发布的 tag
+        id: t
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "create=false" >> "$GITHUB_OUTPUT"
+          else
+            ver="$(tr -d '[:space:]' < VERSION)"
+            echo "tag=v${ver}" >> "$GITHUB_OUTPUT"
+            if git rev-parse -q --verify "refs/tags/v${ver}" >/dev/null; then
+              echo "create=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "create=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: 已存在该 tag ⇒ 跳过（版本号没变）
+        if: steps.t.outputs.create == 'false' && github.ref_type != 'tag'
+        run: echo "${{ steps.t.outputs.tag }} 已存在，无需发布"
+
+      - name: 打 tag 并推送
+        if: steps.t.outputs.create == 'true'
+        env:
+          TAG: ${{ steps.t.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag "$TAG"
+          git push origin "$TAG"
 
       - name: 抽取 CHANGELOG 对应版本段
-        id: notes
+        if: steps.t.outputs.create == 'true' || github.ref_type == 'tag'
+        env:
+          TAG: ${{ steps.t.outputs.tag }}
         run: |
-          python3 - <<'PY'
-          import re, pathlib, sys
-          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
-          tag = "${{ github.ref_name }}".lstrip("vV")
-          pat = re.compile(r"^## (V[\d.]+)\b", re.M)
-          m = next((mm for mm in pat.finditer(text) if mm.group(1).lstrip("Vv") == tag), None)
-          if not m:
-              sys.exit(f"CHANGELOG.md 未找到对应版本段：{tag}")
-          start = m.end()
-          nxt = pat.search(text, start)
-          end = nxt.start() if nxt else len(text)
-          pathlib.Path("NOTES.md").write_text(text[start:end].strip() + "\n", encoding="utf-8")
-          PY
+          set -euo pipefail
+          # `-X utf8` 是刻意的：CHANGELOG 全是中文，不让 notes 的编码取决于运行环境的 locale
+          python3 -X utf8 -m novelforge.core.changelog "${TAG#v}" > NOTES.md
+          echo "--- NOTES.md ---"
+          cat NOTES.md
 
-      - name: 创建 Release
+      - name: 创建 Release（已存在则跳过）
+        if: steps.t.outputs.create == 'true' || github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" -F NOTES.md -t "${{ github.ref_name }}"
+          TAG: ${{ steps.t.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG 的 Release 已存在，跳过"
+          else
+            gh release create "$TAG" -F NOTES.md -t "$TAG"
+          fi
