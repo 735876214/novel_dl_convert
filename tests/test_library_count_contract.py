@@ -165,9 +165,10 @@ def test_删库护栏靠的就是这个计数(client, auth_headers, make_book, m
         f"库里有书却允许直接删（{r.status_code}）—— 数据保护失效了：{r.text}"
     )
 
-    # force=1 才放行，且**只移除登记**：文件必须还在原地
+    # force=1 才放行；它会把**项目内**的文件（书库根里的成品）移入回收站（第 75 期）——
+    # 「文件一律留在原地」是旧口径，现在是「只保留收书目录里的本地原件（①）」
     r = client.delete("/api/libraries/lib-full", headers=auth_headers, params={"force": 1})
     assert r.status_code == 200, r.text
-    assert r.json()["books_left_on_disk"] == 1
-    assert (lib_root / "唯一一本.epub").exists(), "「只移除登记，绝不删文件」被破坏了"
+    assert r.json()["books"] == 1
+    assert not (lib_root / "唯一一本.epub").exists(), "force 移除应当把书库内的文件移入回收站"
     assert "lib-full" not in _counts(client, auth_headers)

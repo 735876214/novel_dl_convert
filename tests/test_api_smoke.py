@@ -5,7 +5,8 @@
 1. **鉴权**：`/api/*` 无令牌必须 401；`/health` 与登录端点放行；
 2. **库根白名单**：库根只允许落在「来源目录 / 导出目录 / 数据目录」之内 ——
    库根就是 `safe_path` 的边界，放任任意路径等于放任改名 / 回收作用到系统目录；
-3. **破坏性操作的护栏**：默认库不可删、非空库需显式 `force`、删除**只移除登记不删文件**。
+3. **破坏性操作的护栏**：非空库需显式 `force`；`force` 移除会把**项目内的文件**移入回收站
+   （第 75 期；收书目录里的本地原件保留）。默认那条 400 就是「不许没想清楚就连文件一起删」。
 
 ⚠️ 本文件**刻意不碰会外呼的接口**（`…/metadata/online`、作者抓取）：测试必须离线可跑。
    元数据编辑 / 恢复链路之所以离线安全，是因为测试环境用的是空配置目录，
@@ -20,7 +21,7 @@ import pytest
 from fastapi import HTTPException
 
 from novelforge import config, server
-from novelforge.core import db, epub_builder, library
+from novelforge.core import db, epub_builder, fileops, library
 
 
 def _build_real_epub(root, name: str, title: str = "三体", author: str = "刘慈欣") -> pathlib.Path:
@@ -200,7 +201,7 @@ def test_没有任何库是不可删除的(client, auth_headers, test_lib_id, ma
     """第 37 期：以前那条「默认书库不可删除」的护栏随默认库概念一起下线。
 
     现在**每一**条库都能删 —— 但「库里还有书」的拦截仍在（那才是真正的数据保护，
-    见 test_非空库需force才移除登记且不删文件）。
+    见 test_非空库需force才移除_且force会回收项目内文件）。
     """
     empty = make_library("comic2", "空漫画库", "comic", pathlib.Path(config.LIBRARY_SOURCE_DIR) / "c2")
     for lid in (test_lib_id, empty["id"]):
@@ -208,7 +209,12 @@ def test_没有任何库是不可删除的(client, auth_headers, test_lib_id, ma
         assert r.status_code == 200, f"{lid} 应当可以移除登记：{r.text}"
 
 
-def test_非空库需force才移除登记且不删文件(client, auth_headers):
+def test_非空库需force才移除_且force会回收项目内文件(client, auth_headers):
+    """第 75 期：`force` 不再只是「移除登记」—— 它把该库书的**项目内文件**
+    （书库根里的成品 + 出版副本）移入回收站；① 收书目录里的本地原件**保留**。
+
+    默认（不带 force）仍 400：那是「没想清楚就连文件一起删」的最后一道闸。
+    """
     root = pathlib.Path(config.LIBRARY_SOURCE_DIR) / "ebooks"
     root.mkdir(parents=True, exist_ok=True)
     (root / "三体.epub").write_bytes(b"EPUB")
@@ -217,12 +223,27 @@ def test_非空库需force才移除登记且不删文件(client, auth_headers):
     denied = client.delete(f"/api/libraries/{lib['id']}", headers=auth_headers)
     assert denied.status_code == 400
     assert "还有 1 本书" in denied.json()["detail"]
+    assert (root / "三体.epub").is_file(), "被拒时一个文件都不该动"
+
+    # 先把这本书的 ①（收书目录里的本地原件）登记上，用来验证「移除书库**不动**本地原件」
+    bid = next(b["id"] for b in client.get("/api/books", headers=auth_headers).json()["items"]
+               if b["name"] == "三体.epub")
+    origin = pathlib.Path(config.DATA_DIR) / "收书目录" / "三体.epub"
+    origin.parent.mkdir(parents=True, exist_ok=True)
+    origin.write_bytes(b"ORIGINAL")
+    db.origin_set(bid, str(origin))
 
     ok = client.delete(f"/api/libraries/{lib['id']}?force=true", headers=auth_headers)
-    assert ok.status_code == 200
-    assert ok.json()["books_left_on_disk"] == 1
-    # 关键：**只移除登记，文件必须还在**
-    assert (root / "三体.epub").is_file()
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["books"] == 1
+    assert body["recycled"] == 1, f"书库根里那份应当被回收：{body}"
+    # 关键：**不是「文件留在原地」** —— 它必须已经进了回收目录（不真删）
+    assert not (root / "三体.epub").exists(), "书库根里的文件必须已经移走"
+    assert list(fileops.recycle_dir().glob("*三体.epub")), "回收目录里应当有它"
+    # ① **保留**：移除书库只删项目内的两份，不动用户本地那份（第 75 期用户口径）
+    assert origin.is_file(), "收书目录里的本地原件不该被「移除书库」删掉"
+    assert db.origin_get(bid) == str(origin), "① 的记录也要留着（库再建回来还认得它）"
     ids = {i["id"] for i in client.get("/api/libraries", headers=auth_headers).json()["items"]}
     assert lib["id"] not in ids
 

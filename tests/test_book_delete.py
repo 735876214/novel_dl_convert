@@ -11,17 +11,22 @@
    目录 —— 只按文件删 = 点了没反应，而且不报错。用例专门盯目录型条目。
 
 另外钉住一条**决策**（不是实现细节）：删书**不清**关联数据（进度 / 批注 / 评分 / 状态）。
-依据是既有的更重那条路径 —— `DELETE /api/libraries/{lid}` 也只移除登记、不清数据
+依据是既有的更重那条路径 —— `DELETE /api/libraries/{lid}` 也不清数据
 （见 `api_delete_library` 的 docstring 与 `_orphan_refs`）；而 `book_id` 由「库 id + 文件名」
 派生，**文件从回收目录放回原路径数据就接回来了**，清掉反而让删书变成不可逆操作。
 后人若「顺手」补一个 purge，第 5 条用例会红。
+
+第 75 期起删书回收的是**同一本书的三份**拷贝（用户口径「把本地和项目里的都删掉」）：
+① 收书目录里的本地原件（入库时登记在 `book_origins`）、② 书库根里的成品、③ 出版副本。
+本文件既有的「只动 ②」用例照旧成立 —— 三条路径里只有 ② 存在时，另两份如实记
+`missing`（**不是失败**）；文末新增的用例专盯 ①③ 与「缺一份也照旧成功」。
 
 末尾三条是**已发现的真 bug 的回归**：`/download/{name}` 原来写死 `OUTPUT_DIR` 拼路径、
 且只匹配单段，多库 + Komga 布局下详情页的下载按钮必 404（`fileops.output_dir` 的
 docstring 专门禁止那样拼）。修法是加可选 `library_id` + 放宽到 `{name:path}`，
 安全性仍一手交给 `fileops.safe_path`（第三条盯的就是「放宽匹配**不等于**放宽校验」）。
 """
-from novelforge.core import activity_log, db, fileops, publish
+from novelforge.core import activity_log, db, fileops, library, publish
 
 # 与 `conftest.TEST_USER` 同值。这里不 import conftest：本文件自建账号无关的断言，
 # 只为确认「日志里记了操作者」而不必把夹具的常量搬进来（先例见 test_local_paths.py）。
@@ -217,7 +222,70 @@ def test_文件已不在磁盘_删除仍然成功(client, auth_headers, make_boo
     r = _delete(client, auth_headers, bid)
     assert r.status_code == 200, f"文件已经不在了，删除不该失败：{r.text}"
     assert r.json()["recycled"] is None, "没有东西可回收时必须是 None，不能编一个名字"
+    assert r.json()["targets"]["library"]["state"] == "missing", "没东西可回收要如实记 missing"
     assert bid not in _ids(client, auth_headers), "台账里的这一行仍要清掉"
+
+
+# ---------------------------------------------------------------------------
+# 判据 ③（第 75 期）：一次删的是**三份**文件，且缺哪份都不算失败
+# ---------------------------------------------------------------------------
+
+def test_删书回收三份_书库内与本地原件与出版副本(client, auth_headers, make_book, default_root,
+                                          test_lib_id, tmp_path):
+    """一次删书要回收**同一本书的三份**拷贝（用户口径「本地和项目里的都删掉」）。
+
+    ① 收书目录里的原件 = 入库时登记在 `book_origins` 的那份；
+    ② 书库根里的成品 = 卡片对应的文件；
+    ③ 出版副本 = 台账 `link_rel` 指向成品目录里的那份。
+    三份**逐份独立**回收，字节数都要对得上（搬的是原文件，不是重建出来的空壳）。
+    """
+    src = make_book(default_root, "三体.epub", b"EPUB" * 100)              # ②
+    bid = _card(client, auth_headers, "三体.epub")["id"]
+
+    origin = tmp_path / "收书目录" / "三体.epub"                           # ①
+    origin.parent.mkdir(parents=True, exist_ok=True)
+    origin.write_bytes(b"ORIGINAL")
+    db.origin_set(bid, str(origin))
+
+    pub = tmp_path / "成品"                                                # ③
+    pub.mkdir(parents=True, exist_ok=True)
+    (pub / "三体.epub").write_bytes(b"COPY")
+    db.update_library(test_lib_id, publish_path=str(pub))
+    library.invalidate()                       # 库字段改了，读点要立刻看见
+    db.scrape_set(bid, status="ok", source_rel="三体.epub", link_rel="三体.epub")
+
+    r = _delete(client, auth_headers, bid)
+    assert r.status_code == 200, r.text
+    t = r.json()["targets"]
+
+    assert [t[k]["state"] for k in ("library", "source", "copy")] == ["recycled"] * 3, t
+    assert not src.exists(), "② 书库根里的那份必须移走"
+    assert not origin.exists(), "① 收书目录里的原件必须移走"
+    assert not (pub / "三体.epub").exists(), "③ 出版副本必须移走"
+    for key, size in (("library", None), ("source", len(b"ORIGINAL")), ("copy", len(b"COPY"))):
+        dst = fileops.recycle_dir() / t[key]["recycled"]
+        assert dst.is_file(), f"{key} 没进回收目录：{dst}"
+        if size is not None:
+            assert dst.stat().st_size == size, f"{key} 回收的不是原文件（字节数变了）"
+    # ① 的记录用完即弃：留着的话下次删书会照着一份已经不存在的路径去回收
+    assert db.origin_get(bid) == "", "① 回收成功后它的登记就该忘掉"
+
+
+def test_删书缺副本缺原件也照旧成功(client, auth_headers, make_book, default_root):
+    """库没配成品目录 / 没登记过 ① ⇒ 那两份如实记 `missing`，删书**照旧成功**。
+
+    防的是「为了删 ③ 把整条删书路径弄成会失败」：`missing` 不是错误 ——
+    直接放进书库文件夹的书本来就没有独立的 ①（源即成品）。
+    """
+    make_book(default_root, "三体.epub")
+    bid = _card(client, auth_headers, "三体.epub")["id"]
+
+    r = _delete(client, auth_headers, bid)
+    assert r.status_code == 200, r.text
+    t = r.json()["targets"]
+    assert t["library"]["state"] == "recycled"
+    assert t["source"]["state"] == "missing"
+    assert t["copy"]["state"] == "missing"
 
 
 def test_删不存在的书_404(client, auth_headers, default_root):
