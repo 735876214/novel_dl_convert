@@ -56,4 +56,4 @@
 - 浏览器冒烟：`playwright-cli open --browser=msedge <url>`；隔离目录 + `admin/changeme`；⚠️ 注入 `nf_token` 不稳，走登录表单。
 
 ## 逐期铁律索引（**全文见 `MEMORY-REF.md`「逐期铁律原文」**）
-近期关键期锚点：**75** 删除语义（删书回收三份/移除书库回收②③保留①；Switch 圆点固定白色）；**76** EPUB 插图资源 URL 形状只在 `library._rewrite_assets`/`_rewrite_css_urls` 拼、令牌响应期注入、书内样式走独立端点且**绝不进正文容器**；**77** 移除「按格式归库」整条链（migrate 的 preview/plan/门禁、端点 `/api/library-migrations/*`、`libraries.auto_migrate`、前端 MigrationGateDialog+卡片台账）—— 它与「移除书库」错误耦合；跨库移动 `/api/book-move/*` 与 `execute`/`rollback`/`library_migrations` **全部保留**。更早各期（53–74）细节见 REF。
+近期关键期锚点：**75** 删除语义（删书回收三份/移除书库回收②③保留①；Switch 圆点固定白色）；**76** EPUB 插图资源 URL 形状只在 `library._rewrite_assets`/`_rewrite_css_urls` 拼、令牌响应期注入、书内样式走独立端点且**绝不进正文容器**；**77** 移除「按格式归库」整条链（migrate 的 preview/plan/门禁、端点 `/api/library-migrations/*`、`libraries.auto_migrate`、前端 MigrationGateDialog+卡片台账）—— 它与「移除书库」错误耦合；跨库移动 `/api/book-move/*` 与 `execute`/`rollback`/`library_migrations` **全部保留**；**78** 版本号唯一真值源 = 仓库根 `VERSION`（第 N 期 = V0.N.0）经 `GET /health` 下发，`CHANGELOG.md` 每版一段驱动「新功能」页；**79** 序号单元**第四形态**「前缀 + 尾部编号」（编号必须**紧贴**标题文字，否则 `vol.1` 会被误认成「第 1 话」）+ `is_unit_dir` 加「同前缀」闸（≥2 种前缀即不合并）+ `SCAN_RULE_VERSION` 2。更早各期（53–74）细节见 REF。
