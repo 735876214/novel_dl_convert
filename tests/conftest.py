@@ -14,13 +14,14 @@
 约定（改测试前先读这三条）：
 - 碰书库或数据库的用例**必须**声明 `isolated`（否则断言会互相污染、且产生顺序依赖）；
 - 打接口的用例用 `client` + `auth_headers`（`/api/*` 无令牌一律 401）；
-- 造数据用 `make_book` / `make_audio_dir` / `make_library`，别自己在测试里拼路径。
+- 造数据用 `make_book` / `make_audio_dir` / `make_epub` / `make_library`，别自己在测试里拼路径。
 """
 import os
 import pathlib
 import shutil
 import sys
 import tempfile
+import zipfile
 from typing import Iterator
 
 import pytest
@@ -459,6 +460,68 @@ def make_book():
 @pytest.fixture
 def make_audio_dir():
     return _make_audio_dir
+
+
+#: 第 76 期：自建「带插图 + 样式表」的最小 EPUB 用的 OPF / container。
+#: 结构刻意贴真实 EPUB —— `OEBPS/{Text,Styles,Images}`，章节里的引用写成 `../Images/pic.png`。
+_EPUB_OPF = """<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>插图测试</dc:title>
+    <dc:identifier id="uid">test-assets</dc:identifier>
+    <dc:language>zh</dc:language>
+  </metadata>
+  <manifest>
+    <item id="c1" href="Text/chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="s1" href="Styles/style.css" media-type="text/css"/>
+    <item id="img" href="Images/pic.png" media-type="image/png"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>
+"""
+
+_EPUB_CONTAINER = """<?xml version="1.0" encoding="utf-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>
+"""
+
+_EPUB_DEFAULT_CHAPTER = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>一</title></head>'
+    '<body><p>正文</p><img src="../Images/pic.png" alt="图"/></body></html>'
+)
+
+
+def _build_epub_with_assets(root, name: str = "插图书.epub", *,
+                            chapter: str = "", css: str = "", extra_css: str = ""):
+    """造一本**带插图与样式表**的最小 EPUB，返回文件路径。
+
+    `epub_builder.build_epub` 只产纯文本章节（既没有插图、也没有样式表），而第 76 期
+    的主题恰恰是这两样 —— 所以自己拼 zip。`extra_css` 会落在 `Styles/sub/` 子目录里，
+    用来验证「`@import` 的相对路径以**被导入文件自己**为基准解析」。
+    """
+    p = pathlib.Path(root) / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(p, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml", _EPUB_CONTAINER)
+        z.writestr("OEBPS/content.opf", _EPUB_OPF)
+        z.writestr("OEBPS/Text/chapter1.xhtml", chapter or _EPUB_DEFAULT_CHAPTER)
+        if css:
+            z.writestr("OEBPS/Styles/style.css", css)
+        if extra_css:
+            z.writestr("OEBPS/Styles/sub/extra.css", extra_css)
+        z.writestr("OEBPS/Images/pic.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+    return p
+
+
+@pytest.fixture
+def make_epub():
+    """→ `_build_epub_with_assets(root, name, chapter=…, css=…, extra_css=…)`（第 76 期）。"""
+    return _build_epub_with_assets
 
 
 @pytest.fixture

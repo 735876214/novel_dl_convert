@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 import { api, type Annotation, type BookDetail, type Bookmark, type BookVolume, type SessionExtra } from '@/lib/api'
-import { READER_PREFS_KEY } from '@/lib/readerPrefs'
+import { READER_PREFS_DEFAULT, READER_PREFS_KEY } from '@/lib/readerPrefs'
 import { useLibraryStore } from '@/stores/library'
 import ReaderView from '@/views/ReaderView.vue'
 
@@ -28,6 +28,8 @@ vi.mock('@/lib/api', () => ({
     saveProgress: vi.fn(),
     // 第 61 期：进度写入（`setProgress`）与就地回写 store 的用例需要它
     setProgress: vi.fn(),
+    // 第 76 期：书内样式（书内排版开关与注入位置的用例需要它）
+    epubCss: vi.fn(),
   },
   apiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
@@ -42,7 +44,24 @@ const m = {
   fonts: vi.mocked(api.fonts),
   addBookmark: vi.mocked(api.addBookmark),
   setProgress: vi.mocked(api.setProgress),
+  epubCss: vi.mocked(api.epubCss),
 }
+
+/**
+ * happy-dom 没有可用的 `CSSStyleSheet`，而阅读器用它探测 `@scope` 支持（第 76 期）。
+ *
+ * ⚠️ 必须放在**顶层** `beforeEach`：探测结果缓存在**模块级**变量里，谁先跑谁定调 ——
+ * 只在某一个 describe 里装桩的话，更早的 describe 已经把它定成 false 了。
+ * 这里要验的是「注入到哪、有没有让位标记」，不是浏览器的解析器，所以给个替身即可。
+ */
+beforeEach(() => {
+  vi.stubGlobal('CSSStyleSheet', class {
+    cssRules: unknown[] = []
+    replaceSync(text: string): void {
+      this.cssRules = text.includes('@scope') ? [{}] : []
+    }
+  })
+})
 
 /** 两章的一卷 EPUB —— `total.value` 非空，`startSession()` 才会被调用。 */
 function makeChapters(): BookVolume[] {
@@ -93,7 +112,84 @@ function stubApi(book: BookDetail): void {
   m.recordSession.mockResolvedValue({ ok: true, session_uid: 'stub-uid' })
   m.fonts.mockResolvedValue({ items: [], max_bytes: 0, max_count: 0 })
   m.setProgress.mockResolvedValue({ ok: true, updated_at: 1000 })
+  // 默认「这本书没有书内样式」⇒ 回落应用排版（既有用例的行为逐字不变）
+  m.epubCss.mockResolvedValue({ css: '', sheets: [], fixed_layout: false })
 }
+
+/**
+ * 第 76 期：插图与书内排版。两条硬约束在这里钉住 ——
+ *
+ * 1. 正文里的插图 URL 由**后端**改写成 asset 接口并**带上令牌**（`<img>` 是浏览器原生
+ *    请求，带不了 Authorization 头；缺令牌就是 401，插图一个都不显示）；
+ * 2. 书内 CSS 必须注入 `document.head`，**绝不进正文容器** —— 容器的
+ *    `textContent.length` 是进度与批注共用的那把尺子（后端 `core/epub_cfi` 同口径），
+ *    CSS 文本会把它顶长，让所有位置偏移**静默错位**。
+ */
+describe('ReaderView · 插图与书内排版（第 76 期）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    localStorage.clear()
+    stubApi(makeBook())
+  })
+
+  afterEach(() => {
+    document.getElementById('nf-book-css')?.remove()
+  })
+
+  it('正文里的插图照后端改写好的 URL 渲染（asset 接口 + 令牌）', async () => {
+    m.chapter.mockResolvedValue({
+      index: 0,
+      total: 1,
+      title: '第一章',
+      html: '<p>正文</p><img src="/api/books/book-a/asset?p=OEBPS%2FImages%2Fx.jpg&amp;token=tok">',
+    })
+    const { wrapper } = await mountReader()
+
+    const img = wrapper.find('.reader-content img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toContain('/api/books/book-a/asset?p=')
+    expect(img.attributes('src')).toContain('token=tok')
+    // ⚠️ 必须卸载：阅读器在 `document` 上挂了 `visibilitychange`（会话上报），
+    // 不卸载就会把监听留给后面的用例 —— 表现为别处的 `recordSession` 次数翻倍。
+    wrapper.unmount()
+  })
+
+  it('书内 CSS 注入 head（@scope 圈在正文容器上），绝不进被测量的正文容器', async () => {
+    m.epubCss.mockResolvedValue({
+      css: 'p { text-indent: 0 }', sheets: ['OEBPS/style.css'], fixed_layout: false,
+    })
+    const { wrapper } = await mountReader()
+    await flushPromises()
+
+    expect(m.epubCss).toHaveBeenCalledWith('book-a')
+    const el = document.getElementById('nf-book-css') as HTMLStyleElement | null
+    expect(el).not.toBeNull()
+    expect(el?.textContent).toContain('@scope (.reader-content)')
+    expect(el?.textContent).toContain('text-indent: 0')
+    // 正文容器里绝不能出现 CSS 文本（否则 textContent 被顶长 ⇒ 进度 / 批注偏移错位）
+    expect(wrapper.find('.reader-content').element.textContent).not.toContain('text-indent')
+    // 同时给正文挂上让位标记，应用那套重排规则才肯退下
+    expect(wrapper.find('.reader-content').classes()).toContain('nf-bookcss')
+
+    wrapper.unmount()
+    expect(document.getElementById('nf-book-css')).toBeNull()
+  })
+
+  it('关掉「使用书内排版」：不请求、不注入，正文也不挂让位标记', async () => {
+    localStorage.setItem(
+      READER_PREFS_KEY,
+      JSON.stringify({ ...READER_PREFS_DEFAULT, useBookLayout: false }),
+    )
+    m.epubCss.mockResolvedValue({ css: 'p { text-indent: 0 }', sheets: [], fixed_layout: false })
+    const { wrapper } = await mountReader()
+    await flushPromises()
+
+    expect(m.epubCss).not.toHaveBeenCalled()
+    expect(document.getElementById('nf-book-css')).toBeNull()
+    expect(wrapper.find('.reader-content').classes()).not.toContain('nf-bookcss')
+    wrapper.unmount()
+  })
+})
 
 /**
  * 挂载阅读器并等它把首屏那串取数走完。
