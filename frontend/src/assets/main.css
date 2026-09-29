@@ -4,7 +4,8 @@
  * 视觉层照搬 BookOrbit（github.com/bookorbit/bookorbit, AGPL-3.0）。
  * 与上游的差异只有两处，均已在此注明：
  *   1. 字体不用 @fontsource-variable/*，改用本地自托管的 fonts.css
- *      （10 个 woff2，零外部请求，NAS 内网可用）
+ *      （10 个 woff2，NAS 内网可用 —— **现状选择，非硬约束**：
+ *      项目默认不拉外部 CDN，但允许显式引入并说明理由，见 AGENTS.md 第 1 节）
  *   2. 未引入 tw-animate-css，动效由本文件的 keyframes 提供
  */
 

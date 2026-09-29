@@ -1,7 +1,7 @@
 /* ── Self-hosted variable fonts ──────────────────────────────
    来源：BookOrbit（github.com/bookorbit/bookorbit, AGPL-3.0）
    字体本体已下载到 ./fonts/（10 个 woff2，共约 293 KB），
-   与远端 /assets/ 下同名同字节，零外部请求。
+   与远端 /assets/ 下同名同字节，不依赖任何外部字体服务（默认取向，非硬约束）。
 
    两处 unicode-range 修正（抓取工具把范围吃成了通配符）：
      · Inter latin 分片：U+?? → U+0-FF

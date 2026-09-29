@@ -22,8 +22,11 @@ theme/bridge.css     ← @theme inline 桥接层（把变量映射成 Tailwind �
 theme/cover-effects.css  ← 书封视觉效果
 ```
 
-两处刻意的与上游差异（已在 main.css 注明）：① 字体不用 `@fontsource-variable/*`，改本地自托管（**零外部请求**，NAS 内网可用）；
+两处刻意的与上游差异（已在 main.css 注明）：① 字体不用 `@fontsource-variable/*`，改本地自托管（NAS 内网可用）；
 ② 未引 `tw-animate-css`，动效由 `main.css` 的 keyframes 提供。
+
+> ⚠️ 上面两条是**现状选择**，不是硬约束（第 80 期口径修订）：项目默认自托管 / 不拉外部 CDN，但允许显式引入外部依赖与出网
+> （见 `AGENTS.md` 第 1 节「外部依赖 / 出网」）。改字体加载方式前先读那一条。
 
 ## 2. 主题架构（改一处即换整套观感）
 

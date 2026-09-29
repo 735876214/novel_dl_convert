@@ -480,7 +480,7 @@ _HTML_TAG = re.compile(r"<[^>]+>")
 
 
 def _strip_html(text) -> str:
-    """剥掉 HTML 标签并还原实体（**不是**完整的 HTML 解析，够用且零依赖）。
+    """剥掉 HTML 标签并还原实体（**不是**完整的 HTML 解析，够用且不必引第三方解析器）。
 
     实体还原用标准库 :func:`html.unescape`：手写对照表会漏（实测 Amazon 书名里有
     ``Frank Herbert&#x27;s``，只列几个常见实体的话它会原样留在书名里）。

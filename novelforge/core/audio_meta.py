@@ -1,6 +1,6 @@
 """有声书标签解析（第 53 期）：从 m4b/mp3/m4a/opus/ogg/flac 提取演播者（narrators）。
 
-零依赖（纯标准库），覆盖主流有声书容器：
+纯标准库实现（不引第三方标签库），覆盖主流有声书容器：
 
 - M4B / M4A / MP4：iTunes ``ilst`` 原子，``©nrt``（narrator）为主，
   ``----`` 自由表（mean ``com.apple.iTunes`` + name ``narrator``）为辅；

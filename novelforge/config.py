@@ -320,14 +320,16 @@ DEFAULTS = {
         # 仍要遍历一遍目录树，在网络存储上就是几百次 syscall。
         "index_interval": 60,
     },
-    # 版本检查与一键更新（第 78 期）。
-    # ⚠️ 这是「零外部请求」取向的**第一处破例**：检查会外呼 GitHub 取最新版本号；
-    # 出网失败静默忽略，且 `check_enabled` 默认开但随时可关。更新的 `image` 固定，
-    # 不给「任意镜像」的口子（见 core/updater.py 的安全说明）。
+    # 版本检查与一键更新（第 78 期；第 80 期接通全部四个键，四个键**保存即生效**）。
+    # 出网口径：默认自托管、默认不出网，但允许**显式、可关、失败降级**地出网
+    # （第 80 期口径修订，见 AGENTS.md 第 1 节「外部依赖 / 出网」）。
+    # 检查会外呼 GitHub 取最新版本号，失败静默忽略；`check_enabled` 关掉即停后台线程
+    # 并清掉侧栏 / 「新功能」页提示。`image` 可自定义（加速镜像 / 私有仓库，写入口做形状
+    # 校验），留空 = 回落环境变量 `NOVELFORGE_UPDATE_IMAGE` 与内置默认值。
     "update": {
         "check_enabled": True,     # 启动 + 定时检查 GitHub 最新版本（设置里可关）
-        "interval_hours": 6,      # 定时检查间隔（小时）
-        "image": "ghcr.io/735876214/novel_dl_convert:latest",  # 更新拉取的固定镜像
+        "interval_hours": 6,      # 定时检查间隔（小时，保存即重启后台线程按新间隔跑）
+        "image": "ghcr.io/735876214/novel_dl_convert:latest",  # 更新拉取镜像（可改加速镜像 / 私有仓库）
         "auto_apply": False,      # 检查到新版是否自动应用（默认关：只提示，手动点更新）
     },
 }

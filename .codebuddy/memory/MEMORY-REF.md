@@ -107,6 +107,8 @@
 ## 逐期铁律原文（第 53–61 期；2026-09-28 由 `MEMORY.md` 下沉，内容未删减）
 
 > `MEMORY.md` 只留「每次都要遵守」的跨期铁律与一页索引；本节的逐期细节按需查阅（当期实施记录另见 `docs/roadmap-gaps-remaining.md`）。
+>
+> ⚠️ **口径修订（第 80 期，2026-09-29）**：下文多处把「零依赖 / 零外部请求」当作**取舍理由**（第 53 期音频标签「零依赖」、第 54 期 embedding「绝不引远程 API」等）。这些**理由仍然成立**（省事 / 隐私 / 内网可用），但**已不再是硬约束** —— 允许**显式、可关、失败降级**地引入外部依赖与出网，新增依赖须在 `requirements*.txt` / `frontend/package.json` 显式声明并说明理由（见 `AGENTS.md` 第 1 节）。下面的原文保留不改，视为历史记录。
 
 ### 演播者实体（第 53 期，2026-09-24）
 - `books.narrators`（列表列，与 `tags` 同构）+ `narrators` 实体表（`sort_name`/`sort_name_local` 两列分列，镜像 `authors`；**派生/回填只写 `sort_name`**）；扫描期 `core/audio_meta.py` **零依赖**解析音频标签落盘（m4b/mp3/m4a/opus/ogg/flac），解析失败降级空、绝不挡入库；接口 `/api/narrators*` 形态对齐 authors；命名 token `{narrators}` 与 `RENAME_TOKENS` 契约钉死；**刻意差异**：不新增浏览维度、无头像。
