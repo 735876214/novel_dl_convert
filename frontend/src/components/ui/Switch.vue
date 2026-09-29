@@ -10,10 +10,14 @@
  *   · 空格 / 回车切换由原生按钮保证，不必再自己补键盘处理；
  *   · 复选框要做成胶囊得 `appearance: none` 再手写全部视觉，焦点环与禁用态反而更难统一。
  *
- * 配色一律走主题变量（`--primary` / `--muted` / `--card`），**禁写死色值**：主题是深浅两套
- * token，写死色值必然在其中一套里糊掉。
- * ⚠️ 滑块用 `bg-card` 而不是硬编码白色：浅色主题下它本来就是白，深色主题下它是深色面 ——
- * 两种主题里都与 `--primary` 有对比。写死白色会在深色主题的浅色轨道上糊成一片。
+ * 配色（第 75 期口径）：
+ *   · **轨道**随主题走 —— 开 `--primary` / 关 `--muted`；这两色深浅两套 token 不同，
+ *     写死必然在其中一套里糊掉。
+ *   · ⚠️ **圆点（滑块）是刻意的例外：固定白色**（用户口径「圆点要与主题色不一致，默认白色」）。
+ *     白色圆点在深色轨道上对比极强，浅色轨道上偏弱 ⇒ 再补一圈**半透明黑细边**
+ *     `border-black/15` 勾出轮廓。此前用 `bg-card`，浅色主题下与 `--muted` 只差 ~2% 明度，
+ *     同样要靠这道边才看得清 —— 换成白色后这道边更不能省。
+ *   · 除「圆点白色 + 半透明黑细边」外，本组件**不再有第二处写死色值**。
  * 焦点环由全局 `:focus-visible`（`assets/main.css`）统一提供，这里**不另写一套**。
  */
 const props = withDefaults(
@@ -45,7 +49,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
     @click="emit('update:modelValue', !props.modelValue)"
   >
     <span
-      class="pointer-events-none absolute top-[2px] left-0 h-[14px] w-[14px] rounded-full border border-border bg-card shadow-xs transition-transform duration-200"
+      class="pointer-events-none absolute top-[2px] left-0 h-[14px] w-[14px] rounded-full border border-black/15 bg-white shadow-xs transition-transform duration-200"
       :class="modelValue ? 'translate-x-[16px]' : 'translate-x-[2px]'"
     />
   </button>

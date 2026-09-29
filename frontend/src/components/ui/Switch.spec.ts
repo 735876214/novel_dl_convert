@@ -51,13 +51,19 @@ describe('Switch（共享开关胶囊）', () => {
     expect(on.emitted('update:modelValue')).toEqual([[false]])
   })
 
-  it('配色只用主题变量：不许出现写死的色值或 white/black', () => {
-    const html = mount(Switch, { props: { modelValue: true } }).html()
+  it('轨道只用主题变量；圆点是唯一的写死白色（刻意，配半透明细边）', () => {
+    const w = mount(Switch, { props: { modelValue: true } })
+    // 轨道随主题走（开 = 主题色），不写死
+    expect(cls(w.find('button'))).toContain('bg-primary')
+    // 不许出现写死的色值（十六进制 / rgb / oklch）——白色只用 Tailwind 关键字 `bg-white`
+    const html = w.html()
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
     expect(html).not.toMatch(/\brgb(a)?\(/)
     expect(html).not.toMatch(/\boklch\(/)
-    expect(html).not.toContain('bg-white')
-    expect(html).not.toContain('bg-black')
+    // 圆点刻意固定白色（用户口径：与主题色不一致），不再是随主题的 `bg-card`
+    const thumb = cls(w.find('span'))
+    expect(thumb).toContain('bg-white')
+    expect(thumb).not.toContain('bg-card')
   })
 
   it('尺寸与过渡是唯一口径（改动会立刻红，避免又长出一个「大胶囊」）', () => {
@@ -73,9 +79,10 @@ describe('Switch（共享开关胶囊）', () => {
     expect(thumb).toContain('w-[14px]')
     expect(thumb).toContain('rounded-full')
     expect(thumb).toContain('transition-transform')
-    // 细边框：关态下轨道与滑块只差 ~2% 明度，没有这道边圆点几乎看不出来
-    //（实测浅色 `--muted` 0.955 vs `--card` 0.975、深色 0.245 vs 0.18）
-    expect(thumb).toContain('border-border')
+    // 细边框：白色圆点在浅色轨道上对比偏弱，没有这道边轮廓几乎看不出来
+    // ⇒ 刻意用**半透明黑**（不随主题变）勾边，深浅两套主题里都成立
+    expect(thumb).toContain('border-black/15')
+    expect(thumb).toContain('bg-white')
   })
 
   it('disabled：带原生 disabled 与禁用光标/降透明；禁用态样式只有这一处定义', () => {
