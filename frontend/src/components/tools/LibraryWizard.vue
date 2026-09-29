@@ -1,34 +1,33 @@
 <script setup lang="ts">
 /**
- * 新建书库向导（第 40 期）—— 按上游 BookOrbit「Create a library」的**信息结构**重排。
+ * 新建书库向导（第 40/55 期）—— 三页签结构，与编辑弹窗（LibrariesView 的
+ * 编辑弹窗）**完全对齐**：内容 / 自动化 / 上次扫描。
  *
- * ## 为什么另起一个组件，而不是把弹窗改成多步
+ * ## 为什么是三页签而不是五步
  *
- * 上游那份向导就叫 *Create a library*，它解决的是**建库那一刻该回答哪些问题**；
- * 而编辑一个已有库要回答的问题不一样（「上次扫描健康吗」只在编辑态才有内容）。
- * 两者共用一套表单会互相将就，所以：**向导只管新建**，编辑沿用三页签弹窗。
+ * 编辑弹窗就是这三页签（对齐上游 BookOrbit 的 LIBRARY/CONTENTS/AUTOMATION/
+ * LAST SCAN）；新建若用另一套结构，用户得记两套心智模型。两者共用同一组
+ * 字段组织，只有「提交语义」不同（新建 POST / 编辑 PATCH）。
  *
- * ## 五步
- *
- * ① 基本信息（名称 / 类型 / 图标，必填）② 内容来源（从多个来源根选多个文件夹 / 归类关键词 /
- * 成品目录，必填）③ 扫描（允许的格式 / 排除图案）④ 阅读（阅读阈值）⑤ 自动化（监听 / 间隔 / 定时）。
- *
- * 上游的 Step 4 Metadata（源优先级 / 格式优先级）与 Step 7 File updates **整步不做**
- * —— 本项目不写回文件（只落服务端 DB），留一个点进去空白的步骤比少一步更糟。
+ * 三块回答的是三个不同时刻的问题：
+ *   内容：这库收什么、放哪（建库时就要定）；
+ *   自动化：什么时候扫、要不要刮削出版（建完再调也行）；
+ *   上次扫描：只有编辑态才有内容 —— 新建时给一句说明，建完扫描后才有数据。
  *
  * ## 两条硬约束（写在这里免得后来人改坏）
  *
  * 1. **不留假交互**：向导状态只在前端内存里，最后一次 POST 建库；
- *    「立即创建」必须真的建库（有 spec 钉着）。中途不落库 ⇒ 不会留下「建一半的库」。
- * 2. **阅读阈值是每库覆写项，不是库表列** ⇒ 必须先有库才能写。
- *    所以第 ④ 步的值跟编辑弹窗的「刮削出版」一样，是**建完库之后再 PUT**。
- *    与全局一致时**不写覆盖**（保持继承）—— 这样以后改全局它跟着变。
+ *    「创建」必须真的建库（有 spec 钉着）。中途不落库 ⇒ 不会留下「建一半的库」。
+ * 2. **刮削出版开关是每库覆盖项**：与全局一致 ⇒ 不写覆盖（保持继承），
+ *    不同 ⇒ 建库后单独 PUT（同编辑弹窗的口径）。
+ *
+ * ⚠️ 阅读阈值是每库覆写项，但编辑弹窗也没有内联入口（走「设置 → 命名规则」），
+ *   所以这里同样**不提供**内联阅读阈值 —— 建完在列表里点「设置」即可，与编辑一致。
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import ExtChips from '@/components/tools/ExtChips.vue'
 import Button from '@/components/ui/Button.vue'
-import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import {
   api,
@@ -37,7 +36,6 @@ import {
 } from '@/lib/api'
 import { ICONS } from '@/lib/icons'
 import { isAbsolutePath, pathsOverlap } from '@/lib/paths'
-import { ensureThresholds, thresholdsFor } from '@/lib/readingThresholds'
 import { useUiStore } from '@/stores/ui'
 
 const props = defineProps<{
@@ -57,57 +55,46 @@ const emit = defineEmits<{
 const ui = useUiStore()
 
 // ---------------------------------------------------------------------------
-// 步骤骨架
+// 三页签（对齐编辑弹窗的 DLG_TABS：内容 / 自动化 / 上次扫描）
 // ---------------------------------------------------------------------------
-
-/**
- * 步骤条。`required` 的两步是上游标了必填的（Details / Folders）——
- * 其余步骤**全部可跳过**，一路「继续」到底也能建出库（用默认值）。
- */
-const STEPS = [
-  { id: 'details', label: '基本信息', required: true, hint: '叫什么、是哪一类' },
-  { id: 'folders', label: '内容来源', required: true, hint: '从哪儿收、放哪儿' },
-  { id: 'scanning', label: '扫描', required: false, hint: '收哪些格式、跳过什么' },
-  { id: 'reading', label: '阅读', required: false, hint: '进度到多少算读完' },
-  { id: 'automation', label: '自动化', required: false, hint: '什么时候自动扫' },
-] as const
-
-type StepId = (typeof STEPS)[number]['id']
-
-const stepIndex = ref(0)
-const step = computed<StepId>(() => STEPS[stepIndex.value].id)
-
-/** 前 i 步是否都填完了（步骤条上的勾） */
-const done = computed(() => (i: number) => {
-  if (i === 0) return Boolean(form.name.trim())
-  if (i === 1) return selectedDirs.value.length > 0
-  return i < stepIndex.value
-})
+type DlgTab = 'contents' | 'automation' | 'last_scan'
+const dlgTab = ref<DlgTab>('contents')
+const DLG_TABS: Array<{ value: DlgTab; label: string }> = [
+  { value: 'contents', label: '内容' },
+  { value: 'automation', label: '自动化' },
+  { value: 'last_scan', label: '上次扫描' },
+]
+const activeTabLabel = computed(() => DLG_TABS.find((t) => t.value === dlgTab.value)?.label ?? '')
 
 // ---------------------------------------------------------------------------
 // 表单
 // ---------------------------------------------------------------------------
-
 const form = reactive({
-  // ① 基本信息
+  // 内容
   name: '',
   type: 'ebook' as LibraryType,
   icon: '',
-  // ② 内容来源（第 41 期：多个文件夹的绝对路径，就地引用）
   rules: '',
   publish_path: '',
-  // ③ 扫描
   allowed_exts: [] as string[],
-  exclude: [] as string[],
-  // ④ 阅读（`reading_override` 为假 = 继承全局，不写覆盖）
-  reading_override: false,
-  started: 0,
-  finished: 99.5,
-  // ⑤ 自动化
+  /**
+   * 排除图案的**文本框原样**（换行分隔）。
+   *
+   * ⚠️ 这里刻意不存 `string[]`：glob 里可能有逗号（`*.{epub,mobi}` 这类
+   *   brace 扩展），拿逗号当分隔符会把模式切坏。换行不属于 glob 语法，安全。
+   *   提交时再拆成数组（见 `submit`）。
+   */
+  exclude_text: '',
+  // 自动化
   watch: true,
   scan_interval: 0,
   scan_cron: '',
+  /** 刮削出版开关（**每库覆盖项**，不是库实体列 → 建库后单独 PUT） */
+  scrape_enabled: true,
 })
+
+/** 全局刮削出版开关（用于判断该库是继承还是覆写） */
+const globalScrape = ref(true)
 
 /**
  * 已选内容来源文件夹（跨多个来源根多选）。每个条目前端持有「根名 / 相对子目录」用于
@@ -115,10 +102,8 @@ const form = reactive({
  */
 const selectedDirs = ref<{ path: string; rootName: string; relSubdir: string }[]>([])
 
-/** 用户在第三步**动过**格式勾选没有。没动过就发空数组 = 继承类型默认。 */
+/** 用户在「允许的格式」里动过勾选没有（同 `ExtChips` 语义：没动过 = 继承类型默认） */
 const fmtTouched = ref(false)
-/** 排除图案的输入框（加一条才进 `form.exclude`） */
-const excludeDraft = ref('')
 
 const typeExLabel = computed(() => props.types.find((t) => t.value === form.type)?.label ?? form.type)
 /** 当前类型的默认白名单（选完类型就带出来当勾选集） */
@@ -138,14 +123,9 @@ watch(() => form.type, () => {
 // ---------------------------------------------------------------------------
 // 「建议值」（成品目录）
 // ---------------------------------------------------------------------------
-
 /**
  * 用户**手改过**没有。改过的字段从此不再自动重算 —— 否则用户填了一半再回去换类型，
  * 前面填的会被悄悄冲掉。
- *
- * ⚠️ 别用「当前值等不等于默认值」来判断用户动没动过：那样一旦默认值自己变了
- * （换类型 / `sourceRoots` 后到），判断的基准就跟着变，结果既留不住用户输入、
- * 也跟不上下拉变化。**记一个显式的 touched 才是唯一稳的**。
  */
 const touched = reactive({ publish: false })
 
@@ -173,28 +153,9 @@ function defaultPublish(type: LibraryType): string {
   return `${parent}/output/${type}-sorted`
 }
 
-function addExclude(): void {
-  const v = excludeDraft.value.trim()
-  if (!v) return
-  if (!form.exclude.includes(v)) form.exclude.push(v)
-  excludeDraft.value = ''
-}
-
-function removeExclude(i: number): void {
-  form.exclude.splice(i, 1)
-}
-
 // ---------------------------------------------------------------------------
 // 服务器目录浏览（第 41 期）—— 多来源根下钻 + 跨根多选文件夹
 // ---------------------------------------------------------------------------
-
-/**
- * 内容来源浏览：调用 `GET /api/libraries/source-dirs` 按**来源根**下钻真实服务器目录。
- * 不传参返回所有来源根；传 `root`+`path` 返回该根下某目录的子项（仅目录可继续下钻）。
- * 选中「当前文件夹」即把它的绝对路径加进 `selectedDirs`，前端同时持有根名 / 相对子目录用于展示。
- *
- * ⚠️ 弹层只依赖接口已返回的数据，不引入异步状态机、不重建整页 DOM（局部显隐）。
- */
 const browse = reactive<{
   open: boolean
   loading: boolean
@@ -271,7 +232,6 @@ function removeDir(p: string): void {
 }
 
 // ---- 定时扫描预设（**只是 `scan_cron` 的选择器，不新增调度能力**）----
-
 const CRON_PRESETS = [
   { label: '从不', value: '' },
   { label: '每小时', value: '0 * * * *' },
@@ -286,7 +246,7 @@ const CRON_PRESETS = [
  *
  * ⚠️ 判据走 `@/lib/paths`，**不在这里写 `startsWith('/')`** —— 那是把后端的
  * `pathlib.Path.resolve()` 抄成了 POSIX 版，Windows 上 `C:\…` 会被判非法：
- * 红字常亮、向导卡在第 2 步（本机实测过）。编辑弹窗那边用的是同一份。
+ * 红字常亮、向导卡在内容页（本机实测过）。编辑弹窗那边用的是同一份。
  */
 const publishIssue = computed(() => {
   const raw = form.publish_path.trim()
@@ -302,71 +262,25 @@ const publishIssue = computed(() => {
   return ''
 })
 
-/** 当前步的**拦停原因**（空 = 放行）。校验失败停在当前步，不 alert。 */
-const blocked = computed(() => {
-  if (step.value === 'details') {
-    if (!form.name.trim()) return '请填写库名称'
-    return ''
-  }
-  if (step.value === 'folders') {
-    if (!selectedDirs.value.length) return '请至少选择一个内容来源文件夹'
-    if (publishIssue.value) return publishIssue.value
-    return ''
-  }
-  if (step.value === 'reading') {
-    if (form.reading_override && form.started >= form.finished) {
-      return `「在读下界」必须小于「已读完阈值」（当前 ${form.started}% / ${form.finished}%）`
-    }
-    return ''
-  }
+/** 拦停原因（空 = 可创建）。必填只有两步：名称 + 至少一个内容来源文件夹。 */
+const blockReason = computed(() => {
+  if (!form.name.trim()) return '请填写库名称'
+  if (!selectedDirs.value.length) return '请至少选择一个内容来源文件夹'
+  if (publishIssue.value) return publishIssue.value
   return ''
 })
-
-// ---------------------------------------------------------------------------
-// 导航 / 提交
-// ---------------------------------------------------------------------------
-
-const maxStep = STEPS.length - 1
-
-function next(): void {
-  if (blocked.value) {
-    ui.toast(blocked.value)
-    return
-  }
-  if (stepIndex.value < maxStep) stepIndex.value += 1
-}
-
-function back(): void {
-  if (stepIndex.value > 0) stepIndex.value -= 1
-}
 
 const busy = ref(false)
 
 /**
- * 建库。`createNow` 为真 = 「立即创建」：**跳过后续步骤，用当前值直接建**
- * （上游 Any step 的 *Create now*）。
- *
- * 两步必填仍然要过 —— 「立即创建」是「不用再往后点了」，不是「可以不填名字」。
+ * 建库。三页签下没有「步骤」概念，「创建」始终可点（受 `blockReason` 禁用）；
+ * 校验失败不放行（与编辑弹窗一致：不 alert，红字在内容页 + 侧栏提示）。
  */
-async function submit(createNow = false): Promise<void> {
-  if (createNow && stepIndex.value < maxStep) {
-    // 只校验必填的两步，不看当前步之后的东西（用户还没看到它们）
-    if (!form.name.trim()) {
-      stepIndex.value = 0
-      ui.toast('请填写库名称')
-      return
-    }
-    if (!selectedDirs.value.length) {
-      stepIndex.value = 1
-      ui.toast('请至少选择一个内容来源文件夹')
-      return
-    }
-  }
-  if (blocked.value) {
-    ui.toast(blocked.value)
+async function submit(): Promise<void> {
+  if (blockReason.value) {
+    ui.toast(blockReason.value)
     return
   }
-
   busy.value = true
   try {
     const res = await api.createLibrary({
@@ -383,21 +297,19 @@ async function submit(createNow = false): Promise<void> {
       // ⚠️ 空数组 = **继承类型默认**（不是「一个格式都不收」）——
       //    后端把 `''` 哨兵读成「没设过」，见 core/library.py 的读时回落规则。
       allowed_exts: fmtTouched.value ? form.allowed_exts : [],
-      exclude: form.exclude,
+      // 排除图案：文本框 → 数组（换行分隔，去空）。
+      exclude: form.exclude_text
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean),
     })
     const lid = res.library.id
 
-    // 阅读阈值是**每库覆写项**，只能建库之后再写（同编辑弹窗的「刮削出版」）。
-    // 与全局一致 ⇒ 不写覆盖，保持继承。
-    if (form.reading_override) {
-      const g = thresholdsFor('')
-      const changed = form.started !== g.started || form.finished !== g.finished
-      if (changed) {
-        await api.librarySettingsUpdate(lid, {
-          'reading.started_threshold': form.started,
-          'reading.finished_threshold': form.finished,
-        })
-      }
+    // 刮削出版是**每库覆盖项**，只能建库之后再写：
+    // 与全局一致 → 不写覆盖，保持继承（以后全局改了它跟着变）；
+    // 与全局不同 → 写死覆盖（这正是「这个库单独关掉」的表达）。
+    if (form.scrape_enabled !== globalScrape.value) {
+      await api.librarySettingsUpdate(lid, { 'scrape.enabled': form.scrape_enabled })
     }
 
     ui.toast(`已创建书库「${form.name.trim()}」`)
@@ -412,7 +324,6 @@ async function submit(createNow = false): Promise<void> {
 // ---------------------------------------------------------------------------
 // 图标选择器
 // ---------------------------------------------------------------------------
-
 /** 图标表**唯一真相源**在前端（`lib/icons.ts`）—— 后端只存 key，不维护白名单。 */
 const ICON_NAMES = Object.keys(ICONS)
 const iconQuery = ref('')
@@ -422,17 +333,17 @@ const iconChoices = computed(() => {
   return q ? ICON_NAMES.filter((n) => n.toLowerCase().includes(q)) : ICON_NAMES
 })
 
-// ---------------------------------------------------------------------------
-
 onMounted(async () => {
-  // 成品目录默认值不在这里设 —— 那会在 `sourceRoots` 还没到位时算出一个丢掉前缀的路径。
-  // 交给上面那个盯 `props.sourceRoots` 的 watch（它带 `immediate`，且来源目录到位后会再跑一次）。
-  //
-  // 第 ④ 步要显示「继承全局」的实际值，所以先把全局阈值取回来
-  await ensureThresholds()
-  const g = thresholdsFor('')
-  form.started = g.started
-  form.finished = g.finished
+  // 取全局配置以决定刮削出版开关的默认值（与全局一致 ⇒ 不写覆盖）。
+  // 失败静默（只想知道开关状态，弹「配置加载失败」会误导用户以为功能坏了）。
+  try {
+    const r = await api.getConfig()
+    const c = r.config as unknown as { scrape?: { enabled?: boolean } }
+    globalScrape.value = c.scrape?.enabled !== false
+  } catch {
+    /* 静默：globalScrape 退化为 true（默认开），建库时不会写多余的覆盖 */
+  }
+  form.scrape_enabled = globalScrape.value
 })
 </script>
 
@@ -441,46 +352,66 @@ onMounted(async () => {
     <div
       class="flex h-[min(38rem,92vh)] w-[min(58rem,96vw)] overflow-hidden rounded-lg border border-border bg-card shadow-2xl"
     >
-      <!-- 左：步骤条 -->
+      <!-- 左：三页签 -->
       <aside class="w-52 shrink-0 border-r border-border bg-muted/40 p-4">
         <div class="mb-3 font-serif text-[15px] font-semibold text-foreground">新建书库</div>
         <ol class="space-y-1">
           <li
-            v-for="(s, i) in STEPS"
-            :key="s.id"
-            class="flex items-start gap-2 rounded-md px-2 py-1.5"
-            :class="i === stepIndex ? 'bg-card shadow-sm' : ''"
+            v-for="(t, i) in DLG_TABS"
+            :key="t.value"
+            class="rounded-md"
+            :class="dlgTab === t.value ? 'bg-card shadow-sm' : ''"
           >
-            <span
-              class="mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[10px]"
-              :class="
-                done(i) && i !== stepIndex
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border text-muted-foreground'
-              "
+            <button
+              type="button"
+              class="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left"
+              :data-test="`wizard-tab-${t.value}`"
+              @click="dlgTab = t.value"
             >
-              <Icon v-if="done(i) && i !== stepIndex" name="check" class="h-3 w-3" />
-              <template v-else>{{ i + 1 }}</template>
-            </span>
-            <span class="min-w-0">
               <span
-                class="block text-[12.5px]"
-                :class="i === stepIndex ? 'font-medium text-foreground' : 'text-muted-foreground'"
+                class="mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[10px]"
+                :class="
+                  dlgTab === t.value
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border text-muted-foreground'
+                "
               >
-                {{ s.label }}
-                <span v-if="s.required" class="text-destructive" title="必填">*</span>
+                {{ i + 1 }}
               </span>
-              <span class="block text-[11px] text-muted-foreground">{{ s.hint }}</span>
-            </span>
+              <span class="min-w-0">
+                <span
+                  class="block text-[12.5px]"
+                  :class="dlgTab === t.value ? 'font-medium text-foreground' : 'text-muted-foreground'"
+                >
+                  {{ t.label }}
+                  <span v-if="(t.value === 'contents')" class="text-destructive" title="必填">*</span>
+                </span>
+                <span class="block text-[11px] text-muted-foreground">
+                  {{
+                    t.value === 'contents'
+                      ? '收什么、放哪'
+                      : t.value === 'automation'
+                        ? '何时扫、刮不刮'
+                        : '健康与否'
+                  }}
+                </span>
+              </span>
+            </button>
           </li>
         </ol>
+        <div
+          v-if="blockReason"
+          class="mt-3 rounded-md border border-destructive/40 bg-destructive/5 px-2.5 py-2 text-[11px] leading-relaxed text-destructive"
+        >
+          {{ blockReason }}
+        </div>
       </aside>
 
       <!-- 右：内容 -->
       <section class="flex min-w-0 flex-1 flex-col">
         <div class="min-h-0 flex-1 overflow-y-auto p-5">
-          <!-- ① 基本信息 -->
-          <div v-if="step === 'details'" class="space-y-4">
+          <!-- ① 内容 -->
+          <div v-if="dlgTab === 'contents'" class="space-y-4">
             <div>
               <div class="mb-1 text-[11.5px] text-muted-foreground">库名称 *</div>
               <input
@@ -544,10 +475,7 @@ onMounted(async () => {
                 </button>
               </div>
             </div>
-          </div>
 
-          <!-- ② 内容来源 -->
-          <div v-else-if="step === 'folders'" class="space-y-4">
             <div>
               <div class="mb-1 text-[11.5px] text-muted-foreground">
                 内容来源（就地引用，不搬文件）—— 可从多个来源根选多个文件夹，一个库对应多个文件夹
@@ -659,20 +587,20 @@ onMounted(async () => {
                 v-model="form.publish_path"
                 data-test="wizard-publish"
                 :placeholder="defaultPublish(form.type)"
-                class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+                class="w-full rounded-md border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+                :class="publishIssue ? 'border-destructive' : 'border-border'"
                 @input="touched.publish = true"
               />
               <div v-if="publishIssue" class="mt-1 text-[11px] text-destructive">{{ publishIssue }}</div>
-            </div>
-          </div>
-
-          <!-- ③ 扫描 -->
-          <div v-else-if="step === 'scanning'" class="space-y-4">
-            <div>
-              <div class="mb-1 text-[11.5px] text-muted-foreground">
-                允许的格式（{{ typeExLabel }} 库）—— 收不了的格式**直接拒收**，
-                不会落盘后从书目里消失
+              <div v-else class="mt-1 text-[11px] text-muted-foreground">
+                刮削出的元数据写进这里的<strong>硬链接副本</strong>（原书文件永远不改），外部阅读器
+                （Komga 等）挂载此目录即可读到整理完成的书。<strong>不得</strong>与库根或扫描源目录重叠
+                —— 副本会被扫回来变成重复书。
               </div>
+            </div>
+
+            <div>
+              <div class="mb-1 text-[11.5px] text-muted-foreground">允许的格式</div>
               <ExtChips
                 v-model="form.allowed_exts"
                 v-model:touched="fmtTouched"
@@ -683,127 +611,91 @@ onMounted(async () => {
 
             <div>
               <div class="mb-1 text-[11.5px] text-muted-foreground">
-                排除图案（glob；含 / 时按库内相对路径匹，否则只匹文件名；大小写敏感）
+                排除图案（每行一条 glob；含 / 时匹库内相对路径，否则只匹文件名；大小写敏感）
               </div>
-              <div class="flex gap-1">
-                <input
-                  v-model="excludeDraft"
-                  data-test="wizard-exclude-input"
-                  class="min-w-0 flex-1 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
-                  placeholder="如：*.draft.epub 或 备份/*"
-                  @keydown.enter.prevent="addExclude"
-                />
-                <Button size="sm" data-test="wizard-exclude-add" @click="addExclude">添加</Button>
-              </div>
-              <ul v-if="form.exclude.length" class="mt-2 space-y-1">
-                <li
-                  v-for="(p, i) in form.exclude"
-                  :key="p"
-                  class="flex items-center gap-2 rounded-md border border-border px-2 py-1 text-[11.5px]"
-                >
-                  <code class="min-w-0 flex-1 truncate">{{ p }}</code>
-                  <button
-                    type="button"
-                    class="text-muted-foreground hover:text-destructive"
-                    :data-test="`wizard-exclude-del-${i}`"
-                    @click="removeExclude(i)"
-                  >
-                    删除
-                  </button>
-                </li>
-              </ul>
+              <textarea
+                v-model="form.exclude_text"
+                data-test="wizard-exclude"
+                rows="3"
+                :placeholder="'如：\n*.draft.epub\n备份/*'"
+                class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+              />
               <div class="mt-1 text-[11px] text-muted-foreground">
-                排除只影响**扫描**：被排除的文件不进书目，文件本身一个字节都不动。
+                排除只影响<strong>扫描</strong>：被排除的文件不进书目，文件本身一个字节都不动。
               </div>
             </div>
           </div>
 
-          <!-- ④ 阅读 -->
-          <div v-else-if="step === 'reading'" class="space-y-4">
+          <!-- ② 自动化 -->
+          <div v-else-if="dlgTab === 'automation'" class="space-y-4">
+            <label class="flex items-center gap-2 text-[12.5px] text-foreground">
+              <input v-model="form.watch" type="checkbox" data-test="wizard-watch" />
+              监听该库的来源子目录（关掉后只能手动「扫描」）
+            </label>
+
+            <div class="flex flex-wrap gap-3">
+              <div class="min-w-[9rem] flex-1">
+                <div class="mb-1 text-[11.5px] text-muted-foreground">扫描间隔（秒，0 = 跟随全局）</div>
+                <input
+                  v-model.number="form.scan_interval"
+                  type="number"
+                  min="0"
+                  class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+                />
+              </div>
+              <div class="min-w-[9rem] flex-1">
+                <div class="mb-1 text-[11.5px] text-muted-foreground">定时扫描（cron，可留空）</div>
+                <input
+                  v-model="form.scan_cron"
+                  placeholder="如 0 3 * * *"
+                  class="w-full rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+                />
+              </div>
+            </div>
+            <div class="text-[11px] text-muted-foreground">
+              cron 写错了不会让监听整个坏掉 —— 会退化成按间隔扫描（错误只记在扫描备注里）。
+            </div>
+
+            <div class="flex flex-wrap gap-1">
+              <Button
+                v-for="p in CRON_PRESETS"
+                :key="p.value"
+                size="sm"
+                :variant="form.scan_cron === p.value ? 'primary' : 'ghost'"
+                :data-test="`wizard-cron-${p.label}`"
+                @click="form.scan_cron = p.value"
+              >
+                {{ p.label }}
+              </Button>
+            </div>
+            <input
+              v-model="form.scan_cron"
+              class="mt-2 w-56 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
+              placeholder="自定义 cron（5 段）"
+            />
+
+            <label class="flex items-start gap-2 text-[12.5px] text-foreground">
+              <input v-model="form.scrape_enabled" type="checkbox" class="mt-0.5" data-test="wizard-scrape" />
+              <span>
+                刮削出版（扫描入库后自动抓元数据并写进成品目录的硬链接副本）
+                <span class="mt-0.5 block text-[11px] text-muted-foreground">
+                  默认跟随全局（当前全局：{{ globalScrape ? '开' : '关' }}）；
+                  与全局不同时才会为该库单独记一条覆盖。没配成品目录的库不会刮削。
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <!-- ③ 上次扫描：新建态没有内容，给一句说明 -->
+          <div v-else class="space-y-3">
+            <div class="rounded-md border border-border bg-muted px-3 py-2 text-[12px] text-foreground">
+              这是新建书库，还没有扫描记录。
+            </div>
             <div class="text-[11.5px] leading-relaxed text-muted-foreground">
-              这两项决定「在读 / 已读完」的判定，统计、书架、成就、Komga 客户端同源。
-              默认与全局一致（{{ thresholdsFor('').started }}% / {{ thresholdsFor('').finished }}%）。
-            </div>
-
-            <label class="flex items-center gap-2 text-[12.5px] text-foreground">
-              <input type="checkbox" v-model="form.reading_override" data-test="wizard-reading-override" />
-              本库单独设定（不勾就跟着全局走，以后改全局它跟着变）
-            </label>
-
-            <div :class="form.reading_override ? '' : 'pointer-events-none opacity-50'">
-              <div class="mb-1 text-[11.5px] text-muted-foreground">
-                在读下界：进度高于 {{ form.started }}% 算「在读」
-              </div>
-              <input
-                v-model.number="form.started"
-                data-test="wizard-started"
-                type="range"
-                min="0"
-                max="100"
-                step="0.05"
-                class="w-full"
-              />
-              <div class="mb-3 mt-1 text-[11.5px] text-muted-foreground">
-                已读完阈值：进度达到 {{ form.finished }}% 算「已读完」
-              </div>
-              <input
-                v-model.number="form.finished"
-                data-test="wizard-finished"
-                type="range"
-                min="0"
-                max="100"
-                step="0.05"
-                class="w-full"
-              />
+              建库并点「扫描」后，这里会显示上次扫描时间、备注与书目数量；开了自动刮削的库，
+              扫描后新书会自动进刮削队列（进度看「工具 → 转换日志 → 刮削」）。
             </div>
           </div>
-
-          <!-- ⑤ 自动化 -->
-          <div v-else class="space-y-4">
-            <label class="flex items-center gap-2 text-[12.5px] text-foreground">
-              <input type="checkbox" v-model="form.watch" data-test="wizard-watch" />
-              监听该库的来源目录（有新文件就自动归库）
-            </label>
-
-            <div>
-              <div class="mb-1 text-[11.5px] text-muted-foreground">
-                轮询间隔秒（0 = 继承全局）
-              </div>
-              <input
-                v-model.number="form.scan_interval"
-                type="number"
-                min="0"
-                class="w-40 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
-              />
-            </div>
-
-            <div>
-              <div class="mb-1 text-[11.5px] text-muted-foreground">
-                自动扫描计划（只是定时表达式的选择器，不新增调度能力）
-              </div>
-              <div class="flex flex-wrap gap-1">
-                <Button
-                  v-for="p in CRON_PRESETS"
-                  :key="p.value"
-                  size="sm"
-                  :variant="form.scan_cron === p.value ? 'primary' : 'ghost'"
-                  :data-test="`wizard-cron-${p.label}`"
-                  @click="form.scan_cron = p.value"
-                >
-                  {{ p.label }}
-                </Button>
-              </div>
-              <input
-                v-model="form.scan_cron"
-                class="mt-2 w-56 rounded-md border border-border bg-transparent px-2.5 py-1.5 text-[12.5px] text-foreground outline-none focus:border-primary"
-                placeholder="自定义 cron（5 段）"
-              />
-            </div>
-          </div>
-
-          <Card v-if="blocked" padding="sm" class="mt-4">
-            <span class="text-[11.5px] text-destructive">{{ blocked }}</span>
-          </Card>
         </div>
 
         <!-- 底部固定栏 -->
@@ -811,38 +703,13 @@ onMounted(async () => {
           <Button size="sm" variant="ghost" data-test="wizard-cancel" :disabled="busy" @click="emit('close')">
             取消
           </Button>
-          <Button size="sm" variant="ghost" data-test="wizard-back" :disabled="stepIndex === 0 || busy" @click="back">
-            上一步
-          </Button>
-          <span class="mx-auto text-[11.5px] text-muted-foreground">
-            第 {{ stepIndex + 1 }} 步，共 {{ STEPS.length }} 步
-          </span>
+          <span class="mx-auto text-[11.5px] text-muted-foreground">{{ activeTabLabel }}</span>
           <Button
-            size="sm"
-            variant="secondary"
-            data-test="wizard-create-now"
-            :disabled="busy"
-            @click="submit(true)"
-          >
-            立即创建
-          </Button>
-          <Button
-            v-if="stepIndex < maxStep"
-            size="sm"
-            variant="primary"
-            data-test="wizard-next"
-            :disabled="busy"
-            @click="next"
-          >
-            继续
-          </Button>
-          <Button
-            v-else
             size="sm"
             variant="primary"
             data-test="wizard-create"
-            :disabled="busy"
-            @click="submit(false)"
+            :disabled="busy || !!blockReason"
+            @click="submit"
           >
             创建
           </Button>
