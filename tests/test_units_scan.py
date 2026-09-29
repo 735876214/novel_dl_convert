@@ -161,6 +161,80 @@ def test_同一个目录里几本独立漫画仍是一本一个(isolated, tmp_pa
 
 
 # ---------------------------------------------------------------------------
+# ①b 前缀 + 尾部编号（第 79 期）：一级子文件夹内的「标题+编号」散文件合成一本
+# ---------------------------------------------------------------------------
+
+def test_同前缀子文件夹是一本合集(isolated, tmp_path, make_library):  # noqa: ARG001
+    """`超人前传/超人前传0904.pdf` + `超人前传1408.pdf` ⇒ **一本**合集（第 79 期）。
+
+    这是用户报的那件事：一部作品被拆成一堆「标题+编号」的散文件，书架上是 N 本各自
+    独立的书（书名就是文件名）。落点是 `units._TAIL_NUM_RE`（尾部编号形态，编号去前导零）
+    与 `is_unit_dir` 的「同前缀」闸。
+
+    ⚠️ **改造前必红**：那时 `超人前传0904` 解析不出序号 ⇒ `is_unit_dir` 为假 ⇒
+    退回「一个文件一本书」，书架上是 2 本。
+    """
+    root = tmp_path / "comic"
+    lib = make_library("c80", "漫画库", "comic", root)
+    _tree(root, "超人前传", ["超人前传0904.pdf", "超人前传1408.pdf"])
+
+    books = library.books(lib["id"])
+    assert [b["name"] for b in books] == ["超人前传"], "文件夹本身就是那本合集"
+    b = books[0]
+    assert b["format"] == "UNITS" and b["tracks"] == 2
+    assert b["title"] == "超人前传"
+    assert [it["name"] for it in library.book_detail("超人前传", lib["id"])["units"]] == [
+        "超人前传0904.pdf", "超人前传1408.pdf"], "话序按**序号**（904 < 1408），不是按名字"
+
+
+def test_混前缀不合并(isolated, tmp_path, make_library):  # noqa: ARG001
+    """护栏：同一个文件夹里两种前缀 ⇒ 各自一本（宁可少合并，不可错合并）。
+
+    `超人前传0904.pdf` 与 `另一部作品0905.pdf` 都解析得出序号，但那是**两部作品** ——
+    只看「≥2 个不同序号」会把它们粘成一本，而错合并之后用户只能靠改目录名自救
+    （本项目承诺源不可变）。
+    """
+    root = tmp_path / "comic"
+    lib = make_library("c81", "漫画库", "comic", root)
+    _tree(root, "两部作品", ["超人前传0904.pdf", "另一部作品0905.pdf"])
+    assert sorted(b["name"] for b in library.books(lib["id"])) == [
+        "两部作品/另一部作品0905.pdf", "两部作品/超人前传0904.pdf"]
+
+
+def test_平铺库根的散文件不合并(isolated, tmp_path, make_library):  # noqa: ARG001
+    """护栏：**平铺在库根**的同类散文件仍是各自一本（用户确认的口径）。
+
+    合并判据只对**目录**生效（`_iter_book_entries` 的目录分支），库根的文件是
+    「文件条目」、永远不走 `is_unit_dir` ⇒ 「库根不合并」天然成立，**没有**任何
+    「库根例外」分支。使用方式因此是「把同类文件放进一个子文件夹」。
+    """
+    root = tmp_path / "comic"
+    lib = make_library("c82", "漫画库", "comic", root)
+    for n in ("超人前传0904.pdf", "超人前传1408.pdf"):
+        (root / n).write_bytes(b"%PDF-1.4 fake")
+    books = library.books(lib["id"])
+    assert sorted(b["name"] for b in books) == ["超人前传0904.pdf", "超人前传1408.pdf"]
+    assert all(b["format"] == "PDF" for b in books)
+
+
+def test_同前缀音频文件夹仍是平铺音频形态(isolated, tmp_path, make_library):  # noqa: ARG001
+    """护栏：有声书库里「同前缀音频」**本来就是一本多轨的书**，本期行为逐字不变。
+
+    `shape_of` 的顺序是**先平铺音频、后序号单元** ⇒ 直接含音频文件的目录取 `"audio"`
+    形态（N 轨 + 播放器，改造前就有的行为）。新增的尾部编号形态对它没有影响：
+    卡片上显示的仍应是「N 轨」而不是「N 话」。
+    """
+    root = tmp_path / "audio"
+    lib = make_library("a80", "有声书库", "audiobook", root)
+    d = _tree(root, "超人前传", ["超人前传0904.mp3", "超人前传1408.mp3"])
+    assert units.shape_of(d) == "audio"
+    b = library.books(lib["id"])[0]
+    assert (b["format"], b["tracks"]) == ("AUDIO", 2)
+    assert [it["name"] for it in library.book_detail("超人前传", lib["id"])["audio_tracks"]] == [
+        "超人前传0904.mp3", "超人前传1408.mp3"], "仍是自然序（904 < 1408）"
+
+
+# ---------------------------------------------------------------------------
 # ② 增量闸门：树深处的变化也必须被看见
 # ---------------------------------------------------------------------------
 
@@ -193,10 +267,14 @@ def test_增量刷新看得见树深处新增的一话(isolated, tmp_path, make_
 def test_口径版本不一致时全量重探一次(isolated, tmp_path, make_library):  # noqa: ARG001
     """落盘口径版本对不上 ⇒ 下一次刷新按 ``force`` 跑一次，之后就回落增量。
 
-    这是**存量索引唯一的自愈通道**：条目边界或卡片字段口径一变（本期：一棵树由
-    43 本合成 1 本），`(size, mtime)` 完全没有变化 ⇒ 不重探就永远显示旧结果，
-    而且不报错、不重建。第 72 期正是同一个坑（改了分章判据，存量书照旧）。
+    这是**存量索引唯一的自愈通道**：条目边界或卡片字段口径一变（第 73 期：一棵树由
+    43 本合成 1 本；第 79 期：一级子文件夹里的「前缀 + 尾部编号」散文件也并为合集），
+    `(size, mtime)` 完全没有变化 ⇒ 不重探就永远显示旧结果，而且不报错、不重建。
+    第 72 期正是同一个坑（改了分章判据，存量书照旧）。
     """
+    # ⚠️ 条目边界口径变了就必须 +1，否则存量书架永远自愈不了。再改「条目边界 / 卡片字段
+    # 口径」时，这一行要同步成下一个数 —— 它是「有没有忘记 +1」的探针。
+    assert library.SCAN_RULE_VERSION == 2, "第 79 期改了条目边界 ⇒ 版本应为 2"
     root = tmp_path / "comic"
     lib = make_library("c4", "漫画库", "comic", root)
     _tree(root, BOOK_DIR, BOOK_FILES)
