@@ -320,6 +320,16 @@ DEFAULTS = {
         # 仍要遍历一遍目录树，在网络存储上就是几百次 syscall。
         "index_interval": 60,
     },
+    # 版本检查与一键更新（第 78 期）。
+    # ⚠️ 这是「零外部请求」取向的**第一处破例**：检查会外呼 GitHub 取最新版本号；
+    # 出网失败静默忽略，且 `check_enabled` 默认开但随时可关。更新的 `image` 固定，
+    # 不给「任意镜像」的口子（见 core/updater.py 的安全说明）。
+    "update": {
+        "check_enabled": True,     # 启动 + 定时检查 GitHub 最新版本（设置里可关）
+        "interval_hours": 6,      # 定时检查间隔（小时）
+        "image": "ghcr.io/735876214/novel_dl_convert:latest",  # 更新拉取的固定镜像
+        "auto_apply": False,      # 检查到新版是否自动应用（默认关：只提示，手动点更新）
+    },
 }
 
 

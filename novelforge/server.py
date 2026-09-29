@@ -26,7 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
-from .core import pipeline, activity_log, library, fileops, publish, scrape
+from .core import pipeline, activity_log, library, fileops, publish, scrape, updater, changelog
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, achievements, activity, recommend,
                    fonts, comics, audio, opds, komga, koreader, integrations, sync,
@@ -114,15 +114,42 @@ async def lifespan(app: FastAPI):
             logging.getLogger("novelforge").info("刮削 worker 已启动（续跑上次未完成的待办）")
     except Exception as e:  # noqa: BLE001 —— 旁路功能，绝不阻断启动
         logging.getLogger("novelforge").exception("刮削 worker 启动失败：%s", e)
+    # 第 78 期：版本检查后台线程（daemon）。首个周期后才首检，避免启动期 / 测试期真连
+    # GitHub；出网失败静默忽略；check_enabled 关掉则完全不检查（零外部请求取向的破例）。
+    try:
+        ucfg = (cfg.get("update") or {})
+        if ucfg.get("check_enabled", True):
+            updater.start_background(int(ucfg.get("interval_hours") or 6))
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("novelforge").exception("版本检查线程启动失败：%s", e)
     yield
     if WATCHER is not None:
         WATCHER.stop()
     scrape.stop()
+    updater.stop_background()
 
 
-# 应用版本（**唯一真值源**：FastAPI 与 /health 同读它；前端 About / 更新日志从后端取，
-# 不再手写版本号）。第 30 期收敛为单一常量，结束「后端 0.5.0 / 前端 v0.6」两套真值源。
-APP_VERSION = "0.6.0"
+# 应用版本（**唯一真值源**）：第 30 期收敛为单一常量；第 78 期起改从仓库根 / 镜像内的
+# `VERSION` 文件读取（第 N 期 = V0.N.0），`tests/test_version_contract.py` 钉着这条契约。
+# 读不到文件时回落到内置常量并记日志，不阻断启动。
+def _read_version() -> str:
+    import pathlib
+    candidates = [
+        pathlib.Path("/app/VERSION"),                       # 容器内（Dockerfile COPY 到 /app）
+        pathlib.Path(__file__).resolve().parents[1] / "VERSION",  # 开发态：novelforge/server.py → 仓库根
+    ]
+    for p in candidates:
+        try:
+            v = p.read_text(encoding="utf-8").strip()
+        except Exception:
+            v = ""
+        if v:
+            return v
+    logging.getLogger("novelforge").warning("读不到 VERSION 文件，回落内置版本 0.78.0")
+    return "0.78.0"
+
+
+APP_VERSION = _read_version()
 
 app = FastAPI(title="NovelForge", version=APP_VERSION, lifespan=lifespan)
 
@@ -307,8 +334,37 @@ def health():
         "watcher": bool(WATCHER and WATCHER.is_running()),
         # 应用版本（**只读**、免鉴权端点，不含任何敏感信息）；前端 About / 更新日志据此渲染
         "version": APP_VERSION,
+        # 是否挂了 docker.sock（决定「一键更新」可用与否）；侧栏据此决定是否挂 new 提示
+        "updater_available": updater.updater_available(),
         "logs": str(activity_log.log_dir()),
     }
+
+
+# ---------------- 版本检查与更新（第 78 期）----------------
+# 检查会外呼 GitHub（唯一出网点，可关）；更新在挂载 docker.sock 时才真执行。
+
+@app.get("/api/changelog")
+def api_changelog():
+    """应用内「新功能」页面的数据源：解析仓库 CHANGELOG.md（离线可读）。"""
+    return {"current": APP_VERSION, "entries": changelog.load()}
+
+
+@app.get("/api/update/status")
+def api_update_status():
+    """"当前版本 / 远端最新 / 是否有更新 / 一键更新是否可用" 的快照。"""
+    return updater.status()
+
+
+@app.post("/api/update/check")
+def api_update_check():
+    """手动触发一次远端检查（绕过定时缓存）。"""
+    return updater.check(force=True)
+
+
+@app.post("/api/update/apply")
+def api_update_apply():
+    """一键更新：挂了 docker.sock 时拉取最新镜像并重建自身容器。"""
+    return updater.apply_update()
 
 
 # ---------------- 书源管理 ----------------
@@ -5245,6 +5301,8 @@ EDITABLE: dict = {
     # Komga 兼容服务端：开关 + Basic 用户名 + 可选 API Key
     # `expose` = 全局默认「书库是否对客户端暴露」（每库可在书库管理里覆写）
     "komga": {"enabled", "username", "api_key", "expose"},
+    # 版本检查与一键更新（第 78 期）。后端只认这几把钥匙；`image` 固定（不给任意镜像口子）。
+    "update": {"check_enabled", "interval_hours", "image", "auto_apply"},
     # 多书库：**第 77 期起不再有可编辑键**。原先这里只有 `auto_migrate`（启动时是否
     # 静默执行按格式归库），随自动归库一并移除 ⇒ 整条 `libraries` 从白名单里删掉。
     # 存量 config.yaml 里若还写着 `libraries.auto_migrate`，只是**留在盘上没人读**
@@ -5389,6 +5447,8 @@ def api_get_config():
             # 多书库（第 77 期起无可编辑键）：库实体本身存 SQLite，走 /api/libraries。
             # 这里曾回显 `auto_migrate`，随自动归库一并移除 —— 别再往这个空对象里加键。
             "libraries": {},
+            # 版本检查与一键更新（第 78 期）：四个键都在 EDITABLE 白名单里，可保存。
+            "update": cfg.get("update") or {},
             # 阅读状态口径的全局默认值（第 40 期）。每库生效值另走
             # `GET /api/reading-thresholds?library_id=`（含覆写合并），不在这里算。
             "reading": cfg.get("reading") or {},
