@@ -44,6 +44,17 @@ UNIT_EXTS = tuple(comics.COMIC_EXTS) + (".pdf",) + tuple(audio.AUDIO_EXTS)
 #: （日期）会被当成「第 2024 话 / 第 20240101 话」。
 _MAX_UNIT = 999
 
+#: **尾部编号**形态的独立上界（第 79 期）。`超人前传1408.pdf` 这类编号常是 4 位，
+#: 所以它与 `_MAX_UNIT` 分开取值。
+#: ⚠️ **不得抬高 `_MAX_UNIT`** 来「顺便」覆盖它：那个上界属于**纯数字**形态，
+#: 抬了就会把 `2024.pdf`（年份）认成「第 2024 话」，是明确的回归。
+_MAX_TAIL_UNIT = 9999
+
+#: 尾部编号形态的**前缀最小长度**（第 79 期）。`A01` / `S1` 这类一字符前缀是噪声
+#: （扫描件的批次号、扫描仪占位），不是作品名 —— 拿它当「同前缀」的依据会把无关的
+#: 文件粘成一本，而错合并之后用户只能靠改目录名来救（本项目承诺源不可变）。
+_MIN_PREFIX = 2
+
 #: 下探深度上限（「若干级文件夹」的实测深度 + 余量）。环路（符号链接）也靠它兜住。
 _MAX_DEPTH = 4
 
@@ -73,6 +84,22 @@ _PREFIX_MARK_RE = re.compile(rf"^(?P<pre>\d{{1,4}})[\s\-_.、]+(?P<rest>第(?P<n
 
 #: 纯数字文件名（`01.pdf` / `007.cbz`）
 _BARE_NUM_RE = re.compile(r"^\d{1,4}$")
+
+#: 形如 `超人前传0904` / `作品名1408`：**非空前缀 + 尾部编号**（第 79 期）。数字紧邻
+#: 扩展名，去前导零（`0904` ⇒ 904），上界是 :data:`_MAX_TAIL_UNIT`。
+#:
+#: ⚠️ 前缀的**最后一个字符必须是「文字字符」**（字母/汉字，即 `[^\W\d_]`：
+#: `\w` 去掉数字与下划线）。这条看似吹毛求疵，实际是两道独立的防线：
+#:
+#: 1. **纯数字文件名永不匹配本形态**。`_BARE_NUM_RE` 那一支在「超出 `_MAX_UNIT`」时
+#:    **不 return**、会继续往下走，所以若写成 `^(?P<pre>.+?)(?P<num>\d{1,4})$`，
+#:    `1408` 会被拆成 `pre="1" + num="408"` ⇒ 把年份/日期误判成「第 408 话」。
+#: 2. **编号必须紧贴标题文字**（中间不能是 `.` `-` `_` 空白等分隔符）。否则
+#:    `vol.1`（`pre="vol." + num="1"`）会被认成「第 1 话」—— 那是**现有契约表里
+#:    明确写着 `None` 的一条**（一本漫画的第 1 卷，不是一部连载的第 1 话）。
+#:    分隔符写法（`作品名-1408` / `作品名_1408` / `作品名 1408`）因此也不收：
+#:    宁可少合并（退回「一个文件一本书」，看得见、懂），不可错合并。
+_TAIL_NUM_RE = re.compile(r"^(?P<pre>.*[^\W\d_])(?P<num>\d{1,4})$")
 
 #: 排「解析不出序号」的那些话用的键：它们一律排在**最后**，不猜位置。
 #: 复用 `comics` 的实现（`audio` 里那份是**先前就存在**的同款实现，本期不新增第三份）。
@@ -111,21 +138,34 @@ def cn_to_int(s) -> "int | None":
     return total + cur
 
 
-def parse_unit(stem: str) -> "int | None":
-    """文件名（不含扩展名）→ 序号；**不是序号返回 ``None``**。
+def _split_unit(stem: str) -> "tuple[str, int] | None":
+    """文件名（不含扩展名）→ ``(前缀, 序号)``；**不是序号返回 ``None``**。
 
-    收三种形态，都要求标记在**开头**（前面只能有一个与其相等的纯数字前缀）：
+    **本模块唯一的解析实现**（第 79 期收敛）：:func:`parse_unit` 只取它的序号，
+    `is_unit_dir` 的「同前缀」闸取它的前缀。两处各写一套正则，迟早给出互相矛盾的
+    答案 —— 一处说这是一部连载、另一处却说不清它属于哪部作品。
 
-    | 形态 | 例子 | 说明 |
+    收**四种**形态，都要求标记在**开头**、或编号在**末尾**（紧邻扩展名）：
+
+    | 形态 | 例子 | 前缀 |
     |---|---|---|
-    | 单元标记 | `第12话` `第十二話` `第03卷` `第1话 番外` | 标记之后的内容不影响判定 |
-    | 前缀序号 + 标记 | `4 第4话` `04-第4話` | 前缀必须**等于**单元号 |
-    | 纯数字 | `01` `007` | `1 <= n <= _MAX_UNIT`，超界不算 |
+    | 单元标记 | `第12话` `第十二話` `第03卷` `第1话 番外` | 空串 |
+    | 前缀序号 + 标记 | `4 第4话` `04-第4話` | 空串（前缀必须**等于**单元号） |
+    | 纯数字 | `01` `007` | 空串 |
+    | 前缀 + 尾部编号（第 79 期） | `超人前传0904` `作品名1408` | 非空（`超人前传` / `作品名`） |
+
+    前缀的语义：**只有第四种形态才给得出非空前缀**。前三种自带编号体系（要么有单位词、
+    要么整名就是编号），再去猜「作品名前缀」只会把 `4 第4话` 的 `4` 当成作品名 ——
+    于是同一棵树里的 `4 第4话` 与 `第4话` 会被判成两种前缀、反而不再合并。
 
     **刻意不收**（这就是「看着不像连载的目录不合并」的全部实现）：
     `《甲》(第1卷).cbz`（标记不在开头 —— 一个文件夹里几本独立漫画正是这个形状）、
-    `作品名 第1话.pdf`（标题在前）、`第1-43话.pdf`（那是**范围**不是某一话）、
-    `4x 第4话.pdf`（前缀不是纯数字）、`2024.pdf`（裸数字超界）、`vol.1.cbz`（不是中文单位词）。
+    `作品名 第1话.pdf`（标题在前、编号不在末尾）、`第1-43话.pdf`（那是**范围**不是某一话）、
+    `4x 第4话.pdf`（前缀不是纯数字）、`2024.pdf`（纯数字超 `_MAX_UNIT`）、
+    `vol.1.cbz`（不是中文单位词，且编号没**紧贴**标题文字）、`A01`（前缀只有 1 个字符，
+    见 `_MIN_PREFIX`）、`超人前传12345.pdf`（尾部编号超过 4 位）、
+    `超人前传-0904.pdf` / `超人前传_0904.pdf` / `超人前传 0904.pdf`（编号与标题之间夹了
+    分隔符 —— 判据要求编号**紧贴**标题文字，见 `_TAIL_NUM_RE`；真出现这种命名请去掉分隔符）。
 
     ⚠️ `4 第4话` 要求前缀**等于**号码：不一致说明那个前缀是别的东西
     （页数 / 批次 / 另一个编号体系），不是同一个序号体系的两处写法。
@@ -138,19 +178,39 @@ def parse_unit(stem: str) -> "int | None":
         num = cn_to_int(m.group("num"))
         pre = cn_to_int(m.group("pre"))
         if num and pre == num and 1 <= num <= _MAX_UNIT:
-            return num
+            return ("", num)
         return None
     m = _MARK_RE.match(s)
     if m:
         num = cn_to_int(m.group("num"))
         if num and 1 <= num <= _MAX_UNIT:
-            return num
+            return ("", num)
         return None
     if _BARE_NUM_RE.match(s):
         num = int(s)
         if 1 <= num <= _MAX_UNIT:
-            return num
+            return ("", num)
+        # ⚠️ 这里**刻意不 return**（既有语义边界）：超界的纯数字落到底部的 `None`，
+        # 而不是在本分支里提前返回。它下一站是新形态，靠 `_TAIL_NUM_RE` 的
+        # 「前缀须含非数字字符」把它挡在门外（详见那里的注释）。
+    m = _TAIL_NUM_RE.match(s)
+    if m:
+        pre = m.group("pre")
+        num = int(m.group("num"))
+        if len(pre) >= _MIN_PREFIX and 1 <= num <= _MAX_TAIL_UNIT:
+            return (pre, num)
     return None
+
+
+def parse_unit(stem: str) -> "int | None":
+    """文件名（不含扩展名）→ 序号；**不是序号返回 ``None``**。
+
+    公开契约不变：内部委托 :func:`_split_unit`（唯一的解析实现），只取序号。
+    需要「前缀」的调用方（`is_unit_dir` 的同前缀闸）请直接用 `_split_unit`，
+    **不要**另写一份正则。
+    """
+    sp = _split_unit(stem)
+    return sp[1] if sp else None
 
 
 def is_unit_file(path) -> bool:
@@ -237,11 +297,22 @@ def _walk(dirp: pathlib.Path, rel: str, out: list, depth: int) -> bool:
 
 
 def _entries(d, exts=None) -> list:
-    """``[(Path, rel, 序号或 None)]`` —— 本模块一切判据的共同底座。"""
+    """``[(Path, rel, 前缀, 序号或 None)]`` —— 本模块一切判据的共同底座。
+
+    第 79 期由三元组扩为四元组：`is_unit_dir` 的「同前缀」闸需要**前缀**，而它必须与
+    序号来自**同一次**解析 —— 另起一次解析就是第二份判据（一处说这是一部连载、
+    另一处却说不清它属于哪部作品）。前缀的取值规则见 :func:`_split_unit`。
+
+    ⚠️ 元组是**按位置**索引的（`_sorted_entries` 的排序键），扩元数时那些索引必须同批改。
+    """
     files = media_files(d, exts)
     if not files:
         return []
-    return [(p, rel, parse_unit(p.stem)) for p, rel in files]
+    out = []
+    for p, rel in files:
+        sp = _split_unit(p.stem)
+        out.append((p, rel, sp[0], sp[1]) if sp else (p, rel, "", None))
+    return out
 
 
 def _numbers(entries) -> set:
@@ -251,7 +322,17 @@ def _numbers(entries) -> set:
     不是计数：`《甲》/第1话.cbz` + `《乙》/第1话.cbz` 两个文件都解析得出序号，
     但它们是两本书的第一话，不是一部连载。
     """
-    return {n for _, _, n in entries if n}
+    return {n for _, _, _, n in entries if n}
+
+
+def _prefixes(entries) -> set:
+    """清单里**解析得出的**那些文件的**前缀**集合（去重）。
+
+    既有三形态（`第12话` / `4 第4话` / 纯数字）一律回**空串** —— 它们自带编号体系，
+    没有「作品名前缀」这个概念；只有第 79 期的尾部编号形态（`超人前传1408`）才给得出
+    非空前缀。`is_unit_dir` 用它做「同前缀」闸，防的是把**不同作品**粘成一本。
+    """
+    return {pre for _, _, pre, n in entries if n}
 
 
 #: 会做序号单元合并的库类型（用户拍的板：漫画库 / 有声书库）。
@@ -275,7 +356,7 @@ def merges_for(ltype) -> bool:
 
 
 def is_unit_dir(d, exts=None) -> bool:
-    """这棵子树是不是「序号单元」：**≥2 个**可解析序号、且**序号不全相同**。
+    """这棵子树是不是「序号单元」：**全部同前缀** 且 **≥2 个不同序号**。
 
     「≥2」是判据的一部分，不是随手的阈值：单独一话说明不了这是个连载
     （`《书名》/第1话.pdf` 只有一本，退回今天的处理即可）。
@@ -283,6 +364,13 @@ def is_unit_dir(d, exts=None) -> bool:
     「不全相同」是同一件事的第二道闸，防的是**把容器当成书**：素材库常见的
     `作者/《甲》/第1话.cbz` + `作者/《乙》/第1话.cbz` 两个文件都解析得出序号，
     但那是两本书各自的第一话 —— 只看个数会把整个作者目录粘成一本。
+
+    「同前缀」（第 79 期）是第三道闸，防的是**把几部作品粘成一部**：尾部编号形态
+    （`超人前传0904.pdf`）只看名字分不出「同一部作品的第 904 话」与「另一部作品的
+    第 904 话」—— 所以要求树内能解析出序号的文件**前缀全部相同**，出现 ≥2 种就
+    不合并。既有三形态回的是空串（见 :func:`_prefixes`），于是
+    `第1话.pdf` + `第2话.pdf` 的前缀集合是 `{""}`（一种）⇒ 照旧合并，
+    而 `超人前传0904.pdf` + `另一部作品0905.pdf` 是两种 ⇒ 不合并。
 
     宁可少合并，不可错合并：少合并退回的是今天的行为（每个文件一本书，看得见、
     懂），错合并会把几本独立的书粘成一本（用户只能靠改名目录来救）。
@@ -292,7 +380,9 @@ def is_unit_dir(d, exts=None) -> bool:
     增量闸门会退回非递归口径、树深处新增的话看不见。
     """
     # `_entries` 对「空树」与「超限」都返回 `[]`（**同一个**结果：不合并 —— 见 docstring）。
-    return len(_numbers(_entries(d, exts))) >= 2
+    # 空清单时 `_prefixes` 是空集 ⇒ 长度 0 ≠ 1 ⇒ 天然不合并，不必额外判空。
+    entries = _entries(d, exts)
+    return len(_prefixes(entries)) == 1 and len(_numbers(entries)) >= 2
 
 
 def shape_of(d) -> str:
@@ -362,7 +452,7 @@ def units(d, exts=None) -> list:
       就等于文件名）；**不含绝对路径** —— 这个列表要直接下发给前端。
     """
     items = []
-    for p, rel, num in _entries(d, exts):
+    for p, rel, _pre, num in _entries(d, exts):
         try:
             size = p.stat().st_size
         except OSError:
@@ -377,15 +467,20 @@ def units(d, exts=None) -> list:
 
 def unit_path(d, index: int):
     """第 index 话的绝对路径；越界 / 不是单元树 → ``None``（与 ``audio.track_path`` 同款）。"""
-    files = [p for p, _, _ in _sorted_entries(d)]
+    files = [p for p, _rel, _pre, _num in _sorted_entries(d)]
     return files[index] if 0 <= index < len(files) else None
 
 
 def _sorted_entries(d, exts=None) -> list:
-    """``[(Path, rel, num)]``，排序口径与 :func:`units` **逐字一致** ——
-    两处若各排各的，「卡片说 4 话、点进去是第 3 话」这种错位就出来了。"""
+    """``[(Path, rel, 前缀, num)]``，排序口径与 :func:`units` **逐字一致** ——
+    两处若各排各的，「卡片说 4 话、点进去是第 3 话」这种错位就出来了。
+
+    ⚠️ 排序键**按位置索引**（`t[3]` = 序号）：`_entries` 的元数一变，这一行必须同批改。
+    错位成前缀（字符串）时会拿它跟 `_INF`（float）比元组 ⇒ 直接 TypeError ——
+    好在那是响亮失败，不是静默错序。
+    """
     items = _entries(d, exts)
-    items.sort(key=lambda t: (t[2] or _INF, _NATURAL_KEY(t[1])))
+    items.sort(key=lambda t: (t[3] or _INF, _NATURAL_KEY(t[1])))
     return items
 
 
@@ -427,7 +522,7 @@ def first_audio(d):
     演播者标签解析用（`audio_meta.extract` 要一个真实的音频文件）。平铺音频目录也能用
     —— 它的排序口径与 :func:`audio._audio_files` 对「全是音频」的目录是同一个结果。
     """
-    for p, _, _ in _sorted_entries(d):
+    for p, _rel, _pre, _num in _sorted_entries(d):
         if kind_of(p) == "audio":
             return p
     return None
