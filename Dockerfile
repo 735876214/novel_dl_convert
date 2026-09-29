@@ -17,7 +17,7 @@
 
 ARG PY_VERSION=3.12
 ARG NODE_VERSION=22
-ARG APP_VERSION=0.5.0
+ARG APP_VERSION=0.78.0
 
 # ============================ 阶段 1：依赖构建 ============================
 FROM python:${PY_VERSION}-slim AS builder
@@ -142,6 +142,9 @@ WORKDIR /app
 # 精确 COPY，避免把本地 venv/、_test/、input/ 等目录带进镜像
 COPY start.sh requirements.txt config.yaml /app/
 COPY novelforge/ /app/novelforge/
+# 第 78 期：版本号与更新日志进镜像（单一真值源 APP_VERSION + 离线更新内容）
+COPY VERSION /app/
+COPY CHANGELOG.md /app/
 
 # 前端构建产物覆盖 static/v2（v2 已进 .dockerignore，镜像里只有这一份）。
 # 必须排在 COPY novelforge/ 之后，否则会被旧产物盖回去。

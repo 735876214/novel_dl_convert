@@ -140,6 +140,11 @@ services:
       # 需要第二个来源根：取消下面一行的注释，并在 environment 里同时打开 LIBRARY_SOURCE_DIRS2*
       - ./libraries:/app/libraries
       # - ./libraries2:/app/libraries2
+      # —— 可选：一键更新（第 78 期）。取消下一行注释 = 把宿主机 docker 控制权交给容器，
+      #    应用内「立即更新」按钮即可拉取最新镜像并重建自身容器。⚠️ 仅在信任部署环境时启用；
+      #    更推荐用独立的叠加文件 docker-compose.update.yml
+      #    （docker compose -f docker-compose.yml -f docker-compose.update.yml up -d）。
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
 
     environment:
       # 可改：时区（日志时间 / 热力图按天聚合都会用到）

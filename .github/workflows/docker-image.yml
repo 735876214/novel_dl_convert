@@ -18,6 +18,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 版本号单一真值源：从仓库根 VERSION 文件读取，注入镜像 LABEL（见 Dockerfile 的 APP_VERSION）
+      - name: Read version
+        id: version
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
       # 多架构：x86 NAS 与 ARM NAS（群晖部分机型 / 树莓派）都能直接 pull
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -42,7 +47,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           provenance: false # 关掉来源证明清单，避免老版本 Docker / 群晖套件拉多架构镜像时解析异常
           build-args: |
-            APP_VERSION=${{ github.sha }}
+            APP_VERSION=${{ steps.version.outputs.version }}
           tags: |
             ghcr.io/735876214/novel_dl_convert:latest
             ghcr.io/735876214/novel_dl_convert:${{ github.sha }}
