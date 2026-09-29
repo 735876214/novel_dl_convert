@@ -3201,3 +3201,58 @@ Big5 里都**不可能**做后继字节，换行后必是字符边界）；② �
 - **`<style>` 只扫每个 spine 文档的前 64 KB**（head 在文件开头）：超出窗口的样式取不到；body 里的 `<style>` **不做抽取**（那些留在正文里由 `_rewrite_assets` 就地改写）。
 - **不支持 `@scope` 的浏览器**（旧 Safari / Firefox）只丢书内排版，插图仍正常；刻意**不写**「不支持就退回全局注入」的分支（那正是会漏进外壳的写法）。
 - 图片的 `max-width: 100%` 安全网**优先于书内样式**（书里若写 `max-width: 200px` 会被放宽）—— 溢出比「不够还原」严重。
+
+---
+
+## 第 77 期（2026-09-29）：移除「按格式归库」+ 讲清入库会不会多一份文件
+
+### 需求（用户原话 + 追问确认）
+
+1. 「移除书库时，不应该出现『按格式归库』、『有 8085 条被拦下（同名冲突 / 需指定目标库），它们不会被迁移 —— 处理后可再次点「执行迁移」』等内容，应该直接将书库信息从本项目中删除。」
+   → 追问确认：那 8085 条是**移除某个书库之后才涨上来的**（移除库 ⇒ 那批书失去归属 ⇒ 待迁移预览暴涨），用户判定「移除与归库被错误地耦合了，要解耦」；处置力度选**彻底移除**（顶部卡片 + 启动阻塞框 + 迁移台账/回滚 + 相关端点与配置键），**仅保留书库的手动建/扫/移除**；移除书库的语义**保持第 75 期不变**。
+2. 「现有的入库方式：从 nas 中获取书然后复制到根目录再导入本项目的流程，是否会增加不必要的文件？考虑直接将源文件的信息导入本项目，元数据等信息在本项目中保存……」→ 追问确认：**只要分析结论 + 改用法与文档**（零后端代码改动）。
+
+### 需求 1：删了什么（一条路，绝不动另一条）
+
+⚠️ 本期风险不在「删得对不对」，在**删多了**：`core/migrate.py` 里「自动归库」与「用户发起的跨库移动」**共用同一台执行机器**（`server.py` 原注释逐字承认过）。所以按**函数**逐个删，而不是按文件删。
+
+**删除**（只服务自动归库）：
+- 端点 `GET /api/library-migrations/preview`、`POST /plan`、`POST /apply`、`POST /rollback`、`GET /batches`、`POST /dismiss`、`POST /reset-gate`。
+- `core/migrate.py`：`preview` / `plan` / `gate_state` / `dismiss` / `reset_gate` / `suggest_specs` / `libraries_of_type` / `_pick_from` / `_pick_dst`（后者本就是**无调用者的死代码**）/ `_suggest_name` / `GATE_KEY` / `SUGGEST` / `TARGET_TYPES`，以及随之一并失效的 `json` / `time` 导入。
+- 配置键 `libraries.auto_migrate`（`config.py` 默认值、`server.py` 的 `EDITABLE` 白名单与 `GET /api/config` 回显、`api.ts` 类型）。
+- 前端：`components/MigrationGateDialog.vue`（整文件）、`App.vue` 的挂载与 `authChecked` 标记、书库管理页顶部卡片 + 迁移台账 + 本次明细三块与六个函数、`api.ts` 的七个方法与八个类型。
+
+**保留（一字未改）**：`execute` / `rollback` / `last_batch` / `compat_reason` / `copy_plan` / `_after_bookmove(_back)` / `move_preview` / `move_plan` / `move_targets` / `move_batches` / `move_summary` / `TYPE_LABELS` / `target_type_of`、`library_migrations` 表与 `db.migration_*`、`/api/book-move/*`，以及**投递目录的入库路由**（`core/library_rules.py` + `watcher._target`）。
+
+> **术语坑（后人别再删错）**：`core/migrate.py` 里被删的那条叫「**自动归库**」（把已有书按格式搬进各类型库）；`core/library_rules.py` 的「**入库归库**（来源子目录名 > 格式 > 关键词）」是**投递时选目标库**，两者毫无关系 —— 后者删了投递就无处落库。本期只动前者。
+
+`DIR_AUTO = "move"` 作为**历史遗留常量**保留：存量台账行里还写着那个字面量，`test_book_move.py` 靠它断言「跨库移动不占用历史槽位」。
+
+### 需求 2：分析结论（「会多一份」，且那份复制不是白占）
+
+入库有**两条路**（都在 `watcher.py`）：
+
+| 给法 | 磁盘 | 代价 |
+|---|---|---|
+| 丢进**投递目录**（`INPUT_DIR`） | `shutil.copy2` **复制**一份进书库根（`:505`；目录型有声书走 `_copy_tree`），并记 ①（`remember_origin`） | 这份复制是**命名规则 + Komga 布局**的唯一着手处（源文件绝对只读，`:491-495`），还承担**跨库同名闸门**与「源与库物理分离」这条部署取向 |
+| 直接放进**库的内容来源文件夹** | `if dst.resolve() == p.resolve()` ⇒ **零复制**（`:458` / `:499`） | 文件名保持原样（应用不改源文件） |
+
+所以用户观察到的「多一份」来自**投递那一步**，而且是**设计使然**：不复制就没地方施加命名规则。用户选了「只要结论 + 改用法与文档」，故本期**不动入库代码**，只把口径写明白：
+
+- `docs/user-guide.md` §2 新增 **2.1「会不会在磁盘上多出一份文件？」** —— 含「从 NAS 拷进 `./input` 再导入**确实会**多一份」的直接回答、两种给法的代价对照，以及「元数据与阅读数据都在项目里、与源文件放哪无关」；
+- **新建书库向导**的「内容来源」步骤加一句对照（选这里 ⇒ 原地引用、不多副本；投递 ⇒ 会复制一份）；
+- **收书目录页**投递目录卡片加一句「投递会复制一份；不想多占就把该目录配成来源根、建库时选它」；
+- 顺手订正该卡片里「`.txt` 会自动转成 EPUB」这句**过期文案**（第 62 期起 `.txt` 已是原样复制入库）。
+
+### 验证
+
+- 后端全量 **1257 passed / 12 skipped / 0 failed**（基线 1290 = 1278 passed；减少的 21 例正是本期有意删除的归库用例）。
+- 前端 `type-check` 0 错 + **447 例**全过。
+- **测试是改写而不是只删**：`tests/test_migrate.py` 从「按格式归库」整篇改写为「**跨库移动执行层**」5 例（逐条独立 / 重复执行不重复搬 / 台账计数 / 回滚标记 / 错误口径）；`tests/test_migrate_unify_contract.py` 从「两条路对比」收窄为「移动的账目完整度 + **存量 move 批次**回滚」（保住那两条别处没覆盖的断言）；`tests/test_api_smoke.py` 删掉三个端点用例及其夹具。⚠️ 刻意**不整文件删除** —— `execute` / `rollback` 的那几项保障（幂等、逐条独立、副本随迁、remap、回滚复原）必须继续有用例。
+- 顺手给跨库移动补了它自己的返回类型 `BookMoveRollbackResult`：原先它**借用**了被删的 `MigrationRunResult` —— `type-check` 当场抓到，说明前端类型面确实收敛干净了。
+
+### 未做 / 取舍
+
+- **不清理存量数据**：真库 `library_migrations` 里第 77 期之前的 `direction="move"` 行、以及 `config.yaml` 里可能还写着的 `libraries.auto_migrate`，都**留着不动**。后者已无人读（`config.load_config` 是浅合并、不校验白名单，不会报错）；前者被 `move_batches` 按 direction 过滤掉，不会出现在界面上。
+- **`authChecked` 一并删了**（全仓只服务那个弹窗）。连带丢掉的第 68 期教训已转录进 `.codebuddy/memory/MEMORY.md`：`showLogin` 初值是 `false`，任何挂在 `App.vue` 里、要等鉴权裁决才有意义的东西，直接用 `!showLogin` 当门都会**先挂载一次**（发出一个注定 401 的请求）。
+- **投递时「按格式 / 关键词选库」的能力保留**（见上面的术语坑）—— 用户那句「项目不再做自动归库」指的是**把已有书按格式搬到对应类型库**这条搬运链。

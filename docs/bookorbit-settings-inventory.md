@@ -405,7 +405,7 @@ SERVER
 | LAST SCAN | `Scanned 2 days ago` / `Failed 17 hours ago` + 小字（如 `Server restarted during scan`）+ 原因标签（`Schedule - no change` / `Manual - no change`） | 扫描状态与原因 | ✅ |
 | 行动按钮 | `Scan` | 单库扫描 | ✅ |
 
-**本项目落地**：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用，一个库可引用多个来源文件夹）、来源文件夹投递、按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）、自动归库、库类型→功能显隐、每库独立覆盖（第 13 期）均在「设置 → 书库管理」实现；此设置页**第 49 期起即操作页**（`settingsNav` 标 `ready`，组件 = `views/tools/LibrariesView.vue`；原「工具 → 书库管理」入口已移除）。
+**本项目落地**：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用，一个库可引用多个来源文件夹）、来源文件夹投递、投递时按子目录名 / 格式 / 关键词选目标库、库类型→功能显隐、每库独立覆盖（第 13 期）均在「设置 → 书库管理」实现；此设置页**第 49 期起即操作页**（`settingsNav` 标 `ready`，组件 = `views/tools/LibrariesView.vue`；原「工具 → 书库管理」入口已移除）。⚠️ **第 77 期移除**：原第 10 期的「按格式迁移（逐条预览 + 台账幂等 + 一键回滚 + 同名冲突拒绝并建议改名）」与启动门禁已整体删除（它与「移除书库」错误耦合，见 `novelforge/core/migrate.py` 的模块 docstring）；用户发起的**跨库移动**（第 36 期，`/api/book-move/*`）保留。
 
 ### 2.18 LIBRARY → Metadata → Providers（`/settings/metadata/providers`）
 
@@ -849,7 +849,7 @@ SERVER
 | YOU → Notifications | **通知** 页 | ✅ 已实现：按类 Off / Problems / All 客户端过滤（生效范围 = 通知中心与日志） |
 | YOU → Privacy & Sharing | **隐私与共享** 只读占位页 | ➖ 单用户部署下没有可分享对象（无其它账号、无管理员角色），整页不提供 |
 | YOU → Restrictions | **内容限制** 只读占位页 | ➖ 单用户部署下无内容限制的应用对象，整页不提供 |
-| LIBRARY → Libraries | **设置 → 书库管理**（本页即操作页） | 🔵 多书库实体 / 自动归库 / 每库覆盖均在本页（第 49 期起；原工具页入口已移除） |
+| LIBRARY → Libraries | **设置 → 书库管理**（本页即操作页） | 🔵 多书库实体 / 每库覆盖 / 同名冲突修复均在本页（第 49 期起；原工具页入口已移除）。⚠️ 第 77 期起本页**不再有「按格式归库」**（卡片 / 台账 / 启动门禁一并移除） |
 | LIBRARY → Metadata（7 页） | **元数据**（7 页均实现） | ✅ Providers / Field Rules / Custom Fields / Confidence Score / Books / Authors / Genre Blocklist 均 `ready` |
 | LIBRARY → File Naming | **工具 → 批量重命名** | 🔵 命名规则存服务端 + 4 配方 + 预览；上游 13 token / 7 修饰符 / 结构语法未支持 |
 | LIBRARY → Maintenance | 部分散落 **监听** / **工具** | ✅ 上传上限 / 成就重算 / 索引重建 / 缓存 / 回收站已实现；IMPORT / RECOMMENDATIONS / UPDATES 未实现（只读列出） |

@@ -16,8 +16,9 @@ components/
   tools/         工具页共用（书库向导 / 逐库设置 / 刮削面板 …）
   settings/      引导弹窗 + 设置项搜索浮层
   （根级）       AppSidebar / AppHeader / AppToast / LoginGate / NotificationBell /
-                TaskFlyout / UserMenu / AppearanceMenu / SettingsSidebar /
-                MetadataScoreCard / MigrationGateDialog
+               TaskFlyout / UserMenu / AppearanceMenu / SettingsSidebar /
+               MetadataScoreCard
+               （`MigrationGateDialog` 已于第 77 期随「按格式归库」删除）
 ```
 
 ## 2. UI 原语（`components/ui/`）

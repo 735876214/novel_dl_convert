@@ -82,7 +82,7 @@ sequenceDiagram
 | 域 | 表（示意） | 要点 |
 |---|---|---|
 | 阅读 | `progress` `reading_status` `reading_sessions` `reading_attempts` `annotations` `bookmarks` | 进度**按文件维度**；CFI 只由 NF 阅读器写入 |
-| 书库 | `libraries` `library_migrations` `book_index` | 每库来源 = 多个绝对路径 `source_dirs` |
+| 书库 | `libraries` `library_migrations` `book_index` | 每库来源 = 多个绝对路径 `source_dirs`。⚠️ `library_migrations` 第 77 期起只记**用户发起的跨库移动**（`direction="bookmove"`）；`direction="move"` 是第 77 期前「按格式归库」留下的存量行，仍可能躺在真库里（不被清理，也不会出现在界面上） |
 | 元数据 | `meta_online` `meta_overrides` `meta_locks` `meta_cover` `custom_field_defs` `custom_values` `series_meta` `authors` `narrators` | **只落服务端 DB** |
 | 其他 | `collections` `notifications` `activity` `book_embeddings` `book_dock_items` `app_state` | |
 
