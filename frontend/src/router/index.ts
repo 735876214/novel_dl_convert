@@ -28,6 +28,7 @@ import AdvancedPage from '@/views/settings/pages/AdvancedPage.vue'
 import AuditLogPage from '@/views/settings/pages/AuditLogPage.vue'
 import BookDockPage from '@/views/settings/pages/BookDockPage.vue'
 import ConversionPage from '@/views/settings/pages/ConversionPage.vue'
+import UpdatePage from '@/views/settings/pages/UpdatePage.vue'
 import CoverPage from '@/views/settings/pages/CoverPage.vue'
 import FileNamingPage from '@/views/settings/pages/FileNamingPage.vue'
 import MaintenancePage from '@/views/settings/pages/MaintenancePage.vue'
@@ -92,6 +93,7 @@ export const SETTINGS_PAGE_COMPONENTS: Record<string, Component> = {
   'admin/audit-log': AuditLogPage,
   'admin/book-dock': BookDockPage,
   'ext/conversion': ConversionPage,
+  'ext/update': UpdatePage,
   'ext/watcher': WatcherPage,
   'ext/network': NetworkPage,
   'ext/advanced': AdvancedPage,

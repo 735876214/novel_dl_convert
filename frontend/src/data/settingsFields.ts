@@ -122,6 +122,28 @@ export const READING_FIELDS: FieldDef[] = [
   },
 ]
 
+/** 版本检查与一键更新（第 78 期；对应后端 config.update 段）。 */
+export const UPDATE_FIELDS: FieldDef[] = [
+  {
+    path: 'update.check_enabled',
+    label: '检查新版本',
+    type: 'bool',
+    hint: '启动时与每 6 小时检查 GitHub 最新版本；出网失败静默忽略。关掉则侧栏不再提示、「新功能」页也无「可更新」',
+  },
+  {
+    path: 'update.interval_hours',
+    label: '检查间隔（小时）',
+    type: 'number',
+    hint: '定时检查间隔；首次检查在启动后一个间隔之后（避开启动期 / 测试期真连 GitHub）',
+  },
+  {
+    path: 'update.auto_apply',
+    label: '发现新版自动更新',
+    type: 'bool',
+    hint: '默认关：只提示，需手动点「立即更新」。即便开启，也须 compose 挂 docker.sock 才真生效，否则仍只提示命令',
+  },
+]
+
 /** 保存某个分区时提交的顶层配置键 */
 /**
  * 分区 → 该分区保存时要提交的**顶层配置键**。
@@ -152,6 +174,8 @@ export const SECTION_KEYS: Record<string, string[]> = {
   logs: ['logging'],
   // 阅读进度口径的全局默认值（页面在「偏好与同步」；每库覆写在书库管理里）
   reading: ['reading'],
+  // 版本检查与一键更新（第 78 期）：四个键都在后端 EDITABLE 白名单里
+  update: ['update'],
 }
 
 /** 命名规则的格式筛选取值（与后端 naming.scope 的取值一致：all 或某个扩展名） */

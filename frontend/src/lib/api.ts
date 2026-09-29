@@ -19,8 +19,52 @@ export interface HealthInfo {
   watcher: boolean
   /** 应用版本（后端单一真值源下发；前端 About / 更新日志据此渲染，不再手写版本号） */
   version: string
+  /** 是否挂了 docker.sock（决定「一键更新」是否可用；侧栏据此决定是否挂 new 提示） */
+  updater_available?: boolean
   /** 活动日志目录（后端 /health 会返回） */
   logs?: string
+}
+
+/** 更新检查快照（GET /api/update/status）。 */
+export interface UpdateStatus {
+  /** 本地当前版本 */
+  current: string
+  /** 远端最新版本（取不到为 null） */
+  latest: string | null
+  /** 远端是否比本地新 */
+  has_update: boolean
+  /** 上次检查时间戳（秒） */
+  checked_at: number
+  /** 远端 Release 链接 */
+  url: string
+  /** 一键更新是否可用（挂了 docker.sock） */
+  updater_available: boolean
+  /** 检查失败原因（空 = 正常） */
+  error: string
+}
+
+/** 更新应用结果（POST /api/update/apply）。 */
+export interface UpdateApplyResult {
+  ok: boolean
+  /** pulling / restarting / pull_failed / unavailable */
+  stage: string
+  image?: string
+  message?: string
+}
+
+/** CHANGELOG 一个分组下的条目。 */
+export interface ChangelogGroup {
+  tag: string
+  items: string[]
+}
+
+/** CHANGELOG 一个版本段。 */
+export interface ChangelogEntry {
+  version: string
+  /** 发布日期（更早段为空） */
+  date: string | null
+  note: string
+  groups: ChangelogGroup[]
 }
 
 export interface SourceItem {
@@ -2599,6 +2643,16 @@ async function requestBlob(path: string, init?: RequestInit): Promise<BlobResult
 
 export const api = {
   health: () => request<HealthInfo>('/health'),
+
+  // ---------- 版本检查与更新（第 78 期）----------
+  /** 「新功能」页数据源：解析仓库 CHANGELOG.md（离线可读）。 */
+  changelog: () => request<{ current: string; entries: ChangelogEntry[] }>('/api/changelog'),
+  /** 当前版本 / 远端最新 / 是否有更新 / 一键更新是否可用的快照。 */
+  updateStatus: () => request<UpdateStatus>('/api/update/status'),
+  /** 手动触发一次远端检查（绕过定时缓存）。 */
+  updateCheck: () => request<UpdateStatus>('/api/update/check', { method: 'POST' }),
+  /** 一键更新：挂了 docker.sock 时拉取最新镜像并重建自身容器。 */
+  updateApply: () => request<UpdateApplyResult>('/api/update/apply', { method: 'POST' }),
 
   // ---------- 书源 ----------
   listSources: () => request<{ sources: SourceItem[] }>('/api/sources'),

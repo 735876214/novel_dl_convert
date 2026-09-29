@@ -75,8 +75,8 @@ REMOVED_PAGE_PATHS = {
 }
 
 # 本项目补充项：上游没有这一页，界面上要标「本项目补充」
-# 第 49 期：koreader-upstream 随「上游对照占位页清理」一并删除，只剩 komga。
-EXPECTED_OWN = {"komga"}
+# 第 49 期：koreader-upstream 随「上游对照占位页清理」一并删除，只剩 komga；第 78 期新增 ext/update（版本检查与一键更新）。
+EXPECTED_OWN = {"komga", "ext/update"}
 
 PAGE_RE = re.compile(r"^\s*p\('([^']+)', '([^']+)', '([^']+)', '(ready|placeholder)', \{", re.M)
 COMPONENT_RE = re.compile(r"^\s{2}'?([\w\-/]+)'?:", re.M)
@@ -115,8 +115,8 @@ def _registered_components() -> set[str]:
 
 def test_page_count_and_uniqueness() -> None:
     pages = _pages()
-    assert len(pages) == 36, (
-        f"设置页数量应为 36（第 49 期删 12 页后：上游 30 有落点 + 本项目补充 6），实际 {len(pages)}"
+    assert len(pages) == 37, (
+        f"设置页数量应为 37（第 49 期删 12 页后：上游 30 有落点 + 本项目补充 7），实际 {len(pages)}"
     )
     paths = [p[0] for p in pages]
     assert len(set(paths)) == len(paths), f"路由 path 重复：{_dups(paths)}"

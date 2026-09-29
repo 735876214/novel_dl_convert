@@ -18,6 +18,25 @@ const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
 
+// 第 78 期：侧栏底部版本号 + new 提示（GitHub 有新版本时挂徽标；点击进「新功能」窗口）
+const version = ref('')
+const hasUpdate = ref(false)
+
+async function loadVersionInfo(): Promise<void> {
+  try {
+    const h = await api.health()
+    version.value = h.version || ''
+  } catch {
+    version.value = ''
+  }
+  try {
+    const s = await api.updateStatus()
+    hasUpdate.value = s.has_update
+  } catch {
+    hasUpdate.value = false
+  }
+}
+
 /**
  * ⚠️ 第 65 期：`tasks` / `tools` / `stats` / `log` / `reading-activity` / `notify`
  * / `achievements` **七项已不在侧栏**（搬到顶栏图标行），故这张表里对应的七个键
@@ -105,6 +124,7 @@ onMounted(() => {
   // 能力清单要跟着**当前库**走（含刷新后恢复上次选中的库）
   void library.loadFeatures()
   void loadBrowseCounts()
+  void loadVersionInfo()
 })
 
 watch(() => route.path, () => void loadBrowseCounts())
@@ -389,5 +409,18 @@ async function onGroupAction(title: string, action: 'add' | 'more'): Promise<voi
         </div>
       </div>
     </div>
+
+    <!-- 第 78 期：侧栏底部版本号 + new 提示；点击进「新功能」窗口 -->
+    <button
+      type="button"
+      class="flex shrink-0 cursor-pointer items-center justify-center gap-1.5 border-t border-border px-3 py-2 text-[11.5px] text-muted-foreground transition-colors hover:bg-[var(--shell-accent-wash)] hover:text-primary"
+      @click="router.push('/whats-new')"
+    >
+      <span class="font-mono tabular-nums">v{{ version || '…' }}</span>
+      <span
+        v-if="hasUpdate"
+        class="rounded-full bg-primary px-1.5 py-0.5 text-[9.5px] leading-none font-semibold text-primary-foreground"
+      >new</span>
+    </button>
   </aside>
 </template>
