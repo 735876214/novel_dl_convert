@@ -25,7 +25,8 @@ import { useUiStore } from '@/stores/ui'
  * 真实实现（与阅读器共享同一份 localStorage 偏好）：
  *   阅读模式（滚动/翻页）、13 档主题、字体、字重样式、字号、行高、内容宽度、
  *   文本区左右内边距、段落间距、首行缩进、字距、词距、分栏、两端对齐、断词，
- *   以及第 51 期补齐的**固定版式页宽**（跟随书籍 / 单页 / 并排两页）。
+ *   以及第 51 期补齐的**固定版式页宽**（跟随书籍 / 单页 / 并排两页）、
+ *   第 76 期的**使用书内排版**（EPUB 自带 CSS 是否生效）。
  * 未支持：新书套用设置（本项目排版是全局单一来源，该问题天然不存在 —— 见卡片说明）。
  */
 
@@ -187,7 +188,7 @@ function setNum(key: NumPrefKey, value: number): void {
         >
       </div>
 
-      <div class="flex items-center gap-8 border-t border-border px-4 py-3.5">
+      <div class="flex flex-wrap items-center gap-x-8 gap-y-2 border-t border-border px-4 py-3.5">
         <label class="flex cursor-pointer items-center gap-2 text-[13px] text-foreground">
           <Switch
             :model-value="prefs.justify"
@@ -202,6 +203,16 @@ function setNum(key: NumPrefKey, value: number): void {
           />
           <span>断词（西文长词换行）</span>
         </label>
+        <!-- 第 76 期：书内排版（EPUB 自带 CSS 是否生效）。固定版式那类书**强制开启** ——
+             整页版式全靠书内 CSS 的绝对定位摆出来，这个开关对它们没有意义，
+             所以这里只说明、不做成假交互（阅读器里对固定版式也禁用它）。 -->
+        <label class="flex cursor-pointer items-center gap-2 text-[13px] text-foreground">
+          <Switch
+            :model-value="prefs.useBookLayout"
+            @update:model-value="prefs.useBookLayout = $event; persistPrefs()"
+          />
+          <span>使用书内排版（书的字体 / 缩进 / 图文混排）</span>
+        </label>
       </div>
     </Card>
 
@@ -211,7 +222,7 @@ function setNum(key: NumPrefKey, value: number): void {
       :items="[
         'Apply my settings to new books（新书是否套用我的设置）—— 本项目排版设置是「全局单一来源」，阅读器与设置页读写同一份，新书一律套用；上游这个开关要解决的问题在这里天然不存在（不是没做）',
       ]"
-      note="本项目已实现「阅读模式 / 13 档主题 / 字体 / 字重样式 / 字号 / 行高 / 内容宽度 / 文本区左右内边距 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 15 项；「固定版式页宽（跟随书籍 / 单页 / 并排两页）」于第 51 期补齐；其余为未支持。"
+      note="本项目已实现「阅读模式 / 13 档主题 / 字体 / 字重样式 / 字号 / 行高 / 内容宽度 / 文本区左右内边距 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 15 项；「固定版式页宽（跟随书籍 / 单页 / 并排两页）」于第 51 期补齐；「使用书内排版」（EPUB 自带 CSS 生效，含书内插图）于第 76 期补齐；其余为未支持。"
     />
   </div>
 </template>

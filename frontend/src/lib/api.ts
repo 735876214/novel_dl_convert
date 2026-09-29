@@ -3658,6 +3658,23 @@ export const api = {
     ),
 
   /**
+   * 一本书的**书内样式**（EPUB 自带的 `<style>` / `<link rel=stylesheet>` / `@import` 链，
+   * 里面的图片与字体 URL 已由后端改写成 asset 接口并**带上令牌**）。
+   *
+   * ⚠️ 与正文**分两条通道**下发是刻意的（第 76 期）：样式必须挂在**被测量的正文容器
+   * 之外** —— CSS 文本本身是文本节点，注入进 `.reader-content` 会把 `textContent`
+   * 顶长，让进度 / 批注的字符偏移全线错位（见后端 `core/epub_cfi`）。
+   *
+   * 取不到样式（非 EPUB / 坏书 / 没有样式）返回空串，**不是错误** —— 调用方据此
+   * 回落应用自身的排版。走 Bearer 即可（它是 `fetch` 取的，不是浏览器原生请求），
+   * 但样式**内部**引用的字体 / 背景图是原生请求，所以 `css` 里的 asset URL 已带令牌。
+   */
+  epubCss: (id: string) =>
+    request<{ css: string; sheets: string[]; fixed_layout: boolean }>(
+      `/api/books/${encodeURIComponent(id)}/epub-css`,
+    ),
+
+  /**
    * 读阅读进度（第 63 期 4/6）。两个口径：
    * - **不给** `fileRel` = 书级：读者最后在看的那个文件的读点（书架 / Komga 走这条）；
    * - **给** `fileRel` = 精确到那个文件：阅读器恢复位置时用。

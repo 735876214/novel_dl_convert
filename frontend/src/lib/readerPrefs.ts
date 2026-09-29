@@ -99,6 +99,18 @@ export interface ReaderPrefs {
    * 本项只决定容器宽度。默认 `book` = 加这项之前的行为。
    */
   fixedLayoutWidth: ReaderFixedLayoutWidth
+  /**
+   * **使用书内排版**（第 76 期，默认开）。
+   *
+   * 开 = 把 EPUB 自带的 CSS（`<style>` / `<link rel=stylesheet>` / `@import` 链、
+   * 含书内字体与背景图）注入到阅读器，书自己的字体 / 缩进 / 图文混排 / 固定版式
+   * 绝对定位说了算 —— 应用那套段落与标题规则**让位**（见 `ReaderView.vue` 的
+   * `.nf-bookcss`）。关 = 回到应用自身的排版口径（第 76 期之前的行为）。
+   *
+   * 留这个开关是因为书内排版**可能**把正文压得难看（例如书里写死了深色文字，
+   * 又碰上阅读器的深色主题）—— 出问题时有个退路，比只能忍或者改代码强。
+   */
+  useBookLayout: boolean
 }
 
 export const READER_PREFS_KEY = 'reader-prefs'
@@ -125,6 +137,9 @@ export const READER_PREFS_DEFAULT: ReaderPrefs = {
   // 第 61 期：滚动到底自动接下一章（预取 → 就地切换，无加载空档）
   // 第 69 期：语义扩为「连续流要不要自动往后补章」，**默认值不变**（仍是开）
   autoNextChapter: true,
+  // 第 76 期：默认**使用书内排版**（EPUB 自带 CSS 生效）；关掉即回到应用自身口径。
+  // 读回时与 DEFAULT 做 spread 合并 ⇒ 老数据没有这一项时拿到的就是 true，无需迁移。
+  useBookLayout: true,
 }
 
 export const READER_FONTS = [

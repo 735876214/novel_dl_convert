@@ -212,6 +212,98 @@ const pageStep = computed(() => (fixedLayout.value
  */
 const fixedLayout = computed(() => book.value?.fixed_layout === true)
 
+// ---------------- 书内排版（第 76 期）----------------
+
+/** 注入书内 CSS 用的 `<style>` 的 id。挂 `document.head`，写法照 `stores/fonts.ts` 的 `injectFontFaces`。 */
+const BOOK_CSS_ID = 'nf-book-css'
+
+/** 书内样式（`GET /api/books/{id}/epub-css`）；取不到就是空串 = 回落应用排版。 */
+const bookCss = ref('')
+
+/**
+ * `@scope` 的探测结果（**懒求值 + 缓存**：探测要 `new` 一个 CSSStyleSheet，
+ * 不该每次重算都跑；放在模块加载时算又会早于测试的桩）。
+ */
+let scopeOkCache: boolean | null = null
+
+/**
+ * `@scope` 在本浏览器上是否可用。
+ *
+ * ⚠️ 这个判据不是可选的：不支持的浏览器会把 `@scope` 当**未知 at-rule 整块忽略**，
+ * 书内样式一个字节都不生效 —— 那时若照常让应用排版「让位」（`.nf-bookcss`），
+ * 就会**既没有书内排版、又丢了应用自己的排版**，比什么都不做更糟。
+ * 用 `replaceSync` 能否解析出规则来问，比猜 UA 可靠（直接问「解析器认不认」）。
+ */
+function scopeSupported(): boolean {
+  if (scopeOkCache !== null) return scopeOkCache
+  try {
+    const ss = new CSSStyleSheet()
+    ss.replaceSync('@scope (.nf-probe) { .nf-probe { color: red } }')
+    scopeOkCache = ss.cssRules.length > 0
+  } catch {
+    scopeOkCache = false
+  }
+  return scopeOkCache
+}
+
+/**
+ * 书内排版此刻是否生效（决定要不要给正文挂 `.nf-bookcss` 让应用规则让位）。
+ *
+ * 固定版式**强制生效**：那种书的整页版式就是靠书内 CSS 的绝对定位摆出来的，
+ * 关掉等于把整本书拆了 —— 设置里那个开关对它们禁用并说明理由（不做假交互）。
+ */
+const bookLayoutOn = computed(() => !!bookCss.value
+  && (fixedLayout.value || prefs.value.useBookLayout)
+  && scopeSupported())
+
+/**
+ * 把书内 CSS 注入 head（空串 = 移除）。
+ *
+ * ⚠️ **为什么必须挂在 head、绝不能放进 `v-html` 或正文容器里**：正文容器的
+ * `textContent.length` 是进度与批注共用的那把尺子（后端 `core/epub_cfi` 按同一口径
+ * 数文本节点长度），而 CSS 文本本身就是文本节点 —— 注入进容器会把长度顶长，
+ * 让所有位置偏移**静默错位**（进度跳错、批注落到别处）。
+ *
+ * ⚠️ `@scope (.reader-content)` 是**作用域方案**：书内样式只作用在正文容器内，
+ * 不会漏到工具栏 / 侧栏 / 弹窗。选它是因为**零解析** —— 想给选择器逐个加前缀就得
+ * 自己写一个 CSS 分词器（要正确处理 `@media` / `@font-face` / 选择器列表），
+ * 而本项目不引第三方依赖。
+ */
+function applyBookCss(css: string): void {
+  const el = document.getElementById(BOOK_CSS_ID) as HTMLStyleElement | null
+  if (!css || !scopeSupported()) {
+    el?.remove()
+    return
+  }
+  const node = el ?? document.createElement('style')
+  if (!el) {
+    node.id = BOOK_CSS_ID
+    document.head.appendChild(node)
+  }
+  node.textContent = `@scope (.reader-content) {\n${css}\n}`
+}
+
+/** 取这本书的书内样式；**失败不是错误**（非 EPUB / 坏书 / 老服务端都回落应用排版）。 */
+async function loadBookCss(): Promise<void> {
+  bookCss.value = ''
+  const id = bookId.value
+  if (!id || !scopeSupported()) return
+  if (!prefs.value.useBookLayout && !fixedLayout.value) return
+  try {
+    const res = await api.epubCss(id)
+    if (bookId.value === id) bookCss.value = res.css || ''
+  } catch {
+    bookCss.value = ''
+  }
+}
+
+watch(bookLayoutOn, (on) => applyBookCss(on ? bookCss.value : ''), { immediate: true })
+// 书一变（或开关打开 / 关掉时再打开）就重新取；`book` 是异步填的，所以盯它而不是盯路由
+watch([bookId, () => book.value?.fixed_layout, () => prefs.value.useBookLayout],
+  () => { void loadBookCss() }, { immediate: true })
+// 离开阅读器就把书内样式摘掉：它是**全局** `<style>`，留着会作用到下一个阅读器实例
+onBeforeUnmount(() => applyBookCss(''))
+
 /**
  * 滚动模式「跨章连续流」的章块（第 69 期）。
  *
@@ -2074,6 +2166,17 @@ onBeforeUnmount(() => {
                 <span>断词（西文长词换行）</span>
                 <Switch v-model="prefs.hyphens" :disabled="fixedLayout" />
               </label>
+              <!-- 第 76 期：书内排版开关。固定版式**强制开启**（整页版式全靠书内 CSS 的
+                   绝对定位摆出来，关掉等于拆书）⇒ 那里禁用并写明理由。 -->
+              <label
+                class="flex cursor-pointer items-center justify-between gap-2 text-[12px] text-muted-foreground"
+                :title="fixedLayout
+                  ? '固定版式的整页版式由书内 CSS 决定，必须开启'
+                  : '开启后使用书自身的字体 / 缩进 / 图文混排；关掉则回到应用自己的排版口径'"
+              >
+                <span>使用书内排版<template v-if="fixedLayout">（固定版式必开）</template></span>
+                <Switch v-model="prefs.useBookLayout" :disabled="fixedLayout" />
+              </label>
             </div>
           </div>
         </div>
@@ -2185,7 +2288,7 @@ onBeforeUnmount(() => {
               <article
                 ref="contentRef"
                 class="reader-content py-8"
-                :class="fixedLayout ? 'nf-fixed' : ''"
+                :class="[fixedLayout ? 'nf-fixed' : '', bookLayoutOn ? 'nf-bookcss' : '']"
                 :style="contentStyle"
                 v-html="html"
               />
@@ -2211,7 +2314,12 @@ onBeforeUnmount(() => {
               >
                 {{ c.title }}
               </h2>
-              <article class="reader-content py-8 mx-auto" :style="contentStyle" v-html="c.html" />
+              <article
+                class="reader-content py-8 mx-auto"
+                :class="bookLayoutOn ? 'nf-bookcss' : ''"
+                :style="contentStyle"
+                v-html="c.html"
+              />
             </section>
           </template>
 
@@ -2221,6 +2329,7 @@ onBeforeUnmount(() => {
             <article
               ref="contentRef"
               class="reader-content py-8 mx-auto nf-fixed"
+              :class="bookLayoutOn ? 'nf-bookcss' : ''"
               :style="contentStyle"
               v-html="html"
             />
@@ -2449,14 +2558,32 @@ onBeforeUnmount(() => {
   color: inherit;
   word-break: break-word;
 }
+/* 第 76 期：书内排版生效时正文挂 `.nf-bookcss`，下面这套「应用重排」整组**让位** ——
+   书自己的字体 / 缩进 / 图文混排说了算。
+   ⚠️ 为什么要显式让位、而不是让特异性自然分胜负：scoped 样式编译后会带上 `[data-v-x]`
+   属性选择器，`.reader-content[data-v-x] p` 永远赢过书里那条裸 `p{…}`
+   —— 不这么做，书内排版一项都生效不了。
+   ⚠️ 图片的「不许溢出」与「分栏不许劈开」是**安全网**，任何情况下都保留（见下）。 */
+.reader-content :deep(img),
+.reader-content :deep(svg) {
+  max-width: 100%;
+  /* 分栏时不要把图劈成两半 */
+  break-inside: avoid;
+}
+.reader-content:not(.nf-bookcss) :deep(img),
+.reader-content:not(.nf-bookcss) :deep(svg) {
+  display: block;
+  height: auto;
+  margin: 1em auto;
+}
 /* 段落间距与首行缩进来自偏好（contentStyle 注入 CSS 变量），不再写死在样式里 */
-.reader-content :deep(p) {
+.reader-content:not(.nf-bookcss) :deep(p) {
   margin: 0 0 var(--nf-para-gap, 1em);
   text-indent: var(--nf-indent, 2em);
 }
-.reader-content :deep(h1),
-.reader-content :deep(h2),
-.reader-content :deep(h3) {
+.reader-content:not(.nf-bookcss) :deep(h1),
+.reader-content:not(.nf-bookcss) :deep(h2),
+.reader-content:not(.nf-bookcss) :deep(h3) {
   margin: 1.2em 0 0.6em;
   font-weight: 700;
   line-height: 1.4;
@@ -2464,20 +2591,13 @@ onBeforeUnmount(() => {
   /* 分栏模式下标题不要孤立在栏尾 */
   break-after: avoid;
 }
-.reader-content :deep(img),
-.reader-content :deep(svg) {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  margin: 1em auto;
-  /* 分栏时不要把图劈成两半 */
-  break-inside: avoid;
-}
+/* 链接配色**刻意不随书内排版让位**：阅读主题（含 9 档深色）才是底色的权威 ——
+   书里写死的深色链接色在深色主题上会直接看不见。 */
 .reader-content :deep(a) {
   color: var(--primary);
   text-decoration: underline;
 }
-.reader-content :deep(blockquote) {
+.reader-content:not(.nf-bookcss) :deep(blockquote) {
   margin: 1em 0;
   padding-left: 0.8em;
   border-left: 3px solid var(--border);
@@ -2490,15 +2610,16 @@ onBeforeUnmount(() => {
 
 /* 固定版式（pre-paginated）：整页已排好版，这里把**上面那套重排样式全部中和掉** ——
    页面里的元素本来就按绝对坐标排好，再加缩进 / 段距 / 图片外边距会把排版揉烂。
-   页宽同理由书本身决定（contentStyle 在该分支不设 maxWidth / 分栏）。 */
-.reader-content.nf-fixed :deep(p),
-.reader-content.nf-fixed :deep(img),
-.reader-content.nf-fixed :deep(svg) {
+   页宽同理由书本身决定（contentStyle 在该分支不设 maxWidth / 分栏）。
+   第 76 期：书内排版生效（`.nf-bookcss`）时上面那套本来就没应用，不必再中和。 */
+.reader-content.nf-fixed:not(.nf-bookcss) :deep(p),
+.reader-content.nf-fixed:not(.nf-bookcss) :deep(img),
+.reader-content.nf-fixed:not(.nf-bookcss) :deep(svg) {
   margin: 0;
   text-indent: 0;
 }
-.reader-content.nf-fixed :deep(img),
-.reader-content.nf-fixed :deep(svg) {
+.reader-content.nf-fixed:not(.nf-bookcss) :deep(img),
+.reader-content.nf-fixed:not(.nf-bookcss) :deep(svg) {
   margin-left: auto;
   margin-right: auto;
 }
