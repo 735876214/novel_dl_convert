@@ -1677,10 +1677,11 @@ export interface AppConfig {
   /** 成就统计与界面开关（对应上游 Profile 页的 Enable achievements） */
   achievements: { enabled?: boolean }
   /**
-   * 多书库跨库策略（第 10 期）。库实体本身存 SQLite（见 `/api/libraries`），
-   * 这里只有「跨库行为」类开关。
+   * 多书库跨库策略（第 10 期）。库实体本身存 SQLite（见 `/api/libraries`）。
+   * ⚠️ 第 77 期起**没有可编辑键**了：原先只有 `auto_migrate`（启动时静默按格式归库），
+   * 随自动归库一并移除 ⇒ 后端 `GET /api/config` 现在回一个空对象。
    */
-  libraries: { auto_migrate?: boolean }
+  libraries: Record<string, never>
 }
 
 /** 目录占用（维护页） */
@@ -2360,107 +2361,6 @@ export interface ScrapeState {
   publish_configured: boolean
 }
 
-/** 迁移预览里的一条（`/api/library-migrations/preview`） */
-export interface MigrationItem {
-  name: string
-  book_id: string
-  title: string
-  format: string
-  target_type: LibraryType
-  target_label: string
-  /** 当前所在库 */
-  library_id: string
-  library_name: string
-  src: string
-  dst_library_id: string
-  dst_library_name: string
-  dst: string
-  /** ready=可迁移 / conflict=目标同名 / no_library=目标库未建 / ambiguous=需指定目标 */
-  status: 'ready' | 'conflict' | 'no_library' | 'ambiguous'
-  reason: string
-  /** 冲突时的建议名（**只建议不自动改**：改名会换 book_id，进度会断链） */
-  suggest: string
-}
-
-export interface MigrationGate {
-  /** 用户已答过「暂不迁移」 */
-  dismissed: boolean
-  dismissed_at: number
-  note: string
-  /** 设置里勾了「以后自动执行」 */
-  auto_migrate: boolean
-}
-
-/** 向导建议：为缺失的类型库给出的就地引用默认内容来源（多文件夹，绝对路径）。第 41 期 */
-export interface LibrarySpecSuggestion {
-  id: string
-  type: LibraryType
-  name: string
-  source_dirs: string[]
-}
-
-export interface MigrationPreview {
-  items: MigrationItem[]
-  total: number
-  ready: number
-  conflict: number
-  no_library: number
-  ambiguous: number
-  movable: number
-  blocked: number
-  missing_types: LibraryType[]
-  missing_labels: string[]
-  suggest_specs: LibrarySpecSuggestion[]
-  gate: MigrationGate
-  /** 有可迁移项、且未答过、且未开自动 → 前端应**阻塞式**确认一次 */
-  needs_confirm: boolean
-}
-
-export interface MigrationPlanResult {
-  batch_id: string
-  created: number
-  /** 同一批文件重复 plan 会复用同一批次（幂等） */
-  reused: boolean
-  items: MigrationItem[]
-  message: string
-}
-
-export interface MigrationRow {
-  id: number
-  batch_id: string
-  direction: string
-  library_id: string
-  src: string
-  dst: string
-  status: 'pending' | 'done' | 'failed' | 'rolled_back' | 'rollback_failed' | string
-  error: string
-  created_at: number
-}
-
-export interface MigrationRunResult {
-  ok: boolean
-  batch_id: string
-  /** 执行时 */
-  moved?: number
-  /** 回滚时 */
-  restored?: number
-  failed: number
-  skipped?: number
-  errors: { src: string; dst: string; error: string }[]
-  items: MigrationRow[]
-}
-
-export interface MigrationBatch {
-  batch_id: string
-  direction: string
-  n: number
-  at: number
-  pending: number
-  done: number
-  failed: number
-  rolled_back: number
-}
-
 // ---------- 跨库移动（用户点选；`/api/book-move/*`） ----------
 
 /** 可选的目标库（`/api/book-move/targets`）：不相容的置灰，`reason` 就是后端拒绝时的那句 */
@@ -2545,6 +2445,36 @@ export interface BookMovePlanResult {
   reused: boolean
   items: BookMoveItem[]
   message: string
+}
+
+/**
+ * 撤回本次移动的结果（`/api/book-move/rollback`）。
+ *
+ * 第 77 期前它借用了「按格式迁移」的 `MigrationRunResult`；那个类型随自动归库一起删了，
+ * 这里按**真实消费面**（书架的 `undoMove` 读 `restored` / `copies` / `failed`）另立一个，
+ * 而不是把后端 `migrate.execute` 的整套返回抄一遍。
+ */
+export interface BookMoveRollbackResult {
+  ok: boolean
+  batch_id: string
+  /** 搬回原库的本数 */
+  restored: number
+  failed: number
+  /** 随迁回来的出版副本数（目标库没配成品目录时缺省） */
+  copies?: number
+  errors: { src: string; dst: string; error: string }[]
+  /** 逐条台账行（`library_migrations` 一行一对象，字段与后端表同形） */
+  items: {
+    id: number
+    batch_id: string
+    direction: string
+    library_id: string
+    src: string
+    dst: string
+    status: string
+    error: string
+    created_at: number
+  }[]
 }
 
 /** 冲突 / 跳过时用户对单本的处置：不传 = 冲突即不搬 */
@@ -4244,56 +4174,6 @@ export const api = {
       `/api/features${libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : ''}`,
     ),
 
-  /** 待迁移概览。`targets` 用于「同类库有多个」时指定目标。 */
-  migrationPreview: (targets?: Record<string, string>) => {
-    const q =
-      targets && Object.keys(targets).length
-        ? `?targets=${encodeURIComponent(JSON.stringify(targets))}`
-        : ''
-    return request<MigrationPreview>(`/api/library-migrations/preview${q}`)
-  },
-
-  /** 生成/复用迁移批次（只写台账，不搬文件）。 */
-  migrationPlan: (targets?: Record<string, string>) =>
-    request<MigrationPlanResult>('/api/library-migrations/plan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targets }),
-    }),
-
-  /** 执行迁移批次（**真移文件**）。 */
-  migrationApply: (batchId: string) =>
-    request<MigrationRunResult>('/api/library-migrations/apply', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ batch_id: batchId }),
-    }),
-
-  /** 一键回滚（`batchId` 留空 = 最近一次迁移批次）。 */
-  migrationRollback: (batchId = '') =>
-    request<MigrationRunResult>('/api/library-migrations/rollback', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ batch_id: batchId }),
-    }),
-
-  migrationBatches: () =>
-    request<{ items: MigrationBatch[]; gate: MigrationGate }>('/api/library-migrations/batches'),
-
-  /** 「暂不迁移」：之后不再每次启动阻塞提示。 */
-  migrationDismiss: (note = '') =>
-    request<{ ok: boolean; gate: MigrationGate }>('/api/library-migrations/dismiss', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ note }),
-    }),
-
-  /** 让启动提示重新出现。 */
-  migrationResetGate: () =>
-    request<{ ok: boolean; gate: MigrationGate }>('/api/library-migrations/reset-gate', {
-      method: 'POST',
-    }),
-
   // ---------- 跨库移动（用户点选） ----------
   // 一律 POST：选择集可能几十本、book_id 里带 `$`，塞进 query string 迟早撞长度上限。
 
@@ -4331,7 +4211,7 @@ export const api = {
 
   /** 撤回本次移动（不传 = 最近一次跨库移动批次）。同步返回真实结果。 */
   bookMoveRollback: (batchId = '') =>
-    request<MigrationRunResult & { copies?: number }>('/api/book-move/rollback', {
+    request<BookMoveRollbackResult>('/api/book-move/rollback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ batch_id: batchId }),

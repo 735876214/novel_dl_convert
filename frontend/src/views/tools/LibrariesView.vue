@@ -2,10 +2,14 @@
 /**
  * 书库管理（工具页 → 书库管理，第 10 期 D8）。
  *
- * 三块的顺序按**用户遇到的问题**排，而不是按数据结构排：
- *   1. 迁移确认 —— 老部署升级上来第一件要回答的事「我这堆书要不要按格式分家」；
- *   2. 书库列表 —— 建/改/扫/移除；
- *   3. 当前库能力 —— 解释「为什么某些菜单不见了」（否则用户会以为功能丢了）。
+ * 两块的顺序按**用户遇到的问题**排，而不是按数据结构排：
+ *   1. 书库列表 —— 建/改/扫/移除；
+ *   2. 当前库能力 —— 解释「为什么某些菜单不见了」（否则用户会以为功能丢了）。
+ *
+ * ⚠️ 第 77 期删掉了原先排在第一位的「迁移确认」卡片（按格式归库 + 缺失类型库 + 迁移
+ * 台账 + 本次明细）与它背后的整套接口：它把「移除书库」与「要不要按格式迁移」错误地
+ * 耦合在一起 —— 移除一个库之后那批书失去归属，这张卡片会从几十条暴涨到上万条
+ * （用户实测「8085 条被拦下」），而此刻用户想做的只是把库删掉。现在移除就是移除。
  */
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
@@ -18,13 +22,7 @@ import ExtChips from '@/components/tools/ExtChips.vue'
 import LibraryConflictPanel from '@/components/tools/LibraryConflictPanel.vue'
 import LibrarySettingsPanel from '@/components/tools/LibrarySettingsPanel.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
-import {
-  api,
-  type LibraryEntity,
-  type LibraryType,
-  type MigrationPreview,
-  type MigrationRow,
-} from '@/lib/api'
+import { api, type LibraryEntity, type LibraryType } from '@/lib/api'
 import { ICONS } from '@/lib/icons'
 import { isAbsolutePath, pathsOverlap } from '@/lib/paths'
 import { useLibraryStore } from '@/stores/library'
@@ -35,31 +33,25 @@ const route = useRoute()
 const ui = useUiStore()
 const library = useLibraryStore()
 const wizard = useLibraryWizardStore()
-const { cfg, setVal, saveSection, saving, loadConfig } = useSettingsConfig()
+const { cfg, loadConfig } = useSettingsConfig()
 
 const libs = ref<LibraryEntity[]>([])
 // `exts` = 该库类型的**默认扫描白名单**（后端 `/api/libraries` 下发）。前端不自己抄一份 ——
 // 抄了就会与扫描口径走散（第 40 期「允许的格式」chips 的默认勾选集就是它）。
 const types = ref<{ value: LibraryType; label: string; exts: string[] }[]>([])
 const sourceRoots = ref<{ name: string; path: string }[]>([])
-const preview = ref<MigrationPreview | null>(null)
-const batches = ref<{ batch_id: string; at: number; done: number; pending: number; failed: number }[]>([])
 const loading = ref(false)
 const busy = ref('')
 /** 主数据（书库清单）加载失败信息：失败不能退化成「还没有书库」（0 库是正常初始态）。 */
 const error = ref('')
-const detailBatch = ref<MigrationRow[]>([])
-const detailOpen = ref(false)
 /** 正在展开「每库设置」的书库 id（空 = 收起）：同时只开一个，免得一屏堆满控件 */
 const settingsFor = ref('')
-/** 同名冲突面板：迁移 / 改名之后要让它重新拉清单 */
+/** 同名冲突面板：改名之后要让它重新拉清单 */
 const conflicts = ref<InstanceType<typeof LibraryConflictPanel> | null>(null)
 
 function toggleSettings(id: string): void {
   settingsFor.value = settingsFor.value === id ? '' : id
 }
-
-const autoMigrate = computed(() => cfg.value?.libraries?.auto_migrate === true)
 
 async function reload(force = false): Promise<void> {
   loading.value = true
@@ -70,9 +62,6 @@ async function reload(force = false): Promise<void> {
     types.value = res.types
     sourceRoots.value = res.source_roots ?? []
     await library.loadLibraries(true)
-    preview.value = await api.migrationPreview()
-    const b = await api.migrationBatches()
-    batches.value = b.items
     if (force) await library.loadBooks(true)
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载书库信息失败'
@@ -87,87 +76,6 @@ onMounted(() => {
   // 侧栏「库」组的「新增」按钮带 `?new=1` 进来，直达新建向导（见 AppSidebar.onGroupAction）
   if (route.query.new) openWizard()
 })
-
-// ---------------- 迁移 ----------------
-
-/** 逐库创建缺失的类型库（**只登记，不搬文件**）。 */
-async function createSuggested(): Promise<void> {
-  const specs = preview.value?.suggest_specs ?? []
-  if (!specs.length) return
-  busy.value = 'create'
-  try {
-    for (const s of specs) {
-      await api.createLibrary({
-        name: s.name,
-        type: s.type,
-        source_dirs: s.source_dirs,
-      })
-    }
-    ui.toast(`已创建 ${specs.length} 个书库`)
-    await reload()
-  } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '创建失败')
-  } finally {
-    busy.value = ''
-  }
-}
-
-async function runMigration(): Promise<void> {
-  busy.value = 'migrate'
-  try {
-    const planned = await api.migrationPlan()
-    if (!planned.batch_id) {
-      ui.toast(planned.message || '没有可迁移的书')
-      await reload()
-      return
-    }
-    const res = await api.migrationApply(planned.batch_id)
-    ui.toast(`已迁移 ${res.moved ?? 0} 本${res.failed ? `，失败 ${res.failed} 本` : ''}`)
-    detailBatch.value = res.items
-    detailOpen.value = res.failed > 0
-    await reload(true)
-  } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '迁移失败')
-  } finally {
-    busy.value = ''
-  }
-}
-
-async function rollbackLast(): Promise<void> {
-  busy.value = 'rollback'
-  try {
-    const res = await api.migrationRollback()
-    ui.toast(`已回滚 ${res.restored ?? 0} 本`)
-    await reload(true)
-  } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '回滚失败')
-  } finally {
-    busy.value = ''
-  }
-}
-
-async function dismissGate(): Promise<void> {
-  busy.value = 'dismiss'
-  try {
-    await api.migrationDismiss('在书库管理页选择暂不迁移')
-    ui.toast('已记下「暂不迁移」，之后不再每次启动提示')
-    await reload()
-  } finally {
-    busy.value = ''
-  }
-}
-
-async function resetGate(): Promise<void> {
-  await api.migrationResetGate()
-  ui.toast('已恢复启动提示')
-  await reload()
-}
-
-async function toggleAutoMigrate(): Promise<void> {
-  setVal('libraries.auto_migrate', !autoMigrate.value)
-  const ok = await saveSection('libraries')
-  if (ok) await reload()
-}
 
 // ---------------- 新建 / 编辑 ----------------
 
@@ -519,75 +427,7 @@ async function remove(l: LibraryEntity): Promise<void> {
 
 <template>
   <div class="space-y-4">
-    <!-- 1) 迁移确认 -->
-    <Card v-if="preview && preview.total > 0" padding="none">
-      <div class="border-b border-border px-4 py-3">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="text-[13px] font-medium text-foreground">按格式归库</span>
-          <Badge tone="accent">待迁移 {{ preview.total }}</Badge>
-          <Badge v-if="preview.conflict">同名冲突 {{ preview.conflict }}</Badge>
-          <Badge v-if="preview.no_library">缺目标库 {{ preview.no_library }}</Badge>
-          <span class="ml-auto text-[11.5px] text-muted-foreground">
-            迁移只<strong>挪库不改名</strong>，进度与批注不会断链
-          </span>
-        </div>
-        <div class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
-          电子书 / 漫画 / 有声书按<strong>格式</strong>分到各自的库；同名文件一律拒绝覆盖并给出建议名
-          （改名会换 book_id，所以只建议、不自动改）。
-        </div>
-      </div>
-
-      <!-- 缺失的类型库：列出默认内容来源（就地引用，多文件夹） -->
-      <div v-if="preview.suggest_specs.length" class="border-b border-border px-4 py-3">
-        <div class="text-[12.5px] text-foreground">
-          还缺 {{ preview.suggest_specs.length }} 个类型库（{{ preview.missing_labels.join('、') }}）——
-          默认内容来源已给出，确认后一并创建（建完可在书库管理里调整）
-        </div>
-        <div
-          v-for="s in preview.suggest_specs"
-          :key="s.id"
-          class="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-border px-3 py-2"
-        >
-          <Badge>{{ s.name }}</Badge>
-          <code class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-            {{ s.source_dirs.join('、') || '（未给出内容来源）' }}
-          </code>
-        </div>
-        <div class="mt-2">
-          <Button size="sm" :disabled="busy === 'create'" @click="createSuggested">
-            {{ busy === 'create' ? '创建中…' : `创建这 ${preview.suggest_specs.length} 个书库` }}
-          </Button>
-        </div>
-      </div>
-
-      <div class="flex flex-wrap items-center gap-2 px-4 py-3">
-        <Button
-          size="sm"
-          :disabled="!!busy || preview.movable === 0"
-          @click="runMigration"
-        >
-          {{ busy === 'migrate' ? '迁移中…' : `执行迁移（${preview.movable} 本）` }}
-        </Button>
-        <Button size="sm" variant="ghost" :disabled="!!busy" @click="rollbackLast">
-          回滚上次迁移
-        </Button>
-        <Button v-if="!preview.gate.dismissed" size="sm" variant="ghost" :disabled="!!busy" @click="dismissGate">
-          暂不迁移
-        </Button>
-        <Button v-else size="sm" variant="ghost" @click="resetGate">恢复启动提示</Button>
-        <label class="ml-auto flex items-center gap-2 text-[11.5px] text-muted-foreground">
-          <input type="checkbox" :checked="autoMigrate" :disabled="saving" @change="toggleAutoMigrate" />
-          以后自动执行（不再确认）
-        </label>
-      </div>
-
-      <div v-if="preview.blocked" class="border-t border-border px-4 py-2 text-[11.5px] text-muted-foreground">
-        有 {{ preview.blocked }} 条被拦下（同名冲突 / 需指定目标库），它们不会被迁移 ——
-        处理后可再次点「执行迁移」。
-      </div>
-    </Card>
-
-    <!-- 2) 书库列表 -->
+    <!-- 1) 书库列表 -->
     <Card padding="none">
       <!-- 工具条：对齐上游（Scan All / Add Library / Filter / Sort） -->
       <div class="border-b border-border px-4 py-3">
@@ -747,7 +587,7 @@ async function remove(l: LibraryEntity): Promise<void> {
       <LibrarySettingsPanel :library-id="settingsFor" @changed="reload(true)" />
     </Card>
 
-    <!-- 3) 当前库能力（解释「为什么某些菜单不见了」） -->
+    <!-- 2) 当前库能力（解释「为什么某些菜单不见了」） -->
     <Card padding="none">
       <div class="border-b border-border px-4 py-3">
         <div class="flex flex-wrap items-center gap-2">
@@ -769,44 +609,9 @@ async function remove(l: LibraryEntity): Promise<void> {
       </div>
     </Card>
 
-    <!-- 3.5) 同名冲突：book_id 由文件名派生，跨库同名会撞同一个 id -->
+    <!-- 3) 同名冲突：book_id 由文件名派生，跨库同名会撞同一个 id -->
     <Card padding="none">
       <LibraryConflictPanel ref="conflicts" @changed="reload(true)" />
-    </Card>
-
-    <!-- 迁移台账 -->
-    <Card v-if="batches.length" padding="none">
-      <div class="border-b border-border px-4 py-3">
-        <span class="text-[13px] font-medium text-foreground">迁移台账</span>
-        <span class="ml-2 text-[11.5px] text-muted-foreground">最近 {{ batches.length }} 个批次</span>
-      </div>
-      <div
-        v-for="b in batches"
-        :key="b.batch_id"
-        class="flex items-center gap-3 border-b border-border px-4 py-2 text-[11.5px] last:border-b-0"
-      >
-        <code class="text-foreground">{{ b.batch_id }}</code>
-        <span class="text-muted-foreground">成功 {{ b.done }}</span>
-        <span v-if="b.pending" class="text-muted-foreground">待处理 {{ b.pending }}</span>
-        <span v-if="b.failed" class="text-destructive">失败 {{ b.failed }}</span>
-      </div>
-    </Card>
-
-    <!-- 明细（迁移后失败项） -->
-    <Card v-if="detailOpen && detailBatch.length" padding="none">
-      <div class="border-b border-border px-4 py-3">
-        <span class="text-[13px] font-medium text-foreground">本次明细</span>
-        <Button size="sm" variant="ghost" class="ml-2" @click="detailOpen = false">收起</Button>
-      </div>
-      <div
-        v-for="r in detailBatch"
-        :key="r.id"
-        class="flex items-center gap-3 border-b border-border px-4 py-2 text-[11.5px] last:border-b-0"
-      >
-        <Badge :tone="r.status === 'done' ? 'accent' : undefined">{{ r.status }}</Badge>
-        <span class="min-w-0 flex-1 truncate" :title="r.src">{{ r.src }}</span>
-        <span v-if="r.error" class="text-destructive">{{ r.error }}</span>
-      </div>
     </Card>
 
     <!-- 新建向导（第 55 期起）：收拢为全局单实例，挂在 App.vue —— 本页不再自带一份，

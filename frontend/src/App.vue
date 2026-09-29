@@ -7,7 +7,6 @@ import AppSidebar from '@/components/AppSidebar.vue'
 import SettingsSidebar from '@/components/SettingsSidebar.vue'
 import AppToast from '@/components/AppToast.vue'
 import LoginGate from '@/components/LoginGate.vue'
-import MigrationGateDialog from '@/components/MigrationGateDialog.vue'
 import GuidedTourModal from '@/components/settings/GuidedTourModal.vue'
 import LibraryWizard from '@/components/tools/LibraryWizard.vue'
 import { useTasksStore } from '@/stores/tasks'
@@ -27,15 +26,6 @@ const wizard = useLibraryWizardStore()
 const route = useRoute()
 const showLogin = ref(false)
 const showTour = ref(false)
-/**
- * 鉴权是否已裁决（第 68 期）。
- *
- * ⚠️ 不能用 `auth.ready` 当门：它是在 `auth.init()` **内部**置真的，而 `showLogin`
- * 要等 `await init()` 回到这里才赋值 —— 中间那一个 tick 里 `ready=true && showLogin=false`，
- * `<MigrationGateDialog>` 会先挂载一次并发出一个注定 401 的预览请求（实测表现为
- * 「每次打开调 2 次」里多出的那一次）。这个标记在**两件事都定好之后**才置真。
- */
-const authChecked = ref(false)
 
 /**
  * 首次使用引导（第 38 期）：**一个书库都没有**时弹一次。
@@ -102,7 +92,6 @@ onMounted(async () => {
   // 鉴权初始化：有 token 则校验，无则直接弹登录门禁
   await auth.init()
   showLogin.value = !auth.authenticated
-  authChecked.value = true
 
   // 首次使用引导：只认 `hasNoLibraries`（= **成功拉到且确实是 0 个**），拉取失败时不弹
   await library.loadLibraries()
@@ -154,12 +143,6 @@ onUnmounted(() => {
       </main>
     </div>
   </div>
-
-  <!-- 首次「按格式归库」的阻塞确认（第 10 期）：登录后自己判断要不要弹。
-       ⚠️ 第 68 期：`showLogin` 初值是 false，所以未登录时会**先挂载（打一次预览）→
-       鉴权失败卸载 → 登录后再挂载（又打一次）** —— 这就是「每次打开调 2 次」的成因。
-       门控用 `authChecked`（鉴权**裁决完**才为真），整个流程只挂一次、也只打一次。 -->
-  <MigrationGateDialog v-if="authChecked && !showLogin" />
 
   <!-- 首次使用引导（第 38 期）：0 个书库时弹一次，见上面 showTour 的说明 -->
   <GuidedTourModal v-model:open="showTour" />
