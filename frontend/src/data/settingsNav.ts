@@ -435,7 +435,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
       }),
       p('ext/update', 'Updates', '更新', 'ready', {
         own: true,
-        note: '第 78 期新增：版本号单一真值源（仓库根 VERSION + 后端 APP_VERSION）。「检查新版本」默认开，出网失败静默忽略；「发现新版自动更新」默认关，需手动点「立即更新」。一键更新须 compose 挂 docker.sock 才生效（见 docker-compose.update.yml），未挂载时「新功能」页降级为复制升级命令。',
+        note: '第 78 期新增：版本号单一真值源（仓库根 VERSION + 后端 APP_VERSION）。「检查新版本」默认开，出网失败静默忽略；「发现新版自动更新」默认关，需手动点「立即更新」。一键更新须在 docker-compose.yml 的 volumes 下挂 /var/run/docker.sock 才生效（取消注释该行），未挂载时「新功能」页降级为复制升级命令。',
       }),
     ],
   },

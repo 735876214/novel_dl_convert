@@ -7,7 +7,7 @@
 更新：挂了 ``/var/run/docker.sock`` 时，拉取固定镜像并**重建自身容器**
 （pull → 取自身 spec → 删旧 → 用新镜像重建 → 启动）。这是用户明确选择的
 「应用真去更新」路径，代价是把宿主机 docker 控制权交给容器，所以**默认不挂载**
-（见 ``docker-compose.yml`` 的注释与可选的 ``docker-compose.update.yml`` 叠加文件）。
+（见 ``docker-compose.yml`` 的注释：在 ``volumes`` 下取消注释 ``/var/run/docker.sock`` 那一行）。
 未挂载时 ``updater_available()`` 为 ``False``，前端只展示「复制升级命令」。
 
 ⚠️ 安全面：本模块**只暴露两个硬编码动作**——拉取**固定镜像名**与重建**自身容器**。

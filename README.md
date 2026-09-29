@@ -204,8 +204,8 @@ update:                   # 第 78 期：版本检查与一键更新
 
 > **一键更新**：默认**不挂载** `docker.sock`，「新功能」页只展示复制升级命令
 > （`docker compose pull && docker compose up -d`）。要在应用内点「立即更新」真实重建容器，
-> 须叠加 `docker-compose.update.yml`（`docker compose -f docker-compose.yml -f docker-compose.update.yml up -d`，
-> 这会把宿主机 docker 控制权交给容器，仅在信任环境启用）。
+> 在 `docker-compose.yml` 的 `volumes` 下取消注释 `/var/run/docker.sock` 那一行
+> （这会把宿主机 docker 控制权交给容器，仅在信任环境启用）。
 
 ## 命令行
 
@@ -283,7 +283,7 @@ docker compose up -d
 - **输入放 `./input`，成品落 `./output`**，互不影响
 - 在线书源：`POST /search`、`POST /download`；内容预览：`GET /content?url=`、`GET /supported?url=`
 - Synology Container Manager / QNAP Container Station：新建「项目 / 应用」，目录选上面那个部署目录即可
-- ⚠️ 部署目录里**不要**放 `docker-compose.override.yml`：Compose 会自动合并它并静默改掉端口与拉取策略（本仓库那份已改名为 `docker-compose.offline.yml`，只有显式 `-f` 才生效）
+- ⚠️ 部署目录里**不要**放 `docker-compose.override.yml`：Compose 会自动合并它并静默改掉端口与拉取策略（本仓库不提供此类叠加件）
 
 ### 更新代码
 
@@ -309,7 +309,6 @@ docker compose pull && docker compose up -d
 novel_dl_convert/
   docker-compose.yml        部署版（NAS 只需这一个文件）：拉 ghcr 预构建镜像；端口 / 挂载 / 账号都写在本文件里
   docker-compose.test.yml   本地测试版：本地 build + 挂源码、端口 8993、数据隔离到 ./data-test
-  docker-compose.offline.yml 离线叠加件：断网 / 无测试镜像时用 `-f` 显式叠加，**不会自动生效**
   start.sh                  启动脚本（依赖已内置，自检后 exec uvicorn，秒级拉起）
   Dockerfile                多阶段构建：builder(venv 依赖) + node(仅取二进制) + frontend(Vue 构建) + runtime(python-slim)
   config.yaml               转换行为配置（目录路径由 compose 的环境变量控制）

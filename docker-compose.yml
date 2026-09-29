@@ -28,8 +28,7 @@
 #   要指到 NAS 上已有的共享目录，把这些相对路径改成绝对路径即可（如 /volume1/books）。
 #
 # ⚠️ 部署目录里不要放 docker-compose.override.yml：Compose 会**自动合并**它，在你不察觉的
-#    情况下改掉端口与拉取策略。本仓库那份临时文件已改名 docker-compose.offline.yml，只有
-#    显式 `-f` 才生效。
+#    情况下改掉端口与拉取策略（本仓库不提供此类叠加件）。
 
 services:
   # ———— PostgreSQL（第 62 期）：书目索引 + 全部业务表的落库后端 ————
@@ -142,8 +141,7 @@ services:
       # - ./libraries2:/app/libraries2
       # —— 可选：一键更新（第 78 期）。取消下一行注释 = 把宿主机 docker 控制权交给容器，
       #    应用内「立即更新」按钮即可拉取最新镜像并重建自身容器。⚠️ 仅在信任部署环境时启用；
-      #    更推荐用独立的叠加文件 docker-compose.update.yml
-      #    （docker compose -f docker-compose.yml -f docker-compose.update.yml up -d）。
+      #    不提供独立叠加文件，需要就直接取消下面这行注释。
       # - /var/run/docker.sock:/var/run/docker.sock:ro
 
     environment:

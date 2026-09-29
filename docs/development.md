@@ -91,7 +91,7 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
   生产镜像**不含** `requirements-dev.txt`。
 - CI：推 `main` 后 GitHub Actions 构建并发布到 `ghcr.io/735876214/novel_dl_convert:latest`；NAS 上 `docker compose pull && docker compose up -d`。
 - 部署文件：`docker-compose.yml`（NAS 单文件、配置全写字面量、**不读 `.env`**，端口 `8992:8000`，`pull_policy: missing`）。
-  ⚠️ **切勿**新建 `docker-compose.override.yml`（Compose 会自动合并并静默改端口/禁拉取）；离线用途已改名 `docker-compose.offline.yml`，须 `-f` 显式叠加。
+  ⚠️ **切勿**新建 `docker-compose.override.yml`（Compose 会自动合并并静默改端口/禁拉取）；离线部署靠 `pull_policy: missing` 自然支持（断网也能启动），不另设叠加文件。
 - 版本号：唯一真值源 `novelforge/server.py` 的 `APP_VERSION`，只由 `GET /health` 下发（**无 `/api/health`**）。
 
 ## 7. 文档维护

@@ -57,7 +57,6 @@
 |---|---|---|
 | **NAS 生产** | 只用 `docker-compose.yml`（配置全写在文件里，**不读 `.env`**）；拉 ghcr 预构建镜像（源码+依赖已烤进镜像，无需 build/clone） | `8992:8000` |
 | 本地测试 compose | `docker-compose.test.yml`：本地 build + 挂源码 + 数据隔离到 `./data-test` | `8993` |
-| 离线叠加件 | `docker-compose.offline.yml`：**必须 `-f` 显式叠加**（⚠️ 千万别改名成 `docker-compose.override.yml` —— Compose 会自动合并并静默改端口/拉取策略） | 同生产 |
 | 裸机 / 开发 | `.venv` + `uvicorn novelforge.server:app --port <自定义>`；`frontend && npm run dev` 走 Vite HMR | 自定 |
 
 目录约定（输入 / 成品 / 配置 / 缓存 / 数据库 / 字体 / 书源 / 备份）见 `README.md` 的「目录约定」表；

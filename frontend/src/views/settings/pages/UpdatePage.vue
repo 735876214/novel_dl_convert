@@ -59,9 +59,9 @@ onMounted(() => loadConfig())
       <div class="text-[12.5px] leading-relaxed text-muted-foreground">
         版本号来自仓库根 <code class="font-mono">VERSION</code> 文件（单一真值源），侧栏底部与
         <RouterLink to="/whats-new" class="underline">新功能</RouterLink>
-        页据此渲染。一键更新须在 compose 中叠加
-        <code class="font-mono">docker-compose.update.yml</code>（挂
-        <code class="font-mono">/var/run/docker.sock</code>）才生效；未挂载时窗口只展示复制升级命令，不做假交互。
+        页据此渲染。一键更新须在 <code class="font-mono">docker-compose.yml</code> 的
+        <code class="font-mono">volumes</code> 下取消注释
+        <code class="font-mono">/var/run/docker.sock</code> 那一行才生效；未挂载时窗口只展示复制升级命令，不做假交互。
       </div>
     </Card>
   </div>
