@@ -27,6 +27,7 @@
 - 行尾必须 **LF**（CRLF⇒容器 `sh /app/start.sh` 报 `set: Illegal option -`）。
 - Python 3.10+（PEP 604）；本机对外网络有限；Node 走 **nvm**（已激活 24.19.0）。
 - 认证走 GCM；推送失败先查认证/网络，**别改 git config**。**切勿恢复 `docker-compose.override.yml` 名**（会静默合并成 8993+禁拉取）；NAS 部署=`docker-compose.yml` 单文件、不读 `.env`。
+- 🚀 **版本号改动 ⇒ 必须同批补 `CHANGELOG.md` 段**：推 `main` 后 CI（`release.yml`）读仓库根 `VERSION`，`v<版本>` tag 不存在就**自动打 tag + 建 Release**（notes 由 `python -m novelforge.core.changelog <版本>` 产出，与应用内「新功能」页同源）；缺段则发布失败。版本唯一真值源=`VERSION`（`/health` 下发），**别再写第二份版本字面量**。
 
 ## 自动化测试
 - 完全离线 `.venv/bin/python -m pytest`；**前端另计**（`npm run test:unit`），**不并入**后端计数。

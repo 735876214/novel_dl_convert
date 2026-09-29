@@ -89,7 +89,21 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 
 - 镜像：`Dockerfile` 多阶段（`builder` 装 venv → `nodejs` 只借 node 二进制 → `frontend` 构建 Vue → `runtime` python-slim）；
   生产镜像**不含** `requirements-dev.txt`。
-- 版本号：唯一真值源 `novelforge/server.py` 的 `APP_VERSION`，只由 `GET /health` 下发（**无 `/api/health`**）。
+- **版本号**：唯一真值源 = **仓库根 `VERSION`**（约定「第 N 期 = V0.N.0」）。
+  `server._read_version()` 读它 → `APP_VERSION` → 只由 `GET /health` 下发（**无 `/api/health`**）；
+  `novelforge/__init__.py` 里的第二份 `__version__` 已在第 79 期删除 —— 别再引入版本字面量。
+- 🚀 **发布自动化**（`.github/workflows/release.yml`，第 79 期起）：
+
+  | 事件 | 行为 |
+  |---|---|
+  | 推送到 `main` | 读 `VERSION`：`v<版本>` tag **不存在** ⇒ 自动打 tag + 建 Release；已存在 ⇒ 跳过（版本没变） |
+  | 推送 `v*` tag（人工补发） | 为那个 tag 建 Release（已存在则跳过） |
+
+  notes 取 `CHANGELOG.md` 对应版本段，且**只经一个实现**：`python3 -X utf8 -m novelforge.core.changelog <版本>`
+  （应用内「新功能」页读的是同一份数据 ⇒ 两处永远同源）。
+  ⇒ **改了 `VERSION` 必须同批补 `CHANGELOG.md` 段**：缺段时该命令以 1 退出、发布在 CI 里失败
+  （宁可失败，也不建一个空 notes 的 Release）；本地可用它自检：`python -m novelforge.core.changelog 0.79.0`。
+  ⚠️ 打 tag 与建 Release 必须在**同一个 job** 里：用 `GITHUB_TOKEN` 推的 tag **不会**再触发别的 workflow。
 - 镜像发布（CI）与 NAS 部署 / 更新命令见 `README.md` §Web 服务；⚠️ **切勿**新建 `docker-compose.override.yml`
   （Compose 会自动合并并静默改端口 / 禁拉取）。
 

@@ -246,6 +246,7 @@ python -m novelforge logs -n 50 --action 转换 --status 失败
 
 镜像 `ghcr.io/735876214/novel_dl_convert:latest` 由 GitHub Actions 在每次推送到 `main` 时自动构建并发布，
 **源码与全部 Python 依赖已在「构建镜像时」烤进镜像**——不需要 NAS 本地 build，也不需要容器启动时 clone 源码。
+版本号一变（仓库根 `VERSION`），CI 还会自动打 `v<版本>` tag 并创建 GitHub Release（说明取 `CHANGELOG.md` 对应段）。
 因此在 NAS 上**只需要 `docker-compose.yml` 一个文件**（配置全部写在文件里，不依赖任何 `.env`），一条命令即可运行：
 
 ```bash

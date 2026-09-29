@@ -104,6 +104,9 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
 ## 6. 提交与交付
 
 - 中文 commit、**按能力拆多笔**；**提交即推送**（`git push origin main`）；收尾不留未提交改动（临时文件放 `$TMP`，别落仓库根）。
+- 🚀 **改了 `VERSION` 就必须同批在 `CHANGELOG.md` 补一段**：推送到 `main` 后 `.github/workflows/release.yml` 会读 `VERSION`，
+  若 `v<版本>` tag 还不存在就**自动打 tag 并创建 Release**（notes 取 CHANGELOG 对应段）⇒ 漏了那段，发布会在 CI 里失败。
+  版本号唯一真值源是仓库根 `VERSION`（`/health` 下发）；**别再写第二份版本字面量**（`novelforge.__version__` 已删）。
 - 每期收尾要更新：`docs/roadmap-gaps-remaining.md`（本期实施记录）+ `.codebuddy/memory/`（当日日志；长期事实进 `MEMORY.md`/`MEMORY-REF.md`）。
 - 行尾：`*.sh` / `Dockerfile` / `.dockerignore` 必须 **LF**（否则容器 `sh /app/start.sh` 报 `set: Illegal option -`）。
 

@@ -40,6 +40,12 @@
 - macOS 首次跑测试：`/Users/stromboid/.local/bin/python3.12 -m venv .venv` → `.venv/bin/pip install -r requirements-dev.txt` → **再** `mkdir -p novelforge/static`（缺目录在 **import 期**就抛）。**别建 `static/v2/index.html`**，否则 `GET /` 不再是 503。
 - ⚠️ `npm install` 会删掉 `frontend/package-lock.json` 里一批 optional 的 `"dev": true`（纯噪声）。**规则（第 39 期修订，取代此前「提交前一律 `git checkout --`」）**：不再无脑还原 —— 那会把**本期真要加的新依赖一起丢掉**（第 39 期加 vitest 三件套时就会）。改为：提交前**逐段 `git diff frontend/package-lock.json`**，只放行「本期新增依赖引入的改动」，其余 `"dev": true` 增减照旧还原。
 - Windows：IDE safe-delete shim 拦 PowerShell `Remove-Item`（静默不删）⇒ 清临时产物用删除工具；`Out-File` 不带 `-Encoding` 同样被拦。
+- **发布自动化（第 79 期）**：`.github/workflows/release.yml` 一个 workflow 两个触发 —— 推 `main` 时读仓库根 `VERSION`，
+  `v<版本>` tag 不存在就**自动打 tag + 建 Release**（已存在则跳过）；人工推 `v*` tag 也走它（`gh release view` 命中则跳过）。
+  notes 的唯一实现 = `python3 -X utf8 -m novelforge.core.changelog <版本>`（与应用内「新功能」页同源；缺段以 1 退出）。
+  ⚠️ 打 tag 与建 Release **必须同 job**：`GITHUB_TOKEN` 推的 tag 不会再触发其它 workflow。
+  ⇒ **改 `VERSION` 必须同批补 `CHANGELOG.md` 段**，否则发布在 CI 里失败（不会发空 notes 的 Release）。
+  镜像另有一条链：`docker-image.yml` 在推 `main` 时构建并推 `ghcr.io/…:latest`（与 tag 无关）。
 
 ### 命名与出版细节
 - `fileops.fill_pattern` 9 个占位符、**先长后短**；`{index}`=系列卷号（两位补零，非流水号）；`{ext}` 已带扩展名 ⇒ **只有模式以 `{ext}` 收尾时才摘尾扩展名**。
