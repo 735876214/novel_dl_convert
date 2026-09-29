@@ -1,8 +1,22 @@
-"""按格式迁移与回滚（`core/migrate.py`）。
+"""跨库移动的**执行层**（`core/migrate.py` 的 `execute` / `rollback` / 台账）。
 
-断言语义取自第 10 期人工冒烟的实测基线（只是把 25 本缩到 5 本）：
-**迁移会不会搬错、会不会重复搬、能不能回滚、冲突会不会被覆盖** —— 这四件事
-只要有一件错了就是用户数据事故，所以逐条钉住。
+第 77 期前本文件测的是「按格式自动归库」（``preview`` / ``plan`` / 门禁 / 向导建议）——
+那条路已整体移除（见 ``core/migrate.py`` 的模块 docstring），那些用例的**载体**没有了。
+但 ``execute`` / ``rollback`` 那台机器还在，且仍在服务一个**会真移文件、真换 book_id**
+的破坏性操作，所以沿用老文件同一套口径继续钉住，只是把载体从 ``plan()`` 换成
+``move_plan()``：
+
+- **会不会搬错**：与 ``test_book_move.py`` 同源（那里覆盖类型相容闸门 / 副本随迁 /
+  预览==落盘）；
+- **会不会重复搬**：见 :func:`test_重复执行不重复搬`；
+- **一条失败会不会拖垮整批**：见 :func:`test_批量执行_单条失败不影响其余`；
+- **台账是否如实**：见 :func:`test_批次台账计数如实` 与
+  :func:`test_回滚后批次行标记为已回滚`；
+- **错误口径**：见 :func:`test_不存在的批次要报错而不是静默`。
+
+⚠️ 与 ``test_book_move.py`` 的分工：那个文件管「**搬到哪儿对不对**」（跨库移动特有的
+口径），本文件管「**一次搬一批、中途出岔子会怎样**」（与 direction 无关的执行层纪律）。
+两边的用例都不多，但都不重叠。
 """
 import pathlib
 
@@ -13,266 +27,101 @@ from novelforge.core import db, library, migrate
 
 
 @pytest.fixture
-def default_with_books(isolated, default_root, make_book, make_audio_dir):  # noqa: ARG001
-    """默认库里铺三种媒体（含一个**有声书目录**，它也是一个迁移条目）。"""
-    make_book(default_root, "三体.epub")
-    make_book(default_root, "流浪地球.epub")
-    make_book(default_root, "测试漫画 01.cbz")
-    make_book(default_root, "测试漫画 02.cbr")
-    make_audio_dir(default_root, "活着", tracks=2)
+def two_libs(isolated, default_root, make_book, make_library):  # noqa: ARG001
+    """起手库（`default`，铺三本电子书）+ 一个电子书目标库（就地引用来源根下子目录）。"""
+    for name in ("三体.epub", "流浪地球.epub", "球状闪电.epub"):
+        make_book(default_root, name)
     library.invalidate()
-    return default_root
 
-
-@pytest.fixture
-def typed_libraries(make_library):  # make_library 已强制依赖 isolated
-    """三个类型库（就地引用 `LIBRARY_SOURCE_DIR` 下的子目录）。"""
     src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
-    return {
-        "ebook": make_library("ebook", "电子书库", "ebook", src / "ebooks", source_subdir="ebooks"),
-        "comic": make_library("comic", "漫画库", "comic", src / "comics", source_subdir="comics"),
-        "audiobook": make_library("audiobook", "有声书库", "audiobook",
-                                  src / "audiobooks", source_subdir="audiobooks"),
-    }
+    make_library("ebook", "电子书库", "ebook", src / "ebooks", source_subdir="ebooks")
+    library.invalidate()
+    return {"src": pathlib.Path(default_root), "dst": src / "ebooks"}
+
+
+def _ids(names) -> list:
+    """文件名 → **当前** book_id（搬库会换库前缀，所以每次都要重新取）。"""
+    library.invalidate()
+    by_name = {b["name"]: b["id"] for b in library.books()}
+    return [by_name[n] for n in names]
 
 
 # ---------------------------------------------------------------------------
-# 预览
+# 执行：逐条独立 + 幂等
 # ---------------------------------------------------------------------------
 
-def test_建库前预览标记缺目标库(default_with_books):
-    pv = migrate.preview()
-    assert pv["total"] == 5
-    assert pv["ready"] == 0
-    assert pv["no_library"] == 5
-    assert pv["missing_types"] == ["audiobook", "comic", "ebook"]
-    # 一本都搬不动时不谈「确认」——否则会弹一个无事可做的阻塞框
-    assert pv["needs_confirm"] is False
+def test_批量执行_单条失败不影响其余(two_libs):
+    """一条失败必须是「这一条失败」，不是「整批中止」。
 
-
-def test_建库后预览可迁移且按类型归类(default_with_books, typed_libraries):
-    pv = migrate.preview()
-    assert pv["total"] == 5 and pv["ready"] == 5
-    assert pv["missing_types"] == []
-    assert pv["needs_confirm"] is True
-    assert sorted(i["target_type"] for i in pv["items"]) == \
-        ["audiobook", "comic", "comic", "ebook", "ebook"]
-
-
-def test_预览条目带绝对源与目标路径(default_with_books, typed_libraries):
-    item = next(i for i in migrate.preview()["items"] if i["name"] == "三体.epub")
-    assert item["src"] == str(pathlib.Path(default_with_books) / "三体.epub")
-    assert item["dst"] == str(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "ebooks" / "三体.epub")
-
-
-def test_无待迁移时预览为空(default_with_books, typed_libraries):
-    migrate.execute(migrate.plan()["batch_id"])
-    pv = migrate.preview()
-    assert pv["total"] == 0
-    assert pv["needs_confirm"] is False
-
-
-def test_向导建议只为缺失类型给出(typed_libraries, default_with_books):
-    # 三个类型库都建好了 → 没有建议
-    assert migrate.preview()["suggest_specs"] == []
-
-
-def test_向导建议只为缺失类型给出就地引用来源(default_with_books):
-    """第 41 期：建议只给「缺失类型」库，且内容来源是就地引用的绝对路径（多文件夹）。
-
-    不再有「独立存储（import）」方案 —— 只有一个就地引用方案，来源根下的同名子目录。
+    老文件同名用例（走 ``plan()``）保护的就是这条 —— 搬 300 本时因为一本坏书把
+    剩下 299 本留在原地，用户看到的是「点了没反应」，比报错更难查。
     """
-    specs = migrate.preview()["suggest_specs"]
-    assert [s["type"] for s in specs] == ["ebook", "comic", "audiobook"]
-    for s in specs:
-        assert s["source_dirs"], "就地引用：建议必须有内容来源文件夹"
-        assert isinstance(s["source_dirs"], list)
-        for d in s["source_dirs"]:
-            dp = pathlib.Path(d)
-            assert dp.is_absolute(), "就地引用：来源必须是绝对路径"
-            assert dp.is_relative_to(pathlib.Path(config.LIBRARY_SOURCE_DIR)), \
-                "就地引用：来源必须落在已配置来源根内"
+    batch = migrate.move_plan(_ids(["三体.epub", "流浪地球.epub", "球状闪电.epub"]), "ebook")
+    assert batch["created"] == 3
 
+    # 计划落定之后其中一本的源文件消失 —— 只有这一条该失败
+    (two_libs["src"] / "流浪地球.epub").unlink()
+    library.invalidate()
 
-# ---------------------------------------------------------------------------
-# 同名冲突：拒绝覆盖 + 建议名（只建议、不自动改）
-# ---------------------------------------------------------------------------
-
-def test_同名冲突被拒绝并给出建议名(default_with_books, typed_libraries, make_book):
-    make_book(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "comics", "测试漫画 01.cbz", b"occupied")
-    pv = migrate.preview()
-    item = next(i for i in pv["items"] if i["name"] == "测试漫画 01.cbz")
-    assert item["status"] == "conflict"
-    assert item["suggest"] == "测试漫画 01 (2).cbz"
-    assert pv["conflict"] == 1
-    assert pv["ready"] == 4
-
-
-def test_建议名遇到占用会继续递增(default_with_books, typed_libraries, make_book):
-    root = pathlib.Path(config.LIBRARY_SOURCE_DIR) / "comics"
-    make_book(root, "测试漫画 01.cbz")
-    make_book(root, "测试漫画 01 (2).cbz")
-    item = next(i for i in migrate.preview()["items"] if i["name"] == "测试漫画 01.cbz")
-    assert item["suggest"] == "测试漫画 01 (3).cbz"
-
-
-def test_冲突条目不进入计划(default_with_books, typed_libraries, make_book):
-    make_book(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "comics", "测试漫画 01.cbz", b"occupied")
-    planned = migrate.plan()
-    assert len(planned["items"]) == 4
-    assert all(i["name"] != "测试漫画 01.cbz" for i in planned["items"])
-
-
-# ---------------------------------------------------------------------------
-# 计划：确定性幂等
-# ---------------------------------------------------------------------------
-
-def test_计划幂等_同集合复用同批次(default_with_books, typed_libraries):
-    first = migrate.plan()
-    second = migrate.plan()
-    assert first["batch_id"] and first["batch_id"] == second["batch_id"]
-    assert first["reused"] is False
-    assert second["reused"] is True
-
-
-def test_没有可迁移条目时计划为空(default_with_books, typed_libraries):
-    migrate.execute(migrate.plan()["batch_id"])
-    planned = migrate.plan()
-    assert planned["batch_id"] == ""
-    assert planned["items"] == []
-    assert planned["message"] == "没有需要迁移的书"
-
-
-# ---------------------------------------------------------------------------
-# 执行
-# ---------------------------------------------------------------------------
-
-def test_执行迁移把书搬进对应库(default_with_books, typed_libraries):
-    res = migrate.execute(migrate.plan()["batch_id"])
-    assert res["ok"] is True and res["moved"] == 5 and res["failed"] == 0
-
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
-    assert (src / "ebooks" / "三体.epub").is_file()
-    assert (src / "comics" / "测试漫画 01.cbz").is_file()
-    assert (src / "comics" / "测试漫画 02.cbr").is_file()
-    assert (src / "audiobooks" / "活着").is_dir()      # 目录形态（有声书）照样能搬
-
-    assert list(pathlib.Path(default_with_books).iterdir()) == []
-    counts: dict = {}
-    for b in library.books():
-        counts[b["library_id"]] = counts.get(b["library_id"], 0) + 1
-    assert counts == {"ebook": 2, "comic": 2, "audiobook": 1}
-
-
-def test_搬库后关联数据随库维度id迁移(default_with_books, typed_libraries):
-    """库维度 id：搬库后 id 的库前缀会变，但 migrate 会把进度/批注一起 remap，不断链。"""
-    before = {b["name"]: b["id"] for b in library.books()}
-    # 在旧 id（default$哈希）上写一条进度，验证搬库后跟到新 id
-    some_old_id = next(iter(before.values()))
-    db.set_progress(some_old_id, 5, 20.0)
-
-    migrate.execute(migrate.plan()["batch_id"])
-    after = {b["name"]: b["id"] for b in library.books()}
-
-    # 文件名不变，但库前缀从 default 换成类型库 → id 变了
-    assert before != after
-    # 进度跟着新 id 走（remap 后的新 id 上能查到）
-    assert any(
-        db.get_progress(nid) and db.get_progress(nid)["locator"] == 5
-        for nid in after.values()
-    )
-    # 旧 id 上不残留
-    assert db.get_progress(some_old_id) is None
-
-
-def test_逐条独立_单条失败不影响其余(default_with_books, typed_libraries):
-    planned = migrate.plan()
-    (pathlib.Path(default_with_books) / "三体.epub").unlink()   # 计划之后源文件消失
-
-    res = migrate.execute(planned["batch_id"])
+    res = migrate.execute(batch["batch_id"])
     assert res["ok"] is False
-    assert res["moved"] == 4 and res["failed"] == 1
+    assert res["moved"] == 2 and res["failed"] == 1, res
     assert any("源文件已不存在" in e["error"] for e in res["errors"])
 
+    # 另两本**确实**到了目标库（不是「一条失败整批回退」）
+    assert (two_libs["dst"] / "三体.epub").is_file()
+    assert (two_libs["dst"] / "球状闪电.epub").is_file()
 
-def test_重复执行不重复搬(default_with_books, typed_libraries):
-    planned = migrate.plan()
-    migrate.execute(planned["batch_id"])
-    again = migrate.execute(planned["batch_id"])
+
+def test_重复执行不重复搬(two_libs):
+    """manifest 先行的幂等依据：同一批次再点一次，搬过的条目必须 **skipped** 而不是再搬一遍。
+
+    重复搬的后果不是「多一份文件」那么轻 —— 目标已有同名文件，第二条要么覆盖、
+    要么冲突失败，两种都不是用户点第二次按钮时想要的结果。
+    """
+    batch = migrate.move_plan(_ids(["三体.epub", "流浪地球.epub"]), "ebook")
+    first = migrate.execute(batch["batch_id"])
+    assert first["ok"] is True and first["moved"] == 2
+
+    again = migrate.execute(batch["batch_id"])
     assert again["moved"] == 0
-    assert again["skipped"] == 5
+    assert again["skipped"] == 2
 
 
 # ---------------------------------------------------------------------------
-# 回滚
+# 台账
 # ---------------------------------------------------------------------------
 
-def test_回滚把文件移回原位(default_with_books, typed_libraries):
-    planned = migrate.plan()
-    migrate.execute(planned["batch_id"])
+def test_批次台账计数如实(two_libs):
+    """台账是回滚的**唯一依据**：计数错了，前端那条「撤销本次移动」就会指错批次或报错数。"""
+    batch = migrate.move_plan(_ids(["三体.epub", "流浪地球.epub"]), "ebook")
+    migrate.execute(batch["batch_id"])
 
-    rb = migrate.rollback(planned["batch_id"])
-    assert rb["ok"] is True and rb["restored"] == 5
-
-    assert (pathlib.Path(default_with_books) / "三体.epub").is_file()
-    assert (pathlib.Path(default_with_books) / "活着").is_dir()
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
-    assert list((src / "ebooks").iterdir()) == []
-    assert {r["status"] for r in db.migration_batch(planned["batch_id"])} == {"rolled_back"}
+    rows = [p for p in migrate.pending_batches() if p["batch_id"] == batch["batch_id"]]
+    assert len(rows) == 1, "刚执行完的批次必须在台账里"
+    assert rows[0]["direction"] == migrate.DIR_BOOKMOVE
+    assert rows[0]["done"] == 2 and rows[0]["failed"] == 0 and rows[0]["pending"] == 0
 
 
-def test_回滚后再次预览可重新迁移(default_with_books, typed_libraries):
-    planned = migrate.plan()
-    migrate.execute(planned["batch_id"])
-    migrate.rollback(planned["batch_id"])
-    assert migrate.preview()["ready"] == 5
+def test_回滚后批次行标记为已回滚(two_libs):
+    batch = migrate.move_plan(_ids(["三体.epub"]), "ebook")
+    migrate.execute(batch["batch_id"])
+
+    rb = migrate.rollback(batch["batch_id"])
+    assert rb["ok"] is True and rb["restored"] == 1
+
+    assert (two_libs["src"] / "三体.epub").is_file(), "正本要回到原处"
+    assert not (two_libs["dst"] / "三体.epub").exists(), "目标库不该还留着"
+    assert {r["status"] for r in db.migration_batch(batch["batch_id"])} == {"rolled_back"}
 
 
 # ---------------------------------------------------------------------------
-# 门禁与异常
+# 错误口径
 # ---------------------------------------------------------------------------
 
-def test_门禁_暂不迁移与复位(default_with_books, typed_libraries):
-    assert migrate.preview()["needs_confirm"] is True
-    assert migrate.dismiss("测试：暂不迁移")["dismissed"] is True
-    assert migrate.preview()["needs_confirm"] is False
-    assert migrate.reset_gate()["dismissed"] is False
-    assert migrate.preview()["needs_confirm"] is True
-
-
-def test_不存在的批次要报错而不是静默(default_with_books):
+def test_不存在的批次要报错而不是静默(two_libs):
+    """静默返回「搬了 0 本」会让用户以为「这批已经处理过了」。"""
     with pytest.raises(ValueError):
         migrate.execute("不存在的批次")
     with pytest.raises(ValueError):
         migrate.rollback("不存在的批次")
-
-
-def test_台账可见(default_with_books, typed_libraries):
-    planned = migrate.plan()
-    migrate.execute(planned["batch_id"])
-    batches = migrate.pending_batches()
-    assert len(batches) == 1
-    assert batches[0]["batch_id"] == planned["batch_id"]
-    assert batches[0]["done"] == 5
-    assert batches[0]["failed"] == 0
-
-
-def test_回滚要把关联数据也搬回来(default_with_books, typed_libraries):
-    """回滚若只把文件移回原位、**不把关联数据搬回**，用户的进度 / 批注会留在新 id 上 ——
-    文件回到了原处，书却「干干净净」，与 T1 修的那类静默断链是同一个病。"""
-    before = {b["name"]: b["id"] for b in library.books()}
-    old_id = next(iter(before.values()))
-    db.set_progress(old_id, 5, 20.0)
-    db.set_override(old_id, "title", "用户改过的书名")
-
-    planned = migrate.plan()
-    migrate.execute(planned["batch_id"])
-    migrate.rollback(planned["batch_id"])
-
-    assert db.get_progress(old_id) is not None, "回滚后进度要回到原位对应的 id 上"
-    assert db.get_progress(old_id)["locator"] == 5
-    assert db.get_overrides(old_id)["title"] == "用户改过的书名"
-    after = {b["name"]: b["id"] for b in library.books()}
-    assert after == before
-    for nid in set(after.values()) - {old_id}:
-        assert db.get_progress(nid) is None, "新 id 上不残留（否则是走不到的孤儿行）"

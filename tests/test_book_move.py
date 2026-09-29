@@ -1,7 +1,7 @@
 """第 36 期：用户点选的**跨库移动**（``migrate`` 里 ``direction="bookmove"`` 那一半）。
 
-自动归库（``preview`` / ``plan``）与跨库移动共用 manifest / 逐条独立 / remap / 回滚这台
-机器，但移动多出三条自己的口径，逐条钉住：
+第 77 期起这是 ``core/migrate.py`` **唯一**的入口 —— 原先与它并列的「按格式自动归库」
+已整体移除（见该模块 docstring 的理由）。移动有三条自己的口径，逐条钉住：
 
 1. **类型相容才许搬**：白名单决定扫描认不认这个文件 —— 搬进不相容的库，书**不是半可见，
    是直接消失**（``library.books()`` 扫不到），所以这条是数据完整性闸门，不是 UX 偏好；
@@ -10,9 +10,9 @@
 3. **预览 == 落盘**：预览说的落点与副本名，就是执行时用的那一个（共用同一份算法，
    不是两边各写一遍）。
 
-另有三条老纪律在新路径上同样要成立：同名**拒绝覆盖**（只给建议名）、
-**回滚把关联数据与副本一起带回来**、自动归库那条路的**行为一字不变**
-（它的 ``direction`` 仍是 ``move``，仍是「最近一次可回滚批次」的取值来源）。
+另有三条老纪律同样要成立：同名**拒绝覆盖**（只给建议名）、
+**回滚把关联数据与副本一起带回来**，以及**历史 ``direction="move"`` 批次的口径一字不变**
+（存量台账行里还写着那个字面量，见 ``migrate.DIR_AUTO`` 的注释）。
 """
 from __future__ import annotations
 
@@ -315,14 +315,18 @@ def test_重复点移动得到同一批次(env):
     assert len(db.migration_batch(p1["batch_id"])) == 1, "幂等：不重复落行"
 
 
-def test_bookmove批次不占用自动归库的回滚入口(env):
-    """``migration_last_batch("move")`` 是自动归库的回滚入口 —— 移动不许把它顶掉。"""
+def test_跨库移动批次不占用历史move槽位(env):
+    """``direction="move"`` 是第 77 期前**自动归库**留下的槽位 —— 移动不许把它顶掉。
+
+    那个方向现在不再产生新批次（自动归库那条路已移除），但**存量台账行还在真库里**，
+    ``last_batch`` 仍按它取批次 —— 所以「移动不占用它」这条纪律要继续成立。
+    """
     _epub(env["a"]["root"], "三体.epub")
     bid = _book(env["a"], "三体.epub")["id"]
     planned = migrate.move_plan([bid], "b")
     assert migrate.execute(planned["batch_id"])["ok"] is True
 
-    assert migrate.DIR_AUTO == "move", "自动归库的历史字面量不能改（存量批次按它取）"
+    assert migrate.DIR_AUTO == "move", "历史字面量不能改（存量批次按它取）"
     assert migrate.last_batch() == ""
     assert migrate.last_batch(migrate.DIR_BOOKMOVE) == planned["batch_id"]
 
@@ -536,7 +540,7 @@ def test_参数不对一律400(client, auth_headers, env):
 
 
 def test_执行别的方向的批次要被拒(client, auth_headers, env):
-    """自动归库的批次有它自己的执行入口，从这里执行会把两套语义混起来。"""
+    """存量 ``move`` 批次（第 77 期前自动归库留下的）不能从这个入口执行 —— 两套语义会混起来。"""
     _epub(env["a"]["root"], "三体.epub")
     bid = _book(env["a"], "三体.epub")["id"]
     db.migration_add("auto-1", migrate.DIR_AUTO, "a",
@@ -556,7 +560,7 @@ def test_批次列表只列跨库移动且可撤销(client, auth_headers, env):
                     book_ids=[old["id"]], dst_library_id="b").json()
     r = _move(client, auth_headers, "/api/book-move/apply", batch_id=planned["batch_id"])
     assert _wait_task(client, auth_headers, r.json()["task_id"])["status"] == "done"
-    # 自动归库的批次不该出现在这里（它有书库管理页自己的入口）
+    # 存量 move 批次（第 77 期前自动归库留下的）不该出现在这里
     db.migration_add("auto-1", migrate.DIR_AUTO, "a", str(env["a"]["root"] / "三体.epub"),
                      str(env["b"]["root"] / "三体.epub"))
 

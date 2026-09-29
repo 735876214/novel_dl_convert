@@ -1,47 +1,43 @@
-"""自动归库 ↔ 用户发起移动：两条路的「账目完整度」契约（第 39 期）。
+"""跨库移动的「账目完整度」契约（第 39 期）+ 存量台账回滚（第 77 期收窄）。
 
-`core/migrate.py:301-303` 原文写着自动归库那条路「**行为一字不改**……这是本期**有意**
-留下的边界……**要改它得单独一期**」。第 39 期就是那一期。
+第 77 期前本文件是「**自动归库 ↔ 用户发起移动**两条路」的对比契约。自动归库已整体
+移除（`core/migrate.py` 的模块 docstring 有理由），那半边用例的**载体**没了
+（`plan()` / `preview()` 不复存在），所以删掉，只留两件仍然成立、且**别处没覆盖**的事：
 
-## 两条路差在哪（读码所得，不是猜）
+1. :func:`test_用户发起的移动_副本与台账都跟着走` —— 一次跨库移动必须把**副本**搬到
+   目标库成品目录，并把 **`scrape_items` 台账**改挂到新 id（连同 `library_id` /
+   `source_rel` 这些库相关列）。
+2. :func:`test_存量批次回滚不造假台账` —— 第 77 期之前**自动归库**写下的
+   ``direction="move"`` 批次行仍可能躺在真库的台账里（历史数据不清理）。那种行回滚时
+   对台账必须**空操作**：不许凭空补一行假台账。
 
-`execute`（`:955`）原先按 `direction` 分两条：
-
-- ``bookmove``（用户点选的跨库移动，第 36 期）走 `_after_bookmove`（`:795`），
-  完整链：`remap` → **副本随书搬**（`copy_plan` / `_apply_copy`）→ **台账改挂**
-  （`scrape_remap_item`）→ 通知 watcher。
-- ``move``（自动归库）只做 `db.remap_book_id` + `watcher.mark_processed`。
-
-**第 39 期把两者收成一条**：`execute`（`:955`）与 `rollback`（`:1035`）现在都不再看
-`direction`，一律走 `_after_bookmove`（`:795`）/ `_after_bookmove_back`（`:886`）。
-差别只剩「谁选源集合、谁定目标库」—— **不在账目完整度**。
-
-## 后果：自动归库后台账行**完全脱钩**
+## 为什么「台账改挂」这一步不能漏（第 39 期的结论，仍然有效）
 
 `db.remap_book_id`（`db.py:1731`）的 docstring 明写：
 
     ``scrape_items``（见 :func:`scrape_remap_item`）**刻意不在这里**：它在 book_id
     之外还有 ``library_id`` / ``source_rel`` / ``link_rel`` 三个库相关列要一起改。
 
-`REMAP_TABLES`（`db.py:1633-1637`）也确实不含它 ⇒ 自动归库后，那本书的 id 换了库前缀，
-**台账行还挂在旧 id 上**，于是：
+`REMAP_TABLES`（`db.py:1633-1637`）也确实不含它 ⇒ 任何换库动作若只 remap 而不搬台账，
+那本书的 id 换了库前缀而**台账行还挂在旧 id 上**，于是：
 
 - 新库的 `scrape_list(library_id=新库)` 里看不到它（`library_id` 列还是旧的）；
-- 而 `_after_bookmove` 的注释第 2 条指出，对账（`scrape.verify` / `_lost`）只在
-  **同一库内**做 —— 旧库那边按旧库根找源文件自然找不到，会把一行好好的「已出版」
-  判成 ``orphan`` / ``removed``，**把一次正常搬迁变成一次误报事故**。
+- 对账（`scrape.verify` / `_lost`）只在**同一库内**做 —— 旧库那边按旧库根找源文件自然
+  找不到，会把一行好好的「已出版」判成 ``orphan`` / ``removed``，**把一次正常搬迁变成
+  一次误报事故**。
 
 ## 本文件的来历（「语义确实变了」的证据）
 
-按「先护栏、后统一」的顺序做的：先写了一条**为当时冻结行为拍的现状快照**
-（断言副本原地不动、台账仍挂旧 id），它**是绿的**；统一之后它**转红**；
-再把断言反写成新语义、回到绿。那处 diff 就是语义确实变了的证据 —— 比任何说明文字都硬。
+按「先护栏、后统一」的顺序做的：先写了一条**为当时冻结行为拍的现状快照**（断言副本
+原地不动、台账仍挂旧 id），它**是绿的**；统一之后它**转红**；再把断言反写成新语义、
+回到绿。那处 diff 就是语义确实变了的证据 —— 比任何说明文字都硬。
 
 ## 变异验证（M5）
 
 把 `rollback` 里的 `_after_bookmove_back(...)` 换成 `{"copied": False, "note": ""}`
-（等价于「回程不统一」）⇒ 两条回滚用例**都红**，且分别是
-「副本没跟着回来」与「关联数据没从新 id 搬回来」；另两条不碰回滚的用例保持绿。
+（等价于「回程不统一」）⇒ :func:`test_存量批次回滚不造假台账` 的牙口（「关联数据没从
+新 id 搬回来」那条）转红。它那条「不造假台账」的断言**验不了这个变异** —— 要验它得
+把造行能力写进去，见该用例自己的说明。
 """
 import json
 import pathlib
@@ -114,45 +110,13 @@ def ebook_target(make_library):
     return lib, pdir
 
 
-def test_自动归库之后_副本与台账都跟着走(published, ebook_target):
-    """自动归库（``direction="move"``）的账目**必须和 bookmove 一样齐**（第 39 期统一）。
-
-    ⚠️ 这条用例的前身是「统一之前的现状快照」：那时它断言副本**原地不动**、台账
-    **还挂在旧 id 上**，而且**是绿的**。第 39 期统一之后它转红、随即将断言改成下面这样
-    —— 那处 diff 就是「语义确实变了」的证据（比任何说明文字都硬）。
-    """
-    _target_lib, target_pdir = ebook_target
-    old_book, row_before, start_pdir = published["book"], published["row"], published["pdir"]
-    copy_before = start_pdir / row_before["link_rel"]
-    assert copy_before.is_file()
-
-    res = migrate.execute(migrate.plan()["batch_id"])
-    assert res["ok"] is True and res["moved"] == 1
-    assert res["copies"] == 1, f"副本没随迁：{res}"
-    assert res["copies_left"] == 0
-
-    library.invalidate()
-    new_book = next(b for b in library.books() if b["name"] == "三体.epub")
-    assert new_book["id"] != old_book["id"], "搬了库 id 却没换前缀 —— 前提不成立"
-
-    # ① 副本：随书搬到**目标库**成品目录，原处不留
-    assert not copy_before.exists(), "旧副本应已离开原库"
-    assert list(target_pdir.iterdir()), "目标库成品目录里应有副本"
-
-    # ② 台账：改挂到新 id，且三个库相关列一起改对 —— 否则新库看不到它，
-    #    而旧库的对账会把一行好好的「已出版」判成 orphan / removed
-    row_after = db.scrape_get(new_book["id"])
-    assert row_after is not None, "台账没改挂到新 id"
-    assert row_after["library_id"] == _target_lib["id"], "台账的 library_id 没跟着换库"
-    assert row_after["source_rel"] == "三体.epub"
-    assert db.scrape_get(old_book["id"]) is None, "台账在旧 id 上不该还留着"
-
-
 def test_用户发起的移动_副本与台账都跟着走(published, ebook_target):
-    """``bookmove`` 那条路 —— 与上一条**结构完全平行**，这正是本期的契约。
+    """跨库移动的账目必须**齐**：副本随迁 + 台账改挂。
 
-    两条路的实现现在共用 ``_after_bookmove``；这两条用例把「共用」钉在**可观测结果**上：
-    谁把两条路拆回两套，就会有一条红。
+    第 77 期前这里还有一条结构平行的「自动归库之后……」，用来钉「两条路共用
+    ``_after_bookmove``」。自动归库移除后那条路不存在了，但**本条的牙口没变**：
+    它断言的是 `execute` 的收尾链（`remap` → `copy_plan`/`_apply_copy` → `scrape_remap_item`）
+    确实跑完，而不是「两条路对齐」。谁把这条链拆掉一半，它就红。
     """
     target_lib, target_pdir = ebook_target
     old_book, row_before, start_pdir = published["book"], published["row"], published["pdir"]
@@ -177,50 +141,8 @@ def test_用户发起的移动_副本与台账都跟着走(published, ebook_targ
     assert db.scrape_get(old_book["id"]) is None, "台账在旧 id 上不该还留着"
 
 
-def test_自动归库_执行后回滚能把副本与台账一起带回来(published, ebook_target):
-    """跑一整圈：自动归库 → 回滚 —— 副本、正本、台账都必须回到出发时的样子。
-
-    去程统一了、回程不统一，就会「搬过去齐了、滚回来又散了」，而那比两边都不齐更难查：
-    用户看到的是书回到了原处、进度也在，只有成品目录里那份副本悄悄留在了新库。
-    """
-    _target_lib, target_pdir = ebook_target
-    old_book, row_before, start_pdir = published["book"], published["row"], published["pdir"]
-    copy_before = start_pdir / row_before["link_rel"]
-    src_path = pathlib.Path(published["src"])
-
-    batch_id = migrate.plan()["batch_id"]
-    assert migrate.execute(batch_id)["ok"] is True
-    library.invalidate()
-    mid_id = next(b for b in library.books() if b["name"] == "三体.epub")["id"]
-    assert db.get_progress(mid_id)["locator"] == 42, "前提不成立：去程没搬关联数据"
-
-    res = migrate.rollback(batch_id)
-    assert res["ok"] is True and res["restored"] == 1
-
-    # 正本回到原处
-    assert src_path.is_file(), "正本没回来"
-    # 副本也回到原处，且目标库成品目录不再留着它
-    assert copy_before.is_file(), "副本没跟着回来"
-    assert list(target_pdir.iterdir()) == [], "副本在新库成品目录里留了一份"
-
-    # 关联数据回到原 id —— 只看文件看不出这一步漏没漏，而漏了就是
-    # 「书回到原处却干干净净、读点还都不报错」那个静默断链
-    assert db.get_progress(mid_id) is None, "关联数据没从中间 id 搬走"
-    assert (db.get_progress(old_book["id"]) or {}).get("locator") == 42, \
-        "回滚没把关联数据搬回原 id"
-
-    # 台账回到旧 id，库相关列也跟着回来
-    library.invalidate()
-    back_book = next(b for b in library.books() if b["name"] == "三体.epub")
-    row_back = db.scrape_get(back_book["id"])
-    assert row_back is not None, "台账没改挂回原 id"
-    assert row_back["library_id"] == START_LIB
-    assert row_back["link_rel"] == row_before["link_rel"]
-    assert db.scrape_get(mid_id) is None, "台账在中间 id 上不该还留着"
-
-
 def test_存量批次回滚不造假台账(published, ebook_target):
-    """**第 39 期之前**写下的 ``status="done"`` 批次，回滚时不能凭空生出台账。
+    """第 77 期之前**自动归库**写下的 ``status="done"`` 批次，回滚时不能凭空生出台账。
 
     存量批次长这样（旧 ``execute`` 留下的）：正本搬走了、关联数据 remap 了，但
     **台账仍挂在旧 id 上**（``remap_book_id`` 刻意不碰 ``scrape_items``）。这种行回滚时，
