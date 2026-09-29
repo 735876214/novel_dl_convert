@@ -280,7 +280,7 @@ def _lib_lock(lid: str) -> threading.Lock:
 # 不重建。第 72 期在派生件那边踩过同一个坑（`pipeline.ENCODING_RULE_VERSION`）。
 #
 # 落点选 `app_state`（运行态 KV）而不是新表 / 新文件：它是**幂等标记**这一类东西
-# 既有的地方（`migrate.GATE_KEY`、`pgmigrate.MARKER` 都在那儿），SQLite 与 PG 两种
+# 既有的地方（`db` 的 `bookid_v2`、`pgmigrate.MARKER` 都在那儿），SQLite 与 PG 两种
 # 后端自动都成立，不必新写一份「跑过一次」的持久化。丢了只是每库多扫一次全量，结果不变。
 #
 # ⚠️ 必须**按库**记（键里带库 id）：记成全局的话，第一个刷新完的库会把标记写成新版本，

@@ -1016,7 +1016,8 @@ def id_conflict_with(name: str, library_id=None) -> "dict | None":
 def suggest_name(name: str, library_id=None, root=None) -> str:
     """给 ``name`` 找一个「不撞 id、目标目录里也不存在」的候选名。
 
-    文案与迁移侧同一套（``三体 (2).epub``，见 ``core.migrate._suggest_name``）；
+    文案沿用 ``三体 (2).epub`` 那套（第 77 期前 ``core.migrate._suggest_name`` 也用它，
+    那个函数随自动归库一起删了，**本函数是现在唯一的实现**）；
     这里**只建议、不自动改** —— 改名会换 ``book_id``，必须显式确认后走冲突修复
     流程（它会把关联数据一起搬，见 ``db.remap_book_id``）。
     """

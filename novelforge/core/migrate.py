@@ -1,19 +1,19 @@
-"""把书在**书库之间**搬运（第 10 期自动归库；第 36 期起另有用户点选的跨库移动）。
+"""把书在**书库之间**搬运 —— 用户点选的**跨库移动**（第 36 期）。
 
-为什么单独一个模块：迁移是**破坏性**操作（真移文件），必须有一处集中承载
+为什么单独一个模块：搬库是**破坏性**操作（真移文件），必须有一处集中承载
 「判据 + 幂等 + 冲突 + 回滚」四件事；散在 server / watcher 里迟早会写歪。
 
-两条入口、同一台机器：
+⚠️ **第 77 期移除了「自动归库」那一条入口**（原先的 ``preview`` / ``plan`` / 门禁：
+按**格式**把散落在默认库里的书自动归进各类型库，``direction="move"``）。理由：它把
+「移除书库」与「要不要迁移」错误地耦合在一起 —— 移除一个库之后那批书失去归属，预览会
+从几十条暴涨到上万条（用户实测「8085 条被拦下」），而此刻用户想做的只是把库删掉。
+随之删除的还有端点 ``/api/library-migrations/*``、门禁状态与配置键 ``libraries.auto_migrate``。
+本模块现在**只剩**跨库移动这一条路；``execute`` / ``rollback`` / ``copy_plan`` 等收尾链
+一字未改（它们本来就主要服务这条路）。
 
-- **自动归库**（``preview`` / ``plan``，``direction="move"``）：按**格式**把散落在
-  默认库里的书归进各类型库。第 10 期口径，行为不再改动。
-- **跨库移动**（``move_preview`` / ``move_plan``，``direction="bookmove"``）：用户勾书、
-  指定目标库。多两道闸门 —— **类型相容**（白名单决定扫描认不认，见 :func:`compat_reason`）
-  与**副本随书搬**（口径③，见 :func:`copy_plan`）。
+四条设计约束：
 
-四条设计约束（两条入口都遵守）：
-
-1. **判据只看格式**（ebook / comic / audiobook）：迁移要可解释、可复现。
+1. **判据只看格式**（ebook / comic / audiobook）：搬库要可解释、可复现。
    靠元数据关键词猜「这本奇幻该进哪个库」只用于**入库**归库（core/library_rules.py）。
 2. **只挪库、不改名**：``name`` 是**库内相对路径**，换库根它不变；但第 17 期起
    ``book_id`` 是「库$哈希」，换库会让 id 的**库前缀**变化 —— 所以执行时用
@@ -23,35 +23,19 @@
 3. **manifest 先行**：每条 ``src → dst`` 在执行前落 ``library_migrations``（pending），
    执行后标 done/failed。于是：重复启动不会重复搬（幂等依据），回滚有据可依。
 4. **逐条独立**：一条失败不影响其余；原因逐条入账，最后汇总返回。
-
-门禁（第 10 期决策）：启动时**只出预览**，真正搬运要用户点一次确认；
-答过「暂不迁移」后记进 ``app_state``，不再每次启动打扰；设置里可勾「以后自动执行」。
 """
 import hashlib
-import json
 import pathlib
 import shutil
-import time
 
 from .. import config
 from . import activity_log, audio, db, fileops, lib_settings, library, publish, units
 
-#: 迁移门禁在 app_state 里的键（存 JSON：用户答过就不再打扰）
-GATE_KEY = "library_migration_gate"
-
-#: 类型库展示名（后端日志 / 预览文案共用一个来源，避免各处各写一套）
+#: 类型库展示名（后端日志 / 书库 dto 共用一个来源，避免各处各写一套）。
+#: 第 77 期起自动归库没了，但系列页按媒体分组（``server.api_series_detail``）与
+#: ``server._LIB_TYPE_LABELS`` 仍在用它 —— 别跟着一起删。
 TYPE_LABELS = {"ebook": "电子书库", "comic": "漫画库", "audiobook": "有声书库",
                "mixed": "混合库"}
-
-#: 向导用的默认命名与来源子目录名（**只是默认值**，用户可改）
-SUGGEST = {
-    "ebook": ("电子书库", "ebooks"),
-    "comic": ("漫画库", "comics"),
-    "audiobook": ("有声书库", "audiobooks"),
-}
-
-#: 迁移的目标类型；``mixed`` 不在列 —— 它本身就是「未归类」的容身之所
-TARGET_TYPES = ("ebook", "comic", "audiobook")
 
 _COMIC_FMT = {"CBZ", "CBR"}
 _EBOOK_FMT = {"EPUB", "MOBI", "AZW3", "PDF", "TXT"}
@@ -77,8 +61,8 @@ def target_type_of(book: dict) -> str:
     第 73 期：``UNITS``（序号单元合集，一话一文件的**目录**）的归属类型取**它所在库的
     类型** —— 合集自己没有扩展名可判，而「它能在哪一类库里出现」本身就是答案
     （`library._iter_book_entries` 只在漫画库 / 有声书库里合并，见 `units.merges_for`；
-    搬家闸门 `compat_reason` 也据此拦下别处的去向）。少了这一条，合集在「自动归库」
-    里会被**静默跳过**、在系列页被分进「其它」—— 两个都是不报错的错。
+    搬家闸门 `compat_reason` 也据此拦下别处的去向）。少了这一条，合集在系列页会被分进
+    「其它」—— 一个不报错的错。
     """
     fmt = str((book or {}).get("format") or "").upper()
     if fmt in _COMIC_FMT:
@@ -92,213 +76,13 @@ def target_type_of(book: dict) -> str:
     return _type_of_path((book or {}).get("name") or "")
 
 
-def libraries_of_type(ltype: str) -> list:
-    """某类型的全部库（正常每类一个；多出来的会在预览里标为需指定目标）。"""
-    t = str(ltype or "")
-    return [l for l in library.libraries() if str(l.get("type") or "") == t]
-
-
-def _suggest_name(root: pathlib.Path, name: str) -> str:
-    """冲突时的建议名：``三体 (2).epub``（递增到不冲突为止）。
-
-    ⚠️ 改名会换 ``book_id`` → 进度 / 批注断链，所以这里**只建议、不自动改**；
-    真要改名应走「设置 → 书库管理 → 跨库同名冲突」的一键修复
-    （``fileops.apply_conflict_rename``，它会把关联数据一起搬，见 db.remap_book_id）。
-    """
-    p = pathlib.PurePosixPath(str(name))
-    stem, suffix, parent = p.stem, p.suffix, str(p.parent)
-    for i in range(2, 100):
-        cand = f"{stem} ({i}){suffix}"
-        rel = cand if parent in ("", ".") else f"{parent}/{cand}"
-        if not (root / rel).exists():
-            return rel
-    return str(name)
-
-
-# ---------------- 门禁状态 ----------------
-
-def gate_state() -> dict:
-    """迁移门禁：用户是否已答过、设置里是否勾了「以后自动执行」。"""
-    info: dict = {}
-    try:
-        raw = db.state_get(GATE_KEY, "")
-        if raw:
-            loaded = json.loads(raw)
-            info = loaded if isinstance(loaded, dict) else {}
-    except Exception:                      # 坏值不该让整个预览接口 500
-        info = {}
-    try:
-        cfg = (config.load_config() or {}).get("libraries") or {}
-    except Exception:
-        cfg = {}
-    return {
-        "dismissed": bool(info.get("dismissed_at")),
-        "dismissed_at": float(info.get("dismissed_at") or 0),
-        "note": str(info.get("note") or ""),
-        "auto_migrate": bool(cfg.get("auto_migrate")),
-    }
-
-
-def dismiss(note: str = "") -> dict:
-    """记下「暂不迁移」（在设置里重新开启前不再打扰）。"""
-    db.state_set(GATE_KEY, json.dumps({"dismissed_at": time.time(), "note": str(note or "")}))
-    return gate_state()
-
-
-def reset_gate() -> dict:
-    """清掉门禁状态 → 下次启动重新提示（设置页「已迁移/继续迁移」用）。"""
-    db.state_delete(GATE_KEY)
-    return gate_state()
-
-
-# ---------------- 预览 ----------------
-
-def _pick_from(dsts: list, ltype: str, targets: dict):
-    """在**已给出的**同类库列表里选目标：显式指定优先 → 唯一同类库 → 否则 ``None``。
-
-    第 68 期从 ``_pick_dst`` 里抽出来：``preview`` 现在一次性把「类型 → 同类库」算好
-    （见那里的说明），每本书再调一次 ``libraries_of_type()`` 是纯浪费。
-    """
-    want = str((targets or {}).get(ltype) or "")
-    if want:
-        return next((l for l in dsts if str(l.get("id")) == want), None)
-    return dsts[0] if len(dsts) == 1 else None
-
-
-def _pick_dst(ltype: str, targets: dict):
-    """选定目标库（自取同类库列表的便捷版）。"""
-    return _pick_from(libraries_of_type(ltype), ltype, targets)
-
-
-def preview(targets: dict = None) -> dict:
-    """待迁移概览（**只读**：不建库、不写台账）。
-
-    ``targets``：``{类型: 库 id}``，用于「同类库有多个」时指定目标。
-
-    ⚠️ 第 68 期性能修正：原实现对**每一本书**都调一次 ``libraries_of_type(t)``
-    （= ``library.libraries()``，读库表 + 组装列表），600 本的库实测仅这一项就约
-    200 ms（整个端点约 300 ms）。现在把「全部库 / 类型 → 同类库 / id → 库」
-    **在循环外算一次**，目标库根也按下沉缓存。口径不变，只是不再重复问同一件事。
-    """
-    items: list = []
-    missing: set = set()
-
-    all_libs = library.libraries()
-    by_type: dict = {}
-    by_id: dict = {}
-    for l in all_libs:
-        by_type.setdefault(str(l.get("type") or ""), []).append(l)
-        by_id[str(l.get("id") or "")] = l
-    roots_by_lib: dict = {}
-
-    for b in library.books():
-        t = target_type_of(b)
-        if not t:
-            continue                          # 不认识的格式：不动它（宁可漏迁，不可乱迁）
-        cur_id = str(b.get("library_id") or "")
-        dsts = by_type.get(t, [])
-        if any(str(l.get("id")) == cur_id for l in dsts):
-            continue                          # 已在同类型库里 → 无需迁移
-        dst = _pick_from(dsts, t, targets)
-        it = {
-            "name": b["name"], "book_id": b["id"], "title": b.get("title") or "",
-            "format": str(b.get("format") or "").upper(), "target_type": t,
-            "target_label": TYPE_LABELS.get(t, t),
-            "library_id": cur_id,
-            "library_name": str((by_id.get(cur_id) or {}).get("name") or ""),
-            "src": str(library.root_of(b) / b["name"]),
-            "dst_library_id": "", "dst_library_name": "", "dst": "",
-            "status": "", "reason": "", "suggest": "",
-        }
-        if not dsts:
-            missing.add(t)
-            it["status"] = "no_library"
-            it["reason"] = f"还没有「{TYPE_LABELS.get(t, t)}」—— 先建库再迁移"
-        elif dst is None:
-            it["status"] = "ambiguous"
-            it["reason"] = "存在多个同类库，需要指定目标库"
-        else:
-            dst_id = str(dst.get("id") or "")
-            root = roots_by_lib.get(dst_id)
-            if root is None:                  # 目标库根按库缓存（同一目标库只解析一次）
-                _dst_roots = library.roots_of(dst)
-                root = _dst_roots[0] if _dst_roots else pathlib.Path(config.OUTPUT_DIR)
-                roots_by_lib[dst_id] = root
-            it["dst_library_id"] = dst_id
-            it["dst_library_name"] = str(dst.get("name") or "")
-            it["dst"] = str(root / b["name"])
-            if (root / b["name"]).exists():
-                it["status"] = "conflict"
-                it["reason"] = "目标库已有同名文件（拒绝覆盖）"
-                it["suggest"] = _suggest_name(root, b["name"])
-            else:
-                it["status"] = "ready"
-        items.append(it)
-
-    counts = {k: sum(1 for i in items if i["status"] == k)
-              for k in ("ready", "conflict", "no_library", "ambiguous")}
-    gate = gate_state()
-    return {
-        "items": items, "total": len(items), **counts,
-        "movable": counts["ready"],
-        "blocked": counts["conflict"] + counts["ambiguous"],
-        "missing_types": sorted(missing),
-        "missing_labels": [TYPE_LABELS[t] for t in sorted(missing)],
-        "suggest_specs": suggest_specs(),
-        "gate": gate,
-        # 有东西可搬、且用户没答过「暂不迁移」、且没勾自动执行 → 前端应阻塞式确认一次
-        "needs_confirm": counts["ready"] > 0 and not gate["dismissed"] and not gate["auto_migrate"],
-    }
-
-
-def suggest_specs() -> list:
-    """向导用：为**缺失**的类型库给出就地引用的默认内容来源（多文件夹，绝对路径）。
-
-    只给默认值，不落库；用户选定后由调用方建库（见 server 的书库 CRUD）。
-
-    第 41 期：库持有多个文件夹（``source_dirs``，绝对路径数组），不再有「来源子目录名」
-    与「独立存储（import）」概念。默认建议取第一个来源根下的同名子目录作为内容来源，
-    用户可在向导里增删 / 改选。
-    """
-    out = []
-    for t in TARGET_TYPES:
-        if libraries_of_type(t):
-            continue
-        name, sub = SUGGEST[t]
-        default_root = config.LIBRARY_SOURCE_ROOTS[0]["path"] if config.LIBRARY_SOURCE_ROOTS else config.OUTPUT_DIR
-        out.append({
-            "id": t, "type": t, "name": name,
-            "source_dirs": [str(pathlib.Path(str(default_root)) / sub)],
-        })
-    return out
-
-
-# ---------------- 计划（落 manifest）----------------
-
-def plan(targets: dict = None) -> dict:
-    """把预览里 ``ready`` 的条目落成 manifest（pending），返回批次。
-
-    ``batch_id`` 由「条目集合」**确定性**派生：同一批文件重复 plan 得到同一批次，
-    因此不会重复落行（幂等）。要换目标库时条目集合会变 → 自然得到新批次。
-    """
-    pv = preview(targets)
-    movable = [i for i in pv["items"] if i["status"] == "ready"]
-    if not movable:
-        return {"batch_id": "", "created": 0, "reused": False, "items": [], "preview": pv,
-                "message": "没有可自动迁移的条目" if pv["total"] else "没有需要迁移的书"}
-
-    sig = "\n".join(sorted(f"{i['src']}|{i['dst']}" for i in movable))
-    batch_id = "auto-" + hashlib.sha1(sig.encode("utf-8")).hexdigest()[:12]
-    reused = bool(db.migration_batch(batch_id))
-    if not reused:
-        for i in movable:
-            db.migration_add(batch_id, "move", i["dst_library_id"], i["src"], i["dst"])
-    return {"batch_id": batch_id, "created": len(movable), "reused": reused,
-            "items": movable, "preview": pv, "message": ""}
-
-
 def pending_batches() -> list:
-    """全部批次概览（含进度计数），供「书库管理」页展示。"""
+    """**全部**批次的概览（含进度计数），不区分 direction。
+
+    第 77 期起只被 :func:`move_batches` 使用（书库管理页那张台账卡片随自动归库一并移除）。
+    ⚠️ 库里可能仍躺着第 77 期之前**自动归库**留下的 ``direction="move"`` 批次行
+    （历史台账不清理），所以调用方要自行过滤 —— :func:`move_batches` 就只取 ``bookmove``。
+    """
     out = []
     for b in db.migration_batches(50):
         rows = db.migration_batch(b["batch_id"])
@@ -313,26 +97,21 @@ def pending_batches() -> list:
 
 
 # ---------------- 用户发起的跨库移动（第 36 期）----------------
-# 与上面「按格式自动归库」共用同一台机器（manifest 批次 / 逐条独立 / remap / 回滚）。
-# 差别**只**在两处：**谁选源集合**（用户点选 vs 全库扫描）、**谁定目标库**（显式指定
-# vs 按格式推导）。所以不另开模块 —— 另开就得把「逐条独立 / 幂等 / 回滚口径」再抄一遍，
-# 两处迟早会写歪。
+# 第 77 期起，本模块**只剩**这一条路：原先与它并列的「按格式自动归库」已整体移除
+# （见模块 docstring）。下面这套链（manifest 批次 / 逐条独立 / remap / 副本随迁 / 回滚）
+# 本来就是为跨库移动写的，自动归库只是历史上一度与它共用 —— 所以删归库时这些函数
+# 一个字没动，正是为了不碰这条路的语义。
 #
-# ⚠️ 第 39 期改掉了**第三处**差别：原先自动归库「不动副本、不改台账」，与 bookmove 走
-# 两套账目完整度。那不是设计，是第 36 期**有意留下的边界**（存量批次可能正躺在 pending
-# 里等执行，改行为要单独一期）—— 第 39 期就是那一期。现在两条路都走
-# ``_after_bookmove`` / ``_after_bookmove_back`` 同一套链：remap + 副本随迁 + 台账改挂
-# + 通知 watcher。
-#
-# 为什么当初的边界**必须**收掉：``db.remap_book_id``（``db.py:1731``）的 docstring 明写
+# ⚠️ 第 39 期统一了「两条路的账目完整度」（原自动归库「不动副本、不改台账」）。那条
+# 修正对**现在**仍然成立，原因与当初一样：``db.remap_book_id`` 的 docstring 明写
 # ``scrape_items`` **刻意不在这里**（它另有 ``library_id`` / ``source_rel`` / ``link_rel``
-# 三个库相关列）⇒ 自动归库后那本书的 id 换了库前缀，**台账行却还挂在旧 id 上**，
-# 新库看不到它、旧库的对账会把它判成 ``orphan`` / ``removed`` —— 一次正常搬迁
-# 变成一次误报事故。
+# 三个库相关列）⇒ 任何换库动作若忘了改挂台账，新库看不到那条行、旧库的对账会把它判成
+# ``orphan`` / ``removed`` —— 一次正常搬迁变成一次误报事故。
 
-#: ``library_migrations.direction`` 的取值，如实记录迁移是**谁发起的**。
-#: ⚠️ 自动归库落库时写的就是字面量 ``"move"``，**不能改** ——
-#: ``migration_last_batch("move")`` 与既有回滚入口都按它取批次。
+#: ``library_migrations.direction`` 的取值，如实记录这次搬迁是**谁发起的**。
+#: ⚠️ ``DIR_AUTO`` 是**历史遗留**（第 77 期起不再产生新的 ``move`` 批次）：存量台账行里
+#: 还写着它，且 ``test_book_move.py`` 靠它断言「跨库移动不会顶掉既有的 move 批次」——
+#: **既不能删也不能改值**。
 DIR_AUTO = "move"
 DIR_BOOKMOVE = "bookmove"
 

@@ -3573,10 +3573,12 @@ def api_annotations_overview():
 
 
 # ---------------- 书库（第 10 期 D8）----------------
-# 三个概念各有归属，别再混用：
-#   /api/libraries          → **库实体**（id / 名称 / 类型 / 归属模式 / 根目录 / 书数）
-#   /api/library-facets     → **格式分面**（原 /api/libraries 的语义：fmt: / issues: / nocover:）
-#   /api/library-migrations → 现有书「按格式迁移」的预览 / 计划 / 执行 / 回滚
+# 两个概念各有归属，别再混用：
+#   /api/libraries      → **库实体**（id / 名称 / 类型 / 归属模式 / 根目录 / 书数）
+#   /api/library-facets → **格式分面**（原 /api/libraries 的语义：fmt: / issues: / nocover:）
+# ⚠️ 第 77 期移除了 `/api/library-migrations/*`（现有书「按格式迁移」的预览 / 计划 /
+#    执行 / 回滚）—— 它与「移除书库」错误耦合，见 core/migrate.py 的模块 docstring。
+#    用户发起的跨库移动仍在，走 `/api/book-move/*`。
 
 _LIB_TYPE_LABELS = migrate.TYPE_LABELS
 
@@ -4493,75 +4495,11 @@ def api_library_conflicts_apply(payload: dict = Body(...)):
         raise HTTPException(400, str(e))
 
 
-# ---- 迁移（预览 / 计划 / 执行 / 回滚 / 门禁）----
-
-@app.get("/api/library-migrations/preview")
-def api_mig_preview(targets: str = ""):
-    """待迁移概览。``targets`` 传 JSON（如 ``{"comic": "comic-2"}``）用于指定同类多库时的目标。"""
-    t: dict = {}
-    if targets.strip():
-        try:
-            parsed = json.loads(targets)
-            if not isinstance(parsed, dict):
-                raise ValueError
-            t = parsed
-        except Exception:
-            raise HTTPException(400, "targets 必须是 JSON 对象")
-    return migrate.preview(t)
-
-
-@app.post("/api/library-migrations/plan")
-def api_mig_plan(payload: dict = Body(None)):
-    """生成/复用迁移批次（**只写台账，不搬文件**）。"""
-    targets = (payload or {}).get("targets")
-    return migrate.plan(targets if isinstance(targets, dict) else None)
-
-
-@app.post("/api/library-migrations/apply")
-def api_mig_apply(payload: dict = Body(...)):
-    """执行迁移批次（**真移文件**；逐条独立，一条失败不影响其余）。"""
-    bid = str((payload or {}).get("batch_id") or "").strip()
-    if not bid:
-        raise HTTPException(400, "缺少 batch_id")
-    try:
-        return migrate.execute(bid)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.post("/api/library-migrations/rollback")
-def api_mig_rollback(payload: dict = Body(None)):
-    """一键回滚（默认最近一次迁移批次）。"""
-    bid = str((payload or {}).get("batch_id") or "").strip() or migrate.last_batch("move")
-    if not bid:
-        raise HTTPException(400, "没有可回滚的批次")
-    try:
-        return migrate.rollback(bid)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-
-@app.get("/api/library-migrations/batches")
-def api_mig_batches():
-    return {"items": migrate.pending_batches(), "gate": migrate.gate_state()}
-
-
-@app.post("/api/library-migrations/dismiss")
-def api_mig_dismiss(payload: dict = Body(None)):
-    """「暂不迁移」：记下来，之后不再每次启动阻塞提示。"""
-    return {"ok": True, "gate": migrate.dismiss(str((payload or {}).get("note") or ""))}
-
-
-@app.post("/api/library-migrations/reset-gate")
-def api_mig_reset_gate():
-    """让启动提示重新出现（管理页 / 设置页用）。"""
-    return {"ok": True, "gate": migrate.reset_gate()}
-
-
 # ---- 跨库移动（用户点选：可选目标库 / 预检 / 计划 / 执行 / 回滚）----
-# 与上面的「自动归库」共用 core/migrate.py 里同一台机器（manifest 批次 / 逐条独立 /
-# remap / 回滚），但**入口刻意分开**：自动归库的批次槽位（``last_batch("move")``）与
-# 门禁是第 10 期定下的，用户的点选移动不去占用它，两边的回滚也不会互相按错批次。
+# 第 77 期起这是 core/migrate.py **唯一**的使用方：原先与之并列的「按格式自动归库」
+# （端点 ``/api/library-migrations/*`` + 启动门禁 + ``libraries.auto_migrate``）已整体
+# 移除。底下那台执行机器本就是共用的（manifest 批次 / 逐条独立 / remap / 副本随迁 /
+# 回滚），所以删归库时那些函数一个字没动 —— 改这里前先读 core/migrate.py 的模块 docstring。
 #
 # 全部走 POST：选择集可能几十本、book_id 里带 ``$`` 与哈希，塞进 query string 迟早
 # 撞长度上限；这组接口没有缓存需求，用 body 传更省事。
@@ -5307,8 +5245,11 @@ EDITABLE: dict = {
     # Komga 兼容服务端：开关 + Basic 用户名 + 可选 API Key
     # `expose` = 全局默认「书库是否对客户端暴露」（每库可在书库管理里覆写）
     "komga": {"enabled", "username", "api_key", "expose"},
-    # 多书库：跨库策略开关（库实体本身存 SQLite，不走 config）
-    "libraries": {"auto_migrate"},
+    # 多书库：**第 77 期起不再有可编辑键**。原先这里只有 `auto_migrate`（启动时是否
+    # 静默执行按格式归库），随自动归库一并移除 ⇒ 整条 `libraries` 从白名单里删掉。
+    # 存量 config.yaml 里若还写着 `libraries.auto_migrate`，只是**留在盘上没人读**
+    # （`config.load_config` 是浅合并不做白名单校验，不会报错），无需迁移清理。
+    # ⚠️ `libraries.index_interval`（全量兜底间隔）从不在本白名单里，别顺手加进来。
     # 阅读状态口径（第 40 期）：全站「在读 / 已读完」判定的**全局默认值**。
     # 每库可在「书库管理 → 每库设置」覆写（走 lib_settings），这里只管全局。
     # ⚠️ 值域 0–100（`percent` 类型，**不是** number 的 0–1）。越界不在这里拦 ——
@@ -5445,10 +5386,9 @@ def api_get_config():
                 "has_api_key": bool(str((cfg.get("komga") or {}).get("api_key") or "").strip()),
                 "expose": bool((cfg.get("komga") or {}).get("expose", True)),
             },
-            # 多书库：跨库策略开关（库实体本身存 SQLite，走 /api/libraries）
-            "libraries": {
-                "auto_migrate": bool((cfg.get("libraries") or {}).get("auto_migrate")),
-            },
+            # 多书库（第 77 期起无可编辑键）：库实体本身存 SQLite，走 /api/libraries。
+            # 这里曾回显 `auto_migrate`，随自动归库一并移除 —— 别再往这个空对象里加键。
+            "libraries": {},
             # 阅读状态口径的全局默认值（第 40 期）。每库生效值另走
             # `GET /api/reading-thresholds?library_id=`（含覆写合并），不在这里算。
             "reading": cfg.get("reading") or {},
