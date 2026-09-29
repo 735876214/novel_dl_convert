@@ -42,6 +42,11 @@ import { useUiStore } from '@/stores/ui'
  * 别再把「按次指定」当成「没有」。
  *
  * 参数细节（轮询间隔 / 稳定判定 / 忽略规则等）在「本项目扩展 → 监听」，本页不重复。
+ *
+ * ⚠️ 第 77 期：投递目录卡片补了一句「**投递会复制一份**」的口径说明。起因是用户问
+ * 「从 NAS 拷进来再导入，是不是多了一份文件」—— 答案是**会**（`shutil.copy2` 进书库根），
+ * 而「把那个目录配成来源根、建库时直接引用它」才是零复制的做法。这不是新能力，
+ * 是把既有取舍写明白（详见 `docs/user-guide.md` §2）。
  */
 
 interface WatcherInfo extends WatcherStatus {
@@ -642,10 +647,17 @@ onBeforeUnmount(() => {
             并指定它的来源目录。
           </template>
           <template v-else>
-            把 <code class="font-mono">.txt</code> 放进该目录会自动转成 EPUB 并归入成品目录；
-            其它格式按设置原样导出。子目录是否递归、写入稳定判定等参数见
+            丢进来的书按各库自己的规则（来源子目录名 &gt; 格式 &gt; 关键词）选目标库并入库；
+            子目录是否递归、写入稳定判定等参数见
             <RouterLink to="/settings/ext/watcher" class="underline">本项目扩展 → 监听</RouterLink>。
           </template>
+        </p>
+        <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
+          ⚠️ 投递会把文件<strong>复制</strong>一份进书库（这份复制正是应用命名规则与 Komga
+          布局的唯一着手处）。不想在磁盘上多占一份，就别投递 —— 把那个目录配成
+          <strong>来源根</strong>，建库时把它选成<strong>内容来源</strong>即可（
+          <button type="button" class="underline" @click="openWizard">新建书库</button>），
+          书会被<strong>原地引用</strong>、零复制。
         </p>
       </div>
 
@@ -813,7 +825,7 @@ onBeforeUnmount(() => {
           <div class="flex items-center gap-1.5">
             <!-- 两个只对**未入库**条目开放的动作（口径 5/6）：`就绪` 一律不显示 ——
                  「不出现、不灰置、不占位」；已入库的改名去书架「编辑元数据」，
-                 改投它库是 migrate 的地盘。 -->
+                 改投它库走书架的「移动到书库」（`/api/book-move/*`）。 -->
             <template v-if="it.status !== 'ready'">
               <Button size="sm" data-dock-act="rename" :disabled="rowBusy(it.id)" @click="startRename(it)">重命名</Button>
               <Button size="sm" data-dock-act="ingest" :disabled="rowBusy(it.id)" @click="openIngest(it)">入库到…</Button>

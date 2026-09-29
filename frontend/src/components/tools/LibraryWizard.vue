@@ -480,6 +480,13 @@ onMounted(async () => {
               <div class="mb-1 text-[11.5px] text-muted-foreground">
                 内容来源（就地引用，不搬文件）—— 可从多个来源根选多个文件夹，一个库对应多个文件夹
               </div>
+              <!-- 第 77 期：把「投递会复制一份」的对照口径放在**建库这一步** —— 用户就是
+                   在这里决定「书放哪、要不要多一份」，而不是等他投递完才发现磁盘上多了一倍。 -->
+              <div class="mb-1 text-[11px] leading-relaxed text-muted-foreground">
+                选这里的文件夹 ⇒ 书被<strong>原地引用</strong>，磁盘上不会多出副本。
+                作为对照：往「收书目录」（设置 → 收书目录）投递的书会<strong>复制</strong>
+                一份进库（那份复制是应用命名规则与 Komga 布局的唯一着手处）。
+              </div>
               <div class="grid grid-cols-2 gap-2">
                 <button
                   v-for="(r, i) in sourceRoots"
