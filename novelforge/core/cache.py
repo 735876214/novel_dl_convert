@@ -243,6 +243,15 @@ def cover_key(bid: str, fp: str) -> str:
     return f"{_PREFIX}cover:{bid}:{fp}"
 
 
+def css_key(bid: str, fp: str) -> str:
+    """书内样式（``library.chapter_assets`` 的产物）的键：``(书, 源文件指纹)``。
+
+    与 :func:`cover_key` 同构：产物完全由源文件决定，指纹一变即自然失效；
+    不按章分键 —— 样式是**整本一份**（见 `chapter_assets` 的说明）。
+    """
+    return f"{_PREFIX}css:{bid}:{fp}"
+
+
 def fingerprint(path) -> str:
     """文件的 ``(大小, mtime)`` 指纹；取不到就返回 ``""``（= 不缓存）。
 

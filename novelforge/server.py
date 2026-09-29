@@ -10,6 +10,7 @@ import json
 import logging
 import mimetypes
 import pathlib
+import posixpath
 import re
 import shutil
 import threading
@@ -1597,21 +1598,118 @@ def api_change_pin(request: Request, payload: dict = Body(...)):
 # ---------------- 阅读器：章节内容 / 资源 / 进度 / 批注 ----------------
 # 阅读进度与批注落在 SQLite（见 core/db.py），多端共享同一持久卷即可一致。
 
+#: 正文 / 样式里的 asset URL —— **令牌注入点**（第 76 期）。
+#: 形状与 `library._asset_url` 严格对应；`p` 的值经 `quote()` 后不含 `&`，所以
+#: 直接追加 `&token=` 不可能与它混淆（末尾的 `[^…&]+` 也保证不会重复追加）。
+_ASSET_URL_RE = re.compile(r"""/api/books/[^/"'\s()]+/asset\?p=[^"'\s()&]+""")
+
+
+def _with_asset_token(text: str, token: str) -> str:
+    """给 asset URL 补上 `?token=`（第 76 期）。
+
+    `<img src>` / CSS `url()` 都是浏览器**原生请求**，带不了 `Authorization` 头 ——
+    而 `/asset` 已在 `_MEDIA_TOKEN_PATHS` 里允许用 query 传令牌（`_request_token`）。
+    URL 由**后端**生成（`library._rewrite_assets` / `_rewrite_css_urls`），所以只能由
+    后端补令牌 —— 前端那边没有、也不该有第二套拼接（与漫画那条链路刻意不同：那里的
+    URL 是前端拼的，见 `api.comicPageUrl`）。
+
+    ⚠️ **必须在读完缓存之后调用**：写进缓存的话，令牌一过期，整章正文的插图就全 401，
+    而缓存还新鲜着、不会重建。
+    """
+    if not text or not token:
+        return text
+    tok = quote(str(token), safe="")
+    return _ASSET_URL_RE.sub(lambda m: f"{m.group(0)}&token={tok}", text)
+
+
+def _asset_entry(z: zipfile.ZipFile, p: str) -> str:
+    """``p`` → zip 内**真实条目名**；命中不了回空串。
+
+    归一化（折叠 `..` 与重复斜杠）与 URL 解码两种等价写法都试一遍：修复前缓存下来的
+    正文里带的是**未折叠**的路径（第 76 期之前 `_rewrite_assets` 不折叠），而真实 EPUB
+    的 href 常写成 `%20` 这种 URL 编码形式、条目名本身却是解码后的。
+    ⚠️ 这只是「换个等价写法去比对同一份 namelist」，**不放宽**白名单：最终仍必须
+    **精确等于**某个真实条目名。
+    """
+    names = z.namelist()
+    cands = [p]
+    for f in (lambda s: posixpath.normpath(s), unquote):
+        for base in list(cands):
+            try:
+                cands.append(f(base))
+            except Exception:                                # noqa: BLE001 —— 坏值跳过
+                continue
+    for cand in cands:
+        if cand and cand in names:
+            return cand
+    return ""
+
+
 @app.get("/api/books/{bid}/asset")
 def api_book_asset(bid: str, p: str = Query(..., description="zip 内资源相对路径")):
+    """分发书内资源（EPUB 正文里的插图、书内 CSS、书内字体都走这里）。
+
+    ⚠️ 取文件用书目里的 ``path``（索引行按它**实际落在的那个根**拼出来的绝对路径），
+    **不用** ``library.root_of(b) / b["name"]`` —— 那是 best-effort 代表根，多文件夹的
+    库里会指到**另一个根**下的同名文件（`api_delete_book` 与 `api_book_local_paths`
+    的 docstring 都点名批评过那种写法）。
+
+    ⚠️ 鉴权：``<img src>`` 带不了 Authorization 头，所以本路径在 `_MEDIA_TOKEN_PATHS`
+    里额外允许 ``?token=`` 传令牌 —— 正文与书内样式里的 URL 由 `api_book_chapter` /
+    `api_epub_css` 注入令牌（`_with_asset_token`）。
+    """
+    b = library.by_id(bid)
+    raw = str((b or {}).get("path") or "")
+    if not b or not raw:
+        raise HTTPException(404, "书籍不存在")
+    data = None
+    name = ""
+    try:
+        with zipfile.ZipFile(pathlib.Path(raw)) as z:
+            name = _asset_entry(z, p)
+            if name:
+                data = z.read(name)
+    except (zipfile.BadZipFile, OSError):
+        data = None
+    if data is None:
+        raise HTTPException(404, "资源不存在")
+    ct = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    return Response(content=data, media_type=ct,
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/api/books/{bid}/epub-css")
+def api_epub_css(bid: str, request: Request):
+    """一本书的**书内样式**（`<style>` / `<link rel=stylesheet>` / `@import` 链）。
+
+    与正文**分成两条通道**下发是刻意的（第 76 期）：样式必须挂在**被测量的正文容器
+    之外**，否则 CSS 文本会把 `textContent` 顶长、让进度 / 批注的字符偏移全线错位
+    （见 `core/epub_cfi` 的说明）。
+
+    取不到样式（非 EPUB / 坏书 / 没有样式）一律返回空串，**不是错误** —— 前端据此
+    回落应用自身的排版。
+
+    这里走 Bearer（**不进** `_MEDIA_TOKEN_PATHS`）：它是前端 `fetch` 取的，不是浏览器
+    原生请求，令牌不必进 URL。但样式**内部**引用的字体 / 背景图仍是原生请求，
+    所以 `css` 里的 asset URL 要在这里补令牌。
+    """
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = library.root_of(b) / b["name"]
-    with zipfile.ZipFile(path) as z:
-        if p not in z.namelist():
-            raise HTTPException(404, "资源不存在")
-        data = z.read(p)
-        ct = mimetypes.guess_type(p)[0] or "application/octet-stream"
-        return Response(
-            content=data, media_type=ct,
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
+    path = pathlib.Path(str(b.get("path") or ""))
+    if path.suffix.lower() != ".epub":
+        return {"css": "", "sheets": [], "fixed_layout": False}
+    tok = _request_token(request)
+    fp = cache.fingerprint(path)
+    key = cache.css_key(bid, fp) if fp else ""
+    if key:
+        hit = cache.get_json(key)
+        if hit is not None:
+            return {**hit, "css": _with_asset_token(str(hit.get("css") or ""), tok)}
+    out = library.chapter_assets(path, bid)
+    if key:
+        cache.set_json(key, out, cache.TTL_CHAPTER)
+    return {**out, "css": _with_asset_token(str(out.get("css") or ""), tok)}
 
 
 # 接口用的字段名 → library 书目字典里的键名。
@@ -2272,7 +2370,8 @@ def _chapter_read(produce):
         raise HTTPException(404, "章节不存在")
 
 
-def _chapter_cached(bid: str, index: int, src, kind: str, produce, extra: str = ""):
+def _chapter_cached(bid: str, index: int, src, kind: str, produce, extra: str = "",
+                    token: str = ""):
     """章节正文的读缓存（第 62 期 C）。``src`` = **真正被读的那个文件**。
 
     ⚠️ TXT 派生路线传的是**派生 EPUB** 的路径而不是源 txt：指纹必须跟着被读的
@@ -2285,27 +2384,42 @@ def _chapter_cached(bid: str, index: int, src, kind: str, produce, extra: str = 
     内存缓存键里正带着 ``v{RULE_VERSION}``）—— 所以这条路把规则版本一并塞进键。
 
     取不到指纹（文件刚被别人删了等）就直接不缓存 —— 那种情况下面本来也会抛。
+
+    ``token``（第 76 期）：非空时把**返回值**里的 asset URL 补上该令牌；缓存里存的
+    始终是**无令牌**那一份 —— 写进缓存会让令牌过期后整章正文的插图全 401，而缓存
+    还新鲜着不会重建（见 `_with_asset_token`）。
     """
+    def done(out):
+        if not token or not isinstance(out, dict):
+            return out
+        return {**out, "html": _with_asset_token(str(out.get("html") or ""), token)}
+
     fp = cache.fingerprint(src)
     if fp and extra:
         fp = f"{fp}:{extra}"
     if not fp:
-        return _chapter_read(produce)
+        return done(_chapter_read(produce))
     key = cache.chapter_key(bid, index, fp, kind)
     hit = cache.get_json(key)
     if hit is not None:
-        return hit
+        return done(hit)
     out = _chapter_read(produce)
     cache.set_json(key, out, cache.TTL_CHAPTER)
-    return out
+    return done(out)
 
 
 @app.get("/api/books/{bid}/chapter/{index}")
-def api_book_chapter(bid: str, index: int):
+def api_book_chapter(bid: str, index: int, request: Request):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = library.root_of(b) / b["name"]
+    # ⚠️ 用书目里的 `path`（按它**实际落在的那个根**拼出的绝对路径），**不用**
+    # `library.root_of(b) / b["name"]` —— 多文件夹的库里后者会指到**另一个根**
+    # （与 `api_book_asset` 同一条判据，说明见那里的 docstring）。
+    path = pathlib.Path(str(b.get("path") or ""))
+    # 正文里的插图 / CSS `url()` 是浏览器原生请求，带不了 Authorization 头 ⇒
+    # 由这里把本次请求的令牌补进 asset URL（第 76 期，见 `_with_asset_token`）。
+    tok = _request_token(request)
     suffix = path.suffix.lower()
     if suffix == ".txt":
         # 第 55 期：TXT 优先读**派生 EPUB**（与详情页下发的目录同一形态，索引空间一致）；
@@ -2314,18 +2428,19 @@ def api_book_chapter(bid: str, index: int):
         ep = txtcache.derived_epub(b, path=path)
         if ep is not None:
             return _chapter_cached(bid, index, ep, "epub",
-                                   lambda: library.chapter_html(ep, index, bid))
+                                   lambda: library.chapter_html(ep, index, bid), token=tok)
         return _chapter_cached(bid, index, path, "native",
                                lambda: txtcache.native_chapter_html(b, index, path=path),
                                # 这条路线的正文由「源文件 + 分章规则 + **编码判据**」共同
                                # 决定，后两者都是源指纹看不出来的输入 —— 缺了编码判据版本，
                                # 判据改了而源文件没动时，缓存里那份（可能是乱码的）正文会
                                # 一直命中（第 72 期）。
-                               extra=f"v{txtcache.RULE_VERSION}:e{txtcache.ENC_RULE_VERSION}")
+                               extra=f"v{txtcache.RULE_VERSION}:e{txtcache.ENC_RULE_VERSION}",
+                               token=tok)
     if suffix != ".epub":
         raise HTTPException(400, "仅 EPUB / TXT 支持在线阅读")
     return _chapter_cached(bid, index, path, "epub",
-                           lambda: library.chapter_html(path, index, bid))
+                           lambda: library.chapter_html(path, index, bid), token=tok)
 
 
 def _progress_file(b: dict, file_rel: str) -> tuple:

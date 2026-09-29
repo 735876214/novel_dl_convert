@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import pathlib
+import posixpath
 from urllib.parse import quote, unquote
 import re
 import stat
@@ -648,21 +649,232 @@ def _body_of(doc: str) -> str:
     return m.group(1) if m else doc
 
 
+# ---------------- 书内资源 URL（第 76 期）----------------
+# 正文（`_rewrite_assets`）与书内样式（`chapter_assets`）**共用**下面这套解析与 URL 构造。
+# ⚠️ 令牌**不在这里拼** —— 这两个函数的产物都会被缓存，写进令牌会让它过期后整章正文
+# 的插图全 401；令牌由端点在**读完缓存之后**统一追加（`server._with_asset_token`）。
+
+def _asset_url(bid: str, resolved: str) -> str:
+    """zip 内条目 → asset 接口 URL（**全仓唯一构造点**，别处不许再拼这个形状）。"""
+    return f"/api/books/{bid}/asset?p={quote(resolved)}"
+
+
+def _resolve_asset(val: str, base: "pathlib.PurePosixPath") -> str:
+    """相对引用 → zip 内条目路径；**不该改写的一律回空串**。
+
+    回空串的情形：空值、``#锚``、协议相对（``//``）、带 scheme 的值（``http:`` /
+    ``data:`` / ``mailto:`` …），以及**折叠 ``..`` 之后仍逃出 zip 根**的路径。
+    最后一种刻意**不重写**：与其造一个必然 404 的 URL，不如原样保留 —— 那本来就说明
+    这本书自身的引用是坏的。
+
+    ``..`` **必须折叠**：真实 EPUB 里 ``../Images/x.jpg`` 极常见，而 `/asset` 是拿
+    ``z.namelist()`` **精确相等**匹配的（``server.api_book_asset``）—— 不折叠就永远
+    命不中（404）。
+    """
+    val = str(val or "").strip()
+    if not val or val.startswith("#") or val.startswith("//") or val.startswith("/"):
+        # `//host/x` 是协议相对、`/x` 是站内绝对：都不是 zip 内条目。
+        # ⚠️ 绝对路径这一条还兼着**幂等**：改写产出的 `/api/…` 也正是这个形状，
+        # 于是「内联进来的 CSS 已经改写完」时外层再跑一遍不会把它套成第二层。
+        return ""
+    if re.match(r"^[a-z][a-z0-9+.-]*:", val, re.I):          # http: / data: / mailto: …
+        return ""
+    try:
+        head = str(base or "")
+        joined = f"{head}/{val}" if head and head != "." else val
+        resolved = posixpath.normpath(joined)
+    except Exception:                                        # noqa: BLE001 —— 坏值当「不改写」
+        return ""
+    if resolved in ("", ".", "..") or resolved.startswith(("../", "/")):
+        return ""
+    return resolved
+
+
+#: 会被改写的属性。**一条正则吃四种**：`(attr)(引号)(值)\2` 用反向引用保证两边引号一致，
+#: 于是单引号写法（真实 EPUB 里不少）也被覆盖，且不必猜值里有没有另一种引号。
+#: `srcset` 的值是「逗号分隔的多个候选」、`style` 的值是 CSS，各自另有处理（见下）。
+_ASSET_ATTR_RE = re.compile(r"""\b(src|href|poster|srcset|style)\s*=\s*(["'])(.*?)\2""", re.I)
+#: 正文里内联的 `<style>` 块（`style="…"` 属性由上面那条正则覆盖）
+_STYLE_TAG_RE = re.compile(r"(<style\b[^>]*>)(.*?)(</style\s*>)", re.S | re.I)
+#: CSS 里的 `url(...)`（三种引号写法）
+_CSS_URL_RE = re.compile(r"""url\(\s*(?:"([^"]*)"|'([^']*)'|([^)"']*))\s*\)""", re.I)
+#: CSS 里的 `@import`（url() 形式与裸字符串形式；只取到分号）
+_CSS_IMPORT_RE = re.compile(
+    r"""@import\s+(?:url\(\s*(?:"([^"]+)"|'([^']+)'|([^)"']+))\s*\)|"([^"]+)"|'([^']+)')"""
+    r"""[^;]*;""",
+    re.I,
+)
+#: `<a href="…">` 指向的是**别的章节文档**，不是资源 —— 不能改写（改写后点开会把
+#: XHTML 当文件下下来）。判据只看扩展名，够用且不必解析文档结构。
+_DOC_EXTS = (".xhtml", ".html", ".htm")
+
+
+def _attr_value(m: "re.Match", *groups) -> str:
+    """「二选一引号」这类正则里实际命中的那个捕获组（另一支是 ``None``）。"""
+    for g in groups:
+        v = m.group(g)
+        if v is not None:
+            return v
+    return ""
+
+
+def _rewrite_css_urls(css: str, base: "pathlib.PurePosixPath", bid: str) -> str:
+    """把 CSS 里的 ``url(...)`` 改写成 asset 接口（相对路径以**该 CSS 文件自身**为基准）。
+
+    图片与 ``@font-face`` 的字体走同一条路 —— 它们都是 zip 内条目，`/asset` 一个入口
+    就够（Content-Type 由 ``mimetypes`` 给出）。
+
+    ⚠️ **刻意不加引号**（`url(/api/…)` 而不是 `url("…")`）：这段 CSS 可能被嵌在
+    `style="…"` 属性里（正文的内联样式），加双引号会把属性**提前截断**。而路径已经过
+    `quote()`，里面不会有 `)` / 引号 / 空白（这几个字符全被百分号编码），
+    所以不带引号的 `url()` 没有歧义、在任何上下文里都成立。
+    """
+    def fix(m: "re.Match") -> str:
+        resolved = _resolve_asset(_attr_value(m, 1, 2, 3), base)
+        return f"url({_asset_url(bid, resolved)})" if resolved else m.group(0)
+
+    return _CSS_URL_RE.sub(fix, css)
+
+
+#: ``@import`` 跟随深度上限（`seen` 是主防循环，这里是第二道）
+_CSS_MAX_DEPTH = 5
+
+
+def _load_css(z: zipfile.ZipFile, name: str, bid: str, seen: set, depth: int = 0) -> str:
+    """读一个 zip 内 CSS：**递归内联** `@import`，再把 `url()` 改写成 asset 接口。
+
+    为什么要内联而不是把 `@import` 也指向 `/asset`：被导入的 CSS 里那些**相对**
+    ``url()`` 是相对**它自己**的位置解析的，交给浏览器去取就会以 `/asset` 为基准 ⇒
+    全错。内联掉之后每条 ``url()`` 都能用正确的 base 处理。
+
+    ⚠️ 内联进来的文本**已经改写完**，外层再跑一遍 `_rewrite_css_urls` 时它不会被二次
+    改写 —— 改写后的值是绝对路径（``/api/…``），`_resolve_asset` 对它回空串（见其说明）。
+    """
+    if depth > _CSS_MAX_DEPTH or not name or name in seen or name not in z.namelist():
+        return ""
+    seen.add(name)
+    try:
+        raw = z.read(name).decode("utf-8", "ignore")
+    except Exception:                                        # noqa: BLE001 —— 坏条目跳过
+        return ""
+    base = pathlib.PurePosixPath(name).parent
+
+    def imp(m: "re.Match") -> str:
+        resolved = _resolve_asset(_attr_value(m, 1, 2, 3, 4, 5), base)
+        return _load_css(z, resolved, bid, seen, depth + 1)
+
+    return _rewrite_css_urls(_CSS_IMPORT_RE.sub(imp, raw), base, bid)
+
+
+#: 扫 spine 文档的 head 找内联 `<style>` 时，每个文档最多读多少字节（head 在开头）
+_HEAD_SCAN_BYTES = 64 * 1024
+
+
+def chapter_assets(path: pathlib.Path, bid: str) -> dict:
+    """一本书的**书内样式**：`<style>` 块 + `<link rel=stylesheet>` + `@import` 链。
+
+    返回 ``{"css": str, "sheets": [zip 内路径…], "fixed_layout": bool}``。
+
+    ⚠️ **必须以独立字段下发，绝不内嵌进 `chapter_html` 的 html** —— 见
+    :mod:`core.epub_cfi` 的字符偏移不变量：正文容器的 ``textContent.length`` 是前后端
+    共用的那把尺子，而 CSS 本身就是文本节点 —— 注入进去会把正文长度顶长，
+    让进度 / 批注 / 高亮的偏移**全线错位**。
+
+    粒度取**整本一次**而不是每章：滚动流同时挂着相邻章块，样式若随章切换会互相打架；
+    真实 EPUB 也基本都是全书共用一套。
+
+    坏书 / 坏 CSS 一律**静默降级为空样式** —— 宁可没有书内排版，也不许因此读不了书。
+    """
+    empty = {"css": "", "sheets": [], "fixed_layout": False}
+    try:
+        with zipfile.ZipFile(path) as z:
+            opf_path = _opf_path(z)
+            if not opf_path:
+                return dict(empty)
+            opf = z.read(opf_path).decode("utf-8", "ignore")
+            opf_base = pathlib.PurePosixPath(opf_path).parent
+
+            # ① manifest 里声明为 CSS 的条目（`<link rel=stylesheet>` 指向的就是它们）。
+            #    走 manifest 而不是逐章扫 `<link>`：一份 OPF 就够，且不受「某些章没写
+            #    link」影响（样式表按 OPF 声明，这正是 EPUB 的权威来源）。
+            sheets: list = []
+            for m in re.finditer(r"<item\b([^>]*?)/?>", opf, re.I):
+                a = m.group(1)
+                hm = re.search(r'href="([^"]+)"', a)
+                if not hm:
+                    continue
+                tm = re.search(r'media-type="([^"]+)"', a, re.I)
+                href = hm.group(1)
+                media = (tm.group(1) if tm else "").lower()
+                if "css" not in media and not href.lower().split("?")[0].endswith(".css"):
+                    continue
+                resolved = _resolve_asset(href, opf_base)
+                # 只认**真的在 zip 里**的那些：OPF 声明了却缺文件的样式表不少见，
+                # 报给前端一份「读了但读不到」的清单没有意义。
+                if resolved and resolved in z.namelist() and resolved not in sheets:
+                    sheets.append(resolved)
+
+            seen: set = set()
+            parts = [_load_css(z, n, bid, seen) for n in sheets]
+
+            # ② 内联 `<style>`（只扫 head；正文里的那些由 `_rewrite_assets` 就地处理）。
+            #    逐文档只读前 64 KB：head 在文件开头，读满会有明显的无用解压开销。
+            for doc in _spine(path):
+                if doc not in z.namelist():
+                    continue
+                try:
+                    with z.open(doc) as f:
+                        raw = f.read(_HEAD_SCAN_BYTES).decode("utf-8", "ignore")
+                except Exception:                            # noqa: BLE001 —— 坏条目跳过
+                    continue
+                head = raw.split("</head>", 1)[0]
+                doc_base = pathlib.PurePosixPath(doc).parent
+                for sm in _STYLE_TAG_RE.finditer(head):
+                    parts.append(_rewrite_css_urls(sm.group(2), doc_base, bid))
+
+            return {"css": "\n".join(p for p in parts if p and p.strip()),
+                    "sheets": sheets, "fixed_layout": _fixed_layout_of(opf)}
+    except Exception:                                        # noqa: BLE001 —— 坏书当「没有样式」
+        logging.getLogger("novelforge").debug("抽取书内样式失败：%s", path, exc_info=True)
+        return dict(empty)
+
+
 def _rewrite_assets(html: str, media: str, bid: str) -> str:
-    """把章节内相对资源（图片 / 链接）改写为后端 asset 接口，跨 zip 取回。"""
+    """把正文里的相对资源改写成后端 asset 接口（第 76 期扩面）。
+
+    覆盖真实 EPUB 出现过的写法：双引号与**单引号**属性、`srcset`（逗号分隔的多候选）、
+    `<style>` 块与 `style="…"` 里的 `url(...)`。`..` 折叠、外链 / 锚 / `data:` 不动
+    （判据集中在 :func:`_resolve_asset`）。
+
+    ⚠️ 令牌**不在这里**拼（见本节开头的说明）；`<a href>` 指向章节文档时也不改写。
+    """
     base = pathlib.PurePosixPath(media).parent
 
     def fix(m: "re.Match") -> str:
-        attr, val = m.group(1), m.group(2)
-        if re.match(r"^[a-z]+:", val, re.I) or val.startswith("#") or val.startswith("data:"):
+        attr, q, val = m.group(1).lower(), m.group(2), m.group(3)
+        if attr == "style":
+            return f"style={q}{_rewrite_css_urls(val, base, bid)}{q}"
+        if attr == "srcset":
+            items = []
+            for piece in val.split(","):
+                bits = piece.strip().split(None, 1)          # 「URL [描述符]」
+                if not bits:
+                    continue
+                resolved = _resolve_asset(bits[0], base)
+                if resolved:
+                    bits[0] = _asset_url(bid, resolved)
+                items.append(" ".join(bits))
+            return f"srcset={q}{', '.join(items)}{q}" if items else m.group(0)
+        resolved = _resolve_asset(val, base)
+        if not resolved:
             return m.group(0)
-        try:
-            resolved = str(base / val)
-        except Exception:
-            return m.group(0)
-        return f'{attr}="/api/books/{bid}/asset?p={quote(resolved)}"'
+        if attr == "href" and resolved.lower().endswith(_DOC_EXTS):
+            return m.group(0)                                # 章节间链接，不是资源
+        return f"{attr}={q}{_asset_url(bid, resolved)}{q}"
 
-    return re.sub(r'(src|href)="([^"]+)"', fix, html, flags=re.I)
+    out = _ASSET_ATTR_RE.sub(fix, html)
+    return _STYLE_TAG_RE.sub(
+        lambda m: f"{m.group(1)}{_rewrite_css_urls(m.group(2), base, bid)}{m.group(3)}", out)
 
 
 def chapter_html(path: pathlib.Path, index: int, bid: str) -> dict:
