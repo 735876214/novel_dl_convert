@@ -209,6 +209,13 @@ beforeEach(async () => {
     name: '三体.epub',
     recycled: '20260927-120000_三体.epub',
     siblings: [],
+    // 第 75 期：删的是**三份**文件（书库内 / 本地原件 / 出版副本），
+    // 每份一份回执；这里给「都成了」的默认值，个别用例再单独覆盖。
+    targets: {
+      library: { state: 'recycled', recycled: '20260927-120000_三体.epub' },
+      source: { state: 'missing' },
+      copy: { state: 'missing' },
+    },
   })
   m.bookDetail.mockResolvedValue(makeDetail())
   m.collections.mockResolvedValue({ items: COLLECTIONS })
@@ -555,6 +562,10 @@ describe('BookActionsMenu：删除', () => {
     expect(text).toContain('回收站')
     expect(text).toContain('不是真删')
     expect(text).toContain('批注')
+    // 第 75 期：文案必须点明删的是**哪三份** —— 只说「文件」会让用户以为只删书库那份，
+    // 结果收书目录里的原件也被移走了
+    expect(text).toContain('本地原件')
+    expect(text).toContain('出版副本')
     // 没有同 stem 的兄弟格式时**不出**第三行 —— 写了会让人以为还有别的格式存在
     expect(text).not.toContain('其它格式')
   })
@@ -588,6 +599,35 @@ describe('BookActionsMenu：删除', () => {
 
     expect(m.deleteBook).toHaveBeenCalledTimes(1)
     expect(m.deleteBook).toHaveBeenCalledWith(BOOK_ID)
+    expect(w.emitted('changed')?.[0]).toEqual([EPUB, 'deleted'])
+  })
+
+  it('部分失败必须说出来：有一份移不动时不能报「已删除」', async () => {
+    // 第 75 期：三份文件是**逐份独立**回收的，可能出现「书库那份回收了、本地原件移不动」。
+    // 全成功才说「已移入回收站」；部分成功也报「已删除」会让用户以为删干净了，
+    // 而那份文件其实还躺在收书目录里 —— 静默的部分成功比失败更糟。
+    setConfirm(true)
+    m.deleteBook.mockResolvedValue({
+      ok: true,
+      id: BOOK_ID,
+      name: '三体.epub',
+      recycled: '20260927-120000_三体.epub',
+      siblings: [],
+      targets: {
+        library: { state: 'recycled', recycled: '20260927-120000_三体.epub' },
+        source: { state: 'failed', error: 'PermissionError: 只读文件系统' },
+        copy: { state: 'missing' },
+      },
+    })
+    const w = await mountMenu(EPUB)
+    await openMenu(w)
+    await clickItem('删除')
+
+    const msg = useUiStore().toastMessage
+    expect(msg).toContain('部分失败')
+    expect(msg).toContain('本地的原件')
+    expect(msg).toContain('只读文件系统')
+    // 文件确实动过了（书库那份已回收）⇒ 照样要请父组件刷新列表
     expect(w.emitted('changed')?.[0]).toEqual([EPUB, 'deleted'])
   })
 

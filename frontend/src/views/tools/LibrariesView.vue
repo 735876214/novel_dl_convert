@@ -486,15 +486,27 @@ async function scan(l: LibraryEntity): Promise<void> {
 }
 
 async function remove(l: LibraryEntity): Promise<void> {
-  if (l.book_count > 0) {
-    ui.toast(`「${l.name}」还有 ${l.book_count} 本书：请先迁移走（移除登记不会动文件）`)
-    return
-  }
-  if (!window.confirm(`移除书库「${l.name}」的登记？（**不会删除任何文件**）`)) return
+  const n = l.book_count || 0
+  // 第 75 期：移除书库会把**项目内**的文件（书库内文件 + 出版副本）移入回收站，
+  // 而收书目录里的**本地原件保留**。所以非空库不再是「不许删」，而是把后果说清楚。
+  const lines = [
+    `移除书库「${l.name}」？`,
+    '',
+    n
+      ? `· 该库还有 ${n} 本书：它们在项目内的文件（书库内文件 + 出版副本）会移入回收站（可恢复）`
+      : '· 该库没有书，只移除登记',
+    '· 收书目录里的本地原件会保留',
+    '· 阅读进度 / 批注 / 书签 / 评分会保留',
+  ]
+  if (!window.confirm(lines.join('\n'))) return
   busy.value = `del:${l.id}`
   try {
-    await api.deleteLibrary(l.id)
-    ui.toast('已移除登记')
+    const res = await api.deleteLibrary(l.id, n > 0)
+    ui.toast(
+      res.failed
+        ? `已移除「${l.name}」，但有 ${res.failed} 份文件移不动（其余已进回收站）`
+        : `已移除「${l.name}」（回收 ${res.recycled} 份文件，本地原件已保留）`,
+    )
     await reload()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '移除失败')

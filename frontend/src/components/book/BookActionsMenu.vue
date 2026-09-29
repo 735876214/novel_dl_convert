@@ -241,8 +241,33 @@ async function siblingNames(): Promise<string[]> {
     .map((n) => n.split('/').pop() || n)
 }
 
+/** 三份文件的中文名（第 75 期）：toast 里要指名道姓说清是哪一份没删掉。 */
+const TARGET_LABELS: Record<string, string> = {
+  library: '书库里的文件',
+  source: '本地的原件',
+  copy: '出版副本',
+}
+
 /**
- * 删除：文件**移入回收站**（不真删），进度 / 批注 / 书签 / 评分一律保留。
+ * 把三份文件的分项回执拼成一句 toast（第 75 期）。
+ *
+ * 全成功就说「已移入回收站」；**有任何一份失败必须说出来** —— 部分成功却报「已删除」
+ * 会让用户以为删干净了，而那份文件其实还躺在原地（静默的部分成功比失败更糟）。
+ */
+function deleteToast(
+  name: string,
+  targets: Record<string, { state: string; error?: string }>,
+): string {
+  const fails = Object.entries(targets).filter(([, t]) => t.state === 'failed')
+  if (!fails.length) return `《${name}》已移入回收站`
+  const which = fails.map(([k]) => TARGET_LABELS[k] ?? k).join('、')
+  return `《${name}》部分失败：${which}移不动（${fails[0][1].error || '原因未知'}），其余已进回收站`
+}
+
+/**
+ * 删除：**三份文件都移入回收站**（不真删）—— 书库里的文件、收书目录里的本地原件、
+ * 出版副本；进度 / 批注 / 书签 / 评分一律保留
+ * （第 75 期，用户口径「删书要把本地和项目里的都删掉」）。
  *
  * 确认文案用 `window.confirm`（全站 20 余处惯例，不为这一处新增确认组件）。
  * 第三行**只在真有同 stem 兄弟时才出** —— 没有兄弟却写「其它格式不会被删除」
@@ -254,7 +279,8 @@ async function remove(): Promise<void> {
   const lines = [
     `确定删除《${title.value}》？`,
     '',
-    '· 文件会移入回收站（可恢复，不是真删）',
+    '· 会移入回收站：书库里的文件、收书目录里的本地原件、出版副本',
+    '· 是移入回收站（可恢复，不是真删）',
     '· 阅读进度 / 批注 / 书签 / 评分会保留',
   ]
   if (sibs.length) lines.push(`· 同名的其它格式文件（${sibs.join('、')}）不会被删除`)
@@ -262,12 +288,11 @@ async function remove(): Promise<void> {
   if (!window.confirm(lines.join('\n'))) return
 
   try {
-    await api.deleteBook(props.book.id)
-    ui.toast(`《${title.value}》已移入回收站`)
+    const res = await api.deleteBook(props.book.id)
+    ui.toast(deleteToast(title.value, res.targets))
     emit('changed', props.book, 'deleted')
   } catch (e) {
-    // 删失败就什么都不动（后端也是「文件没动成就什么都不动」），
-    // 所以这里**不 emit** —— 列表没必要为一次无效操作重拉一遍
+    // 删失败就什么都不动，所以这里**不 emit** —— 列表没必要为一次无效操作重拉一遍
     ui.toast(apiErrorMessage(e, '删除失败'))
   }
 }

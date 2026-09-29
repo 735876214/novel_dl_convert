@@ -3569,9 +3569,14 @@ export const api = {
     request<BookDetail>(`/api/books/${encodeURIComponent(id)}`),
 
   /**
-   * 删除一本书（第 64 期）：文件**移入回收站**（可恢复，不是真删），
+   * 删除一本书（第 64 期；第 75 期扩到**三份文件**）：文件**移入回收站**（可恢复，不是真删），
    * 而进度 / 批注 / 书签 / 评分一律**保留** —— `book_id` 由「库 id + 文件名」派生，
    * 文件放回原路径数据就接回来了（详见后端 `api_delete_book` 的 docstring）。
+   *
+   * ⚠️ 第 75 期起一次删的是**同一本书的三份拷贝**（用户口径「本地和项目里的都删掉」）：
+   * `library` = 书库根里的成品、`source` = 收书目录里的原件（用户本地那份）、
+   * `copy` = 项目产出的出版副本。三份**逐份独立**，每份 `state` 可能是
+   * `recycled`（已回收）/ `missing`（本来就没有 —— **不是错误**）/ `failed`（移不动）。
    *
    * 返回里的 `siblings` 是**同目录同 stem 的其它格式**（`三体.epub` 删了就剩 `三体.mobi`）：
    * 它们是另外两张卡、两个 id，不会被一起删。⚠️ 这是**删完之后**才知道的，
@@ -3582,9 +3587,14 @@ export const api = {
       ok: boolean
       id: string
       name: string
-      /** 回收目录里的文件名；文件本来就不在磁盘上时为 null（那样也算删成功） */
+      /** ② 书库根成品在回收目录里的文件名；它本来就不在磁盘上时为 null */
       recycled: string | null
       siblings: string[]
+      /** 三份文件各自的结果（第 75 期）—— 前端据此写 toast，别只说「已删除」 */
+      targets: Record<
+        'library' | 'source' | 'copy',
+        { state: 'recycled' | 'missing' | 'failed'; recycled?: string; error?: string }
+      >
     }>(`/api/books/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   /** 服务器上这本书的绝对路径（只有本机/局域网来源才拿得到，见 BookLocalPaths） */
@@ -4079,9 +4089,24 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  /** 移除库**登记**（绝不删文件）。库非空时默认拒绝，`force` 才会只移除登记。 */
+  /**
+   * 移除书库（第 75 期改语义）：删项目内登记，并把该库书的**书库内文件 + 出版副本**
+   * 移入回收站，**保留收书目录里的本地原件（①）**。库非空时后端默认拒绝 ——
+   * 前端此时传 `force=true`（确认文案已讲明会回收文件）。
+   */
   deleteLibrary: (id: string, force = false) =>
-    request<{ ok: boolean; removed: string; books_left_on_disk: number }>(
+    request<{
+      ok: boolean
+      removed: string
+      /** 移除时该库的书目数 */
+      books: number
+      /** 已移入回收站的文件份数（② + ③） */
+      recycled: number
+      /** 移不动的份数 */
+      failed: number
+      /** 磁盘上本来就没有的份数（不是错误） */
+      missing: number
+    }>(
       `/api/libraries/${encodeURIComponent(id)}${force ? '?force=true' : ''}`,
       { method: 'DELETE' },
     ),
