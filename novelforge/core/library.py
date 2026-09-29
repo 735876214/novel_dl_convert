@@ -23,6 +23,7 @@ import fnmatch
 import hashlib
 import html.parser
 import json
+import logging
 import os
 import pathlib
 from urllib.parse import quote, unquote
@@ -376,6 +377,33 @@ def book_id(name: str, library_id: str = None) -> str:
     否则跨库同名会串 id。
     """
     return _book_id(name, library_id)
+
+
+def remember_origin(dest, library_id, origin) -> None:
+    """入库成功后登记「① 原件 → 这本书」的对应关系（第 75 期）。
+
+    ``dest`` = ② 落好的成品绝对路径；``origin`` = ① 原件的绝对路径（收书目录里那份）。
+    ``book_id`` 只由 basename 派生（见 :func:`_book_id`），所以这里取 ``dest`` 的文件名。
+
+    两条**刻意的静默返回**（都不是错误）：
+    - ``dest`` 与 ``origin`` 是同一个文件（就地库：来源目录本身就是库根）⇒ 不登记。
+      否则删书会对同一条路径回收两次，第二次报缺 —— 而真相只是「① 就是 ②」。
+    - 判不出库 id ⇒ 不登记。没有库前缀的 id 是第 17 期之前的旧形状，与书目里的
+      ``库$哈希`` 对不上，登记了也是一条永远查不中的记录。
+
+    登记失败**绝不外抛**：它只是「删书时顺带把 ① 也清理掉」的便利信息，
+    不该让一次**已经落盘成功**的入库变成失败（抛出去只会让调用方误判成没入库）。
+    """
+    try:
+        if not library_id:
+            return
+        d, o = pathlib.Path(str(dest)), pathlib.Path(str(origin))
+        if d.resolve() == o.resolve():
+            return
+        base = pathlib.PurePosixPath(str(d).replace("\\", "/")).name
+        db.origin_set(_book_id(base, str(library_id)), str(o))
+    except Exception:                                      # noqa: BLE001 —— 见 docstring
+        logging.getLogger("novelforge").exception("登记原始文件来源失败：%s", dest)
 
 
 def _gradient(bid: str) -> tuple:

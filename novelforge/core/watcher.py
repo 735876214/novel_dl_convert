@@ -462,6 +462,8 @@ class FolderWatcher:
                     enqueue_scrape_async(rel, lib, cfg)
                     return ("added", str(dst))
                 pipeline._copy_tree(p, dst)
+                # 第 75 期：记下 ① 原件在哪 —— 删书要把 ①（收书目录那份）也移入回收站
+                library.remember_origin(dst, (lib or {}).get("id"), p)
                 activity_log.log_add_ok(p.name, rel, size=self._sig(p)[0],
                                         duration_ms=dur(), source="watcher")
                 auto_fetch_async(rel, cfg, kind="audiobook")
@@ -501,6 +503,9 @@ class FolderWatcher:
                 return ("added", str(dst))
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(p, dst)
+            # 第 75 期：记下 ① 原件在哪（就地库那条分支不会走到这里：源就是成品，
+            # 没有独立的 ①，`remember_origin` 内部也会再判一次）
+            library.remember_origin(dst, (lib or {}).get("id"), p)
             activity_log.log_add_ok(p.name, rel, size=size, duration_ms=dur(), source="watcher")
             auto_fetch_async(rel, cfg)
             enqueue_scrape_async(rel, lib, cfg)

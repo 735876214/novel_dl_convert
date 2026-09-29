@@ -1318,6 +1318,59 @@ def api_book_detail(bid: str):
     return detail
 
 
+# ---------------- 删除：三份文件（第 75 期）----------------
+# 同一本书在磁盘上最多有三份拷贝：① 收书目录里的原件（用户本地那份）、
+# ② 书库根里的成品（书目 path）、③ 项目按命名规则产出的出版副本（成品目录）。
+# 「删书」要三份都回收；「移除书库」回收该库所有书的 ②③ 而**保留 ①** ——
+# 两条路径共用下面这两个原语。
+
+def _recycle_one(path, why: str) -> dict:
+    """把一份文件 / 目录移入回收站，返回**分项回执**。**永不外抛**。
+
+    三种状态（前端据此写文案，三者必须能分开说）：
+      ``recycled``  移成功（``recycled`` 是回收目录里的文件名）
+      ``missing``   磁盘上没有这一份 —— **不是错误**：①③ 本就是可选的，
+                    也可能早被用户手工删过 / 在 NAS 上改过名
+      ``failed``    移不动（权限 / 占用 / 跨设备），``error`` 是可读原因
+
+    永不外抛是刻意的：三份里一份失败不该带走另外两份（已经移走的那份也无法回滚），
+    所以宁可**逐份如实回报**，由用户看着处置。
+    """
+    if path is None:
+        return {"state": "missing"}
+    p = pathlib.Path(str(path))
+    try:
+        if not p.exists():
+            return {"state": "missing"}
+        dst = publish.recycle(p, why=why)
+        return {"state": "recycled", "recycled": dst.name} if dst else {"state": "missing"}
+    except OSError as e:
+        return {"state": "failed", "error": f"{type(e).__name__}: {e}"}
+
+
+def _publish_copy_path(book: dict, scrape_row: dict = None) -> "pathlib.Path | None":
+    """本书的**出版副本**绝对路径；库没配成品目录 / 算不出时回 ``None``（第 75 期）。
+
+    优先用台账的 ``link_rel`` —— 那是**当初真的建出来的那个路径**。命名规则改过之后再按
+    规则现算会算到别处去，于是删书会「漏掉一个还躺在成品目录里的旧副本」。
+    只有没有台账行（这本书没经过刮削 / 出版）时才按当前规则现算。
+    """
+    lid = (book or {}).get("library_id")
+    pdir = publish.publish_dir(lid)
+    if pdir is None:
+        return None
+    rel = str((scrape_row or {}).get("link_rel") or "")
+    if not rel:
+        try:
+            rel = publish.relpath_for(book, lib_settings.config_for(lid))
+        except Exception:                                 # noqa: BLE001 —— 算不出就是没有 ③
+            rel = ""
+    pure = pathlib.PurePosixPath(rel) if rel else None
+    if pure is None or pure.is_absolute() or ".." in pure.parts:
+        return None
+    return pdir / rel
+
+
 @app.delete("/api/books/{bid}")
 def api_delete_book(bid: str):
     """删除一本书：**文件移入回收站（不真删），关联数据保留**（第 64 期）。
@@ -1345,6 +1398,17 @@ def api_delete_book(bid: str):
 
     ⚠️ 同名冲突（两个库里同名文件撞同一个 id）时 `by_id` 抛 `BookIdConflict`，这里翻成
     409 —— **绝不能**退回 `by_id_raw`（它在冲突时静默返回 None），那才是「删错书」的入口。
+
+    **③ 第 75 期：同一本书的三份拷贝都要回收。** 用户口径「删书要把本地和项目里的都删掉」：
+    - **① 收书目录里的原件**（用户本地那份）—— 入库时登记在 `book_origins`，见
+      `library.remember_origin`；就地库（源即成品）没有独立的 ①，如实记 `missing`。
+    - **② 书库根里的成品** —— `b["path"]`。
+    - **③ 项目产出的出版副本** —— 台账 `link_rel`（没有台账时按命名规则现算），
+      库未配成品目录就没有 ③。
+    三份**逐份独立回收**：一份失败不带走另外两份，回执按份列出 `recycled / missing / failed`
+    （`missing` 不是错误 —— ①③ 本来就是可选的）。
+    ⚠️ ① 的记录回收成功后**立即忘掉**（`db.origin_delete`）：它此刻已指向一个被移走的路径，
+    留着只会让「① 还在不在」变得不可信；失败则**留着**，下次删书还能重试。
     """
     try:
         b = library.by_id(bid)
@@ -1362,17 +1426,27 @@ def api_delete_book(bid: str):
     if src and src.is_file():
         siblings = [f["path"].name for f in library.sibling_files(src) if f["path"] != src]
 
-    # 文件已经不在磁盘上（手动删过 / NAS 上改过名）不是错误：书照样得能删掉，
-    # 只是没有东西可回收。这里**不必先探一次存在** —— `publish.recycle` 对不存在的
-    # 路径自己返回 None（那是它的既有语义，见其实现）。
-    recycled = None
-    if src:
-        try:
-            dst = publish.recycle(src, why="用户删除书籍")
-        except OSError as e:
-            # 文件没动成就什么都不动 —— 书保持完整，宁可没删成
-            raise HTTPException(500, f"移入回收站失败：{e}")
-        recycled = dst.name if dst else None
+    # 台账要**先读**：下面会把它的状态降级成 `source_removed`，而 ③ 的路径要从它取。
+    scrape_row = db.scrape_get(bid) or {}
+
+    # ② 书库根里的成品（这张卡片对应的那份）
+    targets: dict = {"library": _recycle_one(src, "用户删除书籍")}
+
+    # ① 收书目录里的原件（用户本地那份）。与 ② 是同一个文件时不重复回收
+    #（`remember_origin` 不会登记这种情形，这里再兜一次）。
+    origin = db.origin_get(bid)
+    if origin and not (src and pathlib.Path(origin) == src):
+        t = _recycle_one(origin, "用户删除书籍（原始文件）")
+        targets["source"] = t
+        if t["state"] != "failed":
+            db.origin_delete(bid)          # 用完即弃；失败则留着给下次重试，见 docstring
+    else:
+        targets["source"] = {"state": "missing"}
+
+    # ③ 项目产出的出版副本（成品目录里那份）
+    targets["copy"] = _recycle_one(_publish_copy_path(b, scrape_row), "用户删除书籍（出版副本）")
+
+    recycled = targets["library"].get("recycled") or None
 
     # 索引是磁盘的投影：标脏即可，下一次增量刷新会把这一行删掉
     # （`refresh_library` 的返回里就有 `removed`）。**不做手工行删除** —— 那是删库才用的
@@ -1381,15 +1455,16 @@ def api_delete_book(bid: str):
 
     # 刮削台账只**降级**、不删行：`source_removed` 是「只许降级」状态，且源文件哪天放回来
     # 还能按状态机复活。与 `scrape.resolve('delete_source')` 走的是同一条路径。
-    if db.scrape_get(bid):
+    if scrape_row:
         db.scrape_set(bid, status="source_removed", confirmed_at=time.time(),
                       error=f"用户删除书籍，原文件已移入回收站：{recycled or ''}")
 
+    _parts = "、".join(f"{k}={v['state']}" for k, v in targets.items())
     activity_log.log(activity_log.ACTION_RECYCLE, str(b.get("name") or bid),
                      activity_log.STATUS_OK, output=recycled or "",
-                     detail="用户删除书籍，移入回收站（可在回收目录找回）", source="api")
+                     detail=f"用户删除书籍：逐份回收（{_parts}）", source="api")
     return {"ok": True, "id": bid, "name": b.get("name") or "",
-            "recycled": recycled, "siblings": siblings}
+            "recycled": recycled, "siblings": siblings, "targets": targets}
 
 
 #: 出现这些头就说明请求**经过了一层转发** —— 见 :func:`_is_local_request` 第 1 条
@@ -3944,22 +4019,48 @@ def api_update_library(lid: str, payload: dict = Body(...)):
 
 @app.delete("/api/libraries/{lid}")
 def api_delete_library(lid: str, force: bool = False):
-    """**只移除登记，绝不删文件**。库里还有书时默认拒绝（先迁移或清空）。
+    """**移除书库**：删项目内登记，并把该库书的 ②③ 移入回收站，**保留 ①（本地原件）**。
+
+    用户口径（第 75 期）：「移除书库时，仅将书从项目中删除，不动本地的书」——
+    所以这里回收的是**项目内**那两份（② 书库根里的成品、③ 出版副本），
+    而 ① 收书目录里的原件（`book_origins` 登记的那份，用户本地）**原样留在原地**；
+    `book_origins` 的记录也一并保留 —— 库哪天真建回来，它还认得出来。
 
     第 37 期起**没有任何库是不可删的**：以前那条「默认书库不可删除」的护栏随默认库
     概念一起下线。book_id 形如 ``库$哈希``，库没了它的书就从书目里消失（进度 / 批注
     变成「库不存在的行」，孤儿清理**刻意不碰**它们，见 `_orphan_refs`）。
-    「库里还有书」的拦截仍在下面，那才是真正的数据保护。
+    「库里还有书」的拦截仍在下面，它拦的是「没想清楚就删」而不是「不许删」——
+    想连项目内的文件一起清掉就加 `force=1`（前端就是这么调的）。
     """
     if not db.get_library(lid):
         raise HTTPException(404, "书库不存在")
     n = _book_counts().get(str(lid), 0)
     if n and not force:
         raise HTTPException(400, f"该库还有 {n} 本书：请先迁移走，"
-                                 f"或加 force=1 仅移除登记（文件留在原地）")
+                                 f"或加 force=1 移除（这些书的文件会一并移入回收站）")
+
+    # 先按索引列出该库的书（**不重扫磁盘**：索引本来就是这块盘的投影），逐本回收
+    # ② 书库根里的成品 + ③ 出版副本。①（收书目录里的原件）**一律不动**，见 docstring。
+    try:
+        books = library.books(lid) or []
+    except Exception:                                  # noqa: BLE001 —— 列不出来就当作没有可回收的
+        logging.getLogger("novelforge").exception("列出待回收书目失败：%s", lid)
+        books = []
+    recycled = failed = missing = 0
+    for b in books:
+        row = db.scrape_get(b.get("id")) or {}         # ③ 优先用台账里那个真实路径
+        for t in (_recycle_one(b.get("path") or None, "移除书库（书库内文件）"),
+                  _recycle_one(_publish_copy_path(b, row), "移除书库（出版副本）")):
+            if t["state"] == "recycled":
+                recycled += 1
+            elif t["state"] == "failed":
+                failed += 1
+            else:
+                missing += 1
+
     db.delete_library(lid)
     # 库没了，刮削台账行也没有意义（UI 会显示一堆属于不存在书库的条目）。
-    # **只删登记，副本文件留在成品目录里**，与「移除库不删文件」一致。
+    # **只删登记** —— 副本文件刚刚已经按上面的口径回收过了。
     db.scrape_delete_by_library(lid)
     # 第 62 期：索引行也要跟着删。不删的话它们会一直躺在表里 ——
     # `catalog.books/find_by_id` 都会按「仍登记在册的库」过滤掉它们（读不出错），
@@ -3970,8 +4071,12 @@ def api_delete_library(lid: str, force: bool = False):
         logging.getLogger("novelforge").exception("清理书目索引失败：%s", lid)
     _libraries_changed(lid)
     activity_log.log(activity_log.ACTION_LAYOUT, str(lid), activity_log.STATUS_OK,
-                     detail=f"移除书库登记（文件保留在原地）· 当时 {n} 本", source="api")
-    return {"ok": True, "removed": str(lid), "books_left_on_disk": n}
+                     detail=f"移除书库登记：回收项目内文件 {recycled} 份"
+                            f"（缺失 {missing} / 失败 {failed}），① 本地原件保留"
+                            f" · 当时 {n} 本",
+                     source="api")
+    return {"ok": True, "removed": str(lid), "books": len(books),
+            "recycled": recycled, "failed": failed, "missing": missing}
 
 
 @app.post("/api/libraries/{lid}/scan")
@@ -7322,6 +7427,10 @@ async def convert(file: UploadFile = File(...), traditionalize: bool = Form(Fals
                                       size=len(data), source="upload")
         raise
     await _log_dispatch(src, action, result, "upload", size=len(data), detail=opts.get("_notice", ""))
+    # 第 75 期：记下 ① 原件（上传件落在 INPUT_DIR 的那份），删书时一并回收。
+    # 只在 `copy`（真的复制了一份成品）时记：`skip` 的 `result` 就是 src 本身。
+    if str(action) == "copy":
+        library.remember_origin(result, library_rules.library_id_of_root(out_dir), src)
     return FileResponse(result, filename=pathlib.Path(result).name)
 
 
@@ -7343,6 +7452,9 @@ async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)
         activity_log.log_convert_fail(src.name, f"{type(e).__name__}: {e}", source="api")
         raise
     await _log_dispatch(src, action, result, "api", size=src.stat().st_size, detail=opts.get("_notice", ""))
+    # 第 75 期：与 /convert 同口径 —— 记下 ① 原件，删书时一并回收
+    if str(action) == "copy":
+        library.remember_origin(result, library_rules.library_id_of_root(out_dir), src)
     # 与 /convert 同口径：直接返回文件流，真实文件名由 FileResponse 在
     # Content-Disposition 里给（前端据此命名，杜绝「x.epub.epub」这类错名；
     # 也不在前端再发明一套展开名逻辑）。src 已校验为单文件，result 必为文件。

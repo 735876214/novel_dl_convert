@@ -262,6 +262,19 @@ def init():
                 model_tag  TEXT NOT NULL DEFAULT '',
                 updated_at REAL NOT NULL
             );
+            -- 原始文件来源（第 75 期）：**书被删时要一起回收的那三份文件里的 ①**。
+            -- ① = 用户放进收书目录的那份投递件；② = 书库根里的成品（书目 path）；
+            -- ③ = 项目按命名规则产出的出版副本（publish_path）。②③ 都能从书目 / 台账算出来，
+            -- **① 不能** —— 书目是磁盘扫描的投影，没有「它当初从哪来」这一列。
+            -- 所以入库成功的那一刻把 ① 的绝对路径记在这里，删书时查它。
+            -- ⚠️ 为什么不是 `book_index` 上加一列：那是**派生表**（重扫即重建，
+            -- `REMAP_DERIVED_TABLES` 明说不搬），加了也留不住。本表是持久的。
+            CREATE TABLE IF NOT EXISTS book_origins (
+                book_id     TEXT PRIMARY KEY,
+                source_path TEXT NOT NULL DEFAULT '',
+                created_at  REAL NOT NULL,
+                updated_at  REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS annotations (
                 id         INTEGER PRIMARY KEY,
                 book_id    TEXT NOT NULL,
@@ -2565,7 +2578,7 @@ def unlock_achievement(key) -> bool:
 ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
                  "book_custom_values", "collection_items", "reading_sessions",
                  "reading_attempts", "meta_override", "meta_online", "meta_cover",
-                 "book_embeddings")
+                 "book_embeddings", "book_origins")
 
 
 def book_id_refs() -> dict:
@@ -2626,6 +2639,7 @@ REMAP_TABLES = (
     "progress", "annotations", "bookmarks", "meta_locks", "book_custom_values",
     "collection_items", "reading_sessions", "reading_attempts", "ratings", "reading_status",
     "koreader_docs", "meta_override", "meta_online", "meta_cover", "book_embeddings",
+    "book_origins",
 )
 
 #: **不走通用搬迁**、改用自己那套函数的含 book_id 表（契约测试同样要认它们）。
@@ -3313,6 +3327,55 @@ def dock_prune(keep=500) -> int:
         )
         c.commit()
         return int(cur.rowcount or 0)
+
+
+# ---------------- 原始文件来源（第 75 期）----------------
+# 只在**真的复制了一份**时登记（就地库「源即存储」不登记：那种情况 ① 与 ② 是同一个
+# 文件，登记了会让删书对同一路径回收两次）。登记的调用点是摄入口（watcher / 上传），
+# 删除入口（`server.api_delete_book`）读它决定 ① 要不要一起回收。
+# ⚠️ 按 book_id 存 = 与全仓所有「书维度的数据」同一把钥匙；改名 / 换库时随
+# `REMAP_TABLES` 一起搬（否则记录会指向一本已经不存在的书）。
+
+def origin_set(book_id, source_path) -> None:
+    """登记「这本书的 ① 原件在哪」（绝对路径）。入库成功时调用，幂等。"""
+    bid, src = str(book_id or ""), str(source_path or "")
+    if not bid or not src:
+        return
+    now = time.time()
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO book_origins(book_id, source_path, created_at, updated_at) "
+            "VALUES(?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET "
+            "source_path=excluded.source_path, updated_at=excluded.updated_at",
+            (bid, src, now, now),
+        )
+        c.commit()
+
+
+def origin_get(book_id) -> str:
+    """这本书的 ① 原件绝对路径；**没登记过返回空串**（不是错误）。
+
+    空串的含义是「这本书没有独立的 ①」：或它是就地库（源即成品），或它是 75 期之前
+    入库的（那时还不记这个），或记录被孤儿清理清掉了 —— 删书时按「missing」如实回执。
+    """
+    r = _connect().execute(
+        "SELECT source_path FROM book_origins WHERE book_id=?", (str(book_id),)
+    ).fetchone()
+    return str(r["source_path"] or "") if r else ""
+
+
+def origin_delete(book_id) -> bool:
+    """忘掉这本书的 ①（删书时用完即弃：那个路径此刻已经被移进回收站了）。
+
+    不删的话留着的是一条**指向已经不在原处的路径**的记录 —— 下次删书会照它去回收，
+    找不到 → 报 missing，虽然无害，但让「① 到底存不存在」这件事变得不可信。
+    """
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM book_origins WHERE book_id=?", (str(book_id),))
+        c.commit()
+        return bool(cur.rowcount)
 
 
 # ---------------- 元数据 override / online（第 8 期）----------------
