@@ -41,6 +41,10 @@ export interface UpdateStatus {
   updater_available: boolean
   /** 检查失败原因（空 = 正常） */
   error: string
+  /** 是否开着定时检查（第 80 期回显；关掉后后端不再出网） */
+  check_enabled?: boolean
+  /** 是否开着「发现新版自动更新」（第 80 期回显；横幅据此如实说明） */
+  auto_apply?: boolean
 }
 
 /** 更新应用结果（POST /api/update/apply）。 */

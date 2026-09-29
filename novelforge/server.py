@@ -115,11 +115,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001 —— 旁路功能，绝不阻断启动
         logging.getLogger("novelforge").exception("刮削 worker 启动失败：%s", e)
     # 第 78 期：版本检查后台线程（daemon）。首个周期后才首检，避免启动期 / 测试期真连
-    # GitHub；出网失败静默忽略；check_enabled 关掉则完全不检查（零外部请求取向的破例）。
+    # GitHub；出网失败静默忽略；check_enabled 关掉则完全不检查。
+    # 第 80 期起「启动」与「保存配置后热应用」共用同一个判据（`_apply_update_config`），
+    # 免得两处各写一份、改了一处忘另一处 —— 那正是本期要消掉的假开关成因。
     try:
-        ucfg = (cfg.get("update") or {})
-        if ucfg.get("check_enabled", True):
-            updater.start_background(int(ucfg.get("interval_hours") or 6))
+        _apply_update_config()
     except Exception as e:  # noqa: BLE001
         logging.getLogger("novelforge").exception("版本检查线程启动失败：%s", e)
     yield
@@ -145,8 +145,8 @@ def _read_version() -> str:
             v = ""
         if v:
             return v
-    logging.getLogger("novelforge").warning("读不到 VERSION 文件，回落内置版本 0.79.0")
-    return "0.79.0"
+    logging.getLogger("novelforge").warning("读不到 VERSION 文件，回落内置版本 0.80.0")
+    return "0.80.0"
 
 
 APP_VERSION = _read_version()
@@ -341,7 +341,8 @@ def health():
 
 
 # ---------------- 版本检查与更新（第 78 期）----------------
-# 检查会外呼 GitHub（唯一出网点，可关）；更新在挂载 docker.sock 时才真执行。
+# 检查会外呼 GitHub（显式、可关、失败降级 —— 关掉即不再出网）；更新在挂载 docker.sock
+# 时才真执行，未挂载只提示升级命令（不做假交互）。
 
 @app.get("/api/changelog")
 def api_changelog():
@@ -357,8 +358,14 @@ def api_update_status():
 
 @app.post("/api/update/check")
 def api_update_check():
-    """手动触发一次远端检查（绕过定时缓存）。"""
-    return updater.check(force=True)
+    """手动触发一次远端检查（绕过定时缓存）。
+
+    第 80 期：`update.auto_apply` 开时，手动检查发现新版也自动更新 —— 否则用户点
+    「立即检查」看到新版却不自动应用，同一个开关的行为会显得时灵时不灵（失败静默）。
+    """
+    st = updater.check(force=True)
+    updater.maybe_auto_apply()
+    return st
 
 
 @app.post("/api/update/apply")
@@ -5301,7 +5308,10 @@ EDITABLE: dict = {
     # Komga 兼容服务端：开关 + Basic 用户名 + 可选 API Key
     # `expose` = 全局默认「书库是否对客户端暴露」（每库可在书库管理里覆写）
     "komga": {"enabled", "username", "api_key", "expose"},
-    # 版本检查与一键更新（第 78 期）。后端只认这几把钥匙；`image` 固定（不给任意镜像口子）。
+    # 版本检查与一键更新（第 78 期；第 80 期四个键**全部接通**）。`image` = 去哪个镜像
+    # 拉更新（可填加速镜像源），写入口过 `_validate_update_image` 形状校验；空串回落
+    # 环境变量 / 内置默认值。`tests/test_update_config_contract.py` 钉着「这四个键在
+    # 白名单 / 设置页控件 / 真实读点 三处一致」—— 别再往这里加没人读的键。
     "update": {"check_enabled", "interval_hours", "image", "auto_apply"},
     # 多书库：**第 77 期起不再有可编辑键**。原先这里只有 `auto_migrate`（启动时是否
     # 静默执行按格式归库），随自动归库一并移除 ⇒ 整条 `libraries` 从白名单里删掉。
@@ -5372,6 +5382,51 @@ def _sanitize_config(payload: dict) -> dict:
     return out
 
 
+# 镜像名形状：`[主机[:端口]/]路径…/名` + 可选 `:标签`。docker 会把它拼进 API query
+# （fromImage / tag），所以只放行镜像名允许的字符集；`..` 单独拒（防把 query 拼到意料之外的路径）。
+# ⚠️ 第一段必须单独放行 `:端口` —— 否则 `localhost:5000/ns/app` 这种私有仓库过不了校验，
+# 而 `updater._split_image` 明明已经按「最后一个冒号才是 tag」正确处理了它。
+_UPDATE_IMAGE_RE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*(?::[0-9]{1,5})?(?:/[A-Za-z0-9._-]+)*(?::[A-Za-z0-9._-]+)?$")
+
+
+def _validate_update_image(value: str) -> str:
+    """校验并规整 `update.image`（空串合法 = 回落环境变量 / 内置默认值）。
+
+    第 80 期起这个键真的会被用于 `docker pull`，所以必须在写入口做形状校验。
+    """
+    image = (value or "").strip()
+    if not image:
+        return ""
+    if "@" in image:
+        raise HTTPException(400, "镜像名不支持 digest（@sha256:…）形式，请写成 `仓库:标签`")
+    if ".." in image or len(image) > 200 or not _UPDATE_IMAGE_RE.match(image):
+        raise HTTPException(
+            400, "镜像名不合法：只允许字母 / 数字 / . _ - /，主机后可带 :端口，末尾可带 :标签")
+    return image
+
+
+def _apply_update_config() -> None:
+    """把最新配置热更新到「版本检查」线程（第 80 期：开关与间隔保存即生效）。
+
+    此前 `check_enabled` / `interval_hours` **只在 lifespan 读一次** ⇒ 关掉检查后后台
+    线程照跑、侧栏 new 标记照冒（因为旧快照还在），改间隔必须重启进程。这与「不做假交互」
+    的口径冲突，故按 `_apply_watcher_config()` 的既有范式补上热应用。
+    """
+    try:
+        ucfg = config.load_config().get("update") or {}
+        if not bool(ucfg.get("check_enabled", True)):
+            updater.stop_background()
+            updater.clear_has_update()   # 关掉检查 ⇒ 也不该再提示（与设置页 hint 一致）
+            return
+        # 换挡要重启线程：`_loop` 只在一轮等待结束后才重读间隔。`start_background` 每次换
+        # 新的 stop Event，所以「先 stop 再 start」不会踩到正在退出的旧线程。
+        updater.stop_background()
+        updater.start_background(int(ucfg.get("interval_hours") or 6))
+    except Exception as e:  # noqa: BLE001 —— 旁路功能，绝不连累保存本身
+        logging.getLogger("novelforge").exception("更新检查配置热应用失败：%s", e)
+
+
 def _apply_watcher_config():
     """把最新配置热更新到监听器（间隔 / 递归 / 忽略规则 / 启停）。"""
     if WATCHER is None:
@@ -5400,6 +5455,16 @@ def _apply_watcher_config():
             WATCHER.stop()
     except Exception:
         pass
+
+
+def _apply_runtime_config() -> None:
+    """配置保存后，把所有「读一次就固定在进程里」的旁路模块热更新一遍。
+
+    第 80 期从 `_apply_watcher_config` 的单点调用抽出来：版本检查要挂上同一批写接口
+    （PUT /api/config、原始 YAML、还原备份、重置、清覆盖层），漏一处又是一个假开关。
+    """
+    _apply_watcher_config()
+    _apply_update_config()
 
 
 @app.get("/api/config")
@@ -5447,7 +5512,7 @@ def api_get_config():
             # 多书库（第 77 期起无可编辑键）：库实体本身存 SQLite，走 /api/libraries。
             # 这里曾回显 `auto_migrate`，随自动归库一并移除 —— 别再往这个空对象里加键。
             "libraries": {},
-            # 版本检查与一键更新（第 78 期）：四个键都在 EDITABLE 白名单里，可保存。
+            # 版本检查与一键更新（第 78 期）：整段回显；四个键都在白名单里且**都有读点**。
             "update": cfg.get("update") or {},
             # 阅读状态口径的全局默认值（第 40 期）。每库生效值另走
             # `GET /api/reading-thresholds?library_id=`（含覆写合并），不在这里算。
@@ -5486,6 +5551,12 @@ def api_put_config(payload: dict = Body(...)):
                 raise HTTPException(400, "上传上限必须大于 0")
             up[key] = val
 
+    # 第 80 期：`update.image` 真的会被用于 `docker pull`（见 `_validate_update_image`），
+    # 所以写入口就要拦。空串合法（= 回落 `NOVELFORGE_UPDATE_IMAGE` / 内置默认值）。
+    up_img = (patch.get("update") or {}).get("image")
+    if up_img is not None:
+        patch["update"]["image"] = _validate_update_image(str(up_img))
+
     ov = config.load_overrides()
     for k, v in patch.items():
         if isinstance(v, dict) and isinstance(ov.get(k), dict):
@@ -5503,7 +5574,7 @@ def api_put_config(payload: dict = Body(...)):
                 ov.pop("llm", None)
 
     config.save_overrides(ov)
-    _apply_watcher_config()
+    _apply_runtime_config()
     # 第 52 期：留存策略在日志模块里有 5 秒缓存，配置一改就必须失效 ——
     # 否则刚开启留存，页面上的「存盘情况」仍按旧值显示未启用。
     activity_log.invalidate_retention_cache()
@@ -5755,7 +5826,7 @@ def api_put_raw_config(payload: dict = Body(...)):
         tmp.replace(config.CONFIG_FILE)  # 原子替换
     except Exception as e:
         raise HTTPException(500, f"写入失败：{e}")
-    _apply_watcher_config()
+    _apply_runtime_config()
     return {"ok": True, "backup": backup}
 
 
@@ -5785,7 +5856,7 @@ def api_restore_backup(payload: dict = Body(...)):
         shutil.copy2(src, config.CONFIG_FILE)
     except Exception as e:
         raise HTTPException(500, f"还原失败：{e}")
-    _apply_watcher_config()
+    _apply_runtime_config()
     return {"ok": True, "restored": name, "backup": backup}
 
 
@@ -5799,7 +5870,7 @@ def api_reset_config():
         config.CONFIG_FILE.write_text(text, encoding="utf-8")
     except Exception as e:
         raise HTTPException(500, f"重置失败：{e}")
-    _apply_watcher_config()
+    _apply_runtime_config()
     return {"ok": True, "backup": backup}
 
 
@@ -5811,7 +5882,7 @@ def api_clear_overrides():
             config.SETTINGS_FILE.unlink()
     except Exception as e:
         raise HTTPException(500, f"清除失败：{e}")
-    _apply_watcher_config()
+    _apply_runtime_config()
     return {"ok": True}
 
 

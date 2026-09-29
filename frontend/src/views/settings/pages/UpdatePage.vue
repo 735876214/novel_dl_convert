@@ -13,7 +13,10 @@ import { useSettingsConfig } from '@/composables/useSettingsConfig'
  * EXTENSIONS → Updates（`/settings/ext/update`）
  *
  * 第 78 期新增：版本号单一真值源 + 侧栏版本号 / new 提示 + 一键更新。
- * 本页只暴露三个开关，没有「任意镜像 / 任意容器 / 任意 exec」口子（见 core/updater.py）。
+ * 第 80 期：四个字段全部接通（新增「更新拉取镜像」）；保存后开关 / 间隔**即时生效**，
+ * 不再需要重启进程（后端 `server._apply_update_config`）。
+ * 口子仍然只有两个：拉取 `update.image` 指的那一个镜像、重建**自身容器** ——
+ * 没有「任意容器 / 任意 exec」（见 core/updater.py）。
  */
 
 const { cfg, files, saving, val, setVal, loadConfig, saveSection } = useSettingsConfig()

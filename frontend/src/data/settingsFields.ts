@@ -122,25 +122,38 @@ export const READING_FIELDS: FieldDef[] = [
   },
 ]
 
-/** 版本检查与一键更新（第 78 期；对应后端 config.update 段）。 */
+/**
+ * 版本检查与一键更新（第 78 期；第 80 期四个键**全部接通**；对应后端 config.update 段）。
+ *
+ * ⚠️ 这里的字段集合必须与后端 `server.EDITABLE["update"]` **逐字一致**：
+ * 白名单里有、这里没有 = 假配置（第 78 期漏了 `image`）；这里没有后端读点 = 假开关。
+ * `tests/test_update_config_contract.py` 钉着这条契约。
+ */
 export const UPDATE_FIELDS: FieldDef[] = [
   {
     path: 'update.check_enabled',
     label: '检查新版本',
     type: 'bool',
-    hint: '启动时与每 6 小时检查 GitHub 最新版本；出网失败静默忽略。关掉则侧栏不再提示、「新功能」页也无「可更新」',
+    hint: '启动时与每 6 小时检查 GitHub 最新版本；出网失败静默忽略。关掉后保存即生效：不再检查，侧栏也不再提示、「新功能」页无「可更新」',
   },
   {
     path: 'update.interval_hours',
     label: '检查间隔（小时）',
     type: 'number',
-    hint: '定时检查间隔；首次检查在启动后一个间隔之后（避开启动期 / 测试期真连 GitHub）',
+    hint: '定时检查间隔；保存即生效。首次检查在启动后一个间隔之后（避开启动期真连 GitHub）',
   },
   {
     path: 'update.auto_apply',
     label: '发现新版自动更新',
     type: 'bool',
-    hint: '默认关：只提示，需手动点「立即更新」。即便开启，也须 compose 挂 docker.sock 才真生效，否则仍只提示命令',
+    hint: '默认关：只提示，需手动点「立即更新」。开启后检查到新版会自动拉取镜像并重建容器；须 compose 挂 docker.sock，否则仍只提示命令。同一版本只自动尝试一次',
+  },
+  {
+    path: 'update.image',
+    label: '更新拉取镜像',
+    type: 'text',
+    placeholder: 'ghcr.io/735876214/novel_dl_convert:latest',
+    hint: '留空用内置镜像。填加速镜像源 / 私有仓库时必须是**本应用**镜像（如 ghcr.io/你的用户名/novel_dl_convert:latest），否则重建出来的容器不是本应用',
   },
 ]
 

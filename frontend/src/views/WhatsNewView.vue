@@ -128,6 +128,11 @@ onMounted(async () => {
           <span class="text-[13px] text-foreground">
             有新版本 <span class="font-mono font-semibold text-primary">{{ status.latest }}</span> 可用
           </span>
+          <!-- 第 80 期：自动更新真的会执行，所以横幅如实说明，别让用户以为只是提示 -->
+          <span
+            v-if="status.auto_apply && status.updater_available"
+            class="text-[11.5px] text-muted-foreground"
+          >已开启自动更新：下次检查会自动拉取并重建</span>
           <Button
             v-if="status.updater_available"
             size="sm"
