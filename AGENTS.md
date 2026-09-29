@@ -11,7 +11,7 @@
 1. **`git log --oneline -12` + `git status --short`**
    - 本项目**可能有别的 AI 会话在并行推进**；**期号会被别人用掉** —— 别沿用旧计划里的期号。
    - 别人未提交/已提交的改动**不回退、不顺手提交**；工作区里不是你的改动（例：`.vscode/settings.json`）不要一起 commit。
-2. **读 `TODO.md`** 看当前任务与优先级；读本轮相关的 `docs/roadmap-gaps-remaining.md` 段落（最新期在文件**末尾**）。
+2. **读 `docs/TODO.md`** 看当前任务与优先级；读本轮相关的 `docs/roadmap-gaps-remaining.md` 段落（最新期在文件**末尾**）。
 3. **读 `.codebuddy/memory/MEMORY.md`（铁律）+ `MEMORY-REF.md`（域细节/运行手册）**。跨会话的历史事实在 `memory/YYYY-MM-DD.md`。
 
 ## 1. 改动纪律（硬约束，违反会被判为回归）
@@ -27,7 +27,7 @@
   本地原件 / ② 书库根里的成品 / ③ 出版副本），「移除书库」回收 ②③ 而**保留 ①**。两份都是
   **用户显式动作**的结果；后台流程（刮削 / 发布 / 扫描）依旧**绝不自动删源**。
 - **软删除**：`DELETE` = 置 `deleted_at`，`purge` 才真删；**一切读点须带 `WHERE deleted_at=0`**。
-- **视觉层照搬 BookOrbit，不允许自创**（见 `DESIGN.md`）；**零外部请求 / 零 CDN**（字体自托管、图标内联 SVG）；**不做假交互**（没有后端就如实标注「未支持」）。
+- **视觉层照搬 BookOrbit，不允许自创**（见 `docs/DESIGN.md`）；**零外部请求 / 零 CDN**（字体自托管、图标内联 SVG）；**不做假交互**（没有后端就如实标注「未支持」）。
 - **不做假数据**：演示数据禁用 `Math.random()`；计数/进度必须来自真实接口。
 - **compose 文件只保留两份**：仅 `docker-compose.yml`（生产部署）与 `docker-compose.test.yml`（测试），**严禁新增任何新格式 / 叠加件**（offline、update 等一律内联进主文件注释或文档说明，不另建文件）。
 - 写计划只写四块：**需求来源 / 功能范围 / 防回归要点 / 任务清单**。
@@ -60,7 +60,7 @@ novelforge/                 Python 包（后端全部逻辑）
     metasources.py · metafetch.py   14 家元数据提供商 + 抓取编排（出网只经 `_get_json`/`_get_text`）
   static/v2/                前端**构建产物**（勿手写；由 frontend/ 构建 + deploy 同步）
 frontend/                   前端工程（Vue 3 SFC + TS + Vite + Tailwind v4 + Pinia）
-  src/assets/theme/*.css    视觉 token（照搬 BookOrbit，见 DESIGN.md）
+  src/assets/theme/*.css    视觉 token（照搬 BookOrbit，见 docs/DESIGN.md）
   src/views/ · components/ · stores/ · lib/ · data/ · composables/
   scripts/deploy.mjs        dist → novelforge/static/v2
 tests/                      pytest 全量（离线）；conftest.py 有仓库根防删除守卫
@@ -114,8 +114,8 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
 | 文件 | 管什么 |
 |---|---|
 | `AGENTS.md`（本文件） | AI 入口：硬约束、三处同步点、常用命令、陷阱 |
-| `TODO.md` | 当前任务、优先级、进度与下一期候选 |
-| `DESIGN.md` | 视觉规则（token / 圆角 / 阴影 / 字体 / 暗色 / 动效） |
+| `docs/TODO.md` | 当前任务、优先级、进度与下一期候选 |
+| `docs/DESIGN.md` | 视觉规则（token / 圆角 / 阴影 / 字体 / 暗色 / 动效） |
 | `docs/project-overview.md` | 项目整体说明（能力全景） |
 | `docs/architecture.md` | 架构与数据流（分层 / DB / 索引 / 缓存 / 出版 / 多端） |
 | `docs/user-guide.md` | 面向使用者的功能说明（怎么用） |

@@ -384,7 +384,7 @@ export type BulkRenameProgressEvent =
 | `BulkRenamePreviewPage.pattern` / `totalByStatus` | `NamingPlan.{pattern,stats:{total,changed,conflict,ready}}` | 同上，本项目用四档统计 |
 | `BulkRenameExecuteRequest`（include / exclude 二选一） | `POST /api/naming/apply` 的 `book_ids`（**只能收窄**，不可扩） | 我们只保留 include 一侧：客户端给不出「去改哪本书」，要改哪些由服务端按规则自算 |
 | `BulkRenameProgressEvent`（流式进度） | **无**（同步返回 `{total,done,failed,skipped,items}`） | 串行跑在 `asyncio.to_thread`；进度靠转换日志的轮询看板，不新开流式端点 |
-| `scope` 是书库 | `scope` 是**扩展名筛选**（`naming.scope`） | 上游按 `Library` 维度；本项目的书库维度另有入口，见 `docs/bookorbit-capability-gap.md` §5 |
+| `scope` 是书库 | `scope` 是**扩展名筛选**（`naming.scope`） | 上游按 `Library` 维度；本项目的书库维度另有入口，见 `docs/bookorbit/bookorbit-capability-gap.md` §5 |
 
 > 因此 bulk-rename 的契约**不以本项目接口为对齐基准、也不再以上游类型反推**：上游类型已核实如上，
 > 本项目的对应物以 `core/scrape.py` + `frontend/src/lib/api.ts` 为准（见 §7）。

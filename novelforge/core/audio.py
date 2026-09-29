@@ -12,7 +12,7 @@
 import pathlib
 import re
 
-#: 有声书格式清单（与 docs/bookorbit-library-contract.md 的 AUDIO_FORMAT_LIST 对齐）
+#: 有声书格式清单（与 docs/bookorbit/bookorbit-library-contract.md 的 AUDIO_FORMAT_LIST 对齐）
 AUDIO_EXTS = (".m4b", ".mp3", ".m4a", ".opus", ".ogg", ".flac", ".aac", ".wav")
 
 #: 目录内可能作为封面的图片名（不含扩展名，大小写不敏感）

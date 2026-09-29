@@ -7,7 +7,7 @@
  * 合计 **30 张**（书库侧 18 + 阅读侧 12，与上游逐 id 对得上）。
  * 剩下 3 张已声明不做（`metadata-freshness-gauge` / `reading-source-distribution`
  * 「Where You Read」/ `goal-trajectory`「Pace vs Goal」），账目见
- * `docs/bookorbit-capability-gap.md`。
+ * `docs/bookorbit/bookorbit-capability-gap.md`。
  *
  * 两条与上游对齐的规矩：
  *

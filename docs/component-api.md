@@ -1,7 +1,7 @@
 # 组件与模块 API（component-api）
 
 > 范围：`frontend/src` 的**组件 props/emit**、**stores 公共 API**、**lib 单一判据函数**、**composables**、**注册表结构**。
-> 视觉规范见 `DESIGN.md`；后端接口见 `README.md` 与 FastAPI 自带文档 `/docs`。
+> 视觉规范见 `docs/DESIGN.md`；后端接口见 `README.md` 与 FastAPI 自带文档 `/docs`。
 > ⚠️ 本文是**约定与索引**，不是自动生成文档：改公共 API 时**请同步改这里**（见 `docs/development.md` §7）。
 
 ## 1. 目录与分层
@@ -121,7 +121,7 @@ components/
 | `collections` | `items`、`load(force?)`、`create/remove/rename` | `force` 走「等前一次落地再拉」，避免吞掉刚建的收藏夹 |
 | `tasks` | 任务列表 + 仅未结束时轮询 | `/api/tasks` |
 | `prefSync` | 偏好同步模式快照、设备配置、显式保存、离线降级 | 与 `lib/prefsBridge` 配合 |
-| `theme` | 主题 / 点缀色 / 圆角（写 `<html>` class + localStorage） | 见 `DESIGN.md` |
+| `theme` | 主题 / 点缀色 / 圆角（写 `<html>` class + localStorage） | 见 `docs/DESIGN.md` |
 | `nav` | 分组折叠、「库」组筛选、任务计数 | 侧栏 |
 | `displayPrefs` / `shelfPrefs` / `coverPrefs` / `dashboard` / `statsChartPrefs` | 各类偏好（`displayPrefs` 与 `shelfPrefs.collapseSeries` 进服务端同步） | — |
 | `libraryWizard` | `show()`、`created()` | 「新增书库」**全局单实例就地弹窗**（⚠️ 禁在别处再挂第二份） |
@@ -150,7 +150,7 @@ components/
 ## 10. 新增/改动组件的规矩
 
 1. **优先复用 `ui/` 原语**；不要另起一套按钮 / 卡片 / 空态。
-2. 颜色/圆角/阴影一律用 token 与 Tailwind 语义类（见 `DESIGN.md`），**不写死值**。
+2. 颜色/圆角/阴影一律用 token 与 Tailwind 语义类（见 `docs/DESIGN.md`），**不写死值**。
 3. 新增设置页 → 同批改 `data/settingsNav.ts` + 路由组件映射（并跑设置页契约测试）。
 4. 新增偏好 → 同批改 `lib/prefsPayload.ts` 与后端 `server.PREFS_BLOCKS`（含相关函数），跑 `tests/test_prefs_shelf_block.py`。
 5. 新页面触达后端新接口 → 在 `lib/api.ts` 加方法（唯一 HTTP 客户端），不要组件里裸 `fetch`。

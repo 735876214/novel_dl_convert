@@ -25,7 +25,7 @@ from . import db, stats
 # 上游 `packages/types/src/achievement.ts` 定义 5 个分类；本项目对齐前 4 个：
 #   library / reading / exploration（批注归入「探索」内容）/ dedication（长周期坚持）。
 # `devices` 分类**刻意不做**：上游依赖 `reading_sessions.source` 多设备分桶，本项目
-# `reading_sessions` 表无 `source` 列，无法喂数据（见 docs/bookorbit-capability-gap.md §6）。
+# `reading_sessions` 表无 `source` 列，无法喂数据（见 docs/bookorbit/bookorbit-capability-gap.md §6）。
 # 上游还有 rarity / tier / hidden / iconName 等展示层概念，本项目有意简化为无（不改判定逻辑）。
 GROUP_LIBRARY = "library"
 GROUP_READING = "reading"

@@ -2,13 +2,13 @@
 
 > 来源（历史实测）：`https://orbit.735876214.xyz:16666/`（线上实例，站点版本 **v2.10.0**）；采集日期 2026-09-16 ｜ 账号角色：Superuser（单账号本地部署）
 > **源码对照（本轮新增）**：上游参考仓库 `https://github.com/735876214/bookorbit`，分支 `main` @ commit `c292d6cc`（v2.10.0）。只读镜像，不在本项目中复制上游代码，仅引用文件路径与结论。
-> 用途：本文件是 novel_dl_convert **补齐线上能力**的排期依据，与 `docs/bookorbit-settings-inventory.md`（设置页 41 页清单）、`docs/bookorbit-library-contract.md`（类型契约）、`docs/bookorbit-feature-flows.md`（功能与流程）并列。
+> 用途：本文件是 novel_dl_convert **补齐线上能力**的排期依据，与 `docs/bookorbit/bookorbit-settings-inventory.md`（设置页 41 页清单）、`docs/bookorbit/bookorbit-library-contract.md`（类型契约）、`docs/bookorbit/bookorbit-feature-flows.md`（功能与流程）并列。
 > 采集方式：浏览器自动化（Playwright CLI）**真实登录后逐页渲染采集**非设置页十个能力域；全程只读——仅导航、展开、点击进入子页、读取 DOM、截图；**未点击任何保存 / 删除 / 提交 / 启用 / 重置类控件**。
 > 证据：逐页采集记录见 `docs/review/bookorbit-app-capture.md`；截图见 `docs/review/bookorbit-app-shots/`
 > **脱敏**：全文不含账号、密码、邮箱、令牌、密钥真实值；此类字段一律只记「已设置 / 未设置」；含账号显示名的仪表盘截图主动未归档。
 > **准确性约定**：①未取得可信值的项标注「未能采集」并说明原因；②本轮新增结论一律标注来源文件（`源码（<路径>）`），与历史实测（`历史实测（2026-09-16）`）分列，不混写；③凡源码无法确认的一律标注「**未验证（源码无法确认）**」，不做推测补全；④**「实例页面为空」不等于「上游无此能力」**——能力判断以源码为准，页面为空只在对应条目里说明 UI 侧未渲染。
-> **本轮范围**：纯文档复核（零代码改动、零实例访问）；Hardcover / Readwise / StoryGraph 同步按用户拍板**本轮明确不做**（见 §13、§14）。⚠️ **第 52 期（2026-09-24）已推翻此范围**：同/外部账号同步闭环已落地（Hardcover 推阅读状态与书评、Readwise 推书摘、StoryGraph 仅做 Cookie 有效性校验），详见 `docs/bookorbit-module-inventory.md` 第 52 期更新与 `docs/bookorbit-settings-inventory.md` §2.31–2.33 / §2.39–2.41。
-> ⚠️ **本文件只是三条轴里的一条（第 33 期加注）**：它按**页面 / 协议面**对照，因此**发现不了「整块模块从未进过视野」的缺口**。按上游代码模块逐条对照的结果另见 `docs/bookorbit-module-inventory.md`（67 个后端模块 + 33 个前端 feature；已实测出 16 个模块此前从未被判定过，含一个 94 文件的模块）。**找缺口时两份都要看，不要只 grep 本文件。**
+> **本轮范围**：纯文档复核（零代码改动、零实例访问）；Hardcover / Readwise / StoryGraph 同步按用户拍板**本轮明确不做**（见 §13、§14）。⚠️ **第 52 期（2026-09-24）已推翻此范围**：同/外部账号同步闭环已落地（Hardcover 推阅读状态与书评、Readwise 推书摘、StoryGraph 仅做 Cookie 有效性校验），详见 `docs/bookorbit/bookorbit-module-inventory.md` 第 52 期更新与 `docs/bookorbit/bookorbit-settings-inventory.md` §2.31–2.33 / §2.39–2.41。
+> ⚠️ **本文件只是三条轴里的一条（第 33 期加注）**：它按**页面 / 协议面**对照，因此**发现不了「整块模块从未进过视野」的缺口**。按上游代码模块逐条对照的结果另见 `docs/bookorbit/bookorbit-module-inventory.md`（67 个后端模块 + 33 个前端 feature；已实测出 16 个模块此前从未被判定过，含一个 94 文件的模块）。**找缺口时两份都要看，不要只 grep 本文件。**
 
 ---
 
@@ -43,7 +43,7 @@
 > **第 42 期重取（2026-09-23）**：路由 284 → **285**（第 41 期书库存放改造 +1：`GET /api/libraries/source-dirs`）；
 > **表仍 31 张**（第 41 期只改 `libraries` 的列：删 `mode` / `root_path` / `storage_path` / `source_subdir`、
 > 加 `source_dirs`，未增删表）。`APP_VERSION = "0.6.0"`。另：本期复核上游 `refs/heads/main` **仍为 `c292d6cc`**
-> （无新提交），故本期按「判定刷新 + 部分缺口」取证，详见 `docs/bookorbit-module-inventory.md` 第六节。
+> （无新提交），故本期按「判定刷新 + 部分缺口」取证，详见 `docs/bookorbit/bookorbit-module-inventory.md` 第六节。
 > **第 43 期重取（2026-09-23）**：路由 285 → **291**（+6：`GET`/`POST /api/books/{bid}/reading-attempts`、
 > `POST /api/books/{bid}/reading-attempts/finish`、`POST /api/reading-attempts/backfill`、
 > `GET /api/annotations/export`、`POST /api/authors/sort-name/backfill`）；
@@ -190,7 +190,7 @@ MISSING / OOR / BLANK / COMMENT —— **这是预期噪声，不必再修**；�
 > **第 33 期补记**：那最后一行也倒了 —— **库级控制已落地**（第 38 期实测 `ShelfView.vue:545-560`：切库 / 立即扫描 /
 > 书库管理三项）。原判「无此能力」是**纯 grep 假阴性**：词表 `libraries\|scanLibrary\|…` 一个都没命中
 > 实际用的 `libraryEntities` / `scanShelf` / `manageLibs`。**本域至此 11 行全部落地**，
-> 教训已写进该行理由栏，并同步进 `docs/bookorbit-module-inventory.md` 的方法学警告。
+> 教训已写进该行理由栏，并同步进 `docs/bookorbit/bookorbit-module-inventory.md` 的方法学警告。
 > 这是全文**过期最彻底的一节** —— 原判「无」的九项（搜索/排序/折叠/导出/统一筛选/多选/三视图/
 > Display/书卡信息）**全部已实现**。⚠️ 请注意档位列里那些「需新增后端能力」的判断：
 > 批量写接口（`POST /api/books/batch`）与导出接口（`GET /api/books/export`）**都已存在**，
@@ -203,7 +203,7 @@ MISSING / OOR / BLANK / COMMENT —— **这是预期噪声，不必再修**；�
 | Collapse series | 折叠同系列 | **已落地**：工具栏 toggle `ShelfView.vue:454-461`；`rows` computed 按 `series` 合成一条并带展开态（`:250-274`），展开集合 `:147`，列表/表格的展开行 `:309-324`、`:327-345`；系列内按序号重排 `lib/bookInfo.ts:73-83` | **已落地** | 原判「无」已过期 |
 | Export metadata | 导出书目元数据 | **已落地**：书架「导出 CSV」按钮 + `onExport`（`ShelfView.vue:85,553`）；客户端 `api.exportBooks`（`lib/api.ts:2407`）；后端 `GET /api/books/export`（`server.py:999-1039`，**17 列**含系列/序号/格式/大小/出版年/出版社/语言/ISBN/题材/入库日期/进度/状态/评分/批注数），行生成 `library.export_rows`（`core/library.py:1202-1226`） | **已落地** | 原判「无」「需新增后端能力」均过期。注：`tools/OutputView.vue` 今天**仍只下载文件本体**（`:11,62,93`）—— 导出能力是**新增在书架页**，两者已分家 |
 | Filters 面板 | 统一筛选面板 | **已落地**：统一筛选面板 Card（`ShelfView.vue:488-536`），筛选按钮带脏标记 ●（`:462-468`），维度 = 格式/语言/题材/封面/阅读状态（`:161-172`、`:489-535`），过滤 computed `:198-208`，清除 `:174-180,534` | **已落地** | 原判「无统一面板」已过期。⚠️ **上一轮记的死入口 `shelfTag` —— 第 30 期已删净**：`openShelf(title, tag)` 改为 `openShelf(title)`（所有调用点本就不传 tag，见 `AppSidebar.vue:178,307`、`dashboard/DashboardShelfRow.vue:54`、`library.ts:304`），`stores/library.ts` 里的 `shelfTag` state（`:79`）、过滤分支（`:168`）、清空（`:289`/`:298`）、导出（`:313`）一并移除，题材筛选由面板 select 承担（`ShelfView.vue:507-513`） |
-| Show library controls | 库级控制 | **已落地（第 33 期改判；原判「无此能力」是 grep 假阴性）**：书架页工具栏下方**有库级控制条** —— `ShelfView.vue:457-469`，三项分别是**切库** `<select v-model="currentLib">`（选项来自 `library.libraryEntities`）、**立即扫描**（`@click="scanShelf"`）、**书库管理**（`@click="manageLibs"`）。代码注释写明这是「最小集」，**重命名与删除仍在 `/tools/libraries`**（`router/index.ts:204` → `views/tools/LibrariesView.vue`，后端 `PATCH/DELETE /api/libraries/{lid}`，`server.py:2390`、`:2459`），「避免第二处写入口」——是**有意为之的取舍，不是遗漏** | **已落地** | ⚠️ **原判的教训（第 33 期记）**：当时用 grep 词表 `libraries\|renameLibrary\|deleteLibrary\|scanLibrary\|新建\|重命名\|删除` 判「零命中 ⇒ 无此能力」，而实际代码用的是 **`libraryEntities` / `scanShelf` / `manageLibs`** —— 词表一个都没覆盖到，**grep 假阴性**。同一类错误在按模块名 grep 时**假阴性率过半**（实测 34/67 零命中、真正未判定的只有 16 个，见 `docs/bookorbit-module-inventory.md`）。**判能力有无只能按语义找 + 落到 `文件:行号`；grep 只能用来找起点，不能用来判定「不存在」。** |
+| Show library controls | 库级控制 | **已落地（第 33 期改判；原判「无此能力」是 grep 假阴性）**：书架页工具栏下方**有库级控制条** —— `ShelfView.vue:457-469`，三项分别是**切库** `<select v-model="currentLib">`（选项来自 `library.libraryEntities`）、**立即扫描**（`@click="scanShelf"`）、**书库管理**（`@click="manageLibs"`）。代码注释写明这是「最小集」，**重命名与删除仍在 `/tools/libraries`**（`router/index.ts:204` → `views/tools/LibrariesView.vue`，后端 `PATCH/DELETE /api/libraries/{lid}`，`server.py:2390`、`:2459`），「避免第二处写入口」——是**有意为之的取舍，不是遗漏** | **已落地** | ⚠️ **原判的教训（第 33 期记）**：当时用 grep 词表 `libraries\|renameLibrary\|deleteLibrary\|scanLibrary\|新建\|重命名\|删除` 判「零命中 ⇒ 无此能力」，而实际代码用的是 **`libraryEntities` / `scanShelf` / `manageLibs`** —— 词表一个都没覆盖到，**grep 假阴性**。同一类错误在按模块名 grep 时**假阴性率过半**（实测 34/67 零命中、真正未判定的只有 16 个，见 `docs/bookorbit/bookorbit-module-inventory.md`）。**判能力有无只能按语义找 + 落到 `文件:行号`；grep 只能用来找起点，不能用来判定「不存在」。** |
 | SELECT（多选模式） | 多选 + 批量动作 | **已落地（含后端）**：`selectMode`/`selected`/`toggleSelect`/`selectAllVisible`/`runBatch`（`ShelfView.vue:53-137`），「多选」按钮 `:435-437`，批量动作条（标记状态/评分/加入收藏夹）`:538-558`，三视图内勾选框 `:580-586`（网格）、`:671-677`（列表）、`:732-738`（表格）；**后端批量接口已在**：`POST /api/books/batch`（`server.py:1038-1088`，动作 set_status/set_rating/add_to_collection） | **已落地** | 原判「无多选」与「批量写需新增后端能力」**均过期** —— 批量接口不是待补项，是已存在的 |
 | **Grid / List / Table 三视图** | 三视图切换 | **已落地**：grid `ShelfView.vue:568-635`、list `:637-706`、table `:708-783`；切换按钮 `v-for SHELF_VIEW_OPTIONS`（`:421-433`）；选项与类型 `stores/shelfPrefs.ts:14,37-41` | **已落地** | 原判「仅 Grid」已过期，**锚点也错**：原引的 `ShelfView.vue:74-77` 今天是 `visibleIds()` 内部的分支 |
 | Display 面板（书架级） | 书卡信息/密度 | **已落地**：书架级显示偏好已持久化 —— `ShelfPrefs`（view/sort/dir/collapseSeries）`stores/shelfPrefs.ts:20-35`、书卡信息密度三档 compact/standard/detailed `:17-18,53-57`、筛选面板开关 `:84`，localStorage 键 `nf-shelf-prefs`（`:28,86-92`）；UI 在工具栏第二行「书卡信息」chips + 恢复默认（`ShelfView.vue:471-485`） | **已落地** | 原判「仅仪表盘有部件面板」已过期。⚠️ 形态差异：本项目是**工具栏常驻**而非浮层「面板」—— 能力等价，形态不同，如实记录 |

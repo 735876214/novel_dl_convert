@@ -9,7 +9,7 @@
 
 - **无进行中的任务**。HEAD = 第 68 期；工作区干净（仅 `.vscode/settings.json` 是各人本机设置，**不属于仓库改动**）。
 - 测试基线：后端 **1184 例 / 0 failed**（`pytest`，离线）；前端 **340 例 / 32 文件**（`npm run test:unit`）。
-- 上游缺口清单（`docs/roadmap-gaps-remaining.md` 第一节）已实质清空；新缺口来源改看 `docs/bookorbit-module-inventory.md`。
+- 上游缺口清单（`docs/roadmap-gaps-remaining.md` 第一节）已实质清空；新缺口来源改看 `docs/bookorbit/bookorbit-module-inventory.md`。
 
 ## 1. 待办（按优先级）
 
@@ -43,7 +43,7 @@
 - Kobo 同步、邮件投递；国际化（25 语言）；多用户/角色/OIDC；在线元数据的「插件市场 / 第三方源市场」（**已取消**）；
   批注跨端同步与导入（无数据源）、按设备重建批注位置、Kobo 阅读状态投影、通知清理 job、通知 SSE 网关、孤儿封面清扫；
   非 EPUB 的元数据解析（刻意不解析）；实体**删除**策略（源文件名无写入口）；`file-write`（元数据写回文件，永久不做）。
-- 判据与出处：`docs/roadmap-gaps-remaining.md` 第二节 + `docs/bookorbit-module-inventory.md` §4.2 / §6.2 / §9。
+- 判据与出处：`docs/roadmap-gaps-remaining.md` 第二节 + `docs/bookorbit/bookorbit-module-inventory.md` §4.2 / §6.2 / §9。
 
 ## 2. 已完成（近三期）
 

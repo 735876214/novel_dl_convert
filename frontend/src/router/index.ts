@@ -68,7 +68,7 @@ import { SETTINGS_HOME, SETTINGS_PAGES } from '@/data/settingsNav'
  * 设置页叶子路由 → 真实页面组件。
  *
  * 未在此表中的页一律落到 `SettingsPlaceholder`：只读展示上游该页的分组与设置项，
- * 并统一标注「未支持」（对齐 `docs/bookorbit-settings-inventory.md` 的迁移约定 3）。
+ * 并统一标注「未支持」（对齐 `docs/bookorbit/bookorbit-settings-inventory.md` 的迁移约定 3）。
  * 用映射表而不是在注册表里直接引用组件，是为了让 `data/settingsNav.ts` 保持纯数据、可被非 UI 代码复用。
  */
 export const SETTINGS_PAGE_COMPONENTS: Record<string, Component> = {

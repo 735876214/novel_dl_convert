@@ -10,7 +10,7 @@ import type { SettingsPageDef } from '@/data/settingsNav'
 /**
  * 「未支持」占位页。
  *
- * 迁移约定（对齐 `docs/bookorbit-settings-inventory.md` 第 6 节第 3 条）：
+ * 迁移约定（对齐 `docs/bookorbit/bookorbit-settings-inventory.md` 第 6 节第 3 条）：
  *   - 不做空页面；只读展示上游该页的真实结构（标题 / 说明 / 分组 / 条目）
  *   - 每个条目带「未支持」标注，顶部给出统一说明
  *   - 不伪造交互：所有条目均为只读展示，没有可点的开关
@@ -113,7 +113,7 @@ defineProps<{ page: SettingsPageDef }>()
 
     <p class="text-[11px] leading-relaxed text-muted-foreground">
       上游逐页采集记录见
-      <code class="font-mono">docs/bookorbit-settings-inventory.md</code>；
+      <code class="font-mono">docs/bookorbit/bookorbit-settings-inventory.md</code>；
       截图见 <code class="font-mono">docs/review/bookorbit-settings-shots/</code>。
     </p>
   </div>

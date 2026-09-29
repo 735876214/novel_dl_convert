@@ -1,7 +1,7 @@
 # 使用说明（user-guide）
 
 > 面向**使用者**：每个功能是干什么的、在哪儿、怎么用、有哪些边界。
-> 部署与配置见 `README.md`；原理见 `docs/architecture.md`；界面视觉规范见 `DESIGN.md`。
+> 部署与配置见 `README.md`；原理见 `docs/architecture.md`；界面视觉规范见 `docs/DESIGN.md`。
 
 ## 1. 第一次进入
 

@@ -1543,7 +1543,7 @@ def _is_local_request(request: Request) -> bool:
        IPv4-mapped IPv6（``::ffff:192.168.0.5``，双栈监听下很常见）先还原成 IPv4
        再判，否则它既不是回环也不是私网、会被白白降级。
 
-    ⚠️ **边界条件**（同时记在 ``docs/bookorbit-capability-gap.md`` §3 的复核头里）：
+    ⚠️ **边界条件**（同时记在 ``docs/bookorbit/bookorbit-capability-gap.md`` §3 的复核头里）：
     这一层假定**没有任何反向代理**。将来若真在公网入口前架了反代、又希望仍能识别
     来源，必须改成**显式配置的受信代理白名单**（例如环境变量给出代理地址，再取其
     转发的来源），**不能**在这里放宽这两条 —— 放宽的代价是把绝对路径给到公网。
@@ -1574,7 +1574,7 @@ def api_book_local_paths(bid: str, request: Request, response: Response):
     详情页的「文件」标签要回答「这个文件在磁盘上的哪里」，而这件事**按访问来源
     区分**（用户第 63 期决策 6）：本机看得到完整路径（配复制按钮），远程只看库内
     相对路径。第 33 期曾把「展示绝对路径」定为**已决策不做**（理由：远程 / 多端下
-    泄露服务器目录结构，见 ``docs/bookorbit-capability-gap.md`` §3）；本次是**有条件
+    泄露服务器目录结构，见 ``docs/bookorbit/bookorbit-capability-gap.md`` §3）；本次是**有条件
     放宽、不是推翻** —— 条件就是 :func:`_is_local_request`。
 
     为什么单开一个端点、而不是往 ``GET /api/books/{bid}`` 里塞一个字段：那个响应是

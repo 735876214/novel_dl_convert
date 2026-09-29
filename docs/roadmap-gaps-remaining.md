@@ -1,10 +1,10 @@
 # 上游功能缺口跟踪基线（第 6 期起）
 
-> 来源：`docs/bookorbit-capability-gap.md`（采集自线上实例 BookOrbit v2.10.0，2026-09-16）
+> 来源：`docs/bookorbit/bookorbit-capability-gap.md`（采集自线上实例 BookOrbit v2.10.0，2026-09-16）
 > 基线日期：2026-09-18
 > 已完成参考：第 0–5 期路线图（见 `docs/roadmap-verification.md`，第 0–4 期 27/27 验证，第 5 期 2026-09-17 完成）；**第 6–32 期已完成**（第 33 期进行中）—— 第 6–9 期见下方分期标题（A1–A9 前端快赢 / B1–B4 轻后端 / D1–D5 作者级元数据与抓取深化 / D6–D7 CBR 阅读与有声书播放器），第 10 期起见「三、分期实施计划」下的**逐期实施记录**
 > **第 33 期提示**：本文件的缺口清单已实质清空（档位为「可直接落地」的行**已全部收口**）。新增的缺口来源
-> 请改看 `docs/bookorbit-module-inventory.md`（按上游代码模块逐条对照，已实测出 16 个此前从未被判定过的模块）——
+> 请改看 `docs/bookorbit/bookorbit-module-inventory.md`（按上游代码模块逐条对照，已实测出 16 个此前从未被判定过的模块）——
 > **只 grep 本文件会系统性漏项**，实测名称为准的 grep 假阴性率过半。
 > 用途：跟踪"上游有、本项目仍缺失"的功能，并给出分期实施计划。本文件为**活文档**，每完成一项勾掉一项。
 
@@ -598,7 +598,7 @@
   成就 `dedication`/`devices` 分组标题确证（`packages/types/src/achievement.ts:1,9-10`），本项目成就未逐项对齐；
   求书表格核心列确证为 `createdAt/title/mediaKind/requester/status`（`packages/types/src/book-request.ts:534`），两页
   Mine/All 范围由 `mine`/`allTotal` 区分，本项目无 Requests 功能。
-  `docs/bookorbit-capability-gap.md` 逐行改判（§1/§2/§3/§6/§7/§8/§11 等多行附 `文件:行`），并标注
+  `docs/bookorbit/bookorbit-capability-gap.md` 逐行改判（§1/§2/§3/§6/§7/§8/§11 等多行附 `文件:行`），并标注
   上述「未取证 → 不做」项；三份停旧期文档（roadmap-verification / settings-inventory / feature-flows）
   已在第 29 期加 ⏳ 时效标注，本期不整表翻转，以 capability-gap.md 为权威。
 
@@ -792,7 +792,7 @@ tooltip 标注样本数。
   （本项目无 `source` 列）、`goal-trajectory`（本项目无阅读目标设置）—— 三张不只不做，且**不补死 UI**。
 - 上游 `client/` 全量取证、69 个后端模块逐模块对照：用户未选，本期只按需拉本期要照搬的文件。
   - **第 33 期已补**：模块数**实测订正为 67**（`ls-tree -d` 计数，非 69），其中 1 个是架构边界测试非能力
-    ⇒ 能力模块 66 个；清单见 `docs/bookorbit-module-inventory.md`（含 16 个此前从未被判定过的模块）。
+    ⇒ 能力模块 66 个；清单见 `docs/bookorbit/bookorbit-module-inventory.md`（含 16 个此前从未被判定过的模块）。
     `client/` 的 33 个 feature 也一并列了对照表。**本期只产出清单，不实现清单项。**
 - `win32` 那例长期失败与顺序依赖 flaky 两例：**列为观察项不列为交付**（根因未定位，属既有 win32 不通）。
   - **第 33 期订正**：其中 `test_audiobook_library_scan_triggers_auto_fetch` **已定位并修复** ——
@@ -830,7 +830,7 @@ tooltip 标注样本数。
 
 #### 第 33 期验证
 
-**A. 上游模块级系统取证**：见 `docs/bookorbit-module-inventory.md`（67 个目录逐条判定 + 33 个 feature
+**A. 上游模块级系统取证**：见 `docs/bookorbit/bookorbit-module-inventory.md`（67 个目录逐条判定 + 33 个 feature
 对照 + 一条方法学警告「按模块名 grep 得出的覆盖结论是错的」）。**本期只产出清单，不实现清单项。**
 
 **B. win32「flaky」的真相**：一例是产品 bug，另两例本轮未复现
@@ -1505,7 +1505,7 @@ T5 的症状（并发下每库覆写被吃）在浏览器里**单用户操作触
 全量类型检查 → 构建 → 部署 `novelforge/static/v2` → 重启测试实例 → 端到端脚本验证「保存 → 读回 → 实际生效」→ 浏览器逐路由冒烟。
 
 **文档锚点核验（第 35 期起，与上面同列为收尾必做）**：`.venv/bin/python tests/check_doc_anchors.py`
-（工具本身与它的五类误报、两类漏报见 `docs/bookorbit-capability-gap.md` §0.5）。
+（工具本身与它的五类误报、两类漏报见 `docs/bookorbit/bookorbit-capability-gap.md` §0.5）。
 
 - **判据是两条，不是一条**：「工具报 0 条硬错 + 0 条漂移」**且**人工过完 `--todo` 清单。
   「行号合法、内容已换」这一类**工具天生测不出**（第 35 期 `DOCK_TABS` 差了 568 行就是工具漏报、
@@ -1821,7 +1821,7 @@ BookCover `:96`、ShelfView `:280`）均按实测行号写入；`tests/check_doc
    （`novelforge/server.py:262`；白名单只含 `/health` + `/api/auth/login` + `/api/logout`）。
    第 31 期早已订正代码侧（并修了打错路径的契约测试），此表漏改。
 2. 第 33 行（上游模块 `kobo`）：原记「已实现可用子集」——**未实现**。依据：`README.md:113` 明写
-   「未做：Kobo 同步」、`docs/bookorbit-capability-gap.md:435`、设置页占位 `frontend/src/data/settingsNav.ts:344-363`；全仓无 `kobo*.py`。
+   「未做：Kobo 同步」、`docs/bookorbit/bookorbit-capability-gap.md:435`、设置页占位 `frontend/src/data/settingsNav.ts:344-363`；全仓无 `kobo*.py`。
 3. 第 40 行 `metadata`：原记「`core/metadata.py` 对等（6 类）」——**高估**，实际仅 EPUB 全解析
    （+ 漫画/音频结构），**FB2 完全不支持**、MOBI/AZW3/PDF 无内容解析。
 
@@ -1899,7 +1899,7 @@ BookCover `:96`、ShelfView `:280`）均按实测行号写入；`tests/check_doc
 用户拍板把 module-inventory §4.2 仅剩的两项「有价值但不做」重开：**`embedding` 语义向量**
 与 **`position-converter` 阅读位置换算**。至此「有价值但不做」清单实质清零
 （`email` / `migration` / `file-write` / `seed` / kobo span / kepub DOM 等仍按原判不做，
-理由未变）。详细落地锚点见 `docs/bookorbit-module-inventory.md` 第 54 期一节，此处只记
+理由未变）。详细落地锚点见 `docs/bookorbit/bookorbit-module-inventory.md` 第 54 期一节，此处只记
 决策与防回归要点。
 
 1. **语义向量（`core/embed.py`）**：默认 LSA（TF-IDF + SVD，纯 numpy、离线零下载），
@@ -2516,7 +2516,7 @@ PDF·漫画进下一册 / 有声书接下一轨，**翻页模式预取不做**�
 
 ## 第 68 期（2026-09-28）：收掉第 67 期留下的两处 —— 列表不发简介 + 迁移预览提速去重
 
-**来源**：用户点名把第 67 期「仍未做」的两条做掉（原话见 TODO.md 的历史条目）。
+**来源**：用户点名把第 67 期「仍未做」的两条做掉（原话见 docs/TODO.md 的历史条目）。
 
 ### 一、`/api/books` 不再下发简介正文（改发 `has_description`）
 - **做法**：`server._card()` 里把 `description` 换成布尔 `has_description`。
@@ -2549,10 +2549,10 @@ PDF·漫画进下一册 / 有声书接下一轨，**翻页模式预取不做**�
 - 真机（600 本合成库 + 隔离实例 + Edge）：`/api/library-migrations/preview` 一次页面加载**只调 1 次**；
   `/api/books` 一次真实拉取（gzip **38 KB**）；`preview` curl 热态 37–41 ms。
 
-### 仍未做（顺延，已记入 TODO.md）
+### 仍未做（顺延，已记入 docs/TODO.md）
 - **未登录冷访问会先渲染一次外壳、白发约 10 个 401 探测请求**（每个 337 B）。成因与本期 `MigrationGateDialog` 同源
   （外壳挂在 `v-else`，`showLogin` 初值 false）。没动的原因：这批是**廉价探测**，而把外壳也 gate 到 `authChecked`
-  会让**已登录用户的冷启动**多等一次 `api.me()` —— 要先量再决定（TODO.md P2）。
+  会让**已登录用户的冷启动**多等一次 `api.me()` —— 要先量再决定（docs/TODO.md P2）。
 
 ## 第 69 期（2026-09-28）：滚动模式改成「跨章连续流」—— 读完自然接下一章、向上滚能读回上一章
 
@@ -3256,3 +3256,17 @@ Big5 里都**不可能**做后继字节，换行后必是字符边界）；② �
 - **不清理存量数据**：真库 `library_migrations` 里第 77 期之前的 `direction="move"` 行、以及 `config.yaml` 里可能还写着的 `libraries.auto_migrate`，都**留着不动**。后者已无人读（`config.load_config` 是浅合并、不校验白名单，不会报错）；前者被 `move_batches` 按 direction 过滤掉，不会出现在界面上。
 - **`authChecked` 一并删了**（全仓只服务那个弹窗）。连带丢掉的第 68 期教训已转录进 `.codebuddy/memory/MEMORY.md`：`showLogin` 初值是 `false`，任何挂在 `App.vue` 里、要等鉴权裁决才有意义的东西，直接用 `!showLogin` 当门都会**先挂载一次**（发出一个注定 401 的请求）。
 - **投递时「按格式 / 关键词选库」的能力保留**（见上面的术语坑）—— 用户那句「项目不再做自动归库」指的是**把已有书按格式搬到对应类型库**这条搬运链。
+
+---
+
+## 结构精简（非功能期）· 删死代码 / 清理截图 / 归拢文档目录
+
+**来源**：用户指令「精简一下项目结构」；澄清确认四项目标全选、删除方式为直接 `git rm`、`docs/review/` 仅删 59 张 jpg（保留评审报告与取证文本）。
+
+**做了什么**：
+- 删除无引用的 `beautifier/`（8 文件，独立「前端美化 Agent」小工具）；`git rm` `docs/review/` 下 59 张上游截图（约 7MB，保留 2 份评审报告与两份 capture 取证文本）。
+- 目录归拢（`git mv` 保历史）：`DESIGN.md`→`docs/DESIGN.md`、`TODO.md`→`docs/TODO.md`、`docs/bookorbit-*.md`→`docs/bookorbit/bookorbit-*.md`；`CHANGELOG.md`/`VERSION`（运行时与 Dockerfile 读取）、`AGENTS.md`/`README.md`（入口）依约束**留根**。
+- 全仓 27 个文件同步改写引用（AGENTS 文档地图、docs 交叉引用、`novelforge/*` 注释、前端注释与 AboutPage 文案、`tests/*`）；`tests/check_doc_anchors.py` 的 `ROOTS` 补 `docs/bookorbit`。
+- 收敛 `docs/project-overview.md` / `docs/development.md` 与 `README.md` 的重复表述（部署 / 环境变量 / CLI 指向 README）。
+
+**验证**：后端 **1257 passed / 12 skipped / 0 failed**；前端四连绿（447 例）；`git grep` 旧路径残留 0。⚠️ 锚点脚本既有 **4 条硬错**（`BookDetailView.vue` 经第 73 期重写后行数缩小，`bookorbit-capability-gap.md` 的历史锚点越界）—— 非本次引入，按「历史行号不改写」纪律不动。

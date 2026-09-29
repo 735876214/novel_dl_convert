@@ -59,10 +59,8 @@
 | 本地测试 compose | `docker-compose.test.yml`：本地 build + 挂源码 + 数据隔离到 `./data-test` | `8993` |
 | 裸机 / 开发 | `.venv` + `uvicorn novelforge.server:app --port <自定义>`；`frontend && npm run dev` 走 Vite HMR | 自定 |
 
-目录约定（输入 / 成品 / 配置 / 缓存 / 数据库 / 字体 / 书源 / 备份）见 `README.md` 的「目录约定」表；
-环境变量：`INPUT_DIR` `OUTPUT_DIR` `CONFIG_DIR` `COOKIE_DIR` `CACHE_DIR` `LOG_DIR` `DATA_DIR` `SOURCES_DIR` `FONTS_DIR` `BACKUP_DIR`
-`LIBRARY_SOURCE_DIR`（或多数根 `LIBRARY_SOURCE_DIRS1..N`）`AUTO_WATCH` `AUTH_USER` `AUTH_PIN` `AUTH_SECRET`
-`NOVELFORGE_DB` `NOVELFORGE_PG_DSN` `NOVELFORGE_REDIS_URL`。
+> 目录约定、环境变量（`INPUT_DIR` / `OUTPUT_DIR` / `CONFIG_DIR` / … / `LIBRARY_SOURCE_DIRS1..N` /
+> `NOVELFORGE_DB` / `NOVELFORGE_REDIS_URL`）、数据库与缓存后端、CLI 用法：**唯一真值源见 `README.md`**，本文不重复抄写。
 
 ## 7. 规模与现状（便于判断「这项目多大」）
 
@@ -82,10 +80,10 @@
 |---|---|
 | 怎么装、怎么配、CLI 怎么用 | `README.md` |
 | AI 接手要注意什么 | `AGENTS.md` |
-| 现在做什么、优先级 | `TODO.md` |
-| 视觉规则 | `DESIGN.md` |
+| 现在做什么、优先级 | `docs/TODO.md` |
+| 视觉规则 | `docs/DESIGN.md` |
 | 架构与数据流 | `docs/architecture.md` |
 | 功能怎么用（使用者视角） | `docs/user-guide.md` |
 | 怎么开发、怎么回归 | `docs/development.md` |
 | 组件/工具模块 API | `docs/component-api.md` |
-| 与上游 BookOrbit 的差距 | `docs/bookorbit-capability-gap.md`、`docs/bookorbit-module-inventory.md` |
+| 与上游 BookOrbit 的差距 | `docs/bookorbit/bookorbit-capability-gap.md`、`docs/bookorbit/bookorbit-module-inventory.md` |

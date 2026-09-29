@@ -967,7 +967,7 @@ def _rebuild_progress(c) -> None:
         # 但这里**必须抛**，不能安静返回。安静返回的样子是：表没被重建，服务照常起来，
         # 然后**每一次读写进度都 500**（``column "file_rel" does not exist``）——
         # 现场离根因隔着好几层，而日志里没有任何一行说「迁移没跑」。这跟书签那条
-        # 血泪教训是同一个形状的坑（见 docs/bookorbit-capability-gap.md 的 bookmarks 段）：
+        # 血泪教训是同一个形状的坑（见 docs/bookorbit/bookorbit-capability-gap.md 的 bookmarks 段）：
         # 坏在**静默**上。抛出去则 ``db.init()`` 直接把服务挡在启动之前，
         # 消息里点名两张表，操作者照着决定留哪张即可 —— 数据一行没动，仍可完整恢复。
         raise RuntimeError(

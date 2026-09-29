@@ -7,7 +7,7 @@
 
 钉住的四件事：
 1. 上游 41 页「要么有落点，要么在 `REMOVED_UPSTREAM` 里显式声明已移除」—— 放行已裁决
-   移除的页（对照记录在 `docs/bookorbit-settings-inventory.md`），但不放过静默漏页；
+   移除的页（对照记录在 `docs/bookorbit/bookorbit-settings-inventory.md`），但不放过静默漏页；
 2. `path` / `name` 全局唯一（重复会被 vue-router 静默覆盖，侧栏还会出现重复 key）；
 3. `status === 'ready'` 的页必须已注册组件，且组件表里没有多余条目；
 4. 占位页（第 49 期后应为**空集**）必须同时带 `upstream` 与 `note`。
@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 NAV_TS = ROOT / "frontend" / "src" / "data" / "settingsNav.ts"
 ROUTER_TS = ROOT / "frontend" / "src" / "router" / "index.ts"
 
-# 上游 BookOrbit 设置页共 41 页（页面 <h2>），出处：docs/bookorbit-settings-inventory.md §1.3。
+# 上游 BookOrbit 设置页共 41 页（页面 <h2>），出处：docs/bookorbit/bookorbit-settings-inventory.md §1.3。
 # 已实现的页由自己的 upstream.title 承载，未实现的页由只读占位页承载。
 UPSTREAM_TITLES = [
     "Profile", "Theme", "Book Covers", "Icons", "Layout", "Behavior", "Language",
@@ -41,7 +41,7 @@ UPSTREAM_TITLES = [
 EXPECTED_PLACEHOLDERS: set[str] = set()
 
 # 第 49 期裁决移除的 11 个上游页（按上游标题声明）：删条目即删路由，逐页理由与上游结构
-# 对照保留在 docs/bookorbit-settings-inventory.md。**显式列出**是为保住「上游页不静默漏掉」
+# 对照保留在 docs/bookorbit/bookorbit-settings-inventory.md。**显式列出**是为保住「上游页不静默漏掉」
 # 的性质：上游若新增一页，必须二选一 —— 给它落点，或加进这里并说明为何不做。
 REMOVED_UPSTREAM = {
     "Icons",

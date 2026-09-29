@@ -8,7 +8,7 @@
 > 用途：NovelForge 对标参考
 >
 > **时效说明（第 31 期复核，2026-09-20）**：本文件是**上游 BookOrbit v2.10.0 的行为快照**（实例实测 + 上游源码对照），
-> 描述的是**上游怎么工作**，不是 NovelForge 的完成度。**本项目现状一律以 `docs/bookorbit-capability-gap.md` 为准**
+> 描述的是**上游怎么工作**，不是 NovelForge 的完成度。**本项目现状一律以 `docs/bookorbit/bookorbit-capability-gap.md` 为准**
 > （第 29–31 期已逐行核验到底并附 `文件:行` 锚点）。自 2026-09-19 采集后本文件未随后续各期重取；
 > 另注意上游版本已可能前进（本文件锁定 commit `c292d6cc`）。第 31 期已据 capability-gap.md 复核其中与成就、阅读活动相关的上游行为。
 
@@ -622,7 +622,7 @@
 
 - 未匹配书有独立实体：`KoreaderUnmatchedBook` + `KoreaderManualHashLink`（可手动把 hash 绑到书）；`KoreaderDeviceSweepInfo.requiresManualUpdate` 说明「插件太旧无法自更新」时服务器**不再提供更新**、要求手工装 zip。
 
-> 本项目（NovelForge）现状：Hardcover / Readwise / StoryGraph **三项均未实现**，且本轮已明确不做（见 `docs/bookorbit-capability-gap.md` §13/§14）。上表仅用于说明上游真实形态，不代表本项目已有能力。
+> 本项目（NovelForge）现状：Hardcover / Readwise / StoryGraph **三项均未实现**，且本轮已明确不做（见 `docs/bookorbit/bookorbit-capability-gap.md` §13/§14）。上表仅用于说明上游真实形态，不代表本项目已有能力。
 
 ---
 

@@ -4,7 +4,7 @@
 > **方法（零网络为主）**：`git ls-tree` 从 tree 对象直接列清单（不下载 blob），按 `*.controller.ts` /
 > `*.service.ts` / `*.repository.ts` 的命名推断职责；**只对「归不进既有十二域」的候选按需拉 1–3 个关键文件**
 > （走一次性代理 `git -c http.proxy=… cat-file -p`）确认职责。**全程只读，不复制上游代码**。
-> **为什么要做这件事**：`docs/bookorbit-capability-gap.md` 是按**协议面**（`packages/types`）与**页面**
+> **为什么要做这件事**：`docs/bookorbit/bookorbit-capability-gap.md` 是按**协议面**（`packages/types`）与**页面**
 > 做出来的对照，**从未按上游代码模块系统对照过**。一旦缺口是「整块模块从未进过视野」，
 > 按页面对照永远发现不了 —— 本文件就是为堵这个口子。
 > **本期只产出清单，不实现清单里的任何项**（供第 34 期排期）。
@@ -32,7 +32,7 @@
 | --- | --- | --- | --- |
 | **模块轴** | **67** | `server/src/modules/` 的直接子目录 | 后端能力块。**其中 1 个不是能力**（见下） |
 | **页面轴** | **33** | `client/src/features/` 的直接子目录 | 前端页面块 |
-| **能力轴** | 12 域 | `docs/bookorbit-capability-gap.md` §1–§12 | 既有对照表用的轴 |
+| **能力轴** | 12 域 | `docs/bookorbit/bookorbit-capability-gap.md` §1–§12 | 既有对照表用的轴 |
 
 三条轴**不是一一对应**：一个能力可能横跨多个模块（如「书籍详情」= `book` + `metadata` + `metadata-score`
 + `cover` + `user-book-status`），一个模块也可能横跨多个域。本文件做的是**把模块轴映射到能力轴**，
@@ -125,7 +125,7 @@
 | 30 | `font` | 18 | §1 | ✓ | 已覆盖 | 阅读器自定义字体上传 / 校验 / 元数据解析 |
 | 31 | `hardcover` | 32 | 三方同步 | ✓ | 已拍板不做 | 用户 2026-09-20 拍板本轮不做（§13） |
 | 32 | `health` | 9 | §1 | ✓ | 已覆盖 | 健康检查：⚠️ **第 42 期订正** —— 本项目路由是 **`GET /health`**（`novelforge/server.py:262`），**没有 `/api/health`**（打它会经鉴权中间件被拦成 401；白名单 `novelforge/server.py` 的 `_auth_middleware` 只含 `/health` + `/api/auth/login` + `/api/logout`）。原记「本项目有 `/api/health`」为笔误 |
-| 33 | `kobo` | 67 | §10 | ✓ | **未实现** | ⚠️ **第 42 期订正**（原记「已实现可用子集」**与代码、`capability-gap.md`、`README.md` 三处矛盾**）：Kobo 同步 **2026-09-17 已决策不做**（`README.md:113`、`docs/bookorbit-capability-gap.md:435`、设置页占位 `frontend/src/data/settingsNav.ts:344-363`）。全仓无 `kobo*.py`；`kobo` 只作批注来源枚举（`novelforge/server.py:1959`，实际只写 `web`）与 Komga 占位字段（`novelforge/core/komga_api.py:458` 的 `koboSpan` 恒空） |
+| 33 | `kobo` | 67 | §10 | ✓ | **未实现** | ⚠️ **第 42 期订正**（原记「已实现可用子集」**与代码、`capability-gap.md`、`README.md` 三处矛盾**）：Kobo 同步 **2026-09-17 已决策不做**（`README.md:113`、`docs/bookorbit/bookorbit-capability-gap.md:435`、设置页占位 `frontend/src/data/settingsNav.ts:344-363`）。全仓无 `kobo*.py`；`kobo` 只作批注来源枚举（`novelforge/server.py:1959`，实际只写 `web`）与 Komga 占位字段（`novelforge/core/komga_api.py:458` 的 `koboSpan` 恒空） |
 | 34 | `koreader` | 62 | §10 | ✓ | 已覆盖 | 本项目已实现 kosync 协议服务端（`settingsNav.ts:397` 有完整口径记录） |
 | 35 | `library` | 26 | §2 | ✓ | 已覆盖 | 多库实体 + 定时扫描（第 10 期） |
 | 36 | `maintenance` | 11 | §5 | ✓ | 已覆盖 | 缺失资源巡检（含孤儿封面目录） |
@@ -245,7 +245,7 @@
    本文件回答「上游代码里的能力块本项目做了没有」。**两份都要看**。
 2. **订正 `docs/roadmap-gaps-remaining.md:790`**：原文写「69 个后端模块逐模块对照：用户未选」，
    实测是 **67 个**（`ls-tree -d` 计数），其中 1 个非能力 ⇒ 能力模块 **66 个**。该行同时从「未选」
-   改为「第 33 期已产出清单，见 `docs/bookorbit-module-inventory.md`」。
+   改为「第 33 期已产出清单，见 `docs/bookorbit/bookorbit-module-inventory.md`」。
 3. **`capability-gap.md` 顶部加一行指引**指向本文件（避免下次又只按页面找缺口）。
 4. **本期不实现清单里的任何项**。第四节「值得做」的 4 项是第 34 期的候选输入，
    **排期与否由用户决定**，本文件只提供事实与成本判断。
@@ -315,16 +315,16 @@
 | Kobo 阅读状态投影 | `user-book-status` | **未实现** | Kobo 同步已决策不做（见 §2 第 33 行） |
 | 通知清理 job | `notification` | **未实现**（刻意不做） | 本项目**无通知产生端**（`novelforge/server.py:4666-4672` 明写不做自动清理） |
 | 通知推送网关（SSE） | `notification` | **未实现**（走轮询，`novelforge/server.py:4638`） | 全仓**刻意不上 SSE**（与 §4.2 `book-move` 同一口径） |
-| 孤儿封面清扫（cover-sweep） | `maintenance` | **未实现**：仅有孤儿**记录**清理（`novelforge/server.py:4410`） | 已决策不做（`docs/bookorbit-capability-gap.md:283`） |
+| 孤儿封面清扫（cover-sweep） | `maintenance` | **未实现**：仅有孤儿**记录**清理（`novelforge/server.py:4410`） | 已决策不做（`docs/bookorbit/bookorbit-capability-gap.md:283`） |
 
 ### 6.3 联动文档时效
 
-- `docs/bookorbit-settings-inventory.md` / `docs/bookorbit-feature-flows.md` /
-  `docs/bookorbit-library-contract.md`：按第 41 期库模型关键字（`root_path` / `source_subdir` /
+- `docs/bookorbit/bookorbit-settings-inventory.md` / `docs/bookorbit/bookorbit-feature-flows.md` /
+  `docs/bookorbit/bookorbit-library-contract.md`：按第 41 期库模型关键字（`root_path` / `source_subdir` /
   `inplace`）**复核后零命中** ⇒ 无需改动。
 - `docs/roadmap-gaps-remaining.md`：逐期历史记录里的旧 `root_path` / `source_subdir` / `mode` 表述
   **属历史事实，一律不动**（按锚点核验约定，改它等于篡改历史）。
-- `docs/bookorbit-capability-gap.md` §0.3 基线已随本期重取（路由 284 → **285**）。
+- `docs/bookorbit/bookorbit-capability-gap.md` §0.3 基线已随本期重取（路由 284 → **285**）。
 
 ---
 
@@ -439,7 +439,7 @@
   用户 / 账号活动 / 免密链接 / OIDC·SSO / 求书）：设置页 48 → **36 页**，占位页清零；
   `tests/test_settings_nav_contract.py` 重构（页数 36、`EXPECTED_PLACEHOLDERS` 空集、新增 `REMOVED_UPSTREAM` /
   `REMOVED_PAGE_PATHS` 显式「已移除」清单、`EXPECTED_OWN` 收缩为 `{komga}`）。逐页理由见
-  `docs/bookorbit-settings-inventory.md` §8。
+  `docs/bookorbit/bookorbit-settings-inventory.md` §8。
 - **全站错误态收敛（19 处）**：把「主数据加载失败被静默当成空态」的页面改为**可重试错误态** ——
   `AuthorsView` / `SeriesView` / `SeriesDetailView` / `AuthorDetailView` / `AnnotationsView` / `StatsView` /
   `CollectionDetailView` / `BookDetailView`（区分「拉取失败」与「找不到」）/ `tools/{SourcesView, OutputView,
@@ -494,7 +494,7 @@
 - 契约变化：`reader/comics` 与 `reader/audio` 的未支持清单**清零**（漫画页对照卡删除）；`appearance/layout` 4 条 → 2 条；`reader/ebook` 2 条 → 1 条；`appearance/book-covers` 仍 1 条、措辞更新为「搜索提供者 + 锁定状态」；`settingsNav` 六条 note 同步。
 - 验证：前端 `type-check` 0 错 + `test:unit` 62 + `build` + `deploy`；后端全量 pytest（基线 725）；`check_doc_anchors.py` 硬错 0；无头浏览器冒烟 6 页控制台 0 错误。
 - 提交：`cd9e63f`（封面样式）+ `3ebb529`（布局）+ `b88d271`（漫画）+ `7a7d133`（电子书）+ `d2ca0f4`（有声书 / PDF）+ 文档与记忆（见后续提交）。
-- ⚠️ **锚点披露**：本期在 `views/ShelfView.vue`（+约 120 行）、`components/reader/ComicReader.vue`、`views/ReaderView.vue` 上加了较多行 ⇒ `docs/bookorbit-capability-gap.md` §2「书架与浏览」里指向 `ShelfView.vue` 的若干「实测行号」**整体后移**。本期未逐条重取 —— 那些锚点本就落在工具的「需人工看（该句没点名符号）」桶内（该桶 265 条、历史引用 465 条，与前两期**逐条一致**），`check_doc_anchors.py` 判「**硬错 0 / 疑似漂移 14**」与前一期**完全相同**。**下次触碰书架域时应整域重测**（对齐第 33 期的做法）。
+- ⚠️ **锚点披露**：本期在 `views/ShelfView.vue`（+约 120 行）、`components/reader/ComicReader.vue`、`views/ReaderView.vue` 上加了较多行 ⇒ `docs/bookorbit/bookorbit-capability-gap.md` §2「书架与浏览」里指向 `ShelfView.vue` 的若干「实测行号」**整体后移**。本期未逐条重取 —— 那些锚点本就落在工具的「需人工看（该句没点名符号）」桶内（该桶 265 条、历史引用 465 条，与前两期**逐条一致**），`check_doc_anchors.py` 判「**硬错 0 / 疑似漂移 14**」与前一期**完全相同**。**下次触碰书架域时应整域重测**（对齐第 33 期的做法）。
 
 ## 第 52 期更新（2026-09-24）：外部账号同步闭环 + 服务端三项补齐
 

@@ -16,7 +16,7 @@ import { useChartTheme } from '@/lib/charts'
  *
  * 1. **只读**。上游那张图可以拖动会话条改时间、还带冲突检测；拖动要写库、
  *    要新接口、要处理并发冲突，本期不做，作为独立缺口记在
- *    `docs/bookorbit-capability-gap.md`。这里把「能读出来的东西」照原样画出来。
+ *    `docs/bookorbit/bookorbit-capability-gap.md`。这里把「能读出来的东西」照原样画出来。
  * 2. **没有周选择器**。上游按 `year + week` 向后端取数；本项目的
  *    `session_timeline` 是**最近 400 条**会话的明细（不按周切），所以这里画
  *    「**最近 7 天**（含今天）」这一条滚动窗口，并把更早的条数写在脚注里 ——

@@ -3,12 +3,12 @@ import type { IconName } from '@/lib/icons'
 /**
  * 设置页分区注册表 —— 上游（BookOrbit）设置页信息架构的单一数据源。
  *
- * 对齐依据：`docs/bookorbit-settings-inventory.md`（线上实例逐页采集）。
+ * 对齐依据：`docs/bookorbit/bookorbit-settings-inventory.md`（线上实例逐页采集）。
  * 结构整体与上游一致：6 个分组 / 36 个叶子页，路由为 `/settings/<path>`。
  * 上游 41 页里 **30 页有落点**，另 11 页经**第 49 期裁决已移除**（Icons / Language /
  * Privacy & Sharing / Restrictions / Kobo / Email / Users / Account Activity /
  * Magic Links / OIDC·SSO / Requests）—— 均为单用户本地库下**永无对象**或**已决策不做**
- * 的页；逐页理由与上游结构对照保留在 `docs/bookorbit-settings-inventory.md`。
+ * 的页；逐页理由与上游结构对照保留在 `docs/bookorbit/bookorbit-settings-inventory.md`。
  * 本项目补充 6 页（`ext` 组 5 页 + `komga`，标 `own`）。
  *
  * 命名约定（迁移要点 2：不自创中文名）：

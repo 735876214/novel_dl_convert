@@ -779,7 +779,7 @@ export interface BookLocalPaths {
   paths: Record<string, string>
 }
 
-/** 书架网格与详情页共用的书籍卡片（对齐 docs/bookorbit-library-contract.md）。 */
+/** 书架网格与详情页共用的书籍卡片（对齐 docs/bookorbit/bookorbit-library-contract.md）。 */
 export interface BookCard {
   id: string
   name: string

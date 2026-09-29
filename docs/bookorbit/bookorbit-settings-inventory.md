@@ -1,16 +1,16 @@
 # BookOrbit 设置页功能清单（迁移用）
 
 > 来源：`https://orbit.735876214.xyz:16666/settings`（线上实例，站点名 `BookOrbit`）
-> 用途：本文件是 **novel_dl_convert 设置页「全部对齐（含占位）」迁移** 的对照基准，与 `docs/bookorbit-library-contract.md` 并列。
+> 用途：本文件是 **novel_dl_convert 设置页「全部对齐（含占位）」迁移** 的对照基准，与 `docs/bookorbit/bookorbit-library-contract.md` 并列。
 > 采集方式：浏览器自动化（Playwright CLI）**真实登录后逐页渲染采集**；全程只读——仅导航、展开折叠分组、读取 DOM、截图，**未点击任何保存 / 应用 / 删除 / 重置 / 启用 / 上传 / 退出 / 同步类控件**，未向任何输入框提交内容。
 > 采集日期：2026-09-15 ｜ 账号角色：Superuser（该实例为单账号本地部署）
-> **🔄 复核日期：2026-09-19**（同一实例的另一地址 `http://192.168.0.95:3400/`，账号同为 Superuser，界面此时渲染为**简体中文**）。本轮以**界面实际渲染内容**为准逐页复核，滞后项已就地修正并加 `🔄 2026-09-19` 行；汇总见 **§7 复核纪要**。功能与流程的完整描述见并列文档 `docs/bookorbit-feature-flows.md`。
+> **🔄 复核日期：2026-09-19**（同一实例的另一地址 `http://192.168.0.95:3400/`，账号同为 Superuser，界面此时渲染为**简体中文**）。本轮以**界面实际渲染内容**为准逐页复核，滞后项已就地修正并加 `🔄 2026-09-19` 行；汇总见 **§7 复核纪要**。功能与流程的完整描述见并列文档 `docs/bookorbit/bookorbit-feature-flows.md`。
 > 证据：逐页采集记录与未能采集项见 `docs/review/bookorbit-settings-capture.md`；分区截图见 `docs/review/bookorbit-settings-shots/`
 > ⚠️ 截图局限：该批截图**实为 1440×1000 视口截图，仅覆盖各页首屏**（应用使用内层滚动容器，`fullPage` 未生效）。本清单的文字结论取自完整 DOM 抽取，不受此影响；但截图不可当作「整页」证据。详见 `bookorbit-settings-capture.md` 的 1.1 节。
 > **脱敏**：全文不含账号、密码、邮箱、令牌、密钥等任何真实敏感值；此类字段一律只记「已设置 / 未设置」。
 > **准确性约定**：未取得可信值的项一律标注「未能采集」并说明原因，**不做推测补全**。
 > **时效说明（第 31 期复核，2026-09-20）**：本文件是**上游 BookOrbit 侧的采集快照**，不是本项目的完成度记录 ——
-> 它回答「上游有什么」，不回答「NovelForge 做到哪了」。**本项目现状一律以 `docs/bookorbit-capability-gap.md` 为准**
+> 它回答「上游有什么」，不回答「NovelForge 做到哪了」。**本项目现状一律以 `docs/bookorbit/bookorbit-capability-gap.md` 为准**
 > （该文档第 29–31 期已逐行核验到底并附 `文件:行` 锚点）；本文件自 2026-09-19 采集后未随后续各期重取，
 > 因此其中的设置页数量、页面清单等**只反映上游实例，不代表本项目现值**。第 31 期已据 capability-gap.md 复核其中与成就分类、阅读活动相关的上游形态。
 
@@ -45,10 +45,10 @@
 - 左侧导航基于 `<nav aria-label="Settings sections">`，分 **5 组**：`YOU` / `LIBRARY` / `DEVICES` / `ACCOUNTS` / `SERVER`
 - 共 **23 个一级入口** = 19 个直接链接 + **4 个可展开分组**（`Display` 6 项、`Reader` 6 项、`Metadata` 7 项、`Users & Access` 4 项）
 - 侧栏底部提示 `Press Cmd K to jump to any setting`（设置项级跳转面板；本次未成功唤起，其内容未能采集）
-- **🔄 2026-09-19 复核（设置项跳转面板已采集）**：该面板已于后续轮次成功唤起并采集，展开态共 **42 个可跳转项**（行为与清单见 `docs/bookorbit-feature-flows.md` §3.9）；上一条的「未能采集」作废。
+- **🔄 2026-09-19 复核（设置项跳转面板已采集）**：该面板已于后续轮次成功唤起并采集，展开态共 **42 个可跳转项**（行为与清单见 `docs/bookorbit/bookorbit-feature-flows.md` §3.9）；上一条的「未能采集」作废。
 - 面包屑格式：`Settings > <组> > <页>`；`document.title` 格式：`<页标题> · BookOrbit`
 - 侧栏有折叠按钮 `Toggle Sidebar` / `Collapse sidebar`
-- **🔄 2026-09-19 复核（叶子页计数与侧栏渲染规律）**：在同一页面的 DOM 中一次性抓到的 `a[href^="/settings"]` 为 **29 个**，另加只在各自域展开时才渲染的 `appearance/*` 6 个与 `reader/*` 6 个，合计 **41 个叶子页**（原结论成立）。侧栏**按当前所在域动态展开**：停在「服务器 / 用户与权限」下只会列出 `admin/*` 8 项，停在元数据页则列出 `account/* + libraries + metadata/* + library/* + 设备 + ACCOUNTS` 而不列 `admin/users`。逐页清单见 `docs/bookorbit-feature-flows.md` §3.9。
+- **🔄 2026-09-19 复核（叶子页计数与侧栏渲染规律）**：在同一页面的 DOM 中一次性抓到的 `a[href^="/settings"]` 为 **29 个**，另加只在各自域展开时才渲染的 `appearance/*` 6 个与 `reader/*` 6 个，合计 **41 个叶子页**（原结论成立）。侧栏**按当前所在域动态展开**：停在「服务器 / 用户与权限」下只会列出 `admin/*` 8 项，停在元数据页则列出 `account/* + libraries + metadata/* + library/* + 设备 + ACCOUNTS` 而不列 `admin/users`。逐页清单见 `docs/bookorbit/bookorbit-feature-flows.md` §3.9。
 - **🔄 2026-09-19 复核（失效路由）**：`/settings/komga` **已不存在**，直连会回落到 `/settings/appearance/theme`（原 §2.42 记录的上游页已消失，见 §2.42 修订）；`/settings/system` 会被重定向到 `/settings/library/file-naming`（别名路由，非独立页）。
 
 ### 1.2 结构树
@@ -514,7 +514,7 @@ SERVER
 |---|---|---|---|---|
 | 作者元数据自动抓取相关项 | 开关/分段/按钮（26 个控件） | 未能逐项采集 | 该页为作者传记与照片的自动抓取配置；页面含 `Save` 按钮（`★` 判定命中但属误报，非设置项） | ✅（本项目作者抓取已实现） |
 
-> 该页正文 1303 字符已完整采集存档（正文抽取读的是完整 DOM，不受截图局限影响），但**未能逐项结构化**——原因与「未能采集」口径一致：页面未渲染出可判定的分段控件选中态。视觉参考见截图 `metadata__authors.jpg`（⚠️ 仅首屏，见 `bookorbit-settings-capture.md` 1.1）。
+> 该页正文 1303 字符已完整采集存档（正文抽取读的是完整 DOM，不受截图局限影响），但**未能逐项结构化**——原因与「未能采集」口径一致：页面未渲染出可判定的分段控件选中态。视觉参考原见截图 `metadata__authors.jpg`（⚠️ 仅首屏，见 `docs/review/bookorbit-settings-capture.md` 1.1）；**该批截图已移出仓库以精简体积**。
 
 ### 2.24 LIBRARY → Metadata → Genre Blocklist（`/settings/metadata/genre-blocklist`）
 
@@ -563,7 +563,7 @@ SERVER
 
 **配套说明（原文要点）**：改变模式**不会移动**磁盘上已有的书；新上传自此生效。
 
-> 本项目已有 `docs/bookorbit-library-contract.md` 记录 `Library.fileNamingPattern` / `fileRenameEnabled`，两者可对读。
+> 本项目已有 `docs/bookorbit/bookorbit-library-contract.md` 记录 `Library.fileNamingPattern` / `fileRenameEnabled`，两者可对读。
 
 ### 2.26 LIBRARY → Maintenance（`/settings/library/maintenance`）
 
@@ -813,7 +813,7 @@ SERVER
 
 | 能力 | 位置 | 说明 |
 |---|---|---|
-| 全局搜索 | 顶栏**内联输入框**（placeholder `搜索全部书籍…`） | 全库检索；输入 ≥2 字实时联想下拉（封面 + 标题 + 作者 + 格式徽章），底部「显示所有 N 条结果」；`⌘K` 实测不聚焦、不弹面板。详见 `docs/bookorbit-feature-flows.md` §4.19 |
+| 全局搜索 | 顶栏**内联输入框**（placeholder `搜索全部书籍…`） | 全库检索；输入 ≥2 字实时联想下拉（封面 + 标题 + 作者 + 格式徽章），底部「显示所有 N 条结果」；`⌘K` 实测不聚焦、不弹面板。详见 `docs/bookorbit/bookorbit-feature-flows.md` §4.19 |
 | 通知角标 | 顶栏铃铛 | 未读数 |
 | Statistics / Achievements | 顶栏按钮 | 跳转到独立页面（`/achievements` 等） |
 | Upload books | 顶栏按钮 | 上传书籍 |
@@ -862,7 +862,7 @@ SERVER
 | SERVER → Users & Access（4 页） | **用户** / **账号活动** / **免密链接** / **OIDC / SSO** 四个只读占位页（单用户改密仍在「账户 → 资料」） | ➖ 单用户轻登录，无角色 / 权限 / 邀请 / 免密链接 / OIDC；「账号活动」页给出通往本项目**审计日志**的入口 |
 | SERVER → Audit Log | **工具 → 日志**（activity_log） | ✅ 活动日志已实现，含操作者 / 类别 / Details |
 | SERVER → Book Dock | **监听**（输入目录 + watcher） | ✅ 投递目录 + 监听 + 自动抓取 + 自动定稿已实现 |
-| SERVER → Requests | **求书** 只读占位页 + **网络与下载**（书源管理 / 书源下载） | ➖ 上游那套 indexer（Torznab / Newznab）+ 下载客户端 + 自动化规则的求书体系**已决策不做**（2026-09-18，见 `docs/bookorbit-capability-gap.md` 第 9 节）；功能定位相同的等价能力在本项目是「网络与下载」的书源管理，入口不同、形态也不同 |
+| SERVER → Requests | **求书** 只读占位页 + **网络与下载**（书源管理 / 书源下载） | ➖ 上游那套 indexer（Torznab / Newznab）+ 下载客户端 + 自动化规则的求书体系**已决策不做**（2026-09-18，见 `docs/bookorbit/bookorbit-capability-gap.md` 第 9 节）；功能定位相同的等价能力在本项目是「网络与下载」的书源管理，入口不同、形态也不同 |
 | SERVER → Server Fonts | **服务端字体** 页 | ✅ 与阅读字体共用字体库，上限 200 |
 | — | **转换**（分章模式/AI/LLM/繁转简/输出格式/Calibre） | **本项目独有**，BookOrbit 无对应页 |
 | — | **监听**（watcher 9 项参数） | **本项目独有**（BookOrbit 的 watcher 是每书库的 `Watch folders` 开关 + `Scheduled scan`） |
@@ -909,13 +909,13 @@ SERVER
 9. **对齐时以本清单的「当前值」列为校验基线**：本清单中的当前值来自该实例的实际状态，用于验证「迁移后是否保留了同名同义设置」。标注「未能采集」的项**不要**用上游截图臆测默认值。
 10. **迁移前先复核权限矩阵**：本轮因只读约束未验证非管理员视角（见第 3 节）。若迁移要把 `SERVER` 分组做进去，需先确认哪些页对普通用户隐藏。
 11. **截图与文档同步更新**：迁移完成后，本清单与 `docs/review/bookorbit-settings-shots/` 的对照关系应保留（截图是「上游长什么样」的最终依据）。
-12. **与既有契约文档联动**：`docs/bookorbit-library-contract.md` 已定义 `Library.fileNamingPattern` / `fileRenameEnabled` / `readingThreshold` / `markAsFinishedPercentComplete` 等字段，与本清单的 File Naming（2.25）、Kobo 进度阈值（2.27）直接对应，两文应保持同步修订。
+12. **与既有契约文档联动**：`docs/bookorbit/bookorbit-library-contract.md` 已定义 `Library.fileNamingPattern` / `fileRenameEnabled` / `readingThreshold` / `markAsFinishedPercentComplete` 等字段，与本清单的 File Naming（2.25）、Kobo 进度阈值（2.27）直接对应，两文应保持同步修订。
 
 ---
 
 ## 7. 🔄 复核纪要（2026-09-19）
 
-> 复核对象：同一线上实例的另一入口 `http://192.168.0.95:3400/`（账号角色 Superuser，界面此时渲染为**简体中文**）。方式：Playwright 真实登录后逐路由渲染采集 + 向页面注入 fetch/XHR 钩子读真实网络流量，**全程只读**（仅导航、展开折叠、读 DOM、移动鼠标唤出阅读器工具条）。功能与流程的逐域描述见并列文档 `docs/bookorbit-feature-flows.md`。
+> 复核对象：同一线上实例的另一入口 `http://192.168.0.95:3400/`（账号角色 Superuser，界面此时渲染为**简体中文**）。方式：Playwright 真实登录后逐路由渲染采集 + 向页面注入 fetch/XHR 钩子读真实网络流量，**全程只读**（仅导航、展开折叠、读 DOM、移动鼠标唤出阅读器工具条）。功能与流程的逐域描述见并列文档 `docs/bookorbit/bookorbit-feature-flows.md`。
 
 ### 7.1 差异与修正（均已就地更新）
 
@@ -941,9 +941,9 @@ SERVER
 
 ### 7.2 本轮新增采集、原清单未覆盖项
 
-- **阅读器内置设置面板**（在 `/read/*` 内，**不是** `/settings/reader/*`）：主题（亮/暗）、字号（`A` 步进，实测 16px）、**13 档页面底色**（默认主题/灰度/护眼棕/…/纯黑 AMOLED）、字体族、字重与斜体、行间距、段间距、页面宽度、阅读模式（分页/滚动）；另有「高级排版设置」：分栏数、列间距、`Letter spacing`、`Word spacing`、`First-line indent`（三者均为 `Book / Custom`）、对齐文本、连字符断字。详见 `docs/bookorbit-feature-flows.md` §4.18。
-- **`/api/v1` 端点清单**：页面向 `fetch`/`XHR` 注入钩子得到的真实调用（如 `/api/v1/user-preferences/*`、`/api/v1/dashboard/widgets/batch`、`/api/v1/libraries/:id/books/jump-buckets`、`/api/v1/kobo/devices`、`/api/v1/opds-users`、`/api/v1/book-dock/summary` 等），见 `docs/bookorbit-feature-flows.md` §5。
-- **前端全站路由盘**与设置组之外的管理页（`/settings/admin/metadata*`、`/settings/integrations` 等别名/落点），见 `docs/bookorbit-feature-flows.md` §2、§3.9。
+- **阅读器内置设置面板**（在 `/read/*` 内，**不是** `/settings/reader/*`）：主题（亮/暗）、字号（`A` 步进，实测 16px）、**13 档页面底色**（默认主题/灰度/护眼棕/…/纯黑 AMOLED）、字体族、字重与斜体、行间距、段间距、页面宽度、阅读模式（分页/滚动）；另有「高级排版设置」：分栏数、列间距、`Letter spacing`、`Word spacing`、`First-line indent`（三者均为 `Book / Custom`）、对齐文本、连字符断字。详见 `docs/bookorbit/bookorbit-feature-flows.md` §4.18。
+- **`/api/v1` 端点清单**：页面向 `fetch`/`XHR` 注入钩子得到的真实调用（如 `/api/v1/user-preferences/*`、`/api/v1/dashboard/widgets/batch`、`/api/v1/libraries/:id/books/jump-buckets`、`/api/v1/kobo/devices`、`/api/v1/opds-users`、`/api/v1/book-dock/summary` 等），见 `docs/bookorbit/bookorbit-feature-flows.md` §5。
+- **前端全站路由盘**与设置组之外的管理页（`/settings/admin/metadata*`、`/settings/integrations` 等别名/落点），见 `docs/bookorbit/bookorbit-feature-flows.md` §2、§3.9。
 
 ### 7.3 仍未验证项（维持原判）
 

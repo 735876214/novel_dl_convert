@@ -87,20 +87,19 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 
 ## 6. 发布
 
-- 镜像：`Dockerfile` 多阶段（`builder` 装 venv → `nodejs` 只借 node 二进制 → `frontend` 构建 Vue → `runtime` python-slim）。
+- 镜像：`Dockerfile` 多阶段（`builder` 装 venv → `nodejs` 只借 node 二进制 → `frontend` 构建 Vue → `runtime` python-slim）；
   生产镜像**不含** `requirements-dev.txt`。
-- CI：推 `main` 后 GitHub Actions 构建并发布到 `ghcr.io/735876214/novel_dl_convert:latest`；NAS 上 `docker compose pull && docker compose up -d`。
-- 部署文件：`docker-compose.yml`（NAS 单文件、配置全写字面量、**不读 `.env`**，端口 `8992:8000`，`pull_policy: missing`）。
-  ⚠️ **切勿**新建 `docker-compose.override.yml`（Compose 会自动合并并静默改端口/禁拉取）；离线部署靠 `pull_policy: missing` 自然支持（断网也能启动），不另设叠加文件。
 - 版本号：唯一真值源 `novelforge/server.py` 的 `APP_VERSION`，只由 `GET /health` 下发（**无 `/api/health`**）。
+- 镜像发布（CI）与 NAS 部署 / 更新命令见 `README.md` §Web 服务；⚠️ **切勿**新建 `docker-compose.override.yml`
+  （Compose 会自动合并并静默改端口 / 禁拉取）。
 
 ## 7. 文档维护
 
 | 文档 | 什么时候改 |
 |---|---|
 | `AGENTS.md` | 硬约束、同步点、常用命令、陷阱发生变化时 |
-| `TODO.md` | 开工/收尾（移走已完成、补新发现，**每条带证据**） |
-| `DESIGN.md` | 视觉 token / 圆角档 / 字体 / 动效 / 组件范式变化时 |
+| `docs/TODO.md` | 开工/收尾（移走已完成、补新发现，**每条带证据**） |
+| `docs/DESIGN.md` | 视觉 token / 圆角档 / 字体 / 动效 / 组件范式变化时 |
 | `docs/project-overview.md` | 定位、能力面、技术栈、部署形态、规模数字变化时 |
 | `docs/architecture.md` | 新增 core 模块、数据流变化、不变量增减时 |
 | `docs/user-guide.md` | 用户可见功能/入口/设置页变化时 |
@@ -118,5 +117,5 @@ python tests/check_doc_anchors.py --suggest    # 给建议行号
 python tests/check_doc_anchors.py --todo       # 列出待人工确认
 python tests/check_doc_anchors.py --file docs/xxx.md
 ```
-方法与四条局限见 `docs/bookorbit-capability-gap.md` §0.4/§0.5。判据是「0 硬错 **且** 人工过完 `--todo`」，
+方法与四条局限见 `docs/bookorbit/bookorbit-capability-gap.md` §0.4/§0.5。判据是「0 硬错 **且** 人工过完 `--todo`」，
 **历史实施记录里的旧行号一律不改写**（改它=篡改历史）。

@@ -60,6 +60,7 @@ ROOTS = (
     ROOT / "frontend" / "src",
     ROOT / "tests",
     ROOT / "docs",
+    ROOT / "docs" / "bookorbit",
 )
 
 #: 锚点：`路径:行号` 或 `路径:行号-行号`，引号可有可无
@@ -136,8 +137,8 @@ def resolve(target: str) -> "pathlib.Path | None":
         if cand.is_file():
             return cand
     if "/" not in p and p.endswith(".md"):
-        # 4. **文档互相引用常写简称**：`capability-gap.md` 实为 `docs/bookorbit-capability-gap.md`、
-        #    `settings-inventory.md` 实为 `docs/bookorbit-settings-inventory.md` ⇒ 按名字后缀反查一次。
+        # 4. **文档互相引用常写简称**：`capability-gap.md` 实为 `docs/bookorbit/bookorbit-capability-gap.md`、
+        #    `settings-inventory.md` 实为 `docs/bookorbit/bookorbit-settings-inventory.md` ⇒ 按名字后缀反查一次。
         hits = sorted((x for x in ALL_FILES if x.suffix == ".md" and x.name.endswith(p)),
                       key=lambda x: (len(x.parts), str(x)))
         if hits:
@@ -174,7 +175,7 @@ def build_index() -> dict:
     import os
 
     skip_dirs = {"node_modules", ".git", "__pycache__", "static", "dist", "build",
-                 "output", "input", "cache", "cookies", "data-test", "beautifier",
+                 "output", "input", "cache", "cookies", "data-test",
                  ".venv", ".codebuddy", ".vite", "generated-images"}
     out: dict = {}
     for dirpath, dirnames, filenames in os.walk(ROOT):
