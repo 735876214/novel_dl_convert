@@ -1,8 +1,9 @@
 # BookOrbit 非设置页 — 原始采集证据（留档）
 
-> 本文件是 `docs/bookorbit-capability-gap.md` 的可追溯依据，记录非设置页能力的采集方式、逐页结果、截图索引与未能采集项。
+> 本文件是 `docs/bookorbit/bookorbit-capability-gap.md` 的可追溯依据，记录非设置页能力的采集方式、逐页结果、截图索引与未能采集项。
 > **脱敏声明**：不含账号、密码、邮箱、令牌、密钥等真实敏感值；含账号显示名的页面截图**主动未归档**。
 > 采集日期：2026-09-16 ｜ 账号角色：Superuser ｜ 线上版本：**v2.10.0**
+> ⚠️ **截图已移出仓库**（精简体积）：本文件引用的 23 张界面截图 `bookorbit-app-shots/*.jpg` 已删除；下文表格中的 jpg 文件名保留作取证记录，不再是可打开的链接。
 
 ---
 
@@ -44,7 +45,7 @@
 
 **实测结果**：11 页重截后高度 **1006px**（原先 720px，即被裁掉约 286px），图像高与内容高一致，**判定全部完整**。
 
-> 结论：`fullPage` 对本应用**无效**；可靠做法是撑视口，而非解除容器 overflow。（该坑已写入 `docs/bookorbit-capability-gap.md` 第 15 节执行约定。）
+> 结论：`fullPage` 对本应用**无效**；可靠做法是撑视口，而非解除容器 overflow。（该坑已写入 `docs/bookorbit/bookorbit-capability-gap.md` 第 15 节执行约定。）
 
 ## 4. 逐页采集结果
 
@@ -91,7 +92,7 @@
 | 书籍详情「Edit Metadata」标签内容 | 需点击标签才渲染；本次采集了标签名与 `Details` 内容，未逐标签展开 |
 | 书籍详情「Files」「Highlights」标签内容 | 同上 |
 | 上传弹层 | 系统文件选择框，非 DOM 浮层 |
-| 求书 `Download clients` / `Automation` 段的具体字段 | 无可用索引器时为空态；设置页侧已采集其结构（`docs/bookorbit-settings-inventory.md` 2.38） |
+| 求书 `Download clients` / `Automation` 段的具体字段 | 无可用索引器时为空态；设置页侧已采集其结构（`docs/bookorbit/bookorbit-settings-inventory.md` 2.38） |
 | Kobo / KOReader 同步实际操作界面 | 属设置页范围，已在设置页采集中记录（2.27 / 2.28） |
 | 智能书架 / 收藏夹的**已创建实例** | 该实例为空态（`No Smart Scopes yet` / `No collections yet`），只能采集空态与服务端返回的结构 |
 | 成就具体条目 | `/achievements` 正文已采集（2596 字符），未逐条展开解锁条件 |

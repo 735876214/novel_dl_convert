@@ -1,8 +1,9 @@
 # BookOrbit 设置页 — 原始采集证据（留档）
 
-> 本文件是 `docs/bookorbit-settings-inventory.md` 的可追溯依据，记录采集方式、逐页采集结果、未能采集项与截图索引。
+> 本文件是 `docs/bookorbit/bookorbit-settings-inventory.md` 的可追溯依据，记录采集方式、逐页采集结果、未能采集项与截图索引。
 > **脱敏声明**：本文件不含账号、密码、邮箱、令牌、Cookie 等任何真实敏感值。页面上出现的此类字段一律只记「已设置 / 未设置」。
 > 采集日期：2026-09-15。账号角色：Superuser（该实例为单账号本地部署）。
+> ⚠️ **截图已移出仓库**（精简体积）：本文件引用的 36 张界面截图 `bookorbit-settings-shots/*.jpg` 已删除；下文表格中的 jpg 文件名保留作取证记录，不再是可打开的链接。
 
 ---
 
