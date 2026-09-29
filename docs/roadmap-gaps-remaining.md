@@ -3157,3 +3157,47 @@ Big5 里都**不可能**做后继字节，换行后必是字符边界）；② �
 - 移除书库**保留 `book_origins` 行**：库若再建回来还认得出；这些行会变成「库不存在」的孤儿，
   而 `_orphan_refs` 的过滤（`lib_ids`）**刻意不报**它们 —— 与进度 / 批注同一口径。
 - **不做**：真删（仍只进回收站，真删只有「清空回收站」一个出口）；不扫成品目录去找「孤儿副本」。
+
+---
+
+## 第 76 期（2026-09-29）：EPUB 插图不显示 + 还原书内排版
+
+### 需求（用户原话 + 追问确认）
+
+1. 「epub书中的插图不能正确显示」→ 追问确认：症状 = **完全不出现（空位 / 破图）**；范围 = **还要还原 EPUB 自带排版**（字体 / 缩进 / 图文混排，用户明确知道改动大得多）。
+
+### 根因（三处硬缺陷）
+
+1. **401（插图一个都不显示的直接原因）**：`_rewrite_assets` 把插图改写成 `/api/books/{bid}/asset?p=…` 但**从不带 `?token=`**；`/asset` 虽已在 `_MEDIA_TOKEN_PATHS` 里允许 query 传令牌，而浏览器 `<img>` 带不了 `Authorization` 头 ⇒ `_auth_middleware` 一律 401。
+   对照：漫画 / 有声书 / 封面 / 头像的 URL 都由**前端 helper 显式拼 `?token=`**（`api.comicPageUrl` / `unitPageUrl` / `coverUrl` …）—— 唯独 EPUB 插图的 URL 是**后端**拼的，没人补令牌。
+2. **404**：`PurePosixPath` 不折叠 `..`，产出 `OEBPS/Text/../Images/x.png`；而 `/asset` 用 `namelist()` **精确相等**匹配 ⇒ 命不中（真实 EPUB 里 `../Images/…` 极常见）。
+3. **取错文件**：`/asset` 用 `library.root_of(b) / b["name"]` —— 多文件夹的库里会指到**另一个根**（`api_delete_book` 的 docstring 早点名批评过这种写法）。
+
+附带缺口：单引号属性、`srcset`、`xlink:href`、`style="…"` 与 `<style>` 块里的 `url()` 都没被改写；`<head>` 被 `_body_of` **整段丢弃**（书内 `<style>` / `<link rel=stylesheet>` 全没了）；`/asset` 与 `_rewrite_assets` **零测试**。
+
+### 做了什么
+
+- **加载链路**：`_rewrite_assets` 重写 —— `..` 用 `posixpath.normpath` 折叠、逃出 zip 根的**不改写**（与其造一个必然 404 的 URL，不如留着原值）、一条带反向引用的正则吃下双/单引号与 `src` / `href` / `poster` / `srcset` / `style`、章节间的链接（`.xhtml` / `.html` / `.htm` 结尾）**刻意不动**（改了会让点开变成下载 XHTML）。
+  令牌由 `server._with_asset_token` 在**读完缓存之后**注入（`_chapter_cached(..., token=…)` 返回新 dict，缓存那份始终无令牌）；`/asset` 改用书目 `b["path"]`，`p` 走 `_asset_entry`（原值 / 归一 / URL 解码三种等价写法各试一次，**仍必须精确等于真实条目名** —— 安全性不变）。
+- **书内样式**：新增 `library.chapter_assets(path, bid)` —— OPF manifest 里 `text/css` 的条目（`<link>` 指向的表）+ 各 spine 文档 head 里前 64 KB 的内联 `<style>`；`@import` **递归内联**（用被导入文件自己的 base 解析其 `url()`，不内联就会被浏览器按 `/asset` 基准解析、全部指错）；`@font-face` 的字体与背景图走同一个 `/asset`。
+  新端点 `GET /api/books/{bid}/epub-css`（**Bearer，刻意不进 `_MEDIA_TOKEN_PATHS`**，缓存键 `nf:css:{bid}:{指纹}`），返回 `{css, sheets, fixed_layout}`；取不到一律空串，**不是错误**。
+- **前端注入**：书内 CSS 由 `ReaderView` 以 `@scope (.reader-content)` 注入 `document.head`（**绝不进正文容器**）+ 正文挂 `.nf-bookcss` 让应用那套段落 / 标题 / 引用规则让位（图片「不许溢出」的安全网保留）；`@scope` 能力用 `replaceSync` **懒探测 + 缓存**，不支持时既不注入也**不让位**（否则两头空、比不做更糟）；开关 `readerPrefs.useBookLayout`（默认开，固定版式**强制**开并在阅读器与设置页两处禁用说明）。
+
+### 硬约束（本期最重要的一条）
+
+⚠️ **书内样式必须落在被测量的正文容器之外**。`core/epub_cfi.py` 定义「字符偏移 = 渲染正文的 `textContent.length`」（前端量 `.reader-content`，后端读 zip 里**原始 XHTML**），而 CSS 文本本身就是文本节点 —— 注入进容器会把长度顶长，让**进度 / 批注 / 高亮的偏移全线错位**，而且不报错。
+新增用例 `test_chapter_assets.py::test_改写不增删文本节点` 与 `ReaderView.spec.ts` 的「绝不进被测量的正文容器」两条把这个不变量钉住。
+
+### 验证
+
+- 后端全量 **1290 例 / 1278 passed / 12 skipped / 0 failed / 0 error**（基线 1253 + 新增 25）。
+- 前端 `type-check` 0 错；**447 例**全过（新增 3 例）。
+- 新增两个契约测试文件：`tests/test_chapter_assets.py`（改写口径）、`tests/test_epub_assets_api.py`（两端点：鉴权 / 路径归一 / 多文件夹库 / 令牌只在响应期注入）。
+- ⚠️ 跑之前环境缺依赖（`.venv` 缺 `numpy`、`frontend/node_modules` 缺 `vitest` / `echarts` / `@vue/test-utils`，都与改动无关），已分别 `pip install -r requirements.txt` 与 `npm install` 补齐。
+
+### 未做 / 取舍（需用户知情）
+
+- **书内排版关不掉「颜色」**：书里写死的深色文字碰上阅读器深色主题仍会看不清 —— 退路是那个开关；刻意**不做**「剥掉书内 `color` 声明」（那要自己写 CSS 分词器，与零依赖冲突）。
+- **`<style>` 只扫每个 spine 文档的前 64 KB**（head 在文件开头）：超出窗口的样式取不到；body 里的 `<style>` **不做抽取**（那些留在正文里由 `_rewrite_assets` 就地改写）。
+- **不支持 `@scope` 的浏览器**（旧 Safari / Firefox）只丢书内排版，插图仍正常；刻意**不写**「不支持就退回全局注入」的分支（那正是会漏进外壳的写法）。
+- 图片的 `max-width: 100%` 安全网**优先于书内样式**（书里若写 `max-width: 200px` 会被放宽）—— 溢出比「不够还原」严重。

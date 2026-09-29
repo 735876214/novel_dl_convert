@@ -53,6 +53,13 @@ components/
 **共性**：四者都通过 `useSeriesNext().goToNextVolume(...)` 做「读完进系列下一册」（唯一真值源见 §6）；
 会话计时都走 `lib/readingSession.ts`。
 
+**书内排版（第 76 期）**：`ReaderView` 把 `api.epubCss(bid)` 取到的**书内 CSS**以
+`@scope (.reader-content) { … }` 注入 `document.head`（**绝不放正文容器里** —— 容器的
+`textContent.length` 是进度与批注偏移的尺子，CSS 文本会把长度顶长），并给正文挂 `.nf-bookcss`
+让应用那套段落 / 标题 / 引用规则让位（图片「不许溢出」的安全网保留）。
+开关 `readerPrefs.useBookLayout`（默认开；**固定版式强制开**）；
+浏览器不支持 `@scope` 时不注入也不让位（否则会两头空 —— 见 `ReaderView` 里 `scopeSupported()` 的说明）。
+
 **单话模式（`unit?: UnitRef`，第 73 期）**：三个复用阅读器拿到它就换数据源（`/api/books/{bid}/units/{index}…`）、
 **进度不读不写**，只 `emit('unitPos', UnitPos)`（`{index, within, locator}`）与 `emit('unitEnd')`；
 **进度由上层独占**——`UnitsReader` 是整本书唯一写 `progress` 的地方（换来换去只有一把尺子），

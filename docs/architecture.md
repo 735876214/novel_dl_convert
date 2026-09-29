@@ -177,6 +177,17 @@ graph LR
 - **阅读尝试（轮次）**：`reading_attempts`，一轮 =「开始读 → 读完」；自动维护挂 `db.set_status`；`reset_reading_state` **四清**。
 - **阅读时长**：`reading_sessions`（一次连续阅读 = 一行，30s 心跳合一）；PDF / 漫画也计时。
 - 前端阅读偏好四套分隔（`readerPrefs` EPUB / `pdfPrefs` / `comicPrefs` / `audioPrefs`），各存独立 localStorage 键。
+- **书内资源与书内样式（第 76 期）**：`GET /api/books/{bid}/chapter/{index}` 的正文里，相对资源
+  （`../Images/x.png`）由 `library._rewrite_assets` 改写成 `GET /api/books/{bid}/asset?p=…`
+  （**折叠 `..`**、覆盖单引号 / `srcset` / `xlink:href` / `style="…"` / `<style>` 块里的 `url()`）；
+  **令牌由端点在读完缓存之后注入**（`server._with_asset_token`）—— `<img>` 是浏览器原生请求、
+  带不了 `Authorization` 头，而把令牌写进缓存会让它过期后整章插图**全 401**（且缓存还新鲜、不重建）。
+  书内样式（`<style>` / `<link rel=stylesheet>` / `@import` 链、书内字体与背景图）走**另一条通道**
+  `GET /api/books/{bid}/epub-css`（Bearer，不进 `_MEDIA_TOKEN_PATHS`）。
+  ⚠️ **两条通道必须分开**：正文容器的 `textContent.length` 是进度与批注共用的那把尺子，
+  书内样式只能挂到容器**之外**（前端以 `@scope (.reader-content)` 注入 `document.head`）——
+  注入到容器里会让 CSS 文本把长度顶长，所有位置偏移**静默错位**。
+  开关：`readerPrefs.useBookLayout`（默认开；固定版式**强制**开，整页版式全靠它）。
 
 ## 10. 多端接口
 
