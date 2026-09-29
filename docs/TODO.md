@@ -3,13 +3,14 @@
 > 维护约定：**完成即移入「已完成」并写清 commit/期号**；每条待办要带**证据**（数字、文件、复现方式），
 > 不写「优化一下性能」这种没有判据的条目。较长的逐期记录放 `docs/roadmap-gaps-remaining.md`。
 
-**最后更新**：2026-09-29（第 79 期完成：「同前缀 + 尾部编号」合并为合集）
+**最后更新**：2026-09-29（第 80 期完成：`update` 段配置全部接通 + 解除「零外部请求 / 零依赖」硬约束口径）
 
 ## 0. 当前状态
 
-- **无进行中的任务**。HEAD = 第 79 期；工作区干净（仅 `.vscode/settings.json` 是各人本机设置，**不属于仓库改动**）。
-- 测试基线：后端 **1279 例（1267 passed / 12 skipped / 0 failed）**（`pytest`，离线，约 3 分钟）；前端 **447 例**（`npm run test:unit`；第 79 期前端零改动，故未重跑四连）。
-- 版本：`VERSION` = **0.79.0**（单一真值源，`GET /health` 下发）；每个版本在 `CHANGELOG.md` 有一段。
+- **无进行中的任务**。HEAD = 第 80 期；工作区干净（仅 `.vscode/settings.json` 是各人本机设置，**不属于仓库改动**）。
+- 测试基线：后端 **1319 例（1307 passed / 12 skipped / 0 failed）**（`pytest`，离线，约 3 分 20 秒）；前端 **447 例**（`npm run test:unit`）。
+- 版本：`VERSION` = **0.80.0**（单一真值源，`GET /health` 下发）；每个版本在 `CHANGELOG.md` 有一段。
+- ⚠️ **口径修订（第 80 期）**：「零外部请求 / 零依赖」已由**硬约束改为默认取向** —— 默认仍自托管、不拉 CDN，但允许**显式、可关、失败降级**地引入外部依赖与出网（见 `AGENTS.md` 第 1 节）。别再用「零依赖」当**不做**的理由。
 - 上游缺口清单（`docs/roadmap-gaps-remaining.md` 第一节）已实质清空；新缺口来源改看 `docs/bookorbit/bookorbit-module-inventory.md`。
 - ⚠️ 本文件的「已完成（近三期）」只登记到第 68 期 —— **第 69–79 期的记录在 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）**，别按这里判断「最近做了什么」。
 
@@ -49,6 +50,16 @@
 
 ## 2. 已完成（近三期）
 
+- **第 80 期（2026-09-29）· `update` 段配置从「看着有」变成「每个键都真有读点」**（V0.80.0）
+  - 缺陷形态：`update.image` / `update.auto_apply` 写是写得进、`GET /api/config` 也回显、设置页报「已保存」，
+    但**后端没有任何读点**（`image` 唯一读法是环境变量，`auto_apply` 连读点都没有）⇒ 改完等于没改。
+  - 修法：新增 `updater.configured_image()`（唯一镜像读法：显式入参 > `update.image` > `NOVELFORGE_UPDATE_IMAGE` > 内置默认）
+    与 `updater.maybe_auto_apply()`（自动更新，**先记后做**，同版本只尝试一次）；新增 `server._apply_update_config()`
+    与既有 `_apply_watcher_config()` 并排，在 5 处配置写接口与 lifespan 复用 ⇒ `check_enabled` / `interval_hours` 保存即生效。
+  - 契约：`tests/test_update_config_contract.py` 钉死「`EDITABLE['update']` ⇄ 设置页 `UPDATE_FIELDS` ⇄ 代码读点」三者一致；
+    `tests/test_updater.py` 完全离线覆盖版本比较 / 出网三条路径与 1h 缓存 / 持久化往返 / 未挂载降级 / 镜像优先级 / 自动更新四象限。
+  - 口径：解除「零外部请求 / 零依赖」硬约束 → 「默认自托管、默认不引；允许显式、可关、失败降级地引入」（本期**未新增依赖**）。
+  - commit：见 `docs/roadmap-gaps-remaining.md` 第 80 期段。
 - **第 79 期（2026-09-29）· 漫画 / 有声书：一级子文件夹内「同前缀 + 尾部编号」合并为合集**（V0.79.0）
   - 用户实况 `超人前传0904.pdf` / `超人前传1408.pdf` 这类散文件 ⇒ 文件夹整体合成**一本合集**
     （书架 1 条、话数 = 文件数、话序按序号、逐话连读）；判据在 `novelforge/core/units.py`

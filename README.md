@@ -195,10 +195,10 @@ watcher:
 logging:
   dir: ""                 # 留空则用 LOG_DIR
   max_entries: 2000       # 接口读取的内存缓冲条数
-update:                   # 第 78 期：版本检查与一键更新
-  check_enabled: true     # 启动 + 每 interval_hours 小时检查 GitHub 最新版本（出网失败静默忽略）
-  interval_hours: 6       # 定时检查间隔（小时）；首次检查在启动后一个间隔之后
-  image: "ghcr.io/735876214/novel_dl_convert:latest"  # 一键更新拉取的固定镜像（不给任意镜像口子）
+update:                   # 第 78 期：版本检查与一键更新（第 80 期起四个键保存即生效）
+  check_enabled: true     # 启动 + 每 interval_hours 小时检查 GitHub 最新版本（出网失败静默忽略；关掉即停后台线程）
+  interval_hours: 6       # 定时检查间隔（小时）；首次检查在启动后一个间隔之后，保存后立即按新间隔重启
+  image: "ghcr.io/735876214/novel_dl_convert:latest"  # 一键更新拉取的镜像；可改私有仓库 / 加速镜像，留空=环境变量 NOVELFORGE_UPDATE_IMAGE 或内置默认
   auto_apply: false       # 发现新版是否自动应用（默认关：只提示，手动点「立即更新」）
 ```
 
@@ -206,6 +206,10 @@ update:                   # 第 78 期：版本检查与一键更新
 > （`docker compose pull && docker compose up -d`）。要在应用内点「立即更新」真实重建容器，
 > 在 `docker-compose.yml` 的 `volumes` 下取消注释 `/var/run/docker.sock` 那一行
 > （这会把宿主机 docker 控制权交给容器，仅在信任环境启用）。
+>
+> **自动更新**：把 `update.auto_apply` 设为 `true` 后，后台检查发现新版本会**自动**拉取镜像并重建容器，
+> 同一版本**只尝试一次**（失败也不反复重试）；未挂载 `docker.sock` 时如实降级为「只提示」。
+> 内网 / 私有仓库请用 `update.image` 或环境变量 `NOVELFORGE_UPDATE_IMAGE` 指定镜像地址。
 
 ## 命令行
 

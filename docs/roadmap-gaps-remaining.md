@@ -3356,3 +3356,104 @@ TODO 给的形态是 `^<非空前缀>(?P<num>\d{1,4})$`，字面上**任何**前
   （卡片仍是「N 轨」而不是「N 话」），已用用例钉住。
 - 不做：**库根平铺合并**（要改书边界 / `book_id` / 出版副本 / 跨库搬家 / remap 全链路，属独立一期）；
   `watcher` 入库路径认序号单元树（第 73 期既有的已知缺口，仍未做）。
+
+---
+
+## 第 80 期 · `update` 段配置从「看着有」变成「每个键都真有读点」+ 解除「零外部请求 / 零依赖」硬约束（V0.80.0，2026-09-29）
+
+**来源**：用户指令「继续 A+B」并在问答中确认 ——
+**A**：让 `update.auto_apply` / `update.image` **真正生效**（不生效就从 UI / 白名单移除，**绝不留假开关**）；
+**B**：给 `core/updater.py` 补一套**完全离线**的契约测试；收尾按惯例（VERSION + CHANGELOG + 文档 + 记忆 + 前后端测试 + 按能力拆笔提交并推送）。
+**补充输入（用户原话）**：「取消零外部请求和零依赖的要求」。
+
+### 一、缺陷形态：四个键里有三个是「假配置」
+
+`update` 段（第 78 期引入）在 `server.EDITABLE["update"]` 白名单里、`GET /api/config` 整段回显、设置页也报「已保存」，
+但**后端读点残缺**：
+
+| 键 | 第 80 期前的真实状态 |
+|---|---|
+| `check_enabled` | **只在 lifespan 读一次** ⇒ 改完必须重启进程；关掉后侧栏 `new` 徽标仍会重新冒出来（`_state["has_update"]` 没清） |
+| `interval_hours` | 同上，只在 lifespan 读一次 |
+| `image` | **只在白名单与回显里**，`apply_update()` 直读环境变量 `NOVELFORGE_UPDATE_IMAGE` ⇒ 界面上改了没用；且设置页**没有这个控件** |
+| `auto_apply` | **连读点都没有** ⇒ 打开它什么都不会发生 |
+
+这条链路的危害是**静默**的：用户改完看到「已保存」，只会在下一个版本发布时觉得「这个开关时灵时不灵」。
+
+### 二、后端接线（`core/updater.py` + `server.py`）
+
+- **镜像来源收敛为唯一读法** `updater.configured_image(explicit="")`：**显式入参 > 配置 `update.image` > 环境变量 `NOVELFORGE_UPDATE_IMAGE` > `_DEFAULT_IMAGE`**。
+  `apply_update()` 不再直读环境变量。新 `_split_image()` 只把**最后一个** `/` 之后的冒号当 tag ⇒ `localhost:5000/ns/img` 不会被误拆。
+- **自动更新** `updater.maybe_auto_apply()`：条件为 `auto_apply ∧ has_update ∧ updater_available() ∧ latest 未尝试过`；
+  ⚠️ **先记后做** —— 先把 `latest` 写进新增持久化键 `auto_applied` 并落盘，再去 `apply_update()`，
+  于是「pull 失败」也不会在下一轮无限重试。「未挂载 `docker.sock`」**不记**尝试（否则之后挂上也不可能自动更新了）。
+  失败静默（只记日志不冒泡），挂在 `_loop` 每轮 `check(force=True)` 之后。
+- **持久化键元组扩容**：`_persist()` / `_load_persisted()` 的写死键元组同批加 `auto_applied` ——
+  漏改一处会让新键静默丢失，表现是「每次重启后对同一版本重新自动拉一遍」。
+- **保存即生效** `server._apply_update_config()`（与既有 `_apply_watcher_config()` 并排）：`check_enabled` 关 ⇒
+  `stop_background()` + `clear_has_update()`；开 / 改间隔 ⇒ 先 `stop_background()` 再 `start_background(interval_hours)`。
+  在 **5 处**配置写接口（`PUT /api/config`、原始 YAML、还原备份、重置、清覆盖层）与 lifespan 处复用同一函数 ⇒ 判据只有一份。
+- **`start_background` 的竞态修正**：改为**每次新建** `threading.Event` 并把 stop 作为参数传给 `_loop`
+  （原实现共享同一个模块级 Event ⇒「先 stop 再 start」会让旧线程把新 Event 也置位，出现双线程 / 立即退出）。幂等保护改为
+  `_thread is not None and is_alive() and not _stop.is_set()`。
+- **不改既有语义**：`apply_update` 未挂载时的返回结构与 `stage` 枚举（`unavailable` / `pull_failed` / `restarting`）**逐字不变**，前端 `UpdateApplyResult` 不受影响。
+- `updater.status()` 新增 `check_enabled` / `auto_apply` 两个**只读回显**键（真值源是配置，`_state` 里不另存一份，免得两处说法不一致）。
+
+### 三、前端（4 个字段、保存即生效）
+
+- `settingsFields.ts` 的 `UPDATE_FIELDS` 由 3 项扩为 **4 项**：新增 `update.image`（`type: 'text'`，placeholder 给默认镜像）；
+  三条既有 hint 从「重启后生效」改成「保存即生效」口径，并补上「关掉即收起提示 / 自动更新只在挂了 socket 时生效」。
+- `lib/api.ts` 的 `UpdateStatus` 增可选 `check_enabled` / `auto_apply`；`WhatsNewView.vue` 在「有新版本」横幅里按
+  `auto_apply && updater_available` 如实加一句「已开启自动更新：下次检查会自动拉取并重建」。
+- `UpdatePage.vue` / `settingsNav.ts` 文案同步（note 是**纯文本插值**，未用任何 markdown 记号）。
+
+### 四、镜像名形状校验（写入口）
+
+`update.image` 现在真的会进 `docker pull` 的 query，故 `PUT /api/config` 里做校验：空串合法（回落下一级）、
+拒 `@`（digest）、`..`、`> 200` 字符、不匹配字符集。
+⚠️ **实现比计划严了一处也松了一处**（计划只写「拒绝空白 / `..` / 非法字符」）：第一版正则
+`^[A-Za-z0-9][A-Za-z0-9._/-]*(?::[A-Za-z0-9._-]+)?$` 会把 **`localhost:5000/ns/app` 这种私有仓库拒掉**
+（主机后的 `:端口` 过不了字符集），而 `_split_image` 明明已按「最后一个冒号才是 tag」正确处理了它 ——
+故改为 `^[A-Za-z0-9][A-Za-z0-9._-]*(?::[0-9]{1,5})?(?:/[A-Za-z0-9._-]+)*(?::[A-Za-z0-9._-]+)?$`，
+即**第一段单独放行 `:端口`**。
+
+### 五、契约测试（两新增，全部离线）
+
+- `tests/test_updater.py`（**26 例**）：`parse_version` / `is_newer` 的数值段边界（`0.9.0` 不比 `0.80.0` 新）；
+  `status` 形状与开关回显；`updater_available` 判 socket（并断言**判定本身不碰 docker**）；
+  `check(force)` 三条出网路径（releases/latest 成功 / 失败回落 tags / 全失败 `error=check_failed`）；
+  1 小时新鲜度缓存（非 force **不重复出网**、force 绕过缓存）；`clear_has_update` 落盘；
+  `_split_image` 的端口边界；`configured_image` **四级优先级**；持久化往返（**含 `auto_applied`**）；
+  `start_background` 幂等 + 换间隔得到新线程 / 新 Event；`apply_update` 未挂载 ⇒ `stage=unavailable` **且 `_docker` 从未被调用**、
+  已挂载 ⇒ `fromImage`/`tag` 取自 `configured_image` 且 `_recreate` 被调用（`threading.Event` 同步，**不 monkeypatch `Thread`**）、
+  pull 失败不重建；`maybe_auto_apply` 四象限 + 「先记后做」+ 「重启后不重试」。
+- `tests/test_update_config_contract.py`（**9 例**）：`EDITABLE["update"]` 与前端 `UPDATE_FIELDS` 剥前缀后**集合相等**（正则解析 TS 源码）；
+  `SECTION_KEYS.update` 指向 `update`；`config.DEFAULTS["update"]` 覆盖白名单（否则「恢复默认」会让控件凭空消失）；
+  **每个键都有真实读点**（`READ_POINTS` 表 + `.get("<键>"` 源码片段），且**读点表必须覆盖白名单每个键**（反向闸）；
+  `GET /api/config` 回显整段；保存后 `/api/update/status` 如实回显；镜像名写入口的 4 拒 4 收。
+
+### 六、口径修订：「零外部请求 / 零依赖」降为默认取向（**本期不新增任何依赖**）
+
+**范围**：`AGENTS.md`（硬约束那条重写为「默认自托管、默认不引；允许显式、可关、失败降级地引入；新增依赖须在
+`requirements*.txt` / `frontend/package.json` 显式声明并说明理由」）、`.codebuddy/memory/MEMORY.md` 硬约定 #5、
+`MEMORY-REF.md`（逐期铁律原文上方加「口径修订」总注：下文那些「零依赖」表述仍是**理由**但**不再是硬约束**）、
+`docs/project-overview.md` 取向句、`docs/DESIGN.md` 字体自托管段（注明现状选择）、`docs/architecture.md` 第 6 条、
+`docs/bookorbit/bookorbit-capability-gap.md` 图表条、`bookorbit-module-inventory.md` 第 57 期段（加注）、
+`bookorbit-settings-inventory.md` 图标条（加注）；代码注释：`config.py` 的 update 段、`core/fonts.py`、`core/audio_meta.py`、
+`core/metasources.py`、`frontend/src/lib/icons.ts`、`assets/main.css`、`assets/fonts.css`。
+`tests/test_audio_narrators.py` 的 docstring「零依赖解析器」→「纯标准库解析器」。
+**刻意不改写**：`docs/roadmap-gaps-remaining.md` 里各期历史记录中的同类措辞（历史留痕），以及
+`frontend/src/lib/prefsBridge.ts` 的「零依赖」（那是「无 import 依赖」的**技术事实**，不是口径）。
+**刻意不做**：不为「解除零依赖」顺手换掉手写实现（如 `_UnixSocketConnection`、字体 name 表解析）—— 改口径不等于必须引依赖。
+
+### 七、验证
+
+- 后端离线全量 `pytest`：见下方「收尾复核」。
+- 前端四连：`type-check` / `test:unit` / `build` / `deploy` 全绿（本期**有前端改动**，必须跑）。
+
+### 八、已知取舍 / 未做
+
+- 自动更新**只对「检查发现的新版本」尝试一次**：若用户手动 `docker compose pull` 到别的版本，`auto_applied` 不认识它，
+  但只要 GitHub 上的 latest 没变就不会再触发（符合预期）。
+- 未做「自动更新前的二次确认 / 通知」：单用户自托管场景下 `auto_apply` 本身就是用户显式打开的动作，故不加。
+- 不改 `docker-compose.yml`（用户此前已决定 compose 文件只保留两份，更新说明内联进注释与本文档）。
