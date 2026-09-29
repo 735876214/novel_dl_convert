@@ -1,7 +1,7 @@
 # 长期记忆（novel_dl_convert / NovelForge）
 
-> **体积受限，只放每次都要遵守的铁律**。逐期事实写 `YYYY-MM-DD.md`；**逐期铁律原文 + 运行手册 / 域细节 / 跨会话待办**见 **`MEMORY-REF.md`**；能力/模块/缺口清单见 `docs/bookorbit-*.md`。
-> 📚 **文档体系**：`AGENTS.md`（AI 入口 / 硬约束 / 三处同步点）、`TODO.md`、`DESIGN.md`（视觉）、`docs/` 下 project-overview / architecture / user-guide / development / component-api；逐期记录 `docs/roadmap-gaps-remaining.md`（最新期在**末尾**）。
+> **体积受限，只放每次都要遵守的铁律**。逐期事实写 `YYYY-MM-DD.md`；**逐期铁律原文 + 运行手册 / 域细节 / 跨会话待办**见 **`MEMORY-REF.md`**；能力/模块/缺口清单见 `docs/bookorbit/bookorbit-*.md`。
+> 📚 **文档体系**：`AGENTS.md`（AI 入口 / 硬约束 / 三处同步点）、`docs/TODO.md`、`docs/DESIGN.md`（视觉）、`docs/` 下 project-overview / architecture / user-guide / development / component-api；**上游对照基线在 `docs/bookorbit/`**；逐期记录 `docs/roadmap-gaps-remaining.md`（最新期在**末尾**）。
 
 ## 硬约定
 1. TXT→EPUB，NAS/容器；input/output 物理分离；FastAPI+CLI；可插拔书源。
@@ -48,7 +48,7 @@
 
 ## 前端
 - Vue3 SFC+TS+Vite+Tailwind v4+Pinia+vue-router(hash)；产物 `novelforge/static/v2/`（`/` 服务其 index.html，缺失 503）；**勿往 `novelforge/static/` 加手写页**。
-- ⚠️ **视觉层=逐字照搬 BookOrbit 的 oklch token**（`frontend/src/assets/theme/*.css`；默认 `--tint-h: 80`）。组件**禁写死颜色/圆角/阴影**（规则见 `DESIGN.md`）。
+- ⚠️ **视觉层=逐字照搬 BookOrbit 的 oklch token**（`frontend/src/assets/theme/*.css`；默认 `--tint-h: 80`）。组件**禁写死颜色/圆角/阴影**（规则见 `docs/DESIGN.md`）。
 - ⚠️ **收尾四连**：`type-check` + `test:unit` + `build` + `deploy`。`build` 只落 `frontend/dist`，**`deploy` 才同步到 `novelforge/static/v2`**（漏 deploy⇒服务端发旧 bundle）。
 - ⚠️ **新增/删设置页三处同批改**：`settingsNav.ts` ↔ `router/index.ts` 的 `SETTINGS_PAGE_COMPONENTS` ↔ 组件（且 `SETTINGS_PAGE_COMPONENTS` 与 `status==='ready'` 必须一一对应，否则运行期 `console.error`）。**设置页真实路由=`#/settings/<page.path>`**，**不带分组段**。
 - 演示数据禁 `Math.random()`；**路由 path 全局唯一**。
