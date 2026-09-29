@@ -145,8 +145,8 @@ def _read_version() -> str:
             v = ""
         if v:
             return v
-    logging.getLogger("novelforge").warning("读不到 VERSION 文件，回落内置版本 0.78.0")
-    return "0.78.0"
+    logging.getLogger("novelforge").warning("读不到 VERSION 文件，回落内置版本 0.79.0")
+    return "0.79.0"
 
 
 APP_VERSION = _read_version()
