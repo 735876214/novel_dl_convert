@@ -10,8 +10,10 @@ import { chunkIntoBands, effectiveShelfRows, shelfBookLimit, useNarrowScreen } f
 import { useLibraryStore } from '@/stores/library'
 
 /**
- * 书架行（对应 BookOrbit 的 DashboardScroller —— ⚠️ 两侧同名组件职责不同，
- * 上游的这个名字在本项目是页面级容器 `DashboardScroller.vue`）。
+ * 书架行（对应 BookOrbit 的 `DashboardScroller` —— ⚠️ 名字相同但职责不同：
+ * 上游那个文件是「一个书架行」，本项目原来是页面级栅格容器
+ * `DashboardScroller.vue`；第 82 期把页面容器直接写进 `DashboardView.vue` 后，
+ * 那个同名组件已删除，**本文件才是与上游 `DashboardScroller` 对应的实现**）。
  *
  * 第 82 期：套卡片外壳（与部件卡同款）+ 表头（图标块 / 计数胶囊 / 悬停滚动按钮）
  * + 多行分带（`rows` 1..3，窄屏压到 2）+ 加载骨架。

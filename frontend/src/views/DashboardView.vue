@@ -3,7 +3,6 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
-import DashboardScroller from '@/components/dashboard/DashboardScroller.vue'
 import DashboardSettingsSheet from '@/components/dashboard/DashboardSettingsSheet.vue'
 import DashboardShelfRow from '@/components/dashboard/DashboardShelfRow.vue'
 import DashboardWelcome from '@/components/dashboard/DashboardWelcome.vue'
