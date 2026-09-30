@@ -1,8 +1,14 @@
 # 上游首页（Dashboard）样式对照基线 —— NovelForge 仪表盘 vs BookOrbit dashboard
 
-> **本文件管什么**：把「本项目首页（`/` → 仪表盘）」与**上游 BookOrbit 首页**做一次逐区块的**样式 / 结构**对照，
+> **本文件管什么**：把「本项目首页（`/` → 仪表盘）」与**上游 BookOrbit 首页**做逐区块的**样式 / 结构**对照，
 > 给出四档判定（**已对齐 / 形态不同 / 缺失 / 待确认**）与改造优先级。
-> ⚠️ **本文件只对照、不改代码** —— 它是第 82 期第一步的产物；第二步按 §5 的优先级逐项改造。
+> 产出于第 82 期**第一步**（当时只对照、不改代码）；第 82 期**第二步**已按 §4 的优先级逐项改造完毕（V0.82.0）。
+>
+> ⚠️ **怎么读这份文件（第二步之后的约定）**：
+> - **§2–§4 的表格与判定是「改造前的基线」，一律不逐行改写** —— 它们是「改之前差在哪」的证据，改掉就看不出改了什么；
+> - **现判定与逐区块现状看 §7**：§7 覆盖 §2–§4 的每一条判定，§4 的改造顺序表已补「现状」列、§5 的待确认项已补「处置」；
+> - 下次再对照上游新版本时，**从 §7 的「现判定」继续**，不要从 §2 起。
+>
 > 与既有 5 份 `bookorbit-*.md` 的分工：那 5 份按**能力 / 模块 / 设置 / 契约**对照，本文件专管**首页的样式与结构**。
 
 ---
@@ -46,10 +52,11 @@
 | 类别 | 本项目路径 |
 |---|---|
 | 页面 | `frontend/src/views/DashboardView.vue` |
-| 壳组件 | `frontend/src/components/dashboard/` 的 `DashboardWidgetRow.vue`、`DashboardScroller.vue`、`DashboardWelcome.vue`、`DashboardSettingsSheet.vue`、`DashboardShelfRow.vue`、`FirstRunNotice.vue` |
+| 壳组件 | `frontend/src/components/dashboard/` 的 `DashboardWidgetRow.vue`、`DashboardWelcome.vue`、`DashboardSettingsSheet.vue`、`DashboardShelfRow.vue`、`FirstRunNotice.vue`（⚠️ 基线里的页面级容器 `DashboardScroller.vue` **已于第 82 期第二步删除**，见 §1.3） |
 | 12 件部件 | `frontend/src/components/dashboard/widgets/`（12 个 `*.vue` + `registry.ts`） |
-| 标识与元信息 | `frontend/src/data/dashboard.ts`（`WidgetId` / `WidgetMeta` / `WIDGET_META` / `ShelfType` / `ShelfDef` / `MAX_SHELVES` / `DEFAULT_SHELVES` / `SCOPE_OPTIONS`） |
-| 状态 | `frontend/src/stores/dashboard.ts`（Pinia，落 `localStorage`：`dashboard-widgets` / `dashboard-shelves`） |
+| 数据态 / 纯函数（第 82 期第二步新增） | `frontend/src/composables/useWidgetState.ts`（部件四态唯一真值源）、`frontend/src/lib/dashboardGreeting.ts`（时段问候）、`frontend/src/lib/shelfRows.ts`（分带 / 行数 / 窄屏判定） |
+| 标识与元信息 | `frontend/src/data/dashboard.ts`（`WidgetId` / `WidgetMeta` / `WIDGET_META` / `WidgetSize` / `ShelfType` / `ShelfDef` / `MAX_SHELVES` / `DEFAULT_SHELVES` / `SCOPE_OPTIONS` / `SHELF_ROW_OPTIONS` / `ShelfLayout` / `MAX_COVERS_PER_ROW`） |
+| 状态 | `frontend/src/stores/dashboard.ts`（Pinia，落 `localStorage`：`dashboard-widgets` / `dashboard-shelves`；第 82 期加 `shelfLayout` 与逐书架 `rows`，旧数据自动补默认） |
 | 主题 token | `frontend/src/assets/theme/{tokens,accents,bridge,radius,cover-effects}.css` + 入口 `frontend/src/assets/main.css` |
 | 视觉口径 | `docs/DESIGN.md`（照搬上游 token、组件**禁写死颜色/圆角/阴影**） |
 
@@ -63,9 +70,14 @@
 
 ⇒ §2.5 的比较对象是 **上游 `DashboardScroller.vue` ↔ 本项目 `DashboardShelfRow.vue`**；按文件名对会比较出完全错误的结论。
 
+**第 82 期第二步之后的现状**：本项目那个同名文件**已删除** —— 页面容器直接写在 `DashboardView.vue` 里
+（`<main class="relative flex-none">` + `div.space-y-5 pb-8 pt-4 sm:pr-2`，照上游口径），
+上游 `DashboardScroller.vue` 的对应实现现在是 `DashboardShelfRow.vue`。
+⇒ 「两侧同名不同物」的陷阱**已不存在**（本项目再无 `DashboardScroller.vue`）；本节保留，用来解释 §2.5 为什么这样配对。
+
 ---
 
-## 2. 逐区块对照
+## 2. 逐区块对照（⚠️ 本节的表格与判定是**改造前基线**，未逐行改写；**现判定见 §7**）
 
 ### 2.1 页面骨架与三态
 
@@ -214,12 +226,13 @@
   本项目**额外**提供 `prefers-reduced-motion: reduce` 的全局降级，并有 `:focus-visible` 全局焦点环与元素级基线（上游对应能力来自 shadcn 组件类）。
 
 **token 层总判定**：五个主题文件 = **已对齐**；差异仅在入口的字体与动画库引入方式（与 `docs/DESIGN.md` 记的「两处刻意的与上游差异」吻合）。
+⚠️ 第 82 期第二步**未改 token 层**（零 token 改动），本节判定无变化。
 
 ---
 
 ## 4. 差异汇总与改造优先级
 
-**判定汇总**
+**判定汇总**（⚠️ 改造前基线；**现判定见 §7.1**）
 
 | 区块 | 判定 |
 |---|---|
@@ -245,20 +258,20 @@
 | 五个主题 token 文件 | **已对齐** |
 | 入口字体 / 动画库引入方式 | 形态不同 |
 
-**建议改造顺序（供第二步逐项执行，先观感后结构）**
+**建议改造顺序（第一步的规划；「现状」列是第 82 期第二步的实际结果）**
 
-| 优先级 | 项目 | 理由 / 影响面 |
-|---|---|---|
-| **P0** | ① 部件卡片外壳 token 统一为上游口径（`rounded-2xl` + `border-primary/40` + `bg-card/30` + `backdrop-blur-[1px]`） | 首页第一眼观感差异最大；⚠️ 涉及「外壳从部件内部移到行组件」的重构（12 个部件文件根节点），或**折中**：保持外壳在部件内部、只把 token 换成上游口径（改动面小、视觉收益大） |
-| **P0** | ② 页面级入场动效（`animate-fade-up` + 部件行整体 + 每个书架 `index*100ms`） | 零结构改动的纯增益；`main.css` 里 `.animate-fade-up` 已存在，只需消费 |
-| **P0** | ③ 问候语行（`Sparkles` + 问候 + 用户名 + 「自定义」入口） | 上游首页最显眼的一行，本项目完全缺失；需定「问候语按时段分段」的文案与是否保留 FAB |
-| **P1** | ④ 书架行卡片外壳 + 表头（图标块 / 计数胶囊 / 悬停滚动按钮） | 五行书架是首页主体，观感提升大；只改 `DashboardShelfRow.vue` 一个文件 |
-| **P1** | ⑤ 页面容器 `space-y-5 pb-8 pt-4 sm:pr-2` 与页面三态骨架 | 骨架/错误态是「加载时不闪空」的体验项，改动集中在 `DashboardView.vue` |
-| **P1** | ⑥ 部件行网格模型（定宽横向滚动 + 定高 `h-55`） | ⚠️ **需先定标**（见 §5 待确认 2）：会改变窄屏与多部件下的整体节奏，影响面最大的一处 |
-| **P2** | ⑦ 设置面板：书架布局选择器 / 行数控件 / 库范围筛选 | 属「配置能力」而非纯样式；本项目当前 6 行上限也限制了多行布局的收益 |
-| **P2** | ⑧ 首启卡片（大圆角 + 半透底 + 径向光晕） | 只在 0 库 / 全关时出现 |
-| **P2** | ⑨ 12 件部件内部细节（封面缩略图、进度条高度 `h-1.5`、趋势图标、CTA 按钮） | 逐件小改、收益分散；建议**只统一「外壳 + 字号字重 + 进度条高度」三层**，不逐像素照抄（见 §5 待确认 3） |
-| **不做** | 引入 `/api/v1/dashboard/widgets/batch`、`vue-draggable-plus` 拖拽库、i18n、onboarding tour | 前两项与「默认不引外部依赖」取向冲突且现有实现能力等价；i18n 全站未做；tour 属新功能不属样式对照 |
+| 优先级 | 项目 | 现状（第 82 期第二步） | 理由 / 影响面 |
+|---|---|---|---|
+| **P0** | ① 部件卡片外壳 token 统一为上游口径（`rounded-2xl` + `border-primary/40` + `bg-card/30` + `backdrop-blur-[1px]`） | ✅ **已做**，且取了「外壳上移到行组件」的完整方案（非「只换 token」的折中）：12 件部件根节点同批去壳，壳由 `DashboardWidgetRow` 统一提供 | 首页第一眼观感差异最大；涉及 12 个部件文件根节点 |
+| **P0** | ② 页面级入场动效（`animate-fade-up` + 部件行整体 + 每个书架 `index*100ms`） | ✅ **已做**（问候语行 40ms / 部件行 / 每个书架 `index*100ms`） | 零结构改动的纯增益 |
+| **P0** | ③ 问候语行（`Sparkles` + 问候 + 用户名 + 「自定义」入口） | ✅ **已做**：`lib/dashboardGreeting.ts` 按时段分段（优先账号时区）；**FAB 已移除**，入口即本行右侧按钮 | 上游首页最显眼的一行，本项目完全缺失 |
+| **P1** | ④ 书架行卡片外壳 + 表头（图标块 / 计数胶囊 / 悬停滚动按钮） | ✅ **已做**（`DashboardShelfRow.vue` 重写，另含多行分带与骨架） | 书架行是首页主体，观感提升大 |
+| **P1** | ⑤ 页面容器 `space-y-5 pb-8 pt-4 sm:pr-2` 与页面三态骨架 | ◐ **部分**：容器 / 间距 / 内边距**已照上游对齐**；**整页三态分支未做**（保留既有的单条统计错误提示 + 部件级骨架与重试） | 整页三态缺「单一页面加载信号」，判据不明确（见 §7.4） |
+| **P1** | ⑥ 部件行网格模型（定宽横向滚动 + 定高 `h-55`） | ✅ **已做**（横向卡片带 + 定宽两档 + 定高 + 悬停滚动按钮；窄屏同样成立） | 影响面最大的一处；§5 待确认 2 已拍板「改」 |
+| **P2** | ⑦ 设置面板：书架布局选择器 / 行数控件 / 库范围筛选 | ◐ **部分**：布局选择器 + 行数控件**已做**（与 ⑥ 同批，避免「有控件没效果」）；**库范围筛选未做** | 属「配置能力」而非纯样式 |
+| **P2** | ⑧ 首启卡片（大圆角 + 半透底 + 径向光晕） | ✅ **已做**（`FirstRunNotice` / `DashboardWelcome` 重写，并修正失效的入口文案） | 只在 0 库 / 全关时出现 |
+| **P2** | ⑨ 12 件部件内部细节（封面缩略图、进度条高度 `h-1.5`、趋势图标、CTA 按钮） | ◐ **部分**：按 §5 待确认 3 定的标，只统一「外壳 + 字号字重 + 进度条」三层，其余按本项目语义保留（**未逐像素照抄**） | 逐件小改、收益分散 |
+| **不做** | 引入 `/api/v1/dashboard/widgets/batch`、`vue-draggable-plus` 拖拽库、i18n、onboarding tour | ◐ **三项保持不做**（接口 / i18n / tour）；⚠️ **`vue-draggable-plus` 是唯一翻转项** —— 用户拍板**显式引入 `@^0.6.1`**（原生 HTML5 DnD 在触屏不触发 `dragstart`，卡片拖拽需触屏可用；理由已按第 80 期口径声明在 `package.json`、`architecture.md` 不变量 #6、组件头注释） | 接口与 i18n 与取向/范围冲突；tour 属新功能不属样式对照 |
 
 **风险提示**
 
@@ -266,23 +279,33 @@
 - 上游多处方用 Tailwind 默认调色板硬编码（`orange` / `green` / `blue` / `amber` / `emerald` / `red`）；
   本项目走语义 token。**改造时不要为了「像」而引入硬编码色** —— `docs/DESIGN.md` 明令禁止，且深色主题下硬编码色会失配。
 - 部件外壳若真要搬到行组件，需要同批处理 12 个部件的根节点 + 骨架态，属结构性重构，建议单独立项而非混在「样式微调」里。
+  → **第 82 期第二步已按此执行**：12 件部件同批去壳 + 补骨架 / 错误 / 空态三分支（`useWidgetState` 统一封装），
+  作为一次独立的结构性改造完成，没有混进日常微调。
 
 ---
 
-## 5. 待确认项
+## 5. 待确认项（每条末尾的「**处置**」是第 82 期第二步的结果）
 
 1. **首屏整体观感未做肉眼比对**：上游 `docs/images/dashboard-overview.png` **确实存在**（对象库里有），但本轮稀疏检出未包含 `docs/images/`。
    如需比对，可单独取该文件（`git cat-file` 或把 `docs/images` 加进 sparse-checkout）；⚠️ 按既有脱敏口径，含账号显示名的截图不归档进本仓库。
+   **处置**：**仍未做** —— 本机无浏览器自动化，界面目验仍未做（已写进交付说明）。若要补，把该 PNG 加进 sparse-checkout 后人工比对一次即可。
 2. **部件行网格模型是否要改成上游的「定宽横向滚动 + 定高卡片」**：两侧能力等价但观感差异大，且本项目目前是响应式列栅格
    （`grid-cols-1 sm:grid-cols-2 lg:grid-cols-6` + `sm/md/lg` 三档列跨度）。改成横向滚动会改变窄屏节奏与部件高度统一方式，**需产品决策**。
+   **处置**：**已决 → 改**（用户拍板）。落地为横向卡片带（定宽 `1x1` 220px / `1x1.5` 336px + 定高），窄屏同样走滚动带、不回落栅格。
 3. **12 件部件内部细节「照抄到什么程度」需要定标**：像素级照抄会把本项目已落定的业务语义拉回上游语义（例如下面第 4 条），
    且上游部分实现依赖本项目没有的数据（如「最长连续天数」需额外统计口径、`ExternalLink` 指向外部站点）。
    **建议**：只统一「外壳 + 字号字重 + 进度条高度」三层，其余按本项目语义保留。
+   **处置**：**已按建议定标并执行**（用户口径：「12 件部件按上游样式做，**不改变本项目业务语义**」）。
+   ⚠️ 实际执行里「外壳」是**完全按上游**（壳上移到行组件、12 件去壳），字号字重与进度条只做统一、未逐像素对齐。
 4. **`reading-rhythm` 同一 id 但语义不同**：上游是**阅读时长**（`readingSeconds` + 一致性 + 日均），本项目是**入库数量**（`added_28d`）。
    本项目其实**有**阅读时长数据（`reading_sessions` 表 + `dailySummary{day,totalMinutes}`，见阅读活动页与阅读记录页），
    所以「切回上游语义」在数据上是可行的 —— 是否切、还是保留「入库节奏」并另开一个时长部件，**需产品决策**。
+   **处置**：**仍未决 → 保持现状**（仍显示「入库节奏」`added_28d`）。本期明确「不改变业务语义」，故未动；
+   若日后要切，数据是现成的。
 5. **设置面板是否补「书架布局 / 行数」控件**：这两项在上游与「书架多行 + 两列布局」是**成对**的
    （没有 rows 控件，多行布局无法配置）⇒ 若做 P2 的 ⑦，应与 ⑥ 一起决策，否则会出现「有控件没效果」的假交互。
+   **处置**：**已决并落地** —— 布局选择器与行数控件和「书架多行 / 两列」**同批**实现（用户点名要求）。
+   **库范围筛选**仍在未做清单（不在本期范围，见 §7.4）。
 
 ---
 
@@ -297,9 +320,9 @@
 
 ---
 
-## 7. 实施结果（第 82 期第二步，2026-10-01 · 本节的判定覆盖 §2–§4 的旧行）
+## 7. 实施结果与逐区块现状（第 82 期第二步，2026-10-01 · 本节的判定覆盖 §2–§4 的旧行）
 
-第一步清单确认后已逐项改造完毕（V0.82.0）。**判定翻转**（旧判定 → 现判定）：
+第一步清单确认后已逐项改造完毕（V0.82.0）。**§7.1 判定翻转**（旧判定 → 现判定）：
 
 | 条目 | §2/§4 旧判定 | 现判定 |
 |---|---|---|
@@ -313,10 +336,61 @@
 | 书架多行（1..3）+ 两列布局 + 面板控件 | 缺失 | **已对齐**（`lib/shelfRows.ts` 分带 + 面板布局/行数控件 + 持久化补默认） |
 | 首启卡片（大圆角 + 半透底 + 光晕） | 形态不同 | **已对齐**（`FirstRunNotice` / `DashboardWelcome` 重写；失效文案已改） |
 | 部件骨架 / 错误 / 空态三分支 | 缺失 | **已对齐**（`useWidgetState` 统一封装，全部真实状态） |
+| 页面容器间距 / 内边距（`space-y-5 pb-8 pt-4 sm:pr-2`） | 形态不同 | **已对齐**（照上游写法） |
 | 主题 token（5 个 css） | 已对齐 | 仍**已对齐**（本轮零 token 改动） |
 | 部件清单与顺序（12 件 id） | 已对齐 | 仍**已对齐**（id 一字未改） |
+| 本项目页面级容器 `DashboardScroller.vue` | （基线：它就是页面容器） | **已删除**（容器并入 `DashboardView.vue`；§1.3 的「同名不同物」陷阱随之消失） |
 | i18n / 上游硬编码调色板 / `/api/v1/dashboard/*` 接口 / tour | 形态不同 / 缺失 | **保持刻意差异**（中文字面量 / 语义 token / 不引入 / 未做） |
-| 整页三态分支、库范围筛选、`BookQuickView` 三件套、封面入场动画 | 缺失 | **未做**（见 §4 的「不做」与 §5 待确认；非本期范围） |
+| 整页三态分支、库范围筛选、`BookQuickView` 三件套、封面入场动画 | 缺失 | **未做**（理由见 §7.4） |
 
 实施细节与测试见 `docs/roadmap-gaps-remaining.md` 第 82 期。**本文件的 §2–§4 保留为「改造前的对照基线」**，
-判定以本节为准 —— 下次再对照上游新版本时，从本节的「现判定」继续。
+判定以本节为准 —— 下次再对照上游新版本时，从本节继续。
+
+### 7.2 逐区块现状（改造后 · 下次对照从这里起）
+
+| 区块 | 现状 | 落在哪 |
+|---|---|---|
+| 页面容器 / 间距 | `<main class="relative flex-none">` → `div.space-y-5 pb-8 pt-4 sm:pr-2`（照上游） | `frontend/src/views/DashboardView.vue` |
+| 页面入场动效 | 问候语行 `animate-fade-up`（`animation-delay:40ms`）+ 部件行整块 + 每个书架行 `index*100ms` | 同上 |
+| 页面三态 | ◐ **无整页四分支**：保留 0 库引导（`FirstRunNotice`）+ 单条统计错误提示（可重试）+ **部件级**骨架 / 错误 / 空态；全部部件与书架关闭时 `DashboardWelcome` | 同上 + `FirstRunNotice.vue` / `DashboardWelcome.vue` |
+| 问候语行 | `sparkle` 图标 + 时段问候（优先 `auth.timezone`，每分钟刷新）+ 用户名（`auth.display`，`text-primary font-semibold`）+ 右侧「自定义」按钮（`sliders` 图标，`sm` 以上显示文字） | 同上 |
+| 部件行 | 横向卡片带：`h-55` 定高 + 定宽两档（220 / 336）+ 悬停左右滚动按钮（`scrollBy(±300)`）+ 行内拖拽手柄（`grip`）+ 逐卡错峰 80ms；**壳在行组件上** | `DashboardWidgetRow.vue` |
+| 12 件部件 | 去壳（根节点 `flex h-full flex-col p-3`）+ 声明 `size` prop + 接 `useWidgetState` 三分支（骨架 `animate-pulse` / 错误可点重试 / 空态） | `widgets/*.vue` + `composables/useWidgetState.ts` |
+| 书架行 | 外壳 `rounded-2xl border-primary/40 bg-card/30 shadow-sm backdrop-blur-[1px]` + 表头（图标块 / `text-[15px] font-bold` 标题 / 计数胶囊 / 悬停滚动按钮 `scrollBy(±560)`）+ 多行 1..3 分带 + 按行数分带的骨架 | `DashboardShelfRow.vue` + `lib/shelfRows.ts` |
+| 书架布局 | 单列 `space-y-5` ↔ 两列 `grid gap-5 xl:grid-cols-2`；窄屏回落单列、行数自动压 2 | `DashboardView.vue` + `lib/shelfRows.ts` |
+| 设置面板 | 受控 `v-model:open`（自带 FAB 已移除）；书架 tab 有布局选择器 + 逐书架行数 1/2/3；面板内排序仍是 `useDndSort` + ▲▼ | `DashboardSettingsSheet.vue` |
+| 首启 / 空态卡片 | 大圆角 + 主色描边 + 半透底 + 径向光晕（`color-mix(in oklch, var(--primary) 18%, transparent)`）+ 图标块 + 大标题口径；文案已改指问候语行的「自定义」 | `FirstRunNotice.vue` / `DashboardWelcome.vue` |
+| token 层 | **零改动**（§3 判定无变化） | — |
+
+### 7.3 本期的文件增删
+
+- **新增**：`composables/useWidgetState.ts`、`lib/dashboardGreeting.ts`、`lib/shelfRows.ts`（+ 三个同名 spec，
+  并登记进 `tests/test_frontend_unit_contract.py::EXPECTED_SPECS` —— 缺失即报错）。
+- **新增依赖**：`vue-draggable-plus@^0.6.1`（唯一显式运行时依赖；理由见 §4「不做」行）。
+- **删除**：`frontend/src/components/dashboard/DashboardScroller.vue`（页面级容器 —— 容器写进 `DashboardView.vue` 后它成为**孤儿**，
+  连同 `DashboardView.vue` 里的未使用导入一起删掉，无测试依赖它）。
+  ⚠️ 这一步发生在 `v0.82.0` tag **之后**的收尾清理里 —— 无用户可见变化。
+- `lib/icons.ts` 新增 6 键（`chevronLeft` / `chevronRight` / `grip` / `rows` / `columns` / `sliders`）；
+  `widgets/registry.ts` 删除 `SIZE_SPAN`（旧列跨度模型）。
+
+### 7.4 未做 / 刻意不做（含理由）
+
+| 未做项 | 理由 |
+|---|---|
+| 整页三态分支（`libraryState` 四分支） | 本项目**没有单一的「整页加载」信号**（数据分散在 stats / library / 批注三处），硬造一个页面级 loading 只会是假的（与第 80 期「消灭假开关」同一条口径）。改为**部件级**真三分支 + 单条统计错误提示。 |
+| 每书架的「库范围」筛选 | 属配置能力而非样式；面板已有三层控件，再加会挤（先有用户需求再说）。 |
+| `BookQuickView` / 加入收藏 / 删书三件套 | 本项目点封面进详情（既有交互，改动会牵动整站导航）。 |
+| 封面入场动画（`dashboardFadeUp` + `index*35ms`） | 书架行已有多行分带 + 骨架；20–60 张封面逐张错峰的合成开销与收益不确定。 |
+| i18n | 全站未做，本项目是中文字面量（§2.2 已判「形态不同，**不算缺口**」）。 |
+| 上游硬编码调色板（`text-orange-500` / `bg-green-500` …） | `docs/DESIGN.md` 明令禁止；深色主题下会失配（§2.4 第 3 条）。 |
+| `/api/v1/dashboard/widgets/batch`、`/api/v1/dashboard/scrollers/batch` | 单用户直连 DB，无此接口层（§2.4 第 4 条）。 |
+| onboarding tour / `data-tour` 锚点 | 新功能，不属「样式对照」。 |
+| 界面肉眼冒烟 | 本机无浏览器自动化（§5 第 1 条）。 |
+
+### 7.5 下次怎么续用本文件
+
+1. 按 §0 的口径重新取上游（记得走本机代理）；若 commit 不再是 `c292d6cc`，**先在 §0 补一行「本轮对照 commit」**（基线声明要能追溯）。
+2. **从 §7.2 的「现状」列开始对照，不要从 §2** —— 差别就追加在 §7 里（新起一小节「第 N 期再对照」），§2–§4 继续不动。
+3. 目前仍**未决**的只有两条：§5 第 4 条（`reading-rhythm` 语义是否切回阅读时长）与 §7.4 的未做项 —— 它们都需要产品决策，
+   不属于「样式对齐」范畴，别顺手改。
+4. 上游若推进到新版本，注意 §0 记的「与既有基线的关系」那行要同步（它是「上游没动」这个结论的凭据）。

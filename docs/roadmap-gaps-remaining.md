@@ -3651,3 +3651,16 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 - 未做：页面整页三态分支、每书架的库范围筛选、`BookQuickView` / 加入收藏 / 删书三件套（本项目点封面进详情）、
   封面入场动画（`dashboardFadeUp`）、onboarding tour。
 - 「发现新书」仍按 id 稳定排序（刻意去随机，第 32 期口径）；两列布局窄屏回落单列、行数窄屏压 2（上游同口径）。
+
+### 五、收尾清理与文档改版（`v0.82.0` tag 之后的补记）
+
+- **删除孤儿组件** `frontend/src/components/dashboard/DashboardScroller.vue`：第 82 期第二步把页面容器直接写进
+  `DashboardView.vue`（照上游 `main` + `space-y-5 pb-8 pt-4 sm:pr-2`）之后，这个「页面级栅格容器」已**无人引用**
+  （模板不用、测试不引）⇒ 连同 `DashboardView.vue` 里那行未使用导入一起删掉。
+  ⚠️ 它正是对照文档 §1.3 记的「两侧同名不同物」陷阱里的本项目那一半 —— 删掉后该陷阱**不再存在**
+  （上游 `DashboardScroller` 的对应实现现在是 `DashboardShelfRow.vue`，其头注释已同步说明）。
+- **对照文档改为「基线 + 现状」双段式**（`docs/bookorbit/bookorbit-dashboard-styles.md`）：§2–§4 作为**改造前基线**
+  不逐行改写（逐行改掉就看不出「改了什么」），新增 §7.2「逐区块现状」+ §7.4「未做与理由」+ §7.5「下次怎么续用」；
+  §4 的改造顺序表补「现状」列（①–④⑥⑧ ✅ / ⑤⑦⑨ ◐ 部分 / 「不做」行里 `vue-draggable-plus` 是**唯一翻转项**）、
+  §5 五条待确认各补「处置」、§1.2 清单同步增删。⇒ 下次对照上游**从 §7.2 起，不再从 §2 起**。
+- 无用户可见变化（纯清理与文档）；`type-check` / `test:unit`（456 例）复跑全绿，文档锚点零新增漂移。
