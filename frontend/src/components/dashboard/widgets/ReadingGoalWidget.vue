@@ -1,16 +1,32 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
+import Icon from '@/components/ui/Icon.vue'
 import ProgressRing from '@/components/ui/ProgressRing.vue'
+import { useWidgetState } from '@/composables/useWidgetState'
+import type { WidgetSize } from '@/data/dashboard'
 import { useStatsStore } from '@/stores/stats'
 
 /**
  * 阅读目标（对应 BookOrbit 的 ReadingGoalWidget）。
  * 已完成本数来自 /api/stats（按「已读完阈值」判定，第 40 期起可配）；目标本数本地记忆。
  * 数据未接入前（stats.data 为空）显示 0，避免闪回演示值。
+ *
+ * ⚠️ 卡片外壳在第 82 期上移到 `DashboardWidgetRow`，本件只负责填满卡片。
  */
+defineProps<{
+  /** 宽度档由部件行下发（对齐上游契约） */
+  size?: WidgetSize
+}>()
+
 const stats = useStatsStore()
 onMounted(() => stats.load())
+
+/** 数据态：只读 store 的真实字段（加载中 / 失败可重试） */
+const state = useWidgetState(() => ({
+  loading: !stats.loaded && !stats.error,
+  error: stats.error,
+}))
 
 const GOAL_KEY = 'year-goal-target'
 
@@ -55,7 +71,24 @@ function commit(): void {
 </script>
 
 <template>
-  <div class="flex h-full items-center gap-4 rounded-lg border border-border bg-card p-4 shadow-sm">
+  <div class="flex h-full items-center gap-4 p-3">
+    <template v-if="state === 'loading'">
+      <div class="h-[92px] w-[92px] shrink-0 animate-pulse rounded-full bg-muted" />
+      <div class="flex-1 space-y-2">
+        <div class="h-3.5 w-20 animate-pulse rounded bg-muted" />
+        <div class="h-2.5 w-28 animate-pulse rounded bg-muted" />
+        <div class="h-2.5 w-24 animate-pulse rounded bg-muted" />
+      </div>
+    </template>
+
+    <div v-else-if="state === 'error'" class="flex flex-1 items-center gap-2 text-[11.5px] text-muted-foreground">
+      <span>统计加载失败</span>
+      <button type="button" class="cursor-pointer text-primary hover:underline" @click="stats.load(true)">
+        重试
+      </button>
+    </div>
+
+    <template v-else>
     <ProgressRing :value="done" :max="target" :size="92" :thickness="9" />
 
     <div class="min-w-0 flex-1">
@@ -68,10 +101,8 @@ function commit(): void {
           aria-label="修改目标"
           @click="startEdit"
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-3 w-3">
-            <path d="M12 20h9" />
-            <path d="M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4z" />
-          </svg>
+          <!-- 与 lib/icons.ts 的 edit 同一枚（原先这里手写了一份重复 path） -->
+          <Icon name="edit" class="h-3 w-3" />
         </button>
       </div>
 
@@ -96,5 +127,6 @@ function commit(): void {
         <span v-else class="text-muted-foreground">还差 {{ remaining }} 本达成</span>
       </p>
     </div>
+    </template>
   </div>
 </template>

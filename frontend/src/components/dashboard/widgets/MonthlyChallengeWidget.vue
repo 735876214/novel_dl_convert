@@ -1,11 +1,28 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 
+import { useWidgetState } from '@/composables/useWidgetState'
+import type { WidgetSize } from '@/data/dashboard'
 import { useStatsStore } from '@/stores/stats'
 
-/** 月度挑战：本月入库本数 vs 本地目标（可在面板外直接改，存 localStorage）。 */
+/**
+ * 月度挑战：本月入库本数 vs 本地目标（可在面板外直接改，存 localStorage）。
+ *
+ * ⚠️ 卡片外壳在第 82 期上移到 `DashboardWidgetRow`，本件只负责填满卡片。
+ */
+defineProps<{
+  /** 宽度档由部件行下发（对齐上游契约） */
+  size?: WidgetSize
+}>()
+
 const stats = useStatsStore()
 onMounted(() => stats.load())
+
+/** 数据态：只读 store 的真实字段（加载中 / 失败可重试） */
+const state = useWidgetState(() => ({
+  loading: !stats.loaded && !stats.error,
+  error: stats.error,
+}))
 
 const GOAL_KEY = 'month-goal'
 
@@ -33,7 +50,23 @@ const reached = computed(() => done.value >= target.value)
 </script>
 
 <template>
-  <div class="flex h-full flex-col justify-between rounded-lg border border-border bg-card p-4 shadow-sm">
+  <div class="flex h-full flex-col justify-between p-3">
+    <template v-if="state === 'loading'">
+      <div class="space-y-2">
+        <div class="h-3.5 w-16 animate-pulse rounded bg-muted" />
+        <div class="h-2.5 w-28 animate-pulse rounded bg-muted" />
+      </div>
+      <div class="h-1.5 w-full animate-pulse rounded-full bg-muted" />
+    </template>
+
+    <div v-else-if="state === 'error'" class="flex flex-1 items-center gap-2 text-[11.5px] text-muted-foreground">
+      <span>统计加载失败</span>
+      <button type="button" class="cursor-pointer text-primary hover:underline" @click="stats.load(true)">
+        重试
+      </button>
+    </div>
+
+    <template v-else>
     <div>
       <h3 class="text-[13px] font-semibold text-foreground">月度挑战</h3>
       <p class="mt-1 text-[11.5px] text-muted-foreground tabular-nums">
@@ -58,5 +91,6 @@ const reached = computed(() => done.value >= target.value)
         >
       </div>
     </div>
+    </template>
   </div>
 </template>

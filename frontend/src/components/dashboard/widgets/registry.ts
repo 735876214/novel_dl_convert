@@ -59,11 +59,7 @@ export function isImplemented(id: WidgetId): boolean {
 }
 
 /**
- * 部件在栅格中占的列数。
- * lg = 占满整行；md = 两列中的一列；sm = 三列中的一列。
+ * 部件卡片的宽度档（第 82 期对齐 BookOrbit）：
+ * `1x1` 窄卡 / `1x1.5` 宽卡。宽度类由 `DashboardWidgetRow.vue` 持有
+ * （部件行是卡片外壳与布局的唯一真值源），这里只承载元信息。
  */
-export const SIZE_SPAN: Record<WidgetSize, string> = {
-  lg: 'col-span-6',
-  md: 'col-span-3',
-  sm: 'col-span-2',
-}

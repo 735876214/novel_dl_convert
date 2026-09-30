@@ -2,11 +2,13 @@ import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 
 import {
+  DEFAULT_SHELF_LAYOUT,
   DEFAULT_SHELVES,
   DEFAULT_WIDGET_IDS,
   MAX_SHELVES,
   WIDGET_IDS,
   type ShelfDef,
+  type ShelfLayout,
   type ShelfType,
   type WidgetId,
 } from '@/data/dashboard'
@@ -23,6 +25,8 @@ const SHELF_TYPES: ShelfType[] = ['continue', 'recent', 'discover', 'scope']
  */
 const WIDGET_KEY = 'dashboard-widgets'
 const SHELF_KEY = 'dashboard-shelves'
+/** 书架总布局（单列 / 两列，第 82 期新增键） */
+const LAYOUT_KEY = 'dashboard-shelf-layout'
 
 export interface WidgetPref {
   id: WidgetId
@@ -62,6 +66,12 @@ function mergeWidgets(stored: WidgetPref[] | null): WidgetPref[] {
   return [...valid, ...added].map((p) => ({ ...p }))
 }
 
+/** 书架行数收敛到 1..3（旧数据缺字段 ⇒ 当 1，不写迁移脚本） */
+function normalizeRows(value: unknown): number {
+  const n = Math.round(Number(value))
+  return Number.isFinite(n) ? Math.min(3, Math.max(1, n)) : 1
+}
+
 function mergeShelves(stored: ShelfDef[] | null): ShelfDef[] {
   // 只按「类型合法」保留用户书架（含自定义的 scope / 额外行），而不是按默认 id 白名单，
   // 否则用户新增的行一刷新就丢。
@@ -70,8 +80,15 @@ function mergeShelves(stored: ShelfDef[] | null): ShelfDef[] {
   )
   const seen = new Set(valid.map((s) => s.id))
   const added = DEFAULT_SHELVES.filter((d) => !seen.has(d.id))
-  const merged = [...valid, ...added].slice(0, MAX_SHELVES)
-  return merged.length ? merged : DEFAULT_SHELVES.map((s) => ({ ...s }))
+  const merged = [...valid, ...added]
+    .slice(0, MAX_SHELVES)
+    .map((s) => ({ ...s, rows: normalizeRows(s.rows) }))
+  return merged.length ? merged : DEFAULT_SHELVES.map((s) => ({ ...s, rows: 1 }))
+}
+
+/** 布局值只认两个合法档，其它（含旧数据里的脏值）一律回落单列 */
+function normalizeLayout(value: unknown): ShelfLayout {
+  return value === 'two-columns' ? 'two-columns' : DEFAULT_SHELF_LAYOUT
 }
 
 export const useDashboardStore = defineStore('dashboard', () => {
@@ -79,9 +96,12 @@ export const useDashboardStore = defineStore('dashboard', () => {
   const shelves = ref<ShelfDef[]>(
     mergeShelves(readJson<ShelfDef[] | null>(SHELF_KEY, null)).map((s) => ({ ...s })),
   )
+  /** 书架总布局：单列 / 两列（第 82 期对齐 BookOrbit 的 SHELF_LAYOUT） */
+  const shelfLayout = ref<ShelfLayout>(normalizeLayout(readJson<unknown>(LAYOUT_KEY, null)))
 
   watch(widgets, (v) => writeJson(WIDGET_KEY, v), { deep: true })
   watch(shelves, (v) => writeJson(SHELF_KEY, v), { deep: true })
+  watch(shelfLayout, (v) => writeJson(LAYOUT_KEY, v))
 
   const enabledWidgets = computed(() => widgets.value.filter((w) => w.enabled))
   const enabledShelves = computed(() => shelves.value.filter((s) => s.enabled))
@@ -108,6 +128,40 @@ export const useDashboardStore = defineStore('dashboard', () => {
     if (from >= list.length || to >= list.length) return
     const [moved] = list.splice(from, 1)
     list.splice(to, 0, moved)
+  }
+
+  /**
+   * 按「可见子集的新顺序」重排部件（第 82 期，行内拖拽用）。
+   *
+   * ⚠️ 行内渲染的是**可见子集**（已启用 ∩ 已实现 ∩ 当前库能力满足），
+   * 而 `moveWidget` 用的是**全量**列表索引 —— 直接把可见索引传过去会排错位。
+   * 做法：取可见项在全量列表中的下标集合，按新顺序回填对应 id，
+   * 不可见项保持原相对次序填进剩余下标。
+   */
+  function applyVisibleOrder(orderedIds: WidgetId[]): void {
+    if (!orderedIds.length) return
+    const slotOf = new Map(orderedIds.map((id, i) => [id, i]))
+    const visibleSlots: number[] = []
+    widgets.value.forEach((w, i) => {
+      if (slotOf.has(w.id)) visibleSlots.push(i)
+    })
+    if (visibleSlots.length !== orderedIds.length) return
+    const next = [...widgets.value]
+    orderedIds.forEach((id, i) => {
+      next[visibleSlots[i]] = { ...next[visibleSlots[i]], id }
+    })
+    widgets.value = next
+  }
+
+  /** 书架总布局（单列 / 两列） */
+  function setShelfLayout(layout: ShelfLayout): void {
+    shelfLayout.value = layout
+  }
+
+  /** 设置某个书架行的行数（1..3，越界夹取；行数决定该行拉取的封面数） */
+  function setShelfRows(id: string, rows: number): void {
+    const target = shelves.value.find((s) => s.id === id)
+    if (target) target.rows = normalizeRows(rows)
   }
 
   function moveShelf(from: number, to: number): void {
@@ -150,12 +204,14 @@ export const useDashboardStore = defineStore('dashboard', () => {
   /** 恢复默认：部件与书架都回到出厂状态 */
   function reset(): void {
     widgets.value = WIDGET_IDS.map((id) => ({ id, enabled: DEFAULT_WIDGET_IDS.includes(id) }))
-    shelves.value = DEFAULT_SHELVES.map((s) => ({ ...s }))
+    shelves.value = DEFAULT_SHELVES.map((s) => ({ ...s, rows: 1 }))
+    shelfLayout.value = DEFAULT_SHELF_LAYOUT
   }
 
   return {
     widgets,
     shelves,
+    shelfLayout,
     enabledWidgets,
     enabledShelves,
     isEmpty,
@@ -164,6 +220,9 @@ export const useDashboardStore = defineStore('dashboard', () => {
     toggleShelf,
     moveWidget,
     moveShelf,
+    applyVisibleOrder,
+    setShelfLayout,
+    setShelfRows,
     shiftWidget,
     shiftShelf,
     removeShelf,

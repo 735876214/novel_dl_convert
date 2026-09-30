@@ -2,13 +2,22 @@
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
+import { useWidgetState } from '@/composables/useWidgetState'
+import type { WidgetSize } from '@/data/dashboard'
 import { useLibraryStore } from '@/stores/library'
 import { useStatsStore } from '@/stores/stats'
 
 /**
  * 书库概览卡（对应 BookOrbit 的 LibraryOverviewWidget）。
  * 数字来自 /api/stats（真实书目聚合），点任一统计项跳到对应板块。
+ *
+ * ⚠️ 卡片外壳在第 82 期上移到 `DashboardWidgetRow`，本件只负责填满卡片。
  */
+defineProps<{
+  /** 宽度档由部件行下发（对齐上游契约）；本件两种档位都是四格横排，不分支渲染 */
+  size?: WidgetSize
+}>()
+
 const library = useLibraryStore()
 const stats = useStatsStore()
 const router = useRouter()
@@ -36,10 +45,38 @@ const cards = computed(() => [
 
 /** 近 28 天入库总数（真实值，替代原演示常量） */
 const added28 = computed(() => (s.value?.added_28d ?? []).reduce((a, b) => a + b, 0))
+
+/** 数据态：加载中（首次拉取）/ 失败（可重试）—— 只读 store 的真实字段 */
+const state = useWidgetState(() => ({
+  loading: !stats.loaded && !stats.error,
+  error: stats.error,
+}))
 </script>
 
 <template>
-  <div class="flex h-full flex-col rounded-lg border border-border bg-card p-4 shadow-sm">
+  <div class="flex h-full flex-col p-3">
+    <template v-if="state === 'loading'">
+      <div class="flex flex-1 items-start justify-between gap-4">
+        <div v-for="n in 4" :key="n" class="flex-1 space-y-1.5 px-2 py-1">
+          <div class="h-6 w-14 animate-pulse rounded bg-muted" />
+          <div class="h-2.5 w-10 animate-pulse rounded bg-muted" />
+        </div>
+      </div>
+      <div class="mt-3 h-9 animate-pulse rounded-md bg-muted" />
+    </template>
+
+    <div v-else-if="state === 'error'" class="flex flex-1 items-center gap-2 text-[11.5px] text-muted-foreground">
+      <span>统计加载失败</span>
+      <button
+        type="button"
+        class="cursor-pointer text-primary hover:underline"
+        @click="stats.load(true)"
+      >
+        重试
+      </button>
+    </div>
+
+    <template v-else>
     <div class="flex flex-1 items-start justify-between gap-4">
       <button
         v-for="c in cards"
@@ -61,5 +98,6 @@ const added28 = computed(() => (s.value?.added_28d ?? []).reduce((a, b) => a + b
         近 28 天入库 <span class="font-semibold text-foreground tabular-nums">{{ added28 }}</span> 本
       </span>
     </div>
+    </template>
   </div>
 </template>
