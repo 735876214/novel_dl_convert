@@ -17,7 +17,7 @@
 
 ## 元数据与出版
 - **只落服务端 DB、绝不写回文件**；`core/publish.py` 是唯一仍写文件的模块（写副本，源只读）。
-- **源不可变**：副本禁原地写（临时文件+`Path.replace`）；删除一律移回收站（`CACHE_DIR/recycle`），**从不 `unlink`**（⚠️ 第 75 期例外：仅用户显式「删书」/「移除书库」动作才移动磁盘文件，且「删书」回收三份、「移除书库」回收②③保留①）。
+- **源不可变**：副本禁原地写（临时文件+`Path.replace`）；删除一律移回收站（`CACHE_DIR/recycle`），**从不 `unlink`**（⚠️ 例外：仅用户显式动作才移动磁盘文件 ——「删书」回收三份；「移除书库」**第 81 期起默认只删登记、零文件触碰**，仅显式 `purge_files=1` 才在后台任务里回收②③保留①，可用「维护 → 回收站还原」搬回）。
 - 命名规则**唯一实现**=`fileops.fill_pattern`；`PATTERN_FIELDS` 唯一真值源、前端 `RENAME_TOKENS` 逐字一致（契约）；**禁第二处展开**。
 - 三层 `override>online>opf`；抓取受三道正交闸（字段策略 ⊗ `meta_locks` ⊗「改过就不动」）。无值哨兵 `db.META_CLEAR="-"`。
 - **软删除**：`DELETE`=置 `deleted_at`，`purge` 才真删；**一切读点须 `WHERE deleted_at=0`**。
@@ -59,4 +59,4 @@
 - 浏览器冒烟：`playwright-cli open --browser=msedge <url>`；隔离目录 + `admin/changeme`；⚠️ 注入 `nf_token` 不稳，走登录表单。
 
 ## 逐期铁律索引（**全文见 `MEMORY-REF.md`「逐期铁律原文」**）
-近期关键期锚点：**75** 删除语义（删书回收三份/移除书库回收②③保留①；Switch 圆点固定白色）；**76** EPUB 插图资源 URL 形状只在 `library._rewrite_assets`/`_rewrite_css_urls` 拼、令牌响应期注入、书内样式走独立端点且**绝不进正文容器**；**77** 移除「按格式归库」整条链（migrate 的 preview/plan/门禁、端点 `/api/library-migrations/*`、`libraries.auto_migrate`、前端 MigrationGateDialog+卡片台账）—— 它与「移除书库」错误耦合；跨库移动 `/api/book-move/*` 与 `execute`/`rollback`/`library_migrations` **全部保留**；**78** 版本号唯一真值源 = 仓库根 `VERSION`（第 N 期 = V0.N.0）经 `GET /health` 下发，`CHANGELOG.md` 每版一段驱动「新功能」页；**79** 序号单元**第四形态**「前缀 + 尾部编号」（编号必须**紧贴**标题文字，否则 `vol.1` 会被误认成「第 1 话」）+ `is_unit_dir` 加「同前缀」闸（≥2 种前缀即不合并）+ `SCAN_RULE_VERSION` 2。更早各期（53–74）细节见 REF。
+近期关键期锚点：**75** 删除语义（删书回收三份；「移除书库回收②③保留①」**已于第 81 期作废**，改成默认只删登记；Switch 圆点固定白色）；**76** EPUB 插图资源 URL 形状只在 `library._rewrite_assets`/`_rewrite_css_urls` 拼、令牌响应期注入、书内样式走独立端点且**绝不进正文容器**；**77** 移除「按格式归库」整条链（migrate 的 preview/plan/门禁、端点 `/api/library-migrations/*`、`libraries.auto_migrate`、前端 MigrationGateDialog+卡片台账）—— 它与「移除书库」错误耦合；跨库移动 `/api/book-move/*` 与 `execute`/`rollback`/`library_migrations` **全部保留**；**78** 版本号唯一真值源 = 仓库根 `VERSION`（第 N 期 = V0.N.0）经 `GET /health` 下发，`CHANGELOG.md` 每版一段驱动「新功能」页；**79** 序号单元**第四形态**「前缀 + 尾部编号」（编号必须**紧贴**标题文字，否则 `vol.1` 会被误认成「第 1 话」）+ `is_unit_dir` 加「同前缀」闸（≥2 种前缀即不合并）+ `SCAN_RULE_VERSION` 2；**80** `update` 段四个键全部真有读点（消灭假开关）+「零外部请求 / 零依赖」解除为**默认取向**；**81** 「移除书库」默认只删登记、`purge_files=1` 才清文件且改**后台任务**（`librarypurge`）+ 回收台账 `recycle_items`（**刻意不含 `book_id`**）与「回收站还原」（`core/recycle.py`、`recycle` 任务、幂等可续跑、退让不覆盖）+ 回收落点名 ≤255 字节（唯一实现 `fileops.recycled_name`）。更早各期（53–74）细节见 REF。

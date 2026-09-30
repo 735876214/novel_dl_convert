@@ -20,6 +20,13 @@
   同一条「先清 `NODE_OPTIONS`」对 pytest 也适用（此前几期的命令都带它，原因就在这里）。
 - 浏览器冒烟：本机（win32）**无 chromium 也能跑** —— `playwright-cli open --browser=msedge`（走系统 Edge 通道，免下载；直接 `open` 会失败）；也可 `playwright-cli install-browser chromium`；注入 `nf_token`（`localstorage-set` + **必须再 `reload`**，否则首屏未授权请求 401、且应用会把刚注入的 token 清掉）；⚠️ `snapshot` 直接打到 stdout（`--filename` 可能不落盘）⇒ 重定向到 `/tmp` 自己读，别落仓库根；⚠️ 换了产物要**带 `?nc=N` goto**（普通 `reload` 用旧 bundle，会误判成「改动没生效」）。
 - e2e 自查顺序：接口账目（curl）→ 界面文本（`eval innerText`）→ `console`（0 errors）→ `network`（无非本地请求）。
+- ⚠️ **本机（win32）跑测试的环境（第 81 期实测）**：仓库里**没有 `.venv`**；可用解释器是 `install_binary` 装的
+  `C:\Users\qingr\.workbuddy\binaries\python\versions\3.14.3\python.exe`（先 `pip install -r requirements-dev.txt`），
+  且**必须**先建出 `novelforge\static\` 目录（`server.py` 在 import 期 `StaticFiles(directory=…)` 会因目录不存在直接抛）；
+  `static/v2` 已被 gitignore、**别往里塞手写页**。跑 `pytest` / `npm run build` / `deploy` 前一律 `$env:NODE_OPTIONS=''`。
+- ⚠️ **回收目录是会话级共享的**（`fileops.recycle_dir()` 基于 `config.CACHE_DIR`，而 `isolated` 夹具**不切**它）：
+  写「默认删库没掉文件 / 某次回收没发生」这类断言**只能做名字差集**（前后各拍一次快照），
+  断言「目录里本来没有同名文件」会依赖用例执行顺序 —— 第 81 期先在 `test_api_smoke`、后在 `test_library_purge` 上各踩一次。
 
 ## 上游取证与待办（跨会话）
 - **`docs/bookorbit/bookorbit-module-inventory.md` 是第三条轴**（按上游**代码模块**对照，67 目录/33 feature）：只按页面对照会系统性漏掉「整块模块从未进视野」的能力。⚠️ **按模块名 grep 文档得出的覆盖结论是错的**（假阴性过半）——判定只能按语义找 + 落到 `文件:行`。34 期落地 §4.1「值得做」4 项；35 期**改判** §4.2 里 3 项为做并落地（字段级锁 / 自定义字段 / 推荐打分）、36 期再落地 `book-move` ⇒ §4.2 真·不做 **4 项**（`embedding` / `position-converter` / `email` / `narrator`）。**42 期复核：上游 `main` 仍为 `c292d6cc`（无新提交）⇒ 转为「判定刷新 + 部分缺口」**：该文件第二节判定列 **10 处刷新**（含 3 处文档错误订正）、第六节新增部分缺口 14 项。
@@ -358,4 +365,39 @@
   （本地未推送时 `git reset --soft HEAD~1` + 重做即可，别 amend 后继续堆）。
 - 端点形状：`GET /api/books` → `{items,total}`；`POST /api/libraries` → `{ok,library}`（id 在 `library.id`）。
 - 假 PDF（`b"%PDF-1.4 fake"`）够扫描/合并类验收，但阅读器会报 `Invalid PDF structure.`（夹具所致，不是产品问题）。
+
+---
+
+### 第 81 期铁律（「移除书库」语义 / 回收台账与还原 / 长文件名）
+
+**需求**：线上实例报「移除漫画书库失败」。现场：请求数小时不返回、库仍在册但 `book_count` 持续下降
+（2206→1947→1834→1647→1531）、回收目录以 **≈79 MB/s（跨卷速率）** 增长、活动日志 165 条全 success
+却无一条「移除书库登记」。用户 `docker compose stop` 止血并保留现场。
+
+- **「移除书库」= 只删登记**（第 75 期「回收 ②③ 保留 ①」的**默认行为作废**）：`DELETE /api/libraries/{lid}`
+  默认同步、立即返回、**零文件触碰**（返回 `{purge_files:false, targets:0, task_id:null}`）；
+  要连文件一起清必须**显式** `purge_files=1`（`force` 参数已整个删除）。**不再有**「库里还有书」的 400 拦截。
+- ⚠️ **待回收清单必须在删登记之前物化**（`server._purge_paths`）：③ 的路径取自刮削台账 `link_rel`，
+  而 `db.scrape_delete_by_library` 会把台账行删掉 —— 晚一步就再也算不出副本在哪。
+- ⚠️ **「删书」口径一字未动**（仍是 ① 收书目录里的本地原件 + ② 书库根里的成品 + ③ 出版副本一起回收）。
+  两条路径口径不一致是**刻意的**：「删书」是用户指着某一本说「连文件一起删」；「移除书库」只该表达「别再管这个库」。
+- **长文件操作一律后台任务**（类型 `librarypurge` 清理 / `recycle` 还原）：接口立即返回 `task_id`，
+  逐项回调真进度；**刻意不写 `result`**（有它前端会渲染成「下载」按钮，而这两件事没有产物可下）。
+  全局在跑标记 `_ops_pending` / `_ops_idle` + `server.wait_background_ops()`，由
+  `tests/conftest.py::_quiesce_background` 在夹具 `db.close()` **之前**收尾（与 scrape / watcher / embed 同纪律）。
+- **回收落点名唯一实现 `fileops.recycled_name`**：`{stamp}_{n_}{name}`，UTF-8 字节长 ≤ `RECYCLE_NAME_MAX`(255)；
+  超长按**字节边界**截断（`trunc_bytes`）+ 追加 `~<8 位短哈希>`（保唯一可辨）、尽量保住扩展名。
+  三个调用方必须走它：`publish.recycle` / `fileops.recycle_items` / `bookdock.remove`（原先各写了一份 `f"{stamp}_{name}"`）。
+  线上该漫画库 ≥240 字节的名字有 **7 个**（最长 277）⇒ `ENAMETOOLONG` 被记成 failed。
+- **回收台账 `recycle_items`**（`id / orig_path / recycled_name / why / size / created_at`）：
+  ⚠️ **刻意不含 `book_id`** —— 它记的是「磁盘上某个被移走的路径」而非「某本书的数据」，
+  改名 / 换库都不会让它失效 ⇒ **不进** `ORPHAN_TABLES` / `REMAP_TABLES` / `REMAP_PROBE_FILTER` / `REMAP_EXPLICIT_TABLES`。
+  写入走**永不外抛**的 `db.recycle_note`（文件已移走，不能因为记不上账把回收算失败）；
+  `size` 必须在 `shutil.move` **之前**取，目录型条目用 `fileops.size_of` 递归和（win32 目录 `st_size` 恒 0）。
+- **回收站还原**（`core/recycle.py` + `GET /api/recycle` + `POST /api/recycle/restore`）：
+  `ids`（台账行，按各自 `orig_path`）/ `names` + `target_dir`（无台账孤儿，剥 `YYYYMMDD-HHMMSS_[n_]` 前缀）/
+  `all`（全部台账条目）三种入参可组合。**幂等可续跑**：成功后删台账行。
+  目标已存在 ⇒ `recycle.free_path` 退让改名（`名字 (2).ext`）**绝不覆盖**，回执如实标 `renamed`。
+  `names` 必须是纯文件名（`_safe_name` 挡 `/`、`\`、`..`）；解析不出的条目进 `errors`，不静默丢。
+- **清空回收站同批清台账**（`db.recycle_clear`）：文件都真删了，台账再宣称「可以还原」就是骗人。
 

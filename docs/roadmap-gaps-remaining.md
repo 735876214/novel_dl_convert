@@ -3457,3 +3457,125 @@ TODO 给的形态是 `^<非空前缀>(?P<num>\d{1,4})$`，字面上**任何**前
   但只要 GitHub 上的 latest 没变就不会再触发（符合预期）。
 - 未做「自动更新前的二次确认 / 通知」：单用户自托管场景下 `auto_apply` 本身就是用户显式打开的动作，故不加。
 - 不改 `docker-compose.yml`（用户此前已决定 compose 文件只保留两份，更新说明内联进注释与本文档）。
+
+---
+
+## 第 81 期 · 「移除书库」改为「只删登记」+ 长文件操作后台化 + 回收站还原（V0.81.0，2026-09-30）
+
+**来源**：用户报告（原文一句）`http://192.168.0.95:8992   移除漫画书库失败`。只读探测线上实例得出的现场证据：
+
+1. 移除请求**长时间不返回**（实测数百秒仍无响应）⇒ 前端只能显示「失败」；
+2. 漫画库 `lib-6a0b30d3` **仍在册**，但 `book_count` 持续下降：2206 → 1947 → 1834 → 1647 → 1531；
+3. 活动日志 165 条**全 success，没有一条「移除书库登记」** ⇒ `api_delete_library` 末尾那行日志从未执行到；
+4. 回收目录 61 秒内 **+240 份 / +4.8 GB（≈79 MB/s）** —— 该速率是**跨卷速率**，
+   证明 `shutil.move` 走了 **EXDEV 复制回退**（同盘 rename 是 O(1)、无字节吞吐）。
+
+用户按建议 `docker compose stop` 停服止血，保留现场（库登记与已搬文件都在）。
+
+### 一、三个根因
+
+- **主因（请求挂死）**：`api_delete_library` 把**跨文件系统的大搬迁**放在 HTTP 请求内同步执行
+  （逐本 `_recycle_one(② 书库内成品 + ③ 出版副本)`）⇒ 请求数小时不返回、无进度回调、不可取消。
+- **名实不符（误搬本地原件）**：该库 `source_dirs=["/app/libraries/漫画"]`、`publish_path=""`、无 ① 记录
+  ⇒ 被回收的「②」**就是用户的本地原件**，与第 75 期「移除书库保留本地的书」的字面口径矛盾。
+- **次因（超长名）**：`publish.recycle` 落点名 `f"{stamp}_{p.name}"`，`stamp` 是 16 字节，
+  而 Linux 单文件名上限 **255 字节（UTF-8）**；该库 ≥240 字节的名字有 **7 个**（最长 277 字节）
+  ⇒ `ENAMETOOLONG` 被记成 failed；重名退让分支 `f"{stamp}_{n}_{p.name}"` 同样会溢出。
+
+### 二、语义变更：「移除书库」默认零文件触碰
+
+`DELETE /api/libraries/{lid}` 现在只有一个开关 `purge_files`：
+
+- **默认（不带参）**：同步、立即返回，**只删登记**（`db.delete_library` + `db.scrape_delete_by_library`
+  + `catalog.forget` + `_libraries_changed` + `activity_log`），返回 `{purge_files:false, targets:0, task_id:null}`；
+- **`purge_files=1`**：连文件一起清，且**在后台任务里跑**（见第五节）。
+
+⚠️ 第 75 期「非空库需 `force`、`force` 回收 ②③」的默认行为**作废**，`force` 参数**整个去掉**；
+「删书」的第 75 期口径**一字未动**（仍是三份一起回收）。两条路径口径不一致是**刻意的**：
+「删书」是用户指着某一本说「连文件一起删」，语义明确；「移除书库」只该表达「别再管这个库」。
+
+⚠️ 待回收清单必须**在删登记之前**物化（`server._purge_paths`）：③ 的路径取自刮削台账 `link_rel`，
+而台账行会随 `db.scrape_delete_by_library` 一起消失。
+
+### 三、长文件名加固（唯一实现 `fileops.recycled_name`）
+
+`fileops.RECYCLE_NAME_MAX = 255`；`recycled_name(name, stamp, n=0)` = `{stamp}_{n_}{name}`，
+超长时按 **UTF-8 字节边界**截断（`trunc_bytes`，不切坏多字节字符）+ 追加 `~<8 位短哈希>`，
+并尽量保住扩展名。**这是回收落点名的唯一实现** —— 三个调用方同批收敛：
+`publish.recycle`、`fileops.recycle_items`、`bookdock.remove`（原先各写了一份 `f"{stamp}_{name}"`）。
+
+### 四、回收台账 + 还原（新模块 `core/recycle.py`）
+
+- 新表 `recycle_items`：`id / orig_path / recycled_name / why / size / created_at`。
+  ⚠️ **刻意不含 `book_id`** —— 它记的是「磁盘上某个被移走的路径」而非「某本书的数据」，
+  改名 / 换库都不会让它失效，因此**不进 remap 四处清单**（契约测试钉住）。
+- 写入走 `db.recycle_note`（**永不外抛**：文件已经移走了，不能因为记不上账就把回收算失败）；
+  三个移入点（`publish.recycle` / `fileops.recycle_items` / `bookdock.remove`）同批接线。
+- `GET /api/recycle`：台账条目（带磁盘实况）+ 无台账孤儿（`limit` 只截条数，计数始终全量）。
+- `POST /api/recycle/restore`：三种入参可组合 —— `ids`（台账行，按各自 `orig_path`）、
+  `names` + `target_dir`（无台账孤儿，剥 `YYYYMMDD-HHMMSS_[n_]` 前缀落到指定目录）、`all`（全部台账条目）。
+  **幂等可续跑**：成功后删台账行；目标已存在则退让改名（`名字 (2).ext`，`recycle.free_path`）**绝不覆盖**，
+  回执里如实标 `renamed`。解析不出的条目进 `errors`，不静默丢。
+- `POST /api/maintenance/recycle/clear` 同批清台账（`db.recycle_clear`）—— 文件都真删了，
+  台账再宣称「可以还原」就是骗人。
+
+### 五、长文件操作后台化（`server._ops_*` + 任务行）
+
+「移除书库清理」与「回收站还原」共用一个设施：
+
+- 两个任务类型 `librarypurge` / `recycle`（`db.task_create`），接口立即返回 `task_id`；
+- 逐项回调 `db.task_update(progress=..., detail="正在清理/还原：<名>")` —— 是真进度，不是假推进；
+- **刻意不写 `result`**（有它前端会渲染成「下载」按钮，而这两件事没有产物可下）；
+- 全局在跑标记 `_ops_pending` / `_ops_idle` + `server.wait_background_ops(timeout)`，
+  由 `tests/conftest.py::_quiesce_background` 在**夹具 `db.close()` 之前**调用
+  （与 scrape / watcher / embed-refresh 同一条纪律）。
+
+### 六、前端
+
+- `LibrariesView.vue::remove()` 重写：改为**页内确认浮层**（不是 `window.confirm`）——
+  默认文案「只移除登记、不动任何磁盘文件」+ `Switch` 勾选「连文件一起清理」（勾选后才显示该库还有多少本、
+  会移入回收站、可在维护页还原）+ 受理后 toast 说明「N 份正在后台移入回收站」。
+- `lib/api.ts`：`deleteLibrary(id, purgeFiles)` 语义与返回类型改；新增 `recycleList(limit)` /
+  `recycleRestore(payload)`；`clearRecycle` 返回加 `ledger_cleared`；新增
+  `RecycledItem` / `RecycleOrphan` / `RecycleListPayload` 类型。
+- `MaintenancePage.vue`：「维护动作」之前新增「回收站还原」区块（计数 + 最近 12 条 + 逐条还原 +
+  「全部按原路径还原」+ 无台账孤儿的「指定目录还原」）；「清空回收站」文案补上「连同还原台账一起清掉」。
+- `data/tasks.ts`：`TaskType` 加 `librarypurge` / `recycle`；`TaskCenterView.vue`：
+  `PCT_TYPES` 让这两个类型**运行中**显示真百分比 + 补图标与说明文案。
+
+### 七、测试（后端全量 **1335 例 / 1323 passed / 12 skipped / 0 failed**）
+
+新增：
+
+- `tests/test_library_purge.py`（7 例）：默认路径**字节 + `mtime_ns` 逐项不变**且无新增回收件、无任务行；
+  `purge_files=1` 走后台任务并回收 ②③、台账两条 `orig_path` 对得上、刮削台账已清；
+  空库 + `purge_files` 不白排任务；① 本地原件在两条路径下都保留。
+- `tests/test_recycle_restore.py`（10 例）：`recycled_name` 的字节上限 / 不切坏多字节 / 保扩展名 / 保哈希可辨；
+  超长名真的能回收；台账表**无 `book_id` 列**且不在三份清单里；列表能给出原路径与磁盘实况；
+  `all` 还原 → 字节原样回来 → 台账清空 → 再调 `task_id=null`（幂等）；目标已存在 ⇒ 退让改名不覆盖；
+  台账缺失的 id 如实报错；孤儿还原必须给 `target_dir`、给了就按剥前缀名落地、`../` 名非法；
+  清空回收站同批清台账；`strip_stamp` / `_safe_name` 纯函数。
+
+改写既有旧断言（第 75 期口径作废）：
+
+- `tests/test_api_smoke.py`：`test_非空库需force才移除_…` → `test_移除书库默认不动文件_显式purge_files才后台回收`；
+- `tests/test_library_count_contract.py`：删库护栏条 → `test_删库已无书数护栏_但计数仍须是真值`；
+- `tests/test_annotations.py`：删库不再需要 `?force=1`；
+- `tests/test_no_defaults_contract.py`：形状正则同时认 `async def`（`api_delete_library` 已转 async）；
+- `tests/conftest.py`：`_quiesce_background` 增加 `wait_background_ops`。
+
+⚠️ **回收目录是会话级共享的**（`CACHE_DIR` 不随 `isolated` 夹具切）⇒ 断言只能看「本次有没有新增」
+（前后名字快照做差集），不能看「目录里本来有没有同名文件」——那会依赖用例执行顺序，全量跑时假失败
+（本期先在 `test_api_smoke` 上踩到，随后在 `test_library_purge` 上复现）。
+
+前端四连：`type-check` / `test:unit`（447 例）/ `build` / `deploy` 全绿。
+
+### 八、已知取舍 / 未做 / 待用户处置
+
+- ⚠️ **线上现场需要用户处置**（本机无法代做）：升到本期后，到「设置 → 维护 → 回收站还原」点
+  「全部按原路径还原」，把此前被误搬的 ~2400 份漫画搬回 `./libraries/漫画`；
+  若确有 ≥240 字节的超长名当初回收失败，它们**没有**被搬走（还在原地），只是当时被记成 failed。
+- 「移除书库不动文件」与「删书回收三份」的口径不一致**刻意保留**（见第二节），不擅自改删书。
+- 还原**不做**「只还原本次误搬的一批」的批次筛选（台账有 `why` 与时间戳，但过滤 UI 未做）——
+  现有「逐条 / 全部 / 孤儿」三种粒度已够搬回本次事故；真要按批次筛，先有用户需求再说。
+- 未做「回收站自动清理 / 保留期」（与既有「不做通知清理 job」同一条理由：无实例、无判据）。

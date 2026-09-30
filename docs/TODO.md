@@ -3,21 +3,24 @@
 > 维护约定：**完成即移入「已完成」并写清 commit/期号**；每条待办要带**证据**（数字、文件、复现方式），
 > 不写「优化一下性能」这种没有判据的条目。较长的逐期记录放 `docs/roadmap-gaps-remaining.md`。
 
-**最后更新**：2026-09-29（**第 81 期已立项未开工**：「移除书库」语义改「只删登记」+ 后台任务化 + 回收站还原，方案见第 1 节 P0）
+**最后更新**：2026-09-30（**第 81 期已交付**：V0.81.0 —— 「移除书库」改「只删登记」+ 长文件操作后台化 + 回收站还原；逐项记录见 `docs/roadmap-gaps-remaining.md` 第 81 期）
 
 ## 0. 当前状态
 
-- ⏳ **第 81 期已立项，代码未动**（方案已定稿，落在本文件第 1 节 P0）。**线上实例已由用户 `docker compose stop` 停服止血**（详见 P0 的「线上现状」）。
-- HEAD = 第 80 期（V0.80.0）；工作区干净（仅 `.vscode/settings.json` 是各人本机设置，**不属于仓库改动**）。
-- 测试基线：后端 **1319 例（1307 passed / 12 skipped / 0 failed）**（`pytest`，离线，约 3 分 20 秒）；前端 **447 例**（`npm run test:unit`）。
-- 版本：`VERSION` = **0.80.0**（单一真值源，`GET /health` 下发）；每个版本在 `CHANGELOG.md` 有一段。
+- ✅ **第 81 期已交付**（V0.81.0）。⚠️ **线上现场仍需用户处置**：升到本期后，到「设置 → 维护 → 回收站还原」点「全部按原路径还原」，把此前被误搬的约 2400 份漫画搬回 `./libraries/漫画`。
+- HEAD = 第 81 期（V0.81.0）；工作区干净（仅 `.vscode/settings.json` 是各人本机设置，**不属于仓库改动**）。
+- 测试基线：后端 **1335 例（1323 passed / 12 skipped / 0 failed）**（`pytest`，离线，约 4 分 20 秒）；前端 **447 例**（`npm run test:unit`）。
+- 版本：`VERSION` = **0.81.0**（单一真值源，`GET /health` 下发）；每个版本在 `CHANGELOG.md` 有一段。
 - ⚠️ **口径修订（第 80 期）**：「零外部请求 / 零依赖」已由**硬约束改为默认取向** —— 默认仍自托管、不拉 CDN，但允许**显式、可关、失败降级**地引入外部依赖与出网（见 `AGENTS.md` 第 1 节）。别再用「零依赖」当**不做**的理由。
 - 上游缺口清单（`docs/roadmap-gaps-remaining.md` 第一节）已实质清空；新缺口来源改看 `docs/bookorbit/bookorbit-module-inventory.md`。
 - ⚠️ 本文件的「已完成（近三期）」只登记到第 68 期 —— **第 69–79 期的记录在 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）**，别按这里判断「最近做了什么」。
 
 ## 1. 待办（按优先级）
 
-### P0 · 第 81 期（已立项，未开工）：修「移除漫画书库失败」+ 回收站还原
+### P0 · 第 81 期（✅ 已完成，V0.81.0，2026-09-30）：修「移除漫画书库失败」+ 回收站还原
+
+> ✅ **已交付**（T0–T5 全部完成，结果见下方逐项；完整实施记录与取舍见 `docs/roadmap-gaps-remaining.md` 第 81 期）。
+> ⚠️ 唯一留在用户侧的动作：**在线上点一次「全部按原路径还原」**（见第 0 节）。
 
 **需求来源**
 
@@ -57,13 +60,13 @@
 
 **任务清单（实施顺序）**
 
-- [ ] T0 线上处置：确认已停服；升级后确认库登记仍在；用新还原功能把这批漫画搬回 `./libraries/漫画`。
-- [ ] T1 后端拆分 `api_delete_library`：默认路径**同步、立即返回、零文件触碰**（只 `db.delete_library` + `db.scrape_delete_by_library` + `catalog.forget` + `_libraries_changed` + `activity_log`）；`purge_files=1` 走后台任务（`_run_library_purge` + `_library_purge_progress`，沿用 `_run_book_move` 写法，**刻意不写 `result`**）。
-      ⚠️ 同步阶段先**物化待回收路径清单**（在删登记与 `scrape_delete_by_library` 之前算好 ②③ 路径）—— ③ 依赖刮削台账 `link_rel`，台账行会随库删除。
-- [ ] T2 `publish.recycle` 长名加固 + 回收台账写入（`recycle_items` 表：`id/orig_path/recycled_name/why/size/created_at`，**刻意不含 `book_id`** ⇒ 从设计上规避 remap 四处同步点，写进测试与文档）。
-- [ ] T3 新增 `novelforge/core/recycle.py`（台账读写、剥时间戳前缀 `YYYYMMDD-HHMMSS_[n_]`、退让命名复用 `publish.free_rel` 既有思路、孤儿还原规划）+ `GET /api/recycle`、`POST /api/recycle/restore`（后台任务 + 进度 + **幂等可续跑**，目标已存在则**退让不覆盖**并如实报告）。
-- [ ] T4 前端：`LibrariesView.vue::remove()` 重写（默认文案 + 「连文件一起清理」勾选 + 二次确认 + 受理 toast）；`api.ts::deleteLibrary` 语义/返回类型改；维护页回收站区块加还原入口；`data/tasks.ts` 的 `TaskType` 加新类型；`TaskCenterView.vue` 让新类型运行中显示真进度。
-- [ ] T5 测试与收尾：`tests/test_library_purge.py`、`tests/test_recycle_restore.py` 新增，**改写既有「移除书库会回收 ②③」的旧断言**；跑后端全量（当前基线 1319 例）+ 前端四连。
+- [x] T0 线上处置：**用户侧动作未做**（本机无法代做）——升级后确认库登记仍在，用新还原功能把这批漫画搬回 `./libraries/漫画`。
+- [x] T1 后端拆分 `api_delete_library`：默认路径**同步、立即返回、零文件触碰**（只 `db.delete_library` + `db.scrape_delete_by_library` + `catalog.forget` + `_libraries_changed` + `activity_log`）；`purge_files=1` 走后台任务（`_run_library_purge` + `_purge_worker`，沿用 `_run_book_move` 写法，**刻意不写 `result`**）。`force` 参数整个去掉。
+      ⚠️ 同步阶段先**物化待回收路径清单**（`_purge_paths`，在删登记与 `scrape_delete_by_library` 之前算好 ②③ 路径）—— ③ 依赖刮削台账 `link_rel`，台账行会随库删除。
+- [x] T2 `publish.recycle` 长名加固 + 回收台账写入（`recycle_items` 表：`id/orig_path/recycled_name/why/size/created_at`，**刻意不含 `book_id`** ⇒ 从设计上规避 remap 四处同步点）。落点名收敛为唯一实现 `fileops.recycled_name`（三个调用方同批改）；写入走**永不外抛**的 `db.recycle_note`。
+- [x] T3 新增 `novelforge/core/recycle.py`（`list_items` 台账 + 磁盘实况 + 孤儿、`strip_stamp` 剥时间戳前缀、`free_path` 退让命名、`plan_restore` / `restore_many`）+ `GET /api/recycle`、`POST /api/recycle/restore`（后台任务 + 进度 + **幂等可续跑**，目标已存在则**退让不覆盖**并如实报告）。
+- [x] T4 前端：`LibrariesView.vue::remove()` 改为**页内确认浮层**（默认文案 + 「连文件一起清理」勾选 + 受理 toast）；`api.ts::deleteLibrary` 语义/返回类型改 + 新增 `recycleList` / `recycleRestore`；维护页新增「回收站还原」区块；`data/tasks.ts` 加 `librarypurge` / `recycle` 两类型；`TaskCenterView.vue` 让新类型运行中显示真进度。
+- [x] T5 测试与收尾：新增 `tests/test_library_purge.py`（7 例）、`tests/test_recycle_restore.py`（10 例），**改写了既有「移除书库会回收 ②③」的旧断言**；后端全量 **1335 例 / 1323 passed / 12 skipped / 0 failed** + 前端四连全绿；`VERSION` 0.81.0 + CHANGELOG 段 + roadmap 记录 + 记忆。
 
 **防回归要点**
 
@@ -107,6 +110,18 @@
 
 ## 2. 已完成（近三期）
 
+- **第 81 期（2026-09-30）· 「移除书库」改为「只删登记」+ 长文件操作后台化 + 回收站还原**（V0.81.0）
+  - 缺陷形态：移除漫画库（约 2400 份 / 68 GB）时请求数小时不返回、前端显示「失败」；
+    库仍在册但 `book_count` 持续下降，回收目录以 ≈79 MB/s（跨卷速率）增长 ——
+    根因是大搬迁同步跑在 HTTP 请求内，且该库就地引用用户目录 ⇒ 被回收的「②」就是用户的本地原件。
+  - 修法：① 默认路径**只删登记、零文件触碰**（同步立即返回），连文件一起清改为显式 `purge_files=1` +
+    **后台任务**（类型 `librarypurge`，逐份真进度）；② `publish.recycle` 落点名保证 UTF-8 ≤255 字节
+    （唯一实现 `fileops.recycled_name`）；③ 新增 `recycle_items` 台账 + `core/recycle.py` +
+    `GET /api/recycle` / `POST /api/recycle/restore`（类型 `recycle`，**幂等可续跑**、目标已存在则退让改名不覆盖）。
+  - 契约：回收台账表**刻意不含 `book_id`**（不进 remap 四处清单）；`_quiesce_background` 收后台长操作线程；
+    `test_no_defaults_contract` 的形状正则放宽到 `async def`。
+  - 验证：后端 **1335 例 / 1323 passed / 12 skipped / 0 failed**；前端四连全绿（447 例）。
+  - commit：见 `docs/roadmap-gaps-remaining.md` 第 81 期段。
 - **第 80 期（2026-09-29）· `update` 段配置从「看着有」变成「每个键都真有读点」**（V0.80.0）
   - 缺陷形态：`update.image` / `update.auto_apply` 写是写得进、`GET /api/config` 也回显、设置页报「已保存」，
     但**后端没有任何读点**（`image` 唯一读法是环境变量，`auto_apply` 连读点都没有）⇒ 改完等于没改。
@@ -148,10 +163,11 @@
 - **第 62 期 · 「书架 42 秒 → 毫秒级」**（并行会话）
   - 书目**索引落库**（`core/catalog.py`）、PostgreSQL 可选后端、Redis 读缓存、增量刷新每文件 3 次 stat → 1 次。
 
-## 3. 下一期（第 81 期）候选
+## 3. 下一期（第 82 期）候选
 
-⚠️ 第 81 期**已立项**（见第 1 节 P0，「移除漫画书库失败」修复 + 回收站还原），**代码尚未动**。
-开工前先 `git log --oneline -12` + `git status --short` 定期号（**期号会被并行会话用掉**）。
+⚠️ 第 81 期**已交付**（见第 2 节）。下一期开工前先 `git log --oneline -12` + `git status --short` 定期号
+（**期号会被并行会话用掉**）。
 
-P0 做完后按优先级从第 1 节取；若要做重投入项（例如再次跑大库基准、或做 PG/Redis 相关专项），
-**先量化再动手**（本项目已在第 61 期明确：没有指标不许凭感觉优化）。
+第 1 节 P1 起按优先级取（「元数据来源」页最后两条如实标注的「未支持」最接近可直接动手）；
+若要做重投入项（例如再次跑大库基准、或做 PG/Redis 相关专项），**先量化再动手**
+（本项目已在第 61 期明确：没有指标不许凭感觉优化）。
