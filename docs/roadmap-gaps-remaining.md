@@ -3579,3 +3579,75 @@ TODO 给的形态是 `^<非空前缀>(?P<num>\d{1,4})$`，字面上**任何**前
 - 还原**不做**「只还原本次误搬的一批」的批次筛选（台账有 `why` 与时间戳，但过滤 UI 未做）——
   现有「逐条 / 全部 / 孤儿」三种粒度已够搬回本次事故；真要按批次筛，先有用户需求再说。
 - 未做「回收站自动清理 / 保留期」（与既有「不做通知清理 job」同一条理由：无实例、无判据）。
+
+---
+
+## 第 82 期 · 首页（仪表盘）逐项对齐上游 BookOrbit（V0.82.0，2026-10-01）
+
+**来源**：用户「从上游获取首页的样式」。**两步走**：第一步出对照基线（`docs/bookorbit/bookorbit-dashboard-styles.md`，
+上游 `735876214/bookorbit` @ `c292d6cc`，逐区块四档判定），用户确认后第二步逐项改造。**业务语义与数据来源一律不动**。
+
+### 一、用户拍板的范围
+
+部件行网格模型参考上游改（定宽横向卡片带）；12 件部件按上游样式做**但语义不变**（`reading-rhythm` 仍是「入库节奏」）；
+卡片外壳**完全按上游**（壳上移到部件行）；加页面入场动效、问候语行、书架行外壳与表头；
+12 件部件补齐 **loading / error / empty 三分支 + 骨架**；再加书架**多行（1..3）与两列布局** + 面板控件 + 首启卡片上游化。
+拖拽选型经对比后**显式引入 `vue-draggable-plus@^0.6.1`**（实测打包 42 KB minified / ≈13–15 KB gzip、无运行时依赖）——
+原生 HTML5 DnD 在 iOS/Android 触屏不触发 `dragstart`，而卡片拖动要触屏可用。这是第 80 期「显式引入须声明理由」口径下
+第一个显式新增依赖（`package.json` + `architecture.md` 不变量第 6 条 + 组件头注释三处声明）。
+
+**刻意不做**：整页加载/错误分支（无单一「页面加载」信号，判据不明确）；i18n；`/api/v1/dashboard/*` 批量接口；
+onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`lucide-vue-next`（图标走 `lib/icons.ts` 唯一注册表）；
+上游的 Tailwind 硬编码调色板（本项目保持语义 token，不为「像」而回退 `DESIGN.md` 禁令）。
+
+### 二、实施（逐文件）
+
+- **尺寸与配置模型**（`data/dashboard.ts`）：`WidgetSize` 从自造三档 `sm/md/lg` 收敛为上游两档 `'1x1' | '1x1.5'`
+  （`WIDGET_META` 12 条按上游分配表：宽卡 5 件）；`ShelfDef` 加 `rows?: number`；新增 `SHELF_ROW_OPTIONS` /
+  `ShelfLayout` / `DEFAULT_SHELF_LAYOUT` / `SHELF_LAYOUT_LABEL` / `MAX_COVERS_PER_ROW`。
+  ⚠️ `WidgetId` 是 localStorage 键**一字不改**；持久化结构 `{id, enabled}` 不含 size ⇒ 三档改两档**零迁移**。
+- **部件行**（`DashboardWidgetRow.vue` 重写）：横向滚动卡片带 + 壳（`h-55 rounded-2xl border-primary/40 bg-card/30
+  shadow-sm backdrop-blur-[1px]`）+ 定宽映射 + 悬停滚动按钮（`scrollBy(±300)`）+ 行内拖拽（`VueDraggable`
+  `handle=".widget-drag-handle"` + `localWidgets` 本地副本防松手闪回）+ 逐卡 `dashboardWidgetFadeUp` 错峰 80ms。
+- **可见序 → 全量索引映射**（`stores/dashboard.ts::applyVisibleOrder`）：行内只渲染**可见子集**
+  （启用 ∩ 已实现 ∩ 能力裁剪），而 `moveWidget` 用全量索引 ⇒ 直接传会排错位；取可见项在全量列表的下标集合按新序回填，
+  不可见项相对次序不变。**本期最容易写错的一处**。
+- **12 件部件**：根节点统一去壳（删 `rounded-lg border border-border bg-card p-4 shadow-sm`，保留
+  `flex h-full flex-col[/justify-between|items-center]` + `p-3`），统一声明 `size` prop（对齐上游契约），
+  接 `useWidgetState` 补三分支（骨架用 `animate-pulse`、错误带重试、空态沿用第 38 期「0 库 vs 无内容」两说）；
+  `ReadingGoalWidget` 手写的铅笔 SVG 收敛到 `<Icon name="edit">`。
+- **数据态唯一真值源**（新增 `composables/useWidgetState.ts`）：`{loading?, error?, empty?} → 'loading'|'error'|'empty'|'ready'`
+  （优先级 loading > error > empty > ready），只读各 store 既有字段（`stats.loaded/error`、`library.loaded/hasNoLibraries`、
+  批注部件本地 `failed`），**不做假数据、不加假延迟**。
+- **书架行**（`DashboardShelfRow.vue` 重写）：套同款外壳 + 表头（类型图标块 `h-7 w-7` + `text-[15px] font-bold` 标题 +
+  计数胶囊 + 悬停滚动按钮 `scrollBy(±560)`）+ 多行分带 + 加载骨架（按行数分带、`aspect-ratio: 2/3`）；
+  数据源 / 继续阅读进度条 / 「查看全部」目标 / discover 按 id 稳定排序**全部保持**。
+- **分带纯函数**（新增 `lib/shelfRows.ts`）：`effectiveShelfRows`（窄屏压 2）、`chunkIntoBands`、`shelfBookLimit`、
+  `useNarrowScreen`（`matchMedia` 自实现，**不引 `@vueuse/core`**；不可用环境按宽屏降级）。
+- **问候语行 + 页面**（`DashboardView.vue` 重写）：问候语行（`sparkle` 图标 + 按时段问候 + 用户名 `auth.display` +
+  「自定义」按钮）；自定义入口**从面板自带 FAB 移到这里**；单列/两列容器切换；三级错峰入场（40ms / 部件行 / 书架 index×100ms）。
+- **问候语纯函数**（新增 `lib/dashboardGreeting.ts`）：按时段分段（清晨/下午/晚上/深夜），优先 `auth.timezone`（IANA），
+  解析失败回落本地时间；文案表可单测。
+- **面板**（`DashboardSettingsSheet.vue` 重写）：改**受控组件**（`defineModel('open')`）、移除自带 FAB；
+  书架 tab 顶部新增「布局」选择器（`rows`/`columns` 图标卡 + `aria-pressed`）、逐书架新增「行数 1/2/3」分段；
+  散落的内联 SVG（6 点手柄 / 关闭 ×）收敛到 `lib/icons.ts`（新增 `chevronLeft/chevronRight/grip/rows/columns/sliders` 6 键，
+  grip 用 `fill="currentColor"` 实心圆点）。
+- **首启卡片**（`FirstRunNotice.vue` / `DashboardWelcome.vue`）：上游化（大圆角 + 主色描边 + 半透底 +
+  `radial-gradient(color-mix(in oklch, var(--primary) 18%, transparent))` 光晕 + 图标块 + 大标题口径）；
+  ⚠️ `DashboardWelcome` 文案「用**右下角的调节按钮**…」指向已移除的入口，同步改写为问候语行的「自定义」。
+
+### 三、测试（前端 41 个 spec / 456 例全过；后端 `test_frontend_unit_contract` 10 passed）
+
+- 新增 3 个 spec（并登记进 `test_frontend_unit_contract.py::EXPECTED_SPECS`，缺失即报错）：
+  `lib/shelfRows.spec.ts`（夹取 / 分带 / 上限）、`lib/dashboardGreeting.spec.ts`（时段边界 / 时区 / 非法时区回落）、
+  `composables/useWidgetState.spec.ts`（优先级 / 响应性 —— ⚠️ 响应性用例必须用 `ref` 当源，普通变量不是响应源）。
+- 既有 dashboard spec **零覆盖**（普查确认），四连 `type-check` / `test:unit` / `build` / `deploy` 全绿；
+  图标契约（模板字面量名 ⊆ `ICONS` 键 + path 非空）自动覆盖新增 6 键。
+
+### 四、已知取舍 / 未做
+
+- 12 件部件内部**未逐像素照抄**（只统一外壳 / 字号字重 / 进度条高度三层）：封面缩略图、趋势图标、悬停播放、
+  CTA 按钮等按本项目语义保留 —— 逐像素会拉回上游业务语义（对照文档 §5 待确认 3 的口径）。
+- 未做：页面整页三态分支、每书架的库范围筛选、`BookQuickView` / 加入收藏 / 删书三件套（本项目点封面进详情）、
+  封面入场动画（`dashboardFadeUp`）、onboarding tour。
+- 「发现新书」仍按 id 稳定排序（刻意去随机，第 32 期口径）；两列布局窄屏回落单列、行数窄屏压 2（上游同口径）。

@@ -3,14 +3,16 @@
 > 维护约定：**完成即移入「已完成」并写清 commit/期号**；每条待办要带**证据**（数字、文件、复现方式），
 > 不写「优化一下性能」这种没有判据的条目。较长的逐期记录放 `docs/roadmap-gaps-remaining.md`。
 
-**最后更新**：2026-09-30（**第 81 期已交付**：V0.81.0 —— 「移除书库」改「只删登记」+ 长文件操作后台化 + 回收站还原；逐项记录见 `docs/roadmap-gaps-remaining.md` 第 81 期）
+**最后更新**：2026-10-01（**第 82 期已交付**：V0.82.0 —— 首页（仪表盘）逐项对齐上游 BookOrbit；第一步对照基线在 `docs/bookorbit/bookorbit-dashboard-styles.md`，实施记录见 `docs/roadmap-gaps-remaining.md` 第 82 期）
 
 ## 0. 当前状态
 
-- ✅ **第 81 期已交付**（V0.81.0）。⚠️ **线上现场仍需用户处置**：升到本期后，到「设置 → 维护 → 回收站还原」点「全部按原路径还原」，把此前被误搬的约 2400 份漫画搬回 `./libraries/漫画`。
-- HEAD = 第 81 期（V0.81.0）；工作区干净（仅 `.vscode/settings.json` 是各人本机设置，**不属于仓库改动**）。
-- 测试基线：后端 **1335 例（1323 passed / 12 skipped / 0 failed）**（`pytest`，离线，约 4 分 20 秒）；前端 **447 例**（`npm run test:unit`）。
-- 版本：`VERSION` = **0.81.0**（单一真值源，`GET /health` 下发）；每个版本在 `CHANGELOG.md` 有一段。
+- ✅ **第 82 期已交付**（V0.82.0，首页对齐上游；本轮纯前端，无用户侧补救动作。第 81 期那条「回收站还原」若线上还没点，仍需做一次）。
+- HEAD = 第 82 期（V0.82.0）；工作区干净（仅 `.vscode/settings.json` 是各人本机设置，**不属于仓库改动**）。
+- 测试基线：后端 **1335 例（1323 passed / 12 skipped / 0 failed）**（`pytest`，离线）；前端 **456 例 / 41 个 spec**（`npm run test:unit`）。
+- 版本：`VERSION` = **0.82.0**（单一真值源，`GET /health` 下发）；每个版本在 `CHANGELOG.md` 有一段。
+- ⚠️ 前端自本期起有**显式运行时依赖** `vue-draggable-plus`（仪表盘部件行内拖拽；原生 HTML5 DnD 触屏不触发，
+  理由记录在 `docs/architecture.md` 不变量第 6 条与组件头注释 —— 第 80 期「显式引入须声明理由」口径下的第一个）。
 - ⚠️ **口径修订（第 80 期）**：「零外部请求 / 零依赖」已由**硬约束改为默认取向** —— 默认仍自托管、不拉 CDN，但允许**显式、可关、失败降级**地引入外部依赖与出网（见 `AGENTS.md` 第 1 节）。别再用「零依赖」当**不做**的理由。
 - 上游缺口清单（`docs/roadmap-gaps-remaining.md` 第一节）已实质清空；新缺口来源改看 `docs/bookorbit/bookorbit-module-inventory.md`。
 - ⚠️ 本文件的「已完成（近三期）」只登记到第 68 期 —— **第 69–79 期的记录在 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）**，别按这里判断「最近做了什么」。
@@ -110,6 +112,18 @@
 
 ## 2. 已完成（近三期）
 
+- **第 82 期（2026-10-01）· 首页（仪表盘）逐项对齐上游 BookOrbit**（V0.82.0，两步走：先对照基线后改造）
+  - 第一步：上游 `bookorbit @ c292d6cc` 首页逐区块四档判定，落 `docs/bookorbit/bookorbit-dashboard-styles.md`（含「两侧同名 `DashboardScroller` 职责不同」的命名陷阱）。
+  - 第二步：部件行改横向卡片带（定宽两档 + `h-55` 外壳上移 + 悬停滚动按钮 + 行内拖拽）；12 件部件去壳 + 补
+    **真实** loading/error/empty 三分支（统一封装 `useWidgetState`）；问候语行（按时段 + 时区，入口从 FAB 移到本行）；
+    书架行外壳表头 + 多行（1..3）分带 + 单列/两列布局 + 面板控件；首启卡片上游化（失效文案同步改写）；
+    页面三级错峰入场动效。
+  - 依赖：显式新增 `vue-draggable-plus@^0.6.1`（触屏可拖；≈13–15 KB gzip）；**不引** `@vueuse/core`（`matchMedia` 自实现）与
+    `lucide-vue-next`（图标走 `lib/icons.ts` 唯一注册表，新增 6 键）。
+  - 契约：`WidgetId` localStorage 键一字不改（尺寸档位改两档零迁移）；行内拖拽经 `applyVisibleOrder` 做「可见子集 → 全量索引」映射；
+    三个新纯函数 spec 登记进 `EXPECTED_SPECS`。
+  - 验证：前端 **456 例 / 41 spec** 全过 + 后端图标契约 10 passed + 四连（type-check / test:unit / build / deploy）全绿。
+  - commit：见 `docs/roadmap-gaps-remaining.md` 第 82 期段。
 - **第 81 期（2026-09-30）· 「移除书库」改为「只删登记」+ 长文件操作后台化 + 回收站还原**（V0.81.0）
   - 缺陷形态：移除漫画库（约 2400 份 / 68 GB）时请求数小时不返回、前端显示「失败」；
     库仍在册但 `book_count` 持续下降，回收目录以 ≈79 MB/s（跨卷速率）增长 ——
@@ -163,10 +177,13 @@
 - **第 62 期 · 「书架 42 秒 → 毫秒级」**（并行会话）
   - 书目**索引落库**（`core/catalog.py`）、PostgreSQL 可选后端、Redis 读缓存、增量刷新每文件 3 次 stat → 1 次。
 
-## 3. 下一期（第 82 期）候选
+## 3. 下一期（第 83 期）候选
 
-⚠️ 第 81 期**已交付**（见第 2 节）。下一期开工前先 `git log --oneline -12` + `git status --short` 定期号
+⚠️ 第 82 期**已交付**（见第 2 节）。下一期开工前先 `git log --oneline -12` + `git status --short` 定期号
 （**期号会被并行会话用掉**）。
+
+仪表盘相关的余留（对照文档 `docs/bookorbit/bookorbit-dashboard-styles.md` §5 待确认 + §7 未做项）：
+每书架的「库范围」筛选、`BookQuickView` 三件套、封面入场动画 —— 均需先有用户需求再排期。
 
 第 1 节 P1 起按优先级取（「元数据来源」页最后两条如实标注的「未支持」最接近可直接动手）；
 若要做重投入项（例如再次跑大库基准、或做 PG/Redis 相关专项），**先量化再动手**

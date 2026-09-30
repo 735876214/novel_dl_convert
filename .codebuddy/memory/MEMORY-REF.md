@@ -401,3 +401,34 @@
   `names` 必须是纯文件名（`_safe_name` 挡 `/`、`\`、`..`）；解析不出的条目进 `errors`，不静默丢。
 - **清空回收站同批清台账**（`db.recycle_clear`）：文件都真删了，台账再宣称「可以还原」就是骗人。
 
+---
+
+### 第 82 期铁律（首页对齐上游：两步走 / 壳上移 / 行内拖拽 / 真实数据态）
+
+**需求**：「从上游获取首页的样式」。**两步走**：先出对照基线（`docs/bookorbit/bookorbit-dashboard-styles.md`，
+上游 `bookorbit @ c292d6cc`），用户确认后逐项改造。**业务语义与数据来源一律不动**（`reading-rhythm` 仍是「入库节奏」、
+discover 行仍按 id 稳定排序）。**口径以对照文档 §7「实施结果」为准**（它覆盖 §2–§4 的旧判定）。
+
+- ⚠️ **命名陷阱**：两侧都有 `DashboardScroller.vue` 但**职责不同** —— 上游是「一个书架行」，本项目是「页面级栅格容器」
+  （14 行 + `<slot>`）；本项目的书架行叫 `DashboardShelfRow.vue`。按文件名对会比较出完全错误的结论。
+- **尺寸与键**：`WidgetSize` 收敛为上游两档 `'1x1' | '1x1.5'`（宽卡 5 件分配照抄上游 `widgetLayout`）；
+  ⚠️ `WidgetId` 是 localStorage 持久化键**一字不改**，且持久化结构 `{id, enabled}` **不含 size** ⇒ 改档位**零迁移**。
+- **壳上移**：卡片外壳（`h-55 rounded-2xl border-primary/40 bg-card/30 shadow-sm backdrop-blur-[1px]`）**唯一真值源在
+  `DashboardWidgetRow.vue`**；12 件部件根节点统一 `flex h-full flex-col[/…] p-3`、只声明 `size` prop 不分支渲染。
+  改圆角/描边/宽度只动行组件，**别在部件里加壳**（双层壳是本次消灭的形态差）。
+- **行内拖拽**：显式依赖 `vue-draggable-plus@^0.6.1`（≈13–15 KB gzip，**触屏可拖** —— 原生 HTML5 DnD 在
+  iOS/Android 不触发 `dragstart`，这是浏览器限制不是实现问题；理由记录在 package.json 声明处 /
+  `architecture.md` 不变量 #6 / 组件头注释）。⚠️ 它直接操作 DOM ⇒ 必须保留 `localWidgets` 本地副本防松手闪回；
+  ⚠️⚠️ **行内渲染的是可见子集**（启用 ∩ 已实现 ∩ 能力裁剪），而 `moveWidget` 用全量索引 ⇒ 必须经
+  `stores/dashboard.ts::applyVisibleOrder` 做「可见子集 → 全量索引」映射，否则排错位。设置面板内仍用原生 `useDndSort`，两处互不影响。
+- **数据态**（`composables/useWidgetState.ts`，唯一真值源）：`{loading?, error?, empty?} → loading > error > empty > ready`。
+  ⚠️ **只读各 store 既有字段**（`stats.loaded/error`、`library.loaded/hasNoLibraries`、批注部件本地 `failed`），
+  **不做假数据、不加假延迟**。⚠️ 空值收窄：分支条件要直接引用可空 computed（`v-else-if="!book"`），
+  用 `state === 'empty'` 判会丢 TS 收窄（`today`/`book`/`gem` 全报 possibly null）。
+- **刻意不引**：`@vueuse/core`（窄屏判定用 `matchMedia` 自实现，`lib/shelfRows.ts::useNarrowScreen`，不可用环境按宽屏降级）、
+  `lucide-vue-next`（图标走 `lib/icons.ts` 唯一注册表，grip 用 `fill="currentColor"` 实心圆点）、`tailwindcss-animate`
+  （动效在 `assets/main.css`）；**不按通用 Vue 模板降级栈**（项目是 Vite 8 / TS 6 / Tailwind v4 `@theme inline`）。
+- **收尾**：新增纯函数必须立 spec 并登记 `test_frontend_unit_contract.py::EXPECTED_SPECS`（缺失即报错）；
+  ⚠️ 响应性用例的源必须是 `ref`/store 字段（普通 `let` 变量不是响应源，computed 不会重算 —— 本期实测踩过）；
+  图标契约（模板字面量名 ⊆ `ICONS` 键 + path 非空）会自动覆盖新增键。
+
