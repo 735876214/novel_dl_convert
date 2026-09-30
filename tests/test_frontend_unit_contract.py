@@ -108,6 +108,12 @@ EXPECTED_SPECS = (
     # 的核心断言就是条目行的条数；另钉住「批量条与条目行同时在场」与改名换 id 后
     # 选择集里不许留下幽灵 id。
     "src/views/settings/pages/BookDockPage.spec.ts",
+    # 第 82 期：仪表盘改造的三个纯函数 / 封装。三种走样全是静默的：
+    # 分带与行数收敛算错 ⇒ 书架行只是「渲染错位」，不报错；问候语分段错一个时段 ⇒
+    # 早上显示「晚上好」，没人会发现；数据态优先级写反 ⇒ 把「失败」渲染成「空」。
+    "src/lib/shelfRows.spec.ts",
+    "src/lib/dashboardGreeting.spec.ts",
+    "src/composables/useWidgetState.spec.ts",
 )
 
 
