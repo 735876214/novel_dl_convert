@@ -33,7 +33,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
-                   catalog, cache, units)
+                   catalog, cache, units, recycle)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -1382,11 +1382,11 @@ def api_book_detail(bid: str):
     return detail
 
 
-# ---------------- 删除：三份文件（第 75 期）----------------
+# ---------------- 删除：三份文件（第 75 期；第 81 期修订「移除书库」那一半）----------------
 # 同一本书在磁盘上最多有三份拷贝：① 收书目录里的原件（用户本地那份）、
 # ② 书库根里的成品（书目 path）、③ 项目按命名规则产出的出版副本（成品目录）。
-# 「删书」要三份都回收；「移除书库」回收该库所有书的 ②③ 而**保留 ①** ——
-# 两条路径共用下面这两个原语。
+# 「删书」三份都回收；「移除书库」**默认只删登记、零文件触碰**（第 81 期），
+# 只有显式 `purge_files=1` 才回收该库所有书的 ②③ 而**保留 ①**（两个原语共用，后台任务里跑）。
 
 def _recycle_one(path, why: str) -> dict:
     """把一份文件 / 目录移入回收站，返回**分项回执**。**永不外抛**。
@@ -4197,50 +4197,137 @@ def api_update_library(lid: str, payload: dict = Body(...)):
     return {"ok": True, "library": _library_dto(lib or {}, _book_counts())}
 
 
-@app.delete("/api/libraries/{lid}")
-def api_delete_library(lid: str, force: bool = False):
-    """**移除书库**：删项目内登记，并把该库书的 ②③ 移入回收站，**保留 ①（本地原件）**。
+# ---------------- 长文件操作的后台任务（第 81 期）----------------
+# 「移除书库（连文件一起清理）」与「回收站还原」都是**跨卷大搬迁**：线上实例实测
+# 约 79 MB/s、68 GB 量级（`shutil.move` 跨文件系统时退化为「复制 + 删源」）。
+# 第 81 期的线上故障就是把它放在 HTTP 请求里同步跑 —— 请求数小时不返回，
+# 前端只能显示「失败」（实测库登记仍在册、book_count 却在持续下降）。
+#
+# 所以两条路径统一成「后台任务 + 真实进度」：任务行落 ``db.tasks``（前端轮询
+# ``/api/tasks``，照抄 bookmove 的范式），逐项回调写 ``progress``；``_ops_*`` 是
+# 「有没有长操作在跑」的全局标记，供 ``tests/conftest._quiesce_background`` 收干净线程。
+_ops_lock = threading.Lock()
+_ops_pending = 0
+_ops_idle = threading.Event()
+_ops_idle.set()
 
-    用户口径（第 75 期）：「移除书库时，仅将书从项目中删除，不动本地的书」——
-    所以这里回收的是**项目内**那两份（② 书库根里的成品、③ 出版副本），
-    而 ① 收书目录里的原件（`book_origins` 登记的那份，用户本地）**原样留在原地**；
-    `book_origins` 的记录也一并保留 —— 库哪天真建回来，它还认得出来。
 
-    第 37 期起**没有任何库是不可删的**：以前那条「默认书库不可删除」的护栏随默认库
-    概念一起下线。book_id 形如 ``库$哈希``，库没了它的书就从书目里消失（进度 / 批注
-    变成「库不存在的行」，孤儿清理**刻意不碰**它们，见 `_orphan_refs`）。
-    「库里还有书」的拦截仍在下面，它拦的是「没想清楚就删」而不是「不许删」——
-    想连项目内的文件一起清掉就加 `force=1`（前端就是这么调的）。
+def _ops_begin() -> None:
+    global _ops_pending
+    with _ops_lock:
+        _ops_pending += 1
+        _ops_idle.clear()
+
+
+def _ops_end() -> None:
+    global _ops_pending
+    with _ops_lock:
+        _ops_pending = max(0, _ops_pending - 1)
+        if _ops_pending == 0:
+            _ops_idle.set()
+
+
+def wait_background_ops(timeout: float = 5.0) -> bool:
+    """等「长文件操作」后台任务收尾：空闲 ⇒ True，超时 ⇒ False。
+
+    供 ``tests/conftest.py::_quiesce_background`` 用 —— 与本仓对 scrape / watcher /
+    embed-refresh 的同一条纪律：夹具必须在 ``db.close()`` **之前**等它退出，
+    否则线程会攥着旧连接去查下一个用例的库（实测到过 segfault）。
     """
-    if not db.get_library(lid):
-        raise HTTPException(404, "书库不存在")
-    n = _book_counts().get(str(lid), 0)
-    if n and not force:
-        raise HTTPException(400, f"该库还有 {n} 本书：请先迁移走，"
-                                 f"或加 force=1 移除（这些书的文件会一并移入回收站）")
+    return _ops_idle.wait(timeout)
 
-    # 先按索引列出该库的书（**不重扫磁盘**：索引本来就是这块盘的投影），逐本回收
-    # ② 书库根里的成品 + ③ 出版副本。①（收书目录里的原件）**一律不动**，见 docstring。
+
+def _purge_paths(lid: str) -> list:
+    """物化「移除书库并清理文件」的待回收清单 ``[(绝对路径, 原因), ...]``。
+
+    ⚠️ **必须在删登记之前调用**：③ 出版副本的路径取自刮削台账 ``link_rel``，而
+    ``db.scrape_delete_by_library`` 会把台账行删掉 —— 晚一步就再也算不出副本在哪。
+    ① 收书目录里的原件**一律不收**：那是用户本地那份，移除书库不动它。
+    """
     try:
         books = library.books(lid) or []
-    except Exception:                                  # noqa: BLE001 —— 列不出来就当作没有可回收的
-        logging.getLogger("novelforge").exception("列出待回收书目失败：%s", lid)
+    except Exception:                                  # noqa: BLE001 —— 列不出来就当作没有
+        logging.getLogger("novelforge").exception("列出待清理书目失败：%s", lid)
         books = []
-    recycled = failed = missing = 0
+    out: list = []
     for b in books:
         row = db.scrape_get(b.get("id")) or {}         # ③ 优先用台账里那个真实路径
-        for t in (_recycle_one(b.get("path") or None, "移除书库（书库内文件）"),
-                  _recycle_one(_publish_copy_path(b, row), "移除书库（出版副本）")):
-            if t["state"] == "recycled":
-                recycled += 1
-            elif t["state"] == "failed":
-                failed += 1
-            else:
-                missing += 1
+        if b.get("path"):
+            out.append((str(b["path"]), "移除书库（清理书库内文件）"))
+        copy = _publish_copy_path(b, row)
+        if copy is not None:
+            out.append((str(copy), "移除书库（清理出版副本）"))
+    return out
+
+
+def _purge_worker(tid: str, targets: list) -> dict:
+    """逐份回收（工作线程）。**逐份独立**：一份失败不带走其余，与「删书三份」同纪律。"""
+    counts = {"recycled": 0, "missing": 0, "failed": 0}
+    total = len(targets)
+    for i, (path, why) in enumerate(targets, 1):
+        t = _recycle_one(path, why)
+        counts[t["state"]] = counts.get(t["state"], 0) + 1
+        db.task_update(tid, progress=round(i * 100.0 / max(1, total), 1),
+                       detail=f"正在清理：{pathlib.Path(path).name}")
+    return counts
+
+
+async def _run_library_purge(tid: str, targets: list) -> None:
+    """后台跑「移除书库（连文件一起清理）」。刻意**不写 ``result``**（没有产物可下）。"""
+    db.task_update(tid, status="running", progress=0.0)
+    try:
+        try:
+            res = await asyncio.to_thread(_purge_worker, tid, targets)
+        except Exception as e:                         # noqa: BLE001
+            db.task_update(tid, status="failed", progress=100.0, error=str(e))
+            return
+        parts = [f"回收 {res['recycled']} 份"]
+        if res["missing"]:
+            parts.append(f"本来就不在 {res['missing']} 份")
+        if res["failed"]:
+            parts.append(f"失败 {res['failed']} 份")
+        notice = "、".join(parts)
+        if res["failed"]:
+            db.task_update(tid, status="failed", progress=100.0, notice=notice,
+                           error=f"{res['failed']} 份没能回收（多为权限 / 占用）")
+            return
+        db.task_update(tid, status="done", progress=100.0, notice=notice)
+    finally:
+        _ops_end()
+
+
+@app.delete("/api/libraries/{lid}")
+async def api_delete_library(lid: str, purge_files: bool = False):
+    """**移除书库**：删项目内登记，**默认不动任何磁盘文件**（第 81 期语义变更）。
+
+    第 75 期的口径是「移除书库回收 ②③、保留 ①（本地原件）」，那条默认行为**已作废**：
+    线上实例 ``lib-6a0b30d3`` 的 ``source_dirs`` 指向用户自己的漫画目录、``publish_path=""``，
+    所以被当作「② 书库内成品」回收掉的**就是用户的本地原件**（约 2400 份 / 68 GB）——
+    名实不符。现在的口径一句话：**「移除书库」= 只删登记**；想连文件一起清，必须显式
+    ``purge_files=1``（前端是一个单独的勾选框 + 二次确认）。
+
+    ``purge_files=1`` 时**不再同步执行**：第 81 期的线上故障就是它把跨卷大搬迁放在请求里跑，
+    请求数小时不返回。现在立即返回 ``task_id``，清理在后台跑、逐份报真进度（任务中心可见）。
+
+    ⚠️ 待回收清单必须在**删登记之前**物化（:func:`_purge_paths`）：③ 的路径来自刮削台账，
+    台账行会随库一起删。
+
+    第 37 期起**没有任何库是不可删的**；本函数**不再有**「库里还有书」的 400 拦截 ——
+    默认动作已经零风险（一个文件都不动），拦它只会让用户困惑。
+    book_id 形如 ``库$哈希``，库没了它的书就从书目里消失（进度 / 批注变成「库不存在的行」，
+    孤儿清理**刻意不碰**它们，见 `_orphan_refs`）。
+    """
+    lib = db.get_library(lid)
+    if not lib:
+        raise HTTPException(404, "书库不存在")
+    name = str(lib.get("name") or lid)
+    n = _book_counts().get(str(lid), 0)
+
+    # 先物化清单（若要求清理），再删登记 —— 顺序不能反，见 docstring
+    targets = _purge_paths(lid) if purge_files else []
 
     db.delete_library(lid)
     # 库没了，刮削台账行也没有意义（UI 会显示一堆属于不存在书库的条目）。
-    # **只删登记** —— 副本文件刚刚已经按上面的口径回收过了。
     db.scrape_delete_by_library(lid)
     # 第 62 期：索引行也要跟着删。不删的话它们会一直躺在表里 ——
     # `catalog.books/find_by_id` 都会按「仍登记在册的库」过滤掉它们（读不出错），
@@ -4250,13 +4337,25 @@ def api_delete_library(lid: str, force: bool = False):
     except Exception:                                  # noqa: BLE001 —— 清索引失败不该让删库回滚
         logging.getLogger("novelforge").exception("清理书目索引失败：%s", lid)
     _libraries_changed(lid)
-    activity_log.log(activity_log.ACTION_LAYOUT, str(lid), activity_log.STATUS_OK,
-                     detail=f"移除书库登记：回收项目内文件 {recycled} 份"
-                            f"（缺失 {missing} / 失败 {failed}），① 本地原件保留"
-                            f" · 当时 {n} 本",
+
+    tid = ""
+    if targets:
+        tid = uuid.uuid4().hex
+        db.task_create(tid, "librarypurge", f"清理「{name}」的文件",
+                       detail=f"{len(targets)} 份 · 书库内文件 + 出版副本")
+        db.task_prune()
+        _ops_begin()
+        asyncio.create_task(_run_library_purge(tid, targets))
+
+    activity_log.log(activity_log.ACTION_LAYOUT, name, activity_log.STATUS_OK,
+                     detail=(f"移除书库登记：只删登记、不动文件 · 当时 {n} 本"
+                             if not purge_files
+                             else f"移除书库登记，已受理后台清理 {len(targets)} 份文件"
+                                  f" · 当时 {n} 本"),
                      source="api")
-    return {"ok": True, "removed": str(lid), "books": len(books),
-            "recycled": recycled, "failed": failed, "missing": missing}
+    return {"ok": True, "removed": str(lid), "books": n,
+            "purge_files": bool(purge_files), "targets": len(targets),
+            "task_id": tid or None}
 
 
 @app.post("/api/libraries/{lid}/scan")
@@ -5674,6 +5773,9 @@ def api_clear_recycle():
 
     这是**真删**、不可恢复 —— 回收站本身已是最后一道防线，清空它需要用户在界面上
     明确确认。有意的破坏性操作，因此单独一个入口，不与「清缓存」混在一起。
+
+    第 81 期：**同批清掉回收台账**（`db.recycle_clear`）—— 文件都没了，台账里再留着
+    「这些路径可以还原」就是骗人（还原时逐条报 missing）。
     """
     d = fileops.recycle_dir()
     removed, freed = 0, 0
@@ -5689,10 +5791,92 @@ def api_clear_recycle():
                 continue
     except Exception:
         pass
+    cleared = db.recycle_clear()
     activity_log.log(activity_log.ACTION_RECYCLE, "回收站", activity_log.STATUS_OK,
-                     detail=f"清空回收站：删除 {removed} 个文件，释放 {_human_size(freed)}",
+                     detail=f"清空回收站：删除 {removed} 个文件，释放 {_human_size(freed)}"
+                            f"（台账清掉 {cleared} 条）",
                      source="api")
-    return {"ok": True, "removed": removed, "freed": freed}
+    return {"ok": True, "removed": removed, "freed": freed, "ledger_cleared": cleared}
+
+
+# ---------------- 回收站还原（第 81 期）----------------
+# ⚠️ 两个字面量端点（``/api/recycle`` 与 ``/api/recycle/restore``）**必须在**任何
+# 含 ``{param}`` 的同类路径之前注册（路由遮蔽）—— 这里紧邻维护页端点，附近没有
+# ``/api/recycle/{...}`` 形态的路径，安全。
+
+@app.get("/api/recycle")
+def api_recycle(limit: int = 0):
+    """回收站现状：**台账条目**（可按原路径还原）+ **无台账孤儿**（需指定目录）。
+
+    ``limit`` 只影响返回条数（默认不限），计数始终是全量 —— 2400 份的页面首屏
+    不该一次拉满，但用户要知道「一共有多少」。
+    """
+    return recycle.list_items(limit)
+
+
+@app.post("/api/recycle/restore")
+async def api_recycle_restore(payload: dict = Body(None)):
+    """回收站还原（**把文件搬回原处**）：立即返回 ``task_id``，搬运在后台跑。
+
+    三种入参（可组合）：
+    - ``ids``：台账行 id 列表 —— 按各自 ``orig_path`` 还原；
+    - ``names``：回收目录里的文件名 —— 无台账孤儿，**必须**给 ``target_dir``；
+    - ``all``：``true`` 时还原**全部**台账条目（幂等可续跑：还原成功即删台账行，
+      再调一次只会如实报「已不在台账里」）。
+
+    后台设施与「移除书库清理」共用：逐项真进度 + ``wait_background_ops`` 收尾。
+    解析不出的条目（台账缺失 / 没给目标目录）在 ``errors`` 里如实回报，不静默丢。
+    """
+    p = payload or {}
+    plan = recycle.plan_restore(ids=p.get("ids"), names=p.get("names"),
+                                target_dir=str(p.get("target_dir") or ""),
+                                all_items=bool(p.get("all")))
+    items = plan["items"]
+    if not items:
+        return {"ok": True, "task_id": None, "total": 0,
+                "errors": plan["errors"], "note": "没有可还原的条目"}
+    tid = uuid.uuid4().hex
+    db.task_create(tid, "recycle", "还原回收站文件",
+                   detail=f"{len(items)} 份 · 按原路径搬回")
+    db.task_prune()
+    _ops_begin()
+    asyncio.create_task(_run_recycle_restore(tid, items))
+    return {"ok": True, "task_id": tid, "total": len(items), "errors": plan["errors"]}
+
+
+def _recycle_on_row(tid: str):
+    """逐项进度回调（在工作线程里跑，写库走 db 的锁 —— 与刮削 worker 同一套做法）。"""
+    def cb(done: int, total: int, label: str) -> None:
+        db.task_update(tid, progress=round(done * 100.0 / max(1, total), 1),
+                       detail=f"正在还原：{label}")
+    return cb
+
+
+async def _run_recycle_restore(tid: str, items: list) -> None:
+    """后台跑回收站还原。刻意**不写 ``result``**（没有产物可下）。"""
+    db.task_update(tid, status="running", progress=0.0)
+    try:
+        try:
+            res = await asyncio.to_thread(recycle.restore_many, items, _recycle_on_row(tid))
+        except Exception as e:                         # noqa: BLE001
+            db.task_update(tid, status="failed", progress=100.0, error=str(e))
+            return
+        parts = [f"还原 {res['restored']} 份"]
+        if res["renamed"]:
+            parts.append(f"退让改名 {res['renamed']} 份")
+        if res["missing"]:
+            parts.append(f"已不在回收站 {res['missing']} 份")
+        if res["failed"]:
+            parts.append(f"失败 {res['failed']} 份")
+        notice = "、".join(parts)
+        if res["failed"]:
+            err = (res["errors"] or [{}])[0].get("error") or "未知原因"
+            db.task_update(tid, status="failed", progress=100.0, notice=notice,
+                           error=f"{res['failed']} 份没还原成：{err}")
+            return
+        db.task_update(tid, status="done", progress=100.0, notice=notice)
+    finally:
+        _ops_end()
 
 
 # ---------------- 成就（单用户口径）----------------

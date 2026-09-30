@@ -29,6 +29,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import re
 import shutil
@@ -73,6 +74,83 @@ def recycle_dir() -> pathlib.Path:
     d = config.CACHE_DIR / RECYCLE_DIRNAME
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+# ---------------- 回收落点名（第 81 期：长名加固）----------------
+# 第 81 期的线上实例：漫画库里 ≥240 字节的名字有 7 个（最长 277 字节），
+# 而 Linux 单文件名上限是 **255 字节（UTF-8）** ⇒ 回收时 `ENAMETOOLONG` 被记成 failed。
+# 原来那句 `f"{stamp}_{p.name}"` 与重名退让 `f"{stamp}_{n}_{p.name}"` 都会溢出。
+
+#: 单文件名上限（字节）。Linux ext4/xfs/btrfs 与多数 NAS 文件系统一致；macOS 是 255 字节。
+#: ⚠️ 这是**字节**数不是字符数 —— 一个汉字 3 字节。
+RECYCLE_NAME_MAX = 255
+
+
+def trunc_bytes(s: str, limit: int) -> str:
+    """按 **UTF-8 字节边界**截断字符串（不切坏多字节字符）。"""
+    raw = str(s).encode("utf-8")
+    if len(raw) <= limit:
+        return str(s)
+    cut = raw[:max(0, limit)]
+    while cut:
+        try:
+            return cut.decode("utf-8")
+        except UnicodeDecodeError:
+            cut = cut[:-1]
+    return ""
+
+
+def recycled_name(name: str, stamp: str, n: int = 0) -> str:
+    """回收目录里的落点名：``{stamp}_{n_}{name}``，保证 UTF-8 字节长 ≤ :data:`RECYCLE_NAME_MAX`。
+
+    超长时按字节边界截断正文，并追加 ``~<8位短哈希>``（保唯一可辨、仍能看出原名前后缀），
+    同时尽量保住扩展名。**这是回收落点名的唯一实现** —— `publish.recycle` 与
+    :func:`recycle_items` 都用它（第二份拷贝 = 缺陷）。
+    """
+    raw = str(name)
+    prefix = f"{stamp}_" + (f"{n}_" if n else "")
+    budget = RECYCLE_NAME_MAX - len(prefix.encode("utf-8"))
+    if len(raw.encode("utf-8")) <= budget:
+        return prefix + raw
+    tag = "~" + hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
+    tag_b = len(tag.encode("utf-8"))
+    if budget <= tag_b + 1:
+        # 前缀本身就快占满（几乎不可能）：只截断、不加后缀，优先保证「不超限」
+        return prefix + trunc_bytes(raw, max(1, budget))
+    ext = ""
+    dot = raw.rfind(".")
+    if dot > 0 and len(raw) - dot <= 12:
+        ext = raw[dot:]
+    ext_b = len(ext.encode("utf-8"))
+    room = budget - tag_b - ext_b
+    if room < 1:
+        ext, ext_b = "", 0
+        room = budget - tag_b
+        if room < 1:
+            return prefix + trunc_bytes(raw, max(1, budget))
+    return prefix + trunc_bytes(raw[:len(raw) - len(ext)], room) + tag + ext
+
+
+def size_of(path) -> int:
+    """文件 / 目录的字节数（目录为**整树**和）；不存在或读不到 ⇒ 0。
+
+    ⚠️ win32 下目录 ``st_size`` 恒为 0，所以目录必须递归累加（与 ``watcher._sig`` 同口径）。
+    """
+    p = pathlib.Path(str(path))
+    try:
+        if p.is_file():
+            return int(p.stat().st_size)
+    except OSError:
+        return 0
+    total = 0
+    if p.is_dir():
+        for f in p.rglob("*"):
+            try:
+                if f.is_file():
+                    total += int(f.stat().st_size)
+            except OSError:
+                continue
+    return total
 
 
 # ---------------- 校验 ----------------
@@ -765,12 +843,15 @@ def recycle_items(names: list, reason: str = "") -> dict:
             src = safe_path(label, _lib_of(label, item))
             if not src.is_file():
                 raise ValueError("文件不存在")
-            dst = dest_dir / f"{stamp}_{src.name}"
+            size = size_of(src)            # ⚠️ 必须在 move 之前算，移走后原地就没了
+            dst = dest_dir / recycled_name(src.name, stamp)
             n = 1
             while dst.exists():
-                dst = dest_dir / f"{stamp}_{n}_{src.name}"
+                dst = dest_dir / recycled_name(src.name, stamp, n)
                 n += 1
             shutil.move(str(src), str(dst))
+            # 台账（第 81 期）：记下原路径，回收站还原据此搬回
+            db.recycle_note(src, dst.name, why=reason or "移入回收目录", size=size)
         except Exception as e:
             errors.append({"name": label, "error": str(e)})
             activity_log.log(activity_log.ACTION_RECYCLE, label, activity_log.STATUS_FAIL,

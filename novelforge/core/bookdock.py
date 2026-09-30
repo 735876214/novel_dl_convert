@@ -365,12 +365,15 @@ def remove(watcher, item_id) -> dict:
     if src.is_file():
         dest_dir = fileops.recycle_dir()
         stamp = time.strftime("%Y%m%d-%H%M%S")
-        dst = dest_dir / f"{stamp}_{name}"
+        # 落点名走 fileops.recycled_name（第 81 期长名加固；此处原先是第二份拷贝）
+        dst = dest_dir / fileops.recycled_name(name, stamp)
         n = 1
         while dst.exists():
-            dst = dest_dir / f"{stamp}_{n}_{name}"
+            dst = dest_dir / fileops.recycled_name(name, stamp, n)
             n += 1
+        size = fileops.size_of(src)                 # ⚠️ 必须在 move 之前算
         shutil.move(str(src), str(dst))
+        db.recycle_note(src, dst.name, why="从收书目录移入回收目录", size=size)
         recycled = dst.name
         activity_log.log(activity_log.ACTION_RECYCLE, name, activity_log.STATUS_OK,
                          output=recycled, detail="从收书目录移入回收目录", source="api")

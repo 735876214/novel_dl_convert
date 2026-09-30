@@ -10,6 +10,7 @@
 """
 import ast
 import hashlib
+import logging
 import pathlib
 import re
 import threading
@@ -710,6 +711,23 @@ def init():
             );
             CREATE INDEX IF NOT EXISTS idx_scrape_status ON scrape_items(status);
             CREATE INDEX IF NOT EXISTS idx_scrape_library ON scrape_items(library_id);
+            -- 回收站台账（第 81 期）：每次把文件/目录移入 CACHE_DIR/recycle 都记一行，
+            -- 「回收站还原」据此把东西搬回**原路径**（历史无台账的行走「剥时间戳前缀 +
+            -- 指定目录」的孤儿还原，见 core/recycle.py）。
+            --
+            -- ⚠️ **刻意不含 book_id**：它不是「某本书的数据」，而是「磁盘上某个被移走的
+            -- 路径」的台账 —— 因此**不需要**进 remap 的四处清单（ORPHAN_TABLES /
+            -- REMAP_TABLES / REMAP_PROBE_FILTER / REMAP_EXPLICIT_TABLES），
+            -- 改名 / 换库都不会让它失效（它压根不认 book_id）。契约测试钉住这条。
+            CREATE TABLE IF NOT EXISTS recycle_items (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                orig_path     TEXT NOT NULL DEFAULT '',   -- 被移走前的绝对路径（还原目标）
+                recycled_name TEXT NOT NULL DEFAULT '',   -- 回收目录里的文件名（含时间戳前缀）
+                why           TEXT NOT NULL DEFAULT '',   -- 移入原因（用户可见）
+                size          INTEGER NOT NULL DEFAULT 0, -- 字节数（目录为整树和）
+                created_at    REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_recycle_name ON recycle_items(recycled_name);
             """
         )
         # progress 单独建，**不写进上面那段 executescript**：它的定义只有一份
@@ -4518,6 +4536,71 @@ def state_delete(key) -> None:
     with _lock:
         c.execute("DELETE FROM app_state WHERE key=?", (str(key),))
         c.commit()
+
+
+# ---------------- 回收站台账（第 81 期）----------------
+# ⚠️ 这张表**刻意不含 book_id**（见建表处的注释）：它记的是「磁盘上某个被移走的路径」，
+# 不是「某本书的数据」—— 改名 / 换库 / 删库都不会让它失效，因此**不进 remap 四处清单**。
+# 写台账**永不外抛**（`recycle_add` 的调用方是回收动作本身，记账失败不该让回收失败）。
+
+def recycle_add(orig_path, recycled_name, why="", size=0) -> int:
+    """记一条回收台账，返回行 id。**只记账，不动文件**。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "INSERT INTO recycle_items"
+            "(orig_path, recycled_name, why, size, created_at) VALUES(?,?,?,?,?)",
+            (str(orig_path or ""), str(recycled_name or ""), str(why or ""),
+             int(size or 0), time.time()),
+        )
+        c.commit()
+        return int(cur.lastrowid or 0)
+
+
+def recycle_note(orig_path, recycled_name, why="", size=0) -> None:
+    """:func:`recycle_add` 的**永不外抛**版本。
+
+    调用方是回收动作本身（把文件移进回收站）—— 记账失败**绝不能**让回收失败，
+    否则「文件已移走、台账没写上」会变成「报错了但文件其实已经不在原地」的更糟形态。
+    """
+    try:
+        recycle_add(orig_path, recycled_name, why=why, size=size)
+    except Exception:                                  # noqa: BLE001
+        logging.getLogger("novelforge").exception("写回收台账失败：%s", orig_path)
+
+
+def recycle_list(limit: int = 0) -> list:
+    """回收台账（新 → 旧）。``limit`` 为 0 表示不截断。"""
+    sql = "SELECT * FROM recycle_items ORDER BY id DESC"
+    params: tuple = ()
+    if limit and int(limit) > 0:
+        sql += " LIMIT ?"
+        params = (int(limit),)
+    rows = _connect().execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def recycle_get(rid) -> "dict | None":
+    row = _connect().execute(
+        "SELECT * FROM recycle_items WHERE id=?", (int(rid),)
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def recycle_delete(rid) -> None:
+    c = _connect()
+    with _lock:
+        c.execute("DELETE FROM recycle_items WHERE id=?", (int(rid),))
+        c.commit()
+
+
+def recycle_clear() -> int:
+    """清空台账（「清空回收站」的真删路径同批调它），返回删除行数。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM recycle_items")
+        c.commit()
+        return int(cur.rowcount or 0)
 
 
 def _sync_attempt(c, bid, status, st, fin, now) -> None:

@@ -290,6 +290,10 @@ def _quiesce_background() -> None:
         # 第 54 期：语义向量后台重算线程（/similar 自愈 / 扫描钩子派生）也要收干净
         if not server.wait_embed_refresh(5.0):
             left += 1
+        # 第 81 期：长文件操作（移除书库清理 / 回收站还原）的后台任务同样要收干净 ——
+        # 它们会 `shutil.move` 跨盘搬文件并写库（任务行 / 回收台账）。
+        if not server.wait_background_ops(5.0):
+            left += 1
     except Exception:                                 # noqa: BLE001
         pass
     if left:

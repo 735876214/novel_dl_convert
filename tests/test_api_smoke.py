@@ -5,8 +5,10 @@
 1. **鉴权**：`/api/*` 无令牌必须 401；`/health` 与登录端点放行；
 2. **库根白名单**：库根只允许落在「来源目录 / 导出目录 / 数据目录」之内 ——
    库根就是 `safe_path` 的边界，放任任意路径等于放任改名 / 回收作用到系统目录；
-3. **破坏性操作的护栏**：非空库需显式 `force`；`force` 移除会把**项目内的文件**移入回收站
-   （第 75 期；收书目录里的本地原件保留）。默认那条 400 就是「不许没想清楚就连文件一起删」。
+3. **破坏性操作的护栏**：第 81 期起「移除书库」**默认只删登记、一个磁盘文件都不动**；
+   想连文件一起清必须显式 `purge_files=1`，且它在**后台任务**里跑（第 81 期线上故障就是
+   把它同步放在请求里 ⇒ 68 GB 跨卷搬迁把请求挂死数小时）。旧口径「非空库需 force、
+   force 回收 ②③」已作废（库就地引用用户目录时，被回收的「②」其实就是用户的本地原件）。
 
 ⚠️ 本文件**刻意不碰会外呼的接口**（`…/metadata/online`、作者抓取）：测试必须离线可跑。
    元数据编辑 / 恢复链路之所以离线安全，是因为测试环境用的是空配置目录，
@@ -200,8 +202,8 @@ def test_空库名被拒(client, auth_headers, tmp_path):
 def test_没有任何库是不可删除的(client, auth_headers, test_lib_id, make_library):
     """第 37 期：以前那条「默认书库不可删除」的护栏随默认库概念一起下线。
 
-    现在**每一**条库都能删 —— 但「库里还有书」的拦截仍在（那才是真正的数据保护，
-    见 test_非空库需force才移除_且force会回收项目内文件）。
+    第 81 期起「库里还有书」的 400 拦截也没了 —— 默认动作零风险（一个文件都不动），
+    拦它只会让用户困惑（见 `test_移除书库默认不动文件_显式purge_files才后台回收`）。
     """
     empty = make_library("comic2", "空漫画库", "comic", pathlib.Path(config.LIBRARY_SOURCE_DIR) / "c2")
     for lid in (test_lib_id, empty["id"]):
@@ -209,43 +211,69 @@ def test_没有任何库是不可删除的(client, auth_headers, test_lib_id, ma
         assert r.status_code == 200, f"{lid} 应当可以移除登记：{r.text}"
 
 
-def test_非空库需force才移除_且force会回收项目内文件(client, auth_headers):
-    """第 75 期：`force` 不再只是「移除登记」—— 它把该库书的**项目内文件**
-    （书库根里的成品 + 出版副本）移入回收站；① 收书目录里的本地原件**保留**。
+def _wait_task(client, headers, tid, timeout: float = 15.0) -> dict:
+    """等后台任务走到终态（第 81 期：长文件操作都改在后台跑）。"""
+    import time
+    end = time.time() + timeout
+    row: dict = {}
+    while time.time() < end:
+        row = client.get(f"/api/tasks/{tid}", headers=headers).json()
+        if row.get("status") in ("done", "failed"):
+            return row
+        time.sleep(0.02)
+    raise AssertionError(f"任务 {tid} 超时未结束：{row}")
 
-    默认（不带 force）仍 400：那是「没想清楚就连文件一起删」的最后一道闸。
+
+def test_移除书库默认不动文件_显式purge_files才后台回收(client, auth_headers):
+    """第 81 期口径变更：**「移除书库」默认只删登记，一个磁盘文件都不动**。
+
+    第 75 期那条「非空库需 force、force 回收 ②③」的行为**已作废**：线上实例里
+    被当作「② 书库内成品」回收掉的，就是**用户的本地原件**（库就地引用用户目录，
+    `publish_path` 为空），名实不符。现在连文件一起清是显式开关 `purge_files=1`，
+    且它在**后台任务**里跑 —— 长操作绝不再挂在 HTTP 请求上（第 81 期线上故障）。
     """
-    root = pathlib.Path(config.LIBRARY_SOURCE_DIR) / "ebooks"
+    root = pathlib.Path(config.LIBRARY_SOURCE_DIR) / "ebooks81"
     root.mkdir(parents=True, exist_ok=True)
     (root / "三体.epub").write_bytes(b"EPUB")
-    lib = _create_library(client, auth_headers, "电子书库", "ebook", root)
-
-    denied = client.delete(f"/api/libraries/{lib['id']}", headers=auth_headers)
-    assert denied.status_code == 400
-    assert "还有 1 本书" in denied.json()["detail"]
-    assert (root / "三体.epub").is_file(), "被拒时一个文件都不该动"
-
-    # 先把这本书的 ①（收书目录里的本地原件）登记上，用来验证「移除书库**不动**本地原件」
+    lib = _create_library(client, auth_headers, "电子书库八一", "ebook", root)
     bid = next(b["id"] for b in client.get("/api/books", headers=auth_headers).json()["items"]
                if b["name"] == "三体.epub")
+    # 登记 ①（收书目录里的本地原件）—— 任何路径下都**不许**被「移除书库」动
     origin = pathlib.Path(config.DATA_DIR) / "收书目录" / "三体.epub"
     origin.parent.mkdir(parents=True, exist_ok=True)
     origin.write_bytes(b"ORIGINAL")
     db.origin_set(bid, str(origin))
+    # 回收目录是会话级共享的 ⇒ 只能断言「本次没有新增」（断言目录里本来没有同名文件
+    # 会依赖用例执行顺序，全量跑时会假失败）。
+    recycle_before = {p.name for p in fileops.recycle_dir().iterdir()}
 
-    ok = client.delete(f"/api/libraries/{lib['id']}?force=true", headers=auth_headers)
+    # ---- 默认路径：同步返回、零文件触碰 ----
+    ok = client.delete(f"/api/libraries/{lib['id']}", headers=auth_headers)
     assert ok.status_code == 200, ok.text
     body = ok.json()
-    assert body["books"] == 1
-    assert body["recycled"] == 1, f"书库根里那份应当被回收：{body}"
-    # 关键：**不是「文件留在原地」** —— 它必须已经进了回收目录（不真删）
-    assert not (root / "三体.epub").exists(), "书库根里的文件必须已经移走"
-    assert list(fileops.recycle_dir().glob("*三体.epub")), "回收目录里应当有它"
-    # ① **保留**：移除书库只删项目内的两份，不动用户本地那份（第 75 期用户口径）
-    assert origin.is_file(), "收书目录里的本地原件不该被「移除书库」删掉"
-    assert db.origin_get(bid) == str(origin), "① 的记录也要留着（库再建回来还认得它）"
+    assert body["books"] == 1 and body["purge_files"] is False
+    assert body["task_id"] is None, "默认路径不该产生任何后台任务"
+    assert (root / "三体.epub").is_file(), "默认移除书库**不许**动磁盘文件"
+    assert {p.name for p in fileops.recycle_dir().iterdir()} == recycle_before, \
+        "默认路径不该产生回收件"
+    assert origin.is_file(), "① 本地原件保留"
     ids = {i["id"] for i in client.get("/api/libraries", headers=auth_headers).json()["items"]}
     assert lib["id"] not in ids
+
+    # ---- 显式清理：后台任务把 ② 移入回收站，① 仍然保留 ----
+    lib2 = _create_library(client, auth_headers, "电子书库八二", "ebook", root)
+    r = client.delete(f"/api/libraries/{lib2['id']}?purge_files=true", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    tid = r.json()["task_id"]
+    assert tid, "要清理文件就必须给后台任务 id（绝不能同步跑）"
+    t = _wait_task(client, auth_headers, tid)
+    assert t["status"] == "done", t
+    assert t["progress"] == 100.0 and t["type"] == "librarypurge"
+    assert t["result"] == "", "清理没有产物可下，result 留空（否则前端渲染成下载按钮）"
+    assert not (root / "三体.epub").exists(), "显式清理时书库内的文件必须移走"
+    assert {p.name for p in fileops.recycle_dir().iterdir()} - recycle_before, \
+        "回收目录里应当新增这批回收件"
+    assert origin.is_file(), "① 本地原件在**任何**路径下都保留"
 
 
 def test_不存在的书库返回404(client, auth_headers):

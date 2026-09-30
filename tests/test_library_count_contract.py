@@ -149,26 +149,24 @@ def test_库根不存在时_exists_为假且计数为_0(client, auth_headers, ma
     assert dto["book_count"] == 0, f"库根都没了，计数却是 {dto['book_count']}"
 
 
-def test_删库护栏靠的就是这个计数(client, auth_headers, make_book, make_library, tmp_path):
-    """「库里还有书就拒绝删库」这道数据保护**直接读 ``_book_counts()``**。
+def test_删库已无书数护栏_但计数仍须是真值(client, auth_headers, make_book, make_library, tmp_path):
+    """第 81 期：删库**不再**有「库里还有书」的 400 拦截 —— 默认动作零风险
+    （只删登记、一个磁盘文件都不动），拦它只会让用户困惑。
 
-    所以计数一旦失真，失败方向是**朝开门**的：库里有书却报 0 ⇒ 拦住的那一下没了，
-    用户以为删的是空库。这条把「计数准确」与「数据保护」焊在一起 ——
-    比单看一个数字值钱得多。
+    但 ``_book_counts()`` 仍必须是真值：DTO 的 ``book_count``、侧栏计数、界面文案都读它。
+    这条把「计数准确」与「删库返回的书目数」焊在一起（比单看一个数字值钱）。
     """
     lib_root = tmp_path / "libraries" / "full"
     make_book(lib_root, "唯一一本.epub")
     make_library("lib-full", "有书的库", "mixed", lib_root)
 
-    r = client.delete("/api/libraries/lib-full", headers=auth_headers)
-    assert r.status_code == 400, (
-        f"库里有书却允许直接删（{r.status_code}）—— 数据保护失效了：{r.text}"
-    )
+    assert _counts(client, auth_headers)["lib-full"] == 1, "计数必须是真值"
 
-    # force=1 才放行；它会把**项目内**的文件（书库根里的成品）移入回收站（第 75 期）——
-    # 「文件一律留在原地」是旧口径，现在是「只保留收书目录里的本地原件（①）」
-    r = client.delete("/api/libraries/lib-full", headers=auth_headers, params={"force": 1})
+    r = client.delete("/api/libraries/lib-full", headers=auth_headers)
     assert r.status_code == 200, r.text
-    assert r.json()["books"] == 1
-    assert not (lib_root / "唯一一本.epub").exists(), "force 移除应当把书库内的文件移入回收站"
+    body = r.json()
+    assert body["books"] == 1, f"返回的书目数要与计数一致：{body}"
+    assert body["purge_files"] is False and body["task_id"] is None
+    # 默认路径**一个文件都不动**（第 81 期口径）：文件仍在原地
+    assert (lib_root / "唯一一本.epub").is_file(), "默认移除书库不该动磁盘文件"
     assert "lib-full" not in _counts(client, auth_headers)

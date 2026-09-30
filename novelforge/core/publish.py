@@ -31,7 +31,7 @@ import pathlib
 import shutil
 import time
 
-from . import fileops, komga, library
+from . import db, fileops, komga, library
 
 #: 副本的生成方式：硬链接（首选）/ 复制（文件系统不支持硬链接时的回退）
 LINK_HARD = "hardlink"
@@ -218,19 +218,29 @@ def tree_shared(src, dst) -> bool:
 def recycle(path, why: str = "") -> "pathlib.Path | None":
     """把文件/目录移入回收站（带时间戳前缀、重名加序号）。**不 unlink**。
 
-    ``why`` 只用于返回给调用方记日志；不写进文件名，免得文件名长到看不清。
+    ``why`` 只用于台账与日志；不写进文件名，免得文件名长到看不清。
+
+    第 81 期两点加固：
+      · 落点名交给 :func:`fileops.recycled_name` —— 保证 UTF-8 字节长 ≤255。
+        此前那句 ``f"{stamp}_{p.name}"`` 遇到 ≥240 字节的文件名会 `ENAMETOOLONG`，
+        整个回收失败（线上 68 GB 漫画库实测 7 个）。
+      · 移动成功后记一条**回收台账**（原路径 / 落点名 / 原因 / 字节数）——
+        「回收站还原」据此把东西搬回原处（见 :mod:`novelforge.core.recycle`）。
+        记账永不外抛（文件已经移走了，不能因为记不上账就把这次回收算失败）。
     """
     p = pathlib.Path(path)
     if not p.exists():
         return None
     dest_dir = fileops.recycle_dir()
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    dst = dest_dir / f"{stamp}_{p.name}"
+    dst = dest_dir / fileops.recycled_name(p.name, stamp)
     n = 1
     while dst.exists():
-        dst = dest_dir / f"{stamp}_{n}_{p.name}"
+        dst = dest_dir / fileops.recycled_name(p.name, stamp, n)
         n += 1
+    size = fileops.size_of(p)              # ⚠️ 必须在 move 之前算
     shutil.move(str(p), str(dst))
+    db.recycle_note(p, dst.name, why=why, size=size)
     return dst
 
 

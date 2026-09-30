@@ -172,7 +172,9 @@ def test_书库增删改都走_libraries_changed_钩子():
     """
     src = _read(SERVER_PY)
     for fn in ("api_create_library", "api_update_library", "api_delete_library"):
-        m = re.search(rf"\ndef {fn}\(.*?(?=\n@app\.|\ndef )", src, re.S)
+        # 第 81 期：`api_delete_library` 变成 `async def`（要在里面 `asyncio.create_task`
+        # 起后台清理任务），所以形状匹配要同时认两种。
+        m = re.search(rf"\n(?:async )?def {fn}\(.*?(?=\n@app\.|\ndef |\nasync def )", src, re.S)
         assert m, f"{fn} 的形状变了，请同步本测试"
         body = m.group(0)
         assert re.search(r"_libraries_changed\(", body), f"{fn} 没接上 _libraries_changed 钩子"

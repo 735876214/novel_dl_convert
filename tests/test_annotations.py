@@ -219,8 +219,8 @@ def test_库被移除登记后它的书不算孤儿(client, auth_headers, defaul
     aid = _add(client, auth_headers, bid)
     assert bid.startswith(f"{test_lib_id}$"), "前置：书的 id 应当带库前缀"
 
-    # 把库移除登记（库里还有书，走 force 只移除登记、不动文件）
-    r = client.delete(f"/api/libraries/{test_lib_id}?force=1", headers=auth_headers)
+    # 把库移除登记（第 81 期起默认就是「只移除登记、不动文件」）
+    r = client.delete(f"/api/libraries/{test_lib_id}", headers=auth_headers)
     assert r.status_code == 200, r.text
     library.invalidate()
 
