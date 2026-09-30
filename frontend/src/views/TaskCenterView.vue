@@ -14,11 +14,12 @@ import { useLibraryStore } from '@/stores/library'
 import { useTasksStore } from '@/stores/tasks'
 
 /**
- * 任务中心：下载 / 转换 / 跨库移动任务的统一列表。
+ * 任务中心：下载 / 转换 / 跨库移动 / 移除书库清理 / 回收站还原任务的统一列表。
  *
  * 数据全部来自服务端任务表（`GET /api/tasks`），**不含任何演示数据**。
  * 进度只显示**真数字**：下载器不报细分进度，所以它运行中不给百分比（给一个精确到
- * 1% 的数字等于编造）；跨库移动逐本回调「已完成 / 总数」，运行中就该显示。
+ * 1% 的数字等于编造）；跨库移动、移除书库清理、回收站还原都逐项回调
+ * 「已完成 / 总数」，运行中就该显示。
  */
 const tasks = useTasksStore()
 const library = useLibraryStore()
@@ -46,6 +47,9 @@ const TYPE_ICON: Record<string, string> = {
   download: 'download',
   convert: 'convert',
   bookmove: 'shelf',
+  // 第 81 期：移除书库「连文件一起清理」= 回收动作（trash）；回收站还原 = 搬回去（undo）
+  librarypurge: 'trash',
+  recycle: 'undo',
 }
 
 const DOT: Record<string, string> = {
@@ -65,10 +69,15 @@ const BAR: Record<string, string> = {
  * 什么时候显示百分比。
  *
  * 下载器**不报**细分进度（只有一个「已开始」），所以进行中不给数字，避免伪造精确度；
- * 跨库移动不一样：它逐本回调 `已完成 / 总数`，是**真数字**，进行中就该显示。
+ * 逐项回调「已完成 / 总数」的类型不一样 —— 它们是真数字，进行中就该显示
+ * （`bookmove` 第 36 期；`librarypurge` / `recycle` 第 81 期）。
  */
+const PCT_TYPES = ['bookmove', 'librarypurge', 'recycle']
+
 function showPct(t: TaskItem): boolean {
-  if (t.type === 'bookmove') return t.status === 'running' || t.status === 'done' || t.status === 'failed'
+  if (PCT_TYPES.includes(t.type)) {
+    return t.status === 'running' || t.status === 'done' || t.status === 'failed'
+  }
   return t.status === 'done' || t.status === 'failed'
 }
 
@@ -181,9 +190,10 @@ onMounted(() => {
         <Icon name="alert" class="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
           任务已落 SQLite，重启后仍可查。进度只显示真实数字：下载只报「已入队 / 已开始 /
-          已结束」三个里程碑，所以运行中不给出百分比；跨库移动逐本回调「已完成 / 总数」，
-          运行中就是真百分比。失败的任务需要在「探索发现」重新发起下载 ——
-          本页不提供「重试」，因为任务里没有保存可重放的源数据，做成一键重试只会是假的。
+          已结束」三个里程碑，所以运行中不给出百分比；跨库移动、移除书库清理与回收站还原
+          都逐项回调「已完成 / 总数」，运行中就是真百分比。失败的任务需要在「探索发现」
+          重新发起下载 —— 本页不提供「重试」，因为任务里没有保存可重放的源数据，
+          做成一键重试只会是假的。回收站里的文件可到「设置 → 维护」页还原。
         </span>
       </div>
     </Card>

@@ -4,6 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import Icon from '@/components/ui/Icon.vue'
 import SettingsFieldRow from '@/views/settings/SettingsFieldRow.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
@@ -13,6 +14,9 @@ import {
   api,
   type MaintenanceInfo,
   type OrphansInfo,
+  type RecycleListPayload,
+  type RecycledItem,
+  type RecycleOrphan,
 } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
@@ -32,6 +36,11 @@ const { cfg, saving, val, setVal, loadConfig, saveSection } = useSettingsConfig(
 const info = ref<MaintenanceInfo | null>(null)
 const orphans = ref<OrphansInfo | null>(null)
 const busy = ref('')
+
+/** 回收站台账（第 81 期）：还原的入口就在这一块 */
+const recycle = ref<RecycleListPayload | null>(null)
+/** 列表里最多显示几条（2400 份的库不该把页面撑爆；计数始终是全量） */
+const RECYCLE_SHOWN = 12
 
 /** 只列有孤儿记录的表 */
 const orphanTables = computed(() =>
@@ -97,6 +106,11 @@ async function refresh(): Promise<void> {
   } catch {
     // 孤儿扫描失败不阻塞整页：它只是维护页里的其中一块
   }
+  try {
+    recycle.value = await api.recycleList()
+  } catch {
+    // 回收站列举失败同理：不阻塞整页（下面那块会显示「加载中…」）
+  }
 }
 
 async function run(key: string, label: string, fn: () => Promise<string>): Promise<void> {
@@ -125,12 +139,59 @@ function clearCache(): Promise<void> {
   })
 }
 
+/** 全部按原路径还原（第 81 期）：后台任务，受理即返回；幂等可续跑（成功即删台账行） */
+function restoreRecycle(): Promise<void> {
+  const n = recycle.value?.total ?? 0
+  if (!n) return Promise.resolve()
+  const ok = window.confirm(
+    `把回收站里的 ${n} 份全部按原路径搬回去？\n\n` +
+      '· 目标已存在时会退让改名（绝不覆盖你已有的文件）；\n' +
+      '· 后台执行，受理后到「任务中心」看进度；\n' +
+      '· 幂等可续跑：还原成功后台账行即删除，再点一次只会跳过。',
+  )
+  if (!ok) return Promise.resolve()
+  return run('restore', '还原回收站', async () => {
+    const r = await api.recycleRestore({ all: true })
+    return r.task_id
+      ? `已受理还原 ${r.total} 份（到任务中心看进度）`
+      : (r.errors[0]?.error ?? '没有可还原的条目')
+  })
+}
+
+function restoreOne(it: RecycledItem): Promise<void> {
+  return run(`restore:${it.id}`, '还原', async () => {
+    const r = await api.recycleRestore({ ids: [it.id] })
+    return r.task_id
+      ? `已受理还原：${it.orig_path || it.name}`
+      : (r.errors[0]?.error ?? '没有可还原的条目')
+  })
+}
+
+/**
+ * 无台账孤儿还原：无从知道原路径 ⇒ 让用户指定一个目标目录，
+ * 文件名会剥掉 `YYYYMMDD-HHMMSS_[n_]` 前缀。
+ */
+function restoreOrphan(o: RecycleOrphan): Promise<void> {
+  const dir = window.prompt(
+    `把「${o.stripped}」还原到哪个目录？（绝对路径）\n\n` +
+      '这条没有台账（第 81 期之前的回收，或手工放进回收目录的），所以需要你指定目标目录。',
+    '',
+  )
+  if (!dir) return Promise.resolve()
+  return run(`restore:${o.name}`, '还原', async () => {
+    const r = await api.recycleRestore({ names: [o.name], target_dir: dir })
+    if (!r.task_id) return r.errors[0]?.error ?? '没有可还原的条目'
+    return `已受理还原「${o.stripped}」→ ${dir}`
+  })
+}
+
 function clearRecycle(): Promise<void> {
   // 回收站是「重复清理 / 缺失清理」承诺的兜底，清空即不可恢复 —— 必须显式确认
-  if (!window.confirm('清空回收站？此为真删，清空后无法恢复。')) return Promise.resolve()
+  if (!window.confirm('清空回收站？此为真删，清空后无法恢复（还原台账也一起清掉）。'))
+    return Promise.resolve()
   return run('recycle', '清空回收站', async () => {
     const r = await api.clearRecycle()
-    return `已清空回收站：删除 ${r.removed} 个文件，释放 ${fmtBytes(r.freed)}`
+    return `已清空回收站：删除 ${r.removed} 个文件，释放 ${fmtBytes(r.freed)}（台账 ${r.ledger_cleared} 条）`
   })
 }
 
@@ -295,6 +356,96 @@ onMounted(async () => {
       </div>
     </Card>
 
+    <!-- 回收站还原（第 81 期）：只把文件搬进回收站是不够的 —— 关键是把误搬的东西搬回去。
+         「移除书库 / 删书 / 清理重复」每次移入都会记一条台账（原路径 + 原因）。 -->
+    <Card padding="none" class="mb-4">
+      <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
+        <h3 class="text-[13px] font-semibold text-foreground">回收站还原</h3>
+        <Badge v-if="recycle" tone="accent">{{ recycle.total }} 条台账</Badge>
+        <span class="ml-auto text-[11.5px] text-muted-foreground tabular-nums">
+          {{ recycle ? `无台账 ${recycle.orphan_total} 条` : '—' }}
+        </span>
+        <Button
+          size="sm"
+          variant="primary"
+          :disabled="!!busy || !recycle?.total"
+          @click="restoreRecycle"
+        >
+          {{ busy === 'restore' ? '处理中…' : '全部按原路径还原' }}
+        </Button>
+      </div>
+
+      <div class="px-4 py-3">
+        <p class="text-[11.5px] leading-relaxed text-muted-foreground">
+          「移除书库 / 删书 / 清理重复」把文件移进回收目录时都会记一条台账（原路径 + 原因）。
+          还原就是按<strong>原路径</strong>搬回去；目标已存在时<strong>退让改名</strong>，绝不覆盖。
+          还原是幂等可续跑的：成功后台账行即删除，再点一次只会跳过。
+        </p>
+
+        <div v-if="recycle?.items.length" class="mt-2.5 flex flex-col gap-1.5">
+          <div
+            v-for="it in recycle.items.slice(0, RECYCLE_SHOWN)"
+            :key="it.id"
+            class="flex flex-wrap items-center gap-2 rounded-md bg-muted/60 px-2.5 py-1.5"
+          >
+            <Icon
+              :name="it.kind === 'dir' ? 'folder' : 'file'"
+              class="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+            />
+            <span
+              class="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground"
+              :title="it.orig_path || it.name"
+            >
+              {{ it.orig_path || it.name }}
+            </span>
+            <span v-if="it.why" class="shrink-0 text-[10.5px] text-muted-foreground">{{ it.why }}</span>
+            <span class="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">
+              {{ fmtBytes(it.size) }}
+            </span>
+            <Button size="sm" variant="ghost" :disabled="!!busy" @click="restoreOne(it)">还原</Button>
+          </div>
+          <p v-if="recycle.total > RECYCLE_SHOWN" class="text-[11px] text-muted-foreground">
+            只列最近 {{ RECYCLE_SHOWN }} 条（共 {{ recycle.total }} 条）——
+            用上面的「全部按原路径还原」一次搬回。
+          </p>
+        </div>
+        <p v-else-if="recycle" class="mt-2 text-[11.5px] text-success">没有可还原的台账条目</p>
+        <p v-else class="mt-2 text-[11.5px] text-muted-foreground">加载中…</p>
+      </div>
+
+      <!-- 无台账孤儿：第 81 期之前的历史回收，或用户手工丢进回收目录的东西 -->
+      <div v-if="recycle?.orphans.length" class="border-t border-border px-4 py-3">
+        <div class="text-[12px] font-medium text-foreground">
+          无台账条目（{{ recycle.orphan_total }}）
+        </div>
+        <p class="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+          这些是第 81 期之前回收的、或手工放进回收目录的：无从知道原路径，还原时由你指定目标目录
+          （文件名会剥掉时间戳前缀）。
+        </p>
+        <div class="mt-2 flex flex-col gap-1.5">
+          <div
+            v-for="o in recycle.orphans.slice(0, RECYCLE_SHOWN)"
+            :key="o.name"
+            class="flex flex-wrap items-center gap-2 rounded-md bg-muted/60 px-2.5 py-1.5"
+          >
+            <Icon
+              :name="o.kind === 'dir' ? 'folder' : 'file'"
+              class="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+            />
+            <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground" :title="o.name">
+              {{ o.stripped }}
+            </span>
+            <span class="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">
+              {{ fmtBytes(o.size) }}
+            </span>
+            <Button size="sm" variant="ghost" :disabled="!!busy" @click="restoreOrphan(o)">
+              指定目录还原
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Card>
+
     <!-- 维护动作 -->
     <Card padding="none" class="mb-4">
       <div class="border-b border-border px-4 py-3">
@@ -345,7 +496,8 @@ onMounted(async () => {
         <div class="min-w-0 flex-1">
           <div class="text-[12.5px] font-medium text-foreground">清空回收站</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
-            重复书籍 / 缺失资源清理时移入的文件；清空后<strong>无法找回</strong>
+            重复书籍 / 缺失资源 / 移除书库时移入的文件，连同<strong>还原台账</strong>一起清掉；
+            清空后<strong>无法找回</strong>（要还原请先用上面的「回收站还原」）
           </div>
         </div>
         <Button size="sm" variant="danger" :disabled="!!busy" @click="clearRecycle">

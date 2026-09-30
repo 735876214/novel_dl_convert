@@ -18,6 +18,7 @@ import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
+import Switch from '@/components/ui/Switch.vue'
 import ExtChips from '@/components/tools/ExtChips.vue'
 import LibraryConflictPanel from '@/components/tools/LibraryConflictPanel.vue'
 import LibrarySettingsPanel from '@/components/tools/LibrarySettingsPanel.vue'
@@ -393,28 +394,43 @@ async function scan(l: LibraryEntity): Promise<void> {
   }
 }
 
-async function remove(l: LibraryEntity): Promise<void> {
-  const n = l.book_count || 0
-  // 第 75 期：移除书库会把**项目内**的文件（书库内文件 + 出版副本）移入回收站，
-  // 而收书目录里的**本地原件保留**。所以非空库不再是「不许删」，而是把后果说清楚。
-  const lines = [
-    `移除书库「${l.name}」？`,
-    '',
-    n
-      ? `· 该库还有 ${n} 本书：它们在项目内的文件（书库内文件 + 出版副本）会移入回收站（可恢复）`
-      : '· 该库没有书，只移除登记',
-    '· 收书目录里的本地原件会保留',
-    '· 阅读进度 / 批注 / 书签 / 评分会保留',
-  ]
-  if (!window.confirm(lines.join('\n'))) return
+/**
+ * 移除书库（**第 81 期语义变更**）。
+ *
+ * 旧口径（第 75 期）是「移除书库回收 ②③、保留 ①」—— 线上实例证明它名实不符：
+ * 库就地引用用户自己的目录、`publish_path=""` 时，被当作「② 书库内成品」回收掉的
+ * **就是用户的本地原件**（实测 2400 份 / 68 GB）。而且那次回收跑在 HTTP 请求里，
+ * 请求数小时不返回，前端只能显示「失败」。
+ *
+ * 现在：**默认只删登记、一个磁盘文件都不动**；勾选「连文件一起清理」才回收，
+ * 且那是后台任务（受理即返回，进度到任务中心看）。
+ */
+const removeTarget = ref<LibraryEntity | null>(null)
+const removePurgeFiles = ref(false)
+/** 浮层里用到的两个派生值（模板里不必再对可空对象做收窄） */
+const removeName = computed(() => removeTarget.value?.name ?? '')
+const removeBooks = computed(() => removeTarget.value?.book_count ?? 0)
+
+function remove(l: LibraryEntity): void {
+  removeTarget.value = l
+  removePurgeFiles.value = false          // 默认**不动文件**——这是本期的新默认
+}
+
+async function confirmRemove(): Promise<void> {
+  const l = removeTarget.value
+  if (!l) return
+  const purge = removePurgeFiles.value
   busy.value = `del:${l.id}`
   try {
-    const res = await api.deleteLibrary(l.id, n > 0)
-    ui.toast(
-      res.failed
-        ? `已移除「${l.name}」，但有 ${res.failed} 份文件移不动（其余已进回收站）`
-        : `已移除「${l.name}」（回收 ${res.recycled} 份文件，本地原件已保留）`,
-    )
+    const res = await api.deleteLibrary(l.id, purge)
+    if (res.task_id) {
+      ui.toast(`已移除「${l.name}」：${res.targets} 份文件正在后台移入回收站，可到任务中心看进度`)
+    } else if (purge) {
+      ui.toast(`已移除「${l.name}」：没有需要清理的文件`)
+    } else {
+      ui.toast(`已移除「${l.name}」的登记（未动任何磁盘文件）`)
+    }
+    removeTarget.value = null
     await reload()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '移除失败')
@@ -917,6 +933,62 @@ async function remove(l: LibraryEntity): Promise<void> {
             @click="submitDialog"
           >
             {{ busy === 'save' ? '保存中…' : '保存' }}
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 移除书库确认（第 81 期）：默认**不动任何磁盘文件**；勾选「连文件一起清理」才回收，
+         且那是**后台任务**（受理即返回，进度到任务中心看；见 LibrariesView 的 remove() 注释）。 -->
+    <div
+      v-if="removeTarget"
+      class="fixed inset-0 z-50 grid place-items-center bg-black/35 p-4"
+      @click.self="removeTarget = null"
+    >
+      <div
+        class="w-[min(30rem,94vw)] rounded-lg border border-border bg-card p-5 shadow-2xl"
+        role="dialog"
+        aria-modal="true"
+      >
+        <h3 class="font-serif text-[16px] font-semibold text-foreground">
+          移除书库「{{ removeName }}」
+        </h3>
+
+        <div class="mt-3 space-y-2 text-[12.5px] leading-relaxed text-muted-foreground">
+          <p>
+            · 只移除项目内的<strong class="text-foreground">登记</strong>，
+            <strong class="text-foreground">不动任何磁盘文件</strong>；收书目录里的本地原件保留。
+          </p>
+          <p>· 阅读进度 / 批注 / 书签 / 评分会保留（库再建回来还认得这些书）。</p>
+        </div>
+
+        <label
+          class="mt-3 flex items-start gap-2.5 rounded-md border border-border bg-muted/40 px-3 py-2.5"
+        >
+          <Switch
+            :model-value="removePurgeFiles"
+            class="mt-0.5 shrink-0"
+            @update:model-value="removePurgeFiles = $event"
+          />
+          <span class="text-[12.5px] text-foreground">
+            连文件一起清理
+            <span class="mt-0.5 block text-[11.5px] leading-relaxed text-muted-foreground">
+              <template v-if="removeBooks">
+                该库还有 {{ removeBooks }} 本书：它们在<strong>项目内的文件</strong>
+                （书库内文件 + 出版副本）会移入回收站 —— 不真删，可在「维护」页还原。
+              </template>
+              <template v-else>该库没有书，勾不勾都一样。</template>
+              后台执行，受理后到任务中心看进度。
+            </span>
+          </span>
+        </label>
+
+        <div class="mt-4 flex justify-end gap-2">
+          <Button size="sm" variant="ghost" :disabled="!!busy" @click="removeTarget = null">
+            取消
+          </Button>
+          <Button size="sm" variant="danger" :disabled="!!busy" @click="confirmRemove">
+            {{ busy.startsWith('del:') ? '移除中…' : '移除' }}
           </Button>
         </div>
       </div>

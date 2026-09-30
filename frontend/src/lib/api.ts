@@ -1753,6 +1753,43 @@ export interface MaintenanceInfo {
   library: { books: number }
 }
 
+// ---------- 回收站（第 81 期：台账 + 还原）----------
+
+/** 回收站里的一条台账条目（`GET /api/recycle`）：知道它原来在哪、为什么被搬走 */
+export interface RecycledItem {
+  id: number
+  /** 回收目录里的文件名（含时间戳前缀） */
+  name: string
+  /** 被移走前的绝对路径 —— 还原就搬回这里 */
+  orig_path: string
+  orig_dir: string
+  why: string
+  size: number
+  created_at: number
+  /** 磁盘上是否还在（用户手工删过回收目录时会是 false） */
+  exists: boolean
+  kind: 'file' | 'dir'
+}
+
+/** 无台账的孤儿条目（第 81 期之前的历史回收 / 用户手工丢进回收目录的东西） */
+export interface RecycleOrphan {
+  name: string
+  /** 剥掉 `YYYYMMDD-HHMMSS_[n_]` 前缀后的名字（还原时用） */
+  stripped: string
+  stamp: string
+  kind: 'file' | 'dir'
+  size: number
+}
+
+export interface RecycleListPayload {
+  /** 回收目录的绝对路径 */
+  dir: string
+  items: RecycledItem[]
+  total: number
+  orphans: RecycleOrphan[]
+  orphan_total: number
+}
+
 /** 通知条目 = 活动日志条目 + 稳定 id 与已读态（`GET /api/notifications`） */
 export interface NotificationItem extends LogItem {
   id: string
@@ -4095,26 +4132,64 @@ export const api = {
     }),
 
   /**
-   * 移除书库（第 75 期改语义）：删项目内登记，并把该库书的**书库内文件 + 出版副本**
-   * 移入回收站，**保留收书目录里的本地原件（①）**。库非空时后端默认拒绝 ——
-   * 前端此时传 `force=true`（确认文案已讲明会回收文件）。
+   * 移除书库（**第 81 期语义变更**）：**默认只删项目内登记，不动任何磁盘文件** ——
+   * 同步、立即返回。旧口径（第 75 期「非空库需 force、force 回收 ②③」）已作废：
+   * 库就地引用用户目录时，被当作「② 书库内成品」回收掉的就是**用户的本地原件**。
+   *
+   * 传 `purgeFiles=true` 才连文件一起清（书库内文件 + 出版副本移入回收站），
+   * 且它在**后台任务**里跑（长操作绝不挂在 HTTP 请求上，见第 81 期线上故障）——
+   * 返回 `task_id`，进度到任务中心看。① 收书目录里的本地原件**永不**回收。
    */
-  deleteLibrary: (id: string, force = false) =>
+  deleteLibrary: (id: string, purgeFiles = false) =>
     request<{
       ok: boolean
       removed: string
       /** 移除时该库的书目数 */
       books: number
-      /** 已移入回收站的文件份数（② + ③） */
-      recycled: number
-      /** 移不动的份数 */
-      failed: number
-      /** 磁盘上本来就没有的份数（不是错误） */
-      missing: number
+      /** 是否受理了「连文件一起清理」 */
+      purge_files: boolean
+      /** 受理的待回收份数（0 = 没有可清理的东西 / 未要求清理） */
+      targets: number
+      /** 后台清理任务 id；没有可清理的东西时为 null */
+      task_id: string | null
     }>(
-      `/api/libraries/${encodeURIComponent(id)}${force ? '?force=true' : ''}`,
+      `/api/libraries/${encodeURIComponent(id)}${purgeFiles ? '?purge_files=true' : ''}`,
       { method: 'DELETE' },
     ),
+
+  /**
+   * 回收站现状（第 81 期）：**台账条目**（可按原路径还原）+ **无台账孤儿**
+   * （第 81 期之前的历史回收，还原时要显式指定目录）。
+   *
+   * `limit` 只截返回条数（2400 份不该一次拉满），计数始终是全量。
+   */
+  recycleList: (limit = 0) =>
+    request<RecycleListPayload>(`/api/recycle${limit ? `?limit=${limit}` : ''}`),
+
+  /**
+   * 回收站还原（**把文件搬回原处**）：立即返回 `task_id`，后台逐项搬。
+   *
+   * 三种入参可组合：`ids`（台账行，按各自原路径）/ `names`（孤儿，必须带 `target_dir`）/
+   * `all: true`（还原全部台账条目）。目标是**幂等可续跑**的：还原成功即删台账行。
+   * 解析不出的条目在 `errors` 里如实回报（不静默丢）。
+   */
+  recycleRestore: (payload: {
+    ids?: number[]
+    names?: string[]
+    target_dir?: string
+    all?: boolean
+  }) =>
+    request<{
+      ok: boolean
+      task_id: string | null
+      total: number
+      errors: Array<{ id?: number; name?: string; error: string }>
+      note?: string
+    }>('/api/recycle/restore', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
 
   /** 重新扫描单个库。 */
   scanLibrary: (id: string) =>
@@ -4320,11 +4395,12 @@ export const api = {
   rebuildLibrary: () =>
     request<{ ok: boolean; books: number }>('/api/maintenance/library/rebuild', { method: 'POST' }),
 
-  /** 清空回收站 —— **真删，不可恢复** */
+  /** 清空回收站 —— **真删，不可恢复**（第 81 期：同批清掉回收台账，`ledger_cleared` 是条数） */
   clearRecycle: () =>
-    request<{ ok: boolean; removed: number; freed: number }>('/api/maintenance/recycle/clear', {
-      method: 'POST',
-    }),
+    request<{ ok: boolean; removed: number; freed: number; ledger_cleared: number }>(
+      '/api/maintenance/recycle/clear',
+      { method: 'POST' },
+    ),
 
   // ---------- 高级：config.yaml 原文 ----------
   getRawConfig: () => request<RawConfig>('/api/config/raw'),
