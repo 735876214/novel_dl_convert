@@ -267,3 +267,38 @@ def test_覆盖层_没有映射或没有目录时原样返回():
     assert reading_list.apply_toc_override(local, _store_flat(), {}) == local
     assert reading_list.apply_toc_override(local, [], {1: 0}) == local
     assert reading_list.apply_toc_override([], _store_flat(), {1: 0}) == []
+
+
+# ---------------- 对齐（书城目录 ↔ 本地章节）----------------
+
+def _flat_one(chapters) -> list:
+    return [c for g in chapters for c in g["chapters"]]
+
+
+def test_对齐_本地全是兜底名且条数一致时按顺序配上():
+    """**最需要取目录的那类书**：本地全是兜底名（两边标题不可能相等），但条数一致 ⇒ 顺序一一对应。"""
+    local = _flat_one(_local_flat())
+    assert reading_list.build_pairs(_store_flat()[2:], local) == [(0, 0), (1, 1), (2, 2)]
+
+
+def test_对齐_条数不一致就一条都不配():
+    """书城比本地多出卷名页 / 楔子页时不猜 —— 跳错一格就是**全书章名整体错位**。"""
+    local = _flat_one(_local_flat())
+    assert reading_list.build_pairs(_store_flat(), local) == []
+
+
+def test_对齐_标题相等优先于顺序():
+    local = _flat_one(reading_list.build_reading_list([
+        {"title": "第二章 台球", "index": 0},
+        {"title": "第一章 科学边界", "index": 1},
+    ]))
+    pairs = reading_list.build_pairs([
+        {"title": "第一章 科学边界", "depth": None},
+        {"title": "第二章 台球", "depth": None},
+    ], local)
+    assert pairs == [(0, 1), (1, 0)], "名字对得上就按名字配，不受本地顺序干扰"
+
+
+def test_对齐_空输入():
+    assert reading_list.build_pairs([], []) == []
+    assert reading_list.build_pairs(_store_flat(), []) == []

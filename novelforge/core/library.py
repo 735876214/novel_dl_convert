@@ -1985,6 +1985,42 @@ def sibling_files(path: pathlib.Path) -> list:
     return out
 
 
+def _toc_apply(b: dict, chapters: list) -> tuple:
+    """书城目录覆盖（第 85 期批次 B）：``(结构, 每来源状态清单, 当前生效的来源)``。
+
+    只挑**最后一次成功**的那份套用（`ok=1`）；其中**手动指定优先于自动匹配** ——
+    用户亲手填的书页地址是他明确的意图，不该被一次自动匹配盖过去。
+
+    返回的清单**不带目录负载**（只给条数）：详情页要的是「每个来源现在什么状态」，
+    把整份书城目录再回传一遍纯属浪费带宽。
+    """
+    from ..sources import toc_sources        # 延迟导入：core 不在模块级反向依赖 sources
+    book_id = b.get("id") or ""
+    if not book_id:
+        return chapters, [], ""
+    items, best = [], None
+    for raw in db.store_toc_get(book_id):
+        entries = raw.get("entries") or []
+        # ⚠️ 给界面用的那份**另建**一个 dict：`entries` 是覆盖层的输入，
+        # 不能在「顺手瘦身清单」时把它 pop 掉 —— 那样映射照样落库、目录却一点不生效，
+        # 而且两边看着都正常（本轮实测踩过）。
+        item = {k: v for k, v in raw.items() if k != "entries"}
+        item["label"] = (toc_sources.by_id(raw["source"]) or {}).get("label", raw["source"])
+        item["state"] = toc_sources.state_note(toc_sources.by_id(raw["source"]) or {})
+        item["mapped"] = len(db.toc_map_get(book_id, raw["source"]))
+        item["entry_count"] = len(entries)
+        items.append(item)
+        if raw["ok"]:
+            rank = (1 if raw["manual"] else 0, float(raw["fetched_at"] or 0))
+            if best is None or rank > best[0]:
+                best = (rank, raw)          # 留住**原行**（含 entries）给覆盖层用
+    if best is None:
+        return chapters, items, ""
+    row = best[1]
+    return reading_list.apply_toc_override(
+        chapters, row.get("entries") or [], db.toc_map_get(book_id, row["source"])), items, row["source"]
+
+
 def book_detail(name: str, library_id=None) -> dict | None:
     """单本详情：基础元数据 + 真实章节树 + 同 stem 的成品文件列表（音频另给轨道清单）。"""
     b = find(name, library_id)
@@ -2003,6 +2039,8 @@ def book_detail(name: str, library_id=None) -> dict | None:
         chapters = _reading_list(ep) if ep else txtcache.native_chapters(b, path=path, root=root)
     else:
         chapters = []
+    # 第 85 期批次 B：本地目录「不清楚」时，套用正版书城取回的那份（只改标题与卷名）
+    chapters, toc_items, toc_applied = _toc_apply(b, chapters)
     files = []
     for f in sibling_files(path):
         try:
@@ -2017,6 +2055,10 @@ def book_detail(name: str, library_id=None) -> dict | None:
     detail = dict(b)
     detail["chapters"] = chapters
     detail["files"] = files
+    # 书城目录来源（第 85 期批次 B）：`toc_applied` 空串 = 当前用的是本地目录。
+    # 清单随详情下发，详情页的「目录来源」区块不必再发一次请求。
+    detail["toc_sources"] = toc_items
+    detail["toc_applied"] = toc_applied
     fmt = (b.get("format") or "").upper()
     # 有声书：把轨道清单随详情一起下发，播放器首屏无需再发一次请求。
     # 第 73 期起走 `units.tracks_of` —— 嵌套有声书（`《书名》/第1卷/第1话.mp3`）的轨

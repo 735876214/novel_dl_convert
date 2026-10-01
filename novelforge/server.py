@@ -32,6 +32,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    fonts, comics, audio, opds, komga, koreader, integrations, sync,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
+                  reading_list,
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    catalog, cache, units, recycle)
 from . import config
@@ -39,6 +40,7 @@ from .sources import REGISTRY, DownloadManager
 from .sources import source_of
 from .sources import store
 from .sources import rules as source_rules
+from .sources import toc_sources      # 第 85 期批次 B：官方书城「只取目录」
 
 # 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在
 # （用户书源在 novelforge.sources 包导入时已自动加载）
@@ -571,6 +573,82 @@ async def api_preview(source: str = Query(...), url: str = Query(...)):
     except Exception as e:
         raise HTTPException(502, f"预览失败: {e}")
     return data
+
+
+# ---------------- 书城目录来源（第 85 期批次 B）----------------
+# **只取目录**（章节标题 + 顺序），不取正文；编排与规则在 `sources/toc_sources.py`。
+# 闸门与下载**分开**：`download.toc_enabled` 是它自己的开关（见 `gate_reason` 的用途维度）。
+
+
+@app.get("/api/toc/sources")
+def api_toc_sources():
+    """可用的目录来源清单（含闸门状态与每个来源的诚实档位）。
+
+    `usable` 与 `blocked_reason` 都由**闸门 + 档位**共同决定、措辞只有一份 ——
+    详情页与设置页读的是同一个字段，不会出现「这边说能用、那边说没开」。
+    """
+    gate = _manager().gate_reason(feature="toc")
+    items = []
+    for ent in toc_sources.SOURCES:
+        row = dict(ent)
+        ok = bool(ent.get("rule")) and not gate
+        row["usable"] = ok
+        row["blocked_reason"] = "" if ok else (gate or toc_sources.state_note(ent))
+        items.append(row)
+    return {"items": items, "enabled": not gate, "reason": gate}
+
+
+@app.post("/api/toc/fetch")
+async def api_toc_fetch(payload: dict = Body(...)):
+    """取一本书的目录（**只读目录页**）：成功则落库并重建「书城章节 ↔ 本地章节」映射。
+
+    `source` 必填；`url` 可选（用户手动指定书页 ⇒ 跳过自动匹配、视为确定）。
+    ⚠️ **失败也落库**（`ok=0` + 原因原文）：留着它，下次打开详情页才不会又自动外呼一遍，
+    界面也能如实说「上次为什么没取到」。
+    """
+    book_id = str((payload or {}).get("book_id") or "")
+    source = str((payload or {}).get("source") or "")
+    b = library.by_id(book_id)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    mgr = _manager()
+    # 闸门（用途维度）拦在业务逻辑之前 —— 与搜索/下载同一口径，理由见 `gate_reason`。
+    reason = mgr.gate_reason(source or None, feature="toc")
+    if reason:
+        raise HTTPException(400, reason)
+    detail = library.book_detail(b["name"], b.get("library_id")) or {}
+    local = [c for g in (detail.get("chapters") or []) for c in (g.get("chapters") or [])]
+    try:
+        res = await toc_sources.fetch_toc(
+            mgr, source, book=b, url=str((payload or {}).get("url") or "").strip(),
+            query=str((payload or {}).get("query") or ""))
+    except Exception as e:                                  # noqa: BLE001
+        res = {"ok": False, "note": f"取目录失败：{e}", "entries": [], "confidence": 0.0,
+               "manual": False, "store_ref": "", "matched_title": "", "matched_author": ""}
+    if not res["ok"]:
+        db.store_toc_save(book_id, source, ok=False, note=res["note"],
+                          confidence=res["confidence"], manual=res["manual"],
+                          store_ref=res["store_ref"], matched_title=res["matched_title"])
+        raise HTTPException(502, res["note"])
+    db.store_toc_save(book_id, source, ok=True, store_ref=res["store_ref"],
+                      matched_title=res["matched_title"], matched_author=res["matched_author"],
+                      confidence=res["confidence"], manual=res["manual"], entries=res["entries"])
+    pairs = reading_list.build_pairs(res["entries"], local)
+    db.toc_map_replace(book_id, source, pairs)
+    return {"source": source, "ok": True, "entries": len(res["entries"]),
+            "mapped": len(pairs), "total": len(local),
+            "matched_title": res["matched_title"], "confidence": res["confidence"],
+            "manual": res["manual"]}
+
+
+@app.delete("/api/toc/{bid}")
+def api_toc_clear(bid: str, source: str = Query("")):
+    """还原为本地目录：删掉这本书的书城目录与映射（零副作用，随时可再取一次）。
+
+    `source` 留空 = 清理**全部**来源：界面上那个按钮就叫「还原为本地目录」，
+    用户的心智是「回到我原来的目录」，不是「只清某一个来源」。
+    """
+    return {"ok": True, "cleared": db.store_toc_clear(bid, source)}
 
 
 def _task_out(row: dict | None) -> dict:
@@ -5388,7 +5466,8 @@ EDITABLE: dict = {
         "copy_non_txt", "process_existing", "max_retries", "ignore",
     },
     "network": {"max_retries", "host_replace"},
-    "download": {"enabled", "public_only"},
+    # 第 85 期批次 B：`toc_enabled` = 「从官方书城取目录」的独立开关（闸门的用途维度）
+    "download": {"enabled", "public_only", "toc_enabled"},
     # retention 是嵌套块（第 52 期）：与 integrations 同口径，整块取值，
     # 免得将来往留存策略里加键时还要再改一次白名单。
     "logging": {"dir", "max_entries", "retention"},

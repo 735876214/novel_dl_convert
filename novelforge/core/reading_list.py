@@ -34,6 +34,9 @@ EPUB 路径（``library._reading_list``）与 TXT 路径（``txtcache.native_cha
 """
 from __future__ import annotations
 
+import re
+import unicodedata
+
 from . import detect
 
 #: 「目录不清楚」的默认判据参数（见 :func:`toc_unclear`）
@@ -184,6 +187,65 @@ def toc_unclear(chapters: list, *, ratio: float = _TOC_UNCLEAR_RATIO,
 
 
 # ---------------- 书城目录覆盖层（第 85 期批次 B）----------------
+
+#: 归一化时要剥掉的标点（用于**比较**，不改展示标题）
+_PUNCT_RE = re.compile(r"[\s·・:：,，.。!！?？\-—_/\\()（）\[\]【】\"'“”‘’]+")
+
+
+def norm_title(s) -> str:
+    """标题归一：NFKC（全角 → 半角）+ 小写 + 去空白与标点。**只用于比较，不改展示标题**。
+
+    单一真值源。`sources/toc_sources.py` 的 `norm_title` 是这里转出去的 ——
+    匹配与对齐**必须**用同一套归一，否则会出现「搜索匹配上了、章节却一条都对不上」这种
+    两边各自看着都对的鬼故事。
+    """
+    return _PUNCT_RE.sub("", unicodedata.normalize("NFKC", str(s or "")).lower())
+
+
+def build_pairs(entries: list, local_chapters: list) -> list:
+    """书城目录 ↔ 本地章节的对齐 → ``[(书城序号, 本地 index), ...]``（只产出有把握的）。
+
+    ### 为什么必须有第二趟
+
+    第一趟按「标题归一后完全相等」配。这趟最准，但**恰好最需要取目录的那类书一条也配不上**：
+    本地标题全是兜底名（``第 N 章``）时，两边标题不可能相等 —— 而那正是用户报的症状。
+
+    第二趟只用一条**能自检的不变式**：两边**剩下没配上的条数一样多**时，按剩余顺序一一对应。
+
+    为什么只认「条数相等」这一条：条数一致说明两边切分粒度一致，此时顺序才可信。
+    而「跳过书城的卷名页再顺序配」那种做法看着更聪明，一旦跳错一格就是**全书章名整体错位**
+    （张冠李戴），比不配（保持本地名）难查得多 —— 对齐结果是派生数据，宁少不多。
+    条数不一致就停在第一趟的结果上，剩下的本地条目由覆盖层原样保留。
+
+    ### 只做有把握的
+
+    对齐结果是**派生**数据：配错了的表现是「章名张冠李戴」，比不配（保持本地名）难查得多。
+    所以宁少不多 —— 没配上的本地条目由覆盖层原样保留。
+    """
+    local = [c for c in (local_chapters or []) if c.get("index") is not None]
+    if not entries or not local:
+        return []
+    pairs: list = []
+    used: set = set()
+    # 第一趟：标题归一后完全相等（同名多处按出现顺序依次配，不跨位抢）
+    bucket: dict = {}
+    for c in local:
+        bucket.setdefault(norm_title(c.get("title")), []).append(int(c["index"]))
+    taken: set = set()
+    for i, e in enumerate(entries):
+        q = bucket.get(norm_title((e or {}).get("title")))
+        if not q:
+            continue
+        idx = q.pop(0)
+        pairs.append((i, idx))
+        used.add(idx)
+        taken.add(i)
+    # 第二趟：**剩下的条数一样多** ⇒ 按剩余顺序一一对应；不一样多就一条都不配
+    rest_e = [i for i in range(len(entries)) if i not in taken]
+    rest_l = [int(c["index"]) for c in local if int(c["index"]) not in used]
+    if rest_e and len(rest_e) == len(rest_l):
+        pairs.extend(zip(rest_e, rest_l))
+    return pairs
 
 def _store_slots(entries: list) -> dict:
     """书城目录摊平成 ``{书城序号: {"title", "volume", "kind"}}``。

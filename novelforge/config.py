@@ -142,6 +142,12 @@ DEFAULTS = {
     "download": {
         "enabled": False,           # 默认关闭，仅公版源可用
         "public_only": True,
+        # 第 85 期批次 B：**只取目录**（从官方书城对一份章节目录）的独立开关。
+        # ⚠️ 默认关闭：默认开着意味着「打开详情页就可能自动外呼商业站点」，那不该是默认行为；
+        #    取目录由用户显式点按钮触发，这个开关是它的闸门。
+        # ⚠️ **不受 public_only 约束**：那条管的是「下载内容」的版权，而取目录只读一份
+        #    章节标题 —— 两者是不同的动作（见 sources/manager.py 的 gate_reason 用途维度）。
+        "toc_enabled": False,
     },
     "network": {
         "cookie_dir": str(COOKIE_DIR),

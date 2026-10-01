@@ -61,7 +61,7 @@ class DownloadManager:
             max_retries=self.max_retries,
         )
 
-    def gate_reason(self, source: str | None = None) -> str:
+    def gate_reason(self, source: str | None = None, feature: str = "download") -> str:
         """下载闸门判定（**唯一一处**，第 71 期）：空串 = 放行，非空 = 可直接展示的原因。
 
         两条规则（`config.py` 的默认值就是这两条）：
@@ -75,7 +75,18 @@ class DownloadManager:
 
         ``source`` 留空时只判「下载开关」这一层；给了源名再判「仅公版源」那一层。
         **未知源名不在这里拦**：那不是闸门的事，交由调用方按「未知书源」如实报错。
+
+        ``feature`` 是**用途**维度（第 85 期新增；默认 ``"download"`` ⇒ 既有调用方行为一字不变）：
+        ``"toc"`` 判的是「从官方书城取目录」那个开关。两个用途**各判各的、不叠加** ——
+        关掉下载不影响显式打开了取目录的用户（反之亦然），因为「取一份章节目录」与
+        「下载整本正文」是两个动作，理由见 `sources/toc_sources.py` 的模块注释。
         """
+        if feature == "toc":
+            # 「取目录」是独立开关，也**不受 public_only 约束**：那条管的是下载内容的版权，
+            # 而取目录只读一份章节标题，且用户点名要的正是「官方书城」的目录。
+            if not bool((self.cfg.get("download") or {}).get("toc_enabled", False)):
+                return "取目录未开启：到「设置 → 网络与下载」打开「从官方书城取目录」"
+            return ""
         if not self.enabled:
             return "下载功能未开启：到「设置 → 网络与下载」打开「开放搜索 / 下载」"
         if source and self.public_only:
