@@ -28,7 +28,11 @@ _JUNK_PARTS = ("__MACOSX/", ".DS_Store", "Thumbs.db", ".thumbnails/")
 _RAR_MAGIC = b"Rar!\x1a\x07"
 _ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 
-COMIC_EXTS = (".cbz", ".cbr")
+# ⚠️ `.zip` 也在列（第 87 期）：它与 `.cbz` 在**字节层面本就等价**，而 `_Archive` 是靠
+# 魔数嗅探选后端的（见 `_sniff`），所以「能读」这一步不需要任何改动。
+# 但 `.zip` **是一个通用容器**：里面装的是图片还是别的文档，由 `core/zipkind.py`
+# 按内容分派 —— 本常量只回答「这个后缀要不要按归档处理」，不回答「它是什么书」。
+COMIC_EXTS = (".cbz", ".cbr", ".zip")
 
 
 def write_cbz(dest, pages):
@@ -159,6 +163,16 @@ class _Archive:
             self._r = rarfile.RarFile(str(path))
         else:
             raise ValueError("既不是 zip 也不是 rar 归档")
+
+    def names(self) -> list:
+        """全部**文件**条目名（跳过目录项，**不**过滤非图片）。
+
+        给内容分派用（`core/zipkind.py`）：那边要自己分辨「图片 / 文档 / 内层压缩包」，
+        所以不能拿 :meth:`entries` 那份已经筛成图片的表。
+        """
+        if self._z is not None:
+            return [i.filename for i in self._z.infolist() if not i.is_dir()]
+        return [i.filename for i in self._r.infolist() if not i.isdir()]
 
     def entries(self) -> list:
         """图片条目 ``[(name, size), ...]``，过滤垃圾/目录/非图片后自然排序。"""

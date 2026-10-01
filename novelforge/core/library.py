@@ -36,12 +36,15 @@ import uuid
 import zipfile
 
 from .. import config
-from . import audio, audio_meta, comics, db, metadata, reading_list, units
+from . import audio, audio_meta, comics, db, metadata, reading_list, units, zipkind
 
 # 只把这些扩展名当成「书」；与 /api/files 的全量列表不同，这里是有意收窄的。
 # .cbr（RAR 漫画）自第 9 期起在列 —— 由 core/comics.py 的 zip/rar 双后端解压。
 # 单个音频文件也算一本书；「音频目录」（一章一文件）由 _iter_book_entries 单独识别。
-BOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".cbz", ".cbr", *audio.AUDIO_EXTS)
+# ⚠️ 第 87 期：`.zip` 也在列 —— 它是**通用容器**，真实形态由 `core/zipkind.py` 按内容分派
+# （里面是图片就按漫画读、是一份 EPUB/PDF 就记成需要展开、判不出就如实报无法解析）。
+BOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".cbz", ".cbr", ".zip",
+             *audio.AUDIO_EXTS)
 
 #: 扫描口径版本。**凡能改变「条目边界」或卡片字段口径的改动都要 +1**：
 #: 第 73 期两处 —— ① 序号单元目录整棵树被合成一个条目（此前是每文件一本，更深的根本扫不到）；
@@ -1366,8 +1369,12 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None, ltype=None) -> 
 # 收进来后按漫画形态读（前端 pdf.js 逐页渲染），设置页里另有「用 PDF 阅读器读」的开关。
 # .pdf 同时仍属于电子书类型（`_EBOOK_EXTS`）：**自动归库**按类型路由时它优先去电子书库，
 # 要进漫画库就把它放在漫画库的来源文件夹里 —— 不猜用户意图。
-_COMIC_EXTS = (".cbz", ".cbr", ".pdf")
-_EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt")
+# 第 87 期：`.zip` **三类库里都收** —— 它是通用容器，真实形态由内容分派
+# （`core/zipkind.py`）。不收它就等于「某个库里看不见用户放进去的书」。
+# ⚠️ 收进来 ≠ 当成漫画：里面是别的文档 / 嵌套 / 坏包时一律记「无法解析」，
+# 于是它在「待修复」里看得见，而不会被静默忽略。
+_COMIC_EXTS = (".cbz", ".cbr", ".pdf", ".zip")
+_EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".zip")
 
 
 def _exts_for_type(ltype) -> tuple:
@@ -1676,6 +1683,17 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
     }
     tracks = 0
     fmt = f.suffix.lstrip(".").upper()
+    # `.zip` 是**通用容器**（第 87 期）：真实形态由内容定（`core/zipkind.py`），不看后缀。
+    # 只有「里面是图片」这一档能读，且把它**归一成 CBZ** —— 于是封面接口、逐页接口、
+    # 前端阅读器的既有 CBZ 判据**全部自动生效（上层零分支）**。
+    # 其余各档（内部是别的文档 / 嵌套 / 混装 / 坏包）**不假装能读**：记成无法解析，
+    # 让它在「待修复」分面里看得见 —— 文件在盘上、书目里却找不到，比拒收更糟。
+    zip_v = zipkind.analyze(f) if zipkind.is_container(f) else None
+    if zip_v is not None:
+        if zip_v["readable"]:
+            fmt = zip_v["format"] or fmt
+        else:
+            info["unparsable"] = True
     if shape == "units":
         tracks = len(unit_items)
         # 全是音频 ⇒ 仍是 AUDIO：嵌套有声书（`《书名》/第1卷/第1话.mp3`）因此进播放器，
@@ -1710,8 +1728,12 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
             info["unparsable"] = True
     elif f.suffix.lower() == ".epub":
         info = probe_epub(f)
-    elif comics.is_comic(f):
-        # 漫画（CBZ / CBR）：页数与封面都是**真实值**（不是估算），pages_source = "archive"
+    elif comics.is_comic(f) and (zip_v is None or zip_v["kind"] == "comic"):
+        # 漫画（CBZ / CBR / ZIP 的图片档）：页数与封面都是**真实值**（不是估算），
+        # pages_source = "archive"。
+        # ⚠️ `.zip` 必须带上后面那条附加判据：它已经进了 `comics.COMIC_EXTS`，而
+        # `is_comic` **只看后缀** —— 少了这一条，一个「内部其实是 EPUB」的 zip 也会
+        # 被当成漫画去数页（数出来的是 EPUB 里的插图张数），用户看到一本假的漫画。
         info.update(comics.probe(f))
 
     return {
