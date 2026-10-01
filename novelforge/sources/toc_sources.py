@@ -29,9 +29,9 @@
 """
 from __future__ import annotations
 
-import re
-import unicodedata
-
+# 归一化的**单一真值源在 core**：搜索匹配与章节对齐用同一套归一，否则会出现
+# 「搜索匹配上了、章节却一条都对不上」这种两边各自看着都对的鬼故事。
+from ..core.reading_list import norm_title
 from . import rules as rules_mod
 
 #: 注册表三档状态（别加第四档）
@@ -136,9 +136,6 @@ SOURCES: tuple = (
 
 _BY_ID: dict = {s["id"]: s for s in SOURCES}
 
-#: 归一化时要剥掉的标点（用于**比较**，不改展示标题）
-_PUNCT_RE = re.compile(r"[\s·・:：,，.。!！?？\-—_/\\()（）\[\]【】\"'“”‘’]+")
-
 
 def catalogue() -> list[dict]:
     """给接口用的注册表（含规则原文，便于用户复制到「书源管理」里修）。
@@ -179,11 +176,6 @@ def validate_toc_rule(rule: dict) -> list[str]:
     其余校验逐条沿用，不另写一套（两份校验漂移比少一条校验危险得多）。
     """
     return [e for e in rules_mod.validate_rule(rule or {}) if "book.content" not in e]
-
-
-def norm_title(s) -> str:
-    """标题归一：NFKC（全角→半角）+ 小写 + 去空白与标点。**只用于比较**。"""
-    return _PUNCT_RE.sub("", unicodedata.normalize("NFKC", str(s or "")).lower())
 
 
 def best_match(book: dict, candidates: list) -> tuple:
