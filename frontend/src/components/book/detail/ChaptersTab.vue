@@ -4,7 +4,8 @@ import { computed, ref } from 'vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
-import type { BookVolume } from '@/lib/api'
+import TocSourceCard from '@/components/book/detail/TocSourceCard.vue'
+import type { BookVolume, TocSourceRow } from '@/lib/api'
 import { tocGroups } from '@/lib/chapterGroups'
 
 /**
@@ -17,8 +18,19 @@ import { tocGroups } from '@/lib/chapterGroups'
  * 2. 折叠记忆的键从「卷名」换成**段 key**：段名会重复（背靠背的两个无名段都叫「正文」），
  *    拿它当 key 会让两段互相串折叠；
  * 3. 无编号条目（楔子 / 番外…）**不渲染序号**，但保留序号列宽，标题才不会参差。
+ *
+ * 第 85 期批次 B 又加了一件事：区块顶部的**「目录来源」**（`TocSourceCard`）——
+ * 本地目录看不出章节名时可以从正版书城取一份来对。`bookId` 缺省时不渲染那块，
+ * 这样组件在没有详情上下文的场合仍可单独使用。
  */
-const props = defineProps<{ chapters: BookVolume[] }>()
+const props = defineProps<{
+  chapters: BookVolume[]
+  /** 详情页传进来才会渲染「目录来源」区块 */
+  bookId?: string
+  tocSources?: TocSourceRow[]
+  tocApplied?: string
+}>()
+const emit = defineEmits<{ changed: [] }>()
 
 const chapterQuery = ref('')
 const collapsedVolumes = ref<Record<string, boolean>>({})
@@ -42,6 +54,14 @@ function toggleVolume(key: string): void {
 
 <template>
   <div>
+    <TocSourceCard
+      v-if="props.bookId"
+      :book-id="props.bookId"
+      :sources="props.tocSources ?? []"
+      :applied="props.tocApplied ?? ''"
+      @changed="emit('changed')"
+    />
+
     <div class="mb-3 flex items-center gap-2.5">
       <div class="relative max-w-[22rem] flex-1">
         <Icon

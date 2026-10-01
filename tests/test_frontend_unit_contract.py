@@ -141,6 +141,10 @@ EXPECTED_SPECS = (
     # 背靠背的两个无名段互相串折叠。分组与段名是唯一真值源（两处目录共用），故单独钉住。
     "src/lib/chapterGroups.spec.ts",
     "src/components/book/detail/ChaptersTab.spec.ts",
+    # 第 85 期批次 B：「目录来源」是**出网**的入口，钉的是「不骗人」——
+    # 不可用/未验证要如实标注且按钮点不动；失败要显示原因原文，并且**照样刷新**
+    # （负结果同样落库，不刷新就只剩「点了没反应」）。
+    "src/components/book/detail/TocSourceCard.spec.ts",
 )
 
 

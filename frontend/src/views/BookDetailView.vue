@@ -242,6 +242,16 @@ async function onMetaSaved(): Promise<void> {
   await library.loadBooks(true)
 }
 
+/**
+ * 取目录 / 还原之后的刷新（第 85 期批次 B）：章节标题与「当前生效的来源」都在这份详情里。
+ *
+ * 取目录**失败**时也会走到这里 —— 负结果同样落库，重取一次才能把原因显示在区块里；
+ * 只在不失败时才刷新的话，用户看到的就只是「点了没反应」。
+ */
+async function onTocChanged(): Promise<void> {
+  detail.value = await library.getBookDetail(bookId.value, true)
+}
+
 /** 「加载失败」态的重试：强制重取详情（失败与「找不到这本书」在模板里分开渲染） */
 async function retryDetail(): Promise<void> {
   loading.value = true
@@ -334,7 +344,14 @@ onMounted(async () => {
       @open-book="(id) => router.push(`/book/${id}`)"
     />
 
-    <ChaptersTab v-show="tab === 'chapters'" :chapters="detail?.chapters ?? []" />
+    <ChaptersTab
+      v-show="tab === 'chapters'"
+      :chapters="detail?.chapters ?? []"
+      :book-id="detail?.id ?? ''"
+      :toc-sources="detail?.toc_sources ?? []"
+      :toc-applied="detail?.toc_applied ?? ''"
+      @changed="onTocChanged"
+    />
 
     <!--
       文件标签：`active` 是**必须传的** —— 它要单独问一次 `/local-paths`（那个响应

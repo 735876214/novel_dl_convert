@@ -68,6 +68,12 @@ export const NETWORK_FIELDS: FieldDef[] = [
   { path: 'network.max_retries', label: '传输重试次数', type: 'number', hint: '下载时超时 / 传输错误的重试上限' },
   { path: 'download.enabled', label: '开放搜索 / 下载', type: 'bool', hint: '关闭时书源仅做规则管理，不可搜索下载' },
   { path: 'download.public_only', label: '仅放行公版源', type: 'bool' },
+  {
+    path: 'download.toc_enabled',
+    label: '从官方书城取目录',
+    type: 'bool',
+    hint: '只读章节目录（不取正文）；在图书详情页的「目录」标签里显式点「取目录」才会外呼',
+  },
   { path: 'logging.max_entries', label: '日志内存缓冲条数', type: 'number' },
   { path: 'logging.dir', label: '日志目录', type: 'text', placeholder: '留空则用 LOG_DIR' },
 ]

@@ -52,7 +52,9 @@ describe('ChaptersTab：按段分组渲染', () => {
     // 于是「折叠根本没生效」这个真缺陷被静默放过（本轮实测踩过）。
     const w = mount(ChaptersTab, { props: { chapters: VOLUMES } })
     const hiddenCount = () =>
-      w.findAll('div.border-t').filter((p) => p.element.style.display === 'none').length
+      w.findAll('div.border-t')
+        .filter((p) => (p.element as HTMLElement).style.display === 'none')
+        .length
     expect(w.findAll('div.border-t')).toHaveLength(3)      // 三段各一个面板
     expect(hiddenCount()).toBe(0)
 

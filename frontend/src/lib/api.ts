@@ -871,9 +871,54 @@ export interface BookCard {
   library_type?: LibraryType
 }
 
+/** 书城目录来源的**注册表条目**（第 85 期批次 B）：`usable` 与 `blocked_reason` 由后端算好。 */
+export interface TocSourceItem {
+  id: string
+  label: string
+  home: string
+  /** `available` 内置规则可用；`needs_credentials` 要登录凭据；`unsupported` 本批没写规则 */
+  status: 'available' | 'needs_credentials' | 'unsupported'
+  /** ⚠️ 规则是否**在本机验证过**。false 的必须显示成「未验证」—— 拿不准就说不准。 */
+  verified: boolean
+  note: string
+  usable: boolean
+  /** 不可用时的原因原文（空串 = 可用） */
+  blocked_reason: string
+}
+
+/**
+ * 一本书在某个来源上的**一次取目录结果**（第 85 期批次 B）。
+ *
+ * ⚠️ `ok: false` 的行**不是错误数据**，而是「上次没取到」的事实：界面据此如实显示原因，
+ * 后端也不会因此反复外呼（负结果同样落库）。
+ */
+export interface TocSourceRow {
+  source: string
+  label: string
+  /** 来源自身的档位说明（如「需要登录凭据」） */
+  state: string
+  ok: boolean
+  /** 失败原因原文（`ok=false` 时可直接展示） */
+  note: string
+  /** 用户手动指定过书页 ⇒ 视为确定 */
+  manual: boolean
+  confidence: number
+  matched_title: string
+  store_ref: string
+  fetched_at: number
+  /** 书城那份有多少条 */
+  entry_count: number
+  /** 其中已对齐到本地章节的条数 */
+  mapped: number
+}
+
 export interface BookDetail extends BookCard {
   chapters: BookVolume[]
   files: BookFile[]
+  /** 书城目录来源状态清单（第 85 期批次 B；空数组 = 这本书没取过） */
+  toc_sources?: TocSourceRow[]
+  /** 当前生效的书城来源 id；空串 = 用的是**本地目录** */
+  toc_applied?: string
   /** 有声书专有：轨清单（随详情一起下发，播放器首屏无需再请求一次） */
   audio_tracks?: AudioTrack[]
   /** 序号单元合集的**话清单**（第 73 期；随详情下发，阅读器首屏无需再请求一次） */
@@ -3616,6 +3661,33 @@ export const api = {
 
   bookDetail: (id: string) =>
     request<BookDetail>(`/api/books/${encodeURIComponent(id)}`),
+
+  /** 可用的书城目录来源（含闸门状态与每个来源的诚实档位，第 85 期批次 B） */
+  tocSources: () =>
+    request<{ items: TocSourceItem[]; enabled: boolean; reason: string }>('/api/toc/sources'),
+
+  /**
+   * 取一本书的目录（**只读目录页**，第 85 期批次 B）。
+   *
+   * `url` 可选：手动指定书页 ⇒ 跳过自动匹配、视为确定。
+   * ⚠️ 取不到时这里会抛（错误信息就是后端的**原因原文**），但**失败同样落库** ——
+   * 调用方在 `catch` 之后刷新详情，就能看到「上次为什么没取到」。
+   */
+  tocFetch: (bookId: string, source: string, url = '') =>
+    request<{ mapped: number; total: number; matched_title: string; confidence: number }>(
+      '/api/toc/fetch',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ book_id: bookId, source, url }),
+      },
+    ),
+
+  /** 还原为本地目录（删掉这本书的书城目录与映射，零副作用） */
+  tocClear: (bookId: string) =>
+    request<{ ok: boolean; cleared: number }>(`/api/toc/${encodeURIComponent(bookId)}`, {
+      method: 'DELETE',
+    }),
 
   /**
    * 删除一本书（第 64 期；第 75 期扩到**三份文件**）：文件**移入回收站**（可恢复，不是真删），
