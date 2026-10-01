@@ -45,6 +45,7 @@ from .sources import ledger as source_ledger   # 第 86 期：书源导入 / 台
 from .sources import legado as legado_mod      # 第 86 期：重新分析要用它重跑判定
 from .sources import creds as source_creds     # 第 86 期：Cookie 读写的唯一真值源
 from .sources import probe as source_probe     # 第 86 期：单字探测 / 全部验证
+from .core import network as network_mod       # 第 86 期：JS 解密通道的部署前提（Node）
 
 # 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在
 # （用户书源在 novelforge.sources 包导入时已自动加载）
@@ -781,6 +782,20 @@ async def api_toc_probe(payload: dict = Body(None)):
     p = payload or {}
     q = str(p.get("query") or "").strip() or source_probe.DEFAULT_QUERY
     return await source_probe.probe_toc(_manager(), str(p.get("source_id") or ""), query=q)
+
+
+@app.get("/api/sources/capabilities")
+def api_sources_capabilities(refresh: bool = Query(False)):
+    """运行环境能力：**JS 解密通道到底能不能用**（Node 在不在）。
+
+    ⚠️ 为什么值得单独一个接口：Docker 镜像自带 Node（多阶段构建 + `NODE_BIN`），
+    但**NAS / 手工部署未必有** —— 而 `NODE_BIN` 默认是 `"node"`。
+    如实回一个 `decrypt: false` + 一句「怎么补」，界面就能提前把「这条书源用不了」
+    显示出来，而不是等用户抓书失败才对着英文系统错误猜。
+    """
+    st = network_mod.node_state(refresh=bool(refresh))
+    return {"node": st, "decrypt": bool(st.get("available")),
+            "hint": "" if st.get("available") else (st.get("reason") or "需要 Node 才能运行解密脚本")}
 
 
 @app.post("/api/sources/test")

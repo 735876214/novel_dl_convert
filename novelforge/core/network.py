@@ -148,19 +148,78 @@ class BrowserClient:
         await self.aclose()
 
 
+#: `node_state()` 的缓存（键是 `NODE_BIN` 当前值：换了 bin 就重新探一次）
+_node_cache: dict = {}
+
+
+def node_state(refresh: bool = False) -> dict:
+    """Node 可用性：``{available, bin, version, reason}``（结果按 `NODE_BIN` 缓存）。
+
+    ⚠️ **为什么必须有这个函数**：Docker 镜像里是自带 Node 的
+    （多阶段构建，`NODE_BIN=/usr/local/bin/node`），但**NAS / 手工部署未必有** ——
+    而 `NODE_BIN` 默认就是 `"node"`。少了这一层，缺 Node 时 `subprocess` 抛的是
+    `[Errno 2] No such file or directory: 'node'`：用户看到一句英文系统错误，
+    完全不知道「是这台机器要装 Node / 要么改用不需要解密的书源」。
+    现在改成：**先探一次，然后把「不能做什么 + 怎么补」说清楚**（`reason` 就是那句人话）。
+    """
+    if not refresh and _node_cache.get("bin") == NODE_BIN:
+        return dict(_node_cache)
+    info = {"available": False, "bin": NODE_BIN, "version": "", "reason": ""}
+    try:
+        proc = subprocess.run([NODE_BIN, "--version"], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=10)
+        ver = (proc.stdout or "").strip()
+        if proc.returncode == 0 and ver:
+            info.update(available=True, version=ver)
+        else:
+            info["reason"] = ((proc.stderr or "").strip()[:200]
+                              or f"{NODE_BIN} --version 返回了非零退出码")
+    except FileNotFoundError:
+        info["reason"] = (
+            f"找不到 Node（NODE_BIN={NODE_BIN}）：这台机器没有装 Node。"
+            "需要字体解密 / 内容混淆的书源跑不了（其余书源不受影响）。"
+            "补法：装上 Node 并把环境变量 NODE_BIN 指到它的可执行文件；"
+            "或改用不需要解密的书源。")
+    except Exception as e:                                   # noqa: BLE001 —— 原文照回
+        info["reason"] = f"{type(e).__name__}: {str(e)[:160]}"
+    _node_cache.clear()
+    _node_cache.update(info)
+    return dict(info)
+
+
+def ensure_node() -> dict:
+    """确认 Node 可用；不可用就**带着能照做的说明**抛错（而不是抛系统错误）。"""
+    st = node_state()
+    if not st["available"]:
+        raise RuntimeError(st["reason"] or "Node 不可用：无法运行站点专用 JS 脚本")
+    return st
+
+
 def run_js_sync(js_code: str, *args):
     """在 Node 中执行 js_code；args 作为全局数组 __args 传入；stdout 优先按 JSON 解析。"""
+    ensure_node()
     script = "const __args = " + json.dumps(list(args), ensure_ascii=False) + ";\n" + js_code + "\n"
     fd, path = tempfile.mkstemp(suffix=".js", text=True)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(script)
-        proc = subprocess.run(
-            [NODE_BIN, path], capture_output=True, text=True, timeout=30
-        )
+        try:
+            proc = subprocess.run(
+                [NODE_BIN, path], capture_output=True, text=True,
+                # ⚠️ **必须显式指定 UTF-8**（第 86 期真机跑出来的坑）：不指定就用系统区域编码
+                # （Windows 上是 GBK），Node 输出的中文会撞 `UnicodeDecodeError`；而异常发生在
+                # subprocess 的**读线程**里 ⇒ `proc.stdout` 变成 `None`，用户看到的是
+                # `AttributeError: 'NoneType' object has no attribute 'strip'` ——
+                # 离真正的原因（编码）十万八千里。离线桩永远抓不到这一类问题。
+                encoding="utf-8", errors="replace", timeout=30
+            )
+        except FileNotFoundError:
+            # 探测之后到执行之间 Node 被挪走 / 卸掉（少见，但不能让原始系统错误漏出去）
+            raise RuntimeError(node_state(refresh=True)["reason"]
+                               or "Node 在运行前消失了") from None
         if proc.returncode != 0:
-            raise RuntimeError(proc.stderr.strip() or "node 执行失败")
-        out = proc.stdout.strip()
+            raise RuntimeError((proc.stderr or "").strip() or "node 执行失败")
+        out = (proc.stdout or "").strip()
         try:
             return json.loads(out)
         except (json.JSONDecodeError, ValueError):
