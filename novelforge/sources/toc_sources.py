@@ -32,6 +32,7 @@ from __future__ import annotations
 # 归一化的**单一真值源在 core**：搜索匹配与章节对齐用同一套归一，否则会出现
 # 「搜索匹配上了、章节却一条都对不上」这种两边各自看着都对的鬼故事。
 from ..core.reading_list import norm_title
+from . import creds
 from . import rules as rules_mod
 
 #: 注册表三档状态（别加第四档）
@@ -148,6 +149,21 @@ def catalogue() -> list[dict]:
 
 def by_id(source_id: str) -> dict | None:
     return _BY_ID.get(str(source_id or ""))
+
+
+def cookie_name(source_id: str) -> str:
+    """取目录时**实际读的** Cookie 文件名（第 86 期补的契约）。
+
+    ⚠️ 第 85 期实测踩过的坑：取目录走 `DownloadManager._client(rule_class(source_id))`，
+    而客户端是按**规则名**取文件名的 —— 番茄的规则名是 `fanqie-toc`，注册表 id 却是 `fanqie`。
+    界面若按 id 显示 / 写入登录态，就会出现「明明保存了却还是匿名」这种最难查的静默失败。
+    这里把「id → 文件名」钉成唯一一处；文件名的拼法本身仍在 `sources/creds.py`（唯一处）。
+    未知 id 返回空串（调用方据此如实说「未知来源」，不编一个文件名出来）。
+    """
+    ent = by_id(source_id)
+    if not ent:
+        return ""
+    return creds.cookie_name((ent.get("rule") or {}).get("name") or str(source_id))
 
 
 def rule_class(source_id: str):

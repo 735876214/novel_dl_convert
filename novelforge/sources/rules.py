@@ -47,10 +47,172 @@
 - 所有解析支持 css / regex 双通道，离线可用（正则），也可写 CSS 选择器（需 beautifulsoup4）。
 """
 import asyncio
+import json
 import re
 from urllib.parse import quote, urljoin
 
 from .base import SourceAdapter, DEFAULT_HEADERS
+
+
+# ---------------- 书源变量 `{var:<key>}`（第 86 期）----------------
+# Legado 的 `loginUi` 表单值（番茄的「密钥」、聚合源的「模式 / 音色」）以 `{var:key}` 形式
+# 出现在规则里。**缺失绝不静默留空**：留着原文请求会带着 `%7Bvar%3A密钥%7D` 出去，
+# 站点回一个空页面，报错离原因十万八千里 —— 所以取值处统一先查变量齐不齐。
+
+_VAR_RE = re.compile(r"\{var:([^}]+)\}")
+
+
+def load_vars(rule_name: str) -> dict:
+    """读书源变量**值**（给人看的那份没有值，见 `db.source_vars_keys`）。
+
+    只在这里读一次、随实例带走：取正文时一处一章地查库会把「读变量」变成 N 次 I/O。
+    """
+    if not rule_name:
+        return {}
+    try:
+        from ..core import db
+        return db.source_vars_get(str(rule_name))
+    except Exception:                                        # noqa: BLE001 —— 读不到当没有
+        return {}
+
+
+def render_vars(text: str, variables) -> tuple:
+    """把 `{var:<key>}` 换成值 → ``(文本, 缺失的键列表)``。调用方**必须**处理缺失。"""
+    variables = dict(variables or {})
+    missing: list = []
+
+    def _sub(m):
+        key = m.group(1).strip()
+        if variables.get(key):
+            return str(variables[key])
+        if key not in missing:
+            missing.append(key)
+        return m.group(0)
+
+    return _VAR_RE.sub(_sub, str(text or "")), missing
+
+
+def render_rule_vars(rule, variables) -> tuple:
+    """深度渲染整条规则里的 `{var:}` → ``(渲染后的副本, 缺失的键列表)``（不改入参）。"""
+    if isinstance(rule, str):
+        return render_vars(rule, variables)
+    if isinstance(rule, dict):
+        out, missing = {}, []
+        for k, v in rule.items():
+            nv, miss = render_rule_vars(v, variables)
+            out[k], missing = nv, missing + [m for m in miss if m not in missing]
+        return out, missing
+    if isinstance(rule, list):
+        out, missing = [], []
+        for v in rule:
+            nv, miss = render_rule_vars(v, variables)
+            out.append(nv)
+            missing += [m for m in miss if m not in missing]
+        return out, missing
+    return rule, []
+
+
+def var_keys(rule) -> list:
+    """规则里引用到的全部变量名（**不需要值**）—— 登录面板据此提示「还差哪几个」。"""
+    out: list = []
+
+    def _walk(x):
+        if isinstance(x, str):
+            out.extend(k.strip() for k in _VAR_RE.findall(x) if k.strip() not in out)
+        elif isinstance(x, dict):
+            for v in x.values():
+                _walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                _walk(v)
+
+    _walk(rule)
+    return out
+
+
+# ---------------- JSONPath 第三通道（第 86 期）----------------
+# 酷我小说（`$.data.content` / JSON 版 `searchUrl`）与番茄的 `$.data.content` 都要用。
+# **只实现真规则用得到的子集**：`$.a.b`、`$.a[0]`、`$.a[*]`、`$..key`；取不到就返回 None，
+# 由调用方按「这次没取到」如实处理（而不是抛异常把整本书的抓取打断）。
+
+_JP_TOKEN = re.compile(r"\.\.([^.\[]+)|\.([^.\[]+)|\[(\d+|\*)\]")
+
+
+def _jp_tokens(expr: str) -> list:
+    """`$.a.b[0][*]..c` → ``[("key","a"), ("key","b"), ("idx",0), ("all",None), ("deep","c")]``。"""
+    out: list = []
+    pos, expr = 0, str(expr or "").strip()
+    if expr.startswith("$"):
+        pos = 1
+    while pos < len(expr):
+        m = _JP_TOKEN.match(expr, pos)
+        if not m:
+            bare = re.match(r"[^.\[]+", expr[pos:])
+            if not bare:
+                break
+            out.append(("key", bare.group(0)))
+            pos += bare.end()
+            continue
+        if m.group(1) is not None:
+            out.append(("deep", m.group(1)))
+        elif m.group(2) is not None:
+            out.append(("key", m.group(2)))
+        elif m.group(3) == "*":
+            out.append(("all", None))
+        else:
+            out.append(("idx", int(m.group(3))))
+        pos = m.end()
+    return out
+
+
+def _jp_walk(node, toks: list):
+    if not toks:
+        return node
+    kind, arg = toks[0]
+    rest = toks[1:]
+    if kind == "key":
+        return _jp_walk(node.get(arg), rest) if isinstance(node, dict) else None
+    if kind == "idx":
+        if not isinstance(node, list) or not -len(node) <= arg < len(node):
+            return None
+        return _jp_walk(node[arg], rest)
+    if kind == "all":
+        if not isinstance(node, list):
+            return None
+        vals = [_jp_walk(v, rest) for v in node]
+        return [v for v in vals if v is not None]
+    # deep：递归找同名键（命中多个就是列表）
+    hits: list = []
+
+    def _scan(x):
+        if isinstance(x, dict):
+            for k, v in x.items():
+                if k == arg:
+                    hits.append(_jp_walk(v, rest) if rest else v)
+                _scan(v)
+        elif isinstance(x, list):
+            for v in x:
+                _scan(v)
+
+    _scan(node)
+    return hits or None
+
+
+def json_path(data, path: str):
+    """按 JSONPath 子集取值（`path` 为空 / `$` 时返回整个对象）。"""
+    p = str(path or "").strip()
+    if not p or p == "$":
+        return data
+    return _jp_walk(data, _jp_tokens(p))
+
+
+def _json_body(raw: str):
+    """把响应体当 JSON 解析（失败返回 None：站点回了 HTML 错误页是常见情况）。"""
+    try:
+        return json.loads(raw)
+    except Exception:                                        # noqa: BLE001
+        return None
+
 
 
 # ---------------- 解析工具（bs4 延迟导入，未装也不影响模块导入）----------------
@@ -97,10 +259,28 @@ def _extract_regex(html: str, rule: dict):
     return m.group(0)
 
 
+def _json_scalar(v) -> str:
+    """JSON 取值结果压成字符串；**数组 / 对象一律当空**（见 `_extract_json` 的说明）。"""
+    if v is None or isinstance(v, (dict, list)):
+        return ""
+    return str(v)
+
+
+def _extract_json(raw: str, rule: dict) -> str:
+    """json 模式取**标量**正文（第三通道，第 86 期）。
+
+    ⚠️ 数组 / 对象返回空串：正文位置塞一个 JSON 数组进书里就是一段
+    `[{"text": …}]` 的乱码。要数组请把路径写到标量为止（如 `$.data.content`）。
+    """
+    return _json_scalar(json_path(_json_body(raw), rule.get("path")))
+
+
 def _extract(html: str, rule: dict) -> str:
     rule = rule or {}
     if rule.get("mode") == "regex":
         return _extract_regex(html, rule)
+    if rule.get("mode") == "json":
+        return _extract_json(html, rule)
     return _extract_css(html, rule)
 
 
@@ -120,7 +300,28 @@ def _absolutize(item: dict, base_url: str) -> dict:
     return item
 
 
+def _parse_search_json(raw: str, sp: dict, base_url: str = "") -> list:
+    """JSON 版搜索（第三通道）：`path` 取结果数组，`fields` 的每个值都是**子路径**。"""
+    arr = json_path(_json_body(raw), sp.get("path") or "$")
+    if isinstance(arr, dict):
+        arr = [arr]
+    if not isinstance(arr, list):
+        return []
+    fields = sp.get("fields") or {}
+    out = []
+    for it in arr:
+        if not isinstance(it, dict):
+            continue
+        item = {k: _json_scalar(json_path(it, spec)) for k, spec in fields.items()}
+        if item.get("url"):
+            out.append(_absolutize(item, base_url))
+    return out
+
+
 def _parse_search(html: str, sp: dict, base_url: str = "") -> list[dict]:
+    # 第三通道（第 86 期）：站点给的是 JSON（酷我是 `$.data.list` 这种）
+    if sp.get("mode") == "json":
+        return _parse_search_json(html, sp, base_url)
     if sp.get("mode") == "regex":
         pat = re.compile(sp.get("pattern", ""), re.S | re.I)
         out = []
@@ -146,8 +347,29 @@ def _parse_search(html: str, sp: dict, base_url: str = "") -> list[dict]:
     return out
 
 
+def _extract_links_json(raw: str, toc: dict, base_url: str) -> list:
+    """JSON 版目录（第三通道）：`path` 取章节数组，`fields` 用子路径取标题 / 地址。"""
+    arr = json_path(_json_body(raw), toc.get("path") or "$")
+    if isinstance(arr, dict):
+        arr = [arr]
+    if not isinstance(arr, list):
+        return []
+    fields = toc.get("fields") or {}
+    out = []
+    for it in arr:
+        if not isinstance(it, dict):
+            continue
+        href = _json_scalar(json_path(it, fields.get("url") or "$.url"))
+        title = _json_scalar(json_path(it, fields.get("title") or "$.title")) or href
+        if href:
+            out.append((title, urljoin(base_url, href)))
+    return out
+
+
 def _extract_links(html: str, toc: dict, base_url: str) -> list[tuple[str, str]]:
     """返回 [(标题, 绝对URL)] 章节链接列表。"""
+    if toc.get("mode") == "json":
+        return _extract_links_json(html, toc, base_url)
     if toc.get("mode") == "regex":
         pat = re.compile(toc.get("pattern", ""), re.S | re.I)
         out = []
@@ -178,10 +400,25 @@ class RuleBasedSource(SourceAdapter):
 
     def __init__(self):
         rule = self._RULE
+        # 第 86 期：`{var:<key>}` 在这里**一次渲染完**（含 headers / url / 选择器 / path），
+        # 免得每个取值点各写一遍；缺哪个变量记下来，真正出网前如实报错。
+        self.variables = load_vars(rule.get("name"))
+        rule, self.missing_vars = render_rule_vars(rule, self.variables)
+        self._RULE = rule
         hdrs = rule.get("headers")
         if hdrs:
             self.headers = {**DEFAULT_HEADERS, **hdrs}
         self._concurrency = int(rule.get("concurrency", 8) or 8)
+
+    def _check_vars(self):
+        """出网前检查变量：缺就**当场报**，绝不带着 `{var:…}` 去请求站点。
+
+        带着原文请求的下场是站点回一个空页 / 404，报错离真正的原因很远 ——
+        与「未登录就抓」是同一类静默失败。
+        """
+        if self.missing_vars:
+            raise ValueError("缺少书源变量：" + "、".join(self.missing_vars)
+                             + "（到书源管理页的「登录」里填写）")
 
     # ---- 搜索 ----
     async def search(self, client, title: str) -> list[dict]:
@@ -199,6 +436,7 @@ class RuleBasedSource(SourceAdapter):
         ``has_more`` 只有「模板支持分页**且**本页确实取到了结果」才为真：真到底了的那次
         会返回 0 条，于是下一页自然收敛成 False（不靠猜、靠事实自纠）。
         """
+        self._check_vars()
         sp = self._RULE.get("search") or {}
         tpl = sp.get("url", "")
         if not tpl:
@@ -217,6 +455,7 @@ class RuleBasedSource(SourceAdapter):
 
     # ---- 取书：整页全文 ----
     async def fetch_book(self, client, item: dict) -> str:
+        self._check_vars()
         bp = self._RULE.get("book") or {}
         if bp.get("mode") == "toc":
             chapters = await self._fetch_toc(client, bp, item["url"])
@@ -226,6 +465,7 @@ class RuleBasedSource(SourceAdapter):
 
     # ---- 取书：结构化章节（供目录式分章）----
     async def fetch_book_chapters(self, client, item: dict) -> list[dict]:
+        self._check_vars()
         bp = self._RULE.get("book") or {}
         if bp.get("mode") == "toc":
             return await self._fetch_toc(client, bp, item["url"])
@@ -259,6 +499,7 @@ class RuleBasedSource(SourceAdapter):
 
     # ---- 预览（廉价：目录 + 首章样本）----
     async def preview(self, client, item: dict) -> dict:
+        self._check_vars()
         bp = self._RULE.get("book") or {}
         if bp.get("mode") == "toc":
             toc = bp.get("toc", {})
@@ -328,6 +569,8 @@ def validate_rule(rule: dict) -> list[str]:
         errs.append("search 为 css 模式时 container 必填")
     if sp.get("mode") == "regex" and not sp.get("pattern"):
         errs.append("search 为 regex 模式时 pattern 必填")
+    if sp.get("mode") == "json" and not sp.get("path"):
+        errs.append("search 为 json 模式时 path 必填（如 $.data.list）")
     bp = rule.get("book") or {}
     if bp.get("mode") == "toc":
         toc = bp.get("toc") or {}
@@ -335,6 +578,8 @@ def validate_rule(rule: dict) -> list[str]:
             errs.append("book.toc 为 css 模式时 container 必填")
         if toc.get("mode") == "regex" and not toc.get("pattern"):
             errs.append("book.toc 为 regex 模式时 pattern 必填")
+        if toc.get("mode") == "json" and not toc.get("path"):
+            errs.append("book.toc 为 json 模式时 path 必填（如 $.data.chapters）")
         if not bp.get("content"):
             errs.append("book.content（章节正文提取）必填")
     ch = rule.get("chapter") or {}

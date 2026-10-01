@@ -43,6 +43,7 @@ from .sources import rules as source_rules
 from .sources import toc_sources      # 第 85 期批次 B：官方书城「只取目录」
 from .sources import ledger as source_ledger   # 第 86 期：书源导入 / 台账 / 导出
 from .sources import legado as legado_mod      # 第 86 期：重新分析要用它重跑判定
+from .sources import creds as source_creds     # 第 86 期：Cookie 读写的唯一真值源
 
 # 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在
 # （用户书源在 novelforge.sources 包导入时已自动加载）
@@ -637,6 +638,108 @@ def api_sources_bulk(payload: dict = Body(...)):
             items.append({"name": name, "ok": False, "note": str(e.detail)})
     return {"action": action, "items": items,
             "ok_count": sum(1 for i in items if i.get("ok", True) and not i.get("note"))}
+
+
+# ---------------- 书源凭据：Cookie / 变量 / 登录声明（第 86 期）----------------
+# 三条口径：① Cookie 落盘格式与客户端读的**逐字一致**（见 `sources/creds.py`）；
+#          ② 任何响应都**不回凭据值**，只回「有没有设置」；
+#          ③ 登录面板由**书源自己的声明**驱动（`legado.login_spec`），不写死站点。
+
+def _load_rule(name: str) -> dict:
+    """读一条用户书源的规则本体（没有 / 坏文件返回空字典）。"""
+    f = pathlib.Path(config.SOURCES_DIR) / f"{name}.json"
+    if not f.is_file():
+        return {}
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:                                        # noqa: BLE001
+        return {}
+    if isinstance(data, list):
+        return data[0] if data and isinstance(data[0], dict) else {}
+    return data if isinstance(data, dict) else {}
+
+
+def _source_domains(name: str) -> list:
+    """书源声明的域名（先问注册表，再回落规则文件）—— Cookie **补域**必须用它。"""
+    cls = REGISTRY.get(name)
+    if cls is not None:
+        return [str(d) for d in getattr(cls, "domains", [])]
+    return [str(d) for d in (_load_rule(name).get("domains") or [])]
+
+
+@app.get("/api/sources/{name}/cookie")
+def api_source_cookie(name: str):
+    """登录态：**只有元数据**（有没有、几条、哪些域），没有任何 cookie 值。"""
+    return {"name": name, "domains": _source_domains(name), **source_creds.status(name)}
+
+
+@app.post("/api/sources/{name}/cookie")
+def api_source_cookie_save(name: str, payload: dict = Body(...)):
+    """保存粘贴的 Cookie（`domains` 可选，用来覆盖书源声明的域，补域靠它）。
+
+    解析不出 cookie、或既没有域也拿不到声明域时 → 400 并说清原因：
+    「不补域地写下去 = 写了个永远不生效的文件」比报错糟得多。
+    """
+    p = payload or {}
+    doms = [str(d) for d in (p.get("domains") or [])] or _source_domains(name)
+    try:
+        st = source_creds.save(name, str(p.get("text") or ""), doms)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # ⚠️ `declared_domains` 是「书源声明的」，`st["domains"]` 是「cookie 实际绑定到的」
+    # （归一化后，可能去掉了 `www.`）。两个键分开报，免得用户以为界面写错了域。
+    return {"name": name, "declared_domains": doms, **st}
+
+
+@app.delete("/api/sources/{name}/cookie")
+def api_source_cookie_clear(name: str):
+    """清除登录态。`cleared=False` = 本来就没有（界面据此如实说，不假装清掉了）。"""
+    return {"ok": True, "cleared": source_creds.clear(name)}
+
+
+@app.get("/api/sources/{name}/vars")
+def api_source_vars(name: str):
+    """书源变量：只回**每个键有没有设置**，外加规则里引用到的键（提示还差哪几个）。"""
+    rule = _load_rule(name)
+    return {"name": name, "keys": db.source_vars_keys(name),
+            "referenced": source_rules.var_keys(rule) if rule else []}
+
+
+@app.post("/api/sources/{name}/vars")
+def api_source_vars_save(name: str, payload: dict = Body(...)):
+    """写变量。值传空串 = **清除该键**（界面上「填了又清空」要能真的清掉）。"""
+    p = payload or {}
+    values = p.get("values") if isinstance(p.get("values"), dict) else {
+        k: v for k, v in p.items() if k not in ("name", "values")}
+    for k, v in (values or {}).items():
+        db.source_vars_set(name, str(k), str(v if v is not None else ""))
+    rule = _load_rule(name)
+    return {"name": name, "keys": db.source_vars_keys(name),
+            "referenced": source_rules.var_keys(rule) if rule else []}
+
+
+@app.get("/api/sources/{name}/login-spec")
+def api_source_login_spec(name: str):
+    """登录面板的**全部输入**：Cookie 表单 / 变量表单 / 登录页地址 / 作者说明 / 做不到的步骤。
+
+    声明来自台账里的**原始原文**（只有导入源有）。手写源没有声明 ⇒ 如实说明并回空壳，
+    但 Cookie 照样能粘贴保存（登录这件事对两类源是一样的）。
+    """
+    base = {"name": name, "cookie": source_creds.status(name),
+            "keys": db.source_vars_keys(name),
+            "referenced": source_rules.var_keys(_load_rule(name))}
+    row = db.source_ledger_get(name) or {}
+    raw = row.get("raw_json") or ""
+    if not raw:
+        return {**base, "needs_cookie": True, "vars": [], "open_url": "", "instructions": "",
+                "unsupported": [], "has_declaration": False,
+                "note": "这条源没有原始声明（手写源）：Cookie 仍可粘贴保存，变量按需自填"}
+    try:
+        return {**base, **legado_mod.login_spec(json.loads(raw)), "has_declaration": True}
+    except Exception as e:                                   # noqa: BLE001 —— 坏原文如实说
+        return {**base, "needs_cookie": True, "vars": [], "open_url": "", "instructions": "",
+                "unsupported": [], "has_declaration": False,
+                "note": f"原始声明解析失败：{e}"}
 
 
 @app.post("/api/sources/test")
