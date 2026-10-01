@@ -243,12 +243,18 @@ class DownloadManager:
                 "\n\n".join(f"{c['title']}\n{c['body']}" for c in chapters),
                 encoding="utf-8",
             )
-            self.write_sidecar(txt_path, item, out_dir)
+            self.write_sidecar(txt_path, item, out_dir,
+                               last_title=(chapters[-1].get("title") or ""))
             result = pipeline.convert_chapters(chapters, out_dir, opts, meta=meta)
         else:
             txt_path = input_dir / f"{safe}.txt"
             txt_path.write_text(text, encoding="utf-8")
-            self.write_sidecar(txt_path, item, out_dir)
+            # 整页全文这条路上没有现成章节表，用与 pipeline 同一套判据现切一次拿末章标题
+            # （一次下载只多跑一遍正则，换来「下载完就知道最新章节」这件事不缺席）
+            from ..core import detect
+            chaps = detect.detect_chapters(text) or []
+            self.write_sidecar(txt_path, item, out_dir,
+                               last_title=(chaps[-1].get("title") if chaps else ""))
             result = pipeline.convert_text(text, out_dir, opts, meta=meta)
         # 回传派生格式的降级提示
         caller_opts["_notice"] = opts.get("_notice", "")
@@ -308,8 +314,14 @@ class DownloadManager:
             sidecar.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         return result
 
-    def write_sidecar(self, txt_path: Path, item: dict, output_dir: Path):
-        """下载完成后为本地 txt 写入 sidecar，供日后 update 使用。"""
+    def write_sidecar(self, txt_path: Path, item: dict, output_dir: Path,
+                      last_title: str = ""):
+        """下载完成后为本地 txt 写入 sidecar，供日后 update 使用。
+
+        ⚠️ **`last_title`（最新章节）必须在这里就写下来**：产品承诺是「下载后就能看出这本书
+        来自哪个源、最新章节是哪一章」，而 `update()` 是**下一次抓取**时才回写的 ——
+        中间这段时间 sidecar 里没有它，界面与用户看到的就只有一句「不知道」。
+        """
         sidecar = Path(txt_path).with_suffix(".meta.json")
         meta = {
             "source": source_of(item),
@@ -318,4 +330,6 @@ class DownloadManager:
             "title": item.get("title"),
             "output_dir": str(output_dir),
         }
+        if last_title:
+            meta["last_title"] = str(last_title)
         sidecar.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")

@@ -88,7 +88,12 @@ def _dump_pg(dest: pathlib.Path) -> str:
     # --no-owner/--no-acl：还原进本项目自己的库时不依赖原库里的角色与权限。
     cmd = ["pg_dump", "-Fc", "--no-owner", "--no-acl", "-d", dsn, "-f", str(dest)]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=_PG_DUMP_TIMEOUT)
+        # ⚠️ 显式 `encoding="utf-8"`：`text=True` 的默认编码是**系统区域编码**（Windows 是 GBK），
+        # pg_dump 的 stderr 里出现非 GBK 字节就会在读线程撞 `UnicodeDecodeError`，
+        # 结果是 `p.stderr` 变成 `None`、报错变成看不懂的 `AttributeError`
+        # （第 86 期在 Node 那条路上实测踩过同一个坑，这里一并堵上）。
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=_PG_DUMP_TIMEOUT)
     except FileNotFoundError:
         raise SnapshotError(
             "容器里没有 pg_dump 可执行文件，无法给 PostgreSQL 做更新前备份。"
