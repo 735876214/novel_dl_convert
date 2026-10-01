@@ -136,6 +136,11 @@ EXPECTED_SPECS = (
     # 即已实现，仓内对照却记成「未实现」⇒ 属对照走样。这条钉住「改成了已实现 + 跳转」，
     # 并反向钉住「IMPORT / RECOMMENDATIONS 仍留在未支持卡里」（过滤不能过度）。
     "src/views/settings/pages/MaintenancePage.spec.ts",
+    # 第 85 期：目录的「段」——卷 / 卷前 / 卷尾 / 正文。这一层的三种走样全是**静默**的：
+    # 位置算错 ⇒ 点目录跳错章；空卷名回落成「目录」⇒ 看着像重复标题；段 key 用段名 ⇒
+    # 背靠背的两个无名段互相串折叠。分组与段名是唯一真值源（两处目录共用），故单独钉住。
+    "src/lib/chapterGroups.spec.ts",
+    "src/components/book/detail/ChaptersTab.spec.ts",
 )
 
 
