@@ -124,6 +124,80 @@ def add_ncx_navpoint(ncx: str, *, href: str, title: str, play_order: int) -> str
     return _insert_before(ncx, "</navMap>", frag, what="toc.ncx 的 </navMap>")
 
 
+_CHAPTER_RE_SRC = r"EPUB/c(\d{4})\.xhtml$"
+
+
+def chapter_xhtml(title: str, body_html: str, *, lang: str = "zh") -> bytes:
+    """按 ebooklib 既有章节的**同一模板**生成新章 XHTML（第 86 期）。
+
+    ⚠️ 模板是从真产物的字节里取下来的（`EPUB/c0000.xhtml`），**不是自创的**：
+    同一本书里混两种模板，会被某些阅读器区别对待（样式/目录识别不一致），
+    而这种问题只在「追更之后」才出现，最难归因。
+    """
+    from xml.sax.saxutils import escape
+    t = escape(str(title or ""))
+    body = "\n".join(("    " + ln) if ln.strip() else "" for ln in str(body_html or "").splitlines())
+    return (f"<?xml version='1.0' encoding='utf-8'?>\n<!DOCTYPE html>\n"
+            f'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"'
+            f' epub:prefix="z3998: http://www.daisy.org/z3998/2012/vocab/structure/#"'
+            f' lang="{lang}" xml:lang="{lang}">\n  <head>\n    <title>{t}</title>\n  </head>\n'
+            f"  <body>\n    <h2>{t}</h2>\n{body}\n  </body>\n</html>\n").encode("utf-8")
+
+
+def append_chapters(epub, chapters, *, lang: str = "zh") -> dict:
+    """把新章**追加**进既有 EPUB（**既有条目一字不动**，本函数就是第 6 步的落点）。
+
+    · `chapters` = ``[{"title": str, "body_html": str}, ...]``（按阅读顺序）；
+    · 新章编号从**既有最大章号 + 1** 续（`EPUB/c%04d.xhtml` + manifest id `chapter_%d`，
+      与 ebooklib 的既有命名一致；见 `.codebuddy/memory` 的结构基线）；
+    · **原地原子替换**：先写 `.part` 再 `Path.replace` —— 中途失败既有文件一字不动；
+    · 返回 ``{"path", "added", "start_index"}`` 供调用方如实报「新增 N 章」。
+
+    ⚠️ 只登记**三处**（OPF manifest/spine + nav + NCX），其余条目由 :func:`copy_with_extra`
+    原样搬运 —— 「既有章节的编号、顺序、内容一字不动」是阅读数据（进度/批注）不漂移的**根据**。
+    """
+    import re
+    epub = pathlib.Path(epub)
+    if not chapters:
+        return {"path": epub, "added": [], "start_index": None}
+    with zipfile.ZipFile(epub) as z:
+        names = z.namelist()
+        opf_path = next((n for n in names if n.endswith(".opf")), "")
+        nav_path = next((n for n in names if n.endswith("nav.xhtml")), "")
+        ncx_path = next((n for n in names if n.endswith(".ncx")), "")
+        if not opf_path:
+            raise ValueError("这个 EPUB 里找不到 OPF（不是标准结构，拒绝改）")
+        nums = [int(m.group(1)) for m in (re.search(_CHAPTER_RE_SRC, n) for n in names) if m]
+        start = (max(nums) + 1) if nums else 0
+        opf = z.read(opf_path).decode("utf-8")
+        nav = z.read(nav_path).decode("utf-8") if nav_path else ""
+        ncx = z.read(ncx_path).decode("utf-8") if ncx_path else ""
+    play = ncx.count("<navPoint") + 1
+    extra: list = []
+    added: list = []
+    for i, ch in enumerate(chapters):
+        n = start + i
+        href = f"c{n:04d}.xhtml"
+        item_id = f"chapter_{n}"
+        extra.append((f"EPUB/{href}", chapter_xhtml(ch.get("title", ""), ch.get("body_html", ""),
+                                                    lang=lang)))
+        opf = add_spine_itemref(add_manifest_item(opf, href=href, item_id=item_id),
+                                item_id=item_id)
+        if nav:
+            nav = add_nav_link(nav, href=href, title=str(ch.get("title", "")))
+        if ncx:
+            ncx = add_ncx_navpoint(ncx, href=href, title=str(ch.get("title", "")), play_order=play)
+            play += 1
+        added.append(f"EPUB/{href}")
+    replace = {opf_path: opf.encode("utf-8")}
+    if nav_path and nav:
+        replace[nav_path] = nav.encode("utf-8")
+    if ncx_path and ncx:
+        replace[ncx_path] = ncx.encode("utf-8")
+    copy_with_extra(epub, epub, extra=extra, replace=replace)
+    return {"path": epub, "added": added, "start_index": start}
+
+
 def verify_unchanged(src, dst, *, added=(), replaced=()) -> list:
     """校验 ``dst`` 相对 ``src`` **只多了 ``added`` / 只改了 ``replaced``**。
 
