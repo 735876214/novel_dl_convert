@@ -44,6 +44,7 @@ from .sources import toc_sources      # 第 85 期批次 B：官方书城「只�
 from .sources import ledger as source_ledger   # 第 86 期：书源导入 / 台账 / 导出
 from .sources import legado as legado_mod      # 第 86 期：重新分析要用它重跑判定
 from .sources import creds as source_creds     # 第 86 期：Cookie 读写的唯一真值源
+from .sources import probe as source_probe     # 第 86 期：单字探测 / 全部验证
 
 # 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在
 # （用户书源在 novelforge.sources 包导入时已自动加载）
@@ -740,6 +741,46 @@ def api_source_login_spec(name: str):
         return {**base, "needs_cookie": True, "vars": [], "open_url": "", "instructions": "",
                 "unsupported": [], "has_declaration": False,
                 "note": f"原始声明解析失败：{e}"}
+
+
+# ---------------- 书源有效性探测（第 86 期第 4 步）----------------
+# 单字探测（默认「我」）+ 全部验证（**串行 + 间隔**）+ 目录来源探测（**不落库**）。
+# 状态机与「不落库」的理由写在 `sources/probe.py` 的模块注释里，这里只做包装。
+
+@app.post("/api/sources/{name}/probe")
+async def api_source_probe(name: str, payload: dict = Body(None)):
+    """单字探测一条书源：返回 ≥1 条即有效，同时回条数 / 耗时 / 原因原文，并回写台账。
+
+    ⚠️ 探测**不受下载闸门限制**（与「试搜」同一条口径）：闸门管的是「真的去搜去下」，
+    探测管的是「这条源现在还能不能用」—— 一起拦掉的话，用户在下载关闭时就再也没法
+    体检自己的书源了（第 71 期的取舍）。
+    """
+    q = str((payload or {}).get("query") or "").strip() or source_probe.DEFAULT_QUERY
+    return await source_probe.probe(_manager(), name, query=q)
+
+
+@app.post("/api/sources/probe-all")
+async def api_sources_probe_all(payload: dict = Body(None)):
+    """全部验证：**串行 + 间隔**（默认 1.5 秒）逐条跑，逐条回结果与各状态计数。
+
+    `names` 缺省 = 全部书源（含停用与内置：停用与不可执行的会**直接判 unsupported 且不出网**，
+    所以全量验证不会白跑一堆请求）。
+    """
+    p = payload or {}
+    names = [str(n) for n in (p.get("names") or [])] or [s["name"] for s in store.list_sources()]
+    try:
+        interval = float(p.get("interval", source_probe.DEFAULT_INTERVAL))
+    except (TypeError, ValueError):
+        interval = source_probe.DEFAULT_INTERVAL
+    return await source_probe.probe_many(_manager(), names, interval=max(0.0, interval))
+
+
+@app.post("/api/toc/probe")
+async def api_toc_probe(payload: dict = Body(None)):
+    """目录来源探测：只看这条来源现在能不能取到目录，**绝不落库**（不写 `store_toc`）。"""
+    p = payload or {}
+    q = str(p.get("query") or "").strip() or source_probe.DEFAULT_QUERY
+    return await source_probe.probe_toc(_manager(), str(p.get("source_id") or ""), query=q)
 
 
 @app.post("/api/sources/test")
