@@ -35,6 +35,8 @@ const SECTIONS: ToolSection[] = [
   { label: '重复书籍', routeName: 'tools-duplicate-books' },
   { label: '缺失资源', routeName: 'tools-missing-resources' },
   { label: '书源管理', routeName: 'tools-sources', feature: 'sources' },
+  // 第 86 期能力的接线页（导入 / 台账 / 登录 / 验证）：与「书源管理」同一能力键
+  { label: '书源工具', routeName: 'tools-source-tools', feature: 'sources' },
   { label: '导出目录', routeName: 'tools-output' },
   // 标签跟 `features.labels()["convert"]` 同步：第 62 期 TXT 改成「只入库不转换」后，
   // 这个页面（路由名仍是 tools-local）做的是**手动投递入库**，不再是转换。

@@ -61,6 +61,7 @@ import LogsView from '@/views/tools/LogsView.vue'
 import MissingResourcesView from '@/views/tools/MissingResourcesView.vue'
 import OutputView from '@/views/tools/OutputView.vue'
 import SourcesView from '@/views/tools/SourcesView.vue'
+import SourceToolsView from '@/views/tools/SourceToolsView.vue'
 import ToolsLayout from '@/views/tools/ToolsLayout.vue'
 import { SETTINGS_HOME, SETTINGS_PAGES } from '@/data/settingsNav'
 
@@ -221,6 +222,8 @@ const router = createRouter({
         { path: 'duplicates', name: 'tools-duplicate-books', component: DuplicateBooksView },
         { path: 'missing', name: 'tools-missing-resources', component: MissingResourcesView },
         { path: 'sources', name: 'tools-sources', component: SourcesView },
+        // 第 86 期能力的接线页（导入 / 台账 / 登录 / 验证）
+        { path: 'source-tools', name: 'tools-source-tools', component: SourceToolsView },
               { path: 'output', name: 'tools-output', component: OutputView },
         { path: 'local', name: 'tools-local', component: LocalConvertView },
         { path: 'logs', name: 'tools-logs', component: LogsView },

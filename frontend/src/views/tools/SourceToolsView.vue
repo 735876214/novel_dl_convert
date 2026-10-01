@@ -1,0 +1,519 @@
+<script setup lang="ts">
+/**
+ * 书源工具（第 86 期能力的接线页）：**导入 / 台账 / 登录 / 验证**。
+ *
+ * 这一页此前只存在于后端（16 条接口 + 契约测试），界面上完全没有入口 —— 本期补上。
+ * 四块：
+ *
+ * ① **导入**：粘贴 Legado 书源原文（或本项目导出文件）→ **默认 dry-run** 出差异表，
+ *    逐条给结论（新 / 更新 / 重复 / 撞名 / 不可执行）；撞名与更新要用户**逐条选**
+ *    怎么处理（跳过 / 覆盖 / 两条并存），**绝不静默覆盖**。确认后才真正落盘，
+ *    而覆盖前后端已把旧规则原文存进历史（可回滚）。
+ * ② **台账**：全部书源的启停、能力档位、分组、最近验证；可重分析、看覆盖历史并回滚、导出。
+ * ③ **登录**：Cookie（**只回有没有，不回值**）+ 书源变量（同样是「设没设」）+ 登录声明。
+ * ④ **验证**：单源 / 全部源的连通性探测（后端零外呼之外的实探，逐条回报）。
+ *
+ * ⚠️ 凭据一律**不回显**：后端只回 `has_*`，界面上不给「查看已保存的值」这种按钮 ——
+ * 那是把凭据明文搬到屏幕上，与后端刻意的口径相悖（填了就能用，忘了就重填）。
+ */
+import { computed, ref } from 'vue'
+
+import Badge from '@/components/ui/Badge.vue'
+import Button from '@/components/ui/Button.vue'
+import Card from '@/components/ui/Card.vue'
+import {
+  api,
+  type SourceCookieStatus,
+  type SourceImportResult,
+  type SourceImportRow,
+  type SourceLedgerRow,
+  type SourceLoginSpec,
+  type SourceVarsResult,
+} from '@/lib/api'
+import { useUiStore } from '@/stores/ui'
+
+const ui = useUiStore()
+
+/** 错误 → 可读文案（本页只做展示，不需要后端给的完整诊断串） */
+function msg(e: unknown): string {
+  return e instanceof Error ? e.message : '操作失败'
+}
+
+// ---------------- ① 导入 ----------------
+const paste = ref('')
+const origin = ref('paste')
+const preview = ref<SourceImportResult | null>(null)
+const resolutions = ref<Record<string, string>>({})
+const importing = ref(false)
+
+const rows = computed<SourceImportRow[]>(() => preview.value?.rows ?? [])
+
+function verdictLabel(v: string): string {
+  return (
+    {
+      new: '新增',
+      update: '更新',
+      duplicate: '内容相同',
+      conflict: '撞名 / 同站点',
+      unsupported: '不可执行',
+    }[v] || v
+  )
+}
+
+function verdictTone(v: string): 'accent' | undefined {
+  return v === 'conflict' || v === 'unsupported' ? 'accent' : undefined
+}
+
+async function previewImport(): Promise<void> {
+  if (!paste.value.trim()) {
+    ui.toast('先粘贴书源 JSON（或导出文件内容）')
+    return
+  }
+  try {
+    const res = await api.sourcesImport({
+      payload: paste.value,
+      origin: origin.value || 'paste',
+      dry_run: true,
+    })
+    preview.value = res
+    // 需要用户拍板的条目默认最保守：**跳过**（覆盖是破坏性动作，不该是默认值）
+    const next: Record<string, string> = {}
+    for (const r of res.rows ?? []) {
+      if (r.verdict === 'conflict' || r.verdict === 'update') next[r.name] = 'skip'
+    }
+    resolutions.value = next
+  } catch (e) {
+    preview.value = null
+    ui.toast(msg(e))
+  }
+}
+
+async function applyImport(): Promise<void> {
+  importing.value = true
+  try {
+    const res = await api.sourcesImport({
+      payload: paste.value,
+      origin: origin.value || 'paste',
+      dry_run: false,
+      resolutions: resolutions.value,
+    })
+    const c = res.counts ?? {}
+    ui.toast(
+      `导入完成：新增 ${c.new ?? 0} · 更新 ${c.update ?? 0} · 重复 ${c.duplicate ?? 0}` +
+        ` · 跳过 ${c.skipped ?? 0} · 不可执行 ${c.unsupported ?? 0}`,
+    )
+    for (const it of (res.items ?? []).filter((i) => !i.ok).slice(0, 3)) {
+      ui.toast(`${it.name}：${it.note || '失败'}`)
+    }
+    preview.value = null
+    paste.value = ''
+    await loadLedger()
+  } catch (e) {
+    ui.toast(msg(e))
+  } finally {
+    importing.value = false
+  }
+}
+
+async function exportAll(): Promise<void> {
+  try {
+    const data = await api.sourcesExport()
+    await navigator.clipboard.writeText(JSON.stringify(data, null, 2))
+    ui.toast('已导出到剪贴板（导出后再导入是幂等的）')
+  } catch (e) {
+    ui.toast(msg(e))
+  }
+}
+
+// ---------------- ② 台账 ----------------
+const ledger = ref<SourceLedgerRow[]>([])
+const loading = ref(false)
+const busy = ref('')
+const historyFor = ref('')
+const history = ref<Array<{ id: string; note: string; created_at: number }>>([])
+
+async function loadLedger(): Promise<void> {
+  loading.value = true
+  try {
+    ledger.value = (await api.sourcesLedger()).items
+  } catch (e) {
+    ui.toast(msg(e))
+    ledger.value = []
+  } finally {
+    loading.value = false
+  }
+}
+
+async function toggle(row: SourceLedgerRow): Promise<void> {
+  busy.value = row.name
+  try {
+    await api.sourceEnabled(row.name, !row.enabled)
+    await loadLedger()
+  } catch (e) {
+    // 内置源会被后端如实拒绝（没有可挂启停状态的规则文件）—— 把原因原样告诉用户
+    ui.toast(msg(e))
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function reanalyze(row: SourceLedgerRow): Promise<void> {
+  busy.value = row.name
+  try {
+    const res = await api.sourceReanalyze(row.name)
+    ui.toast(`${row.name}：档位 ${res.supported}${res.usable ? '，现在能跑了' : ''}`)
+    await loadLedger()
+  } catch (e) {
+    ui.toast(msg(e))
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function openHistory(name: string): Promise<void> {
+  if (historyFor.value === name) {
+    historyFor.value = ''
+    return
+  }
+  historyFor.value = name
+  history.value = []
+  try {
+    history.value = (await api.sourceHistory(name)).items
+  } catch (e) {
+    ui.toast(msg(e))
+  }
+}
+
+async function rollback(name: string, id: string): Promise<void> {
+  busy.value = name
+  try {
+    await api.sourceRollback(name, id)
+    ui.toast(`${name} 已回滚到选中的那一版`)
+    await loadLedger()
+  } catch (e) {
+    ui.toast(msg(e))
+  } finally {
+    busy.value = ''
+  }
+}
+
+// ---------------- ③ 登录 ----------------
+const loginFor = ref('')
+const spec = ref<SourceLoginSpec | null>(null)
+const cookieText = ref('')
+const cookieDomains = ref('')
+const varsState = ref<SourceVarsResult | null>(null)
+const varValues = ref<Record<string, string>>({})
+
+/** 需要填的变量键 = 规则引用到的 ∪ 已设置过的（后者让用户能改动之前填的键名） */
+const varKeys = computed(() => {
+  const s = new Set<string>([...(varsState.value?.referenced ?? [])])
+  for (const k of Object.keys(varsState.value?.keys ?? {})) s.add(k)
+  return [...s]
+})
+
+async function openLogin(name: string): Promise<void> {
+  if (loginFor.value === name) {
+    loginFor.value = ''
+    return
+  }
+  loginFor.value = name
+  spec.value = null
+  varValues.value = {}
+  try {
+    const [s, v] = await Promise.all([api.sourceLoginSpec(name), api.sourceVars(name)])
+    spec.value = s
+    varsState.value = v
+  } catch (e) {
+    ui.toast(msg(e))
+  }
+}
+
+async function saveCookie(): Promise<void> {
+  if (!loginFor.value || !cookieText.value.trim()) {
+    ui.toast('先粘贴 Cookie')
+    return
+  }
+  try {
+    const domains = cookieDomains.value
+      .split(',')
+      .map((d) => d.trim())
+      .filter(Boolean)
+    const st = await api.sourceCookieSave(loginFor.value, cookieText.value, domains)
+    spec.value = spec.value ? { ...spec.value, cookie: st } : spec.value
+    cookieText.value = ''
+    ui.toast('登录态已保存（值不会被回显）')
+  } catch (e) {
+    ui.toast(msg(e))
+  }
+}
+
+async function clearCookie(): Promise<void> {
+  if (!loginFor.value) return
+  try {
+    const res = await api.sourceCookieClear(loginFor.value)
+    ui.toast(res.cleared ? '已清除登录态' : '本来就没有登录态')
+    const st: SourceCookieStatus = await api.sourceCookie(loginFor.value)
+    spec.value = spec.value ? { ...spec.value, cookie: st } : spec.value
+  } catch (e) {
+    ui.toast(msg(e))
+  }
+}
+
+async function saveVars(): Promise<void> {
+  if (!loginFor.value) return
+  try {
+    varsState.value = await api.sourceVarsSave(loginFor.value, varValues.value)
+    varValues.value = {}
+    ui.toast('变量已保存（值不会被回显；留空即清除该键）')
+  } catch (e) {
+    ui.toast(msg(e))
+  }
+}
+
+// ---------------- ④ 验证 ----------------
+const probing = ref(false)
+const probeResult = ref('')
+
+async function probeAll(): Promise<void> {
+  probing.value = true
+  try {
+    probeResult.value = JSON.stringify(await api.sourcesProbeAll(), null, 2)
+    ui.toast('验证完成，结果见下方')
+    await loadLedger()
+  } catch (e) {
+    ui.toast(msg(e))
+  } finally {
+    probing.value = false
+  }
+}
+
+void loadLedger()
+</script>
+
+<template>
+  <div class="flex flex-col gap-4 p-4">
+    <!-- ① 导入 -->
+    <Card>
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-[13px] font-medium text-foreground">导入书源</span>
+        <Badge>默认只预览，不落盘</Badge>
+        <Button size="sm" class="ml-auto" :disabled="importing" @click="previewImport">
+          预览（不写入）
+        </Button>
+        <Button size="sm" :disabled="importing || !preview" @click="applyImport">
+          {{ importing ? '导入中…' : '确认导入' }}
+        </Button>
+      </div>
+      <div class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
+        粘贴 Legado 书源原文（单个 / 数组 / JSONL）或本项目导出的文件内容。
+        预览会逐条给出结论：新增 / 更新 / 内容相同 / 撞名 / 不可执行。
+      </div>
+      <textarea
+        v-model="paste"
+        rows="6"
+        placeholder='[{"bookSourceName": "...", "bookSourceUrl": "..."}]'
+        class="mt-2 w-full rounded-md border border-border bg-transparent px-2 py-1.5 font-mono text-[11.5px] text-foreground outline-none focus:border-primary"
+      />
+      <div class="mt-2 flex flex-wrap items-center gap-2 text-[11.5px]">
+        <span class="text-muted-foreground">来源标记</span>
+        <input
+          v-model="origin"
+          class="w-40 rounded-md border border-border bg-transparent px-2 py-1 text-[11.5px] text-foreground outline-none focus:border-primary"
+        />
+        <Button size="sm" class="ml-auto" @click="exportAll">导出全部用户源</Button>
+      </div>
+
+      <div v-if="rows.length" class="mt-3 border-t border-border pt-2">
+        <div
+          v-for="r in rows"
+          :key="r.name"
+          class="flex flex-wrap items-center gap-2 border-b border-border/60 py-1.5 text-[11.5px] last:border-b-0"
+        >
+          <Badge :tone="verdictTone(r.verdict)">{{ verdictLabel(r.verdict) }}</Badge>
+          <code class="min-w-0 flex-1 truncate text-foreground" :title="r.name">{{ r.name }}</code>
+          <span v-if="r.conflict_with" class="shrink-0 text-muted-foreground">
+            撞上 {{ r.conflict_with }}
+          </span>
+          <span v-if="r.changed_fields.length" class="shrink-0 text-muted-foreground">
+            变化：{{ r.changed_fields.slice(0, 3).join('、') }}
+          </span>
+          <span v-if="r.supported !== 'yes'" class="shrink-0 text-muted-foreground">
+            {{ r.supported === 'no' ? '不可执行（只记台账）' : '部分支持' }}
+          </span>
+          <select
+            v-if="r.verdict === 'conflict' || r.verdict === 'update'"
+            v-model="resolutions[r.name]"
+            class="shrink-0 rounded-md border border-border bg-transparent px-1.5 py-0.5 text-[11.5px] text-foreground outline-none focus:border-primary"
+          >
+            <option value="skip">跳过</option>
+            <option value="overwrite">覆盖（先备份旧规则）</option>
+            <option value="keep_both">两条并存</option>
+          </select>
+        </div>
+        <div v-for="r in rows" :key="`note-${r.name}`" class="text-[11px] text-muted-foreground">
+          <span v-for="(n, i) in r.notes" :key="i">{{ r.name }}：{{ n }}</span>
+        </div>
+      </div>
+      <div v-else-if="preview" class="mt-2 text-[11.5px] text-muted-foreground">
+        这份内容里没有可导入的书源。
+      </div>
+    </Card>
+
+    <!-- ② 台账 -->
+    <Card>
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-[13px] font-medium text-foreground">书源台账</span>
+        <Badge>{{ ledger.length }} 个</Badge>
+        <span class="text-[11.5px] text-muted-foreground">
+          启停不动文件；停用只是不注册，随时能再打开
+        </span>
+        <Button size="sm" class="ml-auto" :disabled="loading" @click="loadLedger">刷新</Button>
+      </div>
+
+      <div v-if="loading && !ledger.length" class="mt-2 text-[12.5px] text-muted-foreground">
+        读取中…
+      </div>
+      <div v-else-if="!ledger.length" class="mt-2 text-[12.5px] text-muted-foreground">
+        台账里还没有记录（手写 / 内置源不写台账，属正常）。
+      </div>
+      <div v-else class="mt-2">
+        <div
+          v-for="row in ledger"
+          :key="row.name"
+          class="border-b border-border/60 py-2 text-[11.5px] last:border-b-0"
+        >
+          <div class="flex flex-wrap items-center gap-2">
+            <code class="min-w-0 flex-1 truncate text-foreground" :title="row.name">
+              {{ row.name }}
+            </code>
+            <Badge v-if="row.imported">导入</Badge>
+            <Badge v-if="row.group_name">{{ row.group_name }}</Badge>
+            <Badge :tone="row.supported === 'yes' ? undefined : 'accent'">
+              {{ row.supported === 'yes' ? '可用' : row.supported === 'no' ? '不可执行' : '部分支持' }}
+            </Badge>
+            <span v-if="row.verified_at" class="shrink-0 text-muted-foreground">
+              验证 {{ row.verify_ok ? '通过' : '未通过' }} · {{ row.verify_ms }}ms
+            </span>
+            <Button size="sm" :disabled="busy === row.name" @click="toggle(row)">
+              {{ row.enabled ? '停用' : '启用' }}
+            </Button>
+            <Button size="sm" :disabled="busy === row.name" @click="reanalyze(row)">重分析</Button>
+            <Button size="sm" @click="openHistory(row.name)">
+              {{ historyFor === row.name ? '收起历史' : '历史' }}
+            </Button>
+          </div>
+          <div v-if="row.verify_error" class="mt-1 text-muted-foreground">
+            验证失败：{{ row.verify_error }}
+          </div>
+          <div v-if="row.last_update_note" class="mt-1 text-muted-foreground">
+            追更：{{ row.last_update_note }}
+          </div>
+          <div v-for="u in row.unsupported" :key="`${row.name}-${u.field}`" class="mt-1 text-muted-foreground">
+            不支持 {{ u.field }}：{{ u.why }}<span v-if="u.instead">（改用 {{ u.instead }}）</span>
+          </div>
+          <div v-if="historyFor === row.name" class="mt-2 pl-4">
+            <div v-if="!history.length" class="text-muted-foreground">没有覆盖历史。</div>
+            <div
+              v-for="h in history"
+              :key="h.id"
+              class="flex flex-wrap items-center gap-2 border-l border-border py-1 pl-2"
+            >
+              <span class="text-muted-foreground">{{ h.note || '覆盖前备份' }}</span>
+              <Button size="sm" :disabled="busy === row.name" @click="rollback(row.name, h.id)">
+                回滚到此
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Card>
+
+    <!-- ③ 登录 -->
+    <Card>
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-[13px] font-medium text-foreground">登录与凭据</span>
+        <Badge>值不会回显</Badge>
+        <select
+          v-model="loginFor"
+          class="ml-auto rounded-md border border-border bg-transparent px-2 py-1 text-[11.5px] text-foreground outline-none focus:border-primary"
+          @change="openLogin(loginFor)"
+        >
+          <option value="">选择一个书源…</option>
+          <option v-for="row in ledger" :key="`login-${row.name}`" :value="row.name">
+            {{ row.name }}
+          </option>
+        </select>
+      </div>
+
+      <div v-if="spec" class="mt-2 text-[11.5px]">
+        <div class="text-muted-foreground">
+          登录态：{{ spec.cookie?.has ? `已保存 ${spec.cookie?.count ?? 0} 条` : '未保存' }}
+          <span v-if="spec.cookie?.names?.length">
+            （{{ spec.cookie.names.slice(0, 5).join('、') }}）
+          </span>
+        </div>
+        <div v-if="spec.open_url" class="mt-1 text-muted-foreground">
+          登录页：<a class="underline" :href="spec.open_url" target="_blank" rel="noreferrer">{{ spec.open_url }}</a>
+        </div>
+        <div v-if="spec.instructions" class="mt-1 text-muted-foreground">{{ spec.instructions }}</div>
+        <div v-if="spec.note" class="mt-1 text-muted-foreground">{{ spec.note }}</div>
+        <div v-if="spec.unsupported.length" class="mt-1 text-muted-foreground">
+          这个源有 {{ spec.unsupported.length }} 个步骤本工具做不到，规则里已如实标注。
+        </div>
+
+        <textarea
+          v-model="cookieText"
+          rows="3"
+          placeholder="粘贴 Cookie（从浏览器开发者工具复制即可）"
+          class="mt-2 w-full rounded-md border border-border bg-transparent px-2 py-1.5 font-mono text-[11.5px] text-foreground outline-none focus:border-primary"
+        />
+        <div class="mt-1 flex flex-wrap items-center gap-2">
+          <input
+            v-model="cookieDomains"
+            placeholder="补域（可选，逗号分隔；留空用书源声明的域）"
+            class="min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 py-1 text-[11.5px] text-foreground outline-none focus:border-primary"
+          />
+          <Button size="sm" @click="saveCookie">保存 Cookie</Button>
+          <Button size="sm" @click="clearCookie">清除</Button>
+        </div>
+
+        <div v-if="varKeys.length" class="mt-3">
+          <div class="text-muted-foreground">
+            变量（规则里引用了 {{ varKeys.length }} 个；留空即清除）
+          </div>
+          <div v-for="k in varKeys" :key="`v-${k}`" class="mt-1 flex flex-wrap items-center gap-2">
+            <code class="w-40 shrink-0 truncate text-foreground" :title="k">{{ k }}</code>
+            <Badge v-if="varsState?.keys?.[k]">已设置</Badge>
+            <input
+              v-model="varValues[k]"
+              type="password"
+              :placeholder="varsState?.keys?.[k] ? '已设置（留空不改）' : '未设置'"
+              class="min-w-0 flex-1 rounded-md border border-border bg-transparent px-2 py-1 text-[11.5px] text-foreground outline-none focus:border-primary"
+            />
+          </div>
+          <Button size="sm" class="mt-2" @click="saveVars">保存变量</Button>
+        </div>
+      </div>
+      <div v-else class="mt-2 text-[11.5px] text-muted-foreground">
+        选一个书源就能看到它的登录声明、Cookie 状态与变量清单。
+      </div>
+    </Card>
+
+    <!-- ④ 验证 -->
+    <Card>
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-[13px] font-medium text-foreground">连通性验证</span>
+        <span class="text-[11.5px] text-muted-foreground">逐个源实探一次，结果写入台账</span>
+        <Button size="sm" class="ml-auto" :disabled="probing" @click="probeAll">
+          {{ probing ? '验证中…' : '全部验证' }}
+        </Button>
+      </div>
+      <pre
+        v-if="probeResult"
+        class="mt-2 max-h-72 overflow-auto rounded-md border border-border p-2 font-mono text-[11px] text-muted-foreground"
+        >{{ probeResult }}</pre
+      >
+    </Card>
+  </div>
+</template>

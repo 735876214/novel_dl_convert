@@ -815,6 +815,109 @@ export interface UnpackResult {
   actions: UnpackAction[]
 }
 
+// ---------- 书源：导入 / 台账 / 登录 / 验证（第 86 期能力的界面接线）----------
+// ⚠️ 涉及凭据的接口**一律只回「有没有设置」**，绝不回值（后端口径，界面不要试图显示明文）。
+
+/** 导入差异表的一行（`POST /api/sources/import` 的 dry-run 结果）。 */
+export interface SourceImportRow {
+  name: string
+  display_name: string
+  group: string
+  source_type: string
+  supported: 'yes' | 'partial' | 'no'
+  /** duplicate=内容相同（幂等）；update=同一个源的新版；conflict=撞名/同站点；unsupported=不可执行 */
+  verdict: 'new' | 'update' | 'duplicate' | 'conflict' | 'unsupported'
+  unsupported_fields: Array<{ field?: string; why?: string; instead?: string }>
+  notes: string[]
+  dedup_key: string
+  rule_hash: string
+  /** 撞上谁（冲突 / 更新时才有） */
+  conflict_with: string
+  changed_fields: string[]
+}
+
+export interface SourceImportItem {
+  name: string
+  verdict: string
+  action: string
+  ok: boolean
+  note: string
+}
+
+export interface SourceImportResult {
+  dry_run: boolean
+  origin: string
+  rows?: SourceImportRow[]
+  items?: SourceImportItem[]
+  counts?: Record<string, number>
+}
+
+/** 台账一行（`GET /api/sources/ledger`，**不含** raw_json：那是整条源原文，列表不必背）。 */
+export interface SourceLedgerRow {
+  name: string
+  origin: string
+  dedup_key: string
+  rule_hash: string
+  supported: 'yes' | 'partial' | 'no'
+  source_type: string
+  group_name: string
+  unsupported: Array<{ field?: string; why?: string; instead?: string }>
+  notes: string[]
+  enabled: boolean
+  imported: boolean
+  imported_at: number
+  updated_at: number
+  verified_at?: number | null
+  verify_ok?: boolean | null
+  verify_count: number
+  verify_ms: number
+  verify_error: string
+  last_update_at?: number | null
+  last_update_note: string
+}
+
+export interface SourceHistoryItem {
+  id: string
+  name: string
+  kind: string
+  rule_hash: string
+  note: string
+  created_at: number
+}
+
+/** 登录态：**只有元数据**（有没有、几条、哪些域），没有任何 cookie 值。 */
+export interface SourceCookieStatus {
+  name: string
+  domains: string[]
+  has?: boolean
+  count?: number
+  mtime?: number
+  size?: number
+  names?: string[]
+}
+
+/** 变量：`keys` 只回答「某个键设没设」，**值永不下发**。 */
+export interface SourceVarsResult {
+  name: string
+  keys: Record<string, boolean>
+  referenced: string[]
+}
+
+/** 登录面板的全部输入（由书源自己的声明驱动，不写死站点）。 */
+export interface SourceLoginSpec {
+  name: string
+  has_declaration: boolean
+  needs_cookie: boolean
+  open_url: string
+  instructions: string
+  note?: string
+  vars: Array<Record<string, unknown>>
+  unsupported: Array<Record<string, unknown>>
+  cookie?: SourceCookieStatus
+  keys?: Record<string, boolean>
+  referenced?: string[]
+}
+
 export interface ConflictApplyResult {
   renamed: Array<{ old: string; new: string; library_id: string }>
   errors: Array<{ old?: string; error: string }>
@@ -4428,6 +4531,115 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ remove_source: removeSource }),
     }),
+
+  // ---------- 书源：导入 / 台账 / 登录 / 验证（第 86 期）----------
+
+  /**
+   * 导入书源（Legado 原文或本项目导出文件）。
+   * ⚠️ `dry_run` 默认 true —— 一个字节都不写，先出差异表；确认后才带 `resolutions` 落盘。
+   * `resolutions` 里**非法取值一律当没给**（后端退回判定的默认动作），不会静默覆盖。
+   */
+  sourcesImport: (body: {
+    payload: unknown
+    origin?: string
+    dry_run?: boolean
+    resolutions?: Record<string, string>
+  }) =>
+    request<SourceImportResult>('/api/sources/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+
+  /** 导入历史（新的在前）。 */
+  sourcesImports: (limit = 20) =>
+    request<{ items: Record<string, unknown>[] }>(`/api/sources/imports?limit=${limit}`),
+
+  /** 导出全部用户源（导出 → 导入是幂等的）。 */
+  sourcesExport: () => request<unknown>('/api/sources/export'),
+
+  /** 台账全量：启停 / 档位 / 分组 / 最近验证 / 最近追更。 */
+  sourcesLedger: () => request<{ items: SourceLedgerRow[] }>('/api/sources/ledger'),
+
+  /** 启停一个书源（文件不动，只不注册；内置源会被后端如实拒绝）。 */
+  sourceEnabled: (name: string, enabled: boolean) =>
+    request<{ ok: boolean; enabled: boolean }>(
+      `/api/sources/${encodeURIComponent(name)}/enabled`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled }),
+      },
+    ),
+
+  /** 覆盖历史（只有元数据，不含旧规则原文）。 */
+  sourceHistory: (name: string, limit = 20) =>
+    request<{ items: SourceHistoryItem[] }>(
+      `/api/sources/${encodeURIComponent(name)}/history?limit=${limit}`,
+    ),
+
+  /** 回滚到某条历史里的旧规则（覆盖前已备份，这就是兑现处）。 */
+  sourceRollback: (name: string, historyId: string) =>
+    request<Record<string, unknown>>(
+      `/api/sources/${encodeURIComponent(name)}/rollback`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ history_id: historyId }),
+      },
+    ),
+
+  /** 按台账里的**原始原文**重新判定能力档位（引擎升级后老源的重新体检）。 */
+  sourceReanalyze: (name: string) =>
+    request<{ name: string; supported: string; usable: boolean }>(
+      `/api/sources/${encodeURIComponent(name)}/reanalyze`,
+      { method: 'POST' },
+    ),
+
+  /** 登录态元数据（**没有任何 cookie 值**）。 */
+  sourceCookie: (name: string) =>
+    request<SourceCookieStatus>(`/api/sources/${encodeURIComponent(name)}/cookie`),
+
+  /** 保存粘贴的 Cookie（`domains` 可选，用来覆盖书源声明的补域）。 */
+  sourceCookieSave: (name: string, text: string, domains: string[] = []) =>
+    request<SourceCookieStatus>(`/api/sources/${encodeURIComponent(name)}/cookie`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, domains }),
+    }),
+
+  /** 清除登录态；`cleared=false` = 本来就没有（界面据此如实说）。 */
+  sourceCookieClear: (name: string) =>
+    request<{ ok: boolean; cleared: boolean }>(
+      `/api/sources/${encodeURIComponent(name)}/cookie`,
+      { method: 'DELETE' },
+    ),
+
+  /** 变量：只回「每个键有没有设置」+ 规则里引用到的键（提示还差哪几个）。 */
+  sourceVars: (name: string) =>
+    request<SourceVarsResult>(`/api/sources/${encodeURIComponent(name)}/vars`),
+
+  /** 写变量；值传空串 = **清除该键**。 */
+  sourceVarsSave: (name: string, values: Record<string, string>) =>
+    request<SourceVarsResult>(`/api/sources/${encodeURIComponent(name)}/vars`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ values }),
+    }),
+
+  /** 登录面板的全部输入（Cookie 表单 / 变量表单 / 登录页地址 / 作者说明）。 */
+  sourceLoginSpec: (name: string) =>
+    request<SourceLoginSpec>(`/api/sources/${encodeURIComponent(name)}/login-spec`),
+
+  /** 单源连通性探测（结果形状宽松，界面按需渲染）。 */
+  sourceProbe: (name: string) =>
+    request<Record<string, unknown>>(`/api/sources/${encodeURIComponent(name)}/probe`, {
+      method: 'POST',
+    }),
+
+  /** 全部源探测（逐条回报）。 */
+  sourcesProbeAll: () =>
+    request<Record<string, unknown>>('/api/sources/probe-all', { method: 'POST' }),
 
   // ---------- 刮削出版（第 18 期）----------
   /** 刮削台账：概览计数 + 条目 + worker 运行态（页面轮询此端点）。 */
