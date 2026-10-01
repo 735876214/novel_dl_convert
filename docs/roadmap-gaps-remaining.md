@@ -856,7 +856,7 @@ tooltip 标注样本数。
 **② 第二例 = 未复现，机制如下（不改测试逻辑，如实记录）**：该用例 `assert st["total"] == 1`
 （`test_scrape_publish.py:442`）断言的是**全局**队列，而
 
-- `total` = `sum(db.scrape_counts().values())`（`server.py:4556`）= **`scrape_items` 表全表行数**；
+- `total` = `sum(db.scrape_counts().values())`（`server.py:4572`）= **`scrape_items` 表全表行数**；
 - `_quiesce_background` 收尾走 `scrape.stop(timeout=2.0)`（`conftest.py:281`）—— **超时后线程仍在**；
 - `isolated` 会 `db.close()` + `db.init()` 换一套空库，但**残留线程下次取连接拿到的是新库**。
 
@@ -876,7 +876,7 @@ tooltip 标注样本数。
 测试）。第 33 期共跑 4 轮全量，**全部 0 failed**。
 
 **⑤ 端到端对照实验**：接口级测试**覆盖不到**这条路径 —— 测试里 `AUTO_WATCH=false`（`conftest.py:57`）
-⇒ watcher 不跑 ⇒ `/api/libraries/{lid}/scan` 里 `WATCHER.is_running()`（`server.py:4376`）为假
+⇒ watcher 不跑 ⇒ `/api/libraries/{lid}/scan` 里 `WATCHER.is_running()`（`server.py:4392`）为假
 ⇒ 走不到音频目录的摄入分支。故另起独立实例（**8796 端口** + 独立临时根 + `AUTO_WATCH=true`）做对照，
 **唯一的变量就是那一行**：
 
@@ -1523,7 +1523,7 @@ T5 的症状（并发下每库覆写被吃）在浏览器里**单用户操作触
 
 **开工前实测得出的判断（本期省掉一半活的原因）**：上游 7 步里，第 2 步 Folders、
 第 5 步 Reading 的「何时算读完」、第 6 步 Automation 在本项目**都已是现成后端** ——
-`api_create_library`（`novelforge/server.py:4040`）本就收 `name / type / mode / root_path /
+`api_create_library`（`novelforge/server.py:4056`）本就收 `name / type / mode / root_path /
 source_subdir / publish_path / rules / watch / scan_interval / scan_cron` 十项，而第 6 步的
 「自动扫描计划」是**第 17 期 T2 的真实调度**（`watcher._should_scan`，`novelforge/core/watcher.py:668`），
 不是占位。**真正新增的只有 3 个库表列 + 2 个配置项**，其余是把已有能力摆成向导的样子。
@@ -1561,7 +1561,7 @@ Details / Folders / Scanning / Reading / Automation。
 **新增 3 列**（`icon` / `allowed_exts` / `exclude`，均 `TEXT NOT NULL DEFAULT ''`），
 **七处同步点**：① CREATE TABLE ② 迁移块 ③ `create_library` 签名与 INSERT
 （`novelforge/core/db.py:4375`）④ **`_LIBRARY_COLS`（`novelforge/core/db.py:4430`）**
-⑤ `_library_dto`（`novelforge/server.py:3752`）⑥ POST（`server.py:4039`）⑦ PATCH（`server.py:4113`）。
+⑤ `_library_dto`（`novelforge/server.py:3768`）⑥ POST（`server.py:4039`）⑦ PATCH（`server.py:4113`）。
 第 ④ 处**最易漏且不报错**：`update_library`（`novelforge/core/db.py:4437`）是「过滤后为空就原样返回」，
 漏了的表现是**界面显示「已保存」而值没变**。⚠️ sqlite 的 `ALTER TABLE ADD COLUMN` 只接受
 **常量**默认值 ⇒「按库类型推导扩展名」**不能**写成列默认值，只能靠 `''` 哨兵 + 读时回落。
@@ -1718,7 +1718,7 @@ Details / Folders / Scanning / Reading / Automation。
 ② 统一阅读状态判定优先级 —— `ShelfView` 筛选与 `BookCover` 角标复用 `readingThresholds.statusBucket`
 （真实状态优先），消除「手动标已读完但书架筛选 / 封面角标仍显示在读」的不一致。
 
-**后端零改动**：`api_library_source_dirs`（`novelforge/server.py:3993`）与前端 `api.librarySourceDirs`
+**后端零改动**：`api_library_source_dirs`（`novelforge/server.py:4009`）与前端 `api.librarySourceDirs`
 （`frontend/src/lib/api.ts:3234`）第 40 期已实现，本期只是把后者接到界面；`tests/test_api_smoke.py:150`
 那条「`/api/libraries/source-dirs` 返回 200」的接口契约**本来就在**，本期不新增后端用例。
 
@@ -3776,3 +3776,100 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
   仍需人工并排看，本轮未逐条过。
 - 手法：用一次性 Python 脚本改三份文档（**每条断言「恰好命中 1 处」，命中数不对就整体中止**），避免 48 处手工串改。
 - 顺带记一条命令坑：该工具在 GBK 控制台打印含 `⇒` 的源码行会 `UnicodeEncodeError` ⇒ 跑它要 `$env:PYTHONIOENCODING='utf-8'`。
+
+---
+
+## 第 84 期 · 自动更新加固（失败退避重试 / 启动即检 / 更新前自动备份 / 引导式开启）+ UPDATES 对照纠正（V0.84.0，2026-10-01）
+
+**来源**：用户指令「当 GitHub 上有版本时，自动更新 NAS 上部署的版本」。规划阶段逐项拍板 ——
+实现路径 = **应用内自更新加固**（保留「应用自己拉镜像 + 重建自身容器」这条链，不引入外置 watchtower 容器、
+不做纯文档方案）；数据安全 = **更新前自动备份**（PG 走 dump、SQLite 走文件拷贝，保留若干份，**失败即中止更新**）；
+检查节奏 = **启动即检 + 每 6 小时**；失效处置 = **退避重试 + 界面显著提示**；默认**仍不挂** `docker.sock`（只把
+「要自动更新：取消注释 socket 那一行 + 打开开关」写清楚）；并顺带纠正上游对照里把 UPDATES 记成「未实现」的走样。
+
+### 一、本轮修掉的真缺陷
+
+**自动更新「失败一次即永久卡死」**。第 80 期接通的自动更新是「**先记已尝试、再执行**」：pull 失败也算记过，
+此后每轮检查都 `already_tried` ⇒ 自动更新**永久失效，只能手动介入**。而 NAS 上「镜像拉不下来」恰恰是最常见的
+失败原因 —— 也就是**最需要重试、最不可能自愈**的那一种。第 84 期把判定从「同版本永久放弃」改成「同版本按
+`auto_retry_at` 退避到点再试」，退避序列 **1h → 6h → 24h 封顶**。
+
+### 二、实施（逐块）
+
+**① 退避状态机（`core/updater.py`）**
+- `_state` 由「`auto_applied` 记版本号」扩为 `auto_applied` + `auto_failures` + `auto_retry_at` +
+  `last_auto_result` + `auto_message`；`_PERSIST_KEYS` 同步扩 —— **漏键 = 重启后静默丢状态**
+  （重启即把退避计数清零、对同一版本重新猛拉一遍，正是要消掉的缺陷），故往返用例专门钉它。
+- `maybe_auto_apply()` 的判定链重写（顺序即优先级）：`disabled` → `no_update` → 同版本且**已成功**过 ⇒
+  `already_tried` → 同版本失败且**在退避窗口内** ⇒ **新 stage `defer`**（`message` 给出下次重试时间）→
+  未挂 socket ⇒ `unavailable` → 其余真去 `apply_update(reason="auto")`，成功清零、失败进退避。
+- 新增 `_record_auto_attempt` / `_record_auto_failure` / `_record_auto_success` 三个**唯一**写点；
+  `_backoff_seconds` 封顶 24h（不封顶的话第 4 次失败要等 48h、96h…… 用户会以为「自动更新坏了」）。
+- ⚠️ **未挂 socket 不记失败**（`unavailable`）：环境不具备不是失败，否则用户只是没挂 socket 就背上退避倒计时。
+- ⚠️ 「退避窗口内」用**新 stage `defer`**、不复用旧的 `already_tried`（旧值语义是「永久放弃」，继续沿用会把
+  界面与测试都读成「不会再试了」，正是本期要消掉的误导）。
+
+**② 启动即检查（`start_background` / `_loop`）**
+- 抽出 `_tick()` 承载「检查 + 判自动更新」的**单轮**逻辑，供**启动首轮与定时轮共用**（避免两处各写一份、
+  改一处忘另一处 —— 那种形状正是本期缺陷的邻居）；`_loop` 改为**先跑一轮 `_tick()` 再 `wait(interval)`**。
+- 收益：每次容器重启（含自动更新重建容器后的那次启动）都立即校验自己是否真到最新，并顺带把持久化的退避状态
+  显示出来。⚠️ 出网是「可关、失败降级」的（`check` 内部吞异常），故启动即检不会拖垮启动。
+
+**③ 更新前自动备份（新增 `core/backup.py`）**
+- `snapshot(reason)`：**PostgreSQL** 走 `pg_dump -Fc`（压缩 / 单文件 / 单进程单连接，直接落盘、还原快；
+  `--no-owner --no-acl`），**SQLite** 走 `shutil.copy2` 整文件拷贝；判据复用 `core/sqlcompat.is_pg()`，不新增第二份。
+- 落 `config.BACKUP_DIR`（默认 `/app/config/backups`）—— 在**持久卷**上，容器被删掉重建之后备份还在；这是选它
+  而不是 `/app/data` 的唯一理由。轮转同 `reason` 前缀保留最近 **5** 份（模块级常量 `_BACKUP_KEEP`，**不新增配置键**
+  ⇒ 不触发「新增配置分区 = 三处同步点」铁律）。
+- ⚠️ **失败即中止**是硬要求：任何环节失败都抛 `SnapshotError`，调用方把它变成 `stage="backup_failed"` 并
+  **不进入拉镜像**（`pg_dump` 用 `subprocess.run(timeout=…)`，超时自动 kill，不留僵尸进程；stderr 尾段进 `message`）。
+- `apply_update()` 里 **backup 在 pull 之前**、全在同一后台线程：HTTP 响应先返回（沿用既有「先返回响应、
+  再后台 `_recreate`」范式），主请求不被 `pg_dump` 阻塞；备份失败则不进入 pull。
+
+**④ 失败原因上界面（`status()` 扩展 + 页内横幅）**
+- `status()` 增回显 `auto_failures` / `auto_retry_at` / `last_auto_result` / `auto_message`；
+  `frontend/src/lib/api.ts` 的 `UpdateStatus` 同步扩字段（`UpdateApplyResult` 增 `backup?`）。
+- 「更新」页（`ext/update`）与「新功能」页各加一条失败横幅：显示**原因** + **下次重试时间**（不再是只甩一个
+  「有新版本」让用户猜为什么一直没升上去）。
+
+**⑤ 引导式开启（更新页状态卡）**
+- `UpdatePage.vue` 新增「自动更新状态」卡：`可用 = 开关开 且 socket 挂着` 两条件缺一不可；未挂时**如实标
+  「不可用」+ 说明「开关不生效」+ 给出开启步骤**（取消注释 `docker-compose.yml` 的 socket 行 + 打开开关）。
+- ⚠️ **不做假交互**：未挂载时只演示复制升级命令 + 开启引导，不做「看着能点其实不生效」的开关。
+
+**⑥ 上游对照归置（维护页 UPDATES）**
+- 上游 Maintenance 页 `UPDATES` 的 «Check for updates» 本项目第 78 期即已实现（且扩展出检查间隔 / 镜像拉取 /
+  一键更新 / 自动更新），仓内三处却记成「⬜ 未实现，只读列出」⇒ **对照走样**，本期纠正。
+- `MaintenancePage.vue`：UPDATES 分组改为「版本检查与更新」说明卡 + `RouterLink to="/settings/ext/update"`；
+  `IMPLEMENTED` 数组加 `'Check for updates'`，`unsupportedGroups` 过滤掉 `UPDATES`（**两处同时漏改 = 又一个新的
+  对照走样**）。**不放重复开关** —— 开关只在 `ext/update` 一处，避免两处同键不同步。
+- 文档同步改口径：`settingsNav.ts`、`docs/bookorbit/bookorbit-settings-inventory.md`（§2.26 行 + 落地段 + §4 汇总行）、
+  `docs/bookorbit/bookorbit-feature-flows.md`（§3.9.26）。
+
+### 三、测试与验证
+
+- 后端新增 `tests/test_backup.py`：`_is_pg`/`_dump_pg` 用替身只验「走到 pg 分支」与落点名 / kind 形状；SQLite 走
+  `isolated` 夹具的真实库文件；轮转用 `_rotate` 喂手建文件（保留 5 份、按 reason 分组互不干扰）；失败抛 `SnapshotError`。
+- `tests/test_updater.py`：夹具 `_state` 形状同步扩键；持久化往返改「带退避状态」；`pull失败` 用例改名 + 改判据
+  （失败不再永久跳过而是退避到点可再试）；新增退避序列封顶 24h / `defer` / `unavailable` 不记失败 / 快照失败即中止 /
+  换版本清零 / 持久化后重启不重试等用例。
+- 前端新增 `views/settings/pages/UpdatePage.spec.ts`（状态卡可用性判据 / 未挂载如实提示 / 失败原因 + 重试时间 /
+  备份口径）与 `views/settings/pages/MaintenancePage.spec.ts`（UPDATES 说明卡 + 跳转链接存在 / 不在未支持卡 /
+  过滤不过度），两者登记进 `tests/test_frontend_unit_contract.py::EXPECTED_SPECS`。
+- ⚠️ **不新增配置键** ⇒ `server.EDITABLE` / `GET /api/config` 键列表 / `settingsFields.ts` 三处同步点**不触发**；
+  `test_update_config_contract.py` 只更新 docstring 口径，断言一条不改。**不新增设置页** ⇒ 契约页数 37 不变、
+  `EXPECTED_OWN` 不变。
+
+### 四、未做 / 取舍
+
+- **不引入外置 watchtower 容器**、不做「纯文档」方案：只在应用内这条既有链上定点加固（用户明确选择）。
+- **默认仍不挂** `docker.sock`：不在部署文件里默认开启（不放大攻击面），只把「取消注释 socket 行 + 打开开关」写清。
+- **备份保留份数不做成配置键**：运维口味而非用户配置，弄成可配置要付「三处同步点」的代价，不值当。
+- 上游 Maintenance 的 IMPORT（从其它书库工具一次性导入）/ RECOMMENDATIONS（刷新推荐索引）仍不作（容器部署口径下无对象）。
+
+### 五、收尾
+
+- 前端四连：`type-check` / `test:unit` / `build` / `deploy` 全绿（`deploy` 已同步 `static/v2`）。
+- 后端全量 `pytest`（离线）0 failed。
+- 版本 `VERSION` 0.83.0 → **0.84.0**，同批补 `CHANGELOG.md` 段；推送 `main` 后 CI 自动打 tag `v0.84.0` 并建 Release。
+

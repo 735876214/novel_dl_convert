@@ -573,9 +573,9 @@ SERVER
 | IMPORT | Import library data | 按钮 `Get Started` | — | 一次性从其它书库工具导入书籍/元数据/阅读进度 | ⬜（容器部署口径下未实现，页内只读列出） |
 | RECOMMENDATIONS | Refresh recommendation index | 按钮 `Run` | — | 后台重建推荐索引 | ➖（本项目无推荐系统） |
 | ACHIEVEMENTS | Backfill achievements | 按钮 `Run Backfill` | — | 重算所有用户的成就 | ✅（本项目成就重算 Backfill 已实现） |
-| UPDATES | Check for updates | 开关 | 未能采集 | 启动时查 GitHub 新版本，有更新时侧栏显示指示器 | ⬜（容器部署口径下未实现，页内只读列出） |
+| UPDATES | Check for updates | 开关 | 未能采集 | 启动时查 GitHub 新版本，有更新时侧栏显示指示器 | ✅（本项目第 78 期即已实现并扩展：检查间隔 / 镜像拉取 / 一键更新 / 自动更新，落在「扩展 → 更新」页；第 84 期加固：启动即检 + 退避重试 + 更新前自动备份） |
 
-**本项目落地**：UPLOADS 上传上限（可配置且生效）、ACHIEVEMENTS 的成就重算（Backfill）、书库索引重建、缓存清理、回收站清空与各目录占用统计均已实现；IMPORT（从其它书库工具一次性导入）/ RECOMMENDATIONS（刷新推荐索引）/ UPDATES（查 GitHub 新版本）在容器部署口径下未实现，页内以只读条目列出。
+**本项目落地**：UPLOADS 上传上限（可配置且生效）、ACHIEVEMENTS 的成就重算（Backfill）、书库索引重建、缓存清理、回收站清空与各目录占用统计、UPDATES 版本检查与更新均已实现；IMPORT（从其它书库工具一次性导入）/ RECOMMENDATIONS（刷新推荐索引）在容器部署口径下未实现，页内以只读条目列出。⚠️ **第 84 期对照纠正**：UPDATES 的 «Check for updates» 本项目第 78 期即已实现（且扩展出检查间隔 / 镜像拉取 / 一键更新 / 自动更新），此前误记为「未实现」；开关与状态集中在「扩展 → 更新」页，维护页只放说明卡 + 跳转链接（不放重复开关，避免两处同键不同步）。
 
 ### 2.27 DEVICES → Kobo（`/settings/kobo`）
 
@@ -852,7 +852,7 @@ SERVER
 | LIBRARY → Libraries | **设置 → 书库管理**（本页即操作页） | 🔵 多书库实体 / 每库覆盖 / 同名冲突修复均在本页（第 49 期起；原工具页入口已移除）。⚠️ 第 77 期起本页**不再有「按格式归库」**（卡片 / 台账 / 启动门禁一并移除） |
 | LIBRARY → Metadata（7 页） | **元数据**（7 页均实现） | ✅ Providers / Field Rules / Custom Fields / Confidence Score / Books / Authors / Genre Blocklist 均 `ready` |
 | LIBRARY → File Naming | **工具 → 批量重命名** | 🔵 命名规则存服务端 + 4 配方 + 预览；上游 13 token / 7 修饰符 / 结构语法未支持 |
-| LIBRARY → Maintenance | 部分散落 **监听** / **工具** | ✅ 上传上限 / 成就重算 / 索引重建 / 缓存 / 回收站已实现；IMPORT / RECOMMENDATIONS / UPDATES 未实现（只读列出） |
+| LIBRARY → Maintenance | 部分散落 **监听** / **工具** | ✅ 上传上限 / 成就重算 / 索引重建 / 缓存 / 回收站 / UPDATES 版本检查与更新已实现（UPDATES 落在「扩展 → 更新」页，维护页放说明卡 + 跳转，不放重复开关）；IMPORT / RECOMMENDATIONS 未实现（只读列出） |
 | DEVICES → Kobo | **Kobo 同步** 只读占位页 | ➖ 不做 Kobo 设备同步（注册 / 双向进度 / KEPUB 投递 / 书店书目混投）；⚠️ **上游的 Progress Thresholds 第 40 期起已可配置**（全局 + 每库覆写，设置 → 个人资料 → 阅读进度口径）—— 原文记的「本项目无可配置对应项（已读完固定口径 ≥99.5%）」**已被本期推翻** |
 | DEVICES → KOReader | **KOReader 进度互通**（kosync 服务端）+ **KOReader 上游对照** 占位页（本项目补充） | ✅ kosync 协议服务端已实现；上游结构页为 `placeholder` 对照，该页本身标 `own: true`（上游只有一个 KOReader 页，对照页是本项目拆出来的） |
 | DEVICES → OPDS | **OPDS** 页 | ✅ 已实现（目录 / 端点 / 排序 / 逐库暴露） |
