@@ -163,7 +163,11 @@ export const useLibraryStore = defineStore('library', () => {
     }
     if (key === 'issues:1') return src.filter((b) => (b.issues || []).length > 0)
     if (key === 'nocover:1') {
-      return src.filter((b) => (b.format || '').toUpperCase() === 'EPUB' && !b.has_cover)
+      // ⚠️ 判据是「**没有封面**」，与格式无关（第 87 期修）：服务端抓取的封面
+      // （`db.get_cover`）对任何格式都生效，后端也已据此置 `has_cover`。
+      // 此前这里只算 EPUB ⇒ 抓过封面的 PDF/TXT/MOBI/AZW3 不进这个分面，
+      // 而卡片上明明显示着封面，分面与卡片**各说各话**。
+      return src.filter((b) => !b.has_cover)
     }
     return src
   }

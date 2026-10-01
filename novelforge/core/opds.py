@@ -142,8 +142,15 @@ def book_entry(parent, b: dict, base: str, *, with_alternate: bool = True,
         _link(e, _IMG_REL, f"{base}{prefix}/cover/{bid}", "image/jpeg")
         _link(e, _THUMB_REL, f"{base}{prefix}/cover/{bid}", "image/jpeg")
 
-    _link(e, _ACQ_REL, f"{base}{prefix}/download/{bid}",
-          mime_of(b.get("format")), length=int(b.get("size") or 0))
+    # ⚠️ **目录型条目不给下载链**（第 87 期修）：有声书目录 / 序号单元合集是**目录**，
+    # 而 `/opds/download/{bid}` 要求 `path.is_file()` ⇒ 客户端点了必然 404。
+    # 前端的下载按钮早已按同一判据**刻意隐藏**（`BookActionsMenu` / `BookPreviewDialog`），
+    # 这里只是把这条口径补齐 —— **少给一个必然失败的链接，而不是错给**。
+    # （「隐形文件」那条纪律在这里的反面：给一个点了一定失败的入口，用户只会上报
+    #  「OPDS 下载坏了」，而真正的原因在另一端。）
+    if str(b.get("format") or "").upper() not in ("AUDIO", "UNITS"):
+        _link(e, _ACQ_REL, f"{base}{prefix}/download/{bid}",
+              mime_of(b.get("format")), length=int(b.get("size") or 0))
 
     if with_alternate:
         # 详情 feed：客户端「书籍信息」页可据此展示完整元数据

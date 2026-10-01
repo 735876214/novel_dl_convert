@@ -2625,7 +2625,9 @@ def api_book_cover(bid: str):
         避免这里再自己解一次 zip（那样 CBR 会「列得出封面名却读不出来」）；
       · **有声书 / 序号单元合集**：目录内的 `cover.jpg` / `folder.jpg` 之类
         （**含子树里**的，见下面 `units.cover_in_tree` 那段）；单文件音频无封面；
-      · 其余非 EPUB（mobi/pdf/txt）不解析封面，直接 404 —— 与 has_cover 的口径一致。
+      · **任意格式的服务端抓取封面**（第 87 期修）：`db.get_cover` 里存着在线抓来的
+        封面就先给它 —— 与格式无关（`_apply_overlay` 对任何格式都据此置 `has_cover`）；
+      · 其余非 EPUB（mobi/pdf/txt）没有内嵌图，也没有抓取封面时直接 404。
 
     为什么单独开接口：前端只需要一个不含内部路径的稳定 URL，拿不到就 404、回退渐变占位。
 
@@ -2660,14 +2662,21 @@ def api_book_cover(bid: str):
                             media_type=mimetypes.guess_type(name)[0] or "image/jpeg",
                             headers={"Cache-Control": "public, max-age=86400"})
 
-    if fmt != "EPUB":
-        raise HTTPException(404, "该格式没有内嵌封面")
-    # 第 17 期 T3：优先取服务端缓存封面（在线抓取写入 meta_cover），
-    # 无则回退 EPUB 内嵌图（兼容原文件本来就带封面、从未抓过在线封面的情况）。
+    # ⚠️ 服务端抓取的封面**与文件格式无关**（第 87 期修的真 bug）：
+    # `core/library._apply_overlay` 对**任何格式**只要库里存了抓取封面就把 `has_cover`
+    # 置真并撤掉 `no-cover` ⇒ 卡片会说「有封面」、前端据此请求本接口。而这一句此前
+    # **只写在 EPUB 分支里** ⇒ PDF / TXT / MOBI / AZW3 的抓取封面**永远 404**：
+    # 用户以为「抓取没成功」，其实抓到了却一次也没显示过。症状与上面 AUDIO/UNITS
+    # 那段警告的「两处判据」一模一样（判据写了两处，迟早对不上）。
     server_cover = db.get_cover(bid)
     if server_cover:
         data, sct = server_cover
         return _cover_response(data, sct or "image/jpeg")
+
+    if fmt != "EPUB":
+        raise HTTPException(404, "该格式没有内嵌封面")
+    # 第 17 期 T3：没有服务端封面时回退 EPUB 内嵌图（兼容原文件自带封面、
+    # 从未抓过在线封面的情况）。漫画 / 有声书在上面**已经返回**，不受这一支影响。
     cover = library.cover_path(path)
     if not cover:
         raise HTTPException(404, "该书没有封面")
