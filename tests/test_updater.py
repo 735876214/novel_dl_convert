@@ -120,6 +120,13 @@ def up(isolated, monkeypatch, tmp_path):  # noqa: ARG001 —— isolated 提供�
         t = updater._thread
         if t is not None and t.is_alive():
             t.join(timeout=5)
+        # ⚠️ **超时后线程还活着就必须响亮报错**（第 86 期加）：`updater._state` 是**模块级**
+        # 全局，而 monkeypatch 会在用例结束把它复原 —— 一个跑到下一个用例里的线程会
+        # 边跑边改写新用例的 `_state`，症状正是「每次失败的用例都不同、单跑全过」。
+        # 宁可在这里当场炸掉（指出真正的元凶），也不要让它继续污染下游用例。
+        assert t is None or not t.is_alive(), (
+            "上一个用例的后台线程在 5 秒内没停下来：它会继续改写模块级 _state，"
+            "把失败嫁祸给后面的用例（见本夹具注释）")
 
 
 def _mount_socket(up) -> None:
