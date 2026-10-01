@@ -92,11 +92,29 @@ def _clear_persisted_state(isolated):      # noqa: ARG001 —— isolated 提供
     后台线程泄漏（teardown 加了「线程必须停下」的断言，四次运行一次都没触发）。
     """
     from novelforge.core import db
+
+    def _quiesce() -> None:
+        """把 updater 的后台检查线程**停干净**（`_state` 是模块级全局，必须独占它）。
+
+        ⚠️ 这是本文件偶发失败的**真因**所在：`server` 的 lifespan 启动时会
+        `updater.start_background()`（`_apply_update_config`），于是**别的**用了 `client`
+        夹具的用例会留下一个**真的在跑**的检查线程 —— 本机可出网，它真去查 GitHub 并把结果
+        写进 `_state` 与 DB。那些线程与 updater 用例共享同一个模块级 `_state`，
+        表现就是：**每次失败的用例都不同、实际值恒为「空/没有」、单跑整个文件全过**。
+        之前只在夹具**收尾**停线程是不够的 —— 尾随的别家线程会在**本用例开始后**才动手。
+        """
+        updater.stop_background()
+        t = updater._thread
+        if t is not None and t.is_alive():
+            t.join(timeout=5)
+
+    _quiesce()
     db.state_set(updater._CACHE_KEY, "")
     try:
         yield
     finally:
         db.state_set(updater._CACHE_KEY, "")
+        _quiesce()
 
 
 @pytest.fixture

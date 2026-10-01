@@ -440,8 +440,8 @@ def maybe_auto_apply() -> "dict":
     第 84 期的判定链（顺序即优先级）：
 
     1. 开关关 → ``disabled``
-    2. 无新版 → ``no_update``
-    3. 同一版本**已经成功换上去了** → ``already_tried``（成功过就别再拉同一个）
+    2. 同一版本**已经成功换上去了** → ``already_tried``（成功过就别再拉同一个）
+    3. 无新版 → ``no_update``
     4. 同一版本试过、失败、且**还在退避窗口内** → ``defer``（``message`` 给出重试时间）
     5. 未挂 socket → ``unavailable``（环境不具备，**不记失败**：用户只是没挂 socket，
        凭什么因此背上一个「失败」和被推后的重试时间）
@@ -459,10 +459,15 @@ def maybe_auto_apply() -> "dict":
             failures = int(_state["auto_failures"] or 0)
             retry_at = float(_state["auto_retry_at"] or 0)
             last_result = _state["last_auto_result"]
+        # ⚠️ **`already_tried` 必须判在 `no_update` 之前**（第 86 期：一次成功自动更新之后
+        # `has_update` 会被合法清掉，于是「同一版本已经换过了」会被误报成「没有新版本」）。
+        # 顺序反了的表现是**偶发**：谁先跑完取决于「重建容器」那个后台线程与本函数的竞速，
+        # 全量运行（别的用例在抢 CPU）时才会翻出来 —— 四条 updater 用例都栽在这里。
+        # 判据带 `latest and`：`latest` 还是空串（从未检查过）时不许把 `"" == ""` 当成已试过。
+        if latest and latest == tried and last_result == _AUTO_OK_STAGE:
+            return {"ok": False, "stage": "already_tried", "auto": True}
         if not has_update or not latest:
             return {"ok": False, "stage": "no_update", "auto": True}
-        if latest == tried and last_result == _AUTO_OK_STAGE:
-            return {"ok": False, "stage": "already_tried", "auto": True}
         if latest == tried and failures > 0 and retry_at > time.time():
             return {"ok": False, "stage": "defer", "auto": True,
                     "message": f"上次自动更新失败，退避到 {_fmt_ts(retry_at)} 再试"}
