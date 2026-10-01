@@ -5192,6 +5192,11 @@ def api_library_conflicts():
 
     每组带 ``keep``（保留项）与每个待改名项的 ``suggest``（建议名），
     前端据此直接渲染表格、无需自己算一套建议名口径。
+
+    第 87 期起每组还带 **``kind`` / ``reason``**（说清这一组到底是什么）：
+    ``same_name_different_dirs``（同名的**不同书**，建议名带目录名区分）、
+    ``duplicate_scan``（**同一个文件**被多个来源文件夹重复扫到 ⇒ 该修库配置，
+    改名会改到同一个文件）、``cross_library``。界面据此写提示、决定默认勾选。
     """
     groups = library.id_conflicts()
     return {
@@ -5199,6 +5204,20 @@ def api_library_conflicts():
         "cross_library": len([g for g in groups if g["cross_library"]]),
         "libraries": [{"id": l["id"], "name": l["name"]} for l in library.libraries()],
     }
+
+
+@app.get("/api/library-copies")
+def api_library_copies():
+    """同一本书的**副本**清单（第 87 期新增）：名字只差副本后缀 / 破折号 / 全角半角。
+
+    它们是同一本书（用户口径），basename 本就不同 ⇒ **没撞 id、不需要改名**；
+    用户真正要决定的是「多出来的那份删不删」。**只列不动**（删除不可逆）。
+    与 `/api/library-conflicts` 的分工见 `core/library.copy_groups`：两张表
+    刻意不重复报同一件事。
+    """
+    items = library.copy_groups()
+    return {"items": items, "total": len(items),
+            "libraries": [{"id": l["id"], "name": l["name"]} for l in library.libraries()]}
 
 
 @app.post("/api/library-conflicts/apply")

@@ -32,6 +32,7 @@ import re
 import stat
 import threading
 import time
+import unicodedata
 import uuid
 import zipfile
 
@@ -87,6 +88,84 @@ def norm_key(text: str) -> str:
     t = _NOISE_RE.sub("", t)
     t = _PUNCT_RE.sub("", t)
     return t.strip()
+
+
+# ---------------- 冲突判定用的取名判据（第 87 期）----------------
+# 与 `norm_key` 的分工：`norm_key` 服务**重复书籍 / 搜索 / 实体**（把《书名》与书名
+# 当同一本），本组函数服务**同名冲突 / 副本识别**（判「这两条路径说的是不是同一本书」）。
+# 两者口径不同，**不能合并**：合并会让搜索把不同卷的书也当成一本。
+
+#: 副本后缀：`三体 (2).epub` / `三体（2）` / `三体[2]` —— 下载器与「另存为」的产物。
+#: 它们**是同一本书**（用户第 87 期口径），判定前必须剥掉，否则会被当成两本。
+_COPY_SUFFIX_RE = re.compile(r"\s*[（(\[【]\s*\d{1,3}\s*[)）\]】]\s*$")
+#: 破折号家族统一（`‐` `‑` `‒` `–` `—` `―` `−` 与 `-` 视作同一个字符）—— 用户口径：
+#: `Vol.01-Vol.13` 与 `Vol.01–Vol.13` 是同一本书，不该算两个名字。
+_DASH_RE = re.compile(r"[‐‑‒–—―−]")
+#: 卷号：`第3卷` / `Vol.01` / `v2`（解析不出就返回空 —— 不猜位置）
+_VOLUME_RES = (
+    re.compile(r"第\s*(\d{1,4})\s*[卷话册集部]"),
+    re.compile(r"\bvol(?:ume)?\.?\s*(\d{1,4})"),
+    re.compile(r"\bv\s*(\d{1,3})\b"),
+)
+
+
+def conflict_key(name: str) -> str:
+    """冲突判定的**基底键**：去目录、剥副本后缀、统一破折号 / 全角 / 空白 / 大小写。
+
+    用于回答「这两条路径说的是不是同一本书」。注意它**保留数字**：所以
+    `X Vol.01` 与 `X Vol.02` 得到**不同**的键（它们是不同的书）——
+    这正是用户口径里「主标题相同的不同卷不该算一组」的那一半。
+    """
+    base = pathlib.PurePosixPath(str(name or "")).name
+    base = unicodedata.normalize("NFKC", base)          # 全角 → 半角
+    base = _DASH_RE.sub("-", base)
+    pure = pathlib.PurePosixPath(base)
+    # ⚠️ 副本后缀在**主名**上（`X (2).zip` 的 `(2)` 不在字符串末尾），所以先摘扩展名
+    # 再去后缀；扩展名本身**保留在键里**（`X.zip` 与 `X.cbz` 是两种形态的文件，
+    # 把它们当「同一本的副本」会误导用户去删掉另一种格式）。
+    stem = _COPY_SUFFIX_RE.sub("", pure.stem).strip()
+    return f"{norm_key(stem)}{pure.suffix.lower()}"
+
+
+def volume_of(name: str) -> str:
+    """卷号签名（`Vol.01` / `第3卷` / `v2` → ``"1"`` / ``"3"`` / ``"2"``；无则空串）。
+
+    只用于**说清结论**（「同为第 3 卷的副本」），判定本身靠 :func:`conflict_key`
+    里保留的数字。解析不出返回空串 —— 不猜位置（既有纪律）。
+    """
+    base = unicodedata.normalize("NFKC", pathlib.PurePosixPath(str(name or "")).name)
+    low = base.lower()
+    for rx in _VOLUME_RES:
+        m = rx.search(low)
+        if m:
+            return str(int(m.group(1)))
+    return ""
+
+
+def is_copy_name(a: str, b: str) -> bool:
+    """两个名字是不是**同一本书的副本**（归一化后同名，含 `(2)` / 破折号 / 全角差异）。"""
+    ka, kb = conflict_key(a), conflict_key(b)
+    return bool(ka) and ka == kb
+
+
+def conflict_kind(rels, paths, lib_ids) -> tuple:
+    """一组同 id 条目 → ``(kind, reason)``（**纯函数**，便于单测）。
+
+    · ``duplicate_scan``：条目指向**同一个物理文件**（同一份文件被多个来源文件夹重复
+      扫到）⇒ 改名是**错的**（改的是同一个文件），该修的是库配置；
+    · ``cross_library``：同一条相对路径出现在多个库 ⇒ 真冲突，留一个改一个；
+    · ``same_name_different_dirs``：同库内**同名但不同目录** ⇒ 它们是**不同的书**
+      （不同系列的同名卷之类），只是 basename 逐字相同才撞了 id。
+    """
+    rels = [str(x) for x in rels]
+    paths = [str(x) for x in paths]
+    if len(set(paths)) < len(paths):
+        return "duplicate_scan", ("这几条指向**同一个文件**（同一份文件被多个来源文件夹重复扫到）："
+                                  "改名会改到同一个文件，应当修的是库配置（来源文件夹重叠）")
+    if len(set(lib_ids)) > 1 and len(set(rels)) == 1:
+        return "cross_library", "同一条相对路径出现在多个库：进度 / 批注只有一份，必须留一个、改一个"
+    return "same_name_different_dirs", ("同名但**不同目录**（不同系列 / 不同书）：basename 逐字相同才撞了 id，"
+                                        "改名时用目录名区分才有意义")
 
 
 # ---------------- EPUB 探测 ----------------
@@ -1001,6 +1080,11 @@ def id_conflicts() -> list:
         if len(items) < 2:
             continue
         libs = sorted({str(b.get("library_id") or "") for b in items})
+        kind, reason = conflict_kind([b["name"] for b in items],
+                                     [pathlib.Path(root_of(b)) / b["name"] for b in items],
+                                     [b.get("library_id") for b in items])
+        # 同名但不同目录 ⇒ 建议名**带上父目录名**（原来给的是没有信息量的 `X (2).cbz`）
+        by_dir = kind == "same_name_different_dirs"
         rows = []
         for i, b in enumerate(items):
             keep = i == 0
@@ -1012,9 +1096,10 @@ def id_conflicts() -> list:
                 "size": b.get("size") or 0,
                 "mtime": b.get("mtime") or 0,
                 "keep": keep,
+                "volume": volume_of(b["name"]),
                 # 建议名只给**要改名**的那些（保留项不动）；文案与迁移侧同口径
                 "suggest": "" if keep else suggest_name(b["name"], b.get("library_id"),
-                                                        root_of(b)),
+                                                        root_of(b), use_dir=by_dir),
             })
         out.append({
             "id": bid,
@@ -1023,12 +1108,59 @@ def id_conflicts() -> list:
             "cross_library": len(libs) > 1,
             "library_count": len(libs),
             "keep": items[0]["name"],
+            # 组级结论（第 87 期）：说清「这是同一本书的两个副本 / 同名的不同书 /
+            # 同一个文件被扫了两遍」——界面据此决定要不要勾选、提示怎么写。
+            "kind": kind,
+            "reason": reason,
             # 组级默认建议名 = 第一个待改名项的建议名（界面「一键」用它打底）
             "suggest": rows[1]["suggest"] if len(rows) > 1 else "",
             "items": rows,
         })
     # 跨库的排前面；组内书多的排前面；同档按名字稳定排序
     out.sort(key=lambda g: (not g["cross_library"], -len(g["items"]), g["name"]))
+    return out
+
+
+def copy_groups() -> list:
+    """同一目录下的**副本**（归一化后同名）：`X Vol.01 (2).zip` 与 `X Vol.01.zip`。
+
+    第 87 期用户口径：这类差异（`(2)` 副本后缀 / 破折号 / 全角半角 / 多余空格）
+    **是同一本书**，不该被当成两本、也不该进「同名冲突」要求改名 —— 它们的 basename
+    本来就不同，**没撞 id**。但它们往往意味着「同一本书下到了两遍」，
+    用户真正想知道的是**多出来的那份要不要删**。所以这里把它们显式列出来，
+    并给出「留哪一份」的依据（体积大者更完整），**只列不动**：
+    删除不可逆，必须由用户确认。
+
+    ⚠️ 与 `id_conflicts` 的分工（两张表**不重复报同一件事**）：
+    同名冲突管「basename 逐字相同 ⇒ 撞了 id ⇒ 必须改名」；
+    本表管「basename 不同但归一化相同 ⇒ 是同书副本 ⇒ 是否删多余」。
+    """
+    groups: dict = {}
+    for b in books():
+        key = (str(b.get("library_id") or ""),
+               str(pathlib.PurePosixPath(str(b["name"])).parent),
+               conflict_key(b["name"]))
+        if key[2]:
+            groups.setdefault(key, []).append(b)
+    out = []
+    for (lib_id, parent, ckey), items in groups.items():
+        if len(items) < 2 or len({str(b["name"]) for b in items}) < 2:
+            continue                      # 逐字同名的归「同名冲突」，这边不重复列
+        ordered = sorted(items, key=lambda b: (-int(b.get("size") or 0), str(b["name"])))
+        keep = str(ordered[0]["name"])
+        out.append({
+            "library_id": lib_id,
+            "dir": parent,
+            "key": ckey,
+            "count": len(items),
+            "keep": keep,
+            "reason": "同一本书的副本（名字只差副本后缀 / 破折号 / 全角半角）："
+                      "保留体积最大的那一份",
+            "items": [{"name": b["name"], "size": b.get("size") or 0,
+                       "mtime": b.get("mtime") or 0,
+                       "keep": str(b["name"]) == keep} for b in items],
+        })
+    out.sort(key=lambda g: (-g["count"], g["dir"], g["items"][0]["name"]))
     return out
 
 
@@ -1051,18 +1183,26 @@ def id_conflict_with(name: str, library_id=None) -> "dict | None":
     return None
 
 
-def suggest_name(name: str, library_id=None, root=None) -> str:
+def suggest_name(name: str, library_id=None, root=None, *, use_dir: bool = False) -> str:
     """给 ``name`` 找一个「不撞 id、目标目录里也不存在」的候选名。
 
     文案沿用 ``三体 (2).epub`` 那套（第 77 期前 ``core.migrate._suggest_name`` 也用它，
     那个函数随自动归库一起删了，**本函数是现在唯一的实现**）；
     这里**只建议、不自动改** —— 改名会换 ``book_id``，必须显式确认后走冲突修复
     流程（它会把关联数据一起搬，见 ``db.remap_book_id``）。
+
+    ``use_dir=True``（第 87 期）先试**带父目录名**的候选：`科幻/Vol.01.cbz`
+    → `科幻/科幻 - Vol.01.cbz`。同名但不同目录的两条本来就是**不同的书**，
+    用 `(2)` 区分等于让用户以后完全看不出哪本是哪本（用户口径：`(2)` 是
+    没有信息量的名字）。带目录名的候选撞了才回落到 `(N)` 那一套。
     """
     p = pathlib.PurePosixPath(str(name))
     stem, suffix, parent = p.stem, p.suffix, str(p.parent)
-    for i in range(2, 100):
-        cand = f"{stem} ({i}){suffix}"
+    cands = []
+    if use_dir and parent not in ("", "."):
+        cands.append(f"{pathlib.PurePosixPath(parent).name} - {stem}{suffix}")
+    cands += [f"{stem} ({i}){suffix}" for i in range(2, 100)]
+    for cand in cands:
         rel = cand if parent in ("", ".") else f"{parent}/{cand}"
         if root is not None and (pathlib.Path(root) / rel).exists():
             continue
