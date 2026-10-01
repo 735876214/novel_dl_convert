@@ -23,6 +23,24 @@ def _safe_name(s: str) -> str:
 from ..core import network, detect, pipeline
 from .base import REGISTRY
 
+#: 追更用的**按路径**互斥锁（第 87 期收尾补）。
+#: ⚠️ 为什么必须有：`update_report` 是「读 sidecar → 抓章节 → 读全文 → 写 `.part` → replace」，
+#: 两个并发调用各自读到同一份旧内容 ⇒ **后写覆盖前写、丢章**，而且两边都返回「已追加 N 章」——
+#: 这类静默丢数据最难查（用户只会发现「少了几章」）。
+#: 按**路径**而不是全局加锁：不同书的追更本就该并行，串行化全局会让批量追更慢得离谱。
+#: 表按书增长（一本书一个条目、不清理）：条目数 = 追更过的书数，量级很小。
+_UPDATE_LOCKS: dict = {}
+
+
+def update_lock(txt_path) -> asyncio.Lock:
+    """取某个留档 txt 的追更锁（同一个路径**永远返回同一个对象**）。"""
+    key = str(Path(txt_path))
+    lock = _UPDATE_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _UPDATE_LOCKS[key] = lock
+    return lock
+
 #: 单源搜索超时（秒，第 71 期）。用模块常量而不是新配置键：这是一次性需求，不值得再扩
 #: 一套设置面板 + `config` 白名单（已记入 roadmap 未做项）。超时按**源**算，所以
 #: 「一个源卡住」只会让该源记一条超时原因，不会拖垮整轮搜索。
@@ -280,6 +298,16 @@ class DownloadManager:
 
     # ---- 增量更新（追更）----
     async def update_report(self, txt_path: Path, opts: dict) -> dict:
+        """追更的**串行化入口**：同一个留档文件同时只允许一次追更。
+
+        实现与全部口径见 :meth:`_update_report_locked`；这里只负责加锁 ——
+        没有它，两次并发追更会各自「读旧内容 → 写 `.part` → replace」，
+        后写覆盖前写（**静默丢章**，而且两边都报成功）。
+        """
+        async with update_lock(txt_path):
+            return await self._update_report_locked(txt_path, opts)
+
+    async def _update_report_locked(self, txt_path: Path, opts: dict) -> dict:
         """追更：**只追加**，既有条目一字不动（第 86 期第 6 步重写）。
 
         与旧实现的四处根本差别（前三条都是典型的**静默出错**）：
@@ -377,17 +405,11 @@ class DownloadManager:
     async def update(self, txt_path: Path, opts: dict) -> Path:
         """兼容壳：旧调用方拿的是 ``Path``；要报告请用 :meth:`update_report`。"""
         return (await self.update_report(txt_path, opts))["path"]
-
-        with open(txt_path, "a", encoding="utf-8") as f:
-            f.write("\n\n" + new_body)
-        opts = dict(opts)
-        opts.setdefault("cfg", self.cfg)
-        result = pipeline.convert_txt(txt_path, Path(opts.get("output") or meta.get("output_dir") or txt_path.parent), opts)
-        # 更新 sidecar 末章
-        if chapters:
-            meta["last_title"] = chapters[-1]["title"]
-            sidecar.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-        return result
+        # ⚠️ 第 86 期重写时，这里曾留着一整段**永不执行**的旧实现（`return` 之后）：
+        #    裸 `open(txt_path, "a")` 追加 + `pipeline.convert_txt` 整本重转。
+        #    死代码本身无害，但它**看起来像是可以「恢复」的备选路径** —— 而它正好是
+        #    「重复内容 + index 漂移」那两条静默错误的正身（见 `update_report` 的说明），
+        #    所以第 87 期收尾时**删掉**，不留这个念想。
 
     async def download_audio(self, item: dict, out_dir, opts: dict = None) -> Path:
         """有声书：逐轨取字节 → 落成**目录型有声书**（一本 = 一个目录，第 86 期）。

@@ -111,9 +111,36 @@ def add_spine_itemref(opf: str, *, item_id: str) -> str:
 
 
 def add_nav_link(nav: str, *, href: str, title: str) -> str:
-    """`EPUB/nav.xhtml` 的目录 ``<ol>`` 末尾追加一条链接（EPUB3 阅读器靠它显示目录）。"""
-    return _insert_before(nav, "</ol>", f'<li><a href="{href}">{title}</a></li>',
-                          what="nav.xhtml 的 </ol>")
+    """`EPUB/nav.xhtml` 的**目录** ``<ol>`` 末尾追加一条链接（EPUB3 阅读器靠它显示目录）。
+
+    ⚠️ 必须先**定位到目录那个 `<nav>`**（`epub:type="toc"`）再找它的 `</ol>`：
+    一个 nav.xhtml 里可以有多个 `<ol>`（`landmarks` / `page-list` 若排在 toc 之前，
+    直接找第一个 `</ol>` 会把章节链接插进「地标」列表 —— 阅读器目录里看不到，
+    而「nav 里含这条链接」的断言照样会过，是典型的**静默插错位置**）。
+    找不到 `epub:type="toc"` 时才退回「第一个 `</ol>`」的旧口径（那样至少有得用）。
+    """
+    frag = f'<li><a href="{href}">{title}</a></li>'
+    pos = _toc_ol_close(nav)
+    if pos is None:
+        return _insert_before(nav, "</ol>", frag, what="nav.xhtml 的 </ol>")
+    return nav[:pos] + frag + nav[pos:]
+
+
+def _toc_ol_close(nav: str) -> "int | None":
+    """目录 ``<ol>`` 的闭合位置（在 `<nav epub:type="toc">` 块内取**最后**一个 `</ol>`）。
+
+    返回 ``None`` = 认不出目录块（调用方退回旧口径）。
+    """
+    idx = nav.find('epub:type="toc"')
+    if idx == -1:
+        idx = nav.find("epub:type='toc'")
+    if idx == -1:
+        return None
+    end = nav.find("</nav>", idx)
+    if end == -1:
+        return None
+    pos = nav.rfind("</ol>", idx, end)
+    return pos if pos != -1 else None
 
 
 def add_ncx_navpoint(ncx: str, *, href: str, title: str, play_order: int) -> str:
