@@ -1,0 +1,169 @@
+[
+  {
+    "bookSourceComment": "示例：纯 HTML 站点 + 简单模板（取自用户两份真实书源里那一类「速读谷 / 得奇小说网 / 快书网」形态的最小化样本，字段名与语法与真实文件一致，正文按需裁剪）。",
+    "bookSourceGroup": "示例",
+    "bookSourceName": "示例HTML源",
+    "bookSourceType": 0,
+    "bookSourceUrl": "https://www.example-novel.com",
+    "enabled": true,
+    "enabledCookieJar": true,
+    "enabledExplore": false,
+    "loginUrl": "",
+    "header": "{'User-Agent': 'Mozilla/5.0 (Linux; Android 12; Nexus 5X) AppleWebKit/537.36 Chrome/115.0.4664.104 Mobile Safari/537.36'}",
+    "searchUrl": "/search?q={{key}}&page={{page}}",
+    "ruleSearch": {
+      "bookList": "class.book-item",
+      "name": "class.title.0@tag.a.0@text",
+      "author": "class.author.0@text",
+      "bookUrl": "tag.a.0@href",
+      "coverUrl": "tag.img.0@src",
+      "intro": "class.intro.0@text"
+    },
+    "ruleToc": {
+      "chapterList": "id.chapter-list.0@tag.li",
+      "chapterName": "tag.a.0@text",
+      "chapterUrl": "tag.a.0@href"
+    },
+    "ruleContent": {
+      "content": "id.content.0@html"
+    },
+    "weight": 50
+  },
+  {
+    "bookSourceComment": "因为起点搜索页加了个 Cookie 验证（只需要使用阅读内置浏览器访问一下起点任意网页就会写入 Cookie，就能正常搜索了）",
+    "bookSourceGroup": "正版",
+    "bookSourceName": "起点中文",
+    "bookSourceType": 0,
+    "bookSourceUrl": "https://www.qidian.com",
+    "bookUrlPattern": "https://m\\.qidian\\.com/book/.+",
+    "enabled": true,
+    "enabledCookieJar": true,
+    "enabledExplore": true,
+    "exploreUrl": "[]",
+    "loginUrl": "https://www.qidian.com/all/",
+    "searchUrl": "@js:url=baseUrl+\"/so/{{key}}.html,{'method':'GET','headers':{'Referer':'https://www.qidian.com/'}}\";java.put('url',url);result=url;",
+    "ruleSearch": {
+      "bookList": "<js>\npath='class.res-book-item';\nu=java.get('url');\nc=java.getElement(path);\nif (!c.length && result.includes('var buid')) {\n  cookie.removeCookie(source.getKey());\n  java.startBrowserAwait('https://www.qidian.com/all/','过起点搜索的 cookie 验证');\n}\n</js>",
+      "name": "class.book-info-title.0@tag.a.0@text",
+      "author": "class.author@class.name.0@text",
+      "bookUrl": "a[data-bid]@data-bid@js:'https://m.qidian.com/book/'+result+'/'",
+      "coverUrl": "class.book-img-box.0@tag.img.0@src"
+    },
+    "ruleBookInfo": {
+      "name": "//meta[@property='og:novel:book_name']/@content",
+      "tocUrl": "id.details-menu.0@href"
+    },
+    "ruleToc": {
+      "chapterList": ":\"sS\":(\\d),.*?\"cN\":\"(.*?)\",\"id\":(\\d+),.*?\"uT\":\"(.*?)\"",
+      "chapterName": "$2",
+      "chapterUrl": "@js:var bid = baseUrl.match(/\\d+/);\njava.put('bid', bid);\n'https://vipreader.qidian.com/chapter/'+bid+'/$3/'"
+    },
+    "ruleContent": {
+      "content": "class.read-content@html"
+    },
+    "weight": 99
+  },
+  {
+    "bookSourceGroup": "API",
+    "bookSourceName": "酷我小说",
+    "bookSourceType": 0,
+    "bookSourceUrl": "http://appi.kuwo.cn",
+    "enabled": true,
+    "enabledCookieJar": true,
+    "searchUrl": "/novels/api/book/search?keyword={{key}}&pi={{page}}&ps=30",
+    "ruleSearch": {
+      "bookList": "$.data",
+      "name": "$.title",
+      "author": "$.author_name",
+      "bookUrl": "/novels/api/book/{{$.book_id}}",
+      "coverUrl": "$.cover_url"
+    },
+    "ruleBookInfo": {
+      "name": "$.title",
+      "tocUrl": "/novels/api/book/{{$.book_id}}/chapters?paging=0"
+    },
+    "ruleToc": {
+      "chapterList": "$.data",
+      "chapterName": "$.chapter_title",
+      "chapterUrl": "/novels/api/book/{{$.book_id}}/chapters/{{$.chapter_id}}"
+    },
+    "ruleContent": {
+      "content": "$.data.content"
+    },
+    "weight": 50
+  },
+  {
+    "bookSourceComment": "// 首次使用时，在搜索后或发现选书后，需要先在书籍信息界面点击右上角【三个点】，再点击【登录】后可以看到书源设置界面，点击【获取密钥】输入自己的QQ邮箱【发送验证】获得验证码并输入验证码后点击【获取密钥】即可获得书源密钥，此时书源才能看到（或听到）正文。",
+    "bookSourceName": "番茄小说2",
+    "bookSourceType": 0,
+    "bookSourceUrl": "https://fqapi.komr.cn",
+    "enabled": false,
+    "enabledCookieJar": false,
+    "enabledExplore": false,
+    "loginUi": "[\n{\"name\": \"　   喝杯咖啡   　\",\"type\": \"button\",\"action\": \"zs(zs)\"},\n{\"name\": \"　   查询模式   　\",\"type\": \"button\",\"action\": \"get(sz)\"},\n{\"name\": \"　   获取密钥   　\",\"type\": \"button\",\"action\": \"my(my)\"},\n{\"name\": \" 　   取消听书   　\",\"type\": \"button\",\"action\": \"set(0)\"},\n{\"name\": \"密钥\", \"type\": \"text\"},\n{\"name\": \"　   多人发音   　\",\"type\": \"button\",\"action\": \"set(1)\"},\n{\"name\": \"　   真人发音   　\",\"type\": \"button\",\"action\": \"set(2)\"},\n{\"name\": \"　   甜美少女   　\",\"type\": \"button\",\"action\": \"set(3)\"},\n{\"name\": \"　   清亮青叔   　\",\"type\": \"button\",\"action\": \"set(4)\"},\n{\"name\": \"　   开朗青年   　\",\"type\": \"button\",\"action\": \"set(5)\"},\n{\"name\": \"　   温柔淑女   　\",\"type\": \"button\",\"action\": \"set(6)\"}\n]",
+    "loginUrl": "\nfunction login() {}\n\nfunction my(my) {\njava.startBrowserAwait(source.bookSourceUrl+'/key',\"获取密钥\");\n}\n\nfunction Map(e) {\n    var infomap = source.getLoginInfoMap();\n    const value = infomap[e];\n    return value;\n}\nvar sz = source.getVariable();\n",
+    "searchUrl": "@js:\nfunction getUrl(key) {\n  let isNumber = /^\\d+$/.test(key);\n  if (isNumber) {\n    return `https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/multi-detail/v/?aid=1967&book_id={{key}}`;\n  } else {\n    return `https://api5-normal-lf.fqnovel.com/reading/bookapi/search/page/v/?passback={{(page-1)*50}}&query={{key}}$`;\n  }\n}\ngetUrl(key)",
+    "ruleSearch": {
+      "bookList": "$..book_data[0]&&$.data[*]",
+      "name": "$.book_name",
+      "author": "$.author",
+      "bookUrl": "https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/multi-detail/v/?aid=1967&book_id={{$.book_id}}",
+      "coverUrl": "$.thumb_url"
+    },
+    "ruleToc": {
+      "chapterList": "<js>\nlet res = JSON.parse(result).data\narray\n</js>",
+      "chapterName": "name",
+      "chapterUrl": "url"
+    },
+    "ruleContent": {
+      "content": "<js>\nlet cid = java.hexDecodeToString(result);\nlet genreValue = JSON.parse(java.ajax(book.bookUrl)).data[0].genre;\njava.get(source.bookSourceUrl+'/content?item_id='+cid+'&key='+Map('密钥')).body()\n</js>\n$.data.content"
+    },
+    "weight": 50
+  },
+  {
+    "bookSourceComment": "可移植 JS 的样本：只用字符串/正则能力（不含 Legado 专有 API），应当判 partial 并给出 mode=js 的正文通道。",
+    "bookSourceName": "可移植JS源",
+    "bookSourceType": 0,
+    "bookSourceUrl": "https://portable.example.com",
+    "enabled": true,
+    "enabledCookieJar": true,
+    "searchUrl": "/s?kw={{key}}",
+    "ruleSearch": {
+      "bookList": "class.item",
+      "name": "class.t.0@text",
+      "bookUrl": "tag.a.0@href"
+    },
+    "ruleToc": {
+      "chapterList": "class.list.0@tag.a",
+      "chapterName": "tag.a.0@text",
+      "chapterUrl": "tag.a.0@href"
+    },
+    "ruleContent": {
+      "content": "<js>result.replace(/\\s*&nbsp;\\s*/g, ' ').replace(/^\\s+|\\s+$/g, '')</js>"
+    }
+  },
+  {
+    "bookSourceComment": "更新日志请点击登录，更新书源中查看\n\n书旗听书：登录书源后将模式切换为“听书”、来源切换为“书旗”，返回发现页长按刷新，即可使用官方“全部/男生/女生”听书发现。默认音色为 multi_role 多角色对话；详情页会显示本书可用音色及数字编号，右上角书籍变量填写编号即可切换。",
+    "bookSourceGroup": "大灰狼聚合",
+    "bookSourceName": "🍅大灰狼聚合5.9.30(vip完全版)",
+    "bookSourceType": 0,
+    "bookSourceUrl": "大灰狼融合VIP5.0",
+    "enabled": true,
+    "enabledCookieJar": false,
+    "enabledExplore": true,
+    "exploreUrl": "<js>\nvar open_argument = source.getVariable();\n[]\n</js>",
+    "ruleSearch": {
+      "bookList": "<js>[]</js>",
+      "name": "$.book_name",
+      "bookUrl": "$.book_id"
+    },
+    "ruleToc": {
+      "chapterList": "<js>[]</js>",
+      "chapterName": "name",
+      "chapterUrl": "url"
+    },
+    "ruleContent": {
+      "content": "<js>java.ajax(book.bookUrl)</js>"
+    }
+  }
+]
