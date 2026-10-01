@@ -21,6 +21,7 @@ import Icon from '@/components/ui/Icon.vue'
 import Switch from '@/components/ui/Switch.vue'
 import ExtChips from '@/components/tools/ExtChips.vue'
 import LibraryConflictPanel from '@/components/tools/LibraryConflictPanel.vue'
+import LibraryCopiesPanel from '@/components/tools/LibraryCopiesPanel.vue'
 import LibrarySettingsPanel from '@/components/tools/LibrarySettingsPanel.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type LibraryEntity, type LibraryType } from '@/lib/api'
@@ -49,6 +50,8 @@ const error = ref('')
 const settingsFor = ref('')
 /** 同名冲突面板：改名之后要让它重新拉清单 */
 const conflicts = ref<InstanceType<typeof LibraryConflictPanel> | null>(null)
+/** 副本与容器面板（第 87 期）：展开之后要让它重新拉清单 */
+const copies = ref<InstanceType<typeof LibraryCopiesPanel> | null>(null)
 
 function toggleSettings(id: string): void {
   settingsFor.value = settingsFor.value === id ? '' : id
@@ -628,6 +631,11 @@ async function confirmRemove(): Promise<void> {
     <!-- 3) 同名冲突：book_id 由文件名派生，跨库同名会撞同一个 id -->
     <Card padding="none">
       <LibraryConflictPanel ref="conflicts" @changed="reload(true)" />
+    </Card>
+
+    <!-- 4) 副本与容器（第 87 期）：同一本书的副本（只列不动）+ 待展开的压缩包（一键展开） -->
+    <Card padding="none">
+      <LibraryCopiesPanel ref="copies" @changed="reload(true)" />
     </Card>
 
     <!-- 新建向导（第 55 期起）：收拢为全局单实例，挂在 App.vue —— 本页不再自带一份，

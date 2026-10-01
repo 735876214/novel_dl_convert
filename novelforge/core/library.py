@@ -1164,6 +1164,34 @@ def copy_groups() -> list:
     return out
 
 
+def container_books(limit: int = 200) -> list:
+    """**按内容分派不出形态的容器**清单（`format == "ZIP"`，第 87 期）：展开操作的入口。
+
+    只列 `.zip` 且**没能分派出形态**的那些 —— 图片档已经归一成 `CBZ`（能直接读），
+    不在此列。`reason` / `targets` **现算**（每次开一次归档；容器条目通常很少，
+    而且这是用户主动打开的工具页，不是列表热路径）。`limit` 是防御：真遇到几百个
+    容器时别让一次请求卡住界面（前端会显示实际条数）。
+    """
+    out = []
+    for b in books():
+        if str(b.get("format") or "").upper() != "ZIP":
+            continue
+        plan = zipkind.unpack_plan(pathlib.Path(root_of(b)) / b["name"])
+        out.append({
+            "id": b.get("id") or "",
+            "name": b["name"],
+            "library_id": b.get("library_id"),
+            "size": b.get("size") or 0,
+            "unpackable": bool(plan.get("ok")),
+            "reason": plan.get("reason") or "",
+            "targets": [str(a.get("dest") or a.get("name") or "")
+                        for a in (plan.get("actions") or [])],
+        })
+        if len(out) >= int(limit):
+            break
+    return out
+
+
 def id_conflict_with(name: str, library_id=None) -> "dict | None":
     """``name`` 即将入库时，是否已存在**同 id 且不同路径**的书（入库冲突判据）。
 

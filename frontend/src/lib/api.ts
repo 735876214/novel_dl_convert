@@ -777,6 +777,44 @@ export interface ConflictsResult {
   libraries: Array<{ id: string; name: string }>
 }
 
+/** 待展开的容器条目（`/api/library-containers`，第 87 期）。 */
+export interface ContainerItem {
+  id: string
+  name: string
+  library_id?: string | null
+  size: number
+  /** 能不能展开（false = 容器里没有可落地的文档；界面要如实说，不假装能） */
+  unpackable: boolean
+  reason: string
+  /** 展开后会得到的文件名 */
+  targets: string[]
+}
+
+export interface ContainersResult {
+  items: ContainerItem[]
+  total: number
+  libraries: Array<{ id: string; name: string }>
+}
+
+/** 展开的逐条结果（`POST /api/books/{bid}/unpack`，第 87 期）。 */
+export interface UnpackAction {
+  /** repackage = 整份另存（改了后缀的 EPUB）/ extract = 从容器里取一个条目 */
+  kind: 'repackage' | 'extract'
+  name: string
+  dest: string
+  ok: boolean
+  /** 失败原因（撞名 / 读不到 / 写失败）—— 逐条如实报，不整批失败 */
+  note: string
+}
+
+export interface UnpackResult {
+  name: string
+  ok: boolean
+  reason: string
+  source_removed: boolean
+  actions: UnpackAction[]
+}
+
 export interface ConflictApplyResult {
   renamed: Array<{ old: string; new: string; library_id: string }>
   errors: Array<{ old?: string; error: string }>
@@ -4372,6 +4410,23 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }),
+    }),
+
+  /** 同一本书的**副本**清单（第 87 期）：名字只差副本后缀 / 破折号 / 全角半角。 */
+  libraryCopies: () => request<CopiesResult>('/api/library-copies'),
+
+  /** 待展开的容器（`format === 'ZIP'`，第 87 期）：展开是它们唯一的出路。 */
+  libraryContainers: () => request<ContainersResult>('/api/library-containers'),
+
+  /**
+   * 展开容器成真正可读的书（第 87 期）。
+   * ⚠️ `removeSource` 默认 false —— 删源不可逆，必须由用户在界面上显式选。
+   */
+  unpackBook: (bid: string, removeSource = false) =>
+    request<UnpackResult>(`/api/books/${encodeURIComponent(bid)}/unpack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remove_source: removeSource }),
     }),
 
   // ---------- 刮削出版（第 18 期）----------

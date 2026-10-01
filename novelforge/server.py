@@ -5247,6 +5247,19 @@ def api_library_copies():
             "libraries": [{"id": l["id"], "name": l["name"]} for l in library.libraries()]}
 
 
+@app.get("/api/library-containers")
+def api_library_containers():
+    """**待展开的容器**清单（第 87 期）：`format == "ZIP"` 的书 + 展开后会得到什么。
+
+    ⚠️ 图片档 `.zip` 已被归一成 `CBZ`（能直接读）⇒ **不在此列**；这里只列
+    「按内容分派不出形态」的那些 —— 展开是它们唯一的出路。界面据此给出「展开」按钮，
+    而不是让用户对着一个打不开的书发呆。
+    """
+    items = library.container_books()
+    return {"items": items, "total": len(items),
+            "libraries": [{"id": l["id"], "name": l["name"]} for l in library.libraries()]}
+
+
 @app.post("/api/library-conflicts/apply")
 def api_library_conflicts_apply(payload: dict = Body(...)):
     """执行改名修复（**真改磁盘**，逐条独立，一条失败不影响其余）。

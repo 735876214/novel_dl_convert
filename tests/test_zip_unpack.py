@@ -138,6 +138,30 @@ def test_展开接口存在且形状稳定(isolated, default_root, client, auth_
     assert again.json()["ok"] is False and "已存在" in again.json()["actions"][0]["note"]
 
 
+def test_待展开清单只列分派不出形态的容器(isolated, default_root):  # noqa: ARG001
+    """图片档 `.zip` 已归一成 CBZ（能直接读）⇒ **不该**出现在待展开清单里。"""
+    default_root.mkdir(parents=True, exist_ok=True)
+    _zip(default_root / "图片档.zip", [("001.jpg", b"JPG")])
+    _zip(default_root / "文档档.zip", [("内页.pdf", b"%PDF-1.4")])
+    library.invalidate()
+
+    items = library.container_books()
+    names = {i["name"] for i in items}
+    assert "文档档.zip" in names
+    assert "图片档.zip" not in names, "能直接读的容器不该劝用户展开"
+    doc = next(i for i in items if i["name"] == "文档档.zip")
+    assert doc["unpackable"] is True and doc["targets"] == ["内页.pdf"]
+
+
+def test_待展开清单接口形状稳定(isolated, default_root, client, auth_headers):  # noqa: ARG001
+    default_root.mkdir(parents=True, exist_ok=True)
+    r = client.get("/api/library-containers", headers=auth_headers)
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) == {"items", "total", "libraries"}
+    assert body["total"] == len(body["items"])
+
+
 def test_展开接口对不可展开的容器如实_400(isolated, default_root, client, auth_headers):  # noqa: ARG001
     default_root.mkdir(parents=True, exist_ok=True)
     _zip(default_root / "图.zip", [("001.jpg", b"JPG")])
