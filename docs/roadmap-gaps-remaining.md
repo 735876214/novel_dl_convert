@@ -585,7 +585,7 @@
   （`data/nav.ts` + `components/AppSidebar.vue`）；② 删净 `shelfTag` 死入口（state + 过滤分支 +
   三处清空 + 导出 + 所有调用点，题材筛选已由书架筛选面板承担）；③ 书架页加库级控制最小集
   （切库 / 立即扫描 / 书库管理），重命名删除仍只在 `/tools/libraries`，避免第二处写入口。
-- **版本标识同源（后端为权威）**：收敛单一常量 `APP_VERSION = "0.6.0"`（`server.py:113`），
+- **版本标识同源（后端为权威）**：收敛单一常量 `APP_VERSION = "0.6.0"`（`server.py:152`），
   `FastAPI(version=APP_VERSION)` 与 `GET /health` 的 `version` 同读它；前端 `HealthInfo` 加 `version`，
   About 页与更新日志页渲染后端下发版本，`data/whatsNew.ts` 的 `version` 字段删除（不再手写版本号）；
   新增契约测试钉住「展示版本 == 后端常量」。
@@ -856,8 +856,8 @@ tooltip 标注样本数。
 **② 第二例 = 未复现，机制如下（不改测试逻辑，如实记录）**：该用例 `assert st["total"] == 1`
 （`test_scrape_publish.py:442`）断言的是**全局**队列，而
 
-- `total` = `sum(db.scrape_counts().values())`（`server.py:3050`）= **`scrape_items` 表全表行数**；
-- `_quiesce_background` 收尾走 `scrape.stop(timeout=2.0)`（`conftest.py:109`）—— **超时后线程仍在**；
+- `total` = `sum(db.scrape_counts().values())`（`server.py:4556`）= **`scrape_items` 表全表行数**；
+- `_quiesce_background` 收尾走 `scrape.stop(timeout=2.0)`（`conftest.py:281`）—— **超时后线程仍在**；
 - `isolated` 会 `db.close()` + `db.init()` 换一套空库，但**残留线程下次取连接拿到的是新库**。
 
 ⇒ 残留 worker 要么经 `db.scrape_delete`（`scrape.py:278`「书库已不在」/ `:380`「源与副本都不在」）
@@ -876,7 +876,7 @@ tooltip 标注样本数。
 测试）。第 33 期共跑 4 轮全量，**全部 0 failed**。
 
 **⑤ 端到端对照实验**：接口级测试**覆盖不到**这条路径 —— 测试里 `AUTO_WATCH=false`（`conftest.py:57`）
-⇒ watcher 不跑 ⇒ `/api/libraries/{lid}/scan` 里 `WATCHER.is_running()`（`server.py:2872`）为假
+⇒ watcher 不跑 ⇒ `/api/libraries/{lid}/scan` 里 `WATCHER.is_running()`（`server.py:4376`）为假
 ⇒ 走不到音频目录的摄入分支。故另起独立实例（**8796 端口** + 独立临时根 + `AUTO_WATCH=true`）做对照，
 **唯一的变量就是那一行**：
 
@@ -1074,9 +1074,9 @@ T1→T4 串行（T1 / T1.5 都是**先修既有真 bug**，不修的话新功能
 **与计划的「有意偏离」**（如实记录，都不是省略，是落点不同）：
 
 1. **`preview` / `plan` 未被加参数，改为一对平行入口**：计划写「`preview` / `plan` / `execute`
-   增显式选择集 + 显式目标库入参」；实施为 `migrate.move_preview`（`migrate.py:572`）/
-   `move_plan`（`:595`），与既有 `preview`（`:172`）/ `plan`（`:258`）并列，**共用**
-   `execute`（`:955`）/ `rollback`（`:1035`）。理由：自动归库那条路径的入参**冻结着既有回滚入口**
+   增显式选择集 + 显式目标库入参」；实施为 `migrate.move_preview`（`migrate.py:405`）/
+   `move_plan`（`:428`），与既有 `preview`（`:172`）/ `plan`（`:258`）并列，**共用**
+   `execute`（`:781`）/ `rollback`（`:861`）。理由：自动归库那条路径的入参**冻结着既有回滚入口**
    （`migration_last_batch("move")`），两套语义塞进同一个函数就得在每个分支里判断「这次是哪种调用」；
    平行入口 + 共用执行层既满足防回归 #3（既有行为逐字不变），也不产生第二套规则展开。
    代价：`execute` 多一个 `direction` 判别，接口层据此拒收别的方向的批次。
@@ -1413,7 +1413,7 @@ Book Dock 投递 / 书架「立即扫描」/ 任务中心空态 …）都在把�
 | 三线程裸读 + `db.close()`（4s） | **6/6 段错误**（exit 139） | **exit 0**（不崩） |
 
 **它是生产可达的**：`db.create_library` / `update_library` 持锁写，而 `db.get_library` 裸读，
-生产里 watcher 线程、scrape worker、`server.py:3343` 的 `asyncio.to_thread(migrate.execute)`
+生产里 watcher 线程、scrape worker、`server.py:4784` 的 `asyncio.to_thread(migrate.execute)`
 与请求线程都会同时进这个连接。**用户可见后果**不是「报个错」——
 `library.get_library` 把这个异常吞成 `None` ⇒ `lib_settings.overrides()` 得空 dict ⇒
 **每库覆写静默回落全局值**：用户关掉某库的「自动刮削」，读回来又是开的。
@@ -1475,7 +1475,7 @@ T5 的症状（并发下每库覆写被吃）在浏览器里**单用户操作触
 3370→3472（两处）、`notifications_read` 表 156→258、`book_dock_items` 表 236→338、
 `idx_dock_status` 248→350、`DOCK_TABS` 2160→2262、`set_review` 1889→1991、
 `save_bookmark` 792→894、`meta_locks` 277→379 与其建表注释 272-276→374-378、
-`conftest.py:98`→`:109`（`_quiesce_background` 里的 `scrape.stop`）。
+原引 `conftest.py:98`→`:109`（`_quiesce_background` 里的 `scrape.stop`；**真值**今天是 `:255`/`:281`）。
 **历史记录里的旧行号一律不动** —— `capability-gap.md:86-99` 那张「原引用 / 实测应为」表
 是第 33 期的核验记录，改它等于篡改历史。
 
@@ -1523,7 +1523,7 @@ T5 的症状（并发下每库覆写被吃）在浏览器里**单用户操作触
 
 **开工前实测得出的判断（本期省掉一半活的原因）**：上游 7 步里，第 2 步 Folders、
 第 5 步 Reading 的「何时算读完」、第 6 步 Automation 在本项目**都已是现成后端** ——
-`api_create_library`（`novelforge/server.py:2808`）本就收 `name / type / mode / root_path /
+`api_create_library`（`novelforge/server.py:4040`）本就收 `name / type / mode / root_path /
 source_subdir / publish_path / rules / watch / scan_interval / scan_cron` 十项，而第 6 步的
 「自动扫描计划」是**第 17 期 T2 的真实调度**（`watcher._should_scan`，`novelforge/core/watcher.py:668`），
 不是占位。**真正新增的只有 3 个库表列 + 2 个配置项**，其余是把已有能力摆成向导的样子。
@@ -1545,7 +1545,7 @@ source_subdir / publish_path / rules / watch / scan_interval / scan_cron` 十项
 **向导骨架**（`frontend/src/components/tools/LibraryWizard.vue`，新建 748 行 + spec 368 行）：
 `?new=1` 时渲染全屏 5 步向导替代「列表 + 弹窗」，**`?new=1` 之外一律走原路径** ——
 编辑沿用既有弹窗（只补齐新字段），22+ 条既有编辑用例一条不动。
-步骤条 `STEPS`（`frontend/src/components/tools/LibraryWizard.vue:69`）：
+原步骤条 `STEPS`（`frontend/src/components/tools/LibraryWizard.vue:69`；**已失效** —— 该向导今天改回了「三页签」结构，见 `LibraryWizard.vue` 头注释）：
 `基本信息`（必填）→ `内容来源`（必填）→ `扫描` → `阅读` → `自动化`，对应上游
 Details / Folders / Scanning / Reading / Automation。
 
@@ -1560,9 +1560,9 @@ Details / Folders / Scanning / Reading / Automation。
 
 **新增 3 列**（`icon` / `allowed_exts` / `exclude`，均 `TEXT NOT NULL DEFAULT ''`），
 **七处同步点**：① CREATE TABLE ② 迁移块 ③ `create_library` 签名与 INSERT
-（`novelforge/core/db.py:3304`）④ **`_LIBRARY_COLS`（`novelforge/core/db.py:3349`）**
-⑤ `_library_dto`（`novelforge/server.py:2548`）⑥ POST（`server.py:2808`）⑦ PATCH（`server.py:2873`）。
-第 ④ 处**最易漏且不报错**：`update_library`（`novelforge/core/db.py:3357`）是「过滤后为空就原样返回」，
+（`novelforge/core/db.py:4375`）④ **`_LIBRARY_COLS`（`novelforge/core/db.py:4430`）**
+⑤ `_library_dto`（`novelforge/server.py:3752`）⑥ POST（`server.py:4039`）⑦ PATCH（`server.py:4113`）。
+第 ④ 处**最易漏且不报错**：`update_library`（`novelforge/core/db.py:4437`）是「过滤后为空就原样返回」，
 漏了的表现是**界面显示「已保存」而值没变**。⚠️ sqlite 的 `ALTER TABLE ADD COLUMN` 只接受
 **常量**默认值 ⇒「按库类型推导扩展名」**不能**写成列默认值，只能靠 `''` 哨兵 + 读时回落。
 
@@ -1572,7 +1572,7 @@ Details / Folders / Scanning / Reading / Automation。
 界面语义是「继承默认」。`allowed_exts` 与 `exclude` 的空串/坏值/列表去重保序，
 另有 `tests/test_library_scan_scope.py` 12 例钉住（本期新建）。
 
-**允许格式 / 排除图案的扫描语义**（`library.py:1014-1068`）：与 `watcher.ignore` **同族，
+**允许格式 / 排除图案的扫描语义**（`library.py:1401-1440`），与 `watcher.ignore` **同族，
 但有两处明写的差异** —— ① 用 `fnmatch.fnmatchcase`（`watcher._ignored` 用的 `fnmatch.fnmatch`
 在 Windows 上**大小写不敏感**，而库级排除是用户显式写下的可见规则，不能随平台变）；
 ② 图案**含 `/`** 时匹**相对库根**的路径，否则只匹 basename（watcher 那套是纯 basename）。
@@ -1614,7 +1614,7 @@ Details / Folders / Scanning / Reading / Automation。
    已抽成 `frontend/src/lib/paths.ts`（`isAbsolutePath` `:31` / `pathsOverlap` `:58`），两处改调；
    `pathsOverlap` 顺带修掉「只认 `/`，分隔符混写下重叠检测**恒为假**」。
    **生产跑在 Linux 上，所以这个 bug 从没露头。**
-2. **全局阅读阈值写不进去。** `reading` 不在 `server.EDITABLE`（`novelforge/server.py:3938`）里，
+2. **全局阅读阈值写不进去。** `reading` 当时不在 `server.EDITABLE`（`novelforge/server.py:5364`）里，
    `_sanitize_config` 整块丢掉 ⇒ patch 为空 ⇒ 400「没有可保存的配置项」；
    `GET /api/config` 里那把**硬编码键列表**也缺它；前端 `SECTION_KEYS` 同样缺。
    漏了的表现极隐蔽：界面上的开关正常切换（本地草稿改了），只有一条 toast 一闪而过。
@@ -1718,7 +1718,7 @@ Details / Folders / Scanning / Reading / Automation。
 ② 统一阅读状态判定优先级 —— `ShelfView` 筛选与 `BookCover` 角标复用 `readingThresholds.statusBucket`
 （真实状态优先），消除「手动标已读完但书架筛选 / 封面角标仍显示在读」的不一致。
 
-**后端零改动**：`api_library_source_dirs`（`novelforge/server.py:2784`）与前端 `api.librarySourceDirs`
+**后端零改动**：`api_library_source_dirs`（`novelforge/server.py:3993`）与前端 `api.librarySourceDirs`
 （`frontend/src/lib/api.ts:3234`）第 40 期已实现，本期只是把后者接到界面；`tests/test_api_smoke.py:150`
 那条「`/api/libraries/source-dirs` 返回 200」的接口契约**本来就在**，本期不新增后端用例。
 
@@ -1726,8 +1726,8 @@ Details / Folders / Scanning / Reading / Automation。
 - 步骤②「库根目录」「来源子目录」两输入框各加一个「浏览」幽灵按钮（`wizard-browse-root` /
   `wizard-browse-sub`），点击 `await api.librarySourceDirs()` 取回 `LIBRARY_SOURCE_DIR` 下的真实子目录清单
   （`{root, exists, dirs:[{name, path, entries}]}`），在该行下方弹**局部**浮层（v-if，不重建整页 DOM），
-  每条显示子目录名 + 条目数（`wizard-browse-item`）。状态 `browse`（`LibraryWizard.vue:220`）、
-  `openBrowse`（`LibraryWizard.vue:228`）、`pickBrowseDir`（`LibraryWizard.vue:245`）。
+  每条显示子目录名 + 条目数（`wizard-browse-item`）。状态 `browse`（`LibraryWizard.vue:159`）、
+  `openBrowseRoot`（`LibraryWizard.vue:188`）、`addCurrentFolder`（`LibraryWizard.vue:219`）。
 - 选中回填：`root` 目标用绝对 `path`；`sub` 目标用 `path` 剥离 `root` 前缀得到的相对子目录名
   （与 `props.sourceDir` 同口径，沿用第 40 期「来源子目录相对 `LIBRARY_SOURCE_DIR`」的语义）。
 - 保留 `touched.root` / `touched.sub` 既有手改标记语义：用户从清单选了就不被 `resyncDefaults` 覆盖。
@@ -1738,7 +1738,7 @@ Details / Folders / Scanning / Reading / Automation。
   `finished` → 已读完；`reading` / `paused` / `abandoned` → 在读（过滤器 UI 仅三档，已开始的都进在读桶）；
   无状态行时按进度阈值兜底（含 percent 够高 → 已读完）。与 `statusOf` / `statusLabelOf` 同文件同源，
   **不造第三份三态拷贝**（项目铁律：判据只此一处）。
-- `ShelfView.vue` 删除本地只按进度的 `statusOf`（`ShelfView.vue:280`），改调 `statusBucket(b, library.currentLibraryId)`
+- `ShelfView.vue` 删除本地只按进度的 `statusOf`（`ShelfView.vue:296`），改调 `statusBucket(b, library.currentLibraryId)`
   驱动 `fStatus` 筛选；书卡文案 `bookInfo.statusLabel` 本就走 `statusLabelOf`，由此三处口径统一。
 - `BookCover.vue` 角标由 `percentLabel(book.percent)`（只看进度）改为 `statusLabelOf(book, libraryStore.currentLibraryId)`
   （`BookCover.vue:96`），`CoverBook` 类型补 `status` 字段；跨库组件取当前库阈值当上下文、无当前库退回全局
@@ -3739,10 +3739,9 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
   两者均登记进 `tests/test_frontend_unit_contract.py::EXPECTED_SPECS`；`lib/shelfRows.spec.ts` 补错峰与上限用例。
 - 既有 spec 同步：`BookPreviewDialog.spec.ts` 扩 mock（`bookCollections` / `addToCollection` / `collections` / `deleteBook`）
   并加 5 例动作区契约（默认不给动作、取消不发请求、删除成功关浮层 + 通知父组件、加入收藏、加入失败不谎报）。
-- ⚠️ **本轮验证未跑完**：实施期间本机**命令通道不可用**（权限弹窗连续超时，`npm` / `pytest` 均无法执行）
-  ⇒ 前端四连（`type-check` / `test:unit` / `build` / `deploy`）与后端 `pytest`
-  **待下一次会话补跑**；`VERSION` 已改 0.83.0、`CHANGELOG` 段已写，**提交与推送同样待补**。
-  交付前必须在能跑命令的环境复核一遍（尤其 `BookPreviewDialog.spec.ts` 的新用例与 `test_dashboard_widget_contract.py` 的正则形状）。
+- ⚠️ **实施期间**本机**命令通道不可用**（权限弹窗连续超时，`npm` / `pytest` 均无法执行）⇒ 当时四连与 `pytest` 未跑、提交待补。
+  **已于同日恢复后补齐**（见本节「五」）：前端四连全绿、后端全量 **1340 例 / 0 failed**、
+  四笔提交已推 `main` 并自动发 `v0.83.0`。
 
 ### 四、未做 / 取舍
 
@@ -3752,3 +3751,28 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 - 「库范围」**不做**「按库删掉陈旧 id」的清理：指向已删库的 id 在过滤与摘要里都被忽略，留着无害；
   真要清理得等面板打开时顺手 prune，收益不足。
 - 「阅读时长」部件**默认关闭**：存量用户升级后不该凭空多出一张卡。
+
+### 五、收尾：验证补齐 + 文档锚点全仓复核（`v0.83.0` tag 之后）
+
+**A. 验证补齐**（实施期间命令通道不可用，同日恢复后跑完）：前端四连全绿（`type-check` ✅ / `test:unit` **44 spec** ✅ /
+`build` ✅ / `deploy` ✅ 已同步 `static/v2`，产物含「阅读时长 / 库范围 / 全部书库 / 已移入回收站」四个标记）；
+后端全量 **1340 例（1328 passed / 12 skipped / 0 failed）**（junit 口径）；四笔提交
+`3c81112`→`152c407`→`8316107`→`3944880` 已推 `main`，CI 自动打 tag **`v0.83.0`** 并建 Release。
+
+**B. 文档锚点复核**（用户点名「修复报 51 处疑似漂移 + 4 处硬错」）：逐条按 `--suggest` 给出的**符号真实行号**改正，
+**只动 `文件:行号` 引用本身**，不改叙述与结论。修后 `tests/check_doc_anchors.py` ⇒ **疑似漂移 0 / 硬错 0**
+（符号命中 27 → 74）。涉及三份：`bookorbit-capability-gap.md`（17 处）、`bookorbit-module-inventory.md`（11 处）、
+`roadmap-gaps-remaining.md`（20 处）。
+
+- **两类特殊处理**：① 「**记录旧错**」的行不篡改数字 —— `BookDetailView.vue` 按标签拆分后只剩 394 行，
+  文档引的 `:487-505` / `:404-415` / `:446-455` 是**旧锚点** ⇒ 补 `原引` 标记或改写成不带 `:行号` 的叙述；
+  已失效的 `STEPS` 步骤条（向导早已改回「三页签」）标 `已失效`。工具对含 `原引` / `真值` / `已失效` 的行**按设计跳过**。
+  ② **工具启发式误判**：`FilesTab.vue` 的裸续锚被继承成上一个全路径锚点（`lib/api.ts`）⇒ 给首个锚点补回文件名；
+  「与 `watcher.ignore` 同族」把 `ignore` 算到了 `library.py` 那个锚点头上 ⇒ 在锚点后补分隔符收住小句。
+- ⚠️ 仍剩 **「目标不在此仓」12 条**，**本轮不动**（不属漂移/硬错）：6 条是上游 `packages/types/*` 外部引用（正常）；
+  6 条是本仓/上游**裸文件名**，其中 3 条来自 `docs/review/**` —— 那是工具在 Windows 上 `SKIP_DOCS` 前缀比对
+  **没归一化路径分隔符**导致的扫描误差。
+- ⚠️ 工具自带口径提醒：**「工具报 0 漂移」≠「核完了」** —— `--todo`（该句没点名符号的锚点，本轮 272 条）
+  仍需人工并排看，本轮未逐条过。
+- 手法：用一次性 Python 脚本改三份文档（**每条断言「恰好命中 1 处」，命中数不对就整体中止**），避免 48 处手工串改。
+- 顺带记一条命令坑：该工具在 GBK 控制台打印含 `⇒` 的源码行会 `UnicodeEncodeError` ⇒ 跑它要 `$env:PYTHONIOENCODING='utf-8'`。
