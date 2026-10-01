@@ -76,6 +76,54 @@ def copy_with_extra(src, dst, *, extra=None, replace=None) -> pathlib.Path:
     return dst
 
 
+# ---------------- 新章要在三处 XML 里「登记」（纯函数，可单独验死）----------------
+# 为什么先做这三个函数：追更的成败最终取决于**这三处字符串手术**是否做对 ——
+# 少登记一处，表现是「新章抓下来了、文件也在包里，但阅读器翻不到它」（或目录里看不见），
+# 从现象几乎无法反推是哪一处漏了。所以把它们拆成纯函数、单独测。
+#
+# 落点由真机 dump 决定（见 `.codebuddy/memory` 里「章节级 API 的结构基线」）：
+# ebooklib 产物是 EPUB/content.opf + EPUB/c%04d.xhtml + EPUB/nav.xhtml + EPUB/toc.ncx。
+
+def _insert_before(text: str, anchor: str, fragment: str, *, what: str, last: bool = False) -> str:
+    """在锚点前插入片段；**找不到就响亮报错**（绝不静默无动作）。
+
+    「静默无动作」在这里是最坏的失败形态：条目照样追加、包照样生成、一切看着都成功，
+    只是读者翻不到新章。宁可当场炸。
+    """
+    i = text.rfind(anchor) if last else text.find(anchor)
+    if i < 0:
+        raise ValueError(f"EPUB 结构不符合预期：找不到{what}（锚点 {anchor!r}）")
+    return text[:i] + fragment + text[i:]
+
+
+def add_manifest_item(opf: str, *, href: str, item_id: str) -> str:
+    """OPF 的 ``<manifest>`` 里登记新章（不登记 ⇒ 阅读器不认这个文件）。"""
+    return _insert_before(
+        opf, "</manifest>",
+        f'<item href="{href}" id="{item_id}" media-type="application/xhtml+xml"/>',
+        what="manifest 的 </manifest>")
+
+
+def add_spine_itemref(opf: str, *, item_id: str) -> str:
+    """OPF 的 ``<spine>`` 里**追加在末尾**（既有章节顺序不变 ⇒ 阅读数据的 index 不漂移）。"""
+    return _insert_before(opf, "</spine>", f'<itemref idref="{item_id}"/>',
+                          what="spine 的 </spine>")
+
+
+def add_nav_link(nav: str, *, href: str, title: str) -> str:
+    """`EPUB/nav.xhtml` 的目录 ``<ol>`` 末尾追加一条链接（EPUB3 阅读器靠它显示目录）。"""
+    return _insert_before(nav, "</ol>", f'<li><a href="{href}">{title}</a></li>',
+                          what="nav.xhtml 的 </ol>")
+
+
+def add_ncx_navpoint(ncx: str, *, href: str, title: str, play_order: int) -> str:
+    """`EPUB/toc.ncx` 的 ``<navMap>`` 末尾追加 navPoint（EPUB2 阅读器仍读 NCX）。"""
+    frag = (f'<navPoint id="navPoint-{int(play_order)}" playOrder="{int(play_order)}">'
+            f"<navLabel><text>{title}</text></navLabel>"
+            f'<content src="{href}"/></navPoint>')
+    return _insert_before(ncx, "</navMap>", frag, what="toc.ncx 的 </navMap>")
+
+
 def verify_unchanged(src, dst, *, added=(), replaced=()) -> list:
     """校验 ``dst`` 相对 ``src`` **只多了 ``added`` / 只改了 ``replaced``**。
 
