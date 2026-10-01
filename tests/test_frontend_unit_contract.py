@@ -128,6 +128,14 @@ EXPECTED_SPECS = (
     # 「未勾选 + 标题还写着「1 个书库」」，而且再点一下会变成**选中**（方向反了）。
     # ⇒ 拒绝时必须把 `input.checked` 翻回去；不测就会静默回归。
     "src/components/dashboard/DashboardSettingsSheet.spec.ts",
+    # 第 84 期：更新页的「自动更新状态卡」。默认不挂 docker.sock ⇒ 自动更新开关默认不生效，
+    # 页面上必须如实说「不可用」与「怎么才能用」，否则用户对着一个看似能开的开关一直等；
+    # 失败改退避重试后，失败原因与下次重试时间也必须显示（否则永远不知道会不会再升上去）。
+    "src/views/settings/pages/UpdatePage.spec.ts",
+    # 第 84 期：维护页 UPDATES 分组的对照归置。上游那条 «Check for updates» 本项目第 78 期
+    # 即已实现，仓内对照却记成「未实现」⇒ 属对照走样。这条钉住「改成了已实现 + 跳转」，
+    # 并反向钉住「IMPORT / RECOMMENDATIONS 仍留在未支持卡里」（过滤不能过度）。
+    "src/views/settings/pages/MaintenancePage.spec.ts",
 )
 
 

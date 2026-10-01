@@ -134,19 +134,19 @@ export const UPDATE_FIELDS: FieldDef[] = [
     path: 'update.check_enabled',
     label: '检查新版本',
     type: 'bool',
-    hint: '启动时与每 6 小时检查 GitHub 最新版本；出网失败静默忽略。关掉后保存即生效：不再检查，侧栏也不再提示、「新功能」页无「可更新」',
+    hint: '容器启动即查一次、之后每 6 小时查 GitHub 最新版本；出网失败静默忽略。关掉后保存即生效：不再检查，侧栏也不再提示、「新功能」页无「可更新」',
   },
   {
     path: 'update.interval_hours',
     label: '检查间隔（小时）',
     type: 'number',
-    hint: '定时检查间隔；保存即生效。首次检查在启动后一个间隔之后（避开启动期真连 GitHub）',
+    hint: '定时检查间隔；保存即生效。容器启动后会立即先查一次（不等一个间隔），之后按此间隔轮询',
   },
   {
     path: 'update.auto_apply',
     label: '发现新版自动更新',
     type: 'bool',
-    hint: '默认关：只提示，需手动点「立即更新」。开启后检查到新版会自动拉取镜像并重建容器；须 compose 挂 docker.sock，否则仍只提示命令。同一版本只自动尝试一次',
+    hint: '默认关：只提示，需手动点「立即更新」。开启后检查到新版会自动拉取镜像并重建容器；须 compose 挂 docker.sock，否则仍只提示命令。同一版本若失败，按 1 小时 → 6 小时 → 24 小时退避重试（不会永久放弃）',
   },
   {
     path: 'update.image',

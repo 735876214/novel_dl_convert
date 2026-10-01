@@ -288,7 +288,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['Maximum upload file size limit', 'Import library data（从其它书库工具一次性导入）', 'Refresh recommendation index', 'Backfill achievements', 'Check for updates（查 GitHub 新版本）'],
         },
         link: { to: '/tools/duplicates', label: '重复书籍清理' },
-        note: '已实现：UPLOADS 上传上限（可配置且生效）、ACHIEVEMENTS 的成就重算（Backfill）、书库索引重建、缓存清理、回收站清空与各目录占用统计。IMPORT（从其它书库工具一次性导入）/ RECOMMENDATIONS（刷新推荐索引）/ UPDATES（查 GitHub 新版本）在容器部署口径下未实现，页内以只读条目列出。',
+        note: '已实现：UPLOADS 上传上限（可配置且生效）、ACHIEVEMENTS 的成就重算（Backfill）、书库索引重建、缓存清理、回收站清空与各目录占用统计、UPDATES 版本检查与更新（第 78 期实现上游那条 Check for updates，且扩展出检查间隔 / 镜像拉取 / 一键更新 / 自动更新；开关与状态集中在「扩展 → 更新」页，见该页说明卡）。IMPORT（从其它书库工具一次性导入）/ RECOMMENDATIONS（刷新推荐索引）在容器部署口径下未实现，页内以只读条目列出。',
       }),
     ],
   },
@@ -435,7 +435,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
       }),
       p('ext/update', 'Updates', '更新', 'ready', {
         own: true,
-        note: '第 78 期新增：版本号单一真值源（仓库根 VERSION + 后端 APP_VERSION）。「检查新版本」默认开，出网失败静默忽略；「发现新版自动更新」默认关，需手动点「立即更新」。第 80 期起四个键保存后即时生效（不必重启进程），并可自定义「更新拉取镜像」以走加速镜像源。一键更新须在 docker-compose.yml 的 volumes 下挂 /var/run/docker.sock 才生效（取消注释该行），未挂载时「新功能」页降级为复制升级命令。',
+        note: '第 78 期新增：版本号单一真值源（仓库根 VERSION + 后端 APP_VERSION）。「检查新版本」默认开，出网失败静默忽略；「发现新版自动更新」默认关，需手动点「立即更新」。第 80 期起四个键保存后即时生效（不必重启进程），并可自定义「更新拉取镜像」以走加速镜像源。一键更新须在 docker-compose.yml 的 volumes 下挂 /var/run/docker.sock 才生效（取消注释该行），未挂载时「新功能」页降级为复制升级命令。第 84 期加固：容器启动即校验一次版本（不等检查间隔）、自动更新失败按 1 小时到 6 小时到 24 小时退避重试（不再失败一次即永久放弃）、拉镜像前先自动备份业务数据（备份失败即中止本次更新），页内状态卡如实显示自动更新是否可用及其原因。',
       }),
     ],
   },

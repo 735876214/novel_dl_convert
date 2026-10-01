@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 
+import Badge from '@/components/ui/Badge.vue'
 import Card from '@/components/ui/Card.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -57,6 +58,27 @@ const filteredGroups = computed(() => {
 })
 
 const isEmpty = computed(() => entries.value.length === 0)
+
+/**
+ * 自动更新失败横幅（第 84 期）。
+ *
+ * 「有更新」这个横幅只说明*有*新版，不说明*为什么一直没升上去*。第 84 期之前自动
+ * 更新是「先记已尝试、再执行」：拉取失败也算记过，此后每轮都跳过 ⇒ 失败一次就永久
+ * 卡死，而界面上只剩一个永远跳不动的「有新版本」。这里把失败原因与重试时间说清楚。
+ */
+const autoFailed = computed(() => {
+  const s = status.value
+  if (!s) return false
+  return (s.auto_failures ?? 0) > 0 && s.last_auto_result !== 'restarting'
+})
+
+/** 时间戳 → 本地可读时间。 */
+function fmtTs(ts: number | undefined): string {
+  if (!ts) return ''
+  const d = new Date(ts * 1000)
+  const p = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
 
 function selectVersion(v: string): void {
   selected.value = v
@@ -118,6 +140,38 @@ onMounted(async () => {
     />
 
     <template v-else>
+      <!-- 自动更新失败横幅（第 84 期）：退避重试 + 如实报出原因与下次重试时间。
+           放在「新功能」页是因为这里是用户看到「有新版本」之后最自然会回来的地方。 -->
+      <Card
+        v-if="autoFailed"
+        padding="none"
+        class="mb-4 border-l-2 border-danger"
+      >
+        <div class="px-4 py-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-[13px] font-medium text-danger">自动更新失败</span>
+            <Badge tone="err">{{ status?.last_auto_result }}</Badge>
+            <span class="text-[11.5px] text-muted-foreground tabular-nums">
+              连续 {{ status?.auto_failures }} 次
+            </span>
+            <a
+              v-if="status?.url"
+              :href="status.url"
+              target="_blank"
+              rel="noreferrer"
+              class="ml-auto text-[11.5px] text-muted-foreground underline"
+            >查看 Release</a>
+          </div>
+          <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
+            {{ status?.auto_message || '原因未知' }}
+            <template v-if="status?.auto_retry_at">
+              将于 {{ fmtTs(status?.auto_retry_at) }} 自动重试（失败间隔逐次拉长：1 小时 → 6 小时 → 24 小时）。
+            </template>
+            失败不会升级成永久放弃：退避到点后仍会自动重试。
+          </p>
+        </div>
+      </Card>
+
       <!-- 有新版本：横幅提示 + 更新动作（挂了 socket 才真更新，否则给命令） -->
       <Card
         v-if="status?.has_update"

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { RouterLink } from 'vue-router'
 
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
@@ -26,9 +27,12 @@ import { useUiStore } from '@/stores/ui'
  * 上游分组为 UPLOADS / IMPORT / RECOMMENDATIONS / ACHIEVEMENTS / UPDATES。
  * 本项目真实能落地的：
  *   · UPLOADS      上传大小上限（**此前后端完全没有限制**，本次补上并真正生效）
+ *   · UPDATES      版本检查 + 一键更新 + 自动更新（**第 84 期纠正对照**：
+ *                  本项目第 78 期就实现了上游那条「Check for updates」，且做得更多；
+ *                  此前误记成「未实现」，本项目把开关放在 ext/update 页）
  *   · 目录与占用    输入 / 导出 / 缓存 / 备份 / 回收站
  *   · 维护动作      重建书库索引、清空缓存、清空回收站
- * 其余四项保持明确「未支持」，条目直接取自注册表，避免与侧栏声明走样。
+ * 其余三项保持明确「未支持」，条目直接取自注册表，避免与侧栏声明走样。
  */
 const ui = useUiStore()
 const { cfg, saving, val, setVal, loadConfig, saveSection } = useSettingsConfig()
@@ -51,13 +55,23 @@ const orphanTables = computed(() =>
 
 const upstream = computed(() => findSettingsPage('library/maintenance')?.upstream)
 
-/** 已实现的条目不再列入「未支持」 */
-const IMPLEMENTED = ['Maximum upload file size limit', 'Backfill achievements']
+/**
+ * 已实现的条目不再列入「未支持」。
+ *
+ * ⚠️ 必须与 `settingsNav.ts` 里 `upstream.items` 的**逐字一致**（这里是精确匹配）：
+ * UPDATES 那条在上游条目里带中文括注「（查 GitHub 新版本）」，写成裸 `Check for updates`
+ * 匹配不上 —— 表现是它仍留在「上游还有、本项目未支持」卡里，与同页那张「已实现 + 跳转」
+ * 的说明卡自相矛盾（`MaintenancePage.spec.ts` 钉住这条）。
+ */
+const IMPLEMENTED = ['Maximum upload file size limit', 'Backfill achievements',
+  'Check for updates（查 GitHub 新版本）']
 const unsupportedItems = computed(() =>
   (upstream.value?.items ?? []).filter((i) => !IMPLEMENTED.includes(i)),
 )
 const unsupportedGroups = computed(() =>
-  (upstream.value?.groups ?? []).filter((g) => g !== 'UPLOADS' && g !== 'ACHIEVEMENTS'),
+  (upstream.value?.groups ?? []).filter(
+    (g) => g !== 'UPLOADS' && g !== 'ACHIEVEMENTS' && g !== 'UPDATES',
+  ),
 )
 
 const DIR_LABELS: Record<string, string> = {
@@ -279,6 +293,32 @@ onMounted(async () => {
         </div>
       </template>
       <div v-else class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
+    </Card>
+
+    <!-- UPDATES（第 84 期）：上游那条「Check for updates」本项目第 78 期就实现了，
+         且做得更多（检查间隔 / 拉取镜像 / 一键更新 / 自动更新）。此处只做**跳转**，
+         不放重复开关 —— 同一配置键挂两处必然出现「改了一处另一处没跟上」的假开关。 -->
+    <Card padding="none" class="mb-4">
+      <div class="border-b border-border px-4 py-3">
+        <h3 class="text-[13px] font-semibold text-foreground">版本检查与更新</h3>
+        <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
+          对应上游 UPDATES 分组的 <span class="font-mono">Check for updates</span>
+          （启动时查 GitHub 新版本，有更新时侧栏显示指示器）。本项目第 78 期即已实现，
+          并在此基础上多做了：可配置的检查间隔、镜像拉取、一键更新、发现新版自动更新
+          （自动更新前会自动备份数据，失败按 1 小时 → 6 小时 → 24 小时退避重试）。
+          开关与状态都集中在
+          <RouterLink to="/settings/ext/update" class="underline">扩展 → 更新</RouterLink> 页。
+        </p>
+      </div>
+      <div class="flex items-center gap-3 px-4 py-3">
+        <div class="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
+          一键更新与自动更新要求容器挂了
+          <code class="font-mono">/var/run/docker.sock</code>（默认不挂载，见部署文件注释）。
+        </div>
+        <RouterLink to="/settings/ext/update">
+          <Button size="sm" variant="primary">前往 Updates 页</Button>
+        </RouterLink>
+      </div>
     </Card>
 
     <!-- 目录与占用 -->

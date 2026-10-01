@@ -45,15 +45,25 @@ export interface UpdateStatus {
   check_enabled?: boolean
   /** 是否开着「发现新版自动更新」（第 80 期回显；横幅据此如实说明） */
   auto_apply?: boolean
+  /** 自动更新连续失败次数（第 84 期；退避长度的依据，0 = 没失败过） */
+  auto_failures?: number
+  /** 下次允许自动更新重试的时间戳（秒，0 = 不在退避窗口内） */
+  auto_retry_at?: number
+  /** 上次自动更新尝试的 stage（"" / restarting / pull_failed / backup_failed / unavailable） */
+  last_auto_result?: string
+  /** 上次自动更新失败的人话原因（界面横幅要显示它） */
+  auto_message?: string
 }
 
 /** 更新应用结果（POST /api/update/apply）。 */
 export interface UpdateApplyResult {
   ok: boolean
-  /** pulling / restarting / pull_failed / unavailable */
+  /** unavailable / backup_failed / pull_failed / restarting */
   stage: string
   image?: string
   message?: string
+  /** 第 84 期：更新前快照落点（持久卷上的备份文件路径） */
+  backup?: string
 }
 
 /** CHANGELOG 一个分组下的条目。 */
