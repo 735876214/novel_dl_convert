@@ -27,7 +27,7 @@ import pathlib
 import time
 
 from .. import config
-from . import detect, epub_builder, pipeline, preprocess
+from . import detect, epub_builder, pipeline, preprocess, reading_list
 
 #: 缓存子目录名（小写 / 连字符，与 `pdf/`、`authors/` 同风格）
 CACHE_SUBDIR = "txt-epub"
@@ -229,9 +229,16 @@ def derived_epub(book: dict, *, path=None, root=None):
 
 
 def native_chapters(book: dict, *, path=None, root=None) -> list:
-    """原生分章目录（与 `library._reading_list` **同形状**）：``[{volume, chapters}]``。
+    """原生分章目录（与 `library._reading_list` **同形状**）：``[{volume, kind?, chapters}]``。
 
     索引 0 基、无 nav 占位 —— 与 :func:`native_chapter_html` 的 index 同一空间。
+
+    ⚠️ **第 85 期起不再硬编码单个「正文」卷**：分章结果里 ``第X卷`` 这类卷首会被
+    :func:`novelforge.core.reading_list.build_reading_list` 按**标题形态**认出来并分组
+    （`detect` 的 ``vol`` 字段只标在卷首那一章身上，不能直接按值分组，得「遇卷首切一卷」）。
+    此前 TXT 书**完全看不到卷**，正是因为这里把整本塞进一个「正文」卷。
+    无名段的 ``volume`` 是空串（不再是「正文」）—— 显示层统一把无名段叫「正文」
+    （见前端 `lib/chapterGroups.ts`），数据侧不留一个假卷名。
     """
     p = _src_path(book, path, root)
     if p.suffix.lower() != ".txt" or not p.is_file():
@@ -242,13 +249,11 @@ def native_chapters(book: dict, *, path=None, root=None) -> list:
         return []
     if not chapters:
         return []
-    return [{
-        "volume": "正文",
-        "chapters": [
-            {"num": i + 1, "title": (c.get("title") or f"第 {i + 1} 节"), "index": i}
-            for i, c in enumerate(chapters)
-        ],
-    }]
+    entries: list = [
+        {"title": (c.get("title") or f"第 {i + 1} 节"), "index": i, "depth": None}
+        for i, c in enumerate(chapters)
+    ]
+    return reading_list.build_reading_list(entries)
 
 
 def native_chapter_html(book: dict, index: int, *, path=None, root=None) -> dict:

@@ -36,7 +36,7 @@ import uuid
 import zipfile
 
 from .. import config
-from . import audio, audio_meta, comics, db, metadata, units
+from . import audio, audio_meta, comics, db, metadata, reading_list, units
 
 # 只把这些扩展名当成「书」；与 /api/files 的全量列表不同，这里是有意收窄的。
 # .cbr（RAR 漫画）自第 9 期起在列 —— 由 core/comics.py 的 zip/rar 双后端解压。
@@ -581,20 +581,79 @@ def _spine(path: pathlib.Path) -> list:
         return []
 
 
-def _flat_volume(indexes, title_at) -> dict:
-    return {
-        "volume": "",
-        "chapters": [
-            {"num": j + 1, "title": title_at(i), "index": i} for j, i in enumerate(indexes)
-        ],
-    }
+def _plain_text(raw: str) -> str:
+    """把一小段 HTML 压成纯文本（去标签 + 折叠空白）。
+
+    ⚠️ 名字**刻意不叫 `_tag_text`**：那个名字在本模块 :119 已经有一个「按标签名从 XML 里
+    取值」的同名函数（``_tag_text(xml, tag)``，``probe_epub`` 抽 OPF 元数据用）。
+    重名会把先定义的那个**覆盖掉** —— 而且在 import 期不报错，只在跑起来时让
+    `probe_epub` 抛 `TypeError`（被它自己的 except 吞掉）⇒ 书目集体丢元数据、
+    系列/出版社全空。第 85 期实测踩过一次，别再改回去。
+    """
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", raw or "")).strip()
+
+
+def _doc_titles(path: pathlib.Path, media: list) -> dict:
+    """从「目录里没有列到的」XHTML 文档头部取标题 → ``{zip 内路径: 标题}``。
+
+    为什么值得读正文：**楔子这类条目经常根本不在 nav/NCX 里**（有些电子书的目录只列卷与
+    正文章，前言 / 楔子 / 版权页是「额外」的文档）。而目录面板里那一格标题此前一律回落成
+    「第 N 章」，把书自己写着的「楔子」丢掉了 —— 这是**本地就有的信息**，不该丢。
+
+    只读每个文档的**前 64 KB**（``_HEAD_SCAN_BYTES``，与 :func:`chapter_assets` 扫内联
+    ``<style>`` 同一口径）：标题在文档开头。``<title>`` 优先，否则第一个 ``<h1>–<h6>``。
+    **只对 nav 缺失的那些文档调用**（正常书一本都不会读）。
+    """
+    if not media:
+        return {}
+    out: dict = {}
+    try:
+        with zipfile.ZipFile(path) as z:
+            names = set(z.namelist())
+            for m in media:
+                if m not in names:
+                    continue
+                try:
+                    with z.open(m) as f:
+                        head = f.read(_HEAD_SCAN_BYTES).decode("utf-8", "ignore")
+                except Exception:                            # noqa: BLE001 —— 坏条目跳过
+                    continue
+                m_title = re.search(r"<title[^>]*>(.*?)</title>", head, re.S | re.I)
+                t = _plain_text(m_title.group(1)) if m_title else ""
+                if not t:
+                    m_h = re.search(r"<h[1-6][^>]*>(.*?)</h[1-6]>", head, re.S | re.I)
+                    if m_h:
+                        t = _plain_text(m_h.group(1))
+                if t:
+                    out[m] = t
+    except Exception:                                        # noqa: BLE001 —— 坏 zip 不抛
+        return out
+    return out
+
+
+def _filename_title(media: str) -> str:
+    """文件名的**中文**回退名（``楔子.xhtml`` → ``楔子``）；不可读时给空串。
+
+    ⚠️ 只认**含汉字**的文件名：``c0003.xhtml`` / ``cover.xhtml`` / ``chapter1.xhtml`` 这类
+    骨架名拿来做标题比「第 N 章」更难懂，所以宁可继续用兜底名（第 85 期口径）。
+    """
+    stem = pathlib.PurePosixPath(media).stem
+    return stem if re.search(r"[\u4e00-\u9fff]", stem) else ""
 
 
 def _reading_list(path: pathlib.Path) -> list:
-    """阅读顺序（对齐 spine）的卷-章结构；章标题优先取目录（按文件精确对齐）。
+    """阅读顺序（对齐 spine）的「卷 / 段 → 章」结构；标题优先取目录（按文件精确对齐）。
 
-    spine 决定章节顺序与 index（阅读器据此加载正文），目录仅提供标题/卷层级，
+    spine 决定章节顺序与 index（阅读器据此加载正文），目录仅提供标题与卷层级，
     因此目录条目数与 spine 不一致时也能正确套用（封面、版权页等多出的条目不会错位）。
+
+    **标题解析链**（第 85 期）：目录（nav / NCX）→ 文档自带的 ``<title>`` / 首个标题元素
+    （**只对目录没列到的那些文档读**）→ 文件名（含汉字时）→ ``第 N 章``。
+    此前缺了中间两环，于是「楔子」这种不在目录里的条目一律显示成「第 3 章」。
+
+    ⚠️ **index 始终是 spine 下标**，一个字都不许动（阅读进度 / 批注 / 书签的坐标，
+    且 TXT 两条路线的索引空间刻意对齐）。分组交给
+    :func:`novelforge.core.reading_list.build_reading_list`（与 TXT 路径共用同一份规则）。
     """
     spine = _spine(path)
     n = len(spine)
@@ -608,44 +667,16 @@ def _reading_list(path: pathlib.Path) -> list:
             titled[f] = t
             depth_of[f] = d
 
-    def title_at(i: int) -> str:
-        return titled.get(spine[i]) or f"第 {i + 1} 章"
+    missing = [spine[i] for i in range(n) if spine[i] not in depth_of]
+    doc_titles = _doc_titles(path, missing)
 
-    mapped = [i for i in range(n) if spine[i] in depth_of]
-    if not mapped:
-        return [_flat_volume(range(n), title_at)]
-
-    min_depth = min(depth_of[spine[i]] for i in mapped)
-    # 「卷容器」：某最浅层条目之后、下一个同级条目之前存在更深层条目
-    containers = set()
-    for k, i in enumerate(mapped):
-        if depth_of[spine[i]] != min_depth:
-            continue
-        for j in mapped[k + 1:]:
-            dj = depth_of[spine[j]]
-            if dj > min_depth:
-                containers.add(i)
-                break
-            if dj <= min_depth:
-                break
-
-    if not containers:
-        return [_flat_volume(range(n), title_at)]
-
-    volumes: list = []
-    cur = None
+    entries: list = []
     for i in range(n):
-        if i in containers:
-            cur = {"volume": titled.get(spine[i], ""), "chapters": []}
-            volumes.append(cur)
-        else:
-            if cur is None:
-                cur = {"volume": "", "chapters": []}
-                volumes.append(cur)
-            cur["chapters"].append(
-                {"num": len(cur["chapters"]) + 1, "title": title_at(i), "index": i}
-            )
-    return volumes
+        media = spine[i]
+        title = (titled.get(media) or doc_titles.get(media) or _filename_title(media)
+                 or f"第 {i + 1} 章")
+        entries.append({"title": title, "index": i, "depth": depth_of.get(media)})
+    return reading_list.build_reading_list(entries)
 
 
 def _body_of(doc: str) -> str:

@@ -53,6 +53,13 @@ _VOL_HEAD = rf"(?:第{_SP}{_NUM}{_SP}{_VOL_UNIT}|卷{_SP}{_NUM})"
 #: 「一部分……」「第一卷的内容……」这类普通句子会被整行判成卷首。
 _VOL_TAIL = rf"(?:[：:、\-——]{_SP}[^\n]{{1,{_TITLE_MAX}}}|[ \t　]+[^\n]{{1,{_TITLE_MAX}}})?"
 
+#: **无编号条目**的词表（第 85 期公开为唯一真值源）：它们**没有章号**，阅读列表
+#: （``core/reading_list``）据此把它们单独成段 —— 「卷前一段」与「卷尾一段」，且不给序号。
+#: ⚠️ 顺序有意义：``UNNUMBERED_FRONT + UNNUMBERED_BACK`` 拼出来必须与
+#: ``CHAPTER_PATTERNS`` 里那条「捕获整行」的正则**逐字一致**（改词表等于改分章口径）。
+UNNUMBERED_FRONT = ("序章", "序言", "楔子", "引子", "前言")
+UNNUMBERED_BACK = ("后记", "后記", "尾声", "终章", "番外")
+
 # 多正则：覆盖常见章节标记（中文数字/阿拉伯/No./Chapter/序章番外等）
 CHAPTER_PATTERNS = [
     # 卷 + 章 一行写全：第二卷 第三章 / 第二卷：第三章
@@ -72,12 +79,14 @@ CHAPTER_PATTERNS = [
     # 序章 / 楔子 / 引子 / 前言 / 后记 / 番外 / 尾声：**捕获整行**（此前只捕获标记本身，
     # `番外一 开始` 的「一 开始」会被丢掉）。代价是「番外」开头且整行 ≤24 字的正文行
     # 会被误判成章首，而标题超过 24 字的真章首会被漏掉 —— 两头都罕见，比丢字强。
-    re.compile(_LEAD + rf"(?:序章|序言|楔子|引子|前言|后记|后記|尾声|终章|番外)"
+    # ⚠️ 词表取自 ``UNNUMBERED_FRONT + UNNUMBERED_BACK``（**唯一真值源**）：同一份词表还要给
+    # 阅读顺序分组判「这条是不是无编号条目」（见 ``core/reading_list``），两处各写一份必然漂移。
+    re.compile(_LEAD + rf"(?:{'|'.join(UNNUMBERED_FRONT + UNNUMBERED_BACK)})"
                rf"[^\n]{{0,{_TITLE_MAX}}}{_END}", re.M),
     re.compile(_LEAD + r"[0-9]+" + _SP + r"[\.、．·]" + _SP + r".+", re.M),
     re.compile(_LEAD + r"[一二三四五六七八九十]+" + _SP + r"[\.、．·]" + _SP + r".+", re.M),
 ]
-#: :func:`_is_volume` 用的锚定版（``re.match`` 自带行首锚定，不需要 ``re.M``）
+#: :func:`is_volume_title` 用的锚定版（``re.match`` 自带行首锚定，不需要 ``re.M``）
 _VOL_HEAD_RE = re.compile(_VOL_HEAD)
 # 仅当章节正文短于此值时才并入上一章（避免吞掉真实短章），默认不合并由调用方控制
 MERGE_MIN_LEN = 20
@@ -103,14 +112,45 @@ def regex_bounds(text: str) -> list[tuple[int, str]]:
     return sorted(best.items())
 
 
-def _is_volume(title: str) -> bool:
-    """这条边界是不是**卷首**（决定 ``vol`` 字段，供阅读器/成品做卷分组）。
+def is_volume_title(title: str) -> bool:
+    """这个标题是不是**卷首**（``第一卷`` / ``第二部`` / ``卷一 起风``）。
 
     第 62 期放宽了两处：① ``卷一 起风`` 这种数字在后的写法此前不认；
     ② ``第.+[卷部]`` 的 ``.+`` 贪婪又要求**以**卷/部收尾，于是「第二卷 第一章」
     这种「卷+章写在一行」的写法反而不算卷首 —— 改成**前缀匹配**。
+
+    **第 85 期起是公开判据**：阅读顺序分组（:mod:`novelforge.core.reading_list`）要用它
+    认出「**平铺目录**里哪些条目是卷首」——很多电子书的 nav/NCX 不带层级（卷与章同层），
+    只按层级判「卷容器」的话整本书会退化成一条平铺，卷就看不见了。
+    原先它叫 ``_is_volume``，只在 :func:`split_by_offsets` 里标 ``vol`` 字段用；
+    那个私有名保留成薄封装，**行为一字未改**。
     """
     return bool(_VOL_HEAD_RE.match(title))
+
+
+def _is_volume(title: str) -> bool:
+    """``is_volume_title`` 的旧名（薄封装，行为不变）。"""
+    return is_volume_title(title)
+
+
+def is_unnumbered_title(title: str) -> str:
+    """这个标题是不是**无编号条目**，是的话属于哪一段：``"front"`` / ``"back"`` / ``""``。
+
+    「无编号」= 楔子 / 序章 / 引子 / 前言 / 后记 / 尾声 / 终章 / 番外 这类**没有章号**的条目。
+    阅读列表把它们**单独成段**（卷前一段、卷尾一段）且**不给序号**，所以这里要把
+    「哪一段」也答出来（见 :mod:`novelforge.core.reading_list`）。
+
+    ⚠️ 判据是**前缀**（与 ``CHAPTER_PATTERNS`` 里那条「捕获整行」的正则同一个词表）：
+    ``番外一 开始`` 算「番外」，它的尾巴是标题而不是章号。
+    """
+    t = (title or "").strip()
+    for w in UNNUMBERED_FRONT:
+        if t.startswith(w):
+            return "front"
+    for w in UNNUMBERED_BACK:
+        if t.startswith(w):
+            return "back"
+    return ""
 
 
 def split_by_offsets(text: str, bounds: list[tuple[int, str]], merge: bool = False) -> list[dict]:
