@@ -314,6 +314,47 @@ class DownloadManager:
             sidecar.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         return result
 
+    async def download_audio(self, item: dict, out_dir, opts: dict = None) -> Path:
+        """有声书：逐轨取字节 → 落成**目录型有声书**（一本 = 一个目录，第 86 期）。
+
+        三条口径（与 `download_comic` 同理，差别在产物形态）：
+
+        · **轨名必须用 `units` 认得的序号词**（`第N话`）—— 判据在 `units.UNIT_WORDS`，
+          换个名字（如 `track_1.mp3`）书架看到的就不是「一本书」而是**一堆散装音频**；
+          `N` 上限取 `units._MAX_UNIT`（999）：超过这个数的编号 `units` 不认，编了也白编；
+        · **轨序 = 站点给的顺序**（音频没有页序那种可读顺序，站点顺序就是唯一依据）；
+        · **轨清单为空就报错**，且**失败不留半个目录**（空目录在书架上是一条点开什么都没有的书）。
+        """
+        from ..core import audio as audio_mod      # 延迟导入：core 不在模块级反向依赖 sources
+        from ..core import units
+        name = source_of(item)
+        cls = REGISTRY.get(name)
+        if not cls:
+            raise ValueError(f"未知书源: {name}")
+        src = cls()
+        dest = Path(out_dir) / _safe_name(item.get("title", "audio"))
+        created = not dest.exists()
+        try:
+            async with self._client(src) as c:
+                urls = await src.fetch_media_urls(c, item, "audio") \
+                    if hasattr(src, "fetch_media_urls") else []
+                if not urls:
+                    raise ValueError("这条书源的规则没有给出任何音频地址"
+                                     "（缺 book.audio，或站点结构变了 / 需要两层跳转）")
+                dest.mkdir(parents=True, exist_ok=True)
+                for i, u in enumerate(urls[:units._MAX_UNIT], start=1):
+                    data = await c.get_bytes(u)
+                    ext = Path(str(u).split("?")[0]).suffix.lower()
+                    if ext not in audio_mod.AUDIO_EXTS:
+                        ext = ".mp3"              # 站点常给 `/audio?id=1` 这种没有扩展名的地址
+                    (dest / f"第{i}话{ext}").write_bytes(data)
+        except Exception:
+            if created:                           # 只清理**本次新建**的目录，不动已有产物
+                import shutil
+                shutil.rmtree(dest, ignore_errors=True)
+            raise
+        return dest
+
     async def download_comic(self, item: dict, out_dir, opts: dict = None) -> Path:
         """漫画：从书源取页清单 → 逐页取**字节** → 打成 CBZ 落本地（第 86 期）。
 

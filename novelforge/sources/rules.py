@@ -424,8 +424,10 @@ def _extract_pages(raw: str, rule: dict, base_url: str) -> list:
     attr = rule.get("url_attr") or "src"
     out = []
     for n in soup.select(rule.get("container") or ""):
-        # ⚠️ 漫画站普遍用懒加载：`src` 是占位图，真地址在 `data-src` / `data-original`
-        v = n.get(attr) or n.get("data-src") or n.get("data-original") or ""
+        # ⚠️ 三个兜底都不是可选的：
+        #   · 漫画站普遍**懒加载** —— `src` 是占位图，真地址在 `data-src` / `data-original`；
+        #   · 音频 / 漫画规则常把 container 指到 `<a>` 上 —— 地址在 `href` 而不是 `src`。
+        v = (n.get(attr) or n.get("data-src") or n.get("data-original") or n.get("href") or "")
         if v:
             out.append(urljoin(base_url, str(v)))
     return out
