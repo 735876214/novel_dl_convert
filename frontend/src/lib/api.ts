@@ -761,14 +761,28 @@ export interface RecycleResult {
 // ---------- 书库（图书馆浏览 / 书籍详情） ----------
 
 export interface BookChapter {
-  num: number
+  /**
+   * 段内序号（**每段从 1 重新计**，第 85 期口径不变）。
+   * ⚠️ **缺省 = 无编号条目**（楔子 / 序章 / 番外 / 后记…）：它们不参与编号，
+   * 目录里不显示序号。
+   */
+  num?: number
   title: string
   /** 在 EPUB spine 中的顺序索引，阅读器据此加载正文 */
   index?: number
 }
 
 export interface BookVolume {
+  /**
+   * 段名：卷段是卷名（`第一卷`）；**无名段是空串** —— 显示层统一叫法
+   * （见 `lib/chapterGroups.ts` 的 `groupLabel`），数据侧不留一个假卷名。
+   */
   volume: string
+  /**
+   * 无编号条目的前后段标记：`front`（卷前：楔子 / 序章 / 引子 / 前言）/
+   * `back`（卷尾：番外 / 后记 / 尾声 / 终章）；卷段与无名正文段**没有这个字段**。
+   */
+  kind?: 'front' | 'back'
   chapters: BookChapter[]
 }
 

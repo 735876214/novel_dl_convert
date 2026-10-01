@@ -37,6 +37,7 @@ import {
   type ReaderPrefs,
 } from '@/lib/readerPrefs'
 import { fontPrefValue, readerFontStack } from '@/lib/fonts'
+import { tocGroups } from '@/lib/chapterGroups'
 import { useFontsStore } from '@/stores/fonts'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
@@ -1105,21 +1106,18 @@ function next(): void {
  * 为什么不按后端 `index` 找：`flat` 会跳过 `index === undefined` 的条目，而目录面板用的是
  * 后端原始结构 —— 两边一旦不同步，`findIndex` 就找不到（⇐ 表现为「点了没反应」），
  * 或命中同序号的另一条（⇐ 表现为「跳错位置」）。位置是同序遍历出来的，天然对齐。
+ *
+ * 第 85 期：分组与段名收敛到 `lib/chapterGroups.ts`（与详情页「目录」标签**共用一份规则**，
+ * 免得两处各写一遍「无名段叫什么」）。
  */
-const tocView = computed(() => {
-  let k = 0
-  const groups: Array<{ volume: string; items: Array<{ title: string; pos: number }> }> = []
-  for (const v of book.value?.chapters ?? []) {
-    const items: Array<{ title: string; pos: number }> = []
-    for (const c of v.chapters) {
-      if (c.index === undefined) continue
-      items.push({ title: c.title, pos: k })
-      k += 1
-    }
-    if (items.length || v.volume) groups.push({ volume: v.volume, items })
-  }
-  return groups
-})
+const tocView = computed(() => tocGroups(book.value?.chapters))
+
+/** 目录里折叠起来的段（按 `TocGroup.key` 记）。**只存组件内**：不落盘、不加偏好项 */
+const collapsedToc = ref<Record<string, boolean>>({})
+
+function toggleTocGroup(key: string): void {
+  collapsedToc.value[key] = !collapsedToc.value[key]
+}
 
 /** 跳转（按 `flat` 位置）：越界即忽略并给出反馈，不做静默无事发生 */
 function gotoPos(p: number): void {
@@ -2243,20 +2241,38 @@ onBeforeUnmount(() => {
           v-if="showToc"
           class="w-60 shrink-0 overflow-y-auto border-r border-border pr-2 py-2"
         >
-          <div v-for="(v, vi) in tocView" :key="vi" class="mb-2">
-            <div v-if="v.volume" class="px-2 py-1 text-[11px] font-semibold text-muted-foreground">
-              {{ v.volume }}
-            </div>
+          <div v-for="g in tocView" :key="g.key" class="mb-2">
+            <!-- 只有**有名卷**出段头（无名段只在缩进上区别于卷内章节 —— 整本平铺的书
+                 外观与改造前一致）；点段头折叠。第 85 期 -->
             <button
-              v-for="c in v.items"
-              :key="c.pos"
+              v-if="g.headered"
               type="button"
-              class="block w-full cursor-pointer truncate rounded-md px-2 py-1 text-left text-[12.5px] transition-colors"
-              :class="c.pos === pos ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
-              @click="gotoPos(c.pos)"
+              class="flex w-full cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-left transition-colors hover:bg-muted"
+              :aria-expanded="!collapsedToc[g.key]"
+              @click="toggleTocGroup(g.key)"
             >
-              {{ c.title }}
+              <Icon
+                name="chev"
+                class="h-3 w-3 shrink-0 text-muted-foreground transition-transform"
+                :class="collapsedToc[g.key] ? '-rotate-90' : ''"
+              />
+              <span class="truncate text-[11px] font-semibold text-muted-foreground">{{ g.label }}</span>
             </button>
+            <template v-if="!g.headered || !collapsedToc[g.key]">
+              <button
+                v-for="c in g.items"
+                :key="c.pos"
+                type="button"
+                class="block w-full cursor-pointer truncate rounded-md px-2 py-1 text-left text-[12.5px] transition-colors"
+                :class="[
+                  c.pos === pos ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground',
+                  g.headered ? 'pl-5' : '',
+                ]"
+                @click="gotoPos(c.pos)"
+              >
+                {{ c.title }}
+              </button>
+            </template>
           </div>
           <div v-if="!tocView.length" class="px-2 py-3 text-[11.5px] text-muted-foreground">
             这本书没有可用目录
