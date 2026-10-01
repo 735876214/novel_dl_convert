@@ -129,6 +129,17 @@ class BrowserClient:
         resp.raise_for_status()
         return resp.text
 
+    async def get_bytes(self, url: str, **kw) -> bytes:
+        """取**字节流**（图片 / 音频这类二进制资源，第 86 期）。
+
+        ⚠️ 不能拿 `get_text()` 凑：`resp.text` 会按文本编码解一遍二进制，得回来的字节与站上
+        那一份**不一样** —— 表现是图片打不开、音频放不出，而且**看起来像站点的问题**。
+        走的就是 :meth:`get` 的同一条路（重试 / 退避 / Cookie / host_replace 口径一致），
+        只差最后一步取 `.content`。
+        """
+        resp = await self.get(url, **kw)
+        return resp.content
+
     async def _backoff(self, resp, attempt):
         ra = resp.headers.get("Retry-After")
         try:

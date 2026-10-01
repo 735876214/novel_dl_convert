@@ -314,6 +314,35 @@ class DownloadManager:
             sidecar.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         return result
 
+    async def download_comic(self, item: dict, out_dir, opts: dict = None) -> Path:
+        """漫画：从书源取页清单 → 逐页取**字节** → 打成 CBZ 落本地（第 86 期）。
+
+        ⚠️ 三条不许破的口径：
+        · 逐页必须走 `get_bytes`（走 `get_text` 会把图片按文本编码解一遍，字节就变了）；
+        · 页序**按站点给的顺序**写进归档（阅读顺序），只在扩展名不可信时兜底成 `.jpg`；
+        · **页清单为空就报错**，不产出一个「0 页的 CBZ」—— 那在书架上是一本打不开的假漫画。
+        """
+        from ..core import comics                     # 延迟导入：core 不在模块级反向依赖 sources
+        name = source_of(item)
+        cls = REGISTRY.get(name)
+        if not cls:
+            raise ValueError(f"未知书源: {name}")
+        src = cls()
+        async with self._client(src) as c:
+            urls = await src.fetch_media_urls(c, item, "comic") if hasattr(src, "fetch_media_urls") else []
+            if not urls:
+                raise ValueError("这条书源的规则没有给出任何图片地址"
+                                 "（缺 book.comic，或站点结构变了 / 需要两层跳转）")
+            pages = []
+            for i, u in enumerate(urls):
+                data = await c.get_bytes(u)
+                ext = Path(str(u).split("?")[0]).suffix.lower()
+                if ext not in comics.IMAGE_EXTS:
+                    ext = ".jpg"                      # 站点常给 `/img?id=1` 这种没有扩展名的地址
+                pages.append((f"{i + 1:04d}{ext}", data))
+        dest = Path(out_dir) / f"{_safe_name(item.get('title', 'comic'))}.cbz"
+        return comics.write_cbz(dest, pages)
+
     def write_sidecar(self, txt_path: Path, item: dict, output_dir: Path,
                       last_title: str = ""):
         """下载完成后为本地 txt 写入 sidecar，供日后 update 使用。

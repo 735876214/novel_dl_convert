@@ -391,6 +391,46 @@ def _extract_links(html: str, toc: dict, base_url: str) -> list[tuple[str, str]]
     return out
 
 
+def _extract_pages(raw: str, rule: dict, base_url: str) -> list:
+    """**资源地址清单**（漫画页 / 音频轨，第 86 期）：css / regex / json 三通道通用。
+
+    与 `_extract_links` 的差别：这里只要地址（图和音没有标题），且**保留站点给的顺序** ——
+    页序就是阅读顺序，不许重排、不许去重（真有重复页也是站点的事实）。
+    """
+    rule = rule or {}
+    mode = rule.get("mode") or "css"
+    if mode == "json":
+        arr = json_path(_json_body(raw), rule.get("path") or "$")
+        if isinstance(arr, dict):
+            arr = [arr]
+        out = []
+        for it in (arr if isinstance(arr, list) else []):
+            if isinstance(it, str):
+                out.append(it)
+            elif isinstance(it, dict):
+                u = _json_scalar(json_path(it, rule.get("url") or "$.url"))
+                if u:
+                    out.append(u)
+        return [urljoin(base_url, u) for u in out]
+    if mode == "regex":
+        pat = re.compile(rule.get("pattern") or "", re.S | re.I)
+        out = []
+        for m in pat.finditer(raw):
+            g = m.groupdict().get("url") or (m.groups()[0] if m.groups() else "")
+            if g:
+                out.append(urljoin(base_url, g))
+        return out
+    soup = _soup(raw)
+    attr = rule.get("url_attr") or "src"
+    out = []
+    for n in soup.select(rule.get("container") or ""):
+        # ⚠️ 漫画站普遍用懒加载：`src` 是占位图，真地址在 `data-src` / `data-original`
+        v = n.get(attr) or n.get("data-src") or n.get("data-original") or ""
+        if v:
+            out.append(urljoin(base_url, str(v)))
+    return out
+
+
 # ---------------- 书源类 ----------------
 
 class RuleBasedSource(SourceAdapter):
@@ -496,6 +536,20 @@ class RuleBasedSource(SourceAdapter):
 
         await asyncio.gather(*(_one(i, u) for i, (_, u) in enumerate(links)))
         return [{"title": t, "body": bodies.get(i, "")} for i, (t, _) in enumerate(links)]
+
+    async def fetch_media_urls(self, client, item: dict, key: str) -> list:
+        """取一类**资源地址清单**（`book.comic` / `book.audio`）：只列地址，不下载。
+
+        ⚠️ 只支持**一层**：书页 → 清单（图 / 轨）。有些站点要「书页 → 章节页 → 清单」两级，
+        那种规则现在跑不了 —— 会拿到空清单，由调用方**如实报「这条规则没给出地址」**，
+        而不是编一个看起来像成功的空产物。
+        """
+        self._check_vars()
+        spec = (self._RULE.get("book") or {}).get(key) or {}
+        if not spec or not item.get("url"):
+            return []
+        html = await client.get_text(item["url"])
+        return _extract_pages(html, spec, item["url"])
 
     # ---- 预览（廉价：目录 + 首章样本）----
     async def preview(self, client, item: dict) -> dict:

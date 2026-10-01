@@ -31,6 +31,25 @@ _ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
 COMIC_EXTS = (".cbz", ".cbr")
 
 
+def write_cbz(dest, pages):
+    """把 ``[(文件名, 字节), ...]`` 写成 CBZ（第 86 期：从书源下载漫画的落盘点）。
+
+    · **原子写**：先写同目录的 `.part` 再 `Path.replace` —— 与项目「源不可变、副本禁原地写」
+      同一条纪律。中途失败只会留下一个 `.part`，不会留下半个打不开的归档
+      （那在书架上就是一本书「无法解析」的假漫画，比没有更糟）；
+    · **不压缩**（`ZIP_STORED`）：JPG/PNG 本身已压缩，再 deflate 只是白赔 CPU；
+    · **页序 = 传入顺序**：调用方负责有序（站点给的顺序就是阅读顺序，本函数不重排）。
+    """
+    dest = pathlib.Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
+        for name, data in pages:
+            z.writestr(str(name), data)
+    tmp.replace(dest)
+    return dest
+
+
 def is_comic(path) -> bool:
     """是不是漫画归档（只看扩展名，供书架白名单与路由判定用）。"""
     return pathlib.PurePath(str(path)).suffix.lower() in COMIC_EXTS
