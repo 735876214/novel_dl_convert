@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
 from .core import pipeline, activity_log, library, fileops, publish, scrape, updater, changelog
+from .core import zipkind                        # 第 87 期：容器展开
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, achievements, activity, recommend,
                    fonts, comics, audio, opds, komga, koreader, integrations, sync,
@@ -2712,6 +2713,32 @@ def api_book_file(bid: str):
         raise HTTPException(404, "文件不存在")
     media = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=3600"})
+
+
+@app.post("/api/books/{bid}/unpack")
+def api_book_unpack(bid: str, payload: dict = Body(None)):
+    """**展开容器**（第 87 期）：把「判不出形态 / 内部是别的文档」的 `.zip` 变成真正可读的书。
+
+    三种情形（判据全在 `core/zipkind.py`，这里是薄包装）：
+      · 容器本身就是一份改了后缀的 EPUB ⇒ 整份另存为 `.epub`；
+      · 容器内是文档（epub/pdf/txt/…）⇒ 逐个提取到容器所在目录；
+      · 容器内是压缩包（嵌套）⇒ 提取内层压缩包（一层一层来，不递归）。
+
+    ⚠️ **撞名不覆盖**（逐条如实报），**默认不删源容器**（`remove_source=true` 才删，
+    删除不可逆 ⇒ 默认必须最保守）。展开完 **`library.invalidate()`** —— 新文件要立刻
+    出现在书目里（否则用户会以为展开失败）。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    path = library.root_of(b) / b["name"]
+    if not pathlib.Path(path).is_file():
+        raise HTTPException(400, "这个条目不是文件（目录型条目没有可展开的容器）")
+    res = zipkind.unpack(path, remove_source=bool((payload or {}).get("remove_source")))
+    if not res["ok"] and not res["actions"]:
+        raise HTTPException(400, res["reason"] or "这个容器无法展开")
+    library.invalidate()
+    return {"name": b["name"], **res}
 
 
 # ---------------- 漫画（CBZ / CBR）----------------

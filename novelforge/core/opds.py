@@ -36,6 +36,9 @@ _MIME = {
     "AZW3": "application/x-mobipocket-ebook",
     "CBZ": "application/vnd.comicbook+zip",
     "CBR": "application/vnd.comicbook-rar",
+    # 第 87 期：`.zip` 归一成真实形态（图片档 → CBZ）后，仍可能剩下「判不出形态的
+    # 容器」（format 保持 "ZIP"）。它至少该有一个客户端认识的类型 —— 它就是一份 zip。
+    "ZIP": "application/zip",
     "TXT": "text/plain",
     # 有声书：OPDS 客户端据此识别为音频（目录型书目的 size 为音频总体积）
     "AUDIO": "audio/mpeg",

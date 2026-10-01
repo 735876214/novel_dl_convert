@@ -9,7 +9,9 @@ from . import audio, preprocess, detect, metadata, epub_builder, komga
 # 第 62 期起含 ``.txt``：TXT **只入库不转换** —— 阅读链路本来就走「派生 EPUB 缓存」
 # （见 core/txtcache.py），再在入库时转一份落到 output 只是白占一份空间、还多一条
 # 「转不动就整本进不来」的失败路径。分章仍在阅读时按 core/detect.py 现算。
-EBOOK_EXT = {".epub", ".mobi", ".azw3", ".pdf", ".fb2", ".cbz", ".cbr",
+# 第 87 期：`.zip` 也在列 —— 它是**通用容器**，与 `.cbz` 走同一条「原样入库」的路；
+# 入库后由扫描侧按**内容**分派形态（`core/zipkind.py`），不看后缀猜。
+EBOOK_EXT = {".epub", ".mobi", ".azw3", ".pdf", ".fb2", ".cbz", ".cbr", ".zip",
              ".txt", *audio.AUDIO_EXTS}
 
 

@@ -40,6 +40,9 @@ _DOC_FORMATS = {".epub": "EPUB", ".pdf": "PDF", ".txt": "TXT", ".mobi": "MOBI",
 #: 内层还是压缩包 ⇒ 需先展开
 _ARCHIVE_EXTS = (".zip", ".cbz", ".cbr", ".rar")
 
+#: 可作为展开结果的扩展名（文档 + 内层压缩包）
+_UNPACK_EXTS = tuple(_DOC_FORMATS) + _ARCHIVE_EXTS
+
 
 def is_container(path) -> bool:
     """这个后缀要不要走内容分派。"""
@@ -109,3 +112,118 @@ def analyze(path) -> dict:
         out.update(kind="unknown",
                    reason=f"容器内没有可识别的内容（{len(names)} 个文件）")
     return out
+
+
+# ---------------- 展开（第 87 期）----------------
+# 「按内容分派」的另一半：容器里装的是**别的书**时，让它变成一本真正的书。
+# 图片档本来就能直接读（见 `analyze` 的 comic 档），所以这里只处理其余可读情形：
+#   · 容器**本身就是**一份被改了后缀的 EPUB（有 mimetype / container.xml）
+#     ⇒ **整份另存为 `.epub`**（EPUB 本来就是 zip，字节复制即可，不必解压再打包）；
+#   · 容器内是若干文档（epub / pdf / txt / mobi / azw3 / fb2）⇒ **逐个提取**；
+#   · 容器内是压缩包（嵌套）⇒ 提取内层压缩包（**一层一层来**，不递归展开）。
+# 三条纪律：只在容器所在目录落新文件；**原子写**（`.part` → replace）；
+# **绝不覆盖已有文件**（撞名如实报，不静默改名）；**默认不删源**（删除不可逆）。
+
+
+def _safe_entry(name: str) -> bool:
+    """条目名能否安全落到磁盘（防 zip-slip：绝对路径 / `..` / 盘符一律拒绝）。"""
+    n = str(name or "").replace("\\", "/")
+    if not n or n.startswith("/"):
+        return False
+    parts = n.split("/")
+    if ":" in parts[0]:                       # `C:` 之类盘符
+        return False
+    return all(part not in ("", ".", "..") for part in parts)
+
+
+def _unpack_entries(path) -> list:
+    """容器内**值得落到磁盘**的条目名（文档 + 内层压缩包；须通过 zip-slip 检查）。"""
+    try:
+        with comics._open(str(path)) as arc:          # noqa: SLF001
+            names = [n for n in arc.names() if not _junk(n)]
+    except Exception:                                 # noqa: BLE001 —— 坏包当「没有」
+        return []
+    return [n for n in names if _suffix(n) in _UNPACK_EXTS and _safe_entry(n)]
+
+
+def unpack_plan(path) -> dict:
+    """**只算不做**：这个容器展开后会变成什么。返回 ``{ok, actions, reason}``。
+
+    `actions` 里每条 ``{kind, name, dest, note}``：`repackage` = 整份另存为新后缀、
+    `extract` = 从容器里取一个条目。
+    """
+    v = analyze(path)
+    p = pathlib.Path(str(path))
+    if v["kind"] == "epub":
+        # ⚠️ 手做的 zip 里 `mimetype` 可能是**压缩**存的（正规 EPUB 要求它不压缩）。
+        # 本项目自己的阅读链路按名字取 OPF、不看压缩标志，所以照样能读；
+        # 这里不做「重新打包成合规 EPUB」——那要重写整个归档，风险远大于收益。
+        return {"ok": True, "reason": "", "actions": [
+            {"kind": "repackage", "name": "", "dest": p.with_suffix(".epub").name,
+             "note": "整份另存为 EPUB（容器内本来就是一份 EPUB）"}]}
+    if v["kind"] == "comic":
+        return {"ok": False, "actions": [],
+                "reason": "容器内是图片：已经能直接按漫画阅读，不需要展开"}
+    ents = _unpack_entries(p)
+    if ents:
+        return {"ok": True, "reason": "", "actions": [
+            {"kind": "extract", "name": n, "dest": n, "note": ""} for n in ents]}
+    return {"ok": False, "actions": [],
+            "reason": _junk_reason(v) if not ents else ""}
+
+
+def _junk_reason(v: dict) -> str:
+    """判不出可展开内容时给用户的说法（不糊弄：把容器里的实情说出来）。"""
+    if v["kind"] in ("nested", "multi", "mixed"):
+        return f"{v['reason']}；但其中没有可直接落地的文档（试试先手工解压）"
+    return v["reason"] or "这个容器里没有可展开的内容"
+
+
+def unpack(path, *, remove_source: bool = False) -> dict:
+    """**真展开**：把容器里可读的内容落到容器所在目录，逐条回报结果。
+
+    撞名 ⇒ 该条**跳过并如实报**（不覆盖、也不自动改名：改名会换 `book_id`，
+    必须由用户确认）。``remove_source=True`` 才删源容器。
+    """
+    p = pathlib.Path(str(path))
+    plan = unpack_plan(p)
+    if not plan["ok"]:
+        return {"ok": False, "reason": plan["reason"], "actions": [], "source_removed": False}
+    results: list = []
+    try:
+        arc = comics._open(str(p))                    # noqa: SLF001
+    except Exception as e:                            # noqa: BLE001
+        return {"ok": False, "reason": f"打不开容器：{type(e).__name__}",
+                "actions": [], "source_removed": False}
+    with arc:
+        for act in plan["actions"]:
+            dest = p.parent / act["dest"]
+            if dest.exists():
+                results.append({**act, "ok": False,
+                                "note": f"{dest.name} 已存在（不覆盖，请先处理它）"})
+                continue
+            try:
+                data = p.read_bytes() if act["kind"] == "repackage" else arc.read(act["name"])
+            except Exception as e:                    # noqa: BLE001
+                results.append({**act, "ok": False, "note": f"读取失败：{type(e).__name__}"})
+                continue
+            if data is None:
+                results.append({**act, "ok": False, "note": "容器内读不到该条目"})
+                continue
+            try:
+                tmp = dest.with_name(dest.name + ".part")
+                tmp.write_bytes(data)
+                tmp.replace(dest)
+            except Exception as e:                    # noqa: BLE001
+                results.append({**act, "ok": False, "note": f"写入失败：{e}"})
+                continue
+            results.append({**act, "ok": True, "note": ""})
+    ok = any(r["ok"] for r in results)
+    removed = False
+    if ok and remove_source:
+        try:
+            p.unlink()
+            removed = True
+        except OSError:
+            removed = False
+    return {"ok": ok, "reason": "", "actions": results, "source_removed": removed}
