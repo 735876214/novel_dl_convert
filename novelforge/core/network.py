@@ -246,3 +246,30 @@ async def run_js(js_code: str, *args):
     """异步包装：在默认线程池里跑 Node 子进程，避免阻塞事件循环。"""
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: run_js_sync(js_code, *args))
+
+
+def wrap_decrypt(js: str) -> str:
+    """把「Legado 风格、用 ``return`` 交出明文」的解密片段包成**可直接跑的 Node 脚本**。
+
+    ⚠️ 这一层包装不是装饰：`run_js_sync` 是把片段**拼在脚本顶层**的，
+    而 `return` 在顶层是**语法错误** —— 不包就会得到一句 Node 的
+    `SyntaxError: Illegal return statement`，看起来像「这条规则写错了」，
+    实际上是**我们的调用方式**错了（`SourceAdapter.decryption_js` 的契约写明是 return）。
+
+    输出统一成一行 JSON ``{"ok": 是否字符串, "v": 值}``：片段返回非字符串（漏了 return /
+    返回了对象）时能被调用方**判出来**，而不是把 `undefined` 当成明文写进书里。
+    """
+    return ("const __out = (function () {\n" + str(js or "") + "\n})();\n"
+            "console.log(JSON.stringify({ok: typeof __out === 'string', v: String(__out)}));")
+
+
+async def run_decrypt(js: str, text: str) -> str:
+    """跑一段站点解密片段：``__args[0]`` 传密文，片段 ``return`` 明文。
+
+    ⚠️ 结果**必须是字符串**：拿到 `undefined` / 对象就如实抛错。静默把它当明文返回，
+    写进书里的就是一段 `undefined`，而用户只会看到「这本书内容是乱的」。
+    """
+    res = await run_js(wrap_decrypt(js), text)
+    if not isinstance(res, dict) or not res.get("ok"):
+        raise RuntimeError("解密脚本没有返回字符串（多半是片段里漏了 return，或 return 了非字符串）")
+    return res["v"]
