@@ -61,15 +61,19 @@ _COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"
 #:   · 手动投递（上传 / 按路径入库）→ 仅 ebook（第 62 期起它的产出不再限于转换件，
 #:     但门槛沿用旧口径**没放宽** —— 放宽等于给漫画 / 有声书库也开一个工具入口，
 #:     那是独立一期的评估，不在本期「TXT 收敛」的范围内）
-#:   · 书源下载产出 EPUB → 仅 ebook
+#:   · 书源下载 → **三类库都给**（第 86 期改）：文本产出 EPUB、漫画产出 CBZ、有声书产出目录树。
+#:     ⚠️ 这一条原先写作「书源下载产出 EPUB → 仅 ebook」，那是第 86 期**之前**的事实。
+#:     能力键没跟着改的后果实测出现过：**选中漫画库时「工具 → 书源管理」整个标签消失**，
+#:     用户报「书源找不到在哪」。⚠️ 能力键的判据是「现有实现真实支持的范围」，
+#:     实现扩了而这里没扩，界面就会**藏起用户真正需要的入口**。
 #:   · Komga 布局整理针对系列化目录（电子书 / 漫画）→ ebook + comic
 #:   · 批注与书签都长在**文字阅读器**里（漫画 / PDF 是另外两个阅读器、有声书是播放器）
 #:     → 与 annotations 同一档：仅 ebook / mixed
 FEATURES_BY_TYPE = {
     "ebook": _COMMON | {"ebook", "pdf", "annotations", "bookmarks", "metadata", "authors",
                         "convert", "sources", "komga"},
-    "comic": _COMMON | {"comic", "metadata", "komga"},
-    "audiobook": _COMMON | {"audio", "metadata"},
+    "comic": _COMMON | {"comic", "metadata", "komga", "sources"},
+    "audiobook": _COMMON | {"audio", "metadata", "sources"},
     "mixed": _COMMON | {"ebook", "pdf", "comic", "audio", "annotations", "bookmarks",
                         "metadata", "authors", "convert", "sources", "komga"},
 }

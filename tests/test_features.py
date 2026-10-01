@@ -11,11 +11,15 @@ COMMON = {"rename", "duplicates", "entity", "missing", "logs", "output", "opds"}
 
 
 def test_漫画库能力集():
-    assert set(features.features_for("comic")) == COMMON | {"comic", "metadata", "komga"}
+    # ⚠️ 第 86 期起 `sources` **也归漫画库**：书源下载现在三类产物都有（文本 EPUB /
+    #    漫画 CBZ / 有声书目录树），漫画源本来就是主要来源之一。
+    #    这条以前写作「仅 ebook」—— 那是第 86 期之前的事实；能力键没跟上时的实测后果是
+    #    **选中漫画库时「工具 → 书源管理」整个标签消失**（用户报「书源找不到在哪」）。
+    assert set(features.features_for("comic")) == COMMON | {"comic", "metadata", "komga", "sources"}
 
 
 def test_有声书库能力集():
-    assert set(features.features_for("audiobook")) == COMMON | {"audio", "metadata"}
+    assert set(features.features_for("audiobook")) == COMMON | {"audio", "metadata", "sources"}
 
 
 def test_电子书库能力集():
