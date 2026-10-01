@@ -501,6 +501,15 @@ def forget(library_id) -> None:
         return
     _exec(f"DELETE FROM {TABLE} WHERE library_id=?", (lid,))
     _commit()
+    # ⚠️ 口径标记也要一起清（第 86 期修）：库 id 是由**库名**派生的（`server._new_library_id`），
+    # 「删库 → 用同一个库名重新添加」会**复用同一个 id** ⇒ 新库一上来就带着旧库留下的
+    # `app_state['book_index_rule:{lid}']`，被 `_rule_stale` 认为「口径已是最新」而**不做全量重扫**。
+    # （行本身已被上面的 DELETE 清掉，所以这不是「看不到书」的唯一原因；但残留的口径状态会让
+    #  重建后的首轮扫描按旧口径走，属于必须清干净的脏数据。）
+    try:
+        db.state_delete(_rule_key(lid))
+    except Exception:                                        # noqa: BLE001 —— 清残留失败不该让删库失败
+        pass
     with _state_lock:
         _dirty.pop(lid, None)
         _refreshed_seq.pop(lid, None)
