@@ -719,9 +719,14 @@ export interface ConflictItem {
   mtime?: number
   /** 保留项：不动它，改的是同组其余项（改一个就够消除冲突） */
   keep: boolean
-  /** 建议名（后端给的口径：`X (2).ext`），保留项为空串 */
+  /** 建议名（后端给的口径；第 87 期起同名的不同目录会带目录名区分），保留项为空串 */
   suggest: string
+  /** 卷号签名（`Vol.01` → `"1"`；解析不出为空串）—— 第 87 期加，用于说清结论 */
+  volume?: string
 }
+
+/** 冲突组的结论（第 87 期，后端 `library.conflict_kind`）：界面据此写提示与默认勾选。 */
+export type ConflictKind = 'cross_library' | 'duplicate_scan' | 'same_name_different_dirs'
 
 export interface ConflictGroup {
   id: string
@@ -732,7 +737,36 @@ export interface ConflictGroup {
   library_count: number
   keep: string
   suggest: string
+  /** 这一组到底是什么：`duplicate_scan`（同一个文件被扫两遍）**不该改名** */
+  kind?: ConflictKind
+  /** 组级结论的中文说明，直接展示给用户 */
+  reason?: string
   items: ConflictItem[]
+}
+
+/** 同一本书的**副本**组（第 87 期 `/api/library-copies`）：没撞 id、不需要改名。 */
+export interface CopyItem {
+  name: string
+  size: number
+  mtime: number
+  /** 建议保留的那一份（体积最大者更完整） */
+  keep: boolean
+}
+
+export interface CopyGroup {
+  library_id: string
+  dir: string
+  key: string
+  count: number
+  keep: string
+  reason: string
+  items: CopyItem[]
+}
+
+export interface CopiesResult {
+  items: CopyGroup[]
+  total: number
+  libraries: Array<{ id: string; name: string }>
 }
 
 export interface ConflictsResult {

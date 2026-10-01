@@ -11,8 +11,13 @@
  * 负责（同名同库重新投递仍按覆盖放行，入库侧那条闸门只管跨库），这里只做勾选与
  * 回传，不重复实现判据。
  *
- * 与其它工具同一范式：默认建议名由后端给（与迁移 / 入库闸门同一口径 `X (2).ext`），
+ * 与其它工具同一范式：默认建议名由后端给（与迁移 / 入库闸门同一口径），
  * 应用只回传**清单里确认过的条目**，后端会再校验一遍。
+ *
+ * 第 87 期：后端每组多带 `kind` / `reason`，本组件据此做两件事 ——
+ * ① 把这一组**到底是什么**写出来（同名的不同书 / 同一个文件被扫了两遍）；
+ * ② `duplicate_scan`（条目指向**同一个物理文件**）**默认不勾选**：那种情况改名改的是
+ *    同一个文件、根本修不了问题（该修的是库配置），默认勾上等于劝用户做错事。
  */
 import { computed, ref } from 'vue'
 
@@ -47,8 +52,9 @@ async function load(): Promise<void> {
       for (const it of g.items) {
         if (it.keep) continue
         const k = keyOf(g, it)
-        // 默认全选：一组里改一本就够，保留项后端已经标好、不参与勾选
-        picked.value[k] = true
+        // 默认勾选（一组里改一本就够，保留项后端已标好、不参与勾选），
+        // 但 `duplicate_scan` 除外 —— 见文件头第 87 期说明。
+        picked.value[k] = g.kind !== 'duplicate_scan'
         names.value[k] = it.suggest
       }
     }
@@ -128,11 +134,18 @@ async function apply(): Promise<void> {
         <Badge :tone="g.cross_library ? 'accent' : undefined">
           {{ g.cross_library ? '跨库' : '库内' }}
         </Badge>
+        <Badge v-if="g.kind === 'duplicate_scan'" tone="accent">重复扫描</Badge>
+        <Badge v-else-if="g.kind === 'same_name_different_dirs'">同名不同目录</Badge>
         <span class="text-[12.5px] font-medium text-foreground">{{ g.name }}</span>
         <span class="text-[11.5px] text-muted-foreground">
           {{ g.items.length }} 本 · {{ g.library_count }} 个库
         </span>
         <span class="ml-auto text-[11.5px] text-muted-foreground">{{ g.title }}</span>
+      </div>
+      <!-- 组级结论（第 87 期）：说清这一组是「同名的不同书」还是「同一个文件被扫两遍」。
+           没有这句时，用户只能靠猜 —— 那正是「无意义重名」的主观来源。 -->
+      <div v-if="g.reason" class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
+        {{ g.reason }}
       </div>
 
       <div
