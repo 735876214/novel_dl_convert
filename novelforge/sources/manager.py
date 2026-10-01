@@ -244,7 +244,8 @@ class DownloadManager:
                 encoding="utf-8",
             )
             self.write_sidecar(txt_path, item, out_dir,
-                               last_title=(chapters[-1].get("title") or ""))
+                               last_title=(chapters[-1].get("title") or ""),
+                               chapter_count=len(chapters))
             result = pipeline.convert_chapters(chapters, out_dir, opts, meta=meta)
         else:
             txt_path = input_dir / f"{safe}.txt"
@@ -254,7 +255,8 @@ class DownloadManager:
             from ..core import detect
             chaps = detect.detect_chapters(text) or []
             self.write_sidecar(txt_path, item, out_dir,
-                               last_title=(chaps[-1].get("title") if chaps else ""))
+                               last_title=(chaps[-1].get("title") if chaps else ""),
+                               chapter_count=len(chaps))
             result = pipeline.convert_text(text, out_dir, opts, meta=meta)
         # 回传派生格式的降级提示
         caller_opts["_notice"] = opts.get("_notice", "")
@@ -276,8 +278,35 @@ class DownloadManager:
         async with self._client(src) as c:
             return await src.preview(c, item)
 
-    # ---- 增量更新 ----
-    async def update(self, txt_path: Path, opts: dict) -> Path:
+    # ---- 增量更新（追更）----
+    async def update_report(self, txt_path: Path, opts: dict) -> dict:
+        """追更：**只追加**，既有条目一字不动（第 86 期第 6 步重写）。
+
+        与旧实现的四处根本差别（前三条都是典型的**静默出错**）：
+
+        1. **起点按「本地已有几章」算**，不再按 `last_title` 找 —— 站点给章名加个「（上）」
+           就找不到、`start` 落回 0，于是**把整本再追加一遍**（重复内容，且不报任何错）；
+        2. **EPUB 写回走 `epub_update.append_chapters`**（既有条目字节不变），不再「整本重转」——
+           重转会让既有章节的 index 漂移，**进度与批注全部错位**；
+        3. **txt 留档带标题**（旧实现只写 `body`，留档从此回溯不了章名）；
+        4. 写 txt / 写 sidecar 改成**读全文 + 原子替换**（旧实现裸 `open(..., "a")` append，
+           中途失败会留下半行）。
+
+        返回一份**如实报告**（调用方据此显示「新增 N 章 / 源上少了 N 章」）：
+        ``{"path", "added", "skipped", "missing", "epub", "note"}``。
+
+        ⚠️ **只追加**：源上少了章（`missing`）只报告、绝不删本地已有的章；站点改了老章内容本期
+        也不覆盖（要覆盖得先存「老章内容基线」，属后续项）。
+        """
+        def _to_html(ch: dict) -> str:
+            """章节正文档 → XHTML 片段：源给了 HTML 就用，否则按纯文本转义分段。"""
+            html = str(ch.get("body_html") or "").strip()
+            if html:
+                return html
+            from xml.sax.saxutils import escape
+            return "\n".join(f"<p>{escape(ln)}</p>"
+                             for ln in str(ch.get("body") or "").splitlines() if ln.strip())
+
         txt_path = Path(txt_path)
         sidecar = txt_path.with_suffix(".meta.json")
         if not sidecar.exists():
@@ -287,21 +316,67 @@ class DownloadManager:
         if not cls:
             raise ValueError(f"sidecar 记录的源 {meta.get('source')} 已不存在")
         src = cls()
+        item = {"url": meta.get("url"), "formats": meta.get("formats", {}),
+                "title": meta.get("title")}
         async with self._client(src) as c:
-            text = await src.fetch_book(c, {"url": meta.get("url"), "formats": meta.get("formats", {})})
+            chapters = None
+            if hasattr(src, "fetch_book_chapters"):
+                try:
+                    chapters = await src.fetch_book_chapters(c, item)
+                except NotImplementedError:
+                    chapters = None
+            if not chapters:
+                text = await src.fetch_book(c, item)
+                from ..core import detect
+                chapters = detect.detect_chapters(text) or []
 
-        chapters = detect.detect_chapters(text)
-        last_title = meta.get("last_title")
-        start = 0
-        if last_title:
-            for i, ch in enumerate(chapters):
-                if ch["title"] == last_title:
-                    start = i + 1
-                    break
-        new_body = "\n\n".join(ch["body"] for ch in chapters[start:])
-        if not new_body.strip():
-            print("[info] 无新增内容")
-            return txt_path
+        known = int(meta.get("chapters") or 0)
+        report = {"path": txt_path, "added": 0, "skipped": 0, "missing": 0, "epub": "",
+                  "note": ""}
+        if len(chapters) < known:
+            report["missing"] = known - len(chapters)
+            report["note"] = (f"源上比本地少 {report['missing']} 章：追更**只追加**，"
+                              "绝不删本地已有的章（请自行确认是不是站点改版）")
+        fresh = chapters[known:]
+        if not fresh:
+            report["note"] = report["note"] or "没有新章节"
+            return report
+
+        # ① txt 留档：读全文 + 追加带标题的新章 + **原子替换**（不再裸 append）
+        try:
+            old = txt_path.read_text(encoding="utf-8") if txt_path.exists() else ""
+        except Exception:                                    # noqa: BLE001 —— 读不到当空
+            old = ""
+        add_txt = "\n\n".join(f"{ch.get('title', '')}\n{ch.get('body', '')}" for ch in fresh)
+        t_tmp = txt_path.with_suffix(txt_path.suffix + ".part")
+        t_tmp.write_text((old.rstrip() + "\n\n" + add_txt).strip() + "\n", encoding="utf-8")
+        t_tmp.replace(txt_path)
+
+        # ② EPUB：**只追加**（既有条目字节不变 ⇒ 阅读数据 index 不漂移）
+        out_dir = Path(meta.get("output_dir") or txt_path.parent)
+        epub_path = out_dir / f"{txt_path.stem}.epub"
+        if epub_path.is_file():
+            from ..core import epub_update
+            res = epub_update.append_chapters(
+                epub_path, [{"title": ch.get("title", ""), "body_html": _to_html(ch)}
+                            for ch in fresh])
+            report["epub"] = str(res["path"])
+        else:
+            report["note"] = report["note"] or f"没找到同名 EPUB（{epub_path.name}），本次只留档 txt"
+
+        # ③ sidecar：更新到「本地现在有多少章」（原子写）
+        meta["chapters"] = len(chapters)
+        if chapters:
+            meta["last_title"] = chapters[-1].get("title") or ""
+        s_tmp = sidecar.with_suffix(sidecar.suffix + ".part")
+        s_tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        s_tmp.replace(sidecar)
+        report["added"] = len(fresh)
+        return report
+
+    async def update(self, txt_path: Path, opts: dict) -> Path:
+        """兼容壳：旧调用方拿的是 ``Path``；要报告请用 :meth:`update_report`。"""
+        return (await self.update_report(txt_path, opts))["path"]
 
         with open(txt_path, "a", encoding="utf-8") as f:
             f.write("\n\n" + new_body)
@@ -385,7 +460,7 @@ class DownloadManager:
         return comics.write_cbz(dest, pages)
 
     def write_sidecar(self, txt_path: Path, item: dict, output_dir: Path,
-                      last_title: str = ""):
+                      last_title: str = "", chapter_count: int = 0):
         """下载完成后为本地 txt 写入 sidecar，供日后 update 使用。
 
         ⚠️ **`last_title`（最新章节）必须在这里就写下来**：产品承诺是「下载后就能看出这本书
@@ -402,4 +477,9 @@ class DownloadManager:
         }
         if last_title:
             meta["last_title"] = str(last_title)
+        # ⚠️ 记下**本地已有几章**：追更要靠它决定「源上第几章之后是新的」（第 86 期）。
+        # 旧实现是按 `last_title` 找起点 —— 站点一改章名（加个「（上）」）就会静默错位，
+        # 把已经读过的章当新章再追加一遍，而**不报任何错**。
+        if chapter_count:
+            meta["chapters"] = int(chapter_count)
         sidecar.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
