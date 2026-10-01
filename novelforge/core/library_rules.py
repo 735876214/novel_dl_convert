@@ -40,6 +40,16 @@ def _norm(text) -> str:
 
 
 def _type_of_name(name: str) -> str:
+    """按**文件名**判归属库类型（自动归库用）。
+
+    ⚠️ **`.zip` 刻意不在这里**（第 87 期）：它是**通用容器**，真实形态只能看内容
+    （`core/zipkind.py`）—— 而本函数手里只有一个名字、没有路径，读不到内容。
+    按后缀猜一个类型送进去，正是本项目反复禁止的「猜」：一件包装着 EPUB 的 zip
+    会被塞进漫画库，进去之后既读不了也不好被发现。所以这里返回 ``""``（= 不按格式路由），
+    由 :func:`decide` 走既有路径 —— 猜不出就**如实拒收**，而不是猜一个。
+    扫描白名单已收 `.zip`（`library._COMIC_EXTS` 等），所以**放进库目录里的** zip
+    照常按内容分派形态；差的只是「投递到多库时的自动选库」这一条路。
+    """
     ext = pathlib.PurePosixPath(str(name or "")).suffix.lower()
     if ext in _COMIC_EXT:
         return "comic"
