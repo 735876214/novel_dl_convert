@@ -556,6 +556,67 @@ def init():
                 PRIMARY KEY(book_id, source, store_index)
             );
             CREATE INDEX IF NOT EXISTS idx_toc_map_local ON toc_map(book_id, local_index);
+            -- 书源台账（第 86 期）：**关于书源的元数据**，不是书源本体。
+            -- ⚠️ 规则本体仍旧只存 `SOURCES_DIR/<name>.json`（`sources/store.py` 是唯一写入路径）——
+            --    台账以 `name` 关联它，权限仅限「导入来源 / 去重键 / 档位 / 原始 JSON / 启停 /
+            --    最近验证 / 最近追更」。长出第二份规则定义是本项目明令禁止的形态。
+            -- ⚠️ **不含 book_id** ⇒ 不进 remap 四处（与第 81 期 `recycle_items` 同口径）。
+            CREATE TABLE IF NOT EXISTS source_ledger (
+                name             TEXT PRIMARY KEY,
+                origin           TEXT NOT NULL DEFAULT '',   -- 哪份文件 / 哪个入口导入
+                dedup_key        TEXT NOT NULL DEFAULT '',   -- 归一化站点（空 = 无法判定，不参与去重）
+                rule_hash        TEXT NOT NULL DEFAULT '',   -- 整条源的规范化哈希
+                supported        TEXT NOT NULL DEFAULT 'yes',-- yes / partial / no
+                source_type      TEXT NOT NULL DEFAULT 'text',
+                group_name       TEXT NOT NULL DEFAULT '',   -- Legado 的 bookSourceGroup
+                raw_json         TEXT NOT NULL DEFAULT '',   -- 原始书源原文（导出的凭据，也是重新分析的输入）
+                unsupported      TEXT NOT NULL DEFAULT '[]', -- 逐条 {field,why,instead} 的 JSON
+                notes            TEXT NOT NULL DEFAULT '[]',
+                enabled          INTEGER NOT NULL DEFAULT 1, -- 启停（文件仍在 SOURCES_DIR）
+                imported         INTEGER NOT NULL DEFAULT 0, -- 1 = 由导入产生；0 = 手写 / 内置
+                imported_at      REAL NOT NULL,
+                updated_at       REAL NOT NULL,
+                verified_at      REAL,
+                verify_ok        INTEGER,
+                verify_count     INTEGER NOT NULL DEFAULT 0,
+                verify_ms        INTEGER NOT NULL DEFAULT 0,
+                verify_error     TEXT NOT NULL DEFAULT '',
+                last_update_at   REAL,
+                last_update_note TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_source_ledger_site ON source_ledger(dedup_key);
+            -- 覆盖前备份（第 86 期）：`overwrite` / `update` 一律先把旧规则原文存这里，可回滚。
+            -- ⚠️ 主键用 uuid 而**不用 AUTOINCREMENT**：本项目的 PG 后端经 `sqlcompat` 跑同一批
+            --    DDL，自增语法不通用（自增只会让「备份回滚」这个功能在 PG 上整块失效）。
+            CREATE TABLE IF NOT EXISTS source_ledger_history (
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                kind       TEXT NOT NULL DEFAULT '',   -- rule = 被覆盖的旧规则原文
+                payload    TEXT NOT NULL DEFAULT '',
+                rule_hash  TEXT NOT NULL DEFAULT '',
+                note       TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_sl_hist_name ON source_ledger_history(name, created_at);
+            -- 导入历史（第 86 期）：每次导入留一条（时间、来源、各档计数、逐条结论）。
+            CREATE TABLE IF NOT EXISTS source_imports (
+                id         TEXT PRIMARY KEY,
+                origin     TEXT NOT NULL DEFAULT '',
+                actor      TEXT NOT NULL DEFAULT '',
+                counts     TEXT NOT NULL DEFAULT '{}',
+                detail     TEXT NOT NULL DEFAULT '[]',
+                created_at REAL NOT NULL
+            );
+            -- 书源变量（第 86 期）：Legado 的 `loginUi` 表单值 / 密钥（番茄那源的「密钥」、
+            -- 聚合源的「模式 / 音色」）。规则里以 `{var:<key>}` 引用。
+            -- ⚠️ 值等同凭据：接口只回 `has_<key>`，**绝不回显明文**（与 llm.api_key 同口径）。
+            CREATE TABLE IF NOT EXISTS source_vars (
+                name       TEXT NOT NULL,
+                key        TEXT NOT NULL,
+                value      TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL,
+                PRIMARY KEY(name, key)
+            );
             -- 作者级元数据（第 8 期 D1/D2/D5）：在线抓取的 bio/photo 与用户本地覆盖分列。
             -- 展示取 本地覆盖 > 在线；用户改过的不会被再次抓取冲掉。
             -- 照片一律缓存到 CACHE_DIR/authors/（零外链），这里只存文件名。
@@ -3104,6 +3165,239 @@ def store_toc_clear(book_id, source: str = "") -> int:
         else:
             n = c.execute("DELETE FROM store_toc WHERE book_id=?", (str(book_id),)).rowcount
             c.execute("DELETE FROM toc_map WHERE book_id=?", (str(book_id),))
+        c.commit()
+    return int(n or 0)
+
+
+# ---------------- 书源台账 / 导入历史 / 书源变量（第 86 期）----------------
+# 台账只存**元数据**（规则本体在 `SOURCES_DIR/*.json`）；两张表都不含 book_id。
+
+#: 台账列（`source_ledger_upsert` 只认这些键，多余键忽略 —— 免得打错字静默写不进去）
+LEDGER_FIELDS = (
+    "origin", "dedup_key", "rule_hash", "supported", "source_type", "group_name",
+    "raw_json", "unsupported", "notes", "enabled", "imported", "imported_at", "updated_at",
+    "verified_at", "verify_ok", "verify_count", "verify_ms", "verify_error",
+    "last_update_at", "last_update_note",
+)
+#: JSON 字段（读时解码、写时编码）
+_LEDGER_JSON = ("unsupported", "notes")
+
+
+def _ledger_row(row) -> dict:
+    d = dict(row)
+    for k in _LEDGER_JSON:
+        try:
+            d[k] = json.loads(d.get(k) or "[]")
+        except Exception:                                    # noqa: BLE001 —— 坏 JSON 当空
+            d[k] = []
+    d["enabled"] = bool(d.get("enabled", 1))
+    d["imported"] = bool(d.get("imported", 0))
+    d["verify_ok"] = None if d.get("verify_ok") is None else bool(d["verify_ok"])
+    return d
+
+
+def source_ledger_get(name: str) -> "dict | None":
+    """读一条台账（没有返回 None）。"""
+    c = _connect()
+    r = c.execute("SELECT * FROM source_ledger WHERE name=?", (str(name),)).fetchone()
+    return _ledger_row(r) if r else None
+
+
+def source_ledger_all() -> list:
+    """**一次查询**取全台账，供列表内存 join（逐源查会变成 N+1，第 86 期纪律）。"""
+    c = _connect()
+    return [_ledger_row(r) for r in c.execute("SELECT * FROM source_ledger").fetchall()]
+
+
+def source_ledger_upsert(name: str, **fields) -> dict:
+    """插入或部分更新一条台账（只认 :data:`LEDGER_FIELDS` 里的键）。"""
+    name = str(name)
+    row = source_ledger_get(name) or {}
+    row.update({k: v for k, v in fields.items() if k in LEDGER_FIELDS})
+    now = time.time()
+    row["name"] = name
+    row.setdefault("origin", "")
+    row.setdefault("dedup_key", "")
+    row.setdefault("rule_hash", "")
+    row.setdefault("supported", "yes")
+    row.setdefault("source_type", "text")
+    row.setdefault("group_name", "")
+    row.setdefault("raw_json", "")
+    row["imported_at"] = float(row.get("imported_at") or now)
+    row["updated_at"] = now
+    row["enabled"] = 1 if row.get("enabled", True) else 0
+    row["imported"] = 1 if row.get("imported", False) else 0
+    row["verify_count"] = int(row.get("verify_count") or 0)
+    row["verify_ms"] = int(row.get("verify_ms") or 0)
+    row["verify_error"] = str(row.get("verify_error") or "")
+    row["last_update_note"] = str(row.get("last_update_note") or "")
+    row["verify_ok"] = None if row.get("verify_ok") is None else (1 if row["verify_ok"] else 0)
+    for k in _LEDGER_JSON:
+        v = row.get(k) or []
+        row[k] = json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else v
+    cols = [f for f in LEDGER_FIELDS if f != "name"]
+    c = _connect()
+    with _lock:
+        c.execute(
+            f"INSERT INTO source_ledger(name, {', '.join(cols)})"
+            f" VALUES(?{', ?' * len(cols)})"
+            f" ON CONFLICT(name) DO UPDATE SET "
+            + ", ".join(f"{col}=excluded.{col}" for col in cols),
+            [name] + [row.get(col) for col in cols],
+        )
+        c.commit()
+    return source_ledger_get(name)
+
+
+def source_ledger_set_enabled(name: str, enabled: bool) -> "dict | None":
+    """改启停（台账是唯一真值源；文件不动）。"""
+    if not source_ledger_get(name):
+        return None
+    return source_ledger_upsert(name, enabled=bool(enabled))
+
+
+def source_ledger_delete(name: str) -> bool:
+    """删台账（连同它的历史）。返回是否删掉了行。"""
+    c = _connect()
+    with _lock:
+        n = c.execute("DELETE FROM source_ledger WHERE name=?", (str(name),)).rowcount
+        c.execute("DELETE FROM source_ledger_history WHERE name=?", (str(name),))
+        c.commit()
+    return bool(n)
+
+
+def source_ledger_rename(old: str, new: str) -> bool:
+    """改名（保留旧名台账会与新的冲突；历史一并带过去）。"""
+    c = _connect()
+    with _lock:
+        n = c.execute("UPDATE source_ledger SET name=? WHERE name=?", (str(new), str(old))).rowcount
+        c.execute("UPDATE source_ledger_history SET name=? WHERE name=?", (str(new), str(old)))
+        c.commit()
+    return bool(n)
+
+
+# ---- 覆盖前备份（可回滚）----
+
+def ledger_history_add(name: str, payload: str, *, kind: str = "rule",
+                       rule_hash: str = "", note: str = "") -> str:
+    """把**旧规则原文**存一条历史（覆盖前调用）。返回历史 id。"""
+    hid = uuid.uuid4().hex
+    c = _connect()
+    with _lock:
+        c.execute("INSERT INTO source_ledger_history(id, name, kind, payload, rule_hash,"
+                  " note, created_at) VALUES(?,?,?,?,?,?,?)",
+                  (hid, str(name), str(kind), str(payload or ""), str(rule_hash or ""),
+                   str(note or ""), time.time()))
+        c.commit()
+    return hid
+
+
+def ledger_history_list(name: str, limit: int = 20) -> list:
+    """某源的覆盖历史（新的在前）——「可回滚」的入口就在这儿。"""
+    c = _connect()
+    rows = c.execute("SELECT id, name, kind, rule_hash, note, created_at"
+                     " FROM source_ledger_history WHERE name=? ORDER BY created_at DESC LIMIT ?",
+                     (str(name), int(limit))).fetchall()
+    return [dict(r) for r in rows]
+
+
+def ledger_history_one(hid: str) -> "dict | None":
+    c = _connect()
+    r = c.execute("SELECT * FROM source_ledger_history WHERE id=?", (str(hid),)).fetchone()
+    return dict(r) if r else None
+
+
+def ledger_history_prune(name: str, keep: int = 10) -> int:
+    """只留最近 `keep` 条历史（免得备份把库撑大；保留份数与回收站同一口径）。"""
+    c = _connect()
+    with _lock:
+        n = c.execute(
+            "DELETE FROM source_ledger_history WHERE name=? AND id NOT IN"
+            " (SELECT id FROM source_ledger_history WHERE name=? ORDER BY created_at DESC LIMIT ?)",
+            (str(name), str(name), int(keep))).rowcount
+        c.commit()
+    return int(n or 0)
+
+
+# ---- 导入历史 ----
+
+def source_import_add(origin: str, counts: dict, detail: list, *, actor: str = "") -> str:
+    iid = uuid.uuid4().hex
+    c = _connect()
+    with _lock:
+        c.execute("INSERT INTO source_imports(id, origin, actor, counts, detail, created_at)"
+                  " VALUES(?,?,?,?,?,?)",
+                  (iid, str(origin or ""), str(actor or ""),
+                   json.dumps(counts or {}, ensure_ascii=False),
+                   json.dumps(detail or [], ensure_ascii=False), time.time()))
+        c.commit()
+    return iid
+
+
+def source_imports_clear() -> int:
+    """清空导入历史（给测试隔离用；顺带也是将来「清理历史」的落点）。"""
+    c = _connect()
+    with _lock:
+        n = c.execute("DELETE FROM source_imports").rowcount
+        c.commit()
+    return int(n or 0)
+
+
+def source_imports(limit: int = 20) -> list:
+    c = _connect()
+    rows = c.execute("SELECT * FROM source_imports ORDER BY created_at DESC LIMIT ?",
+                     (int(limit),)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        for k in ("counts", "detail"):
+            try:
+                d[k] = json.loads(d.get(k) or "{}")
+            except Exception:                                # noqa: BLE001
+                d[k] = {} if k == "counts" else []
+        out.append(d)
+    return out
+
+
+# ---- 书源变量（凭据：**只回是否存在，绝不回值**）----
+
+def source_vars_get(name: str) -> dict:
+    """读某源的变量**键 → 值**（供规则渲染用；接口层绝不把它直接回给前端）。"""
+    c = _connect()
+    rows = c.execute("SELECT key, value FROM source_vars WHERE name=?", (str(name),)).fetchall()
+    return {str(r["key"]): str(r["value"] or "") for r in rows}
+
+
+def source_vars_keys(name: str) -> dict:
+    """给界面用的形状：``{键: 是否已设置}``（**值一律不回**）。"""
+    c = _connect()
+    rows = c.execute("SELECT key, value FROM source_vars WHERE name=?", (str(name),)).fetchall()
+    return {str(r["key"]): bool(str(r["value"] or "")) for r in rows}
+
+
+def source_vars_set(name: str, key: str, value: str) -> dict:
+    """写一个变量（空值视为清除该键：界面上「填了又清空」要能真的清掉）。"""
+    name, key, value = str(name), str(key), str(value or "")
+    c = _connect()
+    with _lock:
+        if value == "":
+            c.execute("DELETE FROM source_vars WHERE name=? AND key=?", (name, key))
+        else:
+            c.execute("INSERT INTO source_vars(name, key, value, updated_at) VALUES(?,?,?,?)"
+                      " ON CONFLICT(name, key) DO UPDATE SET value=excluded.value,"
+                      " updated_at=excluded.updated_at", (name, key, value, time.time()))
+        c.commit()
+    return source_vars_keys(name)
+
+
+def source_vars_clear(name: str, key: str = "") -> int:
+    c = _connect()
+    with _lock:
+        if key:
+            n = c.execute("DELETE FROM source_vars WHERE name=? AND key=?",
+                          (str(name), str(key))).rowcount
+        else:
+            n = c.execute("DELETE FROM source_vars WHERE name=?", (str(name),)).rowcount
         c.commit()
     return int(n or 0)
 

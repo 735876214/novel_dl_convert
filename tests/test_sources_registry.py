@@ -79,14 +79,22 @@ def test_generic_不在书源清单里(isolated):
 
 
 def test_书源清单结构不变(client, auth_headers):
-    """接口返回结构是既有契约，本次改动只该少一个条目、不该改字段。"""
+    """接口返回结构是既有契约：**加字段要在这里显式登记**，不能悄悄变。
+
+    第 86 期加了四个（都来自台账，供管理界面筛选 / 排序 / 显示档位）：
+    `enabled`（启停）、`imported`（是否导入来的）、`supported`（yes/partial/no）、
+    `group`（Legado 的 bookSourceGroup）。没有台账行的源按「启用 / 未导入 / 可用 / 无分组」给。
+    """
     r = client.get("/api/sources", headers=auth_headers)
     assert r.status_code == 200
     sources = r.json()["sources"]
     assert sources, "书源清单为空：内置 gutenberg 也该在"
     for s in sources:
-        assert set(s) == {"name", "display_name", "domains", "public", "user"}
+        assert set(s) == {"name", "display_name", "domains", "public", "user",
+                          "enabled", "imported", "supported", "group"}
         assert s["name"] and isinstance(s["domains"], list)
+        assert isinstance(s["enabled"], bool) and isinstance(s["imported"], bool)
+        assert s["supported"] in ("yes", "partial", "no")
     assert all(s["name"] != "generic" for s in sources)
 
 

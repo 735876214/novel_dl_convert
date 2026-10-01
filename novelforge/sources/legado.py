@@ -477,7 +477,7 @@ def analyze(entry: dict) -> dict:
             "source_type_label": SOURCE_TYPE_LABEL.get(stype, "未知")}
 
 
-def _rule_name(ent: dict) -> str:
+def rule_name(ent: dict) -> str:
     site = norm_site(ent.get("bookSourceUrl"))
     slug = re.sub(r"[^a-z0-9._-]+", "-", site).strip("-")
     return f"lg-{slug}" if slug else f"lg-{rule_hash(ent)[:8]}"
@@ -573,8 +573,8 @@ def convert(entry: dict, notes=None) -> "dict | None":
         return None
 
     rule = {
-        "name": _rule_name(ent),
-        "display_name": str(ent.get("bookSourceName") or _rule_name(ent)).strip(),
+        "name": rule_name(ent),
+        "display_name": str(ent.get("bookSourceName") or rule_name(ent)).strip(),
         "domains": [host],
         "public": False,
         "headers": _headers(ent),

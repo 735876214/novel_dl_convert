@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from .. import config
+from ..core import db
 from .base import REGISTRY, register
 from .manager import DownloadManager
 from .rules import make_rule_class, validate_rule
@@ -20,6 +21,21 @@ def _sources_dir() -> Path:
     except Exception:
         pass
     return d
+
+
+def _ledger_enabled(name) -> bool:
+    """台账里这个源是否启用（**没有台账行 = 启用**）—— 启停判定的唯一处。
+
+    ⚠️ 读不到台账时**按启用处理**：数据库出问题时让书源「全部消失」比「全部可用」糟得多
+    （用户会以为书源被删了）。
+    """
+    if not name:
+        return True
+    try:
+        row = db.source_ledger_get(str(name))
+    except Exception:                                        # noqa: BLE001
+        return True
+    return True if not row else bool(row.get("enabled", True))
 
 
 def load_user_sources():
@@ -35,6 +51,8 @@ def load_user_sources():
         for r in rules:
             if not isinstance(r, dict):
                 continue
+            if not _ledger_enabled(r.get("name")):
+                continue          # 台账里停用的源：文件还在，但不注册（随时能再打开）
             try:
                 register_rule(r)
             except Exception as e:
@@ -57,8 +75,37 @@ def add_rule(rule: dict) -> Path:
     path.write_text(
         json.dumps(rule, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    register_rule(rule)
+    if _ledger_enabled(rule.get("name")):
+        register_rule(rule)
     return path
+
+
+def set_enabled(name: str, enabled: bool) -> tuple:
+    """启停一个书源（**台账驱动的唯一入口**）。返回 ``(ok, reason)``。
+
+    · 文件**不动**（仍在 `SOURCES_DIR`）：停用只是「不注册进 REGISTRY」—— 随时能再打开，
+      也不会因为改名 / 移文件把进度与批注的坐标搞乱；
+    · ⚠️ **内置源**（如 gutenberg）没有规则文件、由代码注册 ⇒ 本函数**如实拒绝**，
+      而不是假装停用了（界面要把它置灰并写明原因，这是本项目的纪律）。
+    """
+    name = str(name)
+    path = _sources_dir() / f"{name}.json"
+    if not path.is_file():
+        return False, "内置源由代码注册，没有可挂启停状态的规则文件"
+    try:
+        db.source_ledger_upsert(name, enabled=bool(enabled))
+    except Exception as e:                                   # noqa: BLE001
+        return False, f"写台账失败：{e}"
+    if enabled:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            rule = data[0] if isinstance(data, list) and data else data
+            register_rule(rule)
+        except Exception as e:                               # noqa: BLE001
+            return False, f"重新注册失败：{e}"
+    else:
+        REGISTRY.pop(name, None)
+    return True, ""
 
 
 def remove_rule(name: str) -> bool:
@@ -113,11 +160,21 @@ def sources_status() -> list[dict]:
 
 
 def list_sources() -> list[dict]:
-    """列出全部已注册书源，标注是否为用户源。"""
+    """列出全部已注册书源，标注是否为用户源，并**合并台账**（一次查询，不做 N+1）。
+
+    台账给列表补四样东西：`enabled`（启停）、`imported`（是不是导入来的）、
+    `supported`（yes / partial / no）、`group`（Legado 的 bookSourceGroup）。
+    没有台账行的源按「启用 / 未导入 / 可用 / 无分组」处理 —— 手写源就是这个形态。
+    """
     d = _sources_dir()
     user_names = {p.stem for p in d.glob("*.json")}
+    try:
+        ledger = {r["name"]: r for r in db.source_ledger_all()}
+    except Exception:                                        # noqa: BLE001
+        ledger = {}          # 台账读不到不能让整份书源列表消失
     out = []
     for name, cls in REGISTRY.items():
+        row = ledger.get(name) or {}
         # 用户源以文件存在为准；内置源（如 gutenberg）无对应文件
         out.append(
             {
@@ -126,6 +183,10 @@ def list_sources() -> list[dict]:
                 "domains": list(getattr(cls, "domains", [])),
                 "public": bool(getattr(cls, "public", True)),
                 "user": name in user_names,
+                "enabled": bool(row.get("enabled", True)),
+                "imported": bool(row.get("imported", False)),
+                "supported": row.get("supported", "yes"),
+                "group": row.get("group_name", ""),
             }
         )
     out.sort(key=lambda x: (not x["user"], x["name"]))
