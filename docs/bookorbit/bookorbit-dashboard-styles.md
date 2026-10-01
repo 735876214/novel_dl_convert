@@ -54,7 +54,7 @@
 | 页面 | `frontend/src/views/DashboardView.vue` |
 | 壳组件 | `frontend/src/components/dashboard/` 的 `DashboardWidgetRow.vue`、`DashboardWelcome.vue`、`DashboardSettingsSheet.vue`、`DashboardShelfRow.vue`、`FirstRunNotice.vue`（⚠️ 基线里的页面级容器 `DashboardScroller.vue` **已于第 82 期第二步删除**，见 §1.3） |
 | 部件 | `frontend/src/components/dashboard/widgets/`（**13 个** `*.vue` + `registry.ts`）—— 前 12 件与上游一一对应，第 13 件 `reading-time` 为本项目自开（第 83 期） |
-| 数据态 / 纯函数（第 82–83 期新增） | `frontend/src/composables/useWidgetState.ts`（部件四态唯一真值源）、`frontend/src/lib/dashboardGreeting.ts`（时段问候）、`frontend/src/lib/shelfRows.ts`（分带 / 行数 / 窄屏 / 封面错峰）、`frontend/src/lib/shelfScope.ts`（库范围过滤）、`frontend/src/lib/bookDelete.ts`（删书确认与执行，⋮ 菜单与快速预览浮层共用） |
+| 数据态 / 纯函数（第 82–83 期新增） | `frontend/src/composables/useWidgetState.ts`（部件四态唯一真值源）、`frontend/src/lib/dashboardGreeting.ts`（时段问候）、`frontend/src/lib/shelfRows.ts`（分带 / 行数 / 窄屏 / 封面错峰）、`frontend/src/lib/shelfScope.ts`（库范围过滤）、`frontend/src/lib/bookDelete.ts`（删书确认与执行，⋮ 菜单与快速预览浮层共用）、`frontend/src/lib/bookOpen.ts`（`openTargetOf` 唯一判据：格式 ⇒ 能进阅读器还是只能进详情页） |
 | 标识与元信息 | `frontend/src/data/dashboard.ts`（`WidgetId` / `WidgetMeta` / `WIDGET_META` / `WidgetSize` / `ShelfType` / `ShelfDef` / `MAX_SHELVES` / `DEFAULT_SHELVES` / `SCOPE_OPTIONS` / `SHELF_ROW_OPTIONS` / `ShelfLayout` / `MAX_COVERS_PER_ROW`） |
 | 状态 | `frontend/src/stores/dashboard.ts`（Pinia，落 `localStorage`：`dashboard-widgets` / `dashboard-shelves`；第 82 期加 `shelfLayout` 与逐书架 `rows`，旧数据自动补默认） |
 | 主题 token | `frontend/src/assets/theme/{tokens,accents,bridge,radius,cover-effects}.css` + 入口 `frontend/src/assets/main.css` |
@@ -288,7 +288,7 @@
 
 1. **首屏整体观感未做肉眼比对**：上游 `docs/images/dashboard-overview.png` **确实存在**（对象库里有），但本轮稀疏检出未包含 `docs/images/`。
    如需比对，可单独取该文件（`git cat-file` 或把 `docs/images` 加进 sparse-checkout）；⚠️ 按既有脱敏口径，含账号显示名的截图不归档进本仓库。
-   **处置**：**仍未做** —— 本机无浏览器自动化，界面目验仍未做（已写进交付说明）。若要补，把该 PNG 加进 sparse-checkout 后人工比对一次即可。
+   **处置**：**已做**（2026-10-01，第 83 期收尾时补上） —— 本机已装 `agent-browser`，界面冒烟跑通，且**抓出一件真缺陷**：自定义面板的「库范围」受控 checkbox 会停在「未勾选 + 标题仍写「1 个书库」」的中间态（详见 §7.7）。若要与上游截图逐像素比对，仍需把该 PNG 加进 sparse-checkout 后人工比对一次。
 2. **部件行网格模型是否要改成上游的「定宽横向滚动 + 定高卡片」**：两侧能力等价但观感差异大，且本项目目前是响应式列栅格
    （`grid-cols-1 sm:grid-cols-2 lg:grid-cols-6` + `sm/md/lg` 三档列跨度）。改成横向滚动会改变窄屏节奏与部件高度统一方式，**需产品决策**。
    **处置**：**已决 → 改**（用户拍板）。落地为横向卡片带（定宽 `1x1` 220px / `1x1.5` 336px + 定高），窄屏同样走滚动带、不回落栅格。
@@ -382,6 +382,9 @@
 
 ### 7.4 未做 / 刻意不做（含理由）
 
+> 整改中：原表最后一行「界面肉眼冒烟」已于第 83 期收尾**补做**（见该行注），故本表现在是「未做 + 已补做」的混合表。
+
+
 | 未做项 | 理由 |
 |---|---|
 | 整页三态分支（`libraryState` 四分支） | 本项目**没有单一的「整页加载」信号**（数据分散在 stats / library / 批注三处），硬造一个页面级 loading 只会是假的（与第 80 期「消灭假开关」同一条口径）。改为**部件级**真三分支 + 单条统计错误提示。 |
@@ -390,14 +393,16 @@
 | 上游硬编码调色板（`text-orange-500` / `bg-green-500` …） | `docs/DESIGN.md` 明令禁止；深色主题下会失配（§2.4 第 3 条）。 |
 | `/api/v1/dashboard/widgets/batch`、`/api/v1/dashboard/scrollers/batch` | 单用户直连 DB，无此接口层（§2.4 第 4 条）。 |
 | onboarding tour / `data-tour` 锚点 | 新功能，不属「样式对照」。 |
-| 界面肉眼冒烟 | 本机无浏览器自动化（§5 第 1 条）。 |
+| 界面肉眼冒烟 | **已补做**（第 83 期收尾） —— 本机已装 `agent-browser`；冒烟跑通并抓出「库范围」受控 checkbox 的中间态缺陷（见 §7.7）。仅剩「与上游截图逐像素比对」未做（需先取回上游 PNG）。
 
 ### 7.5 下次怎么续用本文件
 
 1. 按 §0 的口径重新取上游（记得走本机代理）；若 commit 不再是 `c292d6cc`，**先在 §0 补一行「本轮对照 commit」**（基线声明要能追溯）。
 2. **从 §7.2 的「现状」列开始对照，不要从 §2** —— 差别就追加在 §7 里（新起一小节「第 N 期再对照」），§2–§4 继续不动。
-3. 目前仍**未决**的只有两条：§5 第 4 条（`reading-rhythm` 语义是否切回阅读时长）与 §7.4 的未做项 —— 它们都需要产品决策，
-   不属于「样式对齐」范畴，别顺手改。
+3. 目前仍**未决**的只有 §7.4 里的未做项（整页三态分支 / `edit-metadata` 与 `move-to-library` 两个动作 / i18n / tour）——
+   它们都需要产品决策，不属于「样式对齐」范畴，别顺手改。
+   ⚠️ §5 第 4 条（`reading-rhythm` 语义）**已于第 83 期决策完毕**（两个都要：保留原 id 的「入库节奏」+ 另开 `reading-time`），
+   §7.4 的「界面肉眼冒烟」**已于第 83 期收尾补做**（抓出真缺陷，见 §7.7）—— 这两条不再是未决/未做项。
 4. 上游若推进到新版本，注意 §0 记的「与既有基线的关系」那行要同步（它是「上游没动」这个结论的凭据）。
 
 ### 7.6 第 83 期再对照（2026-10-01）
@@ -425,6 +430,30 @@
 
 **本轮新增的契约（防回潮）**：
 - `tests/test_dashboard_widget_contract.py`：钉住「前 12 个 id 与上游逐一对应 + 1 件自开」
-  （id 是 localStorage 键，**改名会让存量偏好静默丢失**）、`WIDGET_META` 与联合类型逐字一致、
+  （id 是 localStorage 键，**改名会让存量偏好静默丢失**）、`WIDGET_META` 与联合类型逐字一致（**顺序也要一致**）、
   `registry` 无漏登记、新增件不默认启用、部件不加壳。
 - `shelfScope` / `bookDelete` 两个新纯函数各立 spec 并登记进 `EXPECTED_SPECS`。
+- ⚠️ 第 83 期收尾的**界面冒烟**又新增一条：`components/dashboard/DashboardSettingsSheet.spec.ts`
+  （钉住「库范围」勾选区 —— 尤其「取消最后一个勾选被拒绝」这条路径上 `input.checked`
+  必须被翻回去；见 §7.7）、并同批登记进 `EXPECTED_SPECS`。
+- `bookOpen.ts`（`openTargetOf` 唯一判据）**不是**第 83 期新增 —— 它第 64 期就存在（`4bfa345`，随书卡 ⋮ 菜单
+  + 快速预览一起进来），第 83 期只是**复用**它做「开始阅读 / 收听」入口的格式判据。
+
+### 7.7 第 83 期收尾的界面冒烟（2026-10-01 晚，与 §5 第 1 条的处置配套）
+
+第 82 期交付说明里写的「本机无浏览器自动化」已作废：本机已装 `agent-browser`（版本与用法记在
+`.codebuddy/memory/2026-10-01.md`「工具链」段）。冒烟在隔离实例（临时目录 + 端口 8412）上进行，
+走登录表单（`admin/changeme`，⚠️ 注入 `nf_token` 不稳），**结果：13 件部件顺序正确、首启卡片可跳过、
+书架行「库范围」面板可勾选 —— 但抓出一件真缺陷**。
+
+**抓出的缺陷（已修 + 已钉测试）**：自定义面板的「库范围」勾选区停在一个**不存在的中间态**。
+现象：勾一个库 ⇒ 标题「1 个书库」；再点它想取消 ⇒ 标题**仍**是「1 个书库」，而界面上那个库已显示为未勾选；
+再点一下 ⇒ 变成**选中**（方向反了）。根因：checkbox 是受控的（`:checked` 绑定 + `@change`），
+而「取消最后一个勾选」这条路径**故意不改 store**（拒绝并提示）⇒ Vue 不重渲染 ⇒ 浏览器已经翻过去的
+原生勾选态留在原地。⇒ 拒绝时必须手动把 `input.checked` 翻回去（`DashboardSettingsSheet.vue` 的
+`toggleLibraryScope` 接受事件对象、拒绝分支里回写 `el.checked = true`）。不修则用户无法把范围改回「全部书库」。
+
+**这条为什么 HTTP 端到端与单测（原有 43 个 spec）都测不到**：单测里从没打开过这个面板的库范围区；
+端到端只看 JSON 接口与产物字符串，不看「受控 input 的原生态与 store 是否一致」这一层。
+⇒ 记进本文件，是因为它证明了「HTTP 端到端 + 单测」这条常规验证路径**有真实的盲区**，
+而第 83 期的改动（库范围筛选 / 快速预览浮层 / 浮层内删除）**几乎全是界面层行为**。
