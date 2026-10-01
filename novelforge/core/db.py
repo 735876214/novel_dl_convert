@@ -518,6 +518,44 @@ def init():
                 data       BLOB NOT NULL,
                 media_type TEXT NOT NULL DEFAULT 'image/jpeg'
             );
+            -- 书城目录来源（第 85 期）：从**正版官方书城**取回的章节目录 —— 只取标题与顺序，
+            -- **绝不取正文**（见 `sources/toc_sources.py` 的模块注释）。一行 = 一本书在一个来源上
+            -- 的一次抓取结果。
+            -- ⚠️ **负结果也要落库**（ok=0 的行）：否则每次打开详情页都会重新外呼一遍，
+            --    白白挨风控；界面据 note 如实显示上次为什么没取到。
+            CREATE TABLE IF NOT EXISTS store_toc (
+                book_id        TEXT NOT NULL,
+                source         TEXT NOT NULL,
+                -- 书城侧的书号 / 书页 URL（用户手动指定时就是用户填的那个）
+                store_ref      TEXT NOT NULL DEFAULT '',
+                matched_title  TEXT NOT NULL DEFAULT '',
+                matched_author TEXT NOT NULL DEFAULT '',
+                confidence     REAL NOT NULL DEFAULT 0,
+                -- 用户手动指定 ⇒ 视为确定（自动匹配的置信度不再参与判断）
+                manual         INTEGER NOT NULL DEFAULT 0,
+                ok             INTEGER NOT NULL DEFAULT 0,
+                note           TEXT NOT NULL DEFAULT '',
+                -- 目录负载：``[[标题, 层级], ...]`` 的 JSON（层级可缺省 = 平铺）
+                payload        TEXT NOT NULL DEFAULT '[]',
+                fetched_at     REAL NOT NULL,
+                PRIMARY KEY(book_id, source)
+            );
+            CREATE INDEX IF NOT EXISTS idx_store_toc_book ON store_toc(book_id);
+            -- 书城章节 ↔ 本地章节的映射（第 85 期）。覆盖层据此把书城那份的**标题与卷名**
+            -- 套到本地章节上（`reading_list.apply_toc_override`）。
+            -- ⚠️ **未映射的本地章节不出现在本表里** —— 于是覆盖层永远造不出「点不开的假条目」。
+            -- ⚠️ 两张表都含 book_id，已按纪律登记进 ORPHAN_TABLES / REMAP_DERIVED_TABLES
+            --    （不搬的理由写在 `REMAP_DERIVED_TABLES` 上方，契约测试 `test_remap_tables` 钉住）。
+            CREATE TABLE IF NOT EXISTS toc_map (
+                book_id     TEXT NOT NULL,
+                source      TEXT NOT NULL,
+                store_index INTEGER NOT NULL,
+                local_index INTEGER NOT NULL,
+                method      TEXT NOT NULL DEFAULT '',
+                score       REAL NOT NULL DEFAULT 0,
+                PRIMARY KEY(book_id, source, store_index)
+            );
+            CREATE INDEX IF NOT EXISTS idx_toc_map_local ON toc_map(book_id, local_index);
             -- 作者级元数据（第 8 期 D1/D2/D5）：在线抓取的 bio/photo 与用户本地覆盖分列。
             -- 展示取 本地覆盖 > 在线；用户改过的不会被再次抓取冲掉。
             -- 照片一律缓存到 CACHE_DIR/authors/（零外链），这里只存文件名。
@@ -2596,7 +2634,7 @@ def unlock_achievement(key) -> bool:
 ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
                  "book_custom_values", "collection_items", "reading_sessions",
                  "reading_attempts", "meta_override", "meta_online", "meta_cover",
-                 "book_embeddings", "book_origins")
+                 "book_embeddings", "book_origins", "store_toc", "toc_map")
 
 
 def book_id_refs() -> dict:
@@ -2677,7 +2715,12 @@ REMAP_EXPLICIT_TABLES = ("scrape_items",)
 #: 于是行变成「book_id 已经是新名字了，rel 还是旧路径」，正好破坏
 #: ``book_id == _book_id(rel, library_id)`` 这条派生不变式 —— ``by_id`` 会拿着一行
 #: 自称指向某本书、路径却指向不存在文件的记录去开文件。契约测试认这份清单。
-REMAP_DERIVED_TABLES = ("book_index",)
+REMAP_DERIVED_TABLES = ("book_index", "store_toc", "toc_map")
+# ⚠️ 后两张是**第 85 期的外部数据缓存**（书城目录 + 章节映射），与 `book_index` 同属「不搬」
+#    那一类，但**理由不同**：它们的主键含来源与书城序号，通用搬迁那种「整表 UPDATE」一旦
+#    撞上主键就会被外层 `except` 吞成「搬 0 行」（正是 :func:`_remap_bookmarks` 那个坑）；
+#    而它们的重建成本只是「下次打开详情页再取一次目录」。改名 / 换库后旧行成为孤儿，
+#    由 :data:`ORPHAN_TABLES` 清掉 —— 不搬不会损坏任何东西，搬错才会。
 
 #: 目标 id 上**已有数据**时也**不整表跳过**的表：逐行搬，只对**同一字段**取舍。
 #: 这几张表的 PK 都是 ``(book_id, field)`` ⇒ 搬迁的粒度本就是**字段**，目标上某个字段
@@ -2956,6 +2999,113 @@ def get_review(book_id) -> dict:
     ).fetchone()
     return {"book_id": str(book_id), "stars": int(r["stars"]) if r else 0,
             "review": (r["review"] if r else "") or ""}
+
+
+# ---------------- 书城目录来源（第 85 期） ----------------
+# 只存**目录**（标题 + 顺序 + 映射），不存正文；`payload` 存 JSON 字符串。
+# 「取目录」的编排与规则在 `sources/toc_sources.py`，覆盖层在 `core/reading_list.py`。
+
+def store_toc_get(book_id, source: str = "") -> list:
+    """读某本书的书城目录行（`source` 留空 = 全部来源），按来源排序。
+
+    ⚠️ **含 `ok=0` 的负结果行** —— 那不是错误数据，而是「上次没取到」的事实：
+    界面据此如实显示原因，而不是把详情页变成每打开一次就外呼一次。
+    """
+    c = _connect()
+    if source:
+        rows = c.execute("SELECT * FROM store_toc WHERE book_id=? AND source=?",
+                         (str(book_id), str(source))).fetchall()
+    else:
+        rows = c.execute("SELECT * FROM store_toc WHERE book_id=? ORDER BY source",
+                         (str(book_id),)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["entries"] = json.loads(d.pop("payload") or "[]")
+        except Exception:                                    # noqa: BLE001 —— 坏 JSON 当空目录
+            d["entries"] = []
+        d["ok"] = bool(d.get("ok"))
+        d["manual"] = bool(d.get("manual"))
+        out.append(d)
+    return out
+
+
+def store_toc_save(book_id, source, *, ok, note="", store_ref="", matched_title="",
+                   matched_author="", confidence=0.0, manual=False, entries=None) -> dict:
+    """写一次抓取结果（**负结果也写**：`ok=False` 留着它才不会再反复外呼）。
+
+    `entries` = 书城目录 ``[{"title": str, "depth": int | None}, ...]``（按书城顺序）。
+    """
+    payload = json.dumps(list(entries or []), ensure_ascii=False)
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO store_toc(book_id, source, store_ref, matched_title, matched_author,"
+            " confidence, manual, ok, note, payload, fetched_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(book_id, source) DO UPDATE SET"
+            " store_ref=excluded.store_ref, matched_title=excluded.matched_title,"
+            " matched_author=excluded.matched_author, confidence=excluded.confidence,"
+            " manual=excluded.manual, ok=excluded.ok, note=excluded.note,"
+            " payload=excluded.payload, fetched_at=excluded.fetched_at",
+            (str(book_id), str(source), str(store_ref or ""), str(matched_title or ""),
+             str(matched_author or ""), float(confidence or 0), 1 if manual else 0,
+             1 if ok else 0, str(note or ""), payload, time.time()),
+        )
+        c.commit()
+    return {"book_id": str(book_id), "source": str(source), "ok": bool(ok)}
+
+
+def toc_map_get(book_id, source: str = "") -> dict:
+    """读映射 ``{书城序号: 本地 index}``；`source` 留空时按来源分组返回。"""
+    c = _connect()
+    if source:
+        rows = c.execute("SELECT store_index, local_index FROM toc_map"
+                         " WHERE book_id=? AND source=?", (str(book_id), str(source))).fetchall()
+        return {int(r["store_index"]): int(r["local_index"]) for r in rows}
+    out: dict = {}
+    rows = c.execute("SELECT source, store_index, local_index FROM toc_map WHERE book_id=?",
+                     (str(book_id),)).fetchall()
+    for r in rows:
+        out.setdefault(r["source"], {})[int(r["store_index"])] = int(r["local_index"])
+    return out
+
+
+def toc_map_replace(book_id, source, pairs) -> int:
+    """整批替换某本书在某来源上的映射（`pairs` = ``[(书城序号, 本地 index), ...]``）。
+
+    **先删后插**：映射是派生数据，逐条 diff 没有收益；而「半新半旧」会让覆盖层按两次
+    不同的对齐结果渲染同一本书（昨天对齐到第 3 章、今天对到第 5 章，读者会以为书变了）。
+    """
+    c = _connect()
+    rows = [(str(book_id), str(source), int(s), int(l)) for s, l in (pairs or [])]
+    with _lock:
+        c.execute("DELETE FROM toc_map WHERE book_id=? AND source=?", (str(book_id), str(source)))
+        if rows:
+            c.executemany("INSERT INTO toc_map(book_id, source, store_index, local_index)"
+                          " VALUES(?,?,?,?)", rows)
+        c.commit()
+    return len(rows)
+
+
+def store_toc_clear(book_id, source: str = "") -> int:
+    """删掉某本书的书城目录与映射 —— **「还原为本地目录」就是这一个动作**，零副作用。
+
+    两张表**一起**清：留下孤立的映射只会让下一次覆盖按一份已经不存在的书城目录去改标题。
+    """
+    c = _connect()
+    with _lock:
+        if source:
+            n = c.execute("DELETE FROM store_toc WHERE book_id=? AND source=?",
+                          (str(book_id), str(source))).rowcount
+            c.execute("DELETE FROM toc_map WHERE book_id=? AND source=?",
+                      (str(book_id), str(source)))
+        else:
+            n = c.execute("DELETE FROM store_toc WHERE book_id=?", (str(book_id),)).rowcount
+            c.execute("DELETE FROM toc_map WHERE book_id=?", (str(book_id),))
+        c.commit()
+    return int(n or 0)
 
 
 # ---------------- 自定义智能书架 ----------------
