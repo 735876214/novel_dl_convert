@@ -15,10 +15,12 @@
 from __future__ import annotations
 
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
+from novelforge.core import backup as backup_mod
 from novelforge.core import updater
 
 #: 手动检查路径与兜底 tags 路径（与 `_remote_latest` 里的拼接逐字一致）。
@@ -87,7 +89,8 @@ def up(isolated, monkeypatch, tmp_path):  # noqa: ARG001 —— isolated 提供�
 
     monkeypatch.setattr(updater, "_state", {
         "latest": None, "checked_at": 0, "has_update": False, "url": "",
-        "error": "", "auto_applied": "",
+        "error": "", "auto_applied": "", "auto_failures": 0,
+        "auto_retry_at": 0.0, "last_auto_result": "", "auto_message": "",
     })
     monkeypatch.setattr(updater, "_thread", None)
     monkeypatch.setattr(updater, "_stop", threading.Event())
@@ -164,7 +167,9 @@ def test_updater_available_看的是_socket_在不在(up):
 def test_status_字段齐全且开关取自配置(up):
     st = updater.status(local_version=LOCAL)
     for k in ("current", "latest", "has_update", "checked_at", "url",
-              "updater_available", "error", "check_enabled", "auto_apply"):
+              "updater_available", "error", "check_enabled", "auto_apply",
+              "auto_failures", "auto_retry_at", "last_auto_result",
+              "auto_message"):
         assert k in st, f"status 少了 {k}"
     assert st["current"] == LOCAL
     assert st["has_update"] is False
@@ -274,20 +279,29 @@ def test_configured_image_四级优先级(up, monkeypatch):
 
 # ---------------- 持久化往返（含 auto_applied）----------------
 
-def test_持久化往返带_auto_applied(up):
+def test_持久化往返带退避状态(up):
     updater._state.update({"latest": "0.81.0", "checked_at": 1700000000.0,
                            "has_update": True, "url": "https://x", "error": "",
-                           "auto_applied": "0.81.0"})
+                           "auto_applied": "0.81.0", "auto_failures": 2,
+                           "auto_retry_at": 1700001000.0,
+                           "last_auto_result": "pull_failed",
+                           "auto_message": "镜像拉取失败（HTTP 500）"})
     updater._persist()
     updater._state.update({"latest": None, "checked_at": 0, "has_update": False,
-                           "url": "", "error": "", "auto_applied": ""})
+                           "url": "", "error": "", "auto_applied": "",
+                           "auto_failures": 0, "auto_retry_at": 0.0,
+                           "last_auto_result": "", "auto_message": ""})
     updater._load_persisted()
     assert updater._state["latest"] == "0.81.0"
     assert updater._state["has_update"] is True
     assert updater._state["url"] == "https://x"
-    # ⚠️ 这一条是第 80 期的重点：漏写键元组 ⇒ `auto_applied` 静默丢失，
-    #    表现是「每次重启后对同一版本重新自动拉一遍」
+    # ⚠️ 第 84 期重点：漏写键元组 ⇒ `auto_failures` / `auto_retry_at` 静默丢失，
+    #    表现是「每次重启后把退避计数清零、对同一版本重新猛拉一遍」，正是要消掉的缺陷
     assert updater._state["auto_applied"] == "0.81.0"
+    assert updater._state["auto_failures"] == 2
+    assert updater._state["auto_retry_at"] == 1700001000.0
+    assert updater._state["last_auto_result"] == "pull_failed"
+    assert updater._state["auto_message"] == "镜像拉取失败（HTTP 500）"
 
 
 # ---------------- 后台线程（不真连：首轮只等待）----------------
@@ -324,9 +338,15 @@ def test_apply_update_按配置镜像拉取并触发重建(up, monkeypatch):
     up.set_cfg(image="harbor.local:5000/mirror/novel_dl_convert:v0.81.0")
     done = threading.Event()
     monkeypatch.setattr(updater, "_recreate", lambda image: done.set())
+    # 第 84 期：拉镜像前先快照。用替身跳掉真备份（避免依赖测试里的真实 DB 文件）
+    monkeypatch.setattr(
+        "novelforge.core.backup.snapshot",
+        lambda reason: {"ok": True, "path": "/fake/backup.db", "kind": "sqlite",
+                        "size": 1, "removed": []})
     res = updater.apply_update()
     assert res == {"ok": True, "stage": "restarting",
-                   "image": "harbor.local:5000/mirror/novel_dl_convert:v0.81.0"}
+                   "image": "harbor.local:5000/mirror/novel_dl_convert:v0.81.0",
+                   "backup": "/fake/backup.db"}
     pull = up.docker.calls[0]
     assert pull["method"] == "POST" and pull["path"] == "/images/create"
     # 绑定替身里 urlencode 结果：fromImage 不带 tag，tag 单独传（与 _split_image 对应）
@@ -404,16 +424,97 @@ def test_maybe_auto_apply_首次自动拉取并记录已尝试(up, monkeypatch):
     assert len(up.docker.calls) == calls
 
 
-def test_maybe_auto_apply_先记后做_pull失败也算已尝试(up):
+def test_maybe_auto_apply_pull失败进退避_defer(up, monkeypatch):
+    # 第 84 期语义：pull 失败**不再永久卡死**，而是记一次失败、退避到点后再试。
     up.set_cfg(auto_apply=True, image="mirror/app:1")
     _mount_socket(up)
     _found_new_version(up)
     up.docker.status = 500                      # 拉取失败
     res = updater.maybe_auto_apply()
     assert res["ok"] is False and res["stage"] == "pull_failed"
-    assert updater._state["auto_applied"] == "0.81.0"   # 失败也已记录
-    assert updater.maybe_auto_apply()["stage"] == "already_tried"
+    assert updater._state["auto_applied"] == "0.81.0"   # 失败也已记录版本
+    assert updater._state["auto_failures"] == 1
+    assert updater._state["auto_retry_at"] > time.time()
+    # 退避窗口内再来一轮 ⇒ defer（不再拉），且失败计数不涨
+    assert updater.maybe_auto_apply()["stage"] == "defer"
     assert len(up.docker.calls) == 1
+    assert updater._state["auto_failures"] == 1
+    # 退避到点（把时间推到窗口之后）⇒ 重新拉（拉取仍失败则再退避）
+    monkeypatch.setattr(updater, "time", SimpleNamespace(
+        time=lambda: updater._state["auto_retry_at"] + 1,
+        strftime=time.strftime, localtime=time.localtime))
+    up.docker.calls.clear()
+    res2 = updater.maybe_auto_apply()
+    assert res2["stage"] == "pull_failed"      # 到点 ⇒ 真去拉了
+    assert len(up.docker.calls) == 1
+    assert updater._state["auto_failures"] == 2
+
+
+def test_maybe_auto_apply_退避序列封顶24h(up, monkeypatch):
+    # 连续失败 ⇒ 退避间隔 1h → 6h → 24h，且封顶 24h（不无限拉长）
+    up.set_cfg(auto_apply=True, image="mirror/app:1")
+    _mount_socket(up)
+    _found_new_version(up)
+    up.docker.status = 500
+    now = [1_700_000_000.0]
+
+    def fake_time() -> float:
+        return now[0]
+
+    monkeypatch.setattr(updater, "time", SimpleNamespace(
+        time=fake_time, strftime=time.strftime, localtime=time.localtime))
+    expected = [3600, 6 * 3600, 24 * 3600, 24 * 3600]   # 第 4 次起封顶 24h
+    for i, exp in enumerate(expected, start=1):
+        updater.maybe_auto_apply()          # 拉取失败 ⇒ 退避
+        assert updater._state["auto_failures"] == i
+        # 退避到点时间戳 = 上次 now + exp；推到该点后下一轮才重试
+        now[0] = updater._state["auto_retry_at"] + 1
+    assert updater._state["auto_retry_at"] - fake_time() <= 24 * 3600 + 1
+
+
+def test_maybe_auto_apply_换版本清零失败计数(up, monkeypatch):
+    # 同一版本退避中时出了更新的版本 ⇒ 失败计数清零、直接去拉新版本
+    up.set_cfg(auto_apply=True, image="mirror/app:1")
+    _mount_socket(up)
+    _found_new_version(up, tag="v0.81.0")
+    up.docker.status = 500
+    assert updater.maybe_auto_apply()["stage"] == "pull_failed"
+    assert updater._state["auto_failures"] == 1
+    # 出了 0.82.0
+    up.net.ok(GITHUB_LATEST, {"tag_name": "v0.82.0", "html_url": "u2"})
+    updater.check(force=True, local_version=LOCAL)
+    up.docker.status = 200
+    res = updater.maybe_auto_apply()
+    assert res["stage"] == "restarting"
+    assert updater._state["auto_failures"] == 0
+    assert updater._state["auto_applied"] == "0.82.0"
+
+
+def test_maybe_auto_apply_未挂socket不记失败(up):
+    # 默认不挂 socket：自动更新无从执行，但**不应**因此背上「失败」+ 退避倒计时
+    up.set_cfg(auto_apply=True)
+    _found_new_version(up)
+    res = updater.maybe_auto_apply()
+    assert res["stage"] == "unavailable" and res["auto"] is True
+    assert up.docker.calls == []
+    assert updater._state["auto_applied"] == ""
+    assert updater._state["auto_failures"] == 0
+    assert updater._state["auto_retry_at"] == 0.0
+
+
+def test_apply_update_快照失败即中止更新(up, monkeypatch):
+    # 第 84 期硬要求：备份失败 = 不准带数据风险继续更新
+    _mount_socket(up)
+    up.set_cfg(image="mirror/app:1")
+
+    def boom(reason):
+        raise backup_mod.SnapshotError("测试预设：pg_dump 失败")
+
+    monkeypatch.setattr("novelforge.core.backup.snapshot", boom)
+    res = updater.apply_update()
+    assert res["ok"] is False and res["stage"] == "backup_failed"
+    assert "pg_dump" in res["message"]
+    assert up.docker.calls == [], "备份失败还去拉镜像 = 没有安全网"
 
 
 def test_maybe_auto_apply_持久化后重启不再重试(up, monkeypatch):
@@ -424,7 +525,9 @@ def test_maybe_auto_apply_持久化后重启不再重试(up, monkeypatch):
     updater.maybe_auto_apply()
     # 模拟重启：内存态清空后从 app_state 恢复
     updater._state.update({"latest": None, "checked_at": 0, "has_update": False,
-                           "url": "", "error": "", "auto_applied": ""})
+                           "url": "", "error": "", "auto_applied": "",
+                           "auto_failures": 0, "auto_retry_at": 0.0,
+                           "last_auto_result": "", "auto_message": ""})
     updater._load_persisted()
     assert updater._state["auto_applied"] == "0.81.0"
     assert updater.maybe_auto_apply()["stage"] == "already_tried"

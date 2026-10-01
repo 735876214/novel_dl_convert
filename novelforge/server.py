@@ -114,10 +114,12 @@ async def lifespan(app: FastAPI):
             logging.getLogger("novelforge").info("刮削 worker 已启动（续跑上次未完成的待办）")
     except Exception as e:  # noqa: BLE001 —— 旁路功能，绝不阻断启动
         logging.getLogger("novelforge").exception("刮削 worker 启动失败：%s", e)
-    # 第 78 期：版本检查后台线程（daemon）。首个周期后才首检，避免启动期 / 测试期真连
-    # GitHub；出网失败静默忽略；check_enabled 关掉则完全不检查。
+    # 第 78 期：版本检查后台线程（daemon）。出网失败静默忽略；check_enabled 关掉则完全不检查。
     # 第 80 期起「启动」与「保存配置后热应用」共用同一个判据（`_apply_update_config`），
     # 免得两处各写一份、改了一处忘另一处 —— 那正是本期要消掉的假开关成因。
+    # 第 84 期：首轮**启动即检**（不再等一个检查间隔）—— 每次容器重启（含自动更新重建容器
+    # 后的那次启动）都立即校验自己是否真到最新，并顺带把持久化的退避状态显示出来。
+    # ⚠️ 出网是「可关、失败降级」的（updater.check 内部吞掉一切异常），故启动即检不会拖垮启动。
     try:
         _apply_update_config()
     except Exception as e:  # noqa: BLE001
@@ -352,7 +354,12 @@ def api_changelog():
 
 @app.get("/api/update/status")
 def api_update_status():
-    """"当前版本 / 远端最新 / 是否有更新 / 一键更新是否可用" 的快照。"""
+    """"当前版本 / 远端最新 / 是否有更新 / 一键更新是否可用" 的快照。
+
+    第 84 期：额外回显**自动更新退避状态**（`auto_failures` / `auto_retry_at` /
+    `last_auto_result` / `auto_message`）—— 前端要能显示「自动更新失败：<原因>，
+    将于 <某时> 重试」，而不是让用户对着一个「有更新」标记猜。
+    """
     return updater.status()
 
 
@@ -362,15 +369,24 @@ def api_update_check():
 
     第 80 期：`update.auto_apply` 开时，手动检查发现新版也自动更新 —— 否则用户点
     「立即检查」看到新版却不自动应用，同一个开关的行为会显得时灵时不灵（失败静默）。
+    第 84 期：返回体里 ``stage=defer`` 时会带 ``message``（下次自动更新重试的时间），
+    前端据此显示「退避中（2026-10-01 08:30 再试）」。
     """
     st = updater.check(force=True)
-    updater.maybe_auto_apply()
+    res = updater.maybe_auto_apply()
+    st = dict(st)
+    st["auto"] = res
     return st
 
 
 @app.post("/api/update/apply")
 def api_update_apply():
-    """一键更新：挂了 docker.sock 时拉取最新镜像并重建自身容器。"""
+    """一键更新：挂了 docker.sock 时拉取最新镜像并重建自身容器。
+
+    第 84 期：拉镜像之前先自动备份业务数据（`core.backup.snapshot`）。失败即
+    ``stage="backup_failed"`` 且**不进入拉取** —— 备份不是可选步骤，备份失败还继续
+    更新 ⇒ 用户连回滚的机会都没有。
+    """
     return updater.apply_update()
 
 

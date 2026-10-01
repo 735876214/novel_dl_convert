@@ -38,10 +38,31 @@ _CACHE_KEY = "update_check"
 # 内置默认镜像；`update.image` 与 `NOVELFORGE_UPDATE_IMAGE` 均可覆盖（第 80 期起 image 真生效）。
 _DEFAULT_IMAGE = "ghcr.io/735876214/novel_dl_convert:latest"
 
-# `auto_applied`（第 80 期）= 已经**自动更新尝试过**的远端版本号；成功失败都记，
-# 保证同一个版本只尝试一次（否则 pull 失败后每轮检查都会重试一遍）。
+#: 自动更新失败后的**退避序列（小时）**，封顶 24h（第 84 期）。
+#:
+#: 第 80 期是「先记已尝试、再执行」：pull 失败也算记过，此后每轮都 `already_tried`
+#: ⇒ **失败一次就永久卡死**，只能手动介入。而 NAS 上镜像拉不下来恰恰是最常见的失败
+#: 原因 —— 也就是最需要重试、最不可能自愈的那一种。第 84 期改为「按退避到点时间戳重试」。
+_BACKOFF_HOURS = (1, 6, 24)
+
+#: `apply_update` 成功路径的 stage。用来区分「这个版本已经成功换上去了，别再拉」
+#: 与「试过了但失败了，退避到点可以再试」—— 两者都记在 `auto_applied` 里。
+_AUTO_OK_STAGE = "restarting"
+
+# 第 84 期：`auto_*` 四元组取代第 80 期的「一记了之」。
+#   auto_applied      上次**尝试过**的远端版本（不论成败；版本一变失败计数即清零）
+#   auto_failures     对该版本的连续失败次数（退避长度的依据）
+#   auto_retry_at     下次允许重试的时间戳（0 = 不在退避窗口内）
+#   last_auto_result  上次尝试的 stage（"" / restarting / pull_failed / backup_failed / unavailable）
+#   auto_message      上次失败的人话原因（界面横幅要显示它，`stage` 本身太干）
 _state = {"latest": None, "checked_at": 0, "has_update": False, "url": "", "error": "",
-          "auto_applied": ""}
+          "auto_applied": "", "auto_failures": 0, "auto_retry_at": 0.0,
+          "last_auto_result": "", "auto_message": ""}
+#: 持久化到 app_state 的键。**改这里等于改落库形状**（`tests/test_updater.py` 的
+#: 往返用例专门钉它，漏一个键就是「重启后静默丢状态」）。
+_PERSIST_KEYS = ("latest", "checked_at", "has_update", "url", "error",
+                 "auto_applied", "auto_failures", "auto_retry_at",
+                 "last_auto_result", "auto_message")
 _lock = threading.Lock()
 #: 当前后台检查线程的停止信号。**每次 `start_background` 换一个新的**（见该函数说明）。
 _stop = threading.Event()
@@ -181,17 +202,20 @@ def status(local_version: str = "") -> "dict":
             # 第 80 期：把开关如实回显给前端（横幅要能说明「已开启自动更新」）。
             "check_enabled": bool(ucfg.get("check_enabled", True)),
             "auto_apply": bool(ucfg.get("auto_apply", False)),
+            # 第 84 期：自动更新的**退避状态**如实回显 —— 前端要能显示
+            # 「自动更新失败：<原因>，将于 <某时> 重试」，而不是让用户对着
+            # 一个「有更新」标记猜为什么一直没升上去。
+            "auto_failures": _state["auto_failures"],
+            "auto_retry_at": _state["auto_retry_at"],
+            "last_auto_result": _state["last_auto_result"],
+            "auto_message": _state["auto_message"],
         }
 
 
 def _persist() -> None:
     try:
         import novelforge.core.db as db
-        db.state_set(_CACHE_KEY, json.dumps({
-            "latest": _state["latest"], "checked_at": _state["checked_at"],
-            "has_update": _state["has_update"], "url": _state["url"], "error": _state["error"],
-            "auto_applied": _state["auto_applied"],
-        }))
+        db.state_set(_CACHE_KEY, json.dumps({k: _state[k] for k in _PERSIST_KEYS}))
     except Exception:
         pass
 
@@ -203,8 +227,7 @@ def _load_persisted() -> None:
         if raw:
             d = json.loads(raw)
             with _lock:
-                for k in ("latest", "checked_at", "has_update", "url", "error",
-                          "auto_applied"):
+                for k in _PERSIST_KEYS:
                     if k in d:
                         _state[k] = d[k]
     except Exception:
@@ -214,13 +237,20 @@ def _load_persisted() -> None:
 # ---------------- 后台定时（daemon，测试不养）----------------
 
 def start_background(interval_hours: int = 6) -> None:
-    """启动后台检查线程。首个周期后才首检（interval 小时级），避免启动期 / 测试期真连。
+    """启动后台检查线程。**启动即跑一轮**（`_tick`），之后每 interval 小时一轮。
 
     第 80 期：`_stop` 改成**每次启动换一个新 Event**（本函数创建、交给新线程持有）。
     此前是模块级共享 Event + `clear()` 复用 —— 「先 stop 再 start」（改开关 / 改间隔）
     会与正在退出的旧线程抢同一个 Event：旧线程可能还没退出就被 `clear()`，于是继续睡
     下一个周期，结果是两个线程各查各的。各自持有后 `stop_background()` 只影响当前那个
     线程，新线程从干净状态开始 —— **不需要 join，也不会阻塞配置保存**。
+
+    第 84 期：**首轮不再等一个 interval**。此前「等 6h 再首检」 ⇒ 每次容器重启
+    （包括自动更新重建容器后的那次启动）都不校验自己是否真到最新，界面就一直挂着
+    「有更新」。改成启动即检还有个额外收益：退避状态是持久化的，启动即检能立刻把
+    「上次自动更新失败、退避到 X 时」如实显示出来。
+    ⚠️ 出网是**显式、可关、失败降级**的（`check` 内部吞掉一切异常），所以启动即检
+    不会让服务起不来；`check_enabled=false` 时 `server._apply_update_config` 压根不起线程。
     """
     _load_persisted()
     global _thread, _stop
@@ -232,17 +262,29 @@ def start_background(interval_hours: int = 6) -> None:
     _thread.start()
 
 
+def _tick() -> None:
+    """一轮「检查 + 判自动更新」。启动首轮与定时轮询共用它。
+
+    抽出来是为了**只有一份逻辑**：第 84 期之前这里是 `_loop` 的循环体，改「启动要不要
+    也检」时得同时记得改两处 —— 那种「两处各写一份」的形状正是本模块第 80 期那个
+    永久卡死缺陷的邻居（同一个版本只在 `_loop` 里被跳过，`apply_update` 手动那条路
+    完全不知道有退避这回事）。
+    """
+    try:
+        check(force=True)
+    except Exception:  # noqa: BLE001 —— 旁路功能，绝不冒泡
+        pass
+    # 检查完看要不要自动更新（`maybe_auto_apply` 自身也不抛）。
+    res = maybe_auto_apply()
+    if res.get("auto") and res.get("ok"):
+        _log.info("已自动应用更新：%s", res.get("image") or "")
+
+
 def _loop(interval_hours: int, stop: threading.Event) -> None:
     interval = max(1, int(interval_hours))
+    _tick()                                        # 第 84 期：启动即检（不等一个间隔）
     while not stop.wait(interval * 3600):
-        try:
-            check(force=True)
-        except Exception:  # noqa: BLE001 —— 旁路功能，绝不冒泡
-            pass
-        # 第 80 期：检查完看要不要自动更新（`maybe_auto_apply` 自身也不抛）。
-        res = maybe_auto_apply()
-        if res.get("auto") and res.get("ok"):
-            _log.info("已自动应用更新：%s", res.get("image") or "")
+        _tick()
         # 间隔每轮重读 ⇒ 改 `interval_hours` 不必重启线程（下一轮等待即用新值）。
         try:
             interval = max(1, int(_update_cfg().get("interval_hours") or interval))
@@ -287,15 +329,32 @@ def _docker(method: str, path: str, query: "dict | None" = None,
     return resp.status, data
 
 
-def apply_update(image: str = "") -> "dict":
+def apply_update(image: str = "", reason: str = "manual") -> "dict":
     """拉取 `update.image` 指的那个镜像并重建自身容器。返回 {ok, stage, ...}。
 
     未挂载 socket ⇒ 直接告知用户手动升级（降级，不做假交互）。
+
+    第 84 期：拉镜像**之前**先做一次数据快照（`core.backup.snapshot`），失败即
+    ``stage="backup_failed"`` 且**不进入拉取**。这是「删掉自己、重建自己」这种更新
+    方式唯一的数据安全网 —— 没有它，一次写坏数据的更新就等于用户的书库没了。
+    备份落 `BACKUP_DIR`（持久卷），所以容器重建之后备份还在。
+
+    :param reason: 备份文件名的分组标记（``manual`` / ``auto``），用于分别轮转。
     """
     if not updater_available():
         return {"ok": False, "stage": "unavailable",
                 "message": "未挂载 docker.sock。请在 compose 中启用可选挂载后重试，"
                             "或手动执行：docker compose pull && docker compose up -d"}
+    from . import backup
+
+    try:
+        snap = backup.snapshot(reason)
+    except backup.SnapshotError as e:
+        _log.error("更新前备份失败，已中止本次更新：%s", e)
+        return {"ok": False, "stage": "backup_failed", "message": str(e)}
+    except Exception as e:  # noqa: BLE001 —— 备份模块自身炸了也不能带着数据风险往下走
+        _log.exception("更新前备份异常，已中止本次更新")
+        return {"ok": False, "stage": "backup_failed", "message": f"更新前备份失败：{e}"}
     image = configured_image(image)
     repo, tag = _split_image(image)
     try:
@@ -306,18 +365,87 @@ def apply_update(image: str = "") -> "dict":
         return {"ok": False, "stage": "pull_failed", "message": f"镜像拉取失败：{e}"}
     # 重建在延迟后台线程里做，先让本响应返回（否则重启会掐断响应）。
     threading.Thread(target=_recreate, args=(image,), name="update-apply", daemon=True).start()
-    return {"ok": True, "stage": "restarting", "image": image}
+    return {"ok": True, "stage": "restarting", "image": image,
+            "backup": snap.get("path", "")}
+
+
+def _fmt_ts(ts: float) -> str:
+    """时间戳 → 「2026-10-01 08:30」这种本地格式（给界面横幅用，别把裸 epoch 甩给用户）。"""
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(float(ts)))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _backoff_seconds(failures: int) -> int:
+    """第 N 次失败后要等多久（秒）。序列 1h → 6h → 24h 封顶。
+
+    「封顶」很重要：不封顶的话第 4 次失败后要等 48h、48h、96h …… 用户会觉得
+    「自动更新坏了」，而实际上它只是被自己上一次的失败推到了两天之后。
+    """
+    n = max(1, int(failures))
+    hours = _BACKOFF_HOURS[min(n, len(_BACKOFF_HOURS)) - 1]
+    return hours * 3600
+
+
+def _record_auto_attempt(latest: str) -> None:
+    """**尝试前**记一次（版本 + 进入退避），成功后再清零。
+
+    为什么还是「先记」：这一条要防的不是「失败被当成已试过」（那是第 84 期修的缺陷），
+    而是**同一个版本并发两轮**同时去拉 —— `_loop` 的首轮与定时轮、或用户手点「立即更新」
+    与自动更新撞在一起。记下版本就等于占住了这个版本的一次尝试机会。
+    失败后在 :func:`_record_auto_failure` 里把计数与重试时间写上，退避到点可再试。
+    """
+    with _lock:
+        if _state["auto_applied"] != latest:
+            # 换了版本 ⇒ 上一版的失败计数与退避都不作数（新版本是全新机会）
+            _state["auto_failures"] = 0
+            _state["auto_retry_at"] = 0.0
+            _state["auto_message"] = ""
+        _state["auto_applied"] = latest
+    _persist()
+
+
+def _record_auto_failure(latest: str, stage: str, message: str) -> None:
+    """失败 ⇒ 计数 +1、退避到点时间、记下人话原因。退避封顶 24h。"""
+    with _lock:
+        n = int(_state["auto_failures"] or 0) + 1
+        _state["auto_failures"] = n
+        _state["auto_retry_at"] = time.time() + _backoff_seconds(n)
+        _state["last_auto_result"] = stage
+        _state["auto_message"] = (message or "")[:200]
+        _state["auto_applied"] = latest
+    _log.warning("自动更新 %s 失败（第 %d 次，%s），%.0f 秒后重试：%s",
+                 latest, n, stage, _backoff_seconds(n), message)
+
+
+def _record_auto_success(latest: str) -> None:
+    """成功 ⇒ 记下版本、清零失败计数与退避。"""
+    with _lock:
+        _state["auto_applied"] = latest
+        _state["auto_failures"] = 0
+        _state["auto_retry_at"] = 0.0
+        _state["last_auto_result"] = _AUTO_OK_STAGE
+        _state["auto_message"] = ""
+    _persist()
 
 
 def maybe_auto_apply() -> "dict":
-    """`update.auto_apply` 开时，发现新版就自动应用一次（第 80 期接通）。
+    """`update.auto_apply` 开时，发现新版就自动应用（第 80 期接通；第 84 期改为退避重试）。
 
-    此前这个开关只有 UI 控件、后端**没有任何读点** —— 打开它什么都不会发生（假开关）。
-    现在：检查完 → 有新版 ∧ 挂了 socket ∧ 该版本**还没试过** ⇒ 直接 `apply_update()`。
+    第 80 期那个「先记已尝试、再执行」的形状有个真缺陷：pull 失败也算记过，此后
+    每轮检查都 `already_tried` ⇒ **失败一次就永久卡死，只能手动介入**。而 NAS 上
+    「镜像拉不下来」恰恰是最常见的失败原因 —— 也就是最需要重试的那一种。
 
-    同一个远端版本只试一次（`auto_applied` 持久化，**先记后做**）：否则 pull 失败后
-    每轮检查都会再拉一次（每 6h 一次、每次最长 120s 超时），用户端只表现为
-    「一直没更新成功」。失败原因留给日志与 `/api/update/status` 的 `error` 字段。
+    第 84 期的判定链（顺序即优先级）：
+
+    1. 开关关 → ``disabled``
+    2. 无新版 → ``no_update``
+    3. 同一版本**已经成功换上去了** → ``already_tried``（成功过就别再拉同一个）
+    4. 同一版本试过、失败、且**还在退避窗口内** → ``defer``（``message`` 给出重试时间）
+    5. 未挂 socket → ``unavailable``（环境不具备，**不记失败**：用户只是没挂 socket，
+       凭什么因此背上一个「失败」和被推后的重试时间）
+    6. 其余 ⇒ `apply_update(reason="auto")`；成功清零、失败进退避。
 
     返回体带 `auto: True`，便于调用方分辨自动还是手动触发（不改 `apply_update` 的既有形状）。
     """
@@ -328,18 +456,28 @@ def maybe_auto_apply() -> "dict":
             latest = _state["latest"]
             has_update = bool(_state["has_update"])
             tried = _state["auto_applied"]
+            failures = int(_state["auto_failures"] or 0)
+            retry_at = float(_state["auto_retry_at"] or 0)
+            last_result = _state["last_auto_result"]
         if not has_update or not latest:
             return {"ok": False, "stage": "no_update", "auto": True}
-        if latest == tried:
+        if latest == tried and last_result == _AUTO_OK_STAGE:
             return {"ok": False, "stage": "already_tried", "auto": True}
+        if latest == tried and failures > 0 and retry_at > time.time():
+            return {"ok": False, "stage": "defer", "auto": True,
+                    "message": f"上次自动更新失败，退避到 {_fmt_ts(retry_at)} 再试"}
         if not updater_available():
             # 默认不挂 socket ⇒ 自动更新无从执行，仍由前端提示手动升级（如实降级）。
             return {"ok": False, "stage": "unavailable", "auto": True}
-        with _lock:
-            _state["auto_applied"] = latest     # 先记后做：失败也不再对同一版本重试
-        _persist()
+        _record_auto_attempt(latest)
         _log.info("检测到新版本 %s，按 update.auto_apply 自动更新", latest)
-        return {**apply_update(), "auto": True}
+        res = apply_update(reason="auto")
+        if res.get("ok"):
+            _record_auto_success(latest)
+        else:
+            _record_auto_failure(latest, str(res.get("stage") or "error"),
+                                 str(res.get("message") or ""))
+        return {**res, "auto": True}
     except Exception as e:  # noqa: BLE001 —— 旁路功能，绝不冒泡
         _log.exception("自动更新失败：%s", e)
         return {"ok": False, "stage": "error", "message": str(e), "auto": True}
