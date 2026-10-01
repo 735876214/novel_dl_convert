@@ -259,7 +259,13 @@ def wrap_decrypt(js: str) -> str:
     输出统一成一行 JSON ``{"ok": 是否字符串, "v": 值}``：片段返回非字符串（漏了 return /
     返回了对象）时能被调用方**判出来**，而不是把 `undefined` 当成明文写进书里。
     """
-    return ("const __out = (function () {\n" + str(js or "") + "\n})();\n"
+    # ⚠️ 同时提供**两种读法**，因为两边的既定约定不同，接不上就是「导入的源静默产出空正文」：
+    #   · 本项目手写的片段用 `__args[0]`（与 `run_js_sync` 的形参一致）；
+    #   · `legado.js_port` 移植过来的片段读**全局 `result`**（Legado 的写法，
+    #     见 `sources/legado.py` 的 `js_port` 文档）。
+    # 少给任何一个，都会表现成「脚本跑通了但什么都没取到」，最难查。
+    return ("const result = __args[0];\n"
+            "const __out = (function () {\n" + str(js or "") + "\n})();\n"
             "console.log(JSON.stringify({ok: typeof __out === 'string', v: String(__out)}));")
 
 

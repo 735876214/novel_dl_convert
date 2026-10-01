@@ -460,6 +460,20 @@ class RuleBasedSource(SourceAdapter):
         """
         return (self._RULE.get("decrypt_js") or "").strip() or None
 
+    async def _content(self, html: str, spec: dict) -> str:
+        """从页面取**正文**：``mode=js`` 交给 Node 通道，其余走 css / regex / json。
+
+        ⚠️ `mode: "js"` 不是可选装饰：`legado.convert` 对「正文由 JS 算出」的源**就是**产出
+        `{"mode": "js", "script": …}`（第 1 步定的形状）。`_extract` 不认这个 mode，
+        它会落进 css 分支、拿到空 container 而**返回空串** —— 表现是「导入成功、下载成功、
+        但书里一个字都没有」，几乎无法从现象反推原因。
+        """
+        if (spec or {}).get("mode") == "js":
+            from ..core import network
+            # 移植脚本读全局 `result`（`wrap_decrypt` 同时提供 `result` 与 `__args[0]`）
+            return await network.run_decrypt(spec.get("script") or "", html)
+        return await self._decrypt(_extract(html, spec))
+
     async def _decrypt(self, text: str) -> str:
         """按需跑站点解密片段：**没配就原样返回**（绝大多数站点不需要）。"""
         js = self.decryption_js()
@@ -519,7 +533,7 @@ class RuleBasedSource(SourceAdapter):
             chapters = await self._fetch_toc(client, bp, item["url"])
             return "\n\n".join(f"{c['title']}\n{c['body']}" for c in chapters)
         html = await client.get_text(item["url"])
-        return await self._decrypt(_extract(html, bp.get("content", {})))
+        return await self._content(html, bp.get("content", {}))
 
     # ---- 取书：结构化章节（供目录式分章）----
     async def fetch_book_chapters(self, client, item: dict) -> list[dict]:
@@ -529,7 +543,7 @@ class RuleBasedSource(SourceAdapter):
             return await self._fetch_toc(client, bp, item["url"])
         # single：取全文后按 chapter 规则切分
         html = await client.get_text(item["url"])
-        text = await self._decrypt(_extract(html, bp.get("content", {})))
+        text = await self._content(html, bp.get("content", {}))
         ch = self._RULE.get("chapter") or {}
         if ch.get("mode") == "regex":
             return _split_regex(text, ch["regex"])
@@ -548,7 +562,7 @@ class RuleBasedSource(SourceAdapter):
             async with sem:
                 try:
                     h = await client.get_text(url)
-                    bodies[i] = await self._decrypt(_extract(h, bp.get("content", {})))
+                    bodies[i] = await self._content(h, bp.get("content", {}))
                 except Exception as e:  # 单章失败不中断整本
                     bodies[i] = f"（第 {i + 1} 章抓取失败：{e}）"
 
@@ -583,7 +597,7 @@ class RuleBasedSource(SourceAdapter):
                 try:
                     h = await client.get_text(links[0][1])
                     # 预览也要解密：否则用户看到的是乱码，会以为「这条源坏了」
-                    sample = (await self._decrypt(_extract(h, bp.get("content", {}))))[:1500]
+                    sample = (await self._content(h, bp.get("content", {})))[:1500]
                 except Exception:
                     sample = ""
             return {"toc": toc_titles, "sample": sample}
