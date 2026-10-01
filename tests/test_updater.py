@@ -78,6 +78,27 @@ class _Docker:
         return [c["path"] for c in self.calls]
 
 
+@pytest.fixture(autouse=True)
+def _clear_persisted_state(isolated):      # noqa: ARG001 —— isolated 提供一套空库
+    """每个用例前**清掉 updater 落在 DB 里的持久化状态**（`app_state` 的 `update_check`）。
+
+    ⚠️ 为什么必须清（第 86 期实测踩到）：`isolated` 夹具只保证「不碰真实数据」，
+    **并不重置全部表** —— `_persist()` 把 `checked_at` / `auto_applied` / 退避计数写进
+    `app_state` 之后会**跨用例残留**。下一个用例读到上一个用例留下的「已尝试 / 无更新」，
+    `_maybe_auto_apply` 就短路成 `no_update`。
+
+    症状极具迷惑性：**每次失败的用例都不同、实际值恒为 `no_update`、单跑整个文件全过**。
+    本轮已排除两条更直觉的假设：真出网（夹具早有 `_http_get_json` 替身）、
+    后台线程泄漏（teardown 加了「线程必须停下」的断言，四次运行一次都没触发）。
+    """
+    from novelforge.core import db
+    db.state_set(updater._CACHE_KEY, "")
+    try:
+        yield
+    finally:
+        db.state_set(updater._CACHE_KEY, "")
+
+
 @pytest.fixture
 def up(isolated, monkeypatch, tmp_path):  # noqa: ARG001 —— isolated 提供一套空库
     """隔离 updater 的模块级状态 + 两条外部缝 + `update` 段配置。
