@@ -132,3 +132,43 @@ def test_原有_cbz_行为不变(tmp_path):
     got = library._iter_book_entries(tmp_path, library._COMIC_EXTS, None, "comic")
     p = library._probe_entry(got[0])
     assert p["format"] == "CBZ" and p["pages"] == 4 and p["unparsable"] is False
+
+
+# ---------------- 自动归库也看内容（第 87 期收尾）----------------
+
+def test_自动归库的容器看内容不看后缀(isolated, tmp_path, make_library):  # noqa: ARG001
+    """放进收书目录的 zip，按**内容**决定去哪个库。
+
+    ⚠️ 按后缀猜就会错：`.zip` 既可能是漫画包也可能是「装着 EPUB 的容器」——
+    猜错的下场是书进了错的库，而错的库既读不了它、用户也难发现。
+    """
+    from novelforge.core import library_rules
+
+    make_library("ebook", "电子书库", "ebook", tmp_path / "libs" / "ebook")
+    make_library("comic", "漫画库", "comic", tmp_path / "libs" / "comic")
+
+    ep = _zip(tmp_path / "包.zip", [("mimetype", b"application/epub+zip"),
+                                    ("META-INF/container.xml", b"<container/>")])
+    assert library_rules.decide(src=ep, name="包.zip")["id"] == "ebook", \
+        "内部是 EPUB ⇒ 电子书库（按后缀猜会进漫画库）"
+    img = _image_zip(tmp_path / "漫画.zip", 3)
+    assert library_rules.decide(src=img, name="漫画.zip")["id"] == "comic"
+
+
+def test_自动归库对判不出形态的容器不猜(isolated, tmp_path, make_library):  # noqa: ARG001
+    """图文混装 ⇒ 判不出形态 ⇒ **不按格式路由**（宁可如实拒收，也不猜一个库）。"""
+    from novelforge.core import library_rules
+
+    make_library("ebook", "电子书库", "ebook", tmp_path / "libs" / "ebook")
+    make_library("comic", "漫画库", "comic", tmp_path / "libs" / "comic")
+    mixed = _zip(tmp_path / "混.zip", [("001.jpg", b"JPG"), ("a.pdf", b"%PDF")])
+    assert library_rules._type_of_name("混.zip", mixed) == ""   # noqa: SLF001
+    assert library_rules.decide(src=mixed, name="混.zip") is None
+
+
+def test_只给名字读不到内容时也不猜(isolated, tmp_path, make_library):  # noqa: ARG001
+    """没有路径（只有文件名）时，容器**不猜**类型 —— 返回空，走既有拒收路径。"""
+    from novelforge.core import library_rules
+
+    make_library("comic", "漫画库", "comic", tmp_path / "libs" / "comic")
+    assert library_rules._type_of_name("随便.zip") == ""        # noqa: SLF001

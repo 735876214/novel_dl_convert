@@ -28,7 +28,7 @@ import json
 import pathlib
 
 from .. import config
-from . import library
+from . import library, zipkind
 
 #: 格式 → 库类型（与 library._exts_for_type 的划分保持一致）
 _COMIC_EXT = (".cbz", ".cbr")
@@ -39,20 +39,25 @@ def _norm(text) -> str:
     return library.norm_key(str(text or ""))
 
 
-def _type_of_name(name: str) -> str:
-    """按**文件名**判归属库类型（自动归库用）。
+def _type_of_name(name: str, src=None) -> str:
+    """按**文件名**判归属库类型（自动归库用）；容器（`.zip`）则**看内容**。
 
-    ⚠️ **`.zip` 刻意不在这里**（第 87 期）：它是**通用容器**，真实形态只能看内容
-    （`core/zipkind.py`）—— 而本函数手里只有一个名字、没有路径，读不到内容。
-    按后缀猜一个类型送进去，正是本项目反复禁止的「猜」：一件包装着 EPUB 的 zip
-    会被塞进漫画库，进去之后既读不了也不好被发现。所以这里返回 ``""``（= 不按格式路由），
-    由 :func:`decide` 走既有路径 —— 猜不出就**如实拒收**，而不是猜一个。
-    扫描白名单已收 `.zip`（`library._COMIC_EXTS` 等），所以**放进库目录里的** zip
-    照常按内容分派形态；差的只是「投递到多库时的自动选库」这一条路。
+    ⚠️ `.zip` 是**通用容器**（第 87 期），真实形态只能看内容（`core/zipkind.py`）。
+    所以：拿到 ``src``（真实路径）就按内容判 —— 图片档 → 漫画库、内含一份文档 →
+    电子书库；**读不到 / 判不出就返回空**（= 不按格式路由），由 :func:`decide`
+    走既有路径如实拒收。按后缀猜类型正是本项目反复禁止的「猜」：
+    一件装着 EPUB 的 zip 会被塞进漫画库，进去之后既读不了也不好被发现。
     """
     ext = pathlib.PurePosixPath(str(name or "")).suffix.lower()
     if ext in _COMIC_EXT:
         return "comic"
+    if zipkind.is_container(name) and src:
+        v = zipkind.analyze(src)
+        if v["readable"] and v["kind"] == "comic":
+            return "comic"
+        if v["kind"] in zipkind.DOC_KINDS:
+            return "ebook"
+        return ""
     if ext in _EBOOK_EXT:
         return "ebook"
     from . import audio as _audio          # 延迟：避免与 audio 的导入顺序耦合
@@ -133,13 +138,15 @@ def _by_subdir(sub: str, filename: str = "") -> "dict | None":
     return None
 
 
-def _by_format(name: str) -> "dict | None":
+def _by_format(name: str, src=None) -> "dict | None":
     """按格式匹配：优先**类型专用**库，其次 ``mixed``（含默认库）。
 
     候选**先按生效白名单过滤**（第 40 期）：库收窄过格式之后，「类型对得上」不再
     等于「扫得到」—— 不过滤就会把 ``.pdf`` 送进一个只收 ``.epub`` 的 ebook 库。
+
+    ``src`` 会透给 :func:`_type_of_name`：``.zip`` 的类型只能看内容（第 87 期）。
     """
-    t = _type_of_name(name)
+    t = _type_of_name(name, src)
     if not t:
         return None
     libs = [l for l in library.libraries() if _accepts(l, name)]
@@ -198,8 +205,8 @@ def decide(src=None, name: str = "", meta: dict = None, base_dir=None) -> "dict 
         if hit:
             return hit
 
-    # 2) 格式（确定性最高）
-    hit = _by_format(filename)
+    # 2) 格式（确定性最高）—— 容器（.zip）在这里**按内容**判类型，不看后缀
+    hit = _by_format(filename, src)
     if hit and hit.get("type") in ("ebook", "comic", "audiobook"):
         return hit
 

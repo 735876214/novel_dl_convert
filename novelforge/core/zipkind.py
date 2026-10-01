@@ -43,6 +43,10 @@ _ARCHIVE_EXTS = (".zip", ".cbz", ".cbr", ".rar")
 #: 可作为展开结果的扩展名（文档 + 内层压缩包）
 _UNPACK_EXTS = tuple(_DOC_FORMATS) + _ARCHIVE_EXTS
 
+#: 「容器里恰好一份文档」时的 kind 值（小写 format）—— 供**自动归库**判
+#: 「这其实是一本电子书」（`core/library_rules._type_of_name`）。
+DOC_KINDS = tuple(f.lower() for f in _DOC_FORMATS.values())
+
 
 def is_container(path) -> bool:
     """这个后缀要不要走内容分派。"""
