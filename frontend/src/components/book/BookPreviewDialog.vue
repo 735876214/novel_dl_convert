@@ -5,12 +5,15 @@ import { useRouter } from 'vue-router'
 import BookCover from '@/components/ui/BookCover.vue'
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type BookCard, type BookDetail } from '@/lib/api'
+import { api, apiErrorMessage, type BookCard, type BookDetail } from '@/lib/api'
+import { confirmAndDeleteBook } from '@/lib/bookDelete'
 import { formatLabel, seriesIndexLabel, tagsLabel } from '@/lib/bookInfo'
 import { isDirEntry, openTargetOf } from '@/lib/bookOpen'
 import { fmtBytes } from '@/lib/format'
 import { statusLabelOf } from '@/lib/readingThresholds'
+import { useCollectionsStore } from '@/stores/collections'
 import { useLibraryStore } from '@/stores/library'
+import { useUiStore } from '@/stores/ui'
 
 /**
  * 快速预览浮层（第 64 期）。
@@ -33,8 +36,20 @@ import { useLibraryStore } from '@/stores/library'
  *
  * 批注、阅读日志、文件绝对路径、任何编辑入口 —— 那是详情页的活。预览是「看一眼
  * 要不要打开」，塞进半页功能就变成了第二个详情页。
+ *
+ * 第 83 期：给出可选的**动作区**（`actions`）—— 书架行用它承载上游 `BookQuickView` 的
+ * 「加入收藏 / 删除」。⚠️ 边界不破：仍然不给批注 / 阅读日志 / 文件路径 / 编辑入口，
+ * 只加这两个动作；`actions` 默认 `false` ⇒ 既有调用方（书架页）行为一字不变。
  */
-const props = defineProps<{ open: boolean; book: BookCard | null }>()
+const props = withDefaults(
+  defineProps<{
+    open: boolean
+    book: BookCard | null
+    /** 是否给出「加入收藏 / 删除」动作（书架行传 true；书架页默认不传） */
+    actions?: boolean
+  }>(),
+  { actions: false },
+)
 const emit = defineEmits<{
   (e: 'close'): void
   /**
@@ -42,14 +57,24 @@ const emit = defineEmits<{
    * 那个 props 由 `v-if` 收窄，只有这里能一眼看出它与渲染的内容同源。
    */
   (e: 'open-detail', book: BookCard): void
+  /** 浮层里改动了这本书（加入收藏 / 删除）—— 父组件据此决定要不要刷新列表 */
+  (e: 'changed', book: BookCard, kind: 'collection' | 'deleted'): void
 }>()
 
 const library = useLibraryStore()
 const router = useRouter()
+const collections = useCollectionsStore()
+const ui = useUiStore()
 
 const detail = ref<BookDetail | null>(null)
 const detailError = ref('')
 const loading = ref(false)
+
+// —— 动作区（`actions` 模式）的状态 ——
+/** 这本书已加入的收藏夹 id（用于把「加入收藏」的选择框初始化到已选状态） */
+const memberIds = ref<number[]>([])
+const pickId = ref('')
+const busy = ref('')
 
 const target = computed(() => (props.book ? openTargetOf(props.book) : null))
 const canDownload = computed(() => !!props.book && !isDirEntry(props.book) && !!props.book.name)
@@ -91,9 +116,14 @@ watch(
       // 关掉就把上一次的状态清干净：否则下一次打开会先闪一眼上一本的章节数
       detail.value = null
       detailError.value = ''
+      pickId.value = ''
+      busy.value = ''
+      memberIds.value = []
       return
     }
     void load()
+    // 收藏夹清单与「这本书在哪几个夹里」都是**按需拉**的（只有动作区需要）
+    if (props.actions) void loadCollections()
   },
   { immediate: true },
 )
@@ -120,6 +150,70 @@ function openDetail(): void {
   const b = props.book
   if (!b) return
   emit('open-detail', b)
+}
+
+/** 拉收藏夹清单 + 这本书已加入的夹（第 83 期动作区） */
+async function loadCollections(): Promise<void> {
+  const b = props.book
+  if (!b) return
+  void collections.load()
+  try {
+    memberIds.value = (await api.bookCollections(b.id)).items
+  } catch {
+    // 拉不到就当作「不在任何夹里」：加入动作本身仍然可用（少显示状态，不挡操作）
+    memberIds.value = []
+  }
+}
+
+/**
+ * 加入收藏。
+ *
+ * ⚠️ 这里只做**加入**（不做移除）：预览浮层是「快速动手」的地方，移出收藏留给
+ * 详情页 hero 的勾选（那里已经能逐夹勾选/取消）。少给一个动作，比给一个半套的好。
+ */
+async function addToCollection(): Promise<void> {
+  const b = props.book
+  const cid = Number(pickId.value)
+  if (!b || !cid) return
+  busy.value = 'collection'
+  try {
+    await api.addToCollection(cid, b.id)
+    const name = collections.items.find((c) => c.id === cid)?.name ?? '收藏夹'
+    ui.toast(`已加入「${name}」`)
+    memberIds.value = memberIds.value.includes(cid) ? memberIds.value : [...memberIds.value, cid]
+    pickId.value = ''
+    await collections.load(true)
+    emit('changed', b, 'collection')
+  } catch (e) {
+    ui.toast(apiErrorMessage(e, '加入收藏失败'))
+  } finally {
+    busy.value = ''
+  }
+}
+
+/**
+ * 删除（第 83 期）：与书卡 ⋮ 菜单**同一套**确认文案与流程（`lib/bookDelete.ts`）。
+ * 删成功后必须关掉浮层 —— 它正在预览一本已经不在书库里的书。
+ */
+async function removeBook(): Promise<void> {
+  const b = props.book
+  if (!b) return
+  busy.value = 'delete'
+  try {
+    const res = await confirmAndDeleteBook(b, {
+      getDetail: (id) => library.getBookDetail(id),
+      remove: (id) => api.deleteBook(id),
+    })
+    if (res.deleted) {
+      ui.toast(res.message ?? '已移入回收站')
+      emit('close')
+      emit('changed', b, 'deleted')
+      return
+    }
+    if (res.error) ui.toast(res.error)
+  } finally {
+    busy.value = ''
+  }
 }
 
 function onKey(e: KeyboardEvent): void {
@@ -212,6 +306,38 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
         <Button v-if="canDownload" size="sm" @click="download">
           <Icon name="download" class="h-3.5 w-3.5" />
           下载
+        </Button>
+        <!-- 非动作区模式：详细信息仍在这一行右侧（既有调用方的布局一字不变） -->
+        <Button v-if="!actions" size="sm" class="ml-auto" @click="openDetail">
+          详细信息
+        </Button>
+      </div>
+
+      <!--
+        动作区（第 83 期，书架行开的「快速预览」用）：加入收藏 + 删除 + 详细信息。
+        ⚠️ 只加这两个动作 —— 批注 / 阅读日志 / 编辑入口仍留给详情页（见头注释的边界说明）。
+      -->
+      <div v-if="actions" class="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
+        <select
+          v-model="pickId"
+          class="h-7 max-w-[10rem] min-w-0 cursor-pointer rounded-md border border-border bg-background px-2 text-[12px] text-foreground"
+          aria-label="选择收藏夹"
+        >
+          <option value="">加入收藏夹…</option>
+          <option v-for="c in collections.items" :key="c.id" :value="String(c.id)">
+            {{ c.name }}{{ memberIds.includes(c.id) ? '（已在）' : '' }}
+          </option>
+        </select>
+        <Button size="sm" :disabled="!pickId || busy === 'collection'" @click="addToCollection">
+          {{ busy === 'collection' ? '加入中…' : '加入' }}
+        </Button>
+        <Button
+          size="sm"
+          variant="danger"
+          :disabled="busy === 'delete'"
+          @click="removeBook"
+        >
+          {{ busy === 'delete' ? '删除中…' : '删除' }}
         </Button>
         <Button size="sm" class="ml-auto" @click="openDetail">
           详细信息

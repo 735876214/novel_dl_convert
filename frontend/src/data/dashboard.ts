@@ -4,15 +4,18 @@
  * 这里的 id 一经发布不可改名 —— 它们同时是 localStorage 持久化的键。
  * 部件组件与自定义面板都从本文件取 id 与文案，避免两处各写一份。
  * （组件的实际挂载在 components/dashboard/widgets/registry.ts，
- *   本轮 12 个全登记、其中 3 个已实现。）
+ *   现在 13 个全登记、**全部已实现**。）
+ *
+ * ⚠️ 前 12 个 id 与上游 BookOrbit 的 `WIDGET_TYPE` **逐一对应、无增减无改名**；
+ * 第 13 个 `reading-time` 是**本项目自开**的（上游 12 件里没有它）—— 原因见下面的注释。
  */
 
 export type WidgetId =
   | 'library-overview'
-  | 'currently-reading'
-  | 'reading-streak'
   | 'reading-goal'
   | 'reading-rhythm'
+  | 'currently-reading'
+  | 'reading-streak'
   | 'reading-dna'
   | 'monthly-challenge'
   | 'highlight-of-the-day'
@@ -20,6 +23,11 @@ export type WidgetId =
   | 'diversity-score'
   | 'year-projection'
   | 'long-wait'
+  // 第 13 件（第 83 期，本项目自开）：阅读时长。
+  // ⚠️ 上游的 `reading-rhythm` **就是**「阅读时长」语义，而本项目把这个 id 落定成了
+  // 「入库节奏」（入库数量）。id 是 localStorage 键、不可改名，所以另开一件显示时长，
+  // 原 id 的业务语义一个字不动。
+  | 'reading-time'
 
 /**
  * 部件卡片宽度档（**与 BookOrbit 一致的两档**，第 82 期从本项目自造的 sm/md/lg 收敛而来）：
@@ -39,10 +47,14 @@ export interface WidgetMeta {
 }
 
 /**
- * 12 个部件全登记，且**均已实现**（见 widgets/registry.ts，数据来自 /api/stats 等）。
+ * 13 个部件全登记，且**均已实现**（见 widgets/registry.ts，数据来自 /api/stats 等）。
  *
- * 标题按 NovelForge 的业务语义落定：「阅读节奏」类部件对应「入库节奏」，
- * 其余沿用 BookOrbit 原名；需要的数据（进度 / 批注 / 会话 / 入库）均已持久化。
+ * 前 12 件的标题按 NovelForge 的业务语义落定：上游的「阅读节奏」在本项目叫「入库节奏」，
+ * 其余沿用 BookOrbit 原名；第 13 件「阅读时长」为本项目自开（补回上游 `reading-rhythm`
+ * 的时长语义，见 `WidgetId` 处的说明）。需要的数据（进度 / 批注 / 会话 / 入库）均已持久化。
+ *
+ * ⚠️ 顺序即「新用户的默认展示顺序」，**新增部件一律追加在末尾** —— 存量用户的顺序
+ * 存在 localStorage 里，改动本表顺序不会重排他们的界面（`mergeWidgets` 只追加不重排）。
  */
 export const WIDGET_META: WidgetMeta[] = [
   // 宽卡（1x1.5）的 5 件分配照抄 BookOrbit 的 widgetLayout 表
@@ -58,6 +70,9 @@ export const WIDGET_META: WidgetMeta[] = [
   { id: 'diversity-score', title: '多样性评分', description: '体裁、作者、年代、语言四维评分', size: '1x1' },
   { id: 'year-projection', title: '年度预测', description: '按当前节奏推算年底累计量', size: '1x1' },
   { id: 'long-wait', title: '等待最久', description: '书库中未读时间最长的一本书', size: '1x1' },
+  // 第 13 件（第 83 期，本项目自开）：与「入库节奏」并存的「阅读时长」。
+  // 默认**不启用**（见 DEFAULT_WIDGET_IDS）—— 存量用户的界面不该因为一次升级多出一张卡。
+  { id: 'reading-time', title: '阅读时长', description: '最近 28 天每日阅读时长与活跃日均', size: '1x1' },
 ]
 
 /**
@@ -71,10 +86,13 @@ export const WIDGET_FEATURE: Record<string, string> = {
 
 export const WIDGET_IDS: WidgetId[] = WIDGET_META.map((w) => w.id)
 
-/** 已实现的部件（registry 会为这些 id 挂真实组件）—— 现在 12 个全部实现 */
+/** 已实现的部件（registry 会为这些 id 挂真实组件）—— 13 个全部实现 */
 export const IMPLEMENTED_WIDGET_IDS: WidgetId[] = [...WIDGET_IDS]
 
-/** 默认启用的部件：一屏信息量适中，其余可在自定义面板里打开 */
+/**
+ * 默认启用的部件：一屏信息量适中，其余可在自定义面板里打开。
+ * ⚠️ 新增部件**不进**本表（除非明确要改默认观感）：存量用户升上来时不该多出卡片。
+ */
 export const DEFAULT_WIDGET_IDS: WidgetId[] = [
   'library-overview',
   'currently-reading',
@@ -103,6 +121,16 @@ export interface ShelfDef {
    * 因此存量 localStorage 不需要迁移脚本。
    */
   rows?: number
+  /**
+   * 只展示这些书库的封面（第 83 期，对齐 BookOrbit 的 per-shelf 库范围）。
+   *
+   * **空数组或缺省 = 全部书库** —— 与 `CustomFieldDef.library_ids` 同一口径（零新概念）。
+   * ⚠️ 与 `scope`（智能书架筛选键：未读 / 在读 / …）是**两个维度**：`scope` 决定「取哪些书」，
+   * 本字段决定「取哪些库的书」，两者叠加生效。
+   * ⚠️ 指向已删除书库的 id 在过滤时会被忽略（见 `lib/shelfScope.ts`）：否则用户删库后
+   * 整行封面会变空，而界面上没有任何东西能解释为什么。
+   */
+  library_ids?: string[]
 }
 
 /** 可加为「智能书架行」的筛选（键与 stores/library.ts 的 SMART_KEYS 对应） */

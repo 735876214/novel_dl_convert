@@ -3,8 +3,8 @@ import { computed, type ComputedRef } from 'vue'
 /**
  * 部件数据态的唯一真值源（第 82 期）。
  *
- * 12 件部件的数据源不同（`useStatsStore` / `useLibraryStore` / 批注接口），
- * 「加载中 / 失败 / 空」的判定若各写一份就是 12 份拷贝 —— 统一到这里。
+ * 13 件部件的数据源不同（`useStatsStore` / `useLibraryStore` / 批注接口），
+ * 「加载中 / 失败 / 空」的判定若各写一份就是 13 份拷贝 —— 统一到这里。
  *
  * ⚠️ **只读各 store 的既有字段**（`loaded` / `error` / `loading` …），
  * 不引入假延迟、不造假数据 —— 项目铁律「不做假数据」。上游靠批量接口的统一 loading，

@@ -2,14 +2,19 @@
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
+import BookCover from '@/components/ui/BookCover.vue'
 import { useWidgetState } from '@/composables/useWidgetState'
 import type { WidgetSize } from '@/data/dashboard'
+import type { BookCard } from '@/lib/api'
+import { openTargetOf } from '@/lib/bookOpen'
 import { useLibraryStore } from '@/stores/library'
 
 /**
  * 正在阅读：已打开但未读完的书，按最近阅读时间排序。
  *
  * ⚠️ 卡片外壳在第 82 期上移到 `DashboardWidgetRow`，本件只负责填满卡片。
+ * 第 83 期：补封面缩略图；开书的目标改走 `lib/bookOpen.ts`（此前写死 `/read/`，
+ * 有声书点下去是打不开的阅读器 —— 应进 `/listen/`）。
  */
 defineProps<{
   /** 宽度档由部件行下发（对齐上游契约） */
@@ -22,6 +27,11 @@ const router = useRouter()
 onMounted(() => library.loadBooks())
 
 const items = computed(() => library.continueReading.slice(0, 3))
+
+/** 开书目标：能读就读、能听就听，都不支持才落到详情页（不在本件里另写一套判据） */
+function openBook(b: BookCard): void {
+  void router.push(openTargetOf(b)?.to ?? `/book/${b.id}`)
+}
 
 /**
  * 空态分两种情况说（第 38 期）。
@@ -71,8 +81,11 @@ const state = useWidgetState(() => ({
       :key="b.id"
       type="button"
       class="mt-2 flex w-full cursor-pointer items-center gap-2.5 text-left"
-      @click="router.push(`/read/${b.id}`)"
+      @click="openBook(b)"
     >
+      <div class="w-8 shrink-0 overflow-hidden rounded-sm">
+        <BookCover :book="b" :show-title="false" :interactive="false" />
+      </div>
       <div class="min-w-0 flex-1">
         <div class="truncate text-[12.5px] text-foreground">{{ b.title }}</div>
         <div class="mt-1 h-1 w-full overflow-hidden rounded-full bg-muted">

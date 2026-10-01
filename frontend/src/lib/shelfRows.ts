@@ -39,6 +39,25 @@ export function shelfBookLimit(perRow: number, rows: number, hardCap: number): n
   return Math.min(hardCap, Math.max(1, perRow) * Math.max(MIN_SHELF_ROWS, rows))
 }
 
+/** 封面入场错峰的步长（对齐 BookOrbit 的 `index * 35`） */
+export const COVER_STAGGER_MS = 35
+/** 错峰上限：末张封面最晚等这么久（超长尾比「没有动画」更难受） */
+export const COVER_STAGGER_CAP_MS = 700
+
+/**
+ * 第 index 张封面的入场延迟（毫秒）。
+ *
+ * ⚠️ 上游是**每带内**从 0 重新计（`index` 是带内下标），所以实际最大延迟 ≈
+ * `(每带封面数 - 1) × 35ms`（本项目每带上限 20 张 ⇒ 665ms）。这里再加一个**上限兜底**：
+ * 若将来把 `MAX_COVERS_PER_ROW` 调大、或有人把整个列表塞进一带，末张封面不会拖到几秒后
+ * 才出现（长尾延迟会被读成「这一行坏了」）。
+ */
+export function coverDelayMs(index: number, stepMs = COVER_STAGGER_MS, capMs = COVER_STAGGER_CAP_MS): number {
+  const i = Math.max(0, Math.floor(index) || 0)
+  const step = stepMs > 0 ? stepMs : COVER_STAGGER_MS
+  return Math.min(capMs, i * step)
+}
+
 /**
  * 窄屏判定（`matchMedia` 自实现，替代上游的 `useBreakpoints`）。
  * `matchMedia` 不可用的环境（极老内核 / 测试桩）按宽屏处理 —— 只影响行数，不影响可用性。

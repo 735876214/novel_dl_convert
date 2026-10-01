@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { chunkIntoBands, effectiveShelfRows, shelfBookLimit } from './shelfRows'
+import { chunkIntoBands, coverDelayMs, effectiveShelfRows, shelfBookLimit } from './shelfRows'
 
 /** 书架行「多行分带」的纯函数（第 82 期对齐 BookOrbit 的 shelf-rows） */
 describe('shelfRows', () => {
@@ -36,5 +36,16 @@ describe('shelfRows', () => {
     expect(shelfBookLimit(20, 4, 50)).toBe(50)
     // perRow 非法时按 1 行兜底
     expect(shelfBookLimit(0, 2, 50)).toBe(2)
+  })
+
+  it('coverDelayMs：按 35ms 递进，且有上限兜底（长尾延迟会被读成「这一行坏了」）', () => {
+    expect(coverDelayMs(0)).toBe(0)
+    expect(coverDelayMs(1)).toBe(35)
+    expect(coverDelayMs(19)).toBe(665) // 本项目每带上限 20 张 ⇒ 实际最大延迟
+    // 上限：再往后不再线性增长
+    expect(coverDelayMs(100)).toBe(700)
+    // 脏值不产生负延迟 / NaN
+    expect(coverDelayMs(-3)).toBe(0)
+    expect(coverDelayMs(Number.NaN)).toBe(0)
   })
 })

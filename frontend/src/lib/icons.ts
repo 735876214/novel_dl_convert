@@ -69,6 +69,10 @@ export const ICONS = {
   rows: '<rect x="3" y="4" width="18" height="4" rx="1.5"/><rect x="3" y="10" width="18" height="4" rx="1.5"/><rect x="3" y="16" width="18" height="4" rx="1.5"/>',
   columns: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/>',
   sliders: '<path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3"/><path d="M14 2v4M8 10v4M16 18v4"/>',
+  // 部件细节（第 83 期）：年度预测的趋势方向（上 / 下 / 持平）
+  trendingUp: '<path d="M3 17l6-6 4 4 8-8"/><path d="M21 7h-5M21 7v5"/>',
+  trendingDown: '<path d="M3 7l6 6 4-4 8 8"/><path d="M21 17h-5M21 17v-5"/>',
+  minus: '<path d="M5 12h14"/>',
 } as const
 
 export type IconName = keyof typeof ICONS

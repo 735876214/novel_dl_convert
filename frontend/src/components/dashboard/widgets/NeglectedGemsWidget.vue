@@ -2,8 +2,10 @@
 import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
+import BookCover from '@/components/ui/BookCover.vue'
 import { useWidgetState } from '@/composables/useWidgetState'
 import type { WidgetSize } from '@/data/dashboard'
+import { openTargetOf } from '@/lib/bookOpen'
 import { isInProgress } from '@/lib/readingThresholds'
 import { useLibraryStore } from '@/stores/library'
 
@@ -11,6 +13,8 @@ import { useLibraryStore } from '@/stores/library'
  * 被遗忘的佳作：已开始却最久未触碰的一本书。
  *
  * ⚠️ 卡片外壳在第 82 期上移到 `DashboardWidgetRow`，本件只负责填满卡片。
+ * 第 83 期：补封面缩略图与「开始阅读 / 收听」入口；打开目标走 `lib/bookOpen.ts`
+ * （此前写死 `/read/`，有声书点下去是打不开的阅读器）。
  */
 defineProps<{
   /** 宽度档由部件行下发（对齐上游契约） */
@@ -30,6 +34,15 @@ const gem = computed(() => {
   if (!list.length) return null
   return [...list].sort((a, b) => (a.updated_at ?? 0) - (b.updated_at ?? 0))[0]
 })
+
+/** 打开目标（能读就读、能听就听；都没有这个按钮干脆不出现，见模板） */
+const target = computed(() => (gem.value ? openTargetOf(gem.value) : null))
+
+function openGem(): void {
+  const g = gem.value
+  if (!g) return
+  void router.push(target.value?.to ?? `/book/${g.id}`)
+}
 
 const daysAgo = computed(() => {
   const t = gem.value?.updated_at ?? 0
@@ -65,18 +78,29 @@ const state = useWidgetState(() => ({
 
     <p v-else-if="!gem" class="mt-2 text-[11.5px] text-muted-foreground">{{ emptyText }}</p>
 
-    <button
-      v-else
-      type="button"
-      class="mt-2 cursor-pointer text-left"
-      @click="router.push(`/read/${gem.id}`)"
-    >
-      <div class="truncate text-[12.5px] font-medium text-foreground">{{ gem.title }}</div>
-      <div class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ gem.author }}</div>
-    </button>
+    <div v-else class="mt-2 flex items-center gap-2.5">
+      <div class="w-9 shrink-0 overflow-hidden rounded-sm">
+        <BookCover :book="gem" :show-title="false" :interactive="false" />
+      </div>
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-[12.5px] font-medium text-foreground">{{ gem.title }}</div>
+        <div class="mt-0.5 truncate text-[11px] text-muted-foreground">{{ gem.author }}</div>
+      </div>
+    </div>
 
-    <p v-if="gem" class="mt-2 text-[10.5px] text-muted-foreground tabular-nums">
-      已 {{ daysAgo }} 天未继续 · 读到 {{ Math.round(gem.percent ?? 0) }}%
-    </p>
+    <div v-if="gem" class="mt-2 flex items-center justify-between gap-2">
+      <span class="min-w-0 truncate text-[10.5px] text-muted-foreground tabular-nums">
+        已 {{ daysAgo }} 天未继续 · 读到 {{ Math.round(gem.percent ?? 0) }}%
+      </span>
+      <!-- 不能读也不能听的格式（如 MOBI）不给入口 —— 灰置等于承认「本该有但不给你」 -->
+      <button
+        v-if="target"
+        type="button"
+        class="shrink-0 cursor-pointer text-[11px] font-medium text-primary hover:underline"
+        @click="openGem"
+      >
+        开始{{ target.label }}
+      </button>
+    </div>
   </div>
 </template>

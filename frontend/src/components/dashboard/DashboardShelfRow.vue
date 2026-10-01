@@ -4,9 +4,17 @@ import { useRouter } from 'vue-router'
 
 import BookCover from '@/components/ui/BookCover.vue'
 import Icon from '@/components/ui/Icon.vue'
+import BookPreviewDialog from '@/components/book/BookPreviewDialog.vue'
 import { MAX_COVERS_PER_ROW, type ShelfDef, type ShelfType } from '@/data/dashboard'
 import type { BookCard } from '@/lib/api'
-import { chunkIntoBands, effectiveShelfRows, shelfBookLimit, useNarrowScreen } from '@/lib/shelfRows'
+import { filterByLibraries } from '@/lib/shelfScope'
+import {
+  chunkIntoBands,
+  coverDelayMs,
+  effectiveShelfRows,
+  shelfBookLimit,
+  useNarrowScreen,
+} from '@/lib/shelfRows'
 import { useLibraryStore } from '@/stores/library'
 
 /**
@@ -17,6 +25,8 @@ import { useLibraryStore } from '@/stores/library'
  *
  * 第 82 期：套卡片外壳（与部件卡同款）+ 表头（图标块 / 计数胶囊 / 悬停滚动按钮）
  * + 多行分带（`rows` 1..3，窄屏压到 2）+ 加载骨架。
+ * 第 83 期：「库范围」过滤（`shelf.library_ids`，空 = 全部书库）叠在 `allBooks` 之后 ——
+ * 四种行类型统一受益，`scope`（智能书架筛选键）与它是两个维度。
  * 业务语义不动：四种类型的数据来源、继续阅读的进度条、「查看全部」的目标都保持现状。
  */
 const props = defineProps<{ shelf: ShelfDef }>()
@@ -24,7 +34,11 @@ const props = defineProps<{ shelf: ShelfDef }>()
 const library = useLibraryStore()
 const router = useRouter()
 
-onMounted(() => library.loadBooks())
+// 书目与书库列表都要：前者是行内数据源，后者是「库范围」的候选与「哪些 id 还有效」的判据
+onMounted(() => {
+  library.loadBooks()
+  library.loadLibraries()
+})
 
 const narrow = useNarrowScreen()
 
@@ -57,7 +71,18 @@ const allBooks = computed<BookCard[]>(() => {
   }
 })
 
-const visibleBooks = computed(() => allBooks.value.slice(0, fetchLimit.value))
+/** 书库列表的 id（判「哪些库范围 id 还有效」的唯一依据） */
+const knownLibraryIds = computed(() => library.libraryEntities.map((l) => l.id))
+
+/**
+ * 「库范围」过滤：叠在 `allBooks` 之后 ⇒ 四种行类型统一生效。
+ * 判定全部收在 `lib/shelfScope.ts`（空 = 全部；指向已删库的 id 忽略；有效项全无 ⇒ 退化为全部）。
+ */
+const scopedBooks = computed(() =>
+  filterByLibraries(allBooks.value, props.shelf.library_ids, knownLibraryIds.value),
+)
+
+const visibleBooks = computed(() => scopedBooks.value.slice(0, fetchLimit.value))
 
 /** 多行分带（rows = 1 时只有一带，渲染与改造前逐字节等价） */
 const bands = computed(() => chunkIntoBands(visibleBooks.value, shelfRows.value))
@@ -65,6 +90,12 @@ const bands = computed(() => chunkIntoBands(visibleBooks.value, shelfRows.value)
 /** 数据态：书库书目没回来 = 加载中（library 无 error 字段） */
 const loading = computed(() => !library.loaded)
 const empty = computed(() => !loading.value && visibleBooks.value.length === 0)
+
+/**
+ * 空是「被库范围筛掉了」还是「本来就没有」——两种空态的说法不同，
+ * 否则用户看到空行会以为是数据没了（其实是自己设的范围）。
+ */
+const emptyByScope = computed(() => empty.value && allBooks.value.length > 0)
 
 /** 书架类型的表头图标（走 lib/icons.ts 的注册表，不散落内联 SVG） */
 const SHELF_TYPE_ICON: Record<ShelfType, string> = {
@@ -90,6 +121,26 @@ function openAll(): void {
   if (props.shelf.type === 'continue') library.openSmart('在读', 'reading')
   else library.openShelf(props.shelf.title)
   router.push('/shelf')
+}
+
+// —— 快速预览浮层（第 83 期）——
+// 点封面不再直接跳详情：先弹一层预览（封面 / 状态 / 简介 + 加入收藏 / 删除）。
+// ⚠️ 上游是「封面卡动作菜单 → quick-view」，本项目按用户口径改成**点封面即开预览**
+// （少一次点击），浮层里仍可一步进完整详情。
+const previewBook = ref<BookCard | null>(null)
+
+function openPreview(b: BookCard): void {
+  previewBook.value = b
+}
+
+function openDetailFromPreview(b: BookCard): void {
+  previewBook.value = null
+  void router.push(`/book/${b.id}`)
+}
+
+/** 浮层里改动了这本书：删掉之后必须重拉书目，否则封面带还留着一本已经不存在的书 */
+function onPreviewChanged(_b: BookCard, kind: 'collection' | 'deleted'): void {
+  if (kind === 'deleted') void library.loadBooks(true)
 }
 </script>
 
@@ -158,7 +209,12 @@ function openAll(): void {
       <div class="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
         <Icon :name="SHELF_TYPE_ICON[shelf.type]" class="h-5 w-5 text-muted-foreground" />
       </div>
-      <p class="text-[12.5px] text-muted-foreground">这一行暂时没有书</p>
+      <p class="text-[12.5px] text-muted-foreground">
+        {{ emptyByScope ? '所选书库里，这一行暂时没有书' : '这一行暂时没有书' }}
+      </p>
+      <p v-if="emptyByScope" class="text-[11px] text-muted-foreground">
+        可在「自定义 → 书架」里调整该行的「库范围」
+      </p>
     </div>
 
     <!-- 封面带：多行分带纵向堆叠，横向滚动 -->
@@ -166,11 +222,12 @@ function openAll(): void {
       <div class="flex w-max flex-col gap-5">
         <div v-for="(band, bandIndex) in bands" :key="bandIndex" class="flex items-end gap-3">
           <button
-            v-for="b in band"
+            v-for="(b, index) in band"
             :key="b.id"
             type="button"
-            class="w-[104px] shrink-0 cursor-pointer text-left"
-            @click="router.push(`/book/${b.id}`)"
+            class="shelf-cover-enter w-[104px] shrink-0 cursor-pointer text-left"
+            :style="{ animationDelay: `${coverDelayMs(index)}ms` }"
+            @click="openPreview(b)"
           >
             <div class="relative">
               <BookCover :book="b" />
@@ -199,5 +256,49 @@ function openAll(): void {
         </div>
       </div>
     </div>
+
+    <!--
+      快速预览浮层（第 83 期）：**Teleport 到 body** —— 本行外壳带 `backdrop-blur`，
+      它会让 `position: fixed` 的后代把外壳当成包含块（浮层会被裁进卡片里），必须挪出去。
+    -->
+    <Teleport to="body">
+      <BookPreviewDialog
+        :open="!!previewBook"
+        :book="previewBook"
+        actions
+        @close="previewBook = null"
+        @open-detail="openDetailFromPreview"
+        @changed="onPreviewChanged"
+      />
+    </Teleport>
   </section>
 </template>
+
+<style scoped>
+/* 封面逐张错峰入场（第 83 期对齐 BookOrbit 的 dashboardFadeUp + index*35ms） */
+@keyframes shelfCoverFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.shelf-cover-enter {
+  animation: shelfCoverFadeUp 0.35s ease both;
+}
+
+/*
+  ⚠️ scoped keyframes **不受** `main.css` 里那条全局 `prefers-reduced-motion` 降级保护
+  （那条只改 duration，靠的是全局选择器，而这里需要的是「干脆不播」）——
+  系统开了「减少动态效果」就整段关掉，别只把时长压到 0.001ms 留一个闪动。
+*/
+@media (prefers-reduced-motion: reduce) {
+  .shelf-cover-enter {
+    animation: none !important;
+  }
+}
+</style>

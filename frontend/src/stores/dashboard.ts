@@ -72,6 +72,22 @@ function normalizeRows(value: unknown): number {
   return Number.isFinite(n) ? Math.min(3, Math.max(1, n)) : 1
 }
 
+/**
+ * 库范围收敛（第 83 期）：只留非空字符串并去重。
+ *
+ * **空数组 = 全部书库**（`lib/shelfScope.ts` 的唯一口径）——所以这里**不**做「至少一个」的兜底：
+ * 那是面板的交互约束（取消最后一个勾选时拒绝），不是数据约束。
+ * ⚠️ 指向已删除书库的 id 保留在偏好里（store 不知道有哪些库），过滤时忽略即可。
+ */
+function normalizeLibraryIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const out: string[] = []
+  for (const v of value) {
+    if (typeof v === 'string' && v && !out.includes(v)) out.push(v)
+  }
+  return out
+}
+
 function mergeShelves(stored: ShelfDef[] | null): ShelfDef[] {
   // 只按「类型合法」保留用户书架（含自定义的 scope / 额外行），而不是按默认 id 白名单，
   // 否则用户新增的行一刷新就丢。
@@ -80,10 +96,14 @@ function mergeShelves(stored: ShelfDef[] | null): ShelfDef[] {
   )
   const seen = new Set(valid.map((s) => s.id))
   const added = DEFAULT_SHELVES.filter((d) => !seen.has(d.id))
-  const merged = [...valid, ...added]
-    .slice(0, MAX_SHELVES)
-    .map((s) => ({ ...s, rows: normalizeRows(s.rows) }))
-  return merged.length ? merged : DEFAULT_SHELVES.map((s) => ({ ...s, rows: 1 }))
+  const merged = [...valid, ...added].slice(0, MAX_SHELVES).map((s) => ({
+    ...s,
+    rows: normalizeRows(s.rows),
+    library_ids: normalizeLibraryIds(s.library_ids),
+  }))
+  return merged.length
+    ? merged
+    : DEFAULT_SHELVES.map((s) => ({ ...s, rows: 1, library_ids: [] }))
 }
 
 /** 布局值只认两个合法档，其它（含旧数据里的脏值）一律回落单列 */
@@ -164,6 +184,17 @@ export const useDashboardStore = defineStore('dashboard', () => {
     if (target) target.rows = normalizeRows(rows)
   }
 
+  /**
+   * 设置某个书架行的「库范围」（第 83 期）。
+   *
+   * **传空数组 = 全部书库** —— 面板的「全部书库」选项就是调它（而不是另设一个布尔字段）。
+   * 判定侧的唯一解释在 `lib/shelfScope.ts::filterByLibraries`。
+   */
+  function setShelfLibraries(id: string, ids: string[]): void {
+    const target = shelves.value.find((s) => s.id === id)
+    if (target) target.library_ids = normalizeLibraryIds(ids)
+  }
+
   function moveShelf(from: number, to: number): void {
     if (from === to || from < 0 || to < 0) return
     const list = shelves.value
@@ -201,10 +232,10 @@ export const useDashboardStore = defineStore('dashboard', () => {
     return true
   }
 
-  /** 恢复默认：部件与书架都回到出厂状态 */
+  /** 恢复默认：部件与书架都回到出厂状态（含清空库范围与行数） */
   function reset(): void {
     widgets.value = WIDGET_IDS.map((id) => ({ id, enabled: DEFAULT_WIDGET_IDS.includes(id) }))
-    shelves.value = DEFAULT_SHELVES.map((s) => ({ ...s, rows: 1 }))
+    shelves.value = DEFAULT_SHELVES.map((s) => ({ ...s, rows: 1, library_ids: [] }))
     shelfLayout.value = DEFAULT_SHELF_LAYOUT
   }
 
@@ -223,6 +254,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     applyVisibleOrder,
     setShelfLayout,
     setShelfRows,
+    setShelfLibraries,
     shiftWidget,
     shiftShelf,
     removeShelf,

@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import DropdownMenu from '@/components/ui/DropdownMenu.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, apiErrorMessage, type BookCard } from '@/lib/api'
+import { confirmAndDeleteBook } from '@/lib/bookDelete'
 import { useBookMenu } from '@/lib/bookMenu'
 import { isDirEntry, openTargetOf } from '@/lib/bookOpen'
 import { READ_STATUS_OPTIONS } from '@/lib/readingThresholds'
@@ -222,79 +223,29 @@ function download(): void {
   a.click()
 }
 
-const stemOf = (n: string): string => n.replace(/\.[^./]+$/, '')
-
-/**
- * 确认文案里的兄弟文件名单（同目录、同 stem 的其它格式）。
- *
- * **只在用户真的点了「删除」时才拉**，而且走 `library.getBookDetail`（缓存优先）——
- * 多数时候零请求。拉失败就退化成不带这一行的文案：**不影响删除**，
- * 少一句提醒比删不掉好。
- */
-async function siblingNames(): Promise<string[]> {
-  const d = await library.getBookDetail(props.book.id)
-  const files = d?.files ?? []
-  const main = props.book.name
-  return files
-    .map((f) => f.name)
-    .filter((n) => n !== main && !!main && stemOf(n) === stemOf(main))
-    .map((n) => n.split('/').pop() || n)
-}
-
-/** 三份文件的中文名（第 75 期）：toast 里要指名道姓说清是哪一份没删掉。 */
-const TARGET_LABELS: Record<string, string> = {
-  library: '书库里的文件',
-  source: '本地的原件',
-  copy: '出版副本',
-}
-
-/**
- * 把三份文件的分项回执拼成一句 toast（第 75 期）。
- *
- * 全成功就说「已移入回收站」；**有任何一份失败必须说出来** —— 部分成功却报「已删除」
- * 会让用户以为删干净了，而那份文件其实还躺在原地（静默的部分成功比失败更糟）。
- */
-function deleteToast(
-  name: string,
-  targets: Record<string, { state: string; error?: string }>,
-): string {
-  const fails = Object.entries(targets).filter(([, t]) => t.state === 'failed')
-  if (!fails.length) return `《${name}》已移入回收站`
-  const which = fails.map(([k]) => TARGET_LABELS[k] ?? k).join('、')
-  return `《${name}》部分失败：${which}移不动（${fails[0][1].error || '原因未知'}），其余已进回收站`
-}
-
 /**
  * 删除：**三份文件都移入回收站**（不真删）—— 书库里的文件、收书目录里的本地原件、
  * 出版副本；进度 / 批注 / 书签 / 评分一律保留
  * （第 75 期，用户口径「删书要把本地和项目里的都删掉」）。
  *
- * 确认文案用 `window.confirm`（全站 20 余处惯例，不为这一处新增确认组件）。
- * 第三行**只在真有同 stem 兄弟时才出** —— 没有兄弟却写「其它格式不会被删除」
- * 会让人以为有别的格式存在。
+ * 第 83 期：确认文案与执行流程**收敛到 `lib/bookDelete.ts`** —— 书架行的快速预览浮层
+ * 也要删书，抄第二份必然漂移（两处确认文案不一致、或某处把「部分失败」报成「已删除」）。
+ * 本处只负责「弹 toast + 请父组件刷新」这两件调用方各自的活。
  */
 async function remove(): Promise<void> {
   close()
-  const sibs = await siblingNames()
-  const lines = [
-    `确定删除《${title.value}》？`,
-    '',
-    '· 会移入回收站：书库里的文件、收书目录里的本地原件、出版副本',
-    '· 是移入回收站（可恢复，不是真删）',
-    '· 阅读进度 / 批注 / 书签 / 评分会保留',
-  ]
-  if (sibs.length) lines.push(`· 同名的其它格式文件（${sibs.join('、')}）不会被删除`)
-  // 用户点「取消」⇒ **一个请求都不发**（双向哨兵：既没删，也没白问一次后端）
-  if (!window.confirm(lines.join('\n'))) return
-
-  try {
-    const res = await api.deleteBook(props.book.id)
-    ui.toast(deleteToast(title.value, res.targets))
+  const res = await confirmAndDeleteBook(props.book, {
+    getDetail: (id) => library.getBookDetail(id),
+    remove: (id) => api.deleteBook(id),
+  })
+  if (res.deleted) {
+    ui.toast(res.message ?? `《${title.value}》已移入回收站`)
     emit('changed', props.book, 'deleted')
-  } catch (e) {
-    // 删失败就什么都不动，所以这里**不 emit** —— 列表没必要为一次无效操作重拉一遍
-    ui.toast(apiErrorMessage(e, '删除失败'))
+    return
   }
+  // 用户点「取消」⇒ 什么都不做（既没删，也没白问一次后端）；
+  // 失败就只给一条 toast、**不 emit** —— 列表没必要为一次无效操作重拉一遍
+  if (res.error) ui.toast(res.error)
 }
 </script>
 

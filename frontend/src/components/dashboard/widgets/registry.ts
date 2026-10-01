@@ -13,13 +13,17 @@ import ReadingDnaWidget from './ReadingDnaWidget.vue'
 import ReadingGoalWidget from './ReadingGoalWidget.vue'
 import ReadingRhythmWidget from './ReadingRhythmWidget.vue'
 import ReadingStreakWidget from './ReadingStreakWidget.vue'
+import ReadingTimeWidget from './ReadingTimeWidget.vue'
 import YearProjectionWidget from './YearProjectionWidget.vue'
 
 /**
  * 部件注册表 —— 整套设计的可扩展性支点。
  *
- * 12 个部件**全部已实现**（数据来自 /api/stats、/api/books、/api/annotations）。
+ * 13 个部件**全部已实现**（数据来自 /api/stats、/api/books、/api/annotations）。
  * 渲染层与设置面板完全由本表驱动：新增部件只需在此登记，页面与面板一行都不用改。
+ *
+ * ⚠️ 前 12 件与上游 BookOrbit 的部件一一对应；第 13 件 `reading-time` 为本项目自开
+ * （上游 `reading-rhythm` 的时长语义，见 `data/dashboard.ts` 的说明）。
  */
 export interface WidgetDef {
   id: WidgetId
@@ -42,6 +46,7 @@ const IMPLEMENTED: Partial<Record<WidgetId, Component>> = {
   'diversity-score': DiversityScoreWidget,
   'year-projection': YearProjectionWidget,
   'long-wait': LongWaitWidget,
+  'reading-time': ReadingTimeWidget,
 }
 
 export const WIDGETS: WidgetDef[] = WIDGET_META.map((meta) => ({

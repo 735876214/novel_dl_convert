@@ -106,7 +106,7 @@ function handleReorder(reordered: WidgetDef[]): void {
         <div
           v-for="(w, index) in localWidgets"
           :key="w.id"
-          class="group/card relative h-55 shrink-0 overflow-hidden rounded-2xl border border-primary/40 bg-card/30 shadow-sm backdrop-blur-[1px]"
+          class="widget-card-enter group/card relative h-55 shrink-0 overflow-hidden rounded-2xl border border-primary/40 bg-card/30 shadow-sm backdrop-blur-[1px]"
           :class="WIDGET_SIZE_CLASS[w.size]"
           :style="{ animation: 'dashboardWidgetFadeUp 0.35s ease both', animationDelay: `${index * 80}ms` }"
         >
@@ -136,6 +136,17 @@ function handleReorder(reordered: WidgetDef[]): void {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+/*
+  ⚠️ scoped keyframes 不受 `main.css` 全局 `prefers-reduced-motion` 降级的保护
+  （那条只压 duration，且主题是「干脆不播」）——动画由内联样式挂上，所以这里必须
+  用 `!important` 才能压过内联声明（第 83 期与封面入场同批补上）。
+*/
+@media (prefers-reduced-motion: reduce) {
+  .widget-card-enter {
+    animation: none !important;
   }
 }
 </style>

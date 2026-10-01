@@ -9,10 +9,13 @@ import {
   SHELF_LAYOUT_LABEL,
   SHELF_ROW_OPTIONS,
   SHELF_TYPE_LABEL,
+  type ShelfDef,
   type ShelfLayout,
   type ShelfType,
 } from '@/data/dashboard'
+import { libraryScopeLabel } from '@/lib/shelfScope'
 import { useDashboardStore } from '@/stores/dashboard'
+import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 import { WIDGETS } from './widgets/registry'
@@ -23,6 +26,7 @@ import { WIDGETS } from './widgets/registry'
  * 第 82 期：**改为受控组件**（`v-model:open`）—— 入口移到首页问候语行右侧的按钮，
  * 本组件自带的右下悬浮按钮（FAB）已移除；新增「书架布局」（单列/两列）与
  * 逐书架的「行数（1/2/3）」控件。配置即时生效并持久化（无草稿态，与既有约定一致）。
+ * 第 83 期：逐书架新增「库范围」勾选区（对齐 BookOrbit 的 per-shelf 库范围）。
  *
  * 其余保持：两个标签页、逐项开关（未实现置灰）、拖拽排序（面板内仍是原生
  * `useDndSort`，与部件行的 `vue-draggable-plus` 互不影响）、恢复默认。
@@ -30,9 +34,78 @@ import { WIDGETS } from './widgets/registry'
 const open = defineModel<boolean>('open', { default: false })
 
 const dashboard = useDashboardStore()
+const library = useLibraryStore()
 const ui = useUiStore()
 
 const tab = ref<'widgets' | 'shelves'>('widgets')
+
+// ---------- 库范围（第 83 期）----------
+// ⚠️ 数据侧语义：`library_ids` 为空 = **全部书库**（唯一口径在 `lib/shelfScope.ts`）。
+// 面板只是一个编辑器：不做第二套判定，显示与判定都问 `libraryScopeLabel` / `effectiveIds`。
+/** 展开「库范围」的书架行 id（同时只开一行，免得面板被撑得很长） */
+const scopeOpenId = ref('')
+
+const knownLibraryIds = computed(() => library.libraryEntities.map((l) => l.id))
+
+/** 该行**有效**的库 id（指向已删库的陈旧 id 不算，与过滤层同一判据） */
+function effectiveIds(shelf: ShelfDef): string[] {
+  return (shelf.library_ids ?? []).filter((id) => knownLibraryIds.value.includes(id))
+}
+
+function scopeLabelOf(shelf: ShelfDef): string {
+  return libraryScopeLabel(shelf.library_ids, knownLibraryIds.value)
+}
+
+function isAllScope(shelf: ShelfDef): boolean {
+  return effectiveIds(shelf).length === 0
+}
+
+function isPicked(shelf: ShelfDef, id: string): boolean {
+  return effectiveIds(shelf).includes(id)
+}
+
+function toggleScopePanel(id: string): void {
+  scopeOpenId.value = scopeOpenId.value === id ? '' : id
+  if (scopeOpenId.value) library.loadLibraries()
+}
+
+/** 「全部书库」= 清空数组（不是另设一个「全部」magic id） */
+function chooseAllLibraries(shelf: ShelfDef): void {
+  dashboard.setShelfLibraries(shelf.id, [])
+}
+
+function selectAllLibraries(shelf: ShelfDef): void {
+  dashboard.setShelfLibraries(shelf.id, [...knownLibraryIds.value])
+}
+
+/**
+ * 勾/取消某个库。
+ *
+ * 两条交互约定（都与「空 = 全部」这条数据语义配套）：
+ *  1. 当前是「全部书库」时勾第一个库 ⇒ 变成「只有这个库」（而不是把全部 + 它一起选上）；
+ *  2. 取消**最后一个**勾选直接拒绝并提示 —— 否则会静默回到「全部书库」，
+ *     与用户「想少看一点」的意图正好相反（要全部请点「全部书库」）。
+ *
+ * ⚠️ 第 2 条踩过**受控 checkbox 的坑**（第 83 期实测）：`input` 是 `:checked` 绑定 +
+ * `@change`，so「拒绝」路径上 store 不变 ⇒ Vue 不重渲染 ⇒ 浏览器已经翻过去的原生
+ * 勾选态留在那儿。用户看到「未勾选 + 标题还写着「1 个书库」」，再点一下还会变成**选中**
+ * （方向反了）。⇒ 拒绝时必须手动把原生态翻回去（见函数体）。
+ */
+function toggleLibraryScope(shelf: ShelfDef, id: string, ev: Event): void {
+  const now = effectiveIds(shelf)
+  if (now.includes(id)) {
+    if (now.length <= 1) {
+      ui.toast('至少选一个书库；要展示全部请点「全部书库」')
+      // 拒绝时把原生勾选态翻回去（见上方注释）：`:checked` 受控 + 无重渲染 ⇒ 界面停在中间态
+      const el = ev.target as HTMLInputElement | null
+      if (el) el.checked = true
+      return
+    }
+    dashboard.setShelfLibraries(shelf.id, now.filter((x) => x !== id))
+    return
+  }
+  dashboard.setShelfLibraries(shelf.id, [...now, id])
+}
 
 const widgetDnd = useDndSort({ onCommit: (from, to) => dashboard.moveWidget(from, to) })
 const shelfDnd = useDndSort({ onCommit: (from, to) => dashboard.moveShelf(from, to) })
@@ -288,6 +361,76 @@ function onReset(): void {
               </button>
             </div>
             <span class="text-[10.5px] text-muted-foreground">行封面（窄屏自动压到 2 行）</span>
+          </div>
+
+          <!-- 库范围（第 83 期，对齐 BookOrbit 的 per-shelf 库范围）：不勾 = 全部书库 -->
+          <div class="mt-1.5 pl-6">
+            <button
+              type="button"
+              class="flex w-full cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-muted"
+              :aria-expanded="scopeOpenId === row.shelf.id"
+              @click="toggleScopePanel(row.shelf.id)"
+            >
+              <span class="shrink-0 text-[10.5px] text-muted-foreground">库范围</span>
+              <span class="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
+                {{ scopeLabelOf(row.shelf) }}
+              </span>
+              <Icon
+                :name="scopeOpenId === row.shelf.id ? 'chev' : 'chevronRight'"
+                class="h-3 w-3 shrink-0 text-muted-foreground"
+              />
+            </button>
+
+            <div v-if="scopeOpenId === row.shelf.id" class="mt-1.5 rounded-md border border-border p-2">
+              <div class="mb-1.5 flex items-center gap-1.5">
+                <button
+                  type="button"
+                  class="cursor-pointer rounded-md border px-2 py-1 text-[11px] transition-colors"
+                  :class="
+                    isAllScope(row.shelf)
+                      ? 'border-primary bg-primary/5 text-primary'
+                      : 'border-border text-foreground hover:border-primary/50'
+                  "
+                  :aria-pressed="isAllScope(row.shelf)"
+                  @click="chooseAllLibraries(row.shelf)"
+                >
+                  全部书库
+                </button>
+                <button
+                  type="button"
+                  class="cursor-pointer rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                  :disabled="!knownLibraryIds.length"
+                  @click="selectAllLibraries(row.shelf)"
+                >
+                  全选
+                </button>
+                <span class="ml-auto text-[10.5px] text-muted-foreground">按库筛这一行</span>
+              </div>
+
+              <p v-if="!library.libraryEntities.length" class="px-1 py-1 text-[11px] text-muted-foreground">
+                还没有书库
+              </p>
+              <div v-else class="max-h-44 overflow-y-auto">
+                <label
+                  v-for="l in library.libraryEntities"
+                  :key="l.id"
+                  class="flex cursor-pointer items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-muted"
+                >
+                  <input
+                    type="checkbox"
+                    class="h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
+                    :checked="isPicked(row.shelf, l.id)"
+                    @change="toggleLibraryScope(row.shelf, l.id, $event)"
+                  />
+                  <span class="min-w-0 flex-1 truncate text-[11.5px] text-foreground">{{ l.name }}</span>
+                  <span class="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">{{ l.book_count }}</span>
+                </label>
+              </div>
+
+              <p class="mt-1.5 text-[10.5px] leading-relaxed text-muted-foreground">
+                不勾任何库 = 全部书库；只勾一部分则只展示这些库的封面。
+              </p>
+            </div>
           </div>
         </div>
 

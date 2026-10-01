@@ -1,10 +1,11 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 import BookPreviewDialog from '@/components/book/BookPreviewDialog.vue'
 import { api, type BookCard, type BookDetail } from '@/lib/api'
+import { useUiStore } from '@/stores/ui'
 
 /**
  * 快速预览浮层（第 64 期 2/3）。
@@ -23,11 +24,28 @@ vi.mock('@/lib/api', () => ({
     downloadUrl: vi.fn((name: string, libraryId?: string) =>
       `/download/${name}${libraryId ? `?library_id=${libraryId}` : ''}`,
     ),
+    // 动作区（第 83 期）用到的三个接口：只有 actions 模式才会被调到
+    bookCollections: vi.fn(async () => ({ items: [] as number[] })),
+    addToCollection: vi.fn(async () => ({ ok: true })),
+    collections: vi.fn(async () => ({ items: [{ id: 1, name: '科幻', count: 0 }] })),
+    deleteBook: vi.fn(async () => ({
+      ok: true,
+      id: 'lib$aaa',
+      name: '三体.epub',
+      recycled: null,
+      siblings: [],
+      targets: { library: { state: 'recycled' } },
+    })),
   },
   apiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
 
-const m = { bookDetail: vi.mocked(api.bookDetail) }
+const m = {
+  bookDetail: vi.mocked(api.bookDetail),
+  bookCollections: vi.mocked(api.bookCollections),
+  addToCollection: vi.mocked(api.addToCollection),
+  deleteBook: vi.mocked(api.deleteBook),
+}
 
 function makeBook(over: Partial<BookCard> = {}): BookCard {
   return {
@@ -73,9 +91,9 @@ function makeDetail(over: Partial<BookDetail> = {}): BookDetail {
 let router: Router
 const mounted: VueWrapper[] = []
 
-async function mountDialog(book: BookCard | null = BOOK): Promise<VueWrapper> {
+async function mountDialog(book: BookCard | null = BOOK, actions = false): Promise<VueWrapper> {
   const w = mount(BookPreviewDialog, {
-    props: { open: true, book },
+    props: { open: true, book, actions },
     global: { plugins: [router] },
   })
   mounted.push(w)
@@ -85,6 +103,29 @@ async function mountDialog(book: BookCard | null = BOOK): Promise<VueWrapper> {
 
 function text(w: VueWrapper): string {
   return w.text().replace(/\s+/g, ' ')
+}
+
+function clickButton(w: VueWrapper, label: string): Promise<void> {
+  const btn = w.findAll('button').find((b) => b.text().trim() === label)
+  expect(btn, `没找到按钮「${label}」`).toBeTruthy()
+  return btn!.trigger('click')
+}
+
+/**
+ * `window.confirm` 的替身。
+ *
+ * ⚠️ happy-dom **根本没有实现 `confirm`**（不是默认返回 true，是这个函数不存在），
+ * 在它上面 `vi.spyOn` 会直接抛「不是一个函数」。必须自己装一个
+ *（与 `BookActionsMenu.spec.ts` 同一套做法）。
+ */
+function setConfirm(answer: boolean): Mock<(message?: string) => boolean> {
+  const spy = vi.fn<(message?: string) => boolean>(() => answer)
+  window.confirm = spy
+  return spy
+}
+
+function confirmText(spy: Mock<(message?: string) => boolean>): string {
+  return String(spy.mock.calls[0]?.[0] ?? '')
 }
 
 beforeEach(async () => {
@@ -193,5 +234,85 @@ describe('BookPreviewDialog', () => {
     // 遮罩：点在对话框**本身**上（非内容区）才算「点外面」
     await w.find('[role="dialog"]').trigger('click')
     expect(w.emitted('close')?.length).toBe(2)
+  })
+})
+
+/**
+ * 动作区（第 83 期）：书架行用它承载上游 `BookQuickView` 的「加入收藏 / 删除」。
+ *
+ * 两条契约写错都不会报错：
+ *  1. **默认不给动作** —— 书架页（既有调用方）不传 `actions`，多出一排动作等于
+ *     在别人的页面上加按钮；连带「按需拉收藏夹」也会变成每次开预览都多发两个请求。
+ *  2. **删除沿用同一套确认**（`lib/bookDelete.ts`）—— 取消时一个请求都不发；
+ *     删成功后必须关掉浮层（它正在预览一本已经没有的书）。
+ */
+describe('BookPreviewDialog：动作区（第 83 期）', () => {
+  it('默认不给动作区，也不去拉收藏夹（既有调用方行为一字不变）', async () => {
+    const w = await mountDialog()
+
+    expect(w.find('select').exists()).toBe(false)
+    expect(w.findAll('button').some((b) => b.text().trim() === '删除')).toBe(false)
+    // 「详细信息」仍在主行里（默认模式的布局没变）
+    expect(w.findAll('button').some((b) => b.text().trim() === '详细信息')).toBe(true)
+    expect(m.bookCollections).not.toHaveBeenCalled()
+    expect(m.deleteBook).not.toHaveBeenCalled()
+  })
+
+  it('删除：点「取消」⇒ 一个请求都不发，也不关浮层', async () => {
+    const spy = setConfirm(false)
+    const w = await mountDialog(BOOK, true)
+
+    await clickButton(w, '删除')
+    await flushPromises()
+
+    expect(confirmText(spy)).toContain('确定删除《三体》？')
+    expect(m.deleteBook).not.toHaveBeenCalled()
+    expect(w.emitted('changed')).toBeUndefined()
+    expect(w.emitted('close')).toBeUndefined()
+  })
+
+  it('删除：确认后调一次接口、关掉浮层并请父组件刷新', async () => {
+    setConfirm(true)
+    const w = await mountDialog(BOOK, true)
+
+    await clickButton(w, '删除')
+    await flushPromises()
+
+    expect(m.deleteBook).toHaveBeenCalledTimes(1)
+    expect(m.deleteBook).toHaveBeenCalledWith('lib$aaa')
+    // 删掉的书不能继续预览 ⇒ 必须关；父组件据此重拉封面带
+    expect(w.emitted('close')).toBeTruthy()
+    expect(w.emitted('changed')?.[0]).toEqual([BOOK, 'deleted'])
+    expect(useUiStore().toastMessage).toContain('已移入回收站')
+  })
+
+  it('加入收藏：没选夹时按钮不可点；选好之后调一次接口并通知父组件', async () => {
+    setConfirm(true)
+    const w = await mountDialog(BOOK, true)
+
+    const addBtn = w.findAll('button').find((b) => b.text().trim() === '加入')!
+    expect(addBtn.attributes('disabled')).toBeDefined()
+
+    await w.find('select').setValue('1')
+    await addBtn.trigger('click')
+    await flushPromises()
+
+    expect(m.addToCollection).toHaveBeenCalledWith(1, 'lib$aaa')
+    expect(w.emitted('changed')?.[0]).toEqual([BOOK, 'collection'])
+    // 加入**不**关浮层（用户可能还要接着开读 / 看简介）
+    expect(w.emitted('close')).toBeUndefined()
+  })
+
+  it('加入收藏失败：只给一条 toast，不谎报成功', async () => {
+    setConfirm(true)
+    m.addToCollection.mockRejectedValueOnce(new Error('后端连不上'))
+    const w = await mountDialog(BOOK, true)
+
+    await w.find('select').setValue('1')
+    await clickButton(w, '加入')
+    await flushPromises()
+
+    expect(useUiStore().toastMessage).toContain('加入收藏失败')
+    expect(w.emitted('changed')).toBeUndefined()
   })
 })
