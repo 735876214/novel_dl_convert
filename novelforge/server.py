@@ -41,6 +41,8 @@ from .sources import source_of
 from .sources import store
 from .sources import rules as source_rules
 from .sources import toc_sources      # 第 85 期批次 B：官方书城「只取目录」
+from .sources import ledger as source_ledger   # 第 86 期：书源导入 / 台账 / 导出
+from .sources import legado as legado_mod      # 第 86 期：重新分析要用它重跑判定
 
 # 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在
 # （用户书源在 novelforge.sources 包导入时已自动加载）
@@ -471,7 +473,170 @@ async def api_upload_sources(file: UploadFile = File(...)):
 def api_delete_source(name: str):
     if not store.remove_rule(name):
         raise HTTPException(404, "书源不存在或为内置源（不可删）")
+    db.source_ledger_delete(name)          # 台账跟着走：留下孤立行会让列表出现「幽灵源」
     return {"ok": True}
+
+
+# ---------------- 书源导入 / 台账 / 导出（第 86 期）----------------
+
+#: 差异表下行要回给前端的字段。**刻意不回** `converted_rule` 与 `raw`：
+#: 那是整条规则本体，一份文件里几百条源就几 MB —— 界面要的只是「结论」。
+_IMPORT_ROW_KEYS = ("name", "display_name", "group", "source_type", "supported", "verdict",
+                    "unsupported_fields", "notes", "dedup_key", "rule_hash", "conflict_with",
+                    "changed_fields")
+
+
+def _import_row_out(row: dict) -> dict:
+    return {k: row[k] for k in _IMPORT_ROW_KEYS}
+
+
+@app.post("/api/sources/import")
+async def api_sources_import(payload: dict = Body(...)):
+    """导入书源（Legado 原文或本项目导出文件）：**默认 dry-run**，先出差异表再落盘。
+
+    body::
+
+        {"payload": <JSON 文本 | 对象 | 数组>,   # 也接受 JSONL 文本
+         "origin": "paste" | "文件名",
+         "dry_run": true,                        # 默认 true ⇒ **一个字节都不写**
+         "resolutions": {"源名": "skip" | "overwrite" | "keep_both"}}
+
+    ⚠️ `resolutions` 里**非法取值一律当没给**（退回判定的默认动作），而不是悄悄当成
+    `overwrite` —— 「拼错一个单词就把用户的书源盖掉」是本期最不能出的错。
+    ⚠️ 覆盖 / 更新前一律**先把旧规则原文存进历史**（`source_ledger_history`），
+    `POST /api/sources/{name}/rollback` 可以还原。
+    """
+    p = payload or {}
+    entries = source_ledger.entries_of(p.get("payload"))
+    if not entries:
+        raise HTTPException(400, "无法解析书源：请提供 JSON 对象 / 数组 / JSONL")
+    origin = str(p.get("origin") or "paste")[:200]
+    rows = source_ledger.plan(entries, origin=origin)
+    if p.get("dry_run", True):
+        return {"dry_run": True, "origin": origin,
+                "rows": [_import_row_out(r) for r in rows]}
+    res = {k: v for k, v in (p.get("resolutions") or {}).items()
+           if v in source_ledger.RESOLUTIONS}
+    return {"dry_run": False, "origin": origin,
+            **source_ledger.apply(rows, origin=origin, resolutions=res)}
+
+
+@app.get("/api/sources/imports")
+def api_source_imports(limit: int = Query(20)):
+    """导入历史（新的在前）：每次导入了什么、各档多少条、逐条结论。"""
+    return {"items": db.source_imports(int(limit))}
+
+
+@app.get("/api/sources/export")
+def api_sources_export():
+    """导出全部**用户源**为一份可再导入的文件（导出→导入是幂等的，测试钉住）。"""
+    return source_ledger.export_payload()
+
+
+@app.get("/api/sources/ledger")
+def api_sources_ledger():
+    """台账全量（**去掉 `raw_json`**）：验证 / 追更 / 档位 / 分组都在这儿。
+
+    `raw_json` 是本条书的原文副本，动辄几 KB —— 列表接口没必要背它，
+    要原文的场景（重新分析 / 导出）由后端自己从库里读。
+    """
+    return {"items": [{k: v for k, v in row.items() if k != "raw_json"}
+                      for row in db.source_ledger_all()]}
+
+
+@app.get("/api/sources/{name}/history")
+def api_source_history(name: str, limit: int = Query(20)):
+    """覆盖历史（只有元数据，不含旧规则原文）。"""
+    return {"items": db.ledger_history_list(name, int(limit))}
+
+
+@app.post("/api/sources/{name}/enabled")
+def api_source_enabled(name: str, payload: dict = Body(...)):
+    """启停一个书源。⚠️ 文件不动，只不注册；内置源**如实拒绝**（返回 400 与原因）。"""
+    ok, why = store.set_enabled(name, bool((payload or {}).get("enabled", True)))
+    if not ok:
+        raise HTTPException(400, why)
+    return {"ok": True, "enabled": bool((payload or {}).get("enabled", True))}
+
+
+@app.post("/api/sources/{name}/rollback")
+def api_source_rollback(name: str, payload: dict = Body(...)):
+    """回滚到某一条历史里的旧规则（「覆盖前已备份」的兑现处）。"""
+    hid = str((payload or {}).get("history_id") or "")
+    if not hid:
+        raise HTTPException(400, "缺少 history_id")
+    try:
+        return source_ledger.rollback(name, hid)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.post("/api/sources/{name}/reanalyze")
+def api_source_reanalyze(name: str):
+    """按台账里的**原始原文**重新判定能力档位（引擎升级后老源的重新体检）。
+
+    ⚠️ 只对**导入来的源**有意义（手写源没有原始原文）—— 那种情况如实说清，
+    不假装「分析过了」。
+    """
+    row = db.source_ledger_get(name)
+    if not row:
+        # ⚠️ 手写源**没有台账行**（台账只在导入时写）—— 这不是「源不存在」，
+        #    而是「没有原始原文可重跑判定」。两者要分开说，否则用户会以为自己的源丢了。
+        exists = name in REGISTRY or pathlib.Path(config.SOURCES_DIR, f"{name}.json").is_file()
+        raise HTTPException(400 if exists else 404,
+                            "这条源没有原始记录（手写源请直接编辑规则）" if exists else "书源不存在")
+    raw = row.get("raw_json") or ""
+    if not raw:
+        raise HTTPException(400, "这条源没有原始记录（手写源请直接编辑规则）")
+    try:
+        ent = json.loads(raw)
+    except Exception:                                        # noqa: BLE001
+        raise HTTPException(400, "原始记录已损坏，无法重新分析")
+    an = legado_mod.analyze(ent)
+    rule = an.get("converted_rule")
+    if rule and an.get("supported") != "no":
+        store.add_rule(rule)                                 # 现在能跑了 ⇒ 真的让它能跑
+    db.source_ledger_upsert(name, supported=an.get("supported", "yes"),
+                            source_type=an.get("source_type", "text"),
+                            unsupported=an.get("unsupported_fields", []),
+                            notes=an.get("notes", []),
+                            rule_hash=legado_mod.rule_hash(ent))
+    return {"name": name, "supported": an.get("supported"),
+            "unsupported_fields": an.get("unsupported_fields", []),
+            "usable": bool(rule) and an.get("supported") != "no"}
+
+
+@app.post("/api/sources/bulk")
+def api_sources_bulk(payload: dict = Body(...)):
+    """批量操作：`enable` / `disable` / `delete` / `reanalyze`（**逐条回报，不整批失败**）。
+
+    逐条回结果而不是「成功就 200 / 失败就 500」：混选里必然有内置源与未知源，
+    整批失败会让用户不知道哪几条真的动了。
+    """
+    p = payload or {}
+    action = str(p.get("action") or "")
+    names = [str(n) for n in (p.get("names") or []) if n]
+    if action not in ("enable", "disable", "delete", "reanalyze"):
+        raise HTTPException(400, "action 只支持 enable / disable / delete / reanalyze")
+    if not names:
+        raise HTTPException(400, "names 不能为空")
+    items = []
+    for name in names:
+        try:
+            if action in ("enable", "disable"):
+                ok, why = store.set_enabled(name, action == "enable")
+                items.append({"name": name, "ok": ok, "note": why})
+            elif action == "delete":
+                ok = store.remove_rule(name)
+                db.source_ledger_delete(name)
+                items.append({"name": name, "ok": ok,
+                              "note": "" if ok else "书源不存在或为内置源（不可删）"})
+            else:
+                items.append({"name": name, **api_source_reanalyze(name)})
+        except HTTPException as e:
+            items.append({"name": name, "ok": False, "note": str(e.detail)})
+    return {"action": action, "items": items,
+            "ok_count": sum(1 for i in items if i.get("ok", True) and not i.get("note"))}
 
 
 @app.post("/api/sources/test")

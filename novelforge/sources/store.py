@@ -160,11 +160,15 @@ def sources_status() -> list[dict]:
 
 
 def list_sources() -> list[dict]:
-    """列出全部已注册书源，标注是否为用户源，并**合并台账**（一次查询，不做 N+1）。
+    """列出**全部**书源：内置源 + 用户源（**含已停用的**），并合并台账（一次查询，不做 N+1）。
 
     台账给列表补四样东西：`enabled`（启停）、`imported`（是不是导入来的）、
     `supported`（yes / partial / no）、`group`（Legado 的 bookSourceGroup）。
     没有台账行的源按「启用 / 未导入 / 可用 / 无分组」处理 —— 手写源就是这个形态。
+
+    ⚠️ **停用的源不在 REGISTRY**（见 :func:`set_enabled`），但它**必须出现在列表里**：
+    否则界面上「停用」等于「消失」，用户再也点不回来。这类条目现场从规则文件里读
+    `display_name` / `domains` / `public` 补齐 —— 文件一直都在，本来就不该丢信息。
     """
     d = _sources_dir()
     user_names = {p.stem for p in d.glob("*.json")}
@@ -172,22 +176,42 @@ def list_sources() -> list[dict]:
         ledger = {r["name"]: r for r in db.source_ledger_all()}
     except Exception:                                        # noqa: BLE001
         ledger = {}          # 台账读不到不能让整份书源列表消失
-    out = []
-    for name, cls in REGISTRY.items():
+
+    def _row(name: str, cls) -> dict:
         row = ledger.get(name) or {}
-        # 用户源以文件存在为准；内置源（如 gutenberg）无对应文件
-        out.append(
-            {
-                "name": name,
-                "display_name": getattr(cls, "display_name", name),
-                "domains": list(getattr(cls, "domains", [])),
-                "public": bool(getattr(cls, "public", True)),
-                "user": name in user_names,
-                "enabled": bool(row.get("enabled", True)),
-                "imported": bool(row.get("imported", False)),
-                "supported": row.get("supported", "yes"),
-                "group": row.get("group_name", ""),
-            }
-        )
+        if cls is not None:
+            display_name = getattr(cls, "display_name", name)
+            domains = list(getattr(cls, "domains", []))
+            public = bool(getattr(cls, "public", True))
+        else:                       # 停用的用户源：没注册，只能从文件里读
+            rule = _read_rule_file(d / f"{name}.json")
+            display_name = str(rule.get("display_name") or name)
+            domains = [str(x) for x in (rule.get("domains") or [])]
+            public = bool(rule.get("public", True))
+        return {
+            "name": name,
+            "display_name": display_name,
+            "domains": domains,
+            "public": public,
+            # 用户源以文件存在为准；内置源（如 gutenberg）无对应文件
+            "user": name in user_names,
+            "enabled": bool(row.get("enabled", True)),
+            "imported": bool(row.get("imported", False)),
+            "supported": row.get("supported", "yes"),
+            "group": row.get("group_name", ""),
+        }
+
+    out = [_row(n, REGISTRY.get(n)) for n in sorted(set(REGISTRY) | user_names)]
     out.sort(key=lambda x: (not x["user"], x["name"]))
     return out
+
+
+def _read_rule_file(path: Path) -> dict:
+    """读一个规则文件（坏文件当空字典：列表少显示几个字段，总好过整页报错）。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:                                        # noqa: BLE001
+        return {}
+    if isinstance(data, list):
+        return data[0] if data and isinstance(data[0], dict) else {}
+    return data if isinstance(data, dict) else {}
