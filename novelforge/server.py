@@ -987,6 +987,32 @@ def _task_out(row: dict | None) -> dict:
     return row
 
 
+def _product_kind(name: str) -> str:
+    """这条书源产出的是哪一类产物：``comic`` / ``audio`` / ``text``（第 86 期）。
+
+    判据**在规则里**（`book.mode`）—— 书源自报它给什么，不让用户猜、也不用另开配置键；
+    认不出来的（含内置 Python 适配器：它们在磁盘上没有规则文件）一律按 `text` 走，
+    既有行为一字不变。
+    """
+    mode = str(((_load_rule(str(name or "")).get("book") or {})).get("mode") or "").lower()
+    return mode if mode in ("comic", "audio") else "text"
+
+
+#: 产物类型 → 交给 `resolve_target` 判库用的**代表文件名**。
+#: ⚠️ 音频产物最终是**目录**，但 `resolve_target` 是按**扩展名 + 关键词**判库的 ——
+#: 传目录名会让「只收音频的库」认不出来，那本书就落不进任何库（只能报「没有可接收的书库」）。
+_KIND_PROBE_NAME = {"text": "{t}.epub", "comic": "{t}.cbz", "audio": "{t}.mp3"}
+
+
+async def _dispatch_product(mgr, kind: str, item: dict, root, opts: dict):
+    """按产物类型分流下载（第 86 期）：文本 → EPUB、漫画 → CBZ、有声书 → 目录树。"""
+    if kind == "comic":
+        return await mgr.download_comic(item, root, opts)
+    if kind == "audio":
+        return await mgr.download_audio(item, root, opts)
+    return await mgr.download_to(item, root, INPUT_DIR, opts)
+
+
 @app.post("/api/download")
 async def api_download(request: Request, item: dict = Body(...)):
     mgr = _manager()
@@ -1006,14 +1032,16 @@ async def api_download(request: Request, item: dict = Body(...)):
     title = item.get("title") or item.get("url") or "(未命名)"
     # 源名走 `source_of()` 统一读法：原先这里读 `item["source"]`，而那时的结果条目里
     # 只有 `_source` ⇒ 任务详情里的来源一栏一直是空的（第 71 期一起修掉）。
-    detail = " · ".join(str(x) for x in (src_name, item.get("format")) if x)
+    kind = _product_kind(src_name)
+    detail = " · ".join(str(x) for x in (src_name, kind if kind != "text" else "",
+                                         item.get("format")) if x)
     db.task_create(tid, "download", title, detail=detail, actor=actor)
     db.task_prune()          # 只留最近 200 条，避免表无限增长
-    asyncio.create_task(_run_download(tid, item, actor))
-    return {"task_id": tid}
+    asyncio.create_task(_run_download(tid, item, actor, kind))
+    return {"task_id": tid, "kind": kind}
 
 
-async def _run_download(tid: str, item: dict, actor: str = "系统"):
+async def _run_download(tid: str, item: dict, actor: str = "系统", kind: str = "text"):
     # progress 只记**真实里程碑**：0 = 已入队、50 = 已开始、100 = 已结束。
     # 下载器不报细分进度，因此不伪造中间百分比。
     db.task_update(tid, status="running", progress=50.0)
@@ -1021,7 +1049,9 @@ async def _run_download(tid: str, item: dict, actor: str = "系统"):
         mgr = _manager()
         # 多书库：书源下载走产出 EPUB，按「来源子目录名 → 格式 → 关键词」归库。
         # 没有可接收的库（一个库都没有，或规则不命中）⇒ 拒收，如实报错，不猜落点。
-        _dl_name = f"{item.get('title') or 'book'}.epub"
+        kind = kind or "text"
+        _dl_name = _KIND_PROBE_NAME.get(kind, "{t}.epub").format(
+            t=item.get("title") or "book")
         tgt = library_rules.resolve_target(
             name=_dl_name,
             meta={"title": item.get("title"), "author": item.get("author")},
@@ -1031,18 +1061,21 @@ async def _run_download(tid: str, item: dict, actor: str = "系统"):
         # 第 13 期：产物格式 / 落盘布局按**目标库**取（库没覆写时等于全局值）
         opts = {"force": True, "merge": True,
                 "cfg": lib_settings.config_for(tgt["library_id"] or None)}
-        res = await mgr.download_to(item, tgt["root"], INPUT_DIR, opts)
+        res = await _dispatch_product(mgr, kind, item, tgt["root"], opts)
         notice = opts.get("_notice", "")
-        name = pathlib.Path(res).name
+        path = pathlib.Path(res)
+        name = path.name
         db.task_update(tid, status="done", progress=100.0,
                        result=f"/download/{name}", fname=name, notice=notice)
         activity_log.log_convert_ok(
             item.get("title") or name, name, source="download",
-            size=(pathlib.Path(res).stat().st_size if pathlib.Path(res).exists() else None),
+            # 音频产物是**目录**：对目录取 st_size 是个毫无意义的数字，如实留空
+            size=(path.stat().st_size if path.is_file() else None),
             detail=notice, actor=actor,
         )
-        # 下载已顺带生成 EPUB，把刚落盘的 txt 登记为已处理，避免监听线程重复转换
-        if WATCHER is not None:
+        # ⚠️ 只有「文本」这条链路会顺带落一个 txt，才需要把它登记为已处理；
+        #    漫画 / 音频不产 txt，无条件 mark_recent 会把同一时间窗里**别人的** txt 一起盖掉。
+        if kind == "text" and WATCHER is not None:
             await asyncio.to_thread(WATCHER.mark_recent, seconds=30, suffix=".txt")
     except Exception as e:
         db.task_update(tid, status="failed", progress=100.0, error=str(e))

@@ -74,11 +74,16 @@ def _set_download(monkeypatch, tmp_path, *, enabled: bool, public_only: bool = T
     config.save_overrides({"download": {"enabled": enabled, "public_only": public_only}})
 
 
-async def _noop_run_download(tid: str, item: dict, actor: str = "系统") -> None:
+async def _noop_run_download(tid: str, item: dict, actor: str = "系统",
+                            kind: str = "text") -> None:
     """把后台下载换成空操作：本文件测的是**入口拦截**，不是下载本身。
 
     少了这一步，后台任务会在测试结束、库已关闭之后才动手（第 39 期那类
     「线程攥着旧连接查库」的随机失败）。
+
+    ⚠️ 签名要**跟着 `server._run_download` 走**（第 86 期给它加了 `kind`：文本 / 漫画 / 音频
+    三类产物分流）。这里刻意**写全参数**而不是 `*args`：哪天又加参数，这条桩会当场报错，
+    而不是把新参数悄悄吞掉 —— 那正好是「测试还绿着、线上已经不对」的经典成因。
     """
     return None
 
