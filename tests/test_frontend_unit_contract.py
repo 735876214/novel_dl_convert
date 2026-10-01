@@ -114,6 +114,20 @@ EXPECTED_SPECS = (
     "src/lib/shelfRows.spec.ts",
     "src/lib/dashboardGreeting.spec.ts",
     "src/composables/useWidgetState.spec.ts",
+    # 第 83 期：书架行的「库范围」筛选。它的失效方式是**静默的** —— 空数组代表「全部书库」，
+    # 一旦写成「空 = 什么都不显示」，用户删库或库列表尚未加载回来时整行封面会凭空消失，
+    # 而界面上没有任何东西能解释为什么。故用 spec 逐条钉住四种退化路径。
+    "src/lib/shelfScope.spec.ts",
+    # 第 83 期：删书流程（书卡 ⋮ 菜单与快速预览浮层共用）。写错全是静默的：没有兄弟却说
+    # 「其它格式不会被删」、有兄弟却漏说、三份里有一份移不动却报「已移入回收站」
+    # （静默的部分成功比失败更糟）。
+    "src/lib/bookDelete.spec.ts",
+    # 第 83 期：自定义面板的「库范围」勾选区。这一条是**界面冒烟实测抓到的真缺陷**：
+    # checkbox 是受控的（`:checked` + `@change`），而「取消最后一个勾选」那条路径**故意
+    # 不改 store**（拒绝）⇒ Vue 不重渲染 ⇒ 浏览器翻过去的原生勾选态留在原地。用户看到
+    # 「未勾选 + 标题还写着「1 个书库」」，而且再点一下会变成**选中**（方向反了）。
+    # ⇒ 拒绝时必须把 `input.checked` 翻回去；不测就会静默回归。
+    "src/components/dashboard/DashboardSettingsSheet.spec.ts",
 )
 
 
