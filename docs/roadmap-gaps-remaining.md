@@ -3664,3 +3664,91 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
   §4 的改造顺序表补「现状」列（①–④⑥⑧ ✅ / ⑤⑦⑨ ◐ 部分 / 「不做」行里 `vue-draggable-plus` 是**唯一翻转项**）、
   §5 五条待确认各补「处置」、§1.2 清单同步增删。⇒ 下次对照上游**从 §7.2 起，不再从 §2 起**。
 - 无用户可见变化（纯清理与文档）；`type-check` / `test:unit`（456 例）复跑全绿，文档锚点零新增漂移。
+
+---
+
+## 第 83 期 · 仪表盘余留项（库范围筛选 / 封面动画与细节 / 第 13 件部件 / 快速预览，V0.83.0，2026-10-01）
+
+**来源**：用户指定「按 `docs/bookorbit/bookorbit-dashboard-styles.md` 的 §7.2 逐区块现状与 §5 待确认项，
+出下一期计划」。规划阶段三轮问答定范围：**做**「每书架库范围筛选」+「封面入场动画与部件细节收尾」；
+`reading-rhythm` 语义**另开第 13 件部件**（保留入库节奏）；书架行「点封面」**改成 QuickView 浮层**。
+**不做**：整页三态分支（用户未选，且本项目没有单一「页面加载」信号）、上游截图肉眼比对。
+
+### 一、上游核对（两处修正）
+
+1. ⚠️ **路径修正**：上游的快速预览组件**不在 dashboard 特性下**，是
+   `client/src/features/book/components/BookQuickView.vue`（同目录另有 `BookCoverCard.vue` /
+   `AddToCollectionSheet.vue` / `DeleteBookDialog.vue` + `composables/useDeleteBook.ts`）。
+   计划里写的 `client/src/features/dashboard/components/BookQuickView.vue` **不存在**。
+2. ⚠️ **触发方式修正**：上游是**封面卡上的动作菜单 → `quick-view`**（动作集合
+   `quick-view` / `edit-metadata` / `add-to-collection` / `move-to-library` / `delete`），**不是点封面**。
+   本项目按用户口径改成「点封面即开预览」（少一次点击），浮层内仍可一步进完整详情。
+   ⚠️ 上游该组件的**内部实现本轮没读到**（本机 web 取不回、临时目录 sparse-checkout 补检被权限弹窗挡掉）
+   ⇒ 本项目**不照抄它**，而是扩展自有的 `BookPreviewDialog.vue`（第 64 期，内容更全：从书卡取全部元信息 + 详情补章节与简介）。
+3. 错峰公式照上游 `coverAnimationDelay(index) = index * 35ms`（`DashboardScroller.vue`）；⚠️ 上游 `index` 是**带内序号**
+   （每带从 0 重置），故实际最大延迟 ≈ 每带封面数 × 35ms，本项目再加 `min(..., 700ms)` 上限兜底。
+
+### 二、实施（逐块）
+
+**① 库范围筛选（`ShelfDef.library_ids`）**
+- `data/dashboard.ts`：`ShelfDef` 增 `library_ids?: string[]`，注释写明与 `scope`（智能书架筛选键）是**两个维度**。
+- 新增 `lib/shelfScope.ts`：`filterByLibraries(books, libraryIds, knownLibraryIds)` ——
+  **空 = 全部书库**（与 `CustomFieldDef.library_ids` 同口径）；**指向已删库的 id 忽略**；
+  有效项全无（库全删 / 库列表未加载）⇒ **退化回全部**（宁可多显示，也不静默清空）；缺 `library_id` 的旧书目按「不在所选库」处理。
+  另有 `libraryScopeLabel` 供面板摘要（选满 = 显示「全部书库」，两者效果确实相同）。
+- `stores/dashboard.ts`：`normalizeLibraryIds`（去重 + 只留非空字符串）+ `mergeShelves` 补默认 + `setShelfLibraries` + `reset` 清空。
+- `DashboardShelfRow.vue`：过滤层叠在 `allBooks` **之后**（四种行类型统一生效）；空态区分「被范围筛掉」与「本来没有」并提示调整位置。
+- `DashboardSettingsSheet.vue`：逐书架可折叠「库范围」区（全部书库 / 全选 / 逐库 checkbox + 书籍数）；
+  两条交互约定：当前是「全部书库」时勾第一个库 ⇒ 变成只有这个库；**取消最后一个勾选直接拒绝并提示**
+  （否则会静默回到「全部书库」，与用户「想少看一点」的意图相反）。
+
+**② 第 13 件部件「阅读时长」（`reading-time`）**
+- `data/dashboard.ts`：`WidgetId` 追加 + `WIDGET_META` 一条（窄卡）+ 头注释「12」→「13」；**不进** `DEFAULT_WIDGET_IDS`。
+- 新增 `widgets/ReadingTimeWidget.vue`：数据取 `/api/stats` 的 `reading_28d`（每日**秒**）+ `window`，
+  与统计页的节奏图同源、零新增接口；`fmtDuration` 复用 `lib/format.ts`；走 `useWidgetState` 三分支（空态 = 窗口内没有记录）。
+- `registry.ts` 登记 + 头注释改 13；`composables/useWidgetState.ts` 头注释「12 件」→「13 件」。
+- 新增 `tests/test_dashboard_widget_contract.py`：钉住「**前 12 个 id 与上游逐一对应 + 1 件自开**」、
+  `WIDGET_META` 与联合类型逐字一致、`registry` 无漏登记且组件文件都在、新增件不默认启用、部件不许再加壳。
+
+**③ 快速预览浮层（QuickView）**
+- 新增 `lib/bookDelete.ts`：把书卡 ⋮ 菜单里的删除流程（确认文案 / 同 stem 兄弟名单 / 「部分失败」点名）
+  抽成唯一真值源（`siblingNamesOf` / `deleteConfirmLines` / `deletedToast` / `confirmAndDeleteBook`）；
+  `BookActionsMenu.vue` 改为调用它（**删掉了原地的第二份实现**）。
+- `BookPreviewDialog.vue`：新增 `actions?: boolean`（默认 `false` ⇒ 既有调用方零影响）与 `changed(book, kind)` 事件；
+  `actions` 为真时底部多一排「加入收藏（选夹 + 加入） / 删除 / 详细信息」。
+  ⚠️ 边界不破：仍**不给**批注 / 阅读日志 / 文件路径 / 编辑入口。
+- `DashboardShelfRow.vue`：点封面改开浮层；浮层用 `<Teleport to="body">` ——
+  书架行外壳带 `backdrop-blur`，会让 `fixed` 后代以外壳为包含块（浮层会被裁进卡片）；
+  删除成功后 `library.loadBooks(true)` 重拉封面带。
+- 边界说明：上游 `edit-metadata`（等于开第二个详情页）与 `move-to-library`（本项目移动在书库管理里做）**不做**。
+
+**④ 封面动画与部件细节**
+- `lib/shelfRows.ts` 增 `coverDelayMs`（错峰 + 上限兜底，纯函数可测）；`DashboardShelfRow.vue` 加 scoped keyframes
+  与 `prefers-reduced-motion` 降级（scoped 动画不受 `main.css` 全局降级保护）；`DashboardWidgetRow.vue` 同批补降级
+  （其动画挂在内联样式上，故降级规则需 `!important`）。
+- 细节收尾：`currently-reading` / `neglected-gems` / `long-wait` 补封面缩略图；后两件补「开始阅读 / 收听」；
+  `year-projection` 补趋势图标（后半程 vs 前半程，升 / 降 / 平用**语义色**，差值 < 0.15 本/天算持平）；
+  `lib/icons.ts` 新增 `trendingUp` / `trendingDown` / `minus` 三个键。
+- ⚠️ 顺带修一处真缺陷：这三件此前打开目标写死 `/read/`（或详情页），**有声书点下去会进打不开的阅读器**；
+  现统一走 `lib/bookOpen.ts` 的 `openTargetOf`。
+
+### 三、测试与验证
+
+- 新增前端 spec：`lib/shelfScope.spec.ts`（8 例：空 / 全选 / 部分 / 陈旧 id 忽略 / 有效项全无退化 / 缺 library_id / 不改入参 + 摘要）、
+  `lib/bookDelete.spec.ts`（11 例：兄弟名单 / 确认文案两态 / 回执全成功与部分失败 / 取消不发请求 / 详情失败不影响删除 / 失败不抛）；
+  两者均登记进 `tests/test_frontend_unit_contract.py::EXPECTED_SPECS`；`lib/shelfRows.spec.ts` 补错峰与上限用例。
+- 既有 spec 同步：`BookPreviewDialog.spec.ts` 扩 mock（`bookCollections` / `addToCollection` / `collections` / `deleteBook`）
+  并加 5 例动作区契约（默认不给动作、取消不发请求、删除成功关浮层 + 通知父组件、加入收藏、加入失败不谎报）。
+- ⚠️ **本轮验证未跑完**：实施期间本机**命令通道不可用**（权限弹窗连续超时，`npm` / `pytest` 均无法执行）
+  ⇒ 前端四连（`type-check` / `test:unit` / `build` / `deploy`）与后端 `pytest`
+  **待下一次会话补跑**；`VERSION` 已改 0.83.0、`CHANGELOG` 段已写，**提交与推送同样待补**。
+  交付前必须在能跑命令的环境复核一遍（尤其 `BookPreviewDialog.spec.ts` 的新用例与 `test_dashboard_widget_contract.py` 的正则形状）。
+
+### 四、未做 / 取舍
+
+- **整页三态分支**仍未做（用户本轮未选）：本项目没有单一的「页面加载」信号，硬造一个页面级 loading 只会是假的
+  （与第 80 期「消灭假开关」同一口径）。
+- 上游 `edit-metadata` / `move-to-library` 两个动作不做（见三、③ 的边界说明）。
+- 「库范围」**不做**「按库删掉陈旧 id」的清理：指向已删库的 id 在过滤与摘要里都被忽略，留着无害；
+  真要清理得等面板打开时顺手 prune，收益不足。
+- 「阅读时长」部件**默认关闭**：存量用户升级后不该凭空多出一张卡。

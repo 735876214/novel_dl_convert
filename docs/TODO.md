@@ -3,16 +3,20 @@
 > 维护约定：**完成即移入「已完成」并写清 commit/期号**；每条待办要带**证据**（数字、文件、复现方式），
 > 不写「优化一下性能」这种没有判据的条目。较长的逐期记录放 `docs/roadmap-gaps-remaining.md`。
 
-**最后更新**：2026-10-01（**第 82 期已交付**：V0.82.0 —— 首页（仪表盘）逐项对齐上游 BookOrbit；第一步对照基线在 `docs/bookorbit/bookorbit-dashboard-styles.md`，实施记录见 `docs/roadmap-gaps-remaining.md` 第 82 期）
+**最后更新**：2026-10-01（**第 83 期已实施**：V0.83.0 —— 仪表盘余留项：库范围筛选 / 封面动画与部件细节 / 第 13 件「阅读时长」/ 快速预览浮层；⚠️ **验证与提交待补**，见第 0 节）
 
 ## 0. 当前状态
 
-- ✅ **第 82 期已交付**（V0.82.0，首页对齐上游；本轮纯前端，无用户侧补救动作。第 81 期那条「回收站还原」若线上还没点，仍需做一次）。
-- HEAD = 第 82 期（V0.82.0）；工作区干净（仅 `.vscode/settings.json` 是各人本机设置，**不属于仓库改动**）。
-- 测试基线：后端 **1335 例（1323 passed / 12 skipped / 0 failed）**（`pytest`，离线）；前端 **456 例 / 41 个 spec**（`npm run test:unit`）。
-- 版本：`VERSION` = **0.82.0**（单一真值源，`GET /health` 下发）；每个版本在 `CHANGELOG.md` 有一段。
-- ⚠️ 前端自本期起有**显式运行时依赖** `vue-draggable-plus`（仪表盘部件行内拖拽；原生 HTML5 DnD 触屏不触发，
-  理由记录在 `docs/architecture.md` 不变量第 6 条与组件头注释 —— 第 80 期「显式引入须声明理由」口径下的第一个）。
+- ⚠️ **第 83 期代码已全部落盘，但「跑验证 + 提交推送」未完成** —— 实施期间本机命令通道不可用
+  （权限弹窗连续超时，`npm` / `pytest` / `git` 都执行不了）。下次开工**第一件事**：跑
+  `npm run type-check` + `npm run test:unit` + `npm run build` + `npm run deploy`
+  与后端 `pytest`（含新增的 `tests/test_dashboard_widget_contract.py`），再按能力拆笔提交推送。
+- HEAD = 第 82 期提交（`v0.82.0` 已发布）；工作区有第 83 期全部未提交改动。
+- 测试基线（第 82 期末）：后端 **1335 例（1323 passed / 12 skipped / 0 failed）**；前端 **456 例 / 41 个 spec**。
+  本期新增 2 个 spec（`lib/shelfScope.spec.ts` / `lib/bookDelete.spec.ts`）+ 1 个后端契约测试
+  （`tests/test_dashboard_widget_contract.py`），预期前端 **≥ 47 个 spec**。
+- 版本：`VERSION` = **0.83.0**（单一真值源，`GET /health` 下发）；`CHANGELOG.md` 已有 `V0.83.0` 段。
+- ⚠️ 前端有**显式运行时依赖** `vue-draggable-plus`（第 82 期，部件行内拖拽；理由在 `docs/architecture.md` 不变量第 6 条）。
 - ⚠️ **口径修订（第 80 期）**：「零外部请求 / 零依赖」已由**硬约束改为默认取向** —— 默认仍自托管、不拉 CDN，但允许**显式、可关、失败降级**地引入外部依赖与出网（见 `AGENTS.md` 第 1 节）。别再用「零依赖」当**不做**的理由。
 - 上游缺口清单（`docs/roadmap-gaps-remaining.md` 第一节）已实质清空；新缺口来源改看 `docs/bookorbit/bookorbit-module-inventory.md`。
 - ⚠️ 本文件的「已完成（近三期）」只登记到第 68 期 —— **第 69–79 期的记录在 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）**，别按这里判断「最近做了什么」。
@@ -112,6 +116,18 @@
 
 ## 2. 已完成（近三期）
 
+- **第 83 期（2026-10-01）· 仪表盘余留项：库范围筛选 / 封面动画与细节 / 第 13 件部件 / 快速预览**（V0.83.0，**验证与提交待补**）
+  - 来源：用户指定按对照文档 §7.2 现状与 §5 待确认出计划；三轮问答定范围（见 roadmap 第 83 期）。
+  - ① **每书架「库范围」筛选**：`ShelfDef.library_ids`（**空 = 全部书库**）+ `lib/shelfScope.ts` 纯函数
+    （指向已删库的 id 忽略；有效项全无 ⇒ 退化回全部）+ 面板逐库勾选 / 全选 / 至少选一个 + 四种行类型统一生效。
+  - ② **第 13 件部件「阅读时长」**（`reading-time`，本项目自开；保留 `reading-rhythm` 的入库节奏语义，默认关闭）：
+    数据取 `/api/stats` 的 `reading_28d`；前 12 件仍与上游逐一对应（新契约测试钉住）。
+  - ③ **书架行点封面 → 快速预览浮层**（`BookPreviewDialog` 加 `actions`）：加入收藏 + 删除 + 详细信息；
+    删除流程与书卡 ⋮ 菜单**收敛到 `lib/bookDelete.ts` 唯一真值源**；浮层 `Teleport to body`（外壳 `backdrop-blur` 会让 fixed 后代被裁）。
+  - ④ **封面错峰入场**（带内 `index*35ms` + 上限兜底 + 减少动效直接不播）+ 部件细节（三件补封面缩略图、两件补「开始阅读 / 收听」、
+    年度预测补趋势图标）；⚠️ 顺带修掉「有声书点进 `/read/` 打不开」的真缺陷。
+  - 上游核对修正：QuickView 在 `client/src/features/book/components/`（**不在 dashboard 下**），且上游是封面卡动作菜单触发，非点封面。
+  - commit：**待补**（连带验证）。
 - **第 82 期（2026-10-01）· 首页（仪表盘）逐项对齐上游 BookOrbit**（V0.82.0，两步走：先对照基线后改造）
   - 第一步：上游 `bookorbit @ c292d6cc` 首页逐区块四档判定，落 `docs/bookorbit/bookorbit-dashboard-styles.md`（含「两侧同名 `DashboardScroller` 职责不同」的命名陷阱）。
   - 第二步：部件行改横向卡片带（定宽两档 + `h-55` 外壳上移 + 悬停滚动按钮 + 行内拖拽）；12 件部件去壳 + 补
@@ -177,13 +193,16 @@
 - **第 62 期 · 「书架 42 秒 → 毫秒级」**（并行会话）
   - 书目**索引落库**（`core/catalog.py`）、PostgreSQL 可选后端、Redis 读缓存、增量刷新每文件 3 次 stat → 1 次。
 
-## 3. 下一期（第 83 期）候选
+## 3. 下一期（第 84 期）候选
 
-⚠️ 第 82 期**已交付**（见第 2 节）。下一期开工前先 `git log --oneline -12` + `git status --short` 定期号
-（**期号会被并行会话用掉**）。
+⚠️ **第 83 期还差最后一步：跑验证 + 提交推送**（见第 0 节，本机命令通道当时不可用）。
+开工前先 `git log --oneline -12` + `git status --short` 定期号（**期号会被并行会话用掉**）。
 
-仪表盘相关的余留（对照文档 `docs/bookorbit/bookorbit-dashboard-styles.md` §5 待确认 + §7 未做项）：
-每书架的「库范围」筛选、`BookQuickView` 三件套、封面入场动画 —— 均需先有用户需求再排期。
+仪表盘相关的余留（对照文档 `docs/bookorbit/bookorbit-dashboard-styles.md` §5 待确认 + §7.4/§7.6）：
+- 整页三态分支（loading / error / empty / ready）—— **需先定「页面级加载」判据**，判据未定前不做；
+- 上游首页截图的肉眼比对（§5 第 1 条，需取回 `docs/images/dashboard-overview.png`）；
+- 上游 QuickView 的 `edit-metadata` / `move-to-library` 两个动作（前者等于第二个详情页，后者本项目移动在书库管理里做）——
+  均**先有用户需求再排期**。
 
 第 1 节 P1 起按优先级取（「元数据来源」页最后两条如实标注的「未支持」最接近可直接动手）；
 若要做重投入项（例如再次跑大库基准、或做 PG/Redis 相关专项），**先量化再动手**

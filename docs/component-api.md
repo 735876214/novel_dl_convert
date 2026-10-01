@@ -11,7 +11,7 @@ components/
   ui/            UI 原语（16 个）—— 新页面优先复用
   reader/        阅读器：PdfReader / ComicReader / AudioPlayer / **UnitsReader**（序号单元合集）
   book/          书籍域组件（编辑/预览/移动/记录/系列面板）+ detail/ 详情页子标签
-  dashboard/     仪表盘外壳 + widgets/ 12 个部件 + registry.ts
+  dashboard/     仪表盘外壳 + widgets/ 13 个部件（前 12 件对齐上游 + 1 件自开）+ registry.ts
   charts/        图表壳 + library/ 18 张 + reading/ 12 张（共 30）
   tools/         工具页共用（书库向导 / 逐库设置 / 刮削面板 …）
   settings/      引导弹窗 + 设置项搜索浮层
@@ -81,7 +81,8 @@ components/
 
 ## 5. 仪表盘与图表
 
-- `dashboard/widgets/registry.ts`：**12 个部件全部登记**（`WIDGETS` + `SIZE_SPAN`）；启停与顺序由 `stores/dashboard.ts`（浏览器本地）决定。
+- `dashboard/widgets/registry.ts`：**13 个部件全部登记**（`WIDGETS`，宽度档在 `data/dashboard.ts` 的 `WIDGET_META`）；启停与顺序由 `stores/dashboard.ts`（浏览器本地）决定。
+  部件清单契约由 `tests/test_dashboard_widget_contract.py` 钉住（前 12 个 id 对齐上游 + 第 13 件 `reading-time` 为自开）。
 - 图表：`components/charts/ChartFrame`（ECharts 挂载壳）、`ChartCard`（标题栏 + 内容/空态/配置）、`ChartGrid`、`ChartConfigPanel`、`ChartEmptyState`。
   - **唯一注册入口是 `lib/charts.ts`**（按需 `use()` + SVGRenderer + `chartTheme()`/`chartPalette()`；ECharts 不认 oklch，故有 `oklchToHex()`）。
     组件里**不许**各自 `use()` 或自建主题。
@@ -117,7 +118,7 @@ components/
 | `ui` | `toast(msg)`、`toastMessage`、`sidebarCollapsed`、`toggleSidebar()` | 外壳 UI |
 | `auth` | `token`、`user`、`displayName`、`ready`、登录/注销 | 鉴权（token 存 `nf_token`） |
 | `library` | `books`、`loaded`、`loadBooks(force?)`、`loadLibraries(force?)`、`loadLibraryFacets(force?)`、`getBookDetail(id)`、`patchProgress(id, pct, at?)`、`currentLibraryId` | **各 loader 有单飞闸**（并发共享同一次请求）；`patchProgress` 就地回写不重拉整库 |
-| `stats` | `data`、`error`、`load(force?)` | `/api/stats` 缓存，供 12 个部件共用；**按书库单飞** |
+| `stats` | `data`、`error`、`load(force?)` | `/api/stats` 缓存，供 13 个部件共用；**按书库单飞** |
 | `collections` | `items`、`load(force?)`、`create/remove/rename` | `force` 走「等前一次落地再拉」，避免吞掉刚建的收藏夹 |
 | `tasks` | 任务列表 + 仅未结束时轮询 | `/api/tasks` |
 | `prefSync` | 偏好同步模式快照、设备配置、显式保存、离线降级 | 与 `lib/prefsBridge` 配合 |

@@ -53,8 +53,8 @@
 |---|---|
 | 页面 | `frontend/src/views/DashboardView.vue` |
 | 壳组件 | `frontend/src/components/dashboard/` 的 `DashboardWidgetRow.vue`、`DashboardWelcome.vue`、`DashboardSettingsSheet.vue`、`DashboardShelfRow.vue`、`FirstRunNotice.vue`（⚠️ 基线里的页面级容器 `DashboardScroller.vue` **已于第 82 期第二步删除**，见 §1.3） |
-| 12 件部件 | `frontend/src/components/dashboard/widgets/`（12 个 `*.vue` + `registry.ts`） |
-| 数据态 / 纯函数（第 82 期第二步新增） | `frontend/src/composables/useWidgetState.ts`（部件四态唯一真值源）、`frontend/src/lib/dashboardGreeting.ts`（时段问候）、`frontend/src/lib/shelfRows.ts`（分带 / 行数 / 窄屏判定） |
+| 部件 | `frontend/src/components/dashboard/widgets/`（**13 个** `*.vue` + `registry.ts`）—— 前 12 件与上游一一对应，第 13 件 `reading-time` 为本项目自开（第 83 期） |
+| 数据态 / 纯函数（第 82–83 期新增） | `frontend/src/composables/useWidgetState.ts`（部件四态唯一真值源）、`frontend/src/lib/dashboardGreeting.ts`（时段问候）、`frontend/src/lib/shelfRows.ts`（分带 / 行数 / 窄屏 / 封面错峰）、`frontend/src/lib/shelfScope.ts`（库范围过滤）、`frontend/src/lib/bookDelete.ts`（删书确认与执行，⋮ 菜单与快速预览浮层共用） |
 | 标识与元信息 | `frontend/src/data/dashboard.ts`（`WidgetId` / `WidgetMeta` / `WIDGET_META` / `WidgetSize` / `ShelfType` / `ShelfDef` / `MAX_SHELVES` / `DEFAULT_SHELVES` / `SCOPE_OPTIONS` / `SHELF_ROW_OPTIONS` / `ShelfLayout` / `MAX_COVERS_PER_ROW`） |
 | 状态 | `frontend/src/stores/dashboard.ts`（Pinia，落 `localStorage`：`dashboard-widgets` / `dashboard-shelves`；第 82 期加 `shelfLayout` 与逐书架 `rows`，旧数据自动补默认） |
 | 主题 token | `frontend/src/assets/theme/{tokens,accents,bridge,radius,cover-effects}.css` + 入口 `frontend/src/assets/main.css` |
@@ -297,11 +297,15 @@
    **建议**：只统一「外壳 + 字号字重 + 进度条高度」三层，其余按本项目语义保留。
    **处置**：**已按建议定标并执行**（用户口径：「12 件部件按上游样式做，**不改变本项目业务语义**」）。
    ⚠️ 实际执行里「外壳」是**完全按上游**（壳上移到行组件、12 件去壳），字号字重与进度条只做统一、未逐像素对齐。
+   **第 83 期补做**了这一标之下仍缺的部分：封面缩略图（`currently-reading` / `neglected-gems` / `long-wait`）、
+   趋势图标（`year-projection`）、「开始阅读 / 收听」入口（后两件）——仍**不**逐像素照抄。
 4. **`reading-rhythm` 同一 id 但语义不同**：上游是**阅读时长**（`readingSeconds` + 一致性 + 日均），本项目是**入库数量**（`added_28d`）。
    本项目其实**有**阅读时长数据（`reading_sessions` 表 + `dailySummary{day,totalMinutes}`，见阅读活动页与阅读记录页），
    所以「切回上游语义」在数据上是可行的 —— 是否切、还是保留「入库节奏」并另开一个时长部件，**需产品决策**。
-   **处置**：**仍未决 → 保持现状**（仍显示「入库节奏」`added_28d`）。本期明确「不改变业务语义」，故未动；
-   若日后要切，数据是现成的。
+   **处置**：**已决（第 83 期，用户拍板）→ 两个都要**：`reading-rhythm` 保留「入库节奏」语义（id 不动 ——
+   它是 localStorage 的键），**另开第 13 件部件 `reading-time`「阅读时长」**把上游的时长语义补回来
+   （数据取 `/api/stats` 的 `reading_28d`，与统计页同源）。因此「本项目部件清单与上游逐一对应」这条
+   现在精确成：**前 12 件一一对应 + 1 件自开**（契约测试 `tests/test_dashboard_widget_contract.py` 钉住）。
 5. **设置面板是否补「书架布局 / 行数」控件**：这两项在上游与「书架多行 + 两列布局」是**成对**的
    （没有 rows 控件，多行布局无法配置）⇒ 若做 P2 的 ⑦，应与 ⑥ 一起决策，否则会出现「有控件没效果」的假交互。
    **处置**：**已决并落地** —— 布局选择器与行数控件和「书架多行 / 两列」**同批**实现（用户点名要求）。
@@ -338,7 +342,7 @@
 | 部件骨架 / 错误 / 空态三分支 | 缺失 | **已对齐**（`useWidgetState` 统一封装，全部真实状态） |
 | 页面容器间距 / 内边距（`space-y-5 pb-8 pt-4 sm:pr-2`） | 形态不同 | **已对齐**（照上游写法） |
 | 主题 token（5 个 css） | 已对齐 | 仍**已对齐**（本轮零 token 改动） |
-| 部件清单与顺序（12 件 id） | 已对齐 | 仍**已对齐**（id 一字未改） |
+| 部件清单与顺序（12 件 id） | 已对齐 | 前 12 件仍**已对齐**（id 一字未改）；**第 83 期起共 13 件**（自开 `reading-time`，见 §7.6） |
 | 本项目页面级容器 `DashboardScroller.vue` | （基线：它就是页面容器） | **已删除**（容器并入 `DashboardView.vue`；§1.3 的「同名不同物」陷阱随之消失） |
 | i18n / 上游硬编码调色板 / `/api/v1/dashboard/*` 接口 / tour | 形态不同 / 缺失 | **保持刻意差异**（中文字面量 / 语义 token / 不引入 / 未做） |
 | 整页三态分支、库范围筛选、`BookQuickView` 三件套、封面入场动画 | 缺失 | **未做**（理由见 §7.4） |
@@ -355,7 +359,10 @@
 | 页面三态 | ◐ **无整页四分支**：保留 0 库引导（`FirstRunNotice`）+ 单条统计错误提示（可重试）+ **部件级**骨架 / 错误 / 空态；全部部件与书架关闭时 `DashboardWelcome` | 同上 + `FirstRunNotice.vue` / `DashboardWelcome.vue` |
 | 问候语行 | `sparkle` 图标 + 时段问候（优先 `auth.timezone`，每分钟刷新）+ 用户名（`auth.display`，`text-primary font-semibold`）+ 右侧「自定义」按钮（`sliders` 图标，`sm` 以上显示文字） | 同上 |
 | 部件行 | 横向卡片带：`h-55` 定高 + 定宽两档（220 / 336）+ 悬停左右滚动按钮（`scrollBy(±300)`）+ 行内拖拽手柄（`grip`）+ 逐卡错峰 80ms；**壳在行组件上** | `DashboardWidgetRow.vue` |
-| 12 件部件 | 去壳（根节点 `flex h-full flex-col p-3`）+ 声明 `size` prop + 接 `useWidgetState` 三分支（骨架 `animate-pulse` / 错误可点重试 / 空态） | `widgets/*.vue` + `composables/useWidgetState.ts` |
+| 部件（13 件） | 去壳（根节点 `flex h-full flex-col p-3`）+ 声明 `size` prop + 接 `useWidgetState` 三分支（骨架 `animate-pulse` / 错误可点重试 / 空态）；第 83 期补封面缩略图 / 趋势图标 / 「开始阅读」入口 | `widgets/*.vue` + `composables/useWidgetState.ts` |
+| 书架行「库范围」 | 逐库勾选（空 = 全部书库；指向已删库的 id 忽略）；四种行类型（继续 / 最近 / 发现 / 智能书架）统一生效；空态区分「被范围筛掉」与「本来没有」 | `DashboardShelfRow.vue` + `lib/shelfScope.ts` + 面板 |
+| 封面入场 | 逐张淡入上浮，按**带内序号** `index*35ms`（有上限兜底）；`prefers-reduced-motion` 直接不播 | `DashboardShelfRow.vue` + `lib/shelfRows.ts` |
+| 点封面 | **打开快速预览浮层**（加入收藏 / 删除 / 详细信息），不再直接进详情 | `BookPreviewDialog.vue`（第 83 期加 `actions`）+ `DashboardShelfRow.vue` |
 | 书架行 | 外壳 `rounded-2xl border-primary/40 bg-card/30 shadow-sm backdrop-blur-[1px]` + 表头（图标块 / `text-[15px] font-bold` 标题 / 计数胶囊 / 悬停滚动按钮 `scrollBy(±560)`）+ 多行 1..3 分带 + 按行数分带的骨架 | `DashboardShelfRow.vue` + `lib/shelfRows.ts` |
 | 书架布局 | 单列 `space-y-5` ↔ 两列 `grid gap-5 xl:grid-cols-2`；窄屏回落单列、行数自动压 2 | `DashboardView.vue` + `lib/shelfRows.ts` |
 | 设置面板 | 受控 `v-model:open`（自带 FAB 已移除）；书架 tab 有布局选择器 + 逐书架行数 1/2/3；面板内排序仍是 `useDndSort` + ▲▼ | `DashboardSettingsSheet.vue` |
@@ -378,9 +385,7 @@
 | 未做项 | 理由 |
 |---|---|
 | 整页三态分支（`libraryState` 四分支） | 本项目**没有单一的「整页加载」信号**（数据分散在 stats / library / 批注三处），硬造一个页面级 loading 只会是假的（与第 80 期「消灭假开关」同一条口径）。改为**部件级**真三分支 + 单条统计错误提示。 |
-| 每书架的「库范围」筛选 | 属配置能力而非样式；面板已有三层控件，再加会挤（先有用户需求再说）。 |
-| `BookQuickView` / 加入收藏 / 删书三件套 | 本项目点封面进详情（既有交互，改动会牵动整站导航）。 |
-| 封面入场动画（`dashboardFadeUp` + `index*35ms`） | 书架行已有多行分带 + 骨架；20–60 张封面逐张错峰的合成开销与收益不确定。 |
+| 上游 QuickView 的**其余两个动作**（`edit-metadata` / `move-to-library`） | 第 83 期已做「快速预览 + 加入收藏 + 删除」（原第 3 条）。剩下两项**仍不做**：前者等于开第二个详情页，后者本项目没有「从书架行跨库移动」的入口（移动在书库管理里做）。 |
 | i18n | 全站未做，本项目是中文字面量（§2.2 已判「形态不同，**不算缺口**」）。 |
 | 上游硬编码调色板（`text-orange-500` / `bg-green-500` …） | `docs/DESIGN.md` 明令禁止；深色主题下会失配（§2.4 第 3 条）。 |
 | `/api/v1/dashboard/widgets/batch`、`/api/v1/dashboard/scrollers/batch` | 单用户直连 DB，无此接口层（§2.4 第 4 条）。 |
@@ -394,3 +399,32 @@
 3. 目前仍**未决**的只有两条：§5 第 4 条（`reading-rhythm` 语义是否切回阅读时长）与 §7.4 的未做项 —— 它们都需要产品决策，
    不属于「样式对齐」范畴，别顺手改。
 4. 上游若推进到新版本，注意 §0 记的「与既有基线的关系」那行要同步（它是「上游没动」这个结论的凭据）。
+
+### 7.6 第 83 期再对照（2026-10-01）
+
+本轮范围由用户从 §7.2 的 ◐ 项与 §7.4 的未做项里挑定；实施细节与验证见
+`docs/roadmap-gaps-remaining.md` 第 83 期。
+
+**⚠️ 上游路径修正（重要）**：上游的快速预览组件**不在 dashboard 特性下**，而是
+`client/src/features/book/components/BookQuickView.vue`（同目录另有 `BookCoverCard.vue`、
+`AddToCollectionSheet.vue`、`DeleteBookDialog.vue`，配 `composables/useDeleteBook.ts`）。
+且上游的触发方式是**封面卡上的动作菜单 → `quick-view`**（动作集合 `quick-view` /
+`edit-metadata` / `add-to-collection` / `move-to-library` / `delete`），**不是点封面**。
+本项目按用户口径改成「点封面即开预览」，浮层内仍可一步进完整详情。⇒ 下次对照别再找 dashboard 下的 QuickView。
+
+**§7.2 现状列的翻转（本轮）**：
+
+| 条目 | 第 82 期末现状 | 现在 |
+|---|---|---|
+| 每书架「库范围」筛选 | 未做（§7.4 原列条目） | **已做**：`ShelfDef.library_ids`（**空 = 全部书库**，与 `CustomFieldDef.library_ids` 同口径）；面板逐库勾选 + 全选 + 「至少选一个」；四种行类型统一在 `allBooks` 之后过滤；指向已删库的 id 一律忽略（否则删库后整行会空掉且无从解释）；空态区分「被范围筛掉」与「本来没有」 |
+| 部件内部细节（封面缩略图 / 趋势图标 / CTA） | ◐ 只统一「外壳 + 字号字重 + 进度条」三层 | **补齐这三样**：`currently-reading` / `neglected-gems` / `long-wait` 补封面缩略图；后两件补「开始阅读 / 收听」（判据走 `lib/bookOpen.ts`，不给不支持阅读的格式留灰置入口）；`year-projection` 补趋势图标（最近半程 vs 前半程，升 / 降 / 平用语义色） |
+| 封面入场动画 | 未做（§7.4 原列条目） | **已做**：逐张淡入上浮，按**带内序号** `index*35ms`（照上游；带上限兜底），`prefers-reduced-motion` 直接不播 |
+| 书架行「点封面」交互 | 直接 `router.push` 进详情页 | **改为快速预览浮层**（`BookPreviewDialog` 加 `actions`）；浮层内「加入收藏」（选夹 + 加入）与「删除」（与书卡 ⋮ 菜单**同一套**确认，收敛在 `lib/bookDelete.ts`），删除成功后关浮层并重拉封面带 |
+| 部件清单 | 12 件（与上游逐一对应） | **13 件**：新增 `reading-time`「阅读时长」（本项目自开，补回上游 `reading-rhythm` 的时长语义；原 id 仍是「入库节奏」，默认不启用） |
+| 整页三态分支 | 未做 | **仍未做**（用户本轮未选；理由见 §7.4 第一条） |
+
+**本轮新增的契约（防回潮）**：
+- `tests/test_dashboard_widget_contract.py`：钉住「前 12 个 id 与上游逐一对应 + 1 件自开」
+  （id 是 localStorage 键，**改名会让存量偏好静默丢失**）、`WIDGET_META` 与联合类型逐字一致、
+  `registry` 无漏登记、新增件不默认启用、部件不加壳。
+- `shelfScope` / `bookDelete` 两个新纯函数各立 spec 并登记进 `EXPECTED_SPECS`。

@@ -432,3 +432,34 @@ discover 行仍按 id 稳定排序）。**口径以对照文档 §7「实施结�
   ⚠️ 响应性用例的源必须是 `ref`/store 字段（普通 `let` 变量不是响应源，computed 不会重算 —— 本期实测踩过）；
   图标契约（模板字面量名 ⊆ `ICONS` 键 + path 非空）会自动覆盖新增键。
 
+---
+
+### 第 83 期铁律（仪表盘余留：库范围 / 第 13 件部件 / 快速预览 / 封面上场）
+
+**范围**：用户从对照文档 §7.2 现状与 §7.4 未做项里各挑两项（库范围筛选 + 封面动画与细节收尾），
+`reading-rhythm` 语义**另开第 13 件部件**（保留「入库节奏」），书架行**点封面改开快速预览浮层**。
+**不做**：整页三态分支（本项目没有单一「页面加载」信号，硬造即假）、上游首页截图肉眼比对。
+
+- **库范围语义**（`lib/shelfScope.ts`，唯一判据）：`library_ids` **空 / 缺省 = 全部书库**
+  （与 `CustomFieldDef.library_ids` 同口径）；**指向已删库的 id 一律忽略**；忽略后**有效项一个不剩 ⇒ 退化回全部**
+  （宁可多显示，也不静默清空）；缺 `library_id` 的旧书目按「不在所选库」处理。过滤层必须叠在 `allBooks` **之后**
+  （四种行类型才统一生效）；`scope`（智能书架键）与它是**两个维度**，别合并。
+- **面板交互**：当前是「全部书库」时勾第一个库 ⇒ 变成只有这个库；**取消最后一个勾选直接拒绝 + 提示**
+  （否则会静默回到「全部书库」，与用户意图相反）。数据侧不做「至少一个」的兜底 —— 那是交互约束不是数据约束。
+- **第 13 件部件**：**前 12 个 `WidgetId` 与上游逐一对应是契约**（id 是 localStorage 键，改名会让存量偏好静默丢失），
+  新增一律**追加末尾**且**不进 `DEFAULT_WIDGET_IDS`**（存量用户升级不该凭空多卡片）；`mergeWidgets` 会自动追加新 id ⇒ **零迁移**。
+  契约由 `tests/test_dashboard_widget_contract.py` 钉住（含「registry 无漏登记」「部件不许再加壳」）。
+- **快速预览**：基座是自有 `BookPreviewDialog.vue`（第 64 期），加 `actions`（默认 `false` ⇒ 既有调用方零影响）。
+  ⚠️ **必须 `<Teleport to="body">`** —— 书架行外壳有 `backdrop-blur`，会让 `position: fixed` 的后代以外壳为包含块，
+  浮层会被裁进卡片里。边界不破：仍**不给**批注 / 阅读日志 / 文件路径 / 编辑入口。
+- **删书唯一真值源** `lib/bookDelete.ts`（`siblingNamesOf` / `deleteConfirmLines` / `deletedToast` / `confirmAndDeleteBook`）：
+  书卡 ⋮ 菜单与预览浮层共用；「部分失败要点名」这条别在任一处另写。
+- **封面错峰**：照上游**带内** `index * 35ms`（每带重置 ⇒ 实际最大 ≈ 每带封面数 × 35ms），另加 700ms 上限兜底。
+  ⚠️ **scoped keyframes 不受 `main.css` 全局 `prefers-reduced-motion` 降级的保护**（那条只压 duration）⇒
+  组件内自己写 `@media (prefers-reduced-motion: reduce) { animation: none !important }`；挂在内联样式上的动画需 `!important` 才压得住。
+- **上游路径**：快速预览**不在** dashboard 特性下，是 `client/src/features/book/components/BookQuickView.vue`
+  （配 `BookCoverCard` / `AddToCollectionSheet` / `DeleteBookDialog` + `useDeleteBook`）；
+  且上游是**封面卡动作菜单 → `quick-view`**（动作集合 `quick-view` / `edit-metadata` / `add-to-collection` / `move-to-library` / `delete`），
+  **不是点封面**。本项目按用户口径改成「点封面即开预览」。
+- **顺手修的真缺陷**：三件部件打开目标写死 `/read/`（有声书进打不开的阅读器）⇒ 统一走 `lib/bookActions`→`openTargetOf`。
+
