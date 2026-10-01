@@ -430,6 +430,43 @@ class DownloadManager:
             raise
         return dest
 
+    async def append_audio(self, client, dest_dir, urls) -> dict:
+        """把新轨**追加**到目录型有声书末尾（第 86 期追更；既有文件一字不动）。
+
+        调用方**传已有的 client**（跟取轨用同一个：Cookie / host_replace / 重试口径一致）。
+
+        · 轨名续着**既有最大话号**：`第N话<ext>`（必须是 `units` 认得的写法 —— 否则书架
+          看到的就不是一本书，而是一堆散装音频）；撞名一律跳号，**绝不覆盖既有轨**；
+        · 每轨**先写 `.part` 再 `Path.replace`**：写一半的音频会被当成「这一话是坏的」，
+          而重下要重跑整轮 —— 这类半成品比没有更糟；
+        · 返回 ``{"dir", "added", "start"}``（`added` 只列**本次新增**的名字）。
+        """
+        from ..core import audio as audio_mod
+        from ..core import units
+        dest = Path(dest_dir)
+        urls = list(urls or [])
+        if not urls:
+            return {"dir": dest, "added": [], "start": None}
+        names = {p.name for p in dest.iterdir()} if dest.is_dir() else set()
+        nums = [x for x in (units.parse_unit(Path(n).stem) for n in names) if x]
+        n = (max(nums) + 1) if nums else 1
+        start, added = n, []
+        dest.mkdir(parents=True, exist_ok=True)
+        for u in urls:
+            ext = Path(str(u).split("?")[0]).suffix.lower()
+            if ext not in audio_mod.AUDIO_EXTS:
+                ext = ".mp3"                     # 站点常给没有扩展名的地址
+            while f"第{n}话{ext}" in names:
+                n += 1                            # 撞名跳号：绝不覆盖既有轨
+            name = f"第{n}话{ext}"
+            tmp = dest / (name + ".part")
+            tmp.write_bytes(await client.get_bytes(u))
+            tmp.replace(dest / name)
+            names.add(name)
+            added.append(name)
+            n += 1
+        return {"dir": dest, "added": added, "start": start}
+
     async def download_comic(self, item: dict, out_dir, opts: dict = None) -> Path:
         """漫画：从书源取页清单 → 逐页取**字节** → 打成 CBZ 落本地（第 86 期）。
 

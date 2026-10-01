@@ -50,6 +50,41 @@ def write_cbz(dest, pages):
     return dest
 
 
+_PAGE_NUM_RE = re.compile(r"^(\d+)$")
+
+
+def append_pages(cbz, pages) -> dict:
+    """把新一话的页**追加**到 CBZ 末尾（第 86 期追更；既有条目一字不动）。
+
+    · **真追加**：用 `zipfile.ZipFile(path, "a")`，只写新条目 —— 既有条目的压缩数据
+      连一个字节都不动（比「全读出来再重写」更省也更安全：重写要重新压缩每一页，
+      还可能顺手改掉既有条目的元数据）；
+    · 页号**续着既有最大编号往下排**（已有 `0001.jpg` ⇒ 新页从 `0005.jpg` 起），
+      既有页序因此不变 —— 阅读进度按页序记录，这一条就是它不漂移的根据；
+    · 撞名一律**跳号，绝不覆盖既有页**；`pages` = ``[(扩展名, 字节), ...]``。
+    """
+    cbz = pathlib.Path(cbz)
+    pages = list(pages or [])
+    if not pages:
+        return {"path": cbz, "added": [], "start": None}
+    with zipfile.ZipFile(cbz) as z:
+        existing = {n for n in z.namelist() if not n.endswith("/")}
+    nums = [int(m.group(1)) for m in
+            (_PAGE_NUM_RE.match(pathlib.PurePath(n).stem) for n in existing) if m]
+    n = (max(nums) + 1) if nums else 1
+    added: list = []
+    with zipfile.ZipFile(cbz, "a", zipfile.ZIP_STORED) as z:
+        for ext, data in pages:
+            while f"{n:04d}{ext}" in existing:
+                n += 1
+            name = f"{n:04d}{ext}"
+            z.writestr(name, data)
+            existing.add(name)
+            added.append(name)
+            n += 1
+    return {"path": cbz, "added": added, "start": int(pathlib.PurePath(added[0]).stem)}
+
+
 def is_comic(path) -> bool:
     """是不是漫画归档（只看扩展名，供书架白名单与路由判定用）。"""
     return pathlib.PurePath(str(path)).suffix.lower() in COMIC_EXTS
