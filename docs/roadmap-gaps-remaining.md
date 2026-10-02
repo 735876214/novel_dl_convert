@@ -3954,3 +3954,242 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 - 后端全量 `pytest`（离线）：**1397 例（1385 passed / 12 skipped / 0 failed）**。
 - 版本 `VERSION` 0.84.0 → **0.85.0**，同批补 `CHANGELOG.md` 段；推送 `main` 后 CI 自动打 tag `v0.85.0`。
 
+---
+
+## 第 86 期 · 书源体系对齐 legado / Mihon + 书籍追更（2026-10-01 ~ 10-02）
+
+**来源**：用户要求把书源能力补齐到「能用真源站」的程度。分期推进：
+`legado-core` → `ledger-import` → `channels-and-login` → `probe` → `ingest-three`
+→ **`update-append`** → `online-fallback` → **`sources-ui`**。
+
+### 一、核心与台账（前期已交付）
+
+- 书源规则内核（legado 兼容解析）、导入台账（导入历史 / 差异 / 回滚锚点）、
+  渠道与登录（Cookie / 变量 / 登录声明）、单源与全量探测。
+- 接口共 16 条全部就绪并有契约测试：`POST /api/sources/import`（含 dry-run 差异表）、
+  `GET /api/sources/imports`、`GET /api/sources/export`、`GET /api/sources/ledger`、
+  `POST /api/sources/{name}/enabled` / `/rollback` / `/reanalyze`、`POST /api/sources/bulk`、
+  `GET|POST|DELETE /api/sources/{name}/cookie`、`GET|POST /api/sources/{name}/vars`、
+  `GET /api/sources/{name}/login-spec`、`POST /api/sources/{name}/probe`、
+  `POST /api/sources/probe-all`、`POST /api/toc/probe`。
+
+### 二、`update-append`：书籍**追更**（只追加，不重写）
+
+摸底纠了一个重要误判：**章节级 API 早已落地并接线**（`core/epub_update.append_chapters`
++ `add_manifest_item` / `add_spine_itemref` / `add_nav_link` / `add_ncx_navpoint` + `verify_unchanged`），
+所以本期只做真正还差的：
+
+1. **按路径加锁**（`manager.update_lock` 包裹 `update_report`）：并发追更会各自
+   「读旧内容 → 写 `.part` → replace」⇒ **后写覆盖前写 = 丢章，两边还都报成功**。
+   拆法刻意**不动缩进**（原实现改名 + 新增薄入口），把 diff 压到最小。
+2. **删死代码**（`manager.update` 里 `return` 之后那段旧实现）：它看起来像可恢复的备选路径，
+   而它正是「重复内容 + index 漂移」两条静默错误的正身。
+3. **nav 定位加固**：必须先在 `epub:type="toc"` 那个 `<nav>` 里取最后一个 `</ol>`；
+   否则 landmarks / page-list 的 `<ol>` 在前时新章会被插进「地标」列表 ——
+   阅读器目录里看不到，而「nav 里含这条链接」的断言照样过。
+4. **新增 `core/autoupdate.py`** + `config.DEFAULTS["auto_update"]`
+   （`enabled=True` / `interval_hours=12` / `max_books=50` / `request_delay=3.0`）+
+   `activity_log.ACTION_UPDATE` + server lifespan 起停 + 热应用。
+   三条口径：**首轮延迟一个间隔**（重启不等于全量外呼）、串行 + 限量 + 逐本节流、
+   **只调 `update_report`**（并发/原子/只追加的保证仍只在一处）。
+5. `auto_update` 配置**三处登记**（`server.EDITABLE` + `GET /api/config` 回显 +
+   设置页 `NETWORK_FIELDS`）—— 默认开启而不可关的开关等于假开关。
+
+### 三、`sources-ui`：把 16 条接口接上界面
+
+- 新增「**书源工具**」页（与「书源管理」同能力键 `sources`）：导入（**默认只预览不落盘**，
+  撞名/更新**逐条选**跳过/覆盖/并存，默认最保守的跳过）· 台账（启停不动文件、档位、
+  不支持字段与改用建议、覆盖历史一键回滚、导出）· 登录（Cookie 只显示「有没有/几条/哪些域」，
+  **不回显值**；变量留空即清除）· 全部源实探一次 · **追更卡**（状态徽章 / 一键暂停 /
+  立即追更一轮）。
+- `SourcesView.vue` 增强 A~E：**A** 统计条（9 徽章可点即筛选）· **B** 工具栏
+  （搜索 + 五维筛选 + 四排序，状态存 sessionStorage）· **C** 批量操作（复用 `POST /api/sources/bulk`，
+  逐条回报、不整批失败）· **D** 验证列（**「未验证」与「验证失败」必须分开**，title 带原因与耗时）·
+  **E** 追更卡（写 `PUT /api/config` 的 `auto_update`，不另开写接口）。
+- 四条关键口径（写进代码注释，避免被「简化」掉）：**选中集合按源名存**（按下标存会在
+  `load()` 顺序变化后变成「选中了别的源」）· `load()` 清理已不存在的选中项 ·
+  **删除二次确认**（文案写明条数与后果）· 统计数字 = **整表**口径而点它才筛
+  （这条不变量由 `lib/sourceFilter.spec.ts` 钉住 —— 界面自相矛盾最伤信任）。
+- 台账字段是 `group_name` 而列表用 `group`，必须转一次；**不转不会报错**，只是分组筛选永远空。
+  台账请求用 `Promise.allSettled`：**台账失败不让整页失败**（它只是补维度）。
+
+### 四、⚠️ 本期最值得记住的 bug：能力键没跟上实现 ⇒ **入口整个消失**
+
+用户报「书源找不到在哪」。真相：书源管理是「工具」页的一个标签（`ToolsLayout`，`feature: 'sources'`），
+按当前书库的能力键裁剪，而 `core/features.py` 的 `FEATURES_BY_TYPE` 里 `sources`
+**只给了 `ebook` / `mixed`** —— 用户当时选中的是**漫画库**，标签直接消失。
+而注释里那条判据还写着「书源下载产出 EPUB → 仅 ebook」，那是**第 86 期之前**的事实：
+本期三类产物都能走书源下载（文本 EPUB / 漫画 CBZ / 有声书目录树）。
+修法：`comic` / `audiobook` 都加上 `sources`，契约测试同步更新（它先红了一次 —— 护栏在正常工作）。
+**纪律**：能力键的判据是「现有实现真实支持的范围」；**实现扩了而这里没扩，界面就会藏起
+用户真正需要的入口**。第 87 期因此专门补了一份可执行的格式 × 能力矩阵（见下）。
+
+### 五、踩坑
+
+1. **测试隔离**：`isolated` 夹具只保证「不碰真实数据」，而 `SOURCES_DIR` 与会话级临时根**共享**、
+   `REGISTRY` 是**进程级全局**、台账/导入历史在**共享库**里 ⇒ 跨用例敏感语义的测试要自带
+   `_sandbox` 夹具（参考 `tests/test_source_ledger.py`）。
+2. **建对象要用会当场抛错的入口**：用例里的源一律 `store.add_rule` 建，**不要**走
+   `POST /api/sources`（返回 200 也可能是「一条都没加进去」，断言会变成永远绿的假失败）。
+3. **不能让 `autoupdate._loop` 的 `stop.wait(interval)` 真等**（最小间隔 1 小时，
+   真等会把整个 pytest 挂住）⇒ `monkeypatch.setattr(stop, "wait", fake_wait)`。
+4. 新增 `DEFAULTS` 段是**会被配置契约测试盯上**的动作 ⇒ 除了 before/after 断言，**必须跑全量**。
+
+### 六、收尾
+
+- 后端全量离线 `pytest`：**1585~1602 例 / 0 failed / 0 errors / 12 skipped**（随补齐递增）。
+- 前端 `type-check` 零错误、`vitest` **529 例**、`build` + `deploy` 同步 `static/v2`。
+- 挂起项在本期无遗留：`online-fallback` 仍未做（本地读不了时应用内渲染源站页面）。
+
+---
+
+## 第 87 期 · `.zip` 内容分派 + 重名与重复判定重构 + 格式能力矩阵（2026-10-02）
+
+**来源**：用户三条（附「同名冲突 16 组 / 已选 48 项」面板截图）——
+①「书库要能识别与解析 ZIP，漫画库需支持 ZIP 内多图片的**顺序读取与展示**」；
+②「大量**无意义重名**的识别逻辑有问题，要改进去重/重名判定，避免误判或冗余展示」；
+③「核心能力应对**所有格式统一支持**（除格式专有功能），需**明确各格式的功能支持矩阵**」。
+
+**规划阶段拍定的口径**（照此实现，不再改）：
+- **ZIP = 按内容分派**（不是最省事的「与 `.cbz` 等价」）：里面是图片按漫画读、
+  含 EPUB/PDF 按对应格式读；**混合 / 嵌套要有明确结论**，判不出**如实报「无法判定」，不许猜**。
+- **重名四项全要**：判据换成「文件名 + 目录 + 体积/页数/内容哈希」综合（名字只作线索）·
+  同系列**不同卷不该同组**（收紧）· 破折号/全角半角/多余空格差异**视为同一**、
+  ` (1)`/` (2)` 副本后缀**不算不同书**（放宽）。
+- **矩阵 = 文档 + 能力键 + 契约测试**。
+- 起手顺序由实现方定 ⇒ **① ZIP 分派 → ② 矩阵（含修静默失败）→ ③ 重名判定 → ④ 前端与收尾**。
+  理由：ZIP 会给矩阵新增一列（分派后的真实形态），先做完矩阵才不返工；重名判定最复杂
+  （牵动入库闸门与两个前端面板、有数据迁移风险），放最后独立可回滚。
+
+### 一、`.zip` 内容分派（容器看内容，不看后缀）
+
+- **新增 `core/zipkind.py`**：`analyze(path)` 分档 `comic`（图片档，**可读**）/ `epub`·`pdf`
+  （内含恰好一份文档）/ `nested`（内层还是压缩包）/ `multi` / `mixed` / `empty` / `broken`，
+  每档给 `reason` 与 `evidence`（文件数、图片数、文档名、样本名）。判定**复用漫画那套既有判据**
+  （`comics._keep` 算不算一页、`_JUNK_PARTS`、`_sniff`），坏包**不抛异常**（与 `comics.probe` 同口径）。
+- **关键设计：`.zip` 的 `format` 归一成真实形态（`CBZ`），上层零分支** —— 封面接口
+  （`fmt in ("CBZ","CBR")`）、逐页接口（`is_comic`）、前端阅读器（`bookOpen.ts` 的 `READER_FORMATS`）
+  **全部自动生效，前端一个字都不用改**。若把 `format` 留成 `"ZIP"`，就要同步补 4 处后端 +
+  3 处前端判据，且以后每加一处都要记得补 —— 那是必然漂移的形态
+  （与既有 D6 CBR 的「魔数嗅探 + 后端抽象、上层零分支」原则一致）。
+- **判不出的一律不假装能读，但照样入库**：`format` 保持 `ZIP` + `unparsable=True` ⇒
+  出现在「待修复」分面里**看得见**。文件在盘上、书目里却找不到（隐形文件）比拒收更糟；
+  而**报成 EPUB/PDF 会让前端去开一个打不开的阅读器** —— 正是第 3 条要消灭的「入口在、点了失败」。
+- ⚠️ 漫画分支加了**附加判据**（`zip_v is None or zip_v["kind"] == "comic"`）**不能省**：
+  `is_comic` 只看后缀，而 `.zip` 已在 `COMIC_EXTS` 里 —— 少了它，一个「内部其实是 EPUB」的 zip
+  会被当成漫画去数页（数出来的是 EPUB 里的插图张数），用户看到一本假漫画。
+- **展开（unwrap）成真正的书**：内含 EPUB/PDF 的容器按内容提取成真 `.epub` / `.pdf`；
+  容器本身就是改了后缀的 EPUB ⇒ 整份另存为 `.epub`（EPUB 即 zip，字节复制）；
+  嵌套 ⇒ 逐层提取。三条纪律：只在容器所在目录落新文件 · **原子写**（`.part` → replace）·
+  **绝不覆盖已有文件**（撞名逐条如实报，不静默改名 —— 改名会换 `book_id`）·
+  **默认不删源**（`remove_source=true` 才删）。另有 **zip-slip 防护**（条目名含 `..` / 绝对路径 /
+  盘符一律拒绝落盘）。前端「副本与容器」面板：副本**只列不动**、待展开压缩包**一键展开**。
+- **自动归库也看内容**：`_type_of_name(name, src=None)` 对容器调 `zipkind.analyze(src)` ——
+  图片档 → 漫画库、内含一份文档 → 电子书库、**判不出/读不到 → 返回空**（由 `decide` 如实拒收，
+  而不是猜一个库）。只有**名字**没有路径时仍然不猜：猜错的代价是书进错库，而错的库既读不了它、
+  用户也难发现（比拒收糟得多）。`zipkind` 导出公开常量 `DOC_KINDS` 供归库复用，
+  避免「哪些扩展名算文档」这份清单两边各写一份。
+
+### 二、修 3 处「入口在、点了静默失败」+ 落格式能力矩阵
+
+摸底扒出三处**静默失败**（比入口消失更难查：用户看到的离原因十万八千里）：
+
+1. **服务端抓取的封面只对 EPUB 生效（真 bug）**：封面接口把 `db.get_cover(bid)` 的读取
+   **只写在 EPUB 分支里**（`if fmt != "EPUB": 404` 在它前面），而 `library._apply_overlay`
+   对**任何格式**只要库里存了抓取封面就置 `has_cover=True` ⇒ PDF/TXT/MOBI/AZW3 卡片显示「有封面」
+   却永远 404 占位。修法：把服务端封面的读取**提到格式分支之前**（漫画/有声书仍优先用文件内封面
+   ⇒ 这两类行为逐字不变）。
+2. **OPDS 给目录型条目广告必然 404 的下载链**：`/opds/download/{bid}` 要求 `path.is_file()`，
+   有声书目录 / UNITS 合集是目录 ⇒ 必然 404。前端早已按同一判据刻意隐藏下载按钮 ⇒
+   补齐同一条口径：**少给一个必然失败的链接，而不是错给**。
+3. **前端「无封面」分面只算 EPUB** ⇒ 与卡片显示各说各话。改成「没有封面」即命中。
+- 附带文档漂移：`docs/roadmap-gaps-remaining.md` 里「手动编辑元数据仍限 EPUB」早已过期
+  （第 22 期放开，`server.py` 的 `editable` 恒真）。
+- **矩阵落地**：新增 `docs/format-capability-matrix.md`（「能力 × 格式」全表，格式专有与通用
+  分开并写明理由）+ `tests/test_format_matrix.py`。契约闸门是：**任何「只给部分库」的能力键
+  都必须在 `EXCLUSIVE` 表里登记理由**，否则测试红 —— 再加一个只给某类库的能力键时，
+  **写理由这个过程本身就会暴露漏配**（第 86 期 `sources` 漏给漫画库就是这么漏的）。
+  另有：通用能力四类库都有 · `mixed` 含全集 · 每条能力键都有中文名 ·
+  `SETTING_CAPS` 声明的键真实存在（写错键名 ⇒ 覆盖项在所有库上被**悄悄剔除**，同类静默失败）。
+
+### 三、重名与重复判定重构
+
+- **判据收敛到唯一函数**：新增 `conflict_key(name)`（去目录 + **剥副本后缀** ` (N)`/`（N）`/`[N]`
+  + **破折号家族统一**（`‐‑‒–—―−` → `-`）+ NFKC 全角归一 + 复用 `norm_key` 去噪声）·
+  `volume_of(name)`（`第X卷` / `Vol.01` / `v2` → 卷号签名，解析不出返回空，**不猜位置**）·
+  `is_copy_name(a, b)` · `conflict_kind(rels, paths, lib_ids)`（**纯函数**，便于单测）。
+  ⚠️ 与 `norm_key` 的**分工不能合并**：`norm_key` 服务「重复书籍 / 搜索 / 实体」（把《书名》与书名
+  当同一本），新判据服务「同名冲突 / 副本识别」（判「这两条路径说的是不是同一本书」）——
+  合并会让搜索把不同卷的书也当成一本。
+- **结论分级**（替代原来「一律报冲突」）：`duplicate_scan`（几条指向**同一个物理文件** ⇒
+  改名是错的，该修的是库配置，**默认不勾选**）· `cross_library`（同一相对路径出现在多个库 ⇒
+  真冲突，留一个改一个）· `same_name_different_dirs`（同库同名但不同目录 ⇒ 是**不同的书**，
+  改名时用目录名区分才有意义）。组级结论与默认勾选一起给前端。
+- ⚠️ **最大风险已规避**：`book_id` 是存储层锚点（进度 / 批注 / 标签 / 评分全挂它），
+  改生成规则 = 全库迁移（前例 `db.upgrade_book_ids()`）⇒ **本期不改 `book_id` 生成规则**，
+  只重构「判定 / 分级 / 默认勾选 / 展示」层。
+- 口径分裂（入库侧「同库同名一律放行」vs 清单侧「已存在同名报冲突」）在注释里写明各自适用面，
+  未强行统一（统一会改变真实写入路径的行为，风险大于收益）。
+
+### 四、F：三档宽度视觉自查（360 / 768 / 1280）
+
+- 做法：`agent-browser set viewport W H`（**注意：`viewport` 是 `set` 的子命令**，
+  顶层 `agent-browser viewport` 会报 `Unknown command`；权威命令表见
+  `agent-browser skills get core --full`）+ `eval` 量布局 + `screenshot`。
+  已把这套封装成机器级命令 `ui-smoke`（`%APPDATA%\npm\ui-smoke.cmd` →
+  `.codebuddy/tools/ui-smoke.ps1`）：打开 →（可选）登录 → 每档设视口 → 量布局 → 截图，
+  含 `-CleanOnly` 清理残留进程（残留会占住 daemon socket 让后续命令**静默挂死**）。
+- 度量结论：**三档均无页面级横向溢出**；8 个工具标签 / 5 个工具栏控件 / 勾选框在窄屏
+  都仍在 DOM 且有尺寸（没有被 `display:none` 藏掉）；768 / 1280 布局干净。
+- **360 档的真问题（已修）**：外壳**不折叠侧栏**（固定 240px），主内容区只剩 **82px** ⇒
+  卡片被压到 **12px 宽**，中文**一字一行**地竖排。诊断证明这**不是**断行规则问题
+  （`white-space / word-break / overflow-wrap` 全是 `normal`，纯物理挤压），
+  所以给文字加 `nowrap` 一律无用 —— **要修的是容器宽度**。
+  修法：`ToolsLayout.vue` 内容区包一层 `overflow-x-auto` + 内层 `min-w-[32rem]`
+  （**宁可横向滚动，也不把卡片压成一字一行**；宽度充足时两层均无影响）。
+  取值依据：修复前实测 **768 档在 490px 内容宽度下本来就是干净的** ⇒ 512px(=32rem) 留余量；
+  先用 34rem 时 768 会多出 16px 横向滚动（`off` 2→5），收到 32rem 后恢复 `off=2`。
+- 诊断产物：`.codebuddy/tools/diag-narrow.js`（**高窄盒子探测器**：抓 `width<46 && height>=60`
+  的叶子盒子并报出自身与父元素的宽度与断行相关 CSS）。**必须用文件传入**：
+  `$js = Get-Content -Raw .codebuddy\tools\diag-narrow.js; agent-browser eval $js`
+  —— 命令文本里的双引号会被工具层吃掉。
+
+### 五、诚实的边界
+
+- 「窄屏外壳折叠侧栏」（抽屉/折叠）**仍未做**：现在 360 档是「**可用但要横向滚**」，
+  不是优雅的移动端布局。属独立一件事。
+- 视觉自查**覆盖不到行级渲染**：当时所测实例（0 书库）书源列表是空态，
+  徽章 / 验证列 / 追更开关在**有数据**时的窄屏表现需另测。
+- `online-fallback`（本地读不了时应用内渲染源站页面）仍未做。
+
+### 六、踩坑
+
+1. **`plan_create` 整晚返回 `AI_APICallError-Bad Request`**（缩到 700 字也一样）⇒ 是 planning
+   服务端故障、不是内容问题；本期改用**待办清单**承载计划。
+2. **`agent-browser` 视口**：`--device` 只对**启动时**生效、`headless` 忽略
+   `--args --window-size`；每次连接会重置视口 ⇒ 一律用 `set viewport`。
+   ⚠️ 我曾据此误判「工具不支持视口」—— **命令报错 ≠ 能力缺失，先读该版本自带命令表**。
+3. **PATH 上的 `.cmd` 转发会吃掉数组参数**：`-Widths 360,1280` 到达时成了单个 `3601280`
+   ⇒ 给 `.cmd` 包装的脚本不要声明 `[int[]]`，用字符串自己切分。
+4. **PowerShell 5.1 按 ANSI 读「无 BOM 的 `.ps1`」**：中文/emoji 注释会搅乱字节，
+   **把后续代码行吞成字符串**（表现为「变量莫名是 null、`New-Object` 那行像没执行」）
+   ⇒ 临时 `.ps1` 一律**纯 ASCII**。
+5. **WebSocket / 大输出**：CDP 消息会分片，必须按 `EndOfMessage` 累积，否则半截 JSON
+   解析失败后下一次 `ReceiveAsync().Wait()` **永久阻塞**；另：CLI 的 `eval` 输出里引号是
+   **转义过**的（`{\"w\":`），取值要匹配裸词（如 `ovf`）。
+6. **工具自己也会静默失败**：`ui-smoke` 某次登录没成功却照样打印三档度量与截图 ——
+   那是**登录页的数字且无任何提示**。已加**硬断言**（登录后重新探测，仍在登录表单则
+   打印 `LOGIN FAILED ... NO metrics emitted` 并跳过该路由，绝不产出不可信数据）。
+   **教训：凡自动化脚本，产出前必须断言「我测的是目标页面」。**
+
+### 七、收尾
+
+- 后端全量离线 `pytest`：**1588 例 / 0 failed / 0 errors / 12 skipped**（今日起点 1535），
+  新增 `test_zip_dispatch.py` 12 + `test_zip_unpack.py` 14 + `test_format_consistency.py` 5
+  + `test_format_matrix.py` 6 + `test_name_conflicts.py` 13。
+- 前端 `vitest` **529 例**通过、`build` + `deploy` 同步 `static/v2`。
+- **验收要点（用户侧）**：① 必须点「**重建索引**」—— `catalog.refresh_library` 对
+  `(size, mtime)` 未变的条目直接跳过，早早入库的 `format="ZIP"` 老条目不会被重新探测，
+  重建后才按内容分派成能读的漫画包；② 工具页 →「书源工具」（导入 / 台账 / 登录 / 验证）；
+  ③ 设置 → 书库管理 →「同名冲突」面板（组级结论，`重复扫描` 默认不勾选）+「副本与容器」面板。
+
