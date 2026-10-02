@@ -145,6 +145,60 @@ async function bulk(action: 'enable' | 'disable' | 'delete' | 'reanalyze'): Prom
   }
 }
 
+// ---------------- 单源验证（第 86 期增强 D）----------------
+const probing = ref('')
+
+/**
+ * 一行的验证结论。
+ * ⚠️「未验证」与「验证失败」是**两种状态**（本仓一条明写的口径）：前者是「还没做」，
+ * 后者是「做了不行」，用户的下一步动作完全不同（一个去打「验证」，一个去看原因）。
+ */
+function verifyOf(s: SourceLike): { state: 'ok' | 'failed' | 'never'; title: string } {
+  if (s.verify_ok === true) return { state: 'ok', title: `最近验证通过（${s.verify_ms || 0}ms）` }
+  if (s.verify_ok === false) {
+    return { state: 'failed', title: s.verify_error || '最近验证未通过' }
+  }
+  return { state: 'never', title: '还没验证过（点「验证」实探一次）' }
+}
+
+/**
+ * 单源验证：**同时只允许一个**（`probing` 是单个名字而不是集合）——
+ * 点的越多越像在对站点发起并发探测，而本仓对站点并发一向保守。
+ * 探测结果由后端写回台账，这里刷新列表即可看到。
+ */
+const probeAllBusy = ref(false)
+
+/** 全部验证：后端**串行带间隔**逐个实探（结果回写台账），这里只等它跑完再刷新。 */
+async function probeAll(): Promise<void> {
+  probeAllBusy.value = true
+  try {
+    const res = await api.sourcesProbeAll()
+    const okCount = (res as { ok_count?: number }).ok_count
+    ui.toast(typeof okCount === 'number'
+      ? `验证完成：通过 ${okCount} 个（明细见各行）`
+      : '验证完成（明细见各行）')
+    load()
+  } catch (e) {
+    ui.toast((e as Error).message || '全部验证失败')
+  } finally {
+    probeAllBusy.value = false
+  }
+}
+
+async function probeOne(name: string): Promise<void> {
+  probing.value = name
+  try {
+    const res = await api.sourceProbe(name)
+    const ok = (res as { ok?: boolean }).ok
+    ui.toast(`${name}：${ok === true ? '验证通过' : ok === false ? '验证未通过' : '已探测（见台账）'}`)
+    load()
+  } catch (e) {
+    ui.toast((e as Error).message || '验证失败')
+  } finally {
+    probing.value = ''
+  }
+}
+
 function load(): void {
   loading.value = true
   error.value = ''
@@ -707,6 +761,9 @@ function testExisting(name: string): void {
             全选当前筛选
           </label>
           <Button v-if="filtered" size="sm" @click="clearQuery">清空筛选</Button>
+          <Button size="sm" :disabled="probeAllBusy" @click="probeAll">
+            {{ probeAllBusy ? '验证中…' : '全部验证' }}
+          </Button>
         </div>
 
         <!-- 批量操作条（第 86 期增强 C）：只在有选中时出现，逐条回报结果 -->
@@ -762,6 +819,21 @@ function testExisting(name: string): void {
                 <Badge :tone="s.user ? 'accent' : 'neutral'">{{ s.user ? '用户' : '内置' }}</Badge>
                 <Badge>{{ s.public ? '公版' : '私有' }}</Badge>
                 <Badge v-if="s.cookie.has" tone="ok">已登录</Badge>
+                <!-- 验证列（增强 D）：「未验证」与「验证失败」分开显示 -->
+                <Badge v-if="verifyOf(s).state === 'ok'" tone="ok" :title="verifyOf(s).title">
+                  验证通过
+                </Badge>
+                <Badge
+                  v-else-if="verifyOf(s).state === 'failed'"
+                  tone="warn"
+                  :title="verifyOf(s).title"
+                >
+                  验证失败
+                </Badge>
+                <span v-else class="text-[11px] text-muted-foreground" :title="verifyOf(s).title">
+                  未验证
+                </span>
+                <span v-if="s.enabled === false" class="text-[11px] text-muted-foreground">已停用</span>
               </div>
               <p v-if="s.domains.length" class="mt-1 truncate font-mono text-[11px] text-muted-foreground">
                 {{ s.domains.join(' · ') }}
@@ -781,6 +853,14 @@ function testExisting(name: string): void {
               @click="testExisting(s.name)"
             >
               测试
+            </Button>
+            <Button
+              size="sm"
+              :disabled="probing === s.name"
+              :title="verifyOf(s).title"
+              @click="probeOne(s.name)"
+            >
+              {{ probing === s.name ? '验证中…' : '验证' }}
             </Button>
             <Button
               v-if="s.user"

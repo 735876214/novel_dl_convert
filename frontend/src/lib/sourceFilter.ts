@@ -25,6 +25,8 @@ export interface SourceLike {
   verified_at?: number | null
   verify_ok?: boolean | null
   verify_ms?: number
+  /** 验证失败的原因（台账里只有失败时才有值） */
+  verify_error?: string
 }
 
 export type SortKey = 'name' | 'group' | 'verified' | 'imported'
