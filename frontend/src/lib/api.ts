@@ -4641,6 +4641,21 @@ export const api = {
   sourcesProbeAll: () =>
     request<Record<string, unknown>>('/api/sources/probe-all', { method: 'POST' }),
 
+  /**
+   * 批量操作（启用 / 停用 / 删除 / 重分析）。
+   * ⚠️ 后端**逐条回报**（`items`），混选里必然有内置源与未知源 —— 不做「成功 200 / 失败 500」
+   * 那种整批语义（整批失败会让用户不知道哪几条真的动了）。
+   */
+  sourcesBulk: (action: 'enable' | 'disable' | 'delete' | 'reanalyze', names: string[]) =>
+    request<{ action: string; items: Array<{ name: string; ok: boolean; note: string }>; ok_count: number }>(
+      '/api/sources/bulk',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, names }),
+      },
+    ),
+
   // ---------- 刮削出版（第 18 期）----------
   /** 刮削台账：概览计数 + 条目 + worker 运行态（页面轮询此端点）。 */
   scrapeState: (query: { library_id?: string; status?: string; q?: string } = {}) => {

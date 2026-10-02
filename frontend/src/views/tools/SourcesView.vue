@@ -95,6 +95,56 @@ function toggleFilter(patch: Partial<SourceQuery>): void {
   query.value = { ...EMPTY_QUERY, ...base, ...(active ? {} : patch) }
 }
 
+// ---------------- 批量操作（第 86 期增强 C）----------------
+// ⚠️ 选中集合按**源名**存（不是下标）：`load()` 之后顺序可能变、条目可能消失，
+//    按下标存会变成「选中了别的源」—— 批量删除场景里最危险的一类错。
+const checked = ref<Record<string, boolean>>({})
+const checkedNames = computed(() => Object.keys(checked.value).filter((n) => checked.value[n]))
+const allVisibleChecked = computed(
+  () => visible.value.length > 0 && visible.value.every((s) => checked.value[s.name]),
+)
+const bulkBusy = ref(false)
+
+function toggleCheck(name: string): void {
+  checked.value = { ...checked.value, [name]: !checked.value[name] }
+}
+
+/** 全选 / 反选**当前筛选结果**（不是全表 —— 用户看的是哪批就选哪批）。 */
+function toggleAllVisible(): void {
+  const next = { ...checked.value }
+  const on = !allVisibleChecked.value
+  for (const s of visible.value) next[s.name] = on
+  checked.value = next
+}
+
+function clearChecked(): void {
+  checked.value = {}
+}
+
+async function bulk(action: 'enable' | 'disable' | 'delete' | 'reanalyze'): Promise<void> {
+  const names = checkedNames.value
+  if (!names.length) return
+  // 删除不可逆（规则文件进回收站）：必须二次确认，且文案写明条数与后果
+  if (action === 'delete' && !window.confirm(
+    `删除 ${names.length} 个书源？规则文件会被移入回收站，之后只能重新导入恢复。`)) return
+  bulkBusy.value = true
+  try {
+    const res = await api.sourcesBulk(action, names)
+    const failed = res.items.filter((i) => !i.ok || i.note)
+    const label = { enable: '启用', disable: '停用', delete: '删除', reanalyze: '重分析' }[action]
+    ui.toast(`${label}完成 ${res.ok_count} / ${names.length}`
+      + (failed.length ? `，${failed.length} 条未生效` : ''))
+    // 逐条原因**照原样**抛出（内置源不可删 / 书源不存在 …）—— 不整批失败、也不静默
+    for (const f of failed.slice(0, 3)) ui.toast(`${f.name}：${f.note || '未生效'}`)
+    clearChecked()
+    load()
+  } catch (e) {
+    ui.toast((e as Error).message || '批量操作失败')
+  } finally {
+    bulkBusy.value = false
+  }
+}
+
 function load(): void {
   loading.value = true
   error.value = ''
@@ -118,6 +168,12 @@ function load(): void {
         }
       }
       ledger.value = map
+      // 选中集合按名存 ⇒ 刷新后要把**已经不存在的**清掉（否则会对着旧名发批量请求）。
+      // 侧边效果：书源被删掉后计数不会虚高，用户看到的「已选 N」永远是真实存在的 N。
+      const alive = new Set(sources.value.map((s) => s.name))
+      const kept: Record<string, boolean> = {}
+      for (const [n, v] of Object.entries(checked.value)) if (v && alive.has(n)) kept[n] = true
+      checked.value = kept
     })
     .finally(() => {
       loading.value = false
@@ -646,7 +702,26 @@ function testExisting(name: string): void {
             {{ query.desc ? '降序' : '升序' }}
           </button>
           <span class="text-muted-foreground">显示 {{ visible.length }} / {{ srcStats.total }}</span>
+          <label class="flex cursor-pointer items-center gap-1 text-muted-foreground">
+            <input type="checkbox" :checked="allVisibleChecked" @change="toggleAllVisible">
+            全选当前筛选
+          </label>
           <Button v-if="filtered" size="sm" @click="clearQuery">清空筛选</Button>
+        </div>
+
+        <!-- 批量操作条（第 86 期增强 C）：只在有选中时出现，逐条回报结果 -->
+        <div
+          v-if="checkedNames.length"
+          class="flex flex-wrap items-center gap-2 border-b border-border bg-muted/40 px-4 py-2 text-[11.5px]"
+        >
+          <span class="text-muted-foreground">已选 {{ checkedNames.length }} 个</span>
+          <Button size="sm" :disabled="bulkBusy" @click="bulk('enable')">启用</Button>
+          <Button size="sm" :disabled="bulkBusy" @click="bulk('disable')">停用</Button>
+          <Button size="sm" :disabled="bulkBusy" @click="bulk('reanalyze')">重分析</Button>
+          <Button size="sm" variant="danger" :disabled="bulkBusy" @click="bulk('delete')">
+            删除
+          </Button>
+          <Button size="sm" class="ml-auto" @click="clearChecked">取消选择</Button>
         </div>
 
         <p v-if="!downloadEnabled" class="border-b border-border bg-muted/60 px-4 py-2 text-[11.5px] text-muted-foreground">
@@ -668,6 +743,13 @@ function testExisting(name: string): void {
             :key="s.name"
             class="flex items-start gap-3 border-b border-border/60 px-4 py-3 last:border-b-0"
           >
+            <input
+              type="checkbox"
+              class="mt-1 h-3.5 w-3.5 shrink-0 cursor-pointer"
+              :aria-label="`选择 ${s.display_name || s.name}`"
+              :checked="!!checked[s.name]"
+              @change="toggleCheck(s.name)"
+            >
             <span
               class="mt-1 h-2 w-2 shrink-0 rounded-full"
               :class="s.usable ? 'bg-success' : 'bg-muted-foreground'"
