@@ -350,7 +350,10 @@ void loadLedger()
     <!-- ⓪ 追更（增强 E）：默认开启且会出网 ⇒ 状态必须一眼可见，且能一键停掉 -->
     <Card>
       <div class="flex flex-wrap items-center gap-2">
-        <span class="text-[13px] font-medium text-foreground">自动追更</span>
+        <!-- ⚠️ 窄屏（第 87 期 F 实测 360px）下侧栏不折叠、内容区只剩百来像素：
+             少了 `shrink-0 whitespace-nowrap`，这个标题会被压成**一字一行的竖排**。
+             宁可让它整块换行（外层是 flex-wrap），也不要压扁文字。 -->
+        <span class="shrink-0 text-[13px] font-medium whitespace-nowrap text-foreground">自动追更</span>
         <Badge :tone="autoState?.enabled === false ? 'warn' : autoState?.running ? 'ok' : 'neutral'">
           {{ autoState?.enabled === false ? '已暂停' : autoState?.running ? '运行中' : '未运行' }}
         </Badge>

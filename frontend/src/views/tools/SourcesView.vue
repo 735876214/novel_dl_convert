@@ -693,7 +693,7 @@ function testExisting(name: string): void {
             v-for="chip in statChips"
             :key="chip.label"
             type="button"
-            class="cursor-pointer rounded-md border border-border px-2 py-0.5 text-[11.5px] text-muted-foreground transition-colors hover:text-foreground"
+            class="shrink-0 cursor-pointer rounded-md border border-border px-2 py-0.5 text-[11.5px] whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground"
             @click="toggleFilter(chip.patch)"
           >
             {{ chip.label }} <span class="text-foreground">{{ chip.value }}</span>
