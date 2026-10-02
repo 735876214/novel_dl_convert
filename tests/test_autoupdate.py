@@ -124,3 +124,42 @@ def test_留档名与_sidecar_口径一致():
     改了这里就找不到留档，追更会静默「零候选」。"""
     sidecar = pathlib.PurePosixPath("科幻/三体.meta.json")
     assert sidecar.name[:-len(".meta.json")] == "三体"
+
+
+# ---------------- 接口（第 86 期 sources-ui 的追更卡要用）----------------
+
+def test_追更状态接口形状(client, auth_headers):  # noqa: ARG001
+    """界面要显示「追更中 / 已暂停」⇒ 状态接口必须回 running / enabled / 间隔。"""
+    r = client.get("/api/autoupdate", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) >= {"running", "enabled", "interval_hours"}
+    assert isinstance(body["running"], bool) and isinstance(body["enabled"], bool)
+
+
+def test_手动追更复用同一段代码(monkeypatch, client, auth_headers):  # noqa: ARG001
+    """「立即追更一轮」必须调 `autoupdate.tick`（与定时轮次同一段代码）。
+
+    两套实现必然分叉：定时那套改了「起点怎么算 / 怎么记台账」，手动那套不会跟着改 ——
+    而手动是用户最常按的那个按钮（他刚发现少章时就会点）。
+    """
+    calls: list = []
+
+    def fake_tick(conf=None):
+        calls.append(conf)
+        return {"total": 0, "ok": 0, "skipped": 0, "errors": 0, "added": 0}
+
+    monkeypatch.setattr(autoupdate, "tick", fake_tick)
+    r = client.post("/api/autoupdate/run", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert calls, "手动入口必须走 tick，不许另写一套"
+    assert r.json()["total"] == 0
+
+
+def test_手动追更的失败逐条回报(monkeypatch, client, auth_headers):  # noqa: ARG001
+    """单本失败不该让整批失败：报告里 errors 计数，其余照常统计。"""
+    monkeypatch.setattr(autoupdate, "tick",
+                        lambda conf=None: {"total": 3, "ok": 2, "skipped": 0,
+                                           "errors": 1, "added": 5})
+    body = client.post("/api/autoupdate/run", headers=auth_headers).json()
+    assert body == {"total": 3, "ok": 2, "skipped": 0, "errors": 1, "added": 5}

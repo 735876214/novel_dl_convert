@@ -5268,6 +5268,34 @@ def api_library_containers():
             "libraries": [{"id": l["id"], "name": l["name"]} for l in library.libraries()]}
 
 
+@app.get("/api/autoupdate")
+def api_autoupdate_state():
+    """追更调度状态（第 86 期）：是否在跑、间隔、开关。
+
+    界面据此显示「追更中 / 已暂停」；开关本身走 `PUT /api/config` 的 `auto_update`
+    （三处登记已完成），**不另开一个写接口** —— 同一份配置两种写法必然分叉。
+    """
+    return autoupdate.state()
+
+
+@app.post("/api/autoupdate/run")
+def api_autoupdate_run():
+    """**立即跑一轮**追更（第 86 期）：逐本回报新增章数，失败逐条给原因。
+
+    ⚠️ 与定时轮次**同一段代码**（`autoupdate.tick`）—— 不做「手动版」第二套实现，
+    否则定时与手动必然分叉（`updater._tick` 抽出来就是为了消掉这种分叉）。
+    ⚠️ 它会**出网**且可能跑一阵（单轮 ≤ `max_books` 本 × 每本节流），所以只能显式触发；
+    「首轮不在启动时跑」那条口径只约束**自动**轮次，不受这里影响。
+    """
+    rep = autoupdate.tick()
+    if rep.get("total"):
+        activity_log.log(activity_log.ACTION_UPDATE, "手动追更", activity_log.STATUS_OK,
+                         detail=f"检查 {rep['total']} 本：成功 {rep['ok']}、"
+                                f"新增 {rep['added']} 章、失败 {rep['errors']}",
+                         source="api")
+    return rep
+
+
 @app.post("/api/library-conflicts/apply")
 def api_library_conflicts_apply(payload: dict = Body(...)):
     """执行改名修复（**真改磁盘**，逐条独立，一条失败不影响其余）。
