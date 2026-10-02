@@ -7,6 +7,14 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, type SourceStatus, type SourceTestResult } from '@/lib/api'
+import {
+  EMPTY_QUERY,
+  filterSources,
+  groupOptions,
+  sourceStats,
+  type SourceLike,
+  type SourceQuery,
+} from '@/lib/sourceFilter'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -37,17 +45,79 @@ const stats = computed(() => {
 const downloadEnabled = computed(() => sources.value[0]?.download_enabled ?? false)
 const publicOnly = computed(() => sources.value[0]?.public_only ?? true)
 
+// ---------------- 统计 / 筛选 / 排序（第 86 期 sources-ui 增强 A+B）----------------
+// ⚠️ 验证状态（`verified_at/verify_ok/verify_ms`）**不在** `/api/sources/status` 里，
+//    它在台账（`/api/sources/ledger`）。不合并就把「验证状态」这一维暴露出来，会让所有源
+//    都显示成「未验证」—— 界面自相矛盾（统计条说 0 个失败、筛选说全都没验证过）。
+const ledger = ref<Record<string, Partial<SourceLike>>>({})
+const query = ref<SourceQuery>({ ...EMPTY_QUERY })   // 必须拷贝：别把共享常量塞进 ref
+
+/** 状态 + 台账**按源名合并**（台账缺这项时保留状态里的值）。 */
+const rows = computed(() => sources.value.map((s) => {
+  const extra = ledger.value[s.name] || {}
+  return { ...s, ...extra } as SourceStatus & SourceLike
+}))
+/** 列表渲染用的**过滤后**数组（渲染与统计同源，数字才会永远对得上）。 */
+const visible = computed(
+  () => filterSources(rows.value, query.value) as (SourceStatus & SourceLike)[],
+)
+/** 统计条的数字取**整表**（徽章是「全量视角」，点它才施加筛选）。 */
+const srcStats = computed(() => sourceStats(rows.value))
+/** 统计条徽章：顺序 = 用户关心的顺序；`patch` = 点它施加的筛选（再点取消）。 */
+const statChips = computed(() => [
+  { label: '总数', value: srcStats.value.total, patch: {} as Partial<SourceQuery> },
+  { label: '启用', value: srcStats.value.enabled, patch: { state: 'enabled' as const } },
+  { label: '停用', value: srcStats.value.disabled, patch: { state: 'disabled' as const } },
+  { label: '导入', value: srcStats.value.imported, patch: { origin: 'imported' as const } },
+  { label: '可用', value: srcStats.value.usable, patch: { supported: 'yes' as const } },
+  { label: '部分支持', value: srcStats.value.partial, patch: { supported: 'partial' as const } },
+  { label: '不可执行', value: srcStats.value.unsupported, patch: { supported: 'no' as const } },
+  { label: '验证失败', value: srcStats.value.verifyFailed, patch: { verified: 'failed' as const } },
+  { label: '未验证', value: srcStats.value.neverVerified, patch: { verified: 'never' as const } },
+])
+const groups = computed(() => groupOptions(rows.value))
+/** 有没有施加任何筛选（空态要区分「还没有书源」与「筛没了」）。 */
+const filtered = computed(() => !!(
+  query.value.q || query.value.supported || query.value.origin
+  || query.value.group || query.value.state || query.value.verified
+))
+
+function clearQuery(): void {
+  query.value = { ...EMPTY_QUERY }
+}
+
+/** 点统计条徽章 = 施加对应筛选；再点一次取消（保留搜索框与排序方向）。 */
+function toggleFilter(patch: Partial<SourceQuery>): void {
+  const base: Partial<SourceQuery> = { ...query.value }
+  const active = (Object.keys(patch) as Array<keyof SourceQuery>)
+    .every((k) => base[k] === patch[k])
+  for (const k of Object.keys(patch) as Array<keyof SourceQuery>) delete base[k]
+  query.value = { ...EMPTY_QUERY, ...base, ...(active ? {} : patch) }
+}
+
 function load(): void {
   loading.value = true
   error.value = ''
-  api
-    .sourcesStatus()
-    .then((r) => {
-      sources.value = r.items ?? []
-    })
-    .catch((e: Error) => {
-      sources.value = []
-      error.value = e.message
+  // ⚠️ 两个请求都要：状态（Cookie / 可用性）**与**台账（启停 / 档位 / 分组 / 最近验证）。
+  // 台账失败**不**让整页失败 —— 它只是给列表补维度，拿不到就按「未验证」显示，
+  // 而状态页本身照常可用（两件事的失败面不一样大）。
+  Promise.allSettled([api.sourcesStatus(), api.sourcesLedger()])
+    .then(([st, lg]) => {
+      if (st.status === 'fulfilled') {
+        sources.value = st.value.items ?? []
+      } else {
+        sources.value = []
+        error.value = (st.reason as Error)?.message || '读取书源状态失败'
+      }
+      const map: Record<string, Partial<SourceLike>> = {}
+      if (lg.status === 'fulfilled') {
+        for (const row of lg.value.items) {
+          // ⚠️ 台账的字段名是 `group_name`，列表用的是 `group` —— 这里不转一下，
+          //    分组筛选会永远筛不出东西（且不会报错）。
+          map[row.name] = { ...row, group: row.group_name || '' }
+        }
+      }
+      ledger.value = map
     })
     .finally(() => {
       loading.value = false
@@ -505,6 +575,80 @@ function testExisting(name: string): void {
           </Badge>
         </div>
 
+        <!-- 统计条（第 86 期增强 A）：徽章可点即施加筛选，再点取消。
+             ⚠️ 数字取**整表**（全量视角），点它才筛 ⇒「数字 = 筛出来的条数」必须成立；
+             这条不变量由 `lib/sourceFilter.spec.ts` 钉住（界面自相矛盾最伤信任）。 -->
+        <div class="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2">
+          <button
+            v-for="chip in statChips"
+            :key="chip.label"
+            type="button"
+            class="cursor-pointer rounded-md border border-border px-2 py-0.5 text-[11.5px] text-muted-foreground transition-colors hover:text-foreground"
+            @click="toggleFilter(chip.patch)"
+          >
+            {{ chip.label }} <span class="text-foreground">{{ chip.value }}</span>
+          </button>
+        </div>
+
+        <!-- 工具栏（第 86 期增强 B）：搜索 / 筛选 / 排序。
+             窄屏靠 `flex-wrap` 自动换行（与卡头同款写法），不出现横向滚动。 -->
+        <div class="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-[11.5px]">
+          <input
+            v-model="query.q"
+            type="search"
+            placeholder="搜索名称 / 域名 / 分组"
+            aria-label="搜索书源"
+            class="min-w-0 flex-1 rounded-md border border-border bg-muted px-2 py-1 text-[11.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring"
+          >
+          <select v-model="query.supported" aria-label="按档位筛选" class="rounded-md border border-border bg-muted px-2 py-1">
+            <option value="">全部档位</option>
+            <option value="yes">可用</option>
+            <option value="partial">部分支持</option>
+            <option value="no">不可执行</option>
+          </select>
+          <select v-model="query.origin" aria-label="按来源筛选" class="rounded-md border border-border bg-muted px-2 py-1">
+            <option value="">全部来源</option>
+            <option value="imported">导入</option>
+            <option value="manual">手写 / 内置</option>
+          </select>
+          <select
+            v-if="groups.length"
+            v-model="query.group"
+            aria-label="按分组筛选"
+            class="rounded-md border border-border bg-muted px-2 py-1"
+          >
+            <option value="">全部分组</option>
+            <option v-for="g in groups" :key="g" :value="g">{{ g }}</option>
+          </select>
+          <select v-model="query.state" aria-label="按启停筛选" class="rounded-md border border-border bg-muted px-2 py-1">
+            <option value="">启用与停用</option>
+            <option value="enabled">仅启用</option>
+            <option value="disabled">仅停用</option>
+          </select>
+          <select v-model="query.verified" aria-label="按验证状态筛选" class="rounded-md border border-border bg-muted px-2 py-1">
+            <option value="">全部验证状态</option>
+            <option value="ok">验证通过</option>
+            <option value="failed">验证失败</option>
+            <option value="never">未验证</option>
+          </select>
+          <select v-model="query.sort" aria-label="排序方式" class="rounded-md border border-border bg-muted px-2 py-1">
+            <option value="name">按名称</option>
+            <option value="group">按分组</option>
+            <option value="verified">按最近验证</option>
+            <option value="imported">导入优先</option>
+          </select>
+          <button
+            type="button"
+            class="cursor-pointer rounded-md border border-border px-2 py-1 text-muted-foreground transition-colors hover:text-foreground"
+            :aria-pressed="!!query.desc"
+            @click="query.desc = !query.desc"
+          >
+            {{ query.desc ? '降序' : '升序' }}
+          </button>
+          <span class="text-muted-foreground">显示 {{ visible.length }} / {{ srcStats.total }}</span>
+          <Button v-if="filtered" size="sm" @click="clearQuery">清空筛选</Button>
+        </div>
+
         <p v-if="!downloadEnabled" class="border-b border-border bg-muted/60 px-4 py-2 text-[11.5px] text-muted-foreground">
           下载功能当前关闭：在 <code class="font-mono">config.yaml</code> 设 <code class="font-mono">download.enabled: true</code> 后，书源才可用于搜索与下载。
         </p>
@@ -518,9 +662,9 @@ function testExisting(name: string): void {
           <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>
         </div>
 
-        <div v-else-if="sources.length" class="max-h-[30rem] overflow-y-auto">
+        <div v-else-if="visible.length" class="max-h-[30rem] overflow-y-auto">
           <div
-            v-for="s in sources"
+            v-for="s in visible"
             :key="s.name"
             class="flex items-start gap-3 border-b border-border/60 px-4 py-3 last:border-b-0"
           >
@@ -569,7 +713,21 @@ function testExisting(name: string): void {
           </div>
         </div>
 
-        <EmptyState v-else icon="source" title="还没有书源" desc="用左侧的批量粘贴或文件导入添加书源。" />
+        <EmptyState
+          v-else-if="!filtered"
+          icon="source"
+          title="还没有书源"
+          desc="用左侧的批量粘贴或文件导入添加书源。"
+        />
+        <!-- ⚠️「筛没了」与「还没有书源」是两件事：前者要给出路（清空筛选），
+             照搬后者的文案会让用户以为自己的书源丢了。 -->
+        <div
+          v-else
+          class="flex flex-wrap items-center gap-2 px-4 py-6 text-[12.5px] text-muted-foreground"
+        >
+          <span>没有符合当前筛选的书源。</span>
+          <Button size="sm" @click="clearQuery">清空筛选</Button>
+        </div>
       </Card>
     </div>
   </div>
