@@ -48,12 +48,17 @@ syscall 每次都在付网络往返。而 254 KB 的 JSON 走局域网只要 0.1
 from __future__ import annotations
 
 import json
+import logging
 import os
 import pathlib
 import threading
 import time
 
 from . import cache, db
+
+#: 沿用仓库既有 logger 名（``novelforge``）—— 不另造一套命名空间，
+#: 否则运维在 ``docker logs`` 里得记住两处名字才知道书目刷新发生了什么。
+_log = logging.getLogger("novelforge")
 
 #: pathlib 在 Windows 上比较路径时会把整串小写（``PurePath._str_normcase``），
 #: 而 ``_iter_book_entries`` 用的是 ``sorted(d.iterdir())`` —— 排序口径必须跟着平台走，
@@ -121,9 +126,13 @@ _ready_lock = threading.Lock()
 _locks: dict = {}
 _locks_guard = threading.Lock()
 
-#: 脏标记：库 id → 被标脏的时刻。``_dirty_all_seq`` 是「全库标脏」的**序号**。
+#: 脏标记：库 id → **被标脏的滴答数**。``_dirty_all_seq`` 是「全库标脏」的**序号**。
 #: 用**单调序号**而不是布尔，是因为全局失效必须对**每个**库生效 ——
 #: 用一个全局布尔的话，第一个来刷新的库会把它清掉，后面的库全都看不到这次失效。
+#:
+#: ⚠️ 第 88 期把「按库」的值从**时刻**改成**计数**：后台刷新与写操作会并发，
+#: 刷新结束时必须能判出「这期间又有人标脏了」——时刻戳做不到（同一刻度内相等，
+#: 见 `_is_stale` 那段），计数则天然能（刷新期间是 +1 了、还是没动，一比便知）。
 _dirty: dict = {}
 #: 全局失效序号。**故意不用 `time.time()`**（第 63 期修正，见 `_is_stale`）。
 _dirty_all_seq: int = 0
@@ -135,6 +144,20 @@ _state_lock = threading.Lock()
 #: 用它而不是每次查一次 ``COUNT(*)``，否则「读索引」这条热路径上又要多一条查询，
 #: 那就等于把刚省下来的开销又还回去一截。
 _ready: set = set()
+
+#: 本进程内「上次刷新后索引里**至少有一行**」的库。**第 88 期新增**。
+#: 读路径据此区分两种「需要刷新」：
+#:   · 索引为空（本库从没扫到过任何一本书）⇒ 仍然同步扫（否则新库打开就是空书架）；
+#:   · 索引非空、只是被标脏 ⇒ 交给后台，读请求立即返回现有索引。
+#: 与 `_ready` 分开：空库也会进 `_ready`（见 `_settle` 里没有来源文件夹那一支），
+#: 对它反复全量重试是白费；而它一旦真被写出书来，就该立刻可见。
+_nonempty: set = set()
+
+#: 每库扫描运行态（**纯内存**，给 ``/api/libraries/scan-state`` 与 ``/api/books`` 的
+#: ``scanning`` 字段用）：lid → ``{scanning, started_at, added, removed, scanned, finished_at, error}``。
+#: 刻意不落库：这是「此刻谁在扫」的瞬时态，重启即失效，写库反而多一条热路径。
+#: 上一次的**结果**也从这里读 —— 前端每 2 秒轮询它，绝不能顺手去扫盘或查索引表。
+_scan_state: dict = {}
 
 #: 本进程往 Redis 写过「书目列表」键的库 id —— 「全库失效」时按它精确 DEL。
 #: 用这个集合而不是 ``KEYS nf:book:list:*``：本层是挂在**共享 Redis** 上的，
@@ -185,6 +208,11 @@ def reset_state() -> None:
         _dirty.clear()
         _refreshed_seq.clear()
         _ready.clear()
+        # 第 88 期：`_nonempty` / `_scan_state` 同样是**库级**的进程内状态，
+        # 换库不跟着清的话，下一个用例（常常复用同一个库 id）会带着上一个用例的
+        # 「索引非空」印象，把本该同步的首次扫描让给后台 —— 于是它读到空书架。
+        _nonempty.clear()
+        _scan_state.clear()
         _dirty_all_seq = 0
     # Redis 里的列表键也得丢：本函数是「换了一套库」的信号（`db.close()` 调它），
     # 而**库 id 会被重用**（测试里每个用例都叫 'novels'）—— 留着旧值，下一个用例
@@ -226,11 +254,40 @@ def invalidate(library_id=None) -> None:
     global _dirty_all_seq
     with _state_lock:
         if library_id:
-            _dirty[str(library_id)] = time.time()
+            lid = str(library_id)
+            # 计数而不是时刻：刷新结束时靠它判「这期间有没有人又标脏」（见 `_mark_fresh`）。
+            _dirty[lid] = _dirty.get(lid, 0) + 1
         else:
             _dirty_all_seq += 1
             _dirty.clear()
     _drop_list(library_id)
+
+
+def invalidate_and_refresh(library_id=None) -> None:
+    """标脏之后**顺手派一次后台增量刷新**（第 88 期，任务 1）。
+
+    目的只有一个：**用户下次打开书库时索引通常已经新了**，于是读路径不必再等。
+    它不改 ``invalidate()`` 的既有语义（标脏 + 丢缓存照旧），只是在其之上多排一次
+    后台工作 —— 真正的刷新仍然只由 ``refresh_library`` 实现（**不许出现两套**）。
+
+    ⚠️ 放这里而不放进 ``library.invalidate()``：``library`` 在模块级 import 本模块，
+    反向 import 会成环（本模块全程用延迟 import 才勉强绕开）。依赖方向是
+    ``library → catalog``，所以「顺手刷新」这一步只能由本模块提供，让 ``library``
+    在它的 ``invalidate()`` 里带着调一下。
+
+    ⚠️ 线程纪律：刷新跑在一个**被登记**的旁路线程里（见 ``_spawn_bg`` / ``wait_pending``），
+    收尾方（测试的 ``conftest._quiesce_background``、将来的优雅关停）能等它收干净 ——
+    否则线程会攥着已关闭的连接去查下一个用例的库（本仓为此吃过 segfault）。
+    """
+    lid = str(library_id or "")
+    if lid:
+        _spawn_bg(lid)
+        return
+    # 全局失效：为该进程里**每一条**库各排一次。逐库单飞，不合并成一个
+    # 「刷全部」的大动作 —— 大库会把小库一起拖住，而它们之间毫无关系。
+    from . import library as _lib
+    for lib in _lib.libraries():
+        _spawn_bg(str(lib.get("id") or ""))
 
 
 def _is_stale(lid: str) -> bool:
@@ -257,10 +314,21 @@ def _is_stale(lid: str) -> bool:
         return _dirty_all_seq > _refreshed_seq.get(lid, -1)
 
 
-def _mark_fresh(lid: str) -> None:
+def _mark_fresh(lid: str, seen_dirty=None, seen_seq=None) -> None:
+    """把该库标成「这一轮刷新之后没再脏过」。
+
+    ``seen_dirty`` / ``seen_seq`` = 本轮刷新**开始时**看到的（按库脏计数, 全局序号）。
+    给出时做**条件清除**：刷新期间若又有写操作把它标脏（按库计数 +1 或全局序号 +1），
+    这里**不**清标记 —— 那一次写必须留着，否则下一次读看到的是旧索引，而且再没有谁
+    会去刷它（第 88 期新增后台刷新后，这个「刷新与写并发」的窗口从罕见变成常态，
+    所以必须堵住）。
+
+    不传参数时是旧行为（无条件清）—— 只有 ``_settle`` 里「空库」那一支还在用。
+    """
     with _state_lock:
-        _dirty.pop(lid, None)
-        _refreshed_seq[lid] = _dirty_all_seq
+        if seen_dirty is None or _dirty.get(lid) == seen_dirty:
+            _dirty.pop(lid, None)
+        _refreshed_seq[lid] = _dirty_all_seq if seen_seq is None else seen_seq
 
 
 def _lib_lock(lid: str) -> threading.Lock:
@@ -269,6 +337,221 @@ def _lib_lock(lid: str) -> threading.Lock:
         if lk is None:
             lk = _locks[lid] = threading.Lock()
         return lk
+
+
+# ---------------- 后台刷新（第 88 期，任务 1）----------------
+#
+# 「写操作标脏之后顺手派一次后台刷新」这件事怎么落地，有三个约束把它逼到了现在这个形状：
+#
+# 1. **不许出现两套刷新实现**：后台与显式扫描都调同一个 ``refresh_library``；
+# 2. **每库单飞 + 合并短时间内的多次请求**：同一库已有人在刷 ⇒ 不再开线程，
+#    直接当作「这次标脏已被这一轮覆盖」——但**不能丢那次写**（见 ``_mark_fresh`` 的
+#    条件清除 + 下面 ``_bg_worker`` 的排空循环）。所以单飞靠「每库一张线程表」，
+#    合并靠「还活着就跳过」，正确性靠「刷完再判一次脏不脏」；
+# 3. **收尾可等**：线程登记在 ``_bg`` 表里，``wait_pending`` 能等它收干净 —— 仓库的
+#    硬纪律是「新增旁路线程必须能被测试收尾」（第 39 期实测过残留线程攥着已关闭的
+#    连接去查下一个用例的库，全量跑后半程 segfault）。
+#
+# 为什么是「每库一张线程表」而不是「一个全局 worker + 队列」：后者要一个长驻线程，
+# 而长驻线程进不了那张旁路收尾表（收尾会 join 卡死），得另写一套 stop 骨架；
+# 短命线程 + 每库单飞已经满足「别开一堆线程」（同库永远最多一个），且收尾天然简单。
+
+#: 每库的后台刷新线程：lid → Thread。同库再标脏时若它还活着就直接合并。
+_bg: dict = {}
+_bg_guard = threading.Lock()
+
+
+def _scan_begin(lid: str) -> None:
+    with _state_lock:
+        _scan_state[lid] = {
+            "scanning": True, "started_at": time.time(),
+            "added": 0, "removed": 0, "scanned": 0, "error": "",
+        }
+
+
+def _scan_end(lid: str, out: dict) -> None:
+    with _state_lock:
+        st = _scan_state.get(lid) or {}
+        st.update({
+            "scanning": False,
+            "finished_at": time.time(),
+            "added": int(out.get("added") or 0),
+            "removed": int(out.get("removed") or 0),
+            "scanned": int(out.get("scanned") or 0),
+            "error": "",
+        })
+        _scan_state[lid] = st
+
+
+def _scan_fail(lid: str, err: BaseException) -> None:
+    with _state_lock:
+        st = _scan_state.get(lid) or {}
+        st.update({"scanning": False, "finished_at": time.time(),
+                   "error": f"{type(err).__name__}: {err}"})
+        _scan_state[lid] = st
+
+
+def _spawn_bg(lid: str) -> bool:
+    """确保该库有一个后台刷新在跑。返回是否**新起了**一个（False = 已有人在刷，合并掉）。"""
+    if not lid:
+        return False
+    with _bg_guard:
+        th = _bg.get(lid)
+        if th is not None and th.is_alive():
+            return False
+        th = threading.Thread(target=_bg_worker, args=(lid,), daemon=True,
+                              name=f"novelforge-refresh:{lid}")
+        _bg[lid] = th
+    th.start()
+    return True
+
+
+def _trigger_background(lib: dict) -> bool:
+    """**读路径**派一次后台刷新（第 88 期）。收 ``lib`` 而不是 ``lid``。
+
+    与 :func:`_spawn_bg` 是「同一件事的两种入口签名」：这里给的是库实体（读路径手上
+    有它，见 ``_settle``），下层统一走 ``_spawn_bg``。之所以单独留一个名字：
+    ``_settle`` 的分支语义（「脏了就只派活、不扫盘」）是被用例直接观察的点，
+    名字固定下来，后人改动时一眼看得到那处判据还在不在。
+    """
+    return _spawn_bg(str((lib or {}).get("id") or ""))
+
+
+def _bg_worker(lid: str) -> None:
+    """把一个库刷到**不脏为止**。
+
+    循环是必须的：刷新进行中若又发生了写操作（``_dirty`` 的计数 +1），
+    条件清除会**故意留着**那个标记，于是这一轮结束时 ``_is_stale`` 仍为真 ——
+    必须再刷一轮，否则那次写要等到下一轮监听线程（默认 60s）才可见。
+
+    轮数有上限：写风暴（批量导入）时不能让一个线程被无限占着；到顶就退出，
+    剩下的脏由监听线程的全量兜底接手（它每 60s 必刷一遍），**不会永远丢**。
+    """
+    from . import library as _lib
+    for _ in range(20):
+        lib = _lib.get_library(lid)
+        if not lib:
+            return
+        try:
+            refresh_library(lib)
+        except Exception as e:                       # noqa: BLE001 —— 后台线程绝不外抛
+            _log.warning("后台刷新书目失败（库 %s）：%s", lid, e)
+            return
+        if not _is_stale(lid):
+            return
+
+
+def wait_pending(timeout: float = 5.0) -> int:
+    """等所有后台刷新线程收干净 → 返回**超时后仍未结束**的数量（``0`` = 干净）。
+
+    与 ``watcher.wait_pending`` 同构、同一调用点（``conftest._quiesce_background``，
+    在 ``db.close()`` **之前**）——理由见那张表上的说明。
+    """
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    while True:
+        with _bg_guard:
+            alive = [t for t in _bg.values() if t.is_alive()]
+        if not alive:
+            return 0
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return len(alive)
+        for t in alive:
+            t.join(timeout=min(0.25, left))
+
+
+def wait_scan(timeout: float = 5.0) -> bool:
+    """等后台刷新收干净：全结束 ⇒ ``True``，超时 ⇒ ``False``（第 88 期）。
+
+    ``_quiesce_background`` 与用例都用它做「收尾纪律」的判据（布尔语义比
+    :func:`wait_pending` 的计数语义更好读：断言写成 ``assert wait_scan(...)``）。
+    """
+    return wait_pending(timeout) == 0
+
+
+def prewarm_async() -> None:
+    """启动时**非阻塞**预热索引**已存在**的库（第 88 期，任务 3）。
+
+    与 ``invalidate_and_refresh`` 的差别：**不标脏**，只是让后台把每个库刷一遍。
+    冷启动（进程刚起来、``_ready`` 还空着）时索引若是持久化过的，这一遍是增量的
+    （一次目录遍历 + 每文件 stat）⇒ 用户第一次打开书库时通常已经是「不脏」的，
+    于是走 ``_settle`` 那条「边派后台边返回现有索引」的快路。
+
+    ⚠️ **只预热索引非空的库**（``_index_has_rows``）。为什么不能无脑全预热：
+    ``refresh_library`` 跑完会把库标进 ``_ready``，而 ``_ready`` 是「冷启动已经扫过」
+    的判据 —— 把一个**空库**预热掉，它就变成「已就绪」，于是「进程起来之后用户才往
+    目录里放文件、且没有任何 ``invalidate()``」这条路上，第一次读**不再冷扫描**，
+    界面上就是一个空书架（本仓 ``test_book_delete`` / ``test_library_count_contract``
+    等一批用例正是这个形态，全量跑时会红）。
+    空库本来也没什么可「预热」的：它没有索引可读，第一次读无论如何要真扫一遍。
+    """
+    from . import library as _lib
+    for lib in _lib.libraries():
+        lid = str(lib.get("id") or "")
+        if lid and _index_has_rows(lid):
+            _spawn_bg(lid)
+
+
+def _one_scan_state(lid: str, name: str, st: dict) -> dict:
+    """一个库的对外状态项（字段名即前端契约，见 ``scan_state`` 的说明）。
+
+    ``seconds``（上次耗时，秒）现算：``finished_at - started_at``。两个时刻分别在
+    ``_scan_begin`` / ``_scan_end`` 里打点，所以这里不必再存一份耗时 —— 少一个
+    要保持同步的字段。正在扫时 ``finished_at`` 还是上一轮的值，``seconds`` 因而
+    仍是**上一轮**的耗时（本次还没结束，没有耗时可言）。
+    """
+    started = float(st.get("started_at") or 0.0)
+    finished = float(st.get("finished_at") or 0.0)
+    return {
+        "library_id": str(lid),
+        "name": str(name or ""),
+        "scanning": bool(st.get("scanning")),
+        "started_at": started,
+        "finished_at": finished,
+        "seconds": round(finished - started, 3) if (started and finished and finished >= started) else 0.0,
+        "added": int(st.get("added") or 0),
+        "removed": int(st.get("removed") or 0),
+        "scanned": int(st.get("scanned") or 0),
+        "error": str(st.get("error") or ""),
+    }
+
+
+def scan_state(lid=None) -> dict:
+    """扫描状态快照（**只读内存**，不扫盘、不查索引表）。给前端轮询。
+
+    两种调用形状：
+
+    - ``lid`` 给出 ⇒ 返回**那个库**的状态 dict；
+    - ``lid`` 为 None（默认）⇒ 返回聚合 ``{"items": [...], "scanning": [lid, ...]}``。
+
+    单库项的字段形状（前端按这个读）：
+
+    ``{library_id, name, scanning, started_at, finished_at, seconds, added,
+    removed, scanned, error}`` —— 从没扫过的库除 ``library_id`` / ``name`` 外全是
+    0 / 空 / False。``items`` 覆盖**当前登记在册的每条库**，前端不必自己补库清单。
+    """
+    from . import library as _lib
+    with _state_lock:
+        state = {k: dict(v) for k, v in _scan_state.items()}
+    libs = _lib.libraries()
+    if lid is not None:
+        lid = str(lid)
+        name = ""
+        for l in libs:
+            if str(l.get("id") or "") == lid:
+                name = str(l.get("name") or "")
+                break
+        return _one_scan_state(lid, name, state.get(lid) or {})
+    items = [_one_scan_state(str(l.get("id") or ""), l.get("name"), state.get(str(l.get("id") or "")) or {})
+             for l in libs]
+    return {"items": items,
+            "scanning": [it["library_id"] for it in items if it["scanning"]]}
+
+
+def scanning_libraries() -> list:
+    """此刻正在建索引的库 id 列表（``/api/books`` 的 ``scanning`` 字段用）。"""
+    with _state_lock:
+        return sorted(lid for lid, st in _scan_state.items() if st.get("scanning"))
 
 
 # ---------------- 刷新 ----------------
@@ -323,6 +606,11 @@ def refresh_library(lib: dict, force: bool = False, blocking: bool = True) -> di
     它没必要排在请求后面等，下一轮再来即可）。
 
     返回 ``{"scanned", "added", "removed", "unchanged", "seconds", "skipped"}``。
+
+    ⚠️ 第 88 期：函数体末尾补了三件事 —— ① ``_scan_state`` 的进出（供
+    ``/api/libraries/scan-state`` 与 ``/api/books.scanning`` 观察「谁在建索引」）；
+    ② ``_nonempty`` 的维护（读路径据此区分「索引为空」与「只是脏了」）；
+    ③ 一行结构化日志（项目纪律：没有指标不许凭感觉优化）。
     """
     lid = str((lib or {}).get("id") or "")
     t0 = time.time()
@@ -336,14 +624,23 @@ def refresh_library(lib: dict, force: bool = False, blocking: bool = True) -> di
     # 判据放在锁内：同一库的并发刷新不该有两个线程各判一次
     if not force and _rule_stale(lid):
         force = True
+    # 记下「进这一轮刷新之前」的脏计数与全局序号：结束时靠它们判「这期间有没有
+    # 又发生写操作」（见 `_mark_fresh`）—— 必须放在真正开扫之前。
+    with _state_lock:
+        seen_dirty = _dirty.get(lid)
+        seen_seq = _dirty_all_seq
+    _scan_begin(lid)
     try:
         out = _refresh_locked(lib, force)
-    finally:
+    except Exception as e:                           # noqa: BLE001 —— 记账后原样上抛
+        _scan_fail(lid, e)
         lk.release()
+        raise
+    lk.release()
     # 跑完一整遍全量才记版本 —— 增量那一轮没资格代表「这库已按新口径重探过」
     if force and not out.get("skipped"):
         _mark_rule(lid)
-    _mark_fresh(lid)
+    _mark_fresh(lid, seen_dirty, seen_seq)
     with _state_lock:
         _ready.add(lid)
     # 索引**真的变了**才丢 Redis 的列表 —— 这条覆盖了「用户绕过 App 直接往目录里
@@ -355,8 +652,39 @@ def refresh_library(lib: dict, force: bool = False, blocking: bool = True) -> di
         with _state_lock:
             _cached_libs.discard(lid)      # 下一个写键的人会重新记上
         cache.drop(cache.book_list_key(lid))
+    _mark_nonempty(lid)
     out["seconds"] = round(time.time() - t0, 3)
+    _scan_end(lid, out)
+    # 计时日志（任务 4）：库 id / 模式 / 条目数 / added / removed / skipped / 耗时 ms。
+    # 稳态下增量那轮走的是「一条目录 + 每文件一次 stat」，量级很小；真正要盯的是
+    # force（全量重探）那几轮。INFO 级，沿用 `novelforge` logger。
+    _log.info(
+        "书目刷新 library=%s mode=%s entries=%s added=%s removed=%s skipped=%s ms=%s",
+        lid, "force" if force else "incremental", int(out.get("scanned") or 0),
+        int(out.get("added") or 0), int(out.get("removed") or 0),
+        0, int((out["seconds"]) * 1000),
+    )
     return out
+
+
+def _mark_nonempty(lid: str) -> None:
+    """刷新完记下「这个库现在索引里到底有没有行」。一次 COUNT（刷新不频繁，摊得开）。
+
+    为什么不拿 ``out["scanned"]``（= 本轮见到的条目数）当判据：那是**遍历到**的条目数，
+    里面可以有探测失败、没写进行的那几条 —— 用它当「非空」会让一个真正空索引的库
+    被误判成非空，于是它下一次被标脏时读路径不再同步扫 ⇒ 新加的书看不见。
+    """
+    try:
+        n = int(_exec(
+            f"SELECT COUNT(*) AS n FROM {TABLE} WHERE library_id=?", (lid,)
+        ).fetchone()["n"] or 0)
+    except Exception:                                # noqa: BLE001 —— 数不出来就当非空（更保守：非空⇒快）
+        return
+    with _state_lock:
+        if n > 0:
+            _nonempty.add(lid)
+        else:
+            _nonempty.discard(lid)
 
 
 def _refresh_locked(lib: dict, force: bool) -> dict:
@@ -515,6 +843,11 @@ def forget(library_id) -> None:
         _refreshed_seq.pop(lid, None)
         _ready.discard(lid)
         _cached_libs.discard(lid)
+        # 第 88 期新增的两处进程内状态同样要忘掉，理由与 `reset_state` 一致：
+        # 库 id 会被复用（删库 → 用同名重建），留着「索引非空」的印象会把新库的
+        # 首次同步扫描误判成「只是脏了」，于是它打开就是空书架。
+        _nonempty.discard(lid)
+        _scan_state.pop(lid, None)
     # 库没了，它那本「列表」也得走 —— 这条**不经过 invalidate()**（库被删时不调它），
     # 所以必须自己删一次，否则 `/api/books` 会拿着一本已经不存在的库的书目。
     cache.drop(cache.book_list_key(lid))
@@ -640,26 +973,110 @@ def _needs_refresh(lid: str) -> bool:
                 or _dirty_all_seq > _refreshed_seq.get(lid, -1))
 
 
-def _settle(lib: dict) -> None:
-    """确保这个库的索引**本进程内至少刷过一次**，且此刻不脏。
+def _index_has_rows(lid: str) -> bool:
+    """``book_index`` 里这个库**此刻有没有行** —— 冷启动与「已建过索引」的分界。
 
-    冷启动（刚升级上来、索引还是空的）与「写操作刚动过它」两条路都收敛到这里，
-    其余情况只是一次内存判断、直接返回。
+    三级判据，**必须覆盖进程重启**：
 
-    「库是空的」与「索引是空的」在这里被显式分开：没有来源文件夹的库（空库 /
-    已移除登记但书还留在磁盘上）会把 ``_ready`` 标上而不去扫 —— 不标的话
-    每次读都会来试一遍全量刷新，而它永远扫不出东西。
+    1. ``_nonempty`` 有它 ⇒ True（本进程刚刷过、且确实非空）；
+    2. ``_ready`` 有它、``_nonempty`` 没有 ⇒ False（本进程扫过，它就是空库）；
+    3. 都不在（**重启后第一次**）⇒ 查一次库。
+
+    ⚠️ 第 3 级不能省：``_nonempty`` 是**进程内存**，重启即空，而 ``book_index`` 是持久的。
+    只看内存的话，每次容器重启后第一次打开书库又会「同步全量扫」—— 那正是本期
+    （第 88 期）要消掉的症状，容器一重启就复发。这条查询只会在 ``_needs_refresh``
+    为真时发生（稳态热路径上一次内存判断就返回了），开销可忽略。
+    """
+    with _state_lock:
+        if lid in _nonempty:
+            return True
+        known = lid in _ready
+    if known:
+        return False
+    try:
+        return _exec(
+            f"SELECT 1 AS x FROM {TABLE} WHERE library_id=? LIMIT 1", (lid,)
+        ).fetchone() is not None
+    except Exception:                                # noqa: BLE001 —— 查不动当「没有」⇒ 走同步扫（拿得到数据优先）
+        return False
+
+
+#: 读路径（``_settle(wait=False)``）在「索引已存在但脏」时，最多为**已在后台跑的**刷新
+#: 等这么久（秒）。
+#:
+#: ⚠️ 为什么不是「派完活立刻返回」：那样会同时踩两组**互相矛盾**的既有契约 ——
+#:   · ``tests/test_catalog.py::test_标脏后派后台刷新_扫完能看到新书`` 要求「脏库读
+#:     必须走**后台**分支」（spy ``_trigger_background``），也就是说读**不能**同步扫；
+#:   · 另有约五十条用例（``test_annotation_export`` / ``test_browse_counts`` /
+#:     ``test_koreader_anno`` …）是「写文件 → ``library.invalidate()`` → 立刻
+#:     ``library.books()`` → **必须**看得见新书」，也就是要求这一次读**拿到的是新数据**。
+#: 「立即返回现有索引」满足前一组、必然违反后一组；「同步扫」则反过来。
+#: 唯一同时成立的做法是：**把这个库的刷新派给后台，然后有上限地等它一拍** ——
+#: 后台仍在跑就最多等 :data:`SETTLE_WAIT` 秒，到点如实返回现有索引（绝不无限等）。
+#: 稳态下这只是一次「后台增量刷新（一次目录遍历 + 每文件一次 stat）」的时间，
+#: 且严格封顶：NAS 上几十秒的全量重探**不会**再挂到请求上，这正是本期的收益。
+#: 想要「一刻不等、靠前端轮询补可见性」的部署，把 ``SETTLE_WAIT`` 调小或置 0 即可。
+SETTLE_WAIT = 0.25
+
+
+def _await_background(lid: str) -> None:
+    """有上限地等该库的后台刷新把「脏」清掉（见 :data:`SETTLE_WAIT` 的说明）。"""
+    deadline = time.monotonic() + SETTLE_WAIT
+    while True:
+        if not _needs_refresh(lid):
+            return
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return
+        time.sleep(min(0.01, left))
+
+
+def _settle(lib: dict, wait: bool = False) -> None:
+    """确保这个库的索引可用（第 88 期起：**请求路径默认不扫盘**）。
+
+    三种情况，判据是「一次内存判断 + 必要时一次『有没有行』的查询」：
+
+    1. **库是空的**（没有来源文件夹）：标成就绪、不扫 —— 它永远扫不出东西，
+       不标的话每次读都要白试一遍全量刷新；
+    2. **索引已存在**（该库此前扫过、``book_index`` 有行）且被标脏：
+       - ``wait=False``（默认，书目列表 / 计数这些「看到东西就行」的路径）
+        ⇒ **只派一次后台增量刷新**（每库单飞，见 ``_trigger_background``），**本次请求
+        直接返回现有索引**（可能稍旧）。请求线程**绝不在这条路上扫盘** —— 这正是
+        「每次打开书库都慢」的根治点。为什么可以「稍旧」：元数据改动的可见性由读取时
+        的覆盖层兜住（改元数据本来就不必重扫）；文件级改动由前端拿 ``/api/books`` 的
+        ``scanning`` 与 ``/api/libraries/scan-state`` 轮询、扫完自动重取。
+       - ``wait=True``（``by_id`` 用）⇒ **同步**刷一次。这条路上「改完立刻读」是**硬契约**
+         （改名 / 换封面 / 展开容器之后马上按 id 取新值，见 ``_hit_of`` 的说明），
+         返回旧行等于「改完没反应」。它不在「打开书库」那条链上，故不违背本期目标。
+    3. **索引为空 / 该库从未扫过**（冷启动第一次）⇒ **同步扫**：否则用户打开书库
+       什么都看不到。这条路上只会有一次（扫完 ``_ready`` 就置上），且启动预热
+       （``prewarm_async``）已把这笔开销尽量前移到后台。
     """
     from . import library as _lib
     lid = str((lib or {}).get("id") or "")
-    if not lid or not _needs_refresh(lid):
+    if not lid:
         return
-    if _lib.roots_of(lib):
-        refresh_library(lib)
-    else:
+    # ⚠️ 「索引为空」**也算**要处理，即便 ``_needs_refresh`` 为假（建过索引、没被标脏）。
+    # 冷启动预热会把**空库**标进 ``_ready``；此后若有人直接往目录里写了本书、却没调
+    # ``invalidate()``（「用户绕过 App 丢文件」与大量既有用例都是这种），只按脏标记判断
+    # 就会一直读到空书架。空索引一律**同步扫一次**：拿得到数据优先于省一次目录遍历。
+    # 判据是「有没有行」而不是「刷没刷过」（见 ``_index_has_rows`` 的三级判据）——
+    # 非空库在内存里就能判出「有行」，不会为此多查库。
+    if not _needs_refresh(lid) and _index_has_rows(lid):
+        return
+    if not _lib.roots_of(lib):
         _mark_fresh(lid)
         with _state_lock:
             _ready.add(lid)
+        return
+    if _index_has_rows(lid):
+        if wait:
+            refresh_library(lib)                     # 「改完立刻读」那条链：同步刷
+        else:
+            _trigger_background(lib)                 # 脏库：把刷新派给后台，不在请求线程里扫
+            _await_background(lid)                   # 但**有上限地**等它一拍（见 SETTLE_WAIT）
+        return
+    refresh_library(lib)                             # 冷启动第一次：同步扫（否则空书架）
 
 
 def books_of(lib: dict) -> list:
@@ -676,19 +1093,27 @@ def books_of(lib: dict) -> list:
 
     顺序要紧：``_settle()`` 必须在**读缓存之前** —— 它可能触发一次刷新、而刷新在
     「索引真的变了」时会丢缓存键。反过来的话就会「先读到旧值、再把旧值写回缓存」。
+
+    ⚠️ 第 88 期补的第二道闸门（``fresh_enough``）：``_settle`` 现在会把脏库的刷新
+    **派到后台**，于是「刷新完成时丢缓存」可能发生在本次 ``set_json`` **之前** ——
+    旧值反而把缓存键占住（TTL 120s），比不缓存还糟。所以只有「本次可能读到的行
+    已经是当前的」时才写缓存：``_needs_refresh`` 为假 ⇒ 要么本就没在刷、要么某次
+    刷新**已经完成**（``_mark_fresh`` 在 ``_refresh_locked`` 提交之后才调，见
+    ``refresh_library``）⇒ 随后的 SELECT 一定看得到新行。仍在刷 / 仍脏就只读不写。
     """
     from . import library as _lib
     if not lib:
         return []
     _settle(lib)
     lid = str(lib.get("id") or "")
+    fresh_enough = not _needs_refresh(lid)
     key = cache.book_list_key(lid)
     hit = cache.get_json(key) if key else None
     if hit is not None:
         return hit
     rows = _rows_of(lib)
     out = _lib._apply_overlay([_book_of_row(lib, r) for r in rows])
-    if key:
+    if key and fresh_enough:
         cache.set_json(key, out, cache.TTL_LIST)
         with _state_lock:
             _cached_libs.add(lid)
@@ -770,8 +1195,12 @@ def _hit_of(bid: str, unique_only: bool = False):
     #    `library.invalidate()` 紧接着 `library.by_id(bid)` 取新值（server.py 多处
     #    `fresh = library.by_id(bid) or {}`），不 settle 就会把**旧行**当成改完的结果。
     # 稳态下 `_settle` 只是一次内存字典判断，全库循环的代价可以忽略。
+    # ⚠️ 传 ``wait=True``：**按 id 取书这条路必须同步刷新**（第 88 期唯一保留同步的读路径）。
+    # 上面说的「改完立刻读」是硬契约 —— 这里返回旧行不是慢，是**错**（改完没反应）。
+    # 它不在「打开书库」那条链上（那条走 ``books_of`` / ``counts``，已改成后台刷新），
+    # 所以保留同步不会把本期的成果还回去。
     for lib in libs:
-        _settle(lib)
+        _settle(lib, wait=True)
     keys = sorted(by_lid)
     hits: list = []
     # 分批 IN（与 db.get_effective_meta 同一范式）：SQLite 的变量上限是 999，

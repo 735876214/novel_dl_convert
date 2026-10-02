@@ -139,6 +139,16 @@ async def lifespan(app: FastAPI):
         _apply_update_config()
     except Exception as e:  # noqa: BLE001
         logging.getLogger("novelforge").exception("版本检查线程启动失败：%s", e)
+    # 第 88 期：**后台**预热全部库的书目索引（不阻塞启动）。
+    # 冷启动（容器刚起、book_index 还空着）时第一次打开书库必须等一次同步全量扫
+    # （NAS 上数十秒，正是「每次打开书库都慢 / 导入后第一次特别慢」的主犯）——
+    # 预热把这笔开销挪到启动后的后台：用户打开书库时索引已经在了，于是走
+    # `catalog._settle` 那条「索引已存在 ⇒ 后台增量刷新 + 立即返回现有索引」的快路。
+    # ⚠️ 必须是**非阻塞**：预热可能跑几十秒，在 lifespan 里同步等它 = 启动就卡住。
+    try:
+        catalog.prewarm_async()
+    except Exception as e:  # noqa: BLE001 —— 预热是旁路，绝不阻断启动
+        logging.getLogger("novelforge").exception("书目索引预热启动失败：%s", e)
     yield
     if WATCHER is not None:
         WATCHER.stop()
@@ -1671,7 +1681,14 @@ def _card(b: dict) -> dict:
 
 @app.get("/api/books")
 def api_books():
-    """书目列表：附带阅读进度 / 批注数 / 评分 / 阅读状态（来自 SQLite）。"""
+    """书目列表：附带阅读进度 / 批注数 / 评分 / 阅读状态（来自 SQLite）。
+
+    第 88 期：新增 ``scanning`` 字段（**追加，不改既有字段**，保持向后兼容）——
+    此刻正在后台建索引 / 刷新索引的库 id 列表。前端据此显示「正在建立索引…」并在扫完后
+    自动重取；本响应里的 items 仍可能比磁盘稍旧，因为脏库刷新已移出请求路径
+    （见 ``catalog._settle``：索引已存在时只派后台刷新、立即返回现有索引）。
+    """
+    _t0 = time.perf_counter()
     prog = db.all_progress()
     annos = db.annotation_counts()
     ratings = db.all_ratings()
@@ -1698,7 +1715,16 @@ def api_books():
             # 一次批量取（**不逐本查**），不在任何夹里就是空数组。
             "collection_ids": colls.get(b["id"], []),
         })
-    return {"items": items, "total": len(items)}
+    scanning = catalog.scanning_libraries()
+    out = {"items": items, "total": len(items), "scanning": scanning}
+    # 常态**不打日志**（别把日志刷爆）：只有明显变慢才留一行，带上量级与「是否在后台刷新」。
+    # 这条是第 88 期的对账依据 —— 优化前后都能量出「打开书库」到底花在哪。
+    _ms = (time.perf_counter() - _t0) * 1000
+    if _ms > 300:
+        logging.getLogger("novelforge").info(
+            "GET /api/books 耗时 %dms（items=%d，后台刷新中的库=%s）",
+            int(_ms), len(items), scanning or "无")
+    return out
 
 
 # ⚠️ 导出端点必须注册在 /api/books/{bid} **之前**：
@@ -4438,6 +4464,26 @@ def api_libraries():
         "source_roots": [{"name": r["name"], "path": str(r["path"])}
                          for r in config.LIBRARY_SOURCE_ROOTS],
     }
+
+
+@app.get("/api/libraries/scan-state")
+def api_libraries_scan_state():
+    """每库的**书目索引扫描状态**（第 88 期）：前端据此轮询显示「正在建立索引…」。
+
+    为什么单开一个轻量接口、而不是塞进 ``/api/libraries``：后者每次都查书数
+    （``catalog.counts``）并拼一整套 DTO，而轮询要的是「变没变」，越便宜越好。
+    本接口**只读内存里的扫描运行态**（``catalog.scan_state``），不扫盘、不查索引表。
+
+    字段形状（前端按这个读）：
+
+    - ``items``：每库一项 —— ``library_id`` / ``name`` / ``scanning`` / ``started_at`` /
+      ``finished_at`` / ``seconds``（上次耗时，秒）/ ``added`` / ``removed`` /
+      ``scanned``（条目数）/ ``error``（上次失败信息，空串 = 成功）。从未扫过时除
+      ``library_id`` / ``name`` 外全是 0 / 空 / False。
+    - ``scanning``：**正在扫**的库 id 列表（与 ``GET /api/books`` 的同名字段一致），
+      轮询方只看这一项就能决定要不要重取书目。
+    """
+    return catalog.scan_state()
 
 
 @app.get("/api/reading-thresholds")
@@ -8481,7 +8527,16 @@ async def convert(file: UploadFile = File(...), traditionalize: bool = Form(Fals
     # 第 75 期：记下 ① 原件（上传件落在 INPUT_DIR 的那份），删书时一并回收。
     # 只在 `copy`（真的复制了一份成品）时记：`skip` 的 `result` 就是 src 本身。
     if str(action) == "copy":
-        library.remember_origin(result, library_rules.library_id_of_root(out_dir), src)
+        lid = library_rules.library_id_of_root(out_dir)
+        library.remember_origin(result, lid, src)
+        # 第 88 期：**入库了就要标脏** —— 与其它写路径（改名 / 上传封面 / 刮削落库 …）一致。
+        # 此前这里漏了这一句，于是刚导入的书只能等监听线程的全量兜底（``watcher`` 的
+        # ``refresh_all``，默认 60s）才出现在书目里，也就是「导入后要等很久」。
+        # ⚠️ 判据是 dispatch 的返回值 ``action``：它只可能是 "copy"（文件/目录已落到
+        # out_dir）或 "skip"（没有可入库的形态、什么都没写）。失败会走上面的 except，
+        # 不会到这里 —— 所以「真的写进去了」⇔ ``action == "copy"``。
+        # ``lid`` 取不到时 ``library.invalidate("")`` 退化为**全库**标脏（宁可多扫，不可漏标）。
+        library.invalidate(lid)
     return FileResponse(result, filename=pathlib.Path(result).name)
 
 
@@ -8505,7 +8560,11 @@ async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)
     await _log_dispatch(src, action, result, "api", size=src.stat().st_size, detail=opts.get("_notice", ""))
     # 第 75 期：与 /convert 同口径 —— 记下 ① 原件，删书时一并回收
     if str(action) == "copy":
-        library.remember_origin(result, library_rules.library_id_of_root(out_dir), src)
+        lid = library_rules.library_id_of_root(out_dir)
+        library.remember_origin(result, lid, src)
+        # 第 88 期：与 /convert 完全同口径 —— 真的入库了才标脏（判据同为 ``action == "copy"``，
+        # 理由见 /convert 那段注释）。这条此前与 /convert 一起漏了，是「导入后很久才看到」的另一半根因。
+        library.invalidate(lid)
     # 与 /convert 同口径：直接返回文件流，真实文件名由 FileResponse 在
     # Content-Disposition 里给（前端据此命名，杜绝「x.epub.epub」这类错名；
     # 也不在前端再发明一套展开名逻辑）。src 已校验为单文件，result 必为文件。

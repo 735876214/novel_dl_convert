@@ -282,6 +282,15 @@ def _quiesce_background() -> None:
         left = watcher.wait_pending(5.0)
     except Exception:                                 # noqa: BLE001 —— 收尾动作本身失败不该让用例变红
         pass
+    # 第 88 期：书目索引的**后台刷新线程**（`catalog._spawn_bg` 派生的那批，以及启动预热
+    # `catalog.prewarm_async`）。它们都会查库，必须在 `db.close()` **之前**收干净 ——
+    # 与 scrape / watcher / embed-refresh 同一条纪律（残留线程攥着旧连接查下一用例的库，
+    # 全量跑实测到过 segfault）。
+    try:
+        from novelforge.core import catalog as _catalog
+        left += _catalog.wait_pending(5.0)
+    except Exception:                                 # noqa: BLE001
+        pass
     try:
         from novelforge import server
         w = getattr(server, "WATCHER", None)

@@ -304,20 +304,39 @@ def test_文件没了索引行跟着删(cat_lib):
     assert [b["name"] for b in library.books(lib["id"])] == ["留下.epub"]
 
 
-def test_标脏后的读会看到新书(cat_lib):
-    """``library.invalidate()`` = 标脏 ⇒ 下一次读**同步**增量刷一次。
+def test_标脏后派后台刷新_扫完能看到新书(cat_lib, monkeypatch):
+    """``library.invalidate()`` = 标脏 ⇒ 下一次读**只派后台刷新、立即返回现有索引**。
 
-    这条语义是全仓 20 多处写操作之后 ``library.invalidate()`` 的依据 ——
-    改成「只标脏、等后台」的话，界面上就会短暂显示旧书目，而那些调用点的
-    注释与用例都建立在「下一次读必然是新状态」上。
+    第 88 期把这条语义从「标脏 ⇒ 下一次读**同步**刷一次」改掉了 —— 后者正是
+    「每次打开书库都慢」的根因：库在 NAS 上时，每个请求都要在请求线程里付一次
+    「整目录遍历 + 每文件一次 stat」。为什么允许「稍旧」：文件级改动的可见性交给
+    前端轮询（``/api/books`` 的 ``scanning`` + ``/api/libraries/scan-state``），
+    扫完自动重取；服务端**绝不**在请求线程里扫盘。
+
+    ⚠️ 断言必须**确定性**：不能写「标脏后第一次读必然看到 / 必然看不到新书」——
+    后台线程可能抢在本次读之前就把行写完，那是竞态、不是语义。所以这里：
+    ① 钉住「脏被看见了、且走了**后台**那条分支」（spy ``_spawn_bg``）；
+    ② 等后台**确定**收干净（``wait_pending``，同一份收尾纪律）；
+    ③ 再看新书。
     """
     lib, root = cat_lib
+    lid = lib["id"]
+    triggered = []
+    _real = catalog._spawn_bg
+    monkeypatch.setattr(catalog, "_spawn_bg",
+                        lambda l: (triggered.append(str(l)), _real(l))[1])
+
     _put(root, "第一本.epub", b"EPUB")
-    assert [b["name"] for b in library.books(lib["id"])] == ["第一本.epub"]
+    # 冷启动第一次：索引为空 ⇒ 同步扫（否则用户什么都看不到）
+    assert [b["name"] for b in library.books(lid)] == ["第一本.epub"]
 
     _put(root, "第二本.epub", b"EPUB")
-    library.invalidate(lib["id"])
-    assert sorted(b["name"] for b in library.books(lib["id"])) == ["第一本.epub", "第二本.epub"]
+    library.invalidate(lid)
+    assert catalog._needs_refresh(lid) is True, "标脏之后没被判成脏"
+    library.books(lid)                                 # 索引已存在 ⇒ 只派后台刷新
+    assert triggered == [lid], "脏库未走后台刷新分支（又回到请求线程里扫盘了）"
+    assert catalog.wait_pending(5.0) == 0, "后台刷新没收干净（收尾纪律）"
+    assert sorted(b["name"] for b in library.books(lid)) == ["第一本.epub", "第二本.epub"]
 
 
 def test_不标脏时读不会看到新书(cat_lib):
@@ -341,13 +360,13 @@ def test_不标脏时读不会看到新书(cat_lib):
 def test_同一时刻刻度内的全局失效也算脏(cat_lib, monkeypatch):
     """全局标脏与刷新完成落在**同一个时钟刻度**里时，也必须判脏。
 
-    ``test_标脏后的读会看到新书`` 走的是**按库**失效（``invalidate(lib_id)`` →
-    ``_dirty`` 集合的成员判断），那条路不受时钟影响、一直是对的。这里走的是
+    ``test_标脏后派后台刷新_扫完能看到新书`` 走的是**按库**失效（``invalidate(lib_id)``
+    → ``_dirty`` 集合的成员判断），那条路不受时钟影响、一直是对的。这里走的是
     **全局**失效分支，它的判据原本是 ``_dirty_all_at > _refreshed_at[lid]``
     —— **两个 ``time.time()`` 比大小**。
 
     同一个刻度里这两次调用返回**完全相同的浮点数**，``>`` 为假 ⇒ 库被判成不脏 ⇒
-    下一次读不刷新 ⇒ 刚写进去的文件**不在书目里**：不报错、也不为空，只是少一本。
+    **不会派后台刷新** ⇒ 刚写进去的文件永远不出现：不报错、也不为空，只是少一本。
     不是理论风险 —— Windows + Python 3.12 上实测 ``time.time()`` 的粒度约
     **15.6ms**（连续调 2000 次全部相同），而「写文件 → ``invalidate()`` → 立刻读书目」
     这一串（上传 / 刮削落库 / 批量导入 / 建库）正好落在同一个刻度里。
@@ -355,25 +374,37 @@ def test_同一时刻刻度内的全局失效也算脏(cat_lib, monkeypatch):
     把时钟**冻住**是关键：不冻就变成「看机器快慢」的 flake ——
     ``tests/test_annotation_export.py::test_按单书收窄`` 正是这样偶尔红一次。
     冻住之后，这个场景在任何平台、任何负载下都**必然**复现改动前的错。
+
+    ⚠️ 第 88 期：判据的**落点**从「下一次读同步刷新」变成了「有没有判脏 ⇒ 有没有派
+    后台刷新」—— 被钉住的那个比较本身没变（计数 vs 时刻）。所以这里 spy
+    ``_spawn_bg``：判据一退化，这里就一条派活都收不到。
     """
     lib, root = cat_lib
     lid = lib["id"]
     monkeypatch.setattr(catalog, "time", _FrozenClock(time.time()))
+    triggered = []
+    _real = catalog._spawn_bg
+    monkeypatch.setattr(catalog, "_spawn_bg",
+                        lambda l: (triggered.append(str(l)), _real(l))[1])
 
     _put(root, "第一本.epub", b"EPUB")
     library.invalidate()                       # 全局，不是按库
-    assert [b["name"] for b in library.books(lid)] == ["第一本.epub"]
+    assert [b["name"] for b in library.books(lid)] == ["第一本.epub"]   # 冷启动 ⇒ 同步扫
 
     _put(root, "第二本.epub", b"EPUB")
-    library.invalidate()
-    assert sorted(b["name"] for b in library.books(lid)) == ["第一本.epub", "第二本.epub"], \
-        "同一刻度内的全局失效被判成「不脏」⇒ 第二次写的文件没进书目"
+    library.invalidate()                       # 与上一次刷新落在同一个刻度内
+    library.books(lid)
+    assert catalog.wait_pending(5.0) == 0
+    assert triggered == [lid], \
+        "同一刻度内的全局失效被判成「不脏」⇒ 根本没派后台刷新（第二次写的文件永不出现）"
+    assert sorted(b["name"] for b in library.books(lid)) == ["第一本.epub", "第二本.epub"]
 
 
 def test_is_stale比的是计数不是时刻(cat_lib, monkeypatch):
     """``_is_stale`` 与 ``_needs_refresh`` 是**两处各自手写**的同一个比较。
 
-    上一条走的是请求路径（``catalog.books_of`` → ``_settle`` → ``_needs_refresh``）。
+    上一条走的是请求路径（``catalog.books_of`` → ``_settle`` → ``_needs_refresh``，
+    第 88 期起经 ``_spawn_bg`` 观察）。
     ``_is_stale`` 只被监听线程的 ``refresh_stale`` 用，**改漏它不会有任何界面表现** ——
     只表现为「后台永远不再刷新」，而那正是「用户绕过 App 往目录里丢文件」唯一的兜底。
     所以这里**单独**再钉一次，两处各钉各的。
