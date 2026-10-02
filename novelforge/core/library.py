@@ -2100,6 +2100,12 @@ def invalidate(library_id=None) -> None:
     """
     from . import catalog
     catalog.invalidate(library_id)
+    # ⚠️ 第 88 期试过在这里「顺手派后台刷新」（`catalog.invalidate_and_refresh`），
+    # 实测**退回**：本函数有 20+ 个调用点，点火后后台刷新会和调用方紧接着的读断言
+    # 赛跑，`tests/test_catalog.py` 里连「顺序 / 序号单元目录」这两条**与契约无关**的
+    # 用例都被打红（4 红）⇒ 那是 flaky 的来源，不是收益。
+    # 现在的点火点只有三处、且都是**不与人抢**的位置：读路径（脏库才派，见 catalog._settle
+    # 的 SETTLE_WAIT）、服务启动预热（prewarm_async）、监听线程每轮增量刷新。
 
 
 def export_rows() -> list:

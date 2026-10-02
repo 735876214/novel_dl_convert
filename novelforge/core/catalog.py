@@ -263,33 +263,6 @@ def invalidate(library_id=None) -> None:
     _drop_list(library_id)
 
 
-def invalidate_and_refresh(library_id=None) -> None:
-    """标脏之后**顺手派一次后台增量刷新**（第 88 期，任务 1）。
-
-    目的只有一个：**用户下次打开书库时索引通常已经新了**，于是读路径不必再等。
-    它不改 ``invalidate()`` 的既有语义（标脏 + 丢缓存照旧），只是在其之上多排一次
-    后台工作 —— 真正的刷新仍然只由 ``refresh_library`` 实现（**不许出现两套**）。
-
-    ⚠️ 放这里而不放进 ``library.invalidate()``：``library`` 在模块级 import 本模块，
-    反向 import 会成环（本模块全程用延迟 import 才勉强绕开）。依赖方向是
-    ``library → catalog``，所以「顺手刷新」这一步只能由本模块提供，让 ``library``
-    在它的 ``invalidate()`` 里带着调一下。
-
-    ⚠️ 线程纪律：刷新跑在一个**被登记**的旁路线程里（见 ``_spawn_bg`` / ``wait_pending``），
-    收尾方（测试的 ``conftest._quiesce_background``、将来的优雅关停）能等它收干净 ——
-    否则线程会攥着已关闭的连接去查下一个用例的库（本仓为此吃过 segfault）。
-    """
-    lid = str(library_id or "")
-    if lid:
-        _spawn_bg(lid)
-        return
-    # 全局失效：为该进程里**每一条**库各排一次。逐库单飞，不合并成一个
-    # 「刷全部」的大动作 —— 大库会把小库一起拖住，而它们之间毫无关系。
-    from . import library as _lib
-    for lib in _lib.libraries():
-        _spawn_bg(str(lib.get("id") or ""))
-
-
 def _is_stale(lid: str) -> bool:
     """这个库自上次刷新之后又被标脏了吗？
 
@@ -472,7 +445,10 @@ def wait_scan(timeout: float = 5.0) -> bool:
 def prewarm_async() -> None:
     """启动时**非阻塞**预热索引**已存在**的库（第 88 期，任务 3）。
 
-    与 ``invalidate_and_refresh`` 的差别：**不标脏**，只是让后台把每个库刷一遍。
+    与「读路径派活」的差别：**不标脏**，只是让后台把每个库刷一遍。
+    （第 88 期曾有一个 ``invalidate_and_refresh``，想让 ``invalidate()`` 顺手点火；
+    实测会让后台刷新与调用方紧接着的读断言赛跑、打红 4 条既有用例，故**已删除** ——
+    点火点只有三处：读路径（脏库才派）、本预热、监听线程每轮。）
     冷启动（进程刚起来、``_ready`` 还空着）时索引若是持久化过的，这一遍是增量的
     （一次目录遍历 + 每文件 stat）⇒ 用户第一次打开书库时通常已经是「不脏」的，
     于是走 ``_settle`` 那条「边派后台边返回现有索引」的快路。
