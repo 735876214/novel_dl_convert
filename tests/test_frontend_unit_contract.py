@@ -43,6 +43,10 @@ EXPECTED_SPECS = (
     "src/stores/library.spec.ts",
     # 第 40 期：阅读阈值是「全前端唯一的判定入口」，它的行为由这条 spec 兜住
     "src/lib/readingThresholds.spec.ts",
+    # 第 86 期：书源列表的统计 / 筛选 / 排序（sources-ui 增强 A~D 的判据源）。
+    # ⚠️ 不登记就等于「它可以被悄悄删掉」—— 这张表就是本仓防回潮的方式。
+    # 最该保住的一条：统计条上的数字 = 点它筛出来的条数（不一致时界面在骗用户）。
+    "src/lib/sourceFilter.spec.ts",
     # 第 40 期：新建向导。「立即创建」必须**真的建库**（不是只关浮层），这条 spec 兜住
     "src/components/tools/LibraryWizard.spec.ts",
     # 第 40 期：路径判据（向导与编辑弹窗共用一份）。原来两处各写一遍 `startsWith('/')`，
