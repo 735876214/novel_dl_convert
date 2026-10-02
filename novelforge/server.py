@@ -5999,6 +5999,10 @@ EDITABLE: dict = {
     "network": {"max_retries", "host_replace"},
     # 第 85 期批次 B：`toc_enabled` = 「从官方书城取目录」的独立开关（闸门的用途维度）
     "download": {"enabled", "public_only", "toc_enabled"},
+    # 第 86 期：**书籍追更**调度（与 `update`「应用自身版本」不是一回事）。
+    # ⚠️ 默认 `enabled=true`（需求口径），所以这里必须可写 —— 否则界面关不掉它，
+    # 后台照跑 = 假开关（本仓有专门一条纪律）。
+    "auto_update": {"enabled", "interval_hours", "max_books", "request_delay"},
     # retention 是嵌套块（第 52 期）：与 integrations 同口径，整块取值，
     # 免得将来往留存策略里加键时还要再改一次白名单。
     "logging": {"dir", "max_entries", "retention"},
@@ -6224,6 +6228,9 @@ def api_get_config():
             "traditionalize": bool(cfg.get("traditionalize", False)),
             "output": cfg.get("output") or {},
             "llm": {**llm, "has_key": has_key},
+            # 第 86 期：书籍**追更**调度（默认开启 ⇒ **必须回显**）。漏了这行，设置页
+            # 显示的就是内置默认值而不是用户改过的值 —— 「写进去看不见」正是假配置的形态。
+            "auto_update": cfg.get("auto_update") or {},
             "watcher": cfg.get("watcher") or {},
             "network": cfg.get("network") or {},
             "download": cfg.get("download") or {},

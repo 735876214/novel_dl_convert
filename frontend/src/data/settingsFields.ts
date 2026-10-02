@@ -65,6 +65,22 @@ export const WATCHER_FIELDS: FieldDef[] = [
 
 /** 网络与下载（本项目扩展） */
 export const NETWORK_FIELDS: FieldDef[] = [
+  // 书籍**追更**（第 86 期）：与「应用更新」无关 —— 它定时对已下载的书增量追加新章。
+  // ⚠️ 默认开启：hint 里必须写明代价（会周期性对源站外呼），否则用户不会想到来关它。
+  {
+    path: 'auto_update.enabled',
+    label: '自动追更',
+    type: 'bool',
+    hint: '定时检查已下载的书并**只追加**新章（既有章节与阅读进度不受影响）；开启后会更频繁地访问源站',
+  },
+  {
+    path: 'auto_update.interval_hours',
+    label: '追更间隔（小时）',
+    type: 'number',
+    hint: '首轮不会在服务启动时立刻跑，而是等一个间隔',
+  },
+  { path: 'auto_update.max_books', label: '单轮最多追更（本）', type: 'number', hint: '防止一次外呼打爆源站' },
+  { path: 'auto_update.request_delay', label: '每本间隔（秒）', type: 'number', hint: '礼貌节流' },
   { path: 'network.max_retries', label: '传输重试次数', type: 'number', hint: '下载时超时 / 传输错误的重试上限' },
   { path: 'download.enabled', label: '开放搜索 / 下载', type: 'bool', hint: '关闭时书源仅做规则管理，不可搜索下载' },
   { path: 'download.public_only', label: '仅放行公版源', type: 'bool' },
@@ -176,7 +192,7 @@ export const UPDATE_FIELDS: FieldDef[] = [
 export const SECTION_KEYS: Record<string, string[]> = {
   conversion: ['chapter_detection', 'traditionalize', 'llm'],
   watcher: ['watcher'],
-  network: ['network', 'download', 'logging'],
+  network: ['network', 'download', 'logging', 'auto_update'],
   naming: ['naming'],
   upload: ['upload'],
   achievements: ['achievements'],
