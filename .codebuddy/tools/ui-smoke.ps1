@@ -22,7 +22,10 @@
 param(
   [string[]]$Routes,
   [string]$Base = 'http://localhost:8993',
-  [int[]]$Widths = @(360, 768, 1280),
+  # Comma-separated string, parsed below. A real [int[]] parameter is unreliable
+  # here: the PATH shim is a .cmd, and cmd/`-File` forwarding eats the comma
+  # (observed: "-Widths 360,1280" arrived as a single value 3601280).
+  [string]$Widths = '360,768,1280',
   [int]$Height = 900,
   [string]$Prefix = 'smoke',
   [string]$OutDir = "$env:TEMP\ui-smoke",
@@ -115,26 +118,41 @@ foreach ($route in $Routes) {
   }
   Start-Sleep -Milliseconds 1500
 
-  if ($LoginPassword) {
-    $needLogin = (& agent-browser eval "!!document.querySelector('input[type=password]')" 2>&1 | Select-Object -Last 1)
-    if ($needLogin -match 'true') {
-      Write-Output 'login required: submitting form'
-      if ($LoginAccount) { & agent-browser fill "input[type=text],input[type=email]" $LoginAccount 2>&1 | Out-Null }
-      & agent-browser fill "input[type=password]" $LoginPassword 2>&1 | Out-Null
-      & agent-browser press Enter 2>&1 | Out-Null
-      Start-Sleep -Seconds 3
-      & agent-browser open $url 2>&1 | Select-Object -Last 1
-      Start-Sleep -Milliseconds 1500
-    } else {
-      Write-Output 'login state reused'
+  # Login probe. Pass the JS through a variable: the command text itself must not
+  # carry quotes, because the shell/tool layer sometimes eats double quotes and
+  # the probe then silently evaluates to nothing.
+  $probeLogin = '!!document.querySelector("input[type=password]")'
+  $isLoginForm = (& agent-browser eval $probeLogin 2>&1 | Select-Object -Last 1) -match 'true'
+  if ($isLoginForm) {
+    if (-not $LoginPassword) {
+      Write-Output 'LOGIN REQUIRED: pass -LoginPassword (route skipped)'
+      continue
     }
-  } elseif ((& agent-browser eval "!!document.querySelector('input[type=password]')" 2>&1 | Select-Object -Last 1) -match 'true') {
-    Write-Output 'WARN: page is a login form; pass -LoginPassword to log in'
+    Write-Output 'login required: submitting form'
+    if ($LoginAccount) { & agent-browser fill 'input[type=text],input[type=email]' $LoginAccount 2>&1 | Out-Null }
+    & agent-browser fill 'input[type=password]' $LoginPassword 2>&1 | Out-Null
+    & agent-browser press Enter 2>&1 | Out-Null
+    Start-Sleep -Seconds 4
+    & agent-browser open $url 2>&1 | Select-Object -Last 1
+    Start-Sleep -Milliseconds 1500
+    # HARD ASSERT. An earlier version emitted metrics + screenshots even when the
+    # login had not taken effect, i.e. it reported numbers measured on the LOGIN
+    # PAGE with no warning. Never emit data for a page we could not enter.
+    $stillLogin = (& agent-browser eval $probeLogin 2>&1 | Select-Object -Last 1) -match 'true'
+    if ($stillLogin) {
+      Write-Output 'LOGIN FAILED (still on login form) - route skipped, NO metrics emitted'
+      continue
+    }
+    Write-Output 'login ok'
+  } else {
+    Write-Output 'login state reused'
   }
 
   $slug = ($route -replace '[^A-Za-z0-9]+', '-').Trim('-')
   if (-not $slug) { $slug = 'page' }
-  foreach ($w in $Widths) {
+  $widthList = @($Widths -split '[,\s]+' | Where-Object { $_ } | ForEach-Object { [int]$_ })
+  if ($widthList.Count -eq 0) { $widthList = @(360, 768, 1280) }
+  foreach ($w in $widthList) {
     & agent-browser set viewport $w $Height 2>&1 | Out-Null
     Start-Sleep -Milliseconds $SettleMs
     # Pick the JSON line explicitly: the CLI also prints informational lines

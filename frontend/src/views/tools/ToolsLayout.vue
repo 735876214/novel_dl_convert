@@ -94,7 +94,7 @@ function go(section: ToolSection): void {
          这里给内容一个**最小可读宽度**并改为横向滚动：宁可让用户横向滚，
          也不把文字压成竖排单字。⚠️ 宽度充足时（桌面 / 平板）下面两层都不产生任何影响。 -->
     <div class="overflow-x-auto">
-      <div class="min-w-[34rem] px-[var(--shell-content-gutter)] pt-[calc(var(--shell-content-gutter)*2)] pb-[var(--shell-content-gutter)]">
+      <div class="min-w-[32rem] px-[var(--shell-content-gutter)] pt-[calc(var(--shell-content-gutter)*2)] pb-[var(--shell-content-gutter)]">
         <RouterView v-slot="{ Component, route: childRoute }">
           <KeepAlive :max="8">
             <component :is="Component" :key="childRoute.name ?? childRoute.path" />
