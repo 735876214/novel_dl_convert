@@ -8,6 +8,7 @@ import {
   type FeaturesResult,
   type LibraryEntity,
   type LibraryFacet,
+  type LibraryScanState,
 } from '@/lib/api'
 import { COLLECTIONS, LIBRARIES, SMART_SHELVES } from '@/data/collections'
 import { evaluateScope, type SmartScope } from '@/lib/smartScope'
@@ -30,6 +31,20 @@ export const useLibraryStore = defineStore('library', () => {
   const details = ref<Record<string, BookDetail>>({})
   const loaded = ref(false)
   const loading = ref(false)
+  /**
+   * 最近一次 `loadBooks` 的失败原因（空 = 无失败）。第 88 期加。
+   *
+   * 起因：失败时 `books` 仍是初值 `[]`，视图只看到「空」——于是「网络挂了」被渲染成
+   * 「这个书架还是空的」，用户完全不知道发生了什么。书架据此显示「加载失败 + 重试」。
+   */
+  const booksError = ref('')
+  /**
+   * 书目数据的**原地变更计数**（`patchProgress` 每次都 ++）。
+   *
+   * `scopeCounts` 的 memo 以「数组引用」为键，而 `patchProgress` 是**就地改**某一本的
+   * 进度（引用不变）—— 没有这个计数，按进度判定的智能书架徽标会停在旧数字上。
+   */
+  const booksRevision = ref(0)
 
   // ---------------- 书库（第 10 期多书库） ----------------
 
@@ -105,15 +120,19 @@ export const useLibraryStore = defineStore('library', () => {
   /** 「库」分组筛选键（如 fmt:EPUB / issues:1），优先级最高 */
   const shelfFacet = ref('')
 
-  /** 全部标签去重（书库页筛选 chips 用） */
+  /**
+   * 全部标签去重（书库页筛选 chips 用）。
+   *
+   * 第 88 期：用 `Set` 而不是 `array.includes` —— 后者对每个标签都要线性扫一遍已收集的，
+   * 近似 O(标签数²)。几百本书 × 几十个标签时这是实打实的卡顿来源；Set 是 O(1) 摊还，
+   * 且**保持插入顺序**（与原来的去重次序完全一致，chips 顺序不变）。
+   */
   const allTags = computed(() => {
-    const seen: string[] = []
+    const seen = new Set<string>()
     scopedBooks.value.forEach((b) => {
-      ;(b.tags || []).forEach((t) => {
-        if (!seen.includes(t)) seen.push(t)
-      })
+      ;(b.tags || []).forEach((t) => seen.add(t))
     })
-    return seen
+    return [...seen]
   })
 
   /** 按阅读状态筛书（真实状态优先，无状态行的书按进度兜底推导）。**限定在当前库内**。 */
@@ -200,17 +219,22 @@ export const useLibraryStore = defineStore('library', () => {
     hit.percent = Math.min(100, Math.max(0, Number(percent) || 0))
     const ts = Number(at) || 0
     if (ts > 0) hit.updated_at = Math.max(ts, hit.updated_at || 0)
+    // 就地改了数据 ⇒ 让以「引用」为键的 memo（scopeCounts）知道该重算
+    booksRevision.value += 1
   }
 
   /**
    * 进行中的书目请求（第 67 期「单飞闸」）。
    *
-   * ⚠️ 只有 `loaded` 守卫是**不够**的：`loadBooks` 在真正发请求前先 `await` 了阈值，
-   * 这是个让步点 —— 首屏上「侧栏 + 若干仪表盘部件」在同一批微任务里各调一次，
-   * 全都在任何人把 `loaded` 置真**之前**通过了守卫，于是同一份书目被并发拉了多次。
-   * 实测 600 本的库：**一次页面加载打了 7 次 `/api/books`**（2.8 MB、累计 3.6 s）。
+   * ⚠️ 只有 `loaded` 守卫是**不够**的：`loaded` 要等响应回来才置真，在那之前的窗口里
+   * 首屏上「侧栏 + 书架 + 若干仪表盘部件」会在同一批微任务里各调一次，全都通过守卫，
+   * 于是同一份书目被并发拉了多次。实测 600 本的库：**一次页面加载打了 7 次 `/api/books`**
+   * （2.8 MB、累计 3.6 s）。
    * 现在并发调用共享同一个 Promise；`force` 期间若已有在飞的请求，也复用它
    * （它拿回来的就是最新数据，再发一次没有意义）。
+   *
+   * （第 88 期把「先 await 阈值再发书目」的串行瀑布拿掉了，但**这个闸不能拆**：
+   *  `loaded` 的窗口依然存在，闸拦的正是那个窗口里的并发调用。）
    */
   let booksInflight: Promise<void> | null = null
 
@@ -219,13 +243,25 @@ export const useLibraryStore = defineStore('library', () => {
     if (booksInflight) return booksInflight
     booksInflight = (async () => {
       loading.value = true
-      // 第 40 期：阈值是判「读没读完」的依据，**先拿到再判**。
-      // 不 await 也能跑（有兜底值），但那是「先按默认值渲染一帧再跳」，不如等一下。
-      await Promise.all([ensureThresholds(), ensureThresholds(currentLibraryId.value)])
+      booksError.value = ''
+      // 第 88 期：阈值与书目**并行**取 —— 此前是「先 await 阈值、再发书目」的串行瀑布，
+      // 两个小请求把那个几百 KB 的大请求硬生生挡在后面（实测「导入后第一次打开特别慢」）。
+      // 阈值有 `FALLBACK` 兜底，且缓存是 `reactive` 的：晚到会让依赖它的 computed 自己
+      // 重算，所以**不必**等它 —— 先用兜底值渲染，真值到了再自动修正。
+      void Promise.all([ensureThresholds(), ensureThresholds(currentLibraryId.value)])
       try {
         const res = await api.books()
         books.value = res.items
+        // 第 88 期：响应可选带上「正在刷新索引的库」——拿不到（后端未落地）就当空数组
+        scanningLibraryIds.value = Array.isArray(res.scanning) ? res.scanning.filter(Boolean) : []
         loaded.value = true
+        // 有库在扫 ⇒ 起轮询看进度（扫完自停）；不在扫就什么都不做
+        syncScanPolling()
+      } catch (e) {
+        // ⚠️ 失败**绝不写 `loaded`**：否则之后永远短路不再拉，界面会一直显示空书架。
+        // 保存原因供视图显示「加载失败 + 重试」；**不再向下抛**（调用方多是 `void`，
+        // 抛出会变成无人 catch 的 unhandled rejection，而那对用户没有任何帮助）。
+        booksError.value = e instanceof Error ? e.message : '加载失败'
       } finally {
         loading.value = false
         booksInflight = null
@@ -314,12 +350,115 @@ export const useLibraryStore = defineStore('library', () => {
     }
   }
 
-  /** 自定义书架计数：`scope:{id}` → 数量（侧栏徽标用，与内置 smartCounts 同一模式） */
-  const scopeCounts = computed<Record<string, number>>(() => {
-    const out: Record<string, number> = {}
-    for (const s of scopes.value) {
-      out[`scope:${s.id}`] = evaluateScope(scopedBooks.value, s.rules, s.match).length
+  // ---------------- 扫描 / 建索引进度（第 88 期） ----------------
+  //
+  // 用户症状：「导入后第一次打开特别慢、显示空的很久才有书」。
+  // 一部分时间是后端正在**建索引** —— 那时列表天然是旧的/空的，界面得说清楚在干什么，
+  // 并给一个进度感，而不是干等。后端并行开发中，字段/接口都按**可选**容错。
+
+  /** 正在刷新索引的库 id（来自 `/api/books` 的可选 `scanning`；拿不到 = 空 = 不显示） */
+  const scanningLibraryIds = ref<string[]>([])
+  /** 每库扫描状态（来自 `/api/libraries/scan-state`），键 = library_id */
+  const scanStates = ref<Record<string, LibraryScanState>>({})
+
+  /** 轮询间隔（需求给定 2 秒；扫完就停，非常驻） */
+  const SCAN_POLL_MS = 2000
+  let scanTimer: ReturnType<typeof setInterval> | null = null
+
+  /**
+   * 停止扫描轮询。`refresh=true` 时顺带重拉一次书目 ——
+   * 索引刚建完，列表多半多了/少了书，用户正等它出现。
+   */
+  function stopScanPolling(refresh = false): void {
+    if (scanTimer !== null) {
+      clearInterval(scanTimer)
+      scanTimer = null
     }
+    if (refresh && loaded.value) void loadBooks(true)
+  }
+
+  /** 拉一次扫描状态并合并；若已无库在扫则**停止轮询**（并刷新一次书目）。 */
+  async function fetchScanState(): Promise<void> {
+    try {
+      const r = await api.librariesScanState()
+      const map: Record<string, LibraryScanState> = {}
+      for (const it of r?.items ?? []) {
+        if (it && it.library_id) map[it.library_id] = it
+      }
+      scanStates.value = map
+      const still = Object.values(map)
+        .filter((s) => s.scanning)
+        .map((s) => s.library_id)
+      if (!still.length) {
+        // 扫完了：清掉标记并停（refresh 让新建索引出来的书立刻可见）
+        scanningLibraryIds.value = []
+        stopScanPolling(true)
+      }
+    } catch {
+      // 接口未落地 / 读失败：停轮询，别拿错误刷屏，也别影响书架本身
+      stopScanPolling()
+    }
+  }
+
+  /** 按当前 `scanningLibraryIds` 决定开不开轮询（重复调用安全：已在轮询就不重开）。 */
+  function syncScanPolling(): void {
+    if (!scanningLibraryIds.value.length) {
+      stopScanPolling()
+      return
+    }
+    if (scanTimer === null) {
+      void fetchScanState()
+      scanTimer = setInterval(() => void fetchScanState(), SCAN_POLL_MS)
+    }
+  }
+
+  /** 是否**有库**在建立索引 */
+  const isScanning = computed(() => scanningLibraryIds.value.length > 0)
+
+  /**
+   * 当前上下文（当前库 / 全部书库）的扫描进度汇总；`null` = 不显示。
+   * 只统计与当前库相关的在扫库 —— 在别的库建索引不该在当前库的书架上弹条。
+   */
+  const scanProgress = computed<{ libs: number; scanned: number; added: number } | null>(() => {
+    const current = currentLibraryId.value
+    const ids = scanningLibraryIds.value.filter((id) => !current || id === current)
+    if (!ids.length) return null
+    let scanned = 0
+    let added = 0
+    for (const id of ids) {
+      const s = scanStates.value[id]
+      if (!s) continue
+      scanned += Number(s.scanned) || 0
+      added += Number(s.added) || 0
+    }
+    return { libs: ids.length, scanned, added }
+  })
+
+  /**
+   * 自定义书架计数：`scope:{id}` → 数量（侧栏徽标用，与内置 smartCounts 同一模式）。
+   *
+   * 第 88 期加 memo：`evaluateScope` 对每个智能书架都要**全量扫一遍书**，而侧栏每渲染
+   * 一组都会读一遍这张表。以「书目数组引用 + scopes 引用 + 原地变更计数」为键 ——
+   * 三者都没变时直接复用上次结果，不做重复的全量求值。
+   */
+  let scopeCountsCache: {
+    books: BookCard[]
+    scopes: SmartScope[]
+    rev: number
+    out: Record<string, number>
+  } | null = null
+
+  const scopeCounts = computed<Record<string, number>>(() => {
+    const src = scopedBooks.value
+    const scs = scopes.value
+    const rev = booksRevision.value
+    const c = scopeCountsCache
+    if (c && c.books === src && c.scopes === scs && c.rev === rev) return c.out
+    const out: Record<string, number> = {}
+    for (const s of scs) {
+      out[`scope:${s.id}`] = evaluateScope(src, s.rules, s.match).length
+    }
+    scopeCountsCache = { books: src, scopes: scs, rev, out }
     return out
   })
 
@@ -390,6 +529,7 @@ export const useLibraryStore = defineStore('library', () => {
     details,
     loaded,
     loading,
+    booksError,
     shelfTitle,
     smartKey,
     shelfFacet,
@@ -428,6 +568,12 @@ export const useLibraryStore = defineStore('library', () => {
     hasFeature,
     loadFeatures,
     setCurrentLibrary,
+    // 扫描 / 建索引进度（第 88 期）
+    scanningLibraryIds,
+    scanStates,
+    isScanning,
+    scanProgress,
+    fetchScanState,
     // 侧栏三组条目（静态导航）
     libraries: LIBRARIES,
     smartShelves: SMART_SHELVES,

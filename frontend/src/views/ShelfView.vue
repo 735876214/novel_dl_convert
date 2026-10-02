@@ -11,7 +11,8 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
-import { api, type BookCard, type BookMoveBatch } from '@/lib/api'
+import Skeleton from '@/components/ui/Skeleton.vue'
+import { api, apiErrorMessage, type BookCard, type BookMoveBatch } from '@/lib/api'
 import {
   formatLabel,
   metaOf,
@@ -52,6 +53,9 @@ const prefs = useShelfPrefsStore()
 const display = useDisplayPrefsStore()
 const router = useRouter()
 const ui = useUiStore()
+
+/** 页面根元素：首字母分桶的 IntersectionObserver 只在本书架内查询，不越界到别的页面 */
+const rootEl = ref<HTMLElement | null>(null)
 
 /**
  * 网格由**封面尺寸**驱动（对应上游 `外观 → Layout` 的封面尺寸 / 网格间距）。
@@ -132,7 +136,7 @@ function visibleIds(): string[] {
   } else if (prefs.prefs.view === 'table') {
     for (const row of tableRows.value) if (!row.toggle) push(row.book)
   } else {
-    for (const r of rows.value) if (!isSeriesRow(r)) push(r.book)
+    for (const r of renderRows.value) if (!isSeriesRow(r)) push(r.book)
   }
   return out
 }
@@ -148,6 +152,7 @@ function enterSelect(): void {
   if (selectMode.value) {
     collections.value = []
     api.collections().then((r) => (collections.value = r.items)).catch(() => {})
+    void loadMoveBatch()   // 按需：进多选才看有没有可撤销的移动批次
   } else {
     selected.value = new Set()
   }
@@ -203,6 +208,13 @@ const moveIds = ref<string[]>([])
 /** 最近一次可撤销的移动批次（书架上给一条「撤销」，不藏在别处） */
 const moveBatch = ref<BookMoveBatch | null>(null)
 
+/**
+ * 拉最近一次可撤销的移动批次（书架的「撤销本次移动」条用它）。
+ *
+ * ⚠️ 第 88 期改成**按需**触发：此前每次进页都并发一条 `/api/book-move/batches`
+ * （用户根本还没进多选、更没移动过任何东西）——那是纯粹的进页开销。
+ * 现在只在「进入多选」「点移动到书库」「刚移动 / 撤销完」时才拉。
+ */
 async function loadMoveBatch(): Promise<void> {
   try {
     const r = await api.bookMoveBatches(1)
@@ -211,10 +223,10 @@ async function loadMoveBatch(): Promise<void> {
     moveBatch.value = null      // 读不到就不显示这条：移动是增强流程，不该堵住书架
   }
 }
-onMounted(loadMoveBatch)
 
 function openMove(): void {
   if (!selected.value.size) { ui.toast('先选几本书'); return }
+  void loadMoveBatch()          // 按需：真正要移动了才看有没有可撤销的批次
   moveIds.value = [...selected.value]
   moveOpen.value = true
 }
@@ -406,11 +418,25 @@ function isFinishedOf(b: BookCard): boolean {
   return (b.percent ?? 0) >= 100
 }
 
+/**
+ * **最终参与渲染的行**（第 88 期新增，为分页 / 无限滚动预留的**唯一**接口）。
+ *
+ * 三个视图（网格 / 列表 / 表格）与首字母分桶全都从这里取 —— 将来接分页只改这一处
+ * （在这里 `.slice(start, end)`），不必去动三个 v-for 与分桶逻辑。
+ * 现阶段它就是 `rows` 本身（一行不做裁剪）。
+ */
+const renderRows = computed<Row[]>(() => rows.value)
+
 /** 首字母分桶（第 43 期）：以每行的代表本（系列折叠行取首本）的书名首字分桶 */
-const buckets = computed(() => buildBuckets(rows.value.map((r) => r.book.title || r.book.name)))
+const buckets = computed(() =>
+  buildBuckets(renderRows.value.map((r) => r.book.title || r.book.name)),
+)
 
 /** 当前视口所在的桶（滚动时更新；用于高亮跳转条） */
 const activeBucket = ref('')
+
+/** 判定「已滚过顶部」的参考线（px）—— 与跳转条 sticky 的落点对齐 */
+const BUCKET_LINE = 140
 
 function jumpToBucket(key: string): void {
   activeBucket.value = key
@@ -419,25 +445,77 @@ function jumpToBucket(key: string): void {
   el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
-/** 高亮「已滚过顶部」的最后一个桶 —— 取真实滚动位置，不猜、不预设 */
-function updateActiveBucket(): void {
-  const els = Array.from(document.querySelectorAll<HTMLElement>('[data-bucket]'))
-  if (!els.length) {
-    activeBucket.value = ''
-    return
-  }
-  let cur = els[0].dataset.bucket || ''
-  for (const el of els) {
-    if (el.getBoundingClientRect().top <= 140) cur = el.dataset.bucket || cur
-    else break
-  }
-  activeBucket.value = cur
+/**
+ * 高亮「已滚过顶部」的最后一个桶 —— 第 88 期从「每次 scroll 都 `querySelectorAll`
+ * + 逐个 `getBoundingClientRect`」改成 **IntersectionObserver**。
+ *
+ * 为什么：长列表里 `querySelectorAll('[data-bucket]')` 每个滚动事件都要分配一次全量数组，
+ * 再加上对「已滚过」的每个元素逐个测量，滚动会明显发涩。
+ *
+ * 做法：观察区取**视口顶部 `0..BUCKET_LINE` 的一条横带**（用 `rootMargin` 的 bottom
+ * 负缩实现）。元素的顶边越过参考线、或底边离开参考线时，都会进出这条带 —— 于是我们只
+ * 在**边界事件**里重算高亮桶，平时滚动一次测量都不做。DOM 顺序里「最后一个仍在这条带内」
+ * 的元素所属桶，就是改造前那段线性扫描得到的同一结论。
+ */
+let bucketObserver: IntersectionObserver | null = null
+/** 当前渲染的 `[data-bucket]` 元素（**只在重建时收集一次**，滚动回调里不再 querySelectorAll） */
+let bucketEls: HTMLElement[] = []
+/** 顶部 `0..BUCKET_LINE` 带内、当前可见的 `[data-bucket]` 元素（事件驱动地增删） */
+const bucketsAboveLine = new Set<HTMLElement>()
+/** 上次建观察器时的视口高度：只在它变了才重建（宽度变化不影响那条带的像素位置） */
+let bucketViewportH = 0
+
+function rebuildBucketObserver(): void {
+  // happy-dom 等测试环境可能没有 IntersectionObserver：没有就静默跳过（高亮非核心功能）
+  if (typeof IntersectionObserver === 'undefined') return
+  bucketObserver?.disconnect()
+  bucketsAboveLine.clear()
+  bucketEls = Array.from(rootEl.value?.querySelectorAll<HTMLElement>('[data-bucket]') ?? [])
+  bucketViewportH = window.innerHeight
+  // bottom 负缩 = innerHeight - BUCKET_LINE，使观察区正好是顶部那条带。
+  const bottomInset = Math.max(0, bucketViewportH - BUCKET_LINE)
+  const obs = new IntersectionObserver(
+    (entries) => {
+      for (const en of entries) {
+        const el = en.target as HTMLElement
+        if (en.isIntersecting) bucketsAboveLine.add(el)
+        else bucketsAboveLine.delete(el)
+      }
+      // DOM 顺序里「最后一个仍在这条带内」的元素所属桶 = 改造前线性扫描的同一结论
+      let cur = ''
+      for (const el of bucketEls) {
+        if (bucketsAboveLine.has(el)) cur = el.dataset.bucket || cur
+      }
+      activeBucket.value = cur
+    },
+    { rootMargin: `0px 0px -${bottomInset}px 0px` },
+  )
+  bucketObserver = obs
+  for (const el of bucketEls) obs.observe(el)
 }
 
-onMounted(() => window.addEventListener('scroll', updateActiveBucket, { passive: true }))
-onBeforeUnmount(() => window.removeEventListener('scroll', updateActiveBucket))
-watch(rows, () => void nextTick(updateActiveBucket))
-watch(() => prefs.prefs.view, () => void nextTick(updateActiveBucket))
+/** 视口**高度**变了，观察区的 bottom 负缩要跟着重算 ⇒ 重建一次观察器 */
+function onResizeRebuildBuckets(): void {
+  if (window.innerHeight === bucketViewportH) return
+  rebuildBucketObserver()
+}
+
+onMounted(async () => {
+  await nextTick()
+  rebuildBucketObserver()
+  window.addEventListener('resize', onResizeRebuildBuckets, { passive: true })
+})
+onBeforeUnmount(() => {
+  bucketObserver?.disconnect()
+  bucketObserver = null
+  bucketsAboveLine.clear()
+  bucketEls = []
+  window.removeEventListener('resize', onResizeRebuildBuckets)
+})
+watch(renderRows, () => void nextTick(rebuildBucketObserver))
+watch(() => prefs.prefs.view, () => void nextTick(rebuildBucketObserver))
+// 展开 / 收起系列会改变渲染的 [data-bucket] 元素集合（listEntries / tableRows 跟着变）
+watch(expanded, () => void nextTick(rebuildBucketObserver))
 
 function isSeriesRow(r: Row): boolean {
   return r.key.startsWith('series:')
@@ -474,7 +552,7 @@ type ListEntry = {
 
 const listEntries = computed<ListEntry[]>(() => {
   const out: ListEntry[] = []
-  for (const r of rows.value) {
+  for (const r of renderRows.value) {
     if (!isSeriesRow(r)) {
       out.push({ key: r.key, kind: 'book', book: r.book })
       continue
@@ -492,7 +570,7 @@ const listEntries = computed<ListEntry[]>(() => {
 /** 表格行：同样拍平（折叠时每组只出首本，展开则全出） */
 const tableRows = computed(() => {
   const out: Array<{ key: string; book: BookCard; toggle: { name: string; count: number } | null }> = []
-  for (const r of rows.value) {
+  for (const r of renderRows.value) {
     const isSeries = isSeriesRow(r)
     const open = isExpanded(r)
     r.members.forEach((b, i) => {
@@ -583,6 +661,34 @@ const filterHint = computed(() => {
 })
 
 const isFiltered = computed(() => Boolean(library.shelfFacet) || library.isSmart)
+
+// ---------------- 加载 / 失败 / 空 三态（第 88 期） ----------------
+
+/**
+ * 首屏骨架：**还没有任何书目数据**、且正在加载时显示。
+ *
+ * 判据挂在**未裁剪的书目**（`library.books`）上而不是 `sorted`：切库时 `books` 非空
+ * ⇒ 不闪骨架（切库是客户端过滤，不需要重新加载）。
+ */
+const showSkeleton = computed(() => !library.books.length && library.loading)
+
+/**
+ * 失败态：没有数据、不在加载、且有失败原因时显示。
+ *
+ * ⚠️ 只在**没有数据**时显示 —— 已有的旧数据比一个错误页有用（force 刷新失败时保留旧列表，
+ * 别把用户看得到的书换成一个报错）。
+ */
+const showError = computed(
+  () => !library.books.length && !library.loading && Boolean(library.booksError),
+)
+
+/** 失败原因文案（剥掉后端 `{"detail":…}` 外壳，必要时带上原始信息） */
+const errorText = computed(() => apiErrorMessage(new Error(library.booksError), '加载失败'))
+
+/** 重试：`force` 绕过 `loaded` 守卫重拉一次（失败时 `loaded` 本就为 false，双保险） */
+function retryLoad(): void {
+  void library.loadBooks(true)
+}
 
 /**
  * 空态三态（第 38 期）。**判据只有这一处**，模板里不许再写条件表达式：
@@ -684,11 +790,25 @@ const INPUT_CLS =
 </script>
 
 <template>
-  <div>
+  <div ref="rootEl">
     <PageHead
       :title="library.shelfTitle"
       :desc="`共 ${sorted.length} 本${sorted.length !== source.length ? ` · 已筛掉 ${source.length - sorted.length} 本` : ''}`"
     />
+
+    <!-- 建索引进度（第 88 期）：后端正在刷新索引时给出可见进度，而不是让用户对着空书架干等。
+         进度来自 `scan-state` 轮询（每 2 秒，扫完即停）；字段拿不到（后端未落地）就不显示。 -->
+    <div
+      v-if="library.scanProgress"
+      class="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-[12.5px] text-muted-foreground"
+    >
+      <Icon name="clock" class="h-3.5 w-3.5 shrink-0" />
+      <span class="font-medium text-foreground">正在建立索引…</span>
+      <span class="tabular-nums">
+        已扫 {{ library.scanProgress.scanned }} 本<template v-if="library.scanProgress.added"> · 新增 {{ library.scanProgress.added }} 本</template>
+      </span>
+    </div>
+
     <!-- 库级控制（最小集：切库 / 扫描 / 管理；重命名与删除仍在「书库管理」页，避免第二处写入口） -->
     <div class="mb-3 flex flex-wrap items-center gap-2 text-[12.5px]">
       <span class="text-muted-foreground">书库</span>
@@ -892,6 +1012,20 @@ const INPUT_CLS =
       @moved="onMoved"
     />
 
+    <!-- 首屏骨架（第 88 期）：数据还在路上时给可见反馈 —— 改造前这里**没有任何反馈**，
+         数据没到时页面直接落进「这个书架还是空的」，等于对用户撒谎（这正是用户说的
+         「一直显示空 / 等很久」）。文案 + 骨架一起给「进度感」。 -->
+    <div v-if="showSkeleton" data-shelf-skeleton class="space-y-3">
+      <p class="text-[12.5px] text-muted-foreground">正在载入书库…</p>
+      <div class="grid" :style="gridStyle">
+        <div v-for="n in 12" :key="n" class="flex flex-col gap-2">
+          <Skeleton class="aspect-3/4 w-full" />
+          <Skeleton class="h-3 w-2/3" />
+        </div>
+      </div>
+    </div>
+
+    <template v-else>
     <!-- 首字母分桶跳转（第 43 期）：按书名首字分桶，非拉丁字符统一归 # 桶。
          桶数不足 3 时不显示 —— 两三个桶的「跳转」只是噪音。 -->
     <div
@@ -913,11 +1047,20 @@ const INPUT_CLS =
       </button>
     </div>
 
+    <!-- 失败态（第 88 期）：**绝不把加载失败装成「空书架」** —— 那是在谎报数据状态。
+         给明确原因 + 一个「重试」出口，而不是继续显示「这个书架还是空的」。 -->
+    <EmptyState v-if="showError" icon="alert" title="书库加载失败" :desc="errorText">
+      <template #action>
+        <Button size="sm" variant="primary" @click="retryLoad">重试</Button>
+      </template>
+    </EmptyState>
+
     <!-- 空态**三态**（第 38 期）：0 库 / 有库但没书 / 有筛选没命中。
          原来只有后两态、且把「没书」一概说成「换个入口看看，或到「探索发现」把书下载进来」
          —— 全新部署（0 个书库）时那句话是**错的**：此时下载/上传/投递一律被后端
-         400 拒收，书根本没有地方可落。第 38 期起三态各说各的话，0 库直接给出口。 -->
-    <EmptyState v-if="!sorted.length" icon="library" :title="emptyTitle" :desc="emptyDesc">
+         400 拒收，书根本没有地方可落。第 38 期起三态各说各的话，0 库直接给出口。
+         ⚠️ 第 88 期：这里是 `v-else-if`（前面先拦失败态）—— 只有在「真的没数据」时才显示。 -->
+    <EmptyState v-else-if="!sorted.length" icon="library" :title="emptyTitle" :desc="emptyDesc">
       <template v-if="library.hasNoLibraries" #action>
         <Button size="sm" variant="primary" @click="createLib">新建书库</Button>
       </template>
@@ -926,7 +1069,7 @@ const INPUT_CLS =
     <!-- 网格视图：列数与间距由 displayPrefs 驱动（见 gridStyle） -->
     <div v-else-if="prefs.prefs.view === 'grid'" class="grid" :style="gridStyle">
       <div
-        v-for="r in rows"
+        v-for="r in renderRows"
         :key="r.key"
         class="group"
         :data-bucket="bucketKeyOf(r.book.title || r.book.name)"
@@ -1269,6 +1412,7 @@ const INPUT_CLS =
         </tbody>
       </table>
     </Card>
+    </template>
 
     <!-- 快速预览浮层（⋮ 菜单的「快速预览」）。挂在页面这一层而不是卡片里：
          它是 `fixed` 居中的模态，与某一个卡片的位置无关 -->

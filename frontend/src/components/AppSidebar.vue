@@ -116,15 +116,38 @@ async function loadBrowseCounts(): Promise<void> {
   }
 }
 
+/**
+ * 把「非首屏关键」的预取推迟到浏览器空闲时再发（第 88 期）。
+ *
+ * 起因：侧栏一挂载就**一次性并发 6 个请求**（书目 / 库 / 书架 / 收藏夹 / 浏览计数 / 版本），
+ * 首屏真正要用的那几个被自己人抢了连接 —— 这正是「打开书库等很久」的一部分。
+ * 次要项（侧栏徽标 / 底部版本号）延后一个空闲帧发即可，早几百毫秒没人看得出。
+ *
+ * ⚠️ 优先 `requestIdleCallback`，**无则退化为一次 `setTimeout 0`**：不能「只有 ric 时才发」，
+ * 否则测试环境（happy-dom 没有 ric）里这些预取永远不执行，徽标会静默消失。
+ */
+function whenIdle(fn: () => void): void {
+  const ric = (
+    window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }
+  ).requestIdleCallback
+  if (typeof ric === 'function') ric(fn, { timeout: 2000 })
+  else setTimeout(fn, 0)
+}
+
 onMounted(() => {
-  collections.load()
+  // 关键路径：书目（书架首次打开的内容）+ 库列表（侧栏「库」组）—— 立刻发。
+  // ⚠️ `loadBooks` 与书架页 `onMounted` 会各调一次，store 的**单飞闸**保证只发一个请求。
   library.loadBooks()
   library.loadLibraries()
-  library.loadScopes()
-  // 能力清单要跟着**当前库**走（含刷新后恢复上次选中的库）
-  void library.loadFeatures()
-  void loadBrowseCounts()
-  void loadVersionInfo()
+  // 次要预取：让出首屏，等空闲再发
+  whenIdle(() => {
+    collections.load()
+    library.loadScopes()
+    // 能力清单要跟着**当前库**走（含刷新后恢复上次选中的库）
+    void library.loadFeatures()
+    void loadBrowseCounts()
+    void loadVersionInfo()
+  })
 })
 
 watch(() => route.path, () => void loadBrowseCounts())

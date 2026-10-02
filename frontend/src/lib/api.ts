@@ -2509,6 +2509,30 @@ export interface LibrariesResult {
   source_roots: { name: string; path: string }[]
 }
 
+/**
+ * 单个书库的**扫描状态**（第 88 期 `GET /api/libraries/scan-state`）。
+ *
+ * 用于「导入后第一次打开特别慢」的**感知**：后端正在刷新索引时，界面显示
+ * 「正在建立索引…（已扫 N 本 / 新增 N 本）」，扫完即停轮询（别常驻）。
+ *
+ * ⚠️ 字段全部**可选**：后端该接口是并行开发的，尚未落地时前端不能因此报错
+ * （拿不到就当空数组，见 store 里的容错）。`scanning` 是唯一的「在扫」判据。
+ */
+export interface LibraryScanState {
+  library_id: string
+  scanning: boolean
+  /** 本轮扫描开始时间（epoch 秒；未在扫时为 0 / 缺省） */
+  started_at?: number
+  /** 上次结果：本次已扫文件数 */
+  scanned?: number
+  /** 上次结果：新增本数 */
+  added?: number
+  /** 上次结果：移除本数 */
+  removed?: number
+  /** 上次结果：错误原因（空 / 缺省 = 无错） */
+  error?: string
+}
+
 /** 每库可覆写项中的一项（`/api/libraries/{id}/settings` 的 `schema`）。 */
 export interface LibrarySettingItem {
   /** 全局配置的点分路径（如 `output.layout`）—— 覆写就以它为键 */
@@ -2839,28 +2863,127 @@ function _authToken(): string {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** `request()` 的默认超时（第 88 期）。15 秒覆盖绝大多数接口；个别慢接口按需覆盖。 */
+export const DEFAULT_REQUEST_TIMEOUT_MS = 15000
+
+export interface RequestOptions {
+  /**
+   * 超时（毫秒）。传 0 = 不限时（谨慎使用：会退回「一直转圈」的老毛病）。
+   * 默认 `DEFAULT_REQUEST_TIMEOUT_MS`。
+   */
+  timeoutMs?: number
+  /**
+   * **网络层**失败时的重试次数（不含首次请求）。默认：GET = 1，其余 = 0。
+   *
+   * ⚠️ 三条纪律（第 88 期）：
+   *   · 只对 GET 生效 —— 写操作（POST/PUT/DELETE）重发可能造成重复副作用；
+   *   · **不重试超时** —— 超时意味着「慢」，再等一轮只会让用户等更久；
+   *   · 调用方主动取消（AbortSignal）不重试。
+   */
+  retries?: number
+}
+
+/** 造一个带 `name` 的错误（`Error` 的 options 只认 `cause`，`name` 得手写）。 */
+function _namedError(name: string, message: string, cause?: unknown): Error {
+  const err = new Error(message, cause === undefined ? undefined : { cause })
+  err.name = name
+  return err
+}
+
+/**
+ * 带超时的 fetch（第 88 期）。
+ *
+ * `fetch` 自身**没有超时**：网络半死不活时它会挂到浏览器默认（可达数分钟），
+ * 界面就一直停在「正在载入…」——「打开书库等很久」的现场正是这种「其实早该报错」的等待。
+ *
+ * 语义：
+ *   · 超时            → 抛 `name === 'TimeoutError'`；
+ *   · 调用方 abort（如探索页「新检索取消旧检索」）→ **原样抛 AbortError**，
+ *     调用方仍能按 `e.name === 'AbortError'` 识别「这是我自己取消的」；
+ *   · 其余 fetch 抛错 = 网络层失败 → 抛 `name === 'NetworkError'`。
+ */
+async function _fetchWithTimeout(path: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const callerSignal = init.signal ?? null
+  const ctrl = new AbortController()
+  let timedOut = false
+
+  // 调用方自带的取消信号必须保留：探索页用它「取消上一次检索」。
+  const forwardAbort = (): void => ctrl.abort(callerSignal?.reason)
+  if (callerSignal) {
+    if (callerSignal.aborted) forwardAbort()
+    else callerSignal.addEventListener('abort', forwardAbort, { once: true })
+  }
+  const timer =
+    timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true
+          ctrl.abort()
+        }, timeoutMs)
+      : null
+
+  try {
+    return await fetch(path, { ...init, signal: ctrl.signal })
+  } catch (e) {
+    if (timedOut) throw _namedError('TimeoutError', `请求超时（${Math.round(timeoutMs / 1000)} 秒未响应）`)
+    const name = (e as { name?: string } | undefined)?.name
+    // 调用方取消：原样抛出，别把它错报成超时 / 网络错
+    if (name === 'AbortError' || name === 'TimeoutError') throw e
+    throw _namedError('NetworkError', '网络错误：无法连接到服务器', e)
+  } finally {
+    if (timer !== null) clearTimeout(timer)
+    callerSignal?.removeEventListener('abort', forwardAbort)
+  }
+}
+
+/**
+ * 统一请求入口（第 88 期：加超时 + 有限重试 + 可诊断的失败原因）。
+ *
+ * ⚠️ 抛错约定**保持不变**：HTTP 错误仍把后端响应原文（可能是 `{"detail":"…"}`）
+ * 塞进 `err.message`，交给 `apiErrorMessage()` 剥壳 —— 全站既有调用点不受影响。
+ */
+async function request<T>(path: string, init?: RequestInit, opts?: RequestOptions): Promise<T> {
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+  // 只有 GET 默认重试一次；写操作默认不重试（重发可能重复副作用）
+  const maxRetries = opts?.retries ?? (method === 'GET' ? 1 : 0)
+
   const headers = new Headers(init?.headers)
   const token = _authToken()
   if (token) headers.set('Authorization', `Bearer ${token}`)
-  const res = await fetch(path, { ...init, headers })
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '')
-    if (res.status === 401) {
-      // 登录失效 / 未登录：清 token 并通知全局弹出登录门禁
-      try {
-        localStorage.removeItem('nf_token')
-      } catch {
-        /* ignore */
-      }
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('nf-unauthorized'))
-      }
+
+  for (let attempt = 0; ; attempt += 1) {
+    let res: Response
+    try {
+      res = await _fetchWithTimeout(path, { ...init, headers }, timeoutMs)
+    } catch (e) {
+      const name = (e as { name?: string } | undefined)?.name
+      // 网络错可重试（GET）；超时 / 调用方取消一律不重试
+      if (name === 'NetworkError' && attempt < maxRetries) continue
+      console.error(`[api] ${method} ${path} → ${name ?? 'error'}`)
+      throw e
     }
-    console.error(`[api] ${init?.method ?? 'GET'} ${path} → ${res.status}`, detail)
-    throw new Error(detail || `请求失败（HTTP ${res.status}）`)
+
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '')
+      if (res.status === 401) {
+        // 登录失效 / 未登录：清 token 并通知全局弹出登录门禁
+        try {
+          localStorage.removeItem('nf_token')
+        } catch {
+          /* ignore */
+        }
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('nf-unauthorized'))
+        }
+      }
+      console.error(`[api] ${method} ${path} → ${res.status}`, detail)
+      // 保留后端 detail 原文（apiErrorMessage 会剥壳）；没有就按 4xx / 5xx 给一句分类过的兜底
+      throw new Error(
+        detail || (res.status >= 500 ? `服务器错误（HTTP ${res.status}）` : `请求失败（HTTP ${res.status}）`),
+      )
+    }
+    return (await res.json()) as T
   }
-  return (await res.json()) as T
 }
 
 /**
@@ -3832,7 +3955,13 @@ export const api = {
     ),
 
   // ---------- 书库：图书馆浏览 / 书籍详情 ----------
-  books: () => request<{ items: BookCard[]; total: number }>('/api/books'),
+  /**
+   * 全部书目。
+   *
+   * 第 88 期：响应新增可选 `scanning`（**正在刷新索引的库 id 列表**）。
+   * ⚠️ 它**可选**（后端并行开发中）—— 拿不到就当空数组，别因此报错。
+   */
+  books: () => request<{ items: BookCard[]; total: number; scanning?: string[] }>('/api/books'),
 
   bookDetail: (id: string) =>
     request<BookDetail>(`/api/books/${encodeURIComponent(id)}`),
@@ -4311,6 +4440,14 @@ export const api = {
 
   /** 书库实体列表（含书数 / 是否存在 / 可写）。 */
   libraries: () => request<LibrariesResult>('/api/libraries'),
+
+  /**
+   * 每库的**扫描状态**（第 88 期）。
+   *
+   * 书架在「有库正在建索引」时**每 2 秒**拉一次它，扫完即停（`stores/library.ts` 管轮询）。
+   * ⚠️ `items` 可选：后端接口并行开发中，未落地时返回 `{}` 也不该让界面报错。
+   */
+  librariesScanState: () => request<{ items?: LibraryScanState[] }>('/api/libraries/scan-state'),
 
   /** 格式分面（原 `/api/libraries` 语义，第 10 期改址到 `/api/library-facets`）。 */
   libraryFacets: () => request<{ items: LibraryFacet[] }>('/api/library-facets'),
