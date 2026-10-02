@@ -149,6 +149,17 @@ DEFAULTS = {
         #    章节标题 —— 两者是不同的动作（见 sources/manager.py 的 gate_reason 用途维度）。
         "toc_enabled": False,
     },
+    # 书籍**追更**（第 86 期最后一项）：定时对已下载的书增量追加新章。
+    # ⚠️ 与上面的 `update`（**应用自身**版本）不是一回事，名字刻意分开，免得混淆。
+    # ⚠️ 默认开启属本轮**唯一被授权**改默认值的项（需求口径）：
+    #    代价是服务会周期性对源站外呼，所以首轮**延迟一个间隔**、单轮限量、逐本节流，
+    #    并且设置页要能一键关掉（`enabled: false` 即刻停线程，见 `_apply_auto_update_config`）。
+    "auto_update": {
+        "enabled": True,
+        "interval_hours": 12,       # 定时间隔（小时）
+        "max_books": 50,            # 单轮最多追多少本（防止一次外呼打爆）
+        "request_delay": 3.0,       # 每本之间的间隔（秒，礼貌节流）
+    },
     "network": {
         "cookie_dir": str(COOKIE_DIR),
         "host_replace": {},         # 应对 CDN 漂移：{"old-host": "new-host"}

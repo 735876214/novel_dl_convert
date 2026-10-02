@@ -27,6 +27,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
 from .core import pipeline, activity_log, library, fileops, publish, scrape, updater, changelog
+from .core import autoupdate                      # 第 86 期：书籍追更的后台调度
 from .core import zipkind                        # 第 87 期：容器展开
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, achievements, activity, recommend,
@@ -122,6 +123,12 @@ async def lifespan(app: FastAPI):
             logging.getLogger("novelforge").info("刮削 worker 已启动（续跑上次未完成的待办）")
     except Exception as e:  # noqa: BLE001 —— 旁路功能，绝不阻断启动
         logging.getLogger("novelforge").exception("刮削 worker 启动失败：%s", e)
+    # 第 86 期：书籍**追更**调度（与上面的 updater「应用版本」是两件事）。
+    # 判据与热应用共用 `_apply_auto_update_config`（同一范式，免得两处各写一份 = 假开关）。
+    try:
+        _apply_auto_update_config()
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("novelforge").exception("追更调度启动失败：%s", e)
     # 第 78 期：版本检查后台线程（daemon）。出网失败静默忽略；check_enabled 关掉则完全不检查。
     # 第 80 期起「启动」与「保存配置后热应用」共用同一个判据（`_apply_update_config`），
     # 免得两处各写一份、改了一处忘另一处 —— 那正是本期要消掉的假开关成因。
@@ -137,6 +144,7 @@ async def lifespan(app: FastAPI):
         WATCHER.stop()
     scrape.stop()
     updater.stop_background()
+    autoupdate.stop()
 
 
 # 应用版本（**唯一真值源**）：第 30 期收敛为单一常量；第 78 期起改从仓库根 / 镜像内的
@@ -6174,6 +6182,25 @@ def _apply_watcher_config():
         pass
 
 
+def _apply_auto_update_config() -> None:
+    """追更调度的热应用（起 / 停 / 换间隔）—— 与 `_apply_update_config` 同一范式。
+
+    ⚠️ 关掉即**停线程**（不只是「下一轮不再外呼」）：与版本检查同款口径 ——
+    界面上关了、后台照跑，就是假开关（本仓有专门一条纪律）。
+    """
+    try:
+        cfg = (config.load_config().get("auto_update") or {})
+        if not bool(cfg.get("enabled", True)):
+            autoupdate.stop()
+            return
+        interval = int(cfg.get("interval_hours") or 12)
+        if autoupdate.state()["interval_hours"] != interval:
+            autoupdate.stop()        # 换挡要重启：线程只在每轮等待结束后才重读间隔
+        autoupdate.start_background(interval)
+    except Exception as e:  # noqa: BLE001 —— 旁路功能，绝不连累保存本身
+        logging.getLogger("novelforge").exception("追更配置热应用失败：%s", e)
+
+
 def _apply_runtime_config() -> None:
     """配置保存后，把所有「读一次就固定在进程里」的旁路模块热更新一遍。
 
@@ -6182,6 +6209,7 @@ def _apply_runtime_config() -> None:
     """
     _apply_watcher_config()
     _apply_update_config()
+    _apply_auto_update_config()
 
 
 @app.get("/api/config")
