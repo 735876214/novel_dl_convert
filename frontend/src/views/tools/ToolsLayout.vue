@@ -61,7 +61,7 @@ function go(section: ToolSection): void {
 
 <template>
   <!-- 负外边距抵消 main 的内边距，使标签栏贴齐卡片内缘；内容区再自行补回内边距 -->
-  <div class="-m-[var(--shell-content-gutter)] flex flex-col">
+  <div class="-m-[var(--shell-content-gutter)] flex min-w-0 flex-col">
     <div
       class="no-scrollbar sticky top-0 z-10 flex h-11 shrink-0 snap-x snap-mandatory items-stretch overflow-x-auto border-b border-border bg-[var(--shell-surface)] px-4 backdrop-blur-md md:snap-none"
       role="tablist"
@@ -86,13 +86,21 @@ function go(section: ToolSection): void {
     </div>
 
     <!-- 内容区上内边距取两倍 gutter：标签栏与内容之间留出更明显的呼吸感。
-         用显式 px/pt/pb 而非 p-[…] + pt-[…]，避免依赖同一属性的工具类排序。 -->
-    <div class="px-[var(--shell-content-gutter)] pt-[calc(var(--shell-content-gutter)*2)] pb-[var(--shell-content-gutter)]">
-      <RouterView v-slot="{ Component, route: childRoute }">
-        <KeepAlive :max="8">
-          <component :is="Component" :key="childRoute.name ?? childRoute.path" />
-        </KeepAlive>
-      </RouterView>
+         用显式 px/pt/pb 而非 p-[…] + pt-[…]，避免依赖同一属性的工具类排序。
+         ⚠️ 极窄屏（实测 360px）下**外壳不折叠侧栏**（固定 240px），内容区只剩 ~82px：
+         卡片被压到 12px 宽 ⇒ 中文**一字一行**地竖排。诊断已确认这**不是**断行规则问题
+         （`white-space / word-break / overflow-wrap` 全是 `normal`，纯物理挤压），
+         所以给文字加 `nowrap` 一律无用 —— 要修的是**容器宽度**。
+         这里给内容一个**最小可读宽度**并改为横向滚动：宁可让用户横向滚，
+         也不把文字压成竖排单字。⚠️ 宽度充足时（桌面 / 平板）下面两层都不产生任何影响。 -->
+    <div class="overflow-x-auto">
+      <div class="min-w-[34rem] px-[var(--shell-content-gutter)] pt-[calc(var(--shell-content-gutter)*2)] pb-[var(--shell-content-gutter)]">
+        <RouterView v-slot="{ Component, route: childRoute }">
+          <KeepAlive :max="8">
+            <component :is="Component" :key="childRoute.name ?? childRoute.path" />
+          </KeepAlive>
+        </RouterView>
+      </div>
     </div>
   </div>
 </template>
