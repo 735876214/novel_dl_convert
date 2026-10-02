@@ -39,6 +39,60 @@ function msg(e: unknown): string {
   return e instanceof Error ? e.message : '操作失败'
 }
 
+// ---------------- ⓪ 追更（增强 E）----------------
+// 追更**默认开启**且会周期性出网 ⇒ 必须能一眼看到状态并一键停掉。
+// 开关与三个数值都走 `api.saveConfig({auto_update: …})`（三处登记已完成），
+// 状态与「立即跑一轮」走专门的只读/触发接口。
+type AutoState = { running: boolean; enabled: boolean; interval_hours: number }
+const autoState = ref<AutoState | null>(null)
+const autoForm = ref({ interval_hours: 12, max_books: 50, request_delay: 3 })
+const autoBusy = ref('')
+
+async function loadAuto(): Promise<void> {
+  try {
+    autoState.value = await api.autoupdateState()
+    const cfg = await api.getConfig()
+    const a = (cfg as unknown as {
+      config?: { auto_update?: Partial<typeof autoForm.value> }
+    }).config?.auto_update
+    if (a) autoForm.value = { ...autoForm.value, ...a }
+  } catch (e) {
+    ui.toast(msg(e))
+  }
+}
+
+async function saveAuto(patch: Partial<AutoState & typeof autoForm.value>): Promise<void> {
+  autoBusy.value = 'save'
+  try {
+    // 整段提交（数值 + 开关），后端按 EDITABLE 白名单收下并**热应用**
+    // （关掉即停线程，不是只停止下一轮外呼）
+    await api.saveConfig({ auto_update: { ...autoForm.value, ...patch } })
+    ui.toast('追更设置已保存并即时生效')
+    await loadAuto()
+  } catch (e) {
+    ui.toast(msg(e))
+  } finally {
+    autoBusy.value = ''
+  }
+}
+
+async function runAuto(): Promise<void> {
+  autoBusy.value = 'run'
+  try {
+    const r = await api.autoupdateRun()
+    ui.toast(r.total
+      ? `追更完成：检查 ${r.total} 本，新增 ${r.added} 章`
+        + (r.errors ? `，失败 ${r.errors} 本（见活动日志）` : '')
+      : '没有可追更的书（只追有留档的下载书）')
+  } catch (e) {
+    ui.toast(msg(e))
+  } finally {
+    autoBusy.value = ''
+  }
+}
+
+void loadAuto()
+
 // ---------------- ① 导入 ----------------
 const paste = ref('')
 const origin = ref('paste')
@@ -293,6 +347,63 @@ void loadLedger()
 
 <template>
   <div class="flex flex-col gap-4 p-4">
+    <!-- ⓪ 追更（增强 E）：默认开启且会出网 ⇒ 状态必须一眼可见，且能一键停掉 -->
+    <Card>
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-[13px] font-medium text-foreground">自动追更</span>
+        <Badge :tone="autoState?.enabled === false ? 'warn' : autoState?.running ? 'ok' : 'neutral'">
+          {{ autoState?.enabled === false ? '已暂停' : autoState?.running ? '运行中' : '未运行' }}
+        </Badge>
+        <span class="text-[11.5px] text-muted-foreground">
+          每 {{ autoForm.interval_hours }} 小时检查一次已下载的书，只追加新章
+        </span>
+        <Button
+          size="sm"
+          class="ml-auto"
+          :disabled="!!autoBusy"
+          @click="saveAuto({ enabled: autoState?.enabled === false })"
+        >
+          {{ autoState?.enabled === false ? '启用追更' : '暂停追更' }}
+        </Button>
+        <Button size="sm" :disabled="!!autoBusy" @click="runAuto">
+          {{ autoBusy === 'run' ? '追更中…' : '立即追更一轮' }}
+        </Button>
+      </div>
+      <div class="mt-2 flex flex-wrap items-center gap-3 text-[11.5px] text-muted-foreground">
+        <label class="flex items-center gap-1">
+          间隔（小时）
+          <input
+            v-model.number="autoForm.interval_hours"
+            type="number"
+            min="1"
+            class="w-20 rounded-md border border-border bg-muted px-2 py-1 text-foreground outline-none focus:border-ring"
+          >
+        </label>
+        <label class="flex items-center gap-1">
+          单轮上限（本）
+          <input
+            v-model.number="autoForm.max_books"
+            type="number"
+            min="1"
+            class="w-20 rounded-md border border-border bg-muted px-2 py-1 text-foreground outline-none focus:border-ring"
+          >
+        </label>
+        <label class="flex items-center gap-1">
+          每本间隔（秒）
+          <input
+            v-model.number="autoForm.request_delay"
+            type="number"
+            min="0"
+            class="w-20 rounded-md border border-border bg-muted px-2 py-1 text-foreground outline-none focus:border-ring"
+          >
+        </label>
+        <Button size="sm" :disabled="!!autoBusy" @click="saveAuto({})">保存设置</Button>
+      </div>
+      <div class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
+        首轮不会在服务启动时立刻跑（等一个间隔）；想立刻追一次就点上面的按钮。
+      </div>
+    </Card>
+
     <!-- ① 导入 -->
     <Card>
       <div class="flex flex-wrap items-center gap-2">
