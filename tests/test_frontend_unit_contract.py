@@ -168,6 +168,23 @@ EXPECTED_SPECS = (
     # 让一次**已经成功**的上传显示成失败。这条失效完全静默（书其实入库了），却最容易被
     # 用户当成「格式不支持 / 上传坏了」，故单独钉住「响应非 JSON 也算成功」。
     "src/lib/convertUpload.spec.ts",
+    # 第 90 期：全站断点唯一真值源。本期之前它是 `lib/shelfRows.ts` 里的一份私有常量，
+    # 外壳侧栏也要用同一个断点时最容易的做法就是再抄一份 —— 抄了之后改一处漏一处
+    # **不会报错**，只是「书架行认为该横滑、侧栏认为还该常驻」这种谁都说不清的错位。
+    # 另一条同样静默的是兜底方向：读不到 `matchMedia` 时若按**窄屏**兜底，整个导航会被
+    # 塞进一个打不开的抽屉里，页面看着正常、只是左边永远空着。
+    "src/lib/viewport.spec.ts",
+    # 第 90 期：应用外壳侧栏（移植 BookOrbit 的 `ui/sidebar`）。它的失效方式几乎全是静默的：
+    # 折叠态宽度类挂错元素 ⇒ 图标条仍是 240px（只是里面空了一大半）；折叠态 / 宽度没落本机
+    # 存储 ⇒ 每次刷新弹回默认（用户读成「拖宽没生效」）；3px 阈值写反 ⇒ 拉手永远点不出开合；
+    # 窄屏没走抽屉 ⇒ 就是本期要修的那个原始缺陷（侧栏死占 240px、正文被挤成一列字）。
+    # 一条都不报错、不告警，页面上只是「有点怪」。
+    "src/components/ui/sidebar/sidebar.spec.ts",
+    # 第 90 期：抽屉（`ui/sheet`），它是窄屏侧栏的载体。每一条同样静默：没 Teleport 到 body
+    # ⇒ 抽屉被外壳的 `backdrop-blur` 裁掉一半（第 83 期踩过）；少了 `role="dialog"` 或
+    # 底下的页面没被 `aria-hidden` ⇒ 只有读屏用户知道坏了；Esc / 点遮罩关不掉 ⇒ 用户被锁在
+    # 抽屉里只能刷新；遮罩色写成 `--foreground` ⇒ 深色主题下是一层盖不住东西的浅雾。
+    "src/components/ui/sheet/sheet.spec.ts",
 )
 
 
@@ -287,6 +304,117 @@ def test_菜单里没有通过电子邮件发送这一项():
     assert "邮件" not in tpl and "email" not in low and "mail" not in low, (
         "BookActionsMenu.vue 的模板里出现了邮件相关项 —— 第 64 期决策是「不做」，"
         "本项目没有邮件配置，这一项点下去只会失败"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 应用外壳侧栏（第 90 期）
+# ---------------------------------------------------------------------------
+
+SIDEBAR_PREFS_TS = SRC / "lib" / "sidebarPrefs.ts"
+PREFS_PAYLOAD_TS = SRC / "lib" / "prefsPayload.ts"
+UI_STORE_TS = SRC / "stores" / "ui.ts"
+
+
+def _strip_js_comments(src: str) -> str:
+    """剥掉 JS/TS 的注释，是**字符串感知**的。
+
+    下面两条断言都问「这个标识符还在不在**代码**里」，而这两份文件的注释里恰恰
+    **逐字引用**了要禁掉的名字（`sidebarPrefs.ts` 的抬头整段在解释「为什么不进
+    `prefsPayload.ts`」；`stores/ui.ts` 的抬头在记录「本期删掉了
+    `sidebarCollapsed` / `toggleSidebar`」）。不剥注释，判据会被它自己的说明绊倒。
+
+    字符串状态必须跟着走：`'https://…'` 里的 `//` 不是注释开头，直接按行正则
+    砍会把字符串从中间截断，于是「键名对不对」那几条断言静默失效（永远为真）。
+    """
+    out: list[str] = []
+    i, n = 0, len(src)
+    quote: str | None = None
+    while i < n:
+        ch = src[i]
+        if quote:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(src[i + 1])
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
+            continue
+        if ch in "'\"`":
+            quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j == -1 else j
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def test_侧栏折叠态只有一处真值源():
+    """`stores/ui.ts` 里不许再出现 `sidebarCollapsed` / `toggleSidebar`。
+
+    第 90 期之前折叠态长在这个 pinia store 里，本期的 `ui/sidebar` 的
+    `SidebarProvider` 用 provide/inject（`useSidebar()`）接管了它。两处并存**不会报错** ——
+    顶栏的 `<SidebarTrigger />` 读 Provider、而某个漏改的页面读 store，于是
+    「点一下，侧栏动了、某个按钮的文案没变」（或反过来），谁也说不清哪边对。
+    这正是本仓库「单一真值源」那条硬约束盯的形状，故用文本断言把它钉死：
+    store 里已经没有侧栏状态，`isCollapsed` 的唯一来源就是 Provider。
+    """
+    # ⚠️ 先剥注释再找：这个文件的抬头**正在**记录「本期删掉了这两个名字」，
+    # 不剥的话判据会被自己的说明绊倒（同 BookDockPage 那条的取舍）。
+    body = _strip_js_comments(UI_STORE_TS.read_text(encoding="utf-8"))
+    for name in ("sidebarCollapsed", "toggleSidebar"):
+        assert name not in body, (
+            f"stores/ui.ts 的**代码**里又出现了 `{name}` —— 侧栏折叠态的真值源在 "
+            "`components/ui/sidebar/SidebarProvider.vue`（`useSidebar()`），"
+            "两处并存不会报错，只会让不同页面显示不一致的状态"
+        )
+
+
+def test_侧栏偏好是设备本地的_不跟着账号同步():
+    """侧栏折叠 / 宽度存本机，**不进**服务端偏好块。
+
+    宽度是**屏幕**的属性不是人的偏好：同一账号在 27 寸上拖到 420px、在平板上就
+    该是抽屉，跟着账号同步等于把大屏的宽度硬塞给小屏。所以 `lib/sidebarPrefs.ts`
+    走 localStorage，而 `lib/prefsPayload.ts` 的 `PAYLOAD_BLOCKS` 里**没有**侧栏块。
+
+    这条同样没有可见症状：真加进同步块，界面照常工作，只有「换个设备打开发现布局
+    被顶成别人的」这一种反馈 —— 而那时没人会想到是同步干的。合同测试
+    `tests/test_prefs_shelf_block.py` 是照 `PAYLOAD_BLOCKS` 断言的，所以这里只要
+    确认它没被塞进去，两边就自动一致。
+    """
+    payload = PREFS_PAYLOAD_TS.read_text(encoding="utf-8")
+    m = re.search(r"PAYLOAD_BLOCKS\s*=\s*\[(.*?)\]", payload, flags=re.S)
+    assert m, "prefsPayload.ts 里解析不出 `PAYLOAD_BLOCKS = […]` —— 结构变了，这条断言已失效"
+    names = [a or b for a, b in re.findall(r"'([^']+)'|\"([^\"]+)\"", m.group(1))]
+    assert names, f"PAYLOAD_BLOCKS 解析出来是空的：{m.group(1)!r}"
+    bad = [n for n in names if "sidebar" in n.lower() or "侧栏" in n]
+    assert not bad, (
+        f"PAYLOAD_BLOCKS 里出现了侧栏块 {bad} —— 侧栏布局是**设备**属性，"
+        "不能跟着账号同步（大屏的宽度会被塞给小屏）"
+    )
+
+    # 反方向：它确实落在本机存储里，且键带 `nf_` 前缀（同域部署时不会与上游互相覆盖）。
+    # 同样先剥注释 —— 抬头的整段说明里**逐字**写着 `prefsPayload` / `PAYLOAD_BLOCKS`。
+    prefs = _strip_js_comments(SIDEBAR_PREFS_TS.read_text(encoding="utf-8"))
+    assert "localStorage" in prefs, (
+        "sidebarPrefs.ts 不再走 localStorage —— 不是搬到服务端同步了，就是搬去别处了，两种都要先看清"
+    )
+    assert "'nf_sidebar_'" in prefs or '"nf_sidebar_"' in prefs, (
+        "侧栏本机键的前缀不是 `nf_sidebar_` —— 同域部署时可能与上游 BookOrbit 撞键、互相覆盖布局"
+    )
+    assert "prefsPayload" not in prefs, (
+        "sidebarPrefs.ts 的代码引用了 prefsPayload —— 侧栏偏好**不进**服务端同步块（见上）"
     )
 
 
