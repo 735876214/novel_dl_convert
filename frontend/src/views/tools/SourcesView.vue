@@ -296,8 +296,11 @@ function fmtTime(ts: number | null): string {
 // 表单字段与 `core/sources/rules.py` 的规则 schema 一一对应（不搞第二套命名）。
 // 「保存」走既有的 POST /api/sources（同一份校验）；「测试」走 POST /api/sources/test ——
 // **只存在于本次请求**，不写盘（写盘的唯一入口是 store.add_rule）。
-/** 表单输入框 / 标签的统一样式（模板里字段多，抽出来免得每个都抄一长串类名） */
-const INPUT_CLS = 'w-full rounded-md border border-border bg-muted px-2.5 py-1.5 text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card'
+/** 表单输入框 / 标签的统一样式（模板里字段多，抽出来免得每个都抄一长串类名）
+ *  ⚠️ `min-w-0` 不能省（第 92 期）：`<input>` 的固有 min-content 宽度约 150–180px（`size=20` 默认值），
+ *  放进 `grid-cols-2` 的轨道里时，grid item 的 `min-width: auto` 会取这个固有宽 ⇒ 两轨合计撑破容器。
+ *  `w-full` + `min-w-0` 才是「跟着轨道走」；宽屏有富余时 `min-w-0` 是 no-op。 */
+const INPUT_CLS = 'w-full min-w-0 rounded-md border border-border bg-muted px-2.5 py-1.5 text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card'
 const LABEL_CLS = 'mb-1 block text-[11px] text-muted-foreground'
 
 const showForm = ref(false)
@@ -532,7 +535,9 @@ function testExisting(name: string): void {
           <template v-if="form.searchMode === 'css'">
             <label :class="LABEL_CLS" class="mt-2">结果容器</label>
             <input v-model="form.searchContainer" :class="INPUT_CLS" placeholder=".book-item">
-            <div class="mt-2 grid grid-cols-2 gap-2">
+            <!-- 四个选择器：窄屏堆成一列（`sm:` 起才并排）—— 360 档两列时每个只剩 ~148px，
+                 占位符全被截断，读不出在填哪一项 -->
+            <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
                 <label :class="LABEL_CLS">标题选择器</label>
                 <input v-model="form.fTitle" :class="INPUT_CLS" placeholder=".name">
@@ -661,7 +666,7 @@ function testExisting(name: string): void {
           rows="7"
           placeholder='{"name": "示例书源", "search": {"url": "..."}}'
           aria-label="粘贴书源 JSON"
-          class="w-full resize-y rounded-md border border-border bg-muted px-3 py-2 font-mono text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+          class="w-full min-w-0 resize-y rounded-md border border-border bg-muted px-3 py-2 font-mono text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
         />
         <div class="mt-2.5 flex items-center gap-2">
           <Button variant="primary" :disabled="busy" @click="submitPaste">导入</Button>
