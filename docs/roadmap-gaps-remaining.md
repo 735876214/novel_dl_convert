@@ -4193,3 +4193,143 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
   重建后才按内容分派成能读的漫画包；② 工具页 →「书源工具」（导入 / 台账 / 登录 / 验证）；
   ③ 设置 → 书库管理 →「同名冲突」面板（组级结论，`重复扫描` 默认不勾选）+「副本与容器」面板。
 
+---
+
+## 第 88 期 · 书库加载慢（请求路径 + 前端感知 + 分页）（V0.88.0，2026-10-03）
+
+**来源**：用户原话「我刚将电子书导入书库，但在书库中显示加载等待时间过长。请分析可能导致延迟的原因，
+并提出优化方案以缩短显示时间。请考虑书库数据量、索引机制、加载策略及界面反馈等因素。」
+**范围**：用户拍定**全量**（含分页与虚拟滚动）。
+
+### 一、诊断结论（只读探测，行号为当时 HEAD）
+
+- **部署口径**：用户侧是 `docker-compose` 默认（Redis + PG 都在）⇒ 封面/列表缓存正常，
+  「封面链」基本可排除；主犯是 **「刷新跑在请求线程里」**。
+- **症状三条全中**：每次打开书库都慢 / 导入后第一次特别慢 / 显示「这个书架还是空的」很久才有书。
+- **后端**：`GET /api/books`（`server.py` → `library.books()` → `catalog.books()/books_of()`）
+  稳态是快的（读索引、DB 查询全批量无 N+1、有 gzip，600 本实测 65–73 ms）。真问题两处：
+  ① **`catalog._settle` 在请求线程里同步跑 `refresh_library`**（整目录遍历 + 每文件一次 stat，
+     必要时逐本 probe）；触发于冷启动 / 库被标脏 / 口径版本变化；NAS 上每次 syscall 毫秒级
+     ⇒ 266 本即数十秒。这正是第 62 期「书架 42 秒」的同一处。
+  ② **`/convert` 与 `/convert-path` 入库后不调 `library.invalidate()`**（其它写路径都调）
+     ⇒ 新书只能等 watcher 全量兜底（默认 60s）。**确定性缺陷**。
+- **前端**：`ShelfView.vue` 加载期**完全没有反馈**，`library.loading` 从未被视图使用，
+  `sorted.length===0` 直接落进 `EmptyState`（「这个书架还是空的」）⇒ **数据在路上却告诉用户没有书**；
+  `loadBooks` 把 `/api/books` 串在两个 `/api/reading-thresholds` 之后（白多一个 RTT）；
+  全量 `v-for` 无虚拟化；每卡一个封面请求；`request()` 无超时无重试。
+
+### 二、后端 A（脏库读不再扫盘）
+
+- **脏库读不再在请求线程扫盘**：派后台刷新 + `catalog.SETTLE_WAIT=0.25` 上限等待，到点如实返回现有索引。
+- 启动**后台预热** `prewarm_async`（只针对索引非空的库；不阻塞启动）。
+- `GET /api/books` 追加 `scanning` 字段（只加不改）；新增 `GET /api/libraries/scan-state`。
+- `refresh_library` 计时日志（>300ms 的请求才记一行）；`/convert`、`/convert-path` 补 `invalidate(lid)`。
+
+### 三、前端 B（骨架屏与真实状态）
+
+- 新增 `components/ui/Skeleton.vue`；**空态判据改为「非 loading 且真无数据」**；错误态与重试；
+  「正在建立索引…」进度条；阈值并行；次要请求懒化（侧栏 `requestIdleCallback`、移动批次按需）；
+  `request()` 超时与分类错误（GET 仅网络错重试一次）；`allTags` 用 Set；`scopeCounts` memo；
+  滚动改 IntersectionObserver。
+- 新增 `apiRequest.spec.ts`(7) / `ShelfView.states.spec.ts`(5) 并登记 `EXPECTED_SPECS`。
+
+### 四、⚠️ 契约变更（有意）
+
+- `library.invalidate()` 之后**下一次读**：由「**同步**增量刷（必然是新数据）」改成
+  「**派后台刷新 + 最多等 `SETTLE_WAIT`(0.25s)**，到点如实返回现有索引」。
+  - 为什么：前者正是「每次打开书库都慢」的根因（NAS 上整目录 stat 挂在请求上）。
+  - 代价：**可能短暂显示稍旧数据**；可见性改由前端轮询补（`scanning` + `scan-state`，扫完自动重取）。
+  - 想「一刻不等」：把 `catalog.SETTLE_WAIT` 置 0，**但必须同时**把「写后立刻读」那批用例改成轮询语义。
+  - 既有测试 `tests/test_catalog.py::test_标脏后的读会看到新书` 已按此**改写并说明理由**。
+- **显式扫描路径一律保持同步**（`refresh_library(force=True)` / `POST /api/libraries/{lid}/scan` /
+  watcher 扫描）—— 这条是硬约束，不许动。
+
+### 五、C 批：分页 + 无限滚动
+
+- **后端**：`GET /api/books` 加可选 `limit` / `offset`（按**字符串**收再自己解析 —— 声明成 `int`
+  会被 FastAPI 用 422 拒掉，而契约要 400 中文 detail）：**不传 `limit` ⇒ 与旧行为逐项一致（全量）**；
+  追加 `limit`/`offset`/`has_more` 三个字段（只加不改）；`total` 恒为**未切片前**的总数；
+  切片在**排序之后**；`limit=0` = 不限；负数/非数字 ⇒ 400；`offset` 越界 ⇒ `items=[]` + 真实 `total` + `has_more=false`。
+  ⚠️ 注释已如实写明边界：**这是 Python 侧切片，省的是响应体积 + 前端渲染，不是 DB 读**。
+- **前端**：书库页专属分页源 + 底部哨兵（IntersectionObserver，卸载 disconnect）+ 可点「加载更多」
+  + 「已显示 N / 共 M」+ 「筛选没命中但还有更多」的**诚实分支**（自动续拉上限 5 页，到顶改按钮，
+  绝不显示「没有符合条件的书」）。页大小 **120** 单点常量。
+- ⚠️ **中途挡下的回归**：初版把分页状态**直接建在共享的 `books` 数组**上 ⇒ `books` 只装首页（120 条）⇒
+  **侧栏计数、仪表盘四个部件、浏览页、智能书架计数全部只见前缀**（600 本的库显示成 120），
+  而**没有任何既有 spec 覆盖，所以全绿**。
+  修法：`loadBooks()` 回到全量（`api.books()` 不传参，注释写明「别在这里加 limit」）；
+  新增 `shelfLoadedBooks` + `loadShelfFirstPage` / `loadMoreShelfBooks` / `autoLoadMoreShelf` / `resetShelfQuery`，
+  **只有 `ShelfView` 读它们**；`patchProgress` **双数组回写**；数据变更后统一 `refreshBooks()`。
+
+### 六、事故与死代码
+
+- ⚠️ **「子代理被取消」≠「已停止」**：第一次派的后端子代理因 idle 超时被取消，但进程继续跑，
+  并与随后派的第二个后端代理**并发编辑同一工作区**（文件在未调用工具时仍在变）。
+  纪律：取消后先 `git status` + 看 mtime 确认工作区静止；**一个工作区同一时间只派一个会写代码的子代理**；
+  给子代理的规格必须写明「不许改既有测试，冲突则停下报告」；提交前先清仓库根临时产物。
+- **死代码删除**：`catalog.invalidate_and_refresh` 试过接线（`library.invalidate()` 标脏后点火），
+  实测打红 4 条既有用例（含两条与契约无关的顺序用例）⇒ 属 flaky 来源，**撤回接线 + 删除函数**，
+  注释写明为何退回；点火点收敛为三处：读路径 / 启动预热 / 监听线程。
+
+### 七、踩坑 / 工具
+
+- ⚠️ **长跑 pytest 必须后台跑**：前台会被 harness 的「长时间无输出」上限取消；
+  用 `Start-Process -FilePath python -ArgumentList '-m','pytest','--junitxml',…` 后台跑 + 轮询 junit
+  （轮询时每 15s 打一行，否则轮询命令自己也会被判静默超时）。
+- `Remove-Item` 会被 IDE 的 **Safe-Delete shim** 拦住 ⇒ 清理临时产物时别先删、让 pytest 直接覆盖
+  （`--junitxml` 会覆写）。
+
+### 八、收尾
+
+- 后端全量 `pytest`（离线）：**1624 例 / 0 failed / 0 errors / 12 skipped**（第 88 期 C 批后；
+  起点 1605）。前端 `type-check` ✓ / `test:unit` **550 例** ✓ / `build` ✓ / `deploy` ✓。
+- 版本 `VERSION` 0.87.0 → **0.88.0**，同批补 `CHANGELOG.md` 段；推送 `main` 后 CI 自动打 tag 并建 Release。
+
+---
+
+## 第 89 期 · TXT 上传假报错 + 正文不乱码（V0.89.0，2026-10-03）
+
+**来源**：用户上传本地 TXT 后出现格式显示问题，要求「**读取与展示 TXT 时保持原始格式、不做转换，原样展示**」；
+截图报错 `美利坚财富人生1-3059.txt: Unexpected token '�', "����������... is not valid JSON`。
+**用户确认的口径**：① 报错**在上传时就弹**，但**等一会书会自动进库**（⇒ 上传其实成功了）；
+② 「原样」的粒度 = **只要正文文字不被动**（空行折叠可接受），即 **字符不错、不乱码**，
+**不是**保留空白/空行/行尾 ⇒ 不需要 `pre-wrap`；③ 那些 TXT 的编码 **GBK / Big5 / UTF-8 / UTF-16 等都可能**。
+
+### 一、根因（带行号）
+
+1. **报错文本骗人（唯一必改点）**：`BookDock` 的「上传」→ `deliverToDock` → `api.convertDrop`
+   用的是 **`request()`（JSON）**；而 `POST /convert` 返回的是 **`FileResponse` 文件流** ⇒
+   `await res.json()` 把文件字节按 UTF-8 解出 `�`，V8 于是抛 `Unexpected token '�'`。
+   **书照常入库**（写盘 + `pipeline.dispatch` 原样复制），所以「等一会自己出现」。
+   ⚠️ 对照：`LocalConvertView` 走 `convertFile` → `requestBlob`（`res.blob()`），**不会**报这个错。
+2. **「字符不错」当时做不到**：解码只在**读取时**做，唯一探测实现是 `pipeline._detect_encoding`：
+   先判「UTF-8 前缀是否合法」，否则在 **`gb18030` / `big5hkscs` / `big5`** 里按字符分布打分择优
+   ⇒ **没有 UTF-16 / BOM 分支**（UTF-16LE 的 `FF FE` 不是合法 UTF-8 ⇒ 落到 gb18030 打分 ⇒ 整篇乱码）。
+   更糟的是解码用 **`errors="ignore"`** ⇒ **静默丢弃**解不出的字节，而这些字节被丢后的文本会写进
+   **派生 EPUB** 与章节缓存 ⇒ 读者看到的派生物**有洞且不报错**。
+3. **展示层确实会重排**（用户已接受）：`preprocess.paragraphs_to_html` 逐行 `strip()` 且丢空行、
+   每行包 `<p>`，会重新分章并插入标题 `<h2>` ⇒ 空行/缩进/行尾不保留。**按用户口径这批不改**。
+
+### 二、交付
+
+- **上传假报错**：`api.ts` 新增 **`requestAck()`**（与 `request()` 同一套鉴权/超时/401/错误剥壳，
+  但**不解析响应体**并 `res.body?.cancel()`），`convertDrop` 改用它（注释写明「不能走 `request()`」）。
+  顺带普查：全仓「返回文件流/非 JSON 的接口」前端调用点里，**只有 `convertDrop` 这一处坏点**。
+- **解码不再丢字节**：`ENCODING_RULE_VERSION` **1 → 2**（`pipeline.py`，`txtcache.ENC_RULE_VERSION` 跟随
+  ⇒ 存量派生件自动重建）；新增 `_choose_encoding()`（**确定性证据优先**：UTF-32/UTF-8/UTF-16 BOM →
+  无 BOM 像 UTF-16 → UTF-8 前缀自证 → gb18030/big5hkscs/big5 打分）+ `decode_file()`
+  （候选**逐个严格试解**，坏字节以 U+FFFD 顶替并**计数/记偏移**，返回 `{encoding, undecodable, positions}`）；
+  `txtcache.decode_info()` + 派生件 `state.json` 增 `encoding`/`undecodable`；章节接口**新增** `text_encoding`
+  字段（只加不改）；阅读器在 `undecodable > 0` 时显示一行低调提示。
+- **测试**：新增 `tests/test_txt_encoding_bytes.py` 11 例（**修前 BOM/UTF-16 那几条是红的**）
+  + `frontend/src/lib/convertUpload.spec.ts` 5 例（已登记 `EXPECTED_SPECS`）。
+- **实测**：后端全量 **1635 例 / 0 failed / 0 errors / 12 skipped**；前端 `type-check` ✓ /
+  `test:unit` **555 例** ✓ / `build` ✓ / `deploy` ✓。
+
+### 三、诚实的边界
+
+- `LocalConvertView.vue` 在「不许碰 `views/tools/`」的约束下未改（它走 blob 路径，不受本次假报错影响）。
+- **无 BOM 的纯中文 UTF-16 仍不可判**（两个字节都不为 0，与随机字节无从区分）—— 已在注释与报告里如实写明，
+  交给启发式并上报。
+- 前端提示目前只在「有坏字节」时显示（若想总是显示所用编码，是一行改动）。
+
