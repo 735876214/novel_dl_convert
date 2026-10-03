@@ -47,6 +47,7 @@ from .sources import ledger as source_ledger   # 第 86 期：书源导入 / 台
 from .sources import legado as legado_mod      # 第 86 期：重新分析要用它重跑判定
 from .sources import creds as source_creds     # 第 86 期：Cookie 读写的唯一真值源
 from .sources import probe as source_probe     # 第 86 期：单字探测 / 全部验证
+from .sources import online as online_mod      # 第 93 期：在线阅读（取数 + 缓存落盘）
 from .core import network as network_mod       # 第 86 期：JS 解密通道的部署前提（Node）
 
 # 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在
@@ -1052,6 +1053,238 @@ async def api_online_bind(bid: str, payload: dict = Body(...)):
     return {"source": source, "display_name": display, "url": row.get("url", ""),
             "title": row.get("title", ""), "confidence": confidence, "manual": manual,
             "pos": row.get("pos", 0)}
+
+
+def _online_ctx(bid: str) -> tuple:
+    """在线阅读三个读点的**共同前置**：书在不在（404）+ 绑定与闸门过不过（400）。
+
+    三处各写一遍的话，最容易出的错是「某一条忘了过闸门」—— 于是下载关着、却还能
+    从某一条路把整本正文读出源站。闸门判定**只有** `gate_reason()` 这一个出处。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    row = db.online_bind_get(bid)
+    if not row:
+        raise HTTPException(400, "这本书还没绑定书源 —— 在详情页的「在线阅读」里选一个源再开始")
+    mgr = _manager()
+    reason = mgr.gate_reason(row.get("source") or None)
+    if reason:
+        raise HTTPException(400, reason)
+    reason = online_mod.support_reason(row.get("source") or "")
+    if reason:
+        raise HTTPException(400, reason)
+    return b, row
+
+
+def _local_chapters(b: dict) -> list:
+    """这本书**本地**的扁平章节表（`[{index, title}...]`），供 `align_online` 比对。
+
+    与「书城目录」（`api_toc_apply`）读的是同一份 `book_detail`：单一真值源，
+    两处各取一份的话，同一条判据会在两个地方各错一次。
+    读不出详情（缺文件 / 详情异常）⇒ 空表：`align_online` 会如实返回 `None`
+    （「对不上就不写本地进度」），不会拿一份假目录去配。
+    """
+    try:
+        detail = library.book_detail(b["name"], b.get("library_id")) or {}
+    except Exception:                                   # noqa: BLE001 —— 详情坏了不该让在线读整体 500
+        return []
+    return [c for g in (detail.get("chapters") or []) for c in (g.get("chapters") or [])]
+
+
+@app.get("/api/books/{bid}/online/status")
+def api_online_status(bid: str):
+    """入口显隐与置灰原因的**唯一出处**（不触网）。
+
+    详情页 / 书架的「在线读」入口都问它，而不是各自去猜「有没有绑定」——
+    猜的结果是入口显示出来了、点进去 400，那就成了假交互。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    row = db.online_bind_get(bid)
+    # 缓存的章数按**当前绑定那一页**算：刚换了源 / 换了页时，盘上还躺着上一页的缓存，
+    # 直接报出去会显示成「还没读就缓存好了 N 章」。没绑定时不看页（也没页可比）。
+    cache = online_mod.book_cache_stats(
+        bid, source=(row or {}).get("source") or "", url=(row or {}).get("url") or "")
+    out = {"bound": bool(row), "source": "", "display_name": "", "url": "",
+           "title": "", "pos": int((row or {}).get("pos") or 0),
+           "seen": len((row or {}).get("seen") or []),
+           "cache": cache, "available": False, "reason": ""}
+    if not row:
+        # 没绑定**不是错误**：这是绝大多数书的常态，前端据此显示「绑定书源」入口。
+        return out
+    source = row.get("source") or ""
+    cls = REGISTRY.get(source)
+    out["source"] = source
+    out["display_name"] = getattr(cls, "display_name", source) if cls else source
+    out["url"] = row.get("url") or ""
+    out["title"] = row.get("title") or b.get("title") or ""
+    # 置灰原因按「用户能做什么」排序：闸门（去设置里打开）比「源不支持」（去换源）更外层
+    gate = _manager().gate_reason(source or None)
+    reason = gate or online_mod.support_reason(source)
+    out["reason"] = reason
+    out["available"] = not reason and bool(row.get("url"))
+    return out
+
+
+@app.delete("/api/books/{bid}/online/bind")
+def api_online_unbind(bid: str):
+    """解绑：只删登记，**零文件触碰**（缓存留着 —— 重绑同一页立刻又能离线读）。"""
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    return {"ok": True, "cleared": db.online_bind_clear(bid)}
+
+
+@app.get("/api/books/{bid}/online/chapters")
+async def api_online_chapters(bid: str, refresh: int = 0):
+    """线上目录 + **后端算好的** `local_index`（客户端不许自己算，见 `align_online`）。
+
+    只回 `index` / `title`：**书页 URL 不出服务端**（客户端按 index 取章，无 SSRF 面）。
+    """
+    b, row = _online_ctx(bid)
+    mgr = _manager()
+    refresh = bool(refresh)
+    try:
+        data = await online_mod.index_of(mgr, bid, row["source"], row["url"], refresh=refresh)
+    except Exception as e:                              # noqa: BLE001 —— 原因原文交给用户
+        raise HTTPException(502, f"取目录失败：{e}")
+    titles = [e.get("title") or "" for e in data.get("entries") or []]
+    local = _local_chapters(b)
+    entries = [{"index": i, "title": t,
+                "local_index": reading_list.align_online(titles, local, i)}
+               for i, t in enumerate(titles)]
+    return {"source": row["source"],
+            "display_name": getattr(REGISTRY.get(row["source"]), "display_name", row["source"]),
+            "title": row.get("title") or b.get("title") or "",
+            "url": row.get("url") or "",
+            "total": len(entries), "entries": entries,
+            "pos": int(row.get("pos") or 0),
+            # `local_total` 供前端显示「本地共 N 章」（进度条的分母用本地那份更诚实）
+            "local_total": len(local),
+            "single": bool(data.get("single")),
+            "origin": data.get("origin") or "cache", "stale": bool(data.get("stale")),
+            "fetched_at": float(data.get("fetched_at") or 0),
+            "error": data.get("error") or ""}
+
+
+@app.get("/api/books/{bid}/online/chapter/{index}")
+async def api_online_chapter(bid: str, index: int, refresh: int = 0):
+    """单章正文（**形状与本地 `chapter/{index}` 一致** —— 同一个阅读器组件吃它）。
+
+    读一次做三件事（顺序有讲究）：
+    ① 取正文（缓存优先，抓不到回落缓存并标 `stale`）；
+    ② 推进**在线位置** `online_bind.pos` 与已读章 `seen`（跨客户端续读的唯一依据）；
+    ③ 按窗口规则对齐本地 ⇒ 对得上才**额外**写一份本地 `progress`（对不上如实不写）。
+    """
+    b, row = _online_ctx(bid)
+    mgr = _manager()
+    source, url = row["source"], row["url"]
+    try:
+        out = await online_mod.chapter_of(mgr, bid, source, url, index, force=bool(refresh))
+    except IndexError:
+        raise HTTPException(404, "章节不存在")
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, f"{e}")
+    except Exception as e:                              # noqa: BLE001 —— 抓取失败照原文说
+        raise HTTPException(502, f"取这一章失败：{e}")
+    i = int(out["index"])
+    rec = await _online_record(b, bid, row, i)
+    out.update(rec)
+    # 来源标注那条横幅要的东西随正文一起给：`url` 是**服务端选定的**书页地址
+    #（客户端只能读、不能传 —— 见 `_online_ctx`），没有它横幅上那个
+    #「打开源站页面」就成了一个点不动的假链接。
+    out["source"] = source
+    out["display_name"] = getattr(REGISTRY.get(source), "display_name", source)
+    out["url"] = url
+    _online_prefetch(mgr, bid, source, url, i, out.get("total") or 0)
+    return out
+
+
+async def _online_record(b: dict, bid: str, row: dict, index: int) -> dict:
+    """把「读到了线上第 index 章」这件事记下来（**唯一实现**，两处调用）。
+
+    两件事，缺一不可：
+
+    ① **在线位置**（`online_bind.pos`）：跨客户端续读的**唯一**依据 ——
+       本地文件缺失 / 目录对不上时，它就是读者能回得去的坐标；
+    ② **本地进度**（`progress` 表）：只有当窗口规则认定「线上第 N 章 == 本地第 N 章」
+       时才写。对不上就**一个字都不写**，页内如实提示 —— 把进度写到错的位置上，
+       比不写严重得多（读者下次打开会落在别的章，而且看不出是为什么）。
+
+    ⚠️ 两份位置**并存、不互相覆盖**（第 93 期口径）：本地阅读器只写 `progress`，
+    在线读两份都写。任何「用一份覆盖另一份」的简化都会让跨客户端续读错位。
+    """
+    mgr = _manager()
+    db.online_bind_set_pos(bid, index)
+    db.online_bind_mark_seen(bid, index)
+    local = _local_chapters(b)
+    try:
+        titles = [e.get("title") or ""
+                  for e in (await online_mod.index_of(
+                      mgr, bid, row.get("source") or "", row.get("url") or "")).get("entries") or []]
+    except Exception:                                   # noqa: BLE001 —— 对齐失败不影响这次阅读
+        titles = []
+    li = reading_list.align_online(titles, local, index)
+    if li is not None and local:
+        # ⚠️ **不带 offset**：线上正文与本地正文不是同一份文本，字符偏移没有意义
+        # （带了会让本地阅读器按错误的偏移恢复位置）。`file_rel` 留空 = 书级，
+        # 与「不知道文件的那次写入」同一口径。
+        db.set_progress(bid, li, round(li * 100.0 / len(local), 2), "", file_rel="")
+    return {"pos": index, "local_index": li, "local_total": len(local)}
+
+
+@app.put("/api/books/{bid}/online/pos")
+async def api_online_pos(bid: str, payload: dict = Body(...)):
+    """推进**在线位置**（阅读器在连续流模式下每次「当前可见章」变化时调）。
+
+    为什么除了取章之外还要单独一条：连续流一次会取**好几章**（当前章 + 前后窗口），
+    光靠「最后一次取数」定位置会停在窗口末尾 —— 读者明明停在窗口中间那一章，
+    别的客户端却从末尾续读。所以位置由前端的**可见章**说了算，这里只负责记。
+    """
+    b, row = _online_ctx(bid)
+    try:
+        index = int((payload or {}).get("index"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "index 必须是整数")
+    total = online_mod.book_cache_stats(bid, source=row.get("source") or "",
+                                        url=row.get("url") or "")["total"]
+    if total and (index < 0 or index >= total):
+        raise HTTPException(404, "章节不存在")
+    return {"ok": True, **(await _online_record(b, bid, row, index))}
+
+
+def _online_prefetch(manager, book_id, source: str, url: str, index: int, total: int) -> None:
+    """读第 p 章时顺手把 p+1 拿回来（**尽力而为**，失败静默，见 `online.prefetch`）。
+
+    只在「下一章存在、且本机还没有」时跑 —— 否则读每一章都白发一次请求。
+    用 `_ops_begin/_ops_end` 把这件后台活计进「长文件操作」的账上，测试的
+    `wait_background_ops` 才能等它收尾（第 86 期同一条纪律，不等会在 `db.close()`
+    之后还攥着旧连接）。
+    """
+    if index + 1 >= total or online_mod.has_body(book_id, index + 1):
+        return
+
+    async def _run():
+        try:
+            await online_mod.prefetch(manager, book_id, source, url, index + 1)
+        finally:
+            _ops_end()
+
+    _ops_begin()
+    asyncio.create_task(_run())
+
+
+@app.post("/api/online/cache/clear")
+def api_online_cache_clear():
+    """清空**在线缓存**（只清 `CACHE_DIR/online/`）。
+
+    与 `/api/cache/clear` 分开：后者连 AI 分章缓存一起清，清完下一本书要重跑一遍分章。
+    用户点「清理在线缓存」时想的是腾空间，不是「顺手把别的东西也清了」。
+    """
+    res = online_mod.purge_cache()
+    return {"ok": True, **res}
 
 
 def _task_out(row: dict | None) -> dict:
@@ -6625,6 +6858,9 @@ def api_maintenance():
                       "bytes": cache["bytes"] - rec["bytes"]},
             "backups": {"path": str(config.BACKUP_DIR), **_dir_usage(config.BACKUP_DIR)},
             "recycle": {"path": str(recycle), **rec},
+            # 在线阅读缓存（第 93 期）：它就在 cache 目录里，**已包含在上面那个数字里** ——
+            # 单独列一份是让「清理在线缓存」这个按钮能如实报出「要腾掉多少」。
+            "online_cache": online_mod.cache_stats(),
         },
         "library": {"books": len(library.books())},
     }

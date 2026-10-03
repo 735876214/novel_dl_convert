@@ -530,7 +530,7 @@ class RuleBasedSource(SourceAdapter):
         self._check_vars()
         bp = self._RULE.get("book") or {}
         if bp.get("mode") == "toc":
-            chapters = await self._fetch_toc(client, bp, item["url"])
+            chapters = await self._fetch_toc(client, item["url"])
             return "\n\n".join(f"{c['title']}\n{c['body']}" for c in chapters)
         html = await client.get_text(item["url"])
         return await self._content(html, bp.get("content", {}))
@@ -540,7 +540,7 @@ class RuleBasedSource(SourceAdapter):
         self._check_vars()
         bp = self._RULE.get("book") or {}
         if bp.get("mode") == "toc":
-            return await self._fetch_toc(client, bp, item["url"])
+            return await self._fetch_toc(client, item["url"])
         # single：取全文后按 chapter 规则切分
         html = await client.get_text(item["url"])
         text = await self._content(html, bp.get("content", {}))
@@ -550,10 +550,32 @@ class RuleBasedSource(SourceAdapter):
         from ..core import detect
         return detect.detect_chapters(text)
 
-    async def _fetch_toc(self, client, bp: dict, book_url: str) -> list[dict]:
-        toc = bp.get("toc", {})
+    async def chapter_links(self, client, book_url: str) -> list[dict]:
+        """书页 → 章节清单 ``[{"title", "url"}, ...]``（**唯一实现**，第 93 期）。
+
+        「取整本」（:meth:`_fetch_toc`）、预览、**在线阅读**三条路共用它。三条路各写一遍
+        `_extract_links` + 相对地址补全的话，改一处漏一处的表现是「某一条路上的章节点不开」，
+        而且从现象完全看不出是解析口径不一致。
+        """
+        self._check_vars()
+        bp = self._RULE.get("book") or {}
         html = await client.get_text(book_url)
-        links = _extract_links(html, toc, book_url)
+        return [{"title": t, "url": u}
+                for t, u in _extract_links(html, bp.get("toc", {}) or {}, book_url)]
+
+    async def chapter_body(self, client, url: str) -> str:
+        """单章正文（**唯一实现**）：`book.content` 提取 + 站点解密。
+
+        ⚠️ 返回值**可能是 HTML**（取决于 `book.content` 的写法）—— 调用方按
+        :meth:`content_may_be_html` 判断要不要剥标记，别自己猜。
+        """
+        self._check_vars()
+        bp = self._RULE.get("book") or {}
+        html = await client.get_text(url)
+        return await self._content(html, bp.get("content", {}) or {})
+
+    async def _fetch_toc(self, client, book_url: str) -> list[dict]:
+        links = await self.chapter_links(client, book_url)
         sem = asyncio.Semaphore(self._concurrency)
 
         bodies = {}
@@ -561,13 +583,13 @@ class RuleBasedSource(SourceAdapter):
         async def _one(i: int, url: str):
             async with sem:
                 try:
-                    h = await client.get_text(url)
-                    bodies[i] = await self._content(h, bp.get("content", {}))
+                    bodies[i] = await self.chapter_body(client, url)
                 except Exception as e:  # 单章失败不中断整本
                     bodies[i] = f"（第 {i + 1} 章抓取失败：{e}）"
 
-        await asyncio.gather(*(_one(i, u) for i, (_, u) in enumerate(links)))
-        return [{"title": t, "body": bodies.get(i, "")} for i, (t, _) in enumerate(links)]
+        await asyncio.gather(*(_one(i, c["url"]) for i, c in enumerate(links)))
+        return [{"title": c["title"], "body": bodies.get(i, "")}
+                for i, c in enumerate(links)]
 
     async def fetch_media_urls(self, client, item: dict, key: str) -> list:
         """取一类**资源地址清单**（`book.comic` / `book.audio`）：只列地址，不下载。
@@ -583,24 +605,56 @@ class RuleBasedSource(SourceAdapter):
         html = await client.get_text(item["url"])
         return _extract_pages(html, spec, item["url"])
 
+    # ---- 在线阅读（第 93 期）----
+    def online_support(self) -> str:
+        """规则源能不能逐章在线读：要 `book.content`（正文）与 `book.toc`（章节清单）。
+
+        ⚠️ 缺哪一样就说缺哪一样 —— 「这本书读不了」和「这条规则没写正文提取」
+        对用户是两件事（后者要去书源管理里补规则）。
+        """
+        bp = self._RULE.get("book") or {}
+        if not bp.get("content"):
+            return "这条书源的规则里没有正文提取（book.content），不能逐章在线阅读"
+        if self.online_mode() == "toc" and not (bp.get("toc") or {}):
+            return "这条书源的规则里没有章节目录（book.toc），不能逐章在线阅读"
+        return ""
+
+    def online_mode(self) -> str:
+        """``"toc"`` = 一章一页按需取；``"single"`` = 只有整本一页，取回后现切。
+
+        `single` 模式本期**支持**（用户口径要的是「接我给的书源」，不少源就是整页全文）：
+        取回整本后按既有 `detect.detect_chapters` / `chapter` 正则分章，逐章进缓存。
+        代价说清楚：这种源**没法只取一章**，缓存被清掉后要重取整本。
+        """
+        return "toc" if ((self._RULE.get("book") or {}).get("mode") or "") == "toc" else "single"
+
+    def content_may_be_html(self) -> bool:
+        """`book.content` 取出来的是不是 HTML —— 决定在线读要不要先剥标记。
+
+        · `css`（默认）走 `get_text()` ⇒ 纯文本；写了 ``"html": true`` ⇒ 原样 HTML；
+        · `regex` 取的是**捕获组原文**（真实站点普遍就是一段 HTML 片段）；
+        · `js` 交给脚本，返回什么都有可能；
+        · `json` 只取标量（见 `_extract_json`）⇒ 纯文本。
+        """
+        spec = (self._RULE.get("book") or {}).get("content") or {}
+        if spec.get("mode") in ("regex", "js"):
+            return True
+        return bool(spec.get("html"))
+
     # ---- 预览（廉价：目录 + 首章样本）----
     async def preview(self, client, item: dict) -> dict:
         self._check_vars()
         bp = self._RULE.get("book") or {}
         if bp.get("mode") == "toc":
-            toc = bp.get("toc", {})
-            html = await client.get_text(item["url"])
-            links = _extract_links(html, toc, item["url"])
-            toc_titles = [t for t, _ in links]
+            links = await self.chapter_links(client, item["url"])
             sample = ""
             if links:
                 try:
-                    h = await client.get_text(links[0][1])
                     # 预览也要解密：否则用户看到的是乱码，会以为「这条源坏了」
-                    sample = (await self._content(h, bp.get("content", {})))[:1500]
+                    sample = (await self.chapter_body(client, links[0]["url"]))[:1500]
                 except Exception:
                     sample = ""
-            return {"toc": toc_titles, "sample": sample}
+            return {"toc": [c["title"] for c in links], "sample": sample}
         html = await client.get_text(item["url"])
         text = _extract(html, bp.get("content", {}))
         from ..core import detect

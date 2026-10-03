@@ -300,6 +300,23 @@ def align_online(online_titles: list, local_chapters: list, pos: int,
     return p if p in local else None
 
 
+def text_to_xhtml(text) -> str:
+    """纯文本 → 阅读器 / EPUB 用的 XHTML 片段（**唯一实现**，第 93 期收敛）。
+
+    两个调用方共用它：① 追更把源站新章写进 EPUB（`DownloadManager._update_report_locked`）；
+    ② 在线阅读把源站正文交给阅读器（`sources/online.py`）。它们要的是同一件事 ——
+    「一段来路不明的文本，怎么变成能安全渲染的段落」。
+
+    ⚠️ **每一行先 `escape` 再包 `<p>`**：源站正文里可能有 `<script>`、`onerror=`、
+    未闭合的标签。**第三方标记永远不进 `v-html`** 是在线读的硬要求（在线读那条路
+    在调用前还会把 HTML 正文压成纯文本，见 `sources/online.html_to_text`）。
+    空行（只有空白）丢掉：源站正文里常有成串空行，转成 `<p></p>` 就是一片空档。
+    """
+    from xml.sax.saxutils import escape
+    return "\n".join(f"<p>{escape(s)}</p>"
+                     for s in (ln.strip() for ln in str(text or "").splitlines()) if s)
+
+
 def _store_slots(entries: list) -> dict:
     """书城目录摊平成 ``{书城序号: {"title", "volume", "kind"}}``。
 

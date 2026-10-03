@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .. import config
 from ..core import db
+from . import online                       # 只为了转调 `online.support_reason`（见 `sources_status`）
 from .base import REGISTRY, register
 from .manager import DownloadManager
 from .rules import make_rule_class, validate_rule
@@ -131,6 +132,11 @@ def sources_status() -> list[dict]:
     这里原先自己写了一段 if/elif 复刻闸门规则 —— 而真实请求路径（`/api/search`、
     `/api/download`、`/api/preview`）谁都不检查它，于是「设置说不可搜索下载、实际照搜照下」。
     现在界面显示的原因与后端拦截时用的原因是同一句原文，不会两样。
+
+    ``online_support``（第 93 期）：这个源能不能**逐章在线阅读**（空串 = 能，否则是原因原文）。
+    同样是转调唯一实现 :func:`online.support_reason`，本函数不自己判规则形状 ——
+    不然详情页的「在线阅读」卡会照着一份**自己的**判据把源列出来，而真实请求路径
+    （`/api/books/{bid}/online/*`）用另一份，于是「界面上能选、选完点进去 400」。
     """
     cfg = config.load_config()
     dl = cfg.get("download") or {}
@@ -153,6 +159,7 @@ def sources_status() -> list[dict]:
             },
             "usable": not reason,
             "blocked_reason": reason,
+            "online_support": online.support_reason(s["name"]),
         })
     return out
 

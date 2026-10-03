@@ -20,7 +20,7 @@ def _safe_name(s: str) -> str:
     s = re.sub(r"[\\/:*?\"<>|]", "_", s)
     return s[:120] or "book"
 
-from ..core import network, detect, pipeline
+from ..core import network, detect, pipeline, reading_list
 from .base import REGISTRY
 
 #: 追更用的**按路径**互斥锁（第 87 期收尾补）。
@@ -321,13 +321,16 @@ class DownloadManager:
         也不覆盖（要覆盖得先存「老章内容基线」，属后续项）。
         """
         def _to_html(ch: dict) -> str:
-            """章节正文档 → XHTML 片段：源给了 HTML 就用，否则按纯文本转义分段。"""
+            """章节正文档 → XHTML 片段：源给了 HTML 就用，否则按纯文本转义分段。
+
+            ⚠️ 纯文本那半**不在本地实现**：与在线阅读共用
+            :func:`core.reading_list.text_to_xhtml`（第 93 期收敛 —— 两处各写一份
+            「逐行 escape 包 `<p>`」时，改了一处忘了另一处就会一条路安全、另一条路漏标记）。
+            """
             html = str(ch.get("body_html") or "").strip()
             if html:
                 return html
-            from xml.sax.saxutils import escape
-            return "\n".join(f"<p>{escape(ln)}</p>"
-                             for ln in str(ch.get("body") or "").splitlines() if ln.strip())
+            return reading_list.text_to_xhtml(ch.get("body"))
 
         txt_path = Path(txt_path)
         sidecar = txt_path.with_suffix(".meta.json")

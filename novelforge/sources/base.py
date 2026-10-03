@@ -68,6 +68,35 @@ class SourceAdapter(ABC):
         """站点专用解密 JS 片段。__args[0] 为待解密字符串，需 return 明文。"""
         return None
 
+    # ---- 在线阅读（第 93 期）----
+
+    def online_support(self) -> str:
+        """这个源能不能**逐章在线阅读**；返回可直接展示的原因（空串 = 能）。
+
+        默认「不能」：普通适配器（如 Gutenberg）只实现「整本取回」，而在线读要的是
+        「书页 → 章节清单 → 单章正文」这条链，它没有。
+
+        ⚠️ 返回**原因原文**而不是一个布尔：详情页要把这句话原样显示给用户
+        （AGENTS.md：不做假交互 —— 灰掉的入口必须说清为什么灰）。
+        """
+        return "这个书源不支持逐章在线阅读：它只能整本取回，没有「书页 → 单章」这条链"
+
+    def online_mode(self) -> str:
+        """在线读的取法：``"toc"`` = 一章一页、按需取；``"single"`` = 只有整本一页。
+
+        空串 = 不支持（与 :meth:`online_support` 一致）。两种取法的差别只落在
+        **取数**上，缓存 / 对齐 / 展示三层完全相同。
+        """
+        return ""
+
+    def content_may_be_html(self) -> bool:
+        """`book.content` 取出来的正文**可能是 HTML** 吗？
+
+        决定在线阅读要不要先把标记压成纯文本（见 `sources/online.html_to_text`）。
+        两边都得做对：该剥没剥 ⇒ 源站标记进了 `v-html`；不该剥却剥了 ⇒ 正文被吃掉一段。
+        """
+        return False
+
 
 REGISTRY: dict[str, type["SourceAdapter"]] = {}
 
