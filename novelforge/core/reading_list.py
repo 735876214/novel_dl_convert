@@ -247,6 +247,59 @@ def build_pairs(entries: list, local_chapters: list) -> list:
         pairs.extend(zip(rest_e, rest_l))
     return pairs
 
+# ---------------- 在线阅读的章节对齐（第 93 期）----------------
+
+#: 窗口半径（本章 ± N 章 ⇒ 共 5 章）与命中门槛（5 章里对上 3 章）
+ONLINE_WINDOW = 2
+ONLINE_NEED = 3
+
+
+def align_online(online_titles: list, local_chapters: list, pos: int,
+                 *, window: int = ONLINE_WINDOW, need: int = ONLINE_NEED) -> int | None:
+    """线上第 ``pos`` 章 ↔ 本地哪一章（用户拍板的判据，第 93 期）。
+
+    用户口径（2026-10-03 原话）：「根据章节序号和章节名称进行匹配，若本章节及上下章节共 5 章
+    能有 3 章对应上就认定为同一章节，以线上章节名称进行确定进度等数据」。
+
+    做法：取线上 ``pos`` 前后各 ``window`` 章（越界**收窄**）为窗口，与**本地同序号**的那几章
+    逐个比 :func:`norm_title`；命中数 ``>= min(need, 窗口实际章数)`` ⇒ 认定同一章，
+    返回**本地那一章的 index**；否则返回 ``None``（**不猜**）。
+
+    为什么按「同序号」比、而不是拿线上标题去本地找：线上与本地是同一本书的两份目录，
+    **序号才是骨架**，标题只用来确认「这个骨架没偏」。整本漂移（比如线上多了一章卷首）
+    会让同序号全错 —— 那时命中数达不到门槛，如实返回 ``None``，绝不硬配。
+    边界（书首 / 书尾）窗口收窄，门槛随之降到「够数即可」（``min(need, total)``），
+    既不会因为「前面没章可对」而永远配不上，也不会拿两章对上就认定整本。
+
+    ⚠️ **唯一实现**：客户端必须用服务端给的 ``local_index``，不许自己再算一份 ——
+    否则「这台机器记上了进度、那台没记」这类只能靠猜的鬼故事会重演。
+    """
+    try:
+        p = int(pos)
+    except (TypeError, ValueError):
+        return None
+    titles = list(online_titles or [])
+    local = {int(c["index"]): c for c in (local_chapters or []) if c.get("index") is not None}
+    if not titles or not local or p < 0:
+        return None
+    w = max(0, int(window))
+    hits = total = 0
+    for i in range(p - w, p + w + 1):
+        if i < 0 or i >= len(titles):        # 越界收窄：书首 / 书尾窗口变小
+            continue
+        total += 1
+        c = local.get(i)
+        if c is None:                        # 本地没有这一章（本地更短）⇒ 不算命中
+            continue
+        q = norm_title(titles[i])
+        if q and q == norm_title(c.get("title")):
+            hits += 1
+    if total == 0 or hits < min(max(1, int(need)), total):
+        return None
+    # 认定同一章 ⇒ 本地位置就是线上位置（骨架对齐）；本地没有这一章则不记（返回 None）
+    return p if p in local else None
+
+
 def _store_slots(entries: list) -> dict:
     """书城目录摊平成 ``{书城序号: {"title", "volume", "kind"}}``。
 
