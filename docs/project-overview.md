@@ -65,15 +65,26 @@
 
 ## 7. 规模与现状（便于判断「这项目多大」）
 
-| 维度 | 当前值 |
+⚠️ **本表刻意少写会过期的数字**（第 91 期改）：凡是有唯一真值源的，这里只写**真值源与刷新命令**，
+不抄具体值 —— 抄一份就必然有一天对不上（上一版停在第 73 期，写着版本 `0.6.0` / 后端 1263 例，全是错的）。
+
+| 维度 | 真值源 / 取法 |
 |---|---|
-| 后端测试 | **1263 例（1251 passed / 12 skipped / 0 failed）**（离线全量，约 2–3 分钟） |
-| 前端测试 | **441 例 / 38 文件**（Vitest） |
-| 后端模块 | `novelforge/core/` **54 个模块** |
-| 前端 | 约 **172 个 .vue**（`components/` 109 + `views/` 63）+ **46 个 `lib`** + **21 个 `store` 文件**；**36 个设置页**（6 组）、**30 张统计图表**、**9 个工具标签** |
-| 元数据提供商 | **14 家**（5 家免密钥即用 / 3 家填密钥即用 / 6 家页面抓取型并标注「易失效」） |
-| 版本 | `0.6.0`（唯一真值源 `server.APP_VERSION`，只由 `GET /health` 下发） |
-| 期号 | 第 73 期（2026-09-29）；逐期记录见 `docs/roadmap-gaps-remaining.md` |
+| 版本 | 仓库根 `VERSION`（`cat VERSION`）；由 `GET /health` 下发，**别处不写第二份** |
+| 期号与最近交付 | `docs/TODO.md` 第 2 节索引 + `docs/roadmap-gaps-remaining.md`（最新期在末尾）；`CHANGELOG.md` 按版本 |
+| 后端测试计数 | `.venv/Scripts/python.exe -m pytest`（离线全量，约 2–4 分钟）；计数以 `--junitxml` 解析为准 |
+| 前端测试计数 | `cd frontend && npm run test:unit`（Vitest）；用例数**不并入**后端计数 |
+| 后端模块数 | `ls novelforge/core/*.py`（列出的行数即模块数） |
+| 前端规模 | `find frontend/src -name '*.vue'`（`components/` 与 `views/` 分别数）；`ls frontend/src/lib/*.ts`（排除 `*.spec.ts`）、`ls frontend/src/stores/*.ts` |
+| 设置页 / 工具标签 | 注册表是唯一真值源：`frontend/src/data/settingsNav.ts`、`frontend/src/data/toolsNav.ts` |
+
+**少数几个「结构性的、不随开发滑动」的量**（可以放心写）：
+
+| 维度 | 值 |
+|---|---|
+| 元数据提供商 | **14 家**（5 家免密钥即用 / 3 家填密钥即用 / 6 家页面抓取型并标注「易失效」）—— 契约 `tests/test_metadata_providers.py` 钉住总数 |
+| 书籍形态 | 普通文件 / 平铺音频目录 / 序号单元合集 / 目录书名带卷段；「一棵树 = 一本书」唯一真值源 `novelforge/core/units.py` |
+| 书源合规 | 只接公版 / 授权源；闸门判据**只有** `DownloadManager.gate_reason()` |
 
 ## 8. 文档地图
 

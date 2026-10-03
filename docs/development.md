@@ -112,7 +112,7 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 | 文档 | 什么时候改 |
 |---|---|
 | `AGENTS.md` | 硬约束、同步点、常用命令、陷阱发生变化时 |
-| `docs/TODO.md` | 开工/收尾（移走已完成、补新发现，**每条带证据**） |
+| `docs/TODO.md` | 开工/收尾（**只放「还没做的」**；完成的只留第 2 节一行索引，细节进 roadmap；补新发现，**每条带证据**） |
 | `docs/DESIGN.md` | 视觉 token / 圆角档 / 字体 / 动效 / 组件范式变化时 |
 | `docs/project-overview.md` | 定位、能力面、技术栈、部署形态、规模数字变化时 |
 | `docs/architecture.md` | 新增 core 模块、数据流变化、不变量增减时 |
