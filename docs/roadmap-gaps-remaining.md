@@ -4333,3 +4333,92 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
   交给启发式并上报。
 - 前端提示目前只在「有坏字节」时显示（若想总是显示所用编码，是一行改动）。
 
+---
+
+## 第 90 期 · 窄屏外壳侧栏对齐上游（抽屉 / 图标条 / 拖宽 / ⌘B）（V0.90.0，2026-10-03）
+
+**需求来源**：第 86 / 87 期尾巴的实测（原 TODO 第 3 节 `ui-narrow-shell`）—— 360 档侧栏仍死占 240px，
+主内容只剩百来像素、文字被挤成一字一行；`ui-smoke` 实测 `#/shelf` `off=27`、`#/tools/sources` `off=38`。
+**用户确认的四条口径**：① **完整对齐上游**（窄屏抽屉 + 桌面折叠成图标条 + 拖宽 + ⌘/Ctrl+B + 边缘 Rail，
+基础组件按上游补齐）；② **内部业务标记一并改写**成上游的 `SidebarMenu*` / `SidebarGroup*` 体系；
+③ 断点 **≤640px**（用本仓既有的 `639.98px`，**不跟**上游的 768px —— 640–767 要继续两栏）；
+④ 引入 `reka-ui` / `@vueuse/core` / `class-variance-authority` / `@lucide/vue` 四个依赖，**不引** `vue-i18n`（中文写死当字面量）。
+
+**验收判据（用户定的）**：`ui-smoke` 在 **360 档** `off` → 0（`ovf=false` 是假象 —— 溢出被内部横滚容器吸收，**只看 `off`**）。
+
+### 一、交付（八件事）
+
+1. **≤640px 抽屉**：`ui/sheet`（`reka-ui` 的 `Dialog` → 右侧滑出），宽 `18rem`、遮罩用 `--scrim`、
+   Esc / 点遮罩 / 点导航项都能关、关掉焦点回到触发器、内容占满整宽。
+2. **桌面折叠成图标条**：`3rem`，只留图标 + 悬停 tooltip（`ui/tooltip`）。
+   ⚠️ 图标条宽度的类（`data-[collapsible=icon]:w-(--sidebar-width-icon)`）必须挂在 **group 元素**上 ——
+   它只匹配**自身**，挂到内层卡片上折叠不报错、只是「中间一小撮图标、两边一大片空白」。
+3. **拖宽**：`224–480`，默认 **240px**（本仓既有的 `w-[15rem]`，**不跟**上游的 256 —— 跟了就是宽屏用户的视觉回归）；
+   存**本机**（`nf_sidebar_width`，120ms 防抖 + 卸载补写一次）。
+4. **边缘 Rail**：`3px` 阈值把两种手势分开 —— 松手时位移 <3px 算「点击开合」，≥3px 算「拖拽调宽」。
+   ⚠️ 阈值**只决定松手算哪种**，不拦宽度（位移多少宽度就跟多少，否则手感是「先纹丝不动、过了 3px 突然一跳」）；
+   折叠态**不认**拖拽手势（48px 宽的条上拖动看不见结果），松手退化成点击 ⇒ 先展开。
+5. **⌘/Ctrl+B** 开合（窄屏开的是抽屉），与 `⌘K`（全局搜索）各管各的键 —— 写成「有 meta/ctrl 就开合」会让 ⌘K **同时**弹搜索并收侧栏。
+6. **内容自适应**：`--sidebar-width` / `--sidebar-width-icon` 两根变量由 `SidebarProvider` 挂在外壳根节点上，侧栏与内容区同一帧一起动。
+7. **`SettingsSidebar` 走同一套**（设置路由下同样是抽屉 / 图标条 / 拖宽）。
+8. **桌面视觉不回归**：宽屏展开态仍是 240px 卡片、圆角 / 间距 / 阴影不变（默认宽度与首个按钮尺寸都逐字保持）。
+
+### 二、单一真值源（本期收敛了四处）
+
+| 判据 | 唯一实现 | 删掉的第二份 |
+|---|---|---|
+| 窄屏断点 | `lib/viewport.ts` 的 `NARROW_QUERY`（`(max-width: 639.98px)`） | `lib/shelfRows.ts` 里那份私有常量 |
+| 折叠态 / 宽度 | `ui/sidebar/SidebarProvider.vue`（`useSidebar()`） | `stores/ui.ts` 的 `sidebarCollapsed` / `toggleSidebar`（**已删**） |
+| 类名合并 `cn()` | `lib/utils.ts`（`clsx` + `tailwind-merge`） | 组件里各写一遍（移植来的 shadcn 组件靠「传 class 覆盖基础类」，只 `clsx` 会时灵时不灵） |
+| 侧栏宽度字面量 | 只有 `useSidebarWidth.ts` 的 `SIDEBAR_WIDTH_DEFAULT_PX = 240` | 上游的 `SIDEBAR_WIDTH = '16rem'` **故意不搬**（留一个没人读的字面量就会在「默认 240 还是 256」上留下第二份答案） |
+
+⚠️ **侧栏偏好刻意不进 `server.PREFS_BLOCKS`**：宽度与折叠是**屏幕**属性、不是人的偏好 ——
+同一账号在 27 寸上拖到 420px、在平板上就该是抽屉，跟着账号同步等于把大屏宽度硬塞给小屏。
+故 `lib/sidebarPrefs.ts` 走 localStorage（键 `nf_sidebar_*`，`nf_` 前缀防同域与上游撞键）。
+
+### 三、测试
+
+- 新增 3 个 spec（均已登记 `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`）：
+  `lib/viewport.spec.ts`（6）、`ui/sidebar/sidebar.spec.ts`（21）、`ui/sheet/sheet.spec.ts`（8）。
+  三条都盯**静默失效**：折叠宽度的类挂错元素、折叠态/宽度没落本机存储、3px 阈值写反、
+  抽屉没 Teleport 到 body（被外壳 `backdrop-blur` 裁掉）、Esc / 遮罩关不掉、遮罩拿 `--foreground` 调（深色下是浅雾）。
+- 契约新增 2 条：`stores/ui.ts` 不许再长出 `sidebarCollapsed` / `toggleSidebar`；
+  `PAYLOAD_BLOCKS` 里不许出现侧栏块 + `sidebarPrefs.ts` 必须走 localStorage 且键带 `nf_sidebar_`。
+  （两条都**先剥注释再断言** —— 这两份文件的抬头正在逐字解释「为什么不放进同步块」，不剥会被自己的说明绊倒。）
+- `AppSidebar.spec.ts` 三处选择器随「行从 `<div>` 换成真 `<button>`」改按 `data-sidebar="menu-button"` 找。
+- 结果：后端全量 **1637 例（1625 passed / 12 skipped / 0 failed / 0 errors）**；
+  前端 **57 spec / 590 例** + `type-check` / `test:unit` / `build` / `deploy` 四连全绿。
+
+### 四、实测（实例 8993，`ui-smoke` 三档）
+
+| 路由 | 360 | 768 | 1280 |
+|---|---|---|---|
+| `#/shelf` | **27 → 3** | 0 → 0 | 0 → 0 |
+| `#/tools/sources` | **38 → 16** | – → 2 | 0 → 0 |
+
+**残留归因（都不是本期引入的回归）**：
+
+1. **顶栏图标行在 360 档本身就装不下**：右侧图标行固定 **375px**（10 个 33px 圆钮），
+   而 360 档顶栏内容盒只有 **334px**（`360 − 2×12` 边距）⇒ 最右三个（外观 / 设置 / 头像）被外壳
+   `overflow-x: clip` 静默裁掉。**本期只是把顶栏第一个按钮从自绘按钮换成 `SidebarTrigger`，尺寸逐字未变（32×32）**
+   —— 已用 `git show HEAD:frontend/src/components/AppHeader.vue` 逐行核对过，该行宽度与裁切位置与改前一致。
+   另外宽屏 1280 档 `off=0`，桌面无回归。
+2. **`#/tools/sources` 的残留主要是工具页自己的 `min-w-[32rem]`**（第 86 期「可用但不优雅」的口径）：
+   书源表单面板实测 **454px** 宽、标签条 4 项在横滚容器里（`scrollBoxes=2`，可横滑到达）；
+   768 档那 2 个 `off` 也是横滚标签条内的项（可达）。
+
+⇒ 验收判据「360 档 `off` → 0」**未完全达成**：侧栏那一半已修净（书库页从 27 降到 3，那 3 个全在顶栏），
+剩下的两处（顶栏图标行、工具页 32rem）都属**独立的交互决策**，已如实记进 `docs/TODO.md` 第 3 节。
+
+### 五、踩坑（都写进了对应文件的注释）
+
+- **`data-slot` 会被 tooltip 触发器顶掉**：`SidebarMenuButton` 带 tooltip 时行被塞进 `TooltipTrigger as-child`，
+  触发器的 `data-slot="tooltip-trigger"` 覆盖了行上同名的属性（上游同样如此）⇒ 取行认 `data-sidebar="menu-button"`。
+- **`reka-ui` 的两处异步**（写 spec 时最容易误判成「功能坏了」）：点击外部的 `pointerdown` 监听器要等
+  `watchEffect`（微任务）**再排一个 `setTimeout(0)`** 才挂到 document 上；卸载还要多等一拍（`usePresence` 里有一次 `await nextTick()`）
+  ⇒ `sheet.spec.ts` 用三轮 `settle()`（宏任务 + 双 `nextTick`）。
+- **`reka` 不写 `aria-modal`**：「模态」靠 `useHideOthers` 把 body 下其余子树标 `aria-hidden` ⇒ 断言要认这个，别认 `aria-modal`。
+- **happy-dom 的 `matchMedia` 不跟着窗口尺寸触发 `change`** ⇒ 两份 spec 各自装了可控桩
+  （「跟随变化」正是最该测的一条，用真实现反而测不到）。
+- **`ui-smoke` 传数组要一次一条路由**：`-Routes '#/a','#/b'` 经 `.cmd` 转发后逗号被吃成一个元素，
+  变出一条 `#/a,#/b` 的假路由（度量到的是 404 页）；git-bash 下还要防 MSYS 把 `#/…` 改写成 Windows 路径。
