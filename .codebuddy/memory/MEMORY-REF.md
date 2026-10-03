@@ -498,6 +498,8 @@ discover 行仍按 id 稳定排序）。**口径以对照文档 §7「实施结�
   / `DELETE /api/toc/{bid}`；配置 `download.toc_enabled`（**默认关闭**）+ 闸门加**用途维度**。
 - ⚠️ 番茄 / 起点两条内置规则**未在本机验证**（`verified=false`，界面标「未验证」）⇒ 需在联网环境用
   「试取目录」核对后把注册表里的 `verified` / `status` 回填。微信读书 / 掌阅 / 晋江只登记。
+  **第 91 期已真机核过（结论见下文第 91 期铁律）**：番茄 `/page/<书号>` 可用而 `/search?query=` 404、
+  起点两条路径都返回反爬挑战 ⇒ **两条仍留 `verified=false`**，`status` 不动（一个布尔说不清「哪一半可用」）。
 - ⚠️ 踩坑：私有 helper 重名覆盖（`_tag_text`）让 82 条无关测试连锁失败 ⇒ **必须跑全量**；
   happy-dom 的 `isVisible()` 测不出 `v-show`（改断言 `style.display`）。
 
@@ -606,3 +608,60 @@ discover 行仍按 id 稳定排序）。**口径以对照文档 §7「实施结�
   已 `git show HEAD:…/AppHeader.vue` 核对）；② 工具页自己的 `min-w-[32rem]`（第 86 期「可用但不优雅」口径）。
   两者都要先定交互口径（上游顶栏同样 11 项，**没有**可照搬的窄屏范式），已记进 `docs/TODO.md` 第 3 节。
 
+
+### 第 91 期铁律（TODO 台账 / 401 探测归零 / 来源权重 / 窄屏「更多」/ 浮层键盘）
+
+- **`docs/TODO.md` 只放「还没做的」**：完成的**只留一行索引**（期号 | 一句话 | 版本/指针），细节一律进
+  `docs/roadmap-gaps-remaining.md`；每条待办必须**带证据**。历史详情**删除不迁移**（roadmap + CHANGELOG + memory 已是完整真值源，
+  在 TODO 里再抄一遍只会让「当前还剩什么要做」淹没在历史里）。唯一例外是**仍然生效的语义**
+  （「移除书库」零文件触碰 /「删书」回收三份 → 指针指 `AGENTS.md` 第 1 节）与**用户侧遗留动作**（待用户线上点一次还原）。
+- ⚠️ **未登录探测归零的真正机制（第 91 期逐行核对，与旧 TODO 描述有出入）**：`stores/auth.ts` 的 `token`
+  在 store 构造时**同步**读 localStorage ⇒ `auth.authenticated` 在 `App.vue` setup 期就已知 ⇒ `showLogin` 的**初值**
+  可以直接写 `ref(!auth.authenticated)`（已登录用户冷启动**不多等**一次 `api.me()`）。
+  但**只改初值只能 12 → 2** —— `App.vue` 里 `tasks.refresh()` 与 `library.loadLibraries()` 是 **App.vue 级、
+  不受 `v-if/v-else` 控制**的，无条件发请求 ⇒ 必须抽 `bootstrapShell()` 并**只在「未弹门禁」时调用**。
+- ⚠️ **`LoginGate` 的 `@authed` 回调必须同批复跑 `bootstrapShell()`**：漏了**不报错**，只是登录后任务轮询与书库
+  **永不启动**（界面看着正常、只是永远是空的）—— 静态契约钉住（`tests/test_unauth_probe_contract.py`）。
+- **诚实边界（刻意不修）**：localStorage 里**有 token 但已失效**时，外壳仍会先挂载并发一轮探测，随后 401 把门禁弹出来。
+  修它就得让**已登录用户冷启动也等一次 `api.me()`** —— 本期口径只承诺「**从未登录过 / 清过 localStorage 的访客 = 0 个 401**」。
+- ⚠️ **测量 401 别用 `performance.getEntriesByType('resource')`** —— 该 API **拿不到 HTTP 状态码**。
+  数 **uvicorn 访问日志里的 `401` 行**。另：改了前端**不跑 `deploy` 就是测旧 bundle**（本期第一次测出 13 全是假象）。
+- **来源排序的唯一真值源仍是 `metasources.reorder_for_language()`**：加可选 `weights` 后排序键 `(-weight, language_tier(...))`；
+  **归一只有 `metasources.weight_of()` 一处**（缺省 / 非法 / 负数 / 未知 id 一律 → `0` = 不干预）。
+  ⚠️ **权重全为 0 必须与改动前逐字一致** —— 靠 `sorted` 的**稳定性**保档内用户顺序，写成用例，别改成会打乱档内顺序的写法。
+  配置键 `metadata_fetch.source_weights` 走**三处同步点**（`config.DEFAULTS` ↔ `server.EDITABLE["metadata_fetch"]` ↔
+  `_mask_metadata_fetch`）；漏 `DEFAULTS` 会让「恢复默认」丢键。
+- ⚠️ **窄屏（≤640px）顶栏的 7 个入口是「唯一入口」**（第 65 期已从侧栏撤掉）：数据统计 / 任务 / 工具 / 阅读记录 /
+  阅读活动 / 成就 / 设置 —— 收进「更多」**不是隐藏**，`v-if` 写错就变成「窄屏没法进设置 / 任务」。
+  判据必须用 `useNarrowScreen()`（`lib/viewport.ts`，**不另写断点**），用 `v-if/v-else` 而**不是纯 CSS 隐藏**
+  （面板 `Teleport` 到 body，CSS 藏不住，且会变成 JS/CSS 两份断点）。
+- ⚠️ **浮层菜单（`ui/DropdownMenu.vue`）的键盘契约**（第 91 期补的真缺陷：面板为躲裁切 `Teleport` 到 `<body>` 末尾，
+  代价是 **Tab 序排在整个页面之后**，`Esc` 也**无人监听**）：打开即入焦第一项、`↑`/`↓` 循环移动、
+  **`Esc` 关闭并把焦点还给触发器**、**`Tab` 也关闭**（`preventDefault` —— 否则焦点会走到浏览器 chrome）。
+  契约写在**共享组件**里 ⇒ 书卡的 ⋮ 菜单一并受益。⚠️ spec 必须 `attachTo: document.body`（游离 DOM 上
+  `document.activeElement` 恒为空）；`press()` 要 await 一拍否则面板还挂在 DOM 上会**假红**。
+- ⚠️ **浮层里的 `Tab` 语义是「关闭 + 焦点还给触发器」**，不是「留在菜单项上」：先按后者写，实测焦点跑到触发器，
+  复核确认**实现是对的** ⇒ **改断言，不改实现**。
+- **同一服务端动作不该有两种客户端语义**：`LocalConvertView` 原先走 `convertFile` / `convertPath`（blob 变体，
+  转完把成品**推回浏览器**），而收书目录页走 `convertDrop`（`requestAck`）⇒ 统一到 ack 链路
+  （投递 → toast → 刷新），blob 变体**全删**。删公开 api 方法前**再 grep 一次全仓**（含 `*.spec.ts` 的 mock）。
+- **`note` / 提示文案是纯文本插值**（`{{ … }}`）：`**` 与反引号会**原样**显示给用户 ⇒ 补契约
+  「`note` 里不许有 markdown」（本期真在 `weread` 的 note 上踩了一次）。
+- **番茄 / 起点目录规则的真机结论（第 91 期，经本机代理）**：番茄 `/page/<书号>` **可用**（匿名 SSR，
+  内置正则逐字命中，实测一本 **550 章**全解析）但 `/search?query=` **404** ⇒ **一半通过一半不通过**；
+  起点 `/so/…` 与 `/book/…/` 都是 **202 + 209 B `probe.js`**（反爬 JS 挑战）⇒ **两条都用不了**。
+  一个布尔 `verified` 说不清「哪一半可用」⇒ **两条都保守留 `False`**，把实测结论写进 `note`（**不改 `status` 与 `verified`**，
+  三条既有 toc 契约**零改动**）。
+- ⚠️ **冒烟要看两层判据**：先排除 `overflow-x: auto|scroll|hidden|clip` 祖先内的元素，再做更严的
+  「**超出视口 AND 被不可滚动的 `overflow:hidden|clip` 祖先裁掉**」复核 —— 第 90 期那个顶栏缺陷正是被
+  `overflow-x: clip` 吃掉的，宽松判据会把它归成「可达」而漏掉。本期 4 页 × 360/768/1280 = 12 组全 0。
+- **`online-fallback` 是独立一期**（第 91 期只写口径不动代码）：触发 = 本地读不了（未下载 / 格式不支持 / 文件缺失损坏）；
+  共享按源登录态**必须**走 `DownloadManager.gate_reason()` 这唯一闸门；⚠️ 需用户先拍板的**合规边界**：
+  渲染第三方页面必须**如实标注「这是源站在线页面」**、不得像在托管正文，只接公版 / 授权源。
+- **跨语言检索词保持「未支持」**（口径写死在设置页）：① 翻译质量不可控、会推高「同名不同书」误配率；
+  ② 各源语言内检索语义不同；③ 已有「按语种重排 + 手动指定来源」两条退路。已进 TODO 的「**明确不做**」区。
+- **踩坑**：`window[m]('keydown', fn)` 过不了 `tsc`（字符串联合推不出 `KeyboardEvent` 重载）⇒ 拆成显式 `if/else` 两个调用；
+  `POST /api/libraries` 内联 `-d` 带中文必炸 ⇒ 写文件 + `--data-binary @f` + `charset=utf-8`；
+  `/api/books` 的键是 **`items`** 不是 `books`；**`/tools/convert` 是 404 路由**（真路由 `/tools/local`）；
+  `json.load(sys.stdin)` 会按 **cp936** 解码 ⇒ 先 `sys.stdin.reconfigure(encoding='utf-8')`（否则乱码 + `\udcXX` 孤立代理，
+  写文件时 `UnicodeEncodeError`）；`nohup … &` 后台跑 pytest 中途死掉**却报 exit 0** ⇒ 长跑改前台 + 足够超时。

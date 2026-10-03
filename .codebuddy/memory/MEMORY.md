@@ -62,9 +62,10 @@
 - **75–79** 删书回收三份 / Switch 圆点白（75）；EPUB 插图 URL 只在 `library._rewrite_assets`+`_rewrite_css_urls` 拼、书内样式独立端点**不进正文容器**（76）；移除「按格式归库」链、**跨库移动 `/api/book-move/*` 保留**（77）；版本真值源=`VERSION`（78）；序号单元**第四形态**（编号须**紧贴**标题）+ `SCAN_RULE_VERSION` 自愈（79）。
 - **80–83** `update` 四键全有读点、假开关即缺陷（80）；「移除书库」只删登记 + `recycle_items`（**不含 `book_id`**）+ 回收站还原 + `recycled_name` ≤255B（81）；首页对齐上游、显式依赖 `vue-draggable-plus`、`WidgetId` 键不改（82）；`ShelfDef.library_ids` **空=全部书库**、第 13 件 `reading-time`、`BookPreviewDialog` **Teleport to body**（83）。
 - **84**（**期号已被并行会话占用**）自动更新：退避状态机（1h→6h→24h）+ 启动即检 + 更新前备份（失败即中止）。
-- **85** 目录体系：`core/reading_list.py`（卷/段唯一真值源）+ `toc_sources.py`（**只取目录**）+ `download.toc_enabled`（默认关）；⚠️ 番茄/起点内置规则**未在本机验证**。
+- **85** 目录体系：`core/reading_list.py`（卷/段唯一真值源）+ `toc_sources.py`（**只取目录**）+ `download.toc_enabled`（默认关）；⚠️ 番茄/起点内置规则**第 91 期真机核过**（番茄书页可用 / 搜索 404、起点两条都不可用 ⇒ **仍留 `verified=false`**，结论见第 91 期）。
 - **86** 书源体系 + 追更：16 接口全有界面入口；`autoupdate` 默认开启、**只调 `update_report`**；`manager.update_lock` 防并发丢章。
 - **87** `.zip` 按内容分派（`zipkind.py`，`format` 归一 `CBZ`）；三处静默失败修复；重名判据收敛（**不改 `book_id` 规则**）；`format-capability-matrix.md` 契约。
 - **88** 脏库读**不扫盘**（派后台 + `SETTLE_WAIT=0.25`；**显式扫描仍同步**）；`/api/books` 加 `limit`/`offset`（不传=全量）；书架用**独立分页源**。
 - **89** `requestAck()` 修上传假报错（不解析响应体）；`ENCODING_RULE_VERSION=2`，BOM 优先 + 坏字节**不静默丢**、计数上报。
 - **90** 外壳侧栏照搬上游 `ui/sidebar`（基座 `reka-ui`）：折叠态/宽度的**唯一真值源=`SidebarProvider`**（`stores/ui.ts` 的 `sidebarCollapsed`/`toggleSidebar` 已删）；窄屏断点唯一真值源=`lib/viewport.ts`（**639.98px，不跟上游 768**）；侧栏偏好**只落本机**（`nf_sidebar_*`，**不进** `PREFS_BLOCKS`）；默认宽度 **240**（非上游 256）；取菜单行认 `data-sidebar="menu-button"`（`data-slot` 会被 tooltip 触发器顶掉）。
+- **91** 未登录 401 探测归零 = `showLogin` **初值**（`auth.authenticated` 同步可读）+ 抽 `bootstrapShell()`，**`@authed` 必须复跑**（漏了不报错、只是登录后永不加载）；**数 401 只能读访问日志**（`performance.getEntriesByType('resource')` 拿不到状态码）。窄屏顶栏 7 个入口**只有**「更多」一条路 ⇒ 判据走 `useNarrowScreen()`、`v-if` 而非 CSS 隐藏。**浮层菜单（`DropdownMenu`）键盘**：`Teleport` 到 body ⇒ Tab 序跑到页面末尾、`Esc` 无人监听 ⇒ 补「入焦首项 / ↑↓ 循环 / `Esc`·`Tab` 关闭并把焦点还给触发器」。`metadata_fetch.source_weights` 排序键 `(-weight, language_tier)`，归一**只有** `metasources.weight_of()`（**全 0 必须与现状逐字一致**——靠 `sorted` 稳定性）。番茄「书页可用 / 搜索 404」、起点两条都不可用 ⇒ **两条都保守留 `verified=false`**。`note` 是纯文本插值 ⇒ **不许写 markdown**。`docs/TODO.md` 只放「还没做的」。
