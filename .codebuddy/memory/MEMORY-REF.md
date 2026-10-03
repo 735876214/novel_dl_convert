@@ -19,6 +19,10 @@
   `fs.rmSync`（清 outDir）与 `deploy.mjs` 的删除，报 `checkBulkDeleteGuard` / 「No active Node.js version」。
   同一条「先清 `NODE_OPTIONS`」对 pytest 也适用（此前几期的命令都带它，原因就在这里）。
 - 浏览器冒烟：本机（win32）**无 chromium 也能跑** —— `playwright-cli open --browser=msedge`（走系统 Edge 通道，免下载；直接 `open` 会失败）；也可 `playwright-cli install-browser chromium`；注入 `nf_token`（`localstorage-set` + **必须再 `reload`**，否则首屏未授权请求 401、且应用会把刚注入的 token 清掉）；⚠️ `snapshot` 直接打到 stdout（`--filename` 可能不落盘）⇒ 重定向到 `/tmp` 自己读，别落仓库根；⚠️ 换了产物要**带 `?nc=N` goto**（普通 `reload` 用旧 bundle，会误判成「改动没生效」）。
+- **`ui-smoke`（机器级三档冒烟，仓库内 `.codebuddy/tools/ui-smoke.ps1`）**：`open →（可选）登录 → 每档 set viewport → 量布局 → 截图`；`-CleanOnly` 清残留。
+  ⚠️ **三个会让它静默挂死的坑（2026-10-03 已全部修进脚本）**：① `~/.agent-browser/default.pid|default.port` 残留指向**已死进程** ⇒ CLI 永久等待、不启新守护进程（`open` 零输出挂死）；② **PowerShell 管道 + 冷启动死锁**：首个 `open` spawn 的守护进程会**继承 PS 管道句柄** ⇒ `& agent-browser ... 2>&1 | ...` 永远等不到流结束（cmd/`.bat` 不受影响、守护进程**已热**时也正常）⇒ 首个 open 走临时 `.bat`，且**别用 `Start-Process -Wait`**（它等整棵进程树，守护进程不死就永不返回，要轮询日志的 `EXIT=`）；③ `eval` 传的 JS **只能用单引号**（双引号会被工具层吃掉 ⇒ `SyntaxError: Unexpected token '?'`），并放进 **here-string**。
+  `-Widths` 用**空格**分隔（逗号会被 `.cmd` 转发吃掉）；默认 `-Profile ~/.agent-browser-profile/novelforge`（**存着登录态，别删那个目录**）。
+  ⚠️ 360 档判据要**看 `off` 不能只看 `ovf`** —— 溢出常被内部 `overflow-x:auto` 容器吸收，`ovf` 仍是 false。
 - e2e 自查顺序：接口账目（curl）→ 界面文本（`eval innerText`）→ `console`（0 errors）→ `network`（无非本地请求）。
 - ⚠️ **本机（win32）跑测试的环境（第 81 期实测）**：仓库里**没有 `.venv`**；可用解释器是 `install_binary` 装的
   `C:\Users\qingr\.workbuddy\binaries\python\versions\3.14.3\python.exe`（先 `pip install -r requirements-dev.txt`），
