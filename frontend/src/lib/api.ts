@@ -3956,12 +3956,30 @@ export const api = {
 
   // ---------- 书库：图书馆浏览 / 书籍详情 ----------
   /**
-   * 全部书目。
+   * 书目列表（可分页）。
    *
    * 第 88 期：响应新增可选 `scanning`（**正在刷新索引的库 id 列表**）。
    * ⚠️ 它**可选**（后端并行开发中）—— 拿不到就当空数组，别因此报错。
+   *
+   * 第 88 期 C 批：新增可选 `limit` / `offset`。
+   *   · **不传参数 ⇒ 与改造前一致**（返回全部）—— 别的调用方（侧栏 / 其它视图）照旧拿全量；
+   *   · 传了就分页：`total` 仍是**未切片前的总数**，`has_more` 告诉我们还有没有下一页。
+   * ⚠️ `limit` / `offset` / `has_more` 三个字段**可选**：拿不到（旧后端）就由 store 兜底推。
    */
-  books: () => request<{ items: BookCard[]; total: number; scanning?: string[] }>('/api/books'),
+  books: (opts?: { limit?: number; offset?: number }) => {
+    const q = new URLSearchParams()
+    if (opts && typeof opts.limit === 'number') q.set('limit', String(opts.limit))
+    if (opts && typeof opts.offset === 'number') q.set('offset', String(opts.offset))
+    const qs = q.toString()
+    return request<{
+      items: BookCard[]
+      total: number
+      scanning?: string[]
+      limit?: number | null
+      offset?: number
+      has_more?: boolean
+    }>(`/api/books${qs ? `?${qs}` : ''}`)
+  },
 
   bookDetail: (id: string) =>
     request<BookDetail>(`/api/books/${encodeURIComponent(id)}`),

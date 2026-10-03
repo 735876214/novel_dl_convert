@@ -25,7 +25,35 @@ import {
  * 数据来自后端 /api/books（扫描 OUTPUT_DIR 的成品），挂载时按需拉取并缓存；
  * 详情页的章节/文件由 /api/books/{id} 按 id 记忆化获取。
  * 阅读进度等持久化字段将在引入数据库后（Batch 2）接入。
+ *
+ * 第 88 期 C 批（修正）：**书架页**改为分页 + 无限滚动（首屏只取第一页，其余页增量拉取），
+ * 但分页状态**只属于书架页自己的分页源**（`shelfLoadedBooks`）—— 共享的 `books` 保持
+ * **全量**语义，否则读它的其它消费方（侧栏计数 / 仪表盘 / BrowseView / SmartScopesView…）
+ * 只会看到已加载的**前缀**（600 本的库被显示成 120 本）。
+ * 页大小与续拉上限集中在下面两个常量里。
  */
+
+/**
+ * 书库列表的**页大小**（第 88 期 C 批）。
+ *
+ * 取值 120 的理由：
+ *   · 够大 —— 常见中小书库（< 120 本）一次就拉全，体感与改造前**完全一样**（不闪、不续拉）；
+ *   · 够小 —— 600 本的库首页约 120 本，响应体积降到全量的约 1/5，首屏渲染的行数也降一个量级；
+ *   · 与「骨架屏 12 格」「网格每屏 ≤ 9 列」量级自洽：一页足够铺满若干屏，不会一滚就到底。
+ * 换值只改这里一处（store 与 spec / ShelfView 共用）。
+ */
+export const BOOKS_PAGE_SIZE = 120
+
+/**
+ * 「筛选 / 搜索在**已加载**的书里没命中」时的**自动续拉上限**（页）。
+ *
+ * 为什么要上限：本仓的排序与筛选都在**客户端**做（`ShelfView` 的 computed），服务端按
+ * 文件序返回；若用户筛一个「排在很后面」的格式，理论上要拉穿全库才找得到。一次拉穿全库
+ * 既慢又费流量，所以自动续拉**最多 5 页**（= 600 本，覆盖绝大多数真实库的命中范围）；
+ * 到顶就停下，把「继续加载以查找」的按钮交给用户（见 `ShelfView`）。
+ */
+export const AUTO_CONTINUE_MAX_PAGES = 5
+
 export const useLibraryStore = defineStore('library', () => {
   const books = ref<BookCard[]>([])
   const details = ref<Record<string, BookDetail>>({})
@@ -45,6 +73,43 @@ export const useLibraryStore = defineStore('library', () => {
    * 进度（引用不变）—— 没有这个计数，按进度判定的智能书架徽标会停在旧数字上。
    */
   const booksRevision = ref(0)
+
+  // ---------------- 书架页的分页 / 无限滚动（第 88 期 C 批；修正版） ----------------
+  //
+  // ⚠️ 分页状态**只属于书架页自己的分页缓冲**（`shelfLoadedBooks`），与共享的 `books`
+  // 彻底分开。起因：C 批把分页直接建在共享的 `books` 上，于是所有读 `library.books` 的
+  // 其它消费方（侧栏「全部书库」计数、仪表盘书架行 / 部件、BrowseView、SmartScopesView…）
+  // 只看得到**已加载的前缀**，600 本的库显示成 120 本 —— 既有 spec 覆盖不到，真实使用却一眼可见。
+  // 现在两条路各归各、互不阻塞：
+  //   · `books`             —— **全量**（`loadBooks()` 不带 limit，服务端整份返回），其它消费方照旧；
+  //   · `shelfLoadedBooks`  —— 书架页**自己**的分页缓冲（首屏只取第一页，滚到底续拉）。
+  // 书架首屏**不**等全量 `loadBooks()`；全量 `books` 由侧栏 / 应用启动那条既有路径（B 批）负责。
+  //
+  /** 书架已加载的页（服务端顺序；**未**做库 / 分面 / 智能书架裁剪 —— 那些在 `shelfBooks` 里） */
+  const shelfLoadedBooks = ref<BookCard[]>([])
+  /** 服务端报告的**书目总数**（`/api/books` 的 `total`，始终是「未切片前的总数」）。 */
+  const shelfTotal = ref(0)
+  /** 服务端是否还有下一页（`has_more`）。为假时不再续拉、隐藏「加载更多」。 */
+  const shelfHasMore = ref(false)
+  /** 书架**首页**是否正在加载（骨架屏用）。**与续拉 `shelfLoadingMore` 分开**。 */
+  const shelfLoading = ref(false)
+  /** 是否正在拉下一页。**与首页 `shelfLoading` 分开**：续拉不该盖掉已有列表、也不该触发骨架屏。 */
+  const shelfLoadingMore = ref(false)
+  /**
+   * 书架首页是否**成功**取回过。
+   *
+   * 与全量的 `loaded` 同一纪律：失败时**保持 false** —— 置真会让之后永远短路、
+   * 界面一直显示空书架。`force` 绕过它重取。
+   */
+  const shelfLoaded = ref(false)
+  /**
+   * 已从服务端**收到**的条数（= 下一页的 `offset`）。
+   * ⚠️ 与 `shelfLoadedBooks.length` 分开：后者是**去重后**的。若某页被整页去重，用去重后的
+   * 长度当 offset 会原地打转、永远推进不了。
+   */
+  const shelfCursor = ref(0)
+  /** 自动续拉已用页数（见 `AUTO_CONTINUE_MAX_PAGES`）；排序 / 筛选变化时归零。 */
+  const shelfContinuedPages = ref(0)
 
   // ---------------- 书库（第 10 期多书库） ----------------
 
@@ -135,9 +200,14 @@ export const useLibraryStore = defineStore('library', () => {
     return [...seen]
   })
 
-  /** 按阅读状态筛书（真实状态优先，无状态行的书按进度兜底推导）。**限定在当前库内**。 */
-  function smartBooks(key: string): BookCard[] {
-    const src = scopedBooks.value
+  /**
+   * 按阅读状态筛书的**取源版本**：把「按什么筛」与「在哪个数组上筛」分开。
+   *
+   * 第 88 期 C 批（修正）加：书架页在自己的分页缓冲（`shelfLoadedBooks`）上筛，
+   * 其它消费方（仪表盘书架行 `DashboardShelfRow` 等）仍在**全量** `books` 上筛。
+   * 判据只有这一份，两处不会各说各话。
+   */
+  function smartBooksOf(src: BookCard[], key: string): BookCard[] {
     const byStatus = (s: string) => (b: BookCard) => (b.status ?? derivedStatus(b)) === s
     switch (key) {
       case 'recent':
@@ -161,6 +231,11 @@ export const useLibraryStore = defineStore('library', () => {
     }
   }
 
+  /** 按阅读状态筛书（真实状态优先，无状态行的书按进度兜底推导）。**限定在当前库内**（全量源）。 */
+  function smartBooks(key: string): BookCard[] {
+    return smartBooksOf(scopedBooks.value, key)
+  }
+
   /**
    * 进度推导（第 40 期起阈值可配，判定收敛到 `lib/readingThresholds.ts`）。
    *
@@ -173,9 +248,8 @@ export const useLibraryStore = defineStore('library', () => {
 
   const isSmart = computed(() => Boolean(smartKey.value))
 
-  /** 按**分面键**筛书（格式 / 待修复 / 无封面）。限定在当前库内。 */
-  function facetBooks(key: string): BookCard[] {
-    const src = scopedBooks.value
+  /** 按**分面键**筛书的**取源版本**（格式 / 待修复 / 无封面）；取源理由同 `smartBooksOf`。 */
+  function facetBooksOf(src: BookCard[], key: string): BookCard[] {
     if (key.startsWith('fmt:')) {
       const f = key.slice(4).toUpperCase()
       return src.filter((b) => (b.format || '').toUpperCase() === f)
@@ -191,10 +265,29 @@ export const useLibraryStore = defineStore('library', () => {
     return src
   }
 
+  /**
+   * **书架页**在分页缓冲上按当前库裁剪（`currentLibraryId` 为空 = 全部，不裁剪）。
+   *
+   * ⚠️ 与 `scopedBooks`（全量 `books` 的库内投影）分开：书架看的是**已加载的页**，
+   * 其它消费方看的是**全量**。这正是首屏快、又不缩小他人视野的关键。
+   */
+  const shelfScopedBooks = computed(() =>
+    currentLibraryId.value
+      ? shelfLoadedBooks.value.filter((b) => (b.library_id || '') === currentLibraryId.value)
+      : shelfLoadedBooks.value,
+  )
+
+  /**
+   * 书架页的**基础筛选源**（库 / 分面 / 智能书架）—— 建在书架自己的分页缓冲上。
+   *
+   * 全仓只有 `ShelfView` 读它；其它库内投影（`scopedBooks` / `continueReading` /
+   * `scopeCounts` / `smartBooks`）一律仍走全量 `books`（见上面各自的注释）。
+   */
   const shelfBooks = computed(() => {
-    if (shelfFacet.value) return facetBooks(shelfFacet.value)
-    if (smartKey.value) return smartBooks(smartKey.value)
-    return scopedBooks.value
+    const src = shelfScopedBooks.value
+    if (shelfFacet.value) return facetBooksOf(src, shelfFacet.value)
+    if (smartKey.value) return smartBooksOf(src, smartKey.value)
+    return src
   })
 
   /** 继续阅读：翻过但还没读完，按最近阅读倒序（限定在当前库内） */
@@ -212,13 +305,21 @@ export const useLibraryStore = defineStore('library', () => {
    *
    * 边界：书不在当前列表里（换了库 / 列表还没加载）⇒ **静默忽略**，不新建条目 ——
    * 凭空插一条没有封面/元数据的残书比不显示更糟；下次 `loadBooks` 自会带上服务端真值。
+   *
+   * ⚠️ 第 88 期 C 批（修正）：`books` 与书架分页缓冲 `shelfLoadedBooks` 是**两份不同的
+   * 数组**（两次不同的响应），所以两处都要就地改 —— 否则从阅读器退回书架时，书架上那本
+   * 的百分比会停在旧值（分页把书架从 `books` 里拆出去时最容易漏的一处）。
    */
   function patchProgress(id: string, percent: number, at?: number): void {
-    const hit = books.value.find((b) => b.id === id)
-    if (!hit) return
-    hit.percent = Math.min(100, Math.max(0, Number(percent) || 0))
+    const hits = [books.value.find((b) => b.id === id), shelfLoadedBooks.value.find((b) => b.id === id)]
+    if (!hits[0] && !hits[1]) return
+    const pct = Math.min(100, Math.max(0, Number(percent) || 0))
     const ts = Number(at) || 0
-    if (ts > 0) hit.updated_at = Math.max(ts, hit.updated_at || 0)
+    for (const b of hits) {
+      if (!b) continue
+      b.percent = pct
+      if (ts > 0) b.updated_at = Math.max(ts, b.updated_at || 0)
+    }
     // 就地改了数据 ⇒ 让以「引用」为键的 memo（scopeCounts）知道该重算
     booksRevision.value += 1
   }
@@ -238,6 +339,19 @@ export const useLibraryStore = defineStore('library', () => {
    */
   let booksInflight: Promise<void> | null = null
 
+  /**
+   * 加载**全量书目**（第 88 期 C 批修正：语义从「拉第一页」**回到「拉全量」**）。
+   *
+   * `books` 是**共享的全量真值源**：侧栏「全部书库」计数、仪表盘书架行 / 部件、
+   * BrowseView / SmartScopesView 都直接（`books`）或间接（`scopedBooks` / `smartBooks` /
+   * `continueReading` / `scopeCounts`）读它。所以这里**不带 `limit`** —— 服务端整份返回，
+   * 顺序与字段与改造前一模一样。
+   *
+   * ⚠️ 书架页的**分页**不在这条路上：那是书架自己的 `shelfLoadedBooks`（见下）。
+   * 两条路互不阻塞 —— 书架首屏不等全量，全量由侧栏 / 应用启动那条既有路径负责。
+   *
+   * `force` 是「绕过 `loaded` 守卫重拉」（数据变更 / 扫描完成 / 手动重试都走这条）。
+   */
   async function loadBooks(force = false): Promise<void> {
     if (loaded.value && !force) return
     if (booksInflight) return booksInflight
@@ -250,6 +364,9 @@ export const useLibraryStore = defineStore('library', () => {
       // 重算，所以**不必**等它 —— 先用兜底值渲染，真值到了再自动修正。
       void Promise.all([ensureThresholds(), ensureThresholds(currentLibraryId.value)])
       try {
+        // 第 88 期 C 批修正：**回到全量**（不传 limit/offset ⇒ 服务端整份返回）。
+        // ⚠️ 别在这里加 limit：共享的 `books` 一旦被切片，读它的消费方就会「只见前缀」——
+        // 那正是 C 批引入、本批要挡下的副作用。
         const res = await api.books()
         books.value = res.items
         // 第 88 期：响应可选带上「正在刷新索引的库」——拿不到（后端未落地）就当空数组
@@ -268,6 +385,135 @@ export const useLibraryStore = defineStore('library', () => {
       }
     })()
     return booksInflight
+  }
+
+  // ---- 书架页自己的分页源（第 88 期 C 批；修正版）----
+  //
+  // 下面这一组**只**服务书架页：首屏取第一页，其余页在滚到底 / 点「加载更多」时增量追加。
+  // 它们**不碰** `books` / `loaded`：那两条是全量那条路的（见上面的 `loadBooks`）。
+
+  /** 把新到的一页**按 id 去重**后追加到书架缓冲（新数组 ⇒ 以「引用」为键的 memo 自动重算）。 */
+  function appendShelfUnique(items: BookCard[]): void {
+    if (!items.length) return
+    const seen = new Set(shelfLoadedBooks.value.map((b) => b.id))
+    const add = items.filter((b) => b.id && !seen.has(b.id))
+    if (add.length) shelfLoadedBooks.value = [...shelfLoadedBooks.value, ...add]
+  }
+
+  let shelfInflight: Promise<void> | null = null
+
+  /**
+   * 加载书架的**首页**（第 88 期 C 批修正后的分页入口，`ShelfView` 挂载时调）。
+   *
+   * 只写 `shelfLoadedBooks`，**不碰**全量 `books` / `loaded` —— 后者由 `loadBooks()` 负责。
+   * `force` 绕过 `shelfLoaded` 守卫重取首页（数据变更 / 手动重试走这条）。
+   */
+  async function loadShelfFirstPage(force = false): Promise<void> {
+    if (shelfLoaded.value && !force) return
+    if (shelfInflight) return shelfInflight
+    shelfInflight = (async () => {
+      shelfLoading.value = true
+      booksError.value = ''
+      try {
+        const res = await api.books({ limit: BOOKS_PAGE_SIZE, offset: 0 })
+        shelfLoadedBooks.value = res.items
+        shelfCursor.value = res.items.length
+        shelfTotal.value = typeof res.total === 'number' ? res.total : res.items.length
+        // `has_more` 是后端权威值；拿不到（旧后端未落地）就按「总数 vs 已收到」兜底推。
+        shelfHasMore.value = res.has_more ?? shelfCursor.value < shelfTotal.value
+        shelfContinuedPages.value = 0
+        shelfLoaded.value = true
+      } catch (e) {
+        // ⚠️ 失败**绝不写 `shelfLoaded`**（也不动全量 `loaded`）：否则之后永远短路、
+        // 书架一直显示空。原因写 `booksError` —— 书架与全量共用同一句「书库加载失败」文案。
+        booksError.value = e instanceof Error ? e.message : '加载失败'
+      } finally {
+        shelfLoading.value = false
+        shelfInflight = null
+      }
+    })()
+    return shelfInflight
+  }
+
+  let shelfMoreInflight: Promise<void> | null = null
+
+  /**
+   * 拉书架的**下一页**（第 88 期 C 批）：首屏 `loadShelfFirstPage()` 之后，其余页从这里增量追加。
+   *
+   * 与首页的分工（纪律，别破坏）：
+   *   · `shelfLoading` / `shelfInflight` 只管首页（首页失败要显示错误态、**不置 `shelfLoaded`**）；
+   *   · 续拉有自己的单飞闸 `shelfMoreInflight` 与 `shelfLoadingMore`，**不碰 `shelfLoaded`** ——
+   *     它已为真，重复置真没有意义；失败只记 `booksError`（不打断、也不清空已有列表）。
+   *
+   * 去重：服务端顺序稳定，正常不会重复；但翻页期间书库可能被标脏重扫而改变总数 / 顺序，
+   * 故**按 id 去重**再追加 —— 宁可少一条诡异的重复，也不要在列表里出现两张一模一样的卡。
+   */
+  async function loadMoreShelfBooks(): Promise<void> {
+    if (shelfMoreInflight) return shelfMoreInflight
+    if (!shelfHasMore.value) return
+    shelfMoreInflight = (async () => {
+      shelfLoadingMore.value = true
+      const offset = shelfCursor.value
+      try {
+        const res = await api.books({ limit: BOOKS_PAGE_SIZE, offset })
+        appendShelfUnique(res.items)
+        shelfCursor.value += res.items.length
+        if (typeof res.total === 'number') shelfTotal.value = res.total
+        shelfHasMore.value = res.has_more ?? shelfCursor.value < shelfTotal.value
+      } catch (e) {
+        // 失败**不改 `shelfLoaded`、不清 `shelfLoadedBooks`**：已有数据比一个错误页有用（B 批纪律）。
+        booksError.value = e instanceof Error ? e.message : '加载失败'
+      } finally {
+        shelfLoadingMore.value = false
+        shelfMoreInflight = null
+      }
+    })()
+    return shelfMoreInflight
+  }
+
+  /**
+   * **预算内**的自动续拉（供「筛选在已加载里没命中、但还有更多」时使用）。
+   *
+   * 返回是否**真的往前推进了一页** —— 调用方据此决定要不要继续循环：
+   * `false` = 没有更多 / 已到 `AUTO_CONTINUE_MAX_PAGES` / 服务端没给新内容（越界或整页去重）。
+   */
+  async function autoLoadMoreShelf(): Promise<boolean> {
+    if (!shelfHasMore.value) return false
+    if (shelfContinuedPages.value >= AUTO_CONTINUE_MAX_PAGES) return false
+    const before = shelfCursor.value
+    shelfContinuedPages.value += 1
+    await loadMoreShelfBooks()
+    return shelfCursor.value > before
+  }
+
+  /**
+   * 排序 / 筛选 / 搜索变化时调用（`ShelfView` 用 watch 挂）。
+   *
+   * 为什么：**把「自动续拉预算」归零**，让新的筛选口径重新拥有整份预算 —— 否则
+   * 「上一种筛选已经连拉过 5 页」会把新筛选的名额吃掉，新筛选即使后面真有匹配也永远找不到。
+   *
+   * 为什么**不**连数据一起丢掉、重拉第一页：本仓的排序与筛选都在**客户端** computed 里做
+   * （`ShelfView.sorted` / `filtered`），服务端返回的行与排序无关 ⇒ 重拉只会拿回**同一批行**，
+   * 白一次往返；而丢掉已加载页还会把用户滚了半天的位置清空。「真正诚实」的出口是页头 /
+   * 页脚的「已显示 N / 共 M」提示 + 自动续拉（见 `ShelfView`）。
+   */
+  function resetShelfQuery(): void {
+    shelfContinuedPages.value = 0
+  }
+
+  /**
+   * 数据变更后刷新书目（第 88 期 C 批修正）：**两条路一起刷**。
+   *
+   * 书架页看到的是分页源（`shelfLoadedBooks`），侧栏计数 / 仪表盘等看到的是全量 `books` ——
+   * 删书 / 批量改状态 / 移动 / 建库 / 扫描完成之后两处都得回到服务端真值，缺一个就会
+   * 「书架首页对了、侧栏计数还是旧的」（或反过来）。收在一个方法里，避免调用点漏刷一处。
+   */
+  async function refreshBooks(): Promise<void> {
+    await Promise.all([
+      loadBooks(true),
+      // 书架分页源**没用过**（用户没进过书架）就不必刷 —— 别为看不见的页面多发一次请求
+      shelfLoaded.value ? loadShelfFirstPage(true) : Promise.resolve(),
+    ])
   }
 
   /** 书库实体 + 来源父目录（空则拉取）。同 `loadBooks`，并发调用共享同一次请求（第 67 期）。 */
@@ -374,7 +620,7 @@ export const useLibraryStore = defineStore('library', () => {
       clearInterval(scanTimer)
       scanTimer = null
     }
-    if (refresh && loaded.value) void loadBooks(true)
+    if (refresh && loaded.value) void refreshBooks()
   }
 
   /** 拉一次扫描状态并合并；若已无库在扫则**停止轮询**（并刷新一次书目）。 */
@@ -530,6 +776,19 @@ export const useLibraryStore = defineStore('library', () => {
     loaded,
     loading,
     booksError,
+    // 书架页的分页 / 无限滚动（第 88 期 C 批；修正版：与全量 `books` 分开）
+    shelfLoadedBooks,
+    shelfTotal,
+    shelfHasMore,
+    shelfLoading,
+    shelfLoadingMore,
+    shelfLoaded,
+    shelfContinuedPages,
+    loadShelfFirstPage,
+    loadMoreShelfBooks,
+    autoLoadMoreShelf,
+    resetShelfQuery,
+    refreshBooks,
     shelfTitle,
     smartKey,
     shelfFacet,

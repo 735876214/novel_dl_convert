@@ -28,7 +28,7 @@ import {
   type CardPrimaryLabel,
   type CardSecondaryLabel,
 } from '@/stores/displayPrefs'
-import { useLibraryStore } from '@/stores/library'
+import { AUTO_CONTINUE_MAX_PAGES, useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useUiStore } from '@/stores/ui'
 import {
@@ -89,7 +89,8 @@ function scanShelf(): void {
     .scanNow()
     .then(() => {
       ui.toast('已触发一次扫描')
-      void library.loadBooks(true)
+      // 数据会变：书架分页源与全量 books 一起刷（见 store.refreshBooks）
+      void library.refreshBooks()
     })
     .catch((e: Error) => ui.toast(e.message))
 }
@@ -100,7 +101,7 @@ function manageLibs(): void {
 
 /** 空态「新建书库」：就地弹窗（第 55 期）——建库在哪儿发生，向导就在哪儿打开 */
 function createLib(): void {
-  void wizard.show({ onCreated: () => void library.loadBooks(true) })
+  void wizard.show({ onCreated: () => void library.refreshBooks() })
 }
 
 /** 导出全部书目 CSV（含阅读进度/状态/评分），交给系统下载 */
@@ -168,7 +169,7 @@ async function runBatch(action: string, params: Record<string, unknown>): Promis
     const r = await api.batch({ action, ids, params })
     ui.toast(`已处理 ${r.succeeded.length}/${r.total} 本` + (r.failed.length ? `，${r.failed.length} 本失败` : ''))
     if (r.failed.length) console.warn('[batch] 部分失败', r.failed)
-    await library.loadBooks(true)
+    await library.refreshBooks()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '批量操作失败')
   }
@@ -235,7 +236,7 @@ function openMove(): void {
 async function onMoved(): Promise<void> {
   selected.value = new Set()
   selectMode.value = false
-  await library.loadBooks(true)
+  await library.refreshBooks()
   await library.loadLibraries(true)
   await loadMoveBatch()
 }
@@ -249,7 +250,7 @@ async function undoMove(): Promise<void> {
       `已撤销：${r.restored ?? 0} 本搬回原库${r.copies ? `，副本 ${r.copies} 本随回滚` : ''}` +
         (r.failed ? `，${r.failed} 本失败` : ''),
     )
-    await library.loadBooks(true)
+    await library.refreshBooks()
     await loadMoveBatch()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '撤销失败')
@@ -266,8 +267,15 @@ watch(() => route.query.q, (q) => { keyword.value = String(q || '') })
 /** 已展开的系列名 */
 const expanded = ref<string[]>([])
 
-onMounted(() => library.loadBooks())
+// 第 88 期 C 批（修正）：书架首屏**只取自己的第一页**（`shelfLoadedBooks`），**不**等全量
+// `loadBooks()` —— 首屏快正是分页的目的。全量 `books` 由侧栏 / 应用启动那条既有路径（B 批）
+// 负责，两者互不阻塞（`ShelfView.states.spec.ts` 也据此断言「挂载只发一次 /api/books」）。
+onMounted(() => library.loadShelfFirstPage())
 
+/**
+ * 书架页的基础筛选源（库 / 分面 / 智能书架）：建在**书架自己的分页缓冲**上，
+ * 所以这里看到的只是**已加载的页** —— 页头 / 页脚用「已显示 N / 共 M」如实说明这一点。
+ */
 const source = computed(() => library.shelfBooks)
 
 function uniq(xs: string[]): string[] {
@@ -503,6 +511,7 @@ function onResizeRebuildBuckets(): void {
 onMounted(async () => {
   await nextTick()
   rebuildBucketObserver()
+  rebuildMoreObserver()
   window.addEventListener('resize', onResizeRebuildBuckets, { passive: true })
 })
 onBeforeUnmount(() => {
@@ -510,12 +519,116 @@ onBeforeUnmount(() => {
   bucketObserver = null
   bucketsAboveLine.clear()
   bucketEls = []
+  // ⚠️ 续拉的观察器必须一起断开：否则离开书架后它仍挂在文档上，用户在任何页面滚到底
+  // 都会继续往这个已卸载的页面里发 `/api/books` 请求。
+  moreObserver?.disconnect()
+  moreObserver = null
   window.removeEventListener('resize', onResizeRebuildBuckets)
 })
-watch(renderRows, () => void nextTick(rebuildBucketObserver))
-watch(() => prefs.prefs.view, () => void nextTick(rebuildBucketObserver))
+watch(renderRows, () => void nextTick(() => { rebuildBucketObserver(); rebuildMoreObserver() }))
+watch(() => prefs.prefs.view, () => void nextTick(() => { rebuildBucketObserver(); rebuildMoreObserver() }))
 // 展开 / 收起系列会改变渲染的 [data-bucket] 元素集合（listEntries / tableRows 跟着变）
 watch(expanded, () => void nextTick(rebuildBucketObserver))
+
+// ---------------- 无限滚动 / 分页（第 88 期 C 批） ----------------
+//
+// 与上面的首字母分桶高亮**同一套写法**：IntersectionObserver + 卸载时 disconnect。
+// 观察列表底部的**哨兵**：进视口就拉下一页（有更多、且不在拉时）。同时给一个**可点**的
+// 「加载更多」按钮兜底 —— 触屏拖不动 / 观察器不生效（happy-dom、旧浏览器）时仍能加载，
+// 且按钮键盘可达（渲染成 <button>）。
+
+/** 底部哨兵（滚到它就续拉）。始终挂在列表末尾，随数据出现而出现 */
+const sentinelEl = ref<HTMLElement | null>(null)
+let moreObserver: IntersectionObserver | null = null
+
+function rebuildMoreObserver(): void {
+  // happy-dom 等测试环境可能没有 IntersectionObserver：没有就静默跳过（按钮兜底仍在）
+  if (typeof IntersectionObserver === 'undefined') return
+  moreObserver?.disconnect()
+  const el = sentinelEl.value
+  if (!el) return
+  moreObserver = new IntersectionObserver((entries) => {
+    for (const en of entries) if (en.isIntersecting) loadNextPage()
+  })
+  moreObserver.observe(el)
+}
+
+/** 拉下一页（哨兵与按钮共用；`shelfHasMore` / `shelfLoadingMore` / 单飞闸都在 store 里兜着） */
+function loadNextPage(): void {
+  void library.loadMoreShelfBooks()
+}
+
+/**
+ * 「筛选结果为空但还有更多」的诚实态（第 88 期 C 批）。
+ *
+ * 筛选与搜索都在**已加载**的数据上做（服务端按文件序返回，排序 / 筛选都在前端 computed 里）。
+ * 于是完全可能「已加载的 N 本里没有匹配，但服务端后面还有」。这时**不能**显示
+ * 「没有符合条件的书」—— 那是在谎报（用户会以为库里真的没有）。
+ */
+const searchPending = computed(
+  () => !sorted.value.length && library.shelfHasMore && library.shelfLoadedBooks.length > 0,
+)
+/** 自动续拉已到上限（不再自动拉，改为让用户点「继续加载以查找」手动推进）。 */
+const searchExhausted = computed(
+  () => searchPending.value && library.shelfContinuedPages >= AUTO_CONTINUE_MAX_PAGES,
+)
+
+/**
+ * 自动续拉循环 —— 只在「已加载里没命中」时跑，且**有上限**（见 AUTO_CONTINUE_MAX_PAGES）。
+ *
+ * 为什么要有上限：没有的话，筛一个「排在很后面」的格式会把整库拉穿（几百本 × 每页一次往返），
+ * 而用户只是想确认「有没有」，不该为此等一整库。上限之内先尽力找，超了就交给
+ * 「继续加载以查找」按钮（用户显式再推进）。
+ */
+let autoRunning = false
+async function runAutoContinue(): Promise<void> {
+  if (autoRunning) return
+  autoRunning = true
+  try {
+    while (searchPending.value) {
+      if (!(await library.autoLoadMoreShelf())) break
+    }
+  } finally {
+    autoRunning = false
+  }
+}
+
+/** 用户点「继续加载以查找」：**绕过自动续拉上限**，手动再推进一页后继续自动找。 */
+async function continueSearch(): Promise<void> {
+  await library.loadMoreShelfBooks()
+  await runAutoContinue()
+}
+
+// 排序 / 筛选 / 搜索一变 ⇒ 重置续拉预算（新口径重新拥有整份预算），并重新评估要不要续拉。
+watch(
+  () => [prefs.prefs.sort, prefs.prefs.dir, keyword.value, fFormat.value, fLanguage.value,
+    fTag.value, fCover.value, fStatus.value],
+  () => {
+    library.resetShelfQuery()
+    void runAutoContinue()
+  },
+)
+// 已加载数据 / 筛选结果变化后也可能还差一步（例如刚切到某个筛选项）—— 补一次续拉评估。
+watch(
+  [() => library.shelfHasMore, () => library.shelfLoadedBooks.length, () => sorted.value.length],
+  () => void runAutoContinue(),
+)
+
+/**
+ * 页头副标题：**诚实**地说明「看到的是全部还是前一段」。
+ *
+ * 改造前是「共 N 本」——分页后 N 只是**已加载**的条数，照旧写会让人以为库里只有这么多。
+ * 有下一页时改成「已显示 N / 共 M 本」，并另报「当前条件命中 K 本」。
+ */
+const headDesc = computed(() => {
+  const shown = sorted.value.length
+  const cut = source.value.length - shown
+  if (library.shelfHasMore) {
+    const hit = shown !== library.shelfLoadedBooks.length ? ` · 当前条件命中 ${shown} 本` : ''
+    return `已显示 ${library.shelfLoadedBooks.length} / 共 ${library.shelfTotal} 本${hit}`
+  }
+  return `共 ${shown} 本${cut > 0 ? ` · 已筛掉 ${cut} 本` : ''}`
+})
 
 function isSeriesRow(r: Row): boolean {
   return r.key.startsWith('series:')
@@ -665,29 +778,31 @@ const isFiltered = computed(() => Boolean(library.shelfFacet) || library.isSmart
 // ---------------- 加载 / 失败 / 空 三态（第 88 期） ----------------
 
 /**
- * 首屏骨架：**还没有任何书目数据**、且正在加载时显示。
+ * 首屏骨架：**书架还没有任何已加载的页**、且首页正在加载时显示。
  *
- * 判据挂在**未裁剪的书目**（`library.books`）上而不是 `sorted`：切库时 `books` 非空
- * ⇒ 不闪骨架（切库是客户端过滤，不需要重新加载）。
+ * ⚠️ 判据挂在**书架自己的分页源**（`library.shelfLoadedBooks` / `shelfLoading`）上，
+ * **不是**全量的 `books` / `loading` —— 书架首屏不等全量（首屏快正是分页的目的）。
+ * 挂在未裁剪的源（而不是 `sorted`）上：切库 / 切筛选时已加载页非空 ⇒ 不闪骨架
+ * （那些都是客户端过滤，不需要重新加载）。
  */
-const showSkeleton = computed(() => !library.books.length && library.loading)
+const showSkeleton = computed(() => !library.shelfLoadedBooks.length && library.shelfLoading)
 
 /**
- * 失败态：没有数据、不在加载、且有失败原因时显示。
+ * 失败态：书架没有已加载页、首页不在加载、且有失败原因时显示。
  *
  * ⚠️ 只在**没有数据**时显示 —— 已有的旧数据比一个错误页有用（force 刷新失败时保留旧列表，
  * 别把用户看得到的书换成一个报错）。
  */
 const showError = computed(
-  () => !library.books.length && !library.loading && Boolean(library.booksError),
+  () => !library.shelfLoadedBooks.length && !library.shelfLoading && Boolean(library.booksError),
 )
 
 /** 失败原因文案（剥掉后端 `{"detail":…}` 外壳，必要时带上原始信息） */
 const errorText = computed(() => apiErrorMessage(new Error(library.booksError), '加载失败'))
 
-/** 重试：`force` 绕过 `loaded` 守卫重拉一次（失败时 `loaded` 本就为 false，双保险） */
+/** 重试：重取书架首页（`force` 绕过 `shelfLoaded` 守卫；失败时它本就为 false，双保险） */
 function retryLoad(): void {
-  void library.loadBooks(true)
+  void library.loadShelfFirstPage(true)
 }
 
 /**
@@ -782,7 +897,7 @@ function onMenuChanged(b: BookCard, kind: 'status' | 'collection' | 'deleted'): 
     // 详情缓存也得失效，否则从浏览器历史退回它的详情页会照常渲染一本已经没有的书
     library.forgetDetail(b.id)
   }
-  void library.loadBooks(true)
+  void library.refreshBooks()
 }
 
 const INPUT_CLS =
@@ -793,7 +908,7 @@ const INPUT_CLS =
   <div ref="rootEl">
     <PageHead
       :title="library.shelfTitle"
-      :desc="`共 ${sorted.length} 本${sorted.length !== source.length ? ` · 已筛掉 ${source.length - sorted.length} 本` : ''}`"
+      :desc="headDesc"
     />
 
     <!-- 建索引进度（第 88 期）：后端正在刷新索引时给出可见进度，而不是让用户对着空书架干等。
@@ -1060,6 +1175,26 @@ const INPUT_CLS =
          —— 全新部署（0 个书库）时那句话是**错的**：此时下载/上传/投递一律被后端
          400 拒收，书根本没有地方可落。第 38 期起三态各说各的话，0 库直接给出口。
          ⚠️ 第 88 期：这里是 `v-else-if`（前面先拦失败态）—— 只有在「真的没数据」时才显示。 -->
+    <!-- 「筛选没命中但还有更多」的诚实态（第 88 期 C 批）：**必须插在普通空态之前** ——
+         否则会把「已加载的书里没匹配」错报成「没有符合条件的书」（谎报数据状态）。 -->
+    <div
+      v-else-if="searchPending"
+      class="py-10 text-center"
+      data-shelf-search-pending
+    >
+      <Icon name="search" class="mx-auto h-6 w-6 text-muted-foreground" />
+      <p class="mt-3 text-[13px] font-medium text-foreground">
+        {{ searchExhausted ? '已加载的书里没有匹配' : '正在继续加载以查找…' }}
+      </p>
+      <p class="mt-1 text-[12px] text-muted-foreground tabular-nums">
+        已加载 {{ library.shelfLoadedBooks.length }} / 共 {{ library.shelfTotal }} 本
+        <template v-if="searchExhausted">· 后面的书还没加载</template>
+      </p>
+      <Button v-if="searchExhausted" size="sm" variant="primary" class="mt-3" @click="continueSearch">
+        继续加载以查找
+      </Button>
+    </div>
+
     <EmptyState v-else-if="!sorted.length" icon="library" :title="emptyTitle" :desc="emptyDesc">
       <template v-if="library.hasNoLibraries" #action>
         <Button size="sm" variant="primary" @click="createLib">新建书库</Button>
@@ -1412,6 +1547,33 @@ const INPUT_CLS =
         </tbody>
       </table>
     </Card>
+    <!-- 分页页脚（第 88 期 C 批）：诚实说明「已显示 N / 共 M」（别让人以为只有这么多本），
+         并给一个**可点**的「加载更多」兜底（触屏拖不动 / 观察器不可用时仍能加载、键盘可达）。
+         续拉失败也在这一行如实显示（此时按钮仍在，用户可重试），而不是把列表换成一个错误页。 -->
+    <div
+      v-if="source.length"
+      class="mt-4 flex flex-col items-center gap-2 pb-4"
+      data-shelf-footer
+    >
+      <p class="text-[12px] text-muted-foreground tabular-nums">
+        <template v-if="library.shelfHasMore">已显示 {{ library.shelfLoadedBooks.length }} / 共 {{ library.shelfTotal }} 本</template>
+        <template v-else>已全部加载（共 {{ library.shelfTotal }} 本）</template>
+      </p>
+      <p v-if="library.booksError" class="text-[12px] text-amber-600">{{ errorText }}</p>
+      <Button
+        v-if="library.shelfHasMore"
+        size="sm"
+        variant="ghost"
+        :disabled="library.shelfLoadingMore"
+        @click="loadNextPage"
+      >
+        {{ library.shelfLoadingMore ? '加载中…' : '加载更多' }}
+      </Button>
+    </div>
+
+    <!-- 底部观察哨兵：滚到它就自动续拉下一页。始终在场（footer 收起时也在），
+         由 IntersectionObserver 观察；`hasMore` / 单飞闸在 store 里兜底。 -->
+    <div ref="sentinelEl" class="h-px w-full" aria-hidden="true" />
     </template>
 
     <!-- 快速预览浮层（⋮ 菜单的「快速预览」）。挂在页面这一层而不是卡片里：

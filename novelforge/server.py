@@ -1679,16 +1679,77 @@ def _card(b: dict) -> dict:
     return out
 
 
+def _books_int_arg(raw, name: str):
+    """解析 ``GET /api/books`` 的 ``limit`` / ``offset`` 查询参数（第 88 期 C 批）。
+
+    ⚠️ 刻意**不把这两个参数声明成 `int`**：那样 FastAPI 会在进入函数体之前用 **422** 拒掉
+    非数字值，而本接口的契约要求「非法参数一律 **400**（中文 detail）」，与全仓其它接口
+    的报错口径一致（前端 ``request()`` 对 4xx 与 422 的展示不同）。
+
+    - 缺省 / 空白串 → ``None``（调用方按各自默认值处理）；
+    - 非整数 → 400；
+    - 其余原样返回 ``int``（负数的语义由调用方判：两者都非法，但报错文案分开）。
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if s == "":
+        return None
+    try:
+        return int(s)
+    except (TypeError, ValueError):
+        raise HTTPException(400, f"{name} 必须是整数")
+
+
 @app.get("/api/books")
-def api_books():
+def api_books(limit: str | None = None, offset: str | None = None):
     """书目列表：附带阅读进度 / 批注数 / 评分 / 阅读状态（来自 SQLite）。
 
     第 88 期：新增 ``scanning`` 字段（**追加，不改既有字段**，保持向后兼容）——
     此刻正在后台建索引 / 刷新索引的库 id 列表。前端据此显示「正在建立索引…」并在扫完后
     自动重取；本响应里的 items 仍可能比磁盘稍旧，因为脏库刷新已移出请求路径
     （见 ``catalog._settle``：索引已存在时只派后台刷新、立即返回现有索引）。
+
+    第 88 期 C 批：新增**可选**查询参数 ``limit`` / ``offset``（同样只加不改）：
+
+    - **不传 ``limit`` ⇒ 与改造前逐字节一致**（``items`` 为全量、顺序不变）。
+      这是硬要求：仓库里还有别的调用方（侧栏 / 其它视图 / 可能的第三方），
+      默认分页会让它们**少拿数据**。只给 ``offset`` 也允许（等价于 ``limit`` 不限）。
+    - ``limit`` 语义：``> 0`` 正常分页；``== 0`` ⇒ **不限**（返回 ``offset`` 起的全部）；
+      **负数 / 非数字 ⇒ 400**（中文 detail）。缺省 = 不限。
+    - ``offset`` 缺省 0；**负数 / 非数字 ⇒ 400**；**超过总数不报错** —— 返回
+      ``items=[]``、``total`` 仍是真实总数、``has_more=false``（翻页到尾巴再拉一页
+      是正常操作，不是错误）。
+    - ``total`` **始终是「未切片前的总数」**（前端用它算「已显示 N / 共 M 本」）。
+    - 追加 ``limit`` / ``offset`` / ``has_more`` 三个字段（``has_more`` =
+      ``offset + len(items) < total``）。``limit`` 回显**生效值**（不限时为 ``null``）。
+
+    ⚠️ 边界（如实写明）：这是 **Python 侧切片**，省的是「响应体积 + 前端渲染行数」，
+    **不是** DB 读 —— ``catalog`` 仍是「一条 ``SELECT *`` + 内存排序」，分页与否
+    （实测索引读取 65–73ms 与分页无关）。真正的 DB 侧分页要改 ``catalog`` 的排序链路，
+    不在本批范围。
+
+    ⚠️ 顺序与稳定性：切片在**排序之后** —— ``library.books()`` 返回的已是
+    「库序 → 根序 → 路径序」的既有顺序（``catalog._rows_of`` 用
+    ``(root 位置, _order_key(rel))`` 排序），这个顺序就是本接口的分页口径，
+    **故意不在本函数里按 id 重排**：一来会与 ``catalog`` 的口径变成两处真值源
+    （排序目前只有 ``_order_key`` 一处），二来会改变「不传 limit」时的既有顺序、
+    违反向后兼容。该顺序对真实库是**确定的全序**（同库内 ``rel`` 唯一 ⇒ 每一行都有
+    唯一排序键），故跨请求翻页稳定、不会重复或漏项。
     """
     _t0 = time.perf_counter()
+    # ---- 分页参数（第 88 期 C 批）----
+    lim = _books_int_arg(limit, "limit")
+    if lim is not None and lim < 0:
+        raise HTTPException(400, "limit 不能为负数")
+    if lim == 0:
+        lim = None                       # limit=0 ⇒ 不限（见文档串）
+    off = _books_int_arg(offset, "offset")
+    if off is None:
+        off = 0
+    if off < 0:
+        raise HTTPException(400, "offset 不能为负数")
+
     prog = db.all_progress()
     annos = db.annotation_counts()
     ratings = db.all_ratings()
@@ -1715,15 +1776,27 @@ def api_books():
             # 一次批量取（**不逐本查**），不在任何夹里就是空数组。
             "collection_ids": colls.get(b["id"], []),
         })
+    total = len(items)                   # ⚠️ 未切片前的总数（前端算「已显示 N / 共 M」）
+    # 切片在**排序之后**（`library.books()` 已有序，见文档串）。
+    # `lim is None` ⇒ 不限，返回 `offset` 起的全部；越界时 `items[off:]` 自然是空列表。
+    page = items[off:] if lim is None else items[off:off + lim]
     scanning = catalog.scanning_libraries()
-    out = {"items": items, "total": len(items), "scanning": scanning}
+    out = {
+        "items": page,
+        "total": total,
+        "scanning": scanning,
+        # 追加字段（只加不改）：回显生效值，供前端对账 / 兼容第三方调用方。
+        "limit": lim,
+        "offset": off,
+        "has_more": (off + len(page)) < total,
+    }
     # 常态**不打日志**（别把日志刷爆）：只有明显变慢才留一行，带上量级与「是否在后台刷新」。
     # 这条是第 88 期的对账依据 —— 优化前后都能量出「打开书库」到底花在哪。
     _ms = (time.perf_counter() - _t0) * 1000
     if _ms > 300:
         logging.getLogger("novelforge").info(
-            "GET /api/books 耗时 %dms（items=%d，后台刷新中的库=%s）",
-            int(_ms), len(items), scanning or "无")
+            "GET /api/books 耗时 %dms（items=%d/%d，offset=%d，后台刷新中的库=%s）",
+            int(_ms), len(page), total, off, scanning or "无")
     return out
 
 

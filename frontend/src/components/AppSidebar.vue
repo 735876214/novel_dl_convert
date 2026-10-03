@@ -135,8 +135,10 @@ function whenIdle(fn: () => void): void {
 }
 
 onMounted(() => {
-  // 关键路径：书目（书架首次打开的内容）+ 库列表（侧栏「库」组）—— 立刻发。
-  // ⚠️ `loadBooks` 与书架页 `onMounted` 会各调一次，store 的**单飞闸**保证只发一个请求。
+  // 关键路径：**全量书目**（侧栏计数 / 仪表盘 / BrowseView 等共用）+ 库列表（侧栏「库」组）—— 立刻发。
+  // ⚠️ 书架页 `onMounted` 走的是**另一条**分页路（`loadShelfFirstPage`，只取第一页），与本处的
+  // 全量 `loadBooks` 是两个不同请求、互不阻塞（第 88 期 C 批修正后如此）；本处仍是「全量 `books`
+  // 何时到齐」的唯一关键路径（`loaded` 单飞闸拦的是**同一路**的并发调用）。
   library.loadBooks()
   library.loadLibraries()
   // 次要预取：让出首屏，等空闲再发
