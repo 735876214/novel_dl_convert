@@ -36,12 +36,33 @@ def test_注册表三档如实且与规则自洽():
 
 
 def test_未验证的来源必须标出来():
-    """本机对外网络受限 ⇒ 内置规则写得出但验不了。**拿不准就说不准**。"""
+    """**拿不准就说不准**：`verified` 只有在「整条规则都实测通过」时才许为真。
+
+    ⚠️ 第 91 期改了这条的理由（断言一字未动）：第 85 期的理由是「本机对外网络受限，
+    验不了」；第 91 期补了真机实测后，番茄是**一半通过一半不通过**（目录规则命中、搜索
+    规则 404），起点是**两条都不通过**（反爬挑战）。一个布尔说不清「哪一半可用」⇒
+    两条都**保守留 `False`**，把实测结论写进 `note`。所以本用例现在守的是：
+    「只要不是整条可用，就必须如实标未验证，并在 note 里说清情况」。
+    """
     for ent in toc_sources.SOURCES:
         if ent.get("rule") and ent["status"] != toc_sources.AVAILABLE:
             assert ent["verified"] is False, f"{ent['id']} 不该声称已验证"
             assert "验证" in (ent.get("note") or ""), \
-                f"{ent['id']} 的说明里要写明「未在本机验证」，别让用户以为是测过的"
+                f"{ent['id']} 的说明里要写明实测结论，别让用户以为是测过的"
+
+
+def test_note_里不许写_markdown():
+    """`note` 在界面上是**纯文本插值**（`SourceToolsView.vue` / `TocSourceCard.vue` 的
+    `{{ … }}`）—— `**` 与反引号会**原样**显示给用户。
+
+    这条是第 91 期补的：写注释时顺手在 weread 的 note 里用了 `**…**`，界面就会把星号
+    一起画出来。反正则只有一条 —— 界面不做 markdown 渲染，note 里就不许有 markdown。
+    """
+    for ent in toc_sources.SOURCES:
+        note = ent.get("note") or ""
+        for bad in ("**", "`", "__"):
+            assert bad not in note, \
+                f"{ent['id']} 的 note 里有 markdown 记号 {bad!r}；界面按纯文本渲染，会原样显示"
 
 
 def test_内置规则都过只取目录的校验():
