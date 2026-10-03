@@ -6181,8 +6181,10 @@ EDITABLE: dict = {
         "enabled", "sources", "limit", "threshold", "fields", "auto_on_import",
         # 第 58 期：跨源字段级合并开关
         "merge_sources",
-        # 第 60 期：按书籍语种自动重排来源顺序
+        # 第 60 期：按书籍语种自动重排来源顺序（只管语种分档这一件事）
         "auto_order_by_language",
+        # 第 91 期：自定义来源权重 `{源 id: 正整数}` —— 与上面那个开关**正交**
+        "source_weights",
         "genre_blocklist", "googlebooks_api_key", "authors",
         # 第 57 期：另三家的密钥（与 core/metasources 注册表的 key_field 对应）
         "hardcover_api_token", "comicvine_api_key", "aladin_ttbkey",

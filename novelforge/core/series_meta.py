@@ -301,9 +301,10 @@ def fetch_one(name: str, cfg: dict = None) -> dict:
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
                if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)
     # 第 60 期：系列**没有自己的语种** → 由成员书投票（全空就不重排，不猜）
+    # 第 91 期：权重同批传入（即使语种投不出来，权重也照旧生效）
     sources = metasources.reorder_for_language(
         sources, metasources.dominant_language(members),
-        bool(mf.get("auto_order_by_language", True)))
+        bool(mf.get("auto_order_by_language", True)), mf.get("source_weights"))
     options = metasources.options_for(mf, sources)
 
     try:

@@ -361,8 +361,10 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         # 第 60 期：**按本书语种重排来源顺序**（专精本语种 → 通吃 → 专精别语种）。
         # 语种来自书自己的 `language`（没填就不知道 ⇒ 原样用你设的顺序，不猜）。
         # 每本书各算一次：整个书库混着中英日书，用一个顺序显然不合理。
+        # 第 91 期：用户设的**权重**排在语种档之前（权重是显式的，语种档是自动的）。
         b_sources = metasources.reorder_for_language(
-            sources, b.get("language"), bool(mfb.get("auto_order_by_language", True)))
+            sources, b.get("language"), bool(mfb.get("auto_order_by_language", True)),
+            mfb.get("source_weights"))
         b_options = options if b_sources == sources else metasources.options_for(mf, b_sources)
         # 如实回传**本次实际顺序**：界面据此说明「为什么先问了它」
         base["sources_order"] = b_sources
@@ -476,8 +478,10 @@ def online_candidate(book: dict, cfg: dict = None, limit: int = None) -> "dict |
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
                if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)
     # 第 60 期：这本书的语种决定来源顺序（与 `plan` 同一口径，否则两处会说两套话）
+    # 第 91 期：权重同批传入 —— 两处只要有一处漏传，界面上的顺序预览就会跟实抓对不上
     sources = metasources.reorder_for_language(
-        sources, book.get("language"), bool(mf.get("auto_order_by_language", True)))
+        sources, book.get("language"), bool(mf.get("auto_order_by_language", True)),
+        mf.get("source_weights"))
     limit = max(1, min(int(limit or mf.get("limit") or 5), 20))
     blocklist = {norm_key(x) for x in (mf.get("genre_blocklist") or []) if str(x).strip()}
     options = metasources.options_for(mf, sources)

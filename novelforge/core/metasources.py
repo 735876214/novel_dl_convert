@@ -512,25 +512,53 @@ def language_tier(source: str, language: str) -> int:
     return LANG_TIER_SPECIFIC if language in langs else LANG_TIER_OTHER
 
 
-def reorder_for_language(sources: list, language: str, enabled: bool = True) -> list:
-    """按书语种**稳定分档**重排来源：专精本语种 → 通吃 → 专精别的语种。
+def weight_of(weights, source: str) -> int:
+    """某个来源的**用户自定义权重**；没设 / 设成非法值一律 0（= 不干预）。
 
-    三点刻意设计：
+    「权重」这东西必须有**唯一**的归一入口：三个调用点各写一遍 `int(...)`，
+    迟早在某处漏掉一个负号或一个 `None`，表现是「设置了权重但顺序偶尔不对」。
+    所以配置怎么存（字符串、负数、`None`、未知源 id）都在这里被收敛成「非负整数」。
+    """
+    try:
+        n = int((weights or {}).get(source) or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0
+    return n if n > 0 else 0
 
-    1. **每档内保持你设定的顺序**（`sorted` 稳定）—— 这不是「覆盖你的配置」，
-       只是把明显不相关的家挪到后面；你在「元数据来源」里排的优先级仍然生效；
-    2. **只排序、不筛选**：所有启用的家最终都会被查到（第 59 期体检也证明了
-       「专精别的语种」的家偶尔真能命中），所以这里绝不因为语种丢掉任何一家；
-    3. 语种**未知 / 空**、或 `enabled=False` ⇒ **原样返回**（不猜、也不动用户顺序）。
-       语种来自书的 `language` 字段（OPF `dc:language`），没填就是不知道 —— 那就别重排。
+
+def reorder_for_language(sources: list, language: str, enabled: bool = True, weights=None) -> list:
+    """按**用户权重**与书语种**稳定分档**重排来源。
+
+    排序键是 `(-权重, 语种档)`，也就是：
+
+    1. **权重高的永远在前面**（第 91 期新增，默认全 0 ⇒ 与第 60 期逐字一致）；
+    2. 权重相同才比「专精本语种 → 通吃 → 专精别的语种」；
+    3. 两者都相同 ⇒ **保持你设定的顺序**（`sorted` 稳定）——这不是「覆盖你的配置」，
+       只是把明显不相关的家挪到后面；你在「元数据来源」里排的优先级仍然生效。
+
+    四点刻意设计：
+
+    1. **只排序、不筛选**：所有启用的家最终都会被查到（第 59 期体检也证明了
+       「专精别的语种」的家偶尔真能命中），所以这里绝不因为语种或权重丢掉任何一家；
+    2. 语种**未知 / 空**、或 `enabled=False` ⇒ **不按语种分档**（不猜）。语种来自书的
+       `language` 字段（OPF `dc:language`），没填就是不知道。⚠️ 但**权重照旧生效** ——
+       权重是你显式设的，`enabled` 管的只是「要不要按语种自动重排」这一件事；
+    3. 若既没有语种可依据、又没有设过任何权重 ⇒ **原样返回**（与改造前逐字一致）；
+    4. 语种档常量只用于排序，别在别处引用它们的数值。
     """
     srcs = [s for s in (sources or []) if s in SOURCES]
+    if len(srcs) < 2:
+        return srcs
+    w = {s: weight_of(weights, s) for s in srcs}
+    has_weight = any(w.values())
     lang = _lang_of(language)
     # 「未知」也算不知道：书目里这种占位很常见，若当成一个真实的语种码去分档，
     # 会把所有家有专精的都判成「专精别的语种」—— 那就是凭一个占位值瞎重排。
-    if not enabled or not lang or lang.lower() in LANG_UNKNOWN or len(srcs) < 2:
-        return srcs
-    return sorted(srcs, key=lambda s: language_tier(s, lang))
+    by_lang = bool(enabled) and bool(lang) and lang.lower() not in LANG_UNKNOWN
+    if not by_lang:
+        # 没有语种可依据：只按权重排（档位一律相等 ⇒ 稳定排序保住用户顺序）
+        return sorted(srcs, key=lambda s: -w[s]) if has_weight else srcs
+    return sorted(srcs, key=lambda s: (-w[s], language_tier(s, lang)))
 
 
 def dominant_language(items: list) -> str:

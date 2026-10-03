@@ -362,6 +362,36 @@ function move(id: string, delta: number): void {
   setVal('metadata_fetch.sources', cur)
 }
 
+// ---------------- 自定义来源权重（第 91 期）----------------
+/**
+ * 权重与「上移 / 下移」是**两件事**，界面上别混：
+ * - 顺序（`sources`）在**同一档内**决定先后，还会被语种档打散；
+ * - 权重（`source_weights`）**跨档**生效 —— 只要权重高，它就排在所有低权重的家前面。
+ *
+ * ⚠️ 页面**不重算**这个序：排序唯一真值源在后端 `metasources.reorder_for_language`
+ * （排序键 `(-权重, 语种档)`）。这里只负责把用户输入写回配置草稿，
+ * 以及把**后端回传的** `sources_order` 拿来对比（见 `reordered()`）。
+ */
+const weights = computed<Record<string, number>>(() => mf.value.source_weights ?? {})
+
+/** 0 = 没设 / 不干预（与后端 `metasources.weight_of` 同口径：非法值一律当 0） */
+function weightOf(id: string): number {
+  const n = Number(weights.value[id] ?? 0)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0
+}
+
+/**
+ * 写权重。0 / 空 / 非数字 ⇒ **删掉这个键**（而不是存一个 0）——
+ * 保持配置里只有用户真的设过的项，这样「恢复默认」的结果就是空字典。
+ */
+function setWeight(id: string, raw: string): void {
+  const n = Math.floor(Number(raw))
+  const next = { ...weights.value }
+  if (!Number.isFinite(n) || n <= 0) delete next[id]
+  else next[id] = Math.min(9, n)
+  setVal('metadata_fetch.source_weights', next)
+}
+
 // ---------------- 抓取面板（预览 → 应用）----------------
 const planItems = ref<MetadataPlanItem[]>([])
 const picked = ref<Set<string>>(new Set())
@@ -748,6 +778,20 @@ watch(() => props.section, () => {
             >
               {{ probes[p.id].ok ? '可用' : '不可用' }} · {{ probes[p.id].message }}
             </span>
+            <!-- 自定义权重（第 91 期）：只管「这家永远排前面」。0 = 不干预（跟随语种档 + 你设的顺序）。 -->
+            <label
+              class="flex items-center gap-1.5"
+              title="权重高的永远排在前面；权重相同才比语种档、再比你设的顺序。0 = 不干预（跟随语种档与顺序）。"
+            >
+              <span class="text-[11px] text-muted-foreground">权重</span>
+              <input
+                :value="weightOf(p.id)"
+                type="number" min="0" max="9"
+                :aria-label="`${p.label} 的检索权重（0 = 不干预）`"
+                class="w-14 rounded-md border border-border bg-muted px-2 py-1 text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
+                @input="setWeight(p.id, ($event.target as HTMLInputElement).value)"
+              />
+            </label>
             <Button size="sm" variant="ghost" :disabled="!inOrder(p.id)" @click="move(p.id, -1)">上移</Button>
             <Button size="sm" variant="ghost" :disabled="!inOrder(p.id)" @click="move(p.id, 1)">下移</Button>
             <a :href="p.home" target="_blank" rel="noreferrer" class="text-[11.5px] text-muted-foreground underline">官网</a>
@@ -1309,10 +1353,9 @@ watch(() => props.section, () => {
       :label="`元数据 · ${meta.zh}`"
       :groups="['PROVIDERS', 'RULES', 'SCORE']"
       :items="[
-        '按书的语种翻译 / 本地化检索词（当前只按语种重排来源顺序，不做跨语言检索）',
-        '自定义来源权重（当前固定三档：专精本语种 → 多语种通吃 → 专精别的语种，档内保持你设的顺序）',
+        '按书的语种翻译 / 本地化检索词（跨语言检索）：只按语种重排来源顺序，不翻译检索词。这是「明确不做」，不是待办 —— 见下方说明。',
       ]"
-      note="已实现：14 家提供商全部接入（Open Library / Google Books / iTunes / AudNexus / RanobeDB 免密钥即用；Hardcover / Comic Vine / Aladin 填密钥即用；Amazon / Goodreads / Kobo / Audible / Libro.fm / Lubimyczytac 为页面抓取型、站点改版可能失效）、联网体检（逐家分门别类：限流 / 拒绝 / 反爬拦截 / 能连通但解析不到）、源选择与顺序、按书籍语种自动重排来源顺序（专精本语种 → 多语种通吃 → 专精别语种，档内保持你的顺序且不筛掉任何一家）、连通性自检、按注册表渲染的密钥与参数配置、入库自动抓取、ISBN 精确匹配、跨源字段级合并（逐字段择优 + 题材合并，仅够格候选参与）、字段级写入策略、字段级锁定（单本书逐字段 / 封面，只挡抓取）、置信度阈值、题材黑名单、自定义字段（定义管理 + 按书的值 + 抓取补默认值）、「先预览再应用」的手动抓取面板（逐本显示本次实际检索顺序），以及作者传记 / 头像抓取与本地覆盖编辑。"
+      note="已实现：14 家提供商全部接入（Open Library / Google Books / iTunes / AudNexus / RanobeDB 免密钥即用；Hardcover / Comic Vine / Aladin 填密钥即用；Amazon / Goodreads / Kobo / Audible / Libro.fm / Lubimyczytac 为页面抓取型、站点改版可能失效）、联网体检（逐家分门别类：限流 / 拒绝 / 反爬拦截 / 能连通但解析不到）、源选择与顺序、自定义来源权重（逐家可设 0–9：权重高的永远排在前面，权重相同才比语种档、再比你设的顺序；0 = 不干预）、按书籍语种自动重排来源顺序（专精本语种 → 多语种通吃 → 专精别语种，与权重正交、且不筛掉任何一家）、连通性自检、按注册表渲染的密钥与参数配置、入库自动抓取、ISBN 精确匹配、跨源字段级合并（逐字段择优 + 题材合并，仅够格候选参与）、字段级写入策略、字段级锁定（单本书逐字段 / 封面，只挡抓取）、置信度阈值、题材黑名单、自定义字段（定义管理 + 按书的值 + 抓取补默认值）、「先预览再应用」的手动抓取面板（逐本显示本次实际检索顺序），以及作者传记 / 头像抓取与本地覆盖编辑。为什么不翻译检索词（明确不做）：① 翻译质量不可控，会把「同名不同书」的误配率推高；② 各家的语言内检索语义不同，翻译后的词未必是站内可检的形态；③ 已有两条退路 —— 按语种重排来源顺序，以及在上面逐家设权重 / 调顺序。"
     />
   </div>
 </template>

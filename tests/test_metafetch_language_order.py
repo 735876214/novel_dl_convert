@@ -211,6 +211,124 @@ def test_系列抓取用成员书语种(isolated, monkeypatch):  # noqa: ARG001
     assert seen and seen[0][0] == "ranobedb", seen
 
 
+# ---------------- 自定义来源权重（第 91 期） ----------------
+#
+# 权重是**用户显式意图**，语种档是**系统推断**。两者的关系必须钉死，否则会出现
+# 「设了权重却被语种档顶掉」这种「界面点了没用」的静默缺陷。四条：
+#   ① 权重全空 ⇒ 与第 60 期逐字一致（不能把老行为改坏）；
+#   ② 权重高的一律在前（哪怕它是「专精别的语种」）；
+#   ③ 权重相同才比语种档，再相同才比用户设的顺序；
+#   ④ 配置里存了脏值也不能炸（界面能存什么，后端就得能吃什么）。
+
+def test_权重归一入口():
+    """`weight_of` 是所有脏值的**唯一**收敛点：非整数 / 负数 / `None` / 未知源一律 0。"""
+    w = {"aladin": 9, "ranobedb": "3", "audible": -5, "kobo": None,
+         "googlebooks": 2.7, "openlibrary": "abc"}
+    assert m.weight_of(w, "aladin") == 9
+    assert m.weight_of(w, "ranobedb") == 3, "字符串数字要认（配置可能被手改成字符串）"
+    assert m.weight_of(w, "audible") == 0, "负数 = 不干预，不能变成「排最后」"
+    assert m.weight_of(w, "kobo") == 0
+    assert m.weight_of(w, "openlibrary") == 0, "非法字符串不能炸"
+    assert m.weight_of(w, "unknown-source") == 0, "未知源 id 忽略"
+    # 配置整体缺失 / 不是字典 ⇒ 全部 0（老配置里没有这个键）
+    assert m.weight_of(None, "aladin") == 0
+    assert m.weight_of({}, "aladin") == 0
+    assert m.weight_of("垃圾", "aladin") == 0
+
+
+def test_权重全空与现状逐字一致():
+    """本期的**核心防回归**：没设权重的人，顺序必须一个字节都不变。"""
+    orders = [
+        (["googlebooks", "openlibrary", "aladin", "lubimyczytac", "ranobedb"], "ko"),
+        (["googlebooks", "openlibrary", "aladin", "lubimyczytac", "ranobedb"], "pl"),
+        (["googlebooks", "openlibrary", "aladin", "lubimyczytac", "ranobedb"], "zh"),
+        (["aladin", "audible", "comicvine", "googlebooks", "ranobedb"], "en"),
+        (["googlebooks", "aladin", "ranobedb"], ""),
+        (["ranobedb", "lubimyczytac", "kobo", "audible"], "ja"),
+    ]
+    for order, lang in orders:
+        for enabled in (True, False):
+            before = m.reorder_for_language(order, lang, enabled)
+            for empty in ({}, None):
+                after = m.reorder_for_language(order, lang, enabled, empty)
+                assert after == before, (order, lang, enabled, empty, before, after)
+                assert sorted(after) == sorted(order), "空权重也不能丢源"
+            # 全是 0 的权重 == 空权重
+            zeros = {s: 0 for s in order}
+            assert m.reorder_for_language(order, lang, enabled, zeros) == before
+
+
+def test_权重高的永远排在前面():
+    """权重是显式意图，优先级**高于**语种档：中文书里把「专精韩语」的 aladin 提上来。"""
+    order = ["googlebooks", "openlibrary", "aladin", "lubimyczytac"]
+    # aladin 在中文下是第 2 档（专精别的语种），设了权重就该排最前
+    assert m.reorder_for_language(order, "zh", True, {"aladin": 9}) == [
+        "aladin", "googlebooks", "openlibrary", "lubimyczytac"]
+    # 语种未知 / 开关关闭时，权重**照旧生效**（它管的不是语种这一件事）
+    assert m.reorder_for_language(order, "", True, {"aladin": 9}) == [
+        "aladin", "googlebooks", "openlibrary", "lubimyczytac"]
+    assert m.reorder_for_language(order, "zh", False, {"aladin": 9}) == [
+        "aladin", "googlebooks", "openlibrary", "lubimyczytac"]
+    # 两家都有权重 ⇒ 权重大的在前
+    assert m.reorder_for_language(order, "zh", True, {"aladin": 3, "lubimyczytac": 7}) == [
+        "lubimyczytac", "aladin", "googlebooks", "openlibrary"]
+
+
+def test_权重相同回落语种档再回落用户顺序():
+    order = ["googlebooks", "openlibrary", "aladin", "lubimyczytac", "ranobedb"]
+    w = {"googlebooks": 5, "openlibrary": 5, "aladin": 5, "lubimyczytac": 5, "ranobedb": 5}
+    # 权重都一样 ⇒ 完全等价于不设权重
+    for lang in ("ko", "pl", "zh", "en", ""):
+        for enabled in (True, False):
+            assert m.reorder_for_language(order, lang, enabled, w) == \
+                m.reorder_for_language(order, lang, enabled)
+    # 只给「通吃」两家同权重 ⇒ 它们在前且保持用户顺序，其余按原顺序跟后面
+    assert m.reorder_for_language(order, "zh", True,
+                                  {"googlebooks": 4, "openlibrary": 4}) == [
+        "googlebooks", "openlibrary", "aladin", "lubimyczytac", "ranobedb"]
+    # 只给「专精韩语」与「通吃」同权重 ⇒ 权重档内再比语种档（中文下 aladin 第 2 档）
+    assert m.reorder_for_language(order, "zh", True,
+                                  {"aladin": 4, "googlebooks": 4}) == [
+        "googlebooks", "aladin", "openlibrary", "lubimyczytac", "ranobedb"]
+
+
+def test_权重不筛源且脏配置不炸():
+    order = ["aladin", "audible", "comicvine", "googlebooks", "ranobedb"]
+    dirty = {"aladin": "9", "audible": -1, "comicvine": None,
+             "googlebooks": 99, "ranobedb": "x", "不存在的源": 5}
+    out = m.reorder_for_language(order, "zh", True, dirty)
+    assert sorted(out) == sorted(order), "权重只排序，不丢源"
+    assert out[0] == "googlebooks", out
+    assert out[1] == "aladin", out
+    # 配置整体是垃圾（字符串 / 列表 / 数字）也要能跑
+    for bad in ("权重", ["a"], 3):
+        assert m.reorder_for_language(order, "zh", True, bad) == \
+            m.reorder_for_language(order, "zh", True)
+
+
+def test_权重经配置键生效(isolated, monkeypatch):  # noqa: ARG001
+    """端到端：`metadata_fetch.source_weights` 要真的能影响 `plan` 的抓取顺序。"""
+    from novelforge.core import library, metafetch
+
+    monkeypatch.setattr(library, "books", lambda *a, **k: [
+        {"id": "b", "name": "b.epub", "title": "t", "language": "zh", "format": "EPUB",
+         "has_cover": False, "locked": []}])
+    seen: list = []
+    _spy_search(monkeypatch, seen)
+
+    # 中文书：没有中文专精的家 ⇒ 默认是「通吃在前」；给 lubimyczytac（波兰专精）设权重后必须翻上来
+    cfg = _cfg(enabled=True, sources=["googlebooks", "openlibrary", "lubimyczytac"],
+               source_weights={"lubimyczytac": 9})
+    metafetch.plan(cfg=cfg)
+    assert seen[-1] == ["lubimyczytac", "googlebooks", "openlibrary"], seen
+
+    # 权重设回 0（= 空）⇒ 逐字回到默认顺序
+    cfg = _cfg(enabled=True, sources=["googlebooks", "openlibrary", "lubimyczytac"],
+               source_weights={"lubimyczytac": 0})
+    metafetch.plan(cfg=cfg)
+    assert seen[-1] == ["googlebooks", "openlibrary", "lubimyczytac"], seen
+
+
 # ---------------- 配置面向 ----------------
 
 def test_配置键可写且默认开启(client, auth_headers):  # noqa: ARG001
@@ -223,6 +341,31 @@ def test_配置键可写且默认开启(client, auth_headers):  # noqa: ARG001
     after = client.get("/api/config", headers=auth_headers).json()["config"]["metadata_fetch"]
     assert after["auto_order_by_language"] is False, "该开关必须可写（否则界面点了没用）"
     assert after["sources"] == cfg["sources"], "只改开关不该动别的键"
+
+
+def test_权重键可读可写且默认空(client, auth_headers):  # noqa: ARG001
+    """三处同步点（DEFAULTS / EDITABLE / 回传）缺一即「界面点了没用」或「恢复默认丢键」。"""
+    from novelforge import config
+
+    assert config.DEFAULTS["metadata_fetch"]["source_weights"] == {}, \
+        "默认必须是空字典（= 谁都不干预），别给某家预置默认权重"
+
+    cfg = client.get("/api/config", headers=auth_headers).json()["config"]["metadata_fetch"]
+    assert cfg["source_weights"] == {}, cfg.get("source_weights")
+
+    r = client.put("/api/config", headers=auth_headers,
+                   json={"metadata_fetch": {"source_weights": {"aladin": 7}}})
+    assert r.status_code == 200, r.text
+    after = client.get("/api/config", headers=auth_headers).json()["config"]["metadata_fetch"]
+    assert after["source_weights"] == {"aladin": 7}, "权重必须可写，且回传不能被打码吃掉"
+    assert after["sources"] == cfg["sources"], "只改权重不该动别的键"
+
+    # 清空 = 恢复「不干预」
+    r = client.put("/api/config", headers=auth_headers,
+                   json={"metadata_fetch": {"source_weights": {}}})
+    assert r.status_code == 200, r.text
+    assert client.get("/api/config", headers=auth_headers).json()[
+        "config"]["metadata_fetch"]["source_weights"] == {}
 
 
 def test_提供商目录回传语种亲和(client, auth_headers):  # noqa: ARG001
