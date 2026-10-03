@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vite
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 import BookActionsMenu from '@/components/book/BookActionsMenu.vue'
-import { api, type BookCard, type BookDetail, type ReadingStatus } from '@/lib/api'
+import { api, type BookCard, type BookDetail, type OnlineStatus, type ReadingStatus } from '@/lib/api'
 import { useBookMenu } from '@/lib/bookMenu'
 import { useUiStore } from '@/stores/ui'
 
@@ -33,6 +33,8 @@ vi.mock('@/lib/api', () => ({
     addToCollection: vi.fn(),
     removeFromCollection: vi.fn(),
     setStatus: vi.fn(),
+    // 第 93 期：面板打开时**按需**问一次源绑定状态（书架列表载荷里没有这个字段）
+    onlineStatus: vi.fn(),
   },
   apiErrorMessage: (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback),
 }))
@@ -45,6 +47,27 @@ const m = {
   addToCollection: vi.mocked(api.addToCollection),
   removeFromCollection: vi.mocked(api.removeFromCollection),
   setStatus: vi.mocked(api.setStatus),
+  onlineStatus: vi.mocked(api.onlineStatus),
+}
+
+/**
+ * `GET /api/books/{id}/online/status` 的形状（第 93 期）。默认「没绑定」——
+ * 上面那条「顶层八项逐条对上」的用例因此仍然成立（未绑定的书**不给**在线读入口）。
+ */
+function makeOnline(over: Partial<OnlineStatus> = {}): OnlineStatus {
+  return {
+    bound: false,
+    source: '',
+    display_name: '',
+    url: '',
+    title: '',
+    pos: 0,
+    seen: 0,
+    cache: { total: 0, cached: 0, single: false, fetched_at: 0 },
+    available: false,
+    reason: '',
+    ...over,
+  }
 }
 
 /** 两个收藏夹；`FIRST` 是用户会点的那个 */
@@ -222,12 +245,14 @@ beforeEach(async () => {
   m.addToCollection.mockResolvedValue({ ok: true })
   m.removeFromCollection.mockResolvedValue({ ok: true })
   m.setStatus.mockResolvedValue(makeStatus())
+  m.onlineStatus.mockResolvedValue(makeOnline())
 
   router = createRouter({
     history: createMemoryHistory(),
     routes: [
       { path: '/book/:id', name: 'book', component: { template: '<div />' } },
       { path: '/read/:id', name: 'read', component: { template: '<div />' } },
+      { path: '/online/:id', name: 'online', component: { template: '<div />' } },
       { path: '/listen/:id', name: 'listen', component: { template: '<div />' } },
       { path: '/', name: 'home', component: { template: '<div />' } },
     ],
@@ -323,6 +348,70 @@ describe('BookActionsMenu：哪些项出现', () => {
     document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
     await flushPromises()
     expect(panel()).toBeNull()
+  })
+})
+
+describe('BookActionsMenu：在线阅读入口（第 93 期）', () => {
+  it('面板打开前不问绑定状态，打开后**只问一次**（列表载荷里没有这个字段）', async () => {
+    const w = await mountMenu(EPUB)
+    expect(m.onlineStatus).not.toHaveBeenCalled()
+
+    await openMenu(w)
+    expect(m.onlineStatus).toHaveBeenCalledTimes(1)
+    expect(m.onlineStatus).toHaveBeenCalledWith(BOOK_ID)
+    // 没绑定 ⇒ 顶层还是那八项（在线读**不占位**）
+    expect(menuItems()).toEqual([
+      '阅读', '快速预览', '下载', '添加到收藏', '设置状态', '编辑元数据', '书籍详细信息', '删除',
+    ])
+  })
+
+  it('已绑源且可用 ⇒ 紧挨「阅读」给一项「在线阅读」，点了进 /online/:id', async () => {
+    m.onlineStatus.mockResolvedValue(makeOnline({
+      bound: true, source: 'stub-src', display_name: '示例书站',
+      url: 'https://example.test/page/1', available: true,
+    }))
+    const w = await mountMenu(EPUB)
+    await openMenu(w)
+
+    expect(menuItems().indexOf('在线阅读')).toBe(menuItems().indexOf('阅读') + 1)
+    await clickItem('在线阅读')
+
+    expect(router.currentRoute.value.fullPath).toBe(`/online/${BOOK_ID}`)
+    expect(panel()).toBeNull()
+  })
+
+  it('本地读不了的书（MOBI）照样给「在线阅读」—— 它是唯一的阅读入口', async () => {
+    m.onlineStatus.mockResolvedValue(makeOnline({
+      bound: true, source: 'stub-src', url: 'https://example.test/page/1', available: true,
+    }))
+    const w = await mountMenu(makeCard({ format: 'MOBI' }))
+    await openMenu(w)
+
+    const items = menuItems()
+    expect(items).not.toContain('阅读')
+    expect(items).toContain('在线阅读')
+  })
+
+  it('有绑定但闸门关着 ⇒ 一项都不加（不摆一个点不动的假入口）', async () => {
+    m.onlineStatus.mockResolvedValue(makeOnline({
+      bound: true, source: 'stub-src', url: 'https://example.test/page/1',
+      available: false, reason: '下载功能未开启：到「设置 → 网络与下载」打开「开放搜索 / 下载」',
+    }))
+    const w = await mountMenu(EPUB)
+    await openMenu(w)
+
+    expect(menuItems()).not.toContain('在线阅读')
+    // 原因不在这里显示（菜单里塞不下一整句）—— 它由详情页的「在线阅读」卡逐字给出
+    expect(panel()?.textContent).not.toContain('下载功能未开启')
+  })
+
+  it('状态问不到 ⇒ 菜单照常可用（一个锦上添花的入口不该拖挂整套操作）', async () => {
+    m.onlineStatus.mockRejectedValue(new Error('后端连不上'))
+    const w = await mountMenu(EPUB)
+    await openMenu(w)
+
+    expect(menuItems()).toContain('删除')
+    expect(menuItems()).not.toContain('在线阅读')
   })
 })
 

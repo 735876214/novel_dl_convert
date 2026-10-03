@@ -4,6 +4,7 @@ import { computed, ref } from 'vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
+import OnlineReadCard from '@/components/book/detail/OnlineReadCard.vue'
 import TocSourceCard from '@/components/book/detail/TocSourceCard.vue'
 import type { BookVolume, TocSourceRow } from '@/lib/api'
 import { tocGroups } from '@/lib/chapterGroups'
@@ -54,6 +55,14 @@ function toggleVolume(key: string): void {
 
 <template>
   <div>
+    <!-- 在线阅读（第 93 期）在前、目录来源在后：前者是「换个地方读这本书」，
+         后者是「把目录标题对得更准」—— 读得成读不成排在标题对不对前面。 -->
+    <OnlineReadCard
+      v-if="props.bookId"
+      :book-id="props.bookId"
+      @changed="emit('changed')"
+    />
+
     <TocSourceCard
       v-if="props.bookId"
       :book-id="props.bookId"

@@ -98,6 +98,13 @@ export interface SourceStatus {
   cookie: { has: boolean; mtime: number | null; size: number }
   usable: boolean
   blocked_reason: string
+  /**
+   * 第 93 期：这个源能不能**逐章在线阅读**。空串 = 能，否则是**原因原文**。
+   *
+   * 服务端转调 `online.support_reason()`（唯一实现）—— 前端与详情页的「在线阅读」卡
+   * 只读它，绝不自己看规则形状猜，否则会出现「界面上能选、选完点进去 400」。
+   */
+  online_support: string
 }
 
 export interface FileEntry {
@@ -1188,6 +1195,95 @@ export interface ChapterContent {
    * 给一行低调提示（本仓纪律：识别结果对用户可见，不静默猜测 / 不静默丢弃）。
    */
   text_encoding?: { encoding: string; undecodable: number }
+}
+
+// ---------- 在线阅读（第 93 期）----------
+
+/** 在线阅读的**缓存现状**（本机存了几章 / 共几章；不触网，磁盘上有多少报多少）。 */
+export interface OnlineCacheStats {
+  total: number
+  /** 本机已缓存的章数（`single` 模式下是整本一次取回后的章数） */
+  cached: number
+  /** true = 这个源只有「整本一页」，按需取整本后现切（缓存被清要重取整本） */
+  single: boolean
+  fetched_at: number
+}
+
+/** 源绑定与可用状态（`GET /api/books/{id}/online/status`）。 */
+export interface OnlineStatus {
+  /** 有没有源绑定。⚠️ `false` **不是错误** —— 绝大多数书的常态，界面显示「绑定书源」 */
+  bound: boolean
+  source: string
+  /** 源站的显示名（横幅上显示它，不是内部 id） */
+  display_name: string
+  /** 书页地址。**服务端选定的**：客户端只读不传（横幅上「打开源站页面」用它） */
+  url: string
+  title: string
+  /** 在线位置（线上章序号）—— 跨客户端续读的依据 */
+  pos: number
+  /** 本机在线读过几章 */
+  seen: number
+  cache: OnlineCacheStats
+  available: boolean
+  /** 不可用的**原因原文**（空串 = 可用）。灰掉的入口要把这句话显示出来，不许只说「不可用」 */
+  reason: string
+}
+
+export interface OnlineChapterEntry {
+  index: number
+  title: string
+  /**
+   * 这一章对应**本地**哪一章（**服务端算的**，前端不许自己再算一份）。
+   * `null` = 窗口规则认定对不上 ⇒ 这一次**不记本地进度**（在线位置照记）。
+   */
+  local_index: number | null
+}
+
+export interface OnlineChapters {
+  source: string
+  display_name: string
+  title: string
+  url: string
+  total: number
+  entries: OnlineChapterEntry[]
+  pos: number
+  /** 本地共几章（进度条的分母用本地那份更诚实） */
+  local_total: number
+  single: boolean
+  /** 这份目录是哪儿来的 */
+  origin: 'cache' | 'network'
+  /** true = 这次想刷新但没成功，给的是缓存里那份（断网时的正常路径） */
+  stale: boolean
+  fetched_at: number
+  error: string
+}
+
+export interface OnlineChapter extends ChapterContent {
+  origin: 'cache' | 'network'
+  stale: boolean
+  cached_at: number
+  error: string
+  /** 源站原文长度（排查「是不是没取到」时看它） */
+  raw_len: number
+  local_index: number | null
+  local_total: number
+  pos: number
+  source: string
+  display_name: string
+  url: string
+}
+
+/** 绑定结果（`POST /api/books/{id}/online/bind`）。 */
+export interface OnlineBindResult {
+  source: string
+  display_name: string
+  url: string
+  title: string
+  /** 自动匹配的置信度；手动粘 URL 时恒为 1.0 */
+  confidence: number
+  /** true = 用户手动填的书页地址（跳过了搜索与匹配） */
+  manual: boolean
+  pos: number
 }
 
 export interface ProgressState {
@@ -4128,6 +4224,71 @@ export const api = {
   chapter: (id: string, index: number) =>
     request<ChapterContent>(
       `/api/books/${encodeURIComponent(id)}/chapter/${index}`,
+    ),
+
+  // ---------- 在线阅读（第 93 期）----------
+  /**
+   * 源绑定与可用状态（**不触网**）。入口显隐与置灰原因都问它 ——
+   * 别在前端自己拼「有没有绑定」的判断，否则入口显示出来了、点进去 400，就成了假交互。
+   */
+  onlineStatus: (id: string) =>
+    request<OnlineStatus>(`/api/books/${encodeURIComponent(id)}/online/status`),
+
+  /** 线上目录（可命中服务端缓存）。`refresh` 强制外呼一次（断网时回落缓存并标 `stale`）。 */
+  onlineChapters: (id: string, refresh = false) =>
+    request<OnlineChapters>(
+      `/api/books/${encodeURIComponent(id)}/online/chapters${refresh ? '?refresh=1' : ''}`,
+    ),
+
+  /**
+   * 单章正文（**服务端已把第三方标记压成纯文本** —— 拿到的 `html` 只含 `<p>`）。
+   *
+   * ⚠️ 客户端**只传章序号、永远不传 URL**：书页地址只在服务端，没有 SSRF 面。
+   */
+  onlineChapter: (id: string, index: number, refresh = false) =>
+    request<OnlineChapter>(
+      `/api/books/${encodeURIComponent(id)}/online/chapter/${index}${refresh ? '?refresh=1' : ''}`,
+    ),
+
+  /**
+   * 推进**在线位置**（连续流模式下「当前可见章」变化时调）。
+   *
+   * 为什么取章之外还要单独一条：连续流一次会取好几章，光靠「最后一次取数」定位置会停在
+   * 窗口末尾，读者明明停在中间那一章，别的客户端却从末尾续读。
+   */
+  onlineSetPos: (id: string, index: number) =>
+    request<{ ok: boolean; pos: number; local_index: number | null; local_total: number }>(
+      `/api/books/${encodeURIComponent(id)}/online/pos`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index }),
+      },
+    ),
+
+  /**
+   * 绑定一个书源（+ 书页）。`url` 有值 = 手动粘的书页地址（跳过搜索与匹配）；
+   * 否则用书源的搜索 + 书名匹配**自动定源**，**匹配不上会抛**（错误信息里带置信度与阈值）。
+   */
+  onlineBind: (id: string, payload: { source: string; url?: string; query?: string }) =>
+    request<OnlineBindResult>(`/api/books/${encodeURIComponent(id)}/online/bind`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 解绑（只删登记，零文件触碰；在线缓存留着 —— 重绑同一页立刻又能离线读）。 */
+  onlineUnbind: (id: string) =>
+    request<{ ok: boolean; cleared: number }>(
+      `/api/books/${encodeURIComponent(id)}/online/bind`,
+      { method: 'DELETE' },
+    ),
+
+  /** 清空**在线缓存**（只清 `CACHE_DIR/online/`，AI 分章缓存不动）。 */
+  onlineCacheClear: () =>
+    request<{ ok: boolean; removed_books: number; removed_bytes: number }>(
+      '/api/online/cache/clear',
+      { method: 'POST' },
     ),
 
   /**

@@ -1,4 +1,4 @@
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { flushPromises, mount, type DOMWrapper, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
@@ -33,6 +33,13 @@ vi.mock('@/lib/api', () => ({
     listAnnotations: vi.fn(),
     bookCollections: vi.fn(),
     collections: vi.fn(),
+    // ---- 在线阅读（第 93 期）----
+    // `DetailHero`（头部入口）与 `ChaptersTab` 里的「在线阅读」卡**各自**取一次：
+    // 两处都包了 try/catch，所以缺桩不会崩，只会静默地少一个入口 —— 那种失败最难查，
+    // 所以照样一次给齐。默认值在 `beforeEach` 里给（本文件不用 `clearAllMocks`，
+    // 在这儿给默认值会被上一个用例的 `mockRejectedValue` 顶掉）。
+    onlineStatus: vi.fn(),
+    sourcesStatus: vi.fn(),
     // `ensureThresholds` 直接 `.then()` 它的返回值 —— 给 undefined 会**同步**抛
     // TypeError（在它自己的 `.catch` 之前），整套用例会以「加载失败」的形式红掉
     readingThresholds: vi.fn().mockResolvedValue({ started: 1, finished: 99 }),
@@ -71,6 +78,8 @@ const m = {
   bookReadingStats: vi.mocked(api.bookReadingStats),
   readingAttempts: vi.mocked(api.readingAttempts),
   bookLocalPaths: vi.mocked(api.bookLocalPaths),
+  onlineStatus: vi.mocked(api.onlineStatus),
+  sourcesStatus: vi.mocked(api.sourcesStatus),
 }
 
 const BOOK_ID = 'lib$aaa'
@@ -183,6 +192,16 @@ beforeEach(async () => {
   // 默认「本机来源但没能定位到」：详情页这几条用例盯的是标签编排，不是路径面板
   // （两种来源的形态在 `FilesTab.spec.ts` 里逐个盯）
   m.bookLocalPaths.mockResolvedValue({ local: true, paths: {} })
+  // 默认「这本书没绑源」：头部不多出「在线阅读」，「在线阅读」卡退化成只列来源。
+  // ⚠️ 必须在 `beforeEach` 里给：本文件没有 `clearAllMocks`，某个用例设的
+  // `mockRejectedValue` 会顺着流到后面的用例（绿得莫名其妙，红得莫名其妙）
+  m.onlineStatus.mockResolvedValue({
+    bound: false, source: '', display_name: '', url: '', title: '',
+    pos: 0, seen: 0,
+    cache: { total: 0, cached: 0, single: false, fetched_at: 0 },
+    available: false, reason: '',
+  })
+  m.sourcesStatus.mockResolvedValue({ items: [] })
 
   router = createRouter({
     history: createMemoryHistory(),
@@ -193,6 +212,9 @@ beforeEach(async () => {
       // 用例就会以「路径没变」的形式红掉 —— 原因离真正的问题很远
       { path: '/read/:id', name: 'read', component: { template: '<div />' } },
       { path: '/listen/:id', name: 'listen', component: { template: '<div />' } },
+      // 头部的「在线阅读」（第 93 期）跳到这儿；不注册的话 `router.push` 匹配不到、
+      // 静默留在原页，用例会以「路径没变」红掉
+      { path: '/online/:id', name: 'online', component: { template: '<div />' } },
     ],
   })
   await router.push(`/book/${BOOK_ID}`)
@@ -379,6 +401,71 @@ describe('BookDetailView', () => {
  * `initialTab()` 就算永远返回 `'overview'`，用例也照样是绿的 —— 一个完全不盯事的
  * 假哨兵。故本块一律查 `style.display`。
  */
+/**
+ * 头部的「在线阅读」（第 93 期）。
+ *
+ * 这一项是**次要动作**：本地那份仍是默认（主按钮不动），它只是多给一条路，
+ * 本地打不开的书（格式不支持 / 文件缺失）它还是唯一入口 —— 所以位置在操作行里，
+ * 而不是只藏在目录标签的卡片后面。判据只有服务端的 `available` 一处。
+ */
+describe('BookDetailView 头部 · 在线阅读入口（第 93 期）', () => {
+  /** 操作行里的按钮（按文案取；找不到就把现有按钮列出来） */
+  function actionButton(w: VueWrapper, label: string): DOMWrapper<Element> | undefined {
+    return w.findAll('button').find((b) => b.text().includes(label))
+  }
+
+  it('没绑源 ⇒ 操作行只有「开始阅读 / 下载 / 收藏」，不多出一项', async () => {
+    const w = await mountDetail()
+
+    expect(actionButton(w, '在线阅读')).toBeUndefined()
+    expect(actionButton(w, '开始阅读')).toBeTruthy()
+    // 状态确实问过了（不是靠「没请求」蒙对的）
+    expect(m.onlineStatus).toHaveBeenCalledWith(BOOK_ID)
+  })
+
+  it('已绑源且可用 ⇒ 多出「在线阅读」，点了进 /online/:id（不是 /read/:id）', async () => {
+    m.onlineStatus.mockResolvedValue({
+      bound: true, source: 'stub-src', display_name: '示例书站',
+      url: 'https://example.test/page/1', title: '三体',
+      pos: 6, seen: 6,
+      cache: { total: 30, cached: 7, single: false, fetched_at: 0 },
+      available: true, reason: '',
+    })
+    const w = await mountDetail()
+
+    const btn = actionButton(w, '在线阅读')
+    expect(btn).toBeTruthy()
+    // 按钮上要写清「这一下读的是源站」—— 本地阅读仍走 /read
+    expect(btn!.attributes('title')).toContain('示例书站')
+
+    await btn!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.fullPath).toBe(`/online/${BOOK_ID}`)
+  })
+
+  it('绑了源但闸门关着 ⇒ 一项都不加（不摆一个点不动的假入口）', async () => {
+    m.onlineStatus.mockResolvedValue({
+      bound: true, source: 'stub-src', display_name: '示例书站',
+      url: 'https://example.test/page/1', title: '三体',
+      pos: 0, seen: 0,
+      cache: { total: 0, cached: 0, single: false, fetched_at: 0 },
+      available: false, reason: '下载功能未开启：到「设置 → 网络与下载」打开「开放搜索 / 下载」',
+    })
+    const w = await mountDetail()
+
+    expect(actionButton(w, '在线阅读')).toBeUndefined()
+    expect(actionButton(w, '开始阅读')).toBeTruthy()
+  })
+
+  it('状态问不到 ⇒ 操作行照常可用（一个次要入口不该拖挂首屏）', async () => {
+    m.onlineStatus.mockRejectedValue(new Error('后端连不上'))
+    const w = await mountDetail()
+
+    expect(actionButton(w, '在线阅读')).toBeUndefined()
+    expect(actionButton(w, '下载')).toBeTruthy()
+  })
+})
+
 describe('BookDetailView 的 ?tab= 深链', () => {
   /** 面板的显隐：`v-show` 把 `display: none` 写在**面板自己**的元素上 */
   function panelEl(w: VueWrapper, id: 'overview' | 'files' | 'metadata'): HTMLElement {

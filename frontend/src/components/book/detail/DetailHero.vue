@@ -7,7 +7,7 @@ import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
 import ProgressBar from '@/components/ui/ProgressBar.vue'
 import RatingStars from '@/components/ui/RatingStars.vue'
-import { api, type BookCard, type ProgressState } from '@/lib/api'
+import { api, type BookCard, type OnlineStatus, type ProgressState } from '@/lib/api'
 import { statusLabelOf } from '@/lib/readingThresholds'
 import { useCollectionsStore } from '@/stores/collections'
 import { useLibraryStore } from '@/stores/library'
@@ -34,7 +34,7 @@ const props = defineProps<{
   tinted: boolean
 }>()
 
-const emit = defineEmits<{ start: []; download: [] }>()
+const emit = defineEmits<{ start: []; download: []; online: [] }>()
 
 const library = useLibraryStore()
 const collections = useCollectionsStore()
@@ -42,6 +42,23 @@ const collections = useCollectionsStore()
 const menuOpen = ref(false)
 const inCollections = ref<number[]>([])
 const newCollection = ref('')
+
+/**
+ * 源绑定状态（第 93 期）——决定操作行里要不要多一个「在线阅读」。
+ *
+ * ⚠️ 判据**只有服务端那一个**（`/online/status` 的 `available`），这里不自拼
+ * 「有没有绑定 / 闸门开没开」。理由与书卡 ⋮ 菜单里那段一致：拼出来的入口会显示、
+ * 点进去 400，那就成了假交互。也**不显示灰掉的入口** —— 不能在线读时整项不出现，
+ * 「为什么不能」由目录标签里的「在线阅读」卡逐字说明。
+ */
+const online = ref<OnlineStatus | null>(null)
+const canOnline = computed(() => online.value?.available === true)
+
+/** 悬停说明：把「这一下读的是源站」写在按钮上，别让用户以为打开的是本地那份 */
+const onlineTitle = computed(() => {
+  const who = online.value?.display_name || online.value?.source || '你的书源'
+  return `在线读：正文来自「${who}」的页面（本地那份不动）`
+})
 
 /** 「作者 · 年份」——两者都没值就整行不渲染（不摆「未知 · 未知 年」） */
 const byline = computed(() =>
@@ -101,7 +118,19 @@ async function createAndAdd(): Promise<void> {
   }
 }
 
-onMounted(loadBookCollections)
+async function loadOnline(): Promise<void> {
+  try {
+    online.value = await api.onlineStatus(props.book.id)
+  } catch {
+    // 问不到就不多给这一项 —— 操作行本身（阅读 / 下载 / 收藏）必须照常可用
+    online.value = null
+  }
+}
+
+onMounted(() => {
+  void loadBookCollections()
+  void loadOnline()
+})
 </script>
 
 <template>
@@ -167,6 +196,13 @@ onMounted(loadBookCollections)
           @click="emit('download')"
         >
           <Icon name="download" class="h-3.5 w-3.5" />下载
+        </Button>
+
+        <!-- 在线阅读（第 93 期）：**次要动作**，不抢主按钮的位置 —— 本地阅读仍是默认。
+             本地打不开的书（格式不支持 / 文件缺失）它才是唯一入口，所以仍摆在操作行里，
+             而不是只藏在目录标签的卡片后面。绑了源但当前不可用 ⇒ 整项不出现（见 `online`）。 -->
+        <Button v-if="canOnline" variant="ghost" :title="onlineTitle" @click="emit('online')">
+          <Icon name="globe" class="h-3.5 w-3.5" />在线阅读
         </Button>
 
         <!-- 加入收藏：勾选加入 / 移除，或就地新建收藏夹 -->

@@ -10,7 +10,7 @@ import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
 import UnitsReader from '@/components/reader/UnitsReader.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
-import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type SessionExtra } from '@/lib/api'
+import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type OnlineChapters, type OnlineStatus, type SessionExtra } from '@/lib/api'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import { progressForFile } from '@/lib/readingProgress'
 import {
@@ -126,6 +126,83 @@ const flat = computed(() => {
 })
 const total = computed(() => flat.value.length)
 
+// ---------------- 在线阅读（第 93 期）----------------
+//
+// 同一个组件、两条路由（`/read/:id` 与 `/online/:id`），靠 `route.name` 分模式。
+// 这样主题 / 字号 / 版式 / 分页 / 滚动 / 目录抽屉 / 键盘翻章**全部共用同一份实现** ——
+// 复制一份 `.reader-content` 与样式计算，改一处漏一处的表现是「在线读的字号不对」
+// 这种看不出根因的小毛病。
+//
+// 与本地阅读的**全部差别**只有三处（都在下面）：
+//   ① 取数：`chapterAt` 走 `api.onlineChapter`（服务端已把源站标记压成纯文本）；
+//   ② 进度：不写 `/progress`，改由服务端按「线上章 ↔ 本地章」的窗口规则决定写不写；
+//   ③ 横幅：常驻一行来源标注（**验收项，不是装饰** —— 读了半天不知道内容来自哪儿，
+//      是这个功能最容易让人误判的地方）。
+//
+// 书签 / 批注在在线模式下一律**隐藏**（不是禁用）：它们的锚是「本地这一章的文本」，
+// 而在线正文与本地正文不是同一份文本 —— 存下来的锚指向哪里谁也不确定。
+/**
+ * 哪两条路由算「阅读器」（同一个组件承载 `/read/:id` 与 `/online/:id`）。
+ * ⚠️ vue-router 对**不同记录但同一个组件**是**复用实例**的（实测：`/read/A` → `/online/A`
+ * 不重新挂载）⇒ 模式变化必须自己盯。
+ */
+const READER_ROUTE_NAMES = ['read', 'online']
+
+/**
+ * 本次阅读现场的模式。**只由 `load()` 定一次**（+ setup 时的初值）。
+ *
+ * ⚠️ 为什么不是 `computed(() => route.name === 'online')`：那个写法在**离开**阅读器时
+ * 会翻成 `false`，而 `onBeforeUnmount` 正好要用它决定「这一次进度往哪儿写」——
+ * 于是从 `/online/A` 退回详情页那一刻，线上章号会被当成**本地章号**写进 `/progress`，
+ * 把这本书的本地进度按到源站目录的位置上。这个 bug 不会报错、只在下次打开本地阅读时
+ * 表现为「进度跳到不相干的一章」，是本期测试抓出来的。
+ *
+ * 反过来说，`load()` 覆盖了全部三种模式变化：首次挂载、同记录换书、`/read/A` ↔ `/online/A`。
+ */
+const onlineMode = ref(route.name === 'online')
+const isOnline = computed(() => onlineMode.value)
+
+/** 不可用的原因（空串 = 可用）。非空时整页只渲染一句如实的说明 + 回本地阅读的入口 */
+const onlineBlocked = ref('')
+/** 来源标注横幅要的四样东西：源站显示名 / 书页地址 / 是哪儿来的 / 抓取时间 */
+const onlineInfo = ref<{ display_name: string; url: string; origin: 'cache' | 'network'; stale: boolean; cached_at: number }>(
+  { display_name: '', url: '', origin: 'network', stale: false, cached_at: 0 },
+)
+/** 本机缓存了几章 / 线上共几章（横幅上如实报出来） */
+const onlineCache = ref<{ cached: number; total: number }>({ cached: 0, total: 0 })
+/**
+ * 这一章对没对上本地。
+ *   · `undefined` = **还不知道**（还没取过任何一章）—— 此时不许显示那条提示；
+ *   · `null` = 对不上（页内如实说「本次不记本地进度」）；
+ *   · 数字 = 本地章号（服务端给的，前端不自己算）。
+ */
+const onlineLocalIndex = ref<number | null | undefined>(undefined)
+
+/** 抓取时间的 `HH:MM`（没抓到过就是空串 ⇒ 横幅不显示那半句） */
+const onlineFetchTime = computed(() => {
+  const t = onlineInfo.value.cached_at
+  if (!t) return ''
+  const d = new Date(t * 1000)
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return `${d.getHours()}:${mm}`
+})
+
+/**
+ * 横幅那句人话。
+ *
+ * ⚠️ 命中缓存时**必须**改口成「选自本机缓存」—— 否则读者以为屏幕上这段字是**刚**从
+ * 源站取的。断网时更要写清「网络不可用」（这是本期「网络差也能继续读」的可见证据，
+ * 不写出来用户只会以为书源更新到这儿了）。
+ */
+const onlineOriginText = computed(() => {
+  const i = onlineInfo.value
+  const who = i.display_name || '源站'
+  const at = onlineFetchTime.value ? `，抓取于 ${onlineFetchTime.value}` : ''
+  if (i.stale) return `网络不可用，本节选自本机缓存（${who}${at}）`
+  if (i.origin === 'cache') return `本节选自本机缓存（${who}${at}）`
+  return `本页内容来自 ${who} 的在线页面`
+})
+
 const pos = ref(0)
 const currentIndex = computed(() => flat.value[pos.value]?.index ?? 0)
 const html = ref('')
@@ -227,7 +304,7 @@ const pageStep = computed(() => (fixedLayout.value
  * 由后端读 OPF 的 `rendition:layout` 判定（`core/library._fixed_layout_of`），随书目 / 详情下发；
  * 读不到就是 false（默认按可重排处理，见那边的说明）。
  */
-const fixedLayout = computed(() => book.value?.fixed_layout === true)
+const fixedLayout = computed(() => !isOnline.value && book.value?.fixed_layout === true)
 
 // ---------------- 书内排版（第 76 期）----------------
 
@@ -304,6 +381,10 @@ function applyBookCss(css: string): void {
 async function loadBookCss(): Promise<void> {
   bookCss.value = ''
   const id = bookId.value
+  // 在线模式一律不套书内 CSS（第 93 期）：正文是源站那一页压出来的纯文本，
+  // 而 `nf-book-css` 是**这本书本地文件**的样式 —— 套上去只会把不相关的排版规则
+  // 作用到一段不属于它的正文上。（横幅底下读的是源站内容，这份样式没有立足点。）
+  if (isOnline.value) return
   if (!id || !scopeSupported()) return
   if (!prefs.value.useBookLayout && !fixedLayout.value) return
   try {
@@ -733,10 +814,34 @@ async function chapterAt(p: number): Promise<{ html: string; title: string }> {
   if (running) return running
   const ch = flat.value[p]
   const job = (async () => {
-    const data = await api.chapter(bookId.value, ch.index)
-    // 第 89 期：TXT 书的解码报告随章节带回（EPUB 等格式不带 ⇒ 保持 null）。
-    if (data.text_encoding) textEncoding.value = data.text_encoding
-    const item = { html: data.html, title: ch.title || data.title }
+    // 第 93 期：在线模式**唯一的取数裂缝** —— 其余（渲染 / 版式 / 滚动 / 分页 / 目录）
+    // 与本地逐字共用。服务端已经把源站标记压成纯文本，这里的 `html` 只含 `<p>`。
+    //
+    // ⚠️ 两条分支**各自**取数、各自处理自己的附带字段，不要写成
+    // `const data = isOnline ? await A : await B` 再靠 `'origin' in data` 收窄 ——
+    // `OnlineChapter` 是 `ChapterContent` 的子类型，那个 `in` 判据收窄不出干净的类型
+    // （实测得到 `ChapterContent & Record<'origin', unknown>`），字段全变成 `unknown`。
+    let bodyHtml = ''
+    let bodyTitle = ''
+    if (isOnline.value) {
+      const data = await api.onlineChapter(bookId.value, ch.index)
+      // 横幅的四个字段随**每一章**更新：断网时只有某几章命中缓存，标注必须跟着变，
+      // 不能只在打开时定一次（那样读者会把缓存章当成刚取回来的）
+      onlineInfo.value = {
+        display_name: data.display_name, url: data.url,
+        origin: data.origin, stale: data.stale, cached_at: data.cached_at,
+      }
+      onlineLocalIndex.value = data.local_index
+      bodyHtml = data.html
+      bodyTitle = ch.title || data.title
+    } else {
+      const data = await api.chapter(bookId.value, ch.index)
+      // 第 89 期：TXT 书的解码报告随章节带回（EPUB 等格式不带 ⇒ 保持 null）。
+      if (data.text_encoding) textEncoding.value = data.text_encoding
+      bodyHtml = data.html
+      bodyTitle = ch.title || data.title
+    }
+    const item = { html: bodyHtml, title: bodyTitle }
     chapterCache.set(p, item)
     // 只留最近几章：缓存的是整章 HTML，留太多是真金白银的内存
     while (chapterCache.size > CACHE_MAX) {
@@ -1216,6 +1321,23 @@ function flushPendingProgress(): void {
 
 async function saveProgress(): Promise<void> {
   if (!book.value || !total.value) return
+  if (isOnline.value) {
+    // 在线模式**不写 `/progress`**：本地进度由服务端按「线上章 ↔ 本地章」的窗口规则
+    // 决定写不写（对不上就一个字都不写）。前端只报「当前可见的是线上第几章」——
+    // 两份位置并存、不互相覆盖，这是跨客户端续读能对上的前提。
+    try {
+      const r = await api.onlineSetPos(bookId.value, currentIndex.value)
+      onlineLocalIndex.value = r.local_index
+      if (r.local_index !== null && r.local_total > 0) {
+        // 不带时间戳：我们手上没有服务端那次写入的 `updated_at`，编一个会让
+        // 「其他设备更新了进度」那条提示拿它当基准（第 56 期的 ownWriteAt 语义）。
+        library.patchProgress(bookId.value, (r.local_index * 100) / r.local_total)
+      }
+    } catch {
+      /* 离线或未登录时静默：位置本身已经记在服务端 */
+    }
+    return
+  }
   try {
     // 第 54 期：EPUB 附带章内字符偏移（textContent 坐标），服务端据此生成 CFI；
     // 算不出（正文未挂载）就不带 —— 进度本身照常保存，恢复侧回落百分比。
@@ -1336,6 +1458,9 @@ function chunkPosOfNode(node: Node | null): number | null {
 const selChunkPos = ref<number | null>(null)
 
 function onSelect(): void {
+  // 在线模式不批注（见 `isOnline` 那段注释：锚指向的文本两边不是同一份）。
+  // 这里拦一道、UI 再隐藏一道 —— 双保险：UI 漏改了也不会存下一个指不清位置的锚。
+  if (isOnline.value) return
   const sel = window.getSelection()
   const anchor = sel?.anchorNode ?? null
   // 连续流下正文有 2–3 个 root，必须按**选区自己**落在哪一块来选 root：
@@ -1483,6 +1608,9 @@ function applyHighlights(): void {
 }
 
 async function addHighlight(color: string): Promise<void> {
+  // 在线模式不写批注（入口已隐藏，这里是双保险）：锚是本地文本偏移，
+  // 存下来的话换成本地阅读器去跳会指到别处。
+  if (isOnline.value) return
   const quote = selText.value
   if (!quote) return
   const note = noteDraft.value.trim()
@@ -1560,6 +1688,7 @@ function unwrapAll(root: HTMLElement): void {
 }
 
 async function removeAnnotation(id: number): Promise<void> {
+  if (isOnline.value) return
   try {
     await api.deleteAnnotation(bookId.value, id)
   } catch (e) {
@@ -1636,6 +1765,8 @@ function bookmarkPlace(b: Bookmark): string {
 }
 
 async function reloadBookmarks(): Promise<void> {
+  // 在线模式不展示书签：锚是本地偏移，指不回源站正文（见 `isOnline` 那段注释）。
+  if (isOnline.value) return
   try {
     const r = await api.listBookmarks(bookId.value, true)
     bookmarks.value = r.items
@@ -1667,6 +1798,8 @@ watch(bookmarkHere, (b) => {
 
 /** 加书签 / 保存备注（同位置已有则是改备注，走 PATCH 的并发合并口径） */
 async function submitBookmark(): Promise<void> {
+  // 书签锚是本地文本偏移 / 章号，在线模式（入口已隐藏）一律不写 —— 双保险。
+  if (isOnline.value) return
   const here = bookmarkHere.value
   const label = bookmarkDraft.value.trim()
   try {
@@ -1703,6 +1836,7 @@ async function submitBookmark(): Promise<void> {
 
 /** 工具条上的快捷开关：当前位置有 ⇒ 移入垃圾桶；没有 ⇒ 加一个（备注留空） */
 async function toggleBookmark(): Promise<void> {
+  if (isOnline.value) return
   const here = bookmarkHere.value
   if (!here) {
     await submitBookmark()
@@ -1729,6 +1863,7 @@ function onBookmarkClick(b: Bookmark): void {
 }
 
 async function trashBookmark(b: Bookmark): Promise<void> {
+  if (isOnline.value) return
   try {
     await api.deleteBookmark(bookId.value, b.id)
   } catch {
@@ -1738,6 +1873,7 @@ async function trashBookmark(b: Bookmark): Promise<void> {
 }
 
 async function restoreBookmark(b: Bookmark): Promise<void> {
+  if (isOnline.value) return
   try {
     await api.restoreBookmark(bookId.value, b.id)
   } catch {
@@ -1747,6 +1883,7 @@ async function restoreBookmark(b: Bookmark): Promise<void> {
 }
 
 async function purgeBookmark(b: Bookmark): Promise<void> {
+  if (isOnline.value) return
   try {
     await api.purgeBookmark(bookId.value, b.id)
   } catch {
@@ -1836,10 +1973,95 @@ function stopSession(): void {
 
 // ---------------- 生命周期 ----------------
 
+/**
+ * 在线模式的取数：状态 → 目录 → 把线上目录铺成与本地阅读器**同形**的 `book`。
+ *
+ * 铺成同形是这一整块的关键取舍：`flat` / `tocView` / `total` / 翻章 / 滚动窗口全都
+ * 从 `book.chapters` 派生，换一份数据源就能整套复用 —— 于是「在线读的翻页坏掉、
+ * 本地是好的」这类问题根本不存在（同一份代码）。
+ *
+ * ⚠️ **本地文件取不到不影响在线阅读**：它读的是源站那一页，不是本地文件
+ * （这正是「本地读不了的书也要能在线读」的含义）。详情取不到就退到一个只带书名的壳。
+ */
+async function loadOnline(): Promise<void> {
+  loading.value = true
+  onlineBlocked.value = ''
+  try {
+    const st = await api.onlineStatus(bookId.value)
+    if (!st.available) {
+      // 如实说清为什么不可用，并给出回本地阅读的入口 —— 不假装能读（不做假交互）
+      onlineBlocked.value = st.reason
+        || (st.bound ? '在线阅读当前不可用' : '这本书还没有绑定书源')
+      loading.value = false
+      return
+    }
+    let shell: BookDetail | null = null
+    try {
+      shell = await api.bookDetail(bookId.value)
+    } catch {
+      shell = null
+    }
+    const toc = await api.onlineChapters(bookId.value)
+    if (!toc.entries.length) {
+      onlineBlocked.value = '这个书页里没有解析出章节（书源规则可能已过期）'
+      loading.value = false
+      return
+    }
+    const base = (shell ?? {
+      id: bookId.value, title: toc.title || bookId.value, format: 'ONLINE',
+      name: '', library_id: '', library_type: '', series: '',
+    }) as unknown as BookDetail
+    book.value = {
+      ...base,
+      // 格式钉成 `ONLINE`：在线正文一律走**可重排**那条渲染路（`fmt` 只用来选分支，
+      // 见 `isPdf` / `isComic` / `isUnits`）。不钉的话「绑了一本漫画书」会去渲染
+      // ComicReader —— 而它要的是本地压缩包，在线模式根本没有。
+      format: 'ONLINE',
+      fixed_layout: false,
+      // 线上目录 → 阅读器认的那一份（`num` 给目录里的序号，`index` 就是线上章序号）
+      chapters: [{
+        volume: '',
+        chapters: toc.entries.map((e) => ({ num: e.index + 1, title: e.title, index: e.index })),
+      }],
+      files: [],
+    }
+    onlineInfo.value = {
+      display_name: toc.display_name || st.display_name,
+      url: toc.url || st.url,
+      origin: toc.origin, stale: toc.stale, cached_at: toc.fetched_at,
+    }
+    onlineCache.value = { cached: st.cache.cached, total: st.cache.total }
+    loading.value = false
+    startSession()
+    // ⚠️ 在线模式**不轮询**「其他设备是否更新了进度」（见下面 startProgressWatch 的注释）。
+    // 初始位置 = **服务端记的在线位置**：任何客户端打开都从同一处续读。
+    let start = Math.min(Math.max(0, toc.pos || 0), total.value - 1)
+    const q = Number(route.query.chapter)
+    if (Number.isFinite(q)) {
+      const t = flat.value.findIndex((f) => f.index === q)
+      if (t >= 0) start = t
+    }
+    await loadChapter(start)
+  } catch (e) {
+    error.value = apiErrorMessage(e, '在线阅读加载失败')
+    loading.value = false
+  }
+}
+
 /** 取数并铺好**这一本**书的阅读现场。抽成函数是为了让首次挂载与同路由换书共用同一条路。 */
 async function load(): Promise<void> {
+  const name = String(route.name || '')
+  // 不是阅读器路由（已经在往别的页走了）⇒ 一个字都别动：现场要留给 `onBeforeUnmount`
+  // 收尾（结阅读时长、把待写的进度补上），而它判模式读的就是 `onlineMode` ——
+  // 这里若跟着路由把它改成 false，收尾那一刻就会把线上章号写成本地进度。
+  if (!READER_ROUTE_NAMES.includes(name)) return
+  onlineMode.value = name === 'online'
   loading.value = true
   error.value = ''
+  if (isOnline.value) {
+    await loadOnline()
+    return
+  }
   try {
     book.value = await api.bookDetail(bookId.value)
   } catch (e) {
@@ -1916,7 +2138,7 @@ async function load(): Promise<void> {
 }
 
 /**
- * 同一条路由记录内换参数（`/read/A` → `/read/B`）时**重新取数**。
+ * 换书 / 换模式时**重新取数**。
  *
  * 原实现只在 `onMounted` 里赋值 `book`，而 `App.vue:138` 是裸 `<RouterView />`
  * （**没有 `:key`**）⇒ 同记录内换参数组件**不重新挂载**，`book` 停在上一本，
@@ -1926,8 +2148,15 @@ async function load(): Promise<void> {
  *
  * ⚠️ 刻意**不**给 `RouterView` 加 `:key`：那会连整棵 DOM 一起重建（丢滚动位置、
  * 重建滚动/分页观察器），与本项目「局部更新不重建」的既有做法冲突。这里只重跑取数。
+ *
+ * ⚠️ 盯的是 `[路由名, 参数]` 而**不只是** `bookId`（第 93 期）：vue-router 对
+ * 「换记录但组件相同」是**复用实例**的，`/read/A` → `/online/A` 时 `bookId` 一个字没变，
+ * 只盯它就会一直放着上一份（本地）数据源，而 URL 已经是在线读。
  */
-watch(bookId, async () => {
+watch([() => route.name, () => route.params.id], async () => {
+  // 已经在往非阅读器页面走了（离开阅读器）⇒ 现场一个字都别动，留给 `onBeforeUnmount` 收尾。
+  // 见 `onlineMode` 那段注释：这里多清一次现场，收尾那一次就会用错模式 / 写错书。
+  if (!READER_ROUTE_NAMES.includes(String(route.name || ''))) return
   // 先把上一本的阅读时长结清：`flushSession` 读的是 `book.value.id`，
   // 必须在 `load()` 换掉它**之前**调，否则这段时长会记到新书头上。
   stopSession()
@@ -1968,6 +2197,25 @@ onBeforeUnmount(() => {
 <template>
   <div class="flex h-full min-h-0 flex-col">
     <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+
+    <!-- 在线读不可用（第 93 期）：一页**如实的说明** + 回本地阅读的入口。
+         为什么单开一页而不是复用下面的 EmptyState：那个的文案是「找不到这本书」——
+         而这里书是好的、只是这本书**当前没法**在线读（没绑源 / 下载开关关着 /
+         源不支持逐章），原因由服务端 `gate_reason` / `online_support` 逐字给出。
+         把「为什么」换成一句凭空写的通用话，等于让用户自己去猜。 -->
+    <EmptyState
+      v-else-if="isOnline && onlineBlocked"
+      icon="alert"
+      title="这本书现在没法在线读"
+      :desc="onlineBlocked"
+    >
+      <template #action>
+        <div class="flex flex-wrap items-center justify-center gap-2">
+          <Button variant="primary" @click="router.push(`/read/${bookId}`)">改读本地</Button>
+          <Button variant="ghost" @click="router.push(`/book/${bookId}`)">返回详情</Button>
+        </div>
+      </template>
+    </EmptyState>
 
     <EmptyState
       v-else-if="error || !book"
@@ -2013,6 +2261,43 @@ onBeforeUnmount(() => {
       />
 
       <template v-else>
+      <!-- 来源标注横幅（第 93 期 · **验收项，不是装饰**）。
+           常驻、不折叠、不随滚动消失 —— 读了半天不知道屏幕上这段字来自哪儿，
+           是这个功能最容易让人误判的地方（「这是本地那本书的新章节吗？」）。
+           目录抽屉顶部有**同一条**（两处都要有，别只留一处）。
+           断网 / 命中缓存时 `onlineOriginText` 会改口，见那段注释。 -->
+      <div
+        v-if="isOnline"
+        data-testid="online-banner"
+        class="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-border bg-card px-2.5 py-1.5 text-[11px] leading-snug text-muted-foreground"
+      >
+        <Icon name="globe" class="h-3 w-3 shrink-0" />
+        <span class="min-w-0 flex-1">{{ onlineOriginText }}</span>
+        <span class="shrink-0">本机已缓存 {{ onlineCache.cached }} / {{ onlineCache.total }} 章</span>
+        <!-- `rel="noopener"`：新开的源站页面不该拿到本页的 `window.opener`
+             （源站是第三方，能拿到就等于把本站当成它的跳板）。 -->
+        <a
+          v-if="onlineInfo.url"
+          :href="onlineInfo.url"
+          target="_blank"
+          rel="noopener"
+          class="shrink-0 underline decoration-dotted underline-offset-2 hover:text-foreground"
+        >打开源站页面</a>
+      </div>
+
+      <!-- 进度：源站目录与本地对不上时如实说一句（不写本地进度，见 `saveProgress`）。
+           不静默 —— 用户会以为「进度怎么不涨了」是坏了。 -->
+      <div
+        v-if="isOnline && onlineLocalIndex === null"
+        class="mb-2 flex gap-1.5 rounded-md border border-border p-2 text-[10.5px] leading-snug text-muted-foreground"
+      >
+        <Icon name="alert" class="mt-0.5 h-3 w-3 shrink-0" />
+        <span>
+          源站目录与本地的章节对不上（这一章前后 5 章里不足 3 章同名）：
+          本次不记本地进度，在线位置照记 —— 换个客户端打开这本书，仍从这一处续读。
+        </span>
+      </div>
+
       <!-- 工具栏 -->
       <div class="flex items-center gap-2 border-b border-border pb-2">
         <Button size="sm" variant="ghost" title="返回详情" @click="router.push(`/book/${bookId}`)">
@@ -2211,7 +2496,11 @@ onBeforeUnmount(() => {
           <Icon name="layers" class="h-4 w-4" />
         </Button>
 
+        <!-- 书签 / 笔记在**在线模式下一律隐藏**（不是灰掉）：
+             它们的锚是「本地这一章的文本」—— 在线正文与本地正文不是同一份文本，
+             存下来的锚指向哪里谁也不确定。留着按钮＝给一个存不下东西的假交互。 -->
         <Button
+          v-if="!isOnline"
           size="sm"
           variant="ghost"
           :title="bookmarkHere ? '移除当前位置的书签' : '在当前位置加书签'"
@@ -2226,7 +2515,7 @@ onBeforeUnmount(() => {
           />
         </Button>
 
-        <Button size="sm" variant="ghost" title="笔记" @click="showNotes = !showNotes">
+        <Button v-if="!isOnline" size="sm" variant="ghost" title="笔记" @click="showNotes = !showNotes">
           <Icon name="note" class="h-4 w-4" />
         </Button>
       </div>
@@ -2270,6 +2559,18 @@ onBeforeUnmount(() => {
           v-if="showToc"
           class="w-60 shrink-0 overflow-y-auto border-r border-border pr-2 py-2"
         >
+          <!-- 目录抽屉顶部的**同一条**来源标注（第 93 期验收项）：
+               正文那里的横幅会被滚动带走，而这里是「从目录直接跳进来」的人
+               第一眼看到的地方 —— 两处都要有，别只留一处。 -->
+          <div
+            v-if="isOnline"
+            data-testid="online-banner-toc"
+            class="mb-2 rounded-md border border-border bg-card px-2 py-1.5 text-[10.5px] leading-snug text-muted-foreground"
+          >
+            <div>{{ onlineOriginText }}</div>
+            <div class="mt-0.5">本机已缓存 {{ onlineCache.cached }} / {{ onlineCache.total }} 章</div>
+          </div>
+
           <div v-for="g in tocView" :key="g.key" class="mb-2">
             <!-- 只有**有名卷**出段头（无名段只在缩进上区别于卷内章节 —— 整本平铺的书
                  外观与改造前一致）；点段头折叠。第 85 期 -->
@@ -2395,7 +2696,7 @@ onBeforeUnmount(() => {
 
         <!-- 笔记 / 书签面板：两者都是「阅读时留下的记号」，共用一个侧栏（不新增导航项） -->
         <aside
-          v-if="showNotes"
+          v-if="showNotes && !isOnline"
           class="w-72 shrink-0 overflow-y-auto border-l border-border py-3 pl-3"
         >
           <div class="mb-3 flex items-center gap-1 rounded-md border border-border p-0.5">

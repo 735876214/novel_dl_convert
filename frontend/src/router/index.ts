@@ -174,6 +174,11 @@ const router = createRouter({
     { path: '/smart-scopes', name: 'smart-scopes', component: SmartScopesView },
     { path: '/book/:id', name: 'book', component: BookDetailView },
     { path: '/read/:id', name: 'read', component: ReaderView },
+    // 在线阅读（第 93 期）：**同一个阅读器组件**，靠 `route.name` 分模式。
+    // 不复用 `/read/:id?online=1` 是刻意的 —— 查询参数不影响组件复用，
+    // 「本地读着读着切成在线」不会有任何反应；两条路由各自是一份现场。
+    // 主题 / 字号 / 版式 / 翻页 / 滚动 / 目录抽屉全部共用同一份实现（只换数据来源）。
+    { path: '/online/:id', name: 'online', component: ReaderView },
     { path: '/listen/:id', name: 'listen', component: AudioPlayerView },
     { path: '/series', name: 'series', component: SeriesView },
     { path: '/series/:name', name: 'series-detail', component: SeriesDetailView },

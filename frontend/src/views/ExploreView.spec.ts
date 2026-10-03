@@ -104,6 +104,8 @@ function status(patch: Partial<SourceStatus> = {}): SourceStatus {
     cookie: { has: false, mtime: null, size: 0 },
     usable: true,
     blocked_reason: '',
+    // 第 93 期：空串 = 这个源能逐章在线阅读（本文件不关心，填齐类型即可）
+    online_support: '',
     ...patch,
   }
 }

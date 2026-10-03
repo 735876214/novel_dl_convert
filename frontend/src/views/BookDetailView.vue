@@ -327,6 +327,7 @@ onMounted(async () => {
       :tinted="Boolean(tint && tintOn)"
       @start="startReading"
       @download="downloadFirst"
+      @online="router.push(`/online/${bookId}`)"
     />
 
     <TabBar v-model="tab" :tabs="tabs" />

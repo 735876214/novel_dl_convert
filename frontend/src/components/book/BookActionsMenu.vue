@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 
 import DropdownMenu from '@/components/ui/DropdownMenu.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, apiErrorMessage, type BookCard } from '@/lib/api'
+import { api, apiErrorMessage, type BookCard, type OnlineStatus } from '@/lib/api'
 import { confirmAndDeleteBook } from '@/lib/bookDelete'
 import { useBookMenu } from '@/lib/bookMenu'
 import { isDirEntry, openTargetOf } from '@/lib/bookOpen'
@@ -94,10 +94,42 @@ const SUB_ITEM =
  */
 const sub = ref<'' | 'collection' | 'status'>('')
 
-// 面板关掉就把展开状态清干净：否则下次打开会先闪一眼上次展开的那一段
+/**
+ * 这本书的源绑定状态（第 93 期）。`null` = 还没问过。
+ *
+ * ⚠️ **书架列表载荷里不带这个字段**（第 68 / 62 期的约束：列表载荷一加字段就是全库一次
+ * 大查询），所以只能在**面板打开的那一刻**按需问一次服务端 —— 几十毫秒的往返只发生在
+ * 用户真的点了 ⋮ 的时候。也正因为它是个「问出来的」值，`null`（还不知道）必须与
+ * `available: false`（问过了，不能在线读）**分开**：前者不显示入口，后者也不显示，
+ * 但原因完全不同 —— 混成一个 `false` 会让「网络抖动没问成」变成「这本书不能在线读」。
+ *
+ * ⚠️ **不显示灰掉的入口**：点不动的一项等于承认「本该有但不给你」，比没有更糟
+ *（同本组件开头那段「不做假交互」的口径）。不能在线读时**什么都不显示**，
+ *「为什么不能」由详情页的「在线阅读」卡逐字说明。
+ */
+const online = ref<OnlineStatus | null>(null)
+
+/** 有绑定、闸门开着、源支持逐章 ⇒ 才给入口（判据全在服务端，前端不自拼） */
+const canOnline = computed(() => online.value?.available === true)
+
+/** 面板关掉就把展开状态清干净：否则下次打开会先闪一眼上次展开的那一段 */
 watch(open, (v) => {
-  if (!v) sub.value = ''
+  if (!v) {
+    sub.value = ''
+    return
+  }
+  void loadOnline()
 })
+
+async function loadOnline(): Promise<void> {
+  try {
+    online.value = await api.onlineStatus(props.book.id)
+  } catch {
+    // 问不到就当没有（入口不显示）—— 菜单本身必须照常能用，
+    // 不能因为一个「锦上添花」的入口把整套操作（收藏 / 状态 / 删除）全拖挂
+    online.value = null
+  }
+}
 
 function close(): void {
   menu.close()
@@ -127,6 +159,9 @@ watch(
   () => props.book,
   () => {
     pending.value = new Set()
+    // 同一行换了本书（列表重拉后 ⋮ 还是同一个实例）⇒ 上一本的绑定状态必须清掉，
+    // 否则会拿甲书的「能在线读」去给乙书开入口，点进去是本甲书的阅读器
+    online.value = null
   },
 )
 
@@ -195,6 +230,18 @@ function startReading(): void {
   const t = target.value
   close()
   if (t) void router.push(t.to)
+}
+
+/**
+ * 进 `ReaderView` 的**在线模式**（第 93 期）。
+ *
+ * ⚠️ 与「阅读」同一个组件、**两条路由**（`/read/:id` 与 `/online/:id`）：主题 / 字号 /
+ * 版式 / 分页 / 目录抽屉全部复用同一份，靠 `route.name` 分模式。刻意**不复用 `target.to`** ——
+ * 那个是「本地能读才给」的判据，而这里恰恰是**本地读不了**时唯一的入口。
+ */
+function startOnline(): void {
+  close()
+  void router.push(`/online/${props.book.id}`)
 }
 
 function preview(): void {
@@ -275,6 +322,14 @@ async function remove(): Promise<void> {
       <button v-if="target" type="button" role="menuitem" :class="ITEM" @click="startReading">
         <Icon :name="target.label === '收听' ? 'volume' : 'book'" class="h-4 w-4 text-muted-foreground" />
         {{ target.label }}
+      </button>
+
+      <!-- 在线读（第 93 期）：本地读得了也显示 —— 它是「换个来源读这本书」，与上面那项
+           不冲突（本地阅读仍是默认动作）。本地读不了时（格式不支持 / 文件缺失）它是**唯一**
+           的阅读入口，所以位置紧贴「阅读」。不出入口的情形见 `online` 那段注释。 -->
+      <button v-if="canOnline" type="button" role="menuitem" :class="ITEM" @click="startOnline">
+        <Icon name="globe" class="h-4 w-4 text-muted-foreground" />
+        在线阅读
       </button>
 
       <button type="button" role="menuitem" :class="ITEM" @click="preview">
