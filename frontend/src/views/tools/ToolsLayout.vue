@@ -57,13 +57,49 @@ function go(section: ToolSection): void {
   if (route.name === section.routeName) return
   router.push({ name: section.routeName })
 }
+
+/** 窄屏下拉的换页（`<select>` 只有一个 change 事件，路由名从 DOM 上读） */
+function goByName(e: Event): void {
+  const name = (e.target as HTMLSelectElement).value
+  if (!name || route.name === name) return
+  router.push({ name })
+}
 </script>
 
 <template>
   <!-- 负外边距抵消 main 的内边距，使标签栏贴齐卡片内缘；内容区再自行补回内边距 -->
   <div class="-m-[var(--shell-content-gutter)] flex min-w-0 flex-col">
+    <!-- 窄屏（<640px，与 `lib/viewport.ts` 的 NARROW_QUERY 同一档）：8 个标签换成原生下拉。
+         360 档标签条按 4 字 × 8 个换行要**三行**（实测 132px 条高），既压内容又难看；
+         换成一个 44px 的下拉条，形态与 `BrowseView.vue` 的「窄屏维度栏折叠成下拉」一致。
+         ⚠️ 下拉**不是隐藏**：8 个页一个都没少，只是换了控件 —— 第 91 期的教训是
+         「唯一入口不许被藏掉」，这里每个入口都仍可点。 -->
     <div
-      class="no-scrollbar sticky top-0 z-10 flex h-11 shrink-0 snap-x snap-mandatory items-stretch overflow-x-auto border-b border-border bg-[var(--shell-surface)] px-4 backdrop-blur-md md:snap-none"
+      class="sticky top-0 z-10 flex h-11 shrink-0 items-center border-b border-border bg-[var(--shell-surface)] px-4 backdrop-blur-md sm:hidden"
+    >
+      <select
+        :value="route.name"
+        aria-label="工具"
+        class="h-8 w-full min-w-0 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+        @change="goByName($event)"
+      >
+        <option v-for="section in visibleSections" :key="section.routeName" :value="section.routeName">
+          {{ section.label }}
+        </option>
+      </select>
+    </div>
+
+    <!-- ⚠️ 标签条**必须换行，不许横向滚动**（第 92 期）：8 个标签在实测里约 672px，
+         而 768 档（侧栏展开 240）内容盒只有 ~492px ⇒ 原先的 `overflow-x-auto` 会把尾部标签
+         滚出视口。「滚出视口」对横向可达性检查（`.codebuddy/tools/ui-smoke.ps1` 的 `off`）而言
+         与「被裁掉」等价 —— 用户看不到、也不会想到那里还能滑。
+         改成 `flex-wrap` 后：装不下就换行、装得下就完全惰性（≥1024 逐字与改前一致）。
+         高度由 `h-11` 改成 `min-h-11`：单行时仍是 44px（按钮 `py-3` + `text-sm` 行高 20 = 44），
+         换行时按行数自然增高。
+         ⚠️ 之所以不只靠下拉、还要给宽屏留 `flex-wrap`：侧栏宽度用户可拖（224–480），
+         固定断点算不准「还剩多少位置」；`flex-wrap` 没有魔数，任何宽度都不会溢出。 -->
+    <div
+      class="sticky top-0 z-10 hidden min-h-11 shrink-0 flex-wrap items-stretch border-b border-border bg-[var(--shell-surface)] px-4 backdrop-blur-md sm:flex"
       role="tablist"
       aria-label="工具"
     >
@@ -73,7 +109,7 @@ function go(section: ToolSection): void {
         type="button"
         role="tab"
         :aria-selected="route.name === section.routeName"
-        class="h-full shrink-0 cursor-pointer snap-start border-b-2 px-3 text-sm font-medium whitespace-nowrap transition-colors"
+        class="flex shrink-0 cursor-pointer items-center border-b-2 px-3 py-3 text-sm font-medium whitespace-nowrap transition-colors"
         :class="
           route.name === section.routeName
             ? 'border-primary text-foreground'
@@ -87,20 +123,19 @@ function go(section: ToolSection): void {
 
     <!-- 内容区上内边距取两倍 gutter：标签栏与内容之间留出更明显的呼吸感。
          用显式 px/pt/pb 而非 p-[…] + pt-[…]，避免依赖同一属性的工具类排序。
-         ⚠️ 极窄屏（实测 360px）下**外壳不折叠侧栏**（固定 240px），内容区只剩 ~82px：
-         卡片被压到 12px 宽 ⇒ 中文**一字一行**地竖排。诊断已确认这**不是**断行规则问题
-         （`white-space / word-break / overflow-wrap` 全是 `normal`，纯物理挤压），
-         所以给文字加 `nowrap` 一律无用 —— 要修的是**容器宽度**。
-         这里给内容一个**最小可读宽度**并改为横向滚动：宁可让用户横向滚，
-         也不把文字压成竖排单字。⚠️ 宽度充足时（桌面 / 平板）下面两层都不产生任何影响。 -->
-    <div class="overflow-x-auto">
-      <div class="min-w-[32rem] px-[var(--shell-content-gutter)] pt-[calc(var(--shell-content-gutter)*2)] pb-[var(--shell-content-gutter)]">
-        <RouterView v-slot="{ Component, route: childRoute }">
-          <KeepAlive :max="8">
-            <component :is="Component" :key="childRoute.name ?? childRoute.path" />
-          </KeepAlive>
-        </RouterView>
-      </div>
+         ⚠️ 这里**曾经**是 `overflow-x-auto` + `min-w-[32rem]`（512px）的「最小可读宽度 + 横滚」：
+         第 86 期为了绕开「极窄屏下卡片被压成 12px、中文竖排单字」才加的。
+         但 360 档内容盒只有 ~328px ⇒ 512px 的内容有 **184px 常驻在视口外**，
+         用户必须横向滚动才能看到右侧的表单按钮与卡片右半（实测 `off=9`）。
+         第 92 期改为**让内容跟着视口自适应**：去掉宽度下限与横滚，
+         逐页把窄屏会撑破的行内元素组收成可换行 / 可堆叠（见各工具视图）。
+         这样窄屏不需要任何横向滚动，`off` 才能真的归零。 -->
+    <div class="px-[var(--shell-content-gutter)] pt-[calc(var(--shell-content-gutter)*2)] pb-[var(--shell-content-gutter)]">
+      <RouterView v-slot="{ Component, route: childRoute }">
+        <KeepAlive :max="8">
+          <component :is="Component" :key="childRoute.name ?? childRoute.path" />
+        </KeepAlive>
+      </RouterView>
     </div>
   </div>
 </template>
