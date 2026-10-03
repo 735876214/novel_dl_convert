@@ -556,6 +556,32 @@ def init():
                 PRIMARY KEY(book_id, source, store_index)
             );
             CREATE INDEX IF NOT EXISTS idx_toc_map_local ON toc_map(book_id, local_index);
+            -- 在线阅读的源绑定（第 93 期）：**一本书 ↔ 一个书源上的一页**。
+            -- 存的是「去哪个源的哪个书页读这本」这件用户**显式声明**的事 ——
+            -- 本表的每一行都是用户按下的一个动作（选源 / 粘 URL），磁盘上推不出来。
+            --
+            -- ⚠️ `url` 只在服务端：客户端永远按 `index` 取章，不许传 URL（无 SSRF 面）。
+            -- ⚠️ `pos` 是**在线位置**，与 `progress` 表那条本地位置**并存且不互相覆盖** ——
+            --    本地读到第 3 章、线上读到第 40 章是两件都真实的事（见 core/reading_list.align_online
+            --    的注释）。跨客户端续读靠它：任何客户端打开这本书都从同一个 `pos` 开始。
+            -- ⚠️ `seen` = 已读过的**在线**章下标（JSON 数组，上限 64）——「在线读超过 5 章
+            --    就自动把本地补齐」的计数器，封顶是为了不让行无限长大（跨过门槛后它就不再有用）。
+            -- ⚠️ `auto_task` = 自动落地任务 id，非空即「这次绑定已经触发过自动下载」⇒
+            --    **只触发一次**（失败也不重复轰炸，用户可以在详情页显式重试）。
+            -- ⚠️ 含 book_id ⇒ 与 store_toc / toc_map **不同**：那两张是「外部数据的缓存」，
+            --    丢了下次再取一次就有；这张是**用户的声明**，换库 / 改名丢了就只能靠用户重新绑
+            --    ⇒ 进 REMAP_TABLES 跟着搬、进 ORPHAN_TABLES 可清理（理由写在两处常量旁边）。
+            CREATE TABLE IF NOT EXISTS online_bind (
+                book_id    TEXT PRIMARY KEY,
+                library_id TEXT NOT NULL DEFAULT '',
+                source     TEXT NOT NULL DEFAULT '',
+                url        TEXT NOT NULL DEFAULT '',
+                title      TEXT NOT NULL DEFAULT '',
+                pos        INTEGER NOT NULL DEFAULT 0,
+                seen       TEXT NOT NULL DEFAULT '[]',
+                auto_task  TEXT NOT NULL DEFAULT '',
+                updated_at REAL NOT NULL DEFAULT 0
+            );
             -- 书源台账（第 86 期）：**关于书源的元数据**，不是书源本体。
             -- ⚠️ 规则本体仍旧只存 `SOURCES_DIR/<name>.json`（`sources/store.py` 是唯一写入路径）——
             --    台账以 `name` 关联它，权限仅限「导入来源 / 去重键 / 档位 / 原始 JSON / 启停 /
@@ -2695,7 +2721,11 @@ def unlock_achievement(key) -> bool:
 ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
                  "book_custom_values", "collection_items", "reading_sessions",
                  "reading_attempts", "meta_override", "meta_online", "meta_cover",
-                 "book_embeddings", "book_origins", "store_toc", "toc_map")
+                 "book_embeddings", "book_origins", "store_toc", "toc_map",
+                 # 第 93 期：源绑定同样是「书走不到就再也看不见、却一直占着库」的行。
+                 # 与 store_toc / toc_map 的区别只在于「重建成本」——它们重取一次就有，
+                 # 绑定得用户重新选一次源 —— 但**可清理**这件事与成本无关。
+                 "online_bind")
 
 
 def book_id_refs() -> dict:
@@ -2756,8 +2786,15 @@ REMAP_TABLES = (
     "progress", "annotations", "bookmarks", "meta_locks", "book_custom_values",
     "collection_items", "reading_sessions", "reading_attempts", "ratings", "reading_status",
     "koreader_docs", "meta_override", "meta_online", "meta_cover", "book_embeddings",
-    "book_origins",
+    "book_origins", "online_bind",
 )
+# ⚠️ 第 93 期的 ``online_bind`` 加在这里，**不加进** :data:`REMAP_DERIVED_TABLES` ——
+#    它与 store_toc / toc_map 长得很像（都是「从某个源取回来的东西」），但性质相反：
+#    那两张是**外部数据的缓存**，丢了下次打开详情页再取一次就有；这一张记的是
+#    **用户显式说过的「这本书在这个源这一页读」** —— 改名 / 换库后不搬，
+#    用户就得自己重新想起来「我当初是在哪个站读的这本」。
+#    PK 只有 ``book_id`` 一列（不像 store_toc 那样带来源 / 序号）⇒ 通用搬迁那种
+#    「整表 UPDATE」不会撞主键，直接走通用路径即可，不需要 REMAP_EXPLICIT_TABLES 那套。
 
 #: **不走通用搬迁**、改用自己那套函数的含 book_id 表（契约测试同样要认它们）。
 #: 目前只有 ``scrape_items``：它除了 ``book_id`` 还有 ``library_id`` / ``source_rel`` /
@@ -3165,6 +3202,147 @@ def store_toc_clear(book_id, source: str = "") -> int:
         else:
             n = c.execute("DELETE FROM store_toc WHERE book_id=?", (str(book_id),)).rowcount
             c.execute("DELETE FROM toc_map WHERE book_id=?", (str(book_id),))
+        c.commit()
+    return int(n or 0)
+
+
+# ---------------- 在线阅读的源绑定（第 93 期）----------------
+# 一本书 ↔ 一个书源上的一页（建表语句在 `init()` 的那段 executescript 里，注释写在那儿）。
+#
+# 为什么这张表必须落库、不能只放前端本地存储：用户的原话是「切换客户端，阅读进度同步」。
+# 绑定与在线位置（`pos`）都是**跨客户端共享的一次事实**，本地存储做不到这件事。
+
+#: `seen` 的长度上限。跨过自动落地的门槛（在线读完 5 章）之后它就不再参与判定，
+#: 封顶只是不让一行随阅读无限长大。超过 64 章时**丢掉最早的** —— 留下最近读过的痕迹。
+ONLINE_SEEN_MAX = 64
+
+#: 绑定行的可写列（白名单：拼 SQL 前过滤，不认任意键 —— 与 `LEDGER_FIELDS` 同口径）。
+ONLINE_BIND_FIELDS = ("library_id", "source", "url", "title", "pos", "seen",
+                      "auto_task", "updated_at")
+
+
+def _online_bind_row(d: dict) -> dict:
+    """把库里的行整理成对外形状（`seen` 解码成 int 列表、`pos` 转 int）。"""
+    row = dict(d)
+    try:
+        seen = json.loads(row.get("seen") or "[]")
+    except Exception:                                       # noqa: BLE001 —— 坏 JSON 当没读过
+        seen = []
+    row["seen"] = [int(x) for x in seen
+                   if isinstance(x, int) or str(x).lstrip("-").isdigit()]
+    row["pos"] = int(row.get("pos") or 0)
+    row["updated_at"] = float(row.get("updated_at") or 0)
+    return row
+
+
+def online_bind_get(book_id) -> dict | None:
+    """读某本书的源绑定（没有绑定 ⇒ ``None``，调用方据此如实说「没绑定」）。"""
+    c = _connect()
+    r = c.execute("SELECT * FROM online_bind WHERE book_id=?", (str(book_id),)).fetchone()
+    return _online_bind_row(dict(r)) if r else None
+
+
+def online_bind_list() -> list[dict]:
+    """**全部**绑定（自动追更要按它把「只有绑定、没有 sidecar」的书也算进候选）。
+
+    ⚠️ 不与 `library.by_id()` 对账：那要扫库，而这一步在后台定时线程里跑；
+    库里的书是否还在，由调用方按需判（不在就当孤儿，见 `ORPHAN_TABLES`）。
+    """
+    c = _connect()
+    rows = c.execute("SELECT * FROM online_bind ORDER BY book_id").fetchall()
+    return [_online_bind_row(dict(r)) for r in rows]
+
+
+def online_bind_put(book_id, *, library_id="", source="", url="", title="") -> dict:
+    """写入 / 覆盖一本书的源绑定（用户显式动作 = 选源 + 匹配书页）。
+
+    ⚠️ **换了 (source, url) 就清零 `pos` / `seen` / `auto_task`**：那三样都是「在**那个**书页上
+    读到哪儿」的记录，换了书页还留着它，读者一打开就会被空降到别的书的某个位置 ——
+    而且旧 `auto_task` 会让「自动落地」再也触发不了（明明是新绑的源）。
+    指向同一页的重复绑定（用户再点一次「绑定」）**不清零**：那是同一个事实。
+    """
+    bid = str(book_id or "")
+    if not bid:
+        raise ValueError("online_bind_put 需要 book_id")
+    new = {"library_id": str(library_id or ""), "source": str(source or ""),
+           "url": str(url or ""), "title": str(title or "")}
+    old = online_bind_get(bid)
+    same_page = bool(old) and old.get("source") == new["source"] and old.get("url") == new["url"]
+    pos = int(old.get("pos") or 0) if same_page else 0
+    seen = json.dumps(old.get("seen") or [], ensure_ascii=False) if same_page else "[]"
+    auto_task = str(old.get("auto_task") or "") if same_page else ""
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO online_bind(book_id, library_id, source, url, title, pos, seen,"
+            " auto_task, updated_at) VALUES(?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(book_id) DO UPDATE SET"
+            " library_id=excluded.library_id, source=excluded.source, url=excluded.url,"
+            " title=excluded.title, pos=excluded.pos, seen=excluded.seen,"
+            " auto_task=excluded.auto_task, updated_at=excluded.updated_at",
+            (bid, new["library_id"], new["source"], new["url"], new["title"],
+             pos, seen, auto_task, time.time()),
+        )
+        c.commit()
+    return online_bind_get(bid) or {}
+
+
+def online_bind_set_pos(book_id, pos) -> int:
+    """推进**在线位置**（在线阅读器每次翻章都会调）。
+
+    ⚠️ 这张表只存在线位置；**本地**位置仍旧只有 `progress` 一处（第 93 期口径：
+    两份位置并存、不互相覆盖 —— 见 `core/reading_list.align_online` 的注释）。
+    """
+    try:
+        p = max(0, int(pos))
+    except (TypeError, ValueError):
+        return 0
+    c = _connect()
+    with _lock:
+        n = c.execute("UPDATE online_bind SET pos=?, updated_at=? WHERE book_id=?",
+                      (p, time.time(), str(book_id))).rowcount
+        c.commit()
+    return int(n or 0)
+
+
+def online_bind_mark_seen(book_id, index) -> list:
+    """把「在线读过的第 index 章」并进 `seen`，返回**去重后**的新列表。
+
+    去重是必须的：反复翻回第 2 章若每次都算一章，门槛（> 5 章）就成了「翻 6 次」。
+    """
+    try:
+        idx = int(index)
+    except (TypeError, ValueError):
+        return []
+    row = online_bind_get(book_id)
+    if not row:
+        return []
+    seen = [int(x) for x in (row.get("seen") or []) if int(x) != idx]
+    seen.append(idx)
+    seen = seen[-ONLINE_SEEN_MAX:]
+    c = _connect()
+    with _lock:
+        c.execute("UPDATE online_bind SET seen=?, updated_at=? WHERE book_id=?",
+                  (json.dumps(seen), time.time(), str(book_id)))
+        c.commit()
+    return seen
+
+
+def online_bind_set_auto_task(book_id, task_id) -> int:
+    """记下自动落地任务 id（**只触发一次**的凭据：非空即表示这本书已经落地过一次）。"""
+    c = _connect()
+    with _lock:
+        n = c.execute("UPDATE online_bind SET auto_task=?, updated_at=? WHERE book_id=?",
+                      (str(task_id or ""), time.time(), str(book_id))).rowcount
+        c.commit()
+    return int(n or 0)
+
+
+def online_bind_clear(book_id) -> int:
+    """解绑（只删这一行，**不动任何文件**）。书上的在线缓存由缓存模块自己按容量回收。"""
+    c = _connect()
+    with _lock:
+        n = c.execute("DELETE FROM online_bind WHERE book_id=?", (str(book_id),)).rowcount
         c.commit()
     return int(n or 0)
 

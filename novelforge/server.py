@@ -994,6 +994,66 @@ def api_toc_clear(bid: str, source: str = Query("")):
     return {"ok": True, "cleared": db.store_toc_clear(bid, source)}
 
 
+# ---------------- 在线阅读（第 93 期）----------------
+# 把**用户自己的书源**接到阅读器上：绑定（本段）+ 取目录 / 取单章（见 `sources/online.py`）。
+#
+# 与「书城目录来源」（第 85 期）的关系：**共用同一套匹配**（`toc_sources.best_match`），
+# 但目的不同 —— 那边只取一份目录对标题，这边是**逐章读正文**，所以绑定的对象是
+# **一个书页 URL**（第 85 期只存目录，没有「在哪儿读」这个概念）。
+#
+# 闸门：与下载同一条（`feature="download"`）—— 在线读也是真的去外呼源站抓正文，
+# 若走 `toc` 那条用途开关就会出现「下载关着、却还能整本站地读」的漏洞。
+# URL **只进服务端**：客户端按 `index` 取章，永远不传 URL（无 SSRF 面）。
+
+
+@app.post("/api/books/{bid}/online/bind")
+async def api_online_bind(bid: str, payload: dict = Body(...)):
+    """绑定一本书到某个书源上的一页（用户显式动作；跨客户端一致，落在服务端 DB）。
+
+    `url` 有值 = 用户手动粘的书页地址（跳过自动匹配，视为确定）；
+    否则用书源的搜索 + :func:`toc_sources.best_match` 自动匹配，**匹配不上如实报错**，
+    绝不「大概是这本」地绑上去 —— 绑错的代价是整本读到别人的书。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    source = str((payload or {}).get("source") or "").strip()
+    url = str((payload or {}).get("url") or "").strip()
+    mgr = _manager()
+    reason = mgr.gate_reason(source or None)
+    if reason:
+        raise HTTPException(400, reason)
+    if source not in REGISTRY:
+        raise HTTPException(400, f"未知书源：{source or '(空)'}")
+    cls = REGISTRY[source]
+    display = getattr(cls, "display_name", source)
+
+    src = cls()
+    manual = bool(url)
+    if manual:
+        matched, confidence = {"title": "", "author": "", "url": url}, 1.0
+    else:
+        query = str((payload or {}).get("query") or "").strip() or (b.get("title") or "")
+        try:
+            async with mgr._client(src) as c:
+                items = await src.search(c, query) or []
+        except Exception as e:                          # noqa: BLE001 —— 原因原文交给用户
+            raise HTTPException(502, f"在「{display}」搜索时失败：{e}")
+        matched, confidence = toc_sources.best_match(b, items)
+        if not matched:
+            raise HTTPException(
+                502,
+                f"在「{display}」里没匹配到《{b.get('title')}》"
+                f"（最高置信度 {confidence:.2f}，阈值 {toc_sources.MATCH_MIN}）"
+                "—— 可以手动填书页地址再绑")
+    row = db.online_bind_put(bid, library_id=str(b.get("library_id") or ""), source=source,
+                             url=matched["url"],
+                             title=matched.get("title") or b.get("title") or "")
+    return {"source": source, "display_name": display, "url": row.get("url", ""),
+            "title": row.get("title", ""), "confidence": confidence, "manual": manual,
+            "pos": row.get("pos", 0)}
+
+
 def _task_out(row: dict | None) -> dict:
     """把任务行整理成前端要的形状。
 
