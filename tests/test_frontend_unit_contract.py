@@ -36,8 +36,14 @@ ICONS_TS = SRC / "lib" / "icons.ts"
 #: 第 39 期的三个 devDependency。少任何一个，`npm run test:unit` 都跑不起来。
 REQUIRED_DEV_DEPS = ("vitest", "@vue/test-utils", "happy-dom")
 
-#: 本期立的前端 spec。每个都必须真的存在**且含至少一个用例** ——
+#: 本仓**全部**前端 spec。每个都必须真的存在**且含至少一个用例** ——
 #: 空文件同样会让 `vitest run` 报绿。
+#:
+#: ⚠️ 第 91 期口径修订：这张表原先是「挑重要的护住」的**子集**（实测只登记了 41 个，
+#: 全仓有 59 个），于是「没登记」被当成了「不重要」—— 而那 18 个同样是**可以被悄悄
+#: 删掉也不会有人发现**的。现在改成**完整登记**（59/59），并由
+#: `test_所有前端_spec_都登记在_EXPECTED_SPECS` 自守：**新增 spec 不登记就是红的**。
+#: 新增时在它上面补一行说明「它护的是什么、写错会怎么静默失效」—— 那才是这张表的价值。
 EXPECTED_SPECS = (
     "src/views/ReaderView.spec.ts",
     "src/stores/library.spec.ts",
@@ -185,6 +191,43 @@ EXPECTED_SPECS = (
     # 底下的页面没被 `aria-hidden` ⇒ 只有读屏用户知道坏了；Esc / 点遮罩关不掉 ⇒ 用户被锁在
     # 抽屉里只能刷新；遮罩色写成 `--foreground` ⇒ 深色主题下是一层盖不住东西的浅雾。
     "src/components/ui/sheet/sheet.spec.ts",
+    # 第 91 期：窄屏顶栏的「更多」菜单。这一块坏起来**一声不响**：少挂一项 ⇒ 那一页
+    # 在窄屏彻底没有入口（它第 65 期已从侧栏撤掉，用户只会以为功能没了）；路径写错 ⇒
+    # 点了 404 白页；成就门控写反 ⇒ 关开关反而出现；忘了「先关面板再跳」⇒ Teleport 到
+    # body 的面板会浮在新页面上不消失。故断言全落在行为上：点了真的跳、面板真的关。
+    "src/components/AppMoreMenu.spec.ts",
+    # 第 91 期：本地导入页的**投递链路**。它原来的失效方式很安静：文件**已经进了书库**，
+    # 页面却又把后端返回的成品文件流 `saveBlob()` 推回浏览器（多出一次下载，浏览器还会拦
+    # 「是否允许多文件下载」），而文案写着「逐个入库并下载」。改成与收书目录页同一条
+    # 「投递 → toast → 刷新」链路后，最关键的一条断言是「整条链路里不出现 createObjectURL」。
+    "src/views/tools/LocalConvertView.spec.ts",
+    # 第 91 期：浮层菜单壳（`ui/DropdownMenu`）的**键盘可达**。这是「真按 Tab 走一遍」
+    # 查出来的缺陷的回归钉 —— 面板 `Teleport` 到 `<body>` 末尾 ⇒ Tab 序排在整个页面之后，
+    # 键盘**根本够不着**菜单项；`Esc` 也从来没人监听。第 64 期这不致命（书卡 ⋮ 只是便捷项），
+    # 第 91 期把窄屏顶栏的 7 个入口（含「设置」）**只**放进这个浮层之后，它就成了硬缺陷：
+    # 窄屏的键盘用户进不去设置。断言因此落在「开面板焦点在哪 / Esc 回哪 / Tab 怎么收」。
+    "src/components/ui/DropdownMenu.spec.ts",
+    # ---- 第 91 期补登记：以下这批此前不在表内（表当时是「挑重要的护住」的子集）----
+    # 它们护的是**静默失效**类的东西 —— 出错时页面照常渲染、请求照常发出，
+    # 只是数字算错 / 位置跳错 / 状态没落盘。故一并收进「不许悄悄删除」的范围。
+    "src/components/book/MetadataEditor.spec.ts",
+    "src/components/book/SeriesMetaPanel.spec.ts",
+    "src/components/book/detail/FilesTab.spec.ts",
+    "src/components/reader/UnitsReader.spec.ts",
+    "src/components/ui/Switch.spec.ts",
+    "src/lib/annotations.spec.ts",
+    "src/lib/readerFlow.spec.ts",
+    "src/lib/readingProgress.spec.ts",
+    "src/lib/searchResults.spec.ts",
+    "src/lib/seriesNext.spec.ts",
+    "src/lib/textAnchor.spec.ts",
+    "src/lib/unitsProgress.spec.ts",
+    "src/stores/libraryWizard.spec.ts",
+    "src/stores/loadDedup.spec.ts",
+    "src/stores/prefSync.spec.ts",
+    "src/views/AnnotationsView.spec.ts",
+    "src/views/ExploreView.spec.ts",
+    "src/views/ReaderView.remoteProgress.spec.ts",
 )
 
 
@@ -212,6 +255,31 @@ def test_三个前端测试依赖都在_devDependencies():
     dev = _pkg().get("devDependencies", {})
     missing = [d for d in REQUIRED_DEV_DEPS if d not in dev]
     assert not missing, f"package.json 的 devDependencies 缺：{missing}"
+
+
+def test_所有前端_spec_都登记在_EXPECTED_SPECS():
+    """`EXPECTED_SPECS` 必须**完整**覆盖 `frontend/src/**/*.spec.ts`（第 91 期口径）。
+
+    为什么需要这条自守：上面那张表的说法一直是「不登记就等于它可以被悄悄删掉」——
+    可它原先只登记了 41 个、全仓有 59 个，**没登记的那 18 个正好就是「可以被悄悄删掉」的**。
+    口径写着完整、实现是子集，这种表最危险：它会让人以为已经护住了。
+
+    两个方向都要查：
+      · 有 spec 文件但没登记 ⇒ 那个 spec 处于无保护状态（这就是本条要拦的）；
+      · 登记了但文件不存在 ⇒ 由 `test_前端_spec_文件存在且不是空壳` 拦（含改名后留下的幽灵条目）。
+    """
+    actual = sorted(
+        p.relative_to(FRONTEND).as_posix() for p in SRC.rglob("*.spec.ts")
+    )
+    listed = set(EXPECTED_SPECS)
+    unlisted = [a for a in actual if a not in listed]
+    assert not unlisted, (
+        "以下前端 spec 没有被登记进 EXPECTED_SPECS —— 它们可以被悄悄删掉而没有任何测试会红。"
+        f"请在表里补上（并写一行「它护的是什么」）：{unlisted}"
+    )
+    assert len(EXPECTED_SPECS) == len(listed), (
+        "EXPECTED_SPECS 里有重复条目；重复会让「查总数」这类断言悄悄失去意义"
+    )
 
 
 def test_vite_config_承载_vitest_配置():
