@@ -15,6 +15,21 @@
 # NOTE: keep this file ASCII-only. PowerShell 5.1 reads .ps1 as ANSI when there
 # is no BOM, so non-ASCII comments get mangled and can swallow code lines.
 #
+# HARD-WON NOTES (2026-10-03, three separate hang causes - all fixed here):
+#   1. STALE DAEMON STATE. `~/.agent-browser/default.pid|default.port` survive a
+#      hard kill. The CLI then waits forever for a dead daemon instead of
+#      starting a new one -> `open` hangs with zero output. Fixed by
+#      Remove-StaleDaemonState below (dead pid OR closed port => delete state).
+#   2. POWERSHELL COLD-START DEADLOCK. The first `open` spawns the daemon, which
+#      INHERITS the PowerShell pipeline's stdout/stderr handles; `& agent-browser
+#      open ... 2>&1 | ...` then never sees end-of-stream and blocks forever.
+#      cmd (a .bat) does not block, and PowerShell is fine once a daemon is warm.
+#      Fixed by doing the FIRST open through a temp .bat (Invoke-ColdOpen).
+#   3. DOUBLE QUOTES GET EATEN when JS is passed as an inline `eval` argument
+#      through the CLI shim (`querySelector("x")` arrives as `querySelector(?)`
+#      => SyntaxError). Write eval JS with SINGLE quotes only, and keep it in a
+#      here-string so the bytes are exact.
+#
 # Usage examples
 #   ui-smoke -Routes '#/tools/sources','#/tools/source-tools'
 #   ui-smoke -CleanOnly
@@ -73,6 +88,68 @@ function Remove-StaleBrowsers {
   }
 }
 
+# A dead daemon leaves its pid/port files behind; the CLI then blocks forever
+# waiting for it instead of spawning a fresh one. Detect and clear that state.
+function Remove-StaleDaemonState {
+  $dir = Join-Path $env:USERPROFILE '.agent-browser'
+  $pidFile = Join-Path $dir 'default.pid'
+  if (-not (Test-Path $pidFile)) { Write-Output 'stale daemon state: no pid file'; return }
+  $pn = 0
+  $rawPid = (Get-Content -LiteralPath $pidFile -Raw -ErrorAction SilentlyContinue)
+  if ($rawPid) { [void][int]::TryParse(([string]$rawPid).Trim(), [ref]$pn) }
+  $alive = $false
+  if ($pn -gt 0) { $alive = [bool](Get-Process -Id $pn -ErrorAction SilentlyContinue) }
+  $listening = $false
+  $portFile = Join-Path $dir 'default.port'
+  if (Test-Path $portFile) {
+    $pr = 0
+    $rawPort = (Get-Content -LiteralPath $portFile -Raw -ErrorAction SilentlyContinue)
+    if ($rawPort) { [void][int]::TryParse(([string]$rawPort).Trim(), [ref]$pr) }
+    if ($pr -gt 0) {
+      try {
+        $c = New-Object System.Net.Sockets.TcpClient
+        $iar = $c.BeginConnect('127.0.0.1', $pr, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne(400)) { $c.EndConnect($iar) }
+        $listening = $c.Connected
+        $c.Close()
+      } catch { $listening = $false }
+    }
+  }
+  if ($alive -and $listening) { Write-Output ("daemon state ok (pid {0}, port {1})" -f $pn, $pr); return }
+  foreach ($f in @('default.pid', 'default.port', 'default.stream', 'default.target')) {
+    $p = Join-Path $dir $f
+    # [System.IO.File]::Delete, not Remove-Item: the IDE safe-delete shim blocks Remove-Item.
+    if (Test-Path $p) { try { [System.IO.File]::Delete($p) } catch { } }
+  }
+  Write-Output ("stale daemon state removed (pid {0} alive={1}, port listening={2})" -f $pn, $alive, $listening)
+}
+
+# The FIRST open must go through cmd: see note 2 at the top of this file.
+# NOTE: do NOT use `Start-Process -Wait` here -- it waits for the whole process
+# tree, and the daemon (a grandchild of this .bat) stays alive by design, so
+# -Wait never returns. Poll the log for the EXIT marker instead.
+function Invoke-ColdOpen([string]$url, [string]$log) {
+  $bat = Join-Path $env:TEMP 'nf-ui-smoke-open.bat'
+  $lines = @(
+    '@echo off',
+    'set "PATH=%APPDATA%\npm;C:\Users\qingr\nodejs;%PATH%"',
+    ('call agent-browser open "' + $url + '" --profile "' + $Profile + '" --restore >> "' + $log + '" 2>&1'),
+    'echo EXIT=%ERRORLEVEL% >> "' + $log + '"'
+  )
+  Set-Content -LiteralPath $bat -Value $lines -Encoding ASCII
+  $proc = Start-Process -FilePath $bat -WindowStyle Hidden -PassThru
+  $deadline = (Get-Date).AddSeconds(60)
+  while ((Get-Date) -lt $deadline) {
+    if (Test-Path $log) {
+      $txt = Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue
+      if ($txt -and ($txt -match 'EXIT=')) { break }
+    }
+    if ($proc.HasExited -and (Test-Path $log)) { break }
+    Start-Sleep -Milliseconds 500
+  }
+  if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+}
+
 if ($Clean -or $CleanOnly) { Remove-StaleBrowsers }
 if ($CleanOnly) { return }
 
@@ -82,6 +159,7 @@ if (-not $Routes -or $Routes.Count -eq 0) {
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 New-Item -ItemType Directory -Force -Path $Profile | Out-Null
+Remove-StaleDaemonState
 
 $measure = @'
 (()=>{const iw=innerWidth,de=document.documentElement;
@@ -91,13 +169,19 @@ const off=v.filter(e=>{const r=e.getBoundingClientRect();return r.right>iw+1||r.
 const tiny=v.filter(e=>e.getBoundingClientRect().height<24);
 const sb=[...document.querySelectorAll('*')].filter(e=>{const s=getComputedStyle(e);
   return /auto|scroll/.test(s.overflowX)&&e.scrollWidth>e.clientWidth+1&&e.clientWidth>0});
+const t=(document.body.innerText||'');
 return JSON.stringify({w:iw,sw:de.scrollWidth,ovf:de.scrollWidth>iw+1,
   act:v.length,off:off.length,offSample:off.slice(0,3).map(e=>(e.innerText||e.tagName).slice(0,14)),
   tiny:tiny.length,scrollBoxes:sb.length,
   tabs:document.querySelectorAll('[role=tab]').length,
   sel:document.querySelectorAll('select').length,
   chk:document.querySelectorAll('input[type=checkbox]').length,
-  txt:(document.body.innerText||'').length});})()
+  txt:t.length,heading:t.slice(0,30).replace(/\s+/g,' ')});})()
+'@
+
+# SINGLE quotes only in eval JS (see note 3 at the top of this file).
+$probeLogin = @'
+!!document.querySelector('[type=password]')
 '@
 
 function To-Url([string]$route) {
@@ -106,24 +190,33 @@ function To-Url([string]$route) {
   return "$Base/#/$route"
 }
 
+# The app is an SPA: the password field may not exist yet right after `open`.
+function Is-LoginForm {
+  for ($k = 0; $k -lt 4; $k++) {
+    $p = & agent-browser eval $probeLogin 2>&1 | Select-Object -Last 1
+    if ($p -match 'true') { return $true }
+    Start-Sleep -Seconds 2
+  }
+  return $false
+}
+
 $first = $true
 foreach ($route in $Routes) {
   $url = To-Url $route
   Write-Output ("=== {0} ===" -f $url)
   if ($first) {
-    & agent-browser open $url --profile $Profile --restore 2>&1 | Select-Object -Last 1
+    $coldLog = Join-Path $env:TEMP 'nf-ui-smoke-open.log'
+    if (Test-Path $coldLog) { try { [System.IO.File]::Delete($coldLog) } catch { } }
+    Invoke-ColdOpen $url $coldLog
+    if (Test-Path $coldLog) { Get-Content $coldLog | Select-Object -Last 3 | ForEach-Object { Write-Output ("  cold-open: " + $_) } }
+    # This open (and only this one) is allowed to hang; do not wait for output.
     $first = $false
   } else {
-    & agent-browser open $url 2>&1 | Select-Object -Last 1
+    & agent-browser open $url 2>&1 | Select-Object -Last 1 | Out-Null
   }
   Start-Sleep -Milliseconds 1500
 
-  # Login probe. Pass the JS through a variable: the command text itself must not
-  # carry quotes, because the shell/tool layer sometimes eats double quotes and
-  # the probe then silently evaluates to nothing.
-  $probeLogin = '!!document.querySelector("input[type=password]")'
-  $isLoginForm = (& agent-browser eval $probeLogin 2>&1 | Select-Object -Last 1) -match 'true'
-  if ($isLoginForm) {
+  if (Is-LoginForm) {
     if (-not $LoginPassword) {
       Write-Output 'LOGIN REQUIRED: pass -LoginPassword (route skipped)'
       continue
@@ -132,14 +225,13 @@ foreach ($route in $Routes) {
     if ($LoginAccount) { & agent-browser fill 'input[type=text],input[type=email]' $LoginAccount 2>&1 | Out-Null }
     & agent-browser fill 'input[type=password]' $LoginPassword 2>&1 | Out-Null
     & agent-browser press Enter 2>&1 | Out-Null
-    Start-Sleep -Seconds 4
-    & agent-browser open $url 2>&1 | Select-Object -Last 1
-    Start-Sleep -Milliseconds 1500
+    Start-Sleep -Seconds 5
+    & agent-browser open $url 2>&1 | Out-Null
+    Start-Sleep -Seconds 3
     # HARD ASSERT. An earlier version emitted metrics + screenshots even when the
     # login had not taken effect, i.e. it reported numbers measured on the LOGIN
     # PAGE with no warning. Never emit data for a page we could not enter.
-    $stillLogin = (& agent-browser eval $probeLogin 2>&1 | Select-Object -Last 1) -match 'true'
-    if ($stillLogin) {
+    if (Is-LoginForm) {
       Write-Output 'LOGIN FAILED (still on login form) - route skipped, NO metrics emitted'
       continue
     }
