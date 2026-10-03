@@ -19,8 +19,11 @@ components/
   settings/      引导弹窗 + 设置项搜索浮层
   （根级）       AppSidebar / AppHeader / AppToast / LoginGate / NotificationBell /
                TaskFlyout / UserMenu / AppearanceMenu / SettingsSidebar /
-               MetadataScoreCard
+               MetadataScoreCard / AppMoreMenu
                （`MigrationGateDialog` 已于第 77 期随「按格式归库」删除）
+               （`AppMoreMenu` 为第 91 期新增：窄屏顶栏的「更多」浮层，是数据统计 / 任务 /
+                工具 / 阅读记录 / 阅读活动 / 成就 / **设置** 这 7 项的**唯一入口**
+                —— 第 65 期已把它们从侧栏撤掉，改动时一项都不能少）
 ```
 
 ## 2. UI 原语（`components/ui/`）
@@ -32,7 +35,7 @@ components/
 | `Badge` | `tone?: 'neutral'\|'accent'\|'ok'\|'warn'\|'err'`、`pill?: boolean` | 默认 slot |
 | `Icon` | `name`（取自 `lib/icons.ts`）、`class` | — |
 | `IconButton` | `label`、`tooltip?`、`active?`、`expanded?`、`badge?` | `click`（顶栏圆形按钮，含气泡与角标） |
-| `DropdownMenu` | `open`、`align?`、`panelClass?`、`triggerClass?` | slot `trigger` / `panel`（内部 `Teleport` 到 body + 手动定位） |
+| `DropdownMenu` | `open`、`align?`、`panelClass?`、`triggerClass?` | slot `trigger` / `panel`；emit `toggle` / `close`（内部 `Teleport` 到 body + 手动定位）。**第 91 期补的键盘契约**：打开即把焦点送进第一项、`Esc` 关闭并把焦点还给触发器、`Tab` 关闭（另见 [§2.3](#23-浮层菜单的键盘契约第-91-期)） |
 | `BookCover` | `book`、`showTitle?`、`interactive?`、`shape?: 'portrait'\|'circle'` | —（真实内嵌封面；缺图回退 `c1/c2` 渐变占位） |
 | `EmptyState` | `icon?`、`title`、`desc?`、`dashed?` | slot `action` |
 | `PageHead` | `title`、`desc?` | — |
@@ -60,6 +63,24 @@ components/
 | `SidebarNavItem` | `item: NavItem`、`isActive`、`count: number \| null`、`visible` | 一条导航项（真 `<button>`）；折叠态的文字 / 计数胶囊由 `group-data-[collapsible=icon]:hidden` 统一收掉 |
 | `SidebarBadge` | `count: number` | 行尾计数胶囊（数字来自真实接口，读失败则整块不渲染 —— 不拿 0 冒充） |
 | `SidebarSectionHeader` | — | 分组标题 |
+
+### 2.3 浮层菜单的键盘契约（第 91 期）
+
+`DropdownMenu` 的面板 `Teleport` 到 `<body>` 末尾 ⇒ 它在 **Tab 序里排在整个页面之后**。
+第 64 期这不算致命（书卡的 ⋮ 只是些便捷项，正文另有入口）；第 91 期把窄屏顶栏的 7 个入口
+（数据统计 / 任务 / 工具 / 阅读记录 / 阅读活动 / 成就 / **设置**）**只**放进这个浮层之后，
+「键鼠用户根本够不着」就成了硬缺陷 —— 窄屏键盘用户进不去设置。故本期按 ARIA `menu`
+惯例给这个共用壳补了键盘行为（`BookActionsMenu` 与 `AppMoreMenu` 同时受益，**只此一份**）：
+
+| 按键 | 行为 |
+|---|---|
+| 打开 | 焦点**自动落在第一项**（`focus({ preventScroll: true })`，免得页面被滚一下） |
+| `↓` / `↑` | 在 `[role=menuitem]` / `menuitemcheckbox` / `menuitemradio` 之间移动，首尾环绕 |
+| `Esc` | 关闭浮层，并把焦点**还给触发器**（触发器自身可能是 `<span>`，取它第一个可聚焦后代） |
+| `Tab` | 关闭浮层并交还焦点（`preventDefault`）—— 面板在 body 末尾，放任原生 Tab 会把焦点送出页面之外 |
+
+⚠️ 只在「关闭时焦点还在面板里」才抢回焦点：点别处导致的关闭不许抢。
+回归钉：`src/components/ui/DropdownMenu.spec.ts`（已登记进 `EXPECTED_SPECS`）。
 
 ## 3. 阅读器（`components/reader/`）
 

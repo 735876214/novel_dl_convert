@@ -25,6 +25,24 @@ import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
  *
  * 面板既然在 body 下，就与触发器不在同一棵树里，`absolute` 无从谈起。用
  * `getBoundingClientRect()` 换算成视口坐标，是这条路上唯一说得通的做法。
+ *
+ * ## 键盘：Esc 关闭 + 打开即入焦（第 91 期补的缺陷）
+ *
+ * 第 91 期按 T9 真按 Tab 走了一遍，发现这个浮层**只有鼠标能用**：
+ *
+ * 1. **Esc 完全不响应** —— 组件从头到尾没绑过 keydown，「按 Esc 关掉」是用户的
+ *    肌肉记忆，不响应会被当成卡死。
+ * 2. **Tab 进不去面板**。面板 `Teleport` 到 `<body>` 末尾 ⇒ 它在 Tab 序里排在整个
+ *    页面**之后**。第 64 期这还不算致命（书架的 ⋮ 只是些便捷项，正文另有入口）；
+ *    但第 91 期把窄屏顶栏的 7 个入口（数据统计 / 任务 / 工具 / 阅读记录 / 阅读活动 /
+ *    成就 / 设置）**只**放在这里 ⇒ 窄屏的键盘用户**根本进不去设置**。
+ *
+ * 修法按 ARIA `menu` 惯例来，只此一份，`BookActionsMenu` 与 `AppMoreMenu` 同时受益：
+ * 打开时把焦点送进第一项，`Esc` 关闭并把焦点**还给触发器**，`Tab` 关闭（菜单不是
+ * 模态：Tab 不该被吞在浮层里），上下键在项间移动。
+ *
+ * ⚠️ `focus({ preventScroll: true })` 不能省：菜单在页面底部时，默认的 `focus()`
+ * 会把页面滚过去 —— 对刚用鼠标点开菜单的人来说是「页面自己跳了一下」。
  */
 const props = withDefaults(
   defineProps<{
@@ -94,15 +112,71 @@ function bind(on: boolean): void {
   const m = on ? 'addEventListener' : 'removeEventListener'
   window[m]('scroll', onScroll, true)
   window[m]('resize', onResize)
+  // 单列一行：`window[m]('keydown', onKeydown)` 过不了类型检查（`m` 是字符串联合，
+  // 推不出 `keydown` 那一重的 `KeyboardEvent` 重载）
+  if (on) window.addEventListener('keydown', onKeydown)
+  else window.removeEventListener('keydown', onKeydown)
+}
+
+/** 面板里的可聚焦项。三种 `menuitem*` 角色都收 —— 书卡菜单还有 `menuitemcheckbox`。 */
+const ITEM_SEL = '[role="menuitem"],[role="menuitemcheckbox"],[role="menuitemradio"]'
+function items(): HTMLElement[] {
+  return panel.value ? Array.from(panel.value.querySelectorAll<HTMLElement>(ITEM_SEL)) : []
+}
+
+function focusItem(el: HTMLElement | undefined): void {
+  // 存不存在 `preventScroll` 是实现细节：老环境退化成普通 focus 也比不聚焦好
+  try {
+    el?.focus({ preventScroll: true })
+  } catch {
+    el?.focus()
+  }
+}
+
+/** 把焦点还给触发器的第一个可聚焦后代（触发器自身可能是 `<span>`，不可聚焦）。 */
+function restoreFocus(): void {
+  const el = trigger.value?.querySelector<HTMLElement>('button,a,input,[tabindex]')
+  focusItem(el ?? undefined)
+}
+
+function onKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Escape') {
+    e.stopPropagation()
+    emit('close')
+    return
+  }
+  if (e.key === 'Tab') {
+    // 菜单不是模态框（Tab 不许被吞在浮层里），但**也不能放任默认行为**：
+    // 面板在 `<body>` 末尾，从面板里原生 Tab 会走到页面之外（浏览器 chrome）。
+    // 所以这里明确收一层：关掉浮层、把焦点交还触发器，并挡掉这一次默认 Tab。
+    // 结果是一致的「Tab = 收起菜单，人回到按钮上」，再按一次 Tab 自然往前走。
+    e.preventDefault()
+    emit('close')
+    return
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+  const list = items()
+  if (!list.length) return
+  e.preventDefault()
+  const cur = list.indexOf(document.activeElement as HTMLElement)
+  const step = e.key === 'ArrowDown' ? 1 : -1
+  const next = cur < 0 ? (step > 0 ? 0 : list.length - 1)
+    : (cur + step + list.length) % list.length
+  focusItem(list[next])
 }
 
 watch(
   () => props.open,
-  async (v) => {
+  async (v, was) => {
     bind(v)
-    if (!v) return
+    if (!v) {
+      // 只在「焦点还在刚关掉的面板里」时抢回来 —— 用户点别处导致关闭时不许抢
+      if (was && panel.value?.contains(document.activeElement)) restoreFocus()
+      return
+    }
     await nextTick()
     place()
+    focusItem(items()[0])
   },
 )
 
