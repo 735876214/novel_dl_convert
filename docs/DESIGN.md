@@ -53,6 +53,7 @@ radius-* 类           覆盖 --radius
 | 侧栏 | `--sidebar` `--sidebar-foreground` `--sidebar-count-foreground` `--sidebar-primary` `--sidebar-accent` `--sidebar-border` |
 | 高程面 | `--surface-1..4`（卡片内的层次） |
 | 外壳 | `--shell-gap` `--shell-content-gutter` `--shell-surface-opacity` `--shell-surface` `--shell-border` |
+| 浮层遮罩 | `--scrim`（对话框 / 抽屉背后的纱，用 `bg-scrim`；**不要拿 `--foreground` 调** —— 深色主题下那是近白色，会变成一层盖不住东西的浅雾） |
 | 递进点缀 | `--shell-accent-wash`（6%）`--shell-accent-tint`（12%）`--shell-accent-line`（30%） |
 
 对应 Tailwind 类：`bg-background` `text-foreground` `bg-card` `text-muted-foreground` `border-border` `bg-primary` `text-primary-foreground` …（映射见 `bridge.css`）。
@@ -112,6 +113,12 @@ html.radius-pill    { --radius: 2.5rem }
   `TabBar` / `RatingStars` / `ProgressBar` / `ProgressRing` / `StatTile` / `EmptyState` / `PageHead` /
   `BookCover` / `DropdownMenu`。**新页面优先复用，不要另起一套按钮/卡片。**
 - 交互范式：设置页=「行 + 标签 + 控件」；工具页=顶部下划线标签栏 + 页内切换；浮层用 `Teleport` 到 body。
+- **外壳侧栏（第 90 期，逐字对齐上游）**：`ui/sidebar` 那一套（`SidebarProvider` / `Sidebar` / `SidebarRail` /
+  `SidebarMenu*` / `SidebarGroup*`），三态由**视口宽**决定 —— **≤640px** 抽屉（`ui/sheet`，宽 `18rem`，
+  遮罩 `bg-scrim`）、**展开**（默认 `240px`，可拖 `224–480`）、**折叠**（图标条 `3rem`，
+  `data-collapsible="icon"` + 悬停 tooltip）。两根宽度变量（`--sidebar-width` / `--sidebar-width-icon`）
+  由 `SidebarProvider` 挂在外壳根节点上，**组件里不要自己算宽度**。
+  ⚠️ 折叠态的收字 / 收胶囊一律靠 `group-data-[collapsible=icon]:hidden`，别在业务组件里判 `isCollapsed` 再 `v-if`。
 - 状态诚实：读失败要说出来（可重试），**不许靠 `catch {}` 让块变空**；空态区分「加载中 / 无匹配 / 空」；
   计数不要出现 `N/0`。
 - 窄屏双写法：宽屏 `<table class="hidden md:block">` + 窄屏 `<ul class="md:hidden">`；纯装饰增强取不到就不设变量。
@@ -121,5 +128,9 @@ html.radius-pill    { --radius: 2.5rem }
 
 - ❌ 在 `.vue` 里写十六进制/oklch 字面量（除固定色板已给的语义用途外）。
 - ❌ 引入外部字体/CDN/图标库（图标走 `lib/icons.ts` 内联 SVG）。
+  ⚠️ **第 90 期的唯一例外（用户口径批准的 4 个依赖之一）**：`@lucide/vue`，且**只**用在逐字移植的
+  上游原语内部（`ui/sidebar/SidebarTrigger.vue` 的 `PanelLeft`、`ui/sheet/SheetContent.vue` 的 `X`）。
+  业务界面（页面 / 业务组件）**仍然一律**走 `<Icon name="…">` + `lib/icons.ts` —— 别把 lucide 当业务图标库用，
+  那会长出第二份图标真值源（本仓契约 `tests/test_frontend_unit_contract.py` 正在普查 `lib/icons.ts`）。
 - ❌ 新增第三方动画库或与 `main.css` 重复的动效。
 - ❌ 改变 `main.css` 里主题文件的 `@import` 顺序（bridge 依赖 tokens 先就位）。

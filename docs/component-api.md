@@ -8,7 +8,9 @@
 
 ```
 components/
-  ui/            UI 原语（16 个）—— 新页面优先复用
+  ui/            UI 原语（16 个 + 第 90 期的 sidebar / sheet / tooltip / separator）—— 新页面优先复用
+  sidebar/       侧栏业务行（第 90 期从 AppSidebar.vue 抽出，共 3 个）：
+                 SidebarNavItem / SidebarBadge / SidebarSectionHeader
   reader/        阅读器：PdfReader / ComicReader / AudioPlayer / **UnitsReader**（序号单元合集）
   book/          书籍域组件（编辑/预览/移动/记录/系列面板）+ detail/ 详情页子标签
   dashboard/     仪表盘外壳 + widgets/ 13 个部件（前 12 件对齐上游 + 1 件自开）+ registry.ts
@@ -41,6 +43,23 @@ components/
 | `SwatchGrid` | `items`、`modelValue` | `update:modelValue`（8 列点缀色网格） |
 | `TabBar` | `tabs`、`modelValue` | `update:modelValue` |
 | `StatTile` | `label`、`value`（字符串）、`hint?` | — |
+
+### 2.1 第 90 期随侧栏移植进来的四组（基座 = reka-ui，**视觉照搬 BookOrbit**）
+
+| 目录 | 导出 | 要点 |
+|---|---|---|
+| `ui/sidebar` | `SidebarProvider`（`defaultOpen?`、`open?`）、`Sidebar`（`side?='left'`、`variant?='floating'`、`collapsible?='icon'`）、`SidebarTrigger`、`SidebarRail`、`SidebarInset`、`SidebarMenu/MenuItem/MenuButton`、`SidebarGroup*`、`SidebarHeader/Content/Footer/Input/Separator` | 折叠态 / 宽度 / 窄屏判定全在 **`SidebarProvider`** 里，经 `provide/inject`（`useSidebar()`）下发；`--sidebar-width` / `--sidebar-width-icon` 也由它挂在根节点上。字符串常量（`SIDEBAR_WIDTH_MOBILE='18rem'` / `SIDEBAR_WIDTH_ICON='3rem'` / `SIDEBAR_KEYBOARD_SHORTCUT='b'`）与宽度上下限在 `utils.ts` / `useSidebarWidth.ts`。⚠️ `useSidebar()` **缺 Provider 时退化为空壳**（只为组件测试），应用内始终有真 Provider |
+| `ui/sheet` | `Sheet`、`SheetContent`（`side?='right'`、`hideClose?`）、`SheetTrigger/Close/Overlay/Header/Footer/Title/Description` | 窄屏侧栏抽屉的载体（`Dialog` → 右侧滑出）。**内容必须 Teleport 到 body** —— 外壳卡片有 `backdrop-blur`，`position: fixed` 的后代以外壳为包含块会被裁掉（第 83 期教训） |
+| `ui/tooltip` | `Tooltip`、`TooltipTrigger/Content/Provider` | 折叠成图标条时给图标补文字（`SidebarMenuButton` 的 `tooltip` 属性自动包一层）。⚠️ `TooltipTrigger as-child` 会把子节点的 `data-slot` **顶掉**（换成 `tooltip-trigger`），取行请认 `data-sidebar="menu-button"` |
+| `ui/separator` | `Separator`（`orientation?='horizontal'`、`decorative?=true`） | 侧栏分组之间的细分隔线 |
+
+### 2.2 侧栏业务行（`components/sidebar/`）
+
+| 组件 | props | 要点 |
+|---|---|---|
+| `SidebarNavItem` | `item: NavItem`、`isActive`、`count: number \| null`、`visible` | 一条导航项（真 `<button>`）；折叠态的文字 / 计数胶囊由 `group-data-[collapsible=icon]:hidden` 统一收掉 |
+| `SidebarBadge` | `count: number` | 行尾计数胶囊（数字来自真实接口，读失败则整块不渲染 —— 不拿 0 冒充） |
+| `SidebarSectionHeader` | — | 分组标题 |
 
 ## 3. 阅读器（`components/reader/`）
 
@@ -109,13 +128,16 @@ components/
 | `smartScope.ts` | `evaluateScope()`、`ruleText()` | 智能书架求值 |
 | `textAnchor.ts` | 章内字符偏移锚（取/还原同坐标） | 批注位置锚 |
 | `annotations.ts` | `chapterLabel()`、`canJumpTo()`、`originLabel()` | 批注展示口径 |
+| `viewport.ts` | `NARROW_QUERY`（`(max-width: 639.98px)`）、`useNarrowScreen()`、`useNarrowScreenOnMount()` | **窄屏断点的唯一真值源**（外壳侧栏与书架行共用；`shelfRows.ts` 原来那份私有常量已删）。读不到 `matchMedia` 的环境**按宽屏兜底** |
+| `sidebarPrefs.ts` | `SIDEBAR_COLLAPSED_KEY`、`SIDEBAR_WIDTH_KEY`、`readDeviceValue()`、`writeDeviceValue()` | 侧栏折叠 / 宽度的**本机**存储（`nf_sidebar_*`）；⚠️ **刻意不进** `prefsPayload.ts` —— 布局是屏幕属性，不跟账号同步 |
+| `utils.ts` | `cn()`（`clsx` + `tailwind-merge`） | 类名合并的**唯一实现**（移植来的 shadcn 组件靠「传 class 覆盖基础类」，只 `clsx` 会时灵时不灵） |
 | `format.ts` / `readingPace.ts` / `deviceInfo.ts` / `fonts.ts` / `coverTint.ts` / `icons.ts` / `notifyPrefs.ts` / `bookMenu.ts` | 见 `docs/architecture.md` §12 | — |
 
 ## 7. Stores（Pinia）
 
 | store | 关键公共 API | 说明 |
 |---|---|---|
-| `ui` | `toast(msg)`、`toastMessage`、`sidebarCollapsed`、`toggleSidebar()` | 外壳 UI |
+| `ui` | `toast(msg)`、`toastMessage` | ⚠️ 第 90 期**删掉了** `sidebarCollapsed` / `toggleSidebar`：侧栏折叠态改由 `ui/sidebar` 的 `SidebarProvider` 经 `useSidebar()` 下发（单一真值源） |
 | `auth` | `token`、`user`、`displayName`、`ready`、登录/注销 | 鉴权（token 存 `nf_token`） |
 | `library` | `books`、`loaded`、`loadBooks(force?)`、`loadLibraries(force?)`、`loadLibraryFacets(force?)`、`getBookDetail(id)`、`patchProgress(id, pct, at?)`、`currentLibraryId` | **各 loader 有单飞闸**（并发共享同一次请求）；`patchProgress` 就地回写不重拉整库 |
 | `stats` | `data`、`error`、`load(force?)` | `/api/stats` 缓存，供 13 个部件共用；**按书库单飞** |
@@ -158,3 +180,6 @@ components/
 6. 组件级测试放同目录 `*.spec.ts`（显式 `import { describe, it, expect, vi } from 'vitest'`；**不开 globals**）；
    挂载前需要 `Element.prototype.scrollIntoView = vi.fn()`（happy-dom 未实现）。
 7. 改完跑四连（`type-check` + `test:unit` + `build` + `deploy`）——`vitest` 不校验模块导出完整性。
+8. **窄屏（第 90 期）**：断点只认 `lib/viewport.ts` 的 `NARROW_QUERY`（≤639.98px），**别再抄一份** ——
+   本项目**不跟**上游的 768px（640–767 要保持两栏）；改折叠 / 宽度只改 `SidebarProvider`（`useSidebar()` 是唯一出口），
+   别在页面里另建一份折叠状态。第三方原语（`ui/sidebar`、`ui/sheet`、`ui/tooltip`、`ui/separator`）**逐字对齐 BookOrbit**，不自创。

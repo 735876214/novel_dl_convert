@@ -214,7 +214,15 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 
 - **路由**：hash；`views/` 页面；设置页与工具页各有一个注册表驱动（`data/settingsNav.ts` / `views/tools/ToolsLayout`）。
   **设置页由注册表生成路由 ⇒ 删条目即删路由与侧栏项。**
+- **外壳（第 90 期）**：`App.vue` 的根是 `SidebarProvider`（`components/ui/sidebar/`，逐字对齐上游 BookOrbit）——
+  它同时是**折叠态 / 宽度 / 窄屏判定**的唯一真值源，经 `useSidebar()`（provide/inject）下发；
+  `--sidebar-width` / `--sidebar-width-icon` 两根变量由它挂在外壳根节点上，侧栏卡片与内容区同一帧一起动。
+  形态照**视口**分三种：**≤640px** 抽屉（`ui/sheet`，`Teleport` 到 body、遮罩 `--scrim`、Esc 关闭）、
+  **展开**（默认 240px，可拖 224–480）、**折叠**（图标条 3rem，`data-collapsible="icon"`）。
+  折叠态与宽度存**本机**（`lib/sidebarPrefs.ts`，`nf_sidebar_*`）——**不进**服务端偏好同步（屏幕属性，不是人的偏好）；
+  ⌘/Ctrl+B 开合、边缘 Rail 点击开合 / 拖拽调宽（3px 阈值分家）。断点唯一真值源 `lib/viewport.ts` 的 `NARROW_QUERY`。
 - **状态**：Pinia。store 分三类：外壳（ui/nav/theme/auth）、数据（library/stats/collections/activity/tasks…）、偏好（displayPrefs/shelfPrefs/coverPrefs/dashboard/statsChartPrefs/prefSync）。
+  ⚠️ 侧栏折叠态**不在** `stores/ui.ts` 里（第 90 期从那里删掉了 `sidebarCollapsed` / `toggleSidebar`，改由 `SidebarProvider` 独占）。
 - **偏好同步**：`lib/prefsPayload.ts` 定义 **7 个载荷块**（reader/pdf/comic/audio/appearance/cover/shelf），与后端 `server.PREFS_BLOCKS` **必须同批改**（契约 `tests/test_prefs_shelf_block.py`）；变更经 `prefsBridge.notifyPrefsChanged` 广播，`suppressing` 防回环。
 - **单一判据集中在 `lib/`**：路径 `paths.ts`、阅读阈值 `readingThresholds.ts`、续接 `seriesNext.ts`、图表 `charts.ts`、书卡信息 `bookInfo.ts`、能否打开 `bookOpen.ts`、进度取哪行 `readingProgress.ts`、话↔百分比换算 `unitsProgress.ts`、会话 `readingSession.ts`。
 - 仪表盘部件走注册表（`components/dashboard/widgets/registry.ts`）；统计图表目录 `lib/statistics-charts.ts`（30 张）。
@@ -228,9 +236,16 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 2. 请求路径不扫盘（读索引）；书目列表并发只拉一次。
    改了「条目边界或卡片字段口径」⇒ `library.SCAN_RULE_VERSION` +1（否则存量索引不自愈，改完看不到变化）。
 3. `db` 只经 `db._connect()`；软删除读点带 `deleted_at=0`。
-4. 命名规则 / 路径判据 / 阈值 / 续接 / ISBN / CFI / 序号单元 / 话↔百分比 等判据各只有一处实现。
+4. 命名规则 / 路径判据 / 阈值 / 续接 / ISBN / CFI / 序号单元 / 话↔百分比 / **窄屏断点（`lib/viewport.ts`）** 等判据各只有一处实现。
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
    ⚠️ **第 82 期显式新增运行时依赖 `vue-draggable-plus@^0.6.1`**（仪表盘部件行内拖拽）：理由是原生 HTML5 DnD
    在 iOS/Android 触屏**不触发** `dragstart`（浏览器限制），卡片拖动需要触屏可用；约 13–15 KB gzip、无运行时传递依赖。
+   ⚠️ **第 90 期显式新增四个运行时依赖**（外壳侧栏照搬上游 BookOrbit 的 shadcn-vue 实现，自造等价物成本更高、且必然与上游越走越远）：
+   `reka-ui@^2.10.5`（无样式原语，侧栏抽屉 `Dialog`、`Tooltip`、焦点陷阱与 `aria-hidden` 都靠它）、
+   `@vueuse/core@^15`（`useMediaQuery` 等）、`class-variance-authority@^0.7.1`（`SidebarMenuButton` 的 size/variant 表）、
+   `@lucide/vue@^1.50`（图标，按需引入）。
+   **四者都只在前端构建期打包、运行期不出网**（字体 / 图标一律随 bundle 自托管，符合第 80 期口径）。
+   实测代价：主包 `index.js` 1,173,783 → 1,237,288 B（**+63.5 KB raw**；gzip 365.15 kB，构建输出），
+   其中还含本期新写的侧栏/sheet/tooltip 代码本身。`clsx` / `tailwind-merge` 是**既有**依赖（`lib/utils.ts` 的 `cn()` 用它们）。
 7. 新的后台线程必须进测试收尾清单（`_quiesce_background`）。
