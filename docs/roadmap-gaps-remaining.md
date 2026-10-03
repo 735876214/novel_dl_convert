@@ -2419,6 +2419,182 @@ PDF·漫画进下一册 / 有声书接下一轨，**翻页模式预取不做**�
   （首次向导才建），故未走完「有书 → 开始预览 → 看到顺序」的链路；该链路由 22 项单测
   （含 plan 的逐本顺序断言）覆盖。你在自己实例里点「开始预览」即可看到。
 
+## 第 62 期（2026-09-27）：书目索引落库 / TXT 只入库不转换 / PostgreSQL 后端 / Redis 缓存 —— 从「42 秒」起底
+
+**来源**：线上实例（`http://192.168.0.95:8992`，改造前逐接口计时）暴露的性能问题：`/api/books` **42.4s**、`/api/libraries` **41.9s**（响应体只有 1.8 KB）、`/api/books/export` **43.1s**、`/api/stats` **28.6s**、`/api/authors` **22.4s**；3 个库共 266 本，42s ÷ 266 ≈ **158 ms/本**。本地开一次 zip 读 OPF 只要几毫秒 —— 量级差只有一个解释：书库挂在 NAS 上，`probe_epub` 里几十次 syscall 每次都在付网络往返（254 KB 的 JSON 走局域网只要 0.1s）。**瓶颈 100% 在后端扫盘**：书目从不入库、每次请求现扫磁盘；`_books_of` 还先算目录指纹再查缓存（命中也要付一次全目录 stat，指纹还要递归 rglob），未命中就 `_scan_once`，而这一步在锁外、没有单飞，并发请求各自重扫。本期分 A/B/C/D 四阶段 + 三笔修正。
+
+### A. 书目索引落库（新增 `core/catalog.py`，`95a73b3`）
+
+- **请求路径不再扫盘**：`books()` / `by_id()` / `_book_counts()` 分别变成一条 SELECT、一条按 `book_id` 的索引查询、一次 GROUP BY。
+- **增量判据 `(size, mtime)`**：条目没变就整段跳过、**不开 zip** —— 266 次 stat 与 266 次「开 zip + 读 container.xml + 读 OPF + 找封面 + 遍历 manifest」是两个量级（线上 42 秒的全部来源）。
+- **单飞靠每库一把锁**：同一库的并发刷新合流；**不新起任何线程**（刷新只从请求线程与既有监听线程发生，不触发仓库「新增旁路线程必须进 conftest 收尾清单」那条纪律）。
+- 删行按 `(root, rel)` 精确删；upsert 按 200 条一批提交（网络存储上不必付几百次 fsync）。
+- **主键 `(library_id, root, rel)`，不是 `(library_id, rel)`**：一个库可持多个来源文件夹（第 41 期 `source_dirs`），两个根下同名文件合法；用两列会把这两本**静默合并成一本**，`by_id` 的 `BookIdConflict` 从此消失，进度 / 批注会写到错的书上。
+- `library.py` 把「探测」与「拼装」拆成 `_probe_entry`（昂贵、**只依赖文件自身**）/ `_cheap_facts` / `_row_of` / `_apply_overlay` 四段；删掉 `_dir_signature` / `_entry_mtime`；遍历顺序精确复刻改造前（`_order_key` 按路径分段比较 —— 顺序有语义：`id_conflicts` 把每组 `items[0]` 当保留项）。
+- `invalidate()` 改为「标脏 + 只失效涉及的库」，`_libraries_changed(lid)` 只失效一个库（改造前无参调用清空所有库，是「新建书库很慢」的一半）。
+- 新增 `core/sqlcompat.py` 方言适配：后端由 `NOVELFORGE_DB` 选择，**默认 sqlite**，不设时全仓行为与第 61 期逐字节一致、离线测试零变化；`?`→`%s` 做**字面量感知**扫描，不能机械翻译的构造（`INSERT OR REPLACE` / `AUTOINCREMENT` …）撞上即大声失败、不静默放过。
+- 修一个被索引化**显形**的既有缺陷：`metastore` 拿卡片「生效值」（override > online > opf）当「OPF 原值」判断「用户改过没有」，用户改过书名后判据恒假 ⇒ 刮削**静默不再内嵌任何元数据**；改从文件派生值取 OPF 原值（新增 `catalog.raw_book` / `library.by_id_raw`）。
+- `api_book_detail` 由「遍历全部库比对 id」改为 `by_id` 直查并补 `library_id`（只按 name 找会在两库存在同名相对路径时翻出**另一本**的章节树）。
+
+### B. TXT 收敛为「只入库不转换」+ 分章行首锚定 + 编码探测按字符分布（`9cf3877`）
+
+- **D1 只入库不转换**：`pipeline.EBOOK_EXT` 纳入 `.txt`，`.txt → convert_txt` 特殊分支删除（`watcher` 里**另有一条**同类分支也删，差点漏掉）；删 `core/ebook_convert.py` 整个模块与 Calibre 依赖，`FORMAT_CHOICES` 收敛为只剩 `epub`；前端「本地转换」工具页改名「本地导入」（它做的是手动投递入库，不再是转换）。
+- **D2 分章行首锚定**：消除「正文里夹一句『他说第 3 章讲过』被当边界」的误切（旧契约刻意钉住的现状用例**反转**）；补「卷单独成行、`【第1章】/（第三章）、全角句点、No.3、Chapter 3`」等形态；序章 / 番外等改**捕获整行**；`CHAPTER_RULE_VERSION` 写进 `txtcache` 指纹（规则一变即重切重转）。
+- **D3 编码探测修缺陷**：旧顺序里 **big5 是死分支**（GB18030 能解绝大多数 Big5 字节序列而不抛异常，繁体书被解成乱码却「成功」）；改为按**字符分布**判据 —— 同一段 Big5 文本 `gb18030` 得 **-2.43**、`big5hkscs` 得 **+1.71**；反过来 GBK 文本 `gb18030` 得 **+1.96**、`big5hkscs` 得 **+0.55**（两个方向都不矫枉过正）。采样默认 256 KB 头部、纯 ASCII 时补 64 KB 中段、仍纯 ASCII 才读全文。
+
+### C. 老库全量搬进 PostgreSQL（后端可选，`861156a`）
+
+- **后端是可选、不是替换**：`NOVELFORGE_DB` 默认仍 sqlite，不设时全仓行为与第 61 期逐字节一致、离线测试照常跑；`=pg` 时 SQL 经 `sqlcompat` 翻译交给 psycopg；半配置状态（选了 pg 却没给 DSN）**直接启动失败**、不静默回落 SQLite。`db.py` 那 35 张表、198 个函数搬到 PG，**公开函数签名与 `_Conn` / `_Result` 代理一律不变**（那是 24 个模块的契约）。
+- 新增 `core/pg.py`（连接层）：RETURNING id 只对确有 IDENTITY 列的表追加（本仓有一半表的 id 是 TEXT 主键）；语句失败先 rollback 再抛；关掉自动预备语句；补语句级串行 + `db._connect()` 双检锁。
+- **本次最贵的一条教训 —— 事务边界对齐 sqlite3 老模型**：psycopg 对**每条语句**都隐式 BEGIN（含 SELECT），不补齐差异就留下 idle in transaction 的连接攥着 ACCESS SHARE 锁 —— 实测把 `DROP SCHEMA … CASCADE` 永久挡在 `wait_event_type=Lock` 上（事务龄 2 分 53 秒纹丝不动），全量测试跑到 4% 再也不动。
+- 新增 `core/pgmigrate.py`（一次性搬迁）：逐表按**列交集**搬、500 行一批、幂等；`SKIP book_index`；幂等标记写在 PG 的 `app_state`；**顺序坑**：`auto_migrate()` 必须排在 `db.init()` 的 `_seed_user` 之前（反过来空 PG 会先冒 admin/changeme 壳，搬来的 users 行撞 `UNIQUE(username)` 被 `DO NOTHING` ⇒ 用户升级完口令被**静默重置成 changeme**）。原 SQLite 文件一个字节都不改。
+- 部署：`requirements` 加 `psycopg[binary]`；compose 加 postgres 服务（healthcheck）；`docker-compose.test.yml` 刻意留在 SQLite（别把老后端变成没人跑的代码）。
+
+### D. Redis 缓存层（可缺席的一层，`6a7f11e`）
+
+- 新增 `core/cache.py`：`NOVELFORGE_REDIS_URL` 不设 = 整层空操作（**连客户端都不建**）；设了但连不上 = **静默降级为「每次未命中」**；**连续失败即熔断 30 秒**（否则 Redis 挂掉就从省时间变成每个请求多等 0.5 秒）；socket 超时 0.5s。挂了三处：章节正文（**唯一明显收益处**）、书目列表（收益有限、如实标注）、封面（只覆盖「从文件里读」的两条分支；服务端 `meta_cover` **不进缓存**）。失效收敛到 `catalog.invalidate()` 一处。
+- **本机（SSD）实测 300 本 / 900 章：章节翻页「无缓存 2.63 ms / 命中 2.57 ms」—— 本机就是打平**（一次 zip 读与一次 Redis 往返同价），列表那处也打平（20.6 / 20.6 ms）。之所以仍接，是因为线上不是本机（书库挂 NAS）。
+- 验收数据：`/api/books` 冷 20.6 ms | 热 20.6 ms（打平）；章节翻页未命中 3.95 ms（多付一次往返）；内存 900 章 ≈ 4.40 MB；命中率一次会话 0.52 / 稳态 1.0。
+- **故障演练**（真 uvicorn + 真容器，中间 `docker stop nf-redis`）：停掉之后服务照常 200，代价是紧接着的两次请求各等一次超时（**1.03s / 0.52s**），随后熔断生效回到 4 ms；`docker start` 之后自动恢复并重新写键（不等重启）。
+
+### 补：三笔修正（收尾）
+
+- **`fe5f58e` 增量刷新每文件 3 次 stat → 1 次**：`_iter_book_entries` 改用 `os.scandir`（读目录项自带的类型，不发 syscall；`d_type` 不可用的文件系统回落一次内部 stat），`_cheap_facts` 用已经拿到的那次 stat 判目录。实测（300 本，模拟 5ms/次 syscall）：写后第一个请求 **4956.8ms / 903 次操作 → 1686.9ms / 304 次操作**；全量重探 **6740.0ms / 1201 次 → 3463.3ms / 602 次**。用例拿**计数**钉住（本机 SSD 上怎么改都是绿的，只有计数能表达「省下了什么」）。
+- **`bcde7ff` PG 迁移后自增序列不推进**：`GENERATED BY DEFAULT AS IDENTITY` 在**显式给值**的 INSERT 上不推序列，搬迁把老库 `id` 一并搬来 ⇒ 搬完 N 行序列仍停在 1，第一次写入撞 `duplicate key … (id)=(1) already exists`；`_seed_user` 也不带 id ⇒ 老库账号名不叫 `admin` 时**服务直接起不来**。修法：`migrate()` 收尾 `_reset_sequences()`。老夹具 `progress` 少一列 `id`（真实老库一定有）才让 bug 一路绿过去。
+- **`2308b2c` 全库失效的判据比「序号」不比「时刻」**：`time.time()` 粒度实测约 **15.6 ms**（连续调 2000 次结果全同），「写文件 → `invalidate()` → 立刻读书目」正好落在同一刻度 ⇒ 库被判成不脏 ⇒ 新文件不在书目里（偶发红灯 `test_annotation_export`）。改成单调递增序号 `_dirty_all_seq` / `_refreshed_seq`；`_is_stale` 与 `_needs_refresh` **两处判据都要改**。
+
+### 验证
+
+- A：新增 `tests/test_catalog.py` 17 例（与「全量扫盘」逐字段对拍、增量闸门、多根同名不合并、`by_id` 语义不变、overlay 与封面照常）。离线（sqlite）全量 **970 passed / 6 skipped**；PG 后端全量 **975 passed / 1 skipped**。
+- B：后端全量 **969 例全绿**（新增 17 例 catalog + 13 例分章与编码契约，反转 1 例旧契约）；前端 `type-check` 零错误、`vitest` 10 文件 / 89 例。
+- C：离线 970 / 6；PG 975 / 1。新增 `tests/test_pgmigrate.py` 7 例。
+- D：新增 `tests/test_cache.py` 9 例；离线 **979 / 6**，PG **984 / 1**。用例需要**真** Redis，连不上就 skip（默认连本机 6380 的 db 15，绝不碰生产的 db 0）。
+- 三笔补：`fe5f58e` 后 979 / 984；`bcde7ff` 后 SQLite **992 / 7**、PG **998 / 1**；`2308b2c` 后 SQLite **1131 / 0 / 0 / 7**、PG **1131 / 0 / 0 / 1**。
+- ⚠️ 性能回归待部署后对同一实例复测（线上 42s 那一组数字是**改造前**基线）；本仓无第 62 期收尾的线上复测记录，如实标注 —— 把接口从 42 秒降到亚秒的是书目索引，不是 PG。
+
+---
+
+## 第 63 期（2026-09-27）：详情页对齐 BookOrbit v3.1.0（六阶段合一）
+
+**来源**：用户给了 Book Orbit v3.1.0 详情页的五张截图作样板，要求按它完善本项目。分六个阶段推进，前段先把壳搭好，后面的阅读日志 / 文件面板 / 元数据扩展都往这个壳里填。
+
+### 1/6 详情页骨架重做（`8d5ad68`）
+
+- 649 行的 `BookDetailView.vue` 按标签拆到 `components/book/detail/`（6 个文件），本文件降到 211 行，只留**取数与编排**；新抽出的 hero / 概览 / 各标签一律**收 props 不自己取数**（否则同一本书请求三遍、三份副本各自过期）。`MetadataEditor` / `ReadingRecord` 保持自取数据不动。
+- 新增 4 个 `ui/` 组件，都是**归并**而非新造：`TabBar` / `ProgressBar`（抽前详情页手写了一份 `h-1.5 bg-primary`，比例只留一个真值源）/ `RatingStars`（抽前有三份各写一遍；`readonly` 时渲染 span 不渲染 button）/ `StatTile`（本期尚无调用点，3/6 期的阅读日志四格是第一个消费者）。
+- 排布对齐样板：进度与星级**上提 hero**；相似书**带封面 + 横向滚动**；0 星 = 未评分 → 整块不渲染（画五颗灰星会被读成「打了 0 分」）。
+- **修两个静默 bug**：① 「暂无成品文件」`EmptyState` 的 `v-else` 挂在了**相似书**的 `v-if` 上 ⇒ 没有相似书的书会多渲染一块「暂无成品文件」；② 面包屑读全局 `shelfTitle` ⇒ 深链进来显示一本**别的书架**的名字。顺带修「详情拉取失败、但书架缓存兜底」被渲染成空壳 —— 改给错误提示条 + 重试。
+- 验证：新增 `BookDetailView.spec.ts` 8 条（该页此前**零测试**）；**实测两条回归用例的判别力**（把 `v-else` bug / 面包屑改回去 → 对应那条红）。后端 980 passed / 6 skipped。
+
+### 2/6 阅读追踪数据层（`cf40106`）
+
+- 会话边界：心跳带 `session_uid`，一段只留**一行**（新增 `db.upsert_session`，`ON CONFLICT(book_id, session_uid) DO UPDATE`）；`start_*` **刻意不进 SET 子句**（起点是 `CHANGE` 列的被减数）；不做「离开时写一行」（浏览器崩了 / 关标签页，那一两小时会**凭空消失**）。
+- 「未知」用 `-1` 哨兵（新增 `db.SESSION_UNKNOWN`），`_session_row()` 一次性转 `None`；`source` 空串 = **未知**不是「其他」（事后猜一个值就是造假），新增 `db.SESSION_SOURCES`。
+- 前端新增 `lib/readingSession.ts`（`createSessionReporter()` 管边界与累计，可脱离网络驱动）：uid 刻意**不用 `crypto.randomUUID()`**（安全上下文限定，局域网明文访问下它直接不存在）；`stop()` 的顺序是「先同步把这一段交出去、再清空、最后才等上报」（反过来会把新段的 uid 一起抹掉）。
+- **PDF / 漫画开始计时**（此前一秒都不记）：`attachReaderClock()` 是整个会话链路唯一的 DOM 接触点；音频那一路**不用它**（判据是「音频在不在播」，不是「页面可不可见」）。
+- 修一个真 bug：`visibilitychange` 是在状态**已变之后**才派发的，旧写法按当前可见性结算 ⇒ 每次切标签页静默吞掉最多 30 秒。
+- 接口：`GET /api/books/{bid}/stats` **一页一端点**；没读过时 `reading` 是 `null` 而非全 0 对象。与计划两处主动偏差：不做独立 `/sessions` 端点、`attempts` 不放进 `/stats`。
+- 验证：新增 `tests/test_book_reading_log.py` 12 例 + `readingSession.spec.ts` 23 例；判别力实测（如把 `start_*` 加进 SET 子句 → 心跳那条红，**第一版用例无效**、改了数据才有判别力）。SQLite 992 passed / 6 skipped、PG 997 passed / 1 skipped。
+
+### 3/6 阅读日志标签页（`076aee0`）
+
+- 详情页第 7 个标签，四块面板（READING / SESSIONS / PROGRESS OVER TIME 双轴图 / ATTEMPTS）+ RECORDS 四格。**推翻第 30 期「按书日志不在详情页（避免与 /log 重复入口）」的旧决定** —— 判据是 `/log` 的「按书」卡只给一行摘要，会话级流水与双轴图只在详情页有（非重复入口）。
+- 每块自己判空，不设一个总的「有没有读过」闸门（标过「在读」但没在网页打开过的书没有会话、却有轮次）。
+- 「未知」不写成 0：`change` 为 `null` 显示「—」、`longest_streak` 为 `null` 那一格**不渲染**、`pages` 不可信则「阅读速度」不渲染。
+- `lib/readingPace.ts` 抽成一份 `/log` 与详情页共用；图表懒加载必须**显式传 `active`**（标签用 `v-show`，光靠 `v-if` 拦不住 800 kB 量级的 ECharts chunk）。构建产物核对：主包 `index-*.js` 里 `echarts` **零命中**，只在 `charts-*.js`（806 kB），StatsView 从 894 kB 瘦到 88 kB。
+- 验证：新增 `ReadingLogTab.spec.ts` 12 条、`readingPace.spec.ts` 6 条；判别力实测 2 处。vitest 14 文件 / 141 条。
+
+### 4/6 进度按文件维度（`5ee741d` 后端 + `83a3eca` 前端）
+
+- `progress` 加列 `file_rel`，唯一约束 `UNIQUE(book_id)` → `UNIQUE(book_id, file_rel)`（EPUB + PDF + 漫画的书各存各的读点，不再互相覆盖）。
+- **书级进度 = `updated_at` 最新的那一行**，不另存一份；`file_rel=''` =「这本书自己 / 不知道文件」（KOReader / Komga / 标记已读完走这条，行为逐字节不变）。
+- 三处硬骨头（都写在代码注释里）：改约束**只能重建表**（补一列是「看起来成功了、其实没生效」的假修复）；重建复制行**不带 `id`**（否则撞第 62 期补的 PG 序列坑）；重建**不在一笔事务里** ⇒ 有半成品自愈，判据是「**源表每一行在新表里有没有着落**」而不是比行数，判决一律「留数据」。
+- 前端新增 `lib/readingProgress.ts`（**三阅读器共用**）：「先按本文件查；本文件没读点 ⇒ 回落书级，但**只认『说的不是别的文件』的回落**」（书级可能是 PDF 读出来的页码，拿去章节流会跳到毫不相干的地方）；`AudioPlayer` **刻意不带** `file_rel`。
+- **诚实边界**：四个阅读器都读不到非主文件 ⇒ 详情页成品文件列表**不给继续阅读入口**（点不动的假交互），本期只把数据契约与落点先立住。
+- 验证：新增 `tests/test_progress_per_file.py` 24 条；变异实测 2/2（`_progress_file` 绕过 `safe_path` → 红，证据里出现指向**库根之外**文件的 CFI）。SQLite 1023 passed / 7 skipped、PG 1023 / 1；前端 vitest 15 文件 / 149 用例。
+
+### 5/6 文件标签重做 + 元数据编辑器扩充（`ab4ee0d` + `3238dad`）
+
+- **文件标签（`ab4ee0d`）**：book 条目里的 `path`（**服务器上的绝对路径**）此前被**六个端点**不做投影就发了出去（前端从未消费）⇒ 决策 6「路径按访问来源区分」要真成立就必须是「服务端不给」，不是「前端不显示」。新增投影 `_card(b)` 丢掉 `path`，六处收口；新增 `GET /api/books/{bid}/local-paths`（本机 / 局域网给「库内相对路径 → 绝对路径」，响应 `no-store`）。判据 `_is_local_request` **绝不解析** `X-Forwarded-For`（客户端可随便伪造）；`FilesTab` 重做 + 目录型有声书如实说清。
+- **元数据编辑器（`3238dad`）**：元数据面 11 → 21 项（`subtitle` + 9 个提供商 ID，均**无 OPF 对应物**、经 `meta_override` 落库，绝不写回书文件）；4 家源**刻意不开字段**（抓到的只是页面 URL，不是该站原生标识）；修一处既有静默失效（`_FINALIZE_FIELDS` 写 `year` 而 plan 按字段名 `date` 查 ⇒ 预设里「出版年」那一档**从来没生效过**）；`metascore` ISBN 由 **10.0 → 5.5**、9 个 ID 各 0.5（合计仍 100）；前端新增 `lib/metadataFields.ts` 收口那 21 项（原先四处各抄一遍、已抄出过事故）。
+- 验证：`tests/test_local_paths.py` 28 条、`FilesTab.spec.ts` 19 条；`tests/test_provider_ids.py` 25 条、`MetadataEditor.spec.ts` 9 条；变异实测后端 4 处 / 前端 6 处。SQLite **1079 passed / 7 skipped**、PG **1079 passed / 1 skipped**；vitest 17 文件 / 177 用例。⚠️ `isbn10` / `isbn13` 分离**不在本期**（要动被 Komga / CSV / Hardcover 匹配 / 出版副本四条外部链路消费的 `isbn` 键）。
+
+### 6/6 批注位置锚 + KOReader 导出文件导入（`cb09c20`）
+
+- **位置锚要两个字段**：`anchor`（来源原生，如 KOReader 的 XPointer，本应用**不能**定位，只用于导入去重与溯源）+ `start_off` / `end_off`（本应用阅读器自己算的**章内字符偏移**，能定位）；取偏移与还原区间**共用同一个遍历**（`lib/textAnchor.ts`）；**验不过就不画**（偏移是位置不是内容，书文件换了老偏移仍合法、会指到无关文字，**比不画更糟**，交给文本搜索兜底）；老库补三列、存量行回落 `''/-1/-1`（回填 0 会让老批注全指到章首）。
+- **导入走文件不是 kosync**：官方 kosync **没有批注端点**（客户端只有 4 个方法、服务端只同步进度），KOReader 批注跨设备同步走 `<书名>.annotations.lua` 文件；导入**幂等**（六计数相加必须等于送进来的条数）、**永不删除**、反向**不许**（本项目删掉的墓碑不会被再次导入复活 —— 删是比同步更强的意图）；`annotations(book_id, origin, anchor)` 上**故意不建唯一索引**（真建会复刻 bookmarks 那个坑 ⇒ 整本书的批注静默丢失）。
+- 高亮页：导入**两步走**（先 `apply=0` 只看不写，看到条数再确认落库）；空态两张卡**不摆 Kobo**（没实现）；`lib/annotations.ts` 收口口径 + 基于 `import.meta.glob` 的回归锁（全仓再出现 `chapter + 1` 就红）。
+- 验证：新增 `tests/test_koreader_anno.py` 39 条、`tests/test_annotation_anchor.py` 11 条；变异实测 `annotations.ts` 8/8、`textAnchor.ts` 8/8、ReaderView 4/4、AnnotationsView 2/2，兜住两类**真实测试缺口**。pytest SQLite **1131 / 0 / 0 / 7**、PG **1131 / 0 / 0 / 1**；vitest 20 文件 / 229 用例。
+
+---
+
+## 第 64 期（2026-09-27）：删书 / 书卡 ⋮ 菜单 + 快速预览 / 三项子菜单
+
+**来源**：上游 Book Orbit 的书卡形态（提交正文引「上游图 1 的九项」）与删书需求。⚠️ 本仓无逐期记录，本段按提交正文与代码复原。
+
+### 1/3 删书 —— 只回收不真删，关联数据一律保留（`2d85c8c`）
+
+- `DELETE /api/books/{bid}`：文件移入回收目录（`publish.recycle`，收**绝对路径**、文件与目录都行 —— 有声书整本就是一个目录），索引标脏交给下一次增量刷新，刮削台账降级为 `source_removed` 而**不删行**，落一条「清理」审计日志。响应回 `{ok,id,name,recycled,siblings}`（`siblings` 供确认文案点名）。
+- **刻意不清**进度 / 批注 / 评分 / 状态 / 收藏：`book_id` 由「库 id + 文件名」派生 ⇒ 文件从回收目录放回原路径数据就接回来，**删书因此可撤销**；清掉批注（用户手写的笔记）则不可逆。依据写在端点 docstring 里，免后人「顺手」补一个 purge。
+- 顺带修一个已存在的真 bug：`/download/{name}` 写死 `OUTPUT_DIR` 拼路径（多库下必 404），且单段路由接不住 Komga 布局的库内相对路径（`三体/三体 #1.epub`）⇒ 改成 `fileops.safe_path(name, library_id)` + `{name:path}`。
+- 验证：`tests/test_book_delete.py` 16 例，**每条都做了变异实测**；另加 `downloadUrl.spec.ts` 4 例钉编码口径。基线 pytest SQLite **1147** 例、PG 1147；vitest 21 文件 233 例。
+
+### 2/3 书卡 ⋮ 菜单 + 快速预览（`4bfa345`）
+
+- 网格 / 列表 / 表格三视图各接一个 ⋮，菜单五项：阅读（收听）/ 快速预览 / 下载 / 书籍详细信息 / 删除。上游九项里的「通过电子邮件发送」按决策**不做**（不出现、不灰置、不占位）；**缩略图点击行为一个字没改**。
+- 状态放 `lib/bookMenu.ts` 单例（`openKey` 只有一个 ⇒「同时只开一个」是**数据结构的结果**）。菜单面板 **Teleport 到 body**（**全仓第一处**）—— 外壳内容卡片带 `backdrop-blur-md` + `overflow-hidden`，`backdrop-filter` 会成为 fixed 后代的包含块；表格卡 `overflow-x-auto` 又两轴裁剪，面板挂在页面内怎么定位都会被裁。
+- 网格卡**必须改结构**：菜单项都是 `<button>`，HTML 解析器遇到内层 button 起始标签会直接闭合外层 button（封面与「封面下方那几行字」拆成两个按钮，`⋮` 落封面右下角，**系列行不给菜单**）。
+- 新增 `BookPreviewDialog`（内容**全部取自书卡**，详情请求只补「N 章」；拉失败只在该行位置说明、绝不把真数据换成错误页）；`lib/bookOpen.ts` 作「能不能在线读、去哪儿」的唯一判据；`stores/library.ts` 加 `forgetDetail`（详情缓存无失效机制，删完书退回详情页会命中缓存渲染一本不存在的书）。
+- 顺带修一个真 bug：上一段提交里 `ShelfView.vue` 少了一个 `</div>`（整个模板编译不过），而 `npx vue-tsc --build --force` 对它是 **exit 0**（把这个 `</div>` 再删掉重跑仍然 0）—— 只能靠「真去 mount 这个页面」的 spec 抓，`ShelfView.spec.ts` 是本页第一份 spec、就这么抓到的。
+- 验证：`bookMenu.spec.ts` 5、`BookActionsMenu.spec.ts` 16、`BookPreviewDialog.spec.ts` 7、`ShelfView.spec.ts` 6（三视图触发器计数是「三个视图都留了入口 + 系列行不给菜单」的唯一哨兵）；变异实测 3 处。基线 SQLite 1149、PG 1149；vitest 25 文件 267 例。
+
+### 3/3 三项子菜单 —— 收藏 / 状态 / 编辑元数据（含 `?tab=` 深链，`55b1b01`）
+
+- 三项都是「已经存在的能力换一个入口」，无新增数据模型。子菜单用**行内手风琴**（面板已是 Teleport + fixed，再叠一层要再写一套定位与 outside-click 语义）；同一时刻只开一个，靠「只有一个变量」而不是互斥规则。
+- ⚠️ 实参顺序是**收藏夹在前**（`addToCollection(collectionId, bookId)`）—— 反了不报错，只会往一个错误的收藏夹里塞书。
+- 「设置状态」**绝不用 `statusLabelOf` 打勾**（它在没有状态行时按进度兜底推导，会把「从没设过状态」显示成「他标了未读」）；五态文案收敛成 `lib/readingThresholds.ts` 的 `READ_STATUS_OPTIONS`。
+- 「编辑元数据」指到 `/book/:id?tab=metadata`：`?tab=` **只当初值**，切标签**不写回 URL**（写回意味着每点一次标签压一条历史、分享链接会带别人的浏览位置）；值不认识就落回概览，不抛错、不白屏。
+- 验证：`BookActionsMenu.spec.ts` 扩到 28 例、`BookDetailView.spec.ts` 加 4 例深链。深链四条断言的是**面板的显隐**（查 `style.display`）而不是整页文本（七个面板全 `v-show`，按文本断言是**假哨兵**）；变异实测 2 处。`vue-tsc` 这一轮抓到 spec 里两处真问题（桩写成 `{ ok: true }`，而接口返回 `ReadingStatus`）。基线 SQLite 1149、PG 1149；vitest 25 文件 283 例。
+
+---
+
+## 第 65 期（2026-09-28）：Book Dock 一级入口 + 顶栏图标行 + 重命名 / 匹配书库
+
+**来源**：两条线合并（用户 2026-09-27 拍板「并入第 65 期」）。
+**线 A 导航改造**（用户原话）：「Book Dock 的入口放在首页-探索发现的下面，与探索发现一级」；「首页左侧栏，迁移任务中心、工具、数据统计、阅读记录、阅读活动、通知中心、成就的入口，放到首页截图所示的位置，与现有的图标位置并排」（图标照上游：圆形描边按钮 + 黑色气泡 tooltip + 数字角标）。
+**线 B 功能**：「根据上游 Book Dock 的功能，实现上传的书可以重命名、匹配书库等功能」。
+
+### 线 A：导航改造
+
+- 侧栏主导航收成 **3 项**（仪表盘 / 探索发现 / **收书目录**）；Book Dock 另开一条**顶层**路由 `/book-dock`，指向与设置里 `admin/book-dock` **同一个组件** —— 不能只留设置里那条：`App.vue` 按 `path.startsWith('/settings')` 判断是否换成设置侧栏。设置里那一条按上游形态**原样保留**。
+- 顶栏图标行：只留顶栏（侧栏不再有那七项）、合并去重（数据统计只保留一个按钮；通知沿用既有铃铛浮层；**任务面板照通知的浮层样式**）。新增 `ui/IconButton.vue` —— 那段 `ICON_BTN` 类原先被**逐字抄了三份**（AppHeader / NotificationBell / AppearanceMenu），本期再加四个入口就是七份。tooltip 是纯 CSS（零 JS），右对齐、颜色写死 `bg-black/85`。
+- `TaskDrawer.vue` 改名 `TaskFlyout.vue`（`git rm` 旧的），骨架与交互逐字照通知浮层；`stores/ui.ts` 的 `drawerOpen` / `toggleDrawer` / `setDrawer` **一并删掉**（撤销掉的入口不能留孤儿状态，留着只会让「再塞个假按钮」变得顺手）。⚠️ 但**轮询没跟着删**（任务数据由 `App.vue` 启动时拉起 + `tasks.syncPolling()` 自管）。
+
+### 顺带修三个真 bug（本期入口做好后用户立刻会点到的）
+
+① `BookDockPage.vue` 同一条 `v-if` 链里两个分支条件**逐字相同** ⇒ 后一个分支永不渲染 ⇒ 条目行一条都不显示（复选框长在条目行里，于是批量按钮永远禁用）；② `library_rules.guard_conflict` 拿 **basename** 去比库内 **rel** ⇒ Komga 布局（`系列/系列 #N.ext`）下**同一本书重复入库被误拦**，平铺布局下 `rel == base` 所以既有测试全绿也压不住；③ `lib/icons.ts` 的 `iconPath()` 对未知键**静默返回空串**，而 `upload` / `folder` 两个键压根不在表里 ⇒ 拖拽遮罩大图标、书库向导文件夹图标一直是**隐形的**（已补键 + 加对表测试钉死）。
+
+### 线 B：重命名 / 匹配书库（后端）
+
+- `db.dock_rename` 换主键（条目 id **就是文件名**）并归零 `retries`（老计数继续拦一个已改名的条目没有道理，历史留在 `activity_log`）；`bookdock.rename` 八步校验**全部在拿锁之前**，锁内只做「改磁盘 + 一条 SQL」。
+- `bookdock._reg_lock` 的不变量写在模块头：**绝不持锁调 watcher 的任何方法** —— watcher 持 `_scan_lock` 时会回调 `on_scan` → `note_scan`（要拿这把锁），反序叠加就是 **AB-BA 死锁**；于是 `reconcile` 改成「锁外快照 + 锁内写库」。
+- `rescan(…, library_id, root)` 三条校验（经 `_ingest_target`）：库必须已登记 / 目标文件夹必须是**该库自己的**（否则这接口就成了「往任意目录写文件」的洞）/ 该库生效白名单必须收得了这个格式（`library.accepts_ext` 是唯一真值源）—— 收进去也扫不到 = **隐形文件**，比直接拒收更糟。⚠️ 一处刻意判断：`supported()` 的早退在**显式指定目标库**时必须让位给 `accepts_ext`，否则「待复核」条目点入库永远静默无效（假交互）。
+
+### 线 B：重命名 / 匹配书库（前端）
+
+- 条目行加两个动作、**只给未入库的条目**（`就绪` 一律不显示）。重命名是**行内输入框**（预填**含扩展名的完整文件名**；只认 Enter / Esc 与 ✓ / ✗，**不做失焦提交** —— 点一下别处就把名字改掉的误伤比「多点一下」贵得多；失败保持编辑态；名字清空时说一句而不是静默关掉）。
+- 「入库到…」是居中弹窗（骨架照 `BookMoveDialog`）：先选库 → 该库的文件夹下拉默认**第一个** → 默认选**第一个收得了这个格式的库**；收不了的库**照列 + 写明原因**（抹掉它用户会以为库没建好）；成功后关弹窗、失败**不关**。id 就是文件名 ⇒ 改名成功后必须重载列表。
+- **复核头七处**：原先多处写着「不做单点目标库 / 文件夹」，逐处写明「原先为什么不做 / 现在为什么做」—— 统一口径是那句仍然成立（设置项确实没有），被推翻的是「由它推出『不能指定目标』」这一步（现在有**按次指定**的入口）。**不新增数据模型**：目标库 / 文件夹只在入库那一刻由用户选、随即透传，不落库、不记忆。
+
+### 验证
+
+- 新建 `tests/test_book_dock.py` **26 例**（该链路此前**零后端测试**）；`test_library_conflicts.py` 补 3 例；前端新增 5 个 spec（`AppHeader` / `AppSidebar` / `TaskFlyout` / `nav` / `BookDockPage`，前四个此前零 spec）。契约测试新增：`BookDockPage.vue` 里那句 `v-else-if` 只许出现 **1 次**（钉住 B1 不许长回来）、图标名对表、五个新 spec 的登记。
+- **变异实测逐条命中并还原**：后端 5/5（去掉 `accepts_ext` / 去掉扩展名检查 / 去掉 `lib is None` 条件 / 去掉 `is_ignored` 检查 / 把「文件夹属于该库」改成恒假）；前端 6/6（动作不按状态显隐 / 入库默认吃列表第一个库 / 提交时不带目标 / 改名失败也退出编辑态 / 收不了也放行 / 渲染文本里写 markdown 星号）。
+- 基线 pytest SQLite **1182 例**（0 失败 / 0 错误 / 7 跳过）、PG **1182** 例（0 / 0 / 1）；vitest 30 文件 319 例；`vue-tsc --build --force` 退出 0。
+- ⚠️ 踩坑：PG 侧只给 `NOVELFORGE_DB=pg` 而忘了 `NOVELFORGE_PG_DSN` 时，夹具会以 `PgUnavailable` 把 831 个用例判成 **error**（不是跳过），必须两个都给才算跑过 PG。
+
+---
+
 ## 第 66 期（2026-09-28）：阅读器「自动续接」收尾 —— 三处收敛为单一真值源 + 默认值统一为开
 
 **范围**（用户拍板）：本期只做核心/低风险项；「打开提速专项」顺延第 67 期。
@@ -4422,3 +4598,152 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
   （「跟随变化」正是最该测的一条，用真实现反而测不到）。
 - **`ui-smoke` 传数组要一次一条路由**：`-Routes '#/a','#/b'` 经 `.cmd` 转发后逗号被吃成一个元素，
   变出一条 `#/a,#/b` 的假路由（度量到的是 404 页）；git-bash 下还要防 MSYS 把 `#/…` 改写成 Windows 路径。
+
+## 第 91 期 · TODO 清理 + 待办收口 + 往期尾巴结清（V0.91.0，2026-10-03）
+
+**需求来源**：用户原话「**todo中已完成的内容删除或迁移到当日日志，完成todo中剩下的任务**」，
+追加「**往期任务，若未完成也加到计划里**」（附第 86 / 88 期尾巴清单）。
+病灶：`docs/TODO.md` 276 行里 **176 行是「已完成」的逐期详情** —— 这些内容在 roadmap / CHANGELOG / memory 里
+都有完整记录，在 TODO 里再抄一遍只会让「**当前还剩什么要做**」淹没在历史里。
+
+**用户拍板的五条口径**：① 第 91 期范围 = 文档三件 + 未登录 401 探测归零 + 元数据来源权重 + 真机核对番茄/起点目录规则；
+② 窄屏顶栏图标行 → **收进「更多」菜单**（高频几个留在外面，顶栏不变高）；③ 跨语言检索词 → **保持「未支持」**、口径写死；
+④ 第 86 期⑦ `online-fallback` → **独立立项**，本期只写口径、**不动代码**；⑤ 第 86 期⑧⑨ + 第 88 期 D 尾巴 → **本期一并收掉**，
+`LocalConvertView` 改成「**投递 + 提示 + 刷新**」。
+
+**开工前核对**：先用 `git log --oneline -12` 确认第 91 期未被并行会话占用（第 84 期被占过一次）。
+用户清单里被当成「未完成」的 6 项经逐条核对**其实已完成**（第 90 期那 7 笔提交 + `v0.90.0` tag + Release），**不重复排期**。
+
+### 一、交付（十件事）
+
+1. **TODO.md 从「流水账」改成「待办台账」**：删掉 P0 整个第 81 期块（内容在 roadmap 第 81 期 + CHANGELOG）；
+   把 `## 2. 已完成（近三期）` 的 **14 个期块 / 117 行**压成一张**交付索引表**（期号 | 一句话 | 版本/指针 —— 细节**删除不迁移**，
+   roadmap + CHANGELOG + memory 已是完整真值源）；改写维护约定为「本文件只放**还没做的**」。
+   **两处例外必须留下**：① 第 81 期的**用户侧遗留动作**（线上点一次「全部按原路径还原」把 ~2400 份 / 68 GB 漫画搬回）
+   → 独立成「⚠️ 待用户确认」；② 「移除书库」零文件触碰 / 「删书」回收三份的**仍然生效的语义** → 已在 `AGENTS.md` 第 1 节，留一句指针。
+2. **roadmap 补第 62–65 期**（本仓此前独缺这四期）：按 84 笔提交逐笔读 `git show --stat` + 提交正文复原四段，
+   插在 `## 第 66 期` 之前；**材料不足处如实写「按提交正文与代码复原」，不编数字**。
+3. **`docs/` 与 `README.md` 去重**：修 `docs/project-overview.md` §7 的过期数字（版本 0.6.0 / 后端 1263 例 / 前端 441 例 38 文件 / 第 73 期），
+   并**改成指向真值源**的写法（版本 → `VERSION`，计数 → 测试基线，逐期 → roadmap），避免下期又过期；
+   同步 `docs/development.md` 文档维护表里 `docs/TODO.md` 那一行的新口径。
+4. **未登录 401 探测归零**（`App.vue`）：`showLogin = ref(!auth.authenticated)`（同步读 localStorage，零延迟）+
+   抽 `bootstrapShell()` + **`@authed` 回调同批复跑** —— 见下面「防回归」第 1 条。
+5. **元数据「自定义来源权重」**：配置键 `metadata_fetch.source_weights`（`dict[str,int]`，默认 `{}`），
+   `metasources.weight_of()` 做**唯一归一**（缺省 / 非法 / 负数 / 未知 id 一律 → 0），`reorder_for_language(weights=…)`
+   排序键 `(-weight, language_tier(...))`；三个调用点同批传参（`metafetch.py` 两处 + `series_meta.py` 一处）；
+   设置页每家提供商行内加 0–9 权重框（带 `aria-label`），文案说清「权重高的永远在前，权重相同才比语种档、再比你设的顺序」。
+6. **窄屏顶栏「更多」菜单**（新建 `AppMoreMenu.vue`，**复用既有 `ui/DropdownMenu.vue`**，零新依赖）：
+   **留在外面**（高频）= `SidebarTrigger` / 搜索框 / 同步状态胶囊 / `NotificationBell` / `AppearanceMenu` / `UserMenu`；
+   **进「更多」**= 数据统计 / 任务 / 工具 / 阅读记录 / 阅读活动 / 成就 / 设置 —— 这 **7 项是唯一入口**（第 65 期已从侧栏撤掉），
+   **不能隐藏，只是换地方**。判据用 `useNarrowScreen()`（`lib/viewport.ts` 的 `639.98px`，全站唯一真值源），
+   `v-if`/`v-else` 切换而**不是纯 CSS 隐藏**（面板 `Teleport` 到 body，CSS 藏不住，且会变成两份断点）；窄屏同时收掉搜索框的 `⌘K` 徽标。
+7. **`LocalConvertView` 改走 ack 链路**：原先 `api.convertFile` / `api.convertPath`（blob 变体）转完把成品 `saveBlob()` **推回浏览器**，
+   而收书目录页走 `convertDrop`（`requestAck`）—— 同一服务端动作、两种客户端语义，页面文案「逐个入库并下载」正是这种怪异。
+   改为复刻 `BookDockPage.vue` 那条链路：**投递 → toast → `refreshInputs()`**；为 `/convert-path` 补对称的 `convertPathDrop`，
+   **彻底删** `convertFile` / `convertPath` 两个 blob 变体（删前再 grep 全仓确认零残留引用）。
+8. **番茄 / 起点目录规则真机核对结论落库**（只改注释 / `note` / `state_note()`，**不动 `verified` 与 `status`**）。
+9. **浮层菜单键盘可达性**（本期新发现的**真缺陷**，见下面「三、实测」第 5 条）：`ui/DropdownMenu.vue` 补键盘支持。
+10. **`online-fallback` 独立立项 + `美利坚财富人生1-3059.txt` 待样本登记**（都只落 TODO 条目，**本期不动代码**）。
+
+### 二、单一真值源
+
+| 判据 | 唯一实现 | 本期动作 |
+|---|---|---|
+| 窄屏断点 | `lib/viewport.ts` 的 `NARROW_QUERY` | 「更多」菜单**不另写断点**，直接 `useNarrowScreen()` |
+| 来源排序 | `metasources.reorder_for_language()` | 加可选 `weights` 参数，**没有第二份排序实现**；归一只有 `weight_of()` 一处 |
+| 权重配置读取 | `metasources.weight_of()` | 三个调用点不各写一份「转 int / 兜底 0」 |
+| 浮层菜单 | `ui/DropdownMenu.vue` | 键盘契约写在**共享组件**里 ⇒ 书卡 ⋮ 一并受益 |
+| 投递链路 | `api.convertDrop` / 新增 `convertPathDrop` | 删 blob 变体，**服务端同一个动作不再有两种客户端语义** |
+
+### 三、实测（实例 8412，全部真机）
+
+1. **D · 未登录 401 探测归零**：清空 `localStorage` 的新访客对 `/api/*` 的 401 探测 **13 → 0**；
+   有效 token → **0 个 401**，且登录后 `api.me()` / `/api/libraries` / `/api/tasks` / `/api/books` 各走**恰好一轮**；
+   篡改 token → 仍有一轮探测、**15 个 401** 之后才弹门禁。
+   ⚠️ **诚实边界（未做取舍，刻意不修）**：`localStorage` 里有 token 但**已失效**时，外壳仍会先挂载并发一轮探测
+   —— 修它就得让**已登录用户冷启动也等一次 `api.me()`**，正是 TODO 里记的那个权衡。
+   本项达成的口径是「**从未登录过的新访客 / 清过 localStorage 的访客 = 0 个 401 探测**」。
+   ⚠️ **测量方法本身踩过坑**：原计划用 `performance.getEntriesByType('resource')` 数 401 —— 该 API **拿不到 HTTP 状态码**。
+   改用 **uvicorn 访问日志里数 `401` 行**。另：第一次测出 13 是因为**测的是旧 bundle**（改了 `App.vue` 没跑 `build`/`deploy`）
+   —— AGENTS.md 警告的那个坑，实打实撞了一次。
+2. **E · 来源权重**：`{}` → `['openlibrary','googlebooks']`；`{googlebooks:9}` → `['googlebooks','openlibrary']`；
+   设回 `{}` → **逐字回到基线**（依赖 `sorted` 稳定性，见「防回归」第 2 条）。界面：14 家提供商各一个权重 `number` 输入（`min=0 max=9`）。
+3. **F · 番茄 / 起点**（经本机代理，`/api/toc/probe` 复核）：
+
+   | 站点 | 探测 | 结果 |
+   |---|---|---|
+   | 番茄 | 首页 | 200 / 164 KB |
+   | 番茄 | `/search?query=` | **404**（9813 B，`undefined_番茄小说`）⇒ **搜索规则失效** |
+   | 番茄 | `/page/<书号>` | **200 / 1.65 MB，匿名 SSR**，正文含 `<a href="/reader/<id>" class="chapter-item-title">` ⇒ **内置目录正则逐字命中**（实测一本 **550 章**全部解析） |
+   | 起点 | `/so/{title}.html` 与 `/book/<id>/` | **202 + 209 B `probe.js`**（反爬 JS 挑战）⇒ **两条规则都用不了** |
+
+   番茄是「**哪一半能用**」说不清，单一布尔 `verified` 表达不了 ⇒ **两条都保守留 `False`**，把实测结论写进 `note`。
+4. **G · 窄屏顶栏**：360 档顶栏 = `["打开侧边栏","通知","更多","外观","账户菜单"]`，「更多」面板**恰好 7 项**、
+   逐个点开都能跳转且面板自动收起；768 / 1280 档仍是 11 个控件的图标行、**无**「更多」、`⌘K` 徽标在。
+5. **I · 键盘 Tab 实测 —— 查出并修掉一个真缺陷**：`ui/DropdownMenu.vue` **原先完全没有键盘支持**。
+   面板为躲裁切 `Teleport` 到 `<body>` 末尾，代价是 **Tab 序排在整个页面之后**（键盘用户够不着），`Esc` 也**无人监听**。
+   第 64 期这不算致命（⋮ 只是书卡快捷项），第 91 期把 **7 个入口（含「设置」）只**放进窄屏「更多」之后，它就是硬缺陷：
+   **窄屏键盘用户进不去设置**。修法：打开即入焦第一项、`↑`/`↓` 循环移动、`Esc` 关闭并把焦点**还给触发器**、
+   `Tab` 也关闭（`preventDefault` —— 否则焦点会走到浏览器 chrome）。真机全键盘走通：`Enter` 展开 → 下键 ×6 → `Enter` 进设置。
+6. **冒烟（第 88 期 D 尾巴）**：12 组（4 个页面 × 360 / 768 / 1280）→ 越界元素 `off=0`、页面横向溢出 `ovf=0`、
+   「被裁掉且滚不到」`clippedUnreachable=0`。⚠️ 用**两层判据**：先排除 `overflow-x: auto|scroll|hidden|clip` 祖先内的元素，
+   再做更严的 `clippedUnreachable` 复核 —— 第 90 期那个顶栏缺陷正是被 `overflow-x: clip` 吃掉的，
+   宽松判据会把它归成「可达」而漏掉。
+7. **J · 本地导入**：`window.__dl = []`（**没有** `createObjectURL`、**没有** `<a download>`）、toast 有提示、
+   `GET /api/files` 刷新后书目 **3 → 4**。
+8. **文档**：`tests/check_doc_anchors.py --strict` → 20 文档 / 836 锚点 / **硬错 0**。
+
+### 四、防回归要点
+
+1. **D 的 `@authed` 必须重启外壳数据加载** —— 漏了不报错，只是登录后任务栏永远空着、书库永远不加载。静态契约钉住。
+2. **E 的「权重全空 = 现状逐字一致」**：靠 Python `sorted` 的**稳定性**保档内顺序，写成用例，**别改成会打乱档内顺序的写法**。
+3. **E 的新键三处同步点**：`config.DEFAULTS` ↔ `server.EDITABLE["metadata_fetch"]` ↔ `server._mask_metadata_fetch`；
+   漏 `DEFAULTS` 会让「恢复默认」丢键。
+4. **G 的七个入口一个都不能少**：这是它们**唯一**入口，`v-if` 写错就变成「窄屏没法进设置 / 任务」。
+5. **F 只改注释与 `note`，不动 `verified` 布尔与 `status`** ⇒ 三条既有 toc 契约**预期零改动**（改红了说明口径跑偏）。
+6. **J 删的是公开 api 方法**：删前再 grep 一次全仓（含 `*.spec.ts` 的 mock）确认零残留。
+7. **A 是删文档**：`tests/check_doc_anchors.py` 扫 `docs/**`，**不动它历史记录里的旧行号**；
+   全仓唯一的 `TODO.md:NN` 锚点在 `.codebuddy/memory/2026-10-03.md`，而该检查器**不扫 `.codebuddy/`** —— 顺手改成不依赖行号的引用。
+8. **口径**：不加 `Math.random()` 演示数据；不新建 compose 文件；**不新增任何依赖**（G 复用 `DropdownMenu`，J 复用 `convertDrop`）。
+
+### 五、测试
+
+- 后端全量 **1652 例（1640 passed / 12 skipped / 0 failed / 0 errors）**，基线 1637 ⇒ **+15**。
+  新增：`tests/test_unauth_probe_contract.py`（D 的静态契约）、`tests/test_metafetch_language_order.py` 扩 143 行（E 的权重四项）、
+  `tests/test_toc_sources.py` 补「`note` 里不许写 markdown」。
+- 前端 **60 spec / 615 例**（基线 59 / 609），`type-check` / `test:unit` / `build` / `deploy` 四连全绿。
+  新增 3 个 spec 并全部登记 `EXPECTED_SPECS`：`AppMoreMenu.spec.ts`、`LocalConvertView.spec.ts`、`ui/DropdownMenu.spec.ts`。
+- `tests/test_changelog_render.py` 5 例全绿（`VERSION` 0.90.0 → **0.91.0** 与 `CHANGELOG.md` `V0.91.0` 段同批）。
+
+### 六、踩坑
+
+- **`performance.getEntriesByType('resource')` 拿不到状态码** ⇒ 数 401 只能读访问日志（见「三、实测」第 1 条）。
+- **改了前端不 deploy = 测旧 bundle**：第一次 401 计数 13 全是假象（`build` 只落 `frontend/dist`，`deploy` 才同步 `static/v2`）。
+- **`window[m]('keydown', fn)` 过不了 `tsc`**：`m` 是字符串联合，推不出 `keydown` 那一重的 `KeyboardEvent` 重载
+  ⇒ 拆成显式 `if (on) addEventListener(...) else removeEventListener(...)`。
+- **happy-dom 下浮层 spec 必须 `attachTo: document.body`**：焦点断言（`document.activeElement`）在游离 DOM 上恒为空。
+- **spec 里的 `press()` 不 await 一拍会假红**：面板还挂在 DOM 上 ⇒ 改成 async 并 await `$nextTick()`。
+- **`Tab` 的语义是「关闭 + 焦点还给触发器」**（不是「留在菜单项上」）：先按「留在项上」写，测出来焦点跑到触发器，
+  复核后确认**这是对的**（面板在 body 末尾，原生 Tab 会走出页面）⇒ 改的是断言，不是实现。
+- **`POST /api/libraries` 用内联 `-d` 带中文必炸**（`There was an error parsing the body`）⇒ 写文件 + `--data-binary @f` + `charset=utf-8`。
+- **`/api/metadata/plan` 的 `items=0`**：`names` 缺 `.txt` 后缀 + `metadata_fetch.enabled` 为假时 `plan()` 提前返回，两处都要满足。
+- **`/api/books` 的键是 `items` 不是 `books`**（提取脚本写了 `d.get('books')` ⇒ 拿到空 bid，白跑一轮）。
+- **`/tools/convert` 是 404 路由**（真路由是 `/tools/local`）：拿它做的冒烟测量无效，重测。
+- **`json.load(sys.stdin)` 按 cp936 解码** ⇒ 中文变乱码 + 产生 `\udcXX` 孤立代理，写文件时 `UnicodeEncodeError`；
+  先 `sys.stdin.reconfigure(encoding='utf-8')` 再用。
+- **`nohup … &` 后台跑 pytest 中途死掉却报 exit 0**（日志只到 8%）⇒ 长跑改前台 + 足够超时。
+- **`note` 是纯文本插值**：`SourceToolsView.vue` / `TocSourceCard.vue` 用 `{{ … }}` 渲染，
+  写注释时顺手用的 `**…**` 会**原样**显示到界面上（第 91 期真的这么踩了一次）⇒ 补契约用例钉住「`note` 里不许有 markdown」。
+
+### 七、未做取舍
+
+- **D 的失效 token 场景**：仍有一轮 401 探测（15 个），**刻意不修**（理由见「三、实测」第 1 条），已记进 `docs/TODO.md`。
+- **`online-fallback`**：**独立立项**，本期只写口径。触发条件 = 本地读不了（未下载 / 格式不支持 / 文件缺失损坏）；
+  入口 = 书卡与详情页的「检查更新」/「在线读」；共享按源登录态必须走 `DownloadManager.gate_reason()` 这**唯一**闸门，不得绕开；
+  ⚠️ **需要用户先拍板的合规边界**：应用内渲染第三方页面必须**如实标注「这是源站在线页面」**，
+  **不得**让产品看起来像在托管正文，只接公版 / 授权源。为什么不在第 91 期做：范围与合规风险都不小，混进来会把本期拉长。
+- **跨语言检索词**：**保持「未支持」**。理由写死在设置页：① 翻译质量不可控、会把「同名不同书」的误配率推高；
+  ② 各源语言内检索语义不同；③ 已有「按语种重排 + 手动指定来源」两条退路。并登记进 TODO 的「**明确不做**」区，避免反复立项。
+- **美利坚财富人生那本 TXT**：第 89 期已上线 `ENCODING_RULE_VERSION=2`（BOM 优先 + 坏字节不静默丢并计数）。
+  下一步**取决于用户**：重开仍乱码就需要该文件（或前几十 KB 字节）按字节定位 —— 可能是编码不在现有候选内
+  （如无 BOM 的纯中文 UTF-16，属不可判）。本期只作为「待用户输入」登记，**不预估、不改探测策略**。
