@@ -13,8 +13,8 @@ import {
   coverDelayMs,
   effectiveShelfRows,
   shelfBookLimit,
-  useNarrowScreen,
 } from '@/lib/shelfRows'
+import { useNarrowScreenOnMount } from '@/lib/viewport'
 import { useLibraryStore } from '@/stores/library'
 
 /**
@@ -40,7 +40,7 @@ onMounted(() => {
   library.loadLibraries()
 })
 
-const narrow = useNarrowScreen()
+const narrow = useNarrowScreenOnMount()
 
 /** 行数：宽屏按配置（1..3），窄屏最多 2 行 */
 const shelfRows = computed(() => effectiveShelfRows(props.shelf.rows ?? 1, narrow.value))

@@ -1,17 +1,18 @@
-import { onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
-
 /**
  * 书架行的「多行分带」纯函数（第 82 期对齐 BookOrbit 的 `lib/shelf-rows.ts`）。
  *
- * ⚠️ 刻意不引 `@vueuse/core`：上游用它做窄屏判定，本项目用 `window.matchMedia`
- * 自实现（见 `useNarrowScreen`），机制等价、零新增依赖（第 80 期口径）。
+ * ⚠️ 第 90 期：本文件原有的私有 `NARROW_QUERY` 与 `useNarrowScreen` **已删**，
+ * 断点收敛到 `lib/viewport.ts`（全站唯一真值源）。本期外壳侧栏也要判窄屏，
+ * 留着这里那份就是「两处各写一遍」——改断点必漏一处，且漏了不报错。
+ *
+ * ⚠️ 关于 `@vueuse/core`：第 82 期写下的「刻意不引」是当时的**默认取向**
+ * （第 80 期口径：默认自托管、默认不引），**不是禁令**。第 90 期为了逐字对齐
+ * 上游的 Sidebar 基础组件已显式引入该依赖（理由见 `docs/architecture.md`），
+ * 故那条注释的前提已不成立，改由 `lib/viewport.ts` 统一持有断点实现。
  */
 
 export const MIN_SHELF_ROWS = 1
 export const MAX_SHELF_ROWS = 3
-
-/** 窄屏断点 = Tailwind 的 `sm`（640px），与全站栅格断点保持一致 */
-const NARROW_QUERY = '(max-width: 639.98px)'
 
 /**
  * 生效行数：宽屏按配置（1..3），窄屏最多压到 2 行
@@ -56,42 +57,4 @@ export function coverDelayMs(index: number, stepMs = COVER_STAGGER_MS, capMs = C
   const i = Math.max(0, Math.floor(index) || 0)
   const step = stepMs > 0 ? stepMs : COVER_STAGGER_MS
   return Math.min(capMs, i * step)
-}
-
-/**
- * 窄屏判定（`matchMedia` 自实现，替代上游的 `useBreakpoints`）。
- * `matchMedia` 不可用的环境（极老内核 / 测试桩）按宽屏处理 —— 只影响行数，不影响可用性。
- */
-export function useNarrowScreen(): Ref<boolean> {
-  const narrow = ref(false)
-  let mql: MediaQueryList | null = null
-  let update: (() => void) | null = null
-
-  onMounted(() => {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
-    try {
-      mql = window.matchMedia(NARROW_QUERY)
-      update = () => {
-        narrow.value = Boolean(mql?.matches)
-      }
-      update()
-      mql.addEventListener('change', update)
-    } catch {
-      /* matchMedia 不可用：按宽屏处理 */
-    }
-  })
-
-  onBeforeUnmount(() => {
-    if (mql && update) {
-      try {
-        mql.removeEventListener('change', update)
-      } catch {
-        /* ignore */
-      }
-    }
-    mql = null
-    update = null
-  })
-
-  return narrow
 }
