@@ -3014,47 +3014,15 @@ export function apiErrorMessage(e: unknown, fallback: string): string {
   return e.message
 }
 
-/** 下载类接口返回文件流（后端用 FileResponse(filename=...) 在 Content-Disposition 给真实文件名）。 */
-export interface BlobResult {
-  blob: Blob
-  /** 解析自 Content-Disposition 的文件名（filename*=UTF-8'' 优先，回落裸 filename=）；无则用 URL 兜底 */
-  filename: string
-}
-
 /**
- * 从 Content-Disposition 取文件名。
- * 兼容性：上游/本服务两种写法都要认 ——
- *   `filename*=UTF-8''%E4%B9%A6.epub`（RFC 5987，百分号编码）
- *   `filename="书.epub"`（裸 filename=，可能带引号）
+ * ⚠️ 第 91 期删掉了 `BlobResult` / `_parseDispositionFilename` / `requestBlob` 这一组。
+ *
+ * 它们只服务 `convertFile` / `convertPath` 两个 blob 变体（已一并删除），全仓再无第二个
+ * 消费方 —— 前端**没有**任何「fetch 一个文件流再接回浏览器」的用法：成品下载一律走
+ * `downloadUrl` 交给浏览器原生 `<a download>`（那条路不经过 JS，也不需要 Content-Disposition
+ * 解析）。留着就是一份没人走的代码：下一个人会以为下载类接口都该这么写，
+ * 然后又复制一份出来。
  */
-function _parseDispositionFilename(cd: string | null, fallback: string): string {
-  if (!cd) return fallback
-  const star = /filename\*\s*=\s*[^']*''((?:[^;]|%[^;])+)/i.exec(cd)
-  if (star) {
-    try {
-      return decodeURIComponent(star[1].trim().replace(/\+/g, ' '))
-    } catch {
-      /* 编码损坏则回落裸 filename */
-    }
-  }
-  const plain = /filename\s*=\s*("([^"]*)"|([^;]*))/i.exec(cd)
-  if (plain) {
-    const v = (plain[2] ?? plain[3] ?? '').trim()
-    if (v) return v
-  }
-  return fallback
-}
-
-async function requestBlob(path: string, init?: RequestInit): Promise<BlobResult> {
-  const res = await fetch(path, init)
-  if (!res.ok) {
-    console.error(`[api] POST ${path} → ${res.status}`)
-    throw new Error(`请求失败（HTTP ${res.status}）`)
-  }
-  const fallback = (path.split('/').pop() || 'download').split('?')[0] || 'download'
-  const blob = await res.blob()
-  return { blob, filename: _parseDispositionFilename(res.headers.get('Content-Disposition'), fallback) }
-}
 
 /**
  * 「只关心成败、不关心响应体」的请求（第 89 期）。
@@ -3153,6 +3121,22 @@ export const api = {
     await requestAck('/convert', { method: 'POST', body: form })
     // 走到这里 = 请求成功（upload 已被后端接收）。返回值只为兼容既有调用点 / 类型，
     // 不再承载后端响应体。
+    return { ok: true }
+  },
+
+  /** 按路径投递（收书目录内的相对路径）：`convertDrop` 的路径版，同一条 ack 链路。
+   *
+   *  ⚠️ 第 91 期：`/convert-path` 与 `/convert` 一样回 **FileResponse 文件流**，
+   *  所以同样必须走 `requestAck`（不解析响应体）。此前这里有一个 `convertPath`
+   *  的 **blob 变体** —— 服务端动作一样、客户端语义却不同（一个入库、一个把成品
+   *  再下载回浏览器），本地导入页为此还把成品推给用户浏览器存盘，语义怪异。
+   *  两个 blob 变体已随之删除（连同只服务它们的 `requestBlob`）。
+   */
+  convertPathDrop: async (path: string, traditionalize = false): Promise<{ ok?: boolean }> => {
+    const form = new FormData()
+    form.append('path', path)
+    if (traditionalize) form.append('traditionalize', 'true')
+    await requestAck('/convert-path', { method: 'POST', body: form })
     return { ok: true }
   },
 
@@ -3761,19 +3745,10 @@ export const api = {
     ),
 
   // ---------- 本地转换 ----------
-  convertFile: (file: File, traditionalize = false) => {
-    const form = new FormData()
-    form.append('file', file)
-    form.append('traditionalize', String(traditionalize))
-    return requestBlob('/convert', { method: 'POST', body: form })
-  },
-
-  convertPath: (path: string, traditionalize = false) => {
-    const form = new FormData()
-    form.append('path', path)
-    form.append('traditionalize', String(traditionalize))
-    return requestBlob('/convert-path', { method: 'POST', body: form })
-  },
+  // ⚠️ 第 91 期：原来的 `convertFile` / `convertPath`（**blob 变体**：把后端返回的
+  // 成品文件流接回浏览器）已删除 —— 同一个服务端动作（投递入库）在收书目录页走
+  // `convertDrop`（ack，不解析响应体）、在这里走 blob，两套客户端语义。现在统一为
+  // `convertDrop` / `convertPathDrop`，见上面那条注释。
 
   /**
    * 成品文件的下载地址（`<a download>` 用，浏览器原生请求带不了 Bearer —— 该路由与

@@ -4,7 +4,7 @@ import { computed, onActivated, ref } from 'vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
-import { api, type FileEntry, type WatcherStatus } from '@/lib/api'
+import { api, apiErrorMessage, type FileEntry, type WatcherStatus } from '@/lib/api'
 import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useUiStore } from '@/stores/ui'
@@ -16,6 +16,17 @@ import { useUiStore } from '@/stores/ui'
  * 第 62 期起 TXT **只入库不转换**（阅读时按需生成派生 EPUB，见 core/txtcache.py），
  * 所以这里不再有「转成繁体」开关 —— 它只对转换链路有意义，而这条链路已经没有了。
  * 页面标题仍是历史命名，路由与键名不动（`features.labels()` 里的标签已改名）。
+ *
+ * ⚠️ 第 91 期：交互从「转换后把成品下载回浏览器」改成 **投递 → 提示 → 刷新**。
+ *
+ * 原来的链路是 `api.convertFile` / `api.convertPath`（**blob 变体**）—— 转完把后端返回的
+ * 成品文件流 `saveBlob()` 推给用户浏览器存盘。问题是服务端做的其实是同一件事
+ * （`pipeline.dispatch` 收进书库），而收书目录页走的是 `convertDrop`（ack，不解析响应体）：
+ * **同一个动作，两种客户端语义**。带来的具体怪异有三处：
+ *   ① 文件已经进了书库，浏览器里却又多出一份存盘（用户以为「我下到了哪」）；
+ *   ② 多选时存盘 N 份、每次覆盖同名下载，浏览器还会拦「是否允许多文件下载」；
+ *   ③ 文案写着「逐个入库并下载」，把「入库」和「下载」说成一件事。
+ * 现在整条链路与 `BookDockPage.deliverToDock()` 逐字同源：投递 → toast → `refreshInputs()`。
  */
 const ui = useUiStore()
 const library = useLibraryStore()
@@ -83,28 +94,20 @@ onActivated(() => {
   refreshInputs()
 })
 
-/** 用 Object URL 触发浏览器下载 */
-function saveBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
+/** 0 库守卫（拖拽与按路径两条入口共用一份话术 —— 两套写法迟早在某一处走样） */
+function blockedByNoLibrary(): boolean {
+  if (!library.hasNoLibraries) return false
+  ui.toast('还没有书库：先新建一个书库，投递的文件才有地方归')
+  return true
 }
 
-function convertFiles(fileList: FileList | File[]): void {
+async function convertFiles(fileList: FileList | File[]): Promise<void> {
   const files = Array.from(fileList)
   if (!files.length) return
 
   // 0 库时提前拦下（第 38 期）：`/convert` 会 400 拒收（「还没有书库…」），
   // 与其把文件读进内存再让后端退回来，不如先把话说明白。
-  if (library.hasNoLibraries) {
-    ui.toast('还没有书库：先新建一个书库，转换结果才有地方落')
-    return
-  }
+  if (blockedByNoLibrary()) return
 
   // 前端预校验：跳出不支持的格式，给可读提示（不再写死 .txt）
   const allowed = files.filter((f) => ALLOWED_EXT.includes(extOf(f.name)))
@@ -116,67 +119,62 @@ function convertFiles(fileList: FileList | File[]): void {
 
   busy.value = true
   lastResult.value = ''
-  let finished = 0
+  let ok = 0
 
-  allowed.forEach((file) => {
-    api
-      .convertFile(file)
-      .then(({ blob, filename }) => {
-        // 文件名用后端给的真实产物名（Content-Disposition），不再自己拼 .epub（避免 x.epub.epub）
-        saveBlob(blob, filename)
-        lastResult.value = `已转换 ${finished + 1} / ${allowed.length}`
-      })
-      .catch((e: Error) => ui.toast(`${file.name}：${e.message}`))
-      .finally(() => {
-        finished += 1
-        if (finished === allowed.length) {
-          busy.value = false
-          ui.toast('转换完成')
-          refreshInputs()
-        }
-      })
-  })
+  for (const file of allowed) {
+    try {
+      // ⚠️ 走 ack 变体（不解析响应体）：`/convert` 回的是文件流，用 `request()` 会把
+      // 字节按 UTF-8 解出 `�` 并报「上传失败」—— 而它其实已经成功了（第 89 期那条老缺陷）。
+      await api.convertDrop(file)
+      ok += 1
+    } catch (err) {
+      // 用 `apiErrorMessage` 而不是 `err.message`：后者是后端响应原文（`{"detail":"…"}`），
+      // 原样塞进 toast 会把花括号和键名一起露给用户。
+      ui.toast(`${file.name}：${apiErrorMessage(err, '投递失败')}`)
+    }
+  }
+
+  busy.value = false
+  lastResult.value = ok ? `已投递 ${ok} / ${allowed.length}` : ''
+  if (ok) {
+    ui.toast(`已投递 ${ok} 个文件，正在入库`)
+    refreshInputs()
+  }
 }
 
 function onDrop(e: DragEvent): void {
   dragging.value = false
-  if (e.dataTransfer?.files?.length) convertFiles(e.dataTransfer.files)
+  if (e.dataTransfer?.files?.length) void convertFiles(e.dataTransfer.files)
 }
 
 function onPick(e: Event): void {
   const input = e.target as HTMLInputElement
-  if (input.files?.length) convertFiles(input.files)
+  if (input.files?.length) void convertFiles(input.files)
   input.value = ''
 }
 
-function convertByPath(): void {
+async function convertByPath(): Promise<void> {
   const p = pathValue.value.trim()
   if (!p) {
     ui.toast('请填写 input 目录下的相对路径')
     return
   }
-  if (library.hasNoLibraries) {
-    ui.toast('还没有书库：先新建一个书库，转换结果才有地方落')
-    return
-  }
+  if (blockedByNoLibrary()) return
   if (!ALLOWED_EXT.includes(extOf(p))) {
     ui.toast(`不支持的格式：${extOf(p) || '无扩展名'}（仅支持 TXT 与电子书/漫画/音频）`)
     return
   }
   busy.value = true
-  api
-    .convertPath(p)
-    .then(({ blob, filename }) => {
-      // /convert-path 与 /convert 同口径返回文件流，文件名由后端给（不会是 x.epub.epub）
-      saveBlob(blob, filename)
-      lastResult.value = `已转换 ${p}`
-      ui.toast('转换完成')
-      refreshInputs()
-    })
-    .catch((e: Error) => ui.toast(e.message))
-    .finally(() => {
-      busy.value = false
-    })
+  try {
+    await api.convertPathDrop(p)
+    lastResult.value = `已投递 ${p}`
+    ui.toast(`已投递 ${p}，正在入库`)
+    refreshInputs()
+  } catch (err) {
+    ui.toast(apiErrorMessage(err, '投递失败'))
+  } finally {
+    busy.value = false
+  }
 }
 
 function toggleWatcher(): void {
@@ -212,7 +210,7 @@ function scan(): void {
             <button type="button" class="underline" @click="openWizard">新建一个书库</button>。
           </template>
           <template v-else>
-            把 TXT 或常见电子书/漫画/音频交给流水线，**一律按原样入库**（TXT 的目录在阅读时按需生成，见阅读器），或交给下方监听目录自动处理。
+            把 TXT 或常见电子书/漫画/音频交给流水线，一律按原样入库（TXT 的目录在阅读时按需生成，见阅读器），或交给下方监听目录自动处理。
           </template>
         </p>
 
@@ -230,7 +228,7 @@ function scan(): void {
             </svg>
           </span>
           <span class="mt-3 text-[13px] font-medium text-foreground">把文件拖到这里，或点击选择</span>
-          <span class="mt-1 text-[11.5px] text-muted-foreground">支持 TXT / EPUB / MOBI / PDF / CBZ 等电子书与常见音频；支持多选，逐个入库并下载</span>
+          <span class="mt-1 text-[11.5px] text-muted-foreground">支持 TXT / EPUB / MOBI / PDF / CBZ 等电子书与常见音频；支持多选，逐个投递入库（不会往你浏览器下载任何文件）</span>
         </label>
 
         <p v-if="lastResult" class="mt-2 text-[11.5px] text-success">{{ lastResult }}</p>
