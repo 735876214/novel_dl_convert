@@ -568,4 +568,41 @@ discover 行仍按 id 稳定排序）。**口径以对照文档 §7「实施结�
 - ⚠️ **无 BOM 的纯中文 UTF-16 仍不可判**（两字节都不为 0，与随机字节无从区分）—— 已如实写明。
 - 测试：`tests/test_txt_encoding_bytes.py` 11 例（修前 BOM/UTF-16 那几条是红的）+ `frontend/src/lib/convertUpload.spec.ts` 5 例（登记 `EXPECTED_SPECS`）。
 
+### 第 90 期铁律（窄屏外壳侧栏：抽屉 / 图标条 / 拖宽 / ⌘B）
+
+- **形态照「视口宽」分三种**（判据只有 `lib/viewport.ts` 的 `NARROW_QUERY = '(max-width: 639.98px)'`，
+  **不用**上游的 768 —— 本仓 640–767 要保持两栏）：**≤640px** 抽屉（`ui/sheet`，宽 `18rem`，`Teleport` 到 body、
+  遮罩 `bg-scrim`、Esc / 点遮罩可关、点导航项自动收）；**展开**（默认 **240px**，可拖 **224–480**）；**折叠**（图标条 `3rem`）。
+- **折叠态 / 宽度 / 窄屏判定的唯一真值源 = `ui/sidebar/SidebarProvider.vue`**（`useSidebar()` provide/inject）。
+  `stores/ui.ts` 的 `sidebarCollapsed` / `toggleSidebar` **已删**（契约 `test_frontend_unit_contract.py` 里两条新断言钉住：
+  ui store 不许再长出这两个名字；`lib/prefsPayload.ts` 的 `PAYLOAD_BLOCKS` 不许出现侧栏块）。
+  ⚠️ 这两条契约**先剥 JS 注释再断言**（`_strip_js_comments`，字符串感知）—— 那两个文件的抬头正在逐字解释
+  「为什么不放进同步块 / 删掉了什么」，不剥会被自己的说明绊倒。
+- ⚠️ **侧栏偏好只落本机**（`lib/sidebarPrefs.ts`，键 `nf_sidebar_collapsed` / `nf_sidebar_width`）：
+  宽度是**屏幕**属性不是人的偏好（27 寸拖到 420px、平板就该是抽屉）⇒ **刻意不进** `server.PREFS_BLOCKS`。
+  `nf_` 前缀防同域部署时与上游 BookOrbit 撞键。
+- ⚠️ **默认宽度 240 不是上游的 256**：跟上游改会让**每一个宽屏用户**的开箱布局动一下 —— 那是回归不是对齐。
+  上游的 `SIDEBAR_WIDTH = '16rem'` **故意不搬**（本仓 `widthPx` 是从 localStorage 同步读出的，那根 CSS 变量永不缺席）。
+- ⚠️ **折叠态宽度的类必须挂在 group 元素上**（`data-[collapsible=icon]:w-(--sidebar-width-icon)` 是**自身**选择器）；
+  挂到内层卡片上不报错，只是「中间一小撮图标、两边一大片空白」。
+- **Rail 的 3px 阈值只决定「松手算点击还是拖拽」**，**不拦宽度**（位移多少宽度就跟多少；拦了手感会「先不动、过了 3px 突然跳」）。
+  折叠态**不认**拖拽（松手退化成点击 ⇒ 先展开）。
+- **⌘/Ctrl+B 与 ⌘K 各管各的键**：写成「有 meta/ctrl 就开合」会让 ⌘K **同时**弹搜索并收侧栏。
+- ⚠️ **取侧栏菜单行认 `data-sidebar="menu-button"`，别认 `data-slot`**：带 tooltip 时行被塞进 `TooltipTrigger as-child`，
+  触发器的 `data-slot="tooltip-trigger"` 会**顶掉**行上的同名属性（上游同样如此）。
+- ⚠️ **写抽屉/浮层的 spec 要等 reka 的两处异步**：点击外部的 `pointerdown` 监听器要等 `watchEffect`（微任务）
+  **再排一个 `setTimeout(0)`** 才挂到 document；卸载还要多等一拍（`usePresence` 里有一次 `await nextTick()`）
+  ⇒ `sheet.spec.ts` 用三轮 `settle()`（宏任务 + 双 `nextTick`）。等少了会把「关得掉」误判成「关不掉」。
+- ⚠️ **reka 不写 `aria-modal`**：模态语义靠 `useHideOthers` 给 body 其余子树打 `aria-hidden` ⇒ 断言认这个。
+- ⚠️ **happy-dom 的 `matchMedia` 不跟着窗口尺寸触发 `change`** ⇒ 「跟随变化」这条最该测的行为反而测不到，
+  两份 spec 各自装了可控桩（`available:false` 用**赋值 `undefined`** 模拟不支持，`delete` 删不掉原型方法）。
+- **`ui-smoke` 用法坑（本期实测）**：`-Routes '#/a','#/b'` 经 `.cmd` 转发后逗号被吃成**一个**元素 ⇒ 变出一条
+  `#/a,#/b` 的假路由（度量到的是 404 页）；**一次只传一条路由**。git-bash 下还要防 MSYS 把 `#/…` 改写成
+  Windows 路径（`MSYS2_ARG_CONV_EXCL='*'`）。`-Widths` 同样只能用空格分隔。
+- **验收只看 `off`**（`ovf=false` 是假象：溢出被内部横滚容器吸收）。本期实测（实例 8993）：
+  `#/shelf` 360 档 **27 → 3**、`#/tools/sources` 360 档 **38 → 16**；768 / 1280 `off=0`。
+  **残留两处都不是本期回归**：① 顶栏右侧图标行固定 **375px**（10 个 33px 圆钮）> 360 档顶栏内容盒 **334px**
+  ⇒ 最右三个（外观/设置/头像）被 `overflow-x: clip` 裁掉 —— 顶栏第一个按钮换成 `SidebarTrigger` 时**尺寸逐字未变**（32×32，
+  已 `git show HEAD:…/AppHeader.vue` 核对）；② 工具页自己的 `min-w-[32rem]`（第 86 期「可用但不优雅」口径）。
+  两者都要先定交互口径（上游顶栏同样 11 项，**没有**可照搬的窄屏范式），已记进 `docs/TODO.md` 第 3 节。
 

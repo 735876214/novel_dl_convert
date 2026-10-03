@@ -54,6 +54,8 @@
 - ⚠️ **新增/删设置页三处同批改**：`settingsNav.ts` ↔ `router/index.ts` 的 `SETTINGS_PAGE_COMPONENTS` ↔ 组件（须与 `status==='ready'` 一一对应）；**设置页真实路由=`#/settings/<page.path>`**（不带分组段）。
 - **全站开关唯一实现=`ui/Switch.vue`**；改偏好必须走 UI 点击；`v-model` 与同事件副作用监听器顺序不保证 ⇒ 写 `@update:model-value="x = $event; persist()"`。
 - 演示数据禁 `Math.random()`；路由 path 全局唯一。冒烟用机器级 **`ui-smoke`**（`.codebuddy/tools/ui-smoke.ps1`；`-CleanOnly` 清残留）。`agent-browser` 视口是 **`set viewport W H`（子命令）**。
+- ⚠️ **窄屏（≤640px）判据只有 `lib/viewport.ts`**；侧栏折叠/宽度只经 `useSidebar()`（别在页面里另建一份状态）。
+  ⚠️ `ui-smoke` 一次只传**一条**路由（数组经 `.cmd` 转发逗号会被吃）；git-bash 下还得防 MSYS 改写 `#/…`。
 - ⚠️ 只跑 HTTP 端到端/`ui-smoke` 仍可能漏界面缺陷（第 83 期）；**共享数组加分页会静默影响所有消费方**（第 88 期）⇒ 分页/切片数据必须有**自己的状态**。
 
 ## 逐期铁律索引（**全文见 `MEMORY-REF.md`「逐期铁律原文」+ `docs/roadmap-gaps-remaining.md`**）
@@ -65,3 +67,4 @@
 - **87** `.zip` 按内容分派（`zipkind.py`，`format` 归一 `CBZ`）；三处静默失败修复；重名判据收敛（**不改 `book_id` 规则**）；`format-capability-matrix.md` 契约。
 - **88** 脏库读**不扫盘**（派后台 + `SETTLE_WAIT=0.25`；**显式扫描仍同步**）；`/api/books` 加 `limit`/`offset`（不传=全量）；书架用**独立分页源**。
 - **89** `requestAck()` 修上传假报错（不解析响应体）；`ENCODING_RULE_VERSION=2`，BOM 优先 + 坏字节**不静默丢**、计数上报。
+- **90** 外壳侧栏照搬上游 `ui/sidebar`（基座 `reka-ui`）：折叠态/宽度的**唯一真值源=`SidebarProvider`**（`stores/ui.ts` 的 `sidebarCollapsed`/`toggleSidebar` 已删）；窄屏断点唯一真值源=`lib/viewport.ts`（**639.98px，不跟上游 768**）；侧栏偏好**只落本机**（`nf_sidebar_*`，**不进** `PREFS_BLOCKS`）；默认宽度 **240**（非上游 256）；取菜单行认 `data-sidebar="menu-button"`（`data-slot` 会被 tooltip 触发器顶掉）。
