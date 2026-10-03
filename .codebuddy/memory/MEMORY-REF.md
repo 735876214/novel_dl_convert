@@ -463,3 +463,105 @@ discover 行仍按 id 稳定排序）。**口径以对照文档 §7「实施结�
   **不是点封面**。本项目按用户口径改成「点封面即开预览」。
 - **顺手修的真缺陷**：三件部件打开目标写死 `/read/`（有声书进打不开的阅读器）⇒ 统一走 `lib/bookActions`→`openTargetOf`。
 
+---
+
+## 逐期铁律原文（第 84–89 期；2026-10-03 由 `MEMORY.md` 下沉 + 新增）
+
+> 第 84 / 85 期原为 `MEMORY.md` 内联长段（导致注入截断），2026-10-03 下沉到此；第 86–89 期为同期新增。
+> ⚠️ **期号 84 已被并行会话占用，别再回用**。
+
+### 第 84 期铁律（自动更新加固）
+
+- ① 第 80 期「先记已尝试、再执行」使 pull 失败也被当「已试过」⇒ **失败一次即永久卡死**；
+  改建 `auto_failures` / `auto_retry_at` / `last_auto_result` / `auto_message` **退避状态机**
+  （**1h→6h→24h 封顶**）；新 stage **`defer`** **不复用**语义为「永久放弃」的 `already_tried`；
+  未挂 socket 记 `unavailable`、**不记失败**。
+- ② 抽出 `_tick()` 让**启动首轮与定时轮共用同一份逻辑**（启动即检，不等一个间隔）。
+- ③ 新增 `core/backup.py` 更新前快照（PG `pg_dump -Fc` / SQLite `copy2`，落 `BACKUP_DIR` 保留 5 份，
+  **失败即 `backup_failed` 中止、不进入 pull**）。
+- ④ 维护页 UPDATES 从「未实现」改为「已实现 + 跳转 `ext/update`」——
+  ⚠️ `IMPLEMENTED` 必须与 `settingsNav` 的 `upstream.items` **逐字一致**
+  （裸 `Check for updates` 匹配不上带中文括注的那条，是新 spec 抓出的真缺陷）。
+- 交付：退避重试 / 启动即检 / 更新前自动备份 / 引导式开启（V0.84.0，并行会话）。
+
+### 第 85 期铁律（目录体系：本地「卷 / 段」+ 官方书城目录覆盖）
+
+- **批次 A**：`core/reading_list.py` 是「卷 / 段 → 章」的**唯一真值源**（EPUB 路径与 TXT 路径都调它）；
+  `detect.is_volume_title` / `is_unnumbered_title` 提升为公开判据；`library._reading_list` 标题三级回退
+  （目录 → 文档自带标题 → 文件名）；前端 `lib/chapterGroups.ts` 卷折叠 / 缩进 / 段名。
+- **批次 B**：`store_toc`（含负结果）+ `toc_map`（未映射的本地章节不入表）两表；
+  `sources/toc_sources.py` **只取目录、绝不取正文**；`GET /api/toc/sources` / `POST /api/toc/fetch`（失败也落库）
+  / `DELETE /api/toc/{bid}`；配置 `download.toc_enabled`（**默认关闭**）+ 闸门加**用途维度**。
+- ⚠️ 番茄 / 起点两条内置规则**未在本机验证**（`verified=false`，界面标「未验证」）⇒ 需在联网环境用
+  「试取目录」核对后把注册表里的 `verified` / `status` 回填。微信读书 / 掌阅 / 晋江只登记。
+- ⚠️ 踩坑：私有 helper 重名覆盖（`_tag_text`）让 82 条无关测试连锁失败 ⇒ **必须跑全量**；
+  happy-dom 的 `isVisible()` 测不出 `v-show`（改断言 `style.display`）。
+
+### 第 86 期铁律（书源体系对齐 legado/Mihon + 书籍追更）
+
+- 16 条书源接口（导入差异预览 / 台账 / 登录凭据 / 单源与全部验证 / 批量）全部有界面入口（工具页「书源工具」）。
+- **章节级追加**已落地：`core/epub_update.append_chapters` + manifest/spine/nav/ncx 插入 + `verify_unchanged`；
+  `manager.update_lock` **按路径加锁**（不加锁会「后写覆盖前写 = 丢章且两边都报成功」）。
+- ⚠️ nav 定位加固：必须先在 `epub:type="toc"` 的 `<nav>` 里取**最后一个** `</ol>`，否则新章被插进「地标」列表
+  （阅读器目录里看不到，而「nav 含该链接」的断言照样过）。
+- `core/autoupdate.py`（骨架照抄 `updater.py`）：**默认开启**、每 12h、串行 + 限量 + 逐本节流、**首轮延迟一个间隔**、
+  **只调 `update_report`**；手动轮**必须**与定时轮共用 `autoupdate.tick`。
+- ⚠️ 测试不能真让 `stop.wait(interval)` 等（最小 1h）⇒ monkeypatch `stop.wait` 让前 N 次 False。
+- ⚠️ `auto_update` 配置三处登记（第 86 期补）—— 没它「关掉追更」在界面上不可达（假开关）。
+
+### 第 87 期铁律（`.zip` 内容分派 / 重名重构 / 格式能力矩阵）
+
+- `core/zipkind.py`：`analyze(path)` 分档 `comic`/`epub`/`pdf`/`nested`/`multi`/`mixed`/`empty`/`broken`，
+  每档给 `reason` + `evidence`；`.zip` 的 `format` **归一成真实形态 `CBZ`** ⇒ 上层零分支；
+  判不出留 `ZIP` + `unparsable=True`（进「待修复」分面，不假装能读）。
+- **展开（unwrap）成真正的书**：只在容器所在目录落文件 · 原子写 · **绝不覆盖已有文件**（不改名，改名换 `book_id`）·
+  **默认不删源** · zip-slip 防护。
+- 修 3 处静默失败：① 服务端抓取封面只对 EPUB 生效（读取提到格式分支**之前**）② OPDS 不给目录型条目
+  广告必然 404 的下载链 ③ 前端「无封面」分面改成「没有封面」即命中。
+- 重名判据收敛：`conflict_key` / `volume_of` / `is_copy_name` / `conflict_kind`（**纯函数**）；
+  ⚠️ 与 `norm_key` 分工**不能合并**；结论分级 `duplicate_scan`（默认不勾，改名是错的）/`cross_library`/`same_name_different_dirs`；
+  ⚠️ **不改 `book_id` 生成规则**（改了 = 全库迁移）。
+- `docs/format-capability-matrix.md` + `tests/test_format_matrix.py`：**任何「只给部分库」的能力键都必须在
+  `EXCLUSIVE` 表里登记理由**，否则测试红（写理由的过程本身会暴露漏配）。
+- 窄屏：`ToolsLayout.vue` 内容区 `overflow-x-auto` + 内层 `min-w-[32rem]`（**宁可横向滚，也不压成一字一行**）。
+  诊断脚本 `.codebuddy/tools/diag-narrow.js`（高窄盒子探测器，**必须用文件传入**，命令文本里的双引号会被工具层吃掉）。
+
+### 第 88 期铁律（书库加载慢：请求路径 + 前端感知 + 分页）
+
+- **契约变更（有意）**：`library.invalidate()` 之后**下一次读**由「**同步**增量刷」改为
+  「**派后台刷新 + 最多等 `catalog.SETTLE_WAIT=0.25s`**，到点如实返回现有索引」；
+  可见性改由前端轮询补（`/api/books` 的 `scanning` + `GET /api/libraries/scan-state`）。
+  想「一刻不等」把 `SETTLE_WAIT` 置 0，**但必须同时**把「写后立刻读」那批用例改成轮询语义。
+- ⚠️ **显式扫描路径一律保持同步**（`refresh_library(force=True)` / `POST /api/libraries/{lid}/scan` / watcher）
+  —— 硬约束，不许动。
+- 启动后台预热 `prewarm_async`（只针对索引非空的库）；`/convert`、`/convert-path` 入库后补 `invalidate(lid)`；
+  `refresh_library` 计时日志（>300ms 才记一行）。
+- ⚠️ **`library.invalidate()` 有 20+ 调用点，不要在它里面点火**（试过接线 `invalidate_and_refresh`，会让后台刷新与调用方
+  紧接着的读断言赛跑 ⇒ flaky；已删除并留注释说明）；点火点收敛为三处：读路径 / 启动预热 / 监听线程。
+- 前端：新 `components/ui/Skeleton.vue`；空态判据改为「**非 loading 且真无数据**」（此前数据在路上却显示「这个书架还是空的」）；
+  错误态与重试；「正在建立索引…」进度条；阈值并行；次要请求懒化；`request()` 超时与分类错误（GET 仅网络错重试一次）。
+- 分页/无限滚动：`/api/books` 可选 `limit`/`offset`（**不传=全量逐项兼容**；按**字符串**收再自己解析，声明 `int` 会被 422 拒；
+  负数/非数字 400；`total` 恒为切片前总数；切片在排序之后；`limit=0`=不限；`offset` 越界 ⇒ `items=[]`+真实 total+`has_more=false`）。
+  前端页大小 **120**；⚠️ **分页状态必须与全量 `books` 彻底分离**（`shelfLoadedBooks` / `loadShelfFirstPage` / `loadMoreShelfBooks` /
+  `autoLoadMoreShelf` / `resetShelfQuery`，**只有 `ShelfView` 读**）—— 直接建在共享 `books` 上会让侧栏计数、仪表盘部件、
+  浏览页、智能书架计数**全部只见前缀**（600 本显示成 120），而**没有任何既有 spec 覆盖**。
+  另：`patchProgress` 必须双数组回写；数据变更后统一 `refreshBooks()`。
+- ⚠️ 事故教训：**子代理「被取消」≠「已停止」**（超时被取消后进程可能继续跑并与新代理并发改同一工作区）⇒
+  取消后先 `git status` + 看 mtime 确认工作区静止；**同一工作区同时只派一个会写代码的子代理**。
+
+### 第 89 期铁律（TXT 上传假报错 + 正文不乱码）
+
+- **上传假报错的根因**：`BookDock` 的上传走 `api.convertDrop` → 用的是 `request()`（JSON），而 `POST /convert` 返回
+  `FileResponse` 文件流 ⇒ `res.json()` 把文件字节按 UTF-8 解出 `�`、V8 抛 `Unexpected token '�'`；**书其实已入库**
+  （等一会自己出现）。修法：`api.ts` 新增 **`requestAck()`**（同一套鉴权/超时/401/错误剥壳，但**不解析响应体**并
+  `res.body?.cancel()`），`convertDrop` 改用它。⚠️ 全仓「返回文件流/非 JSON 的接口」调用点里**只有这一处坏点**
+  （其余走 blob 或 `<a href>`）。
+- **解码不再静默丢字节**：`ENCODING_RULE_VERSION` **1 → 2**（`pipeline.py`，`txtcache.ENC_RULE_VERSION` 跟随 ⇒ 存量派生件自动重建）；
+  新增 `_choose_encoding()`（**确定性证据优先**：UTF-32/UTF-8/UTF-16 BOM → 无 BOM 像 UTF-16 → UTF-8 前缀自证 → gb18030/big5hkscs/big5 打分）
+  + `decode_file()`（候选**逐个严格试解**，坏字节以 U+FFFD 顶替并**计数/记偏移**，返回 `{encoding, undecodable, positions}`）；
+  `txtcache.decode_info()` + 派生件 `state.json` 增 `encoding`/`undecodable`；章节接口**新增** `text_encoding`（只加不改）；
+  阅读器在 `undecodable > 0` 时显示低调提示。全仓 `errors="ignore"` 只剩注释、**无一处可执行代码**。
+- ⚠️ **无 BOM 的纯中文 UTF-16 仍不可判**（两字节都不为 0，与随机字节无从区分）—— 已如实写明。
+- 测试：`tests/test_txt_encoding_bytes.py` 11 例（修前 BOM/UTF-16 那几条是红的）+ `frontend/src/lib/convertUpload.spec.ts` 5 例（登记 `EXPECTED_SPECS`）。
+
+
