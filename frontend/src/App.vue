@@ -25,7 +25,23 @@ const auth = useAuthStore()
 const library = useLibraryStore()
 const wizard = useLibraryWizardStore()
 const route = useRoute()
-const showLogin = ref(false)
+
+/**
+ * 登录门禁是否可见。
+ *
+ * ⚠️ 第 91 期：初值不再是写死的 `false`，而是**本地有没有 token**
+ * （`auth.authenticated` 在 store 构造时就**同步**读好了 `localStorage`，见
+ * `stores/auth.ts` 的 `token` 初始化）。理由：初值写死 `false` ⇒ **未登录的访客
+ * 也会先渲染一次外壳**，外壳里的 store 各自开拉，白发一轮注定 401 的探测请求
+ * （600 本库实测：`collections` / `libraries` / `smart-scopes` / `features` /
+ * `browse-counts` / `notifications` / `prefs/*` / `config` 各被调 **2 次**，
+ * 多出来的那次全是未带 token 的 401 探测，每个约 337 B）。
+ *
+ * 用本地 token 做初值是**同步且零延迟**的：已登录用户的冷启动**不会**因此多等
+ * 一次 `api.me()`（那正是第 68 期权衡里被否掉的方案）。真正的裁决仍是下面
+ * `auth.init()` 的结果 —— token 过期 / 被吊销时它会把门禁翻回来。
+ */
+const showLogin = ref(!auth.authenticated)
 const showTour = ref(false)
 
 /**
@@ -80,22 +96,46 @@ function onUnauthorized(): void {
   showLogin.value = true
 }
 
+/**
+ * 外壳级数据的首拉（任务 + 书库）。**必须在「已裁决已登录」之后调**。
+ *
+ * ⚠️ 第 91 期：这两处请求是 **App.vue 自己的**，不在模板 `v-if/v-else` 覆盖范围内
+ * —— 只 gate 渲染拦不住它们（那正是「改了 `showLogin` 初值还剩 2 个 401」的原因）。
+ * 所以它们被收进这个函数，只在已登录时执行。
+ */
+async function bootstrapShell(): Promise<void> {
+  // 任务数据来自服务端真实任务表（不是本地种子）；只在有未结束任务时才轮询，
+  // 空闲时自动停止 —— 见 stores/tasks.ts。
+  void tasks.refresh()
+  // 首次使用引导：只认 `hasNoLibraries`（= **成功拉到且确实是 0 个**），拉取失败时不弹
+  await library.loadLibraries()
+}
+
+/**
+ * 登录门禁的 `@authed`：关掉门禁**并补跑一次外壳首拉**。
+ *
+ * ⚠️ 漏掉这次复跑不会报错 —— 表现只是「登录进来后任务栏永远空着、书库列表不刷新」，
+ * 因为 `onMounted` 早就跑完了，不会再执行第二遍。
+ */
+function onAuthed(): void {
+  showLogin.value = false
+  void bootstrapShell()
+}
+
 onMounted(async () => {
   // 首屏预置脚本已在 index.html 内联执行；这里再跑一次是为了覆盖
   //「系统深浅色在脚本之后变化」的情况，并挂上 change 监听。
   theme.applyClasses()
   theme.watchSystem()
-  // 任务数据来自服务端真实任务表（不是本地种子）；只在有未结束任务时才轮询，
-  // 空闲时自动停止 —— 见 stores/tasks.ts。
-  void tasks.refresh()
   document.addEventListener('keydown', onKeydown)
   window.addEventListener('nf-unauthorized', onUnauthorized)
   // 鉴权初始化：有 token 则校验，无则直接弹登录门禁
   await auth.init()
   showLogin.value = !auth.authenticated
 
-  // 首次使用引导：只认 `hasNoLibraries`（= **成功拉到且确实是 0 个**），拉取失败时不弹
-  await library.loadLibraries()
+  // 已裁决为「已登录」（本地有 token 且校验通过）才拉外壳数据；
+  // 未登录时门禁就是唯一界面，这些请求注定 401，一个都不该发。
+  if (!showLogin.value) await bootstrapShell()
 })
 
 /**
@@ -107,7 +147,8 @@ onMounted(async () => {
  * 不会再执行第二次 —— 实测就是这个结果：引导一次都没弹过（`nf_tour_seen` 始终为空）。
  *
  * 所以改成盯 `hasNoLibraries`：它由「成功取回且确实为 0」定义，无论书库是
- * 登录后才拉到的、还是用户把最后一个库删掉才变成 0 的，都会在**成立的那一刻**触发。
+ * 登录后才拉到的（第 91 期起这次拉取由 `onAuthed` → `bootstrapShell()` 补跑）、
+ * 还是用户把最后一个库删掉才变成 0 的，都会在**成立的那一刻**触发。
  */
 watch(
   () => library.hasNoLibraries,
@@ -128,7 +169,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <LoginGate v-if="showLogin" @authed="showLogin = false" />
+  <LoginGate v-if="showLogin" @authed="onAuthed" />
 
   <!--
     卡片式外壳：两块浮起卡片（侧栏 + 内容），块间一个 --shell-gap。

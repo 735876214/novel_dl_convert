@@ -190,11 +190,28 @@ def test_探索发现下载前先拦():
 
 
 def test_本地转换上传前先拦():
+    """0 库时不许真的走投递请求（第 38 期）。
+
+    ⚠️ 第 91 期：本页把「投递 → 提示 → 刷新」统一成与收书目录页同一条链路，守卫也照
+    那边的样子抽成了 `blockedByNoLibrary()`（拖拽与按路径两条入口**共用同一份**话术）。
+    「拦截发生在投递之前」这条没变，变的是它不再以字面量 `hasNoLibraries` 的形式待在
+    各入口函数体里 —— 所以断言与 `test_book_dock_投递前先拦` 同款，分两层：
+    守卫本身问的是 0 库，且**两个入口都先调守卫再投递**。
+    """
     src = _read(LOCAL)
-    for fn in ("convertFiles", "convertByPath"):
-        m = re.search(rf"function {fn}\(.*?\n\}}", src, re.S)
+    guard = re.search(r"function blockedByNoLibrary\(\)[^{]*\{(.*?)\n\}", src, re.S)
+    assert guard, "找不到 0 库守卫 blockedByNoLibrary，请同步本测试"
+    assert "hasNoLibraries" in guard.group(1), "守卫必须问的就是 0 库这个判据"
+    assert "return true" in guard.group(1), "守卫要能告诉调用方「已拦下」"
+
+    for fn, deliver in (("convertFiles", "api.convertDrop"), ("convertByPath", "api.convertPathDrop")):
+        m = re.search(rf"async function {fn}\(.*?\n\}}", src, re.S)
         assert m, f"{fn} 的形状变了，请同步本测试"
-        assert "hasNoLibraries" in m.group(0), f"{fn} 在 0 库时应提前拦下"
+        body = m.group(0)
+        assert "blockedByNoLibrary()" in body, f"{fn} 在 0 库时应提前拦下"
+        # 拦截必须在发起请求**之前** —— 否则又是「已入队然后后台失败」
+        assert body.index("blockedByNoLibrary()") < body.index(deliver), \
+            f"{fn} 的拦截要发生在投递之前"
 
 
 def test_book_dock_投递前先拦():
