@@ -8,9 +8,9 @@ import TaskFlyout from '@/components/TaskFlyout.vue'
 import UserMenu from '@/components/UserMenu.vue'
 import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
+import { SidebarTrigger } from '@/components/ui/sidebar'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { usePrefSyncStore } from '@/stores/prefSync'
-import { useUiStore } from '@/stores/ui'
 
 /**
  * 顶栏（第 65 期扩成「全站入口行」）。
@@ -25,8 +25,11 @@ import { useUiStore } from '@/stores/ui'
  *
  * `ICON_BTN` 那串类原先在本文件、`NotificationBell.vue`、`AppearanceMenu.vue`
  * 各有一份，本期统一收进 `ui/IconButton.vue`（否则再加四个入口就是七份复制）。
+ *
+ * ⚠️ 第 90 期：最左那颗「切换侧边栏」按钮换成 `ui/sidebar` 的 `SidebarTrigger`，
+ * 它自己从 `useSidebar()` 拿状态，不再经 `useUiStore` —— 那个 store 里的
+ * `sidebarCollapsed` / `toggleSidebar` 也随之删掉了（单一真值源）。
  */
-const ui = useUiStore()
 const router = useRouter()
 const sync = usePrefSyncStore()
 const { cfg, loadConfig } = useSettingsConfig()
@@ -69,23 +72,16 @@ function onSearchKeydown(e: KeyboardEvent): void {
 
 <template>
   <header class="flex h-14 shrink-0 items-center gap-3.5 border-b border-border px-[var(--shell-content-gutter)]">
-    <button
-      type="button"
-      class="grid h-8 w-8 cursor-pointer place-items-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-      title="切换侧边栏"
-      aria-label="切换侧边栏"
-      @click="ui.toggleSidebar()"
-    >
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-[17px] w-[17px]">
-        <rect x="3" y="4" width="18" height="16" rx="2" />
-        <path d="M9 4v16" />
-      </svg>
-    </button>
+    <!-- 侧栏开合（第 90 期）：换成上游的 `SidebarTrigger`，带悬停提示与
+         `aria-expanded`；⌘/Ctrl+B 是同一个动作的键盘入口（见 SidebarProvider）。
+         样式与替换前那颗按钮**逐字一致**（32×32 方形圆角）—— 见该组件的注释。 -->
+    <SidebarTrigger />
 
     <!-- `min-w-0`：flex 子项默认 `min-width: auto`，窄屏时它**不肯让位**，
          于是溢出部分被外壳的 `overflow-x: clip` 静默裁掉（最先消失的是最右端的头像）。
          加上它，压力先落在搜索框上（它缩得下去），右侧图标行保住。
-         本期只做这一处兜底，**不引入断点体系** —— 那是另一期的活，不做半套。 -->
+         ⚠️ 第 90 期：窄屏兜底已经**不靠这一条**了（≤640px 时侧栏是抽屉、不再占位），
+         但 640–900px 这段搜索框仍会挤右侧图标行，所以这条留着。 -->
     <div class="relative max-w-[35rem] min-w-0 flex-1">
       <svg class="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
         <circle cx="11" cy="11" r="7" />

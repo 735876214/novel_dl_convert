@@ -5,6 +5,7 @@ import { RouterView, useRoute } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import AppSidebar from '@/components/AppSidebar.vue'
 import SettingsSidebar from '@/components/SettingsSidebar.vue'
+import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import AppToast from '@/components/AppToast.vue'
 import LoginGate from '@/components/LoginGate.vue'
 import GuidedTourModal from '@/components/settings/GuidedTourModal.vue'
@@ -129,20 +130,27 @@ onUnmounted(() => {
 <template>
   <LoginGate v-if="showLogin" @authed="showLogin = false" />
 
-  <!-- 卡片式外壳：三块浮起卡片，块间一个 --shell-gap -->
-  <div v-else class="flex h-[100dvh] gap-[var(--shell-gap)] overflow-hidden p-[var(--shell-gap)]">
+  <!--
+    卡片式外壳：两块浮起卡片（侧栏 + 内容），块间一个 --shell-gap。
+    第 90 期把这一层换成 `SidebarProvider`：它在原样式之上多给两件事 ——
+    ① 把折叠态 / 宽度 / 窄屏判定下发成 provide/inject 上下文（`useSidebar()`）；
+    ② 在外壳根节点挂 `--sidebar-width` / `--sidebar-width-icon` 两根变量，
+       侧栏卡片与内容区都从这两根变量取宽度，所以拖宽时**两边同一帧一起动**。
+    高度 / 内边距 / 卡片间隙仍然写在 class 里，由这里（而不是 Provider）说了算。
+  -->
+  <SidebarProvider v-else class="h-[100dvh] gap-[var(--shell-gap)] overflow-hidden p-[var(--shell-gap)]">
     <!-- 任务面板（第 65 期）：从这一层的 `<TaskDrawer />` 搬进了顶栏那一行
          （`AppHeader.vue` 里的 `<TaskFlyout />`），随之删掉下面的全屏遮罩。 -->
     <SettingsSidebar v-if="isSettingsRoute" />
     <AppSidebar v-else />
 
-    <div class="flex min-w-0 flex-1 flex-col overflow-hidden rounded-[var(--shell-radius)] border border-[var(--shell-border)] bg-[var(--shell-surface)] shadow-xs backdrop-blur-md backdrop-saturate-150">
+    <SidebarInset>
       <AppHeader />
       <main class="min-h-0 flex-1 overflow-y-auto p-[var(--shell-content-gutter)]">
         <RouterView />
       </main>
-    </div>
-  </div>
+    </SidebarInset>
+  </SidebarProvider>
 
   <!-- 首次使用引导（第 38 期）：0 个书库时弹一次，见上面 showTour 的说明 -->
   <GuidedTourModal v-model:open="showTour" />

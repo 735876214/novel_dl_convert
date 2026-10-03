@@ -103,7 +103,16 @@ describe('AppSidebar（第 65 期导航改造）', () => {
     const router = makeRouter()
     const w = await mountSidebar(router)
 
-    const item = w.findAll('div').find((d) => d.text().trim() === '收书目录')
+    // 第 90 期：导航行从「可点 `<div>`」换成上游的 `SidebarMenuButton`，并且是
+    // **真 `<button>`** —— 按旧选择器找 `<div>` 会找不到，而找不到时这个用例只会
+    // 在 `toBeTruthy` 上红，看不出是「行换了标签」还是「项被删了」。所以按数据属性找。
+    //
+    // ⚠️ 认 `data-sidebar="menu-button"`，**不要认 `data-slot="sidebar-menu-button"`**：
+    // 带 tooltip 时 `SidebarMenuButton` 把行塞进 `TooltipTrigger as-child`，触发器
+    // 自己的 `data-slot="tooltip-trigger"` 会把行上的同名属性**顶掉**（上游同样如此）。
+    const item = w
+      .findAll('[data-sidebar="menu-button"]')
+      .find((b) => b.text().trim() === '收书目录')
     expect(item, '侧栏里找不到「收书目录」这一项').toBeTruthy()
     await item!.trigger('click')
     await flushPromises()
@@ -133,9 +142,15 @@ describe('AppSidebar（第 65 期导航改造）', () => {
    *
    * 用 `startsWith` 而不是 `includes`：祖先容器的 text 也包含这些字，
    * 而按 DOM 顺序第一个以组标题开头的祖先不会误中（所以只取最内层那一行）。
+   *
+   * 第 90 期改按 `data-sidebar="menu-button"` 取行：行已从 `<div>` 换成 `<button>`
+   * （见上一条用例的说明：`data-slot` 会被 tooltip 触发器顶掉，只有 `data-sidebar`
+   * 是稳的），而按标签名捞会先捞到 `<li>` 等外层容器。
    */
   function rowOf(w: VueWrapper, label: string): string {
-    const hit = w.findAll('div').find((d) => d.text().trim().startsWith(label))
+    const hit = w
+      .findAll('[data-sidebar="menu-button"]')
+      .find((b) => b.text().trim().startsWith(label))
     return hit?.text().trim() ?? ''
   }
 

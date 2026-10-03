@@ -2,10 +2,13 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 /**
- * 外壳 UI 状态（toast / 侧栏折叠 / 全局搜索）。
+ * 外壳 UI 状态（toast）。
  *
- * 这是对计划里五个 store 的一处扩展：toast 被导航、设置、主题三处共用，
- * 侧栏折叠属于外壳而非某个业务域，独立出来比塞进 nav store 更干净。
+ * ⚠️ 第 90 期删掉了 `sidebarCollapsed` / `toggleSidebar`：侧栏折叠改由
+ * `ui/sidebar` 的 `SidebarProvider` 用 provide/inject 下发（`useSidebar()`），
+ * 因为折叠状态还牵连抽屉态、图标条宽度、拖拽调宽三件事 —— 放在一个 Pinia
+ * store 里，就得让每个消费方自己去拼「现在到底该显示成什么样」。
+ * 顺带一个好处：这是个**本机**偏好（localStorage），不该跟着账号同步。
  *
  * ⚠️ 第 65 期删掉了 `drawerOpen` / `toggleDrawer` / `setDrawer`：任务面板从
  * 「右侧滑出抽屉」改成顶栏浮层（`TaskFlyout.vue`）后，浮层的开合是组件自己的
@@ -15,8 +18,6 @@ import { ref } from 'vue'
 export const useUiStore = defineStore('ui', () => {
   const toastMessage = ref('')
   let toastTimer: ReturnType<typeof setTimeout> | null = null
-
-  const sidebarCollapsed = ref(false)
 
   /** 底部提示条；2 秒后自动隐藏（与 v2 的 toast() 一致） */
   function toast(message: string): void {
@@ -28,10 +29,6 @@ export const useUiStore = defineStore('ui', () => {
     }, 2000)
   }
 
-  function toggleSidebar(): void {
-    sidebarCollapsed.value = !sidebarCollapsed.value
-  }
-
   /**
    * ⚠️ 这里原本有个 `demo(label)`：给占位按钮统一打「演示动作：」前缀的 toast。
    * 第 32 期把**最后一个调用点**（侧栏「库」组的假按钮）接上真实路由后，它已无任何
@@ -39,8 +36,6 @@ export const useUiStore = defineStore('ui', () => {
    */
   return {
     toastMessage,
-    sidebarCollapsed,
     toast,
-    toggleSidebar,
   }
 })

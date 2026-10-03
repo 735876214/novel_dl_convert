@@ -1,8 +1,25 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
+import SidebarNavItem from '@/components/sidebar/SidebarNavItem.vue'
+import SidebarSectionHeader from '@/components/sidebar/SidebarSectionHeader.vue'
 import Icon from '@/components/ui/Icon.vue'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarHeader,
+  SidebarInput,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarRail,
+  SidebarSeparator,
+  useSidebar,
+} from '@/components/ui/sidebar'
 import { isShelfGroup, type NavGroup, type NavItem } from '@/data/nav'
 import { api, apiErrorMessage, type BrowseCounts } from '@/lib/api'
 import { useCollectionsStore } from '@/stores/collections'
@@ -17,6 +34,32 @@ const wizard = useLibraryWizardStore()
 const ui = useUiStore()
 const route = useRoute()
 const router = useRouter()
+const { setOpenMobile } = useSidebar()
+
+/**
+ * 窄屏点完就走（第 90 期）：抽屉是模态浮层，选中一项后**必须自己收起来** ——
+ * 不收的话用户看到的是「点了一下，什么都没变」（目标页在遮罩底下加载完了，
+ * 但被抽屉盖着）。宽屏下 `setOpenMobile` 是空操作（`isMobile` 为假时抽屉根本
+ * 不渲染），所以这里不必先判 `isMobile`。
+ */
+function closeMobileDrawer(): void {
+  setOpenMobile(false)
+}
+
+/**
+ * 「库」组筛选框的外观覆盖（第 90 期）。
+ *
+ * `ui/Input.vue` 是逐字移植的上游组件，它自带一套完整样式（`h-9`、透明底、
+ * `border-input`、`md:text-sm`、focus 时一圈 ring）。这里要把它们**逐条抵掉**，
+ * 才能跟替换前的就地 `<input>` 长得一模一样：
+ *   · `md:text-[12px]` —— 不写的话 ≥768px 时 `md:text-sm` 会把它顶成 14px；
+ *   · `dark:bg-muted` / `dark:focus:bg-card` —— 上游的 `dark:bg-input/30` 是
+ *     `dark:` 变体，会盖过无变体的 `bg-muted`；
+ *   · `focus-visible:ring-0` —— 上游 focus 是一圈 ring，本项目这里是 box-shadow。
+ * 用 `cn` 保证「后写的赢」，顺序别调。
+ */
+const SIDEBAR_FILTER_CLASS =
+  'h-[1.875rem] rounded-md border-border bg-muted pr-2.5 pl-[1.875rem] text-[12px] shadow-none md:text-[12px] dark:bg-muted focus-visible:ring-0 focus:border-ring focus:bg-card dark:focus:bg-card focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_22%,transparent)]'
 
 // 第 78 期：侧栏底部版本号 + new 提示（GitHub 有新版本时挂徽标；点击进「新功能」窗口）
 const version = ref('')
@@ -35,6 +78,12 @@ async function loadVersionInfo(): Promise<void> {
   } catch {
     hasUpdate.value = false
   }
+}
+
+/** 底部版本号 → 「新功能」窗口（第 78 期）。先收抽屉，理由同 `onItemClick`。 */
+function goWhatsNew(): void {
+  closeMobileDrawer()
+  router.push('/whats-new')
 }
 
 /**
@@ -238,6 +287,9 @@ function navCount(item: NavItem): number | null {
 }
 
 function onItemClick(groupTitle: string | null, item: NavItem): void {
+  // 先收起抽屉再跳：跳转是异步的，等它完成再收会让用户盯着遮罩愣一下
+  closeMobileDrawer()
+
   if (item.id.startsWith('col:')) {
     router.push(`/collections/${item.id.slice(4)}`)
     return
@@ -270,6 +322,7 @@ function groupMoreCount(group: NavGroup): number {
 
 /** 组底部「更多」行的去向：申报了 `to` 就按路由去，否则沿用「进书架看全部」 */
 function onGroupMore(group: NavGroup): void {
+  closeMobileDrawer()
   const to = group.more?.to
   if (to) {
     router.push(to)
@@ -313,139 +366,150 @@ async function onGroupAction(title: string, action: 'add' | 'more'): Promise<voi
 </script>
 
 <template>
-  <aside
-    class="flex w-[15rem] shrink-0 flex-col overflow-hidden rounded-[var(--shell-radius)] border border-[var(--shell-border)] bg-[var(--shell-surface)] shadow-xs backdrop-blur-md backdrop-saturate-150 transition-[margin-left,width] duration-150"
-    :class="ui.sidebarCollapsed ? '-ml-[calc(15rem+var(--shell-gap))]' : ''"
-  >
-    <div class="flex shrink-0 items-center gap-2.5 px-3.5 pt-3.5 pb-3">
-      <div class="grid h-[1.875rem] w-[1.875rem] shrink-0 place-items-center rounded-sm bg-primary font-serif text-[15px] leading-none font-bold text-primary-foreground">
-        书
-      </div>
-      <div class="text-[14.5px] font-semibold tracking-[-0.01em] text-sidebar-foreground">书籍轨道</div>
-    </div>
-
-    <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3" data-sidebar="content">
-      <div
-        v-for="(group, gi) in groups"
-        :key="group.title ?? `main-${gi}`"
-        class="relative"
-        :class="gi > 0 ? '-mx-2 mt-1.5 border-t border-border px-2 pt-1.5' : ''"
+  <!--
+    第 90 期：整个侧栏换成上游 BookOrbit 的 `Sidebar*` 体系（分组 / 菜单 / 折叠）。
+    桌面折叠成 3rem 图标条，≤640px 变成抽屉，右缘一条可点可拖的拉手 —— 三者都由
+    `Sidebar.vue` 按 `isMobile` / `state` 分派，这里只负责填内容。
+  -->
+  <Sidebar collapsible="icon" variant="floating">
+    <!-- 品牌头。`group-data-[collapsible=icon]:px-2` 是必须的：3rem 宽的卡片减去
+         `px-3.5`（28px）只剩 20px，30px 的方标会溢出去。 -->
+    <SidebarHeader class="px-3.5 pt-3.5 pb-3 group-data-[collapsible=icon]:px-2 group-data-[collapsible=icon]:py-2.5">
+      <RouterLink
+        to="/"
+        class="flex h-[1.875rem] items-center gap-2.5 rounded-md outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+        aria-label="回到仪表盘"
+        @click="closeMobileDrawer"
       >
-        <div
-          v-if="group.title"
-          class="flex cursor-pointer items-center gap-1.5 rounded-md px-[0.625rem] py-1.5 transition-colors select-none hover:bg-[var(--shell-accent-wash)]"
-          @click="nav.toggleGroup(group.title)"
-        >
-          <span class="text-[11px] font-semibold tracking-[0.08em] text-muted-foreground">{{ group.title }}</span>
-          <span class="ml-auto flex items-center gap-0.5">
-            <button
-              v-for="action in group.actions ?? []"
-              :key="action"
-              type="button"
-              class="grid h-5 w-5 shrink-0 cursor-pointer place-items-center rounded-sm text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
-              :title="(action === 'add' ? '新增' : '更多') + group.title"
-              :aria-label="(action === 'add' ? '新增' : '更多') + group.title"
-              @click.stop="onGroupAction(group.title, action)"
-            >
-              <Icon :name="action === 'add' ? 'plus' : 'more'" class="h-3 w-3" />
-            </button>
-            <span
-              class="grid place-items-center text-muted-foreground transition-transform duration-150"
-              :class="nav.collapsed[group.title] ? '-rotate-90' : ''"
-            >
-              <Icon name="chev" class="h-3.5 w-3.5" />
-            </span>
-          </span>
+        <div class="grid h-[1.875rem] w-[1.875rem] shrink-0 place-items-center rounded-sm bg-primary font-serif text-[15px] leading-none font-bold text-primary-foreground">
+          书
         </div>
+        <div class="truncate text-[14.5px] font-semibold tracking-[-0.01em] text-sidebar-foreground group-data-[collapsible=icon]:hidden">
+          书籍轨道
+        </div>
+      </RouterLink>
+    </SidebarHeader>
 
-        <!-- 折叠只切 class，不重建 DOM；筛选只切显隐，输入焦点不丢 -->
-        <div v-show="!group.title || !nav.collapsed[group.title]">
-          <div v-if="group.search" class="relative px-0.5 pt-0.5 pb-1.5">
-            <svg
-              class="pointer-events-none absolute top-[calc(50%-0.1875rem)] left-[0.6875rem] h-[0.8125rem] w-[0.8125rem] -translate-y-1/2 text-muted-foreground"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <path d="M20 20l-3.6-3.6" />
-            </svg>
-            <input
-              type="text"
-              :value="nav.libFilter"
-              :placeholder="group.search.placeholder"
-              :aria-label="group.search.placeholder"
-              class="h-[1.875rem] w-full rounded-md border border-border bg-muted pr-2.5 pl-[1.875rem] text-[12px] text-foreground outline-none transition-[border-color,box-shadow,background-color] placeholder:text-muted-foreground focus:border-ring focus:bg-card focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_22%,transparent)]"
-              @input="nav.setLibFilter(($event.target as HTMLInputElement).value)"
-            >
-          </div>
+    <SidebarContent class="pb-3">
+      <template v-for="(group, gi) in groups" :key="group.title ?? `main-${gi}`">
+        <!-- 组间分隔线。除第一组外都画；`SidebarSeparator` 自带 `my-1`，
+             所以不再需要原来那句 `-mx-2 mt-1.5 px-2 pt-1.5` 的负边距把戏。 -->
+        <SidebarSeparator v-if="gi > 0" />
 
-          <div v-if="group.items.length">
-            <div
-              v-for="item in group.items"
-              v-show="nav.itemVisible(group.title ?? '', item)"
-              :key="item.id"
-              class="flex cursor-pointer items-center gap-[0.5625rem] rounded-md px-[0.625rem] py-[0.4375rem] text-[13px] transition-colors select-none"
-              :class="
-                isActive(item.id)
-                  ? 'bg-[var(--shell-accent-tint)] font-semibold text-primary opacity-100'
-                  : 'text-sidebar-foreground opacity-[0.78] hover:bg-[var(--shell-accent-wash)] hover:opacity-100'
-              "
-              @click="onItemClick(group.title, item)"
-            >
-              <Icon :name="item.icon" class="h-[0.9375rem] w-[0.9375rem] opacity-80" />
-              <span class="truncate">{{ item.label }}</span>
-              <span
-                v-if="navCount(item) !== null"
-                class="ml-auto shrink-0 rounded-full px-[0.4375rem] py-1 text-[10.5px] leading-none font-medium text-sidebar-count-foreground tabular-nums"
-                :class="isActive(item.id) ? 'bg-[var(--shell-accent-line)] text-primary' : 'bg-muted'"
+        <SidebarGroup>
+          <SidebarSectionHeader
+            v-if="group.title"
+            :label="group.title"
+            :is-open="!nav.collapsed[group.title]"
+            :actions="group.actions ?? []"
+            @toggle="nav.toggleGroup(group.title)"
+            @action="onGroupAction(group.title, $event)"
+          />
+
+          <!-- 折叠只切 v-show，不重建 DOM；筛选只切显隐，输入焦点不丢 -->
+          <SidebarGroupContent v-show="!group.title || !nav.collapsed[group.title]">
+            <div v-if="group.search" class="relative px-0.5 pt-0.5 pb-1.5 group-data-[collapsible=icon]:hidden">
+              <svg
+                class="pointer-events-none absolute top-[calc(50%-0.1875rem)] left-[0.6875rem] z-10 h-[0.8125rem] w-[0.8125rem] -translate-y-1/2 text-muted-foreground"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
               >
-                {{ navCount(item) }}
-              </span>
+                <circle cx="11" cy="11" r="7" />
+                <path d="M20 20l-3.6-3.6" />
+              </svg>
+              <SidebarInput
+                :model-value="nav.libFilter"
+                :placeholder="group.search.placeholder"
+                :aria-label="group.search.placeholder"
+                :class="SIDEBAR_FILTER_CLASS"
+                @update:model-value="nav.setLibFilter(String($event ?? ''))"
+              />
             </div>
-          </div>
-          <div v-else-if="!group.search" class="px-[0.625rem] pt-1.5 pb-2 text-[11.5px] text-muted-foreground/70">
-            {{ group.empty ?? '暂无内容' }}
-          </div>
 
-          <!-- 「库」组**永远不为空**（恒有「全部书库」一项），所以上面的 `group.empty`
-               对它永远走不到 —— 0 库时这里单独补一行明示（第 38 期）。
-               没有它，全新部署的侧栏「库」组就只有一个筛选框和「查看全部书库（0）」。 -->
-          <button
-            v-if="group.title === '库' && library.hasNoLibraries"
+            <SidebarMenu v-if="group.items.length">
+              <SidebarNavItem
+                v-for="item in group.items"
+                :key="item.id"
+                :item="item"
+                :is-active="isActive(item.id)"
+                :count="navCount(item)"
+                :visible="nav.itemVisible(group.title ?? '', item)"
+                @select="onItemClick(group.title, $event)"
+              />
+            </SidebarMenu>
+            <div v-else-if="!group.search" class="px-[0.625rem] pt-1.5 pb-2 text-[11.5px] text-muted-foreground/70 group-data-[collapsible=icon]:hidden">
+              {{ group.empty ?? '暂无内容' }}
+            </div>
+
+            <!-- 「库」组**永远不为空**（恒有「全部书库」一项），所以上面的 `group.empty`
+                 对它永远走不到 —— 0 库时这里单独补一行明示（第 38 期）。
+                 没有它，全新部署的侧栏「库」组就只有一个筛选框和「查看全部书库（0）」。 -->
+            <SidebarMenu v-if="group.title === '库' && library.hasNoLibraries">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  as="button"
+                  type="button"
+                  size="sm"
+                  tooltip="新建书库"
+                  class="text-[11.5px] text-muted-foreground"
+                  @click="onGroupAction('库', 'add')"
+                >
+                  <Icon name="plus" class="h-3 w-3 shrink-0" />
+                  <span class="min-w-0 flex-1 truncate group-data-[collapsible=icon]:hidden">还没有书库，先建一个</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+
+            <SidebarMenu v-if="group.more">
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  as="button"
+                  type="button"
+                  size="sm"
+                  :tooltip="group.more?.label"
+                  class="text-[11.5px] text-muted-foreground"
+                  @click="onGroupMore(group)"
+                >
+                  <span class="min-w-0 flex-1 truncate group-data-[collapsible=icon]:hidden">
+                    {{ group.more.label }}（{{ groupMoreCount(group) }}）
+                  </span>
+                  <Icon name="arrowRight" class="h-[0.8125rem] w-[0.8125rem] shrink-0" />
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </template>
+    </SidebarContent>
+
+    <!-- 第 78 期：侧栏底部版本号 + new 提示；点击进「新功能」窗口。
+         图标条态下文字被收掉，留一个 `sparkle` 代表「新功能」——否则那里会是一个
+         什么都没有的 32px 方块。 -->
+    <SidebarFooter class="border-t border-border px-2 py-2 group-data-[collapsible=icon]:px-1">
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            as="button"
             type="button"
-            class="mt-0.5 flex w-full cursor-pointer items-center gap-1.5 rounded-md px-[0.625rem] py-1.5 text-left text-[11.5px] text-muted-foreground transition-colors hover:bg-[var(--shell-accent-wash)] hover:text-primary"
-            @click="onGroupAction('库', 'add')"
+            size="sm"
+            :tooltip="hasUpdate ? '有新版本，查看新功能' : '新功能'"
+            class="justify-center gap-1.5 text-[11.5px] text-muted-foreground"
+            @click="goWhatsNew"
           >
-            <Icon name="plus" class="h-3 w-3 shrink-0" />
-            <span>还没有书库，先建一个</span>
-          </button>
+            <span class="font-mono tabular-nums group-data-[collapsible=icon]:hidden">v{{ version || '…' }}</span>
+            <span
+              v-if="hasUpdate"
+              class="rounded-full bg-primary px-1.5 py-0.5 text-[9.5px] leading-none font-semibold text-primary-foreground group-data-[collapsible=icon]:hidden"
+            >new</span>
+            <Icon name="sparkle" class="hidden h-[0.9375rem] w-[0.9375rem] shrink-0 group-data-[collapsible=icon]:block" />
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    </SidebarFooter>
 
-          <div
-            v-if="group.more"
-            class="mt-0.5 flex cursor-pointer items-center gap-1 rounded-md px-[0.625rem] py-2 text-[11.5px] text-muted-foreground transition-colors hover:bg-[var(--shell-accent-wash)] hover:text-primary"
-            @click="onGroupMore(group)"
-          >
-            <span>{{ group.more.label }}（{{ groupMoreCount(group) }}）</span>
-            <Icon name="arrowRight" class="ml-auto h-[0.8125rem] w-[0.8125rem]" />
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 第 78 期：侧栏底部版本号 + new 提示；点击进「新功能」窗口 -->
-    <button
-      type="button"
-      class="flex shrink-0 cursor-pointer items-center justify-center gap-1.5 border-t border-border px-3 py-2 text-[11.5px] text-muted-foreground transition-colors hover:bg-[var(--shell-accent-wash)] hover:text-primary"
-      @click="router.push('/whats-new')"
-    >
-      <span class="font-mono tabular-nums">v{{ version || '…' }}</span>
-      <span
-        v-if="hasUpdate"
-        class="rounded-full bg-primary px-1.5 py-0.5 text-[9.5px] leading-none font-semibold text-primary-foreground"
-      >new</span>
-    </button>
-  </aside>
+    <SidebarRail />
+  </Sidebar>
 </template>
