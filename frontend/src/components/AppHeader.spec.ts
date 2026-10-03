@@ -6,6 +6,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import AppHeader from '@/components/AppHeader.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type AppConfig, type PrefDevice } from '@/lib/api'
+import { NARROW_QUERY } from '@/lib/viewport'
 import type { PrefsPayload } from '@/lib/prefsPayload'
 
 /**
@@ -18,6 +19,10 @@ import type { PrefsPayload } from '@/lib/prefsPayload'
  *   · 绕回抽屉 —— 抽屉那套状态已被删掉，退回旧写法会与浮层叠成两层。
  *
  * 子组件（通知 / 任务 / 外观 / 账户）各自有 spec，这里只为「接线」断言。
+ *
+ * ⚠️ 第 91 期加了**窄屏**那一半（≤640px 时七项收进「更多」）。窄屏要单独测，
+ * 因为默认环境下 `matchMedia` 一律回 `false`（= 宽屏），窄屏分支**根本没被执行到** ——
+ * 那种「测了但其实没测」的绿比红更危险。
  */
 vi.mock('@/lib/api', () => ({
   api: {
@@ -43,6 +48,54 @@ function configPayload(achievements: { enabled: boolean } | null) {
     config_file: '',
     settings_file: '',
     backup_dir: '',
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 桩：可控的 matchMedia（同 `lib/viewport.spec.ts` / `ui/sidebar/sidebar.spec.ts`
+// 的理由 —— 默认环境的 `matchMedia` 永远回 `false`，窄屏分支一行都跑不到）
+// ---------------------------------------------------------------------------
+
+type ChangeListener = (event: { matches: boolean }) => void
+
+const realMatchMedia = window.matchMedia
+let restoreMatchMedia: (() => void) | null = null
+
+function installMatchMedia(initialMatches: boolean) {
+  const listeners = new Set<ChangeListener>()
+  const queries: string[] = []
+  const state = { matches: initialMatches }
+
+  window.matchMedia = ((query: string) => {
+    queries.push(query)
+    return {
+      media: query,
+      get matches() {
+        return state.matches
+      },
+      onchange: null,
+      addEventListener: (type: string, cb: ChangeListener) => {
+        if (type === 'change') listeners.add(cb)
+      },
+      removeEventListener: (_type: string, cb: ChangeListener) => {
+        listeners.delete(cb)
+      },
+      addListener: (cb: ChangeListener) => listeners.add(cb),
+      removeListener: (cb: ChangeListener) => listeners.delete(cb),
+      dispatchEvent: () => false,
+    }
+  }) as unknown as typeof window.matchMedia
+
+  restoreMatchMedia = () => {
+    window.matchMedia = realMatchMedia
+  }
+
+  return {
+    queries,
+    change(matches: boolean) {
+      state.matches = matches
+      for (const cb of [...listeners]) cb({ matches })
+    },
   }
 }
 
@@ -115,6 +168,8 @@ beforeEach(() => {
 afterEach(() => {
   for (const w of mounted.splice(0)) w.unmount()
   document.body.innerHTML = ''
+  restoreMatchMedia?.()
+  restoreMatchMedia = null
 })
 
 describe('AppHeader（第 65 期顶栏入口行）', () => {
@@ -193,5 +248,85 @@ describe('AppHeader（第 65 期顶栏入口行）', () => {
     const { w } = await mountHeader()
     expect(labels(w).filter((l) => l === '通知')).toHaveLength(1)
     expect(labels(w).filter((l) => l === '数据统计')).toHaveLength(1)
+  })
+})
+
+describe('AppHeader 窄屏（第 91 期：图标行收进「更多」）', () => {
+  /** 窄屏挂载：`matchMedia` 必须在 `mount` **之前**装好（`useMediaQuery` 在 setup 期取初值） */
+  async function mountNarrow() {
+    const mq = installMatchMedia(true)
+    const out = await mountHeader()
+    return { ...out, mq }
+  }
+
+  it('断点用的是全站唯一真值源（`lib/viewport.ts` 的 NARROW_QUERY）', async () => {
+    const { mq } = await mountNarrow()
+    // 这里写死 639.98px 会变成第二份断点。真正的判据是「查询串来自那个常量」。
+    expect(mq.queries).toContain(NARROW_QUERY)
+  })
+
+  it('窄屏：七项从图标行消失，「更多」取代它们的位置', async () => {
+    const { w } = await mountNarrow()
+
+    expect(labels(w)).toEqual(['通知', '更多', '外观'])
+    for (const gone of ['数据统计', '任务', '工具', '阅读记录', '阅读活动', '设置']) {
+      expect(buttonByLabel(w, gone), `窄屏不该还留着「${gone}」`).toBeUndefined()
+    }
+    // 头像与账户菜单仍在（它们被裁掉才是那个原始缺陷）
+    expect(w.find('button[aria-label="账户菜单"]').exists()).toBe(true)
+  })
+
+  it('窄屏：七项在「更多」面板里，且点了真的跳（唯一入口不能少一个）', async () => {
+    const { w, router } = await mountNarrow()
+
+    const trigger = w.find('[data-more-menu-trigger] button')
+    expect(trigger.exists(), '窄屏找不到「更多」触发器').toBe(true)
+    // 面板 Teleport 到 body，`wrapper.find` 够不着
+    expect(document.body.querySelectorAll('[data-book-menu-panel] [role="menuitem"]')).toHaveLength(0)
+
+    await trigger.trigger('click')
+    await flushPromises()
+    const items = Array.from(
+      document.body.querySelectorAll('[data-book-menu-panel] [role="menuitem"]'),
+    ).map((b) => (b.textContent ?? '').trim())
+    expect(items).toEqual([
+      '数据统计', '任务', '工具', '阅读记录', '阅读活动', '成就', '设置',
+    ])
+
+    const settings = Array.from(
+      document.body.querySelectorAll('[data-book-menu-panel] [role="menuitem"]'),
+    ).find((b) => (b.textContent ?? '').includes('设置')) as HTMLElement
+    settings.click()
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/settings')
+    expect(document.body.querySelectorAll('[data-book-menu-panel]').length).toBe(0)
+  })
+
+  it('窄屏：⌘K 徽标收掉（连同它占的那截内边距），宽屏仍在', async () => {
+    const narrow = await mountNarrow()
+    expect(narrow.w.text(), '窄屏还渲染着 ⌘K 徽标').not.toContain('⌘K')
+    const narrowInput = narrow.w.find('#globalSearch')
+    expect(narrowInput.classes(), '窄屏仍留着给徽标腾的内边距').not.toContain('pr-[4.375rem]')
+
+    // 反向哨兵：宽屏**一个字都不能变**（这是「只影响窄屏」的判据）。
+    // ⚠️ 必须先拆掉窄屏桩，否则这一侧的挂载还是窄屏，反向哨兵会变成「自己跟自己对」。
+    restoreMatchMedia?.()
+    restoreMatchMedia = null
+    const wide = await mountHeader()
+    expect(wide.w.text()).toContain('⌘K')
+    expect(wide.w.find('#globalSearch').classes()).toContain('pr-[4.375rem]')
+  })
+
+  it('跨断点：窗口变宽后七项回到图标行，不必刷新', async () => {
+    const { w, mq } = await mountNarrow()
+    expect(labels(w)).toEqual(['通知', '更多', '外观'])
+
+    mq.change(false)
+    await flushPromises()
+    await flushPromises()
+
+    expect(labels(w)).toContain('设置')
+    expect(labels(w)).toContain('数据统计')
+    expect(buttonByLabel(w, '更多'), '变宽了还留着「更多」').toBeUndefined()
   })
 })

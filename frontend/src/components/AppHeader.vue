@@ -3,6 +3,7 @@ import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 import AppearanceMenu from '@/components/AppearanceMenu.vue'
+import AppMoreMenu from '@/components/AppMoreMenu.vue'
 import NotificationBell from '@/components/NotificationBell.vue'
 import TaskFlyout from '@/components/TaskFlyout.vue'
 import UserMenu from '@/components/UserMenu.vue'
@@ -10,6 +11,7 @@ import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { SidebarTrigger } from '@/components/ui/sidebar'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
+import { useNarrowScreen } from '@/lib/viewport'
 import { usePrefSyncStore } from '@/stores/prefSync'
 
 /**
@@ -29,6 +31,10 @@ import { usePrefSyncStore } from '@/stores/prefSync'
  * ⚠️ 第 90 期：最左那颗「切换侧边栏」按钮换成 `ui/sidebar` 的 `SidebarTrigger`，
  * 它自己从 `useSidebar()` 拿状态，不再经 `useUiStore` —— 那个 store 里的
  * `sidebarCollapsed` / `toggleSidebar` 也随之删掉了（单一真值源）。
+ *
+ * ⚠️ 第 91 期：≤640px 时上树那七项收进 `AppMoreMenu`（用户口径「收进『更多』菜单」）。
+ * 「收进」≠「隐藏」—— 它们是唯一入口，所以是换容器、不是收窄功能。
+ * 宽屏那一行**一个字都没动**（顺序、图标、门控全按原样）。
  */
 const router = useRouter()
 const sync = usePrefSyncStore()
@@ -43,6 +49,19 @@ const { cfg, loadConfig } = useSettingsConfig()
  * 关闭时整块**不渲染**（不灰置、不占位：灰置等于承认「本该有但不给你」）。
  */
 const achievementsEnabled = computed(() => cfg.value?.achievements?.enabled !== false)
+
+/**
+ * 窄屏（第 91 期，用户口径：图标行**收进「更多」菜单**）。
+ *
+ * 判据用 `lib/viewport.ts` 的 `useNarrowScreen()` —— 全站断点**唯一真值源**，
+ * 不许在这里写第二份 `matchMedia('(max-width: 639.98px)')`（改断点时必然漏一处）。
+ *
+ * 为什么是 `v-if` 而不是 CSS 隐藏：菜单面板 `Teleport` 到 `body`，CSS 够不着它；
+ * 硬藏就得再写一套「触发器与面板都藏」的规则 ⇒ JS/CSS 两份断点。
+ * `matchMedia` 不可用的环境按**宽屏**处理（与侧栏同一兜底：宁可多显示一排按钮，
+ * 也不要把唯一入口藏进一个打不开的面板里）。
+ */
+const narrow = useNarrowScreen()
 
 /** 应用级入口：注册偏好变更回调并启动同步（幂等）。
  *
@@ -93,10 +112,16 @@ function onSearchKeydown(e: KeyboardEvent): void {
         placeholder="搜索全部书籍..."
         autocomplete="off"
         aria-label="搜索全部书籍"
-        class="h-9 w-full rounded-md border border-transparent bg-muted pr-[4.375rem] pl-9 text-[13px] text-foreground outline-none transition-[border-color,box-shadow,background-color] placeholder:text-muted-foreground focus:border-ring focus:bg-card focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_22%,transparent)]"
+        class="h-9 w-full rounded-md border border-transparent bg-muted pl-9 text-[13px] text-foreground outline-none transition-[border-color,box-shadow,background-color] placeholder:text-muted-foreground focus:border-ring focus:bg-card focus:shadow-[0_0_0_3px_color-mix(in_oklab,var(--ring)_22%,transparent)]"
+        :class="narrow ? 'pr-3' : 'pr-[4.375rem]'"
         @keydown="onSearchKeydown"
       >
-      <span class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 rounded-sm border border-border bg-card px-1.5 py-px text-[10.5px] text-muted-foreground">
+      <!-- `⌘K` 是**徽标不是快捷键说明**（真正的快捷键在 `App.vue` 的 keydown 里）：
+           窄屏既没有 ⌘ 键、也用不着那截内边距，一并收掉，把宽度让给输入本身。 -->
+      <span
+        v-if="!narrow"
+        class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 rounded-sm border border-border bg-card px-1.5 py-px text-[10.5px] text-muted-foreground"
+      >
         ⌘K
       </span>
     </div>
@@ -131,30 +156,52 @@ function onSearchKeydown(e: KeyboardEvent): void {
       >
         离线 · 未同步
       </button>
-      <!-- 通知：浮层 + 未读角标（与整页 /notify 同数据源） -->
+      <!-- 通知：浮层 + 未读角标（与整页 /notify 同数据源）。**窄屏也不收进「更多」**：
+           角标是它存在的意义，藏进面板就等于没有提示了。 -->
       <NotificationBell />
-      <IconButton label="数据统计" @click="router.push('/stats')">
-        <Icon name="chart" class="h-[17px] w-[17px]" />
-      </IconButton>
-      <!-- 任务：第 65 期从「右侧滑出抽屉」改成与通知同款浮层（用户口径 2） -->
-      <TaskFlyout />
-      <IconButton label="工具" @click="router.push('/tools')">
-        <Icon name="wrench" class="h-[17px] w-[17px]" />
-      </IconButton>
-      <IconButton label="阅读记录" @click="router.push('/log')">
-        <Icon name="clock" class="h-[17px] w-[17px]" />
-      </IconButton>
-      <IconButton label="阅读活动" @click="router.push('/reading-activity')">
-        <Icon name="note" class="h-[17px] w-[17px]" />
-      </IconButton>
-      <!-- 成就：开关关掉时**整块不渲染**（不灰置、不占位）—— 与侧栏原来的门控同一个判据 -->
-      <IconButton v-if="achievementsEnabled" label="成就" @click="router.push('/achievements')">
-        <Icon name="star" class="h-[17px] w-[17px]" />
-      </IconButton>
+
+      <!--
+        窄屏：下面这七项**换地方**（不是隐藏）—— 第 65 期已从侧栏撤掉，顶栏是它们的
+        唯一入口，被 `overflow-x: clip` 裁掉就等于「窄屏进不了设置」。
+        「更多」放在这一排的**起始位置**（通知之后），与它取代的那几项同位。
+      -->
+      <AppMoreMenu v-if="narrow" :achievements-enabled="achievementsEnabled" />
+
+      <!--
+        ⚠️ 宽屏的这七项被拆成**两段** `v-if`，因为 `AppearanceMenu` 夹在它们中间
+        （第 65 期的顺序：数据统计 / 任务 / 工具 / 阅读记录 / 阅读活动 / 成就 / 外观 / 设置）。
+        合成一段就得把外观挪到设置后面 —— 那是**没要求过的视觉改动**，且会让
+        `AppHeader.spec.ts` 的顺序断言改成「配合实现」，把哨兵变成橡皮图章。
+      -->
+      <template v-if="!narrow">
+        <IconButton label="数据统计" @click="router.push('/stats')">
+          <Icon name="chart" class="h-[17px] w-[17px]" />
+        </IconButton>
+        <!-- 任务：第 65 期从「右侧滑出抽屉」改成与通知同款浮层（用户口径 2） -->
+        <TaskFlyout />
+        <IconButton label="工具" @click="router.push('/tools')">
+          <Icon name="wrench" class="h-[17px] w-[17px]" />
+        </IconButton>
+        <IconButton label="阅读记录" @click="router.push('/log')">
+          <Icon name="clock" class="h-[17px] w-[17px]" />
+        </IconButton>
+        <IconButton label="阅读活动" @click="router.push('/reading-activity')">
+          <Icon name="note" class="h-[17px] w-[17px]" />
+        </IconButton>
+        <!-- 成就：开关关掉时**整块不渲染**（不灰置、不占位）—— 与侧栏原来的门控同一个判据 -->
+        <IconButton v-if="achievementsEnabled" label="成就" @click="router.push('/achievements')">
+          <Icon name="star" class="h-[17px] w-[17px]" />
+        </IconButton>
+      </template>
+
       <AppearanceMenu />
-      <IconButton label="设置" @click="router.push('/settings')">
-        <Icon name="settings" class="h-[17px] w-[17px]" />
-      </IconButton>
+
+      <template v-if="!narrow">
+        <IconButton label="设置" @click="router.push('/settings')">
+          <Icon name="settings" class="h-[17px] w-[17px]" />
+        </IconButton>
+      </template>
+
       <UserMenu />
     </div>
   </header>
