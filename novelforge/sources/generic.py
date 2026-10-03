@@ -27,7 +27,7 @@ class GenericHtmlSource(SourceAdapter):
     name = "generic"
     # 改成你的站点主域名（用于 /supported 自动选源）
     domains = ["example-novel.com"]
-    public = False  # 非公版源，需用户在 config 中显式开启 download
+    public = False  # 非公版源（仅影响书源列表的徽章；下载仍受 download.enabled 总开关约束）
 
     SEARCH_URL = "https://example-novel.com/search?q={title}"
     # 并发抓取章节数的上限（防 OOM / 被封）

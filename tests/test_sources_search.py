@@ -84,8 +84,8 @@ def _paged(name: str, pages, *, public: bool = True) -> type:
     })
 
 
-def _mgr(*, enabled: bool = True, public_only: bool = True) -> DownloadManager:
-    return DownloadManager({"download": {"enabled": enabled, "public_only": public_only}})
+def _mgr(*, enabled: bool = True) -> DownloadManager:
+    return DownloadManager({"download": {"enabled": enabled}})
 
 
 def _rows(res: dict) -> dict:
@@ -140,16 +140,35 @@ def test_单源超时只影响该源(registry, monkeypatch):
     assert [it["title"] for it in res["items"]] == ["快"]
 
 
-def test_被闸门跳过的源不进命中但仍列出原因(registry):
+def test_闸门关闭时每个源都被跳过并如实列出原因(registry):
+    """跳过的源**不贡献命中但必须出现在 `sources` 里** —— 否则用户只看到「结果变少了」。"""
     registry("paid-src", _plain("paid-src", public=False,
                                 items=[{"title": "付费书", "author": "某人", "url": "u"}]))
     registry("free-src", _plain("free-src", items=[{"title": "免费书", "author": "某人", "url": "u2"}]))
 
-    res = asyncio.run(_mgr(public_only=True).search("x"))
+    res = asyncio.run(_mgr(enabled=False).search("x"))
 
     rows = _rows(res)
-    assert rows["paid-src"]["skipped"] is True and "不是公版源" in rows["paid-src"]["reason"]
-    assert [it["title"] for it in res["items"]] == ["免费书"]
+    assert set(rows) == {"paid-src", "free-src"}
+    assert all(r["skipped"] is True for r in rows.values()), rows
+    assert "下载功能未开启" in rows["paid-src"]["reason"], rows["paid-src"]
+    assert res["items"] == [], "被闸门跳过的源不该贡献任何命中"
+
+
+def test_非公版源在下载开启时照常命中(registry):
+    """第 93 期删掉「仅放行公版源」后：`public=False` 只是标注，**不再被跳过**。
+
+    留这条挡住「哪天有人顺手把 public 过滤加回 gate_reason」—— `test_sources_gate.py`
+    里那条是从 HTTP 入口测同一件事，这里从 `search()` 直接测。
+    """
+    registry("paid-src", _plain("paid-src", public=False,
+                                items=[{"title": "付费书", "author": "某人", "url": "u"}]))
+
+    res = asyncio.run(_mgr().search("x"))
+
+    rows = _rows(res)
+    assert rows["paid-src"]["skipped"] is False and rows["paid-src"]["reason"] == "", rows["paid-src"]
+    assert [it["title"] for it in res["items"]] == ["付费书"]
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +322,7 @@ def test_搜索接口返回逐源状态与分页标记(client, auth_headers, iso
     registry("stub-src", _plain("stub-src",
                                 items=[{"title": "三体", "author": "刘慈欣", "url": "https://e.com/1"}]))
     monkeypatch.setattr(config, "SETTINGS_FILE", tmp_path / "settings.json")
-    config.save_overrides({"download": {"enabled": True, "public_only": True}})
+    config.save_overrides({"download": {"enabled": True}})
 
     r = client.post("/api/search", headers=auth_headers, json={"title": "三体"})
 
@@ -322,7 +341,7 @@ def test_搜索接口第二页沿用逐源分页(client, auth_headers, isolated,
         [{"title": "T2", "author": "A", "url": "u2"}],
     ]))
     monkeypatch.setattr(config, "SETTINGS_FILE", tmp_path / "settings.json")
-    config.save_overrides({"download": {"enabled": True, "public_only": True}})
+    config.save_overrides({"download": {"enabled": True}})
 
     p1 = client.post("/api/search", headers=auth_headers, json={"title": "x"}).json()
     p2 = client.post("/api/search", headers=auth_headers, json={"title": "x", "page": 2}).json()

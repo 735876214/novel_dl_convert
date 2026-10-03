@@ -415,8 +415,8 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
       p('ext/network', 'Network', '网络与下载', 'ready', {
         upstream: {
           title: '（本项目独有）',
-          desc: '上游没有书源下载体系，因此没有下载开关、公版源限制、域名替换等设置。',
-          items: ['传输重试次数', '开放搜索 / 下载', '仅放行公版源', '日志内存缓冲条数 / 日志目录', '域名替换'],
+          desc: '上游没有书源下载体系，因此没有下载开关、取目录开关、域名替换等设置。',
+          items: ['传输重试次数', '开放搜索 / 下载', '从官方书城取目录', '日志内存缓冲条数 / 日志目录', '域名替换'],
         },
       }),
       p('ext/advanced', 'Advanced', '高级', 'ready', {

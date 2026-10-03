@@ -68,7 +68,7 @@ def test_漫画没有新页不碰文件(tmp_path):
 # ---------------- 有声书：追加轨 ----------------
 
 def _audio_mgr():
-    return DownloadManager({"download": {"enabled": True, "public_only": False}})
+    return DownloadManager({"download": {"enabled": True}})
 
 
 def test_音频追加轨续着既有话号(tmp_path):

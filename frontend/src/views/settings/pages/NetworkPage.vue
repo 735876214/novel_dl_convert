@@ -12,7 +12,7 @@ import { useSettingsConfig } from '@/composables/useSettingsConfig'
 /**
  * EXTENSIONS → Network（`/settings/ext/network`）
  *
- * 本项目独有分区：上游没有书源下载体系，因此没有下载开关 / 公版源限制 / 域名替换等设置。
+ * 本项目独有分区：上游没有书源下载体系，因此没有下载开关 / 取目录开关 / 域名替换等设置。
  */
 
 const { cfg, saving, val, setVal, loadConfig, saveSection, hostReplaceText } = useSettingsConfig()

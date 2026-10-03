@@ -6154,7 +6154,7 @@ EDITABLE: dict = {
     },
     "network": {"max_retries", "host_replace"},
     # 第 85 期批次 B：`toc_enabled` = 「从官方书城取目录」的独立开关（闸门的用途维度）
-    "download": {"enabled", "public_only", "toc_enabled"},
+    "download": {"enabled", "toc_enabled"},
     # 第 86 期：**书籍追更**调度（与 `update`「应用自身版本」不是一回事）。
     # ⚠️ 默认 `enabled=true`（需求口径），所以这里必须可写 —— 否则界面关不掉它，
     # 后台照跑 = 假开关（本仓有专门一条纪律）。

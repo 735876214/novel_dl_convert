@@ -1,4 +1,4 @@
-"""第 71 期：下载闸门（`download.enabled` / `download.public_only`）**真的拦得住**。
+"""第 71 期：下载闸门（`download.enabled`）**真的拦得住**；第 93 期：闸门只剩这一条。
 
 起因是一条假开关：设置页写着「开放搜索 / 下载 —— 关闭时书源仅做规则管理，不可搜索下载」
 （`frontend/src/data/settingsFields.ts`），而第 71 期之前那段判定只作用于**展示**
@@ -6,17 +6,20 @@
 CLI 里另写了一份）—— `/api/search`、`/api/download`、`/api/preview` 谁都不检查它。
 于是关掉之后照搜照下，界面上那句承诺是假的。
 
-本文件把四件事钉在一起：
+本文件把五件事钉在一起：
 
 1. 关掉下载 ⇒ 三个端点一律 400，且**原因里带出口**（不能只说「不行」）；
    ⚠️ 拒绝必须发生在**业务逻辑之前**：用例把 `DownloadManager.search/preview` 换成会
    直接失败的桩，被拒时它们一个都不许被调到；
 2. **不进队列**：被闸门或「未知书源」挡下的下载不该先落一条注定失败的任务 ——
    用户要跑到任务中心才发现，等于一次白问（与第 38 期「0 库提前拦」同口径）；
-3. `public_only` 为真 ⇒ 非公版源在**搜索里被跳过并注明原因**（而不是搜出来、点下载才拒），
-   在下/预览时被拒；放行的源照常入队，且任务详情里的来源名不为空
+3. 放行的源照常入队，且任务详情里的来源名不为空
    （第 71 期之前读的是不存在的键 ⇒ 任务中心「来源」一栏一直是空的）；
-4. **试搜（`/api/sources/test`）刻意不受闸门限制**：它是管理面自检（第 57 期语义），
+4. **第 93 期：`public` 只是标注，非公版源照常搜 / 下 / 预览** —— 用户拍板删掉了
+   「仅放行公版源」（`download.public_only`）这条闸门，于是原先那两条
+   「非公版源被跳过 / 被拒」的用例**反过来**钉住新口径：它不再被拦。
+   （历史口径见 `docs/roadmap-gaps-remaining.md` 第 71 期段，不改写。）
+5. **试搜（`/api/sources/test`）刻意不受闸门限制**：它是管理面自检（第 57 期语义），
    一起拦掉的话，用户就再也没法确认自己写的规则还能不能用。
 
 ⚠️ 全程零网络：各书源换成本文件的桩，后台下载换成空操作。
@@ -68,10 +71,10 @@ def stubs(monkeypatch):
     return {"public": "stub-public", "paid": "stub-paid"}
 
 
-def _set_download(monkeypatch, tmp_path, *, enabled: bool, public_only: bool = True) -> None:
+def _set_download(monkeypatch, tmp_path, *, enabled: bool) -> None:
     """把 settings.json 覆盖层指到本用例的临时文件（不动真实配置、也不影响别的用例）。"""
     monkeypatch.setattr(config, "SETTINGS_FILE", tmp_path / "settings.json")
-    config.save_overrides({"download": {"enabled": enabled, "public_only": public_only}})
+    config.save_overrides({"download": {"enabled": enabled}})
 
 
 async def _noop_run_download(tid: str, item: dict, actor: str = "系统",
@@ -134,42 +137,47 @@ def test_关掉下载时预览被拒(client, auth_headers, isolated, monkeypatch
     assert "下载功能未开启" in r.json()["detail"]
 
 
-def test_仅放行公版源时非公版源被跳过并注明原因(client, auth_headers, isolated, monkeypatch, tmp_path, stubs):
-    """非公版源**在搜索阶段就如实标出来**。
+def test_非公版源不再被拦_照常搜索下载与预览(client, auth_headers, isolated, monkeypatch, tmp_path, stubs):
+    """第 93 期新口径：`public` 只是**标注**，闸门里不再有它。
 
-    另一种做法（搜出来、等点下载时才拒）是一条「点了才报错」的死路 ——
-    与本项目「不做假交互」的纪律冲突，所以这里把现行做法钉住。
+    这条是原先那两条「仅放行公版源」用例的**反向**版本（用户拍板删掉该功能）：
+    非公版源必须与公版源一视同仁 —— 搜索里不被跳过、下载与预览也不被拒。
+    留这条是为了防止「哪天有人顺手把 public 过滤加回 gate_reason」而没人发现。
     """
-    _set_download(monkeypatch, tmp_path, enabled=True, public_only=True)
+    _set_download(monkeypatch, tmp_path, enabled=True)
+    monkeypatch.setattr(server, "_run_download", _noop_run_download)
 
-    r = client.post("/api/search", headers=auth_headers, json={"title": "三体"})
-
+    # ① 搜索：非公版源照搜，命中照出
+    r = client.post("/api/search", headers=auth_headers, json={"title": "x"})
     assert r.status_code == 200, r.text
     body = r.json()
     rows = {s["name"]: s for s in body["sources"]}
-    assert rows[stubs["public"]]["ok"] is True and rows[stubs["public"]]["count"] == 1
-    assert rows[stubs["paid"]]["skipped"] is True
-    assert "不是公版源" in rows[stubs["paid"]]["reason"], rows[stubs["paid"]]
-    assert [it["title"] for it in body["results"]] == ["三体"], "被跳过源的结果不该出现"
+    assert rows[stubs["paid"]]["ok"] is True and rows[stubs["paid"]]["count"] == 1, rows[stubs["paid"]]
+    assert rows[stubs["paid"]]["skipped"] is False, rows[stubs["paid"]]
+    assert rows[stubs["public"]]["reason"] == "" and rows[stubs["paid"]]["reason"] == "", \
+        "非公版源不该再带任何闸门原因"
+    assert {it["title"] for it in body["results"]} == {"付费书", "三体"}
 
-
-def test_仅放行公版源时非公版源不能下载也不能预览(client, auth_headers, isolated, monkeypatch, tmp_path, stubs):
-    _set_download(monkeypatch, tmp_path, enabled=True, public_only=True)
-    monkeypatch.setattr(server, "_run_download", _noop_run_download)
-
+    # ② 下载：照常入队（不是 400）
     d = client.post("/api/download", headers=auth_headers,
                     json={"source": stubs["paid"], "title": "付费书", "url": "https://e.com/2"})
+    assert d.status_code == 200, d.text
+    assert db.task_get(d.json()["task_id"]) is not None
+
+    # ③ 预览：不再被闸门拒（本文件的桩源没有 preview 钩子 ⇒ 走「抓全文再分章」那条，
+    #    而 `fetch_book` 是必失败的桩 —— 于是拿到的是**业务**错误而不是 400 闸门错误）
     p = client.get("/api/preview", headers=auth_headers,
                    params={"source": stubs["paid"], "url": "https://e.com/2"})
+    assert p.status_code == 502, f"该走业务路径（这里故意让它炸，502）而不是被闸门 400 挡下：{p.text}"
 
-    assert d.status_code == 400 and "不是公版源" in d.json()["detail"], d.text
-    assert p.status_code == 400 and "不是公版源" in p.json()["detail"], p.text
-    assert db.task_list(100) == [], "被闸门挡下的下载不该留下任务"
+    # ④ 界面那一栏也必须说「可用」：状态行与接口用的是同一句判据
+    shown = {s["name"]: s for s in store.sources_status()}[stubs["paid"]]
+    assert shown["usable"] is True and shown["blocked_reason"] == "", shown
 
 
 def test_放行时下载照常入队且任务详情带源名(client, auth_headers, isolated, monkeypatch, tmp_path, stubs):
     """放行的路径也要钉：闸门不该拦错人，任务详情里的来源不能是空的。"""
-    _set_download(monkeypatch, tmp_path, enabled=True, public_only=True)
+    _set_download(monkeypatch, tmp_path, enabled=True)
     monkeypatch.setattr(server, "_run_download", _noop_run_download)
 
     r = client.post("/api/download", headers=auth_headers,
@@ -185,7 +193,7 @@ def test_放行时下载照常入队且任务详情带源名(client, auth_header
 
 def test_未知书源即时拒绝而不进队列(client, auth_headers, isolated, monkeypatch, tmp_path, stubs):  # noqa: ARG001
     """源名对不上就直接拒：先建任务再后台失败，用户得跑到任务中心才知道白等了。"""
-    _set_download(monkeypatch, tmp_path, enabled=True, public_only=True)
+    _set_download(monkeypatch, tmp_path, enabled=True)
     monkeypatch.setattr(server, "_run_download", _noop_run_download)
 
     r = client.post("/api/download", headers=auth_headers,

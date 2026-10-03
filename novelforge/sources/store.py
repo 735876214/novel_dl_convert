@@ -135,7 +135,6 @@ def sources_status() -> list[dict]:
     cfg = config.load_config()
     dl = cfg.get("download") or {}
     enabled = bool(dl.get("enabled", False))
-    public_only = bool(dl.get("public_only", True))
     cookie_dir = Path(config.COOKIE_DIR)
     mgr = DownloadManager(cfg)
 
@@ -147,7 +146,6 @@ def sources_status() -> list[dict]:
         out.append({
             **s,
             "download_enabled": enabled,
-            "public_only": public_only,
             "cookie": {
                 "has": has_cookie,
                 "mtime": (cpath.stat().st_mtime if has_cookie else None),

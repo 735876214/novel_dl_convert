@@ -95,7 +95,6 @@ export interface SourceStatus {
   public: boolean
   user: boolean
   download_enabled: boolean
-  public_only: boolean
   cookie: { has: boolean; mtime: number | null; size: number }
   usable: boolean
   blocked_reason: string
@@ -141,7 +140,7 @@ export interface SearchHit {
  * 逐源检索状态（第 71 期 `/api/search` 的 `sources[]`）。
  *
  * 存在的意义就是**如实**回答「这个源为什么没结果」：`ok` = 成功，
- * `skipped` = 被闸门（下载未开启 / 仅放行公版源）跳过，其余为失败且 `error` 是原因原文。
+ * `skipped` = 被闸门（下载未开启）跳过，其余为失败且 `error` 是原因原文。
  * 第 71 期之前这些原因只进后端日志，界面那条「部分书源检索失败」横幅永远不显示。
  */
 export interface SearchSourceState {
@@ -1969,7 +1968,7 @@ export interface AppConfig {
     ignore?: string[]
   }
   network: { max_retries?: number; host_replace?: Record<string, string> }
-  download: { enabled?: boolean; public_only?: boolean }
+  download: { enabled?: boolean }
   logging: { dir?: string; max_entries?: number }
   /** 上传上限（字节）。此前后端对上传**完全没有限制**，见 server.py 的 _read_capped */
   upload: { max_bytes?: number; max_source_rules_bytes?: number }

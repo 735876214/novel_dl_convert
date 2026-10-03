@@ -51,7 +51,7 @@ def _audio_rule(name: str = "audio-demo", domain: str = "audio-demo.com") -> dic
 def _run(tmp_path, isolated, monkeypatch, *, html, blobs):      # noqa: ARG001
     store.add_rule(_audio_rule())
     monkeypatch.setattr(DownloadManager, "_client", lambda self, src: _StubClient(html, blobs))
-    mgr = DownloadManager({"download": {"enabled": True, "public_only": False}})
+    mgr = DownloadManager({"download": {"enabled": True}})
     item = {"title": "示例有声书", "url": "https://audio-demo.com/book/1",
             "source": "audio-demo", "_source": "audio-demo"}
     return asyncio.run(mgr.download_audio(item, tmp_path))

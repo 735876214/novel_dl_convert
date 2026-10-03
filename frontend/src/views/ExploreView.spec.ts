@@ -101,7 +101,6 @@ function status(patch: Partial<SourceStatus> = {}): SourceStatus {
     public: true,
     user: false,
     download_enabled: true,
-    public_only: true,
     cookie: { has: false, mtime: null, size: 0 },
     usable: true,
     blocked_reason: '',
@@ -227,7 +226,7 @@ describe('ExploreView · 逐源状态如实显示', () => {
       [
         srcState('ok-src'),
         srcState('boom-src', { ok: false, error: '连接失败：域名不在白名单内' }),
-        srcState('paid-src', { ok: false, skipped: true, reason: '「付费源」不是公版源：已被「仅放行公版源」拦下' }),
+        srcState('off-src', { ok: false, skipped: true, reason: '下载功能未开启：到「设置 → 网络与下载」打开「开放搜索 / 下载」' }),
       ],
     ))
     const w = await mountExplore()
@@ -242,7 +241,8 @@ describe('ExploreView · 逐源状态如实显示', () => {
     await flushPromises()
 
     expect(w.text()).toContain('连接失败：域名不在白名单内')
-    expect(w.text()).toContain('不是公版源')
+    // 「被跳过」的原因原文也要显示（第 93 期删掉「仅放行公版源」后，跳过只剩「下载未开启」一种成因）
+    expect(w.text()).toContain('下载功能未开启')
   })
 
   it('一个源都没有时说「没有可用的书源」，而不是「没有找到结果」', async () => {

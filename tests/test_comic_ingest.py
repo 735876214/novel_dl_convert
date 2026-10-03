@@ -100,7 +100,7 @@ def _download(tmp_path, isolated, monkeypatch, *, html, blobs, item=None):
     store.add_rule(_comic_rule())
     monkeypatch.setattr(DownloadManager, "_client",
                         lambda self, src: _StubClient(html, blobs))
-    mgr = DownloadManager({"download": {"enabled": True, "public_only": False}})
+    mgr = DownloadManager({"download": {"enabled": True}})
     it = item or {"title": "示例漫画", "url": "https://comic-demo.com/book/1",
                   "source": "comic-demo", "_source": "comic-demo"}
     return asyncio.run(mgr.download_comic(it, tmp_path)), mgr

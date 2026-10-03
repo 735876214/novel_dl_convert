@@ -43,7 +43,6 @@ const stats = computed(() => {
 })
 
 const downloadEnabled = computed(() => sources.value[0]?.download_enabled ?? false)
-const publicOnly = computed(() => sources.value[0]?.public_only ?? true)
 
 // ---------------- 统计 / 筛选 / 排序（第 86 期 sources-ui 增强 A+B）----------------
 // ⚠️ 验证状态（`verified_at/verify_ok/verify_ms`）**不在** `/api/sources/status` 里，
@@ -507,7 +506,7 @@ function testExisting(name: string): void {
           <input v-model="form.domains" :class="INPUT_CLS" placeholder="example.com, example.org">
           <div class="mt-2.5 flex items-center gap-4">
             <label class="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
-              <input v-model="form.public" type="checkbox" class="h-3.5 w-3.5 accent-primary">公版 / 合规
+              <input v-model="form.public" type="checkbox" class="h-3.5 w-3.5 accent-primary">公版 / 合规（仅标注）
             </label>
             <label class="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
               并发
@@ -685,9 +684,6 @@ function testExisting(name: string): void {
           <Badge class="ml-auto" :tone="downloadEnabled ? 'ok' : 'warn'">
             {{ downloadEnabled ? '下载已开启' : '下载未开启' }}
           </Badge>
-          <Badge v-if="downloadEnabled" :tone="publicOnly ? 'neutral' : 'warn'">
-            {{ publicOnly ? '仅公版源' : '全部源放行' }}
-          </Badge>
         </div>
 
         <!-- 统计条（第 86 期增强 A）：徽章可点即施加筛选，再点取消。
@@ -822,7 +818,12 @@ function testExisting(name: string): void {
               <div class="flex flex-wrap items-center gap-1.5">
                 <span class="truncate text-[12.5px] font-medium text-foreground">{{ s.display_name || s.name }}</span>
                 <Badge :tone="s.user ? 'accent' : 'neutral'">{{ s.user ? '用户' : '内置' }}</Badge>
-                <Badge>{{ s.public ? '公版' : '私有' }}</Badge>
+                <!-- ⚠️ 这只是源自己标的「公版 / 非公版」标注（第 93 期删掉「仅放行公版源」闸门后）：
+                     它**不影响**能不能搜 / 能不能下，别让人误以为是可用性判据。
+                     真正的闸门只有「下载是否开启」，那条由上面的徽章与可用性圆点反映。 -->
+                <Badge :title="s.public ? '标注：公版 / 合规来源' : '标注：非公版来源（不影响搜索与下载）'">
+                  {{ s.public ? '公版' : '非公版' }}
+                </Badge>
                 <Badge v-if="s.cookie.has" tone="ok">已登录</Badge>
                 <!-- 验证列（增强 D）：「未验证」与「验证失败」分开显示 -->
                 <Badge v-if="verifyOf(s).state === 'ok'" tone="ok" :title="verifyOf(s).title">

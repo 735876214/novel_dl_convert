@@ -83,7 +83,6 @@ export const NETWORK_FIELDS: FieldDef[] = [
   { path: 'auto_update.request_delay', label: '每本间隔（秒）', type: 'number', hint: '礼貌节流' },
   { path: 'network.max_retries', label: '传输重试次数', type: 'number', hint: '下载时超时 / 传输错误的重试上限' },
   { path: 'download.enabled', label: '开放搜索 / 下载', type: 'bool', hint: '关闭时书源仅做规则管理，不可搜索下载' },
-  { path: 'download.public_only', label: '仅放行公版源', type: 'bool' },
   {
     path: 'download.toc_enabled',
     label: '从官方书城取目录',

@@ -68,7 +68,6 @@ class DownloadManager:
         self.host_replace = host_replace
         dl = self.cfg.get("download", {}) or {}
         self.enabled = dl.get("enabled", False)
-        self.public_only = dl.get("public_only", True)
 
     def _client(self, source):
         return network.BrowserClient(
@@ -82,36 +81,31 @@ class DownloadManager:
     def gate_reason(self, source: str | None = None, feature: str = "download") -> str:
         """下载闸门判定（**唯一一处**，第 71 期）：空串 = 放行，非空 = 可直接展示的原因。
 
-        两条规则（`config.py` 的默认值就是这两条）：
-        - ``download.enabled`` 默认 **False**：关掉时书源仅做规则管理，不搜也不下；
-        - ``download.public_only`` 默认 **True**：只放行 ``public`` 源。
+        一条规则（`config.py` 的默认值就是它）：``download.enabled`` 默认 **False** ——
+        关掉时书源仅做规则管理，不搜也不下。
 
         第 71 期之前这段判定散在三处（`store.sources_status` 自算一份、`_visible_sources`
         一份且无人调用、CLI 一份），而 `/api/search` / `/api/download` / `/api/preview`
         谁都不检查 —— 于是设置页写着「关闭时不可搜索下载」，实际照搜照下，真开关成了假开关。
         现在三个端点都问这里，界面显示的原因也是它的原文（措辞只有一份）。
 
-        ``source`` 留空时只判「下载开关」这一层；给了源名再判「仅公版源」那一层。
-        **未知源名不在这里拦**：那不是闸门的事，交由调用方按「未知书源」如实报错。
-
         ``feature`` 是**用途**维度（第 85 期新增；默认 ``"download"`` ⇒ 既有调用方行为一字不变）：
         ``"toc"`` 判的是「从官方书城取目录」那个开关。两个用途**各判各的、不叠加** ——
         关掉下载不影响显式打开了取目录的用户（反之亦然），因为「取一份章节目录」与
         「下载整本正文」是两个动作，理由见 `sources/toc_sources.py` 的模块注释。
+
+        ⚠️ **第 93 期删掉了「仅放行公版源」（`download.public_only`）那一层**（用户拍板）：
+        现在**不再按来源的公版 / 非公版过滤**，全部已注册源一视同仁，判定只剩上面那一条。
+        ``source`` 形参**保留**（调用方仍按源逐条问原因，签名稳定），但自本期起不参与判定；
+        适配器上的 ``public`` 字段降级为**纯标注**（书源列表里的「公版 / 私有」徽章）。
         """
         if feature == "toc":
-            # 「取目录」是独立开关，也**不受 public_only 约束**：那条管的是下载内容的版权，
-            # 而取目录只读一份章节标题，且用户点名要的正是「官方书城」的目录。
+            # 「取目录」是独立开关：它只读一份章节标题，与「下载整本正文」是两个动作。
             if not bool((self.cfg.get("download") or {}).get("toc_enabled", False)):
                 return "取目录未开启：到「设置 → 网络与下载」打开「从官方书城取目录」"
             return ""
         if not self.enabled:
             return "下载功能未开启：到「设置 → 网络与下载」打开「开放搜索 / 下载」"
-        if source and self.public_only:
-            cls = REGISTRY.get(source)
-            if cls is not None and not getattr(cls, "public", True):
-                display = getattr(cls, "display_name", source)
-                return f"「{display}」不是公版源：已被「仅放行公版源」拦下（设置 → 网络与下载）"
         return ""
 
     async def test_source(self, cls, title: str) -> list[dict]:

@@ -9,7 +9,9 @@ from abc import ABC, abstractmethod
 
 from ..core.network import DEFAULT_HEADERS
 
-# 公开性：public=True 表示公版 / 合规来源，可被默认值放行；False 需用户显式开启
+# 公开性：public=True 表示公版 / 合规来源。
+# ⚠️ 第 93 期起这只影响**书源列表里的徽章**（「公版 / 私有」），**不再参与任何过滤** ——
+#    原先的「仅放行公版源」闸门（download.public_only）已按用户决定删除（见 DownloadManager.gate_reason）。
 PUBLIC = True
 NON_PUBLIC = False
 
@@ -20,7 +22,7 @@ class SourceAdapter(ABC):
     headers: dict = DEFAULT_HEADERS
     # 域名白名单：用于 /supported 与自动选源
     domains: list[str] = []
-    # 是否公开合规来源（download.public_only 为 true 时只放行 public 源）
+    # 是否公开合规来源（**仅标注**：书源列表的「公版 / 私有」徽章；不参与任何闸门判定）
     public: bool = PUBLIC
 
     @abstractmethod

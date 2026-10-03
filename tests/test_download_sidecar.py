@@ -10,7 +10,7 @@ from novelforge.sources.manager import DownloadManager
 
 
 def _mgr() -> DownloadManager:
-    return DownloadManager({"download": {"enabled": True, "public_only": False}})
+    return DownloadManager({"download": {"enabled": True}})
 
 
 def test_sidecar带来源与最新章节(tmp_path):

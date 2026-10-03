@@ -65,7 +65,7 @@ def _setup(tmp_path, isolated, monkeypatch, *, local_chapters: int, source_chapt
     monkeypatch.setattr(DownloadManager, "_client", lambda self, src: _StubClient())
     monkeypatch.setattr("novelforge.sources.manager.REGISTRY",
                         {"update-demo": _Src}, raising=False)
-    mgr = DownloadManager({"download": {"enabled": True, "public_only": False}})
+    mgr = DownloadManager({"download": {"enabled": True}})
     return mgr, txt, epub
 
 
