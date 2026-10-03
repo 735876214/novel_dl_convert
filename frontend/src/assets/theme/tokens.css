@@ -91,6 +91,10 @@
   --surface-3: oklch(0.93 var(--tint-c-surface) var(--tint-h));
   --surface-4: oklch(0.91 var(--tint-c-surface) var(--tint-h));
 
+  /* Modal scrim: the veil behind every dialog and sheet (第 90 期，照搬 BookOrbit)。
+     Dark in both themes —— 拿 --foreground 调它会在深色主题下变成一层浅雾。 */
+  --scrim: oklch(0.2 0.02 var(--tint-h) / 0.35);
+
   /* Shadows */
   --elevation-xs: 0 1px 2px oklch(0 0 0 / 0.05);
   --elevation-sm: 0 1px 3px oklch(0 0 0 / 0.08), 0 1px 2px oklch(0 0 0 / 0.06);
@@ -310,6 +314,8 @@
   --surface-2: oklch(calc(0.235 + var(--bg-lift)) var(--tint-c-surface) var(--tint-h));
   --surface-3: oklch(calc(0.245 + var(--bg-lift)) var(--tint-c-surface) var(--tint-h));
   --surface-4: oklch(calc(0.295 + var(--bg-lift)) var(--tint-c-surface) var(--tint-h));
+
+  --scrim: oklch(0.06 0.01 var(--tint-h) / 0.62);
 
   /* Shadows */
   --elevation-xs: 0 1px 2px oklch(0 0 0 / 0.4);

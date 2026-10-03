@@ -298,4 +298,56 @@
     background-size: 1rem 1rem;
     animation: progress-stripes 0.5s linear infinite;
   }
+
+  /* ── 抽屉（第 90 期，`ui/sheet`）────────────────────────────
+     上游用 tw-animate-css 的 `slide-in-from-left` 等类名；本项目未引该包
+     （见文件头），故在同一套动效词表里补这四个 keyframe。
+     `nf-` 前缀是为了与上游类名区分：**同名不同实现**比没有更糟。
+     出场不做动画 —— reka-ui 的 Presence 没有退场动画就立即卸载，
+     抽屉关闭本就该跟手。 */
+  @keyframes nf-slide-in-left {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+  @keyframes nf-slide-in-right {
+    from {
+      transform: translateX(100%);
+    }
+    to {
+      transform: translateX(0);
+    }
+  }
+  @keyframes nf-slide-in-top {
+    from {
+      transform: translateY(-100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+  @keyframes nf-slide-in-bottom {
+    from {
+      transform: translateY(100%);
+    }
+    to {
+      transform: translateY(0);
+    }
+  }
+
+  .nf-slide-in-left {
+    animation: nf-slide-in-left 0.22s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  .nf-slide-in-right {
+    animation: nf-slide-in-right 0.22s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  .nf-slide-in-top {
+    animation: nf-slide-in-top 0.22s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
+  .nf-slide-in-bottom {
+    animation: nf-slide-in-bottom 0.22s cubic-bezier(0.32, 0.72, 0, 1) both;
+  }
 }

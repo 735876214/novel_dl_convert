@@ -77,6 +77,9 @@
   --color-surface-3: var(--surface-3);
   --color-surface-4: var(--surface-4);
 
+  /* 弹层遮罩（第 90 期，移植上游 Sheet 时补） */
+  --color-scrim: var(--scrim);
+
   /* 图案与差异视图（BookOrbit 原有命名空间，保留以便将来复用其组件） */
   --color-pattern-token: var(--pattern-token);
   --color-pattern-modifier: var(--pattern-modifier);
