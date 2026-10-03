@@ -173,7 +173,11 @@ def _sample_bytes(path: Path) -> bytes:
 #: `core/txtcache.py` 把它写进派生缓存的 state 与内存缓存键，`server.py` 的章节读缓存
 #: 也带上它 —— 否则「判据改了、源文件一个字节没动」时，已缓存的正文（可能是乱码）
 #: 会一直命中，**改了看不见效果**。
-ENCODING_RULE_VERSION = 1
+#:
+#: 第 89 期 +1（1 → 2）：判据从「能解码就算（叠加 errors=\"ignore\"）」改为
+#: 「BOM 确定性优先 + 候选逐个**严格**试解 + 不允许静默丢字节」。存量派生件（可能是
+#: 旧判据解出的乱码 / 有洞的正文）必须**重建**，否则用户改完代码看到的还是老样子。
+ENCODING_RULE_VERSION = 2
 
 
 def _utf8_prefix_ok(data: bytes) -> bool:
@@ -196,39 +200,180 @@ def _utf8_prefix_ok(data: bytes) -> bool:
         return False
 
 
+#: 无 BOM 判 UTF-16 时采样的字节窗口（足够看出 ASCII 的奇偶零字节分布，又不必读整篇）。
+_UTF16_PROBE = 4096
+
+
+def _looks_utf16(data: bytes) -> "str | None":
+    """无 BOM 时判断「整篇是不是 UTF-16」——**明确判据**，不含糊、不猜。
+
+    ⚠️ **刻意不覆盖「纯中文的无 BOM UTF-16」**：例如「中」= U+4E2D，两个字节都不是
+    0x00，与随机字节无从区分 —— 那属于「不可判」，宁可交给下面的启发式并**如实报告**
+    解出的编码与坏字节数，也不在这里硬猜一个。这里覆盖的是**含大量 ASCII** 的 UTF-16：
+    英文书名 / 版权页 / 数字 / 标点 / 空格、乃至中英混排的书里 ASCII 占比往往很高，而
+    ASCII 码位 < 0x80 ⇒ UTF-16LE 下**奇数位恒为 0x00**、UTF-16BE 下**偶数位恒为 0x00**，
+    这是很强的结构信号（GB18030 / Big5 的正文里 0x00 根本不出现 —— 它是控制字符）。
+
+    判据（只看开头 4 KB）：某一奇偶位上的 0x00 占比 ≥ 40%，且另一奇偶位 < 5%
+    ⇒ 判为该字节序，返回 ``"utf-16-le"`` / ``"utf-16-be"``；否则返回 ``None``。
+    返回显式字节序（而不是 ``"utf-16"``）：无 BOM 的 ``"utf-16"`` 解码器会按**本机**
+    字节序解，是平台相关的行为，必须避免。
+    """
+    head = data[:_UTF16_PROBE]
+    n = len(head) - (len(head) % 2)
+    if n < 8:
+        return None
+    pairs = n // 2
+    even_zero = sum(1 for i in range(0, n, 2) if head[i] == 0)
+    odd_zero = sum(1 for i in range(1, n, 2) if head[i] == 0)
+    if odd_zero / pairs >= 0.4 and even_zero / pairs < 0.05:
+        return "utf-16-le"
+    if even_zero / pairs >= 0.4 and odd_zero / pairs < 0.05:
+        return "utf-16-be"
+    return None
+
+
+def _choose_encoding(data: bytes) -> "list[str]":
+    """按**候选顺序**给出可能的编码（最可能在前），供 :func:`decode_file` 逐个严格试解。
+
+    顺序的由来（**确定性证据优先于启发式猜测**，这是本期的第一原则）：
+
+    1. **BOM** —— 由写出方显式写下，不含概率、判错概率为零 ⇒ 最高优先级。
+       ``EF BB BF`` → UTF-8；``FF FE`` / ``FE FF`` → UTF-16；``FF FE 00 00`` /
+       ``00 00 FE FF`` → UTF-32（先判，免得被当成 UTF-16 解坏）。
+       ⚠️ **为什么 BOM 必须凌驾于启发式**：UTF-16LE 的开头 ``FF FE`` 不是合法 UTF-8
+       ⇒ 没有这一步时会落到下面的 gb18030 打分，而 gb18030 几乎「总能解码成功」⇒
+       **整本乱码且不报错**。BOM 是唯一能确定字节序、不依赖内容的证据。
+    2. **无 BOM 但整篇像 UTF-16**（见 :func:`_looks_utf16`，判据明确）。
+    3. **UTF-8 前缀合法** —— UTF-8 是**自证**的（非 UTF-8 字节几乎必然解失败），且
+       `_sample_bytes` 会一直读到「有非 ASCII」为止 ⇒ 前缀合法 ≈ 真 UTF-8。只回一个
+       候选：样本按字节切、尾部可能不完整，但**整篇**若真是 UTF-8 必能严格解出；万一
+       夹了坏字节，也应当以 U+FFFD **就地占位**（见 :func:`decode_file`），而不是改判成
+       gb18030 把整篇搅乱。
+    4. 否则在 ``gb18030`` / ``big5hkscs`` / ``big5`` 里按「解出来像不像人话」打分排序
+       —— 这两种编码都能解汉字，光看「能不能解码」分不出来，才需要标点 / 高频字 /
+       罕见字块的分布判据。（本项目**不引第三方依赖**，所以自己算分，不用 chardet。）
+    """
+    if data.startswith(codecs.BOM_UTF32_LE) or data.startswith(codecs.BOM_UTF32_BE):
+        return ["utf-32"]
+    if data.startswith(codecs.BOM_UTF8):
+        return ["utf-8-sig"]
+    if data.startswith(codecs.BOM_UTF16_LE) or data.startswith(codecs.BOM_UTF16_BE):
+        return ["utf-16"]
+    guess = _looks_utf16(data)
+    if guess is not None:
+        return [guess]
+    if _utf8_prefix_ok(data):
+        return ["utf-8"]
+    scored: "list[tuple[str, float]]" = []
+    for enc in ("gb18030", "big5hkscs", "big5"):
+        try:
+            scored.append((enc, _score_text(data.decode(enc, "replace"))))
+        except Exception:                                  # noqa: BLE001
+            continue
+    if not scored:
+        return ["utf-8"]
+    # 稳定排序：同分时保留 `("gb18030", "big5hkscs", "big5")` 的原始次序
+    # （与旧实现的「严格大于才换」等价）。
+    scored.sort(key=lambda kv: kv[1], reverse=True)
+    return [enc for enc, _ in scored]
+
+
 def _detect_encoding(path: Path) -> str:
-    """探测文本编码 —— **按「解出来像不像人话」择优**，不靠「能解码就算」。
+    """探测文本编码 —— 返回**首选候选**的名字（见 :func:`_choose_encoding` 的判据与顺序）。
 
-    ⚠️ 老实现是 ``for enc in ("utf-8-sig","utf-8","gb18030","gbk","big5")`` 逐个
-    ``read_text`` 试，第一个不抛异常的胜出。那条链上 **``big5`` 是死分支**：
-    GB18030 能解码绝大多数 Big5 字节序列而不抛异常，于是繁体书被判成 GB18030、
-    解出一整本乱码却「成功」—— 调用方还叠加 ``errors="ignore"``，连失败兜底都不触发。
-    读者看到的是满屏怪字，而不是「这本书打不开」。（大数据量的正确做法是装 chardet /
-    charset-normalizer，本项目**不引第三方依赖**，所以用字符分布判据自己判。）
+    ⚠️ 这**不是**「随便找个能解码的」。老实现是逐个 ``read_text`` 试、第一个不抛异常的
+    胜出，那条链上 **``big5`` 是死分支**：GB18030 能解码绝大多数 Big5 字节序列而不抛异常
+    ⇒ 繁体书被判成 GB18030、解出一整本乱码却「成功」，调用方再叠加 ``errors="ignore"``
+    连失败兜底都不触发。现在的判据是「确定性证据（BOM / 自证）优先，其余按像不像人话打分」。
 
-    ``utf-8`` 仍然先试：它是**自证**的（非 UTF-8 字节几乎必然解失败），没有误判空间。
-    但「自证」的判据必须是**前缀**意义上的（见 :func:`_utf8_prefix_ok`）—— 样本按字节切，
-    尾部被切断不等于编码不对。剩下的 GB18030 与 Big5 都能解汉字，才需要按标点 / 高频字 /
-    罕见字块算分择优。
+    需要「绝不静默丢字节」的**读全文**路径请用 :func:`decode_file` —— 它拿本函数的
+    候选顺序去逐个**严格**试解，并在都不干净时如实上报坏字节数。本函数保留给
+    「只想知道是哪个编码」的调用方（既有测试等都走它）。
     """
     data = _sample_bytes(path)
     if not data:
         return "utf-8"
-    if _utf8_prefix_ok(data):
-        # ``utf-8-sig`` 兼容无 BOM 的输入，所以「解得开」不等于「有 BOM」——
-        # 回报的名字要如实：**有 BOM 才报 utf-8-sig**（两种编码读出来的文本都正确，
-        # 区别只在开头那个 U+FEFF 会不会被吃掉）。
-        return "utf-8-sig" if data.startswith(codecs.BOM_UTF8) else "utf-8"
-    best, best_score = "utf-8", float("-inf")
-    for enc in ("gb18030", "big5hkscs", "big5"):
+    return _choose_encoding(data)[0]
+
+
+def _decode_count(data: bytes, enc: str) -> "tuple[str, int, list[int]]":
+    """严格解码；解不出的字节以 U+FFFD **替上**（不是丢掉），并数出丢了多少、丢在哪。
+
+    返回 ``(文本, 坏字节数, 前若干坏字节的起始偏移)``；全部解出时是 ``(文本, 0, [])``。
+    """
+    # ``utf-16`` 解码器靠**开头的 BOM** 定字节序；逐段试解时 BOM 不在段首就会按本机
+    # 字节序解错 ⇒ 先落成显式字节序并去掉 BOM（BOM 必在开头，由 `_choose_encoding` 认出）。
+    if enc == "utf-16":
+        if data.startswith(codecs.BOM_UTF16_BE):
+            enc, data = "utf-16-be", data[2:]
+        else:
+            enc, data = "utf-16-le", data[2:]
+    try:
+        return data.decode(enc), 0, []
+    except UnicodeDecodeError:
+        pass
+    out: "list[str]" = []
+    bad = 0
+    positions: "list[int]" = []
+    pos, total = 0, len(data)
+    while pos < total:
         try:
-            text = data.decode(enc, "replace")
-        except Exception:                                  # noqa: BLE001
+            out.append(data[pos:].decode(enc))
+            break
+        except UnicodeDecodeError as e:
+            # ``e.start`` / ``e.end`` 是**相对 `data[pos:]`** 的偏移 ⇒ 坏段在**绝对坐标**
+            # 上是 ``[pos + e.start, pos + e.end)``；下一轮从 ``pos + e.end`` 续解
+            #（写成「加 e.end - e.start」会让 pos 几乎不动、把同一段正文反复追加 —— 实测过）。
+            if e.start:
+                out.append(data[pos:pos + e.start].decode(enc))
+            out.append("\ufffd")
+            bad += max(1, e.end - e.start)
+            if len(positions) < 16:
+                positions.append(pos + e.start)
+            nxt = pos + e.end
+            pos = nxt if nxt > pos else pos + 1
+    return "".join(out), bad, positions
+
+
+def decode_file(path: Path) -> "tuple[str, dict]":
+    """把文本文件**如实**读成字符串：确定性判据优先，且**绝不静默丢字节**。
+
+    返回 ``(文本, 报告)``，报告字段：
+
+    - ``encoding``：本次**实际使用**的编码（如实回报，不是「猜中的那个」）；
+    - ``undecodable``：无法解码、只能以 U+FFFD 呈现的**字节数**（0 = 全部解出）；
+    - ``positions``：前若干坏字节的**起始偏移**（封顶 16 个，仅供诊断）。
+
+    ⚠️ **为什么不再用 ``errors="ignore"``**：ignore 会让解不出的字节**无声消失** ——
+    一本主体合法、中间夹了几个坏字节的书（下载被截断 / 混合编码 / 尾巴混进二进制）读出来
+    「像成功了」，实则正文少了几处、**位置全错**；更糟的是这个结果会写进**派生 EPUB**
+    （`core/txtcache.py`）与章节缓存，读者拿到的是一份**有洞的派生物**却全程不报错。
+
+    这里的口径：候选编码**逐个严格试解**，取第一个能无错解开的；若一个都做不到，就选
+    「错得最少」的那个，坏字节以 U+FFFD 顶上**并计数上报**（`decode_info` → 章节接口 →
+    阅读器提示）。**宁可让读者看到少量「�」，也不要一段悄悄变短、位置漂移的正文。**
+    """
+    data = path.read_bytes()
+    empty = {"encoding": "utf-8", "undecodable": 0, "positions": []}
+    if not data:
+        return "", dict(empty)
+    candidates = _choose_encoding(_sample_bytes(path) or data)
+    for enc in candidates:
+        try:
+            return data.decode(enc), {**empty, "encoding": enc}
+        except UnicodeDecodeError:
             continue
-        s = _score_text(text)
-        if s > best_score:
-            best, best_score = enc, s
-    return best
+    # 一个都不干净：挑坏字节最少的那个，如实呈现 + 计数（不丢字节）。
+    best_enc = candidates[0]
+    best_bad: "int | None" = None
+    best_text, best_pos = "", []
+    for enc in candidates:
+        text, bad, positions = _decode_count(data, enc)
+        if best_bad is None or bad < best_bad:
+            best_enc, best_bad, best_text, best_pos = enc, bad, text, positions
+    return best_text, {"encoding": best_enc, "undecodable": int(best_bad or 0),
+                       "positions": best_pos}
 
 
 def convert_text(raw: str, out_dir: Path, opts: dict, meta: dict | None = None) -> Path:
@@ -255,7 +400,11 @@ def convert_text(raw: str, out_dir: Path, opts: dict, meta: dict | None = None) 
 
 
 def convert_txt(path: Path, out_dir: Path, opts: dict) -> Path:
-    raw = path.read_text(encoding=_detect_encoding(path), errors="ignore")
+    # 第 89 期：不再 ``errors="ignore"``（那会让解不出的字节无声消失、位置全错）。
+    # 改走 `decode_file`：候选逐个严格试解，读不干净就把坏字节数以 U+FFFD 呈现并计数，
+    # 报告回传给调用方（`opts["_decode"]`）写进活动日志。
+    raw, report = decode_file(path)
+    opts["_decode"] = report
     inner = dict(opts)
     inner.setdefault("filename", path.name)
     out = convert_text(raw, out_dir, inner)

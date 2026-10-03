@@ -163,6 +163,11 @@ EXPECTED_SPECS = (
     # 之后永远短路；排序 / 筛选不重置续拉预算会让新筛选永远找不到排在后面的书。
     # 哪一种都不报错，故单独钉住。
     "src/stores/libraryPagination.spec.ts",
+    # 第 89 期：上传本地书（收书目录投递）。`POST /convert` 回的是**文件流**，老实现却
+    # 用 `request()` 解析 JSON ⇒ 把文件字节按 UTF-8 解出 `�`、抛 `Unexpected token '�'`，
+    # 让一次**已经成功**的上传显示成失败。这条失效完全静默（书其实入库了），却最容易被
+    # 用户当成「格式不支持 / 上传坏了」，故单独钉住「响应非 JSON 也算成功」。
+    "src/lib/convertUpload.spec.ts",
 )
 
 

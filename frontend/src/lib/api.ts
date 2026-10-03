@@ -1182,6 +1182,13 @@ export interface ChapterContent {
   title: string
   /** 章节正文 HTML（资源 URL 已改写为后端接口） */
   html: string
+  /**
+   * 第 89 期：这本书 TXT 源**本次解码用的编码**与**有几个字节无法解码**（`undecodable`）。
+   * 只有 TXT 书才有（EPUB / 其它格式不带）。编码探测是**启发式**（BOM 除外），
+   * 加上「解不出的字节以 U+FFFD 呈现」这件事，都该让用户看得见 —— 前端据此在阅读器里
+   * 给一行低调提示（本仓纪律：识别结果对用户可见，不静默猜测 / 不静默丢弃）。
+   */
+  text_encoding?: { encoding: string; undecodable: number }
 }
 
 export interface ProgressState {
@@ -3049,6 +3056,50 @@ async function requestBlob(path: string, init?: RequestInit): Promise<BlobResult
   return { blob, filename: _parseDispositionFilename(res.headers.get('Content-Disposition'), fallback) }
 }
 
+/**
+ * 「只关心成败、不关心响应体」的请求（第 89 期）。
+ *
+ * 专给**返回文件流**的接口用（如 `POST /convert` → `FileResponse`）。那些响应不是 JSON，
+ * 用 `request()` 的 `res.json()` 会把文件字节按 UTF-8 解出 `�`、再抛
+ * `Unexpected token '�', "…" is not valid JSON` —— 上传其实**已经成功**（后端另有一条
+ * 写入 + 入库链路），报错文本却在骗用户「上传失败」。
+ *
+ * 这里与 `request()` 走**同一套**鉴权 / 超时 / 错误剥壳约定，只是**不解析响应体**。
+ */
+async function requestAck(path: string, init?: RequestInit): Promise<void> {
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const headers = new Headers(init?.headers)
+  const token = _authToken()
+  if (token) headers.set('Authorization', `Bearer ${token}`)
+  const res = await _fetchWithTimeout(path, { ...init, headers }, DEFAULT_REQUEST_TIMEOUT_MS)
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    if (res.status === 401) {
+      // 与 `request()` 同口径：登录失效 / 未登录 → 清 token 并通知全局弹出登录门禁
+      try {
+        localStorage.removeItem('nf_token')
+      } catch {
+        /* ignore */
+      }
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('nf-unauthorized'))
+      }
+    }
+    console.error(`[api] ${method} ${path} → ${res.status}`, detail)
+    throw new Error(
+      detail || (res.status >= 500 ? `服务器错误（HTTP ${res.status}）` : `请求失败（HTTP ${res.status}）`),
+    )
+  }
+  // 响应体对本动作没有用处（上传入库的语义：后端会自己写文件 / 入库）。
+  // 显式**取消**读取：`/convert` 回的是**成品文件**，读完只是把整本书白白下载一遍
+  //（这正是老实现 `res.json()` 的副作用 —— 解析失败之前，整本书已经被拽进浏览器了）。
+  try {
+    await res.body?.cancel()
+  } catch {
+    /* 不支持取消也没关系：连接会被浏览器回收 */
+  }
+}
+
 export const api = {
   health: () => request<HealthInfo>('/health'),
 
@@ -3088,17 +3139,22 @@ export const api = {
   },
 
   /** 收书目录整页拖拽投递：把文件丢进 INPUT_DIR（监听目录）并按现有管线处理。
-   *  复用后端的 /convert（写入 INPUT_DIR 后走 pipeline），等价于把文件放进投递目录。 */
-  convertDrop: (file: File, traditionalize = false) =>
-    request<{ ok?: boolean }>('/convert', {
-      method: 'POST',
-      body: (() => {
-        const f = new FormData()
-        f.append('file', file)
-        if (traditionalize) f.append('traditionalize', 'true')
-        return f
-      })(),
-    }),
+   *  复用后端的 /convert（写入 INPUT_DIR 后走 pipeline），等价于把文件放进投递目录。
+   *
+   *  ⚠️ 第 89 期：`POST /convert` 回的是 **FileResponse 文件流**（不是 JSON），所以这里
+   *  走 `requestAck`（**不解析响应体**），不能走 `request()` —— 后者 `res.json()` 会把
+   *  文件字节按 UTF-8 解出 `�` 并抛 `Unexpected token '�'`，让一次**已经成功**的上传
+   *  显示成失败（老缺陷的原文症状）。响应体对「上传入库」这个动作没有用处。
+   */
+  convertDrop: async (file: File, traditionalize = false): Promise<{ ok?: boolean }> => {
+    const form = new FormData()
+    form.append('file', file)
+    if (traditionalize) form.append('traditionalize', 'true')
+    await requestAck('/convert', { method: 'POST', body: form })
+    // 走到这里 = 请求成功（upload 已被后端接收）。返回值只为兼容既有调用点 / 类型，
+    // 不再承载后端响应体。
+    return { ok: true }
+  },
 
   deleteSource: (name: string) =>
     request<{ ok: boolean }>(`/api/sources/${encodeURIComponent(name)}`, { method: 'DELETE' }),

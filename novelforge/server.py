@@ -3083,17 +3083,26 @@ def api_book_chapter(bid: str, index: int, request: Request):
         # 转不动（超大 / 编码坏 / 构建失败）回落原生分章 —— 两条路线 index 语义各自内聚，
         # 由缓存里的源指纹锁定形态，绝不中途混用。
         ep = txtcache.derived_epub(b, path=path)
+        # 第 89 期：把「本次解码用的编码 + 有几个字节解不出」**如实**带回（**只加字段、不改
+        # 既有字段**）。本仓纪律是「识别结果对用户可见，不许静默猜测 / 静默丢弃」——
+        # 编码是猜出来的（启发式），坏字节数更是用户判断「这本书读出来对不对」的唯一线索。
+        # 报告与正文同源（都来自 `txtcache` 的同一份解码），不会出现「正文一套、提示另一套」。
+        info = txtcache.decode_info(b, path=path)
         if ep is not None:
-            return _chapter_cached(bid, index, ep, "epub",
-                                   lambda: library.chapter_html(ep, index, bid), token=tok)
-        return _chapter_cached(bid, index, path, "native",
-                               lambda: txtcache.native_chapter_html(b, index, path=path),
-                               # 这条路线的正文由「源文件 + 分章规则 + **编码判据**」共同
-                               # 决定，后两者都是源指纹看不出来的输入 —— 缺了编码判据版本，
-                               # 判据改了而源文件没动时，缓存里那份（可能是乱码的）正文会
-                               # 一直命中（第 72 期）。
-                               extra=f"v{txtcache.RULE_VERSION}:e{txtcache.ENC_RULE_VERSION}",
-                               token=tok)
+            out = _chapter_cached(bid, index, ep, "epub",
+                                  lambda: library.chapter_html(ep, index, bid), token=tok)
+        else:
+            out = _chapter_cached(bid, index, path, "native",
+                                  lambda: txtcache.native_chapter_html(b, index, path=path),
+                                  # 这条路线的正文由「源文件 + 分章规则 + **编码判据**」共同
+                                  # 决定，后两者都是源指纹看不出来的输入 —— 缺了编码判据版本，
+                                  # 判据改了而源文件没动时，缓存里那份（可能是乱码的）正文会
+                                  # 一直命中（第 72 期）。
+                                  extra=f"v{txtcache.RULE_VERSION}:e{txtcache.ENC_RULE_VERSION}",
+                                  token=tok)
+        if info and isinstance(out, dict):
+            return {**out, "text_encoding": info}
+        return out
     if suffix != ".epub":
         raise HTTPException(400, "仅 EPUB / TXT 支持在线阅读")
     return _chapter_cached(bid, index, path, "epub",

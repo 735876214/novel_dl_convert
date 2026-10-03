@@ -134,6 +134,22 @@ const local = ref(0)
 /** 章节加载中（第 61 期）：连点目录时必须有反馈，否则「点了没反应」 */
 const chapterLoading = ref(false)
 
+/**
+ * TXT 书**本次解码用的编码与坏字节数**（第 89 期）：随章节响应带回（`text_encoding`）。
+ *
+ * 编码探测是**启发式**（除 BOM 外都是按字符分布猜的），且「解不出的字节以 U+FFFD 呈现」
+ * 这件事本身就该让用户看见 —— 本仓纪律是「识别结果对用户可见，不静默猜测 / 不静默丢弃」。
+ * EPUB / PDF 等格式不带这个字段（`null` ⇒ 不显示任何提示）。
+ */
+const textEncoding = ref<{ encoding: string; undecodable: number } | null>(null)
+
+/** 只在**确有解不出的字节**时提示（低调）：全部解出时没什么要说的，不必打扰。 */
+const decodeHint = computed(() => {
+  const e = textEncoding.value
+  if (!e || !e.undecodable) return ''
+  return `按 ${e.encoding} 解码，${e.undecodable} 个字节无法解码（已用「�」占位）`
+})
+
 // ---------------- 阅读偏好（与设置页共享，见 lib/readerPrefs.ts）----------------
 
 const prefs = ref<ReaderPrefs>(readReaderPrefs())
@@ -718,6 +734,8 @@ async function chapterAt(p: number): Promise<{ html: string; title: string }> {
   const ch = flat.value[p]
   const job = (async () => {
     const data = await api.chapter(bookId.value, ch.index)
+    // 第 89 期：TXT 书的解码报告随章节带回（EPUB 等格式不带 ⇒ 保持 null）。
+    if (data.text_encoding) textEncoding.value = data.text_encoding
     const item = { html: data.html, title: ch.title || data.title }
     chapterCache.set(p, item)
     // 只留最近几章：缓存的是整章 HTML，留太多是真金白银的内存
@@ -1921,6 +1939,7 @@ watch(bookId, async () => {
   html.value = ''
   chapterTitle.value = ''
   local.value = 0
+  textEncoding.value = null
   // 第 69 期：章块窗口也要清 —— 留着会露着上一本的正文，而 `chunkEls` 里的元素
   // 随后会被卸载成死引用（量几何量出 0，可见章判定就全靠猜了）
   chunks.value = []
@@ -2215,6 +2234,16 @@ onBeforeUnmount(() => {
       <!-- 进度条 -->
       <div class="h-0.5 w-full bg-muted">
         <div class="h-full bg-primary transition-[width] duration-300" :style="{ width: `${overallPercent}%` }" />
+      </div>
+
+      <!-- TXT 解码提示（第 89 期）：只在**确有字节解不出**时出现，低调但明确 ——
+           编码是猜的、且坏字节被 U+FFFD 顶替，这两件事实用户有权知道。 -->
+      <div
+        v-if="decodeHint"
+        class="mb-2 flex items-center gap-2 rounded-md border border-border bg-muted/60 px-3 py-1.5 text-[11.5px] text-muted-foreground"
+      >
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span class="min-w-0 flex-1 truncate">{{ decodeHint }}</span>
       </div>
 
       <!-- 其他设备更新过进度：**只提示、绝不静默挪位置**（第 56 期）。

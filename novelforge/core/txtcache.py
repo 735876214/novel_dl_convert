@@ -20,7 +20,8 @@ TXT 直接阅读缺的不止是渲染 —— 目录、批注、CFI 精确位置�
 **改了规则看不见效果**。
 
 分章/编码/组装三处都不另写实现：`detect`（唯一分章真值源）、
-`pipeline._detect_encoding`（唯一编码探测）、`epub_builder.build_epub`（唯一组装）。
+`pipeline.decode_file`（唯一编码探测 + 读取；第 89 期起它**绝不静默丢字节**，
+坏字节以 U+FFFD 呈现并计数上报，见 `decode_info`）、`epub_builder.build_epub`（唯一组装）。
 """
 import json
 import pathlib
@@ -40,6 +41,11 @@ STATE_NAME = "state.json"
 #: 分章结果缓存（键 = 源路径 + 指纹）：详情接口与逐章接口都会调，别每章重切一遍
 _SPLIT_CACHE: dict = {}
 _SPLIT_CACHE_MAX = 8
+
+#: 解码报告缓存（键 = 源路径 + 指纹 + 编码判据版本）。第 89 期加：章节接口每次都要问
+#: 「这次用了什么编码、有几个字节解不出」（对用户可见，见 :func:`decode_info`），
+#: 不能每次请求都重解一遍全文。只存报告（不含全文），体积可忽略。
+_DECODE_CACHE: dict = {}
 
 #: **分章规则版本**（跟随 `detect.CHAPTER_RULE_VERSION`）。第 62 期加：只比源指纹不够 ——
 #: 规则改了而源文件一个字节没动时，旧派生 EPUB 的目录与新口径不一致，可缓存照样命中、
@@ -129,11 +135,60 @@ def _src_path(book: dict, path=None, root=None):
     return (root or library.root_of(book)) / book["name"]
 
 
-def _read_text(path: pathlib.Path) -> "tuple[str, str]":
-    """读全文：编码探测复用 `pipeline._detect_encoding`（唯一实现，禁第二处）。"""
-    from .pipeline import _detect_encoding
-    enc = _detect_encoding(path)
-    return path.read_text(encoding=enc, errors="ignore"), enc
+def _read(path: pathlib.Path) -> "tuple[str, dict]":
+    """读全文并带回**解码报告**：编码探测 / 读取复用 `pipeline.decode_file`（唯一实现，禁第二处）。
+
+    第 89 期：不再用 ``errors="ignore"`` —— 那条路会让解不出的字节**无声消失**，
+    写进派生 EPUB 与章节缓存，读者拿到的是有洞且位置漂移的正文却不报错。
+    `pipeline.decode_file` 会候选逐个严格试解、读不干净就如实计数。
+
+    报告顺手留一份在 `_DECODE_CACHE`：正文读一次就够，但 :func:`decode_info`
+    会被章节接口**每章问一次**，不能每次都重解全文。
+    """
+    text, info = pipeline.decode_file(path)
+    try:
+        key = (str(path), _fingerprint(path), ENC_RULE_VERSION)
+        if len(_DECODE_CACHE) >= _SPLIT_CACHE_MAX:
+            _DECODE_CACHE.clear()
+        _DECODE_CACHE[key] = info
+    except Exception:                                  # noqa: BLE001 —— 缓存失败不影响读
+        pass
+    return text, info
+
+
+def decode_info(book: dict, *, path=None, root=None) -> dict:
+    """这本书 TXT 源的**解码报告**（``{encoding, undecodable, positions}``）；非 TXT / 读不到回空 dict。
+
+    第 89 期加，供章节接口把「本次用了什么编码、有几个字节解不出」如实带给前端与调用方
+    （本仓纪律：**识别结果必须对用户可见**，不许静默猜测 / 静默丢弃）。命中派生件 state
+    （里面记了编码与坏字节数）或 `_DECODE_CACHE` 时零成本；否则现读一次。
+    """
+    p = _src_path(book, path, root)
+    if p.suffix.lower() != ".txt" or not p.is_file():
+        return {}
+    try:
+        fp = _fingerprint(p)
+    except Exception:                                  # noqa: BLE001
+        return {}
+    # ① 派生件 state：建派生 EPUB 时已把编码与坏字节数写进去（省一次全量解码）。
+    bid = str(book.get("id") or "")
+    if bid:
+        state = _read_state(_cache_dir(bid))
+        if (state.get("fingerprint") == fp and state.get("enc_rule") == ENC_RULE_VERSION
+                and state.get("encoding")):
+            return {"encoding": str(state.get("encoding") or ""),
+                    "undecodable": int(state.get("undecodable") or 0),
+                    "positions": []}
+    # ② 内存缓存（原生分章路线没有派生件指纹可用）。
+    hit = _DECODE_CACHE.get((str(p), fp, ENC_RULE_VERSION))
+    if hit is not None:
+        return hit
+    # ③ 现读一次（会顺带把报告写进 `_DECODE_CACHE`）。
+    try:
+        _text, info = _read(p)
+    except Exception:                                  # noqa: BLE001
+        return {}
+    return info
 
 
 def _chapters(book: dict, path: pathlib.Path) -> list:
@@ -150,7 +205,7 @@ def _chapters(book: dict, path: pathlib.Path) -> list:
     if hit is not None:
         return hit
     from .. import config as _cfg
-    raw, _enc = _read_text(path)
+    raw, _info = _read(path)
     chapters = detect.detect_chapters_cfg(raw, _cfg.load_config(), False) if raw.strip() else []
     if len(_SPLIT_CACHE) >= _SPLIT_CACHE_MAX:
         _SPLIT_CACHE.clear()
@@ -216,8 +271,14 @@ def derived_epub(book: dict, *, path=None, root=None):
         epub_builder.build_epub(meta, chapters, str(tmp), nav=False)
         final = cdir / EPUB_NAME
         tmp.replace(final)          # 原子落盘：半成品绝不留在最终路径上
+        # 第 89 期：把「本次解码用的编码 + 有几个字节解不出」一并写进 state ——
+        # ① 章节接口靠它把结果如实带给阅读器（`decode_info` 优先读这里，省一次全量解码）；
+        # ② 缓存有效性判定也顺带把这两个值留下痕迹。
+        info = decode_info(book, path=p)
         _write_state(cdir, {"status": "ok", "fingerprint": fp, "rule": RULE_VERSION,
-                            "chapters": len(chapters)})
+                            "chapters": len(chapters),
+                            "encoding": info.get("encoding", ""),
+                            "undecodable": int(info.get("undecodable") or 0)})
         return final
     except Exception as e:
         _write_state(cdir, {"status": "failed", "fingerprint": fp, "rule": RULE_VERSION,
