@@ -3224,6 +3224,16 @@ export const api = {
     })
   },
 
+  /** 从 URL 订阅导入书源（第 94 期阶段 4a）。走 `/import` 的**同一条**解析与落盘路径，
+   *  只是内容由服务端去取；开关 / SSRF 闸 / 取回上限都在后端（前端不重复判断）。
+   *  失败原因（未启用、地址被拒、目标站 4xx）由后端给**人话原文**，照原样 toast。 */
+  importSourcesFromUrl: (url: string, origin = '', dryRun = false) =>
+    request<ImportResult>('/api/sources/import-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, origin, dry_run: dryRun }),
+    }),
+
   /** 收书目录整页拖拽投递：把文件丢进 INPUT_DIR（监听目录）并按现有管线处理。
    *  复用后端的 /convert（写入 INPUT_DIR 后走 pipeline），等价于把文件放进投递目录。
    *

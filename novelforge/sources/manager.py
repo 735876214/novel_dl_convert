@@ -66,6 +66,8 @@ class DownloadManager:
         self.max_retries = net.get("max_retries", 3)
         host_replace = net.get("host_replace", {}) or {}
         self.host_replace = host_replace
+        # 第 94 期阶段 4a：读点与默认值都在 `network.verify_tls_enabled`（唯一一处）
+        self.verify_tls = network.verify_tls_enabled(self.cfg)
         dl = self.cfg.get("download", {}) or {}
         self.enabled = dl.get("enabled", False)
 
@@ -79,6 +81,7 @@ class DownloadManager:
             # 单次请求超时来自**书源自己**（规则里的 `timeout`）——夹逼只有
             # `clamp_timeout` 一处，这里不写第二份范围判断。
             timeout=network.clamp_timeout(getattr(source, "timeout", None)),
+            verify_tls=self.verify_tls,
         )
 
     def gate_reason(self, source: str | None = None, feature: str = "download") -> str:

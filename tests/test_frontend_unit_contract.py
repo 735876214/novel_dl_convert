@@ -249,6 +249,11 @@ EXPECTED_SPECS = (
     "src/views/AnnotationsView.spec.ts",
     "src/views/ExploreView.spec.ts",
     "src/views/ReaderView.remoteProgress.spec.ts",
+    # 第 94 期：「从 URL 订阅导入书源」的前端接线。它的失效方式与用户报的原始 bug 同族 ——
+    # **点了没反应**：路径写错（打到别的端点）不会报错，只是按钮永远无效；在前端擅自
+    # 「补协议 / 去空格 / 加斜杠」则会让后端给出的拒绝原因指向一个并不存在的地址；
+    # 把后端的 `detail`（人话原因）吞成自编的一句「导入失败」⇒ 用户不知道该去哪儿开开关。
+    "src/lib/sourceUrlImport.spec.ts",
 )
 
 

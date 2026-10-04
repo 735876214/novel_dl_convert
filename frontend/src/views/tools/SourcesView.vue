@@ -31,6 +31,8 @@ const loading = ref(true)
 /** 加载失败信息：失败不能退化成「还没有书源」。 */
 const error = ref('')
 const pasteText = ref('')
+//: URL 订阅导入的地址（第 94 期阶段 4a）。开关默认关，关着时后端给的是**怎么打开**的原文。
+const urlText = ref('')
 const busy = ref(false)
 const fileInput = ref<HTMLInputElement | null>(null)
 
@@ -255,6 +257,27 @@ function submitPaste(): void {
       pasteText.value = ''
       load()
     })
+    .catch((e: Error) => ui.toast(e.message))
+    .finally(() => {
+      busy.value = false
+    })
+}
+
+function submitUrl(): void {
+  const url = urlText.value.trim()
+  if (!url) {
+    ui.toast('请先填写书源文件地址')
+    return
+  }
+  busy.value = true
+  api
+    .importSourcesFromUrl(url)
+    .then((r) => {
+      ui.toast(importOutcome(r))
+      urlText.value = ''
+      load()
+    })
+    // 未启用 / 地址被拒 / 目标站 4xx：后端给的是**可以直接读的人话**，照原样显示
     .catch((e: Error) => ui.toast(e.message))
     .finally(() => {
       busy.value = false
@@ -716,6 +739,28 @@ function testExisting(name: string): void {
           <Button variant="primary" :disabled="busy" @click="submitPaste">导入</Button>
           <Button :disabled="busy" @click="fileInput?.click()">从文件导入</Button>
           <input ref="fileInput" type="file" accept=".json,.jsonl,.txt" class="hidden" @change="onFilePick">
+        </div>
+
+        <!-- URL 订阅导入（第 94 期阶段 4a）：本站**唯一**由用户指定 URL 的出网点。
+             开关默认关着，关着时后端回 400 + 怎么打开的原文 ⇒ 这里照原样提示即可，
+             不在前端再判一遍（判据只有后端那一处，前端重复判断必然漂）。 -->
+        <div class="mt-3 border-t border-border pt-2.5">
+          <label class="mb-1.5 block text-[11.5px] text-muted-foreground" for="src-url">从 URL 订阅</label>
+          <div class="flex items-center gap-2">
+            <input
+              id="src-url"
+              v-model="urlText"
+              type="url"
+              placeholder="https://…/shuyuan.json"
+              class="min-w-0 flex-1 rounded-md border border-border bg-muted px-2 py-1.5 font-mono text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+              @keyup.enter="submitUrl"
+            >
+            <Button :disabled="busy" @click="submitUrl">取回并导入</Button>
+          </div>
+          <p class="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+            需先在「设置 → 网络」打开「允许从 URL 订阅导入书源」。只允许 http/https；
+            内网 / 本机地址会被拒绝。二维码导入未支持（本项目没有扫码通道）。
+          </p>
         </div>
       </Card>
 

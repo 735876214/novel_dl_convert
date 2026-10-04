@@ -170,6 +170,24 @@ DEFAULTS = {
         #     与书源规则里的 `concurrency`（章级并发）是两层，不叠加成第二份实现。
         "max_response_bytes": 16 * 1024 * 1024,
         "max_concurrency": 16,
+        # 第 94 期阶段 4a：抓取书源站时是否校验 TLS 证书。
+        # ⚠️ 默认 **False = 保持现状**：不少书源站证书不规范（自签 / 链不全 / 域名不匹配），
+        # 改成 True 会让一批本来能用的书源静默失效 —— 那是「静默改变既有行为」，
+        # 所以只**提供**开关、由部署者自己决定。MITM 风险与本开关的含义写在设置页里。
+        "verify_tls": False,
+    },
+    # URL 订阅导入（第 94 期阶段 4a）：本站**唯一**由用户指定 URL 的出网点，
+    # 因此单独一节配置（判据与护栏见 `core/urlguard.py`）。
+    # ⚠️ `url_enabled` 默认 **False**：开着等于把「服务端替你去取任意公网地址」的能力
+    # 交出去，属显式开启的功能（与 `download.enabled` 同口径）。
+    "source_import": {
+        "url_enabled": False,
+        "max_bytes": 8 * 1024 * 1024,   # 书源文件通常几十 KB ~ 3 MB（实测 1537 条那份 3.3 MB）
+        "timeout": 30.0,                # 秒；慢速镜像站要给足，但不能无限挂着
+        # 这条路的出站**默认校验证书**（与 `network.verify_tls` 刻意分开：那个默认 False
+        # 是为了不动既有书源的抓取行为，URL 导入没有这段历史包袱）。仍然可显式关掉 ——
+        # 目标站证书不规范时用户得有出路，但关掉是他自己的决定，界面上写明风险。
+        "verify_tls": True,
     },
     # 可选：hybrid/ai 模式下 AI 分章兜底（不填 api_key 则仅用正则 + 缩进降级）
     "llm": {"api_key": "", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},

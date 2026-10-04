@@ -5,7 +5,6 @@ import csv
 import hashlib
 import io
 import hmac
-import ipaddress
 import json
 import logging
 import mimetypes
@@ -37,7 +36,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
                   reading_list,
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
-                   catalog, cache, units, recycle)
+                   catalog, cache, units, recycle, urlguard)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -549,6 +548,24 @@ def _import_row_out(row: dict) -> dict:
     return {k: row[k] for k in _IMPORT_ROW_KEYS}
 
 
+def _import_response(p: dict, rows: list, origin: str) -> dict:
+    """差异表 → 落盘的**唯一**收尾（`/api/sources/import` 与 `/import-url` 共用）。
+
+    `dry_run` 默认 **True**：先出差异表、再按 `resolutions` 落盘，两步之间**一个字节都不写**。
+    ⚠️ `resolutions` 里**非法取值一律当没给**（退回判定的默认动作），而不是悄悄当成
+    `overwrite` —— 「拼错一个单词就把用户的书源盖掉」是本期最不能出的错。
+    ⚠️ 覆盖 / 更新前一律**先把旧规则原文存进历史**（`source_ledger_history`），
+    `POST /api/sources/{name}/rollback` 可以还原。
+    """
+    if p.get("dry_run", True):
+        return {"dry_run": True, "origin": origin,
+                "rows": [_import_row_out(r) for r in rows]}
+    res = {k: v for k, v in (p.get("resolutions") or {}).items()
+           if v in source_ledger.RESOLUTIONS}
+    return {"dry_run": False, "origin": origin,
+            **source_ledger.apply(rows, origin=origin, resolutions=res)}
+
+
 @app.post("/api/sources/import")
 async def api_sources_import(payload: dict = Body(...)):
     """导入书源（Legado 原文或本项目导出文件）：**默认 dry-run**，先出差异表再落盘。
@@ -559,11 +576,6 @@ async def api_sources_import(payload: dict = Body(...)):
          "origin": "paste" | "文件名",
          "dry_run": true,                        # 默认 true ⇒ **一个字节都不写**
          "resolutions": {"源名": "skip" | "overwrite" | "keep_both"}}
-
-    ⚠️ `resolutions` 里**非法取值一律当没给**（退回判定的默认动作），而不是悄悄当成
-    `overwrite` —— 「拼错一个单词就把用户的书源盖掉」是本期最不能出的错。
-    ⚠️ 覆盖 / 更新前一律**先把旧规则原文存进历史**（`source_ledger_history`），
-    `POST /api/sources/{name}/rollback` 可以还原。
     """
     p = payload or {}
     origin = str(p.get("origin") or "paste")[:200]
@@ -573,13 +585,85 @@ async def api_sources_import(payload: dict = Body(...)):
         rows = source_intake.rows_from_payload(p.get("payload"), origin=origin)["rows"]
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
-    if p.get("dry_run", True):
-        return {"dry_run": True, "origin": origin,
-                "rows": [_import_row_out(r) for r in rows]}
-    res = {k: v for k, v in (p.get("resolutions") or {}).items()
-           if v in source_ledger.RESOLUTIONS}
-    return {"dry_run": False, "origin": origin,
-            **source_ledger.apply(rows, origin=origin, resolutions=res)}
+    return _import_response(p, rows, origin)
+
+
+@app.post("/api/sources/import-url")
+async def api_sources_import_url(payload: dict = Body(...)):
+    """从 URL **订阅**导入书源：`{url, origin, dry_run, resolutions}`。
+
+    这是本站**唯一**由用户指定 URL 的出网点（其余出网目标都由书源规则里的 `domains`
+    决定，客户端从不传地址）。所以这条路上有三道与本项目别处不同的闸：
+
+    1. **开关**：`source_import.url_enabled` 默认关。关着就 400 + 人话，不静默出网 ——
+       与 `download.enabled`「关掉即不搜不下」同口径。
+    2. **SSRF 闸**：`core/urlguard.assert_public_url` 校验**每一跳**（含重定向），
+       私网 / 回环 / 链路本地 / 保留段一律拒，人话原因直接回给前端。
+    3. **取回上限**：`source_import.max_bytes` + `timeout`，且这条路**默认校验证书**
+       （`source_import.verify_tls`）—— 目标是用户临时给的，没有「这个站证书不规范但
+       我信它」的历史理由。
+
+    取回之后与 `/api/sources/import` **共用同一条**解析与落盘路径（`intake` + `ledger`），
+    所以「同一份书源文件从哪个入口进来都得同一个结论」这条在 URL 这条路同样成立。
+
+    ⚠️ 刻意**不支持**二维码导入（本项目无客户端扫码通道，服务端也不内嵌解码器）——
+    界面如实标「未支持」，不做假交互。
+    """
+    p = payload or {}
+    cfg = (config.load_config().get("source_import") or {})
+    if not bool(cfg.get("url_enabled", False)):
+        raise HTTPException(
+            400, "URL 订阅导入未启用：请到「设置 → 网络 → 书源导入」打开「允许从 URL 订阅导入书源」后再试")
+    url = str(p.get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "缺少 url")
+    try:
+        raw = await _fetch_source_url(url, cfg)
+    except urlguard.UrlBlocked as e:
+        raise HTTPException(400, f"该地址不允许访问（服务端只替你去取公网书源文件）：{e}") from None
+    except HTTPException:
+        raise
+    except Exception as e:                      # noqa: BLE001 —— 网络层什么都能抛，如实回原文
+        raise HTTPException(400, f"取回失败：{type(e).__name__}: {e}") from None
+    origin = str(p.get("origin") or url)[:200]
+    text = raw.decode("utf-8", errors="ignore")
+    try:
+        rows = source_intake.rows_from_payload(text, origin=origin)["rows"]
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    return _import_response(p, rows, origin)
+
+
+async def _fetch_source_url(url: str, cfg: dict) -> bytes:
+    """取回一个**用户给的** URL 的内容（URL 导入专用）。
+
+    走 `network.BrowserClient` 而不是自己拼 httpx：重试 / 上限 / 全局并发闸 / Cookie
+    全在那一处（自己再写一份的下场是「这条路的超时上限和别处不一样」，最难查的那种）。
+    这里只加两样它默认没有的东西：**逐跳 SSRF 复查**（`request_guard`）与
+    **本路自己的大小 / 超时 / 证书校验**。
+    """
+    from .core import network
+
+    timeout = float(cfg.get("timeout") or 30.0)
+    guard = urlguard.guard_request
+    # ⚠️ 首跳先单独验一次：httpx 的 request 钩子在 `_send_handling_redirects` 里调用，
+    # 而 `TooManyRedirects` 之类的错误会发生在钩子之外 —— 先验一遍，保证「一次都没发出去」
+    # 的情况下也能给出准确的拒绝原因（而不是等一次 DNS 之后再说）。
+    urlguard.assert_public_url(url)
+    async with network.BrowserClient(
+        "url_import",
+        cookie_dir=str(config.COOKIE_DIR),
+        headers=None,
+        max_retries=2,                  # 订阅文件是静态资源，重试 2 次够用
+        timeout=timeout,
+        verify_tls=bool(cfg.get("verify_tls", True)),
+        request_guard=guard,
+        max_bytes=int(cfg.get("max_bytes") or 8 * 1024 * 1024),
+    ) as client:
+        resp = await client.get(url)
+        if resp.status_code >= 400:
+            raise HTTPException(400, f"目标站返回 {resp.status_code}（不是书源文件？）")
+        return resp.content
 
 
 @app.get("/api/sources/imports")
@@ -2606,19 +2690,17 @@ def _is_local_request(request: Request) -> bool:
         if request.headers.get(h):
             return False
     host = (request.client.host if request.client else "") or ""
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        # 解析不出 IP 的 host（Starlette 的 TestClient 给的是 `testclient` 这类名字）
-        # 一律当作「不是本机」—— 判否只会少给一份便利，判是却会泄露目录结构
-        return False
-    mapped = getattr(ip, "ipv4_mapped", None)
-    if mapped is not None:
-        ip = mapped
     # 判据取「**不是全球可路由**」而不是 `is_private`：以「能不能从公网到达」为准，
     # 落不进全球地址集合的（私网 / 回环 / 链路本地 / 保留段 / 文档段）都算本地 / 局域网。
     # 方向是**从严** —— 宁可少给一份便利，不可错给一次目录结构。
-    return not ip.is_global
+    #
+    # ⚠️ 第 94 期阶段 4a 起这段判据**只有一份实现**（`urlguard.ip_scope`）：出站那边
+    # （URL 导入 `assert_public_url`）判的是同一个集合、相反的方向，两边共用。
+    # IPv4-mapped IPv6 的还原也放在那一处 —— 不还原的话 `::ffff:192.168.0.9`
+    # 既非回环也非私网，本机访问会被白白降级。
+    # 解析不出 IP 的 host（TestClient 给的是 `testclient` 这类名字）⇒ `None` ⇒ 当作
+    # 「不是本机」：判否只会少给一份便利，判是却会泄露目录结构。
+    return urlguard.ip_scope(host) == "local"
 
 
 @app.get("/api/books/{bid}/local-paths")
@@ -6649,7 +6731,12 @@ EDITABLE: dict = {
     },
     # 第 94 期阶段 3：抓取护栏（响应体上限 / 全局并发）。默认值写在 `config.DEFAULTS`，
     # `GET /api/config` 整块回显 `cfg["network"]` ⇒ 加子键只需改**这一处**白名单 + 前端字段。
-    "network": {"max_retries", "host_replace", "max_response_bytes", "max_concurrency"},
+    # 阶段 4a 加 `verify_tls`（**默认 False = 不改既有书源的抓取行为**，界面上写明含义）。
+    "network": {"max_retries", "host_replace", "max_response_bytes", "max_concurrency",
+                "verify_tls"},
+    # 第 94 期阶段 4a：URL 订阅导入（本站唯一由用户指定 URL 的出网点）。
+    # `url_enabled` 默认关 ⇒ 必须可写，否则界面上「打开了」而后端照旧拒 = 假开关。
+    "source_import": {"url_enabled", "max_bytes", "timeout", "verify_tls"},
     # 第 85 期批次 B：`toc_enabled` = 「从官方书城取目录」的独立开关（闸门的用途维度）
     "download": {"enabled", "toc_enabled"},
     # 第 86 期：**书籍追更**调度（与 `update`「应用自身版本」不是一回事）。
@@ -6888,6 +6975,8 @@ def api_get_config():
             "auto_update": cfg.get("auto_update") or {},
             "watcher": cfg.get("watcher") or {},
             "network": cfg.get("network") or {},
+            # 第 94 期阶段 4a：URL 订阅导入的开关与护栏（硬编码键列表 ⇒ 这里必须加）
+            "source_import": cfg.get("source_import") or {},
             "download": cfg.get("download") or {},
             "logging": cfg.get("logging") or {},
             "notifications": cfg.get("notifications") or {},
@@ -6972,6 +7061,31 @@ def api_put_config(payload: dict = Body(...)):
             if val < 0:
                 raise HTTPException(400, f"network.{key} 不能是负数（0 = 不限制）")
             net[key] = val
+
+    # 第 94 期阶段 4a：URL 导入的两条数必须是**正**数 —— 这里与上面那组刻意不同口径：
+    # `max_bytes: 0` 在这条路上不是「不限制」而是「什么都取不回来」，属于把功能关死却不
+    # 说原因；`timeout: 0` 会让每次请求立刻超时。两者都当输入错误拒掉，让用户说清楚
+    # （想关就用 `url_enabled`，那个开关有明确语义）。
+    si = patch.get("source_import")
+    if isinstance(si, dict):
+        for key in ("max_bytes",):
+            if key not in si:
+                continue
+            try:
+                val = int(si[key])
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"source_import.{key} 必须是整数")
+            if val <= 0:
+                raise HTTPException(400, f"source_import.{key} 必须大于 0")
+            si[key] = val
+        if "timeout" in si:
+            try:
+                val = float(si["timeout"])
+            except (TypeError, ValueError):
+                raise HTTPException(400, "source_import.timeout 必须是数字（秒）")
+            if not 0 < val <= 300:
+                raise HTTPException(400, "source_import.timeout 必须落在 0–300 秒之间")
+            si["timeout"] = val
 
     # 第 80 期：`update.image` 真的会被用于 `docker pull`（见 `_validate_update_image`），
     # 所以写入口就要拦。空串合法（= 回落 `NOVELFORGE_UPDATE_IMAGE` / 内置默认值）。
@@ -9181,6 +9295,8 @@ async def content(url: str = Query(..., description="章节 / 书籍页 URL")):
     async with network.BrowserClient(
         name, cookie_dir=str(config.COOKIE_DIR), headers=getattr(src, "headers", None),
         timeout=network.clamp_timeout(getattr(src, "timeout", None)),
+        # 与下载 / 搜索同口径（读点只有 `network.verify_tls_enabled` 一处）
+        verify_tls=network.verify_tls_enabled(),
     ) as c:
         html = await src.render(c, url)
     return HTMLResponse(html or "<p>（空内容）</p>")

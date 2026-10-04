@@ -94,6 +94,37 @@ export const NETWORK_FIELDS: FieldDef[] = [
     type: 'number',
     hint: '所有书源同时在途的请求数之和；与书源规则里的章级并发是两层。填 0 = 不限制',
   },
+  {
+    path: 'network.verify_tls',
+    label: '抓取书源时校验证书',
+    type: 'bool',
+    hint: '默认关闭：不少书源站证书不规范（自签 / 链不全 / 域名不匹配），打开后这类站点会直接失败。'
+      + '关闭意味着抓取内容可能被中间人篡改 —— 自建 NAS 常见做法是同时只在本机 / 局域网访问',
+  },
+  {
+    path: 'source_import.url_enabled',
+    label: '允许从 URL 订阅导入书源',
+    type: 'bool',
+    hint: '打开后服务端会替你访问公网地址取书源文件（只允许 http/https，内网 / 本机地址一律拒绝）',
+  },
+  {
+    path: 'source_import.max_bytes',
+    label: 'URL 导入文件上限（字节）',
+    type: 'number',
+    hint: '订阅文件的取回上限，边收边数、超限即断。实测一份 1537 条的书源文件约 3.3 MB',
+  },
+  {
+    path: 'source_import.timeout',
+    label: 'URL 导入超时（秒）',
+    type: 'number',
+    hint: '单次取回的总超时，慢速镜像站要给足；上限 300 秒',
+  },
+  {
+    path: 'source_import.verify_tls',
+    label: 'URL 导入校验证书',
+    type: 'bool',
+    hint: '默认开启（与上面「抓取书源」刻意不同）：订阅地址是你临时给的，没有「这个站证书不规范但我信它」的既有理由',
+  },
   { path: 'download.enabled', label: '开放搜索 / 下载', type: 'bool', hint: '关闭时书源仅做规则管理，不可搜索下载' },
   {
     path: 'download.toc_enabled',
@@ -203,7 +234,8 @@ export const UPDATE_FIELDS: FieldDef[] = [
 export const SECTION_KEYS: Record<string, string[]> = {
   conversion: ['chapter_detection', 'traditionalize', 'llm'],
   watcher: ['watcher'],
-  network: ['network', 'download', 'logging', 'auto_update'],
+  // 第 94 期阶段 4a：URL 订阅导入的开关与护栏也在这页（`source_import.*`）
+  network: ['network', 'download', 'logging', 'auto_update', 'source_import'],
   naming: ['naming'],
   upload: ['upload'],
   achievements: ['achievements'],
