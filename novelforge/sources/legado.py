@@ -480,6 +480,142 @@ def _leading_mode(spec: str) -> str:
     return "css"
 
 
+# ---------------- 全字段报告（第 94 期阶段 5）----------------
+
+#: 阅读 3.x 字段的**全量**报告表：键（嵌套用点号）→ (状态, 原因, 替代做法)。
+#:
+#: **为什么要有它**：`analyze` 原先只看 5 个字段（`searchUrl` / `ruleSearch.bookList` /
+#: `ruleToc.chapterList` / `ruleToc.chapterUrl` / `ruleContent.content`），其余十几项
+#: **一声不响地消失** —— 用户的源里明明白白写着「详情页作者规则」，导入后那部分没了，
+#: 界面上一个字都不提。所以现在这条源里**每一个出现过的字段**都要有一句交代。
+#:
+#: 三档状态（与 `analyze` 的 `supported` 同义）：
+#:   * ``executable`` —— 引擎直接执行（转换产物里按原意保留）；
+#:   * ``ported``     —— 改写了形态后使用（例如 2.x 的 `httpUserAgent` 变成请求头）；
+#:   * ``unsupported``—— 本项目跑不了 / 没有这项功能，导入时被忽略（**如实说，不假装**）。
+#:
+#: ⚠️ 表里的键只收**实测出现过、或本项目已明确要不要做的**（样本：`202003.txt` 1537 条
+#: 2.x、`tests/fixtures/legado_sample.json` 与 XIU2 `shuyuan` 的 3.x，键频统计见
+#: `model.LEGACY_ALIASES` 的注释）。表外的键走**兜底**：照样逐条报「本项目未使用该字段」，
+#: 不静默丢 —— 「没见过的键不许猜含义」与「见了就要如实说」是两件事。
+_UNSUPPORTED = "unsupported"
+_FIELD_TABLE: dict = {
+    # —— 身份 / 元信息 ——
+    "bookSourceName": ("executable", "落成本项目书源的展示名", ""),
+    "bookSourceUrl": ("executable", "取域名白名单与请求基址", ""),
+    "bookSourceGroup": ("executable", "落成本项目书源的分组", ""),
+    "bookSourceComment": ("unsupported", "本项目的书源没有备注字段，导入后不保留",
+                          "要留备注就写在分组名里，或到「书源管理」手写源里补"),
+    "bookSourceType": ("executable", "判形态（文本 / 音频 / 漫画）", ""),
+    "enabled": ("executable", "落成启用状态", ""),
+    "weight": ("ported", "只存进溯源台账 —— 本项目的排序由自己的书源列表决定", ""),
+    "customOrder": ("unsupported", "本项目的书源排序由自己的列表决定，源里的排序序号用不上", ""),
+    "serialNumber": ("unsupported", "阅读自己的导出序号；本项目按名字与规则哈希去重，不用它", ""),
+    "lastUpdateTime": ("unsupported", "阅读自己记录的时间戳；本项目的书源状态由台账维护",
+                       "书源文件更新后重新导入一次即可"),
+    "respondTime": ("unsupported", "阅读自己测的响应耗时；本项目的耗时来自「验证」接口", ""),
+    "header": ("executable", "落成请求头（该源的每一次抓取都带它）", ""),
+    "enabledCookieJar": ("unsupported", "本项目没有「书源自带 Cookie 存档」这回事",
+                         "需要登录态的站点走抓取层的 CookieJar（自动保存 / 自动带上）"),
+    "loginUrl": ("unsupported", "本项目没有「在服务端登录源站」的界面与流程",
+                 "需要登录的源请在书源规则的请求头里带上凭据，或改用其它源"),
+    "loginUi": ("unsupported", "同上：本项目没有登录界面",
+                "需要交互式登录的源请在本项目里手写等价规则（带凭据的请求头）"),
+    "loginCheckJs": ("unsupported", "同上：本项目没有交互式验证流程",
+                     "需要验证码 / 交互验证的源请在本项目里手写等价规则"),
+    "variable": ("unsupported", "本项目的规则模型里没有「变量表」这一层",
+                 "把变量展开成字面量后手写进规则（地址 / 选择器里直接写死值）"),
+    "jsLib": ("unsupported", "本项目的规则模型里没有「公共 JS 库」这一层",
+              "把用到的函数直接写进需要它的那一项里（本项目的 JS 通道按项执行）"),
+    "concurrentRate": ("ported", "换算成本项目的抓取并发上限", ""),
+    # —— 发现页（项目没有这个功能，两代名字都如实说）——
+    "ruleExplore": ("unsupported", "发现页规则组 —— 本项目**没有发现页功能**", ""),
+    "exploreUrl": ("unsupported", "发现页地址 —— 本项目**没有发现页功能**", ""),
+    "enabledExplore": ("unsupported", "同上：本项目没有发现页功能", ""),
+    # —— 搜索 ——
+    "searchUrl": ("executable", "搜索地址（后面的 `,{'method':…}` 请求选项由引擎自己解）", ""),
+    "ruleSearch.bookList": ("executable", "搜索结果容器", ""),
+    "ruleSearch.name": ("executable", "书名", ""),
+    "ruleSearch.author": ("executable", "作者", ""),
+    "ruleSearch.bookUrl": ("executable", "书页地址", ""),
+    "ruleSearch.coverUrl": ("executable", "封面", ""),
+    "ruleSearch.intro": ("executable", "简介", ""),
+    "ruleSearch.kind": ("unsupported", "本项目的书目没有「分类」字段，导入后不保留",
+                        "搜索本身照常可用；要按分类筛选请用本项目自己的标签 / 书库"),
+    "ruleSearch.lastChapter": ("unsupported", "本项目的书目没有「最新章节」字段，导入后不保留",
+                               "追更请用本项目的「检查更新」（以源站目录为准）"),
+    "ruleSearch.wordCount": ("unsupported", "本项目的书目没有字数统计字段，导入后不保留", ""),
+    # —— 书目信息（详情页）——
+    "ruleBookInfo.tocUrl": ("executable", "目录页地址（书页上没有目录链接时用）", ""),
+    "ruleBookInfo.name": ("unsupported", "详情页元数据由本项目的**刮削提供商**补齐，不用源里的规则",
+                          "要用这条源的书名 / 作者，请在详情页用「元数据」里的书源刮削"),
+    "ruleBookInfo.author": ("unsupported", "同上：详情页元数据由本项目的刮削提供商补齐", ""),
+    "ruleBookInfo.kind": ("unsupported", "同上：本项目的书目没有「分类」字段", ""),
+    "ruleBookInfo.intro": ("unsupported", "同上：简介由本项目的刮削提供商补齐", ""),
+    "ruleBookInfo.coverUrl": ("unsupported", "同上：封面由本项目的刮削提供商补齐", ""),
+    "ruleBookInfo.lastChapter": ("unsupported", "同上：本项目的书目没有「最新章节」字段", ""),
+    "ruleBookInfo.wordCount": ("unsupported", "同上：本项目的书目没有字数统计字段", ""),
+    "ruleBookInfo.init": ("unsupported", "「取详情前先发一次初始化请求」—— 本项目不支持",
+                          "若站点必须先访问一次才出内容，请在书源规则里把地址改成那个页面"),
+    "ruleBookInfo.bookUrlPattern": ("unsupported",
+                                    "书页地址的形状校验 —— 本项目直连绑定好的地址，不做形状校验", ""),
+    # —— 目录 ——
+    "ruleToc.chapterList": ("executable", "目录容器", ""),
+    "ruleToc.chapterName": ("executable", "章节名", ""),
+    "ruleToc.chapterUrl": ("executable", "章节地址", ""),
+    "ruleToc.nextTocUrl": ("executable", "目录续页", ""),
+    "ruleToc.isVip": ("unsupported", "本项目的目录没有「VIP 章」标记，导入后不保留", ""),
+    "ruleToc.updateTime": ("unsupported", "本项目的目录没有「章节更新时间」字段，导入后不保留", ""),
+    # —— 正文 ——
+    "ruleContent.content": ("executable", "正文容器", ""),
+    "ruleContent.nextContentUrl": ("executable", "正文续页", ""),
+    "ruleContent.replaceRegex": ("executable",
+                                 "正文替换（与正文规则里的 `##正则##替换` 走**同一份**实现）", ""),
+    "ruleContent.webJs": ("unsupported", "需要在浏览器环境里执行脚本 —— 本项目只发 HTTP 请求",
+                          "能在脚本里算出来的地址 / 文本，请改写成选择器或模板变量"),
+    "ruleContent.sourceRegex": ("unsupported", "需要浏览器环境取网页源码 —— 本项目只发 HTTP 请求",
+                                "请改写成对 HTTP 响应正文生效的选择器或正则"),
+}
+
+
+def _report_one(field: str, value) -> dict:
+    """一个字段 → ``{field, status, why, instead}``（表外的键走兜底，不静默丢）。"""
+    row = _FIELD_TABLE.get(field)
+    if row is None and field in EXPLORE_KEYS:
+        row = ("unsupported", "发现页规则 —— 本项目**没有发现页功能**", "")
+    if row is None:
+        return {"field": field, "status": _UNSUPPORTED,
+                "why": f"本项目不使用这个字段（{field}）—— 导入时被忽略",
+                "instead": "若这一项对你的源是必需的，请在「书源管理」里手写等价规则"}
+    status, why, instead = row
+    return {"field": field, "status": status, "why": why, "instead": instead}
+
+
+#: 需要逐子键展开的字段组（其余 dict 值按整项报告）。
+_NESTED_GROUPS = ("ruleSearch", "ruleBookInfo", "ruleToc", "ruleContent")
+
+
+def field_report(entry: dict) -> list:
+    """这条源里**出现过**的每一个字段 → 三档状态 + 原因 + 替代做法（阶段 5）。
+
+    只在**入口归一之后**走一遍（2.x 的键名先变 3.x），所以同一份报告对两个方言都成立 ——
+    映射表只有 `normalize_legacy` 那一份，这里不重复认方言。
+    空值字段（`""` / `None` / 空表）不算「出现过」，不占篇幅。
+    """
+    ent = normalize_legacy(entry or {})
+    out: list = []
+    for key, val in ent.items():
+        if key in _NESTED_GROUPS and isinstance(val, dict):
+            for sub, sv in val.items():
+                if sv not in (None, "", [], {}):
+                    out.append(_report_one(f"{key}.{sub}", sv))
+            continue
+        if val in (None, "", [], {}):
+            continue
+        out.append(_report_one(str(key), val))
+    return out
+
+
 def analyze(entry: dict) -> dict:
     """逐字段判定能力 → ``{supported, unsupported_fields, converted_rule, notes, source_type}``。
 
@@ -583,7 +719,12 @@ def analyze(entry: dict) -> dict:
                 verdict = "partial"
     return {"supported": verdict, "unsupported_fields": unsupported, "converted_rule": converted,
             "notes": notes, "source_type": stype,
-            "source_type_label": SOURCE_TYPE_LABEL.get(stype, "未知")}
+            "source_type_label": SOURCE_TYPE_LABEL.get(stype, "未知"),
+            # 第 94 期阶段 5：**这条源里每一个字段**的交代（三档 + 原因 + 替代做法）。
+            # 与 `unsupported_fields` 刻意分开：那一位是**判定依据**（决定 verdict），
+            # 这一位是**全量清单**（含跑得动的）。混在一起会让「发现页不支持」把
+            # 1321 条本来能用的源判成 no —— 那是把「如实说」做成了「误杀」。
+            "field_report": field_report(ent)}
 
 
 def rule_name(ent: dict) -> str:

@@ -843,6 +843,20 @@ export interface SourceImportRow {
   /** duplicate=内容相同（幂等）；update=同一个源的新版；conflict=撞名/同站点；unsupported=不可执行 */
   verdict: 'new' | 'update' | 'duplicate' | 'conflict' | 'unsupported'
   unsupported_fields: Array<{ field?: string; why?: string; instead?: string }>
+  /**
+   * 这条源里**每一个出现过**的字段的交代（第 94 期阶段 5）。
+   *
+   * 与 `unsupported_fields` 分工不同：那一位是**判定依据**（决定 verdict，
+   * 只有影响主链的才进），这一位是**全量清单** —— 包括跑得动的（`executable`）、
+   * 改了形态的（`ported`）与本项目没有的功能（`unsupported`）。
+   * 少了它，用户源里的「详情页规则」被丢掉时界面上一个字都没有。
+   */
+  field_report: Array<{
+    field: string
+    status: 'executable' | 'ported' | 'unsupported'
+    why?: string
+    instead?: string
+  }>
   notes: string[]
   dedup_key: string
   rule_hash: string

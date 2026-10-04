@@ -541,7 +541,11 @@ def api_delete_source(name: str):
 #: 那是整条规则本体，一份文件里几百条源就几 MB —— 界面要的只是「结论」。
 _IMPORT_ROW_KEYS = ("name", "display_name", "group", "source_type", "supported", "verdict",
                     "unsupported_fields", "notes", "dedup_key", "rule_hash", "conflict_with",
-                    "changed_fields")
+                    "changed_fields",
+                    # 第 94 期阶段 5：这条源里**每一个**字段的去向（三档 + 原因）。
+                    # 界面的「字段明细」读的就是它（`unsupported_fields` 只含判定依据，
+                    # 看不到「跑得动的那些」；用户要问的是「我源里的东西丢在哪儿了」）。
+                    "field_report")
 
 
 def _import_row_out(row: dict) -> dict:

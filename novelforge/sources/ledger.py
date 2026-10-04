@@ -162,6 +162,9 @@ def plan(entries: list, *, origin: str = "", existing: "list | None" = None) -> 
             "verdict": verdict,
             "unsupported_fields": an.get("unsupported_fields", []),
             "notes": an.get("notes", []),
+            # 第 94 期阶段 5：**全字段**交代（三档 + 原因）。与 `unsupported_fields` 分工不同：
+            # 那一位是判定依据（决定 verdict），这一位是「这条源里的每一项都去哪儿了」。
+            "field_report": an.get("field_report", []),
             "dedup_key": dkey, "rule_hash": rhash, "conflict_with": conflict_with,
             "changed_fields": changes, "converted_rule": converted, "raw": ent,
             "origin": origin,

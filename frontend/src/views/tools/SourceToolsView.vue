@@ -105,8 +105,23 @@ const origin = ref('paste')
 const preview = ref<SourceImportResult | null>(null)
 const resolutions = ref<Record<string, string>>({})
 const importing = ref(false)
+//: 展开「字段明细」的那一行（第 94 期阶段 5）。空串 = 都收起。
+//: 收起是默认：一屏里几十行源、每行十几项字段，全展开等于什么都没说。
+const reportFor = ref('')
 
 const rows = computed<SourceImportRow[]>(() => preview.value?.rows ?? [])
+
+/** 「字段明细」里每种状态的说法。三档与后端的 `status` 逐字对应，前端不自己判。 */
+const FIELD_STATUS_LABEL: Record<string, string> = {
+  executable: '直接用',
+  ported: '换了个形态',
+  unsupported: '本项目没有',
+}
+
+/** 只列「本项目没有」的那些 —— 用户要的是「我源里的东西丢在哪儿了」。 */
+function lostFields(r: SourceImportRow) {
+  return r.field_report.filter((f) => f.status === 'unsupported')
+}
 
 function verdictLabel(v: string): string {
   return (
@@ -468,9 +483,44 @@ void loadLedger()
             <option value="overwrite">覆盖（先备份旧规则）</option>
             <option value="keep_both">两条并存</option>
           </select>
+          <!-- 第 94 期阶段 5：这条源里**每一个**字段的去向（含被丢掉的那些）。
+               没有它，用户源里的「详情页规则」在导入后凭空消失，界面上一句话都没有。 -->
+          <Button
+            v-if="r.field_report.length"
+            size="sm"
+            class="shrink-0"
+            @click="reportFor = reportFor === r.name ? '' : r.name"
+          >
+            {{ reportFor === r.name ? '收起明细' : `字段明细 ${r.field_report.length}` }}
+          </Button>
         </div>
         <div v-for="r in rows" :key="`note-${r.name}`" class="text-[11px] text-muted-foreground">
           <span v-for="(n, i) in r.notes" :key="i">{{ r.name }}：{{ n }}</span>
+        </div>
+        <div v-for="r in rows" :key="`report-${r.name}`">
+          <div
+            v-if="reportFor === r.name"
+            class="mb-2 mt-1.5 rounded-md border border-border bg-muted/40 px-3 py-2 text-[11.5px]"
+          >
+            <div class="mb-1 font-medium text-foreground">
+              {{ r.display_name || r.name }}：这条源里 {{ r.field_report.length }} 个字段的去向
+              <span class="font-normal text-muted-foreground">
+                （本项目没有 {{ lostFields(r).length }} 项）
+              </span>
+            </div>
+            <div
+              v-for="f in r.field_report"
+              :key="f.field"
+              class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 border-b border-border/40 py-1 last:border-b-0"
+            >
+              <code class="shrink-0 text-foreground">{{ f.field }}</code>
+              <Badge :tone="f.status === 'unsupported' ? 'warn' : undefined" class="shrink-0">
+                {{ FIELD_STATUS_LABEL[f.status] || f.status }}
+              </Badge>
+              <span v-if="f.why" class="min-w-0 flex-1 text-muted-foreground">{{ f.why }}</span>
+              <span v-if="f.instead" class="w-full text-muted-foreground">→ {{ f.instead }}</span>
+            </div>
+          </div>
         </div>
       </div>
       <div v-else-if="preview" class="mt-2 text-[11.5px] text-muted-foreground">
