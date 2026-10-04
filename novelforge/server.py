@@ -852,12 +852,16 @@ def api_sources_capabilities(refresh: bool = Query(False)):
     st = network_mod.node_state(refresh=bool(refresh))
     reg = saferegex.state()
     lxml_ok = source_rules.lxml_available()
+    js = network_mod.js_engine()
     hints = {
         "node": "" if st.get("available") else (st.get("reason") or "需要 Node 才能运行解密脚本"),
         "regex": reg["reason"],
         "lxml": "" if lxml_ok else "未安装 lxml ⇒ XPath 规则取不到值（`pip install lxml`）",
+        # 沙箱可用时 `reason` 为空；不可用时那句话必须能直接显示给用户
+        "js": js["reason"],
     }
     return {"node": st, "regex": reg, "lxml": {"available": lxml_ok, "reason": hints["lxml"]},
+            "js": js,
             "decrypt": bool(st.get("available")),
             "hints": hints,
             # 旧字段保留（既有前端与 `tests/test_js_node.py` 钉着它）

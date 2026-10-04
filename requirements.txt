@@ -19,6 +19,18 @@ lxml>=5.0
 # `core/saferegex.py`。它**不是硬依赖**：缺了由 `saferegex.state()` 如实标
 # `timeout:false` 并改用「输入长度上限」兜底 —— **绝不假装有超时**。
 regex>=2024.0
+# JS 沙箱（第 94 期阶段 4b）：书源规则里的 `@js:` / `<js>` 片段是**第三方代码**，
+# 第 86 期的 Node 通道里它拿得到 `require('fs')` / 出网，且没有任何上限。quickjs 是
+# 嵌入式引擎：无宿主能力，且 `set_time_limit` 实测**真能中断**死循环。唯一执行处是
+# `core/jssandbox.py`。它同样**不是硬依赖**：缺了由 `jssandbox.state()` 如实标
+# `available:false` 并回落 Node（capabilities 里标「非沙箱」），**绝不冒充沙箱**。
+#
+# ⚠️ 版本标记不是洁癖：quickjs 1.19.4 **只有 cp38–cp312 的预编译包**（实测 PyPI 文件列表），
+# 3.13/3.14 会退化成源码构建 —— 本机没有 C++ 编译器时 `pip install -r requirements.txt`
+# **整条会失败**（把整个开发环境装死）。生产镜像用 PY_VERSION=3.12（有包），
+# 3.13+ 的开发机就如实跳过这一项（JS 走回落通道，其余功能不受影响）。
+# aarch64 也没有预编译包 ⇒ 靠 Dockerfile builder 的 build-essential 就地编译。
+quickjs>=1.19; python_version < "3.13"
 # PDF 页面渲染：Komga 兼容服务端的页面流要把 PDF 逐页转成图片
 # （pypdfium2 自带 PDFium 二进制，pip 装即可，不需要系统库）
 pypdfium2>=4.30

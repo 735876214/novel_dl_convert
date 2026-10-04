@@ -5,9 +5,15 @@
   CONFIG_DIR/cookies/<source>.cookies.txt，跨请求保留登录态。
 - 429 自动按 Retry-After 或 2^n 退避；传输/超时错误有限次重试。
 - run_js / run_js_async：借助本机 Node 执行站点专用解密脚本（应对字体加密 / 内容混淆）。
+
+⚠️ **规则里的 JS 走 :func:`run_source_js`（沙箱优先）**，不是直接走 Node：书源文件是第三方
+给的，`@js:` 片段在 Node 里拿得到 `require('fs')` / 出网，而且**没有任何上限**。
+第 94 期阶段 4b 起：有 `quickjs` 就在沙箱里跑（时间 / 内存 / 栈三道上限，实测真中断），
+没有才回落 Node，并由 :func:`js_engine` **如实标注「那不是沙箱」**。
 """
 import asyncio
 import json
+import logging
 import os
 import pathlib
 import subprocess
@@ -16,6 +22,10 @@ import tempfile
 from http.cookiejar import CookieJar
 
 import httpx
+
+from . import jssandbox
+
+logger = logging.getLogger(__name__)
 
 # urllib3 仅为关闭 InsecureRequestWarning 而引入；httpx 0.28 改用 httpcore，
 # 不再依赖 urllib3。这里做防御式处理：存在时才关闭告警，避免干净环境因缺包崩溃。
@@ -414,13 +424,75 @@ def wrap_decrypt(js: str) -> str:
             "console.log(JSON.stringify({ok: typeof __out === 'string', v: String(__out)}));")
 
 
+#: 「片段没交出字符串」的**唯一**一处文案（Node 通道与沙箱共用，口径不许漂）
+_REQUIRE_STR = "解密脚本没有返回字符串（多半是片段里漏了 return，或 return 了非字符串）"
+
+
+def _demand_str(v) -> str:
+    if not isinstance(v, str):
+        raise RuntimeError(_REQUIRE_STR)
+    return v
+
+
 async def run_decrypt(js: str, text: str) -> str:
     """跑一段站点解密片段：``__args[0]`` 传密文，片段 ``return`` 明文。
 
-    ⚠️ 结果**必须是字符串**：拿到 `undefined` / 对象就如实抛错。静默把它当明文返回，
+    ⚠️ **这是 Node 通道**（第 86 期）：能跑但没有沙箱、没有超时 / 内存 / 栈上限，
+    只保留给既有契约与 `node_state()` 明确的部署。书源规则里的 JS 请走
+    :func:`run_source_js`（沙箱优先）。
+
+    结果**必须是字符串**：拿到 `undefined` / 对象就如实抛错。静默把它当明文返回，
     写进书里的就是一段 `undefined`，而用户只会看到「这本书内容是乱的」。
     """
     res = await run_js(wrap_decrypt(js), text)
     if not isinstance(res, dict) or not res.get("ok"):
-        raise RuntimeError("解密脚本没有返回字符串（多半是片段里漏了 return，或 return 了非字符串）")
+        raise RuntimeError(_REQUIRE_STR)
     return res["v"]
+
+
+# ---------------- 书源规则里的 JS：沙箱优先（第 94 期阶段 4b）----------------
+
+#: 「回落到 Node」只提醒一次：每次请求都刷一遍等价于没有日志。
+_sandbox_warned = {"done": False}
+
+
+def js_engine() -> dict:
+    """规则里的 JS 会由**谁**执行 —— 沙箱优先，缺 quickjs 才回落 Node。
+
+    回落是**如实标注**的，不是偷偷的：`/api/sources/capabilities` 原样下发这个 dict，
+    界面 / 文档据此说清「这台机器上规则里的 JS 跑在没有超时的 Node 通道里」。
+    """
+    sb = jssandbox.state()
+    if sb["available"]:
+        return {"sandbox": True, "engine": "quickjs", "version": sb["version"],
+                "limits": {"time": sb["time_limit"], "memory": sb["memory_limit"],
+                           "stack": sb["stack_limit"]},
+                "reason": ""}
+    node = node_state()
+    why = f"缺 JS 沙箱：{sb['reason']}"
+    if node["available"]:
+        why += "；再回落 Node 通道（**非沙箱**、无超时 / 内存 / 栈上限）"
+    else:
+        why += "；本机也没有 Node ⇒ 书源规则里的 JS 片段跑不了（其余书源不受影响）"
+    return {"sandbox": False, "engine": "node" if node["available"] else "",
+            "version": node["version"], "limits": {}, "reason": why}
+
+
+async def run_source_js(js: str, text: str) -> str:
+    """**书源规则里的 JS 的唯一执行入口**（`decrypt_js` 与 `mode:"js"` 正文共用）。
+
+    契约与 :func:`run_decrypt` 逐字一致：``__args[0]`` 与全局 ``result`` 都是输入，
+    片段用 ``return`` 交出**字符串**，拿不到就如实报错。
+
+    引擎选择只有这一处：有沙箱就在沙箱里跑（带时间 / 内存 / 栈上限），
+    没有才回落 Node 通道，并在 :func:`js_engine` 里如实说明**那不是沙箱**。
+    """
+    eng = js_engine()
+    if eng["sandbox"]:
+        return _demand_str(await jssandbox.run_js(js, text))
+    if not eng["engine"]:
+        raise RuntimeError(eng["reason"])
+    if not _sandbox_warned["done"]:
+        _sandbox_warned["done"] = True
+        logger.warning("书源规则里的 JS 正走 Node 通道（无沙箱、无超时）：%s", eng["reason"])
+    return await run_decrypt(js, text)

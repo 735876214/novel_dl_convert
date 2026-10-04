@@ -959,7 +959,7 @@ class RuleBasedSource(SourceAdapter):
         return (self._RULE.get("decrypt_js") or "").strip() or None
 
     async def _content(self, html: str, spec: dict) -> str:
-        """从页面取**正文**：``mode=js`` 交给 Node 通道，其余走 css / regex / json。
+        """从页面取**正文**：``mode=js`` 交给 JS 通道（沙箱优先），其余走 css / regex / json。
 
         ⚠️ `mode: "js"` 不是可选装饰：`legado.convert` 对「正文由 JS 算出」的源**就是**产出
         `{"mode": "js", "script": …}`（第 1 步定的形状）。`_extract` 不认这个 mode，
@@ -968,17 +968,22 @@ class RuleBasedSource(SourceAdapter):
         """
         if (spec or {}).get("mode") == "js":
             from ..core import network
-            # 移植脚本读全局 `result`（`wrap_decrypt` 同时提供 `result` 与 `__args[0]`）
-            return await network.run_decrypt(spec.get("script") or "", html)
+            # 移植脚本读全局 `result`（包装层同时提供 `result` 与 `__args[0]`）；
+            # `run_source_js` 是规则 JS 的**唯一**入口（沙箱优先，见 core/jssandbox.py）
+            return await network.run_source_js(spec.get("script") or "", html)
         return await self._decrypt(_extract(html, spec))
 
     async def _decrypt(self, text: str) -> str:
-        """按需跑站点解密片段：**没配就原样返回**（绝大多数站点不需要）。"""
+        """按需跑站点解密片段：**没配就原样返回**（绝大多数站点不需要）。
+
+        ⚠️ 走 `network.run_source_js`（规则 JS 的**唯一**入口）：有沙箱就在沙箱里跑，
+        没有才回落 Node，并且**如实标注那不是沙箱** —— 规则来自第三方，不能无护栏执行。
+        """
         js = self.decryption_js()
         if not js or not text:
             return text
         from ..core import network
-        return await network.run_decrypt(js, text)
+        return await network.run_source_js(js, text)
 
     def _check_vars(self):
         """出网前检查变量：缺就**当场报**，绝不带着 `{var:…}` 去请求站点。
