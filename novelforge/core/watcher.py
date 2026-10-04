@@ -35,6 +35,24 @@ STATE_FILENAME = "watcher_state.json"
 _BG_THREADS: dict = {}
 _BG_LOCK = threading.Lock()
 
+#: 进程内**唯一**的监听器实例（第 93 期）。创建点只有 `server._start_watcher` 一处，
+#: 它建好后登记在这里 —— 于是 `core/` 里的模块（自动落地 / 追更）也能问「我该把
+#: 刚写的那个 txt 登记成已处理吗」，而不必反向 import `server`（那是循环依赖）。
+#: ⚠️ 只读访问（`current()`）**不判它在不在跑**：`mark_recent` 只是往状态文件里记一笔，
+#: 监听线程没起时调用它同样正确（没起 = 本来就不会重复转换）。
+_current = None
+
+
+def set_current(w) -> None:
+    """登记进程内的监听器实例（`server._start_watcher` 调用，重复调用覆盖同一个）。"""
+    global _current
+    _current = w
+
+
+def current():
+    """当前进程的监听器（没有 ⇒ ``None``）。"""
+    return _current
+
 
 def _spawn_bg(target, name: str) -> threading.Thread:
     """起一个**被登记**的旁路线程（daemon，不阻塞主流程）。"""

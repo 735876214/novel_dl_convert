@@ -219,11 +219,18 @@ class DownloadManager:
         caller_opts["_notice"] = opts.get("_notice", "")
         return result
 
-    async def download_to(self, item: dict, out_dir: Path, input_dir: Path, opts: dict) -> Path:
+    async def download_to(self, item: dict, out_dir: Path, input_dir: Path, opts: dict,
+                          *, txt_stem: str = "") -> Path:
         """下载整本书 → 落 txt 到输入目录（留档/可重转）→ 按书源分章方案转 EPUB 到导出目录。
 
         - 书源提供结构化章节（目录式）时直接分章，最干净；否则抓全文后走全局检测/正则。
         - 自动写 sidecar 元数据，便于日后增量更新。
+
+        ``txt_stem`` 是**留档 txt / sidecar 的文件名**，默认按书名清洗（``_safe_name``）。
+        什么时候必须显式传：**把源站内容落到「已有的那本书」上**时（第 93 期自动落地）——
+        那时留档必须叫**那本书**的名字，否则 `autoupdate.sidecar_of`（唯一一处拼法）
+        在收书目录里找不到它，追更从此对这本书失效。书名的清洗可能改名（非法字符 / 超长），
+        所以不能靠「书名本来就安全」这个假设。
         """
         out_dir, input_dir = Path(out_dir), Path(input_dir)
         name = source_of(item)
@@ -244,24 +251,30 @@ class DownloadManager:
                 text = await src.fetch_book(c, item)
 
         safe = _safe_name(item.get("title", "book"))
+        stem = str(txt_stem or safe)
         caller_opts = opts
         opts = dict(opts)
         opts.setdefault("cfg", self.cfg)
         opts.setdefault("filename", safe)
 
+        # ⚠️ 留档 txt **先写 .part 再 replace**（第 93 期）：重复下载 / 自动覆盖时这个文件
+        # 是**已存在**的（它就是追更的起点依据），半截文件会被当成「本地已有这么多章」——
+        # 于是下次追更从错误的位置开始，静默丢章。与 `_update_report_locked` 同一手法。
         if chapters:
-            txt_path = input_dir / f"{safe}.txt"
-            txt_path.write_text(
-                "\n\n".join(f"{c['title']}\n{c['body']}" for c in chapters),
-                encoding="utf-8",
-            )
+            body = "\n\n".join(f"{c['title']}\n{c['body']}" for c in chapters)
+        else:
+            body = str(text)
+        txt_path = input_dir / f"{stem}.txt"
+        t_tmp = txt_path.with_suffix(txt_path.suffix + ".part")
+        t_tmp.write_text(body, encoding="utf-8")
+        t_tmp.replace(txt_path)
+
+        if chapters:
             self.write_sidecar(txt_path, item, out_dir,
                                last_title=(chapters[-1].get("title") or ""),
                                chapter_count=len(chapters))
             result = pipeline.convert_chapters(chapters, out_dir, opts, meta=meta)
         else:
-            txt_path = input_dir / f"{safe}.txt"
-            txt_path.write_text(text, encoding="utf-8")
             # 整页全文这条路上没有现成章节表，用与 pipeline 同一套判据现切一次拿末章标题
             # （一次下载只多跑一遍正则，换来「下载完就知道最新章节」这件事不缺席）
             from ..core import detect

@@ -385,9 +385,19 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     monkeypatch.setattr(config, "LIBRARY_SOURCE_DIR", tmp_path / "libraries")
     # 收书目录也指到用例专属路径（第 93 期）：下载留档（`<名>.meta.json`）写在**原件旁边**，
     # 而原件落在收书目录 —— 追更的候选枚举按它算（`autoupdate.sidecar_of`）。
-    # 不指的话那些用例会往 `/app/input` 下真写文件（Windows 上是 `C:\app\input`）。
-    # ⚠️ `server.INPUT_DIR` 是 import 时的拷贝，不受这里影响（见上方注释）。
+    #
+    # ⚠️ **两处都要指，而且必须指成同一个**：`server.INPUT_DIR` 是 import 时的拷贝
+    # （`server.py:217`，注释里那句「摄入类接口仍指向会话级临时目录」说的就是它）。
+    # 只指 `config` 那一份的话，用例把文件写进 A、接口去 B 里找 —— 这正是第 93 期
+    # 实测踩到的坑（`test_scan_background::test_convert_path` 立刻 404）。
+    # 指成同一个之后，读写两侧仍然一致，且摄入链路也一并隔离到用例专属目录。
     monkeypatch.setattr(config, "INPUT_DIR", tmp_path / "input")
+    from novelforge import server as _server_mod          # 延迟导入：本模块顶部只导了 app
+    monkeypatch.setattr(_server_mod, "INPUT_DIR", tmp_path / "input")
+    # ⚠️ 得**建出来**：会话级那个收书目录是 `config.ensure_dirs()` 建好的，而这里换成了
+    # 一个全新路径 —— 上传接口（`/convert`、`/convert-path`）是直接往里写的，
+    # 目录不在就是一句 `FileNotFoundError`，跟被测的口径毫无关系。
+    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
     # 第 41 期：多来源根。测试里就一个来源根（即上面这个）；同步让服务端的边界校验
     # （normalize_source_dirs 只认 LIBRARY_SOURCE_ROOTS）放行 tmp_path 下的库根。
     monkeypatch.setattr(config, "LIBRARY_SOURCE_ROOTS",

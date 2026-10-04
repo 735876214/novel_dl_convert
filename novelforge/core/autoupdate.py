@@ -35,6 +35,7 @@
 与 updater 同一范式 —— 这类**长期循环**线程不进 `watcher._BG_THREADS`
 （那张表是给「短命旁路任务」收尾用的，长期循环会把收尾 join 卡死）。
 """
+import asyncio
 import json
 import logging
 import pathlib
@@ -42,7 +43,7 @@ import threading
 import time
 
 from .. import config
-from . import activity_log, library
+from . import activity_log, db, library
 
 _log = logging.getLogger("novelforge")
 
@@ -90,14 +91,25 @@ def sidecar_of(book: dict) -> pathlib.Path | None:
 
 
 def candidates(limit: int = 0) -> list:
-    """本轮要追更的书目（``[{"name", "sidecar", "book"}...]``）。**只读枚举、不外呼**。
+    """本轮要动的书（``[{"kind", "name", "sidecar", "book", "row"}...]``）。**只读枚举、不外呼**。
 
-    判据：书库里每本书的同名 sidecar 是否存在 —— sidecar 是「这本书是下载来的」
-    的唯一持久痕迹（`sources/manager.write_sidecar`）。
+    判定顺序（第 93 期补的第二个来源）：
 
-    `limit > 0` 时最多收这么多本（单轮上限，防止一次外呼打爆）。
+    1. **有留档**（收书目录里原件旁边有同名 ``.meta.json``）⇒ ``kind="sidecar"``，
+       走既有追更。留档是「这本书是下载来的」的唯一持久痕迹，也是「本地已有几章」的权威。
+    2. **否则只有绑定** ⇒ ``kind="binding"``，走**绑定驱动更新**（`core/landing`：对齐则追加
+       源站尾部新章）。这正是用户要的「书源自动搜索更新章节」—— 在线阅读绑了源的书，
+       本地副本也该跟着源站走。
+
+    ⚠️ **有留档的一律走 1**，不再看绑定：两套机制对同一本书各跑一遍，会把同一批新章
+    追加两次（而且都报成功）。留档指向的**书页**以留档为准（`landing.ensure_sidecar`
+    在绑定指向另一页时会拒绝写入，理由写在那里）。
+
+    ``limit > 0`` 时最多收这么多本（单轮上限，防止一次外呼打爆）。截断**按上面的枚举顺序**
+    —— 有留档的书先占预算：追更是主路径，绑定驱动是补充。
     """
     out: list = []
+    known: set = set()
     try:
         books = library.books()
     except Exception as e:                               # noqa: BLE001
@@ -107,41 +119,114 @@ def candidates(limit: int = 0) -> list:
         try:
             sidecar = sidecar_of(b)
             if sidecar is not None and sidecar.is_file():
-                out.append({"name": sidecar.name[:-len(".meta.json")],
+                out.append({"kind": "sidecar", "row": None,
+                            "name": sidecar.name[:-len(".meta.json")],
                             "sidecar": sidecar, "book": b})
+                known.add(str(b.get("id") or ""))
         except Exception:                                # noqa: BLE001 —— 单本失败不拖累整轮
             continue
+    try:
+        binds = db.online_bind_list()
+    except Exception as e:                               # noqa: BLE001 —— 绑定表读不到就当没有
+        _log.warning("追更：枚举在线绑定失败（本轮只跑留档）：%s", e)
+        binds = []
+    for row in binds:
         if limit and len(out) >= int(limit):
             break
-    return out
+        bid = str(row.get("book_id") or "")
+        if not bid or bid in known:
+            continue
+        try:
+            # ⚠️ 走 `by_id`（书架口径）：书被软删 / 文件没了 ⇒ 这里是孤儿，
+            # 跳过而不是拿一份「册子上已经没有的书」去外呼。
+            b = library.by_id(bid)
+        except Exception:                                # noqa: BLE001 —— 含 BookIdConflict
+            b = None
+        if not b:
+            continue
+        row = dict(row)
+        row["book_id"] = bid
+        out.append({"kind": "binding", "row": row, "sidecar": None,
+                    "name": row.get("title") or b.get("title") or bid, "book": b})
+    return out[:int(limit)] if limit else out
 
 
-def update_book(book: dict, mgr=None, *, origin: str = "auto-update") -> dict:
-    """**单本追更的唯一入口**：读留档 → 过闸门 → `manager.update_report` → 记日志 → 返回报告。
+def _update_target(book: dict, mgr) -> tuple:
+    """单本追更的**前半截**（读留档 → 过闸门）⇒ ``(留档 txt 路径, 书名)``。
 
-    顺序是刻意的（第 93 期）：**先读留档再问闸门**，因为闸门的入参是「源」——
-    而「这本书来自哪个源」只有留档知道。被拦下时抛 :class:`Blocked`（原文照传），
-    **不返回假报告**；其余异常照常冒出（调用方逐本吞并计数，不让一本书拖垮整轮）。
+    顺序是刻意的：**先读留档再问闸门**，因为闸门的入参是「源」—— 而「这本书来自哪个源」
+    只有留档知道。被拦下时抛 :class:`Blocked`（原文照传），**绝不返回假报告**。
 
-    它同时是**活动日志的唯一写点**（原先这段在 `tick()` 里）：定时轮次、手动「检查更新」、
-    自动落地后的更新都调这里，日志措辞就只有一份 —— 两处各写一份必然分叉。
-
-    ⚠️ 真正的追更保证（只追加 / 原子写 / 并发互斥 / 既有章 index 不漂移）仍然**只在**
-    `manager.update_report` 一处，本函数不复制它。
+    同步壳与协程壳共用这一段：闸门判据与「留档在哪儿」都只有一份 —— 两处各写一遍的话，
+    「关掉下载还能不能追更」这类问题会在两条路上给出不同答案。
     """
-    from ..sources import manager as mgr_mod
     sidecar = sidecar_of(book)
     if sidecar is None:
         raise ValueError(f"算不出这本书的留档路径（{book.get('name')}），无法追更")
     if not sidecar.is_file():
         raise ValueError(f"未找到 sidecar 元数据 {sidecar.name}，无法增量更新")
-    name = sidecar.name[:-len(".meta.json")]
     meta = json.loads(sidecar.read_text(encoding="utf-8"))
-    mgr = mgr if mgr is not None else mgr_mod.DownloadManager(config.load_config())
     reason = mgr.gate_reason(meta.get("source"))
     if reason:
         raise Blocked(reason)
-    txt = sidecar.with_suffix("").with_suffix(".txt")
+    return sidecar.with_suffix("").with_suffix(".txt"), sidecar.name[:-len(".meta.json")]
+
+
+def _log_update(name: str, txt, res: dict, origin: str) -> None:
+    """把一次追更的结果记进活动日志（**唯一写点**：措辞只有一份）。
+
+    两种「0 章」在这里分得开：``note`` 非空 ⇒ 原样记原因（源上没有新章 / 站点改版）；
+    真新增了才记「新增 N 章」。
+    """
+    added = int((res or {}).get("added") or 0)
+    if res.get("note"):
+        activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_OK,
+                         output=str(pathlib.Path(txt).parent), detail=str(res["note"]),
+                         source=origin)
+    elif added:
+        activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_OK,
+                         output=str(pathlib.Path(txt).parent),
+                         detail=f"新增 {added} 章", source=origin)
+
+
+async def update_book_async(book: dict, mgr=None, *, origin: str = "auto-update") -> dict:
+    """**单本追更的协程壳** —— 已经在事件循环里的调用方用它（「检查更新」/ 自动落地）。
+
+    ⚠️ 为什么必须有它（第 93 期踩到的真 bug）：同步壳 :func:`update_book` 走
+    ``asyncio.run``，而 ``asyncio.run`` 在**运行中的事件循环里**直接抛
+    「asyncio.run() cannot be called from a running event loop」。自动落地整条链就在
+    事件循环里（`server._sync_worker` → `landing._append`）—— 于是「对齐后追加新章」
+    这一步**永远不会发生**：文件一个字不改，报告是一句令人费解的失败，而且没有任何
+    测试会红（桩源不会替我们跑事件循环）。
+
+    两个壳共用 :func:`_update_target` 与 :func:`_log_update`，差别只有「等不等」这一行。
+    """
+    from ..sources import manager as mgr_mod
+    mgr = mgr if mgr is not None else mgr_mod.DownloadManager(config.load_config())
+    txt, name = _update_target(book, mgr)
+    try:
+        res = await mgr.update_report(txt, {"cfg": getattr(mgr, "cfg", None)})
+    except Exception as e:                               # noqa: BLE001 —— 记一笔再照原样冒出
+        activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_FAIL,
+                         detail=f"追更失败：{e}", source=origin)
+        raise
+    res = dict(res or {})
+    _log_update(name, txt, res, origin)
+    return res
+
+
+def update_book(book: dict, mgr=None, *, origin: str = "auto-update") -> dict:
+    """**单本追更的唯一入口（同步壳）**：读留档 → 过闸门 → `manager.update_report` → 记日志。
+
+    定时轮次（`tick`，它本身是同步的、跑在后台线程里）走这一条。**事件循环里的调用方
+    请用** :func:`update_book_async` —— 见那里的 docstring。
+
+    ⚠️ 真正的追更保证（只追加 / 原子写 / 并发互斥 / 既有章 index 不漂移）仍然**只在**
+    `manager.update_report` 一处，本函数不复制它。
+    """
+    from ..sources import manager as mgr_mod
+    mgr = mgr if mgr is not None else mgr_mod.DownloadManager(config.load_config())
+    txt, name = _update_target(book, mgr)
     try:
         res = _run_one(mgr, txt)
     except Exception as e:                               # noqa: BLE001 —— 记一笔再照原样冒出
@@ -149,13 +234,7 @@ def update_book(book: dict, mgr=None, *, origin: str = "auto-update") -> dict:
                          detail=f"追更失败：{e}", source=origin)
         raise
     res = dict(res or {})
-    added = int(res.get("added") or 0)
-    if res.get("note"):
-        activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_OK,
-                         output=str(txt.parent), detail=str(res["note"]), source=origin)
-    elif added:
-        activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_OK,
-                         output=str(txt.parent), detail=f"新增 {added} 章", source=origin)
+    _log_update(name, txt, res, origin)
     return res
 
 
@@ -164,9 +243,11 @@ def tick(conf: dict = None) -> dict:
 
     返回 ``{"total", "ok", "skipped", "errors", "added"}`` —— 供日志与
     `state()` 用；失败逐本记 `activity_log`，不让一本书拖垮整轮。
-    ``total > 0`` 时可能另带 ``"blocked"``（闸门原文；此时**一本都没外呼**，全部计入
-    ``skipped``）—— 见模块文档第 4 条：报告必须是「干了什么」的实录，
-    「被拦下」与「源上没有新章」是两件事，不能都长成「新增 0 章」。
+    ``total > 0`` 时可能另带两个键：``"blocked"``（闸门原文；此时**一本都没外呼**，
+    全部计入 ``skipped``）与 ``"notes"``（**跑了但什么都没写**的逐本原因，第 93 期加）。
+    见模块文档第 4 条：报告必须是「干了什么」的实录 ——
+    「被拦下」、「源上没有新章」、「绑定跟本地对不上所以没写」是三件事，
+    不能都长成一句「新增 0 章」。
 
     ⚠️ ``conf`` 只管**调度**（`max_books` / `request_delay`）；闸门判据**只从配置读**
     （``DownloadManager.gate_reason()``，唯一一处），不接受参数覆盖 —— 否则调用方
@@ -202,14 +283,19 @@ def tick(conf: dict = None) -> dict:
     for i, cand in enumerate(files):
         name = cand["name"]
         try:
-            # 逐本走**同一个**入口（第 93 期收敛）：闸门、报告、活动日志都在 `update_book` 里，
-            # 这里只负责计数与节流 —— 定时轮次与手动「检查更新」的措辞因此不可能分叉。
-            res = update_book(cand["book"], mgr)
+            # 逐本走**同一个**入口：有留档走 `update_book`、只有绑定走 `_run_binding`，
+            # 两者的闸门、报告与账面口径都在各自那一处，这里只负责计数与节流。
+            res = (_run_binding(mgr, cand) if cand.get("kind") == "binding"
+                   else update_book(cand["book"], mgr))
             added = int(res.get("added") or 0)
             rep["ok"] += 1
             rep["added"] += added
             if not added and not res.get("note"):
                 rep["skipped"] += 1
+            elif not added:
+                # 「跑完了但什么都没写」且**有原因**（绑定对不上 / 本地没内容）——
+                # 不能悄无声息：定时轮次没人看报告，所以这句要能被带出去（见下）。
+                rep.setdefault("notes", []).append(f"{name}：{res['note']}")
         except Blocked as e:
             # 理论上到不了（上面已整轮拦下），但闸门日后若按**源**分级就会走到这里：
             # 那时把它算成「失败」是错的（用户自己的开关，不是站点挂了），记「跳过」。
@@ -223,9 +309,35 @@ def tick(conf: dict = None) -> dict:
     return rep
 
 
+def _run_binding(mgr, cand: dict) -> dict:
+    """**绑定驱动更新**一本（第 93 期）：把源站多出来的尾部章节追加到本地副本末尾。
+
+    实现在 `core.landing.sync`（**唯一一处**，与「检查更新」按钮共用）；这里只管调度 ——
+    `sync` 是协程而 `tick` 是同步的，所以每本一次 ``asyncio.run``（与 `_run_one` 同款）。
+
+    ``allow_first=False``：**定时轮次不整本落地**。用户没读过的书不该被后台线程悄悄下
+    一本 —— 首次落地归「读满 5 章」那个触发器（`server._maybe_auto_land`），
+    或用户自己点「检查更新」。这里只做「本地已经有副本，源上又多了几章」这件事。
+
+    ⚠️ 什么都没做（对不上 / 本地没内容）时**记一笔活动日志**：定时轮次没人看返回值，
+    不记就等于静默。这是异常状态而非常态，所以不会刷屏。
+    """
+    from . import landing
+    rep = asyncio.run(landing.sync(mgr, cand["book"], cand["row"], allow_first=False))
+    if rep.get("mode") == "skip":
+        activity_log.log(activity_log.ACTION_UPDATE, cand["name"], activity_log.STATUS_FAIL,
+                         detail=f"未执行：{rep.get('note') or ''}", source="auto-update")
+    return rep
+
+
 def _run_one(mgr, txt_path):
-    """跑一本（`update_report` 是 async 的，这里同步等它 —— 每本一次 `asyncio.run`）。"""
-    import asyncio
+    """跑一本（**同步壳那一侧的唯一外呼处**：`update_report` 是 async 的，
+    而 `tick()` 是同步的 ⇒ 每本一次 `asyncio.run`）。
+
+    ⚠️ **只能在事件循环之外调**。事件循环里请走 :func:`update_book_async`
+    （它直接 `await`，不经过这里）—— 在循环里调 `asyncio.run` 会抛
+    「cannot be called from a running event loop」，而那正是第 93 期自动落地踩过的坑。
+    """
     return asyncio.run(mgr.update_report(txt_path, {"cfg": getattr(mgr, "cfg", None)}))
 
 

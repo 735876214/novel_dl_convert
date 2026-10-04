@@ -28,6 +28,7 @@ from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddle
 
 from .core import pipeline, activity_log, library, fileops, publish, scrape, updater, changelog
 from .core import autoupdate                      # 第 86 期：书籍追更的后台调度
+from .core import landing                          # 第 93 期：源站内容落到「这本书自己」上
 from .core import zipkind                        # 第 87 期：容器展开
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, achievements, activity, recommend,
@@ -69,6 +70,9 @@ def _start_watcher(cfg: dict) -> "watcher_mod.FolderWatcher":
     global WATCHER
     if WATCHER is None:
         WATCHER = watcher_mod.FolderWatcher(cfg=cfg)
+        # 登记到 watcher 模块（第 93 期）：`core/landing` 写完 txt 后要把它标记成已处理，
+        # 而 core 不许反向 import server。创建点只有这一处，所以登记也只有这一处。
+        watcher_mod.set_current(WATCHER)
     WATCHER.on_scan = bookdock.note_scan      # 收书目录状态机回调（幂等绑定）
     if WATCHER.is_running():
         return WATCHER
@@ -668,17 +672,12 @@ def api_sources_bulk(payload: dict = Body(...)):
 #          ③ 登录面板由**书源自己的声明**驱动（`legado.login_spec`），不写死站点。
 
 def _load_rule(name: str) -> dict:
-    """读一条用户书源的规则本体（没有 / 坏文件返回空字典）。"""
-    f = pathlib.Path(config.SOURCES_DIR) / f"{name}.json"
-    if not f.is_file():
-        return {}
-    try:
-        data = json.loads(f.read_text(encoding="utf-8"))
-    except Exception:                                        # noqa: BLE001
-        return {}
-    if isinstance(data, list):
-        return data[0] if data and isinstance(data[0], dict) else {}
-    return data if isinstance(data, dict) else {}
+    """读一条用户书源的规则本体（没有 / 坏文件返回空字典）。
+
+    第 93 期起**只有一处实现**（`sources.rules.load_rule`）：自动落地也要读同一份规则，
+    而 `core/` 不能反向 import `server`。这里保留这个名字只是不想动既有调用点。
+    """
+    return source_rules.load_rule(name)
 
 
 def _source_domains(name: str) -> list:
@@ -1080,16 +1079,11 @@ def _online_ctx(bid: str) -> tuple:
 def _local_chapters(b: dict) -> list:
     """这本书**本地**的扁平章节表（`[{index, title}...]`），供 `align_online` 比对。
 
-    与「书城目录」（`api_toc_apply`）读的是同一份 `book_detail`：单一真值源，
-    两处各取一份的话，同一条判据会在两个地方各错一次。
-    读不出详情（缺文件 / 详情异常）⇒ 空表：`align_online` 会如实返回 `None`
-    （「对不上就不写本地进度」），不会拿一份假目录去配。
+    第 93 期起**只有一处实现**（`landing.local_chapters`）：在线读按它写进度、
+    自动落地按它判「本地读得了吗」，两处各取一份的话，「本地有没有内容」这个判据
+    会在两个地方各错一次。这里保留这个名字只是不想动既有调用点。
     """
-    try:
-        detail = library.book_detail(b["name"], b.get("library_id")) or {}
-    except Exception:                                   # noqa: BLE001 —— 详情坏了不该让在线读整体 500
-        return []
-    return [c for g in (detail.get("chapters") or []) for c in (g.get("chapters") or [])]
+    return landing.local_chapters(b)
 
 
 @app.get("/api/books/{bid}/online/status")
@@ -1107,10 +1101,23 @@ def api_online_status(bid: str):
     # 直接报出去会显示成「还没读就缓存好了 N 章」。没绑定时不看页（也没页可比）。
     cache = online_mod.book_cache_stats(
         bid, source=(row or {}).get("source") or "", url=(row or {}).get("url") or "")
+    # 「检查更新」的入口判据（第 93 期 E5）与「在线读」**不是一回事**：本地副本是从书源
+    # 下载来的时候就已经有留档、却常常没有绑定 —— 那种书恰恰最该能检查更新。
+    # 判据与服务端端点（`api_check_update`）逐条对齐：先闸门、再「有没有源」，
+    # 顺序相同 ⇒ 入口显示出来的必然点得动（不然就是假交互）。
+    sidecar = autoupdate.sidecar_of(b)
     out = {"bound": bool(row), "source": "", "display_name": "", "url": "",
            "title": "", "pos": int((row or {}).get("pos") or 0),
            "seen": len((row or {}).get("seen") or []),
-           "cache": cache, "available": False, "reason": ""}
+           "cache": cache, "available": False, "reason": "",
+           "has_sidecar": bool(sidecar and sidecar.is_file()),
+           "updatable": False, "update_reason": ""}
+    if not out["has_sidecar"] and not row:
+        out["update_reason"] = ("这本书既没有书源留档、也没有绑定书源 —— "
+                                "先在下面绑一个源，或者从书源下载它")
+    else:
+        out["update_reason"] = _manager().gate_reason(None) or ""
+    out["updatable"] = not out["update_reason"]
     if not row:
         # 没绑定**不是错误**：这是绝大多数书的常态，前端据此显示「绑定书源」入口。
         return out
@@ -1152,8 +1159,10 @@ async def api_online_chapters(bid: str, refresh: int = 0):
         raise HTTPException(502, f"取目录失败：{e}")
     titles = [e.get("title") or "" for e in data.get("entries") or []]
     local = _local_chapters(b)
-    entries = [{"index": i, "title": t,
-                "local_index": reading_list.align_online(titles, local, i)}
+    # 整本**只求一次位移**（`align_map`）：逐章问一遍 `align_online` 会把 O(章数) 的活
+    # 干成 O(章数²)（每章都要把两边目录归一化一次）。判据仍然只有 `reading_list` 那一处。
+    amap = reading_list.align_map(titles, local)
+    entries = [{"index": i, "title": t, "local_index": amap.get(i)}
                for i, t in enumerate(titles)]
     return {"source": row["source"],
             "display_name": getattr(REGISTRY.get(row["source"]), "display_name", row["source"]),
@@ -1218,7 +1227,8 @@ async def _online_record(b: dict, bid: str, row: dict, index: int) -> dict:
     """
     mgr = _manager()
     db.online_bind_set_pos(bid, index)
-    db.online_bind_mark_seen(bid, index)
+    seen = db.online_bind_mark_seen(bid, index)
+    _maybe_auto_land(b, bid, seen)
     local = _local_chapters(b)
     try:
         titles = [e.get("title") or ""
@@ -1276,6 +1286,142 @@ def _online_prefetch(manager, book_id, source: str, url: str, index: int, total:
     asyncio.create_task(_run())
 
 
+@app.post("/api/books/{bid}/check-update")
+async def api_check_update(bid: str, request: Request, payload: dict = Body(default={})):
+    """单本「检查更新」：搜源站更新 → 落到**这本书自己**的位置上（第 93 期 E5）。
+
+    有留档走追更；只有绑定走绑定驱动更新；两者都没有 ⇒ 400 如实说明（不猜、不建空任务）。
+
+    ``{"overwrite": true}`` = 用户显式要求「**用源站整本覆盖本地**」（详情页那个带二次
+    确认的按钮）。它的代价写在明处：章节结构按源站那一版走，进度按**章号**重新对齐 ——
+    所以**默认路径永远不会**整本重写（那份保证在 `core/landing` 的模块文档里）。
+
+    起**后台任务**而不是在请求里等：一次外呼要好几秒到几十秒，占着请求会超时（第 81 期
+    的线上故障就是这么来的）。报告写进任务行，详情页那边就地展示一句。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    # 闸门与 `/api/download` 同一条：这是真的去外呼源站抓正文。
+    reason = _manager().gate_reason()
+    if reason:
+        raise HTTPException(400, reason)
+    row = db.online_bind_get(bid)
+    sidecar = autoupdate.sidecar_of(b)
+    has_side = bool(sidecar and sidecar.is_file())
+    if not has_side and not row:
+        raise HTTPException(400, "这本书既没有书源留档、也没有绑定书源 —— 先在详情页的"
+                                 "「在线阅读」里绑一个源，或者从书源下载它")
+    overwrite = bool((payload or {}).get("overwrite"))
+    if overwrite and not row:
+        raise HTTPException(400, "「整本覆盖」需要先绑定书源（本地副本该换成哪一版，得由你说）")
+    actor = getattr(request.state, "user", "") or "系统"
+    title = b.get("title") or b.get("name") or ""
+    tid = uuid.uuid4().hex
+    detail = " · ".join(str(x) for x in (
+        (row or {}).get("source") or "", "整本覆盖" if overwrite else "") if x)
+    db.task_create(tid, "check-update", title, detail=detail, actor=actor)
+    db.task_prune()
+    asyncio.create_task(_run_sync(tid, b, row, actor=actor, overwrite=overwrite))
+    return {"task_id": tid, "overwrite": overwrite, "source": (row or {}).get("source") or ""}
+
+
+def _maybe_auto_land(b: dict, bid: str, seen: list) -> str:
+    """读满 5 章 ⇒ 起一次**自动落地**任务；返回任务 id（没触发则空串）。
+
+    两条判据都在 `landing.should_sync` 里（唯一实现）：``len(seen) > 5`` 与
+    ``auto_task`` 为空。这里只负责**记账 + 起任务**：
+
+    ⚠️ **先写 ``auto_task`` 再起协程**。反过来的话，同一轮里连着翻章会各起一个任务
+    （每个都还没写账），于是同一本书被下两遍 —— 而这个字段的全部意义就是「只触发一次，
+    失败也不重复轰炸」。
+
+    ⚠️ 它**只在这条路径上被调用**（在线阅读读到第 N 章）。定时追更那条路不自动落地：
+    用户没读过的书不该被后台线程悄悄下一本（`landing.sync(allow_first=False)`）。
+    """
+    row = db.online_bind_get(bid)
+    if not row:
+        return ""
+    row = dict(row)
+    row["seen"] = list(seen or row.get("seen") or [])
+    ok, why = landing.should_sync(row)
+    if not ok:
+        return ""
+    tid = uuid.uuid4().hex
+    title = b.get("title") or b.get("name") or ""
+    db.task_create(tid, "online-land", title,
+                   detail=f"{row.get('source') or ''} · 读满 {len(row['seen'])} 章自动落地",
+                   actor="系统")
+    db.task_prune()
+    db.online_bind_set_auto_task(bid, tid)
+    asyncio.create_task(_run_sync(tid, b, row, actor="系统"))
+    logging.getLogger("novelforge").info(
+        "在线阅读满 %s 章，已起自动落地任务 %s：《%s》", len(row["seen"]), tid, title)
+    return tid
+
+
+async def _run_sync(tid: str, b: dict, row: dict | None, *,
+                    actor: str = "系统", overwrite: bool = False) -> None:
+    """「把源站内容落到这本书上」的后台协程 —— **两条触发路都走它**（第 93 期）。
+
+    自动落地（`_maybe_auto_land`）与详情页的「检查更新」只在**触发条件**上不同，
+    落地这件事本身一模一样。分成两段各写一遍的话，迟早一条改了一条没改。
+
+    `_ops_begin/_ops_end` 把这次外呼记在「长文件操作」的账上 —— 测试收尾的
+    `wait_background_ops` 才能等到它，不然会在 `db.close()` 之后还攥着旧连接（第 86 期纪律）。
+    """
+    _ops_begin()
+    try:
+        await _sync_worker(tid, b, row, actor=actor, overwrite=overwrite, allow_first=True)
+    finally:
+        _ops_end()
+
+
+async def _sync_worker(tid: str, b: dict, row: dict | None, *, actor: str = "系统",
+                       overwrite: bool = False, allow_first: bool = True) -> None:
+    """「把源站内容落到这本书上」的**唯一后台实现**（两条触发路都走它）。
+
+    报告一律落进任务行（``notice`` 里是给人看的那句），**绝不吞掉原因**。三种结局分得开：
+
+    · ``first`` —— 整本落地成功：活动日志记「添加」（与收书目录收进来的书同一口径）；
+    · ``append`` —— 追加成功：**账已经由 `autoupdate.update_book_async` 记过了**，这里不再记
+      第二笔（两处都记会让同一本书在活动日志里出现两行，用户以为发生了两件事）；
+    · ``skip`` —— 什么都没做：如实记「失败」+ 原因。活动日志的状态词表只有成功 / 失败两档，
+      而「未自动写入」是用户**必须**看到的一条（不是一句可忽略的提示）。
+    """
+    db.task_update(tid, status="running", progress=50.0)
+    title = b.get("title") or b.get("name") or ""
+    try:
+        mgr = _manager()
+        reason = mgr.gate_reason((row or {}).get("source") or None)
+        if reason:
+            raise RuntimeError(reason)
+        if row:
+            rep = await landing.sync(mgr, b, row, overwrite=overwrite, allow_first=allow_first)
+        else:
+            # 只有留档、没有绑定：就是既有追更（同一函数、同一账）。
+            res = await autoupdate.update_book_async(b, mgr, origin="check-update")
+            added = int(res.get("added") or 0)
+            rep = {"mode": "append", "added": added, "note": str(res.get("note") or ""),
+                   "epub": str(res.get("epub") or ""), "title": landing.book_stem(b),
+                   "path": "", "detail": (f"新增 {added} 章" if added
+                                          else (res.get("note") or "没有新章节"))}
+        mode = str(rep.get("mode") or "")
+        note = str(rep.get("detail") or rep.get("note") or "")
+        name = str(rep.get("title") or landing.book_stem(b))
+        db.task_update(tid, status="done", progress=100.0, notice=note, fname=name)
+        if mode == "first":
+            activity_log.log_add_ok(name, str(rep.get("path") or ""), detail=note,
+                                    actor=actor, source="online")
+        elif mode == "skip":
+            activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_FAIL,
+                             detail=f"未执行：{note}", actor=actor, source="online")
+    except Exception as e:                                  # noqa: BLE001 —— 原因原文交给用户
+        db.task_update(tid, status="failed", progress=100.0, error=str(e))
+        activity_log.log(activity_log.ACTION_UPDATE, title, activity_log.STATUS_FAIL,
+                         detail=f"检查更新失败：{e}", actor=actor, source="online")
+
+
 @app.post("/api/online/cache/clear")
 def api_online_cache_clear():
     """清空**在线缓存**（只清 `CACHE_DIR/online/`）。
@@ -1302,12 +1448,10 @@ def _task_out(row: dict | None) -> dict:
 def _product_kind(name: str) -> str:
     """这条书源产出的是哪一类产物：``comic`` / ``audio`` / ``text``（第 86 期）。
 
-    判据**在规则里**（`book.mode`）—— 书源自报它给什么，不让用户猜、也不用另开配置键；
-    认不出来的（含内置 Python 适配器：它们在磁盘上没有规则文件）一律按 `text` 走，
-    既有行为一字不变。
+    第 93 期起**只有一处实现**（`sources.rules.product_kind`）：自动落地也要用它判
+    「这本能不能自动落地」，两处各写一份的话，「什么算文本」一变就会一半自动、一半不自动。
     """
-    mode = str(((_load_rule(str(name or "")).get("book") or {})).get("mode") or "").lower()
-    return mode if mode in ("comic", "audio") else "text"
+    return source_rules.product_kind(name)
 
 
 #: 产物类型 → 交给 `resolve_target` 判库用的**代表文件名**。
