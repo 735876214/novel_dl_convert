@@ -26,6 +26,7 @@
 │  koreader_anno · integrations · auth · fonts · customfields · metascore · │
 │  browse_counts · activity_log · ai_detect · network · migrate · pdfrender │
 │  autoupdate（书源追更 / 单本检查更新）· landing（在线读满 5 章落到本地）  │
+│  jssandbox（JS 沙箱）· saferegex（执行期正则超时）· urlguard（出站 URL 闸）│
 └───────────────┬──────────────────────────────────────────────────────────┘
                 │
    ┌────────────▼───────────┐   ┌──────────────┐   ┌───────────────────────┐
@@ -36,6 +37,13 @@
 
 **边界规则**：`core` 一律 `from .. import config`（裸 `import config` 会被同名命名空间包劫持）；`core` 不认识 HTTP。
 前端**不直接碰磁盘**（本地导入走接口）。
+
+**书源（`novelforge/sources/`，与 `core/` 并列的一个包）**：`intake`（导入路由的唯一决策点）·
+`formats/*`（**格式轴**：sniff / parse / map / serialize）· `model`（native schema 的类型化契约）·
+`legado`（阅读方言的**唯一**转换与诚实判定入口）· `rules`（**执行**，含 `_MODES` + `audit_native_rule`）·
+`online` · `manager` · `store`（规则文件的**唯一**写者）· `ledger`（台账 + 差异表 + 落盘编排）。
+⚠️ **格式轴与执行轴正交**：`base.REGISTRY` 是执行注册表，`formats.FORMATS` 是格式注册表，
+两条轴**不合并、不互为第二实现**。详见 §10。
 
 ## 2. 一次请求的生命周期（以「打开书架」为例）
 
@@ -206,7 +214,43 @@ graph LR
   对齐判据 = `reading_list.align_shift`（用户口径「本章 + 上下各 2 章共 5 章里 ≥3 章同名」），
   前端**不重算**，只用后端给的 `local_index`；对不上就不写本地进度并如实提示。
 
-## 10. 多端接口
+## 10. 书源导入链路（第 94 期）
+
+三个导入入口（`POST /api/sources` · `POST /api/sources/upload` · `POST /api/sources/import`，
+外加 URL 订阅的 `POST /api/sources/import-url`）**共用同一条解析路**：
+
+```
+payload ─► intake.sniff_and_adapt()            # 认格式：格式注册表逐家打置信度，取最高分
+            └─► formats.FORMATS[i].parse()      # 坏输入抛 ValueError（文案直接给用户看）
+                 └─► adapter.map(entry)         # → native 规则 + 逐字段不支持报告
+                      └─► rules.validate_rule()          # schema 唯一判据
+                      └─► rules.audit_native_rule()      # 诚实闸：引擎真能跑吗？
+            └─► legado.analyze() 的 supported 由 audit 结论反推
+        ─► ledger.plan(rows)                    # 纯计算：去重四级判据 → 差异表（不落盘）
+        ─► ledger.apply(rows, resolutions)      # 唯一落盘编排
+             └─► store.add_rule()               # 规则文件的唯一写者
+```
+
+- **格式轴**（`sources/formats/`）：`nf-native` · `nf-export`（本项目导出信封）· `legado-3` ·
+  `legado-2`（**只做键名归一**，交给 `legado` 那唯一一份转换）· `legado-jsonl`。
+  加格式 = 加一个 adapter，**执行层一行不改**。
+- **诚实闸**：`rules._MODES` + `rules.audit_native_rule` 是「引擎能执行什么」的**唯一真值源**。
+  任何格式的 adapter 产物都必须过它，**不许 adapter 自称可用**。每补一项能力就从
+  `_UNSUPPORTED_CONSTRUCTS` 摘一条并补用例（单调变诚实，不会先松后紧）。
+- **`field_report` 与 `unsupported_fields` 分工不同**：前者是**交代**（每一项去哪儿了），
+  后者是**判定依据**（决定 verdict）。⚠️ 合并会让带发现页的源被误杀。
+- **安全层**：`core/jssandbox`（规则里的第三方 JS 走 quickjs，时间 / 内存 / 栈三道上限；
+  不可用则如实回落 Node 并标「非沙箱」）· `core/saferegex`（执行期正则超时，反 ReDoS）·
+  `core/urlguard`（**URL 导入是本项目唯一让用户提供地址的出网点**：只放行 http/https、
+  解析出的每个 IP 必须全球可路由、**重定向逐跳复查**；DNS rebinding 用「连已校验 IP + 保留 Host」
+  缓解，**残余 TOCTOU 如实记录**）· `core/network`（响应体上限、全局并发、每源超时）。
+- **永久不支持**（UI + 审计双处如实标注）：Android 专有桥（`java.*` / `source.*`）·
+  发现页（`exploreUrl` / `ruleFindUrl`，本项目无此功能）· 二维码导入 · 由客户端提供章节 URL。
+- **可配置项**：`source_import.{url_enabled,max_bytes,timeout,verify_tls}`（**默认关闭 URL 导入**；
+  这条路的 `verify_tls` 默认 **True**，与 `network.verify_tls` 的默认 False 刻意分开）·
+  `network.{max_response_bytes,max_concurrency,verify_tls}`。
+
+## 11. 多端接口
 
 | 端点 | 认证 | 说明 |
 |---|---|---|
@@ -215,7 +259,7 @@ graph LR
 | `/komga/*` | Basic / `X-API-Key` / 会话 | **本应用冒充 Komga 服务端**；系列与书籍按库过滤；Collections = 应用内收藏夹；有声书库不进 Komga |
 | `syncs/progress` 等 | Basic | KOReader kosync 协议（部分 MD5 索引文档 + XPointer/页码换算） |
 
-## 11. 配置与能力矩阵
+## 12. 配置与能力矩阵
 
 ```
 DEFAULTS → config.yaml → settings.json → 环境变量           （全局四层）
@@ -226,7 +270,7 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 - **可见性 = 能力矩阵（库类型）∩ 每库开关**，判定只留一处；「不可见」=「不存在」→ 404。
 - ⚠️ 新增「可保存的配置分区」要同改三处（`server.EDITABLE` / `GET /api/config` 键列表 / 前端 `settingsFields.SECTION_KEYS`）——见 `AGENTS.md` §2。
 
-## 12. 前端架构
+## 13. 前端架构
 
 - **路由**：hash；`views/` 页面；设置页与工具页各有一个注册表驱动（`data/settingsNav.ts` / `views/tools/ToolsLayout`）。
   **设置页由注册表生成路由 ⇒ 删条目即删路由与侧栏项。**
@@ -243,7 +287,7 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 - **单一判据集中在 `lib/`**：路径 `paths.ts`、阅读阈值 `readingThresholds.ts`、续接 `seriesNext.ts`、图表 `charts.ts`、书卡信息 `bookInfo.ts`、能否打开 `bookOpen.ts`、进度取哪行 `readingProgress.ts`、话↔百分比换算 `unitsProgress.ts`、会话 `readingSession.ts`。
 - 仪表盘部件走注册表（`components/dashboard/widgets/registry.ts`）；统计图表目录 `lib/statistics-charts.ts`（30 张）。
 
-## 13. 关键不变量清单（改代码前扫一眼）
+## 14. 关键不变量清单（改代码前扫一眼）
 
 1. 源文件只读；元数据只落 DB；删除移回收站；成品目录不与源重叠。
    ⚠️ **第 81 期**：只有用户显式删除才会移动磁盘文件 ——「删书」回收 ①②③；「移除书库」**默认只删登记、
@@ -273,3 +317,11 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    ⚠️ `core.autoupdate` / `core.landing` 在**事件循环里**必须用 **`update_book_async`**（协程壳）——
    同步壳 `update_book` 内部的 `asyncio.run` 在运行中的循环里会直接抛，用错会让整条自动落地
    与「检查更新」**静默什么都不写**（不报错、盘上零改动）。
+9. **书源导入（第 94 期）**：三条导入入口**共用一条解析路**（`intake`）；拒绝**不许回 200 装成功**；
+   「引擎能不能执行」**只有** `rules._MODES` + `audit_native_rule` 一处说了算（adapter 不许自评）；
+   `field_report`（交代）与 `unsupported_fields`（判定依据）**不许合并**；
+   格式轴与执行轴**不合并**；`store.add_rule` 仍是规则文件的**唯一**写者；
+   `source_ledger.raw_json` 仍是无损原文（转换必然有损，靠它兜底往返）。
+   ⚠️ **重建响应体时必须摘掉 `Content-Encoding` / `Content-Length`**（`network._drop_entity_headers`）——
+   留着 `Content-Encoding` 会让 httpx 把**已经解压的**字节再解一次 ⇒ 所有开压缩的真实站点全挂，
+   **而这个缺陷单元测试抓不到**（桩站正文从不压缩）。凡「重建 / 包装响应或流」的改动，收尾必须真网核一次。

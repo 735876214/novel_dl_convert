@@ -65,6 +65,13 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 - [ ] **三处同步点**：涉及配置分区 / 偏好块 / 设置页 / 库列 / 含 `book_id` 的表 / 书源注册表 → 逐项对照 `AGENTS.md` §2。
 - [ ] **契约测试**：`tests/test_remap_tables.py`、`tests/test_prefs_shelf_block.py`、`tests/test_metadata_providers.py`、
       `tests/test_settings_nav_contract.py`、`tests/test_nav_contract.py`、`tests/test_db_concurrency_contract.py` 是否受影响。
+      书源相关的另有：`tests/test_sources_intake.py`（静默 200 回归钉）、`tests/test_format_adapters.py`、
+      `tests/test_convert_honesty.py`（假可用钉）、`tests/test_legado_field_report.py`、
+      `tests/test_source_url_import.py`（SSRF 全拒）、`tests/test_js_sandbox.py`、`tests/test_saferegex.py`、
+      `tests/test_pipeline_decode_bytes.py`、`tests/test_sources_capabilities_ext.py`、`tests/test_source_import_config_contract.py`。
+- [ ] **真机（能出网就必须真测）**：⚠️ **凡「重建 / 包装 HTTP 响应或流」的改动，必须拿真实地址核一次** ——
+      第 94 期的 gzip 解两遍（`Content-Encoding` 未摘）就是这样漏过单测、只被真网抓到的（桩站正文从不压缩）。
+      出网走本机代理 `127.0.0.1:7897`。
 - [ ] **后台线程**：新增旁路线程必须进 `tests/conftest.py` 的 `_quiesce_background()` 收尾清单，否则全量后半程可能 segfault。
 - [ ] **数据隔离**：碰库用例用 `isolated` 夹具 + `client`/`auth_headers`；环境变量必须在 **import 业务模块之前** 设。
 - [ ] **文档**：`docs/roadmap-gaps-remaining.md` 写本期实施记录（最新期在文件末尾）；

@@ -21,6 +21,9 @@
   阅读状态阈值 `lib_settings.reading_thresholds` ↔ `lib/readingThresholds.ts`、续接 `lib/seriesNext.ts`、
   ISBN 形状 `metadata.isbn_digits`、位置换算 `core/epub_cfi.py`、图表入口 `lib/charts.ts`。
   发现第二份拷贝 = 缺陷，先收敛再改行为。
+  ⚠️ **第 94 期新增六处**：书源导入路由 `sources/intake.py`、格式轴 `sources/formats/*`（与执行轴 `base.REGISTRY` **正交**）、
+  「引擎能执行什么」`rules._MODES` + `rules.audit_native_rule`（**诚实闸** —— adapter 不许自评可用）、
+  编码探测 `pipeline.decode_bytes`、执行期正则 `core/saferegex`、阅读选择器解析与转换 `sources/legado.*`（formats 只包装）。
 - **数据只落服务端 DB，绝不写回书文件**（`core/publish.py` 是唯一仍写文件的模块；它写的也是**副本**，源文件绝对只读）。
 - **源不可变**：副本禁原地写（临时文件 + `Path.replace`）；删除一律**移入回收站**（`CONFIG_DIR/cache/recycle`），**从不 `unlink`**。
   ⚠️ **删除的边界（第 81 期口径）**：只有**用户显式动作**才会移动磁盘上的文件 ——
@@ -76,7 +79,7 @@ docs/                       既有对照文档 + 本次新增的 5 份（见下�
 
 ```bash
 # 后端测试（离线、全量；Windows 用 .venv\Scripts\python.exe）
-.venv/bin/python -m pytest                 # 当前基线 1182 例
+.venv/bin/python -m pytest                 # 当前基线 2129 例（只增不减）
 .venv/bin/python -m pytest tests/test_catalog.py -k 某关键字
 
 # 前端四连（缺一不可；Windows 先 $env:NODE_OPTIONS=''）
@@ -105,6 +108,11 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
 - 前端设置页路由是 `#/settings/<page.path>`（**不带分组段**）。
 - 计时类测量用 `curl`，**别用 PowerShell `Invoke-RestMethod`**（解析大 JSON 会严重虚高耗时）。
 - `pytest.ini` 已含 `addopts=-q`，**别再加 `-q`**；计数用 `--junitxml` 解析（Windows 下会话末清理报错不影响结果，看 junit 才算数）。
+- ⚠️ **重建 / 包装 HTTP 响应时必须摘掉 `Content-Encoding` / `Content-Length`**（第 94 期，`network._drop_entity_headers`）——
+  留着前者会让 httpx 把**已解压**的字节再解一次（开 gzip 的真实站点**全挂**），而**桩站返回的正文从不压缩 ⇒ 单测 100% 绿**。
+  凡这类改动，收尾必须拿**真实地址**核一次。
+- ⚠️ `quickjs` 只有 **cp38–cp312** 预编译包 ⇒ `requirements.txt` 的 `python_version < "3.13"` 标记不能少（否则 3.13+ 装整条失败）。
+- ⚠️ **不认识的 python 进程一律不 kill**（本机常有并行会话的实例）；`pytest` 里调 `ledger.plan` 的用例必须带 `isolated` fixture。
 
 ## 6. 提交与交付
 

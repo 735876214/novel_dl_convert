@@ -5042,3 +5042,134 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 - ⚠️ `.codebuddy/memory/2026-10-03.md` 里有**并行会话**的未提交段落：提交时用
   `git hash-object -w --path` + `git update-index --cacheinfo` **只暂存自己那一段**，
   绝不重写工作区文件；`.vscode/settings.json` 不提交。
+
+---
+
+## 第 94 期 · 书源导入静默失败修复 + 转换诚实闸 + 加固规则引擎（V0.94.0，2026-10-04）
+
+> 需求来源：用户报告「在书源管理 → 导入书源时导入两个书源，项目中没有反应」，随后把范围扩成一次
+> 架构升级（多格式支持 + Adapter + 引擎能力 + 安全层），并拍板三条边界：**一次做到「引擎能力与安全层」**、
+> **二维码导入不做**、**「不确定的格式不要猜」「没提供或提供格式错误的书源，本期不做」**。
+
+### 一、根因（在用户实例上逐条证实，非推测）
+
+用户实例是测试 compose 容器。容器日志里恰好两条 `POST /api/sources/upload → 200 OK`；而容器内
+`/app/config/sources` **是空的**，`source_ledger` / `source_imports` / `source_ledger_history` **全是 0 行**。
+
+链路：`/api/sources`（[:437](novelforge/server.py#L437)）／`/api/sources/upload`（[:489](novelforge/server.py#L489)）
+→ `_parse_rules_text`（[:311](novelforge/server.py#L311)）→ `_add_rules_list`（[:332](novelforge/server.py#L332)）
+→ `store.add_rule` → `validate_rule`，**只认本项目 native schema**，且**永远回 HTTP 200** +
+`{"added": [], "errors": [...]}`。前端 [SourcesView.vue](frontend/src/views/tools/SourcesView.vue) 只 toast
+`` `已添加 ${r.added ?? 0} 个书源` ``，**从不读 `r.errors`**；而 `added` 实际是**名字数组**，被拒时
+`[] ?? 0` 渲染成空串 ⇒ 提示是「已添加  个书源」。真正的导入器只挂在隔壁页「书源工具」。
+
+同一个坑里埋着第二颗雷：本项目**自己导出的**文件（`{"nf_export":1,"entries":[…]}`）从这张卡**同样导不进去** ——
+而「导出 → 导入幂等」是第 86 期已被测试钉住的承诺。
+
+### 二、最深的一层：转换器在两头都不诚实（本期数字全部实测）
+
+| 样本 | 修前 | 修后 |
+|---|---|---|
+| `202003.txt`（阅读 2.x，**1537 条**，3.3 MB） | `analyze` = `no` **1537/1537**；`convert` 成功 **0/1537**（旧键名一个都读不到） | `yes` **685** + `partial` **357** = **1042 条可用**；`no` 495 |
+| XIU2 `shuyuan`（3.x，**22 条**） | `yes` **9**，其中 **6/9（2/3）假可用**（产物仍含引擎不认识的构造） | `yes` **2** / `partial` **6** / `no` **14** |
+
+`no` 的主因（2.x，实测分布）：发现页相关 172、音频类 31、JS 类 50+、整体不可解析 175。
+即：**1537 条真书源被静默判死，而被判「可用」的又有 2/3 根本跑不起来** —— 与用户报的
+「导入没反应」是同一族的病：**不报错、不生效、还给出错误的结论**。
+
+假可用的四类泄漏（都在转换产物里实测到）：① URL 选项字典没剥离（`url,{'method':'post',…}`
+整段还在字符串里，引擎会拿废 URL 发 GET）；② 阅读索引语法 `tr!0` / `.odd.0` 泄漏进选择器
+（实测 `soup.select_one` 抛 `SelectorSyntaxError`，而搜索/目录调用点**没有 try 保护** ⇒ 一搜就炸）；
+③ `##regex##replace` 无一处处理；④ `class.` / `@tag.a` / `@css:` 前缀泄漏。
+
+### 三、交付（15 笔，按能力拆）
+
+| # | 能力 | 提交 |
+|---|---|---|
+| A | 三条入口收敛到同一条解析路（`sources/intake.py`）；导入结果如实回报 | `85ed5dd` |
+| A | 前端不再说「已添加  个书源」 | `8d78149` |
+| B | 格式适配器轴（5 个 adapter）+ 阅读 2.x 方言 + **转换诚实闸** `rules.audit_native_rule` | `d54d850` |
+| 2a/2b | 选择器解析**唯一实现** + URL 请求选项 + 编码单真值源（`pipeline.decode_bytes`） | `ce3a4a8` |
+| 2c | 2.x 单 `#` 替换 + `@children` 渲染往返 | `5d55288` |
+| 2c | XPath 取值通道接入引擎与转换器 + 表单支持 | `2cdb396` `5d5de93` |
+| 3 | 抓取加固：响应体上限 + 全局并发 + 每源超时 | `4a39919` |
+| 3 回归 | **压缩响应被解两遍**（真机发现） | `0eb8add` |
+| 4c | 执行期正则超时护栏（反 ReDoS） | `c248c5c` |
+| 4b | JS 真沙箱（quickjs + 时间/内存/栈三道上限） | `0565fd3` |
+| 4a | 从 URL 订阅导入 + 出站 SSRF 闸 | `a18deec` |
+| 5 | **书源字段去向全量报告** + 界面「字段明细」 | `bf80998` |
+
+### 四、单一真值源（本期收敛 / 复用了九处）
+
+1. **「引擎能执行什么」只有一处**：`rules._MODES` + `rules.audit_native_rule`（诚实闸）。
+   `legado.analyze` 的 `supported` 由它反推 —— 转换器不再既当运动员又当裁判。
+2. **选择器解析只有一处**：`legado` 的 mini 解析器（`@text` / `@html` / `@attr(x)` / `||` / `&&` /
+   索引 `!n`·`.n`）。格式适配器里**绝不出现第二份**。
+3. **URL 选项字典只有一处**：`parse_url_spec`。
+4. **`##` 替换只有一处**：`_apply_regex_replace`（`ruleContent.replaceRegex` 与字段里的 `##` 共用）。
+5. **编码探测只有一处**：新增 `pipeline.decode_bytes`，`decode_file` 重构为「读字节 + 解码」两个入口
+   （**一份实现，两个入口**，Python 侧不做第二份 GBK/Big5 识别）。
+6. **执行期正则只有一处**：`core/saferegex`（书源执行路径**不留裸 `re.compile`**；规范类常量正则仍用 stdlib）。
+7. **SSRF 判据只有一处**：`urlguard.ip_scope()`（复用服务端既有「不是全球可路由」口径，方向为出站）。
+8. **JS 执行两条路并存但注明性质**：规则默认走 `core/jssandbox`（quickjs）；Node 通道只为既有契约保留并标「非沙箱、legacy」。
+9. **格式注册表与 `base.REGISTRY` 是两条正交轴**：前者只做 sniff/parse/map/serialize，**不产出第二套可执行结构**。
+
+### 五、实测（真机，本机代理 127.0.0.1:7897）
+
+- **URL 导入端到端**：开关关时的拒绝文案（不含反引号）、五类 SSRF 拒绝（回环 / 链路本地 / 10.x / 重定向到私网 / 非 http(s)）
+  各给原文；真实公网取回 22 行（`no` 14 / `partial` 6 / `yes` 2）；8 个规则文件落盘；再导一次幂等（`duplicate: 8`）。
+- **后端全量**：**2104 passed / 25 skipped / 0 failed / 0 errors**（2129 例，496.77 s）。
+  相对阶段 4b 的 2058，+46 = `test_legado_field_report.py` 的例数。**脚本例数只增不减**。
+- **前端四连**：`type-check` + `test:unit`（**65 spec / 673 例**）+ `build` + `deploy` 全过。
+- **降级三件套**分别实测（缺 quickjs / regex / lxml）：都如实报原因、都不阻塞其余功能。
+- **字段报告的体量**：1537 条样本的报告 JSON = **3130 KB**（≈21.5 字段/条），analyze 1.4 s ——
+  靠既有 gzip 中间件可接受，因此没有为它引入分页。
+
+### 六、防回归要点（红线）
+
+1. **静默 200 必须钉死**：断言「绝不出现 200 + `added:[]` + errors 非空却不展示」。
+2. **假可用必须钉死**：拿 22 条真实样本做夹具，断言「判 `yes` 的条目，其产物过 `audit_native_rule` 必须为空」。
+3. **选择器解析失败不得抛异常**：`tr!0` / `.odd.0` 这类输入必须走「空值 + 人话 error」，用例直接钉住。
+4. **全字段报告不许越权**：它**不进** `unsupported_fields` ——
+   混进去会让 2.x 样本里带发现页的 1321 条源**全部**被判死（`test_发现页只进报告_不进判定依据`）。
+5. **`/api/sources` 行键集契约**保持不变（新增键必须显式登记，`field_report` 走的是白名单 `_IMPORT_ROW_KEYS`）。
+6. **新增测试文件必进 `EXPECTED_SPECS`**（前端）/ 契约测试（后端）—— 漏了会在全量里才炸。
+
+### 七、踩坑
+
+- ⚠️ **本期最贵的一个缺陷：响应体上限加了之后，`Content-Encoding` 被留在重建的响应上**。
+  `httpx` 会用这个头**再解一次**已经解压的字节 ⇒ `DecodingError: incorrect header check`，
+  **所有开 gzip 的真实站点全挂**。单元测试 100% 绿（桩站返回的正文都没压缩），
+  只有拿真实地址跑才会现形。修法 `network._drop_entity_headers`（同时摘掉 `Content-Length`，
+  它会被 `Response._prepare` 按新 body 重算）。**教训：凡「重建响应/包装流」的改动，必须真网核一次。**
+- ⚠️ **`sqlite3.OperationalError` in tests**：调 `ledger.plan` 的用例必须带 `isolated` fixture（要读库判冲突）。
+- ⚠️ **接口体的键名**：`POST /api/sources/import` 吃的是 `payload`（**不是** `content`）；
+  `import-url` 的 `dry_run` **默认为 true**。写用例时踩过一次 400「无法识别格式」。
+- ⚠️ **字典合并是覆盖不是深合并**：`LEGACY_2X | {nested}` 会把 2.x 的 `ruleToc` 整个替换掉 ⇒
+  测试夹具必须分开写两个完整 dict，不能靠浅合并拼。
+- ⚠️ **auth 只能是 Bearer token**：cookie jar 不生效（401）；`/health`、`/api/auth/login`、`/api/logout` 之外全要 `Authorization`。
+  带中文的请求体要写文件 + `--data-binary @file`，否则 FastAPI 报 body 解析错。
+- ⚠️ **quickjs 只有 cp38–cp312 预编译包**：不写 `python_version < "3.13"` 标记会让 3.13+ 开发机
+  `pip install -r requirements.txt` **整条失败**（退化成源码构建，无 C++ 编译器时装死）。
+- ⚠️ **不要 kill 不认识的 python 进程**：本机同时跑着并行会话的实例（8993/8413），
+  只停自己 `TaskStop` 的那个 task id。
+
+### 八、未做取舍（刻意保留 + 待样本）
+
+- **四类格式不做**（`.js` / `.xbs` / XML / 纯文本规则）—— 两个候选 URL 一个 404、一个是 Cloudflare
+  403 挑战页（拿到的是 5,646 字节的 HTML，不是书源文件）。按用户口径「提供格式错误的书源 ⇒ 本期不做」。
+  框架已就位，**加一个 adapter 不改执行层**。
+- **永久不支持**（UI + 审计双处如实标注）：Android 专有桥（`java.*` / `source.*`）、
+  发现页（`exploreUrl` / `ruleFindUrl` —— 项目无此功能）、二维码导入、由客户端提供章节 URL。
+- **`verify_tls` 默认不改**：书源抓取**保持 False**（不少源站证书不规范，改默认 = 静默改变既有行为）；
+  URL 导入那条路**强制 True**（它没有历史包袱），但同样可显式关掉，风险写在设置页里。
+- **待用户提供样本的参数**（不猜、不预估）：以 `+` 开头的规则值 100 处、`:lt()`/`:gt()`/`:eq()` 9 处、
+  17 处编译错误、2.x 的 JSON 搜索通道与 `{$…}` URL 模板。
+- **残余 TOCTOU**：DNS rebinding 用「连已校验 IP + 保留 Host」缓解，理论窗口仍在，**文档如实记录**。
+
+### 九、收尾
+
+- 版本：`VERSION` → `0.94.0`；`CHANGELOG.md` 首段同版本（含三条口径变化的如实说明）。
+- 文档：本节 + `docs/TODO.md` 刷新 + `.codebuddy/memory/`（当日日志 / `MEMORY.md` 索引 / `MEMORY-REF.md`）。
+- ⚠️ `.codebuddy/memory/2026-10-03.md` 里有**并行会话**的未提交段落：不重写工作区文件、
+  用 `git hash-object -w --path` + `git update-index --cacheinfo` 只暂存自己那一段；`.vscode/settings.json` 不提交。

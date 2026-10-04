@@ -132,7 +132,7 @@ components/
 
 | 模块 | 导出（要点） | 谁是唯一真值源 |
 |---|---|---|
-| `api.ts` | `api.*`（全站唯一 HTTP 客户端）、`apiErrorMessage`、全部响应类型 | 前端 HTTP 契约 |
+| `api.ts` | `api.*`（全站唯一 HTTP 客户端）、`apiErrorMessage`、全部响应类型 | 前端 HTTP 契约。⚠️ 第 94 期新增 `importSourcesFromUrl()`（打到 `POST /api/sources/import-url`，**地址原样送出去**，不在前端补协议 / 去空格 / 加斜杠 —— 判据全在后端，前端加工会让拒绝原因指向另一个地址）；`SourceImportRow` 补 `field_report` 类型（逐字段去向：`executable` / `ported` / `unsupported` + `why` / `instead`） |
 | `seriesNext.ts` | `SERIES_NEXT_MSG`、`resolveNextVolume()`、`useSeriesNext()`、`resetSeriesNextState()` | 「读完进下一册」 |
 | `paths.ts` | `isAbsolutePath()`、`normalizePath()`、`pathsOverlap()` | 路径判据（含 Windows 盘符/UNC） |
 | `readingThresholds.ts` | `statusFromPercent()`、`thresholdsFor()`、`ensureThresholds()`、`statusLabelOf()` | 阅读状态阈值（后端 `lib_settings.reading_thresholds`） |
@@ -153,7 +153,7 @@ components/
 | `sidebarPrefs.ts` | `SIDEBAR_COLLAPSED_KEY`、`SIDEBAR_WIDTH_KEY`、`readDeviceValue()`、`writeDeviceValue()` | 侧栏折叠 / 宽度的**本机**存储（`nf_sidebar_*`）；⚠️ **刻意不进** `prefsPayload.ts` —— 布局是屏幕属性，不跟账号同步 |
 | `utils.ts` | `cn()`（`clsx` + `tailwind-merge`） | 类名合并的**唯一实现**（移植来的 shadcn 组件靠「传 class 覆盖基础类」，只 `clsx` 会时灵时不灵） |
 | `sourceImport.ts` | `FORMAT_LABELS`、`formatLabel()`、`countsLine()`、`needsAttention()`、`importSummary()`、`importOutcome()` | **导入书源结果的措辞**（第 94 期）：`/api/sources` 与 `/api/sources/upload` 的返回体翻成人话，「书源管理 → 导入书源」卡与「书源工具」页共用。⚠️ 之前两页各写一句 ⇒ 导入卡那句是 `已添加 ${r.added ?? 0} 个书源`，而 `added` 是**名字数组**、被拒时 `[]` 渲染成空串 ⇒ 用户看到的结论是「导入没反应」 |
-| `format.ts` / `readingPace.ts` / `deviceInfo.ts` / `fonts.ts` / `coverTint.ts` / `icons.ts` / `notifyPrefs.ts` / `bookMenu.ts` | 见 `docs/architecture.md` §12 | — |
+| `format.ts` / `readingPace.ts` / `deviceInfo.ts` / `fonts.ts` / `coverTint.ts` / `icons.ts` / `notifyPrefs.ts` / `bookMenu.ts` | 见 `docs/architecture.md` §13 | — |
 
 ## 7. Stores（Pinia）
 

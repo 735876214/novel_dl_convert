@@ -764,3 +764,102 @@ discover 行仍按 id 稳定排序）。**口径以对照文档 §7「实施结�
   ⚠️ **PowerShell 5.1 把无 BOM 的 `.ps1` 读成 ANSI** ⇒ 脚本里写中文会变乱码、选择器静默失配
   （`button[title=目录]` 变成 `鐩綍`）⇒ 界面脚本**只写 ASCII**，中文用 JS 的 `\uXXXX` 转义；
   取 `agent-browser eval` 的结果要**先滤掉 `[agent-browser]` 那类信息行**再取最后一行，否则会吞掉真结果。
+
+### 第 94 期铁律（书源导入 / 格式轴 / 转换诚实闸 / 引擎能力 / 安全层）
+
+#### 一、用户这个 bug 的**形状**（会再犯，记住形状比记住这次改了什么更重要）
+
+「**点了没反应**」= 后端**回 200 装成功** + 前端**不读错误字段** + 提示文案自己编。
+第 91 期（未登录 401）、第 93 期（追更报「新增 0 章」）、本期**同一个形状出现三次**。
+判据：**任何「用户动作 → 结果」的路径，都必须在界面上给出与后端结论一致的一行字**；
+接口**不许**用 200 表示「我拒绝了」。三条导入入口（`/api/sources`、`/api/sources/upload`、
+`/api/sources/import`）已收敛到 `sources/intake.py` 一条解析路 —— **再加导入通道就加到那里，别在 `server.py` 里另起判据**。
+
+#### 二、格式轴与执行轴**正交**（加格式不改执行层）
+
+- **执行模型仍是 native schema**（`rules.py` 顶部 docstring 那一份），
+  `sources/model.py::UnifiedBookSource` 只是它的**类型化契约**（`to_native()` 是恒等函数），**不是第三套模型**；
+- `sources/formats/*` 是**格式轴**：只做 `sniff` / `parse` / `map` / `serialize`，
+  **绝不产出第二套可执行结构**；`base.REGISTRY` 是**执行轴**。两条轴**不合并、不互为第二实现**。
+- `legado2` 适配器**不写第二套 convert** —— 它只调 `legado.normalize_legacy()` 做**键名归一**，
+  再交给 `legado3` 那**唯一**一份转换。`legado.detect_format` 是 JSON 类格式 sniff 的权威实现。
+- ⚠️ `ledger.plan` 里的条目级分派**只在格式轴**（`formats.map_entry`）；
+  历史上那句内联判据 `"name" in ent and "domains" in ent` 与 native 适配器的 sniff 是同一件事的两份实现，已删。
+
+#### 三、转换诚实闸（本期的核心，别绕过）
+
+- **「引擎能执行什么」唯一真值源 = `rules._MODES` + `rules.audit_native_rule`**。
+  `legado.analyze` 的 `supported` **由它反推**。改判定能力就改那一处，**不许让 adapter 自称可用**。
+- 每新增一项执行能力，就**从 `_UNSUPPORTED_CONSTRUCTS` 里摘掉一条**并补用例
+  ⇒ 单调变诚实，不会先松后紧。
+- 实测收益：22 条真实 3.x 样本上「假可用」从 **6/9** 降到 **0**。
+  ⚠️ 副作用是**被判「可用」的源变少**（`yes` 9 → 2）——这是**修正**，CHANGELOG 与界面都要说清楚。
+
+#### 四、`field_report` 与 `unsupported_fields` **分工不同，不许合并**
+
+- `unsupported_fields` 是**判定依据**（决定 `verdict` / `supported`）；
+- `field_report` 是**交代**（这条源里每一项都去哪儿了：`executable` / `ported` / `unsupported` + 原因 + 出路）。
+- ⚠️ 把「发现页不支持」塞进判定依据，2.x 真实样本里带发现页的 **1321 条源会全部被判死** ——
+  **把「如实说」做成「误杀」**。用例 `test_发现页只进报告_不进判定依据` 钉住这条边界。
+- 表外的键**走兜底不静默丢**：不猜含义，但见了就说「本项目不使用这个字段」+ 给出去哪儿手写等价规则。
+- ⚠️ **接口白名单会吃掉新键**：`server._IMPORT_ROW_KEYS` 漏了 `field_report` 时，
+  接口上就是拿不到（界面上「字段明细」永远空）——**加行键必须同批加白名单**。
+  native 行也要有 `field_report`（空列表），否则前端 `r.field_report.length` 会炸。
+
+#### 五、⚠️ **重建响应体必须摘掉描述传输实体的头**（本期最贵的一个缺陷）
+
+`network._send_capped` 给响应体加上限时需要**重建 `httpx.Response`**。重建时手里拿到的
+**已经是解压后**的字节，若仍带着 `Content-Encoding: gzip`，httpx 会**再解一次** ⇒
+`DecodingError: incorrect header check`，**所有开压缩的真实站点全部抓不到**。
+⇒ 唯一实现 `_drop_entity_headers`（同时摘 `Content-Length`：`Response._prepare` 会按新 body 重算）。
+**这个缺陷单测 100% 绿**（桩站返回的正文从不压缩），**只有真网跑一次才会现形**。
+判据：**凡「重建 / 包装响应或流」的改动，收尾必须拿真实地址核一次**。
+
+#### 六、收敛掉的单一真值源（九处，出现第二份 = 缺陷）
+
+1. 选择器解析：`legado` 的 mini 解析器（`@text`/`@html`/`@attr(x)`/`||`/`&&`/索引 `!n`·`.n`）；
+2. URL 选项字典：`parse_url_spec`；
+3. `##` 替换：`_apply_regex_replace`（字段里的 `##` 与 `ruleContent.replaceRegex` 共用）；
+4. 编码探测：`pipeline.decode_bytes`（`decode_file` 重构为「读字节 + 解码」两个入口，**一份实现**）；
+5. 执行期正则：`core/saferegex`（书源执行路径不留裸 `re.compile`；规范类常量正则仍用 stdlib）；
+6. JS 沙箱：`core/jssandbox`（规则默认走它；Node 通道只为既有契约保留并标「非沙箱、legacy」）；
+7. SSRF 判据：`urlguard.ip_scope()`；
+8. 能力判定：`rules._MODES` + `audit_native_rule`；
+9. 导入路由决策：`intake.sniff_and_adapt` / `rows_from_payload`。
+
+#### 七、安全层的**边界与残余风险**（写进文档，别当已经解决）
+
+- **URL 导入是本项目唯一让用户提供地址的出网点** ⇒ 单独设闸：只放行 http/https、
+  域名解析出的**每个** A/AAAA 都必须是全球可路由（内网 / 回环 / 链路本地一律拒）、
+  **重定向逐跳复查**（关自动重定向手动跟随）、拒了给原文。默认**关闭**（`source_import.url_enabled`）。
+- **残余 TOCTOU**：DNS rebinding 用「连已校验 IP + 保留 Host」缓解，理论窗口仍在 —— **如实记录，不声称已解决**。
+- **`verify_tls` 默认不改**：书源抓取**保持 False**（改默认 = 静默改变既有行为，很多源站证书不规范）；
+  **URL 导入那条路强制 True**（它没有历史包袱），但同样可显式关掉。
+- **`url` 导入的 `dry_run` 默认为 true** —— 先给差异表再落盘，别在调用侧默认成 apply。
+- **永久 unsupported（UI + 审计双处如实标注）**：Android 专有桥（`java.*` / `source.*`）、
+  发现页（`exploreUrl` / `ruleFindUrl`，项目无此功能）、二维码导入、由客户端提供章节 URL。
+
+#### 八、配置与测试的坑
+
+- **三处同步点**（本期的 `source_import` 段与 `network` 新键）：`config.DEFAULTS` ↔ `server.EDITABLE`
+  + `GET /api/config` 硬编码键列表 ↔ 前端 `settingsFields.ts` 的 `FIELDS` / `SECTION_KEYS`。
+  漏一处 = **假配置**（界面上能存、代码里没人读）。
+- ⚠️ **`POST /api/sources/import` 吃的是 `payload`（不是 `content`）**；带中文的请求体写文件 +
+  `--data-binary @file`，否则 FastAPI 报 body 解析错。
+- ⚠️ **auth 只能是 Bearer token**（`POST /api/auth/login` → `Authorization: Bearer …`）；
+  cookie jar **不生效**（401）。
+- ⚠️ 调 `ledger.plan` 的用例必须带 **`isolated` fixture**（它要读库判冲突，否则 `sqlite3.OperationalError`）。
+- ⚠️ **测试夹具别用 `A | {nested}` 浅合并**（字典合并是**覆盖**）—— 会把整个 `ruleToc` 换掉，
+  于是「主链可执行」那组拿到一个没有 `chapterList` 的条目。
+- ⚠️ **quickjs 只有 cp38–cp312 的预编译包**：`requirements.txt` 里的 `python_version < "3.13"`
+  标记不能少，否则 3.13+ 开发机 `pip install -r requirements.txt` **整条失败**。
+- ⚠️ **不认识的 python 进程一律不 kill**（本机并行跑着别人的实例）—— 只 `TaskStop` 自己的 task id。
+
+#### 九、刻意不做 / 等样本（**不猜、不写桩、不做空壳**）
+
+- **四类格式**：`.js` / `.xbs` / XML / 纯文本规则 —— 两个候选 URL 一个 404、一个 Cloudflare 403
+  挑战页（拿到的 5,646 字节是 HTML）。按用户口径「**没提供或提供格式错误的书源 ⇒ 不做**」，
+  导入时给「无法识别格式：…」。**框架已就位，加 adapter 不改执行层。**
+- **四个待样本参数**（1537 条真样本里统计到的）：以 `+` 开头的规则值 100 处、
+  `:lt()`/`:gt()`/`:eq()` 9 处、编译不过的规则 17 处、2.x 的 JSON 搜索通道与 `{$…}` URL 模板。
+- 二维码导入不做（本项目无客户端扫码通道）。
