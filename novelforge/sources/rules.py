@@ -48,10 +48,15 @@
 """
 import asyncio
 import json
+import logging
+import pathlib
 import re
 from urllib.parse import quote, urljoin
 
 from .base import SourceAdapter, DEFAULT_HEADERS
+from .. import config
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------- 书源变量 `{var:<key>}`（第 86 期）----------------
@@ -60,6 +65,44 @@ from .base import SourceAdapter, DEFAULT_HEADERS
 # 站点回一个空页面，报错离原因十万八千里 —— 所以取值处统一先查变量齐不齐。
 
 _VAR_RE = re.compile(r"\{var:([^}]+)\}")
+
+
+def load_rule(name: str) -> dict:
+    """读一条书源的**规则本体**（用户书源 = ``SOURCES_DIR/<name>.json``；没有 / 坏文件 ⇒ ``{}``）。
+
+    ⚠️ **唯一实现**（第 93 期收敛）：此前只有 `server._load_rule` 一份，而
+    `core/landing` 也要问「这条源产出的是文本还是漫画」—— 于是要么反向 import `server`
+    （循环依赖），要么抄第二份读法（两份必然漂移）。放在规则模块里两边都够得着。
+
+    规则文件允许写成**数组**（Legado 导出的多源文件）：取第一条字典，与既有读法一字不差。
+    """
+    if not name:
+        return {}
+    f = pathlib.Path(config.SOURCES_DIR) / f"{name}.json"
+    if not f.is_file():
+        return {}
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:                                        # noqa: BLE001 —— 坏文件当没有
+        return {}
+    if isinstance(data, list):
+        return data[0] if data and isinstance(data[0], dict) else {}
+    return data if isinstance(data, dict) else {}
+
+
+def product_kind(name: str) -> str:
+    """这条书源产出的是哪一类产物：``comic`` / ``audio`` / ``text``（第 86 期）。
+
+    判据**在规则里**（``book.mode``）—— 书源自报它给什么，不让用户猜、也不用另开配置键；
+    认不出来的（含内置 Python 适配器：它们在磁盘上没有规则文件）一律按 ``text`` 走，
+    既有行为一字不变。
+
+    ⚠️ **唯一实现**（第 93 期收敛）：`server._product_kind` 与自动落地都要用它判
+    「这本能不能自动落地」，两处各写一份的话，`text` 的界定一旦变化就会一半自动、
+    一半不自动。
+    """
+    mode = str(((load_rule(str(name or "")).get("book") or {})).get("mode") or "").lower()
+    return mode if mode in ("comic", "audio") else "text"
 
 
 def load_vars(rule_name: str) -> dict:
@@ -222,6 +265,56 @@ def _soup(html: str):
     return BeautifulSoup(html, "html.parser")
 
 
+#: **只有块级标签**才是分段信号（见 :func:`html_to_text`）。
+_BLOCK_TAGS = frozenset({
+    "address", "article", "aside", "blockquote", "dd", "div", "dl", "dt",
+    "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3",
+    "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre",
+    "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul",
+})
+
+
+def html_to_text(raw: str) -> str:
+    """HTML 正文 → **纯文本**（保留段落切分）。**唯一实现**。
+
+    三个调用方共用它 —— 它们要的是同一件事：「源站那段东西，怎么变成读得下去的一段段文字」：
+    ① `_extract_css` 按 css 规则取正文（`sources/rules.py`，**下载 / 追更 / 预览 / 在线读**全走它）；
+    ② 在线读的 `sources/online.html_to_text`（`regex` / `js` / `html:true` 那几种「抓回来就是
+    HTML」的模式，见 `SourceAdapter.content_may_be_html`）。
+
+    分段口径：**块级标签与 `<br>` 断行，行内标签不断行**。
+
+    ⚠️ 别退回 `node.get_text("\\n")` / `soup.get_text("\\n")`（每个标签边界都插换行）——
+    `<b>` / `<em>` / `<a>` / `<span>` 只是包一层样式，当成分段信号会把**一句话剁成好几句**
+    （第 93 期真机验证逮到：正文渲染成「第二段：/加粗/与/斜体/标记都…」各自成段）。
+    真实站点用 `<span>` 逐字防采集、在正文里放 `<a>` 跳转链接的遍地都是。
+    """
+    text = str(raw or "")
+    if "<" not in text:                     # 已经是纯文本 ⇒ 不必过解析器
+        return text
+    try:
+        soup = _soup(text)
+        for bad in soup(["script", "style"]):
+            bad.decompose()
+        for br in soup.find_all("br"):
+            br.replace_with("\n")
+        # 换行是**追加**在块级标签末尾，不是 `get_text` 的分隔符 —— 用分隔符就没法
+        # 区分行内 / 块级。`strip=True` 会把追加进来的 "\n" 当空白吃掉，所以这里
+        # 不 strip，改由下面按行去空白 + 丢空行（与 `core.reading_list.text_to_xhtml` 同口径）。
+        for tag in soup.find_all(lambda t: t.name in _BLOCK_TAGS):
+            tag.append("\n")
+        lines = (ln.strip() for ln in soup.get_text("").splitlines())
+        return "\n".join(ln for ln in lines if ln)
+    except Exception:                       # noqa: BLE001 —— 解析器炸了也不能放过标记
+        logger.warning("HTML 正文压纯文本失败，改用去标记兜底")
+        # 兜底同样**只认块级标签**断行：宁可少断一段，也不把行内标签当成换行。
+        block = "|".join(sorted(_BLOCK_TAGS))
+        text = re.sub(rf"(?i)<(?:br|/?(?:{block}))\b[^>]*>", "\n", text)
+        text = re.sub(r"<[^>]*>", "", text)
+        lines = (ln.strip() for ln in text.splitlines())
+        return "\n".join(ln for ln in lines if ln)
+
+
 def _field_value(container, spec: str) -> str:
     """从容器内按 spec 取值：''/'./' 取自身文本，'选择器' 取文本，'选择器::attr(name)' 取属性。"""
     spec = spec or ""
@@ -237,13 +330,13 @@ def _field_value(container, spec: str) -> str:
 
 
 def _extract_css(html: str, rule: dict):
-    """按 css 规则从 html 抽取文本（text=true）或保留标签的 HTML（html=true）。"""
+    """按 css 规则从 html 抽取文本（默认）或保留标签的 HTML（``html: true``）。"""
     node = _soup(html).select_one(rule.get("container", ""))
     if not node:
         return ""
     if rule.get("html"):
         return str(node)
-    return node.get_text("\n", strip=True)
+    return html_to_text(str(node))
 
 
 def _extract_regex(html: str, rule: dict):

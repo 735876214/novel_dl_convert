@@ -118,3 +118,48 @@ def test_变量齐了就能正常渲染(isolated):                              
     db.source_vars_set("有密钥的源", "密钥", "ABC")
     src = cls()
     assert src.missing_vars == [] and src._RULE["search"]["url"].endswith("k=ABC")
+
+
+# ---------------- 正文压纯文本：行内标签不断段（第 93 期）----------------
+# 真机验证逮到的缺陷：`node.get_text("\n")` 会在**每个标签边界**插换行，
+# `<b>` / `<em>` / `<a>` / `<span>` 这类行内标签于是把一句话剁成好几段。
+# 这条链是 css 模式（绝大多数规则）取正文的唯一入口，下载 / 追更 / 预览 / 在线读全走它。
+
+def test_按css规则取正文时行内标签不断段():
+    html = ('<html><body><div id="c">\n'
+            '  <p>甲<b>乙</b>丙</p>\n'
+            '  <div>丁<a href="/x">戊</a>己<br>庚</div>\n'
+            '  <script>steal()</script><style>p{color:red}</style>\n'
+            '</div></body></html>')
+    out = rules._extract_css(html, {"container": "#c"})
+    assert out == "甲乙丙\n丁戊己\n庚", repr(out)
+    assert "steal" not in out and "color" not in out, "script / style 要连内容一起丢"
+
+
+def test_块级标签才算分段与空行折叠():
+    html = '<div id="c"><p>一</p>\n\n\n<p>   </p><p>二</p></div>'
+    assert rules._extract_css(html, {"container": "#c"}) == "一\n二"
+
+
+def test_纯文本正文不过解析器():
+    """规则的正文提取本来就给纯文本时，正文里合法的 `<` 是内容而不是标记。"""
+    assert rules.html_to_text("他笑了 <3 然后走了") == "他笑了 <3 然后走了"
+
+
+def test_解析器缺席时兜底同样不断行内标签():
+    """bs4 炸了（或没装）也不能把行内标签当换行 —— 兜底也要读得下去。"""
+    import builtins
+
+    real = builtins.__import__
+
+    def boom(name, *a, **kw):
+        if name == "bs4":
+            raise ImportError("模拟没有 bs4")
+        return real(name, *a, **kw)
+
+    builtins.__import__ = boom
+    try:
+        out = rules.html_to_text("<p>甲<b>乙</b>丙</p><p>丁</p>")
+    finally:
+        builtins.__import__ = real
+    assert out == "甲乙丙\n丁", repr(out)

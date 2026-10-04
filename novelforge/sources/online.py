@@ -51,6 +51,7 @@ from pathlib import Path
 
 from .. import config
 from ..core.reading_list import text_to_xhtml
+from . import rules
 from .base import REGISTRY
 
 logger = logging.getLogger(__name__)
@@ -524,26 +525,11 @@ def _chapter_out(index: int, total: int, entry: dict, raw: str, *, origin: str,
 
 # ---------------- 正文清洗（第三方标记到这里为止）----------------
 
-def html_to_text(raw: str) -> str:
-    """把源站给的 HTML 正文压成**纯文本**（保留段落切分）。
-
-    ⚠️ 这是「第三方标记永不进 `v-html`」那道闸门的前半截：`script` / `style`
-    **连内容一起丢掉**（否则页面里的 JS 会变成一堆乱码正文），其余标签只当**分段信号**，
-    文本一律交给 :func:`render_body` 里的 `escape`。所以本模块**从不**把源站
-    HTML 直接交给前端，无论规则怎么写。
-    """
-    text = str(raw or "")
-    if "<" not in text:                     # 纯文本（css 默认 / json 通道）⇒ 不必过解析器
-        return text
-    try:
-        from bs4 import BeautifulSoup
-        soup = BeautifulSoup(text, "html.parser")
-        for bad in soup(["script", "style"]):
-            bad.decompose()
-        return soup.get_text("\n", strip=True)
-    except Exception:                       # noqa: BLE001 —— 解析器炸了也不能放过标记
-        logger.warning("在线正文压纯文本失败，改用去标记兜底")
-        return re.sub(r"<[^>]*>", "\n", text)
+# HTML → 纯文本的**唯一实现**在 `rules.html_to_text`：它同时服务 css 规则取正文
+# （下载 / 追更 / 预览 / 在线读都走那条）与这里的 regex / js / `html:true` 模式。
+# 这里只是**转出**同一个函数，不另写一份 —— 两份的实现必然有一天对不上
+# （AGENTS.md「单一真值源」）。
+html_to_text = rules.html_to_text
 
 
 def render_body(raw: str, *, may_be_html: bool = True) -> str:

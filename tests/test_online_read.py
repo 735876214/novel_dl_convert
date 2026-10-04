@@ -341,6 +341,44 @@ def test_纯文本源里的尖括号不被解析器吃掉(client, auth_headers, 
     assert html == "<p>他笑了 &lt;3 然后走了</p>\n<p>第二行</p>", html
 
 
+def test_行内标签只剥标记不断段(client, auth_headers, book, monkeypatch, tmp_path, online_cache, stub):  # noqa: ARG001
+    """`<b>` / `<em>` / `<a>` / `<span>` 只是包一层样式，**不是段落边界**。
+
+    真机验证逮到的缺陷：早先用 `get_text("\\n")`（每个标签边界都插换行），
+    一句「第二段：加粗与斜体标记都…」被 `<b>`/`<em>` 剁成四段，读起来是碎的。
+    真实站点用 `<span>` 逐句包裹、用 `<a>` 标章节链接的遍地都是，所以这条钉的是**读得下去**。
+    """
+    _set_download(monkeypatch, tmp_path, enabled=True)
+    body = ('<div class="content">\n  <p>甲<b>乙</b>丙</p>\n'
+            '  <div>丁<span class="x">戊</span>己<br>庚</div>\n</div>')
+    name = stub("stub-inline", [{"title": "第 1 章", "body": body}])
+    _bind(db, book["id"], name)
+
+    html = _chapter(client, auth_headers, book["id"], 0).json()["html"]
+    assert html == "<p>甲乙丙</p>\n<p>丁戊己</p>\n<p>庚</p>", html
+
+
+def test_行内标签不断段_解析器兜底路径(client, auth_headers, book, monkeypatch, tmp_path, online_cache, stub):  # noqa: ARG001
+    """bs4 不可用时的兜底去标记同样**只认块级标签断行** —— 兜底也要读得下去。"""
+    _set_download(monkeypatch, tmp_path, enabled=True)
+    name = stub("stub-fallback", [{"title": "第 1 章",
+                                   "body": "<p>甲<b>乙</b>丙</p><p>丁</p>"}])
+    _bind(db, book["id"], name)
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_bs4(name_, *a, **kw):
+        if name_ == "bs4":
+            raise ImportError("模拟没有 bs4")
+        return real_import(name_, *a, **kw)
+
+    monkeypatch.setattr(builtins, "__import__", no_bs4)
+    html = _chapter(client, auth_headers, book["id"], 0).json()["html"]
+    assert html == "<p>甲乙丙</p>\n<p>丁</p>", html
+
+
 def test_读一章会推进在线位置与已读章(client, auth_headers, book, monkeypatch, tmp_path, online_cache, stub):  # noqa: ARG001
     """跨客户端续读的唯一依据就是服务端这份记录 —— 两个客户端读到的必须是同一个 `pos`。"""
     _set_download(monkeypatch, tmp_path, enabled=True)

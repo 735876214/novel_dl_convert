@@ -92,7 +92,7 @@ class SourceAdapter(ABC):
     def content_may_be_html(self) -> bool:
         """`book.content` 取出来的正文**可能是 HTML** 吗？
 
-        决定在线阅读要不要先把标记压成纯文本（见 `sources/online.html_to_text`）。
+        决定在线阅读要不要先把标记压成纯文本（见 `sources/rules.html_to_text`）。
         两边都得做对：该剥没剥 ⇒ 源站标记进了 `v-html`；不该剥却剥了 ⇒ 正文被吃掉一段。
         """
         return False
