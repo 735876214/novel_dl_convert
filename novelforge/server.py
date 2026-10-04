@@ -45,6 +45,7 @@ from .sources import store
 from .sources import rules as source_rules
 from .sources import toc_sources      # 第 85 期批次 B：官方书城「只取目录」
 from .sources import ledger as source_ledger   # 第 86 期：书源导入 / 台账 / 导出
+from .sources import intake as source_intake   # 第 94 期：导入入口的**唯一**路由决策点
 from .sources import legado as legado_mod      # 第 86 期：重新分析要用它重跑判定
 from .sources import creds as source_creds     # 第 86 期：Cookie 读写的唯一真值源
 from .sources import probe as source_probe     # 第 86 期：单字探测 / 全部验证
@@ -308,39 +309,53 @@ def _manager():
     return DownloadManager(config.load_config())
 
 
-def _parse_rules_text(text: str) -> list:
-    """解析书源文本：支持 JSON 对象、JSON 数组、或每行一个 JSON 的 JSONL。"""
-    text = (text or "").strip()
-    if not text:
-        return []
+def _quick_import(payload, *, origin: str, save: bool) -> dict:
+    """「书源管理」页那条快路：识别格式 → 差异表 → 按既定动作落盘（第 94 期）。
+
+    第 94 期之前这里**只认本项目 native schema**：Legado 原文逐条被判成「缺少 name /
+    缺少 domains / search.url 必填」，接口**仍回 200**，前端又只读 `added` —— 于是
+    「导入书源，项目中没有反应」。现在统一走 `sources/intake.py`（与 `/api/sources/import`
+    同一条解析路），认不出格式就 **400 + 人话原因**，绝不静默校验。
+
+    · ``save=True``（手动表单的「保存」）＝显式 upsert：撞名冲突按覆盖（`SAVE_RESOLUTION`，
+      覆盖前照旧备份旧规则进历史）；
+    · ``save=False``（粘贴 / 文件导入）＝保守：用 `ledger._DEFAULT_RESOLUTION`
+      （冲突跳过），**逐条如实回报**，要逐条选去处请去「书源工具」页。
+
+    返回体**同时**带旧字段（`added` / `errors`）与新字段（`counts` / `format`）：
+    旧前端不会因为多了字段而炸，新前端据此说真话。
+
+    ⚠️ **刻意不回逐条差异表**。用户在真样本上给过 3.3 MB / **1537 条**的书源文件：
+    把差异表塞进这个响应体是几 MB 的载荷，而这条快路的前端**根本不读它**（它要的是
+    「成没成、成几条、为什么不成」）。逐条详情请用 `/api/sources/import` 的 dry-run ——
+    那是**同一份** `intake` 产物，不是第二套实现。
+    """
     try:
-        data = __import__("json").loads(text)
-        return data if isinstance(data, list) else [data]
-    except Exception:
-        out = []
-        for line in text.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            try:
-                out.append(__import__("json").loads(line))
-            except Exception:
-                continue
-        return out
-
-
-def _add_rules_list(rules: list) -> dict:
-    added, errors = [], []
-    for r in rules:
-        if not isinstance(r, dict):
-            errors.append({"name": "?", "error": "不是 JSON 对象"})
+        got = source_intake.rows_from_payload(payload, origin=origin)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    rows = got["rows"]
+    if save:
+        # 逐条映射成 `apply` 已有的动作取值 —— 不新造自动策略，只是挑表
+        resolutions = {r["name"]: source_ledger.SAVE_RESOLUTION.get(r["verdict"], "skip")
+                       for r in rows}
+    else:
+        resolutions = {}
+    res = source_ledger.apply(rows, origin=origin, resolutions=resolutions)
+    items = res["items"]
+    added = [it["name"] for it in items
+             if it["ok"] and it["verdict"] in ("new", "update") and it["action"] != "skip"]
+    errors: list = []
+    for row, it in zip(rows, items):
+        if it["ok"] and row["verdict"] != "unsupported":
             continue
-        try:
-            store.add_rule(r)
-            added.append(r.get("name"))
-        except ValueError as e:
-            errors.append({"name": r.get("name", "?"), "error": str(e)})
-    return {"added": added, "errors": errors}
+        first = (row["unsupported_fields"] or [{}])[0]
+        errors.append({"name": it["name"],
+                       "error": it["note"] if not it["ok"]
+                       else (first.get("why") or "不可执行（原因见「书源工具」）"),
+                       "instead": first.get("instead", "")})
+    return {"added": added, "errors": errors, "counts": res["counts"],
+            "format": got["format"], "origin": origin}
 
 
 # ---------------- 页面与静态资源 ----------------
@@ -435,12 +450,21 @@ def api_sources_status():
 
 
 @app.post("/api/sources")
-async def api_add_sources(request: Request):
+async def api_add_sources(request: Request, mode: str = Query("save")):
+    """粘贴导入 / 手动表单保存（第 94 期起走 `sources/intake` 的统一路由）。
+
+    `mode`（**默认 `save` = 本接口第 94 期之前的老行为**：写入即覆盖）：
+
+    · ``save``  —— 「书源管理 → 手动表单 → 保存」。用户自己填了名字、自己点了保存，
+      所以撞名冲突按覆盖（覆盖前仍备份旧规则进历史），不会出现「点保存却什么都没发生」；
+    · ``import`` —— 「导入书源」卡（粘贴 / 文件）。保守口径：撞名冲突**跳过**，
+      逐条如实回报，要逐条选去处请去「书源工具」页。
+
+    ⚠️ 这两个动作与 `/api/sources/import` 共用 `ledger` 的同一张动作表（`SAVE_RESOLUTION`
+    只是 `_DEFAULT_RESOLUTION` 的一个特例）—— **不新造第二套自动策略**。
+    """
     text = (await request.body()).decode("utf-8", errors="ignore")
-    rules = _parse_rules_text(text)
-    if not rules:
-        raise HTTPException(400, "无法解析书源：请粘贴 JSON 对象 / 数组 / JSONL")
-    return _add_rules_list(rules)
+    return _quick_import(text, origin="paste", save=(mode != "import"))
 
 
 async def _read_capped(file: UploadFile, limit: int) -> bytes:
@@ -487,13 +511,20 @@ def _upload_limit(key: str) -> int:
 
 
 @app.post("/api/sources/upload")
-async def api_upload_sources(file: UploadFile = File(...)):
+async def api_upload_sources(file: UploadFile = File(...), mode: str = Query("import")):
+    """上传书源文件导入（第 94 期起认**所有**能识别的格式，不再只认 native）。
+
+    ⚠️ 本接口**默认为 `import`**（保守：撞名冲突跳过）—— 与粘贴卡同口径；
+    手动表单的「保存」走 `/api/sources?mode=save`，两条路不要混。
+
+    用户报的「导入书源，项目中没有反应」就是本接口：它当年只认本项目 native schema，
+    把 Legado 原文逐条判成「缺少 name / 缺少 domains / search.url 必填」，**仍回 200**，
+    前端又只读 `added` ⇒ 屏幕上什么都不发生。现在认不出格式会 **400 + 人话原因**。
+    """
     raw = await _read_capped(file, _upload_limit("max_source_rules_bytes"))
     text = raw.decode("utf-8", errors="ignore")
-    rules = _parse_rules_text(text)
-    if not rules:
-        raise HTTPException(400, "文件内容无法解析为书源 JSON")
-    return _add_rules_list(rules)
+    return _quick_import(text, origin=(file.filename or "上传文件")[:200],
+                         save=(mode != "import"))
 
 
 @app.delete("/api/sources/{name}")
@@ -534,11 +565,13 @@ async def api_sources_import(payload: dict = Body(...)):
     `POST /api/sources/{name}/rollback` 可以还原。
     """
     p = payload or {}
-    entries = source_ledger.entries_of(p.get("payload"))
-    if not entries:
-        raise HTTPException(400, "无法解析书源：请提供 JSON 对象 / 数组 / JSONL")
     origin = str(p.get("origin") or "paste")[:200]
-    rows = source_ledger.plan(entries, origin=origin)
+    try:
+        # 第 94 期：解析走 `intake` 的**同一条**路（格式识别、坏输入措辞只有那一份），
+        # 这样本接口与「导入书源」卡对同一份输入**永远给出同一个结论**。
+        rows = source_intake.rows_from_payload(p.get("payload"), origin=origin)["rows"]
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
     if p.get("dry_run", True):
         return {"dry_run": True, "origin": origin,
                 "rows": [_import_row_out(r) for r in rows]}

@@ -35,15 +35,23 @@ RESOLUTIONS = ("skip", "overwrite", "keep_both")
 #: `conflict` 是「两条不同的东西撞在一起」，默认必须是最保守的跳过。
 _DEFAULT_RESOLUTION = {"update": "overwrite", "conflict": "skip", "new": "overwrite"}
 
+#: 「书源管理 → 手动表单 → 保存」用的动作表（第 94 期）。
+#: 手写表单是**一次显式的 upsert**（用户自己填了名字、自己点了保存），所以撞名冲突按覆盖处理
+#: —— 覆盖前照旧把旧规则原文备份进历史（`apply` 里那一段），可回滚。
+#: ⚠️ 只有 `conflict` 与默认表不同：`duplicate` / `unsupported` 在 `apply` 里**先于**动作判定，
+#:    改这里影响不到它们；`new` / `update` 本来就是覆盖。
+SAVE_RESOLUTION = {**_DEFAULT_RESOLUTION, "conflict": "overwrite"}
+
 
 def entries_of(payload) -> list:
-    """吃下各种输入：本项目的导出文件、Legado 数组 / 单对象 / JSONL、或已是 list。"""
-    if isinstance(payload, dict) and payload.get("nf_export"):
-        return [e for e in (payload.get("entries") or []) if isinstance(e, dict)]
-    if isinstance(payload, dict) and isinstance(payload.get("entries"), list) \
-            and "version" in payload:
-        return [e for e in payload["entries"] if isinstance(e, dict)]
-    return legado.parse_sources(payload)
+    """吃下各种输入：本项目的导出文件、Legado 数组 / 单对象 / JSONL、或已是 list。
+
+    ⚠️ 第 94 期起**委托** `intake.unpack_entries`（信封判据、坏输入措辞都只有那一份）——
+    本模块不再自己认格式，否则「同一种输入两条路两种结论」的老毛病会原样长回来。
+    """
+    from . import intake                                     # 局部导入：intake 需要 plan，模块级导入成环
+
+    return intake.unpack_entries(payload)
 
 
 def _rule_path(name: str) -> pathlib.Path:

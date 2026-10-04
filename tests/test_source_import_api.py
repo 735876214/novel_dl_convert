@@ -200,6 +200,18 @@ def test_批量操作逐条回报(client, auth_headers):
     assert r2.status_code == 400 and "action" in r2.json()["detail"]
 
 
+def test_导入接口认不出格式要400不是空差异表(client, auth_headers):
+    """第 94 期：解析改走 `intake`（与「导入书源」卡同一条路）。
+
+    `ValueError` 若不接住，会从 FastAPI 里逃成 **500** —— 用户看到的是一个**崩了**的接口，
+    而他手上的文件其实只是格式不对。所以这里把「400 + 人话原因」钉住。
+    """
+    for bad in ("这不是书源", "", "{}"):
+        r = _import(client, auth_headers, bad)
+        assert r.status_code == 400, r.text
+        assert "无法识别格式" in r.json()["detail"]
+
+
 def test_导入相关接口都要鉴权(client):
     assert client.post("/api/sources/import", json={"payload": []}).status_code in (401, 403)
     assert client.get("/api/sources/export").status_code in (401, 403)
