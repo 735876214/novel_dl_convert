@@ -14,7 +14,7 @@
 | `update` | 同一个源名 + 哈希变了 | 备份旧规则后覆盖（用户点了一下才动的） |
 | `conflict` | 站点相同的**另一条**，或撞上**手写源**的源名 | **交用户选**：跳过 / 覆盖 / 两条并存 |
 | `new` | 都没有 | 直接落 |
-| `unsupported` | `legado.analyze` 判 `no` | 只记台账（含逐条原因），**不落规则** |
+| `unsupported` | 能力报告判 `no`（Legado 走 `analyze`，native 走 `validate_rule` + `audit_native_rule`） | 只记台账（含逐条原因），**不落规则** |
 
 ⚠️ 去重范围含**内置源、手写源、已导入源**三类 —— 只比「本次导入的条目之间」会放进一个
 与内置源重复的源，用户列表里就会出现两条同站点的书源。
@@ -26,7 +26,7 @@ import pathlib
 import time
 
 from ..core import db
-from . import legado, store
+from . import formats, legado, store
 
 #: 冲突处理方式（界面逐条让用户选）
 RESOLUTIONS = ("skip", "overwrite", "keep_both")
@@ -111,18 +111,15 @@ def plan(entries: list, *, origin: str = "", existing: "list | None" = None) -> 
     rows = []
     for ent in entries:
         ent = dict(ent or {})
-        ours = "name" in ent and "domains" in ent and "bookSourceName" not in ent
-        if ours:
-            converted = ent
-            an = {"supported": "yes", "unsupported_fields": [], "notes": [],
-                  "source_type": (ent.get("legado") or {}).get("source_type", "text")}
-        else:
-            an = legado.analyze(ent)
-            converted = an.get("converted_rule")
-            if converted is None:
-                # 不可执行也要有个稳定的名字，才能在列表里看到它、删掉它
-                converted = {"name": legado.rule_name(ent), "display_name": "",
-                             "domains": [], "legado": {}}
+        # 条目级分派**只在格式轴里**（`formats.map_entry` → 某个适配器的 `map`）：
+        # 这里原来是内联判据 `"name" in ent and "domains" in ent`，与 native 适配器的
+        # sniff 是同一件事的两份实现 ⇒ 已删。`an` 的形状对任何格式都一样（见 formats/base.py）。
+        an = formats.map_entry(ent)
+        converted = an.get("converted_rule")
+        if converted is None:
+            # 不可执行也要有个稳定的名字，才能在列表里看到它、删掉它
+            converted = {"name": legado.rule_name(ent), "display_name": "",
+                         "domains": [], "legado": {}}
         name = converted["name"]
         rhash = legado.rule_hash(ent)
         dkey = legado.dedup_key(ent) or (converted.get("legado") or {}).get("dedup_key") or ""
@@ -287,7 +284,10 @@ def export_payload() -> dict:
                 obj = json.loads(raw)
             except Exception:                                # noqa: BLE001
                 obj = None
-        entries.append(obj if isinstance(obj, dict) else (_read_rule(s["name"]) or {"name": s["name"]}))
+        # 没有原文（手写源 / 台账行丢了）就导出**规则本体** —— 走格式轴的序列化入口，
+        # 调用方不必知道 native 的序列化是恒等（将来加别的格式就换适配器，不改这里）。
+        fallback = formats.serialize_native(_read_rule(s["name"]) or {"name": s["name"]})
+        entries.append(obj if isinstance(obj, dict) else fallback)
     return {"nf_export": 1, "exported_at": time.time(), "entries": entries}
 
 

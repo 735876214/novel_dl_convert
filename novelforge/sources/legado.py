@@ -35,11 +35,16 @@ import json
 import re
 from urllib.parse import urljoin, urlsplit
 
+from .model import EXPLORE_KEYS, LEGACY_ALIASES
+from . import rules
+
 #: 四档结论的合法取值
 VERDICTS = ("yes", "partial", "no")
 
-#: Legado 里调用 **Android 专有桥** 的痕迹：这些片段服务端无法执行（不是「还没做」，是做不到）
-_ANDROID_API_RE = re.compile(
+#: Legado 里调用 **Android 专有桥** 的痕迹：这些片段服务端无法执行（不是「还没做」，是做不到）。
+#: ⚠️ 公开名（不是 `_ANDROID_API_RE`）：`rules.audit_native_rule` 审 JS 字段时也读**这一份**
+#: ——「哪些 API 做不到」只许有一处判据。
+ANDROID_API_RE = re.compile(
     r"\bjava\.(?:ajax|get|put|post|getElement|getElements|startBrowser|startBrowserAwait|"
     r"toast|longToast|hexDecodeToString|hexDecode|base64Encode|base64Decode|timeFormat|"
     r"androidId|setContent|webView|log)\b"
@@ -59,6 +64,10 @@ _SECRET_HINT = re.compile(r"密钥|密码|口令|授权|key|token|secret|passwd|
 #: 三类书源类型（Legado 的 ``bookSourceType``）：值域以 Legado 源码为准，未知值如实标注
 SOURCE_TYPE = {0: "text", 1: "audio", 2: "image", 3: "file"}
 SOURCE_TYPE_LABEL = {"text": "文本", "audio": "音频（听书）", "image": "图片（漫画）", "file": "文件"}
+
+#: 阅读 **2.x** 把类型写成**字符串**（实测：``''`` 1368 条 / ``'TEXT'`` 79 / ``'AUDIO'`` 76 /
+#: ``'漫画'`` 6 / ``None`` 8）。**逐字**映射到 Legado 的整数枚举；不认识的字符串仍回 ``unknown``。
+_SOURCE_TYPE_STR = {"": 0, "TEXT": 0, "AUDIO": 1, "漫画": 2}
 
 
 # ---------------- 解析 ----------------
@@ -149,12 +158,101 @@ def rule_hash(entry: dict) -> str:
 
 
 def source_type(entry: dict) -> str:
-    """``bookSourceType`` → ``text`` / ``audio`` / ``image`` / ``file`` / ``unknown``。"""
+    """``bookSourceType`` → ``text`` / ``audio`` / ``image`` / ``file`` / ``unknown``（**唯一**判据）。
+
+    两代写法都在这里认：3.x 是整数枚举，2.x 是字符串（``''`` / ``'TEXT'`` / ``'AUDIO'`` / ``'漫画'``）。
+    字段缺失与 ``null`` 都按 Legado 的默认值 0（文本）处理 —— 那是 schema 的默认值，不是猜。
+    认不出的值仍然回 ``unknown``，由调用方如实标注（**不硬塞进 text**）。
+    """
     raw = (entry or {}).get("bookSourceType", 0)
+    if raw is None:
+        return "text"
+    if isinstance(raw, str):
+        s = raw.strip()
+        if not s:
+            return "text"                                    # 2.x 的空串 = 默认（文本）
+        if s not in _SOURCE_TYPE_STR and s.upper() not in _SOURCE_TYPE_STR:
+            return "unknown"
+        hit = _SOURCE_TYPE_STR[s] if s in _SOURCE_TYPE_STR else _SOURCE_TYPE_STR[s.upper()]
+        return SOURCE_TYPE.get(hit, "unknown")
     try:
         return SOURCE_TYPE.get(int(raw), "unknown")
     except (TypeError, ValueError):
         return "unknown"
+
+
+# ---------------- 方言归一（第 94 期：阅读 2.x → 3.x 键名）----------------
+
+def _set_path(obj: dict, path: str, value):
+    """按 ``"ruleSearch.bookList"`` 写进嵌套字典；目标已存在（3.x 键）时**不覆盖**。
+
+    ⚠️ 合并而非替换：`ruleSearchList` / `ruleSearchName` … 会**分别**写进同一个
+    `ruleSearch`，逐键新造一个字典会把兄弟键全丢掉（那是 600 条源各少一半字段的静默损失）。
+    """
+    parts = path.split(".")
+    cur = obj
+    for p in parts[:-1]:
+        nxt = cur.get(p)
+        if not isinstance(nxt, dict):
+            nxt = {}
+            cur[p] = nxt
+        cur = nxt
+    cur.setdefault(parts[-1], value)
+
+
+def legacy_keys(entry) -> list:
+    """这条源里出现的 **2.x 专有键名**（空列表 = 已经是 3.x 形态）。
+
+    ⚠️ 这是「这份文件是哪个方言」的**唯一**判据：`normalize_legacy` 与格式适配器
+    （`formats/legado2.py`）/ `intake` 的格式标识都读它，不各写一份。
+    """
+    ent = entry or {}
+    return sorted(k for k in LEGACY_ALIASES if k in ent)
+
+
+def dialect(entry) -> str:
+    """``"legado-2"``（出现 2.x 键名）或 ``"legado-3"``。"""
+    return "legado-2" if legacy_keys(entry) else "legado-3"
+
+
+def normalize_legacy(entry) -> dict:
+    """阅读 **2.x** 方言 → 3.x 键名。**纯函数**：不改入参、3.x 输入原样返回。
+
+    ⚠️ 这是「旧方言能不能读」的**唯一**归一实现。`convert` / `analyze` 只认 3.x 键名，
+    所以 2.x 必须先过这里 —— 两张映射表（一张在转换里、一张在这里）必然漂移，
+    所以 3.x 的键名**一个字都不动**，表在 `model.LEGACY_ALIASES`（只收实测出现过的键）。
+
+    三处**值级**归一（改名表表达不了，逐条写在下面）：`httpUserAgent` → 请求头、
+    `searchUrl` 里的**裸词占位符**、`bookSourceType` 的字符串取值（在 `source_type`
+    里认，不在这里改）；`serialNumber` 这类 3.x 没有的键**保持原样**
+    （`raw_json` 要能无损往返，多一个键不影响执行）。
+    """
+    ent = dict(entry or {})
+    if not legacy_keys(ent):
+        return ent
+    out: dict = {}
+    for k, v in ent.items():
+        path = LEGACY_ALIASES.get(k)
+        if path:
+            _set_path(out, path, v)                          # 3.x 键已存在时不覆盖
+        else:
+            out[k] = v
+    # 2.x 的搜索占位符是**裸词**：实测 1537 条里 1412 条写成 `keyword=searchKey`、
+    # 389 条写成 `&page=searchPage`（3.x 才写 `{{key}}` / `{{page}}`）。不做这一步，
+    # 转换出来的地址会原样带上 `searchKey` —— 于是「搜什么都搜同一个词」，
+    # 而且**一个错都不报**（比抛异常更难发现的一类失效）。
+    # ⚠️ 大小写敏感：同一样本里小写 `searchkey=` 是**参数名**（479 条），
+    #    驼峰 `searchKey` 才是**值**（`searchKey=` 当参数名出现 0 次）—— 加 re.I 会把参数名也换掉。
+    su = out.get("searchUrl")
+    if isinstance(su, str) and su:
+        out["searchUrl"] = re.sub(r"\bsearchPage\b", "{{page}}",
+                                  re.sub(r"\bsearchKey\b", "{{key}}", su))
+    # 2.x 的 UA 是**一个字符串**（`httpUserAgent`），3.x 的 `header` 是字典 ⇒ 只在没有
+    # 显式 `header` 时补一条 User-Agent（有显式头就以它为准，不合并、不猜）。
+    ua = str(ent.get("httpUserAgent") or "").strip()
+    if ua and not ent.get("header"):
+        out["header"] = {"User-Agent": ua}
+    return out
 
 
 # ---------------- JS 可移植性 ----------------
@@ -178,7 +276,7 @@ def js_port(js: str) -> dict:
     src = _strip_js_wrap(js)
     if not src:
         return {"ok": False, "script": "", "missing": ["（空脚本）"]}
-    missing = sorted({m.group(0) for m in _ANDROID_API_RE.finditer(src)})
+    missing = sorted({m.group(0) for m in ANDROID_API_RE.finditer(src)})
     if missing:
         return {"ok": False, "script": "", "missing": missing}
     return {"ok": True, "script": src, "missing": []}
@@ -408,8 +506,17 @@ def analyze(entry: dict) -> dict:
 
     ``unsupported_fields`` 每条都给 ``field`` / ``why`` / ``instead``（**替代做法**，
     而不是只报错）—— 界面上要能把「哪一项、为什么、我该怎么做」讲清楚。
+
+    第 94 期两处**口径变化**（都如实记在 CHANGELOG 里）：
+
+    1. **入口先过** :func:`normalize_legacy`：阅读 2.x 的键名在这里一次归一到 3.x，
+       于是全项目只有**一条**转换路（`convert` 只认 3.x 键名）。2.x 的 1537 条真实书源
+       当年是**全灭**（`analyze` 一个键都读不到 ⇒ 0/1537 可转）。
+    2. **`supported` 由引擎反推**：转换产物交给 ``rules.audit_native_rule`` 审，
+       审计说跑不动就判 ``no``。当年是转换器自己声明可用 —— 实测 22 条样本里
+       9 条判「可用」中有 **6 条**一搜就抛选择器语法异常，这就是「假可用」。
     """
-    ent = entry or {}
+    ent = normalize_legacy(entry or {})                      # ① 2.x 键名 → 3.x（唯一转换路的入口）
     unsupported: list = []
     notes: list = []
     name = str(ent.get("bookSourceName") or "").strip()
@@ -424,6 +531,12 @@ def analyze(entry: dict) -> dict:
     if stype == "file":
         unsupported.append({"field": "bookSourceType", "why": "文件类书源本批不支持",
                             "instead": "文件类通常需要额外协议处理，建议在「书源管理」里手写规则或改用其它源"})
+    if stype in ("audio", "image"):
+        # 源自己声明是音频 / 漫画，而自动转换出来的规则是**文本**形态（`book.mode = "toc"`）。
+        # 不判死（搜索 / 目录 / 正文这条链本身能跑），但必须说清：拿到的会是地址清单而不是正文，
+        # 要真当音频 / 漫画用，得在「书源管理」里把 book.mode 改成 audio / comic。
+        notes.append(f"该源声明的是{SOURCE_TYPE_LABEL.get(stype, stype)}类，而自动转换只覆盖文本形态 "
+                     f"—— 导入后请到「书源管理」把「取书方式」改成 audio / comic 再填上对应规则")
     if not re.match(r"^https?://", site, re.I):
         # ⚠️ 真实文件 B 就是这种（bookSourceUrl = "大灰狼融合VIP5.0"）：Legado 允许它是任意占位串，
         # 而本项目要靠它拼请求与判域名 ⇒ 整条不可用，必须如实说清（不许猜一个域名出来）。
@@ -432,6 +545,12 @@ def analyze(entry: dict) -> dict:
             "why": f"不是 http(s) 网址：{site or '(空)'}",
             "instead": "本项目以书源站点基址拼请求与判域名；请在「书源管理」里换成真实网址后重试",
         })
+    explore = [k for k in EXPLORE_KEYS if str(ent.get(k) or "").strip()]
+    if explore:
+        # ⚠️ **只记不停**：本项目没有发现页功能（全仓没有 explore 实现），这部分规则被忽略是事实，
+        #    但它不影响「搜索 → 目录 → 正文」这条主链。判死会把实测 1321 条本来能用的源误杀。
+        notes.append("源里有「发现页」规则（" + "、".join(explore)
+                     + "）—— 本项目没有发现页功能，这部分已忽略")
 
     for field, spec in (("searchUrl", ent.get("searchUrl")),
                         ("ruleSearch.bookList", (ent.get("ruleSearch") or {}).get("bookList")),
@@ -472,6 +591,13 @@ def analyze(entry: dict) -> dict:
                 "why": "可判定的字段不足以拼出本项目规则：搜索地址 / 目录容器 / 正文容器三者至少缺一",
                 "instead": "请在「书源管理」的手动表单里补上缺的那一项（或改用其它书源）",
             })
+        else:
+            # ② **转换诚实闸**：产物能不能跑由引擎自己说（`rules.audit_native_rule`），
+            #    不许由转换器自称可用 —— 这正是当年「9 条判可用、6 条一搜就炸」的根因。
+            bad = rules.audit_native_rule(converted)
+            if bad:
+                verdict = "no"
+                unsupported += bad
     return {"supported": verdict, "unsupported_fields": unsupported, "converted_rule": converted,
             "notes": notes, "source_type": stype,
             "source_type_label": SOURCE_TYPE_LABEL.get(stype, "未知")}
