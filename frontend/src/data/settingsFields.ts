@@ -82,6 +82,18 @@ export const NETWORK_FIELDS: FieldDef[] = [
   { path: 'auto_update.max_books', label: '单轮最多追更（本）', type: 'number', hint: '防止一次外呼打爆源站' },
   { path: 'auto_update.request_delay', label: '每本间隔（秒）', type: 'number', hint: '礼貌节流' },
   { path: 'network.max_retries', label: '传输重试次数', type: 'number', hint: '下载时超时 / 传输错误的重试上限' },
+  {
+    path: 'network.max_response_bytes',
+    label: '单次响应体上限（字节）',
+    type: 'number',
+    hint: '边收边数、超限即断；防止一个返回超大页面的坏书源把内存打满。填 0 = 不限制',
+  },
+  {
+    path: 'network.max_concurrency',
+    label: '全局并发请求上限',
+    type: 'number',
+    hint: '所有书源同时在途的请求数之和；与书源规则里的章级并发是两层。填 0 = 不限制',
+  },
   { path: 'download.enabled', label: '开放搜索 / 下载', type: 'bool', hint: '关闭时书源仅做规则管理，不可搜索下载' },
   {
     path: 'download.toc_enabled',

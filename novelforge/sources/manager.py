@@ -76,6 +76,9 @@ class DownloadManager:
             headers=getattr(source, "headers", None),
             host_replace=self.host_replace,
             max_retries=self.max_retries,
+            # 单次请求超时来自**书源自己**（规则里的 `timeout`）——夹逼只有
+            # `clamp_timeout` 一处，这里不写第二份范围判断。
+            timeout=network.clamp_timeout(getattr(source, "timeout", None)),
         )
 
     def gate_reason(self, source: str | None = None, feature: str = "download") -> str:

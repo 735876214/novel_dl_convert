@@ -7,7 +7,9 @@
   "domains": ["qidian.com"],               # 域名白名单（必填，用于自动选源）
   "public": false,                         # 是否公版/合规（默认 false）
   "headers": {"User-Agent": "..."},        # 可选覆盖请求头
-  "concurrency": 8,                        # 并发抓取章节上限
+  "concurrency": 8,                        # 并发抓取章节上限（章级，**每个源**各一份）
+  "timeout": 30,                           # 可选：单次请求超时秒数（夹逼 [5,120]，
+                                           # 唯一判据 network.clamp_timeout；不写 = 30）
   "search": {                              # 搜索
     "url": "https://x.com/search?kw={title}",   # {title} 必用；{page} 可选（写了才支持翻页）
     "mode": "css",                         # css | regex | json | xpath
@@ -65,6 +67,7 @@ from urllib.parse import quote, urljoin
 from .base import SourceAdapter, DEFAULT_HEADERS
 from . import selspec
 from .. import config
+from ..core.network import clamp_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -938,6 +941,8 @@ class RuleBasedSource(SourceAdapter):
         if hdrs:
             self.headers = {**DEFAULT_HEADERS, **hdrs}
         self._concurrency = int(rule.get("concurrency", 8) or 8)
+        # 单次请求超时（秒）；`clamp_timeout` 是唯一夹逼处，`manager._client` 按它建客户端
+        self.timeout = clamp_timeout(rule.get("timeout"))
 
     def decryption_js(self):
         """规则里的 ``decrypt_js``（Legado 的 ``@js:`` 片段移植过来后放这里）。
@@ -1183,6 +1188,8 @@ def make_rule_class(rule: dict):
     cls.domains = list(rule.get("domains", []))
     cls.public = bool(rule.get("public", False))
     cls._concurrency = int(rule.get("concurrency", 8) or 8)
+    # 单次请求超时：夹逼与默认值只有 `network.clamp_timeout` 一处（校验、执行共用）
+    cls.timeout = clamp_timeout(rule.get("timeout"))
     return cls
 
 
@@ -1195,6 +1202,14 @@ def validate_rule(rule: dict) -> list[str]:
         errs.append("缺少 name（唯一标识）")
     if not rule.get("domains"):
         errs.append("缺少 domains（域名白名单数组）")
+    # 可选护栏：写歪了会被 `clamp_timeout` 悄悄换成默认值 —— 那正是假配置，
+    # 所以这里当场报出来（超范围的**值**不报：夹逼本身是有意为之）。
+    if rule.get("timeout") is not None:
+        try:
+            if float(rule["timeout"]) <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            errs.append("timeout 必须是正数（秒）")
     sp = rule.get("search") or {}
     if not sp.get("url"):
         errs.append("search.url 必填")

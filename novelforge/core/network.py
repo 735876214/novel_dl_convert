@@ -39,6 +39,85 @@ DEFAULT_HEADERS = {
 
 NODE_BIN = os.environ.get("NODE_BIN") or "node"
 
+#: 书源规则里的 `timeout` 允许范围（秒）。**唯一**一处判据：`clamp_timeout` 用它，
+#: 校验与执行都只问它 —— 否则「校验放行 0.1 秒 / 执行真的按 0.1 秒超时」这种假配置
+#: 会在真机上表现成「这个源全部超时」而看不出原因。
+TIMEOUT_MIN, TIMEOUT_MAX = 5.0, 120.0
+
+#: `timeout` 没写时的默认值（与 `BrowserClient` 的默认参数**同一个数**，改就一起改）。
+TIMEOUT_DEFAULT = 30.0
+
+
+def clamp_timeout(value, default: float = TIMEOUT_DEFAULT) -> float:
+    """书源规则里的 ``timeout`` → 可直接交给 httpx 的秒数（**唯一**一处夹逼）。
+
+    空 / 非数字 / ≤0 ⇒ 用 ``default``；超出范围 ⇒ 夹到 ``[TIMEOUT_MIN, TIMEOUT_MAX]``。
+    夹逼而不是报错，是因为这一项是**可选护栏**：写歪了不该让整条源变成不可用。
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if v <= 0:
+        return float(default)
+    return min(max(v, TIMEOUT_MIN), TIMEOUT_MAX)
+
+
+class ResponseTooLarge(RuntimeError):
+    """响应体超过 `network.max_response_bytes` —— **边收边数、超限即断**。
+
+    刻意不复用 `httpx` 的异常类型：它要能穿过 `_request` 的「传输错误重试」分支
+    （重试一个已经确定超限的响应没有意义，只是把同样的几百 MB 再拉一遍）。
+    """
+
+
+class _Unlimited:
+    """`max_concurrency <= 0` 时的空闸（显式关掉并发限制，不是「忘了配」）。"""
+
+    async def __aenter__(self):
+        return None
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+#: 全局出网闸的缓存（按**上限值**缓存：设置页改了上限就换一个闸）
+_gate_cache: dict = {}
+
+
+def global_gate():
+    """**全局**在途请求闸：所有 `BrowserClient` 共用（模块级，不是每个客户端一份）。
+
+    为什么必须是模块级的：书源是**并发**跑的（`asyncio.gather` 逐源），
+    「每源自己限流」拦不住「20 个源各开 8 个请求」这类总量。上限读
+    `config.network.max_concurrency`（默认值写在 `config.DEFAULTS`，这里**不另写一份**）。
+    """
+    try:
+        from .. import config
+
+        limit = int(((config.load_config().get("network") or {}).get("max_concurrency")) or 0)
+    except Exception:                                    # 配置读不出来 ⇒ 不拦，别把抓取锁死
+        limit = 0
+    if _gate_cache.get("limit") != limit:
+        _gate_cache.clear()
+        _gate_cache.update({"limit": limit,
+                            "sem": asyncio.Semaphore(limit) if limit > 0 else None})
+    sem = _gate_cache["sem"]
+    return sem if sem is not None else _UNLIMITED
+
+
+_UNLIMITED = _Unlimited()
+
+
+def _response_max_bytes() -> int:
+    """单次响应体上限（字节）；≤0 表示不限（显式关掉）。"""
+    try:
+        from .. import config
+
+        return int(((config.load_config().get("network") or {}).get("max_response_bytes")) or 0)
+    except Exception:
+        return 0
+
 
 class BrowserClient:
     """带持久 Cookie 与浏览器标头的异步 HTTP 客户端（scraping 友好）。"""
@@ -50,7 +129,7 @@ class BrowserClient:
         headers: dict | None = None,
         host_replace: dict | None = None,
         max_retries: int = 3,
-        timeout: float = 30.0,
+        timeout: float = TIMEOUT_DEFAULT,
     ):
         self.cookie_dir = pathlib.Path(cookie_dir or ".")
         self.cookie_dir.mkdir(parents=True, exist_ok=True)
@@ -109,8 +188,41 @@ class BrowserClient:
                 url = url.replace(old, new)
         return url
 
+    async def _send_capped(self, method: str, url: str, **kw):
+        """发一次请求并**边收边数**：超过 `network.max_response_bytes` 立即中断。
+
+        ⚠️ 为什么不能拿 `client.request()` 之后再看 `len(resp.content)`：那时整个响应体
+        已经在内存里了 —— 上限的意义正是**不把它拉进来**。所以这里走 `client.stream()`。
+        重建 `httpx.Response` 时会**保留原 headers 与 extensions**（`.text` 的编码判据、
+        `raise_for_status()` 的原文都还在），并且 httpx 在 `_send_single_request` 里已经
+        抽过 Cookie ⇒ Set-Cookie 照旧生效（用例钉住）。
+        """
+        cap = _response_max_bytes()
+        async with self.client.stream(method, url, **kw) as resp:
+            if cap <= 0:                                     # 显式关掉上限
+                await resp.aread()
+                return resp
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in resp.aiter_bytes():
+                total += len(chunk)
+                if total > cap:
+                    raise ResponseTooLarge(
+                        f"响应体超过上限 {cap} 字节（已收 {total}）—— 已中断：{url}"
+                        "（可到「设置 → 网络」调大 network.max_response_bytes）")
+                chunks.append(chunk)
+            return httpx.Response(
+                resp.status_code,
+                headers=resp.headers,
+                content=b"".join(chunks),
+                # `request` 必须带上：`raise_for_status()` 靠它拼错误原文
+                # （httpx 在 `_send_single_request` 里已经塞好了）
+                request=resp.request,
+                extensions=dict(resp.extensions or {}),
+            )
+
     async def _request(self, method: str, url: str, **kw):
-        """**唯一**出网口：重试 / 429 退避 / Cookie / host_replace 只在这一处。
+        """**唯一**出网口：重试 / 429 退避 / Cookie / host_replace / 全局闸只在这一处。
 
         `get` / `get_text` / `get_bytes` 与 POST 全走它 —— 各自复制一份重试逻辑的下场是
         「某一条路没有退避 / 不认 host_replace」，而现象只是**偶发失败**（最难查的那种）。
@@ -118,7 +230,8 @@ class BrowserClient:
         url = self._fix_url(url)
         for attempt in range(self.max_retries):
             try:
-                resp = await self.client.request(method, url, **kw)
+                async with global_gate():                    # 全局在途上限（模块级，全客户端共享）
+                    resp = await self._send_capped(method, url, **kw)
                 if resp.status_code == 429:
                     await self._backoff(resp, attempt)
                     continue

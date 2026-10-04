@@ -6629,7 +6629,9 @@ EDITABLE: dict = {
         "enabled", "interval", "recursive", "settle_seconds", "stable_rounds",
         "copy_non_txt", "process_existing", "max_retries", "ignore",
     },
-    "network": {"max_retries", "host_replace"},
+    # 第 94 期阶段 3：抓取护栏（响应体上限 / 全局并发）。默认值写在 `config.DEFAULTS`，
+    # `GET /api/config` 整块回显 `cfg["network"]` ⇒ 加子键只需改**这一处**白名单 + 前端字段。
+    "network": {"max_retries", "host_replace", "max_response_bytes", "max_concurrency"},
     # 第 85 期批次 B：`toc_enabled` = 「从官方书城取目录」的独立开关（闸门的用途维度）
     "download": {"enabled", "toc_enabled"},
     # 第 86 期：**书籍追更**调度（与 `update`「应用自身版本」不是一回事）。
@@ -6937,6 +6939,21 @@ def api_put_config(payload: dict = Body(...)):
             if val <= 0:
                 raise HTTPException(400, "上传上限必须大于 0")
             up[key] = val
+
+    # 第 94 期阶段 3：抓取护栏同为「正整数或显式 0（= 关掉）」—— 负数是打错的，
+    # 而 `0` 在这里是**有意义**的取值（0 = 不限），所以不能照抄上传上限那条 `<= 0` 直接拒。
+    net = patch.get("network")
+    if isinstance(net, dict):
+        for key in ("max_response_bytes", "max_concurrency"):
+            if key not in net:
+                continue
+            try:
+                val = int(net[key])
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"network.{key} 必须是整数")
+            if val < 0:
+                raise HTTPException(400, f"network.{key} 不能是负数（0 = 不限制）")
+            net[key] = val
 
     # 第 80 期：`update.image` 真的会被用于 `docker pull`（见 `_validate_update_image`），
     # 所以写入口就要拦。空串合法（= 回落 `NOVELFORGE_UPDATE_IMAGE` / 内置默认值）。
@@ -9143,6 +9160,9 @@ async def content(url: str = Query(..., description="章节 / 书籍页 URL")):
     src = REGISTRY[name]()
     from .core import network
 
-    async with network.BrowserClient(name, cookie_dir=str(config.COOKIE_DIR), headers=getattr(src, "headers", None)) as c:
+    async with network.BrowserClient(
+        name, cookie_dir=str(config.COOKIE_DIR), headers=getattr(src, "headers", None),
+        timeout=network.clamp_timeout(getattr(src, "timeout", None)),
+    ) as c:
         html = await src.render(c, url)
     return HTMLResponse(html or "<p>（空内容）</p>")

@@ -7,7 +7,7 @@
 """
 from abc import ABC, abstractmethod
 
-from ..core.network import DEFAULT_HEADERS
+from ..core.network import DEFAULT_HEADERS, TIMEOUT_DEFAULT
 
 # 公开性：public=True 表示公版 / 合规来源。
 # ⚠️ 第 93 期起这只影响**书源列表里的徽章**（「公版 / 私有」），**不再参与任何过滤** ——
@@ -24,6 +24,10 @@ class SourceAdapter(ABC):
     domains: list[str] = []
     # 是否公开合规来源（**仅标注**：书源列表的「公版 / 私有」徽章；不参与任何闸门判定）
     public: bool = PUBLIC
+    # 单次请求超时（秒）：建 `BrowserClient` 时按它取值。规则源由规则的 `timeout`
+    # 经 `network.clamp_timeout` 夹逼后写入；内置适配器用默认值。**默认值只有一处**
+    # （`network.TIMEOUT_DEFAULT`），这里不另写一份字面量。
+    timeout: float = TIMEOUT_DEFAULT
 
     @abstractmethod
     async def search(self, client, title: str) -> list[dict]:

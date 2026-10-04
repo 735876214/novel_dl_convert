@@ -161,6 +161,15 @@ DEFAULTS = {
         "cookie_dir": str(COOKIE_DIR),
         "host_replace": {},         # 应对 CDN 漂移：{"old-host": "new-host"}
         "max_retries": 3,
+        # 第 94 期阶段 3（抓取加固，**非样本证据**）：下面两个是「源站不按常理出牌时
+        # 别把容器拖垮」的护栏，默认值刻意宽松（正常书源页远小于此）。
+        #   · max_response_bytes：单次响应体上限，**边收边数、超限即断**
+        #     （`network.BrowserClient._send_capped`，唯一实现）—— 没有它时一个
+        #     「返回 500 MB 的坏源」会直接把进程内存打满。
+        #   · max_concurrency：**全局**同时在途的请求数上限（`network.global_gate`）。
+        #     与书源规则里的 `concurrency`（章级并发）是两层，不叠加成第二份实现。
+        "max_response_bytes": 16 * 1024 * 1024,
+        "max_concurrency": 16,
     },
     # 可选：hybrid/ai 模式下 AI 分章兜底（不填 api_key 则仅用正则 + 缩进降级）
     "llm": {"api_key": "", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
