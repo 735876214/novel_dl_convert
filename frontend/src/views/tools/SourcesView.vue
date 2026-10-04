@@ -317,16 +317,29 @@ const form = ref({
   // 基础
   name: '', display_name: '', domains: '', public: false, concurrency: 8,
   // 搜索
-  searchUrl: '', searchMode: 'css' as 'css' | 'regex',
+  searchUrl: '', searchMode: 'css' as 'css' | 'regex' | 'xpath',
   searchContainer: '', searchPattern: '',
   fTitle: '', fAuthor: '', fUrl: 'a::attr(href)', fCover: 'img::attr(src)',
   // 取书
   bookMode: 'toc' as 'toc' | 'single',
-  tocMode: 'css' as 'css' | 'regex', tocContainer: '', tocUrlAttr: 'href', tocPattern: '',
+  tocMode: 'css' as 'css' | 'regex' | 'xpath', tocContainer: '', tocUrlAttr: 'href', tocPattern: '',
   contentKind: 'text' as 'text' | 'html' | 'regex', contentContainer: '', contentPattern: '',
+  // 正文通道（第 94 期 2c）：`contentKind` 只管「怎么读结果」，「用哪套语法找」在这里
+  contentChannel: 'css' as 'css' | 'xpath',
   // 分章
   chapterMode: 'auto' as 'toc' | 'regex' | 'auto', chapterRegex: '',
 })
+
+/** 占位提示跟着通道走 —— CSS 与 XPath 写法完全不同，同一句占位符会**教错人**。 */
+const PH_SEARCH = computed(() => (form.value.searchMode === 'xpath'
+  ? { container: "//div[@class='item']", title: '//a/text()', author: '//span/text()',
+      url: '//a/@href', cover: '//img/@src' }
+  : { container: '.book-item', title: '.name', author: '.author',
+      url: 'a::attr(href)', cover: 'img::attr(src)' }))
+const PH_TOC = computed(() => (form.value.tocMode === 'xpath'
+  ? "//div[@class='chapterlist']/dd/a" : '#list a'))
+const PH_CONTENT = computed(() => (form.value.contentChannel === 'xpath'
+  ? "//*[@id='content']" : '#content'))
 
 /** 前端必填校验（与后端 `validate_rule` 同口径，另加「写盘文件名」的字符集检查） */
 const formErrors = computed<string[]>(() => {
@@ -339,12 +352,13 @@ const formErrors = computed<string[]>(() => {
   if (!f.searchUrl.trim()) errs.push('搜索地址模板必填')
   else if (!f.searchUrl.includes('{title}'))
     errs.push('搜索地址里要有 {title} 占位符，否则每次搜的都是同一个页面')
-  if (f.searchMode === 'css' && !f.searchContainer.trim())
-    errs.push('CSS 模式需要「结果容器」选择器')
+  if (f.searchMode !== 'regex' && !f.searchContainer.trim())
+    errs.push(f.searchMode === 'xpath' ? 'XPath 模式需要「结果容器」（XPath 表达式）'
+      : 'CSS 模式需要「结果容器」选择器')
   if (f.searchMode === 'regex' && !f.searchPattern.trim())
     errs.push('正则模式需要「结果正则」（带命名组 title / url）')
   if (f.bookMode === 'toc') {
-    if (f.tocMode === 'css' && !f.tocContainer.trim()) errs.push('目录式需要「章节目录容器」选择器')
+    if (f.tocMode !== 'regex' && !f.tocContainer.trim()) errs.push('目录式需要「章节目录容器」选择器')
     if (f.tocMode === 'regex' && !f.tocPattern.trim()) errs.push('目录式需要「章节目录正则」')
   }
   if (f.contentKind === 'regex') {
@@ -360,12 +374,13 @@ const formErrors = computed<string[]>(() => {
 function buildRule(): Record<string, unknown> {
   const f = form.value
   const search: Record<string, unknown> = { url: f.searchUrl.trim(), mode: f.searchMode }
-  if (f.searchMode === 'css') {
+  if (f.searchMode !== 'regex') {
+    // css 与 xpath **同一个形状**（容器 + 四个取值），差别只在 `mode`（引擎那边另有实现）
     search.container = f.searchContainer.trim()
     search.fields = {
       title: f.fTitle.trim(),
       author: f.fAuthor.trim(),
-      url: f.fUrl.trim() || 'a::attr(href)',
+      url: f.fUrl.trim() || (f.searchMode === 'xpath' ? '//a/@href' : 'a::attr(href)'),
       cover: f.fCover.trim(),
     }
   } else {
@@ -373,12 +388,12 @@ function buildRule(): Record<string, unknown> {
   }
   const content: Record<string, unknown> = f.contentKind === 'regex'
     ? { mode: 'regex', pattern: f.contentPattern.trim() }
-    : { mode: 'css', container: f.contentContainer.trim(), [f.contentKind]: true }
+    : { mode: f.contentChannel, container: f.contentContainer.trim(), [f.contentKind]: true }
   const book: Record<string, unknown> = { mode: f.bookMode, content }
   if (f.bookMode === 'toc') {
-    book.toc = f.tocMode === 'css'
-      ? { mode: 'css', container: f.tocContainer.trim(), url_attr: f.tocUrlAttr.trim() || 'href' }
-      : { mode: 'regex', pattern: f.tocPattern.trim() }
+    book.toc = f.tocMode === 'regex'
+      ? { mode: 'regex', pattern: f.tocPattern.trim() }
+      : { mode: f.tocMode, container: f.tocContainer.trim(), url_attr: f.tocUrlAttr.trim() || 'href' }
   }
   const chapter: Record<string, unknown> = { mode: f.chapterMode }
   if (f.chapterMode === 'regex') chapter.regex = f.chapterRegex.trim()
@@ -532,37 +547,43 @@ function testExisting(name: string): void {
           <h4 class="mb-2 text-[12px] font-semibold text-foreground">搜索</h4>
           <label :class="LABEL_CLS">地址模板（{title} 占位）</label>
           <input v-model="form.searchUrl" :class="INPUT_CLS" placeholder="https://example.com/search?q={title}">
-          <div class="mt-2 flex items-center gap-4 text-[11.5px] text-muted-foreground">
+          <div class="mt-2 flex flex-wrap items-center gap-4 text-[11.5px] text-muted-foreground">
             <label class="flex items-center gap-1.5">
               <input v-model="form.searchMode" type="radio" value="css" class="accent-primary">CSS 选择器
+            </label>
+            <label class="flex items-center gap-1.5">
+              <input v-model="form.searchMode" type="radio" value="xpath" class="accent-primary">XPath
             </label>
             <label class="flex items-center gap-1.5">
               <input v-model="form.searchMode" type="radio" value="regex" class="accent-primary">正则
             </label>
           </div>
-          <template v-if="form.searchMode === 'css'">
+          <template v-if="form.searchMode !== 'regex'">
             <label :class="LABEL_CLS" class="mt-2">结果容器</label>
-            <input v-model="form.searchContainer" :class="INPUT_CLS" placeholder=".book-item">
+            <input v-model="form.searchContainer" :class="INPUT_CLS" :placeholder="PH_SEARCH.container">
             <!-- 四个选择器：窄屏堆成一列（`sm:` 起才并排）—— 360 档两列时每个只剩 ~148px，
                  占位符全被截断，读不出在填哪一项 -->
             <div class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
                 <label :class="LABEL_CLS">标题选择器</label>
-                <input v-model="form.fTitle" :class="INPUT_CLS" placeholder=".name">
+                <input v-model="form.fTitle" :class="INPUT_CLS" :placeholder="PH_SEARCH.title">
               </div>
               <div>
                 <label :class="LABEL_CLS">作者选择器</label>
-                <input v-model="form.fAuthor" :class="INPUT_CLS" placeholder=".author">
+                <input v-model="form.fAuthor" :class="INPUT_CLS" :placeholder="PH_SEARCH.author">
               </div>
               <div>
                 <label :class="LABEL_CLS">链接选择器</label>
-                <input v-model="form.fUrl" :class="INPUT_CLS" placeholder="a::attr(href)">
+                <input v-model="form.fUrl" :class="INPUT_CLS" :placeholder="PH_SEARCH.url">
               </div>
               <div>
                 <label :class="LABEL_CLS">封面选择器</label>
-                <input v-model="form.fCover" :class="INPUT_CLS" placeholder="img::attr(src)">
+                <input v-model="form.fCover" :class="INPUT_CLS" :placeholder="PH_SEARCH.cover">
               </div>
             </div>
+            <p v-if="form.searchMode === 'xpath'" class="mt-1.5 text-[11px] text-muted-foreground">
+              XPath 的四个取值是相对每条结果求值的（如 //a/@href），只有「结果容器」是整页级的。
+            </p>
           </template>
           <template v-else>
             <label :class="LABEL_CLS" class="mt-2">结果正则（命名组 title / url）</label>
@@ -587,21 +608,24 @@ function testExisting(name: string): void {
           <template v-if="form.bookMode === 'toc'">
             <label :class="LABEL_CLS" class="mt-2">章节目录容器</label>
             <input
-              v-if="form.tocMode === 'css'" v-model="form.tocContainer" :class="INPUT_CLS"
-              placeholder="#list a"
+              v-if="form.tocMode !== 'regex'" v-model="form.tocContainer" :class="INPUT_CLS"
+              :placeholder="PH_TOC"
             >
             <input
               v-else v-model="form.tocPattern" :class="INPUT_CLS"
               placeholder='&lt;a href="(?P&lt;href&gt;[^"]+)"[^&gt;]*&gt;(?P&lt;title&gt;[^&lt;]+)&lt;/a&gt;'
             >
-            <div class="mt-2 flex items-center gap-4 text-[11.5px] text-muted-foreground">
+            <div class="mt-2 flex flex-wrap items-center gap-4 text-[11.5px] text-muted-foreground">
               <label class="flex items-center gap-1.5">
                 <input v-model="form.tocMode" type="radio" value="css" class="accent-primary">CSS
               </label>
               <label class="flex items-center gap-1.5">
+                <input v-model="form.tocMode" type="radio" value="xpath" class="accent-primary">XPath
+              </label>
+              <label class="flex items-center gap-1.5">
                 <input v-model="form.tocMode" type="radio" value="regex" class="accent-primary">正则
               </label>
-              <label v-if="form.tocMode === 'css'" class="flex items-center gap-1.5">
+              <label v-if="form.tocMode !== 'regex'" class="flex items-center gap-1.5">
                 链接属性
                 <input
                   v-model="form.tocUrlAttr"
@@ -620,13 +644,24 @@ function testExisting(name: string): void {
             <label class="flex items-center gap-1.5">
               <input v-model="form.contentKind" type="radio" value="regex" class="accent-primary">正则提取
             </label>
+            <!-- 通道与「怎么读结果」是两件事（第 94 期 2c）：文本 / 保留标签两种读法，
+                 CSS 与 XPath 两套语法，正交 ⇒ 分成两个选择器，不拼成四个单选。 -->
+            <template v-if="form.contentKind !== 'regex'">
+              <span class="ml-1 text-foreground">通道</span>
+              <label class="flex items-center gap-1.5">
+                <input v-model="form.contentChannel" type="radio" value="css" class="accent-primary">CSS
+              </label>
+              <label class="flex items-center gap-1.5">
+                <input v-model="form.contentChannel" type="radio" value="xpath" class="accent-primary">XPath
+              </label>
+            </template>
           </div>
           <label :class="LABEL_CLS" class="mt-2">{{ form.contentKind === 'regex' ? '正文正则' : '正文容器' }}</label>
           <input
             v-if="form.contentKind === 'regex'" v-model="form.contentPattern" :class="INPUT_CLS"
             placeholder='&lt;div id="content"&gt;([\s\S]*?)&lt;/div&gt;'
           >
-          <input v-else v-model="form.contentContainer" :class="INPUT_CLS" placeholder="#content">
+          <input v-else v-model="form.contentContainer" :class="INPUT_CLS" :placeholder="PH_CONTENT">
           <label :class="LABEL_CLS" class="mt-2">分章方式</label>
           <div class="flex flex-wrap items-center gap-3 text-[11.5px] text-muted-foreground">
             <label class="flex items-center gap-1.5">
