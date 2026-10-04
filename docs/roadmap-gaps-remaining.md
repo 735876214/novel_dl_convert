@@ -4898,3 +4898,147 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
    `config.DEFAULTS["watch"]["ignore"]` 里那条 `*.meta.json` 正是为这个位置留的（留档写在
    **被监听**的收书目录里）。测试现场同步改成「成品在库根、留档在收书目录」两个不同目录，
    并加一条反向用例钉住「按库根找 = 一本都找不到」。
+
+### 二、交付（十件事，按能力拆笔提交）
+
+| # | 能力 | 落点 | 提交 |
+| --- | --- | --- | --- |
+| A | 删「仅放行公版源」 | `manager.gate_reason` / `config.DEFAULTS` / `store` / 设置页控件 / 源列表徽章 / 6 份文档口径 | `a67c4fe` |
+| D | 在线 ↔ 本地章节对齐 `align_online` | `core/reading_list.py`（窗口 2 / 需 3 命中，含边界与超界） | `1ef2ee0` |
+| B | 源绑定 `online_bind`（新表） | `core/db.py` + remap 四处 + `POST/DELETE /api/books/{bid}/online/bind`（复用 `toc_sources.best_match`） | `940e0d6` |
+| C | 在线阅读后端 `sources/online.py`（559 行） | status / chapters / chapter / pos 四条路由 + 章节缓存（真 LRU）+ 断网降级 + `base.online_support()` + `rules.chapter_links/chapter_body` | `e4776a5` |
+| F | 阅读器**在线模式**（同一个 `ReaderView.vue`，靠 `route.name` 分模式）+ 来源横幅 + 入口 | `router` 的 `/online/:id` + 横幅（正文上方 / 目录抽屉顶部两处）+ 书签批注守卫 + `checkUpdate.ts` | `95e04b4` |
+| E2 | 定时追更过闸门 + 补必填 `cfg`（见 §一.2/3） | `core/autoupdate.tick` | `12a38a4` |
+| E2′ | 单本追更收敛成 `update_book` + 留档改在收书目录找（见 §一.4） | `core/autoupdate.sidecar_of/update_book`、`candidates()` 纳入 `online_bind` | `55e8613` |
+| E3/E4 | 首次落地 + 绑定驱动更新 `core/landing.py`（506 行） | 同 `book_id` 落进**这本书自己的位置**、`seen>5` 只触发一次、对不上零写入 | 本笔 |
+| E5 | 单本「检查更新」+「用源站整本覆盖本地」 | `POST /api/books/{bid}/check-update`（`overwrite=true` 才整本重写）+ 详情页在线读卡 | 本笔 |
+| F2 | 详情页「在线阅读」卡 + 菜单入口 + 键盘可达 | `components/book/detail/OnlineReadCard.vue`、`BookActionsMenu`、`lib/icons.ts`、`ReaderView` 的 Esc 收面板 | 本笔 |
+
+**新增后端用例 90 条**：`test_online_align.py` 13 / `test_online_bind.py` 15 / `test_online_read.py` 37 /
+`test_online_landing.py` 21 / `test_autoupdate_gate.py` 4。全量 **1656 → 1759**（只增不减）。
+
+### 三、单一真值源（本期收敛 / 复用了七处）
+
+- **正文净化 `sources/rules.html_to_text`**：本期从三份（`online` 一份、`rules._extract_css` 一份、
+  追更一份）**收敛成一处**。这是 §五.1 那个缺陷的直接产物，也是「第二份拷贝 = 缺陷」的活样本。
+- **章节对齐 `reading_list.align_shift`**（`align_online` / `align_map` 都建在它上面，
+  `landing.aligned_tail` 用同一个 `norm_title`）：前端**只读**服务端给的 `local_index`，一个字符都不重算。
+- **书名匹配**复用第 85 期的 `sources/toc_sources.best_match` —— 不新写第二份匹配。
+- **闸门**只有 `DownloadManager.gate_reason()` 一处；搜索 / 下载 / 预览 / 取目录 / 在线读四条路由 /
+  「检查更新」/ 定时追更**全部**问它（本期把最后一个不问的调用方补上了，见 §一.2）。
+- **「这本书来自哪个源」** 收敛到 `autoupdate.sidecar_of(book)` 一处。
+- **取数原语**：`rules.chapter_links()` / `chapter_body()` 抽出来后，`_fetch_toc`、`preview`、
+  在线读三处共用同一份。
+- **两份位置故意不合并**（写进 docstring，防「简化」）：`online_bind.pos` = 在线位置（跨客户端续读
+  的唯一依据）；`progress` = 本地位置。对得上时**同时**写，对不上只写前者。
+
+### 四、实测
+
+**自动化**：后端全量 **1759 例 / 0 failed / 0 errors / 12 skipped**（352.5 s）；
+前端 **63 文件 / 664 例**；文档锚点 `check_doc_anchors.py --strict` **20 文档 / 836 锚点 / 硬错 0**。
+
+**真机**（本机桩书站 `127.0.0.1:8710`（stdlib `http.server`，章节数读 `count.txt`、标题错位读
+`wrong.txt`、正文带 `<b>/<em>` 与 `<script>/<style>` 载荷）+ 隔离实例 `8414`，`/health` 报 0.93.0）：
+
+1. **入口与闸门**：`available:false` 时文案逐字来自 `gate_reason()`；关掉 `download.enabled` 后
+   「检查更新 / 在线取章 / 绑定 / 定时追更」四处一律 `blocked`、`ok: 0`。
+2. **绑定**：自动匹配给出 confidence，手动粘 URL 落库 `manual: true`。
+3. **对齐**：5 章窗口 ≥3 命中 ⇒ `local_index` 正确映射，越界为 `null`（用例与真机一致）。
+4. **正文**：响应里只有我们转义的 `<p>`，源站标签 / `script` / `style` 一个都不剩。
+5. **缓存**：只落 `CACHE_DIR/online/`，书库与收书目录零新增。
+6. **跨客户端**：A 读到第 7 章 ⇒ `online_bind.pos` 与 `/progress` 都记；B 打开同一本从**同一处**续读。
+7. **对不上**：进度不写、`pos` 照记、页内如实提示。
+8. **断网降级**：命中缓存 ⇒ `origin:"cache"`、`stale:true`、横幅改口；缓存也没有 ⇒ 502 带**原文**，不白屏。
+9. **首次落地**：本地读不了的书读满 6 章 ⇒ 只触发一次（第 7、8 章不再触发）、**书架不多出第二条**。
+10. **用户自己导入的 `.txt`**：`updatable()` 如实拒绝、盘上零改动、收书目录零残留。
+11. **键盘**：Tab 第 38 下到来源横幅链接，焦点环可见（`outline: solid 2px`）；`Esc` 收面板并把焦点
+    还给触发按钮（真机复核：`{"title":"目录"}` / `{"title":"阅读设置"}`）。
+12. **三档冒烟**：`/online/<bid>` 与改动的详情页在 360 / 768 / 1280 全部 `ovf: false`
+    （详情页 360 档 `off: 2` 是窄屏「更多」下拉里的两个标签，第 92 期口径不计入）。
+
+### 五、真机走查发现并修掉的三个缺陷（+1 个键盘缺口）
+
+单测全绿时这三个缺陷**全都存在**，是「真机上读一遍」逼出来的 —— 记下来是因为它们的共同形态是
+**不报错、不提示，只是结果不对**：
+
+1. **内联标签把段落切碎**。正文里 `<b>加粗</b>` 这类内联标记被压成了独立一行（「第二段：加粗与斜体
+   标记都应被剥掉」被切成三行）。第一直觉是 `online.html_to_text` 写错了 —— 改完**症状一字不变**，
+   因为真正的源头在上游 `rules._extract_css` 的 `node.get_text("\n", strip=True)`：`"\n"` 分隔符
+   对**每个**子节点都插一次，`strip=True` 又把我们补的分段标记一并吃掉。
+   ⇒ 不修两处、而是**收敛成一处**（`rules.html_to_text`，块级标签才补分段的 `_BLOCK_TAGS` 白名单），
+   `online` 只做再导出。顺带发现 `get_text("", strip=True)` 会连标记一起吞行 ⇒ 改成
+   `get_text("")` + 逐行 strip 去空。
+2. **假追加报告**。`landing._append` 报「对齐后追加了 12 章」，而本地那份文件**逐字节没变**，
+   还往收书目录里丢了一份半截 txt + 留档。根因：追更只写「收书目录里的原件」与「本项目的成品」，
+   而这本书两处都不是（它是用户自己导入的），于是那 12 章写到了别处、报告却按「写成功」算。
+   ⇒ 新增 `updatable()` + `_same_path()` + `update_writes()`，在 `ensure_sidecar` **之前**拦下，
+   如实写明「这两份都不是 ⇒ 换不到它的内容」，并指路「用源站整本覆盖本地」。**零写入**。
+3. **EPUB 字节被写成了 `.txt`**。首次落地把 18736 字节、开头是 `PK\x03\x04` 的 EPUB 写进了
+   `落地测试.txt` —— TXT 阅读器会显示一片乱码。根因：落地只认「stage 里唯一的产物」。
+   ⇒ 改成**按这本书自己的后缀**挑产物（`.txt` 的书取管线产出的正文原件并 `copy2` 留档；
+   想找的后缀恰好 1 份才写），对不上就如实说明「产物格式与这本书对不上」并**不写**。
+4. **「同序号硬比」这个前提是错的**（写 E3/E4 的用例时撞出来的，不是真机）。计划里 D 段写的是
+   「取线上 `pos` 前后各 2 章与**本地同序号**那几章比标题」。这一条对**本项目自己下载的书**根本不成立：
+   本地章节表是按 **EPUB spine 下标**给的（`library._reading_list`），而 `epub_builder.build_epub`
+   默认 `nav=True` —— spine 首条是 **nav 目录页**，于是**本地 index 恒比源站章号大 1**
+   （源站目录里多一条「序章 / 版权页」时位移又是另一个方向）。按同下标硬比 ⇒ **一本都对不上**，
+   而症状是「进度不涨 / 落地不动」，没有任何报错。
+   ⇒ `align_online` 重写成求位移的 `align_shift`：拿本地每章的归一标题去线上目录里找同名位置得到
+   **候选位移**，逐个用用户那条 5 章规则验，**恰好一个**通过才采纳（两个以上 ⇒ `None`，有歧义不猜）；
+   锚点从**本地末章往前退 20 章**（末章是追更的追加边界，源站只改尾部个别标题时退几章仍能对齐，
+   只认末章的话整本书就白白放弃）。`align_online(titles, local, pos)` 保留为逐章入口，
+   整本 `align_map` 一次求位移 + 纯算术映射（逐章问一遍是 O(章数) 的活）。
+5. **`Esc` 什么也不做**（Tab 走查发现）。目录抽屉与阅读设置面板开了以后只能再点一次按钮关，
+   键盘用户按 `Esc` 毫无反应、焦点还留在面板里。⇒ `ReaderView.onKeydown` 里补 `Esc`：
+   **一次只关一层**（设置 → 笔记 → 目录）、关掉后把焦点还给打开它的那个按钮（`$el.focus()`）、
+   **没有面板时不吞这个键**（`defaultPrevented` 仍为 false，别把别的弹窗的 Esc 吃掉）。
+   ⚠️ 这段必须放在 `if (!paged.value) return` **之前**：滚动模式下没有翻页键，但面板一样得能关。
+
+### 六、防回归要点
+
+1. **`online_bind` 含 `book_id`** ⇒ remap 四处同批改（`tests/test_remap_tables.py` 问库本身，漏了就红）；
+   书被软删后绑定不参与在线读（读点一律 `deleted_at=0` 语义）。
+2. **缓存写盘点**：静态契约把在线读模块的写盘**限定在 `CACHE_DIR/online/`**（越界即红）；
+   清缓存只清缓存目录；书库 / 收书目录里的东西**从来不 `unlink`**。
+3. **第三方标记永不进 `v-html`**：端点只回我们转义的 `<p>`，用例断言响应里不含源站原始标签与事件属性。
+4. **自动落地只触发一次**（`auto_task` 记 id，失败不重试轰炸）且**不静默**（任务中心 + 通知 + `activity_log`）；
+   落地一律写进**这本书自己的位置**（同名 ⇒ 同一个 `book_id`）—— **绝不新建第二条书目**，
+   否则第 87 期的重名判定会在书架上多出一本，而用户的进度还留在旧的那本上。
+5. **「覆盖」不许退化成整本重写**：默认路径是追更的「只追加 + 原子写 + EPUB 按章 append」
+   （既有测试钉住）；整本重写只在①首次落地②用户显式点「用源站整本覆盖本地」时发生。
+   用户自己的源文件**永远不写**。
+6. **两份位置不许互相覆盖**：本地阅读器只写 `progress`，在线读只写 `online_bind.pos`
+   （对齐成功时**额外**写 `progress`）。任何「用一份覆盖另一份」的简化都会让跨客户端续读错位。
+7. **`landing.SYNC_AFTER = 5`** 判的是 `len(seen) > 5` 且 `auto_task` 为空 —— 改判据就改这一处。
+8. **`Esc` 的边界**：一次只关一层、焦点必须还给触发者、没面板时不吞键。
+
+### 七、踩坑
+
+- **`chapter_links` / `chapter_body` 抽出来后，`_fetch_toc` 与 `preview` 必须改调它** ——
+  只加新口子不改旧调用方，就同时存在两份取数实现（第 3 节那类缺陷的温床）。
+- **落地的 `.txt` 书之后追更改不到它**（见 §五.2）：这是**刻意的**取舍，不是漏子。追更只写
+  「收书目录里的原件」与「本项目在书库根里的成品」；用户自己导入的书两处都不是。
+  要跟着源站走，就在在线读卡里点「用源站整本覆盖本地」。
+- **`local_index === null` 不是错误**，是「对不上」的正常结果：页内如实提示、只记在线位置。
+  把它当异常抛会让整章打不开。
+- **真机走查的桩站要能造错位**（`wrong.txt` 控制标题是否错位、`count.txt` 控制章节数）——
+  否则「对不上」和「断网」这两条最要紧的路径根本走不到。
+
+### 八、未做取舍（刻意保留）
+
+- **在线模式不做书签 / 批注**：它们的锚是「本地这一章的文本偏移」，而在线正文是**另一份文本**。
+  两个入口**隐藏**（不是灰掉）并写明原因，7 个写调用同时加守卫（双保险）。
+- **`kind != "text"`（漫画 / 有声）不自动落地**：任务里如实说明，不假装做了。
+- **缓存上限**：总量 **200 MB**、单本 **500 章**，超了按最久没碰过的先删（真 LRU）。限额不做成
+  可配置项 —— 它是防磁盘写满的兜底，不是功能。
+- **`single` 模式源**整本抓一次再按 `detect.detect_chapters` 分章进缓存：这一期支持，但不做增量重取。
+- **跨客户端续读靠服务端 `pos`**，不做实时推送：另一个客户端要**重新打开**这本书才看到新位置。
+
+### 九、收尾
+
+- 版本：`VERSION` → `0.93.0`，`CHANGELOG.md` 首段同版本（含公版闸门下线的如实说明）。
+- 文档：`README.md` / `docs/user-guide.md` / `architecture.md` / `project-overview.md` / `docs/TODO.md`
+  （删该 P0 条目 + 刷新状态）+ 本节 + `.codebuddy/memory/`（当日日志 / `MEMORY.md` 索引 / `MEMORY-REF.md`）。
+- ⚠️ `.codebuddy/memory/2026-10-03.md` 里有**并行会话**的未提交段落：提交时用
+  `git hash-object -w --path` + `git update-index --cacheinfo` **只暂存自己那一段**，
+  绝不重写工作区文件；`.vscode/settings.json` 不提交。

@@ -25,6 +25,7 @@
 │  lib_settings · library_rules · opds · komga · komga_api · koreader ·     │
 │  koreader_anno · integrations · auth · fonts · customfields · metascore · │
 │  browse_counts · activity_log · ai_detect · network · migrate · pdfrender │
+│  autoupdate（书源追更 / 单本检查更新）· landing（在线读满 5 章落到本地）  │
 └───────────────┬──────────────────────────────────────────────────────────┘
                 │
    ┌────────────▼───────────┐   ┌──────────────┐   ┌───────────────────────┐
@@ -84,6 +85,7 @@ sequenceDiagram
 | 阅读 | `progress` `reading_status` `reading_sessions` `reading_attempts` `annotations` `bookmarks` | 进度**按文件维度**；CFI 只由 NF 阅读器写入 |
 | 书库 | `libraries` `library_migrations` `book_index` | 每库来源 = 多个绝对路径 `source_dirs`。⚠️ `library_migrations` 第 77 期起只记**用户发起的跨库移动**（`direction="bookmove"`）；`direction="move"` 是第 77 期前「按格式归库」留下的存量行，仍可能躺在真库里（不被清理，也不会出现在界面上） |
 | 元数据 | `meta_online` `meta_overrides` `meta_locks` `meta_cover` `custom_field_defs` `custom_values` `series_meta` `authors` `narrators` | **只落服务端 DB** |
+| 在线阅读（第 93 期） | `online_bind` | 一本书一行：书源 + 书页 URL + **在线位置 `pos`** + 已读章下标 `seen`（去重，上限 64）+ `auto_task`（自动落地只触发一次的凭据）。跨客户端续读的**唯一依据**；含 `book_id` ⇒ 必过 remap 四处 |
 | 其他 | `collections` `notifications` `activity` `book_embeddings` `book_dock_items` `app_state` | |
 
 ### 4.4 两条铁律
@@ -189,6 +191,20 @@ graph LR
   书内样式只能挂到容器**之外**（前端以 `@scope (.reader-content)` 注入 `document.head`）——
   注入到容器里会让 CSS 文本把长度顶长，所有位置偏移**静默错位**。
   开关：`readerPrefs.useBookLayout`（默认开；固定版式**强制**开，整页版式全靠它）。
+- **在线阅读（第 93 期）**：`/online/:id` 与 `/read/:id` 是**同一个 `ReaderView` 组件**的两条路由，
+  靠 `route.name` 分模式 —— 主题 / 字号 / 版式 / 分页 / 滚动 / 目录抽屉全部复用同一份。
+  数据源两处：章节表取 `GET /api/books/{bid}/online/chapters`（`flat` 形状与本地一致），
+  正文取 `GET /api/books/{bid}/online/chapter/{index}`。实现全在 `sources/online.py`（唯一读点）：
+  正文经 `bs4` 剥净标记后逐行转义包 `<p>`（**第三方标记永不进 `v-html`**）、
+  章节缓存落 `CACHE_DIR/online/<book_id>/`（总量 / 单本上限 + LRU；**只落缓存目录**，
+  不进书库 / 收书目录、不回写书文件）、抓取失败回落缓存并带 `stale` 标记。
+  ⚠️ **客户端永远不能传 URL**（URL 只存绑定表与服务端缓存，章节只按 `index` 取，无 SSRF 面）。
+- **在线阅读的两份位置，故意不合并**：① `online_bind.pos` = **在线位置**，落服务端 ⇒
+  任何客户端打开 `/online/:id` 都从同一处续读；② 目录对得上时**同时**写既有 `progress`
+  （`locator` = 本地章号、`percent` = 本地位置 / 本地总章数，**不传 `offset`** —— 线上与本地不是同一份文本，
+  字符偏移没有意义）⇒ 本地阅读器也续得上。任何「用一份覆盖另一份」的简化都会让跨客户端续读错位。
+  对齐判据 = `reading_list.align_shift`（用户口径「本章 + 上下各 2 章共 5 章里 ≥3 章同名」），
+  前端**不重算**，只用后端给的 `local_index`；对不上就不写本地进度并如实提示。
 
 ## 10. 多端接口
 
@@ -249,3 +265,11 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    实测代价：主包 `index.js` 1,173,783 → 1,237,288 B（**+63.5 KB raw**；gzip 365.15 kB，构建输出），
    其中还含本期新写的侧栏/sheet/tooltip 代码本身。`clsx` / `tailwind-merge` 是**既有**依赖（`lib/utils.ts` 的 `cn()` 用它们）。
 7. 新的后台线程必须进测试收尾清单（`_quiesce_background`）。
+8. **在线阅读（第 93 期）**：正文一律纯文本（第三方标记永不进 `v-html`）；缓存只落 `CACHE_DIR/online/`；
+   落地 / 更新只写「这本书自己的位置」（同名 ⇒ 同一个 `book_id`，**绝不新建第二条书目** ——
+   否则书架上多出一本重名的，而用户的进度 / 批注还留在旧的那本上）；
+   默认路径**只追加**（走追更同一函数，章节 index 不漂移），整本重写只在首次落地或用户显式点选时发生；
+   `online_bind.pos`（在线位置）与 `progress`（本地进度）两份位置**不许互相覆盖**。
+   ⚠️ `core.autoupdate` / `core.landing` 在**事件循环里**必须用 **`update_book_async`**（协程壳）——
+   同步壳 `update_book` 内部的 `asyncio.run` 在运行中的循环里会直接抛，用错会让整条自动落地
+   与「检查更新」**静默什么都不写**（不报错、盘上零改动）。

@@ -60,6 +60,14 @@ TXT 小说入库 + 阅读工具，融合 Fanqie-novel-Downloader / kaf-cli / txt
   PDF（pdf.js 懒加载）、漫画（CBZ）、有声书（倍速 / 睡眠定时 / 轨列表）、
   **合集**（序号单元树逐话连读：话目录 + 上/下一话 + 读完自动续，跨话进度连续）。
   ⚠️ **CBR 需要容器内有 `bsdtar`**（官方镜像已含）：RAR 是系统级解压依赖，缺它时相关入口会明确提示
+- **在线阅读（接你自己的书源，第 93 期）**：任意一本在库的书都能绑一个书源 —— 详情页「在线阅读」卡里
+  选源 + 自动匹配书名，或手动粘书页地址；绑完就在**本项目自己的阅读器**里逐章读源站正文
+  （主题 / 字号 / 版式 / 翻页 / 目录全部复用同一套，源站的样式与脚本一律不带进来，正文以纯文本呈现）。
+  读到哪一章记在**服务端** ⇒ 换设备从同一处续读；读过的章节缓存在本机（**只落缓存目录，不进书库、不动书文件**）
+  ⇒ 断网还能接着读，届时横幅会如实改成「内容选自本机缓存（抓取于 …）」。本地读不了这本书时，
+  在线阅读过 5 章会**自动补齐成本地副本** —— 还是书架上那一条（同一本书、进度 / 批注 / 绑定都不丢），
+  此后由追更持续「搜更新 → 下载 → 写进这本书」；书卡 ⋮ 与详情页都有单本「检查更新」。
+  ⚠️ 页面顶部与目录抽屉**常驻来源标注**（内容是谁的始终看得见）；下载开关关着时这一族入口一律不可用并如实说明原因。
 - **序号单元合并**：漫画库 / 有声书库里一棵子树有 ≥2 个能解析出序号的媒体文件 ⇒ 整棵树 = **一本书**
   （`format = UNITS`，话数就是清单条数）；`.pdf` / `.cbz` / `.cbr` / 音频话混在一棵树里也认，
   各话按种类自动选阅读器。⚠️ 合并后是一本**新书**：旧的每文件一本的那些行的
@@ -294,6 +302,8 @@ docker compose up -d
 - **文件直接丢进 `./input` 即可**：自动收进书库并记日志（网页「转换日志」页可看），在线阅读 TXT 时按需生成目录
 - **输入放 `./input`，成品落 `./output`**，互不影响
 - 在线书源：`POST /search`、`POST /download`；内容预览：`GET /content?url=`、`GET /supported?url=`
+- 在线阅读（第 93 期）：`/api/books/{id}/online/status|chapters|chapter/{n}`、`online/bind`；
+  单本更新：`POST /api/books/{id}/check-update` —— 全部走同一个下载闸门，关着就是 400 + 原因原文
 - Synology Container Manager / QNAP Container Station：新建「项目 / 应用」，目录选上面那个部署目录即可
 - ⚠️ 部署目录里**不要**放 `docker-compose.override.yml`：Compose 会自动合并它并静默改掉端口与拉取策略（本仓库不提供此类叠加件）
 
@@ -338,6 +348,8 @@ novel_dl_convert/
                        + pgmigrate.py（SQLite → PostgreSQL 一次性数据搬迁）
                        + publish.py（刮削出版：硬链接副本 / 原子写副本 / 回收）
                        + scrape.py（刮削台账状态机与单线程 worker，含「待确认」处置）
+                       + autoupdate.py（书源追更：候选枚举 + 单本检查更新，先过下载闸门）
+                       + landing.py（在线读满 5 章后把源站落到**这本书自己**的位置：首次落地 / 对齐后追加）
                        + stats.py（统计聚合）· achievements.py · recommend.py（相似书）
                        + auth.py（单用户轻登录）· comics.py（CBZ 解包）· fonts.py（字体管理）
 
@@ -345,6 +357,7 @@ novel_dl_convert/
                        + komga.py（Komga 库布局与系列推断）· koreader.py（kosync 进度互通）
                        + integrations.py（Hardcover / Readwise / StoryGraph 凭据与验证）
     sources/           书源适配器（gutenberg 公版 / generic 模板·不注册 / rules 数据驱动 / store 用户源管理 / manager）
+                       + online.py（在线阅读：逐章取正文 / 章节缓存与断网降级 / 源绑定，唯一读点）
     static/v2/          前端构建产物（Vue + Tailwind，由 frontend/ 构建，不入库）
   frontend/           前端工程（Vue 3 SFC + TypeScript + Vite 8 + Tailwind v4 + Pinia）
     src/views/          仪表盘 / 探索发现 / 任务中心 / 数据统计 / 阅读记录 / 通知 / 成就 /
@@ -539,7 +552,7 @@ npm run deploy       # 同步 dist → novelforge/static/v2（先删后拷）
   "name": "my_site",                  // 唯一标识（必填）
   "display_name": "我的站",            // 展示名（可选）
   "domains": ["example.com"],          // 域名白名单（必填，用于自动选源）
-  "public": false,                    // 是否公版/合规（默认 false）
+  "public": false,                    // 是否公版（默认 false）—— 第 93 期起**仅作展示标注**，不参与任何过滤
   "headers": {"User-Agent": "..."},   // 可选覆盖请求头
   "concurrency": 8,                   // 并发抓取章节上限
   "search": {                         // 搜索
@@ -601,5 +614,12 @@ docker build --build-arg NODE_VERSION=22 -t novelforge .
 
 ## 合规说明
 
-下载功能默认关闭，仅对接公版书源（Project Gutenberg）。使用其他书源请遵守目标站点
-robots.txt 与服务条款，仅限合法用途。
+下载功能**默认关闭**，且它是搜索 / 下载 / 预览 / 取目录 / 在线阅读的**唯一闸门**
+（判据只有一处：`DownloadManager.gate_reason()`）。开启后请遵守目标站点的 robots.txt 与服务条款，
+仅限合法用途。
+
+⚠️ **第 93 期口径变化（如实记录）**：此前有一道「仅放行公版源」的闸门，会直接跳过非公版书源；
+**按用户要求这条功能已整体下线**。现在每源记录里的「公版」字段保留，但**只作为书源列表里的一个标注**，
+不再参与任何过滤 —— 也就是说，**本工具不再替你区分公版与非公版源，后果由使用者自负**。
+项目自带的 Project Gutenberg 适配器仍是一个公版源，但它的「公版」属性也不再是程序判据。
+历史版本记录不改写。
