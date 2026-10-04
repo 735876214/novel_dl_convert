@@ -14,6 +14,7 @@
 * 超时夹逼只有 `clamp_timeout` 一处，校验与执行问同一个它。
 """
 import asyncio
+import gzip
 
 import httpx
 import pytest
@@ -202,6 +203,46 @@ def test_不超限时字节与文本一字不差(monkeypatch, tmp_path):
     text, raw = asyncio.run(go())
     assert text == "中文正文<br>第二段"
     assert raw == body, "get_bytes 拿到的必须是站上那一份字节（不能被文本编码解过一遍）"
+
+
+def test_压缩响应不会被解两遍(monkeypatch, tmp_path):
+    """**真网回归钉**（第 94 期实测踩到）：
+
+    `_send_capped` 重建响应时若原样保留 `Content-Encoding`，httpx 会拿**已经解压**的字节
+    再解一次 ⇒ gzip 数据当场抛
+    `DecodingError: Error -3 while decompressing data: incorrect header check`。
+    现象是「所有开了压缩的真实站点全抓不到」（单测里 mock 不压缩，只有真网暴露），
+    所以这条用例用**真 gzip 字节 + `Content-Encoding: gzip`** 走一遍上限通道。
+    """
+    body = "中文正文<br>第二段".encode("utf-8")
+    log: list[int] = []
+    gz = gzip.compress(body)
+
+    def handler(req):
+        return httpx.Response(
+            200, stream=_ChunkStream([gz], log),
+            headers={"Content-Encoding": "gzip",
+                     "Content-Type": "text/html; charset=utf-8"})
+
+    bc, old = _capped_client(tmp_path, handler, 4096, monkeypatch)
+
+    async def go():
+        try:
+            resp = await bc.get("https://a.com/gz")
+            return resp, await bc.get_text("https://a.com/gz"), await bc.get_bytes(
+                "https://a.com/gz")
+        finally:
+            await bc.aclose()
+            await old.aclose()
+
+    resp, text, raw = asyncio.run(go())
+    assert raw == body, "压缩响应解出来的字节不对（多半是解了两遍）"
+    assert text == "中文正文<br>第二段", "Content-Type 里的 charset 判据被弄丢了"
+    assert "content-encoding" not in {k.lower() for k in resp.headers}, (
+        "重建后的响应不该再自称有 Content-Encoding（字节已经是解压后的）")
+    # Content-Length 由 httpx 按**解压后**的字节重算（不是原样抄过来的压缩后长度）
+    assert resp.headers.get("content-length") == str(len(body)), (
+        "Content-Length 应该是解压后的真实长度，而不是压缩时的那个数字")
 
 
 def test_set_cookie在流式请求后仍然生效(monkeypatch, tmp_path):

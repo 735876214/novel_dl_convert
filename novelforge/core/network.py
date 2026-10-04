@@ -129,6 +129,39 @@ def _response_max_bytes() -> int:
         return 0
 
 
+#: 重建响应体时必须摘掉的头 —— 它们描述的是**传输时的实体**，而重建时手里拿的
+#: 已经是解压后的字节。留着 `Content-Encoding` 会让 httpx 再解一次（对 gzip 数据
+#: 解两遍 ⇒ `DecodingError: incorrect header check`，即所有开压缩的站点全挂）；
+#: `Content-Length` 则是长度已变，留着会给出错的数字。见 `BrowserClient._send_capped`。
+_ENTITY_HEADERS = frozenset(("content-encoding", "content-length"))
+
+
+def _drop_entity_headers(headers) -> "list[tuple[str, str]]":
+    """去掉描述传输实体的头，其余（含 Content-Type / Set-Cookie）原样保留。"""
+    return [(k, v) for k, v in headers.items() if k.lower() not in _ENTITY_HEADERS]
+
+
+def verify_tls_enabled(cfg: dict | None = None) -> bool:
+    """书源抓取要不要校验证书 —— `network.verify_tls` 的**唯一**读点与默认值。
+
+    默认 **False** = 与第 94 期之前逐字一致（当时写死 `verify=False`）。不少书源站证书
+    不规范（自签 / 链不全 / 域名不匹配），把默认改成 True 等于静默让一批书源失效 ——
+    所以只**提供**开关，由部署者自己决定；MITM 风险写在设置页的 hint 里。
+
+    `cfg` 给了就用它（`DownloadManager` 收的是注入的配置，测试要能自己造），
+    没给就自己读一次（`/content` 这类没有 cfg 的调用点）。
+    """
+    net = (cfg or {}).get("network") if isinstance(cfg, dict) else None
+    if not isinstance(net, dict):
+        try:
+            from .. import config
+
+            net = config.load_config().get("network") or {}
+        except Exception:
+            net = {}
+    return bool(net.get("verify_tls", False))
+
+
 class BrowserClient:
     """带持久 Cookie 与浏览器标头的异步 HTTP 客户端（scraping 友好）。"""
 
@@ -140,6 +173,9 @@ class BrowserClient:
         host_replace: dict | None = None,
         max_retries: int = 3,
         timeout: float = TIMEOUT_DEFAULT,
+        verify_tls: bool = False,
+        request_guard=None,
+        max_bytes: int | None = None,
     ):
         self.cookie_dir = pathlib.Path(cookie_dir or ".")
         self.cookie_dir.mkdir(parents=True, exist_ok=True)
@@ -162,10 +198,18 @@ class BrowserClient:
             cookies=self.jar,
             follow_redirects=True,
             timeout=timeout,
-            verify=False,
+            # ⚠️ 默认 False = **保持不变**（第 94 期阶段 4a）：不少书源站证书不规范，
+            # 改默认值等于静默改掉所有既有书源的抓取行为。要打开就设 `network.verify_tls`。
+            # URL 导入那条路**强制 True**（见 `core/urlguard.py`）。
+            verify=bool(verify_tls),
+            # 逐跳复查出站目标（URL 导入用）；None = 不查（书源抓取照旧）
+            event_hooks={"request": [request_guard]} if request_guard else {},
         )
         self.host_replace = host_replace or {}
         self.max_retries = max_retries
+        # 上限的**默认值**仍由 `network.max_response_bytes` 给出（唯一读点不变）；
+        # 传值只为「URL 导入」这种别的场景有自己的上限，避免多出一份实现。
+        self.max_bytes = None if max_bytes is None else int(max_bytes)
 
     # ---- Cookie 持久化（LWPCookieJar 格式，便于人工查看/调试）----
     def _load_cookies(self):
@@ -206,8 +250,19 @@ class BrowserClient:
         重建 `httpx.Response` 时会**保留原 headers 与 extensions**（`.text` 的编码判据、
         `raise_for_status()` 的原文都还在），并且 httpx 在 `_send_single_request` 里已经
         抽过 Cookie ⇒ Set-Cookie 照旧生效（用例钉住）。
+
+        ⚠️ **`Content-Encoding` / `Content-Length` 必须摘掉**（第 94 期实测踩出来的真 bug）：
+        `resp.aiter_bytes()` 交给我们的**已经是解压后**的字节，而 `httpx.Response(...,
+        content=…)` 构造时会立刻按 headers 里的 `Content-Encoding` **再解一遍** ⇒
+        任何 gzip / deflate / br 响应都会当场抛
+        `DecodingError: Error -3 while decompressing data: incorrect header check`。
+        换言之：留着这两个头 = **所有开了压缩的真实站点全抓不到**（而本地/单测的 mock
+        响应不带压缩，所以只有真网才暴露）。`Content-Length` 同理——重算后的长度已不同，
+        留着它只会让下游读到错的数字。
+
+        顺带：计数用的是**解压后**的字节数，正是我们要的语义（压缩炸弹在这里被拦住）。
         """
-        cap = _response_max_bytes()
+        cap = _response_max_bytes() if self.max_bytes is None else self.max_bytes
         async with self.client.stream(method, url, **kw) as resp:
             if cap <= 0:                                     # 显式关掉上限
                 await resp.aread()
@@ -221,10 +276,11 @@ class BrowserClient:
                         f"响应体超过上限 {cap} 字节（已收 {total}）—— 已中断：{url}"
                         "（可到「设置 → 网络」调大 network.max_response_bytes）")
                 chunks.append(chunk)
+            body = b"".join(chunks)
             return httpx.Response(
                 resp.status_code,
-                headers=resp.headers,
-                content=b"".join(chunks),
+                headers=_drop_entity_headers(resp.headers),
+                content=body,
                 # `request` 必须带上：`raise_for_status()` 靠它拼错误原文
                 # （httpx 在 `_send_single_request` 里已经塞好了）
                 request=resp.request,
