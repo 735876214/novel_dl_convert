@@ -10,6 +10,7 @@
  */
 // 类型-only 循环引用在运行时会被擦除，安全（smartScope.ts 需要 BookCard）
 import type { PrefsPayload } from './prefsPayload'
+import type { ImportResult } from './sourceImport'
 import type { SmartScope, ScopeRule } from './smartScope'
 
 export interface HealthInfo {
@@ -3198,26 +3199,29 @@ export const api = {
   // ---------- 书源 ----------
   listSources: () => request<{ sources: SourceItem[] }>('/api/sources'),
 
-  addSourcesText: (text: string) =>
-    request<{ added?: number; ok?: boolean; errors?: Array<{ name?: string; error?: string }> }>(
-      '/api/sources',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-        body: text,
-      },
-    ),
+  /** 粘贴 / 手写表单 → 后端统一导入路由（第 94 期）。
 
-  uploadSourcesFile: (file: File) => {
+   *  `mode='save'`（**默认**）：手动表单「保存」——显式 upsert，撞名冲突按覆盖
+   *  （覆盖前备份旧规则进历史）。默认取它是为了**保持第 94 期之前的行为**：
+   *  当年这个接口就是无条件写盘。
+   *  `mode='import'`：「导入书源」卡（粘贴）——保守口径，撞名冲突跳过、逐条如实回报。
+   *  ⚠️ 认不出格式时后端**不再回 200 + 空数组**，而是 400 + 人话原因（`request` 抛 Error）。
+   */
+  addSourcesText: (text: string, mode: 'save' | 'import' = 'save') =>
+    request<ImportResult>(`/api/sources?mode=${mode}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+      body: text,
+    }),
+
+  /** 上传书源文件；`mode` 口径同 `addSourcesText`，但**默认 `import`**（与粘贴卡同口径）。 */
+  uploadSourcesFile: (file: File, mode: 'save' | 'import' = 'import') => {
     const form = new FormData()
     form.append('file', file)
-    return request<{ added?: number; ok?: boolean; errors?: Array<{ name?: string; error?: string }> }>(
-      '/api/sources/upload',
-      {
-        method: 'POST',
-        body: form,
-      },
-    )
+    return request<ImportResult>(`/api/sources/upload?mode=${mode}`, {
+      method: 'POST',
+      body: form,
+    })
   },
 
   /** 收书目录整页拖拽投递：把文件丢进 INPUT_DIR（监听目录）并按现有管线处理。

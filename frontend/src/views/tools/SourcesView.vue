@@ -7,6 +7,7 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, type SourceStatus, type SourceTestResult } from '@/lib/api'
+import { importOutcome, type ImportError } from '@/lib/sourceImport'
 import {
   EMPTY_QUERY,
   filterSources,
@@ -245,9 +246,12 @@ function submitPaste(): void {
   }
   busy.value = true
   api
-    .addSourcesText(text)
+    .addSourcesText(text, 'import')
     .then((r) => {
-      ui.toast(`已添加 ${r.added ?? 0} 个书源`)
+      // ⚠️ 第 94 期：**必读 `counts` 与 `errors`**，不能再 `已添加 ${r.added ?? 0} 个书源`
+      //    —— `added` 是名字数组，被拒时是 `[]`，那句提示会渲染成「已添加  个书源」，
+      //    用户看到的结论就是「导入没反应」（他报的就是这个）。
+      ui.toast(importOutcome(r))
       pasteText.value = ''
       load()
     })
@@ -263,9 +267,9 @@ function onFilePick(e: Event): void {
   if (!file) return
   busy.value = true
   api
-    .uploadSourcesFile(file)
+    .uploadSourcesFile(file, 'import')
     .then((r) => {
-      ui.toast(`已从文件添加 ${r.added ?? 0} 个书源`)
+      ui.toast(importOutcome(r))
       load()
     })
     .catch((err: Error) => ui.toast(err.message))
@@ -388,9 +392,11 @@ function buildRule(): Record<string, unknown> {
   }
 }
 
-function savedOk(r: { added?: number; errors?: Array<{ error?: string }> }, label: string): void {
-  if (r.errors?.length) {
-    ui.toast(`保存失败：${r.errors[0]?.error ?? '规则不合法'}`)
+function savedOk(r: { errors?: ImportError[] }, label: string): void {
+  // 手写表单走 `mode=save`：这里只在**规则本身不可执行**时才有 `errors`（后端给的原文原因）
+  const why = (r.errors ?? [])[0]?.error
+  if (why) {
+    ui.toast(`保存失败：${why}`)
     return
   }
   ui.toast(`已保存书源 ${label}`)
@@ -404,7 +410,10 @@ function saveForm(): void {
   }
   busy.value = true
   api
-    .addSourcesText(JSON.stringify(buildRule()))
+    // `mode=save`：手写表单是**一次显式的 upsert**（自己填了名字、自己点了保存）⇒
+    // 撞名冲突按覆盖（覆盖前照旧备份旧规则进历史）。**不能**用导入卡的保守口径，
+    // 否则编辑一个与既有源重名的书源会「点了保存却什么都没发生」。
+    .addSourcesText(JSON.stringify(buildRule()), 'save')
     .then((r) => savedOk(r, form.value.name.trim()))
     .catch((e: Error) => ui.toast(e.message))
     .finally(() => {
@@ -658,7 +667,8 @@ function testExisting(name: string): void {
       <Card>
         <h3 class="mb-2 text-[13px] font-semibold text-foreground">导入书源</h3>
         <p class="mb-2.5 text-[11.5px] text-muted-foreground">
-          支持 JSON 对象 / 数组 / JSONL 三种格式，一次可导入多个书源。
+          支持 Legado（阅读 App）书源、本项目的导出文件、本书源规则 JSON（对象 / 数组 / JSONL）。
+          撞名冲突默认跳过；要逐条选去处请去「书源工具」。其他格式（.js / .xbs / XML）暂未支持。
         </p>
         <textarea
           v-model="pasteText"

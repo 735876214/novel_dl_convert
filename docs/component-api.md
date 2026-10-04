@@ -152,6 +152,7 @@ components/
 | `viewport.ts` | `NARROW_QUERY`（`(max-width: 639.98px)`）、`useNarrowScreen()`、`useNarrowScreenOnMount()` | **窄屏断点的唯一真值源**（外壳侧栏与书架行共用；`shelfRows.ts` 原来那份私有常量已删）。读不到 `matchMedia` 的环境**按宽屏兜底** |
 | `sidebarPrefs.ts` | `SIDEBAR_COLLAPSED_KEY`、`SIDEBAR_WIDTH_KEY`、`readDeviceValue()`、`writeDeviceValue()` | 侧栏折叠 / 宽度的**本机**存储（`nf_sidebar_*`）；⚠️ **刻意不进** `prefsPayload.ts` —— 布局是屏幕属性，不跟账号同步 |
 | `utils.ts` | `cn()`（`clsx` + `tailwind-merge`） | 类名合并的**唯一实现**（移植来的 shadcn 组件靠「传 class 覆盖基础类」，只 `clsx` 会时灵时不灵） |
+| `sourceImport.ts` | `FORMAT_LABELS`、`formatLabel()`、`countsLine()`、`needsAttention()`、`importSummary()`、`importOutcome()` | **导入书源结果的措辞**（第 94 期）：`/api/sources` 与 `/api/sources/upload` 的返回体翻成人话，「书源管理 → 导入书源」卡与「书源工具」页共用。⚠️ 之前两页各写一句 ⇒ 导入卡那句是 `已添加 ${r.added ?? 0} 个书源`，而 `added` 是**名字数组**、被拒时 `[]` 渲染成空串 ⇒ 用户看到的结论是「导入没反应」 |
 | `format.ts` / `readingPace.ts` / `deviceInfo.ts` / `fonts.ts` / `coverTint.ts` / `icons.ts` / `notifyPrefs.ts` / `bookMenu.ts` | 见 `docs/architecture.md` §12 | — |
 
 ## 7. Stores（Pinia）

@@ -30,6 +30,7 @@ import {
   type SourceLoginSpec,
   type SourceVarsResult,
 } from '@/lib/api'
+import { importSummary } from '@/lib/sourceImport'
 import { useUiStore } from '@/stores/ui'
 
 const ui = useUiStore()
@@ -156,11 +157,9 @@ async function applyImport(): Promise<void> {
       dry_run: false,
       resolutions: resolutions.value,
     })
-    const c = res.counts ?? {}
-    ui.toast(
-      `导入完成：新增 ${c.new ?? 0} · 更新 ${c.update ?? 0} · 重复 ${c.duplicate ?? 0}` +
-        ` · 跳过 ${c.skipped ?? 0} · 不可执行 ${c.unsupported ?? 0}`,
-    )
+    // 逐档计数 → 人话的这一份**只有** `lib/sourceImport.ts`（第 94 期：本页与
+    // 「书源管理 → 导入书源」卡共用，别再在这里手写第二串）
+    ui.toast(importSummary(res.counts))
     for (const it of (res.items ?? []).filter((i) => !i.ok).slice(0, 3)) {
       ui.toast(`${it.name}：${it.note || '失败'}`)
     }
