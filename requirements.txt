@@ -13,6 +13,12 @@ beautifulsoup4>=4.12
 # （取空值 + 审计报「需要 lxml（未安装）」），装它是因为 ebooklib 本来就会带进来，
 # 而显式声明才不会在某个镜像里被静默丢掉。
 lxml>=5.0
+# 执行期正则的超时（第 94 期阶段 4c：反 ReDoS）：书源规则里的 `pattern` 是第三方给的，
+# 一条 `(a|a)*$` 配几十 KB 正文就能把 worker 卡死几分钟。`regex` 的 `timeout=`
+# **实测能真的中断匹配**（stdlib `re` 没有任何等价物），唯一执行处是
+# `core/saferegex.py`。它**不是硬依赖**：缺了由 `saferegex.state()` 如实标
+# `timeout:false` 并改用「输入长度上限」兜底 —— **绝不假装有超时**。
+regex>=2024.0
 # PDF 页面渲染：Komga 兼容服务端的页面流要把 PDF 逐页转成图片
 # （pypdfium2 自带 PDFium 二进制，pip 装即可，不需要系统库）
 pypdfium2>=4.30

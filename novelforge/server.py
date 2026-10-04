@@ -51,6 +51,7 @@ from .sources import creds as source_creds     # 第 86 期：Cookie 读写的�
 from .sources import probe as source_probe     # 第 86 期：单字探测 / 全部验证
 from .sources import online as online_mod      # 第 93 期：在线阅读（取数 + 缓存落盘）
 from .core import network as network_mod       # 第 86 期：JS 解密通道的部署前提（Node）
+from .core import saferegex                    # 第 94 期阶段 4c：执行期正则的超时能力
 
 # 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在
 # （用户书源在 novelforge.sources 包导入时已自动加载）
@@ -838,16 +839,29 @@ async def api_toc_probe(payload: dict = Body(None)):
 
 @app.get("/api/sources/capabilities")
 def api_sources_capabilities(refresh: bool = Query(False)):
-    """运行环境能力：**JS 解密通道到底能不能用**（Node 在不在）。
+    """运行环境能力：**哪些可选依赖真的在** —— Node（JS 解密）/ lxml（XPath）/ regex（正则超时）。
 
     ⚠️ 为什么值得单独一个接口：Docker 镜像自带 Node（多阶段构建 + `NODE_BIN`），
     但**NAS / 手工部署未必有** —— 而 `NODE_BIN` 默认是 `"node"`。
     如实回一个 `decrypt: false` + 一句「怎么补」，界面就能提前把「这条书源用不了」
     显示出来，而不是等用户抓书失败才对着英文系统错误猜。
+
+    同理：**缺 `regex` 时执行期正则就没有超时保护**（只剩长度兜底），缺 `lxml` 时
+    XPath 取不到值 —— 两者都**如实报**，不因为「有兜底」就冒充安全（第 94 期阶段 4c）。
     """
     st = network_mod.node_state(refresh=bool(refresh))
-    return {"node": st, "decrypt": bool(st.get("available")),
-            "hint": "" if st.get("available") else (st.get("reason") or "需要 Node 才能运行解密脚本")}
+    reg = saferegex.state()
+    lxml_ok = source_rules.lxml_available()
+    hints = {
+        "node": "" if st.get("available") else (st.get("reason") or "需要 Node 才能运行解密脚本"),
+        "regex": reg["reason"],
+        "lxml": "" if lxml_ok else "未安装 lxml ⇒ XPath 规则取不到值（`pip install lxml`）",
+    }
+    return {"node": st, "regex": reg, "lxml": {"available": lxml_ok, "reason": hints["lxml"]},
+            "decrypt": bool(st.get("available")),
+            "hints": hints,
+            # 旧字段保留（既有前端与 `tests/test_js_node.py` 钉着它）
+            "hint": hints["node"]}
 
 
 @app.post("/api/sources/test")

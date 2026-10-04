@@ -68,6 +68,7 @@ from .base import SourceAdapter, DEFAULT_HEADERS
 from . import selspec
 from .. import config
 from ..core.network import clamp_timeout
+from ..core import saferegex
 
 logger = logging.getLogger(__name__)
 
@@ -646,8 +647,13 @@ def _extract_css(html: str, rule: dict):
 
 
 def _extract_regex(html: str, rule: dict):
-    """按 regex 规则抽取：优先取第一个命名/位置捕获组，无组则取整段匹配。"""
-    pat = re.compile(rule.get("pattern", ""), re.S | re.I)
+    """按 regex 规则抽取：优先取第一个命名/位置捕获组，无组则取整段匹配。
+
+    ⚠️ 走 `saferegex`（模式来自**书源规则**，正文长度由站点决定）—— 超时会抛
+    `RegexTimeout` 交给上层，由 `manager._search_one` / `_fetch_toc._one` 落成
+    逐条 error，不会中断整本。
+    """
+    pat = saferegex.compile(rule.get("pattern", ""), re.S | re.I)
     m = pat.search(html)
     if not m:
         return ""
@@ -758,7 +764,7 @@ def _parse_search(html: str, sp: dict, base_url: str = "") -> list[dict]:
     if mode == "xpath":
         return _parse_search_xpath(html, sp, base_url)
     if mode == "regex":
-        pat = re.compile(sp.get("pattern", ""), re.S | re.I)
+        pat = saferegex.compile(sp.get("pattern", ""), re.S | re.I)
         out = []
         for m in pat.finditer(html):
             d = m.groupdict()
@@ -832,7 +838,7 @@ def _extract_links(html: str, toc: dict, base_url: str) -> list[tuple[str, str]]
     if mode == "xpath":
         return _extract_links_xpath(html, toc, base_url)
     if mode == "regex":
-        pat = re.compile(toc.get("pattern", ""), re.S | re.I)
+        pat = saferegex.compile(toc.get("pattern", ""), re.S | re.I)
         out = []
         for m in pat.finditer(html):
             d = m.groupdict()
@@ -900,7 +906,7 @@ def _extract_pages(raw: str, rule: dict, base_url: str) -> list:
                     out.append(u)
         return [urljoin(base_url, u) for u in out]
     if mode == "regex":
-        pat = re.compile(rule.get("pattern") or "", re.S | re.I)
+        pat = saferegex.compile(rule.get("pattern") or "", re.S | re.I)
         out = []
         for m in pat.finditer(raw):
             g = m.groupdict().get("url") or (m.groups()[0] if m.groups() else "")
@@ -1163,11 +1169,16 @@ class RuleBasedSource(SourceAdapter):
 
 
 def _split_regex(text: str, pattern: str) -> list[dict]:
-    """用单个正则把全文切成章节：每个匹配作为新章标题起点，正文至下一匹配。"""
+    """用单个正则把全文切成章节：每个匹配作为新章标题起点，正文至下一匹配。
+
+    ⚠️ 这里是**唯一**会把「整本书」当成一个字符串去匹配的地方（MB 级输入）——
+    走 `saferegex` 超时的意义最大；降级路径下超长输入会被 `RegexInputTooLong` 拒掉，
+    理由如实写在使用说明里（绝不静默卡死）。
+    """
     from ..core.detect import split_by_offsets, regex_bounds
 
     # 复用 detect 的偏移切分：把单条正则包装成多匹配形式
-    pat = re.compile(pattern, re.M)
+    pat = saferegex.compile(pattern, re.M)
     bounds = sorted({(m.start(), m.group(0).strip()) for m in pat.finditer(text)})
     if not bounds:
         return [{"title": "正文", "body": text.strip()}]
@@ -1422,9 +1433,13 @@ def _css_error(sel: str) -> str:
 
 
 def _regex_error(pattern: str) -> str:
-    """正则能编译吗？（`_extract_regex` 在抓取期裸 `re.compile`，编不过 = 整次取书 500）"""
+    """正则能编译吗？（抓取期编不过 = 整次取书 500）
+
+    ⚠️ 编译走的是**执行期同一处** `saferegex.compile`：审计与执行用两条编译路径的话，
+    会出现「审计说能跑、跑起来是另一回事」（`::attr()` / XPath 那两处都踩过同一个坑）。
+    """
     try:
-        re.compile(str(pattern or ""), re.S | re.I)
+        saferegex.compile(str(pattern or ""), re.S | re.I)
     except Exception as e:                                   # noqa: BLE001
         return f"{type(e).__name__}: {e}"
     return ""

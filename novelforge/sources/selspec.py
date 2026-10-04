@@ -81,6 +81,8 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
+from ..core import saferegex
+
 __all__ = ["Plan", "Step", "parse_spec", "select", "one", "value", "render",
            "check_css", "spec_error", "replace_text", "apply_replace", "is_xpath"]
 
@@ -451,7 +453,8 @@ def _replace_of(pieces: list) -> "tuple[tuple, str]":
         if not pat and not repl:
             continue
         try:
-            out.append((re.compile(pat, re.S), _to_pyrepl(repl)))
+            # 模式来自书源的 `##正则##替换` 段 ⇒ 执行期正则走 saferegex（超时保护）
+            out.append((saferegex.compile(pat, re.S), _to_pyrepl(repl)))
         except Exception as e:                     # noqa: BLE001 —— 如实记 note，不抛异常
             note = (f"替换用的正则编译不过（这一段当成没写）：{pat}"
                     f"（{type(e).__name__}: {e}）")
@@ -693,7 +696,7 @@ def replace_text(text: str, pattern: str, repl: str) -> "tuple[str, str]":
     if not pattern:
         return str(text or ""), ""
     try:
-        pat = re.compile(pattern, re.S)
+        pat = saferegex.compile(pattern, re.S)     # 模式来自规则 ⇒ 超时保护（同 `_replace_of`）
     except Exception as e:                         # noqa: BLE001 —— 原文给人看
         return str(text or ""), f"{type(e).__name__}: {e}"
     try:
