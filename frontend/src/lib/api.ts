@@ -5010,12 +5010,21 @@ export const api = {
    * 立即跑一轮追更。
    * ⚠️ 会**出网**且可能跑一阵（单轮 ≤ max_books 本 × 每本节流）——界面要显示进行态；
    * 开关与数值本身走 `saveConfig({auto_update: …})`，**不另开写接口**（同一份配置两种写法必然分叉）。
+   *
+   * `blocked`（第 93 期）：闸门（`download.enabled`）没过时后端带回闸门原文，此时
+   * **一本都没外呼**（`total` 是候选数、`skipped` 等于它、`added` 必为 0）。
+   * 界面对这两种 `added === 0` **必须分开说**：一个是「源上没有新章节」，
+   * 一个是「你关着下载开关，什么都没跑」—— 混成一句就是在骗人。
    */
   autoupdateRun: () =>
-    request<{ total: number; ok: number; skipped: number; errors: number; added: number }>(
-      '/api/autoupdate/run',
-      { method: 'POST' },
-    ),
+    request<{
+      total: number
+      ok: number
+      skipped: number
+      errors: number
+      added: number
+      blocked?: string
+    }>('/api/autoupdate/run', { method: 'POST' }),
 
   // ---------- 刮削出版（第 18 期）----------
   /** 刮削台账：概览计数 + 条目 + worker 运行态（页面轮询此端点）。 */

@@ -80,10 +80,15 @@ async function runAuto(): Promise<void> {
   autoBusy.value = 'run'
   try {
     const r = await api.autoupdateRun()
-    ui.toast(r.total
-      ? `追更完成：检查 ${r.total} 本，新增 ${r.added} 章`
-        + (r.errors ? `，失败 ${r.errors} 本（见活动日志）` : '')
-      : '没有可追更的书（只追有留档的下载书）')
+    // ⚠️ `added === 0` 有**两种**完全不同的原因（第 93 期）：源上没有新章，或者
+    // 闸门没过、一本都没跑。后端把后者放在 `blocked` 里且 `skipped` 等于 `total` ——
+    // 一句「新增 0 章」会把「你关着开关」说成「源站没更新」，那条提示比不提示更坏。
+    ui.toast(r.blocked
+      ? `追更未执行：${r.blocked}`          // 闸门原文来自服务端，界面不另写一句
+      : r.total
+        ? `追更完成：检查 ${r.total} 本，新增 ${r.added} 章`
+          + (r.errors ? `，失败 ${r.errors} 本（见活动日志）` : '')
+        : '没有可追更的书（只追有留档的下载书）')
   } catch (e) {
     ui.toast(msg(e))
   } finally {

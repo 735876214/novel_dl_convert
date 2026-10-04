@@ -12,6 +12,21 @@
    并发外呼会被站点限流甚至封禁 —— 与 `core/watcher.py` 里那条既有注释同口径。
 3. **不重复实现追更**：只调 `sources.manager.update_report` —— 它是**同路径互斥的唯一入口**，
    所以「只追加 / 原子写 / 并发保护 / 既有章 index 不漂移」这些保证仍然只在一处。
+4. **追更也过闸门**（第 93 期补）—— 见下。
+
+## 第 93 期补的两处（都是既有漏子，行为变化）
+
+**① 追更原先完全不过闸门。** `download.enabled` 默认 **False**，而本模块照样逐本外呼抓正文 ——
+正是第 71 / 80 期口径里点名的那种「假开关」：设置页写着「关闭时不搜索不下载」，定时线程照跑。
+现在 `tick()` 在枚举完候选、动手之前先问 ``DownloadManager.gate_reason()``，被拦就**一本都不外呼**，
+把闸门原文放进报告（``rep["blocked"]``）—— 手动按「立即追更」的人必须看到「为什么什么都没做」，
+而不是一句「检查 N 本，新增 0 章」的假汇报（那句会被读成「源上没有新章节」）。
+
+**② `DownloadManager()` 少传了 cfg。** 构造函数签名是 ``__init__(self, cfg: dict)``（**必填**），
+而这里原先是无参调用 ⇒ 每轮都在 ``except`` 里静默退化成「构造下载器失败（本轮跳过）」，
+**定时追更从来没真正跑过一本**。既有用例钉不到它：它们要么 monkeypatch 掉 `tick`，
+要么只测候选枚举。改成与 `server._manager()` 同口径的 ``DownloadManager(config.load_config())``。
+（这也是①的前提：闸门判据本身要从配置里读。）
 
 ⚠️ 线程生命周期交给 `server.py` 的 lifespan（起：刮削之后；停：与 `scrape.stop()` 并列），
 与 updater 同一范式 —— 这类**长期循环**线程不进 `watcher._BG_THREADS`
@@ -75,6 +90,13 @@ def tick(conf: dict = None) -> dict:
 
     返回 ``{"total", "ok", "skipped", "errors", "added"}`` —— 供日志与
     `state()` 用；失败逐本记 `activity_log`，不让一本书拖垮整轮。
+    ``total > 0`` 时可能另带 ``"blocked"``（闸门原文；此时**一本都没外呼**，全部计入
+    ``skipped``）—— 见模块文档第 4 条：报告必须是「干了什么」的实录，
+    「被拦下」与「源上没有新章」是两件事，不能都长成「新增 0 章」。
+
+    ⚠️ ``conf`` 只管**调度**（`max_books` / `request_delay`）；闸门判据**只从配置读**
+    （``DownloadManager.gate_reason()``，唯一一处），不接受参数覆盖 —— 否则调用方
+    能顺手把开关绕过去，那就又变成了假开关。
     """
     conf = dict(conf or _cfg())
     limit = int(conf.get("max_books") or 50)
@@ -90,9 +112,18 @@ def tick(conf: dict = None) -> dict:
     if not files:
         return rep
     try:
-        mgr = mgr_mod.DownloadManager()
+        # ⚠️ cfg **必传**（见模块文档第 4 条②）：少了它构造就抛，整轮静默跳过。
+        mgr = mgr_mod.DownloadManager(config.load_config())
     except Exception as e:                               # noqa: BLE001
         _log.warning("追更：构造下载器失败（本轮跳过）：%s", e)
+        return rep
+    blocked = mgr.gate_reason()
+    if blocked:
+        # 闸门管的是「真的去搜去下」。被拦就与 `/api/search`、`/api/download` 同款处理：
+        # **一次外呼都不发**，并把同一句原文回给调用方（措辞只有一处）。
+        rep["skipped"] = len(files)
+        rep["blocked"] = blocked
+        _log.info("追更：闸门未放行，本轮一本都没跑（%s）", blocked)
         return rep
     for i, sidecar in enumerate(files):
         name = sidecar.name[:-len(".meta.json")]

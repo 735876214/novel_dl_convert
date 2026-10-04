@@ -5707,9 +5707,16 @@ def api_autoupdate_run():
     否则定时与手动必然分叉（`updater._tick` 抽出来就是为了消掉这种分叉）。
     ⚠️ 它会**出网**且可能跑一阵（单轮 ≤ `max_books` 本 × 每本节流），所以只能显式触发；
     「首轮不在启动时跑」那条口径只约束**自动**轮次，不受这里影响。
+    ⚠️ 闸门（`download.enabled`）没过时 `tick` 会带回 ``blocked`` ⇒ **一本都没跑**。
+    这时**不能**记成「成功」：那条账的措辞是「检查 N 本：成功 0、新增 0 章、失败 0」，
+    读起来与「源上真的没有新章」一模一样，而用户按下这个按钮唯一的疑问就是
+    「为什么什么都没发生」。活动日志里如实写闸门原文（唯一一处判定的原文）。
     """
     rep = autoupdate.tick()
-    if rep.get("total"):
+    if rep.get("blocked"):
+        activity_log.log(activity_log.ACTION_UPDATE, "手动追更", activity_log.STATUS_FAIL,
+                         detail=f"未执行：{rep['blocked']}", source="api")
+    elif rep.get("total"):
         activity_log.log(activity_log.ACTION_UPDATE, "手动追更", activity_log.STATUS_OK,
                          detail=f"检查 {rep['total']} 本：成功 {rep['ok']}、"
                                 f"新增 {rep['added']} 章、失败 {rep['errors']}",
