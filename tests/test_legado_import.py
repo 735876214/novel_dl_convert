@@ -18,7 +18,7 @@ import pathlib
 
 import pytest
 
-from novelforge.sources import legado, rules
+from novelforge.sources import legado, rules, selspec
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "legado_sample.json"
 
@@ -79,10 +79,14 @@ def test_HTML源可转_且产物能过校验(samples):
     assert r["search"]["container"] == ".book-item"
     assert r["search"]["fields"]["url"] == "a::attr(href)"
     assert r["search"]["fields"]["title"] == ".title a"
-    # 目录容器要补上链接层，否则一条章节都取不到
-    assert r["book"]["toc"]["container"] == "#chapter-list li a"
-    # Legado 的 @html 要带上，不然正文被压成纯文本
-    assert r["book"]["content"] == {"mode": "css", "container": "#content", "html": True}
+    # 目录容器要补上链接层，否则一条章节都取不到。
+    # ⚠️ 第 94 期阶段 2a 起容器**保留阅读写的索引**（源里是 `id.chapter-list.0@tag.li`）：
+    #    以前这里抹成 `#chapter-list li a`（`.0` 被丢掉，只有恰好是第一个时才等价），
+    #    现在按「匹配列表里的第一个」真跑，写成 `!0`；步与步之间改 `@` 是为了**往返一致**
+    #    （`!0` 后面接空格就再也解析不回来 —— 见 `selspec.Plan.render`）。
+    assert r["book"]["toc"]["container"] == "#chapter-list!0@li@a"
+    # Legado 的 @html 要带上，不然正文被压成纯文本（容器同样保留源里写的索引 `.0` → `!0`）
+    assert r["book"]["content"] == {"mode": "css", "container": "#content!0@html", "html": True}
     # header 是 Python repr 形式的字典（真实文件就这样），要能解析
     assert r["headers"]["User-Agent"].startswith("Mozilla/5.0")
 
@@ -190,10 +194,23 @@ def test_JS可移植性判定():
     assert legado.js_port("")["ok"] is False
 
 
-def test_选择器转换_非零索引如实拒绝():
-    assert legado._sel_to_css("class.book-item")["css"] == ".book-item"
-    assert legado._sel_to_css("id.chapter-list.0@tag.li")["css"] == "#chapter-list li"
-    assert legado._sel_to_css("a[data-bid]")["css"] == "a[data-bid]"
-    bad = legado._sel_to_css("class.item.1@text")
-    assert bad["index_ok"] is False and "非 0 索引" in bad["note"]
-    assert legado._sel_to_css("$.data && $.list")["index_ok"] is False
+def test_选择器转换_交给引擎_且索引往返一致():
+    """第 94 期阶段 2a：本模块**不再**自己解析选择器（`_sel_to_css` / `_field_spec` 已删）。
+
+    索引以前是「非 0 就整条源判死」（`.odd.0` / `tr!0` 在真样本里成片出现，实测 22 条样本里
+    6 条「判可用却一搜就抛异常」），现在由引擎按「匹配列表里的第 n 个」真跑。这里钉两件事：
+    产物带着索引、且 **render → parse 往返一致**（转换器写出去的东西，引擎回来还得认得）。
+    """
+    assert legado._spec_of("class.book-item")[0] == ".book-item"
+    assert legado._spec_of("id.chapter-list.0@tag.li")[0] == "#chapter-list!0@li"
+    assert legado._spec_of("a[data-bid]")[0] == "a[data-bid]"
+    # 字段取值丢**第一个**索引（`value()` 本来就只取第一个匹配），容器的索引必须保留
+    # （容器的默认是「全部匹配」，丢了 `!0` 就从「取第一项」变成「取所有项」）
+    assert legado._spec_of("class.item.1@text", drop_first_index=True)[0] == ".item!1"
+    assert legado._spec_of("class.item.0@tag.a.0@text", drop_first_index=True)[0] == ".item a"
+    for spec in (".item!1", "#chapter-list!0@li", ".item a", "#list dl dd a"):
+        plan = selspec.parse_spec(spec)
+        assert selspec.spec_error(plan) == "" and selspec.render(plan) == spec, spec
+    # 取不出来时给的是**人话**（原因），而且**原文写回**给闸门点名（不是丢掉这一项）
+    spec, why = legado._spec_of("$.data && $.list")
+    assert spec == "$.data && $.list" and "JSON 路径" in why

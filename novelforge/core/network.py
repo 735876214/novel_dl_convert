@@ -109,11 +109,16 @@ class BrowserClient:
                 url = url.replace(old, new)
         return url
 
-    async def get(self, url: str, **kw):
+    async def _request(self, method: str, url: str, **kw):
+        """**唯一**出网口：重试 / 429 退避 / Cookie / host_replace 只在这一处。
+
+        `get` / `get_text` / `get_bytes` 与 POST 全走它 —— 各自复制一份重试逻辑的下场是
+        「某一条路没有退避 / 不认 host_replace」，而现象只是**偶发失败**（最难查的那种）。
+        """
         url = self._fix_url(url)
         for attempt in range(self.max_retries):
             try:
-                resp = await self.client.get(url, **kw)
+                resp = await self.client.request(method, url, **kw)
                 if resp.status_code == 429:
                     await self._backoff(resp, attempt)
                     continue
@@ -124,10 +129,37 @@ class BrowserClient:
                 await asyncio.sleep(2 ** attempt)
         raise RuntimeError("下载重试次数耗尽")
 
-    async def get_text(self, url: str, **kw) -> str:
-        resp = await self.get(url, **kw)
+    async def get(self, url: str, **kw):
+        return await self._request("GET", url, **kw)
+
+    async def get_text(self, url: str, *, method: str = "GET", body=None,
+                       headers: "dict | None" = None, charset: "str | None" = None) -> str:
+        """取文本。**不给选项时与旧行为一字不差**（GET + httpx 自己的解码）。
+
+        第 94 期新增三个**由书源规则显式要求**的选项（阅读的 `,{'method':…}` / `|char=…`）：
+
+        - ``method`` / ``body``：站点只认 POST 的搜索接口（实测 6 条真实源）；
+        - ``headers``：该请求自带的标头（阅读的选项字典里就叫 `headers`）；
+        - ``charset``：站点是 GBK 这类**页面没写编码**的编码时按它解 —— 走
+          :func:`novelforge.core.pipeline.decode_bytes`（与「上传文件」**同一份**判据），
+          不在这里另写一份「先试 gbk 再试 utf-8」。
+
+        ⚠️ 刻意**不改**默认路径：`charset` 没给时仍旧 `resp.text`（httpx 自己按
+        Content-Type / 内容猜）。把默认改成我们的探测器会**静默改变**所有既有书源的抓取
+        结果（方向可能更好，但那是另一件事，得单独测过真网再改）。
+        """
+        opts = {}
+        if headers:
+            opts["headers"] = headers
+        if body is not None:
+            opts["content"] = body
+        resp = await self._request(method, url, **opts)
         resp.raise_for_status()
-        return resp.text
+        if not charset:
+            return resp.text
+        from . import pipeline                         # 编码判据**只有一处**（见 docstring）
+        text, _info = pipeline.decode_bytes(resp.content, encoding=charset)
+        return text
 
     async def get_bytes(self, url: str, **kw) -> bytes:
         """取**字节流**（图片 / 音频这类二进制资源，第 86 期）。

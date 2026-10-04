@@ -336,6 +336,74 @@ def _decode_count(data: bytes, enc: str) -> "tuple[str, int, list[int]]":
     return "".join(out), bad, positions
 
 
+def _sample_of(data: bytes) -> bytes:
+    """**内存字节**的编码判据样本 —— 与 :func:`_sample_bytes` 同口径（只是不用再读盘）。
+
+    开头 256 KB；若它全是 ASCII 再补一段中段；中段也是纯 ASCII 时直接用整段
+    （内存里反正已经拿到了，不必像文件那样省）。
+    """
+    head = data[:_SAMPLE_HEAD]
+    if not head or max(head) >= 0x80 or len(data) <= _SAMPLE_HEAD:
+        return head or data
+    mid = data[len(data) // 2:][:_SAMPLE_MID]
+    if not mid or max(mid) < 0x80:
+        return data
+    return head + mid
+
+
+def decode_bytes(data: bytes, sample: "bytes | None" = None,
+                 encoding: "str | None" = None) -> "tuple[str, dict]":
+    """把一段**内存字节**如实读成字符串 —— 与 :func:`decode_file` **同一份判据**。
+
+    第 94 期新增（书源引擎要用）：规则里的请求选项可以**指定编码**
+    （阅读的 `|char=gbk` / `,{'charset':'gbk'}`），网络层返回的是内存字节，得按它解。
+    在 `core/network.py` 里另写一份「先试 gbk 再试 utf-8」的话，判据就有了两份：
+    同一份 GBK 内容**上传走文件、抓取走内存**会解出两种结果，而两边都不报错。
+
+    - ``sample``：判编码用的样本（文件入口传 :func:`_sample_bytes` 的结果；不传则用
+      :func:`_sample_of`）。**判据输入与解码输入分开**是为了省算力，不是两套判据。
+    - ``encoding``：**写明的编码**（规则里指定的那种）。给了就只按它解 —— 但**不抛异常**：
+      编码名不认（规则里写 `char=escape` 这种）时**落回**自动探测，并在报告里如实说明
+      （抓取路径不因为规则里一个坏编码就整个 500）。
+    """
+    empty = {"encoding": "utf-8", "undecodable": 0, "positions": []}
+    if not data:
+        return "", dict(empty)
+    if encoding:
+        try:
+            codecs.lookup(encoding)
+        except LookupError:
+            text, info = decode_bytes(data, sample)
+            return text, {**info, "encoding": info["encoding"],
+                          "requested": encoding, "fallback": True}
+        text, bad, positions = _decode_count(data, _norm_codec(encoding))
+        return text, {"encoding": encoding, "undecodable": int(bad), "positions": positions}
+    candidates = _choose_encoding(sample if sample else _sample_of(data))
+    for enc in candidates:
+        try:
+            return data.decode(enc), {**empty, "encoding": enc}
+        except UnicodeDecodeError:
+            continue
+    # 一个都不干净：挑坏字节最少的那个，如实呈现 + 计数（不丢字节）。
+    best_enc = candidates[0]
+    best_bad: "int | None" = None
+    best_text, best_pos = "", []
+    for enc in candidates:
+        text, bad, positions = _decode_count(data, enc)
+        if best_bad is None or bad < best_bad:
+            best_enc, best_bad, best_text, best_pos = enc, bad, text, positions
+    return best_text, {"encoding": best_enc, "undecodable": int(best_bad or 0),
+                       "positions": best_pos}
+
+
+def _norm_codec(enc: str) -> str:
+    """规则里写的编码名 → Python 的规范名（`gbk` / `GB2312` / `utf8` 都要认）。"""
+    try:
+        return codecs.lookup(str(enc).strip()).name
+    except LookupError:
+        return str(enc).strip()
+
+
 def decode_file(path: Path) -> "tuple[str, dict]":
     """把文本文件**如实**读成字符串：确定性判据优先，且**绝不静默丢字节**。
 
@@ -355,25 +423,9 @@ def decode_file(path: Path) -> "tuple[str, dict]":
     阅读器提示）。**宁可让读者看到少量「�」，也不要一段悄悄变短、位置漂移的正文。**
     """
     data = path.read_bytes()
-    empty = {"encoding": "utf-8", "undecodable": 0, "positions": []}
-    if not data:
-        return "", dict(empty)
-    candidates = _choose_encoding(_sample_bytes(path) or data)
-    for enc in candidates:
-        try:
-            return data.decode(enc), {**empty, "encoding": enc}
-        except UnicodeDecodeError:
-            continue
-    # 一个都不干净：挑坏字节最少的那个，如实呈现 + 计数（不丢字节）。
-    best_enc = candidates[0]
-    best_bad: "int | None" = None
-    best_text, best_pos = "", []
-    for enc in candidates:
-        text, bad, positions = _decode_count(data, enc)
-        if best_bad is None or bad < best_bad:
-            best_enc, best_bad, best_text, best_pos = enc, bad, text, positions
-    return best_text, {"encoding": best_enc, "undecodable": int(best_bad or 0),
-                       "positions": best_pos}
+    # ⚠️ 判据与解码**都**在 :func:`decode_bytes` 一处实现（本函数只负责「从盘上读」与
+    #    「取一段更省的样本」）—— 两个入口两条判据的下场是同一份 GBK 内容解出两种结果。
+    return decode_bytes(data, _sample_bytes(path) or data)
 
 
 def convert_text(raw: str, out_dir: Path, opts: dict, meta: dict | None = None) -> Path:

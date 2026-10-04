@@ -10,7 +10,7 @@
   "concurrency": 8,                        # 并发抓取章节上限
   "search": {                              # 搜索
     "url": "https://x.com/search?kw={title}",   # {title} 必用；{page} 可选（写了才支持翻页）
-    "mode": "css",                         # css | regex
+    "mode": "css",                         # css | regex | json
     "container": ".item",                  # css: 每条结果容器选择器
     "fields": {                            # 从容器内提取；值可写 "选择器" 或 "选择器::attr(href)"
       "title": ".name", "author": ".author",
@@ -44,16 +44,23 @@
   （章节目录一直是这个口径）。补全只对相对地址生效，绝对地址原样保留。
 - 书页 book.mode=toc 时，chapter 自动走「toc 结构化分章」（最干净）。
 - book.mode=single 时，chapter.mode=regex 用该书源正则切全文；=auto 用全局检测。
-- 所有解析支持 css / regex 双通道，离线可用（正则），也可写 CSS 选择器（需 beautifulsoup4）。
+- 所有解析支持 css / regex / json 三通道，离线可用（正则），也可写 CSS 选择器（需 beautifulsoup4）。
+- **选择器写法**（第 94 期起）除标准 CSS 外还认「阅读」的写法（`class.xx` / `@text` /
+  `tag.a.0@href` / `tr!0` / `选择器##正则##替换` / `A||B` 候选）—— **唯一**的解析与执行在
+  `sources/selspec.py`，这里只调用它。**取值写法的语法表与实测出处见该模块的文档**。
 """
+import ast
 import asyncio
+import codecs
 import json
 import logging
 import pathlib
 import re
+from typing import NamedTuple
 from urllib.parse import quote, urljoin
 
 from .base import SourceAdapter, DEFAULT_HEADERS
+from . import selspec
 from .. import config
 
 logger = logging.getLogger(__name__)
@@ -257,6 +264,185 @@ def _json_body(raw: str):
         return None
 
 
+# ---------------- 请求地址与选项（第 94 期阶段 2b）----------------
+# 阅读把**请求选项**直接写在 URL 值后面，两代写法：
+#   3.x / 现代：`/search.php,{'method':'post','body':'key={title}','charset':'gbk'}`（实测 6 条）
+#   2.x / 竖线：`/search.php?q={title}|char=gbk`                                             （实测 775 条）
+# 选项字典的引号两种都有（`'` Python repr 与 `"` JSON），键名大小写也不固定。
+#
+# ⚠️ **唯一**的解析处：**执行**（`RuleBasedServer.search_page` 发请求）与**审计**
+#    （`_audit_url`）读的是同一份结论 —— 分成两处会出现最坏的一种组合：
+#    「审计说这条源能跑，跑起来却把整段 `,{'method':...}` 当地址发出去」。
+
+#: 选项字典里本项目**真的会照做**的键。**证据**：22 条现代样本里实测出现 `method` / `body` /
+#: `charset`（`headers` 只出现在 JS 型的 URL 里，但它是同一个语义、同一段代码，一并认）。
+_URL_OPT_KEYS = ("method", "body", "charset", "headers")
+
+#: 2.x 竖线写法里认的键。实测 775 条**只有** `char`（个位数是 `utf-8` / `gb2312`）。
+#: 刻意**不**认 `|method=` / `|body=`：竖线选项的值只能到下一个 `|` / `&` 为止（实测
+#: `…searchkey=searchKey|char=gbk&searchtype=articlename` 就是这样），凡是值里带 `&` 的
+#: 选项在竖线写法里**本身就写不出来** —— 与其猜它到哪儿结束，不如让作者改用 `,{…}` 写法。
+_URL_PIPE_KEYS = {"char": "charset", "charset": "charset"}
+
+#: 认的请求方法。别的（`PUT` / `webView` 之类）如实报「不认」，不静默当 GET。
+_URL_METHODS = ("get", "post")
+
+#: :func:`parse_url_spec` 在「末尾那段确实像选项字典、可是读不出来」时放进 ``unknown`` 的哨兵。
+#: 单列一条是因为它的说法与「不认识的键」完全不同（这个是**写坏了**，不是**我们不支持**）。
+_OPTS_UNPARSED = "(选项字典读不出来)"
+
+
+class UrlSpec(NamedTuple):
+    """一个 URL 值的解析结果（:func:`parse_url_spec` 的返回值）。
+
+    - ``url``：地址（选项已摘掉）——**发请求就用它**；
+    - ``opts``：本项目会照做的选项（`method` / `body` / `charset` / `headers`）；
+    - ``unknown``：**不认识 / 读不出**的选项（引擎不会照它做 ⇒ 必须如实报，见 :func:`_audit_url`）。
+    """
+    url: str
+    opts: dict
+    unknown: list
+
+
+def parse_dict_literal(text) -> "dict | None":
+    """把 ``"{'a': 1}"`` / ``'{"a": 1}'`` 这类**字面量字典**解析成 dict，不像就返回 None。
+
+    ⚠️ **唯一**的「字面量字典」解析处：书源的 ``header`` 字段（Python repr 形式，真实文件
+    里就是）与 URL 选项字典都是它。两处各写一遍 ``ast.literal_eval`` 的下场是其中一处
+    只认单引号、另一处只认双引号，而**两边都不报错**（只是字段静默为空）。
+    """
+    s = str(text or "").strip()
+    if not s:
+        return None
+    for parse in (ast.literal_eval, json.loads):
+        try:
+            obj = parse(s)
+        except Exception:                                    # noqa: BLE001 —— 不像就不像
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def _balanced_tail(s: str) -> int:
+    """``s`` 末尾若是**平衡的** ``{…}``，返回它的起点下标；否则 ``-1``。
+
+    引号感知：``{'body':"a}b"}` 里的 ``}`` 不算数（否则会在 body 里一个 ``}`` 上提前收尾，
+    而表现出来的只是「选项解析失败 ⇒ 这条源被判死」——很难反推到「引号没处理」）。
+    """
+    if not s.endswith("}"):
+        return -1
+    depth = 0
+    quote = ""
+    esc = False
+    start = -1
+    for i, c in enumerate(s):
+        if quote:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == quote:
+                quote = ""
+            continue
+        if c in "\"'":
+            quote = c
+        elif c == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0 and i == len(s) - 1:
+                return start
+    return -1
+
+
+def parse_url_spec(raw) -> UrlSpec:
+    """URL 值 → :class:`UrlSpec`。**纯函数、不抛异常、不联网**。
+
+    两种写法（实测出处见本节顶部的说明）：``,{…}`` 选项字典与 ``|key=value`` 竖线选项。
+    两者可以同时出现（真源里有），所以先摘竖线再摘字典。
+    """
+    s = str(raw or "")
+    unknown: "list[str]" = []
+    opts: dict = {}
+
+    # ① `,{…}` 选项字典（必须**在末尾**、且前面紧跟逗号，才是选项 ——
+    #    地址的查询串里也可能出现大括号，按「末尾平衡对象」判才不会误摘）
+    start = _balanced_tail(s)
+    if start > 0 and s[:start].rstrip().endswith(","):
+        obj = parse_dict_literal(s[start:])
+        if obj is None:
+            return UrlSpec(url=s, opts={}, unknown=[_OPTS_UNPARSED])
+        s = s[:start].rstrip().rstrip(",").rstrip()
+        for k, v in obj.items():
+            key = str(k).strip().lower()
+            if key not in _URL_OPT_KEYS:
+                unknown.append(str(k))
+                continue
+            opts[key] = v
+
+    # ② 2.x 的竖线选项：`|key=value`，值到下一个 `|` / `&` / 结尾为止（实测就是这种形状）。
+    #    只认带 `=` 的，免得把地址里一个光秃秃的 `|` 也当成选项。
+    if re.search(r"\|[A-Za-z_][A-Za-z0-9_-]*\s*=", s):
+        parts, pos = [], 0
+        for m in re.finditer(r"\|([A-Za-z_][A-Za-z0-9_-]*)\s*=\s*([^|&]*)", s):
+            parts.append(s[pos:m.start()])
+            key = m.group(1).strip().lower()
+            val = m.group(2).strip()
+            if key in _URL_PIPE_KEYS:
+                opts[_URL_PIPE_KEYS[key]] = val
+            else:
+                unknown.append(m.group(1))
+            pos = m.end()
+        parts.append(s[pos:])
+        s = "".join(parts)
+
+    # ③ 选项归一：方法大小写随意（实测 `POST` / `post` 都有），其余统一成字符串
+    if "method" in opts:
+        m = str(opts["method"] or "").strip().lower()
+        if m in _URL_METHODS:
+            opts["method"] = m
+        else:
+            unknown.append(f"method={opts['method']}")
+            opts.pop("method")
+    for key in ("body", "charset"):
+        if key in opts:
+            opts[key] = str(opts[key])
+    if "headers" in opts and not isinstance(opts["headers"], dict):
+        unknown.append("headers")
+        opts.pop("headers")
+    return UrlSpec(url=s.strip(), opts=opts, unknown=[u for u in unknown if u])
+
+
+def url_kwargs(spec: UrlSpec) -> dict:
+    """选项 → ``client.get_text`` 的关键字参数。**没有选项时返回空 dict**。
+
+    ⚠️ 空 dict 不是装饰：不带选项的规则走的是 ``get_text(url)``（与旧行为逐字一致的
+    那条路），参数一个都不能多传 —— 测试与真机上都有只实现 ``get_text(url)`` 的桩客户端。
+    """
+    kw: dict = {}
+    if spec.opts.get("method"):
+        kw["method"] = spec.opts["method"].upper()
+    if spec.opts.get("body") is not None:
+        kw["body"] = spec.opts["body"]
+    if spec.opts.get("charset"):
+        kw["charset"] = spec.opts["charset"]
+    if spec.opts.get("headers"):
+        kw["headers"] = spec.opts["headers"]
+    return kw
+
+
+def _codec_ok(name) -> bool:
+    """编码名是不是真的能解（判据用 `codecs.lookup`，与 `pipeline.decode_bytes` 同一口径）。"""
+    try:
+        codecs.lookup(str(name).strip())
+        return True
+    except (LookupError, ValueError):
+        return False
+
+
 
 # ---------------- 解析工具（bs4 延迟导入，未装也不影响模块导入）----------------
 
@@ -316,27 +502,36 @@ def html_to_text(raw: str) -> str:
 
 
 def _field_value(container, spec: str) -> str:
-    """从容器内按 spec 取值：''/'./' 取自身文本，'选择器' 取文本，'选择器::attr(name)' 取属性。"""
-    spec = spec or ""
-    if "::attr(" in spec:
-        sel, attr = spec.split("::attr(", 1)
-        attr = attr.rstrip(")")
-        node = container.select_one(sel) if sel.strip() else container
-        return node.get(attr, "") if node else ""
-    if spec.strip() in ("", "."):
-        return container.get_text(" ", strip=True)
-    node = container.select_one(spec)
-    return node.get_text(" ", strip=True) if node else ""
+    """从容器内按 spec 取值：''/'./' 取自身文本，'选择器' 取文本，'选择器::attr(name)' 取属性。
+
+    ⚠️ 选择器的**解析与执行只有一处**（`sources/selspec.py`）—— 阅读的写法
+    （`tag.a.0@href` / `class.xx` / `##正则##替换` / `A||B`）与标准 CSS 走同一个函数，
+    而且**永不抛异常**（语法错 ⇒ 空值 + `plan.error` 里一句人话）。
+    """
+    return selspec.value(container, selspec.parse_spec(spec))
 
 
 def _extract_css(html: str, rule: dict):
-    """按 css 规则从 html 抽取文本（默认）或保留标签的 HTML（``html: true``）。"""
-    node = _soup(html).select_one(rule.get("container", ""))
-    if not node:
+    """按 css 规则从 html 抽取正文（默认纯文本；``html: true`` / 容器写 `@html` 时保留标签）。
+
+    ⚠️ 正文的文本化**必须**走 :func:`html_to_text`（按块级标签分段），不能改用
+    `selspec.value`（字段取值那套是按 `get_text(" ")` 拼一行）—— 章节正文与字段是两种东西。
+    """
+    plan = selspec.parse_spec(rule.get("container"))
+    if plan.is_self and not str(rule.get("container") or "").strip():
+        return ""                          # 没写容器 ⇒ 没有正文（与历史行为一字不差）
+    nodes = selspec.select(_soup(html), plan)
+    if not nodes:
         return ""
-    if rule.get("html"):
-        return str(node)
-    return html_to_text(str(node))
+    if plan.mode == "all":
+        # 阅读的 `@all`：取**全部**匹配并逐段拼接（正文里成片出现，只取第一个会少一大半）
+        text = "\n".join(html_to_text(str(n)) for n in nodes)
+    elif rule.get("html") or plan.mode == "html":
+        text = str(nodes[0])
+    else:
+        text = html_to_text(str(nodes[0]))
+    # `##正则##替换` 作用在**取到的结果**上（阅读就是这个口径：先取值、再替换）
+    return selspec.apply_replace(text, plan)
 
 
 def _extract_regex(html: str, rule: dict):
@@ -368,11 +563,25 @@ def _extract_json(raw: str, rule: dict) -> str:
     return _json_scalar(json_path(_json_body(raw), rule.get("path")))
 
 
+def _mode_of(spec, allowed: tuple, where: str) -> str:
+    """取值通道：**未知 mode 绝不静默当 css**（第 94 期口径变化，见 CHANGELOG）。
+
+    以前 `_extract` 的最后一行是 `return _extract_css(...)` —— 任何不认识的 mode 都会
+    当 css 跑一遍：容器是空的 ⇒ 静默取到空值，用户看到的是「下载成功但一个字都没有」。
+    现在如实报错。调用点：正文/搜索/目录/资源清单四处（**只有这一处判据**）。
+    """
+    mode = str((spec or {}).get("mode") or "css").strip().lower() if isinstance(spec, dict) else "css"
+    if mode not in allowed:
+        raise ValueError(f"{where}的 mode「{mode}」引擎不认（只认 {' / '.join(allowed)}）")
+    return mode
+
+
 def _extract(html: str, rule: dict) -> str:
-    rule = rule or {}
-    if rule.get("mode") == "regex":
+    rule = rule if isinstance(rule, dict) else {}
+    mode = _mode_of(rule, MODES, "正文规则")
+    if mode == "regex":
         return _extract_regex(html, rule)
-    if rule.get("mode") == "json":
+    if mode == "json":
         return _extract_json(html, rule)
     return _extract_css(html, rule)
 
@@ -412,10 +621,12 @@ def _parse_search_json(raw: str, sp: dict, base_url: str = "") -> list:
 
 
 def _parse_search(html: str, sp: dict, base_url: str = "") -> list[dict]:
+    sp = sp if isinstance(sp, dict) else {}
+    mode = _mode_of(sp, MODES, "搜索规则")
     # 第三通道（第 86 期）：站点给的是 JSON（酷我是 `$.data.list` 这种）
-    if sp.get("mode") == "json":
+    if mode == "json":
         return _parse_search_json(html, sp, base_url)
-    if sp.get("mode") == "regex":
+    if mode == "regex":
         pat = re.compile(sp.get("pattern", ""), re.S | re.I)
         out = []
         for m in pat.finditer(html):
@@ -429,11 +640,11 @@ def _parse_search(html: str, sp: dict, base_url: str = "") -> list[dict]:
                 out.append(_absolutize(item, base_url))
         return out
     # css
-    soup = _soup(html)
-    nodes = soup.select(sp.get("container", ""))
-    fields = sp.get("fields", {})
+    fields = sp.get("fields") if isinstance(sp.get("fields"), dict) else {}
     out = []
-    for n in nodes:
+    # ⚠️ `selspec.select` **永不抛异常**：`class.book` / `tr!0` 这类阅读写法照收，
+    #    真写错的（`children[0] a`）落成空列表而不是 SelectorSyntaxError（一搜就 500）。
+    for n in selspec.select(_soup(html), selspec.parse_spec(sp.get("container"))):
         item = {k: _field_value(n, spec) for k, spec in fields.items()}
         if item.get("url"):
             out.append(_absolutize(item, base_url))
@@ -461,9 +672,11 @@ def _extract_links_json(raw: str, toc: dict, base_url: str) -> list:
 
 def _extract_links(html: str, toc: dict, base_url: str) -> list[tuple[str, str]]:
     """返回 [(标题, 绝对URL)] 章节链接列表。"""
-    if toc.get("mode") == "json":
+    toc = toc if isinstance(toc, dict) else {}
+    mode = _mode_of(toc, MODES, "目录规则")
+    if mode == "json":
         return _extract_links_json(html, toc, base_url)
-    if toc.get("mode") == "regex":
+    if mode == "regex":
         pat = re.compile(toc.get("pattern", ""), re.S | re.I)
         out = []
         for m in pat.finditer(html):
@@ -473,14 +686,20 @@ def _extract_links(html: str, toc: dict, base_url: str) -> list[tuple[str, str]]
             if href:
                 out.append((title or href, urljoin(base_url, href)))
         return out
-    soup = _soup(html)
-    nodes = soup.select(toc.get("container", ""))
-    attr = toc.get("url_attr", "href")
+    plan = selspec.parse_spec(toc.get("container"))
+    # 容器自己写了取值方式（`class.list@a@href`）就以它为准，其次才是规则的 `url_attr`
+    attr = plan.attr or toc.get("url_attr") or "href"
     out = []
-    for n in nodes:
-        href = n.get(attr, "")
+    for n in selspec.select(_soup(html), plan):
+        try:
+            href = n.get(attr, "")
+        except Exception:                    # noqa: BLE001 —— 坏节点当没有
+            href = ""
         if href:
-            out.append((n.get_text(" ", strip=True) or href, urljoin(base_url, href)))
+            # 目录容器也能带 `##正则##替换`（阅读里常见：`a@text##第(.*)章##$1`）——
+            # 替换后标题可能变空，那就退回地址当标题（宁可标题丑，也不能一条章节变成空白）。
+            title = selspec.apply_replace(n.get_text(" ", strip=True), plan)
+            out.append((title or href, urljoin(base_url, str(href))))
     return out
 
 
@@ -490,8 +709,8 @@ def _extract_pages(raw: str, rule: dict, base_url: str) -> list:
     与 `_extract_links` 的差别：这里只要地址（图和音没有标题），且**保留站点给的顺序** ——
     页序就是阅读顺序，不许重排、不许去重（真有重复页也是站点的事实）。
     """
-    rule = rule or {}
-    mode = rule.get("mode") or "css"
+    rule = rule if isinstance(rule, dict) else {}
+    mode = _mode_of(rule, MODES, "资源清单规则")
     if mode == "json":
         arr = json_path(_json_body(raw), rule.get("path") or "$")
         if isinstance(arr, dict):
@@ -513,14 +732,17 @@ def _extract_pages(raw: str, rule: dict, base_url: str) -> list:
             if g:
                 out.append(urljoin(base_url, g))
         return out
-    soup = _soup(raw)
-    attr = rule.get("url_attr") or "src"
+    plan = selspec.parse_spec(rule.get("container"))
+    attr = rule.get("url_attr") or plan.attr or "src"
     out = []
-    for n in soup.select(rule.get("container") or ""):
+    for n in selspec.select(_soup(raw), plan):
         # ⚠️ 三个兜底都不是可选的：
         #   · 漫画站普遍**懒加载** —— `src` 是占位图，真地址在 `data-src` / `data-original`；
         #   · 音频 / 漫画规则常把 container 指到 `<a>` 上 —— 地址在 `href` 而不是 `src`。
-        v = (n.get(attr) or n.get("data-src") or n.get("data-original") or n.get("href") or "")
+        try:
+            v = (n.get(attr) or n.get("data-src") or n.get("data-original") or n.get("href") or "")
+        except Exception:                    # noqa: BLE001 —— 坏节点当没有
+            v = ""
         if v:
             out.append(urljoin(base_url, str(v)))
     return out
@@ -613,9 +835,14 @@ class RuleBasedSource(SourceAdapter):
         url = tpl.replace("{title}", quote(title))
         if paged:
             url = url.replace("{page}", str(page))
-        html = await client.get_text(url)
+        # 请求选项（`,{'method':'post',…}` / `|char=gbk`）在**模板渲染之后**摘：
+        # body 里的 `{title}` 也要跟着替换（实测 `'body':'searchkey={title}'`）。
+        spec = parse_url_spec(url)
+        url = spec.url
         # 把**请求用的** url 作为基准传给解析：命中里的相对链接要按它补全（见 `_absolutize`）
-        items = _parse_search(html, sp, url)
+        # ⚠️ 基准用**摘掉选项**之后的地址：选项串（`,{'method':…}`）跟在后面时 urljoin
+        #    会把它当成地址的一部分，补出来的链接带着一段废串。
+        items = _parse_search(await client.get_text(url, **url_kwargs(spec)), sp, url)
         return {"items": items, "has_more": bool(paged and items)}
 
     # ---- 取书：整页全文 ----
@@ -819,6 +1046,10 @@ def validate_rule(rule: dict) -> list[str]:
     ch = rule.get("chapter") or {}
     if ch.get("mode") == "regex" and not ch.get("regex"):
         errs.append("chapter 为 regex 模式时 regex 必填")
+    # **mode 值域**：判据与诚实闸**同一份**（`_audit_modes`）—— 未知 mode 的下场曾经是
+    # 「静默当 css 跑」（取到空值，界面只显示「没找到」）。第 94 期口径变化：写不进去。
+    errs += [f"{bad['field']}：{bad['why']}"
+             for bad in _audit_modes(rule) if bad["construct"] == "unknown_mode"]
     return errs
 
 
@@ -830,6 +1061,9 @@ def validate_rule(rule: dict) -> list[str]:
 # `#author tbody tr!0` / `.odd.0` 会让 `soup.select_one` **抛 SelectorSyntaxError**
 # （搜索与目录的调用点没有 try 保护）、`.author text##作者：` 的替换段原样进正文、
 # `class.section-list.-1@tag.a` 当 CSS 用。这不是「结果不准」，是「一搜就炸」。
+#
+# 阶段 2a 已把后三类**补进引擎**（唯一实现 `sources/selspec.py`）：索引、阅读选择器语法、
+# 候选/拼接、`##` 替换现在真的会跑 ⇒ 对应的四条构造从下表摘掉。剩下的仍如实拦着。
 
 #: 引擎**真实**支持的解析通道（= `_extract` / `_parse_search` / `_extract_links` /
 #: `_extract_pages` 认的 `mode` 值域）。**唯一**声明处：审计从它读，别人不许再记一份。
@@ -838,20 +1072,23 @@ MODES = ("css", "regex", "json")
 #: 各通道字段允许的 mode —— 正文多一条 `js`（走 `RuleBasedSource._content`）。
 _MODE_SLOTS = {"search": MODES, "book.toc": MODES, "book.content": MODES + ("js",),
                "book.comic": MODES, "book.audio": MODES}
-#: `book.mode` / `chapter.mode` 的值域（**未知值的下场是静默降级**，所以也要审）
-_BOOK_MODES = ("toc", "single")
+#: `book.mode` / `chapter.mode` 的值域（**未知值的下场是静默降级**，所以也要审）。
+#: ⚠️ `comic` / `audio` 是**资源清单**型（`book.comic` / `book.audio` 只列地址、不取正文），
+#: 与 `toc` / `single` 并列 —— `rules.product_kind` 就是按这两个值判产物类型的，
+#: 漏了它们会把**能跑**的漫画 / 有声源误判成未知 mode（假警报比漏报更伤信任）。
+_BOOK_MODES = ("toc", "single", "comic", "audio")
 _CHAPTER_MODES = ("toc", "regex", "auto")
 
 #: 引擎**今天跑不了**的构造。每条：``{id, kinds, re, what, why, instead}``。
 #: ⚠️ **阶段 2 每补一项能力就摘掉一条并补一个用例** ⇒ 这张表单调变短，不会先松后紧。
+#: 第 94 期阶段 2a 摘掉了四条 —— 阅读索引（`tr!0` / `.odd.0`）、阅读选择器语法
+#: （`class.` / `@text` / `@css:`）、候选与拼接（`|` / `||` / `&&`）、`##regex##replace`
+#: —— 引擎现在真的会跑它们（唯一实现在 `sources/selspec.py`），继续拦着就是**误杀**。
+#: 阶段 2b 又摘掉两条 —— URL 选项字典（`,{'method':'post',…}`）与 2.x 竖线选项
+#: （`|char=gbk`）：引擎现在真的按它发请求（唯一实现在 `parse_url_spec` + `url_kwargs`，
+#: `BrowserClient.get_text` 真的支持 POST / 自定义头 / 指定编码）。**认不出的选项键
+#: 仍然拦**，但改由 :func:`_audit_url` 逐键报（表里的正则判不了「哪个键」）。
 _UNSUPPORTED_CONSTRUCTS = (
-    {
-        "id": "url_option_dict", "kinds": ("url",),
-        "re": re.compile(r",\s*\{"),
-        "what": "URL 选项字典（`<地址>,{'method':'post','body':…}`）",
-        "why": "本项目按 GET 取该地址，整段字典会当成地址的一部分发出去",
-        "instead": "改用 GET 型书源，或到「书源管理」手写搜索地址与请求方式",
-    },
     {
         "id": "legacy_placeholder", "kinds": ("url",),
         # 阅读 2.x 的搜索占位符是裸词（实测 `?keyword=searchKey&page=searchPage`）。
@@ -864,41 +1101,6 @@ _UNSUPPORTED_CONSTRUCTS = (
         "instead": "把 `searchKey` 改成 `{title}`、`searchPage` 改成 `{page}`",
     },
     {
-        "id": "url_option_pipe", "kinds": ("url",),
-        # 2.x 的**竖线选项**（实测 775 条：`…&q=searchKey|char=gbk`）。与 `,{...}` 是同一类
-        # 东西（请求选项），但要说的话不同：这个错在**编码**，不是说错了请求方式。
-        "re": re.compile(r"\|[a-zA-Z_-]+\s*="),
-        "what": "URL 的竖线选项（`<地址>|char=gbk` / `|method=post`）",
-        "why": "本项目会把整段选项当成地址的一部分发出去（多出一个 `|char=gbk` 的查询参数），"
-               "而且不会按它指定的编码解码",
-        "instead": "去掉 `|…` 那一段；若站点是 GBK，请在「书源管理」里把编码设成对应值",
-    },
-    {
-        "id": "legado_index", "kinds": ("selector",),
-        # ⚠️ 索引可以是负数、也可以写成区间（实测 `ul!0:1:-1:-2:-3 li!-3 a`、`.mySearch ul!-1`），
-        #    只认 `!\d+` 会让这些条目掉到下一条「选择器不是合法 CSS」去 —— 结论一样（判 no），
-        #    但给出的建议从「改写成 :nth-of-type(n+1)」退化成「这不是合法 CSS」，用户没法照做。
-        "re": re.compile(r"!-?\d+(?::[-?\d]*)?|[\w\)\]]\.-?\d+(?=\s*$|[\s>,.\[:])"),
-        "what": "「阅读」的索引语法（`tr!0` / `.odd.0` / `a.0` / `ul!-1` / `ul!0:1:-1`）",
-        "why": "本项目只取第一个匹配，索引段会被原样丢给 CSS 解析器并直接报语法错",
-        "instead": "改写成 CSS 的 `:nth-of-type(n+1)`",
-    },
-    {
-        "id": "hash_hash_replace", "kinds": ("selector", "regex", "jsonpath"),
-        "re": re.compile(r"##"),
-        "what": "「阅读」的替换语法（`选择器##正则##替换`）",
-        "why": "本项目取到的是原文，`##` 那一段会原样进结果",
-        "instead": "把 `##正则##替换` 去掉，或改成不含替换的选择器",
-    },
-    {
-        "id": "legado_sel_syntax", "kinds": ("selector",),
-        "re": re.compile(r"@\s*(?:css|tag|text|textNodes|html|all|href|src|data-|js|attr)"
-                         r"|(?:^|[\s>~,])(?:class|id|tag)\.", re.I),
-        "what": "「阅读」的选择器语法（`class.` / `id.` / `tag.` / `@text` / `@css:` / `@attr(href)`）",
-        "why": "本项目的选择器是标准 CSS（取值写 `::attr(href)`），这套前缀会被当成标签名 / 类名",
-        "instead": "到「书源管理」改写成标准 CSS（如 `.foo > a::attr(href)`）",
-    },
-    {
         "id": "jsonpath_in_css", "kinds": ("selector",),
         # 取值项写成了 JSON 路径（`JSon:$.title` / `$.title`），而这条搜索通道是 **CSS**。
         # 实测 2.x 里成片出现：转换器按 `ruleSearchList` 定通道，字段却是 JSON 路径 ⇒
@@ -909,16 +1111,6 @@ _UNSUPPORTED_CONSTRUCTS = (
         "why": "这条搜索通道是按 CSS 选择器跑的，JSON 路径会被当成选择器解析（永远取不到值）",
         "instead": "把这一项改写成 CSS 选择器；若整份搜索本来就是 JSON 接口，"
                    "到「书源管理」把「搜索通道」改成 json",
-    },
-    {
-        "id": "and_or", "kinds": ("selector",),
-        # ⚠️ 单竖线也要认：阅读 2.x 的候选分隔符是**一个** `|`（实测
-        #    `#result-list tag.li|class.rank-view-list tag.li|class.all-bo`），3.x 才用 `||`。
-        #    只认 `||` 时这些条目会掉到「选择器不是合法 CSS」，等于没告诉用户该怎么改。
-        "re": re.compile(r"\|\|?|&&"),
-        "what": "多路候选（`|` / `||` 取首个非空 / `&&` 拼接）",
-        "why": "本项目只有一条取值路，候选语法会被当成 CSS 解析错误",
-        "instead": "在「书源管理」里选定其中一条",
     },
     {
         "id": "xpath", "kinds": ("selector",),
@@ -1015,23 +1207,15 @@ def _exec_fields(rule: dict) -> list:
 def _css_error(sel: str) -> str:
     """这个选择器能被 CSS 引擎编译吗？返回错误原文（空串 = 没问题 / 查不了）。
 
-    ⚠️ 用 `soupsieve`（bs4 的依赖，`requirements.txt` 已声明）**真的编译一次** ——
-    「这条选择器到底能不能跑」只有编译器说了算，正则猜不出来。
-    ``::attr(x)`` 是本项目自己的取值后缀（不是 CSS），编译前先摘掉。
-    装不上 soupsieve 就**如实不查**（返回空串），不假装查过。
+    ⚠️ 编译判据**只有一处**（`selspec.check_css`，用 soupsieve 真的编译一次）；
+    ``::attr(x)`` 是本项目自己的取值后缀（不是 CSS），编译前先摘掉 ——
+    其余写法（`class.` / `tr!0` / `##替换`）交给 `selspec.parse_spec` 之后**再**编译
+    （见 `_audit_value`），这里保持「传进来什么 CSS 就编译什么」的老口径（测试钉着它）。
     """
     core = str(sel or "").split("::attr(", 1)[0].strip()
     if core in ("", ".", "./"):
         return ""
-    try:
-        import soupsieve
-    except Exception:                                        # noqa: BLE001 —— 装不上就不查
-        return ""
-    try:
-        soupsieve.compile(core)
-    except Exception as e:                                   # noqa: BLE001 —— 原文要给人看
-        return f"{type(e).__name__}: {e}"
-    return ""
+    return selspec.check_css(core)
 
 
 def _regex_error(pattern: str) -> str:
@@ -1055,6 +1239,47 @@ def _audit_js(field: str, script: str) -> list:
                         "手写等价规则（CSS / 正则 / JSON 路径）"}]
 
 
+def _audit_url(field: str, s: str) -> list:
+    """URL 值 → 理由。**判据就是引擎自己那份**（:func:`parse_url_spec`）。
+
+    ⚠️ 这里**不再**用正则去猜「这段是不是选项字典」（阶段 2b 之前是那样：
+    `,{'method':…}` 整段报「会当成地址发出去」）。现在引擎真的会发 POST、真的会按
+    `charset` 解码 ⇒ 那两条**误杀**必须撤；但**认不出的选项键仍要拦** —— 引擎不会照它做，
+    放过去就是「导入成功、搜出来的东西不对」。判据只有 :func:`parse_url_spec` 一处。
+    """
+    spec = parse_url_spec(s)
+    out = []
+    if _OPTS_UNPARSED in spec.unknown:
+        out.append({"field": field, "construct": "url_option_broken",
+                    "why": f"地址后面那段请求选项读不出来（原文：{_snippet(s)}）—— "
+                           "引擎不知道该按什么请求方式发，只能把整段当地址，站点不会认",
+                    "instead": "选项要写成字面量字典（`{'method':'post','body':'…'}`，"
+                               "键值用单引号或双引号都认）；确不定怎么改就先删掉那一段再导入"})
+    for key in spec.unknown:
+        if key == _OPTS_UNPARSED:              # 上面已单独说过（说法完全不同）
+            continue
+        out.append({"field": field, "construct": "url_option_unknown",
+                    "why": f"请求选项 `{key}` 本项目不认（原文：{_snippet(s)}）—— "
+                           "引擎不会照它做，放过去只会搜出不对的结果",
+                    "instead": "本项目认的选项：`method`(get/post) · `body` · `charset` · "
+                               "`headers`（2.x 的竖线写法只认 `char`/`charset`）；"
+                               "其余请在「书源管理」里改成等价写法"})
+    charset = spec.opts.get("charset", "")
+    if "charset" in spec.opts and not _codec_ok(charset):
+        out.append({"field": field, "construct": "url_option_charset",
+                    "why": f"选项里的编码 `{charset}` 本项目解不了（原文：{_snippet(s)}）",
+                    "instead": "改成真实编码名（`gbk` / `gb2312` / `utf-8` / `big5`…）；"
+                               "阅读的 `char=escape` 那种「转义模式」本项目没有对应实现"})
+    if out:
+        return out
+    if not re.match(r"^https?://", spec.url, re.I):
+        return [{"field": field, "construct": "url_not_http",
+                 "why": f"引擎按 GET/POST 请求这个地址，而它不是 http(s) 网址："
+                        f"{_snippet(spec.url)}",
+                 "instead": "在「书源管理」里把地址改成完整网址（含 `http://` 或 `https://`）"}]
+    return []
+
+
 def _audit_value(field: str, kind: str, value) -> list:
     """一个值 → 它跑不动的理由（空列表 = 这一项引擎跑得动）。"""
     s = str(value)
@@ -1063,17 +1288,35 @@ def _audit_value(field: str, kind: str, value) -> list:
     hits = [c for c in _UNSUPPORTED_CONSTRUCTS if kind in c["kinds"] and c["re"].search(s)]
     if hits:
         # ⚠️ 命中具体构造就**不再**报「语法错误」：编译器只会说「这个选择器不合法」，
-        #    而上面那条会告诉他「`!0` 是阅读的索引语法、该改成什么」——后者才可照做。
+        #    而上面那条会告诉他「这一项跟通道对不上、该改成什么」—— 后者才可照做。
         return [{"field": field, "construct": c["id"],
                  "why": f"{c['what']} —— {c['why']}（原文：{_snippet(s)}）",
                  "instead": c["instead"]} for c in hits]
-    err = _css_error(s) if kind == "selector" else (_regex_error(s) if kind == "regex" else "")
+    if kind == "url":
+        # 请求地址：能不能发出去由 `parse_url_spec`（发请求时用的**同一份**判据）说了算
+        return _audit_url(field, s)
+    if kind == "selector":
+        # **问引擎自己**：这个值解析出来的选择器，引擎的编译器认不认？
+        # 阅读的写法（`class.` / `tr!0` / `##替换`）在这里被展开成真正的 CSS 再编译 ——
+        # 展开器（`selspec`）与执行器是同一个，所以「审计说能跑」与「真的能跑」是同一件事。
+        plan = selspec.parse_spec(s)
+        if plan.note:
+            # 替换段的正则编译不过 ⇒ 这一项的取值会**带着该去掉的原文**（静默变差，要报）
+            return [{"field": field, "construct": "replace_regex",
+                     "why": f"{plan.note}（原文：{_snippet(s)}）",
+                     "instead": "改写成 Python 与 Java 都能编译的正则（多数是 `$1` 捕获组的写法）"}]
+        err = selspec.spec_error(plan)
+        if not err:
+            return []
+        return [{"field": field, "construct": "selector_syntax",
+                 "why": f"这一项引擎跑不了：{_snippet(s)}（{err}）",
+                 "instead": "到「书源管理」把这一项改写成标准 CSS 选择器"}]
+    err = _regex_error(s) if kind == "regex" else ""
     if not err:
         return []
-    return [{"field": field, "construct": f"{kind}_syntax",
-             "why": f"{'选择器不是合法 CSS' if kind == 'selector' else '正则编译不过'}："
-                    f"{_snippet(s)}（{err}）",
-             "instead": "到「书源管理」把这一项改写成" + ("标准 CSS 选择器" if kind == "selector" else "能编译的正则")}]
+    return [{"field": field, "construct": "regex_syntax",
+             "why": f"正则编译不过：{_snippet(s)}（{err}）",
+             "instead": "到「书源管理」把这一项改写成能编译的正则"}]
 
 
 def _audit_modes(rule: dict) -> list:

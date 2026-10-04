@@ -11,8 +11,8 @@
 ## 四档能力结论（``supported``）
 
 - ``yes``：全靠纯字符串 URL / CSS / regex / JSONPath / 模板即可 —— 直接可用；
-- ``partial``：规则可转，但**需要 JS 通道**（解密 / 文本替换 / 渲染兜底），或需要人工核对
-  （非 0 索引、从 JS 里提取出来的地址）—— 会上台账并显示「需留意」；
+- ``partial``：规则可转，但**需要 JS 通道**（解密 / 文本替换 / 渲染兜底），或有需要留意的地方
+  （个别字段取不出来已略过、源里有「发现页」规则本批忽略）—— 会上台账并显示「需留意」；
 - ``no``：用了 **Android 专有桥**（``java.*`` / ``source.*``）或用到了本项目表达不了的形态
   （跨条目拼 URL、`bookSourceUrl` 不是网址）—— 如实标注，**不假装能用**。
 
@@ -36,7 +36,7 @@ import re
 from urllib.parse import urljoin, urlsplit
 
 from .model import EXPLORE_KEYS, LEGACY_ALIASES
-from . import rules
+from . import rules, selspec
 
 #: 四档结论的合法取值
 VERDICTS = ("yes", "partial", "no")
@@ -55,8 +55,6 @@ ANDROID_API_RE = re.compile(
 _JS_HEAD_RE = re.compile(r"^\s*(?:@js:|<js>|@JS:)", re.I)
 #: Legado 正则模式的前缀（`:pattern`）与 JSON 路径的前缀（`$`）
 _REGEX_HEAD = ":"
-#: 形如 `class.foo.0` / `id.bar` / `tag.li` 的选择器片段
-_SEL_PART_RE = re.compile(r"^(class|id|tag)\.([^.@]+?)(?:\.(\d+))?$")
 
 #: 登录字段里出现这些词 ⇒ 视为凭据（界面不回显、导入时标记为必填）
 _SECRET_HINT = re.compile(r"密钥|密码|口令|授权|key|token|secret|passwd|password", re.I)
@@ -391,92 +389,65 @@ def login_spec(entry: dict) -> dict:
 
 
 # ---------------- 选择器与字段转换 ----------------
+#
+# ⚠️ 阅读的选择器语法（`class.` / `@tag.a` / `!0` / `.0` / `##正则##替换` / `A||B` / `A&&B`）
+# **不在本模块解析** —— 唯一实现是 `sources/selspec.py`，`rules.py` 执行期读的就是同一份。
 
-def _sel_to_css(sel: str) -> dict:
-    """把 Legado 选择器片段转成 CSS：``{css, index_ok, note}``。
+def _spec_of(spec, *, drop_first_index: bool = False) -> "tuple[str, str]":
+    """阅读的取值 spec → ``(写进 native 规则的 spec 文本, 人话原因)``（取不出来时文本为 ``""``）。
 
-    支持：``class.foo`` → ``.foo``、``id.bar`` → ``#bar``、``tag.li`` → ``li``、
-    ``a[data-bid]`` / ``.intro`` 原样透传（本来就是 CSS）。
+    ⚠️ **这里不解析选择器**：`class.` / `@tag.a` / `!0` / `.0` / `##正则##替换` / `A||B` / `A&&B`
+    的唯一实现是 :mod:`novelforge.sources.selspec`，执行期（`rules.py`）读的就是同一份产物。
+    本模块只做两件事：① 判**通道**（:func:`_leading_mode`：js / regex / json / css）；
+    ② 用 `selspec.render` 把解析结果**写回**成 spec 文本落进规则。
 
-    ⚠️ **非 0 索引（``.1`` / ``.2``…）本批不支持**：本项目 ``select_one`` 只能取第一个匹配，
-    丢弃非 0 索引会**取到错的那一项**（比不转换更糟）⇒ 如实标注，交给人工在书源管理里改写。
+    第 94 期阶段 2a 删掉了本模块原来的 `_sel_to_css` / `_field_spec` —— 那是**第二份**选择器解析，
+    而且因为「非 0 索引」把整条源判死（`.odd.0` / `tr!0` 在真样本里成片出现，实测 22 条里
+    6 条「判可用却一搜就抛异常」）。现在索引由引擎按「匹配列表第 n 个」执行，不再需要翻译。
+
+    ⚠️ **解析不了时把原文原样写回去**（不是丢掉这一项）：丢掉了诚实闸就看不到它，
+    用户只会收到一句笼统的「拼不出规则」—— 那正是「答非所问」。原文写回去之后，闸门能
+    指名道姓：「`ruleToc.chapterList` 这一项是 XPath / 不是合法选择器，该改成什么」。
+    实测三例（天天看小说 / 手机小说 / 武林中文网）就是靠这一条才拿回逐项理由的。
     """
-    s = str(sel or "").strip()
-    if not s:
-        return {"css": "", "index_ok": True, "note": ""}
-    if "&&" in s or "||" in s:
-        return {"css": "", "index_ok": False, "note": f"多路候选（&&/||）本批不支持：{s}"}
-    out, note, index_ok = [], "", True
-    for part in s.split("@"):
-        p = part.strip()
-        if not p or p in ("text", "textNodes", "html", "all"):
-            continue
-        m = _SEL_PART_RE.match(p)
-        if m:
-            kind, val, idx = m.group(1), m.group(2), m.group(3)
-            if idx is not None and idx != "0":
-                index_ok = False
-                note = note or f"非 0 索引（{p}）本批不支持（本项目只能取第一个匹配）"
-                continue
-            out.append(val if kind == "tag" else (f".{val}" if kind == "class" else f"#{val}"))
-            continue
-        if re.match(r"^\d+$", p):        # 纯数字 = 取第 n 个后代，同样只支持 0
-            if p != "0":
-                index_ok = False
-                note = note or f"非 0 索引（{p}）本批不支持"
-            continue
-        out.append(p)                    # 已是 CSS（.intro / a[data-bid] / h2）
-    return {"css": " ".join(x for x in out if x), "index_ok": index_ok, "note": note}
+    plan = selspec.parse_spec(spec)
+    err = selspec.spec_error(plan)
+    if err:
+        return str(spec or "").strip(), err
+    return selspec.render(plan, drop_first_index=drop_first_index), ""
 
 
-def _field_spec(spec: str) -> dict:
-    """Legado 的字段表达式 → 本项目 ``fields`` 的取值 spec（``选择器`` 或 ``选择器::attr(x)``）。
+def _field_of(spec) -> "tuple[str, str]":
+    """**搜索字段**的取值 spec → ``(spec 文本, 人话原因)``。
 
-    ``class.title.0@tag.a.0@text`` 这种链式写法里，**中间每一段都是选择器的一部分**
-    （这里就是「.title 里的 a」）——只取第一段会把取值位置弄错。末段是取值方式：
-    ``text`` / ``textNodes`` / ``html`` 取文本，``href`` / ``src`` / ``data-*`` 取属性。
-    ⚠️ 出现 ``@js:`` 的字段本批不可转（要执行脚本才能算出值）——如实拒绝，不硬猜。
+    与 :func:`_spec_of` 的差别是**处理失败的方式**：字段取不出来时**略过这一项**
+    （整条源不因此判死，结论降为「需留意」并带上说明）—— 少了 `author` 这种非关键字段
+    不该让一条源不能用；但容器（搜索/目录/正文）取不出来就必须让闸门点名，见 `_spec_of`。
+    字段取一个值时「第一个匹配」本来就是默认，所以索引按 ``drop_first_index`` 丢掉。
     """
-    s = str(spec or "").strip()
-    if not s:
-        return {"spec": "", "ok": True, "note": ""}
-    sel_parts, tail = [], ""
-    for raw in s.split("@"):
-        p = raw.strip()
-        if not p or p in ("text", "textNodes", "html", "all"):
-            continue
-        if re.match(r"^js\b|^@js", p, re.I):
-            return {"spec": "", "ok": False, "note": f"字段含 JS（要执行脚本才取值）：{s}"}
-        if re.match(r"^(href|src|poster|value|content|data-|alt|title$)", p):
-            tail = p
-            continue
-        sel_parts.append(p)
-    conv = _sel_to_css("@".join(sel_parts))
-    if not conv["index_ok"]:
-        return {"spec": "", "ok": False, "note": conv["note"]}
-    css = conv["css"]
-    if not css:
-        return {"spec": "", "ok": False, "note": f"取不出选择器：{s}"}
-    spec_out = f"{css}::attr({tail})" if tail else css
-    return {"spec": spec_out, "ok": True, "note": conv["note"]}
+    if not str(spec or "").strip():
+        return "", ""
+    plan = selspec.parse_spec(spec)
+    err = selspec.spec_error(plan)
+    if err:
+        return "", err
+    return selspec.render(plan, drop_first_index=True), ""
 
 
 def _headers(entry: dict) -> dict:
-    """Legado 的 ``header`` 可能是 **Python repr 形式的字典**（真实文件里就是），也可能是 JSON。"""
+    """Legado 的 ``header`` 可能是 **Python repr 形式的字典**（真实文件里就是），也可能是 JSON。
+
+    ⚠️ 解析用 `rules.parse_dict_literal`（**唯一**一份字面量字典解析）：URL 的选项字典
+    （`,{'method':…}`）走的是同一份代码 —— 各写一份的下场是一处只认单引号、另一处只认
+    双引号，而**两边都不报错**（字段静默为空）。
+    """
     raw = (entry or {}).get("header")
     if isinstance(raw, dict):
         return dict(raw)
-    s = str(raw or "").strip()
-    if not s:
+    obj = rules.parse_dict_literal(raw)
+    if not obj:
         return {}
-    for parse in (ast.literal_eval, json.loads):
-        try:
-            obj = parse(s)
-            if isinstance(obj, dict):
-                return {str(k): str(v) for k, v in obj.items()}
-        except Exception:                                 # noqa: BLE001
-            continue
-    return {}
+    return {str(k): str(v) for k, v in obj.items()}
 
 
 # ---------------- 能力判定与转换 ----------------
@@ -598,6 +569,10 @@ def analyze(entry: dict) -> dict:
             if bad:
                 verdict = "no"
                 unsupported += bad
+            elif notes:
+                # 转换期新记下的如实说明（例如某个字段取不出来、已略过）⇒ 结论降为「需留意」，
+                # 不然用户会看到一条「可用」却少了一半字段的源。
+                verdict = "partial"
     return {"supported": verdict, "unsupported_fields": unsupported, "converted_rule": converted,
             "notes": notes, "source_type": stype,
             "source_type_label": SOURCE_TYPE_LABEL.get(stype, "未知")}
@@ -616,6 +591,7 @@ def convert(entry: dict, notes=None) -> "dict | None":
     绝不用一个「看着像」的规则去糊弄。
     """
     ent = entry or {}
+    notes = notes if isinstance(notes, list) else []     # 逐字段的如实说明落在这里（判「需留意」）
     site = str(ent.get("bookSourceUrl") or "").strip()
     if not re.match(r"^https?://", site, re.I):
         return None
@@ -627,6 +603,12 @@ def convert(entry: dict, notes=None) -> "dict | None":
     search_url = _tpl(ent.get("searchUrl"))
     if not search_url or _JS_HEAD_RE.match(str(ent.get("searchUrl") or "")):
         return None
+    # ⚠️ 地址后面**原样保留**阅读的请求选项（`/search.php,{'method':'post'}` / `?q={title}|char=gbk`）：
+    #    只有引擎知道怎么发这个请求（`rules.parse_url_spec`），转换器**不翻译也不丢** ——
+    #    在这里把选项摘下来、落到别的字段上，就等于转换器自己声明了一遍「哪些选项能跑」，
+    #    而那正是本项目最深的那个病（转换器既当运动员又当裁判）。
+    #    `urljoin` 对这样的地址是**逐字拼接**（只补主机与路径，不改查询串），所以补绝对地址
+    #    与保留选项两件事不冲突。
     if not re.match(r"^https?://", search_url, re.I):
         search_url = urljoin(base, search_url.lstrip("/"))
 
@@ -644,17 +626,21 @@ def convert(entry: dict, notes=None) -> "dict | None":
                    ("intro", rs.get("intro")))
                   if str(v or "").strip().startswith("$")}
     else:
-        conv = _sel_to_css(rs.get("bookList"))
-        if not conv["css"] or not conv["index_ok"]:
+        container, _err = _spec_of(rs.get("bookList"))
+        if not container:
             return None
-        search.update({"mode": "css", "container": conv["css"]})
+        search.update({"mode": "css", "container": container})
         fields = {}
         for key, spec in (("title", rs.get("name")), ("author", rs.get("author")),
                           ("url", rs.get("bookUrl")), ("cover", rs.get("coverUrl")),
                           ("intro", rs.get("intro"))):
-            f = _field_spec(spec)
-            if f["ok"] and f["spec"]:
-                fields[key] = f["spec"]
+            # ⚠️ 取不出来的字段**如实说**（写进 notes ⇒ 结论降为「需留意」），不静默丢：
+            #    丢掉 `author` 这种非关键字段本身没错，但用户看不到「为什么这本没作者」。
+            text, why = _field_of(spec)
+            if text:
+                fields[key] = text
+            elif why:
+                notes.append(f"ruleSearch.{key} 取不出来（{why}）—— 该字段已略过")
     if not fields.get("url"):
         return None
     search["fields"] = fields
@@ -665,11 +651,16 @@ def convert(entry: dict, notes=None) -> "dict | None":
     if toc_mode == "json":
         book["toc"] = {"mode": "json", "container": str(toc_spec).strip()}
     elif toc_mode == "css":
-        conv = _sel_to_css(toc_spec)
-        if not conv["css"] or not conv["index_ok"]:
+        # ⚠️ 容器**保留索引**（`drop_first_index=False`）：容器的默认是「全部匹配」，
+        #    丢掉 `!0` 就从「取第一项」变成「取所有项」—— 那是取错章节的静默故障。
+        toc_plan = selspec.parse_spec(toc_spec)
+        toc_err = selspec.spec_error(toc_plan)
+        # 解析不了的容器**原文写回**（`_spec_of` 的口径）：闸门才能指名道姓地说这一项是什么
+        container = _toc_container(toc_plan, ent.get("ruleToc") or {}) if not toc_err \
+            else str(toc_spec or "").strip()
+        if not container:
             return None
-        book["toc"] = {"mode": "css",
-                       "container": _toc_container(conv["css"], ent.get("ruleToc") or {})}
+        book["toc"] = {"mode": "css", "container": container}
     else:
         return None
 
@@ -686,15 +677,16 @@ def convert(entry: dict, notes=None) -> "dict | None":
             return None
         book["content"] = {"mode": "js", "script": port["script"]}
     elif cmode == "css":
-        conv = _sel_to_css(content)
-        if not conv["css"] or not conv["index_ok"]:
+        plan = selspec.parse_spec(content)
+        cplan_err = selspec.spec_error(plan)
+        container = str(content or "").strip() if cplan_err else selspec.render(plan)
+        if not container:
             return None
         # Legado 的 `@html` = 保留标签；本项目 css 通道两种都支持，要如实带上
         # （不带就会把富文本压成纯文本，章节里的排版全丢）。
-        if re.search(r"@\s*html\s*$", str(content or ""), re.I):
-            book["content"] = {"mode": "css", "container": conv["css"], "html": True}
-        else:
-            book["content"] = {"mode": "css", "container": conv["css"], "text": True}
+        book["content"] = ({"mode": "css", "container": container, "html": True}
+                           if plan.mode == "html"
+                           else {"mode": "css", "container": container, "text": True})
     else:
         return None
 
@@ -716,20 +708,35 @@ def convert(entry: dict, notes=None) -> "dict | None":
     return rule
 
 
-def _toc_container(css: str, rule_toc: dict) -> str:
-    """目录容器**补上链接层**。
+def _toc_container(plan, rule_toc: dict) -> str:
+    """目录容器**补上链接层** → spec 文本（按计划补，不拼字符串）。
 
-    ⚠️ Legado 的目录容器常写 ``<li>``，链接在它里面的 ``<a>``；而本项目的 toc css 是直接读
-    容器自身的 ``href`` 与文本 —— 不补 ``a`` 会**一条章节都取不到**（静默 0 章，最难查的那种）。
-    容器本身已经是 ``a`` 时不补（否则会变成 ``a a``，同样取不到）。
+    ⚠️ Legado 的目录容器常写 ``<li>``，链接在它里面的 ``<a>``；而本项目的 toc 容器是直接读
+    匹配到的节点的 ``href`` 与文本 —— 不补 ``a`` 会**一条章节都取不到**（静默 0 章，最难查的那种）。
+    容器本身已经以 ``a`` 结尾时不补（否则会变成 ``a a``，同样取不到）。
+
+    按**计划**补而不是按字符串补：容器可能带 ``##替换`` 尾巴（拼字符串会把 ``a`` 塞进替换段后面）、
+    也可能是候选（`A||B`，两边都要补）。这些都是「静默取错」的高发区。
     """
     spec = f"{rule_toc.get('chapterUrl') or ''} {rule_toc.get('chapterName') or ''}"
     if "a" not in spec:
-        return css
-    parts = css.split()
-    if parts and parts[-1].split("[")[0] == "a":
-        return css
-    return f"{css} a"
+        return selspec.render(plan)
+    return selspec.render(_with_trailing_a(plan))
+
+
+def _with_trailing_a(plan):
+    """在计划的取值末端补一步 ``a``（已经是 ``a`` 的不补）；候选/拼接则**每一路都补**。"""
+    if plan.sub:
+        return selspec.Plan(
+            raw=plan.raw, sub=tuple(_with_trailing_a(s) for s in plan.sub),
+            combine=plan.combine, attr=plan.attr, mode=plan.mode,
+            replace=plan.replace, error=plan.error, note=plan.note)
+    steps = list(plan.steps)
+    if steps and steps[-1].kind == "desc" and steps[-1].css.split("[")[0].strip() == "a":
+        return plan
+    steps.append(selspec.Step(css="a"))
+    return selspec.Plan(raw=plan.raw, steps=tuple(steps), attr=plan.attr, mode=plan.mode,
+                        replace=plan.replace, error=plan.error, note=plan.note)
 
 
 def _concurrency(ent: dict) -> int:
