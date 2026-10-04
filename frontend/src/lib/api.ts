@@ -176,6 +176,14 @@ export interface TaskState {
   result: string | null
   error: string | null
   name: string | null
+  /**
+   * 任务完成后给人看的那一句（第 93 期：「检查更新」的报告写在这里 ——
+   * 「新增 N 章」/「源站目录与本地不一致，未自动写入」）。
+   * ⚠️ 老任务的这一列是空的（字段后加），调用方必须按「没有」处理而不是报错。
+   */
+  notice?: string
+  /** 入队时写的一句话说明（`notice` 为空时的兜底，别把原因藏起来） */
+  detail?: string
 }
 
 /** 任务表的一行（`GET /api/tasks`）。progress 只含真实里程碑：0 入队 / 50 开始 / 100 结束。 */
@@ -1227,6 +1235,17 @@ export interface OnlineStatus {
   available: boolean
   /** 不可用的**原因原文**（空串 = 可用）。灰掉的入口要把这句话显示出来，不许只说「不可用」 */
   reason: string
+  /**
+   * 本地副本是**从书源下载来**的吗（收书目录里有留档）。
+   *
+   * ⚠️ 与 `bound` 是两件事：从书源下载来的书**常常没有绑定**（用户不一定在线读过），
+   * 而那种书恰恰最该能「检查更新」。把两个判据混成一个，会出现「下载来的书没有检查更新入口」。
+   */
+  has_sidecar: boolean
+  /** 「检查更新」能不能用（闸门开着 **且** 有留档或绑定）。判据在服务端，前端不自拼 */
+  updatable: boolean
+  /** 不能检查更新的原因原文（先闸门、再「这本书有没有源」—— 与端点里的顺序逐条一致） */
+  update_reason: string
 }
 
 export interface OnlineChapterEntry {
@@ -4282,6 +4301,25 @@ export const api = {
     request<{ ok: boolean; cleared: number }>(
       `/api/books/${encodeURIComponent(id)}/online/bind`,
       { method: 'DELETE' },
+    ),
+
+  /**
+   * 单本「检查更新」（第 93 期 E5）：搜源站更新 → 落到**这本书自己**的位置上。
+   *
+   * 立即返回 `task_id`（一次外呼要好几秒到几十秒，占着请求会超时），报告写进任务行
+   * —— 用 `api.task(tid)` 轮询，`notice` 里就是给人看的那一句（见 `lib/checkUpdate.ts`）。
+   *
+   * `overwrite: true` = 「**用源站整本覆盖本地**」：按源站那一版整本重写，进度按章号
+   * 重新对齐。默认 `false` 走「对齐后只追加新章」（既有章一个都不动）。
+   */
+  checkUpdate: (id: string, overwrite = false) =>
+    request<{ task_id: string; overwrite: boolean; source: string }>(
+      `/api/books/${encodeURIComponent(id)}/check-update`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overwrite }),
+      },
     ),
 
   /** 清空**在线缓存**（只清 `CACHE_DIR/online/`，AI 分章缓存不动）。 */

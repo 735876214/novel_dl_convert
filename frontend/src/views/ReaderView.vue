@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { ComponentPublicInstance } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
@@ -596,6 +597,22 @@ function onReaderClick(e: MouseEvent): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
+  // Esc 收起打开的面板，并把焦点还给打开它的按钮（第 93 期）。
+  // ⚠️ 必须在 `paged` 之前判：滚动模式下没有翻页键，但面板一样得能关。
+  // 一次只关一层（自下而上），且**不吞**没有面板时的 Esc —— 那是别的组件的（如弹窗）。
+  if (e.key === 'Escape') {
+    if (showSettings.value) {
+      showSettings.value = false
+      restoreFocus(settingsBtn.value)
+    } else if (showNotes.value) {
+      showNotes.value = false
+      restoreFocus(notesBtn.value)
+    } else if (showToc.value) {
+      showToc.value = false
+      restoreFocus(tocBtn.value)
+    }
+    return
+  }
   if (!paged.value) return
   if (e.key === 'ArrowRight' || e.key === 'PageDown') flip(1)
   else if (e.key === 'ArrowLeft' || e.key === 'PageUp') flip(-1)
@@ -708,6 +725,21 @@ function prefApplies(key: NumPrefKey): boolean {
 const showSettings = ref(false)
 const showToc = ref(false)
 const showNotes = ref(false)
+
+/**
+ * 打开面板的那三个按钮。只为「Esc 收面板后把焦点还回去」而存在 ——
+ * 不还的话焦点掉到 `body`，键盘用户得从侧栏第一项重新 Tab 几十下。
+ * 面板本身不是模态框（没有焦点陷阱），所以这里用最轻的一招：
+ * 记下触发者，关掉后 `focus()` 回去。`Button` 是单根组件 ⇒ 模板 ref 拿到的是实例，按钮在 `$el`。
+ */
+const tocBtn = ref<ComponentPublicInstance | null>(null)
+const settingsBtn = ref<ComponentPublicInstance | null>(null)
+const notesBtn = ref<ComponentPublicInstance | null>(null)
+
+function restoreFocus(btn: ComponentPublicInstance | null): void {
+  const el = btn?.$el
+  if (el instanceof HTMLElement) el.focus()
+}
 
 const annotations = ref<Annotation[]>([])
 const scrollRef = ref<HTMLElement | null>(null)
@@ -2303,7 +2335,7 @@ onBeforeUnmount(() => {
         <Button size="sm" variant="ghost" title="返回详情" @click="router.push(`/book/${bookId}`)">
           <Icon name="arrowLeft" class="h-4 w-4" />
         </Button>
-        <Button size="sm" variant="ghost" title="目录" @click="showToc = !showToc">
+        <Button ref="tocBtn" size="sm" variant="ghost" title="目录" @click="showToc = !showToc">
           <Icon name="book" class="h-4 w-4" />
         </Button>
         <div class="min-w-0 flex-1">
@@ -2311,7 +2343,7 @@ onBeforeUnmount(() => {
           <div class="truncate text-[13px] font-medium text-foreground">{{ chapterTitle }}</div>
         </div>
         <div class="relative">
-          <Button size="sm" variant="ghost" title="阅读设置" @click="showSettings = !showSettings">
+          <Button ref="settingsBtn" size="sm" variant="ghost" title="阅读设置" @click="showSettings = !showSettings">
             <Icon name="settings" class="h-4 w-4" />
           </Button>
 
@@ -2515,7 +2547,7 @@ onBeforeUnmount(() => {
           />
         </Button>
 
-        <Button v-if="!isOnline" size="sm" variant="ghost" title="笔记" @click="showNotes = !showNotes">
+        <Button v-if="!isOnline" ref="notesBtn" size="sm" variant="ghost" title="笔记" @click="showNotes = !showNotes">
           <Icon name="note" class="h-4 w-4" />
         </Button>
       </div>

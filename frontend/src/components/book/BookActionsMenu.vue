@@ -6,6 +6,7 @@ import DropdownMenu from '@/components/ui/DropdownMenu.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, apiErrorMessage, type BookCard, type OnlineStatus } from '@/lib/api'
 import { confirmAndDeleteBook } from '@/lib/bookDelete'
+import { runCheckUpdate } from '@/lib/checkUpdate'
 import { useBookMenu } from '@/lib/bookMenu'
 import { isDirEntry, openTargetOf } from '@/lib/bookOpen'
 import { READ_STATUS_OPTIONS } from '@/lib/readingThresholds'
@@ -111,6 +112,32 @@ const online = ref<OnlineStatus | null>(null)
 
 /** 有绑定、闸门开着、源支持逐章 ⇒ 才给入口（判据全在服务端，前端不自拼） */
 const canOnline = computed(() => online.value?.available === true)
+
+/**
+ * 「检查更新」的入口判据（第 93 期 E5）：`updatable` = 闸门开着 **且**（有留档 或 有绑定）。
+ *
+ * ⚠️ 与 `canOnline` **不是一回事，也别合并**：从书源下载来的书有留档、却常常没有绑定
+ *（用户不一定在线读过）—— 合并的后果是「下载来的书没有检查更新入口」，
+ * 而那恰恰是最该有它的那一类。同理「本地读不了」也不影响它：它更新的是**文件**。
+ */
+const canCheckUpdate = computed(() => online.value?.updatable === true)
+
+/** 正在检查更新（按钮置忙，防连点起两个任务） */
+const checking = ref(false)
+
+async function checkUpdate(): Promise<void> {
+  close()
+  if (checking.value) return
+  checking.value = true
+  try {
+    const r = await runCheckUpdate(props.book.id)
+    ui.toast(r.message)
+    // 追更真的写盘了才刷新列表（章数变了）；失败 / 什么都没做时没必要重拉一遍
+    if (r.ok) emit('changed', props.book, 'status')
+  } finally {
+    checking.value = false
+  }
+}
 
 /** 面板关掉就把展开状态清干净：否则下次打开会先闪一眼上次展开的那一段 */
 watch(open, (v) => {
@@ -330,6 +357,21 @@ async function remove(): Promise<void> {
       <button v-if="canOnline" type="button" role="menuitem" :class="ITEM" @click="startOnline">
         <Icon name="globe" class="h-4 w-4 text-muted-foreground" />
         在线阅读
+      </button>
+
+      <!-- 检查更新（第 93 期 E5）：搜源站更新 → 落到**这本书自己**的本地副本上。
+           判据见 `canCheckUpdate`（它与「在线阅读」不同：下载来的书也有这一项）。
+           报告**不跳任务中心** —— 结果直接一条 toast（「新增 N 章」/「未自动写入」的原因）。 -->
+      <button
+        v-if="canCheckUpdate"
+        type="button"
+        role="menuitem"
+        :class="ITEM"
+        :disabled="checking"
+        @click="checkUpdate"
+      >
+        <Icon name="refresh" class="h-4 w-4 text-muted-foreground" />
+        {{ checking ? '检查中…' : '检查更新' }}
       </button>
 
       <button type="button" role="menuitem" :class="ITEM" @click="preview">

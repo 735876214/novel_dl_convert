@@ -6,6 +6,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import BookActionsMenu from '@/components/book/BookActionsMenu.vue'
 import { api, type BookCard, type BookDetail, type OnlineStatus, type ReadingStatus } from '@/lib/api'
 import { useBookMenu } from '@/lib/bookMenu'
+import { runCheckUpdate } from '@/lib/checkUpdate'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -39,6 +40,16 @@ vi.mock('@/lib/api', () => ({
   apiErrorMessage: (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback),
 }))
 
+/**
+ * 「检查更新」的实现在 `lib/checkUpdate.ts`（那里自己 `checkUpdate.spec.ts` 全量钉住了
+ * 轮询 / 报告 / 超时）。这里只钉**菜单这一端**：入口出不出来、点了有没有调它、
+ * 报告有没有原样 toast 出去。所以整块替掉，不在这里重测一遍轮询。
+ */
+vi.mock('@/lib/checkUpdate', () => ({
+  overwriteConfirmLines: (title: string) => [`用源站的内容整本覆盖《${title}》的本地副本？`],
+  runCheckUpdate: vi.fn(),
+}))
+
 const m = {
   deleteBook: vi.mocked(api.deleteBook),
   bookDetail: vi.mocked(api.bookDetail),
@@ -48,6 +59,7 @@ const m = {
   removeFromCollection: vi.mocked(api.removeFromCollection),
   setStatus: vi.mocked(api.setStatus),
   onlineStatus: vi.mocked(api.onlineStatus),
+  runCheckUpdate: vi.mocked(runCheckUpdate),
 }
 
 /**
@@ -66,6 +78,9 @@ function makeOnline(over: Partial<OnlineStatus> = {}): OnlineStatus {
     cache: { total: 0, cached: 0, single: false, fetched_at: 0 },
     available: false,
     reason: '',
+    has_sidecar: false,
+    updatable: false,
+    update_reason: '',
     ...over,
   }
 }
@@ -246,6 +261,7 @@ beforeEach(async () => {
   m.removeFromCollection.mockResolvedValue({ ok: true })
   m.setStatus.mockResolvedValue(makeStatus())
   m.onlineStatus.mockResolvedValue(makeOnline())
+  m.runCheckUpdate.mockResolvedValue({ ok: true, message: '已检查，没有新章节' })
 
   router = createRouter({
     history: createMemoryHistory(),
@@ -412,6 +428,70 @@ describe('BookActionsMenu：在线阅读入口（第 93 期）', () => {
 
     expect(menuItems()).toContain('删除')
     expect(menuItems()).not.toContain('在线阅读')
+  })
+})
+
+describe('BookActionsMenu：检查更新（第 93 期 E5）', () => {
+  it('可更新 ⇒ 紧挨阅读区给一项「检查更新」', async () => {
+    m.onlineStatus.mockResolvedValue(makeOnline({ updatable: true }))
+    const w = await mountMenu(EPUB)
+    await openMenu(w)
+
+    const items = menuItems()
+    expect(items).toContain('检查更新')
+    expect(items.indexOf('检查更新')).toBeGreaterThan(items.indexOf('阅读'))
+    expect(items.indexOf('检查更新')).toBeLessThan(items.indexOf('快速预览'))
+  })
+
+  it('点了：调一次、把**报告原文**toast 出去、请父组件刷新、面板关掉', async () => {
+    m.onlineStatus.mockResolvedValue(makeOnline({ updatable: true }))
+    m.runCheckUpdate.mockResolvedValue({ ok: true, message: '新增 3 章' })
+    const w = await mountMenu(EPUB)
+    await openMenu(w)
+    await clickItem('检查更新')
+
+    expect(m.runCheckUpdate).toHaveBeenCalledWith(BOOK_ID)
+    // 报告**原样**透出：它可能是「未自动写入」的原因，换成一句自编的「更新完成」就没了
+    expect(useUiStore().toastMessage).toBe('新增 3 章')
+    // 真写盘了（章数可能变了）才需要重拉列表
+    expect(w.emitted('changed')?.[0]).toEqual([EPUB, 'status'])
+    expect(panel()).toBeNull()
+  })
+
+  it('报告是「什么都没做 / 失败」时不请父组件刷新（无效操作不该重拉整库）', async () => {
+    m.onlineStatus.mockResolvedValue(makeOnline({ updatable: true }))
+    m.runCheckUpdate.mockResolvedValue({ ok: false, message: '源站目录与本地不一致，未自动写入' })
+    const w = await mountMenu(EPUB)
+    await openMenu(w)
+    await clickItem('检查更新')
+
+    expect(useUiStore().toastMessage).toContain('未自动写入')
+    expect(w.emitted('changed')).toBeUndefined()
+  })
+
+  it('「检查更新」不看绑定：只有留档（下载来的书）也给，而「在线阅读」不给', async () => {
+    // ⚠️ 这就是「两个判据不许合并」的用例：合并的后果是**从书源下载来的书反而没有**
+    // 检查更新入口 —— 那恰恰是最该有它的那一类（它们本来就有 sidecar）。
+    m.onlineStatus.mockResolvedValue(makeOnline({ has_sidecar: true, updatable: true }))
+    const w = await mountMenu(EPUB)
+    await openMenu(w)
+
+    const items = menuItems()
+    expect(items).toContain('检查更新')
+    expect(items).not.toContain('在线阅读')
+  })
+
+  it('不可更新 ⇒ 不出现（连灰掉的占位都不给）', async () => {
+    m.onlineStatus.mockResolvedValue(makeOnline({
+      bound: false, has_sidecar: false, updatable: false,
+      update_reason: '这本书既没有书源留档、也没有绑定书源 —— 先在下面绑一个源，或者从书源下载它',
+    }))
+    const w = await mountMenu(EPUB)
+    await openMenu(w)
+
+    expect(menuItems()).not.toContain('检查更新')
+    // 原因由详情页的「在线阅读」卡逐字说明，菜单里塞不下一整句
+    expect(panel()?.textContent).not.toContain('没有书源留档')
   })
 })
 

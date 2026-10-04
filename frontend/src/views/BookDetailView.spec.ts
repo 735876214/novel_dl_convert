@@ -200,6 +200,7 @@ beforeEach(async () => {
     pos: 0, seen: 0,
     cache: { total: 0, cached: 0, single: false, fetched_at: 0 },
     available: false, reason: '',
+    has_sidecar: false, updatable: false, update_reason: '',
   })
   m.sourcesStatus.mockResolvedValue({ items: [] })
 
@@ -430,6 +431,7 @@ describe('BookDetailView 头部 · 在线阅读入口（第 93 期）', () => {
       pos: 6, seen: 6,
       cache: { total: 30, cached: 7, single: false, fetched_at: 0 },
       available: true, reason: '',
+      has_sidecar: false, updatable: true, update_reason: '',
     })
     const w = await mountDetail()
 
@@ -450,6 +452,8 @@ describe('BookDetailView 头部 · 在线阅读入口（第 93 期）', () => {
       pos: 0, seen: 0,
       cache: { total: 0, cached: 0, single: false, fetched_at: 0 },
       available: false, reason: '下载功能未开启：到「设置 → 网络与下载」打开「开放搜索 / 下载」',
+      has_sidecar: false, updatable: false,
+      update_reason: '下载功能未开启：到「设置 → 网络与下载」打开「开放搜索 / 下载」',
     })
     const w = await mountDetail()
 

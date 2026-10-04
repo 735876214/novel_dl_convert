@@ -319,3 +319,89 @@ describe('ReaderView · 在线读的来源标注（第 93 期）', () => {
     wrapper.unmount()
   })
 })
+
+/**
+ * 第 93 期 · 键盘可达：`Esc` 收面板 + 焦点归位。
+ *
+ * 面板（目录 / 阅读设置 / 笔记）都不是模态框、没有焦点陷阱，所以「关掉」之后
+ * **焦点必须回到打开它的那个按钮** —— 否则焦点掉到 `body`，键盘用户要重新从侧栏
+ * 第一项 Tab 几十下才回得来（真机走查里 Tab 数到第 38 下才进正文区）。
+ *
+ * ⚠️ 断言必须挂在 `document.body` 上：`focus()` 对**不在文档里**的节点无效，
+ * 不 `attachTo` 的话 `document.activeElement` 永远是 `body`，这里会全假绿。
+ */
+describe('ReaderView · 键盘：Esc 收面板并把焦点还回去（第 93 期）', () => {
+  function btn(w: VueWrapper, title: string) {
+    const b = w.findAll('button').find((x) => x.attributes('title') === title)
+    expect(b, `没找到标题为「${title}」的按钮`).toBeTruthy()
+    return b!.element as HTMLElement
+  }
+
+  async function mountAttached(): Promise<VueWrapper> {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/read/:id', name: 'read', component: ReaderView },
+        { path: '/online/:id', name: 'online', component: ReaderView },
+      ],
+    })
+    await router.push('/online/book-a')
+    await router.isReady()
+    const wrapper = mount(ReaderView, { attachTo: document.body, global: { plugins: [router] } })
+    await flushPromises()
+    return wrapper
+  }
+
+  /** 面板开着的判据用**真实渲染物**（在线模式的目录抽屉带 `online-banner-toc`）。 */
+  const tocOpen = () => !!document.querySelector('[data-testid="online-banner-toc"]')
+
+  it('Esc 收起目录抽屉，焦点还给「目录」按钮', async () => {
+    const wrapper = await mountAttached()
+    const toc = btn(wrapper, '目录')
+    toc.click()
+    await flushPromises()
+    expect(tocOpen()).toBe(true)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+
+    expect(tocOpen()).toBe(false)
+    expect(document.activeElement).toBe(toc)
+    wrapper.unmount()
+  })
+
+  it('Esc 收起阅读设置面板，焦点还给「阅读设置」按钮', async () => {
+    const wrapper = await mountAttached()
+    const gear = btn(wrapper, '阅读设置')
+    gear.click()
+    await flushPromises()
+    // 面板开着的旁证：字号那一栏出来了
+    expect(wrapper.text()).toContain('字号')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await flushPromises()
+
+    expect(wrapper.find('button[title="阅读设置"]').exists()).toBe(true)
+    expect(document.activeElement).toBe(gear)
+    wrapper.unmount()
+  })
+
+  /**
+   * 没有面板时的 `Esc` **什么也不做**：阅读器把它吃掉，别的组件（弹窗 / 抽屉）
+   * 就再也收不到这个键了 —— 那是很难查的「按 Esc 没反应」。
+   */
+  it('没有面板时 Esc 不动焦点、不吞按键', async () => {
+    const wrapper = await mountAttached()
+    const gear = btn(wrapper, '阅读设置')
+    gear.focus()
+    expect(document.activeElement).toBe(gear)
+
+    const ev = new KeyboardEvent('keydown', { key: 'Escape', cancelable: true, bubbles: true })
+    window.dispatchEvent(ev)
+    await flushPromises()
+
+    expect(ev.defaultPrevented).toBe(false)
+    expect(document.activeElement).toBe(gear)
+    wrapper.unmount()
+  })
+})

@@ -6,6 +6,7 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, apiErrorMessage, type OnlineStatus, type SourceStatus } from '@/lib/api'
+import { overwriteConfirmLines, runCheckUpdate } from '@/lib/checkUpdate'
 
 /**
  * 「在线阅读」区块（第 93 期）：把**用户自己的书源**接到阅读器上。
@@ -121,6 +122,48 @@ async function unbind(): Promise<void> {
 async function startOnline(): Promise<void> {
   await router.push(`/online/${props.bookId}`)
 }
+
+// ---------------- 检查更新 / 用源站整本覆盖（第 93 期 E5）----------------
+
+/**
+ * 报告就写在**这张卡上**（不跳任务中心）：这几件事的结果是「新增 N 章」或
+ * 「未自动写入」的原因 —— 用户就站在这儿刚点的按钮，跳到另一个页面去看一句短话
+ * 只会让他在两个页面之间来回找。
+ */
+async function checkUpdate(): Promise<void> {
+  if (busy.value) return
+  busy.value = '__update__'
+  failed.value = false
+  message.value = '正在检查源站更新…'
+  const r = await runCheckUpdate(props.bookId)
+  failed.value = !r.ok
+  message.value = r.message
+  busy.value = ''
+  await refresh()
+  emit('changed')
+}
+
+/**
+ * 「用源站整本覆盖本地」：**用户显式动作**，必须二次确认。
+ *
+ * 默认那条路（上面的「检查更新」）是**只追加**、既有章一个都不动 —— 所以这里不是
+ * 「更彻底地做同一件事」，而是**另一件事**：按源站那一版整本重写，章节结构可能变、
+ * 进度按章号重新对齐。确认文案在 `lib/checkUpdate.ts`（与菜单那一侧共用一份）。
+ */
+async function overwrite(): Promise<void> {
+  if (busy.value) return
+  const title = st.value?.title || st.value?.display_name || '这本书'
+  if (!window.confirm(overwriteConfirmLines(title).join('\n'))) return
+  busy.value = '__overwrite__'
+  failed.value = false
+  message.value = '正在用源站整本覆盖…'
+  const r = await runCheckUpdate(props.bookId, { overwrite: true })
+  failed.value = !r.ok
+  message.value = r.message
+  busy.value = ''
+  await refresh()
+  emit('changed')
+}
 </script>
 
 <template>
@@ -137,12 +180,39 @@ async function startOnline(): Promise<void> {
         <template v-else>还没有绑定书源</template>
       </span>
       <span class="min-w-0 flex-1" />
-      <Button v-if="st?.bound" size="sm" variant="ghost" :disabled="!!busy" @click="unbind">
+      <!-- 检查更新 / 整本覆盖（第 93 期 E5）：判据 = 服务端的 `updatable`
+           （闸门开着 且 有留档或绑定）—— 与「有没有绑定」刻意分开，
+           所以**下载来的书（有留档、没绑定）也能在这里更新**。 -->
+      <Button
+        v-if="st?.updatable"
+        size="sm"
+        variant="secondary"
+        :disabled="!!busy"
+        @click="checkUpdate"
+      >
+        {{ busy === '__update__' ? '检查中…' : '检查更新' }}
+      </Button>
+      <Button
+        v-if="st?.bound"
+        size="sm"
+        variant="ghost"
+        :disabled="!!busy"
+        @click="unbind"
+      >
         解绑
       </Button>
       <Button v-if="st?.bound && st.available" size="sm" variant="primary" @click="startOnline">
         开始在线读
       </Button>
+    </div>
+
+    <!-- 有本地副本（留档）却没有入口时**说出原因**：闸门关着就照原文讲，
+         不给一个点不动的按钮、也不让用户以为「这个功能不存在」。 -->
+    <div
+      v-if="st && !st.bound && st.has_sidecar && !st.updatable"
+      class="mx-3.5 mt-2 rounded-md border border-border bg-muted px-2.5 py-1.5 text-[11.5px] text-muted-foreground"
+    >
+      这本书的本地副本来自书源：{{ st.update_reason || '当前不能检查更新' }}
     </div>
 
     <p class="px-3.5 pt-2 text-[11.5px] text-muted-foreground">
@@ -205,5 +275,20 @@ async function startOnline(): Promise<void> {
     >
       {{ message }}
     </p>
+
+    <!-- 整本覆盖：**另一件事**，不是「更彻底地检查更新」—— 所以单独一行、说清代价、
+         二次确认。默认那条路（只追加）永远不会走到这里。 -->
+    <div
+      v-if="st?.updatable"
+      class="flex flex-wrap items-center gap-2 border-t border-border/60 px-3.5 py-2.5"
+    >
+      <span class="min-w-0 flex-1 text-[11.5px] text-muted-foreground">
+        源站换了版本、目录对不上时，上面的「检查更新」会拒绝写入（避免进度错位）。
+        确认要换成源站那一版，才用这个。
+      </span>
+      <Button size="sm" variant="ghost" :disabled="!!busy" @click="overwrite">
+        {{ busy === '__overwrite__' ? '覆盖中…' : '用源站整本覆盖本地' }}
+      </Button>
+    </div>
   </Card>
 </template>

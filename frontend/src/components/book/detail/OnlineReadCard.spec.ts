@@ -1,9 +1,10 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
 import OnlineReadCard from '@/components/book/detail/OnlineReadCard.vue'
 import { api, type OnlineStatus, type SourceStatus } from '@/lib/api'
+import { runCheckUpdate } from '@/lib/checkUpdate'
 
 /**
  * 第 93 期：「在线阅读」卡的**判定契约**。
@@ -29,11 +30,37 @@ vi.mock('@/lib/api', () => ({
     (e instanceof Error && e.message) ? e.message : fallback,
 }))
 
+/**
+ * 「检查更新 / 整本覆盖」只替掉**执行**那一半（`checkUpdate.spec.ts` 已把轮询 / 报告 /
+ * 超时全量钉死）。确认文案取**真实现**（`importActual`）—— 它是「整本重写、进度可能错位」
+ * 这句承诺的唯一出处，在这里另抄一份就等于允许它两处漂移。
+ */
+vi.mock('@/lib/checkUpdate', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/checkUpdate')>('@/lib/checkUpdate')
+  return { ...actual, runCheckUpdate: vi.fn() }
+})
+
 const m = {
   onlineStatus: vi.mocked(api.onlineStatus),
   sourcesStatus: vi.mocked(api.sourcesStatus),
   onlineBind: vi.mocked(api.onlineBind),
   onlineUnbind: vi.mocked(api.onlineUnbind),
+  runCheckUpdate: vi.mocked(runCheckUpdate),
+}
+
+/**
+ * `window.confirm` 的替身。
+ * ⚠️ happy-dom **根本没有实现 `confirm`**（不是「默认返回 true」，是这个函数不存在），
+ * 所以在它上面 `vi.spyOn` 会直接抛「不是一个函数」。必须自己装一个。
+ */
+function setConfirm(answer: boolean): Mock<(message?: string) => boolean> {
+  const spy = vi.fn<(message?: string) => boolean>(() => answer)
+  window.confirm = spy
+  return spy
+}
+
+function confirmText(spy: Mock<(message?: string) => boolean>): string {
+  return String(spy.mock.calls[0]?.[0] ?? '')
 }
 
 function status(over: Partial<SourceStatus> = {}): SourceStatus {
@@ -64,6 +91,9 @@ function onlineStatus(over: Partial<OnlineStatus> = {}): OnlineStatus {
     cache: { total: 0, cached: 0, single: false, fetched_at: 0 },
     available: false,
     reason: '',
+    has_sidecar: false,
+    updatable: false,
+    update_reason: '',
     ...over,
   }
 }
@@ -95,6 +125,7 @@ beforeEach(() => {
   // 默认「还没绑定」—— 需要已绑定态的用例自己覆盖（表格里那几条写明了的才是重点）
   m.onlineStatus.mockResolvedValue(onlineStatus())
   m.sourcesStatus.mockResolvedValue({ items: [] } as never)
+  m.runCheckUpdate.mockResolvedValue({ ok: true, message: '已检查，没有新章节' })
 })
 
 describe('OnlineReadCard · 源列表的可用态（第 93 期）', () => {
@@ -224,6 +255,87 @@ describe('OnlineReadCard · 已绑定态（第 93 期）', () => {
 
     expect(m.onlineUnbind).toHaveBeenCalledWith('book-a')
     expect(w.text()).toContain('缓存留着')
+    w.unmount()
+  })
+})
+
+describe('OnlineReadCard · 检查更新 / 用源站整本覆盖（第 93 期 E5）', () => {
+  /** 可更新 = 闸门开着 且（有留档 或 有绑定）；这里取「下载来的书」：有留档、**没绑定** */
+  function updatable(over: Partial<OnlineStatus> = {}): OnlineStatus {
+    return onlineStatus({ has_sidecar: true, updatable: true, ...over })
+  }
+
+  it('可更新 ⇒ 给出「检查更新」与「用源站整本覆盖本地」两颗按钮', async () => {
+    m.onlineStatus.mockResolvedValue(updatable())
+    const w = await mountCard()
+
+    expect(rowButtons(w, '检查更新').length).toBe(1)
+    expect(rowButtons(w, '用源站整本覆盖本地').length).toBe(1)
+    // 没绑定 ⇒ 不给「开始在线读」/「解绑」（那两项的判据是 bound）
+    expect(rowButtons(w, '开始在线读').length).toBe(0)
+    expect(rowButtons(w, '解绑').length).toBe(0)
+    w.unmount()
+  })
+
+  it('「检查更新」默认**只追加**：不带 overwrite，报告就地显示在这张卡上', async () => {
+    m.onlineStatus.mockResolvedValue(updatable())
+    m.runCheckUpdate.mockResolvedValue({ ok: true, message: '新增 3 章' })
+    const w = await mountCard()
+
+    await rowButtons(w, '检查更新')[0].trigger('click')
+    await flushPromises()
+
+    // ⚠️ 第二个参数缺省 ⇒ 「只追加」那条路（既有章一个字都不动）
+    expect(m.runCheckUpdate).toHaveBeenCalledWith('book-a')
+    // 报告**原样**贴出来，不跳任务中心（用户就站在这儿刚点的按钮）
+    expect(w.text()).toContain('新增 3 章')
+    expect(w.emitted('changed')).toBeTruthy()
+    w.unmount()
+  })
+
+  it('「整本覆盖」说清代价并二次确认，确认后才带 overwrite=true', async () => {
+    m.onlineStatus.mockResolvedValue(updatable({ title: '三体' }))
+    m.runCheckUpdate.mockResolvedValue({ ok: true, message: '已按源站整本重写' })
+    const spy = setConfirm(true)
+    const w = await mountCard()
+
+    await rowButtons(w, '用源站整本覆盖本地')[0].trigger('click')
+    await flushPromises()
+
+    const text = confirmText(spy)
+    expect(text).toContain('三体')
+    // 代价必须写明：它**不是**「更彻底地检查更新」，而是另一件事
+    expect(text).toContain('整本重写')
+    expect(text).toContain('进度')
+    expect(m.runCheckUpdate).toHaveBeenCalledWith('book-a', { overwrite: true })
+    expect(w.text()).toContain('整本重写')
+    w.unmount()
+  })
+
+  it('点「取消」⇒ 一个字都不写（既没覆盖，也没白问一次后端）', async () => {
+    m.onlineStatus.mockResolvedValue(updatable())
+    setConfirm(false)
+    const w = await mountCard()
+
+    await rowButtons(w, '用源站整本覆盖本地')[0].trigger('click')
+    await flushPromises()
+
+    expect(m.runCheckUpdate).not.toHaveBeenCalled()
+    expect(w.emitted('changed')).toBeUndefined()
+    w.unmount()
+  })
+
+  it('有留档但当前不可更新 ⇒ 说出后端给的原因，两颗按钮都不出现', async () => {
+    m.onlineStatus.mockResolvedValue(onlineStatus({
+      has_sidecar: true,
+      updatable: false,
+      update_reason: '下载与搜索已在设置里关闭：到「设置 → 网络与下载」打开',
+    }))
+    const w = await mountCard()
+
+    expect(w.text()).toContain('下载与搜索已在设置里关闭')
+    expect(rowButtons(w, '检查更新').length).toBe(0)
+    expect(rowButtons(w, '用源站整本覆盖本地').length).toBe(0)
     w.unmount()
   })
 })
