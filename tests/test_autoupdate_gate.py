@@ -21,6 +21,8 @@
 
 ⚠️ 全程零网络：`_run_one`（唯一外呼处）在本文件里一律换成桩。
 """
+import pathlib
+
 import pytest
 
 from novelforge import config
@@ -39,11 +41,16 @@ def books(isolated, default_root):  # noqa: ARG001
 
     只造登记与留档，不造正文 —— 本文件关心的是「有没有外呼」，不是追更本身
     （追更的正确性在 `tests/test_update_report.py`）。
+
+    ⚠️ 成品在书库根、留档在**收书目录**（`config.INPUT_DIR`）—— 与真实下载链路同一布局，
+    理由见 `test_autoupdate.py::test_留档要在收书目录里找`。
     """
     default_root.mkdir(parents=True, exist_ok=True)
+    inp = pathlib.Path(config.INPUT_DIR)
+    inp.mkdir(parents=True, exist_ok=True)
     for i in range(3):
         (default_root / f"书{i}.epub").write_bytes(b"PK")
-        (default_root / f"书{i}.meta.json").write_text(
+        (inp / f"书{i}.meta.json").write_text(
             '{"source": "stub", "chapters": 1}', encoding="utf-8")
     library.invalidate()
     return default_root

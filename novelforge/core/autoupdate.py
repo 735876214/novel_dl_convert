@@ -12,6 +12,9 @@
    并发外呼会被站点限流甚至封禁 —— 与 `core/watcher.py` 里那条既有注释同口径。
 3. **不重复实现追更**：只调 `sources.manager.update_report` —— 它是**同路径互斥的唯一入口**，
    所以「只追加 / 原子写 / 并发保护 / 既有章 index 不漂移」这些保证仍然只在一处。
+   第 93 期把「**单本**追更」也收敛成一处 :func:`update_book`（读留档 → 过闸门 → 追更 →
+   记日志 → 返回报告）：定时轮次、详情页的「检查更新」、自动落地之后的更新都走它。
+   三处各写一遍「读留档 + 记一笔账」时，最容易分叉的恰恰是**日志措辞与闸门**。
 4. **追更也过闸门**（第 93 期补）—— 见下。
 
 ## 第 93 期补的两处（都是既有漏子，行为变化）
@@ -32,6 +35,7 @@
 与 updater 同一范式 —— 这类**长期循环**线程不进 `watcher._BG_THREADS`
 （那张表是给「短命旁路任务」收尾用的，长期循环会把收尾 join 卡死）。
 """
+import json
 import logging
 import pathlib
 import threading
@@ -54,12 +58,42 @@ def _cfg() -> dict:
         return {}
 
 
+class Blocked(RuntimeError):
+    """闸门未放行（``args[0]`` 是**可直接展示**的原因原文，与 `gate_reason()` 逐字一致）。
+
+    为什么不返回一份「新增 0 章」的报告：调用方（含详情页的「检查更新」）必须能分出
+    「源上没有新章」与「你自己关着下载开关」——后者是一句**指令**，前者只是一条状态。
+    """
+
+
+def sidecar_of(book: dict) -> pathlib.Path | None:
+    """这本书的**留档**（`<stem>.meta.json`）路径；判不出来返回 ``None``。
+
+    ⚠️ **在收书目录（`config.INPUT_DIR`）下，不在书库根下** —— 这是第 93 期修的一个
+    真 bug：留档由 `manager.write_sidecar` 写在**原件旁边**，而下载链路把原件（txt）
+    落在收书目录、把成品（epub）落在书库根（`download_to(item, out_dir, input_dir, opts)`）。
+    第 86 期原先按「书库根 + 货名去后缀」算，于是**正常布局下一本都找不到**
+    （只有「收书目录恰好就是书库根」的单目录部署才碰得上，测试正是那么造的现场，
+    所以一直绿着）。`config.DEFAULTS["watch"]["ignore"]` 里那条 `*.meta.json` 也是
+    为它留的：留档写在**被监听**的收书目录里，不排除就会被当成待转换的文件。
+
+    ⚠️ 拼法**只有这一处**（书库扫描给的 `name` 是成品名，两者基名相同 —— 下载的 txt 与
+    转出的 epub 同名）。**不查 DB**：留档就在原件旁边，比「遍历书目再反查来源」直接，
+    也不受索引刷新时机影响。
+    ⚠️ 本函数**只拼路径、不判存在**（`is_file()` 交给调用方）—— 这样它既能当
+    「有没有留档」的判据，也能当「留档该写在哪」的判据（落地时要写它）。
+    """
+    stem = pathlib.PurePosixPath(str((book or {}).get("name") or "")).stem
+    if not stem:
+        return None
+    return pathlib.Path(config.INPUT_DIR) / f"{stem}.meta.json"
+
+
 def candidates(limit: int = 0) -> list:
-    """本轮要追更的**留档清单**（`*.meta.json` 路径）。**只读枚举、不外呼**。
+    """本轮要追更的书目（``[{"name", "sidecar", "book"}...]``）。**只读枚举、不外呼**。
 
     判据：书库里每本书的同名 sidecar 是否存在 —— sidecar 是「这本书是下载来的」
-    的唯一持久痕迹（`sources/manager.write_sidecar`）。**不查 DB**：sidecar 就在
-    书旁边，比「遍历书目再反查来源」直接，也不受索引刷新时机影响。
+    的唯一持久痕迹（`sources/manager.write_sidecar`）。
 
     `limit > 0` 时最多收这么多本（单轮上限，防止一次外呼打爆）。
     """
@@ -71,18 +105,58 @@ def candidates(limit: int = 0) -> list:
         return out
     for b in books:
         try:
-            root = library.root_of(b)
-            stem = pathlib.PurePosixPath(str(b.get("name") or "")).stem
-            if not root or not stem:
-                continue
-            sidecar = pathlib.Path(root) / f"{stem}.meta.json"
-            if sidecar.is_file():
-                out.append(sidecar)
+            sidecar = sidecar_of(b)
+            if sidecar is not None and sidecar.is_file():
+                out.append({"name": sidecar.name[:-len(".meta.json")],
+                            "sidecar": sidecar, "book": b})
         except Exception:                                # noqa: BLE001 —— 单本失败不拖累整轮
             continue
         if limit and len(out) >= int(limit):
             break
     return out
+
+
+def update_book(book: dict, mgr=None, *, origin: str = "auto-update") -> dict:
+    """**单本追更的唯一入口**：读留档 → 过闸门 → `manager.update_report` → 记日志 → 返回报告。
+
+    顺序是刻意的（第 93 期）：**先读留档再问闸门**，因为闸门的入参是「源」——
+    而「这本书来自哪个源」只有留档知道。被拦下时抛 :class:`Blocked`（原文照传），
+    **不返回假报告**；其余异常照常冒出（调用方逐本吞并计数，不让一本书拖垮整轮）。
+
+    它同时是**活动日志的唯一写点**（原先这段在 `tick()` 里）：定时轮次、手动「检查更新」、
+    自动落地后的更新都调这里，日志措辞就只有一份 —— 两处各写一份必然分叉。
+
+    ⚠️ 真正的追更保证（只追加 / 原子写 / 并发互斥 / 既有章 index 不漂移）仍然**只在**
+    `manager.update_report` 一处，本函数不复制它。
+    """
+    from ..sources import manager as mgr_mod
+    sidecar = sidecar_of(book)
+    if sidecar is None:
+        raise ValueError(f"算不出这本书的留档路径（{book.get('name')}），无法追更")
+    if not sidecar.is_file():
+        raise ValueError(f"未找到 sidecar 元数据 {sidecar.name}，无法增量更新")
+    name = sidecar.name[:-len(".meta.json")]
+    meta = json.loads(sidecar.read_text(encoding="utf-8"))
+    mgr = mgr if mgr is not None else mgr_mod.DownloadManager(config.load_config())
+    reason = mgr.gate_reason(meta.get("source"))
+    if reason:
+        raise Blocked(reason)
+    txt = sidecar.with_suffix("").with_suffix(".txt")
+    try:
+        res = _run_one(mgr, txt)
+    except Exception as e:                               # noqa: BLE001 —— 记一笔再照原样冒出
+        activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_FAIL,
+                         detail=f"追更失败：{e}", source=origin)
+        raise
+    res = dict(res or {})
+    added = int(res.get("added") or 0)
+    if res.get("note"):
+        activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_OK,
+                         output=str(txt.parent), detail=str(res["note"]), source=origin)
+    elif added:
+        activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_OK,
+                         output=str(txt.parent), detail=f"新增 {added} 章", source=origin)
+    return res
 
 
 def tick(conf: dict = None) -> dict:
@@ -125,28 +199,24 @@ def tick(conf: dict = None) -> dict:
         rep["blocked"] = blocked
         _log.info("追更：闸门未放行，本轮一本都没跑（%s）", blocked)
         return rep
-    for i, sidecar in enumerate(files):
-        name = sidecar.name[:-len(".meta.json")]
+    for i, cand in enumerate(files):
+        name = cand["name"]
         try:
-            txt = sidecar.with_suffix("").with_suffix(".txt")
-            res = _run_one(mgr, txt)
+            # 逐本走**同一个**入口（第 93 期收敛）：闸门、报告、活动日志都在 `update_book` 里，
+            # 这里只负责计数与节流 —— 定时轮次与手动「检查更新」的措辞因此不可能分叉。
+            res = update_book(cand["book"], mgr)
             added = int(res.get("added") or 0)
             rep["ok"] += 1
             rep["added"] += added
-            if res.get("note"):
-                activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_OK,
-                                 output=str(sidecar.parent), detail=str(res["note"]),
-                                 source="auto-update")
-            elif added:
-                activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_OK,
-                                 output=str(sidecar.parent), detail=f"新增 {added} 章",
-                                 source="auto-update")
-            else:
+            if not added and not res.get("note"):
                 rep["skipped"] += 1
+        except Blocked as e:
+            # 理论上到不了（上面已整轮拦下），但闸门日后若按**源**分级就会走到这里：
+            # 那时把它算成「失败」是错的（用户自己的开关，不是站点挂了），记「跳过」。
+            rep["skipped"] += 1
+            _log.info("追更：闸门未放行，跳过 %s（%s）", name, e)
         except Exception as e:                           # noqa: BLE001
             rep["errors"] += 1
-            activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_FAIL,
-                             detail=f"追更失败：{e}", source="auto-update")
             _log.warning("追更失败（%s）：%s", name, e)
         if delay and i < len(files) - 1:
             time.sleep(delay)                            # 礼貌节流：不在两本之间连打

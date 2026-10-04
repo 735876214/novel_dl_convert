@@ -4889,3 +4889,12 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
    （要么 monkeypatch 掉 `tick`、要么只测候选枚举）。改成与 `server._manager()` 同口径的
    `DownloadManager(config.load_config())`。它与第 2 条同属「追更的调度口径」，
    故合在一笔提交里（新增 `tests/test_autoupdate_gate.py` 三面钉住：拦得住 / 放得行 / 两种 0 分得开）。
+4. **追更的候选枚举找错了目录**（同批修）：留档由 `manager.write_sidecar` 写在**原件旁边**，
+   而下载链路把原件（txt）落在**收书目录**、把成品（epub）落在**书库根**
+   （`download_to(item, out_dir, input_dir, opts)`）。第 86 期却按「书库根 + 货名去后缀」算
+   ⇒ **正常部署下一本候选都找不到**（只有「收书目录恰好就是书库根」的单目录部署才碰得上，
+   而第 86 期的用例正是那么造的现场，所以一直绿着）。现在收敛到 `autoupdate.sidecar_of(book)`
+   一处，按 `config.INPUT_DIR` 找；「这本书来自哪个源」的读法也只有它一处。
+   `config.DEFAULTS["watch"]["ignore"]` 里那条 `*.meta.json` 正是为这个位置留的（留档写在
+   **被监听**的收书目录里）。测试现场同步改成「成品在库根、留档在收书目录」两个不同目录，
+   并加一条反向用例钉住「按库根找 = 一本都找不到」。

@@ -383,6 +383,11 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "output")
     monkeypatch.setattr(config, "LIBRARY_SOURCE_DIR", tmp_path / "libraries")
+    # 收书目录也指到用例专属路径（第 93 期）：下载留档（`<名>.meta.json`）写在**原件旁边**，
+    # 而原件落在收书目录 —— 追更的候选枚举按它算（`autoupdate.sidecar_of`）。
+    # 不指的话那些用例会往 `/app/input` 下真写文件（Windows 上是 `C:\app\input`）。
+    # ⚠️ `server.INPUT_DIR` 是 import 时的拷贝，不受这里影响（见上方注释）。
+    monkeypatch.setattr(config, "INPUT_DIR", tmp_path / "input")
     # 第 41 期：多来源根。测试里就一个来源根（即上面这个）；同步让服务端的边界校验
     # （normalize_source_dirs 只认 LIBRARY_SOURCE_ROOTS）放行 tmp_path 下的库根。
     monkeypatch.setattr(config, "LIBRARY_SOURCE_ROOTS",
