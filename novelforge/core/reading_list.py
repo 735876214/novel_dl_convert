@@ -253,51 +253,119 @@ def build_pairs(entries: list, local_chapters: list) -> list:
 ONLINE_WINDOW = 2
 ONLINE_NEED = 3
 
+#: 求位移时**从本地末章往前最多试多少章**当锚点。不从「只认末章」出发的原因见
+#: :func:`align_shift`（源站改了尾部个别标题时，退几章仍能对齐，比一票否决结实）。
+ALIGN_ANCHORS = 20
 
-def align_online(online_titles: list, local_chapters: list, pos: int,
-                 *, window: int = ONLINE_WINDOW, need: int = ONLINE_NEED) -> int | None:
-    """线上第 ``pos`` 章 ↔ 本地哪一章（用户拍板的判据，第 93 期）。
+
+def _align_local(local_chapters: list) -> dict:
+    """本地章节表 → ``{index: 归一标题}``（对齐判据的唯一入参形状）。"""
+    out: dict = {}
+    for c in local_chapters or []:
+        if c.get("index") is None:
+            continue
+        try:
+            out[int(c["index"])] = norm_title(c.get("title"))
+        except (TypeError, ValueError):                  # 坏 index 当没有，不猜
+            continue
+    return out
+
+
+def _probe(local: dict, titles: list, *, center: int, shift: int, window: int) -> tuple:
+    """在**本地坐标**里跑一遍 5 章窗口规则 ⇒ ``(hits, total)``。
+
+    ``shift`` 把本地 index 映到线上 index（线上 = 本地 + ``shift``）；``center`` 是本地坐标下的
+    窗口中心。``total`` 只数**两边都在**的位置（越界收窄）—— 本地还没读到那一章、
+    或源站目录已经到头，都不该被算成「对不上」。
+    """
+    hits = total = 0
+    for i in range(center - window, center + window + 1):
+        lt = local.get(i)
+        if not lt:                                        # 本地没有 / 没标题 ⇒ 无可比
+            continue
+        j = i + shift
+        if j < 0 or j >= len(titles):
+            continue
+        total += 1
+        if lt == titles[j]:
+            hits += 1
+    return hits, total
+
+
+def align_shift(online_titles: list, local_chapters: list,
+                *, window: int = ONLINE_WINDOW, need: int = ONLINE_NEED) -> int | None:
+    """**唯一判据**：本地 index + ``shift`` = 线上 index；对不上 ⇒ ``None``（第 93 期 D/E）。
 
     用户口径（2026-10-03 原话）：「根据章节序号和章节名称进行匹配，若本章节及上下章节共 5 章
     能有 3 章对应上就认定为同一章节，以线上章节名称进行确定进度等数据」。
 
-    做法：取线上 ``pos`` 前后各 ``window`` 章（越界**收窄**）为窗口，与**本地同序号**的那几章
-    逐个比 :func:`norm_title`；命中数 ``>= min(need, 窗口实际章数)`` ⇒ 认定同一章，
-    返回**本地那一章的 index**；否则返回 ``None``（**不猜**）。
+    做法：① 拿本地章节的**归一标题**去线上目录里找同名的位置，每一个都给出一个候选位移；
+    ② 候选位移逐个用**用户那条 5 章规则**验（在锚点章上下各 ``window`` 章里，
+    命中数 ``>= min(need, 可比章数)`` 才算通过 —— 边界与本地更短时窗口自然收窄）；
+    ③ 恰好**只有一个**位移通过才返回它，两个以上都通过 ⇒ ``None``（有歧义就不猜，
+    硬配错一章的代价是进度落到别人身上）。
 
-    为什么按「同序号」比、而不是拿线上标题去本地找：线上与本地是同一本书的两份目录，
-    **序号才是骨架**，标题只用来确认「这个骨架没偏」。整本漂移（比如线上多了一章卷首）
-    会让同序号全错 —— 那时命中数达不到门槛，如实返回 ``None``，绝不硬配。
-    边界（书首 / 书尾）窗口收窄，门槛随之降到「够数即可」（``min(need, total)``），
-    既不会因为「前面没章可对」而永远配不上，也不会拿两章对上就认定整本。
+    ⚠️ **为什么必须求位移、不能假定为 0**：本地章节表是按 **EPUB spine 下标**给的
+    （`library._reading_list`），源站目录是**正文章号**。本项目自己下载的书，成品 EPUB 的
+    spine 首条是 nav 目录页（`epub_builder.build_epub` 默认 ``nav=True``）—— 本地 index
+    恒比源站章号**大 1**，按同下标硬比会「一本都对不上」。源站目录里多一条「序章 / 版权页」
+    时位移是另一个方向，同一个机制一并覆盖。
 
-    ⚠️ **唯一实现**：客户端必须用服务端给的 ``local_index``，不许自己再算一份 ——
-    否则「这台机器记上了进度、那台没记」这类只能靠猜的鬼故事会重演。
+    ⚠️ 锚点从**本地末章往前**退（``ALIGN_ANCHORS`` 章）：末章是**追加的边界**
+    （`core.landing` 靠它认识「本地接在源站哪儿」），而源站只改了尾部个别标题时，
+    往前退几章仍能对齐；只认末章的话那本书就整本放弃了。
     """
+    titles = [norm_title(t) for t in (online_titles or [])]
+    local = _align_local(local_chapters)
+    if not titles or not local:
+        return None
+    online_by: dict = {}
+    for i, t in enumerate(titles):
+        if t:
+            online_by.setdefault(t, []).append(i)
+    if not online_by:
+        return None
+    w = max(0, int(window))
+    threshold = max(1, int(need))
+    accepted: set = set()
+    for a in sorted(local, reverse=True)[:ALIGN_ANCHORS]:
+        if not local[a]:
+            continue
+        for i in online_by.get(local[a], ()):             # 这一章的标题在线上出现在哪几处
+            s = i - a
+            hits, total = _probe(local, titles, center=a, shift=s, window=w)
+            if total and hits >= min(threshold, total):
+                accepted.add(s)
+    if len(accepted) != 1:
+        return None
+    return accepted.pop()
+
+
+def align_map(online_titles: list, local_chapters: list,
+              *, window: int = ONLINE_WINDOW, need: int = ONLINE_NEED) -> dict:
+    """线上 index → 本地 index（**整本一次求出来**；对不上 ⇒ ``{}``）。
+
+    服务端列目录时用它：`align_shift` 一求，逐章映射是纯算术 —— 一章一次 ``align_shift``
+    会把 O(章数) 的活干成 O(章数²)。
+    """
+    s = align_shift(online_titles, local_chapters, window=window, need=need)
+    if s is None:
+        return {}
+    local = _align_local(local_chapters)
+    titles = list(online_titles or [])
+    return {i: i - s for i in range(len(titles)) if (i - s) in local}
+
+
+def align_online(online_titles: list, local_chapters: list, pos: int,
+                 *, window: int = ONLINE_WINDOW, need: int = ONLINE_NEED) -> int | None:
+    """线上第 ``pos`` 章 ↔ 本地哪一章（单章问法 = ``align_map(...).get(pos)``）。"""
     try:
         p = int(pos)
     except (TypeError, ValueError):
         return None
-    titles = list(online_titles or [])
-    local = {int(c["index"]): c for c in (local_chapters or []) if c.get("index") is not None}
-    if not titles or not local or p < 0:
+    if p < 0:
         return None
-    w = max(0, int(window))
-    hits = total = 0
-    for i in range(p - w, p + w + 1):
-        if i < 0 or i >= len(titles):        # 越界收窄：书首 / 书尾窗口变小
-            continue
-        total += 1
-        c = local.get(i)
-        if c is None:                        # 本地没有这一章（本地更短）⇒ 不算命中
-            continue
-        q = norm_title(titles[i])
-        if q and q == norm_title(c.get("title")):
-            hits += 1
-    if total == 0 or hits < min(max(1, int(need)), total):
-        return None
-    # 认定同一章 ⇒ 本地位置就是线上位置（骨架对齐）；本地没有这一章则不记（返回 None）
-    return p if p in local else None
+    return align_map(online_titles, local_chapters, window=window, need=need).get(p)
 
 
 def text_to_xhtml(text) -> str:
@@ -309,7 +377,7 @@ def text_to_xhtml(text) -> str:
 
     ⚠️ **每一行先 `escape` 再包 `<p>`**：源站正文里可能有 `<script>`、`onerror=`、
     未闭合的标签。**第三方标记永远不进 `v-html`** 是在线读的硬要求（在线读那条路
-    在调用前还会把 HTML 正文压成纯文本，见 `sources/online.html_to_text`）。
+    在调用前还会把 HTML 正文压成纯文本，见 `sources/rules.html_to_text`）。
     空行（只有空白）丢掉：源站正文里常有成串空行，转成 `<p></p>` 就是一片空档。
     """
     from xml.sax.saxutils import escape
