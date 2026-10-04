@@ -2,7 +2,7 @@
 
 夹具 `tests/fixtures/legado2_real.json` 是从真实样本 `202003.txt`（用户给的
 `cdn.jsdelivr.net/gh/yeyulingfeng01/yuedu.github.io@1.1/202003.txt`，3,345,858 字节、
-**1537 条**书源）里裁出来的 5 条 —— 名字、键名、取值**一字未改**，只在条数上做了裁剪。
+**1537 条**书源）里裁出来的 9 条 —— 名字、键名、取值**一字未改**，只在条数上做了裁剪。
 
 ## 这一版修的是什么
 
@@ -10,13 +10,17 @@
 于是每条都被判「可判定的字段不足以拼出本项目规则」—— 而用户看到的是「源不能用」，
 看不出「其实是方言不认识」。现在 2.x 的键名、以及**裸词搜索占位符**，都在
 :func:`legado.normalize_legacy` 这一处归一到 3.x，然后走同一条转换路（**没有第二套 convert**）。
+
+阶段 2c 又补了两处 2.x 独有写法（**由实测驱动，不是猜的**）：单个 `#` 也是替换分隔符
+（`斗书阁` / `小说旗` 那两条），以及 `@children` 步的渲染往返（`看看书™九天之狼`）。
+这三条就是新加进夹具的回归钉子。
 """
 import json
 import pathlib
 
 import pytest
 
-from novelforge.sources import formats, intake, legado, rules
+from novelforge.sources import formats, intake, legado, rules, selspec
 
 FIX_DIR = pathlib.Path(__file__).parent / "fixtures"
 FIXTURE2 = FIX_DIR / "legado2_real.json"
@@ -197,7 +201,7 @@ def test_2x的源现在转得出规则(entries2):
 
 
 def test_2x条目判no时也给逐条理由(entries2):
-    """实测：另外 4 条里 3 条被诚实闸拦下、1 条判 partial ——**每一条**都要说清为什么。"""
+    """整份夹具里**每一条**都要说清为什么（判 `no` 的必须有逐条理由，不许只丢一句「不可用」）。"""
     for e in entries2:
         got = formats.map_entry(e)
         assert got["supported"] in ("yes", "partial", "no")
@@ -229,3 +233,44 @@ def test_整份走一遍导入路由(entries2, isolated):
     for r in res["rows"]:
         if r["verdict"] == "unsupported":
             assert r["unsupported_fields"], f"{r['name']} 判不可用却没给理由"
+
+
+# ---------------- 阶段 2c：单个 `#` 替换 / `@children`（都是实测真源写法） ----------------
+
+def test_单井号替换照旧当替换(entries2):
+    r"""2.x 里**单个** `#` 也是替换分隔符 —— 从前被当成「把 `##` 写错了」整条判死。
+
+    实测（`202003.txt`）单 `#` 出现在 1745 个取值里，其中 **206 条**整条只卡这一处。
+    证据是成对出现的：`.mlist@html##^\s*##<br>` 与 `.brief_text@html#^#<br>` 并存。
+    """
+    rule = formats.map_entry(_by_name(entries2, "小说旗"))["converted_rule"]
+    # ⚠️ 归一成项目自己的两个 `#`（引擎只认一份实现），语义不变
+    assert rule["book"]["content"]["container"] == \
+        "#content##一秒记住【小说旗 www.xs7.la】，热门小说免费阅读！"
+    assert rule["search"]["fields"]["author"] == "span##作者："
+    # 容器与字段都要**真的能跑**（不是只过闸门）
+    soup = rules._soup("<div id='content'>一秒记住【小说旗 www.xs7.la】，"
+                       "热门小说免费阅读！正文开始</div>")
+    assert rules._field_value(soup, rule["book"]["content"]["container"]) == "正文开始"
+
+
+def test_单井号在容器上也是替换(entries2):
+    """`斗书阁` 的正文容器 `id.content@html#…` —— 单 `#` 在**容器**位置同样当替换。"""
+    got = formats.map_entry(_by_name(entries2, "斗书阁"))
+    assert got["supported"] == "yes", got["unsupported_fields"]
+    rule = got["converted_rule"]
+    assert rule["book"]["content"]["container"].startswith("#content@html##")
+    assert "@@" not in json.dumps(got, ensure_ascii=False)
+
+
+def test_children步不再渲染成两个井号(entries2):
+    """`class.chaptercontent@children` 曾渲染成 `.chaptercontent@@children` ⇒ 解析报「空的 `@` 段」。
+
+    （实测原始语料里 `@@` 出现 **0 次** —— 那些 `@@children` 全是本项目自己的渲染 bug。）
+    """
+    got = formats.map_entry(_by_name(entries2, "看看书™九天之狼"))
+    assert got["supported"] == "yes", got["unsupported_fields"]
+    container = got["converted_rule"]["book"]["content"]["container"]
+    assert container == ".chaptercontent@children", container
+    assert not selspec.spec_error(selspec.parse_spec(container))
+    assert "@@" not in json.dumps(got, ensure_ascii=False)

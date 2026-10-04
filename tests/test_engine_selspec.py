@@ -133,7 +133,7 @@ def test_索引是列表位置_不是nth_of_type():
     "children[0] a",      # 实测真源写法，不是合法 CSS
     "//div[@id='x']",     # XPath（通道对不上）
     "$.data.list",        # JSON 路径（通道对不上）
-    "text#注释",          # 把 `##` 写成了单个 `#`
+    "id.content@html#<js>result",   # `<js>` 贴在单 `#` 后面（跑脚本，不是替换）
 ])
 def test_写坏的选择器走空值不抛异常(bad):
     """**红线**：搜索与目录的调用点没有 try 保护 —— 当年一条「判可用」的规则会让整次搜索 500。"""
@@ -176,3 +176,72 @@ def test_坏输入不许把取值带崩():
     soup = rules._soup(SEARCH_HTML)
     for junk in (None, "", ".", "./", "  ", 3, object()):
         assert isinstance(rules._field_value(soup, junk), str)
+
+
+# ---------------- 阶段 2c：2.x 的单个 `#` + `@children` 的渲染往返 ----------------
+
+def test_单井号是2x的替换分隔符():
+    r"""单个 `#` 与 `##` **同义** —— 实测 2.x 里两者成对出现（206 条只卡在这里）。
+
+    证据（`202003.txt`）：同一条目既有 `.mlist@html##^\s*##<br>` 也有 `.brief_text@html#^#<br>`，
+    还有 `tag.p.0@text#.*? \| (.*?) \| 已?(.+?)中?[\s]*(\d[^|]+).*#$1,$2,$3` 这种**两侧都写一个**。
+    """
+    plan = selspec.parse_spec(".brief_text@html#^#<br>")
+    assert not plan.error and not selspec.spec_error(plan)
+    assert plan.mode == "html" and [st.css for st in plan.steps] == [".brief_text"]
+    assert len(plan.replace) == 1
+    soup = rules._soup("<div class='brief_text'>^正文</div>")
+    assert selspec.value(soup, selspec.parse_spec(r".brief_text@text#\^#<br>")) == "<br>正文"
+    # 只写一段 ⇒ 删掉命中（与 `##` 一个口径）
+    assert selspec.value(soup, selspec.parse_spec("div@text#正文")) == "^"
+    # 三段写法：`选择器#正则#替换`，`$1` 照旧转 `\g<1>`
+    assert selspec.value(soup, selspec.parse_spec(r"div@text#\^(.*)$#$1")) == "正文"
+    # 与 `##` 的结果必须**一字不差**（同一份实现，不是第二套）
+    for a, b in ((".brief_text@html#^#<br>", ".brief_text@html##^##<br>"),
+                 ("div@text#正文", "div@text##正文"),
+                 (".a@text#x#y", ".a@text##x##y")):
+        pa, pb = selspec.parse_spec(a), selspec.parse_spec(b)
+        assert selspec.render(pa) == selspec.render(pb), (a, b)
+        assert selspec.value(soup, pa) == selspec.value(soup, pb), (a, b)
+
+
+def test_单井号不会误切id选择器():
+    """`.a#b@html` / `.a #b` / `#main p` 里的 `#` 是 **id 选择器** —— 切错了会静默改坏取值。"""
+    for css, mode in ((".a#b@html", "html"), (".a#b", "text"), (".a #b", "text"),
+                      ("#main p", "text"), ("html#main", "text")):
+        plan = selspec.parse_spec(css)
+        assert not plan.replace, (css, plan)
+        assert plan.mode == mode, (css, plan)
+    assert not selspec.spec_error(selspec.parse_spec(".a #b"))       # 编译得过就是纯 CSS
+    # 而前缀解析不出来的（`@css:` 残段）也不切 —— 宁可不动
+    assert not selspec.parse_spec("@css:#list").replace
+    # `<js>` 贴在 `#` 后面是在跑脚本，不是替换
+    assert "js" in selspec.spec_error(selspec.parse_spec("id.content@html#<js>result"))
+
+
+def test_children步渲染往返一致():
+    """`@children` 步渲染时不能再带一个 `@` —— 否则拼出 `.pt-read-text@@children`（实测 35 条被误判死）。"""
+    for raw in ("class.cover@children", ".pt-read-text@children", ".mySearch!0@children",
+                "@children", "class.cover@children@tag.a"):
+        plan = selspec.parse_spec(raw)
+        assert not plan.error, (raw, plan.error)
+        text = selspec.render(plan)
+        assert "@@" not in text, (raw, text)
+        again = selspec.parse_spec(text)
+        assert not again.error, (raw, text, again.error)
+        assert not selspec.spec_error(again), (raw, text)
+        assert [(st.css, st.index, st.kind) for st in again.steps] == \
+               [(st.css, st.index, st.kind) for st in plan.steps], (raw, text)
+
+
+def test_children步真的取子元素():
+    """渲染往返只是纸面 —— 子元素要真的取到（`.cover@children` 取的是**子元素**不是后代）。
+
+    容器走 `select()`（要列表），字段走 `value()`（只要第一个）—— 两处语义本来就不一样。
+    """
+    soup = rules._soup("<ul class='cover'><li>甲</li><li>乙</li></ul>")
+    for raw in ("class.cover@children", ".cover!0@children", "ul.cover@children"):
+        nodes = selspec.select(soup, selspec.parse_spec(raw))
+        assert [n.name for n in nodes] == ["li", "li"], raw
+        assert [n.get_text() for n in nodes] == ["甲", "乙"], raw
+    assert selspec.value(soup, selspec.parse_spec("class.cover@children")) == "甲"

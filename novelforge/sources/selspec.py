@@ -26,6 +26,7 @@
 | `A\\|B` / `A\\|\\|B` | 候选：取**第一个非空**的 | 3.x `\\|\\|`；2.x 单 `\\|`（`class.author@text\\|class.author ellipsis@text`） |
 | `A&&B` | 拼接（两边的值接起来） | `class.book-author.2@text&&class.book-zt@text` |
 | `选择器##正则##替换` | 取到值后再替换（可多段，`$1` 自动转 `\\g<1>`）；只写 `##正则` 表示**删掉**命中段 | `.author text##作者：`、`href##$##,`（实测 663 处能编译 / 667） |
+| `选择器#正则#替换` | **单个** `#` —— 阅读 2.x 的替换分隔符（与 `##` 同义）；只写一段也删掉命中 | 2.x 实测 206 条只卡在这里：`id.content@textNodes#一秒记住…`、`.brief_text@html#^#<br>` |
 
 ### 三个容易写错的顺序问题（都按实测口径定死）
 
@@ -45,6 +46,21 @@
 `#author tbody tr!0` 恰好等价（tr 互为兄弟），但 `.odd.0` 跨多个父节点时两者结果不同 ——
 所以这里真的按结果列表取（`nodes[n]`），不做「差不多等价」的翻译。
 
+### 单 `#` 与 `##`（2.x 方言；判据**宁可不动，不可误切**）
+
+单个 `#` 在阅读 2.x 里**就是**替换分隔符，不是「把 `##` 写错」。实测证据成对出现：
+同一条目里既有 `.mlist@html##^\\s*##<br>`（两个）也有 `.brief_text@html#^#<br>`（一个），
+并且 `tag.p.0@text#.*? \| (.*?) \| 已?(.+?)中?[\s]*(\d[^\|]+).*#$1,$2,$3` 这种**两侧都写一个**。
+所以不能一见单个 `#` 就报「少写了一个 `#`」（那是把 206 条能跑的源判死）。
+
+⚠️ 但 `.a#b@html` / `#main p` / `.a #b` 里那个 `#` 是 **id 选择器**，切错了会静默改坏取值。
+判据（`_split_single_hash`）：
+
+1. 整条原文**能编译成 CSS** ⇒ 里面的 `#` 全是 id 选择器，**不切**；
+2. `#` 前面那截要能解析成一条**能编译**的选择器链（`@css:` 这种没写完的前缀不算）；
+3. `#` 后面紧跟「标识符 + 段尾/`@`/空格」且**加上这段仍是合法 CSS**（`.a#b@html`）⇒ 不切；
+4. 取**第一个**满足上面三条的 `#`；它后面那段再按 `#` 切一次（两侧写法）。
+
 ### 绝不抛异常（本期红线）
 
 `#author tbody tr!0` / `.odd.0` / `a.0` 直接交给 `soup.select_one` 会抛
@@ -54,8 +70,8 @@
 由诚实闸与「查看原因」界面直接展示。
 
 ⚠️ 有几处是**故意**解析成 ``error`` 而不是硬塞进 CSS 的：`@js:` / `<js>`（要执行脚本）、
-`$…` / `JSon:`（JSON 路径）、`//xpath`（XPath 通道）、单个 `#`（把 `##` 写错了）。
-它们各自有负责的通道/语法，报「通道对不上」比报「不是合法 CSS」可照做得多。
+`$…` / `JSon:`（JSON 路径）、`//xpath`（XPath 通道）。它们各自有负责的通道/语法，
+报「通道对不上」比报「不是合法 CSS」可照做得多。
 """
 from __future__ import annotations
 
@@ -104,8 +120,8 @@ _PREFIX = {"class": ".", "id": "#", "tag": ""}
 #: 索引后缀：`!0` / `!-1` / `!0:1:-1` / `!`；`.0` / `.-1`。
 _INDEX_BANG = re.compile(r"!(?P<spec>-?\d*(?::-?\d*)*)\s*$")
 _INDEX_DOT = re.compile(r"\.(?P<spec>-?\d+)\s*$")
-#: 单竖线的**误用**：`text#某个东西`（实测有作者把 `##` 写成 `#`）。
-_MALFORMED_HASH = re.compile(r"^(?:text|textnodes|owntext|html|all)#", re.I)
+#: `<js>…</js>`：这一段要在选择器通道里跑脚本（2.x 常写在选择器后面）。
+_JS_TAG = re.compile(r"<\s*js\s*>|<js\b|</js\s*>", re.I)
 #: 一段是不是「一个词」（用来判标签 / 属性名）。
 _WORD = re.compile(r"[A-Za-z_][\w-]*")
 #: 索引写在了**一段的中间**（`tr!0 li`）：`!` 后面是数字，但数字后面还有东西。
@@ -128,9 +144,14 @@ class Step:
         self.kind = kind
 
     def render(self) -> str:
-        """还原成 spec 文本（索引写成 `!n`，`children` 写成 `@children`）。"""
+        """还原成 spec 文本（索引写成 `!n`，`children` 步写成 `@children`）。
+
+        ⚠️ `children` 步**自己没有 css** 时写成裸 `children`，不能再带一个 `@`：
+        `Plan.render` 在带索引 / 带 `children` 时用 `@` 连接各步，写成 `@children` 会拼出
+        `.cover!0@@children` —— 解析回来是「空的 `@` 段」语法错（实测 35 条源就是这么被误判死的）。
+        """
         if self.kind == "children":
-            return f"{self.css}@{_CHILDREN}" if self.css else f"@{_CHILDREN}"
+            return f"{self.css}@{_CHILDREN}" if self.css else _CHILDREN
         return f"{self.css}{'!' + self.index if self.index else ''}"
 
     def __repr__(self) -> str:                              # pragma: no cover —— 调试用
@@ -298,14 +319,15 @@ def _classify(part: str, *, first: bool) -> "tuple[str, str, str, str]":
             f"「{text}」里的索引 `{m_mid.group(0)}` 后面还接着选择器 —— 索引要写在"
             "**它取的那一段**末尾；后面还要往下选就用 `@` 分段（`tr!0@a`），不要用空格")
     low = text.lower()
-    if _MALFORMED_HASH.match(text):
-        return "desc", "", "", (f"「{text}」里的 `#` 只写了一个 —— 阅读的替换分隔符是**两个** `#`"
-                                "（`选择器##正则##替换`），单个 `#` 会被当成 CSS 的 id 选择器")
     if low.startswith("css:"):
         rest = text[4:].strip()
         return ("desc", rest, idx, "") if rest else ("desc", "", "", f"「{text}」后面没写选择器")
     if low.startswith(("js:", "@js", "json:", "jsonpath:", "json@")):
         return "desc", "", "", f"「{text}」要在选择器通道里执行脚本 / JSON 路径（通道对不上）"
+    if _JS_TAG.search(text):
+        # 2.x 把 `<js>…</js>` 直接贴在选择器后面（实测 8 处，如 `class.page-content@tag.p@html<js>…`）。
+        # 整段交给 CSS 编译器只会得到一句 `SelectorSyntaxError`，用户看不出「这里要跑脚本」。
+        return "desc", "", "", f"「{text}」里有 `<js>` —— 这一段要在选择器通道里执行脚本（通道对不上）"
     if text.lstrip("(").startswith("/"):
         return "desc", "", "", (f"「{text}」是 XPath —— 本项目的选择器通道是 CSS"
                                 "（XPath 见 mode=\"xpath\"）")
@@ -413,9 +435,53 @@ def _chain_plan(body: str, raw: str) -> Plan:
     return Plan(raw=raw, steps=steps, attr=attr, mode=mode)
 
 
+def _split_single_hash(text: str) -> "list | None":
+    """阅读 2.x 的**单个** `#` 也当替换分隔符 → ``[选择器, 正则, 替换?]``（切不出来 ⇒ None）。
+
+    判据见模块 docstring「单 `#` 与 `##`」：整条能编译成 CSS 的不切、`#` 前面那截要能解析成
+    一条**能编译**的选择器链、`#` 后面紧跟「标识符 + 段尾/`@`/空格」且加上这段仍是合法 CSS
+    （`.a#b@html`）的不切。**宁可不动，不可误切** —— 切错会静默改坏取值。
+    """
+    if "#" not in text or check_css(text) == "":
+        return None                            # 没有 `#` / 整条就是合法 CSS（`#` 是 id 选择器）
+    if _JS_TAG.search(text):
+        return None                            # `<js>` 一出现就是在跑脚本（2.x 常紧跟换行写），不能当替换
+    for i, ch in enumerate(text):
+        if ch != "#":
+            continue
+        head = text[:i]
+        if not head or head[-1].isspace():
+            continue                           # `.a #b` / 开头就是 `#`（id 选择器）
+        m = _WORD.match(text, i + 1)
+        if m and check_css(text[:m.end()]) == "" and _is_id_tail(text[m.end():]):
+            continue                           # `.a#b@html` / `.a#b` —— id 选择器，不是替换
+        trial = _plan(head)
+        if trial.error or not (trial.steps or trial.sub or trial.attr
+                               or trial.mode != "text" or _is_bare_mode(head)):
+            continue                           # 前缀不是一条能解析的选择器（`@css:` 这种残段）
+        if spec_error(trial):
+            continue                           # 前缀里的 CSS 编译不过 ⇒ 这也不是替换分隔符
+        return [head] + _split_outside(text[i + 1:], ("#",))
+    return None
+
+
+def _is_id_tail(tail: str) -> bool:
+    """`#标识符` 后面接的是不是「选择器继续写」的样子（`@html` / `::attr(x)` / 空格 / 到底）。"""
+    return not tail or tail[0] in "@ \t" or tail.startswith("::")
+
+
+def _is_bare_mode(head: str) -> bool:
+    """前缀就是一整段取值方式（`text#…` / `html#…`）= 节点自身的文本，后面接的是替换。"""
+    return head.strip().lower() in _MODES
+
+
 def _plan(text: str) -> Plan:
-    """**核心解析**（不含缓存）：`##` → 候选 → 拼接 → 步骤。"""
+    """**核心解析**（不含缓存）：`##`（2.x 单 `#`）→ 候选 → 拼接 → 步骤。"""
     pieces = _split_outside(text, ("##",))
+    if len(pieces) == 1:
+        one = _split_single_hash(text)
+        if one:
+            pieces = one
     body = pieces[0]
     replace, note = _replace_of(pieces[1:])
     cands = _split_outside(body, ("||", "|"))
