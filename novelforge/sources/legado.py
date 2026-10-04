@@ -461,7 +461,13 @@ def _tpl(url: str) -> str:
 
 
 def _leading_mode(spec: str) -> str:
-    """判断一个字段的形态：``js`` / ``regex`` / ``json`` / ``css``。"""
+    """判断一个字段的形态：``js`` / ``regex`` / ``json`` / ``xpath`` / ``css``。
+
+    ⚠️ XPath 的判据在 :func:`selspec.is_xpath`（**唯一**一处）—— 那边刻意只认 `//…` / `.//…`
+    且**排除带 `{` 的值**：实测 2.x 的 `bookUrl = /i/{$.NovelID}/`、
+    `/Book/getChapterListByBookId?bookId={$._id}` 是**相对地址模板**，按「以 `/` 开头」判
+    会把它们当 XPath ⇒ 取不到值，而且错得没有痕迹。
+    """
     s = str(spec or "").strip()
     if _JS_HEAD_RE.match(s):
         return "js"
@@ -469,6 +475,8 @@ def _leading_mode(spec: str) -> str:
         return "regex"
     if s.startswith("$") or "@js:" in s.lower():
         return "json" if s.startswith("$") else "js"
+    if selspec.is_xpath(s):
+        return "xpath"
     return "css"
 
 
@@ -614,7 +622,7 @@ def convert(entry: dict, notes=None) -> "dict | None":
 
     rs = ent.get("ruleSearch") or {}
     bl = _leading_mode(rs.get("bookList"))
-    if bl not in ("css", "json"):
+    if bl not in ("css", "json", "xpath"):
         return None
     search: dict = {"url": search_url}
     if bl == "json":
@@ -625,6 +633,15 @@ def convert(entry: dict, notes=None) -> "dict | None":
                    ("url", rs.get("bookUrl")), ("cover", rs.get("coverUrl")),
                    ("intro", rs.get("intro")))
                   if str(v or "").strip().startswith("$")}
+    elif bl == "xpath":
+        # ⚠️ XPath **原样**写进规则：它有自己的语法，`selspec` 只判形状（`is_xpath`），
+        #    执行由 `rules._xpath_nodes` 交给 lxml。**不翻译、不改写**（翻译 = 第二份 XPath 实现）。
+        search.update({"mode": "xpath", "container": str(rs.get("bookList") or "").strip()})
+        fields = {k: str(v).strip() for k, v in
+                  (("title", rs.get("name")), ("author", rs.get("author")),
+                   ("url", rs.get("bookUrl")), ("cover", rs.get("coverUrl")),
+                   ("intro", rs.get("intro")))
+                  if str(v or "").strip()}
     else:
         container, _err = _spec_of(rs.get("bookList"))
         if not container:
@@ -650,6 +667,13 @@ def convert(entry: dict, notes=None) -> "dict | None":
     book: dict = {"mode": "toc"}
     if toc_mode == "json":
         book["toc"] = {"mode": "json", "container": str(toc_spec).strip()}
+    elif toc_mode == "xpath":
+        # 实测真源的目录容器形如 `//*[@class="chapterlist"]/dd/a`（**已经取到 `<a>`**）——
+        # 不做 `_toc_container` 那种「补链接层」（那是 CSS 通道的事：容器常写 `<li>`）。
+        container = str(toc_spec or "").strip()
+        if not container:
+            return None
+        book["toc"] = {"mode": "xpath", "container": container}
     elif toc_mode == "css":
         # ⚠️ 容器**保留索引**（`drop_first_index=False`）：容器的默认是「全部匹配」，
         #    丢掉 `!0` 就从「取第一项」变成「取所有项」—— 那是取错章节的静默故障。
@@ -668,6 +692,13 @@ def convert(entry: dict, notes=None) -> "dict | None":
     cmode = _leading_mode(content)
     if cmode == "json":
         book["content"] = {"mode": "json", "path": str(content).strip()}
+    elif cmode == "xpath":
+        # XPath 原文写回；正文**压纯文本**（与 css 通道的默认一致）。容器本身写成
+        # `//*[@id="content"]/text()` 时取到的是文本节点列表 —— 那样也是纯文本，口径相同。
+        container = str(content or "").strip()
+        if not container:
+            return None
+        book["content"] = {"mode": "xpath", "container": container, "text": True}
     elif cmode == "js":
         # ⚠️ 只有**可移植**的 JS 才走得到这里（含 Android 专有桥的已在 :func:`analyze` 判 no）。
         # 正文交给 Node 通道：宿主脚本读 ``result``（页面 HTML）、返回正文文本 ——

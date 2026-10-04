@@ -10,7 +10,7 @@
   "concurrency": 8,                        # 并发抓取章节上限
   "search": {                              # 搜索
     "url": "https://x.com/search?kw={title}",   # {title} 必用；{page} 可选（写了才支持翻页）
-    "mode": "css",                         # css | regex | json
+    "mode": "css",                         # css | regex | json | xpath
     "container": ".item",                  # css: 每条结果容器选择器
     "fields": {                            # 从容器内提取；值可写 "选择器" 或 "选择器::attr(href)"
       "title": ".name", "author": ".author",
@@ -24,10 +24,12 @@
     "toc": {                               # mode=toc 时：从书页提取章节链接
       "mode": "css", "container": "#list a", "url_attr": "href"
       # 或 "mode": "regex", "pattern": "<a href=\"(?P<href>[^\"]+)\"[^>]*>(?P<title>[^<]+)</a>"
+      # 或 "mode": "xpath", "container": "//*[@class=\"chapterlist\"]/dd/a"   （需 lxml）
     },
     "content": {                           # 单章正文提取
       "mode": "css", "container": "#content", "text": true   # text=纯文本；html=保留标签
       # 或 "mode": "regex", "pattern": "<div id=\"content\">([\\s\\S]*?)</div>"
+      # 或 "mode": "xpath", "container": "//*[@id=\"content\"]" / "…/text()"
     }
     # single 模式：整页即全文，"content" 同上
   },
@@ -44,7 +46,8 @@
   （章节目录一直是这个口径）。补全只对相对地址生效，绝对地址原样保留。
 - 书页 book.mode=toc 时，chapter 自动走「toc 结构化分章」（最干净）。
 - book.mode=single 时，chapter.mode=regex 用该书源正则切全文；=auto 用全局检测。
-- 所有解析支持 css / regex / json 三通道，离线可用（正则），也可写 CSS 选择器（需 beautifulsoup4）。
+- 所有解析支持 css / regex / json / xpath 四通道，离线可用（正则），也可写 CSS 选择器
+  （需 beautifulsoup4）或 XPath（需 lxml，唯一实现在 `_xpath_nodes`）。
 - **选择器写法**（第 94 期起）除标准 CSS 外还认「阅读」的写法（`class.xx` / `@text` /
   `tag.a.0@href` / `tr!0` / `选择器##正则##替换` / `A||B` 候选）—— **唯一**的解析与执行在
   `sources/selspec.py`，这里只调用它。**取值写法的语法表与实测出处见该模块的文档**。
@@ -511,6 +514,111 @@ def _field_value(container, spec: str) -> str:
     return selspec.value(container, selspec.parse_spec(spec))
 
 
+# ---------------- XPath 通道（第 94 期阶段 2c）----------------
+# 实测证据（`202003.txt`，1537 条真实 2.x 书源）：XPath 在真源里成片出现，且形状固定 ——
+#   · 搜索字段：`//h3/a/text()`、`//dt/a/@href`（**相对当天那条结果**求值）；
+#   · 目录容器：`//*[@class="chapterlist"]/dd/a`（文档级，取一批 `<a>` 节点）；
+#   · 正文容器：`//*[@id="content"]`、`//*[@id="content"]/text()`（文档级）。
+# 从前这些都走 CSS 通道 ⇒ 解析报错、整条源判死。现在有独立的 `mode:"xpath"`。
+#
+# **只有一处**执行 XPath：:func:`_xpath_nodes`（其余三个函数都建在它上面）。
+
+def lxml_available() -> bool:
+    """`lxml` 装了吗？——「XPath 能不能跑」的**唯一**判据（引擎 / 审计都问它）。
+
+    缺依赖 ⇒ 引擎取到空值（不抛异常，红线见 `selspec` 顶部），但审计会**如实报**
+    「需要 lxml（未安装）」⇒ 导入差异表里那条源就是「不可用 + 为什么」，不会静默变成空书。
+    """
+    try:
+        import lxml.html                                  # noqa: F401
+    except Exception:                                     # noqa: BLE001 —— 缺 / 装坏都算不可用
+        return False
+    return True
+
+
+def _xpath_rel(expr) -> str:
+    """字段 XPath 要**相对条目**求值：`//a/@href` → `.//a/@href`。
+
+    ⚠️ 这是实测口径，不是翻译洁癖：真源里搜索字段写的都是 `//h3/a/text()` 这种「看着像
+    绝对路径」的形式，而阅读是在**当天那条搜索结果**里求值的 —— 不加那个 `.` 会在整页里
+    取到**第一个**匹配（搜索结果十条，全指向同一本书），而且一个错都不报。
+    文档级的容器（搜索列表 / 目录 / 正文）**不加**，保持文档级（实测就是 `//*[@id="content"]`）。
+    """
+    s = str(expr or "").strip()
+    return "." + s if s.startswith("//") else s
+
+
+def _xpath_nodes(html, expr, *, rel: bool = False) -> list:
+    """跑一次 XPath → 结果列表（元素 / 文本 / 属性值）。**唯一**的 XPath 执行处。
+
+    ``html`` 可以是 HTML 字符串，也可以是**已经取到的节点**（字段相对条目取值走后者 ——
+    少一次「序列化再解析」，而且不用把子树拼回字符串）。``rel=True`` 时表达式相对该节点求值。
+
+    永不抛异常（红线与 `selspec` 同一口径）：缺 lxml、表达式编不过、文档解析炸了
+    ⇒ 空列表 + 一条日志。搜索 / 目录的调用点没有 try 保护，抛出去就是整次搜索 500。
+    """
+    s = str(expr or "").strip()
+    if not s or not lxml_available():
+        return []
+    try:
+        from lxml import etree, html as _lhtml
+        compiled = etree.XPath(_xpath_rel(s) if rel else s)
+        root = (html if not isinstance(html, str) and html is not None
+                else _lhtml.fromstring(str(html or "") or "<html></html>"))
+        got = compiled(root)
+    except Exception as e:                                # noqa: BLE001 —— 坏规则不许带崩调用点
+        logger.warning("XPath 跑不动（%s）：%s", s, e)
+        return []
+    return got if isinstance(got, list) else [got]
+
+
+def _xpath_html(node) -> str:
+    """结果节点 → HTML 原文（字符串节点原样返回）。"""
+    if isinstance(node, str):
+        return str(node)
+    try:
+        from lxml import etree
+        return etree.tostring(node, encoding="unicode", method="html")
+    except Exception:                                     # noqa: BLE001
+        return ""
+
+
+def _xpath_text(node) -> str:
+    """结果节点 → 一行文本（字段取值口径：空白压成一个空格，与 CSS 通道的取值一致）。"""
+    if isinstance(node, str):
+        return " ".join(str(node).split())
+    try:
+        return " ".join(str(node.text_content()).split())
+    except Exception:                                     # noqa: BLE001
+        return ""
+
+
+def _xpath(html: str, expr, *, html_out: bool = False, rel: bool = False) -> str:
+    """XPath → 文本（多个命中用换行拼）。
+
+    ⚠️ 元素的 HTML 一律过 :func:`html_to_text`（**与 CSS 通道同一份**分段口径）——
+    别在这里自己 `text_content()`：那会把 `第1段<br>第2段` 粘成一行。文本 / 属性节点
+    （`/text()`、`/@href`）本来就是字符串，不经过解析器。
+    """
+    out = []
+    for n in _xpath_nodes(html, expr, rel=rel):
+        if html_out:
+            out.append(_xpath_html(n))
+        elif isinstance(n, str):
+            out.append(str(n))
+        else:
+            out.append(html_to_text(_xpath_html(n)))
+    return "\n".join(p for p in out if p.strip())
+
+
+def _extract_xpath(html: str, rule: dict) -> str:
+    """XPath 版正文取值（`html: true` = 保留标签，与 CSS 通道同一口径）。"""
+    expr = rule.get("container")
+    if not str(expr or "").strip():
+        return ""
+    return _xpath(html, expr, html_out=bool(rule.get("html")))
+
+
 def _extract_css(html: str, rule: dict):
     """按 css 规则从 html 抽取正文（默认纯文本；``html: true`` / 容器写 `@html` 时保留标签）。
 
@@ -583,6 +691,8 @@ def _extract(html: str, rule: dict) -> str:
         return _extract_regex(html, rule)
     if mode == "json":
         return _extract_json(html, rule)
+    if mode == "xpath":
+        return _extract_xpath(html, rule)
     return _extract_css(html, rule)
 
 
@@ -620,12 +730,30 @@ def _parse_search_json(raw: str, sp: dict, base_url: str = "") -> list:
     return out
 
 
+def _parse_search_xpath(html: str, sp: dict, base_url: str = "") -> list:
+    """XPath 版搜索：`container` 取一批结果节点，`fields` 的值是**相对每条结果**的 XPath。"""
+    fields = sp.get("fields") if isinstance(sp.get("fields"), dict) else {}
+    out = []
+    for n in _xpath_nodes(html, sp.get("container")):
+        if isinstance(n, str):                            # 容器取到了属性 / 文本 ⇒ 没有条目可分
+            continue
+        item = {}
+        for k, v in fields.items():
+            hit = _xpath_nodes(n, v, rel=True)             # ⚠️ 相对**本条结果**求值（见 `_xpath_rel`）
+            item[k] = _xpath_text(hit[0]) if hit else ""
+        if item.get("url"):
+            out.append(_absolutize(item, base_url))
+    return out
+
+
 def _parse_search(html: str, sp: dict, base_url: str = "") -> list[dict]:
     sp = sp if isinstance(sp, dict) else {}
     mode = _mode_of(sp, MODES, "搜索规则")
     # 第三通道（第 86 期）：站点给的是 JSON（酷我是 `$.data.list` 这种）
     if mode == "json":
         return _parse_search_json(html, sp, base_url)
+    if mode == "xpath":
+        return _parse_search_xpath(html, sp, base_url)
     if mode == "regex":
         pat = re.compile(sp.get("pattern", ""), re.S | re.I)
         out = []
@@ -670,12 +798,36 @@ def _extract_links_json(raw: str, toc: dict, base_url: str) -> list:
     return out
 
 
+def _extract_links_xpath(html: str, toc: dict, base_url: str) -> list[tuple[str, str]]:
+    """XPath 版目录：容器取一批节点（通常是 `<a>`），地址取节点属性。
+
+    ⚠️ 容器本身写成 `//*[@class="chapterlist"]/dd/a/@href`（直接取属性）也认 —— 那时结果
+    是字符串，没有属性可读，**字符串本身就是地址**（实测 2.x 有 `chapterUrl = //@href` 的写法）。
+    """
+    attr = str(toc.get("url_attr") or "").strip() or "href"
+    out = []
+    for n in _xpath_nodes(html, toc.get("container")):
+        if isinstance(n, str):
+            href, title = str(n), ""
+        else:
+            try:
+                href = n.get(attr) or n.get("href") or ""
+            except Exception:                             # noqa: BLE001 —— 坏节点当没有
+                href = ""
+            title = _xpath_text(n)
+        if href:
+            out.append((title or href, urljoin(base_url, str(href))))
+    return out
+
+
 def _extract_links(html: str, toc: dict, base_url: str) -> list[tuple[str, str]]:
     """返回 [(标题, 绝对URL)] 章节链接列表。"""
     toc = toc if isinstance(toc, dict) else {}
     mode = _mode_of(toc, MODES, "目录规则")
     if mode == "json":
         return _extract_links_json(html, toc, base_url)
+    if mode == "xpath":
+        return _extract_links_xpath(html, toc, base_url)
     if mode == "regex":
         pat = re.compile(toc.get("pattern", ""), re.S | re.I)
         out = []
@@ -703,14 +855,34 @@ def _extract_links(html: str, toc: dict, base_url: str) -> list[tuple[str, str]]
     return out
 
 
+def _extract_pages_xpath(raw: str, rule: dict, base_url: str) -> list:
+    """XPath 版资源地址清单。与 CSS 通道**同一套兜底**：`url_attr` → `data-src` /
+    `data-original` / `href`（漫画站懒加载、规则指到 `<a>` 上，这两件事两边都会遇到）。"""
+    attr = str(rule.get("url_attr") or "").strip() or "src"
+    out = []
+    for n in _xpath_nodes(raw, rule.get("container")):
+        if isinstance(n, str):
+            out.append(urljoin(base_url, str(n)))
+            continue
+        try:
+            v = n.get(attr) or n.get("data-src") or n.get("data-original") or n.get("href") or ""
+        except Exception:                                 # noqa: BLE001 —— 坏节点当没有
+            v = ""
+        if v:
+            out.append(urljoin(base_url, str(v)))
+    return out
+
+
 def _extract_pages(raw: str, rule: dict, base_url: str) -> list:
-    """**资源地址清单**（漫画页 / 音频轨，第 86 期）：css / regex / json 三通道通用。
+    """**资源地址清单**（漫画页 / 音频轨，第 86 期）：css / regex / json / xpath 四通道通用。
 
     与 `_extract_links` 的差别：这里只要地址（图和音没有标题），且**保留站点给的顺序** ——
     页序就是阅读顺序，不许重排、不许去重（真有重复页也是站点的事实）。
     """
     rule = rule if isinstance(rule, dict) else {}
     mode = _mode_of(rule, MODES, "资源清单规则")
+    if mode == "xpath":
+        return _extract_pages_xpath(raw, rule, base_url)
     if mode == "json":
         arr = json_path(_json_body(raw), rule.get("path") or "$")
         if isinstance(arr, dict):
@@ -1032,6 +1204,8 @@ def validate_rule(rule: dict) -> list[str]:
         errs.append("search 为 regex 模式时 pattern 必填")
     if sp.get("mode") == "json" and not sp.get("path"):
         errs.append("search 为 json 模式时 path 必填（如 $.data.list）")
+    if sp.get("mode") == "xpath" and not sp.get("container"):
+        errs.append("search 为 xpath 模式时 container 必填（如 //div[@class=\"item\"]）")
     bp = rule.get("book") or {}
     if bp.get("mode") == "toc":
         toc = bp.get("toc") or {}
@@ -1041,6 +1215,8 @@ def validate_rule(rule: dict) -> list[str]:
             errs.append("book.toc 为 regex 模式时 pattern 必填")
         if toc.get("mode") == "json" and not toc.get("path"):
             errs.append("book.toc 为 json 模式时 path 必填（如 $.data.chapters）")
+        if toc.get("mode") == "xpath" and not toc.get("container"):
+            errs.append("book.toc 为 xpath 模式时 container 必填（如 //div[@class=\"list\"]/a）")
         if not bp.get("content"):
             errs.append("book.content（章节正文提取）必填")
     ch = rule.get("chapter") or {}
@@ -1067,7 +1243,9 @@ def validate_rule(rule: dict) -> list[str]:
 
 #: 引擎**真实**支持的解析通道（= `_extract` / `_parse_search` / `_extract_links` /
 #: `_extract_pages` 认的 `mode` 值域）。**唯一**声明处：审计从它读，别人不许再记一份。
-MODES = ("css", "regex", "json")
+#: 第 94 期阶段 2c 加 `xpath`（实测真源里成片出现，见 `_xpath_nodes` 上方那段：
+#: 搜索字段 / 目录容器 / 正文容器三种形状都有真实样本）。
+MODES = ("css", "regex", "json", "xpath")
 
 #: 各通道字段允许的 mode —— 正文多一条 `js`（走 `RuleBasedSource._content`）。
 _MODE_SLOTS = {"search": MODES, "book.toc": MODES, "book.content": MODES + ("js",),
@@ -1113,14 +1291,17 @@ _UNSUPPORTED_CONSTRUCTS = (
                    "到「书源管理」把「搜索通道」改成 json",
     },
     {
+        # ⚠️ 第 94 期阶段 2c 起 XPath **有**自己的通道（`mode:"xpath"`，见 `MODES`）——
+        # 这一条只剩一个意思：「你在 **CSS** 通道里写了 XPath」。所以替代做法里
+        # 「换成 xpath 通道」与「改写成 CSS」并列，而不是让人白改一遍选择器。
         "id": "xpath", "kinds": ("selector",),
         "re": re.compile(r"^\(*\s*/"),
-        "what": "XPath（`//div[@id=\"x\"]/p`）",
-        "why": "本项目的选择器通道是 CSS，XPath 会被当成选择器语法错误",
-        "instead": "改写成等价的 CSS 选择器",
+        "what": "在 CSS 通道里写 XPath（`//div[@id=\"x\"]/p`）",
+        "why": "这条通道的选择器是按 CSS 编译的，XPath 会被当成选择器语法错误（永远取不到值）",
+        "instead": "到「书源管理」把该通道的「取值通道」改成 xpath；或改写成等价的 CSS 选择器",
     },
     {
-        "id": "tpl_leftover", "kinds": ("url", "selector", "regex", "jsonpath"),
+        "id": "tpl_leftover", "kinds": ("url", "selector", "regex", "jsonpath", "xpath"),
         "re": re.compile(r"\{\{"),
         "what": "没被转换的模板变量（`{{key}}` / `{{$.x}}`）",
         "why": "本项目只认 `{title}` / `{page}` / `{var:键}`，`{{…}}` 会原样拼进请求地址或选择器",
@@ -1167,6 +1348,13 @@ def _spec_fields(prefix: str, spec) -> list:
         out = [(f"{prefix}.path", "jsonpath", spec.get("path") or spec.get("container"))]
         for k, v in fields.items():
             out.append((f"{prefix}.fields.{k}", "jsonpath", v))
+        return out
+    if mode == "xpath":
+        # 与 json 同一个理由：`container` 是 XPath 表达式；`fields` 的值是**相对条目**的 XPath
+        # （`_xpath_rel` 在执行期加那个 `.`，审计也按同一份口径编译）。
+        out = [(f"{prefix}.container", "xpath", spec.get("container"))]
+        for k, v in fields.items():
+            out.append((f"{prefix}.fields.{k}", "xpath", v))
         return out
     if mode == "js":
         return [(f"{prefix}.script", "js", spec.get("script"))]
@@ -1222,6 +1410,22 @@ def _regex_error(pattern: str) -> str:
     """正则能编译吗？（`_extract_regex` 在抓取期裸 `re.compile`，编不过 = 整次取书 500）"""
     try:
         re.compile(str(pattern or ""), re.S | re.I)
+    except Exception as e:                                   # noqa: BLE001
+        return f"{type(e).__name__}: {e}"
+    return ""
+
+
+def _xpath_error(expr: str) -> str:
+    """XPath 能编译吗？（`_xpath_nodes` 在抓取期编译，编不过 = 这一项永远取到空值）
+
+    ⚠️ 编译的是 **`_xpath_rel` 之后**的表达式 —— 字段是相对条目求值的，审计和执行必须是
+    同一条式子（不然会出现「审计说能跑、跑起来是另一回事」）。
+    """
+    if not lxml_available():
+        return "需要 lxml（未安装）"
+    try:
+        from lxml import etree
+        etree.XPath(_xpath_rel(expr))
     except Exception as e:                                   # noqa: BLE001
         return f"{type(e).__name__}: {e}"
     return ""
@@ -1311,6 +1515,32 @@ def _audit_value(field: str, kind: str, value) -> list:
         return [{"field": field, "construct": "selector_syntax",
                  "why": f"这一项引擎跑不了：{_snippet(s)}（{err}）",
                  "instead": "到「书源管理」把这一项改写成标准 CSS 选择器"}]
+    if kind == "xpath":
+        # ⚠️ 缺 lxml 时**如实报「跑不了」**（不是「还没做」）：引擎那边取到的是空值，
+        #    放过去就是「导入成功、书是空的」——这正是本期要消灭的那种病。
+        err = _xpath_error(s)
+        if err == "需要 lxml（未安装）":
+            return [{"field": field, "construct": "missing_dep",
+                     "why": f"这一项是 XPath（{_snippet(s)}），而本机没装 lxml —— 引擎取不到值",
+                     "instead": "装上 lxml（`pip install lxml`）后重试；"
+                                "或到「书源管理」把这一项改写成 CSS 选择器"}]
+        if not err:
+            return []
+        # ⚠️ 这条 XPath 编不过，但**按选择器写法能解析** ⇒ 真正的病是「通道对不上」：
+        #    实测（202003.txt）46 条就是这样 —— 容器是 XPath（`//div[@class="l"]/ul/li`），
+        #    字段却写着阅读的默认方言（`tag.a.0@href` / `class.wd10.0@text` / `img@src`）。
+        #    阅读是**按每个值**判通道的，本项目按通道逐项判；两个语法不同，报
+        #    「Invalid expression」用户看不懂，得直接告诉他「这一项是选择器写法」。
+        if not selspec.spec_error(selspec.parse_spec(s)):
+            return [{"field": field, "construct": "selector_in_xpath",
+                     "why": f"这一项写的是选择器写法（{_snippet(s)}），而这条通道是 XPath —— "
+                            "两套语法不同，这一项取不到值"
+                            "（阅读是按每一个值判通道的，本项目按通道逐项判）",
+                     "instead": "到「书源管理」把该通道的「取值通道」改成 css"
+                                "（容器那一项同时要改回 CSS 选择器）；或把这一项改写成等价的 XPath"}]
+        return [{"field": field, "construct": "xpath_syntax",
+                 "why": f"这一项引擎跑不了：{_snippet(s)}（{err}）",
+                 "instead": "到「书源管理」把这一项改写成能跑的 XPath（或换成 CSS 选择器）"}]
     err = _regex_error(s) if kind == "regex" else ""
     if not err:
         return []
@@ -1358,11 +1588,12 @@ def _audit_structure(rule: dict) -> list:
                  "instead": "到「书源管理」重新填写搜索规则"}]
     mode = str(sp.get("mode") or "css").strip().lower()
     fields = sp.get("fields") if isinstance(sp.get("fields"), dict) else {}
-    if mode in ("css", "json") and not str(fields.get("url") or "").strip():
+    if mode in ("css", "json", "xpath") and not str(fields.get("url") or "").strip():
         return [{"field": "search.fields.url", "construct": "no_url_field",
                  "why": "搜索规则里没有「详情页地址」字段 —— 引擎靠它判断一条结果是否有效，"
                         "缺了就会永远搜不到（界面只会说「没找到」）",
-                 "instead": "在「书源管理」里给搜索补一个地址字段（CSS 写法如 `a::attr(href)`）"}]
+                 "instead": "在「书源管理」里给搜索补一个地址字段（CSS 写法如 `a::attr(href)`，"
+                            "XPath 写法如 `//a/@href`）"}]
     return []
 
 

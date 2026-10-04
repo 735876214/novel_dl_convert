@@ -16,8 +16,15 @@
 （=当年一搜就抛 `SelectorSyntaxError`）；加闸后落到 `yes 0 / partial 2 / no 20`，假可用 0。
 少掉的是「本来一搜就抛异常」的那些，是修正不是退化。
 闸门会**单调变短**：阶段 2/3 每补一项能力就摘掉 `_UNSUPPORTED_CONSTRUCTS` 里的一条并补用例。
-阶段 2b 之后的实测分布：`yes 1 / partial 6 / no 15`（假可用仍为 0）；1537 条的 `202003.txt`
-是 `yes 398 / partial 403 / no 736`（假可用 0）—— 还差的那些见 `_UNSUPPORTED_CONSTRUCTS` 现存条目。
+实测分布（**假可用恒为 0**，这是本文件的验收点）：
+
+| 样本 | 加闸前（自称可用 / 其中真能跑） | 阶段 2b | 阶段 2c（现在） |
+|---|---|---|---|
+| `shuyuan`（22 条，3.x） | 9 / 3 | `yes 1 · partial 6 · no 15` | **`yes 2 · partial 6 · no 14`** |
+| `202003.txt`（1537 条，2.x） | 0 / 0 | `yes 398 · partial 403 · no 736` | **`yes 685 · partial 357 · no 495`** |
+
+还差的那些见 `_UNSUPPORTED_CONSTRUCTS` 现存条目（阶段 2c 又摘掉 XPath 这一条：
+1537 条里 **120 条**源用了 XPath ⇒ 可用 993 → **1042**）。
 """
 import json
 import pathlib
@@ -114,7 +121,8 @@ def test_能跑的规则审计为空():
     (lambda r: r["search"].update({"container": "class.x@children[0]@tag.a"}), "selector_syntax"),
     (lambda r: r["search"]["fields"].update({"author": "$.a['b']"}), "jsonpath_in_css"),
     (lambda r: r["search"]["fields"].update({"author": "JSon:$.title"}), "jsonpath_in_css"),
-    (lambda r: r["search"].update({"mode": "xpath", "container": "//a"}), "unknown_mode"),
+    # 阶段 2c：`xpath` 已经是**合法** mode ⇒ 这一条改用真正不认识的值（口径不变：不许静默当 css）
+    (lambda r: r["search"].update({"mode": "yaml"}), "unknown_mode"),
     (lambda r: r["search"].pop("fields"), "no_url_field"),
     (lambda r: r["book"]["content"].update(
         {"mode": "js", "script": "java.ajax(book.bookUrl)"}), "android_bridge"),
@@ -167,12 +175,18 @@ def test_闸门声明表是自洽的():
     # 每条声明都要有 4 个字段齐全的说明（界面直接展示）
     for c in rules._UNSUPPORTED_CONSTRUCTS:
         assert c["id"] and c["what"] and c["why"] and c["instead"] and c["kinds"]
-        assert c["kinds"] and set(c["kinds"]) <= {"url", "selector", "regex", "jsonpath"}
+        #: 阶段 2c 起多了 `xpath` 这一档：`tpl_leftover` 在 XPath 通道里同样拦得住
+        #: （`{{page}}` 在 XPath 里也会原样拼出去）—— 声明表要跟着通道数走。
+        assert c["kinds"] and set(c["kinds"]) <= {"url", "selector", "regex", "jsonpath", "xpath"}
 
 
 def test_未知mode不会被当成css静默跑():
-    """**口径变化**（CHANGELOG 有记）：未知 mode 以前会静默落回 css 通道。"""
-    r = _rule(search={"mode": "xpath"})
+    """**口径变化**（CHANGELOG 有记）：未知 mode 以前会静默落回 css 通道。
+
+    ⚠️ 阶段 2c 起 `xpath` **是**已知通道（用例见 `tests/test_engine_xpath.py`）——
+    这条钉的是「**不认识**的值不许被当成 css 跑」，不是「值必须少」。
+    """
+    r = _rule(search={"mode": "yaml"})
     assert "unknown_mode" in _constructs(r)
     # 正文允许 js，搜索不允许
     assert rules.audit_native_rule(_rule(search={"mode": "js", "script": "1"})) != []
@@ -180,10 +194,15 @@ def test_未知mode不会被当成css静默跑():
                                          "search": {"url": "https://a/s?q={title}"},
                                          "book": {"mode": "图"}})
     assert "unknown_mode" in _constructs({**_rule(), "chapter": {"mode": "猜"}})
-    # 合法值一个都不报
+    # 合法值一个都不报（含阶段 2c 新增的 xpath）
     assert "unknown_mode" not in _constructs({
         **_rule(), "book": {"mode": "toc", "toc": {"mode": "css", "container": "li a"},
                             "content": {"mode": "regex", "pattern": "x"}}})
+    assert "unknown_mode" not in _constructs({
+        **_rule(search={"mode": "xpath", "container": '//ul/li',
+                        "fields": {"title": "//a/text()", "url": "//a/@href"}}),
+        "book": {"mode": "single",
+                 "content": {"mode": "xpath", "container": '//*[@id="c"]'}}})
 
 
 def test_拼不出请求地址的规则要单独说():
@@ -250,16 +269,19 @@ def test_假可用实证_现在全拦下(entries3):
     理由必须**指到具体字段**：阶段 2a 之前这几条会退化成一个笼统的「（整体）拼不出规则」
     （转换器提前 `return None`，闸门就看不到是哪一项不行）—— 那正是「答非所问」。
 
-    ⚠️ 阶段 2b 之后**名单变短了**（闸门单调变诚实）：
-    `url_option_dict` / `url_option_pipe` 那两类已经**真的能跑**（引擎会按选项发 POST、
-    会按 `charset` 解码）⇒ 速读谷 / 武林中文网 退出本表（见下一个用例）；
-    `legado_index` / `hash_hash_replace` / `legado_sel_syntax` 在阶段 2a 也已摘掉
-    （`selspec`，见 `tests/test_engine_selspec.py`）。
-    夹具是 22 条真源里裁的 8 条，留下的这两条各自卡在**别的**能力上，与选项字典无关。
+    ⚠️ 这份名单**只会变短**（闸门单调变诚实），每摘掉一条都要有「它现在真的跑得动」的用例兜着：
+    - 阶段 2a 摘掉 `legado_index` / `hash_hash_replace` / `legado_sel_syntax`
+      （见 `tests/test_engine_selspec.py`）；
+    - 阶段 2b 摘掉 `url_option_dict` / `url_option_pipe` —— 速读谷 / 武林中文网 退出本表
+      （见 `test_阶段2b放进来的条目_选项不再是拦点`）；
+    - 阶段 2c 摘掉 XPath —— **手机小说**（目录容器是 `//…`）退出本表，见
+      `test_阶段2c放进来的条目_XPath不再是拦点`。
+
+    夹具是 22 条真源里裁的 8 条；留下的这条卡在阅读的选择器方言上（`class.full_chapters
+    @children[0]@tag.a` 里的 `children[0]` 不是合法 CSS，`@tag.a` 也不是 CSS 的写法）。
     """
     cases = {
         "天天看小说": {"selector_syntax"},                        # `class.full_chapters@children[0]@tag.a`
-        "手机小说": {"xpath"},                                    # XPath 目录容器
     }
     for name, expect in cases.items():
         got = formats.map_entry(_by_name(entries3, name))
@@ -284,10 +306,9 @@ def test_阶段2b放进来的条目_选项不再是拦点(entries3):
     一部分发出去；阶段 1 拦下，阶段 2b 把能力补进引擎（`parse_url_spec` +
     `BrowserClient.get_text(method/body/charset)`）之后**才**真的能用。
 
-    这三条的**归途不一样，必须分开说**，否则就是拿两条的结论替第三条背书：
-    - 速读谷 / 武林中文网：选项是它们**唯一**的卡点 ⇒ 现在整体可用（`partial` 的只是「没有发现页」这类旁注）；
-    - 手机小说：选项**已经解析出来**（断言 opts 里有 gbk / post），但整条仍卡在**目录容器的 XPath** 上
-      ⇒ 仍判 `no`，且理由里**不许**再出现任何选项类构造。
+    ⚠️ 阶段 2c 起这三条**都走到头了**：手机小说当时另有一处卡点（目录容器是 XPath），
+    2c 把 XPath 补成正式通道之后它也整体可用 —— 选项类构造在三条里**一条都不剩**
+    （手机小说的「现在能用」另有用例：`test_阶段2c放进来的条目_XPath不再是拦点`）。
     """
     seen = 0
     for name, want in (("速读谷", {"method": "post"}),
@@ -300,18 +321,14 @@ def test_阶段2b放进来的条目_选项不再是拦点(entries3):
         assert spec.opts and not spec.unknown, f"{name} 的选项没解析出来：{spec}"
         for k, v in want.items():
             assert spec.opts.get(k) == v, f"{name} 的 {k} 选项丢了：{spec.opts}"
-        # 引擎自己的结论：产物过审计（手机小说会因 XPath 被拦，但**不许**因为选项被拦）
+        # 引擎自己的结论：产物过审计 —— 选项这一块**一律**不许再成为拦点
         bad = {u["construct"] for u in rules.audit_native_rule(rule)}
         assert not ({"url_option_dict", "url_option_pipe", "url_option_unknown",
                      "url_option_charset", "url_option_broken", "url_not_http"} & bad), \
             f"{name} 的选项部分仍不可执行：{bad}"
-        if name == "手机小说":
-            assert got["supported"] == "no" and bad == {"xpath"}, \
-                f"手机小说的卡点应当是 XPath：{got['unsupported_fields']}"
-        else:
-            assert got["supported"] != "no", f"{name} 仍被判死：{got['unsupported_fields']}"
-            assert rules.audit_native_rule(rule) == []
-            assert rules.validate_rule(rule) == []
+        assert got["supported"] != "no", f"{name} 仍被判死：{got['unsupported_fields']}"
+        assert rules.audit_native_rule(rule) == []
+        assert rules.validate_rule(rule) == []
         seen += 1
     assert seen == 3
 
@@ -327,6 +344,26 @@ def test_阶段2a放进来的两条_以前拦着现在能用(entries3):
     assert "hash_hash_replace" not in {u["construct"] for u in got["unsupported_fields"]}
     assert "##" in got["converted_rule"]["book"]["content"]["container"]
     assert rules.audit_native_rule(got["converted_rule"]) == []
+
+
+def test_阶段2c放进来的条目_XPath不再是拦点(entries3):
+    """摘掉 XPath 阻塞的**实证**：`手机小说` 的目录容器是 `//*[@id="chapterlist"]…` 一类的 XPath。
+
+    它当年判「可用」是**假可用**（XPath 被当成 CSS 编译 ⇒ 一取目录就空/炸），阶段 1 因此判它 `no`，
+    阶段 2c 把 XPath 补成**正式通道**（`mode:"xpath"`，唯一执行处 `rules._xpath_nodes`）之后才真的能用 ——
+    放开与当初拦下是**同一个判据**（`audit_native_rule`）给出的两个结论，不是拍脑袋翻案。
+
+    另：它的搜索地址还带着 `,{'charset':'gbk','method':'post'}` 选项字典（见上一个用例），
+    这条源因此是「阶段 2b + 2c 两处能力叠起来才活」的那一类。
+    """
+    got = formats.map_entry(_by_name(entries3, "手机小说"))
+    assert got["supported"] != "no", got["unsupported_fields"]
+    rule = got["converted_rule"]
+    assert rules.audit_native_rule(rule) == [] and rules.validate_rule(rule) == []
+    assert rule["book"]["toc"]["mode"] == "xpath", rule["book"]["toc"]
+    assert rule["book"]["toc"]["container"].startswith("//")
+    # 「XPath 通道写选择器」这条错配**没有**落到它身上：卡点是被支持，不是被绕过
+    assert "xpath" not in {u["construct"] for u in got["unsupported_fields"]}
 
 
 def test_转换不出来时的理由指到具体字段(entries3):

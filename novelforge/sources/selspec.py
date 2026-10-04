@@ -50,7 +50,7 @@
 
 单个 `#` 在阅读 2.x 里**就是**替换分隔符，不是「把 `##` 写错」。实测证据成对出现：
 同一条目里既有 `.mlist@html##^\\s*##<br>`（两个）也有 `.brief_text@html#^#<br>`（一个），
-并且 `tag.p.0@text#.*? \| (.*?) \| 已?(.+?)中?[\s]*(\d[^\|]+).*#$1,$2,$3` 这种**两侧都写一个**。
+并且 `tag.p.0@text#.*? \\| (.*?) \\| 已?(.+?)中?[\\s]*(\\d[^\\|]+).*#$1,$2,$3` 这种**两侧都写一个**。
 所以不能一见单个 `#` 就报「少写了一个 `#`」（那是把 206 条能跑的源判死）。
 
 ⚠️ 但 `.a#b@html` / `#main p` / `.a #b` 里那个 `#` 是 **id 选择器**，切错了会静默改坏取值。
@@ -72,6 +72,9 @@
 ⚠️ 有几处是**故意**解析成 ``error`` 而不是硬塞进 CSS 的：`@js:` / `<js>`（要执行脚本）、
 `$…` / `JSon:`（JSON 路径）、`//xpath`（XPath 通道）。它们各自有负责的通道/语法，
 报「通道对不上」比报「不是合法 CSS」可照做得多。
+
+「一个值是不是 XPath」的判据在 :func:`is_xpath`（第 94 期阶段 2c 起 XPath 有了自己的
+`mode="xpath"` 通道，见 `rules._xpath`）——本模块**不执行** XPath，只判形状。
 """
 from __future__ import annotations
 
@@ -79,7 +82,7 @@ import re
 from functools import lru_cache
 
 __all__ = ["Plan", "Step", "parse_spec", "select", "one", "value", "render",
-           "check_css", "spec_error", "replace_text", "apply_replace"]
+           "check_css", "spec_error", "replace_text", "apply_replace", "is_xpath"]
 
 
 # ---------------- 词表（**唯一**定义处）----------------
@@ -127,6 +130,31 @@ _WORD = re.compile(r"[A-Za-z_][\w-]*")
 #: 索引写在了**一段的中间**（`tr!0 li`）：`!` 后面是数字，但数字后面还有东西。
 #: 留一个可照做的错（「用 `@` 分段」），不给的话用户只能看到「不是合法 CSS 选择器」。
 _INDEX_MID = re.compile(r"!-?\d+(?::-?\d+)*(?=\s|$)")
+
+#: XPath 的**形状判据**（`//…` / `.//…`）——「一个值是不是 XPath」只有这一处判据，
+#: 通道选择（`legado._leading_mode`）与审计（`rules._audit_value`）共用同一个函数。
+_XPATH_HEAD = re.compile(r"^\.?\s*//")
+#: 值里带 `{` ⇒ 是**模板**不是 XPath。实测反例（`202003.txt`）：2.x 的
+#: `bookUrl = /i/{$.NovelID}/`、`/Book/getChapterListByBookId?bookId={$._id}` 是相对地址模板，
+#: 光看「以 `/` 开头」会把它们当成 XPath —— 取不到值，而且错得没有一点痕迹。
+_TPL_BRACE = re.compile(r"\{")
+
+
+def is_xpath(text) -> bool:
+    """这个值是不是 XPath？**唯一**判据（`sources/legado.py` 的通道选择与审计都用它）。
+
+    只认 `//…` / `.//…` 两种开头 —— 实测 `202003.txt` 里成片的 XPath 取值**全是**这两种：
+    搜索字段 `//h3/a/text()`、目录 `//*[@class="chapterlist"]/dd/a`、正文 `//*[@id="content"]`。
+
+    ⚠️ 刻意**不**把「以 `/` 开头」一概当 XPath（那是 `_classify` 里「不是 CSS」的**宽**口径）：
+    相对链接（`/book/123`）与相对地址模板（`/i/{$.NovelID}/`）都长这样，误判 = 静默换通道。
+    单斜杠的绝对路径 XPath（`/html/body/div[1]`）实测没出现过 ⇒ 不猜，留给审计如实报
+    「选择器通道是 CSS」，作者看得见原因。
+    """
+    s = str(text or "").strip()
+    if not s or _TPL_BRACE.search(s):
+        return False
+    return bool(_XPATH_HEAD.match(s))
 
 _OPENERS = {"[": "]", "(": ")"}
 _CLOSERS = {"]": "[", ")": "("}
@@ -329,6 +357,9 @@ def _classify(part: str, *, first: bool) -> "tuple[str, str, str, str]":
         # 整段交给 CSS 编译器只会得到一句 `SelectorSyntaxError`，用户看不出「这里要跑脚本」。
         return "desc", "", "", f"「{text}」里有 `<js>` —— 这一段要在选择器通道里执行脚本（通道对不上）"
     if text.lstrip("(").startswith("/"):
+        # ⚠️ 这里判的是「**不是 CSS**」，比 :func:`is_xpath` **宽**（`/div[1]` 这种单斜杠绝对
+        #    路径也算 XPath，只是 xpath 通道按 `is_xpath` 的窄口径选通道）—— 两处口径不同是
+        #    有意的：这里是「别拿它当 CSS 用」，那里是「确定要换通道」。
         return "desc", "", "", (f"「{text}」是 XPath —— 本项目的选择器通道是 CSS"
                                 "（XPath 见 mode=\"xpath\"）")
     if text.startswith("$"):
