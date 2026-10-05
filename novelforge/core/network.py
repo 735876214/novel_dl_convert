@@ -149,7 +149,8 @@ def verify_tls_enabled(cfg: dict | None = None) -> bool:
     所以只**提供**开关，由部署者自己决定；MITM 风险写在设置页的 hint 里。
 
     `cfg` 给了就用它（`DownloadManager` 收的是注入的配置，测试要能自己造），
-    没给就自己读一次（`/content` 这类没有 cfg 的调用点）。
+    没给 / 给了空 dict 就自己读一次**全局**配置（`tests/test_source_url_import.py` 钉着这条退路；
+    第 97 期删掉 `/content` 之后，生产侧唯一的调用点是 `DownloadManager`）。
     """
     net = (cfg or {}).get("network") if isinstance(cfg, dict) else None
     if not isinstance(net, dict):

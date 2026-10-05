@@ -21,7 +21,7 @@ from urllib.parse import quote, unquote
 import yaml
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Body, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
@@ -9268,21 +9268,3 @@ async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)
         src, src.name,
         {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
         "api", size=src.stat().st_size)
-
-
-@app.get("/content")
-async def content(url: str = Query(..., description="章节 / 书籍页 URL")):
-    name = next((n for n, c in REGISTRY.items() if c().supports_url(url)), None)
-    if not name:
-        raise HTTPException(404, "没有已注册的书源支持该 URL")
-    src = REGISTRY[name]()
-    from .core import network
-
-    async with network.BrowserClient(
-        name, cookie_dir=str(config.COOKIE_DIR), headers=getattr(src, "headers", None),
-        timeout=network.clamp_timeout(getattr(src, "timeout", None)),
-        # 与下载 / 搜索同口径（读点只有 `network.verify_tls_enabled` 一处）
-        verify_tls=network.verify_tls_enabled(),
-    ) as c:
-        html = await src.render(c, url)
-    return HTMLResponse(html or "<p>（空内容）</p>")

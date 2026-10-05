@@ -112,6 +112,17 @@ def test_格式分面接口已随零调用者移除(client, auth_headers):
     assert client.get("/api/library-facets", headers=auth_headers).status_code == 404
 
 
+def test_旧内容端点已随零调用者移除(client, auth_headers):
+    """第 97 期删掉了 `GET /content`（`docs/agents-audit-95.md` §2 那条 `[low]`）。
+
+    它是一个**旧式非 `/api` 路径**：按 `supports_url(url)` 选一条已注册书源、把 `render()`
+    的结果原样当 HTML 回吐，每次都**出网抓一个第三方页面**。仓内零消费者（前端与用例都不调它），
+    用户确认没有外部脚本在用 ⇒ 删掉并钉住 404，防止「删了又被人加回来」的半删状态。
+    """
+    assert client.get("/content", params={"url": "https://example.com/x"},
+                      headers=auth_headers).status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # 书库：列表 / 新建 / 修改 / 扫描 / 来源目录
 # ---------------------------------------------------------------------------
@@ -129,7 +140,7 @@ def test_书库列表不再有默认库(client, auth_headers, test_lib_id):
     assert items[0]["type"] == "mixed"
     assert "source_dirs" in items[0]
     # 新建向导按已配置来源根浏览 / 下钻
-    assert any(r["path"] == str(config.LIBRARY_SOURCE_ROOTS[0]["path"]) for r in data["source_roots"])
+    assert any(r["path"] == str(pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])) for r in data["source_roots"])
     assert {t["value"] for t in data["types"]} == {"ebook", "comic", "audiobook", "mixed"}
 
 
