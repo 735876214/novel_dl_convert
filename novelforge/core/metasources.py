@@ -16,7 +16,9 @@
    与「重复书籍」的口径一致 —— 同一本书在两处的匹配判断不应该出现分歧。
 """
 import difflib
+import hashlib
 import json
+import logging
 import re
 import time
 from concurrent import futures
@@ -24,9 +26,12 @@ from html import unescape as html_unescape
 
 import httpx
 
+from .. import config
 from .library import norm_key
 from .sources import Provider, kinds
 from .sources import registry as _src_registry
+
+_log = logging.getLogger("novelforge")
 
 #: 与其它外呼一致的超时口径：连接 8s、整体 20s
 TIMEOUT = httpx.Timeout(20.0, connect=8.0)
@@ -146,10 +151,16 @@ def _walk_dicts(node) -> list:
     return out
 
 
-OPENLIBRARY = "https://openlibrary.org/search.json"
+#: OpenLibrary 的站点根：检索（`/search.json`）与按 works key 取详情（`/works/OL…W.json`）
+#: 是同一台主机 —— 主机名只写一次，两处派生（第 102 期）。
+OPENLIBRARY_BASE = "https://openlibrary.org"
+OPENLIBRARY = OPENLIBRARY_BASE + "/search.json"
 OPENLIBRARY_COVER = "https://covers.openlibrary.org/b/id/{cover}-L.jpg"
 GOOGLEBOOKS = "https://www.googleapis.com/books/v1/volumes"
-ITUNES = "https://itunes.apple.com/search"
+ITUNES_BASE = "https://itunes.apple.com"
+ITUNES = ITUNES_BASE + "/search"
+#: iTunes 按 ``trackId`` 取详情（与检索同主机、同响应形状，只有参数不同）
+ITUNES_LOOKUP = ITUNES_BASE + "/lookup"
 AUDNEXUS = "https://api.audnexus.com/books"
 RANOBEDB = "https://ranobedb.org/api/v0"
 HARDCOVER = "https://api.hardcover.app/v1/graphql"
@@ -223,6 +234,11 @@ SOURCES = {
 #: ⚠️ 这里先给**占位**，真实值在**文件末尾**的 `_derive_final()` 里填 —— 因为 `_FETCHERS`
 #: 及其引用的 `_search_*` 全定义在文件后段，此处直接引用会 import 期 `NameError`。
 IMPLEMENTED = ()
+
+#: 有「按 ID 取详情」通道的家（第 102 期）。同样是占位，末尾由 `_derive_final()` 填。
+#: 公开它是因为 `metafetch` 要据此决定「库里记过 id 时走不走精确键」—— 私有绑定表
+#: `_DETAIL_FETCHERS` 是产物，不是接口。
+DETAIL_SOURCES = ()
 
 #: 默认启用顺序：**只留两家最可靠的**（Open Library + Google Books）。
 #: 14 家都能用不代表默认全开 —— 每启用一家就多一轮外呼（还容易被限流），
@@ -1295,9 +1311,13 @@ _FETCHERS = {
 }
 
 #: 按 ID 取详情的函数表（第 102 期新能力）。**空 = 这家没有按 ID 取详情的能力**，
-#: `detail()` 因此回 `None`，调用方如实降级（不当成错误）。
+#: `detail()` 因此回一句明确的中文回绝（「这家没有按 ID 取详情的通道」），而不是
+#: 回一条假装成功的记录 —— 界面上要分得清「这家没有」与「这家刚才失败了」（处置不同）。
 #: ⚠️ 先只接**真有独立详情通道**的家；Goodreads / RanobeDB 的详情是在各自检索函数里
 #: 顺手取的，没有单独的入口 —— 不为了凑数给它们造一个（§7.2 禁投机抽象）。
+#: ⚠️ 而且只接**真机核过**的（接口存在 + 返回形状对得上）：第 102 期核过 itunes
+#: （`/lookup?id=` 与 `/search` 同形状）与 openlibrary（`<key>.json`）；googlebooks
+#: （匿名额度已 429）/ audnexus（本机 TCP 不可达）/ goodreads（302 反爬）没核过 ⇒ 不接。
 _DETAIL_FETCHERS = {}
 
 
@@ -1338,13 +1358,17 @@ HEALTH_SAMPLE_DEFAULT = ("Dune", "Frank Herbert")
 
 
 def _derive_final() -> None:
-    """绑定声明后填上两张**依赖后段定义**的表（`_bind_declared` 之后调用）。"""
-    global IMPLEMENTED, HEALTH_SAMPLES
+    """绑定声明后填上三张**依赖后段定义**的表（`_bind_declared` 之后调用）。"""
+    global IMPLEMENTED, HEALTH_SAMPLES, DETAIL_SOURCES
     IMPLEMENTED = tuple(_FETCHERS)
     HEALTH_SAMPLES = {
         p.id: (tuple(p.health_sample) if p.health_sample else HEALTH_SAMPLE_DEFAULT)
         for p in _src_registry.DECLARED
     }
+    # `_DETAIL_FETCHERS` 是**私有**的（它是绑定产物，不是给人读的接口）；
+    # 但 `metafetch` 要按「这家有没有详情通道」决定走不走精确键 ⇒ 给一个只读的元组。
+    # 用元组而不是 dict：调用方只能做成员判断，改不了绑定表。
+    DETAIL_SOURCES = tuple(_DETAIL_FETCHERS)
 
 
 # ---------------- ISBN 精确匹配（第 8 期 D4）----------------
@@ -1405,35 +1429,212 @@ def search_by_isbn(isbn: str, sources: list = None, limit: int = 3,
     return None
 
 
-def search(source: str, title: str, author: str, limit: int = 5, opts: dict = None) -> dict:
+# ---------------- 检索缓存 与 主动限流（第 102 期）----------------
+#
+# 这两个能力都是**进程内**的，刻意不落盘、也不进 `core/cache.py`（那是跨进程 / 跨重启的
+# 缓存，语义与 TTL 口径都不同）。理由：这里的目的是「同一个用户连点两次预览别发两轮外呼」，
+# 不是「重启后还能命中」—— 后者会带来「元数据看着是新的其实是昨天的」这类更难查的问题。
+
+#: 检索结果缓存：``{(源, 归一化书名, 归一化作者, limit): (写入单调时刻, entries)}``。
+#: ⚠️ 用 `time.monotonic()` 而非 `time.time()`：墙钟会被 NTP 回拨，回拨后 TTL 可能永不生效。
+_SEARCH_CACHE: dict = {}
+#: 缓存条目上限（超限按插入序淘汰最旧）。256 条 ≈ 几十本书 × 十几个源，够用且不会涨到吃内存。
+_SEARCH_CACHE_MAX = 256
+
+#: 每家的「上次调用时刻」（单调秒）。`search()` 在**调用 fetcher 之前**据此补足间隔。
+_LAST_CALL: dict = {}
+
+
+def _opts_key(opts: dict) -> str:
+    """`opts` 的**指纹**，进缓存键。
+
+    ⚠️ 必须参与键：同一本书换一个选项就会返回**不同结果** —— itunes 的
+    `resolution` 直接决定封面是 100x100 还是 1000x1000，kobo 的 `region`/`language`
+    决定返回哪国目录，付费源的 `api_key` 决定查到哪份数据。不参与就会出现
+    「改了设置、结果没变」这类查不出来的错。
+    用摘要而非原值：密钥不该以明文躺在缓存键里（键可能被日志/调试打印）。
+    """
+    if not opts:
+        return ""
+    blob = json.dumps({str(k): str(v) for k, v in sorted(opts.items())}, ensure_ascii=False)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def _cache_key(source: str, title: str, author: str, limit: int, opts: dict = None):
+    # 用 `norm_key` 归一：与「重复书籍」同一口径，避免大小写/全半角差异导致缓存失效
+    return (source, norm_key(title), norm_key(author), int(limit), _opts_key(opts or {}))
+
+
+def _detail_key(source: str, provider_id: str, opts: dict = None):
+    """详情缓存键。第一段是 ``"@detail"``。
+
+    ⚠️ **必须与检索键分开**：详情回的是**单条**、检索回**列表**，共用键会让
+    `search` 读到一个 dict、`detail` 读到一个 list，两边都解析不出东西（而且都不会报错）。
+    第一段的字面量不同 ⇒ 与 `(源, 书名, 作者, limit, opts)` 必然不撞。
+    """
+    return ("@detail", source, norm_key(provider_id), _opts_key(opts or {}))
+
+
+def clear_cache() -> int:
+    """清空检索缓存，返回被丢弃的条目数。给测试与「设置页手动清一下」用。"""
+    n = len(_SEARCH_CACHE)
+    _SEARCH_CACHE.clear()
+    return n
+
+
+def cache_stats() -> dict:
+    """缓存现状（条目数 / 上限）—— 设置页与体检报告想显示「省了多少外呼」时读它。
+
+    ⚠️ 检索与**详情**共用一个存储（键不同，见 `_detail_key`），所以 `entries` 是两者之和。
+    不拆成两个计数：这一层的用途只是「有没有在涨」，拆开既不指导任何决策，又要多维护一份状态。
+    """
+    return {"entries": len(_SEARCH_CACHE), "max": _SEARCH_CACHE_MAX}
+
+
+def _cache_get(key, ttl: int):
+    """命中且未过期则回缓存值；`ttl<=0` 视为不缓存（回 None）。"""
+    if ttl <= 0:
+        return None
+    hit = _SEARCH_CACHE.get(key)
+    if not hit:
+        return None
+    at, entries = hit
+    if time.monotonic() - at > ttl:
+        _SEARCH_CACHE.pop(key, None)
+        return None
+    return [dict(e) for e in entries]        # 浅拷贝每条：调用方会往候选里写 score
+
+
+def _cache_put(key, entries, ttl: int) -> None:
+    """写入缓存。
+
+    ⚠️ **只缓存「成功且非空」的结果**（由调用方保证）：空结果一律不缓存 ——
+    一次网络抖动 / 站点临时抽风会让这家源「假死」整个 TTL，用户看到的是
+    「刚才还能用，现在什么都没了」，而实际早就恢复了。
+    """
+    if ttl <= 0:
+        return
+    if key not in _SEARCH_CACHE and len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX:
+        # 按插入序淘汰最旧（dict 保序）。不做 LRU：这层的目的只是「短时间内重复点击」，
+        # 精确的访问序统计不值得那份复杂度（AGENTS.md §7.2）。
+        _SEARCH_CACHE.pop(next(iter(_SEARCH_CACHE)), None)
+    _SEARCH_CACHE[key] = (time.monotonic(), [dict(e) for e in entries])
+
+
+def _ttl_of(source: str) -> int:
+    """该源的缓存秒数：**配置优先**（`metadata_fetch.cache_ttl`），留空则用声明里的值。
+
+    ⚠️ 配置的 ``0`` 与「留空」是**两件事**：留空 = 「按各来源自己声明的值」（`None`），
+    `0` = 「我不要缓存」。所以判断必须按 `is None`，不能写成 `if configured:` ——
+    那样 `0` 会被当成「没配」而回落到声明值，用户关不掉缓存（假配置的一种）。
+
+    ⚠️ 这里曾经写成裸 `except Exception` —— 而本模块当时**根本没 import config**，于是
+    `config.load_config()` 抛的 `NameError` 被一起吞掉，`cache_ttl` 变成「能写进
+    settings.json、界面上也有控件、但谁都不读」的假配置，好几个步骤都没人发现。
+    教训：**兜底要兜得住「读不到」，但不能连「写错了」一起吞**。所以这里只接
+    `TypeError` / `ValueError`（值本身不是数字），并且出声。
+    """
+    meta = SOURCES.get(source) or {}
+    configured = None
+    try:
+        raw = (config.load_config().get("metadata_fetch") or {}).get("cache_ttl")
+        if raw is not None and str(raw).strip() != "":
+            configured = int(raw)
+    except (TypeError, ValueError) as e:       # noqa: BLE001 —— 配置里填了个非数字
+        _log.warning("metadata_fetch.cache_ttl 不是整数（%r），改用各来源声明的缓存时长：%s",
+                     (config.load_config().get("metadata_fetch") or {}).get("cache_ttl"), e)
+        configured = None
+    if configured is not None:
+        return max(0, configured)
+    return max(0, int(meta.get("cache_ttl") or 0))
+
+
+def _throttle(source: str) -> None:
+    """主动限流：按声明的 `(次数, 秒)` 补足最小间隔。
+
+    ⚠️ 只在**单进程内**生效（本项目是单进程 uvicorn）。不引入跨进程限流：
+    那需要锁或外部存储，而收益只是「多 worker 部署下更稳」，本项目没有那种部署（§7.2）。
+
+    ⚠️ 体检路径**旁路本函数**（见 `health_one`）：体检默认 4 路并发，与「串行补间隔」
+    互相干扰；而体检本来就是要探「现在到底能不能用」，人为拖慢它没有意义。
+    """
+    meta = SOURCES.get(source) or {}
+    rl = meta.get("rate_limit") or []
+    if not rl or len(rl) < 2:
+        return
+    span = float(rl[1])
+    if span <= 0:
+        return
+    now = time.monotonic()
+    last = _LAST_CALL.get(source)
+    if last is not None:
+        wait = span - (now - last)
+        if wait > 0:
+            time.sleep(wait)
+    _LAST_CALL[source] = time.monotonic()
+
+
+def _error_text(exc: Exception) -> str:
+    """把 fetcher 抛出的异常翻成**用户照着能做点什么**的中文说明。
+
+    ⚠️ **只此一处**：`search` 与 `detail` 都需要这套口径（3xx 反爬 / 4xx-5xx 接口 /
+    超时 / 连不上），两处各写一份必然走散 —— 第 102 期加 `detail` 时收敛到这里。
+    """
+    if isinstance(exc, httpx.TimeoutException):
+        return f"请求超时：{exc}"
+    if isinstance(exc, httpx.HTTPStatusError):
+        # ⚠️ 必须按状态码分开说：3xx（httpx 的 raise_for_status 也管）多半是被反爬
+        # 重定向到验证页，4xx/5xx 是接口本身的问题，两者要做的处置不一样。
+        code = exc.response.status_code
+        if 300 <= code < 400:
+            return f"被重定向（HTTP {code}）：多半被反爬拦到验证页，需要降低频率或带 Cookie"
+        if code == 404:
+            # 按 ID 取详情时 404 是**常见**结果（记录下架 / 标识过期）。笼统写「接口返回错误」
+            # 会让人以为站点坏了，跑去查一个根本没坏的东西（误报比不报更糟）。
+            return "该地址不存在（HTTP 404）：记录可能已下架，或该来源的接口已改版"
+        return f"接口返回错误（HTTP {code}）"
+    if isinstance(exc, httpx.HTTPError):
+        return f"连接失败：{exc}"
+    return str(exc)
+
+
+def search(source: str, title: str, author: str, limit: int = 5, opts: dict = None,
+           force: bool = False) -> dict:
     """单个源检索。返回 ``{ok, entries, error}`` —— **不抛异常**，失败信息带回给调用方。
 
     ``opts`` 是**该源的**配置（如 Google Books 的 ``api_key``）。
+
+    ``force=True`` = **诊断模式：旁路缓存与限流**。体检与「测试这一家」必须用它 ——
+    那些功能的全部价值是「现在到底能不能用」，读缓存等于说谎；
+    而体检默认 4 路并发 + 单家 12s 超时，若还串行补限流间隔（comicvine 声明 18s），
+    它会把自己的 sleep 当成源超时 ⇒ **把健康源误报成 timeout**（误报比不测更糟：
+    用户会去修一个根本没坏的东西）。
     """
     fn = _FETCHERS.get(source)
     if not fn or not _clean(title):
         return {"ok": False, "entries": [], "error": "源不可用或书名为空"}
+    title, author = _clean(title), _clean(author)
+    n_limit = max(1, min(int(limit or 5), 20))
+    ttl = _ttl_of(source)
+    key = _cache_key(source, title, author, n_limit, opts)
+    if not force:
+        cached = _cache_get(key, ttl)
+        if cached is not None:
+            return {"ok": True, "entries": cached, "error": ""}
+    if not force:
+        _throttle(source)
     try:
-        entries = fn(_clean(title), _clean(author), max(1, min(int(limit or 5), 20)), opts or {})
-    except httpx.TimeoutException as e:
-        return {"ok": False, "entries": [], "error": f"请求超时：{e}"}
-    except httpx.HTTPStatusError as e:
-        # ⚠️ 这里必须按状态码分开说：3xx（httpx 的 raise_for_status 也管）多半是被反爬
-        # 重定向到验证页，4xx/5xx 是接口本身的问题，两者要做的处置不一样。
-        code = e.response.status_code
-        if 300 <= code < 400:
-            return {"ok": False, "entries": [],
-                    "error": f"被重定向（HTTP {code}）：多半被反爬拦到验证页，需要降低频率或带 Cookie"}
-        return {"ok": False, "entries": [], "error": f"接口返回错误（HTTP {code}）"}
-    except httpx.HTTPError as e:
-        return {"ok": False, "entries": [], "error": f"连接失败：{e}"}
+        entries = fn(title, author, n_limit, opts or {})
     except Exception as e:                                   # noqa: BLE001 —— 单源失败不能影响别的源
-        return {"ok": False, "entries": [], "error": str(e)}
+        return {"ok": False, "entries": [], "error": _error_text(e)}
+    # ⚠️ 只缓存**非空**结果：空结果不缓存（一次抖动不该让这家「假死」整个 TTL）
+    if entries:
+        _cache_put(key, entries, ttl)
     return {"ok": True, "entries": entries, "error": ""}
 
 
 def search_all(sources: list, title: str, author: str, limit: int = 5,
-               options: dict = None) -> dict:
+               options: dict = None, force: bool = False) -> dict:
     """按给定顺序检索多个源，合并候选并按匹配分倒序。
 
     ``options`` 按源给配置，形如 ``{"googlebooks": {"api_key": "..."}}``。
@@ -1445,7 +1646,7 @@ def search_all(sources: list, title: str, author: str, limit: int = 5,
     opts_map = options or {}
     merged, report = [], {}
     for name in order:
-        res = search(name, title, author, limit, opts_map.get(name))
+        res = search(name, title, author, limit, opts_map.get(name), force=force)
         report[name] = {"ok": res["ok"], "count": len(res["entries"]), "error": res["error"]}
         for e in res["entries"]:
             e["score"] = score_candidate(title, author, e)
@@ -1485,14 +1686,14 @@ def score_against_members(cand: dict, members: list) -> float:
 
 
 def search_series(series_name: str, members: list, sources: list = None,
-                  limit: int = 5, options: dict = None) -> dict:
+                  limit: int = 5, options: dict = None, force: bool = False) -> dict:
     """按系列名检索，再按成员书一致性重打分。
 
     返回 ``{entries, sources, best, members}``；``entries`` 已按一致性分倒序，
     ``best`` 是最高分候选（**可能是 0 分** —— 那就说明没搜到能对上的东西，
     由调用方如实回「未找到」，不要拿个不相关的候选硬凑简介）。
     """
-    res = search_all(sources, series_name, "", limit=limit, options=options)
+    res = search_all(sources, series_name, "", limit=limit, options=options, force=force)
     entries = []
     for e in res["entries"]:
         e = dict(e)
@@ -1503,12 +1704,155 @@ def search_series(series_name: str, members: list, sources: list = None,
             "best": entries[0] if entries else None, "members": len(members or [])}
 
 
+# ---------------- 按 ID 取详情（第 102 期）----------------
+# 「我已经知道这本书是哪一条，别再按书名猜。」检索回的是**最像的**那条，而 `provider_id`
+# 是**精确键**：库里已经记过 `openlibrary_id` / `itunes_id` 的书，用它回查那一刻的官方记录，
+# 比拿书名再猜一次更准，也少一轮打分。
+#
+# ⚠️ **只绑定真机核验过的家**（第 102 期探针结论，脚本在 `$TMP`，结论记在 `docs/TODO.md`）：
+#   ✅ itunes      `/lookup?id=` 与检索**同响应形状**（实测 trackId=597944491）
+#   ✅ openlibrary `/works/OL…W.json` 返回 works 文档（实测 /works/OL17267881W）
+#   ⛔ googlebooks 匿名额度耗尽（连打 3 个查询全 429）⇒ 端点没核过，不声明
+#   ⛔ audnexus    本机不可达（`SSL: UNEXPECTED_EOF_WHILE_READING`）⇒ 不知道它回什么形状
+#   ⛔ goodreads   `/book/show/{id}` 回 302 反爬 ⇒ 拿不到真实文档
+# 没核过就声明 = 用一个「不知道会回什么」的端点假装有这项能力，用户点了只得到一个看不懂的
+# 失败（`AGENTS.md` §7「不做假能力」）。剩下的家在 :func:`detail` 里回**明确中文回绝**
+# —— 「这家没有这条通道」和「这家有但刚才失败了」是两件事，用户要做的处置不同。
+
+
+def _detail_itunes(provider_id: str, opts: dict) -> dict:
+    """iTunes 按 ``trackId`` 取详情；查不到回 ``None``。
+
+    ``/lookup?id=`` 与 ``/search`` **同一响应形状**（都是 ``{"resultCount", "results": []}``），
+    所以复用 :func:`_itunes_entry` —— 不另写一份字段映射（§7.1 发现第二份实现 = 缺陷）。
+    """
+    pid = _clean(provider_id)
+    if not pid:
+        return None
+    size = ITUNES_COVER_SIZES.get(_clean((opts or {}).get("resolution")).lower(), "1000x1000")
+    data = _get_json(ITUNES_LOOKUP, params={"id": pid})
+    items = [it for it in (data.get("results") or []) if isinstance(it, dict)]
+    return _itunes_entry(items[0], size) if items else None
+
+
+def _ol_work_key(provider_id: str) -> str:
+    """把库里存的 OpenLibrary 标识归一成 ``/works/OL…W``；认不出来回空串。
+
+    `openlibrary_id` 字段里落的就是 provider 当时的 ``key``（``/works/OL1234W``），
+    但用户可能从别处粘一个裸 id 或带 URL 的串过来 —— 这里只认 **works** 形态。
+    editions 的 ``/books/OL…M`` 认不出来 ⇒ 由调用方如实回绝，而不是拿它去猜一个 works 地址
+    （猜错会回一条**别的书**的记录，比失败更糟）。
+    """
+    key = _clean(provider_id)
+    if not key:
+        return ""
+    m = re.search(r"/works/(OL\d+W)", key, re.I) or re.fullmatch(r"(OL\d+W)", key, re.I)
+    return "/works/" + m.group(1).upper() if m else ""
+
+
+def _ol_description(d: dict) -> str:
+    """取 works 文档的简介。
+
+    ⚠️ 真机核验：这里的 ``description`` 是**字典**（``{"type": "/type/text", "value": …}``），
+    不是字符串。直接透给 `_entry` 会被 `str()` 成一坨 Python 字面量落进书目简介。
+    """
+    desc = d.get("description")
+    if isinstance(desc, dict):
+        return desc.get("value")
+    return desc
+
+
+def _ol_author_names(d: dict) -> str:
+    """works 文档里只有作者**边的 key**（``authors[].author.key``），名字要逐条再查一次。
+
+    ⚠️ 最多取 3 位、单个作者查不到就跳过：详情是**补字段**用的，不该因为第 4 位作者超时
+    就让整条详情作废（宁可少一个作者名，也不要整条失败）。
+    """
+    names = []
+    for edge in (d.get("authors") or [])[:3]:
+        key = _clean(((edge or {}).get("author") or {}).get("key"))
+        if not key:
+            continue
+        try:
+            ad = _get_json(OPENLIBRARY_BASE + key + ".json")
+        except Exception:                       # noqa: BLE001 —— 一个作者查不到不算详情失败
+            continue
+        if _clean(ad.get("name")):
+            names.append(_clean(ad.get("name")))
+    return ", ".join(names)
+
+
+def _detail_openlibrary(provider_id: str, opts: dict) -> dict:
+    """OpenLibrary 按 works key 取详情；key 不合法 / 查不到回 ``None``。
+
+    ⚠️ **works 端点不返回**出版年 / 出版社 / ISBN —— 那些挂在 edition 上（要再查
+    ``/works/OL…W/editions.json``）。这三项**留空，不猜**：宁可少几个字段，也不要凭空给一本
+    书安一个出版年，用户没法分辨那是不是编的。
+    """
+    key = _ol_work_key(provider_id)
+    if not key:
+        return None
+    d = _get_json(OPENLIBRARY_BASE + key + ".json")
+    if not _clean(d.get("title")):
+        return None
+    covers = [c for c in (d.get("covers") or []) if isinstance(c, int) and c > 0]
+    return _entry(
+        "openlibrary",
+        title=d.get("title"),
+        author=_ol_author_names(d),
+        language=_pick_lang(d.get("languages")),
+        description=_ol_description(d),
+        tags=_split_subjects(d.get("subjects")),
+        cover_url=OPENLIBRARY_COVER.format(cover=covers[0]) if covers else "",
+        raw_id=key,
+        provider_id=key,
+    )
+
+
+def detail(source: str, provider_id: str, opts: dict = None) -> dict:
+    """按**该源自己的记录标识**取详情。返回 ``{ok, entry, error}`` —— 与 :func:`search` 同纪律，不抛异常。
+
+    ``opts`` 是**该源的**配置（与 :func:`search` 同一份，如 iTunes 的 ``resolution``）。
+    缓存与限流都照常走（同一家的详情与检索共用限流窗口）—— 这里**不设** ``force``：
+    没有哪个调用方需要「跳过缓存拿详情」，加了就是投机抽象（§7.2）。
+    """
+    if source not in SOURCES:
+        return {"ok": False, "entry": None, "error": f"未知源：{source}"}
+    fn = _DETAIL_FETCHERS.get(source)
+    if not fn:
+        return {"ok": False, "entry": None,
+                "error": "这家来源没有「按 ID 取详情」的通道，请改用按书名检索"}
+    pid = _clean(provider_id)
+    if not pid:
+        return {"ok": False, "entry": None, "error": "缺少该来源的记录标识"}
+    ttl = _ttl_of(source)
+    key = _detail_key(source, pid, opts)
+    cached = _cache_get(key, ttl)
+    if cached:
+        return {"ok": True, "entry": cached[0], "error": ""}
+    _throttle(source)
+    try:
+        entry = fn(pid, opts or {})
+    except Exception as e:                                   # noqa: BLE001 —— 与 search 同纪律
+        return {"ok": False, "entry": None, "error": _error_text(e)}
+    if not entry:
+        # 请求成功但没有这条记录：如实说「没返回」，不要说成「可用」——
+        # 界面若据此显示「已同步」，用户会以为元数据是新的。
+        return {"ok": False, "entry": None, "error": "该来源没有返回这条记录（标识可能已失效）"}
+    _cache_put(key, [entry], ttl)
+    return {"ok": True, "entry": entry, "error": ""}
+
+
 def probe(source: str, opts: dict = None) -> dict:
-    """连通性自检（设置页用）。用一本几乎必然存在的书探路，返回耗时与结论。"""
+    """连通性自检（设置页用）。用一本几乎必然存在的书探路，返回耗时与结论。
+
+    ⚠️ `force=True`：自检的价值就是「现在到底能不能用」——读缓存等于说谎。
+    （缓存命中会让一次真的断线也显示「可用」。）
+    """
     if source not in SOURCES:
         return {"ok": False, "message": f"未知源：{source}", "ms": 0}
     t0 = time.time()
-    res = search(source, "Pride and Prejudice", "Jane Austen", 1, opts)
+    res = search(source, "Pride and Prejudice", "Jane Austen", 1, opts, force=True)
     ms = int((time.time() - t0) * 1000)
     if not res["ok"]:
         return {"ok": False, "message": res["error"] or "不可用", "ms": ms}
@@ -1606,8 +1950,16 @@ def health_one(source: str, opts: dict = None, title: str = "", author: str = ""
         # 与抓取口径一致：没填密钥就**不发外呼** —— 体检也不该拿一次注定失败的请求当「测试」
         return {**base, "ok": False, "kind": "missing_key", "ms": 0, "count": 0, "first": "",
                 "error": "未填密钥：填好后再体检这一家"}
+    if not _clean(title):
+        # 只给 source 时回落到**该家的地区样本**：否则 `search` 会以「书名为空」提前返回，
+        # 体检结论变成「源不可用」—— 把人引去查一个根本没坏的源（误报比不测更糟）。
+        sample = HEALTH_SAMPLES.get(source) or HEALTH_SAMPLE_DEFAULT
+        title, author = sample[0], sample[1]
     t0 = time.time()
-    res = search(source, title, author, limit, opts)
+    # ⚠️ `force=True` = 诊断模式，**缓存与限流都旁路**（见 `search` 的说明）：体检是并发 4 路，
+    # 不能被「串行补间隔」拖到自己的超时；用 force 也保证结论反映**当下** ——
+    # 缓存命中会让一次真的断线也显示「可用」。
+    res = search(source, title, author, limit, opts, force=True)
     ms = int((time.time() - t0) * 1000)
     entries = res.get("entries") or []
     if not res.get("ok"):

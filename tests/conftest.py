@@ -369,6 +369,30 @@ def _no_notification_merge():
         al._pending.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_metasource_cache_leak():
+    """用例**默认从干净的检索缓存开始**（第 102 期）。
+
+    缓存与「上次调用时刻」都是 `novelforge.core.metasources` 的**模块级可变状态**，
+    跨用例留存会同时造成两类假象：
+    ① 命中上一条用例的结果 ⇒ 用例里换过的桩 / 换过的选项**不生效**，
+       表现为「单独跑绿、全量跑红」（实测过：`test_itunes_封面尺寸按配置` 与
+       `test_带HTML的简介会被剥标签` 都栽在这上面）；
+    ② `_LAST_CALL` 留存 ⇒ 声明了限流的家（comicvine 18s）会在无关用例里**真 sleep**。
+
+    缓存本身的行为由 `tests/test_metasources_cache.py` 专门钉住（那里自带清场）。
+    """
+    from novelforge.core import metasources as _ms
+
+    _ms.clear_cache()
+    _ms._LAST_CALL.clear()
+    try:
+        yield
+    finally:
+        _ms.clear_cache()
+        _ms._LAST_CALL.clear()
+
+
 @pytest.fixture
 def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     """**用例级隔离**：数据 / 导出 / 来源目录指向本用例专属路径，并重建一套空库。

@@ -39,8 +39,8 @@ from .kinds import KINDS, KIND_ANIME, KIND_AUDIOBOOK, KIND_COMIC, KIND_EBOOK
 class Provider:
     """一家元数据来源的**全部事实**。
 
-    `fetch` / `fetch_isbn` / `fetch_detail` 都是对 `metasources` 里函数的引用
-    （避免循环 import：调用方在运行时注入，见 `metasources._FETCHERS`）。
+    `fetch_name` / `isbn_name` / `detail_name` 存的是 `metasources` 里函数的**名字**
+    （避免循环 import：调用方在加载末尾按名字注入，见 `metasources._bind_declared`）。
 
     ⚠️ `frozen=True`：声明表在 import 期构造一次，运行期不该被改。
     """
@@ -165,14 +165,17 @@ DECLARED: tuple = (
         id="openlibrary", label="Open Library", kind=KIND_EBOOK, group="一般书籍目录",
         fetch_name="_search_openlibrary",
         isbn_name="_search_isbn_openlibrary",
+        detail_name="_detail_openlibrary",
         home="https://openlibrary.org",
-        note="无需 API Key。中文书的覆盖率一般，但语种/年份/ISBN 较规范。",
+        note="无需 API Key。中文书的覆盖率一般，但语种/年份/ISBN 较规范。"
+             "按 ID 取详情走 works 文档（不带出版年/出版社/ISBN，那几项在 edition 上）。",
         id_field="openlibrary_id",
         langs=(),                      # 通吃
     ),
     Provider(
         id="itunes", label="iTunes", kind=KIND_EBOOK, group="一般书籍目录",
         fetch_name="_search_itunes",
+        detail_name="_detail_itunes",
         home="https://itunes.apple.com",
         note="Apple 公开检索接口（无需 Key）。图书分类以英文为主，有声书与电子书分列。",
         id_field="itunes_id",
