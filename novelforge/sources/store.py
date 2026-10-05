@@ -148,7 +148,7 @@ def sources_status() -> list[dict]:
     for s in list_sources():
         cpath = cookie_dir / f"{s['name']}.cookies.txt"
         has_cookie = cpath.is_file()
-        reason = mgr.gate_reason(s["name"])
+        reason = mgr.gate_reason()
         out.append({
             **s,
             "download_enabled": enabled,

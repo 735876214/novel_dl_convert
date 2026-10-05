@@ -104,9 +104,9 @@ def test_命中带来源字段_失败源如实回报原因(registry):
 
     assert [it["title"] for it in res["items"]] == ["三体"], "一个源挂了不影响别的源出结果"
     it = res["items"][0]
-    # 三个键都写全：`source` 是前端读的，`_source` 是下载路径与 sidecar 在读的历史键
-    assert (it["source"], it["_source"], it["source_name"]) == \
-        ("ok-src", "ok-src", "ok-src 展示名")
+    # 两个键：`source` 是前端与下载路径读的（第 97 期删掉了冗余的历史键 `_source` 写入），
+    # `source_name` 是展示名。
+    assert (it["source"], it["source_name"]) == ("ok-src", "ok-src 展示名")
 
     rows = _rows(res)
     assert rows["ok-src"]["ok"] is True and rows["ok-src"]["count"] == 1

@@ -133,9 +133,10 @@ export interface SearchHit {
   title: string
   author?: string
   /**
-   * 书源名（`manager._mark()` 打的，第 71 期起**同时**写 `_source` 与 `source`）。
+   * 书源名（`manager._mark()` 打的，第 71 期起写 `source`）。
    * 结果行的来源徽章与「预览」都用它 —— 第 71 期之前后端只给了 `_source`，
    * 于是 `hit.source` 恒为 `undefined`：徽章空白、预览必然报「未知书源: undefined」。
+   * ⚠️ 第 97 期起后端**不再**同时写历史键 `_source`（读侧仍认它，供外部回传的 item 用）。
    */
   source: string
   url: string

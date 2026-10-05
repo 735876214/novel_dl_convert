@@ -1067,7 +1067,7 @@ async def api_preview(source: str = Query(...), url: str = Query(...)):
     mgr = _manager()
     # 预览也是**真的去外呼书源**（`mgr.preview` 会取书页/目录），同样过闸门 ——
     # 否则它就成了「下载关了但还留着一扇窗」的后门。
-    reason = mgr.gate_reason(source)
+    reason = mgr.gate_reason()
     if reason:
         raise HTTPException(400, reason)
     try:
@@ -1115,7 +1115,7 @@ async def api_toc_fetch(payload: dict = Body(...)):
         raise HTTPException(404, "书籍不存在")
     mgr = _manager()
     # 闸门（用途维度）拦在业务逻辑之前 —— 与搜索/下载同一口径，理由见 `gate_reason`。
-    reason = mgr.gate_reason(source or None, feature="toc")
+    reason = mgr.gate_reason(feature="toc")
     if reason:
         raise HTTPException(400, reason)
     detail = library.book_detail(b["name"], b.get("library_id")) or {}
@@ -1179,7 +1179,7 @@ async def api_online_bind(bid: str, payload: dict = Body(...)):
     source = str((payload or {}).get("source") or "").strip()
     url = str((payload or {}).get("url") or "").strip()
     mgr = _manager()
-    reason = mgr.gate_reason(source or None)
+    reason = mgr.gate_reason()
     if reason:
         raise HTTPException(400, reason)
     if source not in REGISTRY:
@@ -1226,7 +1226,7 @@ def _online_ctx(bid: str) -> tuple:
     if not row:
         raise HTTPException(400, "这本书还没绑定书源 —— 在详情页的「在线阅读」里选一个源再开始")
     mgr = _manager()
-    reason = mgr.gate_reason(row.get("source") or None)
+    reason = mgr.gate_reason()
     if reason:
         raise HTTPException(400, reason)
     reason = online_mod.support_reason(row.get("source") or "")
@@ -1275,7 +1275,7 @@ def api_online_status(bid: str):
         out["update_reason"] = ("这本书既没有书源留档、也没有绑定书源 —— "
                                 "先在下面绑一个源，或者从书源下载它")
     else:
-        out["update_reason"] = _manager().gate_reason(None) or ""
+        out["update_reason"] = _manager().gate_reason() or ""
     out["updatable"] = not out["update_reason"]
     if not row:
         # 没绑定**不是错误**：这是绝大多数书的常态，前端据此显示「绑定书源」入口。
@@ -1287,7 +1287,7 @@ def api_online_status(bid: str):
     out["url"] = row.get("url") or ""
     out["title"] = row.get("title") or b.get("title") or ""
     # 置灰原因按「用户能做什么」排序：闸门（去设置里打开）比「源不支持」（去换源）更外层
-    gate = _manager().gate_reason(source or None)
+    gate = _manager().gate_reason()
     reason = gate or online_mod.support_reason(source)
     out["reason"] = reason
     out["available"] = not reason and bool(row.get("url"))
@@ -1552,7 +1552,7 @@ async def _sync_worker(tid: str, b: dict, row: dict | None, *, actor: str = "系
     title = b.get("title") or b.get("name") or ""
     try:
         mgr = _manager()
-        reason = mgr.gate_reason((row or {}).get("source") or None)
+        reason = mgr.gate_reason()
         if reason:
             raise RuntimeError(reason)
         if row:
@@ -1633,7 +1633,7 @@ async def api_download(request: Request, item: dict = Body(...)):
     mgr = _manager()
     src_name = source_of(item)
     # 闸门先判（第 71 期）：不判的话「设置里关掉了下载」也照样能下 —— 那是假开关。
-    reason = mgr.gate_reason(src_name or None)
+    reason = mgr.gate_reason()
     if reason:
         raise HTTPException(400, reason)
     # 源名对不上就直接拒，**不进队列**：原先会先建任务、再由后台失败，用户要跑到任务中心

@@ -1,7 +1,7 @@
 """下载管理器：统一搜索、按站点抓取全文、转 EPUB，以及增量更新。
 
 对应 denovel「自动更新（指定 txt 自动爬取小说更新内容）」「写扩展脚本即可加站点」。
-- search：遍历已注册书源，返回带 _source 标记的候选。
+- search：遍历已注册书源，返回带 source 标记的候选。
 - fetch_and_convert：取全文 → 走本地转换管线 → 成品落导出目录。
 - update：读取本地 txt 的 sidecar 元数据，重爬源站只追加新增章节，再重转。
 """
@@ -84,7 +84,7 @@ class DownloadManager:
             verify_tls=self.verify_tls,
         )
 
-    def gate_reason(self, source: str | None = None, feature: str = "download") -> str:
+    def gate_reason(self, feature: str = "download") -> str:
         """下载闸门判定（**唯一一处**，第 71 期）：空串 = 放行，非空 = 可直接展示的原因。
 
         一条规则（`config.py` 的默认值就是它）：``download.enabled`` 默认 **False** ——
@@ -101,9 +101,10 @@ class DownloadManager:
         「下载整本正文」是两个动作，理由见 `sources/toc_sources.py` 的模块注释。
 
         ⚠️ **第 93 期删掉了「仅放行公版源」（`download.public_only`）那一层**（用户拍板）：
-        现在**不再按来源的公版 / 非公版过滤**，全部已注册源一视同仁，判定只剩上面那一条。
-        ``source`` 形参**保留**（调用方仍按源逐条问原因，签名稳定），但自本期起不参与判定；
+        现在**不再按来源的公版 / 非公版过滤**，全部已注册源一视同仁，判定只剩上面那一条；
         适配器上的 ``public`` 字段降级为**纯标注**（书源列表里的「公版 / 私有」徽章）。
+        ⚠️ 第 97 期把那个**不参与判定的 ``source`` 形参删掉**了（第 93 期只是留着它「签名稳定」）：
+        判定与来源无关，留着只会让人以为「按源判」。
         """
         if feature == "toc":
             # 「取目录」是独立开关：它只读一份章节标题，与「下载整本正文」是两个动作。
@@ -145,7 +146,7 @@ class DownloadManager:
         """
         page = max(1, int(page or 1))
         entries = list(REGISTRY.items())
-        blocked = {name: self.gate_reason(name) for name, _ in entries}
+        blocked = {name: self.gate_reason() for name, _ in entries}
         live = [(n, c) for n, c in entries if not blocked[n]]
         results = await asyncio.gather(
             *(self._search_one(n, c, title, page) for n, c in live)
@@ -197,14 +198,15 @@ class DownloadManager:
     def _mark(item: dict, name: str, display: str) -> dict:
         """给命中打上来路（**唯一写入处**，第 71 期）。
 
-        - ``source``：前端读的字段。第 71 期之前只写 ``_source`` 而前端读 ``source``，
+        - ``source``：前端与下载路径读的字段。第 71 期之前只写 ``_source`` 而前端读 ``source``，
           后果是结果行的来源徽章空白、点「预览」必然 502「未知书源: undefined」；
-        - ``source_name``：展示名；
-        - ``_source``：历史键，下载路径与 sidecar 仍在读它（见 :func:`source_of`），保留。
+        - ``source_name``：展示名。
+
+        ⚠️ 第 97 期**不再写历史键 ``_source``**：读侧 :func:`source_of` 仍认它 —— 那是
+        **外部回传 item** 的输入契约（`cli.py --item` / sidecar），不是给我们自己产物用的。
         """
         item["source"] = name
         item.setdefault("source_name", display)
-        item["_source"] = name
         return item
 
     async def fetch_and_convert(self, item: dict, out_dir: Path, opts: dict) -> Path:

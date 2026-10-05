@@ -166,7 +166,7 @@ def _update_target(book: dict, mgr) -> tuple:
     if not sidecar.is_file():
         raise ValueError(f"未找到 sidecar 元数据 {sidecar.name}，无法增量更新")
     meta = json.loads(sidecar.read_text(encoding="utf-8"))
-    reason = mgr.gate_reason(meta.get("source"))
+    reason = mgr.gate_reason()
     if reason:
         raise Blocked(reason)
     return sidecar.with_suffix("").with_suffix(".txt"), sidecar.name[:-len(".meta.json")]

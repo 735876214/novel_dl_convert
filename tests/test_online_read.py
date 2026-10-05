@@ -572,7 +572,7 @@ class _Manager:
     def _client(self, src):
         return _NullClient()
 
-    def gate_reason(self, source=None, feature="download"):
+    def gate_reason(self, feature="download"):
         return ""
 
 

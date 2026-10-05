@@ -44,7 +44,7 @@ class _FakeMgr:
     def __init__(self, reason: str = ""):
         self._reason = reason
 
-    def gate_reason(self, source=None, feature="download"):  # noqa: ARG002
+    def gate_reason(self, feature="download"):  # noqa: ARG002
         return self._reason
 
 

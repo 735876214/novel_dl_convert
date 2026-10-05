@@ -11,7 +11,7 @@
 · 规则字段照抄 `sources/rules.py` 顶部的 schema，`book.mode="toc"` 用的就是那份 `toc`
   提取器（本模块只做「不取正文」的裁剪）；
 · 出网走 `DownloadManager._client`（**同一份** Cookie 目录 / host_replace / 重试口径）；
-· 开关走 `DownloadManager.gate_reason(source, feature="toc")` —— 闸门只有一个入口
+· 开关走 `DownloadManager.gate_reason(feature="toc")` —— 闸门只有一个入口
   （第 71 期定的），第 85 期给它加了「**用途**」维度：下载内容与取目录是两个开关。
 
 ## 注册表的诚实口径（AGENTS.md：不做假交互）
@@ -297,7 +297,7 @@ async def fetch_toc(manager, source_id: str, *, book: dict, url: str = "",
 
     `url` 有值 = **用户手动指定**（跳过匹配，`manual=True`、置信度记 1.0）；
     `query` 可覆盖搜索词（默认用书名）。闸门**不在这里判**：闸门只有一个入口，
-    由调用方（路由 / 管理器）先问 `gate_reason(source, feature="toc")`，理由与
+    由调用方（路由 / 管理器）先问 `gate_reason(feature="toc")`，理由与
     「下载被拦时不该先入队」同源 —— 拦在业务逻辑之前。
     """
     ent = by_id(source_id)

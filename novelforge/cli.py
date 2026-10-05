@@ -150,7 +150,7 @@ async def cmd_download(args):
         item = {"source": args.source, "url": args.url,
                 "title": args.title or "book", "author": args.author or "未知",
                 "formats": {}}
-    reason = mgr.gate_reason(source_of(item) or None)
+    reason = mgr.gate_reason()
     if reason:
         print(reason)
         return
