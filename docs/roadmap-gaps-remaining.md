@@ -5173,3 +5173,158 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 - 文档：本节 + `docs/TODO.md` 刷新 + `.codebuddy/memory/`（当日日志 / `MEMORY.md` 索引 / `MEMORY-REF.md`）。
 - ⚠️ `.codebuddy/memory/2026-10-03.md` 里有**并行会话**的未提交段落：不重写工作区文件、
   用 `git hash-object -w --path` + `git update-index --cacheinfo` 只暂存自己那一段；`.vscode/settings.json` 不提交。
+
+---
+
+## 第 95 期 · `AGENTS.md` §7「工程原则」+ 按 `AGENTS.md` 的合规审计与整改
+
+> ⚠️ **本期不发版**：`VERSION` 仍 `0.94.0`（用户 2026-10-05 明确选择「先不发版，只提交代码」）
+> ⇒ **不改 `CHANGELOG.md`、无 tag、无 Release**。这也意味着本期**不触发** `.github/workflows/release.yml`。
+
+### 一、需求来源（用户两句话 + 8 条原则）
+
+用户先给了一份「AI 写代码的工程原则」清单，要求 ① **写进 `AGENTS.md`**、② **据 `AGENTS.md` 检查项目功能**。
+随后用户**全选**了审计报告给出的批次 1–6 ⇒ 授权动手改产品代码（批次 8「数据安全口径」**未勾选**）。
+
+### 二、功能范围
+
+**A. `AGENTS.md` 新增 §7「工程原则」**（8 条 + **两条先写死的边界**）。
+
+8 条：① 不为向后兼容留路 ② 只做满足当前需求的最简实现 ③ 分层生长 ④ 模块化 / 关注点分离
+⑤ 优先成熟库 ⑥ **先查已有依赖再自己写** ⑦ 为长期做架构决策 ⑧ 先研究成熟产品怎么解。
+
+⚠️ **两条边界**（防止本节被误读成「可以删安全网」）：**数据安全语义不是兼容层**
+（软删除 / 回收站 / 源不可变 /「移除书库只删登记」照旧）；**DB schema 迁移不是兼容层**
+（建表 / 加列 / `*_RULE_VERSION` 存量自愈照旧 —— 那是**存量数据**的正确性，不是代码里的旧路径）。
+§1 末尾加了一行指针，并写明**冲突时以 §1 硬约束为准**。§7 是**追加**的 ——
+`docs/DESIGN.md` / `docs/TODO.md` / `MEMORY-REF.md` / `MEMORY.md` / 两份 `memory/2026-*.md`
+共 6 处**硬引用「`AGENTS.md` 第 1 节」**，所以**没有重排既有节号**。
+
+**B. 合规审计**（`docs/agents-audit-95.md`，四轴并行 + 父代理逐条复核）—— 结论分布：
+§2 旧路径 13 条 / §3 死代码 6 条 / §4 重复造轮子 4 条 / §4.5 文档过期 8 条。
+⚠️ **复核推翻了 3 条**（见「五、踩坑」）。
+
+**C. 整改**（批次 7 → 3 → 4 → 2 → 6 → 1）：
+
+| 批次 | 内容 |
+|---|---|
+| 7 文档计数 | 5 文件 6 处（含审计漏掉的 `FileNamingPage.vue` 第 4 处「9 个占位符」；后端 `PATTERN_FIELDS` 已是 10 项：新增「演播者」） |
+| 3 死代码 | `LIBRARY_MODES`；`pipeline.chapter_regex` 死分支（**它绕过 `core/saferegex`**，是执行期正则的唯一入口纪律的漏洞）；`settingsFields.ts` 的 `libraries` 死条目 |
+| 4 半截接线 | `notifications.merge_enabled` / `merge_window` 三处 + `activity_log.merge_cfg()` 常量化（界面从来没有出口 ⇒ **假配置**，删而不是补控件） |
+| 2 旧路径 | **九项**，见下「三、单一真值源」 |
+| 6 判据合并 | 新增叶子模块 `novelforge/core/filename.py` |
+| 1 视觉 | 热力图 / 浮层遮罩 / 评分坡三处 + **新增守卫用例** |
+
+**D. 新增守卫（7 个文件，+18 例）**：`tests/test_visual_tokens_contract.py`（新文件 6 例）、
+`tests/test_epub_xml_parse.py`（新文件 5 例，容错契约 —— 见「六、未做及原因」里那次**回退**）、
+版本契约 +3、`test_sources_intake.py` +2、`test_api_smoke.py` +1、`test_metadata_providers.py` +1。
+
+### 三、单一真值源（本期收敛掉的）
+
+1. **格式中文名**：唯一产出点 = `novelforge/sources/formats/base.py:format_label()`（此前**零调用方**）；
+   四条导入路（`/api/sources`、`/upload`、`/import`、`/import-url`）都下发 `format_label`；
+   前端 `lib/sourceImport.ts` 的 `FORMAT_LABELS` **第二份表删除**（它 5 个键里已有 **3 个**与后端
+   `display_name` 悄悄发散 ⇒ 界面上的名字一直在说错话）。
+2. **文件名安全判据**：唯一实现 = `novelforge/core/filename.py`（`UNSAFE_CHARS` / `TRAILING_JUNK` /
+   `strip_unsafe()`）。`komga.clean_segment` 与 `fileops.sanitize_stem` 共用它。
+   ⚠️ 选**叶子模块**（只 import `re`）而不是让 `komga` 反向 import `fileops`：后者会把 `library` 拖进
+   `pipeline` 的导入链（`komga.py` 原注释自陈的那条分层约束是**对的**，只是「于是各写一份」是错的答案）。
+   ⚠️ 两者**「折不折叠内部空白」的差异是刻意的**（前者折叠、后者不折叠），已用探针逐字比对确认等价。
+3. **「CSS 颜色变量 → 色串」**：唯一实现 = `lib/charts.ts` 新增导出的 `cssVarHex()`
+   （ECharts 把颜色**原样**写进图元属性，既不认 `var()` 也不认 `oklch()` ⇒ 必须运行时解析）。
+4. **删掉九处旧路径**：`/api/metadata/sources`（兼容端点）+ `has_googlebooks_key`（双写键）、
+   `/api/library-facets`（**全链路零调用者**）+ `library.library_groups()`、`output.format`（含 `FORMAT_CHOICES` 常量与 `/api/config` 值域校验）、
+   `/api/metadata/probe` 的 `keys` 入参（前端从未用过）、`DownloadManager.update()`（只回 `Path` 的壳）、
+   `written: []`（恒空字段）、`notifications` 两键、版本兜底字面量、`Dockerfile` 的 `ARG APP_VERSION` 默认值。
+
+### 四、防回归要点
+
+- **删功能要删干净**（§1）：本轮删的两个端点**各补了一条 404 断言**
+  （`test_api_smoke.py::test_格式分面接口已随零调用者移除`、
+  `test_metadata_providers.py::test_旧元数据源接口已删除返回404`）——
+  半删状态（删了页面、接口还在 / 删了接口、前端还在调）**不会报错**，只会让人以为功能还在。
+- **视觉契约用例已实测「故意造回一处违规 ⇒ 变红」**（不是只写了一条永远绿的扫描）。
+- **版本兜底不许是像样的版本号**：原 `"0.80.0"` 会让「部署缺 `VERSION`」**伪装成**「本应用就是那个版本」，
+  而原契约只验「非空且 == `APP_VERSION`」⇒ 谁都不会发现。改哨兵 `0.0.0-unknown`
+  （`parse_version` 视作 `(0,0,0)` ⇒ 更新提示照常给出），并加用例钉住「没有第二份版本字面量」。
+- **格式中文名**的用例把后端下发值与格式轴逐字钉在一起（谁再抄一份、谁改名字漏改一处都会红）。
+- **`AGENTS.md` §4 的基线数字同批更新**为 `2147 例（2122 passed / 25 skipped）`。
+
+### 五、踩坑
+
+1. ⚠️ **`NO_PROXY` 里的 `[::1]` 让 45 个用例假失败**（本期最贵的环境坑）。`httpx` 0.28.1 的
+   `get_environment_proxies()` 把方括号 IPv6 解析成畸变 mount `all://*[::1]` ⇒ 任何真实 `BrowserClient`
+   用例炸 `httpx.InvalidURL: Invalid port: ':1]'`。**只去掉方括号不够，必须整组清空**。
+   首轮全量因此读出 `45 failed, 2059 passed`，差点被当成回归。已写进 `AGENTS.md` §5。
+2. ⚠️ **不要用 PowerShell `Get-Content -Raw` + `Set-Content` 改这些 UTF-8 文件**：为验证「守卫真的会红」，
+   我用它临时改回一处 `bg-[#0f172a]/25` ⇒ **整文件中文被写坏**（17 行 mojibake）。
+   已 `git checkout -- <file>` 还原并用 edit 工具重做。**临时改动用 python 或 edit 工具。**
+3. ⚠️ **审计结论也要复核 —— 4 轴审计里有 3 条被父代理推翻**：
+   - `comics.append_pages` **不是**「数据安全违规的死代码」：目标是本项目**自己的成品 CBZ**
+     （`manager.download_comic` 用 `write_cbz` 产出），且 `tests/test_append_media.py` 有 **6 个用例**钉它；
+     真实性质是「第 86 期第 6 步的既定能力，**从未接线**」（同族 EPUB 分支 `append_chapters` **已接线**）⇒ **保留未删**。
+   - `cli.py` 的 `scan --interval` help「（保留参数…）」**没过期**：`scan` 设 `once=True`，
+     `cmd_watch` 只跑 `scan_once()` 就返回 ⇒ 该参数对 `scan` 确实无效。⇒ **撤销该条**。
+   - `LIBRARY_SOURCE_DIR` **不能删**：Python 常量确实只被测试用，但它镜像的**环境变量回退**
+     （`config.py` 的「未配置任何编号变量时回退单根」）是**真实部署模式**。
+4. ⚠️ **子代理的产出必须复核**（本期三个子代理都没交报告）：一个只改了 3 个 `.vue` 且**漏建**要求的守卫测试；
+   一个**什么都没落地**；还有一个按要求「不许改 `charts.ts`」于是**绕道重写了一份** OKLCH 解析
+   （违反 §7.1 —— 正确做法是**把那个唯一实现导出**，父代理据此新增 `cssVarHex()`）。
+   ⇒ 收尾一律以**工作区实际 diff + 全量回归**为准，**不信「子代理说做了」**。
+
+### 六、未做及原因（**不猜、不写桩、不留半截**）
+
+- **网页抓取改用 HTML 解析库**（`metasources.py` 五处抓 Amazon / Goodreads / Libro.fm / Lubimyczytac 等
+  **真实线上页面**）：**刻意不做**。硬规则是「能出网验证的就必须真的出网验证」，而第 94 期的 gzip 缺陷
+  正是「桩站单测 100% 绿、真实站点全挂」。没有逐家真机核过就改选择器语义 = 拿「单测绿」换「线上未知」，
+  属 §7.3 明令禁止的「拿能用的功能去换没做完的复杂度」。**要做就单独一轮 + 抓取样本落夹具。**
+- **EPUB 解析改成熟解析器（`library.py` 的 OPF / NCX / nav）—— 做了、验证后回退了。**
+  这是本期**唯一一次「做完又退回」**的改动，证据与理由如下（想重试的人请先读这段）：
+  动机是 §7.5「优先成熟库」（这一组取值本来是手写正则，而 `xml.etree.ElementTree` 是 stdlib）。
+  改完并跑通聚焦用例后，**验证阶段实测到三处真实回归**，且全部落在「野生 EPUB 的容错」这个
+  恰恰最不该出问题的空间里：
+  1. **截断的 OPF 会丢整块元数据**：`XMLPullParser.read_events()` 是**按文档顺序**吐事件的，
+     而实现按「取最后一条 `end` 当文档元素」—— `<package>…<manifest><item/></manifest>` 截断时
+     最后一条 `end` 是内层的 `item`，于是 `<metadata>` 整个子树看不见、**书名 / 作者全空且不报错**
+     （`unparsable` 仍是 False）。文档元素应是**第一条 `start`** 的那个（解析器复用同一对象，
+     它上面挂着坏点之前的全部子节点）。
+  2. **未定义实体（`&nbsp;`）会让整份文档作废**：`read_events()` 是生成器，`ParseError` 在
+     **迭代中途**才抛；写成 `list(parser.read_events())` 一抛就把**已吐出的事件一起丢掉**，
+     连坏点**之前**解析好的书名也没了 —— 必须手工累积、只吞异常。
+  3. **未声明命名空间前缀（写了 `dc:` 却没声明 `xmlns:dc`）会丢全部元数据**：旧正则比的是
+     字面标签名，所以读得到；真 XML 解析器把它当硬错误（`unbound prefix`）。
+     这条是**现有用例唯一抓到的**（`tests/test_isbn_shape.py` 打了个正着）。
+  ⇒ **回退的核心理由**：这三条要么靠字符串手术式的补丁去兼容（给根标签注入常用命名空间声明），
+  要么换 `lxml` 的 `recover=True` —— 而 `lxml` 在 `requirements.txt` 里**明确是可选依赖**
+  （缺了要如实降级），把它变成硬依赖、或在同一处留两条解析路径，**都违反推动这次重构的那两条原则**。
+  换来的只是一个「内部实现更现代」的纯重构（**用户可见行为零变化**），却要动**书库扫描的热路径** ——
+  正是 §7.3「绝不拿能用的功能去换没做完的复杂度」要挡的事。
+  ⚠️ **没有白做**：那三处回归被写成了**与实现无关的容错契约**（`tests/test_epub_xml_parse.py`，**5 例**，
+  对当前的正则实现全绿）—— 下次谁再动这组解析，先撞上这些用例。
+- **`fileops.py` 的 OPF 改写正则 → ElementTree**：改写的是**出版副本的 XML**，字节等价不可证，
+  而「出版产物不得变化」是硬约束 ⇒ 保留（理由写在原地）。
+- **[low] 四项刻意留档**：`gate_reason(source=…)` 的不参与判定形参（要动就同批改 ~13 个调用点 + 桩）、
+  `_source` 的**冗余写入**（读那一侧是**外部回传 item 的输入契约**，不能一起删）、
+  `LIBRARY_SOURCE_DIR` 的 Python 别名（~20 个测试在用）、`/content` 端点（**仓外消费者无法从仓内证明**）。
+  已记进 `docs/TODO.md` §1。
+- **批次 8「数据安全两处口径」**（`zipkind.unpack` 的 `remove_source` 真 `unlink`；
+  `landing` 自动落地支无二次确认）：用户**未勾选** ⇒ 本轮不动，仍待决策。
+
+### 七、实测（收尾）
+
+- **后端全量**：**2122 passed / 25 skipped / 0 failed**（285.14 s，`--junitxml` 解析）；
+  第 94 期基线 2104 passed ⇒ **+18**，与新增守卫例数**逐一对上**（6 视觉 + 3 版本 + 2 导入标签 +
+  1 + 1 两条 404 + **5 容错契约** = 18；另有一条「兼容壳仍返回 Path」被同数替换成「只有一个入口」，净 0）。
+- **前端**：`type-check` **0 error**、`test:unit` **65 spec / 673 passed**、`build` **exit 0**
+  （`deploy` 未跑：`novelforge/static/v2/` 在 `.gitignore` 里，产物不进提交）。
+- **全量共跑三次**（批次 1–7 落地后 / 文档改动前 / 回退 EPUB 重构后），三次都是 `0 failed`。
+
+### 八、收尾
+
+- 版本：**`VERSION` 未改**（仍 `0.94.0`）⇒ 无 `CHANGELOG.md` 段、无 tag/Release（用户 2026-10-05 选择）。
+- 文档：本节 + `docs/TODO.md` 刷新（基线数字 + 四条 `[low]` 与「刻意未做」立项）+
+  `docs/agents-audit-95.md`（新增 §6 整改落地，并订正被推翻的 3 条）+ `AGENTS.md` §4 基线数字。
+- 记忆：`.codebuddy/memory/2026-10-05.md`（当日日志）+ `MEMORY.md` 逐期铁律索引第 95 期 +
+  `MEMORY-REF.md`「第 95 期铁律」（十一节）。
+- ⚠️ `.codebuddy/memory/2026-10-03.md` 是**并行会话**的未提交段落：**不重写、不提交**；
+  `.vscode/settings.json` 同样不提交。

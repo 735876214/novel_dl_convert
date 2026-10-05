@@ -4,17 +4,21 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-04 —— 第 94 期已交付（**V0.94.0**，书源导入静默失败修复 + 多格式适配器 +
-转换诚实闸 + 引擎能力补齐 + 安全层；见 `docs/roadmap-gaps-remaining.md` 末尾）。
+**最后更新**：2026-10-05 —— 第 95 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，用户选择先不发布）：
+`AGENTS.md` 新增 §7「工程原则」+ 按 `AGENTS.md` 做了一轮**合规审计与整改**（详见
+`docs/agents-audit-95.md` 与 `docs/roadmap-gaps-remaining.md` 末尾第 95 期段）。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交；`VERSION` = **0.94.0**（单一真值源，`GET /health` 下发）；
-  `CHANGELOG.md` 已有 `V0.91.0` / `V0.92.0` / `V0.93.0` / `V0.94.0` 段。
-- 测试基线（第 94 期）：后端 **2129 例（2104 passed / 0 failed / 0 errors / 25 skipped）**；前端 **65 spec / 673 例**。
+- HEAD = 第 94 期提交 + 第 95 期整改；`VERSION` = **0.94.0**（**本轮刻意未升**：清理与守卫为主，无新功能值得单独发版；
+  单一真值源，`GET /health` 下发）；`CHANGELOG.md` 最新段仍是 `V0.94.0`。
+- 测试基线（第 95 期）：后端 **2147 例（2122 passed / 0 failed / 0 errors / 25 skipped）**；前端 **65 spec / 673 例**。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
   （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
   ⚠️ 长跑 pytest 必须**后台跑 + 轮询 junit**（前台会被 harness 的「长时间无输出」上限取消）。
+  ⚠️ **本机跑 pytest 前必须清空全部代理变量**（`HTTP_PROXY`/`HTTPS_PROXY`/`http_proxy`/`https_proxy`/`NO_PROXY`/`no_proxy`）——
+  否则 `httpx` 解析 `NO_PROXY` 里的 `[::1]` 会生成畸变代理 mount，**45 个用例假失败**（第 95 期实测，
+  已写进 `AGENTS.md` §5）。
 - **可用的真实数据实例**（用户 2026-10-03 提供，随时可用来做实测）：本机 **`http://127.0.0.1:8412`**
   （`admin` / `changeme`），书目 **4 本**：三体 / 沙丘 / 银河系漫游指南 / 冒烟测试-第 91 期。
   窄屏三档冒烟一律跑它（`.codebuddy/tools/ui-smoke.ps1`，一次只传**一条**路由）。
@@ -63,6 +67,35 @@
   - 上游首页截图的肉眼比对（§5 第 1 条，需取回 `docs/images/dashboard-overview.png`）；
   - 上游 QuickView 的 `edit-metadata` / `move-to-library` 两个动作（前者等于第二个详情页，后者本项目移动在书库管理里做）
     —— 均**先有用户需求再排期**。
+
+- [ ] **第 95 期审计留下的四条 [low] 清理**（都不影响正确性，改动面却不小；判据与理由见
+  `docs/agents-audit-95.md` §6「未做及原因」）：
+  - `novelforge/sources/manager.py:87` `gate_reason(source=…)` 的 `source` 形参**不参与判定**
+    （自第 93 期删掉「仅放行公版源」起），但仍被 ~13 个调用点传 —— 要动就同批改签名 + 全部调用点 + 桩。
+  - `novelforge/sources/manager.py:207` `item["_source"] = name` 是**冗余写入**（`source` 已写且优先读）；
+    但**读**那一侧（`source_of`）是**外部回传 item 的输入契约**（`cli.py --item` / sidecar），**不能一起删**。
+  - `novelforge/config.py:53` 的 `LIBRARY_SOURCE_DIR` **Python 别名**：生产代码零引用、~20 个测试在用。
+    ⚠️ 它镜像的**环境变量回退**（`:45-48`）是真实部署模式，**必须保留**。
+  - `novelforge/server.py` 的 `/content` 端点：仓内零消费者，**仓外消费者无法从仓内证明**（脚本 / 油猴可能在用）⇒ 删之前需要一次外部确认或弃用公告。
+- [ ] **EPUB 解析（`novelforge/core/library.py` 的 OPF / NCX / nav）改成熟解析器**（第 95 期**试过并回退**）。
+  动机是 `AGENTS.md` §7.5「优先成熟库」；回退是因为**实测到三处容错回归**，重试前**务必先读**
+  `docs/roadmap-gaps-remaining.md` 第 95 期段「未做及原因」那条的完整证据：
+  - 🔴 **截断的 OPF 丢整块元数据** —— `XMLPullParser.read_events()` 是**按文档顺序**吐事件的；
+    若按「取最后一条 `end` 当文档元素」，`<package>…<manifest><item/></manifest>` 截断时会取到内层
+    `item`，`<metadata>` 整棵看不见、书名作者全空**且不报错**。文档元素是**第一条 `start`** 的那个。
+  - 🔴 **未定义实体（`&nbsp;`）让整份文档作废** —— `read_events()` 是生成器，`ParseError` 在**迭代中途**
+    才抛；`list(parser.read_events())` 一抛就把**已吐出的事件一起丢掉**。必须手工累积、只吞异常。
+  - 🔴 **未声明命名空间前缀（`dc:` 未声明 `xmlns:dc`）丢全部元数据** —— 旧正则比字面标签名读得到，
+    真 XML 解析器当硬错误 `unbound prefix`。**这条是唯一被现有用例抓到的**（`tests/test_isbn_shape.py`）。
+  ⚠️ 注意 `lxml` 在 `requirements.txt` 里**明确是可选依赖**（缺了要如实降级）⇒
+  想用它的 `recover=True` 就得先把依赖口径定下来（要么升为硬依赖、要么接受两条解析路径）。
+  ⚠️ **先跑 `tests/test_epub_xml_parse.py`（5 例）** —— 它就是这三处的可执行形式，对当前实现全绿。
+- [ ] **书源网页抓取改用 HTML 解析库**（第 95 期审计 §4，**刻意未做**）：`novelforge/core/metasources.py`
+  里 Amazon / Goodreads / Libro.fm / Lubimyczytac / Kobo 等**五处**仍用正则抓真实线上 HTML。
+  未做的理由：这五处打的是**真实站点**，而本项目的硬规则是「能出网验证的就必须真的出网验证」
+  （第 94 期的 gzip 缺陷就是「桩站单测全绿、真实站点全挂」）。**要做就单独一轮**：带真实站点核验 +
+  把抓到的页面样本落成夹具，再改选择器语义。同理 `novelforge/core/fileops.py` 的 OPF 改写正则
+  （出版副本的 XML，字节等价不可证）与 `novelforge/core/library.py` 的 EPUB/OPF/NCX 解析（见下一期段）。
 
 ### 明确「不做」（避免反复立项）
 

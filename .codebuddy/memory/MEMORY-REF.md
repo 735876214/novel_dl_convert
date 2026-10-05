@@ -863,3 +863,109 @@ discover 行仍按 id 稳定排序）。**口径以对照文档 §7「实施结�
 - **四个待样本参数**（1537 条真样本里统计到的）：以 `+` 开头的规则值 100 处、
   `:lt()`/`:gt()`/`:eq()` 9 处、编译不过的规则 17 处、2.x 的 JSON 搜索通道与 `{$…}` URL 模板。
 - 二维码导入不做（本项目无客户端扫码通道）。
+
+### 第 95 期铁律（`AGENTS.md` §7 工程原则 / 合规审计 / 旧路径清理 / 守卫）
+
+#### 一、`AGENTS.md` 新增 §7「工程原则」—— 8 条 + **两条边界先写死**
+
+8 条：① 不为向后兼容留路（旧实现删掉，不加兼容层 / 回退分支 / 迁移垫片）② 只做满足当前需求的最简实现
+（禁投机性抽象）③ 分层生长（从端到端能跑的最小版本起步）④ 模块化 / 关注点分离 ⑤ 优先成熟库
+⑥ 先查已有依赖再自己写 ⑦ 为长期做架构决策（不接受「先这样以后再换」）⑧ 先研究成熟产品怎么解。
+
+⚠️ **两条边界**（防被误读成「可以删安全网」）：**数据安全语义不是兼容层**（软删除 / 回收站 / 源不可变 /
+「移除书库只删登记」照旧）；**DB schema 迁移不是兼容层**（建表 / 加列 / `*_RULE_VERSION` 存量自愈照旧）。
+§1 末尾有一行指针，且写明**冲突时以 §1 硬约束为准**。
+
+#### 二、⚠️ 本机跑 pytest **必须先清空全部代理变量**（否则 45 个用例假失败）
+
+`httpx` 0.28.1 的 `get_environment_proxies()` 解析 `NO_PROXY` 里的方括号 IPv6（`[::1]`）会生成
+**畸变 mount** `all://*[::1]` ⇒ 任何真实 `BrowserClient` 用例炸
+`httpx.InvalidURL: Invalid port: ':1]'`，实测一次性假失败 **45 个**（看着像大回归）。
+**只去掉方括号不够，必须整组清空**：`HTTP_PROXY` / `HTTPS_PROXY` / `http_proxy` / `https_proxy` /
+`NO_PROXY` / `no_proxy`。已写进 `AGENTS.md` §5。
+
+#### 三、删功能要删干净 = **六处同批**（本轮删了两个端点，各补了一条 404 用例）
+
+路由 + 模块/函数 + 前端 `api`/`store`/类型 + 文档 + 记忆 + **「接口 404」断言**
+（体例见 `tests/test_api_smoke.py::test_格式分面接口已随零调用者移除`、
+`tests/test_metadata_providers.py::test_旧元数据源接口已删除返回404`）。
+⚠️ 半删状态（删了页面、接口还在 / 删了接口、前端还在调）**不会报错**，只会让人以为「这功能还在」。
+本轮删掉的是：`/api/metadata/sources`（兼容端点）+ `has_googlebooks_key`（双写键）、
+`/api/library-facets`（全链路零调用者）、`output.format`（含 `FORMAT_CHOICES`）、
+`/api/metadata/probe` 的 `keys` 入参、`DownloadManager.update()`（只回 `Path` 的壳）、
+`written: []`（恒空字段）、`notifications.merge_enabled/merge_window`（无界面出口的假配置）、
+`LIBRARY_MODES`、`pipeline.chapter_regex` 死分支、`settingsFields.ts` 的 `libraries` 死条目。
+
+#### 四、格式中文名**由后端下发**（前端不许再抄一份表）
+
+唯一产出点 = `novelforge/sources/formats/base.py:format_label()`（此前零调用方）；
+接口体新增 `format_label` 字段（`/api/sources`、`/api/sources/upload`、`/api/sources/import`、
+`/api/sources/import-url` 四条路都带）。前端 `lib/sourceImport.ts` 的 `FORMAT_LABELS` 第二份表**已删**
+（它 5 个键里已有 3 个与后端 `display_name` 悄悄发散）。⚠️ `sourceImport.spec.ts` 钉着文案，
+改名字要同批改它。
+
+#### 五、文件名安全判据**唯一实现 = `novelforge/core/filename.py`**（叶子模块）
+
+`UNSAFE_CHARS` / `TRAILING_JUNK` / `strip_unsafe()`；`komga.clean_segment` 与
+`fileops.sanitize_stem` 共用它。⚠️ 两者**「折不折叠内部空白」的差异是刻意的**（前者折叠、后者不折叠）——
+别顺手「统一」。选**叶子模块**（只 import `re`）而不是让 `komga` 反向 import `fileops`，是为了不改
+「`pipeline` 能直接 import `komga`」这条分层约束。
+
+#### 六、版本号：兜底**不许是像样的版本号**
+
+`server._read_version()` 读不到 `VERSION` 时曾回字面量 `"0.80.0"` —— 那会让「部署缺 VERSION」
+**伪装成**「本应用就是那个版本」，而原契约只验「非空且 == APP_VERSION」⇒ 谁都不会发现。
+现改为哨兵 `_VERSION_UNKNOWN = "0.0.0-unknown"`（error 级日志；`parse_version` 视作 `(0,0,0)` ⇒
+更新提示照常）。`Dockerfile` 的 `ARG APP_VERSION` 也**去掉了写死的默认值**。
+守卫：`tests/test_version_contract.py::test_没有第二份版本字面量`。
+
+#### 七、视觉层：**组件里不许自创颜色**已有守卫
+
+`tests/test_visual_tokens_contract.py`（扫 `.vue` 的任意值颜色工具类 `bg-[#…]` + `docs/DESIGN.md` §1
+已作废的 `#2563eb`/`#6366f1`；带 `design-token-ok` 单行豁免）。配套的单一真值源：
+- **「CSS 颜色变量 → 色串」= `charts.cssVarHex()`**（ECharts 不认 `var()`/`oklch()`，必须运行时解析；
+  别在组件里再抄一份 `getComputedStyle` + 正则 —— 本轮就把一份这样的重写收敛掉了）；
+- 热力图「一色多档」= `charts.chartShades()`；浮层遮罩 = `bg-scrim`；评分坡 = `--score-*` 四个 token
+  （`docs/DESIGN.md` §4 的色板只有四个锚点，**原来第五档那个蓝是自创的**）。
+
+#### 八、⚠️ **不要用 PowerShell `Get-Content -Raw` + `Set-Content` 改这些 UTF-8 文件**
+
+为验证「守卫测试真的会红」，我用它临时改回一处 `bg-[#0f172a]/25` ⇒ **整文件中文被写坏**（17 行 mojibake）。
+临时改动用 **python 脚本或 edit 工具**；已坏的用 `git checkout -- <file>` 还原后重做。
+
+#### 九、子代理的产出**必须复核**（本轮两个都没交报告）
+
+一个只改了 3 个 `.vue` 且**漏建**了要求的守卫测试；另一个**什么都没落地**；还有一个按要求「不许改
+`charts.ts`」于是**绕道重写了一份** OKLCH 解析（违反 §7.1，父代理改为在 `charts.ts` 导出
+`cssVarHex()` 一处实现）。⇒ 收尾一律以**工作区实际 diff + 全量回归**为准，**不信「子代理说做了」**；
+审计结论也一样 —— 本轮 4 轴审计里有 **3 条被父代理复核推翻**（见 §十）。
+
+#### 十、复核推翻了审计的 3 条结论（**审计报告也要复核**）
+
+1. `comics.append_pages` **不是**「数据安全违规的死代码」：目标是本项目**自己的成品 CBZ**
+   （`download_comic` 用 `write_cbz` 产出），且 `tests/test_append_media.py` 有 **6 个用例**钉它。
+   真实性质是「第 86 期第 6 步的既定能力，**从未接线**」（同族 EPUB 分支 `append_chapters` 已接线）⇒ **保留未删**。
+2. `cli.py` 的 `scan --interval` help「（保留参数…）」**没过期**：`scan` 设 `once=True`，`cmd_watch` 只跑
+   `scan_once()` 就返回 ⇒ 该参数对 `scan` 确实无效。⇒ **撤销该条**。
+3. `LIBRARY_SOURCE_DIR` **不能删**：Python 常量确实只被测试用，但它镜像的**环境变量回退**
+   （`config.py` 的「未配置任何编号变量时回退单根」）是**真实部署模式**。
+
+#### 十一、刻意未做（连同理由）
+
+- **网页抓取改用 HTML 解析库**（`metasources.py` 五处抓真实线上页面）：硬规则是「能出网验证的就必须
+  真的出网验证」，没有逐家真机核过就改选择器语义 = 拿「单测绿」换「线上未知」。**要做就单独一轮**。
+- **EPUB 解析（`library.py` 的 OPF/NCX/nav）改 ElementTree：第 95 期做了、验证后回退了**。
+  实测三处容错回归（截断 OPF 丢 `<metadata>` / 未定义实体让整份作废 / **未声明命名空间前缀丢全部元数据**），
+  而 `lxml` 是**可选依赖** ⇒ 修它要么字符串手术、要么留两条解析路径，**都违反推动重构的原则**；
+  换来的只是纯重构（用户可见行为零变化）却要动书库扫描热路径（§7.3）。
+  ⚠️ 证据与结论写在 `docs/roadmap-gaps-remaining.md` 第 95 期段 + `docs/TODO.md` §1；
+  ⚠️ **重试前先跑 `tests/test_epub_xml_parse.py`（5 例，与实现无关的容错契约）**。
+  ⚠️ 加测教训：**别把某个实现的局限写成契约**（我原先断言「坏实体之后的字段读不到」，
+  回退后实测旧正则照读不误 —— 那是实现定义，不是承诺）。
+- **`fileops.py` 的 OPF 改写正则 → ElementTree**：改写的是**出版副本的 XML**，字节等价不可证。
+- **[low] 四项**：`gate_reason(source=…)` 的不参与判定形参、`_source` 的冗余**写入**（读那一侧是
+  外部回传 item 的**输入契约**，不能一起删）、`LIBRARY_SOURCE_DIR` 的 Python 别名、`/content` 端点
+  （仓外消费者无法从仓内证明）。已记进 `docs/TODO.md` §1。
+- **数据安全两处口径**（`zipkind.unpack` 的 `remove_source` 真 `unlink`；`landing` 自动落地支无二次确认）：
+  用户未勾选该批次 ⇒ 仍待决策。
+
