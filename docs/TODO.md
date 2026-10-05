@@ -4,17 +4,19 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-05 —— 第 97 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，用户选择先不发布）：
-把第 95 期审计留下的**四条 `[low]`** 全部清掉（`gate_reason` 的不参与判定形参 / `_source` 冗余写入 /
-`LIBRARY_SOURCE_DIR` Python 别名 / 零消费者的旧式 `/content` 端点），详见
-`docs/roadmap-gaps-remaining.md` 末尾第 97 期段。上一期（第 96 期）是数据安全两处口径（覆盖 / 删源先回收）。
+**最后更新**：2026-10-05 —— 第 98 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，用户选择先不发布）：
+把 P1 的**「仪表盘余留」三条**做完 —— ① 页级三态（判据 = **聚合首屏真请求**，唯一实现
+`frontend/src/lib/dashboardPageState.ts`）② 快速预览浮层补 `edit-metadata`（**深链**，不挂第二个编辑器）与
+`move-to-library`（复用既有 `BookMoveDialog`）③ 上游首页截图**已取回**并做源码级复核（见
+`docs/bookorbit/bookorbit-dashboard-styles.md` §7.8）。历史：第 97 期清掉第 95 期审计的四条 `[low]`，
+第 96 期是数据安全两处口径（覆盖 / 删源先回收）。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理；`VERSION` = **0.94.0**（**三轮都刻意未升**：
-  第 95 期是清理与守卫、第 96 期是数据安全补漏、第 97 期是死参数/别名/零消费者端点清理，用户三次都选「先不发版」；
-  单一真值源，`GET /health` 下发）；`CHANGELOG.md` 最新段仍是 `V0.94.0`。
-- 测试基线（第 97 期）：后端 **2153 例（2128 passed / 0 failed / 0 errors / 25 skipped）**；前端 **65 spec / 673 例**。
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留；`VERSION` = **0.94.0**
+  （**四轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
+  第 98 期仪表盘余留，用户四次都选「先不发版」；单一真值源，`GET /health` 下发）；`CHANGELOG.md` 最新段仍是 `V0.94.0`。
+- 测试基线（第 98 期）：后端 **2153 例（2128 passed / 0 failed / 0 errors / 25 skipped）**；前端 **67 spec / 686 例**。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
   （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
   ⚠️ 长跑 pytest 必须**后台跑 + 轮询 junit**（前台会被 harness 的「长时间无输出」上限取消）。
@@ -55,11 +57,11 @@
 > 材料与统计数字仍在 `docs/roadmap-gaps-remaining.md` 第 94 期段与第 89 期段，以及
 > `docs/project-overview.md` / `docs/user-guide.md` 的「未覆盖项」—— **拿到真实样本再立项**。
 
-- [ ] **仪表盘余留**（对照文档 `docs/bookorbit/bookorbit-dashboard-styles.md` §5 / §7.4 / §7.6）：
-  - 整页三态分支（loading / error / empty / ready）—— **需先定「页面级加载」判据**，判据未定前不做；
-  - 上游首页截图的肉眼比对（§5 第 1 条，需取回 `docs/images/dashboard-overview.png`）；
-  - 上游 QuickView 的 `edit-metadata` / `move-to-library` 两个动作（前者等于第二个详情页，后者本项目移动在书库管理里做）
-    —— 均**先有用户需求再排期**。
+> 第 98 期按用户要求**做完了「仪表盘余留」三条**（页级三态 / 快速预览补两个动作 / 上游截图比对）：
+> 判据与落法见 `frontend/src/lib/dashboardPageState.ts` 与
+> `docs/bookorbit/bookorbit-dashboard-styles.md` §7.8。⚠️ 唯一没做成的细分项是**与上游截图的像素级比对**
+> —— PNG 已按 §0 口径取回（落在 `%TEMP%`、**不入库**），但本机模型**不支持图片输入**
+> ⇒ 需要人工看一眼那张 PNG，或把这一步交给能读图的模型。
 
 - [ ] **EPUB 解析（`novelforge/core/library.py` 的 OPF / NCX / nav）改成熟解析器**（第 95 期**试过并回退**）。
   动机是 `AGENTS.md` §7.5「优先成熟库」；回退是因为**实测到三处容错回归**，重试前**务必先读**
@@ -98,6 +100,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 98 | 仪表盘余留三条：**页级三态**（判据 = 聚合首屏真请求：`stores/stats` 的 `loaded`/`error` + `stores/library` 的 `loading`/`booksError`；唯一实现 `frontend/src/lib/dashboardPageState.ts` + 页级骨架 / 页级错误与「一起重试」）+ **快速预览补两个动作**（「编辑元数据」深链 `?tab=metadata`，**不挂第二个 `MetadataEditor`**；「移动到书库…」复用 `BookMoveDialog`）+ **上游首页截图取回**与源码级复核（`docs/bookorbit/bookorbit-dashboard-styles.md` §7.8）（**不发版**，`VERSION` 仍 0.94.0） |
 | 97 | 第 95 期审计四条 `[low]` 全清：`gate_reason` 的不参与判定 `source` 形参**删除**（17 处调用点 / 11 处传参 + 2 个测试桩）/ `manager._mark` **不再写**冗余历史键 `_source`（读侧 `source_of` 保留）/ `config.LIBRARY_SOURCE_DIR` Python 别名**删除**（环境变量回退照旧，18 个测试文件改读 `LIBRARY_SOURCE_ROOTS[0]["path"]`）/ 零消费者旧式端点 `GET /content` **删除**并补 404 断言（**不发版**，`VERSION` 仍 0.94.0） |
 | 96 | 数据安全两处口径落地：展开容器的「删源」改为**移入回收站**（`publish.recycle` + 台账，可还原）+ 自动落地/显式覆盖**先把被替换的文件移入回收站**（回收失败即中止、盘上零改动）；报告写实（不再对显式覆盖说「本地读不了」）（**不发版**，`VERSION` 仍 0.94.0） |
 | 95 | `AGENTS.md` 新增 §7「工程原则」+ 按 `AGENTS.md` 做合规审计与整改（九处旧路径、三处死代码、文件名判据收口、视觉 token 守卫、404 断言）（**不发版**，`VERSION` 仍 0.94.0） |
@@ -139,8 +142,9 @@
 
 ## 3. 排期候选（未立项）
 
-- 第 1 节 P0 目前**已清空**（第 93 期交付 `online-fallback`）；第 96 期是从**第 95 期审计批次 8**
-  里取的两条数据安全口径。下一期从 P1 取，或按用户新需求立项。
+- 第 1 节 P0 目前**已清空**（第 93 期交付 `online-fallback`）；第 96 期取自**第 95 期审计批次 8**、
+  第 97 期取审计的四条 `[low]`、第 98 期取 P1「仪表盘余留」。下一期仍从 P1 取
+  （现只剩 EPUB 解析重试 / 书源网页抓取改 bs4 / `fileops` 的 OPF 改写），或按用户新需求立项。
   开工前一律先 `git log --oneline -12` 定期号（**期号会被并行会话用掉**，第 84 期就是这么被占的）。
 - 若要做重投入项（例如再次跑大库基准、或做 PG / Redis 相关专项），**先量化再动手**
   —— 本项目已在第 61 期明确：没有指标不许凭感觉优化。

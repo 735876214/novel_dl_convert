@@ -1076,3 +1076,65 @@ txt 书**两个落点都留档**（`blobs == [b"", "旧的留档"]`）、显式�
 **教训：批处理替换之后必须 ① 跑聚焦用例 ② 核对 `git diff`，别只信计数与「已写 N 个文件」的输出。**
 机制未完全证实，怀疑与脚本里「先改内存 `buf`、再用 `glob` 从磁盘读同一批文件」的写法有关。
 
+---
+
+### 第 98 期铁律（仪表盘页级三态 / 快速预览两个动作 / 上游对照）
+
+#### 一、「页级加载」的判据**只许聚合真实请求状态**，不许超时启发式
+
+`frontend/src/lib/dashboardPageState.ts` 是唯一实现，四档 `loading | error | empty | ready`，输入只有
+`noLibraries` / `emptied` / `statsLoaded` / `statsError` / `booksLoading` / `booksError`：
+`loading` = 统计**既没成功也没失败**且书目还在路上；`error` = 统计与书目**都**失败且统计从未到手；
+`empty` 让位给既有的 0 库引导 / 全关空态；其余 `ready`。
+⚠️ **不许**改成「进页面 N 毫秒没数据就当 loading」—— 那不是任何真实请求的状态，正是第 80 期
+「消灭假开关」要挡的假信号（第 82 / 83 期拒绝做页级三态的原始理由就是这个）。
+
+#### 二、**页级骨架自己得会解开**：谁在等，谁就得发请求
+
+`frontend/src/views/DashboardView.vue` 的 `onMounted` 里必须自己 `void stats.load()`：
+加载期部件行**不渲染**，而 13 件部件平时是各自 `onMounted` 去拉统计的 ⇒ 不自己发这一发就是
+**永远转不完的骨架**。`stats.load()` 自身按「书库 + 已加载」去重，所以部件挂起来之后的重复调用不会多发请求。
+
+#### 三、「有真数据就不许遮」是这类页级状态的硬边界
+
+骨架与页级错误只在「首屏那几条请求都没 settle / 都失败」时出现；**任一条 settle（成功或失败）立刻退出**，
+只对仍未就绪的那一条保留**区块级**提示（统计失败那张卡片照旧）。断言就钉这条：
+`dashboardPageState.spec.ts` 的「统计一到手就不再遮」「没有任何请求在路上时**不**显示骨架」
+「只有一条失败**不**升级成整页错误」。
+
+#### 四、⚠️ 上游**有**页级信号 —— 别把「我们没有」记成「上游也没有」
+
+`client/src/views/DashboardView.vue` 第 42-44 行：
+
+```
+42: if (librariesLoaded.value) return libraries.value.length === 0 ? 'empty' : 'ready'
+43: if (librariesError.value) return 'error'
+44: return 'loading'
+```
+
+上游拿的是 `useLibraries()` 的 `loaded` / `error` / `length === 0`。**我们刻意不照搬**：
+`frontend/src/stores/library.ts` 的 `loadLibraries` 失败时保持 `librariesLoaded = false` 且**不加 error 标志**
+（注释写明「不知道有几个库时不说『还没有书库』」）⇒ 拿它当页级信号会得到一个**永远解不开的骨架**。
+我们的首屏内容（13 件部件 / 书架行）本来也不挂在书库列表上。
+⚠️ 上游的三态**还有第二层**：`DashboardScroller.vue` 每行自带 loading / error / empty
+（骨架带 `SKELETONS_PER_BAND = 8`、`w-[120px]`）—— 这一层我们早有（`useWidgetState` + 各行骨架）。
+
+#### 五、快速预览的动作：**只带意图**，由父组件接既有实现
+
+`frontend/src/components/book/BookPreviewDialog.vue` 的 `actions` 模式现在五个动作
+（加入收藏 / 删除 / **编辑元数据** / **移动到书库…** / 详细信息），后两个**只 `emit`**：
+- `edit-metadata` ⇒ 父组件 `router.push(metadataEditPath(id))` 深链到详情页元数据页签。
+  ⚠️ **不挂第二个 `MetadataEditor` 实例**（它是自取数据的区块组件，同一屏两个入口更糟）；
+  深链路径的唯一实现是 `frontend/src/lib/bookOpen.ts` 的 `metadataEditPath()`（原先内联字符串有两处）。
+- `move-to-library` ⇒ 父组件开既有 `frontend/src/components/book/BookMoveDialog.vue`
+  （`props: { open, bookIds }`；它自己会 toast，父组件**别重复提示**，只重拉书目与库计数）。
+- 浮层里**没有就地编辑器**；批量删除的「撤销」仍留在书架页。
+
+#### 六、⚠️ 本机**看不了图** —— 涉及截图的验收项要事先说清
+
+`read_image` 对本机模型直接拒绝（「does not declare image input」）；`workflow` 里用
+`provider/model: deepseek-v4-flash-vision-exp` 转交子代理也只拿到 `null`。
+⇒ 「与上游截图的**像素级**比对」做不成，只能做**源码级复核**（上游检出用 §0 的部分克隆 + 稀疏检出到 `%TEMP%`，
+走本机代理 `127.0.0.1:7897`；PNG `docs/images/dashboard-overview.png` 5.68 MB **不入库**）。
+以后遇到这类验收项，**先声明工具边界**，别等做完才发现没法验收。
+

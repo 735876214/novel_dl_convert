@@ -5491,3 +5491,90 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 - 记忆：`.codebuddy/memory/2026-10-05.md` 第 97 期节 + `MEMORY.md` 索引第 97 期 +
   `MEMORY-REF.md`「第 97 期铁律」。
 - ⚠️ 并行会话的未提交内容（`2026-10-03.md` / `.vscode/*` / `*.cookies.txt`）照旧**不重写、不提交**。
+
+---
+
+## 第 98 期：仪表盘余留三条（页级三态 / 快速预览两个动作 / 上游对照）
+
+### 一、需求来源
+
+用户 2026-10-05 原话「**做一下仪表盘余留的功能**」= `docs/TODO.md` P1「仪表盘余留」三条（第 82 / 83 期遗留）。
+按 Aegis 路由走 `brainstorming`（**设计先行**）+ `ui-ux-governance`。三条里唯一需要产品决策的是
+**①「整页三态分支」的判据**（TODO 自己写着「判据未定前不做」，`dashboard-styles.md` §7.4 还判过
+「硬造页面级 loading 只会是假的」）⇒ 先问用户，用户拍板取 **「聚合首屏真请求」**。
+版本：**不发版**（照第 95–97 期先例）⇒ `VERSION` 仍 `0.94.0`、无 CHANGELOG 段、无 tag/Release。
+
+### 二、功能范围
+
+1. **页级三态**：新增纯判据 `frontend/src/lib/dashboardPageState.ts`（四档 loading / error / empty / ready，
+   只吃 `stores/stats` 的 `loaded`/`error` 与 `stores/library` 的 `loading`/`booksError`）；
+   `frontend/src/views/DashboardView.vue` 按它渲染**页级骨架**（`[data-page-skeleton]`，复用 `ui/Skeleton.vue`）
+   与**页级错误**（带「重试」，一次把 stats 与 books 都重拉）；`onMounted` 里自己打一发 `stats.load()`
+   （**骨架期部件行不渲染，没人替它发请求**）。**任一条 settle 即退出 loading**；`empty` 仍让位给既有的
+   0 库引导 / 全关空态。
+2. **快速预览补两个动作**：`BookPreviewDialog` 的 `actions` 模式新增 `edit-metadata` / `move-to-library`
+   两个 emit + 两个按钮（**只带意图**，浮层里没有就地编辑器）；`DashboardShelfRow` 接住 ——
+   前者 `router.push(metadataEditPath(id))`（深链 `?tab=metadata`）、后者开复用既有的 `BookMoveDialog`
+   （同一层 Teleport，因为本行外壳带 `backdrop-blur`）；深链路径收口到 `frontend/src/lib/bookOpen.ts` 的
+   `metadataEditPath()`（`BookActionsMenu` 原先内联的那份改调它）。
+3. **上游对照**：按 §0 口径把上游（`735876214/bookorbit`）稀疏检出到 `%TEMP%`（走本机代理 `127.0.0.1:7897`），
+   实测 commit 仍 **`c292d6c`**；取回 `docs/images/dashboard-overview.png`（5.68 MB，**不入库**）并做
+   **源码级复核**（读上游 `DashboardView.vue` / `DashboardScroller.vue` / `DashboardWidgetRow.vue` /
+   `useDashboardScroller.ts`），结论写进 `docs/bookorbit/bookorbit-dashboard-styles.md` **§7.8**。
+
+### 三、单一真值源
+
+「什么叫**页级加载**」只有 `frontend/src/lib/dashboardPageState.ts` 一处实现（8 条用例的 spec 穷举）；
+「编辑元数据的**深链**」只有 `lib/bookOpen.ts` 的 `metadataEditPath()` 一处（原先是两处内联字符串）；
+「移动到书库」的弹层 / 预检 / 请求仍只有 `BookMoveDialog` 一处实现 —— 本期只是把它接到**第二个入口**。
+
+### 四、防回归要点
+
+- `frontend/src/lib/dashboardPageState.spec.ts`（**8 例**）：每条规则的**正反两面** —— 尤其
+  「统计一到手就不再遮」「没有任何请求在路上时**不许**显示骨架」「只有一条失败**不**升级成整页错误」。
+- `frontend/src/views/DashboardView.spec.ts`（**4 例**）：接线面 —— 骨架期不渲染部件行、重试把两条都重拉。
+- `frontend/src/components/book/BookPreviewDialog.spec.ts` 补 1 例：两个新动作**只 emit**、浮层里没有编辑器。
+- 两个新 spec **登记进** `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`（不登记就红）。
+- 视觉：页级骨架只用既有 token（`ui/Skeleton.vue` + `bg-muted`），`tests/test_visual_tokens_contract.py` 照旧守卫。
+
+### 五、踩坑 / 本轮查到的上游事实
+
+- **上游其实有页级信号**：`client/src/views/DashboardView.vue` 第 42-44 行的 `libraryState` 拿的是
+  `useLibraries()` 的 `loaded` / `error` / `length === 0` ⇒ §7.4 那句「本项目没有单一的整页加载信号」
+  **只对我们的数据布局成立**，不能记成「上游也没有」。这条已回写进 §7.4 / §7.8。
+- **刻意不照搬它**：`stores/library.ts` 的 `loadLibraries` 失败时保持 `librariesLoaded = false` 且
+  **不加 error 标志**（注释写明「不知道有几个库时不说『还没有书库』」）⇒ 拿它当页级信号会得到一个
+  **永远解不开的骨架**，正是 §7.4 说的「假」。
+- 上游三态**还有第二层**：每个 `DashboardScroller` 自带 loading / error / empty 与骨架带
+  （`SKELETONS_PER_BAND = 8`、`w-[120px]`）—— 这一层我们早有（`useWidgetState` + 各行骨架），本轮**没动**。
+- ⚠️ **本机模型不支持图片输入**：`read_image` 直接拒绝；转交视觉模型子代理（`workflow` 的
+  `provider/model` 覆盖）也拿不到结果 ⇒ **与上游截图的像素级比对没做成**，只能给源码级复核。
+  这条已记进 §7.4 / §7.8 与 `docs/TODO.md`。
+
+### 六、未做及原因
+
+- 「与上游截图的**像素级**比对」：见上（工具限制）—— 需要人工看一眼那张 PNG，或换能读图的模型。
+- 上游的 i18n / onboarding tour / `/api/v1/dashboard/*` 批量接口层：仍按 §7.4 保持**刻意差异**。
+- 页级三态**没有**做「按行 / 按块的第二层」改造：那一层第 83 期就有，本轮不重复造。
+
+### 七、实测（收尾）
+
+| 项 | 值 |
+|---|---|
+| 前端单测 | **67 spec / 686 passed**（第 97 期 65 / 673 ⇒ **+2 spec、+13 例**：判据 8 + 接线 4 + 浮层动作 1） |
+| 前端类型 / 构建 | `type-check` **0 error** / `build` **exit 0** |
+| 后端全量 | **2128 passed / 25 skipped / 0 failed**（260.60 s，exit 0；本期**无后端改动**，与第 97 期同数） |
+| 契约 | `tests/test_frontend_unit_contract.py`（含 `EXPECTED_SPECS` 自守）/ `test_visual_tokens_contract.py` / `test_dashboard_widget_contract.py` 共 **24 passed** |
+| `VERSION` | 仍 `0.94.0`（**未发版**） |
+
+### 八、收尾
+
+- 提交（按能力分）：`feat(frontend): 仪表盘页级三态（判据 = 聚合首屏真请求）` →
+  `feat(frontend): 快速预览补「编辑元数据」与「移动到书库」两个动作` →
+  `docs(98): 仪表盘余留实施记录 + 上游对照 + TODO + 记忆`。
+- 文档：本节 + `docs/bookorbit/bookorbit-dashboard-styles.md`（§7.4 三行 + §7.6 表末行 + 新增 §7.8）+
+  `docs/TODO.md`（头 / §0 基线 / P1 删条目并留结论 / §2 索引补 98 / §3）+ `docs/component-api.md`
+  （`BookPreviewDialog` 那行改成五个动作）。
+- 记忆：`.codebuddy/memory/2026-10-05.md` 第 98 期节 + `MEMORY.md` 索引第 98 期 +
+  `MEMORY-REF.md`「第 98 期铁律」。
+- ⚠️ 上游检出与 PNG 都在 `%TEMP%\nf-upstream-dash\`，**不入库、不进提交**（脱敏口径）。

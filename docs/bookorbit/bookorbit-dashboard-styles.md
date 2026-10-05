@@ -387,13 +387,13 @@
 
 | 未做项 | 理由 |
 |---|---|
-| 整页三态分支（`libraryState` 四分支） | 本项目**没有单一的「整页加载」信号**（数据分散在 stats / library / 批注三处），硬造一个页面级 loading 只会是假的（与第 80 期「消灭假开关」同一条口径）。改为**部件级**真三分支 + 单条统计错误提示。 |
-| 上游 QuickView 的**其余两个动作**（`edit-metadata` / `move-to-library`） | 第 83 期已做「快速预览 + 加入收藏 + 删除」（原第 3 条）。剩下两项**仍不做**：前者等于开第二个详情页，后者本项目没有「从书架行跨库移动」的入口（移动在书库管理里做）。 |
+| 整页三态分支（`libraryState` 四分支） | 本项目**没有单一的「整页加载」信号**（数据分散在 stats / library / 批注三处），硬造一个页面级 loading 只会是假的（与第 80 期「消灭假开关」同一条口径）。改为**部件级**真三分支 + 单条统计错误提示。<br>⇒ **第 98 期已做**（用户拍板「做仪表盘余留」）：判据改成**聚合首屏真的在等的那几条请求**（`stores/stats` 的 `loaded`/`error` + `stores/library` 的 `loading`/`booksError`），骨架只盖未就绪区块。**刻意不照搬上游的 `libraryState`** —— 上游拿的是 `useLibraries()` 的 `loaded`/`error`，而我们的首屏内容（13 件部件 / 书架行）都不挂在书库列表上，且 `stores/library.ts` 的 `loadLibraries` **故意吞掉失败**（`librariesLoaded` 保持 false、不加 error 标志）⇒ 拿它当页级信号会得到一个**永远解不开的骨架**。详见 §7.8。 |
+| 上游 QuickView 的**其余两个动作**（`edit-metadata` / `move-to-library`） | 第 83 期已做「快速预览 + 加入收藏 + 删除」（原第 3 条）。剩下两项**仍不做**：前者等于开第二个详情页，后者本项目没有「从书架行跨库移动」的入口（移动在书库管理里做）。<br>⇒ **第 98 期已做**（用户拍板）：两项都接**既有实现**，不新建弹层 —— `edit-metadata` **深链**到详情页的元数据页签（`lib/bookOpen.ts` 的 `metadataEditPath`，**不挂第二个 `MetadataEditor` 实例**）、`move-to-library` 复用 `BookMoveDialog`（`DashboardShelfRow` 的同一层 Teleport 里）。详见 §7.8。 |
 | i18n | 全站未做，本项目是中文字面量（§2.2 已判「形态不同，**不算缺口**」）。 |
 | 上游硬编码调色板（`text-orange-500` / `bg-green-500` …） | `docs/DESIGN.md` 明令禁止；深色主题下会失配（§2.4 第 3 条）。 |
 | `/api/v1/dashboard/widgets/batch`、`/api/v1/dashboard/scrollers/batch` | 单用户直连 DB，无此接口层（§2.4 第 4 条）。 |
 | onboarding tour / `data-tour` 锚点 | 新功能，不属「样式对照」。 |
-| 界面肉眼冒烟 | **已补做**（第 83 期收尾） —— 本机已装 `agent-browser`；冒烟跑通并抓出「库范围」受控 checkbox 的中间态缺陷（见 §7.7）。仅剩「与上游截图逐像素比对」未做（需先取回上游 PNG）。
+| 界面肉眼冒烟 | **已补做**（第 83 期收尾） —— 本机已装 `agent-browser`；冒烟跑通并抓出「库范围」受控 checkbox 的中间态缺陷（见 §7.7）。仅剩「与上游截图逐像素比对」未做（需先取回上游 PNG）。<br>⇒ 第 98 期**已取回 PNG**（上游 commit `c292d6c` 的 `docs/images/dashboard-overview.png`，5.68 MB，落在 `%TEMP%`、**不入库**）；⚠️ 但本机模型**不支持图片输入** ⇒ **像素级比对仍待人工（或换成能看图的模型）**，本期改做**源码级复核**（见 §7.8）
 
 ### 7.5 下次怎么续用本文件
 
@@ -426,7 +426,7 @@
 | 封面入场动画 | 未做（§7.4 原列条目） | **已做**：逐张淡入上浮，按**带内序号** `index*35ms`（照上游；带上限兜底），`prefers-reduced-motion` 直接不播 |
 | 书架行「点封面」交互 | 直接 `router.push` 进详情页 | **改为快速预览浮层**（`BookPreviewDialog` 加 `actions`）；浮层内「加入收藏」（选夹 + 加入）与「删除」（与书卡 ⋮ 菜单**同一套**确认，收敛在 `lib/bookDelete.ts`），删除成功后关浮层并重拉封面带 |
 | 部件清单 | 12 件（与上游逐一对应） | **13 件**：新增 `reading-time`「阅读时长」（本项目自开，补回上游 `reading-rhythm` 的时长语义；原 id 仍是「入库节奏」，默认不启用） |
-| 整页三态分支 | 未做 | **仍未做**（用户本轮未选；理由见 §7.4 第一条） |
+| 整页三态分支 | 未做 | **仍未做**（用户本轮未选；理由见 §7.4 第一条）<br>⇒ **第 98 期已做**（用户点名「做仪表盘余留」）：判据 = 聚合首屏真请求，见 §7.8 —— 与上游的 `libraryState`（拿书库列表）**刻意不同**，理由也写在 §7.8。 |
 
 **本轮新增的契约（防回潮）**：
 - `tests/test_dashboard_widget_contract.py`：钉住「前 12 个 id 与上游逐一对应 + 1 件自开」
@@ -457,3 +457,66 @@
 端到端只看 JSON 接口与产物字符串，不看「受控 input 的原生态与 store 是否一致」这一层。
 ⇒ 记进本文件，是因为它证明了「HTTP 端到端 + 单测」这条常规验证路径**有真实的盲区**，
 而第 83 期的改动（库范围筛选 / 快速预览浮层 / 浮层内删除）**几乎全是界面层行为**。
+
+### 7.8 第 98 期再对照（2026-10-05 · 「仪表盘余留」三条收口）
+
+本轮范围由用户直接点名（`docs/TODO.md` P1「仪表盘余留」三条）；上游按 §0 口径**重新取回**到 `%TEMP%`
+（部分克隆 + 稀疏检出，**不入库**），实测 commit 仍是 **`c292d6c`** ⇒ §0 的基线声明无需更新。
+
+**① 上游的页级三态是怎么做的（本轮新查到的事实）**
+
+上游 `client/src/views/DashboardView.vue` **确实有**一个页级状态机：
+
+```
+42: if (librariesLoaded.value) return libraries.value.length === 0 ? 'empty' : 'ready'
+43: if (librariesError.value) return 'error'
+44: return 'loading'
+```
+
+判据是「**书库列表**这一条请求」的 `loaded` / `error` / `length === 0`，模板对应整页 loading
+（`role="status"`）、整页 error（带重试）、`DashboardWelcome` 空态与真内容四分支。
+⇒ §7.4 当初写的「本项目没有单一的『整页加载』信号」**对本项目仍然成立**（我们的首屏内容不挂在书库列表上），
+但**上游是有那个信号的** —— 这句记下来，免得下次误以为上游也没有。
+
+**② 本项目的落法（刻意与上游不同）**
+
+- 判据落成纯函数 `frontend/src/lib/dashboardPageState.ts`（唯一实现，8 条用例的 spec 钉住）：
+  `loading` = 统计既没成功也没失败**且**书目还在路上；`error` = 统计与书目**都**失败且统计从未到手；
+  `empty` 让位给既有的 0 库引导 / 全关空态；其余 `ready`。
+- 页面（`frontend/src/views/DashboardView.vue`）按它渲染页级骨架（`[data-page-skeleton]`，复用
+  `ui/Skeleton.vue`；沿用第 88 期「内联 div + `data-*` 钩子」的先例）与页级错误（带「重试」，
+  一次把 stats 与 books 两条都重拉）。**任一条 settle 就不再遮** —— 有真数据时绝不盖住。
+- ⚠️ **不照搬上游的 `useLibraries()` 判据**：`stores/library.ts` 的 `loadLibraries` 失败时保持
+  `librariesLoaded = false` 且**不加 error 标志**（注释写明「不知道有几个库时不说『还没有书库』」）
+  ⇒ 拿它当页级信号会得到一个**永远解不开的骨架**，正是 §7.4 说的「假」。
+- 上游的三态其实**还有第二层**：`DashboardScroller.vue` 每行自带 `loading` / `error` / `empty`
+  与骨架带（`SKELETONS_PER_BAND = 8`、`w-[120px]`）—— 这一层我们早有（`useWidgetState` + 各行骨架），
+  本轮**没有**动它。
+
+**③ QuickView 的两个动作**
+
+上游走「封面卡动作菜单 → `quick-view`」，动作集合是 `quick-view` / `edit-metadata` / `add-to-collection` /
+`move-to-library` / `delete`。本项目按用户口径是「点封面即开预览」、动作**长在预览浮层里**：本轮补上
+`edit-metadata` 与 `move-to-library`，两项都**只把意图 emit 出去**、由父组件接既有实现
+（深链 `?tab=metadata` / `BookMoveDialog`），浮层里**没有**就地编辑器；批量删除的「撤销」仍留在书架页
+（仪表盘这一行只负责重拉书目与库计数）。
+
+**④ 上游首页截图的比对**
+
+PNG 已按 §0 取回（`docs/images/dashboard-overview.png`，5.68 MB，**落在 `%TEMP%`、不入库、不进提交** ——
+按 §5 第 1 条的脱敏口径）。⚠️ **本机模型不支持图片输入**（`read_image` 直接拒绝；转交视觉模型子代理也拿不到结果）
+⇒ **像素级比对没做成**，本轮换成上面那份**源码级复核**：读上游 `DashboardView.vue` /
+`DashboardScroller.vue` / `DashboardWidgetRow.vue` / `useDashboardScroller.ts` 逐条比对。
+**待办**：要像素级结论，需人工看一眼那张 PNG，或把这一步交给能读图的模型。
+
+**⑤ 本轮的文件增删**
+
+- 新增 `frontend/src/lib/dashboardPageState.ts` + `.spec.ts`（判据唯一实现）；
+- 新增 `frontend/src/views/DashboardView.spec.ts`（接线：真状态 → 骨架 / 页级错误 / 不遮）；
+- 改 `frontend/src/views/DashboardView.vue`（页级骨架 + 页级错误 + 在 `onMounted` 自己打一发
+  `stats.load()` —— 骨架期部件行不渲染，没人替它发请求）；
+- 改 `frontend/src/components/book/BookPreviewDialog.vue`（两个新 emit + 两个按钮 + 边界注释）、
+  `frontend/src/components/dashboard/DashboardShelfRow.vue`（接深链与移动弹层）、
+  `frontend/src/components/book/BookActionsMenu.vue` 与 `frontend/src/lib/bookOpen.ts`
+  （深链路径收口到 `metadataEditPath()` 一处，原先是内联字符串）；
+- 两个新 spec 已登记进 `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`。
