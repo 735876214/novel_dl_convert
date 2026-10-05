@@ -4,16 +4,16 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-05 —— 第 99 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续五轮用户都选先不发布）：
-P1 该条**只收口了能核到样本的部分**，其余三家仍挂起（见下）。历史：第 98 期仪表盘余留三条，
-第 97 期清掉第 95 期审计的四条 `[low]`，第 96 期数据安全两处口径（覆盖 / 删源先回收）。
+**最后更新**：2026-10-05 —— 第 100 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续六轮）：EPUB 解析换成熟解析器这条待办**实测后删除**（真实语料零收益），
+改立并修掉唯一站得住的差异 —— `dc:description` 不解 HTML 实体。历史：第 99 期元数据抓取真机核验，
+第 98 期仪表盘余留三条，第 97 期清掉第 95 期审计的四条 `[low]`，第 96 期数据安全两处口径。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验；`VERSION` = **0.94.0**
-  （**五轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
-  第 98 期仪表盘余留、第 99 期元数据抓取真 bug，用户五次都选「先不发版」；单一真值源，`GET /health` 下发）；`CHANGELOG.md` 最新段仍是 `V0.94.0`。
-- 测试基线（第 99 期）：后端 **2165 例（2140 passed / 0 failed / 0 errors / 25 skipped）**；前端 **67 spec / 686 例**（本期前端零改动，未重跑）。
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法；`VERSION` = **0.94.0**
+  （**六轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
+  第 98 期仪表盘余留、第 99 期元数据抓取真 bug、第 100 期 EPUB 判定，用户六次都选「先不发版」；单一真值源，`GET /health` 下发）；`CHANGELOG.md` 最新段仍是 `V0.94.0`。
+- 测试基线（第 100 期）：后端 **2172 例（2147 passed / 0 failed / 0 errors / 25 skipped）**；前端 **67 spec / 686 例**（本期前端零改动，未重跑）。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
   （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
   ⚠️ 长跑 pytest 必须**后台跑 + 轮询 junit**（前台会被 harness 的「长时间无输出」上限取消）。
@@ -62,19 +62,31 @@ P1 该条**只收口了能核到样本的部分**，其余三家仍挂起（见�
 > ⚠️ 工具链变动记在 §7.8 ④：`agent-browser` 在本机**已不可用**（会挂住不返回），
 > 改用本机 Edge 的 CDP 无头截图；PNG 仍**不入库**。
 
-- [ ] **EPUB 解析（`novelforge/core/library.py` 的 OPF / NCX / nav）改成熟解析器**（第 95 期**试过并回退**）。
-  动机是 `AGENTS.md` §7.5「优先成熟库」；回退是因为**实测到三处容错回归**，重试前**务必先读**
-  `docs/roadmap-gaps-remaining.md` 第 95 期段「未做及原因」那条的完整证据：
-  - 🔴 **截断的 OPF 丢整块元数据** —— `XMLPullParser.read_events()` 是**按文档顺序**吐事件的；
-    若按「取最后一条 `end` 当文档元素」，`<package>…<manifest><item/></manifest>` 截断时会取到内层
-    `item`，`<metadata>` 整棵看不见、书名作者全空**且不报错**。文档元素是**第一条 `start`** 的那个。
-  - 🔴 **未定义实体（`&nbsp;`）让整份文档作废** —— `read_events()` 是生成器，`ParseError` 在**迭代中途**
-    才抛；`list(parser.read_events())` 一抛就把**已吐出的事件一起丢掉**。必须手工累积、只吞异常。
-  - 🔴 **未声明命名空间前缀（`dc:` 未声明 `xmlns:dc`）丢全部元数据** —— 旧正则比字面标签名读得到，
-    真 XML 解析器当硬错误 `unbound prefix`。**这条是唯一被现有用例抓到的**（`tests/test_isbn_shape.py`）。
-  ⚠️ 注意 `lxml` 在 `requirements.txt` 里**明确是可选依赖**（缺了要如实降级）⇒
-  想用它的 `recover=True` 就得先把依赖口径定下来（要么升为硬依赖、要么接受两条解析路径）。
-  ⚠️ **先跑 `tests/test_epub_xml_parse.py`（5 例）** —— 它就是这三处的可执行形式，对当前实现全绿。
+- [x] ~~**EPUB 解析（`novelforge/core/library.py` 的 OPF / NCX / nav）改成熟解析器**~~ ——
+  **第 100 期实测后删除该立项**（用户 2026-10-05 拍板：证不出更好就删）。判据是 37 本真实第三方
+  EPUB（Standard Ebooks，30 本含 OPF）逐字段对比「现有正则」vs「`xml.etree.ElementTree` 真解析器」：
+  `title` / `creator` / `publisher` / `language` **0/30 不一致**，真解析器**零失败**（含 CDATA 0、
+  含 DOCTYPE 0、含非标准实体 0、含单引号属性 0、疑未声明前缀 0 **全为 0**）⇒ 待办标题承诺的收益
+  在真实语料上是 **0**，而它要承担的风险（未声明前缀 `unbound prefix` / 未定义实体 `undefined entity`
+  整份作废）恰是第三方 OPF 会遇到的那类。合成语料上真解析器赢的三处（前缀别名 / CDATA /
+  DOCTYPE 内部实体）**真实书里一个都没出现** ⇒ 判决：**有能力交换、无净收益**。
+  那三处容错回归的**可执行形式** `tests/test_epub_xml_parse.py`（5 例）**保留**（对当前实现全绿，
+  是「将来真要换解析器」的验收条件）；证据全文见 `docs/roadmap-gaps-remaining.md` 第 100 期段。
+- [ ] **`dc:description` 仍不解 HTML 实体**（第 100 期实测发现，**唯一在真实语料上站得住的差异**）——
+  ⚠️ **已修**：`novelforge/core/library.py:209` 新增 `_dc_description(opf)`，解**一次**实体、
+  **保留标签**（口径：先解实体再剥标签会把刚解出的真标签吃掉；先剥再解会把 `&lt;p&gt;` 当文本留下
+  ⇒ 只 unescape，不套 `re.sub(r"<[^>]+>", "", …)`）。`probe_epub` 改调它（`:1420`）。
+  实测 30/30 本真实书的 `html.unescape(旧结果) == 真解析器结果` **逐字成立** ⇒ 差异唯一就是这一处。
+  用户可见性已证实：`probe_epub` 直接写回未解码串，前端用 `{{ }}` **文本插值**渲染
+  `frontend/src/components/book/BookPreviewDialog.vue:310` / `detail/OverviewTab.vue:112` ⇒
+  浏览器不再解一次实体，界面露出 `&lt;p&gt;In the &lt;i&gt;Treatise…` 字面量。
+  对照 `novelforge/core/metasources.py:498` 的在线源路径**早已** `html_unescape` ⇒ 两条来源口径
+  不一致，而 OPF 是兜底来源（`override > online > opf`）。
+  新增 `tests/test_epub_description.py`（**7 例**，改动前 **4 例实测会红**）。
+  ⚠️ **自己引入过一处回归并修掉**：新函数最初把前缀写死成 `dc:description`，而野生 EPUB 有 `xmlns:dc1=…` + `<dc1:description>` 的写法（旧实现按调用点传的标签名匹配、**本来就认**）
+  ⇒ 会让这类书的描述**静默变空**。已改成 `<\w+:description…>`（认任意前缀），并补 `test_前缀别名也读得到` 钉住。
+  **余留（未做，属另一件事）**：`dc:title` 等**纯文本字段**走 `_tag_text` 仍是**剥标签 + 不解实体**
+  （真实语料 0/30 不一致 ⇒ 那条路上没有实体可用，本次**故意不动**，测试里如实钉住当前行为）。
 - [ ] **书源网页抓取改用 HTML 解析库**（第 95 期审计 §4）—— **第 99 期已真机核验并做完能核的部分**。
   已修的三处线上真 bug（详见 `docs/roadmap-gaps-remaining.md` 第 99 期段）：Audible 的 `response_groups`
   带非法组名 `publisher` ⇒ **整家永远 0 结果**（`publisher_name` 是**字段**，随 `product_desc` 照旧返回）；
@@ -106,6 +118,7 @@ P1 该条**只收口了能核到样本的部分**，其余三家仍挂起（见�
 
 | 期 | 交付（版本） |
 |---|---|
+| 100 | EPUB 解析换成熟解析器**实测后删除该立项**：37 本真实第三方 EPUB（Standard Ebooks，30 本含 OPF）逐字段对比「现有正则」vs「`xml.etree.ElementTree`」——`title`/`creator`/`publisher`/`language` **0/30 不一致**、真解析器**零失败**（CDATA/DOCTYPE/非标准实体/单引号属性/疑未声明前缀 **全为 0**）⇒ 标题承诺的收益是 0，风险（`unbound prefix`/`undefined entity` 整份作废）恰是第三方 OPF 会遇到的那类；`tests/test_epub_xml_parse.py`（5 例）**保留**为将来换解析器的验收条件。另立并修掉**唯一站得住的差异**：`dc:description` 不解 HTML 实体（30/30 本实测 `html.unescape(旧) == 真解析器` 逐字成立）⇒ 新增 `_dc_description()`（解一次实体、**保留标签**），前后端可见性已证实（前端 `{{ }}` 文本插值不做二次解码）；新增 `tests/test_epub_description.py`（7 例，改动前 4 例实测会红）（**不发版**，`VERSION` 仍 0.94.0） |
 | 99 | 元数据抓取**真机核验** + 三处线上真 bug：① Audible `response_groups` 带非法组名 `publisher` ⇒ 400、**整家永远 0 结果**（`publisher_name` 是**字段**，随 `product_desc` 照旧返回）② Lubimyczytac **多作者截断**（卡内多作者多个 `<a>`，旧实现三次独立 `findall` 按下标配对）③ Amazon 的 JS 校验页（`200` + `bm-verify` 跳转、**不含验证码关键词**）**静默 0 条**；Lubimyczytac 改逐卡 `bs4` + `_soup` 缺库如实回落；新增 `tests/test_metasources_scrape.py`（12 例，此前六家脆弱源解析逻辑零覆盖）+ 真机夹具；Goodreads/Kobo/Libro.fm 三家**取不到样本 ⇒ 挂起**（**不发版**，`VERSION` 仍 0.94.0） |
 | 98 | 仪表盘余留三条：**页级三态**（判据 = 聚合首屏真请求：`stores/stats` 的 `loaded`/`error` + `stores/library` 的 `loading`/`booksError`；唯一实现 `frontend/src/lib/dashboardPageState.ts` + 页级骨架 / 页级错误与「一起重试」）+ **快速预览补两个动作**（「编辑元数据」深链 `?tab=metadata`，**不挂第二个 `MetadataEditor`**；「移动到书库…」复用 `BookMoveDialog`）+ **上游首页截图像素级对照完成**（收尾换能读图的模型做完；结论：无需要修的视觉偏差；`docs/bookorbit/bookorbit-dashboard-styles.md` §7.8）（**不发版**，`VERSION` 仍 0.94.0） |
 | 97 | 第 95 期审计四条 `[low]` 全清：`gate_reason` 的不参与判定 `source` 形参**删除**（17 处调用点 / 11 处传参 + 2 个测试桩）/ `manager._mark` **不再写**冗余历史键 `_source`（读侧 `source_of` 保留）/ `config.LIBRARY_SOURCE_DIR` Python 别名**删除**（环境变量回退照旧，18 个测试文件改读 `LIBRARY_SOURCE_ROOTS[0]["path"]`）/ 零消费者旧式端点 `GET /content` **删除**并补 404 断言（**不发版**，`VERSION` 仍 0.94.0） |

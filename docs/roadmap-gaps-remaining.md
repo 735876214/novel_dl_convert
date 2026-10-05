@@ -5584,6 +5584,18 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 - **结论：没有发现需要修的视觉偏差。** ⇒ §7.4 的「界面肉眼冒烟」一行至此**全部收口**
   （肉眼冒烟第 83 期已做 + 像素对照本轮已做）。
 
+### 六之二、我自己引入过的一处回归（并修掉）
+
+新函数最初把标签前缀**写死**成 `dc:description`。但旧实现是 `_tag_text(opf, "dc:description")` ——
+标签名由**调用点**传入，而野生 EPUB 里有 `xmlns:dc1="http://purl.org/dc/elements/1.1/"` +
+`<dc1:description>` 这种**别名前缀**写法（旧代码里 `_tag_text` 是通用函数，谁传 `dc1:description` 就认谁）。
+写死后这类书的描述会**静默变成空串** —— 丢了不报错、只表现为「这本书没有简介」，
+正是本项目最忌讳的失败模式。
+
+**改法**：正则改成 `<\w+:description[^>]*>(.*?)</\w+:description>`（认任意前缀，`re.S | re.I` 与 `_tag_text` 一致），
+并补 `test_前缀别名也读得到` 钉住。⚠️ **教训：把「按参数匹配」的通用逻辑改成「写死常量」时要逐个核对
+调用点原本能接受的输入集合** —— 这里的输入集合比我想的宽。
+
 ### 七、未做及原因
 
 - 上游的 i18n / onboarding tour / `/api/v1/dashboard/*` 批量接口层：仍按 §7.4 保持**刻意差异**。
@@ -5746,3 +5758,174 @@ Audible 响应组不含 `publisher` 且出版方字段仍取到 / 接口 400 如
 - ⚠️ 真机探活脚本（`%TEMP%\nf_probe_sites.py` / `nf_probe_selectors.py` / `nf_build_fixtures.py`）
   与抓到的原始整页（`%TEMP%\nf-fixtures\`）**一律不入库**；只把**裁过的代表性片段**进 `tests/fixtures/`。
 - ⚠️ 探活前必须清空全部代理变量（同 `pytest` 铁律），否则一律 `httpx.InvalidURL: Invalid port: ':1]'`。
+
+---
+
+## 第 100 期（EPUB 解析判定 + `dc:description` 实体解码）
+
+### 一、立项依据
+
+用户指令：**「EPUB 解析重试，只有比当前效果好的情况下才考虑更新，否则删除此待办」** ——
+这是一次**带否决条件的重试**：必须**证明更好**，证不出就**删掉 `docs/TODO.md` §1 那条待办**。
+
+待办原文的动机是 `AGENTS.md` §7.5「优先成熟库」；第 95 期**试过并回退**，回退理由是实测到三处容错回归。
+所以这一期的产出**不是代码，先是判决**：能不能在真实语料上证明「换成熟解析器更好」。
+
+### 二、真实语料怎么来的（本机没有书库）
+
+`config.LIBRARY_SOURCE_ROOTS` 在本机指向容器路径（`/app/libraries` ⇒ `\\app\\libraries`，不存在），
+全盘递归（`C:\\Users\\qingr\\WorkBuddy` / `D:` / `E:` / `F:`，深度 3–4）**找不到任何含 ≥5 本 epub 的目录**；
+仓库内只有 5 本（`input/` 1 本 + `cache/txt-epub/lib-*/derived.epub` 4 本）—— **样本量不足以判决**。
+
+⇒ 出网探活后取**真实第三方 EPUB**：**Standard Ebooks** 可达（`https://standardebooks.org/ebooks` → 200/34159B），
+Gutenberg 超时。脚本 `%TEMP%\nf_fetch_epub_corpus.py` 从书架/列表页收集书籍页 → 每页取非 `_advanced` 的
+`.epub` 链接下载 ⇒ **37 本**落在 `%TEMP%\nf-epub-corpus\`（**30 本含 OPF**；单本最大 19.9 MB；
+部分 200 但 `RemoteProtocolError: Server disconnected`）。这批书是公版书、专业制作、EPUB3 规范。
+
+### 三、普查方法与决定性结论
+
+脚本 `%TEMP%\nf_probe_corpus_census.py`（**临时脚本，不入库**）对 30 本逐本对比
+「现有正则实现（直接调 `novelforge/core/library.py` 的私有函数）」vs
+「`xml.etree.ElementTree.XMLPullParser` 手写真解析器（手工累积事件 + 只吞异常 + 文档元素取**第一条 `start`**）」。
+
+**Q1：真解析器会失败吗？→ 成功 30 / 失败 0。** 结构特征**全为 0**：
+
+| 结构特征 | 命中数 |
+|---|---|
+| 含 CDATA | **0** |
+| 含 DOCTYPE | **0** |
+| 含非标准实体 | **0** |
+| 含单引号属性 | **0** |
+| 疑未声明前缀 | **0** |
+
+**Q2：字段真的不一样吗？→ 只有 `description` 不一致。**
+
+| 字段 | 不一致 |
+|---|---|
+| `title` | **0 / 30** |
+| `creator` | **0 / 30** |
+| `publisher` | **0 / 30** |
+| `language` | **0 / 30** |
+| `description` | **30 / 30** |
+
+⚠️ 首轮普查里 `series` 6、`series_index` 6 也报「不一致」，**那是我探针自身的缺陷**、不是实现优劣：
+我没在 ET 版里实现 `belongs-to-collection` + `refines` 的**关联**写法 —— 真实 OPF 里是
+`<meta id="collection-1" property="belongs-to-collection">` 配
+`<meta property="group-position" refines="#collection-1">`，**不是平铺属性**。排除后才是上表。
+
+**差异的性质已核实**：正则结果里有转义实体（`&lt;`/`&gt;`/`&amp;`/`&#`）= True，
+且 **`html.unescape(正则结果) == ET 结果` 逐字成立** ⇒ 差异**唯一**就是「正则不解 HTML 实体」。
+
+### 四、判决：删除立项（有能力交换、无净收益）
+
+合成语料（`%TEMP%\nf_probe_epub_parsers.py` / `nf_probe_epub_parsers2.py`）上，真解析器在
+**前缀别名 / CDATA 内容 / DOCTYPE 内部实体**三处更对，但正则在
+**未声明前缀（`ParseError: unbound prefix`）/ 未定义实体（`ParseError: undefined entity`）/
+完全不是 XML（`ParseError: syntax error`）** 三处更宽容（ET 硬失败）——
+**这是能力交换，不是单向变好**。而真实语料把这笔账算清了：
+
+- 真解析器**赢的那三处，30 本真实书里一个都没出现**（结构特征全 0）；
+- 真解析器**输的那三处，恰恰是第三方 OPF 会遇到的那类**（野生 EPUB 里就有不合规前缀）；
+- 其余所有字段**逐字相同**，解析失败率 **0**。
+
+⇒ 待办标题承诺的收益（「改成熟解析器」）在真实语料上是 **0**，而要承担的风险是**真实存在**的。
+**按用户给的否决条件：删除该立项**（用户 2026-10-05 拍板：「删除待办，并把 `description` 实体解码立为新条目」）。
+
+`tests/test_epub_xml_parse.py`（5 例）**保留** —— 它是那三处容错回归的**可执行形式**，
+对当前实现全绿，是「将来真要换解析器」时的验收条件（文件 docstring 已写明这一点）。
+
+### 五、新立并修掉的条目：`dc:description` 不解 HTML 实体
+
+这是**唯一在真实语料上站得住的差异**，也是这一期唯一的代码改动。
+
+**缺陷链条（三段都已实测）**：
+
+1. **OPF 里是双写转义**。实测 `david-hume_a-treatise-of-human-nature.epub` 的原始字节：
+   `\n\t\t\t&lt;p&gt;In the &lt;i&gt;Treatise of Human Nature&lt;/i&gt;, written in 1739, &lt;a href="https://standardebooks.org…`
+2. **旧实现原样返回**。`novelforge/core/library.py:1387` 是
+   `out["description"] = _tag_text(opf, "dc:description")` —— 未经任何解码直接写进返回值。
+   正则得 `&lt;p&gt;…`，真解析器解一次得 `<p>…`。
+3. **用户真的会看到**。前端是**文本插值**：`frontend/src/components/book/BookPreviewDialog.vue:310`
+   为 `{{ description }}`，`frontend/src/components/book/detail/OverviewTab.vue:112` 为
+   `{{ book.description || '暂无简介。' }}` ⇒ `{{ }}` 是 Vue 文本插值，浏览器**不会**再解一次实体
+   ⇒ 界面露出字面量 `&lt;p&gt;In the &lt;i&gt;Treatise…`。
+
+**两条来源口径不一致**（旁证）：`novelforge/core/metasources.py:498` 的
+`return _clean(html_unescape(_HTML_TAG.sub(" ", str(text))))` ⇒ **在线源来的描述早已 unescape + 剥标签**，
+而 OPF 来的带实体；OPF 是**兜底来源**（`override > online > opf`）⇒ 用户没配在线源时看到的就是坏的那份。
+全库 `novelforge/core/metadata.py` 里**没有**任何 unescape/剥标签处理。
+
+**三条修法口径实测对比**（同一本书）：
+
+| 口径 | 结果 |
+|---|---|
+| ① 现状（正则 `_tag_text`） | `'&lt;p&gt;In the &lt;i&gt;Treatise of Human Nature&lt;/i&gt;, written in 1739, '` |
+| ② 仅 `html.unescape` | `'<p>In the <i>Treatise of Human Nature</i>, written in 1739, '` |
+| ③ unescape 后再剥标签 | `'In the Treatise of Human Nature, written in 1739, David Hume'` |
+
+⚠️ **不能简单「unescape + 剥标签」**：description 在很多源里本就是 HTML 片段，
+而真解析器路径给出的正是**带标签**字符串 ⇒ 盲目剥标签会丢内容，这是**口径选择**而非纯修 bug。
+**用户拍板取 ②（仅 unescape，保留标签）**。顺序**不可颠倒**：先剥标签再解实体会把 `&lt;p&gt;` 当文本留下；
+先解实体再剥标签会把刚解出的真标签吃掉 ⇒ 只 unescape，**不**套 `re.sub(r"<[^>]+>", "", …)`。
+
+**实现**：`novelforge/core/library.py:209` 新增 `_dc_description(opf: str) -> str`（先在 `:25` 加
+`from html import unescape as html_unescape`），`probe_epub` 在 `:1420` 改调它。
+**不**复用 `_tag_text` 的原因写在函数 docstring 里：两者需求刚好相反 ——
+纯文本字段（title/creator/publisher/language）要剥标签、实体不解也无害；
+description 要解实体、但**绝不能**剥标签。
+
+**实测（修复后）**：30/30 本真实书的描述**不再含转义实体**（修复前 30/30 含）；
+同一本书 `title = 'A Treatise of Human Nature'` / `author = 'David Hume'` /
+`publisher = 'Standard Ebooks'` / `language = 'en-GB'` **逐字未变**，
+`description` 变成 `<p>In the <i>Treatise of Human Nature</i>, written in 1739, <a href="https://standardebooks.org/…`
+（标签保留、实体已解）。
+
+### 六、测试
+
+新增 `tests/test_epub_description.py`（**6 例**）：
+
+| 用例 | 钉住什么 |
+|---|---|
+| `test_双写转义的HTML片段解一次实体` | 核心契约：`&lt;p&gt;` → `<p>`（解**一次**） |
+| `test_标签必须保留不许剥掉` | 口径第 2 条：`<b>` 是描述内容，不许剥 |
+| `test_纯文本描述原样保留` | 无实体时是恒等变换 |
+| `test_命名实体与数字实体都解得开` | `&amp;` / `&#8212;` 也要解 |
+| `test_没有description字段时为空串` | 缺失字段仍是 `""`（不能变 `None`） |
+| `test_前缀别名也读得到` | 🔴 回归钉：`dc1:` 别名的描述**不许静默变空** |
+| `test_其他字段不受影响` | 🔴 回归钉：其余字段**逐字不变** |
+
+⚠️ **每个新用例都实测「改动前会红」**（用 Python 把 `library.py` 临时还原成
+`out["description"] = _tag_text(opf, "dc:description")` 再跑）：**4 例失败**，另 2 例
+（`test_纯文本描述原样保留` / `test_没有description字段时为空串`）**刻意两边都该绿**（它们断言的是不变量）。
+⚠️ 还原文件**必须用 Python 读写**，别用 PowerShell 重定向 —— `git show HEAD:path > file` 在本机写成
+**UTF-16**（null 字节 ⇒ `SyntaxError: source code string cannot contain null bytes`）。实测：复原后
+`tests/test_epub_description.py` + `tests/test_epub_xml_parse.py` **全绿**，`git status` 只留预期改动。
+
+### 七、未做及原因
+
+- **不换解析器**（本期结论，不是遗漏）：见第四节。
+- **`dc:title` 等纯文本字段仍不解实体**：真实语料 **0/30 不一致** ⇒ 那条路上没有实体可用；
+  本次**故意不动**（与「零收益不改动」同一条原则）。`tests/test_epub_description.py` 里
+  用 `test_其他字段不受影响` **如实钉住当前行为**，将来若要给 title 也解实体是**另一件事**。
+- **`novelforge/core/fileops.py` 的 OPF 改写正则**（出版副本 XML，字节等价不可证）继续保留。
+- **元数据抓取剩余三家**（Goodreads / Kobo / Libro.fm，取不到样本）继续挂起。
+
+### 八、实测
+
+| 项 | 结果 |
+|---|---|
+| 后端全量 | **2172 例（2147 passed / 0 failed / 0 errors / 25 skipped）** |
+| 前端 | **零改动**（`git status frontend/ novelforge/static/` 为空），未重跑 |
+| 每个新用例 | 都实测「改动前会红」（4/6 例失败 ⇒ 还原） |
+| `VERSION` | 仍 `0.94.0`（**未发版**） |
+
+### 九、收尾
+
+- ⚠️ **本期没有可提交的语料**：37 本第三方 EPUB 落在 `%TEMP%\nf-epub-corpus\`，
+  探针脚本（`nf_fetch_epub_corpus.py` / `nf_probe_corpus_census.py` / `nf_probe_visible_impact.py` /
+  `nf_probe_epub_parsers*.py`）一律**不入库**（同第 99 期口径：只把**裁过的代表性片段**进 `tests/fixtures/`；
+  本期新用例全部**自造最小 EPUB**，连夹具都不需要）。
+- ⚠️ **文档编辑铁律（本期踩到两次）**：内联 here-string 里的 `$` 开头序列会被 pwsh 当**变量展开**
+  （实测 `$t` → 空、`$( ` → 空，`novelforge` 被吃成 `ovelforge`、`title` 被吃成 `	itle`）
+  ⇒ **改文档一律写脚本文件再执行**，别用内联 heredoc。
+

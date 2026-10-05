@@ -172,8 +172,21 @@ httpx.InvalidURL: Invalid port: ':1]'    # 堆栈 tests/test_network_limits.py:1
   **取不到可解析样本** ⇒ 仍按本条原话挂起（无样本不改选择器语义）。
 - **`novelforge/core/fileops.py` 的 OPF 改写正则 → ElementTree**（§4 med）：仍保留。改写的是
   **出版副本的 XML**，字节级等价不可证，而「出版产物不得变化」是硬约束；已把理由写在原地。
-- **`novelforge/core/library.py` 的 EPUB/OPF/NCX 解析 → ElementTree**（§4 high）：**做了、验证后回退了**。
-  见 §6「回退记录」—— 三处实测回归 + `lxml` 是可选依赖 ⇒ 不满足 §7.5 的「降低总复杂度或提高可靠性」。
+- **`novelforge/core/library.py` 的 EPUB/OPF/NCX 解析 → ElementTree**（§4 high）：**第 100 期实测后关闭该立项**（用户口径：「只有比当前效果好的情况下才考虑更新，否则删除此待办」）。
+  第 95 期做过一版、验证后回退（见 §6「回退记录」）。第 100 期不重复试写，而是先**取真实语料判决**：
+  本机没有书库（`LIBRARY_SOURCE_ROOTS` 指向容器路径 `/app/libraries`）⇒ 从 **Standard Ebooks** 取
+  **37 本真实第三方 EPUB**（30 本含 OPF），逐字段对比「现有正则」与「`xml.etree.ElementTree` 真解析器」：
+  `title` / `creator` / `publisher` / `language` **0/30 不一致**，真解析器**零失败**，
+  结构特征（含 CDATA / DOCTYPE / 非标准实体 / 单引号属性 / 疑未声明前缀）**全为 0**；
+  **唯一差异是 `description` 30/30**，且 `html.unescape(旧结果) == 真解析器结果` **逐字成立**
+  ⇒ 差异唯一就是「正则不解 HTML 实体」，与「解析器成熟度」无关。
+  ⚠️ **判决口径**：合成语料上真解析器赢的三处（前缀别名 / CDATA / DOCTYPE 内部实体）**真实书里一个都没出现**，
+  而它输的三处（未声明前缀 `unbound prefix` / 未定义实体 `undefined entity` / 纯垃圾 `syntax error` 整份作废）
+  恰是第三方 OPF 会遇到的那类 ⇒ **有能力交换、无净收益**，本条按原口径**关闭**。
+  那三处容错回归的**可执行形式** `tests/test_epub_xml_parse.py`（5 例）**保留**，作为「将来真要换解析器」的验收条件。
+  唯一真差异已单独修掉：`novelforge/core/library.py:209` 新增 `_dc_description(opf)`（解一次实体、**保留标签**），
+  `probe_epub` 在 `:1420` 改调它，守卫 `tests/test_epub_description.py`（7 例）。详见
+  `docs/roadmap-gaps-remaining.md` 第 100 期段。
 - **[low] 四项刻意留档**（都不影响正确性，改动面却不小）：
   `sources/manager.py:87 gate_reason(source=…)` 的 `source` 形参不参与判定（改签名要动 ~13 个调用点）；
   `sources/manager.py:207` 的 `_source` 写入冗余（但 `source_of` 读它是**外部回传 item 的输入契约**，`cli.py --item` 在用）；

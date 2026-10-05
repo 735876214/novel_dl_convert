@@ -1212,7 +1212,15 @@ txt 书**两个落点都留档**（`blobs == [b"", "旧的留档"]`）、显式�
 - ⚠️ **每个新用例都必须实测「改动前会红」**（临时撤掉修复 ⇒ 对应用例失败 ⇒ 还原）。
 - ⚠️ **缺 bs4 要如实回落**（`_soup` 返 `None` ⇒ 空列表），不许抛异常打断整轮多源抓取。
 
-#### 五、操作陷阱
+#### 五、把「按参数匹配」改成「写死常量」时必须核对输入集合（本期自己踩到）
+
+新函数最初写死 `r"<dc:description[^>]*>…"`，而旧实现是 `_tag_text(opf, "dc:description")` ——
+**标签名由调用点传入的通用函数**。野生 EPUB 有 `xmlns:dc1=…` + `<dc1:description>` 的别名写法，
+旧代码认、写死后**不认** ⇒ 描述**静默变空**（丢了不报错，只表现为「这本书没有简介」）。
+⇒ 改成 `r"<\w+:description[^>]*>(.*?)</\w+:description>"`（认任意前缀，`re.S | re.I` 同 `_tag_text`），
+守卫 `test_前缀别名也读得到`。⚠️ 这类回归**不会**被「6 例新用例」抓到 —— 是**自己复核边界**才发现的。
+
+### 六、操作陷阱
 
 - ⚠️ **探活前必须清空全部代理变量**（同 `pytest` 铁律），否则逐家探活结果全是
   `httpx.InvalidURL: Invalid port: ':1]'`（畸变 mount），会误判成「站点全挂了」。
@@ -1220,3 +1228,72 @@ txt 书**两个落点都留档**（`blobs == [b"", "旧的留档"]`）、显式�
   `SyntaxError: source code string cannot contain null bytes`）。要还原文件做「改动前会红」验证，
   用 **Python 读写**，别用 PowerShell 重定向。
 - ⚠️ 真机抓到的**整页**与探活脚本**一律不入库**（分析用，放 `%TEMP%`）；只有**裁过的片段**进 `tests/fixtures/`。
+
+## 第 100 期铁律（EPUB 解析判定 + `dc:description` 实体解码）
+
+### 一、结论：换成熟解析器这条待办**删除**，理由是真实语料上零收益
+
+用户口径：**「只有比当前效果好的情况下才考虑更新，否则删除此待办」** ⇒ 先证明，再动手。
+本机**没有书库**（`config.LIBRARY_SOURCE_ROOTS` 指向容器路径 `/app/libraries` ⇒ `\\app\\libraries`，
+全盘递归找不到任何含 ≥5 本 epub 的目录）⇒ 从 **Standard Ebooks** 取 **37 本真实第三方 EPUB**（30 本含 OPF）
+作为判决语料（Gutenberg 超时）。逐字段对比「现有正则」vs「`xml.etree.ElementTree.XMLPullParser` 手写真解析器」：
+
+| 字段 | 不一致 |
+|---|---|
+| `title` | **0 / 30** |
+| `creator` | **0 / 30** |
+| `publisher` | **0 / 30** |
+| `language` | **0 / 30** |
+| `description` | **30 / 30** |
+
+真解析器**零失败**；结构特征含 CDATA / DOCTYPE / 非标准实体 / 单引号属性 / 疑未声明前缀 **全为 0**。
+
+### 二、判决口径：**有能力交换 ≠ 有净收益**
+
+合成语料上两边各有胜负，**必须按真实语料算账**：
+
+| | 真解析器赢 | 正则赢 |
+|---|---|---|
+| 合成语料 | 前缀别名（`dc1:`）、CDATA 内容、DOCTYPE 内部实体 | 未声明前缀（`unbound prefix`）、未定义实体（`undefined entity`）、纯垃圾（`syntax error`） |
+| 真实书的命中数 | **0**（结构特征全为 0） | 第三方 OPF 会遇到的那类 |
+
+⇒ 待办标题承诺的收益（「改成熟解析器」）在真实语料上是 **0**，而要承担的风险是**真实存在**的。
+`tests/test_epub_xml_parse.py`（5 例）**保留**为「将来真要换解析器」的验收条件。
+
+### 三、`dc:description` 与 `dc:title` 的需求**刚好相反**（本次唯一代码改动）
+
+| | 剥标签？ | 解实体？ |
+|---|---|---|
+| 纯文本字段（title / creator / publisher / language，走 `_tag_text`） | **要** | 不要（真实语料 0/30 无实体可用） |
+| description（新增 `_dc_description`，`novelforge/core/library.py:209`） | **绝不能** | **要** |
+
+- **不能复用 `_tag_text`**：解出来的 `<p>` / `<i>` / `<a>` 是**描述本身的内容**
+  （description 在很多源里本就是 HTML 片段）；剥了就丢信息。
+- ⚠️ **顺序不可颠倒**：先剥标签再解实体会把 `&lt;p&gt;` 当文本留下；
+  先解实体再剥标签会把刚解出的真标签吃掉。⇒ 只 `html.unescape`，**不**套 `re.sub(r"<[^>]+>", "", …)`。
+- 真实 OPF 里写的是**双写转义**：`&lt;p&gt;In the &lt;i&gt;Treatise…` ⇒ 解**一次**得 `<p>In the <i>…`。
+- 实测 30/30 本真实书的 **`html.unescape(旧结果) == 真解析器结果` 逐字成立** ⇒ 差异**唯一**就是这一处。
+
+### 四、用户可见性证据链（三段，缺一段就只是洁癖）
+
+1. `probe_epub` 把未解码串**直接写回**（`novelforge/core/library.py:1420` 原为
+   `out["description"] = _tag_text(opf, "dc:description")`）。
+2. 前端是 **`{{ }}` 文本插值**：`frontend/src/components/book/BookPreviewDialog.vue:310`、
+   `frontend/src/components/book/detail/OverviewTab.vue:112` ⇒ 浏览器**不会**再解一次实体
+   （若是 `v-html` 则会被二次解码、缺陷自己消失）。
+3. **两条来源口径不一致**：`novelforge/core/metasources.py:498` 的在线源路径**早已**
+   `_clean(html_unescape(_HTML_TAG.sub(" ", str(text))))`；而 OPF 是**兜底来源**
+   （`override > online > opf`）⇒ 用户没配在线源时看到的就是坏的那份。
+   ⚠️ 在线源**额外剥标签**是对的：它拿到的是**网页**、标签是站点模板；OPF 的标签是**书自己的内容**。
+
+### 五、操作陷阱
+
+- ⚠️ **内联 here-string 里的 `$` 开头序列会被 pwsh 当变量展开** —— 实测把 `novelforge` 吃成 `ovelforge`、
+  把 `` `title `` 吃成 `\title`。**改文档一律写脚本文件再执行**，别用内联 heredoc。
+- ⚠️ **验证「用例改动前会红」必须用 Python 读写还原文件**：`git show HEAD:path > file` 在 PowerShell 下
+  写成 **UTF-16**（带 null 字节 ⇒ `SyntaxError: source code string cannot contain null bytes`）。
+  本期实测：临时还原成 `_tag_text` 后 **4/6 例失败**，另 2 例（断言不变量的）**刻意两边都绿**。
+- ⚠️ **语料与探针脚本一律不入库**（37 本 EPUB 落 `%TEMP%\nf-epub-corpus\`；探针放 `%TEMP%`）——
+  同第 99 期口径。本期新用例**全部自造最小 EPUB**，连夹具都不需要。
+- ⚠️ 跑 `pytest` 前清空全部代理变量（老铁律，否则 `httpx.InvalidURL: Invalid port: ':1]'` 45 例假失败）。
+
