@@ -168,8 +168,18 @@ httpx.InvalidURL: Invalid port: ':1]'    # 堆栈 tests/test_network_limits.py:1
   （`200` + `<meta refresh …&bm-verify=…>`、约 2.3 KB、**不含任何验证码关键词**）被旧判据放行 ⇒
   **静默 0 条**。Lubimyczytac 已改逐卡 `bs4` 选择器（`_soup` 缺库时如实回落空列表），
   新增 `tests/test_metasources_scrape.py`（12 例）+ 真机夹具 `tests/fixtures/metasources/`。
-  **本条并未全部收口**：Goodreads / Kobo（本机 `ConnectTimeout`）与 Libro.fm（HTTP 202 空体）
-  **取不到可解析样本** ⇒ 仍按本条原话挂起（无样本不改选择器语义）。
+  **第 101 期把剩下三家也核了**（用户 2026-10-05 明确「本项目可以出网」）：
+  **Goodreads 是又一整家失效** —— 真结果页里 `<tr itemscope>` / `bookTitle` / `authorName`
+  **各 0 次**（站点已下线该结构）⇒ 旧正则恒返 0 条；改用 **RSC flight payload** 解析后，
+  同一真样本（604317 B）**0 条 → 19 条**，多作者 / 年份 / 封面 / provider_id 全对、未解析引用残留 0。
+  ⚠️ **本条「改用 HTML 解析库」的前提被真机推翻了一半**：新结果页后续卡的详情在
+  `<template id="P:c">` 里，而 bs4 的 `html.parser` **不解析 `<template>` 内容** ⇒
+  **光换解析库解决不了这一家**，必须换数据源。同时把 **AWS WAF 挑战页**的归因
+  （Goodreads / Libro.fm 同套防护、取决于 IP 信誉 ⇒ 「重试/降频/Cookie」而非「站点改版」）
+  与 **Kobo 的站点主动拒绝**（403 `Challenged`）分开写清。夹具 2 个，
+  `tests/test_metasources_scrape.py` 12 → 24 例。详见 `docs/roadmap-gaps-remaining.md` 第 101 期段。
+  **仍未收口**：Kobo / Libro.fm / Amazon 三家**仍无可解析样本**（403 / WAF / JS 校验页）
+  ⇒ 仍按本条原话挂起（无样本不改选择器语义）。
 - **`novelforge/core/fileops.py` 的 OPF 改写正则 → ElementTree**（§4 med）：仍保留。改写的是
   **出版副本的 XML**，字节级等价不可证，而「出版产物不得变化」是硬约束；已把理由写在原地。
 - **`novelforge/core/library.py` 的 EPUB/OPF/NCX 解析 → ElementTree**（§4 high）：**第 100 期实测后关闭该立项**（用户口径：「只有比当前效果好的情况下才考虑更新，否则删除此待办」）。

@@ -5929,3 +5929,173 @@ description 要解实体、但**绝不能**剥标签。
   （实测 `$t` → 空、`$( ` → 空，`novelforge` 被吃成 `ovelforge`、`title` 被吃成 `	itle`）
   ⇒ **改文档一律写脚本文件再执行**，别用内联 heredoc。
 
+
+
+---
+
+## 第 101 期（书源网页抓取收口：Goodreads 整家失效修复 + AWS WAF 归因）
+
+> 立项依据：`docs/TODO.md` §1 那条「书源网页抓取改用 HTML 解析库」（第 95 期审计 §4）。
+> 第 99 期已真机核验 14 家并修掉三处线上真 bug，剩余 Goodreads / Kobo / Libro.fm 三家**取不到
+> 可解析样本**而挂起。用户 2026-10-05 明确「**本项目可以出网**，尝试书源抓取」⇒ 本期补齐这三家。
+
+### 一、真机探活（清空全部代理变量后）
+
+⚠️ 探活前必须清空 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` 等全部代理变量，否则 `httpx` 0.28.1
+解析 `NO_PROXY` 里的 `[::1]` 会生成畸变 mount，报 `Invalid port: ':1]'` —— 会把「站点全挂」
+误判成事实（本期第一次跑就踩到）。
+
+| 源 | 结果 | 判定 |
+|---|---|---|
+| Goodreads | **200 / 604471 B**，`<title>Book search results for "three body problem" \| Goodreads</title>` | **真结果页**（首次请求） |
+| Goodreads（二跑同 URL） | **202 / 2432 B** | **AWS WAF 挑战页** |
+| Kobo | **403 / 84598 B**，`<title>Challenged \| Kobo.com</title>` | **站点主动拒绝**（与网络无关） |
+| Libro.fm（搜索） | **202 / 1999 B** | **AWS WAF 挑战页** |
+| Libro.fm（首页） | **200 / 207585 B** | 站点可达 ⇒ 拦的是**搜索端点** |
+
+样本落盘 `%TEMP%\nf-scrape-samples\`（`goodreads_title.html` / `goodreads_both.html` /
+`kobo_us_en.html` / `librofm_search.html` / `librofm_home.html`）。**脚本一律不入库**。
+
+### 二、判决一：Goodreads 整家失效（线上真 bug）
+
+真结果页实测 `<tr itemscope` = **0**、`bookTitle` = **0**、`authorName` = **0**
+⇒ 既有的 17 行正则**只能匹配到 0 条**，表现为这一家**静默返回无结果**：用户看到的只是
+「没有结果」，无从判断是站点改版还是自己被拦 —— 与第 99 期 Amazon 那处同一类症状。
+
+### 三、为什么不能只靠 DOM 解析（关键发现）
+
+新结果页由 React Server Components 渲染：
+
+- `ul[data-testid="book-list-item"]` 下确有 **20 个 `<li>`**；
+- 但**只有第一张卡带完整详情**，其余卡只有 `book-card` / `responsive-image` / `book-item-<kca id>`；
+- 原因是后续卡的详情被放进 **`<template id="P:c">` 占位符**，而 `BeautifulSoup(html, "html.parser")`
+  **不解析 `<template>` 内容** ⇒ DOM 通道只拿得到 **1 本**。
+
+⇒ **光靠「改 HTML 解析库」解决不了这一家**，必须换数据源。
+
+### 四、数据源：RSC flight payload
+
+页面有 **66 段** `self.__next_f.push([1,"…"])</script>`，拼接后 258913 字符；
+`json.loads(f'"{blob}"')` 反转义后得 **180 行**文本，行格式是 `<hexid>:<payload>`（155 行带载荷）。
+
+| 事实 | 值 |
+|---|---|
+| Book 对象（`__typename == "Book"` 且带 title） | **19** |
+| `title` 键出现次数 | **23** |
+| 结论 | ⚠️ **必须按对象关联字段，不能全局抓同名 key** —— 多出来的 4 个是**系列名**，全局抓会让书名与系列串台 |
+
+**前向引用两种形态**（payload 里的值常是 `"$73"` 这类引用，不是字面量）：
+
+1. **纯文本引用** `"$73"` → 目标是另一行 `73:T4f5,<正文>`，带 RSC 类型前缀 `T<十六进制长度>,`；
+2. **路径引用** `"$4d:props:children:1:…:bookSeries:0:series"` → 行号 + 冒号路径。
+
+⚠️ **React 元素是定长数组 `["$", <type>, <key>, <props>]`**（实测行 `4d` 是 4 项，`[3]` 才是 props）
+⇒ 路径里的 `props` 段**不是 list 下标**，直接 `int()` 会崩
+（`invalid literal for int() with base 10: 'props'`），必须特判。
+
+⚠️ **不能用 `unicode_escape` 全局反转义**：会让部分 `description` 出现 mojibake
+（实测 `'â\x80\x9cThe entire universe will flicker for you.â\x80\x9d'`）⇒ 必须 **`json.loads` 逐行解析**。
+
+### 五、判决二：AWS WAF 归因（不是站点改版）
+
+`goodreads_both.html`(202/2432B) 与 `librofm_search.html`(202/1999B) 是**同一套 AWS WAF 挑战页**：
+含 `window.gokuProps` + `awswaf.com/…/challenge.js` + `<div id="challenge-container">` +
+`AwsWafIntegration.getToken()`。
+
+原实现的 202 分支**已能拦住**它，但归因笼统（「站点返回 HTTP 202 挑战页」）⇒ 用户分不清
+「站点改版」（要等开发者修）与「自己被拦」（可以重试/降频/带 Cookie）。
+
+- 新增判据 `"gokuprops" in low or "awswaf" in low` → 
+  「被反爬拦截（AWS WAF 挑战页）：Goodreads / Libro.fm 走同一套防护，取决于出口 IP 信誉 ——
+  稍后重试、降低频率，或按需提供 Cookie」；
+- ⚠️ **该判据必须排在 HTTP 202 兜底之前**：放后面时两家先命中 202 分支，新文案**永不出现**
+  （实测确认过这个坑）；
+- 202 分支保留为兜底，覆盖「202 但没有 WAF 特征」的其它站点。
+
+**三家要分开写**：Goodreads / Libro.fm = **AWS WAF**（可重试）；Kobo = **站点主动拒绝**
+（403 + `Challenged | Kobo.com`）。
+
+### 六、实现（`novelforge/core/metasources.py`，1635 → 1833 行）
+
+新增纯函数（全部可单测，不出网）：
+
+| 符号 | 作用 |
+|---|---|
+| `_RSC_PUSH` | `self.__next_f.push\(\[1,"(.*?)"\]\)</script>` |
+| `_RSC_ROW` | 行格式 `^([0-9a-f]+):(.*)$` |
+| `_rsc_rows(html)` | → `{行号: 载荷}` |
+| `_RSC_TYPED` | 剥 RSC 类型前缀 `^T[0-9a-f]+,` |
+| `_rsc_value(rows, value, _depth=0)` | 递归解引用（纯文本 / 路径两种形态，深度上限 8） |
+| `_rsc_text(rows, value)` | 解引用 + 剥类型前缀 |
+| `_rsc_books(html)` | 从含 `legacyId` 的行取 Book 对象 |
+| `_rsc_authors(rows, book)` | `primaryContributorEdge` + `secondaryContributorEdges` **全取**、去重 |
+| `_rsc_year(book)` | `details.publicationTime`（epoch 毫秒）→ 年份 |
+
+`_search_goodreads` 重写为：`_get_text(GOODREADS, params={"q": …})` → `_rsc_rows` → 逐 Book，
+按 `legacyId`（回落 `webUrl`）**去重**（同一本书会在多个 RSC 行各带一份，不去重会灌水）。
+
+### 七、实测收益（同一真样本，604317 B）
+
+| 指标 | 旧正则 | 新实现 |
+|---|---|---|
+| 条数 | **0** | **19** |
+| 书名 | — | 全对（含 `"The Three-Body Problem Trilogy: Remembrance of Earth's Past"`） |
+| 多作者 | — | 全对（如 `'Jin Cai, Twilight Lu, Silver, Xiao, Bianca Pistillo, Liu Cixin, XuDong Cai'`） |
+| 年份 | — | 2014/2015/2016/…/2027（从 epoch 毫秒换算） |
+| 简介 | — | 已解引用 + 剥标签（420–1293 字符，**无残留 `$` 引用、无 `T4f5,` 前缀**） |
+| provider_id | — | 全对（`20518872` 等） |
+| **未解析引用残留** | — | **0** |
+
+⚠️ **第二次探活时线上已命中 WAF**（302 重定向）—— 这正说明**归因**为何重要：
+同一 URL 不同时刻结果不同，是 IP 信誉问题，不是解析问题。**真样本是本期的唯一可复现实证**。
+
+### 八、一件刻意不做的事（新立项）
+
+payload 里**有**系列信息（`bookSeries` → `seriesPlacement` + 系列名，实测能解出
+`("Remembrance of Earth's Past", "1")`），但**不返回**：
+
+- `_entry` 的候选结构是**固定键白名单**，**没有** `series` / `series_index`；
+- `metafetch._VALUE_KEYS`（派生自 `_CURRENT`）也没有这两个映射 ⇒ 传了会被**静默丢掉**；
+- ⚠️ 但 `metascore.FIELDS` **确实**把 `series`(4.0) / `series_index`(3.0) 列为 Enrichment 计分项
+  ⇒ **系统本就预期候选能带系列，只是这条线从未接上**（对 Amazon / 豆瓣等带系列的源同样如此）。
+
+接上要同时动**四处**：候选结构 → `_VALUE_KEYS` 字段映射 → 收尾模式 → OPF 写入。
+这超出「修一个坏掉的抓取器」的范围（§7 单一真源 / 能力边界），故**删掉已写的 `_rsc_series()`**，
+只把这段发现写进 `_search_goodreads` docstring 并挂 `docs/TODO.md`（**该函数知道怎么解系列，只是不返回**）。
+
+### 九、测试与夹具
+
+- 夹具 `tests/fixtures/metasources/goodreads_search.html`（22009 B）：
+  ⚠️ **必须保留「多段 + 段内换行」** —— 最初按 `seg[book_start:third_start]` 切片导致段落无换行
+  ⇒ `_rsc_rows` 得 0 行、0 本书（试两次都空）。最终做法：从真实页面拼出 180 行后**只挑 3 个真实行**
+  （`4d` 第 1 本内联系列 + 内联简介、`59` 第 2 本 `<li>` 载体带 `$4d` 路径引用、`73` 第 2 本简介的
+  纯文本引用目标），`json.dumps(body)[1:-1]` 重新转义后包成一段 `__next_f.push` ⇒ 解出 **2 本书**。
+  口径同 `tests/fixtures/legado2_real.json`：**真样本裁成代表性片段，不整页入库**。
+- 夹具 `tests/fixtures/metasources/awswaf_challenge.html`（2475 B，**真机原样字节**，同
+  `amazon_challenge.html` 口径）。
+- `tests/test_metasources_scrape.py`：**12 → 24 例**（全绿）。新增 Goodreads 10 例 + WAF 2 例。
+- ⚠️ **`tests/test_metasources_parsers.py::test_goodreads_按tr块解析` 断言的是已下线的旧结构**
+  ⇒ 全量跑必然 `IndexError`。已改写为 `test_goodreads_按flight载荷解析`（构造真实 `\"` 双转义载荷），
+  并给该文件补 `import json`。
+- ⚠️ **测试函数名不能含 `「」`**（`SyntaxError: invalid character '「' (U+300C)`）。
+- **实测「改动前会红」**：用 Python 把 `_search_goodreads` 临时换回旧实现 ⇒ **8/10 条会红**；
+  删掉 WAF 判据 ⇒ WAF 用例红并报出旧文案。两脚本均在 `finally` 里还原并已验证还原成功。
+
+### 十、实测
+
+| 项 | 结果 |
+|---|---|
+| 后端全量 | **2184 例（2159 passed / 0 failed / 0 errors / 25 skipped）**，317.312 s |
+| 第 100 期基线 | 2172 例（2147 passed）⇒ **+12**（新增用例） |
+| 前端 | **零改动**（`git status frontend/ novelforge/static/` 为空），未重跑 |
+| `tests/check_doc_anchors.py` | exit 0 / **硬错 0 条** |
+| `VERSION` | 仍 `0.94.0`（**未发版**，连续七轮） |
+
+### 十一、收尾
+
+- 按用户要求**已完成的条目直接从 `docs/TODO.md` 删除**（不再标 `[x]`）：删掉「`dc:description`
+  仍不解 HTML 实体」（第 100 期已修）与「EPUB 解析换成熟解析器」（第 100 期实测后关闭）两条，
+  改写「书源网页抓取改用 HTML 解析库」为两条**尚未完成**的（系列信息未接进候选 / 剩余三家无样本）。
+- ⚠️ **两侧样本与探活脚本一律不入库**（`%TEMP%\nf-scrape-samples\`、`%TEMP%\nf_scrape_*.py`），
+  只把**裁过的代表性片段**进 `tests/fixtures/`。
+- ⚠️ **并行会话脏项**（`.codebuddy/memory/2026-10-03.md`、`.vscode/settings.json` 等）**不回退不提交**。

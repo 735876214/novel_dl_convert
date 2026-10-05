@@ -4,16 +4,17 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-05 —— 第 100 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续六轮）：EPUB 解析换成熟解析器这条待办**实测后删除**（真实语料零收益），
-改立并修掉唯一站得住的差异 —— `dc:description` 不解 HTML 实体。历史：第 99 期元数据抓取真机核验，
-第 98 期仪表盘余留三条，第 97 期清掉第 95 期审计的四条 `[low]`，第 96 期数据安全两处口径。
+**最后更新**：2026-10-05 —— 第 101 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续七轮）：
+书源网页抓取收口 —— **Goodreads 旧结构已被站点下线、整家恒返 0 条的线上真 bug 已修**（改用 RSC flight
+payload，同一真样本 0 条 → 19 条），并把 AWS WAF 挑战页的**归因**与「站点改版 / 站点主动拒绝」分开。
+按用户要求，本轮起**已做完的条目直接从本文件删除**（不再标 `[x]` 留痕），历史一律去 roadmap 查。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法；`VERSION` = **0.94.0**
-  （**六轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
-  第 98 期仪表盘余留、第 99 期元数据抓取真 bug、第 100 期 EPUB 判定，用户六次都选「先不发版」；单一真值源，`GET /health` 下发）；`CHANGELOG.md` 最新段仍是 `V0.94.0`。
-- 测试基线（第 100 期）：后端 **2172 例（2147 passed / 0 failed / 0 errors / 25 skipped）**；前端 **67 spec / 686 例**（本期前端零改动，未重跑）。
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload；`VERSION` = **0.94.0**
+  （**七轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
+  第 98 期仪表盘余留、第 99 期元数据抓取真 bug、第 100 期 EPUB 判定、第 101 期 Goodreads 整家失效修复，用户七次都选「先不发版」；单一真值源，`GET /health` 下发）；`CHANGELOG.md` 最新段仍是 `V0.94.0`。
+- 测试基线（第 101 期）：后端 **2184 例（2159 passed / 0 failed / 0 errors / 25 skipped）**；前端 **67 spec / 686 例**（本期前端零改动，未重跑）。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
   （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
   ⚠️ 长跑 pytest 必须**后台跑 + 轮询 junit**（前台会被 harness 的「长时间无输出」上限取消）。
@@ -62,44 +63,23 @@
 > ⚠️ 工具链变动记在 §7.8 ④：`agent-browser` 在本机**已不可用**（会挂住不返回），
 > 改用本机 Edge 的 CDP 无头截图；PNG 仍**不入库**。
 
-- [x] ~~**EPUB 解析（`novelforge/core/library.py` 的 OPF / NCX / nav）改成熟解析器**~~ ——
-  **第 100 期实测后删除该立项**（用户 2026-10-05 拍板：证不出更好就删）。判据是 37 本真实第三方
-  EPUB（Standard Ebooks，30 本含 OPF）逐字段对比「现有正则」vs「`xml.etree.ElementTree` 真解析器」：
-  `title` / `creator` / `publisher` / `language` **0/30 不一致**，真解析器**零失败**（含 CDATA 0、
-  含 DOCTYPE 0、含非标准实体 0、含单引号属性 0、疑未声明前缀 0 **全为 0**）⇒ 待办标题承诺的收益
-  在真实语料上是 **0**，而它要承担的风险（未声明前缀 `unbound prefix` / 未定义实体 `undefined entity`
-  整份作废）恰是第三方 OPF 会遇到的那类。合成语料上真解析器赢的三处（前缀别名 / CDATA /
-  DOCTYPE 内部实体）**真实书里一个都没出现** ⇒ 判决：**有能力交换、无净收益**。
-  那三处容错回归的**可执行形式** `tests/test_epub_xml_parse.py`（5 例）**保留**（对当前实现全绿，
-  是「将来真要换解析器」的验收条件）；证据全文见 `docs/roadmap-gaps-remaining.md` 第 100 期段。
-- [ ] **`dc:description` 仍不解 HTML 实体**（第 100 期实测发现，**唯一在真实语料上站得住的差异**）——
-  ⚠️ **已修**：`novelforge/core/library.py:209` 新增 `_dc_description(opf)`，解**一次**实体、
-  **保留标签**（口径：先解实体再剥标签会把刚解出的真标签吃掉；先剥再解会把 `&lt;p&gt;` 当文本留下
-  ⇒ 只 unescape，不套 `re.sub(r"<[^>]+>", "", …)`）。`probe_epub` 改调它（`:1420`）。
-  实测 30/30 本真实书的 `html.unescape(旧结果) == 真解析器结果` **逐字成立** ⇒ 差异唯一就是这一处。
-  用户可见性已证实：`probe_epub` 直接写回未解码串，前端用 `{{ }}` **文本插值**渲染
-  `frontend/src/components/book/BookPreviewDialog.vue:310` / `detail/OverviewTab.vue:112` ⇒
-  浏览器不再解一次实体，界面露出 `&lt;p&gt;In the &lt;i&gt;Treatise…` 字面量。
-  对照 `novelforge/core/metasources.py:498` 的在线源路径**早已** `html_unescape` ⇒ 两条来源口径
-  不一致，而 OPF 是兜底来源（`override > online > opf`）。
-  新增 `tests/test_epub_description.py`（**7 例**，改动前 **4 例实测会红**）。
-  ⚠️ **自己引入过一处回归并修掉**：新函数最初把前缀写死成 `dc:description`，而野生 EPUB 有 `xmlns:dc1=…` + `<dc1:description>` 的写法（旧实现按调用点传的标签名匹配、**本来就认**）
-  ⇒ 会让这类书的描述**静默变空**。已改成 `<\w+:description…>`（认任意前缀），并补 `test_前缀别名也读得到` 钉住。
-  **余留（未做，属另一件事）**：`dc:title` 等**纯文本字段**走 `_tag_text` 仍是**剥标签 + 不解实体**
-  （真实语料 0/30 不一致 ⇒ 那条路上没有实体可用，本次**故意不动**，测试里如实钉住当前行为）。
-- [ ] **书源网页抓取改用 HTML 解析库**（第 95 期审计 §4）—— **第 99 期已真机核验并做完能核的部分**。
-  已修的三处线上真 bug（详见 `docs/roadmap-gaps-remaining.md` 第 99 期段）：Audible 的 `response_groups`
-  带非法组名 `publisher` ⇒ **整家永远 0 结果**（`publisher_name` 是**字段**，随 `product_desc` 照旧返回）；
-  Lubimyczytac 多作者书**只拿到第一位作者**（卡内多作者是多个 `<a>`，旧实现三次独立 `findall` 按下标配对）；
-  Amazon 的 JS 校验页（`200` + `bm-verify` 跳转、约 2.3 KB、**不含验证码关键词**）**静默 0 条**，
-  用户分不清「站点改版」与「被拦」。Lubimyczytac 已改逐卡 `bs4` 选择器，`_soup` 缺库时如实回落空列表。
-  新增 `tests/test_metasources_scrape.py`（**12 例**，此前六家脆弱源解析逻辑**零覆盖**——正是这几个
-  bug 长期没被发现的原因）+ 真机夹具 `tests/fixtures/metasources/`。
-  **剩余（挂起，不是忘了）**：Goodreads / Kobo（本机 `ConnectTimeout`）与 Libro.fm（HTTP 202 空体）三家
-  **取不到可解析样本** ⇒ 按审计原话「在没有逐家真机核过的前提下改选择器语义，等于用『单测绿』换『线上未知』」，
-  **无样本不改选择器**，等有网络条件时单独一轮（做法照第 99 期：先探活 → 抓样本落夹具 → 再改）。
-  同理 `novelforge/core/fileops.py` 的 OPF 改写正则（出版副本 XML，字节等价不可证）与
-  `novelforge/core/library.py` 的 EPUB/OPF/NCX 解析（下一条）继续保留。
+- [ ] **书源网页抓取：系列信息没有接进候选**（第 101 期真机核验发现，**新立项**）——
+  Goodreads 的 RSC payload 里**有**系列（`bookSeries` → `seriesPlacement` + 系列名），实测能解出来
+  （如 `("Remembrance of Earth's Past", "1")`），但**不返回**：`novelforge/core/metasources.py`
+  的 `_entry` 候选结构是**固定键白名单**，没有 `series` / `series_index` 两个键，
+  `metafetch._VALUE_KEYS`（派生自 `_CURRENT`）也没有这个映射 ⇒ 传了会被**静默丢掉**。
+  ⚠️ 但 `metascore.FIELDS` 确实把 `series`(4.0) / `series_index`(3.0) 列为 Enrichment 计分项
+  ⇒ **系统本就预期候选能带系列，只是这条线从未接上**（对 Goodreads / Amazon / 豆瓣等带系列的源都是如此）。
+  接上要同时动**四处**：候选结构 → `_VALUE_KEYS` 字段映射 → 收尾模式 → OPF 写入，
+  属于独立一件事，不在「修一个坏掉的抓取器」范围内。证据见 roadmap 第 101 期段。
+
+- [ ] **剩余三家抓取源仍无可解析样本**（挂起，不是忘了）—— Kobo（本机 403 + `Challenged | Kobo.com`，
+  **站点主动拒绝**，与网络无关）/ Libro.fm（**AWS WAF 挑战页**，200 可达但搜索端点被拦）/
+  Amazon（正则是活的，但本机命中 JS 校验页）。按第 95 期审计原话「在没有逐家真机核过的前提下改
+  选择器语义，等于用『单测绿』换『线上未知』」⇒ **无样本不改选择器**。
+  ⚠️ 第 101 期已把归因分开写清（WAF 可重试/降频/带 Cookie ≠ 站点改版 ≠ 站点主动拒绝），
+  用户不会再误判成「站点挂了」。
+  同理 `novelforge/core/fileops.py` 的 OPF 改写正则（出版副本 XML，字节等价不可证）继续保留。
 
 ### 明确「不做」（避免反复立项）
 
@@ -118,6 +98,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 101 | 书源网页抓取收口：**Goodreads 旧结构（`<tr itemscope>`/`bookTitle`/`authorName`）已被站点下线 ⇒ 整家恒返 0 条**，改用 React Server Components 的 **RSC flight payload** 解析（同一真样本 604317 B：0 条 → **19 条**，多作者/年份/封面/provider_id 全对，未解析引用残留 0）+ **AWS WAF 挑战页归因**与「站点改版 / 站点主动拒绝」分开（Goodreads / Libro.fm 同套防护，取决于 IP 信誉）＋ 夹具 2 个、`tests/test_metasources_scrape.py` 12→24 例（**不发版**，`VERSION` 仍 0.94.0） |
 | 100 | EPUB 解析换成熟解析器**实测后删除该立项**：37 本真实第三方 EPUB（Standard Ebooks，30 本含 OPF）逐字段对比「现有正则」vs「`xml.etree.ElementTree`」——`title`/`creator`/`publisher`/`language` **0/30 不一致**、真解析器**零失败**（CDATA/DOCTYPE/非标准实体/单引号属性/疑未声明前缀 **全为 0**）⇒ 标题承诺的收益是 0，风险（`unbound prefix`/`undefined entity` 整份作废）恰是第三方 OPF 会遇到的那类；`tests/test_epub_xml_parse.py`（5 例）**保留**为将来换解析器的验收条件。另立并修掉**唯一站得住的差异**：`dc:description` 不解 HTML 实体（30/30 本实测 `html.unescape(旧) == 真解析器` 逐字成立）⇒ 新增 `_dc_description()`（解一次实体、**保留标签**），前后端可见性已证实（前端 `{{ }}` 文本插值不做二次解码）；新增 `tests/test_epub_description.py`（7 例，改动前 4 例实测会红）（**不发版**，`VERSION` 仍 0.94.0） |
 | 99 | 元数据抓取**真机核验** + 三处线上真 bug：① Audible `response_groups` 带非法组名 `publisher` ⇒ 400、**整家永远 0 结果**（`publisher_name` 是**字段**，随 `product_desc` 照旧返回）② Lubimyczytac **多作者截断**（卡内多作者多个 `<a>`，旧实现三次独立 `findall` 按下标配对）③ Amazon 的 JS 校验页（`200` + `bm-verify` 跳转、**不含验证码关键词**）**静默 0 条**；Lubimyczytac 改逐卡 `bs4` + `_soup` 缺库如实回落；新增 `tests/test_metasources_scrape.py`（12 例，此前六家脆弱源解析逻辑零覆盖）+ 真机夹具；Goodreads/Kobo/Libro.fm 三家**取不到样本 ⇒ 挂起**（**不发版**，`VERSION` 仍 0.94.0） |
 | 98 | 仪表盘余留三条：**页级三态**（判据 = 聚合首屏真请求：`stores/stats` 的 `loaded`/`error` + `stores/library` 的 `loading`/`booksError`；唯一实现 `frontend/src/lib/dashboardPageState.ts` + 页级骨架 / 页级错误与「一起重试」）+ **快速预览补两个动作**（「编辑元数据」深链 `?tab=metadata`，**不挂第二个 `MetadataEditor`**；「移动到书库…」复用 `BookMoveDialog`）+ **上游首页截图像素级对照完成**（收尾换能读图的模型做完；结论：无需要修的视觉偏差；`docs/bookorbit/bookorbit-dashboard-styles.md` §7.8）（**不发版**，`VERSION` 仍 0.94.0） |
@@ -163,9 +144,12 @@
 ## 3. 排期候选（未立项）
 
 - 第 1 节 P0 目前**已清空**（第 93 期交付 `online-fallback`）；第 96 期取自**第 95 期审计批次 8**、
-  第 97 期取审计的四条 `[low]`、第 98 期取 P1「仪表盘余留」、第 99 期取 P1「书源网页抓取」
-  （已成**部分**——能核到样本的那部分已修，剩三家缺样本挂起）。下一期仍从 P1 取
-  （现只剩 EPUB 解析重试 / `fileops` 的 OPF 改写 / 书源抓取的**剩余三家**——最后这条需先有网络条件），
-  或按用户新需求立项。
+  第 97 期取审计的四条 `[low]`、第 98 期取 P1「仪表盘余留」、第 99 期取 P1「书源网页抓取」、
+  第 100 期取 P1「EPUB 解析重试」（**实测后删除该立项**）、第 101 期取 P1「书源网页抓取」的剩余三家
+  （Goodreads 已收口，另两家缺样本）。
+  ⚠️ 下一期从 P1 取时**只剩两条**：`novelforge/core/fileops.py` 的 OPF 改写正则（**字节等价不可证**，
+  须先证明等价才动）、「书源网页抓取：系列信息没有接进候选」（**新立项**，要动候选结构 →
+  `_VALUE_KEYS` → 收尾模式 → OPF 写入四处）；另有「剩余三家抓取源无可解析样本」一条**挂起**
+  （Kobo / Libro.fm / Amazon，需先能拿到真样本）。或按用户新需求立项。
 - 若要做重投入项（例如再次跑大库基准、或做 PG / Redis 相关专项），**先量化再动手**
   —— 本项目已在第 61 期明确：没有指标不许凭感觉优化。

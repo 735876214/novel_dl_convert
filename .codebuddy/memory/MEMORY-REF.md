@@ -1297,3 +1297,94 @@ txt 书**两个落点都留档**（`blobs == [b"", "旧的留档"]`）、显式�
   同第 99 期口径。本期新用例**全部自造最小 EPUB**，连夹具都不需要。
 - ⚠️ 跑 `pytest` 前清空全部代理变量（老铁律，否则 `httpx.InvalidURL: Invalid port: ':1]'` 45 例假失败）。
 
+
+
+---
+
+## 第 101 期铁律（书源网页抓取收口：Goodreads 整家失效 + AWS WAF 归因）
+
+### 一、结论
+
+- **Goodreads 旧实现（`<tr itemscope>` + `class="bookTitle"`）已彻底失效**：真结果页里
+  `<tr itemscope` / `bookTitle` / `authorName` **各出现 0 次** —— 站点下线了该结构，旧正则只能
+  匹配到 0 条，表现为**这一家静默返回无结果**（同第 99 期 Amazon 那类症状）。
+- 改用 **RSC flight payload** 解析：同一真样本（604317 B）**0 条 → 19 条**，多作者 / 年份 /
+  封面 / provider_id 全对，**未解析引用残留 0**。
+- **光靠「改 HTML 解析库」解决不了这一家**：新结果页由 React Server Components 渲染，
+  `ul[data-testid="book-list-item"]` 下 20 个 `<li>` 里**只有第一张带完整详情**，其余被放进
+  `<template id="P:c">` 占位符 —— 而 `BeautifulSoup(html, "html.parser")` **不解析 `<template>` 内容**
+  ⇒ DOM 通道只拿得到 1 本。**必须换数据源。**
+
+### 二、RSC flight payload 的解析要点（逐字事实）
+
+| 项 | 值 |
+|---|---|
+| `self.__next_f.push([1,"…"])</script>` 段数 | **66** |
+| 拼接后长度 | 258913 字符 |
+| `json.loads(f'"{blob}"')` 反转义后 | **180 行**，格式 `<hexid>:<payload>`（155 行带载荷） |
+| Book 对象（`__typename == "Book"` 且带 title） | **19** |
+| `title` 键出现次数 | **23** |
+
+- ⚠️ **必须按对象关联字段，不能全局抓同名 key**：`title` 比 Book 多 4 个，多出来的是**系列名**
+  ⇒ 全局抓会让书名与系列串台（`"legacyId":(\d+),"title":"(.*?)",…` 成套正则会好一些，
+  但按行 `json.loads` + 递归 walk 才是稳的）。
+- **前向引用两种形态**：① 纯文本 `"$73"` → 目标行 `73:T4f5,<正文>`（带 RSC 类型前缀
+  `T<十六进制长度>,`）；② 路径 `"$4d:props:children:1:…:bookSeries:0:series"`。
+- ⚠️ **React 元素是定长数组 `["$", <type>, <key>, <props>]`**（实测行 `4d` 是 4 项，`[3]` 才是 props）
+  ⇒ 路径里的 `props` 段**不是 list 下标**，直接 `int()` 会崩
+  （`invalid literal for int() with base 10: 'props'`），必须特判。
+- ⚠️ **禁止用 `unicode_escape` 全局反转义**：会让部分 `description` 出现 mojibake
+  （实测 `'â\x80\x9cThe entire universe will flicker for you.â\x80\x9d'`）
+  ⇒ 必须 **`json.loads` 逐行解析**。
+- `bookSeries` 是**嵌套的**：`[{"seriesPlacement":"2","series":{…"title":"…"}}]`，且 `series`
+  有时内联、有时是路径引用。
+
+### 三、AWS WAF 归因（三家要分开写）
+
+| 源 | 真机结果 | 判定 | 该说什么 |
+|---|---|---|---|
+| Goodreads | 首次 **200 / 604471 B** 真结果页；二跑同 URL **202 / 2432 B** | **AWS WAF** | 可重试 / 降频 / 带 Cookie |
+| Libro.fm | 搜索 **202 / 1999 B**；首页 **200 / 207585 B** | **AWS WAF** | 同上（站点可达，拦的是**搜索端点**） |
+| Kobo | **403 / 84598 B**，`<title>Challenged \| Kobo.com</title>` | **站点主动拒绝** | 与网络无关，别让用户重试 |
+
+- WAF 挑战页特征：`window.gokuProps` + `awswaf.com/…/challenge.js` + `<div id="challenge-container">`
+  + `AwsWafIntegration.getToken()`。
+- ⚠️ **新增判据必须排在 HTTP 202 兜底之前**：Goodreads / Libro.fm 回的就是 202 + 这个页，
+  放后面时新文案**永不出现**（实测确认过这个坑）。
+- ⚠️ 判据取 `low = text[:4000].lower()`，所以用小写 `gokuprops` / `awswaf`。
+- ⚠️ **同一 URL 不同时刻结果不同**（首次 200、二跑 202）⇒ 命中与否取决于**出口 IP 信誉**，
+  **不是**「站点挂了」也不是解析问题。这条正是「归因」为何重要的活证据。
+
+### 四、一件刻意不做的事（新立项）
+
+payload 里**有**系列信息（实测能解出 `("Remembrance of Earth's Past", "1")`），但**不返回**：
+
+- `_entry` 的候选结构是**固定键白名单**，**没有** `series` / `series_index`；
+- `metafetch._VALUE_KEYS`（派生自 `_CURRENT`）也没有这两个映射 ⇒ 传了会被**静默丢掉**；
+- ⚠️ 但 `metascore.FIELDS` **确实**把 `series`(4.0) / `series_index`(3.0) 列为 Enrichment 计分项
+  ⇒ **系统本就预期候选能带系列，只是这条线从未接上**（对 Amazon / 豆瓣等带系列的源同样如此）。
+
+接上要同时动**四处**：候选结构 → `_VALUE_KEYS` 字段映射 → 收尾模式 → OPF 写入。
+超出「修一个坏掉的抓取器」的范围（§7 单一真源 / 能力边界）
+⇒ **删掉已写的 `_rsc_series()`**，只把发现写进 `_search_goodreads` docstring + 挂 TODO。
+
+### 五、测试与夹具口径
+
+- ⚠️ **夹具必须保留「多段 + 段内换行」**：最初按 `seg[book_start:third_start]` 切片导致段落无换行
+  ⇒ `_rsc_rows` 得 **0 行、0 本书**（试两次都空）。正确做法：从真实页面拼出 180 行后**只挑 3 个真实行**，
+  `json.dumps(body)[1:-1]` 重新转义后包成一段 `__next_f.push`。
+  口径同 `tests/fixtures/legado2_real.json`：**真样本裁成代表性片段，不整页入库**。
+- ⚠️ **旧用例可能断言已下线的结构**：`tests/test_metasources_parsers.py::test_goodreads_按tr块解析`
+  断言的就是 `<tr itemscope>` ⇒ 全量跑必然 `IndexError`（这类红**不是**你改坏的，是站点变了）。
+- ⚠️ **测试函数名不能含 `「」`**（`SyntaxError: invalid character '「' (U+300C)`）。
+- **实测「改动前会红」**：用 Python（**不是** PowerShell 重定向）把 `_search_goodreads` 临时换回旧实现
+  ⇒ 8/10 条红；删掉 WAF 判据 ⇒ WAF 用例红并报出旧文案。脚本 `finally` 还原并已验证。
+
+### 六、操作陷阱
+
+- ⚠️ 探活前清空**全部**代理变量，否则报 `Invalid port: ':1]'` —— 会把「站点全挂」误判成事实
+  （本期第一次跑就踩到；第一次跑 pytest 也踩到，`gate_reason` 那两个桩是无关的）。
+- ⚠️ **改用 `_search_goodreads` 后线上正命中 WAF**（302 重定向）⇒ **真样本才是唯一可复现实证**，
+  别把「线上此刻能跑通」当作验收。
+- ⚠️ 语料与探针脚本**一律不入库**（`%TEMP%\nf-scrape-samples\`、`%TEMP%\nf_scrape_*.py`）。
+- ⚠️ **并行会话脏项**（`.codebuddy/memory/2026-10-03.md`、`.vscode/settings.json` 等）**不回退不提交**。
