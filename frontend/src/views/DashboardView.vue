@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 import DashboardSettingsSheet from '@/components/dashboard/DashboardSettingsSheet.vue'
 import DashboardShelfRow from '@/components/dashboard/DashboardShelfRow.vue'
 import DashboardWelcome from '@/components/dashboard/DashboardWelcome.vue'
@@ -10,6 +11,7 @@ import DashboardWidgetRow from '@/components/dashboard/DashboardWidgetRow.vue'
 import FirstRunNotice from '@/components/dashboard/FirstRunNotice.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { getDashboardGreeting } from '@/lib/dashboardGreeting'
+import { dashboardPageState } from '@/lib/dashboardPageState'
 import { useAuthStore } from '@/stores/auth'
 import { useDashboardStore } from '@/stores/dashboard'
 import { useLibraryStore } from '@/stores/library'
@@ -38,6 +40,9 @@ const greetingText = computed(() => getDashboardGreeting(now.value, auth.timezon
 const displayName = computed(() => auth.display.trim())
 
 onMounted(() => {
+  // 页级骨架得能自己解开：部件行在 `loading` 期**不渲染**，没人替它打这一发统计请求。
+  // `stats.load()` 自身按「书库 + 已加载」去重，所以部件挂起来之后的重复调用不会多发请求。
+  void stats.load()
   greetingTimer = window.setInterval(() => {
     now.value = new Date()
   }, 60_000)
@@ -59,6 +64,24 @@ const shelfLayoutClass = computed(() =>
     ? 'grid min-w-0 items-start gap-5 xl:grid-cols-2'
     : 'space-y-5',
 )
+
+// —— 页级三态（第 98 期）：判据只此一处，见 `lib/dashboardPageState.ts` ——
+const phase = computed(() =>
+  dashboardPageState({
+    noLibraries: library.hasNoLibraries,
+    emptied: dashboard.isEmpty,
+    statsLoaded: stats.loaded,
+    statsError: stats.error,
+    booksLoading: library.loading,
+    booksError: library.booksError,
+  }),
+)
+
+/** 页级错误：两条首屏请求一起重试（只有一条失败时仍走区块级那张卡片，不升级） */
+function retryPage(): void {
+  void stats.load(true)
+  void library.loadBooks(true)
+}
 </script>
 
 <template>
@@ -68,8 +91,10 @@ const shelfLayoutClass = computed(() =>
         <!-- 0 库时的首屏引导：压在部件之上，第一个看见的就是「先建书库」（第 38 期） -->
         <FirstRunNotice class="animate-fade-up" />
 
-        <!-- 统计拉取失败：部件会各自退化成骨架/空，这里统一给一条可重试提示（第 49 期） -->
-        <Card v-if="stats.error" padding="sm">
+        <!-- 统计拉取失败：部件会各自退化成骨架/空，这里统一给一条可重试提示（第 49 期）。
+             ⚠️ 两条首屏请求都失败时改由下面的**页级**错误承担（否则一屏两张红卡），
+             所以这里只在「页级还不是 error」时出现。 -->
+        <Card v-if="stats.error && phase !== 'error'" padding="sm">
           <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
             <span>统计加载失败，部分部件显示不完整：{{ stats.error }}</span>
             <Button size="sm" variant="secondary" class="ml-auto" @click="stats.load(true)">重试</Button>
@@ -103,20 +128,42 @@ const shelfLayoutClass = computed(() =>
           </button>
         </div>
 
-        <DashboardWidgetRow class="animate-fade-up" />
+        <!-- 页级错误（第 98 期）：两条首屏请求都失败、且一条都没拿到时给一次「一起重试」 -->
+        <Card v-if="phase === 'error'" padding="sm">
+          <div class="flex flex-wrap items-center gap-2 text-[12.5px] text-destructive">
+            <span>首页数据加载失败：{{ stats.error }}；{{ library.booksError }}</span>
+            <Button size="sm" variant="secondary" class="ml-auto" @click="retryPage">重试</Button>
+          </div>
+        </Card>
 
-        <!-- 书架行：单列 / 两列（面板里切） -->
-        <div v-if="dashboard.enabledShelves.length" :class="shelfLayoutClass">
-          <DashboardShelfRow
-            v-for="(shelf, index) in dashboard.enabledShelves"
-            :key="shelf.id"
-            :shelf="shelf"
-            class="animate-fade-up min-w-0"
-            :style="{ animationDelay: `${index * 100}ms` }"
-          />
+        <!--
+          页级骨架（第 98 期）：只在「两条首屏请求都没 settle、书目还在路上」时出现
+          （判据只有一处实现：`lib/dashboardPageState.ts`）。任一条 settle 就换成真内容 ——
+          骨架绝不盖住已经就绪的那一半；没有任何请求在路上时也绝不出现（那不叫加载）。
+        -->
+        <div v-if="phase === 'loading'" data-page-skeleton aria-busy="true" class="space-y-5">
+          <p class="px-1 text-[12.5px] text-muted-foreground">正在载入首页…</p>
+          <Skeleton class="h-55 w-full rounded-2xl" />
+          <Skeleton class="h-40 w-full rounded-2xl" />
+          <Skeleton class="h-40 w-full rounded-2xl" />
         </div>
 
-        <DashboardWelcome v-if="dashboard.isEmpty" />
+        <template v-else-if="phase !== 'error'">
+          <DashboardWidgetRow class="animate-fade-up" />
+
+          <!-- 书架行：单列 / 两列（面板里切） -->
+          <div v-if="dashboard.enabledShelves.length" :class="shelfLayoutClass">
+            <DashboardShelfRow
+              v-for="(shelf, index) in dashboard.enabledShelves"
+              :key="shelf.id"
+              :shelf="shelf"
+              class="animate-fade-up min-w-0"
+              :style="{ animationDelay: `${index * 100}ms` }"
+            />
+          </div>
+
+          <DashboardWelcome v-if="dashboard.isEmpty" />
+        </template>
       </div>
     </main>
 

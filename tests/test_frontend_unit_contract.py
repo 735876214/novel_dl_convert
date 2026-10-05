@@ -254,6 +254,14 @@ EXPECTED_SPECS = (
     # 「补协议 / 去空格 / 加斜杠」则会让后端给出的拒绝原因指向一个并不存在的地址；
     # 把后端的 `detail`（人话原因）吞成自编的一句「导入失败」⇒ 用户不知道该去哪儿开开关。
     "src/lib/sourceUrlImport.spec.ts",
+    # 第 98 期：仪表盘**页级三态**（loading / error / empty / ready）。判据只吃真实请求状态
+    # （`stores/stats` 的 `loaded`/`error` + `stores/library` 的首次 `loading`/`booksError`），
+    # 所以它最典型的坏法是**静默撒谎**：条件写反 ⇒ 首页永远显示骨架（或者有数据时被骨架盖住），
+    # 而界面照常渲染、不报任何错。第 82 / 83 期拒绝做页级三态的正是这个理由
+    # （`docs/bookorbit/bookorbit-dashboard-styles.md` §7.4：硬造一个 page-level flag 会是假的）。
+    "src/lib/dashboardPageState.spec.ts",
+    # 同一件事的**接线**面：页面到底读哪几条状态、重试是不是把两条真的一起重拉。
+    "src/views/DashboardView.spec.ts",
 )
 
 
