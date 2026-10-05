@@ -1130,11 +1130,28 @@ txt 书**两个落点都留档**（`blobs == [b"", "旧的留档"]`）、显式�
   （`props: { open, bookIds }`；它自己会 toast，父组件**别重复提示**，只重拉书目与库计数）。
 - 浮层里**没有就地编辑器**；批量删除的「撤销」仍留在书架页。
 
-#### 六、⚠️ 本机**看不了图** —— 涉及截图的验收项要事先说清
+#### 六、⚠️ `agent-browser` 在本机**已不可用**；截图改用 Edge CDP 无头
 
-`read_image` 对本机模型直接拒绝（「does not declare image input」）；`workflow` 里用
-`provider/model: deepseek-v4-flash-vision-exp` 转交子代理也只拿到 `null`。
-⇒ 「与上游截图的**像素级**比对」做不成，只能做**源码级复核**（上游检出用 §0 的部分克隆 + 稀疏检出到 `%TEMP%`，
-走本机代理 `127.0.0.1:7897`；PNG `docs/images/dashboard-overview.png` 5.68 MB **不入库**）。
-以后遇到这类验收项，**先声明工具边界**，别等做完才发现没法验收。
+`agent-browser`（0.38.1）会去连一个 **CEF 远程调试实例**（`http://127.0.0.1:8080/` 的 `<title>` 就是
+`CEF remote debugging`），然后**挂住不返回** —— 三次尝试（含放进 PowerShell 后台 job）都没产出文件、
+无残留进程。⚠️ §7.7 记的「本机已装 agent-browser、冒烟跑通」**已过时**。
+
+**可用替代（第 98 期收尾实测有效、零新依赖）**：直接用本机 Edge 的无头 CDP 截图 ——
+`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe` 带
+`--headless=new --remote-debugging-port=9333 --user-data-dir=<临时目录> --window-size=W,H`，
+流程 `Page.enable` → `Emulation.setDeviceMetricsOverride` → `Page.navigate`（等 6 s）→
+`Runtime.evaluate` 用**原生 setter + `input` 事件**填登录表单并点「登录」→ 再 `Page.navigate`（等 6 s）
+→ `Page.captureScreenshot`（`captureBeyondViewport: true` 拿整页）。脚本 `%TEMP%\nf_shot.py`（**不入库**），
+只用标准库（含手写 WebSocket 帧）。⚠️ 本机服务端口**不是** §7.7 的 8412，先查
+`Get-CimInstance Win32_Process | ? CommandLine -like '*uvicorn novelforge*'` 拿真实 `--port`（本次是 8413）。
+
+#### 七、看图对照的结论：**外壳逐字一致，差异只在既定范围三处**
+
+两侧截图都看过之后的结论（写进 `docs/bookorbit/bookorbit-dashboard-styles.md` §7.8 ④）：
+外壳 `h-55 rounded-2xl border border-primary/40 bg-card/30 shadow-sm backdrop-blur-[1px]`
+与书架行外壳 **逐字一致**，结构同序；差异只有 ① 语言 ② **默认启用集合**（上游默认 6 张、且把
+`library-overview` 设为 `enabled: false`；本项目默认 8 件、该卡排第一）③ 侧栏分区粒度。
+⇒ **没有发现需要修的视觉偏差**。
+⚠️ 看图时别把上游 `Reading DNA` 卡上的 `Rhythm` 横条当成我们的 `reading-rhythm`（那个 id 在本项目
+已落定为「入库节奏」，第 83 期决策）。
 

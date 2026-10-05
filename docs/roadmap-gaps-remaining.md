@@ -5547,17 +5547,49 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
   **永远解不开的骨架**，正是 §7.4 说的「假」。
 - 上游三态**还有第二层**：每个 `DashboardScroller` 自带 loading / error / empty 与骨架带
   （`SKELETONS_PER_BAND = 8`、`w-[120px]`）—— 这一层我们早有（`useWidgetState` + 各行骨架），本轮**没动**。
-- ⚠️ **本机模型不支持图片输入**：`read_image` 直接拒绝；转交视觉模型子代理（`workflow` 的
-  `provider/model` 覆盖）也拿不到结果 ⇒ **与上游截图的像素级比对没做成**，只能给源码级复核。
-  这条已记进 §7.4 / §7.8 与 `docs/TODO.md`。
+- ⚠️ **主体交付时本机模型不支持图片输入**：`read_image` 直接拒绝；转交视觉模型子代理（`workflow` 的
+  `provider/model` 覆盖）也拿不到结果 ⇒ 当时**与上游截图的像素级比对没做成**，只给了源码级复核。
+  ⇒ **收尾时用户换了能读图的模型，这一步已补做**（见下）。
 
-### 六、未做及原因
+### 六、收尾补做：上游截图的像素级对照（2026-10-05 晚）
 
-- 「与上游截图的**像素级**比对」：见上（工具限制）—— 需要人工看一眼那张 PNG，或换能读图的模型。
+用户说「换能读图的模型了，再跑一次」⇒ 本轮把第 98 期唯一没做成的细分项补完。
+
+**拿到本项目截图的路径（下次照做）**：
+
+- 本机服务在 **`http://127.0.0.1:8413`**（`admin` / `changeme`）；⚠️ 端口是启服务时定的，
+  别照抄 §7.7 记的 8412 —— 先 `Get-CimInstance Win32_Process` 看 `uvicorn novelforge.server:app --port` 的实际值。
+- ⚠️ **`agent-browser` 在本机已不可用**：它连的是一个 CEF 远程调试实例
+  （`http://127.0.0.1:8080/` 的 `<title>` 就是 `CEF remote debugging`），然后**挂住不返回**；
+  三次尝试（其中一次放进 PowerShell 后台 job）**都没产出文件**，也没有残留进程。
+- 改用**本机 Edge 的 CDP 无头截图**：`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`
+  带 `--headless=new --remote-debugging-port=9333 --user-data-dir=<临时目录>`，
+  走 `Page.navigate` → `Runtime.evaluate` 填登录表单 → 再 `Page.navigate` → `Page.captureScreenshot`
+  （`captureBeyondViewport: true` 拿整页）。**不引入任何新依赖**（只用标准库 + 手写 WebSocket 帧），
+  脚本在 `%TEMP%\nf_shot.py`（**不入库**）。
+
+**看图结论（首次以图像为依据）**：
+
+- **逐字一致**：部件卡外壳 `h-55 rounded-2xl border border-primary/40 bg-card/30 shadow-sm
+  backdrop-blur-[1px]`（宽度两档 `w-[220px]` / `w-[336px]`）；书架行外壳同款 `rounded-2xl border-primary/40
+  bg-card/30`。结构层（部件行 → 继续阅读 → 最近添加 → 发现新书）与上游同序。
+- **三处差异，均属既定范围**：① 界面语言（上游英文 / 本项目中文，§2.2 已判「不算缺口」）；
+  ② **默认启用集合**不同 —— 上游截图里是 6 张统计卡，本项目默认 8 件且 `library-overview` 排第一
+  （上游把它设为 `enabled: false`，见上游 `useDashboardWidgets.ts` 的 `DEFAULT_WIDGETS`），
+  另有本项目自开的 `reading-time`（默认不启用）⇒ 差异在**默认启用集合**，不在**卡片集合**；
+  ③ 侧栏分区粒度（本项目多出「浏览」「帮助」两段）。
+- ⚠️ **看图时的坑**：上游截图里 `Reading DNA` 卡上的 `Rhythm` 横条是**阅读基因的内部维度**，
+  与本项目那个已落定为「入库节奏」（入库数量）的 `reading-rhythm` **不是一回事**（第 83 期决策，
+  见 §5 第 4 条）—— 别把两者对上。
+- **结论：没有发现需要修的视觉偏差。** ⇒ §7.4 的「界面肉眼冒烟」一行至此**全部收口**
+  （肉眼冒烟第 83 期已做 + 像素对照本轮已做）。
+
+### 七、未做及原因
+
 - 上游的 i18n / onboarding tour / `/api/v1/dashboard/*` 批量接口层：仍按 §7.4 保持**刻意差异**。
 - 页级三态**没有**做「按行 / 按块的第二层」改造：那一层第 83 期就有，本轮不重复造。
 
-### 七、实测（收尾）
+### 八、实测（收尾）
 
 | 项 | 值 |
 |---|---|
@@ -5567,11 +5599,21 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 | 契约 | `tests/test_frontend_unit_contract.py`（含 `EXPECTED_SPECS` 自守）/ `test_visual_tokens_contract.py` / `test_dashboard_widget_contract.py` 共 **24 passed** |
 | `VERSION` | 仍 `0.94.0`（**未发版**） |
 
-### 八、收尾
+**收尾补做那一轮（只改文档、零代码改动）新增的验证**：
+
+| 项 | 值 |
+|---|---|
+| `tests/check_doc_anchors.py` | **exit 0** |
+| 后端 / 前端套件 | **未重跑** —— 本轮零代码改动（`git diff` 只含 `docs/` 与 `.codebuddy/memory/`），重跑不产生新信息 |
+| 截图工具 | Edge CDP 无头（`%TEMP%\nf_shot.py`，**不入库**）；两侧 PNG 均在 `%TEMP%`、**不入库** |
+
+### 九、收尾
 
 - 提交（按能力分）：`feat(frontend): 仪表盘页级三态（判据 = 聚合首屏真请求）` →
   `feat(frontend): 快速预览补「编辑元数据」与「移动到书库」两个动作` →
   `docs(98): 仪表盘余留实施记录 + 上游对照 + TODO + 记忆`。
+  收尾补做那一轮另有一笔（只动文档）：`docs(98): 上游截图像素级对照结论 + 工具链修正`
+  （`dashboard-styles.md` §7.4/§7.8 + 本节 + `TODO.md` + 记忆）—— **不含任何代码改动**。
 - 文档：本节 + `docs/bookorbit/bookorbit-dashboard-styles.md`（§7.4 三行 + §7.6 表末行 + 新增 §7.8）+
   `docs/TODO.md`（头 / §0 基线 / P1 删条目并留结论 / §2 索引补 98 / §3）+ `docs/component-api.md`
   （`BookPreviewDialog` 那行改成五个动作）。

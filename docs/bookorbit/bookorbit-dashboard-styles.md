@@ -393,7 +393,7 @@
 | 上游硬编码调色板（`text-orange-500` / `bg-green-500` …） | `docs/DESIGN.md` 明令禁止；深色主题下会失配（§2.4 第 3 条）。 |
 | `/api/v1/dashboard/widgets/batch`、`/api/v1/dashboard/scrollers/batch` | 单用户直连 DB，无此接口层（§2.4 第 4 条）。 |
 | onboarding tour / `data-tour` 锚点 | 新功能，不属「样式对照」。 |
-| 界面肉眼冒烟 | **已补做**（第 83 期收尾） —— 本机已装 `agent-browser`；冒烟跑通并抓出「库范围」受控 checkbox 的中间态缺陷（见 §7.7）。仅剩「与上游截图逐像素比对」未做（需先取回上游 PNG）。<br>⇒ 第 98 期**已取回 PNG**（上游 commit `c292d6c` 的 `docs/images/dashboard-overview.png`，5.68 MB，落在 `%TEMP%`、**不入库**）；⚠️ 但本机模型**不支持图片输入** ⇒ **像素级比对仍待人工（或换成能看图的模型）**，本期改做**源码级复核**（见 §7.8）
+| 界面肉眼冒烟 | **已补做**（第 83 期收尾） —— 本机已装 `agent-browser`；冒烟跑通并抓出「库范围」受控 checkbox 的中间态缺陷（见 §7.7）。仅剩「与上游截图逐像素比对」未做（需先取回上游 PNG）。<br>⇒ 第 98 期**已取回 PNG**（上游 commit `c292d6c` 的 `docs/images/dashboard-overview.png`，5.68 MB，落在 `%TEMP%`、**不入库**）；主体交付时模型不支持图片输入、只做了源码级复核，**收尾换成能读图的模型后把像素对照做完了** —— 结论：外壳与书架行 class 逐字一致、结构同序，差异只在语言 / 默认启用集合 / 分区粒度三处，**没有发现需要修的视觉偏差**。⚠️ `agent-browser` 在本机已不可用（会挂住，见 §7.8 ④），改用 Edge CDP 无头截图。**本条至此全部收口** |
 
 ### 7.5 下次怎么续用本文件
 
@@ -501,13 +501,46 @@
 （深链 `?tab=metadata` / `BookMoveDialog`），浮层里**没有**就地编辑器；批量删除的「撤销」仍留在书架页
 （仪表盘这一行只负责重拉书目与库计数）。
 
-**④ 上游首页截图的比对**
+**④ 上游首页截图的比对**（第 98 期收尾**已补做**）
 
 PNG 已按 §0 取回（`docs/images/dashboard-overview.png`，5.68 MB，**落在 `%TEMP%`、不入库、不进提交** ——
-按 §5 第 1 条的脱敏口径）。⚠️ **本机模型不支持图片输入**（`read_image` 直接拒绝；转交视觉模型子代理也拿不到结果）
-⇒ **像素级比对没做成**，本轮换成上面那份**源码级复核**：读上游 `DashboardView.vue` /
-`DashboardScroller.vue` / `DashboardWidgetRow.vue` / `useDashboardScroller.ts` 逐条比对。
-**待办**：要像素级结论，需人工看一眼那张 PNG，或把这一步交给能读图的模型。
+按 §5 第 1 条的脱敏口径）。第 98 期主体交付时本机模型不支持图片输入，只做了源码级复核；
+**收尾时换成能读图的模型，两侧截图都看成了** ⇒ 下面是**首次以图像为依据**的对照结论。
+
+**怎么拿到本项目的截图**（下次照做）：本机服务在 **`http://127.0.0.1:8413`**（`admin` / `changeme`，
+⚠️ 不是 §7.7 记的 8412 —— 端口是启服务时指定的，别照抄）。⚠️ **`agent-browser` 在本机不可用**：
+它会去连一个 CEF 远程调试实例（`http://127.0.0.1:8080/` 的标题就是 `CEF remote debugging`）然后**挂住不返回**，
+三次尝试（含放进后台 job）都没产出文件。可用替代：**直接用本机 Edge 的 CDP 无头截图**
+（`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`，`--headless=new
+--remote-debugging-port=9333`，走 `Page.captureScreenshot` + `captureBeyondViewport`），
+脚本落在 `%TEMP%\nf_shot.py`（本机临时脚本，**不入库**）。它**不引入任何新依赖**（只用标准库 + 手写 WebSocket 帧）。
+
+**看图结论：结构层一致，三处真实差异**
+
+| 维度 | 上游 | 本项目 | 判断 |
+|---|---|---|---|
+| 部件卡外壳 | `h-55 rounded-2xl border border-primary/40 bg-card/30 shadow-sm backdrop-blur-[1px]`，宽度 `w-[220px]` / `w-[336px]` | **逐字一致** | ✅ |
+| 书架行外壳 | 同款 `rounded-2xl border border-primary/40 bg-card/30` | **逐字一致** | ✅ |
+| 侧栏结构 | 品牌块 → 主导航 → LIBRARIES（带计数）→ SMART SCOPES（带计数）→ COLLECTIONS（带计数）→ 底部 | 品牌块 → 主导航 → 浏览 → 库（带计数 + 筛选框）→ 智能书架 → 收藏夹 → 帮助 → 底部版本号 | ◐ **本项目分区更细**（多出「浏览」「帮助/说明书/更新日志/关于」），符合本项目「本地阅读器」形态 |
+| 顶部栏 | 搜索框居中偏左，右侧 10 个图标 | 搜索框左侧 + 右侧 10 个图标 | ◐ 图标数量一致，布局微差 |
+| 问候语 | `Good afternoon, Neon` + 副标题 | `下午好 admin` + 右侧「自定义」按钮 | ◐ 本项目把「自定义」提到问候语同行（上游在别处） |
+
+**三处真实差异（都不是缺陷，但值得记下来）**
+
+1. **界面语言**：上游全英文，本项目全中文 —— §2.2 已判「形态不同，不算缺口」，此处只是图像证据。
+2. **上游的统计卡在**截图里是 6 张（Reading Streak / Currently Reading / Reading Goal 2026 /
+   Reading DNA / Monthly Challenge / Highlight of the Day），**本项目默认启用 8 件**：
+   `library-overview` 排第一（上游默认把它设为 `enabled: false`，见上游 `useDashboardWidgets.ts`
+   的 `DEFAULT_WIDGETS` 第 18 行），且本项目另有自开的 `reading-time`（默认不启用）。
+   ⇒ **差异来自「默认启用集合」而不是「卡片集合」**：前 12 个 id 与上游逐一对应（第 83 期已有契约钉住）。
+3. **`reading-rhythm` 的语义**：上游截图里 `Reading DNA` 卡带的四条横条（Length / Variety / Rhythm /
+   Time）是**阅读基因的内部维度**；本项目的 `reading-rhythm` **是「入库节奏」**（入库数量柱状图），
+   两个 id 的语义已经分道（第 83 期决策，见 §5 第 4 条）⇒ 看图时**别把上游的 Rhythm 横条误当成
+   本项目的「入库节奏」卡**。这正是当初要记这条的原因。
+
+**结论**：**没有发现需要修的视觉偏差**。外壳与书架行的 class 是逐字对齐的，结构层（部件行 → 书架行 →
+发现行）与上游同序；差异集中在**语言、默认启用集合、分区粒度**三处，都属既定范围（§2.2 / §7.4）。
+⇒ §7.4 的「界面肉眼冒烟」一行至此**全部收口**（肉眼冒烟第 83 期已做、像素对照组第 98 期已做）。
 
 **⑤ 本轮的文件增删**
 
