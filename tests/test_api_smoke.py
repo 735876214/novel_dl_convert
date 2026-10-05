@@ -102,6 +102,16 @@ def test_求书接口已随决策移除(client, auth_headers):
     assert client.get("/api/requests/config", headers=auth_headers).status_code == 404
 
 
+def test_格式分面接口已随零调用者移除(client, auth_headers):
+    """第 95 期删掉了 `/api/library-facets`（`docs/agents-audit-95.md` §2）。
+
+    它是一个**全链路零调用者**的旧端点：`loadLibraryFacets()` 只定义与导出、没有任何
+    页面调用它，服务端那份 `library.library_groups()` 也只服务它一个。钉住 404，
+    防止「删了前端、接口又被人加回来」的半删状态。
+    """
+    assert client.get("/api/library-facets", headers=auth_headers).status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # 书库：列表 / 新建 / 修改 / 扫描 / 来源目录
 # ---------------------------------------------------------------------------

@@ -103,7 +103,8 @@ def test_手动编辑只存服务端不改文件(client, auth_headers, default_r
     r = client.post(f"/api/books/{b['id']}/metadata", headers=auth_headers,
                     json={"fields": {"publisher": "服务端社", "title": "服务端标题"}})
     assert r.status_code == 200, r.text
-    assert r.json()["written"] == []                 # 不再写文件
+    assert "written" not in r.json(), "第 95 期删掉了恒为空的兼容字段 written"
+    assert r.json()["changed"], "改没改要看 changed，不是看那个恒空的 written"
     assert p.read_bytes() == before                  # EPUB 字节不变
 
     # 列表 / 卡片反映服务端值

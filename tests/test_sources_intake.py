@@ -28,7 +28,7 @@ import pytest
 
 from novelforge import config
 from novelforge.core import db
-from novelforge.sources import base, intake, ledger, store
+from novelforge.sources import base, formats, intake, ledger, store
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "legado_sample.json"
 SOURCES_DIR = lambda: pathlib.Path(config.SOURCES_DIR)          # noqa: E731 —— 目录随夹具变
@@ -143,6 +143,38 @@ def test_本项目导出的文件能从快路导回去(client, auth_headers):
     assert data["format"] == "nf-export"
     # 导出→导入幂等：判「重复」而不是「更新」（第 86 期已有的承诺，快路也必须守住）
     assert data["counts"]["duplicate"] == 1 and data["counts"]["update"] == 0
+
+
+def test_格式中文名由后端下发且与格式轴逐字一致(client, auth_headers):
+    """第 95 期：格式的**中文名**只有一个产出点（`formats/base.py:format_label`）。
+
+    此前前端 `lib/sourceImport.ts` 自抄了一份 `FORMAT_LABELS`，5 个键里已有 3 个与后端的
+    `display_name` 悄悄发散。现在三条导入路都下发 `format_label`，界面照原样显示；
+    这条用例把它与 `formats.FORMATS` 钉在一起 —— 谁再抄一份、谁改名字漏改一处，都会红。
+    """
+    entry = _html_entry()
+    blob = json.dumps(entry).encode("utf-8")
+    a = client.post("/api/sources", headers=auth_headers, content=blob).json()
+    assert a["format_label"] == formats.format_label(a["format"]) == "Legado / 阅读 App 书源"
+
+    c = client.post("/api/sources/import", headers=auth_headers,
+                    json={"payload": json.dumps(entry), "origin": "t", "dry_run": True}).json()
+    assert c["format"] == a["format"] and c["format_label"] == a["format_label"]
+
+    # 每种格式都下发出中文名，且**就是**格式轴那一个（不是第二份表）
+    for ad in formats.FORMATS:
+        assert formats.format_label(ad.format_id) == ad.display_name, ad.format_id
+
+
+def test_落盘那条路也带回格式中文名(client, auth_headers):
+    """`dry_run=False` 的分支同样要带 —— 界面的 toast 两条分支都读它。"""
+    r = client.post("/api/sources/import", headers=auth_headers,
+                    json={"payload": json.dumps(_html_entry()), "origin": "t",
+                          "dry_run": False})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["dry_run"] is False
+    assert data["format_label"] == "Legado / 阅读 App 书源"
 
 
 # ---------------- ② 两种动作口径 ----------------

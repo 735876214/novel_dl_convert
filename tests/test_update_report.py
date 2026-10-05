@@ -141,8 +141,14 @@ def test_找不到epub就如实说并只留档txt(tmp_path, isolated, monkeypatc
         "找不到 EPUB 要如实说，不能假装更新成功"
 
 
-def test_兼容壳仍返回Path(tmp_path, isolated, monkeypatch):                        # noqa: ARG001
-    mgr, txt, _ = _setup(tmp_path, isolated, monkeypatch, local_chapters=2,
-                         source_chapters=_chapters(("第 1 章", "正文 1"), ("第 2 章", "正文 2"),
-                                                   ("第 3 章", "新正文 3")))
-    assert asyncio.run(mgr.update(txt, {})) == txt, "旧调用方拿到的仍是 Path"
+def test_追更只有一个入口_update_report(tmp_path, isolated, monkeypatch):                # noqa: ARG001
+    """第 95 期删掉了那个只回 `Path` 的兼容壳 `update()`（§7.1 不为向后兼容留路）。
+
+    同一个动作留两个入口，迟早有人只改其中一个 —— 第 88 期那半天的「入库没标脏」
+    就是这么漏的。钉住「兼容壳不再存在」，防止它被人以「旧调用方还在用」为由加回来。
+    """
+    mgr, _txt, _ = _setup(tmp_path, isolated, monkeypatch, local_chapters=2,
+                          source_chapters=_chapters(("第 1 章", "正文 1"),
+                                                    ("第 2 章", "正文 2")))
+    assert not hasattr(mgr, "update"), "只回 Path 的兼容壳 update() 已删，别再长回来"
+    assert hasattr(mgr, "update_report"), "追更的唯一入口是 update_report"

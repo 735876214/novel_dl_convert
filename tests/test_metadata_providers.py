@@ -153,7 +153,11 @@ def test_行内测试用输入框里的凭据且不落盘(client, auth_headers, 
     """行内「测试」的语义：**用当前输入框的值**试一次，且**不写进配置**。
 
     否则只有两条烂路：测的是上次保存的旧值，或者为了测试先保存一次（把「试一下」
-    变成写操作）。这里同时钉住「传了 keys 就用 keys」与「没传就沿用已保存值」。
+    变成写操作）。这里同时钉住「传了 configs 就用 configs」与「没传就沿用已保存值」。
+
+    ⚠️ 第 95 期收敛：入参只剩 `configs`（整行字段）。早先那个只带主密钥的 `keys`
+    已删 —— 它是同一件事的第二套入参，前端从未用过。第一段用 `configs` 复现原
+    「刚输入、还没保存」的语义（主密钥也是行内字段之一）。
     """
     seen: list = []
 
@@ -165,15 +169,22 @@ def test_行内测试用输入框里的凭据且不落盘(client, auth_headers, 
 
     # ① 带着「刚输入、还没保存」的凭据 → 用它，且配置里不该出现它
     r = client.post("/api/metadata/probe", headers=auth_headers,
-                    json={"sources": ["hardcover"], "keys": {"hardcover": "draft-token"}})
+                    json={"sources": ["hardcover"],
+                          "configs": {"hardcover": {"hardcover_api_token": "draft-token"}}})
     assert r.status_code == 200, r.text
     assert seen == [("hardcover", "draft-token")], seen
     mf = client.get("/api/config", headers=auth_headers).json()["config"]["metadata_fetch"]
     assert mf["has_hardcover_api_token"] is False, "行内测试绝不能把凭据写进配置"
 
-    # ② 不传 keys → 沿用已保存值（先保存一个）
+    # ①′ 早期的 `keys` 入参已删：先存一个已保存值，再喂 `keys` 一个不同的 —— 必须仍是已保存值
     client.put("/api/config", headers=auth_headers,
                json={"metadata_fetch": {"hardcover_api_token": "saved-token"}})
+    seen.clear()
+    client.post("/api/metadata/probe", headers=auth_headers,
+                json={"sources": ["hardcover"], "keys": {"hardcover": "legacy-token"}})
+    assert seen == [("hardcover", "saved-token")], f"keys 入参已删，不该再生效：{seen}"
+
+    # ② 不传 configs → 沿用已保存值
     seen.clear()
     client.post("/api/metadata/probe", headers=auth_headers, json={"sources": ["hardcover"]})
     assert seen == [("hardcover", "saved-token")], seen
@@ -234,5 +245,18 @@ def test_配置回显按注册表掩码所有密钥(client, auth_headers, isolat
     assert mf["hardcover_api_token"] not in (token, ""), "该键必须掩码回显，不能回明文"
     assert mf["has_aladin_ttbkey"] is True
     assert mf["has_comicvine_api_key"] is False
-    # 兼容旧字段名仍在
-    assert mf["has_googlebooks_key"] is False
+    assert "has_googlebooks_key" not in mf, "第 95 期删掉了这个兼容旧字段名的双写键"
+    assert mf["has_googlebooks_api_key"] is False
+
+
+def test_旧元数据源接口已删除返回404(client, auth_headers):
+    """删功能要删干净（AGENTS.md §1）：`/api/metadata/sources` 是自陈「兼容端点」的第二份状态聚合。
+
+    第 57 期起设置页的唯一数据源就是 `/api/metadata/providers`；仓内唯一还读旧端点的是
+    前端那道「后端可能是旧版本」的 catch 兜底 —— 同仓同版本发布，那条路永远走不到。
+    第 95 期连同兜底一起删掉，这里钉住它不能悄悄长回来。
+    """
+    r = client.get("/api/metadata/sources", headers=auth_headers)
+    assert r.status_code == 404, f"旧兼容端点还在：{r.status_code}"
+    # 新端点必须照常活着（别把两个一起删掉）
+    assert client.get("/api/metadata/providers", headers=auth_headers).status_code == 200
