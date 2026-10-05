@@ -4,23 +4,32 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-05 —— 第 101 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续七轮）：
-书源网页抓取收口 —— **Goodreads 旧结构已被站点下线、整家恒返 0 条的线上真 bug 已修**（改用 RSC flight
-payload，同一真样本 0 条 → 19 条），并把 AWS WAF 挑战页的**归因**与「站点改版 / 站点主动拒绝」分开。
+**最后更新**：2026-10-05 —— 第 102 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续八轮）：
+**元数据抓取地基** —— 14 家源的声明收口到 `novelforge/core/sources/`（7 张手工表改派生）、
+进程内**缓存 + 按源限流**、**按记录标识取详情**（只接真机核验过的 iTunes / Open Library 两家）、
+两个配置键（缓存时长 / 按 ID 回查，含环境变量兜底与前端开关）。**零新源**、改用户可见行为为零。
 按用户要求，本轮起**已做完的条目直接从本文件删除**（不再标 `[x]` 留痕），历史一律去 roadmap 查。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload；`VERSION` = **0.94.0**
-  （**七轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
-  第 98 期仪表盘余留、第 99 期元数据抓取真 bug、第 100 期 EPUB 判定、第 101 期 Goodreads 整家失效修复，用户七次都选「先不发版」；单一真值源，`GET /health` 下发）；`CHANGELOG.md` 最新段仍是 `V0.94.0`。
-- 测试基线（第 101 期）：后端 **2184 例（2159 passed / 0 failed / 0 errors / 25 skipped）**；前端 **67 spec / 686 例**（本期前端零改动，未重跑）。
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基；`VERSION` = **0.94.0**
+  （**八轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
+  第 98 期仪表盘余留、第 99 期元数据抓取真 bug、第 100 期 EPUB 判定、第 101 期 Goodreads 整家失效修复、
+  第 102 期元数据地基，用户八次都选「先不发版」；单一真值源，`GET /health` 下发）；`CHANGELOG.md` 最新段仍是 `V0.94.0`。
+- 测试基线（第 102 期）：后端 **2263 例（2238 passed / 0 failed / 0 errors / 25 skipped）**；
+  前端 **67 spec / 686 例**（本期只加了两个设置项控件，未重跑）。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
   （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
   ⚠️ 长跑 pytest 必须**后台跑 + 轮询 junit**（前台会被 harness 的「长时间无输出」上限取消）。
   ⚠️ **本机跑 pytest 前必须清空全部代理变量**（`HTTP_PROXY`/`HTTPS_PROXY`/`http_proxy`/`https_proxy`/`NO_PROXY`/`no_proxy`）——
   否则 `httpx` 解析 `NO_PROXY` 里的 `[::1]` 会生成畸变代理 mount，**45 个用例假失败**（第 95 期实测，
   已写进 `AGENTS.md` §5）。
+  ⚠️ **`pytest.ini` 已有 `addopts = -q`**：命令行再传 `-q` 会变 `-qq`，末行就不打印
+  `N passed / M skipped` 汇总（表现是「exit 0 但拿不到计数」）⇒ 计数时**别传 `-q`**；pwsh 重定向的
+  日志是 **UTF-16LE**，读要用 `encoding="utf-16"`。
+  ⚠️ **不要在本仓跑 `pnpm run <script>`** —— pnpm 会自动 install 并**整套换掉** `frontend/node_modules`
+  （脚本还没跑就以 `ERR_PNPM_IGNORED_BUILDS` exit 1）。要跑前端检查直接调 `frontend/node_modules/`
+  里的工具，例如 `node node_modules/vue-tsc/bin/vue-tsc.js --build`。
 - **可用的真实数据实例**（用户 2026-10-03 提供，随时可用来做实测）：本机 **`http://127.0.0.1:8412`**
   （`admin` / `changeme`），书目 **4 本**：三体 / 沙丘 / 银河系漫游指南 / 冒烟测试-第 91 期。
   窄屏三档冒烟一律跑它（`.codebuddy/tools/ui-smoke.ps1`，一次只传**一条**路由）。
@@ -81,6 +90,32 @@ payload，同一真样本 0 条 → 19 条），并把 AWS WAF 挑战页的**归
   用户不会再误判成「站点挂了」。
   同理 `novelforge/core/fileops.py` 的 OPF 改写正则（出版副本 XML，字节等价不可证）继续保留。
 
+- [ ] **按 ID 取详情：三家源仍未核验**（第 102 期真机探活后挂起，不是忘了）——
+  `novelforge/core/metasources.py` 的 `_DETAIL_FETCHERS` 只接了**真机核过**的两家
+  （iTunes `/lookup?id=`、Open Library `/works/OL…W.json`）。三家具体阻塞原因：
+  **Google Books** 三个查询全部 `429`（匿名额度耗尽，`volumes/{id}` 端点没核过）/
+  **Audnexus** 本机 `[SSL: UNEXPECTED_EOF_WHILE_READING]` 不可达 / **Goodreads** `GET /book/show/{id}`
+  返回 `302`（反爬验证页）。按第 95 期口径「没有逐家真机核过就改选择器语义 = 用单测绿换线上未知」
+  ⇒ `detail()` 对这三家如实回**明确中文回绝**（「这家来源没有按 ID 取详情的通道，请改用按书名检索」）。
+  证据见 roadmap 第 102 期 §四。
+- [ ] **Open Library 本机间歇性不可达**（第 102 期收尾实测，**链路问题不是代码问题**）——
+  重试探针 **12/12 次全部 `ConnectTimeout [WinError 10060]`**（同日早些时候同一个 works URL
+  曾返回 200），裸 `httpx.get(url, timeout=30)` 同样连不上（各耗 42 s）⇒ 不是超时太短，是这台机器
+  到 `openlibrary.org` 的 TCP 连不上。**详情绑定因此保留不回撤**。日后再遇到「体检报这一家 timeout」，
+  **先查链路再查代码**，别当成本期改坏了。
+- [ ] **`online_candidate(book)` 不传 `cfg` 时静默返回 `None`**（既有语义，第 102 期已钉住不改）——
+  `novelforge/core/metafetch.py` 的 `_cfg(cfg: dict)` 只从**传入的** dict 取 `metadata_fetch`，
+  而 `online_candidate(book, cfg=None)` 默认 `None` ⇒ 看着像「这家源没结果」，实际是「压根没去查」。
+  仓内真实调用方都传了（`novelforge/server.py` 的详情页路径传 `cfg=config.load_config()`），
+  已由 `tests/test_config_readback_contract.py::test_不传配置时它什么都查不到是既有语义` 钉住。
+  **不要**改成自动 `load_config()`（会让它从「什么都不做」变成「真的出网抓」，属有副作用的静默行为变更）。
+- [ ] **`vue-tsc` 3.3.12 起前端类型检查会红**（与本期能力无关，未动）——
+  `frontend/src/components/book/MetadataEditor.vue:614` 模板里的
+  `FIELD_LABELS[c as keyof BookMetadataFields]` 报 `TS2339: Property 'value' does not exist on type
+  'Record<keyof BookMetadataFields, string>'`；用**仓库原有的 3.3.11** 跑 `--build --force` 是 exit 0。
+  ⇒ 触发条件是「重装前端依赖」，不是这行代码变了。修它要动数据编辑器模板（属另一件事），
+  本轮只记录不改；`frontend/package.json` 的 `vue-tsc` 版本范围**迟早要收紧或把这行类型写对**。
+
 ### 明确「不做」（避免反复立项）
 
 - **跨语言检索词（翻译检索词）** —— 第 91 期定级。理由：① 翻译质量不可控，会把「同名不同书」的误配率推高；
@@ -98,6 +133,7 @@ payload，同一真样本 0 条 → 19 条），并把 AWS WAF 挑战页的**归
 
 | 期 | 交付（版本） |
 |---|---|
+| 102 | 元数据抓取**地基**（用户 2026-10-05 直接提出，非从 TODO 取条目）：① 14 家源声明**收口**到 `novelforge/core/sources/`（`Provider` 数据类 + `DECLARED`，`SOURCES`/`GROUPS`/`IMPLEMENTED`/`LANG_AFFINITY`/`LANG_BROAD`/`SOURCE_ID_FIELD`/`HEALTH_SAMPLES` **7 张手工表改派生**，逐字段验算 14 家旧键全等，只多 `kind`/`rate_limit`/`cache_ttl`）② 进程内**缓存 + 按源限流**（`time.monotonic` 计时、只缓存「成功且非空」、命中浅拷贝防分数污染；`force=True` = 诊断模式**缓存与限流都旁路**，否则体检 4 路并发会被自己的 sleep 拖成**假 timeout**）③ **按记录标识取详情**（只接真机核验过的 iTunes / Open Library；Google Books 匿名 429 / Audnexus 本机不可达 / Goodreads 302 ⇒ **不声明**，如实中文回绝）④ 配置两键 `cache_ttl`（默认 `None` = 按各来源声明，不写死 600）/ `detail_fetch`（默认**关**，不改既有书的抓取结果）+ 环境变量**只兜底不覆盖** + 前端两个开关；顺带修掉一个**假配置**（`metasources.py` 从未 import `config` ⇒ `cache_ttl` 写完两期无人读，被裸 `except` 吞掉）＋ 新增 `test_metasource_registry_contract` 15 / `test_metasources_cache` 21 / `test_metasources_detail` 24 / `test_config_readback_contract` 19（**不发版**，`VERSION` 仍 0.94.0） |
 | 101 | 书源网页抓取收口：**Goodreads 旧结构（`<tr itemscope>`/`bookTitle`/`authorName`）已被站点下线 ⇒ 整家恒返 0 条**，改用 React Server Components 的 **RSC flight payload** 解析（同一真样本 604317 B：0 条 → **19 条**，多作者/年份/封面/provider_id 全对，未解析引用残留 0）+ **AWS WAF 挑战页归因**与「站点改版 / 站点主动拒绝」分开（Goodreads / Libro.fm 同套防护，取决于 IP 信誉）＋ 夹具 2 个、`tests/test_metasources_scrape.py` 12→24 例（**不发版**，`VERSION` 仍 0.94.0） |
 | 100 | EPUB 解析换成熟解析器**实测后删除该立项**：37 本真实第三方 EPUB（Standard Ebooks，30 本含 OPF）逐字段对比「现有正则」vs「`xml.etree.ElementTree`」——`title`/`creator`/`publisher`/`language` **0/30 不一致**、真解析器**零失败**（CDATA/DOCTYPE/非标准实体/单引号属性/疑未声明前缀 **全为 0**）⇒ 标题承诺的收益是 0，风险（`unbound prefix`/`undefined entity` 整份作废）恰是第三方 OPF 会遇到的那类；`tests/test_epub_xml_parse.py`（5 例）**保留**为将来换解析器的验收条件。另立并修掉**唯一站得住的差异**：`dc:description` 不解 HTML 实体（30/30 本实测 `html.unescape(旧) == 真解析器` 逐字成立）⇒ 新增 `_dc_description()`（解一次实体、**保留标签**），前后端可见性已证实（前端 `{{ }}` 文本插值不做二次解码）；新增 `tests/test_epub_description.py`（7 例，改动前 4 例实测会红）（**不发版**，`VERSION` 仍 0.94.0） |
 | 99 | 元数据抓取**真机核验** + 三处线上真 bug：① Audible `response_groups` 带非法组名 `publisher` ⇒ 400、**整家永远 0 结果**（`publisher_name` 是**字段**，随 `product_desc` 照旧返回）② Lubimyczytac **多作者截断**（卡内多作者多个 `<a>`，旧实现三次独立 `findall` 按下标配对）③ Amazon 的 JS 校验页（`200` + `bm-verify` 跳转、**不含验证码关键词**）**静默 0 条**；Lubimyczytac 改逐卡 `bs4` + `_soup` 缺库如实回落；新增 `tests/test_metasources_scrape.py`（12 例，此前六家脆弱源解析逻辑零覆盖）+ 真机夹具；Goodreads/Kobo/Libro.fm 三家**取不到样本 ⇒ 挂起**（**不发版**，`VERSION` 仍 0.94.0） |
@@ -146,10 +182,14 @@ payload，同一真样本 0 条 → 19 条），并把 AWS WAF 挑战页的**归
 - 第 1 节 P0 目前**已清空**（第 93 期交付 `online-fallback`）；第 96 期取自**第 95 期审计批次 8**、
   第 97 期取审计的四条 `[low]`、第 98 期取 P1「仪表盘余留」、第 99 期取 P1「书源网页抓取」、
   第 100 期取 P1「EPUB 解析重试」（**实测后删除该立项**）、第 101 期取 P1「书源网页抓取」的剩余三家
-  （Goodreads 已收口，另两家缺样本）。
+  （Goodreads 已收口，另两家缺样本）、第 102 期由**用户直接立项**（元数据抓取地基，不从 TODO 取）。
+  ⚠️ 第 102 期按拍板口径**只做了地基、零新源**：**分期做**（用户原话），
+  微信读书一家中文源与其余能力留待后续期次；`docs/roadmap-gaps-remaining.md` 第 102 期段
+  已写清「本期刻意不做」的边界（不新建 providers 包 / 不搬 1833 行解析实现 / 不改 `metascore` 计分 /
+  不接 series / 不装 Calibre 运行时）。
   ⚠️ 下一期从 P1 取时**只剩两条**：`novelforge/core/fileops.py` 的 OPF 改写正则（**字节等价不可证**，
   须先证明等价才动）、「书源网页抓取：系列信息没有接进候选」（**新立项**，要动候选结构 →
-  `_VALUE_KEYS` → 收尾模式 → OPF 写入四处）；另有「剩余三家抓取源无可解析样本」一条**挂起**
-  （Kobo / Libro.fm / Amazon，需先能拿到真样本）。或按用户新需求立项。
+  `_VALUE_KEYS` → 收尾模式 → OPF 写入四处）；另有三条**挂起**（Kobo / Libro.fm / Amazon 缺样本；
+  三家源的按 ID 详情通道未核验；Open Library 本机链路间歇不通）。或按用户新需求立项。
 - 若要做重投入项（例如再次跑大库基准、或做 PG / Redis 相关专项），**先量化再动手**
   —— 本项目已在第 61 期明确：没有指标不许凭感觉优化。

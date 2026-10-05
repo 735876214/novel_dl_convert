@@ -1388,3 +1388,86 @@ payload 里**有**系列信息（实测能解出 `("Remembrance of Earth's Past"
   别把「线上此刻能跑通」当作验收。
 - ⚠️ 语料与探针脚本**一律不入库**（`%TEMP%\nf-scrape-samples\`、`%TEMP%\nf_scrape_*.py`）。
 - ⚠️ **并行会话脏项**（`.codebuddy/memory/2026-10-03.md`、`.vscode/settings.json` 等）**不回退不提交**。
+
+## 第 102 期铁律（元数据抓取地基：来源声明收口 / 缓存 / 限流 / 按 ID 取详情 / 两个配置键）
+
+### 一、立项与范围（用户原话）
+
+用户（第 102 期，plan 模式）要求：**每个来源一个 provider + 统一接口（搜索 / 按 ID 取详情 / 取封面）、字段映射、去重合并、缓存、限流、错误处理、配置可经环境变量或数据库管理、允许使用 Calibre 插件、先出方案再动代码**。
+拍板结论：**默认全端共享配置**（不按设备分）、**先只做微信读书一家中文源**（本期零新源）、**分期做**（本期只做地基）。
+⚠️ **Calibre 只参考插件模式与源适配表，不装运行时**（不写 `requirements.txt`、不 `import calibre.*` —— 插件继承 `calibre.ebooks.metadata.sources.base.Source` 需 Calibre 运行时，而第 62 期已明确不依赖 Calibre）。
+⚠️ **不新建 `providers/` 包**：`novelforge/core/metasources.py`（1833 行）**本身就是**现有的可插拔提供者系统，再建一层即第二份实现（违反 §7.1）。
+⚠️ **不改 `metascore` 计分**（按 kind 重算会改变现有书库评分）、**不接 series**（要动候选结构 / `metafetch._VALUE_KEYS` / 收尾模式 / OPF 写入四处 ⇒ 新立项）。
+
+### 二、来源声明收口（第 1 步，`84f1003`）
+
+- 新增 `novelforge/core/sources/`：`__init__.py` + `kinds.py`（`KINDS = ("ebook","comic","anime","audiobook")`）+ `registry.py`（`DECLARED` 14 家 `Provider(...)`）。
+  ⚠️ `Provider` 的 `fetch_name` / `isbn_name` / `detail_name` 存的是**函数名字符串**（互相 import 会成环），由 `metasources._bind_declared()` 在模块末尾注入；**找不到同名函数直接 `raise ValueError`**。
+  ⚠️ `id_field` 注释写明「空串 = 这家没有对应字段，**不硬塞别的字段**」。
+- `metasources.py` 原 7 张手工扁平表改为**派生**（`SOURCES` / `GROUPS` / `IMPLEMENTED` / `HEALTH_SAMPLES` / `LANG_AFFINITY` / `LANG_BROAD` / `SOURCE_ID_FIELD`）。
+  ⚠️ `IMPLEMENTED` / `HEALTH_SAMPLES` **必须先给占位再在文件末尾填** —— 原写法直接引用后段的 `_FETCHERS` 会在 **import 期 `NameError`**；文件末尾顺序 = `_bind_declared()` → `_derive_final()`。
+- 验证：把旧表从 `git show HEAD:novelforge/core/metasources.py` 切出 `exec` 成 `OLD`，逐家逐字段比对 ⇒ **14 家旧键全等**，只多 `kind` / `rate_limit` / `cache_ttl`。契约 `tests/test_metasource_registry_contract.py`（15 例）。
+  ⚠️ **文件名不能叫 `test_sources_registry.py`** —— 已被**书源引擎**（`novelforge/sources/` 的 Legado `REGISTRY`）的测试占用。
+- ⚠️ `novelforge/core/sources/__init__.py` **不导出 `DECLARED`** ⇒ 取声明表必须 `from novelforge.core.sources import registry`（写 `from novelforge.core import sources` 会 `AttributeError`）。
+
+### 三、缓存与限流（第 2 步）+ 两处真缺陷
+
+- 构件：`_SEARCH_CACHE`（`_SEARCH_CACHE_MAX = 256`，按**插入序**淘汰，不做 LRU）/ `_LAST_CALL` / `_cache_key` / `_detail_key` / `_cache_get` / `_cache_put` / `_ttl_of` / `_throttle` / `clear_cache()` / `cache_stats()`。
+- ⚠️ **时间一律 `time.monotonic()`**（墙钟被 NTP 回拨 ⇒ TTL 永不生效）。
+- ⚠️ **只缓存「成功且非空」**：空结果 / 报错都不缓存，一次抖动不该让这家源「假死」整个 TTL。
+- ⚠️ `_cache_get` 对每条候选 `dict(e)` **浅拷贝** —— `search_all` 会往候选写 `score`，不拷会让第二次命中带着**对别的书名**算出的分（静默错误排序）。
+- ⚠️ **`force=True` = 诊断模式：缓存与限流都旁路**（`search()` 里必须是 `if not force: _throttle(source)`）。理由：体检并发 4 路 + 单家 `per_timeout=12.0`，串行补限流间隔（comicvine 声明 18s）会**把自己的 sleep 当成源超时 ⇒ 把健康源误报成 timeout**（「误报比不测更糟：用户会去修一个根本没坏的东西」）。
+- ⚠️ **真缺陷①：缓存键漏了 `opts`** —— itunes 先按 `resolution=high` 取到 1000×1000 封面，再按 `standard` 查会**命中上一条缓存**，用户改了设置看不出变化。修法 `_opts_key(opts)` = `sha1(json.dumps({str(k):str(v) for k,v in sorted(opts.items())}))[:12]` —— ⚠️ **用摘要不用原值：密钥不该以明文躺在缓存键里**。
+- ⚠️ **真缺陷②：缓存/限流是模块级可变状态，跨用例泄漏** —— ① 命中上一条用例的结果（换过的桩/选项不生效）② `_LAST_CALL` 留存 ⇒ 声明限流的家（comicvine 18s）会在无关用例里**真 sleep**。修法：`tests/conftest.py` 加 autouse fixture `_no_metasource_cache_leak`（前后各 `_ms.clear_cache()` + `_ms._LAST_CALL.clear()`）。
+- ⚠️ `health_one(source, opts=None, title="", author="", limit=3)` **只传 source 时 `title` 为空 ⇒ `search()` 在 `if not fn or not _clean(title)` 提前返回、根本到不了 fetcher**（真实路径是 `health_check()` 传 `HEALTH_SAMPLES`）。已加样本回落：`if not _clean(title): sample = HEALTH_SAMPLES.get(source) or HEALTH_SAMPLE_DEFAULT` —— 否则会报「书名为空」，把人引去修一个没坏的源。
+- 测试 `tests/test_metasources_cache.py`（21 例）。
+
+### 四、按 ID 取详情（第 4 步）+ 真机核验表
+
+- 统一入口 **`detail(source, provider_id, opts=None) -> {"ok","entry","error"}`**，**不抛异常**、**不设 `force`**（没有哪个调用方需要「跳过缓存拿详情」，加了就是投机抽象 §7.2）。
+  ⚠️ 无通道的家回**明确中文回绝**（「这家来源没有『按 ID 取详情』的通道，请改用按书名检索」），不假装成功。
+  ⚠️ `_detail_key` 第一段是字面量 `"@detail"` ⇒ 与 `(源, 书名, 作者, limit, opts)` **必然不撞**（一个 dict 一个 list，撞了双方都静默失效）。
+- **真机核验表**（决定谁能声明）：**Open Library ✅**（`/works/OL…W.json`）/ **iTunes ✅**（`/lookup?id=`，与 `/search` 同形状）/ **Google Books ⛔**（匿名额度耗尽，换 3 个查询全 429）/ **Audnexus ⛔**（本机 `SSL: UNEXPECTED_EOF_WHILE_READING`）/ **Goodreads ⛔**（302 反爬）⇒ ⚠️ **没核过就不声明**（§7「不做假能力」）：只绑 `_detail_itunes` + `_detail_openlibrary`。
+- ⚠️ **Open Library works 端点的三个坑**：① `description` 是**字典** `{"type":"/type/text","value":"…"}` 不是字符串；② 详情**没有作者名**，只有边 `authors:[{"author":{"key":"/authors/OL…A"}}]` ⇒ 要**逐作者再查一次**（单个作者失败 `continue`，不影响整条）；③ `first_publish_date` 实测为 **null**、`covers` 是**整数数组** ⇒ **works 端点不返回出版年/出版社/ISBN**（那些在 edition 上）⇒ 这几项**留空不猜**。
+- ⚠️ `_ol_work_key` 只认 `/works/OL\d+W`（含裸 `OL…W` 与带查询串的 URL，大小写归一）；**`/books/OL…M`（edition）认不出就回绝** —— 拿它猜 works 地址会返回**别的书**的记录。
+- ⚠️ 错误文案抽成模块级 `_error_text(exc)` 由 `search` 与 `detail` **共用**（否则必然走散两份）；判断顺序要紧（`TimeoutException`/`HTTPStatusError` 都是 `HTTPError` 子类），并补 **404 分支**：「该地址不存在（HTTP 404）：记录可能已下架，或该来源的接口已改版」。
+- 测试 `tests/test_metasources_detail.py`（24 例，`_Routes` 桩按 URL **精确路由**、未登记 URL 直接 `AssertionError`）。
+
+### 五、两个配置键（第 5 步）+ 一个被裸 `except` 吞掉两期的假配置
+
+- `cache_ttl` 默认 **`None`**（不是 600）：三档语义 = `None` 按**各来源声明**（当前 14 家全 600）/ `0` 关闭 / `>0` 全局覆盖。⚠️ **写死 600 会让各来源的 `cache_ttl` 声明变成死配置**。⚠️ 判定必须按 `is None`（写成 `if configured:` 会让 `0` 被当成「没配」而回落到声明值 ⇒ **用户关不掉缓存**）。
+- `detail_fetch` 默认 **False**：多数书抓过一遍就带 id ⇒ 打开会**改变既有书的抓取结果**（本期「不发版、不改用户可见行为」）。
+- ⚠️ **环境变量只兜底、不覆盖**（与 `core/updater.py:131` 的 `update.image` 同口径）：`NOVELFORGE_METADATA_CACHE_TTL` / `NOVELFORGE_METADATA_DETAIL_FETCH` 只在 `settings.json` 与 `config.yaml` **都没写过**该键时生效。
+  ⚠️ **名字必须是模块常量**（`_ENV_CACHE_TTL` / `_ENV_DETAIL_FETCH`），别散写字面量；返回值填错**忽略而不是让服务起不来**。
+  ⚠️ 无条件覆盖（照 `AUTO_WATCH` 那样）会让「界面上改了、保存后没变」变成查不出来的怪事 —— 那两个监听开关是**部署时钉死**的，这两个是**用户在设置页会调**的。
+- ⚠️ **真缺陷：`metadata_fetch.cache_ttl` 是「能写进 settings.json、界面上有控件、实际谁都不读」的假配置** —— `metasources.py` **从来没有 import config**，`_ttl_of` 里 `config.load_config()` 抛的 `NameError` 被**裸 `except Exception`** 一起吞掉（所以第 2 步写下、第 5 步加读回契约测试才暴露）。
+  修法：`from .. import config`（⚠️ `core/` 里一律这个写法，裸 `import config` 会被同名命名空间包劫持）+ `_log = logging.getLogger("novelforge")` + `except (TypeError, ValueError)` 收窄并 `_log.warning(...)`。
+  ⚠️ **教训原文**：**兜底要兜得住「读不到」，但不能连「写错了」一起吞**。
+- ⚠️ **`server.EDITABLE` 的 `metadata_fetch` 不走「两处键列表」约束** —— `GET /api/config` 那边是 `_mask_metadata_fetch` **整块透传**（`out = dict(sec)` 后按 `metasources.secret_fields()` 掩码 + 补 `has_<字段>`）⇒ 加子键只需改 `EDITABLE` **并加真实读点**。⚠️ `_sanitize_config` 是**纯白名单、不校验类型** ⇒ 类型/范围校验必须写在 `api_put_config`（`cache_ttl`：负数/非数字/超 2592000 一律 400，**留空放行且存成 `None`**、**0 放行**）。
+- ⚠️ **输入错误就 400 说清，不静默回落**（`upload.*` 必须 `>0`、`network.*` 允许 `>=0`、`source_import.timeout` 必须 `0<v<=300` 是同一条口径）。
+- ⚠️ `core/cache.py`（第 62 期的**可选 Redis 层**，`NOVELFORGE_REDIS_URL` 默认不设 = 整个模块空操作，缓存章节 HTML / 书目列表 / 封面字节，键前缀 `nf:`，带熔断 `_FAILS_TO_TRIP=3` / `_COOLDOWN=30.0`）**不是第二份实现** —— 元数据那层是**进程内 memo 第三方 HTTP 响应**、TTL 来自各来源声明、失败不缓存、`force=True` 供诊断旁路，且**必须在 Redis 缺席时照常工作**（默认部署就是没有 Redis）。⚠️ **收敛二者是错的**（理由已写在 `metasources.py` 的 `clear_cache` 附近）。
+- ⚠️ `metafetch._cfg(cfg)` 只从**传入的** dict 取 `metadata_fetch`，而 `online_candidate(book, cfg=None)` 默认 `None` ⇒ **`online_candidate(book)` 静默返回 `None`**（看着像「这家源没结果」，实际是「压根没去查」）。**不改成自动 `load_config()`**（那会把「什么都不做」变成「真的出网抓」= 有副作用的静默行为变更）⇒ 在新测试里**钉住现状** + 记 TODO。真实调用方都传（`server.py` 传 `cfg=config.load_config()`）。
+- 测试 `tests/test_config_readback_contract.py`（19 例）。⚠️ **写配置的用例必须自己隔离** `monkeypatch.setattr(config, "SETTINGS_FILE", tmp_path / "settings.json")`（否则把键留在会话级 settings.json 里污染后面的用例 —— `tests/test_network_limits.py:355` 的注释明写过）。
+- 四个同步点（新键必查）：① `config.DEFAULTS` ② `server.EDITABLE` ③ 界面控件 ④ **真实读点**。⚠️ **静态断言只能证明名字写对，证明不了链路通**（本期假配置就是被第 ④ 条抓出来的）。
+
+### 六、`detail_fetch` 的两个消费点（分数必须写 1.0）
+
+- `metafetch._detail_first(book, sources, options)`：遍历**这次启用的源**，`field = metasources.SOURCE_ID_FIELD.get(sid)`（**只有声明了 `id_field` 的家才在表里**），`sid not in metasources.DETAIL_SOURCES` 则跳过，`pid = str(book.get(field) or "").strip()`，命中即 `return [dict(entry, score=1.0)]`。
+- ⚠️ **分数必须写 1.0**，不沿用 `_entry` 的 0.0：打分函数是为「拿书名在一堆结果里挑最像的一条」准备的（`metasources.score_candidate`）；这里是**同一份记录**，照抄 0.0 会被 `threshold` 挡在门外 ⇒ **功能开了却永远不生效**。
+- ⚠️ **两条路都要接**：`metafetch.online_candidate`（详情页在线建议）**与** `metafetch.plan`（批量抓取 / 入库自动抓）。只在详情页接，用户打开开关后会发现「批量抓取还是老样子」，且**没有任何办法知道这个开关只管一个页面**。
+- ⚠️ `DETAIL_SOURCES` 公开为**元组**（调用方只能做成员判断、改不了绑定表）；`_DETAIL_FETCHERS` 是**产物不是接口**。
+
+### 七、前端两个开关（第 6 步）
+
+- ⚠️ **`metadata_fetch` 的前端落点是 `frontend/src/views/settings/pages/MetadataPage.vue`**，**不是** `frontend/src/data/settingsFields.ts`（那里只有 `metadata: ['metadata_fetch']` 的分区块映射；`network.*` 的键才住在 settingsFields.ts）。
+- 既有两种控件范式：**开关** = `<Button :variant :disabled="saving" @click="setVal(...); saveSection('metadata')">`；**数字输入** = 只 `setVal` 不立即保存。
+- ⚠️ `ttlInput(ev)` 空串必须回 **`null`** 而不是 0 —— 后端把「留空 = 按各来源声明」与「0 = 关闭缓存」分得很清，回落成 0 等于**用户清空输入框就悄悄关了缓存**。
+
+### 八、操作陷阱（本轮新增，已写进 `AGENTS.md` §5）
+
+- ⚠️ **pwsh 的 `> $out 2>&1` 写的是 UTF-16LE** ⇒ 用 `encoding="utf-8"` 读会得到夹 `\x00` 的乱码、**搜不到任何关键词**（据此白读一轮「exit 0 但没有汇总行」）。读要 `encoding="utf-16"`。
+- ⚠️ **不要在本仓跑 `pnpm run <script>`**：pnpm 的 deps 检查会**自动 install** —— 把 `frontend/node_modules` 整套移进 `.ignored` 再从 registry 重装（版本与 `package.json` 的 `^` 记录不同），最后卡在 `[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: vue-demi@0.14.10` 上 exit 1，**脚本压根没跑**。正确姿势：`cd frontend` 后直接调 `frontend/node_modules/` 里的工具（`node node_modules/vue-tsc/bin/vue-tsc.js --build`）。
+- ⚠️ **`vue-tsc` 3.3.12 起在 `frontend/src/components/book/MetadataEditor.vue:614` 报 `TS2339`**（`FIELD_LABELS[c as keyof BookMetadataFields]`），**3.3.11 全量重建 exit 0** ⇒ 触发条件是「重装前端依赖」，与那行代码改没改无关。
+- ⚠️ **`Get-Content` 读本仓 UTF-8 中文文档会在控制台输出 GBK 乱码** ⇒ 一律用 `read` / `grep` 工具或 Python；**绝不用 `Get-Content -Raw` + `Set-Content` 改**。
+- ⚠️ **探针脚本放在 `%TEMP%` 时必须 `sys.path.insert(0, os.getcwd())`** —— Python 只把**脚本所在目录**入 `sys.path`，直接跑会 `ModuleNotFoundError: No module named 'novelforge'`。
+- ⚠️ 基线：**2263 例（2238 passed / 25 skipped）**，metadata 聚焦 15 文件 261 passed；`VERSION` 仍 `0.94.0`、**八轮不发版**。

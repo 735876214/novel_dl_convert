@@ -51,7 +51,7 @@
 | 新增 / 删设置页 | ① `data/settingsNav.ts`（**删条目即删路由与侧栏项**）② 路由组件映射 `SETTINGS_PAGE_COMPONENTS` ③ 侧栏/搜索由注册表派生（自动） |
 | 新增库表列 | 必须同进 `db._LIBRARY_COLS`，否则 `update_library` **静默写不进**（界面仍显示「已保存」） |
 | 新增含 `book_id` 的表 | 必过 remap 清单：`ORPHAN_TABLES` / `REMAP_TABLES` / `REMAP_PROBE_FILTER` / `REMAP_EXPLICIT_TABLES`（契约 `tests/test_remap_tables.py`；另有 `REMAP_DERIVED_TABLES` / `REMAP_MERGE_TABLES` 由该用例的 `_tables_with_book_id()` 直接问库兜底） |
-| 新增书源 / 提供商 | `core/metasources.SOURCES` 与 `_FETCHERS` **逐字一致**（契约 `IMPLEMENTED == _FETCHERS.keys()`） |
+| 新增书源 / 提供商 | ① **声明**：`novelforge/core/sources/registry.py` 的 `DECLARED`（`fetch_name` / `isbn_name` / `detail_name` / `id_field` / `kind` / `rate_limit` / `cache_ttl` …）② **实现**：`novelforge/core/metasources.py` 里的同名函数（声明存的是**函数名字符串**，由 `_bind_declared()` 注入；找不到直接 `raise ValueError`）③ 该源的配置键进 `DEFAULTS["metadata_fetch"]` 与 `server.EDITABLE`（契约 `tests/test_metasource_registry_contract.py` + `tests/test_metadata_providers.py`） |
 | 新增发布/接口 | 批量端点注册在 `/api/books/{bid}` **之前**；字面量路径在 `{param}` 之前 |
 
 ## 3. 目录地图（只列常去的）
@@ -81,8 +81,8 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 
 ```bash
 # 后端测试（离线、全量；Windows 用 .venv\Scripts\python.exe）
-.venv/bin/python -m pytest                 # 当前基线 2153 例（2128 passed / 25 skipped；只增不减）
-                                           # ⚠️ 跑前先清空全部 proxy 变量，见第 5 节最后一条
+.venv/bin/python -m pytest                 # 当前基线 2263 例（2238 passed / 25 skipped；只增不减）
+                                           # ⚠️ 跑前先清空全部 proxy 变量；⚠️ 别再加 `-q`（两条都见第 5 节）
 .venv/bin/python -m pytest tests/test_catalog.py -k 某关键字
 
 # 前端四连（缺一不可；Windows 先 $env:NODE_OPTIONS=''）
@@ -119,6 +119,13 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
 - ⚠️ **跑 pytest 前清空全部 proxy 变量**（`HTTP_PROXY` / `HTTPS_PROXY` / `http_proxy` / `https_proxy` / `NO_PROXY` / `no_proxy`）——
   `httpx` 0.28.1 解析 `NO_PROXY` 里的方括号 IPv6（`[::1]`）会生成畸变 mount `all://*[::1]`，于是**任何真实 `BrowserClient` 用例**炸
   `httpx.InvalidURL: Invalid port: ':1]'`（本机曾据此误判出 45 个「回归」）。**只去掉方括号不够，必须整组清空**。
+- ⚠️ **pwsh 的 `> $out 2>&1` 把输出写成 UTF-16LE**（第 102 期）：用 `encoding="utf-8"` 读会得到夹 `\x00` 的乱码、**搜不到任何关键词**（据此白读一轮「exit 0 但没有汇总行」）。读这类日志要 `encoding="utf-16"`。
+- ⚠️ **不要在本仓跑 `pnpm run <script>`**（第 102 期实测）：pnpm 的 deps 检查会**自动 install** —— 把 `frontend/node_modules`
+  整套移进 `.ignored` 再从 registry 重装（版本与 `package.json` 的 `^` 记录不同），最后卡在
+  `[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: vue-demi@0.14.10` 上 exit 1，**脚本压根没跑**。
+  正确姿势：`cd frontend` 后**直接调 `frontend/node_modules/` 里的工具**（如 `node node_modules/vue-tsc/bin/vue-tsc.js --build`），或按第 4 节用 `npm run`。
+- ⚠️ **`vue-tsc` 3.3.12 起会在 `frontend/src/components/book/MetadataEditor.vue:614` 报 `TS2339`**
+  （模板里 `FIELD_LABELS[c as keyof BookMetadataFields]`），**3.3.11 全量重建 exit 0** ⇒ 触发条件是「重装前端依赖」，与那行代码有没有改过无关（第 102 期记录在 `docs/TODO.md`）。
 
 ## 6. 提交与交付
 

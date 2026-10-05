@@ -6099,3 +6099,180 @@ payload 里**有**系列信息（`bookSeries` → `seriesPlacement` + 系列名�
 - ⚠️ **两侧样本与探活脚本一律不入库**（`%TEMP%\nf-scrape-samples\`、`%TEMP%\nf_scrape_*.py`），
   只把**裁过的代表性片段**进 `tests/fixtures/`。
 - ⚠️ **并行会话脏项**（`.codebuddy/memory/2026-10-03.md`、`.vscode/settings.json` 等）**不回退不提交**。
+
+## 第 102 期（元数据抓取地基：来源声明收口 + 缓存 / 限流 / 按 ID 取详情 + 两个配置键）
+
+> 立项：用户 2026-10-05 直接提出（非从 TODO 取条目）——「**每个来源一个 provider + 统一接口
+> （搜索 / 按 ID 取详情 / 取封面）、字段映射、去重合并、缓存、限流、错误处理、配置可经环境变量
+> 或数据库管理，允许使用 Calibre 插件**，先出方案再动代码」。
+> 用户随后拍板：**默认全端共享配置 / 先只做微信读书一家中文源 / 分期做（本期只做地基，零新源）**。
+
+### 一、为什么是「收口」而不是「新建一层」
+
+`novelforge/core/metasources.py`（1833 行、14 家源）**本身就是现有的可插拔提供者系统**：
+每家源有抓取函数、字段映射、配置字段、健康样本、语种偏好、标识字段。再新建一个 `providers/` 包
+就是**第二份实现** —— 按 `AGENTS.md` §7.1「发现第二份实现 = 缺陷，先收敛再改行为」，
+本期做法是**把散在各处的声明收拢成一份数据**，再在它之上长能力。
+
+### 二、第 1 步：来源声明收口到 `novelforge/core/sources/`（提交 `84f1003`）
+
+- 新增 `novelforge/core/sources/__init__.py`、`kinds.py`（`KINDS == ("ebook", "comic", "anime",
+  "audiobook")`）、`registry.py`（`Provider` 数据类 + `DECLARED` 14 家 + `validate()`）。
+- **7 张手工扁平表改派生**：`SOURCES` / `GROUPS` / `IMPLEMENTED` / `LANG_AFFINITY` / `LANG_BROAD` /
+  `SOURCE_ID_FIELD` / `HEALTH_SAMPLES`。新增 `kind` / `rate_limit` / `cache_ttl` 三个字段。
+- ⚠️ **import 期 `NameError` 陷阱**：`IMPLEMENTED` / `HEALTH_SAMPLES` 原先写在 `SOURCES` 附近、
+  直接引用 `_FETCHERS`，而 `_FETCHERS` 与它引用的 `_search_*` 定义在文件后段 ⇒ 占位
+  （`IMPLEMENTED = ()`、`HEALTH_SAMPLES = {}`）后由文件末尾的 `_bind_declared()` → `_derive_final()`
+  按**函数名字符串**注入（存函数对象会成环）。
+- **逐字段验算**：把旧字面表从 `git show HEAD:novelforge/core/metasources.py` 切出来 `exec` 成 `OLD`，
+  逐家逐字段比对 ⇒ **14 家旧键全等**，只多出这三个新键；`GROUPS` / `LANG_AFFINITY` / `LANG_BROAD` /
+  `SOURCE_ID_FIELD` / `HEALTH_SAMPLES` 逐字一致。
+- 新增 `tests/test_metasource_registry_contract.py`（**15 例**）。
+  ⚠️ **文件名不能叫 `test_sources_registry.py`** —— 已被**书源引擎**（`novelforge/sources/` 的
+  Legado `REGISTRY`）既有测试占用，撞名会让「改 A 却红了 B」。
+
+### 三、第 2 步：进程内缓存 + 按源限流（两处真缺陷）
+
+- 新增 `_SEARCH_CACHE`（上限 `_SEARCH_CACHE_MAX = 256`，按**插入序**淘汰最旧，不做 LRU）、
+  `_LAST_CALL`、`_cache_key()`、`_opts_key()`、`_ttl_of()`、`_throttle()`、`clear_cache()`、`cache_stats()`；
+  `search(source, title, author, limit=5, opts=None, force=False)`。
+- 三个必须记牢的口径：
+  1. **时间一律用 `time.monotonic()`** —— 墙钟会被 NTP 回拨，回拨后 TTL 永不生效。
+  2. **只缓存「成功且非空」的结果** —— 一次网络抖动不该让这家源「假死」整个 TTL。
+  3. **命中时对每条候选 `dict(e)` 浅拷贝** —— `search_all` 会往候选里写 `score`，
+     不拷贝会让第二次命中带着**对别的书名算出的分**，静默错误排序。
+- `force=True` 的语义定死为 **诊断模式：缓存与限流都旁路**。理由：体检是 4 路并发 + 单家 12 s 超时，
+  若串行补限流间隔（comicvine 声明 `(1, 18.0)`），`_throttle` 的 sleep 会**超过源自己的超时**，
+  把健康源**误报成 timeout** —— 本仓口径是「**误报比不测更糟：用户会去修一个根本没坏的东西**」。
+- **真缺陷 ①（缓存键漏 `opts`）**：itunes 先按 `resolution=high` 取到 1000×1000 封面，再按
+  `standard` 查会**命中上一条缓存** ⇒ 返回 1000×1000，用户改了设置**看不出变化**。修法：新增
+  `_opts_key(opts)`，把选项排序后 `json.dumps` 取 **sha1 前 12 位** —— 用摘要不用原值，
+  因为配置里可能含 API Key，**密钥不该以明文躺在缓存键里**。
+- **真缺陷 ②（模块级状态跨用例泄漏）**：`_SEARCH_CACHE` / `_LAST_CALL` 是模块级可变状态，
+  跨用例留存会 ① 命中上一条用例的结果（换过的桩不生效）② 让声明限流的家（comicvine 18 s）
+  在**无关用例里真 sleep**。症状是「**单跑绿、全量红**」⇒ `tests/conftest.py` 加 autouse
+  fixture 前后各清一次（缓存行为本身由 `tests/test_metasources_cache.py` 专门钉住）。
+- 两处修复都做了**「改动前会红」的实测**（改回去 ⇒ 对应用例 exit 1），不是事后补的测试。
+- 新增 `tests/test_metasources_cache.py`（**21 例**）。
+
+### 四、第 4 步：按 ID 取详情 —— 只接**真机核验过**的两家
+
+| 源 | 探活结果 | 判决 |
+|---|---|---|
+| Open Library | `GET /works/OL17267881W.json` **200** | ✅ 接 |
+| iTunes | `GET /lookup?id=597944491` **200**，`resultCount=1` | ✅ 接（字段与检索同形状，直接复用 `_itunes_entry`） |
+| Google Books | 三个查询全部 **429**（匿名额度耗尽） | ⛔ **不接**（端点没核过） |
+| Audnexus | `[SSL: UNEXPECTED_EOF_WHILE_READING]`，本机不可达 | ⛔ **不接** |
+| Goodreads | `GET /book/show/{id}` → **302**（反爬验证页） | ⛔ **不接** |
+
+- Open Library works 端点的**三个坑**：① `description` 是**字典** `{"type": ..., "value": ...}`
+  而不是字符串；② 详情**没有作者名**，只有边 `authors[].author.key` ⇒ 要逐作者再查
+  （单个作者失败 `continue`，不影响整条详情）；③ works 端点**不返回出版年 / 出版社 / ISBN**
+  （那些在 edition 上）⇒ 这三项**留空不猜**。
+- 新增 `_error_text(exc)`：把原在 `search()` 里折中文的 except 抽成模块级共用函数，
+  **否则第 4 步立刻就会造出第二份错误文案**（两处必然走散）；顺带补 **404 分支**
+  （「该地址不存在（HTTP 404）：记录可能已下架，或该来源的接口已改版」）——
+  按 ID 取详情时 404 是常见结果，笼统的「接口返回错误」会让人以为站点坏了。
+- 新增 `_detail_key()`：第一段用字面量 `"@detail"` ⇒ 与 `(源, 书名, 作者, limit, opts)`
+  **必然不撞**（详情存的是**单条** `[entry]`，检索存的是列表，撞了双方都静默失效）。
+- `detail(source, provider_id, opts=None)` **不抛异常**，回 `{ok, entry, error}`；未核验的家回
+  **明确中文回绝**（「这家来源没有『按 ID 取详情』的通道，请改用按书名检索」）而不是假装成功；
+  **不设 `force`**（没有哪个调用方需要「跳过缓存拿详情」，加了就是投机抽象 §7.2）。
+- 新增 `tests/test_metasources_detail.py`（**24 例**，`_Routes` 按 URL 精确路由，未登记的外呼直接
+  `AssertionError`，用来证明「回绝路径真的没发请求」）。
+
+### 五、第 5 步：两个配置键 + 环境变量兜底（含一个被裸 `except` 吞掉两期的**假配置**）
+
+- `metadata_fetch.cache_ttl` 默认 **`None`**（三档：`None` = 按各来源自己声明的值 /
+  `0` = 关闭缓存 / `> 0` = 全局覆盖）。**不能写死 600** —— 那样各来源的 `cache_ttl` 声明
+  就变成**死配置**，将来某家数据变动快慢不同时没人能按源调。
+- `metadata_fetch.detail_fetch` 默认 **`False`** —— 多数书抓过一遍就带上了记录标识，
+  打开会**改变既有书的抓取结果**（本期口径是「不发版、不改用户可见行为」）。
+- ⚠️ **真缺陷（本期最重的一处）**：`novelforge/core/metasources.py` **从来没有 import config**，
+  `_ttl_of()` 里那句 `config.load_config()` 抛的 `NameError` 被当初写的**裸 `except Exception`**
+  一起吞掉 ⇒ `cache_ttl` 成了「**能写进 settings.json、界面上有控件、实际谁都不读**」的假配置，
+  第 2 步写下的配置项一直到第 5 步加读回契约测试才暴露（这正是本仓把假配置判为缺陷的原因）。
+  修法：补 `from .. import config`（house style，注意 **config 在上一级 `novelforge/` 不在 `core/` 里**）
+  + `import logging` + 模块级 `_log`，并把 except **收窄成 `except (TypeError, ValueError)`** 加 warning。
+  教训原文：**兜底要兜得住「读不到」，但不能连「写错了」一起吞**。
+- 环境变量**只兜底、不覆盖**（与 `update.image` 同口径）：`NOVELFORGE_METADATA_CACHE_TTL` /
+  `NOVELFORGE_METADATA_DETAIL_FETCH`，**只有 `settings.json` 与 `config.yaml` 都没写过这个键时才生效**。
+  无条件覆盖会让「在界面上改了、保存后没变」变成查不出来的怪事（假配置的另一种形态）。
+  常量名写成 `_ENV_CACHE_TTL` / `_ENV_DETAIL_FETCH` 而不是散落的字面量（测试要按名字断言）。
+- `server.py`：`EDITABLE["metadata_fetch"]` 加两键，并在 `api_put_config` 补 `cache_ttl` 校验 ——
+  负数 / 非数字 / 超 30 天一律 **400**，`0` 放行（**不能照抄上传上限那条 `<= 0` 直接拒**：
+  `0` 在这条路上是明确语义；但静默回落到「按来源默认」等于用户改完没反应）。
+- `metafetch._detail_first(book, sources, options)`：库里记过 `openlibrary_id` / `itunes_id` 时
+  按**精确键**回查 —— 书名会重、会带副标题、会换语言写法，按书名检索本质是**猜**，
+  而记录标识是**上次已经认过的那条记录**。
+  ⚠️ 分数写 **1.0**，不沿用 `_entry` 的 0.0：打分是为「拿书名在一堆结果里挑最像的一条」准备的，
+  这里是同一份记录；照抄 0.0 会被 `threshold` 挡在门外 ⇒ **功能开了却永远不生效**。
+  ⚠️ `plan`（批量抓取）与 `online_candidate`（详情页在线建议）**两条路都要接** ——
+  只在详情页接，用户打开开关后会发现「批量抓取还是老样子」，且没有任何办法知道这个开关只管一个页面。
+- 新增 `tests/test_config_readback_contract.py`（**19 例**）：静态断言**四个同步点**
+  （`config.DEFAULTS` → `server.EDITABLE` → 界面控件 → **真实读点**）+ 端到端 PUT/GET 回读
+  （含「兄弟键没被动过」）+ 环境变量优先级 + `400` 分支。写配置的用例必须自己
+  `monkeypatch.setattr(config, "SETTINGS_FILE", tmp_path / "settings.json")`，否则污染会话级 settings.json。
+
+### 六、第 6 步：前端两个开关
+
+- 落点是 `frontend/src/views/settings/pages/MetadataPage.vue`（**不是** `frontend/src/data/settingsFields.ts`
+  —— 那里只有 `metadata: ['metadata_fetch']` 的分区块映射，`metadata_fetch` 的控件住在这个页面里）。
+- 缓存时长用数字输入 + `ttlInput(ev)`：**空串必须回 `null` 而不是 0** —— 后端把「留空 = 按各来源声明」
+  与「0 = 关闭缓存」分得很清，回落成 0 等于用户清空输入框就悄悄关了缓存。
+- 按 ID 回查用开关（`@click` 后立即 `saveSection('metadata')`），说明文字如实写「只对存过标识的书生效」、
+  「目前只有 iTunes 与 Open Library 有这条通道」、「默认关闭」。
+
+### 七、实测与基线
+
+| 项 | 结果 |
+|---|---|
+| 后端全量 | **2238 passed / 0 failed / 0 errors / 25 skipped**（350.16 s，exit 0） |
+| 第 101 期基线 | 2184 例（2159 passed）⇒ **+79** = registry 15 + cache 21 + detail 24 + readback 19 |
+| metadata 聚焦 15 文件 | **261 passed**（14.26 s），既有解析 / 缓存 / 限流用例互不干扰 |
+| 前端类型检查 | 仓库原有的 `vue-tsc 3.3.11` `--build --force` **exit 0** |
+| `VERSION` | 仍 `0.94.0`（**未发版，连续八轮**） |
+
+### 八、本轮**没核过**因而**没声明**的能力（挂起，不是忘了）
+
+- **Google Books / Audnexus / Goodreads 的按 ID 取详情通道**：阻塞原因逐条见上表（429 额度 /
+  SSL 不可达 / 302 反爬）。按第 95 期审计口径「在没有逐家真机核过的前提下改选择器语义，
+  等于用『单测绿』换『线上未知』」⇒ **无样本不声明**，`detail()` 如实回绝。
+- **openlibrary.org 间歇性不可达**：收尾时重试探针 **12/12 次全部 `ConnectTimeout [WinError 10060]`**
+  （同日早些时候同一个 works URL 曾返回 200），裸 `httpx.get(timeout=30)` 同样连不上
+  ⇒ 判定为**本机到该站的链路问题，不是代码问题**，故**保留**详情绑定。日后体检若报这一家 timeout，
+  先查链路再查代码。
+- **`online_candidate(book)` 不传 `cfg` 时静默返回 `None`**（既有语义，本期**钉住不改**）：
+  `_cfg(cfg)` 只从传入的 dict 取，而 `online_candidate(book, cfg=None)` 的默认值是 `None`
+  ⇒ 看着像「这家源没结果」，实际是「压根没去查」。仓内所有真实调用方都传了
+  （`server.py` 的详情页路径传 `cfg=config.load_config()`）。改成自动 `load_config()` 会让它
+  从「什么都不做」变成「真的出网抓」，属于有副作用的静默行为变更 ⇒ 记 TODO。
+
+### 九、踩坑与工具链（写进 `AGENTS.md` §5）
+
+- ⚠️ **`pytest.ini` 已有 `addopts = -q`，命令行再传 `-q` 会变 `-qq`**，pytest 就不再打印末行
+  `N passed, M skipped` 汇总 ⇒ 表现是「exit 0 但拿不到计数」；计数时**不要传 `-q`**。
+- ⚠️ **pwsh 的 `> $out 2>&1` 写出的是 UTF-16LE**，用 `encoding="utf-8"` 读会得到带 `\x00` 的乱码
+  且搜不到任何关键词 ⇒ 读这类日志要 `encoding="utf-16"`。
+- ⚠️ **不要在本仓跑 `pnpm run <script>`**：pnpm 的 deps 检查会**自动 install**，把 `frontend/node_modules`
+  整套移进 `.ignored` 再从 registry 重装（版本与 `package.json` 的 `^` 记录不同），并在
+  `[ERR_PNPM_IGNORED_BUILDS]` 上以 exit 1 收尾 ⇒ 脚本压根没跑。正确姿势是直接调
+  `frontend/node_modules/` 里的工具（如 `node node_modules/vue-tsc/bin/vue-tsc.js --build`）。
+  本次事故还顺手留下两个未跟踪文件 `frontend/pnpm-lock.yaml` / `frontend/pnpm-workspace.yaml`，
+  已删除；**没有任何已跟踪文件受损**（`git status` 核实）。
+- ⚠️ **`vue-tsc` 3.3.12 起**会在 `frontend/src/components/book/MetadataEditor.vue:614`
+  （模板里的 `FIELD_LABELS[c as keyof BookMetadataFields]`）报 `TS2339`，3.3.11 干净
+  ⇒ 下一轮只要重装依赖，前端类型检查就会红。已记 `docs/TODO.md`，**本期不动**（与本期能力无关）。
+- ⚠️ 测试函数的**名字里不能有「」**（`SyntaxError: invalid character '「'`）；**批量替换脚本必须先
+  `src.count(old) == 1` 断言**再替换（「命中若干处」不等于「命中该处」）。
+- 探针脚本一律放 `%TEMP%`、**不入库**；离线夹具只放**裁过的代表性片段**。
+
+### 十、收尾
+
+- 分能力提交（`fix` / `feat` / `docs` 各自一条），**提交即推送**，工作区不留我方的未提交改动。
+- ⚠️ 并行会话脏项（`.codebuddy/memory/2026-10-03.md`、`.vscode/settings.json`、
+  `.vscode/harmony-deploy.ps1`、两个 `*.cookies.txt`）**不回退不提交**。
+- 本期**零新源**：微信读书（`wr_skey` 等登录态会过期、违反站点 ToS）按既定口径
+  `fragile=True` + `needs_config=True` + **默认不启用**，留待后续期次；失效时回**明确中文错误
+  而不是静默 0 条**。Calibre 只**参考插件模式与源适配表**，**不装运行时**（不写 `requirements.txt`、
+  不 `import calibre.*` —— 第 62 期已明确不依赖 Calibre）。
