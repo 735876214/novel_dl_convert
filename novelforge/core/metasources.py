@@ -490,6 +490,24 @@ def _strip_html(text) -> str:
     return _clean(html_unescape(_HTML_TAG.sub(" ", str(text))))
 
 
+def _soup(html: str):
+    """把 HTML 解析成 BeautifulSoup 树；**没装 bs4 就返回 None**（调用方如实回落空列表）。
+
+    bs4 已在 `requirements.txt` 里显式声明（书源引擎的 CSS 选择器通道
+    `sources/rules.py::_selspec_nodes` 就用它），正常环境一定在；这里仍按
+    「可选依赖缺失要**如实降级**、不静默假装成功」的既有口径兜一层 ——
+    缺了就是这家源取不到值，而不是抛异常打断整轮抓取。
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:                                      # pragma: no cover - 依赖缺失分支
+        return None
+    try:
+        return BeautifulSoup(html or "", "html.parser")
+    except Exception:                                        # noqa: BLE001 —— 解析器不认的内容按「取不到」处理
+        return None
+
+
 def _year_of(value) -> str:
     """从各种形态里抠出 4 位年份（源里可能是 2008 / '2008-05-01' / 2008.0）。"""
     m = re.search(r"(1[5-9]\d{2}|20\d{2})", str(value or ""))
@@ -1148,13 +1166,18 @@ def _search_audible(title: str, author: str, limit: int, opts: dict) -> list:
     """Audible 走 catalog 接口（JSON）而不是抓页面：更稳，但仍是**非公开**接口 → fragile。
 
     区域（行内可配，默认 us）决定打哪个分站域名；没见过的取值回落 us。
+
+    ⚠️ ``response_groups`` 里**不能带 ``publisher``**（第 99 期真机核验）：接口会直接回
+    ``400 {"message":"Invalid response group(s) requested: publisher"}`` ⇒ 这家**永远 0 结果**。
+    需注意 ``publisher_name`` / ``publisher_summary`` 两个**字段**照旧随 ``product_desc`` 返回，
+    与那个非法的**响应组名**无关 —— 删掉它不会少拿出版方（实测 200 + ``publisher_name: "Macmillan Audio"``）。
     """
     region = _clean((opts or {}).get("region")).lower() or "us"
     host = AUDIBLE_HOSTS.get(region, AUDIBLE_HOSTS["us"])
     data = _get_json(f"https://{host}/1.0/catalog/products", params={
         "keywords": _clean(title), "num_results": str(limit),
         "products_sort_by": "Relevance",
-        "response_groups": "product_desc,contributors,media,series,publisher",
+        "response_groups": "product_desc,contributors,media,series",
     })
     out = []
     for p in (data.get("products") or [])[:limit]:
@@ -1199,22 +1222,37 @@ def _search_lubimyczytac(title: str, author: str, limit: int, opts: dict) -> lis
     """Lubimyczytac 搜索结果页抓取。
 
     ⚠️ 选择器同样照真实页面校准过（第 59 期体检：旧的 ``authorAllBooks__*`` 早已废弃，
-    现站用 ``book-card__title`` / ``book-card__author``）。书名优先取 ``title="…"`` 属性
-    （比锚文本干净，锚文本带首尾空格），封面在 ``book-card__cover-image`` 的 ``src``。
+    现站用 ``book-card__title`` / ``book-card__author``）。
+
+    ⚠️ **必须按卡片容器逐卡取，不能按三个独立列表按下标配对**（第 99 期真机核验）：
+    实测一本多作者的书（``Latin American Thought``，作者 Karol Derwich + Magdalena
+    Modrzejewska，两名之间是 ``, `` 分隔）会让「作者」这个列表与「书名」列表**长度和下标都对不上**
+    —— 旧的三次 ``findall`` + 按下标取只拿得到第一位作者，其余静默丢失。
+    改成在 ``div.book-card`` 容器内分别取标题与作者（多作者用 ``, `` 连接），
+    既修好截断，也不再依赖三个列表的下标对齐。
+
+    ⚠️ 书名优先取 ``title="…"`` 属性（比锚文本干净，锚文本带首尾空格）。
     """
     html = _get_text(LUBIMYCZYTAC, params={"phrase": _clean(title)})
-    covers = re.findall(r'class="book-card__cover-image"[^>]*src="([^"]+)"', html)
-    cards = re.findall(r'<a class="book-card__title"[^>]*?title="([^"]+)"[^>]*?href="([^"]+)"'
-                       r'[^>]*>(.*?)</a>', html, re.S)
-    authors = re.findall(r'class="book-card__author"[^>]*>\s*<a[^>]*>([^<]+)</a>', html)
+    soup = _soup(html)
+    if soup is None:
+        return []
     out = []
-    for i, (attr_title, href, inner) in enumerate(cards[:limit]):
-        name = _clean(attr_title) or _clean(inner)
+    for card in soup.select("div.book-card"):
+        a = card.select_one("a.book-card__title")
+        if a is None:
+            continue
+        name = _clean(a.get("title")) or _clean(a.get_text())
         if not name:
             continue
+        authors = [_clean(x.get_text()) for x in card.select("div.book-card__author a")]
+        cover = card.select_one("img.book-card__cover-image")
         out.append(_entry("lubimyczytac", title=name,
-                          author=authors[i] if i < len(authors) else "",
-                          cover_url=covers[i] if i < len(covers) else "", raw_id=href))
+                          author=", ".join([x for x in authors if x]),
+                          cover_url=_clean(cover.get("src")) if cover is not None else "",
+                          raw_id=_clean(a.get("href"))))
+        if len(out) >= limit:
+            break
     return out
 
 
