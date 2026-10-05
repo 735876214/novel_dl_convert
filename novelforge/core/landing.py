@@ -40,6 +40,9 @@
    整本重写那条路（`first` / 显式 `overwrite`）才是本模块唯一会盖到用户原文件的地方，
    而那两处的前置条件分别是「本地已经读不了」与「用户点过二次确认」。
    删除一律走回收站（本模块根本不删任何书文件）。
+   ⚠️ 第 96 期补上另一半：**覆盖也先留档** —— 整本重写之前，要被替换的那份文件先走
+   `publish.recycle` 进回收站（见 :func:`_park`）⇒ 「用源站整本覆盖本地」现在是**可撤销**的；
+   回收失败就中止整条落地、盘上零改动（宁可如实拒绝，也不做一次不可撤销的覆盖）。
    ⚠️ 已知边界（如实记录，不在本期修）：成品 EPUB 由 `pipeline` / `epub_builder` 直接写
    ``out_path``，**不是**「临时文件 + replace」—— 与既有下载链路同一性质（`_run_download`
    也是这么写的）。本模块只保证：先落到同盘的暂存目录、再用 ``Path.replace`` 原子搬到
@@ -53,7 +56,7 @@ import secrets
 import shutil
 
 from .. import config
-from . import library, lib_settings, reading_list
+from . import library, lib_settings, publish, reading_list
 
 _log = logging.getLogger("novelforge")
 
@@ -321,9 +324,41 @@ def _write_text(path: pathlib.Path, text: str) -> None:
     tmp.replace(path)
 
 
+def _park(path):
+    """覆盖 ``path`` 之前，把**现在就在那儿的**那份文件移入回收站（第 96 期）。
+
+    为什么非有这一步：整本落地与显式覆盖都是**原地替换**，而被替换掉的那一份此前没有任何副本
+    ⇒ 用户点错一次、或在线阅读过了触发门槛，旧书就再也回不来了。`AGENTS.md` §1 的口径是
+    「删除一律移入回收站、从不 ``unlink``」—— **覆盖同性质：先留档再盖**。
+
+    文件不存在 ⇒ 返回 ``None``（没什么可留的）；移不动时**抛出**，由调用方中止整条落地
+    （宁可如实拒绝，也不做一次不可撤销的覆盖）。
+    """
+    if not path:
+        return None
+    p = pathlib.Path(path)
+    if not p.is_file():
+        return None
+    return publish.recycle(p, why="自动落地覆盖本地文件前留档")
+
+
+def _copy_atomic(src: pathlib.Path, dst: pathlib.Path) -> None:
+    """把 ``src`` **原子地**复制到 ``dst``（``.part`` → :meth:`Path.replace`）。
+
+    ``shutil.copy2`` 直接写目标是原地写：中途死掉会留下**半份** txt，而它就躺在**被监听**的
+    收书目录里 ⇒ 监听线程会把它当成一本新书收进书架。``*.part`` 在 `config` 的 watcher
+    忽略清单里（`watcher.ignore`），所以宁可留一个垃圾文件，也不留半本书
+    —— 与 `sources/manager.py` 里留档 txt 的写法同一手法。
+    """
+    tmp = dst.with_name(dst.name + ".part")
+    shutil.copy2(src, tmp)
+    tmp.replace(dst)
+
+
 # ---------------- 落地 / 更新 ----------------
 
-async def _first_landing(mgr, book: dict, row: dict) -> dict:
+async def _first_landing(mgr, book: dict, row: dict, *,
+                         replacing_readable: bool = False) -> dict:
     """**首次落地**：整本抓到这本书自己的位置上（本地读不了时的唯一出路）。
 
     步骤与每一步的「为什么」：拉到**同盘的暂存目录**（书所在目录下的 ``.nfstage-*``，
@@ -339,6 +374,15 @@ async def _first_landing(mgr, book: dict, row: dict) -> dict:
     ⚠️ 最后一步**不能省**：留档 txt 写在**被监听**的收书目录里，
     不登记就会被监听线程当成新文件收一次 ⇒ 书架上多出一本 ``<名>.txt``
     （正是「绝不新建第二条书目」要避免的事）。
+
+    ⚠️ **覆盖之前先把被替换的那一份移入回收站**（第 96 期，见 :func:`_park`）：``dest`` 在
+    单目录部署下**就是用户自己的原文件**（书库来源目录 = 收书目录，见 `watcher` 里
+    「就地库：来源即存储」那条分支），``txt_dest`` 是收书目录里的原件/留档 —— 两处都可能有
+    旧内容，所以**两个落点都先留档**再写，并按解析后的路径去重（同一个文件只留一次）。
+    回收失败 ⇒ 整条落地**中止**、盘上零改动（宁可如实拒绝，也不做一次不可撤销的覆盖）。
+
+    ``replacing_readable``：本次是不是在盖一本**本来读得了**的书（显式覆盖那条路）——
+    只用来把报告写实（此前无论哪条路都写「本地读不了」）。
     """
     from . import autoupdate, watcher as watcher_mod
     bdir = book_dir(book)
@@ -373,15 +417,27 @@ async def _first_landing(mgr, book: dict, row: dict) -> dict:
                          f"{len(picked)} 份 —— 就地替换会写出一本名不副实的书"
                          "（阅读器按后缀派），所以没有写进书库；要这一版请手动下载")
         dest = bdir / name
+        txt_dest = pathlib.Path(config.INPUT_DIR) / f"{stem}.txt"
+        # ⚠️ **覆盖之前先把被替换掉的那一份移入回收站**（第 96 期）。`dest` 在单目录部署下
+        # **就是用户自己的原文件**（书库来源目录 = 收书目录），`txt_dest` 是收书目录里的
+        # 原件/留档 —— 两处都可能已经有旧内容，所以两个落点都先留档。
+        # 去重是必须的：那种部署下两者**是同一个文件**，回收两次会把刚写好的那份搬走。
+        targets = [dest] if _same_path(dest, txt_dest) else [dest, txt_dest]
+        parked: list = []
+        for t in targets:
+            try:
+                got = _park(t)
+            except Exception as e:                    # noqa: BLE001 —— 原因原文交给用户
+                return _skip(f"覆盖前把《{t.name}》移入回收站失败："
+                             f"{type(e).__name__}: {e} —— 已中止，盘上文件零改动")
+            if got is not None:
+                parked.append(got.name)
+        txt_dest.parent.mkdir(parents=True, exist_ok=True)
         if picked[0] == txt_src:
             # txt 书：原件既**就是**这本书、又是追更的留档 ⇒ 两处各留一份（copy 不是 move，
-            # 否则下面那段就再也找不到 txt 了）。
-            txt_dest = pathlib.Path(config.INPUT_DIR) / f"{stem}.txt"
-            txt_dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(txt_src, txt_dest)
+            # 否则下面那段就再也找不到 txt 了）。复制走 `.part` → replace（见 `_copy_atomic`）。
+            _copy_atomic(txt_src, txt_dest)
         picked[0].replace(dest)                      # 同盘 ⇒ 原子覆盖这本书自己
-        txt_dest = pathlib.Path(config.INPUT_DIR) / f"{stem}.txt"
-        txt_dest.parent.mkdir(parents=True, exist_ok=True)
         if txt_src.is_file():
             txt_src.replace(txt_dest)
         meta_src = stage / f"{stem}.meta.json"
@@ -395,9 +451,13 @@ async def _first_landing(mgr, book: dict, row: dict) -> dict:
         shutil.rmtree(stage, ignore_errors=True)
     library.invalidate()
     _log.info("自动落地完成：《%s》 → %s", stem, dest)
+    # 报告要写实：显式覆盖那条路盖的是一本**本来读得了**的书，不能再写「本地读不了」。
+    why_head = "你确认了用源站整本覆盖本地" if replacing_readable \
+        else "本地读不了（没有可读章节）"
+    kept = f"；原文件 {'、'.join(parked)} 已移入回收站（可还原）" if parked else ""
     return {"mode": "first", "added": 0, "note": "",
             "title": stem, "epub": str(dest), "path": str(dest),
-            "detail": f"本地读不了（没有可读章节），已按源站整本落到 {name}"}
+            "detail": f"{why_head}，已按源站整本落到 {name}{kept}"}
 
 
 async def _append(mgr, book: dict, row: dict, local: list) -> dict:
@@ -496,7 +556,7 @@ async def sync(mgr, book: dict, row: dict, *, overwrite: bool = False,
         if not overwrite and not allow_first:
             return _skip("本地没有可读内容：在在线阅读里读满 "
                          f"{SYNC_AFTER + 1} 章会自动落到本地（或手动点「用源站整本覆盖本地」）")
-        return await _first_landing(mgr, book, row)
+        return await _first_landing(mgr, book, row, replacing_readable=bool(local))
     return await _append(mgr, book, row, local)
 
 

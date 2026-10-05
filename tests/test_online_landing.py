@@ -25,7 +25,8 @@ import zipfile
 import pytest
 
 from novelforge import config
-from novelforge.core import db, epub_builder, landing, library, watcher as watcher_mod
+from novelforge.core import (db, epub_builder, fileops, landing, library,
+                             watcher as watcher_mod)
 from novelforge.sources import REGISTRY, store
 from novelforge.sources.base import SourceAdapter
 from novelforge.sources.manager import DownloadManager
@@ -423,6 +424,67 @@ def test_首次落地到txt书要落txt_不许把EPUB字节塞进txt(ctx, monkey
     assert json.loads(sidecar.read_text(encoding="utf-8"))["output_dir"] == str(ctx)
 
 
+def test_首次落地覆盖前先把原文件移入回收站(ctx, monkeypatch):            # noqa: ARG001
+    """**覆盖是可撤销的**（第 96 期）：盖到这本书自己头上之前，旧的那一份先进回收站。
+
+    这是本模块唯一会盖到用户文件的地方 —— 此前盖掉就没了（第 95 期审计批次 8 的真缺口
+    不是「没二次确认」，而是「不可撤销」）。钉三件事：旧字节完整留在回收站、台账记下原路径、
+    报告如实说明「已移入回收站」。
+    """
+    book = _make_book(ctx, "坏书", 0)               # ctx/坏书.epub = 坏字节（本地读不了）
+    before = (ctx / "坏书.epub").read_bytes()
+    row = _bind(book)
+    mgr = _install_src(monkeypatch, _source_toc(3))
+
+    rep = asyncio.run(landing.sync(mgr, book, row, allow_first=True))
+
+    assert rep["mode"] == "first", rep
+    recycled = [q for q in fileops.recycle_dir().iterdir() if q.is_file()]
+    assert len(recycled) == 1 and recycled[0].read_bytes() == before, \
+        "被替换的那一份必须逐字节躺在回收站里"
+    rows = db.recycle_list()
+    assert len(rows) == 1 and rows[0]["orig_path"] == str(ctx / "坏书.epub")
+    assert "回收站" in rep["detail"], rep
+    assert len(library.books()) == 1, "留档不影响「绝不新建第二条书目」"
+
+
+def test_首次落地到txt书_两份落点都先留档(ctx, monkeypatch):             # noqa: ARG001
+    """txt 书的**两个**落点（书库内 `dest` + 收书目录留档 `txt_dest`）都可能已有旧内容 ⇒ 都先回收。"""
+    book = _make_txt_book(ctx, "三体", 0)
+    assert landing.local_chapters(book) == [], "起手就要是「本地读不了」"
+    row = _bind(book)
+    mgr = _install_src(monkeypatch, _source_toc(2))
+    input_txt = pathlib.Path(config.INPUT_DIR) / "三体.txt"
+    input_txt.parent.mkdir(parents=True, exist_ok=True)
+    input_txt.write_text("旧的留档", encoding="utf-8")
+
+    rep = asyncio.run(landing.sync(mgr, book, row, allow_first=True))
+
+    assert rep["mode"] == "first", rep
+    blobs = sorted(q.read_bytes() for q in fileops.recycle_dir().iterdir() if q.is_file())
+    assert blobs == [b"", "旧的留档".encode("utf-8")], \
+        f"书库内那份（空文件）与收书目录那份（旧留档）都要留档，实得 {blobs}"
+    assert len(db.recycle_list()) == 2
+
+
+def test_覆盖前回收失败就中止_盘上零改动(ctx, monkeypatch):              # noqa: ARG001
+    """移不动就**如实拒绝**：宁可这次不落地，也不做一次不可撤销的覆盖。"""
+    book = _make_book(ctx, "坏书", 0)
+    before = (ctx / "坏书.epub").read_bytes()
+    row = _bind(book)
+    mgr = _install_src(monkeypatch, _source_toc(2))
+
+    def _boom(*a, **k):
+        raise OSError("回收目录写不进去")
+
+    monkeypatch.setattr(landing.publish, "recycle", _boom)
+    rep = asyncio.run(landing.sync(mgr, book, row, allow_first=True))
+
+    assert rep["mode"] == "skip" and "回收站失败" in rep["note"], rep
+    assert (ctx / "坏书.epub").read_bytes() == before, "盘上必须零改动"
+    assert not list(ctx.glob(".nfstage-*")), "暂存目录仍要收干净（finally 那一步）"
+
+
 def test_落地写的留档txt要登记为已处理(ctx, monkeypatch):                # noqa: ARG001
     """落地写在**被监听**的收书目录里，不登记就会被监听线程当成新文件再收一次
     ⇒ 书架上多出一本 `<名>.txt`（正是「绝不新建第二条书目」要避免的事）。
@@ -476,6 +538,11 @@ def test_整本覆盖会重写第一章的内容(ctx, monkeypatch):             
     assert rep["mode"] == "first", rep
     assert _titles(ctx, "三体")[1:] == ["源站第 1 章", "源站第 2 章"]
     assert len(library.books()) == 1
+    # 第 96 期：显式覆盖同样**先留档**（这本本来是能读的 3 章，不是「本地读不了」）
+    recycled = [q.read_bytes() for q in fileops.recycle_dir().iterdir() if q.is_file()]
+    assert len(recycled) == 1 and recycled[0].startswith(b"PK\x03\x04"), \
+        "被覆盖掉的那本 EPUB 要先躺进回收站"
+    assert "覆盖" in rep["detail"] and "回收站" in rep["detail"], rep["detail"]
 
 
 def test_漫画与有声本期不自动落地(ctx):
