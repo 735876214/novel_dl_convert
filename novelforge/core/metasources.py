@@ -91,6 +91,14 @@ def _get_text(url: str, params: dict = None, headers: dict = None, hints: dict =
         if marker in low:
             raise RuntimeError("被反爬拦截（验证码 / 机器人校验）：该来源需要降低频率，"
                                "或按需提供 Cookie")
+    # ⚠️ Amazon 的「JS 校验 + 跳转」页（第 99 期真机核验）：它**不含任何验证码关键词**，
+    # 内容是 `200 OK` + 一段 `<meta http-equiv="refresh" content="5; URL='…&bm-verify=…'">`
+    # + 混淆 `<script>var i=…</script>` + 空 `<iframe>`，约 2.3 KB。
+    # 不在这里判掉的话，这家只会安静地返回 0 条，用户分不清「站点改版」与「被拦」——
+    # 正是本函数要消除的那种混淆。判据取站点专属的 `bm-verify`（真结果页不含，实测）。
+    if "bm-verify" in text[:4000]:
+        raise RuntimeError("被反爬拦截（Amazon 的 JS 校验页）：该来源需要降低频率，"
+                           "或按需提供 Cookie")
     return text
 
 

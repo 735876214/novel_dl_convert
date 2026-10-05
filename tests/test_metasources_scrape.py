@@ -93,6 +93,42 @@ def test_amazon_反爬挑战页解析出0条且不抛异常(monkeypatch):
     assert metasources._search_amazon("three body problem", "cixin liu", 5, {}) == []
 
 
+def test_amazon的JS校验页被识别成被拦截而不是静默0条(monkeypatch):
+    """**第 99 期真机核验发现的第三处问题**。
+
+    Amazon 回的是「200 + meta refresh 跳转到 …&bm-verify=… + 混淆 JS」的 JS 校验页，
+    它**不含任何验证码关键词** ⇒ 旧判据放行，用户只看到「0 条结果」。
+
+    用户要能分清「站点改版（等修复）」与「被拦（降频率 / 带 Cookie）」——
+    这两种处置完全不同，所以必须在出网口当场判掉。本用例走真实 `_get_text`（打桩 httpx）。
+    """
+    import httpx
+
+    html = AMAZON_CHALLENGE.read_text(encoding="utf-8")
+
+    def fake_request(method, url, **kw):
+        return httpx.Response(200, request=httpx.Request(method, url), text=html)
+
+    monkeypatch.setattr(httpx, "request", fake_request)
+    res = metasources.search("amazon", "three body problem", "", 5, {})
+    assert res["ok"] is False
+    assert "拦截" in res["error"], res["error"]
+
+
+def test_真结果页不会被误判成被拦截(monkeypatch):
+    """判据（bm-verify）必须**不误伤正常结果页** —— 否则这家会好页也报被拦。"""
+    import httpx
+
+    html = _lubi_html()                       # 真机抓到的正常搜索结果页
+
+    def fake_request(method, url, **kw):
+        return httpx.Response(200, request=httpx.Request(method, url), text=html)
+
+    monkeypatch.setattr(httpx, "request", fake_request)
+    text = metasources._get_text("https://example.invalid/s")
+    assert "book-card__title" in text, "正常页必须原样返回"
+
+
 def test_空页面与垃圾内容对各家都是空列表而不是异常(monkeypatch):
     """真实站点会给出各种「不是我们期待的形状」的响应；一家炸了不能拖垮整轮。"""
     for html in ("", "<html></html>", "not html at all", "<div><span>", "\x00\x01"):
