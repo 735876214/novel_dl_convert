@@ -468,23 +468,11 @@ def convert_txt(path: Path, out_dir: Path, opts: dict) -> Path:
 def convert_chapters(chapters: list[ dict], out_dir: Path, opts: dict, meta: dict | None = None) -> Path:
     """把「已结构化好的章节列表」直接转 EPUB（书源目录式分章时使用，最干净）。
 
-    chapters: [{title, body}, ...]；chapter_regex 不为空时先按该书源正则再切一次。
+    chapters: [{title, body}, ...]。书源正则切章在 `sources/rules._split_regex` 里，
+    这里拿到的一定已经是切好的章节。
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    regex = (opts.get("chapter_regex") or "").strip()
-    if regex:
-        from .detect import split_by_offsets, regex_bounds
-        import re as _re
-        merged = []
-        for ch in chapters:
-            text = f"{ch['title']}\n{ch['body']}"
-            bounds = sorted({(m.start(), m.group(0).strip()) for m in _re.compile(regex, _re.M).finditer(text)})
-            if bounds:
-                merged.extend(split_by_offsets(text, bounds, merge=False))
-            else:
-                merged.append(ch)
-        chapters = merged
 
     if not chapters:
         raise ValueError("章节为空，无法生成 EPUB")

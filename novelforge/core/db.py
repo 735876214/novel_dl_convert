@@ -4960,8 +4960,6 @@ def scrape_books_in(library_id, book_ids) -> dict:
 
 #: 库类型：电子书 / 漫画 / 有声书 / 混合通用（决定功能显隐矩阵）
 LIBRARY_TYPES = ("ebook", "comic", "audiobook", "mixed")
-#: 归属模式：本项目仅保留「就地引用」。mode 列已移除；保留常量仅作历史引用占位。
-LIBRARY_MODES = ("inplace",)
 
 
 def list_libraries() -> list:
