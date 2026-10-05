@@ -25,6 +25,8 @@ from html import unescape as html_unescape
 import httpx
 
 from .library import norm_key
+from .sources import Provider, kinds
+from .sources import registry as _src_registry
 
 #: 与其它外呼一致的超时口径：连接 8s、整体 20s
 TIMEOUT = httpx.Timeout(20.0, connect=8.0)
@@ -183,211 +185,44 @@ GROUPS = ("一般书籍目录", "有声读物", "漫画和小说", "极权目录
 #:
 #: `key_field` = 配置落在 `metadata_fetch.<key_field>`（键名复用既有配置，不新造一份）；
 #: fetcher 内部一律读 `opts["api_key"]`，由调用侧按本表拼装（见 `metafetch._options_for`）。
+#: 源元数据（前端据此渲染分组列表 / 开关 / 配置入口，避免前后端各写一份）。
+#:
+#: ⚠️ **本表由 `core/sources/registry.py` 的 `DECLARED` 派生**（第 102 期）——
+#: 一家源的 label / group / note / fragile / needs_config / config_fields 只写在那份声明里，
+#: 这里不再手写。改一家源请改声明，别改这里（改了会在 import 期被覆盖）。
+#:
+#: 保持 `dict[str, dict]` 形状是**刻意的兼容边界**：`SOURCES[id]["label"]` 这种取法在
+#: `server.py` / `metafetch` / `metascore` / 前端契约里到处在用（`provider_catalog()`
+#: 直接 `{**meta}`）—— 第 102 期只收口声明，**不动取法**。
 SOURCES = {
-    # ---- 一般书籍目录 ----
-    "googlebooks": {
-        "label": "Google Books",
-        "group": "一般书籍目录",
-        "home": "https://books.google.com",
-        "note": "无需 API Key。简介与封面通常更全；部分地区会被拒绝（返回 403）。",
+    p.id: {
+        "label": p.label,
+        "group": p.group,
+        "home": p.home,
+        "note": p.note,
         "implemented": True,
-        "fragile": False,
-        # 匿名额度低（实测常撞 429），填 Key 显著改善 —— 属「可选配置」而非「必须」
-        "needs_config": False,
-        "config_hint": "可选：填 API Key 可显著提高额度（匿名常撞 429）",
-        # 行内「配置」项（第 57 期 E 段）：**注册表是唯一真值源**，前端只按 type 渲染。
-        # `opt` = 传给 fetcher 的 `opts` 键名（缺省 api_key）；`type` = 控件形态。
-        "config_fields": [
-            {"key": "googlebooks_api_key", "opt": "api_key", "label": "API 密钥",
-             "type": "secret", "placeholder": "未设置（可选）"},
-        ],
-    },
-    "amazon": {
-        "label": "Amazon",
-        "group": "一般书籍目录",
-        "home": "https://www.amazon.com/books",
-        "note": "图书搜索页抓取。反爬严格，可能被要求验证或直接返回空，站点改版即失效。",
-        "implemented": True,
-        "fragile": True,
-        "needs_config": False,
-        "config_hint": "",
-        # Amazon 反爬严格：带上登录后的 Cookie 能显著提高成功率（上游同款做法）。
-        # 它**不是必需**（不填也能试），所以 needs_config 仍为 False。
-        "config_fields": [
-            {"key": "amazon_cookie", "opt": "cookie", "label": "COOKIE", "type": "secret",
-             "placeholder": "session-id=…; ubid-main=…; x-main=…",
-             "hint": "从浏览器复制 amazon.com 的 Cookie，不必带「Cookie」前缀"},
-        ],
-    },
-    "goodreads": {
-        "label": "Goodreads",
-        "group": "一般书籍目录",
-        "home": "https://www.goodreads.com",
-        "note": "搜索页抓取（官方 API 已停发新 Key）。简介与评分齐全，但常触发反爬。",
-        "implemented": True,
-        "fragile": True,
-        "needs_config": False,
-        "config_hint": "",
-    },
-    "hardcover": {
-        "label": "Hardcover",
-        "group": "一般书籍目录",
-        "home": "https://hardcover.app",
-        "note": "GraphQL 接口，需要个人 API Token（hardcover.app → 账号设置里生成）。",
-        "implemented": True,
-        "fragile": False,
-        "needs_config": True,
-        "config_hint": "需要 Hardcover API Token（网页版账号设置 → Hardcover API）",
-        "config_fields": [
-            {"key": "hardcover_api_token", "opt": "api_key", "label": "API 密钥", "type": "secret",
-             "placeholder": "eyJ...（在 hardcover.app/account/api 获取的令牌）"},
-        ],
-    },
-    "openlibrary": {
-        "label": "Open Library",
-        "group": "一般书籍目录",
-        "home": "https://openlibrary.org",
-        "note": "无需 API Key。中文书的覆盖率一般，但语种/年份/ISBN 较规范。",
-        "implemented": True,
-        "fragile": False,
-        "needs_config": False,
-        "config_hint": "",
-    },
-    "itunes": {
-        "label": "iTunes",
-        "group": "一般书籍目录",
-        "home": "https://itunes.apple.com",
-        "note": "Apple 公开检索接口（无需 Key）。图书分类以英文为主，有声书与电子书分列。",
-        "implemented": True,
-        "fragile": False,
-        "needs_config": False,
-        "config_hint": "",
-        "config_fields": [
-            {"key": "itunes_cover_resolution", "opt": "resolution", "label": "封面分辨率",
-             "type": "select", "options": [
-                 {"value": "high", "label": "high（1000×1000，默认）"},
-                 {"value": "standard", "label": "standard（100×100，接口原图）"},
-             ]},
-        ],
-    },
-    "kobo": {
-        "label": "Kobo",
-        "group": "一般书籍目录",
-        "home": "https://www.kobo.com",
-        "note": "搜索页抓取（书店接口非公开）。注：本项目 Kobo **同步**仍不做，这里只是元数据来源。",
-        "implemented": True,
-        "fragile": True,
-        "needs_config": False,
-        "config_hint": "",
-        # Kobo 的 URL 分段是「/区域/语言/」—— 机器人在区域/语言不匹配时会拦（上游同款做法）
-        "config_fields": [
-            {"key": "kobo_region", "opt": "region", "label": "国家", "type": "select", "options": [
-                {"value": "us", "label": "us"}, {"value": "uk", "label": "uk"},
-                {"value": "ca", "label": "ca"}, {"value": "au", "label": "au"},
-                {"value": "jp", "label": "jp"},
-            ]},
-            {"key": "kobo_language", "opt": "language", "label": "语言", "type": "select", "options": [
-                {"value": "en", "label": "en"}, {"value": "zh", "label": "zh"},
-                {"value": "ja", "label": "ja"},
-            ]},
-        ],
-    },
-    # ---- 有声读物 ----
-    "audible": {
-        "label": "Audible",
-        "group": "有声读物",
-        "home": "https://www.audible.com",
-        "note": "有声书目录（时长 / 演播者 / 系列），走其公开 catalog 接口；区域站点结果不同。",
-        "implemented": True,
-        "fragile": True,
-        "needs_config": False,
-        "config_hint": "",
-        # Audible 的 catalog 接口按**区域域名**分站（api.audible.com / .co.uk / .de …）
-        "config_fields": [
-            {"key": "audible_region", "opt": "region", "label": "地区", "type": "select", "options": [
-                {"value": "us", "label": "us（api.audible.com）"},
-                {"value": "uk", "label": "uk（api.audible.co.uk）"},
-                {"value": "de", "label": "de（api.audible.de）"},
-                {"value": "jp", "label": "jp（api.audible.co.jp）"},
-            ]},
-        ],
-    },
-    "audnexus": {
-        "label": "AudNexus",
-        "group": "有声读物",
-        "home": "https://audnexus.com",
-        "note": "有声书元数据聚合（演播者 / 章节 / 系列），公开接口、免 Key。",
-        "implemented": True,
-        "fragile": False,
-        "needs_config": False,
-        "config_hint": "",
-    },
-    "librofm": {
-        "label": "Libro.fm",
-        "group": "有声读物",
-        "home": "https://libro.fm",
-        "note": "独立书店有声书平台，搜索页抓取（接口未公开）。",
-        "implemented": True,
-        "fragile": True,
-        "needs_config": False,
-        "config_hint": "",
-    },
-    # ---- 漫画和小说 ----
-    "comicvine": {
-        "label": "Comic Vine",
-        "group": "漫画和小说",
-        "home": "https://comicvine.gamespot.com",
-        "note": "漫画卷/期元数据，需要免费 API Key（comicvine.gamespot.com/api 申请）。",
-        "implemented": True,
-        "fragile": False,
-        "needs_config": True,
-        "config_hint": "需要 Comic Vine API Key（免费申请，注意其限流 200 次/小时）",
-        "config_fields": [
-            {"key": "comicvine_api_key", "opt": "api_key", "label": "API 密钥", "type": "secret",
-             "placeholder": "在 comicvine.gamespot.com/api 免费申请的密钥"},
-        ],
-    },
-    "ranobedb": {
-        "label": "RanobeDB",
-        "group": "漫画和小说",
-        "home": "https://ranobedb.org",
-        "note": "轻小说数据库（含系列册序），公开 API v0、免 Key；官方要求 ≤60 次/分钟。",
-        "implemented": True,
-        "fragile": False,
-        "needs_config": False,
-        "config_hint": "",
-    },
-    # ---- 地区性目录（上游分区名）----
-    "lubimyczytac": {
-        "label": "Lubimyczytac",
-        "group": "极权目录",
-        "home": "https://lubimyczytac.pl",
-        "note": "波兰语书籍目录，搜索页抓取。",
-        "implemented": True,
-        "fragile": True,
-        "needs_config": False,
-        "config_hint": "",
-    },
-    "aladin": {
-        "label": "Aladin",
-        "group": "极权目录",
-        "home": "https://www.aladin.co.kr",
-        "note": "韩国 Aladin 书店目录，公开 TTB API，需要 TTBKey。",
-        "implemented": True,
-        "fragile": False,
-        "needs_config": True,
-        "config_hint": "需要 Aladin TTBKey（aladin.co.kr 开放 API 页面申请）",
-        "config_fields": [
-            {"key": "aladin_ttbkey", "opt": "api_key", "label": "TTB 密钥", "type": "secret",
-             "placeholder": "ttb...（在 aladin.co.kr 开放 API 页面申请）"},
-        ],
-    },
+        "fragile": p.fragile,
+        "needs_config": p.needs_config,
+        "config_hint": p.config_hint,
+        **({"config_fields": [dict(f) for f in p.config_fields]} if p.config_fields else {}),
+        # 领域轴（第 102 期新增）：这家供给的是电子书 / 漫画 / 动画·轻小说 / 有声书。
+        # 界面据此分组并可如实说明「这家不提供 ISBN」，不参与计分（见 core/sources/kinds.py）。
+        "kind": p.kind,
+        # 限流 `(次数, 秒)`；空 = 不限。`search()` 在调用 fetcher 前据此补足间隔。
+        "rate_limit": list(p.rate_limit),
+        # 检索缓存秒数；0 = 不缓存
+        "cache_ttl": p.cache_ttl,
+    }
+    for p in _src_registry.DECLARED
 }
 
-#: 真正实现（有 fetcher）的源 id —— **必须与 `_FETCHERS` 的键完全一致**（契约测试钉住）。
-IMPLEMENTED = ("googlebooks", "amazon", "goodreads", "hardcover", "openlibrary", "itunes",
-               "kobo", "audible", "audnexus", "librofm", "comicvine", "ranobedb",
-               "lubimyczytac", "aladin")
+
+#: 真正实现（有 fetcher）的源 id —— **由 `_FETCHERS` 派生**（第 102 期：不再手写一份，
+#: 两份手写表迟早不一致）。契约测试仍钉住「声明里有 fetch 的 == 这张表」。
+#:
+#: ⚠️ 这里先给**占位**，真实值在**文件末尾**的 `_derive_final()` 里填 —— 因为 `_FETCHERS`
+#: 及其引用的 `_search_*` 全定义在文件后段，此处直接引用会 import 期 `NameError`。
+IMPLEMENTED = ()
 
 #: 默认启用顺序：**只留两家最可靠的**（Open Library + Google Books）。
 #: 14 家都能用不代表默认全开 —— 每启用一家就多一轮外呼（还容易被限流），
@@ -631,22 +466,11 @@ _LANG_PRIORITY = ("zh", "en", "ja", "ko")
 #
 # 契约：`set(LANG_AFFINITY) | set(LANG_BROAD) == set(SOURCES)` 且两者不相交（测试钉住）——
 # 新增一家源必须显式表态「专精哪些语种」还是「通吃」，不能默默漏过。
-#: 专精某些语种的源（语种码经 `_lang_of` 归一，如 "zh-CN"→"zh"）
-LANG_AFFINITY = {
-    "aladin": ("ko",),          # 韩国 Aladin 书店（TTB 接口）
-    "lubimyczytac": ("pl",),    # 波兰最大书评 / 书店站
-    "ranobedb": ("ja",),        # 轻小说数据库（日文原版）
-    "comicvine": ("en",),       # 漫画卷 / 期目录（英文为主）
-    "audible": ("en",),         # 有声书目录（区域站点，默认 us）
-    "audnexus": ("en",),
-    "librofm": ("en",),
-    "amazon": ("en",),          # 抓的是 amazon.com
-    "goodreads": ("en",),
-    "hardcover": ("en",),       # 英文书目社区（hardcover.app）
-    "itunes": ("en",),          # 默认 US 店（未配 country 时）
-}
+#: 专精某些语种的源（语种码经 `_lang_of` 归一，如 "zh-CN"→"zh"）。
+#: **由声明派生**（第 102 期）：`Provider.langs` 空元组 = 通吃，非空 = 专精这些语种。
+LANG_AFFINITY = {p.id: tuple(p.langs) for p in _src_registry.DECLARED if p.langs}
 #: 语种通吃：多语种都有一定覆盖 —— 任何语种都该排在「专精别的语种」之前
-LANG_BROAD = ("googlebooks", "openlibrary", "kobo")   # Kobo 的站点语种由配置项决定
+LANG_BROAD = tuple(p.id for p in _src_registry.DECLARED if not p.langs)
 
 #: 分档常量（数字只用于排序，别在别处引用其数值）
 LANG_TIER_SPECIFIC, LANG_TIER_BROAD, LANG_TIER_OTHER = 0, 1, 2
@@ -710,18 +534,7 @@ def score_candidate(want_title: str, want_author: str, cand: dict) -> float:
 #:
 #: ``audnexus`` 与 ``audible`` 同填 ``audible_id`` —— 两家的同一个 ASIN，
 #: 没有区分的意义（谁先命中谁写，合并时按信任表顺序）。
-SOURCE_ID_FIELD = {
-    "googlebooks": "google_books_id",
-    "goodreads": "goodreads_id",
-    "amazon": "amazon_id",
-    "hardcover": "hardcover_id",
-    "openlibrary": "openlibrary_id",
-    "itunes": "itunes_id",
-    "kobo": "kobo_id",
-    "aladin": "aladin_id",
-    "audible": "audible_id",
-    "audnexus": "audible_id",
-}
+SOURCE_ID_FIELD = {p.id: p.id_field for p in _src_registry.DECLARED if p.id_field}
 
 
 def _goodreads_id(path: str) -> str:
@@ -1462,22 +1275,76 @@ def _search_lubimyczytac(title: str, author: str, limit: int, opts: dict) -> lis
     return out
 
 
+#: 检索函数表：**键序 = 声明顺序**（`IMPLEMENTED` 由它派生，故顺序与 `registry.DECLARED` 一致）。
+#: ⚠️ 函数体仍在本文件（第 102 期只收口**声明**，不搬 1800 行解析实现）。
 _FETCHERS = {
-    "openlibrary": _search_openlibrary,
     "googlebooks": _search_googlebooks,
-    "itunes": _search_itunes,
-    "audnexus": _search_audnexus,
-    "ranobedb": _search_ranobedb,
-    "hardcover": _search_hardcover,
-    "comicvine": _search_comicvine,
-    "aladin": _search_aladin,
     "amazon": _search_amazon,
     "goodreads": _search_goodreads,
+    "hardcover": _search_hardcover,
+    "openlibrary": _search_openlibrary,
+    "itunes": _search_itunes,
     "kobo": _search_kobo,
     "audible": _search_audible,
+    "audnexus": _search_audnexus,
     "librofm": _search_librofm,
+    "comicvine": _search_comicvine,
+    "ranobedb": _search_ranobedb,
     "lubimyczytac": _search_lubimyczytac,
+    "aladin": _search_aladin,
 }
+
+#: 按 ID 取详情的函数表（第 102 期新能力）。**空 = 这家没有按 ID 取详情的能力**，
+#: `detail()` 因此回 `None`，调用方如实降级（不当成错误）。
+#: ⚠️ 先只接**真有独立详情通道**的家；Goodreads / RanobeDB 的详情是在各自检索函数里
+#: 顺手取的，没有单独的入口 —— 不为了凑数给它们造一个（§7.2 禁投机抽象）。
+_DETAIL_FETCHERS = {}
+
+
+def _bind_declared() -> None:
+    """把声明里声明的 fetch / fetch_detail 绑到本模块的表上（第 102 期）。
+
+    ⚠️ 为什么在**函数里**做而不是 import 期顶层做：声明表要引用本模块的函数，
+    而本模块要引用声明表 —— 顶层互相引用会成环。声明里 `fetch` 字段默认留空，
+    由这里在**本模块加载完之后**注入。
+
+    契约：声明里写了 `fetch` 却找不到同名函数 ⇒ **直接抛错**（静默忽略等于
+    「源在声明里但抓不了」，正是第 102 期要消灭的那类静默失败）。
+    """
+    for p in _src_registry.DECLARED:
+        want = getattr(p, "fetch_name", "")
+        if want:
+            fn = globals().get(want)
+            if fn is None:
+                raise ValueError(f"来源 {p.id} 声明的抓取函数不存在：{want}")
+            _FETCHERS[p.id] = fn
+        want_d = getattr(p, "detail_name", "")
+        if want_d:
+            fn = globals().get(want_d)
+            if fn is None:
+                raise ValueError(f"来源 {p.id} 声明的详情函数不存在：{want_d}")
+            _DETAIL_FETCHERS[p.id] = fn
+    missing = [p.id for p in _src_registry.DECLARED
+               if p.fetch_name and p.id not in _FETCHERS]
+    if missing:
+        raise ValueError(f"这些来源声明了抓取函数但未绑定成功：{missing}")
+
+
+#: 通用体检样本：绝大多数家都用这一本（命中率最高、界面上的说明也统一）。
+#: ⚠️ 地区性目录必须用当地书名（声明里的 `health_sample`）：拿 "Dune" 去查 Aladin（韩）/
+#: Lubimyczytac（波兰）/ RanobeDB（轻小说）本来就搜不到，那会把「这家是好的」误报成
+#: 「无结果」—— 误报比不测更糟：用户会去修一个根本没坏的东西。
+HEALTH_SAMPLE_DEFAULT = ("Dune", "Frank Herbert")
+
+
+def _derive_final() -> None:
+    """绑定声明后填上两张**依赖后段定义**的表（`_bind_declared` 之后调用）。"""
+    global IMPLEMENTED, HEALTH_SAMPLES
+    IMPLEMENTED = tuple(_FETCHERS)
+    HEALTH_SAMPLES = {
+        p.id: (tuple(p.health_sample) if p.health_sample else HEALTH_SAMPLE_DEFAULT)
+        for p in _src_registry.DECLARED
+    }
 
 
 # ---------------- ISBN 精确匹配（第 8 期 D4）----------------
@@ -1499,7 +1366,10 @@ def _search_isbn_googlebooks(isbn: str, limit: int, opts: dict) -> list:
     return [_gb_entry(it) for it in ((data.get("items") or [])[:limit]) if isinstance(it, dict)]
 
 
-#: 有 ISBN 精确检索能力的家（其余没有就跳过，由调用方回退「书名 + 作者」检索）
+#: 有 ISBN 精确检索能力的家（其余没有就跳过，由调用方回退「书名 + 作者」检索）。
+#: ⚠️ 这里保留字面写出而非从声明派生：它引用的是**本文件下方**定义的函数，
+#: 而声明表为了避开成环不写具体函数名（见 `_bind_declared`）。契约测试钉住
+#: 「键集合 == 声明里 fetch_isbn 非空的家」。
 _ISBN_FETCHERS = {
     "openlibrary": _search_isbn_openlibrary,
     "googlebooks": _search_isbn_googlebooks,
@@ -1662,22 +1532,10 @@ def probe(source: str, opts: dict = None) -> dict:
 #: ⚠️ 地区性目录必须用当地书名：拿 "Dune" 去查 Aladin（韩）/ Lubimyczytac（波兰）/
 #: RanobeDB（轻小说）本来就搜不到，那会把「这家是好的」误报成「无结果」——
 #: 误报比不测更糟：用户会去修一个根本没坏的东西。
-HEALTH_SAMPLES = {
-    "googlebooks": ("Dune", "Frank Herbert"),
-    "amazon": ("Dune", "Frank Herbert"),
-    "goodreads": ("Dune", "Frank Herbert"),
-    "hardcover": ("Dune", "Frank Herbert"),
-    "openlibrary": ("Dune", "Frank Herbert"),
-    "itunes": ("Dune", "Frank Herbert"),
-    "kobo": ("Dune", "Frank Herbert"),
-    "audible": ("Dune", "Frank Herbert"),
-    "audnexus": ("Dune", "Frank Herbert"),
-    "librofm": ("Dune", "Frank Herbert"),
-    "comicvine": ("Saga", ""),
-    "ranobedb": ("狼と香辛料", "支倉凍砂"),
-    "lubimyczytac": ("Wiedźmin", "Andrzej Sapkowski"),
-    "aladin": ("채식주의자", "한강"),
-}
+#: **由声明派生**（第 102 期）：`Provider.health_sample` 空元组 ⇒ 用通用样本。
+#: 顺序 = 声明顺序（`health_check` 的并发与呈现都按它）。
+#: ⚠️ 与 `IMPLEMENTED` 同理，真实值在文件末尾的 `_derive_final()` 里填。
+HEALTH_SAMPLES = {}
 
 #: 体检结论分类（界面直接用这份文案，不要在两端各写一套说法）。
 #: `ok` 与 `empty` 是两种不同的「通」：前者有结果，后者请求成功但解析不到东西。
@@ -1831,3 +1689,9 @@ def health_check(mf: dict = None, sources: list = None, query: str = "",
     return {"items": items, "order": order, "summary": summary, "kind_labels": HEALTH_KINDS,
             "query": ask, "samples": not ask, "elapsed_ms": int((time.time() - t0) * 1000),
             "ran_at": time.time()}
+
+#: 模块加载末尾统一绑定（第 102 期）。
+#: ⚠️ 顺序要紧：先 `_bind_declared()` 填 `_FETCHERS`，再 `_derive_final()` 由它派生
+#: `IMPLEMENTED` / `HEALTH_SAMPLES`。放在文件末尾是因为它们依赖本文件后段的定义。
+_bind_declared()
+_derive_final()
