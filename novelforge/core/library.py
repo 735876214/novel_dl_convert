@@ -22,6 +22,7 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import html.parser
+from html import unescape as html_unescape
 import json
 import logging
 import os
@@ -203,6 +204,38 @@ def _tag_text(xml: str, tag: str) -> str:
     if not m:
         return ""
     return re.sub(r"<[^>]+>", "", m.group(1)).strip()
+
+
+def _dc_description(opf: str) -> str:
+    """``dc:description``：**先解 HTML 实体，再原样保留标签**。
+
+    为什么单独一个函数而不复用 :func:`_tag_text`：``dc:description`` 在真实 OPF 里
+    常常是**双写转义**的 HTML 片段（实测 Standard Ebooks 30/30 本写作 ``&lt;p&gt;…``），
+    所以它需要的处理和 ``dc:title`` 这类纯文本字段**刚好相反**：
+    - 纯文本字段（title / creator / publisher / language）：要**剥标签**，实体不解也无害。
+    - description：要**解一次实体**（否则用户界面上直接看到 ``&lt;p&gt;`` 字面量），
+      但**不能剥标签**（解出来的 ``<p>`` / ``<i>`` 是描述本身的内容，
+      而它在很多源里本就是 HTML 片段 —— 剥了就丢信息）。
+
+    ⚠️ **顺序不能反**：先剥标签再解实体会把 ``&lt;p&gt;`` 当成文本留下；
+      先解实体再剥标签会把刚解出来的真标签吃掉。所以这里只做 unescape，
+      并且**刻意不再调** ``re.sub(r"<[^>]+>", "", …)``。
+    ⚠️ 前端用 ``{{ }}`` 文本插值渲染 description（``BookPreviewDialog.vue`` /
+      ``detail/OverviewTab.vue``），浏览器**不会**再解一次实体 ⇒ 坏的那份会直接露出。
+
+    口径与在线源对齐到「同一步」：``core/metasources.py`` 抓来的描述也解了实体
+    （它额外剥了标签，因为它拿到的是**网页**、标签是站点模板；OPF 的标签是**书自己的内容**）。
+
+    ⚠️ **前缀不写死成 ``dc:``**：野生 EPUB 里有把 Dublin Core 声明成别的别名的
+      （``xmlns:dc1="http://purl.org/dc/elements/1.1/"`` + ``<dc1:description>``），
+      而旧实现走 :func:`_tag_text` 时按**调用点传进来的标签名**匹配、本来就认这种写法。
+      写死 ``dc:`` 会让这类书的描述**静默变空**（正是本文件最忌讳的失败模式），
+      所以这里用 ``\\w+:description`` 认任意前缀。``re.S | re.I`` 与 :func:`_tag_text` 保持一致。
+    """
+    m = re.search(r"<\w+:description[^>]*>(.*?)</\w+:description>", opf, re.S | re.I)
+    if not m:
+        return ""
+    return html_unescape(m.group(1)).strip()
 
 
 def _fixed_layout_of(opf: str) -> bool:
@@ -1384,7 +1417,7 @@ def probe_epub(path: pathlib.Path) -> dict:
             out["publisher"] = _tag_text(opf, "dc:publisher")
             out["isbn"] = _isbn_of(opf)
             out["language"] = _tag_text(opf, "dc:language")
-            out["description"] = _tag_text(opf, "dc:description")
+            out["description"] = _dc_description(opf)
             out["tags"] = _subjects_of(opf)
             out["fixed_layout"] = _fixed_layout_of(opf)
             out["pages"] = _pages_in(z, opf, opf_path)
