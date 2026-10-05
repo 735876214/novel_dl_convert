@@ -4,7 +4,7 @@ import { computed } from 'vue'
 import ChartCard from '@/components/charts/ChartCard.vue'
 import ChartFrame from '@/components/charts/ChartFrame.vue'
 import type { StatsOverview } from '@/lib/api'
-import { useChartTheme } from '@/lib/charts'
+import { cssVarHex, useChartTheme } from '@/lib/charts'
 import { useLibraryStore } from '@/stores/library'
 
 /**
@@ -21,7 +21,7 @@ import { useLibraryStore } from '@/stores/library'
  */
 const props = defineProps<{ data: StatsOverview }>()
 
-const { theme } = useChartTheme()
+const { theme, dark } = useChartTheme()
 const library = useLibraryStore()
 
 const integrity = computed(() => props.data.integrity)
@@ -46,13 +46,37 @@ const stats = computed(() => {
   ]
 })
 
-/** 分档配色（照上游）：红 → 橙 → 黄 → 绿 → 蓝 */
+/**
+ * 分档配色：`docs/DESIGN.md` §4 的**固定**色板「红 → 橙 → 黄 → 绿」。
+ *
+ * 为什么是四个锚点而不是上游那张五档表：色板本身只定义四个（`--score-red/orange/yellow/green`），
+ * 且 §4 写明它是「**事实**而非品牌」—— 不随 accent 变。第 95 期之前这里写死了一列十六进制
+ * （红/橙/黄/绿四个 Tailwind 色，末档还自创了一个蓝），现在四档直接取 token：
+ * `<20` 红 / `<40` 橙 / `<60` 黄 / `≥60` 绿。
+ */
+const SCORE_RAMP_VARS = ['--score-red', '--score-orange', '--score-yellow', '--score-green'] as const
+
+/**
+ * 四档评分色的**具体色串**（ECharts 不认 `var()`/`oklch()`，必须解析）。
+ * 走 `@/lib/charts` 的 `cssVarHex()` —— 「CSS 颜色变量 → 色串」的唯一实现。
+ */
+const scoreRamp = computed((): string[] => {
+  // 读 `dark` 只为把它记成依赖：`--score-*` 在 `.dark` 下是另一组值，深浅切换要重算。
+  void dark.value
+  return SCORE_RAMP_VARS.map(cssVarHex)
+})
+
+/** 分档下标：`<20` 红 / `<40` 橙 / `<60` 黄 / 其余绿（四档与色板一一对应） */
+function scoreBand(score: number): number {
+  if (score < 20) return 0
+  if (score < 40) return 1
+  if (score < 60) return 2
+  return 3
+}
+
 function scoreColor(score: number): string {
-  if (score < 20) return '#ef4444'
-  if (score < 40) return '#f97316'
-  if (score < 60) return '#eab308'
-  if (score < 80) return '#22c55e'
-  return '#3b82f6'
+  const ramp = scoreRamp.value
+  return ramp[scoreBand(score)] ?? ramp[ramp.length - 1] ?? ''
 }
 
 const option = computed(() => {
@@ -83,12 +107,12 @@ const option = computed(() => {
         axisLine: {
           lineStyle: {
             width: 14,
+            // 四段 = 四个 token（红/橙/黄/绿），分界与 `scoreBand()` 的 20/40/60 一致
             color: [
-              [0.2, '#ef4444'],
-              [0.4, '#f97316'],
-              [0.6, '#eab308'],
-              [0.8, '#22c55e'],
-              [1, '#3b82f6'],
+              [0.2, scoreRamp.value[0]],
+              [0.4, scoreRamp.value[1]],
+              [0.6, scoreRamp.value[2]],
+              [1, scoreRamp.value[3]],
             ],
           },
         },

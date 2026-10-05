@@ -8,11 +8,13 @@ import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import Segment from '@/components/ui/Segment.vue'
 import { type ReadingEvent } from '@/lib/api'
+import { chartShades, useChartTheme } from '@/lib/charts'
 import { useActivityStore } from '@/stores/activity'
 
 /**
  * 阅读活动（第 31 期新增）：贡献热力图 + 时间轴。
- * 视觉对齐 BookOrbit 克隆口径（冷灰中性、主色 #2563eb），纯前端确定性渲染、零外链。
+ * 视觉全部走主题 token（热力图色阶由 `@/lib/charts` 的 `chartShades()` 派生），
+ * 纯前端确定性渲染、零外链。
  * 数据来自后端 /api/reading-activity（reading_sessions 聚合 + annotations + achievements 合并），
  * 经 stores/activity 缓存并按当前书库与范围（今年/去年/全部）拉取。
  */
@@ -46,7 +48,13 @@ onMounted(() => void activity.load(false, yearOf(range.value)))
 watch(range, () => void activity.load(true, yearOf(range.value)))
 
 // ---------------- 热力图（GitHub 式贡献日历） ----------------
-const LEVEL_COLORS = ['#eef1f5', '#c7d6f7', '#93b1f0', '#5b86e8', '#2563eb']
+/**
+ * 五档色阶：栈内唯一的图表配色入口 `@/lib/charts` 的 `chartShades()` 派生，
+ * 跟着主题与强调色走（不再自己写死一列十六进制 —— 那套原型配色已作废，见 docs/DESIGN.md §1）。
+ * 0 档 = 无活动的休息日（最淡），1..4 档 = 递增强度。
+ */
+const { palette } = useChartTheme()
+const LEVEL_COLORS = computed(() => chartShades(palette.value, 5))
 
 function isoLocal(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -95,11 +103,12 @@ const calendar = computed(() => {
 })
 
 function levelColor(minutes: number, max: number): string {
-  if (minutes <= 0) return LEVEL_COLORS[0]
-  if (max <= 0) return LEVEL_COLORS[1]
+  const colors = LEVEL_COLORS.value
+  if (minutes <= 0) return colors[0]
+  if (max <= 0) return colors[1]
   const step = max / 4
   const lvl = Math.min(4, 1 + Math.floor(minutes / step))
-  return LEVEL_COLORS[lvl]
+  return colors[lvl]
 }
 
 function tip(c: { date: string; minutes: number; sessions: number }): string {

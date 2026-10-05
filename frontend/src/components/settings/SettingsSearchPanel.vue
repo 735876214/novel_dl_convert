@@ -126,11 +126,11 @@ function onKeydown(e: KeyboardEvent): void {
   >
     <div
       v-if="search.open.value"
-      class="fixed inset-0 z-50 flex items-start justify-center bg-[#0f172a]/25 px-4 pt-[12vh] backdrop-blur-[2px]"
+      class="fixed inset-0 z-50 flex items-start justify-center bg-scrim px-4 pt-[12vh] backdrop-blur-[2px]"
       @click.self="search.closePanel()"
     >
       <div
-        class="flex max-h-[68vh] w-full max-w-[34rem] flex-col overflow-hidden rounded-[14px] border border-border bg-card shadow-lg transition duration-150 ease-out"
+        class="flex max-h-[68vh] w-full max-w-[34rem] flex-col overflow-hidden rounded-[var(--shell-radius)] border border-border bg-card shadow-lg transition duration-150 ease-out"
         :class="search.open.value ? 'translate-y-0' : '-translate-y-1'"
       >
         <!-- 输入区 -->

@@ -20,8 +20,10 @@ const SHELF_TYPES: ShelfType[] = ['continue', 'recent', 'discover', 'scope']
  *
  * 与 BookOrbit 的差异（已知偏离，已在计划中标注）：
  *   BookOrbit 把 widget 偏好存服务端账户、shelf 偏好存 localStorage；
- *   本项目纯静态无后端，**两者都存 localStorage**。
- *   将来接后端时只需替换 widget 的读写实现，渲染层契约不变。
+ *   本项目**两者都存 localStorage** —— 理由是它们是「这块屏幕怎么摆」的
+ *   **本地视图偏好**，不是「外观 / 阅读偏好」，故与 `stores/statsChartPrefs`、
+ *   `stores/shelfPrefs` 同档，**不进偏好同步载荷**（`lib/prefsPayload.ts`）。
+ *   代价是换设备不同步；要改成服务端只需替换这里的读写实现，渲染层契约不变。
  */
 const WIDGET_KEY = 'dashboard-widgets'
 const SHELF_KEY = 'dashboard-shelves'

@@ -172,6 +172,25 @@ function readOklch(varName: string): [number, number, number] | null {
   return [n(m[1]), n(m[2]), parseFloat(m[3])]
 }
 
+/**
+ * 把一个 **CSS 颜色变量**解析成渲染器认得的具体色串（hex）。
+ *
+ * 为什么需要它：ECharts 把颜色**原样**写进图元属性（SVG 的 `fill`、canvas 的 `fillStyle`），
+ * 它既不认 `var(--score-red)` 也不认 `oklch()` —— 不解析就等于不给色。而
+ * `docs/DESIGN.md` §4 的固定色板（`--score-*` 等）**只能**以 CSS 变量形式持有值。
+ *
+ * 解析不出 OKLCH 三元组时（老浏览器把 `oklch()` 折算成了 `rgb()`）**原样回传计算值** ——
+ * 那本身已经是具体色串，比在这里写死一份十六进制更诚实。调用方因此总能拿到能用的一串。
+ *
+ * ⚠️ 这是「CSS 颜色变量 → 具体色串」的**唯一实现**：图表要固定色板就调它，
+ * 别在组件里再抄一份 `getComputedStyle` + 正则（第 95 期收口过一次）。
+ */
+export function cssVarHex(varName: string): string {
+  const triple = readOklch(varName)
+  if (triple) return oklchToHex(triple[0], triple[1], triple[2])
+  return getComputedStyle(document.documentElement).getPropertyValue(varName).trim()
+}
+
 /** `--tint-h` 是**裸数字**的色相（不是颜色），不能走 readOklch */
 function readTintHue(): number {
   const raw = getComputedStyle(document.documentElement).getPropertyValue('--tint-h').trim()
