@@ -23,6 +23,8 @@ Komga（漫画/电子书服务器）扫描库根目录，结构约定决定了�
 import pathlib
 import re
 
+from .filename import strip_unsafe
+
 #: 能识别的「系列 + 卷号」文件名形态（按优先级）。全部要求卷号在**结尾**，
 #: 避免把「三体 2 体」这类中间带数字的书名误切。
 _SERIES_PATTERNS = (
@@ -36,9 +38,6 @@ _SERIES_PATTERNS = (
     re.compile(r"^(?P<s>.+?)[\s_\-—]+(?P<i>\d{1,3})$"),
 )
 
-#: 跨平台不安全的文件名字符（与 fileops._BAD_CHARS 同规则）
-_BAD_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
-_BAD_TAIL = re.compile(r"[. ]+$")
 #: 系列名最短长度：1 个字符多半是误切（如「A 01」）
 _MIN_SERIES_LEN = 2
 #: 卷号上限：超过基本是年份/编号而非卷号（如「系列 2024」）
@@ -48,13 +47,11 @@ _MAX_INDEX = 300
 def clean_segment(text: str) -> str:
     """清洗成安全的**路径段 / 文件名主干**。
 
-    与 ``fileops.sanitize_stem`` 同规则，但**故意不共用**：
-    ``fileops`` 依赖 ``library``，而布局计算要能被 ``pipeline`` 直接调用，
-    共用会引入 fileops↔pipeline 的耦合。
+    与 ``fileops.sanitize_stem`` 共用**同一份**不安全字符判据（`core/filename.py`，
+    第 95 期收敛 —— 此前两边各写一份逐字相同的正则）。本函数比它多做一件事：
+    把连续空白**折叠**成一个空格（路径段里换行/多空格会让某些客户端读乱）。
     """
-    s = _BAD_CHARS.sub("", (text or "").strip())
-    s = _BAD_TAIL.sub("", s)
-    return re.sub(r"\s+", " ", s).strip()
+    return re.sub(r"\s+", " ", strip_unsafe(text)).strip()
 
 
 def infer(stem: str, meta_series: str = "", meta_index: str = "") -> tuple:

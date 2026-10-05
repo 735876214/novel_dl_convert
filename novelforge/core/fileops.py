@@ -39,17 +39,13 @@ from xml.sax.saxutils import escape
 
 from .. import config
 from . import activity_log, db, komga, library, metadata
+from .filename import UNSAFE_CHARS, strip_unsafe
 
 RECYCLE_DIRNAME = "recycle"
 
-# 跨平台都不安全的文件名字符（含控制字符）
-_BAD_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
-# 其它非法字符（路径分隔符、Windows 保留结尾的点和空格）
-_BAD_TAIL = re.compile(r"[. ]+$")
-
 #: 命名规则里可用的占位符，前端据此给出提示。**这是全项目唯一真值源** ——
 #: 展开逻辑只有 :func:`fill_pattern` 一份（第 28 期合并，设置页预览与刮削出版共用）。
-#: 第 20 期扩到 9 个 —— **只加书目里真实存在的字段**（`library.books()` 的
+#: 第 20 期定下、第 53 期加入 `{narrators}` —— **只加书目里真实存在的字段**（`library.books()` 的
 #: year / publisher / language / series_index）；加不出真实值的一律不加。
 PATTERN_FIELDS = ("{title}", "{author}", "{narrators}", "{series}", "{series_index}", "{index}",
                   "{year}", "{publisher}", "{language}", "{ext}")
@@ -175,7 +171,7 @@ def safe_path(name: str, library_id=None) -> pathlib.Path:
     if len(rel.parts) > 2:
         raise ValueError(f"路径层级过深（最多 系列/文件）：{name}")
     for part in rel.parts:
-        if _BAD_CHARS.search(part):
+        if UNSAFE_CHARS.search(part):
             raise ValueError(f"文件名含非法字符：{name}")
     base = output_dir(library_id).resolve()
     p = (base / raw).resolve()
@@ -188,10 +184,12 @@ def safe_path(name: str, library_id=None) -> pathlib.Path:
 
 
 def sanitize_stem(stem: str) -> str:
-    """把用户输入的「新名（不含扩展名）」清洗成安全文件名。"""
-    s = _BAD_CHARS.sub("", (stem or "").strip())
-    s = _BAD_TAIL.sub("", s)
-    return s.strip()
+    """把用户输入的「新名（不含扩展名）」清洗成安全文件名。
+
+    与 ``komga.clean_segment`` 共用**同一份**判据（`core/filename.py`，第 95 期收敛）。
+    差别只在这里**不**折叠内部空白 —— 用户自己写的书名里那个空格是他要的。
+    """
+    return strip_unsafe(stem).strip()
 
 
 # ---------------- 命名规则（唯一实现） ----------------
@@ -205,7 +203,7 @@ def validate_pattern(pattern: str) -> str:
     pat = (pattern or "").strip()
     if not pat:
         raise ValueError("命名规则不能为空")
-    if _BAD_CHARS.search(pat):
+    if UNSAFE_CHARS.search(pat):
         raise ValueError("规则里不能含 \\ / : * ? \" < > | 这些字符")
     return pat
 
@@ -228,7 +226,7 @@ def index_text(book: dict) -> str:
 def fill_pattern(pattern: str, book: dict, ext: str = "", seq: str = "") -> str:
     """展开命名规则占位符 —— **全项目唯一实现**：设置页预览、刮削出版、重出版共用。
 
-    支持 ``PATTERN_FIELDS`` 的 9 个占位符；缺省值口径：``{title}`` 退化到文件名、
+    支持 ``PATTERN_FIELDS`` 的 10 个占位符；缺省值口径：``{title}`` 退化到文件名、
     ``{author}`` → 未知、``{series}`` → 无系列、扩展名不带点。
 
     ``seq`` 是给 ``{index}`` 的兜底（书目里没有系列卷号时用），调用方按需给。

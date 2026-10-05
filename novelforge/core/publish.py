@@ -122,8 +122,9 @@ def relpath_for(book: dict, cfg: dict = None) -> str:
         if is_dir:
             # ``{ext}`` 对目录型条目**没有取值**：摘掉这个占位符再展开，而不是塞空串 ——
             # ``fill_pattern`` 的 ``ext`` 参数是「覆盖值」，传空串会回落去读书目名的后缀
-            # （``书.名`` 于是填出「名」）。模式里剩下的分隔符残留由 ``sanitize_stem`` 的
-            # ``_BAD_TAIL`` 收掉（``书名 - 作者.`` → ``书名 - 作者``）。
+            # （``书.名`` 于是填出「名」）。模式里剩下的分隔符残留由 `core/filename.py`
+            # 的 `TRAILING_JUNK` 收掉（``书名 - 作者.`` → ``书名 - 作者``）——
+            # 该判据与 `komga.clean_segment` 共用一份（第 95 期收敛）。
             pattern, drop_ext = pattern.replace("{ext}", ""), ""
         else:
             # ``{ext}`` 展开后 stem **已经带上了扩展名**，而下面 ``komga.relpath_for`` 还会
