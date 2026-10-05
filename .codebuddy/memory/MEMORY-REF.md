@@ -967,5 +967,62 @@ discover 行仍按 id 稳定排序）。**口径以对照文档 §7「实施结�
   外部回传 item 的**输入契约**，不能一起删）、`LIBRARY_SOURCE_DIR` 的 Python 别名、`/content` 端点
   （仓外消费者无法从仓内证明）。已记进 `docs/TODO.md` §1。
 - **数据安全两处口径**（`zipkind.unpack` 的 `remove_source` 真 `unlink`；`landing` 自动落地支无二次确认）：
-  用户未勾选该批次 ⇒ 仍待决策。
+  用户未勾选该批次 ⇒ 仍待决策。⇒ **第 96 期已落地**（`remove_source` 改走回收站；「无二次确认」经复核
+  **不是缺口**，真缺口是「覆盖不可撤销」）——见下一节。
+
+---
+
+### 第 96 期铁律（数据安全：覆盖 / 删源一律先 `publish.recycle`）
+
+#### 一、**「删除」与「覆盖」是同一条纪律**（第 96 期立）
+
+`AGENTS.md` §1 的「删除一律移入回收站、从不 `unlink`」**同样约束覆盖**：任何会摧毁用户既有文件的
+写点，**写之前**先把被替换的那一份移入回收站（`core/publish.py:recycle` —— 落点名走
+`fileops.recycled_name`、台账走 `db.recycle_note`、**永不外抛**），使「回收站还原」能把东西搬回来。
+第 96 期补上的两条路径：`core/zipkind.py`（展开容器回收源容器，此前是全仓**唯一**一次真 `unlink`）、
+`core/landing.py`（整本覆盖前先 park 被替换的 `dest` / `txt_dest`）。
+`docs/architecture.md` 里那句「都走 `publish.recycle` —— 仍从不 `unlink`」到这一期才**覆盖全部写点**。
+
+#### 二、覆盖前的回收必须**在写盘之前**，且失败要**中止**
+
+`landing._first_landing` 的教训：原来的顺序是「先 `shutil.copy2` 盖留档 → 再 `replace` 盖书」，
+所以**回收动作必须整体提前**，否则救回来的是刚写进去的新内容。为此：
+`txt_dest` 只算一次；`dest` 与 `txt_dest` 用 `_same_path`（`normcase(resolve())`）**去重**
+（单目录部署 / 就地库下两者**就是同一个文件**，回收两次会把刚写好的那份搬走）；
+`_park()` 抛异常 ⇒ `_skip(...)` **中止整条落地**（此刻盘上零改动）—— 宁可如实拒绝，也不做不可撤销的覆盖。
+
+#### 三、回收失败**不许静默**（两条路径都要如实回报）
+
+- `zipkind.unpack` 返回值新增 `source_note`：回收失败时写明 `回收源容器失败（<异常>: <原文>），已保留原文件`，
+  且 `source_removed=False`。旧代码在 `except OSError` 里只是**默默**把 `removed` 置 False。
+- `landing` 侧失败即 `mode="skip"` + 原因原文进 `note`（任务中心看得见）。
+
+#### 四、⚠️ 「无二次确认」**不等于**缺口 —— 先看用户口径再看审计措辞
+
+审计把「`landing` 自动落地支无二次确认」记成数据安全缺口；但 `core/landing.py:3-6` 记录的
+**用户 2026-10-03 原话**是「默认将本地书进行覆盖……需要书源自动搜索更新章节、自动下载、自动覆盖」
+⇒ 自动覆盖是**用户拍板的产品行为**，不该加确认弹窗。**真缺口是「覆盖不可撤销」**，已用回收补上。
+教训：读审计条目时要回到**原始口径**，别把「与我的直觉不符」当成缺陷。
+
+#### 五、`.part` 是「半成品不进书架」的唯一机制
+
+留档 txt 的复制改 `_copy_atomic()`（`shutil.copy2` 到 `.part` 再 `replace`）：`shutil.copy2` 直接写目标是
+**原地写**，中途死掉会在**被监听**的收书目录里留半份 txt ⇒ 监听线程会把它当一本新书收进书架。
+`*.part` 在 `config` 的 watcher 忽略清单（`watcher.ignore`）里，与 `sources/manager.py` 的留档写法同一手法。
+
+#### 六、报告写实：显式覆盖**不是**「本地读不了」
+
+`_first_landing` 此前无论哪条路都写「本地读不了（没有可读章节）」——`overwrite=True`（用户点
+「用源站整本覆盖本地」）盖的往往是**本来读得了**的书。现按 `replacing_readable` 分支措辞，
+并把「原文件 X 已移入回收站（可还原）」追加进 `detail`。
+
+#### 七、守卫用例（钉行为，不钉实现）
+
+`tests/test_zip_unpack.py`（16 例）：回收那份**逐字节一致**、台账 `orig_path` +
+`recycle.plan_restore(...)["items"][0]["dst"] == str(p)`、回收失败时**原容器原样保留**、
+接口层 `remove_source:true` 走回收。
+`tests/test_online_landing.py`（24 例）：首次落地前 `ctx/坏书.epub` 逐字节进回收站、
+txt 书**两个落点都留档**（`blobs == [b"", "旧的留档"]`）、显式覆盖同样留档且 `detail` 不再说「本地读不了」、
+回收失败即 `skip` 且**盘上零改动**。
+⚠️ 加这类用例必须确认「改动前它会红」——否则是恒真断言。
 

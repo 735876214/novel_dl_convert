@@ -5328,3 +5328,86 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
   `MEMORY-REF.md`「第 95 期铁律」（十一节）。
 - ⚠️ `.codebuddy/memory/2026-10-03.md` 是**并行会话**的未提交段落：**不重写、不提交**；
   `.vscode/settings.json` 同样不提交。
+
+---
+
+## 第 96 期：数据安全两处口径 —— 「覆盖」也先回收
+
+### 一、需求来源
+
+用户 2026-10-05 拍板「**先做 B**」：第 95 期审计（`docs/agents-audit-95.md` §5 批次 8）留下的两条
+**数据安全口径**。同批两条指示：① 三条「卡在外部样本」的待办**从 `docs/TODO.md` 删掉**
+（书源格式四类 / 书源规则四个待样本参数 / `美利坚财富人生1-3059.txt` 乱码）；⑥ 第 81 期的
+**用户侧遗留动作**（线上「设置 → 维护 → 回收站还原 → 全部按原路径还原」搬回 ~2400 份 / 68 GB 漫画）
+**用户已完成**，条目关闭。版本：**不发版**（照第 95 期先例）⇒ `VERSION` 仍 `0.94.0`、无 CHANGELOG 段、无 tag/Release。
+
+### 二、功能范围
+
+1. `novelforge/core/zipkind.py`：展开容器的 `remove_source=True` 由 `p.unlink()` 改为
+   `publish.recycle(...)`（回收站 + 台账 ⇒ 可在「设置 → 维护 → 回收站还原」搬回）；返回值新增
+   `source_note`（回收失败**如实说**、原文件保留）。**这是全仓唯一一次真 `unlink` 用户书文件的地方**
+   （第 95 期审计结论，`grep` 全仓复核过：其余 `unlink` 全是临时/缓存/系统文件）。
+2. `novelforge/core/landing.py`：`_first_landing` 在**任何写盘之前**先把 `dest` 与 `txt_dest`
+   移入回收站（新增 `_park()`，按既有 `_same_path` 去重）；**回收失败即中止**（`mode="skip"`、盘上零改动）；
+   留档 txt 的复制改 `_copy_atomic()`（`.part` + `replace`）；新增参数 `replacing_readable`，让
+   「显式覆盖一本**本来读得了**的书」不再被报告成「本地读不了」，并把「原文件 … 已移入回收站（可还原）」
+   追加进 `detail`。
+3. 前端**只改注释**（`frontend/src/lib/api.ts`、`frontend/src/components/tools/LibraryCopiesPanel.vue`）：
+   「删源不可逆」→「移入回收站、可还原」。**GUI 仍不暴露**「展开后删源」（现状即如此，`unpackBook` 默认 `false`）。
+
+### 三、单一真值源
+
+「移入回收站」只有 `publish.recycle` 一处实现（落点名 `fileops.recycled_name`、台账 `db.recycle_note`）；
+本期**没有新增第二份实现**，只是把两条旧写点接上去。`landing` 的去重复用既有 `_same_path`。
+
+### 四、防回归要点
+
+- `zipkind` 回收：回收目录里那份**逐字节一致** + 台账 `orig_path` + `recycle.plan_restore(...)` 能指回原路径。
+- `landing` 留档：`ctx/坏书.epub` 的**旧字节**在回收站里；txt 书**两个落点都留档**（`blobs == [b"", "旧的留档"]`）；
+  显式覆盖（`overwrite=True`）同样先留档。
+- 失败路径：`zipkind` 侧 monkeypatch `publish.recycle` 抛错 ⇒ `source_note` 有原文且**原容器还在**；
+  `landing` 侧抛错 ⇒ `skip` 且**盘上零改动**、暂存目录仍收干净（`finally`）。
+- 既有护栏不动：默认不动源、撞名不覆盖、zip-slip、定时轮次不整本落地。
+
+### 五、踩坑
+
+- ⚠️ **回收必须整体提前到写盘之前**：原顺序是「先 `shutil.copy2` 盖留档 → 再 `replace` 盖书」，
+  在 `dest` / `txt_dest` 是同一个文件时，晚一步回收救回来的是**刚写进去的新内容**。
+- ⚠️ **去重不是洁癖**：单目录部署 / 就地库下 `dest` 与 `txt_dest` **就是同一个文件**，回收两次会把刚写好的搬走。
+- ⚠️ **局部 import `publish`**：`publish` 顶层 import `library`，而 `core/library.py` 顶层 import `zipkind`
+  ⇒ 顶层写会成 import 环（先例：`landing.py` 在函数内 import `autoupdate` / `watcher`）。
+- ⚠️ `[xml](Get-Content $env:TEMP\nf96.xml)` 在**本机**解析失败（`Get-Content` 按 GBK 解 UTF-8 的 XML，
+  报「名称不能以"0"字符开头」）⇒ 读统计看 pytest stdout，或 `-Encoding utf8`。
+- ⚠️ 这类用例必须确认「改动前会红」：`test_首次落地覆盖前先把原文件移入回收站` 在改动前**必然失败**
+  （此前没有任何回收动作）——否则就是恒真断言。
+
+### 六、未做及原因
+
+- **不给自动落地加二次确认**（用户本轮再次确认）：用户 2026-10-03 的口径（`core/landing.py:3-6`）明确要求
+  「书源自动搜索更新章节、自动下载、自动覆盖」；审计那句「无二次确认」经复核**不是缺口**，
+  真缺口是**覆盖不可撤销** —— 已用「覆盖前先回收」补上。
+- 不在 GUI 暴露「展开后删源」：它改的是书库里的文件，不进便捷路径。
+- 相邻但不同性质的两点**如实留下、未改**：① 落地产物在 `pipeline` / `epub_builder` 里仍是直接写
+  `stage` 输出路径（不是「临时文件 + replace」，与既有下载链路同一性质，见 `core/landing.py` 模块
+  docstring 的「已知边界」）；② `[low]` 四项、`metasources` 五家 bs4、`fileops` OPF、EPUB 解析重试仍留在
+  `docs/TODO.md` §1。
+
+### 七、实测（收尾）
+
+| 项 | 值 |
+|---|---|
+| 后端全量 | **2127 passed / 25 skipped / 0 failed**（280.49 s；第 95 期 2122 passed ⇒ **+5** = 新增 6 例 − 删掉旧 1 例） |
+| 前端 | `type-check` **0 error** / `test:unit` **65 spec / 673 passed** / `build` **exit 0** |
+| `VERSION` | 仍 `0.94.0`（**未发版**） |
+
+### 八、收尾
+
+- 提交（中文、按能力分）：`fix(core): 容器展开的「删源」改走回收站（可还原）` →
+  `fix(core): 自动落地覆盖前先把被替换的文件移入回收站` →
+  `docs(96): 实施记录 + TODO/索引 + 审计复核 + 记忆`。
+- 文档：本节 + `docs/TODO.md`（头 / §0 / 删 ①⑥ / §2 索引补 95+96 / §3）+
+  `docs/agents-audit-95.md`（批次 8 复核改判）+ `docs/architecture.md`（「从不 `unlink`」覆盖全部写点）。
+- 记忆：`.codebuddy/memory/2026-10-05.md` 第 96 期节 + `MEMORY.md` 索引第 96 期 +
+  `MEMORY-REF.md`「第 96 期铁律」（七节）。
+- ⚠️ `.codebuddy/memory/2026-10-03.md` / `.vscode/settings.json` / `*.cookies.txt` 是**并行会话**的
+  未提交内容：**不重写、不提交**。

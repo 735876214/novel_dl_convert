@@ -175,6 +175,7 @@ httpx.InvalidURL: Invalid port: ':1]'    # 堆栈 tests/test_network_limits.py:1
   `server.py:/content` 端点（仓内零消费者，**仓外消费者无法从仓内证明**）。已记进 `docs/TODO.md` §1。
 - **§5 批次 8（数据安全两处口径）**：用户**未勾选** ⇒ 本轮不动。两条仍待用户决策
   （`zipkind.unpack` 的 `remove_source` 真 `unlink`；`landing` 自动落地支无二次确认）。
+  ⚠️ **第 96 期已落地**（见 `docs/roadmap-gaps-remaining.md` 第 96 期段）：第一条改成 `publish.recycle`（移入回收站 + 台账，可还原）；第二条经复核**改判** —— 「无二次确认」**不是缺口**（用户 2026-10-03 的口径明确要求自动覆盖，见 `novelforge/core/landing.py:3-6`），真缺口是「覆盖不可撤销」，已补成「覆盖前先回收；回收失败即中止、盘上零改动」。
 
 ### 回退记录：EPUB 解析改 ElementTree（本期唯一一次「做完又退回」）
 
