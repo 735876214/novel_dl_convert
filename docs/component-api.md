@@ -111,7 +111,7 @@ components/
 | 组件 | 用途 / 关键 props |
 |---|---|
 | `BookActionsMenu` | 书卡 ⋮ 菜单（阅读/收听 · 快速预览 · 下载 · 详情 · 删除 + 子菜单）；状态由 `lib/bookMenu.ts` 单例统一管理 |
-| `BookPreviewDialog` | 快速预览浮层（内容取自书卡，详情补章节数） |
+| `BookPreviewDialog` | 快速预览浮层（内容取自书卡，详情补章节数）。`actions` 模式（书架行开的）给**五个动作**：加入收藏 / 删除 / 编辑元数据（**只 emit**，父组件深链 `?tab=metadata`）/ 移动到书库…（**只 emit**，父组件开 `BookMoveDialog`）/ 详细信息 —— 浮层里**没有就地编辑器**（见 `docs/bookorbit/bookorbit-dashboard-styles.md` §7.8） |
 | `BookMoveDialog` | 跨库移动（选目标库 → 预检 → 确认） |
 | `MetadataEditor` | 单书元数据编辑（覆盖 / 恢复在线 / 清空的分层语义） |
 | `ReadingRecord` | 「我的记录」标签（状态 + 起止 + 评分 + 书评 + 轮次） |

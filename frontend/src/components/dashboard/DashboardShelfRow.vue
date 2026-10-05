@@ -4,9 +4,11 @@ import { useRouter } from 'vue-router'
 
 import BookCover from '@/components/ui/BookCover.vue'
 import Icon from '@/components/ui/Icon.vue'
+import BookMoveDialog from '@/components/book/BookMoveDialog.vue'
 import BookPreviewDialog from '@/components/book/BookPreviewDialog.vue'
 import { MAX_COVERS_PER_ROW, type ShelfDef, type ShelfType } from '@/data/dashboard'
 import type { BookCard } from '@/lib/api'
+import { metadataEditPath } from '@/lib/bookOpen'
 import { filterByLibraries } from '@/lib/shelfScope'
 import {
   chunkIntoBands,
@@ -127,6 +129,8 @@ function openAll(): void {
 // 点封面不再直接跳详情：先弹一层预览（封面 / 状态 / 简介 + 加入收藏 / 删除）。
 // ⚠️ 上游是「封面卡动作菜单 → quick-view」，本项目按用户口径改成**点封面即开预览**
 // （少一次点击），浮层里仍可一步进完整详情。
+// 第 98 期补上上游 QuickView 的另两个动作：编辑元数据（**深链**，不就地开编辑器）、
+// 移动到书库（复用既有的 `BookMoveDialog`）—— 两者都只是「把意图接到既有的那一处实现」。
 const previewBook = ref<BookCard | null>(null)
 
 function openPreview(b: BookCard): void {
@@ -136,6 +140,28 @@ function openPreview(b: BookCard): void {
 function openDetailFromPreview(b: BookCard): void {
   previewBook.value = null
   void router.push(`/book/${b.id}`)
+}
+
+/** 浮层里点了「编辑元数据」：关浮层 + 深链到详情页的元数据页签（路径判据见 `lib/bookOpen.ts`） */
+function editMetadataFromPreview(b: BookCard): void {
+  previewBook.value = null
+  void router.push(metadataEditPath(b.id))
+}
+
+// —— 移动到书库（第 98 期）：复用既有多选弹层，只是把「选中的那些」换成浮层里那一本 ——
+const moveOpen = ref(false)
+const moveIds = ref<string[]>([])
+
+function moveFromPreview(b: BookCard): void {
+  previewBook.value = null
+  moveIds.value = [b.id]
+  moveOpen.value = true
+}
+
+/** 搬完的书换了库：本行封面带与库计数都必须重取（弹层自己已经 toast，这里不重复提示） */
+async function onMoved(): Promise<void> {
+  await library.refreshBooks()
+  await library.loadLibraries(true)
 }
 
 /** 浮层里改动了这本书：删掉之后必须重拉书目，否则封面带还留着一本已经不存在的书 */
@@ -269,6 +295,16 @@ function onPreviewChanged(_b: BookCard, kind: 'collection' | 'deleted'): void {
         @close="previewBook = null"
         @open-detail="openDetailFromPreview"
         @changed="onPreviewChanged"
+        @edit-metadata="editMetadataFromPreview"
+        @move-to-library="moveFromPreview"
+      />
+      <!-- 移动到书库（第 98 期）：同一层 Teleport —— 本行外壳带 `backdrop-blur`，
+           `position: fixed` 的后代会被它当成包含块裁进卡片里（与上面浮层同一个理由）。 -->
+      <BookMoveDialog
+        :open="moveOpen"
+        :book-ids="moveIds"
+        @close="moveOpen = false"
+        @moved="onMoved"
       />
     </Teleport>
   </section>

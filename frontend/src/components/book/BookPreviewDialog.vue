@@ -38,8 +38,13 @@ import { useUiStore } from '@/stores/ui'
  * 要不要打开」，塞进半页功能就变成了第二个详情页。
  *
  * 第 83 期：给出可选的**动作区**（`actions`）—— 书架行用它承载上游 `BookQuickView` 的
- * 「加入收藏 / 删除」。⚠️ 边界不破：仍然不给批注 / 阅读日志 / 文件路径 / 编辑入口，
- * 只加这两个动作；`actions` 默认 `false` ⇒ 既有调用方（书架页）行为一字不变。
+ * 「加入收藏 / 删除」。第 98 期按用户要求补齐上游 QuickView 的另两个动作
+ * （`edit-metadata` / `move-to-library`），做法**不是**把编辑器搬进来：
+ *   · `edit-metadata` 只 `emit` 一次，由父组件深链到详情页的元数据页签
+ *     （`lib/bookOpen.ts` 的 `metadataEditPath`）—— **不在这里挂第二个 `MetadataEditor` 实例**；
+ *   · `move-to-library` 只 `emit` 一次，由父组件开既有的 `BookMoveDialog`。
+ * ⚠️ 边界仍然不破：批注 / 阅读日志 / 文件路径**依旧**不给，浮层里也不出现任何**就地编辑器**；
+ *    `actions` 默认 `false` ⇒ 既有调用方（书架页）行为一字不变。
  */
 const props = withDefaults(
   defineProps<{
@@ -59,6 +64,13 @@ const emit = defineEmits<{
   (e: 'open-detail', book: BookCard): void
   /** 浮层里改动了这本书（加入收藏 / 删除）—— 父组件据此决定要不要刷新列表 */
   (e: 'changed', book: BookCard, kind: 'collection' | 'deleted'): void
+  /**
+   * 「编辑元数据」（第 98 期）：**只把意图带出去**，父组件负责深链到详情页的元数据页签。
+   * 不在这里就地开编辑器 —— 那会让同一屏出现第二个 `MetadataEditor` 实例（见头注释）。
+   */
+  (e: 'edit-metadata', book: BookCard): void
+  /** 「移动到书库…」（第 98 期）：同样只带意图，父组件开既有的 `BookMoveDialog` */
+  (e: 'move-to-library', book: BookCard): void
 }>()
 
 const library = useLibraryStore()
@@ -314,8 +326,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
       </div>
 
       <!--
-        动作区（第 83 期，书架行开的「快速预览」用）：加入收藏 + 删除 + 详细信息。
-        ⚠️ 只加这两个动作 —— 批注 / 阅读日志 / 编辑入口仍留给详情页（见头注释的边界说明）。
+        动作区（第 83 期 + 第 98 期，书架行开的「快速预览」用）：
+        加入收藏 / 删除 / 编辑元数据（深链）/ 移动到书库…（既有多选弹层）/ 详细信息。
+        ⚠️ 边界不破：批注 / 阅读日志 / 文件路径仍留给详情页，浮层里**没有就地编辑器**。
       -->
       <div v-if="actions" class="mt-3 flex flex-wrap items-center gap-2 border-t border-border pt-3">
         <select
@@ -338,6 +351,24 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey))
           @click="removeBook"
         >
           {{ busy === 'delete' ? '删除中…' : '删除' }}
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          :disabled="!book"
+          @click="book && emit('edit-metadata', book)"
+        >
+          <Icon name="edit" class="h-3.5 w-3.5" />
+          编辑元数据
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          :disabled="!book"
+          @click="book && emit('move-to-library', book)"
+        >
+          <Icon name="library" class="h-3.5 w-3.5" />
+          移动到书库…
         </Button>
         <Button size="sm" class="ml-auto" @click="openDetail">
           详细信息

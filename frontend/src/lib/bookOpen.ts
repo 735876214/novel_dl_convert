@@ -83,3 +83,18 @@ export function openTargetOf(b: { id: string } & Formattable): OpenTarget | null
   }
   return null
 }
+
+/**
+ * 「编辑元数据」的深链（第 98 期）—— 指向详情页的元数据页签（`?tab=metadata`）。
+ *
+ * 为什么收在这里：这条路由**两个入口**都要（书卡 ⋮ 菜单、快速预览浮层），
+ * 而 `?tab=metadata` 是与 `BookDetailView` 的约定 —— 两处各写一遍就是第二份真值源
+ * （§1「发现第二份拷贝 = 缺陷」）。
+ *
+ * ⚠️ **不许**改成「就地挂第二个 `MetadataEditor` 实例」：那个编辑器是自取数据的区块组件，
+ * 同一屏开两个入口更糟（见 `components/book/BookActionsMenu.vue` 与
+ * `views/BookDetailView.vue` 里的同一条注释）。
+ */
+export function metadataEditPath(bookId: string): string {
+  return `/book/${bookId}?tab=metadata`
+}

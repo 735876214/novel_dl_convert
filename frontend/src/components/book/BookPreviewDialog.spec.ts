@@ -258,6 +258,21 @@ describe('BookPreviewDialog：动作区（第 83 期）', () => {
     expect(m.deleteBook).not.toHaveBeenCalled()
   })
 
+  it('编辑元数据 / 移动到书库（第 98 期）：只把意图 emit 出去，浮层里不开就地编辑器', async () => {
+    const w = await mountDialog(BOOK, true)
+
+    await clickButton(w, '编辑元数据')
+    await clickButton(w, '移动到书库…')
+
+    // 两条都只带意图：父组件负责深链 / 开既有多选弹层
+    expect(w.emitted('edit-metadata')?.[0]?.[0]).toMatchObject({ id: BOOK.id })
+    expect(w.emitted('move-to-library')?.[0]?.[0]).toMatchObject({ id: BOOK.id })
+    // ⚠️ 浮层里**没有**编辑器：编辑元数据走详情页那条深链，不在这里挂第二个 MetadataEditor
+    //（挂上去就会同一屏两个实例，见组件头注释的边界）
+    expect(w.find('textarea').exists()).toBe(false)
+    expect(w.html()).not.toContain('metadata-editor')
+  })
+
   it('删除：点「取消」⇒ 一个请求都不发，也不关浮层', async () => {
     const spy = setConfirm(false)
     const w = await mountDialog(BOOK, true)

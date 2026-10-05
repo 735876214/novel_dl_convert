@@ -8,7 +8,7 @@ import { api, apiErrorMessage, type BookCard, type OnlineStatus } from '@/lib/ap
 import { confirmAndDeleteBook } from '@/lib/bookDelete'
 import { runCheckUpdate } from '@/lib/checkUpdate'
 import { useBookMenu } from '@/lib/bookMenu'
-import { isDirEntry, openTargetOf } from '@/lib/bookOpen'
+import { isDirEntry, metadataEditPath, openTargetOf } from '@/lib/bookOpen'
 import { READ_STATUS_OPTIONS } from '@/lib/readingThresholds'
 import { useCollectionsStore } from '@/stores/collections'
 import { useLibraryStore } from '@/stores/library'
@@ -242,15 +242,18 @@ async function setStatus(v: string): Promise<void> {
 // ---------------- 编辑元数据 ----------------
 
 /**
- * 指向详情页的**第 5 个标签**（`?tab=metadata`）。`BookDetailView` 的 `tab` 本期才接上
+ * 指向详情页的**第 5 个标签**（`?tab=metadata`）。`BookDetailView` 的 `tab` 第 65 期接上
  * `?tab=`：没有深链就只能再挂一个 `MetadataEditor` 实例，而同一个编辑器开两个入口更糟。
+ *
+ * 第 98 期起路径由 `lib/bookOpen.ts` 的 `metadataEditPath()` 给 —— 快速预览浮层也要同一条
+ * 深链，两处各拼一遍就是第二份真值源。
  *
  * 这里**不**把「恢复为在线值」之类压成第二项：卡片层根本判断不出这本书有没有覆盖值，
  * 极可能是空操作 —— 空操作就是假交互。
  */
 function editMetadata(): void {
   close()
-  void router.push(`/book/${props.book.id}?tab=metadata`)
+  void router.push(metadataEditPath(props.book.id))
 }
 
 function startReading(): void {
