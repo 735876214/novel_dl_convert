@@ -22,7 +22,7 @@
   ISBN 形状 `metadata.isbn_digits`、位置换算 `core/epub_cfi.py`、图表入口 `lib/charts.ts`。
   发现第二份拷贝 = 缺陷，先收敛再改行为。
   ⚠️ **第 94 期新增六处**：书源导入路由 `sources/intake.py`、格式轴 `sources/formats/*`（与执行轴 `base.REGISTRY` **正交**）、
-  「引擎能执行什么」`rules._MODES` + `rules.audit_native_rule`（**诚实闸** —— adapter 不许自评可用）、
+  「引擎能执行什么」`rules.MODES` + `rules.audit_native_rule`（**诚实闸** —— adapter 不许自评可用）、
   编码探测 `pipeline.decode_bytes`、执行期正则 `core/saferegex`、阅读选择器解析与转换 `sources/legado.*`（formats 只包装）。
 - **数据只落服务端 DB，绝不写回书文件**（`core/publish.py` 是唯一仍写文件的模块；它写的也是**副本**，源文件绝对只读）。
 - **源不可变**：副本禁原地写（临时文件 + `Path.replace`）；删除一律**移入回收站**（`CONFIG_DIR/cache/recycle`），**从不 `unlink`**。
@@ -39,6 +39,8 @@
 - **不做假数据**：演示数据禁用 `Math.random()`；计数/进度必须来自真实接口。
 - **compose 文件只保留两份**：仅 `docker-compose.yml`（生产部署）与 `docker-compose.test.yml`（测试），**严禁新增任何新格式 / 叠加件**（offline、update 等一律内联进主文件注释或文档说明，不另建文件）。
 - 写计划只写四块：**需求来源 / 功能范围 / 防回归要点 / 任务清单**。
+- ⚠️ 除上述硬约束外，**工程取向**见第 7 节（不为向后兼容留路 / 最简实现 / 分层生长 / 模块化 / 优先成熟库 / 先查已有依赖 / 长期决策 / 先研究成熟产品）；
+  两者冲突时**以本节的硬约束为准**。
 
 ## 2. 三处同步点（最容易漏、且漏了不报错）
 
@@ -48,7 +50,7 @@
 | 新增偏好块 | ① `server.PREFS_BLOCKS` ② 前端 `lib/prefsPayload.ts` 的 `PAYLOAD_BLOCKS`（契约 `tests/test_prefs_shelf_block.py`） |
 | 新增 / 删设置页 | ① `data/settingsNav.ts`（**删条目即删路由与侧栏项**）② 路由组件映射 `SETTINGS_PAGE_COMPONENTS` ③ 侧栏/搜索由注册表派生（自动） |
 | 新增库表列 | 必须同进 `db._LIBRARY_COLS`，否则 `update_library` **静默写不进**（界面仍显示「已保存」） |
-| 新增含 `book_id` 的表 | 必过 remap 四处：`ORPHAN_TABLES` / `REMAP_TABLES` / `REMAP_PROBE_FILTER` / `REMAP_EXPLICIT_TABLES`（契约 `tests/test_remap_tables.py`） |
+| 新增含 `book_id` 的表 | 必过 remap 清单：`ORPHAN_TABLES` / `REMAP_TABLES` / `REMAP_PROBE_FILTER` / `REMAP_EXPLICIT_TABLES`（契约 `tests/test_remap_tables.py`；另有 `REMAP_DERIVED_TABLES` / `REMAP_MERGE_TABLES` 由该用例的 `_tables_with_book_id()` 直接问库兜底） |
 | 新增书源 / 提供商 | `core/metasources.SOURCES` 与 `_FETCHERS` **逐字一致**（契约 `IMPLEMENTED == _FETCHERS.keys()`） |
 | 新增发布/接口 | 批量端点注册在 `/api/books/{bid}` **之前**；字面量路径在 `{param}` 之前 |
 
@@ -72,14 +74,15 @@ frontend/                   前端工程（Vue 3 SFC + TS + Vite + Tailwind v4 +
   src/views/ · components/ · stores/ · lib/ · data/ · composables/
   scripts/deploy.mjs        dist → novelforge/static/v2
 tests/                      pytest 全量（离线）；conftest.py 有仓库根防删除守卫
-docs/                       既有对照文档 + 本次新增的 5 份（见下）
+docs/                       文档（见下「文档地图」）；bookorbit/ 上游对照、review/ 历史评审快照
 ```
 
 ## 4. 常用命令
 
 ```bash
 # 后端测试（离线、全量；Windows 用 .venv\Scripts\python.exe）
-.venv/bin/python -m pytest                 # 当前基线 2129 例（只增不减）
+.venv/bin/python -m pytest                 # 当前基线 2147 例（2122 passed / 25 skipped；只增不减）
+                                           # ⚠️ 跑前先清空全部 proxy 变量，见第 5 节最后一条
 .venv/bin/python -m pytest tests/test_catalog.py -k 某关键字
 
 # 前端四连（缺一不可；Windows 先 $env:NODE_OPTIONS=''）
@@ -113,6 +116,9 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
   凡这类改动，收尾必须拿**真实地址**核一次。
 - ⚠️ `quickjs` 只有 **cp38–cp312** 预编译包 ⇒ `requirements.txt` 的 `python_version < "3.13"` 标记不能少（否则 3.13+ 装整条失败）。
 - ⚠️ **不认识的 python 进程一律不 kill**（本机常有并行会话的实例）；`pytest` 里调 `ledger.plan` 的用例必须带 `isolated` fixture。
+- ⚠️ **跑 pytest 前清空全部 proxy 变量**（`HTTP_PROXY` / `HTTPS_PROXY` / `http_proxy` / `https_proxy` / `NO_PROXY` / `no_proxy`）——
+  `httpx` 0.28.1 解析 `NO_PROXY` 里的方括号 IPv6（`[::1]`）会生成畸变 mount `all://*[::1]`，于是**任何真实 `BrowserClient` 用例**炸
+  `httpx.InvalidURL: Invalid port: ':1]'`（本机曾据此误判出 45 个「回归」）。**只去掉方括号不够，必须整组清空**。
 
 ## 6. 提交与交付
 
@@ -122,6 +128,30 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
   版本号唯一真值源是仓库根 `VERSION`（`/health` 下发）；**别再写第二份版本字面量**（`novelforge.__version__` 已删）。
 - 每期收尾要更新：`docs/roadmap-gaps-remaining.md`（本期实施记录）+ `.codebuddy/memory/`（当日日志；长期事实进 `MEMORY.md`/`MEMORY-REF.md`）。
 - 行尾：`*.sh` / `Dockerfile` / `.dockerignore` 必须 **LF**（否则容器 `sh /app/start.sh` 报 `set: Illegal option -`）。
+
+## 7. 工程原则（长期取向，第 95 期立）
+
+> 与第 1 节的硬约束**冲突时以硬约束为准**。为防止本节被误读成「可以删安全网」，两条边界先写死：
+> ① **数据安全语义不是兼容层** —— 软删除（`deleted_at`）/ 回收站（`fileops.recycle_dir()`）/ 源不可变 /
+> 「移除书库只删登记」照旧，**永不以「不做向后兼容」为由删掉**；
+> ② **DB schema 迁移不是兼容层** —— `core/db.py` 的建表 / 加列 / `*_RULE_VERSION` 存量自愈照旧
+> （那是**存量数据**的正确性，不是代码里的旧路径）。
+> 本节针对的是**代码里的旧路径**：废弃分支、兼容垫片、双实现、为猜想的未来预留的抽象。
+
+1. **不为向后兼容留路（Do not preserve backward compatibility）**：旧实现**删掉**，不加兼容层 / 回退分支 / 迁移垫片。
+   改行为就同批改调用点与用例；**发现第二份实现 = 缺陷**（与第 1 节「单一真值源」同向）。
+2. **只做满足当前需求的最简实现**：**禁投机性抽象**、禁「以后可能要」的配置项与间接层。多一层间接 =
+   多一处可能不同步的真值源。
+3. **分层生长**：从**能端到端跑通的最小版本**起步，新能力加在**已经能用的产品**上；
+   **绝不拿能用的功能去换没做完的复杂度**（宁可少一个能力，不留半截架构）。
+4. **模块化、关注点分离**：新逻辑先看 `docs/architecture.md` 的分层表该落在哪一层，别塞进 `server.py` 顺手的位置。
+5. **优先用成熟库**：能降低总复杂度或提高可靠性的就用；**没有明确理由不自己重写**常见功能。
+6. **先查已有依赖再自己写**：动手前**先看文档与类型**，别假设某个库没有这个能力。本项目已装：
+   `httpx` / `beautifulsoup4` / `lxml` / `quickjs` / `regex` / `Pillow` / `ebooklib` / `pypdfium2` /
+   `rarfile` / `numpy` / `croniter` / `psycopg` / `redis`（清单与理由见 `requirements.txt` 逐条注释）。
+7. **为长期做架构决策**：**不接受「先这样、以后再换」的临时方案** —— 临时方案 = 未来的第二份实现。
+8. **先研究成熟产品怎么解**：照搬已被验证的模式与约定，**不从零发明**。本项目一直在这么做：
+   视觉层逐字照搬 BookOrbit、书源对齐 legado / Mihon、命名/续接对齐既有上游。
 
 ---
 
@@ -137,6 +167,9 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
 | `docs/user-guide.md` | 面向使用者的功能说明（怎么用） |
 | `docs/development.md` | 开发方式、命令、回归清单 |
 | `docs/component-api.md` | 前端组件与状态/工具模块 API |
-| `docs/bookorbit-*.md` | 既有上游对照基线（capability-gap / module-inventory / settings-inventory / feature-flows / library-contract） |
+| `docs/format-capability-matrix.md` | 书源格式轴 × 执行轴的能力矩阵（第 94 期） |
+| `docs/roadmap-verification.md` | 路线图完成度核查快照（第 94 期，**不采信文档状态标记**、只认实证） |
+| `docs/bookorbit/bookorbit-*.md` | 既有上游对照基线（capability-gap / module-inventory / settings-inventory / feature-flows / library-contract / dashboard-styles） |
+| `docs/review/` | 历史评审快照（backend / frontend code_review_report、上游截图记录） |
 | `docs/roadmap-gaps-remaining.md` | 逐期实施记录（**活文档**，最新期在末尾） |
 | `README.md` | 面向部署者/使用者的完整说明（NAS 部署、配置表、CLI） |
