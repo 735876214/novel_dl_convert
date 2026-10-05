@@ -347,21 +347,15 @@ export interface DuplicateItem {
   library_id?: string | null
 }
 
-/** 元数据源（OpenLibrary / Google Books） */
-export interface MetadataSource {
-  id: string
-  label: string
-  home: string
-  note: string
-  /** 是否在当前启用的源顺序里 */
-  active: boolean
-}
-
 /**
  * 元数据**提供商**（第 57 期「设置 → 书库 → 元数据 → 提供商」页）。
  *
  * 目录 = 上游那 14 家（分四组）；⚠️ `implemented=false` 的家**只列出、不给开关** ——
  * 「能点但点了没用」就是假交互，它们的备注里写清「可经插件市场安装」。
+ *
+ * ⚠️ 第 95 期删掉了配套的 `MetadataSource` 类型与 `metadataSources()` 方法
+ * （旧端点 `/api/metadata/sources`——自陈「兼容端点」的第二份状态聚合）：
+ * 同仓同版本发布，为「后端可能是旧版本」准备的回退路永远不会真的走到。
  */
 export interface MetadataProvider {
   id: string
@@ -876,6 +870,10 @@ export interface SourceImportItem {
 export interface SourceImportResult {
   dry_run: boolean
   origin: string
+  /** 识别出的格式标识（`intake.FORMAT_*`）。 */
+  format?: string
+  /** 上面那个标识的中文名（第 95 期起由后端 `formats.format_label` 下发）。 */
+  format_label?: string
   rows?: SourceImportRow[]
   items?: SourceImportItem[]
   counts?: Record<string, number>
@@ -2493,8 +2491,6 @@ export interface BatchResult {
 /** POST /api/books/{bid}/metadata */
 export interface MetadataWriteResult {
   ok: boolean
-  /** 被接受的字段（已按白名单过滤） */
-  written: string[]
   /** **实际发生变化**的字段（同值重写不在此列） */
   changed: string[]
   /** 提交了但不支持的字段 */
@@ -2568,21 +2564,7 @@ export interface BackupItem {
   size: number
 }
 
-// ---------- 库（第 10 期：库实体 / 格式分面 / 能力 / 迁移） ----------
-
-/**
- * 格式分面（`/api/library-facets`）。
- *
- * ⚠️ 这就是第 10 期**改址**的旧 `/api/libraries` 语义：侧栏已不再用它
- * （书库页自带格式筛选），保留给需要按格式筛选的页面与既有调用方。
- */
-export interface LibraryFacet {
-  /** 筛选键：fmt:EPUB / issues:1 / nocover:1 */
-  key: string
-  label: string
-  count: number
-  kind: string
-}
+// ---------- 库（第 10 期：库实体 / 能力 / 迁移） ----------
 
 /** 库类型：决定功能显隐矩阵（见后端 core/features.py） */
 export type LibraryType = 'ebook' | 'comic' | 'audiobook' | 'mixed'
@@ -3998,11 +3980,6 @@ export const api = {
     }),
 
   // ---------- 元数据抓取与治理 ----------
-  metadataSources: () =>
-    request<{ items: MetadataSource[]; enabled: boolean; has_googlebooks_key: boolean }>(
-      '/api/metadata/sources',
-    ),
-
   /** 提供商目录（第 57 期：分组 + 启用 / 配置现状；设置页「提供商」页的唯一数据源） */
   metadataProviders: () => request<MetadataProvidersResult>('/api/metadata/providers'),
 
@@ -4023,15 +4000,14 @@ export const api = {
   /**
    * 源连通性自检（真的外呼；被点的源才测）。
    *
-   * - `keys`：按源 id 给的**主密钥**覆盖（早期接口，保留兼容）；
    * - `configs`：按源 id 给的**整行配置草稿** `{sid: {字段键: 值}}`（行内「配置」区用）。
    *
-   * 两者都**优先于已保存配置、且不落盘** —— 否则只能测「上次保存的旧值」，
+   * 草稿**优先于已保存配置、且不落盘** —— 否则只能测「上次保存的旧值」，
    * 或被迫为了测试先保存一次。
+   * ⚠️ 第 95 期删掉了早期那个只带主密钥的 `keys` 入参（前端从未用过，只剩用例在喂）。
    */
   metadataProbe: (
     sources?: string[],
-    keys?: Record<string, string>,
     configs?: Record<string, Record<string, string>>,
   ) =>
     request<{ items: Record<string, { ok: boolean; message: string; ms: number }> }>(
@@ -4041,7 +4017,6 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sources,
-          ...(keys && Object.keys(keys).length ? { keys } : {}),
           ...(configs && Object.keys(configs).length ? { configs } : {}),
         }),
       },
@@ -4723,9 +4698,6 @@ export const api = {
    * ⚠️ `items` 可选：后端接口并行开发中，未落地时返回 `{}` 也不该让界面报错。
    */
   librariesScanState: () => request<{ items?: LibraryScanState[] }>('/api/libraries/scan-state'),
-
-  /** 格式分面（原 `/api/libraries` 语义，第 10 期改址到 `/api/library-facets`）。 */
-  libraryFacets: () => request<{ items: LibraryFacet[] }>('/api/library-facets'),
 
   /**
    * 阅读阈值（第 40 期）：`{started, finished}`，0–100。

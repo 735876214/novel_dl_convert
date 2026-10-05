@@ -7,7 +7,6 @@ import {
   type BookDetail,
   type FeaturesResult,
   type LibraryEntity,
-  type LibraryFacet,
   type LibraryScanState,
 } from '@/lib/api'
 import { COLLECTIONS, LIBRARIES, SMART_SHELVES } from '@/data/collections'
@@ -124,8 +123,6 @@ export const useLibraryStore = defineStore('library', () => {
    * 而后端明明是通的。失败时**保持 false**（不知道就是不知道，不猜成 0）。
    */
   const librariesLoaded = ref(false)
-  /** 格式分面（`/api/library-facets`）：侧栏已不再用它，保留给需要按格式筛选的页面 */
-  const libraryFacets = ref<LibraryFacet[]>([])
   /** 已配置的来源根（compose 的 `LIBRARY_SOURCE_DIRS1..N`，向导按这些根浏览 / 下钻） */
   const sourceRoots = ref<{ name: string; path: string }[]>([])
 
@@ -538,24 +535,6 @@ export const useLibraryStore = defineStore('library', () => {
     return libsInflight
   }
 
-  /** 格式分面（第 10 期改址到 `/api/library-facets`）。同上，并发共享一次请求（第 67 期）。 */
-  let facetsInflight: Promise<void> | null = null
-
-  async function loadLibraryFacets(force = false): Promise<void> {
-    if (libraryFacets.value.length && !force) return
-    if (facetsInflight) return facetsInflight
-    facetsInflight = (async () => {
-      try {
-        libraryFacets.value = (await api.libraryFacets()).items
-      } catch {
-        /* ignore */
-      } finally {
-        facetsInflight = null
-      }
-    })()
-    return facetsInflight
-  }
-
   /**
    * 拉当前库的能力清单（切库后必须重取）。
    * 失败时清空 = **不裁剪**：宁可多显示几项，也不要把功能藏起来让人找不到。
@@ -792,7 +771,6 @@ export const useLibraryStore = defineStore('library', () => {
     shelfTitle,
     smartKey,
     shelfFacet,
-    libraryFacets,
     allTags,
     shelfBooks,
     continueReading,
@@ -801,7 +779,6 @@ export const useLibraryStore = defineStore('library', () => {
     smartBooks,
     loadBooks,
     loadLibraries,
-    loadLibraryFacets,
     scopes,
     loadScopes,
     scopeCounts,

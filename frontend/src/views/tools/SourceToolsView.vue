@@ -173,8 +173,9 @@ async function applyImport(): Promise<void> {
       resolutions: resolutions.value,
     })
     // 逐档计数 → 人话的这一份**只有** `lib/sourceImport.ts`（第 94 期：本页与
-    // 「书源管理 → 导入书源」卡共用，别再在这里手写第二串）
-    ui.toast(importSummary(res.counts))
+    // 「书源管理 → 导入书源」卡共用，别再在这里手写第二串）。
+    // 格式中文名读后端下发的 `format_label`（第 95 期）—— 前端不再自己翻译格式标识。
+    ui.toast(importSummary(res.counts, res.format_label))
     for (const it of (res.items ?? []).filter((i) => !i.ok).slice(0, 3)) {
       ui.toast(`${it.name}：${it.note || '失败'}`)
     }

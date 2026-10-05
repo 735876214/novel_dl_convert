@@ -43,22 +43,14 @@ export interface ImportResult {
   counts?: ImportCounts
   /** 识别出的格式标识（`intake.FORMAT_*`）；认不出时后端直接 400，不会走到这里。 */
   format?: string
+  /** 上面那个标识的**中文名**，由后端 `sources/formats/base.py:format_label` 下发。
+   *
+   *  ⚠️ 第 95 期新增。此前前端自抄了一份 `FORMAT_LABELS`，5 个键里已有 3 个与后端的
+   *  `display_name` 悄悄发散（「Legado / 阅读书源」vs「Legado / 阅读 App 书源」…）——
+   *  界面上的名字只能有一份来源，所以那份表**已删**，名字一律读这里。
+   */
+  format_label?: string
   origin?: string
-}
-
-/** 格式标识 → 界面中文名。键与后端 `sources/intake.py` 的 `FORMAT_*` 一一对应。 */
-export const FORMAT_LABELS: Record<string, string> = {
-  'nf-native': '本项目书源规则',
-  'nf-export': '本项目导出文件',
-  'legado-3': 'Legado / 阅读书源',
-  'legado-2': 'Legado / 阅读旧版书源',
-  'legado-jsonl': 'Legado JSONL',
-}
-
-/** 认得出就给中文名；认不出（后端加了新格式而前端还没跟上）**原样回显**，不吞。 */
-export function formatLabel(f?: string): string {
-  if (!f) return ''
-  return FORMAT_LABELS[f] ?? f
 }
 
 /**
@@ -84,10 +76,12 @@ export function needsAttention(c: ImportCounts = {}): number {
   return (c.conflict ?? 0) + (c.unsupported ?? 0)
 }
 
-/** 完整一句：`导入完成（格式：Legado / 阅读书源）：新增 3 · 更新 0 · …`。 */
-export function importSummary(counts: ImportCounts = {}, format?: string): string {
-  const fmt = formatLabel(format)
-  return `导入完成${fmt ? `（格式：${fmt}）` : ''}：${countsLine(counts)}`
+/** 完整一句：`导入完成（格式：Legado / 阅读 App 书源）：新增 3 · 更新 0 · …`。
+ *
+ *  `label` 是后端下发的中文名（`ImportResult.format_label`）；为空时整段括号省掉 ——
+ *  前端**不再自己翻译**格式标识（那是 `sources/formats/*` 的 `display_name`）。 */
+export function importSummary(counts: ImportCounts = {}, label?: string): string {
+  return `导入完成${label ? `（格式：${label}）` : ''}：${countsLine(counts)}`
 }
 
 /**
@@ -103,7 +97,7 @@ export function importOutcome(r: ImportResult): string {
   if (!r.counts) {
     return errs.length ? `导入失败：${errs[0]?.error ?? '规则不合法'}` : '导入失败：响应里没有结果'
   }
-  const head = importSummary(r.counts, r.format)
+  const head = importSummary(r.counts, r.format_label)
   const bad = needsAttention(r.counts)
   if (!bad && !errs.length) return head
   const first = errs[0]?.error ?? ''

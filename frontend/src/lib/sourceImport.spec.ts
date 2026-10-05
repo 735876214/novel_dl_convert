@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   countsLine,
-  formatLabel,
   importOutcome,
   importSummary,
   needsAttention,
@@ -22,6 +21,7 @@ describe('lib/sourceImport', () => {
       errors: [{ name: 'lg-x.com', error: '缺少 search.url', instead: '请在手动表单里补齐' }],
       counts: { new: 0, unsupported: 1 },
       format: 'legado-3',
+      format_label: 'Legado / 阅读 App 书源',
     }
     const text = importOutcome(r)
     expect(text).not.toContain('已添加')
@@ -30,11 +30,17 @@ describe('lib/sourceImport', () => {
     expect(text).toContain('去「书源工具」看原因')
     // 后端给的人话原因**原样**带出来，前端不另写一套解释
     expect(text).toContain('缺少 search.url')
-    expect(text).toContain('格式：Legado / 阅读书源')
+    // 格式中文名也**原样**带出来 —— 它由后端 `formats.format_label` 下发（第 95 期）
+    expect(text).toContain('格式：Legado / 阅读 App 书源')
   })
 
   it('`added` 是名字数组（不是数字）—— 类型修正后不再有 `?? 0` 渲染成空串的空间', () => {
-    const r: ImportResult = { added: ['a', 'b'], counts: { new: 2 }, format: 'nf-native' }
+    const r: ImportResult = {
+      added: ['a', 'b'],
+      counts: { new: 2 },
+      format: 'nf-native',
+      format_label: '本项目书源规则',
+    }
     expect(importOutcome(r)).toBe(
       '导入完成（格式：本项目书源规则）：新增 2 · 更新 0 · 重复 0 · 跳过 0 · 冲突 0 · 不可执行 0',
     )
@@ -52,10 +58,12 @@ describe('lib/sourceImport', () => {
     expect(importOutcome({ counts: { conflict: 1 } })).toContain('1 条需要你看一眼')
   })
 
-  it('认不出的格式标识原样回显，不吞（前端没跟上后端时也要看得见）', () => {
-    expect(formatLabel('legado-2')).toBe('Legado / 阅读旧版书源')
-    expect(formatLabel('xbs')).toBe('xbs')
-    expect(formatLabel(undefined)).toBe('')
+  it('后端没给中文名时整段括号省掉，绝不自己翻译格式标识', () => {
+    // 认不出的格式标识前端**不再**回显成中文（第 95 期：翻译只由后端 `formats.format_label` 做）
+    expect(importSummary({ new: 1 })).toBe(
+      '导入完成：新增 1 · 更新 0 · 重复 0 · 跳过 0 · 冲突 0 · 不可执行 0',
+    )
+    // 后端给了什么就原样用什么（哪怕是个前端不认识的标识，也轮不到前端插手）
     expect(importSummary({ new: 1 }, 'xbs')).toBe(
       '导入完成（格式：xbs）：新增 1 · 更新 0 · 重复 0 · 跳过 0 · 冲突 0 · 不可执行 0',
     )

@@ -14,7 +14,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const A = vi.hoisted(() => ({
   books: vi.fn(),
   libraries: vi.fn(),
-  libraryFacets: vi.fn(),
   readingThresholds: vi.fn(),
   stats: vi.fn(),
   collections: vi.fn(),

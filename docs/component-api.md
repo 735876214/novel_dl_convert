@@ -152,7 +152,7 @@ components/
 | `viewport.ts` | `NARROW_QUERY`（`(max-width: 639.98px)`）、`useNarrowScreen()`、`useNarrowScreenOnMount()` | **窄屏断点的唯一真值源**（外壳侧栏与书架行共用；`shelfRows.ts` 原来那份私有常量已删）。读不到 `matchMedia` 的环境**按宽屏兜底** |
 | `sidebarPrefs.ts` | `SIDEBAR_COLLAPSED_KEY`、`SIDEBAR_WIDTH_KEY`、`readDeviceValue()`、`writeDeviceValue()` | 侧栏折叠 / 宽度的**本机**存储（`nf_sidebar_*`）；⚠️ **刻意不进** `prefsPayload.ts` —— 布局是屏幕属性，不跟账号同步 |
 | `utils.ts` | `cn()`（`clsx` + `tailwind-merge`） | 类名合并的**唯一实现**（移植来的 shadcn 组件靠「传 class 覆盖基础类」，只 `clsx` 会时灵时不灵） |
-| `sourceImport.ts` | `FORMAT_LABELS`、`formatLabel()`、`countsLine()`、`needsAttention()`、`importSummary()`、`importOutcome()` | **导入书源结果的措辞**（第 94 期）：`/api/sources` 与 `/api/sources/upload` 的返回体翻成人话，「书源管理 → 导入书源」卡与「书源工具」页共用。⚠️ 之前两页各写一句 ⇒ 导入卡那句是 `已添加 ${r.added ?? 0} 个书源`，而 `added` 是**名字数组**、被拒时 `[]` 渲染成空串 ⇒ 用户看到的结论是「导入没反应」 |
+| `sourceImport.ts` | `countsLine()`、`needsAttention()`、`importSummary()`、`importOutcome()` | **导入书源结果的措辞**（第 94 期）：`/api/sources` 与 `/api/sources/upload` 的返回体翻成人话，「书源管理 → 导入书源」卡与「书源工具」页共用。⚠️ 之前两页各写一句 ⇒ 导入卡那句是 `已添加 ${r.added ?? 0} 个书源`，而 `added` 是**名字数组**、被拒时 `[]` 渲染成空串 ⇒ 用户看到的结论是「导入没反应」。⚠️ 第 95 期删掉了 `FORMAT_LABELS` / `formatLabel()` 那份**第二份**格式中文名表（5 键里 3 个已与后端 `display_name` 发散）—— 名字改读后端下发的 `format_label`（唯一产出点是 `sources/formats/base.py:format_label`） |
 | `format.ts` / `readingPace.ts` / `deviceInfo.ts` / `fonts.ts` / `coverTint.ts` / `icons.ts` / `notifyPrefs.ts` / `bookMenu.ts` | 见 `docs/architecture.md` §13 | — |
 
 ## 7. Stores（Pinia）
@@ -161,7 +161,7 @@ components/
 |---|---|---|
 | `ui` | `toast(msg)`、`toastMessage` | ⚠️ 第 90 期**删掉了** `sidebarCollapsed` / `toggleSidebar`：侧栏折叠态改由 `ui/sidebar` 的 `SidebarProvider` 经 `useSidebar()` 下发（单一真值源） |
 | `auth` | `token`、`user`、`displayName`、`ready`、登录/注销 | 鉴权（token 存 `nf_token`） |
-| `library` | `books`、`loaded`、`loadBooks(force?)`、`loadLibraries(force?)`、`loadLibraryFacets(force?)`、`getBookDetail(id)`、`patchProgress(id, pct, at?)`、`currentLibraryId` | **各 loader 有单飞闸**（并发共享同一次请求）；`patchProgress` 就地回写不重拉整库 |
+| `library` | `books`、`loaded`、`loadBooks(force?)`、`loadLibraries(force?)`、`getBookDetail(id)`、`patchProgress(id, pct, at?)`、`currentLibraryId` | **各 loader 有单飞闸**（并发共享同一次请求）；`patchProgress` 就地回写不重拉整库。⚠️ 第 95 期删掉了 `libraryFacets` / `loadLibraryFacets(force?)`（配套的后端 `/api/library-facets` 全链路零调用者） |
 | `stats` | `data`、`error`、`load(force?)` | `/api/stats` 缓存，供 13 个部件共用；**按书库单飞** |
 | `collections` | `items`、`load(force?)`、`create/remove/rename` | `force` 走「等前一次落地再拉」，避免吞掉刚建的收藏夹 |
 | `tasks` | 任务列表 + 仅未结束时轮询 | `/api/tasks` |
