@@ -5620,3 +5620,129 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 - 记忆：`.codebuddy/memory/2026-10-05.md` 第 98 期节 + `MEMORY.md` 索引第 98 期 +
   `MEMORY-REF.md`「第 98 期铁律」。
 - ⚠️ 上游检出与 PNG 都在 `%TEMP%\nf-upstream-dash\`，**不入库、不进提交**（脱敏口径）。
+
+
+---
+
+## 第 99 期：元数据抓取真机核验 + 三处线上真 bug（不发版）
+
+**用户指令（本轮）**：「梳理 todo，做下一期」。用户拍板选「两条真机 bug 修复 + lubimyczytac 改 bs4 + 夹具」。
+`VERSION` 仍 **0.94.0**（第 95–99 期连续五轮都刻意不发版）。
+
+### 一、为什么是这一期：审计的硬性前置条件
+
+`docs/TODO.md` §1 与 `docs/agents-audit-95.md:162-166` 对 `novelforge/core/metasources.py` 的原文口径是：
+
+> 这五处抓的是 Amazon / Goodreads / Libro.fm / Lubimyczytac 的**真实线上页面**，而本项目的硬规则是
+> 「能出网验证的就必须真的出网验证」+「桩站单测 100% 绿但真实站点全挂」（第 94 期那个 gzip 缺陷的教训）。
+> **在没有逐家真机核过的前提下改选择器语义，等于用「单测绿」换「线上未知」** —— 属 §7.3 明令禁止的
+> 「拿能用的功能去换没做完的复杂度」。**需要单独一轮：带真实站点核验 + 抓取样本落夹具。**
+
+⇒ 本轮先做真机核验，**核验结果决定了做什么**，而不是先定改造范围再找证据。
+
+### 二、真机核验（14 家逐家探活；清空代理变量后）
+
+| 来源 | 探活结果 | 判定 |
+|---|---|---|
+| `itunes` | 200，3 条真结果 | 正常 |
+| `ranobedb` | 200，按英文书名 0 条；按 `Solo Leveling` 3 条 | **不是 bug**（日系轻小说源，书名语言不匹配） |
+| `audible` | 400 `Invalid response group(s) requested: publisher` | **真 bug ①** |
+| `lubimyczytac` | 200 / 123866 B 真结果页；多作者书少作者 | **真 bug ②** |
+| `amazon` | 200 / 2.3 KB JS 校验页（`bm-verify`） | **真 bug ③**（旧判据放行 ⇒ 静默 0 条） |
+| `librofm` | HTTP 202 空体 | 环境性（挑战页，本轮无法取样本） |
+| `goodreads` / `kobo` | `ConnectTimeout` | 环境性（本机网络） |
+| `openlibrary` / `googlebooks` | 超时 | 环境性 |
+| `audnexus` | `getaddrinfo failed` | 环境性（DNS） |
+| `hardcover` / `comicvine` / `aladin` | 缺 API Key | 环境性（需用户配 Key 才有意义） |
+
+⚠️ **六家 `_FRAGILE` 源里只有 Lubimyczytac 拿到了可解析的真实样本** —— 这是本轮夹具只有它一份的原因，
+也是**其余四家选择器改造必须继续挂起**的原因（没样本改选择器 = 正是审计禁止的事）。
+
+### 三、三处真 bug（逐条带证据）
+
+#### ① Audible 整家永远 0 结果（提交 `cf92090`）
+
+请求参数里 `response_groups` 带了非法组名 `publisher`，接口直接回
+`400 {"message":"Invalid response group(s) requested: publisher"}`。
+
+**关键事实（删了不会少拿数据）**：`publisher_name` / `publisher_summary` 是**响应字段**，
+随合法的 `product_desc` 组照旧返回，与非法**组名**无关。改成
+`"product_desc,contributors,media,series"` 后实测 **200 + `publisher_name: "Macmillan Audio"`**，
+`search('audible', ...)` → `ok=True`、3 条真数据；端到端 `search_all(['audible','openlibrary'], ...)` 也通。
+
+#### ② Lubimyczytac 多作者书只拿到第一位作者（提交 `cf92090`）
+
+旧实现是三次**独立** `findall`（书名一批、作者一批、封面一批）再**按下标配对**。
+Lubimyczytac 的一张卡里多作者是**多个 `<a>`**，而正则在 `div.book-card__author` 内只取到**第一个** `<a>`
+⇒ 长度仍等于卡片数、**下标不会错位**，是**截断**而不是张冠李戴。
+
+**实测证据**（真机 10 张卡，2 本少作者）：
+- `Latin American Thought` 真实作者 = Karol Derwich + Magdalena Modrzejewska
+- `Problems, threats...` 真实作者 = Joanna Marszałek-Kawa + Maria Ochwat
+
+改为在 `div.book-card` 容器内**逐卡**取（`soup.select("div.book-card")` →
+`card.select_one("a.book-card__title")` / `card.select("div.book-card__author a")`，
+多作者 `", ".join(...)`，封面 `img.book-card__cover-image`），并新增 `_soup(html)` 辅助：
+缺 `bs4` 时**如实回落 `None` ⇒ 空列表**，不抛异常打断整轮抓取。
+
+#### ③ Amazon 的 JS 校验页静默 0 条（提交 `56568a0`）
+
+Amazon 回的是 **HTTP 200** + `<meta http-equiv="refresh" content="5; URL='…&bm-verify=…'">`
++ 混淆 `<script>var i=…</script>` + 空 `<iframe>`，约 2.3 KB，**不含任何验证码关键词**
+⇒ `_get_text` 既有的挑战页判据放行，用户只看到「0 条结果」，
+**分不清「站点改版（等修复）」与「被拦（降频率 / 带 Cookie）」**——而这两种处置完全不同。
+
+在 `novelforge/core/metasources.py` 的 `_get_text` 里补站点专属判据 `bm-verify`
+（真结果页不含，实测；lubimyczytac 正常页 + `test_真结果页不会被误判成被拦截` 双向钉住误伤风险）。
+
+### 四、为什么这三个 bug 长期没被发现：解析逻辑零测试覆盖
+
+`tests/test_metadata_providers.py` 只钉**注册表一致性**与**密钥口径**，从不碰解析；
+`tests/fixtures/` 里此前**没有任何 `.html` 样本**。⇒ 六家 `_FRAGILE` 源的解析路径
+**完全没有测试**，这正是本期的根因。
+
+新增 `tests/test_metasources_scrape.py`（**12 例**，**一律打桩 `metasources._get_text` ⇒ 不出网**）：
+夹具出处校验 / **多作者全取到（核心：钉住两位作者的完整拼接）** / 书名取 `title="…"` 属性且封面带出 /
+遵守 limit / 挑战页 0 条不抛异常 / 空页与垃圾内容对各家中任一都返空列表 /
+Audible 响应组不含 `publisher` 且出版方字段仍取到 / 接口 400 如实带回错误 /
+`_get_text` 是页面型唯一出网处 / 缺 bs4 如实回落 / Amazon JS 校验页被识别成被拦截 / 真结果页不误判。
+
+**每个 bug 都实测过「改动前会红」**（把修复临时撤掉再跑，确认对应用例失败，然后还原）。
+
+### 五、夹具口径
+
+`tests/fixtures/metasources/`：
+- `lubimyczytac_search.html`（**10455 B**，从 123866 B 真机页裁出**前 3 张卡** = 1 单作者 + 2 多作者，
+  正是缺陷现场；带 HTML 注释写明抓取 URL 与日期）
+- `amazon_challenge.html`（**2561 B**，真机**原样字节**）
+
+沿用既有先例 `tests/fixtures/legado2_real.json`：**真样本裁成代表性片段，不整页入库**。
+
+### 六、未做及原因
+
+- **Goodreads / Kobo / Libro.fm 三家的选择器改造**：本机**取不到**可解析样本
+  （两个 `ConnectTimeout`、一个 HTTP 202 空体）⇒ **无真实样本改选择器正是审计禁止的事**，
+  继续挂起（等有网络条件时单独一轮）。
+- **`novelforge/core/fileops.py` 的 OPF 改写**：改写的是**出版副本 XML**，
+  字节级等价不可证，而「出版产物不得变化」是硬约束 ⇒ 保留正则（`docs/agents-audit-95.md:167-168`）。
+- **EPUB 解析改成熟解析器**：第 95 期试过并回退（三处容错回归，`lxml` 是可选依赖），仍未做。
+- **没有把 `metasources.py` 其余非 HTML 家（iTunes / Open Library 等 JSON 接口）纳入改造**：
+  它们不是抓 HTML，无选择器语义问题。
+
+### 七、实测（收尾）
+
+| 项 | 值 |
+|---|---|
+| 后端全量 | **2140 passed / 25 skipped / 0 failed**（263.52 s，exit 0；第 98 期 2128 ⇒ **+12** = 新增 12 例） |
+| 前端 | **零改动**（`git status frontend/ novelforge/static/` 为空），未重跑 |
+| 每个新用例 | 都实测「改动前会红」（临时撤掉修复 ⇒ 对应用例失败 ⇒ 还原） |
+| `VERSION` | 仍 `0.94.0`（**未发版**） |
+
+### 八、收尾
+
+- 提交（按能力分）：`fix(core): 元数据抓取两处线上真 bug（Audible 整家失效 + 多作者截断）`
+  （`cf92090`，含夹具与 12 例测试）→ `fix(core): 识别 Amazon 的 JS 校验页，不再静默 0 条`（`56568a0`）
+  → 本期文档与记忆一笔。
+- ⚠️ 真机探活脚本（`%TEMP%\nf_probe_sites.py` / `nf_probe_selectors.py` / `nf_build_fixtures.py`）
+  与抓到的原始整页（`%TEMP%\nf-fixtures\`）**一律不入库**；只把**裁过的代表性片段**进 `tests/fixtures/`。
+- ⚠️ 探活前必须清空全部代理变量（同 `pytest` 铁律），否则一律 `httpx.InvalidURL: Invalid port: ':1]'`。

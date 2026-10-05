@@ -1155,3 +1155,68 @@ txt 书**两个落点都留档**（`blobs == [b"", "旧的留档"]`）、显式�
 ⚠️ 看图时别把上游 `Reading DNA` 卡上的 `Rhythm` 横条当成我们的 `reading-rhythm`（那个 id 在本项目
 已落定为「入库节奏」，第 83 期决策）。
 
+
+### 第 99 期铁律（元数据抓取真机核验 / 三处线上真 bug / 脆弱源夹具）
+
+#### 一、先说结论：这一期是「审计的前置条件」逼出来的，不是想重构
+
+第 95 期审计对 `novelforge/core/metasources.py` 五家抓 HTML 的原话是「**需要单独一轮：
+带真实站点核验 + 抓取样本落夹具**」，并明确禁止「在没有逐家真机核过的前提下改选择器语义
+（等于用『单测绿』换『线上未知』）」。⇒ **先核验，核验结果决定改什么**，
+而不是先定改造范围再找证据。核出三处真 bug，其中两处与「选择器写法」无关。
+
+#### 二、三处 bug 与判据（逐条都可能再次踩）
+
+1. **Audible：参数里的非法「组名」让整家失效。** `response_groups` 带 `publisher` ⇒
+   `400 {"message":"Invalid response group(s) requested: publisher"}`。
+   ⚠️ **一定要分清「组名」与「字段名」**：`publisher_name` / `publisher_summary` 是**字段**，
+   随合法的 `product_desc` 照旧返回 ⇒ 删掉非法组名**一点不少拿出版方数据**。
+   这类「合法 JSON、合法 HTTP、但参数值非法」的错误会被 `ok=False` 吞成「这家没结果」。
+2. **Lubimyczytac：多次独立正则 + 下标配对 = 多作者静默截断。**
+   卡内多作者是**多个 `<a>`**，而正则在 `div.book-card__author` 内只取到第一个 ⇒
+   三个列表长度**仍等于卡片数**、**下标不错位**，所以它表现得「完全正常」，只是少了作者。
+   ⚠️ **「下标不错位」不等于「数据完整」** —— 长度相等会让人以为对齐逻辑没问题。
+   改法：在卡片容器内**逐卡**取（一次 `select`，同一个 `card` 上 `select_one` / `select`）。
+3. **Amazon：`200 OK` 的 JS 校验页被当成空结果页。**
+   真机回的是 `<meta http-equiv="refresh" content="5; URL='…&bm-verify=…'">` + 混淆 JS + 空 `<iframe>`，
+   ~2.3 KB，**不含任何验证码关键词**（`validatecaptcha` / `robot check` / `g-recaptcha` / `cf-challenge`
+   都没有）⇒ 既有判据放行。
+   ⚠️ **判据要按站点补**（`bm-verify`），并且必须**双向钉住**：真结果页不许被误判
+   （`test_真结果页不会被误判成被拦截`）。否则修完变成「好页也报被拦」。
+   ⚠️ 这条的本质是**可诊断性**：用户必须能分清「站点改版（等修复）」与「被拦（降频率/带 Cookie）」。
+
+#### 三、判「某家源坏了」必须分环境性与结构性
+
+| 现象 | 归类 | 处置 |
+|---|---|---|
+| `ConnectTimeout` / `getaddrinfo failed` | 环境（本机网络 / DNS） | 不立项，等网络条件 |
+| 挑战页 / HTTP 202 空体 | 环境（反爬，需 Cookie） | **无样本不改选择器**，挂起 |
+| 缺 API Key（hardcover / comicvine / aladin） | 环境（需用户配置） | 不立项 |
+| 参数值非法 ⇒ 400（Audible） | **结构性真 bug** | 立项修 |
+| 解析少字段（Lubimyczytac） | **结构性真 bug** | 立项修 |
+| `ranobedb` 按英文书名 0 条 | **不是 bug**（日系轻小说源，换 `Solo Leveling` 有 3 条） | 不动 |
+
+⚠️ **六家 `_FRAGILE` 里只有 Lubimyczytac 取到了可解析样本** ⇒ 夹具只有它一份，
+其余三家（Goodreads / Kobo / Libro.fm）**不因「没做」而改成「先改了再说」**。
+
+#### 四、测试与夹具的口径
+
+- 新增 `tests/test_metasources_scrape.py`（**12 例**）。根因是**解析逻辑此前零覆盖**：
+  `tests/test_metadata_providers.py` 只钉注册表一致性与密钥口径，从不碰解析；
+  `tests/fixtures/` 此前**没有任何 `.html`**。
+- ⚠️ **一律打桩 `metasources._get_text` ⇒ 测试不出网**（它是页面型来源的**唯一出网处**）。
+  验证「唯一出网处」本身也写成了一个用例。
+- 夹具口径沿用 `tests/fixtures/legado2_real.json` 的先例：**真样本裁成代表性片段，不整页入库**
+  （`lubimyczytac_search.html` 10455 B，从 123866 B 真页裁出**前 3 张卡** = 1 单作者 + 2 多作者，
+  正是缺陷现场；`amazon_challenge.html` 2561 B 真机**原样字节**）。
+- ⚠️ **每个新用例都必须实测「改动前会红」**（临时撤掉修复 ⇒ 对应用例失败 ⇒ 还原）。
+- ⚠️ **缺 bs4 要如实回落**（`_soup` 返 `None` ⇒ 空列表），不许抛异常打断整轮多源抓取。
+
+#### 五、操作陷阱
+
+- ⚠️ **探活前必须清空全部代理变量**（同 `pytest` 铁律），否则逐家探活结果全是
+  `httpx.InvalidURL: Invalid port: ':1]'`（畸变 mount），会误判成「站点全挂了」。
+- ⚠️ **`git show HEAD:path > file` 在 PowerShell 下写成 UTF-16**（带 null 字节 ⇒
+  `SyntaxError: source code string cannot contain null bytes`）。要还原文件做「改动前会红」验证，
+  用 **Python 读写**，别用 PowerShell 重定向。
+- ⚠️ 真机抓到的**整页**与探活脚本**一律不入库**（分析用，放 `%TEMP%`）；只有**裁过的片段**进 `tests/fixtures/`。

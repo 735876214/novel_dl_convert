@@ -159,12 +159,18 @@ httpx.InvalidURL: Invalid port: ':1]'    # 堆栈 tests/test_network_limits.py:1
 
 ### 未做及原因
 
-- **`novelforge/core/metasources.py` 五家 HTML 抓取 → bs4**（§4 high）：**刻意不做**。这五处抓的是
-  Amazon / Goodreads / Libro.fm / Lubimyczytac 的**真实线上页面**，而本项目的硬规则是
-  「能出网验证的就必须真的出网验证」+「桩站单测 100% 绿但真实站点全挂」（第 94 期那个 gzip 缺陷的教训）。
-  在没有逐家真机核过的前提下改选择器语义，等于用「单测绿」换「线上未知」—— 属 §7.3 明令禁止的
-  「拿能用的功能去换没做完的复杂度」。**需要单独一轮：带真实站点核验 + 抓取样本落夹具**。
-- **`novelforge/core/fileops.py` 的 OPF 改写正则 → ElementTree**（§4 med）：同上保留。改写的是
+- **`novelforge/core/metasources.py` 五家 HTML 抓取 → bs4**（§4 high）：**第 99 期已部分落地**。
+  按本条自己写的做法（「带真实站点核验 + 抓取样本落夹具」）做了逐家真机探活，**核出三处线上真 bug**
+  并修掉：Audible 的 `response_groups` 带非法组名 `publisher` ⇒ 接口 400、**整家永远 0 结果**
+  （`publisher_name`/`publisher_summary` 是**字段**，随 `product_desc` 照旧返回）；
+  Lubimyczytac 多作者书**只拿到第一位作者**（卡内多作者是多个 `<a>`，旧实现三次独立 `findall`
+  再按下标配对，长度仍等卡片数 ⇒ 是**截断**不是错位）；Amazon 的 JS 校验页
+  （`200` + `<meta refresh …&bm-verify=…>`、约 2.3 KB、**不含任何验证码关键词**）被旧判据放行 ⇒
+  **静默 0 条**。Lubimyczytac 已改逐卡 `bs4` 选择器（`_soup` 缺库时如实回落空列表），
+  新增 `tests/test_metasources_scrape.py`（12 例）+ 真机夹具 `tests/fixtures/metasources/`。
+  **本条并未全部收口**：Goodreads / Kobo（本机 `ConnectTimeout`）与 Libro.fm（HTTP 202 空体）
+  **取不到可解析样本** ⇒ 仍按本条原话挂起（无样本不改选择器语义）。
+- **`novelforge/core/fileops.py` 的 OPF 改写正则 → ElementTree**（§4 med）：仍保留。改写的是
   **出版副本的 XML**，字节级等价不可证，而「出版产物不得变化」是硬约束；已把理由写在原地。
 - **`novelforge/core/library.py` 的 EPUB/OPF/NCX 解析 → ElementTree**（§4 high）：**做了、验证后回退了**。
   见 §6「回退记录」—— 三处实测回归 + `lxml` 是可选依赖 ⇒ 不满足 §7.5 的「降低总复杂度或提高可靠性」。
