@@ -107,6 +107,32 @@ def test_题材多源合并去重且过黑名单(isolated, monkeypatch):  # noqa
     assert item["changes"]["tags"]["to"] == ["科幻", "太空歌剧", "小说", "冒险"]
 
 
+def test_演播者只取一家不跨源拼(isolated, monkeypatch):  # noqa: ARG001
+    """第 103 期：演播者是**版本属性**，与题材相反 —— **只取一家**。
+
+    两个源报的常常是两次不同录音（甚至不同语言版本）的阵容；拼起来会造出一份
+    **从未存在过**的名单，而且写进库后没人能看出哪一半是错的（与「同名不同书」
+    的污染同一类风险）。所以这里断言的是：结果**恰好等于**某一个源的名单。
+    """
+    item = _plan(monkeypatch, [
+        cand("audible", 0.95, narrators=["Scott Brick", "Euan Morton"]),
+        cand("audnexus", 0.93, narrators=["Simon Vance"]),
+    ])
+
+    assert item["merged_from"] == ["audible", "audnexus"], "两家都够格参与合并"
+    assert item["changes"]["narrators"]["to"] == ["Scott Brick", "Euan Morton"], "取一家，不拼"
+    assert item["changes"]["narrators"]["source"] == "audible"
+
+
+def test_演播者首位源为空则顺延到下一家(isolated, monkeypatch):  # noqa: ARG001
+    item = _plan(monkeypatch, [
+        cand("audible", 0.95),
+        cand("audnexus", 0.93, narrators=["Simon Vance"]),
+    ])
+
+    assert item["changes"]["narrators"]["to"] == ["Simon Vance"]
+
+
 def test_关掉开关逐字回到旧行为(isolated, monkeypatch):  # noqa: ARG001
     item = _plan(monkeypatch, [
         cand("openlibrary", 0.95, year="1965"),

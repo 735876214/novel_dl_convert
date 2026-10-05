@@ -41,6 +41,9 @@ _CURRENT = {
     # OPF 的 `calibre:series`），缺的只是抓取线这一头 —— 候选结构与这里都没有它的键。
     # ⚠️ 默认策略是 **fill_only**（见 `config.DEFAULTS`）：系列会参与改名，不该被在线值覆盖。
     "series": "series", "series_index": "series_index",
+    # 第 103 期：演播者（有声书）。**多值字段**（与 `tags` 同口径，见 `_LIST_FIELDS`）——
+    # 本地值来自音频文件标签，那是这一项的**权威源**，所以默认策略同样是 fill_only。
+    "narrators": "narrators",
     # 第 63 期：副标题与 9 个提供商 ID —— 书对象里的键与字段名同名，
     # 且**没有 OPF 原值**（``metastore._opf_value`` 会回落到空串，「恢复在线」对它们
     # 就是「回落到在线抓取值、没有在线值即为空」，与第 22 期非 EPUB 的语义一致）。
@@ -53,6 +56,21 @@ _VALUE_KEYS = dict(_CURRENT)
 
 #: 提供商 ID 字段集合（加速判别；值取自 `fileops` 那张单一真源表）
 _PROVIDER_FIELDS = frozenset(fileops.PROVIDER_ID_FIELDS)
+
+#: **多值字段**（值是字符串列表）：题材与演播者（第 103 期）。
+#: 它们与标量字段有三处不同，三处都必须按这张表分流（漏一处就是静默的类型错误）：
+#:   · 候选侧要按列表取（`str(list)` 会得到 ``"['Scott Brick']"`` 这种 repr 垃圾）；
+#:   · 当前值侧同理（本地值来自 OPF / 音频标签，本来就是列表）；
+#:   · 合并规则不同 —— 题材跨源拼、演播者不拼（见 :func:`merge_values`）。
+#: ⚠️ `metastore` 与 `db` 各有一份等价判断（那两处不能反向 import 本模块），
+#: 三份由测试钉住同集合。
+_LIST_FIELDS = ("tags", "narrators")
+
+
+def _as_list(value) -> list:
+    """多值字段的对外形态：去空白、丢空项、**保序去重**（顺序有展示意义）。"""
+    items = value if isinstance(value, (list, tuple, set)) else ([value] if value else [])
+    return list(dict.fromkeys(str(x).strip() for x in items if str(x or "").strip()))
 
 
 def _cand_value(cand: dict, field: str, key: str) -> str:
@@ -144,12 +162,13 @@ FINALIZE_PRESETS = {
 }
 #: `fields` 字典包含的字段键（与 config.DEFAULTS.metadata_fetch.fields 一致）
 #:
-#: ⚠️ 第 63 期起含副标题与 9 个提供商 ID，第 103 期起含系列与卷号。它们**必须**在这里 ——
-#: ``preset_to_fields("embedded_only")`` 是把整张表写成 ``skip``，
+#: ⚠️ 第 63 期起含副标题与 9 个提供商 ID，第 103 期起含系列、卷号与演播者。它们**必须**
+#: 在这里 —— ``preset_to_fields("embedded_only")`` 是把整张表写成 ``skip``，
 #: 漏了新字段就会出现「选了『仅用内嵌（不下载远程字段）』，却仍然写回 9 个在线 ID」
 #: 的自相矛盾。漏一个字段的表现是**静默的**：预设页说一套、抓取做另一套。
 _FINALIZE_FIELDS = ["title", "author", "publisher", "date", "language",
-                    "isbn", "description", "tags", "series", "series_index", "cover",
+                    "isbn", "description", "tags", "series", "series_index",
+                    "narrators", "cover",
                     "subtitle", *fileops.PROVIDER_ID_FIELDS]
 
 
@@ -192,8 +211,8 @@ def _field_policy(b_policy: dict, field: str) -> str:
 
 
 def _current_value(book: dict, field: str):
-    if field == "tags":
-        return list(book.get("tags") or [])
+    if field in _LIST_FIELDS:
+        return _as_list(book.get(field))
     return str(book.get(_CURRENT.get(field) or field) or "").strip()
 
 
@@ -201,11 +220,11 @@ def _candidate_values(cand: dict, blocklist: set) -> dict:
     """候选 → ``{字段: 值}``；题材先过黑名单（过滤「小说」这类没信息量的值）。"""
     out = {}
     for field, key in _VALUE_KEYS.items():
-        if field == "tags":
-            vals = [str(t).strip() for t in (cand.get("tags") or [])]
-            vals = [t for t in vals if t and norm_key(t) not in blocklist]
-            # 去重保序（题材顺序有展示意义）
-            out[field] = list(dict.fromkeys(vals))[:8]
+        if field in _LIST_FIELDS:
+            vals = _as_list(cand.get(key))
+            if field == "tags":
+                vals = [t for t in vals if norm_key(t) not in blocklist]
+            out[field] = vals[:8]
         else:
             out[field] = _cand_value(cand, field, key)
     return out
@@ -235,6 +254,8 @@ def merge_values(cands: list, blocklist: set) -> tuple:
     2. **题材是合并而非择优**：多源题材按出现顺序去重拼起来（上限 :data:`MERGE_MAX_TAGS`）——
        各家的题材本来就不重合，取某一个源反而信息更少；
     3. 逐字段回传 `来源 / 分数`：写库账目对得上（谁给的值、多可信）；封面同理单列。
+    4. **演播者（第 103 期）与题材相反：只取一家、不拼** —— 那是版本属性，
+       跨源拼会造出一份从未存在过的阵容（见下方分支里的注释）。
     """
     sources: list = []
     for c in cands:
@@ -268,6 +289,18 @@ def merge_values(cands: list, blocklist: set) -> tuple:
                 values["tags"] = merged[:MERGE_MAX_TAGS]
                 origin["tags"] = {"source": str((first or {}).get("source") or ""),
                                   "score": float((first or {}).get("score") or 0.0)}
+            continue
+        if field in _LIST_FIELDS:
+            # 演播者**不跨源合并**（第 103 期）：它是**版本属性** —— 两个源报的通常是
+            # 两次不同录音（甚至不同语言版本）的阵容，拼起来会造出一份**从未存在过**的
+            # 名单；而题材那种互补性在这里也不成立。取第一个非空即可。
+            for c in order(field):
+                vals = _as_list(c.get(key))
+                if vals:
+                    values[field] = vals[:MERGE_MAX_TAGS]
+                    origin[field] = {"source": str(c.get("source") or ""),
+                                     "score": float(c.get("score") or 0.0)}
+                    break
             continue
         for c in order(field):
             v = _cand_value(c, field, key)

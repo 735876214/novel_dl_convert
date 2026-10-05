@@ -14,7 +14,8 @@ from novelforge.core import fileops, metafetch
 #: 字段名查策略的，于是预设里「出版年」那一档**从来没生效过**（查不到 ⇒ 回落默认），
 #: 而设置页的逐字段下拉写的是 `date`、一直是对的。两套键空间并存了整整若干期。
 EXPECTED_KEYS = ["title", "author", "publisher", "date", "language",
-                 "isbn", "description", "tags", "series", "series_index", "cover",
+                 "isbn", "description", "tags", "series", "series_index",
+                 "narrators", "cover",
                  "subtitle", *fileops.PROVIDER_ID_FIELDS]
 
 
@@ -84,16 +85,18 @@ def test_presets_声明齐全():
     assert set(metafetch.FINALIZE_PRESETS) >= {"overwrite", "fill_only", "embedded_only"}
 
 
-def test_系列两项的默认策略是fill_only():
-    """系列 / 卷号的**默认**策略是 fill_only（与整表其它项的 overwrite 不同，故意的）。
+def test_新接的三项默认策略是fill_only():
+    """系列 / 卷号 / 演播者的**默认**策略是 fill_only（与整表其它项的 overwrite 不同，故意的）。
 
     理由写在 `config.DEFAULTS` 那段注释里，核心是一条：系列会参与**命名规则**
-    （`{series}` / `{series_index}`）与系列视图 —— 默认覆盖会静默改掉用户已有的系列
-    分组与文件名（重命名读的是生效值）。抓取的收益主要在**没有**系列的书上。
+    （`{series}` / `{series_index}`）与系列视图，演播者的本地值来自音频文件标签（权威源）
+    —— 默认覆盖会静默改掉用户已有的系列分组与文件名。抓取的收益主要在**没有**值的书上。
 
-    这条钉的是默认值本身：谁把这两项「顺手统一成 overwrite」，用户可见行为就变了。
+    这条钉的是默认值本身：谁把这三项「顺手统一成 overwrite」，用户可见行为就变了。
     """
     f = config.DEFAULTS["metadata_fetch"]["fields"]
-    assert f["series"] == "fill_only" and f["series_index"] == "fill_only"
-    others = {k: v for k, v in f.items() if k not in ("series", "series_index")}
-    assert set(others.values()) == {"overwrite"}, "别因为这两项把整表改档"
+    new = ("series", "series_index", "narrators")
+    for k in new:
+        assert f[k] == "fill_only", k
+    others = {k: v for k, v in f.items() if k not in new}
+    assert set(others.values()) == {"overwrite"}, "别因为这几项把整表改档"

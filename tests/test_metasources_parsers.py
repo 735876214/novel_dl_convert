@@ -300,6 +300,10 @@ def test_audible_按catalog接口解析(monkeypatch):
         "publisher_summary": "沙丘有声版", "language": "english",
         "series": [{"title": "The Dune Sequence", "sequence": "12"},
                    {"title": "Dune", "sequence": "1"}],
+        # 第 103 期：演播者在**顶层** `narrators`，每项 `{"name": …}`；
+        # 同一响应里的 `contributors` 实测恒为 null（别绕道去解它）。
+        "narrators": [{"name": "Scott Brick"}, {"name": "Euan Morton"},
+                      {"name": ""}, "不是字典的杂项"],
         "product_images": {"500": "https://x/au.jpg"},
     }]}})
     e = _one("audible")[0]
@@ -307,6 +311,7 @@ def test_audible_按catalog接口解析(monkeypatch):
     assert e["title"] == "Dune" and e["author"] == "Frank Herbert"
     assert e["cover_url"] == "https://x/au.jpg"
     assert e["series"] == "Dune" and e["series_index"] == "1", "取卷号最小的那支"
+    assert e["narrators"] == ["Scott Brick", "Euan Morton"], "空名与非字典项要丢掉"
     assert e["tags"] == [], "系列名不该再占着 tags（题材这接口不给）"
 
 

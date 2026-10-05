@@ -633,6 +633,8 @@ def _entry(source: str, **kw) -> dict:
     命名规则的 ``{series}`` 都有），只是候选结构里一直没有它们的键，抓到了也
     **无处可放**（Audible 的系列名此前被塞进 ``tags``，正是这个缺口的副作用）。
     卷号一律走 :func:`_series_index_of`：**只认数字**。
+
+    第 103 期起也多带 ``narrators``（演播者）：与 ``tags`` 一样的多值字段，空值为 ``[]``。
     """
     pid = _clean(kw.get("provider_id"))
     field = SOURCE_ID_FIELD.get(source)
@@ -648,6 +650,10 @@ def _entry(source: str, **kw) -> dict:
         "series": _strip_html(kw.get("series")),
         "series_index": _series_index_of(kw.get("series_index")),
         "tags": [t for t in (_strip_html(x) for x in (kw.get("tags") or [])) if t][:8],
+        # 第 103 期：演播者（有声书）。与 `tags` 同口径的**多值字段**：空就是 `[]`，
+        # 不写空串 —— 下游 `metafetch` 对这两个字段都按列表处理（合并规则不同：
+        # 题材跨源拼、演播者只取一家，见那里的 `merge_values`）。
+        "narrators": [n for n in (_strip_html(x) for x in (kw.get("narrators") or [])) if n][:8],
         "cover_url": _clean(kw.get("cover_url")),
         "raw_id": _clean(kw.get("raw_id")),
         #: 该源那条记录的标识 → 字段名由 SOURCE_ID_FIELD 决定；无字段的源恒为空
@@ -1343,12 +1349,18 @@ def _search_audible(title: str, author: str, limit: int, opts: dict) -> list:
         series, series_index = _best_series([(s.get("title"), s.get("sequence"))
                                             for s in (p.get("series") or [])
                                             if isinstance(s, dict)])
+        # 演播者（第 103 期）：`narrators` 是**顶层键**且真的随现有响应组返回
+        # （真机实测 Dune 12 位、Dune Messiah 4 位），每项形如 `{"name": "Scott Brick"}`。
+        # 注意 `contributors` 实测恒为 null —— 别绕道去解它。
+        narrators = [n.get("name") for n in (p.get("narrators") or [])
+                     if isinstance(n, dict) and n.get("name")]
         out.append(_entry("audible", title=p.get("title"), author=authors,
                           publisher=p.get("publisher_name") or p.get("publisher_summary"),
                           year=p.get("publication_datetime") or p.get("release_date"),
                           language=p.get("language"),
                           description=p.get("publisher_summary"),
                           series=series, series_index=series_index,
+                          narrators=narrators,
                           # ⚠️ 题材**不从这里来**：此前把系列名塞进了 `tags`（把值写错
                           # 地方，还污染题材黑名单与跨源合并）。实测现有
                           # `response_groups` 下 Audible 根本不返回题材

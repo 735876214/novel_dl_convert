@@ -120,15 +120,16 @@ describe('元数据编辑器 · 字段表的完整性', () => {
   it('抓取策略表与「引擎真会抓的字段」同集合', () => {
     // 与后端 `metafetch._FINALIZE_FIELDS` 同集合（= `_VALUE_KEYS` + 封面；
     // 后端有测试钉住那两者，这里补上跨语言这一半）。
-    // ⚠️ 第 103 期起 **含 series / series_index**：`metafetch` 把这两项接进了抓取线
-    // （候选结构 + `_VALUE_KEYS` 都加了），所以策略表里也必须有 ——
+    // ⚠️ 第 103 期起 **含 series / series_index / narrators**：`metafetch` 把这三项接进了
+    // 抓取线（候选结构 + `_VALUE_KEYS` 都加了），所以策略表里也必须有 ——
     // 少一边的表现是「这一项在设置页里根本看不见」，静默失效。
-    const editable = [...IDENTITY_FIELDS, ...CATALOG_FIELDS, 'tags', 'description']
+    const editable = [...IDENTITY_FIELDS, ...CATALOG_FIELDS, 'tags', 'narrators', 'description']
     expect(new Set(POLICY_FIELDS)).toEqual(new Set([...editable, 'cover']))
     expect(POLICY_FIELDS).toContain('date')       // 先前 Book Dock 抄成 year 的那一项
     expect(POLICY_FIELDS).not.toContain('year')
     expect(POLICY_FIELDS).toContain('series')
     expect(POLICY_FIELDS).toContain('series_index')
+    expect(POLICY_FIELDS).toContain('narrators')
   })
 
   it('「没有 OPF 对应物」的字段表覆盖了全部 DB-only 字段', () => {

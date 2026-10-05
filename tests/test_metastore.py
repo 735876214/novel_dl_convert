@@ -92,6 +92,36 @@ def test_没有在线值时online为空串(isolated):  # noqa: ARG001
     assert metastore.state(BOOK)["description"]["online"] == ""
 
 
+def test_多值字段的在线值还原成列表(isolated):  # noqa: ARG001
+    """`tags` / `narrators` 在 DB 里是 ``str(list)`` 形态（`db.set_online` 存的是 ``str(v)``）。
+
+    不还原的后果是**同一字段两种形态**：OPF 分支给真列表，在线分支给
+    ``"['Scott Brick']"`` 这样的 repr 串 —— 编辑器上就直接显示这串东西，
+    「恢复在线值」也会把一个字符串当成标签列表写回去。
+    """
+    db.set_online("b1", {"tags": (["在线标签", "科幻"], "openlibrary"),
+                         "narrators": (["Scott Brick"], "audible")})
+    eff = metastore.effective(BOOK)
+    st = metastore.state(BOOK)
+
+    assert eff["tags"] == ["在线标签", "科幻"]
+    assert eff["narrators"] == ["Scott Brick"]
+    assert st["tags"]["online"] == ["在线标签", "科幻"]
+    assert st["narrators"]["online"] == ["Scott Brick"]
+    assert st["tags"]["value"] == ["在线标签", "科幻"]
+    # 标量字段不受影响（别把整张表都当列表）
+    assert st["publisher"]["online"] == ""
+
+
+def test_多值字段清空覆盖给出空列表(isolated):  # noqa: ARG001
+    """显式清空（哨兵）对多值字段的对外形态是**空列表**，不是一个空串。"""
+    db.set_override("b1", "narrators", db.META_CLEAR)
+    eff = metastore.effective(BOOK)
+
+    assert eff["narrators"] == []
+    assert metastore.state(BOOK)["narrators"]["value"] == []
+
+
 # ---------------------------------------------------------------------------
 # 边界：缺 id / 空库
 # ---------------------------------------------------------------------------

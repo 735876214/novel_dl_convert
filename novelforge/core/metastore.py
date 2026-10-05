@@ -12,6 +12,22 @@
 """
 from . import db, fileops
 
+#: **多值字段**：`tags` 与 `narrators`（演播者，第 103 期）。
+#: DB 里它们以 ``str(list)`` 形态存放（``db.set_online`` 存的是 ``str(v)``），读出来
+#: **必须还原成列表** —— 否则编辑器上会把 ``"['Scott Brick']"`` 这串 repr 当值显示，
+#: 而 OPF 分支（`_opf_value`）给的是真列表，同一个字段两种形态。
+#: ⚠️ 与 `db.get_effective_meta` 里那份判断、`metafetch._LIST_FIELDS` 同口径
+#: （三处不能互相 import：db ← metastore ← metafetch 是单向的）。
+_LIST_FIELDS = ("tags", "narrators")
+
+
+def _online_value(field: str, value):
+    """在线值的对外形态：多值字段还原成列表，其余按去空白的字符串（无值给空串/空列表）。"""
+    s = str(value or "").strip()
+    if not s:
+        return [] if field in _LIST_FIELDS else ""
+    return db._parse_tags(s) if field in _LIST_FIELDS else s
+
 
 def _opf_value(book: dict, field: str):
     """从 library 的书对象读 OPF 原值。字段名对齐 ``fileops.METADATA_FIELDS``
@@ -61,7 +77,7 @@ def effective(book: dict) -> dict:
             # 而不是把哨兵本身当成值显示出去。
             out[f] = db._meta_out(f, ov[f])
         elif on.get(f) and str((on[f].get("value") or "")).strip():
-            out[f] = on[f]["value"]
+            out[f] = _online_value(f, on[f]["value"])
         else:
             out[f] = _opf_value(raw, f)
     return out
@@ -85,8 +101,7 @@ def state(book: dict) -> dict:
     out = {}
     for f in fileops.METADATA_FIELDS:
         opf = _opf_value(raw, f)
-        online = (on.get(f) or {}).get("value") or ""
-        online = str(online).strip()
+        online = _online_value(f, (on.get(f) or {}).get("value"))
         overridden = bool(ov.get(f) and str(ov[f]).strip())
         # 被覆盖时取「对外形态」：哨兵 → 空串（用户显式清空）。overridden 仍为真，
         # 编辑器据此显示「已本地修改」并提供「恢复为在线值」——语义没变，只是值空了。
