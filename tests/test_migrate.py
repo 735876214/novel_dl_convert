@@ -33,7 +33,7 @@ def two_libs(isolated, default_root, make_book, make_library):  # noqa: ARG001
         make_book(default_root, name)
     library.invalidate()
 
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     make_library("ebook", "电子书库", "ebook", src / "ebooks", source_subdir="ebooks")
     library.invalidate()
     return {"src": pathlib.Path(default_root), "dst": src / "ebooks"}

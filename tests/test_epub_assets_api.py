@@ -32,7 +32,7 @@ def _token(auth_headers: dict) -> str:
 def _setup(client, auth_headers, make_library, make_epub, *,
            root_name: str = "assets", lid: str = "lib-assets"):
     """建一个库、放一本带插图的 EPUB，返回 `(库根, epub 路径, 书 id)`。"""
-    root = pathlib.Path(config.LIBRARY_SOURCE_DIR) / root_name
+    root = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / root_name
     make_library(lid, "素材库", "ebook", root)
     ep = make_epub(root, "插图.epub")
     cards = client.get("/api/books", headers=auth_headers).json()["items"]
@@ -90,8 +90,8 @@ def test_资产端点不吞别的书(client, auth_headers, make_library, make_ep
 def test_多文件夹库也能取对文件(client, auth_headers, make_epub):
     """书在**第二个**来源文件夹里时，`root_of(b) / b["name"]`（改造前的写法）会指到
     第一个根 —— 那里根本没有这个文件，于是这本书的插图**全是 404**。"""
-    first = pathlib.Path(config.LIBRARY_SOURCE_DIR) / "multi-a"
-    second = pathlib.Path(config.LIBRARY_SOURCE_DIR) / "multi-b"
+    first = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "multi-a"
+    second = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "multi-b"
     first.mkdir(parents=True, exist_ok=True)
     second.mkdir(parents=True, exist_ok=True)
     db.create_library("lib-multi", "双根库", "ebook",
@@ -129,7 +129,7 @@ def test_章节正文的插图URL带令牌_而缓存那份不带(client, auth_he
 
 def test_书内样式端点返回样式且URL带令牌(client, auth_headers, make_library, make_epub):
     tok = _token(auth_headers)
-    root = pathlib.Path(config.LIBRARY_SOURCE_DIR) / "styles"
+    root = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "styles"
     make_library("lib-styles", "样式库", "ebook", root)
     ep = make_epub(root, "带样式.epub", chapter=CHAPTER_WITH_STYLE,
                    css='p{background:url("../Images/pic.png")}')

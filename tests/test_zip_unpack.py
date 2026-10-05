@@ -22,7 +22,7 @@ def recycle_env(isolated, monkeypatch, tmp_path) -> None:   # noqa: ARG001 —�
     """把**回收落点**也切到本用例的临时目录。
 
     ⚠️ `CACHE_DIR` 是**会话级**的（`tests/conftest.py` 里那份环境一次性定死），而 `isolated`
-    只切 `DATA_DIR` / `OUTPUT_DIR` / `LIBRARY_SOURCE_DIR` / `INPUT_DIR` ⇒ 不自己切的话，
+    只切 `DATA_DIR` / `OUTPUT_DIR` / `LIBRARY_SOURCE_ROOTS` / `INPUT_DIR` ⇒ 不自己切的话，
     「回收目录里有什么」会撞上别的用例留下的条目（台账是按用例隔离的：DB 在 `DATA_DIR` 下）。
     """
     monkeypatch.setattr(config, "CACHE_DIR", tmp_path / "cache")

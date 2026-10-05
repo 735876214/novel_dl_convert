@@ -49,8 +49,6 @@ if not _LIBRARY_SOURCE_ROOTS:
 
 # 来源根集合：每个元素 {"name": 显示名, "path": Path}。
 LIBRARY_SOURCE_ROOTS = _LIBRARY_SOURCE_ROOTS
-# 兼容别名：指向第一个来源根（老代码 / 测试可能仍引用 LIBRARY_SOURCE_DIR，后续清理）。
-LIBRARY_SOURCE_DIR = LIBRARY_SOURCE_ROOTS[0]["path"]
 
 
 def _is_under_source_root(p: "pathlib.Path") -> bool:

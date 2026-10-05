@@ -21,7 +21,7 @@ from novelforge.core import db, library, library_rules
 @pytest.fixture
 def typed_libraries(isolated, tmp_path, make_library):  # noqa: ARG001 —— isolated 负责切目录
     """三个类型库，就地引用 `LIBRARY_SOURCE_DIR` 下的子目录（与向导的默认方案一致）。"""
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     return {
         "ebook": make_library("ebook", "电子书库", "ebook", src / "ebooks", source_subdir="ebooks"),
         "comic": make_library("comic", "漫画库", "comic", src / "comics", source_subdir="comics"),
@@ -44,7 +44,7 @@ def test_格式决定目标库(typed_libraries):
 
 
 def test_target_root落在命中的库根(typed_libraries):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     assert library_rules.target_root(name="三体.epub") == src / "ebooks"
     assert library_rules.target_root(name="测试漫画.cbz") == src / "comics"
 
@@ -55,7 +55,7 @@ def test_库名优先于格式推断(isolated, tmp_path, make_library):  # noqa:
     第 41 期起「来源子目录名」概念移除，改为按**库名**匹配：文件所在子目录名等于某库的
     库名即命中该库，优先级高于按扩展名推断类型。
     """
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     make_library("ebook", "电子书库", "ebook", src / "ebooks")
     make_library("comic", "漫画库", "comic", src / "漫画库",
                  allowed_exts='[".cbz", ".cbr", ".epub"]')
@@ -75,7 +75,7 @@ def test_子目录命中也拦不住格式不匹配(typed_libraries):
     闸门只排除「收不了的库」，剩下候选之间的优先级一点没动（这是有意的 ——
     书至少还能出现在界面上，用户看得见才好纠正）。
     """
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     hit = library_rules.decide(src=src / "comics" / "随便什么.epub")
     assert hit is not None
     assert hit["id"] == "ebook"
@@ -83,7 +83,7 @@ def test_子目录命中也拦不住格式不匹配(typed_libraries):
 
 def test_decide_for_path与decide同源(typed_libraries):
     """`watcher.target_root` 走的入口必须与 `decide` 结论一致（两套逻辑必然写歪）。"""
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     p = src / "audiobooks" / "某书.m4b"
     assert library_rules.decide_for_path(p, None)["id"] == "audiobook"
 

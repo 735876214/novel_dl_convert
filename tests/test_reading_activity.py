@@ -14,7 +14,7 @@ from novelforge.core import activity, db, library, watcher
 
 def _make_lib_and_book(make_library, tmp_path, lid, book_name):
     """建一个就地引用库并把一本书放进来源文件夹，返回该书 id（与上位测试同口径）。"""
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     make_library(lid, lid, "ebook", src / lid)
     (src / lid).mkdir(parents=True, exist_ok=True)
     (src / lid / book_name).write_bytes(b"EPUB")

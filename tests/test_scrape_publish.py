@@ -380,7 +380,7 @@ def test_接口_未登录一律401(client):
 
 
 def test_接口_建库校验成品目录边界(client, auth_headers, tmp_path):
-    base = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    base = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     root = base / "comics"
     ok = client.post("/api/libraries", headers=auth_headers, json={
         "name": "漫画库", "type": "comic",
@@ -421,7 +421,7 @@ def test_接口_非法处置动作被拒(client, auth_headers):
 
 
 def test_接口_扫描后按开关自动入队(client, auth_headers):
-    base = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    base = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     root = base / "novels"
     root.mkdir(parents=True, exist_ok=True)
     _epub(root, "扫描.epub", title="扫描")

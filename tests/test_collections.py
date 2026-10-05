@@ -11,7 +11,7 @@ from novelforge.core import db, library
 
 
 def _make_book(make_library, tmp_path, lid, name):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     make_library(lid, lid, "ebook", src / lid)
     (src / lid).mkdir(parents=True, exist_ok=True)
     (src / lid / name).write_bytes(b"EPUB")

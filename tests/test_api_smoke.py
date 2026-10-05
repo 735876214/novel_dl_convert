@@ -129,7 +129,7 @@ def test_书库列表不再有默认库(client, auth_headers, test_lib_id):
     assert items[0]["type"] == "mixed"
     assert "source_dirs" in items[0]
     # 新建向导按已配置来源根浏览 / 下钻
-    assert any(r["path"] == str(config.LIBRARY_SOURCE_DIR) for r in data["source_roots"])
+    assert any(r["path"] == str(config.LIBRARY_SOURCE_ROOTS[0]["path"]) for r in data["source_roots"])
     assert {t["value"] for t in data["types"]} == {"ebook", "comic", "audiobook", "mixed"}
 
 
@@ -142,7 +142,7 @@ def test_一个书库都没有时列表真的为空(client, auth_headers, test_l
 
 def test_新建书库并改属性与扫描(client, auth_headers):
     # 库根必须落在白名单内（来源目录 / 导出目录 / 数据目录），这里用来源目录下的子目录
-    root = pathlib.Path(config.LIBRARY_SOURCE_DIR) / "ebooks"
+    root = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "ebooks"
     root.mkdir(parents=True, exist_ok=True)
     lib = _create_library(client, auth_headers, "电子书库", "ebook", root,
                           rules="科幻, 太空")
@@ -162,7 +162,7 @@ def test_新建书库并改属性与扫描(client, auth_headers):
 
 
 def test_来源目录列举(client, auth_headers):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     (src / "comics").mkdir(parents=True, exist_ok=True)
     (src / "comics" / "某漫画.cbz").write_bytes(b"CBZ")
 
@@ -215,7 +215,7 @@ def test_没有任何库是不可删除的(client, auth_headers, test_lib_id, ma
     第 81 期起「库里还有书」的 400 拦截也没了 —— 默认动作零风险（一个文件都不动），
     拦它只会让用户困惑（见 `test_移除书库默认不动文件_显式purge_files才后台回收`）。
     """
-    empty = make_library("comic2", "空漫画库", "comic", pathlib.Path(config.LIBRARY_SOURCE_DIR) / "c2")
+    empty = make_library("comic2", "空漫画库", "comic", pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "c2")
     for lid in (test_lib_id, empty["id"]):
         r = client.delete(f"/api/libraries/{lid}", headers=auth_headers)
         assert r.status_code == 200, f"{lid} 应当可以移除登记：{r.text}"
@@ -242,7 +242,7 @@ def test_移除书库默认不动文件_显式purge_files才后台回收(client,
     `publish_path` 为空），名实不符。现在连文件一起清是显式开关 `purge_files=1`，
     且它在**后台任务**里跑 —— 长操作绝不再挂在 HTTP 请求上（第 81 期线上故障）。
     """
-    root = pathlib.Path(config.LIBRARY_SOURCE_DIR) / "ebooks81"
+    root = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "ebooks81"
     root.mkdir(parents=True, exist_ok=True)
     (root / "三体.epub").write_bytes(b"EPUB")
     lib = _create_library(client, auth_headers, "电子书库八一", "ebook", root)
@@ -385,7 +385,7 @@ def test_能力清单按库类型返回(client, auth_headers):
     assert len(everything["features"]) == 18          # 「全部书库」= 不裁剪（含第 14 期的 opds；第 16 期删掉 opds_sources；第 34 期加 bookmarks）
 
     comic = _create_library(client, auth_headers, "漫画库", "comic",
-                            pathlib.Path(config.LIBRARY_SOURCE_DIR) / "comics")
+                            pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "comics")
     per_lib = client.get(f"/api/features?library_id={comic['id']}", headers=auth_headers).json()
     assert per_lib["library_type"] == "comic"
     assert "comic" in per_lib["features"]
@@ -598,7 +598,7 @@ def test_新建向导发出的payload被原样接收(client, auth_headers):
     ⚠️ 改 `frontend/src/components/tools/LibraryWizard.vue` 的 `submit()` 时请同步改这里：
        这条用例的价值就在于它是那份 payload 的**字面拷贝**。
     """
-    base = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    base = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     root = base / "guide"
     payload = {                      # ← 与 LibraryWizard.submit() 逐字对应
         "name": "向导库",
@@ -640,7 +640,7 @@ def test_向导没动格式时发的空数组等于继承而不是拒收(client,
     """
     r = client.post("/api/libraries", headers=auth_headers, json={
         "name": "继承库", "type": "comic",
-        "source_dirs": [str(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "inherit")],
+        "source_dirs": [str(pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "inherit")],
         "icon": "", "allowed_exts": [], "exclude": []})
     assert r.status_code == 200, r.text
     lib = r.json()["library"]
@@ -658,7 +658,7 @@ def test_编辑弹窗的payload也能改这三个新列(client, auth_headers):
     """
     lib = client.post("/api/libraries", headers=auth_headers, json={
         "name": "改前", "type": "ebook",
-        "source_dirs": [str(pathlib.Path(config.LIBRARY_SOURCE_DIR) / "patch")]}).json()["library"]
+        "source_dirs": [str(pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "patch")]}).json()["library"]
 
     got = client.patch(f"/api/libraries/{lib['id']}", headers=auth_headers, json={
         "icon": "star", "allowed_exts": [".epub"], "exclude": ["备份/*"]}).json()["library"]

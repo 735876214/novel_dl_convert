@@ -94,7 +94,7 @@ def test_OPDS单库地址需要Basic认证(client, enable_opds_cfg):
 # ---------------------------------------------------------------------------
 
 def test_书库导航列出全部可见库(client, auth_headers, enable_opds_cfg, default_root):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     lib_b = _new_library(client, auth_headers, "comics", src / "comics", "comic")
     _put(default_root, "默认库的书.epub")
     _put(src / "comics", "漫画库的一本.cbz")
@@ -116,7 +116,7 @@ def test_单库才多出书库入口(client, auth_headers, enable_opds_cfg, defa
     before = client.get("/opds", headers=enable_opds_cfg).text
     assert "按书库" not in before
 
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     _new_library(client, auth_headers, "comics", src / "comics", "comic")
     _put(src / "comics", "b.cbz")
     library.invalidate()
@@ -130,7 +130,7 @@ def test_单库才多出书库入口(client, auth_headers, enable_opds_cfg, defa
 # ---------------------------------------------------------------------------
 
 def test_单库目录一整套(client, auth_headers, enable_opds_cfg, default_root):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     lib_b = _new_library(client, auth_headers, "comics", src / "comics", "comic")
     _put(default_root, "甲.epub")
     _put(src / "comics", "乙.cbz")
@@ -152,7 +152,7 @@ def test_单库目录一整套(client, auth_headers, enable_opds_cfg, default_ro
 
 
 def test_单库搜索只在本库内(client, auth_headers, enable_opds_cfg, default_root):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     lib_b = _new_library(client, auth_headers, "comics", src / "comics", "comic")
     _put(default_root, "共有书名.epub")
     _put(src / "comics", "共有书名.cbz")
@@ -169,7 +169,7 @@ def test_单库搜索只在本库内(client, auth_headers, enable_opds_cfg, defa
 # ---------------------------------------------------------------------------
 
 def test_关掉暴露后单库地址404(client, auth_headers, enable_opds_cfg, default_root):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     lib_b = _new_library(client, auth_headers, "comics", src / "comics", "comic")
     _put(src / "comics", "b.cbz")
     library.invalidate()
@@ -197,7 +197,7 @@ def test_不存在的库404(client, auth_headers, enable_opds_cfg):
 
 def test_单库取书越库404(client, auth_headers, enable_opds_cfg, default_root):
     """详情 / 封面 / 下载都只能在**本库内**找到书，别的库的书一律 404。"""
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     lib_b = _new_library(client, auth_headers, "comics", src / "comics", "comic")
     _put(default_root, "默认库的书.epub")
     _put(src / "comics", "漫画库的书.cbz")

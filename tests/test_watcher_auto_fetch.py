@@ -10,6 +10,8 @@
 全部离线：用 monkeypatch 替换 `metafetch.auto_fetch`，只断言「名字抵达 metafetch」，不真联网。
 后台线程纪律：派生线程由 `watcher.wait_pending` 在 `isolated` 夹具里收干净（见 conftest）。
 """
+import pathlib
+
 import novelforge.core.metafetch as metafetch_mod
 from novelforge import config
 from novelforge.core import db, lib_settings
@@ -84,7 +86,7 @@ def test_comic_library_scan_triggers_auto_fetch(isolated, make_library, monkeypa
     """漫画库 source_subdir 摄入 .cbz，开启 auto_on_import → 触发 metafetch.auto_fetch。"""
     calls = _patch_auto_fetch(monkeypatch)
     monkeypatch.setattr("novelforge.core.scrape.enabled", lambda lid: False)  # 隔离：本测试只验 auto_fetch
-    src = config.LIBRARY_SOURCE_DIR
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     make_library("comic1", "漫画库", "comic", src / "comics")
     lib_settings.set_overrides("comic1", {
         "metadata_fetch.enabled": True,
@@ -105,7 +107,7 @@ def test_audiobook_library_scan_triggers_auto_fetch(isolated, make_library, make
     """有声书库摄入音频目录，开启 auto_on_import → 触发 metafetch.auto_fetch（kind=audiobook）。"""
     calls = _patch_auto_fetch(monkeypatch)
     monkeypatch.setattr("novelforge.core.scrape.enabled", lambda lid: False)  # 隔离：本测试只验 auto_fetch
-    src = config.LIBRARY_SOURCE_DIR
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     make_library("audio1", "有声书库", "audiobook", src / "audios")
     lib_settings.set_overrides("audio1", {
         "metadata_fetch.enabled": True,
@@ -124,7 +126,7 @@ def test_audiobook_library_scan_triggers_auto_fetch(isolated, make_library, make
 def test_auto_fetch_not_triggered_when_disabled(isolated, make_library, monkeypatch):
     """未开 auto_on_import 时，漫画入库不触发（默认行为零变化）。"""
     calls = _patch_auto_fetch(monkeypatch)
-    src = config.LIBRARY_SOURCE_DIR
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     make_library("comic2", "漫画库2", "comic", src / "comics2")
     (src / "comics2").mkdir(parents=True, exist_ok=True)
     (src / "comics2" / "不抓的漫画.cbz").write_bytes(b"CBZ")
@@ -151,7 +153,7 @@ def test_audio_dir_not_mistaken_for_empty_file(isolated, make_library, make_audi
     逐层打印 `_scan_locked` 的返回值才明白是 `skipped`）。
     """
     monkeypatch.setattr("novelforge.core.scrape.enabled", lambda lid: False)
-    src = config.LIBRARY_SOURCE_DIR
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     lib = make_library("audio9", "有声书库9", "audiobook", src / "audios9")
     d = make_audio_dir(src / "audios9", "回归有声书", tracks=2)
 

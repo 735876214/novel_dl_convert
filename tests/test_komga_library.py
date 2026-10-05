@@ -60,7 +60,7 @@ def enable_komga():
 # ---------------------------------------------------------------------------
 
 def test_系列列表按库过滤(client, auth_headers, enable_komga, default_root):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     lib_b = _new_library(client, auth_headers, "漫画库", src / "comics", "comic")
     _put(default_root, "甲.epub")
     _put(src / "comics", "乙.cbz")
@@ -83,7 +83,7 @@ def test_系列列表按库过滤(client, auth_headers, enable_komga, default_ro
 
 
 def test_书籍列表按库过滤(client, auth_headers, enable_komga, default_root):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     lib_b = _new_library(client, auth_headers, "漫画库", src / "comics", "comic")
     _put(default_root, "甲.epub")
     _put(src / "comics", "乙.cbz")
@@ -103,7 +103,7 @@ def test_书籍列表按库过滤(client, auth_headers, enable_komga, default_ro
 # ---------------------------------------------------------------------------
 
 def test_有声书库不出现在Komga(client, auth_headers, enable_komga, default_root):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     audio = _new_library(client, auth_headers, "有声书库", src / "audio", "audiobook")
     _put(default_root, "甲.epub")
     _put_audio_dir(src / "audio", "一本有声书")
@@ -126,7 +126,7 @@ def test_有声书库不出现在Komga(client, auth_headers, enable_komga, defau
 # ---------------------------------------------------------------------------
 
 def test_CBR有正确的媒体类型(client, auth_headers, enable_komga, default_root):
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     comic = _new_library(client, auth_headers, "漫画库", src / "comics", "comic")
     _put(src / "comics", "一本.cbr", b"Rar!")
     library.invalidate()
@@ -203,7 +203,7 @@ def test_逐库关闭对Komga暴露(client, auth_headers, enable_komga, default_
 
     默认 True = 全部符合条件的库都暴露 —— 与加这个开关之前的行为一致。
     """
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     lib_b = _new_library(client, auth_headers, "漫画库", src / "comics", "comic")
     _put(src / "comics", "乙.cbz")
     library.invalidate()

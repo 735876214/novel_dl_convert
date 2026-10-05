@@ -307,7 +307,7 @@ def two_libs(make_library, tmp_path):  # noqa: ARG001 —— 依赖 isolated 切
     下面「按库筛选生效」与「按库热力图不跟随筛选」两个用例共用这一份数据。
     题材**按库名区分**：阅读侧的题材时长也靠它验收窄（一本书只该看到自己那个题材）。
     """
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     for lid, lang, year in (("sc-a", "zh", "2012"), ("sc-b", "en", "1998")):
         make_library(lid, lid, "ebook", src / lid)
         d = src / lid

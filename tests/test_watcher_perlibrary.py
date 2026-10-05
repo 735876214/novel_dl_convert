@@ -28,7 +28,7 @@ def _make_watcher(**kw):
 
 def test_derive_targets_honors_per_library_watch(isolated, make_library):
     """关库 (watch=0) 的目标 watch=False；开库与全局 INPUT_DIR 目标 watch=True。"""
-    src = config.LIBRARY_SOURCE_DIR
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     make_library("open1", "开库", "ebook", src / "open1")
     make_library("closed1", "关库", "ebook", src / "closed1")
     db.update_library("closed1", watch=0)
@@ -46,7 +46,7 @@ def test_derive_targets_honors_per_library_watch(isolated, make_library):
 
 def test_derive_targets_per_library_interval_and_cron(isolated, make_library):
     """逐库目标的 interval / cron 取自该库列；scan_interval=0 时继承全局。"""
-    src = config.LIBRARY_SOURCE_DIR
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     make_library("lib1", "库1", "ebook", src / "lib1")
     db.update_library("lib1", scan_interval=120, scan_cron="0 3 * * *")
 
@@ -80,7 +80,7 @@ def test_should_scan_cron_window_and_bad_cron_fallback(isolated):
 
 def test_open_library_source_is_scanned_and_writes_last_scan(isolated, make_library, tmp_path):
     """开库（就地引用）的来源文件夹被扫描，文件登记入库，并回写 last_scan_at。"""
-    src = config.LIBRARY_SOURCE_DIR
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     folder = src / "ebooks"
     make_library("eb1", "电子书", "ebook", folder)
     folder.mkdir(parents=True, exist_ok=True)
@@ -95,7 +95,7 @@ def test_open_library_source_is_scanned_and_writes_last_scan(isolated, make_libr
 
 def test_closed_library_source_not_scanned_by_scheduler(isolated, make_library, tmp_path):
     """复刻 _loop 的调度判定：关库（watch=0）的来源文件夹不应被扫（文件留在原地）。"""
-    src = config.LIBRARY_SOURCE_DIR
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     folder = src / "clsrc"
     make_library("cl1", "关库", "ebook", folder)
     db.update_library("cl1", watch=0)
@@ -180,7 +180,7 @@ def test_建库后被拒收过的文件会自动重新收走(client, auth_header
     assert w.scan_once()["failed"], "前置：没有库时应当拒收"
     assert not w.scan_once()["failed"], "前置：到上限后就不该再试 —— 否则本用例不成立"
 
-    root = config.LIBRARY_SOURCE_DIR / "ebooks"
+    root = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "ebooks"
     r = client.post("/api/libraries", headers=auth_headers,
                     json={"name": "电子书库", "type": "ebook",
                           "source_dirs": [str(root)]})

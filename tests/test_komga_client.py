@@ -119,7 +119,7 @@ def test_收藏夹整体替换与移出系列(client, auth_headers, enable_komga
 def test_收藏夹里的越库书不进Komga(client, auth_headers, enable_komga, two_book_series):
     """收藏夹是全局的（能装有声书库的书），但 Komga 侧必须把它过滤掉。"""
     sid, ids = two_book_series
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     audio = _new_library(client, auth_headers, "有声书库", src / "audio", "audiobook")
     _audio_dir(src / "audio", "一本有声书")
     library.invalidate()

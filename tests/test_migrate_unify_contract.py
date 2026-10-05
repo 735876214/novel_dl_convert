@@ -99,7 +99,7 @@ def ebook_target(make_library):
 
     配成品目录是关键 —— 只有它存在，「副本该不该跟过来」才是一个**可观测**的差别。
     """
-    src = pathlib.Path(config.LIBRARY_SOURCE_DIR)
+    src = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])
     pdir = src / "_sorted_ebook"
     pdir.mkdir(parents=True, exist_ok=True)
     lib = make_library("ebook", "电子书库", "ebook", src / "ebooks", source_subdir="ebooks")

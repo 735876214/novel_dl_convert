@@ -382,7 +382,6 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     """
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "output")
-    monkeypatch.setattr(config, "LIBRARY_SOURCE_DIR", tmp_path / "libraries")
     # 收书目录也指到用例专属路径（第 93 期）：下载留档（`<名>.meta.json`）写在**原件旁边**，
     # 而原件落在收书目录 —— 追更的候选枚举按它算（`autoupdate.sidecar_of`）。
     #
@@ -398,8 +397,9 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     # 一个全新路径 —— 上传接口（`/convert`、`/convert-path`）是直接往里写的，
     # 目录不在就是一句 `FileNotFoundError`，跟被测的口径毫无关系。
     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
-    # 第 41 期：多来源根。测试里就一个来源根（即上面这个）；同步让服务端的边界校验
-    # （normalize_source_dirs 只认 LIBRARY_SOURCE_ROOTS）放行 tmp_path 下的库根。
+    # 第 41 期：多来源根。测试里就一个来源根 —— **第 97 期起它是「第一个来源根」的唯一读法**
+    # （原先还有个 `config.LIBRARY_SOURCE_DIR` 别名，生产代码零引用、纯给测试用，已删）。
+    # 同步让服务端的边界校验（normalize_source_dirs 只认 LIBRARY_SOURCE_ROOTS）放行 tmp_path 下的库根。
     monkeypatch.setattr(config, "LIBRARY_SOURCE_ROOTS",
                         [{"name": "libraries", "path": str(tmp_path / "libraries")}])
     db.close()
