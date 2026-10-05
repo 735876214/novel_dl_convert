@@ -17,7 +17,11 @@
 
 ARG PY_VERSION=3.12
 ARG NODE_VERSION=22
-ARG APP_VERSION=0.78.0
+# OCI LABEL 的版本号（**不是**应用读的那个 —— 应用读的是被 COPY 进 /app 的 `VERSION` 文件）。
+# ⚠️ 刻意**不给默认值**：早先写死 `0.78.0`，于是本地 `docker build` 不带 `--build-arg` 时
+# 镜像 LABEL 会撒谎（写着 0.78.0，实际是别的版本）。CI 每次都注入真实值
+# （`.github/workflows/docker-image.yml` 从仓库根 VERSION 读），缺了就留空 —— 空标签比错标签诚实。
+ARG APP_VERSION
 
 # ============================ 阶段 1：依赖构建 ============================
 FROM python:${PY_VERSION}-slim AS builder

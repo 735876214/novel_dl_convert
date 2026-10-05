@@ -162,8 +162,17 @@ async def cmd_download(args):
 async def cmd_update(args):
     cfg = _load_cfg()
     mgr = DownloadManager(cfg)
-    result = await mgr.update(pathlib.Path(args.txt), {"force": True, "merge": True, "cfg": cfg})
-    print(f"已更新：{result}")
+    # 第 95 期：改调 `update_report`（删掉了那个只回 `Path` 的兼容壳 `update()`）。
+    # 顺带把报告里的事实打出来 —— 原来只打印一个路径，用户看不出「新增了几章 / 有没有 EPUB」。
+    rep = await mgr.update_report(pathlib.Path(args.txt),
+                                  {"force": True, "merge": True, "cfg": cfg})
+    print(f"已更新：{rep['path']}（新增 {rep['added']} 章）")
+    if rep.get("missing"):
+        print(f"注意：源上比本地少 {rep['missing']} 章（追更只追加，绝不删本地已有的章）")
+    if rep.get("epub"):
+        print(f"EPUB：{rep['epub']}")
+    if rep.get("note"):
+        print(f"说明：{rep['note']}")
 
 
 def main():

@@ -1342,31 +1342,6 @@ def narrator_books(name: str) -> list:
     return [b for b in books() if name in [str(x or "").strip() for x in (b.get("narrators") or [])]]
 
 
-def library_groups() -> list:
-    """「库」的真实分组：按文件格式，外加元数据维度的「待修复 / 无封面」。
-
-    本项目生成的 EPUB 不含 dc:subject，故不用内容标签分类；
-    格式与 problem 标记始终可用，是最可靠的区分维度。
-    key 形如 ``fmt:EPUB`` / ``issues:1`` / ``nocover:1``，前端据此筛选。
-    """
-    bs = books()
-    fmt: dict = {}
-    for b in bs:
-        f = (b.get("format") or "?").upper()
-        fmt[f] = fmt.get(f, 0) + 1
-    groups = [
-        {"key": f"fmt:{k}", "label": k, "count": v, "kind": "format"}
-        for k, v in sorted(fmt.items(), key=lambda kv: (-kv[1], kv[0]))
-    ]
-    issues = [b for b in bs if b.get("issues")]
-    if issues:
-        groups.append({"key": "issues:1", "label": "待修复", "count": len(issues), "kind": "issues"})
-    nocover = [b for b in bs if (b.get("format") or "").upper() == "EPUB" and not b.get("has_cover")]
-    if nocover:
-        groups.append({"key": "nocover:1", "label": "无封面", "count": len(nocover), "kind": "nocover"})
-    return groups
-
-
 def probe_epub(path: pathlib.Path) -> dict:
     """读 EPUB 容器内的 OPF，取书名 / 作者 / 系列，并判断有没有封面。
 

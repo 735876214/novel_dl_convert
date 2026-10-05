@@ -407,8 +407,8 @@ def secret_fields() -> tuple:
 def key_field_of(source: str) -> str:
     """该源的**主密钥**键名（= 第一个 secret 项）；没有则空串。
 
-    保留这个入口是为了兼容既有调用（掩码 / metafetch / probe / 系列抓取都按
-    「一家一个主密钥」写的）；但它现在是**从 `config_fields` 派生**的，注册表里不再单独写一份。
+    这是 `config_fields_of()` 的**派生读取器**（掩码 / metafetch / probe / 系列抓取都按
+    「一家一个主密钥」写的）—— 注册表里**不**单独存一份键名，加字段只改 `config_fields`。
     """
     for f in config_fields_of(source):
         if f.get("type") == "secret":

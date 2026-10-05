@@ -204,32 +204,21 @@ def invalidate_retention_cache() -> None:
 
 #: 待落盘的合并缓冲：key → {"entry": 条目, "count": 次数, "at": 最后一次时间（秒）}
 _pending: dict = {}
-#: `notifications` 配置的短缓存（与留存策略同款：日志写入是热路径）
-_merge_cfg_cache: dict = {"at": 0.0, "val": None}
+#: 合并窗口（秒）：同类型条目在这段时间内重复 → 并成一条，且**每来一条都重新计时**（尾随去抖）。
+#: 第 95 期起是**常量**：此前由 `notifications.merge_enabled / merge_window` 两个配置键给出，
+#: 但界面上从来没有过出口（设置页那套开关是纯 localStorage 的客户端过滤，与服务端无关），
+#: 「点不到的配置」就是假配置 —— 那两个键连同这里的配置读取一起删了。
+MERGE_WINDOW = 10.0
 
 
 def merge_cfg() -> dict:
-    """合并策略。读不到配置 ⇒ **10s 且开启**（需求给的默认值）。"""
-    now = time.time()
-    cached = _merge_cfg_cache.get("val")
-    if cached is not None and now - float(_merge_cfg_cache.get("at") or 0) < 5:
-        return cached
-    try:
-        from .. import config
-        r = (config.load_config().get("notifications") or {}) or {}
-    except Exception:
-        r = {}
-    out = {
-        "enabled": bool(r.get("merge_enabled", True)),
-        "window": max(0.0, float(r.get("merge_window") or 10)),
-    }
-    _merge_cfg_cache.update(at=now, val=out)
-    return out
+    """合并策略：固定「开启 + `MERGE_WINDOW` 秒」。
 
-
-def invalidate_merge_cache() -> None:
-    """配置变更后调用：否则最长 5 秒内仍按**旧窗口**判断是否合并。"""
-    _merge_cfg_cache.update(at=0.0, val=None)
+    保留这个函数而不是让调用点直接读常量，是为了给用例一个**可替换的接缝**：
+    `tests/conftest.py` 把整个项目关掉（合并会破坏「写一条即落一条」的既有前提），
+    `tests/test_notification_merge.py` 则用它显式开窗并断言合并与重置。
+    """
+    return {"enabled": True, "window": MERGE_WINDOW}
 
 
 def _merge_key(entry: dict) -> str:

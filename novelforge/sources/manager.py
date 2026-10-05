@@ -418,14 +418,13 @@ class DownloadManager:
         report["added"] = len(fresh)
         return report
 
-    async def update(self, txt_path: Path, opts: dict) -> Path:
-        """兼容壳：旧调用方拿的是 ``Path``；要报告请用 :meth:`update_report`。"""
-        return (await self.update_report(txt_path, opts))["path"]
-        # ⚠️ 第 86 期重写时，这里曾留着一整段**永不执行**的旧实现（`return` 之后）：
-        #    裸 `open(txt_path, "a")` 追加 + `pipeline.convert_txt` 整本重转。
-        #    死代码本身无害，但它**看起来像是可以「恢复」的备选路径** —— 而它正好是
-        #    「重复内容 + index 漂移」那两条静默错误的正身（见 `update_report` 的说明），
-        #    所以第 87 期收尾时**删掉**，不留这个念想。
+    # ⚠️ 第 95 期删掉了那个「只回 `Path`」的兼容壳 `update()`：两个调用方（CLI 与一条用例）
+    # 都改调 `update_report` 了。§7.1「不为向后兼容留路」—— 同一个动作留两个入口，
+    # 迟早有人只改其中一个（第 88 期那半天的「入库没标脏」就是这么漏的）。
+    #
+    # 同处还有一段更早的历史（第 86 期重写时 `return` 之后留下的**永不执行**的旧实现：
+    # 裸 `open(txt_path, "a")` 追加 + `pipeline.convert_txt` 整本重转），已经删过一次 ——
+    # 它看着像「可恢复的备选路径」，而它正是「重复内容 + index 漂移」两条静默错误的正身。
 
     async def download_audio(self, item: dict, out_dir, opts: dict = None) -> Path:
         """有声书：逐轨取字节 → 落成**目录型有声书**（一本 = 一个目录，第 86 期）。

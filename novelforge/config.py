@@ -100,13 +100,12 @@ os.environ.setdefault("LOG_DIR", str(LOG_DIR))
 DEFAULTS = {
     "chapter_detection": {"mode": "hybrid", "context_lines": 3, "fallback": "regex"},
     "traditionalize": False,
-    # format: **只剩 epub**（第 62 期）。派生 MOBI / AZW3 依赖本机 Calibre，而产物不进书目，
-    #         收益抵不上成本，整条派生链路已删。键保留是为了兼容旧 settings.json ——
-    #         值域校验（server.FORMAT_CHOICES）与前端下拉都还从它取值。
     # layout: flat  = 全部平铺在 OUTPUT_DIR（原行为）
     #         komga = 有系列的书放 ``系列名/系列名 #N.ext``，让 Komga 扫描后正确成系列
     #                 （Komga 不递归系列目录的子目录，故最多一层；无系列的书仍平铺）
-    "output": {"format": "epub", "layout": "flat"},
+    # 第 62 期起这里**只有 layout**：`format` 整条删掉（产物只剩 epub）。派生 MOBI / AZW3
+    # 依赖本机 Calibre 而产物不进书目，收益抵不上成本，整条派生链路连同那个键一起没了。
+    "output": {"layout": "flat"},
     # 成品命名规则：**副本名**的默认 pattern/scope（存 settings.json 覆盖层；
     # 每库可覆盖，见 core/lib_settings，刮削面板与设置页共用同一份规则）
     # 可用占位符见 core/fileops.PATTERN_FIELDS；扩展名由后端自动追加，模式里不要写 {ext} 之外的后缀
@@ -223,11 +222,10 @@ DEFAULTS = {
         },
     },
     # 通知合并（第 61 期）：同类型（动作 + 结果 + 主体）在窗口内重复 → 合并成一条推送，
-    # 且**每来一条同类型消息窗口都重新计时**（尾随去抖）。默认 10s 且开启 —— 这正是需求给的口径。
-    "notifications": {
-        "merge_enabled": True,
-        "merge_window": 10,
-    },
+    # 且**每来一条同类型消息窗口都重新计时**（尾随去抖）。固定 10s 且开启。
+    # ⚠️ 曾有过 `notifications.merge_enabled / merge_window` 两个可写键，第 95 期删掉：
+    # 界面上从来没有过出口（那页是纯 localStorage 客户端过滤，与服务端无关），
+    # 而「写进去看不见 / 点不到」= 假配置。合并口径改由 `activity_log.merge_cfg` 一处给出。
     # 上传上限。⚠️ 此前**完全没有任何限制**：POST /convert 与 POST /api/sources/upload
     # 都直接 `await file.read()`，把整个请求体一次性读进内存 —— 一个几 GB 的请求
     # 就能把容器内存打满（不需要鉴权绕过，走正常接口即可）。

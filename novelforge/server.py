@@ -45,6 +45,7 @@ from .sources import rules as source_rules
 from .sources import toc_sources      # 第 85 期批次 B：官方书城「只取目录」
 from .sources import ledger as source_ledger   # 第 86 期：书源导入 / 台账 / 导出
 from .sources import intake as source_intake   # 第 94 期：导入入口的**唯一**路由决策点
+from .sources import formats as source_formats  # 第 95 期：格式中文名的**唯一**产出点
 from .sources import legado as legado_mod      # 第 86 期：重新分析要用它重跑判定
 from .sources import creds as source_creds     # 第 86 期：Cookie 读写的唯一真值源
 from .sources import probe as source_probe     # 第 86 期：单字探测 / 全部验证
@@ -163,9 +164,18 @@ async def lifespan(app: FastAPI):
     autoupdate.stop()
 
 
+#: 读不到 `VERSION` 时上报的**哨兵值**。刻意不是一个像样的版本号 ——
+#: 早先这里回的是一个**看起来像真版本**的字面量（`0.80.0` 那一档），于是「部署里缺了
+#: VERSION」会伪装成「本应用就是那个版本」，而 `tests/test_version_contract.py` 只验
+#: 「非空且等于 APP_VERSION」⇒ **谁都不会发现**（第 95 期按 §7.1 清掉这第二份版本字面量）。
+#: `updater.parse_version(_VERSION_UNKNOWN) == (0, 0, 0)` ⇒ 任何真实版本都比它新，更新提示照常给出。
+_VERSION_UNKNOWN = "0.0.0-unknown"
+
+
 # 应用版本（**唯一真值源**）：第 30 期收敛为单一常量；第 78 期起改从仓库根 / 镜像内的
 # `VERSION` 文件读取（第 N 期 = V0.N.0），`tests/test_version_contract.py` 钉着这条契约。
-# 读不到文件时回落到内置常量并记日志，不阻断启动。
+# 读不到文件时如实上报哨兵值并记 **error** 级日志，不阻断启动（部署不完整是运维问题，
+# 不该让整个应用起不来）—— 但绝不再假装成一个具体的版本号。
 def _read_version() -> str:
     import pathlib
     candidates = [
@@ -179,8 +189,10 @@ def _read_version() -> str:
             v = ""
         if v:
             return v
-    logging.getLogger("novelforge").warning("读不到 VERSION 文件，回落内置版本 0.80.0")
-    return "0.80.0"
+    logging.getLogger("novelforge").error(
+        "读不到 VERSION 文件（试过 %s）—— 版本号按 %s 上报。请确认 VERSION 进了仓库根 / 镜像",
+        " / ".join(str(p) for p in candidates), _VERSION_UNKNOWN)
+    return _VERSION_UNKNOWN
 
 
 APP_VERSION = _read_version()
@@ -322,8 +334,9 @@ def _quick_import(payload, *, origin: str, save: bool) -> dict:
     · ``save=False``（粘贴 / 文件导入）＝保守：用 `ledger._DEFAULT_RESOLUTION`
       （冲突跳过），**逐条如实回报**，要逐条选去处请去「书源工具」页。
 
-    返回体**同时**带旧字段（`added` / `errors`）与新字段（`counts` / `format`）：
-    旧前端不会因为多了字段而炸，新前端据此说真话。
+    返回体**同时**带旧字段（`added` / `errors`）与新字段（`counts` / `format` / `format_label`）：
+    旧前端不会因为多了字段而炸，新前端据此说真话。`format_label` 是格式的**中文名**
+    （第 95 期：唯一产出点是 `sources/formats/base.py:format_label`，前端不再自抄一份表）。
 
     ⚠️ **刻意不回逐条差异表**。用户在真样本上给过 3.3 MB / **1537 条**的书源文件：
     把差异表塞进这个响应体是几 MB 的载荷，而这条快路的前端**根本不读它**（它要的是
@@ -355,7 +368,12 @@ def _quick_import(payload, *, origin: str, save: bool) -> dict:
                        else (first.get("why") or "不可执行（原因见「书源工具」）"),
                        "instead": first.get("instead", "")})
     return {"added": added, "errors": errors, "counts": res["counts"],
-            "format": got["format"], "origin": origin}
+            "format": got["format"],
+            # 第 95 期：中文名由**格式轴**一处给出（`sources/formats/base.py:format_label`）。
+            # 此前前端 `lib/sourceImport.ts` 自抄了一份 `FORMAT_LABELS`，5 键里已有 3 个
+            # 与后端 `display_name` 悄悄发散 —— 界面上的名字只能有一份来源。
+            "format_label": source_formats.format_label(got["format"]),
+            "origin": origin}
 
 
 # ---------------- 页面与静态资源 ----------------
@@ -552,7 +570,7 @@ def _import_row_out(row: dict) -> dict:
     return {k: row[k] for k in _IMPORT_ROW_KEYS}
 
 
-def _import_response(p: dict, rows: list, origin: str) -> dict:
+def _import_response(p: dict, rows: list, origin: str, fmt: str) -> dict:
     """差异表 → 落盘的**唯一**收尾（`/api/sources/import` 与 `/import-url` 共用）。
 
     `dry_run` 默认 **True**：先出差异表、再按 `resolutions` 落盘，两步之间**一个字节都不写**。
@@ -562,11 +580,13 @@ def _import_response(p: dict, rows: list, origin: str) -> dict:
     `POST /api/sources/{name}/rollback` 可以还原。
     """
     if p.get("dry_run", True):
-        return {"dry_run": True, "origin": origin,
+        return {"dry_run": True, "origin": origin, "format": fmt,
+                "format_label": source_formats.format_label(fmt),
                 "rows": [_import_row_out(r) for r in rows]}
     res = {k: v for k, v in (p.get("resolutions") or {}).items()
            if v in source_ledger.RESOLUTIONS}
-    return {"dry_run": False, "origin": origin,
+    return {"dry_run": False, "origin": origin, "format": fmt,
+            "format_label": source_formats.format_label(fmt),
             **source_ledger.apply(rows, origin=origin, resolutions=res)}
 
 
@@ -586,10 +606,10 @@ async def api_sources_import(payload: dict = Body(...)):
     try:
         # 第 94 期：解析走 `intake` 的**同一条**路（格式识别、坏输入措辞只有那一份），
         # 这样本接口与「导入书源」卡对同一份输入**永远给出同一个结论**。
-        rows = source_intake.rows_from_payload(p.get("payload"), origin=origin)["rows"]
+        got = source_intake.rows_from_payload(p.get("payload"), origin=origin)
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
-    return _import_response(p, rows, origin)
+    return _import_response(p, got["rows"], origin, got["format"])
 
 
 @app.post("/api/sources/import-url")
@@ -632,10 +652,10 @@ async def api_sources_import_url(payload: dict = Body(...)):
     origin = str(p.get("origin") or url)[:200]
     text = raw.decode("utf-8", errors="ignore")
     try:
-        rows = source_intake.rows_from_payload(text, origin=origin)["rows"]
+        got = source_intake.rows_from_payload(text, origin=origin)
     except ValueError as e:
         raise HTTPException(400, str(e)) from None
-    return _import_response(p, rows, origin)
+    return _import_response(p, got["rows"], origin, got["format"])
 
 
 async def _fetch_source_url(url: str, cfg: dict) -> bytes:
@@ -3029,8 +3049,9 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
                      detail=detail, source="api")
     return {
         "ok": True,
-        # 不再写文件：written 恒为空（保留字段以兼容前端），实际生效见 changed
-        "written": [],
+        # ⚠️ 第 95 期删掉了 `written: []`：那是「不再写文件」过渡期留给前端的兼容字段，
+        # 值恒为空数组（前端只读 `changed` / `fields` / `meta`）。同仓同版本，
+        # 保留一个永远为空的键只会让人以为「某条路真的写过文件」。
         "changed": changed,
         "unknown": unknown,
         # 回写生效值 + 逐字段明细，前端直接据此刷新表单
@@ -5177,15 +5198,6 @@ def api_features(library_id: str = ""):
     }
 
 
-@app.get("/api/library-facets")
-def api_library_facets():
-    """按格式 / 待修复 / 无封面的**分面**（原 ``/api/libraries`` 的语义，第 10 期改址）。
-
-    侧栏不再展示它（ShelfView 本就有格式筛选），保留给需要的页面与既有调用方。
-    """
-    return {"items": library.library_groups()}
-
-
 @app.get("/api/libraries/source-dirs")
 def api_library_source_dirs(root: int = None, path: str = ""):
     """多来源根目录树。
@@ -6720,13 +6732,11 @@ def api_reading_activity(
 # ---------------- 应用设置（服务端持久化 → settings.json）----------------
 # 与上游 BookOrbit 的 settings 一致：设置存服务端、前端读写。
 # 只暴露**真正生效**的配置键（见 config.DEFAULTS 与 detect / watcher / network 的读取处）。
-# `output.format` 第 62 期起值域只剩 epub（见 FORMAT_CHOICES），保留可写只是为了兼容
-# 旧 settings.json 里可能存着的 mobi/azw3 —— 写进来会被值域校验挡下并给出可读提示。
 
 EDITABLE: dict = {
     "chapter_detection": {"mode", "context_lines", "fallback"},
     "traditionalize": None,  # None = 标量键，直接取值
-    "output": {"format", "layout"},   # format 已收敛为 epub，留着键只为兼容旧 settings.json
+    "output": {"layout"},
     "naming": {"pattern", "scope"},
     "llm": {"api_key", "base_url", "model"},
     "watcher": {
@@ -6750,8 +6760,6 @@ EDITABLE: dict = {
     # retention 是嵌套块（第 52 期）：与 integrations 同口径，整块取值，
     # 免得将来往留存策略里加键时还要再改一次白名单。
     "logging": {"dir", "max_entries", "retention"},
-    # 第 61 期：通知合并窗口（同类型 10s 内重复 → 合并为一条）
-    "notifications": {"merge_enabled", "merge_window"},
     "upload": {"max_bytes", "max_source_rules_bytes"},
     "achievements": {"enabled"},
     "opds": {"enabled", "expose"},
@@ -6802,11 +6810,6 @@ EDITABLE: dict = {
 
 # api_key 掩码：前端回显该值即表示「不修改」
 _KEY_MASK = "••••••••"
-
-# 允许的输出格式。第 62 期收敛为只剩 epub：派生 MOBI / AZW3 要常驻一条本机 Calibre 依赖，
-# 而它的产物不进书目（书库只读 EPUB 章节树），收益抵不上成本。常量本身保留 —— 校验点、
-# 前端下拉、`lib_settings` 的枚举都从它取值，保留一处真值源比散落字面量好。
-FORMAT_CHOICES = ("epub",)
 
 
 def _flatten_overrides(data: dict, prefix: str = "") -> list:
@@ -6983,7 +6986,6 @@ def api_get_config():
             "source_import": cfg.get("source_import") or {},
             "download": cfg.get("download") or {},
             "logging": cfg.get("logging") or {},
-            "notifications": cfg.get("notifications") or {},
             # 注意：这里是**硬编码键列表**，不随 EDITABLE 自动同步 ——
             # 新增可写配置项时，EDITABLE 与本列表都要加，否则会出现「能写进 settings.json 但读不回来」。
             "naming": cfg.get("naming") or {},
@@ -7031,10 +7033,6 @@ def api_put_config(payload: dict = Body(...)):
     patch = _sanitize_config(payload or {})
     if not patch:
         raise HTTPException(400, "没有可保存的配置项")
-
-    fmt = str(((patch.get("output") or {}).get("format")) or "").strip().lower()
-    if fmt and fmt not in FORMAT_CHOICES:
-        raise HTTPException(400, "输出格式仅支持 " + " / ".join(FORMAT_CHOICES))
 
     # 上传上限必须是正整数。拒绝 0 / 负数 / 非数字 —— 否则「限 0」会被误读成「无限制」，
     # 正好把这次要修的风险又放回去。
@@ -8055,8 +8053,6 @@ def _mask_metadata_fetch(sec: dict) -> dict:
         has = bool(str(out.get(field) or "").strip())
         out[field] = _KEY_MASK if has else ""
         out[f"has_{field}"] = has
-    # 兼容旧字段名（前端历史版本可能还在读），值等同于 googlebooks 那项
-    out["has_googlebooks_key"] = bool(out.get("has_googlebooks_api_key"))
     return out
 
 
@@ -8174,19 +8170,6 @@ def api_integration_test(service: str, payload: dict = Body(None)):
 #    （17 本 × 2 源 ≈ 34 次请求）。所以它**一次只处理传入的那几本**（默认 1 本，
 #    上限 10 本），由前端逐本循环、逐本显示进度与结果。
 
-@app.get("/api/metadata/sources")
-def api_metadata_sources():
-    """可用元数据源 + 当前启用情况（兼容端点；第 57 期起设置页改用 /providers）。"""
-    mf = config.load_config().get("metadata_fetch") or {}
-    active = mf.get("sources") or list(metasources.DEFAULT_ORDER)
-    return {
-        "items": [{**meta, "id": sid, "active": sid in active}
-                  for sid, meta in metasources.SOURCES.items()],
-        "enabled": bool(mf.get("enabled")),
-        "has_googlebooks_key": bool(str(mf.get("googlebooks_api_key") or "").strip()),
-    }
-
-
 @app.get("/api/metadata/providers")
 def api_metadata_providers():
     """提供商目录 + 启用 / 配置现状（第 57 期「提供商」页的唯一数据源）。
@@ -8273,8 +8256,8 @@ def api_metadata_probe(payload: dict = Body(None)):
     wanted = p.get("sources") or list(metasources.SOURCES)
     # 行内「测试」把**输入框里当前的值**带进来（按源 id）：有草稿就用草稿、**不落盘** ——
     # 否则「测试」要么测的是上次保存的旧值，要么被迫先保存一次。
-    # 两种形态都认：`keys`（主密钥，早期接口）与 `configs`（整行字段，E 段起）。
-    legacy_keys = p.get("keys") if isinstance(p.get("keys"), dict) else {}
+    # ⚠️ 第 95 期收敛：只认 `configs`（整行字段）。此前还认一个早期的 `keys`（只带主密钥），
+    # 那是同一件事的两套入参 —— 前端从来只用 `configs`，`keys` 只剩用例在喂。
     drafts = p.get("configs") if isinstance(p.get("configs"), dict) else {}
     out = {}
     for sid in wanted:
@@ -8287,9 +8270,6 @@ def api_metadata_probe(payload: dict = Body(None)):
             for f in fields:
                 if f["key"] in row:                      # 草稿优先（空串 = 本次按清空试）
                     merged[f["key"]] = str(row[f["key"]] or "")
-            main_key = metasources.key_field_of(sid)
-            if main_key and str(legacy_keys.get(sid) or "").strip():
-                merged[main_key] = str(legacy_keys[sid]).strip()
             opts = metasources.options_for(merged, [sid]).get(sid) or {}
         else:
             opts = {}
@@ -9193,7 +9173,7 @@ def api_missing(library_id: str = ""):
     return library.missing_items(_opt_library(library_id) or None)
 
 
-# ---------------- 兼容旧接口（脚本 / 油猴等）----------------
+# ---------------- 转换投递（脚本 / 油猴 / 前端拖拽共用）----------------
 
 async def _log_dispatch(src: pathlib.Path, action: str, result, source: str, size=None, detail=""):
     """把一次分发结果写入活动日志，并登记为已处理（避免监听线程重复转换）。
@@ -9212,36 +9192,38 @@ async def _log_dispatch(src: pathlib.Path, action: str, result, source: str, siz
             pass
 
 
-@app.post("/convert")
-async def convert(file: UploadFile = File(...), traditionalize: bool = Form(False)):
-    # B1 上传多格式：允许 pipeline.EBOOK_EXT 直接入库。
-    # 第 9 期起 EBOOK_EXT 含漫画（.cbz/.cbr）与音频（.mp3/.m4b…）；第 62 期起 **.txt 也在里面**
-    # （TXT 改为「只入库不转换」），所以这里不再单独并一个 .txt；其余类型（如 .docx）明确拒绝。
-    _name = file.filename or ""
-    _ext = pathlib.Path(_name).suffix.lower()
-    _allowed = set(pipeline.EBOOK_EXT)
-    if _ext not in _allowed:
-        raise HTTPException(400, "仅支持 .txt 与电子书格式：" + ", ".join(sorted(_allowed)))
-    src = INPUT_DIR / file.filename
-    opts = {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()}
-    # 多书库：上传件按归库规则决定落点。**先判落点在不在**，没有可接收的库就直接 400 ——
-    # 免得先把文件写进 input/ 再拒，留下一个每轮扫描都被拒一次的孤儿。
-    out_dir = library_rules.target_root(src=src, name=_name, meta=opts.get("meta"),
+async def _dispatch_into_library(src: pathlib.Path, name: str, opts: dict,
+                                 source: str, size=None,
+                                 upload: UploadFile | None = None) -> FileResponse:
+    """把 `INPUT_DIR` 下的一个文件按归库规则投递入书库，返回成品文件流。
+
+    ``upload`` 不为空时，先把上传内容落盘到 ``src``；顺序有意如此 —— **先判落点在不在**，
+    没有可接收的库就直接 400，免得先把文件写进 input/ 再拒、留下一个每轮扫描都被拒一次的孤儿。
+
+    ⚠️ 这是「上传件 / 服务端已有文件」两条路由的**唯一**实现（第 95 期收敛）。
+    此前 `/convert` 与 `/convert-path` 各抄了一份整链，差别只有「文件怎么来到
+    `INPUT_DIR`」与活动日志的 `source` 字段 —— 代价是第 88 期的「入库没标脏」
+    在两条路上一起漏了半天（各自都得补一遍同样的注释与语句）。
+    """
+    # 多书库：按归库规则决定落点（来源子目录名 → 格式 → 关键词）。
+    out_dir = library_rules.target_root(src=src, name=name, meta=opts.get("meta"),
                                         base_dir=INPUT_DIR)
     if out_dir is None:
-        raise HTTPException(400, library_rules.no_library_reason(name=_name))
-    data = await _read_capped(file, _upload_limit("max_bytes"))
-    with open(src, "wb") as f:
-        f.write(data)
+        raise HTTPException(400, library_rules.no_library_reason(name=name))
+    if upload is not None:
+        # `_read_capped` 超限会抛，此时一个字节都还没写进 input/
+        data = await _read_capped(upload, _upload_limit("max_bytes"))
+        with open(src, "wb") as f:
+            f.write(data)
+        size = len(data)
     try:
         # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环（其它请求无响应）
         action, result = await asyncio.to_thread(pipeline.dispatch, src, out_dir, opts)
     except Exception as e:
-        activity_log.log_convert_fail(file.filename, f"{type(e).__name__}: {e}",
-                                      size=len(data), source="upload")
+        activity_log.log_convert_fail(name, f"{type(e).__name__}: {e}", size=size, source=source)
         raise
-    await _log_dispatch(src, action, result, "upload", size=len(data), detail=opts.get("_notice", ""))
-    # 第 75 期：记下 ① 原件（上传件落在 INPUT_DIR 的那份），删书时一并回收。
+    await _log_dispatch(src, action, result, source, size=size, detail=opts.get("_notice", ""))
+    # 第 75 期：记下 ① 原件（落在 INPUT_DIR 的那份），删书时一并回收。
     # 只在 `copy`（真的复制了一份成品）时记：`skip` 的 `result` 就是 src 本身。
     if str(action) == "copy":
         lid = library_rules.library_id_of_root(out_dir)
@@ -9254,38 +9236,37 @@ async def convert(file: UploadFile = File(...), traditionalize: bool = Form(Fals
         # 不会到这里 —— 所以「真的写进去了」⇔ ``action == "copy"``。
         # ``lid`` 取不到时 ``library.invalidate("")`` 退化为**全库**标脏（宁可多扫，不可漏标）。
         library.invalidate(lid)
+    # 直接返回文件流，真实文件名由 FileResponse 在 Content-Disposition 里给（前端据此命名，
+    # 杜绝「x.epub.epub」这类错名；也不在前端再发明一套展开名逻辑）。
     return FileResponse(result, filename=pathlib.Path(result).name)
+
+
+@app.post("/convert")
+async def convert(file: UploadFile = File(...), traditionalize: bool = Form(False)):
+    # B1 上传多格式：允许 pipeline.EBOOK_EXT 直接入库。
+    # 第 9 期起 EBOOK_EXT 含漫画（.cbz/.cbr）与音频（.mp3/.m4b…）；第 62 期起 **.txt 也在里面**
+    # （TXT 改为「只入库不转换」），所以这里不再单独并一个 .txt；其余类型（如 .docx）明确拒绝。
+    _name = file.filename or ""
+    _ext = pathlib.Path(_name).suffix.lower()
+    _allowed = set(pipeline.EBOOK_EXT)
+    if _ext not in _allowed:
+        raise HTTPException(400, "仅支持 .txt 与电子书格式：" + ", ".join(sorted(_allowed)))
+    return await _dispatch_into_library(
+        INPUT_DIR / _name, _name,
+        {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
+        "upload", upload=file)
 
 
 @app.post("/convert-path")
 async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)):
+    """转换 `INPUT_DIR` 下**已经存在**的文件（脚本 / 油猴直接给路径，不走上传）。"""
     src = INPUT_DIR / path
     if not src.exists() or not src.is_file():
         raise HTTPException(404, "文件不存在")
-    opts = {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()}
-    # 多书库：按归库规则决定落点（来源子目录名 → 格式 → 关键词）；判不出 ⇒ 400 拒收
-    out_dir = library_rules.target_root(src=src, name=src.name, meta=opts.get("meta"),
-                                        base_dir=INPUT_DIR)
-    if out_dir is None:
-        raise HTTPException(400, library_rules.no_library_reason(name=src.name))
-    try:
-        # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环
-        action, result = await asyncio.to_thread(pipeline.dispatch, src, out_dir, opts)
-    except Exception as e:
-        activity_log.log_convert_fail(src.name, f"{type(e).__name__}: {e}", source="api")
-        raise
-    await _log_dispatch(src, action, result, "api", size=src.stat().st_size, detail=opts.get("_notice", ""))
-    # 第 75 期：与 /convert 同口径 —— 记下 ① 原件，删书时一并回收
-    if str(action) == "copy":
-        lid = library_rules.library_id_of_root(out_dir)
-        library.remember_origin(result, lid, src)
-        # 第 88 期：与 /convert 完全同口径 —— 真的入库了才标脏（判据同为 ``action == "copy"``，
-        # 理由见 /convert 那段注释）。这条此前与 /convert 一起漏了，是「导入后很久才看到」的另一半根因。
-        library.invalidate(lid)
-    # 与 /convert 同口径：直接返回文件流，真实文件名由 FileResponse 在
-    # Content-Disposition 里给（前端据此命名，杜绝「x.epub.epub」这类错名；
-    # 也不在前端再发明一套展开名逻辑）。src 已校验为单文件，result 必为文件。
-    return FileResponse(result, filename=pathlib.Path(result).name)
+    return await _dispatch_into_library(
+        src, src.name,
+        {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
+        "api", size=src.stat().st_size)
 
 
 @app.get("/content")
