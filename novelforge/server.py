@@ -6788,6 +6788,10 @@ EDITABLE: dict = {
         # 第 57 期 E 段：行内抓取参数（同样与注册表 config_fields 一一对应）
         "amazon_cookie", "itunes_cover_resolution", "kobo_region", "kobo_language",
         "audible_region",
+        # 第 102 期：抓取缓存有效期（`None` = 按各来源声明 / `0` = 关闭 / `> 0` = 全局覆盖）
+        # 与「按 ID 取详情」开关（默认关）。**两个都有真实读点**：
+        # `metasources._ttl_of` / `metafetch._detail_first` —— 没有读点的键就是假配置。
+        "cache_ttl", "detail_fetch",
     },
     # Komga 兼容服务端：开关 + Basic 用户名 + 可选 API Key
     # `expose` = 全局默认「书库是否对客户端暴露」（每库可在书库管理里覆写）
@@ -7064,6 +7068,26 @@ def api_put_config(payload: dict = Body(...)):
             if val < 0:
                 raise HTTPException(400, f"network.{key} 不能是负数（0 = 不限制）")
             net[key] = val
+
+    # 第 102 期：抓取缓存有效期。三档语义（与 `config.DEFAULTS` 那段注释同一口径）——
+    # `None` / 空串 = 按**各来源声明**的值（界面留空），`0` = 关闭缓存，`> 0` = 全局覆盖。
+    # 所以这里**不能**照抄上传上限那条 `<= 0` 直接拒：`0` 在这条路上是明确语义。
+    # 但是负数 / 非数字必须是输入错误 —— 静默回落到「按来源默认」等于用户改完没反应。
+    mf = patch.get("metadata_fetch")
+    if isinstance(mf, dict) and "cache_ttl" in mf:
+        raw = mf["cache_ttl"]
+        if raw is None or str(raw).strip() == "":
+            mf["cache_ttl"] = None
+        else:
+            try:
+                val = int(raw)
+            except (TypeError, ValueError):
+                raise HTTPException(400, "缓存有效期必须是整数秒（留空 = 按各来源默认）")
+            if val < 0:
+                raise HTTPException(400, "缓存有效期不能是负数（0 = 关闭缓存，留空 = 按各来源默认）")
+            if val > 2592000:
+                raise HTTPException(400, "缓存有效期最多 30 天（再长就不是缓存，而是拿旧数据冒充新数据）")
+            mf["cache_ttl"] = val
 
     # 第 94 期阶段 4a：URL 导入的两条数必须是**正**数 —— 这里与上面那组刻意不同口径：
     # `max_bytes: 0` 在这条路上不是「不限制」而是「什么都取不回来」，属于把功能关死却不

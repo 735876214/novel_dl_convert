@@ -94,6 +94,12 @@ os.environ.setdefault("COOKIE_DIR", str(COOKIE_DIR))
 os.environ.setdefault("CACHE_DIR", str(CACHE_DIR))
 os.environ.setdefault("LOG_DIR", str(LOG_DIR))
 
+# 元数据抓取两个键的环境变量名（第 102 期）。**兜底**用，见 :func:`load_config` 末尾那段：
+# 容器部署想固定住它们又不想动 settings.json 时用；界面上设过就以界面上那份为准。
+# 常量而不是散落的字面量：测试要按名字断言，写死字符串迟早两边走样。
+_ENV_CACHE_TTL = "NOVELFORGE_METADATA_CACHE_TTL"
+_ENV_DETAIL_FETCH = "NOVELFORGE_METADATA_DETAIL_FETCH"
+
 # ---- 配置默认值（config.yaml 可覆盖）----
 DEFAULTS = {
     "chapter_detection": {"mode": "hybrid", "context_lines": 3, "fallback": "regex"},
@@ -335,6 +341,18 @@ DEFAULTS = {
         "kobo_region": "us",             # Kobo：URL 的区域段
         "kobo_language": "en",           # Kobo：URL 的语言段（要与区域匹配才不被拦）
         "audible_region": "us",          # Audible：分站域名 us/uk/de/jp
+        # 抓取缓存有效期（第 102 期，秒）。三档语义**别混**：
+        #   `None`（默认，界面留空）= 用**各来源自己声明**的值（当前 14 家都是 600 秒）；
+        #   `0` = 关闭缓存（每次都是真外呼）；
+        #   `> 0` = 全局覆盖，不再看各来源的声明。
+        # ⚠️ 默认**不能**写死 600：那样各来源的 `cache_ttl` 声明就成了**死配置** ——
+        # 将来某家数据变动快（该校短）/ 慢（该校长）时，没人能按源调（§7 死配置算缺陷）。
+        "cache_ttl": None,
+        # 按 ID 取详情（第 102 期）：库里已经记过某家的记录标识（`openlibrary_id` /
+        # `itunes_id`…）时，直接用那个**精确键**回查该源，而不是拿书名再猜一次。
+        # ⚠️ 默认 **False**：多数书抓过一遍就带了 id ⇒ 打开会改掉既有书的抓取结果，
+        # 那是用户可见的行为变化，必须由用户自己开（本期「不发版、不改既有行为」的基调）。
+        "detail_fetch": False,
         # 作者级元数据（第 8 期 D1/D2/D5）：独立于书籍抓取开关，默认关
         "authors": {
             "enabled": False,      # 是否抓取作者传记 / 头像
@@ -423,11 +441,13 @@ def save_overrides(data: dict) -> None:
 def load_config() -> dict:
     """加载配置：默认值 → config.yaml → settings.json 覆盖层 → 环境变量。"""
     data = {k: (v.copy() if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
+    file_sec: dict = {}          # config.yaml 里那份（下面用它判断「运维手写过这个键没有」）
     if CONFIG_FILE.is_file():
         try:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 loaded = yaml.safe_load(f) or {}
             if isinstance(loaded, dict):
+                file_sec = loaded
                 for k, v in loaded.items():
                     if isinstance(v, dict) and isinstance(data.get(k), dict):
                         data[k].update(v)
@@ -452,4 +472,30 @@ def load_config() -> dict:
             data.setdefault("watcher", {})["interval"] = float(os.getenv("WATCH_INTERVAL"))
         except ValueError:
             pass
+
+    # 元数据抓取的两个键（第 102 期）：环境变量**兜底**，不是覆盖 —— 与 `update.image`
+    # 同口径（`server._validate_update_image` 注释：「空串合法 = 回落 NOVELFORGE_UPDATE_IMAGE」）。
+    #
+    # 为什么这两个键刻意**不**照 `AUTO_WATCH` 那样无条件覆盖：那是「部署时钉死的监听开关」，
+    # 而这两个是**用户在设置页会调**的东西。无条件覆盖会让「在界面上改了、保存后没变」
+    # 变成一件查不出来的怪事（本仓把这种形态叫假配置，见 `test_config_readback_contract.py`）。
+    # 所以规则是：settings.json / config.yaml 里人写过就以人写的为准，没人写过才用环境变量。
+    mf = data.get("metadata_fetch")
+    if isinstance(mf, dict):
+        written: dict = {}
+        for src in (load_overrides(), file_sec):
+            sec = src.get("metadata_fetch") if isinstance(src, dict) else None
+            if isinstance(sec, dict):
+                written.update(sec)
+        if "cache_ttl" not in written:
+            raw_ttl = os.getenv(_ENV_CACHE_TTL)
+            if raw_ttl is not None:
+                try:
+                    mf["cache_ttl"] = int(raw_ttl.strip())
+                except (TypeError, ValueError):
+                    pass                 # 填错的忽略：一个笔误不该让服务起不来
+        if "detail_fetch" not in written:
+            raw_detail = os.getenv(_ENV_DETAIL_FETCH)
+            if raw_detail is not None:
+                mf["detail_fetch"] = raw_detail.strip().lower() in ("1", "true", "yes", "on")
     return data

@@ -383,12 +383,20 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
         # ISBN 精确匹配优先（第 8 期 D4）：有 ISBN 且在线查得到就直接用，置信度视为最高。
         # ⚠️ 顺序在这里是有意义的：第一个命中的精确匹配就赢（不再往后问），
         # 所以「按语种重排」对 ISBN 路径的效果最直接。
-        exact = metasources.search_by_isbn(b.get("isbn") or "", b_sources, 3, b_options)
-        if exact:
-            res = {"entries": [exact], "sources": {}, "best": exact}
+        # 第 102 期：库里记过记录标识时先按**精确键**回查（默认关，见 `_detail_first`）；
+        # 没有标识 / 回查失败才退回「ISBN 精确匹配 → 书名 + 作者检索」。
+        # ⚠️ 两条路都要接：只在详情页接，用户打开这个开关后会发现「批量抓取还是老样子」——
+        # 那时他没有任何办法知道这个开关只管一个页面。
+        det = _detail_first(b, b_sources, b_options) if mfb.get("detail_fetch") else []
+        if det:
+            res = {"entries": det, "sources": {}, "best": det[0]}
         else:
-            res = metasources.search_all(b_sources, b.get("title") or b["name"],
-                                         b.get("author") or "", limit, b_options)
+            exact = metasources.search_by_isbn(b.get("isbn") or "", b_sources, 3, b_options)
+            if exact:
+                res = {"entries": [exact], "sources": {}, "best": exact}
+            else:
+                res = metasources.search_all(b_sources, b.get("title") or b["name"],
+                                             b.get("author") or "", limit, b_options)
         best = res.get("best")
         base["candidates"] = res["entries"]
         base["sources"] = res["sources"]
@@ -460,6 +468,35 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
     }
 
 
+def _detail_first(book: dict, sources: list, options: dict) -> list:
+    """库里记过某家的记录标识时，按那个**精确键**回查该源 —— 命中就返回单条候选（第 102 期）。
+
+    为什么值得单开一条路：书名会重、会带副标题、会换语言写法，按书名检索本质上是**猜**；
+    而 `openlibrary_id` / `itunes_id` 是**上一次已经认过的那条记录**。同一本书回查自己那条
+    记录，比再猜一次准得多 —— 这就是「按 ID 取详情」在元数据链路里的落点。
+
+    ⚠️ 分数写 **1.0**，不沿用 `_entry` 的 0.0：打分函数是为「拿书名在一堆结果里挑最像的一条」
+    准备的（见 `metasources.score_candidate`）。这里是**同一份记录**，不是挑出来的；照抄 0.0 会让一条
+    完全正确的候选被 `threshold` 挡在门外 —— 功能开了却永远不生效（假配置的另一种形态）。
+
+    ⚠️ 只认**这次启用的源**（`sources` 是按语种重排过的顺序）且只认有详情通道的家（
+    `metasources.DETAIL_SOURCES`）。一家都不匹配 / 回查失败 ⇒ 回空表，调用方回退按书名检索。
+    因此打开 `detail_fetch` **不改变没有 id 的书**的行为 —— 既有书的抓取结果不会被动过，
+    这也是它默认关着的原因（本期定的是「不发版、不改用户可见行为」）。
+    """
+    for sid in sources:
+        field = metasources.SOURCE_ID_FIELD.get(sid)
+        if not field or sid not in metasources.DETAIL_SOURCES:
+            continue
+        pid = str(book.get(field) or "").strip()
+        if not pid:
+            continue
+        entry = metasources.detail(sid, pid, (options or {}).get(sid) or {}).get("entry")
+        if entry:
+            return [dict(entry, score=1.0)]
+    return []
+
+
 def online_candidate(book: dict, cfg: dict = None, limit: int = None) -> "dict | None":
     """对单本书做一次在线检索，返回**最佳候选**的字段值（不上锁、不写库）。
 
@@ -485,14 +522,17 @@ def online_candidate(book: dict, cfg: dict = None, limit: int = None) -> "dict |
     limit = max(1, min(int(limit or mf.get("limit") or 5), 20))
     blocklist = {norm_key(x) for x in (mf.get("genre_blocklist") or []) if str(x).strip()}
     options = metasources.options_for(mf, sources)
-    # ISBN 精确匹配优先，否则回退书名 + 作者检索
-    exact = metasources.search_by_isbn(book.get("isbn") or "", sources, 3, options)
-    if exact:
-        pool_raw = [exact]
-    else:
-        res = metasources.search_all(sources, book.get("title") or book.get("name") or "",
-                                     book.get("author") or "", limit, options)
-        pool_raw = res.get("entries") or []
+    # 第 102 期：库里记过记录标识时先按**精确键**回查（默认关，见 `_detail_first`），
+    # 否则 ISBN 精确匹配优先，再否则回退书名 + 作者检索。
+    pool_raw = _detail_first(book, sources, options) if mf.get("detail_fetch") else []
+    if not pool_raw:
+        exact = metasources.search_by_isbn(book.get("isbn") or "", sources, 3, options)
+        if exact:
+            pool_raw = [exact]
+        else:
+            res = metasources.search_all(sources, book.get("title") or book.get("name") or "",
+                                         book.get("author") or "", limit, options)
+            pool_raw = res.get("entries") or []
     if not pool_raw:
         return None
     best = pool_raw[0]                 # search_all 已按分数倒序 ⇒ 第一条即最佳候选
