@@ -4,20 +4,23 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-05 —— 第 102 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续八轮）：
-**元数据抓取地基** —— 14 家源的声明收口到 `novelforge/core/sources/`（7 张手工表改派生）、
-进程内**缓存 + 按源限流**、**按记录标识取详情**（只接真机核验过的 iTunes / Open Library 两家）、
-两个配置键（缓存时长 / 按 ID 回查，含环境变量兜底与前端开关）。**零新源**、改用户可见行为为零。
+**最后更新**：2026-10-05 —— 第 103 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续九轮）：
+**把系列 / 卷号 / 演播者接进元数据抓取线** —— 三个字段**早就建模**（`fileops.METADATA_FIELDS`、
+`metascore.FIELDS` 计分、命名规则 `{series}` / `{series_index}`、Komga `seriesIndex`、系列视图都已在），
+但**候选结构从一开始就没有这三个键** ⇒ 抓到的值连丢都算不上（压根没采集）。本期把候选结构 →
+`metafetch._VALUE_KEYS` 字段映射 → 默认策略 → 前端策略表整条接通，顺手修两处**把值写错地方**的缺陷
+（Audible 把系列名塞进 `tags`；RanobeDB 详情补全因响应套了 `book` 键而**从未生效**）。
 按用户要求，本轮起**已做完的条目直接从本文件删除**（不再标 `[x]` 留痕），历史一律去 roadmap 查。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基；`VERSION` = **0.94.0**
-  （**八轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线；`VERSION` = **0.94.0**
+  （**九轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
   第 98 期仪表盘余留、第 99 期元数据抓取真 bug、第 100 期 EPUB 判定、第 101 期 Goodreads 整家失效修复、
-  第 102 期元数据地基，用户八次都选「先不发版」；单一真值源，`GET /health` 下发）；`CHANGELOG.md` 最新段仍是 `V0.94.0`。
-- 测试基线（第 102 期）：后端 **2263 例（2238 passed / 0 failed / 0 errors / 25 skipped）**；
-  前端 **67 spec / 686 例**（本期只加了两个设置项控件，未重跑）。
+  第 102 期元数据地基、第 103 期元数据字段接线，用户九次都选「先不发版」；单一真值源，`GET /health` 下发）；
+  `CHANGELOG.md` 最新段仍是 `V0.94.0`。
+- 测试基线（第 103 期）：后端 **2274 例（2249 passed / 0 failed / 0 errors / 25 skipped）**；
+  前端 **67 spec / 686 例**（本期实跑全绿）。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
   （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
   ⚠️ 长跑 pytest 必须**后台跑 + 轮询 junit**（前台会被 harness 的「长时间无输出」上限取消）。
@@ -72,15 +75,29 @@
 > ⚠️ 工具链变动记在 §7.8 ④：`agent-browser` 在本机**已不可用**（会挂住不返回），
 > 改用本机 Edge 的 CDP 无头截图；PNG 仍**不入库**。
 
-- [ ] **书源网页抓取：系列信息没有接进候选**（第 101 期真机核验发现，**新立项**）——
-  Goodreads 的 RSC payload 里**有**系列（`bookSeries` → `seriesPlacement` + 系列名），实测能解出来
-  （如 `("Remembrance of Earth's Past", "1")`），但**不返回**：`novelforge/core/metasources.py`
-  的 `_entry` 候选结构是**固定键白名单**，没有 `series` / `series_index` 两个键，
-  `metafetch._VALUE_KEYS`（派生自 `_CURRENT`）也没有这个映射 ⇒ 传了会被**静默丢掉**。
-  ⚠️ 但 `metascore.FIELDS` 确实把 `series`(4.0) / `series_index`(3.0) 列为 Enrichment 计分项
-  ⇒ **系统本就预期候选能带系列，只是这条线从未接上**（对 Goodreads / Amazon / 豆瓣等带系列的源都是如此）。
-  接上要同时动**四处**：候选结构 → `_VALUE_KEYS` 字段映射 → 收尾模式 → OPF 写入，
-  属于独立一件事，不在「修一个坏掉的抓取器」范围内。证据见 roadmap 第 101 期段。
+- [ ] **演播者（`narrators`）：Audnexus 未接线**（第 103 期真机探活后挂起，不是忘了）——
+  本期只接了**真机核过**的 Audible（`narrators` 是顶层键，每项 `{"name": …}`，Dune 12 位实测）。
+  `novelforge/core/metasources.py` 的 `_audnexus_entry` docstring 自称「`authors`/`narrators` 都是对象数组」
+  但**从未映射** narrators / series —— 而 `api.audnexus.com` 从本机连打 3 次全是
+  `[SSL: UNEXPECTED_EOF_WHILE_READING]`（与第 102 期同一条阻塞）⇒ **没核过就不声明**（第 95 期口径）。
+- [ ] **Open Library 的 `series` 字段未核验**——`_OL_FIELDS` 现在**不含** `series`，
+  所以这家源对本期的三个字段贡献为零。探针（`fields=key,title,series,author_name`）撞上
+  本机 `ConnectTimeout`（见下面那条「间歇性不可达」）⇒ 拿到真实响应再决定要不要加。
+- [ ] **Audible 的 `subtitle` 顶层键存在但未接线**——第 103 期同一份响应用真机核过
+  `subtitle` **是**顶层键（`novelforge/core/metasources.py` 的 `_search_audible` 没取）。
+  接它要重走本期那套四处同步（候选结构 → `_VALUE_KEYS` → 默认策略 → 前端策略表），
+  且要先定策略口径：不少书库把副标题当标题的一部分，默认 `overwrite` 会改书名 ⇒ 倾向 `fill_only`。
+- [ ] **`frontend/src/components/book/detail/ReadingLogTab.spec.ts:242` 全量并行偶发**
+  （第 103 期实测一次 `1 failed | 685 passed`，红的是 `it('重试按钮真的会再拉一次')`）——
+  **单跑该文件 + 紧接着全量复跑都是 686 passed** ⇒ 是并行下的偶发，不是本次改动破坏的。
+  记在这里是防止下次误判成「刚改的东西坏了」；真要根治得查该用例的等待/重试竞态。
+- [ ] **`vue-tsc` 3.3.12 前端类型检查实红**（第 103 期复核：`frontend/node_modules` 里**现装的就是
+  3.3.12**，不再只是「重装后才会红」）——`frontend/src/components/book/MetadataEditor.vue:614`
+  模板里的 `FIELD_LABELS[c as keyof BookMetadataFields]` 报 `TS2339: Property 'value' does not exist
+  on type 'Record<keyof BookMetadataFields, string>'`（`--build --force` 恰好 1 条，`EXIT=2`）。
+  `frontend/package.json` 的 range 是 `"vue-tsc": "^3.3.11"`，**3.3.11 跑 `--build --force` 是 exit 0**。
+  ⇒ 两条路：把该行类型写对（模板里 `changed` 是 `ref<string[]>`），或收紧版本范围；
+  本期一行未动该文件，只记录不改。
 
 - [ ] **剩余三家抓取源仍无可解析样本**（挂起，不是忘了）—— Kobo（本机 403 + `Challenged | Kobo.com`，
   **站点主动拒绝**，与网络无关）/ Libro.fm（**AWS WAF 挑战页**，200 可达但搜索端点被拦）/
@@ -133,6 +150,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 103 | 元数据字段**接线**（用户 2026-10-05 在 ask_user_question 里选 A：`series` / `series_index` / `narrators` 三项**早就建模、消费者全在**（`fileops.METADATA_FIELDS` / `metascore.FIELDS` 的 series 4.0 + series_index 3.0 / 命名规则 `{series}` `{series_index}` / Komga `seriesIndex` / 系列视图 / `db._CLEARABLE` `_META_FIELDS` / `patch_opf_meta`），**唯独这条抓取线从未接上** —— `_entry` 是固定键白名单、`metafetch` 无映射 ⇒ 抓到了也被静默丢掉）：① 顺手修 **RanobeDB 详情补全从未生效**（真机响应套在 `book` 键里，`{**b, **fetched}` 只并进一个键 ⇒ 作者/出版社/简介**全空且不报错**、`score_candidate` 只剩书名 0.7 < 阈值 0.75 ⇒ 这家源在默认配置下**永远进不了合并**，白挂两期）② **五个同步点**（`_entry` / `_CURRENT`·`_VALUE_KEYS`·`_FINALIZE_FIELDS` / `DEFAULTS['metadata_fetch']['fields']` / 前端 `POLICY_FIELDS` / 前端**写死的 spec 断言**「不含 series」）③ 卷号**只认 `^\d+(?:\.\d+)?$`**（错值比空值严重：它喂命名规则与 Komga `seriesIndex`）、`_best_series` **取卷号最小那支**（Audible 数组顺序三次实测倒置、Goodreads item 内层 `$4d:…:series` 是引用**要二次解析**、RanobeDB 卷号 = `series.books` 位置 + 1 且 29 册核过 28/29）④ **演播者四处口径**（`_LIST_FIELDS` + `_as_list`；`merge_values` 里 **不跨源合并** —— 两个源常是两次不同录音，拼起来会造出**从未存在**的阵容；`metastore.effective`/`state` 的在线分支此前给 `"['Scott Brick']"` 这串 repr，改 `_online_value` 走 `db._parse_tags`）⑤ 三项默认 **`fill_only`**（系列参与命名规则与系列视图、抓取收益在没值的书上；演播者本地值来自音频标签=权威源；老配置整表 overwrite 的用户仍按 overwrite 走，已在 `config.py` 写明）；Audnexus（SSL EOF）/ Open Library `series`（超时）/ Audible `subtitle` 三条**未核验不接线**挂 TODO；测试 **+11 例**、后端全量 **2274 例全绿**（**不发版**，`VERSION` 仍 0.94.0） |
 | 102 | 元数据抓取**地基**（用户 2026-10-05 直接提出，非从 TODO 取条目）：① 14 家源声明**收口**到 `novelforge/core/sources/`（`Provider` 数据类 + `DECLARED`，`SOURCES`/`GROUPS`/`IMPLEMENTED`/`LANG_AFFINITY`/`LANG_BROAD`/`SOURCE_ID_FIELD`/`HEALTH_SAMPLES` **7 张手工表改派生**，逐字段验算 14 家旧键全等，只多 `kind`/`rate_limit`/`cache_ttl`）② 进程内**缓存 + 按源限流**（`time.monotonic` 计时、只缓存「成功且非空」、命中浅拷贝防分数污染；`force=True` = 诊断模式**缓存与限流都旁路**，否则体检 4 路并发会被自己的 sleep 拖成**假 timeout**）③ **按记录标识取详情**（只接真机核验过的 iTunes / Open Library；Google Books 匿名 429 / Audnexus 本机不可达 / Goodreads 302 ⇒ **不声明**，如实中文回绝）④ 配置两键 `cache_ttl`（默认 `None` = 按各来源声明，不写死 600）/ `detail_fetch`（默认**关**，不改既有书的抓取结果）+ 环境变量**只兜底不覆盖** + 前端两个开关；顺带修掉一个**假配置**（`metasources.py` 从未 import `config` ⇒ `cache_ttl` 写完两期无人读，被裸 `except` 吞掉）＋ 新增 `test_metasource_registry_contract` 15 / `test_metasources_cache` 21 / `test_metasources_detail` 24 / `test_config_readback_contract` 19（**不发版**，`VERSION` 仍 0.94.0） |
 | 101 | 书源网页抓取收口：**Goodreads 旧结构（`<tr itemscope>`/`bookTitle`/`authorName`）已被站点下线 ⇒ 整家恒返 0 条**，改用 React Server Components 的 **RSC flight payload** 解析（同一真样本 604317 B：0 条 → **19 条**，多作者/年份/封面/provider_id 全对，未解析引用残留 0）+ **AWS WAF 挑战页归因**与「站点改版 / 站点主动拒绝」分开（Goodreads / Libro.fm 同套防护，取决于 IP 信誉）＋ 夹具 2 个、`tests/test_metasources_scrape.py` 12→24 例（**不发版**，`VERSION` 仍 0.94.0） |
 | 100 | EPUB 解析换成熟解析器**实测后删除该立项**：37 本真实第三方 EPUB（Standard Ebooks，30 本含 OPF）逐字段对比「现有正则」vs「`xml.etree.ElementTree`」——`title`/`creator`/`publisher`/`language` **0/30 不一致**、真解析器**零失败**（CDATA/DOCTYPE/非标准实体/单引号属性/疑未声明前缀 **全为 0**）⇒ 标题承诺的收益是 0，风险（`unbound prefix`/`undefined entity` 整份作废）恰是第三方 OPF 会遇到的那类；`tests/test_epub_xml_parse.py`（5 例）**保留**为将来换解析器的验收条件。另立并修掉**唯一站得住的差异**：`dc:description` 不解 HTML 实体（30/30 本实测 `html.unescape(旧) == 真解析器` 逐字成立）⇒ 新增 `_dc_description()`（解一次实体、**保留标签**），前后端可见性已证实（前端 `{{ }}` 文本插值不做二次解码）；新增 `tests/test_epub_description.py`（7 例，改动前 4 例实测会红）（**不发版**，`VERSION` 仍 0.94.0） |

@@ -1471,3 +1471,118 @@ payload 里**有**系列信息（实测能解出 `("Remembrance of Earth's Past"
 - ⚠️ **`Get-Content` 读本仓 UTF-8 中文文档会在控制台输出 GBK 乱码** ⇒ 一律用 `read` / `grep` 工具或 Python；**绝不用 `Get-Content -Raw` + `Set-Content` 改**。
 - ⚠️ **探针脚本放在 `%TEMP%` 时必须 `sys.path.insert(0, os.getcwd())`** —— Python 只把**脚本所在目录**入 `sys.path`，直接跑会 `ModuleNotFoundError: No module named 'novelforge'`。
 - ⚠️ 基线：**2263 例（2238 passed / 25 skipped）**，metadata 聚焦 15 文件 261 passed；`VERSION` 仍 `0.94.0`、**八轮不发版**。
+
+## 第 103 期铁律（把系列 / 卷号 / 演播者接进元数据抓取线）
+
+### 一、性质是「接线」，不是「加能力」
+
+- 三个字段**早就建模**，消费者全在：`novelforge/core/fileops.py` 的 `METADATA_FIELDS`（含 `series` / `series_index` / `narrators`）、
+  `novelforge/core/metascore.py` 的 `FIELDS`（`series` 4.0 / `series_index` 3.0，Enrichment 组 —— 此前是**死分项**）、
+  命名规则 `{series}` / `{series_index}`（`fileops.PATTERN_FIELDS`）、Komga `seriesIndex`、系列视图、`db._CLEARABLE` / `_META_FIELDS`、
+  `fileops.patch_opf_meta` 已能写 `calibre:series` / `calibre:series_index`。
+- 断点只有**两处**：① `novelforge/core/metasources.py` 的 `_entry()` 是**固定键白名单**（没有这三个键）② `novelforge/core/metafetch.py` 的
+  `_CURRENT` / `_VALUE_KEYS` / `_FINALIZE_FIELDS` 没有映射 ⇒ 抓取器即便拿到也传不进去（第 101 期的 docstring 自己写着「传了会被静默丢掉」）。
+- 立项：用户在 m07055 的 ask_user_question 里选 **A**（把这三个字段接进抓取线），未选 B（微信读书）/ C（别的方向）。
+- ⚠️ **不能只接一半**：`metasources` 接了而 `metafetch` 没接 = 静默丢弃（本期之前的状态）；`metafetch` 接了而 `config.DEFAULTS` / 前端 `POLICY_FIELDS` 没接 = 用户看不见这一项。
+
+### 二、RanobeDB 详情补全从未生效（随系列那一笔 `e1927ea` 提交）
+
+- ⚠️ **没单独成笔**：原先给这一处准备的 `git commit -F "$env:TEMP\nf_msg_p103_1.txt"` **失败**（见第八节第 1 条陷阱），
+  暂存区内容被**系列那一笔 `e1927ea`** 一起带走 ⇒ 修复的代码与两条用例都在 `e1927ea` 里。
+  **提交后必须核 `git log --oneline` 的笔数与 `git show --stat`**，不能只凭证「我写了提交信息」。
+
+- `_search_ranobedb` 里 `detail = {**b, **fetched}`，而真机 `GET https://ranobedb.org/api/v0/book/{id}` 返回 **`{"book": {…}}`**
+  ⇒ 只并进一个 `book` 键：作者 / 出版社 / 简介**全空且不报错**。
+- 后果不是「缺几个字段」：`score_candidate()` 只剩书名那 0.7 分 < 默认 `threshold` 0.75 ⇒ **这家源在默认配置下永远进不了合并（白挂）**。
+- 修法：先剥一层 `inner = fetched.get("book")`，剥不到再按扁平吃（接口形状变过，留兜底免得**整家静默变空**）。
+- 「改动前会红」证据：把修复换回旧写法 ⇒ `1 failed, 2 passed`；修复版 `3 passed`。测试 `tests/test_metasources_parsers.py::test_ranobedb_两段式补详情`（真机嵌套形状）+ `::test_ranobedb_扁平详情也认`。
+- ⚠️ **教训**：这是第 102 期「假配置」的同类 —— **链路静默失效不报错**，只有拿真机响应写用例才抓得到。
+
+### 三、系列与卷号（候选结构 + 三家源）
+
+- `_entry()` 新增 `"series": _strip_html(kw.get("series"))` 与 `"series_index": _series_index_of(kw.get("series_index"))`。
+- ⚠️ **`_series_index_of()` 只认 `^\d+(?:\.\d+)?$`**（`1` / `12` / `1.5` / `" 2 "` 认；`"1-3"` / `"Kindle Edition"` / `"卷三"` **留空**）。
+  理由：卷号要喂命名规则 `{series_index}`、缺册判定与 Komga `seriesIndex` —— **错值比空值严重**（把 `Kindle Edition` 当卷号会把书排到不存在的第 N 卷）。
+- `_best_series(candidates) -> (系列名, 卷号)`：**取卷号最小的那支**；⚠️ **有数字卷号的一律优先于没号的**（`rank = (0, float(idx))` / `(1, 0.0)` —— 实现语义如此，测试按实现写）；
+  无名字的跳过；全空回 `("", "")`。理由：数组顺序不可信。
+- ⚠️ **Audible 的 `series` 顺序不稳定**：同一会话两次请求，Dune 一次 `[The Dune Sequence #12, Dune #1]`、另一次倒过来
+  ⇒ **不能用「取第一条」**；取 `sequence` 最小 = 最具体的子系列（实测 Dune #1 / Messiah #2 / Children of Dune #3 三本全对）。
+- ⚠️ **Goodreads 的 `bookSeries` item 内层还可能是引用**：`bookSeries[0].series` 可能是 `"$4d:props:children:1:…:series"` 路径引用
+  ⇒ `_rsc_series()` 必须**二次解析**（外层 list 解出来后，内层还要 `_rsc_value(rows, item.get("series"))`）。
+  夹具 `tests/fixtures/metasources/goodreads_search.html`（22001 B / 3 rows / 2 books）两种形态各一。
+- **RanobeDB**：卷号只能靠**位置** —— `series.books` 里的 `ids.index(book_id) + 1`（真机 SAO 29 册逐本对照：**28/29 标题序号 == 位置+1**，第 29 册是日文原名
+  ⇒ 是**读排序不是猜**）；取不到回空串；⚠️ 书的详情 / 列表**都没有 tags** ⇒ `tags` 为空时兜底取 `series.tags`（真机 `[{"name":"action","ttype":"genre"}, …]`）。
+- ⚠️ **Audible 的 `tags` 现在给 `[]`**：此前 `tags=[s.get("title") for s in series …]` 把**系列名塞进题材** —— 那是**把值写错地方**，
+  污染题材黑名单与跨源合并。现有 `response_groups`（`product_desc,contributors,media,series`）下 Audible **不返回题材**
+  （`thesaurus_subject_keywords` / `category_ladders` / `genres` 实测全 null）；⚠️ **不要为拿题材加 response_group** ——
+  第 99 期核过，带非法组名（`publisher`）会让接口回 400、**整家永远 0 结果**。
+
+### 四、演播者（`narrators`）：一个多值字段在四处被当字符串
+
+- `novelforge/core/metasources.py`：`_entry()` 加 `"narrators": [...][:8]`（与 `tags` 同口径的多值字段）；`_search_audible` 取 `p["narrators"]`
+  （**顶层键**且随现有响应组返回，每项 `{"name": …}`，Dune 12 位；`contributors` 实测恒 null，别绕道去解它）。
+- `novelforge/core/metafetch.py`：新增 `_LIST_FIELDS = ("tags", "narrators")` + `_as_list(value)`（去空白 / 丢空项 / 保序去重）；
+  `_current_value` / `_candidate_values` 的列表分支扩到 narrators；⚠️ **`plan()` 本来就列表安全**（用 `isinstance(value, list)` + `sorted()` 比较，无需改动）。
+- ⚠️ **`merge_values()` 里 narrators 不跨源合并，只取第一个非空候选**：两个源报的常常是**两次不同录音**（甚至不同语言版本）的阵容，
+  拼起来会造出一份**从未存在过**的名单，写进库后没人能看出哪一半是错的（与「同名不同书」同类风险）。**题材照旧合并去重**。
+- ⚠️ **`novelforge/core/metastore.py` 的在线分支此前不是列表感知**：`effective()` 用 `on[f]["value"]` 原样、`state()` 用 `str(...).strip()`
+  ⇒ 同一个字段 **OPF 分支给列表、在线分支给 `"['Scott Brick']"` 这串 repr**（编辑器上直接显示这串东西）。
+  修法：新增 `_online_value(field, value)` 走 `db._parse_tags` 统一还原；标量字段不受影响。
+- ⚠️ `novelforge/core/db.py` 的 `_parse_tags()` **行为本来就是通用的**（`startswith("[")` 走 `ast.literal_eval`，否则按 `[、,，;/|]` 拆）——
+  名字叫 tags 但 `get_effective_meta` 早已用它处理 narrators；`set_online()` 存的是 `str(list)` 的 repr，所以整条链是能 round-trip 的，**缺的只是「谁在什么时候还原」**。
+- 显式清空（`db.META_CLEAR`）对多值字段的对外形态是**空列表**（`_meta_out` 已有分支）。
+
+### 五、字段映射与默认策略（五个同步点）
+
+1. `novelforge/core/metasources.py` 的 `_entry()`（候选结构）
+2. `novelforge/core/metafetch.py` 的 `_CURRENT` / `_VALUE_KEYS` / `_FINALIZE_FIELDS`
+3. `novelforge/config.py` 的 `DEFAULTS["metadata_fetch"]["fields"]`
+4. `frontend/src/lib/metadataFields.ts` 的 `POLICY_FIELDS`（`MetadataPage.vue` 的 `FIELDS` 自动跟随）
+5. **前端 spec 里写死的断言** —— `frontend/src/components/book/MetadataEditor.spec.ts` 原来写着「抓取字段集**不含** series / series_index」，接上后必改
+
+- ⚠️ **默认策略三项都给 `fill_only`**（整表其它项仍 `overwrite`，有测试钉住「别因为这几项把整表改档」）：
+  ① 系列 / 卷号参与**命名规则与系列视图** ⇒ 默认 `overwrite` 会**静默改掉用户已有的分组与文件名**；② 演播者的本地值来自**音频文件标签**（那是权威源）；
+  ③ 抓取的收益主要在**没有**值的书上。
+- ⚠️ **老配置里存过整表 overwrite 的用户，这三项也会按 overwrite 走** —— 那是 `_field_policy()` 刻意还原的**预设意图**（第 63 期口径），
+  想改就在设置页逐项调。**已写进 `novelforge/config.py` 的注释**（与第 102 期「老配置不会自动获得新键：`load_config` 只有一层浅合并」同一段）。
+- ⚠️ **`FIELD_TRUST` 不为这三项加信任源**：静态表表达不了「电子书信 Goodreads / 有声书信 Audible」—— 哪个源的系列更可信取决于这本书的形态，
+  交给候选分数与 `merge_eligible()` 的 0.7 闸。
+- ⚠️ **`metascore` 一行不动**：`score_candidate()` 只用 title + author ⇒ 往候选里加字段**不改变匹配分与排序**（不会让既有书库的评分跳动）。
+
+### 六、真机核验表（决定谁接线）
+
+| 源 | 系列 / 卷号 / 演播者 | 依据 |
+|---|---|---|
+| Goodreads | ✅ 系列 + 卷号 | 夹具两种形态（内联 + `$4d:…` 路径引用） |
+| Audible | ✅ 系列 + 卷号 + 演播者 | 真机 `catalog/products`（顺序不稳 ⇒ 取 `sequence` 最小） |
+| RanobeDB | ✅ 系列 + 卷号（按位置） | 真机详情套 `book` 键；`books` 顺序 == 卷号顺序（29 册核过） |
+| Audnexus | ⛔ 不接线 | 本机 3/3 `[SSL: UNEXPECTED_EOF_WHILE_READING]` |
+| Open Library | ⛔ 不动 `_OL_FIELDS` | `fields=key,title,series,author_name` 撞本机 `ConnectTimeout` |
+
+- 记 TODO 的还有：**Audible 的 `subtitle`** 是顶层键（真机核过）但未接线（策略口径要先定：不少书库把副标题当标题的一部分）。
+- ⚠️ **探针脚本也必须先清空 proxy 变量**（不只是 pytest）：否则 `httpx.InvalidURL: Invalid port: ':1]'` 会让人误判成「这站连不上」。
+
+### 七、测试与实测
+
+- `tests/test_metafetch_presets.py`：`EXPECTED_KEYS` 加三键 + `test_新接的三项默认策略是fill_only`（并断言其余项仍全 `overwrite`）。
+- `tests/test_metasources_parsers.py`：卷号归一化（10 组输入）、`_best_series` 取最小、RanobeDB 系列/卷号 + 取不到留空、
+  Audible 倒序两支取最小 + 演播者过滤（空名与非字典项**在 fetcher 侧就丢**）。
+- `tests/test_metasources_scrape.py`：`test_goodreads_系列两种形态都解得开`（**夹具驱动**，断言两本系列同名、卷号 `["1","2"]`）。
+- `tests/test_metafetch_merge.py`：演播者**只取一家不跨源拼** + 首位源为空则顺延。
+- `tests/test_metastore.py`：多值字段在线值还原成列表 + 显式清空给空列表。
+- 实测：元数据聚焦 8 文件 **142 passed**；15 文件 **268 passed**；前端 **67 文件 / 686 例全绿**。
+- ⚠️ **前端全量并行偶发一条**：`frontend/src/components/book/detail/ReadingLogTab.spec.ts:242` 的 `it('重试按钮真的会再拉一次')`
+  一次全量跑红，**单跑该文件与紧接着全量复跑都绿** ⇒ 并行竞态，**别误判成本期改坏**。
+- ⚠️ **`vue-tsc` 3.3.12 实红**：`frontend/src/components/book/MetadataEditor.vue:614` 的 `FIELD_LABELS[c as keyof BookMetadataFields]`
+  报 `TS2339`（`--build --force` 恰好 1 条、`EXIT=2`）；**3.3.11 是 exit 0**，而 `frontend/node_modules` 里**现装的就是 3.3.12** ⇒ 这条不再是潜在红。本期未动该文件。
+
+### 八、操作陷阱（本轮新增，已写进 `AGENTS.md` §5）
+
+- ⚠️ **`write` 工具落的临时文件在 `C:\Users\qingr\Temp\`，而 pwsh 的 `$env:TEMP` 是 `…\AppData\Local\Temp`** ⇒
+  `git commit -F "$env:TEMP\nf_msg_xxx.txt"` 报 `fatal: could not read log file '…': No such file or directory`（**提交没发生**，`git add` 的暂存还在）⇒ **一律给完整显式路径**。
+  ⚠️ **这条的后果比看上去严重**：失败后**暂存区不会清空**，那一笔的内容会被**下一笔提交悄悄带走** ——
+  第 103 期给 RanobeDB 修复准备的那笔就这么并进了系列那一笔（`e1927ea`）⇒ **每笔提交后都要核 `git log --oneline` 的笔数**，
+  收尾时用 `git show --stat <hash>` 确认每笔内容对得上。
+- ⚠️ **读仓库里的中文 / JSON 文件一律用 `read` 工具**：`Get-Content package.json -Raw | ConvertFrom-Json` 因控制台 **GBK 解码**把中文读成乱码而报 `传入的对象无效`；`Get-Content docs\*.md` 满屏乱码 —— **不是文件坏了**。
+- ⚠️ 追加中文正文的脚本要写成 `%TEMP%\nf_*.py` 再跑（内联 here-string 会吃 `$` 前缀序列与引号）；追加前 `assert text.endswith("\n")`、追加后回读 `tail` 验证顺序。
+- 基线：第 102 期 **2263 例（2238 passed / 25 skipped）**；`VERSION` 仍 `0.94.0`、**九轮不发版**。

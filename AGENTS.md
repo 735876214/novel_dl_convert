@@ -81,7 +81,7 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 
 ```bash
 # 后端测试（离线、全量；Windows 用 .venv\Scripts\python.exe）
-.venv/bin/python -m pytest                 # 当前基线 2263 例（2238 passed / 25 skipped；只增不减）
+.venv/bin/python -m pytest                 # 当前基线 2274 例（2249 passed / 25 skipped；只增不减）
                                            # ⚠️ 跑前先清空全部 proxy 变量；⚠️ 别再加 `-q`（两条都见第 5 节）
 .venv/bin/python -m pytest tests/test_catalog.py -k 某关键字
 
@@ -125,7 +125,16 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
   `[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: vue-demi@0.14.10` 上 exit 1，**脚本压根没跑**。
   正确姿势：`cd frontend` 后**直接调 `frontend/node_modules/` 里的工具**（如 `node node_modules/vue-tsc/bin/vue-tsc.js --build`），或按第 4 节用 `npm run`。
 - ⚠️ **`vue-tsc` 3.3.12 起会在 `frontend/src/components/book/MetadataEditor.vue:614` 报 `TS2339`**
-  （模板里 `FIELD_LABELS[c as keyof BookMetadataFields]`），**3.3.11 全量重建 exit 0** ⇒ 触发条件是「重装前端依赖」，与那行代码有没有改过无关（第 102 期记录在 `docs/TODO.md`）。
+  （模板里 `FIELD_LABELS[c as keyof BookMetadataFields]`），**3.3.11 全量重建 exit 0** ⇒ 触发条件是「重装前端依赖」，与那行代码有没有改过无关
+  （第 102 期记录，第 103 期复核：`frontend/node_modules` 里**现装的就是 3.3.12**，所以这条现在是**实红**不是潜在红；记在 `docs/TODO.md` §1）。
+- ⚠️ **`write` 工具落的临时文件在 `C:\Users\qingr\Temp\`，而 pwsh 的 `$env:TEMP` 是 `…\AppData\Local\Temp`**（第 103 期）：
+  用 `git commit -F "$env:TEMP\nf_msg_xxx.txt"` 会报 `fatal: could not read log file '…': No such file or directory`（提交未发生，`git add` 的暂存还在）
+  ⇒ **一律给完整显式路径**（`git commit -F "C:\Users\qingr\Temp\nf_msg_xxx.txt"`）。
+  ⚠️ **这条的后果比看上去严重**：失败后**暂存区不会清空**，那一笔的内容会被**下一笔提交悄悄带走**
+  （第 103 期给 RanobeDB 缺陷修复准备的那一笔就这么并进了系列那一笔 `e1927ea`）⇒
+  **每笔提交后都要核 `git log --oneline` 的笔数**，收尾用 `git show --stat <hash>` 确认内容对得上。
+- ⚠️ **读仓库里的中文 / JSON 文件一律用 `read` 工具**（第 103 期）：`Get-Content package.json -Raw | ConvertFrom-Json` 在本机
+  因控制台 **GBK 解码**把中文读成乱码而报 `传入的对象无效`，`Get-Content docs\*.md` 则是满屏乱码 —— 都**不是文件坏了**，是 pwsh 读错了。
 
 ## 6. 提交与交付
 
