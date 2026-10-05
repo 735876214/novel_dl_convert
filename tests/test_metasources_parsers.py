@@ -13,6 +13,8 @@
 📌 第 59 期体检的实测修正：Amazon 的书名类名、Lubimyczytac 的卡片类名都已与页面真实结构
 对齐（旧写法在真实页面上**一条都匹配不到**），fixture 同步换成了真实结构。
 """
+import json
+
 import pytest
 
 import novelforge.core.metasources as m
@@ -183,16 +185,27 @@ def test_amazon_书名取h2且跳过辅助span(monkeypatch):
     assert items[0]["cover_url"] == "https://x/1.jpg"
 
 
-def test_goodreads_按tr块解析(monkeypatch):
-    html = (
-        '<tr itemscope><td><a class="bookTitle" href="/book/show/1"><span>Dune</span></a>'
-        '<a class="authorName"><span itemprop="name">Frank Herbert</span></a></td></tr>'
-    )
+def test_goodreads_按flight载荷解析(monkeypatch):
+    """第 101 期：**旧结构（``<tr itemscope>`` / ``bookTitle``）已从真页面下线**，
+    旧用例断言的是那个不复存在、因而恒返回 0 条的实现。
+
+    现在的数据源是 React Server Components 的 flight payload：每行 ``<hexid>:<json>``，
+    书对象带 ``__typename == "Book"``。夹具按真实形态构造（含 ``\\"`` 双转义）。
+    真机页面驱动的那组用例在 `tests/test_metasources_scrape.py`。
+    """
+    book = ('{"__typename":"Book","legacyId":1,'
+            '"title":"Dune","imageUrl":"https://x/d.jpg",'
+            '"webUrl":"https://www.goodreads.com/book/show/1-dune",'
+            '"description":"A desert planet.",'
+            '"primaryContributorEdge":{"node":{"name":"Frank Herbert"}}}')
+    body = json.dumps("a:" + book + "\n")[1:-1]        # 取 JSON 字面量内容（带 \" 转义）
+    html = f'<script>self.__next_f.push([1,"{body}"])</script>'
     _patch(monkeypatch, text_router={"goodreads": html})
     e = _one("goodreads")[0]
 
     assert e["title"] == "Dune" and e["author"] == "Frank Herbert"
-    assert e["raw_id"] == "/book/show/1"
+    assert e["provider_id"] == "1"
+    assert e["raw_id"] == "https://www.goodreads.com/book/show/1-dune"
 
 
 def test_kobo_从NEXT_DATA递归找书(monkeypatch):

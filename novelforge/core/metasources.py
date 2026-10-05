@@ -78,13 +78,23 @@ def _get_text(url: str, params: dict = None, headers: dict = None, hints: dict =
     r = httpx.request("GET", url, params=params, timeout=TIMEOUT,
                       headers={**_BROWSER_HEADERS, **(headers or {})})
     _raise_for_status(r, hints)
-    # HTTP 202 + 极小响应体 = 站点的 JS 挑战页（实测 Libro.fm 就是这样回的）。
-    # 它**不是** 4xx/5xx，若不在这里判掉，解析器只会得到「解析不到结果」，
-    # 用户就分不清「站点改版」与「被拦」——两者要做的事完全不同。
-    if r.status_code == 202:
-        raise RuntimeError("被反爬拦截（站点返回挑战页 HTTP 202）")
     text = r.text or ""
     low = text[:4000].lower()
+    # ⚠️ **AWS WAF 挑战页**（第 101 期真机核验）：Goodreads 与 Libro.fm **同一套机制** ——
+    # 两家都在 AWS WAF 后面，命中时回一段约 2 KB 的挑战页（实测含 ``window.gokuProps``
+    # + ``awswaf.com/…/challenge.js`` + ``<div id="challenge-container">``）。
+    # ⚠️ 命中与否取决于 **IP 信誉**，同一 URL 换个时刻可能就正常 —— 所以文案要写成
+    # 「可重试 / 降频 / 带 Cookie」，**不是**「站点挂了或改版了」，否则用户会白等修复。
+    # ⚠️ 这段判据要放在 HTTP 202 兜底**之前**：Libro.fm 回的就是 202 + 这个页，
+    # 若先命中 202 分支，用户看到的会是笼统的「HTTP 202 挑战页」而认不出是 WAF。
+    if "gokuprops" in low or "awswaf" in low:
+        raise RuntimeError("被反爬拦截（AWS WAF 挑战页）：Goodreads / Libro.fm 走同一套防护，"
+                           "取决于出口 IP 信誉 —— 稍后重试、降低频率，或按需提供 Cookie")
+    # HTTP 202 + 极小响应体 = 站点的 JS 挑战页。它**不是** 4xx/5xx，若不在这里判掉，
+    # 解析器只会得到「解析不到结果」，用户就分不清「站点改版」与「被拦」——
+    # 两者要做的事完全不同。这一条是**兜底**，覆盖「202 但没有 WAF 特征」的别的站点。
+    if r.status_code == 202:
+        raise RuntimeError("被反爬拦截（站点返回 HTTP 202 挑战页）：稍后重试或降低频率")
     for marker in ("validatecaptcha", "enter the characters you see below", "robot check",
                    "g-recaptcha", "cf-challenge", "checking your browser",
                    "attention required! | cloudflare", "人机验证", "访问验证"):
@@ -1108,18 +1118,206 @@ def _search_amazon(title: str, author: str, limit: int, opts: dict) -> list:
     return out
 
 
-def _search_goodreads(title: str, author: str, limit: int, opts: dict) -> list:
-    html = _get_text(GOODREADS, params={"q": f"{_clean(title)} {_clean(author)}".strip()})
-    out = []
-    for block in re.findall(r"<tr itemscope.*?</tr>", html, re.S):
-        t = re.search(r'class="bookTitle"[^>]*>\s*<span[^>]*>([^<]+)</span>', block)
-        if not t:
+#: Goodreads 搜索结果页里承载书数据的 React Server Components (RSC) flight payload。
+#: 页面把它一段段地推成 ``self.__next_f.push([1,"…"])``；**书对象在 payload 的 JSON 里**，
+#: 不在 DOM 里 —— 详见 :func:`_search_goodreads` 的说明。
+_RSC_PUSH = re.compile(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>', re.S)
+#: RSC 流的一行：``<hexid>:<payload>``。行号单独记，载荷才是内容。
+_RSC_ROW = re.compile(r"^([0-9a-f]+):(.*)$", re.S)
+
+
+def _walk_dicts(node):
+    """递归产出嵌套结构里的所有 dict（列表 / dict 都下钻）。"""
+    if isinstance(node, dict):
+        yield node
+        for v in node.values():
+            yield from _walk_dicts(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _walk_dicts(v)
+
+
+def _rsc_books(html: str) -> list:
+    """从 Goodreads 结果页的 RSC flight payload 里取出 ``__typename == "Book"`` 的对象。
+
+    **为什么不能只靠 DOM 解析**（第 101 期真机核验）：新结果页是 React Server
+    Components 渲染的，``ul[data-testid="book-list-item"]`` 下确有 20 个 ``<li>``，
+    但**只有第一张卡带完整详情**，其余卡的详情被放进 ``<template id="P:c">`` 占位符里
+    —— 而 ``BeautifulSoup(html, "html.parser")`` **不解析 `<template>` 的内容**，
+    于是 DOM 通道只拿得到 1 本书（其余 ``<li>`` 只有 class 名，没有书名/作者）。
+
+    可靠来源是 flight payload：它含完整字段的 Book 对象。
+    ⚠️ **必须逐行 ``json.loads`` 后按对象取字段，不能对整段文本抓同名 key** ——
+    实测 ``title`` 出现 23 次而 Book 对象只有 19 个（多出来的是**系列名**等），
+    全局抓取会让书名与系列串台。
+    """
+    books = []
+    for payload in _rsc_rows(html).values():
+        if '"legacyId"' not in payload:
             continue
-        a = re.search(r'class="authorName"[^>]*>\s*<span[^>]*>([^<]+)</span>', block)
-        u = re.search(r'href="(/book/show/[^"]+)"', block)
-        href = u.group(1) if u else ""
-        out.append(_entry("goodreads", title=t.group(1), author=a.group(1) if a else "",
-                          raw_id=href, provider_id=_goodreads_id(href)))
+        try:
+            data = json.loads(payload)
+        except ValueError:
+            continue
+        for node in _walk_dicts(data):
+            if node.get("__typename") == "Book" and node.get("title"):
+                books.append(node)
+    return books
+
+
+def _rsc_year(book: dict) -> str:
+    """Book 的出版年：``details.publicationTime`` 是 **epoch 毫秒**（实测 1415692800000）。"""
+    ms = (book.get("details") or {}).get("publicationTime")
+    try:
+        secs = int(ms) / 1000
+    except (TypeError, ValueError):
+        return ""
+    if secs <= 0:
+        return ""
+    return time.strftime("%Y", time.gmtime(secs))
+
+
+def _rsc_rows(html: str) -> dict:
+    """把 RSC flight 流拆成 ``{行号: 载荷}``。
+
+    flight 流每一行是 ``<hexid>:<payload>``；行与行之间可以互相**前向引用**
+    （见 :func:`_rsc_ref`），所以必须先建好整张表再解析书对象。
+    ⚠️ payload 未必是 JSON（实测 ``73:T4f5,Read the award…`` 这种前缀是 RSC 的
+    类型标记 ``T<长度>,``，后面才是文本）—— 取值时再按需剥掉。
+    """
+    rows = {}
+    for seg in _RSC_PUSH.findall(html or ""):
+        try:
+            text = json.loads(f'"{seg}"')
+        except ValueError:
+            continue
+        for line in text.split("\n"):
+            m = _RSC_ROW.match(line.strip())
+            if m:
+                rows[m.group(1)] = m.group(2)
+    return rows
+
+
+#: RSC 的带类型前缀值：``T<十六进制长度>,<正文>``（实测简介行就是这样）。
+_RSC_TYPED = re.compile(r"^T[0-9a-f]+,", re.S)
+
+
+def _rsc_value(rows: dict, value, _depth: int = 0):
+    """解开一个字段的**前向引用**（``"$4d:props:children:…"``）。取不到就原样返回。
+
+    为什么必须解：实测 20 本结果里**只有第 1 本**的简介/系列是内联的，其余都写成
+    引用串。不解的话要么落进 ``'$73'`` 这种垃圾值，要么整片字段丢掉 —— 前者更糟，
+    因为它看起来「有值」。解不出来（引用指向的行不存在）时返回 ``None``，
+    让调用方按「这个字段没有」处理。
+    """
+    if _depth > 8 or not isinstance(value, str) or not value.startswith("$"):
+        return value
+    ref = value[1:]
+    # 两种引用形态（实测都有）：
+    #   ① 纯文本引用 —— ``"$73"``：整行就是内容（简介常这样写）；
+    #   ② 路径引用  —— ``"$4d:props:children:…:series"``：行号 + 一串属性/下标路径。
+    head, sep, path = ref.partition(":")
+    if head not in rows:
+        return None
+    node = rows[head]
+    # 带类型前缀的行（``T4f5,<正文>``）**只有纯文本引用才该剥前缀**；
+    # 路径引用的行是 JSON，乱剥会把内容弄坏。
+    if not sep:
+        return _RSC_TYPED.sub("", node.strip())
+    try:
+        node = json.loads(node.strip())
+    except ValueError:
+        return None
+    for part in [p for p in path.split(":") if p]:
+        if isinstance(node, list):
+            # React 元素是定长数组 ``["$", <type>, <key>, <props>]``（实测）：
+            # 路径里的 ``props`` 指的是第 4 项，不是 list 的下标 —— 直接 ``int()`` 会崩。
+            if part == "props" and len(node) == 4 and node[0] == "$":
+                node = node[3]
+                continue
+            try:
+                node = node[int(part)]
+            except (ValueError, IndexError):
+                return None
+        elif isinstance(node, dict):
+            if part not in node:
+                return None
+            node = node[part]
+        else:
+            return None
+    return _rsc_value(rows, node, _depth + 1)
+
+
+def _rsc_text(rows: dict, value) -> str:
+    """取一个**文本字段**：先解引用，再剥掉 RSC 的类型标记前缀。"""
+    got = _rsc_value(rows, value)
+    if not isinstance(got, str):
+        return ""
+    return _RSC_TYPED.sub("", got)
+
+
+def _rsc_authors(rows: dict, book: dict) -> str:
+    """把主作者与其余作者连成一个字符串（多作者是常见情形，不能只取第一位）。"""
+    names = []
+    edges = [book.get("primaryContributorEdge")]
+    extra = _rsc_value(rows, book.get("secondaryContributorEdges"))
+    if isinstance(extra, list):
+        edges.extend(extra)
+    for edge in edges:
+        edge = _rsc_value(rows, edge)
+        if not isinstance(edge, dict):
+            continue
+        node = _rsc_value(rows, edge.get("node"))
+        if not isinstance(node, dict):
+            continue
+        name = _clean(node.get("name"))
+        if name and name not in names:
+            names.append(name)
+    return ", ".join(names)
+
+
+def _search_goodreads(title: str, author: str, limit: int, opts: dict) -> list:
+    """Goodreads 搜索结果页抓取 —— 数据在 **RSC flight payload** 里，不在 DOM 里。
+
+    ⚠️ **旧实现（``<tr itemscope>`` + ``class="bookTitle"``）已彻底失效**（第 101 期真机核验）：
+    真结果页里 ``<tr itemscope`` / ``bookTitle`` / ``authorName`` **各出现 0 次** ——
+    该结构已被站点下线，旧正则只能匹配到 0 条，表现为**这整家静默返回 0 结果**。
+
+    **为什么不能只靠 DOM 解析**：新结果页由 React Server Components 渲染，
+    ``ul[data-testid="book-list-item"]`` 下确有 20 个 ``<li>``，但只有第一张卡带完整详情，
+    其余卡的详情被放进 ``<template id="P:c">`` 占位符 —— 而 bs4 的 ``html.parser``
+    **不解析 `<template>` 内容**，于是 DOM 通道只拿得到 1 本书。
+
+    ⚠️ **必须按对象取字段，不能对整段文本抓同名 key**：实测 ``title`` 出现 23 次而
+    Book 对象只有 19 个（多出来的是**系列名**），全局抓取会让书名与系列串台。
+
+    ⚠️ Goodreads 与 Libro.fm 一样在 **AWS WAF** 后面：命中挑战页时 :func:`_get_text`
+    会抛「被反爬拦截」（实测挑战页含 ``window.gokuProps`` + ``awswaf.com/…/challenge.js``）。
+    是否被拦取决于 IP 信誉，**不是**「站点挂了」，也不是解析问题。
+
+    ⚠️ payload 里**有**系列信息（``bookSeries`` → ``seriesPlacement`` + 系列名），
+    实测能解出来（如 ``("Remembrance of Earth's Past", "1")``），但**不在这里返回**：
+    :func:`_entry` 的候选结构没有 ``series`` / ``series_index`` 两个键，
+    `metafetch._VALUE_KEYS` 也没有这个映射 ⇒ 传了会被静默丢掉。要接上它得同时动
+    候选结构、字段映射、收尾模式与 OPF 写入四处，属于**另一件事**（见 `docs/TODO.md`）。
+    """
+    html = _get_text(GOODREADS, params={"q": f"{_clean(title)} {_clean(author)}".strip()})
+    rows = _rsc_rows(html)
+    out = []
+    seen = set()
+    for book in _rsc_books(html):
+        url = _clean(book.get("webUrl"))
+        # 同一本书可能在 payload 里出现多次（不同 RSC 行各带一份）⇒ 去重，否则结果灌水。
+        key = _clean(book.get("legacyId")) or url
+        if key and key in seen:
+            continue
+        seen.add(key)
+        out.append(_entry("goodreads", title=_clean(_rsc_text(rows, book.get("title"))),
+                          author=_rsc_authors(rows, book),
+                          year=_rsc_year(book),
+                          description=_strip_html(_rsc_text(rows, book.get("description"))),
+                          cover_url=_clean(_rsc_value(rows, book.get("imageUrl"))),
+                          raw_id=url, provider_id=_goodreads_id(url)))
         if len(out) >= limit:
             break
     return out
