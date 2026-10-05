@@ -4907,7 +4907,8 @@ export const api = {
 
   /**
    * 展开容器成真正可读的书（第 87 期）。
-   * ⚠️ `removeSource` 默认 false —— 删源不可逆，必须由用户在界面上显式选。
+   * ⚠️ `removeSource` 默认 false —— 必须由用户在界面上显式选。第 96 期起它的效果是
+   * **把源容器移入回收站**（可在「设置 → 维护 → 回收站还原」搬回），不再是一次真删。
    */
   unpackBook: (bid: string, removeSource = false) =>
     request<UnpackResult>(`/api/books/${encodeURIComponent(bid)}/unpack`, {

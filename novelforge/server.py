@@ -3426,8 +3426,9 @@ def api_book_unpack(bid: str, payload: dict = Body(None)):
       · 容器内是文档（epub/pdf/txt/…）⇒ 逐个提取到容器所在目录；
       · 容器内是压缩包（嵌套）⇒ 提取内层压缩包（一层一层来，不递归）。
 
-    ⚠️ **撞名不覆盖**（逐条如实报），**默认不删源容器**（`remove_source=true` 才删，
-    删除不可逆 ⇒ 默认必须最保守）。展开完 **`library.invalidate()`** —— 新文件要立刻
+    ⚠️ **撞名不覆盖**（逐条如实报），**默认不动源容器**。`remove_source=true` 时才把源容器
+    **移入回收站**（第 96 期：`publish.recycle` + 台账 ⇒ 可在「设置 → 维护 → 回收站还原」搬回；
+    此前这里是一次真 `unlink`）—— 默认仍最保守。展开完 **`library.invalidate()`** —— 新文件要立刻
     出现在书目里（否则用户会以为展开失败）。
     """
     b = library.by_id(bid)

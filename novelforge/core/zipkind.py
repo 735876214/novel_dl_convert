@@ -126,7 +126,8 @@ def analyze(path) -> dict:
 #   · 容器内是若干文档（epub / pdf / txt / mobi / azw3 / fb2）⇒ **逐个提取**；
 #   · 容器内是压缩包（嵌套）⇒ 提取内层压缩包（**一层一层来**，不递归展开）。
 # 三条纪律：只在容器所在目录落新文件；**原子写**（`.part` → replace）；
-# **绝不覆盖已有文件**（撞名如实报，不静默改名）；**默认不删源**（删除不可逆）。
+# **绝不覆盖已有文件**（撞名如实报，不静默改名）；**默认不动源**，即使要求回收也只是
+# **移入回收站**（第 96 期：可还原、有台账，从不 `unlink`）。
 
 
 def _safe_entry(name: str) -> bool:
@@ -187,7 +188,14 @@ def unpack(path, *, remove_source: bool = False) -> dict:
     """**真展开**：把容器里可读的内容落到容器所在目录，逐条回报结果。
 
     撞名 ⇒ 该条**跳过并如实报**（不覆盖、也不自动改名：改名会换 `book_id`，
-    必须由用户确认）。``remove_source=True`` 才删源容器。
+    必须由用户确认）。
+
+    ``remove_source=True`` ⇒ 把源容器**移入回收站**（第 96 期）：走 :func:`publish.recycle`，
+    台账记下原路径 ⇒ 可在「设置 → 维护 → 回收站还原」把它搬回来。**本模块从不 ``unlink``
+    任何东西**（`AGENTS.md` §1「删除一律移入回收站」）。此前这里是全仓**唯一**能真删用户
+    书文件的地方（第 95 期审计批次 8）。
+
+    回收失败**不静默**：原因进 ``source_note``，且原容器原样保留（``source_removed=False``）。
     """
     p = pathlib.Path(str(path))
     plan = unpack_plan(p)
@@ -223,11 +231,20 @@ def unpack(path, *, remove_source: bool = False) -> dict:
                 continue
             results.append({**act, "ok": True, "note": ""})
     ok = any(r["ok"] for r in results)
-    removed = False
+    removed, source_note = False, ""
     if ok and remove_source:
-        try:
-            p.unlink()
-            removed = True
-        except OSError:
-            removed = False
-    return {"ok": ok, "reason": "", "actions": results, "source_removed": removed}
+        if not p.exists():
+            source_note = "源容器已不在原处，没有可回收的东西"
+        else:
+            try:
+                # ⚠️ 局部 import：`publish` 顶层 import `library`，而 `library` 顶层 import
+                # 本模块（`core/library.py` 的 import 行）⇒ 顶层写会成 import 环。
+                from . import publish
+                dst = publish.recycle(p, why="展开容器后回收源容器")
+                removed = dst is not None
+                if not removed:
+                    source_note = "源容器没能移入回收站，已保留原文件"
+            except Exception as e:                    # noqa: BLE001 —— 绝不静默
+                source_note = f"回收源容器失败（{type(e).__name__}: {e}），已保留原文件"
+    return {"ok": ok, "reason": "", "actions": results,
+            "source_removed": removed, "source_note": source_note}
