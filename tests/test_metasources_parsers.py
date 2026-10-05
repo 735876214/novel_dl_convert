@@ -96,11 +96,22 @@ def test_audnexus_解析对象数组作者(monkeypatch):
 
 
 def test_ranobedb_两段式补详情(monkeypatch):
+    """详情**套在 `book` 键里**（第 103 期真机核验的真实形状，不是拍脑袋写的）。
+
+    第 103 期之前这里用的是**扁平**样例，而真机上内容是 ``{"book": {...}}`` ——
+    旧代码 `{**b, **fetched}` 于是只并进一个 `book` 键，作者 / 出版社 / 简介全空
+    且不报错。这条样例就是那次真机核验抓到的形状，别再改回扁平的。
+    """
     _patch(monkeypatch, json_router={
         "/books": {"books": [{"id": 41, "title": "青春猪头少年", "lang": "ja",
                               "c_release_date": 2014}]},
-        "/book/41": {"id": 41, "description": "简介", "publishers": [{"name": "KADOKAWA"}],
-                     "editions": [{"staff": [{"role_type": "author", "name": "鸭志田一"}]}]},
+        "/book/41": {"book": {
+            "id": 41, "description": "简介", "publishers": [{"name": "KADOKAWA"}],
+            "editions": [{"staff": [{"role_type": "author", "name": "鸭志田一"}]}],
+            "series": {"id": 7, "title": "青春猪头少年系列",
+                       "tags": [{"name": "romance"}],
+                       "books": [{"id": 40}, {"id": 41}, {"id": 42}]},
+        }},
     })
     e = _one("ranobedb")[0]
 
@@ -109,6 +120,35 @@ def test_ranobedb_两段式补详情(monkeypatch):
     assert e["publisher"] == "KADOKAWA" and e["year"] == "2014"
     assert e["description"] == "简介"
     assert e["cover_url"] == "", "官方没公布封面 CDN 前缀 ⇒ 宁可留空也不拼猜测 URL"
+    # 第 103 期：系列在详情的 `series` **对象**里（列表里没有）；卷号 = 本册在
+    # `series.books`（按系列顺序排的 id 列表）里的位置 + 1。
+    assert e["series"] == "青春猪头少年系列"
+    assert e["series_index"] == "2", "id=41 在 books 的第 1 位 ⇒ 第 2 卷"
+    assert e["tags"] == ["romance"], "题材只在系列上（书的详情里没有）⇒ 兜底取系列的"
+
+
+def test_ranobedb_卷号取不到就留空(monkeypatch):
+    """`series.books` 里没有这本书（或压根没有 series）⇒ 卷号留空，**不拿书名里的数字猜**。"""
+    _patch(monkeypatch, json_router={
+        "/books": {"books": [{"id": 43, "title": "第 3 卷 某轻小说"}]},
+        "/book/43": {"book": {"id": 43, "title": "第 3 卷 某轻小说",
+                              "series": {"title": "某系列", "books": [{"id": 1}, {"id": 2}]}}},
+    })
+    e = _one("ranobedb")[0]
+
+    assert e["series"] == "某系列" and e["series_index"] == ""
+
+
+def test_ranobedb_扁平详情也认(monkeypatch):
+    """接口形状随版本变过：没套 `book` 的旧形状照样吃（否则哪天变回去，整家**静默**变空）。"""
+    _patch(monkeypatch, json_router={
+        "/books": {"books": [{"id": 42, "title": "扁平书"}]},
+        "/book/42": {"id": 42, "description": "扁平简介",
+                     "publishers": [{"name": "某社"}]},
+    })
+    e = _one("ranobedb")[0]
+
+    assert e["description"] == "扁平简介" and e["publisher"] == "某社"
 
 
 def test_ranobedb_详情失败回落列表字段(monkeypatch):
@@ -121,6 +161,35 @@ def test_ranobedb_详情失败回落列表字段(monkeypatch):
     e = _one("ranobedb")[0]
 
     assert e["title"] == "某轻小说" and e["author"] == "", "单本详情失败只丢那本的字段"
+
+
+# ---------------- 系列 / 卷号的归一化（第 103 期） ----------------
+
+def test_卷号只认数字其余留空():
+    """卷号会参与命名规则 `{series_index}`、缺册判定与 Komga 的 `seriesIndex`。
+
+    所以「宁可留空也不猜」：`"Kindle Edition"` / `"1-3"` 这类值一旦进了库，会变成
+    文件名里的一段乱码或者一个**错误的册号**，比没有更糟。
+    """
+    for raw, want in (("1", "1"), ("12", "12"), ("1.5", "1.5"), (" 2 ", "2"),
+                      ("1-3", ""), ("Kindle Edition", ""), ("卷三", ""),
+                      ("", ""), (None, ""), (7, "7")):
+        assert m._series_index_of(raw) == want, repr(raw)
+
+
+def test_多支系列取卷号最小的那支():
+    """同一本书的系列数组可能挂多支（正传 / 合集），而且**顺序不可信**
+    （Audible 实测：同一会话两次请求给出的先后不同）。
+
+    取「卷号最小」= 最具体的那支；**有数字卷号的优先于没号的**（能定位册序，信息更多），
+    都在没号的里面则取第一个有名字的，连名字都没有的条目直接跳过。
+    """
+    assert m._best_series([("The Dune Sequence", "12"), ("Dune", "1")]) == ("Dune", "1")
+    assert m._best_series([("Dune", "1"), ("The Dune Sequence", "12")]) == ("Dune", "1")
+    assert m._best_series([("合集", "12"), ("某系列", "")]) == ("合集", "12")
+    assert m._best_series([("", "1"), ("某系列", "3")]) == ("某系列", "3")
+    assert m._best_series([]) == ("", "")
+    assert m._best_series([("", "")]) == ("", "")
 
 
 # ---------------- 需密钥接口 ----------------
@@ -219,16 +288,35 @@ def test_kobo_从NEXT_DATA递归找书(monkeypatch):
 
 
 def test_audible_按catalog接口解析(monkeypatch):
+    """第 103 期起：系列进 ``series`` 字段，**不再塞进 tags**。
+
+    实测同一本书的 ``series`` 数组里会挂**多支**（正传 + 合集），而且**顺序不稳定**
+    （同一次会话里两次请求给出的先后就不同）⇒ 取卷号最小的那支。题材这里留空：
+    现有 ``response_groups`` 下 Audible 根本不返回题材（真机核对过顶层键）。
+    """
     _patch(monkeypatch, json_router={"audible": {"products": [{
         "asin": "B07", "title": "Dune", "authors": [{"name": "Frank Herbert"}],
         "publisher_name": "Macmillan Audio", "publication_datetime": "2019-05-28",
         "publisher_summary": "沙丘有声版", "language": "english",
-        "series": [{"title": "Dune"}], "product_images": {"500": "https://x/au.jpg"},
+        "series": [{"title": "The Dune Sequence", "sequence": "12"},
+                   {"title": "Dune", "sequence": "1"}],
+        "product_images": {"500": "https://x/au.jpg"},
     }]}})
     e = _one("audible")[0]
 
     assert e["title"] == "Dune" and e["author"] == "Frank Herbert"
-    assert e["cover_url"] == "https://x/au.jpg" and e["tags"] == ["Dune"]
+    assert e["cover_url"] == "https://x/au.jpg"
+    assert e["series"] == "Dune" and e["series_index"] == "1", "取卷号最小的那支"
+    assert e["tags"] == [], "系列名不该再占着 tags（题材这接口不给）"
+
+
+def test_audible_没有数字卷号时留名不留号(monkeypatch):
+    _patch(monkeypatch, json_router={"audible": {"products": [{
+        "asin": "B08", "title": "独本", "series": [{"title": "某系列"}],
+    }]}})
+    e = _one("audible")[0]
+
+    assert e["series"] == "某系列" and e["series_index"] == "", "没卷号就留空，不猜"
 
 
 def test_librofm_标题与作者配对(monkeypatch):

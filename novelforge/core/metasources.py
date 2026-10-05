@@ -383,6 +383,46 @@ def _year_of(value) -> str:
     return m.group(1) if m else ""
 
 
+#: 卷号只认这几种形态：``1`` / ``12`` / ``1.5``（calibre 的 series_index 是浮点文本）
+_SERIES_INDEX = re.compile(r"^\d+(?:\.\d+)?$")
+
+
+def _series_index_of(value) -> str:
+    """系列卷号（第 103 期）：**只认数字**，其余留空。
+
+    为什么不当普通文本照收：卷号会参与**命名规则**（``{series_index}``）、缺册判定
+    与 Komga 的 ``seriesIndex``，一个「Kindle Edition」这样的文本值会被当成「第几卷」
+    用，后果比留空严重得多。有的源在这个位置放的是「1-3」（套装）或整串副标题，
+    一律留空 —— 宁可少一个字段，也不给一个会被下游当数字用的错值。
+    """
+    s = _clean(value)
+    return s if _SERIES_INDEX.match(s) else ""
+
+
+def _best_series(candidates) -> tuple:
+    """多支系列里挑一支：``[(系列名, 卷号), …]`` → ``(系列名, 卷号)``（无则空串）。
+
+    ⚠️ **不能取第一条** —— 顺序不可信，两处实测：
+      · Audible 的 ``series`` 数组：同一本书两次请求给出的先后不同
+        （Dune 一次是「Dune #1, The Dune Sequence #12」，另一次倒过来）；
+      · Goodreads 的 ``bookSeries`` 里还会挂「合集 / 合订本」这种更大粒度的系列，
+        卷号往往是 12、13 这种大数字。
+    规则：**卷号最小的那支** = 最具体的子系列。取不到数字卷号的项一律**排在后面**
+    （有名字没卷号，也好过整项丢掉）。
+    """
+    best = None
+    best_rank = None
+    for name, index in (candidates or []):
+        name = _clean(name)
+        if not name:
+            continue
+        idx = _series_index_of(index)
+        rank = (0, float(idx)) if idx else (1, 0.0)
+        if best is None or rank < best_rank:
+            best, best_rank = (name, idx), rank
+    return best or ("", "")
+
+
 def _lang_of(value) -> str:
     v = _clean(value).lower().replace("_", "-")
     if not v:
@@ -587,6 +627,12 @@ def _entry(source: str, **kw) -> dict:
     由 fetcher 显式传（不要拿 ``raw_id`` 顶替 —— 后者对几家源是 URL）。
     它经 :data:`SOURCE_ID_FIELD` 落到对应字段；源没有对应字段就整条丢掉，
     绝不硬塞进别的字段。
+
+    第 103 期起多带 ``series`` / ``series_index``：这两项**早就建模了**
+    （``fileops.METADATA_FIELDS``、``kinds.FIELDS``、OPF 的 ``calibre:series``、
+    命名规则的 ``{series}`` 都有），只是候选结构里一直没有它们的键，抓到了也
+    **无处可放**（Audible 的系列名此前被塞进 ``tags``，正是这个缺口的副作用）。
+    卷号一律走 :func:`_series_index_of`：**只认数字**。
     """
     pid = _clean(kw.get("provider_id"))
     field = SOURCE_ID_FIELD.get(source)
@@ -599,6 +645,8 @@ def _entry(source: str, **kw) -> dict:
         "language": _lang_of(kw.get("language")),
         "isbn": _strip_html(kw.get("isbn")),
         "description": _strip_html(kw.get("description")),
+        "series": _strip_html(kw.get("series")),
+        "series_index": _series_index_of(kw.get("series_index")),
         "tags": [t for t in (_strip_html(x) for x in (kw.get("tags") or [])) if t][:8],
         "cover_url": _clean(kw.get("cover_url")),
         "raw_id": _clean(kw.get("raw_id")),
@@ -758,18 +806,49 @@ def _search_audnexus(title: str, author: str, limit: int, opts: dict) -> list:
 
 # ---------------- RanobeDB（轻小说库，公开 API v0）----------------
 
+def _ranobedb_index(series: dict, book_id) -> str:
+    """本册在系列里的卷号 = 它在 ``series.books`` 里的位置 + 1。
+
+    ``series`` 里**没有**卷号字段，但 ``books`` 是**按系列顺序**排的同系列书目列表
+    （第 103 期真机核验：Sword Art Online 29 册，各自标题里的序号与它在表里的位置
+    逐一吻合，28/29 直接对上，剩下那册是日文原名、序号也在标题里）。
+    所以「位置 + 1」不是猜，是读它的排序。
+
+    取不到（没有 series、books 为空、本书 id 不在表里）一律留空 —— 不拿书名里的
+    数字去凑（那本第 29 册的日文书名是 ``ソードアート・オンライン29``，正则抠数字
+    就是另一套脆弱逻辑了）。
+    """
+    ids = [b.get("id") for b in (series.get("books") or []) if isinstance(b, dict)]
+    try:
+        return str(ids.index(book_id) + 1)
+    except ValueError:
+        return ""
+
+
 def _ranobedb_entry(d: dict) -> dict:
-    """RanobeDB 单条 → 统一候选（**两段式**：列表无作者/简介，详情才有）。
+    """RanobeDB 单条 → 统一候选（**两段式**：列表无作者/简介/系列，详情才有）。
 
     ⚠️ 封面只给了 ``filename``，官方文档没公布 CDN 前缀 → **留空**而不是拼一个猜的 URL
     （宁可没有封面，也不要给一个 404 的图）。
+
+    第 103 期真机核验的详情形状：``series`` 是**对象**，键为
+    ``{books, id, lang, romaji, romaji_orig, tags, title, title_orig}``：
+      · 系列名取 ``title``（``title_orig`` 是原文名，``romaji`` 实测为 null）；
+      · 卷号见 :func:`_ranobedb_index`；
+      · ⚠️ ``tags`` **只在系列上**，书的详情里没有（列表也没有）—— 以前这里读
+        ``d["tags"]`` 于是**永远是空的**。系列题材兜底当书的题材：同一个系列共用
+        题材本来就是 RanobeDB 自己的建模。
     """
     staff = [s for ed in (d.get("editions") or []) for s in (ed.get("staff") or [])]
     author = next((s.get("name") for s in staff if s.get("role_type") == "author"), "")
     if not author and staff:
         author = staff[0].get("name") or ""
     pubs = d.get("publishers") or []
+    series = d.get("series") if isinstance(d.get("series"), dict) else {}
     tags = [t.get("name") if isinstance(t, dict) else t for t in (d.get("tags") or [])]
+    if not tags:
+        tags = [t.get("name") if isinstance(t, dict) else t
+                for t in (series.get("tags") or [])]
     return _entry(
         "ranobedb",
         title=d.get("title") or d.get("romaji"),
@@ -778,6 +857,8 @@ def _ranobedb_entry(d: dict) -> dict:
         year=d.get("c_release_date") or d.get("start_date"),
         language=d.get("lang"),
         description=d.get("description"),
+        series=series.get("title") or series.get("romaji") or series.get("title_orig"),
+        series_index=_ranobedb_index(series, d.get("id")),
         tags=tags,
         raw_id=d.get("id") or "",
     )
@@ -796,7 +877,17 @@ def _search_ranobedb(title: str, author: str, limit: int, opts: dict) -> list:
                 # 逐本补详情（列表不给作者/简介/出版社）。**单本失败只丢这一本**，
                 # 用列表里已有的字段顶上 —— 一轮抓取不该被其中一本书拖垮。
                 fetched = _get_json(f"{RANOBEDB}/book/{bid}")
-                if isinstance(fetched, dict) and fetched:
+                # ⚠️ 第 103 期真机核验：详情响应把内容**套在一个 `book` 键里**
+                # （`{"book": {id, description, publishers, editions, series, …}}`）。
+                # 直接 `{**b, **fetched}` 只会并进一个 `book` 键，内层字段**一个都进不来**：
+                # 作者 / 出版社 / 简介全空，而且**不报错**（表现为这家源永远给不出作者，
+                # `score_candidate` 只剩书名那 0.7 分 < 默认阈值 0.75 ⇒ 候选在默认配置下
+                # 永远进不了合并，整家源白挂）。所以先剥一层，剥不到再按扁平吃（接口形状
+                # 随版本变过，留这条兜底免得哪天再变回去时整家**静默**变空）。
+                inner = fetched.get("book") if isinstance(fetched, dict) else None
+                if isinstance(inner, dict) and inner:
+                    detail = {**b, **inner}
+                elif isinstance(fetched, dict) and fetched:
                     detail = {**b, **fetched}
             except Exception:                       # noqa: BLE001
                 pass
@@ -1105,6 +1196,30 @@ def _rsc_authors(rows: dict, book: dict) -> str:
     return ", ".join(names)
 
 
+def _rsc_series(rows: dict, book: dict) -> tuple:
+    """Goodreads 的系列：``(系列名, 卷号)``，没有就给 ``("", "")``。
+
+    实测 ``bookSeries`` 是**一层列表**，但列表里那项的 ``series`` 可能是内联字典，
+    也可能是**路径引用字符串** —— 同一页的两本书就是两种写法（见夹具
+    ``tests/fixtures/metasources/goodreads_search.html``）⇒ 必须再解一次引用。
+
+    多项时按 :func:`_best_series` 取（卷号最小的那支，**不是**第一条）。
+    """
+    items = _rsc_value(rows, book.get("bookSeries"))
+    if not isinstance(items, list):
+        return "", ""
+    pairs = []
+    for item in items:
+        item = _rsc_value(rows, item)
+        if not isinstance(item, dict):
+            continue
+        series = _rsc_value(rows, item.get("series"))
+        if not isinstance(series, dict):
+            continue
+        pairs.append((series.get("title"), item.get("seriesPlacement")))
+    return _best_series(pairs)
+
+
 def _search_goodreads(title: str, author: str, limit: int, opts: dict) -> list:
     """Goodreads 搜索结果页抓取 —— 数据在 **RSC flight payload** 里，不在 DOM 里。
 
@@ -1125,10 +1240,8 @@ def _search_goodreads(title: str, author: str, limit: int, opts: dict) -> list:
     是否被拦取决于 IP 信誉，**不是**「站点挂了」，也不是解析问题。
 
     ⚠️ payload 里**有**系列信息（``bookSeries`` → ``seriesPlacement`` + 系列名），
-    实测能解出来（如 ``("Remembrance of Earth's Past", "1")``），但**不在这里返回**：
-    :func:`_entry` 的候选结构没有 ``series`` / ``series_index`` 两个键，
-    `metafetch._VALUE_KEYS` 也没有这个映射 ⇒ 传了会被静默丢掉。要接上它得同时动
-    候选结构、字段映射、收尾模式与 OPF 写入四处，属于**另一件事**（见 `docs/TODO.md`）。
+    第 103 期起接上了（见 :func:`_rsc_series`）：此前不返回不是因为解不出来，
+    而是候选结构里没有 ``series`` / ``series_index`` 两个键，传了会被**静默丢掉**。
     """
     html = _get_text(GOODREADS, params={"q": f"{_clean(title)} {_clean(author)}".strip()})
     rows = _rsc_rows(html)
@@ -1141,10 +1254,12 @@ def _search_goodreads(title: str, author: str, limit: int, opts: dict) -> list:
         if key and key in seen:
             continue
         seen.add(key)
+        series, series_index = _rsc_series(rows, book)
         out.append(_entry("goodreads", title=_clean(_rsc_text(rows, book.get("title"))),
                           author=_rsc_authors(rows, book),
                           year=_rsc_year(book),
                           description=_strip_html(_rsc_text(rows, book.get("description"))),
+                          series=series, series_index=series_index,
                           cover_url=_clean(_rsc_value(rows, book.get("imageUrl"))),
                           raw_id=url, provider_id=_goodreads_id(url)))
         if len(out) >= limit:
@@ -1223,13 +1338,25 @@ def _search_audible(title: str, author: str, limit: int, opts: dict) -> list:
         imgs = p.get("product_images") or {}
         cover = imgs.get("500") or imgs.get("1000") or next(iter(imgs.values()), "") \
             if isinstance(imgs, dict) else ""
+        # 系列：`series` 是**对象数组**，常常挂多支（实测 Dune 同时属于「Dune」#1 与
+        # 「The Dune Sequence」#12），且顺序不稳定 ⇒ 交给 `_best_series` 挑。
+        series, series_index = _best_series([(s.get("title"), s.get("sequence"))
+                                            for s in (p.get("series") or [])
+                                            if isinstance(s, dict)])
         out.append(_entry("audible", title=p.get("title"), author=authors,
                           publisher=p.get("publisher_name") or p.get("publisher_summary"),
                           year=p.get("publication_datetime") or p.get("release_date"),
                           language=p.get("language"),
                           description=p.get("publisher_summary"),
-                          tags=[s.get("title") for s in (p.get("series") or [])
-                                if isinstance(s, dict) and s.get("title")],
+                          series=series, series_index=series_index,
+                          # ⚠️ 题材**不从这里来**：此前把系列名塞进了 `tags`（把值写错
+                          # 地方，还污染题材黑名单与跨源合并）。实测现有
+                          # `response_groups` 下 Audible 根本不返回题材
+                          # （`thesaurus_subject_keywords` / `category_ladders` 都不在
+                          # 响应里），所以 tags 就是空 —— 不为了好看去凑一个。
+                          # ⚠️ **不要**为了拿题材去加 response_group：第 99 期核过，
+                          # 带一个非法组名（`publisher`）会让接口直接 400、整家永远 0 结果。
+                          tags=[],
                           cover_url=cover, raw_id=p.get("asin") or "",
                           provider_id=p.get("asin") or ""))
     return out

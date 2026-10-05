@@ -229,6 +229,23 @@ def test_goodreads_年份从epoch毫秒换算(monkeypatch):
     assert out[1]["year"] == "2015"
 
 
+def test_goodreads_系列两种形态都解得开(monkeypatch):
+    """``bookSeries`` 在真机上**两种形态并存**，两种都要解出来（第 103 期）：
+
+    * 第 1 本：内联字典 —— ``bookSeries[0].series`` 直接就是 Series 对象；
+    * 第 2 本：**路径引用** —— ``series`` 是 ``"$4d:props:children:…:series"``，
+      只解外层 ``bookSeries`` 的话这里会拿到一个**字符串**（看着有值，其实没法用）。
+
+    系列与卷号此前一直被丢掉：候选结构里没有这两个键，传了也会被静默剔除 ——
+    同一份 payload 里其实**早就带着**它们。
+    """
+    _stub_page(monkeypatch, _gr_html())
+    out = metasources._search_goodreads("three body problem", "", 10, {})
+
+    assert [e["series"] for e in out] == ["Remembrance of Earth's Past"] * 2
+    assert [e["series_index"] for e in out] == ["1", "2"], "卷号来自身份引用解出的 seriesPlacement"
+
+
 def test_goodreads_封面与provider_id成套(monkeypatch):
     """``legacyId`` 是该源的规范 ID，落在 ``goodreads_id`` 字段；封面是 Amazon 图床。"""
     _stub_page(monkeypatch, _gr_html())

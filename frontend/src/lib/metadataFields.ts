@@ -96,7 +96,8 @@ export const DB_ONLY_FIELDS: ReadonlySet<string> = new Set<string>([
  */
 export const POLICY_FIELDS: (keyof BookMetadataFields | 'cover')[] = [
   'title', 'author', 'publisher', 'date', 'language', 'isbn',
-  'description', 'tags', 'cover', 'subtitle', ...PROVIDER_ID_FIELDS,
+  'description', 'tags', 'series', 'series_index', 'cover', 'subtitle',
+  ...PROVIDER_ID_FIELDS,
 ]
 
 /** 策略键的中文名（`cover` 不在 `FIELD_LABELS` 里，单独补） */

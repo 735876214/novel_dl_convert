@@ -291,12 +291,24 @@ DEFAULTS = {
             "title": "overwrite", "author": "overwrite", "publisher": "overwrite",
             "date": "overwrite", "language": "overwrite", "isbn": "overwrite",
             "description": "overwrite", "tags": "overwrite", "cover": "overwrite",
-            # 第 63 期：副标题与 9 个提供商 ID（与 metafetch._FINALIZE_FIELDS 同集合）。
-            # ⚠️ **老配置不会自动获得这 10 个键**：本函数对 `metadata_fetch` 只有**一层**
+            # 第 103 期：系列与卷号**默认 fill_only**（与这张表其它项的 overwrite 不同，**故意的**）：
+            #   · 系列会参与**命名规则**（`{series}` / `{series_index}`）与系列视图 ——
+            #     覆盖掉用户已经理好的中文系列名（「三体」被换成 Goodreads 的
+            #     "Remembrance of Earth's Past"）会直接改分组、改文件名；而抓取的收益
+            #     主要在**没有**系列信息的书上（补空），所以 fill_only 拿到了绝大部分好处；
+            #   · 在线源常常挂**多支**系列（正传 / 合集 / 套装），哪支是「主系列」由源决定，
+            #     不该让一次抓取改掉用户的分组。
+            # 想覆盖就去设置页把这两项调成 overwrite —— 逐字段策略优先于这里的默认值。
+            "series": "fill_only", "series_index": "fill_only",
+            # 第 63 期：副标题与 9 个提供商 ID（与 metafetch._FINALIZE_FIELDS 同集合，
+            # 第 103 期又加了 series / series_index）。
+            # ⚠️ **老配置不会自动获得这些新键**：本函数对 `metadata_fetch` 只有**一层**
             # 浅合并（`data[k].update(v)`，见 :func:`load_config`），用户 config.yaml 里
             # 存过的 `fields` 子字典会**整体替换**这里的默认值。用户存过的是预设
             # （整表同档），所以 `metafetch._field_policy` 负责把那个意图还原到新键上。
             # 那句注释之所以写在这里：**加字段的人要记得去改那个函数**。
+            # 也正因如此，上面那两条 `fill_only` 只对**新**配置生效；老配置里存过整表
+            # overwrite 的用户，这两项也会按 overwrite 走（那是他选的预设）。
             "subtitle": "overwrite", "google_books_id": "overwrite",
             "goodreads_id": "overwrite", "amazon_id": "overwrite",
             "hardcover_id": "overwrite", "openlibrary_id": "overwrite",

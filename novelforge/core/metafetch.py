@@ -36,6 +36,11 @@ _COVER_TIMEOUT = httpx.Timeout(20.0, connect=8.0)
 _CURRENT = {
     "title": "title", "author": "author", "publisher": "publisher", "date": "year",
     "language": "language", "isbn": "isbn", "description": "description", "tags": "tags",
+    # 第 103 期：系列与卷号（书对象里的键与字段名同名）。这两项**早就有了消费者**
+    # （命名规则 `{series}` / `{series_index}`、系列视图、Komga 的 seriesIndex、
+    # OPF 的 `calibre:series`），缺的只是抓取线这一头 —— 候选结构与这里都没有它的键。
+    # ⚠️ 默认策略是 **fill_only**（见 `config.DEFAULTS`）：系列会参与改名，不该被在线值覆盖。
+    "series": "series", "series_index": "series_index",
     # 第 63 期：副标题与 9 个提供商 ID —— 书对象里的键与字段名同名，
     # 且**没有 OPF 原值**（``metastore._opf_value`` 会回落到空串，「恢复在线」对它们
     # 就是「回落到在线抓取值、没有在线值即为空」，与第 22 期非 EPUB 的语义一致）。
@@ -139,12 +144,12 @@ FINALIZE_PRESETS = {
 }
 #: `fields` 字典包含的字段键（与 config.DEFAULTS.metadata_fetch.fields 一致）
 #:
-#: ⚠️ 第 63 期起含副标题与 9 个提供商 ID。它们**必须**在这里 ——
+#: ⚠️ 第 63 期起含副标题与 9 个提供商 ID，第 103 期起含系列与卷号。它们**必须**在这里 ——
 #: ``preset_to_fields("embedded_only")`` 是把整张表写成 ``skip``，
 #: 漏了新字段就会出现「选了『仅用内嵌（不下载远程字段）』，却仍然写回 9 个在线 ID」
 #: 的自相矛盾。漏一个字段的表现是**静默的**：预设页说一套、抓取做另一套。
 _FINALIZE_FIELDS = ["title", "author", "publisher", "date", "language",
-                    "isbn", "description", "tags", "cover",
+                    "isbn", "description", "tags", "series", "series_index", "cover",
                     "subtitle", *fileops.PROVIDER_ID_FIELDS]
 
 
