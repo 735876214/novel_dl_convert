@@ -67,6 +67,20 @@ const mf = computed<Record<string, any>>(() => (cfg.value as any)?.metadata_fetc
 const has = (b: string) => meta.value.blocks.includes(b)
 
 /**
+ * 缓存有效期输入框 → 配置值（第 102 期）。
+ *
+ * ⚠️ 空串必须变成 **null** 而不是 `0`：后端把这两件事分得很清 —— `0` = 关闭缓存，
+ * 留空 = 按各来源自己声明的值（现为 600 秒）。若这里回落到 `0`，用户把输入框清空再
+ * 保存就等于**悄悄关掉了缓存**，而他以为自己只是「恢复默认」。
+ */
+function ttlInput(ev: Event): number | null {
+  const raw = (ev.target as HTMLInputElement).value.trim()
+  if (raw === '') return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
  * 可写字段（与后端 `metafetch._FINALIZE_FIELDS` / `config.DEFAULTS.metadata_fetch.fields`
  * 对齐；显示名给人看，键名给引擎用）。
  *
@@ -996,6 +1010,45 @@ watch(() => props.section, () => {
                class="w-20 rounded-md border border-border bg-muted px-3 py-1.5 text-[12.5px] text-foreground outline-none focus:border-ring focus:bg-card"
                @input="setVal('metadata_fetch.limit', Number(($event.target as HTMLInputElement).value))" />
         <span class="text-[11.5px] text-muted-foreground">越多越慢（每个源都会外呼一次）</span>
+      </div>
+
+      <!-- 缓存（第 102 期）：留空 = 按各来源声明（现为 600 秒），0 = 关闭。
+           「留空」与「0」是两个语义，输入框必须能把它们分开（见 ttlInput）。 -->
+      <div class="flex flex-wrap items-center gap-3 border-t border-border px-4 py-3.5">
+        <span class="text-[12.5px] text-foreground">搜索结果缓存有效期</span>
+        <input :value="mf.cache_ttl ?? ''" type="number" min="0" max="2592000" placeholder="默认"
+               class="w-24 rounded-md border border-border bg-muted px-3 py-1.5 text-[12.5px] text-foreground outline-none focus:border-ring focus:bg-card"
+               @input="setVal('metadata_fetch.cache_ttl', ttlInput($event))" />
+        <span class="text-[11.5px] text-muted-foreground">
+          秒。<strong>留空 = 按各来源默认</strong>（各来源目前都声明 600 秒，数据变动快的家可以自己声明更短），
+          <strong>0 = 关闭缓存</strong>（每次检索都真外呼，慢但最新）。只缓存「成功且非空」的结果 ——
+          一次网络抖动不会让某家源在整个有效期内「假死」。
+        </span>
+      </div>
+
+      <!-- 按 ID 取详情（第 102 期）：默认关。打开后，库里记过记录标识的书按那个**精确键**
+           回查，比拿书名再猜一次准；没有标识的书行为不变。 -->
+      <div class="flex items-center gap-4 border-t border-border px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">按记录标识精确回查</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            书里存过某家的记录标识时，直接按那个标识问该家要这条记录，<strong>而不是拿书名再猜一次</strong> ——
+            书名会重、会带副标题、会换语言写法，回查自己那条记录明显更准。
+            <span class="text-muted-foreground">
+              只对<strong>存过标识</strong>的书生效（没存过的走原来的检索，行为完全不变）；
+              目前只有 <strong>iTunes</strong> 与 <strong>Open Library</strong> 两家有这条通道，
+              其余家会如实回「这家没有按 ID 取详情的通道」。默认关闭。
+            </span>
+          </div>
+        </div>
+        <Button
+          size="sm"
+          :variant="mf.detail_fetch ? 'ghost' : 'primary'"
+          :disabled="saving"
+          @click="setVal('metadata_fetch.detail_fetch', !mf.detail_fetch); saveSection('metadata')"
+        >
+          {{ mf.detail_fetch ? '关闭' : '开启' }}
+        </Button>
       </div>
     </Card>
 
