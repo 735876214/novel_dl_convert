@@ -5411,3 +5411,83 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
   `MEMORY-REF.md`「第 96 期铁律」（七节）。
 - ⚠️ `.codebuddy/memory/2026-10-03.md` / `.vscode/settings.json` / `*.cookies.txt` 是**并行会话**的
   未提交内容：**不重写、不提交**。
+
+---
+
+## 第 97 期：四条 `[low]` 清理（候选 C）
+
+### 一、需求来源
+
+用户 2026-10-05 拍板「**做候选 C**」= 第 95 期审计（`docs/agents-audit-95.md` §6「未做及原因」）留下的四条
+`[low]`。其中 `GET /content` 一条审计原文写着「删之前需要一次**外部确认**或弃用公告」⇒ 询问用户后确认
+**没有外部脚本在用**，选择**直接删掉**。版本：**不发版**（照第 95 / 96 期先例）⇒ `VERSION` 仍 `0.94.0`。
+
+### 二、功能范围
+
+1. `novelforge/sources/manager.py`：`gate_reason(source=…, feature=…)` ⇒ **`gate_reason(feature=…)`** ——
+   删掉**自第 93 期删掉「仅放行公版源」起就不参与判定**的 `source` 形参（判定只剩 `download.enabled`
+   与 `download.toc_enabled` 两条）。同批改 **11 处传参调用点**（`novelforge/cli.py:153`、
+   `novelforge/server.py` 的 1070 / 1118 / 1182 / 1229 / 1290 / 1555 / 1636、`novelforge/core/autoupdate.py:169`、
+   `novelforge/sources/manager.py:148`、`novelforge/sources/store.py:151`）与 **2 处测试桩**
+   （`tests/test_autoupdate.py:47`、`tests/test_online_read.py:575`），以及 `sources/toc_sources.py` 里两处举例。
+2. `manager._mark` **不再写**历史键 `_source`（只写 `source` + `source_name`）；**读侧 `source_of` 保留**
+   （`str(item.get("source") or item.get("_source") or "")`）—— 那是**外部回传 item**（`cli.py --item` /
+   sidecar）的输入契约，不是给我们自己产物用的。
+3. `novelforge/config.py` 删掉 `LIBRARY_SOURCE_DIR` **Python 别名**（生产代码零引用）；`LIBRARY_SOURCE_DIRS1..N`
+   与**单根回退的环境变量**逻辑**照旧**（`os.getenv("LIBRARY_SOURCE_DIR", "/app/libraries")` 是真实部署模式）。
+   **18 个测试文件**改读 `LIBRARY_SOURCE_ROOTS[0]["path"]`（等价于原先的别名），`tests/conftest.py` 的
+   `isolated` 夹具删掉那份别名 patch（`LIBRARY_SOURCE_ROOTS` 那份留着 —— 它才是生效的那份）。
+4. `novelforge/server.py`：删掉 **`GET /content`**（旧式非 `/api` 路径：按 `supports_url(url)` 选一条已注册
+   书源、把它 `render()` 的结果原样当 HTML 回吐，每次都出网抓第三方页面），并同批删掉因此不再被使用的
+   `HTMLResponse` import；补 404 断言。
+
+### 三、单一真值源
+
+`source_of` 仍是「一条 item 属于哪个源」的唯一读法；`LIBRARY_SOURCE_ROOTS` 仍是来源根的唯一真值源
+（删掉别名后测试也直接读它）；`gate_reason` 仍是闸门的唯一判定入口。本期只删**死参数 / 冗余键 / 测试专用别名 /
+零消费者端点**，没有新增任何实现。
+
+### 四、防回归要点
+
+- `tests/test_api_smoke.py::test_旧内容端点已随零调用者移除`：`GET /content` 必须 **404**（AGENTS.md §1「删功能要删干净」）。
+- `tests/test_sources_search.py::test_命中带来源字段_失败源如实回报原因`：命中只断言 `source` / `source_name`（不再有 `_source`）。
+- 同文件另一条继续钉**读侧**契约：`source_of({"_source": "b"}) == "b"`、`source_of({"source": "a", "_source": "b"}) == "a"` —— 删的是**写**，不是读。
+- `tests/test_online_read.py::test_模块源码里不出现别的写盘入口` 的「字眼黑名单」**不动**（`LIBRARY_SOURCE_DIR` 那个字符串在这里的含义是「online.py 不许碰来源根」，与 config 的别名无关）。
+
+### 五、踩坑
+
+- ⚠️ **脚本报「全部命中」不等于文件真的改对**：本期的替换脚本对 `tests/test_sources_search.py` 那条断言
+  报告命中，但文件**实际没被改**（`git diff` 里只剩我事后用 edit 工具补的那一次），是聚焦用例
+  `KeyError: '_source'` 把它暴露出来的。**教训：批处理替换后必须跑聚焦用例 + 核对 `git diff`，别只看计数。**
+  机制未完全证实，怀疑与脚本里「先改内存 `buf`、再用 `glob` 从磁盘读同一批文件」的写法有关。
+- ⚠️ 删掉一个端点要顺手看**它独占的 import**（`HTMLResponse` 在 `server.py` 里就只剩那一行 import）。
+- ⚠️ 删调用点会**留下过期的注释举例**：`novelforge/core/network.py` 的 `verify_tls_enabled` docstring 原写
+  「没给就自己读一次（`/content` 这类没有 cfg 的调用点）」—— 举例的对象被删了，注释要同批改。
+
+### 六、未做及原因
+
+- `verify_tls_enabled(cfg=None)` 的 **`cfg` 缺省参数与全局回退保留**：生产侧唯一调用点 `DownloadManager`
+  总是传 cfg，但缺省分支仍被 `tests/test_source_url_import.py:178-179` 用 `{}` / `{"network": {...}}` 钉着，
+  且它是「只有全局配置」这类调用点的退路 ⇒ 要删得先决定「那种调用点该怎么办」，不在本期。
+- 前端只改了**一处注释**（`frontend/src/lib/api.ts` 的 `SearchHit.source` 说明），无行为变更。
+- `[low]` 之外的留档项照旧：`metasources` 五家 bs4 / `fileops` OPF 改写 / `library.py` 的 EPUB 解析重试
+  （都需要真机核验或先定依赖口径）。
+
+### 七、实测（收尾）
+
+| 项 | 值 |
+|---|---|
+| 后端全量 | **2128 passed / 25 skipped / 0 failed**（289.26 s，exit 0；第 96 期 2127 passed ⇒ **+1** = 新增的 `/content` 404 用例） |
+| 前端 | `type-check` **0 error** / `test:unit` **65 spec / 673 passed** / `build` **exit 0** |
+| `VERSION` | 仍 `0.94.0`（**未发版**） |
+
+### 八、收尾
+
+- 提交（中文、按能力分）：`refactor(sources): gate_reason 不再收不参与判定的 source 形参` →
+  `refactor(sources): 搜索结果不再写冗余的 _source 键` → `refactor(config): 删掉测试专用的 LIBRARY_SOURCE_DIR 别名` →
+  `refactor(server): 删掉零消费者的旧式 /content 端点` → `docs(97): 实施记录 + TODO + 审计复核 + 记忆`。
+- 文档：本节 + `docs/TODO.md`（头 / §0 / 删四条 `[low]` / §2 索引补 97）+
+  `docs/agents-audit-95.md`（四条 `[low]` 标注已清）+ `AGENTS.md` §4 基线 2152 → 2153。
+- 记忆：`.codebuddy/memory/2026-10-05.md` 第 97 期节 + `MEMORY.md` 索引第 97 期 +
+  `MEMORY-REF.md`「第 97 期铁律」。
+- ⚠️ 并行会话的未提交内容（`2026-10-03.md` / `.vscode/*` / `*.cookies.txt`）照旧**不重写、不提交**。

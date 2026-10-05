@@ -1026,3 +1026,53 @@ txt 书**两个落点都留档**（`blobs == [b"", "旧的留档"]`）、显式�
 回收失败即 `skip` 且**盘上零改动**。
 ⚠️ 加这类用例必须确认「改动前它会红」——否则是恒真断言。
 
+---
+
+### 第 97 期铁律（四条 `[low]` 清理：死参数 / 冗余键 / 测试专用别名 / 零消费者端点）
+
+#### 一、闸门 `gate_reason` 只剩两个开关，**没有来源维度**
+
+`novelforge/sources/manager.py` 的 `gate_reason(feature: str = "download") -> str`：
+`feature == "toc"` 看 `download.toc_enabled`，否则看 `download.enabled`。
+第 93 期删掉「仅放行公版源」后 `source` 形参就不参与判定了，第 97 期**把形参删掉**
+（11 处传参调用点 + 2 处测试桩同批改，`sources/toc_sources.py` 两处举例同步）。
+「**闸门只有一个入口**」这条纪律不变 —— 界面显示的原因与接口拒绝的原因仍是同一份原文。
+
+#### 二、`source_of` 是**读侧契约**：`_source` 的「不再写」与「仍然读」是两件事
+
+`manager._mark` 现在只写 `source`（前端与下载路径读的）+ `source_name`。
+`source_of(item)` 仍是 `str(item.get("source") or item.get("_source") or "")` ——
+`_source` 是**外部回传 item**（`cli.py --item` / sidecar 里手写的）的输入契约。
+**要删 `_source` 必须先换掉「外部回传」这条路**，否则旧 sidecar 失效；
+`tests/test_sources_search.py` 有一条专门钉 `source_of({"_source": "b"}) == "b"`。
+
+#### 三、`LIBRARY_SOURCE_DIR` 是同名的两个东西，**别一起删**
+
+- **环境变量** `LIBRARY_SOURCE_DIR`（`novelforge/config.py` 的 `os.getenv(..., "/app/libraries")`）：
+  `LIBRARY_SOURCE_DIRS1..N` 都没配时的**单根部署回退** ⇒ **必须保留**。
+- **Python 别名** `config.LIBRARY_SOURCE_DIR`（= `LIBRARY_SOURCE_ROOTS[0]["path"]`）：生产代码零引用，
+  只有测试在读 —— 第 97 期**删除**；测试改读 `LIBRARY_SOURCE_ROOTS[0]["path"]`（≈45 处 / 18 个文件），
+  `tests/conftest.py` 的 `isolated` 夹具里那份别名 patch 一并删掉（`LIBRARY_SOURCE_ROOTS` 那份才是生效的）。
+
+#### 四、删端点要连它的**独占 import** 与**注释里的举例**一起清
+
+`GET /content`（旧式非 `/api` 路径：按 `supports_url(url)` 在 `REGISTRY` 里选一条已注册书源、
+把 `src.render()` 的结果原样当 HTML 回吐，**每次都出网抓第三方页面**）在仓内零消费者，
+经用户确认无外部脚本在用后**删除**，并补 **404 断言**（`tests/test_api_smoke.py`）。连带两处：
+① `HTMLResponse` 在 `server.py` 里只被它用过 ⇒ import 同批删；
+② `novelforge/core/network.py` 的 `verify_tls_enabled` docstring 原拿 `/content` 当「没有 cfg 的调用点」举例
+⇒ 举例过期要改（**删调用点最容易漏的就是注释里的举例**）。
+
+#### 五、`verify_tls_enabled(cfg=None)` 的缺省分支**保留** —— 它有别的读者
+
+生产侧唯一调用点是 `DownloadManager`（总传 cfg），但缺省 / 空 dict 分支被
+`tests/test_source_url_import.py:178-179` 钉着，且它是「只有全局配置」这类调用点的退路。
+**要删得先决定那种调用点怎么办**，不在第 97 期。
+
+#### 六、⚠️ **脚本报「全部命中」不等于文件真的改对**
+
+第 97 期的替换脚本对 `tests/test_sources_search.py` 那条断言报告命中，但文件**实际没被改**
+（`git diff` 里只剩事后用 edit 工具补的那一次），是聚焦用例 `KeyError: '_source'` 把它暴露出来的。
+**教训：批处理替换之后必须 ① 跑聚焦用例 ② 核对 `git diff`，别只信计数与「已写 N 个文件」的输出。**
+机制未完全证实，怀疑与脚本里「先改内存 `buf`、再用 `glob` 从磁盘读同一批文件」的写法有关。
+

@@ -81,7 +81,7 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 
 ```bash
 # 后端测试（离线、全量；Windows 用 .venv\Scripts\python.exe）
-.venv/bin/python -m pytest                 # 当前基线 2152 例（2127 passed / 25 skipped；只增不减）
+.venv/bin/python -m pytest                 # 当前基线 2153 例（2128 passed / 25 skipped；只增不减）
                                            # ⚠️ 跑前先清空全部 proxy 变量，见第 5 节最后一条
 .venv/bin/python -m pytest tests/test_catalog.py -k 某关键字
 

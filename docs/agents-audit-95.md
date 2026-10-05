@@ -173,6 +173,7 @@ httpx.InvalidURL: Invalid port: ':1]'    # 堆栈 tests/test_network_limits.py:1
   `sources/manager.py:207` 的 `_source` 写入冗余（但 `source_of` 读它是**外部回传 item 的输入契约**，`cli.py --item` 在用）；
   `config.py:53` 的 `LIBRARY_SOURCE_DIR` Python 别名（~20 个测试在用）；
   `server.py:/content` 端点（仓内零消费者，**仓外消费者无法从仓内证明**）。已记进 `docs/TODO.md` §1。
+  ⚠️ **第 97 期已全部清掉**（用户拍板做「候选 C」，见 `docs/roadmap-gaps-remaining.md` 第 97 期段）：① `gate_reason` 的 `source` 形参**删除**（17 处调用点 / 11 处传参同批改，两个测试桩同步）；② `manager._mark` **不再写** `_source`（读侧 `source_of` 保留 —— 那是外部回传 item 的输入契约）；③ `config.LIBRARY_SOURCE_DIR` 别名**删除**（`LIBRARY_SOURCE_DIRS1..N` 的**环境变量回退照旧**；18 个测试文件改读 `LIBRARY_SOURCE_ROOTS[0]["path"]`）；④ `GET /content` 经用户确认**无外部脚本在用** ⇒ **直接删除**并补 404 用例。
 - **§5 批次 8（数据安全两处口径）**：用户**未勾选** ⇒ 本轮不动。两条仍待用户决策
   （`zipkind.unpack` 的 `remove_source` 真 `unlink`；`landing` 自动落地支无二次确认）。
   ⚠️ **第 96 期已落地**（见 `docs/roadmap-gaps-remaining.md` 第 96 期段）：第一条改成 `publish.recycle`（移入回收站 + 台账，可还原）；第二条经复核**改判** —— 「无二次确认」**不是缺口**（用户 2026-10-03 的口径明确要求自动覆盖，见 `novelforge/core/landing.py:3-6`），真缺口是「覆盖不可撤销」，已补成「覆盖前先回收；回收失败即中止、盘上零改动」。
