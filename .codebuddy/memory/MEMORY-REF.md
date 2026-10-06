@@ -1767,3 +1767,11 @@ payload 里**有**系列信息（实测能解出 `("Remembrance of Earth's Past"
   仍带着 Node 20 弃用警告；升大版本（`checkout v7` / `build-push v7` / `setup-* v4` / `login v4`）
   要重新核 input 有无更名，属**独立一件事**，挂 TODO §1。
 - 基线：第 105 期 **2311 例（2286 passed / 25 skipped）274.56 s**；`VERSION` 仍 `0.94.0`（**十一次不发版**）。
+
+### 八、收尾：CI 转绿（决定性证据）
+
+- 推送后 `Build and Push Image` run **318**（id `37394372273`，head_sha `ea2ad51`，`2026-10-06T00:30:30Z`
+  → `00:41:48Z`，约 11 分钟）**conclusion = success**；job `build`（id `112046720613`）第 7 步 `Build and push`
+  与第 8 步 `Ensure package is public` **全 success**（失败时是第 7 步 failure、第 8 步 skipped）
+  ⇒ 自 run 217（2026-10-01）起**连续 30 次失败终止**。
+- ⚠️ 教训：**「本机复现成功」只有放在 clone 里才算证据**；最终判据永远是 **CI 自己那一跑**（`runs/<id>` 的 `conclusion`）。

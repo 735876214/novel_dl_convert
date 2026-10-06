@@ -6685,5 +6685,11 @@ Build failed with 1 error:
 
 - 第 1 笔：`8a8ac2e fix(build): 补回被 .gitignore 静默忽略的 ui/input（CI 镜像构建失败的真因）`
   （`.gitignore` + 两个补回的文件 + 新契约测试）。
-- 第 2 笔：docs（AGENTS.md §5 新增该陷阱、TODO 头部/§0/§1/§2/§3、本段、三个记忆文件）。
+- 第 2 笔：`ea2ad51 docs(105): 记录 CI 镜像构建失败的真因与防回归契约`
+  （AGENTS.md §5 新增该陷阱、TODO 头部/§0/§1/§2/§3、本段、三个记忆文件）。
+- 第 3 笔：docs（把 CI 实测结果写回本段与 TODO）。
+- **CI 转绿（决定性证据）**：推送后 `Build and Push Image` run **318**（id `37394372273`，head_sha `ea2ad51`，
+  `2026-10-06T00:30:30Z` → `00:41:48Z`，约 11 分钟）**conclusion = success**；job `build`
+  （id `112046720613`）第 7 步 `Build and push`、第 8 步 `Ensure package is public` **全 success**
+  （对照失败的第 317 次：第 7 步 failure、第 8 步 skipped）⇒ 自 run 217（2026-10-01）起**连续 30 次失败到此终止**。
 - `VERSION` 不动（仍 `0.94.0`；用户**连续十一次**选择「先不发版」）。
