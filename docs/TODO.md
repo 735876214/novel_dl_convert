@@ -4,21 +4,26 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-06 —— 第 107 期**自动化收尾：落位器 + 三方对账**（用户 m08782「再谈自动化」立项）：
-把每期收尾里**机械的几处**交给 `tests/period_close.py` —— `new` 一次落位（roadmap 期段标题 / 本文件头部占位 /
-§2 一行 / §0 HEAD 链 / 两处基线 / `MEMORY.md` 索引行 / 手记轮次数改 VERSION 派生句），`check` 只读对账 R1–R8；
-缺锚点或期号已占用就**整体拒绝、绝不改一半**。工具**不写叙事、不做提炼**（第 106 期口径不变：收尾只写两处）。
-历史：第 106 期把记忆三件合并、收尾从「手改五处」减到「只写两处」；`VERSION` 仍 `0.94.0`（无版本变更）。
-按用户要求，**已做完的条目直接从本文件删除**（不再标 `[x]` 留痕），历史一律去 roadmap 查。
+**最后更新**：2026-10-06 —— 第 108 期**仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关**：
+用户 m09151 提了四条阅读动线问题（仪表盘点封面还弹浮层、手机横屏与平板侧栏常驻占掉一大块、
+阅读页仍顶着侧栏与顶栏、点设置面板旁边收不掉）；五处歧义问过用户（m09230）后按「仪表盘 = 快速启动器、
+读不动的格式去详情页、阅读路由整屏沉浸（外壳根本不渲染）、点阅读区任何非面板位置都关」全部落地，
+四条均由 headless Edge 在 1440×900 / 390×844 / 844×390 三种视口下实测通过。
+历史：第 107 期把每期收尾里机械的几处交给 `tests/period_close.py`（`new` 落位 + `check` 只读对账 R1–R8），
+本期是它第一次被真的用来收尾；`VERSION` 仍 `0.94.0`（连续十四轮不发版）。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口 + 第 105 期 CI 镜像构建修复 + 第 106 期记忆体系精简（收尾只写两处） + 第 107 期自动化收尾：落位器 + 三方对账；`VERSION` = **0.94.0**
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口 + 第 105 期 CI 镜像构建修复 + 第 106 期记忆体系精简（收尾只写两处） + 第 107 期自动化收尾：落位器 + 三方对账 + 第 108 期仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关；`VERSION` = **0.94.0**
   `VERSION` 仍 `0.94.0`（自 v0.94.0 起未再升版；最近一次升版见 `CHANGELOG.md`）——
   单一真值源，`GET /health` 下发。
   `CHANGELOG.md` 最新段仍是 `V0.94.0`。
-- 测试基线（第 107 期实测）：后端 **2340 例（2315 passed / 0 failed / 0 errors / 25 skipped）**，全量 329.85 s；
-  前端 **67 spec / 686 例**（第 104 期实跑全绿，本期未改前端行为）。
+- 测试基线（第 108 期实测）：后端 **2340 例（2315 passed / 0 failed / 0 errors / 25 skipped）**，全量 385.37 s；
+  前端 **69 spec / 710 例**（全量 1 failed / 709 passed，唯一失败是既有 flaky
+  `frontend/src/components/book/detail/ReadingLogTab.spec.ts`「接口失败 → 给重试」全量并行下超时、
+  单跑 12 passed；第 104 期起就有这条记录）；`vue-tsc --build --force` exit 0。
+  ⚠️ 新增前端 spec 必须登记进 `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`，
+  否则全量 pytest 会红（本期 `App.spec.ts` / `DashboardShelfRow.spec.ts` 就踩过一次）。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
   （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
   ⚠️ 长跑 pytest 必须**后台跑 + 轮询 junit**（前台会被 harness 的「长时间无输出」上限取消）。
@@ -155,6 +160,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 108 | 仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 108 期段 |
 | 107 | 自动化收尾：落位器 + 三方对账 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 107 期段 |
 | 106 | **记忆体系精简（收尾只写两处）**（用户 2026-10-06 直接提出 m08584：做完一期要把同一段「根因 / 证据 / 修法 / 核验」抄 **5 处**（`docs/roadmap-gaps-remaining.md` 本期段 / `MEMORY.md` / `MEMORY-REF.md` / `memory/YYYY-MM-DD.md` 当日日志 / `docs/TODO.md` 头部+§0+§1+§2+§3）+ `AGENTS.md` 基线；经 `ask_user_question` 选定**方案 B「先把记忆三件合并，再谈自动化」**）：① `.codebuddy/memory/MEMORY.md`（48903 B / 86 行 → **8588 字符 / 92 行**）只留**铁律小节 + 一期一行索引**，逐期索引正文（24857 字符）移入存档；② `.codebuddy/memory/MEMORY-REF.md`（207485 B / 1777 行 → **14635 字符 / 122 行**）保留行 1–116 主题部分，改成**按主题的域手册**（逐期原文 106673 字符移入存档，**不再按期号追加**，只有新领域知识才补小节）；③ **取消当日日志**（2026-10-06 起不再新建 `memory/YYYY-MM-DD.md`，既有日期文件保留为历史）；④ 逐期铁律全文 → 新存档 `.codebuddy/memory/MEMORY-PERIODS.md`（**132070 字符 / 1696 行**，A=原 `MEMORY.md` 索引 75–105 期、B=原 `MEMORY-REF.md` 逐期原文 53–105 期，**两份原样合入**、已在文件头标注 81–105 期重叠属历史、未合并以免丢信息；缺 62–65 / 74–78 / 80 期只在 A 里有）。⚠️ **文件名一律不动** —— 它们被 `AGENTS.md:15`、`AGENTS.md:165`、`docs/development.md:79`、`novelforge/core/sqlcompat.py:7`（引 `MEMORY.md`「自动化测试」小节，该小节**保留**）、`tests/test_engine_urlspec.py:205`、`tests/test_library_count_contract.py:19` 引用。规则落点：`AGENTS.md` §0 第 3 条（读哪三份）+ §6「**每期收尾只写两处（第 106 期起，用户 m08584 要求精简）**」（① roadmap 本期段 = **唯一叙事** ② `MEMORY.md` 索引加一行 ③ 不再建当日日志 ④ 不再按期号追加 `MEMORY-REF.md` ⑤ 存档只读、按 `### 第 N 期` 搜 ⑥ `docs/TODO.md` 与 `AGENTS.md` 基线数字仍同批更新）、`docs/development.md` 回归清单同条。**守恒核验**：脚本 `nf_p106_restructure.py` 写前断言索引标记/逐期标记各唯一、写后断言旧索引与逐期原文**逐字**仍在存档且**不在**两个新文件里（输出 `moved_index=24857 moved_periods=106673`、两条 `check → True`）；`python tests/check_doc_anchors.py` **exit 0**（纯文档改动，未动代码与用例 ⇒ 基线仍 2311 例）。**没做**：自动化（脚本生成索引 / 漂移校验）按用户选择**留到下一轮**（**不发版**，`VERSION` 仍 0.94.0） |
 | 105 | **CI「Build and Push Image」全失败修好**（用户 2026-10-06 直接立项）：先查历史 —— 该工作流 **run 288–317 全 failure**（2026-10-03 起），最后一次 success 是 run 217（2026-10-01，sha `99ee3494`）⇒ **既存故障**，与第 104 期那几笔提交无关。失败步骤 = job `build` 第 7 步 `Build and push`（`docker/build-push-action@v6`）；annotation **只给最后一行**，真正的 vite 报错要用本机 `git credential fill` 的 token 下 `GET /actions/jobs/<id>/logs`（⚠️ 返回**纯文本日志**、不是 zip）才拿到：`[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`（`SidebarInput.vue:4`）。**根因**：`.gitignore` 的 `input/` **不带前导斜杠** ⇒ 匹配**任意层级**同名目录 ⇒ 第 90 期新增的 `frontend/src/components/ui/input/`（`Input.vue` + `index.ts`）**从未入库**；本机文件一直在 ⇒ 本地 `npm run build` / `vue-tsc` / 单测**永远绿**，CI 从 clone 构建才断链。**修法**：运行时目录全部锚定仓库根（`/input/` `/output/` `/cookies/` `/cache/` `/config/cookies/` `/config/cache/`）+ 补回那两个文件，**刻意不加任何兜底**（不在 workflow 里 `git add -f`、不给 vite 加 alias）。**防回归**：`tests/test_source_tracking_contract.py` 两例（源码树不许有被 `.gitignore` 忽略的文件；`@/` 别名导入必须落在**已入库**路径上），**「改动前会红」已实测**。**核验口径**：在本工作区构建成功**不算证明**（工作区本来就有那两个文件）—— 必须 `git clone` 到临时目录（只有已入库内容）再跑 `docker build --target frontend`（实测 `#10 RUN npm run build` **真执行**、`✓ built in 2.44s`、EXIT=0）。后端全量 **2311 例全绿**（+2）。**CI 已转绿**：推送后 `Build and Push Image` run **318**（id `37394372273`，head_sha `ea2ad51`，约 11 分钟）conclusion **success** —— job `build` 第 7 步 `Build and push` 与第 8 步 `Ensure package is public` **全 success**（失败时是第 7 步 failure / 第 8 步 skipped）⇒ **自 run 217（2026-10-01）起连续 30 次失败终止**（**不发版**，`VERSION` 仍 0.94.0） |
@@ -221,6 +227,9 @@
   （`tests/period_close.py` 的 `new` / `check`），见 roadmap 第 107 期段 ——
   ⚠️ 这条正是第 106 期收尾时明确留给用户的那**两件事（索引行生成 + 三方漂移校验）**，属**已知候选**而非新需求，
   立项时它还没写进本节。
+  第 108 期仍由**用户直接立项**（用户 m09151 报的四条阅读动线问题：仪表盘点封面还弹浮层 / 手机横屏与平板
+  侧栏常驻 / 阅读页仍顶着侧栏与顶栏 / 设置面板点旁边收不掉；五处歧义经 m09230 全部选推荐项）——
+  属**用户体感反馈**，不从 TODO 取，见 roadmap 第 108 期段。
   ⚠️ 第 102 期按拍板口径**只做了地基、零新源**：**分期做**（用户原话），
   微信读书一家中文源与其余能力留待后续期次；`docs/roadmap-gaps-remaining.md` 第 102 期段
   已写清「本期刻意不做」的边界（不新建 providers 包 / 不搬 1833 行解析实现 / 不改 `metascore` 计分 /

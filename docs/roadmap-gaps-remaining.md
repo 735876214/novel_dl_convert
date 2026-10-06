@@ -6885,3 +6885,106 @@ Build failed with 1 error:
 本期自己就是用 `new` 落位的（先跑 `new` 拿到期段标题，再手写本节），落位后 `check` 0 问题、`tests/check_doc_anchors.py` 硬错 0。
 收尾口径仍是第 106 期那两处（roadmap 本节 + `MEMORY.md` 索引一行），**不发版**（`VERSION` 仍 `0.94.0`，连续第十三轮）。
 下一期开工时，收尾只需：写一次 roadmap 段 → `python tests/period_close.py new --period N --title "…" --numbers "…"` → 手写那两句话 → `check`。
+
+## 第 108 期（仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关）
+
+### 一、立项与范围（用户 m09151 四条）
+
+用户原话（第 108 期立项）：
+
+> 1、在仪表板点击图书，直接进入阅读状态，不要有弹窗。2、手机端进入时左侧栏自动折叠。
+> 3、阅读时，除阅读界面外，其他栏自动隐藏。4、阅读界面点击设置后，若点击除设置窗口以外的地方，自动隐藏设置界面
+
+五处歧义先问后做（用户 m09230 全部选推荐项，答案即口径）：
+
+1. **读不了的格式**（MOBI/AZW3/KEPUB 等不在阅读器能力里）点封面 ⇒ **进该书详情页**，与仪表盘「继续阅读」部件既有行为一致（不许点了没反应）。
+2. **撤掉预览浮层后仪表盘丢掉的四个动作**（收藏 / 编辑元数据 / 移动书库 / 删除）⇒ **接受**：仪表盘按「快速启动器」定位，这些动作书架页与详情页都有。
+3. **「其他栏自动隐藏」的形态** ⇒ **进阅读页即整屏沉浸：侧栏与顶栏都不渲染**（不是「隐藏但占位」）；阅读器自带的工具栏（含「返回详情」）保留。
+4. **「点设置以外」的判据** ⇒ 阅读区**任何非面板位置**都关（含滚动模式点正文）；点工具栏其它按钮时**先关面板、再执行那个按钮**。
+5. **手机端现状** ⇒ 竖屏本来就已经收起；用户要修的是**横屏或平板宽度下侧栏常驻、占掉一大块**这一类设备。
+
+### 二、勘察事实（决定了改动落在哪四个文件）
+
+- **仪表盘封面**：`frontend/src/components/dashboard/DashboardShelfRow.vue` 是仪表盘唯一入口 —— `:256` 封面 `<button @click="openPreview(b)">`，`:286-309` 把 `BookPreviewDialog` + `BookMoveDialog` 放进 `<Teleport to="body">`。既有直读先例就在同一个目录：`frontend/src/components/dashboard/widgets/CurrentlyReadingWidget.vue:33` 的 `void router.push(openTargetOf(b)?.to ?? '/book/' + b.id)`。
+- **「读得读不得」的判据**：`frontend/src/lib/bookOpen.ts` 的 `READER_FORMATS = new Set(['EPUB','PDF','CBZ','CBR','TXT','UNITS'])` 与 `openTargetOf()`（AUDIO ⇒ `/listen/:id`、可读 ⇒ `/read/:id`、其余 `null`）。这是全站唯一真值源，本期**第二份实现一个都不许写**。
+- **外壳**：`frontend/src/App.vue` —— `:172` 登录门禁、`:182` `<SidebarProvider>`、`:185/:186` 两个侧栏、`:188-193` `<SidebarInset>` 里 `AppHeader` + `<main>` 包 `<RouterView>`。路由名在 `frontend/src/router/index.ts:176-182`：`/read/:id` → `name: 'read'`、`/online/:id` → `name: 'online'`（**同一个 ReaderView**）、`/listen/:id` → `name: 'listen'`（播放器，不是阅读界面）。
+- **抽屉判据**：`frontend/src/lib/viewport.ts:25` 的 `NARROW_QUERY = '(max-width: 639.98px)'` 是断点唯一真值源；`SidebarProvider` 用它算 `isMobile`，`Sidebar.vue` 按它选「抽屉」还是「常驻」。**只按宽度判 ⇒ 844×390 这类「宽但矮」的手机横屏落进常驻分支**，这正是第 5 条口径说的现象。
+- **设置面板**：`frontend/src/views/ReaderView.vue:2334-2353` 的工具栏里，`:2350` 是一条 `absolute right-0 z-30 …` 浮层（**没有遮罩**）。收面板现有两条路：`onReaderClick`（`:583` 首行 `if (!paged.value) return` ⇒ 默认滚动模式根本进不来）与 `onKeydown` 的 Esc。**点旁边没有任何一条路能收** ⇒ 必须补一条 document 级监听。
+
+### 三、改动（四条，逐条记「改了哪、为什么这么改」）
+
+**① `frontend/src/components/dashboard/DashboardShelfRow.vue`：封面 = 直接开**
+
+- 新增 `function openBook(b: BookCard): void { void router.push(openTargetOf(b)?.to ?? '/book/' + b.id) }`，模板改成 `@click="openBook(b)"`。
+- 随浮层一起删掉的是**它带来的整套状态**：`previewBook` / `openPreview` / `openDetailFromPreview` / `editMetadataFromPreview` / `moveOpen` / `moveIds` / `moveFromPreview` / `onMoved` / `onPreviewChanged`、`<Teleport to="body">` 整块、以及 `BookPreviewDialog` / `BookMoveDialog` / `metadataEditPath` 三个 import（§7.2：不许留死配置）。
+- 注释里写明**别再往封面挂第二个按钮把浮层请回来** —— 否则第 108 期这条口径会被下一期无意推翻。
+
+**② `frontend/src/lib/viewport.ts` + `ui/sidebar/SidebarProvider.vue` + `ui/sidebar/Sidebar.vue`：抽屉判据按「设备」而不是「宽度」**
+
+- 新增 `export const DRAWER_QUERY = \`${NARROW_QUERY}, (pointer: coarse) and (max-width: 1023.98px)\`` 与 `useDrawerLayout()`（`mediaQueryUsable()` 兜底与 `useNarrowScreen()` 逐字一致：读不到 `matchMedia` ⇒ 按不抽屉）。
+- `SidebarProvider` 的 `isMobile` 改用 `useDrawerLayout()`。**名字仍叫 isMobile**（它是「侧栏该是抽屉」的开关，改名会牵动 5 个消费方），语义写在注释里。
+- 为什么用**指针精度**而不是纯宽度：纯宽度会把「桌面窗口拖窄到 900px」（第 90 期明确的用户口径：640–767 继续两栏）一起卷进来。`1023.98` 与 Tailwind `lg`=1024 严丝合缝，和 `639.98`/`sm`=640 同一个写法。
+- 只加进 `DRAWER_QUERY` 一处：`Sidebar.vue` 里 `hidden sm:block` 只是**同一判据的 CSS 副本**，② / ③ 两个分支仍由 JS 裁决 —— 差一个像素就会出现双份侧栏（第 90 期踩过）。
+
+**③ `frontend/src/App.vue`：阅读路由整屏沉浸**
+
+- 新增 `const isImmersiveRoute = computed(() => route.name === 'read' || route.name === 'online')`，模板在登录门禁之后插入一条**互斥分支**：
+  `<div v-else-if="isImmersiveRoute" class="flex h-[100dvh] min-h-0 flex-col overflow-hidden p-[var(--shell-content-gutter)]"><RouterView /></div>`
+- 是**不渲染外壳**，不是「把外壳藏起来」：`SidebarProvider` / 两个侧栏 / `AppHeader` 在阅读路由下**根本不存在**（藏起来仍会占着 `h-[100dvh]` 与滚动容器）。
+- 高度用 `100dvh`（移动端地址栏伸缩时不跳），内边距沿用 `--shell-content-gutter`；`/listen/:id` **刻意不在内** —— 那是播放器不是阅读界面，要收进去只需加一个名字。
+- `GuidedTourModal` / `LibraryWizard` / `AppToast` 在外壳之外，不受影响。
+
+**④ `frontend/src/views/ReaderView.vue`：点面板以外自动收**
+
+- 新增 `const settingsPanel = ref<HTMLElement | null>(null)`（模板面板 DIV 上挂 `ref="settingsPanel"`）与 `function onDocumentClick(e: MouseEvent)`：面板没开直接 return；`contains(target)` 命中面板自身或 `settingsBtn` 就 return；否则 `showSettings.value = false`（**不** `restoreFocus` —— 焦点已经随用户那一下走了）。
+- `onMounted` / `onBeforeUnmount` 成对挂/拆 `document.addEventListener('click', …)`。
+- 用 `click` 冒泡而**不是** `pointerdown`：组件自己的 `@click` 先跑完 ⇒ 翻页模式下那一次点击仍会被 `onReaderClick` 的早退吃掉（**收面板但不翻页**，正是用户要的）。
+- 面板里**不许**放 Teleport 到 body 的浮层（`Select` / `Popover`）：否则点下拉会被判成「点外面」。注释里写死了这条。
+
+### 四、测试（四个 spec 文件，710 例）
+
+- **新增 `frontend/src/components/dashboard/DashboardShelfRow.spec.ts`**（5 例）：EPUB 封面 ⇒ `/read/<id>`、AUDIO ⇒ `/listen/<id>`、MOBI ⇒ `/book/<id>`（读不了去详情）、点第二张封面取的是**被点那本**、以及「点完**页面里没有 `[role="dialog"]`**」（旧浮层 `frontend/src/components/book/BookPreviewDialog.vue:242` 就是 `role="dialog"`，Teleport 到 body ⇒ 必须查 `document` 而不是 `wrapper`）。
+- **改 `frontend/src/lib/viewport.spec.ts`**（16 例）：断言 `DRAWER_QUERY` 以 `NARROW_QUERY` 开头、两条 `max-width` 就是 `[639.98, 1023.98]`。老桩对所有 query 返回同一个答案 ⇒ **证明不了**「844 触屏抽屉、844 鼠标不抽屉」，于是新写一个按「宽 + 指针精度」真评 query 的桩（认不出的媒体特性**直接抛**），再用 `it.each` 钉一张视口表：`390/触屏`、**`844/触屏`**、`768/触屏` ⇒ 抽屉；`1024/触屏`、`844/鼠标`、`1440/鼠标` ⇒ 不抽屉。并断言被问到的 query 恰好是 `[DRAWER_QUERY]`（不是另抄一份条件）。
+- **改 `frontend/src/components/ui/sidebar/sidebar.spec.ts`**（21 例）：把「被问到的 query 是 `NARROW_QUERY`」改成 `DRAWER_QUERY` —— 这条**不改必红**（问法换了，`toContain` 是严格相等）。
+- **新增 `frontend/src/App.spec.ts`**（4 例，此前仓库没有 App 的 spec）：`#/read/:id` 与 `#/online/:id` ⇒ 无 `AppHeader`、无侧栏、无 `[data-slot="sidebar-wrapper"]`，且路由视图的父元素带 `h-[100dvh]`；`#/` ⇒ 三样都在；`#/listen/:id` ⇒ **外壳照旧**（把「刻意不沉浸」这个决定钉住）。
+- **改 `frontend/src/views/ReaderView.spec.ts`**（29 例）：滚动模式点正文收面板、点工具栏另一个按钮先收面板、点面板自己**不**收、点设置按钮仍由它自己的 toggle 说了算、卸载后 document 上没有遗留监听。
+- **登记**：两个新建的 spec 同时补进 `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`（那张表的语义是「**不登记 = 它可以被悄悄删掉**」，所以它自己有一条「所有 spec 都登记了」的自守用例）—— 没登记时全量 pytest 会红在 `tests/test_frontend_unit_contract.py:310`，并**精确点名**缺哪两个文件。表里给每条写清了「它护的是什么」，本期两条分别是「封面点击的去向」与「沉浸分支的正反两面」。
+
+### 五、核验（本机实测）
+
+**引擎测**：`node node_modules/vitest/vitest.mjs run` ⇒ `Test Files 1 failed | 68 passed (69)`、`Tests 1 failed | 709 passed (710)`；唯一失败是**既有 flaky** `frontend/src/components/book/detail/ReadingLogTab.spec.ts`「接口失败 → 给重试」（`Error: Test timed out in 5000ms`，实测 5761ms），**单跑 12 passed** ⇒ 与本期无关（第 104 期起就有这条记录）。
+`node node_modules/vue-tsc/bin/vue-tsc.js --build --force` ⇒ **exit 0**（首跑红在 `DashboardShelfRow.spec.ts`：`ShelfDef` 必填 `enabled`，补上即绿 —— vitest 不查类型，只有 vue-tsc 会抓）。
+`node node_modules/vite/bin/vite.js build` + `node scripts/deploy.mjs` ⇒ 产物同步进 `novelforge/static/v2`（⚠️ `build` 只写 `frontend/dist`，**`deploy` 才同步**）。
+
+**真机（headless Edge + CDP，`Emulation.setDeviceMetricsOverride` + `setTouchEmulationEnabled`）** —— 四条逐一实测，全部与口径一致：
+
+| 场景 | 探测 | 结果 |
+|---|---|---|
+| 1440×900 鼠标，点「三体」封面 | 点击后 +200/+800/+2000/+4000 ms 的 `location.hash` 与 `[role="dialog"]` | `#/read/lib-8d8943ae$…`、**全程无 dialog**、阅读器工具栏出现 ⇒ 第 1 条成立 |
+| 390×844 触屏 | `matchMedia(DRAWER_QUERY)` / 常驻侧栏是否可见 / 点触发器 | `true` / 不可见 / 弹出抽屉 ⇒ 竖屏仍是抽屉 |
+| **844×390 触屏** | 同上 | `true` / **不可见（修好前是常驻 240px）** / 弹出抽屉 ⇒ 第 2 条成立 |
+| 1440×900 鼠标 | 同上 | `false` / 常驻 240px 可见 ⇒ 没有把桌面卷进来 |
+| `#/read/<id>`（390×844 与 1440×900） | `header` / 触发器 / `[data-slot="sidebar-wrapper"]` / 阅读器工具栏 | 前三个**都不存在**、工具栏在 ⇒ 第 3 条成立 |
+| `#/read/<id>` 上点「阅读设置」→ 点正文 | `.z-30` 面板是否存在 | `true` → **`false`** ⇒ 第 4 条成立 |
+
+**这条核验本身踩的坑（值得记）**：本仓 SPA 用 **hash 路由**（`frontend/src/router/index.ts:2` `createWebHashHistory`）⇒ `location.pathname` 恒为 `/`，真正的路由在 `location.hash`；用 `Page.navigate(BASE + '/read/<id>')` 直接打路径拿到的是**服务端 404**（`{"detail":"Not Found"}`）。第一次探测因此误判成「点了封面没跳转」，改用 `#/read/<id>` 与 `location.hash` 后一切正常。探测脚本还顺手确认了 `desktopAsideShown` 要用 `[data-sidebar="sidebar"]:not([data-mobile="true"])` 选（抽屉那份带 `data-mobile="true"`，只有打开时才存在）。
+
+### 六、数字
+
+- 后端全量（第 108 期实测）：**2340 例（2315 passed / 0 failed / 0 errors / 25 skipped）**，全量 **385.37 s**，exit 0。本期唯一动过的 Python 文件是 `tests/test_frontend_unit_contract.py`（把两个新 spec 登记进 `EXPECTED_SPECS`）——**首跑正是这条契约把「新增 spec 没登记」抓了出来**（`1 failed, 2314 passed`，失败点 `tests/test_frontend_unit_contract.py:310`），补登记后重跑全绿；总例数不变，因为新增的是**前端** spec，不进 pytest 计数。
+- 前端：`69 spec / 710 例`（全量 1 failed / 709 passed，唯一失败是上述既有 flaky；单跑该文件 12 passed）；`vue-tsc --build --force` exit 0。
+- 改动规模：4 个组件/库文件 + 4 个 spec 文件（其中 2 个新建）。
+- `VERSION` 仍 `0.94.0`（**连续十四轮不发版**）。
+
+### 七、没做的事（如实记）
+
+- **书架页保留预览浮层**：`frontend/src/views/ShelfView.vue` 仍引 `BookPreviewDialog`。用户只要求改仪表板，且书架页的封面在列表里、误触代价不同 —— 要统一再单独立项。
+- **`/listen/:id` 不纳入沉浸**：播放器有自己的整屏形态，本期不放进来；`isImmersiveRoute` 想收它只加一个名字。
+- **`THUMBNAIL_READER_FORMATS` 没动**（刻意少 TXT，第 32 期既有行为）：本期只碰「点封面去哪」，没碰缩略图判据。
+- **没给面板加遮罩**：遮罩会挡住正文点击，与第 4 条口径（点正文也要能收面板）冲突；改用 document 监听 + `contains` 判据。
+- **`useNarrowScreen()` 保留**：它仍在别处（`AppHeader` 的窄屏布局）表达「屏幕窄」这件事，与「侧栏该是抽屉」是两件事，没有合并。
+
+### 八、收尾
+
+- 四条口径全部落盘并由真机视口核验；`tests/period_close.py check`（0 问题）与 `tests/check_doc_anchors.py`（exit 0，21 文档锚点）均通过；本期收尾是 `tests/period_close.py new` 第一次被真的用上。
+- 遗留：`frontend/src/components/book/detail/ReadingLogTab.spec.ts` 的 flaky（全量并行下超时、单跑绿）仍是既有问题，未在本期处置；`docs/TODO.md` §1 P1 里的 action 版本升级、`fileops.py` OPF 正则等条目照旧。
