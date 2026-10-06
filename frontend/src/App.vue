@@ -73,6 +73,20 @@ function tourSeen(): boolean {
 
 /** 设置路由下，左列渲染设置导航而非主侧栏 */
 const isSettingsRoute = computed(() => route.path.startsWith('/settings'))
+
+/**
+ * 沉浸路由（第 108 期，用户口径「阅读时除阅读界面外其他栏自动隐藏」）。
+ *
+ * `/read/:id` 与 `/online/:id` 是**同一个** `ReaderView`（两条路由各自一份现场，见
+ * `router/index.ts`），它们进入时**整块外壳都不渲染**：侧栏、顶栏、`SidebarInset`
+ * 一起让位，整屏交给正文。退出阅读的唯一路径是阅读器工具栏那颗「返回详情」
+ * （阅读器的工具栏自带返回 / 目录 / 设置）—— 所以这里不需要再留第二条退路。
+ *
+ * ⚠️ 按 `route.name` 判而不是路径前缀：路由表里是具名路由，改名时这里会**一起**失效
+ * （路径前缀写错则静默不生效）。`/listen/:id`（听书）**刻意不在内**：那是播放器
+ * 不是阅读界面，用户口径说的是阅读 —— 要收进去只需在这里加一个名字。
+ */
+const isImmersiveRoute = computed(() => route.name === 'read' || route.name === 'online')
 const settingsSearch = useSettingsSearch()
 
 /**
@@ -170,6 +184,20 @@ onUnmounted(() => {
 
 <template>
   <LoginGate v-if="showLogin" @authed="onAuthed" />
+
+  <!--
+    阅读器：整屏沉浸（第 108 期，用户口径）。
+    与下面那层外壳是**互斥**的两条渲染路径（`v-else-if`）—— 不是把外壳藏起来，而是
+    根本不渲染（藏起来仍会拉数据、仍占 DOM，还会留下一条 ⌘B 能掀开的缝）。
+    高度用 `100dvh`（移动端地址栏收放时 `vh` 会跳），内边距沿用同一个
+    `--shell-content-gutter`，与阅读时在外壳里的观感对齐。
+  -->
+  <div
+    v-else-if="isImmersiveRoute"
+    class="flex h-[100dvh] min-h-0 flex-col overflow-hidden p-[var(--shell-content-gutter)]"
+  >
+    <RouterView />
+  </div>
 
   <!--
     卡片式外壳：两块浮起卡片（侧栏 + 内容），块间一个 --shell-gap。
