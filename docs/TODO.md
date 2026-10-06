@@ -4,30 +4,30 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-06 —— 第 105 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续十一轮）：
-**修好 GitHub Actions「Build and Push Image」全失败**（用户直接立项）—— 先查历史：该工作流 **run 288–317 全 failure**
-（2026-10-03 起），最后一次 success 是 run 217（2026-10-01，sha `99ee3494`）⇒ **既存故障**。
-根因不在 vite、不在 node、也不在多架构：`.gitignore` 的 `input/` **不带前导斜杠**（本意是仓库根的运行时挂载点），
-而这类模式会匹配**任意层级**的同名目录 ⇒ 第 90 期新增的 `frontend/src/components/ui/input/`
-（`Input.vue` + `index.ts`，被 `ui/sidebar/SidebarInput.vue` import）被**静默忽略、从未入库**；
-本机文件一直在（所以本地 `npm run build` / `vue-tsc` / 单测**永远绿**），CI 从 clone 构建才报
-`[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`，连带**整个镜像构建 + 推送连续失败**。
-修法：运行时目录全部锚定仓库根（`/input/` `/output/` `/cookies/` `/cache/` `/config/cookies/` `/config/cache/`）
-+ 补回那两个文件，**刻意不加任何兜底**（不在 workflow 里 `git add -f`、不给 vite 加 alias）。
-新增 `tests/test_source_tracking_contract.py` 两例钉住（源码树不许有被 `.gitignore` 忽略的文件 + `@/` 别名导入
-必须落在**已入库**路径上），并已实测「改动前会红」。核验口径：**在本工作区构建成功不算证明**
-（工作区本来就有那两个文件）—— 必须 `git clone` 到临时目录（只有已入库内容）再跑 `docker build --target frontend`。
-按用户要求，本轮起**已做完的条目直接从本文件删除**（不再标 `[x]` 留痕），历史一律去 roadmap 查。
+**最后更新**：2026-10-06 —— 第 106 期**记忆体系精简**（用户 m08584 立项，用户选定方案 B：「先把记忆三件合并，再谈自动化」）：
+痛点 = 做完一期要在 **5 处**抄同一段「根因 + 证据 + 修法 + 核验」（`docs/roadmap-gaps-remaining.md` 本期段 /
+`MEMORY.md` / `MEMORY-REF.md` / `memory/YYYY-MM-DD.md` 当日日志 / 本文件头部+§0+§1+§2+§3），另加 `AGENTS.md` 基线。
+做法（只砍结构重复，**不改文件名** —— 它们被 `AGENTS.md:15` / `docs/development.md:79` /
+`novelforge/core/sqlcompat.py:7` / 两个测试引用）：
+① `.codebuddy/memory/MEMORY.md` 只留**铁律小节 + 一期一行索引**（退化的索引正文 → 存档）；② `.codebuddy/memory/MEMORY-REF.md`
+改成**按主题的域手册**（保留 1–116 行主题部分，**不再按期号追加**，只有新领域知识才补小节）；
+③ **取消当日日志**（2026-10-06 起不再新建 `memory/YYYY-MM-DD.md`，既有日期文件保留为历史）；
+④ 逐期铁律全文→ 新 `.codebuddy/memory/MEMORY-PERIODS.md`（**只读存档**，两份来源原样合入）。
+⇒ **收尾只写两处（第 106 期起）**：roadmap 本期段（**唯一叙事**）+ `MEMORY.md` 索引一行。
+规则落在 `AGENTS.md` §0/§6 与 `docs/development.md` 回归清单；**自动化（脚本生成索引 / 漂移校验）按用户选择留到下一轮**。
+历史：第 105 期 CI 镜像构建修复已交付（CI run 318 success），`VERSION` 仍 `0.94.0`（连续十二轮不发版）。
+按用户要求，**已做完的条目直接从本文件删除**（不再标 `[x]` 留痕），历史一律去 roadmap 查。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口 + 第 105 期 CI 镜像构建修复；`VERSION` = **0.94.0**
-  （**十一轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口 + 第 105 期 CI 镜像构建修复 + 第 106 期记忆体系精简（收尾只写两处）；`VERSION` = **0.94.0**
+  （**十二轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
   第 98 期仪表盘余留、第 99 期元数据抓取真 bug、第 100 期 EPUB 判定、第 101 期 Goodreads 整家失效修复、
-  第 102 期元数据地基、第 103 期元数据字段接线、第 104 期出网失败归因、第 105 期 CI 构建修复，用户十一次都选「先不发版」；
+  第 102 期元数据地基、第 103 期元数据字段接线、第 104 期出网失败归因、第 105 期 CI 构建修复、
+  第 106 期记忆体系精简，用户十二次都选「先不发版」；
   单一真值源，`GET /health` 下发）；
   `CHANGELOG.md` 最新段仍是 `V0.94.0`。
-- 测试基线（第 105 期）：后端 **2311 例（2286 passed / 0 failed / 0 errors / 25 skipped）**，全量 274.56 s；
+- 测试基线（第 105 期实测；第 106 期**纯文档改动、未动代码与用例**）：后端 **2311 例（2286 passed / 0 failed / 0 errors / 25 skipped）**，全量 274.56 s；
   前端 **67 spec / 686 例**（第 104 期实跑全绿，本期未改前端行为）。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
   （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
@@ -165,7 +165,9 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 106 | **记忆体系精简（收尾只写两处）**（用户 2026-10-06 直接提出 m08584：做完一期要把同一段「根因 / 证据 / 修法 / 核验」抄 **5 处**（`docs/roadmap-gaps-remaining.md` 本期段 / `MEMORY.md` / `MEMORY-REF.md` / `memory/YYYY-MM-DD.md` 当日日志 / `docs/TODO.md` 头部+§0+§1+§2+§3）+ `AGENTS.md` 基线；经 `ask_user_question` 选定**方案 B「先把记忆三件合并，再谈自动化」**）：① `.codebuddy/memory/MEMORY.md`（48903 B / 86 行 → **8588 字符 / 92 行**）只留**铁律小节 + 一期一行索引**，逐期索引正文（24857 字符）移入存档；② `.codebuddy/memory/MEMORY-REF.md`（207485 B / 1777 行 → **14635 字符 / 122 行**）保留行 1–116 主题部分，改成**按主题的域手册**（逐期原文 106673 字符移入存档，**不再按期号追加**，只有新领域知识才补小节）；③ **取消当日日志**（2026-10-06 起不再新建 `memory/YYYY-MM-DD.md`，既有日期文件保留为历史）；④ 逐期铁律全文 → 新存档 `.codebuddy/memory/MEMORY-PERIODS.md`（**132070 字符 / 1696 行**，A=原 `MEMORY.md` 索引 75–105 期、B=原 `MEMORY-REF.md` 逐期原文 53–105 期，**两份原样合入**、已在文件头标注 81–105 期重叠属历史、未合并以免丢信息；缺 62–65 / 74–78 / 80 期只在 A 里有）。⚠️ **文件名一律不动** —— 它们被 `AGENTS.md:15`、`AGENTS.md:165`、`docs/development.md:79`、`novelforge/core/sqlcompat.py:7`（引 `MEMORY.md`「自动化测试」小节，该小节**保留**）、`tests/test_engine_urlspec.py:205`、`tests/test_library_count_contract.py:19` 引用。规则落点：`AGENTS.md` §0 第 3 条（读哪三份）+ §6「**每期收尾只写两处（第 106 期起，用户 m08584 要求精简）**」（① roadmap 本期段 = **唯一叙事** ② `MEMORY.md` 索引加一行 ③ 不再建当日日志 ④ 不再按期号追加 `MEMORY-REF.md` ⑤ 存档只读、按 `### 第 N 期` 搜 ⑥ `docs/TODO.md` 与 `AGENTS.md` 基线数字仍同批更新）、`docs/development.md` 回归清单同条。**守恒核验**：脚本 `nf_p106_restructure.py` 写前断言索引标记/逐期标记各唯一、写后断言旧索引与逐期原文**逐字**仍在存档且**不在**两个新文件里（输出 `moved_index=24857 moved_periods=106673`、两条 `check → True`）；`python tests/check_doc_anchors.py` **exit 0**（纯文档改动，未动代码与用例 ⇒ 基线仍 2311 例）。**没做**：自动化（脚本生成索引 / 漂移校验）按用户选择**留到下一轮**（**不发版**，`VERSION` 仍 0.94.0） |
 | 105 | **CI「Build and Push Image」全失败修好**（用户 2026-10-06 直接立项）：先查历史 —— 该工作流 **run 288–317 全 failure**（2026-10-03 起），最后一次 success 是 run 217（2026-10-01，sha `99ee3494`）⇒ **既存故障**，与第 104 期那几笔提交无关。失败步骤 = job `build` 第 7 步 `Build and push`（`docker/build-push-action@v6`）；annotation **只给最后一行**，真正的 vite 报错要用本机 `git credential fill` 的 token 下 `GET /actions/jobs/<id>/logs`（⚠️ 返回**纯文本日志**、不是 zip）才拿到：`[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`（`SidebarInput.vue:4`）。**根因**：`.gitignore` 的 `input/` **不带前导斜杠** ⇒ 匹配**任意层级**同名目录 ⇒ 第 90 期新增的 `frontend/src/components/ui/input/`（`Input.vue` + `index.ts`）**从未入库**；本机文件一直在 ⇒ 本地 `npm run build` / `vue-tsc` / 单测**永远绿**，CI 从 clone 构建才断链。**修法**：运行时目录全部锚定仓库根（`/input/` `/output/` `/cookies/` `/cache/` `/config/cookies/` `/config/cache/`）+ 补回那两个文件，**刻意不加任何兜底**（不在 workflow 里 `git add -f`、不给 vite 加 alias）。**防回归**：`tests/test_source_tracking_contract.py` 两例（源码树不许有被 `.gitignore` 忽略的文件；`@/` 别名导入必须落在**已入库**路径上），**「改动前会红」已实测**。**核验口径**：在本工作区构建成功**不算证明**（工作区本来就有那两个文件）—— 必须 `git clone` 到临时目录（只有已入库内容）再跑 `docker build --target frontend`（实测 `#10 RUN npm run build` **真执行**、`✓ built in 2.44s`、EXIT=0）。后端全量 **2311 例全绿**（+2）。**CI 已转绿**：推送后 `Build and Push Image` run **318**（id `37394372273`，head_sha `ea2ad51`，约 11 分钟）conclusion **success** —— job `build` 第 7 步 `Build and push` 与第 8 步 `Ensure package is public` **全 success**（失败时是第 7 步 failure / 第 8 步 skipped）⇒ **自 run 217（2026-10-01）起连续 30 次失败终止**（**不发版**，`VERSION` 仍 0.94.0） |
+ **CI「Build and Push Image」全失败修好**（用户 2026-10-06 直接立项）：先查历史 —— 该工作流 **run 288–317 全 failure**（2026-10-03 起），最后一次 success 是 run 217（2026-10-01，sha `99ee3494`）⇒ **既存故障**，与第 104 期那几笔提交无关。失败步骤 = job `build` 第 7 步 `Build and push`（`docker/build-push-action@v6`）；annotation **只给最后一行**，真正的 vite 报错要用本机 `git credential fill` 的 token 下 `GET /actions/jobs/<id>/logs`（⚠️ 返回**纯文本日志**、不是 zip）才拿到：`[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`（`SidebarInput.vue:4`）。**根因**：`.gitignore` 的 `input/` **不带前导斜杠** ⇒ 匹配**任意层级**同名目录 ⇒ 第 90 期新增的 `frontend/src/components/ui/input/`（`Input.vue` + `index.ts`）**从未入库**；本机文件一直在 ⇒ 本地 `npm run build` / `vue-tsc` / 单测**永远绿**，CI 从 clone 构建才断链。**修法**：运行时目录全部锚定仓库根（`/input/` `/output/` `/cookies/` `/cache/` `/config/cookies/` `/config/cache/`）+ 补回那两个文件，**刻意不加任何兜底**（不在 workflow 里 `git add -f`、不给 vite 加 alias）。**防回归**：`tests/test_source_tracking_contract.py` 两例（源码树不许有被 `.gitignore` 忽略的文件；`@/` 别名导入必须落在**已入库**路径上），**「改动前会红」已实测**。**核验口径**：在本工作区构建成功**不算证明**（工作区本来就有那两个文件）—— 必须 `git clone` 到临时目录（只有已入库内容）再跑 `docker build --target frontend`（实测 `#10 RUN npm run build` **真执行**、`✓ built in 2.44s`、EXIT=0）。后端全量 **2311 例全绿**（+2）。**CI 已转绿**：推送后 `Build and Push Image` run **318**（id `37394372273`，head_sha `ea2ad51`，约 11 分钟）conclusion **success** —— job `build` 第 7 步 `Build and push` 与第 8 步 `Ensure package is public` **全 success**（失败时是第 7 步 failure / 第 8 步 skipped）⇒ **自 run 217（2026-10-01）起连续 30 次失败终止**（**不发版**，`VERSION` 仍 0.94.0） |
 | 104 | 出网**失败归因**（用户 2026-10-06 在 ask_user_question 里选 A）+ 前端类型红收口：先查出**本机 DNS 被上游污染**（`openlibrary.org`→`31.13.112.4` / `www.goodreads.com`→`128.242.240.253`，而 `8.8.8.8`→`199.59.149.201` / `199.59.148.6`，`hosts` 无自定义行、`1.1.1.1` 无应答）—— 此前一律报「超时」，用户会去修一个**根本没坏**的源（仓规：误报比不测更糟）。新增叶子模块 `novelforge/core/netdiag.py`：① **数据路径只做纯函数分类**（`classify_exc` / `describe_exc`，零 I/O，`search()` 失败多回一个 `fail` 键）② **诊断路径才交叉核对**（手写 UDP DNS 查询本机 vs `8.8.8.8`/`1.1.1.1`，按 host 缓存 60 s；两个 I/O 缝可注入）③ 污染 ⇒ 结论升级 `dns_polluted` 并**把两边地址写进原因**；公共解析器答不上来 ⇒ 如实说「无法交叉核对」，**未知 ≠ 污染**。`HEALTH_KINDS` 12→17 类（`dns` / `dns_polluted` / `tls` / `proxy` / `connect_timeout`，中文文案由后端下发，前端零新文案；`healthClass` 把这四类归**琥珀**＝本机环境问题，别再指着站点）。顺带**收口 `vue-tsc` 3.3.12 的 `TS2339`**：`MetadataEditor.vue` 五处重复的字段中文名（其中 :614 在模板内联箭头里）收敛成一个 `labelOf(k: string)` ⇒ `--build --force` **exit 0**（此前 `.vue(614,40)` 恰 1 条、EXIT=2）。测试 **+35 例**（`tests/test_netdiag.py` 23 / 健康归因 12，含把 `[Errno -2] Name or service not known` 从 `network` **故意改判** `dns`）、新增 `tests/conftest.py` 的 `_no_live_dns_in_tests`（全测试进程**零真实 DNS**）；后端全量 **2309 例全绿**、前端 686 例（**不发版**，`VERSION` 仍 0.94.0） |
 | 103 | 元数据字段**接线**（用户 2026-10-05 在 ask_user_question 里选 A：`series` / `series_index` / `narrators` 三项**早就建模、消费者全在**（`fileops.METADATA_FIELDS` / `metascore.FIELDS` 的 series 4.0 + series_index 3.0 / 命名规则 `{series}` `{series_index}` / Komga `seriesIndex` / 系列视图 / `db._CLEARABLE` `_META_FIELDS` / `patch_opf_meta`），**唯独这条抓取线从未接上** —— `_entry` 是固定键白名单、`metafetch` 无映射 ⇒ 抓到了也被静默丢掉）：① 顺手修 **RanobeDB 详情补全从未生效**（真机响应套在 `book` 键里，`{**b, **fetched}` 只并进一个键 ⇒ 作者/出版社/简介**全空且不报错**、`score_candidate` 只剩书名 0.7 < 阈值 0.75 ⇒ 这家源在默认配置下**永远进不了合并**，白挂两期）② **五个同步点**（`_entry` / `_CURRENT`·`_VALUE_KEYS`·`_FINALIZE_FIELDS` / `DEFAULTS['metadata_fetch']['fields']` / 前端 `POLICY_FIELDS` / 前端**写死的 spec 断言**「不含 series」）③ 卷号**只认 `^\d+(?:\.\d+)?$`**（错值比空值严重：它喂命名规则与 Komga `seriesIndex`）、`_best_series` **取卷号最小那支**（Audible 数组顺序三次实测倒置、Goodreads item 内层 `$4d:…:series` 是引用**要二次解析**、RanobeDB 卷号 = `series.books` 位置 + 1 且 29 册核过 28/29）④ **演播者四处口径**（`_LIST_FIELDS` + `_as_list`；`merge_values` 里 **不跨源合并** —— 两个源常是两次不同录音，拼起来会造出**从未存在**的阵容；`metastore.effective`/`state` 的在线分支此前给 `"['Scott Brick']"` 这串 repr，改 `_online_value` 走 `db._parse_tags`）⑤ 三项默认 **`fill_only`**（系列参与命名规则与系列视图、抓取收益在没值的书上；演播者本地值来自音频标签=权威源；老配置整表 overwrite 的用户仍按 overwrite 走，已在 `config.py` 写明）；Audnexus（SSL EOF）/ Open Library `series`（超时）/ Audible `subtitle` 三条**未核验不接线**挂 TODO；测试 **+11 例**、后端全量 **2274 例全绿**（**不发版**，`VERSION` 仍 0.94.0） |
 | 102 | 元数据抓取**地基**（用户 2026-10-05 直接提出，非从 TODO 取条目）：① 14 家源声明**收口**到 `novelforge/core/sources/`（`Provider` 数据类 + `DECLARED`，`SOURCES`/`GROUPS`/`IMPLEMENTED`/`LANG_AFFINITY`/`LANG_BROAD`/`SOURCE_ID_FIELD`/`HEALTH_SAMPLES` **7 张手工表改派生**，逐字段验算 14 家旧键全等，只多 `kind`/`rate_limit`/`cache_ttl`）② 进程内**缓存 + 按源限流**（`time.monotonic` 计时、只缓存「成功且非空」、命中浅拷贝防分数污染；`force=True` = 诊断模式**缓存与限流都旁路**，否则体检 4 路并发会被自己的 sleep 拖成**假 timeout**）③ **按记录标识取详情**（只接真机核验过的 iTunes / Open Library；Google Books 匿名 429 / Audnexus 本机不可达 / Goodreads 302 ⇒ **不声明**，如实中文回绝）④ 配置两键 `cache_ttl`（默认 `None` = 按各来源声明，不写死 600）/ `detail_fetch`（默认**关**，不改既有书的抓取结果）+ 环境变量**只兜底不覆盖** + 前端两个开关；顺带修掉一个**假配置**（`metasources.py` 从未 import `config` ⇒ `cache_ttl` 写完两期无人读，被裸 `except` 吞掉）＋ 新增 `test_metasource_registry_contract` 15 / `test_metasources_cache` 21 / `test_metasources_detail` 24 / `test_config_readback_contract` 19（**不发版**，`VERSION` 仍 0.94.0） |
@@ -222,7 +224,9 @@
   第 104 期由**用户直接立项**（出网失败归因 + 前端类型红收口，我给的推荐项，不从 TODO 取）、
   第 105 期同样由**用户直接立项**（修 GitHub Actions「Build and Push Image」全失败 ——
   根因不在构建本身，而是 `.gitignore` 把 `frontend/src/components/ui/input/` 静默忽略、从未入库，
-  详见 roadmap 第 105 期段）。
+  详见 roadmap 第 105 期段）、第 106 期仍由**用户直接立项**（记忆体系精简 / 收尾只写两处 ——
+  痛点来自第 104、105 期收尾的重复劳动，方案经 `ask_user_question` 由用户选定 B；
+  **其中的「自动化」半场按用户选择留到下一轮**，可直接作为候选）。
   ⚠️ 第 102 期按拍板口径**只做了地基、零新源**：**分期做**（用户原话），
   微信读书一家中文源与其余能力留待后续期次；`docs/roadmap-gaps-remaining.md` 第 102 期段
   已写清「本期刻意不做」的边界（不新建 providers 包 / 不搬 1833 行解析实现 / 不改 `metascore` 计分 /
