@@ -195,6 +195,22 @@ def parse_agents_baseline(text: str) -> tuple[int, int, int] | None:
 
 _VERSION_LIT_RE = re.compile(r"`VERSION`\s*(?:=|仍)\s*`?\*{0,2}(\d+\.\d+\.\d+)\*{0,2}`?")
 
+
+def _version_lits(text: str) -> list[str]:
+    """当前态里的版本字面量（跳过 `| …` 表格行）。
+
+    `docs/TODO.md` §2 是**逐期历史索引**（与 roadmap 本期段同类）：第 95–106 期那几行写着的
+    「（**不发版**，`VERSION` 仍 0.94.0）」是**当时的事实**。第 109 期第一次真正发版时实测：
+    R7 与 `--fix` 一并扫表格行 ⇒ 一次把 **12 行历史记录**改成 `1.0.0`，历史就变成谎话。
+    ⇒ R7 只管「当前态」（§0 头部 / `AGENTS.md` §4），历史行一律不碰。
+    """
+    out: list[str] = []
+    for line in text.split("\n"):
+        if line.lstrip().startswith("|"):
+            continue
+        out += _VERSION_LIT_RE.findall(line)
+    return out
+
 #: 旧口径里手记的「连续 N 轮未升版」整块（第 107 期起换成 VERSION 派生句）。
 _ROUND_BLOCK_RE = re.compile(r"^\s*（\*\*[^\n]{0,40}轮都刻意未升\*\*")
 
@@ -292,10 +308,10 @@ def check_records(root: pathlib.Path, *, history: bool = False) -> tuple[list[st
                 f"新期号只写一行 `| {n} | <标题> {TODO_ROW_TAIL.format(n=n)} |`，细节进 roadmap"
             )
 
-    # -- R7 版本字面量 = 仓库根 VERSION
+    # -- R7 版本字面量 = 仓库根 VERSION（只扫当前态，§2 历史行不算，见 `_version_lits`）
     want = (root / VERSION).read_text(encoding="utf-8-sig").strip()
     for rel in (TODO, AGENTS):
-        for got in _VERSION_LIT_RE.findall(read(rel)):
+        for got in _version_lits(read(rel)):
             if got != want:
                 problems.append(f"[R7] `{rel}` 里的版本字面量 `{got}` ≠ 仓库根 `{VERSION}` 的 `{want}`（`--fix` 可改）")
 
@@ -426,6 +442,8 @@ def scaffold(
         bad.append(f"`{TODO}` §2 找不到表头分隔行 `|---|---|`")
     if not re.search(rf"(?m)^{re.escape(MEM_INDEX_HEAD)}", memory.text):
         bad.append(f"`{MEMORY}` 找不到 `{MEM_INDEX_HEAD}`")
+    elif not any(_INDEX_LINE_RE.match(ln) for ln in memory.text.split("\n")):
+        bad.append(f"`{MEMORY}` 的 `{MEM_INDEX_HEAD}` 小节里没有任何 `- **N**` 行")
     if bad:
         raise ScaffoldError("落位前检查不通过（未改任何文件）：\n  - " + "\n  - ".join(bad))
 
@@ -465,9 +483,11 @@ def scaffold(
     todo.text = "\n".join(tlines)
 
     # 5) MEMORY.md 索引加一行
+    #    插在**整段索引的末尾**（不是「最后一条 `- **N**` 行」之后）：上一条可能带着几行续行说明
+    #    （缩进的非列表行），插在它前面会把续行归到新条目底下 —— 第 109 期第一次真发版时踩到。
     mlines = memory.text.split("\n")
     a, b = _span(mlines, MEM_INDEX_HEAD)
-    last = max((i for i in range(a, b) if _INDEX_LINE_RE.match(mlines[i])), default=-1)
+    last = max((i for i in range(a, b) if mlines[i].strip()), default=a - 1)
     mlines.insert(last + 1, f"- **{period}** {title}")
     memory.text = "\n".join(mlines)
     log.append(f"· `{MEMORY}` 索引加一行 `- **{period}** {title}`")
@@ -508,7 +528,13 @@ def _fix_versions(root: pathlib.Path) -> list[str]:
                 return m.group(0).replace(m.group(1), want)
             return m.group(0)
 
-        doc.text = _VERSION_LIT_RE.sub(sub, doc.text)
+        # 逐行修：`| …` 表格行是逐期历史（见 `_version_lits`），不跟着 VERSION 改。
+        lines = doc.text.split("\n")
+        for i, line in enumerate(lines):
+            if line.lstrip().startswith("|"):
+                continue
+            lines[i] = _VERSION_LIT_RE.sub(sub, line)
+        doc.text = "\n".join(lines)
         if fixed:
             doc.save()
             out.append(f"· `{rel}`：{fixed} 处版本字面量 → {want}")

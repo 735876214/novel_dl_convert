@@ -274,6 +274,19 @@ def test_fix_把版本字面量改回来(repo: pathlib.Path) -> None:
     assert "**0.94.0**" in _text(repo, TODO)
 
 
+def test_S2_历史行里的旧版本字面量不算漂移(repo: pathlib.Path) -> None:
+    """§2 是**逐期历史索引**（与 roadmap 本期段同类），不是「当前态」声明。
+
+    第 109 期第一次真正发版时实测：R7 与 `--fix` 一并扫表格行 ⇒ 一次把 **12 行**历史记录
+    「（**不发版**，`VERSION` 仍 0.94.0）」改成 `1.0.0` —— 历史就成了谎话。
+    现在 R7 只管 §0 头部与 `AGENTS.md` §4，历史行一律不碰。
+    """
+    _patch(repo, TODO, "| 100 | 老一期 |", "| 100 | 老一期（**不发版**，`VERSION` 仍 0.93.0） |")
+    assert not any("[R7]" in p for p in _problems(repo))
+    assert main(["check", "--root", str(repo), "--fix"]) == 0
+    assert "`VERSION` 仍 0.93.0" in _text(repo, TODO), "历史行被 --fix 改写了"
+
+
 def test_口径句被删报_R8(repo: pathlib.Path) -> None:
     _patch(repo, AGENTS, "每期收尾只写两处", "以前那套仪式")
     problems = _problems(repo)
@@ -295,6 +308,27 @@ def test_new_一次把几处落位(repo: pathlib.Path) -> None:
     assert "# 当前基线 2400 例（2370 passed / 25 skipped；只增不减）" in _text(repo, AGENTS)
     # 新的期号自己也要对得上账（否则工具在教人漂移）
     assert _problems(repo) == []
+
+
+def test_new_索引行插在续行之后(repo: pathlib.Path) -> None:
+    """上一条索引可能带续行说明（缩进的非列表行）。
+
+    第 109 期第一次真发版时踩到：`new` 把新条目插在「最后一条 `- **N**` 行」之后，于是老条目的
+    续行被留在了新条目底下（看起来像新条目在讲老一期的事）。现在插在**整段索引末尾**。
+    """
+    _patch(repo, MEMORY, "- **107** 新一期\n", "- **107** 新一期\n  续行说明（属于 107）。\n")
+    scaffold(repo, 108, "演练一期")
+    lines = [ln for ln in _text(repo, MEMORY).split("\n") if ln.strip()]
+    assert lines[-2] == "  续行说明（属于 107）。", lines[-3:]
+    assert lines[-1] == "- **108** 演练一期", lines[-3:]
+
+
+def test_new_索引小节空了就整体拒绝(repo: pathlib.Path) -> None:
+    _patch(repo, MEMORY, "- **100** 老一期\n- **107** 新一期\n", "")
+    before = _snapshot(repo)  # 拍在 `_patch` 之后：`_patch` 会把行尾规范成 CRLF
+    with pytest.raises(ScaffoldError):
+        scaffold(repo, 108, "演练一期")
+    assert _snapshot(repo) == before
 
 
 def test_new_把旧口径的轮次数换成_VERSION_派生句(repo: pathlib.Path) -> None:
