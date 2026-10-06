@@ -304,11 +304,24 @@ const health = ref<MetadataHealthResult | null>(null)
 const healthQuery = ref('')
 const healthRunning = ref(false)
 
-/** 结论 → 颜色：绿=能出结果；灰=只是没配密钥；琥珀=等一会或站点可能改版；红=被拒/异常 */
+/**
+ * 结论 → 颜色：绿=能出结果；灰=只是没配密钥；琥珀=**本机环境的问题**或等一会就好；
+ * 红=被拒 / 反爬拦截 / 接口改版这类「站点侧」的异常。
+ *
+ * ⚠️ 第 104 期把 `dns` / `dns_polluted` / `proxy` / `connect_timeout` 归琥珀而不是红：
+ * 这四类的**毛病在本机**（DNS 解析不出 / 被污染、代理不通、TCP 都建不起来），
+ * 标红会让人以为站点坏了、跑去修一个没坏的源 —— 误报比不报更贵。
+ * （`timeout` 仍按原样标红：它既可能是站点慢也可能是被阻断，改颜色会顺带动到
+ * 既有界面观感，本期只收口新增的四个分类。）
+ */
 function healthClass(kind: string): string {
   if (kind === 'ok') return 'text-emerald-600 dark:text-emerald-400'
   if (kind === 'missing_key') return 'text-muted-foreground'
   if (kind === 'empty' || kind === 'rate_limited') return 'text-amber-600 dark:text-amber-400'
+  if (kind === 'dns' || kind === 'dns_polluted' || kind === 'proxy'
+      || kind === 'connect_timeout') {
+    return 'text-amber-600 dark:text-amber-400'
+  }
   return 'text-destructive'
 }
 

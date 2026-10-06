@@ -124,9 +124,24 @@ function isLocked(k: string): boolean {
   return metaState(k as keyof BookMetadataFields)?.locked === true
 }
 
+/**
+ * 字段（含封面）的中文名。**全组件只此一份**。
+ *
+ * 早先这段 `k === COVER ? '封面' : FIELD_LABELS[k as keyof BookMetadataFields] ?? k`
+ * 在脚本里抄了两遍、模板里抄了三遍；模板内联的那处（底部「实际改动」提示）在
+ * `vue-tsc` 3.3.12 下直接报 TS2339（`Record` 上没有 `value`）—— 收敛到这里，
+ * 索引 `FIELD_LABELS` 所需的断言只出现一次。
+ * ⚠️ `k` 收 `string` 而不是 `keyof BookMetadataFields`：调用方会传 `changed`（抓取/清空
+ * 回包给的 `string[]`，不保证是元数据字段键），落到 `?? k` 分支就是原样显示。
+ */
+function labelOf(k: string): string {
+  if (k === COVER) return '封面'
+  return FIELD_LABELS[k as keyof BookMetadataFields] ?? k
+}
+
 /** 「已锁定」徽标统一走这里，免得三处各写一遍判定 */
 function lockTitle(k: string): string {
-  const zh = k === COVER ? '封面' : FIELD_LABELS[k as keyof BookMetadataFields] ?? k
+  const zh = labelOf(k)
   return isLocked(k)
     ? `已锁定「${zh}」：在线抓取不会改写它（手动编辑仍可用），点一下解锁`
     : `锁定「${zh}」：在线抓取永不改写它 —— 即使该字段策略是「总是覆盖」`
@@ -153,7 +168,7 @@ async function toggleLock(k: string): Promise<void> {
         }
       }
     }
-    const zh = k === COVER ? '封面' : FIELD_LABELS[k as keyof BookMetadataFields] ?? k
+    const zh = labelOf(k)
     ui.toast(r.locked ? `已锁定「${zh}」：抓取不会再动它` : `已解锁「${zh}」：抓取可以重新接管`)
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '锁定失败')
@@ -299,7 +314,7 @@ async function clearOne(k: keyof BookMetadataFields): Promise<void> {
     tagText.value = (r.fields.tags || []).join('、')
     narratorText.value = (r.fields.narrators || []).join('、')
     resetCustom()
-    ui.toast(r.changed.length ? `已清空：${FIELD_LABELS[k] ?? k}` : '该字段本来就是空的')
+    ui.toast(r.changed.length ? `已清空：${labelOf(k)}` : '该字段本来就是空的')
     emit('saved')
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '清空失败')
@@ -361,7 +376,7 @@ const INPUT_CLS =
               class="flex flex-col gap-1 border-b border-border/60 py-2.5"
             >
               <span class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
-                {{ FIELD_LABELS[k] }}
+                {{ labelOf(k) }}
                 <span
                   v-if="meta.meta[k]?.overridden"
                   class="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] text-primary"
@@ -611,7 +626,7 @@ const INPUT_CLS =
 
         <div class="flex flex-wrap items-center gap-3 border-t border-border px-4 py-3">
           <span v-if="changed.length" class="text-[11.5px] text-muted-foreground">
-            实际改动：{{ changed.map((c) => FIELD_LABELS[c as keyof BookMetadataFields] ?? c).join('、') }}
+            实际改动：{{ changed.map(labelOf).join('、') }}
           </span>
           <Button
             v-if="hasOverrides && editable"
