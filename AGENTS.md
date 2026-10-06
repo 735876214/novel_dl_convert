@@ -166,6 +166,17 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
 - **每期收尾只写两处（第 106 期起，用户 m08584 要求精简）**：
   ① `docs/roadmap-gaps-remaining.md` 本期段 —— **唯一叙事**（根因 / 证据 / 修法 / 核验，别再往第二处抄一遍）；
   ② `.codebuddy/memory/MEMORY.md` 的「逐期铁律索引」加**一行**（期号 + 一句话铁律）。
+  - ▸ **机械的几处用落位器**（第 107 期起，用户 m08782「再谈自动化」立项）：
+    `python tests/period_close.py new --period N --title "期标题" --numbers "总 passed skipped" --seconds S`
+    一次改完 —— roadmap 追加期段标题、TODO 头部占位、TODO §2 一行索引、TODO §0 的 HEAD 链与基线句、
+    `AGENTS.md` §4 基线、`MEMORY.md` 索引行、并把旧口径手记的「连续 N 轮未升版」换成 VERSION 派生句；
+    缺锚点或期号已被占用 ⇒ **整体拒绝、绝不改一半**（幂等，可反复跑）。
+    跑完再 `python tests/period_close.py check`（**只读**）对账 R1–R8，0 问题才算收尾完：
+    `R1` 新期号三处齐全 / `R2` 索引标签可解析不重复不越界 / `R3` §0 提到最新期号且两处基线一致 /
+    `R4` 不许再建当日日志 / `R5` `MEMORY-PERIODS.md` 只读 / `R6` 新期号的 §2 行 ≤300 字符 /
+    `R7` 版本字面量 = 仓库根 `VERSION`（`--fix` 可修）/ `R8` 第 106 期口径还在。
+    **工具不写叙事也不做提炼**：roadmap 正文、TODO 头部那一句话、索引行的一句话仍要手写
+    （先跑 `new` 再写正文 —— 期段标题已存在时 `new` 会拒绝）。
   - **不再**新建 `memory/YYYY-MM-DD.md`（当日日志 2026-10-06 起取消；既有日期文件保留为历史）。
   - **不再**按期号往 `MEMORY-REF.md` 追加 —— 它**按主题**组织，只有出现**新的领域知识**（运行手册 / 域细节 / 跨会话待办）时才补对应小节。
   - 逐期铁律全文存档 = `.codebuddy/memory/MEMORY-PERIODS.md`（**只读，不追加**）；老期号细节按 `### 第 N 期` 搜。

@@ -78,6 +78,11 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
       大文件改动后跑 `python tests/check_doc_anchors.py --drift` 并在文档里做「锚点披露」（硬错 0 / 疑似漂移保留，**历史行号不改写**）。
 - [ ] **记忆（第 106 期起只有两处）**：`MEMORY.md` 的「逐期铁律索引」加**一行**（期号 + 一句话）；跨会话 / 领域知识进 `MEMORY-REF.md` 的**对应主题小节**（它不再按期号追加）。
       **不写**当日日志（`memory/YYYY-MM-DD.md` 已取消）、**不写**第二份实施记录；逐期全文存档 = `MEMORY-PERIODS.md`（只读）。
+- [ ] **收尾落位与对账（第 107 期起，用户 m08782）**：机械的几处**别手改**，用
+      `python tests/period_close.py new --period N --title "期标题" --numbers "总 passed skipped" --seconds S`
+      （一次改完 roadmap 期段标题 / TODO 头部占位与 §2 一行索引 / §0 的 HEAD 链与基线句 / `AGENTS.md` §4 基线 /
+      `MEMORY.md` 索引行；缺锚点或期号已被占用就**整体拒绝**，绝不改一半）。
+      随后手写 roadmap 正文、TODO 头部那句话、索引行里的一句话，最后 `python tests/period_close.py check`（**只读**，R1–R8）**0 问题**才算收尾完。
 - [ ] **工作区**：`git status` 无自有未提交改动；不顺手提交别人的改动。
 
 ## 5. 调试技巧（都踩过坑）
@@ -141,3 +146,26 @@ python tests/check_doc_anchors.py --file docs/xxx.md
 ```
 方法与四条局限见 `docs/bookorbit/bookorbit-capability-gap.md` §0.4/§0.5。判据是「0 硬错 **且** 人工过完 `--todo`」，
 **历史实施记录里的旧行号一律不改写**（改它=篡改历史）。
+
+## 9. 收尾落位与对账工具（第 107 期）
+
+`tests/period_close.py`（**非 `test_` 前缀，pytest 不收集**；stdlib，无新依赖）：
+
+```bash
+python tests/period_close.py new --period 107 --title "期标题" --numbers "2338 2313 25" --seconds 300.5
+python tests/period_close.py new --period 107 --title "期标题" --junit junit.xml   # 或用 junit 取数字
+python tests/period_close.py new --period 107 --title "期标题" --dry-run          # 只看改哪几处
+python tests/period_close.py check            # 只读对账 R1–R8（0 问题退 0）
+python tests/period_close.py check --history  # 顺带列出历史豁免项（第 53–61 期）
+python tests/period_close.py check --fix      # 只修版本字面量（= 仓库根 VERSION）
+```
+
+- **它做什么**：把「期段标题 / TODO 头部占位 / §2 一行索引 / §0 HEAD 链与基线 / `AGENTS.md` §4 基线 /
+  `MEMORY.md` 索引行 / 去掉手记的『连续 N 轮未升版』」一次改完；`check` 负责三方对账（roadmap 期段 ↔
+  `TODO` §2 ↔ `MEMORY.md` 索引）与口径检查，**唯一叙事仍在 roadmap**。
+- **它不做什么**：不写叙事、不做「一句话提炼」、不碰 `MEMORY-PERIODS.md`（只读存档）、**不新建当日日志**。
+- **为什么对账从第 107 期起才严判**：`TODO` §2 是第 62 期才开始记的 —— roadmap 的第 53–61 期**有期段却从没有过索引行**；
+  而第 74 / 78 期反过来（§2 有行、roadmap 没有对应期段）。这两类历史差异若按今天的规则判，都得「补一条从没存在过的记录」= **编造**。
+  ⇒ `STRICT_FROM = 107`，历史差异只出 warning（`check --history` 会列出来）。
+- 契约见 `tests/test_period_records_contract.py`（27 例：每条规则都有「故意破坏 ⇒ 报错」用例，
+  外加 `new` 幂等、整体拒绝、行尾 / BOM 保住、`check` 只读）。
