@@ -6434,3 +6434,155 @@ payload 里**有**系列信息（`bookSeries` → `seriesPlacement` + 系列名�
 - 本机新陷阱两条进 `AGENTS.md` §5：**`write` 工具的临时文件在 `C:\Users\qingr\Temp\` 而 pwsh `$env:TEMP`
   是 `…\AppData\Local\Temp`**（`git commit -F "$env:TEMP\…"` 报 `fatal: could not read log file`，**提交没发生**）；
   **读仓库里的中文 / JSON 文件一律用 `read` 工具**（`Get-Content … | ConvertFrom-Json` 因 GBK 解码报 `传入的对象无效`）。
+
+## 第 104 期（出网失败归因：DNS 解析失败 / 解析被污染 / 连接被阻断 / TLS / 代理 / 超时 + 前端类型红收口）
+
+### 一、立项与范围
+
+- 由**用户直接立项**（`ask_user_question` 选 A，2026-10-06），不从 `docs/TODO.md` 取条目。
+  范围两条：① **网络故障归因**（DNS 解析失败 / 解析被污染 / 连接被阻断 / TLS / 代理 / 超时 / 状态码）
+  ② **顺带收口前端类型红**（`vue-tsc` 3.3.12 的 `TS2339`）。
+- 立项理由（写进了推荐项）：体检把「DNS 给错地址」和「站点慢」**都报成超时**，
+  而这两件事要用户做的动作完全不同（改本机 DNS vs 等一会），违反本仓反复确认的口径
+  **「误报比不测更糟：用户会去修一个根本没坏的东西」**。
+- 用户未选的三项（本期不做）：B Audible `subtitle` 接线、C 只修前端类型红、D 微信读书中文源。
+
+### 二、先定因：本机的 DNS 被上游污染（不是站点故障、也不是链路抖动）
+
+真机证据（两个只读探针，`C:\Users\qingr\Temp\nf_p104_probe.py` / `nf_p104_net.py`，
+**跑前必须清空全部 proxy 变量**，否则 httpx 因 `NO_PROXY` 里的方括号 IPv6 抛 `InvalidURL: Invalid port: ':1]'`）：
+
+| 主机 | 本机解析 | 8.8.8.8 解析 | 443 连通 |
+|---|---|---|---|
+| `openlibrary.org` | `185.60.216.36` / `31.13.112.4`（**Facebook 段**） | `199.59.149.201` | ✗ 超时 |
+| `www.goodreads.com` | `31.13.91.33` / `128.242.240.253` | `199.59.148.6` | ✗ 超时 |
+| `www.googleapis.com` | `172.217.119.4` | — | ✗ 超时 |
+| `api.audnexus.com` | DNS 直接失败（`getaddrinfo`） | — | ✗ |
+| `ranobedb.org` / `api.audible.com` / `github.com` / `pypi.org` | 正常 | 一致 | ✓ |
+
+交叉核对：`C:\Windows\System32\drivers\etc\hosts` **没有任何自定义行**；`Resolve-DnsName` 与
+`socket.gethostbyname` 给的是**同一批错地址**（每次还可能不同）；`1.1.1.1` 的 UDP/53 **完全无应答**。
+⇒ 结论是**上游 DNS 污染**（本机拿到的是别人的网段），而不是站点故障、不是本机改过 hosts、也不是链路抖动。
+⇒ 第 103 期挂起的三条（Open Library `series` 字段 / Google Books `seriesInfo` / Audnexus narrators）
+**今天仍无法真机核验**；`docs/TODO.md` 里「Open Library 本机间歇性不可达（链路问题）」的归因已据此**改写**。
+
+### 三、架构决策：数据路径只做纯函数分类，诊断路径才交叉核对
+
+三个候选：① **每条失败都查一遍公共解析器** —— 数据路径（检索 / 详情）会平白多一次 UDP 往返，
+失败时还要等超时，属于给热路径加副作用；② **只在诊断路径查**（体检 / 「测试这一家」）
+③ 加一个「启用 DNS 交叉核对」配置开关。
+
+选 ②，理由：用户要的归因正是**出现在体检与探活**这两个诊断入口上；数据路径只需把异常里**已有**的
+信息（哪一类、打的是哪个主机）如实带出去 —— 于是 `search()` 的失败返回值多一个
+**纯函数算出来的 `fail` 键**，零 I/O、零耗时。③ 被否掉的理由是仓规 §7.2（**禁投机抽象**）：
+一个诊断功能不需要开关，需要开关的是「行为」，而这里的行为只在用户主动点体检时发生。
+
+### 四、新叶子模块 `novelforge/core/netdiag.py`
+
+模块 docstring 写明「为什么」与三条边界，其中第三条就是上面的架构决策。API：
+
+- **纯函数（数据路径可用，绝不联网）**：`classify_exc(exc) -> str`（沿 `__cause__`/`__context__`
+  链三遍扫描：`socket.gaierror`→`dns`、`ssl.SSLError`→`tls`、`httpx.ProxyError`→`proxy`；
+  `httpx.ConnectTimeout`→`connect_timeout`、其余 `httpx.TimeoutException`→`timeout`；
+  `httpx.ConnectError`/`ConnectionRefusedError`/`ConnectionResetError`/`BrokenPipeError`/`OSError`→`network`；
+  认不出回 `""`）、`host_of(exc, url="")`、`describe_exc(exc, url="") -> {"kind","host"}`。
+- **纯函数（DNS 报文编解码，可单测）**：`_build_query(name, qid)`、`_skip_name(data, off)`（认得压缩指针）、
+  `_parse_a_records(data, qid)`（id 不匹配或 `rcode != 0` 回 `[]`；截断不抛）。
+- **两个 I/O 缝**（可注入，测试全靠它）：`_dns_exchange(packet, server, timeout)`（UDP 53，`recvfrom(2048)`）、
+  `_local_ips(host, port=443)`（`socket.getaddrinfo`，去重保序）。
+- **编排**：`resolve_via(server, host, timeout=2.0)`、`compare(host, *, timeout, servers=DNS_CHECK_SERVERS,
+  cache_ttl=60.0)`、`pollution_note(cmp)` / `unresolved_note(cmp)` / `blocked_note(cmp)`、
+  `refine(fail, *, timeout=2.0) -> {"kind","note"}`、`clear_cache() -> int`。
+- 常量：`DNS_CHECK_SERVERS = ("8.8.8.8", "1.1.1.1")`（**8.8.8.8 在前**，因为本机实测 1.1.1.1 的 UDP/53 无应答；
+  **故意不加配置键**）、`CROSS_CHECK_KINDS = ("dns", "connect_timeout", "network")`
+  （`timeout` **不在**其中：站点慢与 DNS 无关，不该为它去查解析）。
+- 判定三态：`agrees = bool(set(local) & set(public))`（CDN 多地址只要求**有交集**，不要求集合相等）；
+  不一致 ⇒ `polluted=True` ⇒ `refine` 把结论升级成 **`dns_polluted`**；公共解析器全失败 ⇒
+  `agrees=None, polluted=False` + `error="公共解析器不可用，无法交叉核对（…）"` ⇒
+  **保持原分类，绝不下「污染」结论（未知 ≠ 污染）**；`public` 有而 `local` 空 ⇒ 说「问题在本机 DNS」。
+- 结果按 host 缓存（`time.monotonic()` + 60 s TTL，上限 64 条按写入时间淘汰）：一个源在一次体检里
+  只会被问一次解析。
+- **手写 UDP DNS 报文**而不是引入 `dnspython`：为一个只用于诊断的功能加运行时依赖不划算，
+  而 A 记录的编解码只有几十行，且**纯函数部分能被完整单测**（合成响应 + 异常响应）。
+
+### 五、接线（`novelforge/core/metasources.py` 五处）
+
+1. `_error_text(exc)`：**先判 `httpx.HTTPStatusError`**（302 / 404 / 其余的中文文案与阈值一字未动），
+   再按 `classify_exc` 分档给出 `dns` / `tls` / `proxy` / `connect_timeout` / `timeout` / `network` 的中文，
+   `httpx.HTTPError` 兜底**仍是「连接失败：…」** ⇒ `tests/test_metasources_detail.py:330-343`
+   钉住的五条口径（含**裸异常**）全部不变。**此函数零 I/O**。
+2. `search()` 失败返回加 `"fail": netdiag.describe_exc(e)`：**附加键**，既有 `{"ok","entries","error"}`
+   一个都没动，调用方一律 `.get`。
+3. `HEALTH_KINDS` **12 → 17 类**：`connect_timeout`「连接超时（连不上）」/ `dns`「域名解析失败」/
+   `dns_polluted`「域名解析被污染（本机 DNS 给错地址）」/ `tls`「TLS 握手失败」/
+   `proxy`「代理不可用（检查代理环境变量）」。中文文案**由后端下发**（`kind_labels` 随体检结果返回），
+   前端零新文案 —— 这是第 59 期定的分工（`frontend/src/lib/api.ts:443` 有注释）。
+4. `_classify_error(err, exc=None)`：在 `"超时"` 与 `"连接失败"` 两支**之前**插入（顺序即优先级）
+   `解析被污染`→`dns_polluted`；`域名解析` / `name or service not known` / `getaddrinfo` / `gaierror` /
+   `nodename nor servname` / `11001`→`dns`；`tls` / `ssl` / `certificate verify failed` /
+   `unexpected_eof`→`tls`；`代理` / `proxy`→`proxy`；`连接超时` / `connecttimeout`→`connect_timeout`。
+   ⚠️ **故意改判**了 `tests/test_metasources_health.py` 里那一行
+   `("连接失败：[Errno -2] Name or service not known", "network")` → **`"dns"`**：
+   `EAI_NONAME` 本来就是**解析失败**，归到「网络不可达」会让用户去查网络。
+5. `health_one` 与 `probe` 的失败分支**共用同一个 `refine`**，把 `note` 追加进 `error` / `message`：
+   两处各写一份必然走散（本仓的老教训）。
+
+### 六、前端
+
+- `frontend/src/views/settings/pages/MetadataPage.vue` 的 `healthClass`：把 `dns` / `dns_polluted` /
+  `proxy` / `connect_timeout` 归**琥珀**（**毛病在本机**，标红会让人以为站点坏了）；
+  `timeout` **仍按原样标红** —— 它既可能是站点慢也可能是被阻断，改颜色会顺带动既有观感，
+  本期只收口新增的四个分类（§7.3：用户可见行为没变就别顺手改）。
+- `frontend/src/components/book/MetadataEditor.vue`：把**五处**重复的
+  `k === COVER ? '封面' : FIELD_LABELS[k as keyof BookMetadataFields] ?? k`（:129 / :156 / :302 / :364 /
+  **:614**，最后一处在模板的内联箭头里）收敛成一个 `labelOf(k: string): string`。
+  `vue-tsc` 3.3.12 报的 `TS2339`（`Record<keyof BookMetadataFields, string>` 上没有 `value`）
+  正是 :614 那行，索引 `FIELD_LABELS` 所需的断言现在**只出现一次**。
+  ⇒ `node node_modules/vue-tsc/bin/vue-tsc.js --build --force`（cwd `frontend/`）**exit 0**
+  （改前：`.vue(614,40)` 恰 1 条、`EXIT=2`）。`frontend/package.json` 的版本范围**未动**
+  （`"vue-tsc": "^3.3.11"`）—— 把代码写对比收紧范围更能扛住下次重装。
+
+### 七、测试与实测
+
+- 新增 `tests/test_netdiag.py`：异常分类（含异常链要看内层）、取主机名、`describe_exc` 是纯函数
+  （把两个缝换成「一调就炸」再调它）、DNS 报文编解码（合成响应 + `rcode≠0` + 截断都不崩）、
+  `compare` 三态（一致 / 不一致=污染 / 公共解析器失败=无法核对）、按 host 缓存、`refine` 升级
+  `dns_polluted`、解析一致但连不上是本机网络问题、与解析无关的失败不去核对。
+- `tests/test_metasources_health.py`：参数化表新增 7 行 + 改判 1 行；新增「网络归因」区段 5 例
+  （`search` 附结构化 `fail` / 体检把 DNS 污染说清楚 / 无法核对时不乱指 / 探活同一套口径 /
+  归因缝没有联网也能跑）。
+- `tests/conftest.py` 新增 autouse fixture **`_no_live_dns_in_tests`**：把两个 I/O 缝换成「问不到」并清缓存
+  ⇒ **全测试进程零真实 DNS**（既不该出网，也不该让结论取决于本机 DNS 是否被污染）；
+  要测污染行为的用例自己再 patch（后打的补丁生效）。
+- 实测：聚焦 3 文件 `tests/test_netdiag.py` + `tests/test_metasources_health.py` +
+  `tests/test_metasources_detail.py` ⇒ **82 passed / 7.29 s**；
+  后端全量 **2309 例（2284 passed / 0 failed / 0 errors / 25 skipped）401.83 s**（第 103 期 2274 例 ⇒ **+35 例**）；
+  前端 `npm run test:unit` **67 文件 / 686 例**；`vue-tsc --build --force` **exit 0**。
+- `VERSION` 仍 `0.94.0`（**第十轮不发版**）。
+
+### 八、踩坑
+
+- **前端全量并行偶发**（第 103 期一次、本期又一次）：`frontend/src/components/book/detail/ReadingLogTab.spec.ts`
+  在**并行全量**下会有一条 `Test timed out in 5000ms`（第 103 期命中
+  `it('重试按钮真的会再拉一次')`，本期命中同文件 `:233` 的 `it('接口失败 → 给重试…')`），
+  单跑该文件 **12 例 453 ms 全绿**，紧接着全量复跑 **686 passed**。根因线索：
+  `happy-dom was created 67 times · 256.61s total, 55% of tracked time` —— 环境创建吃满 CPU。
+  ⚠️ **别按行号认领**：命中的用例会换（已按这个事实改写 `docs/TODO.md` 的条目）。
+- `pytest.ini` 已含 `addopts = -q`，命令行**再传 `-q` 会变 `-qq`** ⇒ 末行不打印 `N passed / M skipped`
+  （是「exit 0 但拿不到计数」）。计数时别传 `-q`。
+- pwsh `> $out 2>&1` 写出的日志是 **UTF-16LE**，按 utf-8 读会得到夹 `\x00` 的乱码。
+
+### 九、没核过因而没声明
+
+- **三家源的真机核验仍做不了**（Google Books `seriesInfo` / Open Library `series` / Audnexus narrators）——
+  阻塞原因本期**从「站点不可达」改判为「本机 DNS 被上游污染」**（证据见第二节）。
+  ⇒ 三条挂起**保持挂起**，并且**不是技术债**：环境修好之前改选择器语义＝用单测绿换线上未知。
+- 本期**没有**做端到端探测（只比对解析结果）：网段被阻断时「解析对但连不上」与「站点真的慢」
+  仍可能混淆 —— 归因文案已如实分开（`blocked_note` vs `timeout`），但不宣称能区分。
+
+### 十、收尾
+
+- 分能力提交：`feat(core)` 出网失败归因（含 `netdiag` 与接线 + 测试）/ `feat(web)` 前端两处 /
+  `docs(104)`，**提交即推送**，工作区不留我方的未提交改动。
+- ⚠️ 并行会话脏项（`.codebuddy/memory/2026-10-03.md`、`.vscode/settings.json`、
+  `.vscode/harmony-deploy.ps1`、两个 `*.cookies.txt`）**不回退、不提交**。

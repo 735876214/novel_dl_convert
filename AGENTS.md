@@ -81,7 +81,7 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 
 ```bash
 # 后端测试（离线、全量；Windows 用 .venv\Scripts\python.exe）
-.venv/bin/python -m pytest                 # 当前基线 2274 例（2249 passed / 25 skipped；只增不减）
+.venv/bin/python -m pytest                 # 当前基线 2309 例（2284 passed / 25 skipped；只增不减）
                                            # ⚠️ 跑前先清空全部 proxy 变量；⚠️ 别再加 `-q`（两条都见第 5 节）
 .venv/bin/python -m pytest tests/test_catalog.py -k 某关键字
 
@@ -124,9 +124,13 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
   整套移进 `.ignored` 再从 registry 重装（版本与 `package.json` 的 `^` 记录不同），最后卡在
   `[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: vue-demi@0.14.10` 上 exit 1，**脚本压根没跑**。
   正确姿势：`cd frontend` 后**直接调 `frontend/node_modules/` 里的工具**（如 `node node_modules/vue-tsc/bin/vue-tsc.js --build`），或按第 4 节用 `npm run`。
-- ⚠️ **`vue-tsc` 3.3.12 起会在 `frontend/src/components/book/MetadataEditor.vue:614` 报 `TS2339`**
-  （模板里 `FIELD_LABELS[c as keyof BookMetadataFields]`），**3.3.11 全量重建 exit 0** ⇒ 触发条件是「重装前端依赖」，与那行代码有没有改过无关
-  （第 102 期记录，第 103 期复核：`frontend/node_modules` 里**现装的就是 3.3.12**，所以这条现在是**实红**不是潜在红；记在 `docs/TODO.md` §1）。
+- ⚠️ **`vue-tsc` 3.3.12 起比 3.3.11 严**（第 102 期记录、第 103 期复核为**实红**、**第 104 期已修**）：
+  症状是 `frontend/src/components/book/MetadataEditor.vue:614` 的模板内联
+  `FIELD_LABELS[c as keyof BookMetadataFields]` 报 `TS2339`（`--build --force` 恰 1 条、`EXIT=2`），
+  而 **3.3.11 全量重建 exit 0** ⇒ 触发条件是「**重装前端依赖**」，与那行代码有没有改过无关。
+  第 104 期的解法是**把代码写对**（五处重复的字段中文名收敛成一个 `labelOf(k: string)`，
+  索引断言只留一处），而不是收紧 `package.json` 的版本范围 —— 范围挡不住下次重装，写对才挡得住。
+  ⚠️ 所以「本地类型检查突然红一条、你没动过那个文件」先怀疑**工具链版本漂移**，别急着改业务代码。
 - ⚠️ **`write` 工具落的临时文件在 `C:\Users\qingr\Temp\`，而 pwsh 的 `$env:TEMP` 是 `…\AppData\Local\Temp`**（第 103 期）：
   用 `git commit -F "$env:TEMP\nf_msg_xxx.txt"` 会报 `fatal: could not read log file '…': No such file or directory`（提交未发生，`git add` 的暂存还在）
   ⇒ **一律给完整显式路径**（`git commit -F "C:\Users\qingr\Temp\nf_msg_xxx.txt"`）。
@@ -135,6 +139,11 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
   **每笔提交后都要核 `git log --oneline` 的笔数**，收尾用 `git show --stat <hash>` 确认内容对得上。
 - ⚠️ **读仓库里的中文 / JSON 文件一律用 `read` 工具**（第 103 期）：`Get-Content package.json -Raw | ConvertFrom-Json` 在本机
   因控制台 **GBK 解码**把中文读成乱码而报 `传入的对象无效`，`Get-Content docs\*.md` 则是满屏乱码 —— 都**不是文件坏了**，是 pwsh 读错了。
+- ⚠️ **本机的 DNS 被上游污染**（第 104 期实测，与代码无关）：`openlibrary.org` / `www.goodreads.com` /
+  `www.googleapis.com` 在本机解析到的是**别人的网段**（Facebook 的 `31.13.x` / `128.242.x`），
+  而 `8.8.8.8` 给的是正确地址（`199.59.149.201` / `199.59.148.6`）；`hosts` 里**没有**自定义行、`1.1.1.1` 的 UDP/53 无应答。
+  ⇒ 这三家的**真机探活 / 详情核验现在做不了**（第 102 期起挂起的三条都撞在这上面）。
+  探针连不上时先按 DNS 归因（应用内体检会报 `dns_polluted` 并把两边地址写进原因），**别去改选择器或超时**。
 
 ## 6. 提交与交付
 

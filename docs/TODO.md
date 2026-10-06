@@ -4,22 +4,26 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-05 —— 第 103 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续九轮）：
-**把系列 / 卷号 / 演播者接进元数据抓取线** —— 三个字段**早就建模**（`fileops.METADATA_FIELDS`、
-`metascore.FIELDS` 计分、命名规则 `{series}` / `{series_index}`、Komga `seriesIndex`、系列视图都已在），
-但**候选结构从一开始就没有这三个键** ⇒ 抓到的值连丢都算不上（压根没采集）。本期把候选结构 →
-`metafetch._VALUE_KEYS` 字段映射 → 默认策略 → 前端策略表整条接通，顺手修两处**把值写错地方**的缺陷
-（Audible 把系列名塞进 `tags`；RanobeDB 详情补全因响应套了 `book` 键而**从未生效**）。
+**最后更新**：2026-10-06 —— 第 104 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续十轮）：
+**出网失败归因（DNS 解析失败 / 解析被污染 / 连接被阻断 / TLS / 代理 / 超时）+ 收口前端类型红** ——
+本机 `openlibrary.org` / `www.goodreads.com` / `www.googleapis.com` 解析到的是**别人的网段**
+（Facebook 的 `31.13.x` / `128.242.x`），而 `8.8.8.8` 给的是正确地址（`hosts` 里没有任何自定义行）
+⇒ **上游 DNS 被污染**，不是站点故障、也不是链路抖动；而体检此前一律报「超时」，用户会去修一个**根本没坏**的源。
+本期新增叶子模块 `novelforge/core/netdiag.py`：数据路径只做**纯函数**异常分类（不联网），
+诊断路径（体检 / 「测试这一家」）才交叉核对本机与公共解析器，污染时把结论升级成 `dns_polluted`
+并把两边地址写进原因；**无法核对时如实说不下结论**（未知 ≠ 污染）。顺带把 `vue-tsc` 3.3.12 的
+`TS2339` 收口（`MetadataEditor.vue` 里五处重复的字段中文名收敛成一个 `labelOf`）。
 按用户要求，本轮起**已做完的条目直接从本文件删除**（不再标 `[x]` 留痕），历史一律去 roadmap 查。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线；`VERSION` = **0.94.0**
-  （**九轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口；`VERSION` = **0.94.0**
+  （**十轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
   第 98 期仪表盘余留、第 99 期元数据抓取真 bug、第 100 期 EPUB 判定、第 101 期 Goodreads 整家失效修复、
-  第 102 期元数据地基、第 103 期元数据字段接线，用户九次都选「先不发版」；单一真值源，`GET /health` 下发）；
+  第 102 期元数据地基、第 103 期元数据字段接线、第 104 期出网失败归因，用户十次都选「先不发版」；
+  单一真值源，`GET /health` 下发）；
   `CHANGELOG.md` 最新段仍是 `V0.94.0`。
-- 测试基线（第 103 期）：后端 **2274 例（2249 passed / 0 failed / 0 errors / 25 skipped）**；
+- 测试基线（第 104 期）：后端 **2309 例（2284 passed / 0 failed / 0 errors / 25 skipped）**，全量 401.83 s；
   前端 **67 spec / 686 例**（本期实跑全绿）。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
   （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
@@ -33,6 +37,12 @@
   ⚠️ **不要在本仓跑 `pnpm run <script>`** —— pnpm 会自动 install 并**整套换掉** `frontend/node_modules`
   （脚本还没跑就以 `ERR_PNPM_IGNORED_BUILDS` exit 1）。要跑前端检查直接调 `frontend/node_modules/`
   里的工具，例如 `node node_modules/vue-tsc/bin/vue-tsc.js --build`。
+  ⚠️ **本机 DNS 被上游污染**（第 104 期实测）——`openlibrary.org` / `www.goodreads.com` /
+  `www.googleapis.com` 在本机解析到的是**别人的网段**（`31.13.112.4` / `128.242.240.253` /
+  `172.217.x`，Facebook 与 Google 的真实段），而 `8.8.8.8` 给的是正确地址（`199.59.149.201` /
+  `199.59.148.6`），`C:\Windows\System32\drivers\etc\hosts` **没有任何自定义行**，`1.1.1.1` 无应答。
+  ⇒ 这三家的真机探活**现在做不了**；体检会对它们报 `dns_polluted`（第 104 期起）而不是「超时」，
+  看到这条**先查本机 DNS，别改代码**。
 - **可用的真实数据实例**（用户 2026-10-03 提供，随时可用来做实测）：本机 **`http://127.0.0.1:8412`**
   （`admin` / `changeme`），书目 **4 本**：三体 / 沙丘 / 银河系漫游指南 / 冒烟测试-第 91 期。
   窄屏三档冒烟一律跑它（`.codebuddy/tools/ui-smoke.ps1`，一次只传**一条**路由）。
@@ -87,18 +97,13 @@
   `subtitle` **是**顶层键（`novelforge/core/metasources.py` 的 `_search_audible` 没取）。
   接它要重走本期那套四处同步（候选结构 → `_VALUE_KEYS` → 默认策略 → 前端策略表），
   且要先定策略口径：不少书库把副标题当标题的一部分，默认 `overwrite` 会改书名 ⇒ 倾向 `fill_only`。
-- [ ] **`frontend/src/components/book/detail/ReadingLogTab.spec.ts:242` 全量并行偶发**
-  （第 103 期实测一次 `1 failed | 685 passed`，红的是 `it('重试按钮真的会再拉一次')`）——
-  **单跑该文件 + 紧接着全量复跑都是 686 passed** ⇒ 是并行下的偶发，不是本次改动破坏的。
-  记在这里是防止下次误判成「刚改的东西坏了」；真要根治得查该用例的等待/重试竞态。
-- [ ] **`vue-tsc` 3.3.12 前端类型检查实红**（第 103 期复核：`frontend/node_modules` 里**现装的就是
-  3.3.12**，不再只是「重装后才会红」）——`frontend/src/components/book/MetadataEditor.vue:614`
-  模板里的 `FIELD_LABELS[c as keyof BookMetadataFields]` 报 `TS2339: Property 'value' does not exist
-  on type 'Record<keyof BookMetadataFields, string>'`（`--build --force` 恰好 1 条，`EXIT=2`）。
-  `frontend/package.json` 的 range 是 `"vue-tsc": "^3.3.11"`，**3.3.11 跑 `--build --force` 是 exit 0**。
-  ⇒ 两条路：把该行类型写对（模板里 `changed` 是 `ref<string[]>`），或收紧版本范围；
-  本期一行未动该文件，只记录不改。
-
+- [ ] **`frontend/src/components/book/detail/ReadingLogTab.spec.ts` 全量并行偶发**
+  （第 103 期实测 `1 failed | 685 passed`，红的是 `it('重试按钮真的会再拉一次')`；第 104 期又复现一次，
+  这次红的是同文件 :233 的 `it('接口失败 → 给重试，而不是「还没有阅读记录」')`，
+  **都是 `Test timed out in 5000ms`**）—— 单跑该文件 12 例 **453 ms 全绿**，紧接着全量复跑 **686 passed**
+  ⇒ 是**并行全量下 happy-dom 环境创建吃满 CPU**（实测 `happy-dom was created 67 times · 256.61s total,
+  55% of tracked time`）导致的 5 s 超时，不是改动破坏的。⚠️ **别按行号认领**：命中的用例会换。
+  记在这里是防止下次误判成「刚改的东西坏了」；真要根治得给该用例放宽超时或查它的等待竞态。
 - [ ] **剩余三家抓取源仍无可解析样本**（挂起，不是忘了）—— Kobo（本机 403 + `Challenged | Kobo.com`，
   **站点主动拒绝**，与网络无关）/ Libro.fm（**AWS WAF 挑战页**，200 可达但搜索端点被拦）/
   Amazon（正则是活的，但本机命中 JS 校验页）。按第 95 期审计原话「在没有逐家真机核过的前提下改
@@ -115,23 +120,18 @@
   返回 `302`（反爬验证页）。按第 95 期口径「没有逐家真机核过就改选择器语义 = 用单测绿换线上未知」
   ⇒ `detail()` 对这三家如实回**明确中文回绝**（「这家来源没有按 ID 取详情的通道，请改用按书名检索」）。
   证据见 roadmap 第 102 期 §四。
-- [ ] **Open Library 本机间歇性不可达**（第 102 期收尾实测，**链路问题不是代码问题**）——
-  重试探针 **12/12 次全部 `ConnectTimeout [WinError 10060]`**（同日早些时候同一个 works URL
-  曾返回 200），裸 `httpx.get(url, timeout=30)` 同样连不上（各耗 42 s）⇒ 不是超时太短，是这台机器
-  到 `openlibrary.org` 的 TCP 连不上。**详情绑定因此保留不回撤**。日后再遇到「体检报这一家 timeout」，
-  **先查链路再查代码**，别当成本期改坏了。
+- [ ] **Open Library 本机解析被污染（不是本站的链路问题）**（第 104 期定因，**改自第 102 期的「链路问题」**）——
+  重试探针 12/12 次全部 `ConnectTimeout [WinError 10060]`，裸 `httpx.get(url, timeout=30)` 也连不上
+  （各耗 42 s）；第 104 期查了 DNS：本机 `openlibrary.org` → **`31.13.112.4`**（Facebook 段），
+  而 `8.8.8.8` → `199.59.149.201`（正确）；`hosts` 无自定义行、`1.1.1.1` 无应答 ⇒ **上游 DNS 污染**。
+  ⇒ 该家的真机核验（含 `series` 字段、`/works/OL…W.json` 详情）要等能解析对之后再谈；
+  体检现在会把它报成 `dns_polluted` 而不是「超时」。**详情绑定因此保留不回撤**。
 - [ ] **`online_candidate(book)` 不传 `cfg` 时静默返回 `None`**（既有语义，第 102 期已钉住不改）——
   `novelforge/core/metafetch.py` 的 `_cfg(cfg: dict)` 只从**传入的** dict 取 `metadata_fetch`，
   而 `online_candidate(book, cfg=None)` 默认 `None` ⇒ 看着像「这家源没结果」，实际是「压根没去查」。
   仓内真实调用方都传了（`novelforge/server.py` 的详情页路径传 `cfg=config.load_config()`），
   已由 `tests/test_config_readback_contract.py::test_不传配置时它什么都查不到是既有语义` 钉住。
   **不要**改成自动 `load_config()`（会让它从「什么都不做」变成「真的出网抓」，属有副作用的静默行为变更）。
-- [ ] **`vue-tsc` 3.3.12 起前端类型检查会红**（与本期能力无关，未动）——
-  `frontend/src/components/book/MetadataEditor.vue:614` 模板里的
-  `FIELD_LABELS[c as keyof BookMetadataFields]` 报 `TS2339: Property 'value' does not exist on type
-  'Record<keyof BookMetadataFields, string>'`；用**仓库原有的 3.3.11** 跑 `--build --force` 是 exit 0。
-  ⇒ 触发条件是「重装前端依赖」，不是这行代码变了。修它要动数据编辑器模板（属另一件事），
-  本轮只记录不改；`frontend/package.json` 的 `vue-tsc` 版本范围**迟早要收紧或把这行类型写对**。
 
 ### 明确「不做」（避免反复立项）
 
@@ -150,6 +150,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 104 | 出网**失败归因**（用户 2026-10-06 在 ask_user_question 里选 A）+ 前端类型红收口：先查出**本机 DNS 被上游污染**（`openlibrary.org`→`31.13.112.4` / `www.goodreads.com`→`128.242.240.253`，而 `8.8.8.8`→`199.59.149.201` / `199.59.148.6`，`hosts` 无自定义行、`1.1.1.1` 无应答）—— 此前一律报「超时」，用户会去修一个**根本没坏**的源（仓规：误报比不测更糟）。新增叶子模块 `novelforge/core/netdiag.py`：① **数据路径只做纯函数分类**（`classify_exc` / `describe_exc`，零 I/O，`search()` 失败多回一个 `fail` 键）② **诊断路径才交叉核对**（手写 UDP DNS 查询本机 vs `8.8.8.8`/`1.1.1.1`，按 host 缓存 60 s；两个 I/O 缝可注入）③ 污染 ⇒ 结论升级 `dns_polluted` 并**把两边地址写进原因**；公共解析器答不上来 ⇒ 如实说「无法交叉核对」，**未知 ≠ 污染**。`HEALTH_KINDS` 12→17 类（`dns` / `dns_polluted` / `tls` / `proxy` / `connect_timeout`，中文文案由后端下发，前端零新文案；`healthClass` 把这四类归**琥珀**＝本机环境问题，别再指着站点）。顺带**收口 `vue-tsc` 3.3.12 的 `TS2339`**：`MetadataEditor.vue` 五处重复的字段中文名（其中 :614 在模板内联箭头里）收敛成一个 `labelOf(k: string)` ⇒ `--build --force` **exit 0**（此前 `.vue(614,40)` 恰 1 条、EXIT=2）。测试 **+35 例**（`tests/test_netdiag.py` 23 / 健康归因 12，含把 `[Errno -2] Name or service not known` 从 `network` **故意改判** `dns`）、新增 `tests/conftest.py` 的 `_no_live_dns_in_tests`（全测试进程**零真实 DNS**）；后端全量 **2309 例全绿**、前端 686 例（**不发版**，`VERSION` 仍 0.94.0） |
 | 103 | 元数据字段**接线**（用户 2026-10-05 在 ask_user_question 里选 A：`series` / `series_index` / `narrators` 三项**早就建模、消费者全在**（`fileops.METADATA_FIELDS` / `metascore.FIELDS` 的 series 4.0 + series_index 3.0 / 命名规则 `{series}` `{series_index}` / Komga `seriesIndex` / 系列视图 / `db._CLEARABLE` `_META_FIELDS` / `patch_opf_meta`），**唯独这条抓取线从未接上** —— `_entry` 是固定键白名单、`metafetch` 无映射 ⇒ 抓到了也被静默丢掉）：① 顺手修 **RanobeDB 详情补全从未生效**（真机响应套在 `book` 键里，`{**b, **fetched}` 只并进一个键 ⇒ 作者/出版社/简介**全空且不报错**、`score_candidate` 只剩书名 0.7 < 阈值 0.75 ⇒ 这家源在默认配置下**永远进不了合并**，白挂两期）② **五个同步点**（`_entry` / `_CURRENT`·`_VALUE_KEYS`·`_FINALIZE_FIELDS` / `DEFAULTS['metadata_fetch']['fields']` / 前端 `POLICY_FIELDS` / 前端**写死的 spec 断言**「不含 series」）③ 卷号**只认 `^\d+(?:\.\d+)?$`**（错值比空值严重：它喂命名规则与 Komga `seriesIndex`）、`_best_series` **取卷号最小那支**（Audible 数组顺序三次实测倒置、Goodreads item 内层 `$4d:…:series` 是引用**要二次解析**、RanobeDB 卷号 = `series.books` 位置 + 1 且 29 册核过 28/29）④ **演播者四处口径**（`_LIST_FIELDS` + `_as_list`；`merge_values` 里 **不跨源合并** —— 两个源常是两次不同录音，拼起来会造出**从未存在**的阵容；`metastore.effective`/`state` 的在线分支此前给 `"['Scott Brick']"` 这串 repr，改 `_online_value` 走 `db._parse_tags`）⑤ 三项默认 **`fill_only`**（系列参与命名规则与系列视图、抓取收益在没值的书上；演播者本地值来自音频标签=权威源；老配置整表 overwrite 的用户仍按 overwrite 走，已在 `config.py` 写明）；Audnexus（SSL EOF）/ Open Library `series`（超时）/ Audible `subtitle` 三条**未核验不接线**挂 TODO；测试 **+11 例**、后端全量 **2274 例全绿**（**不发版**，`VERSION` 仍 0.94.0） |
 | 102 | 元数据抓取**地基**（用户 2026-10-05 直接提出，非从 TODO 取条目）：① 14 家源声明**收口**到 `novelforge/core/sources/`（`Provider` 数据类 + `DECLARED`，`SOURCES`/`GROUPS`/`IMPLEMENTED`/`LANG_AFFINITY`/`LANG_BROAD`/`SOURCE_ID_FIELD`/`HEALTH_SAMPLES` **7 张手工表改派生**，逐字段验算 14 家旧键全等，只多 `kind`/`rate_limit`/`cache_ttl`）② 进程内**缓存 + 按源限流**（`time.monotonic` 计时、只缓存「成功且非空」、命中浅拷贝防分数污染；`force=True` = 诊断模式**缓存与限流都旁路**，否则体检 4 路并发会被自己的 sleep 拖成**假 timeout**）③ **按记录标识取详情**（只接真机核验过的 iTunes / Open Library；Google Books 匿名 429 / Audnexus 本机不可达 / Goodreads 302 ⇒ **不声明**，如实中文回绝）④ 配置两键 `cache_ttl`（默认 `None` = 按各来源声明，不写死 600）/ `detail_fetch`（默认**关**，不改既有书的抓取结果）+ 环境变量**只兜底不覆盖** + 前端两个开关；顺带修掉一个**假配置**（`metasources.py` 从未 import `config` ⇒ `cache_ttl` 写完两期无人读，被裸 `except` 吞掉）＋ 新增 `test_metasource_registry_contract` 15 / `test_metasources_cache` 21 / `test_metasources_detail` 24 / `test_config_readback_contract` 19（**不发版**，`VERSION` 仍 0.94.0） |
 | 101 | 书源网页抓取收口：**Goodreads 旧结构（`<tr itemscope>`/`bookTitle`/`authorName`）已被站点下线 ⇒ 整家恒返 0 条**，改用 React Server Components 的 **RSC flight payload** 解析（同一真样本 604317 B：0 条 → **19 条**，多作者/年份/封面/provider_id 全对，未解析引用残留 0）+ **AWS WAF 挑战页归因**与「站点改版 / 站点主动拒绝」分开（Goodreads / Libro.fm 同套防护，取决于 IP 信誉）＋ 夹具 2 个、`tests/test_metasources_scrape.py` 12→24 例（**不发版**，`VERSION` 仍 0.94.0） |
@@ -200,14 +201,16 @@
 - 第 1 节 P0 目前**已清空**（第 93 期交付 `online-fallback`）；第 96 期取自**第 95 期审计批次 8**、
   第 97 期取审计的四条 `[low]`、第 98 期取 P1「仪表盘余留」、第 99 期取 P1「书源网页抓取」、
   第 100 期取 P1「EPUB 解析重试」（**实测后删除该立项**）、第 101 期取 P1「书源网页抓取」的剩余三家
-  （Goodreads 已收口，另两家缺样本）、第 102 期由**用户直接立项**（元数据抓取地基，不从 TODO 取）。
+  （Goodreads 已收口，另两家缺样本）、第 102 期由**用户直接立项**（元数据抓取地基，不从 TODO 取）、
+  第 103 期取 P1「书源网页抓取：系列信息没有接进候选」（**该条已交付并删除**）、
+  第 104 期由**用户直接立项**（出网失败归因 + 前端类型红收口，我给的推荐项，不从 TODO 取）。
   ⚠️ 第 102 期按拍板口径**只做了地基、零新源**：**分期做**（用户原话），
   微信读书一家中文源与其余能力留待后续期次；`docs/roadmap-gaps-remaining.md` 第 102 期段
   已写清「本期刻意不做」的边界（不新建 providers 包 / 不搬 1833 行解析实现 / 不改 `metascore` 计分 /
   不接 series / 不装 Calibre 运行时）。
-  ⚠️ 下一期从 P1 取时**只剩两条**：`novelforge/core/fileops.py` 的 OPF 改写正则（**字节等价不可证**，
-  须先证明等价才动）、「书源网页抓取：系列信息没有接进候选」（**新立项**，要动候选结构 →
-  `_VALUE_KEYS` → 收尾模式 → OPF 写入四处）；另有三条**挂起**（Kobo / Libro.fm / Amazon 缺样本；
-  三家源的按 ID 详情通道未核验；Open Library 本机链路间歇不通）。或按用户新需求立项。
+  ⚠️ 下一期从 P1 取时**只剩一条**：`novelforge/core/fileops.py` 的 OPF 改写正则（**字节等价不可证**，
+  须先证明等价才动）；另有三条**挂起**（Kobo / Libro.fm / Amazon 缺样本；三家源的按 ID 详情通道未核验；
+  `openlibrary.org` 等三家本机 **DNS 被上游污染** —— 这是**环境问题不是代码问题**，别当技术债还）。
+  或按用户新需求立项。
 - 若要做重投入项（例如再次跑大库基准、或做 PG / Redis 相关专项），**先量化再动手**
   —— 本项目已在第 61 期明确：没有指标不许凭感觉优化。

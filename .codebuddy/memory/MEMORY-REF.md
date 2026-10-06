@@ -1586,3 +1586,106 @@ payload 里**有**系列信息（实测能解出 `("Remembrance of Earth's Past"
 - ⚠️ **读仓库里的中文 / JSON 文件一律用 `read` 工具**：`Get-Content package.json -Raw | ConvertFrom-Json` 因控制台 **GBK 解码**把中文读成乱码而报 `传入的对象无效`；`Get-Content docs\*.md` 满屏乱码 —— **不是文件坏了**。
 - ⚠️ 追加中文正文的脚本要写成 `%TEMP%\nf_*.py` 再跑（内联 here-string 会吃 `$` 前缀序列与引号）；追加前 `assert text.endswith("\n")`、追加后回读 `tail` 验证顺序。
 - 基线：第 102 期 **2263 例（2238 passed / 25 skipped）**；`VERSION` 仍 `0.94.0`、**九轮不发版**。
+
+
+## 第 104 期铁律（出网失败归因 + 前端类型红收口）
+
+### 一、立项与范围
+
+- 用户 `ask_user_question` **选 A**（2026-10-06）：**出网失败归因**（DNS 解析失败 / 解析被污染 / 连接被阻断 / TLS / 代理 /
+  超时六类分开）+ **顺带收口前端类型红**。未选 B（Audible `subtitle` 接线）、C（只修类型红）、D（微信读书中文源）。
+- ⚠️ 性质是**把已有的一条诊断线做准**，不是加能力：`search()` / `detail()` 失败后归类的函数本来就有一串中文关键词
+  （`_classify_error`），缺的是「**到底是本机的问题还是站点的问题**」这一层判据。
+
+### 二、先定因：本机 DNS 被上游污染（本轮第一件事就是取证）
+
+- 症状：第 102 期起挂起的三条（Open Library `series` / Google Books `seriesInfo` / Audnexus narrators）**全都连不上**，
+  而同时 `ranobedb.org` / `api.audible.com` / `github.com` / `pypi.org` 正常。
+- 取证（三条互证）：
+  1. `socket.gethostbyname` / `Resolve-DnsName` 在本机给 `openlibrary.org` → `31.13.112.4`、`www.goodreads.com` →
+     `128.242.240.253`（**Facebook 的网段**）；
+  2. 问公共解析器 `8.8.8.8` 得到 `199.59.149.201` / `199.59.148.6`（**与上面完全不一致**）；
+  3. `C:\Windows\System32\drivers\etc\hosts` **没有任何自定义行**，`1.1.1.1` 的 UDP/53 **无应答**。
+- 结论：**上游 DNS 被污染**（不是链路抖动、不是我们改了 hosts、更不是站点故障）⇒ 三家的真机探活/详情核验现在做不了，
+  这类失败**要用户去查本机 DNS**，所以必须在界面上与「站点慢」分开报。⚠️ 这条已写进 `AGENTS.md` §5。
+
+### 三、架构决策：只在诊断路径做联网交叉核对
+
+- 三个候选：① 每次失败都查一遍；② **只在诊断路径查**；③ 加一个配置开关。
+- **选 ②**：数据路径（`search()` / `detail()`）要快、要无副作用，而用户真正看归因的地方是**体检与探活**；
+  配置开关属于「为猜想的未来预留」（§7.2 禁投机抽象）。
+- 因此 `netdiag` 分成两层：**纯函数**（`classify_exc` / `host_of` / `describe_exc`，可被数据路径安全调用）
+  与**做 I/O 的诊断函数**（`compare` / `refine`，只被 `health_one` / `probe` 调用）。
+
+### 四、`novelforge/core/netdiag.py` 的 API 与三态判定
+
+- 常量：`DNS_CHECK_SERVERS = ("8.8.8.8", "1.1.1.1")`（8.8.8.8 在前，本机实测 1.1.1.1 无应答）、
+  `CROSS_CHECK_KINDS = ("dns", "connect_timeout", "network")`（⚠️ **`timeout` 不在其中**：站点慢与 DNS 无关，不该去查）、
+  `_CROSS_CACHE`（按主机缓存，`_CROSS_CACHE_MAX = 64`，按写入时间淘汰最旧）。
+- 纯函数：`_clean_host(host)`（去空白/末尾点/小写；**IP 字面量回空串**，IP 不需要解析也不该被比）、
+  `_chain(exc, limit=8)`（沿 `__cause__` / `__context__` 走 —— httpx 常把真因包一层）、
+  `classify_exc(exc) -> str`（三遍扫描：① `socket.gaierror` → `dns`、`ssl.SSLError` → `tls`、`httpx.ProxyError` → `proxy`；
+  ② `httpx.ConnectTimeout` → `connect_timeout`、其余 `httpx.TimeoutException` → `timeout`；
+  ③ `httpx.ConnectError` / `ConnectionRefusedError` / `ConnectionResetError` / `BrokenPipeError` / `OSError` → `network`；
+  认不出回 `""`；**自身任何异常都吞掉回 `""`**）、`host_of(exc, url="")`、`describe_exc(exc, url="") -> {"kind","host"}`。
+- I/O 缝（测试可替换）：`_dns_exchange(packet, server, timeout) -> bytes`（UDP `sendto((server, 53))` + `recvfrom(2048)`）、
+  `_local_ips(host, port=443) -> list`（`socket.getaddrinfo` 去重保序）。
+- 报文编解码（手写，因为只取 A 记录不值得引依赖）：`_build_query(name, qid)`（header `>HHHHHH`、flags `0x0100`、
+  QTYPE=1 / QCLASS=1）、`_skip_name(data, off)`（`0x00` 或压缩指针 `0b11` 结束）、
+  `_parse_a_records(data, qid)`（id 不匹配或 `flags & 0x000F` ⇒ `[]`；逐 answer 解 `>HHIH`，
+  `rtype==1 and rclass==1 and rdlen==4` ⇒ 点分 IP；**截断不抛**）。
+- `compare(host, *, timeout=2.0, servers=DNS_CHECK_SERVERS, cache_ttl=60.0) -> {"host","local","public","server","agrees","polluted","error"}`：
+  `agrees = bool(set(local) & set(public))`（⚠️ CDN 多地址只要求**有交集**，不能要求集合相等）、
+  `polluted = local and public and not agrees`；**公共解析器全失败 ⇒ `agrees=None, polluted=False` + 「公共解析器不可用，无法交叉核对」**
+  —— **未知 ≠ 污染**，这条口径是本期的核心防误报设计。
+- `refine(fail, *, timeout=2.0) -> {"kind","note"}`：只在 `kind ∈ CROSS_CHECK_KINDS` 且 host 非空时核对；
+  污染 ⇒ kind 升级 **`dns_polluted`** + `pollution_note`（写明两边地址）；解析一致 ⇒ 原 kind + `blocked_note`
+  （「解析正常但连不上 ⇒ 多半是本机网络/防火墙屏蔽了该站点，不是站点故障」）；`public 有而 local 空` ⇒ 原 kind + `unresolved_note`。
+
+### 五、接线五处（`novelforge/core/metasources.py`）
+
+1. `_error_text(exc)`：**先判 `httpx.HTTPStatusError`**（302 / 404 / 其余，文案与阈值一字未动），再按
+   `netdiag.classify_exc` 分档；⚠️ **这里零 I/O**（钉住的用例传的是**裸异常**、连 `.request` 都没有）。
+2. `search()` 的 except 分支返回 `"fail": netdiag.describe_exc(e)`（**附加键**，`ok/entries/error` 三键语义不变）。
+3. `HEALTH_KINDS` 12 → 17（新增 `connect_timeout` / `dns` / `dns_polluted` / `tls` / `proxy`，中文名即前端文案，
+   前端**不另写一套**）。
+4. `_classify_error(err, exc=None)` 新关键词**排在 `超时`/`连接失败` 两支之前**（顺序即优先级）：`解析被污染` → `dns_polluted`；
+   `域名解析` / `name or service not known` / `getaddrinfo` / `gaierror` / `11001` → `dns`；`tls`/`ssl`/`certificate verify failed`/`unexpected_eof` → `tls`；
+   `代理`/`proxy` → `proxy`；`连接超时`/`connect time out` → `connect_timeout`。
+5. `health_one` 与 `probe` 的失败分支**共用 `netdiag.refine`**，把 `note` 追加到 `error` / `message`，kind 用 `ref["kind"]`。
+
+### 六、前端两处
+
+- `frontend/src/views/settings/pages/MetadataPage.vue` 的 `healthClass(kind)`：`dns` / `dns_polluted` / `proxy` /
+  `connect_timeout` 归**琥珀**（`text-amber-600 dark:text-amber-400`）—— 这四类的毛病在**本机**，标红等于说「站点坏了」；
+  ⚠️ **`timeout` 仍标红**（既可能站点慢也可能被阻断，改颜色会动既有观感，本期只收口新增四类）。
+- `frontend/src/components/book/MetadataEditor.vue`：五处重复的
+  `k === COVER ? '封面' : FIELD_LABELS[k as keyof BookMetadataFields] ?? k`（`:129` / `:156` / `:302` / `:364` / `:614`）
+  收敛成唯一的 `labelOf(k: string): string` ⇒ `vue-tsc` 3.3.12 的 `TS2339` 消失。
+  ⚠️ **不要用收紧 `package.json` 版本范围的办法绕过**（范围挡不住下次重装）；**把代码写对**才是解法。
+  改后 `node node_modules/vue-tsc/bin/vue-tsc.js --build --force`（cwd `frontend/`）**EXIT=0**（改前恰 1 条、`EXIT=2`）。
+
+### 七、测试与实测
+
+- 新 `tests/test_netdiag.py`（23 例含参数化）：异常链分类、DNS 报文编解码（合成响应 + id 不匹配 / rcode=3 / 空包 / 截断）、
+  `compare` 三态（一致 / 不一致=污染 / 公共解析器失败=无法核对）、按主机缓存与 `clear_cache()`、
+  `refine` 升级 `dns_polluted`、**「与解析无关的失败不去核对」**（`timeout` 不查；`{}/None` 回 `{"kind":"","note":""}`）。
+- `tests/conftest.py` 新增 autouse `_no_live_dns_in_tests`：把 `_dns_exchange` 换成抛 `OSError` 的 `_no_net`、
+  `_local_ips` 换成回 `[]`，并前后清 `_CROSS_CACHE` ⇒ **测试既不出网，也不该让结论取决于本机 DNS 是否被污染**。
+- `tests/test_metasources_health.py`：参数化表**故意**把 `("连接失败：[Errno -2] Name or service not known", "network")`
+  改成 `"dns"`（`EAI_NONAME` 本就是解析失败；两类要用户做的动作不同），并新增 7 行（含污染长文案 → `dns_polluted`、
+  `[SSL: UNEXPECTED_EOF_WHILE_READING]` → `tls`、`proxy connect failed` → `proxy`、`连接超时` → `connect_timeout`）；
+  新增区段「网络归因（第 104 期）」5 例（结构化 `fail` / 污染说清楚 / 无法核对时**不乱指** / 探活同归因 / 归因缝没网也能跑）。
+- 实测：聚焦 3 文件 **82 passed / 7.29 s**；后端全量 **2309 例（2284 passed / 25 skipped），401.83 s，exit 0**（+35 例）；
+  前端 67 spec / 686 例；`python tests/check_doc_anchors.py` exit 0。
+
+### 八、操作陷阱（本轮新增/复核）
+
+- ⚠️ **`ReadingLogTab.spec.ts` 的全量并行偶发**：第 103 期与第 104 期各撞一次（命中用例会换，第 104 期是 `:233`）
+  ⇒ **别按行号认领**；vite 自报 `happy-dom was created 67 times · 55% of tracked time`，单跑 453 ms 全绿。
+- ⚠️ **探针脚本同样要先清空全部 proxy 变量**（不只是 pytest）：`NO_PROXY` 里的 `[::1]` 会让 httpx 抛
+  `InvalidURL: Invalid port: ':1]'`，看起来像「所有站点都连不上」。
+- ⚠️ **`write` 工具落的临时文件在 `C:\Users\qingr\Temp\`，而 pwsh `$env:TEMP` 是 `…\AppData\Local\Temp`** ⇒
+  `git commit -F "$env:TEMP\nf_msg_*.txt"` 会失败且**暂存区不清空**（内容被下一笔悄悄带走）⇒ 用完整显式路径，**每笔后核笔数**。
+- ⚠️ Python 追加脚本**别打印中文**（控制台 GBK ⇒ `UnicodeEncodeError`；**出现它不代表写入失败**），追加前 `assert text.endswith("\n")`、追加后回读 `tail` 验证顺序。
+- 基线：第 104 期 **2309 例（2284 passed / 25 skipped）**；`VERSION` 仍 `0.94.0`、**十轮不发版**。
