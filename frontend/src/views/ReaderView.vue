@@ -584,6 +584,8 @@ function onReaderClick(e: MouseEvent): void {
   if (!paged.value) return
   // 设置面板打开时，点正文先收面板且**不翻页** —— 面板本身就盖住右侧翻页热区，
   // 顺手翻页会让「想关面板」变成「莫名翻过去一页」。
+  // ⚠️ 第 108 期起「点面板以外就收面板」还有一条 document 级监听（`onDocumentClick`）；
+  // 这条早退仍然必要：它管的是**这一次点击不翻页**，而那条只管收面板。
   if (showSettings.value) {
     showSettings.value = false
     return
@@ -654,12 +656,15 @@ onMounted(() => {
     pageObserver.observe(scrollRef.value)
   }
   window.addEventListener('keydown', onKeydown)
+  // 第 108 期：点面板以外就收面板（含滚动模式点正文、点工具栏其它按钮）
+  document.addEventListener('click', onDocumentClick)
 })
 
 onBeforeUnmount(() => {
   pageObserver?.disconnect()
   pageObserver = null
   window.removeEventListener('keydown', onKeydown)
+  document.removeEventListener('click', onDocumentClick)
 })
 
 // 影响分页的偏好变动后重新量（等 DOM 更新完再量，否则拿到旧 scrollWidth）
@@ -739,6 +744,38 @@ const notesBtn = ref<ComponentPublicInstance | null>(null)
 function restoreFocus(btn: ComponentPublicInstance | null): void {
   const el = btn?.$el
   if (el instanceof HTMLElement) el.focus()
+}
+
+/** 设置面板本体（第 108 期）：判「点的是不是面板里面」用，见 `onDocumentClick` */
+const settingsPanel = ref<HTMLElement | null>(null)
+
+/**
+ * 点面板以外的地方就收面板（第 108 期，用户口径）。
+ *
+ * 只在 `onReaderClick` 里收是不够的：那条路第一行就是 `if (!paged.value) return`，
+ * 于是**滚动模式**下点正文、以及点工具栏其它按钮，都不会经过它 —— 面板会一直挂着
+ * 挡住正文（它 `absolute` 盖在右侧翻页热区上）。
+ *
+ * 这里挂在 `document` 上按**包含关系**判：点在面板里、或点在打开它的那颗按钮上都不收，
+ * 其余任何位置（正文、工具栏、横幅、留白）一律收。
+ *
+ * ⚠️ 用 `click`（冒泡到 document）而不是 `pointerdown`：组件自己的 `@click` 先跑完才轮到
+ * 这里，于是翻页模式下「点正文关面板」那一下仍会先被 `onReaderClick` 的早退吃掉
+ * （收面板、**不翻页**）。换成 `pointerdown` 会先关面板，让同一下点击顺势翻过去一页 ——
+ * 用户想关面板却翻了一页，正是那条早退当初要避免的。
+ *
+ * ⚠️ 面板里**不放** `action` / `pointerdown` 类关闭判据的浮层（Select / Popover 这类
+ * Teleport 到 body 的控件）：它们的下拉内容不在 `settingsPanel` 里，点一下会被这里
+ * 当成「点到了外面」。要加这类控件，得先把它排除掉（`lib/viewport` 那种收口不算）。
+ */
+function onDocumentClick(e: MouseEvent): void {
+  if (!showSettings.value) return
+  const target = e.target
+  if (!(target instanceof Node)) return
+  if (settingsPanel.value?.contains(target)) return
+  const trigger = settingsBtn.value?.$el
+  if (trigger instanceof Node && trigger.contains(target)) return
+  showSettings.value = false
 }
 
 const annotations = ref<Annotation[]>([])
@@ -2349,6 +2386,7 @@ onBeforeUnmount(() => {
 
           <div
             v-if="showSettings"
+            ref="settingsPanel"
             class="absolute right-0 z-30 mt-1 max-h-[75vh] w-72 overflow-y-auto rounded-lg border border-border bg-card p-3 shadow-lg"
           >
             <!-- 固定版式：重排设置对这本书没有意义，如实说清并把它们禁用（不装作能调） -->

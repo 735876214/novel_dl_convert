@@ -824,3 +824,93 @@ describe('ReaderView · 高亮定位（偏移锚 vs 文本搜索）', () => {
     expect(highlightedParagraph(wrapper)).toBe('目标一')
   })
 })
+
+/**
+ * 点设置面板以外的地方 ⇒ 面板自己收（第 108 期，用户口径）。
+ *
+ * 面板是一条 `absolute` 的浮层，没有任何遮罩，所以「点旁边」必须自己收 —— 否则它
+ * 会一直挂在那儿盖住正文，而用户已经去干别的事了。
+ *
+ * ⚠️ 收在 `onReaderClick` 里**不够**：那条路的首行是 `if (!paged.value) return`，
+ * 默认的滚动模式下点正文、点工具栏**都不经过**它。所以本期加的是 document 级监听；
+ * 下面第一条用例就是按默认（滚动）模式写的。
+ *
+ * ⚠️ 这个 describe **必须** `attachTo: document.body`（不能照抄文件里那个
+ * `mountReader`）：VTU 默认把组件挂在一棵**游离**的树上，事件不会冒泡到 `document`，
+ * 于是「document 级监听」这条被测代码**根本不会跑到** —— 用例会以「面板没关」这种
+ * 看着像产品 bug 的形式失败。冤枉过一次，记在这儿。
+ *
+ * 反向的两条同样要钉：点面板**自己**不许收（不然里面的控件没法用），点设置按钮
+ * 也不许被这条监听立刻关掉（那是它自己的 toggle）。
+ */
+describe('ReaderView · 点面板以外自动收面板（第 108 期）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    localStorage.clear()
+    stubApi(makeBook())
+  })
+
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  /** 面板 = 设置浮层；`.z-30` 在整个阅读器里只有它一份 */
+  const panel = (w: VueWrapper) => w.find('.z-30')
+
+  async function openSettings() {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [{ path: '/read/:id', name: 'read', component: ReaderView }],
+    })
+    await router.push('/read/book-a')
+    await router.isReady()
+    const wrapper = mount(ReaderView, { global: { plugins: [router] }, attachTo: document.body })
+    await flushPromises()
+    await wrapper.get('[title="阅读设置"]').trigger('click')
+    expect(panel(wrapper).exists(), '设置按钮要先能把面板打开').toBe(true)
+    return wrapper
+  }
+
+  it('默认（滚动）模式点正文 ⇒ 面板收起', async () => {
+    const wrapper = await openSettings()
+
+    await wrapper.get('.reader-content').trigger('click')
+
+    expect(panel(wrapper).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('点工具栏另一个按钮 ⇒ 先收面板，再执行那个按钮', async () => {
+    const wrapper = await openSettings()
+
+    await wrapper.get('[title="目录"]').trigger('click')
+
+    expect(panel(wrapper).exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('点面板**自己** ⇒ 不收（否则里面的控件点一下就把面板关了）', async () => {
+    const wrapper = await openSettings()
+
+    await panel(wrapper).trigger('click')
+
+    expect(panel(wrapper).exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('点设置按钮 ⇒ 仍由它自己的 toggle 说了算（不会被这条监听立刻关掉）', async () => {
+    const wrapper = await openSettings()
+
+    await wrapper.get('[title="阅读设置"]').trigger('click')
+
+    expect(panel(wrapper).exists()).toBe(false) // 第二次点是**关**
+    wrapper.unmount()
+  })
+
+  it('卸载后 document 上没有遗留监听（点哪儿都不炸）', async () => {
+    const wrapper = await openSettings()
+    wrapper.unmount()
+
+    expect(() => document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))).not.toThrow()
+  })
+})
