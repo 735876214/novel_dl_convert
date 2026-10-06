@@ -27,6 +27,7 @@ from html import unescape as html_unescape
 import httpx
 
 from .. import config
+from . import netdiag
 from .library import norm_key
 from .sources import Provider, kinds
 from .sources import registry as _src_registry
@@ -1718,9 +1719,12 @@ def _error_text(exc: Exception) -> str:
 
     ⚠️ **只此一处**：`search` 与 `detail` 都需要这套口径（3xx 反爬 / 4xx-5xx 接口 /
     超时 / 连不上），两处各写一份必然走散 —— 第 102 期加 `detail` 时收敛到这里。
+
+    ⚠️ 第 104 期补上**网络归因**：本机 DNS 被污染时 `openlibrary.org` 解析到 Facebook 网段、
+    连接超时，原来的口径一律写「请求超时」/「连接失败」—— 用户会照着自己去修一个**根本没坏**
+    的源。这里按**异常链**分档（`netdiag.classify_exc`，纯函数、零 I/O），**不查 DNS**：
+    真正的交叉核对（本机解析 vs 公共解析）由诊断路径的 `netdiag.refine` 做。
     """
-    if isinstance(exc, httpx.TimeoutException):
-        return f"请求超时：{exc}"
     if isinstance(exc, httpx.HTTPStatusError):
         # ⚠️ 必须按状态码分开说：3xx（httpx 的 raise_for_status 也管）多半是被反爬
         # 重定向到验证页，4xx/5xx 是接口本身的问题，两者要做的处置不一样。
@@ -1732,7 +1736,19 @@ def _error_text(exc: Exception) -> str:
             # 会让人以为站点坏了，跑去查一个根本没坏的东西（误报比不报更糟）。
             return "该地址不存在（HTTP 404）：记录可能已下架，或该来源的接口已改版"
         return f"接口返回错误（HTTP {code}）"
-    if isinstance(exc, httpx.HTTPError):
+    kind = netdiag.classify_exc(exc)
+    if kind == "dns":
+        return (f"域名解析失败：{exc}"
+                "（本机 DNS 解析不出该域名；解析被污染时也会这样，换一个 DNS 再试）")
+    if kind == "tls":
+        return f"TLS 握手失败：{exc}（证书 / 中间人 / 站点握手中断）"
+    if kind == "proxy":
+        return f"代理不可用：{exc}（检查代理环境变量）"
+    if kind == "connect_timeout":
+        return f"连接超时：{exc}（TCP 都没建起来：多半被阻断，或该地址已不对）"
+    if kind == "timeout" or isinstance(exc, httpx.TimeoutException):
+        return f"请求超时：{exc}"
+    if kind == "network" or isinstance(exc, httpx.HTTPError):
         return f"连接失败：{exc}"
     return str(exc)
 
@@ -1765,7 +1781,11 @@ def search(source: str, title: str, author: str, limit: int = 5, opts: dict = No
     try:
         entries = fn(title, author, n_limit, opts or {})
     except Exception as e:                                   # noqa: BLE001 —— 单源失败不能影响别的源
-        return {"ok": False, "entries": [], "error": _error_text(e)}
+        # `fail` 是第 104 期加的**附加键**（调用方一律用 `.get`）：把异常里的
+        # 「哪一类失败、打的是哪个主机」结构化地带出去，诊断路径（probe / health_one）
+        # 靠它做 DNS 交叉核对。数据路径不看它，也不为它多花任何一次往返。
+        return {"ok": False, "entries": [], "error": _error_text(e),
+                "fail": netdiag.describe_exc(e)}
     # ⚠️ 只缓存**非空**结果：空结果不缓存（一次抖动不该让这家「假死」整个 TTL）
     if entries:
         _cache_put(key, entries, ttl)
@@ -1994,7 +2014,13 @@ def probe(source: str, opts: dict = None) -> dict:
     res = search(source, "Pride and Prejudice", "Jane Austen", 1, opts, force=True)
     ms = int((time.time() - t0) * 1000)
     if not res["ok"]:
-        return {"ok": False, "message": res["error"] or "不可用", "ms": ms}
+        # 诊断路径才做交叉核对（本机解析 vs 公共解析）：把「本机 DNS 给错地址」
+        # 升级成 `dns_polluted` 并把证据写进原因。⚠️ 数据路径（`search` 本身）不做这件事。
+        msg = res["error"] or "不可用"
+        ref = netdiag.refine(res.get("fail") or {})
+        if ref.get("note"):
+            msg = f"{msg}；{ref['note']}"
+        return {"ok": False, "message": msg, "ms": ms}
     if not res["entries"]:
         return {"ok": False, "message": "能连通但没返回结果（可能被限流）", "ms": ms}
     return {"ok": True, "message": f"可用（{ms} ms）", "ms": ms}
@@ -2032,7 +2058,14 @@ HEALTH_KINDS = {
     "redirect": "被重定向（多为反爬）",
     "http": "接口返回错误",
     "timeout": "超时",
+    "connect_timeout": "连接超时（连不上）",
     "network": "网络不可达",
+    # 第 104 期：把「本机 DNS 的问题」单列 —— 它要用户做的事（改 DNS）与「站点故障」
+    # （等修复 / 换源）完全不同，混在「网络不可达」里用户只能瞎猜。
+    "dns": "域名解析失败",
+    "dns_polluted": "域名解析被污染（本机 DNS 给错地址）",
+    "tls": "TLS 握手失败",
+    "proxy": "代理不可用（检查代理环境变量）",
     "parse": "响应解析失败",
     "error": "其它错误",
 }
@@ -2059,6 +2092,21 @@ def _classify_error(err: str, exc: Exception = None) -> str:
         return "http"
     if "需要 api key" in low or "需要 ttbkey" in low or "需要密钥" in text or "需要设置" in text:
         return "missing_key"
+    # 第 104 期：把「解析不出来 / 解析到错地址」与「连不上」分开。
+    # ⚠️ 必须排在「超时」/「连接失败」**之前**：DNS 失败的原文常常同时含
+    # `timed out` 或 `连接失败`，先匹配那两个就永远分不出来。
+    if "解析被污染" in text or "dns 被污染" in low:
+        return "dns_polluted"
+    if "域名解析" in text or "name or service not known" in low or "getaddrinfo" in low \
+            or "gaierror" in low or "nodename nor servname" in low or "11001" in text:
+        return "dns"
+    if "tls" in low or "ssl" in low or "certificate verify failed" in low \
+            or "unexpected_eof" in low:
+        return "tls"
+    if "代理" in text or "proxy" in low:
+        return "proxy"
+    if "连接超时" in text or "connecttimeout" in low or "connect timeout" in low:
+        return "connect_timeout"
     if "超时" in text or "timeout" in low:
         return "timeout"
     # JSON 解析失败的原文是英文（json.JSONDecodeError）：换个报错口径这里就会漏分类，
@@ -2103,8 +2151,12 @@ def health_one(source: str, opts: dict = None, title: str = "", author: str = ""
     entries = res.get("entries") or []
     if not res.get("ok"):
         err = res.get("error") or "不可用"
-        return {**base, "ok": False, "kind": _classify_error(err), "ms": ms, "count": 0,
-                "first": "", "error": err}
+        # 同上：体检是诊断路径，值得为「到底是谁的问题」多花一次解析核对。
+        ref = netdiag.refine(res.get("fail") or {})
+        if ref.get("note"):
+            err = f"{err}；{ref['note']}"
+        return {**base, "ok": False, "kind": ref.get("kind") or _classify_error(err),
+                "ms": ms, "count": 0, "first": "", "error": err}
     if not entries:
         return {**base, "ok": False, "kind": "empty", "ms": ms, "count": 0, "first": "",
                 "error": "请求成功但没解析到结果：站点结构可能变了，或这家确实没有这本样本"}

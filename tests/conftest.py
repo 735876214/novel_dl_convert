@@ -393,6 +393,36 @@ def _no_metasource_cache_leak():
         _ms._LAST_CALL.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_live_dns_in_tests(monkeypatch):
+    """用例**默认不出网做 DNS 查询**（第 104 期）。
+
+    `probe` / `health_one` 是诊断路径，失败时会调 `novelforge.core.netdiag.refine` 去问
+    公共解析器「本机解析得对不对」—— 那是一次真实的 UDP/53 往返（本机 8.8.8.8 通、
+    1.1.1.1 无应答）。单测里既不该出网，也不该让结论取决于**本机 DNS 是否被污染**
+    （那正是第 104 期要解释的现象：本机 `openlibrary.org` 解析到 Facebook 网段）。
+
+    所以两个 I/O 缝都换成「问不到」：`_dns_exchange` 抛错、`_local_ips` 回空表 ⇒
+    `compare()` 给出 `agrees=None` + 「无法交叉核对」。**未知不等于污染** ——
+    这条口径本身也是有意的：宁可说不出结论，也不能乱指。
+
+    要钉污染行为的用例自己再 monkeypatch（后打的补丁生效，见 `tests/test_netdiag.py`）。
+    """
+    from novelforge.core import netdiag as _nd
+
+    def _no_net(*_a, **_k):
+        raise OSError("测试环境禁止真实 DNS 查询（见 conftest._no_live_dns_in_tests）")
+
+    monkeypatch.setattr(_nd, "_dns_exchange", _no_net)
+    monkeypatch.setattr(_nd, "_local_ips", lambda *_a, **_k: [])
+    _nd.clear_cache()
+    try:
+        yield
+    finally:
+        # 缓存是按主机名的、跨用例会留存 ⇒ 清掉，否则后一个用例读到前一个的核对结果。
+        _nd.clear_cache()
+
+
 @pytest.fixture
 def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     """**用例级隔离**：数据 / 导出 / 来源目录指向本用例专属路径，并重建一套空库。

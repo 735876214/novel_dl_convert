@@ -44,7 +44,20 @@ def test_体检样本覆盖全部来源():
     ("接口返回错误（HTTP 400）", "http"),
     ("需要 API Key：请在「元数据来源」里填 Hardcover API Token", "missing_key"),
     ("需要 TTBKey：请在「元数据来源」里填 Aladin TTBKey", "missing_key"),
-    ("连接失败：[Errno -2] Name or service not known", "network"),
+    # ⚠️ 第 104 期**故意改掉**这一行：`[Errno -2] Name or service not known` 是 EAI_NONAME，
+    # 本来就是**解析失败**，此前归到「网络不可达」—— 而这两件事要用户做的事完全不同
+    # （改本机 DNS vs 查网络）。分不开就是误报：用户会去修一个根本没坏的东西。
+    ("连接失败：[Errno -2] Name or service not known", "dns"),
+    ("域名解析失败：[Errno 11001] getaddrinfo failed（本机 DNS 解析不出该域名）", "dns"),
+    # 污染是**交叉核对之后**才敢下的结论：本机解析与公共解析器完全不一致。
+    ("连接超时：timed out；域名 openlibrary.org 在本机解析到 31.13.112.4，"
+     "而公共解析器（8.8.8.8）给的是 199.59.149.201 —— 两者完全不一致 ⇒ "
+     "多半是**本机 DNS 被污染**，不是站点故障", "dns_polluted"),
+    ("连接失败：[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol",
+     "tls"),
+    ("连接失败：proxy connect failed", "proxy"),
+    ("连接超时：timed out（TCP 都没建起来）", "connect_timeout"),
+    ("连接失败：网络不可达", "network"),
     ("请求超时：timed out", "timeout"),
     ("Expecting value: line 1 column 1 (char 0)", "parse"),
     ("某些没见过的错误", "error"),
@@ -149,6 +162,105 @@ def test_指定的源子集也能体检(monkeypatch):
 
     assert out["order"] == ["itunes", "openlibrary"]
     assert set(out["items"]) == {"itunes", "openlibrary"}
+
+
+# ---------------- 网络归因（第 104 期）----------------
+
+def _connect_timeout():
+    import httpx
+    return httpx.ConnectTimeout(
+        "timed out", request=httpx.Request("GET", "https://openlibrary.org/search.json"))
+
+
+def _patch_connect_timeout(monkeypatch):
+    """所有出网口都抛同一条 `ConnectTimeout`（带 request ⇒ 归因知道打的是哪个主机）。"""
+    def boom(*_a, **_k):
+        raise _connect_timeout()
+
+    monkeypatch.setattr(m, "_get_json", boom)
+    monkeypatch.setattr(m, "_get_text", boom)
+
+
+def test_检索失败附上结构化归因(monkeypatch):
+    """`search` 的失败返回值多一个 `fail`：**纯函数**算出来的「哪一类、打的是哪个主机」。
+
+    数据路径不为它多花任何往返（不做 DNS 核对），只是把异常里已有的信息带出去 ——
+    诊断路径靠它决定要不要交叉核对。
+    """
+    import httpx
+
+    def boom(*_a, **_k):
+        raise httpx.ConnectError("x", request=httpx.Request("GET", "https://openlibrary.org/a"))
+
+    monkeypatch.setitem(m._FETCHERS, "openlibrary", boom)
+
+    res = m.search("openlibrary", "三体", "刘慈欣", 5)
+
+    assert res["ok"] is False
+    assert res["fail"] == {"kind": "network", "host": "openlibrary.org"}, res
+
+
+def test_体检把DNS污染说清楚(monkeypatch):
+    """本机解析到错地址 ⇒ 结论升级成 `dns_polluted`，并把两边地址写进原因。
+
+    这是第 104 期的核心：此前一律报「超时」，用户会去修一个**根本没坏**的源。
+    """
+    from novelforge.core import netdiag as nd
+
+    _patch_connect_timeout(monkeypatch)
+    monkeypatch.setattr(nd, "compare", lambda host, **_k: {
+        "host": host, "local": ["31.13.112.4"], "public": ["199.59.149.201"],
+        "server": "8.8.8.8", "agrees": False, "polluted": True, "error": ""})
+
+    out = m.health_one("openlibrary", {}, "Dune", "Frank Herbert")
+
+    assert out["ok"] is False and out["kind"] == "dns_polluted", out
+    assert "本机 DNS 被污染" in out["error"]
+    assert "31.13.112.4" in out["error"] and "199.59.149.201" in out["error"]
+
+
+def test_无法交叉核对时不乱指(monkeypatch):
+    """公共解析器答不上来 ⇒ 分类保持「连接超时」，原因如实说无法核对，**不许提污染**。"""
+    from novelforge.core import netdiag as nd
+
+    _patch_connect_timeout(monkeypatch)
+    monkeypatch.setattr(nd, "compare", lambda host, **_k: {
+        "host": host, "local": [], "public": [], "server": "", "agrees": None,
+        "polluted": False, "error": "公共解析器不可用，无法交叉核对（8.8.8.8 无应答）"})
+
+    out = m.health_one("openlibrary", {}, "Dune", "Frank Herbert")
+
+    assert out["kind"] == "connect_timeout", out
+    assert "无法交叉核对" in out["error"]
+    assert "污染" not in out["error"]
+
+
+def test_探活也带同样的归因(monkeypatch):
+    """「测试这一家」与体检是同一套口径（两处各写一份必然走散）。"""
+    from novelforge.core import netdiag as nd
+
+    _patch_connect_timeout(monkeypatch)
+    monkeypatch.setattr(nd, "compare", lambda host, **_k: {
+        "host": host, "local": ["31.13.112.4"], "public": ["199.59.149.201"],
+        "server": "8.8.8.8", "agrees": False, "polluted": True, "error": ""})
+
+    res = m.probe("openlibrary")
+
+    assert res["ok"] is False
+    assert "本机 DNS 被污染" in res["message"]
+
+
+def test_归因缝没有联网也能跑(monkeypatch):
+    """conftest 的 `_no_live_dns_in_tests` 把两个 I/O 缝换成「问不到」时：
+
+    不能报污染（未知 ≠ 污染），但也不能因此抛异常 —— 体检照常给出「连接超时 + 无法核对」。
+    """
+    _patch_connect_timeout(monkeypatch)
+
+    out = m.health_one("openlibrary", {}, "Dune", "Frank Herbert")
+
+    assert out["kind"] == "connect_timeout", out
+    assert "无法交叉核对" in out["error"]
 
 
 # ---------------- 端点 ----------------
