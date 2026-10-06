@@ -4,11 +4,9 @@ import { useRouter } from 'vue-router'
 
 import BookCover from '@/components/ui/BookCover.vue'
 import Icon from '@/components/ui/Icon.vue'
-import BookMoveDialog from '@/components/book/BookMoveDialog.vue'
-import BookPreviewDialog from '@/components/book/BookPreviewDialog.vue'
 import { MAX_COVERS_PER_ROW, type ShelfDef, type ShelfType } from '@/data/dashboard'
 import type { BookCard } from '@/lib/api'
-import { metadataEditPath } from '@/lib/bookOpen'
+import { openTargetOf } from '@/lib/bookOpen'
 import { filterByLibraries } from '@/lib/shelfScope'
 import {
   chunkIntoBands,
@@ -29,6 +27,8 @@ import { useLibraryStore } from '@/stores/library'
  * + 多行分带（`rows` 1..3，窄屏压到 2）+ 加载骨架。
  * 第 83 期：「库范围」过滤（`shelf.library_ids`，空 = 全部书库）叠在 `allBooks` 之后 ——
  * 四种行类型统一受益，`scope`（智能书架筛选键）与它是两个维度。
+ * 第 108 期：点封面**直接读**（用户口径）—— 撤掉了第 83 期的快速预览浮层，
+ * 仪表盘只做快速启动器；判断收在 `openBook` 一处（`openTargetOf` + 详情页兜底）。
  * 业务语义不动：四种类型的数据来源、继续阅读的进度条、「查看全部」的目标都保持现状。
  */
 const props = defineProps<{ shelf: ShelfDef }>()
@@ -125,48 +125,19 @@ function openAll(): void {
   router.push('/shelf')
 }
 
-// —— 快速预览浮层（第 83 期）——
-// 点封面不再直接跳详情：先弹一层预览（封面 / 状态 / 简介 + 加入收藏 / 删除）。
-// ⚠️ 上游是「封面卡动作菜单 → quick-view」，本项目按用户口径改成**点封面即开预览**
-// （少一次点击），浮层里仍可一步进完整详情。
-// 第 98 期补上上游 QuickView 的另两个动作：编辑元数据（**深链**，不就地开编辑器）、
-// 移动到书库（复用既有的 `BookMoveDialog`）—— 两者都只是「把意图接到既有的那一处实现」。
-const previewBook = ref<BookCard | null>(null)
-
-function openPreview(b: BookCard): void {
-  previewBook.value = b
-}
-
-function openDetailFromPreview(b: BookCard): void {
-  previewBook.value = null
-  void router.push(`/book/${b.id}`)
-}
-
-/** 浮层里点了「编辑元数据」：关浮层 + 深链到详情页的元数据页签（路径判据见 `lib/bookOpen.ts`） */
-function editMetadataFromPreview(b: BookCard): void {
-  previewBook.value = null
-  void router.push(metadataEditPath(b.id))
-}
-
-// —— 移动到书库（第 98 期）：复用既有多选弹层，只是把「选中的那些」换成浮层里那一本 ——
-const moveOpen = ref(false)
-const moveIds = ref<string[]>([])
-
-function moveFromPreview(b: BookCard): void {
-  previewBook.value = null
-  moveIds.value = [b.id]
-  moveOpen.value = true
-}
-
-/** 搬完的书换了库：本行封面带与库计数都必须重取（弹层自己已经 toast，这里不重复提示） */
-async function onMoved(): Promise<void> {
-  await library.refreshBooks()
-  await library.loadLibraries(true)
-}
-
-/** 浮层里改动了这本书：删掉之后必须重拉书目，否则封面带还留着一本已经不存在的书 */
-function onPreviewChanged(_b: BookCard, kind: 'collection' | 'deleted'): void {
-  if (kind === 'deleted') void library.loadBooks(true)
+/**
+ * 点封面 = **直接读**（第 108 期，用户口径）。
+ *
+ * 原是「先弹一层快速预览浮层」（第 83 期），多一次点击才进得去正文。现在照抄
+ * `CurrentlyReadingWidget` 的判据（`openTargetOf`）：能读的直进阅读器 / 听书器，
+ * **读不了的（MOBI / AZW3 等）进详情页** —— 不能出现「点了没反应」。
+ *
+ * ⚠️ 浮层里那四个动作（加入收藏 / 编辑元数据 / 移动到书库 / 删除）随之从仪表盘退场：
+ * 仪表盘按用户口径只做**快速启动器**，这些管理动作书架页（仍在用同一个浮层）与
+ * 详情页各自都有。**别再往封面上挂第二个按钮**把浮层请回来。
+ */
+function openBook(b: BookCard): void {
+  void router.push(openTargetOf(b)?.to ?? `/book/${b.id}`)
 }
 </script>
 
@@ -253,7 +224,7 @@ function onPreviewChanged(_b: BookCard, kind: 'collection' | 'deleted'): void {
             type="button"
             class="shelf-cover-enter w-[104px] shrink-0 cursor-pointer text-left"
             :style="{ animationDelay: `${coverDelayMs(index)}ms` }"
-            @click="openPreview(b)"
+            @click="openBook(b)"
           >
             <div class="relative">
               <BookCover :book="b" />
@@ -283,30 +254,6 @@ function onPreviewChanged(_b: BookCard, kind: 'collection' | 'deleted'): void {
       </div>
     </div>
 
-    <!--
-      快速预览浮层（第 83 期）：**Teleport 到 body** —— 本行外壳带 `backdrop-blur`，
-      它会让 `position: fixed` 的后代把外壳当成包含块（浮层会被裁进卡片里），必须挪出去。
-    -->
-    <Teleport to="body">
-      <BookPreviewDialog
-        :open="!!previewBook"
-        :book="previewBook"
-        actions
-        @close="previewBook = null"
-        @open-detail="openDetailFromPreview"
-        @changed="onPreviewChanged"
-        @edit-metadata="editMetadataFromPreview"
-        @move-to-library="moveFromPreview"
-      />
-      <!-- 移动到书库（第 98 期）：同一层 Teleport —— 本行外壳带 `backdrop-blur`，
-           `position: fixed` 的后代会被它当成包含块裁进卡片里（与上面浮层同一个理由）。 -->
-      <BookMoveDialog
-        :open="moveOpen"
-        :book-ids="moveIds"
-        @close="moveOpen = false"
-        @moved="onMoved"
-      />
-    </Teleport>
   </section>
 </template>
 

@@ -262,6 +262,12 @@ EXPECTED_SPECS = (
     "src/lib/dashboardPageState.spec.ts",
     # 同一件事的**接线**面：页面到底读哪几条状态、重试是不是把两条真的一起重拉。
     "src/views/DashboardView.spec.ts",
+    # 第 108 期：仪表盘书架行的**封面点击**。它此前弹预览浮层，本期改成直接开书 ——
+    # 这类「点了去哪」的判据一旦写错，表现是**点了没反应或去了不该去的地方**：
+    # 读得动的书没进阅读页（用户以为坏了）、MOBI/AZW3 这类读不动的进了阅读页只能看报错、
+    # 点第二张封面却按第一本取值。另有一条断言专门查「点完没有 `[role="dialog"]`」，
+    # 因为浮层是 `Teleport` 到 body 的，只在 wrapper 里查会把「其实还在弹」判成绿。
+    "src/components/dashboard/DashboardShelfRow.spec.ts",
 )
 
 
