@@ -82,7 +82,7 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 
 ```bash
 # 后端测试（离线、全量；Windows 用 .venv\Scripts\python.exe）
-.venv/bin/python -m pytest                 # 当前基线 2311 例（2286 passed / 25 skipped；只增不减）
+.venv/bin/python -m pytest                 # 当前基线 2340 例（2315 passed / 25 skipped；只增不减）
                                            # ⚠️ 跑前先清空全部 proxy 变量；⚠️ 别再加 `-q`（两条都见第 5 节）
 .venv/bin/python -m pytest tests/test_catalog.py -k 某关键字
 
@@ -173,7 +173,8 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
     缺锚点或期号已被占用 ⇒ **整体拒绝、绝不改一半**（幂等，可反复跑）。
     跑完再 `python tests/period_close.py check`（**只读**）对账 R1–R8，0 问题才算收尾完：
     `R1` 新期号三处齐全 / `R2` 索引标签可解析不重复不越界 / `R3` §0 提到最新期号且两处基线一致 /
-    `R4` 不许再建当日日志 / `R5` `MEMORY-PERIODS.md` 只读 / `R6` 新期号的 §2 行 ≤300 字符 /
+    `R4` 不许再建当日日志 / `R5` `MEMORY-PERIODS.md` 只读 /
+    `R6` §2 是「**一行一期**」的表：期号不重复、表里不许夹裸行（表头前缀被吃掉的那种）、第 ≥107 期的一行 ≤300 字符 /
     `R7` 版本字面量 = 仓库根 `VERSION`（`--fix` 可修）/ `R8` 第 106 期口径还在。
     **工具不写叙事也不做提炼**：roadmap 正文、TODO 头部那一句话、索引行的一句话仍要手写
     （先跑 `new` 再写正文 —— 期段标题已存在时 `new` 会拒绝）。
