@@ -4,27 +4,31 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-06 —— 第 104 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续十轮）：
-**出网失败归因（DNS 解析失败 / 解析被污染 / 连接被阻断 / TLS / 代理 / 超时）+ 收口前端类型红** ——
-本机 `openlibrary.org` / `www.goodreads.com` / `www.googleapis.com` 解析到的是**别人的网段**
-（Facebook 的 `31.13.x` / `128.242.x`），而 `8.8.8.8` 给的是正确地址（`hosts` 里没有任何自定义行）
-⇒ **上游 DNS 被污染**，不是站点故障、也不是链路抖动；而体检此前一律报「超时」，用户会去修一个**根本没坏**的源。
-本期新增叶子模块 `novelforge/core/netdiag.py`：数据路径只做**纯函数**异常分类（不联网），
-诊断路径（体检 / 「测试这一家」）才交叉核对本机与公共解析器，污染时把结论升级成 `dns_polluted`
-并把两边地址写进原因；**无法核对时如实说不下结论**（未知 ≠ 污染）。顺带把 `vue-tsc` 3.3.12 的
-`TS2339` 收口（`MetadataEditor.vue` 里五处重复的字段中文名收敛成一个 `labelOf`）。
+**最后更新**：2026-10-06 —— 第 105 期**已交付但不发版**（`VERSION` 仍 `0.94.0`，连续十一轮）：
+**修好 GitHub Actions「Build and Push Image」全失败**（用户直接立项）—— 先查历史：该工作流 **run 288–317 全 failure**
+（2026-10-03 起），最后一次 success 是 run 217（2026-10-01，sha `99ee3494`）⇒ **既存故障**。
+根因不在 vite、不在 node、也不在多架构：`.gitignore` 的 `input/` **不带前导斜杠**（本意是仓库根的运行时挂载点），
+而这类模式会匹配**任意层级**的同名目录 ⇒ 第 90 期新增的 `frontend/src/components/ui/input/`
+（`Input.vue` + `index.ts`，被 `ui/sidebar/SidebarInput.vue` import）被**静默忽略、从未入库**；
+本机文件一直在（所以本地 `npm run build` / `vue-tsc` / 单测**永远绿**），CI 从 clone 构建才报
+`[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`，连带**整个镜像构建 + 推送连续失败**。
+修法：运行时目录全部锚定仓库根（`/input/` `/output/` `/cookies/` `/cache/` `/config/cookies/` `/config/cache/`）
++ 补回那两个文件，**刻意不加任何兜底**（不在 workflow 里 `git add -f`、不给 vite 加 alias）。
+新增 `tests/test_source_tracking_contract.py` 两例钉住（源码树不许有被 `.gitignore` 忽略的文件 + `@/` 别名导入
+必须落在**已入库**路径上），并已实测「改动前会红」。核验口径：**在本工作区构建成功不算证明**
+（工作区本来就有那两个文件）—— 必须 `git clone` 到临时目录（只有已入库内容）再跑 `docker build --target frontend`。
 按用户要求，本轮起**已做完的条目直接从本文件删除**（不再标 `[x]` 留痕），历史一律去 roadmap 查。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口；`VERSION` = **0.94.0**
-  （**十轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口 + 第 105 期 CI 镜像构建修复；`VERSION` = **0.94.0**
+  （**十一轮都刻意未升**：第 95 期清理与守卫、第 96 期数据安全补漏、第 97 期死参数/别名/零消费者端点清理、
   第 98 期仪表盘余留、第 99 期元数据抓取真 bug、第 100 期 EPUB 判定、第 101 期 Goodreads 整家失效修复、
-  第 102 期元数据地基、第 103 期元数据字段接线、第 104 期出网失败归因，用户十次都选「先不发版」；
+  第 102 期元数据地基、第 103 期元数据字段接线、第 104 期出网失败归因、第 105 期 CI 构建修复，用户十一次都选「先不发版」；
   单一真值源，`GET /health` 下发）；
   `CHANGELOG.md` 最新段仍是 `V0.94.0`。
-- 测试基线（第 104 期）：后端 **2309 例（2284 passed / 0 failed / 0 errors / 25 skipped）**，全量 401.83 s；
-  前端 **67 spec / 686 例**（本期实跑全绿）。
+- 测试基线（第 105 期）：后端 **2311 例（2286 passed / 0 failed / 0 errors / 25 skipped）**，全量 274.56 s；
+  前端 **67 spec / 686 例**（第 104 期实跑全绿，本期未改前端行为）。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
   （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
   ⚠️ 长跑 pytest 必须**后台跑 + 轮询 junit**（前台会被 harness 的「长时间无输出」上限取消）。
@@ -133,6 +137,17 @@
   已由 `tests/test_config_readback_contract.py::test_不传配置时它什么都查不到是既有语义` 钉住。
   **不要**改成自动 `load_config()`（会让它从「什么都不做」变成「真的出网抓」，属有副作用的静默行为变更）。
 
+- [ ] **CI 的 5 个 action 仍跑在 Node 20 运行时**（第 105 期发现；**不是**本次构建失败的原因，别混为一谈）——
+  `Build and Push Image` 每次都给这条 warning：`Node.js 20 is deprecated. The following actions target Node.js 20
+  but are being forced to run on Node.js 24: actions/checkout@v4, docker/build-push-action@v6,
+  docker/login-action@v3, docker/setup-buildx-action@v3, docker/setup-qemu-action@v3`。
+  最新大版本（2026-10-06 查 `releases/latest`）：`actions/checkout` **v7.0.1** / `docker/build-push-action`
+  **v7.4.0** / `docker/setup-buildx-action` **v4.4.1** / `docker/setup-qemu-action` **v4.4.0** /
+  `docker/login-action` **v4.6.0**。升级要**逐个核 input 有无更名**（本期只用到 `context` / `file` / `push` /
+  `platforms` / `provenance` / `build-args` / `tags` / `cache-from` / `cache-to`），且 `.github/workflows/release.yml`
+  里的 action 要同批看 ⇒ **独立一件事，别顺手改**。
+  另有一条 notice：**`ubuntu-latest` 将于 2026-10-19 起迁移到 Ubuntu 26** —— 那天之后再看一次 CI 是否仍绿。
+
 ### 明确「不做」（避免反复立项）
 
 - **跨语言检索词（翻译检索词）** —— 第 91 期定级。理由：① 翻译质量不可控，会把「同名不同书」的误配率推高；
@@ -150,6 +165,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 105 | **CI「Build and Push Image」全失败修好**（用户 2026-10-06 直接立项）：先查历史 —— 该工作流 **run 288–317 全 failure**（2026-10-03 起），最后一次 success 是 run 217（2026-10-01，sha `99ee3494`）⇒ **既存故障**，与第 104 期那几笔提交无关。失败步骤 = job `build` 第 7 步 `Build and push`（`docker/build-push-action@v6`）；annotation **只给最后一行**，真正的 vite 报错要用本机 `git credential fill` 的 token 下 `GET /actions/jobs/<id>/logs`（⚠️ 返回**纯文本日志**、不是 zip）才拿到：`[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`（`SidebarInput.vue:4`）。**根因**：`.gitignore` 的 `input/` **不带前导斜杠** ⇒ 匹配**任意层级**同名目录 ⇒ 第 90 期新增的 `frontend/src/components/ui/input/`（`Input.vue` + `index.ts`）**从未入库**；本机文件一直在 ⇒ 本地 `npm run build` / `vue-tsc` / 单测**永远绿**，CI 从 clone 构建才断链。**修法**：运行时目录全部锚定仓库根（`/input/` `/output/` `/cookies/` `/cache/` `/config/cookies/` `/config/cache/`）+ 补回那两个文件，**刻意不加任何兜底**（不在 workflow 里 `git add -f`、不给 vite 加 alias）。**防回归**：`tests/test_source_tracking_contract.py` 两例（源码树不许有被 `.gitignore` 忽略的文件；`@/` 别名导入必须落在**已入库**路径上），**「改动前会红」已实测**。**核验口径**：在本工作区构建成功**不算证明**（工作区本来就有那两个文件）—— 必须 `git clone` 到临时目录（只有已入库内容）再跑 `docker build --target frontend`（实测 `#10 RUN npm run build` **真执行**、`✓ built in 2.44s`、EXIT=0）。后端全量 **2311 例全绿**（+2）（**不发版**，`VERSION` 仍 0.94.0） |
 | 104 | 出网**失败归因**（用户 2026-10-06 在 ask_user_question 里选 A）+ 前端类型红收口：先查出**本机 DNS 被上游污染**（`openlibrary.org`→`31.13.112.4` / `www.goodreads.com`→`128.242.240.253`，而 `8.8.8.8`→`199.59.149.201` / `199.59.148.6`，`hosts` 无自定义行、`1.1.1.1` 无应答）—— 此前一律报「超时」，用户会去修一个**根本没坏**的源（仓规：误报比不测更糟）。新增叶子模块 `novelforge/core/netdiag.py`：① **数据路径只做纯函数分类**（`classify_exc` / `describe_exc`，零 I/O，`search()` 失败多回一个 `fail` 键）② **诊断路径才交叉核对**（手写 UDP DNS 查询本机 vs `8.8.8.8`/`1.1.1.1`，按 host 缓存 60 s；两个 I/O 缝可注入）③ 污染 ⇒ 结论升级 `dns_polluted` 并**把两边地址写进原因**；公共解析器答不上来 ⇒ 如实说「无法交叉核对」，**未知 ≠ 污染**。`HEALTH_KINDS` 12→17 类（`dns` / `dns_polluted` / `tls` / `proxy` / `connect_timeout`，中文文案由后端下发，前端零新文案；`healthClass` 把这四类归**琥珀**＝本机环境问题，别再指着站点）。顺带**收口 `vue-tsc` 3.3.12 的 `TS2339`**：`MetadataEditor.vue` 五处重复的字段中文名（其中 :614 在模板内联箭头里）收敛成一个 `labelOf(k: string)` ⇒ `--build --force` **exit 0**（此前 `.vue(614,40)` 恰 1 条、EXIT=2）。测试 **+35 例**（`tests/test_netdiag.py` 23 / 健康归因 12，含把 `[Errno -2] Name or service not known` 从 `network` **故意改判** `dns`）、新增 `tests/conftest.py` 的 `_no_live_dns_in_tests`（全测试进程**零真实 DNS**）；后端全量 **2309 例全绿**、前端 686 例（**不发版**，`VERSION` 仍 0.94.0） |
 | 103 | 元数据字段**接线**（用户 2026-10-05 在 ask_user_question 里选 A：`series` / `series_index` / `narrators` 三项**早就建模、消费者全在**（`fileops.METADATA_FIELDS` / `metascore.FIELDS` 的 series 4.0 + series_index 3.0 / 命名规则 `{series}` `{series_index}` / Komga `seriesIndex` / 系列视图 / `db._CLEARABLE` `_META_FIELDS` / `patch_opf_meta`），**唯独这条抓取线从未接上** —— `_entry` 是固定键白名单、`metafetch` 无映射 ⇒ 抓到了也被静默丢掉）：① 顺手修 **RanobeDB 详情补全从未生效**（真机响应套在 `book` 键里，`{**b, **fetched}` 只并进一个键 ⇒ 作者/出版社/简介**全空且不报错**、`score_candidate` 只剩书名 0.7 < 阈值 0.75 ⇒ 这家源在默认配置下**永远进不了合并**，白挂两期）② **五个同步点**（`_entry` / `_CURRENT`·`_VALUE_KEYS`·`_FINALIZE_FIELDS` / `DEFAULTS['metadata_fetch']['fields']` / 前端 `POLICY_FIELDS` / 前端**写死的 spec 断言**「不含 series」）③ 卷号**只认 `^\d+(?:\.\d+)?$`**（错值比空值严重：它喂命名规则与 Komga `seriesIndex`）、`_best_series` **取卷号最小那支**（Audible 数组顺序三次实测倒置、Goodreads item 内层 `$4d:…:series` 是引用**要二次解析**、RanobeDB 卷号 = `series.books` 位置 + 1 且 29 册核过 28/29）④ **演播者四处口径**（`_LIST_FIELDS` + `_as_list`；`merge_values` 里 **不跨源合并** —— 两个源常是两次不同录音，拼起来会造出**从未存在**的阵容；`metastore.effective`/`state` 的在线分支此前给 `"['Scott Brick']"` 这串 repr，改 `_online_value` 走 `db._parse_tags`）⑤ 三项默认 **`fill_only`**（系列参与命名规则与系列视图、抓取收益在没值的书上；演播者本地值来自音频标签=权威源；老配置整表 overwrite 的用户仍按 overwrite 走，已在 `config.py` 写明）；Audnexus（SSL EOF）/ Open Library `series`（超时）/ Audible `subtitle` 三条**未核验不接线**挂 TODO；测试 **+11 例**、后端全量 **2274 例全绿**（**不发版**，`VERSION` 仍 0.94.0） |
 | 102 | 元数据抓取**地基**（用户 2026-10-05 直接提出，非从 TODO 取条目）：① 14 家源声明**收口**到 `novelforge/core/sources/`（`Provider` 数据类 + `DECLARED`，`SOURCES`/`GROUPS`/`IMPLEMENTED`/`LANG_AFFINITY`/`LANG_BROAD`/`SOURCE_ID_FIELD`/`HEALTH_SAMPLES` **7 张手工表改派生**，逐字段验算 14 家旧键全等，只多 `kind`/`rate_limit`/`cache_ttl`）② 进程内**缓存 + 按源限流**（`time.monotonic` 计时、只缓存「成功且非空」、命中浅拷贝防分数污染；`force=True` = 诊断模式**缓存与限流都旁路**，否则体检 4 路并发会被自己的 sleep 拖成**假 timeout**）③ **按记录标识取详情**（只接真机核验过的 iTunes / Open Library；Google Books 匿名 429 / Audnexus 本机不可达 / Goodreads 302 ⇒ **不声明**，如实中文回绝）④ 配置两键 `cache_ttl`（默认 `None` = 按各来源声明，不写死 600）/ `detail_fetch`（默认**关**，不改既有书的抓取结果）+ 环境变量**只兜底不覆盖** + 前端两个开关；顺带修掉一个**假配置**（`metasources.py` 从未 import `config` ⇒ `cache_ttl` 写完两期无人读，被裸 `except` 吞掉）＋ 新增 `test_metasource_registry_contract` 15 / `test_metasources_cache` 21 / `test_metasources_detail` 24 / `test_config_readback_contract` 19（**不发版**，`VERSION` 仍 0.94.0） |
@@ -203,13 +219,18 @@
   第 100 期取 P1「EPUB 解析重试」（**实测后删除该立项**）、第 101 期取 P1「书源网页抓取」的剩余三家
   （Goodreads 已收口，另两家缺样本）、第 102 期由**用户直接立项**（元数据抓取地基，不从 TODO 取）、
   第 103 期取 P1「书源网页抓取：系列信息没有接进候选」（**该条已交付并删除**）、
-  第 104 期由**用户直接立项**（出网失败归因 + 前端类型红收口，我给的推荐项，不从 TODO 取）。
+  第 104 期由**用户直接立项**（出网失败归因 + 前端类型红收口，我给的推荐项，不从 TODO 取）、
+  第 105 期同样由**用户直接立项**（修 GitHub Actions「Build and Push Image」全失败 ——
+  根因不在构建本身，而是 `.gitignore` 把 `frontend/src/components/ui/input/` 静默忽略、从未入库，
+  详见 roadmap 第 105 期段）。
   ⚠️ 第 102 期按拍板口径**只做了地基、零新源**：**分期做**（用户原话），
   微信读书一家中文源与其余能力留待后续期次；`docs/roadmap-gaps-remaining.md` 第 102 期段
   已写清「本期刻意不做」的边界（不新建 providers 包 / 不搬 1833 行解析实现 / 不改 `metascore` 计分 /
   不接 series / 不装 Calibre 运行时）。
-  ⚠️ 下一期从 P1 取时**只剩一条**：`novelforge/core/fileops.py` 的 OPF 改写正则（**字节等价不可证**，
-  须先证明等价才动）；另有三条**挂起**（Kobo / Libro.fm / Amazon 缺样本；三家源的按 ID 详情通道未核验；
+  ⚠️ 下一期从 P1 取时**只剩两条**：① `novelforge/core/fileops.py` 的 OPF 改写正则（**字节等价不可证**，
+  须先证明等价才动）；② 把 CI 的 5 个 action 从跑 Node 20 运行时的旧版升到最新大版本（`release.yml` 同批看），
+  并留意 `ubuntu-latest` **2026-10-19 起迁 Ubuntu 26**（第 105 期只登记，见 §1）。
+  另有三条**挂起**（Kobo / Libro.fm / Amazon 缺样本；三家源的按 ID 详情通道未核验；
   `openlibrary.org` 等三家本机 **DNS 被上游污染** —— 这是**环境问题不是代码问题**，别当技术债还）。
   或按用户新需求立项。
 - 若要做重投入项（例如再次跑大库基准、或做 PG / Redis 相关专项），**先量化再动手**

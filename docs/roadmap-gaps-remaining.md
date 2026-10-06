@@ -6586,3 +6586,104 @@ payload 里**有**系列信息（`bookSeries` → `seriesPlacement` + 系列名�
   `docs(104)`，**提交即推送**，工作区不留我方的未提交改动。
 - ⚠️ 并行会话脏项（`.codebuddy/memory/2026-10-03.md`、`.vscode/settings.json`、
   `.vscode/harmony-deploy.ps1`、两个 `*.cookies.txt`）**不回退、不提交**。
+
+## 第 105 期（CI 镜像构建修复：源码目录被 `.gitignore` 静默忽略）
+
+### 一、立项与症状
+
+- 用户 2026-10-06 直接立项：「修一下 github 上 **Build and Push Image: All jobs have failed** 的问题」。
+- 现象：`.github/workflows/docker-image.yml`（`name: Build and Push Image`）**最近 30 次运行全部 failure**
+  （run_number **288–317**，2026-10-03 起）；**最后一次 success 是 run 217（`2026-10-01T11:11:35Z`，sha `99ee3494`）**
+  ⇒ 这是**既存故障**，与第 104 期那三笔提交无关（它们只是接着既存的红）。
+- 失败位置：`docker/build-push-action@v6` 这一步（job `build` 的**第 7 步 `Build and push`**；
+  第 8 步 `Ensure package is public` 因前一步失败被 skip）。单次运行仅约 **87 秒**（远不到正常多架构构建的时长）。
+- ⚠️ 本机**没有 `gh` CLI** ⇒ 全程走**匿名 GitHub REST API**（仓库 `"private": false` 可匿名读）。
+
+### 二、取证（顺序即「从粗到细」）
+
+1. `GET /repos/735876214/novel_dl_convert/actions/workflows/356963404/runs` ⇒ 历史列表（确认「最近 30 次全 failure」与上次 success 的 run 号）。
+2. `GET /actions/runs/37392917055/jobs` ⇒ **步骤级**结论：第 7 步 failure、其余 success/skipped。
+3. `GET /check-runs/112041982069/annotations` ⇒ **失败原文**：
+   `[failure] buildx failed with: ERROR: failed to build: failed to solve: process "/bin/sh -c npm run build" did not complete successfully: exit code: 1`；
+   另有 `[warning] Node.js 20 is deprecated…`（我们 pin 的 5 个 action 都还在 Node 20 运行时）
+   与 `[notice] ubuntu-latest 将于 2026-10-19 起迁移到 Ubuntu 26`。
+4. ⚠️ **annotation 只给最后一行**，真正的 vite 报错得靠 job 日志 —— 而 `GET /actions/jobs/<id>/logs`
+   **需要鉴权**：用本机 `git credential fill`（host=github.com）取出已存 token、拼 Basic 头下载
+   （返回的是**纯文本日志 130 KB，不是 zip**，别按 zip 解），再在里面搜 `npm run build` / `ERROR:`。
+
+### 三、根因（不是 vite、不是 node、不是多架构）
+
+CI 日志里的原文（`#27 [linux/amd64 frontend 6/6] RUN npm run build`）：
+
+```
+error during build:
+Build failed with 1 error:
+[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input
+  ╭─[ src/components/ui/sidebar/SidebarInput.vue?vue&type=script&setup=true&lang.ts:4:23 ]
+4 │ import { Input } from '@/components/ui/input'
+  ╰─ No such file or directory (os error 2)
+```
+
+- `.gitignore` 第 11 行写的是 `input/`（本意是**仓库根**的运行时挂载点），
+  而**不带前导斜杠的模式会匹配任意层级**的同名目录 ⇒ 第 90 期新增的
+  `frontend/src/components/ui/input/`（`Input.vue` + `index.ts`，被 `ui/sidebar/SidebarInput.vue` import）
+  **被静默忽略、从未入库**。
+- 症状极隐蔽：**本机文件一直在** ⇒ 本地 `npm run build` / `vue-tsc` / 单测**永远是绿的**；
+  只有 CI 从 clone 构建才断链。
+- ⚠️ 这个坑本仓库**早就写过两遍**（`.gitignore` 里 `/data/` 与 `/libraries/` 的注释都在强调「前导斜杠不能省」，
+  且写明「实测漏掉了两个源文件」），但第 11–16 行那批运行时目录一直没锚定 —— 这次踩的就是它（代价是 CI 红了两周）。
+
+### 四、修法
+
+- `.gitignore` 把运行时目录**全部锚定到仓库根**：`/input/` `/output/` `/cookies/` `/cache/`
+  `/config/cookies/` `/config/cache/`，并把本次事故写进注释（挡住后来者改回去）。
+- 补回 `frontend/src/components/ui/input/Input.vue` 与 `index.ts`（内容与第 90 期一致，未改一行）。
+- **刻意不加兜底**：不在 workflow 里做 `git add -f`、不给 vite 加 alias、不在 Dockerfile 里补 COPY ——
+  病根是「文件没入库」，修法就是让它入库（§7.1 不留第二份实现 / §7.2 不做投机抽象）。
+
+### 五、防回归（新契约测试）
+
+`tests/test_source_tracking_contract.py` 两例：
+
+1. `test_源码树里没有被静默忽略的文件` —— `git ls-files --others --ignored --exclude-standard -- frontend/src novelforge`，
+   白名单只有构建产物 / 依赖 / 字节码（`frontend/dist/`、`frontend/node_modules/`、`novelforge/static/v2/`、`__pycache__`、`*.pyc`）。
+   查不到 git（或不是 clone）时**如实 skip**。
+2. `test_前端别名导入都指向已入库的文件` —— 扫 `frontend/src` 里所有 `@/…` 引用，
+   基准是 `vite.config.ts` 的 `@` → `src`（**不写死扩展名清单**：候选 = 原样 / `原样.*` / `原样/index.*`）。
+
+**改动前会红已实测**：把 `.gitignore` 换回 `input/` 并 `git rm --cached` 那两个文件 ⇒ **两例都红**；
+恢复后两例绿。只 `git rm --cached`（`.gitignore` 已修）时例 2 红、例 1 绿 —— 两条各管一半，分工是清楚的。
+
+### 六、核验：把 CI 那一步在本机复现
+
+1. 先在本工作区跑 `docker build --target frontend -f Dockerfile .` ⇒ 成功。
+   ⚠️ 但这一步**不足以证明**修复成立 —— 工作区里本来就有那两个文件，**这正是本地一直绿的原因**。
+2. 决定性的一步：`git clone` HEAD 到临时目录（**只有已入库内容**），在那里跑
+   `docker build --target frontend -f Dockerfile --progress=plain -t nf-frontend-clone .`
+   ⇒ `#10 [frontend 6/6] RUN npm run build` **真的执行**（不是 CACHED），
+   `vite v8.3.0 building client environment for production... ✓ built in 2.44s`，**EXIT=0**。
+   日志：`%TEMP%\nf_p105_clone_build.txt`。
+
+### 七、测试与实测
+
+- 新契约 **2 例**；后端全量 **2311 例（2286 passed / 0 failed / 0 errors / 25 skipped），274.56 s，exit 0**
+  （对照第 104 期 2309 例 ⇒ **+2**）。
+- 前端类型检查 `vue-tsc --build --force` exit 0（那两个文件本机一直在，本次没有新增类型面）。
+- CI：修好后重新推送，观察 `Build and Push Image` 是否转绿（见 §九）。
+
+### 八、没核过因而没声明
+
+- **arm64 那一半没在本机验**：本机 `docker build` 只构建当前架构；CI 是 `linux/amd64,linux/arm64` 双架构。
+  本期只证明「源码断链」这一条已修 —— 若 arm64 还有别的毛病（例如某个前端原生依赖在 QEMU 下跑不动），
+  那会是**另一个问题**，不从本期的结论里推断。
+- **没动 action 版本**：`actions/checkout@v4`、`docker/build-push-action@v6`、`setup-buildx@v3`、
+  `setup-qemu@v3`、`login@v3` 仍被 GitHub 警告「target Node.js 20」；升级大版本
+  （checkout v7 / build-push v7 / setup-* v4 / login v4）是**独立的一件事**（要重新核 input 有无更名），
+  本期不做，挂 TODO §1。
+
+### 九、收尾
+
+- 第 1 笔：`8a8ac2e fix(build): 补回被 .gitignore 静默忽略的 ui/input（CI 镜像构建失败的真因）`
+  （`.gitignore` + 两个补回的文件 + 新契约测试）。
+- 第 2 笔：docs（AGENTS.md §5 新增该陷阱、TODO 头部/§0/§1/§2/§3、本段、三个记忆文件）。
+- `VERSION` 不动（仍 `0.94.0`；用户**连续十一次**选择「先不发版」）。

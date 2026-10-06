@@ -1689,3 +1689,81 @@ payload 里**有**系列信息（实测能解出 `("Remembrance of Earth's Past"
   `git commit -F "$env:TEMP\nf_msg_*.txt"` 会失败且**暂存区不清空**（内容被下一笔悄悄带走）⇒ 用完整显式路径，**每笔后核笔数**。
 - ⚠️ Python 追加脚本**别打印中文**（控制台 GBK ⇒ `UnicodeEncodeError`；**出现它不代表写入失败**），追加前 `assert text.endswith("\n")`、追加后回读 `tail` 验证顺序。
 - 基线：第 104 期 **2309 例（2284 passed / 25 skipped）**；`VERSION` 仍 `0.94.0`、**十轮不发版**。
+
+## 第 105 期铁律（CI 镜像构建修复：源码被 `.gitignore` 静默忽略）
+
+### 一、症状与「先看历史」
+
+- 用户原话：「修一下 github 上 **Build and Push Image: All jobs have failed** 的问题」。
+- ⚠️ **先查历史再动手**：工作流 `356963404`（`.github/workflows/docker-image.yml`）**run_number 288–317 全部 failure**
+  （2026-10-03 起），**最后一次 success 是 run 217**（`2026-10-01T11:11:35Z`，sha `99ee3494`）
+  ⇒ 这是**既存故障**，最新几笔提交只是「接着红」（不要以为是刚推的东西弄坏的）。
+- 失败的那一步：job `build` 的**第 7 步 `Build and push`**（`docker/build-push-action@v6`）；
+  第 8 步 `Ensure package is public` 因前一步失败被 **skip**；单次运行仅 **~87 秒**。
+
+### 二、本机没有 `gh` CLI 时怎么读 CI 证据（匿名 REST API）
+
+1. 工作流历史：`GET /repos/<owner>/<repo>/actions/workflows/<workflow_id>/runs?per_page=100&page=N`
+   （仓库 `"private": false` 时**可匿名读**；返回 `total_count` / `run_number` / `conclusion` / `head_sha`）。
+2. **步骤级**结论：`GET /actions/runs/<run_id>/jobs` ⇒ 每步的 `status`/`conclusion`（一眼定位是哪一步红）。
+3. **失败原文**：`GET /check-runs/<check_run_id>/annotations`（id 来自上一步 job 的 `check_run_url`）
+   ⇒ `[failure]` 那一行就是 docker buildx 的收尾错误。
+   ⚠️ **annotation 只给最后一行**（`… process "/bin/sh -c npm run build" did not complete successfully: exit code: 1`），
+   真正的 vite 报错**不在这里**。
+4. **完整日志**（需要鉴权）：本机 `git credential fill`（`protocol=https` + `host=github.com`）取出已存 token，
+   拼 `Authorization: Basic base64(user:token)`，下 `GET /actions/jobs/<job_id>/logs`
+   ⇒ ⚠️ **返回的是纯文本日志（本次 130 KB），不是 zip**（按 zip 解会报「找不到中央目录结尾记录」）。
+5. 顺带能看到的两个**非致命**信号（本期没修）：`[warning] Node.js 20 is deprecated…`（我们 pin 的 5 个 action
+   都还在 Node 20 运行时）、`[notice] ubuntu-latest 将于 2026-10-19 起迁移到 Ubuntu 26`。
+
+### 三、根因：`.gitignore` 少了前导斜杠 ⇒ 源码被静默忽略
+
+- `.gitignore` 第 11 行是 `input/`（本意是**仓库根**的运行时挂载点）；
+  **不带前导斜杠的模式匹配任意层级**的同名目录 ⇒ `frontend/src/components/ui/input/`
+  （`Input.vue` + `index.ts`，第 90 期新增，被 `ui/sidebar/SidebarInput.vue` import）**被静默忽略、从未入库**。
+- CI 报错原文：`[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`
+  （`SidebarInput.vue?vue&type=script&setup=true&lang.ts:4:23` → `No such file or directory (os error 2)`）。
+- ⚠️ **这类故障的症状是「本机永远绿」**：文件一直在磁盘上 ⇒ 本地 `npm run build` / `vue-tsc` / 单测都过；
+  只有从 clone 构建才会断链 ⇒ **任何「只在本机验证过」的结论都不算数**。
+- ⚠️ 更刺眼的是：`.gitignore` **早就为同一个坑写过两遍注释**（`/data/` 与 `/libraries/` 两条都在强调
+  「前导斜杠不能省，否则会匹配任意层级的同名目录」），但第 11–16 行（`input/` `output/` `cookies/` `cache/`
+  `config/cookies/` `config/cache/`）一直没有锚定。
+
+### 四、修法（不加兜底）
+
+- 运行时目录全部锚定仓库根：`/input/` `/output/` `/cookies/` `/cache/` `/config/cookies/` `/config/cache/`，
+  并把本次事故写进注释。
+- 补回 `frontend/src/components/ui/input/Input.vue` 与 `index.ts`（内容未改一行）。
+- **刻意不做**：不在 workflow 里 `git add -f`、不给 vite 加 alias 兜底、不在 Dockerfile 里额外 COPY ——
+  病根是「文件没入库」，修法就是让它入库（§7.1 不留第二份实现 / §7.2 禁投机抽象）。
+
+### 五、防回归契约（`tests/test_source_tracking_contract.py`）
+
+1. `test_源码树里没有被静默忽略的文件`：
+   `git ls-files --others --ignored --exclude-standard -- frontend/src novelforge`，白名单只有
+   `frontend/dist/`、`frontend/node_modules/`、`novelforge/static/v2/`、`__pycache__`、`*.pyc`/`*.pyo`；
+   本机没 git 或不是 clone 时**如实 skip**（不假装通过）。
+2. `test_前端别名导入都指向已入库的文件`：扫 `frontend/src` 里所有 `@/…`，基准是 `vite.config.ts` 的 `@` → `src`；
+   ⚠️ **不写死扩展名清单**（候选 = 原样 / `原样.*` / `原样/index.*`），免得以后加 `.mts` 之类又要改测试。
+
+**「改动前会红」的实测**：把 `.gitignore` 换回 `input/` 并 `git rm --cached` 那两个文件 ⇒ **两例都红**；
+只 `git rm --cached`（`.gitignore` 已修）⇒ 例 2 红、例 1 绿（两条各管一半）。
+⚠️ 做这种「临时把仓库改回坏状态」的验证时，脚本要**断言替换次数为 1**、跑完立刻还原并回读确认。
+
+### 六、核验口径：在「只有已入库内容」的目录里复现
+
+- ⚠️ **在本工作区跑 `docker build --target frontend` 成功不算证明**：工作区里本来就有那两个文件，
+  这正是本地一直绿的原因。
+- 决定性的一步：`git clone` HEAD 到临时目录（clone 只有已入库内容），在那里跑
+  `docker build --target frontend -f Dockerfile --progress=plain` ⇒ 日志里 `#10 [frontend 6/6] RUN npm run build`
+  **真的执行（不是 CACHED）**、`✓ built in 2.44s`、**EXIT=0**。
+- ⚠️ 判断「docker 到底跑没跑那一步」看两处：该层是 `CACHED` 还是 `DONE`，以及**有没有该步的真实输出**。
+
+### 七、本期没核过的事（别从结论里推）
+
+- **arm64 那一半没在本机验**（CI 是 `linux/amd64,linux/arm64` 双架构；本机只构建当前架构）——
+  本期只证明「源码断链」已修；若 arm64 还有别的毛病，那是**另一个问题**。
+- **action 版本没升**：`checkout@v4` / `build-push@v6` / `setup-buildx@v3` / `setup-qemu@v3` / `login@v3`
+  仍带着 Node 20 弃用警告；升大版本（`checkout v7` / `build-push v7` / `setup-* v4` / `login v4`）
+  要重新核 input 有无更名，属**独立一件事**，挂 TODO §1。
+- 基线：第 105 期 **2311 例（2286 passed / 25 skipped）274.56 s**；`VERSION` 仍 `0.94.0`（**十一次不发版**）。

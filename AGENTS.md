@@ -81,7 +81,7 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 
 ```bash
 # 后端测试（离线、全量；Windows 用 .venv\Scripts\python.exe）
-.venv/bin/python -m pytest                 # 当前基线 2309 例（2284 passed / 25 skipped；只增不减）
+.venv/bin/python -m pytest                 # 当前基线 2311 例（2286 passed / 25 skipped；只增不减）
                                            # ⚠️ 跑前先清空全部 proxy 变量；⚠️ 别再加 `-q`（两条都见第 5 节）
 .venv/bin/python -m pytest tests/test_catalog.py -k 某关键字
 
@@ -144,6 +144,17 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
   而 `8.8.8.8` 给的是正确地址（`199.59.149.201` / `199.59.148.6`）；`hosts` 里**没有**自定义行、`1.1.1.1` 的 UDP/53 无应答。
   ⇒ 这三家的**真机探活 / 详情核验现在做不了**（第 102 期起挂起的三条都撞在这上面）。
   探针连不上时先按 DNS 归因（应用内体检会报 `dns_polluted` 并把两边地址写进原因），**别去改选择器或超时**。
+- ⚠️ **`.gitignore` 的模式不写前导斜杠，会把源码一起忽略掉，而本机永远看不出来**（第 105 期）：
+  `input/` / `output/` / `cache/` 这类**不带前导斜杠**的模式匹配**任意层级**的同名目录 ——
+  本仓库就这么把 `frontend/src/components/ui/input/`（`Input.vue` + `index.ts`，被
+  `ui/sidebar/SidebarInput.vue` import）静默忽略了**从第 90 期到第 105 期**。
+  症状极隐蔽：**本机文件一直在 ⇒ 本地 `npm run build` / `vue-tsc` / 单测全绿**，
+  只有 CI 从 clone 构建（`Build and Push Image` 的 `npm run build`）才报
+  `[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`，并让**整个镜像构建 + 推送连续失败 30+ 次**。
+  ⇒ ① 运行时目录一律写成锚定仓库根的形式（`/input/` `/output/` `/cookies/` `/cache/` `/config/cookies/`
+  `/config/cache/`，与 `/data/`、`/libraries/` 同口径）；② 新增源码目录后**别只信本机构建** ——
+  跑 `git ls-files --others --ignored --exclude-standard -- frontend/src novelforge` 看有没有被吞掉的文件；
+  ③ 这两条已由 `tests/test_source_tracking_contract.py` 钉住（源码树不许有被忽略的文件 + `@/` 别名导入必须落在已入库路径上）。
 
 ## 6. 提交与交付
 
