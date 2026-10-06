@@ -8,12 +8,17 @@ __pycache__/
 venv/
 
 # 运行时目录（容器挂载点，不入库）
-input/
-output/
-cookies/
-cache/
-config/cookies/
-config/cache/
+# ⚠️ 前导斜杠不能省 —— 与下面 /data/ 那条同一个坑：不带前导斜杠的 `input/`
+#    会匹配**任意层级**的同名目录。第 90 期加的 `frontend/src/components/ui/input/`
+#    （Input.vue + index.ts，被 ui/sidebar/SidebarInput.vue import）因此被静默忽略、
+#    从未入库：本机文件一直在（所以本机构建永远是绿的），CI 从 clone 构建才报
+#    `[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`（第 105 期修）。
+/input/
+/output/
+/cookies/
+/cache/
+/config/cookies/
+/config/cache/
 
 # 构建 / 产物
 *.epub
