@@ -93,3 +93,9 @@
 - **106** 记忆体系精简（用户 m08584）：**收尾只写两处** = roadmap 本期段（唯一叙事）+ 本表一行；`MEMORY-REF.md` 改为**按主题**的域手册（不再按期号追加）；**当日日志取消**；第 53–105 期逐期全文存档 = `MEMORY-PERIODS.md`（只读）；三个文件名一律不动。
 - **107** 自动化收尾（用户 m08782「再谈自动化」）：机械的几处交给 `tests/period_close.py` —— `new` 一次落位 / `check` 只读对账 R1–R8；⚠️ **工具只摆位置、不写叙事也不提炼**，缺锚点或期号已占用**整体拒绝**（绝不改一半）、**不猜数字**（没给 `--numbers` 就让人手改）、逐文件保住**行尾与 BOM**（否则假 diff）。⚠️ **对账不能追溯历史**：§2 是第 62 期才开始记的（53–61 无行）、74/78 反过来 ⇒ `STRICT_FROM=107`，历史错位只 warning（补一条从来没存在过的记录 = 编造）。
 - **108** 阅读动线四改（用户 m09151；五处歧义经 m09230 全部选推荐项）：仪表盘封面**直接开书**（`frontend/src/lib/bookOpen.ts` 的 `openTargetOf` 是唯一真值源，端点读不动的格式去详情页）／侧栏抽屉判据从「纯宽度」改成 `DRAWER_QUERY = 窄屏 or (pointer: coarse and ≤1023.98px)`（手机横屏与平板收起，桌面窗口拖窄仍两栏）／阅读路由**整屏沉浸 = 外壳根本不渲染**（`/listen` 刻意不在内：它是播放器不是阅读界面）／设置面板补 document 级 `click` + `contains` 收面板（用 click 冒泡而非 pointerdown ⇒ 翻页模式下只收面板、不翻页）。⚠️ 三条教训：**本仓 SPA 是 hash 路由**（探测要用 `#/read/<id>`；`location.pathname` 恒为 `/`，按路径导航拿到的是服务端 404）／**VTU 默认挂游离树**，测 document 级监听的用例必须 `attachTo: document.body`，否则会以「看着像产品 bug」的形式假红／新增前端 spec 必须登记进 `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`，否则全量 pytest 红。
+  第 108 期补记（用户 m09721 追问「确保满足响应式了吗？」）：真机横扫（CDP，17 视口 × 5 路由 = 12 触屏 + 5 鼠标）
+  **FAILS=0**，但查出一个**既有**缺陷并已修 —— 阅读设置面板 `absolute right-0 w-72` 的定位父节点是那颗 38px 宽的按钮
+  （它右侧还有「切换模式 / 书签 / 笔记」≈138px），320px 视口面板 x=-118、左半边被祖先 `overflow-hidden` **裁掉**（看不见也滚不回来）；
+  修法 = `relative` 挂到工具栏**整行**（`frontend/src/views/ReaderView.vue:2378`）+ 面板 `max-w-full`（该缺陷 `ac1906d` 起就有）。
+  ⚠️ 横扫探针的两条假警报：元素右边缘越界**不能**直接算页面溢出（横向滚动容器、`transform` 停在屏外的抽屉、`inert`/`aria-hidden` 都要排除）、
+  CDP 非触屏档不能传 `maxTouchPoints: 0`（回 `Touch points must be between 1 and 16`）。

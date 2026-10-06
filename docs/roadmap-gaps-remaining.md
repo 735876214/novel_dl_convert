@@ -6988,3 +6988,14 @@ Build failed with 1 error:
 
 - 四条口径全部落盘并由真机视口核验；`tests/period_close.py check`（0 问题）与 `tests/check_doc_anchors.py`（exit 0，21 文档锚点）均通过；本期收尾是 `tests/period_close.py new` 第一次被真的用上。
 - 遗留：`frontend/src/components/book/detail/ReadingLogTab.spec.ts` 的 flaky（全量并行下超时、单跑绿）仍是既有问题，未在本期处置；`docs/TODO.md` §1 P1 里的 action 版本升级、`fileops.py` OPF 正则等条目照旧。
+
+### 九、补记：响应式横扫与窄屏设置面板出界（用户 m09721 追问「确保满足响应式了吗？」）
+
+- **口径**：不口头保证，改成真机横扫。脚本 `nf_p108_responsive.mjs`（本机 `C:\Users\qingr\Temp\`，不提交）直连 headless Edge 的 CDP（端口 9334），**17 个视口（触屏 12 + 鼠标 5）× 5 个路由（仪表盘 / 书架 / 详情 / 阅读 / 设置）**逐格量：页面横向溢出、越界元素、`DRAWER_QUERY` 求值、常驻/抽屉侧栏与触发器可见性、阅读页外壳（`header`）与工具栏矩形、点开设置后的面板矩形（含「谁裁的」）。
+- **横扫结果（修面板之前就已成立的部分）**：全部视口 × 全部路由 **`ovf=0`**；≤1023 触屏一律「无常驻侧栏 + 有触发器」，≥1024 触屏与全部鼠标档常驻两栏（`DRAWER_QUERY` 上界 1023.98 = Tailwind `lg`，iPad Pro 12.9 竖屏 1024 走两栏是刻意口径）；阅读页在**所有**视口下 `header=false / aside=false / trig=false`（沉浸成立）、工具栏在视口内（宽 38px）。
+- **横扫查出一个既有缺陷（不是本期引入 —— `git log -S` 追到 `ac1906d`，2026-09-17）**：阅读设置面板是 `frontend/src/views/ReaderView.vue:2399` 的 `absolute right-0 z-30 … w-72`（288px 固定宽），而它的定位父节点是那颗**按钮的外层** `<div class="relative">`（宽 38px；它右侧还有「切换模式 / 书签 / 笔记」≈138px）⇒ 面板右边缘恒定落在视口右侧约 150px 处，288px 的面板于是向左出界：320×568 ⇒ x=**-118**、360 ⇒ -78、390 ⇒ -48、414 ⇒ -24（≥568 才为正），被祖先 `overflow-hidden` **裁掉**（320 时左边 118px 用户看不见、也滚不回来）。
+- **修法（最小，且不猜）**：把 `relative` 从按钮外层**挪到工具栏整行**（`frontend/src/views/ReaderView.vue:2378`）——面板右边缘才等于内容区右边缘；面板自身加 `max-w-full`，比它 288px 还窄的视口就压窄面板而不是横着溢出。**没动**面板里的控件、也没动第 4 条的 `onDocumentClick` 监听；`git show a059b6f` 已确认本期此前只加了 `ref`/监听、没碰 class。
+- **修后复核（同一脚本）**：320×568 ⇒ `288px@20`（右 308 = 内容区右边缘）、360 ⇒ `@60`、390 ⇒ `@90`、414 ⇒ `@114`、**280×600 ⇒ `256px@12`**（`max-w-full` 真的把面板压窄了，这是它唯一能被验证的地方）、1440×900 ⇒ `@1128`；全部 `inView=true`、左被裁 0px。整轮横扫 **`FAILS=0`**。
+- **契约测试**：`frontend/src/views/ReaderView.spec.ts` 新增 describe「设置面板的定位（第 108 期响应式横扫补记）」2 例 —— jsdom 没有布局、量不了坐标，所以钉的是**结构**：面板的定位父节点是工具栏整行（**不是**那颗按钮的外层 div），且面板带 `max-w-full`。该文件 29 → **31 例**，前端全量 **69 spec / 712 例全绿**。
+- **探针自身踩的两个假警报（已写进脚本注释）**：① 「元素右边缘超出视口」不能直接当页面溢出 —— 仪表盘书脊条是 `div.flex w-max` 放在横向滚动容器里、详情页 tabs 同理、收起的侧栏抽屉用 `transform` 停在屏外；要按「祖先 `overflow-x` 非 visible / 自身或祖先有 `transform` / `inert`・`aria-hidden`」排除，否则 29 条「失败」里 27 条是假的。② CDP 非触屏档**不能**传 `maxTouchPoints: 0`（`Emulation.setTouchEmulationEnabled` 回 `{"code":-32602,"message":"Touch points must be between 1 and 16"}`，首轮就崩在这；改成一个都不传）。
+- **没核过的**：实体手机/平板（只用了 CDP 设备模拟，含触屏与 `pointer: coarse` 模拟）；iOS Safari 的 `dvh` 与地址栏收放；1920×1080 以上的 4K 视口。
