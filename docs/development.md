@@ -152,9 +152,9 @@ python tests/check_doc_anchors.py --file docs/xxx.md
 `tests/period_close.py`（**非 `test_` 前缀，pytest 不收集**；stdlib，无新依赖）：
 
 ```bash
-python tests/period_close.py new --period 107 --title "期标题" --numbers "2338 2313 25" --seconds 300.5
-python tests/period_close.py new --period 107 --title "期标题" --junit junit.xml   # 或用 junit 取数字
-python tests/period_close.py new --period 107 --title "期标题" --dry-run          # 只看改哪几处
+python tests/period_close.py new --period 108 --title "期标题" --numbers "2340 2315 25" --seconds 329.85
+python tests/period_close.py new --period 108 --title "期标题" --junit junit.xml   # 或用 junit 取数字
+python tests/period_close.py new --period 108 --title "期标题" --dry-run          # 只看改哪几处
 python tests/period_close.py check            # 只读对账 R1–R8（0 问题退 0）
 python tests/period_close.py check --history  # 顺带列出历史豁免项（第 53–61 期）
 python tests/period_close.py check --fix      # 只修版本字面量（= 仓库根 VERSION）
@@ -167,5 +167,8 @@ python tests/period_close.py check --fix      # 只修版本字面量（= 仓库
 - **为什么对账从第 107 期起才严判**：`TODO` §2 是第 62 期才开始记的 —— roadmap 的第 53–61 期**有期段却从没有过索引行**；
   而第 74 / 78 期反过来（§2 有行、roadmap 没有对应期段）。这两类历史差异若按今天的规则判，都得「补一条从没存在过的记录」= **编造**。
   ⇒ `STRICT_FROM = 107`，历史差异只出 warning（`check --history` 会列出来）。
-- 契约见 `tests/test_period_records_contract.py`（27 例：每条规则都有「故意破坏 ⇒ 报错」用例，
+- 契约见 `tests/test_period_records_contract.py`（29 例：每条规则都有「故意破坏 ⇒ 报错」用例，
   外加 `new` 幂等、整体拒绝、行尾 / BOM 保住、`check` 只读）。
+- `R6` 管的是「`TODO` §2 必须是一行一期的表」：期号不重复、不许夹不以 `|` 开头的裸行（表尾脚注不算）、
+  第 ≥107 期的行 ≤300 字符。它**第一次真跑就抓到一处既有缺陷**：第 105 期那行被吃掉 `| 105 | ` 前缀后
+  整段掉进表格中间（1465 字符，把表格从那里截断）—— 这类事故**肉眼很难注意到**，是这条判据的主要价值。
