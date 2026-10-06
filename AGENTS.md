@@ -82,7 +82,7 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 
 ```bash
 # 后端测试（离线、全量；Windows 用 .venv\Scripts\python.exe）
-.venv/bin/python -m pytest                 # 当前基线 2340 例（2315 passed / 25 skipped；只增不减）
+.venv/bin/python -m pytest                 # 当前基线 2343 例（2318 passed / 25 skipped；只增不减）
                                            # ⚠️ 跑前先清空全部 proxy 变量；⚠️ 别再加 `-q`（两条都见第 5 节）
 .venv/bin/python -m pytest tests/test_catalog.py -k 某关键字
 

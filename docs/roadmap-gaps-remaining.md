@@ -6999,3 +6999,64 @@ Build failed with 1 error:
 - **契约测试**：`frontend/src/views/ReaderView.spec.ts` 新增 describe「设置面板的定位（第 108 期响应式横扫补记）」2 例 —— jsdom 没有布局、量不了坐标，所以钉的是**结构**：面板的定位父节点是工具栏整行（**不是**那颗按钮的外层 div），且面板带 `max-w-full`。该文件 29 → **31 例**，前端全量 **69 spec / 712 例全绿**。
 - **探针自身踩的两个假警报（已写进脚本注释）**：① 「元素右边缘超出视口」不能直接当页面溢出 —— 仪表盘书脊条是 `div.flex w-max` 放在横向滚动容器里、详情页 tabs 同理、收起的侧栏抽屉用 `transform` 停在屏外；要按「祖先 `overflow-x` 非 visible / 自身或祖先有 `transform` / `inert`・`aria-hidden`」排除，否则 29 条「失败」里 27 条是假的。② CDP 非触屏档**不能**传 `maxTouchPoints: 0`（`Emulation.setTouchEmulationEnabled` 回 `{"code":-32602,"message":"Touch points must be between 1 and 16"}`，首轮就崩在这；改成一个都不传）。
 - **没核过的**：实体手机/平板（只用了 CDP 设备模拟，含触屏与 `pointer: coarse` 模拟）；iOS Safari 的 `dvh` 与地址栏收放；1920×1080 以上的 4K 视口。
+
+## 第 109 期（发版 V1.0.0：把第 95–108 期的积累一次性发布）
+
+### 一、立项与范围
+
+用户直接立项：**「发版v1.0.0」**。此前连续十四轮（第 95–108 期）每期都明确选择「先不发版，只提交代码」，`VERSION` 一直停在 `0.94.0`；这一期把这批积累**一次性发布**。
+
+两个决策先问后做（`ask_user_question`，用户都选了推荐项）：
+
+1. `CHANGELOG.md` 的 `V1.0.0` 段**只写一段话里程碑说明** —— 不逐项罗列十四期，细节留在本文件各期段；
+2. 镜像**多推一个版本 tag**（`:1.0.0`），NAS 端可以固定版本、需要时回滚（此前只有 `latest` 与 `sha`）。
+
+**范围**：`VERSION` / `CHANGELOG.md` / 两个 workflow 的注释与 tag；**不含**任何运行时代码改动。
+
+### 二、勘察事实（写之前先读原文）
+
+- `.github/workflows/release.yml`：`on: push(main) + tags(v*) + workflow_dispatch`；job `release` 读仓库根 `VERSION`，若 `refs/tags/v<版本>` 不存在就 `git tag` + `git push origin`，再用 `python3 -X utf8 -m novelforge.core.changelog "${TAG#v}" > NOTES.md` 取段，最后 `gh release create "$TAG" -F NOTES.md -t "$TAG"`。文件头注释写死一条：**打 tag 与建 Release 必须在同一个 job** —— `GITHUB_TOKEN` 推的 tag 不会再触发别的 workflow。
+- `.github/workflows/docker-image.yml`：读 `VERSION` 作 `APP_VERSION` build-arg；`platforms: linux/amd64,linux/arm64`；`provenance: false`；`cache-from/to: type=gha`。
+- `novelforge/core/changelog.py`：`section()` 返回 `## ` 段的**原文正文**（与「新功能」页 `parse()` 同一套分界判据），`main()` 找不到段就**打 stderr 并退 1** —— 即「缺段 ⇒ 发布失败」，这是想要的行为。
+- 两条会红的契约：`tests/test_changelog_render.py`（`VERSION` 指向的段必须存在、段正文必须 `startswith("### ")`、`parse()[0]` 必须是当前版本、`main([VER]) == 0` 且输出含 `### 新功能`）与 `tests/test_version_contract.py`（`/health` 下发的 version == `server.APP_VERSION` == 仓库根 `VERSION` 内容）。两条都**没有**「版本号必须是 0.x」的约束 ⇒ 1.0.0 不需要改任何契约。
+- `frontend/src/views/WhatsNewView.vue`：模板既渲染 `note`（`>` 块引用）也渲染分组 ⇒ 段里写 `### 新功能` + 一段话，应用内与 GitHub Release 两边都看得见。
+
+### 三、改动
+
+1. `VERSION`：`0.94.0` → `1.0.0`。
+2. `CHANGELOG.md`：首段改为 `## V1.0.0 — 2026-10-06`（一段话里程碑说明 + `### 口径变化（如实记录）`：版本号约定从「第 N 期 = V0.N.0」改为**按里程碑发版**）；第 3 行的版本号约定说明同步改写。
+3. `.github/workflows/docker-image.yml`：`tags:` 块增加 `ghcr.io/735876214/novel_dl_convert:${{ steps.version.outputs.version }}`。⚠️ 注释必须写在 `tags:` **上方** —— 写进 `|` 块标量会变成一个带 `#` 的假 tag。
+4. `.github/workflows/release.yml`：顶部注释那句「（约定：第 N 期 = V0.N.0）」改为「v0.x 阶段的约定…；**V1.0.0（第 109 期）起按里程碑发版**」。
+5. `tests/period_close.py`：两处工具判据修正（下一节）。
+
+### 四、测试
+
+- **`tests/period_close.py` 的 R7 修正（首次真正发版暴露的工具缺陷）**：`docs/TODO.md` §2 是**逐期历史索引**（与 roadmap 本期段同类），第 95–106 期那几行写着「（**不发版**，`VERSION` 仍 `0.94.0`）」；而 R7 与 `check --fix` 都按整篇文本 `findall`/`sub` ⇒ 一按 `--fix` 就会把 **12 行历史记录**改成 `1.0.0`，**历史变成谎话**。现在 R7 只扫「当前态」（`docs/TODO.md` §0 头部与 `AGENTS.md` §4），`| …` 表格行一律跳过；`_fix_versions` 同样逐行、跳过表格行。抽出 `_version_lits()` 供两边共用（**一处实现**）。
+- **`new` 的索引行落点修正（同一个坑的第二次暴露，同一天踩到）**：`scaffold()` 原本把 `- **N** …` 插在「**最后一条 `- **N**` 行**」之后 —— 而上一条索引可能带**缩进的续行说明**（第 108 期的 109 条目旁就有 6 行），于是续行被切到新条目底下，读起来像新一期在讲上一期的事。现在插在**整段索引末尾**（该小节内最后一行非空行之后）；若该小节里一行索引都没有，则**整体拒绝**（与「缺锚点即拒绝」同一口径）。
+- 新增用例（`tests/test_period_records_contract.py`，29 → **32 例**）：`test_S2_历史行里的旧版本字面量不算漂移`（`check` 不报 R7、`--fix` 不碰历史行）、`test_new_索引行插在续行之后`（续行仍排在 107 底下、`- **108**` 在整段末尾）、`test_new_索引小节空了就整体拒绝`（一行索引都没有 ⇒ `ScaffoldError` 且文件一个字节不动）。R6 那条「§2 里夹裸行」的既有用例仍在。
+
+### 五、核验（实测口径）
+
+- `python -X utf8 -m novelforge.core.changelog 1.0.0` ⇒ **exit 0**、输出 1382 B（与 `release.yml` 里 CI 用的取段命令同源）；段正文以 `### 新功能` 开头；定稿后**不带** `-X utf8` 也 exit 0。
+- `pytest tests/test_changelog_render.py tests/test_version_contract.py` ⇒ **9 passed**。
+- `pytest tests/test_period_records_contract.py` ⇒ **32 passed**；`tests/period_close.py check` ⇒ **收尾记录对账通过（0 问题）**、exit 0。
+- `python tests/check_doc_anchors.py` ⇒ **exit 0**。
+- 后端全量 ⇒ **2343 例（2318 passed / 0 failed / 0 errors / 25 skipped）、325.16 s、exit 0**（junit 落 `C:\Users\qingr\Temp\nf_p109_junit.xml`）—— 比第 108 期的 2340 例多 **3** 例，正是本节新增的三条契约。
+- **没核过（如实声明）**：tag `v1.0.0`、GitHub Release、镜像 `:1.0.0` **都要等推送后由 GitHub 侧产生**，本机不跑 Actions —— 推送后按 REST 核对（见第八节）；arm64 镜像仍只有 CI 构建，本机只验过 amd64（沿用第 105 期口径）。
+
+### 六、数字
+
+- 后端全量 **2343 例（2318 passed / 0 failed / 0 errors / 25 skipped）**、325.16 s（第 108 期 2340 例 / 385.37 s ⇒ 本期 +3 例，全是本节新增的契约）；前端 **69 spec / 712 例**（本期未动前端 ⇒ 没有重跑）。
+- 版本：`VERSION` → **`1.0.0`**（`CHANGELOG.md` 首段同版本）；「连续十四轮不发版」到此结束，从 V1.0.0 起按里程碑发版。
+
+### 七、没做的事
+
+- **没有逐项罗列十四期**（用户选择「一段话」）—— 想看细节就翻本文件第 95–108 期各段。
+- **没有为迁就本机控制台编码改代码**：首版正文里有 `⇒`（U+21D2，非 GBK），不带 `-X utf8` 时 `python -m novelforge.core.changelog 1.0.0` 会报 `UnicodeEncodeError: 'gbk' codec can't encode character '\u21d2'`；改写时顺手把非 GBK 字符去掉，**定稿后不带 `-X utf8` 也 exit 0**（CI 用 `python3 -X utf8`，与版本无关）。没有在代码里为控制台编码加兜底 —— 那是环境，不是产品。
+- **没有新增 CI 跑 pytest 的 workflow**：既有门禁仍是「本地全量 pytest」（第 107 期的 `test_真实仓库收尾记录无漂移` 就是挂在这条门禁上的活契约）。
+- 没有动运行时代码、没有升前端依赖、没有动 `docker-image.yml` 的构建矩阵。
+
+### 八、收尾
+
+- 三笔提交（发布本体 / CI 镜像 tag / docs）+ **一次** `git push origin main`：一次推送 ⇒ `release.yml` 打 tag 与 `docker-image.yml` 构建落在**同一个 head**（`v1.0.0` 指向的正是镜像构建的那个提交）。
+- 推送后核对三件 GitHub 侧事实：① `v1.0.0` tag 与 Release 是否建出（Release notes 应**逐字等于** `CHANGELOG.md` 的 V1.0.0 段）；② `docker-image.yml` 是否推出 `:1.0.0` 标签；③ 两个 workflow 的最新 run 是否 `success`。
