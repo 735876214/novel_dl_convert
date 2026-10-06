@@ -7060,3 +7060,12 @@ Build failed with 1 error:
 
 - 三笔提交（发布本体 / CI 镜像 tag / docs）+ **一次** `git push origin main`：一次推送 ⇒ `release.yml` 打 tag 与 `docker-image.yml` 构建落在**同一个 head**（`v1.0.0` 指向的正是镜像构建的那个提交）。
 - 推送后核对三件 GitHub 侧事实：① `v1.0.0` tag 与 Release 是否建出（Release notes 应**逐字等于** `CHANGELOG.md` 的 V1.0.0 段）；② `docker-image.yml` 是否推出 `:1.0.0` 标签；③ 两个 workflow 的最新 run 是否 `success`。
+
+### 九、发版核验（推送后按 REST 核对）
+
+- 四笔提交 → **一次** `git push origin main` ⇒ `origin/main == 5727744`（`edeb1ba` 发布本体 / `46bc726` 镜像 tag 与 workflow 注释 / `d87d2f1` 落位器两处缺陷 / `5727744` docs）。
+- **两个 workflow 都在 head `5727744` 上 success**：`Release` run `37408546297`、`Build and Push Image` run `37408546232`（job `build` = `112091517778`）。
+- **tag 与 Release**：`v1.0.0` → `5727744fbbe3485e0bb55a6d101fd3df915956b6`；Release `v1.0.0` 建出、非 draft，notes **1639 B**、首行是 `### 新功能`（即 `CHANGELOG.md` 那段的原文切片，符合 `release.yml` 的取段逻辑）。
+- **镜像三个 tag 都在**：`ghcr.io/735876214/novel_dl_convert` 的 `:1.0.0` / `:latest` / `:5727744f…` 按 tag 取 manifest 都是 **HTTP 200**、`application/vnd.oci.image.index.v1+json`（多架构索引，647 B）。**对照**：随便编一个 tag 取 manifest 回 **404** —— 这个探法本身能分辨真假，所以 200 不是「一律返回」。
+- ⚠️ **GHCR 的 `tags/list` 有缓存，别拿它判「tag 推没推上去」**：构建 success 十几分钟后它仍然只列 `latest` + 一批旧 sha，`1.0.0` 与新 sha **都不在里面**（我据此差点判成「版本 tag 没生效」）。**以「按 tag 取 manifest」为准**。
+- **没核过（如实声明）**：① 镜像内 `APP_VERSION` 标签没有读回来 —— 本机到 `ghcr.io` 反复 `ssl.SSLEOFError: [SSL: UNEXPECTED_EOF_WHILE_READING]`（本机出网抖动，同一天也撞在 curl（`HTTP=000`）与 schannel 上）；镜像里的 `APP_VERSION` 由 `build-args: APP_VERSION=${{ steps.version.outputs.version }}` 从 `VERSION` 注入，这条链路只核到「workflow 里写的是它」。② NAS 端实拉 `:1.0.0` 未验（本机没有 NAS 环境）。

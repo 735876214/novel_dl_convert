@@ -104,3 +104,7 @@
   ⚠️ 发版段正文**第一行必须是 `### ` 分组标题**（`tests/test_changelog_render.py` 断言 `startswith("### ")`，且 `changelog.main()` 输出里必须含写死的 `### 新功能`）—— `>` 领起的一段话不算段首；而 `note` 收的是本节内**任意** `>` 行，所以「`### 新功能` + 一段话 + `### 口径变化（如实记录）`」既满足契约、也满足用户「只写一段话、不逐项罗列」。
   ⚠️ `VERSION` 一改就必须**同批**改 `CHANGELOG.md`（取段失败 ⇒ `release.yml` 退 1、发布失败）；反过来 `tests/period_close.py` 的 R7 原本按整篇文本扫 `` `VERSION` 仍 0.94.0 ``，而 `docs/TODO.md` §2 是**逐期历史**（第 95–106 期都写着旧版本）⇒ `--fix` 会一次改掉 **12 行历史**（第 109 期第一次真发版才暴露）；现在 R7 与 `--fix` 都跳过 `| …` 表格行（新契约 `test_S2_历史行里的旧版本字面量不算漂移`）。
   ⚠️ `new` 的索引行改插在**整段索引末尾**：上一条的缩进续行不再被切到新条目底下（同一个坑第二次暴露）。
+  ✅ 核过（推送后按 REST）：`origin/main == 5727744`，head 上 `Release`（run `37408546297`）与 `Build and Push Image`（run `37408546232`）都 success；
+  tag `v1.0.0` → `5727744`、Release 建出（notes 1639 B、首行 `### 新功能`）；镜像 `:1.0.0` / `:latest` / `:<sha>` 三个 tag 取 manifest 均 **200**（编造的 tag 回 404 做对照）。
+  ⚠️ **GHCR 的 `tags/list` 有缓存** —— 构建 success 十几分钟后它仍只列 `latest` + 旧 sha，`1.0.0` 与新 sha 都不在（差点据此误判「版本 tag 没生效」）⇒ 判 tag 要**按 tag 取 manifest**。没核：镜像内 `APP_VERSION` 标签（本机到 ghcr.io 反复 `SSL: UNEXPECTED_EOF_WHILE_READING`）、NAS 端实拉。
+  ⚠️ 本机新的编码坑：`write` 工具落的 `.ps1` 是**无 BOM UTF-8**，Windows PowerShell 按 GBK 解 ⇒ 全角字符把字符串打断（`字符串缺少终止符: "`，脚本一行没跑）；`.ps1` 只用 ASCII 或写成带 BOM。

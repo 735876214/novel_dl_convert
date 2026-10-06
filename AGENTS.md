@@ -156,6 +156,13 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
   `/config/cache/`，与 `/data/`、`/libraries/` 同口径）；② 新增源码目录后**别只信本机构建** ——
   跑 `git ls-files --others --ignored --exclude-standard -- frontend/src novelforge` 看有没有被吞掉的文件；
   ③ 这两条已由 `tests/test_source_tracking_contract.py` 钉住（源码树不许有被忽略的文件 + `@/` 别名导入必须落在已入库路径上）。
+- ⚠️ **临时 `.ps1` 里写中文会被按 GBK 读**（第 109 期）：`write` 工具落的是**无 BOM 的 UTF-8**，而本机 Windows PowerShell 对无 BOM 文件按 ANSI（GBK）解码 ⇒
+  全角字符（`：`、`（`）会被当成多字节乱码，解析报 `字符串缺少终止符: "`（脚本一行都没跑）。
+  ⇒ 写 `.ps1` 要么**只用 ASCII**（哪怕是临时脚本：输出标签用英文），要么写成**带 BOM 的 UTF-8**；
+  同理，`.ps1` 里也不要用中文做正则/路径字面量。
+- ⚠️ **GHCR 的 `tags/list` 有缓存**（第 109 期）：镜像构建 success 之后十几分钟，tag 列表里仍可能没有刚推上去的那个 tag（`latest` 与旧 sha 照旧列着）。
+  ⇒ 判「tag 推没推上去」要**按 tag 取 manifest**（`GET https://ghcr.io/v2/<owner>/<repo>/manifests/<tag>`，带 `Bearer` pull token）；
+  用随便编的 tag 应回 404 做对照，否则分不清「真存在」与「这个端点不校验」。
 
 ## 6. 提交与交付
 
