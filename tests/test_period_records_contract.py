@@ -68,6 +68,8 @@ TODO_STUB = """# TODO.md（测试桩）
 | 107 | 新一期 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 107 期段 |
 | 100 | 老一期 |
 
+**更早的期次**：本仓无逐期记录（表尾脚注，**不在两条数据行之间**，不算裸行）。
+
 ## 3. 排期候选
 """
 
@@ -245,6 +247,19 @@ def test_新期号的行太长报_R6(repo: pathlib.Path) -> None:
 def test_历史期的长行豁免_R6(repo: pathlib.Path) -> None:
     _patch(repo, TODO, "| 100 | 老一期 |", "| 100 | 老一期" + "很长" * 200 + " |")
     assert not any("[R6]" in p for p in _problems(repo))
+
+
+def test_同一期在_S2_出现两次报_R6(repo: pathlib.Path) -> None:
+    _patch(repo, TODO, "| 107 | 新一期", "| 107 | 新一期\n| 107 | 新一期")
+    problems = _problems(repo)
+    assert any("[R6]" in p and "出现了 2 次" in p for p in problems)
+
+
+def test_S2_表里夹裸行报_R6(repo: pathlib.Path) -> None:
+    # 真实事故形状：某一期的行**表头前缀被吃掉**，剩下的正文掉进表格里（第 105 期那条就这么留了十几期）
+    _patch(repo, TODO, "| 100 | 老一期 |", "  老一期的正文，没有 `| 100 |` 前缀\n| 100 | 老一期 |")
+    problems = _problems(repo)
+    assert any("[R6]" in p and "裸行" in p for p in problems)
 
 
 def test_版本字面量不一致报_R7(repo: pathlib.Path) -> None:

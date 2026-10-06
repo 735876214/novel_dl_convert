@@ -37,6 +37,7 @@ import pathlib
 import re
 import sys
 import xml.etree.ElementTree as ET
+from collections import Counter
 
 # ---------------------------------------------------------------- 口径常量
 
@@ -114,17 +115,44 @@ def parse_roadmap_periods(text: str) -> list[int]:
     return [int(n) for n in re.findall(r"(?m)^## 第 (\d+) 期", text)]
 
 
-def parse_todo_rows(text: str) -> dict[int, str]:
+_TODO_ROW_RE = re.compile(r"^\| (\d+) \|")
+
+
+def _todo_row_lines(text: str) -> list[tuple[int, str]]:
+    """`docs/TODO.md` §2 小节里的 `| N | …` 行（按出现次序，**含重复**）。"""
     lines = text.split("\n")
     a, b = _span(lines, SEC2)
-    out: dict[int, str] = {}
     if a < 0:
-        return out
+        return []
+    out: list[tuple[int, str]] = []
     for ln in lines[a:b]:
-        m = re.match(r"^\| (\d+) \|(.*)$", ln)
-        if m:
-            out[int(m.group(1))] = ln
+        if m := _TODO_ROW_RE.match(ln):
+            out.append((int(m.group(1)), ln))
     return out
+
+
+def parse_todo_rows(text: str) -> dict[int, str]:
+    return {n: ln for n, ln in _todo_row_lines(text)}
+
+
+def _section2_broken_lines(text: str) -> list[str]:
+    """夹在两条 `| N |` 行之间、自己却**不以 `|` 开头**的裸行。
+
+    表格里的裸行会把表格截断，视觉上等于「同一个期号占了两行」；
+    表尾（最后一条数据行之后）的脚注不算 —— 它不在两条数据行之间。
+    """
+    lines = text.split("\n")
+    a, b = _span(lines, SEC2)
+    if a < 0:
+        return []
+    seg = lines[a:b]
+    idx = [i for i, ln in enumerate(seg) if _TODO_ROW_RE.match(ln)]
+    bad: list[str] = []
+    for x, y in zip(idx, idx[1:]):
+        for ln in seg[x + 1 : y]:
+            if ln.strip() and not ln.startswith("|"):
+                bad.append(ln)
+    return bad
 
 
 _INDEX_LINE_RE = re.compile(r"^- \*\*(?P<label>[^*]{1,24})\*\*")
@@ -248,7 +276,15 @@ def check_records(root: pathlib.Path, *, history: bool = False) -> tuple[list[st
         if n >= STRICT_FROM:
             problems.append(f"[R5] `{PERIODS}` 是**只读存档**，却出现了 `## 第 {n} 期`")
 
-    # -- R6 新期号的 §2 行是一行
+    # -- R6 §2 是「一行一期」的表
+    for n, cnt in Counter(n for n, _ in _todo_row_lines(todo)).items():
+        if cnt > 1:
+            problems.append(f"[R6] `{TODO}` §2 里第 {n} 期出现了 {cnt} 次（一行一期）")
+    for ln in _section2_broken_lines(todo):
+        problems.append(
+            f"[R6] `{TODO}` §2 表里夹了一条不以 `|` 开头的裸行（会把表格截断、等于同一期占两行）："
+            f"{ln.strip()[:60]}…"
+        )
     for n, ln in rows.items():
         if n >= STRICT_FROM and len(ln) > TODO_ROW_MAX:
             problems.append(
