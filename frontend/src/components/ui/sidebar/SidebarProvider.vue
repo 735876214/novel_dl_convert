@@ -6,7 +6,7 @@ import { computed, ref } from 'vue'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { readDeviceValue, SIDEBAR_COLLAPSED_KEY, writeDeviceValue } from '@/lib/sidebarPrefs'
 import { cn } from '@/lib/utils'
-import { useNarrowScreen } from '@/lib/viewport'
+import { useDrawerLayout } from '@/lib/viewport'
 import { provideSidebarContext, SIDEBAR_KEYBOARD_SHORTCUT, SIDEBAR_WIDTH_ICON } from './utils'
 import { useSidebarWidth } from './useSidebarWidth'
 
@@ -16,6 +16,11 @@ import { useSidebarWidth } from './useSidebarWidth'
  * 一处**刻意的偏离**：断点用 `@/lib/viewport` 的 `NARROW_QUERY`（≤639.98px），
  * 不是上游写死的 `(max-width: 768px)`。理由见 `lib/viewport.ts` 的注释 ——
  * 768 档在本项目要继续保持两栏布局（用户口径），提到 768 是**行为变差**。
+ *
+ * ⚠️ 第 108 期：这里的 `isMobile` 改问 `useDrawerLayout()`（`DRAWER_QUERY`），不再
+ * 直接问 `useNarrowScreen()` —— 判据多了「触屏且不宽于 lg」一档，手机横屏与平板
+ * 也走抽屉，否则它们在 639.98px 之上会常驻一条侧栏占掉一大块（用户实测口径）。
+ * 名字仍是 `isMobile`（上下文里其它消费方读的就是它），语义是「侧栏该是抽屉」。
  *
  * 另外这个组件**不自己撑满屏**：上游根节点带 `min-h-svh w-full`，本项目的
  * 外壳高度/内边距/卡片间隙由 `App.vue` 用 class 传进来（见那里的调用）。
@@ -37,7 +42,7 @@ const emits = defineEmits<{
   'update:open': [open: boolean]
 }>()
 
-const isMobile = useNarrowScreen()
+const isMobile = useDrawerLayout()
 const openMobile = ref(false)
 
 const open = useVModel(props, 'open', emits, {

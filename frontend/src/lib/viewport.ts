@@ -24,6 +24,25 @@ import { onBeforeUnmount, onMounted, ref, type Ref } from 'vue'
  */
 export const NARROW_QUERY = '(max-width: 639.98px)'
 
+/**
+ * 「侧栏按**抽屉**处理」的判据（第 108 期）—— 只给外壳侧栏用。
+ *
+ * `NARROW_QUERY` 只按宽度判，于是**宽而矮 / 触屏**的设备会落进「常驻侧栏」分支：
+ * 手机横屏（844×390）与平板（1024×768）都 > 639.98px，侧栏就那么常驻着占掉一大块
+ * （用户实测口径）。这里只补一个条件，宽屏桌面**一字不改**：
+ *
+ * - `(pointer: coarse) and (max-width: 1023.98px)`：触屏且不宽于 `lg`
+ *   （1023.98 与 Tailwind `lg` 的 1024 严丝合缝，理由同 `NARROW_QUERY` 的 639.98）。
+ *
+ * 用**指针精度**而不是纯宽度，是为了不碰第 90 期的用户口径：桌面浏览器把窗口拖到
+ * 900px 是常见操作，那**不该**突然变成抽屉（640–767 继续两栏）。
+ *
+ * 语义是「这台设备的侧栏该是抽屉」，不是「屏幕窄」—— 所以它替代 `NARROW_QUERY`
+ * 去决定 `Sidebar.vue` 走 Sheet 还是常驻卡片（JS 先裁决分支，CSS 的 `sm:` 只在
+ * 常驻分支内部生效）。
+ */
+export const DRAWER_QUERY = `${NARROW_QUERY}, (pointer: coarse) and (max-width: 1023.98px)`
+
 function mediaQueryUsable(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
 }
@@ -39,6 +58,17 @@ export function useNarrowScreen(): Ref<boolean> {
   // 环境能力在进程内恒定，故这个分支不会造成 setup 里「钩子顺序不一致」。
   if (!mediaQueryUsable()) return ref(false)
   return useMediaQuery(NARROW_QUERY)
+}
+
+/**
+ * 抽屉判定（第 108 期）：外壳侧栏该是抽屉（手机竖屏 / 手机横屏 / 平板）还是常驻卡片。
+ *
+ * 兜底与 `useNarrowScreen` 逐字一致 —— 读不到 `matchMedia` 一律**按宽屏处理**
+ * （不抽屉）。反过来会把整个导航藏进一个打不开的抽屉里：页面不报错，只是左边空了。
+ */
+export function useDrawerLayout(): Ref<boolean> {
+  if (!mediaQueryUsable()) return ref(false)
+  return useMediaQuery(DRAWER_QUERY)
 }
 
 /**

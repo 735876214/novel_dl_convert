@@ -2,7 +2,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { defineComponent, h, nextTick } from 'vue'
 
-import { NARROW_QUERY } from '@/lib/viewport'
+import { DRAWER_QUERY } from '@/lib/viewport'
 import { SIDEBAR_COLLAPSED_KEY, SIDEBAR_WIDTH_KEY } from '@/lib/sidebarPrefs'
 
 import { Sidebar, SidebarProvider, SidebarRail, SidebarTrigger } from '.'
@@ -348,12 +348,15 @@ describe('SidebarRail（拉手：点开合 / 拖调宽，靠 3px 阈值分家）
   })
 })
 
-describe('窄屏（≤640px）变成抽屉', () => {
+describe('该抽屉的视口变成抽屉（第 90 期：窄屏；第 108 期：再加手机横屏与平板）', () => {
   it('不再常驻：桌面那一块不渲染，点触发器才挂到 body 上', async () => {
+    // 这个桩对**所有** query 返回同一个答案 ⇒ 这里只能证明「抽屉分支被选中了」。
+    // 「什么设备算该抽屉」的那张表（390 触屏 / 844 触屏 / 844 鼠标 …）在
+    // `lib/viewport.spec.ts` 里用会真评媒体查询的桩穷举，两处不要互相替代。
     const mm = installMatchMedia(true)
 
     const w = mountShell()
-    expect(mm.queries).toContain(NARROW_QUERY)
+    expect(mm.queries).toContain(DRAWER_QUERY)
 
     // 侧栏常驻块没了 —— 这正是本期要修的原始缺陷（死占 240px，正文被挤成一列字）
     expect(w.find('[data-slot="sidebar"][data-state]').exists()).toBe(false)

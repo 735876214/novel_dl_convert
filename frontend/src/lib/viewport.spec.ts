@@ -2,7 +2,13 @@ import { mount } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 import { defineComponent, h, nextTick } from 'vue'
 
-import { NARROW_QUERY, useNarrowScreen, useNarrowScreenOnMount } from './viewport'
+import {
+  DRAWER_QUERY,
+  NARROW_QUERY,
+  useDrawerLayout,
+  useNarrowScreen,
+  useNarrowScreenOnMount,
+} from './viewport'
 
 /**
  * 断点唯一真值源（第 90 期）。
@@ -185,5 +191,101 @@ describe('useNarrowScreenOnMount（既有书架行那条路）', () => {
     const w = mount(probeOf(useNarrowScreenOnMount))
     expect(mm.queries).toEqual([NARROW_QUERY])
     w.unmount()
+  })
+})
+
+/**
+ * 侧栏该不该是抽屉（第 108 期）。
+ *
+ * 用户报的是「手机端进来左侧栏没收起」，实测却是**竖屏已经收了** —— 常驻的是
+ * 手机横屏 / 平板那一档（`NARROW_QUERY` 只问宽度，844×390 这种宽而矮的视口落在
+ * 640px 之外，于是走了宽屏常驻分支）。
+ *
+ * 所以这一档的判据从「屏幕窄」改成「**这台设备的侧栏该是抽屉**」：宽度**或**触屏。
+ * 用指针精度而不是单纯把宽度阈值提到 1023.98，是因为第 90 期有明确口径 —— 桌面窗口
+ * 拖窄到 768 之类仍然要两栏；那是一条**用户看得见**的行为，不能顺手改掉。
+ */
+describe('DRAWER_QUERY / useDrawerLayout（第 108 期：横屏与平板也收起侧栏）', () => {
+  it('是 NARROW_QUERY 的**超集**（手机竖屏照旧收，不是把它换掉）', () => {
+    expect(DRAWER_QUERY.startsWith(NARROW_QUERY)).toBe(true)
+    expect(DRAWER_QUERY).toContain('pointer: coarse')
+  })
+
+  it('两条阈值的数字钉在 639.98 与 1023.98 —— 分别贴住 Tailwind 的 sm(640) 与 lg(1024)', () => {
+    const px = [...DRAWER_QUERY.matchAll(/max-width:\s*([\d.]+)px/g)].map((m) => Number(m[1]))
+    expect(px).toEqual([639.98, 1023.98])
+    // 写 1024 会让 1024.00–1024.98 同时命中抽屉与 `lg:` 两套样式
+    expect(px[1]).toBeLessThan(1024)
+    expect(px[1]).toBeGreaterThan(1000)
+  })
+
+  /**
+   * 桩里按「视口宽度 + 指针是否粗」真评一遍查询串。
+   *
+   * 本文件上面那个 `installMatchMedia` 是「所有 query 同一个答案」的粗桩 —— 那条路
+   * **证明不了**「横屏手机会抽屉、桌面 844 不会」，因为两者对同一个 query 的答案相同。
+   * 认不出的媒体特性直接抛：这是测试桩，别让它悄悄把新条件当 false。
+   */
+  function evaluate(query: string, env: { width: number; coarse: boolean }): boolean {
+    return query.split(',').some((clause) => {
+      const c = clause.trim()
+      const max = /max-width:\s*([\d.]+)px/.exec(c)
+      if (!max) throw new Error(`viewport 测试桩没实现的媒体特性：${c}`)
+      if (env.width > Number(max[1])) return false
+      if (c.includes('pointer: coarse') && !env.coarse) return false
+      return true
+    })
+  }
+
+  function installViewportMatchMedia(env: { width: number; coarse: boolean }): string[] {
+    const queries: string[] = []
+    window.matchMedia = ((query: string) => {
+      queries.push(query)
+      return {
+        media: query,
+        matches: evaluate(query, env),
+        onchange: null,
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        addListener: () => {},
+        removeListener: () => {},
+        dispatchEvent: () => false,
+      }
+    }) as unknown as typeof window.matchMedia
+    teardown = () => {
+      window.matchMedia = realMatchMedia
+    }
+    return queries
+  }
+
+  const VIEWPORTS = [
+    { label: '手机竖屏 390×844（触屏）', width: 390, coarse: true, drawer: true },
+    { label: '手机横屏 844×390（触屏）—— 用户报的那一档', width: 844, coarse: true, drawer: true },
+    { label: '平板竖屏 768（触屏）', width: 768, coarse: true, drawer: true },
+    { label: '触屏但已到 lg（1024）—— 够宽了，回常驻', width: 1024, coarse: true, drawer: false },
+    { label: '桌面窗口拖窄到 844（鼠标）—— 第 90 期口径：继续两栏', width: 844, coarse: false, drawer: false },
+    { label: '桌面 1440（鼠标）', width: 1440, coarse: false, drawer: false },
+  ]
+
+  it.each(VIEWPORTS)('$label ⇒ 抽屉=$drawer', ({ width, coarse, drawer }) => {
+    installViewportMatchMedia({ width, coarse })
+    const w = mount(probeOf(useDrawerLayout))
+    expect(w.text()).toBe(drawer ? '窄' : '宽')
+    w.unmount()
+  })
+
+  it('问的就是 DRAWER_QUERY 这一条（不是另抄一份条件）', () => {
+    const queries = installViewportMatchMedia({ width: 844, coarse: true })
+    const w = mount(probeOf(useDrawerLayout))
+    expect(queries).toEqual([DRAWER_QUERY])
+    w.unmount()
+  })
+
+  it('环境读不到 matchMedia 时按**不抽屉**兜底（与 useNarrowScreen 同向）', () => {
+    // 反过来兜底会把导航塞进一个打不开的抽屉里 —— 页面不报错，只是左边永远空着。
+    const mm = installMatchMedia(false, false)
+    const w = mount(probeOf(useDrawerLayout))
+    expect(w.text()).toBe('宽')
+    expect(mm.queries).toEqual([])
   })
 })

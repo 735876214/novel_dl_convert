@@ -19,9 +19,10 @@ import { SIDEBAR_WIDTH_MOBILE, useSidebar } from './utils'
  *    **对内的类名契约完全不变**：外层仍是 `group peer` + `data-state/collapsible/
  *    variant/side`，所以从上游逐字搬来的那些 `group-data-[collapsible=icon]:*`
  *    子孙选择器（图标条隐藏文字、组标题上浮消隐……）原样生效。
- * 2. **断点是 `sm`（640px）而不是 `md`（768px）**，与 `lib/viewport.ts` 同一口径。
- *    `hidden sm:block` 必须与 `useNarrowScreen()` 的 `NARROW_QUERY` 严丝合缝 ——
- *    差一个像素就会出现「JS 认为该显示抽屉、CSS 认为该显示常驻」的双份侧栏。
+ * 2. **断点口径收在 `lib/viewport.ts`**：第 90 期是 `sm`（640px）而不是上游的 `md`（768px）；
+ *    第 108 期抽屉判据升级成 `DRAWER_QUERY`（再多一档「触屏且 ≤lg」）。② / ③ 走哪个分支
+ *    由 JS（`useDrawerLayout()`）裁决，`hidden sm:block` 只是**同一判据的 CSS 副本** ——
+ *    新条件只加进 `DRAWER_QUERY` 一处；只改一边的表现是「该有侧栏的位置什么都没有」。
  */
 defineOptions({
   inheritAttrs: false,
@@ -51,7 +52,11 @@ const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
     <slot />
   </div>
 
-  <!-- ② 窄屏（≤640px）：抽屉。`SheetContent` 内部 Teleport 到 body，见该文件注释 -->
+  <!--
+    ② 抽屉：手机竖屏（≤640px）、手机横屏与平板（触屏且 ≤lg，第 108 期）。
+    判据是 `useDrawerLayout()`（`lib/viewport.ts` 的 `DRAWER_QUERY`），**不是** CSS 断点
+    —— 所以 ≤640px 与 700px 触屏屏走的是同一条路。`SheetContent` 内部 Teleport 到 body。
+  -->
   <Sheet v-else-if="isMobile" :open="openMobile" v-bind="$attrs" @update:open="setOpenMobile">
     <SheetContent
       data-sidebar="sidebar"
@@ -73,7 +78,12 @@ const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
     </SheetContent>
   </Sheet>
 
-  <!-- ③ 桌面常驻：留文档流，宽度在 240px ↔ 3rem 之间过渡 -->
+  <!--
+    ③ 常驻卡片：留文档流，宽度在 240px ↔ 3rem 之间过渡。
+    ⚠️ `hidden sm:block` 只是**同一判据的 CSS 副本**（JS 已经在 ②/③ 之间裁决过分支）；
+    第 108 期起 ② 的条件不再等于 `!sm`，所以这条 class 不再是「谁显示」的裁决者 ——
+    别把新条件只加在 JS 或只加在 CSS 上：**加在 `DRAWER_QUERY` 一处**，两边都跟着走。
+  -->
   <div
     v-else
     class="group peer relative hidden shrink-0 text-sidebar-foreground transition-[width] duration-200 ease-linear sm:block"
