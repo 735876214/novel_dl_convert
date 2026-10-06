@@ -914,3 +914,41 @@ describe('ReaderView · 点面板以外自动收面板（第 108 期）', () => 
     expect(() => document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))).not.toThrow()
   })
 })
+
+describe('ReaderView · 设置面板的定位（第 108 期响应式横扫补记）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    localStorage.clear()
+    stubApi(makeBook())
+  })
+
+  /** 打开设置面板并返回 wrapper；`.z-30` 在整个阅读器里只有面板一份 */
+  async function openSettings(): Promise<VueWrapper> {
+    const { wrapper } = await mountReader()
+    await wrapper.get('[title="阅读设置"]').trigger('click')
+    expect(wrapper.find('.z-30').exists(), '设置按钮要先能把面板打开').toBe(true)
+    return wrapper
+  }
+
+  it('面板挂在**工具栏整行**上，而不是那颗按钮的外层 div', async () => {
+    // 这条是给真机实测钉的（第 108 期横扫）：面板是 `absolute right-0 w-72`（288px 固定宽），
+    // 定位父节点若是那颗按钮的外层（宽 38px，它右侧还有切换模式 / 书签 / 笔记 ≈138px），
+    // 面板右边缘就落在视口右侧约 150px 处 ⇒ 320px 视口实测面板 x=-118、390px 时 x=-48，
+    // 左半边被祖先 `overflow-hidden` 裁掉（用户看不到、也滚不回来）。
+    // jsdom 没有布局，量不了坐标，所以这里钉的是「结构」：整行才是定位父节点。
+    const wrapper = await openSettings()
+    const panelEl = wrapper.get('.z-30').element as HTMLElement
+    const anchor = panelEl.parentElement as HTMLElement // 设置按钮的外层 div
+    const row = anchor.parentElement as HTMLElement // 工具栏整行
+    expect(anchor.className, '按钮外层加回 relative ⇒ 面板又被钉在 38px 宽的按钮上').not.toContain('relative')
+    expect(row.className).toContain('relative')
+    wrapper.unmount()
+  })
+
+  it('面板带 max-w-full：比面板还窄的视口下压窄，而不是横着溢出', async () => {
+    const wrapper = await openSettings()
+
+    expect(wrapper.get('.z-30').classes()).toContain('max-w-full')
+    wrapper.unmount()
+  })
+})

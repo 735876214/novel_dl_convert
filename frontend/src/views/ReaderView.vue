@@ -2367,8 +2367,15 @@ onBeforeUnmount(() => {
         </span>
       </div>
 
-      <!-- 工具栏 -->
-      <div class="flex items-center gap-2 border-b border-border pb-2">
+      <!-- 工具栏。
+           ⚠️ 这里的 `relative` 是「阅读设置」面板的**定位父节点**（第 108 期从按钮外层挪上来的）：
+           面板是 `absolute right-0 w-72`（288px 固定宽），若定位父节点是那**一颗按钮**
+           （宽 38px，且它右侧还有「切换模式 / 书签 / 笔记」几颗按钮 ≈138px），面板右边缘就落在
+           视口右侧约 150px 处 ⇒ 288px 的面板向左跑出视口：320px 视口实测面板 x=-118
+           （左半边被 `overflow-hidden` 裁掉，用户看不到、也滚不回来）。
+           挂到整行上才是「右边缘＝内容区右边缘」，再配面板自己的 `max-w-full` 兜极窄屏。
+           别把 `relative` 挪回那颗按钮的外层。 -->
+      <div class="relative flex items-center gap-2 border-b border-border pb-2">
         <Button size="sm" variant="ghost" title="返回详情" @click="router.push(`/book/${bookId}`)">
           <Icon name="arrowLeft" class="h-4 w-4" />
         </Button>
@@ -2379,7 +2386,9 @@ onBeforeUnmount(() => {
           <div class="truncate text-[12px] text-muted-foreground">{{ book.title }}</div>
           <div class="truncate text-[13px] font-medium text-foreground">{{ chapterTitle }}</div>
         </div>
-        <div class="relative">
+        <!-- ⚠️ 这个 div **不能**加 `relative`：设置面板的定位父节点是上面整行（见那段注释）。
+             加回这里 = 把面板重新钉到只有 38px 宽的按钮上 ⇒ 窄屏下它又会跑出视口左边。 -->
+        <div>
           <Button ref="settingsBtn" size="sm" variant="ghost" title="阅读设置" @click="showSettings = !showSettings">
             <Icon name="settings" class="h-4 w-4" />
           </Button>
@@ -2387,7 +2396,7 @@ onBeforeUnmount(() => {
           <div
             v-if="showSettings"
             ref="settingsPanel"
-            class="absolute right-0 z-30 mt-1 max-h-[75vh] w-72 overflow-y-auto rounded-lg border border-border bg-card p-3 shadow-lg"
+            class="absolute right-0 z-30 mt-1 max-h-[75vh] w-72 max-w-full overflow-y-auto rounded-lg border border-border bg-card p-3 shadow-lg"
           >
             <!-- 固定版式：重排设置对这本书没有意义，如实说清并把它们禁用（不装作能调） -->
             <div
