@@ -90,3 +90,4 @@
 - **103** 把 `series` / `series_index` / `narrators` 接进抓取线（用户选 A）。⚠️ **性质是「接线」不是「加能力」**（字段早就建模）；RanobeDB 详情补全**从未生效**（0.7 < 0.75 阈值）。
 - **104** 出网失败归因（用户选 A）：`core/netdiag.py` 把「DNS 解析失败 / 解析被污染 / 连接被阻断 / TLS / 代理 / 超时」分开 + 收口前端类型红。⚠️ **本机 DNS 被上游污染**（`openlibrary.org` → `31.13.x`，而 8.8.8.8 给 `199.59.149.201`）—— 看到 `dns_polluted` **先查本机 DNS，别改代码**。
 - **105** ⚠️ **CI 镜像构建失败的真因：源码被 `.gitignore` 静默忽略** —— `input/` 少前导斜杠吞掉 `frontend/src/components/ui/input/`（第 90 期新增）⇒ CI 从 clone 构建报 `[UNLOADABLE_DEPENDENCY]`；**本机文件一直在 ⇒ 本地永远绿**（「本地复现」不算证明，要用干净 clone 验）。防回归 `tests/test_source_tracking_contract.py`。
+- **106** 记忆体系精简（用户 m08584）：**收尾只写两处** = roadmap 本期段（唯一叙事）+ 本表一行；`MEMORY-REF.md` 改为**按主题**的域手册（不再按期号追加）；**当日日志取消**；第 53–105 期逐期全文存档 = `MEMORY-PERIODS.md`（只读）；三个文件名一律不动。

@@ -6777,3 +6777,5 @@ Build failed with 1 error:
 - 第 1 笔：`5151e04 docs(memory): 记忆三件合并为「一期一行索引 + 按主题域手册」`
   （`MEMORY.md` / `MEMORY-REF.md` / `MEMORY-PERIODS.md` / `AGENTS.md` / `docs/development.md`）。
 - 第 2 笔：`docs(106)`（`docs/TODO.md` 头部 / §0 / §2 / §3 + 本段）。
+- 第 3 笔：`docs(memory)` 补上第 106 期的**索引行**（新口径「收尾只写两处」的第一次执行：
+  本段早已写好，这一笔只往 `.codebuddy/memory/MEMORY.md` 加一行 —— 顺带验证了流程本身够短）。
