@@ -76,7 +76,8 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 - [ ] **数据隔离**：碰库用例用 `isolated` 夹具 + `client`/`auth_headers`；环境变量必须在 **import 业务模块之前** 设。
 - [ ] **文档**：`docs/roadmap-gaps-remaining.md` 写本期实施记录（最新期在文件末尾）；
       大文件改动后跑 `python tests/check_doc_anchors.py --drift` 并在文档里做「锚点披露」（硬错 0 / 疑似漂移保留，**历史行号不改写**）。
-- [ ] **记忆**：`.codebuddy/memory/YYYY-MM-DD.md` 追加当日结论；跨会话的事实进 `MEMORY.md`（铁律）/ `MEMORY-REF.md`（细节）。
+- [ ] **记忆（第 106 期起只有两处）**：`MEMORY.md` 的「逐期铁律索引」加**一行**（期号 + 一句话）；跨会话 / 领域知识进 `MEMORY-REF.md` 的**对应主题小节**（它不再按期号追加）。
+      **不写**当日日志（`memory/YYYY-MM-DD.md` 已取消）、**不写**第二份实施记录；逐期全文存档 = `MEMORY-PERIODS.md`（只读）。
 - [ ] **工作区**：`git status` 无自有未提交改动；不顺手提交别人的改动。
 
 ## 5. 调试技巧（都踩过坑）

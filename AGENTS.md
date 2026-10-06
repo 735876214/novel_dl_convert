@@ -12,7 +12,8 @@
    - 本项目**可能有别的 AI 会话在并行推进**；**期号会被别人用掉** —— 别沿用旧计划里的期号。
    - 别人未提交/已提交的改动**不回退、不顺手提交**；工作区里不是你的改动（例：`.vscode/settings.json`）不要一起 commit。
 2. **读 `docs/TODO.md`** 看当前任务与优先级；读本轮相关的 `docs/roadmap-gaps-remaining.md` 段落（最新期在文件**末尾**）。
-3. **读 `.codebuddy/memory/MEMORY.md`（铁律）+ `MEMORY-REF.md`（域细节/运行手册）**。跨会话的历史事实在 `memory/YYYY-MM-DD.md`。
+3. **读 `.codebuddy/memory/MEMORY.md`（铁律 + 一期一行索引）+ `MEMORY-REF.md`（按主题的域细节/运行手册）**。
+   第 53–105 期的逐期铁律全文在 `MEMORY-PERIODS.md`（存档）；**当日日志已取消**（2026-10-06 起不再新建 `memory/YYYY-MM-DD.md`），跨会话历史事实按需查既有日期文件。
 
 ## 1. 改动纪律（硬约束，违反会被判为回归）
 
@@ -162,7 +163,13 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
 - 🚀 **改了 `VERSION` 就必须同批在 `CHANGELOG.md` 补一段**：推送到 `main` 后 `.github/workflows/release.yml` 会读 `VERSION`，
   若 `v<版本>` tag 还不存在就**自动打 tag 并创建 Release**（notes 取 CHANGELOG 对应段）⇒ 漏了那段，发布会在 CI 里失败。
   版本号唯一真值源是仓库根 `VERSION`（`/health` 下发）；**别再写第二份版本字面量**（`novelforge.__version__` 已删）。
-- 每期收尾要更新：`docs/roadmap-gaps-remaining.md`（本期实施记录）+ `.codebuddy/memory/`（当日日志；长期事实进 `MEMORY.md`/`MEMORY-REF.md`）。
+- **每期收尾只写两处（第 106 期起，用户 m08584 要求精简）**：
+  ① `docs/roadmap-gaps-remaining.md` 本期段 —— **唯一叙事**（根因 / 证据 / 修法 / 核验，别再往第二处抄一遍）；
+  ② `.codebuddy/memory/MEMORY.md` 的「逐期铁律索引」加**一行**（期号 + 一句话铁律）。
+  - **不再**新建 `memory/YYYY-MM-DD.md`（当日日志 2026-10-06 起取消；既有日期文件保留为历史）。
+  - **不再**按期号往 `MEMORY-REF.md` 追加 —— 它**按主题**组织，只有出现**新的领域知识**（运行手册 / 域细节 / 跨会话待办）时才补对应小节。
+  - 逐期铁律全文存档 = `.codebuddy/memory/MEMORY-PERIODS.md`（**只读，不追加**）；老期号细节按 `### 第 N 期` 搜。
+  - `docs/TODO.md`（§0 进度 / §1 待办 / §2 交付索引）与 `AGENTS.md` 基线数字仍要同批更新。
 - 行尾：`*.sh` / `Dockerfile` / `.dockerignore` 必须 **LF**（否则容器 `sh /app/start.sh` 报 `set: Illegal option -`）。
 
 ## 7. 工程原则（长期取向，第 95 期立）
