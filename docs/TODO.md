@@ -4,20 +4,20 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-07 —— 第 110 期**MOBI/AZW3/AZW 直读（解包，不转换）**：
-用户原话「mobi直接阅读，不进行转化」⇒ **不做转换器**，改为把书**自身**的 KF8 内容**解包**到 `CACHE_DIR/mobi-unpack/<book_id>/` 直接读（不进书库、不新增书目条目、源文件只读）：KF8 解出的是**真 EPUB** ⇒ 目录 / 正文 / 插图 / 书内样式 / **CFI 与批注**全部复用既有链路；纯 MOBI6 只解出 HTML ⇒ 如实降级（无插图 / 无书内样式、`cfi` 留空，回落「章 + 百分比」）。新增 `novelforge/core/mobicache.py`（`read_target` 是**唯一**「读目标」判据，四个读点全问它）、`.azw` 进白名单（`SCAN_RULE_VERSION` 2→3）、前端两个格式集合加 MOBI/AZW3/AZW（`ReaderView.vue` 零改动）。许可证首次成文：因 `mobi`(GPL-3.0-only) + 既有 `EbookLib`(AGPL-3.0) ⇒ 本项目整体 **AGPL-3.0**（新增 `LICENSE` + `THIRD-PARTY-NOTICES.md`）。
-历史：第 109 期发版 V1.0.0（把第 95–108 期「只提交不发版」的积累一次性发布）；`VERSION` = **1.1.0**（第 110 期里程碑：直读）。
+**最后更新**：2026-10-07 —— 第 111 期**.rar/.7z 容器按内容分派**：
+用户原话（m00001）里的 **rar** 这一半补齐：`.rar` / `.7z` 与 `.zip` 走**同一套**「容器看内容」判据（`zipkind.CONTAINER_EXTS`）—— 图片序列的容器一律**归一成 `CBZ`**（`.rar` 漫画第一次能直接读），里面是别的书就进「待展开」清单由用户显式展开；`.7z` 用**纯 Python 的 `py7zr`**（不需要外部解压器），`.rar` 继续 `rarfile` + `bsdtar`/`unrar`。新增唯一判据 `comics.backend_problem`：**「缺解压能力」与「这本书坏了」分开说**（503 会说清缺什么，不再表现成「容器里一个文件都没有」）；`.rar`/`.7z` 进三类库白名单（`SCAN_RULE_VERSION` 3→4，存量库重探一次）。
+历史：第 110 期 MOBI/AZW3/AZW **直读**（解包，不转换）；`VERSION` = **1.2.0**（第 111 期里程碑：容器三兄弟）。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口 + 第 105 期 CI 镜像构建修复 + 第 106 期记忆体系精简（收尾只写两处） + 第 107 期自动化收尾：落位器 + 三方对账 + 第 108 期仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关 + 第 109 期发版 V1.0.0：把第 95–108 期的积累一次性发布 + 第 110 期MOBI/AZW3/AZW 直读（解包，不转换）；`VERSION` = **1.1.0**
-  `VERSION` = `1.1.0`（第 110 期里程碑「MOBI/AZW3/AZW 直读」；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，**按里程碑发版**）——
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口 + 第 105 期 CI 镜像构建修复 + 第 106 期记忆体系精简（收尾只写两处） + 第 107 期自动化收尾：落位器 + 三方对账 + 第 108 期仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关 + 第 109 期发版 V1.0.0：把第 95–108 期的积累一次性发布 + 第 110 期MOBI/AZW3/AZW 直读（解包，不转换） + 第 111 期.rar/.7z 容器按内容分派；`VERSION` = **1.2.0**
+  `VERSION` = `1.2.0`（第 111 期里程碑「`.rar`/`.7z` 容器按内容分派」；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，**按里程碑发版**）——
   单一真值源，`GET /health` 下发。
-  `CHANGELOG.md` 最新段 = `V1.1.0 — 2026-10-07`（发布后 GitHub Release 的 notes 就取这一段原文）。
-- 测试基线（第 110 期实测）：后端 **2355 例（2329 passed / 0 failed / 0 errors / 26 skipped）**，全量 276 s；
-  前端 **69 spec / 717 例**（本期实测 **69 files / 716 passed + 1 failed**、exit 1：那条失败是**既有 flaky**
+  `CHANGELOG.md` 最新段 = `V1.2.0 — 2026-10-07`（发布后 GitHub Release 的 notes 就取这一段原文）。
+- 测试基线（第 111 期实测）：后端 **2366 例（2340 passed / 0 failed / 0 errors / 26 skipped）**，全量 328 s；
+  前端 **69 spec / 717 例**（第 111 期实测 **69 files / 717 passed**、exit 0；第 110 期那次曾命中既有 flaky
   `frontend/src/components/book/detail/ReadingLogTab.spec.ts`「接口失败 → 给重试」全量并行下 5 s 超时，
-  **单跑 12 passed**，与本期无关；第 104 期起就有这条记录）；`vue-tsc --build --force` exit 0。
+  单跑 12 passed，与改动无关；第 104 期起就有这条记录）；`vue-tsc --build --force` exit 0。
   ⚠️ 本期前端 +5 例（MOBI/AZW3/ZIP 三条判据与一条预览浮层用例）、spec **文件数不变** ⇒ 无需动 `EXPECTED_SPECS`。
   ⚠️ 新增前端 spec 必须登记进 `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`，
   否则全量 pytest 会红（本期 `App.spec.ts` / `DashboardShelfRow.spec.ts` 就踩过一次）。
@@ -81,16 +81,14 @@
 > ⚠️ 工具链变动记在 §7.8 ④：`agent-browser` 在本机**已不可用**（会挂住不返回），
 > 改用本机 Edge 的 CDP 无头截图；PNG 仍**不入库**。
 
-- [ ] **`.rar` / `.7z` 容器、FB2、容器自动展开仍未做（第 110 期计划的阶段②③④，等用户确认范围）** ——
-  第 110 期只交付了阶段①（MOBI/AZW3/AZW 直读）。原始需求（用户 m00001「mobi、zip、rar 等格式直接阅读」）
-  里 **`.rar` / `.7z` 至今不在任何白名单**（`library.BOOK_EXTS` 只有 `.cbr`）⇒ 它们连「入库」都不发生，
-  **不是**「入库了打不开」。已定过的路线（见第 110 期计划，未实施）：`zipkind.CONTAINER_EXTS` 扩
-  `.rar`/`.7z` 后按内容分派（图片档归一 `CBZ`，与第 87 期的 `.zip` 同一条路）；`.7z` 用 `py7zr`
-  （纯 Python、跨平台、可写 ⇒ 测试能自己造样本）；`.rar` 复用 `core/comics.py` 既有的 rarfile + bsdtar
-  路线（缺 bsdtar 时如实 503）；FB2（`.fb2`）用 `fb2reader` + lxml 直读。
-  ⚠️ 第④项「容器自动展开进书库目录」与 `frontend/src/components/tools/LibraryCopiesPanel.vue:9-11`
-  现存的注释纪律**相反**（原文：「一个按钮对应一次**显式动作**，不做自动展开 —— 它会往用户的库目录里写字，
-  必须由人按下去」）⇒ **要先用户拍板**，动手就得同批改写那条注释与界面文案。
+- [ ] **FB2 直读、容器自动展开仍未做（第 110 期计划的阶段③④，等用户确认）** ——
+  **阶段②（`.rar` / `.7z` 容器按内容分派）已在第 111 期交付**（`zipkind.CONTAINER_EXTS` 扩到三兄弟、
+  `.7z` 用 `py7zr`、`.rar` 复用 rarfile+bsdtar、三类库白名单都收、待展开清单认它们）。
+  剩下两项：③ **FB2（`.fb2`）直读**（`.fb2` 已在 `zipkind._DOC_FORMATS` 与 `pipeline.EBOOK_EXT` 里，
+  但**没有阅读入口**：需要 `fb2reader` + lxml 解析章节）；④ **容器自动展开进书库目录**。
+  ⚠️ 第④项与 `frontend/src/components/tools/LibraryCopiesPanel.vue:9-11` 现存的注释纪律**相反**
+  （原文：「一个按钮对应一次**显式动作**，不做自动展开 —— 它会往用户的库目录里写字，必须由人按下去」）
+  ⇒ **要先用户拍板**，动手就得同批改写那条注释与界面文案。
 - [ ] **演播者（`narrators`）：Audnexus 未接线**（第 103 期真机探活后挂起，不是忘了）——
   本期只接了**真机核过**的 Audible（`narrators` 是顶层键，每项 `{"name": …}`，Dune 12 位实测）。
   `novelforge/core/metasources.py` 的 `_audnexus_entry` docstring 自称「`authors`/`narrators` 都是对象数组」
@@ -167,6 +165,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 111 | `.rar`/`.7z` 容器按内容分派：与 `.zip` 同一套判据（图片档归一 CBZ、其余进待展开），`.7z` 用纯 Python 的 `py7zr`；「缺解压能力」收敛成 `comics.backend_problem` 一处、503 说清缺什么；三类库白名单 + `SCAN_RULE_VERSION` 3→4。⚠️ 教训：`analyze` 把未分派形态的 format 写死 `"ZIP"` 会让待展开清单**静默漏掉**新容器 —— 判据要派生不要手写 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 111 期段 |
 | 110 | MOBI/AZW3/AZW 直读（解包，不转换）：把书自身的 KF8 内容解包到缓存目录直读（不进书库、源只读），KF8 出真 EPUB 全复用、纯 MOBI6 出 HTML 如实降级；`.azw` 进白名单（`SCAN_RULE_VERSION` 2→3）。⚠️ 延迟导入必须放分支第一行，否则 `UnboundLocalError` 全线 500 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 110 期段 |
 | 109 | 发版 V1.0.0：把第 95–108 期的积累一次性发布 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 109 期段 |
 | 108 | 仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关（用户 m09721 追问响应式后补横扫 17 视口 × 5 路由 = `FAILS=0`，并修掉窄屏设置面板跑出视口的既有缺陷）—— 细节见 `docs/roadmap-gaps-remaining.md` 第 108 期段 |
