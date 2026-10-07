@@ -57,6 +57,12 @@
   ⚠️ 打 tag 与建 Release **必须同 job**：`GITHUB_TOKEN` 推的 tag 不会再触发其它 workflow。
   ⇒ **改 `VERSION` 必须同批补 `CHANGELOG.md` 段**，否则发布在 CI 里失败（不会发空 notes 的 Release）。
   镜像另有一条链：`docker-image.yml` 在推 `main` 时构建并推 `ghcr.io/…:latest`（与 tag 无关）。
+- **核 CI 结果**（第 114 期）：本机**没有 `gh`**，匿名 REST 又撞 60 req/h 限额（`403 rate limit exceeded`）
+  ⇒ 改走**公开 HTML 页**（不限流、**免鉴权**）：① `/commit/<sha>/checks` 里数 `aria-label="This job succeeded"`；
+  ② job 页（`/actions/runs/<run>/job/<job>`）的注解块 `data-target="annotation-message.annotationContainer"`
+  —— **「Node.js 20 is deprecated」那类 warning 就落在这里**，判「升级有没有生效」靠它。
+  ⚠️ 判「镜像推没推上去」**别用** GHCR `tags/list`（有缓存，第 109 期）；⚠️ 别为了取 job 日志去
+  `git credential fill`（会把本机 token 打进会话记录，安全策略会拦）。
 
 ### 命名与出版细节
 - `fileops.fill_pattern` 9 个占位符、**先长后短**；`{index}`=系列卷号（两位补零，非流水号）；`{ext}` 已带扩展名 ⇒ **只有模式以 `{ext}` 收尾时才摘尾扩展名**。
