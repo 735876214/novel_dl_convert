@@ -7283,3 +7283,82 @@ Build failed with 1 error:
   （本机 SSL EOF，仍挂起）；③ 前端策略表**未改**（`subtitle` 那行本来就在，值由后端下发）。
 - **没核过**：① 真机实例（`http://127.0.0.1:8412`）上走一遍「抓取 → fill_only 跳过已有副标题」的界面流程
   （本期验证全在自动化用例里）；② Audible 之外的源是否会**顺带**返回 `subtitle`（只接线了 Audible）。
+
+## 第 114 期（CI 的 5 个 action 升到 Node 24 运行时）
+
+> **需求来源**：用户原话「修一下 CI 的 5 个 action 仍跑在 Node 20 运行时」。这正是 `docs/TODO.md` §1
+> 里第 105 期挂上的那条 —— 那次只修了镜像构建失败的**真因**（`.gitignore` 把源码吞了），
+> 并刻意写下「升级是**独立一件事，别顺手改**」。两轮 `AskUserQuestion` 拍板：
+> ① `actions/checkout` 升到**最新大版本 v7**（不是只升到首个 node24 的 v5）；② **顺手加一条离线契约测试**。
+> 派生：**不发版**（`VERSION` 仍 `1.3.0`，无 `CHANGELOG` 段、无 Release）。
+
+### 一、根因：这 5 个 action 的大版本停在 **node20** 时代
+
+`Build and Push Image` 每次构建都给一条 warning：
+
+```
+Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to
+run on Node.js 24: actions/checkout@v4, docker/build-push-action@v6, docker/login-action@v3,
+docker/setup-buildx-action@v3, docker/setup-qemu-action@v3
+```
+
+即：上游大版本自己的 `action.yml` 写着 `runs.using: node20`，GitHub 已在 node24 上**强制**跑它们。
+不修也不红（只是每次一条 warning），但一旦 GitHub 停止兼容就会**直接失败**。
+
+### 二、修法：一次升到最新大版本（**纯版本号替换**）
+
+动手前**逐个实查**上游（2026-10-08，`raw.githubusercontent.com/<repo>/<tag>/action.yml` 的 `runs.using`）：
+
+| 现用 | 运行时 | 升到 | 运行时 |
+|---|---|---|---|
+| `actions/checkout@v4` | node20 | **`@v7`**（v7.0.1） | node24（v5 起） |
+| `docker/build-push-action@v6` | node20 | **`@v7`**（v7.4.0） | node24 |
+| `docker/setup-buildx-action@v3` | node20 | **`@v4`**（v4.4.1） | node24 |
+| `docker/setup-qemu-action@v3` | node20 | **`@v4`**（v4.4.0） | node24 |
+| `docker/login-action@v3` | node20 | **`@v4`**（v4.6.0） | node24 |
+
+- **关键取证：逐个 diff 了 `action.yml` 的 `inputs:`（旧大版本 → 新大版本）** —— 本仓用到的
+  `context` / `file` / `push` / `platforms` / `provenance` / `build-args` / `tags` / `cache-from` /
+  `cache-to` / `registry` / `username` / `password` / `fetch-depth` **一个都没改名、没删**
+  （`setup-buildx@v4` 砍掉的是 `config` / `config-inline` / `install` 三个**弃用**输入，
+  `setup-qemu@v4` 新增 `reset` —— 两处本仓都没传任何输入）
+  ⇒ workflow 的 `with:` **一个字都不用动**，6 处 `uses:` 只换版本号。
+- **用浮动大版本 tag**（`@v7`）而不是钉死补丁号：与本仓现状、与这两家上游的惯例一致；
+  已验证 `v7` / `v4` 这些 tag 真实存在且指向 node24 的 `action.yml`。
+- ⚠️ `v4.0.0`+ 的四个 docker action 都要求 **Actions Runner ≥ v2.327.1**；本仓 `runs-on: ubuntu-latest`
+  （GitHub 托管 runner 永远是最新版）⇒ 满足。
+- 两个 workflow 都同批改了（`docker-image.yml` 5 处 + `release.yml` 1 处 = 6 处，`actions/checkout` 用了两次），
+  并在两处各留一句注释说明「这 5 个是**成组**挑的、都必须是 node24」，免得下次只升一半。
+
+### 三、防回归：新增离线契约测试 `tests/test_ci_actions_contract.py`（2 例）
+
+这条 warning 从第 105 期挂到第 113 期没人管，说明「记在 TODO 里」挡不住它 ⇒ 改成**全量 pytest 能红**：
+
+- `test_workflow_里的_action都在已登记的大版本上()` —— 扫 `.github/workflows/*.yml` 的每个 `uses:`，
+  逐个查手写的 `ALLOWED` 白名单（就是这 5 个）；扫不到任何 `uses:` 也**报错**（防扫描逻辑坏掉后静默通过）。
+- `test_白名单与实际用到的一一对应()` —— **反向**也钉：`ALLOWED` 里不许有**用不上**的条目
+  （否则删掉某个 step 后它静静烂掉，下次真要用时白名单已经给不出保证）。
+- **为什么白名单手写、不联网读上游 `action.yml`**：全量 pytest 是**离线**的（`AGENTS.md` §4）。
+  代价是白名单会随上游发新版而「过期」—— 这正是它的用途：逼一次有意识的改动。
+- **「改动前会红」已实测**：把两个文件的 `actions/checkout@v7` 临时改回 `@v4` ⇒ 两例**都红**
+  （`2 failed`，脚本用 `try/finally` 还原并核对字节相同）。
+- 同一判据只此一处：workflow 文件里**不再**复述版本清单，只留指向本用例的注释。
+
+### 四、实测证据与核验
+
+- 契约测试 2 例通过；**YAML 仍可解析**（`yaml.safe_load` 后回读每步的 `uses:`，确认 6 处都是新版本）。
+- 后端全量 **2402 例（2376 passed / 26 skipped / 0 failed / 0 errors）**，265 s（+2 例 = 本期新增的契约测试）；
+  **前端零改动** ⇒ 未跑四连，`git status` 确认 `frontend/` 下无改动。
+- **真判据是 CI 自己那一跑**（第 105 期的教训：本机怎么绿都不算数）—— 推送后核两件事：
+  ① `Build and Push Image` 与 `Release` 的 `conclusion == success`（镜像还得推得上去）；
+  ② 那条 Node 20 warning **确实消失**（只核 ① 不够：warning 还在就说明升级没生效）。
+  本机没有 `gh` ⇒ 走匿名 GitHub REST API + `git credential fill` 的本机 token 取 job 日志
+  （⚠️ 该端点返回**纯文本、不是 zip**）。
+
+### 五、没做 / 没核过（如实声明）
+
+- **没做**：① `runs-on: ubuntu-latest` 的 **Ubuntu 26 迁移**（`docs/TODO.md` §1 里仍挂着，
+  生效日期 2026-10-19，与 action 运行时无关）；② 没有把 action 钉到**补丁号**（仍用浮动大版本 tag，
+  与本仓既有口径一致）。
+- **没核过**：多架构构建（`linux/amd64,linux/arm64`）在 `build-push@v7` + `setup-buildx@v4` 下的
+  真机产物 —— 只核到「CI 这一跑成功」，**没有**在 NAS 端实拉一次新镜像。

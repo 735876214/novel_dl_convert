@@ -4,19 +4,20 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-07 —— 第 113 期**Audible `subtitle` 接线；TODO §0 精简**：
-把 Audible 的**顶层 `subtitle`** 接进抓取线（`subtitle` 自第 63 期就整套建模好了 —— 缺的只是候选结构那一处，
-所以净改动只有 `metasources.py` 两行 + `config.py` 一个默认值，前端零改动）；默认写入策略由 `overwrite` 改成
-`fill_only`（此前**从没有源填过它**，一直是空转）。顺手把本文件 §0 从 46 行压到 13 行 —— 本机陷阱一律指向
-`AGENTS.md` §5，不在这里重抄一份。
-历史：第 112 期 FB2 直读 + 容器自动展开；`VERSION` 仍 `1.3.0`（本期**不发版**，无 `CHANGELOG` 段、无 Release）。
+**最后更新**：2026-10-08 —— 第 114 期**CI 的 5 个 action 升到 Node 24 运行时**：
+把 `Build and Push Image` 里那条从第 105 期就挂着的 warning 清掉 —— `actions/checkout@v4` /
+`docker/build-push-action@v6` / `setup-buildx@v3` / `setup-qemu@v3` / `login@v3` 全是 **node20** 运行时
+（GitHub 已弃用、强制在 node24 上跑），一次升到最新大版本（`checkout@v7` / `build-push@v7` / 其余三个 `@v4`）；
+升级前逐个 diff 过上游 `action.yml` 的 `inputs:`，本仓用到的**一个都没更名** ⇒ 纯版本号替换。
+另加一条离线契约测试 `tests/test_ci_actions_contract.py` 钉住这 5 个大版本。
+历史：第 113 期 Audible `subtitle` 接线 + TODO §0 精简；`VERSION` 仍 `1.3.0`（本期**不发版**）。
 
 ## 0. 当前状态
 
-- HEAD = 第 113 期 Audible `subtitle` 接线 + TODO §0 精简（第 95–112 期逐期历史见 §2 与 `git log --oneline`）；`VERSION` = **1.3.0**
+- HEAD = 第 114 期 CI 的 5 个 action 升到 Node 24 运行时（第 95–113 期逐期历史见 §2 与 `git log --oneline`）；`VERSION` = **1.3.0**
   —— 单一真值源，`GET /health` 下发；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，改为**按里程碑发版**
   （第 112 期里程碑 = FB2 直读 + 容器自动展开，`CHANGELOG.md` 最新段 `V1.3.0 — 2026-10-07` 即取自它）。
-- 测试基线（第 113 期实测）：后端 **2400 例（2374 passed / 0 failed / 0 errors / 26 skipped）**，全量 338 s；
+- 测试基线（第 114 期实测）：后端 **2402 例（2376 passed / 0 failed / 0 errors / 26 skipped）**，全量 265 s；
   前端 **69 spec / 717 例**、`vue-tsc --build --force` exit 0（本期**前端零改动** ⇒ 文件数与例数不变、无需动 `EXPECTED_SPECS`）。
 - ⚠️ **本机运行陷阱不在这里重抄** —— 清空全部代理变量 / 别加 `-q` / 别跑 `pnpm` / 本机 DNS 被污染 /
   长跑 pytest 后台跑 + 轮询 junit / 新增前端 spec 要登记 `EXPECTED_SPECS` / 只跑相关文件看不见连锁失败：
@@ -69,6 +70,10 @@
 > 第 113 期把 **Audible 的 `subtitle`** 接了进去（默认策略 `fill_only`，见 roadmap 第 113 期段）——
 > 上一条待办随之删除。
 
+> 第 114 期把 **CI 的 5 个 action** 一次性升到 node24 运行时（`checkout@v7` / `build-push@v7` /
+> `setup-buildx@v4` / `setup-qemu@v4` / `login@v4`，见 roadmap 第 114 期段）—— 那条待办随之删除，
+> 并新增离线契约测试 `tests/test_ci_actions_contract.py` 钉住这 5 个大版本。
+
 - [ ] **演播者（`narrators`）：Audnexus 未接线**（第 103 期真机探活后挂起，不是忘了）——
   本期只接了**真机核过**的 Audible（`narrators` 是顶层键，每项 `{"name": …}`，Dune 12 位实测）。
   `novelforge/core/metasources.py` 的 `_audnexus_entry` docstring 自称「`authors`/`narrators` 都是对象数组」
@@ -113,16 +118,9 @@
   已由 `tests/test_config_readback_contract.py::test_不传配置时它什么都查不到是既有语义` 钉住。
   **不要**改成自动 `load_config()`（会让它从「什么都不做」变成「真的出网抓」，属有副作用的静默行为变更）。
 
-- [ ] **CI 的 5 个 action 仍跑在 Node 20 运行时**（第 105 期发现；**不是**本次构建失败的原因，别混为一谈）——
-  `Build and Push Image` 每次都给这条 warning：`Node.js 20 is deprecated. The following actions target Node.js 20
-  but are being forced to run on Node.js 24: actions/checkout@v4, docker/build-push-action@v6,
-  docker/login-action@v3, docker/setup-buildx-action@v3, docker/setup-qemu-action@v3`。
-  最新大版本（2026-10-06 查 `releases/latest`）：`actions/checkout` **v7.0.1** / `docker/build-push-action`
-  **v7.4.0** / `docker/setup-buildx-action` **v4.4.1** / `docker/setup-qemu-action` **v4.4.0** /
-  `docker/login-action` **v4.6.0**。升级要**逐个核 input 有无更名**（本期只用到 `context` / `file` / `push` /
-  `platforms` / `provenance` / `build-args` / `tags` / `cache-from` / `cache-to`），且 `.github/workflows/release.yml`
-  里的 action 要同批看 ⇒ **独立一件事，别顺手改**。
-  另有一条 notice：**`ubuntu-latest` 将于 2026-10-19 起迁移到 Ubuntu 26** —— 那天之后再看一次 CI 是否仍绿。
+- [ ] **`ubuntu-latest` 将于 2026-10-19 起迁移到 Ubuntu 26**（第 105 期的 notice，**仍未发生**）——
+  那天之后再看一次 `Build and Push Image` 是否仍绿。它与 action 的 node24 运行时**无关**
+  （那是 runner 镜像的迁移）⇒ 第 114 期那次升级不解决它。
 
 ### 明确「不做」（避免反复立项）
 
@@ -141,6 +139,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 114 | CI 的 5 个 action 升到 Node 24 运行时 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 114 期段 |
 | 113 | Audible `subtitle` 接线；TODO §0 精简 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 113 期段 |
 | 112 | FB2 直读 + 容器自动展开 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 112 期段 |
 | 111 | `.rar`/`.7z` 容器按内容分派：与 `.zip` 同一套判据（图片档归一 CBZ、其余进待展开），`.7z` 用纯 Python 的 `py7zr`；「缺解压能力」收敛成 `comics.backend_problem` 一处、503 说清缺什么；三类库白名单 + `SCAN_RULE_VERSION` 3→4。⚠️ 教训：`analyze` 把未分派形态的 format 写死 `"ZIP"` 会让待展开清单**静默漏掉**新容器 —— 判据要派生不要手写 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 111 期段 |
