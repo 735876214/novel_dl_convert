@@ -803,6 +803,8 @@ export interface ContainerItem {
 export interface ContainersResult {
   items: ContainerItem[]
   total: number
+  /** 容器**自动展开**开关（第 112 期，默认开）—— 面板顶部那个开关的初值 */
+  auto_unpack: boolean
   libraries: Array<{ id: string; name: string }>
 }
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import logging
 import shutil
 import threading
 import time
@@ -208,6 +209,9 @@ class FolderWatcher:
             or 60.0
         )
         self._index_last = 0.0
+        # 第 112 期：容器**自动展开**的上次执行时刻（与索引全量兜底同一个节流间隔 ——
+        # 展开要开归档，绝不能每轮 tick（5s）都跑一遍）。
+        self._autounpack_last = 0.0
         # 各扫描目标的上次实际扫描时刻（按 tkey 分桶，避免跨目标互相干扰）
         self._target_last: dict = {}
         self.stats = {"converted": 0, "added": 0, "failed": 0, "scans": 0}
@@ -743,6 +747,9 @@ class FolderWatcher:
                 if self._stop.is_set():
                     break
                 self._catalog_tick()
+                if self._stop.is_set():
+                    break
+                self._auto_unpack_tick()
             except Exception:                     # 单轮异常不能让监听线程死掉
                 time.sleep(self.tick_interval)
 
@@ -773,6 +780,61 @@ class FolderWatcher:
             catalog.refresh_all(blocking=False)
         else:
             catalog.refresh_stale(blocking=False)
+
+    def _auto_unpack_tick(self) -> None:
+        """容器**自动展开**（第 112 期）：把打进库的容器在后台展开成可读书。
+
+        口径（用户拍板）：**默认开启、可关**；展开成功后**源容器原样保留**（只新增文件，
+        不移动也不删）。开关读 ``self.cfg["libraries"]["auto_unpack"]`` —— 保存配置时
+        ``server._apply_watcher_config`` 会刷新 ``self.cfg`` ⇒ **热生效**。
+
+        幂等：每个容器的**源指纹**（`mtime_ns:size`）记在 `app_state`（键 ``autounpack:{bid}``），
+        指纹没变就跳过（容器不可变 ⇒ 源一改指纹就变、自然重试；坏包也不会每轮刷屏）。
+        节流到 `index_interval`（默认 60s）—— 展开要开归档，绝不能每轮 tick 都跑。
+
+        线程纪律：跑在**本监听线程**里（与 `_catalog_tick` 同一条），不新起线程，
+        不给 `tests/conftest.py::_quiesce_background` 的收尾清单添条目。
+        """
+        try:
+            if not bool((self.cfg or {}).get("libraries", {}).get("auto_unpack", True)):
+                return
+            now = time.time()
+            if now - self._autounpack_last < self.index_interval:
+                return
+            self._autounpack_last = now
+            from . import db, zipkind       # 延迟导入：避免 core 内部循环依赖
+            al = activity_log
+            for b in library.books():
+                if self._stop.is_set():
+                    break
+                if str(b.get("format") or "").upper() not in zipkind.CONTAINER_FORMATS:
+                    continue
+                bid = str(b.get("id") or "")
+                path = library.root_of(b) / b["name"]
+                try:
+                    st = path.stat()
+                    fp = f"{st.st_mtime_ns}:{st.st_size}"
+                except OSError:
+                    continue
+                key = f"autounpack:{bid}"
+                if db.state_get(key) == fp:
+                    continue                      # 这本展开过了（源没变）—— 幂等
+                try:
+                    res = zipkind.unpack(path)    # remove_source=False ⇒ 源容器保留
+                except Exception as e:            # noqa: BLE001 —— 坏包不能把监听线程打崩
+                    res = {"ok": False, "reason": str(e), "actions": []}
+                # **无论成败**都记指纹：容器不可变，避免坏包每轮都重试一遍
+                db.state_set(key, fp)
+                if res.get("ok"):
+                    library.invalidate(b.get("library_id"))
+                    try:
+                        al.log(al.ACTION_ADD, b["name"], al.STATUS_OK,
+                               detail="自动展开容器：已展开出可读文件（源容器保留）",
+                               source="autounpack")
+                    except Exception:             # noqa: BLE001 —— 记日志失败不影响展开
+                        pass
+        except Exception:                         # noqa: BLE001 —— 旁路功能，绝不连累监听主循环
+            logging.getLogger("novelforge").debug("容器自动展开一轮失败", exc_info=True)
 
     def start(self) -> bool:
         if self._thread and self._thread.is_alive():

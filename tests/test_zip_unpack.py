@@ -233,8 +233,10 @@ def test_待展开清单接口形状稳定(isolated, default_root, client, auth_
     r = client.get("/api/library-containers", headers=auth_headers)
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"items", "total", "libraries"}
+    assert set(body) == {"items", "total", "libraries", "auto_unpack"}
     assert body["total"] == len(body["items"])
+    # 第 112 期：容器自动展开开关随本接口下发（前端面板的初值，不必再拉 /api/config）
+    assert isinstance(body["auto_unpack"], bool)
 
 
 def test_展开接口对不可展开的容器如实_400(isolated, default_root, client, auth_headers):  # noqa: ARG001
