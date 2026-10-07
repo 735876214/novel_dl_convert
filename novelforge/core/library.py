@@ -48,7 +48,7 @@ from . import audio, audio_meta, comics, db, metadata, reading_list, units, zipk
 # 第 111 期：`.rar` / `.7z` 同列 —— 同一种通用容器的另外两个壳（`.rar` 与 `.cbr`、
 # `.7z` 与其并列）。不收进来的话，用户放进库里的 `.rar` 漫画**连书目都进不去**
 # （表现为「文件在盘上、书架上看不见」，比打开失败更难排查）。
-BOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".pdf", ".txt", ".cbz", ".cbr", ".zip",
+BOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".fb2", ".pdf", ".txt", ".cbz", ".cbr", ".zip",
              ".rar", ".7z", *audio.AUDIO_EXTS)
 
 #: 扫描口径版本。**凡能改变「条目边界」或卡片字段口径的改动都要 +1**：
@@ -69,7 +69,11 @@ BOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".pdf", ".txt", ".cbz", ".cbr", 
 #: （扫描时被忽略），现在是一本可直读的 MOBI 家族书 ⇒ **条目边界变了**，存量库里那些
 #: `.azw` 文件不 +1 就永远不会被重探（它们此前连索引行都没有）。
 #: 第 111 期一处 —— ⑤ `.rar` / `.7z` 进白名单（三类库都收）：同理，「不是书」变成「一本书」。
-SCAN_RULE_VERSION = 4
+#: 第 112 期一处 —— ⑥ `.fb2` 进白名单（`BOOK_EXTS` / `_EBOOK_EXTS`）：它此前不是书
+#: （扫描时被忽略），现在是一本可直读的 FB2 ⇒ 存量库里那些 `.fb2` 文件不 +1 就永远不会被
+#: 重探（它们此前连索引行都没有）。扫描期口径也扩了一格：`.fb2` 的 `has_cover` 改由
+#: 内嵌封面探测（`fb2cache.has_embedded_cover`）决定。
+SCAN_RULE_VERSION = 5
 
 # 可能作为封面出现的图片扩展名
 _COVER_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
@@ -1560,8 +1564,10 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None, ltype=None) -> 
 # ⚠️ 收进来 ≠ 当成漫画：里面是别的文档 / 嵌套 / 坏包时一律记「无法解析」，
 # 于是它在「待修复」里看得见，而不会被静默忽略。
 # 第 111 期：`.rar` / `.7z` 与 `.zip` 同一处理（漫画库收、电子书库也收 —— 里面可能是一份 EPUB）。
+# 第 112 期：`.fb2` 进电子书白名单（可直读，见 `core/fb2cache.py`）。它**只归电子书**，
+# 不进 `_COMIC_EXTS` —— FB2 是文字书，不是漫画。
 _COMIC_EXTS = (".cbz", ".cbr", ".pdf", ".zip", ".rar", ".7z")
-_EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".pdf", ".txt", ".zip", ".rar", ".7z")
+_EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".fb2", ".pdf", ".txt", ".zip", ".rar", ".7z")
 
 
 def _exts_for_type(ltype) -> tuple:
@@ -1922,6 +1928,11 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
         # `is_comic` **只看后缀** —— 少了这一条，一个「内部其实是 EPUB」的 zip 也会
         # 被当成漫画去数页（数出来的是 EPUB 里的插图张数），用户看到一本假的漫画。
         info.update(comics.probe(f))
+    elif f.suffix.lower() == ".fb2":
+        # 第 112 期：FB2 直读 —— 扫描期只做**廉价头部扫描**判有没有内嵌封面（整本 XML 解析
+        # 留给派生缓存 `fb2cache`，别把「丢一本书进库」变成一次 XML 解析）。
+        from . import fb2cache
+        info["has_cover"] = fb2cache.has_embedded_cover(f)
 
     return {
         "is_dir": is_dir,
@@ -2261,8 +2272,15 @@ def book_detail(name: str, library_id=None) -> dict | None:
         # 函数里那句 `from . import mobicache` 会把 `mobicache` 变成**局部名**，而条件表达式
         # 先求值 ⇒ `UnboundLocalError`（实测在详情接口上全线 500）。扩展名清单仍只认
         # `mobicache.EXTS` 这一处真值源，所以判据放在导入之后。
-        from . import mobicache     # 延迟导入：本模块顶层 import 它会与它反向依赖
-        chapters = mobicache.chapters(b, path=path, root=root) if suffix in mobicache.EXTS else []
+        from . import fb2cache, mobicache   # 延迟导入：本模块顶层 import 它们会与它们反向依赖
+        if suffix in mobicache.EXTS:
+            chapters = mobicache.chapters(b, path=path, root=root)
+        elif suffix in fb2cache.EXTS:
+            # 第 112 期：FB2 **直读**（解析后归一成派生 EPUB，见 `core/fb2cache.py`）——
+            # 目录与真 EPUB 同源（`fb2cache.chapters` 内部就是拿派生 EPUB 喂 :func:`_reading_list`）。
+            chapters = fb2cache.chapters(b, path=path, root=root)
+        else:
+            chapters = []
     # 第 85 期批次 B：本地目录「不清楚」时，套用正版书城取回的那份（只改标题与卷名）
     chapters, toc_items, toc_applied = _toc_apply(b, chapters)
     files = []

@@ -36,7 +36,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
                   reading_list,
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
-                   mobicache,
+                   mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard)
 from . import config
 from .sources import REGISTRY, DownloadManager
@@ -2889,6 +2889,13 @@ def api_book_asset(bid: str, p: str = Query(..., description="zip 内资源相�
         if target is None:
             raise HTTPException(404, "资源不存在")
         src = target
+    if src.suffix.lower() in fb2cache.EXTS:
+        # 第 112 期：FB2 直读 —— 书内插图在**派生 EPUB** 里（FB2 的 `<binary>` 已写进去）。
+        # 与上面 MOBI 同款：读目标只问 `fb2cache.read_target` 一处。
+        target, _kind = fb2cache.read_target(b, path=src)
+        if target is None:
+            raise HTTPException(404, "资源不存在")
+        src = target
     data = None
     name = ""
     try:
@@ -2928,6 +2935,13 @@ def api_epub_css(bid: str, request: Request):
         # 第 110 期：MOBI / AZW3 直读 —— KF8 解包出的是**真 EPUB**，书内样式照给；
         # 纯 MOBI6 没有书内样式（如实回空串，前端回落自有排版，与"取不到样式不是错误"同款）。
         target, kind = mobicache.read_target(b, path=path)
+        if kind != "epub" or target is None:
+            return {"css": "", "sheets": [], "fixed_layout": False}
+        path = target
+    elif path.suffix.lower() in fb2cache.EXTS:
+        # 第 112 期：FB2 直读 —— 派生 EPUB 带一段内置样式（epigraph / poem / subtitle 排版），
+        # 照常经既有样式通道下发；解析不出（坏书 / 锁定）⇒ 如实回空样式，不是错误。
+        target, kind = fb2cache.read_target(b, path=path)
         if kind != "epub" or target is None:
             return {"css": "", "sheets": [], "fixed_layout": False}
         path = target
@@ -3342,6 +3356,7 @@ def api_book_cover(bid: str):
 
     分支（按格式）：
       · **EPUB**：OPF 指定的内嵌图（`library.cover_path`）；
+      · **FB2**（第 112 期）：`<coverpage>` 那张图，已在**派生 EPUB** 里 —— 与 EPUB 同路；
       · **漫画（CBZ / CBR）**：归档第一页 —— 走 `comics.cover_bytes`，zip/rar 双后端统一，
         避免这里再自己解一次 zip（那样 CBR 会「列得出封面名却读不出来」）；
       · **有声书 / 序号单元合集**：目录内的 `cover.jpg` / `folder.jpg` 之类
@@ -3394,7 +3409,14 @@ def api_book_cover(bid: str):
         data, sct = server_cover
         return _cover_response(data, sct or "image/jpeg")
 
-    if fmt != "EPUB":
+    if fmt == "FB2":
+        # 第 112 期：FB2 的内嵌封面在**派生 EPUB** 里（`<coverpage>` 那张图已写进去）。
+        # 与真 EPUB 同路：把 path 换成派生产物，落到下面既有的内嵌封面读取。
+        target, kind = fb2cache.read_target(b, path=path)
+        if kind != "epub" or target is None:
+            raise HTTPException(404, "该书没有封面")
+        path = target
+    elif fmt != "EPUB":
         raise HTTPException(404, "该格式没有内嵌封面")
     # 第 17 期 T3：没有服务端封面时回退 EPUB 内嵌图（兼容原文件自带封面、
     # 从未抓过在线封面的情况）。漫画 / 有声书在上面**已经返回**，不受这一支影响。
@@ -3744,6 +3766,16 @@ def api_book_chapter(bid: str, index: int, request: Request):
         if not mobicache.state().get("available"):
             raise HTTPException(503, f"服务器缺少 MOBI 解包能力（需 {mobicache.PKG_NAME}）")
         raise HTTPException(422, mobicache.unreadable_reason(b, path=path))
+    if suffix in fb2cache.EXTS:
+        # 第 112 期：FB2 **直读** —— 解析成派生 EPUB 后**完全复用** EPUB 那条链路
+        # （目录 / 插图 / 书内样式 / CFI 精确位置 / 批注照旧）。指纹传**派生产物**而不是源
+        # .fb2 —— 与 TXT / MOBI 派生路线同一条纪律：缓存键必须跟着**被读的字节**走。
+        target, kind = fb2cache.read_target(b, path=path)
+        if kind == "epub" and target is not None:
+            return _chapter_cached(bid, index, target, "epub",
+                                   lambda: library.chapter_html(target, index, bid), token=tok)
+        # 解析不了（坏书 / 超限 / 锁定）⇒ **422 + 原因**，绝不回一句含糊的「仅 EPUB / TXT…」。
+        raise HTTPException(422, fb2cache.unreadable_reason(b, path=path))
     if suffix != ".epub":
         raise HTTPException(400, "仅 EPUB / TXT 支持在线阅读")
     return _chapter_cached(bid, index, path, "epub",
@@ -3773,6 +3805,14 @@ def _progress_file(b: dict, file_rel: str) -> tuple:
             unpacked, kind = mobicache.read_target(b, path=target)
             if kind == "epub" and unpacked is not None:
                 return unpacked, True
+            return None, False
+        if target.suffix.lower() in fb2cache.EXTS:
+            # 第 112 期：FB2 的读目标是**派生 EPUB** ⇒ CFI 照常按它算（精确位置不丢）。
+            # 解析不出来（坏书 / 锁定）⇒ 不生成 CFI 并如实回落「章 + 全书百分比」，
+            # **进度本身照常落库**。
+            derived, kind = fb2cache.read_target(b, path=target)
+            if kind == "epub" and derived is not None:
+                return derived, True
             return None, False
         return target, (b.get("format") or "").upper() == "EPUB"
     try:
@@ -5301,8 +5341,8 @@ def api_library_source_dirs(root: int = None, path: str = ""):
 
 
 #: 事实校正时用来「看目录里到底有些什么」的扩展名集合（媒体类，尽量宽）
-_ANY_MEDIA_EXTS = tuple(units.UNIT_EXTS) + (".epub", ".mobi", ".azw3", ".azw", ".txt", ".zip",
-                                           ".rar", ".7z")
+_ANY_MEDIA_EXTS = tuple(units.UNIT_EXTS) + (".epub", ".mobi", ".azw3", ".azw", ".fb2", ".txt",
+                                           ".zip", ".rar", ".7z")
 
 
 def _scan_media(dirs, cap: int = 3000) -> tuple:
@@ -6035,6 +6075,9 @@ def api_library_containers():
     """
     items = library.container_books()
     return {"items": items, "total": len(items),
+            # 第 112 期：容器**自动展开**开关随本接口一起下发（面板顶部那个开关的初值）
+            # —— 前端不必再单发一次 /api/config。
+            "auto_unpack": bool((config.load_config().get("libraries") or {}).get("auto_unpack", True)),
             "libraries": [{"id": l["id"], "name": l["name"]} for l in library.libraries()]}
 
 
@@ -6856,11 +6899,11 @@ EDITABLE: dict = {
     # 环境变量 / 内置默认值。`tests/test_update_config_contract.py` 钉着「这四个键在
     # 白名单 / 设置页控件 / 真实读点 三处一致」—— 别再往这里加没人读的键。
     "update": {"check_enabled", "interval_hours", "image", "auto_apply"},
-    # 多书库：**第 77 期起不再有可编辑键**。原先这里只有 `auto_migrate`（启动时是否
-    # 静默执行按格式归库），随自动归库一并移除 ⇒ 整条 `libraries` 从白名单里删掉。
-    # 存量 config.yaml 里若还写着 `libraries.auto_migrate`，只是**留在盘上没人读**
-    # （`config.load_config` 是浅合并不做白名单校验，不会报错），无需迁移清理。
-    # ⚠️ `libraries.index_interval`（全量兜底间隔）从不在本白名单里，别顺手加进来。
+    # 多书库：第 77 期起曾**整条**从白名单里删掉（自动归库移除后无可编辑键）。
+    # 第 112 期加回**一个键** `auto_unpack`（容器自动展开，默认开、可关）—— 它会往用户库
+    # 目录里写字，必须能在界面上关掉，否则就是「关不掉的假开关」。
+    # ⚠️ `libraries.index_interval`（全量兜底间隔）**仍不在**本白名单里，别顺手加进来。
+    "libraries": {"auto_unpack"},
     # 阅读状态口径（第 40 期）：全站「在读 / 已读完」判定的**全局默认值**。
     # 每库可在「书库管理 → 每库设置」覆写（走 lib_settings），这里只管全局。
     # ⚠️ 值域 0–100（`percent` 类型，**不是** number 的 0–1）。越界不在这里拦 ——
@@ -7071,9 +7114,12 @@ def api_get_config():
                 "has_api_key": bool(str((cfg.get("komga") or {}).get("api_key") or "").strip()),
                 "expose": bool((cfg.get("komga") or {}).get("expose", True)),
             },
-            # 多书库（第 77 期起无可编辑键）：库实体本身存 SQLite，走 /api/libraries。
-            # 这里曾回显 `auto_migrate`，随自动归库一并移除 —— 别再往这个空对象里加键。
-            "libraries": {},
+            # 多书库：库实体本身存 SQLite，走 /api/libraries。这里只回显**跨库策略开关** ——
+            # 第 112 期加 `auto_unpack`（容器自动展开，默认开）。硬编码键列表 ⇒ EDITABLE
+            # 与本列表都要加，否则「能写进 settings.json 但读不回来」。
+            "libraries": {
+                "auto_unpack": bool((cfg.get("libraries") or {}).get("auto_unpack", True)),
+            },
             # 版本检查与一键更新（第 78 期）：整段回显；四个键都在白名单里且**都有读点**。
             "update": cfg.get("update") or {},
             # 阅读状态口径的全局默认值（第 40 期）。每库生效值另走

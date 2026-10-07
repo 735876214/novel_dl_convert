@@ -18,13 +18,18 @@ def _esc(s: str) -> str:
 
 
 def build_epub(meta: dict, chapters: list, out_path: str,
-               css: str = None, cover: str = None, nav: bool = True):
+               css: str = None, cover: str = None, nav: bool = True,
+               images: list = None):
     """组装 EPUB：ebooklib 已保证 mimetype 首条目与标准结构。
 
     ``nav=False``（第 55 期，opt-in）：**不把 nav 目录页放进 spine** —— spine 只含
     正文章节，于是 ``library._reading_list`` 的章节 index 变成 0 基、与「原生 TXT
     分章」的索引空间完全对齐（TXT 派生 EPUB 两条路线不再差一位）；目录/NCX 仍然
     照常写入（标题不丢）。默认 ``True`` 保持既有全部调用方的产物逐字不变。
+
+    ``images``（第 112 期，opt-in）：``[{name, media_type, data}]`` —— 书内插图（FB2 直读
+    把顶层 `<binary>` 图片写进派生 EPUB，正文用 `<img src="images/…">` 引用，再走既有
+    资产链路下发）。默认 ``None`` ⇒ **既有调用方的产物逐字节不变**。
     """
     book = epub.EpubBook()
     book.set_identifier(str(uuid.uuid4()))
@@ -43,6 +48,12 @@ def build_epub(meta: dict, chapters: list, out_path: str,
     if css:
         book.add_item(epub.EpubItem(
             file_name="style.css", media_type="text/css", content=css))
+
+    if images:
+        for im in images:
+            book.add_item(epub.EpubItem(
+                file_name=im["name"], media_type=im.get("media_type") or "image/jpeg",
+                content=im["data"]))
 
     items = []
     for i, ch in enumerate(chapters):

@@ -47,11 +47,13 @@ export function isDirEntry(b: Formattable): boolean {
  * - UNITS（第 73 期）：序号单元合集，由 `UnitsReader` 逐话读（每话按种类换阅读器）
  * - MOBI / AZW3 / AZW（第 110 期）：后端**直读解包**（不转换，见 `core/mobicache.py`）——
  *   KF8 解包出的是真 EPUB，走与 EPUB **完全相同**的链路；纯 MOBI6 走原生分章
+ * - FB2（第 112 期）：后端解析成**派生 EPUB**（见 `core/fb2cache.py`），同样走与 EPUB
+ *   **完全相同**的链路（目录 / 插图 / 封面 / CFI 精确位置）
  *
  * 仍**不在**其中的是**没归一成书的容器**（例如 `.zip` 里既不是图片档、也认不出文档 ⇒
  * 后端如实标「无法解析」）与读不出的坏书：点开只会得到一句「点不了」，后端如实报错。
  */
-export const READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'MOBI', 'AZW3', 'AZW', 'UNITS'])
+export const READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'MOBI', 'AZW3', 'AZW', 'FB2', 'UNITS'])
 
 /**
  * 「浏览行为 → 缩略图点击」选「直接阅读」时认的格式。
@@ -67,8 +69,10 @@ export const READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'MOBI
  * `MOBI` / `AZW3` / `AZW`（第 110 期）**在**这里面：它们此前不在，唯一原因是「读不了」
  * （转换是另一条流水线的事），只能进详情页；第 110 期直读落地后它们**有内容可读了**，
  * 再让封面绕道详情页就与这个设置的字面语义（「点缩略图直接阅读」）相反。
+ *
+ * `FB2`（第 112 期）**在**这里面：与 MOBI / AZW3 同理 —— 可直读（后端解析成派生 EPUB）。
  */
-export const THUMBNAIL_READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'MOBI', 'AZW3', 'AZW', 'UNITS'])
+export const THUMBNAIL_READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'MOBI', 'AZW3', 'AZW', 'FB2', 'UNITS'])
 
 export interface OpenTarget {
   /** 按钮文案：有声书是「收听」，其余是「阅读」 */

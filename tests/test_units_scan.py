@@ -278,7 +278,8 @@ def test_口径版本不一致时全量重探一次(isolated, tmp_path, make_lib
     # 存量库里那些 `.azw` 文件此前的索引行根本不存在 ⇒ 条目边界变了，故 2 → 3。
     # 第 111 期：`.rar` / `.7z` 进白名单（三类库都收）⇒ 同理，同一个库里原先被忽略的
     # 容器文件会变成书目条目，故 3 → 4。
-    assert library.SCAN_RULE_VERSION == 4, "第 111 期 `.rar`/`.7z` 进白名单 ⇒ 版本应为 4"
+    # 第 112 期：`.fb2` 进白名单（`BOOK_EXTS` / `_EBOOK_EXTS`）⇒ 同理，故 4 → 5。
+    assert library.SCAN_RULE_VERSION == 5, "第 112 期 `.fb2` 进白名单 ⇒ 版本应为 5"
     root = tmp_path / "comic"
     lib = make_library("c4", "漫画库", "comic", root)
     _tree(root, BOOK_DIR, BOOK_FILES)
