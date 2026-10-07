@@ -14,7 +14,7 @@
 - **能力键**（`core/features.py` 的 `FEATURE_LABELS`，共 18 个）：前端据此显示/隐藏入口，
   `lib_settings.allows_setting` 据此剔除不生效的覆盖项。**判隐显的轴是「这本书/这个库」**，
   不是「侧栏当前选着哪个库」（后者只用于工具页标签与设置页导航）。
-- **格式**：EPUB · TXT · PDF · MOBI/AZW3 · CBZ/CBR · ZIP（容器，按内容分派）· 有声书 · UNITS（合集）。
+- **格式**：EPUB · TXT · PDF · MOBI/AZW3/AZW · CBZ/CBR · ZIP（容器，按内容分派）· 有声书 · UNITS（合集）。
 
 ## 二、矩阵
 
@@ -23,7 +23,7 @@
 
 | 能力 \ 格式 | EPUB | TXT | PDF | MOBI/AZW3 | CBZ/CBR | ZIP（图片档） | 有声书 | UNITS |
 |---|---|---|---|---|---|---|---|---|
-| 阅读 | ✅ | ✅ | ✅ | ❌ 需转换 | ✅ | ✅ 归一成 CBZ | ✅ 播放器 | ✅ |
+| 阅读 | ✅ | ✅ | ✅ | ⚠️ 直读（KF8 全功能；纯 MOBI6 无插图 / 无书内样式、CFI 留空） | ✅ | ✅ 归一成 CBZ | ✅ 播放器 | ✅ |
 | 封面 | ✅ 内嵌 | ✅ 抓取 | ✅ 抓取 | ✅ 抓取 | ✅ 首页 | ✅ 首页 | ✅ 目录内 cover 文件 | ✅ 目录内 cover 文件 |
 | 元数据抓取 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 元数据手动编辑 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -31,7 +31,7 @@
 | 重命名 / 命名规则 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅（`scope=all`） | ✅（`scope=all`） |
 | 重复检测 / 同名冲突 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 标签 / 评分 / 书评 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| 批注 / 书签 | ✅ | ✅ | ❌ 专有 | ❌ 专有 | ❌ 专有 | ❌ 专有 | ❌ 专有 | ❌ 专有 |
+| 批注 / 书签 | ✅ | ✅ | ❌ 专有 | ✅ 见 §六 | ❌ 专有 | ❌ 专有 | ❌ 专有 | ❌ 专有 |
 | 导出目录浏览 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | OPDS（浏览/元数据） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | OPDS 下载链 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️ 刻意不给 | ⚠️ 刻意不给 |
@@ -74,5 +74,32 @@
    （`zipkind`），不要靠后缀猜。
 3. 前端：`lib/bookOpen.ts` 的 `READER_FORMATS` / `THUMBNAIL_READER_FORMATS`、
    `ReaderView.vue` 的阅读器选择。**能让后端把形态归一成既有 format 就不要动前端**
-   （`.zip → CBZ` 就是这么做的）。
-4. 本文件 + `tests/` 的契约测试 + 记忆。
+   （`.zip → CBZ` 就是这么做的；MOBI/AZW3 也是 —— 第 110 期只往两个集合里加格式名，
+   阅读器本身零分支）。
+4. **`core/readsource` 级的一件事：新格式的正文到底在哪个文件里**（第 110 期新增，见 §六）。
+   只要「读的文件 ≠ 书架上那个文件」，就必须把这个问题收敛到**一处**（四个读点：目录表 /
+   单章正文 / 书内资源与样式 / 进度的 CFI）。第 87 期那四条不一致（抓取封面永远 404、
+   OPDS 给出必然 404 的下载链…）都是同一个判据在四处各写一遍造成的。
+5. 本文件 + `tests/` 的契约测试 + 记忆。
+
+## 六、第 110 期：MOBI / AZW3 / AZW **直读**（能力变化）
+
+**口径**：`mobi直接阅读，不进行转化`（用户原话）。做法是**解包（unpack）**，不是转换 ——
+把书自身的 KF8 内容抽出来直接读：**不进书库、不新增书目条目、不写回源文件**（源全程只读）。
+
+| 事项 | 落点 / 口径 |
+|---|---|
+| 解包产物 | `CACHE_DIR/mobi-unpack/<book_id>/`（`core/mobicache.py` 的 `CACHE_SUBDIR`）：可随时重建、可随时整个删掉 |
+| **唯一的「读目标」判据** | `mobicache.read_target(book)` → `"epub"` / `"html"` / `"pdf"` / `""`。四个读点（详情页目录表 `library.book_detail`、单章 `api_book_chapter`、书内资源与样式 `api_book_asset` + `api_epub_css`、进度的 CFI `_progress_file`）**全部问它一处** —— 见 §五 第 4 条 |
+| KF8 / AZW3 | 解包出的是**真 EPUB** ⇒ 目录 / 正文 / 插图 / 书内样式 / **CFI 精确位置** / 批注**零新代码**复用 EPUB 链路（`library._reading_list` / `chapter_html` / `chapter_assets` / `epub_cfi`） |
+| 纯 MOBI6 | 解包只出 `mobi7/book.html` ⇒ 复用既有分章真值源（`detect`）渲染成章节流。**如实降级**：没有插图、没有书内样式、`cfi` 留空（恢复回落「章 + 全书百分比」，与 TXT 原生路线同款） |
+| Print Replica 型 | 解包出 `<base>.001.pdf` ⇒ 交回既有 PDF 阅读路线（本期不为它新增处理） |
+| 缓存失效三分量 | 源指纹 + `mobicache.RULE_VERSION` + **`mobi` 包版本**（后者是本期特有的：读到什么由抽取器决定，换了版本目录可能变） |
+| 缺解包器 | 章节接口 **503**「服务器缺少 MOBI 解包能力（需 mobi）」（与缺 bsdtar 时 `.cbr` 的 503 同款）；详情页目录**如实为空**；进度照常能存。**绝不假装能读、绝不 500** |
+| 解不开 / 坏书 | 章节接口 **422** + 原因（把抽取器的话转述出来）；源没变就**锁定形态**不再重试；产物原子换入，不留半个目录 |
+| 批注 / 书签 | ✅ 可用。判据不在 CFI 上：`db.add_annotation` 用的是 `chapter` + `start_off` / `end_off`（**章内字符偏移，真能定位**），`anchor` 只用于去重与溯源 |
+| 封面点击 | `MOBI` / `AZW3` / `AZW` 已进 `READER_FORMATS` 与 `THUMBNAIL_READER_FORMATS`（有了内容就该直读）；仍读不了的（如**未归一成书**的 `ZIP` 容器）继续进详情页 |
+| `.azw` | 本期才进白名单（`BOOK_EXTS` / `_EBOOK_EXTS`）：它此前**不是书**，扫描时被忽略；`SCAN_RULE_VERSION` 2 → 3 ⇒ 存量库下次刷新走一次全量重探 |
+| 契约测试 | `tests/test_mobi_reader.py`（12 例）：把 `unpackBook` 换成造**真 EPUB / 真 HTML** 的假解包器 ⇒ **不依赖第三方样本**；真样本那条 `skipif`，把任意 `.mobi` 放到 `tests/fixtures/mobi/demo.mobi` 即自动启用 |
+| 许可证 | `mobi` 是 **GPL-3.0-only** 且为**进程内** import ⇒ 本项目整体按 **AGPL-3.0** 分发（见根目录 `LICENSE` 与 `THIRD-PARTY-NOTICES.md`） |
+

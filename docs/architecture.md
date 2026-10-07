@@ -21,7 +21,7 @@
 │  scrape · metadata · metasources · metafetch · metastore · series_meta ·  │
 │  authors · narrators · stats · achievements · activity · recommend ·      │
 │  embed · epub_cfi · comics · audio · audio_meta · detect · preprocess ·   │
-│  pipeline · watcher · txtcache · units · migrate · bookdock · features ·  │
+│  pipeline · watcher · txtcache · mobicache · units · bookdock · features │
 │  lib_settings · library_rules · opds · komga · komga_api · koreader ·     │
 │  koreader_anno · integrations · auth · fonts · customfields · metascore · │
 │  browse_counts · activity_log · ai_detect · network · migrate · pdfrender │
