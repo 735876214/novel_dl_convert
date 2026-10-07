@@ -14,14 +14,14 @@
 - **能力键**（`core/features.py` 的 `FEATURE_LABELS`，共 18 个）：前端据此显示/隐藏入口，
   `lib_settings.allows_setting` 据此剔除不生效的覆盖项。**判隐显的轴是「这本书/这个库」**，
   不是「侧栏当前选着哪个库」（后者只用于工具页标签与设置页导航）。
-- **格式**：EPUB · TXT · PDF · MOBI/AZW3/AZW · CBZ/CBR · ZIP（容器，按内容分派）· 有声书 · UNITS（合集）。
+- **格式**：EPUB · TXT · PDF · MOBI/AZW3/AZW · CBZ/CBR · 容器（ZIP/RAR/7Z，按内容分派）· 有声书 · UNITS（合集）。
 
 ## 二、矩阵
 
 图例：**✅ 完整** · **⚠️ 部分**（括注缺什么） · **🐛 曾静默失败**（已修，见第四节） ·
 **❌ 无入口** · **— 不适用**
 
-| 能力 \ 格式 | EPUB | TXT | PDF | MOBI/AZW3 | CBZ/CBR | ZIP（图片档） | 有声书 | UNITS |
+| 能力 \ 格式 | EPUB | TXT | PDF | MOBI/AZW3/AZW | CBZ/CBR | 容器（图片档） | 有声书 | UNITS |
 |---|---|---|---|---|---|---|---|---|
 | 阅读 | ✅ | ✅ | ✅ | ⚠️ 直读（KF8 全功能；纯 MOBI6 无插图 / 无书内样式、CFI 留空） | ✅ | ✅ 归一成 CBZ | ✅ 播放器 | ✅ |
 | 封面 | ✅ 内嵌 | ✅ 抓取 | ✅ 抓取 | ✅ 抓取 | ✅ 首页 | ✅ 首页 | ✅ 目录内 cover 文件 | ✅ 目录内 cover 文件 |
@@ -102,4 +102,21 @@
 | `.azw` | 本期才进白名单（`BOOK_EXTS` / `_EBOOK_EXTS`）：它此前**不是书**，扫描时被忽略；`SCAN_RULE_VERSION` 2 → 3 ⇒ 存量库下次刷新走一次全量重探 |
 | 契约测试 | `tests/test_mobi_reader.py`（12 例）：把 `unpackBook` 换成造**真 EPUB / 真 HTML** 的假解包器 ⇒ **不依赖第三方样本**；真样本那条 `skipif`，把任意 `.mobi` 放到 `tests/fixtures/mobi/demo.mobi` 即自动启用 |
 | 许可证 | `mobi` 是 **GPL-3.0-only** 且为**进程内** import ⇒ 本项目整体按 **AGPL-3.0** 分发（见根目录 `LICENSE` 与 `THIRD-PARTY-NOTICES.md`） |
+
+## 七、第 111 期：`.rar` / `.7z` 容器（与 `.zip` 同一套判据）
+
+**口径**：容器看内容、不看后缀（第 87 期立的口径，本期把另外两个壳补齐）。用户原话（m00001）
+要的是「mobi、zip、rar 等格式直接阅读」—— 第 110 期交付 MOBI，本期补齐容器。
+
+| 事项 | 落点 / 口径 |
+|---|---|
+| 认哪些后缀 | `zipkind.CONTAINER_EXTS = (".zip", ".rar", ".7z")`；「没分派出形态」时的书目标签 = `zipkind.CONTAINER_FORMATS = ("ZIP", "RAR", "7Z")`（**由前者派生，只有一处**；`library.container_books` 与前端注释都认它） |
+| 三个解压后端 | `core/comics.py` 的 `_Archive` 按**魔数**选：zip → `zipfile`；rar → `rarfile` + 外部解压器（`bsdtar` / `unrar`）；7z → `py7zr`（**纯 Python，不需要外部解压器**） |
+| 能读的一档 | 里面是**图片序列** ⇒ 归一成 `CBZ`，页序 / 封面 / 逐页接口 / 阅读器**上层零分支**（与 `.cbz` 完全同等待遇）。**`.rar` 漫画因此第一次能直接读** |
+| 需展开的一档 | 里面是别的书（EPUB / PDF / TXT / MOBI / AZW3 / FB2）或嵌套压缩包 ⇒ 照旧入库、记「无法解析」，进「工具 → 书库管理 → 副本与容器」的**待展开**清单，由用户**显式**按一下展开（第 87 期的能力，本期自动覆盖三兄弟） |
+| 缺解压能力 | **唯一判据** `comics.backend_problem(path)`：`.rar` 缺 bsdtar/unrar 或 `.7z` 缺 `py7zr` ⇒ 页接口 **503** 并**说清缺什么**；「缺能力」**不算**「这本书坏了」（两者文案分开）。魔数认不出时**退回后缀**再判一次 —— 半截下载 / 占位文件也该先报能力 |
+| 白名单 | `.rar` / `.7z` 进 `library.BOOK_EXTS` + `_COMIC_EXTS` + `_EBOOK_EXTS`（**三类库都收**：里面可能是漫画，也可能是一份 EPUB）；`SCAN_RULE_VERSION` **3 → 4** ⇒ 存量库下一轮刷新全量重探一次 |
+| 上传 / 转交 | `pipeline.EBOOK_EXT` 与 `server._ANY_MEDIA_EXTS` 同步补 `.rar` / `.7z`（否则「能入库的格式上传却 400」）；同批补上第 110 期漏掉的 `.azw` |
+| 前端 | 只改两处**文案 / 注释**（`lib/api.ts` 的容器清单注释、`components/tools/LibraryCopiesPanel.vue`）；容器**没有**前端格式白名单，列表由 `/api/library-containers` 驱动 |
+| 契约测试 | `tests/test_archive_kinds.py`（11 例）：`.7z` **现场造真归档**（`py7zr` 可写）跑完整链路；`.rar` **造不出来**（`rarfile` 只读，本机实测 `tool_setup()` 抛 `RarCannotExec`）⇒ 只测缺能力的诚实路径与判定档位，**绝不伪造「读过 RAR」的结论** |
 

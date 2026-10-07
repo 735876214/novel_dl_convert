@@ -32,6 +32,7 @@ GPLv3 ↔ AGPLv3 的兼容是**单向**的：GPLv3 的代码可以并入 AGPLv3 
 |---|---|---|
 | `EbookLib` | **AGPL-3.0** | 组装成品 EPUB（决定本项目的许可证落点，见 §一） |
 | `mobi` | **GPL-3.0-only** | MOBI/AZW3 直读解包（同上） |
+| `py7zr` | **LGPL-2.1-or-later** | 通用容器 `.7z` 的解压后端（第 111 期，`core/comics.py` 的 `_Archive`）。LGPL-2.1-or-later 可升到 LGPL-3.0、与 AGPL-3.0 兼容 ⇒ §一 的落点不变 |
 | `fastapi` · `pydantic` | MIT | HTTP 服务层 |
 | `starlette` | BSD-3-Clause | FastAPI 的 ASGI 基座 |
 | `uvicorn` | BSD-3-Clause | ASGI 服务器 |
@@ -55,6 +56,10 @@ GPLv3 ↔ AGPLv3 的兼容是**单向**的：GPLv3 的代码可以并入 AGPLv3 
 | `standard-imghdr` | PSF-2.0 | `mobi` 的传递依赖（补 Python 3.13 移除的 `imghdr`） |
 | `win32-setctime` | MIT | `loguru` 在 Windows 上的传递依赖 |
 | `six` | MIT | `EbookLib` 的传递依赖 |
+| `inflate64` · `pybcj` · `pyppmd` · `multivolumefile` | LGPL-2.1-or-later（`multivolumefile` 标 `LGPL-2.1+`） | `py7zr` 的传递依赖（各一个压缩/加密编解码器） |
+| `brotli` · `texttable` | MIT | `py7zr` 的传递依赖 |
+| `pycryptodomex` | BSD + Public Domain（双许可） | `py7zr` 的传递依赖（AES） |
+| `psutil` | BSD-3-Clause | `py7zr` 的传递依赖（进程/内存信息） |
 | `click` · `colorama` · `Pygments` · `python-dateutil` · `tzdata` · `packaging` · `typing_extensions` · `annotated-types` · `typing-inspection` · `opentelemetry-api` | BSD / MIT / Apache-2.0 / 双许可（各见其发行包） | 上面各组件的传递依赖 |
 
 ## 三、可选依赖（装了才有的能力；缺了一律**如实降级**，不假装有）
@@ -63,7 +68,7 @@ GPLv3 ↔ AGPLv3 的兼容是**单向**的：GPLv3 的代码可以并入 AGPLv3 
 |---|---|---|
 | `quickjs` | ⚠️ **上游未标注**（PyPI 元数据里 `license` 为空、无许可证 classifier，实测 1.19.4） | 书源规则的 `@js:` 片段回落 Node 通道，能力表如实标「非沙箱」。**部署/分发前建议自行向上游确认许可** |
 | `pdfium`（`pypdfium2` wheel 内） | 见其发行包 | 无（wheel 自带） |
-| `bsdtar`（`libarchive-tools`，系统包） | BSD-2-Clause | `.cbr` 打开返回 503「服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）」 |
+| `bsdtar`（`libarchive-tools`，系统包）或 `unrar`（WinRAR 自带） | BSD-2-Clause / 见其发行包 | `.cbr` 与 `.rar` 打开返回 503「服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）」。⚠️ **`.7z` 不依赖它** —— 走纯 Python 的 `py7zr`（见 §二） |
 | `mobi` | GPL-3.0-only | MOBI/AZW3 章节接口返回 503「服务器缺少 MOBI 解包能力（需 mobi）」 |
 
 ## 四、仅开发 / 测试用（不进生产镜像）
