@@ -28,7 +28,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # ⚠️ 大版本必须是 node24 运行时（`@v4` 及更早是 node20、已被 GitHub 弃用）；
+      # 升级要同批改 `tests/test_ci_actions_contract.py` 的 `ALLOWED`。
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0            # 需要看到仓库里已有的 tag
 
