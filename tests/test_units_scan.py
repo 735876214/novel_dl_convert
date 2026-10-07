@@ -276,7 +276,9 @@ def test_口径版本不一致时全量重探一次(isolated, tmp_path, make_lib
     # 口径」时，这一行要同步成下一个数 —— 它是「有没有忘记 +1」的探针。
     # 第 110 期：`.azw` 进白名单（`BOOK_EXTS` / `_EBOOK_EXTS`）⇒ 它从「不是书」变成一本书，
     # 存量库里那些 `.azw` 文件此前的索引行根本不存在 ⇒ 条目边界变了，故 2 → 3。
-    assert library.SCAN_RULE_VERSION == 3, "第 110 期 `.azw` 进白名单 ⇒ 版本应为 3"
+    # 第 111 期：`.rar` / `.7z` 进白名单（三类库都收）⇒ 同理，同一个库里原先被忽略的
+    # 容器文件会变成书目条目，故 3 → 4。
+    assert library.SCAN_RULE_VERSION == 4, "第 111 期 `.rar`/`.7z` 进白名单 ⇒ 版本应为 4"
     root = tmp_path / "comic"
     lib = make_library("c4", "漫画库", "comic", root)
     _tree(root, BOOK_DIR, BOOK_FILES)

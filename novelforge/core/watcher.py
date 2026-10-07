@@ -107,7 +107,7 @@ def auto_fetch_async(name: str, cfg: dict | None, kind: str | None = None) -> No
     if kind != "audiobook":
         ext = Path(str(name)).suffix.lower()
         from . import comics  # 延迟导入：避免 core 内循环依赖
-        if ext not in {".epub", ".mobi", ".azw3", ".pdf", ".fb2", *comics.COMIC_EXTS}:
+        if ext not in {".epub", ".mobi", ".azw3", ".azw", ".pdf", ".fb2", *comics.COMIC_EXTS}:
             return
 
     def _run():

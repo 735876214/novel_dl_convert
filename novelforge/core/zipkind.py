@@ -1,34 +1,48 @@
-"""`.zip` 的**内容分派**（第 87 期）：容器看内容，不看后缀。
+"""容器的**内容分派**（第 87 期立，第 111 期扩到 `.rar` / `.7z`）：容器看内容，不看后缀。
 
-`.zip` 是通用容器、**不是一种书籍格式** —— 里面可能是漫画图片序列，也可能是一份被改了
-后缀的 EPUB，还可能是别的文档。它到底算什么书只能看内容（与 `core/comics.py` 顶部
-「靠魔数嗅探、不信任扩展名」是同一条纪律的延伸：`.cbz` 与 `.zip` 在字节层面本就等价）。
+`.zip` / `.rar` / `.7z` 是通用容器、**不是一种书籍格式** —— 里面可能是漫画图片序列，也可能
+是一份被改了后缀的 EPUB，还可能是别的文档。它到底算什么书只能看内容（与 `core/comics.py`
+顶部「靠魔数嗅探、不信任扩展名」是同一条纪律的延伸：`.cbz` 与 `.zip`、`.cbr` 与 `.rar` 在
+字节层面本就等价，`.7z` 只是第三种打包算法）。
 
 结论分档，**判不出就如实报「无法判定」** —— 本项目的一条硬纪律：静默猜测的下场是
 用户看到一本打不开的书，而原因离现象十万八千里。
+
+⚠️ **「缺解压能力」不是「这本书坏了」**（第 111 期）：`.rar` 缺 bsdtar/unrar、`.7z` 缺
+`py7zr` 时，用户该看到的是「服务器读不了、缺什么」，而不是「容器里一个文件都没有」。
+判据只有一处（`comics.backend_problem`），本模块把它原样翻成 ``broken`` 的 ``reason``。
 
 ===============  ==============  ==================================================
 kind             format          含义
 ===============  ==============  ==================================================
 ``comic``        ``CBZ``         容器内是图片序列 ⇒ 与 .cbz **完全同等待遇**（可读）
 ``epub``/``pdf`` 同名大写       容器内**恰好一份**文档（典型是被改了后缀的 EPUB）
-``nested``       ``ZIP``         内层还是压缩包 ⇒ 需先展开
-``multi``        ``ZIP``         内有多份文档 ⇒ 需先展开
-``mixed``        ``ZIP``         图文混装 ⇒ 判不准，不猜
-``empty``        ``ZIP``         一个文件都没有
-``broken``       ``ZIP``         坏包 / 根本不是压缩包
+``nested``       容器自身        内层还是压缩包 ⇒ 需先展开
+``multi``        容器自身        内有多份文档 ⇒ 需先展开
+``mixed``        容器自身        图文混装 ⇒ 判不准，不猜
+``empty``        容器自身        一个文件都没有
+``broken``       容器自身        坏包 / 魔数不认识 / **缺解压能力**（reason 说清是哪种）
 ===============  ==============  ==================================================
 
 ⚠️ **目前只有 ``comic`` 一档能读**（页序、封面、逐页接口全部复用漫画那一套）。
 其余各档一律**不假装能读**：调用方按「无法解析」登记，让它在「待修复」里看得见 ——
 文件在磁盘上、书目里却找不到，比直接拒收更糟（见 `library.accepts_ext` 的说明）。
+
+「**容器自身**」= 该容器的后缀大写（``ZIP`` / ``RAR`` / ``7Z``），由 :data:`CONTAINER_FORMATS`
+一处派生 —— 「待展开清单」（`library.container_books`）就按它筛，**别再手写第二份**。
 """
 import pathlib
 
 from . import comics
 
-#: 需要内容分派才能定形态的扩展名（`.cbz` / `.cbr` 是漫画专属后缀，不走这里）
-CONTAINER_EXTS = (".zip",)
+#: 需要内容分派才能定形态的扩展名（`.cbz` / `.cbr` 是漫画专属后缀，不走这里）。
+#: 第 111 期：`.rar` / `.7z` 与 `.zip` 同列 —— 三者都是**通用容器**。
+CONTAINER_EXTS = (".zip", ".rar", ".7z")
+
+#: 「没分派出形态」的容器在书目里的 format 标签。由 :data:`CONTAINER_EXTS` 派生 ——
+#: 它是「这还是一个需要展开的容器吗」这个判据的**唯一**来源（后端 `container_books`
+#: 与前端注释都认它），手写第二份必然漂移。
+CONTAINER_FORMATS = tuple(e.lstrip(".").upper() for e in CONTAINER_EXTS)
 
 #: 容器内出现任一 ⇔ 它其实是一份 EPUB
 _EPUB_MARKERS = ("mimetype", "META-INF/container.xml")
@@ -38,7 +52,7 @@ _DOC_FORMATS = {".epub": "EPUB", ".pdf": "PDF", ".txt": "TXT", ".mobi": "MOBI",
                 ".azw3": "AZW3", ".fb2": "FB2"}
 
 #: 内层还是压缩包 ⇒ 需先展开
-_ARCHIVE_EXTS = (".zip", ".cbz", ".cbr", ".rar")
+_ARCHIVE_EXTS = (".zip", ".cbz", ".cbr", ".rar", ".7z")
 
 #: 可作为展开结果的扩展名（文档 + 内层压缩包）
 _UNPACK_EXTS = tuple(_DOC_FORMATS) + _ARCHIVE_EXTS
@@ -57,6 +71,15 @@ def _suffix(name: str) -> str:
     return pathlib.PurePath(str(name)).suffix.lower()
 
 
+def _container_format(path) -> str:
+    """容器**自身**的 format 标签（没分派出形态时书目里显示的那个）。
+
+    = 后缀大写（``ZIP`` / ``RAR`` / ``7Z``），与 :data:`CONTAINER_FORMATS` 同源；
+    后缀取不到时回 ``ZIP``（调用方都在「已知它是容器」的场合，取不到后缀只可能是怪路径）。
+    """
+    return pathlib.PurePath(str(path)).suffix.lstrip(".").upper() or "ZIP"
+
+
 def _junk(name: str) -> bool:
     """垃圾条目（`__MACOSX/`、`.DS_Store`、隐藏文件）—— 与取页那份判据同源。"""
     if any(j in name for j in comics._JUNK_PARTS):      # noqa: SLF001 —— 同包同源，刻意复用
@@ -73,9 +96,16 @@ def analyze(path) -> dict:
     坏包 / 缺 RAR 依赖折算成 ``broken``（与 `comics.probe` 同口径，绝不抛异常）。
     """
     p = pathlib.Path(str(path))
-    out = {"kind": "unknown", "format": "ZIP", "reason": "", "readable": False,
+    out = {"kind": "unknown", "format": _container_format(p), "reason": "", "readable": False,
            "needs_unwrap": False,
            "evidence": {"files": 0, "images": 0, "docs": [], "archives": 0, "sample": []}}
+    # 「缺解压能力」与本文件坏要分开说：前者是**服务器**的问题（`.rar` 缺 bsdtar、`.7z`
+    # 缺 py7zr），把它塞进下面那个 except 里会变成「不是可读的压缩包（ModuleNotFoundError）」
+    # —— 用户据此只会去怀疑自己的文件（第 111 期）。
+    problem = comics.backend_problem(p)
+    if problem:
+        out.update(kind="broken", reason=problem)
+        return out
     try:
         with comics._open(str(p)) as arc:               # noqa: SLF001 —— 归档句柄的唯一owner
             names = [n for n in arc.names() if not _junk(n)]

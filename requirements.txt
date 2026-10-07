@@ -61,3 +61,14 @@ redis>=5.0
 # 分发（既有依赖 `EbookLib` 也是 AGPL-3.0）。见根目录 `LICENSE` 与
 # `THIRD-PARTY-NOTICES.md`，改这一条之前先读那两个文件。
 mobi>=0.4.1
+# 通用容器 `.7z` 的解压后端（第 111 期）：`core/comics.py` 的 `_Archive` 靠**魔数嗅探**在
+# zipfile / rarfile / py7zr 之间选后端，`.zip` / `.rar` / `.7z` 三类容器共用同一套阅读
+# （图片档归一成 CBZ）与展开（`core/zipkind.py`）链路。
+# **为什么用它而不是复用 bsdtar**：纯 Python wheel、**不需要外部解压器** —— 容器镜像不必
+# 再装系统包，Windows 开发机也能直接读（`.rar` 那条恰恰会因为缺 bsdtar/unrar 而读不了）。
+# **它不是硬依赖**：缺了由 `comics.seven_available()` 如实标，读 `.7z` 时回
+# 503「服务器缺少 7z 解压能力（需 py7zr）」——**绝不假装能读**、也绝不静默回空页
+# （与缺 bsdtar 时 `.cbr` 报 503 同一条纪律）。
+# 许可证 **LGPL-2.1-or-later**（传递依赖 brotli / pycryptodomex / pyppmd / pybcj /
+# inflate64 / multivolumefile / psutil / texttable，见 `THIRD-PARTY-NOTICES.md`）。
+py7zr>=1.1.3

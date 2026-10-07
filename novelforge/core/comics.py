@@ -1,12 +1,19 @@
-"""漫画归档（CBZ / CBR）：页清单 / 单页取图 / 封面探测。
+"""漫画归档与通用容器（CBZ / CBR / ZIP / RAR / 7Z）：页清单 / 单页取图 / 封面探测。
 
-支持两种容器，靠**魔数嗅探**选择后端（不信任扩展名）：
-- **CBZ** = 普通 zip，标准库 ``zipfile`` 直接解；
-- **CBR** = RAR，需 ``rarfile`` + 一个外部解压器（``bsdtar`` / ``unrar``）。
-  容器里由 ``libarchive-tools`` 提供 ``bsdtar``，macOS 本机自带 ``bsdtar``。
+支持三种容器，靠**魔数嗅探**选择后端（不信任扩展名）：
+- **zip**（`.cbz` / `.zip`）= 标准库 ``zipfile`` 直接解；
+- **rar**（`.cbr` / `.rar`）= ``rarfile`` + 一个外部解压器（``bsdtar`` / ``unrar``）。
+  容器镜像里由 ``libarchive-tools`` 提供 ``bsdtar``，macOS 本机自带 ``bsdtar``；
+  Windows 上装了 WinRAR 也能用（把 ``UnRAR.exe`` 所在目录加进 ``PATH``，或设 ``UNRAR_TOOL``）。
+- **7z**（`.7z`）= ``py7zr``（第 111 期）。纯 Python、**不需要外部解压器** —— 这一条是
+  选它的主要理由：容器镜像不必再装系统包，Windows 开发机也能直接读。
+
+⚠️ 「缺依赖」必须**如实**报出来（第 111 期）：:func:`backend_problem` 是这件事的**唯一判据**
+（返回「缺什么」，空串 = 现在能读）。此前只有 RAR 一条判据散在 server 的三处守卫里，
+`.7z` 一进来就会漏 —— 缺 ``py7zr`` 时表现为「容器里一个文件都没有」这种静默失败。
 
 对外接口（``probe`` / ``pages`` / ``page_bytes`` / ``cover_entry`` / ``cover_bytes``）
-对两种格式**完全一致**，上层（library / server）无需分支。
+对三种容器**完全一致**，上层（library / server）无需分支。
 
 三个必须处理的现实问题：
 - macOS 压缩会塞进 ``__MACOSX/`` 与 ``.DS_Store``，不过滤的话漫画里会混进垃圾「页」；
@@ -24,15 +31,21 @@ import zipfile
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"}
 _JUNK_PARTS = ("__MACOSX/", ".DS_Store", "Thumbs.db", ".thumbnails/")
 
-#: 归档魔数：RAR4/RAR5 都是 "Rar!\x1a\x07"，zip 以 "PK" 开头
+#: 归档魔数：RAR4/RAR5 都是 "Rar!\x1a\x07"，zip 以 "PK" 开头，7z 是固定 6 字节签名
 _RAR_MAGIC = b"Rar!\x1a\x07"
 _ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
+_7Z_MAGIC = b"7z\xbc\xaf\x27\x1c"
 
 # ⚠️ `.zip` 也在列（第 87 期）：它与 `.cbz` 在**字节层面本就等价**，而 `_Archive` 是靠
 # 魔数嗅探选后端的（见 `_sniff`），所以「能读」这一步不需要任何改动。
 # 但 `.zip` **是一个通用容器**：里面装的是图片还是别的文档，由 `core/zipkind.py`
 # 按内容分派 —— 本常量只回答「这个后缀要不要按归档处理」，不回答「它是什么书」。
-COMIC_EXTS = (".cbz", ".cbr", ".zip")
+# 第 111 期：`.rar` / `.7z` 同理入列 —— 它们是同一种通用容器的另外两个壳（`.rar` 与
+# `.cbr`、`.7z` 与前面两者只是打包算法不同）。入列的**唯一**理由是「按归档读」这条路径
+# 要认它们；「它是什么书」仍然只由 `zipkind.analyze` 按内容答。
+# ⚠️ 副作用是 `is_comic` 对它们返回**真**（它只看后缀）⇒ 调用方必须像 `.zip` 那样带上
+# 附加判据（见 `library._probe_entry` 里 `zip_v["kind"] == "comic"` 那一条）。
+COMIC_EXTS = (".cbz", ".cbr", ".zip", ".rar", ".7z")
 
 
 def write_cbz(dest, pages):
@@ -118,8 +131,46 @@ def rar_available() -> bool:
         return False
 
 
+def seven_available() -> bool:
+    """7z 后端是否可用（``py7zr`` 已装）。第 111 期。
+
+    与 :func:`rar_available` 的区别是**不需要外部解压器** —— 纯 Python 包，装了就能读。
+    """
+    try:
+        import py7zr  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def backend_problem(path) -> str:
+    """这个归档**现在**读不了的**能力**原因；空串 = 能读。
+
+    ⚠️ **「缺依赖」的唯一判据**（第 111 期）：server 的三处守卫、`zipkind.analyze` 的
+    坏包分档都问这里，别各自再写一遍「是不是 rar、装没装」—— 那种散判据正是漏掉 `.7z`
+    的成因（缺 `py7zr` 时表现为「容器里一个文件都没有」，用户完全看不出原因）。
+
+    只回答**能力**问题：文件本身坏 / 魔数不认识**不算**（那是「这本书坏了」，
+    由 :func:`_sniff` 回空串 + 调用方按坏包处理，文案也不同）。
+
+    ⚠️ 魔数认不出时会**退回后缀**再判一次：`.cbr` / `.rar` / `.7z` 的扩展名与「需要哪个
+    后端」是确定的，而真实世界里坏包、半截下载、占位文件都会让魔数落空 —— 那时若只说
+    「缺能力」是错怪用户，只说「坏包」又漏掉了「这台服务器本来就读不了 RAR」这个更该先
+    知道的事实。两害相权，先报能力（与改造前按后缀判的既有行为一致）。
+    """
+    kind = _sniff(path)
+    if not kind:
+        kind = {".cbr": "rar", ".rar": "rar", ".7z": "7z"}.get(
+            pathlib.PurePath(str(path)).suffix.lower(), "")
+    if kind == "rar" and not rar_available():
+        return "服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）"
+    if kind == "7z" and not seven_available():
+        return "服务器缺少 7z 解压能力（需 py7zr）"
+    return ""
+
+
 def _sniff(path) -> str:
-    """按魔数判断容器类型：``"zip"`` / ``"rar"`` / ``""``（都不是）。"""
+    """按魔数判断容器类型：``"zip"`` / ``"rar"`` / ``"7z"`` / ``""``（都不是）。"""
     try:
         with open(path, "rb") as fh:
             head = fh.read(8)
@@ -127,6 +178,8 @@ def _sniff(path) -> str:
         return ""
     if head.startswith(_RAR_MAGIC):
         return "rar"
+    if head.startswith(_7Z_MAGIC):
+        return "7z"
     if head[:4] in _ZIP_MAGICS:
         return "zip"
     return ""
@@ -147,7 +200,7 @@ def _keep(name: str) -> bool:
 
 
 class _Archive:
-    """zip / rar 的统一只读句柄：``entries()`` 列表 + ``read(name)``。
+    """zip / rar / 7z 的统一只读句柄：``entries()`` 列表 + ``read(name)``。
 
     上层只依赖这两个方法，因此 4 个公开函数不必知道底层是什么容器。
     """
@@ -156,13 +209,25 @@ class _Archive:
         self.kind = _sniff(path)
         self._z = None
         self._r = None
+        self._s = None
+        self._sizes = None
         if self.kind == "zip":
             self._z = zipfile.ZipFile(path)
         elif self.kind == "rar":
             import rarfile
             self._r = rarfile.RarFile(str(path))
+        elif self.kind == "7z":
+            import py7zr
+            self._s = py7zr.SevenZipFile(str(path))
         else:
-            raise ValueError("既不是 zip 也不是 rar 归档")
+            raise ValueError("既不是 zip、rar 也不是 7z 归档")
+
+    def _size_of(self, name: str) -> int:
+        """7z 条目的解压后大小（给内存工厂设上限用）；查不到回 0。"""
+        if self._sizes is None:
+            self._sizes = {str(getattr(i, "filename", "")): int(getattr(i, "uncompressed", 0) or 0)
+                           for i in self._s.list()}
+        return self._sizes.get(str(name), 0)
 
     def names(self) -> list:
         """全部**文件**条目名（跳过目录项，**不**过滤非图片）。
@@ -172,7 +237,10 @@ class _Archive:
         """
         if self._z is not None:
             return [i.filename for i in self._z.infolist() if not i.is_dir()]
-        return [i.filename for i in self._r.infolist() if not i.isdir()]
+        if self._r is not None:
+            return [i.filename for i in self._r.infolist() if not i.isdir()]
+        return [i.filename for i in self._s.list()
+                if not getattr(i, "is_directory", False)]
 
     def entries(self) -> list:
         """图片条目 ``[(name, size), ...]``，过滤垃圾/目录/非图片后自然排序。"""
@@ -183,7 +251,7 @@ class _Archive:
                     continue
                 if _keep(info.filename):
                     out.append((info.filename, info.file_size))
-        else:
+        elif self._r is not None:
             for info in self._r.infolist():
                 name = info.filename
                 # RAR 没有可靠的 is_dir()，目录项以 / 结尾（个别工具还带 isdir 标志）
@@ -191,14 +259,34 @@ class _Archive:
                     continue
                 if _keep(name):
                     out.append((name, getattr(info, "file_size", 0)))
+        else:
+            for info in self._s.list():
+                name = str(getattr(info, "filename", ""))
+                if getattr(info, "is_directory", False) or name.endswith("/"):
+                    continue
+                if _keep(name):
+                    out.append((name, int(getattr(info, "uncompressed", 0) or 0)))
         out.sort(key=lambda kv: _natural_key(kv[0]))
         return out
 
-    def read(self, name: str) -> bytes:
-        return self._z.read(name) if self._z is not None else self._r.read(name)
+    def read(self, name: str):
+        """取一个条目的字节。**取不到回 ``None``**（7z 后端的能力边界，见下）。"""
+        if self._z is not None:
+            return self._z.read(name)
+        if self._r is not None:
+            return self._r.read(name)
+        # 7z：py7zr 1.1.3 实测**没有**「读单个条目」的直接 API（只有 extract/extractall），
+        # 官方给的路子是传一个内存工厂 ⇒ 这里把该条目抽进 BytesIO：**不落盘**、
+        # 也**不整包读进内存**（工厂的 limit 按该条目的解压后大小给）。
+        import py7zr.io
+        factory = py7zr.io.BytesIOFactory(limit=max(self._size_of(name), 1))
+        self._s.reset()                     # py7zr 的句柄有状态：再抽一次前必须复位
+        self._s.extract(targets=[name], factory=factory)
+        buf = factory.products.get(name)
+        return buf.read() if buf is not None else None
 
     def close(self) -> None:
-        for h in (self._z, self._r):
+        for h in (self._z, self._r, self._s):
             try:
                 if h is not None:
                     h.close()

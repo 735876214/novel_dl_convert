@@ -45,8 +45,11 @@ from . import audio, audio_meta, comics, db, metadata, reading_list, units, zipk
 # 单个音频文件也算一本书；「音频目录」（一章一文件）由 _iter_book_entries 单独识别。
 # ⚠️ 第 87 期：`.zip` 也在列 —— 它是**通用容器**，真实形态由 `core/zipkind.py` 按内容分派
 # （里面是图片就按漫画读、是一份 EPUB/PDF 就记成需要展开、判不出就如实报无法解析）。
+# 第 111 期：`.rar` / `.7z` 同列 —— 同一种通用容器的另外两个壳（`.rar` 与 `.cbr`、
+# `.7z` 与其并列）。不收进来的话，用户放进库里的 `.rar` 漫画**连书目都进不去**
+# （表现为「文件在盘上、书架上看不见」，比打开失败更难排查）。
 BOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".pdf", ".txt", ".cbz", ".cbr", ".zip",
-             *audio.AUDIO_EXTS)
+             ".rar", ".7z", *audio.AUDIO_EXTS)
 
 #: 扫描口径版本。**凡能改变「条目边界」或卡片字段口径的改动都要 +1**：
 #: 第 73 期两处 —— ① 序号单元目录整棵树被合成一个条目（此前是每文件一本，更深的根本扫不到）；
@@ -65,7 +68,8 @@ BOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".pdf", ".txt", ".cbz", ".cbr", 
 #: 第 110 期一处 —— ④ `.azw` 进白名单（`BOOK_EXTS` / `_EBOOK_EXTS`）：此前它**不是书**
 #: （扫描时被忽略），现在是一本可直读的 MOBI 家族书 ⇒ **条目边界变了**，存量库里那些
 #: `.azw` 文件不 +1 就永远不会被重探（它们此前连索引行都没有）。
-SCAN_RULE_VERSION = 3
+#: 第 111 期一处 —— ⑤ `.rar` / `.7z` 进白名单（三类库都收）：同理，「不是书」变成「一本书」。
+SCAN_RULE_VERSION = 4
 
 # 可能作为封面出现的图片扩展名
 _COVER_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
@@ -1201,16 +1205,19 @@ def copy_groups() -> list:
 
 
 def container_books(limit: int = 200) -> list:
-    """**按内容分派不出形态的容器**清单（`format == "ZIP"`，第 87 期）：展开操作的入口。
+    """**按内容分派不出形态的容器**清单（`zipkind.CONTAINER_FORMATS`，第 87 期）：展开操作的入口。
 
-    只列 `.zip` 且**没能分派出形态**的那些 —— 图片档已经归一成 `CBZ`（能直接读），
-    不在此列。`reason` / `targets` **现算**（每次开一次归档；容器条目通常很少，
+    只列**通用容器**（`.zip` / `.rar` / `.7z`）且**没能分派出形态**的那些 —— 图片档已经
+    归一成 `CBZ`（能直接读），不在此列。判据取 `zipkind.CONTAINER_FORMATS` 而不是写死
+    `"ZIP"`：第 111 期加 `.rar` / `.7z` 时，写死的那一份会让它们**从待展开清单里消失**
+    （文件在盘上、书架上打进不了，且界面上一个字都不提）。
+    `reason` / `targets` **现算**（每次开一次归档；容器条目通常很少，
     而且这是用户主动打开的工具页，不是列表热路径）。`limit` 是防御：真遇到几百个
     容器时别让一次请求卡住界面（前端会显示实际条数）。
     """
     out = []
     for b in books():
-        if str(b.get("format") or "").upper() != "ZIP":
+        if str(b.get("format") or "").upper() not in zipkind.CONTAINER_FORMATS:
             continue
         plan = zipkind.unpack_plan(pathlib.Path(root_of(b)) / b["name"])
         out.append({
@@ -1552,8 +1559,9 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None, ltype=None) -> 
 # （`core/zipkind.py`）。不收它就等于「某个库里看不见用户放进去的书」。
 # ⚠️ 收进来 ≠ 当成漫画：里面是别的文档 / 嵌套 / 坏包时一律记「无法解析」，
 # 于是它在「待修复」里看得见，而不会被静默忽略。
-_COMIC_EXTS = (".cbz", ".cbr", ".pdf", ".zip")
-_EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".pdf", ".txt", ".zip")
+# 第 111 期：`.rar` / `.7z` 与 `.zip` 同一处理（漫画库收、电子书库也收 —— 里面可能是一份 EPUB）。
+_COMIC_EXTS = (".cbz", ".cbr", ".pdf", ".zip", ".rar", ".7z")
+_EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".pdf", ".txt", ".zip", ".rar", ".7z")
 
 
 def _exts_for_type(ltype) -> tuple:

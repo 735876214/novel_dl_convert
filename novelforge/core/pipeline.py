@@ -11,8 +11,10 @@ from . import audio, preprocess, detect, metadata, epub_builder, komga
 # 「转不动就整本进不来」的失败路径。分章仍在阅读时按 core/detect.py 现算。
 # 第 87 期：`.zip` 也在列 —— 它是**通用容器**，与 `.cbz` 走同一条「原样入库」的路；
 # 入库后由扫描侧按**内容**分派形态（`core/zipkind.py`），不看后缀猜。
-EBOOK_EXT = {".epub", ".mobi", ".azw3", ".pdf", ".fb2", ".cbz", ".cbr", ".zip",
-             ".txt", *audio.AUDIO_EXTS}
+# 第 110 期：`.azw` 补进来（它是 MOBI 家族、能直读，此前不在任何白名单里 ⇒ 上传会被 400 拒掉）。
+# 第 111 期：`.rar` / `.7z` 同 `.zip` —— 通用容器，原样入库后按内容分派。
+EBOOK_EXT = {".epub", ".mobi", ".azw3", ".azw", ".pdf", ".fb2", ".cbz", ".cbr", ".zip",
+             ".rar", ".7z", ".txt", *audio.AUDIO_EXTS}
 
 
 def _copy_tree(src: Path, dst: Path) -> None:

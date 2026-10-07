@@ -3474,8 +3474,9 @@ def api_comic_pages(bid: str):
     path = library.root_of(b) / b["name"]
     if not comics.is_comic(path):
         raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
-    if comics.is_cbr(path) and not comics.rar_available():
-        raise HTTPException(503, "服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）")
+    problem = comics.backend_problem(path)      # 缺 bsdtar/unrar 或 py7zr —— 唯一判据（第 111 期）
+    if problem:
+        raise HTTPException(503, problem)
     return comics.pages(path)
 
 
@@ -3487,8 +3488,9 @@ def api_comic_page(bid: str, index: int):
     path = library.root_of(b) / b["name"]
     if not comics.is_comic(path):
         raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
-    if comics.is_cbr(path) and not comics.rar_available():
-        raise HTTPException(503, "服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）")
+    problem = comics.backend_problem(path)      # 缺 bsdtar/unrar 或 py7zr —— 唯一判据（第 111 期）
+    if problem:
+        raise HTTPException(503, problem)
     data, media = comics.page_bytes(path, index)
     if data is None:
         raise HTTPException(404, "页不存在")
@@ -3582,8 +3584,9 @@ def _unit_comic(bid: str, index: int):
     path = _unit_file(bid, index)
     if not comics.is_comic(path):
         raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
-    if comics.is_cbr(path) and not comics.rar_available():
-        raise HTTPException(503, "服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）")
+    problem = comics.backend_problem(path)      # 缺 bsdtar/unrar 或 py7zr —— 唯一判据（第 111 期）
+    if problem:
+        raise HTTPException(503, problem)
     return path
 
 
@@ -5298,7 +5301,8 @@ def api_library_source_dirs(root: int = None, path: str = ""):
 
 
 #: 事实校正时用来「看目录里到底有些什么」的扩展名集合（媒体类，尽量宽）
-_ANY_MEDIA_EXTS = tuple(units.UNIT_EXTS) + (".epub", ".mobi", ".azw3", ".azw", ".txt", ".zip")
+_ANY_MEDIA_EXTS = tuple(units.UNIT_EXTS) + (".epub", ".mobi", ".azw3", ".azw", ".txt", ".zip",
+                                           ".rar", ".7z")
 
 
 def _scan_media(dirs, cap: int = 3000) -> tuple:
