@@ -303,16 +303,22 @@ DEFAULTS = {
             # 第 103 期：演播者也默认 fill_only —— 本地值来自**音频文件标签**，那是这一项的
             # 权威源（我们自己抓的 Audible 只是其中一个平台，且版本可能不同）。
             "narrators": "fill_only",
-            # 第 63 期：副标题与 9 个提供商 ID（与 metafetch._FINALIZE_FIELDS 同集合，
-            # 第 103 期又加了 series / series_index / narrators）。
+            # 第 113 期：副标题同样默认 fill_only（在此之前是 overwrite，但**从没有源填过它**
+            # ⇒ 一直是空转；第 113 期接了 Audible 的顶层 `subtitle` 才有实际含义）。
+            # 理由与上面两条同向：不少书库把副标题当书名的一部分，覆盖会凭空多出一条重复的副标题；
+            # 「已经有的副标题」（手工改的、上一次抓来的 —— `library._apply_overlay` 会把生效值
+            # 并进书对象）在 `metafetch.plan` 里 `cur` 非空，fill_only 一律跳过。
+            "subtitle": "fill_only",
+            # 第 63 期的 9 个提供商 ID（与 metafetch._FINALIZE_FIELDS 同集合，
+            # 第 103 期加了 series / series_index / narrators，第 113 期加了 subtitle）。
             # ⚠️ **老配置不会自动获得这些新键**：本函数对 `metadata_fetch` 只有**一层**
             # 浅合并（`data[k].update(v)`，见 :func:`load_config`），用户 config.yaml 里
             # 存过的 `fields` 子字典会**整体替换**这里的默认值。用户存过的是预设
             # （整表同档），所以 `metafetch._field_policy` 负责把那个意图还原到新键上。
             # 那句注释之所以写在这里：**加字段的人要记得去改那个函数**。
-            # 也正因如此，上面那三条 `fill_only` 只对**新**配置生效；老配置里存过整表
-            # overwrite 的用户，这三项也会按 overwrite 走（那是他选的预设）。
-            "subtitle": "overwrite", "google_books_id": "overwrite",
+            # 也正因如此，上面那四条 `fill_only` 只对**新**配置生效；老配置里存过整表
+            # overwrite 的用户，这四项也会按 overwrite 走（那是他选的预设）。
+            "google_books_id": "overwrite",
             "goodreads_id": "overwrite", "amazon_id": "overwrite",
             "hardcover_id": "overwrite", "openlibrary_id": "overwrite",
             "itunes_id": "overwrite", "kobo_id": "overwrite",

@@ -298,6 +298,8 @@ def test_audible_按catalog接口解析(monkeypatch):
         "asin": "B07", "title": "Dune", "authors": [{"name": "Frank Herbert"}],
         "publisher_name": "Macmillan Audio", "publication_datetime": "2019-05-28",
         "publisher_summary": "沙丘有声版", "language": "english",
+        # 第 113 期：副标题是**顶层键**，随现有的 `response_groups` 照旧返回
+        "subtitle": "Book 1 of the Dune Saga",
         "series": [{"title": "The Dune Sequence", "sequence": "12"},
                    {"title": "Dune", "sequence": "1"}],
         # 第 103 期：演播者在**顶层** `narrators`，每项 `{"name": …}`；
@@ -312,6 +314,7 @@ def test_audible_按catalog接口解析(monkeypatch):
     assert e["cover_url"] == "https://x/au.jpg"
     assert e["series"] == "Dune" and e["series_index"] == "1", "取卷号最小的那支"
     assert e["narrators"] == ["Scott Brick", "Euan Morton"], "空名与非字典项要丢掉"
+    assert e["subtitle"] == "Book 1 of the Dune Saga", "第 113 期：顶层 `subtitle` 要进候选"
     assert e["tags"] == [], "系列名不该再占着 tags（题材这接口不给）"
 
 
@@ -322,6 +325,7 @@ def test_audible_没有数字卷号时留名不留号(monkeypatch):
     e = _one("audible")[0]
 
     assert e["series"] == "某系列" and e["series_index"] == "", "没卷号就留空，不猜"
+    assert e["subtitle"] == "", "响应里没有副标题就是空串（不猜、也不写 None）"
 
 
 def test_librofm_标题与作者配对(monkeypatch):

@@ -85,17 +85,19 @@ def test_presets_声明齐全():
     assert set(metafetch.FINALIZE_PRESETS) >= {"overwrite", "fill_only", "embedded_only"}
 
 
-def test_新接的三项默认策略是fill_only():
-    """系列 / 卷号 / 演播者的**默认**策略是 fill_only（与整表其它项的 overwrite 不同，故意的）。
+def test_新接的四项默认策略是fill_only():
+    """系列 / 卷号 / 演播者 / 副标题的**默认**策略是 fill_only（与整表其它项的 overwrite 不同，故意的）。
 
     理由写在 `config.DEFAULTS` 那段注释里，核心是一条：系列会参与**命名规则**
     （`{series}` / `{series_index}`）与系列视图，演播者的本地值来自音频文件标签（权威源）
     —— 默认覆盖会静默改掉用户已有的系列分组与文件名。抓取的收益主要在**没有**值的书上。
 
-    这条钉的是默认值本身：谁把这三项「顺手统一成 overwrite」，用户可见行为就变了。
+    副标题（第 113 期）同理：不少书库把副标题当书名的一部分，覆盖会凭空多出一条重复的副标题。
+
+    这条钉的是默认值本身：谁把这四项「顺手统一成 overwrite」，用户可见行为就变了。
     """
     f = config.DEFAULTS["metadata_fetch"]["fields"]
-    new = ("series", "series_index", "narrators")
+    new = ("series", "series_index", "narrators", "subtitle")
     for k in new:
         assert f[k] == "fill_only", k
     others = {k: v for k, v in f.items() if k not in new}

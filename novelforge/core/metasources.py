@@ -636,6 +636,11 @@ def _entry(source: str, **kw) -> dict:
     卷号一律走 :func:`_series_index_of`：**只认数字**。
 
     第 103 期起也多带 ``narrators``（演播者）：与 ``tags`` 一样的多值字段，空值为 ``[]``。
+
+    第 113 期起多带 ``subtitle``（副标题）：与上面三项**不一样** —— 它自第 63 期就
+    **整套建模好了**（``fileops.METADATA_FIELDS`` / ``metafetch._VALUE_KEYS`` /
+    ``config.DEFAULTS`` 的字段策略 / 前端 ``POLICY_FIELDS`` / 元数据编辑器都有它），
+    唯独候选结构这里**一直没有这个键** ⇒ 抓到了也无处可放。当前只有 Audible 供给它。
     """
     pid = _clean(kw.get("provider_id"))
     field = SOURCE_ID_FIELD.get(source)
@@ -648,6 +653,9 @@ def _entry(source: str, **kw) -> dict:
         "language": _lang_of(kw.get("language")),
         "isbn": _strip_html(kw.get("isbn")),
         "description": _strip_html(kw.get("description")),
+        # 第 113 期：副标题。下游（策略 / 数据库 / 前端）**早就都有它**，这里只是补上
+        # 那个一直缺的键 —— 在此之前 fetcher 传 `subtitle=` 会被 `**kw` 静默吞掉。
+        "subtitle": _strip_html(kw.get("subtitle")),
         "series": _strip_html(kw.get("series")),
         "series_index": _series_index_of(kw.get("series_index")),
         "tags": [t for t in (_strip_html(x) for x in (kw.get("tags") or [])) if t][:8],
@@ -1360,6 +1368,11 @@ def _search_audible(title: str, author: str, limit: int, opts: dict) -> list:
                           year=p.get("publication_datetime") or p.get("release_date"),
                           language=p.get("language"),
                           description=p.get("publisher_summary"),
+                          # 副标题（第 113 期）：**顶层键** `subtitle`，随现有的
+                          # `response_groups`（`product_desc`）照旧返回 —— 第 103 期真机核过它存在。
+                          # ⚠️ 别为了它去加 response_group：第 99 期实测，加一个非法组名
+                          # （`publisher`）会让接口直接 400、**整家永远 0 结果**。
+                          subtitle=p.get("subtitle"),
                           series=series, series_index=series_index,
                           narrators=narrators,
                           # ⚠️ 题材**不从这里来**：此前把系列名塞进了 `tags`（把值写错

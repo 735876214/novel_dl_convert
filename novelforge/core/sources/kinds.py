@@ -58,10 +58,11 @@ FIELDS_OF_KIND = {
     KIND_ANIME: frozenset({
         "title", "author", "series", "series_index", "date", "description", "tags",
     }),
-    # 有声书：演出者是独立字段（`narrators` 已在 fileops.METADATA_FIELDS 里）
+    # 有声书：演出者是独立字段（`narrators` 已在 fileops.METADATA_FIELDS 里）；
+    # 副标题同理（第 113 期：Audible 从顶层 `subtitle` 供给它）。
     KIND_AUDIOBOOK: frozenset({
-        "title", "author", "narrators", "series", "series_index", "date", "publisher",
-        "language", "description", "tags", "isbn",
+        "title", "author", "subtitle", "narrators", "series", "series_index", "date",
+        "publisher", "language", "description", "tags", "isbn",
     }),
 }
 

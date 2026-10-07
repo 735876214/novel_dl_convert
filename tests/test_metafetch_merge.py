@@ -25,9 +25,14 @@ def cand(source, score, **kw):
     return base
 
 
-def _plan(monkeypatch, entries, merge=True, locked=(), overridden=()):
+def _plan(monkeypatch, entries, merge=True, locked=(), overridden=(),
+          book_extra=None, fields=None):
     book = {"id": "b1", "name": "dune.epub", "title": "Dune", "author": "Frank Herbert",
             "library_id": "", "format": "EPUB"}
+    # `book_extra`：给书对象预置**已有值**（形状与 `library._apply_overlay` 并进去的一致），
+    # 用来测 `fill_only` 那类「原值非空就不动」的分支。
+    if book_extra:
+        book.update(book_extra)
     monkeypatch.setattr(metafetch.library, "books", lambda *a, **k: [book])
     monkeypatch.setattr(metafetch.metasources, "search_by_isbn", lambda *a, **k: None)
     monkeypatch.setattr(metafetch.metasources, "search_all",
@@ -38,7 +43,7 @@ def _plan(monkeypatch, entries, merge=True, locked=(), overridden=()):
     monkeypatch.setattr(metafetch.db, "all_locks", lambda: {"b1": set(locked)})
     cfg = {"metadata_fetch": {"enabled": True, "sources": ["openlibrary", "googlebooks"],
                               "threshold": 0.75, "merge_sources": merge,
-                              "fields": {}, "genre_blocklist": []}}
+                              "fields": dict(fields or {}), "genre_blocklist": []}}
     return metafetch.plan(names=["dune.epub"], cfg=cfg)["items"][0]
 
 
@@ -188,3 +193,32 @@ def test_online_candidate_与plan同一套规则(isolated, monkeypatch):  # noqa
     assert out["merged_from"] == ["openlibrary", "googlebooks"]
     assert out["field_sources"]["description"] == "googlebooks"
     assert out["field_sources"]["date"] == "openlibrary"
+
+
+# ---------------- 副标题（第 113 期：Audible 顶层 `subtitle` 接线）----------------
+
+def test_副标题只在空着的书上补(isolated, monkeypatch):  # noqa: ARG001
+    """候选里带 `subtitle` ⇒ 默认策略（fill_only）下，没副标题的书会被补上。"""
+    item = _plan(monkeypatch, [cand("audible", 0.95, subtitle="Book 1 of the Dune Saga")],
+                 fields={"subtitle": "fill_only"})
+
+    assert item["changes"]["subtitle"]["to"] == "Book 1 of the Dune Saga"
+    assert item["changes"]["subtitle"]["source"] == "audible", "来源要如实带出"
+
+
+def test_副标题已有值时不覆盖(isolated, monkeypatch):  # noqa: ARG001
+    """书**已经有**副标题 ⇒ fill_only 跳过；同一份候选换 overwrite 就会换掉。
+
+    钉的是**两条策略的差异**：`fill_only` 曾经是空转（没有任何源填过 subtitle），
+    接线之后它才真正意味着「只在没有副标题的书上补」。已有值可能是用户手工改的、
+    也可能是上一次抓来的 —— 两者都会经 `library._apply_overlay` 并进书对象。
+    """
+    cands = [cand("audible", 0.95, subtitle="Book 1 of the Dune Saga")]
+    have = {"subtitle": "沙漠星球"}
+
+    kept = _plan(monkeypatch, cands, book_extra=have, fields={"subtitle": "fill_only"})
+    assert "subtitle" not in kept["changes"], "原值非空 ⇒ 默认不动"
+
+    changed = _plan(monkeypatch, cands, book_extra=have, fields={"subtitle": "overwrite"})
+    assert changed["changes"]["subtitle"]["from"] == "沙漠星球"
+    assert changed["changes"]["subtitle"]["to"] == "Book 1 of the Dune Saga"
