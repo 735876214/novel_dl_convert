@@ -4903,7 +4903,13 @@ export const api = {
   /** 同一本书的**副本**清单（第 87 期）：名字只差副本后缀 / 破折号 / 全角半角。 */
   libraryCopies: () => request<CopiesResult>('/api/library-copies'),
 
-  /** 待展开的容器（`format === 'ZIP'`，第 87 期）：展开是它们唯一的出路。 */
+  /**
+   * 待展开的容器（第 87 期立，第 111 期扩到 `.rar` / `.7z`）：展开是它们唯一的出路。
+   *
+   * ⚠️ 判据是后端的 `zipkind.CONTAINER_FORMATS`（`ZIP` / `RAR` / `7Z`）而不是写死 `'ZIP'`——
+   * 后端 `library.container_books` 按同一份清单筛，两边各写一个不同的字面量就会出现
+   * 「后端列得出、界面看不见」。
+   */
   libraryContainers: () => request<ContainersResult>('/api/library-containers'),
 
   /**
