@@ -642,3 +642,19 @@ docker build --build-arg NODE_VERSION=22 -t novelforge .
 不再参与任何过滤 —— 也就是说，**本工具不再替你区分公版与非公版源，后果由使用者自负**。
 项目自带的 Project Gutenberg 适配器仍是一个公版源，但它的「公版」属性也不再是程序判据。
 历史版本记录不改写。
+
+## 许可证
+
+本项目按 **GNU Affero 通用公共许可证第 3 版（AGPL-3.0）** 分发，全文见 [`LICENSE`](LICENSE)。
+
+为什么是 AGPL-3.0（而不是 GPL-3.0 或别的）：本项目**进程内**用了两个 copyleft 组件 ——
+
+- `EbookLib`（组装成品 EPUB）：**AGPL-3.0**；
+- `mobi`（第 110 期起，MOBI / AZW3 直读解包）：**GPL-3.0-only**。
+
+GPLv3 与 AGPLv3 的兼容是**单向**的（GPLv3 的代码可以并入 AGPLv3 的作品，反过来不行），
+两者合并后的正确落点就是 AGPL-3.0。也就是说：**把本服务部署出去、让用户通过网络与它交互时，
+按 AGPL §13 使用者有权取得对应源码** —— 本项目没有闭源部分，源码就是部署物本身（见上面
+「为什么既没有本地 build、也没有运行时 clone」）。
+
+其余第三方组件各自的许可证、用途，以及「缺了会怎样」，见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
