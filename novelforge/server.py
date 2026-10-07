@@ -36,6 +36,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
                   reading_list,
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
+                   mobicache,
                    catalog, cache, units, recycle, urlguard)
 from . import config
 from .sources import REGISTRY, DownloadManager
@@ -2878,10 +2879,20 @@ def api_book_asset(bid: str, p: str = Query(..., description="zip 内资源相�
     raw = str((b or {}).get("path") or "")
     if not b or not raw:
         raise HTTPException(404, "书籍不存在")
+    src = pathlib.Path(raw)
+    if src.suffix.lower() in mobicache.EXTS:
+        # 第 110 期：MOBI / AZW3 的书内资源**不在书文件里**（.mobi 不是 zip），而在解包产物
+        # 里（KF8 解包出的是真 EPUB）。「正文其实在哪个文件里」只问 `mobicache.read_target`
+        # 一处 —— 与目录表 / 单章正文 / 样式 / 进度同一个判据。
+        # 纯 MOBI6 的正文是纯文本（不含 `<img>` 改写），走不到这里；真来了也是 404。
+        target, _kind = mobicache.read_target(b, path=src)
+        if target is None:
+            raise HTTPException(404, "资源不存在")
+        src = target
     data = None
     name = ""
     try:
-        with zipfile.ZipFile(pathlib.Path(raw)) as z:
+        with zipfile.ZipFile(src) as z:
             name = _asset_entry(z, p)
             if name:
                 data = z.read(name)
@@ -2913,7 +2924,14 @@ def api_epub_css(bid: str, request: Request):
     if not b:
         raise HTTPException(404, "书籍不存在")
     path = pathlib.Path(str(b.get("path") or ""))
-    if path.suffix.lower() != ".epub":
+    if path.suffix.lower() in mobicache.EXTS:
+        # 第 110 期：MOBI / AZW3 直读 —— KF8 解包出的是**真 EPUB**，书内样式照给；
+        # 纯 MOBI6 没有书内样式（如实回空串，前端回落自有排版，与"取不到样式不是错误"同款）。
+        target, kind = mobicache.read_target(b, path=path)
+        if kind != "epub" or target is None:
+            return {"css": "", "sheets": [], "fixed_layout": False}
+        path = target
+    elif path.suffix.lower() != ".epub":
         return {"css": "", "sheets": [], "fixed_layout": False}
     tok = _request_token(request)
     fp = cache.fingerprint(path)
@@ -3699,6 +3717,30 @@ def api_book_chapter(bid: str, index: int, request: Request):
         if info and isinstance(out, dict):
             return {**out, "text_encoding": info}
         return out
+    if suffix in mobicache.EXTS:
+        # 第 110 期：MOBI / AZW3 / AZW **直读**（解包，不转换，见 `core/mobicache.py`）。
+        # 两条路线，判据只有一处（`mobicache.read_target`）：
+        # · KF8（解包出 EPUB）⇒ **完全复用** EPUB 那条链路（目录 / 插图 / 书内样式 /
+        #   CFI 精确位置 / 批注全部照旧）。指纹传**解包产物**而不是源 .mobi —— 与 TXT
+        #   派生路线同一条纪律：缓存键必须跟着**被读的字节**走。
+        # · 纯 MOBI6（解包出 HTML）⇒ 与 TXT 原生分章同一条路（`kind="native"`）。
+        target, kind = mobicache.read_target(b, path=path)
+        if kind == "epub":
+            return _chapter_cached(bid, index, target, "epub",
+                                   lambda: library.chapter_html(target, index, bid), token=tok)
+        if kind == "html":
+            st = mobicache.state()
+            # 指纹看不出来的那部分输入：本模块的规则版本 + 解包器版本（解包产物本身也会因
+            # 重建而换 mtime，但"同一份产物、换了分章口径"这一情形只有版本进键才判得出）
+            return _chapter_cached(bid, index, target, "native",
+                                   lambda: mobicache.chapter_html(b, index, path=path),
+                                   extra=f"v{mobicache.RULE_VERSION}:m{st.get('version') or ''}",
+                                   token=tok)
+        # 读不了 ⇒ **如实**分开说：缺解包能力（503，与 CBR 缺 bsdtar 同款）还是这本书
+        # 解不开（422）。绝不回一句含糊的「仅 EPUB / TXT 支持在线阅读」。
+        if not mobicache.state().get("available"):
+            raise HTTPException(503, f"服务器缺少 MOBI 解包能力（需 {mobicache.PKG_NAME}）")
+        raise HTTPException(422, mobicache.unreadable_reason(b, path=path))
     if suffix != ".epub":
         raise HTTPException(400, "仅 EPUB / TXT 支持在线阅读")
     return _chapter_cached(bid, index, path, "epub",
@@ -3720,7 +3762,16 @@ def _progress_file(b: dict, file_rel: str) -> tuple:
     """
     if not file_rel:
         # 书级：沿用原来的判据（`format` 而不是扩展名）—— 老路径的行为不动它
-        return library.root_of(b) / b["name"], (b.get("format") or "").upper() == "EPUB"
+        target = library.root_of(b) / b["name"]
+        if target.suffix.lower() in mobicache.EXTS:
+            # 第 110 期：MOBI / AZW3 的读目标是**解包产物**（KF8 出 EPUB）⇒ CFI 照常按它算
+            # （精确位置不丢）。解不出来（缺解包器 / 坏书 / 纯 MOBI6 出 HTML）⇒
+            # 不生成 CFI 并如实回落「章 + 全书百分比」，**进度本身照常落库**。
+            unpacked, kind = mobicache.read_target(b, path=target)
+            if kind == "epub" and unpacked is not None:
+                return unpacked, True
+            return None, False
+        return target, (b.get("format") or "").upper() == "EPUB"
     try:
         target = fileops.safe_path(file_rel, b.get("library_id"))
     except ValueError:

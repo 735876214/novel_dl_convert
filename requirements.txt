@@ -51,3 +51,13 @@ psycopg[binary]>=3.2
 # 缓存层（第 62 期阶段 C）：`NOVELFORGE_REDIS_URL` 不设时**整层是空操作**，
 # 所以离线环境同样不装也能跑全量。纯 Python，无系统库依赖。
 redis>=5.0
+# MOBI / AZW3 / AZW **直读**（第 110 期）：解包（**不是**转换）书自身的 KF8 内容，交给既有
+# EPUB 阅读链路。唯一执行处是 `core/mobicache.py`；解包产物落 `CACHE_DIR/mobi-unpack/`，
+# 不进书库、不写回源文件。
+# **它不是硬依赖**：缺了由 `mobicache.state()` 如实标 `available:false`，MOBI 章节接口回
+# 503「服务器缺少 MOBI 解包能力（需 mobi）」——**绝不假装能读**（与缺 bsdtar 时 `.cbr`
+# 报 503 同一条纪律）。纯 Python wheel，无系统库依赖。
+# ⚠️ 许可证是 **GPL-3.0-only**：它是**进程内 import** 的，于是本项目整体按 **AGPL-3.0**
+# 分发（既有依赖 `EbookLib` 也是 AGPL-3.0）。见根目录 `LICENSE` 与
+# `THIRD-PARTY-NOTICES.md`，改这一条之前先读那两个文件。
+mobi>=0.4.1

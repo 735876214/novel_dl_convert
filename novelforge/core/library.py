@@ -45,7 +45,7 @@ from . import audio, audio_meta, comics, db, metadata, reading_list, units, zipk
 # 单个音频文件也算一本书；「音频目录」（一章一文件）由 _iter_book_entries 单独识别。
 # ⚠️ 第 87 期：`.zip` 也在列 —— 它是**通用容器**，真实形态由 `core/zipkind.py` 按内容分派
 # （里面是图片就按漫画读、是一份 EPUB/PDF 就记成需要展开、判不出就如实报无法解析）。
-BOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".cbz", ".cbr", ".zip",
+BOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".pdf", ".txt", ".cbz", ".cbr", ".zip",
              *audio.AUDIO_EXTS)
 
 #: 扫描口径版本。**凡能改变「条目边界」或卡片字段口径的改动都要 +1**：
@@ -62,7 +62,10 @@ BOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".cbz", ".cbr", ".zip",
 #: `catalog` 拿这个数与 `app_state` 里的标记（**按库**）比对，不一致就把该库的下一轮
 #: 刷新**当成 force**，全量重探一次后写回标记（见 `catalog` 里「扫描口径版本」那段）。
 #: 第 72 期在派生件那边踩过同一个坑（`pipeline.ENCODING_RULE_VERSION`）。
-SCAN_RULE_VERSION = 2
+#: 第 110 期一处 —— ④ `.azw` 进白名单（`BOOK_EXTS` / `_EBOOK_EXTS`）：此前它**不是书**
+#: （扫描时被忽略），现在是一本可直读的 MOBI 家族书 ⇒ **条目边界变了**，存量库里那些
+#: `.azw` 文件不 +1 就永远不会被重探（它们此前连索引行都没有）。
+SCAN_RULE_VERSION = 3
 
 # 可能作为封面出现的图片扩展名
 _COVER_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
@@ -1550,7 +1553,7 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None, ltype=None) -> 
 # ⚠️ 收进来 ≠ 当成漫画：里面是别的文档 / 嵌套 / 坏包时一律记「无法解析」，
 # 于是它在「待修复」里看得见，而不会被静默忽略。
 _COMIC_EXTS = (".cbz", ".cbr", ".pdf", ".zip")
-_EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".zip")
+_EBOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".pdf", ".txt", ".zip")
 
 
 def _exts_for_type(ltype) -> tuple:
@@ -2242,7 +2245,16 @@ def book_detail(name: str, library_id=None) -> dict | None:
         ep = txtcache.derived_epub(b, path=path, root=root)
         chapters = _reading_list(ep) if ep else txtcache.native_chapters(b, path=path, root=root)
     else:
-        chapters = []
+        # 第 110 期：MOBI / AZW3 / AZW **直读**（解包，不转换，见 `core/mobicache.py`）。
+        # KF8 路线的目录与真 EPUB 同源 —— `mobicache.chapters` 内部就是拿解包出的 EPUB
+        # 喂 :func:`_reading_list`，所以目录 / 批注 / 进度的坐标系与 EPUB 完全一致。
+        #
+        # ⚠️ 延迟导入**必须在本分支的第一行**：写成 `elif suffix in mobicache.EXTS:` 的话，
+        # 函数里那句 `from . import mobicache` 会把 `mobicache` 变成**局部名**，而条件表达式
+        # 先求值 ⇒ `UnboundLocalError`（实测在详情接口上全线 500）。扩展名清单仍只认
+        # `mobicache.EXTS` 这一处真值源，所以判据放在导入之后。
+        from . import mobicache     # 延迟导入：本模块顶层 import 它会与它反向依赖
+        chapters = mobicache.chapters(b, path=path, root=root) if suffix in mobicache.EXTS else []
     # 第 85 期批次 B：本地目录「不清楚」时，套用正版书城取回的那份（只改标题与卷名）
     chapters, toc_items, toc_applied = _toc_apply(b, chapters)
     files = []
