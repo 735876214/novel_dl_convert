@@ -81,6 +81,16 @@
 > ⚠️ 工具链变动记在 §7.8 ④：`agent-browser` 在本机**已不可用**（会挂住不返回），
 > 改用本机 Edge 的 CDP 无头截图；PNG 仍**不入库**。
 
+- [ ] **`.rar` / `.7z` 容器、FB2、容器自动展开仍未做（第 110 期计划的阶段②③④，等用户确认范围）** ——
+  第 110 期只交付了阶段①（MOBI/AZW3/AZW 直读）。原始需求（用户 m00001「mobi、zip、rar 等格式直接阅读」）
+  里 **`.rar` / `.7z` 至今不在任何白名单**（`library.BOOK_EXTS` 只有 `.cbr`）⇒ 它们连「入库」都不发生，
+  **不是**「入库了打不开」。已定过的路线（见第 110 期计划，未实施）：`zipkind.CONTAINER_EXTS` 扩
+  `.rar`/`.7z` 后按内容分派（图片档归一 `CBZ`，与第 87 期的 `.zip` 同一条路）；`.7z` 用 `py7zr`
+  （纯 Python、跨平台、可写 ⇒ 测试能自己造样本）；`.rar` 复用 `core/comics.py` 既有的 rarfile + bsdtar
+  路线（缺 bsdtar 时如实 503）；FB2（`.fb2`）用 `fb2reader` + lxml 直读。
+  ⚠️ 第④项「容器自动展开进书库目录」与 `frontend/src/components/tools/LibraryCopiesPanel.vue:9-11`
+  现存的注释纪律**相反**（原文：「一个按钮对应一次**显式动作**，不做自动展开 —— 它会往用户的库目录里写字，
+  必须由人按下去」）⇒ **要先用户拍板**，动手就得同批改写那条注释与界面文案。
 - [ ] **演播者（`narrators`）：Audnexus 未接线**（第 103 期真机探活后挂起，不是忘了）——
   本期只接了**真机核过**的 Audible（`narrators` 是顶层键，每项 `{"name": …}`，Dune 12 位实测）。
   `novelforge/core/metasources.py` 的 `_audnexus_entry` docstring 自称「`authors`/`narrators` 都是对象数组」
