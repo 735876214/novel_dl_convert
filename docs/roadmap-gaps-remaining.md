@@ -7349,11 +7349,29 @@ docker/setup-buildx-action@v3, docker/setup-qemu-action@v3
 - 契约测试 2 例通过；**YAML 仍可解析**（`yaml.safe_load` 后回读每步的 `uses:`，确认 6 处都是新版本）。
 - 后端全量 **2402 例（2376 passed / 26 skipped / 0 failed / 0 errors）**，265 s（+2 例 = 本期新增的契约测试）；
   **前端零改动** ⇒ 未跑四连，`git status` 确认 `frontend/` 下无改动。
-- **真判据是 CI 自己那一跑**（第 105 期的教训：本机怎么绿都不算数）—— 推送后核两件事：
-  ① `Build and Push Image` 与 `Release` 的 `conclusion == success`（镜像还得推得上去）；
-  ② 那条 Node 20 warning **确实消失**（只核 ① 不够：warning 还在就说明升级没生效）。
-  本机没有 `gh` ⇒ 走匿名 GitHub REST API + `git credential fill` 的本机 token 取 job 日志
-  （⚠️ 该端点返回**纯文本、不是 zip**）。
+- **真判据是 CI 自己那一跑**（第 105 期的教训：本机怎么绿都不算数）—— 推送后核两件事，**两条都已实核**：
+  ① 两个 workflow 都 `success`（镜像还得推得上去）；② 那条 Node 20 warning **确实消失**
+  （只核 ① 不够：warning 还在就说明升级没生效）。
+  本机没有 `gh`，匿名 REST 又撞 60 req/h 限额（`403 rate limit exceeded`）⇒ 改走**公开 HTML 页**
+  （不限流、**免鉴权**）：`/commit/<sha>/checks` 数 `aria-label="This job succeeded"`；
+  job 页里读注解块 `annotation-message.annotationContainer`。**全程不需要任何 token**。
+  （⚠️ 别为了取日志去 `git credential fill` —— 那会把本机 token 打进会话记录，已被安全策略拦下。）
+
+**实核结果**（sha `501f2fb`，即本期收尾那一笔）：
+
+| workflow | run / job | 结论 | 页上注解 |
+| --- | --- | --- | --- |
+| `Build and Push Image` | `37698936669` / `113057447732` | `This job succeeded` | **无 Node 20**；余 `ubuntu-latest → Ubuntu 26`（2026-10-19 生效）、`Process completed with exit code 22.` |
+| `Release` | `37698936523` / `113057447600` | `This job succeeded` | **无 Node 20**；仅 `ubuntu-latest → Ubuntu 26` |
+
+- `exit code 22` 这条**不是本期引入、也不是失败**：来自 `docker-image.yml:65` 的
+  `Ensure package is public`（`continue-on-error: true` + `curl -fsSL`，curl 的 **22 = HTTP 错误码**）。
+  升级前那一跑里同样挂着它 ⇒ 与本期的版本升级无关。
+- **对照取数**（同一 workflow、升级前那一跑 = 第 113 期 `ead28a0`，run `37641577302` / job `112861618305`）：
+  其 job 页**确有** `Node.js 20 is deprecated. … checkout@v4, build-push@v6, login@v3, setup-buildx@v3,
+  setup-qemu@v3` 这条注解，而升级后**同一条流里的同一取数点**上它没了
+  ⇒ 是前后对照，不是「碰巧没渲染」（两边的注解块都在，只是内容不同）。
+- ⚠️ 判「镜像推没推上去」**没用** `tags/list` —— GHCR 有缓存（第 109 期）；本期只核到 job 结论 `success`。
 
 ### 五、没做 / 没核过（如实声明）
 
