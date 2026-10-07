@@ -7124,13 +7124,13 @@ Build failed with 1 error:
 
 ### 六、没做的 / 没核过的（如实声明）
 
-- **没做**：`.rar` / `.7z` 容器（按内容分派 + 归一成 CBZ）、FB2 直读、容器自动展开进书库目录 —— 三项都在计划里，等用户确认阶段范围（**`.rar` / `.7z` 容器已在第 111 期交付**，见下一节；FB2 与容器自动展开仍未做）。
+- **没做**：`.rar` / `.7z` 容器（按内容分派 + 归一成 CBZ）、FB2 直读、容器自动展开进书库目录 —— 三项都在计划里，等用户确认阶段范围（**`.rar` / `.7z` 容器已在第 111 期交付**；**FB2 直读与容器自动展开已在第 112 期交付**，见末尾两节）。
 - **没核过**：① 真机实例（`http://127.0.0.1:8412`）上的端到端 —— 本期验证走的是测试内的真字节与假解包器，**真实 `.mobi` 的解包路径只有本机一次性脚本验过**（`unpackBook` 那一层没有被自动化用例覆盖，样本没进仓库）；② 纯 MOBI6 的**真实样本**没有（该分支只用「假解包器写 `mobi7/book.html`」验证过形态与降级行为）；③ Print Replica（出 PDF）那一类没有样本，代码路径存在但未实跑；④ 前端 `test:unit` 里那条既有 flaky 是否与并行度有关，本期没有进一步定位。
 
 ## 第 111 期（.rar/.7z 容器按内容分派）
 
 > **需求来源**：`User said (m00001)：梳理增加对 mobi、zip、rar等格式书籍直接阅读的能力` —— 第 110 期交付了 MOBI 直读，本期补齐**容器**那一半；`User said (m00875)：「接着做阶段②」`。
-> **范围**：只做「`.rar` / `.7z` 按内容分派」。计划的阶段③（FB2 直读）与④（容器自动展开）**没做** —— ④与前端 `LibraryCopiesPanel.vue:9-11` 的「必须由人按、不做自动展开」纪律相反，要先用户拍板。
+> **范围**：只做「`.rar` / `.7z` 按内容分派」。计划的阶段③（FB2 直读）与④（容器自动展开）**本期没做** —— ④与前端 `LibraryCopiesPanel.vue:9-11` 的「必须由人按、不做自动展开」纪律相反，要先用户拍板（**两项已在第 112 期交付**，见末尾一节）。
 
 ### 一、根因：另外两个壳**连入库都不发生**
 
@@ -7154,3 +7154,47 @@ Build failed with 1 error:
 
 - **没做**：③ FB2（`.fb2`）直读 —— `.fb2` 已在 `zipkind._DOC_FORMATS` 与 `pipeline.EBOOK_EXT` 里，但**没有阅读入口**（要 `fb2reader` + lxml 解析章节）；④ 容器自动展开进书库目录（与前端既有「必须由人按」纪律相反，需用户拍板）。
 - **没核过**：① 真实 `.rar` 的端到端（无样本 + 本机无可用解压器）；② `.7z` 的**真实大包**（用例是现场造的小包，`BytesIOFactory` 的 limit 只按条目大小给）；③ 真机实例（`http://127.0.0.1:8412`）上把 `.rar` / `.7z` 放进库走一遍界面。
+
+## 第 112 期（FB2 直读 + 容器自动展开）
+
+> **需求来源**：第 110 期计划里剩下的**阶段③④**（`docs/TODO.md` P1 那条「等用户确认」）。用户本轮拍板（`AskUserQuestion`）三项：
+> ① FB2 做**完整深度** —— 归一成**派生 EPUB**（目录 / 插图 / 封面 / 精确进度全要）；
+> ② 容器自动展开**默认开启、可关**；③ 展开成功后**源容器原样保留**（只新增文件，不移动也不删）。
+> **范围**：`novelforge/core/fb2cache.py`（新）+ 上架白名单与五个读点接线 + `watcher._auto_unpack_tick()` + 前端两处。
+
+### 一、FB2：把「单文件 XML」当成一份**能够组装出来的 EPUB**
+
+**根因**：`.fb2` 此前处在**最难排查的那一档** —— 它已在 `zipkind._DOC_FORMATS`、`pipeline.EBOOK_EXT`、`library_rules._EBOOK_EXT` 里（下载/发布链路认得它），却**不在 `library.BOOK_EXTS`**：用户把 `.fb2` 丢进书库，得到的不是「打开失败」，而是**书架上看不见它**，界面上一个字都不提。
+
+**修法（核心决定）**：FB2 是自带章节（`<section><title>`）、插图（`<binary>` + `<image l:href="#id">`）、封面（`<coverpage>`）的**单文件 XML** ⇒ 解析后**组装一份派生 EPUB**，落在 `CACHE_DIR/fb2-epub/<book_id>/derived.epub`，于是整条既有 EPUB 链路**零新代码复用**：目录（`library._reading_list`）、单章（`library.chapter_html`）、书内插图（`chapter_assets` + `_rewrite_assets` 把 `<img src="images/x.jpg">` 改写成 asset 接口）、书内样式、**精确 CFI** 与批注全部照常。落点与 `mobicache` / `txtcache` **同形态**：派生缓存，**不进书库、不新增书目条目、不写回源文件**（源全程只读，临时目录 + `Path.replace` 原子换入）。
+
+- **不引新依赖**：用 stdlib `xml.etree.ElementTree`。已评估 `fb2reader`（Apache-2.0）并**否决** —— 它只是**元数据抽取器**，`save_body_as_html` 写的是 `soup.prettify()` 出来的**原始 FB2 XML**（不是 HTML），正文无论如何都要自己解析 ⇒ 为省约 40 行元数据代码引一个依赖不划算。`lxml` 只作为**可选兜底**（`ET` 抛 `ParseError` 时用 `XMLParser(recover=True)` 重试一次），**没装只是少一层兜底，不是 503**。
+- **诚实闸放在「读不出」上**：解析器是 stdlib，永远在 ⇒ **没有 503 路径**；文件读不出（根不是 `FictionBook` / 没有 `<body>` / XML 两头都解析失败）一律 **422**，不 500、不假装能读。
+- **缓存不变式**：`state.json` 记 `源指纹(mtime_ns:size) + RULE_VERSION + recover`。`status:"failed"` 且指纹一致 ⇒ **locked**（源没变不重试）；`recover` 分量是**自愈钩子** —— 先前因无 lxml 而锁定的文件，装了 lxml 后指纹没变也会重建（只记指纹则永远锁死）。
+- **章节切法**：递归走 `<body>` 的 `<section>`，**有 `<title>` 的 section = 一章**；收尾后丢掉「正文既无可见文字又无 `<img>`」的章（"第一部"这类纯容器不占一章），再给无标题章补 `第 N 章`（**过滤之后**编号 ⇒ 0 基且连续）。`<body name="notes">`（脚注）本期**跳过**（如实记在「没做」）。
+- **封面**：扫描期用 `fb2cache.has_embedded_cover()` 做**廉价头部扫描**（读前 ~256KB 找 `<coverpage`）置 `has_cover`，**不做整本解析**；真读封面时走 `api_book_cover` 的既有 EPUB 内嵌封面路径。
+- **单一读目标判据不破**：`fb2cache.read_target()` 是唯一一处判「这本书该读哪个文件」，五个读点（详情页目录 / 单章 / 书内资源 / 书内样式 / 进度 CFI）**都问它**，与 `mobicache` 同款。
+
+### 二、容器自动展开：把「必须由人按」改成「默认帮你按，但只做加法」
+
+**口径修订（如实记录）**：此前六处文档/代码写着「**不做自动展开 —— 它会往用户的库目录里写字，必须由人按下去**」（`LibraryCopiesPanel.vue:9-11`、`TODO.md`、第 110/111 期 roadmap 段、能力矩阵）。用户本轮拍板**默认开启、可关、源容器保留** ⇒ 那条纪律**作废并同批改写**（不是「加了例外」，而是口径变了）。
+
+- **触发点**：`watcher.FolderWatcher._auto_unpack_tick()`，跑在**既有监听线程**里（`_catalog_tick()` 之后），**不新起线程** —— 不给 `tests/conftest.py::_quiesce_background` 的收尾清单添条目。节流到 `index_interval`（默认 60s）：展开要开归档，绝不能每轮 tick 都跑。
+- **动作**：对 `format ∈ zipkind.CONTAINER_FORMATS`（`ZIP`/`RAR`/`7Z`）的书调既有的安全原语 `zipkind.unpack(path)`（默认 `remove_source=False` ⇒ **源容器保留**；临时 `.part` + `replace`、**撞名跳过不覆盖**、**从不 `unlink`**）。**不用** `library.container_books()` —— 那个每条都开归档，在这里等于每轮把所有容器解一遍。
+- **幂等**：每个容器的**源指纹**记进 `app_state`（键 `autounpack:{bid}`），指纹没变就跳过；**无论成败都记指纹** ⇒ 坏包不会每轮刷屏，而容器不可变 ⇒ 源一改指纹就变、自然重试。
+- **成功之后**：`library.invalidate(lib_id)`（新文件下一轮被索引）+ `activity_log` 记一条（`source="autounpack"`，文案明说「源容器保留」）。整段 `try/except` 包住 —— 旁路功能绝不连累监听主循环。
+- **可关**：`config.DEFAULTS["libraries"]["auto_unpack"] = True`；`server.EDITABLE` **加回**这一个键（`libraries` 自第 77 期起无可编辑键，注释同批改）；`GET /api/config` 的**硬编码键列表**同批补（三处同步点）。`GET /api/library-containers` 直接下发 `auto_unpack`，前端面板不必再拉 `/api/config`。保存后 `_apply_watcher_config()` 刷新 `WATCHER.cfg` ⇒ **热生效**。
+- **前端**：`LibraryCopiesPanel.vue` 顶部加「自动展开新容器」开关（初值取清单接口），那条「不做自动展开」的注释**改写**；手动「展开」按钮**保留**（自动失败的容器兜底）。
+
+### 三、实测证据与核验
+
+- `.fb2` 上架：`BOOK_EXTS` + `_EBOOK_EXTS` 收 `.fb2`（**只归电子书**，不进漫画/有声书库）；`SCAN_RULE_VERSION` **4 → 5**（存量库下一轮全量重探一次 —— 那些 `.fb2` 此前**连索引行都没有**，不 +1 就永远不会被重探）；`pipeline.EBOOK_EXT` 与 `server._ANY_MEDIA_EXTS` 同步补（否则「能入库却上传 400」）。
+- 契约连带：`tests/test_units_scan.py` 的 `SCAN_RULE_VERSION == 4` 硬断言同批改 `== 5`；`tests/test_zip_unpack.py::test_待展开清单接口形状稳定` 的**精确键集**断言加了 `auto_unpack`（这正是那道契约的用途）。
+- 新增 `tests/test_fb2_reader.py` **17 例**（用例内直接写真 FB2 XML 字节，**不依赖第三方样本、不假解包器**）：上架与格式判定；头部扫描认封面；整条派生链路（目录标题取自 `<title>` 且 index 连续 0 基、`<em>`/`<strong>`/`<s>`/`class="subtitle"`/`<blockquote>`/`<br/>`、插图经 asset 接口取到的字节与 `<binary>` **逐字节相同**、封面 == `<coverpage>`、书内样式通道、进度 CFI 非空）；**源文件 size/mtime 与书库目录逐字节不变**；脚注 body 跳过；HTML5 具名实体；坏 base64 跳过；书名回退文件名；二次请求**只构建一次**（缓存命中）；`RULE_VERSION` 升级触发重建；`recover` 自愈重建（lxml 缺失时 skipif）；坏 FB2 → **422 且锁定不重试**；非 `FictionBook` 根 → 422；产物被手工删掉 → 视同未命中（不是错误）；asset 路径穿越 → 404；非 `.fb2` no-op；超大小上限 → 422。
+- 新增 `tests/test_auto_unpack.py` **15 例**（`py7zr` 可现场造**真 `.7z`**）：默认开启就展开且**源保留**；关掉不展开；**缺键时默认 True**（默认值真值源钉在 `config.DEFAULTS`）；**幂等**（第二轮不再动、`state_get` 标记生效，源一改就重试）；坏容器标记后不阻塞；**撞名不覆盖**；判据 `CONTAINER_FORMATS == {"ZIP","RAR","7Z"}` 与 `CONTAINER_EXTS == (".zip",".rar",".7z")`（**`.rar` 只测判据、绝不伪造归档**）；配置可写可回显（`PUT /api/config` → `GET` → `libraries.auto_unpack`；`libraries.index_interval` **不在**可编辑集里）；**热生效**（monkeypatch `server.WATCHER` + `config.load_config`）；展开后 `library.invalidate` 让新文件被索引；**没有新起线程**；只往容器自己所在目录写；一轮只展开**一层**（嵌套包下一轮按新书处理）；手动 `zipkind.unpack` 默认仍是 `remove_source=False`。
+- 后端全量 **2398 例（2372 passed / 26 skipped / 0 failed）**；前端 **69 spec / 717 例**全绿、`vue-tsc --build --force` / `build` / `deploy` 均 exit 0。
+
+### 四、没做 / 没核过（如实声明）
+
+- **没做**：① FB2 的 `<body name="notes">` 脚注与正文里的悬空脚注锚（`<image>` 之外的 `<a l:href="#…">` 现退成纯文本）；② FB2 元数据（书名/作者/语言仍按**文件名**，与 MOBI/TXT 同口径 —— `<description>` 解析出来只喂给了派生 EPUB 的 `<dc:*>`，**不进书目**）；③ 自动展开只解**一层**（嵌套包靠下一轮按新书处理，不做递归深度控制）。
+- **没核过**：① **真机实例**（`http://127.0.0.1:8412`）上把 `.fb2` 与容器各丢一份进库、走一遍界面（本期验证全在自动化用例里：真字节的 FB2 与现场造的真 `.7z`，**没有在跑着的实例上看过一眼**）；② 真实**大 `.fb2`**（用例是 KB 级，200MB 上限那条只测了拒绝路径）；③ 真实 `.mobi` 之外的**真 FB2 书**（用例都是自己写的 XML；见过的最复杂输入是带命名空间与 HTML5 实体的那种）。
