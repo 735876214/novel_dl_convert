@@ -92,7 +92,7 @@ const state = useWidgetState(() => ({
       <span class="min-w-0 truncate text-[10.5px] text-muted-foreground tabular-nums">
         已 {{ daysAgo }} 天未继续 · 读到 {{ Math.round(gem.percent ?? 0) }}%
       </span>
-      <!-- 不能读也不能听的格式（如 MOBI）不给入口 —— 灰置等于承认「本该有但不给你」 -->
+      <!-- 不能读也不能听的格式（如未归一成书的 ZIP 容器）不给入口 —— 灰置等于承认「本该有但不给你」 -->
       <button
         v-if="target"
         type="button"

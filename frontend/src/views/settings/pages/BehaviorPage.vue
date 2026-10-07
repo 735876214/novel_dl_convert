@@ -45,7 +45,7 @@ function setCollapseSeries(v: boolean): void {
         <div class="min-w-0 flex-1">
           <div class="text-[13px] font-medium text-foreground">缩略图点击</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
-            点书卡封面后先去哪儿。打不开的格式（MOBI、有声书等）仍会进详情页。
+            点书卡封面后先去哪儿。打不开的格式（如未归一成书的 ZIP 容器）仍会进详情页。
           </div>
         </div>
         <div

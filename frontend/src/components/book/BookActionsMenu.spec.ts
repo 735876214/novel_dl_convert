@@ -295,8 +295,12 @@ describe('BookActionsMenu：哪些项出现', () => {
     // 有声书整本是一个目录，`files[]` 为空 ⇒ 没有可下的单个文件。
     // 「下载」整条不出现（属**少给**，不是错给 —— 点下去 404 才是错给）
     { format: 'AUDIO', has: ['收听'], lacks: ['阅读', '下载'] },
-    // MOBI 在线读不了：点了只会得到一句「点不了」，所以两项都不给，只留下载与详情
-    { format: 'MOBI', has: ['下载', '书籍详细信息'], lacks: ['阅读', '收听'] },
+    // MOBI / AZW3 / AZW 第 110 期起可直读（后端解包，见 `core/mobicache.py`）⇒ 与 EPUB 同列
+    { format: 'MOBI', has: ['阅读', '下载'], lacks: ['收听'] },
+    { format: 'AZW3', has: ['阅读', '下载'], lacks: ['收听'] },
+    // 仍读不了的是**没归一成书的容器**（ZIP 里既不是图片档也认不出文档 ⇒ 后端标「无法解析」）：
+    // 点了只会得到一句「点不了」，所以「阅读」不给，只留下载与详情
+    { format: 'ZIP', has: ['下载', '书籍详细信息'], lacks: ['阅读', '收听'] },
   ]
 
   for (const c of CASES) {
@@ -396,11 +400,11 @@ describe('BookActionsMenu：在线阅读入口（第 93 期）', () => {
     expect(panel()).toBeNull()
   })
 
-  it('本地读不了的书（MOBI）照样给「在线阅读」—— 它是唯一的阅读入口', async () => {
+  it('本地读不了的（ZIP 容器）照样给「在线阅读」—— 它是唯一的阅读入口', async () => {
     m.onlineStatus.mockResolvedValue(makeOnline({
       bound: true, source: 'stub-src', url: 'https://example.test/page/1', available: true,
     }))
-    const w = await mountMenu(makeCard({ format: 'MOBI' }))
+    const w = await mountMenu(makeCard({ format: 'ZIP' }))
     await openMenu(w)
 
     const items = menuItems()

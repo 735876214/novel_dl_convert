@@ -45,10 +45,13 @@ export function isDirEntry(b: Formattable): boolean {
  * - EPUB / TXT：章节流（TXT 自第 55 期起走派生 EPUB 或原生分章，见后端 `txtcache`）
  * - PDF / CBZ / CBR：由各自阅读器就地处理
  * - UNITS（第 73 期）：序号单元合集，由 `UnitsReader` 逐话读（每话按种类换阅读器）
+ * - MOBI / AZW3 / AZW（第 110 期）：后端**直读解包**（不转换，见 `core/mobicache.py`）——
+ *   KF8 解包出的是真 EPUB，走与 EPUB **完全相同**的链路；纯 MOBI6 走原生分章
  *
- * MOBI / AZW3 之类**不在**其中：转换是另一条流水线的事，点开只会得到一句「点不了」。
+ * 仍**不在**其中的是**没归一成书的容器**（例如 `.zip` 里既不是图片档、也认不出文档 ⇒
+ * 后端如实标「无法解析」）与读不出的坏书：点开只会得到一句「点不了」，后端如实报错。
  */
-export const READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'UNITS'])
+export const READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'MOBI', 'AZW3', 'AZW', 'UNITS'])
 
 /**
  * 「浏览行为 → 缩略图点击」选「直接阅读」时认的格式。
@@ -60,8 +63,12 @@ export const READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'TXT', 'UNIT
  * `UNITS`（第 73 期）**在**这里面：它与 PDF / 漫画同属「点开就是内容」的书，而且
  * 改造前这套形态在书架上就是一堆 PDF / 漫画条目 —— 不纳入的话，同一批书升级后会
  * 从「点卡片直接读」变成「点卡片进详情页」，那是用户没要求的行为倒退。
+ *
+ * `MOBI` / `AZW3` / `AZW`（第 110 期）**在**这里面：它们此前不在，唯一原因是「读不了」
+ * （转换是另一条流水线的事），只能进详情页；第 110 期直读落地后它们**有内容可读了**，
+ * 再让封面绕道详情页就与这个设置的字面语义（「点缩略图直接阅读」）相反。
  */
-export const THUMBNAIL_READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'UNITS'])
+export const THUMBNAIL_READER_FORMATS = new Set(['EPUB', 'PDF', 'CBZ', 'CBR', 'MOBI', 'AZW3', 'AZW', 'UNITS'])
 
 export interface OpenTarget {
   /** 按钮文案：有声书是「收听」，其余是「阅读」 */

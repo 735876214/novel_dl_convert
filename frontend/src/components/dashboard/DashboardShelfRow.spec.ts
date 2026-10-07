@@ -11,9 +11,13 @@ import { useLibraryStore } from '@/stores/library'
  * 仪表盘点封面 = **直接读**（第 108 期，用户口径）。
  *
  * 第 83 期这里是「先弹一层快速预览浮层」，要多点一次才进得去正文。撤掉浮层之后
- * 最怕的不是「少了个功能」，而是**点上去没反应** —— 读不了的格式（MOBI / AZW3）
- * 必须落到详情页，不能静默什么都不做。所以三条用例按格式把三条去路钉死：
+ * 最怕的不是「少了个功能」，而是**点上去没反应** —— 读不了的格式必须落到详情页，
+ * 不能静默什么都不做。所以用例按格式把三条去路钉死：
  * 能读的进阅读器、有声书进听书器、其余的进详情页。
+ *
+ * ⚠️ 第 110 期起 **MOBI / AZW3 / AZW 属于「能读的」**（后端直读解包，见
+ * `core/mobicache.py`），此前它们在这里是「读不了 ⇒ 详情页」的样例 —— 那条例子的
+ * 判据改由**没归一成书的容器**（`ZIP`）承担（它仍读不了）。
  *
  * ⚠️ 浮层里那四个管理动作（收藏 / 编辑元数据 / 移动书库 / 删除）**刻意**从仪表盘退场
  * （仪表盘只做快速启动器，书架页与详情页各自都有），所以这里也断言「点了不再有 dialog」——
@@ -89,20 +93,40 @@ describe('DashboardShelfRow：点封面直接读（第 108 期）', () => {
     w.unmount()
   })
 
-  it('MOBI（读不了）⇒ 落到详情页 /book/:id，不许点了没反应', async () => {
+  it('MOBI ⇒ 一次点击直接进阅读器 /read/:id（第 110 期直读落地后不再是「读不了」）', async () => {
     const w = await mountRow([book({ id: 'mobi-1', format: 'MOBI' })])
 
     await w.get('button.shelf-cover-enter').trigger('click')
     await flushPromises()
 
-    expect(router.currentRoute.value.path).toBe('/book/mobi-1')
+    expect(router.currentRoute.value.path).toBe('/read/mobi-1')
+    w.unmount()
+  })
+
+  it('AZW3 / AZW 与 MOBI 同一套直读 ⇒ 也进阅读器', async () => {
+    const w = await mountRow([book({ id: 'azw3-1', format: 'AZW3' })])
+
+    await w.get('button.shelf-cover-enter').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/read/azw3-1')
+    w.unmount()
+  })
+
+  it('读不了的（ZIP 容器没归一成 CBZ）⇒ 落到详情页 /book/:id，不许点了没反应', async () => {
+    const w = await mountRow([book({ id: 'zip-1', format: 'ZIP' })])
+
+    await w.get('button.shelf-cover-enter').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/book/zip-1')
     w.unmount()
   })
 
   it('每本书各点各的（判据按被点的那本取值，不是「第一本」）', async () => {
     const w = await mountRow([
       book({ id: 'a-1', format: 'EPUB' }),
-      book({ id: 'a-2', format: 'MOBI' }),
+      book({ id: 'a-2', format: 'ZIP' }),
     ])
 
     const covers = w.findAll('button.shelf-cover-enter')

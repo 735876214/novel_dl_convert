@@ -205,14 +205,23 @@ describe('BookPreviewDialog', () => {
     expect(labels).not.toContain('下载')
   })
 
-  it('MOBI：既不能读也不能听，但「下载」与「详细信息」都在', async () => {
-    const w = await mountDialog(makeBook({ format: 'MOBI', has_cover: false }))
+  it('ZIP（容器没归一成书）：既不能读也不能听，但「下载」与「详细信息」都在', async () => {
+    const w = await mountDialog(makeBook({ format: 'ZIP', has_cover: false }))
     const labels = w.findAll('button').map((b) => b.text().trim())
 
     expect(labels).not.toContain('阅读')
     expect(labels).not.toContain('收听')
     expect(labels).toContain('下载')
     expect(labels).toContain('详细信息')
+  })
+
+  it('MOBI（第 110 期起可直读）：给「阅读」，且与「下载」并存', async () => {
+    const w = await mountDialog(makeBook({ format: 'MOBI', has_cover: false }))
+    const labels = w.findAll('button').map((b) => b.text().trim())
+
+    expect(labels).toContain('阅读')
+    expect(labels).not.toContain('收听')
+    expect(labels).toContain('下载')
   })
 
   it('「详细信息」把书一起 emit 出去（父组件不必猜浮层里是谁）', async () => {
