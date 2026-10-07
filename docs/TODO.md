@@ -4,57 +4,32 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-07 —— 第 112 期**FB2 直读 + 容器自动展开**：
-第 110 期计划里剩下的阶段③④一次做完 —— `.fb2` 解析成**派生 EPUB**（目录 / 插图 / 封面 / 精确进度**全复用既有 EPUB 链路**，不引新依赖），打
-进库的 `.zip` / `.rar` / `.7z` 容器由后台**默认自动展开**（可关；只在容器所在目录新增文件，**源容器原样保留**）。
-历史：第 111 期 `.rar` / `.7z` 容器按内容分派（三个壳一套判据、图片档归一 CBZ）；`VERSION` = **1.3.0**（第 112 期里程碑：FB2 直读 + 容器自动展开）。
+**最后更新**：2026-10-07 —— 第 113 期**Audible `subtitle` 接线；TODO §0 精简**：
+把 Audible 的**顶层 `subtitle`** 接进抓取线（`subtitle` 自第 63 期就整套建模好了 —— 缺的只是候选结构那一处，
+所以净改动只有 `metasources.py` 两行 + `config.py` 一个默认值，前端零改动）；默认写入策略由 `overwrite` 改成
+`fill_only`（此前**从没有源填过它**，一直是空转）。顺手把本文件 §0 从 46 行压到 13 行 —— 本机陷阱一律指向
+`AGENTS.md` §5，不在这里重抄一份。
+历史：第 112 期 FB2 直读 + 容器自动展开；`VERSION` 仍 `1.3.0`（本期**不发版**，无 `CHANGELOG` 段、无 Release）。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口 + 第 105 期 CI 镜像构建修复 + 第 106 期记忆体系精简（收尾只写两处） + 第 107 期自动化收尾：落位器 + 三方对账 + 第 108 期仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关 + 第 109 期发版 V1.0.0：把第 95–108 期的积累一次性发布 + 第 110 期MOBI/AZW3/AZW 直读（解包，不转换） + 第 111 期.rar/.7z 容器按内容分派 + 第 112 期FB2 直读 + 容器自动展开；`VERSION` = **1.3.0**
-  `VERSION` = `1.3.0`（第 112 期里程碑「FB2 直读 + 容器自动展开」；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，**按里程碑发版**）——
-  单一真值源，`GET /health` 下发。
-  `CHANGELOG.md` 最新段 = `V1.3.0 — 2026-10-07`（发布后 GitHub Release 的 notes 就取这一段原文）。
-- 测试基线（第 112 期实测）：后端 **2398 例（2372 passed / 0 failed / 0 errors / 26 skipped）**，全量 414 s；
-  前端 **69 spec / 717 例**（第 112 期实测 **69 files / 717 passed**、exit 0；第 110 期那次曾命中既有 flaky
-  `frontend/src/components/book/detail/ReadingLogTab.spec.ts`「接口失败 → 给重试」全量并行下 5 s 超时，
-  单跑 12 passed，与改动无关；第 104 期起就有这条记录）；`vue-tsc --build --force` exit 0。
-  ⚠️ 本期前端只动了两处数据与开关（`bookOpen.ts` 的两个格式表加 `'FB2'`、容器面板加「自动展开新容器」），
-  **没有新增 spec 文件** ⇒ 文件数与例数都不变（69 / 717），**无需动 `EXPECTED_SPECS`**
-  （第 111 期那次的 +5 例是 MOBI/AZW3/ZIP 三条判据与一条预览浮层用例）。
-  ⚠️ 新增前端 spec 必须登记进 `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`，
-  否则全量 pytest 会红（本期 `App.spec.ts` / `DashboardShelfRow.spec.ts` 就踩过一次）。
-  ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
-  （`_tag_text`）让 82 条**与本模块无关**的测试连锁失败，跑全量才发现（见 roadmap 第 85 期「踩坑」）。
-  ⚠️ 长跑 pytest 必须**后台跑 + 轮询 junit**（前台会被 harness 的「长时间无输出」上限取消）。
-  ⚠️ **本机跑 pytest 前必须清空全部代理变量**（`HTTP_PROXY`/`HTTPS_PROXY`/`http_proxy`/`https_proxy`/`NO_PROXY`/`no_proxy`）——
-  否则 `httpx` 解析 `NO_PROXY` 里的 `[::1]` 会生成畸变代理 mount，**45 个用例假失败**（第 95 期实测，
-  已写进 `AGENTS.md` §5）。
-  ⚠️ **`pytest.ini` 已有 `addopts = -q`**：命令行再传 `-q` 会变 `-qq`，末行就不打印
-  `N passed / M skipped` 汇总（表现是「exit 0 但拿不到计数」）⇒ 计数时**别传 `-q`**；pwsh 重定向的
-  日志是 **UTF-16LE**，读要用 `encoding="utf-16"`。
-  ⚠️ **不要在本仓跑 `pnpm run <script>`** —— pnpm 会自动 install 并**整套换掉** `frontend/node_modules`
-  （脚本还没跑就以 `ERR_PNPM_IGNORED_BUILDS` exit 1）。要跑前端检查直接调 `frontend/node_modules/`
-  里的工具，例如 `node node_modules/vue-tsc/bin/vue-tsc.js --build`。
-  ⚠️ **本机 DNS 被上游污染**（第 104 期实测）——`openlibrary.org` / `www.goodreads.com` /
-  `www.googleapis.com` 在本机解析到的是**别人的网段**（`31.13.112.4` / `128.242.240.253` /
-  `172.217.x`，Facebook 与 Google 的真实段），而 `8.8.8.8` 给的是正确地址（`199.59.149.201` /
-  `199.59.148.6`），`C:\Windows\System32\drivers\etc\hosts` **没有任何自定义行**，`1.1.1.1` 无应答。
-  ⇒ 这三家的真机探活**现在做不了**；体检会对它们报 `dns_polluted`（第 104 期起）而不是「超时」，
-  看到这条**先查本机 DNS，别改代码**。
-- **可用的真实数据实例**（用户 2026-10-03 提供，随时可用来做实测）：本机 **`http://127.0.0.1:8412`**
-  （`admin` / `changeme`），书目 **4 本**：三体 / 沙丘 / 银河系漫游指南 / 冒烟测试-第 91 期。
-  窄屏三档冒烟一律跑它（`.codebuddy/tools/ui-smoke.ps1`，一次只传**一条**路由）。
-- **删除语义（第 75 / 81 期，仍然生效）**：「删书」回收**三份**（本地原件 / 书库内成品 / 出版副本）；
-  「移除书库」**默认只删登记、零文件触碰**，仅显式 `purge_files=1` 才在**后台**回收后两份并保留本地原件。
-  硬约束原文见 `AGENTS.md` 第 1 节。
-- ⚠️ 前端有**显式运行时依赖**：`vue-draggable-plus`（第 82 期）、
-  `reka-ui` / `@vueuse/core` / `class-variance-authority` / `@lucide/vue`（第 90 期）。
-  理由与例外边界见 `docs/architecture.md` 不变量第 6 条 + `docs/DESIGN.md` §9。
-- ⚠️ **口径修订（第 80 期）**：「零外部请求 / 零依赖」已由**硬约束改为默认取向** —— 默认仍自托管、不拉 CDN，
-  但允许**显式、可关、失败降级**地引入外部依赖与出网（见 `AGENTS.md` 第 1 节）。别再用「零依赖」当**不做**的理由。
-- 上游缺口清单（`docs/roadmap-gaps-remaining.md` 第一节）已实质清空；
-  新缺口来源改看 `docs/bookorbit/bookorbit-module-inventory.md`。
+- HEAD = 第 113 期 Audible `subtitle` 接线 + TODO §0 精简（第 95–112 期逐期历史见 §2 与 `git log --oneline`）；`VERSION` = **1.3.0**
+  —— 单一真值源，`GET /health` 下发；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，改为**按里程碑发版**
+  （第 112 期里程碑 = FB2 直读 + 容器自动展开，`CHANGELOG.md` 最新段 `V1.3.0 — 2026-10-07` 即取自它）。
+- 测试基线（第 113 期实测）：后端 **2400 例（2374 passed / 0 failed / 0 errors / 26 skipped）**，全量 338 s；
+  前端 **69 spec / 717 例**、`vue-tsc --build --force` exit 0（本期**前端零改动** ⇒ 文件数与例数不变、无需动 `EXPECTED_SPECS`）。
+- ⚠️ **本机运行陷阱不在这里重抄** —— 清空全部代理变量 / 别加 `-q` / 别跑 `pnpm` / 本机 DNS 被污染 /
+  长跑 pytest 后台跑 + 轮询 junit / 新增前端 spec 要登记 `EXPECTED_SPECS` / 只跑相关文件看不见连锁失败：
+  **一律看 `AGENTS.md` §5 与 §4**。
+- **可用的真实数据实例**：本机 **`http://127.0.0.1:8412`**（`admin` / `changeme`，书目 4 本 —— 三体 / 沙丘 /
+  银河系漫游指南 / 冒烟测试-第 91 期）；窄屏三档冒烟跑 `.codebuddy/tools/ui-smoke.ps1`（一次只传**一条**路由）。
+- **数据安全语义**（第 75 / 81 期，硬约束）：「删书」回收**三份**；「移除书库」**默认只删登记、零文件触碰**，
+  仅显式 `purge_files=1` 才在后台回收后两份并保留本地原件；源不可变、软删除 —— 原文见 `AGENTS.md` §1。
+- ⚠️ **口径修订（第 80 期）**：「零外部请求 / 零依赖」由**硬约束降为默认取向**（默认仍自托管、不拉 CDN，
+  但允许**显式、可关、失败降级**地引入）—— 别再用「零依赖」当**不做**的理由；同见 `AGENTS.md` §1。
+- **前端显式运行时依赖**（`vue-draggable-plus` / `reka-ui` / `@vueuse/core` / `class-variance-authority` /
+  `@lucide/vue`）：理由与例外边界见 `docs/architecture.md` 不变量第 6 条 + `docs/DESIGN.md` §9。
+- 上游缺口清单已实质清空；新缺口来源改看 `docs/bookorbit/bookorbit-module-inventory.md`。
 
 ## 1. 待办（按优先级）
 
@@ -91,6 +66,9 @@
 > 所以 `LibraryCopiesPanel.vue` 原先那条「不做自动展开、必须由人按」的纪律注释**已经改写** ——
 > 它是本期待办的前提，不是仍然生效的约束。
 
+> 第 113 期把 **Audible 的 `subtitle`** 接了进去（默认策略 `fill_only`，见 roadmap 第 113 期段）——
+> 上一条待办随之删除。
+
 - [ ] **演播者（`narrators`）：Audnexus 未接线**（第 103 期真机探活后挂起，不是忘了）——
   本期只接了**真机核过**的 Audible（`narrators` 是顶层键，每项 `{"name": …}`，Dune 12 位实测）。
   `novelforge/core/metasources.py` 的 `_audnexus_entry` docstring 自称「`authors`/`narrators` 都是对象数组」
@@ -99,10 +77,6 @@
 - [ ] **Open Library 的 `series` 字段未核验**——`_OL_FIELDS` 现在**不含** `series`，
   所以这家源对本期的三个字段贡献为零。探针（`fields=key,title,series,author_name`）撞上
   本机 `ConnectTimeout`（见下面那条「间歇性不可达」）⇒ 拿到真实响应再决定要不要加。
-- [ ] **Audible 的 `subtitle` 顶层键存在但未接线**——第 103 期同一份响应用真机核过
-  `subtitle` **是**顶层键（`novelforge/core/metasources.py` 的 `_search_audible` 没取）。
-  接它要重走本期那套四处同步（候选结构 → `_VALUE_KEYS` → 默认策略 → 前端策略表），
-  且要先定策略口径：不少书库把副标题当标题的一部分，默认 `overwrite` 会改书名 ⇒ 倾向 `fill_only`。
 - [ ] **`frontend/src/components/book/detail/ReadingLogTab.spec.ts` 全量并行偶发**
   （第 103 期实测 `1 failed | 685 passed`，红的是 `it('重试按钮真的会再拉一次')`；第 104 期又复现一次，
   这次红的是同文件 :233 的 `it('接口失败 → 给重试，而不是「还没有阅读记录」')`，
@@ -167,6 +141,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 113 | Audible `subtitle` 接线；TODO §0 精简 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 113 期段 |
 | 112 | FB2 直读 + 容器自动展开 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 112 期段 |
 | 111 | `.rar`/`.7z` 容器按内容分派：与 `.zip` 同一套判据（图片档归一 CBZ、其余进待展开），`.7z` 用纯 Python 的 `py7zr`；「缺解压能力」收敛成 `comics.backend_problem` 一处、503 说清缺什么；三类库白名单 + `SCAN_RULE_VERSION` 3→4。⚠️ 教训：`analyze` 把未分派形态的 format 写死 `"ZIP"` 会让待展开清单**静默漏掉**新容器 —— 判据要派生不要手写 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 111 期段 |
 | 110 | MOBI/AZW3/AZW 直读（解包，不转换）：把书自身的 KF8 内容解包到缓存目录直读（不进书库、源只读），KF8 出真 EPUB 全复用、纯 MOBI6 出 HTML 如实降级；`.azw` 进白名单（`SCAN_RULE_VERSION` 2→3）。⚠️ 延迟导入必须放分支第一行，否则 `UnboundLocalError` 全线 500 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 110 期段 |

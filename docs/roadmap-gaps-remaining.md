@@ -7198,3 +7198,88 @@ Build failed with 1 error:
 
 - **没做**：① FB2 的 `<body name="notes">` 脚注与正文里的悬空脚注锚（`<image>` 之外的 `<a l:href="#…">` 现退成纯文本）；② FB2 元数据（书名/作者/语言仍按**文件名**，与 MOBI/TXT 同口径 —— `<description>` 解析出来只喂给了派生 EPUB 的 `<dc:*>`，**不进书目**）；③ 自动展开只解**一层**（嵌套包靠下一轮按新书处理，不做递归深度控制）。
 - **没核过**：① **真机实例**（`http://127.0.0.1:8412`）上把 `.fb2` 与容器各丢一份进库、走一遍界面（本期验证全在自动化用例里：真字节的 FB2 与现场造的真 `.7z`，**没有在跑着的实例上看过一眼**）；② 真实**大 `.fb2`**（用例是 KB 级，200MB 上限那条只测了拒绝路径）；③ 真实 `.mobi` 之外的**真 FB2 书**（用例都是自己写的 XML；见过的最复杂输入是带命名空间与 HTML5 实体的那种）。
+
+## 第 113 期（Audible `subtitle` 接线；TODO §0 精简）
+
+> **需求来源**：用户原话「todo的当前状态太长了，精简一下。精简完成做一下剩下的任务」。两轮 `AskUserQuestion`
+> 拍板：① 剩下要推进的是 **Audible `subtitle` 接线**（P1 里其余条目都卡在外部样本 / 本机 DNS / 已钉住不改）；
+> ② §0 精简力度 = **删重复 + 留指针**。派生决定：**不发版**（`VERSION` 仍 `1.3.0`，无 `CHANGELOG` 段、无 Release）；
+> `subtitle` 默认策略由 `overwrite` 改成 **`fill_only`**。
+
+### 一、`subtitle` 接线：TODO 里预估的「四处同步」其实**只缺一处**
+
+**根因**：P1 那条待办写着「接它要重走那套四处同步（候选结构 → `_VALUE_KEYS` → 默认策略 → 前端策略表）」。
+动手前逐处核对，**只有第一处真的缺** —— `subtitle` 自**第 63 期**就已完整建模：
+
+| 环节 | 动手前 | 证据 |
+|---|---|---|
+| 候选结构 `metasources._entry()` | ❌ **没有 `subtitle` 键**（fetcher 传了会被 `**kw` 静默吞掉） | `core/metasources.py` |
+| `_search_audible()` 取值 | ❌ **没读**顶层 `subtitle` | 同文件 |
+| `metafetch._VALUE_KEYS` / `_CURRENT` / `_FINALIZE_FIELDS` | ✅ 已在 | `core/metafetch.py` |
+| 默认策略 | ✅ 已在（值 `overwrite`） | `config.py` 的 `DEFAULTS["metadata_fetch"]["fields"]` |
+| 前端 `POLICY_FIELDS` / `FIELD_LABELS` | ✅ 已在 | `frontend/src/lib/metadataFields.ts` |
+| `fileops.METADATA_FIELDS` / `db._CLEARABLE` / `metascore.NOT_SCORED` | ✅ 已在（**无 OPF 元素**，与 `DB_ONLY_FIELDS` 同档） | `fileops.py` / `db.py` / `metascore.py` |
+
+⇒ **净改动 = `metasources.py` 两行 + `config.py` 一个默认值 + `kinds.py` 一个集合项；前端零改动**
+（设置页策略表由后端下发的值渲染，`PolicyFields` 里本就有 `subtitle` 一行）。
+
+- **`_entry()` 加 `"subtitle": _strip_html(kw.get("subtitle"))`**（放在 `description` 旁；与 `series`/`narrators`
+  那批「第 103 期新接」不同 —— 它**不是新字段**，只是候选结构这一处一直没接）。
+- **`_search_audible()` 在 `_entry("audible", …)` 里加 `subtitle=p.get("subtitle")`** —— 顶层键，**随现有
+  `response_groups`（`product_desc`）照旧返回，不新增组**。⚠️ 注释里再次写明：第 99 期实测，给这个接口加一个
+  非法 `response_group` 名会让它**直接 400、整家永远 0 结果** ⇒ 别为这一个字段去加组。
+- **`FIELDS_OF_KIND[KIND_AUDIOBOOK]` 加 `"subtitle"`**：该表是**描述性**的（「这家源本来就不提供 X」），
+  有声书确实有副标题；漫画 / 动画两档**照旧不加**（不与 `KIND_EBOOK` 合并）。
+
+### 二、默认策略改成 `fill_only`（此前是**空转**的）
+
+`config.DEFAULTS["metadata_fetch"]["fields"]["subtitle"]` 原为 `overwrite` —— 但**从来没有任何源填过这个字段**
+（候选结构缺键），所以这个值一直没有实际含义。接线之后它才真正生效，于是同批定档：
+
+- **改成 `fill_only`**，与第 103 期新接的 `series` / `series_index` / `narrators` 三项**同档**（`overwrite`
+  与 `fill_only` 之外的项照旧 `overwrite`，整表没被动过）。理由：不少书库把副标题当书名的一部分 / 已有副标题
+  常是手工理过的，`overwrite` 会凭空多出一条重复的副标题。
+- **`fill_only` 不是空转，是「真的会保护已有值」**：`_current_value(b, "subtitle")` 读的是**书对象**上的
+  `subtitle`，而 `library.books()` 的条目过 `library._apply_overlay()` —— 它把 `db.get_effective_meta()`
+  （override > online > OPF，按 `fileops.METADATA_FIELDS` 逐字段迭代，**含 `subtitle`**）并进书对象。
+  ⇒ 手工改的、上一次抓来的，都会让 `cur` 非空 ⇒ `fill_only` 跳过、`overwrite` 换掉。
+- **`subtitle` 是 DB-only 字段**（无 OPF 元素）：`fileops.patch_opf_meta` 里刻意没有它的分支，
+  `publish.embed_meta` 接受但最终丢掉 —— 这是**既有且正确**的口径（与 `narrators`、9 个提供商 ID 同档），
+  本期**不动**，也没有把它写成「写进书文件」。
+
+### 三、实测证据与核验
+
+- **真机核过**（经本机代理 `127.0.0.1:7897`，`httpx`）：`GET https://api.audible.com/1.0/catalog/products`
+  （`keywords=Dune&num_results=2&products_sort_by=Relevance&response_groups=product_desc,contributors,media,series`）
+  → **HTTP 200**，两条产品的 `subtitle` **都是顶层键**且非空（`'Dune' → 'Book One in the Dune Chronicles'`、
+  `'Dune Messiah' → 'Book Two in the Dune Chronicles'`）。**沿用现有 response_groups，没有新增组名**。
+- 契约用例：`tests/test_metasources_parsers.py` 的 Audible fixture 加 `subtitle` 并断言它进候选、
+  缺键时为**空串**（不猜、不写 `None`）；`tests/test_metafetch_presets.py` 那条「新接的 N 项默认策略是
+  `fill_only`」由**三项改四项**（**这是本期的关键契约**：谁把 `subtitle` 顺手统一回 `overwrite`，用户可见行为就变）；
+  `tests/test_metafetch_merge.py` 新增两例 —— **补空**（书没有副标题 ⇒ 补上，且 `source` 如实带出）与
+  **不覆盖**（书已有 ⇒ `fill_only` 不动；同一夹具换 `overwrite` ⇒ 换掉），把两条策略的**差异**钉住。
+- 后端全量 **2400 例（2374 passed / 26 skipped / 0 failed / 0 errors）**，338 s；**前端零改动**
+  ⇒ 未跑四连，`git status` 确认 `frontend/` 下无改动。
+
+### 四、`docs/TODO.md` §0 精简（46 行 → 17 行）
+
+- **删重复**：§0 里与 `AGENTS.md` §5 逐条重复的本机陷阱（清空代理变量 / 别加 `-q` / 别跑 `pnpm` /
+  本机 DNS 污染 / 长跑 pytest 后台跑 / 新增前端 spec 登记 `EXPECTED_SPECS` / 只跑相关文件看不见连锁失败）
+  **整块删掉**，压成一条**指针**「一律看 `AGENTS.md` §5 与 §4」。
+- **压链条**：横跨 19 期的 `HEAD` 链（第 94–113 期逐期一句话）压成「最近一期 + 一句历史指针
+  （第 95–112 期见 §2 与 `git log --oneline`）」。
+- **留 TODO 自有的**（各压成一两行）：真实数据实例 / 数据安全语义（指向 `AGENTS.md` §1）/
+  第 80 期口径修订 / 前端显式运行时依赖（指向 architecture + DESIGN）/ 上游缺口来源。
+- **落位器锚点全部保住**（否则 R3 / R7 会红）：`- HEAD = ` 前缀 + 同一物理行里的 `` ；`VERSION` `` 锚点、
+  逐字基线句（`-n 测试基线（…）：后端 **N 例（P passed / 0 failed / 0 errors / S skipped）**，全量 X s；`）、
+  §0 里出现 `第 113 期`、非表格行的 `` `VERSION` = **1.3.0** `` 字面量。
+  ⇒ `python tests/period_close.py check` **0 问题**（R1–R8）。
+- §1 里那条「Audible `subtitle` 未接线」待办**删除**，只留**一句** blockquote 说明已落地
+  （不再写第 112 期那种三行说明 —— 那正是 §1 变长的原因）。
+
+### 五、没做 / 没核过（如实声明）
+
+- **没做**：① 其余 13 家源的副标题 —— **没核过就不声明**（第 95 期口径）；② Audnexus 的 `narrators`/`series`
+  （本机 SSL EOF，仍挂起）；③ 前端策略表**未改**（`subtitle` 那行本来就在，值由后端下发）。
+- **没核过**：① 真机实例（`http://127.0.0.1:8412`）上走一遍「抓取 → fill_only 跳过已有副标题」的界面流程
+  （本期验证全在自动化用例里）；② Audible 之外的源是否会**顺带**返回 `subtitle`（只接线了 Audible）。
