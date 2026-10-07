@@ -7069,3 +7069,61 @@ Build failed with 1 error:
 - **镜像三个 tag 都在**：`ghcr.io/735876214/novel_dl_convert` 的 `:1.0.0` / `:latest` / `:5727744f…` 按 tag 取 manifest 都是 **HTTP 200**、`application/vnd.oci.image.index.v1+json`（多架构索引，647 B）。**对照**：随便编一个 tag 取 manifest 回 **404** —— 这个探法本身能分辨真假，所以 200 不是「一律返回」。
 - ⚠️ **GHCR 的 `tags/list` 有缓存，别拿它判「tag 推没推上去」**：构建 success 十几分钟后它仍然只列 `latest` + 一批旧 sha，`1.0.0` 与新 sha **都不在里面**（我据此差点判成「版本 tag 没生效」）。**以「按 tag 取 manifest」为准**。
 - **没核过（如实声明）**：① 镜像内 `APP_VERSION` 标签没有读回来 —— 本机到 `ghcr.io` 反复 `ssl.SSLEOFError: [SSL: UNEXPECTED_EOF_WHILE_READING]`（本机出网抖动，同一天也撞在 curl（`HTTP=000`）与 schannel 上）；镜像里的 `APP_VERSION` 由 `build-args: APP_VERSION=${{ steps.version.outputs.version }}` 从 `VERSION` 注入，这条链路只核到「workflow 里写的是它」。② NAS 端实拉 `:1.0.0` 未验（本机没有 NAS 环境）。
+
+## 第 110 期（MOBI/AZW3/AZW 直读（解包，不转换））
+
+> **需求来源（用户原话）**：`mobi直接阅读，不进行转化`（m00255）；同一轮还立了工程口径 `有成熟功能和模块的，不要自研`（m00226）。
+> **本期范围**：只做「MOBI / AZW3 / AZW 直读」。计划里同时列出的 `.rar` / `.7z` 容器、FB2、容器自动展开三项**没做** —— 计划把「阶段范围」列为待用户拍板的 Q1（我的建议是**先做直读**这一条最小闭环），用户只回复了 MOBI 那一条，其余按未确认处理。
+
+### 一、根因：缺的不是「转换器」，是「读的文件不是书架上那个文件」
+
+`.mobi` / `.azw3` 在格式能力矩阵里的「阅读」一栏写的是 **❌ 需转换**。翻代码能看到真正的原因不是「没有 MOBI 解析器」，而是**整条阅读链路都建立在「EPUB zip + spine」上**，而这个假设被**硬编码在四个读点**里：
+
+| 读点 | 位置 | 原来的形态 |
+|---|---|---|
+| 详情页目录表 | `novelforge/core/library.py:2239-2254`（`book_detail`） | `if suffix == ".epub"` / `elif suffix == ".txt"` / **`else: chapters = []`** ⇒ MOBI 永远空目录 |
+| 单章正文 | `novelforge/server.py:3664-3705`（`api_book_chapter`） | `.txt` 分支 / `.epub` 分支 / **`raise HTTPException(400, "仅 EPUB / TXT 支持在线阅读")`** |
+| 书内资源与样式 | `novelforge/server.py:2864-2894`（`api_book_asset`）、`:2897-2928`（`api_epub_css`） | 把**书自己的文件**当 zip 打开（`zipfile.ZipFile(raw)`）、样式用 `path.suffix != ".epub"` 提前返回空 |
+| 进度的精确位置 | `novelforge/server.py:3708-3729`（`_progress_file`） | 按后缀 / `format` 判 `is_epub` 来决定要不要算 CFI |
+
+「转换」只是这四处的**共同后果**：只要正文不在书自己的 zip 里，四处都得各写一遍「去哪儿找」。第 87 期修掉的那四条不一致（抓取封面永远 404、OPDS 给出必然 404 的下载链…）就是同一个判据在四处各写一遍的产物 —— 所以本期的**主要设计决定不是「怎么解析 MOBI」，而是「读目标只能有一处答案」**。
+
+### 二、修法：解包（unpack），不是转换
+
+新增 `novelforge/core/mobicache.py`（与既有的 `core/txtcache.py` 同构：缓存状态机 + 指纹 + 规则版本）：
+
+- **产物落 `CACHE_DIR/mobi-unpack/<book_id>/`**：不进书库、不新增书目条目、不写回源文件（源全程只读），可随时重建或整个删掉 —— 与 `txt-epub/` 同一形态：**派生缓存，不是第二本书**。
+- **唯一的读目标判据** `mobicache.read_target(book) -> (路径, "epub" | "html" | "pdf" | "")`，四个读点**全部问它**（`server.py` 那三处 + `library.book_detail`）。
+- **KF8 / AZW3 出真 EPUB** ⇒ 目录 / 正文 / 插图 / 书内样式 / **CFI 精确位置** / 批注**零新代码**复用（`library._reading_list` / `chapter_html` / `chapter_assets` / `epub_cfi` 原样吃解包产物）。
+- **纯 MOBI6 只出 `mobi7/book.html`** ⇒ 复用既有分章真值源（`detect`）+ `preprocess` 渲染成章节流；**如实降级**：无插图、无书内样式、`cfi` 留空（恢复回落「章 + 全书百分比」，与 TXT 原生路线同款）。
+- **Print Replica 出 `<base>.001.pdf`** ⇒ 交回既有 PDF 路线。
+- **缓存失效三分量** = 源指纹 + `mobicache.RULE_VERSION` + **`mobi` 包版本**（后者本期特有：读到什么由抽取器决定）。源没变而上次失败 ⇒ **锁定形态**不再每次重试。
+- ⚠️ **不用 `mobi.extract()`**：它把临时目录建在**系统 TEMP**（`tempfile.mkdtemp(prefix="mobiex")`）⇒ 产物要跨卷复制进缓存目录、解包还得依赖 `/tmp` 容量（NAS 容器上常很小）。改为直接喂它下一层的 `mobi.kindleunpack.unpackBook(src, stage, epubver="A")`：**同卷**、可原子换入、不碰全局状态。代价是要自己认产物名（`mobi8/<stem>.epub` / `mobi7/book.html` / `<stem>.*.pdf`，顺序与 `extract` 的三个候选逐条对齐，另有 `mobi8/*.epub` glob 兜底）。
+- **依赖是软依赖**：缺 `mobi` ⇒ 章节接口 **503**「服务器缺少 MOBI 解包能力（需 mobi）」（与缺 bsdtar 时 `.cbr` 报 503 同款），详情页目录**如实为空**，**进度照常能存**；书解不开 ⇒ **422** + 抽取器的原话。绝不假装能读、绝不 500。
+- 顺带把 `.azw` 收进白名单（`BOOK_EXTS` / `_EBOOK_EXTS`）：它此前**不是书**，扫描时被静默忽略 ⇒ `SCAN_RULE_VERSION` **2 → 3**（存量库下一轮刷新走一次全量重探）。
+- 前端只改判据不动阅读器：`frontend/src/lib/bookOpen.ts` 的两个集合加 `MOBI`/`AZW3`/`AZW`（`ReaderView.vue` **零改动** —— 后端把形态归一成了既有 EPUB/TXT 形态，这正是「能让后端归一就不要动前端」那条）。
+
+### 三、实测证据
+
+- 真实样本（从 `mobi` 上游仓库的 `tests/demo.mobi` 取，**未入库**）：639,267 B 的 KF8 combo ⇒ 解包出 22 个文件（`mobi8/demo.epub` 162,582 B、`mobi7/book.html` 383,930 B）。
+- 首次解包 **0.27 s**、第二次 **0.012 s**（命中缓存）；`state.json` 实测 = `{"status":"ok","fingerprint":"…:639267","rule":1,"pkg":"0.4.1","rel":"mobi8/demo.epub","kind":"epub"}`。
+- 解包出的 EPUB 喂既有链路：`_reading_list` 得 3 章真标题、`chapter_html` 200、`chapter_assets` 2 个 sheet / 2132 字符样式。
+- **源文件只读**：读完整本后 size/mtime 逐字节不变；书库目录**没有**新文件。
+- ⚠️ **spine 首条是 nav 目录页**（与真 EPUB 同形态，`build_epub(nav=True)` 与 KindleUnpack 产物都这样）⇒ 测试里正文断言取**末章**，别把「目录页没有正文」误判成「读不了」。
+
+### 四、核验
+
+- 新增 `tests/test_mobi_reader.py` **12 例**：把 `unpackBook` 换成「造**真 EPUB** / 真 HTML」的假解包器 ⇒ 缓存状态机、读目标解析、目录、单章、书内资源、**进度 CFI**、源文件只读**整条链路真跑一遍**，**不依赖第三方样本**；真实样本那条是 `skipif`（把任意 `.mobi` 放到 `tests/fixtures/mobi/demo.mobi` 即自动启用，缺样本**如实跳过而不是伪造**）。
+- 后端全量：**2355 例（2329 passed / 0 failed / 0 errors / 26 skipped）、276 s**（基线 2343 + 本期 12；skipped 25 → 26 = 新增的真样本那条）。
+- 前端：**69 spec / 717 例**（+5 例，spec 文件数不变 ⇒ 无需改 `EXPECTED_SPECS`）；`vue-tsc` exit 0；`build` / `deploy` exit 0。唯一失败是 `frontend/src/components/book/detail/ReadingLogTab.spec.ts` 那条**既有 flaky**（`接口失败 → 给重试`，全量并行下 5 s 超时）—— **单跑 12 passed**，与本期无关（`docs/TODO.md` 第 104 期起就有记录）。
+- ⚠️ 本期踩到的两个**本机环境**坑（都不是产品缺陷，但会伪装成「回归」）：① 跑 pytest 时只清了 `HTTP(S)_PROXY` 而**漏清 `NO_PROXY`** ⇒ `httpx` 解析 `[::1]` 生成畸变 mount，**45 个用例假失败**（`AGENTS.md` §5 与 `docs/TODO.md` 早已记着这条，是我没照做）；② 沙箱下 `0o700` 目录**不可枚举**（`os.listdir`/`os.scandir` 抛 `PermissionError`，事后 `chmod` 也修不回），而 pytest 的 tmpdir 与 `tests/conftest.py` 的会话根都用 `0o700` ⇒ 需要临时垫片把 `os.mkdir` 的 `0o700` 改 `0o777`；另：`--basetemp` **不能放仓库根**（`tests/conftest.py` 有仓库根防删除守卫，会直接 `Failed: [REPO-ROOT GUARD]`）。
+
+### 五、连带结论：许可证落点变成 AGPL-3.0（首次补上 `LICENSE`）
+
+引入 `mobi`（**GPL-3.0-only**，且是**进程内 import**）迫使本期回答一个此前被跳过的问题。实测依赖元数据（`importlib.metadata`）后发现**既有**依赖 `EbookLib` 本就是 **AGPL-3.0**（成品 EPUB 由它组装，`core/epub_builder.py`）。GPLv3 与 AGPLv3 的兼容是**单向**的（GPLv3 可并入 AGPLv3 作品，反之不行）⇒ 合并后的正确落点是 **AGPL-3.0**，不是计划里写的 GPL-3.0。已落盘：根目录 `LICENSE`（AGPL-3.0 全文）+ `THIRD-PARTY-NOTICES.md`（运行时 / 可选 / 仅测试依赖逐条许可与「缺了会怎样」）+ `README.md` 新增「许可证」节 + `requirements.txt` 那条依赖注释。**如实记下的一条**：`quickjs` 在 PyPI 元数据里**没有任何许可证字段**（`license_expression: None`、`license` 为空、无 License classifier），而生产镜像 `PY_VERSION=3.12` 会装上它。
+
+### 六、没做的 / 没核过的（如实声明）
+
+- **没做**：`.rar` / `.7z` 容器（按内容分派 + 归一成 CBZ）、FB2 直读、容器自动展开进书库目录 —— 三项都在计划里，等用户确认阶段范围。
+- **没核过**：① 真机实例（`http://127.0.0.1:8412`）上的端到端 —— 本期验证走的是测试内的真字节与假解包器，**真实 `.mobi` 的解包路径只有本机一次性脚本验过**（`unpackBook` 那一层没有被自动化用例覆盖，样本没进仓库）；② 纯 MOBI6 的**真实样本**没有（该分支只用「假解包器写 `mobi7/book.html`」验证过形态与降级行为）；③ Print Replica（出 PDF）那一类没有样本，代码路径存在但未实跑；④ 前端 `test:unit` 里那条既有 flaky 是否与并行度有关，本期没有进一步定位。
+

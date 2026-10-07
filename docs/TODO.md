@@ -4,24 +4,21 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-06 —— 第 109 期**发版 V1.0.0：把第 95–108 期的积累一次性发布**：
-把 2026-10-04（V0.94.0）之后连续十四轮「只提交、不发版」攒下的积累（第 95–108 期）一次性发布为
-**V1.0.0**：`VERSION` → `1.0.0`、`CHANGELOG.md` 补 `V1.0.0` 段（一段话里程碑说明 + 版本号约定变更），
-镜像多推一个版本 tag（`:1.0.0`，NAS 端可固定版本与回滚）。发布动作由 `release.yml` 在推 main 时自动完成：
-若 `v1.0.0` tag 不存在就**打 tag + 用 CHANGELOG 段建 GitHub Release**（同一 job，`GITHUB_TOKEN` 推的 tag 不会再触发别的 workflow）。
-历史：第 108 期交付「仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关」，并按用户追问做完
-17 视口 × 5 路由响应式横扫（`FAILS=0`）、修掉窄屏下设置面板跑出视口的既有缺陷。`VERSION` 由 `0.94.0` 升到 `1.0.0`（本期即发布本体）。
+**最后更新**：2026-10-07 —— 第 110 期**MOBI/AZW3/AZW 直读（解包，不转换）**：
+用户原话「mobi直接阅读，不进行转化」⇒ **不做转换器**，改为把书**自身**的 KF8 内容**解包**到 `CACHE_DIR/mobi-unpack/<book_id>/` 直接读（不进书库、不新增书目条目、源文件只读）：KF8 解出的是**真 EPUB** ⇒ 目录 / 正文 / 插图 / 书内样式 / **CFI 与批注**全部复用既有链路；纯 MOBI6 只解出 HTML ⇒ 如实降级（无插图 / 无书内样式、`cfi` 留空，回落「章 + 百分比」）。新增 `novelforge/core/mobicache.py`（`read_target` 是**唯一**「读目标」判据，四个读点全问它）、`.azw` 进白名单（`SCAN_RULE_VERSION` 2→3）、前端两个格式集合加 MOBI/AZW3/AZW（`ReaderView.vue` 零改动）。许可证首次成文：因 `mobi`(GPL-3.0-only) + 既有 `EbookLib`(AGPL-3.0) ⇒ 本项目整体 **AGPL-3.0**（新增 `LICENSE` + `THIRD-PARTY-NOTICES.md`）。
+历史：第 109 期发版 V1.0.0（把第 95–108 期「只提交不发版」的积累一次性发布）；`VERSION` = **1.1.0**（第 110 期里程碑：直读）。
 
 ## 0. 当前状态
 
-- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口 + 第 105 期 CI 镜像构建修复 + 第 106 期记忆体系精简（收尾只写两处） + 第 107 期自动化收尾：落位器 + 三方对账 + 第 108 期仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关 + 第 109 期发版 V1.0.0：把第 95–108 期的积累一次性发布；`VERSION` = **1.0.0**
-  `VERSION` = `1.0.0`（第 109 期发版；v0.x 阶段「第 N 期 = V0.N.0」的约定到此为止，**V1.0.0 起按里程碑发版**）——
+- HEAD = 第 94 期提交 + 第 95 期整改 + 第 96 期数据安全口径 + 第 97 期 `[low]` 清理 + 第 98 期仪表盘余留 + 第 99 期元数据抓取真机核验 + 第 100 期 EPUB 解析判定与 `dc:description` 修法 + 第 101 期 Goodreads 抓取改用 RSC payload + 第 102 期元数据抓取地基 + 第 103 期系列/卷号/演播者接线 + 第 104 期出网失败归因与前端类型红收口 + 第 105 期 CI 镜像构建修复 + 第 106 期记忆体系精简（收尾只写两处） + 第 107 期自动化收尾：落位器 + 三方对账 + 第 108 期仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关 + 第 109 期发版 V1.0.0：把第 95–108 期的积累一次性发布 + 第 110 期MOBI/AZW3/AZW 直读（解包，不转换）；`VERSION` = **1.1.0**
+  `VERSION` = `1.1.0`（第 110 期里程碑「MOBI/AZW3/AZW 直读」；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，**按里程碑发版**）——
   单一真值源，`GET /health` 下发。
-  `CHANGELOG.md` 最新段 = `V1.0.0 — 2026-10-06`（发布后 GitHub Release 的 notes 就取这一段原文）。
-- 测试基线（第 109 期实测）：后端 **2343 例（2318 passed / 0 failed / 0 errors / 25 skipped）**，全量 325.16 s；
-  前端 **69 spec / 712 例**（全量 **69 files / 712 passed**、exit 0；此前记录过的既有 flaky
-  `frontend/src/components/book/detail/ReadingLogTab.spec.ts`「接口失败 → 给重试」全量并行下偶尔超时、
-  单跑 12 passed；第 104 期起就有这条记录）；`vue-tsc --build --force` exit 0。
+  `CHANGELOG.md` 最新段 = `V1.1.0 — 2026-10-07`（发布后 GitHub Release 的 notes 就取这一段原文）。
+- 测试基线（第 110 期实测）：后端 **2355 例（2329 passed / 0 failed / 0 errors / 26 skipped）**，全量 276 s；
+  前端 **69 spec / 717 例**（本期实测 **69 files / 716 passed + 1 failed**、exit 1：那条失败是**既有 flaky**
+  `frontend/src/components/book/detail/ReadingLogTab.spec.ts`「接口失败 → 给重试」全量并行下 5 s 超时，
+  **单跑 12 passed**，与本期无关；第 104 期起就有这条记录）；`vue-tsc --build --force` exit 0。
+  ⚠️ 本期前端 +5 例（MOBI/AZW3/ZIP 三条判据与一条预览浮层用例）、spec **文件数不变** ⇒ 无需动 `EXPECTED_SPECS`。
   ⚠️ 新增前端 spec 必须登记进 `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`，
   否则全量 pytest 会红（本期 `App.spec.ts` / `DashboardShelfRow.spec.ts` 就踩过一次）。
   ⚠️ 第 85 期实测教训：**只跑相关文件看不见「改动波及别处」的问题** —— 一次私有函数重名覆盖
@@ -160,6 +157,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 110 | MOBI/AZW3/AZW 直读（解包，不转换）：把书自身的 KF8 内容解包到缓存目录直读（不进书库、源只读），KF8 出真 EPUB 全复用、纯 MOBI6 出 HTML 如实降级；`.azw` 进白名单（`SCAN_RULE_VERSION` 2→3）。⚠️ 延迟导入必须放分支第一行，否则 `UnboundLocalError` 全线 500 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 110 期段 |
 | 109 | 发版 V1.0.0：把第 95–108 期的积累一次性发布 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 109 期段 |
 | 108 | 仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关（用户 m09721 追问响应式后补横扫 17 视口 × 5 路由 = `FAILS=0`，并修掉窄屏设置面板跑出视口的既有缺陷）—— 细节见 `docs/roadmap-gaps-remaining.md` 第 108 期段 |
 | 107 | 自动化收尾：落位器 + 三方对账 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 107 期段 |
