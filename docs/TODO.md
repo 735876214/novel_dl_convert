@@ -4,25 +4,25 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-08 —— 第 115 期**核验演播者：摘掉 Audnexus、Audible 接按 ASIN 取详情**：
-用户点名「核验演播者」，结果核到这家源的**根**上了 —— `api.audnexus.com` 在权威 TLD 上**已 NXDOMAIN**
-（不是第 103 期记的 `SSL EOF`），真接口 `api.audnex.us` 又**没有检索路由**（`/books?title=` 实测 404）⇒
-这家四期来**从未可能产出任何东西**，却一直在界面上占开关、替 `narrators` 打勾（假能力）。
-按用户拍板**彻底摘掉**（不留兼容垫片），改接 **Audible 自带的 `/products/{asin}`**
-（真机核过：`{"product": {…}}`、与检索同形状、且**多给 `series`**——Audnexus 那项恒为 `null`）。
-提供商 14 → **13 家**；`DETAIL_SOURCES` 2 → **3 家**（audible / itunes / openlibrary）。
-历史：第 114 期 CI 的 5 个 action 升到 Node 24 运行时；`VERSION` 仍 `1.3.0`（本期**不发版**）。
-同日按用户要求**梳理本文件**：§1 清掉六段「已完成」注记、开列项按「可动手 / 挂起 / 钉住不改」分组，
-§3 修正两处过期陈述并补上第 110–115 期的立项来源（**§0 的锚点与 §2 的表格一个字没动**）。
+**最后更新**：2026-10-08 —— 第 116 期**修可动手待办：多值字段上限按字段分 + 前端 flaky 超时**：
+用户原话「**修一下可动手待办**」—— 把 §1 A 组那三条消化掉。① 多值字段（`tags` / `narrators`）
+原先在**候选侧与合并侧各写死一个 8**（同一判据的两份实现），收敛成 `metasources.MULTI_VALUE_MAX`
+**一张表**并按字段取值：题材仍是刻意的 8 项策展上限，**演播者放宽到 32**（第 115 期真机
+Audible《Dune》**12 位**演播者被砍成 8 位的**丢事实**就此修掉）；② 前端全量并行下
+`ReadingLogTab.spec.ts` 的偶发 `Test timed out in 5000ms` 收到 `testTimeout: 15000`（根因是
+happy-dom **环境创建**成本，见 roadmap 第 116 期段）；③ `fileops.py` 的 OPF 改写正则按第 95 期
+审计结论**保留**，从 A 组挪进 C 组（A 组因此**清空**）。
+历史：第 115 期核验演播者（摘掉 Audnexus、Audible 接按 ASIN 取详情）；`VERSION` 仍 `1.3.0`（本期**不发版**）。
 
 ## 0. 当前状态
 
-- HEAD = 第 115 期核验演播者（摘掉 Audnexus、Audible 接按 ASIN 取详情）（第 95–114 期逐期历史见 §2 与 `git log --oneline`）；`VERSION` = **1.3.0**
+- HEAD = 第 116 期修可动手待办（多值字段上限按字段分 + 前端 flaky 超时）（第 95–115 期逐期历史见 §2 与 `git log --oneline`）；`VERSION` = **1.3.0**
   —— 单一真值源，`GET /health` 下发；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，改为**按里程碑发版**
   （第 112 期里程碑 = FB2 直读 + 容器自动展开，`CHANGELOG.md` 最新段 `V1.3.0 — 2026-10-07` 即取自它）。
-- 测试基线（第 115 期实测）：后端 **2405 例（2379 passed / 0 failed / 0 errors / 26 skipped）**，全量 345 s；
-  前端 **69 spec / 717 例**、`vue-tsc --build --force` exit 0（本期只改**文案与注释** ⇒
-  文件数与例数不变、无需动 `EXPECTED_SPECS`；但**必须 build + deploy**，否则服务端仍发旧 bundle）。
+- 测试基线（第 116 期实测）：后端 **2411 例（2385 passed / 0 failed / 0 errors / 26 skipped）**，全量 296 s；
+  前端 **69 spec / 717 例**、`vue-tsc --build --force` exit 0（本期只改 `vite.config.ts` 里的
+  **测试**配置（`testTimeout`），不动任何源码 ⇒ 产物**逐字节不变**（build + deploy 跑过，
+  `git status` 里 `novelforge/static/v2` 零改动可证）；文件数与例数不变、无需动 `EXPECTED_SPECS`）。
 - ⚠️ **本机运行陷阱不在这里重抄** —— 清空全部代理变量 / 别加 `-q` / 别跑 `pnpm` / 本机 DNS 被污染 /
   长跑 pytest 后台跑 + 轮询 junit / 新增前端 spec 要登记 `EXPECTED_SPECS` / 只跑相关文件看不见连锁失败：
   **一律看 `AGENTS.md` §5 与 §4**。
@@ -49,25 +49,17 @@
 
 ### P1 · 待办（分三组：可动手 / 挂起 / 钉住不改）
 
-> **已办结的条目不留在这里** —— 本文件只管「还没做的」。第 96 / 98 / 112 / 113 / 114 / 115 期做完的
-> 那几条，各自的「为什么删 / 结论是什么」都在 §2 与 `docs/roadmap-gaps-remaining.md` 的同名期号段里，
-> 别在这里再抄一遍。唯一要留住的判据：**卡在外部样本上的事，拿到真实样本再立项**（第 96 期口径）。
+> **已办结的条目不留在这里** —— 本文件只管「还没做的」。第 96 / 98 / 112 / 113 / 114 / 115 / 116 期
+> 做完的那几条，各自的「为什么删 / 结论是什么」都在 §2 与 `docs/roadmap-gaps-remaining.md`
+> 的同名期号段里，别在这里再抄一遍。唯一要留住的判据：**卡在外部样本上的事，拿到真实样本再立项**
+> （第 96 期口径）。
 
 #### A · 可动手（本仓内，有判据）
 
-- [ ] **`frontend/src/components/book/detail/ReadingLogTab.spec.ts` 全量并行偶发**
-  （第 103 期实测 `1 failed | 685 passed`，红的是 `it('重试按钮真的会再拉一次')`；第 104 期又复现一次，
-  这次红的是同文件 :233 的 `it('接口失败 → 给重试，而不是「还没有阅读记录」')`，
-  **都是 `Test timed out in 5000ms`**）—— 单跑该文件 12 例 **453 ms 全绿**，紧接着全量复跑 **686 passed**
-  ⇒ 是**并行全量下 happy-dom 环境创建吃满 CPU**（实测 `happy-dom was created 67 times · 256.61s total,
-  55% of tracked time`）导致的 5 s 超时，不是改动破坏的。⚠️ **别按行号认领**：命中的用例会换。
-  记在这里是防止下次误判成「刚改的东西坏了」；真要根治得给该用例放宽超时或查它的等待竞态。
-- [ ] **`novelforge/core/fileops.py` 的 OPF 改写正则**（出版副本 XML，**字节等价不可证**）——
-  须**先证明等价才动**（第 95 期审计口径）。它与 B 组那几条抓取源无关，是**另一件事**。
-- [ ] **`_entry` 对多值字段统一截断到 8 项**（`novelforge/core/metasources.py` 的 `tags` / `narrators`
-  两处）—— 第 115 期真机核验暴露：Audible 的《Dune》有 **12 位**演播者，落库只剩 8 位
-  （用例断言已按截断后写，见 `tests/test_metasources_detail.py`）。它影响**所有多值字段与既有库**，
-  属**独立议题** —— 第 115 期刻意没动，见 roadmap 第 115 期 §五。
+- （**空**）第 116 期把最后两条做完了 —— 多值字段上限（`tags` 8 / `narrators` 32）与前端
+  全量并行下的 flaky 超时；唯一没动的那条（`fileops.py` 的 OPF 改写正则，第 95 期审计判「保留」）
+  已按结论挪进 C 组。**这一类目前没有条目** —— 新条目照文件头那条维护约定走：
+  带**证据**（数字 / 文件 / 复现方式），别写「优化一下」。见 roadmap 第 116 期段。
 
 #### B · 挂起（外部样本 / 本机环境 —— 是环境问题，不是技术债）
 
@@ -102,8 +94,21 @@
   那天之后再看一次 `Build and Push Image` 是否仍绿。它与 action 的 node24 运行时**无关**
   （那是 runner 镜像的迁移）⇒ 第 114 期那次升级不解决它。
 
-#### C · 钉住不改（语义已定，写在这里免得反复讨论）
+#### C · 钉住不改（语义已定 / 已知边界，写在这里免得反复讨论）
 
+- [ ] **`frontend/src/components/book/detail/ReadingLogTab.spec.ts` 全量并行偶发超时**（第 116 期
+  **已缓解**，不是修好）—— 第 103 期实测 `1 failed | 685 passed`、第 104 期又复现一次（红的是同文件
+  :233 `it('接口失败 → 给重试…')`），**都是 `Test timed out in 5000ms`**；单跑该文件 12 例 **453 ms 全绿**、
+  紧接着全量复跑 **686 passed** ⇒ 不是用例坏了。根因是 vitest 给**每个 spec** 各建一次 happy-dom
+  （`isolate` 默认开；第 104 期记 `67 次 / 256.61 s / 占 55%`，第 116 期复测 `69 次 / 72.75 s / 48%`），
+  这几秒记在**恰好排在它后面**的那条用例头上 ⇒ **命中的用例会换，别按行号认领**。
+  第 116 期把 `vite.config.ts` 的 `test.testTimeout` 收到 **15 s** 覆盖这个抖动；
+  ⚠️ **再红先怀疑环境创建成本与机器负载，别当「刚改的东西坏了」**。要再压这块成本得动
+  `pool: 'vmThreads'` / `isolate: false`（会改 717 例的隔离语义，属另一件事）。
+- [ ] **`novelforge/core/fileops.py` 的 OPF 改写正则**（出版副本 XML，**字节等价不可证**）——
+  第 95 期审计**判定保留**（`docs/agents-audit-95.md:183`、roadmap 第 95 期段「六、未做及原因」）：
+  「出版产物不得变化」是硬约束，换成 `ElementTree` 拿不出字节等价证明 ⇒ **不动**。
+  它与 B 组那几条抓取源无关，是**另一件事**；想重试的人先读上面两处。
 - [ ] **`online_candidate(book)` 不传 `cfg` 时静默返回 `None`**（既有语义，第 102 期已钉住不改）——
   `novelforge/core/metafetch.py` 的 `_cfg(cfg: dict)` 只从**传入的** dict 取 `metadata_fetch`，
   而 `online_candidate(book, cfg=None)` 默认 `None` ⇒ 看着像「这家源没结果」，实际是「压根没去查」。
@@ -128,6 +133,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 116 | 修可动手待办：多值字段上限按字段分 + 前端 flaky 超时 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 116 期段 |
 | 115 | 核验演播者：摘掉 Audnexus、Audible 接按 ASIN 取详情 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 115 期段 |
 | 114 | CI 的 5 个 action 升到 Node 24 运行时 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 114 期段 |
 | 113 | Audible `subtitle` 接线；TODO §0 精简 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 113 期段 |
@@ -215,17 +221,21 @@
   第 113 期由**用户直接立项**（原话「todo的当前状态太长了，精简一下。精简完成做一下剩下的任务」——
   Audible `subtitle` 接线）；第 114 期仍由**用户直接立项**（原话「修一下 CI 的 5 个 action
   仍跑在 Node 20 运行时」）；第 115 期取 §1 挂了四期的那条（用户原话「核验 演播者（narrators）」，
-  落地为「摘掉 Audnexus、Audible 接按 ASIN 取详情」）。各期细节见 roadmap 同名期号段。
+  落地为「摘掉 Audnexus、Audible 接按 ASIN 取详情」）；第 116 期由**用户直接立项**
+  （原话「修一下可动手待办」—— **直接取 §1 A 组**那三条，其中两条当轮做完、OPF 正则按审计结论
+  挪进 C 组）。各期细节见 roadmap 同名期号段。
   ⚠️ 第 102 期按拍板口径**只做了地基、零新源**：**分期做**（用户原话），
   微信读书一家中文源与其余能力留待后续期次；`docs/roadmap-gaps-remaining.md` 第 102 期段
   已写清「本期刻意不做」的边界（不新建 providers 包 / 不搬 1833 行解析实现 / 不改 `metascore` 计分 /
   不接 series / 不装 Calibre 运行时）。
-  ⚠️ 下一期若要从 §1 取条目，**A 组只剩一条**：`novelforge/core/fileops.py` 的 OPF 改写正则
-  （**字节等价不可证**，须先证明等价才动）。原先并列的「把 CI 的 5 个 action 升到最新大版本」
-  **已于第 114 期完成**（5 个一起升 + 新增离线契约测试钉住）；`ubuntu-latest` **2026-10-19 起迁
-  Ubuntu 26** 仍在**等日期**（第 105 期只登记，见 §1 B 组）。
-  另有**挂起**（Kobo / Libro.fm / Amazon 缺样本；**两家**源的按 ID 详情通道未核验 —— 第 115 期已接
-  Audible、摘掉 Audnexus，故由三家降为两家；`openlibrary.org` 等三家本机 **DNS 被上游污染** ——
-  这是**环境问题不是代码问题**，别当技术债还）。或按用户新需求立项。
+  ⚠️ **§1 的 A 组（可动手）现已清空**（第 116 期把多值字段上限与前端 flaky 超时两条做完，
+  唯一没动的 `fileops.py` OPF 改写正则按第 95 期审计结论挪进 C 组「钉住不改」）。
+  所以下一期**没有现成的可动手条目** —— 要么从下面**挂起**那几条里挑（条件已具备才立项），
+  要么按用户新需求立项。挂起项的最新状态：Kobo / Libro.fm / Amazon 缺样本；**两家**源的按 ID
+  详情通道未核验（第 115 期已接 Audible、摘掉 Audnexus，故由三家降为两家）；`openlibrary.org`
+  等三家本机 **DNS 被上游污染** —— 这是**环境问题不是代码问题**，别当技术债还；
+  `ubuntu-latest` **2026-10-19 起迁 Ubuntu 26** 仍在**等日期**（第 105 期只登记，见 §1 B 组）。
+  历史口径补充：「把 CI 的 5 个 action 升到最新大版本」**已于第 114 期完成**（5 个一起升 +
+  新增离线契约测试钉住）。
 - 若要做重投入项（例如再次跑大库基准、或做 PG / Redis 相关专项），**先量化再动手**
   —— 本项目已在第 61 期明确：没有指标不许凭感觉优化。
