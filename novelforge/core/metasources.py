@@ -1860,7 +1860,8 @@ def search_series(series_name: str, members: list, sources: list = None,
 # 是**精确键**：库里已经记过 `openlibrary_id` / `itunes_id` 的书，用它回查那一刻的官方记录，
 # 比拿书名再猜一次更准，也少一轮打分。
 #
-# ⚠️ **只绑定真机核验过的家**（第 102 期探针结论，脚本在 `$TMP`，结论记在 `docs/TODO.md`）：
+# ⚠️ **只绑定真机核验过的家**（第 102 期探针结论，脚本在 `$TMP`；未核验的与原因见
+#   `docs/TODO.md` §1「按 ID 取详情：两家源仍未核验」那条）：
 #   ✅ itunes      `/lookup?id=` 与检索**同响应形状**（实测 trackId=597944491）
 #   ✅ openlibrary `/works/OL…W.json` 返回 works 文档（实测 /works/OL17267881W）
 #   ✅ audible      `/1.0/catalog/products/{asin}` 回 `{"product": {…}}`（**与检索同形状的单条**）
