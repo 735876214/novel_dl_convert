@@ -466,3 +466,35 @@ def test_两个解析小工具行为():
 
     found = [d for d in m._walk_dicts({"a": [{"title": "t"}]}) if d.get("title")]
     assert found == [{"title": "t"}]
+
+
+# ---------------- 多值字段上限（第 116 期：按字段分，不再是统一 8） ----------------
+
+def test_多值字段上限按字段取():
+    """上限是 `MULTI_VALUE_MAX` **一张表**（候选侧与合并侧同取它），不按字段就地写死。
+
+    这条同时钉住「演播者不再与题材共用 8」：真机 Audible 的《Dune》12 位演播者，
+    旧口径落库只剩 8 位（**丢事实**），题材则仍是刻意的 8 项策展上限。
+    """
+    assert m.MULTI_VALUE_MAX["narrators"] > 8, "12 位演播者的真实阵容不许再被砍到 8"
+    assert m.MULTI_VALUE_MAX["tags"] == 8, "题材的 8 项是刻意的策展上限，别顺手改掉"
+
+
+def test_entry题材截到8项而演播者全留():
+    """`_entry` 对两个多值字段的清洗相同、**上限不同**。"""
+    tags = [f"题材{i}" for i in range(20)]
+    narrators = [f"演播者{i}" for i in range(12)]
+
+    e = m._entry("audible", tags=tags, narrators=narrators)
+
+    assert e["tags"] == tags[:m.MULTI_VALUE_MAX["tags"]]
+    assert e["narrators"] == narrators, "上限内的多值字段逐项保留（顺次、不重排）"
+    assert len(e["narrators"]) == 12
+
+
+def test_entry的多值字段清洗空值不占位():
+    """清洗（剥标签 + 丢空串）在**截断之前**：空值不许把名额用掉。"""
+    e = m._entry("audible", tags=[" <b>甲</b> ", "", "乙"], narrators=["", "丙"])
+
+    assert e["tags"] == ["甲", "乙"]
+    assert e["narrators"] == ["丙"]

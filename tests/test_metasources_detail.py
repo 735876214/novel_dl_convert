@@ -332,10 +332,12 @@ def test_audible详情复用检索的字段映射(monkeypatch):
     assert e["title"] == "Dune"
     assert e["subtitle"] == "Book One in the Dune Chronicles"
     assert e["author"] == "Frank Herbert"
-    # 真机 Dune 是 12 位演播者，但 `_entry` 对多值字段**统一截到 8 项**（与 `tags` 同口径）
+    # 真机 Dune 是 **12 位**演播者 —— 一条不少（第 116 期起上限按字段取，见 `MULTI_VALUE_MAX`；
+    # 旧口径与 `tags` 共用 `[:8]`，会把这份阵容砍成 8 位）
     assert e["narrators"] == ["Scott Brick", "Orlagh Cassidy", "Euan Morton", "Simon Vance",
                               "Ilyana Kadushin", "Byron Jennings", "David R. Gordon",
-                              "Jason Culp"]
+                              "Jason Culp", "Kent Broadhurst", "Oliver Wyman",
+                              "Patricia Kilgarriff", "Scott Sowers"]
     # 多支系列里取**卷号最小**的那支（不是第一条）—— 与检索同一套 `_best_series`
     assert (e["series"], e["series_index"]) == ("Dune", "1")
     assert (e["year"], e["publisher"]) == ("2007", "Macmillan Audio")

@@ -99,8 +99,10 @@ DEFAULT_POLICY = "overwrite"
 MERGE_MIN_SCORE = 0.7
 #: 参与合并的**相对**下限：距最佳候选不能太远（两道闸取严）
 MERGE_RELATIVE = 0.9
-#: 合并后的题材上限（与单候选 `_entry` 的 8 个同口径）
-MERGE_MAX_TAGS = 8
+# 多值字段（tags / narrators）的条数上限**不在这里定义** —— 它是
+# `metasources.MULTI_VALUE_MAX`（单一真源），候选侧与这里的合并侧同取那一份。
+# 原先这里另写过一个 `MERGE_MAX_TAGS = 8`，与 `_entry` 的 `[:8]` 是同一判据的**第二份**
+# 实现 —— 第 116 期把上限按字段拆开时一并收敛掉了（§1「单一真值源」）。
 
 #: 字段 → **该字段更可信的源**（命中者在该字段上插队，未命中按候选分数排）。
 #: 依据是各家**返回内容本身**的取舍，不是主观偏好：
@@ -224,7 +226,7 @@ def _candidate_values(cand: dict, blocklist: set) -> dict:
             vals = _as_list(cand.get(key))
             if field == "tags":
                 vals = [t for t in vals if norm_key(t) not in blocklist]
-            out[field] = vals[:8]
+            out[field] = vals[:metasources.MULTI_VALUE_MAX[field]]
         else:
             out[field] = _cand_value(cand, field, key)
     return out
@@ -251,7 +253,8 @@ def merge_values(cands: list, blocklist: set) -> tuple:
 
     1. 每个字段先看 :data:`FIELD_TRUST` 里的**信任源**（按该表顺序），再看候选分数，
        取第一个非空值 —— 所以「简介来自 Google Books、年份来自 Open Library」是**可预期**的；
-    2. **题材是合并而非择优**：多源题材按出现顺序去重拼起来（上限 :data:`MERGE_MAX_TAGS`）——
+    2. **题材是合并而非择优**：多源题材按出现顺序去重拼起来
+       （上限 :data:`metasources.MULTI_VALUE_MAX` 里的 `tags` 档）——
        各家的题材本来就不重合，取某一个源反而信息更少；
     3. 逐字段回传 `来源 / 分数`：写库账目对得上（谁给的值、多可信）；封面同理单列。
     4. **演播者（第 103 期）与题材相反：只取一家、不拼** —— 那是版本属性，
@@ -286,7 +289,7 @@ def merge_values(cands: list, blocklist: set) -> tuple:
                         if first is None:
                             first = c
             if merged:
-                values["tags"] = merged[:MERGE_MAX_TAGS]
+                values["tags"] = merged[:metasources.MULTI_VALUE_MAX["tags"]]
                 origin["tags"] = {"source": str((first or {}).get("source") or ""),
                                   "score": float((first or {}).get("score") or 0.0)}
             continue
@@ -297,7 +300,7 @@ def merge_values(cands: list, blocklist: set) -> tuple:
             for c in order(field):
                 vals = _as_list(c.get(key))
                 if vals:
-                    values[field] = vals[:MERGE_MAX_TAGS]
+                    values[field] = vals[:metasources.MULTI_VALUE_MAX[field]]
                     origin[field] = {"source": str(c.get("source") or ""),
                                      "score": float(c.get("score") or 0.0)}
                     break

@@ -619,6 +619,25 @@ def _kobo_id(d: dict) -> str:
     return m.group(1) if m else ""
 
 
+#: 多值字段（`tags` / `narrators`）落库条数上限 —— **单一真源**（第 116 期）。
+#:
+#: 候选侧（:func:`_entry`）与合并侧（``metafetch._candidate_values`` / ``merge_values``）
+#: 都取这一份。原先散在**四处**各写死一个 8（`_entry` 的 `tags` / `narrators` 各一处、
+#: `metafetch._candidate_values` 的 `vals[:8]`、`metafetch.MERGE_MAX_TAGS`）—— 同一判据的
+#: 多份实现，改一处另几处照旧（§1「单一真值源」）。
+#:
+#: **为什么要分字段**（第 116 期）：
+#: - ``tags`` 是「尽力而为的标签」：多源题材合并就靠它防爆（OpenLibrary 的 ``subject``
+#:   拆开后常上百条），8 项是**刻意的策展上限**；
+#: - ``narrators`` 是**这版录音的事实阵容**，不是「够用就行」的标签 —— 第 115 期真机
+#:   Audible 的《Dune》有 12 位演播者，砍到 8 位就是**丢事实**（落库的阵容与实体不符）。
+#:   32 项远超真实有声书阵容（第 115 期实测最多 12 位）。
+#:
+#: ⚠️ 上限**按字段取值**（``MULTI_VALUE_MAX[field]``），新增多值字段忘了登记会直接
+#: ``KeyError``（启动/首测就炸），不会静默退回某个默认值。
+MULTI_VALUE_MAX = {"tags": 8, "narrators": 32}
+
+
 def _entry(source: str, **kw) -> dict:
     """统一候选结构 —— 前端与写回逻辑都只认这一种形状。
 
@@ -637,6 +656,8 @@ def _entry(source: str, **kw) -> dict:
     卷号一律走 :func:`_series_index_of`：**只认数字**。
 
     第 103 期起也多带 ``narrators``（演播者）：与 ``tags`` 一样的多值字段，空值为 ``[]``。
+    第 116 期起这两个字段的上限按字段分开（见 :data:`MULTI_VALUE_MAX`）—— 原先统一 ``[:8]``，
+    会把 12 位演播者的有声书砍成 8 位。
 
     第 113 期起多带 ``subtitle``（副标题）：与上面三项**不一样** —— 它自第 63 期就
     **整套建模好了**（``fileops.METADATA_FIELDS`` / ``metafetch._VALUE_KEYS`` /
@@ -659,11 +680,14 @@ def _entry(source: str, **kw) -> dict:
         "subtitle": _strip_html(kw.get("subtitle")),
         "series": _strip_html(kw.get("series")),
         "series_index": _series_index_of(kw.get("series_index")),
-        "tags": [t for t in (_strip_html(x) for x in (kw.get("tags") or [])) if t][:8],
-        # 第 103 期：演播者（有声书）。与 `tags` 同口径的**多值字段**：空就是 `[]`，
-        # 不写空串 —— 下游 `metafetch` 对这两个字段都按列表处理（合并规则不同：
+        # 多值字段的条数上限按字段取（见 `MULTI_VALUE_MAX`）：tags 8 / narrators 32
+        "tags": [t for t in (_strip_html(x) for x in (kw.get("tags") or [])) if t][
+            :MULTI_VALUE_MAX["tags"]],
+        # 第 103 期：演播者（有声书）。与 `tags` 同一种**多值字段**（清洗规则相同、上限不同）：
+        # 空就是 `[]`，不写空串 —— 下游 `metafetch` 对这两个字段都按列表处理（合并规则不同：
         # 题材跨源拼、演播者只取一家，见那里的 `merge_values`）。
-        "narrators": [n for n in (_strip_html(x) for x in (kw.get("narrators") or [])) if n][:8],
+        "narrators": [n for n in (_strip_html(x) for x in (kw.get("narrators") or [])) if n][
+            :MULTI_VALUE_MAX["narrators"]],
         "cover_url": _clean(kw.get("cover_url")),
         "raw_id": _clean(kw.get("raw_id")),
         #: 该源那条记录的标识 → 字段名由 SOURCE_ID_FIELD 决定；无字段的源恒为空

@@ -138,6 +138,42 @@ def test_演播者首位源为空则顺延到下一家(isolated, monkeypatch):  
     assert item["changes"]["narrators"]["to"] == ["Simon Vance"]
 
 
+def test_演播者上限内全留(isolated, monkeypatch):  # noqa: ARG001
+    """第 116 期：12 位演播者的阵容**一条不少**地过合并。
+
+    旧口径在**两个环节各砍一刀**（候选侧 `_entry` 的 `[:8]`、合并侧 `MERGE_MAX_TAGS = 8`），
+    所以这条同时钉住「合并侧也从 `MULTI_VALUE_MAX` 取」—— 只改候选侧会在这里红。
+    """
+    cast = [f"演播者{i}" for i in range(12)]
+    item = _plan(monkeypatch, [cand("audible", 0.95, narrators=cast)])
+
+    assert item["changes"]["narrators"]["to"] == cast
+
+
+def test_演播者超上限仍截(isolated, monkeypatch):  # noqa: ARG001
+    """上限放宽 ≠ 取消：防爆闸还在，值取自 `metasources.MULTI_VALUE_MAX`（单一真源）。"""
+    cast = [f"演播者{i}" for i in range(40)]
+    limit = metafetch.metasources.MULTI_VALUE_MAX["narrators"]
+    item = _plan(monkeypatch, [cand("audible", 0.95, narrators=cast)])
+
+    assert item["changes"]["narrators"]["to"] == cast[:limit]
+    assert len(cast) > limit, "用例前提：构造的阵容必须真的超过上限"
+
+
+def test_题材去重后仍截到上限(isolated, monkeypatch):  # noqa: ARG001
+    """题材的上限**没有放宽**（仍是 8 项策展上限）—— 两源各 6 条拼成 12 条后只留 8。"""
+    a = [f"甲{i}" for i in range(6)]
+    b = [f"乙{i}" for i in range(6)]
+    limit = metafetch.metasources.MULTI_VALUE_MAX["tags"]
+    item = _plan(monkeypatch, [
+        cand("openlibrary", 0.95, tags=a),
+        cand("googlebooks", 0.93, tags=b),
+    ])
+
+    assert item["changes"]["tags"]["to"] == (a + b)[:limit]
+    assert limit == 8, "题材的 8 项是刻意的策展上限，别顺手改掉"
+
+
 def test_关掉开关逐字回到旧行为(isolated, monkeypatch):  # noqa: ARG001
     item = _plan(monkeypatch, [
         cand("openlibrary", 0.95, year="1965"),
