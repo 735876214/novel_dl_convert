@@ -171,9 +171,9 @@ graph LR
 2. `meta_locks` 显式字段锁（**只挡抓取，不挡手工编辑**）；
 3. 「改过就不动」（字段在 `overrides` 里）。
 
-**14 家提供商**（`core/metasources.py`）：
+**13 家提供商**（`core/metasources.py`）：
 - 出网**只经** `_get_json` / `_get_text` 两个薄封装 ⇒ 契约测试 monkeypatch 它俩即可**离线**验证全部解析。
-- 注册表 `SOURCES` 与 `_FETCHERS` **逐字一致**（契约钉住）；三档如实标注：免密钥即用（5）/ 需密钥（3，`key_field`）/ 页面抓取型（6，`fragile` → 「易失效」徽标）。
+- 注册表 `SOURCES` 与 `_FETCHERS` **逐字一致**（契约钉住）；三档如实标注：免密钥即用（4）/ 需密钥（3，`key_field`）/ 页面抓取型（6，`fragile` → 「易失效」徽标）。
 - **单源异常绝不冒泡**（解析器一律过滤 + 空响应回落 `[]`）。
 - 编排在 `core/metafetch.py`：`plan`（逐本）/ `online_candidate`（单本）/ `series_meta`（系列按成员书投票）三处**同一套规则**；
   跨源合并只在 `score ≥ max(0.7, 0.9×最佳)` 的候选间进行；按语种**重排**（不筛源）。一律**先预览再应用**。

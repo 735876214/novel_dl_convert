@@ -7380,3 +7380,94 @@ docker/setup-buildx-action@v3, docker/setup-qemu-action@v3
   与本仓既有口径一致）。
 - **没核过**：多架构构建（`linux/amd64,linux/arm64`）在 `build-push@v7` + `setup-buildx@v4` 下的
   真机产物 —— 只核到「CI 这一跑成功」，**没有**在 NAS 端实拉一次新镜像。
+
+## 第 115 期（核验演播者：摘掉 Audnexus、Audible 接按 ASIN 取详情）
+
+**需求来源**：用户原话「**核验 演播者（narrators）**」—— 即 `docs/TODO.md` §1 挂了四期的那条
+「演播者（`narrators`）：Audnexus 未接线」（第 103 期真机探活后挂起，第 102 期同一条阻塞）。
+
+### 一、真机核验（2026-10-08，全程真实地址，不是读文档）
+
+| 对象 | 结论 | 证据 |
+| --- | --- | --- |
+| Audible 检索 | ✅ 可用 | `GET api.audible.com/1.0/catalog/products?keywords=Dune&num_results=3&response_groups=product_desc,contributors,media,series` → **200**；Dune 12 位演播者、Dune Messiah 4 位、Children of Dune 2 位；`subtitle` / `series` 同时在场 |
+| Audnexus 声明的域名 | ❌ **已注销** | `api.audnexus.com` 与 `audnexus.com` 在**权威** `.com` TLD 服务器上回 **NXDOMAIN**（Google 与 Cloudflare DoH 都给 `"Status":3`，Authority = `a.gtld-servers.net` 的 SOA）⇒ **既不是本机 DNS 污染，也不是第 103 期记的 `SSL EOF`** |
+| Audnexus 真实接口 | ⚠️ 活着，但在**另一条轴** | 真接口是 `https://api.audnex.us`；`/books/{asin}` ✅ 200、`/authors/{asin}` ✅、`/books/{asin}/chapters` ✅；但 **`/books?title=…` → 404 `Route GET:/books not found`**、`/search` 也 404 ⇒ **它没有检索路由，纯 ASIN 键** |
+| Audnexus 的 narrators | ✅ 形状如 docstring 所写 | `/books/B08G9PRS1K` → `narrators:[{"name":"Ray Porter"}]`；Dune 回**同样的 12 位**；但 **`series` 恒为 `null`**（连 Dune 都是 null） |
+| Audible 自带按 ASIN | ✅ 可用，且**比 Audnexus 全** | `GET api.audible.com/1.0/catalog/products/B002V1OF70?response_groups=product_desc,contributors,media,series` → 200 `{"product": {…}}`：同样 12 位演播者 + `subtitle` + **`series`（Dune #1 / The Dune Sequence #12）** |
+
+**代码审计（与实测互相印证）**：
+
+- `narrators=` 在全仓 `metasources.py` **只出现一次**（Audible，原 `:1377`）；`subtitle=` / `series=` 同理。
+- `_audnexus_entry` 的 docstring 与注册表 `note="…（演播者 / 章节 / 系列）"` 都宣称给演播者 / 系列，
+  **函数体一个都没映射** ⇒ **死声明**；而 `_search_audnexus` 打的 `GET /books?title=` 这条路由
+  **在任何 host 上都不存在**（实测 404）⇒ 这家源**从来不可能产出任何东西**，但它在界面上
+  占着一个开关、在体检里占着 1/14 的份额、在 `kinds.FIELDS_OF_KIND[KIND_AUDIOBOOK]` 里
+  替 `narrators` 打了勾（**假能力**，`AGENTS.md` §7）。
+
+**用户拍板（两轮 `AskUserQuestion`）**：① **摘掉 Audnexus，改接 Audible 按 ASIN 详情** ——
+Audnexus 在本链路里是**冗余的第二份实现**（数据本就源自 Audible）且比 Audible **少给系列**；
+② 核验**核到源为止**，不起本地实例。
+
+### 二、实施
+
+1. **删掉 `audnexus` 这家提供商**（彻底删，不留兼容垫片，§7.1）：
+   `registry.DECLARED` 的 `Provider` 整块、`metasources` 的 `AUDNEXUS` 常量 / `_audnexus_entry` /
+   `_search_audnexus` / `_FETCHERS` 条目 / 四处提到它的注释。
+2. **Audible 接「按 ASIN 取详情」**（第 102 期建的 `detail_fetch` 轴）：
+   - 把 `_search_audible` 里那段逐条映射抽成 **`_audible_entry(p)`**，检索改成循环调用它
+     —— 详情与检索**共用同一份字段映射**（照 `_itunes_entry` / `_detail_itunes` 的规矩，§7.1）；
+   - 新增 `AUDIBLE_CATALOG = "https://{host}/1.0/catalog/products{tail}"` 与
+     `AUDIBLE_RESPONSE_GROUPS` 两个常量（检索尾段为空、详情尾段 `/ASIN`），
+     **响应组只有一处真值源**（第 99 期：加一个非法组名 ⇒ 400 ⇒ 整家永远 0 结果）；
+   - `_detail_audible(provider_id, opts)` 按 `opts["region"]` 选分站域名，取 `data["product"]`
+     交给 `_audible_entry`；`registry` 的 audible 声明加 `detail_name="_detail_audible"`。
+   - `DETAIL_SOURCES` 由 2 家变 **3 家**（audible / itunes / openlibrary），
+     `metafetch._detail_first()` **无需改动**（`SOURCE_ID_FIELD["audible"] == "audible_id"` 早已存在）。
+     `detail_fetch` **默认仍关**（第 102 期口径）。
+3. **「14 家」→「13 家」全量收敛**（当前口径，**不动历史**）：后端 `config.py` / `metafetch.py` /
+   `metasources.py`（10 处）/ `sources/kinds.py`；前端 `MetadataPage.vue`（含**用户可见文案**：
+   note 里的「14 家」→「13 家」、「免密钥 5 家」→「4 家」、去掉 `AudNexus`、体检按钮的文案）
+   与 `api.ts` 两处注释；文档 `docs/architecture.md`（含三档 5/3/6 → **4/3/6**）/
+   `docs/project-overview.md` / `docs/user-guide.md`。三处「audible 与 audnexus 两家同填」的注释逐处改掉。
+   ⚠️ `docs/roadmap-gaps-remaining.md`、`.codebuddy/memory/**`、`docs/bookorbit/**` 里的旧「14 家 / AudNexus」
+   **保留** —— 那是**历史记录与上游对照基线**，改了就是篡改。
+
+### 三、契约测试与防回归
+
+- `tests/test_metadata_providers.py`（含「13 家 / 四组」与 `/api/metadata/providers` 的 `total`/`implemented_count`）、
+  `tests/test_metasource_registry_contract.py`（`provider_catalog()` 计数）、
+  `tests/test_metasources_parsers.py`（docstring）、`tests/test_metasources_health.py`（docstring）同步到 13。
+- `tests/test_metasources_detail.py`：声明范围断言改 `["audible", "itunes", "openlibrary"]`；
+  **新增 4 例 Audible 详情**（复用映射 + 12 位演播者按 `[:8]` 截断 / 按区域换分站 /
+  不同区域不共用缓存 / `{"product": null}` 回明确说明）。夹具用的是**本轮真机响应**（ASIN `B002V1OF70`）。
+- **「改动前会红」已实做**：临时摘掉 `detail_name="_detail_audible"` 跑一次 ⇒
+  `test_只有核过的三家声明了详情通道` + 4 个 Audible 详情用例**全红**（5 failed），接线后转绿。
+- 删掉 `test_audnexus_解析对象数组作者` 与其夹具；`test_metafetch_merge.py` 的演播者两条把假候选
+  的源从 `audnexus` 换成**真实存在**的 `librofm`（原来那个 id 指向一个已不存在的源）；
+  `test_provider_ids.py` 删掉「audnexus 与 audible 共用」断言；`test_netdiag.py` 的占位域名从
+  `api.audnexus.com`（现在**真的** NXDOMAIN）换成中性的 `books.example.org`。
+
+### 四、验证
+
+- **后端全量**：**2405 例（2379 passed / 0 failed / 0 errors / 26 skipped）**，345 s
+  （基线 2402 → 2405：删 1 例 audnexus 解析、增 4 例 Audible 详情）。
+- **前端四连**：`type-check` exit 0；`test:unit` **717 passed**；`build` + `deploy` 已跑
+  （⚠️ 只改文案也必须 deploy —— 否则服务端仍发旧 bundle，界面照旧显示「14 家」；
+  已回读 `novelforge/static/v2`，`13 家` 在、`AudNexus` 不在）。
+- **真机复核（本期的判据）**：改完**再用真实地址打一次** —— 走 `M.detail("audible", "B002V1OF70")`
+  得 `title=Dune` / `subtitle=Book One in the Dune Chronicles` / 8 位演播者（`_entry` 统一截断）/
+  `series="Dune" #1` / `provider_id=B002V1OF70`。桩站单测永远绿 ⇒ 这类改动**必须**拿真实地址核一次（`AGENTS.md` §5）。
+- **旧配置不炸**：构造 `sources` 含 `audnexus` 的配置跑一遍 —— `is_implemented("audnexus")` 为 `False`，
+  `metafetch.plan` 的来源过滤把它**静默剔除**，不抛异常。
+
+### 五、没做 / 没核过
+
+- **没接 Audnexus**（用户拍板摘掉）；**没接它的继任者 AudiobookDB**（属新源，另立项）。
+- **没改 `detail_fetch` 默认值**（仍默认关）；**没动 `kinds` 的字段轴**（`KIND_AUDIOBOOK` 仍含 `narrators`，
+  现在只有 Audible 一家真的供它 —— 这是**如实**的，不再是假声明）。
+- **没发版**：`VERSION` 仍 `1.3.0`。
+- ⚠️ **删源是刻意的可见行为变更**：「元数据来源」页少一家、体检从 14 家变 13 家 ——
+  这是本期**要**的结果（消灭死声明），不是回归。
+- `_entry` 对多值字段**统一截断到 8 项**（`tags` 与 `narrators` 同口径）⇒ 真机 12 位演播者落库 8 位；
+  本期**没有**动这个上限（它影响所有多值字段与既有库，属独立议题）。

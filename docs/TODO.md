@@ -4,21 +4,23 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-08 —— 第 114 期**CI 的 5 个 action 升到 Node 24 运行时**：
-把 `Build and Push Image` 里那条从第 105 期就挂着的 warning 清掉 —— `actions/checkout@v4` /
-`docker/build-push-action@v6` / `setup-buildx@v3` / `setup-qemu@v3` / `login@v3` 全是 **node20** 运行时
-（GitHub 已弃用、强制在 node24 上跑），一次升到最新大版本（`checkout@v7` / `build-push@v7` / 其余三个 `@v4`）；
-升级前逐个 diff 过上游 `action.yml` 的 `inputs:`，本仓用到的**一个都没更名** ⇒ 纯版本号替换。
-另加一条离线契约测试 `tests/test_ci_actions_contract.py` 钉住这 5 个大版本。
-历史：第 113 期 Audible `subtitle` 接线 + TODO §0 精简；`VERSION` 仍 `1.3.0`（本期**不发版**）。
+**最后更新**：2026-10-08 —— 第 115 期**核验演播者：摘掉 Audnexus、Audible 接按 ASIN 取详情**：
+用户点名「核验演播者」，结果核到这家源的**根**上了 —— `api.audnexus.com` 在权威 TLD 上**已 NXDOMAIN**
+（不是第 103 期记的 `SSL EOF`），真接口 `api.audnex.us` 又**没有检索路由**（`/books?title=` 实测 404）⇒
+这家四期来**从未可能产出任何东西**，却一直在界面上占开关、替 `narrators` 打勾（假能力）。
+按用户拍板**彻底摘掉**（不留兼容垫片），改接 **Audible 自带的 `/products/{asin}`**
+（真机核过：`{"product": {…}}`、与检索同形状、且**多给 `series`**——Audnexus 那项恒为 `null`）。
+提供商 14 → **13 家**；`DETAIL_SOURCES` 2 → **3 家**（audible / itunes / openlibrary）。
+历史：第 114 期 CI 的 5 个 action 升到 Node 24 运行时；`VERSION` 仍 `1.3.0`（本期**不发版**）。
 
 ## 0. 当前状态
 
-- HEAD = 第 114 期 CI 的 5 个 action 升到 Node 24 运行时（第 95–113 期逐期历史见 §2 与 `git log --oneline`）；`VERSION` = **1.3.0**
+- HEAD = 第 115 期核验演播者（摘掉 Audnexus、Audible 接按 ASIN 取详情）（第 95–114 期逐期历史见 §2 与 `git log --oneline`）；`VERSION` = **1.3.0**
   —— 单一真值源，`GET /health` 下发；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，改为**按里程碑发版**
   （第 112 期里程碑 = FB2 直读 + 容器自动展开，`CHANGELOG.md` 最新段 `V1.3.0 — 2026-10-07` 即取自它）。
-- 测试基线（第 114 期实测）：后端 **2402 例（2376 passed / 0 failed / 0 errors / 26 skipped）**，全量 265 s；
-  前端 **69 spec / 717 例**、`vue-tsc --build --force` exit 0（本期**前端零改动** ⇒ 文件数与例数不变、无需动 `EXPECTED_SPECS`）。
+- 测试基线（第 115 期实测）：后端 **2405 例（2379 passed / 0 failed / 0 errors / 26 skipped）**，全量 345 s；
+  前端 **69 spec / 717 例**、`vue-tsc --build --force` exit 0（本期只改**文案与注释** ⇒
+  文件数与例数不变、无需动 `EXPECTED_SPECS`；但**必须 build + deploy**，否则服务端仍发旧 bundle）。
 - ⚠️ **本机运行陷阱不在这里重抄** —— 清空全部代理变量 / 别加 `-q` / 别跑 `pnpm` / 本机 DNS 被污染 /
   长跑 pytest 后台跑 + 轮询 junit / 新增前端 spec 要登记 `EXPECTED_SPECS` / 只跑相关文件看不见连锁失败：
   **一律看 `AGENTS.md` §5 与 §4**。
@@ -74,11 +76,12 @@
 > `setup-buildx@v4` / `setup-qemu@v4` / `login@v4`，见 roadmap 第 114 期段）—— 那条待办随之删除，
 > 并新增离线契约测试 `tests/test_ci_actions_contract.py` 钉住这 5 个大版本。
 
-- [ ] **演播者（`narrators`）：Audnexus 未接线**（第 103 期真机探活后挂起，不是忘了）——
-  本期只接了**真机核过**的 Audible（`narrators` 是顶层键，每项 `{"name": …}`，Dune 12 位实测）。
-  `novelforge/core/metasources.py` 的 `_audnexus_entry` docstring 自称「`authors`/`narrators` 都是对象数组」
-  但**从未映射** narrators / series —— 而 `api.audnexus.com` 从本机连打 3 次全是
-  `[SSL: UNEXPECTED_EOF_WHILE_READING]`（与第 102 期同一条阻塞）⇒ **没核过就不声明**（第 95 期口径）。
+> 第 115 期把 **`narrators` 那条待办核到了根上**（见 roadmap 第 115 期段）—— 结论不是「补线」而是
+> **摘源**：`api.audnexus.com` 已 NXDOMAIN、真接口 `api.audnex.us` **没有检索路由** ⇒ 这家源**从未可能**
+> 产出任何东西，且 `_audnexus_entry` 自称映射了 narrators/series 而**一个都没写**（死声明）。
+> 按用户拍板**整家删除**（不留兼容垫片），改接 **Audible 自带的 `/products/{asin}`** 取详情
+> （真机核过：12 位演播者 + `subtitle` + `series`，比 Audnexus 全）。该待办随之删除。
+
 - [ ] **Open Library 的 `series` 字段未核验**——`_OL_FIELDS` 现在**不含** `series`，
   所以这家源对本期的三个字段贡献为零。探针（`fields=key,title,series,author_name`）撞上
   本机 `ConnectTimeout`（见下面那条「间歇性不可达」）⇒ 拿到真实响应再决定要不要加。
@@ -97,14 +100,17 @@
   用户不会再误判成「站点挂了」。
   同理 `novelforge/core/fileops.py` 的 OPF 改写正则（出版副本 XML，字节等价不可证）继续保留。
 
-- [ ] **按 ID 取详情：三家源仍未核验**（第 102 期真机探活后挂起，不是忘了）——
-  `novelforge/core/metasources.py` 的 `_DETAIL_FETCHERS` 只接了**真机核过**的两家
-  （iTunes `/lookup?id=`、Open Library `/works/OL…W.json`）。三家具体阻塞原因：
+- [ ] **按 ID 取详情：两家源仍未核验**（第 102 期真机探活后挂起，不是忘了；第 115 期更新）——
+  `novelforge/core/metasources.py` 的 `_DETAIL_FETCHERS` 已接了**真机核过**的三家
+  （iTunes `/lookup?id=`、Open Library `/works/OL…W.json`、**第 115 期新接的 Audible
+  `/1.0/catalog/products/{asin}`**）。剩下两家的具体阻塞原因：
   **Google Books** 三个查询全部 `429`（匿名额度耗尽，`volumes/{id}` 端点没核过）/
-  **Audnexus** 本机 `[SSL: UNEXPECTED_EOF_WHILE_READING]` 不可达 / **Goodreads** `GET /book/show/{id}`
-  返回 `302`（反爬验证页）。按第 95 期口径「没有逐家真机核过就改选择器语义 = 用单测绿换线上未知」
-  ⇒ `detail()` 对这三家如实回**明确中文回绝**（「这家来源没有按 ID 取详情的通道，请改用按书名检索」）。
-  证据见 roadmap 第 102 期 §四。
+  **Goodreads** `GET /book/show/{id}` 返回 `302`（反爬验证页）。
+  （原先列在这里的第三家 **Audnexus 已在第 115 期整家删除** —— 它的声明域名 NXDOMAIN、
+  真接口 `api.audnex.us` 又没有检索路由，见上面那条 115 期注记。）
+  按第 95 期口径「没有逐家真机核过就改选择器语义 = 用单测绿换线上未知」
+  ⇒ `detail()` 对这两家如实回**明确中文回绝**（「这家来源没有按 ID 取详情的通道，请改用按书名检索」）。
+  证据见 roadmap 第 102 期 §四、第 115 期段。
 - [ ] **Open Library 本机解析被污染（不是本站的链路问题）**（第 104 期定因，**改自第 102 期的「链路问题」**）——
   重试探针 12/12 次全部 `ConnectTimeout [WinError 10060]`，裸 `httpx.get(url, timeout=30)` 也连不上
   （各耗 42 s）；第 104 期查了 DNS：本机 `openlibrary.org` → **`31.13.112.4`**（Facebook 段），
@@ -139,6 +145,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 115 | 核验演播者：摘掉 Audnexus、Audible 接按 ASIN 取详情 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 115 期段 |
 | 114 | CI 的 5 个 action 升到 Node 24 运行时 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 114 期段 |
 | 113 | Audible `subtitle` 接线；TODO §0 精简 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 113 期段 |
 | 112 | FB2 直读 + 容器自动展开 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 112 期段 |
