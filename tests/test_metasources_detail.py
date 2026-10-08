@@ -1,11 +1,12 @@
 """第 102 期：按 ID 取详情（`metasources.detail`）的行为契约。
 
 「按 ID 取详情」补的是检索**猜不准**的那一半：库里已经记过 `openlibrary_id` /
-`itunes_id` 的书，用**精确键**回查比拿书名再猜一次更准。本文件钉住四件事：
+`itunes_id` / `audible_id` 的书，用**精确键**回查比拿书名再猜一次更准。本文件钉住四件事：
 
 - **只绑定真机核验过的家**：接口存在 + 返回形状对得上才在声明里写 `detail_name`。
-  第 102 期核过 itunes 与 openlibrary；googlebooks（匿名 429）/ audnexus（本机不可达）/
-  goodreads（302 反爬）**未核过 ⇒ 不声明**（`AGENTS.md` §7「不做假能力」）。
+  第 102 期核过 itunes 与 openlibrary，第 115 期核过 audible（`/products/{asin}` 回
+  `{"product": {…}}`、与检索同形状）；googlebooks（匿名 429）/ goodreads（302 反爬）
+  **未核过 ⇒ 不声明**（`AGENTS.md` §7「不做假能力」）。
 - 未覆盖的家 / 缺标识 / 假标识**都不外呼**，且都回用户看得懂的中文 ——
   「这家没有这条通道」与「这家有但刚才失败了」要能分得开（处置不同）。
 - 解析：iTunes 复用检索的字段映射（`/lookup` 与 `/search` 同响应形状）；
@@ -84,13 +85,13 @@ class _Routes:
 
 # ---------------------------------------------------------------- 声明范围
 
-def test_只有核过的两家声明了详情通道():
+def test_只有核过的三家声明了详情通道():
     """声明范围**就是**契约：多一家 = 多一个没核过的端点在假装有这项能力。
 
     要加一家，先真机核出「接口存在 + 形状对得上」，再把它的解析函数写进 `metasources`
     并在声明里填 `detail_name` —— 顺序不能倒（倒过来就是拿单测绿冒充线上可用）。
     """
-    assert sorted(M._DETAIL_FETCHERS) == ["itunes", "openlibrary"]
+    assert sorted(M._DETAIL_FETCHERS) == ["audible", "itunes", "openlibrary"]
     for sid, fn in M._DETAIL_FETCHERS.items():
         p = next(x for x in M._src_registry.DECLARED if x.id == sid)
         assert p.detail_name == fn.__name__, f"{sid} 的声明与绑定对不上"
@@ -283,6 +284,97 @@ def test_openlibrary空文档如实失败(monkeypatch):
     monkeypatch.setattr(M, "_get_json", routes)
 
     assert M.detail("openlibrary", "/works/OL17267881W")["ok"] is False
+
+
+# ---------------------------------------------------------------- Audible
+
+AUDIBLE_ASIN = "B002V1OF70"
+AUDIBLE_URL = "https://api.audible.com/1.0/catalog/products/" + AUDIBLE_ASIN
+AUDIBLE_UK_URL = "https://api.audible.co.uk/1.0/catalog/products/" + AUDIBLE_ASIN
+#: 检索与详情**逐字同组**（第 99 期：带一个非法组名会让接口 400、整家永远 0 结果）
+AUDIBLE_CALL = {"response_groups": "product_desc,contributors,media,series"}
+
+#: Audible `/1.0/catalog/products/{asin}` 的**真实响应**（第 115 期真机核验，ASIN B002V1OF70）：
+#: 单条包在 `{"product": {…}}` 里，字段形状与检索**完全一致** —— 这正是能复用
+#: `_audible_entry` 的理由（写第二份字段映射就是 §7.1 说的「第二份实现」）。
+AUDIBLE_DOC = {"product": {
+    "asin": AUDIBLE_ASIN,
+    "title": "Dune",
+    "subtitle": "Book One in the Dune Chronicles",
+    "authors": [{"name": "Frank Herbert"}],
+    "narrators": [{"name": n} for n in (
+        "Scott Brick", "Orlagh Cassidy", "Euan Morton", "Simon Vance", "Ilyana Kadushin",
+        "Byron Jennings", "David R. Gordon", "Jason Culp", "Kent Broadhurst", "Oliver Wyman",
+        "Patricia Kilgarriff", "Scott Sowers")],
+    "series": [{"title": "Dune", "sequence": "1"},
+               {"title": "The Dune Sequence", "sequence": "12"}],
+    "publisher_name": "Macmillan Audio",
+    "publication_datetime": "2007-05-29T01:13:52Z",
+    "language": "english",
+    "product_images": {"500": "https://m.media-amazon.com/images/I/x._SL500_.jpg"},
+}}
+
+
+def test_audible详情复用检索的字段映射(monkeypatch):
+    """第 115 期新接：`/products/{asin}` 与检索**同端点、同响应组、同形状**。
+
+    这家的意义就是**演播者**：检索已经能拿到（第 103 期），但只有存过 ASIN 的书
+    才能用精确键回查 —— 而那正是「库里记过的书」最常见的形态。
+    """
+    routes = _Routes(**{AUDIBLE_URL: AUDIBLE_DOC})
+    monkeypatch.setattr(M, "_get_json", routes)
+
+    res = M.detail("audible", AUDIBLE_ASIN)
+
+    assert res["ok"] is True
+    e = res["entry"]
+    assert e["source"] == "audible"
+    assert e["title"] == "Dune"
+    assert e["subtitle"] == "Book One in the Dune Chronicles"
+    assert e["author"] == "Frank Herbert"
+    # 真机 Dune 是 12 位演播者，但 `_entry` 对多值字段**统一截到 8 项**（与 `tags` 同口径）
+    assert e["narrators"] == ["Scott Brick", "Orlagh Cassidy", "Euan Morton", "Simon Vance",
+                              "Ilyana Kadushin", "Byron Jennings", "David R. Gordon",
+                              "Jason Culp"]
+    # 多支系列里取**卷号最小**的那支（不是第一条）—— 与检索同一套 `_best_series`
+    assert (e["series"], e["series_index"]) == ("Dune", "1")
+    assert (e["year"], e["publisher"]) == ("2007", "Macmillan Audio")
+    assert e["provider_id"] == AUDIBLE_ASIN
+    assert routes.calls == [(AUDIBLE_URL, AUDIBLE_CALL)]
+
+
+def test_audible详情按区域换分站(monkeypatch):
+    """UK / DE / JP 的 ASIN 在 US 站查不到 ⇒ 区域必须跟着 `opts` 走。"""
+    routes = _Routes(**{AUDIBLE_UK_URL: AUDIBLE_DOC})
+    monkeypatch.setattr(M, "_get_json", routes)
+
+    assert M.detail("audible", AUDIBLE_ASIN, {"region": "uk"})["ok"] is True
+    assert routes.calls == [(AUDIBLE_UK_URL, AUDIBLE_CALL)]
+
+
+def test_audible不同区域不共用缓存(monkeypatch):
+    """`opts` 进缓存键的**详情侧**证明：先 us 再 uk 必须发第二次外呼。
+
+    否则「用户把区域从 us 改成 uk」看不出任何变化 —— 回的是 US 站的缓存。
+    """
+    routes = _Routes(**{AUDIBLE_URL: AUDIBLE_DOC, AUDIBLE_UK_URL: AUDIBLE_DOC})
+    monkeypatch.setattr(M, "_get_json", routes)
+
+    M.detail("audible", AUDIBLE_ASIN)
+    M.detail("audible", AUDIBLE_ASIN, {"region": "uk"})
+
+    assert [c[0] for c in routes.calls] == [AUDIBLE_URL, AUDIBLE_UK_URL]
+
+
+def test_audible空结果回明确说明(monkeypatch):
+    """`{"product": null}`（ASIN 已下架）⇒ 如实说「没返回」，不能报成可用。"""
+    routes = _Routes(**{AUDIBLE_URL: {"product": None}})
+    monkeypatch.setattr(M, "_get_json", routes)
+
+    res = M.detail("audible", AUDIBLE_ASIN)
+
+    assert res["ok"] is False and res["entry"] is None
+    assert "没有返回这条记录" in res["error"]
 
 
 # ---------------------------------------------------------------- 缓存 / 限流

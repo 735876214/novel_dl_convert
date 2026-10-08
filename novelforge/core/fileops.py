@@ -358,7 +358,7 @@ PROVIDER_ID_FIELDS = (
     "itunes_id",           # iTunes trackId / collectionId（数字）
     "kobo_id",             # Kobo 书目 slug（Kobo 页面用 /ebook/<slug> 定位，无数字 ID）
     "aladin_id",           # Aladin itemId
-    "audible_id",          # Audible ASIN（audible 与 audnexus 两家同填这一个）
+    "audible_id",          # Audible ASIN（Audible 家的书目标识；检索与按 ASIN 详情共用）
 )
 METADATA_FIELDS = (
     "title", "author", "series", "series_index",

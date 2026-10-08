@@ -1,4 +1,4 @@
-"""第 57 期：14 家元数据提供商「全部真的能用」的契约。
+"""第 57 期：13 家元数据提供商「全部真的能用」的契约。
 
 这块的核心风险是**一致性**与**诚实性**，不是功能本身：
 
@@ -19,11 +19,11 @@ _KEY_FIELDS = {"googlebooks_api_key", "hardcover_api_token", "comicvine_api_key"
 _FRAGILE = {"amazon", "goodreads", "kobo", "audible", "librofm", "lubimyczytac"}
 
 
-def test_注册表覆盖上游十四家且分四组():
+def test_注册表覆盖十三家且分四组():
     items = metasources.provider_catalog()
 
-    assert len(items) == 14, [i["id"] for i in items]
-    assert len({i["id"] for i in items}) == 14, "id 不能重复"
+    assert len(items) == 13, [i["id"] for i in items]
+    assert len({i["id"] for i in items}) == 13, "id 不能重复"
     assert {i["group"] for i in items} == set(metasources.GROUPS)
     for meta in items:
         assert meta["label"] and meta["home"] and meta["note"], meta
@@ -34,7 +34,7 @@ def test_注册表覆盖上游十四家且分四组():
 def test_已实现清单与fetcher逐字一致():
     """`IMPLEMENTED` 是给注册表/前端看的，`_FETCHERS` 是真正能跑的 —— 两者必须相等。"""
     assert set(metasources.IMPLEMENTED) == set(metasources._FETCHERS)
-    assert len(metasources._FETCHERS) == 14
+    assert len(metasources._FETCHERS) == 13
     for sid in metasources.IMPLEMENTED:
         assert metasources.SOURCES[sid]["implemented"] is True, sid
         assert metasources.is_implemented(sid) is True, sid
@@ -80,7 +80,7 @@ def test_配置键三处登记一致():
 
 
 def test_默认启用顺序只含已实现的源():
-    assert len(metasources.DEFAULT_ORDER) == 2, "默认只开两家最可靠的，别一上来就 14 家外呼"
+    assert len(metasources.DEFAULT_ORDER) == 2, "默认只开两家最可靠的，别一上来就 13 家外呼"
     for sid in metasources.DEFAULT_ORDER:
         assert metasources.is_implemented(sid), f"{sid} 没实现却在默认顺序里"
 
@@ -113,8 +113,8 @@ def test_providers_端点给出分组与计数(client, auth_headers):
     assert r.status_code == 200, r.text
     body = r.json()
 
-    assert body["total"] == 14
-    assert body["implemented_count"] == 14
+    assert body["total"] == 13
+    assert body["implemented_count"] == 13
     assert body["active_count"] == 2, "默认启用 openlibrary + googlebooks"
     assert [g["name"] for g in body["groups"]] == list(metasources.GROUPS)
 

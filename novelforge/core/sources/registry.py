@@ -208,6 +208,7 @@ DECLARED: tuple = (
     Provider(
         id="audible", label="Audible", kind=KIND_AUDIOBOOK, group="有声读物",
         fetch_name="_search_audible",
+        detail_name="_detail_audible",
         home="https://www.audible.com",
         note="有声书目录（时长 / 演播者 / 系列），走其公开 catalog 接口；区域站点结果不同。",
         fragile=True,
@@ -222,14 +223,6 @@ DECLARED: tuple = (
                 ("jp", "jp（api.audible.co.jp）"),
             ]),
         ),
-    ),
-    Provider(
-        id="audnexus", label="AudNexus", kind=KIND_AUDIOBOOK, group="有声读物",
-        fetch_name="_search_audnexus",
-        home="https://audnexus.com",
-        note="有声书元数据聚合（演播者 / 章节 / 系列），公开接口、免 Key。",
-        id_field="audible_id",         # 与 audible 同填 ASIN（谁先命中谁写）
-        langs=("en",),
     ),
     Provider(
         id="librofm", label="Libro.fm", kind=KIND_AUDIOBOOK, group="有声读物",

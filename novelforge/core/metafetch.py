@@ -345,7 +345,7 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
     mf = _cfg(cfg)
     if not mf.get("enabled"):
         return {"enabled": False, "items": [], "message": "元数据抓取未启用"}
-    # 第 57 期：只认**真的能抓**的源（14 家都有 fetcher ⇒ 恒真）—— 留着这道过滤是防
+    # 第 57 期：只认**真的能抓**的源（13 家都有 fetcher ⇒ 恒真）—— 留着这道过滤是防
     # 「将来注册表先加条目、fetcher 还没写」的空档，那时也别白跑一次注定失败的外呼。
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
                if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)
@@ -548,7 +548,7 @@ def online_candidate(book: dict, cfg: dict = None, limit: int = None) -> "dict |
     mf = _mf_of(book, mf)
     if not mf.get("enabled"):
         return None
-    # 第 57 期：只认**真的能抓**的源（14 家都有 fetcher ⇒ 恒真）—— 留着这道过滤是防
+    # 第 57 期：只认**真的能抓**的源（13 家都有 fetcher ⇒ 恒真）—— 留着这道过滤是防
     # 「将来注册表先加条目、fetcher 还没写」的空档，那时也别白跑一次注定失败的外呼。
     sources = [s for s in (mf.get("sources") or list(metasources.DEFAULT_ORDER))
                if metasources.is_implemented(s)] or list(metasources.DEFAULT_ORDER)

@@ -32,7 +32,7 @@ def test_声明表自洽():
     registry.validate()
 
 
-def test_十四家都选了领域轴():
+def test_每家都选了领域轴():
     """第 102 期新增 `kind`：**每家必须显式表态**，不能默默漏过。
 
     拼错 kind 的后果是静默的 —— `kinds.fields_of()` 对未知 kind 返回空集，
@@ -131,7 +131,7 @@ def test_SOURCES仍是dict_of_dict():
 def test_provider_catalog条目带齐前端要的键():
     """前端「元数据来源」页直接吃 `provider_catalog()` —— 键少了页面会渲染成空白。"""
     items = metasources.provider_catalog()
-    assert len(items) == 14
+    assert len(items) == 13
     need = {"id", "label", "group", "home", "note", "implemented", "fragile",
             "needs_config", "config_hint", "config_fields", "key_field", "key_label",
             "key_placeholder", "langs", "lang_broad", "kind"}

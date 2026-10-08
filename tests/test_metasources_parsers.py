@@ -1,4 +1,4 @@
-"""第 57 期：14 家元数据提供商的**解析**契约（全部离线，不碰公网）。
+"""第 57 期：13 家元数据提供商的**解析**契约（全部离线，不碰公网）。
 
 做法：只 monkeypatch 出网收口层 —— `metasources._get_json` / `metasources._get_text`，
 喂各家真实响应形状的样例，断言候选字段映射正确。这样：
@@ -78,21 +78,6 @@ def test_带HTML的简介会被剥标签(monkeypatch):
     assert e["tags"] == ["Sci-Fi"], e["tags"]
     # 数字实体也要还原（实测 Amazon 书名里有 `Frank Herbert&#x27;s`）
     assert m._strip_html("<h2>Frank Herbert&#x27;s Dune</h2>") == "Frank Herbert's Dune"
-
-
-def test_audnexus_解析对象数组作者(monkeypatch):
-    _patch(monkeypatch, json_router={"audnexus": {"books": [{
-        "asin": "B01N", "title": "Project Hail Mary",
-        "authors": [{"name": "Andy Weir"}], "publisherName": "Audible Studios",
-        "releaseDate": "2021-05-04", "description": "太空求生",
-        "genres": [{"name": "科幻"}], "language": "english",
-        "image": "https://x/a.jpg",
-    }]}})
-    e = _one("audnexus")[0]
-
-    assert e["title"] == "Project Hail Mary" and e["author"] == "Andy Weir"
-    assert e["publisher"] == "Audible Studios" and e["year"] == "2021"
-    assert e["tags"] == ["科幻"] and e["language"] == "en"
 
 
 def test_ranobedb_两段式补详情(monkeypatch):

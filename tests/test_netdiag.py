@@ -223,7 +223,8 @@ def test_解析一致但连不上是本机网络问题(seams):
 def test_本机解析不出而公共能解析(seams):
     seams["public"] = {"8.8.8.8": ["199.59.149.201"]}
 
-    ref = nd.refine({"kind": "dns", "host": "api.audnexus.com"})
+    # 域名只是个占位（这条用例验的是「本机解析不出、公共能解析」的判据，与具体站点无关）
+    ref = nd.refine({"kind": "dns", "host": "books.example.org"})
 
     assert ref["kind"] == "dns", "分类仍是解析失败"
     assert "问题在本机 DNS" in ref["note"]

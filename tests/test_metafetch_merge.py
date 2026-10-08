@@ -121,10 +121,10 @@ def test_演播者只取一家不跨源拼(isolated, monkeypatch):  # noqa: ARG0
     """
     item = _plan(monkeypatch, [
         cand("audible", 0.95, narrators=["Scott Brick", "Euan Morton"]),
-        cand("audnexus", 0.93, narrators=["Simon Vance"]),
+        cand("librofm", 0.93, narrators=["Simon Vance"]),
     ])
 
-    assert item["merged_from"] == ["audible", "audnexus"], "两家都够格参与合并"
+    assert item["merged_from"] == ["audible", "librofm"], "两家都够格参与合并"
     assert item["changes"]["narrators"]["to"] == ["Scott Brick", "Euan Morton"], "取一家，不拼"
     assert item["changes"]["narrators"]["source"] == "audible"
 
@@ -132,7 +132,7 @@ def test_演播者只取一家不跨源拼(isolated, monkeypatch):  # noqa: ARG0
 def test_演播者首位源为空则顺延到下一家(isolated, monkeypatch):  # noqa: ARG001
     item = _plan(monkeypatch, [
         cand("audible", 0.95),
-        cand("audnexus", 0.93, narrators=["Simon Vance"]),
+        cand("librofm", 0.93, narrators=["Simon Vance"]),
     ])
 
     assert item["changes"]["narrators"]["to"] == ["Simon Vance"]

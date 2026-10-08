@@ -51,7 +51,7 @@ _BROWSER_HEADERS = {
 def _raise_for_status(r, hints: dict = None) -> None:
     """把常见的失败码翻成**中文**说明，其余交给 httpx 抛。
 
-    只在 :func:`_get_json` / :func:`_get_text` 里调 —— 14 家 provider 的错误口径因此一致，
+    只在 :func:`_get_json` / :func:`_get_text` 里调 —— 13 家 provider 的错误口径因此一致，
     不会每家写一遍「429 是什么意思」。``hints`` 允许某家覆盖特定码的说法（如 Google 的 403）。
     """
     if hints and r.status_code in hints:
@@ -65,9 +65,9 @@ def _raise_for_status(r, hints: dict = None) -> None:
 
 def _get_json(url: str, params: dict = None, headers: dict = None, method: str = "GET",
               data: dict = None, hints: dict = None) -> dict:
-    """**唯一出网口（JSON）**。14 家 provider 只经它访问公网。
+    """**唯一出网口（JSON）**。13 家 provider 只经它访问公网。
 
-    收口有两个目的：① 契约测试 monkeypatch 这一个函数就能给 14 家喂假响应，
+    收口有两个目的：① 契约测试 monkeypatch 这一个函数就能给 13 家喂假响应，
     解析逻辑完全离线可测；② 限流 / 拒绝 / 超时的中文口径只有一处。
     """
     r = httpx.request(method, url, params=params, json=data,
@@ -162,7 +162,6 @@ ITUNES_BASE = "https://itunes.apple.com"
 ITUNES = ITUNES_BASE + "/search"
 #: iTunes 按 ``trackId`` 取详情（与检索同主机、同响应形状，只有参数不同）
 ITUNES_LOOKUP = ITUNES_BASE + "/lookup"
-AUDNEXUS = "https://api.audnexus.com/books"
 RANOBEDB = "https://ranobedb.org/api/v0"
 HARDCOVER = "https://api.hardcover.app/v1/graphql"
 COMICVINE = "https://comicvine.gamespot.com/api/volumes/"
@@ -178,6 +177,11 @@ AUDIBLE_HOSTS = {
     "de": "api.audible.de",
     "jp": "api.audible.co.jp",
 }
+#: Audible catalog 端点：检索尾段为空，按 ASIN 取详情尾段是 ``/ASIN``（同一形状）。
+AUDIBLE_CATALOG = "https://{host}/1.0/catalog/products{tail}"
+#: ⚠️ 检索与详情**必须逐字同组**（第 99 期真机核验：带一个非法组名（``publisher``）接口直接回
+#: ``400``，整家永远 0 结果）—— 所以收口成一处常量，别让两条路径各写一份。
+AUDIBLE_RESPONSE_GROUPS = "product_desc,contributors,media,series"
 #: iTunes 封面：Apple 允许直接改 ``artworkUrl100`` 里的尺寸段
 ITUNES_COVER_SIZES = {"high": "1000x1000", "standard": "100x100"}
 LIBROFM = "https://libro.fm/search"
@@ -188,7 +192,7 @@ GROUPS = ("一般书籍目录", "有声读物", "漫画和小说", "极权目录
 
 #: 源元数据（前端据此渲染分组列表 / 开关 / 配置入口，避免前后端各写一份）。
 #:
-#: ⚠️ **14 家全部有抓取器**（`IMPLEMENTED` 与 `_FETCHERS` 逐字一致，契约测试钉住）——
+#: ⚠️ **13 家全部有抓取器**（`IMPLEMENTED` 与 `_FETCHERS` 逐字一致，契约测试钉住）——
 #: 也就是说每一家都给开关，没有「能点但点了没用」的行。三档如实标注：
 #: - `needs_config=True`：要 API Key / Token 才有效（未填时该行显示「需要设置」，
 #:   抓取会回明确的中文错误而不是泛泛失败）；
@@ -242,13 +246,13 @@ IMPLEMENTED = ()
 DETAIL_SOURCES = ()
 
 #: 默认启用顺序：**只留两家最可靠的**（Open Library + Google Books）。
-#: 14 家都能用不代表默认全开 —— 每启用一家就多一轮外呼（还容易被限流），
+#: 13 家都能用不代表默认全开 —— 每启用一家就多一轮外呼（还容易被限流），
 #: 由用户在「元数据来源」页按需打开。
 DEFAULT_ORDER = ("openlibrary", "googlebooks")
 
 
 def is_implemented(source: str) -> bool:
-    """该源是否真的能抓（防御性判断：14 家都有 fetcher，恒真；留给将来新增家）。"""
+    """该源是否真的能抓（防御性判断：13 家都有 fetcher，恒真；留给将来新增家）。"""
     return source in _FETCHERS
 
 
@@ -588,9 +592,6 @@ def score_candidate(want_title: str, want_author: str, cand: dict) -> float:
 #: librofm / lubimyczytac）不是漏了 —— 它们的 ``raw_id`` 今天只是个**定位串**
 #: （页面 URL），而本项目没有给它们开字段。「宁可少给不可错给」：把 URL 塞进一个叫
 #: ``*_id`` 的字段，比留空更糟。将来要收，先给它们开字段、再从 URL 里抠真 ID。
-#:
-#: ``audnexus`` 与 ``audible`` 同填 ``audible_id`` —— 两家的同一个 ASIN，
-#: 没有区分的意义（谁先命中谁写，合并时按信任表顺序）。
 SOURCE_ID_FIELD = {p.id: p.id_field for p in _src_registry.DECLARED if p.id_field}
 
 
@@ -786,37 +787,6 @@ def _search_itunes(title: str, author: str, limit: int, opts: dict) -> list:
                                      "limit": str(limit), "media": "ebook"})
     return [_itunes_entry(it, size) for it in (data.get("results") or [])[:limit]
             if isinstance(it, dict)]
-
-
-# ---------------- AudNexus（有声书聚合，公开接口）----------------
-
-def _audnexus_entry(d: dict) -> dict:
-    """AudNexus 单条 → 统一候选（``authors``/``narrators`` 都是对象数组）。"""
-    authors = d.get("authors") or []
-    author = ", ".join(a.get("name") for a in authors
-                       if isinstance(a, dict) and a.get("name")) or _clean(d.get("author"))
-    genres = [g.get("name") if isinstance(g, dict) else g for g in (d.get("genres") or [])]
-    return _entry(
-        "audnexus",
-        title=d.get("title") or d.get("name"),
-        author=author,
-        publisher=d.get("publisherName") or d.get("publisher"),
-        year=d.get("releaseDate") or d.get("publicationDatetime"),
-        language=d.get("language"),
-        description=d.get("description") or d.get("summary"),
-        tags=genres,
-        cover_url=d.get("image") or d.get("imageUrl") or "",
-        raw_id=d.get("asin") or "",
-        provider_id=d.get("asin") or "",
-    )
-
-
-def _search_audnexus(title: str, author: str, limit: int, opts: dict) -> list:
-    data = _get_json(AUDNEXUS, params={"title": _clean(title), "author": _clean(author),
-                                       "region": "us"})
-    # 检索接口的形状随版本变过：列表键可能是 books / results，也可能直接回单本
-    items = data.get("books") or data.get("results") or ([data] if data.get("asin") else [])
-    return [_audnexus_entry(d) for d in items[:limit] if isinstance(d, dict)]
 
 
 # ---------------- RanobeDB（轻小说库，公开 API v0）----------------
@@ -1327,65 +1297,74 @@ def _search_kobo(title: str, author: str, limit: int, opts: dict) -> list:
     return out
 
 
+def _audible_region_host(opts: dict) -> str:
+    """区域（行内可配，默认 us）→ 分站域名；没见过的取值回落 us。检索与详情共用。"""
+    region = _clean((opts or {}).get("region")).lower() or "us"
+    return AUDIBLE_HOSTS.get(region, AUDIBLE_HOSTS["us"])
+
+
+def _audible_entry(p: dict) -> dict:
+    """Audible catalog 的单条 ``product`` → 统一候选。
+
+    ⚠️ 这是 Audible 的**唯一字段映射**：检索（``/products``）与按 ASIN 取详情
+    （``/products/{asin}``）回的是**同形状**的单条（详情只是包在 ``{"product": {...}}`` 里）
+    ⇒ 两条路径都走它，别抄第二份（§7.1；同 `_itunes_entry` / `_detail_itunes` 的规矩）。
+    """
+    authors = ", ".join(a.get("name") for a in (p.get("authors") or [])
+                        if isinstance(a, dict) and a.get("name"))
+    imgs = p.get("product_images") or {}
+    cover = imgs.get("500") or imgs.get("1000") or next(iter(imgs.values()), "") \
+        if isinstance(imgs, dict) else ""
+    # 系列：`series` 是**对象数组**，常常挂多支（实测 Dune 同时属于「Dune」#1 与
+    # 「The Dune Sequence」#12），且顺序不稳定 ⇒ 交给 `_best_series` 挑。
+    series, series_index = _best_series([(s.get("title"), s.get("sequence"))
+                                        for s in (p.get("series") or [])
+                                        if isinstance(s, dict)])
+    # 演播者（第 103 期）：`narrators` 是**顶层键**且真的随现有响应组返回
+    # （真机实测 Dune 12 位、Dune Messiah 4 位），每项形如 `{"name": "Scott Brick"}`。
+    # 注意 `contributors` 实测恒为 null —— 别绕道去解它。
+    narrators = [n.get("name") for n in (p.get("narrators") or [])
+                 if isinstance(n, dict) and n.get("name")]
+    return _entry("audible", title=p.get("title"), author=authors,
+                  publisher=p.get("publisher_name") or p.get("publisher_summary"),
+                  year=p.get("publication_datetime") or p.get("release_date"),
+                  language=p.get("language"),
+                  description=p.get("publisher_summary"),
+                  # 副标题（第 113 期）：**顶层键** `subtitle`，随现有的
+                  # `response_groups`（`product_desc`）照旧返回 —— 第 103 期真机核过它存在。
+                  # ⚠️ 别为了它去加 response_group：第 99 期实测，加一个非法组名
+                  # （`publisher`）会让接口直接 400、**整家永远 0 结果**。
+                  subtitle=p.get("subtitle"),
+                  series=series, series_index=series_index,
+                  narrators=narrators,
+                  # ⚠️ 题材**不从这里来**：此前把系列名塞进了 `tags`（把值写错
+                  # 地方，还污染题材黑名单与跨源合并）。实测现有
+                  # `response_groups` 下 Audible 根本不返回题材
+                  # （`thesaurus_subject_keywords` / `category_ladders` 都不在
+                  # 响应里），所以 tags 就是空 —— 不为了好看去凑一个。
+                  # ⚠️ **不要**为了拿题材去加 response_group：第 99 期核过，
+                  # 带一个非法组名（`publisher`）会让接口直接 400、整家永远 0 结果。
+                  tags=[],
+                  cover_url=cover, raw_id=p.get("asin") or "",
+                  provider_id=p.get("asin") or "")
+
+
 def _search_audible(title: str, author: str, limit: int, opts: dict) -> list:
     """Audible 走 catalog 接口（JSON）而不是抓页面：更稳，但仍是**非公开**接口 → fragile。
-
-    区域（行内可配，默认 us）决定打哪个分站域名；没见过的取值回落 us。
 
     ⚠️ ``response_groups`` 里**不能带 ``publisher``**（第 99 期真机核验）：接口会直接回
     ``400 {"message":"Invalid response group(s) requested: publisher"}`` ⇒ 这家**永远 0 结果**。
     需注意 ``publisher_name`` / ``publisher_summary`` 两个**字段**照旧随 ``product_desc`` 返回，
     与那个非法的**响应组名**无关 —— 删掉它不会少拿出版方（实测 200 + ``publisher_name: "Macmillan Audio"``）。
     """
-    region = _clean((opts or {}).get("region")).lower() or "us"
-    host = AUDIBLE_HOSTS.get(region, AUDIBLE_HOSTS["us"])
-    data = _get_json(f"https://{host}/1.0/catalog/products", params={
+    host = _audible_region_host(opts)
+    data = _get_json(AUDIBLE_CATALOG.format(host=host, tail=""), params={
         "keywords": _clean(title), "num_results": str(limit),
         "products_sort_by": "Relevance",
-        "response_groups": "product_desc,contributors,media,series",
+        "response_groups": AUDIBLE_RESPONSE_GROUPS,
     })
-    out = []
-    for p in (data.get("products") or [])[:limit]:
-        if not isinstance(p, dict):
-            continue
-        authors = ", ".join(a.get("name") for a in (p.get("authors") or [])
-                            if isinstance(a, dict) and a.get("name"))
-        imgs = p.get("product_images") or {}
-        cover = imgs.get("500") or imgs.get("1000") or next(iter(imgs.values()), "") \
-            if isinstance(imgs, dict) else ""
-        # 系列：`series` 是**对象数组**，常常挂多支（实测 Dune 同时属于「Dune」#1 与
-        # 「The Dune Sequence」#12），且顺序不稳定 ⇒ 交给 `_best_series` 挑。
-        series, series_index = _best_series([(s.get("title"), s.get("sequence"))
-                                            for s in (p.get("series") or [])
-                                            if isinstance(s, dict)])
-        # 演播者（第 103 期）：`narrators` 是**顶层键**且真的随现有响应组返回
-        # （真机实测 Dune 12 位、Dune Messiah 4 位），每项形如 `{"name": "Scott Brick"}`。
-        # 注意 `contributors` 实测恒为 null —— 别绕道去解它。
-        narrators = [n.get("name") for n in (p.get("narrators") or [])
-                     if isinstance(n, dict) and n.get("name")]
-        out.append(_entry("audible", title=p.get("title"), author=authors,
-                          publisher=p.get("publisher_name") or p.get("publisher_summary"),
-                          year=p.get("publication_datetime") or p.get("release_date"),
-                          language=p.get("language"),
-                          description=p.get("publisher_summary"),
-                          # 副标题（第 113 期）：**顶层键** `subtitle`，随现有的
-                          # `response_groups`（`product_desc`）照旧返回 —— 第 103 期真机核过它存在。
-                          # ⚠️ 别为了它去加 response_group：第 99 期实测，加一个非法组名
-                          # （`publisher`）会让接口直接 400、**整家永远 0 结果**。
-                          subtitle=p.get("subtitle"),
-                          series=series, series_index=series_index,
-                          narrators=narrators,
-                          # ⚠️ 题材**不从这里来**：此前把系列名塞进了 `tags`（把值写错
-                          # 地方，还污染题材黑名单与跨源合并）。实测现有
-                          # `response_groups` 下 Audible 根本不返回题材
-                          # （`thesaurus_subject_keywords` / `category_ladders` 都不在
-                          # 响应里），所以 tags 就是空 —— 不为了好看去凑一个。
-                          # ⚠️ **不要**为了拿题材去加 response_group：第 99 期核过，
-                          # 带一个非法组名（`publisher`）会让接口直接 400、整家永远 0 结果。
-                          tags=[],
-                          cover_url=cover, raw_id=p.get("asin") or "",
-                          provider_id=p.get("asin") or ""))
-    return out
+    return [_audible_entry(p) for p in (data.get("products") or [])[:limit]
+            if isinstance(p, dict)]
 
 
 def _search_librofm(title: str, author: str, limit: int, opts: dict) -> list:
@@ -1455,7 +1434,6 @@ _FETCHERS = {
     "itunes": _search_itunes,
     "kobo": _search_kobo,
     "audible": _search_audible,
-    "audnexus": _search_audnexus,
     "librofm": _search_librofm,
     "comicvine": _search_comicvine,
     "ranobedb": _search_ranobedb,
@@ -1469,8 +1447,9 @@ _FETCHERS = {
 #: ⚠️ 先只接**真有独立详情通道**的家；Goodreads / RanobeDB 的详情是在各自检索函数里
 #: 顺手取的，没有单独的入口 —— 不为了凑数给它们造一个（§7.2 禁投机抽象）。
 #: ⚠️ 而且只接**真机核过**的（接口存在 + 返回形状对得上）：第 102 期核过 itunes
-#: （`/lookup?id=` 与 `/search` 同形状）与 openlibrary（`<key>.json`）；googlebooks
-#: （匿名额度已 429）/ audnexus（本机 TCP 不可达）/ goodreads（302 反爬）没核过 ⇒ 不接。
+#: （`/lookup?id=` 与 `/search` 同形状）与 openlibrary（`<key>.json`）；第 115 期核过
+#: audible（`/products/{asin}` 回 `{"product": {…}}`、与检索同形状）；googlebooks
+#: （匿名额度已 429）/ goodreads（302 反爬）没核过 ⇒ 不接。
 _DETAIL_FETCHERS = {}
 
 
@@ -1526,7 +1505,7 @@ def _derive_final() -> None:
 
 # ---------------- ISBN 精确匹配（第 8 期 D4）----------------
 # 有 ISBN 的书直接按 ISBN 查，命中即为**同一版本**，比「书名+作者」相似度可靠得多。
-# 放在 `_FETCHERS` 之后是为了「一张表看全 14 家」——这两家同样只经 `_get_json` 出网。
+# 放在 `_FETCHERS` 之后是为了「一张表看全 13 家」——这两家同样只经 `_get_json` 出网。
 
 def _search_isbn_openlibrary(isbn: str, limit: int, opts: dict) -> list:
     data = _get_json(OPENLIBRARY, params={"q": f"isbn:{isbn}", "limit": str(limit),
@@ -1884,12 +1863,33 @@ def search_series(series_name: str, members: list, sources: list = None,
 # ⚠️ **只绑定真机核验过的家**（第 102 期探针结论，脚本在 `$TMP`，结论记在 `docs/TODO.md`）：
 #   ✅ itunes      `/lookup?id=` 与检索**同响应形状**（实测 trackId=597944491）
 #   ✅ openlibrary `/works/OL…W.json` 返回 works 文档（实测 /works/OL17267881W）
+#   ✅ audible      `/1.0/catalog/products/{asin}` 回 `{"product": {…}}`（**与检索同形状的单条**）
+#                   —— 第 115 期真机核验：ASIN `B002V1OF70` 得 12 位演播者 + subtitle + series
 #   ⛔ googlebooks 匿名额度耗尽（连打 3 个查询全 429）⇒ 端点没核过，不声明
-#   ⛔ audnexus    本机不可达（`SSL: UNEXPECTED_EOF_WHILE_READING`）⇒ 不知道它回什么形状
 #   ⛔ goodreads   `/book/show/{id}` 回 302 反爬 ⇒ 拿不到真实文档
 # 没核过就声明 = 用一个「不知道会回什么」的端点假装有这项能力，用户点了只得到一个看不懂的
 # 失败（`AGENTS.md` §7「不做假能力」）。剩下的家在 :func:`detail` 里回**明确中文回绝**
 # —— 「这家没有这条通道」和「这家有但刚才失败了」是两件事，用户要做的处置不同。
+
+
+def _detail_audible(provider_id: str, opts: dict) -> dict:
+    """Audible 按 ASIN 取详情；查不到回 ``None``。
+
+    ``/1.0/catalog/products/{asin}`` 与检索**同一端点**（尾段多一段 ASIN）、**同一个
+    ``response_groups``**、回的是**同形状**的单条（只是包在 ``{"product": {...}}`` 里）
+    ⇒ 复用 :func:`_audible_entry`，不另写字段映射（§7.1）。
+
+    ⚠️ 区域**必须**跟着走（``opts["region"]``）：UK/DE/JP 的 ASIN 在 US 站查不到；
+    而 `_detail_key` 已把 ``opts`` 并进缓存键，所以不同区域不会互相串缓存。
+    """
+    pid = _clean(provider_id)
+    if not pid:
+        return None
+    host = _audible_region_host(opts)
+    data = _get_json(AUDIBLE_CATALOG.format(host=host, tail="/" + pid),
+                     params={"response_groups": AUDIBLE_RESPONSE_GROUPS})
+    p = data.get("product")
+    return _audible_entry(p) if isinstance(p, dict) else None
 
 
 def _detail_itunes(provider_id: str, opts: dict) -> dict:
@@ -2039,7 +2039,7 @@ def probe(source: str, opts: dict = None) -> dict:
     return {"ok": True, "message": f"可用（{ms} ms）", "ms": ms}
 
 
-# ---------------- 14 家真联网体检（第 59 期）----------------
+# ---------------- 13 家真联网体检（第 59 期）----------------
 # 把「这家现在到底能不能用、为什么不能用」变成**一次可复现的检查**，而不是让用户一家家
 # 点「测试」自己拼印象。**只读**：不改配置、不写库、不注册任何东西（与 `probe` 同一纪律）。
 #
@@ -2048,7 +2048,7 @@ def probe(source: str, opts: dict = None) -> dict:
 #      要用户做的事完全不同（前者等一会或填 Key，后者只能等修复 / 换源）；
 #   ② 抓取型（`fragile`）**请求成功但 0 条结果**才是它出故障的典型信号，
 #      probe 把这种情况算成不可用却不解释；
-#   ③ 14 家要一起看（谁掉线、谁限流），逐个点「测试」看不出整体。
+#   ③ 13 家要一起看（谁掉线、谁限流），逐个点「测试」看不出整体。
 
 #: 体检样本 = **每一家最容易命中的书名**。
 #: ⚠️ 地区性目录必须用当地书名：拿 "Dune" 去查 Aladin（韩）/ Lubimyczytac（波兰）/
@@ -2188,7 +2188,7 @@ def health_check(mf: dict = None, sources: list = None, query: str = "",
       （地区性目录用当地书名，否则会误报「无结果」）；
     - 单家超时（默认 12s）到点即记为 `timeout`，**不拖住整轮** —— 体检的价值是「一次看清」，
       某一家卡住不该让另外 13 家的结论也拿不到；
-    - 并发 4 路（`workers`）：14 家串行最坏要几分钟，用户会以为界面卡死；
+    - 并发 4 路（`workers`）：13 家串行最坏要几分钟，用户会以为界面卡死；
     - **只读**：不改配置、不写库。
     """
     mf = mf or {}

@@ -351,7 +351,7 @@ export interface DuplicateItem {
 /**
  * 元数据**提供商**（第 57 期「设置 → 书库 → 元数据 → 提供商」页）。
  *
- * 目录 = 上游那 14 家（分四组）；⚠️ `implemented=false` 的家**只列出、不给开关** ——
+ * 目录 = 注册表 `DECLARED` 那 13 家（分四组）；⚠️ `implemented=false` 的家**只列出、不给开关** ——
  * 「能点但点了没用」就是假交互，它们的备注里写清「可经插件市场安装」。
  *
  * ⚠️ 第 95 期删掉了配套的 `MetadataSource` 类型与 `metadataSources()` 方法
@@ -365,7 +365,7 @@ export interface MetadataProvider {
   group: string
   home: string
   note: string
-  /** 本项目是否真的实现了抓取（14 家全实现 ⇒ 恒 true；留着以防注册表先加条目） */
+  /** 本项目是否真的实现了抓取（13 家全实现 ⇒ 恒 true；留着以防注册表先加条目） */
   implemented: boolean
   /** 页面抓取型（站点改版就可能失效）⇒ 前端给「易失效」徽标 */
   fragile: boolean
@@ -2286,7 +2286,7 @@ export interface BookMetadataFields {
   kobo_id: string
   /** Aladin itemId */
   aladin_id: string
-  /** Audible ASIN（audible 与 audnexus 两家同填这一个） */
+  /** Audible ASIN（Audible 家的书目标识；检索与按 ASIN 详情共用） */
   audible_id: string
 }
 

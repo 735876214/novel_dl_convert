@@ -46,11 +46,10 @@ def test_提供商id与副标题都进了抓取引擎的字段表():
 
 
 def test_每个有id字段的源都映射到唯一一个字段():
-    """`SOURCE_ID_FIELD` 的**值**必须落在真实字段上；且 audnexus 与 audible 共用
-    同一个 ASIN 字段（两家是同一份数据的两个入口，没有区分的意义）。"""
+    """`SOURCE_ID_FIELD` 的**值**必须落在真实字段上（值域 = 那 9 个可编辑字段）。"""
     assert set(metasources.SOURCE_ID_FIELD.values()) == set(IDS)
-    assert metasources.SOURCE_ID_FIELD["audnexus"] == metasources.SOURCE_ID_FIELD["audible"]
     assert metasources.SOURCE_ID_FIELD["amazon"] == "amazon_id"
+    assert metasources.SOURCE_ID_FIELD["audible"] == "audible_id"
 
 
 def test_没有对应字段的源_它的标识不会漏进别的字段():
