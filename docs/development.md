@@ -16,7 +16,8 @@ cd frontend && npm install          # registry 走 .npmrc 配置；本仓**只�
 
 - ⚠️ **本机（Windows）专属**：`.venv\Scripts\python.exe`、命令前 `$env:NODE_OPTIONS=''`（IDE 的 safe-delete shim 会拦 Vite 清目录与删除）等
   —— 一律见 `docs/development-windows.md`（Linux / 容器忽略该文件）。
-- 不要提交机器相关路径（`.vscode/settings.json` 里指向 `.venv` 的配置属各人本机设置）。
+- 不要提交机器相关路径：`.vscode/settings.json` 是**本机配置**（第 117 期已从仓库移除、并在 `.gitignore` 里钉住），
+  要指向 `.venv` 的配置放本机 **User 设置**里。
 
 ## 2. 常用命令
 

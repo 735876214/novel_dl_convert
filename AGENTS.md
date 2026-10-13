@@ -6,7 +6,7 @@
 
 **30 秒红线**（细则全在 §1，冲突时以 §1 为准）
 
-- 不回退、不顺手提交别人的改动；`.vscode/settings.json` 永不提交。
+- 不回退、不顺手提交别人的改动；本机 IDE 配置不入库（`.vscode/settings.json` 已从仓库移除并在 `.gitignore` 里钉住）。
 - 加 / 删功能都要**彻底**：路由 + 模块 + db CRUD + 能力键 + 前端 + 文档 + 记忆 + 「接口 404」断言，一处不落。
 - **单一真值源**：同一判据只许一处实现 —— 发现第二份 = 缺陷。
 - 书文件**只读**；删除一律**移入回收站**（从不 `unlink`）；软删除的一切读点带 `WHERE deleted_at=0`。
@@ -152,7 +152,7 @@ bash scripts/dev-instance.sh 8412
   2. `python tests/period_close.py new --period N --title "…" …` 落位；
   3. `python tests/period_close.py check` —— **0 问题**；
   4. 改过 `VERSION` ⇒ 补 `CHANGELOG.md` 段；
-  5. `git status --short` 排除无关文件（`.vscode/settings.json` 永不提交）；
+  5. `git status --short` 排除无关文件（`.vscode/settings.json` 已在 `.gitignore` 里，正常不该出现）；
   6. 按能力拆中文 commit → `git push origin main`；
   7. `git log --oneline` 核笔数、`git show --stat <hash>` 核内容（提交失败会**静默**留下暂存区，见 `docs/development-windows.md`）。
 - **失败处理**：测试失败**不强推**；`period_close` 整体拒绝时**不要手改一半**；CI 红先查 `VERSION` / `CHANGELOG` 缺段；
