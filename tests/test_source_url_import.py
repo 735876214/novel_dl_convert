@@ -153,17 +153,22 @@ def test_钩子必须是_async函数():
     assert inspect.iscoroutinefunction(urlguard.guard_request)
 
 
-def test_浏览器客户端默认不挂任何钩子():
-    """⚠️ 不改变既有抓取行为：只有 URL 导入那条路才逐跳复查。"""
-    c = network.BrowserClient("钩子测试", cookie_dir=".", max_retries=1)
+def test_浏览器客户端默认不挂任何钩子(tmp_path):
+    """⚠️ 不改变既有抓取行为：只有 URL 导入那条路才逐跳复查。
+
+    ⚠️ `cookie_dir` 必须给 `tmp_path`，**不能给 `"."`**：`aclose()` 会 `_save_cookies()`
+    落盘，相对路径会落在**当前工作目录**（pytest 从仓库根跑 ⇒ 仓库根）—— 每次全量都会
+    在仓库里留下 `<书源名>.cookies.txt`（18 B 的空 LWPCookieJar），`git status` 永远脏一个。
+    """
+    c = network.BrowserClient("钩子测试", cookie_dir=tmp_path, max_retries=1)
     try:
         assert c.client.event_hooks["request"] == []
     finally:
         asyncio.run(c.aclose())
 
 
-def test_浏览器客户端能挂上钩子与证书开关(monkeypatch):
-    c = network.BrowserClient("钩子测试", cookie_dir=".", max_retries=1,
+def test_浏览器客户端能挂上钩子与证书开关(monkeypatch, tmp_path):
+    c = network.BrowserClient("钩子测试", cookie_dir=tmp_path, max_retries=1,
                               verify_tls=True, request_guard=urlguard.guard_request,
                               max_bytes=1234)
     try:
@@ -180,9 +185,9 @@ def test_证书校验默认关着不改既有行为():
     assert config.DEFAULTS["network"]["verify_tls"] is False
 
 
-def test_上限默认仍走_network_max_response_bytes(monkeypatch):
+def test_上限默认仍走_network_max_response_bytes(tmp_path):
     """给了 `max_bytes` 才覆盖；没给就还是那个唯一读点（不新造第二份默认值）。"""
-    c = network.BrowserClient("上限测试", cookie_dir=".", max_retries=1)
+    c = network.BrowserClient("上限测试", cookie_dir=tmp_path, max_retries=1)
     try:
         assert c.max_bytes is None
     finally:
