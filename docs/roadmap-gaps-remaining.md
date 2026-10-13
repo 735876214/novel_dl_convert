@@ -7662,3 +7662,27 @@ Git Bash 的 `/tmp` 与原生 Windows 解释器眼里的 `/tmp` **不是同一�
   `@vueuse/core` / `class-variance-authority` / `@lucide/vue` / `vue-draggable-plus`）**不在** `node_modules` 里
   （`type-check` 报一片 `TS2307`）—— 那是本机 `node_modules` 被先前某次 `pnpm` 破坏的**残留**，`npm install` 即复原，
   与仓库状态无关（`package-lock.json` 零改动可证）。
+
+### 七、收尾时又修掉一处：三个用例把空 cookie jar 落进仓库根
+
+**怎么发现的**：收尾核 `git status` 时，仓库根常年挂着两个未跟踪文件
+`上限测试.cookies.txt` / `钩子测试.cookies.txt`（各 **18 B**）。
+
+**根因**（实证，非推测）：`tests/test_source_url_import.py` 的三处
+`network.BrowserClient(…, cookie_dir=".")`（原 :158 / :166 / :185）；
+而 `BrowserClient.aclose()` 会 `_save_cookies()` 落盘（`core/network.py`），**相对路径落在当前工作目录**
+—— pytest 从仓库根跑 ⇒ 文件落进仓库根。18 B 正是 `LWPCookieJar` 存**空 jar** 的定长
+（`#LWP-Cookies-2.0` + 空行）⇒ 文件里**没有任何 cookie**，纯垃圾。
+
+**判据（`改动前会红`的正向证据）**：删掉两个文件 → **只跑** `tests/test_source_url_import.py`
+→ 两个文件立刻重生（文件名与三处调用的书源名一一对上：`钩子测试` ×2、`上限测试` ×1）。
+
+**修法**：三处改成 `cookie_dir=tmp_path` —— 这三个用例验的是**钩子挂载 / 上限默认值**，
+与 cookie 目录无关 ⇒ 不丢覆盖面；并在其中一处 docstring 写清「为什么不能给 `"."`」。
+**没有**用 `.gitignore` 把它盖掉：盖住只是让它继续悄悄落而没人知道。
+
+**生产侧无此问题**：两处真实调用点（`server.py` 的 `url_import` 与 `sources/manager.py` 的 `_client`）
+都显式传了 `config.COOKIE_DIR` / `self.cookie_dir`，`cookie_dir or "."` 的兜底在真实路径上走不到。
+
+**核验**：改后该文件 50 passed 且仓库根零新增；全量跑完的**根目录快照对差为空**
+（按名字差集判，不靠「本来没有」——见 `MEMORY-REF.md` 的回收目录教训）。基线数字不变（2412 例）。
