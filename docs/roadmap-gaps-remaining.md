@@ -7558,3 +7558,107 @@ vitest 自己给的方向（`pool: 'vmThreads'` 每个 worker 只建一次环境
 - **没有动 `metascore` / `kinds`**：多值字段上限不是计分项，`KIND_AUDIOBOOK` 的字段轴照旧。
 - **没有动前端构建产物**，也**没有**顺手开 `pool: 'vmThreads'` / `isolate: false`（见第二节）。
 - **没有改 `library.py` 的 EPUB/OPF 解析**：那是第 100 期实测后**关闭**的立项（见第 95 期段「六」）。
+
+## 第 117 期（AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化）
+
+**需求来源**：`AGENTS.md` 是 AI 进入本仓的**唯一入口**，却已经长成「什么都说一点」——
+§5 的 19 条陷阱里，**只对当前这台 Windows 开发机成立**的（IDE 注入的 safe-delete shim、nvm、
+本机 DNS 污染、pwsh 读文件编码、msedge 冒烟、本机端口占用）与**跨环境通用**的
+（`from .. import config`、`db._connect()`）混在同一张表里；前者在
+`.codebuddy/memory/MEMORY-REF.md`「运行 / UI 验证」与 `docs/TODO.md` §0 还各有一份拷贝
+—— §1「单一真值源」意义上的**第二份、第三份实现**。常用命令（清哪几个 proxy、解释器用哪个、
+四连怎么串）同样在 `AGENTS.md` §4 / `docs/development.md` §1§2§4 / `MEMORY-REF.md` 各处手抄，
+而**真正的判据**（探测顺序、清变量清单）没有一处实现 —— 全靠人每次手敲。
+本轮把入口收成**索引**、把本机项**整块外移**、把命令收成**可执行脚本**。**不发版**，`VERSION` 仍 `1.3.0`。
+
+### 一、`AGENTS.md` → 入口索引
+
+| 位置 | 改动 |
+| --- | --- |
+| 开头 | 新增「**30 秒红线**」六条（冲突时以 §1 为准），先给结论再给细则 |
+| §2 同步点 | 从「三处同步点」改名「同步点」（早就不止三处），**补第三列「契约测试」**——把「漏了会红」的判据直接摆在表里 |
+| §4 常用命令 | 改成**调脚本**（`scripts/*.sh`），只留跨环境判据；注明基线行由落位器维护、**勿手改** |
+| §5 已知陷阱 | 从 19 行散文改成**三列表**（症状 / 关键词 → 判据与处理 → 去哪看）；**本机专属行整块搬走** |
+| §6 提交与交付 | 收尾写成**七步顺序**（测试 → 落位 → `check` → `CHANGELOG` → `git status` → 拆提交推送 → 核笔数）；新增「失败处理」 |
+| 文末 | 新增「**记忆与收尾**」表（`MEMORY.md` / `MEMORY-REF.md` / `MEMORY-PERIODS.md` / `VERSION` / `CHANGELOG.md` / 两个工具） |
+
+### 二、本机（Windows）专属陷阱外移成 `docs/development-windows.md`
+
+五节（工具链与解释器 / 文件读写编码 / 网络 / 浏览器冒烟 / 端口与实例）。**文件开头第一段就写死适用范围**：
+「整份文件只对当前这台 Windows 开发机成立（路径含 `C:\Users\qingr\…`），**Linux / 容器 / 其他机器忽略** ——
+下面每条都是这台机器的 IDE 注入、控制台代码页或上游 DNS 造成的，**不要当成项目规则**」（本仓是 NAS / 容器自托管，
+这台机器不是目标环境 —— 不写这句，下一个 AI 会把本机 shim 当产品行为）。文末注明它是第 117 期**搬家**而来
+（不是新增知识），并写清「改这里的判据时同批检查 `AGENTS.md` §5 的指针」。
+
+同批：`MEMORY-REF.md`「运行 / UI 验证」节与 `docs/TODO.md` §0 的对应内容**原地只留指针**。
+
+⚠️ **教训：外移必须留指针，不是删掉。** 搬走的每条都要有「去哪看」的落点，否则「文档里搜不到」
+就等于删了 —— 连「我查过了」这个事实一起丢。搬完**必须 grep 回读**被删掉的关键词，确认还落在某处：
+
+| 关键词 | 现在的落点 |
+| --- | --- |
+| `ledger.plan` 的用例必须带 `isolated` fixture | `docs/development.md` §4 回归清单 + roadmap 第 94 期段 |
+| win32 目录 `st_size` 恒 0 | `.codebuddy/memory/MEMORY-REF.md`（`AGENTS.md` §5 指向它） |
+| `vue-tsc` 3.3.12 起变严 | roadmap 第 102–104 期段 + `docs/TODO.md` §1 |
+| 本机 `pnpm` 会把 `node_modules` 搬进 `.ignored` | `docs/development.md` §1（改成通用口径：「本仓**只用 npm**，别跑 pnpm / yarn」） |
+
+### 三、常用命令收成 `scripts/`（判据只许有一份）
+
+| 脚本 | 做什么 |
+| --- | --- |
+| `scripts/test.sh` | 探测解释器 → 清变量 → pytest → **只认 junit 判成败**（Windows 下会话末退出码不可信）、打印摘要与 junit 路径（可直接喂 `period_close.py --junit`） |
+| `scripts/frontend-verify.sh` | 四连（type-check → unit → build → **deploy**），缺一即退非 0 |
+| `scripts/dev-instance.sh` | 每次建**全新**隔离目录 + 新端口起本地实例 |
+| `scripts/_lib.sh` | 三者**共用**的判据：`nf_resolve_python()`（`.venv/bin` → `.venv/Scripts` → `python3` → `python`）、`nf_clean_env()`（**六个** proxy 变量 + `NODE_OPTIONS`）、`nf_tmp_root()` |
+
+两个刻意的细节：① 清 proxy 必须**整组清空**（`httpx` 0.28.1 解析 `NO_PROXY` 里的 `[::1]` 会生成畸变 mount，
+只去方括号不够）；② `nf_tmp_root()` 取的是 `tempfile.gettempdir()` 的**原生路径** ——
+Git Bash 的 `/tmp` 与原生 Windows 解释器眼里的 `/tmp` **不是同一处**，直接传 `"/tmp/…"` 会落到 `C:\tmp\…`。
+脚本一律 **LF**（`.gitattributes` 已钉）。`docs/development.md` §2 的命令表与 §4 回归清单同批改成调脚本。
+
+### 四、索引化配一条「跳转有效」的契约（`tests/test_agents_index_contract.py`）
+
+入口索引的价值**全在跳过去有东西** —— 一个指向不存在文件的指针比没有指针更坏：读者会以为自己已经查过了。
+用例只钉一条：`AGENTS.md` 里**用反引号括起、且看起来是仓库内相对路径**的字符串必须真实存在。判据边界：
+
+- 只认白名单**前缀**（`docs/` `tests/` `scripts/` `.codebuddy/` `frontend/` `novelforge/`）**且**白名单**后缀**
+  （`.md` `.py` `.sh` `.mjs` `.ts` `.vue`）—— 否则 `server.EDITABLE`、`db._connect()` 这类符号名会被误判成路径；
+- 含 `*` / `{` / 空格的跳过（那是模式或说明文字）；`/` 收尾的（目录）跳过；
+- **判据自身防失效**：一条都扫不到时也要**红**（写法整体变了 ⇒ 判据失效，而不是「恰好没有指针」）。
+
+判据力实测（**用临时副本，不改仓库文件**）：真 `AGENTS.md` 扫到 **50** 条指针且通过；
+塞一条 `docs/根本没有这个文件.md` ⇒ 红，报出的正是那条；换成空文档 ⇒ 红。
+
+### 五、实测
+
+| 项 | 值 |
+| --- | --- |
+| 后端全量 | **2399 passed / 0 failed / 0 errors / 13 skipped**（**2412 例**，350.5 s，exit 0） |
+| 前端四连 | `bash scripts/frontend-verify.sh` exit 0：`vue-tsc --build` 干净、**69 spec / 717 例**全绿（15.88 s）、build + deploy 通过 |
+| 本轮零源码改动 | `novelforge/static/v2` **零改动**、`frontend/package-lock.json` 零改动（[`git status`] 可证）⇒ 产物**逐字节不变** |
+| 契约用例 | 上面第四节的三条判据力实测（正反两向 + 空文档） |
+| 收尾对账 | `tests/period_close.py check` **0 问题**；`tests/check_doc_anchors.py` **硬错 0 条**（疑似漂移 57 条照旧，含 `docs/agents-audit-95.md` 这类**历史快照**锚到 `AGENTS.md` 的行号 —— 该文件已标注「历史文件，行号会漂移」，**不改写**）；活文档里唯一受本轮行号漂移影响的一处已按**实测行号**修正（`docs/format-capability-matrix.md` 的 `AGENTS.md:19` → `:27`） |
+
+⚠️ **基线数字的变化不是「+1」，必须连着读**：总例数 2411 → 2412 的 +1 是本期新增的契约用例；
+但 **passed 2385 → 2399（+14）、skipped 26 → 13（−13）** 与本期代码**无关** —— 是**解释器换了**：
+
+- 新脚本探测到的是仓库根 `.venv` = **Python 3.12.10**（`quickjs` 装得上）；
+- 而过去几期的全量是用 `.workbuddy\binaries\python\versions\3.14.3` 跑的 —— `requirements.txt` 里
+  `quickjs` 那条 `python_version < "3.13"` 标记在 3.14 上让它**装不上**，`jssandbox.available()` 为假，
+  `tests/test_js_sandbox.py` 里 `if not jssandbox.available(): pytest.skip("本机没有 quickjs")` 的那些用例
+  长期**静默跳过**（实测：屏蔽 `quickjs` 后跑该文件 ⇒ 恰好 `15 passed, 13 skipped`，对上 −13）。
+
+⇒ 本期顺带把这 **13 例真的跑起来**了（全绿）。`docs/development-windows.md` §1 已写明
+**别把 `.venv` 升到 3.13+**：那 13 例会重新静默跳过，而**全量依然全绿**（这正是它藏了这么多期的原因）。
+
+### 六、没做的
+
+- **没有动任何业务代码与前端源码**：本轮只改文档 / 新增脚本 / 新增一个用例（`git status` 可证）。
+- **没有动 `MEMORY-PERIODS.md`**：那是只读存档。
+- **没有把这些本机事实做成配置项**：端口占用、代理地址、nvm 路径是**这台机器的事**，不是项目规则
+  （§7.2：不为投机性需求加配置项）。
+- **没有拆 `AGENTS.md` 的 §7 工程原则**：它已经够短，且被别处按编号引用（`§7.1`）。
+- **没有清 `frontend/node_modules` 的历史破坏**：本轮跑四连时发现五个运行时依赖（`reka-ui` /
+  `@vueuse/core` / `class-variance-authority` / `@lucide/vue` / `vue-draggable-plus`）**不在** `node_modules` 里
+  （`type-check` 报一片 `TS2307`）—— 那是本机 `node_modules` 被先前某次 `pnpm` 破坏的**残留**，`npm install` 即复原，
+  与仓库状态无关（`package-lock.json` 零改动可证）。

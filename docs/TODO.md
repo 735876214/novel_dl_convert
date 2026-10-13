@@ -4,28 +4,31 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-08 —— 第 116 期**修可动手待办：多值字段上限按字段分 + 前端 flaky 超时**：
-用户原话「**修一下可动手待办**」—— 把 §1 A 组那三条消化掉。① 多值字段（`tags` / `narrators`）
-原先在**候选侧与合并侧各写死一个 8**（同一判据的两份实现），收敛成 `metasources.MULTI_VALUE_MAX`
-**一张表**并按字段取值：题材仍是刻意的 8 项策展上限，**演播者放宽到 32**（第 115 期真机
-Audible《Dune》**12 位**演播者被砍成 8 位的**丢事实**就此修掉）；② 前端全量并行下
-`ReadingLogTab.spec.ts` 的偶发 `Test timed out in 5000ms` 收到 `testTimeout: 15000`（根因是
-happy-dom **环境创建**成本，见 roadmap 第 116 期段）；③ `fileops.py` 的 OPF 改写正则按第 95 期
-审计结论**保留**，从 A 组挪进 C 组（A 组因此**清空**）。
-历史：第 115 期核验演播者（摘掉 Audnexus、Audible 接按 ASIN 取详情）；`VERSION` 仍 `1.3.0`（本期**不发版**）。
+**最后更新**：2026-10-13 —— 第 117 期**AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化**：
+`AGENTS.md` 是 AI 的唯一入口，却已长成「什么都说一点」—— §5 的 19 条陷阱里，**只对当前这台 Windows 开发机成立**的
+（IDE 的 safe-delete shim / nvm / 本机 DNS 污染 / pwsh 编码 / msedge 冒烟 / 端口占用）与跨环境通用的混在一起，
+且在 `MEMORY-REF.md` 与本节各有一份拷贝；常用命令（清哪几个 proxy、解释器、四连）更是每处手抄一遍。
+本期把入口收成**索引**（一行判据 + 去哪看）、本机项整块外移成 `docs/development-windows.md`、命令收成
+`scripts/` 三个可执行脚本（判据集中在 `_lib.sh`），并给索引配一条 `tests/test_agents_index_contract.py`
+（**跳转有效**：文里写成仓库内路径的指针必须真实存在）。⚠️ 顺带暴露一处**静默漏跑**：
+新脚本选中的 `.venv` 是 **3.12.10**（`quickjs` 装得上），而过去几期用 3.14.3 跑 ⇒
+`test_js_sandbox.py` 的 **13 例一直静默跳过**（skipped 26 → 13、passed +13，详见 roadmap 第 117 期段）。
+历史：第 116 期修可动手待办（多值字段上限按字段分 + 前端 flaky 超时）；`VERSION` 仍 `1.3.0`（本期**不发版**）。
 
 ## 0. 当前状态
 
-- HEAD = 第 116 期修可动手待办（多值字段上限按字段分 + 前端 flaky 超时）（第 95–115 期逐期历史见 §2 与 `git log --oneline`）；`VERSION` = **1.3.0**
+- HEAD = 第 117 期 AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化（第 95–116 期逐期历史见 §2 与 `git log --oneline`）；`VERSION` = **1.3.0**
   —— 单一真值源，`GET /health` 下发；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，改为**按里程碑发版**
   （第 112 期里程碑 = FB2 直读 + 容器自动展开，`CHANGELOG.md` 最新段 `V1.3.0 — 2026-10-07` 即取自它）。
-- 测试基线（第 116 期实测）：后端 **2411 例（2385 passed / 0 failed / 0 errors / 26 skipped）**，全量 296 s；
-  前端 **69 spec / 717 例**、`vue-tsc --build --force` exit 0（本期只改 `vite.config.ts` 里的
-  **测试**配置（`testTimeout`），不动任何源码 ⇒ 产物**逐字节不变**（build + deploy 跑过，
-  `git status` 里 `novelforge/static/v2` 零改动可证）；文件数与例数不变、无需动 `EXPECTED_SPECS`）。
-- ⚠️ **本机运行陷阱不在这里重抄** —— 清空全部代理变量 / 别加 `-q` / 别跑 `pnpm` / 本机 DNS 被污染 /
-  长跑 pytest 后台跑 + 轮询 junit / 新增前端 spec 要登记 `EXPECTED_SPECS` / 只跑相关文件看不见连锁失败：
-  **一律看 `AGENTS.md` §5 与 §4**。
+- 测试基线（第 117 期实测）：后端 **2412 例（2399 passed / 0 failed / 0 errors / 13 skipped）**，全量 350.5 s；
+  前端 **69 spec / 717 例**、`vue-tsc --build` exit 0（本期**零前端源码改动** ⇒ 产物**逐字节不变**，
+  build + deploy 跑过、`git status` 里 `novelforge/static/v2` 与 `package-lock.json` 零改动可证）。
+  ⚠️ **跨期比基线要连着 skipped 一起读**：skipped **26 → 13**、passed **+13** 与本期代码无关 ——
+  新脚本探测到的 `.venv` 是 **3.12.10**（`quickjs` 装得上），旧的全量用 3.14.3 跑（装不上 `quickjs`）⇒
+  `tests/test_js_sandbox.py` 那 13 例长期静默跳过；**别把 `.venv` 升到 3.13+**（见 roadmap 第 117 期段）。
+- ⚠️ **运行陷阱不在这里重抄** —— 别加 `-q` / 长跑 pytest 后台跑 + 轮询 junit / 新增前端 spec 要登记
+  `EXPECTED_SPECS` / 只跑相关文件看不见连锁失败：**一律看 `AGENTS.md` §4 与 §5**；
+  **本机（Windows）专属项**（清代理变量、别跑 `pnpm`、DNS 污染、编码坑）：见 `docs/development-windows.md`。
 - **可用的真实数据实例**：本机 **`http://127.0.0.1:8412`**（`admin` / `changeme`，书目 4 本 —— 三体 / 沙丘 /
   银河系漫游指南 / 冒烟测试-第 91 期）；窄屏三档冒烟跑 `.codebuddy/tools/ui-smoke.ps1`（一次只传**一条**路由）。
 - **数据安全语义**（第 75 / 81 期，硬约束）：「删书」回收**三份**；「移除书库」**默认只删登记、零文件触碰**，
@@ -133,6 +136,7 @@ happy-dom **环境创建**成本，见 roadmap 第 116 期段）；③ `fileops.
 
 | 期 | 交付（版本） |
 |---|---|
+| 117 | AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 117 期段 |
 | 116 | 修可动手待办：多值字段上限按字段分 + 前端 flaky 超时 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 116 期段 |
 | 115 | 核验演播者：摘掉 Audnexus、Audible 接按 ASIN 取详情 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 115 期段 |
 | 114 | CI 的 5 个 action 升到 Node 24 运行时 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 114 期段 |
