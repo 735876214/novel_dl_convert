@@ -10,28 +10,34 @@ python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt -r requirements-dev.txt   # dev 含 pytest，不进生产镜像
 mkdir -p novelforge/static          # 缺这个目录会在 **import 期**就抛；但别建 static/v2/index.html
 
-# 前端（Node 走 nvm；本机已 nvm use 24.19.0）
-cd frontend && npm install          # registry 走 .npmrc 配置
+# 前端（Node 走 nvm，24.x）
+cd frontend && npm install          # registry 走 .npmrc 配置；本仓**只用 npm**（只有 package-lock.json，别跑 pnpm / yarn）
 ```
 
-- Windows 用 `.venv\Scripts\python.exe`；命令前先 **`$env:NODE_OPTIONS=''`**（IDE 的 safe-delete shim 会拦 Vite 清目录与删除）。
+- ⚠️ **本机（Windows）专属**：`.venv\Scripts\python.exe`、命令前 `$env:NODE_OPTIONS=''`（IDE 的 safe-delete shim 会拦 Vite 清目录与删除）等
+  —— 一律见 `docs/development-windows.md`（Linux / 容器忽略该文件）。
 - 不要提交机器相关路径（`.vscode/settings.json` 里指向 `.venv` 的配置属各人本机设置）。
 
 ## 2. 常用命令
 
 | 目的 | 命令 |
 |---|---|
-| 后端全量测试 | `.venv/bin/python -m pytest`（离线；Windows 同左，用 `Scripts\python.exe`） |
+| **后端全量测试**（首选） | `bash scripts/test.sh`（自动探测解释器、清 proxy / `NODE_OPTIONS`、跑完打印 junit 摘要与路径） |
+| 单模块 / 传参 | `bash scripts/test.sh tests/test_catalog.py -k 关键字`（参数原样透传给 pytest） |
+| 后端（等价手写） | `.venv/bin/python -m pytest`（离线；Windows 用 `Scripts\python.exe`） |
 | 单模块 | `.venv/bin/python -m pytest tests/test_catalog.py -k 关键字` |
+| **前端四连**（首选） | `bash scripts/frontend-verify.sh`（= `type-check && test:unit && build && deploy`，缺一即退非 0） |
 | 前端类型检查 | `cd frontend && npm run type-check` |
 | 前端单测 | `npm run test:unit`（= `vitest run`；脚本名**刻意不叫 `test`**） |
 | 前端构建 | `npm run build`（只落 `frontend/dist`） |
 | **同步产物** | `npm run deploy`（`dist` → `novelforge/static/v2`） |
-| 本地起服务 | 见下面「隔离实例」 |
+| **本地起服务**（首选） | `bash scripts/dev-instance.sh [端口]`（默认 8412；见下面「隔离实例」） |
 | CLI | `.venv/bin/python -m novelforge convert|search|download|update|watch|scan|logs` |
-| 浏览器冒烟 | `playwright-cli open --browser=msedge <url>`（本机无 Chrome，必须 `--browser=msedge`） |
+| 浏览器冒烟 | `playwright-cli open --browser=msedge <url>` —— **本机专属用法**见 `docs/development-windows.md` §4 |
 
 ### 隔离实例（本地调试/冒烟，别干扰别人）
+
+一键：`bash scripts/dev-instance.sh 8412`（每次建全新目录、`AUTO_WATCH=false`）。等价手写版：
 
 ```bash
 T=$TMP/nf-dev   # 或 /tmp/nf-dev
@@ -57,9 +63,9 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 
 ## 4. 回归清单（每期收尾照着过）
 
-- [ ] **后端全量**：`.venv/bin/python -m pytest --junitxml=<tmp>.xml`，解析 junit 得 `tests/failures/errors`
+- [ ] **后端全量**：`bash scripts/test.sh`（自动落 junit 并打印摘要，失败退非 0）
       （⚠️ Windows 下 safe-delete shim 会让会话末退出码非 0，而 junit 全绿 —— **只认 junit**；`pytest.ini` 已含 `-q`，**别再 `-q`**）。
-- [ ] **前端四连**：`npm run type-check && npm run test:unit && npm run build && npm run deploy`
+- [ ] **前端四连**：`bash scripts/frontend-verify.sh`
       （缺 `build` 会漏掉模块断链；缺 `deploy` 则服务端仍发旧 bundle）。
 - [ ] **接口边界**：新增/删除功能要有「接口 404」与参数边界断言（加删功能都要彻底，见 `AGENTS.md` §1）。
 - [ ] **三处同步点**：涉及配置分区 / 偏好块 / 设置页 / 库列 / 含 `book_id` 的表 / 书源注册表 → 逐项对照 `AGENTS.md` §2。
@@ -71,7 +77,7 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
       `tests/test_pipeline_decode_bytes.py`、`tests/test_sources_capabilities_ext.py`、`tests/test_source_import_config_contract.py`。
 - [ ] **真机（能出网就必须真测）**：⚠️ **凡「重建 / 包装 HTTP 响应或流」的改动，必须拿真实地址核一次** ——
       第 94 期的 gzip 解两遍（`Content-Encoding` 未摘）就是这样漏过单测、只被真网抓到的（桩站正文从不压缩）。
-      出网走本机代理 `127.0.0.1:7897`。
+      出网走本机代理（**仅当前开发机**，见 `docs/development-windows.md` §3）。
 - [ ] **后台线程**：新增旁路线程必须进 `tests/conftest.py` 的 `_quiesce_background()` 收尾清单，否则全量后半程可能 segfault。
 - [ ] **数据隔离**：碰库用例用 `isolated` 夹具 + `client`/`auth_headers`；环境变量必须在 **import 业务模块之前** 设。
 - [ ] **文档**：`docs/roadmap-gaps-remaining.md` 写本期实施记录（最新期在文件末尾）；
@@ -87,11 +93,11 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 
 ## 5. 调试技巧（都踩过坑）
 
-- **测量**：计时用 `curl`（`-w "%{time_total} %{size_download}"`）；**别用 PowerShell `Invoke-RestMethod`**（解析大 JSON 会严重虚高，曾把 65 ms 测成 613 ms）。
+- **测量**：计时用 `curl`（`-w "%{time_total} %{size_download}"`）；**别用 PowerShell `Invoke-RestMethod`**（本机专属，见 `docs/development-windows.md` §3）。
 - **日志**：pytest 全量落文件再读，别用 `grep` 猜；uvicorn 访问日志写 `RedirectStandardError` 指向的文件。
 - **测试计数**：一律 `--junitxml` + 脚本解析；**前端用例数不与后端合并**（两套跑法两套前提）。
 - **「长期稳定失败」= 产品 bug 症状**：逐层打印中间返回值找根因；e2e 做「改前 FAIL / 改后 PASS」对照。
-- **浏览器冒烟**：
+- **浏览器冒烟**（**本机（Windows）专属**；环境与 `ui-smoke.ps1` 见 `docs/development-windows.md` §4）：
   - `playwright-cli open --browser=msedge "<url>?nc=<随机>"`（带 cache-bust，否则看到旧 bundle 误判「改动没生效」）；
   - ⚠️ **注入 `nf_token` 不稳**（首屏会 401 并清掉 token）⇒ **直接走登录表单**：填 `admin/changeme` 点「进入」；
   - 该外壳下 `getByRole` 常匹配不到 ⇒ 用 DOM 文本/DOM 遍历点按钮；`run-code` 传 JS 时**别用 `\"` 转义**（用 JS 单引号）；
@@ -133,6 +139,8 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 | `docs/development.md`（本文） | 命令、回归清单、调试手法变化时 |
 | `docs/component-api.md` | 组件 props/emit、store/lib 公共 API 变化时 |
 | `docs/roadmap-gaps-remaining.md` | **每期**追加实施记录（活文档，最新在末尾） |
+| `docs/development-windows.md` | **仅当前 Windows 开发机**的运行坑（nvm / 编码 / DNS / 代理 / 冒烟 / 端口）变化时；Linux / 容器读者**忽略该文件** |
+| `scripts/`（`test.sh` / `frontend-verify.sh` / `dev-instance.sh` + 共用 `_lib.sh`） | 常用命令口径变化时 —— **先改脚本**（脚本是首选入口），本文表格与 `AGENTS.md` §4 跟着改；解释器探测 / 要清哪些变量只许有 `_lib.sh` 一份 |
 
 ## 8. 锚点核验工具
 
@@ -167,7 +175,7 @@ python tests/period_close.py check --fix      # 只修版本字面量（= 仓库
 - **为什么对账从第 107 期起才严判**：`TODO` §2 是第 62 期才开始记的 —— roadmap 的第 53–61 期**有期段却从没有过索引行**；
   而第 74 / 78 期反过来（§2 有行、roadmap 没有对应期段）。这两类历史差异若按今天的规则判，都得「补一条从没存在过的记录」= **编造**。
   ⇒ `STRICT_FROM = 107`，历史差异只出 warning（`check --history` 会列出来）。
-- 契约见 `tests/test_period_records_contract.py`（29 例：每条规则都有「故意破坏 ⇒ 报错」用例，
+- 契约见 `tests/test_period_records_contract.py`（32 例：每条规则都有「故意破坏 ⇒ 报错」用例，
   外加 `new` 幂等、整体拒绝、行尾 / BOM 保住、`check` 只读）。
 - `R6` 管的是「`TODO` §2 必须是一行一期的表」：期号不重复、不许夹不以 `|` 开头的裸行（表尾脚注不算）、
   第 ≥107 期的行 ≤300 字符。它**第一次真跑就抓到一处既有缺陷**：第 105 期那行被吃掉 `| 105 | ` 前缀后

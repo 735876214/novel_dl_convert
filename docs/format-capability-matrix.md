@@ -64,7 +64,7 @@
 
 ## 五、加新能力 / 新格式时要动哪几处
 
-按 `AGENTS.md:19`「加/删功能都要彻底」：
+按 `AGENTS.md:27`「加/删功能都要彻底」：
 
 1. `core/features.py`：`FEATURE_LABELS`（中文名）+ `FEATURES_BY_TYPE`（给哪些库）。
    **只给部分库时必须写清理由**，并登记进 `tests/test_format_matrix.py` 的 `EXCLUSIVE` 表 ——

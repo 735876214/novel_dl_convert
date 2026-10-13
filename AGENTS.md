@@ -4,27 +4,37 @@
 > 项目名：**NovelForge**（仓库名 `novel_dl_convert`）。定位：**TXT/电子书 → 书库 + 在线阅读器**，
 > 面向 **NAS / 容器**自托管，单用户。后端 FastAPI，前端 Vue 3 SPA。
 
----
+**30 秒红线**（细则全在 §1，冲突时以 §1 为准）
+
+- 不回退、不顺手提交别人的改动；`.vscode/settings.json` 永不提交。
+- 加 / 删功能都要**彻底**：路由 + 模块 + db CRUD + 能力键 + 前端 + 文档 + 记忆 + 「接口 404」断言，一处不落。
+- **单一真值源**：同一判据只许一处实现 —— 发现第二份 = 缺陷。
+- 书文件**只读**；删除一律**移入回收站**（从不 `unlink`）；软删除的一切读点带 `WHERE deleted_at=0`。
+- 不手写 `static/v2`；不新增 compose 文件；不写假数据；不为省事把界面资源丢给外部 CDN。
+- 跑测试用 `scripts/test.sh`；收尾 `python tests/period_close.py check` **0 问题**才算完。
 
 ## 0. 开工前三件事（顺序别调）
 
 1. **`git log --oneline -12` + `git status --short`**
    - 本项目**可能有别的 AI 会话在并行推进**；**期号会被别人用掉** —— 别沿用旧计划里的期号。
-   - 别人未提交/已提交的改动**不回退、不顺手提交**；工作区里不是你的改动（例：`.vscode/settings.json`）不要一起 commit。
-2. **读 `docs/TODO.md`** 看当前任务与优先级；读本轮相关的 `docs/roadmap-gaps-remaining.md` 段落（最新期在文件**末尾**）。
-3. **读 `.codebuddy/memory/MEMORY.md`（铁律 + 一期一行索引）+ `MEMORY-REF.md`（按主题的域细节/运行手册）**。
-   第 53–105 期的逐期铁律全文在 `MEMORY-PERIODS.md`（存档）；**当日日志已取消**（2026-10-06 起不再新建 `memory/YYYY-MM-DD.md`），跨会话历史事实按需查既有日期文件。
+   - 别人未提交/已提交的改动**不回退、不顺手提交**；工作区里不是你的改动不要一起 commit。
+2. **读 `docs/TODO.md`** 看当前任务与优先级；读本轮相关的 `docs/roadmap-gaps-remaining.md` 段落（最新期在**末尾**，按 `## 第 N 期` 搜）。
+3. **读 `.codebuddy/memory/MEMORY.md`（铁律 + 一期一行索引）+ `MEMORY-REF.md`（按主题的域细节 / 运行手册）**；
+   本机（Windows）专属陷阱见 `docs/development-windows.md` —— **换机器 / 容器请忽略它**。
 
 ## 1. 改动纪律（硬约束，违反会被判为回归）
 
-- **加/删功能都要彻底**：路由 + 模块 + db CRUD + 能力键 + 前端页/路由/api + 文档 + 记忆 + 「接口 404」断言，一处不落。
+- **加 / 删功能都要彻底**（同批改完、一处不落）：
+  - **新增**：路由 → 模块 → db CRUD → 能力键 → 前端页/路由/api → 文档 → 记忆 → 「接口 404」断言。
+  - **删除**：删路由 → 删模块 → 删 db CRUD → 删能力键 → 删前端页/路由/api → 删文档 → 改记忆索引 →
+    删/改 404 断言 → `rg` 全文确认无残留引用（**不留兼容垫片 / 回退分支**，见 §7.1）。
 - **单一真值源**：同一判据**只许有一处实现**。典型：命名规则 `fileops.fill_pattern`、路径判据 `frontend/src/lib/paths.ts`、
   阅读状态阈值 `lib_settings.reading_thresholds` ↔ `lib/readingThresholds.ts`、续接 `lib/seriesNext.ts`、
-  ISBN 形状 `metadata.isbn_digits`、位置换算 `core/epub_cfi.py`、图表入口 `lib/charts.ts`。
-  发现第二份拷贝 = 缺陷，先收敛再改行为。
-  ⚠️ **第 94 期新增六处**：书源导入路由 `sources/intake.py`、格式轴 `sources/formats/*`（与执行轴 `base.REGISTRY` **正交**）、
+  ISBN 形状 `metadata.isbn_digits`、位置换算 `core/epub_cfi.py`、图表入口 `lib/charts.ts`；
+  第 94 期又立六处：书源导入路由 `sources/intake.py`、格式轴 `sources/formats/*`（与执行轴 `base.REGISTRY` **正交**）、
   「引擎能执行什么」`rules.MODES` + `rules.audit_native_rule`（**诚实闸** —— adapter 不许自评可用）、
   编码探测 `pipeline.decode_bytes`、执行期正则 `core/saferegex`、阅读选择器解析与转换 `sources/legado.*`（formats 只包装）。
+  发现第二份拷贝 = 缺陷，先收敛再改行为。
 - **数据只落服务端 DB，绝不写回书文件**（`core/publish.py` 是唯一仍写文件的模块；它写的也是**副本**，源文件绝对只读）。
 - **源不可变**：副本禁原地写（临时文件 + `Path.replace`）；删除一律**移入回收站**（`CONFIG_DIR/cache/recycle`），**从不 `unlink`**。
   ⚠️ **删除的边界（第 81 期口径）**：只有**用户显式动作**才会移动磁盘上的文件 ——
@@ -33,27 +43,29 @@
   （想搬回用「设置 → 维护 → 回收站还原」）。后台流程（刮削 / 发布 / 扫描）依旧**绝不自动删源**。
 - **软删除**：`DELETE` = 置 `deleted_at`，`purge` 才真删；**一切读点须带 `WHERE deleted_at=0`**。
 - **视觉层照搬 BookOrbit，不允许自创**（见 `docs/DESIGN.md`）；**不做假交互**（没有后端就如实标注「未支持」）。
-- **外部依赖 / 出网：默认自托管、默认不引**（字体自托管、图标内联 SVG、前端不拉第三方 CDN）—— 这是**默认取向**，
-  **不是硬约束**（第 80 期口径修订，见 `docs/roadmap-gaps-remaining.md`）。允许**显式、可关、失败能降级**地引入：
-  ① 新增依赖必须在 `requirements*.txt` / `frontend/package.json` 显式声明并说明理由；② 出网一律由后端发起、有开关或退路，
-  失败不得阻塞主流程；③ 仅为「省事」把界面资源丢给外部 CDN 仍然不做（自托管是默认选择，不是禁令）。
-- **不做假数据**：演示数据禁用 `Math.random()`；计数/进度必须来自真实接口。
-- **compose 文件只保留两份**：仅 `docker-compose.yml`（生产部署）与 `docker-compose.test.yml`（测试），**严禁新增任何新格式 / 叠加件**（offline、update 等一律内联进主文件注释或文档说明，不另建文件）。
+- **外部依赖 / 出网：默认自托管、默认不引** —— 这是**默认取向**，**不是硬约束**（第 80 期口径修订）。
+  允许**显式、可关、失败能降级**地引入：① 新增依赖必须在 `requirements*.txt` / `frontend/package.json` 显式声明并说明理由；
+  ② 出网一律由后端发起、有开关或退路，失败不得阻塞主流程；③ 仅为「省事」把界面资源丢给外部 CDN 仍然不做。
+- **不做假数据**：演示数据禁用 `Math.random()`；计数 / 进度必须来自真实接口。
+- **compose 文件只保留两份**：仅 `docker-compose.yml`（生产部署）与 `docker-compose.test.yml`（测试），
+  **严禁新增任何新格式 / 叠加件**（offline、update 等一律内联进主文件注释或文档说明，不另建文件）。
 - 写计划只写四块：**需求来源 / 功能范围 / 防回归要点 / 任务清单**。
-- ⚠️ 除上述硬约束外，**工程取向**见第 7 节（不为向后兼容留路 / 最简实现 / 分层生长 / 模块化 / 优先成熟库 / 先查已有依赖 / 长期决策 / 先研究成熟产品）；
-  两者冲突时**以本节的硬约束为准**。
+- ⚠️ 除上述硬约束外，**工程取向**见第 7 节；两者冲突时**以本节的硬约束为准**。
 
-## 2. 三处同步点（最容易漏、且漏了不报错）
+## 2. 同步点（最容易漏、且漏了不报错）
 
-| 场景 | 必须同批改的位置 |
-|---|---|
-| 新增「可保存的配置分区」 | ① `server.EDITABLE` ② `GET /api/config` 的硬编码键列表 ③ 前端 `data/settingsFields.ts` 的 `SECTION_KEYS` |
-| 新增偏好块 | ① `server.PREFS_BLOCKS` ② 前端 `lib/prefsPayload.ts` 的 `PAYLOAD_BLOCKS`（契约 `tests/test_prefs_shelf_block.py`） |
-| 新增 / 删设置页 | ① `data/settingsNav.ts`（**删条目即删路由与侧栏项**）② 路由组件映射 `SETTINGS_PAGE_COMPONENTS` ③ 侧栏/搜索由注册表派生（自动） |
-| 新增库表列 | 必须同进 `db._LIBRARY_COLS`，否则 `update_library` **静默写不进**（界面仍显示「已保存」） |
-| 新增含 `book_id` 的表 | 必过 remap 清单：`ORPHAN_TABLES` / `REMAP_TABLES` / `REMAP_PROBE_FILTER` / `REMAP_EXPLICIT_TABLES`（契约 `tests/test_remap_tables.py`；另有 `REMAP_DERIVED_TABLES` / `REMAP_MERGE_TABLES` 由该用例的 `_tables_with_book_id()` 直接问库兜底） |
-| 新增书源 / 提供商 | ① **声明**：`novelforge/core/sources/registry.py` 的 `DECLARED`（`fetch_name` / `isbn_name` / `detail_name` / `id_field` / `kind` / `rate_limit` / `cache_ttl` …）② **实现**：`novelforge/core/metasources.py` 里的同名函数（声明存的是**函数名字符串**，由 `_bind_declared()` 注入；找不到直接 `raise ValueError`）③ 该源的配置键进 `DEFAULTS["metadata_fetch"]` 与 `server.EDITABLE`（契约 `tests/test_metasource_registry_contract.py` + `tests/test_metadata_providers.py`） |
-| 新增发布/接口 | 批量端点注册在 `/api/books/{bid}` **之前**；字面量路径在 `{param}` 之前 |
+> 加 / 删这类东西时，**同批**改完下表各处 —— 表里的契约测试就是「漏了会红」的判据。
+
+| 场景 | 必须同批改的位置 | 契约测试 |
+|---|---|---|
+| 配置分区（可保存） | ① `server.EDITABLE` ② `GET /api/config` 的硬编码键列表 ③ 前端 `data/settingsFields.ts` 的 `SECTION_KEYS`；**删分区走反向**（三处同批删） | `tests/test_update_config_contract.py` |
+| 配置项 / 环境变量 | `config.DEFAULTS` → `server.EDITABLE`（若可编辑）→ `GET /api/config` 的键列表 → 前端 `settingsFields.ts`；用户可见的另加 `README.md` 配置表 / `docs/user-guide.md` | `tests/test_update_config_contract.py` |
+| 偏好块 | ① `server.PREFS_BLOCKS` ② 前端 `lib/prefsPayload.ts` 的 `PAYLOAD_BLOCKS` | `tests/test_prefs_shelf_block.py` |
+| 设置页（增 / 删） | ① `data/settingsNav.ts`（**删条目即删路由与侧栏项**）② 路由组件映射 `SETTINGS_PAGE_COMPONENTS`；侧栏 / 搜索由注册表派生（自动） | `tests/test_settings_nav_contract.py` |
+| 库表列 | 必须同进 `db._LIBRARY_COLS`，否则 `update_library` **静默写不进**（界面仍显示「已保存」） | `tests/test_api_smoke.py`（只覆盖部分列，别只信它） |
+| 含 `book_id` 的表 | remap 清单：`ORPHAN_TABLES` / `REMAP_TABLES` / `REMAP_PROBE_FILTER` / `REMAP_EXPLICIT_TABLES`（另有 `REMAP_DERIVED_TABLES` / `REMAP_MERGE_TABLES` 由用例问库兜底） | `tests/test_remap_tables.py` |
+| 书源 / 提供商 | ① **声明** `core/sources/registry.py` 的 `DECLARED`（存的是**函数名字符串**，由 `_bind_declared()` 注入）② **实现** `core/metasources.py` 里的同名函数 ③ 配置键进 `DEFAULTS["metadata_fetch"]` 与 `server.EDITABLE` | `tests/test_metasource_registry_contract.py` + `tests/test_metadata_providers.py` |
+| 发布 / 接口 | 批量端点注册在 `/api/books/{bid}` **之前**；字面量路径在 `{param}` 之前；**删除的接口必须有 404 断言** | —（靠 §1 的 404 断言） |
 
 ## 3. 目录地图（只列常去的）
 
@@ -68,12 +80,14 @@ novelforge/                 Python 包（后端全部逻辑）
     db.py                   持久层（SQLite / PostgreSQL 双后端，经 sqlcompat.py）
     cache.py                Redis 读缓存（可选、可缺席、挂掉自动降级）
     publish.py · scrape.py  刮削出版（硬链接副本 / 原子写 / 状态机）
-    metasources.py · metafetch.py   14 家元数据提供商 + 抓取编排（出网只经 `_get_json`/`_get_text`）
+    metasources.py · metafetch.py   13 家元数据提供商 + 抓取编排（出网只经 `_get_json`/`_get_text`）
   static/v2/                前端**构建产物**（勿手写；由 frontend/ 构建 + deploy 同步）
 frontend/                   前端工程（Vue 3 SFC + TS + Vite + Tailwind v4 + Pinia）
   src/assets/theme/*.css    视觉 token（照搬 BookOrbit，见 docs/DESIGN.md）
   src/views/ · components/ · stores/ · lib/ · data/ · composables/
   scripts/deploy.mjs        dist → novelforge/static/v2
+scripts/                    一键验证脚本（入库；见 §4）
+  test.sh · frontend-verify.sh · dev-instance.sh · _lib.sh（三者共用的探测 / 清变量）
 tests/                      pytest 全量（离线）；conftest.py 有仓库根防删除守卫
 docs/                       文档（见下「文档地图」）；bookorbit/ 上游对照、review/ 历史评审快照
 ```
@@ -81,115 +95,69 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 ## 4. 常用命令
 
 ```bash
-# 后端测试（离线、全量；Windows 用 .venv\Scripts\python.exe）
-.venv/bin/python -m pytest                 # 当前基线 2411 例（2385 passed / 26 skipped；只增不减）
-                                           # ⚠️ 跑前先清空全部 proxy 变量；⚠️ 别再加 `-q`（两条都见第 5 节）
-.venv/bin/python -m pytest tests/test_catalog.py -k 某关键字
+# 后端全量测试（离线）—— 脚本已清 proxy、已带 junitxml，有 failed/errors 即退 1
+bash scripts/test.sh                       # 当前基线 2412 例（2399 passed / 13 skipped；只增不减）
+bash scripts/test.sh tests/test_catalog.py -k 某关键字
 
-# 前端四连（缺一不可；Windows 先 $env:NODE_OPTIONS=''）
-cd frontend
-npm run type-check && npm run test:unit && npm run build && npm run deploy
+# 前端四连（type-check → unit → build → deploy，缺一不可）
+bash scripts/frontend-verify.sh
 
-# 跑本地实例（隔离目录，别占用别人的端口；8993 常被测试 compose 占）
-INPUT_DIR=$TMP/nf/input OUTPUT_DIR=$TMP/nf/output CONFIG_DIR=$TMP/nf/config \
-DATA_DIR=$TMP/nf/data CACHE_DIR=$TMP/nf/cache LIBRARY_SOURCE_DIR=$TMP/nf/libraries \
-AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
+# 起本地实例（隔离目录 + 新端口，别占用别人的）
+bash scripts/dev-instance.sh 8412
 # 健康检查 GET /health（唯一给版本号的端点）；登录字段是 {"user","pin"}，默认 admin/changeme
+# ↑ 仅本地默认；部署必须改 AUTH_USER / AUTH_PIN
 ```
 
-- ⚠️ **`build` 只落 `frontend/dist`，`deploy` 才同步到 `novelforge/static/v2`**；漏 deploy ⇒ 服务端仍发旧 bundle（改动看似「没生效」）。
-- ⚠️ `vitest` **不校验模块导出完整性** —— 只有 `build` 才报断链（历史上曾把两个文件误提交成 0 B）。
-- ⚠️ Windows 的 IDE safe-delete shim 会拦 Vite 清目录与 `Remove-Item`；跑 `build`/`deploy`/`pytest` 前 `$env:NODE_OPTIONS=''`。
-- ⚠️ 改了后端**必须重启进程**才生效（用户曾把「改了后端没重启」误当成产品 bug）。
+- 📌 **§4 的基线行由 `tests/period_close.py` 维护**（`new --numbers/--junit`），**勿手改**；它与 `docs/TODO.md` §0 必须一致（R3 对账）。
+- ⚠️ **`build` 只落 `frontend/dist`，`deploy` 才同步到 `novelforge/static/v2`** —— 漏 deploy ⇒ 服务端仍发旧 bundle（改动看似「没生效」）；
+  而 `type-check` / `unit` 都**不校验模块导出完整性**，只有 `build` 会报断链（历史上曾把两个文件误提交成 0 B）。
+- ⚠️ 改了后端**必须重启进程**才生效；Windows 上直跑命令（不经脚本）时的环境差异见 `docs/development-windows.md`。
 
 ## 5. 已知陷阱速查
 
-- `core/` 里一律 `from .. import config`（裸 `import config` 会被同名命名空间包劫持，**启动时才炸**）。
-- `db` 只走 `db._connect()`（持 `RLock` 的代理连接）；**别抓裸连接、别绕开锁**（否则 `InterfaceError`/段错误）。
-- win32 目录 `st_size` 恒 0 ⇒「空文件」判据要 `not is_dir() and st_size == 0`。
-- **能力键判隐显轴**：`library.hasFeature(k)` 判的是「侧栏当前选中的库」，读者侧要判「**这本书**属于哪个库」。
-- 设置页 `note` 是**纯文本插值** ⇒ `**`/反引号/`<strong>` 会原样显示；且只有占位页会渲染 note。
-- 前端设置页路由是 `#/settings/<page.path>`（**不带分组段**）。
-- 计时类测量用 `curl`，**别用 PowerShell `Invoke-RestMethod`**（解析大 JSON 会严重虚高耗时）。
-- `pytest.ini` 已含 `addopts=-q`，**别再加 `-q`**；计数用 `--junitxml` 解析（Windows 下会话末清理报错不影响结果，看 junit 才算数）。
-- ⚠️ **重建 / 包装 HTTP 响应时必须摘掉 `Content-Encoding` / `Content-Length`**（第 94 期，`network._drop_entity_headers`）——
-  留着前者会让 httpx 把**已解压**的字节再解一次（开 gzip 的真实站点**全挂**），而**桩站返回的正文从不压缩 ⇒ 单测 100% 绿**。
-  凡这类改动，收尾必须拿**真实地址**核一次。
-- ⚠️ `quickjs` 只有 **cp38–cp312** 预编译包 ⇒ `requirements.txt` 的 `python_version < "3.13"` 标记不能少（否则 3.13+ 装整条失败）。
-- ⚠️ **不认识的 python 进程一律不 kill**（本机常有并行会话的实例）；`pytest` 里调 `ledger.plan` 的用例必须带 `isolated` fixture。
-- ⚠️ **跑 pytest 前清空全部 proxy 变量**（`HTTP_PROXY` / `HTTPS_PROXY` / `http_proxy` / `https_proxy` / `NO_PROXY` / `no_proxy`）——
-  `httpx` 0.28.1 解析 `NO_PROXY` 里的方括号 IPv6（`[::1]`）会生成畸变 mount `all://*[::1]`，于是**任何真实 `BrowserClient` 用例**炸
-  `httpx.InvalidURL: Invalid port: ':1]'`（本机曾据此误判出 45 个「回归」）。**只去掉方括号不够，必须整组清空**。
-- ⚠️ **pwsh 的 `> $out 2>&1` 把输出写成 UTF-16LE**（第 102 期）：用 `encoding="utf-8"` 读会得到夹 `\x00` 的乱码、**搜不到任何关键词**（据此白读一轮「exit 0 但没有汇总行」）。读这类日志要 `encoding="utf-16"`。
-- ⚠️ **不要在本仓跑 `pnpm run <script>`**（第 102 期实测）：pnpm 的 deps 检查会**自动 install** —— 把 `frontend/node_modules`
-  整套移进 `.ignored` 再从 registry 重装（版本与 `package.json` 的 `^` 记录不同），最后卡在
-  `[ERR_PNPM_IGNORED_BUILDS] Ignored build scripts: vue-demi@0.14.10` 上 exit 1，**脚本压根没跑**。
-  正确姿势：`cd frontend` 后**直接调 `frontend/node_modules/` 里的工具**（如 `node node_modules/vue-tsc/bin/vue-tsc.js --build`），或按第 4 节用 `npm run`。
-- ⚠️ **`vue-tsc` 3.3.12 起比 3.3.11 严**（第 102 期记录、第 103 期复核为**实红**、**第 104 期已修**）：
-  症状是 `frontend/src/components/book/MetadataEditor.vue:614` 的模板内联
-  `FIELD_LABELS[c as keyof BookMetadataFields]` 报 `TS2339`（`--build --force` 恰 1 条、`EXIT=2`），
-  而 **3.3.11 全量重建 exit 0** ⇒ 触发条件是「**重装前端依赖**」，与那行代码有没有改过无关。
-  第 104 期的解法是**把代码写对**（五处重复的字段中文名收敛成一个 `labelOf(k: string)`，
-  索引断言只留一处），而不是收紧 `package.json` 的版本范围 —— 范围挡不住下次重装，写对才挡得住。
-  ⚠️ 所以「本地类型检查突然红一条、你没动过那个文件」先怀疑**工具链版本漂移**，别急着改业务代码。
-- ⚠️ **`write` 工具落的临时文件在 `C:\Users\qingr\Temp\`，而 pwsh 的 `$env:TEMP` 是 `…\AppData\Local\Temp`**（第 103 期）：
-  用 `git commit -F "$env:TEMP\nf_msg_xxx.txt"` 会报 `fatal: could not read log file '…': No such file or directory`（提交未发生，`git add` 的暂存还在）
-  ⇒ **一律给完整显式路径**（`git commit -F "C:\Users\qingr\Temp\nf_msg_xxx.txt"`）。
-  ⚠️ **这条的后果比看上去严重**：失败后**暂存区不会清空**，那一笔的内容会被**下一笔提交悄悄带走**
-  （第 103 期给 RanobeDB 缺陷修复准备的那一笔就这么并进了系列那一笔 `e1927ea`）⇒
-  **每笔提交后都要核 `git log --oneline` 的笔数**，收尾用 `git show --stat <hash>` 确认内容对得上。
-- ⚠️ **读仓库里的中文 / JSON 文件一律用 `read` 工具**（第 103 期）：`Get-Content package.json -Raw | ConvertFrom-Json` 在本机
-  因控制台 **GBK 解码**把中文读成乱码而报 `传入的对象无效`，`Get-Content docs\*.md` 则是满屏乱码 —— 都**不是文件坏了**，是 pwsh 读错了。
-- ⚠️ **本机的 DNS 被上游污染**（第 104 期实测，与代码无关）：`openlibrary.org` / `www.goodreads.com` /
-  `www.googleapis.com` 在本机解析到的是**别人的网段**（Facebook 的 `31.13.x` / `128.242.x`），
-  而 `8.8.8.8` 给的是正确地址（`199.59.149.201` / `199.59.148.6`）；`hosts` 里**没有**自定义行、`1.1.1.1` 的 UDP/53 无应答。
-  ⇒ 这三家的**真机探活 / 详情核验现在做不了**（第 102 期起挂起的三条都撞在这上面）。
-  探针连不上时先按 DNS 归因（应用内体检会报 `dns_polluted` 并把两边地址写进原因），**别去改选择器或超时**。
-- ⚠️ **`.gitignore` 的模式不写前导斜杠，会把源码一起忽略掉，而本机永远看不出来**（第 105 期）：
-  `input/` / `output/` / `cache/` 这类**不带前导斜杠**的模式匹配**任意层级**的同名目录 ——
-  本仓库就这么把 `frontend/src/components/ui/input/`（`Input.vue` + `index.ts`，被
-  `ui/sidebar/SidebarInput.vue` import）静默忽略了**从第 90 期到第 105 期**。
-  症状极隐蔽：**本机文件一直在 ⇒ 本地 `npm run build` / `vue-tsc` / 单测全绿**，
-  只有 CI 从 clone 构建（`Build and Push Image` 的 `npm run build`）才报
-  `[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`，并让**整个镜像构建 + 推送连续失败 30+ 次**。
-  ⇒ ① 运行时目录一律写成锚定仓库根的形式（`/input/` `/output/` `/cookies/` `/cache/` `/config/cookies/`
-  `/config/cache/`，与 `/data/`、`/libraries/` 同口径）；② 新增源码目录后**别只信本机构建** ——
-  跑 `git ls-files --others --ignored --exclude-standard -- frontend/src novelforge` 看有没有被吞掉的文件；
-  ③ 这两条已由 `tests/test_source_tracking_contract.py` 钉住（源码树不许有被忽略的文件 + `@/` 别名导入必须落在已入库路径上）。
-- ⚠️ **临时 `.ps1` 里写中文会被按 GBK 读**（第 109 期）：`write` 工具落的是**无 BOM 的 UTF-8**，而本机 Windows PowerShell 对无 BOM 文件按 ANSI（GBK）解码 ⇒
-  全角字符（`：`、`（`）会被当成多字节乱码，解析报 `字符串缺少终止符: "`（脚本一行都没跑）。
-  ⇒ 写 `.ps1` 要么**只用 ASCII**（哪怕是临时脚本：输出标签用英文），要么写成**带 BOM 的 UTF-8**；
-  同理，`.ps1` 里也不要用中文做正则/路径字面量。
-- ⚠️ **GHCR 的 `tags/list` 有缓存**（第 109 期）：镜像构建 success 之后十几分钟，tag 列表里仍可能没有刚推上去的那个 tag（`latest` 与旧 sha 照旧列着）。
-  ⇒ 判「tag 推没推上去」要**按 tag 取 manifest**（`GET https://ghcr.io/v2/<owner>/<repo>/manifests/<tag>`，带 `Bearer` pull token）；
-  用随便编的 tag 应回 404 做对照，否则分不清「真存在」与「这个端点不校验」。
+> 只列**跨环境通用**的判据：一行一条（症状 → 处理），展开见「去哪看」列。
+> ⚠️ **本机（Windows）专属陷阱不在本表** —— 见 `docs/development-windows.md`（换机器 / 容器忽略它）。
+
+| 症状 / 关键词 | 判据与处理 | 去哪看 |
+|---|---|---|
+| `core/` 里 `import config`：**启动时才炸** | 一律 `from .. import config`（裸 import 会被同名命名空间包劫持） | `docs/development.md` §3 |
+| `db` 报 `InterfaceError` / 段错误 | 只走 `db._connect()`（持 `RLock` 的代理连接）；别抓裸连接、别绕开锁 | `docs/development.md` §3 |
+| win32 目录 `st_size` 恒 0 | 「空文件」判据要 `not is_dir() and st_size == 0`；目录体积用 `watcher._sig()` | `MEMORY-REF.md`（搜索 `st_size`） |
+| 能力键判隐显轴 | `library.hasFeature(k)` 判的是**侧栏当前选中的库**；读者侧要判「**这本书**属于哪个库」 | —（本行即判据） |
+| 设置页 `note` 里的 `**` 原样显示 | `note` 是**纯文本插值**（`**` / 反引号 / `<strong>` 不渲染），且只有占位页渲染 note；前端设置页路由是 `#/settings/<page.path>`（**不带分组段**） | —（本行即判据） |
+| 真站点全挂，但单测 100% 绿 | 重建 / 包装 HTTP 响应时**必须摘掉 `Content-Encoding` / `Content-Length`**（`network._drop_entity_headers`）—— 留着会让 httpx 把已解压的字节再解一次，而桩站正文从不压缩 ⇒ 单测抓不到。凡这类改动，收尾必须拿**真实地址**核一次 | roadmap 第 94 期段 |
+| 3.13+ 装 `quickjs` 整条失败 | `requirements.txt` 的 `python_version < "3.13"` 标记不能少（它只有 cp38–cp312 预编译包） | `requirements.txt` 注释 |
+| 源码目录被**静默忽略**（本机永远看不出来） | `.gitignore` 模式**不写前导斜杠**会匹配任意层级同名目录（`input/` 曾吞掉 `frontend/src/components/ui/input/` 达 15 期，只有 CI 从 clone 构建才报）⇒ 运行时目录一律锚定仓库根（`/input/` `/output/` `/cache/` …）；新增源码目录后跑 `git ls-files --others --ignored --exclude-standard -- frontend/src novelforge` 复验 | `.gitignore` 注释 + `tests/test_source_tracking_contract.py`（已钉） |
+| 计数 / 汇总行读不到 | 计数一律用 `--junitxml` 解析（`scripts/test.sh` 已内置）；`pytest.ini` 已含 `addopts=-q`，**别再加 `-q`** | `docs/development.md` §4 |
 
 ## 6. 提交与交付
 
-- 中文 commit、**按能力拆多笔**；**提交即推送**（`git push origin main`）；收尾不留未提交改动（临时文件放 `$TMP`，别落仓库根）。
+- 中文 commit、**按能力拆多笔**（惯例 `feat(115): …` / `fix(core): …` / `docs(116): …`）、**提交即推送**（`git push origin main`）；
+  收尾不留未提交改动（临时文件放 `$TMP`，别落仓库根）。
 - 🚀 **改了 `VERSION` 就必须同批在 `CHANGELOG.md` 补一段**：推送到 `main` 后 `.github/workflows/release.yml` 会读 `VERSION`，
   若 `v<版本>` tag 还不存在就**自动打 tag 并创建 Release**（notes 取 CHANGELOG 对应段）⇒ 漏了那段，发布会在 CI 里失败。
-  版本号唯一真值源是仓库根 `VERSION`（`/health` 下发）；**别再写第二份版本字面量**（`novelforge.__version__` 已删）。
-- **每期收尾只写两处（第 106 期起，用户 m08584 要求精简）**：
-  ① `docs/roadmap-gaps-remaining.md` 本期段 —— **唯一叙事**（根因 / 证据 / 修法 / 核验，别再往第二处抄一遍）；
+  版本号唯一真值源是仓库根 `VERSION`（`/health` 下发）；**别再写第二份版本字面量**。
+- **每期收尾只写两处（第 106 期起）**：
+  ① `docs/roadmap-gaps-remaining.md` 本期段 —— **唯一叙事**（根因 / 证据 / 修法 / 核验）；
   ② `.codebuddy/memory/MEMORY.md` 的「逐期铁律索引」加**一行**（期号 + 一句话铁律）。
-  - ▸ **机械的几处用落位器**（第 107 期起，用户 m08782「再谈自动化」立项）：
-    `python tests/period_close.py new --period N --title "期标题" --numbers "总 passed skipped" --seconds S`
-    一次改完 —— roadmap 追加期段标题、TODO 头部占位、TODO §2 一行索引、TODO §0 的 HEAD 链与基线句、
-    `AGENTS.md` §4 基线、`MEMORY.md` 索引行、并把旧口径手记的「连续 N 轮未升版」换成 VERSION 派生句；
-    缺锚点或期号已被占用 ⇒ **整体拒绝、绝不改一半**（幂等，可反复跑）。
-    跑完再 `python tests/period_close.py check`（**只读**）对账 R1–R8，0 问题才算收尾完：
-    `R1` 新期号三处齐全 / `R2` 索引标签可解析不重复不越界 / `R3` §0 提到最新期号且两处基线一致 /
-    `R4` 不许再建当日日志 / `R5` `MEMORY-PERIODS.md` 只读 /
-    `R6` §2 是「**一行一期**」的表：期号不重复、表里不许夹裸行（表头前缀被吃掉的那种）、第 ≥107 期的一行 ≤300 字符 /
-    `R7` 版本字面量 = 仓库根 `VERSION`（`--fix` 可修）/ `R8` 第 106 期口径还在。
-    **工具不写叙事也不做提炼**：roadmap 正文、TODO 头部那一句话、索引行的一句话仍要手写
-    （先跑 `new` 再写正文 —— 期段标题已存在时 `new` 会拒绝）。
-  - **不再**新建 `memory/YYYY-MM-DD.md`（当日日志 2026-10-06 起取消；既有日期文件保留为历史）。
-  - **不再**按期号往 `MEMORY-REF.md` 追加 —— 它**按主题**组织，只有出现**新的领域知识**（运行手册 / 域细节 / 跨会话待办）时才补对应小节。
-  - 逐期铁律全文存档 = `.codebuddy/memory/MEMORY-PERIODS.md`（**只读，不追加**）；老期号细节按 `### 第 N 期` 搜。
-  - `docs/TODO.md`（§0 进度 / §1 待办 / §2 交付索引）与 `AGENTS.md` 基线数字仍要同批更新。
-- 行尾：`*.sh` / `Dockerfile` / `.dockerignore` 必须 **LF**（否则容器 `sh /app/start.sh` 报 `set: Illegal option -`）。
+  - **机械的几处用落位器**（`tests/period_close.py`，用法与 R1–R8 判据见 `docs/development.md` §9）：
+    `python tests/period_close.py new --period N --title "期标题" --numbers "总 passed skipped" --seconds S`，
+    再 `python tests/period_close.py check`（**只读**）对账，**0 问题**才算收尾完；缺锚点或期号已被占用就整体拒绝（绝不改一半）。
+    工具**不写叙事也不做提炼** —— roadmap 正文与索引行那句话仍要手写。
+  - **不再**新建 `memory/YYYY-MM-DD.md`（当日日志 2026-10-06 起取消）；**不再**按期号往 `MEMORY-REF.md` 追加（它**按主题**组织）。
+  - 逐期铁律全文存档 = `.codebuddy/memory/MEMORY-PERIODS.md`（**第 1–105 期，只读，不追加**）。
+    查老期号：`MEMORY-PERIODS.md` 按 `### 第 N 期` 搜；roadmap 按 `## 第 N 期` 搜（最新在末尾）；第 74 期及更早的期号↔主题对照见 `docs/TODO.md` §2。
+- **收尾顺序**：
+  1. `bash scripts/test.sh`（全量）+ `bash scripts/frontend-verify.sh`（四连）；
+  2. `python tests/period_close.py new --period N --title "…" …` 落位；
+  3. `python tests/period_close.py check` —— **0 问题**；
+  4. 改过 `VERSION` ⇒ 补 `CHANGELOG.md` 段；
+  5. `git status --short` 排除无关文件（`.vscode/settings.json` 永不提交）；
+  6. 按能力拆中文 commit → `git push origin main`；
+  7. `git log --oneline` 核笔数、`git show --stat <hash>` 核内容（提交失败会**静默**留下暂存区，见 `docs/development-windows.md`）。
+- **失败处理**：测试失败**不强推**；`period_close` 整体拒绝时**不要手改一半**；CI 红先查 `VERSION` / `CHANGELOG` 缺段；
+  真机探活失败先按 DNS / 代理归因，**别去改选择器或超时**。
+- 行尾：`*.sh` / `Dockerfile` / `.dockerignore` 必须 **LF**（`.gitattributes` 已钉；否则容器 `sh /app/start.sh` 报 `set: Illegal option -`）。
 
 ## 7. 工程原则（长期取向，第 95 期立）
 
@@ -213,7 +181,7 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
    `rarfile` / `numpy` / `croniter` / `psycopg` / `redis`（清单与理由见 `requirements.txt` 逐条注释）。
 7. **为长期做架构决策**：**不接受「先这样、以后再换」的临时方案** —— 临时方案 = 未来的第二份实现。
 8. **先研究成熟产品怎么解**：照搬已被验证的模式与约定，**不从零发明**。本项目一直在这么做：
-   视觉层逐字照搬 BookOrbit、书源对齐 legado / Mihon、命名/续接对齐既有上游。
+   视觉层逐字照搬 BookOrbit、书源对齐 legado / Mihon、命名 / 续接对齐既有上游。
 
 ---
 
@@ -221,17 +189,32 @@ AUTO_WATCH=false .venv/bin/python -m uvicorn novelforge.server:app --port 8412
 
 | 文件 | 管什么 |
 |---|---|
-| `AGENTS.md`（本文件） | AI 入口：硬约束、三处同步点、常用命令、陷阱 |
+| `AGENTS.md`（本文件） | AI 入口：硬约束、同步点、常用命令、陷阱 |
 | `docs/TODO.md` | 当前任务、优先级、进度与下一期候选 |
 | `docs/DESIGN.md` | 视觉规则（token / 圆角 / 阴影 / 字体 / 暗色 / 动效） |
 | `docs/project-overview.md` | 项目整体说明（能力全景） |
 | `docs/architecture.md` | 架构与数据流（分层 / DB / 索引 / 缓存 / 出版 / 多端） |
 | `docs/user-guide.md` | 面向使用者的功能说明（怎么用） |
-| `docs/development.md` | 开发方式、命令、回归清单 |
+| `docs/development.md` | 开发方式、命令、回归清单、调试技巧、收尾工具 |
+| `docs/development-windows.md` | **仅当前 Windows 开发机**的专属陷阱（Linux / 容器忽略） |
 | `docs/component-api.md` | 前端组件与状态/工具模块 API |
 | `docs/format-capability-matrix.md` | 书源格式轴 × 执行轴的能力矩阵（第 94 期） |
 | `docs/roadmap-verification.md` | 路线图完成度核查快照（第 94 期，**不采信文档状态标记**、只认实证） |
+| `docs/agents-audit-95.md` | 第 95 期 AGENTS 合规审计快照（历史文件，行号会漂移） |
 | `docs/bookorbit/bookorbit-*.md` | 既有上游对照基线（capability-gap / module-inventory / settings-inventory / feature-flows / library-contract / dashboard-styles） |
 | `docs/review/` | 历史评审快照（backend / frontend code_review_report、上游截图记录） |
-| `docs/roadmap-gaps-remaining.md` | 逐期实施记录（**活文档**，最新期在末尾） |
+| `docs/roadmap-gaps-remaining.md` | 逐期实施记录（**活文档**，最新期在末尾，按 `## 第 N 期` 搜） |
 | `README.md` | 面向部署者/使用者的完整说明（NAS 部署、配置表、CLI） |
+| `scripts/` | 一键验证脚本（`test.sh` / `frontend-verify.sh` / `dev-instance.sh`，见 §4） |
+
+### 记忆与收尾（每轮都要碰的入口）
+
+| 文件 | 管什么 |
+|---|---|
+| `.codebuddy/memory/MEMORY.md` | 硬约定 + 逐期铁律索引（**一期一行**，最新在末尾） |
+| `.codebuddy/memory/MEMORY-REF.md` | 按主题的运行手册 / 域细节 / 跨会话待办（**不按期号追加**） |
+| `.codebuddy/memory/MEMORY-PERIODS.md` | 第 1–105 期逐期铁律全文存档（**只读**，不追加） |
+| `VERSION` | 版本号**唯一真值源**（`/health` 下发）；改它必须同批补 `CHANGELOG.md` |
+| `CHANGELOG.md` | 版本段 —— release notes 的唯一来源 |
+| `tests/period_close.py` | 收尾落位器 + 三处对账（`new` / `check`，R1–R8） |
+| `tests/check_doc_anchors.py` | 文档锚点（`file:line`）漂移核验 |

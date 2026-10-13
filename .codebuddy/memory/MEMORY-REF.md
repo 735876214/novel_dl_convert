@@ -5,29 +5,14 @@
 > 由 09-21 的压缩整理从 `MEMORY.md` 拆分而来，内容等价、未删减。
 
 ## 运行 / UI 验证
-- 本地实例：`*_DIR→/tmp/<自建>/…`、`LIBRARY_SOURCE_DIR=…/libraries`、`AUTO_WATCH=false`、`.venv/bin/python -m uvicorn novelforge.server:app --port <新端口>`（**别 kill 别人的实例**：8791 常被旧代码实例占、8993 是用户 Docker 容器）。
-- 登录字段是 `{"user","pin"}`（**不是** username/password）；全新 `DATA_DIR` 首启由 `db.init()` 按 `AUTH_USER`/`AUTH_PIN` 建默认账号（缺省 `admin/changeme`）。
+- 本地实例：`bash scripts/dev-instance.sh [端口]`（自动建隔离目录、默认 8412）；等价手写版 `*_DIR→/tmp/<自建>/…`、`LIBRARY_SOURCE_DIR=…/libraries`、`AUTO_WATCH=false`、`.venv/bin/python -m uvicorn novelforge.server:app --port <新端口>`（**别 kill 别人的实例** —— 本机端口占用见 `docs/development-windows.md`）。
+- 登录字段是 `{"user","pin"}`（**不是** username/password）；全新 `DATA_DIR` 首启由 `db.init()` 按 `AUTH_USER`/`AUTH_PIN` 建默认账号（缺省 `admin/changeme` —— **仅本地默认，部署必须改**）。
 - 建库接口收 **`source_dirs`（绝对路径 JSON 数组，第 41 期起）**；路径须在 `config.LIBRARY_SOURCE_ROOTS` 内（「就地引用」，跨根合法）。⚠️ 已无 `mode`/`root_path`/`source_subdir`。
 - Docker：`docker-compose.yml` 是**自足的 NAS 单文件**（镜像 / 端口 **8992** / 挂载 `./input ./output ./config ./cookies ./cache ./data ./libraries` / `AUTH_*` / `AUTO_WATCH` / `WATCH_INTERVAL` 全部写字面量，**不读 `.env`**；`.env.example` 已删，`.env`/`.env.*` 仅留在 `.dockerignore` 里做卫生）。可选开关一律是**注释行**：`user: "1026:100"`、`EBOOK_CONVERT_BIN=`、`HTTP_PROXY/HTTPS_PROXY/NO_PROXY=`、`LIBRARY_SOURCE_DIRS1_NAME`/`DIRS2*`；`pull_policy: missing`（非 always）是刻意的。compose 文件仅保留 `docker-compose.yml` 与 `docker-compose.test.yml`，**不另设叠加件**（offline / update 等已移除，相关用法内联进主文件注释或文档）。⚠️ 原 `docker-compose.override.yml` 名仍被 Compose **自动合并**（静默改 8993 + 禁拉取），切勿恢复该文件名。`docker-compose.test.yml`（本地 build + 挂 `./novelforge` + 8993 + `./data-test`）同样自足；断网无法 `--build`。
-- 构建：`cd frontend && npm run type-check && npm run build && npm run deploy`，核对 `/static/v2/assets/index-*.js` **实际内容**（HMR 源码≠服务端产物）。
-- ⚠️ **本机 Node 由 nvm 管理（09-23 订正，取代此前「nvm 是空的、用 IDE 托管」的旧结论）**：nvm v2.0.0 位于
-  `C:\Users\qingr\AppData\Local\Author Software\nvm`，已 `nvm install 24.19.0` + `nvm use 24.19.0`（设为默认），
-  `node`/`npm` 现解析为 **v24.19.0 / 11.17.0**。winget 直装的 node 落在 WinGet 包目录、PATH 检索会跳过且被 nvm 抢注
-  ⇒ **不能靠 winget 直装落地，须走 nvm**（那份 winget node 是无害残留）。`npm install` 等下载动作仍受本机网络限制（走系统代理）。
-  ⚠️ `install_binary`（node）在本机会因 EPERM（rename 失败）装不上，**别在它上面反复试**。
-  ⚠️ **跑 `npm run build` / `deploy` 前必须先 `$env:NODE_OPTIONS=''`** —— IDE 注入的 safe-delete shim 会拦 Vite 的
-  `fs.rmSync`（清 outDir）与 `deploy.mjs` 的删除，报 `checkBulkDeleteGuard` / 「No active Node.js version」。
-  同一条「先清 `NODE_OPTIONS`」对 pytest 也适用（此前几期的命令都带它，原因就在这里）。
-- 浏览器冒烟：本机（win32）**无 chromium 也能跑** —— `playwright-cli open --browser=msedge`（走系统 Edge 通道，免下载；直接 `open` 会失败）；也可 `playwright-cli install-browser chromium`；注入 `nf_token`（`localstorage-set` + **必须再 `reload`**，否则首屏未授权请求 401、且应用会把刚注入的 token 清掉）；⚠️ `snapshot` 直接打到 stdout（`--filename` 可能不落盘）⇒ 重定向到 `/tmp` 自己读，别落仓库根；⚠️ 换了产物要**带 `?nc=N` goto**（普通 `reload` 用旧 bundle，会误判成「改动没生效」）。
-- **`ui-smoke`（机器级三档冒烟，仓库内 `.codebuddy/tools/ui-smoke.ps1`）**：`open →（可选）登录 → 每档 set viewport → 量布局 → 截图`；`-CleanOnly` 清残留。
-  ⚠️ **三个会让它静默挂死的坑（2026-10-03 已全部修进脚本）**：① `~/.agent-browser/default.pid|default.port` 残留指向**已死进程** ⇒ CLI 永久等待、不启新守护进程（`open` 零输出挂死）；② **PowerShell 管道 + 冷启动死锁**：首个 `open` spawn 的守护进程会**继承 PS 管道句柄** ⇒ `& agent-browser ... 2>&1 | ...` 永远等不到流结束（cmd/`.bat` 不受影响、守护进程**已热**时也正常）⇒ 首个 open 走临时 `.bat`，且**别用 `Start-Process -Wait`**（它等整棵进程树，守护进程不死就永不返回，要轮询日志的 `EXIT=`）；③ `eval` 传的 JS **只能用单引号**（双引号会被工具层吃掉 ⇒ `SyntaxError: Unexpected token '?'`），并放进 **here-string**。
-  `-Widths` 用**空格**分隔（逗号会被 `.cmd` 转发吃掉）；默认 `-Profile ~/.agent-browser-profile/novelforge`（**存着登录态，别删那个目录**）。
-  ⚠️ 360 档判据要**看 `off` 不能只看 `ovf`** —— 溢出常被内部 `overflow-x:auto` 容器吸收，`ovf` 仍是 false。
+- 构建：`bash scripts/frontend-verify.sh`（= `type-check && test:unit && build && deploy` 四连），核对 `/static/v2/assets/index-*.js` **实际内容**（HMR 源码≠服务端产物）。
+- ⚠️ **本机（Windows）专属项不在这里重抄**：nvm 与 `NODE_OPTIONS`、`.venv` 解释器、msedge 冒烟与 `ui-smoke.ps1`、端口占用、编码 / proxy 坑
+  —— 一律见 **`docs/development-windows.md`**（仅当前开发机，Linux / 容器忽略）。
 - e2e 自查顺序：接口账目（curl）→ 界面文本（`eval innerText`）→ `console`（0 errors）→ `network`（无非本地请求）。
-- ⚠️ **本机（win32）跑测试的环境（第 81 期实测）**：仓库里**没有 `.venv`**；可用解释器是 `install_binary` 装的
-  `C:\Users\qingr\.workbuddy\binaries\python\versions\3.14.3\python.exe`（先 `pip install -r requirements-dev.txt`），
-  且**必须**先建出 `novelforge\static\` 目录（`server.py` 在 import 期 `StaticFiles(directory=…)` 会因目录不存在直接抛）；
-  `static/v2` 已被 gitignore、**别往里塞手写页**。跑 `pytest` / `npm run build` / `deploy` 前一律 `$env:NODE_OPTIONS=''`。
 - ⚠️ **回收目录是会话级共享的**（`fileops.recycle_dir()` 基于 `config.CACHE_DIR`，而 `isolated` 夹具**不切**它）：
   写「默认删库没掉文件 / 某次回收没发生」这类断言**只能做名字差集**（前后各拍一次快照），
   断言「目录里本来没有同名文件」会依赖用例执行顺序 —— 第 81 期先在 `test_api_smoke`、后在 `test_library_purge` 上各踩一次。
@@ -50,7 +35,6 @@
 - `.gitignore`：`.codebuddy/*` + `!.codebuddy/memory/`；忽略 `data/`、`*.db`、`novelforge/static/v2/`、`dist/`、`.playwright-cli/`。
 - macOS 首次跑测试：`/Users/stromboid/.local/bin/python3.12 -m venv .venv` → `.venv/bin/pip install -r requirements-dev.txt` → **再** `mkdir -p novelforge/static`（缺目录在 **import 期**就抛）。**别建 `static/v2/index.html`**，否则 `GET /` 不再是 503。
 - ⚠️ `npm install` 会删掉 `frontend/package-lock.json` 里一批 optional 的 `"dev": true`（纯噪声）。**规则（第 39 期修订，取代此前「提交前一律 `git checkout --`」）**：不再无脑还原 —— 那会把**本期真要加的新依赖一起丢掉**（第 39 期加 vitest 三件套时就会）。改为：提交前**逐段 `git diff frontend/package-lock.json`**，只放行「本期新增依赖引入的改动」，其余 `"dev": true` 增减照旧还原。
-- Windows：IDE safe-delete shim 拦 PowerShell `Remove-Item`（静默不删）⇒ 清临时产物用删除工具；`Out-File` 不带 `-Encoding` 同样被拦。
 - **发布自动化（第 79 期）**：`.github/workflows/release.yml` 一个 workflow 两个触发 —— 推 `main` 时读仓库根 `VERSION`，
   `v<版本>` tag 不存在就**自动打 tag + 建 Release**（已存在则跳过）；人工推 `v*` tag 也走它（`gh release view` 命中则跳过）。
   notes 的唯一实现 = `python3 -X utf8 -m novelforge.core.changelog <版本>`（与应用内「新功能」页同源；缺段以 1 退出）。
