@@ -8031,3 +8031,96 @@ except Exception:
 **教训（写进索引）**：① **一个名字被 8 处拼成路径，就等于 8 次漏掉校验的机会** ——
 「路径只有一处构造」和「名字只有一处置信」是同一件事的两面；② `except Exception: pass` 出现在
 **写入口**上是「静默写不进」的标准配方，它和界面上的「已保存」合起来，比直接报错难查十倍。
+
+## 第 121 期（功能审查：同名守卫覆盖 KOReader / 同一文件双库登记 / 假监听 / 封面当章节）
+
+**需求来源**：用户「审查代码功能」（第 119 期审的是**代码逻辑**、第 120 期审的是**静默失败**，这一期换视角：
+不看代码怎么写，只看**点下去能不能用**）。做法：`bash scripts/dev-instance.sh <端口>` 起隔离实例，
+用 httpx 按「一个用户会做的事」把登录 / 收书 / 转换 / 阅读（TXT · EPUB · CBZ · UNITS · AUDIO）/ 进度 / 批注 / 书签 /
+互通（OPDS · Komga · KOReader）/ 出版 / 回收站全跑一遍，**以接口实际返回为准**（不采信文档与设置页的承诺）。
+
+### 一、P1 KOReader 的守卫被 Komga 的守卫**同名覆盖**了
+
+`novelforge/server.py` 里有两个 `def _ko_guard(request)`：
+
+- `:8059 def _ko_guard(request) -> None` —— 判 `koreader.enabled`、比 `koreader.key`（界面填的密码 MD5）；
+- `:8526 def _ko_guard(request) -> str` —— 转发 `komga_api.verify(request)`（判 `komga.enabled`，`novelforge/core/komga_api.py:146`）。
+
+Python **后定义覆盖前定义**，于是 `:8085 / :8113 / :8125` 三条 `/koreader/*` 路由（`users/auth`、`syncs/progress` 的
+PUT 与 GET）实际全走 Komga 守卫。实测（保留现场）：
+
+| 配置 | 端点 | 实际结果 |
+| --- | --- | --- |
+| 只开 koreader（`enabled=true` + `username`/`key`） | `GET /koreader/users/auth` | **404 `{"detail":"Komga 兼容服务未启用"}`** |
+| 同上 | `PUT /koreader/syncs/progress` | **404** 同一句 |
+| 同上 | `POST /koreader/users/create` | **201**（它用的是另一个 `_ko_cfg()`，所以没被覆盖） |
+| 只开 komga + `koreader.enabled=false` | `GET /koreader/users/auth`（`Basic admin:changeme`） | **200 `{"authorized":"OK"}`** |
+
+即：**按设置页开的 KOReader 同步一律 404，而只开 Komga 的部署反而能用应用账号同步 KOReader**。
+承诺见 `frontend/src/views/settings/pages/KoreaderPage.vue:133`「开启后 KOReader 可用下面的地址推送 / 拉取阅读进度
+（关闭时返回 404）」与 `docs/user-guide.md` §10。
+
+修法：把第二个改名为 `_komga_guard(`（45 处：定义 + 全部 `/api/v1/*` 调用），docstring 写明它是 Komga 兼容层入口；
+`tests/test_func_audit_121.py::test_两个守卫不再同名` 直接断言源码里两个名字各只有一处定义。
+
+### 二、P1 同一个物理文件被两个库各登记一次 ⇒ 判成「重复的书」，清理时搬走唯一那份
+
+两个库共用同一个来源根、白名单都含 `.zip` 时，**同一个文件会以两条书目行出现**（书 id = `库id$sha1(路径)`，
+`novelforge/core/library.py:_book_id`）。`novelforge/core/library.py:2338 duplicate_groups` 只按「归一化作者 + 书名相似度」
+聚类、**不看路径**，于是这两条被当成「两本重复的书」；`novelforge/core/fileops.py:856 recycle_items` 按 `safe_path`
+得到的路径 `shutil.move`，而两条的路径**是同一个绝对路径** ⇒ 搬到回收站的是保留方唯一的那份文件。
+
+实测：`容器包.zip`（193 B，mtime `1792397973.3963184`）同时是 `lib-f0d3a32e$a9a458a40a73` 与 `lib-d2b93c0a$a9a458a40a73`，
+`GET /api/duplicates` 成组；`POST /api/duplicates/resolve {"keep": …a9a458a40a73, "remove": [{"name": "容器包.zip", "library_id": "lib-d2b93c0a"}]}`
+回 200 之后：文件进回收站、**保留那本也从 `/api/books` 消失**、`GET /api/books/<keep>/file` → 404「书籍不存在」。
+（可恢复 —— 回收台账留了 `orig_path`。）
+
+修法两层：
+
+1. `duplicate_groups` 成对比较前跳过同 `path`（同一物理文件不是两本重复的书），聚类后再按 `path` 兜底去重；
+2. `recycle_items` 先用 `library.books()` 建「路径 → 书 id 集合」，**同一路径还有别的活行就拒绝搬**
+   （`ValueError("该文件同时登记在另一个书库（同一物理文件），搬动会让那本变断链，已跳过")`），
+   前端 `DuplicateBooksView.vue` 的提示补上首个失败原因。
+
+### 三、P2 `AUTO_WATCH=false` 时「启动监听」是**假监听**
+
+`novelforge/core/watcher.py:680` 用 `global_enabled = bool(wcfg.get("enabled", True))` 决定**收书目录**目标是否
+`"watch": True`，而 `novelforge/config.py:563-565` 会拿 `AUTO_WATCH` 覆盖 `watcher.enabled`（`scripts/dev-instance.sh`
+就设 `AUTO_WATCH=false`）；`novelforge/server.py:7713-7715 api_watcher_start` 只起线程、不改配置。
+
+实测：该配置下把 txt 丢进 `input/`，**2 分钟不转化**（`POST /api/scan` 立刻收，所以不是解析问题），
+`/api/watcher` 却回 `running: true`；同样操作在 `AUTO_WATCH=true` 的新实例 **2 秒**收书。
+
+修法：`_derive_targets` 删掉 `global_enabled`，收书目录恒 `"watch": True` —— `watcher.enabled` 只表达
+「**服务启动时**是否自动起线程」，线程在跑就是在监听，要停请 `stop()`（设置页 hint 本来写的就是这个意思）。
+
+### 四、P3 EPUB 的 `linear="no"` 被当成正常章节（取舍：改目录、不改坐标）
+
+`novelforge/core/library.py:682-707 _spine` 只认 `itemref/@idref`、忽略 `linear`，于是封面页之类「非线性」文档
+进了目录。实测自造 epub（`<itemref idref="cover" linear="no"/>` + 一章）⇒ `_reading_list` 把「封面页」列为第 1 章、
+真实第一章变第 2 章。
+
+修法：拆出 `_spine_items(path) -> [(href, linear)]`；**`_spine()` 保持原样（仍含非线性项）** —— 它是章节坐标/index 的来源，
+`epub_cfi`、`komga_api`、`chapter_html` 都以它为准，改它会把**已存的阅读进度与批注的 index 空间整体平移**；
+只让 `_reading_list`（目录展示）跳过非线性项，编号按「已列条数 + 1」重排。兜底：整条 spine 都非线性时**照旧全列**
+（空目录 = 读者翻不到任何东西）。
+
+**试过又撤掉**：顺手也过滤 `properties="nav"` 的目录页 —— 8 个既有用例（`tests/test_mobi_reader.py` 等）按
+「nav 也是一章」的契约断言标题列表，全红；`tests/conftest.py::_build_epub_with_assets` 造的书正是这个形状。
+⇒ 只处理 `linear`，nav 不动，理由写进 `_spine_items` 的 docstring。
+
+### 五、核验
+
+| 项 | 结果 |
+| --- | --- |
+| 新增契约用例 | `tests/test_func_audit_121.py` **11 例**（守卫不同名 1 + 只开 KOReader 能同步 1 + 关掉仍 404 1 + 同路径不算重复 1 + 同名不同路径照旧算重复 1 + 拒搬共用文件 1 + 独占文件照旧回收 1 + 收书目标恒在监听 1 + 封面不列章节 1 + 坐标空间不平移 1 + 全非线性照旧列出 1） |
+| 受影响的四个文件 | `pytest tests/test_mobi_reader.py tests/test_online_landing.py tests/test_online_read.py tests/test_toc_source_api.py` → 83 passed / 1 skipped |
+| 后端全量 | `bash scripts/test.sh` → **2478 例（2465 passed / 0 failed / 0 errors / 13 skipped），243.8 s，exit 0** |
+| 前端四连 | `bash scripts/frontend-verify.sh` exit 0（69 spec / 717 例；本期只改 `DuplicateBooksView.vue` 的一句提示） |
+| 实机（隔离实例） | 只开 koreader → `users/auth` 200 / 错 key 401；`POST /api/watcher/start` 回 `targets[0].watch: true`，丢 txt **4 秒**入库；两库共用文件时 `/api/duplicates` 回 `groups: []`；`POST /api/duplicates/resolve` 回 200 但 `moved: []`、`errors[0].error` = 「该文件同时登记在另一个书库（同一物理文件），搬动会让那本变断链，已跳过」，文件仍在、保留方仍在书架 |
+
+**教训（写进索引）**：① **同名不同职责 = 静默功能丢失** —— Python 的后定义覆盖前定义不报错、不告警，
+`_ko_guard` 这么短的名字在一个 9000 行的文件里撞两次，症状是「设置页开了却 404」；② **去重的判等键要与数据的
+身份一致** —— 书 id 是「库id + 路径摘要」，同一文件在两个库天然有两条 id，按 id / 标题判重必然把「同一份」当「两份」，
+而清理动作又会搬走唯一那份；③ **开关的语义别二分到同一个键上** —— 「启动时自动起线程」与「线程在跑就在收书」
+是两件事，用 `AUTO_WATCH` 覆盖前者却让后者跟着变，就得到「`running: true` 却不收书」。

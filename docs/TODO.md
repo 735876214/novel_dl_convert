@@ -4,27 +4,27 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-19 —— 第 120 期**第二轮逻辑审计：书源名就是文件名 + 设置写不进去还回 ok**：
-继续按「看起来成功、实际没发生 / 发生了却不该发生」这条线审：又抓到两条 —— 书源名 `../../evil`
-能把规则写出 `SOURCES_DIR` 之外（重启后源凭空消失）、`../settings` 能覆盖设置覆盖层；设置保存失败
-（磁盘满 / 只读挂载）四个接口仍回 `{"ok": true}` 且写盘非原子。均已修 + 17 例契约用例。
-历史：第 119 期全量逻辑审查（一条未鉴权任意文件读取 + 九条逻辑缺陷）；`VERSION` 仍 `1.3.0`。
+**最后更新**：2026-10-19 —— 第 121 期**功能审查：同名守卫覆盖 KOReader / 同一文件双库登记 / 假监听 / 封面当章节**：
+本轮换了视角（不看代码怎么写，只看**点下去能不能用**）：在隔离实例上把登录 / 收书 / 转换 / 阅读 / 进度 / 批注 / 书签 /
+互通（OPDS · Komga · KOReader）/ 出版 / 回收站全跑了一遍，抓到四条「能开、能用、会出错」的缺陷，已全部修掉（11 例契约用例）。
+历史：第 120 期第二轮逻辑审计：书源名就是文件名（`../../evil` 落盘到配置根外）+ 设置写不进去还回 ok；`VERSION` 仍 `1.3.0`（无版本变更时保留这句）。
 
 ## 0. 当前状态
 
-- HEAD = 第 117 期 AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化（第 95–116 期逐期历史见 §2 与 `git log --oneline`） + 第 118 期跨平台审查修复：pytest 进 CI + 六条平台假设缺陷 + 第 119 期逻辑审查：一条未鉴权任意文件读取 + 九条逻辑缺陷 + 第 120 期第二轮逻辑审计：书源名就是文件名 + 设置写不进去还回 ok；`VERSION` = **1.3.0**
+- HEAD = 第 117 期 AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化（第 95–116 期逐期历史见 §2 与 `git log --oneline`） + 第 118 期跨平台审查修复：pytest 进 CI + 六条平台假设缺陷 + 第 119 期逻辑审查：一条未鉴权任意文件读取 + 九条逻辑缺陷 + 第 120 期第二轮逻辑审计：书源名就是文件名 + 设置写不进去还回 ok + 第 121 期功能审查：同名守卫覆盖 KOReader / 同一文件双库登记 / 假监听 / 封面当章节；`VERSION` = **1.3.0**
   —— 单一真值源，`GET /health` 下发；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，改为**按里程碑发版**
   （第 112 期里程碑 = FB2 直读 + 容器自动展开，`CHANGELOG.md` 最新段 `V1.3.0 — 2026-10-07` 即取自它）。
-- 测试基线（第 120 期实测）：后端 **2467 例（2454 passed / 0 failed / 0 errors / 13 skipped）**，全量 115.0 s
-  （同一天另一次跑 313.9 / 477.9 s —— **本机 Docker Desktop 的 VM 吃 8 核 + 经 virtiofs 挂载 `/var/folders`（pytest 的 tmp 就在那儿）**，
+- 测试基线（第 121 期实测）：后端 **2478 例（2465 passed / 0 failed / 0 errors / 13 skipped）**，全量 243.8 s
+  （第 118–121 期同一天的几次全量：104.7 / 115.0 / 313.9 / 477.9 / 243.8 s —— **本机 Docker Desktop 的 VM 吃 8 核 +
+  经 virtiofs 挂载 `/var/folders`（pytest 的 tmp 就在那儿）**，
   `--durations` 最慢一例仅 8.3 s、无单点热点 ⇒ 耗时随环境波动，**别拿它比第 118 期的 104.7 s**）；
-  CI 同环境（ubuntu 24.04 + Python 3.12、干净 clone）走同一条 `bash scripts/test.sh`，含本期 17 例。
+  CI 同环境（ubuntu 24.04 + Python 3.12、干净 clone）走同一条 `bash scripts/test.sh`，含本期 11 例。
   ⚠️ **跨期比基线要连着 skipped 与「总数」一起读**：第 117 期 skipped 26 → 13 是 `quickjs` 装上了；
   第 118 期 2404 → 2428 里的 **24 例不是新写的**，是本机 `.venv` 缺 `py7zr` 时两个模块的**模块级 `importorskip`
   把 26 例整体吃掉**（junit 里只剩 2 条模块级 skip）—— 判据是**拿两台机器的 junit 做用例名差集**，不是看 skipped 计数。
   **别把 `.venv` 升到 3.13+**（`quickjs` 只有 cp38–cp312 包，见 `AGENTS.md` §5）。
-- 前端（第 119 期实测）：**69 spec / 717 例**全绿、`vue-tsc --build` exit 0、`build + deploy` 跑过（`scripts/frontend-verify.sh` exit 0）；
-  本期前端只改一行（`lib/bookInfo.ts` 书名兜底排序加 `{ numeric: true }`），`package-lock.json` 零改动；
+- 前端（第 121 期实测）：**69 spec / 717 例**全绿、`vue-tsc --build` exit 0、`build + deploy` 跑过（`scripts/frontend-verify.sh` exit 0）；
+  本期前端只改 `views/tools/DuplicateBooksView.vue` 的一句提示（失败原因带上后端 `errors[0].error`），`package-lock.json` 零改动；
   `novelforge/static/v2` 是**构建产物且不入库**（`.gitignore` 忽略）⇒ 它变与不变都不在 `git status` 里。
 - ⚠️ **运行陷阱不在这里重抄** —— 别加 `-q` / 长跑 pytest 后台跑 + 轮询 junit / 新增前端 spec 要登记
   `EXPECTED_SPECS` / 只跑相关文件看不见连锁失败：**一律看 `AGENTS.md` §4 与 §5**；
@@ -136,6 +136,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 121 | 功能审查：同名守卫覆盖 KOReader / 同一文件双库登记 / 假监听 / 封面当章节 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 121 期段 |
 | 120 | 第二轮逻辑审计：书源名就是文件名 + 设置写不进去还回 ok —— 细节见 `docs/roadmap-gaps-remaining.md` 第 120 期段 |
 | 119 | 逻辑审查：一条未鉴权任意文件读取 + 九条逻辑缺陷 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 119 期段 |
 | 118 | 跨平台审查修复：pytest 进 CI + 六条平台假设缺陷 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 118 期段 |
