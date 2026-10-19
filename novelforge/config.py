@@ -9,10 +9,16 @@
 - LOG_DIR    日志目录：转换 / 添加的活动日志（activity.log、activity.jsonl）
 """
 import json
+import logging
 import os
 import pathlib
+import threading
+import time
 
 import yaml
+
+#: 本模块的日志出口（不动 uvicorn 的 root 配置，只往 `novelforge` 这个 logger 名下写）
+_log = logging.getLogger("novelforge.config")
 
 # ---- 目录（环境变量可覆盖，便于容器 / NAS 挂载）----
 CONFIG_DIR = pathlib.Path(os.getenv("CONFIG_DIR", "/app/config"))
@@ -443,26 +449,89 @@ def ensure_dirs():
             pass
 
 
+#: 覆盖层「读—改—写」的进程内互斥。
+#:
+#: 第 120 期：`PUT /api/config`、`PUT /api/koreader`、`PUT /api/integrations/{service}`、
+#: 自定义字段清理这四条路都是「load_overrides() → 改几个键 → save_overrides()」。
+#: 没有锁时两个并发保存会**各读一份旧值、各写一份全量**，后写的那份把先写的键抹回旧值 ——
+#: 表现为「连着点两下保存，第一处设置撤回去了」，而且没有任何报错。
+_OVERRIDES_LOCK = threading.Lock()
+
+
 def load_overrides() -> dict:
-    """读取应用内设置覆盖层（settings.json）。不存在或损坏时返回空 dict。"""
+    """读取应用内设置覆盖层（settings.json）。不存在返回空 dict。
+
+    ⚠️ 文件**存在但读不出来**（半截 JSON / 权限 / 编码）时**不再静默返回空 dict** ——
+    那等于「全部设置悄悄回到默认值」：集成凭据、更新镜像、追踪开关全都消失，
+    而界面看起来一切正常。第 120 期改为把它改名留档（``settings.json.corrupt-<ts>``）
+    并打一条日志，然后返回空 dict（否则设置页从此打不开，比丢设置更糟）。
+    """
     if not SETTINGS_FILE.is_file():
         return {}
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         return data if isinstance(data, dict) else {}
-    except Exception:
+    except (OSError, ValueError, TypeError) as e:
+        _quarantine_overrides(e)
         return {}
 
 
-def save_overrides(data: dict) -> None:
-    """写入设置覆盖层（整份替换）。"""
+def _quarantine_overrides(err: BaseException) -> pathlib.Path:
+    """把读不出来的 settings.json 改名留档，返回留档路径（改名失败返回原路径）。"""
+    keep = SETTINGS_FILE.with_name(
+        SETTINGS_FILE.name + ".corrupt-" + time.strftime("%Y%m%d-%H%M%S"))
     try:
-        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+        SETTINGS_FILE.replace(keep)
+    except OSError:
+        keep = SETTINGS_FILE
+    _log.warning("设置覆盖层读不出来（%s），已留档到 %s，本次按空覆盖层读取", err, keep)
+    return keep
+
+
+def save_overrides(data: dict) -> None:
+    """写入设置覆盖层（整份替换，**原子**）。
+
+    两条口径（第 120 期）：
+
+    1. **原子落盘**：先写同目录临时文件再 ``os.replace``。此前直接 ``open(..., "w")``
+       截断后写 —— 写一半断电 / 容器被 kill 会留下半截 JSON，下次启动读不出来
+       ⇒ 全部设置静默回默认值（现在至少会留档 + 报日志）。
+    2. **失败要抛**（``OSError``）：此前 ``except Exception: pass`` 把写盘失败全吃掉，
+       四个写接口仍回 ``{"ok": true}`` ⇒ 磁盘满 / 只读挂载 / 配置目录没权限时，
+       界面显示「已保存」、重启后设置全没了。这正是本项目最忌讳的「静默写不进」。
+    """
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = SETTINGS_FILE.with_name(SETTINGS_FILE.name + ".tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, ensure_ascii=False, indent=2))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, SETTINGS_FILE)
+    except OSError:
+        # 临时文件不留在配置目录里（它会出现在「配置目录备份 / 还原」的清单中）
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def mutate_overrides(mutator) -> dict:
+    """在锁内做一次「读 → 改 → 写」，返回写进去的整份覆盖层。
+
+    ``mutator(ov)`` 就地修改 ``ov``（也可返回一份新的）；它抛异常 ⇒ 不写盘、原样抛出。
+    四个写入口都该用它，别再各自 ``load_overrides()`` + ``save_overrides()``
+    —— 那样会丢更新，见 :data:`_OVERRIDES_LOCK`。
+    """
+    with _OVERRIDES_LOCK:
+        ov = load_overrides()
+        out = mutator(ov)
+        if isinstance(out, dict):
+            ov = out
+        save_overrides(ov)
+        return ov
 
 
 def load_config() -> dict:

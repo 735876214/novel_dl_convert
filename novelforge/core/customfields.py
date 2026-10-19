@@ -187,11 +187,24 @@ def migrate_from_config(cfg: dict = None) -> list:
 
 
 def drop_legacy_override() -> bool:
-    """把 settings.json 覆盖层里的 ``metadata_fetch.custom_fields`` 删掉（有才写盘）。"""
-    ov = config.load_overrides()
-    mf = ov.get("metadata_fetch")
-    if not isinstance(mf, dict) or "custom_fields" not in mf:
+    """把 settings.json 覆盖层里的 ``metadata_fetch.custom_fields`` 删掉（有才写盘）。
+
+    第 120 期：走 ``config.mutate_overrides``（锁内读—改—写 + 原子落盘）。
+    「先 load 判空、再 save」这种做法在并发保存时会把这期间别处写进去的键抹掉。
+    没有要删的键时**连盘都不碰**（这条路径会在迁移里被反复调用）。
+    """
+    mf0 = config.load_overrides().get("metadata_fetch")
+    if not isinstance(mf0, dict) or "custom_fields" not in mf0:
         return False
-    mf.pop("custom_fields", None)
-    config.save_overrides(ov)
-    return True
+    dropped = False
+
+    def _merge(ov: dict) -> None:
+        nonlocal dropped
+        mf = ov.get("metadata_fetch")
+        if not isinstance(mf, dict) or "custom_fields" not in mf:
+            return
+        mf.pop("custom_fields", None)
+        dropped = True
+
+    config.mutate_overrides(_merge)
+    return dropped

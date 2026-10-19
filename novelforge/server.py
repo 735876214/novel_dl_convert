@@ -7255,23 +7255,30 @@ def api_put_config(payload: dict = Body(...)):
     if up_img is not None:
         patch["update"]["image"] = _validate_update_image(str(up_img))
 
-    ov = config.load_overrides()
-    for k, v in patch.items():
-        if isinstance(v, dict) and isinstance(ov.get(k), dict):
-            ov[k] = {**ov[k], **v}
-        else:
-            ov[k] = v
+    def _merge(ov: dict) -> None:
+        """把本次 patch 并进覆盖层（在 `config.mutate_overrides` 的锁内执行）。"""
+        for k, v in patch.items():
+            if isinstance(v, dict) and isinstance(ov.get(k), dict):
+                ov[k] = {**ov[k], **v}
+            else:
+                ov[k] = v
 
-    # api_key 为掩码 / 空 → 沿用现有值，避免「回显即覆盖」
-    llm_ov = ov.get("llm")
-    if isinstance(llm_ov, dict):
-        key = (llm_ov.get("api_key") or "").strip()
-        if key in ("", _KEY_MASK):
-            llm_ov.pop("api_key", None)
-            if not llm_ov:
-                ov.pop("llm", None)
+        # api_key 为掩码 / 空 → 沿用现有值，避免「回显即覆盖」
+        llm_ov = ov.get("llm")
+        if isinstance(llm_ov, dict):
+            key = (llm_ov.get("api_key") or "").strip()
+            if key in ("", _KEY_MASK):
+                llm_ov.pop("api_key", None)
+                if not llm_ov:
+                    ov.pop("llm", None)
 
-    config.save_overrides(ov)
+    # 第 120 期：写盘失败必须报出来。`config.save_overrides` 此前吞掉所有异常，
+    # 于是磁盘满 / 只读挂载 / 配置目录无权限时这里照样回 `{"ok": true}` ——
+    # 界面显示「已保存」，重启后设置全没了（本项目最忌讳的「静默写不进」）。
+    try:
+        ov = config.mutate_overrides(_merge)
+    except OSError as e:
+        raise HTTPException(500, f"设置写入失败（配置目录不可写？）：{e}")
     _apply_runtime_config()
     # 第 52 期：留存策略在日志模块里有 5 秒缓存，配置一改就必须失效 ——
     # 否则刚开启留存，页面上的「存盘情况」仍按旧值显示未启用。
@@ -8160,9 +8167,13 @@ def api_koreader_save(payload: dict = Body(...)):
         patch["key"] = hashlib.md5(pw.encode("utf-8")).hexdigest()
     if patch["enabled"] and not patch["key"]:
         raise HTTPException(400, "开启前请先设置同步密码")
-    ov = config.load_overrides()
-    ov["koreader"] = patch
-    config.save_overrides(ov)
+    def _merge(ov: dict) -> None:
+        ov["koreader"] = patch
+
+    try:
+        config.mutate_overrides(_merge)
+    except OSError as e:                     # 第 120 期：写不进去要如实报（别回 ok:true）
+        raise HTTPException(500, f"设置写入失败（配置目录不可写？）：{e}")
     return {"ok": True}
 
 
@@ -8267,21 +8278,27 @@ def api_integration_save(service: str, payload: dict = Body(None)):
     """保存凭据。提交掩码或空串（None）= 不修改该字段。"""
     if service not in _INTEGRATION_SERVICES:
         raise HTTPException(404, "未知服务")
-    ov = config.load_overrides()
-    cur = dict(((ov.get("integrations") or {}).get(service)) or {})
-    for k in _integration_field_keys(service):
-        v = (payload or {}).get(k)
-        if v is None:
-            continue
-        v = str(v)
-        if v == _KEY_MASK:      # 掩码 = 保持原值
-            continue
-        cur[k] = v.strip()
-    # 第 52 期：自动推送开关（布尔，不是掩码字段，故单独处理；不传 = 保持原值）
-    if "auto_push" in (payload or {}):
-        cur["auto_push"] = bool((payload or {}).get("auto_push"))
-    ov["integrations"] = {**(ov.get("integrations") or {}), service: cur}
-    config.save_overrides(ov)
+
+    def _merge(ov: dict) -> None:
+        # 在锁内重读现值再合并 —— 否则并发保存两家的凭据会互相覆盖（第 120 期）
+        cur = dict(((ov.get("integrations") or {}).get(service)) or {})
+        for k in _integration_field_keys(service):
+            v = (payload or {}).get(k)
+            if v is None:
+                continue
+            v = str(v)
+            if v == _KEY_MASK:      # 掩码 = 保持原值
+                continue
+            cur[k] = v.strip()
+        # 第 52 期：自动推送开关（布尔，不是掩码字段，故单独处理；不传 = 保持原值）
+        if "auto_push" in (payload or {}):
+            cur["auto_push"] = bool((payload or {}).get("auto_push"))
+        ov["integrations"] = {**(ov.get("integrations") or {}), service: cur}
+
+    try:
+        config.mutate_overrides(_merge)
+    except OSError as e:                     # 第 120 期：写不进去要如实报
+        raise HTTPException(500, f"凭据写入失败（配置目录不可写？）：{e}")
     return {"ok": True}
 
 
