@@ -183,6 +183,39 @@ def safe_path(name: str, library_id=None) -> pathlib.Path:
     return p
 
 
+def input_path(name: str, base=None) -> pathlib.Path:
+    """把「**收书目录内**的相对路径」解析成绝对路径，可疑输入抛 ``ValueError``。
+
+    **全仓「收书目录内路径」的唯一校验入口**（第 119 期）。此前 ``/convert-path``
+    直接写 ``INPUT_DIR / path``，于是 ``path=../secret.epub`` 能读到收书目录**之外**
+    的任意文件、并原样作为下载响应回给调用方（实测 200 + 原始字节）—— 那条路由
+    又不在 ``/api`` 前缀下（历史为油猴脚本保留、不强制鉴权），等于一条未鉴权的
+    任意文件读取。这里补的是**包含性**这一层，不是业务规则：
+
+    - 拒绝对路径、空段、``.`` / ``..``（先按 ``/`` 切段判，再 ``resolve()`` 复判一次
+      —— 符号链接 / 大小写文件系统都可能把结果指到根之外）；
+    - **不**限制层级：收书目录允许子目录（下载插件的分目录），与 ``safe_path``
+      的「最多 系列/文件 两层」是两件事，别混用；
+    - **不**用 ``UNSAFE_CHARS`` 过滤：那是「创建文件名」的约束，而这里只**读**已有
+      文件；磁盘上已存在的名字（下载器落下的 ``?`` 之类）不该因为这条校验变成打不开。
+
+    ``base`` 缺省取 ``config.INPUT_DIR``；服务端传自己那份常量（``server.INPUT_DIR``
+    是 import 时的拷贝，测试会 monkeypatch 它，两处必须指同一个）。
+    """
+    root = pathlib.Path(base if base is not None else config.INPUT_DIR)
+    raw = (name or "").strip().replace("\\", "/")
+    if not raw:
+        raise ValueError("路径为空")
+    rel = pathlib.PurePosixPath(raw)
+    if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
+        raise ValueError(f"非法路径（不允许绝对路径或 ..）：{name}")
+    root = root.resolve()
+    p = (root / raw).resolve()
+    if p != root and root not in p.parents:
+        raise ValueError(f"路径不在收书目录内：{name}")
+    return p
+
+
 def sanitize_stem(stem: str) -> str:
     """把用户输入的「新名（不含扩展名）」清洗成安全文件名。
 
@@ -641,7 +674,7 @@ def apply_entity_rename(kind: str, frm: str, to: str, library_id=None) -> dict:
         raise ValueError("新名称含非法字符")
     field = "author" if kind == "author" else "series"
 
-    done, errors, items = [], [], []
+    done, errors = [], []
     for b in library.books(library_id):
         if (b.get(field) or "").strip() != frm:
             continue
