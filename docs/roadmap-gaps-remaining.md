@@ -7821,3 +7821,118 @@ pip 缓存，入口是 `bash scripts/test.sh`（与本地**同一条命令**；�
 判据：拿 macOS 与 Linux 的 junit 做**用例名差集**（不是看 skipped 计数），命中就是这种「整模块消失」。
 装上 `py7zr` 后两边总数对齐 **2428**，**skipped 也回到 13**。⇒ 换机器 / 重建 `.venv` 后，
 **「全绿」不等于「跑全了」**，要拿总数与 `requirements.txt` 的软依赖逐条对一遍。
+
+## 第 119 期（逻辑审查：一条未鉴权任意文件读取 + 九条逻辑缺陷）
+
+> **来源**：用户「全量审查代码逻辑性」——用**逻辑视角**把整个仓库再走一遍（上一轮第 118 期是**跨平台工具链**视角，
+> 结论是「产品代码硬指标全清」，这次换角度看的是**代码做了什么**，不是它能不能跑）。
+> 规模基线：后端 `novelforge/` 50,948 行（`server.py` 9,397 / `core/db.py` 5,455 / `core/library.py` 2,443 /
+> `core/metasources.py` 2,278），前端 `frontend/src` 73,673 行（`lib/api.ts` 5,273 / `views/ReaderView.vue` 3,051）。
+> 做法：AST + ruff 机械扫描 → 定点读码（db / catalog / library / komga / auth / 路由 / 统计）→
+> **探针用例实证**（临时 `tests/test_zz_probe_tmp.py`，跑完即删）。全部 10 条都带可复现证据，再逐条修。
+
+### 一、P1-1 未鉴权任意文件读取（`POST /convert-path`）
+
+**根因**：`convert_path` 写的是 `src = INPUT_DIR / path` 直拼。`_auth_middleware` 只对 `/api/` 前缀强制 Bearer，
+这条路由历史为油猴脚本保留、**不带 Authorization 也放行** ⇒ `path=../secret.epub` 能读到收书目录**之外**的任意文件，
+并且响应体就是那份原始字节（`Content-Disposition: attachment`）。
+
+**探针**（typed 库 + 收书目录同级放 `secret.epub`，不带 token）：
+`POST /convert-path {"path": "../secret.epub"}` → **200 / `application/epub+zip` / body `TOPSECRET-EPUB-PAYLOAD`**。
+修复前它**有时**也回 400 —— 但那是 `library_rules.target_root` 返回 None（mixed 库不收该格式）挡的，
+换个 typed 库就 200；所以判据不能是「状态码」，必须是「**包含性**」。
+
+**修法**：新增 `fileops.input_path(name, base=None)` 作为「收书目录内路径」的**唯一校验入口**（单一真值源）：
+
+- 拒绝对路径、空段、`..`（先按 `/` 切段判，再 `resolve()` 复判 `root not in p.parents` —— 符号链接 / 大小写文件系统）；
+- **不限层级**（收书目录允许下载器的分目录），与 `fileops.safe_path` 的「最多 系列/文件 两层」是两件事，别混用；
+- **不套** `UNSAFE_CHARS`：那是「创建文件名」的约束，这里只**读**已有文件。
+- `/convert` 的 `file.filename` 同样过这道闸（客户端给的名字不能决定落盘位置），`name` 参数只取 basename。
+
+### 二、P1-2 库根不可用 ⇒ 整库索引清空 + 阅读记录判孤儿 + 回收站造幻影目录
+
+**根因（三处串成一条数据丢失链）**：
+
+1. `core/library.py:1497-1499` 扫目录时 `except Exception: return out` —— 根不可读就**静默返回空列表**；
+2. `core/catalog.py::_refresh_locked` 随后 `stale = [k for k in stored if k not in seen]` ⇒ 把这轮「没扫到」的
+   **全部行删掉**；而 `core/watcher.py:774-782 _catalog_tick` **每 60s 无条件**跑一次 `catalog.refresh_all`；
+3. `server._orphan_refs()` 以 `library.books()` 为唯一 valid 集 ⇒ 索引一空，该库**所有** progress / annotations 都成「孤儿」，
+   而 `POST /api/orphans/clear` → `db.delete_orphans` 是**真 DELETE**（不进回收站）。
+
+**探针**：根下 2 本 → 把根改名（模拟 NAS 掉线）→ `catalog.refresh_library` 返回 `{'scanned': 0, 'added': 0, 'removed': 2}`、
+`library.books()` = 0；`_orphan_refs()` 立刻列出全部 progress / annotations。把根名改回 ⇒ 重新 `added`、**book_id 不变**
+（`default$6be875c5859b`）、进度与批注都还在 ⇒ **只有「点清理孤儿」那一步不可逆**。
+
+**修法（三道护栏，各自独立生效）**：
+
+- **索引**：`_refresh_locked` 里「本轮 0 条目 + 索引原有行 + 所有根都不可用（`is_dir` 且 `R_OK|X_OK`）」⇒ 返回
+  `{"skipped": True, "reason": "root_unavailable", "removed": 0}`，不删、不写「非空」标记；
+- **孤儿**：`_orphan_refs` 追加 `live_libs`（有索引行的库）约束 —— 「该库当前一本书都没索引到」时它的行**不进清理清单**；
+- **还原**：`recycle.restore_one` 前判「目标落在哪个库根下、那个根还在不在」，不在就 `failed` 并**把文件留在回收站**
+  （原来 `target.parent.mkdir(parents=True, exist_ok=True)` 会在本地盘 / overlay 上造幻影目录并把文件搬进去）。
+
+⚠️ **残留盲区（如实记）**：Docker bind mount 缺失时目录会**存在且可读**（只是空）⇒ 第一道护栏分辨不出，
+这条路仍会删索引，**第二道**拦住不可逆的那一步；挂载回来后 book_id 不变、书目自动长回来。
+
+### 三、P2-3 三套「天」的定义（28 天图标签错位 + 点阵与连续天数矛盾）
+
+`db.daily_seconds` 用 `int((now - ended_at) // 86400)`（**滚动 24 小时桶**），而 `active_days` / `stats.streak` /
+`completion_months` 用 `time.localtime` 的**日历日**，`hour_histogram` / `weekday_histogram` 又走**账号时区**。
+前端把 `reading_28d` 的第 i 桶标成「`window-1-i` 天前」（`StatsView.vue`、`ReadingStreakWidget.vue` 的 7 点阵）
+⇒ 标签系统性错位最多 24h，且点阵能和「连续阅读天数」数字互相矛盾（服务器 UTC + 账号 +08:00 时，
+「昨天 20:00 读的」落在标着「今天」的桶里）。
+
+**修法**：新增 `db.local_day(ts)` 作为「**哪一天**」的唯一判据，`daily_seconds` / `active_days` / `stats` 的
+连续天数与「近 N 天入库」四处统一走它；`stats` 的逐日递减从 `now - i*86400` 改成**日期运算**
+（`timedelta`）—— 夏令时切换那天本地日不是恒等 86400 秒。「哪个**时段**」（两张直方图）继续走账号时区，
+`completion_months` 保持本地日历日 —— 两个问题分开，各自只有一处实现。
+
+### 四、P2-4 Komga 进度：第 1 章写不进去
+
+`komga_api.apply_read_progress` 的 EPUB 分支写 `if not locator: locator = <既有>` —— 用**真假值**当「href 有没有对上」
+的哨兵，而 spine 第 0 章（读者在**第一章**）的合法 locator 就是 **0**，于是被当成「没对上」拒绝写入。
+探针：既有 locator=7，`href` 指第 0 章 + progression 0.02 ⇒ 返回 `(7, 2.0)`：**percent 动了、位置没动**。
+改 `None` 当哨兵即可。同时修掉漫画/PDF 分支的不对称：`page ≤ 0`（1 起编号里不合法）此前会把 locator 一起清零，
+现在只把 percent 归零、**保留位置** —— 与 `completed: true` 保留 locator 同一取向（拿不到位置就别毁掉位置）。
+
+### 五、P3 五条 + 死代码（一条一条都对过代码）
+
+- **上传落盘阻塞事件循环**：`server.py` 的入库分发里 `data = await _read_capped(...)` 之后是同步
+  `with open(src, "wb")`，而上限可达数百 MB ⇒ 改成 `await asyncio.to_thread(src.write_bytes, data)`
+  （与第 118 期 `landing` / `manager` 的修法同一口径）。
+- **7 处 `asyncio.create_task(...)` 丢弃返回值**：事件循环只持**弱引用**，任务可能跑完前被 GC
+  （「Task was destroyed but it is pending!」），异常只在回收时打 stderr，前端看到的是「一直进行中」。
+  新增 `server._spawn_bg(coro)`：留住引用到结束 + `done` 回调里记未捕获异常，7 个调用点全换。
+  （`_ops_begin/_ops_end` 只回答「有没有长操作在跑」，是测试收尾用的，与任务生死无关 —— 两者都留。）
+- **`komga_api.paginate` 与 Spring `PageImpl` 两处偏差**：空集合 `totalPages` 由 1 改为 **0**（客户端拿它算
+  循环次数 / 进度条，1 会让它以为还有一页）；越界页码**原样回显 + 空 content**（原来夹到最后一页，把
+  「客户端算错页」伪装成「这页就这么点内容」，翻页循环永远停不下来）。
+- **`bookInfo.ts` 书名兜底排序**改 `localeCompare(..., 'zh', { numeric: true })`（「第2卷」在「第10卷」前）。
+- **死代码 / 未用变量**（ruff 真信号，逐个核过语义）：死导入 9 处
+  （`sources/legado.py` `ast`、`sources/manager.py` `detect`、`sources/rules.py` `regex_bounds`、`core/landing.py` `autoupdate`、
+  `core/catalog.py` `library`、`core/series_meta.py` `fileops`、`server.py` `komga`、`core/metasources.py` 的
+  `Provider` / `kinds` —— 后者同时消掉 `kinds` 的 F811 遮蔽）；未用变量 4 处：
+  `core/autoupdate.py` 的 `meta = json.loads(...)` 其实是**留档解析闸门**（改成裸调用 + 注释，别让 F841 把语义盖掉）、
+  `core/fileops.py` 的 `items`（删）、`server.py` 的 `day` / `hm`（两处 `strptime` 只做格式校验，去掉赋值 + 注释）。
+- **核过但不是缺陷**（写下来免得下次重报）：`library.py` 的 B023 闭包捕获循环变量 —— `find` 只在**本轮**被调用，
+  下一轮 `parent` 已重新绑定、旧闭包不再被引用（唯一真缺陷形态是「把闭包存起来事后调」）；8 处 `zip()` 无 `strict=`
+  逐个确认两侧同长；`activity_log` 的 naive `datetime.now()` 是**给人看的本地墙钟**（`ts_epoch` 才是可排序时刻，
+  komga / opds 那两处早已带 `timezone.utc`）；`core/publish.py` 的落盘**不加**挂载校验 —— 源不在时它早已 skip，
+  加了反而退化成「首发布要多级父目录都存在」（源仍在、副本可重建）。
+
+### 六、核验
+
+| 项 | 结果 |
+| --- | --- |
+| 修前基线（第 118 期） | 2428 例（2415 passed / 13 skipped），104.7 s |
+| 本期新增契约用例 | `tests/test_logic_audit_119.py` 22 例（穿越 6 / 主流程 3 / 库根 4 / 天口径 2 / Komga 3 / 分页 2 / 强引用 1） |
+| 后端全量（本机，两次） | 2450 例（2437 passed / **0 failed** / 13 skipped），477.9 s / 313.9 s，`exit 0` |
+| 前端四连 | `bash scripts/frontend-verify.sh` **exit 0**（69 spec / 717 例 + `vue-tsc` + `build` + `deploy`） |
+
+⚠️ **耗时不可与第 118 期的 104.7 s 直接比**：本机此刻 Docker Desktop 的 VM 吃着 8 核、还经 virtiofs 挂着
+`/var/folders`（pytest 的 tmp 就在那儿），`load avg` 20 —— 同一份代码两次跑差 164 s，且 `--durations` 里
+**最慢一例只有 8.3 s**（无单点热点）⇒ 是环境负载，不是回归。
+
+**教训（写进索引）**：① 「状态码对」不等于「校验对」—— 400 可能来自业务规则，测安全边界必须**桩掉业务规则**，
+否则换个库类型就穿了；② 数据丢失链往往是**三个各自看起来合理的默认值**串起来的（静默 `except` → 空集当全删 →
+孤儿清理真 DELETE），单看任何一处都不像缺陷。
