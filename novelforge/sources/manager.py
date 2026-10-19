@@ -274,23 +274,28 @@ class DownloadManager:
             body = str(text)
         txt_path = input_dir / f"{stem}.txt"
         t_tmp = txt_path.with_suffix(txt_path.suffix + ".part")
-        t_tmp.write_text(body, encoding="utf-8")
-        t_tmp.replace(txt_path)
+        # ⚠️ 同步文件 I/O 一律扔线程池（第 118 期）：整本正文可能几 MB、书库常在 NAS 上，
+        #    占着事件循环会让同进程的其它请求一起卡住（口径同 `server.py`）。
+        await asyncio.to_thread(t_tmp.write_text, body, encoding="utf-8")
+        await asyncio.to_thread(t_tmp.replace, txt_path)
 
         if chapters:
-            self.write_sidecar(txt_path, item, out_dir,
-                               last_title=(chapters[-1].get("title") or ""),
-                               chapter_count=len(chapters))
-            result = pipeline.convert_chapters(chapters, out_dir, opts, meta=meta)
+            await asyncio.to_thread(self.write_sidecar, txt_path, item, out_dir,
+                                    last_title=(chapters[-1].get("title") or ""),
+                                    chapter_count=len(chapters))
+            # 转换是**同步 CPU + 写文件**（拼 EPUB / CBZ），同样不占事件循环
+            result = await asyncio.to_thread(pipeline.convert_chapters, chapters, out_dir,
+                                             opts, meta=meta)
         else:
             # 整页全文这条路上没有现成章节表，用与 pipeline 同一套判据现切一次拿末章标题
             # （一次下载只多跑一遍正则，换来「下载完就知道最新章节」这件事不缺席）
             from ..core import detect
             chaps = detect.detect_chapters(text) or []
-            self.write_sidecar(txt_path, item, out_dir,
-                               last_title=(chaps[-1].get("title") if chaps else ""),
-                               chapter_count=len(chaps))
-            result = pipeline.convert_text(text, out_dir, opts, meta=meta)
+            await asyncio.to_thread(self.write_sidecar, txt_path, item, out_dir,
+                                    last_title=(chaps[-1].get("title") if chaps else ""),
+                                    chapter_count=len(chaps))
+            result = await asyncio.to_thread(pipeline.convert_text, text, out_dir,
+                                             opts, meta=meta)
         # 回传派生格式的降级提示
         caller_opts["_notice"] = opts.get("_notice", "")
         return result
@@ -357,7 +362,7 @@ class DownloadManager:
         sidecar = txt_path.with_suffix(".meta.json")
         if not sidecar.exists():
             raise ValueError(f"未找到 sidecar 元数据 {sidecar.name}，无法增量更新")
-        meta = json.loads(sidecar.read_text(encoding="utf-8"))
+        meta = json.loads(await asyncio.to_thread(sidecar.read_text, "utf-8"))
         cls = REGISTRY.get(meta.get("source"))
         if not cls:
             raise ValueError(f"sidecar 记录的源 {meta.get('source')} 已不存在")
@@ -390,20 +395,25 @@ class DownloadManager:
 
         # ① txt 留档：读全文 + 追加带标题的新章 + **原子替换**（不再裸 append）
         try:
-            old = txt_path.read_text(encoding="utf-8") if txt_path.exists() else ""
+            old = (await asyncio.to_thread(txt_path.read_text, "utf-8")) \
+                if txt_path.exists() else ""
         except Exception:                                    # noqa: BLE001 —— 读不到当空
             old = ""
         add_txt = "\n\n".join(f"{ch.get('title', '')}\n{ch.get('body', '')}" for ch in fresh)
         t_tmp = txt_path.with_suffix(txt_path.suffix + ".part")
-        t_tmp.write_text((old.rstrip() + "\n\n" + add_txt).strip() + "\n", encoding="utf-8")
-        t_tmp.replace(txt_path)
+        await asyncio.to_thread(t_tmp.write_text,
+                                (old.rstrip() + "\n\n" + add_txt).strip() + "\n",
+                                encoding="utf-8")
+        await asyncio.to_thread(t_tmp.replace, txt_path)
 
         # ② EPUB：**只追加**（既有条目字节不变 ⇒ 阅读数据 index 不漂移）
         out_dir = Path(meta.get("output_dir") or txt_path.parent)
         epub_path = out_dir / f"{txt_path.stem}.epub"
         if epub_path.is_file():
             from ..core import epub_update
-            res = epub_update.append_chapters(
+            # 追加 EPUB 要重写整个 zip（同步、可能几十 MB）⇒ 线程池
+            res = await asyncio.to_thread(
+                epub_update.append_chapters,
                 epub_path, [{"title": ch.get("title", ""), "body_html": _to_html(ch)}
                             for ch in fresh])
             report["epub"] = str(res["path"])
@@ -415,8 +425,9 @@ class DownloadManager:
         if chapters:
             meta["last_title"] = chapters[-1].get("title") or ""
         s_tmp = sidecar.with_suffix(sidecar.suffix + ".part")
-        s_tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-        s_tmp.replace(sidecar)
+        await asyncio.to_thread(s_tmp.write_text,
+                                json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        await asyncio.to_thread(s_tmp.replace, sidecar)
         report["added"] = len(fresh)
         return report
 
@@ -455,17 +466,17 @@ class DownloadManager:
                 if not urls:
                     raise ValueError("这条书源的规则没有给出任何音频地址"
                                      "（缺 book.audio，或站点结构变了 / 需要两层跳转）")
-                dest.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(dest.mkdir, parents=True, exist_ok=True)
                 for i, u in enumerate(urls[:units._MAX_UNIT], start=1):
                     data = await c.get_bytes(u)
                     ext = Path(str(u).split("?")[0]).suffix.lower()
                     if ext not in audio_mod.AUDIO_EXTS:
                         ext = ".mp3"              # 站点常给 `/audio?id=1` 这种没有扩展名的地址
-                    (dest / f"第{i}话{ext}").write_bytes(data)
+                    await asyncio.to_thread((dest / f"第{i}话{ext}").write_bytes, data)
         except Exception:
             if created:                           # 只清理**本次新建**的目录，不动已有产物
                 import shutil
-                shutil.rmtree(dest, ignore_errors=True)
+                await asyncio.to_thread(shutil.rmtree, dest, ignore_errors=True)
             raise
         return dest
 
@@ -486,11 +497,12 @@ class DownloadManager:
         urls = list(urls or [])
         if not urls:
             return {"dir": dest, "added": [], "start": None}
-        names = {p.name for p in dest.iterdir()} if dest.is_dir() else set()
+        names = ({p.name for p in await asyncio.to_thread(lambda: list(dest.iterdir()))}
+                 if dest.is_dir() else set())
         nums = [x for x in (units.parse_unit(Path(n).stem) for n in names) if x]
         n = (max(nums) + 1) if nums else 1
         start, added = n, []
-        dest.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(dest.mkdir, parents=True, exist_ok=True)
         for u in urls:
             ext = Path(str(u).split("?")[0]).suffix.lower()
             if ext not in audio_mod.AUDIO_EXTS:
@@ -499,8 +511,8 @@ class DownloadManager:
                 n += 1                            # 撞名跳号：绝不覆盖既有轨
             name = f"第{n}话{ext}"
             tmp = dest / (name + ".part")
-            tmp.write_bytes(await client.get_bytes(u))
-            tmp.replace(dest / name)
+            await asyncio.to_thread(tmp.write_bytes, await client.get_bytes(u))
+            await asyncio.to_thread(tmp.replace, dest / name)
             names.add(name)
             added.append(name)
             n += 1

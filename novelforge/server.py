@@ -4766,9 +4766,11 @@ async def api_upload_account_avatar(file: UploadFile = File(...)):
     if not data:
         raise HTTPException(400, "文件为空")
     d = pathlib.Path(config.CACHE_DIR) / "user"
-    d.mkdir(parents=True, exist_ok=True)
     target = d / f"avatar{ext}"
-    target.write_bytes(data)
+    # ⚠️ 建目录 + 写 ≤5 MB 都是同步 I/O（`CACHE_DIR` 可能挂在 NAS 上）⇒ 扔线程池，
+    #    别让一次头像上传卡住整个事件循环（第 118 期，口径同本文件里其它 `asyncio.to_thread`）。
+    await asyncio.to_thread(d.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(target.write_bytes, data)
     db.set_user_avatar(f"avatar{ext}")
     return {"ok": True, "avatar_url": _account_avatar_url()}
 

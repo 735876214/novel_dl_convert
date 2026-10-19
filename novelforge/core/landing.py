@@ -48,6 +48,7 @@
    也是这么写的）。本模块只保证：先落到同盘的暂存目录、再用 ``Path.replace`` 原子搬到
    这本书的位置上（见 :func:`_first_landing`），所以**搬到一半**不会留下半本书。
 """
+import asyncio
 import json
 import logging
 import os
@@ -390,7 +391,10 @@ async def _first_landing(mgr, book: dict, row: dict, *,
     if bdir is None or not name:
         return _skip(f"算不出《{book.get('name')}》的落点（缺 path / name），没有写任何文件")
     stage = bdir / f".nfstage-{secrets.token_hex(4)}"
-    stage.mkdir(parents=True, exist_ok=True)
+    # ⚠️ 从这一步起全是**同步文件 I/O**：建目录、遍历产物、搬文件、写留档、清暂存 ——
+    #    书库常在 NAS 上（单次 rmtree 几十个文件），占着事件循环会让**所有**请求一起卡住。
+    #    一律 `asyncio.to_thread`（与 `server.py` 既有写同一口径，第 118 期）。
+    await asyncio.to_thread(stage.mkdir, parents=True, exist_ok=True)
     try:
         opts = {"force": True, "merge": True, "filename": stem,
                 "cfg": lib_settings.config_for(book.get("library_id") or None)}
@@ -401,7 +405,8 @@ async def _first_landing(mgr, book: dict, row: dict, *,
         # （目前只有内置的 Gutenberg）会在这里如实报错，而不是拿一份编造的格式表去请求。
         item = {"source": row.get("source") or "", "url": row.get("url") or "", "title": stem}
         await mgr.download_to(item, stage, stage, opts, txt_stem=stem)
-        products = sorted(p for p in stage.rglob("*")
+        entries = await asyncio.to_thread(lambda: list(stage.rglob("*")))
+        products = sorted(p for p in entries
                           if p.is_file() and p.suffix.lower() in _PRODUCT_SUFFIXES)
         txt_src = stage / f"{stem}.txt"
         # ⚠️ **产物形态必须与这本书自己的后缀一致**。把 EPUB 的字节写进 `.txt` 的名字，
@@ -426,29 +431,31 @@ async def _first_landing(mgr, book: dict, row: dict, *,
         parked: list = []
         for t in targets:
             try:
-                got = _park(t)
+                got = await asyncio.to_thread(_park, t)
             except Exception as e:                    # noqa: BLE001 —— 原因原文交给用户
                 return _skip(f"覆盖前把《{t.name}》移入回收站失败："
                              f"{type(e).__name__}: {e} —— 已中止，盘上文件零改动")
             if got is not None:
                 parked.append(got.name)
-        txt_dest.parent.mkdir(parents=True, exist_ok=True)
+        await asyncio.to_thread(txt_dest.parent.mkdir, parents=True, exist_ok=True)
         if picked[0] == txt_src:
             # txt 书：原件既**就是**这本书、又是追更的留档 ⇒ 两处各留一份（copy 不是 move，
             # 否则下面那段就再也找不到 txt 了）。复制走 `.part` → replace（见 `_copy_atomic`）。
-            _copy_atomic(txt_src, txt_dest)
-        picked[0].replace(dest)                      # 同盘 ⇒ 原子覆盖这本书自己
+            await asyncio.to_thread(_copy_atomic, txt_src, txt_dest)
+        # 同盘 ⇒ 原子覆盖这本书自己
+        await asyncio.to_thread(picked[0].replace, dest)
         if txt_src.is_file():
-            txt_src.replace(txt_dest)
+            await asyncio.to_thread(txt_src.replace, txt_dest)
         meta_src = stage / f"{stem}.meta.json"
         if meta_src.is_file():
-            meta = json.loads(meta_src.read_text(encoding="utf-8"))
+            meta = json.loads(await asyncio.to_thread(meta_src.read_text, "utf-8"))
             meta["output_dir"] = str(bdir)           # 暂存目录只在这次调用里活着
-            _write_text(txt_dest.with_suffix(".meta.json"),
-                        json.dumps(meta, ensure_ascii=False))
-        _mark_done(txt_dest, watcher_mod)            # 见 docstring 最后一条
+            await asyncio.to_thread(_write_text, txt_dest.with_suffix(".meta.json"),
+                                    json.dumps(meta, ensure_ascii=False))
+        # 见 docstring 最后一条：登记监听状态，免得留档 txt 被当成新文件再收一次
+        await asyncio.to_thread(_mark_done, txt_dest, watcher_mod)
     finally:
-        shutil.rmtree(stage, ignore_errors=True)
+        await asyncio.to_thread(shutil.rmtree, stage, ignore_errors=True)
     library.invalidate()
     _log.info("自动落地完成：《%s》 → %s", stem, dest)
     # 报告要写实：显式覆盖那条路盖的是一本**本来读得了**的书，不能再写「本地读不了」。
