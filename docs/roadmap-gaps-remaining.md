@@ -8124,3 +8124,68 @@ PUT 与 GET）实际全走 Komga 守卫。实测（保留现场）：
 身份一致** —— 书 id 是「库id + 路径摘要」，同一文件在两个库天然有两条 id，按 id / 标题判重必然把「同一份」当「两份」，
 而清理动作又会搬走唯一那份；③ **开关的语义别二分到同一个键上** —— 「启动时自动起线程」与「线程在跑就在收书」
 是两件事，用 `AUTO_WATCH` 覆盖前者却让后者跟着变，就得到「`running: true` 却不收书」。
+
+## 第 122 期（zip 上传被判没有库：先落临时件再判形态 + 前端白名单补齐）
+
+**需求来源**：用户报「zip 格式的书导入后不能识别」。同一份字节，改成 `.cbz` 上传是 200，存成 `.zip` 就是
+400「没有可接收这个文件的书库」—— 后端对 zip 的支持一直是有的（书库目录直扫、`/api/scan` 都正常），
+有三处各自独立的漂移叠在一起，每一处都足以让「zip 进不去」。
+
+### 一、后端：判据要看内容，可那时文件还不存在
+
+`novelforge/server.py::_dispatch_into_library` 原来的顺序是「**先**判落点（`library_rules.target_root`）→ 再落盘」。
+而通用容器（`.zip` / `.rar` / `.7z`）的形态**只能看内容**定（`zipkind.analyze`：图片序列 = 漫画包、含 epub/pdf/txt =
+电子书、混装 = 判不准），判落点时文件**还没写**，`analyze` 拿到一个不存在的路径 ⇒ 一律返回「不收」。
+
+修法（顺序即安全边界）：
+
+1. `_read_capped` 读完就直接写一个**点号临时件** `src.with_name(f".upload-{uuid4().hex}{src.suffix}")`；
+2. 拿临时件的路径去 `target_root(src=tmp, name=name, …)` 判归库；
+3. 拒收时**先算 `why` 再 unlink** —— 顺序反了会变成「临时件已删 → `analyze` 读不到 → 只报『打不开』」（实测踩过，
+   报错从「里面是 2 张图片，要按漫画包」退化成一句看不懂的通用话术）；
+4. 通过则 `tmp.replace(src)` 原子改回真名（`input/` 里永远看不到半截文件）。
+
+同批把「库根缺失」从堆栈变话术：`except OSError` → 500「书库目录写入失败（可能未挂载或没有写权限）：<out_dir>（<strerror>）」。
+
+### 二、「格式 → 类型」立唯一真值源
+
+`novelforge/core/library_rules.py` 自抄了两份局部元组（`_COMIC_EXT = (".cbz", ".cbr")`、
+`_EBOOK_EXT = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".fb2")`），而 `novelforge/core/pipeline.py:16-17` 的
+`EBOOK_EXT` 从第 87 期起就含 `.azw`。于是 `.azw` 过得了 pipeline 那道闸、却在归库时**判不出类型** ⇒ 被判「没有可接收的库」。
+
+→ 新增 `novelforge/core/library.py::type_for_ext(ext) -> str`（`ebook` / `comic` / `audiobook` / `""`，
+`.cbz/.cbr` → comic、audio → audiobook、其余在 `_EBOOK_EXTS` 里的 → ebook，`.pdf/.zip/.rar/.7z` 两边都在 ⇒ 算 ebook），
+`library_rules._type_of_name` 改调它；容器的分支保持「无 `src` 就不猜（`""`）、有 `src` 看内容」。
+
+### 三、前端白名单：第二份拷贝漂移了三代
+
+`frontend/src/views/tools/LocalConvertView.vue:52-55` 的 `ALLOWED_EXT` 缺 `.azw` `.zip` `.rar` `.7z`，
+而注释写着「与后端 `POST /convert` 的允许集一致 = `core/pipeline.EBOOK_EXT`」—— **注释是对的，代码是错的**。
+后果：拖 zip 进「本地转换」页 → 前端自己就过滤掉 → toast「已跳过 1 个不支持的格式」，一个文件都不投递；
+按路径投递同样「不支持的格式：.zip」。`BookDockPage` 直接 `api.convertDrop`、没有白名单，所以只有本地转换页中招。
+
+→ 补齐成与后端逐项一致的 20 项；新增 `tests/test_upload_exts_contract.py` 用 **pytest 解析两端源码**并比集合
+（missing / extra 分别报错），并禁止出现第二份 `ACCEPT` 字面量、禁止别的 `.vue` / `.ts` 再写书籍后缀白名单。
+
+### 四、拒收时说清「它是什么」
+
+「现有书库的来源子目录 / 格式 / 关键词规则都不命中」对 zip 毫无帮助。新增
+`library_rules._container_shape_hint()`，按 `zipkind` 的档位给话术：漫画包（「里面是 2 张图片，要按漫画包才读得动；
+现有书库都不收漫画（当前：电子书库）——到『书库管理』新建一个漫画库，或把文件后缀改成 .cbz」）、
+混装（「既有 1 张图片又有文档，系统判不准，不猜」）、文档包 / 嵌套 / 多文件 / 损坏 / 空包各自指向
+「工具 → 书库管理 → 待展开的压缩包」。`watcher` 的收书失败原因同批走 `no_library_reason(name=…, src=…)`。
+
+### 五、核验
+
+| 项 | 结果 |
+| --- | --- |
+| 新增用例 | `tests/test_upload_exts_contract.py` **5 例**（白名单逐项一致 / 容器与 `.azw` 在列 / 无重复 / `ACCEPT` 派生自同一份 / 前端只此一处）+ `tests/test_zip_upload_122.py` **9 例**（`type_for_ext` 唯一真值源 / 漫画 zip 进漫画库 / 只有电子书库时说出识别结果 / 拒收不留临时件 / 不留真名半成品 / `.azw` 不再被判没有库 / `.zip .rar .7z` 都在允许集） |
+| 后端全量 | `bash scripts/test.sh` → **2492 例（2479 passed / 0 failed / 0 errors / 13 skipped），218.8 s，exit 0**（收尾复跑 152.1 s，同一批用例） |
+| 前端四连 | `bash scripts/frontend-verify.sh` exit 0（69 spec / 717 例 + `vue-tsc` + build + deploy） |
+| 实机（隔离实例 8535） | 漫画 zip + 只有电子书库 → 400 且说出「2 张图片 / 新建漫画库或改后缀」；建漫画库后同一文件 → **200**（`('漫画上传.zip', 'CBZ', 2)`）；改了后缀的 epub 容器 → 200（`ZIP` 待展开）；图文混装 → 400「判不准，不猜」 |
+
+**教训（写进索引）**：① **注释写着「与后端一致」不等于一致** —— 同一份允许集写两遍，第二份必然会漂移，且
+**用户看得见的那个入口先坏**（后端收得进、前端根本不让投）；② **「判不出形态」有时是「文件还不存在」** ——
+判据依赖内容时，必须先落盘再判，且拒收路径的顺序（先算原因再删临时件）也是行为的一部分；
+③ 报错要说出**识别结果**而不是规则名称，用户才知道该建漫画库还是改后缀。
+
