@@ -9397,8 +9397,9 @@ async def _dispatch_into_library(src: pathlib.Path, name: str, opts: dict,
                                  upload: UploadFile | None = None) -> FileResponse:
     """把 `INPUT_DIR` 下的一个文件按归库规则投递入书库，返回成品文件流。
 
-    ``upload`` 不为空时，先把上传内容落盘到 ``src``；顺序有意如此 —— **先判落点在不在**，
-    没有可接收的库就直接 400，免得先把文件写进 input/ 再拒、留下一个每轮扫描都被拒一次的孤儿。
+    ``upload`` 不为空时，先把上传内容落成**临时件**、判完落点再改名成真名；顺序有意如此 ——
+    拒收时临时件当场删掉，既不在收书目录里留一个每轮扫描都被拒一次的孤儿，又能让
+    「只能看内容才判得出形态」的容器（`.zip` / `.rar` / `.7z`）参与归库判定（第 122 期）。
 
     ⚠️ 这是「上传件 / 服务端已有文件」两条路由的**唯一**实现（第 95 期收敛）。
     此前 `/convert` 与 `/convert-path` 各抄了一份整链，差别只有「文件怎么来到
@@ -9406,20 +9407,52 @@ async def _dispatch_into_library(src: pathlib.Path, name: str, opts: dict,
     在两条路上一起漏了半天（各自都得补一遍同样的注释与语句）。
     """
     # 多书库：按归库规则决定落点（来源子目录名 → 格式 → 关键词）。
-    out_dir = library_rules.target_root(src=src, name=name, meta=opts.get("meta"),
-                                        base_dir=INPUT_DIR)
-    if out_dir is None:
-        raise HTTPException(400, library_rules.no_library_reason(name=name))
+    #
+    # ⚠️ 上传件必须**先落一份临时件再判落点**（第 122 期）。通用容器（`.zip` / `.rar` / `.7z`）
+    # 的形态只能看**内容**（`library_rules._type_of_name` → `zipkind.analyze`），而此前
+    # 「判落点」发生在写盘之前 ⇒ 文件根本不存在 ⇒ 一律判不出形态 ⇒ 每个 zip 都被拒收。
+    # 症状就是用户报的「zip 格式的书导入后不能识别」：同样的字节存成 `.cbz` 能进、
+    # 存成 `.zip` 进不去（`tests/test_zip_upload_122.py` 钉住）。
+    # 临时件用点号前缀：扫描侧（`core/watcher.py` / `core/library.py`）一律跳过隐藏项，
+    # 判完立刻改名成真名，所以正常路径上 disco 永远看不到半成品。
     if upload is not None:
         # `_read_capped` 超限会抛，此时一个字节都还没写进 input/
         data = await _read_capped(upload, _upload_limit("max_bytes"))
+        size = len(data)
         # ⚠️ 落盘也要进线程池（第 119 期）：上传上限可达数百 MB，同步 `f.write(data)`
         # 会在这段时间里把整个事件循环停住（同 `pipeline.dispatch` 那一行的道理）。
-        await asyncio.to_thread(src.write_bytes, data)
-        size = len(data)
+        tmp = src.with_name(f".upload-{uuid.uuid4().hex}{src.suffix}")
+        await asyncio.to_thread(tmp.write_bytes, data)
+        try:
+            out_dir = library_rules.target_root(src=tmp, name=name, meta=opts.get("meta"),
+                                               base_dir=INPUT_DIR)
+        except BaseException:
+            await asyncio.to_thread(tmp.unlink, missing_ok=True)
+            raise
+        if out_dir is None:
+            # ① 先把话说完（读的是**还在盘的**临时件），② 再删它。
+            # 顺序反了就会变成「临时件已删 → analyze 读不到 → 只能报『打不开』」。
+            why = library_rules.no_library_reason(name=name, src=tmp)
+            # 拒收：临时件删掉，不在收书目录里留孤儿（原实现的「先判后写」就是为了这个，
+            # 这里改成「先写临时件、判完再改名」，两件事都保住了）。
+            await asyncio.to_thread(tmp.unlink, missing_ok=True)
+            raise HTTPException(400, why)
+        # 同目录改名 = 原子的；此后 dispatch 看到的 `src.name` 才是用户给的名字。
+        await asyncio.to_thread(tmp.replace, src)
+    else:
+        out_dir = library_rules.target_root(src=src, name=name, meta=opts.get("meta"),
+                                           base_dir=INPUT_DIR)
+        if out_dir is None:
+            raise HTTPException(400, library_rules.no_library_reason(name=name, src=src))
     try:
         # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环（其它请求无响应）
         action, result = await asyncio.to_thread(pipeline.dispatch, src, out_dir, opts)
+    except OSError as e:
+        # 落点目录不在（NAS 没挂上 / 库根被删 / 只读挂载）—— 别把 FileNotFoundError 的
+        # 堆栈甩给用户：`/convert` 是**未鉴权**的历史入口，500 的默认响应里什么都没有。
+        activity_log.log_convert_fail(name, f"{type(e).__name__}: {e}", size=size, source=source)
+        raise HTTPException(
+            500, f"书库目录写入失败（可能未挂载或没有写权限）：{out_dir}（{e.strerror or e}）")
     except Exception as e:
         activity_log.log_convert_fail(name, f"{type(e).__name__}: {e}", size=size, source=source)
         raise
