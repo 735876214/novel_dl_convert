@@ -8189,3 +8189,74 @@ PUT 与 GET）实际全走 Komga 守卫。实测（保留现场）：
 判据依赖内容时，必须先落盘再判，且拒收路径的顺序（先算原因再删临时件）也是行为的一部分；
 ③ 报错要说出**识别结果**而不是规则名称，用户才知道该建漫画库还是改后缀。
 
+## 第 123 期（格式识别审查：图文混装永久不可读 + 兼容层媒体表落后）
+
+**需求来源**：用户「审查一下格式识别相关的代码」→ 交付七条 → 用户「修一下」。审查只做一件事：
+把「同一个字节序列，换个后缀就换个命运」的地方全部找出来 —— 格式识别是全书库的**入口闸门**，
+它判错一格，后面（阅读器、兼容层、自动补全、自动归库）就一路错下去。
+
+### 一、图片 + 旁注文档被判「判不准」⇒ 容器永久不可读（P2-1）
+
+`zipkind.analyze` 原来只要「图片 + 任何文档」就判 `mixed`（不可读、不猜）。问题是**漫画包带一份
+`说明.txt` / `ComicInfo.xml` 是常态**，于是最常见的打包方式被判死；更糟的是 `unpack_plan` 只抽
+`_UNPACK_EXTS` 里的文档、**图片不在其中**，所以「展开」也救不回这本书。
+
+实证（同一份字节，只改后缀）：
+
+| 文件 | 旧结论 | 新结论 |
+|---|---|---|
+| `图片+说明.cbz` | `comics.probe` → `pages=2`（能读） | 能读 |
+| `图片+说明.zip` | `analyze` → `kind=mixed readable=False` | `kind=comic pages=2` |
+
+**修法**：把「文档」拆成两类 —— **旁注**（`_TEXT_DOC_EXTS`：txt/nfo/md/rtf/html/xml/json/url/sfv，
+`ComicInfo.xml` 就在其中）与**真文档**（epub/pdf/mobi/azw3/azw/fb2）。图片 + 全是旁注 ⇒ **按漫画读**，
+并把旁注记进 `evidence["ignored_docs"]`、`reason` 里写明「另有 N 份旁注文档，按漫画读时忽略」；
+图片 + 有真文档 ⇒ 仍 `mixed` 且 `reason` **点名是哪一份**（用户才知道该拆哪个）。
+
+### 二、兼容层媒体表落后于格式表（P2-2）
+
+`komga_api.MEDIA_TYPES` 缺 FB2 / AZW / AUDIO / UNITS / ZIP，`_PROFILES.get(fmt, "DIVINA")` 的默认值
+让**所有**格式都变成漫画：FB2 / AZW 的客户端点「阅读」拿到的是 0 页空阅读器（`pages_for` 只认
+CBZ/CBR/PDF ⇒ 随后 400）。`opds._MIME` 缺 FB2 / AZW ⇒ acquisition 链接 `type=application/octet-stream`，
+而 `opds.py` 自己的注释就写着「type 必须是客户端认识的类型，否则不出现下载按钮」⇒ 这两类书在 OPDS 里**下不了**。
+
+**修法**：两张表都补齐；`_PROFILES` 只保留客户端**真有**阅读器的四种（EPUB / PDF / CBZ / CBR），
+其余格式 `status = "UNSUPPORTED"` + `mediaProfile = null` —— 这两个都是 Komga `Media.Status` / `MediaType.kt`
+的**原生口径**（已核上游：`enum class Status { UNKNOWN, ERROR, READY, UNSUPPORTED, OUTDATED }`，
+`MediaType.fromMediaType` 只认 ZIP/RAR/EPUB/PDF，其余回 null）。**不假装能读**（AGENTS.md §1「不做假交互」）。
+
+### 三、`.azw` 在容器里认不出来 + 错标后缀不报问题（P3-3 / P3-4）
+
+- `_DOC_FORMATS` 漏 `.azw`（`mobicache.EXTS` 早有）⇒ `.zip` 里是一份 `.azw` 判成 `unknown`；而
+  `_UNPACK_EXTS` 由它派生，于是**连展开都抽不出来**。修法：补 `.azw`，并在表头写明「必须与
+  `mobicache.EXTS` 同进同出」+ 契约用例。
+- `.cbz` 里装的其实是一份 txt：`comics.probe` 给 `pages=0`、`unparsable=False` ⇒ 书架显示 0 页、
+  不进退修复，点开才由阅读器报「这本漫画里没有可显示的图片」。修法：`_probe_entry` 在「0 页且没报错」时
+  借 `zipkind.analyze` 复核内容，只要不是图片序列就标 `unparsable` —— **判据复用**，不另写一套。
+
+### 四、三处手抄的格式集合（P3-5 / P3-6 / P3-7）
+
+| 位置 | 现象 | 修法 |
+|---|---|---|
+| `units.kind_of` | `.zip` 一律 `comic` ⇒ 「一话一个 zip、里面是 PDF/EPUB」被塞进漫画阅读器（0 页） | 容器按 `zipkind.analyze` 判内容；判不出回空串（前端给下载，不假装能读） |
+| `watcher.auto_fetch_async` | 手抄 allow-list **漏 `.txt`** ⇒ 打开「入库自动补全」后主力格式永不触发（手动刮削一直可用） | 改用 `library.type_for_ext`（第 122 期收敛的唯一真值源） |
+| `library_rules.decide` 第 2 步 | `in ("ebook","comic","audiobook")` 把 `_by_format` 的 mixed 回落就地丢弃 ⇒ **只建了一个综合库的部署按格式一本都收不进来** | mixed 回落**留到关键词之后**当兜底：既不抢关键词（第 40 期两条用例钉着），又不让综合库收不到 |
+| `server._ANY_MEDIA_EXTS` | 「UNIT_EXTS + 手抄文档后缀」第二份拷贝 | 派生自 `library.BOOK_EXTS` |
+
+### 五、核验
+
+| 项 | 结果 |
+|---|---|
+| 新契约用例 `tests/test_format_audit_123.py` | **13 例全绿**（文档表 ⇄ `mobicache.EXTS`、旁注按漫画读、真文档仍 mixed、`.azw` 展开、错标后缀标 unparsable、单元容器按内容、Komga/OPDS 表覆盖 + UNSUPPORTED、单一真值源、mixed 兜底与关键词让位） |
+| 改写的既有用例 | `tests/test_watcher_auto_fetch.py::test_auto_fetch_async_allowlist_and_kind`（`.txt` 由「不抓」改为「抓」—— 第 24 期那条断言基于「TXT 先转 EPUB 再入库」的旧假设，现在 TXT 是一本独立的书） |
+| 后端全量 `bash scripts/test.sh` | **2505 例（2492 passed / 0 failed / 0 errors / 13 skipped），112.0 s** |
+| 受影响子集 | 153 passed（units / komga / opds / library_rules / watcher / format_* / comic / archive） |
+| 前端 | 无改动（本期全在后端判据；前端只按 `kind` 选渲染器，`kind` 为空时已有「下载」分支） |
+
+### 六、两条教训
+
+1. **「放宽判据」与「诚实报错」是两件事**：混装容器有「旁注（常态）」与「真歧义（不猜）」两种，
+   一刀切判死会把最常见的打包方式挡在门外；一刀切放行则会把真歧义读成半本。**分开判**才行 ——
+   而分开的判据必须写在一处（`_TEXT_DOC_EXTS`），否则下一次又是两份表漂移。
+2. **注释里写着「其次 mixed」不代表代码真的这么做**：`_by_format` 的 mixed 回落长期是死代码，
+   而它恰好是「只有综合库」那种部署的唯一活路。**判据的存在性要用用例证明**，注释不算。
