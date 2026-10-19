@@ -7708,58 +7708,116 @@ Git Bash 的 `/tmp` 与原生 Windows 解释器眼里的 `/tmp` **不是同一�
 
 **核验**：`git check-ignore -v` 命中的正是新规则；`git status` 干净；全量仍 2412 例全绿。
 
-### 九、跨平台审查修复（2026-10-19 补记，不占新期号）
+## 第 118 期（跨平台审查修复：pytest 进 CI + 六条平台假设缺陷）
 
-**起因**：用户让「审查代码是否存在问题」。做法是先跑一遍拿地面真值，再静态扫（路由遮蔽 / 软删除读点 /
-注入面 / AST 模式）+ 定点读码。硬指标全清：`novelforge/` 0 裸 `except`、0 可变默认参数、0 `assert` 当校验；
-346 条路由同方法**零**遮蔽；`annotations` / `bookmarks` / `custom_field_defs` 三表软删除读点**零**泄漏
-（三处「刻意含墓碑」都有注释）；表名插值全是常量、`PRAGMA` 翻译前有 `[A-Za-z_][A-Za-z0-9_$]*` 白名单；
-无 `shell=True` / `eval` / `exec` / `pickle`；`_LIBRARY_COLS`(15) 与 `libraries` 表(17) 无漂移
-（差的两个是 `id` / `created_at`，本就不该可写）；前端 `api.ts` 与后端路由 **0** 不一致。
+**需求来源**：用户让「审查代码是否存在问题」。做法是先跑一遍拿**地面真值**，再静态扫（路由遮蔽 / 软删除读点 /
+注入面 / AST 模式）+ 定点读码。审出来的东西分两半：**产品代码硬指标全清** —— `novelforge/` 0 裸 `except`、
+0 可变默认参数、0 `assert` 当校验；346 条路由同方法**零**遮蔽；`annotations` / `bookmarks` / `custom_field_defs`
+三表软删除读点**零**泄漏（三处「刻意含墓碑」都有注释）；表名插值全是常量、`PRAGMA` 翻译前有
+`[A-Za-z_][A-Za-z0-9_$]*` 白名单；无 `shell=True` / `eval` / `exec` / `pickle`；`core/urlguard.py` 逐跳 SSRF；
+`_LIBRARY_COLS`(15) 与 `libraries` 表(17) 无漂移（差的两个是 `id` / `created_at`，本就不该可写）；
+前端 `api.ts` 与后端路由 **0** 不一致。**红的全是「工具链只在 Windows 上验过」这一层** —— 它们能活这么久，
+恰恰因为**没有任何一处会在换平台时自动报错**。本轮把这层补齐：pytest 进 CI + 六条平台假设缺陷。**不发版**。
 
-**问题全部集中在「工具链只在 Windows 上验过」这一层** —— 这也解释了它们为什么能存活：
+### 一、仓库根防删除守卫不认 `dir_fd`，POSIX 上 12 例必红
 
-1. **`scripts/test.sh` 在 macOS 上一行都跑不了**（第 117 期落进去的脚本）。
-   `echo "…$PY）…"` 里变量名后面紧跟**全角右括号**；macOS 自带 bash **3.2** 在默认 locale 下把多字节字符
-   当成变量名的一部分 ⇒ 找的是名为 `PY）` 的变量，`set -u` 报 `PY: unbound variable`，**exit 1 且一条测试没跑**。
-   最小复现：`bash -c 'set -u; PY=abc; echo "$PY）"'` 报错，半角 `)` 正常。
-   修法：`${PY}`；并**不是**只改这一处就算完 —— 加了 `tests/test_scripts_contract.py` 把「变量后紧跟非 ASCII
-   必须写花括号」这一类钉死（中文标点在本仓出现频率太高，靠眼睛看不住），同批加 `bash -n` 语法与 LF 行尾断言。
+**症状**（macOS / Linux 上跑全量）：`test_online_landing` 7 例、`test_fb2_reader` 3 例、`test_audio_ingest` 1 例、
+`test_online_read` 1 例报 `[REPO-ROOT GUARD] 拒绝os.unlink 于仓库根内路径 derived.epub`；其中 3 例还进一步炸成
+`BaseExceptionGroup: unhandled errors in a TaskGroup` + `RuntimeError: This portal is not running` ——
+**报错完全指不到 `conftest.py`**。
 
-2. **仓库根防删除守卫不认 `dir_fd` ⇒ POSIX 上 12 例必红**（`tests/conftest.py` 的 `_g_unlink` / `_g_rmdir`）。
-   POSIX 的 `shutil.rmtree` 走 `_rmtree_safe_fd`，删子项时调的是 `os.unlink(entry.name, dir_fd=topfd)` ——
-   传进来的是**裸文件名**，由内核按 `dir_fd` 解析；守卫只看 `path` ⇒ 按 cwd（= 仓库根）解析 ⇒ 判定「要删
-   仓库根里的文件」。实测红例：`test_online_landing` 7 / `test_fb2_reader` 3 / `test_audio_ingest` 1 /
-   `test_online_read` 1，其中 3 例在事件循环线程里进一步炸成
-   `BaseExceptionGroup: unhandled errors in a TaskGroup` + `RuntimeError: This portal is not running`
-   （报错完全指不到 conftest）。**这 12 例恰是数据安全网**：整本覆盖前留档、覆盖失败即中止、FB2 规则版本
-   升级重建、音频中途失败不留半个目录 ⇒ 它们在 Linux/macOS 上等于**没有自动化守卫**。
-   修法：`_rel_to_open_dir(kwargs)` —— `dir_fd` / `src_dir_fd` / `dst_dir_fd` 有值就**让行**（解析权在内核，
-   且 `shutil` 那侧全程 fd 操作、自己做过逃逸检查）；绝对路径照旧一律拒绝。Windows 不传 `dir_fd` ⇒ 行为不变。
-   防回归：`tests/test_repo_root_guard.py`（**该让行的让行** + **该拦的仍然拦得住**；后者用不存在的路径调用，
-   守卫在碰文件系统之前就 fail ⇒ 即使它坏了也不会真删仓库里的东西）。
+**根因**：POSIX 的 `shutil.rmtree` 走 `_rmtree_safe_fd`，删子项时调的是 `os.unlink(entry.name, dir_fd=topfd)`
+—— 传进来的是**裸文件名**，由内核按 `dir_fd` 解析；守卫只看 `path`，于是按 cwd（= 仓库根）解析，
+判定「要删仓库根里的文件」并 `pytest.fail`。
 
-3. **pytest 从不在 CI 跑**。CI 里只有 `Build and Push Image`（只 `docker build`）与 `Release`（只打 tag）——
-   上面两条都是「平台假设」缺陷，只要没人换平台就永远发现不了。修法：新增 `.github/workflows/tests.yml`
-   （ubuntu-latest + Python **3.12**（`quickjs` 只有 cp38–cp312）+ `bash scripts/test.sh`），
-   入口与本地**同一条命令**（proxy 清理 / junit 判成败只该有一处实现）。`setup-python@v6` 进
-   `tests/test_ci_actions_contract.py` 的 `ALLOWED`（2026-10-19 抓 `v6/action.yml` 核过 `runs.using: node24`）。
+**为什么这条最要紧**：这 12 例恰是**数据安全网**（整本覆盖前留档、覆盖失败即中止、FB2 规则版本升级重建、
+音频中途失败不留半个目录）⇒ 在 Linux / macOS 上等于**没有自动化守卫**，而它们的红还被 `BaseExceptionGroup`
+伪装成「事件循环坏了」。
 
-4. **`mobi` 8 例硬报错而非跳过**，与「软依赖」口径相反（`requirements.txt` 明确写缺了 `mobicache.state()`
-   标 `available:false`、章节接口回 503）。根因是假解包器要往 `mobi.kindleunpack` 上打补丁 ⇒ 得先能 import。
-   修法：`_require_mobi()`（`pytest.importorskip`）放在三处打补丁**之前**，而不是模块级 skip ——
-   `test_缺解包器时章节接口503而不是假装能读` 恰恰模拟「没装解包器」，它不需要这个包，必须照常跑。
+**修法**：新增 `_rel_to_open_dir(kwargs)`（`dir_fd` / `src_dir_fd` / `dst_dir_fd` 任一有值），
+`_g_remove` / `_g_unlink` / `_g_rmdir` / `_g_rename` / `_g_replace` 遇到它就**让行** —— 解析权在内核，
+且 `shutil` 那侧全程 fd 操作、自己做过逃逸检查；绝对路径照旧一律拒绝。Windows 不传 `dir_fd` ⇒ 行为不变。
+`_g_rmtree` / `_g_move` / `Path.unlink|rmdir` 不动。
 
-5. **`async` 函数里的同步磁盘 I/O**（书库常在 NAS 上，一次 `rmtree` / 遍历 / 整本写盘会把事件循环按住，
-   同进程所有请求一起卡住）：`core/landing.py` 的 `stage.rglob` / 留档读写 / `Path.replace` / `shutil.rmtree`、
-   `sources/manager.py` 的整本正文与 sidecar 读写、`epub_update.append_chapters`、有声书逐轨 `write_bytes`
-   与 `iterdir` / `rmtree`、`server.py` 头像 `write_bytes`。修法：一律 `asyncio.to_thread`（与 `server.py`
-   既有写法**同一口径**，不引入第三种姿势）。
+**防回归** `tests/test_repo_root_guard.py`：该让行的让行、**该拦的仍然拦得住**（后者用不存在的路径调用，
+守卫在碰文件系统之前就 fail ⇒ 即使它坏了也不会真删仓库）。刻意**不**写 `rmtree(REPO_ROOT)` 用例。
 
-**核验（本机 macOS 实测）**：全量从 **2334 passed / 20 failed / 3 errors / 34 skipped**
-（其中 20 failed = 12 守卫误判 + 8 mobi 缺包，3 errors 是事件循环里的级联）
-变成 **2404 例（2389 passed / 0 failed / 0 errors / 15 skipped）**，109 s，`bash scripts/test.sh` 退出码 0。
-新增 16 例（`test_scripts_contract.py` 13 + `test_repo_root_guard.py` 3）。
-⚠️ **基线行没动**：`AGENTS.md` §4 / `docs/TODO.md` §0 的 2412 是**开发机（Windows）**实测，
-本机补装 `mobi` / `quickjs` / `regex` 后收集到 2404 例（差 8 例来自平台条件 / 可选工具探测，与本次改动无关）
-⇒ 差 ±10 是这个仓库的已知跨机噪声，**别拿本机数字去改 Windows 基线**，下期收尾时由开发机重测。
+### 二、`scripts/test.sh` 在 macOS 上一行都跑不了
+
+**症状**：`scripts/test.sh: line 27: PY: unbound variable`，**exit 1 且一条测试没跑**。
+
+**根因**：`echo "…（解释器：$PY）…"` 的变量名后面紧跟**全角右括号**；macOS 自带的 bash **3.2** 在默认 locale 下
+把多字节字符当成变量名的一部分 ⇒ 找的是名为 `PY）` 的变量，`set -u` 直接 unbound。
+最小复现：`bash -c 'set -u; PY=abc; echo "$PY）"'` 报错，半角 `)` 正常。
+
+**修法**：`${PY}`；并**不是**只改这一处就算完 —— `tests/test_scripts_contract.py` 把「变量后紧跟非 ASCII
+必须写花括号」钉死（中文标点在本仓出现频率太高，靠眼睛看不住），同批加 `bash -n` 语法断言与 LF 行尾断言。
+两个脚本（`test.sh` / `frontend-verify.sh`）header 补一条：**别把脚本接进管道** ——
+`bash scripts/test.sh | tail` 的退出码是 `tail` 的，全红也能看到 `exit 0`。
+
+### 三、pytest 从不在 CI 跑 ⇒ 修法是加门；门一开就撞上「全新 clone 起不来」
+
+**背景**：CI 里原本只有 `Build and Push Image`（只 `docker build`）与 `Release`（只打 tag）。上面两条都是
+「代码假设了 Windows」，只要没人换平台就**永远不会红**。
+
+**做法**：`.github/workflows/tests.yml` —— ubuntu-latest + Python **3.12**（`quickjs` 只有 cp38–cp312 包）+
+pip 缓存，入口是 `bash scripts/test.sh`（与本地**同一条命令**；清 proxy / 落 junit / 按 junit 判成败只该有一处实现）。
+`actions/setup-python@v6` 进 `tests/test_ci_actions_contract.py` 的 `ALLOWED`（2026-10-19 抓 `v6/action.yml`
+核过 `runs.using: node24`）。
+
+**门一开就抓到第三条真红**（第一次 CI 跑：`pytest` failure）：`ImportError while loading conftest` →
+`novelforge/server.py:229` → `RuntimeError: Directory '/w/novelforge/static' does not exist`。
+根因是**空目录不进 git**：`novelforge/static/` 从未入库（`.gitignore` 只忽略 `static/v2/`），本地一直存在
+（`deploy` 会建、Dockerfile 用 `COPY --from=frontend` 造），而**任何全新 clone** 在 **import 期**就炸。
+修法：入库 `novelforge/static/.gitkeep`（同行写上为什么）。它同时是这条缺陷的**防回归**：删掉它，
+本地跑的每一步 pytest 都会在 import conftest 时直接失败 —— 靠「立刻大声炸」而不是靠记忆。
+
+**复现方式（可复用）**：本机没有 Linux ⇒ 用 `docker run --rm -v <clone>:/w -w /w ubuntu:24.04` 建一个
+**干净 clone + Python 3.12** 的环境跑 `bash scripts/test.sh`。⚠️ 别把带本机 `.venv` 的工作区挂进去 ——
+`scripts/_lib.sh` 会优先用 `.venv/bin/python`（macOS 的二进制在 Linux 里跑不起来）。用 `git clone --local`
+克隆一份即可（38 MB，不含 `.venv` / `node_modules`）。
+
+### 四、`mobi` 是软依赖，用例却硬报错
+
+**症状**：没装 `mobi` 的环境里 `tests/test_mobi_reader.py` 8 例 `ModuleNotFoundError`。
+
+**口径冲突**：`requirements.txt` 明确写了缺这包时 `mobicache.state()` 标 `available:false`、章节接口回 503 降级
+—— 「软依赖」在测试侧却变成了硬失败。
+
+**修法**：`_require_mobi()`（`pytest.importorskip("mobi.kindleunpack")`）放在三处打补丁**之前**
+（三处都要往 `mobi.kindleunpack` 上 `monkeypatch.setattr` ⇒ 得先能 import）；**不做**模块级 skip ——
+`test_缺解包器时章节接口503而不是假装能读` 恰恰模拟「没装解包器」，它不需要这个包，必须照常跑。
+
+### 五、`async` 函数里的同步磁盘 I/O
+
+**为什么是真问题**：书库常在 NAS 上，一次 `rmtree`、一次整本遍历、一次整本书写盘会把事件循环按住
+几十毫秒到几秒；同进程**所有**请求（含 `/health` 与正在读的页面）一起卡住。
+
+**清单**（一律 `await asyncio.to_thread(...)`，与 `server.py` 既有写**同一口径**，不引入第三种姿势）：
+
+- `core/landing.py` `_first_landing`：`stage.mkdir`、`list(stage.rglob("*"))`、`_park`、`txt_dest.parent.mkdir`、
+  `_copy_atomic`、`picked[0].replace`、`txt_src.replace`、`meta_src.read_text`、`_write_text`、`_mark_done`、
+  finally 里的 `shutil.rmtree`；
+- `sources/manager.py`：`download_to` 的正文写入 / `replace` / 两处 sidecar、`pipeline.convert_chapters|convert_text`；
+  `_update_report_locked` 的 sidecar 与正文读写、`epub_update.append_chapters`、`s_tmp.replace`；
+  `download_audio` 的 `mkdir` / 逐轨 `write_bytes` / `rmtree`；`append_audio` 的 `iterdir` / `mkdir` /
+  `write_bytes` / `replace`；
+- `server.py` `api_upload_account_avatar`：`mkdir` 与 `write_bytes`（≤5 MB）。
+
+**没动的**：`fileops` / 回收站语义、`db` 调用（SQLite 有自己的锁与线程语义）、`publish` 的原子写 ——
+本次只挪「阻塞点」，不改行为。
+
+### 六、核验：三处环境同一份代码，同一份清单
+
+| 环境 | 结果 |
+| --- | --- |
+| 修前（macOS） | **2334 passed / 20 failed / 3 errors / 34 skipped**（20 failed = 12 守卫误判 + 8 mobi 缺包，3 errors 是事件循环里的级联） |
+| 修后（macOS，补装 `mobi` / `quickjs` / `regex` / `py7zr`） | **2428 例（2415 passed / 0 failed / 13 skipped），101.9 s，`bash scripts/test.sh` exit 0** |
+| CI 同环境（ubuntu 24.04 + Python 3.12，干净 clone） | **2428 例（2408 passed / 0 failed / 20 skipped），206.9 s，exit 0** |
+
+⚠️ **同一个坑第二次踩到「静默跳过」**（第 117 期的 `test_js_sandbox` 13 例是第一次）：本机 `.venv` 当初没装
+`py7zr`，于是 `tests/test_archive_kinds.py` 与 `tests/test_auto_unpack.py` 的**模块级 `importorskip` 把 26 例
+整体吃掉** —— junit 里只留 2 条「模块级 skip」，总数少了 **24**（26 例变成 2 条），而全量照样**全绿**。
+判据：拿 macOS 与 Linux 的 junit 做**用例名差集**（不是看 skipped 计数），命中就是这种「整模块消失」。
+装上 `py7zr` 后两边总数对齐 **2428**，**skipped 也回到 13**。⇒ 换机器 / 重建 `.venv` 后，
+**「全绿」不等于「跑全了」**，要拿总数与 `requirements.txt` 的软依赖逐条对一遍。

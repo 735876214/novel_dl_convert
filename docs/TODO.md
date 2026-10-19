@@ -4,28 +4,29 @@
 > 细节一律进 `docs/roadmap-gaps-remaining.md`（活文档，最新期在末尾）—— **别再往这里抄实施记录**。
 > 每条待办要带**证据**（数字、文件、复现方式），不写「优化一下性能」这种没有判据的条目。
 
-**最后更新**：2026-10-13 —— 第 117 期**AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化**：
-`AGENTS.md` 是 AI 的唯一入口，却已长成「什么都说一点」—— §5 的 19 条陷阱里，**只对当前这台 Windows 开发机成立**的
-（IDE 的 safe-delete shim / nvm / 本机 DNS 污染 / pwsh 编码 / msedge 冒烟 / 端口占用）与跨环境通用的混在一起，
-且在 `MEMORY-REF.md` 与本节各有一份拷贝；常用命令（清哪几个 proxy、解释器、四连）更是每处手抄一遍。
-本期把入口收成**索引**（一行判据 + 去哪看）、本机项整块外移成 `docs/development-windows.md`、命令收成
-`scripts/` 三个可执行脚本（判据集中在 `_lib.sh`），并给索引配一条 `tests/test_agents_index_contract.py`
-（**跳转有效**：文里写成仓库内路径的指针必须真实存在）。⚠️ 顺带暴露一处**静默漏跑**：
-新脚本选中的 `.venv` 是 **3.12.10**（`quickjs` 装得上），而过去几期用 3.14.3 跑 ⇒
-`test_js_sandbox.py` 的 **13 例一直静默跳过**（skipped 26 → 13、passed +13，详见 roadmap 第 117 期段）。
-历史：第 116 期修可动手待办（多值字段上限按字段分 + 前端 flaky 超时）；`VERSION` 仍 `1.3.0`（本期**不发版**）。
+**最后更新**：2026-10-19 —— 第 118 期**跨平台审查修复：pytest 进 CI + 六条平台假设缺陷**：
+用户让「审查代码是否存在问题」，审下来**产品代码硬指标全清**（0 裸 `except` / 0 可变默认参数 / 346 条路由零遮蔽 /
+三表软删除读点零泄漏 / 无 `shell=True|eval|pickle` / `_LIBRARY_COLS` 与表结构无漂移 / 前端 `api.ts` 与后端路由零不一致），
+而**红的全是「工具链只在 Windows 上验过」这一层**：仓库根守卫不认 `dir_fd`（POSIX 上 12 例数据安全用例必红）、
+`scripts/test.sh` 在 macOS 的 bash 3.2 下一行都跑不了、pytest **从不在 CI 跑**（新加门后又抓到「全新 clone 缺
+`novelforge/static` ⇒ import 期就炸」）、`mobi` 软依赖硬报错、`async` 里同步磁盘 I/O。修完三处环境同一份清单：
+**2428 例全绿**（macOS 2415 passed / 13 skipped；CI 同环境 ubuntu+py3.12 2408 passed / 20 skipped）。
+历史：第 117 期把 `AGENTS.md` 收成索引 + 本机陷阱外移 + 常用命令脚本化（顺带暴露 `test_js_sandbox` 13 例静默跳过）；
+`VERSION` 仍 `1.3.0`（本轮无版本变更）。
 
 ## 0. 当前状态
 
-- HEAD = 第 117 期 AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化（第 95–116 期逐期历史见 §2 与 `git log --oneline`）；`VERSION` = **1.3.0**
+- HEAD = 第 117 期 AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化（第 95–116 期逐期历史见 §2 与 `git log --oneline`） + 第 118 期跨平台审查修复：pytest 进 CI + 六条平台假设缺陷；`VERSION` = **1.3.0**
   —— 单一真值源，`GET /health` 下发；v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，改为**按里程碑发版**
   （第 112 期里程碑 = FB2 直读 + 容器自动展开，`CHANGELOG.md` 最新段 `V1.3.0 — 2026-10-07` 即取自它）。
-- 测试基线（第 117 期实测）：后端 **2412 例（2399 passed / 0 failed / 0 errors / 13 skipped）**，全量 350.5 s；
-  前端 **69 spec / 717 例**、`vue-tsc --build` exit 0（本期**零前端源码改动** ⇒ 产物**逐字节不变**，
-  build + deploy 跑过、`git status` 里 `novelforge/static/v2` 与 `package-lock.json` 零改动可证）。
-  ⚠️ **跨期比基线要连着 skipped 一起读**：skipped **26 → 13**、passed **+13** 与本期代码无关 ——
-  新脚本探测到的 `.venv` 是 **3.12.10**（`quickjs` 装得上），旧的全量用 3.14.3 跑（装不上 `quickjs`）⇒
-  `tests/test_js_sandbox.py` 那 13 例长期静默跳过；**别把 `.venv` 升到 3.13+**（见 roadmap 第 117 期段）。
+- 测试基线（第 118 期实测）：后端 **2428 例（2415 passed / 0 failed / 0 errors / 13 skipped）**，全量 101.9 s；
+  CI 同环境（ubuntu 24.04 + Python 3.12、干净 clone）**2428 例（2408 passed / 0 failed / 20 skipped）**。
+  ⚠️ **跨期比基线要连着 skipped 与「总数」一起读**：第 117 期 skipped 26 → 13 是 `quickjs` 装上了；
+  第 118 期 2404 → 2428 里的 **24 例不是新写的**，是本机 `.venv` 缺 `py7zr` 时两个模块的**模块级 `importorskip`
+  把 26 例整体吃掉**（junit 里只剩 2 条模块级 skip）—— 判据是**拿两台机器的 junit 做用例名差集**，不是看 skipped 计数。
+  **别把 `.venv` 升到 3.13+**（`quickjs` 只有 cp38–cp312 包，见 `AGENTS.md` §5）。
+- 前端（第 118 期实测）：**69 spec / 717 例**全绿、`vue-tsc --build` exit 0、`build + deploy` 跑过；
+  本期**零前端源码改动** ⇒ `git status` 里 `novelforge/static/v2` 与 `package-lock.json` 零改动（产物逐字节不变）。
 - ⚠️ **运行陷阱不在这里重抄** —— 别加 `-q` / 长跑 pytest 后台跑 + 轮询 junit / 新增前端 spec 要登记
   `EXPECTED_SPECS` / 只跑相关文件看不见连锁失败：**一律看 `AGENTS.md` §4 与 §5**；
   **本机（Windows）专属项**（清代理变量、别跑 `pnpm`、DNS 污染、编码坑）：见 `docs/development-windows.md`。
@@ -136,6 +137,7 @@
 
 | 期 | 交付（版本） |
 |---|---|
+| 118 | 跨平台审查修复：pytest 进 CI + 六条平台假设缺陷 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 118 期段 |
 | 117 | AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 117 期段 |
 | 116 | 修可动手待办：多值字段上限按字段分 + 前端 flaky 超时 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 116 期段 |
 | 115 | 核验演播者：摘掉 Audnexus、Audible 接按 ASIN 取详情 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 115 期段 |
