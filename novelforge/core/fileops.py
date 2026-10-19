@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import pathlib
 import re
 import shutil
@@ -860,9 +861,25 @@ def recycle_items(names: list, reason: str = "") -> dict:
     多书库下同名文件可以同时存在于多个库，只给名字时 ``_lib_of`` 只能反查到其中之一
     （``library.find`` 命中多个就取第一个）—— 清理时给错库就等于移错了书。
     所以工具页在「全部书库」范围下一律带上 ``library_id``。
+
+    ⚠️ **同一物理文件被多个库各登记一次时，这里拒绝搬动**（第 121 期）：
+    ``{"name": "容器包.zip", "library_id": "B"}`` 与 ``{"name": "容器包.zip", "library_id": "A"}``
+    可能指的是**同一个绝对路径**（两个库指向同一文件夹、白名单都含 .zip）。搬走它，
+    另一条登记立刻变成断链书目 —— 实测「重复清理保留 A 删 B」会让 A 也消失。
+    拒绝而不是静默跳过：静默跳过会让界面以为删掉了，下次扫描仍是「重复」。
+    这一步只读 ``library.books()`` 建一次 realpath 映射，回收是低频批量操作，不计成本。
     """
     if not isinstance(names, list) or not names:
         raise ValueError("没有要清理的条目")
+
+    refs: dict = {}
+    try:
+        for b in library.books():
+            p = str(b.get("path") or "")
+            if p:
+                refs.setdefault(os.path.realpath(p), set()).add(str(b.get("id") or ""))
+    except Exception:                     # noqa: BLE001 —— 书目读不出来就退化成「不拦」
+        refs = {}
 
     dest_dir = recycle_dir()
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -874,6 +891,11 @@ def recycle_items(names: list, reason: str = "") -> dict:
             src = safe_path(label, _lib_of(label, item))
             if not src.is_file():
                 raise ValueError("文件不存在")
+            ids = refs.get(os.path.realpath(str(src))) or set()
+            if len(ids) > 1:
+                raise ValueError(
+                    "该文件同时登记在另一个书库（同一物理文件），搬动会让那本变断链，已跳过"
+                )
             size = size_of(src)            # ⚠️ 必须在 move 之前算，移走后原地就没了
             dst = dest_dir / recycled_name(src.name, stamp)
             n = 1

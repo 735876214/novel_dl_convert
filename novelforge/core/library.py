@@ -679,8 +679,27 @@ def _opf_path(z: zipfile.ZipFile) -> str:
     return names[0] if names else ""
 
 
-def _spine(path: pathlib.Path) -> list:
-    """返回阅读顺序的 XHTML 文档在 zip 内的路径列表（已解析为 OPF 相对路径）。"""
+def _spine_items(path: pathlib.Path) -> list:
+    """spine 的 ``[(zip 内路径, 是否线性)]`` 序列 —— 顺序即阅读顺序，下标即章节坐标。
+
+    **为什么要有「是否线性」这一维**（第 121 期）：EPUB 的 ``<itemref linear="no">``
+    表示「不属于正文的线性阅读顺序」（封面页、版权页、注释页…），Calibre / KOReader
+    顺序阅读都会跳过它。此前这里只读 ``idref``，于是自造 epub 的封面页被列成「第 1 章」、
+    真实第一章变成「第 2 章」。
+
+    同样不列章节的还有 **manifest 里带 ``properties="nav"`` 的文档**（EPUB3 的目录页）：
+    EPUB3 规范要求它进 spine，但它本身是目录、不是正文 —— 展示成「第 1 章」只会在
+    打开时看到一串链接。
+
+    ⚠️ **这两类条目仍然占着它的 spine 下标** —— 返回值里保留、由调用方决定要不要显示。
+    这是刻意的：``index`` 是阅读进度 / 批注 / 书签的坐标（见 :func:`_reading_list`
+    的 docstring），过滤掉条目却不平移下标，才不会有「升级后进度跳到别的章」。
+
+    ⚠️ **目录页（``properties="nav"``）不在此过滤**（试过、又撤了）：它在 spine 里是
+    一页**有内容的真实文档**，既有契约（`tests/conftest.py::_build_epub_with_assets`
+    造的书）与 8 个用例都按「它也是一章」断言；过滤它等于悄悄改阅读顺序的语义，
+    而它带来的困惑（第一格是目录）在目录面板里并不构成问题。
+    """
     try:
         with zipfile.ZipFile(path) as z:
             opf_path = _opf_path(z)
@@ -697,14 +716,29 @@ def _spine(path: pathlib.Path) -> list:
                 if hm and im:
                     manifest[im.group(1)] = (hm.group(1), tm.group(1) if tm else "")
             out = []
-            for sid in re.findall(r'<itemref\b[^>]*idref="([^"]+)"', opf):
-                if sid in manifest:
-                    href, mt = manifest[sid]
-                    if "html" in mt or href.lower().endswith((".xhtml", ".html", ".htm")):
-                        out.append(str(base / href))
+            for m in re.finditer(r"<itemref\b([^>]*)/?>", opf):
+                attrs = m.group(1)
+                im = re.search(r'idref="([^"]+)"', attrs)
+                if not im:
+                    continue
+                sid = im.group(1)
+                if sid not in manifest:
+                    continue
+                href, mt = manifest[sid]
+                if "html" in mt or href.lower().endswith((".xhtml", ".html", ".htm")):
+                    lm = re.search(r"""linear\s*=\s*["']no["']""", attrs, re.I)
+                    out.append((str(base / href), not lm))
             return out
     except Exception:
         return []
+
+
+def _spine(path: pathlib.Path) -> list:
+    """返回阅读顺序的 XHTML 文档在 zip 内的路径列表（已解析为 OPF 相对路径）。
+
+    **含非线性条目**（``linear="no"``），下标 = 章节坐标 —— 见 :func:`_spine_items`。
+    """
+    return [href for href, _linear in _spine_items(path)]
 
 
 def _plain_text(raw: str) -> str:
@@ -780,9 +814,14 @@ def _reading_list(path: pathlib.Path) -> list:
     ⚠️ **index 始终是 spine 下标**，一个字都不许动（阅读进度 / 批注 / 书签的坐标，
     且 TXT 两条路线的索引空间刻意对齐）。分组交给
     :func:`novelforge.core.reading_list.build_reading_list`（与 TXT 路径共用同一份规则）。
+
+    ⚠️ **``linear="no"`` 的条目（封面页 / 版权页 / 注释页）不列进章节**，但 **index 不平移**
+    （第 121 期）：下标空间里它们还在，所以升级前后已存的进度/批注坐标仍指同一段正文；
+    代价是章节列表里的 index 可能出现空档（如 1、2、3…缺 0）—— 阅读器按列表顺序翻页，
+    空档不影响导航。目录编号走「已有几条 + 1」，所以第一个**正文**章仍叫「第 1 章」。
     """
-    spine = _spine(path)
-    n = len(spine)
+    items = _spine_items(path)
+    n = len(items)
     if not n:
         return []
 
@@ -793,15 +832,23 @@ def _reading_list(path: pathlib.Path) -> list:
             titled[f] = t
             depth_of[f] = d
 
-    missing = [spine[i] for i in range(n) if spine[i] not in depth_of]
+    missing = [href for href, linear in items if linear and href not in depth_of]
     doc_titles = _doc_titles(path, missing)
 
     entries: list = []
-    for i in range(n):
-        media = spine[i]
+    for i, (media, linear) in enumerate(items):
+        if not linear:
+            continue
         title = (titled.get(media) or doc_titles.get(media) or _filename_title(media)
-                 or f"第 {i + 1} 章")
+                 or f"第 {len(entries) + 1} 章")
         entries.append({"title": title, "index": i, "depth": depth_of.get(media)})
+    if not entries:
+        # 整条 spine 都是 linear="no" / nav（畸形书，但现实里存在）：此时宁可把全都列出来，
+        # 也不能给阅读器一个空目录 —— 空目录 = 读者点开什么也翻不到。
+        for i, (media, _linear) in enumerate(items):
+            title = (titled.get(media) or doc_titles.get(media) or _filename_title(media)
+                     or f"第 {i + 1} 章")
+            entries.append({"title": title, "index": i, "depth": depth_of.get(media)})
     return reading_list.build_reading_list(entries)
 
 
@@ -2386,6 +2433,14 @@ def duplicate_groups(threshold: int = 85, library_id=None) -> dict:
         for i in range(n):
             for j in range(i + 1, n):
                 ti, tj = items[i][1], items[j][1]
+                # ⚠️ **同一物理文件**（同一个 ``path`` 被两个库各登记一次，例如 ebook 库
+                # 与 comic 库指向同一个文件夹、白名单都含 .zip）**不是两本重复的书**，
+                # 是同一本被登记了两遍（第 121 期修的缺陷）。把它算进重复组的后果很重：
+                # 用户「保留一本、清掉另一本」时，`recycle_items` 按路径把**唯一那份文件**
+                # 搬进回收站，保留方跟着消失（实测整本从书架消失）。
+                # 判据只用 ``path``：它是索引行按实际落点拼出的绝对路径，与 name 无关。
+                if str(items[i][0].get("path") or "") == str(items[j][0].get("path") or "") != "":
+                    continue
                 # 便宜预筛：ratio = 2M/(lenA+lenB) 且 M ≤ min，故 ratio ≤ 2*min/(min+max)。
                 # 由此得必要条件 max/min ≤ (2-thr)/thr —— 超过它相似度**数学上不可能**达标。
                 # ⚠️ 不能用「长度差占比」(lenA-lenB)/max：那不是有效下界
@@ -2403,6 +2458,18 @@ def duplicate_groups(threshold: int = 85, library_id=None) -> dict:
             clusters.setdefault(find(idx), []).append(items[idx])
 
         for members in clusters.values():
+            # 兜底去重：传递闭包可能把「同一文件的两条登记」经第三本连进同一组
+            # （A~B、B~C 达标），这里按 path 再收一次，只留第一条。
+            seen_paths: set = set()
+            deduped = []
+            for m in members:
+                p = str(m[0].get("path") or "")
+                if p and p in seen_paths:
+                    continue
+                if p:
+                    seen_paths.add(p)
+                deduped.append(m)
+            members = deduped
             if len(members) < 2:
                 continue
             ms = [m[0] for m in members]
