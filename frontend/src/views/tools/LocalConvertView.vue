@@ -45,12 +45,19 @@ const pathValue = ref('')
 const lastResult = ref('')
 
 /**
- * 上传/拖拽允许的扩展名（与后端 `POST /convert` 的允许集一致 = `core/pipeline.EBOOK_EXT`，
- * 含 .txt/.epub/.mobi/.azw3/.pdf/.fb2/.cbz/.cbr 与 `core/audio.AUDIO_EXTS`）。
+ * 上传/拖拽允许的扩展名 = 后端 `core/pipeline.EBOOK_EXT` 的**镜像**（唯一真值源在后端：
+ * `.epub .mobi .azw3 .azw .pdf .fb2 .cbz .cbr .zip .rar .7z .txt` + `core/audio.AUDIO_EXTS`）。
  * 前端只做**预校验**（后端 400 才报错，但前端应提前给出可读提示，不留「点了没反应」）。
+ *
+ * ⚠️ 第 122 期事故：这份清单曾漏了 `.zip` / `.rar` / `.7z` / `.azw` —— 拖一本 **zip 漫画**进来
+ * 直接被前端「已跳过 N 个不支持的格式」拦掉，一个文件都不投递，而后端其实一直收得下
+ * （`.zip` 第 87 期、`.rar`/`.7z` 第 111 期、`.azw` 第 110 期就进了 `EBOOK_EXT`）。
+ * 注释写着「与后端一致」，实际已经漂移三代。现在由 `tests/test_upload_exts_contract.py`
+ * 钉住：两边集合不等就红，改后端白名单必须同批改这里。
  */
 const ALLOWED_EXT = [
-  '.txt', '.epub', '.mobi', '.azw3', '.pdf', '.fb2', '.cbz', '.cbr',
+  '.txt', '.epub', '.mobi', '.azw3', '.azw', '.pdf', '.fb2', '.cbz', '.cbr',
+  '.zip', '.rar', '.7z',
   '.m4b', '.mp3', '.m4a', '.opus', '.ogg', '.flac', '.aac', '.wav',
 ]
 const ACCEPT = ALLOWED_EXT.join(',')
@@ -113,7 +120,7 @@ async function convertFiles(fileList: FileList | File[]): Promise<void> {
   const allowed = files.filter((f) => ALLOWED_EXT.includes(extOf(f.name)))
   const skipped = files.length - allowed.length
   if (skipped > 0) {
-    ui.toast(`已跳过 ${skipped} 个不支持的格式（仅支持 TXT 与电子书/漫画/音频）`)
+    ui.toast(`已跳过 ${skipped} 个不支持的格式（支持 TXT / 电子书 / 漫画 / 音频 / zip·rar·7z 压缩包）`)
   }
   if (!allowed.length) return
 
@@ -161,7 +168,7 @@ async function convertByPath(): Promise<void> {
   }
   if (blockedByNoLibrary()) return
   if (!ALLOWED_EXT.includes(extOf(p))) {
-    ui.toast(`不支持的格式：${extOf(p) || '无扩展名'}（仅支持 TXT 与电子书/漫画/音频）`)
+    ui.toast(`不支持的格式：${extOf(p) || '无扩展名'}（支持 TXT / 电子书 / 漫画 / 音频 / zip·rar·7z 压缩包）`)
     return
   }
   busy.value = true
