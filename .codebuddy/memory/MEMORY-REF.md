@@ -34,6 +34,13 @@
 ### 环境与构建
 - `.gitignore`：`.codebuddy/*` + `!.codebuddy/memory/`；忽略 `data/`、`*.db`、`novelforge/static/v2/`、`dist/`、`.playwright-cli/`。
 - macOS 首次跑测试：`/Users/stromboid/.local/bin/python3.12 -m venv .venv` → `.venv/bin/pip install -r requirements-dev.txt` → **再** `mkdir -p novelforge/static`（缺目录在 **import 期**就抛）。**别建 `static/v2/index.html`**，否则 `GET /` 不再是 503。
+- ⚠️ **本仓的测试与脚本以前只在 Windows 上验过，两个平台陷阱（2026-10-19 抓出，都已修）**：
+  ① macOS 自带 **bash 3.2** 会把**紧跟变量名后的多字节字符**算进变量名（`"$PY）"` ⇒ 变量 `PY）` ⇒ `set -u` 报
+  `unbound variable`）⇒ 写脚本时变量一律 `${VAR}`，别指望眼睛看住（`tests/test_scripts_contract.py` 钉着）；
+  ② `tests/conftest.py` 的仓库根守卫原本不看 `dir_fd`，而 POSIX 的 `shutil.rmtree` 删子项走
+  `os.unlink(name, dir_fd=fd)` ⇒ 裸文件名被按 cwd（=仓库根）解析 ⇒ 12 例数据安全用例（覆盖前留档 / FB2 重建 /
+  音频中途失败）在 Linux/macOS 上必红，还会以 `BaseExceptionGroup` 的形式指不到 conftest。
+  **前端/后端 CI**：`.github/workflows/tests.yml` 在 ubuntu-latest + Python 3.12 上跑 `bash scripts/test.sh`。
 - ⚠️ `npm install` 会删掉 `frontend/package-lock.json` 里一批 optional 的 `"dev": true`（纯噪声）。**规则（第 39 期修订，取代此前「提交前一律 `git checkout --`」）**：不再无脑还原 —— 那会把**本期真要加的新依赖一起丢掉**（第 39 期加 vitest 三件套时就会）。改为：提交前**逐段 `git diff frontend/package-lock.json`**，只放行「本期新增依赖引入的改动」，其余 `"dev": true` 增减照旧还原。
 - **发布自动化（第 79 期）**：`.github/workflows/release.yml` 一个 workflow 两个触发 —— 推 `main` 时读仓库根 `VERSION`，
   `v<版本>` tag 不存在就**自动打 tag + 建 Release**（已存在则跳过）；人工推 `v*` tag 也走它（`gh release view` 命中则跳过）。

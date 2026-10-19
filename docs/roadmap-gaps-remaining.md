@@ -7707,3 +7707,59 @@ Git Bash 的 `/tmp` 与原生 Windows 解释器眼里的 `/tmp` **不是同一�
 历史期段里的记载**一律不改写**（那是历史）。
 
 **核验**：`git check-ignore -v` 命中的正是新规则；`git status` 干净；全量仍 2412 例全绿。
+
+### 九、跨平台审查修复（2026-10-19 补记，不占新期号）
+
+**起因**：用户让「审查代码是否存在问题」。做法是先跑一遍拿地面真值，再静态扫（路由遮蔽 / 软删除读点 /
+注入面 / AST 模式）+ 定点读码。硬指标全清：`novelforge/` 0 裸 `except`、0 可变默认参数、0 `assert` 当校验；
+346 条路由同方法**零**遮蔽；`annotations` / `bookmarks` / `custom_field_defs` 三表软删除读点**零**泄漏
+（三处「刻意含墓碑」都有注释）；表名插值全是常量、`PRAGMA` 翻译前有 `[A-Za-z_][A-Za-z0-9_$]*` 白名单；
+无 `shell=True` / `eval` / `exec` / `pickle`；`_LIBRARY_COLS`(15) 与 `libraries` 表(17) 无漂移
+（差的两个是 `id` / `created_at`，本就不该可写）；前端 `api.ts` 与后端路由 **0** 不一致。
+
+**问题全部集中在「工具链只在 Windows 上验过」这一层** —— 这也解释了它们为什么能存活：
+
+1. **`scripts/test.sh` 在 macOS 上一行都跑不了**（第 117 期落进去的脚本）。
+   `echo "…$PY）…"` 里变量名后面紧跟**全角右括号**；macOS 自带 bash **3.2** 在默认 locale 下把多字节字符
+   当成变量名的一部分 ⇒ 找的是名为 `PY）` 的变量，`set -u` 报 `PY: unbound variable`，**exit 1 且一条测试没跑**。
+   最小复现：`bash -c 'set -u; PY=abc; echo "$PY）"'` 报错，半角 `)` 正常。
+   修法：`${PY}`；并**不是**只改这一处就算完 —— 加了 `tests/test_scripts_contract.py` 把「变量后紧跟非 ASCII
+   必须写花括号」这一类钉死（中文标点在本仓出现频率太高，靠眼睛看不住），同批加 `bash -n` 语法与 LF 行尾断言。
+
+2. **仓库根防删除守卫不认 `dir_fd` ⇒ POSIX 上 12 例必红**（`tests/conftest.py` 的 `_g_unlink` / `_g_rmdir`）。
+   POSIX 的 `shutil.rmtree` 走 `_rmtree_safe_fd`，删子项时调的是 `os.unlink(entry.name, dir_fd=topfd)` ——
+   传进来的是**裸文件名**，由内核按 `dir_fd` 解析；守卫只看 `path` ⇒ 按 cwd（= 仓库根）解析 ⇒ 判定「要删
+   仓库根里的文件」。实测红例：`test_online_landing` 7 / `test_fb2_reader` 3 / `test_audio_ingest` 1 /
+   `test_online_read` 1，其中 3 例在事件循环线程里进一步炸成
+   `BaseExceptionGroup: unhandled errors in a TaskGroup` + `RuntimeError: This portal is not running`
+   （报错完全指不到 conftest）。**这 12 例恰是数据安全网**：整本覆盖前留档、覆盖失败即中止、FB2 规则版本
+   升级重建、音频中途失败不留半个目录 ⇒ 它们在 Linux/macOS 上等于**没有自动化守卫**。
+   修法：`_rel_to_open_dir(kwargs)` —— `dir_fd` / `src_dir_fd` / `dst_dir_fd` 有值就**让行**（解析权在内核，
+   且 `shutil` 那侧全程 fd 操作、自己做过逃逸检查）；绝对路径照旧一律拒绝。Windows 不传 `dir_fd` ⇒ 行为不变。
+   防回归：`tests/test_repo_root_guard.py`（**该让行的让行** + **该拦的仍然拦得住**；后者用不存在的路径调用，
+   守卫在碰文件系统之前就 fail ⇒ 即使它坏了也不会真删仓库里的东西）。
+
+3. **pytest 从不在 CI 跑**。CI 里只有 `Build and Push Image`（只 `docker build`）与 `Release`（只打 tag）——
+   上面两条都是「平台假设」缺陷，只要没人换平台就永远发现不了。修法：新增 `.github/workflows/tests.yml`
+   （ubuntu-latest + Python **3.12**（`quickjs` 只有 cp38–cp312）+ `bash scripts/test.sh`），
+   入口与本地**同一条命令**（proxy 清理 / junit 判成败只该有一处实现）。`setup-python@v6` 进
+   `tests/test_ci_actions_contract.py` 的 `ALLOWED`（2026-10-19 抓 `v6/action.yml` 核过 `runs.using: node24`）。
+
+4. **`mobi` 8 例硬报错而非跳过**，与「软依赖」口径相反（`requirements.txt` 明确写缺了 `mobicache.state()`
+   标 `available:false`、章节接口回 503）。根因是假解包器要往 `mobi.kindleunpack` 上打补丁 ⇒ 得先能 import。
+   修法：`_require_mobi()`（`pytest.importorskip`）放在三处打补丁**之前**，而不是模块级 skip ——
+   `test_缺解包器时章节接口503而不是假装能读` 恰恰模拟「没装解包器」，它不需要这个包，必须照常跑。
+
+5. **`async` 函数里的同步磁盘 I/O**（书库常在 NAS 上，一次 `rmtree` / 遍历 / 整本写盘会把事件循环按住，
+   同进程所有请求一起卡住）：`core/landing.py` 的 `stage.rglob` / 留档读写 / `Path.replace` / `shutil.rmtree`、
+   `sources/manager.py` 的整本正文与 sidecar 读写、`epub_update.append_chapters`、有声书逐轨 `write_bytes`
+   与 `iterdir` / `rmtree`、`server.py` 头像 `write_bytes`。修法：一律 `asyncio.to_thread`（与 `server.py`
+   既有写法**同一口径**，不引入第三种姿势）。
+
+**核验（本机 macOS 实测）**：全量从 **2334 passed / 20 failed / 3 errors / 34 skipped**
+（其中 20 failed = 12 守卫误判 + 8 mobi 缺包，3 errors 是事件循环里的级联）
+变成 **2404 例（2389 passed / 0 failed / 0 errors / 15 skipped）**，109 s，`bash scripts/test.sh` 退出码 0。
+新增 16 例（`test_scripts_contract.py` 13 + `test_repo_root_guard.py` 3）。
+⚠️ **基线行没动**：`AGENTS.md` §4 / `docs/TODO.md` §0 的 2412 是**开发机（Windows）**实测，
+本机补装 `mobi` / `quickjs` / `regex` 后收集到 2404 例（差 8 例来自平台条件 / 可选工具探测，与本次改动无关）
+⇒ 差 ±10 是这个仓库的已知跨机噪声，**别拿本机数字去改 Windows 基线**，下期收尾时由开发机重测。

@@ -57,6 +57,11 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 ## 3. 代码规范（本项目特有）
 
 - **行尾**：`*.sh` / `Dockerfile` / `.dockerignore` 必须 LF（`.gitattributes` 已钉）；CRLF 会让容器 `sh /app/start.sh` 报 `set: Illegal option -`。
+- **shell 变量**：`$VAR` 后面紧跟**中文标点 / 全角字符**时必须写 `${VAR}` —— macOS 自带的 bash **3.2** 在默认 locale 下
+  会把那个多字节字符吞进**变量名**（`"$PY）"` 找的是名为 `PY）` 的变量，`set -u` 直接 `unbound variable`，
+  脚本一行不跑还退出 1）。`tests/test_scripts_contract.py` 钉着这一类（含 `bash -n` 语法与 LF 行尾）。
+- **脚本输出别接管道**：`bash scripts/test.sh | tail` 的退出码是 `tail` 的 —— 全红也能看到 `exit 0`。要截取输出用
+  `> out.log 2>&1; echo $?`。
 - **导入**：`core/` 内一律 `from .. import config`；`db` 只经 `db._connect()`。
 - **提交**：中文 commit、**按能力拆多笔**、**提交即推送**；临时文件写 `$TMP`，不要落仓库根。
 - **期号**：动手前 `git log` 确认——可能有并行会话把期号用掉（历史先例：计划写「第 62 期」但已被占用，实际落成第 66 期）。
@@ -65,6 +70,8 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 ## 4. 回归清单（每期收尾照着过）
 
 - [ ] **后端全量**：`bash scripts/test.sh`（自动落 junit 并打印摘要，失败退非 0）
+      （CI 的 `Tests` workflow 在 push 到 `main` / PR 时跑**同一条命令**，见 `.github/workflows/tests.yml` ——
+      「代码假设了 Windows」这类缺陷只有换平台跑才会露头）
       （⚠️ Windows 下 safe-delete shim 会让会话末退出码非 0，而 junit 全绿 —— **只认 junit**；`pytest.ini` 已含 `-q`，**别再 `-q`**）。
 - [ ] **前端四连**：`bash scripts/frontend-verify.sh`
       （缺 `build` 会漏掉模块断链；缺 `deploy` 则服务端仍发旧 bundle）。
