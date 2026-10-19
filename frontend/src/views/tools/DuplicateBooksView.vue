@@ -165,8 +165,11 @@ function apply(): void {
     .then((rs) => {
       const moved = rs.reduce((n, r) => n + r.moved.length, 0)
       const failed = rs.reduce((n, r) => n + r.errors.length, 0)
+      // 失败原因要说出来：第 121 期起后端会**拒搬**「同一物理文件被两个库各登记一次」
+      // 的那个文件（搬走它会让保留方也断链），只回「N 个失败」用户会以为是 bug。
+      const why = rs.flatMap((r) => r.errors).map((e) => e.error).find(Boolean)
       lastRecycleDir.value = rs[0]?.recycle_dir ?? ''
-      ui.toast(`已移入回收目录 ${moved} 个${failed ? `，${failed} 个失败` : ''}`)
+      ui.toast(`已移入回收目录 ${moved} 个${failed ? `，${failed} 个失败${why ? `（${why}）` : ''}` : ''}`)
       load()
     })
     .catch((e: Error) => ui.toast(e.message))
