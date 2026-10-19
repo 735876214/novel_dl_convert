@@ -34,6 +34,18 @@ _IMAGE = b"\xff\xd8\xff\xe0" + b"fake-jpeg-bytes" * 8
 _SAMPLE = pathlib.Path(__file__).parent / "fixtures" / "mobi" / "demo.mobi"
 
 
+def _require_mobi() -> None:
+    """假解包器要往 `mobi.kindleunpack` 上打补丁 ⇒ 得先能 import 到它。
+
+    `mobi` 在 `requirements.txt` 里是**软依赖**（缺了由 `mobicache.state()` 如实标
+    `available:false`、章节接口回 503，绝不假装能读）。所以缺包时这几条用例应当
+    **如实 skip**，而不是 8 例 `ModuleNotFoundError`（第 118 期：本机就是这种红法）。
+    注意**不**在模块级 skip —— :func:`test_缺解包器时章节接口503而不是假装能读`
+    恰恰模拟「没装解包器」，它不需要这个包，必须照常跑。
+    """
+    pytest.importorskip("mobi.kindleunpack", reason="未安装 mobi（软依赖），解包器相关用例跳过")
+
+
 @pytest.fixture(autouse=True)
 def _cache_dir_in_tmp(tmp_path, monkeypatch):
     """CACHE_DIR 默认指向真实配置目录；解包产物必须落进用例专属目录。"""
@@ -84,6 +96,7 @@ def _fake_kf8(monkeypatch, calls: list):
         return None
 
     fake.image_rel = ""
+    _require_mobi()
     monkeypatch.setattr("mobi.kindleunpack.unpackBook", fake)
     return fake
 
@@ -100,6 +113,7 @@ def _fake_mobi6(monkeypatch, calls: list):
             encoding="utf-8")
         return None
 
+    _require_mobi()
     monkeypatch.setattr("mobi.kindleunpack.unpackBook", fake)
     return fake
 
@@ -244,6 +258,7 @@ def test_解不开时422且源没变就不再重试(client, auth_headers, defaul
         calls.append(infile)
         raise ValueError("Coud not extract from %s" % infile)      # 真解包器失败时抛的就是它
 
+    _require_mobi()
     monkeypatch.setattr("mobi.kindleunpack.unpackBook", fake)
     bid, _src = _write_mobi(default_root, "坏MOBI.mobi")
 
