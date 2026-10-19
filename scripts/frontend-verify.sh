@@ -5,6 +5,8 @@
 #    （改动看起来「没生效」；见 AGENTS.md §4）。
 # ⚠️ 先清 NODE_OPTIONS：IDE 注入的 safe-delete shim 会拦 Vite 清 outDir 与 deploy.mjs 的删除。
 # ⚠️ vitest **不校验模块导出完整性** —— 只有 build 才报模块断链，所以四步一步都不能省。
+# ⚠️ **别把本脚本接进管道**（`bash scripts/frontend-verify.sh | tail`）：退出码会变成 `tail` 的。
+#    要截取输出用重定向（`> out.log 2>&1; echo $?`）。
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

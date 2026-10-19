@@ -11,6 +11,9 @@
 #   bash scripts/test.sh tests/test_catalog.py -k 关键字    # 参数原样透传给 pytest
 #
 # 收尾时把打印出的 junit 路径交给 `python tests/period_close.py new --junit <路径>` 取基线数字。
+#
+# ⚠️ **别把本脚本接进管道**（`bash scripts/test.sh | tail`）：退出码会变成 `tail` 的，
+#    pytest 全红也能看到 `exit 0`。要截取输出用重定向（`> out.log 2>&1; echo $?`）。
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,7 +27,9 @@ nf_clean_env
 JUNIT="$("$PY" -c 'import os,tempfile;d=os.path.join(tempfile.gettempdir(),"nf-junit");os.makedirs(d,exist_ok=True);print(os.path.join(d,"junit.xml").replace(chr(92),"/"))')"
 rm -f "$JUNIT"
 
-echo "== pytest（解释器：$PY）=="
+# ⚠️ 变量一律写成 `${PY}`：macOS 自带的 bash 3.2 会把**紧跟在变量名后的全角字符**算进变量名
+#    （`"$PY）"` ⇒ 变量名 `PY）` ⇒ `set -u` 下报 `PY: unbound variable`，脚本一行都跑不了）。
+echo "== pytest（解释器：${PY}）=="
 "$PY" -m pytest --junitxml="$JUNIT" "$@"
 
 if [ ! -f "$JUNIT" ]; then
