@@ -1629,6 +1629,32 @@ def _exts_for_type(ltype) -> tuple:
     return BOOK_EXTS
 
 
+def type_for_ext(ext) -> str:
+    """扩展名 → 库类型（``ebook`` / ``comic`` / ``audiobook``）；认不出来 → ``""``。
+
+    这是「格式 → 类型」的**唯一真值源**（第 122 期收敛）：自动归库
+    （`core/library_rules._type_of_name`）与上传白名单判定都走它。
+
+    ⚠️ 此前 `library_rules` 自己抄了一份 `.epub/.mobi/.azw3/.pdf/.txt/.fb2` 的元组，
+    **漏了 `.azw`**（第 110 期就进了 `_EBOOK_EXTS`）—— 于是 `.azw` 上传到了
+    `EBOOK_EXT` 这一关，却在归库时判不出类型，被当成「没有可接收这个文件的书库」拒收。
+    判不准就空串（调用方按「不按格式路由」处理，如实拒收），不猜。
+
+    ``.pdf`` / ``.zip`` / ``.rar`` / ``.7z`` 同时在漫画与电子书白名单里：按**电子书**算
+    （漫画侧靠 `.cbz` / `.cbr` 与容器**内容**判 —— 见 `core/zipkind.analyze`）。
+    """
+    e = norm_ext(ext)
+    if not e:
+        return ""
+    if e in _COMIC_EXTS and e not in _EBOOK_EXTS:
+        return "comic"
+    if e in audio.AUDIO_EXTS:
+        return "audiobook"
+    if e in _EBOOK_EXTS:
+        return "ebook"
+    return ""
+
+
 # ---------------- 新库向导：格式白名单 / 排除图案（第 40 期）----------------
 # ⚠️ **两条读时回落规则**：库表里这两列的空串都表示「没设过」，不是空集合 ——
 #   allowed_exts='' ⇒ 继承库类型默认（_exts_for_type），**不是**「一个格式都不收」；
@@ -2482,7 +2508,7 @@ def duplicate_groups(threshold: int = 85, library_id=None) -> dict:
             libs = {str(m[0].get("library_id") or "") for m in members}
             groups.append({
                 "key": f"{akey}|{ms[0]['id']}",
-                "reason": (f"书名与作者完全相同" if exact
+                "reason": ("书名与作者完全相同" if exact
                            else f"同作者 · 书名相似度 ≥ {threshold}%"),
                 "similarity": round(min(sims) * 100) if sims else 100,
                 "title": ms[0]["title"],

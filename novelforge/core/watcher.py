@@ -458,8 +458,10 @@ class FolderWatcher:
                 # 没有可接收的库 ⇒ **拒收**，文件留在原地（不删、不挪、不猜一个库）。
                 # 以前这里会落到「默认库 = OUTPUT_DIR」，第 37 期起没有默认库了。
                 from . import library_rules as _lr
+                # `src=p`：通用容器（.zip/.rar/.7z）的形态只能看内容，把识别结果说出来
+                # （第 122 期）—— 否则用户只得到一句「规则都不命中」。
                 return ("failed", "没有可接收的书库："
-                        + _lr.no_library_reason(name=p.name))
+                        + _lr.no_library_reason(name=p.name, src=p))
         cfg = lib_settings.config_for((lib or {}).get("id") or None)
         layout = str((cfg.get("output") or {}).get("layout") or "flat").strip().lower()
         # 非 txt 是否原样收取：按库取值，取不到时回落到构造时的全局判定

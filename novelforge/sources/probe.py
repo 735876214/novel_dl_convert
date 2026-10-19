@@ -30,10 +30,8 @@
 from __future__ import annotations
 
 import asyncio
-import pathlib
 import time
 
-from .. import config
 from ..core import db
 from . import base, toc_sources
 from .manager import SEARCH_TIMEOUT

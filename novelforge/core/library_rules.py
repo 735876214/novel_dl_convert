@@ -30,11 +30,6 @@ import pathlib
 from .. import config
 from . import library, zipkind
 
-#: 格式 → 库类型（与 library._exts_for_type 的划分保持一致）
-_COMIC_EXT = (".cbz", ".cbr")
-_EBOOK_EXT = (".epub", ".mobi", ".azw3", ".pdf", ".txt", ".fb2")
-
-
 def _norm(text) -> str:
     return library.norm_key(str(text or ""))
 
@@ -47,23 +42,21 @@ def _type_of_name(name: str, src=None) -> str:
     电子书库；**读不到 / 判不出就返回空**（= 不按格式路由），由 :func:`decide`
     走既有路径如实拒收。按后缀猜类型正是本项目反复禁止的「猜」：
     一件装着 EPUB 的 zip 会被塞进漫画库，进去之后既读不了也不好被发现。
+
+    非容器一律问 :func:`library.type_for_ext` —— 「格式 → 类型」的真值源在 library 里
+    （第 122 期收敛：本文件曾自抄一份元组，漏了 `.azw`，导致 `.azw` 上传被判「没有库」）。
     """
     ext = pathlib.PurePosixPath(str(name or "")).suffix.lower()
-    if ext in _COMIC_EXT:
-        return "comic"
-    if zipkind.is_container(name) and src:
+    if zipkind.is_container(name):
+        if not src:
+            return ""           # 只有名字、读不到内容 ⇒ 不猜类型（如实拒收）
         v = zipkind.analyze(src)
         if v["readable"] and v["kind"] == "comic":
             return "comic"
         if v["kind"] in zipkind.DOC_KINDS:
             return "ebook"
         return ""
-    if ext in _EBOOK_EXT:
-        return "ebook"
-    from . import audio as _audio          # 延迟：避免与 audio 的导入顺序耦合
-    if ext in _audio.AUDIO_EXTS:
-        return "audiobook"
-    return ""
+    return library.type_for_ext(ext)
 
 
 def _accepts(lib: dict, filename: str) -> bool:
@@ -366,7 +359,54 @@ def target_root(src=None, name: str = "", meta: dict = None,
     return resolve_target(src=src, name=name, meta=meta, base_dir=base_dir)["root"]
 
 
-def no_library_reason(libs=None, name: str = "") -> str:
+def _container_shape_hint(libs, name: str, src) -> str:
+    """容器被拒时，把**识别结果**说出来（第 122 期）。
+
+    用户原话是「zip 格式的书导入后不能识别」—— 后端其实识别得出（`zipkind.analyze`
+    能分清漫画包 / 改了后缀的 EPUB / 图文混装 / 嵌套包），只是拒收时统一说了一句
+    「规则都不命中」，等于告诉用户「我不知道这是什么」。识别得出就得说出来：
+    该建漫画库、该先展开、还是该把文档从容器里移出去，三种修法互不相同。
+
+    ``src`` 为空（下载链路只给名字）或不是容器 ⇒ 返回空串，退回原话术。
+    """
+    if src is None:
+        return ""
+    try:
+        if not zipkind.is_container(str(src)):
+            return ""
+        v = zipkind.analyze(src)
+    except Exception:                       # noqa: BLE001 —— 旁路说明，不许把拒收流程打崩
+        return ""
+    kind = str(v.get("kind") or "")
+    ev = v.get("evidence") or {}
+    images = int(ev.get("images") or 0)
+    label = {"ebook": "电子书库", "comic": "漫画库", "audiobook": "听书库", "mixed": "综合库"}
+    have = "、".join(
+        label.get(str(l.get("type") or ""), str(l.get("type") or "未设类型"))
+        for l in (libs or [])
+    ) or "（没有书库）"
+    if kind == "comic":
+        return (f"「{name}」里是 {images} 张图片，要按漫画包才读得动；"
+                f"现有书库都不收漫画（当前：{have}）——"
+                f"到「书库管理」新建一个漫画库，或把文件后缀改成 .cbz")
+    if kind == "mixed":
+        return (f"「{name}」里既有 {images} 张图片又有文档，系统判不准该按漫画读还是按文档读"
+                f"（不猜）——把文档移出容器后重新投递，或先解压再分别投")
+    if kind in zipkind.DOC_KINDS or kind == "epub":
+        fmt = str(v.get("format") or "")
+        return (f"「{name}」里是一份 {fmt or '文档'}，要先展开才能入库；"
+                f"到「工具 → 书库管理」的「待展开的压缩包」里展开，或把后缀改回它本来的格式")
+    if kind in ("nested", "multi"):
+        return (f"「{name}」里还有别的压缩包 / 多份文档（{v.get('reason') or ''}），"
+                f"要先展开才能入库；到「工具 → 书库管理」的「待展开的压缩包」里展开")
+    if kind == "broken":
+        return f"「{name}」打不开：{v.get('reason') or '不是可读的压缩包'}"
+    if kind == "empty":
+        return f"「{name}」是个空容器（里面没有任何文件）"
+    return ""
+
+
+def no_library_reason(libs=None, name: str = "", src=None) -> str:
     """拒收时给人看的原因。**三种成因分开说**，否则用户不知道该去改哪儿：
 
     ① 一个书库都没有；② 有库但规则都不命中；③ **规则命中了，但那个库的
@@ -374,6 +414,11 @@ def no_library_reason(libs=None, name: str = "") -> str:
 
     ⚠️ ③ 尤其不能并进 ② —— 那是**假话**：用户明明把文件放进了对的来源目录，
     却被告知「规则不命中」，于是他去改规则，而真正该改的是那个库的允许格式。
+
+    ④ 第 122 期新增：**容器（`.zip` / `.rar` / `.7z`）判得出形态却没人收**时，
+    先由 :func:`_container_shape_hint` 把识别结果说出来（是漫画包？改了后缀的 EPUB？
+    图文混装？），再退回 ② 的通用话术。需要 ``src``（真实路径）才能看内容 ——
+    上传链路给的是刚落盘的临时件，扫描链路给的是收书目录里那份。
     """
     try:
         all_libs = list(library.libraries() if libs is None else libs)
@@ -386,5 +431,8 @@ def no_library_reason(libs=None, name: str = "") -> str:
         return (f"没有收得了「{name}」的书库：现有书库的「允许的格式」里都没有 "
                 f"{ext or '（无扩展名的文件）'}。到「书库管理」编辑对应书库的格式清单"
                 "把它加进去，或换一个受支持的格式")
+    hint = _container_shape_hint(all_libs, name, src)
+    if hint:
+        return hint
     return ("没有可接收这个文件的书库：现有书库的来源子目录 / 格式 / 关键词规则都不命中。"
             "把它放进某个库的来源子目录，或到书库管理给该库补一条规则")
