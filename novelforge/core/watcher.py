@@ -675,11 +675,16 @@ class FolderWatcher:
     # 目标在每个 tick 轻量重读 libraries() 派生 —— 增 / 删 / 改库即时热重载。
 
     def _derive_targets(self) -> list:
-        wcfg = (self.cfg or {}).get("watcher", {}) or {}
         global_interval = float(self.interval)
-        global_enabled = bool(wcfg.get("enabled", True))
+        # ⚠️ 收书目录这个目标的 ``watch`` **恒为真**（第 121 期修的缺陷）：它原来取
+        # ``watcher.enabled``，而那个键的语义只是「**服务启动时**要不要自动起监听线程」
+        # （`server.lifespan` 读它；环境变量 `AUTO_WATCH=false` 就把它置假）。
+        # 于是「部署时设了 AUTO_WATCH=false，之后在界面上点『启动监听』」的场景里，
+        # 线程跑起来了、`/api/watcher` 也回 `running: true`，但每轮 tick 都在
+        # `if not t["watch"]: continue` 这一行把收书目录跳过 —— 丢进去的文件永远不收，
+        # 而用户看到的是「运行中」。线程在跑就意味着在监听；要停就 `stop()`。
         targets = [{
-            "root": self.input_dir, "library_id": None, "watch": global_enabled,
+            "root": self.input_dir, "library_id": None, "watch": True,
             "interval": global_interval, "cron": None, "tkey": "input", "name": "input",
             "owner_lib": None,
         }]
