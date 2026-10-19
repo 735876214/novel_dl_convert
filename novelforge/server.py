@@ -31,7 +31,7 @@ from .core import landing                          # 第 93 期：源站内容�
 from .core import zipkind                        # 第 87 期：容器展开
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, achievements, activity, recommend,
-                   fonts, comics, audio, opds, komga, koreader, integrations, sync,
+                   fonts, comics, audio, opds, koreader, integrations, sync,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
                    authors as authors_mod, narrators as narrators_mod, migrate, library_rules, features, series_meta,
                   reading_list,
@@ -1443,7 +1443,7 @@ def _online_prefetch(manager, book_id, source: str, url: str, index: int, total:
             _ops_end()
 
     _ops_begin()
-    asyncio.create_task(_run())
+    _spawn_bg(_run())
 
 
 @app.post("/api/books/{bid}/check-update")
@@ -1482,7 +1482,7 @@ async def api_check_update(bid: str, request: Request, payload: dict = Body(defa
         (row or {}).get("source") or "", "整本覆盖" if overwrite else "") if x)
     db.task_create(tid, "check-update", title, detail=detail, actor=actor)
     db.task_prune()
-    asyncio.create_task(_run_sync(tid, b, row, actor=actor, overwrite=overwrite))
+    _spawn_bg(_run_sync(tid, b, row, actor=actor, overwrite=overwrite))
     return {"task_id": tid, "overwrite": overwrite, "source": (row or {}).get("source") or ""}
 
 
@@ -1514,7 +1514,7 @@ def _maybe_auto_land(b: dict, bid: str, seen: list) -> str:
                    actor="系统")
     db.task_prune()
     db.online_bind_set_auto_task(bid, tid)
-    asyncio.create_task(_run_sync(tid, b, row, actor="系统"))
+    _spawn_bg(_run_sync(tid, b, row, actor="系统"))
     logging.getLogger("novelforge").info(
         "在线阅读满 %s 章，已起自动落地任务 %s：《%s》", len(row["seen"]), tid, title)
     return tid
@@ -1653,7 +1653,7 @@ async def api_download(request: Request, item: dict = Body(...)):
                                          item.get("format")) if x)
     db.task_create(tid, "download", title, detail=detail, actor=actor)
     db.task_prune()          # 只留最近 200 条，避免表无限增长
-    asyncio.create_task(_run_download(tid, item, actor, kind))
+    _spawn_bg(_run_download(tid, item, actor, kind))
     return {"task_id": tid, "kind": kind}
 
 
@@ -4168,13 +4168,15 @@ def api_add_session(payload: dict = Body(...)):
         raise HTTPException(400, "时长须在 1–1440 分钟之间")
 
     date_s = str(payload.get("date") or "").strip()
+    start_s = str(payload.get("start") or "00:00").strip()
+    # 两处 `strptime` 只做**格式校验**（结果不参与计算，真正的解析在下面一行合并后做）：
+    # 分开校验是为了报错能指明是哪一段不对。
     try:
-        day = _time.strptime(date_s, "%Y-%m-%d")
+        _time.strptime(date_s, "%Y-%m-%d")
     except ValueError:
         raise HTTPException(400, "日期格式须为 YYYY-MM-DD")
-    start_s = str(payload.get("start") or "00:00").strip()
     try:
-        hm = _time.strptime(start_s, "%H:%M")
+        _time.strptime(start_s, "%H:%M")
     except ValueError:
         raise HTTPException(400, "开始时间格式须为 HH:MM")
 
@@ -5632,6 +5634,36 @@ def _ops_end() -> None:
             _ops_idle.set()
 
 
+#: 后台任务的**强引用**集合（第 119 期）。
+#:
+#: ``asyncio.create_task(...)`` 的返回值只被事件循环持**弱引用**：``create_task(f())``
+#: 扔掉返回值的写法下，任务有可能在跑完之前就被 GC（CPython 会打出
+#: 「Task was destroyed but it is pending!」），异常也只在那时以
+#: 「Task exception was never retrieved」写到 stderr —— 前端看到的现象是任务一直
+#: 挂在「进行中」。这里留住引用到任务结束，并把未捕获异常记进应用日志。
+#: 注意这与 `_ops_*` 是两个东西：``_ops_*`` 只回答「有没有长操作在跑」（测试收尾用），
+#: 不管任务生死；两者都要留着。
+_BG_TASKS: set = set()
+
+
+def _spawn_bg(coro) -> "asyncio.Task":
+    """把协程挂成后台任务并**留住引用**（见 ``_BG_TASKS`` 的注释）。"""
+    task = asyncio.create_task(coro)
+    _BG_TASKS.add(task)
+
+    def _done(t) -> None:
+        _BG_TASKS.discard(t)
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            logging.getLogger("novelforge").warning(
+                "后台任务异常：%s: %s", type(exc).__name__, exc)
+
+    task.add_done_callback(_done)
+    return task
+
+
 def wait_background_ops(timeout: float = 5.0) -> bool:
     """等「长文件操作」后台任务收尾：空闲 ⇒ True，超时 ⇒ False。
 
@@ -5750,7 +5782,7 @@ async def api_delete_library(lid: str, purge_files: bool = False):
                        detail=f"{len(targets)} 份 · 书库内文件 + 出版副本")
         db.task_prune()
         _ops_begin()
-        asyncio.create_task(_run_library_purge(tid, targets))
+        _spawn_bg(_run_library_purge(tid, targets))
 
     activity_log.log(activity_log.ACTION_LAYOUT, name, activity_log.STATUS_OK,
                      detail=(f"移除书库登记：只删登记、不动文件 · 当时 {n} 本"
@@ -6237,7 +6269,7 @@ async def api_book_move_apply(payload: dict = Body(...)):
     db.task_create(tid, "bookmove", f"移动到「{s['dst_library_name']}」",
                    detail=f"{s['src_library_name']} → {s['dst_library_name']} · {s['total']} 本")
     db.task_prune()
-    asyncio.create_task(_run_book_move(tid, bid, s["total"]))
+    _spawn_bg(_run_book_move(tid, bid, s["total"]))
     return {"task_id": tid, "batch_id": bid}
 
 
@@ -7410,7 +7442,7 @@ async def api_recycle_restore(payload: dict = Body(None)):
                    detail=f"{len(items)} 份 · 按原路径搬回")
     db.task_prune()
     _ops_begin()
-    asyncio.create_task(_run_recycle_restore(tid, items))
+    _spawn_bg(_run_recycle_restore(tid, items))
     return {"ok": True, "task_id": tid, "total": len(items), "errors": plan["errors"]}
 
 
@@ -7488,16 +7520,31 @@ def _orphan_refs() -> dict:
 
     ``book_id`` 形如 ``库$哈希``（见 `library._book_id`）；没有 ``$`` 的是第 17 期
     库维度化之前的旧 id，无法归属到任何库，按老口径处理（不在书目里就算孤儿）。
+
+    ⚠️ **第 119 期第二道护栏**：「**该库当前一本书都没被索引到**」时，它的行一律
+    不判孤儿。判据与第一道同源（库还在），但防的是另一件事 —— 库根暂时不可用
+    （NAS 未挂载 / 网盘掉线 / Docker 挂载缺失）时书目会暂时为空，此时若照第一道
+    判据走，整库的进度 / 批注 / 书签 / 阅读会话**全部**会出现在「可清理」清单里，
+    而清理是真 ``DELETE``（不进回收站）—— 用户看到「书架空了」再点一下清理，
+    阅读历史就没了。代价：某库最后一本书被删后，它的残余行会留在清单外（清理不掉），
+    只能连库一起删 —— 比起「一次点错删光全部历史」，这是刻意选的那一边。
     """
-    valid = {b["id"] for b in library.books()}
+    books = library.books()
+    valid = {b["id"] for b in books}
     try:
         lib_ids = {str(l.get("id") or "") for l in library.libraries()}
     except Exception:
         lib_ids = set()
+    #: 当前**确实索引到了书**的库（前缀命中的才有资格判孤儿，见 docstring 第二道护栏）
+    live_libs = {str(b.get("library_id") or "") for b in books}
     refs = db.book_id_refs()
+
+    def _owner(i) -> str:
+        return str(i).split("$", 1)[0]
+
     return {
         name: [i for i in ids
-               if i not in valid and str(i).split("$", 1)[0] in lib_ids]
+               if i not in valid and _owner(i) in lib_ids and _owner(i) in live_libs]
         for name, ids in refs.items()
     }
 
@@ -9341,8 +9388,9 @@ async def _dispatch_into_library(src: pathlib.Path, name: str, opts: dict,
     if upload is not None:
         # `_read_capped` 超限会抛，此时一个字节都还没写进 input/
         data = await _read_capped(upload, _upload_limit("max_bytes"))
-        with open(src, "wb") as f:
-            f.write(data)
+        # ⚠️ 落盘也要进线程池（第 119 期）：上传上限可达数百 MB，同步 `f.write(data)`
+        # 会在这段时间里把整个事件循环停住（同 `pipeline.dispatch` 那一行的道理）。
+        await asyncio.to_thread(src.write_bytes, data)
         size = len(data)
     try:
         # 同步转换可能耗时数十秒，放到线程池跑，避免阻塞事件循环（其它请求无响应）
@@ -9379,16 +9427,32 @@ async def convert(file: UploadFile = File(...), traditionalize: bool = Form(Fals
     _allowed = set(pipeline.EBOOK_EXT)
     if _ext not in _allowed:
         raise HTTPException(400, "仅支持 .txt 与电子书格式：" + ", ".join(sorted(_allowed)))
+    # ⚠️ 落点同样要过包含性校验（第 119 期）：`file.filename` 是**客户端给的**，
+    # 传 `../../etc/x.epub` 时 `INPUT_DIR / 名字` 会把文件写到收书目录之外。
+    try:
+        src = fileops.input_path(_name, base=INPUT_DIR)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return await _dispatch_into_library(
-        INPUT_DIR / _name, _name,
+        src, pathlib.PurePosixPath(_name).name,
         {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
         "upload", upload=file)
 
 
 @app.post("/convert-path")
 async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)):
-    """转换 `INPUT_DIR` 下**已经存在**的文件（脚本 / 油猴直接给路径，不走上传）。"""
-    src = INPUT_DIR / path
+    """转换 `INPUT_DIR` 下**已经存在**的文件（脚本 / 油猴直接给路径，不走上传）。
+
+    ⚠️ 第 119 期：入参过 :func:`fileops.input_path`（**包含性**校验）。此前是
+    ``INPUT_DIR / path`` 直拼，``path=../secret.epub`` 能读到收书目录之外的任意文件
+    并原样作为下载响应返回 —— 而这条路由不在 ``/api`` 前缀下（历史为油猴保留、
+    不强制鉴权），等于一条未鉴权的任意文件读取。校验只收紧「能不能出收书目录」，
+    目录内子目录照旧可用（下载插件的分目录）。
+    """
+    try:
+        src = fileops.input_path(path, base=INPUT_DIR)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if not src.exists() or not src.is_file():
         raise HTTPException(404, "文件不存在")
     return await _dispatch_into_library(
