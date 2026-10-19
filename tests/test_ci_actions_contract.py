@@ -18,13 +18,15 @@ import re
 
 WORKFLOWS = pathlib.Path(__file__).resolve().parents[1] / ".github" / "workflows"
 
-#: 允许出现在 workflow 里的 `uses:`（**去重**后的 5 个）。
+#: 允许出现在 workflow 里的 `uses:`（**去重**后的 6 个）。
 #: 每个都是 **node24** 运行时的大版本（2026-10-08 逐个抓上游 `action.yml` 的 `runs.using` 核过）：
 #:   `actions/checkout`            v4 = node20 → **v5 起 node24**（本仓取最新 v7）
 #:   `docker/build-push-action`    v6 = node20 → **v7 起 node24**
 #:   `docker/setup-buildx-action`  v3 = node20 → **v4 起 node24**
 #:   `docker/setup-qemu-action`    v3 = node20 → **v4 起 node24**
 #:   `docker/login-action`         v3 = node20 → **v4 起 node24**
+#:   `actions/setup-python`        **v6 = node24**（第 118 期新增：`.github/workflows/tests.yml`
+#:                                用它装 3.12 跑后端全量；2026-10-19 抓 `v6/action.yml` 核过 `runs.using: node24`）
 #: 升级时同批核过 `inputs:` 无更名 —— 本仓用到的那些一个都没动，所以是纯版本号替换。
 ALLOWED = frozenset({
     "actions/checkout@v7",
@@ -32,6 +34,7 @@ ALLOWED = frozenset({
     "docker/login-action@v4",
     "docker/setup-buildx-action@v4",
     "docker/setup-qemu-action@v4",
+    "actions/setup-python@v6",
 })
 
 #: `uses:` 行（带不带 `- ` 前缀都要认）；`[^\s#]+` 顺带把行尾注释切掉。

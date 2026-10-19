@@ -1,0 +1,51 @@
+name: Tests
+
+# 后端全量 pytest 的 CI 门（第 118 期）。
+#
+# 为什么非有这一步：在这之前 pytest **只在开发机（Windows）上跑过** —— CI 里只有
+# `Build and Push Image`（只做 `docker build`）和 `Release`（只打 tag）。于是「代码假设
+# 了 Windows」这类缺陷无人发现，攒到第 118 期一次抓出两条真红：
+#   ① `.github` 之外无人在 Linux 跑 ⇒ 没人发现 `tests/conftest.py` 的仓库根守卫
+#      不认 `dir_fd`，POSIX 上 `shutil.rmtree` 删子项时把**裸文件名**按 cwd(=仓库根)
+#      解析，12 例数据安全用例（覆盖前留档 / FB2 重建 / 音频中途失败）必红；
+#   ② `scripts/test.sh` 里 `"$PY）"` 在 macOS 自带 bash 3.2 下把全角括号吞进变量名
+#      ⇒ `set -u` 报 `PY: unbound variable`，**一条测试都没跑**就 exit 1。
+#
+# 入口用 `bash scripts/test.sh` 而不是裸 `pytest`：清 proxy 变量、junit 判定成败这些口径
+# 只该有**一处**实现（`AGENTS.md` §1「单一真值源」），CI 与本地走同一条路才不会分叉。
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # ⚠️ 3.12 而不是最新的 3.13：`quickjs` 只有 cp38–cp312 的预编译包
+      #    （见 `requirements.txt` 的 `python_version < "3.13"` 标记与 `AGENTS.md` §5），
+      #    在 3.13 上装整条依赖会失败。要升 Python 得先解决这个包。
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      # 全量离线（`AGENTS.md` §4）。失败时脚本以非 0 退出，job 直接红；
+      # 收尾会打印 junit 路径与「X passed / Y failed / Z skipped」的汇总行。
+      - name: Run pytest
+        run: bash scripts/test.sh
