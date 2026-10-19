@@ -1,0 +1,4 @@
+静态目录占位：`v2/` 是前端构建产物（不入库），但**目录本身必须在**——
+`novelforge/server.py` 在 import 期就 `app.mount("/static", StaticFiles(directory=STATIC_DIR))`，
+空目录不进 git ⇒ 全新 clone 直接 `RuntimeError: Directory ... does not exist`
+（CI 上第一次就撞到，见 roadmap 第 117 期补记）。
