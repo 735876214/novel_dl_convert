@@ -7936,3 +7936,98 @@ pip 缓存，入口是 `bash scripts/test.sh`（与本地**同一条命令**；�
 **教训（写进索引）**：① 「状态码对」不等于「校验对」—— 400 可能来自业务规则，测安全边界必须**桩掉业务规则**，
 否则换个库类型就穿了；② 数据丢失链往往是**三个各自看起来合理的默认值**串起来的（静默 `except` → 空集当全删 →
 孤儿清理真 DELETE），单看任何一处都不像缺陷。
+
+## 第 120 期（第二轮逻辑审计：书源名就是文件名 + 设置写不进去还回 ok）
+
+第 119 期把「10 条明显缺陷」清完后，这一轮把审计口径换到另一类：**「看起来成功、实际没发生」**
+（用户点了一下、界面回成功、后端却什么都没做，或做到了不该做的位置）。扫法只有两种：
+机械扫（删除 / 移动 / 替换调用点、静默 `except`、名字与路径的构造点）+ 拿探针验**写入口的行为**。
+
+### 一、书源名就是文件名（P2，探针实证）
+
+书源名同时是**两个落盘文件**的主干：`SOURCES_DIR/<name>.json`（规则本体）与
+`COOKIE_DIR/<name>.cookies.txt`（登录态）。而 `name` **没有任何校验** —— 探针实测：
+
+```python
+store.add_rule({"name": "../../evil", "domains": [...], "search": {...}})
+# → 写到 CONFIG_DIR/sources/../../evil.json（= CONFIG_DIR/evil.json，sources 目录之外）
+# → load_user_sources() 只 glob SOURCES_DIR/*.json ⇒ 重启后这条源**凭空消失**
+```
+
+两条后果都不报错：① 用户「导入成功」的源在重启后没了，只会记住「导入没生效」；
+② `name = "../settings"` 会**覆盖 settings.json 覆盖层**（集成凭据 / 更新镜像 / 追踪开关全在里面），
+即「导入一个书源」可以顺手把整份设置换成攻击者给的 JSON（需已登录，属自伤面，故判 P2 不判 P1）。
+
+更要紧的是**根因**：这条路径此前在 8 处各拼一遍 ——
+`store.py:75/93/115/192`、`ledger.py:58`、`rules.py:95`、`server.py:755`、`probe.py:62/93`；
+cookie 名字也拼了两处（`creds.cookie_name` 与 `store.sources_status`）。
+**8 处拼同一个名字 ⇒ 8 次漏掉校验的机会**，这正是「单一真值源」那条硬约束一直在防的形态。
+
+修法（判据与路径各收一处）：
+
+| 落点 | 内容 |
+| --- | --- |
+| `sources/rules.py::rule_name_error(name)` | 名字的**唯一判据**：拒空、拒 `\ / : * ? " < > |` 与控制字符、拒含 `..`、拒 `.` 开头、长度 ≤ 80 |
+| `sources/rules.py::rule_file_path(name)` | 规则文件路径的**唯一构造处**；名字非法 ⇒ `ValueError`（写入口当场拒） |
+| `sources/rules.py::rule_file_exists(name)` | 读路径用：名字非法 ⇒ 当「没有」（不抛，免得历史坏文件把整页打成 500） |
+| `validate_rule()` / `register_rule()` / `add_rule()` | 三个入口都过闸：导入界面直接显示原因、手改坏的规则文件在注册处被拒、写盘前再判一次 |
+| `store.sources_status()` | cookie 路径改调 `creds.cookie_file()`（不再自己拼） |
+
+`ledger._rule_path` / `server.py:755` / `probe._exists` 三处读路径也一并改调上面那两个函数。
+
+### 二、设置覆盖层「写不进去还回 ok」（P2，代码级）
+
+`config.save_overrides()` 此前长这样：
+
+```python
+try:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:   # 直接截断再写
+        json.dump(data, f, ensure_ascii=False, indent=2)
+except Exception:
+    pass                                                     # ← 所有失败被吃掉
+```
+
+四条写入口（`PUT /api/config`、`PUT /api/koreader`、`PUT /api/integrations/{service}`、
+`customfields.drop_legacy_override`）都无条件回 `{"ok": true}` —— 于是两种真实场景都变成静默失败：
+
+1. **磁盘满 / 只读挂载 / 配置目录没权限**：界面显示「已保存」，重启后设置全没了；
+2. **写一半断电 / 容器被 kill**：留下半截 JSON，下次启动 `load_overrides()` 的
+   `except Exception: return {}` 把它当「没有覆盖层」⇒ **全部设置静默回到默认值**
+   （LLM api_key、三家集成凭据、更新镜像、追更开关一齐消失，界面一切正常）。
+
+修法：
+
+- `save_overrides()` **原子落盘**（同目录临时文件 + `fsync` + `os.replace`），失败**抛 `OSError`**
+  并清掉临时文件；不再 `pass`。
+- `load_overrides()` 读不出来时**改名留档**（`settings.json.corrupt-<YYYYmmdd-HHMMSS>`）+ 打 warning，
+  再按空覆盖层返回（设置页仍能打开 —— 打不开比丢设置更糟）。
+- 新增 `config.mutate_overrides(mutator)`：在 `threading.Lock` 内做「读 → 改 → 写」。
+  此前四个入口各自 `load_overrides()` + 改键 + `save_overrides()`，**并发保存会各读一份旧值、
+  各写一份全量**，后写的那份把先写的键抹回旧值 —— 表现为「连着点两下保存，第一处设置撤回去了」，
+  同样不报错。`/api/integrations` 的字段合并也挪进锁内（原先在锁外读 `cur`）。
+- 三个接口把 `OSError` 转成 `HTTPException(500, "设置写入失败（配置目录不可写？）：…")`，
+  前端 `lib/api.ts` 本来就把后端 `detail` 原样抛给页面 —— 现在用户能看到真正的原因。
+
+### 三、核过、**不是**缺陷（负面结论也要留档）
+
+| 类 | 扫到的量 | 结论 |
+| --- | --- | --- |
+| 删除 / 移动 / 替换调用点 | 102 处，其中 `.unlink(` 21 处 | 逐处核对：临时文件（`fileops`/`txtcache`/`network`/写探针）、缓存（`online` 的章节缓存、CACHE_DIR 清理且**显式跳过回收站**）、日志轮转、头像、`settings.json` 覆盖层、用户书源规则、cookie、旧备份轮转、回收站**显式清空**、用户删字体 —— **没有一处删书文件或副本**（源不可变那条守住了） |
+| 静默 `except`（AST：`except` 体只含 `pass` / `continue` / 返回常量 / 仅日志） | 428 处 | 绝大多数带 `# noqa: BLE001` + 理由（旁路增强 / 降级 / 单条失败不中断）。**关键判据**：全仓**没有一处** `except` 里返回 `{"ok": True}`（专门扫过），也没有写路径上的静默回退 |
+| 自然序 | `audio._audio_files`（`:38`）、`comics` 的 `_natural_key`（`:188`，`:269` 用它排页） | 音轨与漫画页都是自然序（`第2话 < 第10话`、`page_2 < page_10`），没有字典序反向的坑 |
+| 媒体 Range | `FileResponse`（音频 / PDF / 漫画页） | Starlette 的 `FileResponse` 自带 Range（206），播放器拖拽跳转不受影响；`GZipMiddleware` 也显式跳过 206 |
+| `units.py` | 590 行 | **纯读**（零 `write_text` / `replace` / `unlink`），合并 / 拆分只算模型不改盘 |
+
+### 四、核验
+
+| 项 | 结果 |
+| --- | --- |
+| 新增契约用例 | `tests/test_logic_audit_120.py` **17 例**（名字 6 + 导入报错 1 + 中文名 1 + 注册 1 + 路径唯一 1 + 写失败要抛 1 + 原子 1 + 留档 1 + 并发 1 + 迁移删键 1 + 接口不再直调 save 1 + 接口 500 1） |
+| 相关子集 | `pytest tests -k "source or legado or config or settings or custom_field"` → 532 passed / 1 skipped |
+| 后端全量 | `bash scripts/test.sh` → **2467 例（2454 passed / 0 failed / 0 errors / 13 skipped），115.0 s，exit 0** |
+| 前端 | 本期无前端改动（三个接口的错误只用既有 `detail` 通道显示），未重跑四连 |
+
+**教训（写进索引）**：① **一个名字被 8 处拼成路径，就等于 8 次漏掉校验的机会** ——
+「路径只有一处构造」和「名字只有一处置信」是同一件事的两面；② `except Exception: pass` 出现在
+**写入口**上是「静默写不进」的标准配方，它和界面上的「已保存」合起来，比直接报错难查十倍。
