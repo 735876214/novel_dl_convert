@@ -752,7 +752,7 @@ def api_source_reanalyze(name: str):
     if not row:
         # ⚠️ 手写源**没有台账行**（台账只在导入时写）—— 这不是「源不存在」，
         #    而是「没有原始原文可重跑判定」。两者要分开说，否则用户会以为自己的源丢了。
-        exists = name in REGISTRY or pathlib.Path(config.SOURCES_DIR, f"{name}.json").is_file()
+        exists = name in REGISTRY or source_rules.rule_file_exists(name)   # 第 120 期：路径只有一处
         raise HTTPException(400 if exists else 404,
                             "这条源没有原始记录（手写源请直接编辑规则）" if exists else "书源不存在")
     raw = row.get("raw_json") or ""

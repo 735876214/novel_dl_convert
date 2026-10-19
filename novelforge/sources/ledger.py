@@ -55,7 +55,9 @@ def entries_of(payload) -> list:
 
 
 def _rule_path(name: str) -> pathlib.Path:
-    return store._sources_dir() / f"{name}.json"
+    from . import rules                                      # 局部导入：只为一处构造路径
+
+    return rules.rule_file_path(name)          # 第 120 期：路径只有一处
 
 
 def existing_sources() -> list:
@@ -173,7 +175,10 @@ def plan(entries: list, *, origin: str = "", existing: "list | None" = None) -> 
 
 
 def _read_rule(name: str) -> "dict | None":
-    p = _rule_path(name)
+    try:
+        p = _rule_path(name)
+    except ValueError:                       # 名字非法 ⇒ 当「没有这个文件」
+        return None
     if not p.is_file():
         return None
     try:
@@ -232,8 +237,11 @@ def apply(rows: list, *, origin: str = "", resolutions: "dict | None" = None,
                     rule["name"] = new_name
                     rec["note"] = f"两条并存：新条目改名为 {new_name}"
                 else:
-                    old = _rule_path(name)
-                    if old.is_file():
+                    try:
+                        old = _rule_path(name)
+                    except ValueError:           # 名字非法：没有可覆盖的旧文件（下面 add_rule 会拒）
+                        old = None
+                    if old is not None and old.is_file():
                         # ⚠️ 覆盖前**必须**备份旧规则原文 —— 「可回滚」靠的就是这一行
                         db.ledger_history_add(
                             name, old.read_text(encoding="utf-8"),

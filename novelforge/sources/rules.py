@@ -81,6 +81,50 @@ logger = logging.getLogger(__name__)
 _VAR_RE = re.compile(r"\{var:([^}]+)\}")
 
 
+# ---------------- 书源名 = 文件名（第 120 期）----------------
+# 书源名同时是**两个落盘文件**的主干：`SOURCES_DIR/<name>.json`（规则本体）与
+# `COOKIE_DIR/<name>.cookies.txt`（登录态）。此前这两个名字在 8 处各拼一遍，
+# 而且**没人校验 name** —— 实测 `add_rule({"name": "../../evil", ...})` 会把规则写到
+# `CONFIG_DIR/evil.json`（sources 目录之外），重启后 `load_user_sources()` 扫不到它，
+# 书源「导入成功却消失」；`name = "../settings"` 更会**覆盖 settings.json 覆盖层**。
+# 现在：名字的判据只有 :func:`rule_name_error` 一处，路径只有 :func:`rule_file_path` 一处。
+
+_NAME_BAD = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+#: 书源名的长度上限。理由：它要当文件名（常见文件系统 255 字节），且台账 / 界面按它做键。
+_NAME_MAX = 80
+
+
+def rule_name_error(name) -> str:
+    """书源名能不能当文件名用：能 ⇒ ``""``，不能 ⇒ 原因原文（导入界面直接显示）。"""
+    s = str(name or "").strip()
+    if not s:
+        return "缺少 name（唯一标识）"
+    if _NAME_BAD.search(s) or ".." in s:
+        return f"name 里不能有路径分隔符或 ..（它同时是文件名）：{s}"
+    if s.startswith("."):
+        return f"name 不能以 . 开头（会被当隐藏文件）：{s}"
+    if len(s) > _NAME_MAX:
+        return f"name 太长（最多 {_NAME_MAX} 字符）：{s[:_NAME_MAX]}…"
+    return ""
+
+
+def rule_file_path(name) -> pathlib.Path:
+    """用户书源的规则文件路径 —— **唯一构造处**；名字非法 ⇒ ``ValueError``（写入口当场拒）。"""
+    err = rule_name_error(name)
+    if err:
+        raise ValueError(err)
+    return pathlib.Path(config.SOURCES_DIR) / f"{str(name).strip()}.json"
+
+
+def rule_file_exists(name) -> bool:
+    """这个源有没有规则文件。**读**路径用：名字非法 ⇒ 当不存在（不抛）。"""
+    try:
+        return rule_file_path(name).is_file()
+    except ValueError:
+        return False
+
+
 def load_rule(name: str) -> dict:
     """读一条书源的**规则本体**（用户书源 = ``SOURCES_DIR/<name>.json``；没有 / 坏文件 ⇒ ``{}``）。
 
@@ -92,7 +136,10 @@ def load_rule(name: str) -> dict:
     """
     if not name:
         return {}
-    f = pathlib.Path(config.SOURCES_DIR) / f"{name}.json"
+    try:
+        f = rule_file_path(name)          # 第 120 期：路径只有那一处（读路径上非法名 = 没有）
+    except ValueError:
+        return {}
     if not f.is_file():
         return {}
     try:
@@ -1214,8 +1261,10 @@ def validate_rule(rule: dict) -> list[str]:
     errs = []
     if not isinstance(rule, dict):
         return ["规则必须是一个 JSON 对象"]
-    if not rule.get("name"):
-        errs.append("缺少 name（唯一标识）")
+    # name 同时是落盘文件名（规则 json 与 cookie txt）⇒ 判据在 `rule_name_error` 一处
+    _name_err = rule_name_error(rule.get("name"))
+    if _name_err:
+        errs.append(_name_err)
     if not rule.get("domains"):
         errs.append("缺少 domains（域名白名单数组）")
     # 可选护栏：写歪了会被 `clamp_timeout` 悄悄换成默认值 —— 那正是假配置，

@@ -9,10 +9,11 @@ from pathlib import Path
 
 from .. import config
 from ..core import db
+from . import creds                         # cookie 文件名只有一处（`creds.cookie_file`）
 from . import online                       # 只为了转调 `online.support_reason`（见 `sources_status`）
 from .base import REGISTRY, register
 from .manager import DownloadManager
-from .rules import make_rule_class, validate_rule
+from .rules import make_rule_class, rule_file_path, rule_name_error, validate_rule
 
 
 def _sources_dir() -> Path:
@@ -61,6 +62,15 @@ def load_user_sources():
 
 
 def register_rule(rule: dict):
+    """注册一条规则进 REGISTRY。
+
+    第 120 期：**注册也过名字闸** —— 名字同时是规则文件与 cookie 文件的主干，
+    手改过的 / 历史遗留的坏名字（含 ``/``、``..``）在注册处就被拒，
+    否则后面 `creds.cookie_file()` 会拼出目录之外的路径。
+    """
+    err = rule_name_error((rule or {}).get("name"))
+    if err:
+        raise ValueError(err)
     cls = make_rule_class(rule)
     register(cls)
     return cls
@@ -71,8 +81,8 @@ def add_rule(rule: dict) -> Path:
     errs = validate_rule(rule)
     if errs:
         raise ValueError("；".join(errs))
-    d = _sources_dir()
-    path = d / f"{rule['name']}.json"
+    _sources_dir()                       # 确保目录存在（路径本身由 `rule_file_path` 给出）
+    path = rule_file_path(rule["name"])
     path.write_text(
         json.dumps(rule, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -90,7 +100,10 @@ def set_enabled(name: str, enabled: bool) -> tuple:
       而不是假装停用了（界面要把它置灰并写明原因，这是本项目的纪律）。
     """
     name = str(name)
-    path = _sources_dir() / f"{name}.json"
+    try:
+        path = rule_file_path(name)
+    except ValueError as e:              # 名字非法 ⇒ 与「内置源」同样如实拒绝（不抛 500）
+        return False, str(e)
     if not path.is_file():
         return False, "内置源由代码注册，没有可挂启停状态的规则文件"
     try:
@@ -112,7 +125,10 @@ def set_enabled(name: str, enabled: bool) -> tuple:
 def remove_rule(name: str) -> bool:
     """删除用户书源（内置源不可删）。返回是否成功。"""
     REGISTRY.pop(name, None)
-    path = _sources_dir() / f"{name}.json"
+    try:
+        path = rule_file_path(name)      # 第 120 期：路径只有一处；坏名字当「没有这个源」
+    except ValueError:
+        return False
     if path.exists():
         try:
             path.unlink()
@@ -141,12 +157,14 @@ def sources_status() -> list[dict]:
     cfg = config.load_config()
     dl = cfg.get("download") or {}
     enabled = bool(dl.get("enabled", False))
-    cookie_dir = Path(config.COOKIE_DIR)
     mgr = DownloadManager(cfg)
 
     out = []
     for s in list_sources():
-        cpath = cookie_dir / f"{s['name']}.cookies.txt"
+        # 第 120 期：cookie 文件名只有 `creds.cookie_file()` 一处 —— 这里原先自己拼
+        # `COOKIE_DIR/<name>.cookies.txt`，与 creds 各写一遍（改了格式必然漂移：
+        # 界面说「已登录」、下载却还是匿名）。
+        cpath = creds.cookie_file(s["name"])
         has_cookie = cpath.is_file()
         reason = mgr.gate_reason()
         out.append({
@@ -189,7 +207,10 @@ def list_sources() -> list[dict]:
             domains = list(getattr(cls, "domains", []))
             public = bool(getattr(cls, "public", True))
         else:                       # 停用的用户源：没注册，只能从文件里读
-            rule = _read_rule_file(d / f"{name}.json")
+            try:
+                rule = _read_rule_file(rule_file_path(name))    # 路径只有一处（第 120 期）
+            except ValueError:
+                rule = {}
             display_name = str(rule.get("display_name") or name)
             domains = [str(x) for x in (rule.get("domains") or [])]
             public = bool(rule.get("public", True))

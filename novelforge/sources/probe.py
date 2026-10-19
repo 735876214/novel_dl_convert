@@ -58,8 +58,10 @@ def _out(name: str, state: str, count: int, t0: float, error: str = "",
 
 def _exists(name: str) -> bool:
     """这条源「真的存在」吗（注册过 / 有规则文件 / 台账里有行）。"""
+    from . import rules                                       # 局部导入：路径只有一处
+
     return (name in base.REGISTRY
-            or pathlib.Path(config.SOURCES_DIR, f"{name}.json").is_file()
+            or rules.rule_file_exists(name)                    # 第 120 期：不再自己拼路径
             or db.source_ledger_get(name) is not None)
 
 
@@ -89,8 +91,9 @@ async def probe(manager, name: str, *, query: str = DEFAULT_QUERY) -> dict:
     if cls is None:
         # 停用的源仍在磁盘上，只是没注册（见 `store.set_enabled`）——
         # 这两种「不可用」的原因不同，措辞也要不同。
+        from . import rules                                   # 局部导入：路径只有一处
         why = ("书源已停用：在书源管理页重新启用后再验证"
-               if pathlib.Path(config.SOURCES_DIR, f"{name}.json").is_file() else "未知书源（没有注册也没有规则文件）")
+               if rules.rule_file_exists(name) else "未知书源（没有注册也没有规则文件）")
         return record(name, {**_out(name, UNSUPPORTED, 0, t0, why,
                                     supported=row.get("supported", "yes"))})
     q = str(query or "").strip() or DEFAULT_QUERY
