@@ -101,6 +101,23 @@ def _path_under_repo_root(p) -> bool:
         return False
 
 
+def _rel_to_open_dir(kwargs) -> bool:
+    """路径是不是**相对于一个已经打开的目录 fd**给进来的。
+
+    为什么必须问这一句（第 118 期，本机 macOS 上实测）：POSIX 的 `shutil.rmtree` 走
+    `_rmtree_safe_fd`，它删除子项时调的是 `os.unlink(entry.name, dir_fd=topfd)`
+    —— 传进来的 `entry.name` 是**裸文件名**，由内核按 `dir_fd` 解析，与当前工作目录无关。
+    守卫若只看 `path`，就只能按 cwd 解析；而 pytest 的 cwd 就是**仓库根** ⇒ 裸名
+    `derived.epub` / `三体.meta.json` / `第1话.mp3` 全被解析成「仓库根里的同名文件」，
+    整批数据安全用例（覆盖前留档 / FB2 重建 / 音频中途失败）在 Linux / macOS 上必红。
+
+    `dir_fd` 有值 ⇒ 解析权在内核，而且 `shutil` 那一侧全程用 fd 操作、自己做过符号链接
+    逃逸检查（它从不把裸名拼回绝对路径）⇒ 守卫让行。Windows 上 `rmtree` 不传 `dir_fd`，
+    行为与从前逐字节一致。
+    """
+    return any(kwargs.get(k) is not None for k in ("dir_fd", "src_dir_fd", "dst_dir_fd"))
+
+
 def _repo_root_guard_fail(verb, p):
     import traceback
 
@@ -150,17 +167,17 @@ def _repo_root_guard():
     }
 
     def _g_remove(path, *a, **k):
-        if _path_under_repo_root(path):
+        if not _rel_to_open_dir(k) and _path_under_repo_root(path):
             _repo_root_guard_fail("os.remove 于", path)
         return _orig["os.remove"](path, *a, **k)
 
     def _g_unlink(path, *a, **k):
-        if _path_under_repo_root(path):
+        if not _rel_to_open_dir(k) and _path_under_repo_root(path):
             _repo_root_guard_fail("os.unlink 于", path)
         return _orig["os.unlink"](path, *a, **k)
 
     def _g_rmdir(path, *a, **k):
-        if _path_under_repo_root(path):
+        if not _rel_to_open_dir(k) and _path_under_repo_root(path):
             _repo_root_guard_fail("os.rmdir 于", path)
         return _orig["os.rmdir"](path, *a, **k)
 
@@ -170,12 +187,12 @@ def _repo_root_guard():
         return _orig["shutil.rmtree"](path, *a, **k)
 
     def _g_rename(src, dst, *a, **k):
-        if _path_under_repo_root(src):
+        if not _rel_to_open_dir(k) and _path_under_repo_root(src):
             _repo_root_guard_fail("os.rename 于", src)
         return _orig["os.rename"](src, dst, *a, **k)
 
     def _g_replace(src, dst, *a, **k):
-        if _path_under_repo_root(src):
+        if not _rel_to_open_dir(k) and _path_under_repo_root(src):
             _repo_root_guard_fail("os.replace 于", src)
         return _orig["os.replace"](src, dst, *a, **k)
 
