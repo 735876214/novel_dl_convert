@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import pathlib
 import re
 import shutil
@@ -57,16 +58,51 @@ def free_path(dst: pathlib.Path) -> pathlib.Path:
     return dst.with_name(f"{stem}~{tag}{suf}")
 
 
+def _library_root_of(target: pathlib.Path) -> "pathlib.Path | None":
+    """``target`` 落在哪个库根之下（按最长前缀命中）；不落任何库根 ⇒ ``None``。
+
+    只用于还原前的「目标盘还在不在」判断（第 119 期），不参与别处路径判定 ——
+    路径包含性判据的唯一真值源仍是 `fileops.safe_path` / `fileops.input_path`。
+    """
+    from . import library as _lib          # 延迟导入：library 依赖 db，recycle 只被上层调
+
+    best = None
+    t = target.resolve()                   # 库根是 resolve 过的，比之前先对齐
+    for lib in _lib.libraries():
+        for r in _lib.roots_of(lib):
+            if t == r or r in t.parents:
+                if best is None or len(str(r)) > len(str(best)):
+                    best = r
+    return best
+
+
 def restore_one(src, dst) -> dict:
     """把回收站里的一份搬回 ``dst``（**文件与目录都行**）。
 
     返回 ``{state, dst, error?}``：``restored``（落在请求的目标上）/ ``renamed``
     （目标已被占，退让到 ``name (2).ext``）/ ``missing``（源不在回收站）/ ``failed``。
+
+    ⚠️ **第 119 期：库根不可用就拒绝还原。** 此前是直接
+    ``target.parent.mkdir(parents=True, exist_ok=True)`` + ``shutil.move`` ——
+    NAS 未挂载 / Docker 挂载缺失时，这句 ``mkdir`` 会在**本地盘**（容器里是 overlay）
+    上造出一条幻影目录，把文件搬进去，然后回收站那份就没了：对用户表现为
+    「文件还在回收站里点还原，还原成功，然后找不到这本书」。判断口径：目标落在某个
+    库根之下、而那个库根不是一个可用目录 ⇒ 放弃（**文件留在回收站**，报错说清原因）。
+    库根之下的一两层子目录照旧自动创建（Komga 布局的目录可能随书一起被回收过）。
     """
     s = pathlib.Path(str(src))
     target = pathlib.Path(str(dst))
     if not s.exists():
         return {"state": "missing", "dst": str(target)}
+    root = _library_root_of(target)
+    if root is not None:
+        try:
+            usable = root.is_dir() and os.access(root, os.R_OK | os.W_OK | os.X_OK)
+        except OSError:
+            usable = False
+        if not usable:
+            return {"state": "failed", "dst": str(target),
+                    "error": f"目标库根当前不可用（未挂载或无权限）：{root}"}
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
         final = free_path(target)

@@ -747,6 +747,36 @@ def _refresh_locked(lib: dict, force: bool) -> dict:
                 _flush()
     _flush()
 
+    # ---- 「根不可用」保护（第 119 期）----
+    # `library._iter_book_entries` 对**读不到的目录**是静默返回空列表的
+    # （`except Exception: return out`），于是 NAS 未挂载 / 网盘掉线 / 权限被改时，
+    # 本轮 `seen` 会是空的，下面那句「索引里有、磁盘上没了 → 删」就会把**整库**
+    # 当成「文件被全删了」清空。而这条路径是**自动**的：监听线程每 ``index_interval``
+    # （默认 60s）无条件 ``refresh_all`` 兜底一次（见 ``watcher._catalog_tick``）。
+    #
+    # 判据只用文件系统：**一个根都访问不了** ⇒ 本轮的「扫到 0 个」不可信，跳过删除。
+    # 反过来说「根都在、就是空的」照旧删（用户真把库清空了），这不是给删除加确认，
+    # 而是拒绝在**读不到**的前提下下「没了」的结论。
+    #
+    # ⚠️ 残留盲区（如实写明，不假装解决）：Docker 的 bind mount 缺失时容器里会
+    # **建出一个空目录**，`is_dir()` 为真、可读 —— 这一层分辨不出来，索引仍会被清空
+    # （数据本身没危险：挂载回来后重新扫描即恢复，book_id 不变、进度与批注都在）。
+    # 真正的不可逆动作在「孤儿清理」那一侧，已由 ``server._orphan_refs`` 的
+    # 「该库当前有书被索引到才判孤儿」挡住。
+    if stored and not seen:
+        usable = False
+        for d in roots:
+            try:
+                if pathlib.Path(d).is_dir() and os.access(d, os.R_OK | os.X_OK):
+                    usable = True
+                    break
+            except OSError:
+                continue
+        if not usable:
+            return {"scanned": 0, "added": added, "removed": 0,
+                    "unchanged": unchanged, "skipped": True,
+                    "reason": "root_unavailable"}
+
     # 索引里有、磁盘上没了的行 → 删。按 (root, rel) 精确删，不整库重来
     # （整库重来在「只有一本书变了」时要重写全部 266 行，网络存储上纯属白付）。
     stale = [k for k in stored if k not in seen]
@@ -1142,7 +1172,6 @@ def raw_book(bid: str) -> "dict | None":
     命中多本时**不抛异常**，返回 None：调用方是「取值」而不是「取书」，
     拿不到就退回传进来的卡片（= 第 62 期之前的行为），不该让编辑器接口 500。
     """
-    from . import library as _lib
     hit = _hit_of(bid, unique_only=True)
     if hit is None:
         return None
