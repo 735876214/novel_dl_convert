@@ -38,16 +38,21 @@ def _patch_auto_fetch(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_auto_fetch_async_allowlist_and_kind(monkeypatch):
-    """可抓格式触发；散落文件（.jpg）/ 原始 .txt 不触发；有声书靠 kind 放行。"""
+    """可抓格式触发；散落文件（.jpg）/ 无后缀且没标 kind 的不触发；有声书靠 kind 放行。
+
+    ⚠️ 第 123 期改口径：`.txt` **要触发**了。第 24 期这里断言「原始 .txt 不会传进来」，
+    那是「TXT 先转 EPUB 再入库」年代的假设；现在 TXT 是**一本独立的书**（书目 `format` 就是
+    ``TXT``），入库自动补全对主力格式不触发属于纯漏项。判据同时换成单一真值源
+    `library.type_for_ext`（此前是一份手抄 allow-list）。
+    """
     calls = _patch_auto_fetch(monkeypatch)
     cfg = {"metadata_fetch": {"enabled": True, "auto_on_import": True}}
 
-    for n in ["a.epub", "b.cbz", "c.cbr", "d.pdf", "e.fb2", "f.mobi", "g.azw3"]:
+    for n in ["a.epub", "b.cbz", "c.cbr", "d.pdf", "e.fb2", "f.mobi", "g.azw3", "h.azw", "i.txt"]:
         auto_fetch_async(n, cfg)
     auto_fetch_async("Series/我的有声书", cfg, kind="audiobook")
-    # 不应触发：散落文件 + 原始 txt（txt 转换后才是 .epub，原始 .txt 不会传进来）
+    # 不应触发：散落文件（判不出书目类型）
     auto_fetch_async("stray.jpg", cfg)
-    auto_fetch_async("note.txt", cfg)
     # 有声书若漏传 kind，名字无后缀也要被拦（不能靠后缀放行）
     auto_fetch_async("Series/我的有声书", cfg)
 
@@ -55,7 +60,7 @@ def test_auto_fetch_async_allowlist_and_kind(monkeypatch):
     watcher.wait_pending(5.0)
 
     assert set(calls) == {
-        "a.epub", "b.cbz", "c.cbr", "d.pdf", "e.fb2", "f.mobi", "g.azw3",
+        "a.epub", "b.cbz", "c.cbr", "d.pdf", "e.fb2", "f.mobi", "g.azw3", "h.azw", "i.txt",
         "Series/我的有声书",
     }
 
