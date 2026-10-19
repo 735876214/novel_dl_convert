@@ -2106,18 +2106,38 @@ def reading_totals(book_ids: set | None = None) -> dict:
     }
 
 
+def local_day(ts) -> "datetime.date":
+    """时间戳 → **本地日历日**（「哪一天读的」的唯一判据）。
+
+    第 119 期收敛：``daily_seconds``（近 N 天柱状）、``active_days``（有阅读的日期）、
+    ``stats`` 里的连续天数与「近 N 天入库」，四处必须同一天口径 ——
+    此前 ``daily_seconds`` 用的是 ``int((now - ended_at) // 86400)`` 的**滚动 24 小时桶**
+    （「今天」= 最近 24 小时），其余三处是 ``time.localtime`` 的日历日，
+    两者最多差一整天，而前端把桶直接标成「N 天前」⇒ 图上位置与「今天」标签对不上，
+    28 天点阵还会和「连续阅读天数」互相矛盾（服务器 UTC + 账号 +08:00 时，
+    「昨天 20:00 读的」落在标着「今天」的桶里）。
+
+    刻意**不**归一到账号时区（``_reading_zone``）：那个问题是「哪个**时段**」
+    （``hour_histogram`` / ``weekday_histogram``），这里是「哪一**天**」；
+    ``completion_months``（哪天读完）一直以来就是本地日历日，一并保持。
+    """
+    return datetime.fromtimestamp(float(ts or 0)).date()
+
+
 def daily_seconds(days: int = 28, book_ids: set | None = None) -> list:
     """近 days 天每日阅读秒数（索引 0 = days-1 天前，末尾 = 今天）。
+
+    「天」的口径见 :func:`local_day`（本地日历日，与连续天数 / 有阅读日期同一判据）。
 
     ``book_ids`` 语义同 ``reading_totals``（None = 全部）。
     """
     c = _connect()
-    now = time.time()
+    today = local_day(time.time())
     buckets = [0.0] * days
     for r in c.execute("SELECT book_id, seconds, ended_at FROM reading_sessions").fetchall():
         if book_ids is not None and r["book_id"] not in book_ids:
             continue
-        d = int((now - r["ended_at"]) // 86400)
+        d = (today - local_day(r["ended_at"])).days
         if 0 <= d < days:
             buckets[days - 1 - d] += float(r["seconds"])
     return buckets
@@ -2164,14 +2184,16 @@ def hour_histogram(book_ids: set | None = None) -> list:
 
 
 def active_days(book_ids: set | None = None) -> list:
-    """有阅读会话的日期（本地时区 YYYY-MM-DD，已排序）。
+    """有阅读会话的日期（``YYYY-MM-DD``，本地日历日，已排序）。
+
+    天口径见 :func:`local_day`（与 ``daily_seconds`` / ``stats.streak`` 一致）。
 
     ``book_ids`` 语义同 ``reading_totals``（None = 全部）。
     """
     c = _connect()
     rows = c.execute("SELECT book_id, ended_at FROM reading_sessions").fetchall()
     return sorted({
-        time.strftime("%Y-%m-%d", time.localtime(r["ended_at"]))
+        local_day(r["ended_at"]).isoformat()
         for r in rows
         if book_ids is None or r["book_id"] in book_ids
     })

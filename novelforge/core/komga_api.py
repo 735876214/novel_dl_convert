@@ -400,7 +400,17 @@ def book_dto(b: dict, series_name: str = "", th=None) -> dict:
 # ---------------- 分页壳 ----------------
 
 def paginate(items: list, page=0, size=20) -> dict:
-    """Spring Data 风格分页壳 —— 客户端解析的是这个结构，**不是裸数组**。"""
+    """Spring Data 风格分页壳 —— 客户端解析的是这个结构，**不是裸数组**。
+
+    ⚠️ 第 119 期：与 Spring ``PageImpl`` 对齐了两处，此前是两个「看着更友好、
+    实际会让客户端算错」的偏差：
+    ① 空集合的 ``totalPages`` 是 **0**（不是 1）—— 客户端拿 ``totalPages`` 算
+       循环次数 / 进度条，1 会让它以为还有一页；
+    ② 请求页码越界时 ``content`` 为**空**、``number`` 原样回显（不是悄悄夹到最后一页）
+       —— 夹住会把「客户端算错页」伪装成「这一页就这么点内容」，翻页循环永远停不下来。
+    ``first`` / ``last`` 仍按 Spring 的算式（``number == 0`` / ``number + 1 >= totalPages``），
+    故空集合上两者都是 true。
+    """
     try:
         page = max(0, int(page))
     except (TypeError, ValueError):
@@ -410,15 +420,15 @@ def paginate(items: list, page=0, size=20) -> dict:
     except (TypeError, ValueError):
         size = 20
     total = len(items)
-    pages = max(1, (total + size - 1) // size)
-    page = min(page, pages - 1)
-    chunk = items[page * size:(page + 1) * size]
+    pages = (total + size - 1) // size
+    start = page * size
+    chunk = items[start:start + size]
     return {
         "content": chunk, "totalElements": total, "totalPages": pages,
         "size": size, "number": page, "numberOfElements": len(chunk),
-        "first": page == 0, "last": page >= pages - 1, "empty": not chunk,
+        "first": page == 0, "last": page + 1 >= pages, "empty": not chunk,
         "pageable": {
-            "pageNumber": page, "pageSize": size, "offset": page * size,
+            "pageNumber": page, "pageSize": size, "offset": start,
             "paged": True, "unpaged": False,
             "sort": {"sorted": False, "unsorted": True, "empty": True},
         },
@@ -478,9 +488,16 @@ def apply_read_progress(b: dict, payload: dict = None) -> tuple:
     """Komga 的进度 → 本项目的 ``(locator, percent)``。
 
     - ``completed: true`` → ``percent = 100``（页码忽略，与 Komga 语义一致）
-    - 漫画/PDF：``page``（1 起）→ ``locator = page - 1``
+    - 漫画/PDF：``page``（**1 起**）→ ``locator = page - 1``；``page`` 缺失或 ≤ 0
+      是不合法的输入（1 起编号里没有第 0 页）⇒ 只把 percent 归零、**保留原 locator**
     - EPUB：``locator.locations.progression`` → percent；
       ``locator.href`` 若能对上 spine 的某一章 → 同时更新 locator（对不上就只更新 percent）
+
+    ⚠️ 第 119 期：EPUB 分支原来写 ``if not locator: locator = <既有>``，把**第 0 章**
+    （spine 第 1 章，locator 合法值就是 0）当成「href 没对上」而拒绝写入 ——
+    读者在第一章时进度永远停在原处（探针：``href`` 指第 0 章、progression 0.02 ⇒
+    返回 ``(7, 2.0)``：percent 动了、位置没动）。改用 ``None`` 当哨兵后，
+    「第 1 章」是 0、照样写入。
     """
     p = payload or {}
     if p.get("completed"):
@@ -491,9 +508,12 @@ def apply_read_progress(b: dict, payload: dict = None) -> tuple:
             page = int(p.get("page") or 0)
         except (TypeError, ValueError):
             page = 0
-        percent = 0.0
         total = int(b.get("pages") or 0)
-        if total > 0 and page > 0:
+        if page <= 0:
+            # 非法页码不覆盖位置（见 docstring）；percent 归零表示「读到这里」没有进度
+            return (int((db.get_progress(b["id"]) or {}).get("locator") or 0), 0.0)
+        percent = 0.0
+        if total > 0:
             percent = min(100.0, round(page / total * 100.0, 4))
         return (max(0, page - 1), percent)
 
@@ -503,7 +523,7 @@ def apply_read_progress(b: dict, payload: dict = None) -> tuple:
         percent = min(100.0, max(0.0, float(prog) * 100.0))
     except (TypeError, ValueError):
         percent = 0.0
-    locator = 0
+    locator = None
     href = unquote(str((loc or {}).get("href") or "")) if isinstance(loc, dict) else ""
     if href:
         try:
@@ -511,8 +531,8 @@ def apply_read_progress(b: dict, payload: dict = None) -> tuple:
             if href in spine:
                 locator = spine.index(href)
         except Exception:
-            locator = 0
-    if not locator:
+            locator = None
+    if locator is None:
         locator = int((db.get_progress(b["id"]) or {}).get("locator") or 0)
     return (locator, percent)
 

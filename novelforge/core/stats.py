@@ -87,8 +87,12 @@ heatmap 用）、``genre_cooccurrence``（题材两两共现，弦图用）、``
   允许把 20% 的书标成 finished，那会造出「后档比前档多」的畸形图。
 """
 import time
+from datetime import timedelta
 
 from . import db, lib_settings, library, metascore
+
+#: 一天（连续阅读天数的逐日递减用；见「连续阅读天数」那段的注释）。
+_ONE_DAY = timedelta(days=1)
 
 #: 体积榜固定长度（上游该榜名为「Top 50 Largest Books」）。
 #: 刻意**不**跟随 `top` 参数：那个参数管的是作者/系列/出版社/题材四个计数器榜。
@@ -400,10 +404,13 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     recent.sort(key=lambda r: r["updated_at"], reverse=True)
 
     # 近 N 天入库节奏（按文件 mtime；buckets[0] = N 天前，buckets[-1] = 今天）
+    # 天口径统一走 ``db.local_day``（第 119 期）：此前是 ``// 86400`` 的滚动 24 小时桶，
+    # 而「今天」在别处是日历日，前端却按「N 天前」标注 ⇒ 标签最多错一整天。
     now = time.time()
+    today_d = db.local_day(now)
     buckets = [0] * days
     for b in bs:
-        d = int((now - (b.get("mtime") or 0)) // 86400)
+        d = (today_d - db.local_day(b.get("mtime") or 0)).days
         if 0 <= d < days:
             buckets[days - 1 - d] += 1
 
@@ -415,13 +422,15 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     active = db.active_days(ids)
     day_set = set(active)
 
-    # 连续阅读天数：今天有阅读就从今天算起，否则从昨天算起
-    today = time.strftime("%Y-%m-%d", time.localtime(now))
-    yesterday = time.strftime("%Y-%m-%d", time.localtime(now - 86400))
+    # 连续阅读天数：今天有阅读就从今天算起，否则从昨天算起。
+    # 逐日递减用**日期运算**（第 119 期）：原来写 ``now - i * 86400`` 再 ``localtime``，
+    # 夏令时切换那天会跳过或重复一天（本地日不是恒等 86400 秒）。
     streak = 0
+    today = today_d.isoformat()
+    yesterday = (today_d - _ONE_DAY).isoformat()
     if today in day_set or yesterday in day_set:
         i = 0 if today in day_set else 1
-        while time.strftime("%Y-%m-%d", time.localtime(now - i * 86400)) in day_set:
+        while (today_d - _ONE_DAY * i).isoformat() in day_set:
             streak += 1
             i += 1
 

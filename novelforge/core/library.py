@@ -2374,6 +2374,9 @@ def duplicate_groups(threshold: int = 85, library_id=None) -> dict:
             continue
         parent = list(range(n))
 
+        # ⚠️ `find` 闭包捕获外层循环变量 `parent`（ruff B023 会报）。**这里不是缺陷**：
+        # 它只在本轮被调用（并查集用完即弃），下一轮 `parent` 已经重新绑定、旧闭包不再被引用。
+        # 唯一真缺陷的形态是「把闭包存起来事后调用」，见本文件别处一律显式传参的写法。
         def find(x: int) -> int:
             while parent[x] != x:
                 parent[x] = parent[parent[x]]

@@ -165,7 +165,9 @@ def _update_target(book: dict, mgr) -> tuple:
         raise ValueError(f"算不出这本书的留档路径（{book.get('name')}），无法追更")
     if not sidecar.is_file():
         raise ValueError(f"未找到 sidecar 元数据 {sidecar.name}，无法增量更新")
-    meta = json.loads(sidecar.read_text(encoding="utf-8"))
+    # 先确认留档能解析：坏 JSON 要**现在**报错，而不是在增量合并到一半时炸
+    # （此前这行赋给一个没人用的 `meta`，ruff F841 只报了「未使用变量」，看不出它是闸门）
+    json.loads(sidecar.read_text(encoding="utf-8"))
     reason = mgr.gate_reason()
     if reason:
         raise Blocked(reason)

@@ -374,6 +374,9 @@ def log(action: str, file: str, status: str, output: str = "", detail: str = "",
             历史条目没有该字段，读取端按「未知」渲染，不影响兼容性。
     """
     now = datetime.now()
+    # ``ts`` 是**给人看的本地墙钟**（活动日志页直接显示这一列），刻意不做时区归一；
+    # 需要可排序 / 可比较的时刻一律用 ``ts_epoch``（第 119 期核对：只有这一处是
+    # naive ``datetime.now()``，komga_api / opds 那两处早已带 ``timezone.utc``）。
     entry = {
         "ts": now.strftime(TS_FORMAT),
         "ts_epoch": round(time.time(), 3),
