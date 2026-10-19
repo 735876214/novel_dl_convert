@@ -93,22 +93,22 @@ def auto_fetch_async(name: str, cfg: dict | None, kind: str | None = None) -> No
     1. **必须异步**：抓取要外呼公网（每本 1–3 秒）。watcher 是后台线程，同步做会拖慢
        扫描轮次；起个 daemon 线程最省心 —— 晚几秒补上元数据没有任何影响。
     2. **吞掉一切异常**：这是旁路增强，不能因为外网不通就影响入库结果。
-    3. **只对「可抓格式」触发**：第 22 期起元数据只落服务端 DB、不再写 OPF，原
-       「其它格式无 OPF 可写」的理由已失效；放开到电子书（epub / mobi / azw3 / pdf / fb2）
-       与漫画（cbz / cbr）。有声书是**目录条目**、名字无后缀，由调用点显式传
-       ``kind="audiobook"`` 放行（与 `metafetch.plan` 对格式无依赖的口径一致）。
+    3. **只对「书目类型已知」的格式触发**：第 22 期起元数据只落服务端 DB、不再写 OPF，原
+       「其它格式无 OPF 可写」的理由已失效；判据改为 `library.type_for_ext`（格式→类型的
+       **唯一真值源**，第 122 期收敛）落在电子书 / 漫画上。有声书是**目录条目**、名字无后缀，
+       由调用点显式传 ``kind="audiobook"`` 放行（与 `metafetch.plan` 对格式无依赖的口径一致）。
+       ⚠️ 第 123 期之前这里是一份手抄的 allow-list，**漏了 `.txt`** —— 而 TXT 是本项目主力
+       格式（手动刮削一直可用），于是打开「入库自动补全」后主力格式永不触发。
     4. **仍受双重门控**：``metadata_fetch.enabled`` 且 ``auto_on_import`` 为真才触发；
        默认关闭、默认不联网、默认行为零变化。
     """
     mf = (cfg or {}).get("metadata_fetch") or {}
     if not mf.get("enabled") or not mf.get("auto_on_import"):
         return
-    # 目录型有声书靠 kind 显式放行；其余格式按 allow-list（名字无后缀的散落文件不抓，
-    # 避免「入库即外呼」误伤无关文件）。
+    # 目录型有声书靠 kind 显式放行；其余按「格式 → 类型」的唯一真值源判
+    # （名字无后缀的散落文件判不出类型 ⇒ 不抓，避免「入库即外呼」误伤无关文件）。
     if kind != "audiobook":
-        ext = Path(str(name)).suffix.lower()
-        from . import comics  # 延迟导入：避免 core 内循环依赖
-        if ext not in {".epub", ".mobi", ".azw3", ".azw", ".pdf", ".fb2", *comics.COMIC_EXTS}:
+        if library.type_for_ext(Path(str(name)).suffix) not in ("ebook", "comic"):
             return
 
     def _run():

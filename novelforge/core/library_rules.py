@@ -198,17 +198,26 @@ def decide(src=None, name: str = "", meta: dict = None, base_dir=None) -> "dict 
         if hit:
             return hit
 
-    # 2) 格式（确定性最高）—— 容器（.zip）在这里**按内容**判类型，不看后缀
+    # 2) 格式（确定性最高）—— 容器（.zip）在这里**按内容**判类型，不看后缀。
+    #    只认**类型专用库**；`_by_format` 的 mixed 回落留到第 4 步当兜底。
+    #    ⚠️ 第 123 期改口（此前两道偏差各占一半）：原来这里 `in ("ebook","comic","audiobook")`
+    #    把 mixed 回落就地丢弃 ⇒ 只建了一个综合库的部署按格式**一本都收不进来**（只剩
+    #    库名 / 关键词两条路）；但如果在这里就接受 mixed，混合库又会抢在关键词之前，
+    #    让「关键字路由」永远不生效。两条都要满足 ⇒ mixed 放到关键词之后。
     hit = _by_format(filename, src)
-    if hit and hit.get("type") in ("ebook", "comic", "audiobook"):
+    if hit and str(hit.get("type") or "") in ("ebook", "comic", "audiobook"):
         return hit
 
     # 3) 元数据 / 文件名关键词（最容易误判，最后才用）
-    hit = _by_keywords(_haystack(src, filename, meta), filename)
+    kw = _by_keywords(_haystack(src, filename, meta), filename)
+    if kw:
+        return kw
+
+    # 4) 兜底：格式只判到 mixed（「综合库 = 什么都收」）—— 第 123 期补的，此前是死代码
     if hit:
         return hit
 
-    # 4) 都不可靠 → None。**没有默认库可退**，调用方一律拒收（见 resolve_target）
+    # 5) 都不可靠 → None。**没有默认库可退**，调用方一律拒收（见 resolve_target）
     return None
 
 

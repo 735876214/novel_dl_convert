@@ -3602,10 +3602,16 @@ def _unit_file(bid: str, index: int):
 
 
 def _unit_comic(bid: str, index: int):
-    """这一话的归档路径（仅 CBZ / CBR 话）；缺 RAR 能力时 503（与 `/comic` 同款）。"""
+    """这一话的归档路径（内容得是图片序列）；缺 RAR 能力时 503（与 `/comic` 同款）。
+
+    ⚠️ 第 123 期改口径：`.zip` / `.rar` / `.7z` 与 `.cbz` / `.cbr` 一样是**容器**，
+    能不能按漫画读取决于**内容**（`units.kind_of` 已按内容分派）。此前话术说「仅 CBZ / CBR」，
+    实际却放行任何 `comics.COMIC_EXTS` —— 于是一话一个装文档的 `.zip` 也走到这里
+    （前端按 `kind` 选渲染器，`kind` 为空就不会调本端点，所以这段话术只是兜底）。
+    """
     path = _unit_file(bid, index)
     if not comics.is_comic(path):
-        raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
+        raise HTTPException(400, "这一话不是图片压缩包（CBZ / CBR / ZIP / RAR / 7Z 里得是图片）")
     problem = comics.backend_problem(path)      # 缺 bsdtar/unrar 或 py7zr —— 唯一判据（第 111 期）
     if problem:
         raise HTTPException(503, problem)
@@ -5344,9 +5350,11 @@ def api_library_source_dirs(root: int = None, path: str = ""):
             "base": str(base), "path": str(target), "entries": entries}
 
 
-#: 事实校正时用来「看目录里到底有些什么」的扩展名集合（媒体类，尽量宽）
-_ANY_MEDIA_EXTS = tuple(units.UNIT_EXTS) + (".epub", ".mobi", ".azw3", ".azw", ".fb2", ".txt",
-                                           ".zip", ".rar", ".7z")
+#: 事实校正时用来「看目录里到底有些什么」的扩展名集合（媒体类，尽量宽）。
+#: ⚠️ 第 123 期起**派生**自唯一真值源 `library.BOOK_EXTS`：此前是「`units.UNIT_EXTS` + 手抄
+#: 一串文档后缀」，同一个家族要改两处 —— `.azw` 进白名单那次就漏了这一处（于是 `.azw`
+#: 在「目录里到底有什么」的事实校正里被当成「不是媒体」）。
+_ANY_MEDIA_EXTS = library.BOOK_EXTS
 
 
 def _scan_media(dirs, cap: int = 3000) -> tuple:
