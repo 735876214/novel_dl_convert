@@ -16,10 +16,12 @@
 kind             format          含义
 ===============  ==============  ==================================================
 ``comic``        ``CBZ``         容器内是图片序列 ⇒ 与 .cbz **完全同等待遇**（可读）
+                              （图片 + 旁注文档，如 `说明.txt` / `ComicInfo.xml`，**也算**
+                              comic —— 见 :data:`_TEXT_DOC_EXTS`）
 ``epub``/``pdf`` 同名大写       容器内**恰好一份**文档（典型是被改了后缀的 EPUB）
 ``nested``       容器自身        内层还是压缩包 ⇒ 需先展开
 ``multi``        容器自身        内有多份文档 ⇒ 需先展开
-``mixed``        容器自身        图文混装 ⇒ 判不准，不猜
+``mixed``        容器自身        图片 + 一本真文档 ⇒ 判不准，不猜
 ``empty``        容器自身        一个文件都没有
 ``broken``       容器自身        坏包 / 魔数不认识 / **缺解压能力**（reason 说清是哪种）
 ===============  ==============  ==================================================
@@ -47,9 +49,19 @@ CONTAINER_FORMATS = tuple(e.lstrip(".").upper() for e in CONTAINER_EXTS)
 #: 容器内出现任一 ⇔ 它其实是一份 EPUB
 _EPUB_MARKERS = ("mimetype", "META-INF/container.xml")
 
-#: 容器内**恰好一份**这些文档时，它就是这个格式
+#: 容器内**恰好一份**这些文档时，它就是这个格式。
+#: ⚠️ `.mobi` / `.azw3` / `.azw` 三个必须与 `core/mobicache.EXTS` 同进同出（契约：
+#: `tests/test_format_audit_123.py::test_容器文档表覆盖直读格式`）—— 第 123 期之前
+#: 漏了 `.azw`，于是「`.zip` 里是一份 `.azw`」被判成 `unknown`（同一个 MOBI 家族、
+#: 只差一个后缀），而且它不在 `_UNPACK_EXTS` 里 ⇒ 连展开都抽不出来。
 _DOC_FORMATS = {".epub": "EPUB", ".pdf": "PDF", ".txt": "TXT", ".mobi": "MOBI",
-                ".azw3": "AZW3", ".fb2": "FB2"}
+                ".azw3": "AZW3", ".azw": "AZW", ".fb2": "FB2"}
+
+#: 容器里**顺带**出现的旁注类文档（说明 / 校验 / 漫画元数据）。它们与图片同时出现时
+#: 不该把整份容器判成「判不准」：漫画包带一个 `说明.txt` / `ComicInfo.xml` 是**常态**，
+#: 按那份文档拒读等于把最常见的形态挡在门外。
+_TEXT_DOC_EXTS = (".txt", ".nfo", ".md", ".rtf", ".html", ".htm", ".xml", ".json",
+                  ".url", ".sfv")
 
 #: 内层还是压缩包 ⇒ 需先展开
 _ARCHIVE_EXTS = (".zip", ".cbz", ".cbr", ".rar", ".7z")
@@ -130,16 +142,31 @@ def analyze(path) -> dict:
     elif images and not docs:
         out.update(kind="comic", format="CBZ", readable=True,
                    reason=f"容器内是 {len(images)} 张图片，按漫画包读取")
-    elif len(docs) == 1 and not images:
+    elif images and docs:
+        # 「图片 + 文档」有两种：**漫画包顺带一份旁注**（说明 / ComicInfo.xml —— 常态，
+        # 按漫画读，忽略那份文档）与**真歧义**（图片 + 一本 EPUB/PDF —— 判不准，不猜）。
+        # ⚠️ 第 123 期之前这里一律判 mixed 不可读，于是「同样的字节存成 .cbz 能读、存成
+        # .zip 读不了」，而且展开也救不回（`_unpack_entries` 只抽文档、不抽图片）——
+        # 用户报了「zip 格式的书导入后不能识别」的另一半。
+        stray = [n for n in docs if _suffix(n) not in _TEXT_DOC_EXTS]
+        if stray:
+            out.update(kind="mixed",
+                       reason=f"容器内既有 {len(images)} 张图片又有 "
+                              f"{len(stray)} 份文档（如 {pathlib.PurePath(stray[0]).name}），"
+                              f"判不准该按漫画读还是按文档读（不猜）")
+        else:
+            notes = [pathlib.PurePath(n).name for n in docs[:3]]
+            out.update(kind="comic", format="CBZ", readable=True,
+                       reason=f"容器内是 {len(images)} 张图片（另有 {len(docs)} 份旁注文档："
+                              f"{'、'.join(notes)}，按漫画读时忽略）")
+            out["evidence"] = {**out["evidence"], "ignored_docs": [str(n) for n in docs]}
+    elif len(docs) == 1:
         fmt = _DOC_FORMATS[_suffix(docs[0])]
         out.update(kind=fmt.lower(), format=fmt, needs_unwrap=True,
                    reason=f"容器内是一份 {fmt}，需要先展开才能读")
     elif len(docs) > 1:
         out.update(kind="multi", needs_unwrap=True,
                    reason=f"容器内有 {len(docs)} 份文档，需要先展开")
-    elif images and docs:
-        out.update(kind="mixed",
-                   reason=f"容器内既有 {len(images)} 张图片又有文档，判不准（不猜）")
     elif not names:
         out.update(kind="empty", reason="容器内没有任何文件")
     else:

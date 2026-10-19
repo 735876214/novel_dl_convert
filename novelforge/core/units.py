@@ -31,7 +31,7 @@ import os
 import pathlib
 import re
 
-from . import audio, comics
+from . import audio, comics, zipkind
 
 #: 序号单元的单位词（简繁并列）。**只有这些词**算「话」的单位 —— 这是「不过度合并」的第一道闸。
 UNIT_WORDS = ("话", "話", "卷", "回", "册", "集", "部", "篇", "幕", "章")
@@ -222,14 +222,25 @@ def kind_of(path) -> str:
     """这一话的形态：``"audio"`` / ``"comic"``（CBZ/CBR）/ ``"pdf"``；都不认识返回空串。
 
     阅读器据此选渲染方式（音频播放器 / 逐页看图 / pdf.js）。
+
+    ⚠️ **通用容器要看内容**（第 123 期）：``.zip`` / ``.rar`` / ``.7z`` 是容器、不是漫画，
+    与 `core/zipkind.py` 同一条纪律。此前这里对它们一律回 ``"comic"``，于是
+    「一话一个 zip、里面其实是 PDF / EPUB」的树会被塞进漫画阅读器（0 页、什么都看不到）。
+    现在只有内容确实是图片序列才回 ``"comic"``，其余回空串 —— 前端据此给「下载 / 不支持」，
+    而不是假装能读（``AGENTS.md`` §1「不做假交互」）。
     """
     ext = pathlib.PurePath(str(path)).suffix.lower()
     if ext in audio.AUDIO_EXTS:
         return "audio"
-    if ext in comics.COMIC_EXTS:
-        return "comic"
     if ext == ".pdf":
         return "pdf"
+    if ext in comics.COMIC_EXTS:
+        if zipkind.is_container(path):
+            try:
+                return "comic" if zipkind.analyze(path).get("kind") == "comic" else ""
+            except Exception:                       # noqa: BLE001 —— 旁路判据，坏包当「不认识」
+                return ""
+        return "comic"
     return ""
 
 

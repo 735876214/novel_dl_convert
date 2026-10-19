@@ -2001,6 +2001,14 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
         # `is_comic` **只看后缀** —— 少了这一条，一个「内部其实是 EPUB」的 zip 也会
         # 被当成漫画去数页（数出来的是 EPUB 里的插图张数），用户看到一本假的漫画。
         info.update(comics.probe(f))
+        # 0 页且没报错 ⇒ **后缀与内容不符**（典型：`.cbz` 里装的是一份文档，第 123 期）。
+        # 此前这种情况一声不吭：书架显示「0 页」、也不进「待修复」，点开才由阅读器报
+        # 「这本漫画里没有可显示的图片」—— 用户只能猜。判据借用 `zipkind.analyze`
+        # （内容分派），不在本函数另写一套：只有「里面确实是图片序列」才不标问题。
+        if not info.get("pages") and not info.get("unparsable"):
+            v2 = zip_v if zip_v is not None else zipkind.analyze(f)
+            if v2.get("kind") != "comic":
+                info["unparsable"] = True
     elif f.suffix.lower() == ".fb2":
         # 第 112 期：FB2 直读 —— 扫描期只做**廉价头部扫描**判有没有内嵌封面（整本 XML 解析
         # 留给派生缓存 `fb2cache`，别把「丢一本书进库」变成一次 XML 解析）。
