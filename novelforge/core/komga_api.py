@@ -86,15 +86,26 @@ SESSION_COOKIE = "KOMGA-SESSION"
 #: 会话签名密钥：复用部署时已有的 AUTH_SECRET，不新增配置项
 _SESSION_SECRET = (os.getenv("AUTH_SECRET") or "novelforge-komga").encode()
 
-#: 格式 → Komga 客户端要的媒体类型
+#: 格式 → Komga 客户端要的媒体类型。
+#: ⚠️ 第 123 期补齐 FB2 / AZW / AUDIO / UNITS：此前一律落 `application/octet-stream`，
+#: 客户端只能把它当「未知二进制」——下载按钮给不出类型、书架也不显示格式。
 MEDIA_TYPES = {
     "EPUB": "application/epub+zip", "PDF": "application/pdf",
     "CBZ": "application/vnd.comicbook+zip", "CBR": "application/vnd.comicbook-rar",
     "MOBI": "application/x-mobipocket-ebook",
-    "AZW3": "application/x-mobipocket-ebook", "TXT": "text/plain",
+    "AZW3": "application/x-mobipocket-ebook", "AZW": "application/vnd.amazon.ebook",
+    "TXT": "text/plain", "FB2": "application/x-fictionbook+xml",
+    "AUDIO": "audio/mpeg", "UNITS": "application/octet-stream",
+    # 「判不出形态的容器」（format 保持 ZIP）——它至少该有个客户端认识的身份：就是一份 zip
+    "ZIP": "application/zip",
 }
-#: Komga 用 mediaProfile 决定阅读器：漫画类走 DIVINA，EPUB 走 EPUB，PDF 走 PDF。
+#: Komga 用 ``mediaProfile`` 决定用哪个阅读器，而**客户端只有** EPUB / PDF / 漫画归档这四类
+#: 阅读器（上游 `MediaType.kt` 的 ``profile`` 也只在它们身上非空，其余 `fromMediaType` 回 null）。
 #: CBR 与 CBZ 同为漫画容器（第 15 期补上；此前缺它，CBR 会退化成 octet-stream）。
+#: ⚠️ 第 123 期之前这里是 ``_PROFILES.get(fmt, "DIVINA")`` —— MOBI / AZW3 / TXT / FB2 全被
+#: 当成漫画，客户端点「阅读」拿到的是 0 页的空阅读器。现在给不出 profile 的格式如实报
+#: ``status = "UNSUPPORTED"``（Komga 的 ``Media.Status`` 原值）+ ``mediaProfile = null``
+#: ——「不做假交互」（AGENTS.md §1），客户端据此不显示「阅读」按钮。
 _PROFILES = {"EPUB": "EPUB", "PDF": "PDF", "CBZ": "DIVINA", "CBR": "DIVINA"}
 
 
@@ -365,6 +376,7 @@ def book_dto(b: dict, series_name: str = "", th=None) -> dict:
         number = int(str(b.get("series_index") or "").strip() or 1)
     except ValueError:
         number = 1
+    profile = _PROFILES.get(fmt)
     return {
         "id": b["id"], "seriesId": series_id(sname), "seriesTitle": sname,
         "libraryId": book_library_id(b),
@@ -373,9 +385,11 @@ def book_dto(b: dict, series_name: str = "", th=None) -> dict:
         "created": iso(b.get("mtime")), "lastModified": iso(b.get("mtime")),
         "fileLastModified": iso(b.get("mtime")), "sizeBytes": int(b.get("size") or 0),
         "media": {
-            "status": "READY", "mediaType": MEDIA_TYPES.get(fmt, "application/octet-stream"),
+            # 只有客户端真有阅读器的格式才 READY，其余如实 UNSUPPORTED（见 `_PROFILES`）
+            "status": "READY" if profile else "UNSUPPORTED",
+            "mediaType": MEDIA_TYPES.get(fmt, "application/octet-stream"),
             "pagesCount": pages, "comment": "",
-            "mediaProfile": _PROFILES.get(fmt, "DIVINA"),
+            "mediaProfile": profile,
             "epubDivinaCompatible": fmt == "EPUB",
             "epubIsKepub": False, "kepubDivinaCompatible": False,
         },

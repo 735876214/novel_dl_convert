@@ -34,6 +34,11 @@ _MIME = {
     "PDF": "application/pdf",
     "MOBI": "application/x-mobipocket-ebook",
     "AZW3": "application/x-mobipocket-ebook",
+    # 第 123 期：`.azw` / `.fb2` 此前落到 octet-stream —— 按本表自己的口径（客户端不认识的
+    # 类型就不出现下载按钮）等于「这两类书在 OPDS 里下不了」。`.fb2` 用 de-facto 类型
+    # `application/x-fictionbook+xml`（Calibre / KOReader 都认）。
+    "AZW": "application/vnd.amazon.ebook",
+    "FB2": "application/x-fictionbook+xml",
     "CBZ": "application/vnd.comicbook+zip",
     "CBR": "application/vnd.comicbook-rar",
     # 第 87 期：`.zip` 归一成真实形态（图片档 → CBZ）后，仍可能剩下「判不出形态的
