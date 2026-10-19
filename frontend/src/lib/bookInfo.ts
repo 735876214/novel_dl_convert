@@ -87,6 +87,9 @@ export function sortBySeriesIndex(list: BookCard[]): BookCard[] {
     const yOk = !Number.isNaN(y)
     if (xOk && yOk && x !== y) return x - y
     if (xOk !== yOk) return xOk ? -1 : 1
-    return (a.title || a.name).localeCompare(b.title || b.name, 'zh')
+    // 书名兜底排序按**数字大小**（「第2卷」在「第10卷」前）。不带 `numeric` 时
+    // localeCompare 是纯字典序，而这条兜底恰在「册号缺失 / 解析不出」时才走，
+    // 那些书名里带数字的概率反而更高（第 119 期）。
+    return (a.title || a.name).localeCompare(b.title || b.name, 'zh', { numeric: true })
   })
 }
