@@ -1180,7 +1180,7 @@ def _split_regex(text: str, pattern: str) -> list[dict]:
     走 `saferegex` 超时的意义最大；降级路径下超长输入会被 `RegexInputTooLong` 拒掉，
     理由如实写在使用说明里（绝不静默卡死）。
     """
-    from ..core.detect import split_by_offsets, regex_bounds
+    from ..core.detect import split_by_offsets
 
     # 复用 detect 的偏移切分：把单条正则包装成多匹配形式
     pat = saferegex.compile(pattern, re.M)

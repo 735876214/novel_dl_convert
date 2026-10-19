@@ -20,7 +20,7 @@ def _safe_name(s: str) -> str:
     s = re.sub(r"[\\/:*?\"<>|]", "_", s)
     return s[:120] or "book"
 
-from ..core import network, detect, pipeline, reading_list
+from ..core import network, pipeline, reading_list
 from .base import REGISTRY
 
 #: 追更用的**按路径**互斥锁（第 87 期收尾补）。

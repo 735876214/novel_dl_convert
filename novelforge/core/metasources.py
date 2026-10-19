@@ -29,7 +29,6 @@ import httpx
 from .. import config
 from . import netdiag
 from .library import norm_key
-from .sources import Provider, kinds
 from .sources import registry as _src_registry
 
 _log = logging.getLogger("novelforge")

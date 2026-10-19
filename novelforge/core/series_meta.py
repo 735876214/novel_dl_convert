@@ -26,7 +26,7 @@ import threading
 from collections import Counter
 
 from .. import config
-from . import activity_log, db, fileops, lib_settings, library, metasources
+from . import activity_log, db, lib_settings, library, metasources
 
 #: 可被本地覆盖的展示字段（与 :data:`db.SERIES_LOCAL_COLS` 一一对应）
 FIELDS = ("description", "publisher", "first_year", "tags")

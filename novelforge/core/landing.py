@@ -385,7 +385,7 @@ async def _first_landing(mgr, book: dict, row: dict, *,
     ``replacing_readable``：本次是不是在盖一本**本来读得了**的书（显式覆盖那条路）——
     只用来把报告写实（此前无论哪条路都写「本地读不了」）。
     """
-    from . import autoupdate, watcher as watcher_mod
+    from . import watcher as watcher_mod
     bdir = book_dir(book)
     name, stem = book_name(book), book_stem(book)
     if bdir is None or not name:
