@@ -54,6 +54,7 @@ from .sources import probe as source_probe     # 第 86 期：单字探测 / 全
 from .sources import online as online_mod      # 第 93 期：在线阅读（取数 + 缓存落盘）
 from .core import network as network_mod       # 第 86 期：JS 解密通道的部署前提（Node）
 from .core import saferegex                    # 第 94 期阶段 4c：执行期正则的超时能力
+from .core import csvsafe                        # 第 132 期：CSV 导出的公式注入防护
 
 # 启动即确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在
 # （用户书源在 novelforge.sources 包导入时已自动加载）
@@ -2523,13 +2524,13 @@ def api_export_books():
 
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["书名", "文件名", "作者", "系列", "序号", "格式", "大小(字节)",
-                "出版年", "出版社", "语言", "ISBN", "题材", "入库日期",
-                "阅读进度%", "阅读状态", "评分", "批注数"])
+    w.writerow(csvsafe.row(["书名", "文件名", "作者", "系列", "序号", "格式", "大小(字节)",
+                           "出版年", "出版社", "语言", "ISBN", "题材", "入库日期",
+                           "阅读进度%", "阅读状态", "评分", "批注数"]))
     for b in library.export_rows():
         bid = b["id"]
         st = statuses.get(bid)
-        w.writerow([
+        w.writerow(csvsafe.row([
             b["title"], b["name"], b["author"], b["series"], b["series_index"],
             b["format"], b["size"], b["year"], b["publisher"], b["language"],
             b["isbn"], b["tags"], b["added"],
@@ -2537,7 +2538,7 @@ def api_export_books():
             (st or {}).get("status") or "",
             ratings.get(bid, 0),
             annos.get(bid, 0),
-        ])
+        ]))
     return Response(
         content="\ufeff" + buf.getvalue(),
         media_type="text/csv; charset=utf-8",
@@ -5026,11 +5027,12 @@ def api_annotation_export(format: str = "markdown", library_id: str = "", book_i
     if fmt == "csv":
         buf = io.StringIO()
         w = csv.writer(buf)
-        w.writerow(["book_title", "book_author", "chapter", "quote", "note", "color", "style", "created_at"])
+        w.writerow(csvsafe.row(["book_title", "book_author", "chapter", "quote",
+                                "note", "color", "style", "created_at"]))
         for r in rows:
-            w.writerow([r.get("book_title", ""), r.get("book_author", ""), r.get("chapter", ""),
-                        r.get("quote", ""), r.get("note", ""), r.get("color", ""),
-                        r.get("style", ""), r.get("created_at", "")])
+            w.writerow(csvsafe.row([r.get("book_title", ""), r.get("book_author", ""), r.get("chapter", ""),
+                                    r.get("quote", ""), r.get("note", ""), r.get("color", ""),
+                                    r.get("style", ""), r.get("created_at", "")]))
         return Response(
             content=buf.getvalue(), media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="annotations-{stamp}.csv"'})
