@@ -347,6 +347,45 @@ _MEDIA_TOKEN_PATHS = (
     re.compile(r"^/api/books/[^/]+/units/\d+/page/\d+$"),
 )
 
+#: 书内资源 / 封面这两个出口的**安全头**（第 134 期，判据只此一份）。
+#:
+#: 它们的媒体类型来自**文件后缀或书里的声明**，都不可信：书里一个 ``.svg`` 被
+#: `_rewrite_assets` 改写成 ``/asset?p=…&token=…`` 后，用户点一下就是**顶层导航**到
+#: 同源响应 —— SVG 里的 ``<script>`` 于是能读 ``localStorage.nf_token``（30 天登录令牌）。
+#: `nosniff` 禁掉浏览器的内容嗅探（别把未知字节猜成 html），
+#: CSP `sandbox` 让浏览器把这份响应当独立文档、**不给脚本权限**（对 ``<img>`` 这类子资源
+#: 加载无影响 —— CSP 只作用于文档）。
+_MEDIA_UNTRUSTED_HEADERS = {
+    "Cache-Control": "public, max-age=86400",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox",
+}
+
+
+class _RedactMediaToken(logging.Filter):
+    """uvicorn access log 里的 ``?token=…`` 一律打码（第 134 期）。
+
+    媒体出口（`/asset`、`/cover`、`/audio`、`/units/…/page/…`）允许用 ``?token=`` 鉴权 ——
+    浏览器原生的 ``<img>`` / ``<audio>`` 带不了 Authorization 头。代价是 uvicorn 的 access
+    log 会打出**带查询串的完整路径**，于是一个 30 天有效的登录令牌明文进了容器日志，
+    随后会跟着 ``docker logs`` / 诊断包 / 用户贴出来的报错一起流出去。
+
+    这里只抹值，路径与状态码照旧可查（排障要看的是「谁在什么时候取了哪个资源」）。
+    挂在 ``uvicorn.access`` 上而不是改日志格式：格式来自 uvicorn 自己的 config，动它
+    等于和 uvicorn 的版本绑死；过滤器只碰 ``record.args``（元组第 3 项是 full_path）。
+    """
+
+    _TOKEN_RE = re.compile(r"(token=)[^&\s\"]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:   # noqa: A003 —— logging 的接口名
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            record.args = (args[:2] + (self._TOKEN_RE.sub(r"\1***", args[2]),) + args[3:])
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(_RedactMediaToken())
+
 
 def _request_token(request: Request) -> str:
     tok = _bearer(request)
@@ -3016,7 +3055,7 @@ def api_book_asset(bid: str, p: str = Query(..., description="zip 内资源相�
         raise HTTPException(404, "资源不存在")
     ct = mimetypes.guess_type(name)[0] or "application/octet-stream"
     return Response(content=data, media_type=ct,
-                    headers={"Cache-Control": "public, max-age=86400"})
+                    headers=_MEDIA_UNTRUSTED_HEADERS)
 
 
 @app.get("/api/books/{bid}/epub-css")
@@ -3418,9 +3457,13 @@ def api_purge_custom_field(cid: int):
 
 
 def _cover_response(data: bytes, media: str) -> Response:
-    """封面的统一出口（HTTP 层的缓存头也在这里，别在分支里各写一遍）。"""
+    """封面的统一出口（HTTP 层的缓存头也在这里，别在分支里各写一遍）。
+
+    封面字节来自**书里 / 抓来的图**，媒体类型同理不可信 ⇒ 与书内资源共用
+    `_MEDIA_UNTRUSTED_HEADERS`（第 134 期）。
+    """
     return Response(content=data, media_type=media or "image/jpeg",
-                    headers={"Cache-Control": "public, max-age=86400"})
+                    headers=_MEDIA_UNTRUSTED_HEADERS)
 
 
 def _cover_cached(bid: str, src, produce):
@@ -7029,8 +7072,9 @@ EDITABLE: dict = {
     # 第 94 期阶段 3：抓取护栏（响应体上限 / 全局并发）。默认值写在 `config.DEFAULTS`，
     # `GET /api/config` 整块回显 `cfg["network"]` ⇒ 加子键只需改**这一处**白名单 + 前端字段。
     # 阶段 4a 加 `verify_tls`（**默认 False = 不改既有书源的抓取行为**，界面上写明含义）。
+    # 第 134 期加 `allow_private_sources`（默认 False = 书源抓取也校验内网目标）。
     "network": {"max_retries", "host_replace", "max_response_bytes", "max_concurrency",
-                "verify_tls"},
+                "verify_tls", "allow_private_sources"},
     # 第 94 期阶段 4a：URL 订阅导入（本站唯一由用户指定 URL 的出网点）。
     # `url_enabled` 默认关 ⇒ 必须可写，否则界面上「打开了」而后端照旧拒 = 假开关。
     "source_import": {"url_enabled", "max_bytes", "timeout", "verify_tls"},
@@ -7428,7 +7472,7 @@ def api_put_config(payload: dict = Body(...)):
     try:
         ov = config.mutate_overrides(_merge)
     except OSError as e:
-        raise HTTPException(500, f"设置写入失败（配置目录不可写？）：{e}")
+        raise HTTPException(500, f"设置写入失败：{e}")
     _apply_runtime_config()
     # 第 52 期：留存策略在日志模块里有 5 秒缓存，配置一改就必须失效 ——
     # 否则刚开启留存，页面上的「存盘情况」仍按旧值显示未启用。
@@ -8323,7 +8367,7 @@ def api_koreader_save(payload: dict = Body(...)):
     try:
         config.mutate_overrides(_merge)
     except OSError as e:                     # 第 120 期：写不进去要如实报（别回 ok:true）
-        raise HTTPException(500, f"设置写入失败（配置目录不可写？）：{e}")
+        raise HTTPException(500, f"设置写入失败：{e}")
     return {"ok": True}
 
 
@@ -8448,7 +8492,7 @@ def api_integration_save(service: str, payload: dict = Body(None)):
     try:
         config.mutate_overrides(_merge)
     except OSError as e:                     # 第 120 期：写不进去要如实报
-        raise HTTPException(500, f"凭据写入失败（配置目录不可写？）：{e}")
+        raise HTTPException(500, f"凭据写入失败：{e}")
     return {"ok": True}
 
 
@@ -9569,10 +9613,27 @@ async def _dispatch_into_library(src: pathlib.Path, name: str, opts: dict,
         # `_read_capped` 超限会抛，此时一个字节都还没写进 input/
         data = await _read_capped(upload, _upload_limit("max_bytes"))
         size = len(data)
-        # ⚠️ 落盘也要进线程池（第 119 期）：上传上限可达数百 MB，同步 `f.write(data)`
-        # 会在这段时间里把整个事件循环停住（同 `pipeline.dispatch` 那一行的道理）。
         tmp = src.with_name(f".upload-{uuid.uuid4().hex}{src.suffix}")
-        await asyncio.to_thread(tmp.write_bytes, data)
+        try:
+            # ⚠️ 落盘也要进线程池（第 119 期）：上传上限可达数百 MB，同步 `f.write(data)`
+            # 会在这段时间里把整个事件循环停住（同 `pipeline.dispatch` 那一行的道理）。
+            await asyncio.to_thread(tmp.write_bytes, data)
+        except OSError as e:
+            # 写了一半（磁盘满 / 只读挂载 / 配额）：**当场删掉**再报错。此前这一句不在
+            # try 里，失败时半截 `.upload-*` 留在收书目录 —— 点号前缀让扫描侧看不见它，
+            # 于是既不进库也不会有任何界面提示，只会一直堆到有人手工清（第 134 期）。
+            #
+            # ⚠️ 清理本身也可能失败（收书目录不是可写目录 / 挂载点整个没了 / 父路径不是
+            # 目录 ⇒ ``NotADirectoryError``，而 ``missing_ok`` 只吞 ``FileNotFoundError``）。
+            # 那种情况下更要紧的是把**真正的原因**如实回给用户，而不是让清理的错误盖掉它。
+            try:
+                await asyncio.to_thread(tmp.unlink, missing_ok=True)
+            except OSError:
+                pass
+            activity_log.log_convert_fail(name, f"{type(e).__name__}: {e}", size=size,
+                                          source=source)
+            raise HTTPException(500, "上传件写盘失败（可能磁盘已满或没有写权限）："
+                                     f"{tmp.parent}（{e.strerror or e}）") from e
         try:
             out_dir = library_rules.target_root(src=tmp, name=name, meta=opts.get("meta"),
                                                base_dir=INPUT_DIR)
