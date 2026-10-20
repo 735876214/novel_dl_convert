@@ -139,7 +139,11 @@ async def lifespan(app: FastAPI):
     # 第 18 期：刮削出版 worker。**只在有未完成待办时启动** —— 队列是持久化的
     # （status='pending' 的行），重启要接着跑；没待办就不必白起一个后台线程。
     try:
-        if (cfg.get("scrape") or {}).get("enabled", True) and db.scrape_pending(limit=1):
+        if (cfg.get("scrape") or {}).get("enabled", True) and (
+    db.scrape_pending(limit=1) or db.scrape_list(status="running", limit=1)
+):  # 第 136 期：也要看残留的 running 行 —— 进程在刮削中途被杀时，
+    # scrape_pending() 只查 pending，worker 永远不会被启动，队列从此停摆。
+    # worker 起来后 scrape_reset_running() 会把它们翻回 pending。
             scrape.start()
             logging.getLogger("novelforge").info("刮削 worker 已启动（续跑上次未完成的待办）")
     except Exception as e:  # noqa: BLE001 —— 旁路功能，绝不阻断启动
@@ -307,8 +311,9 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 INPUT_DIR = config.INPUT_DIR
 # ⚠️ 多书库（第 10 期）后这**不是**「唯一的根」，第 37 期起也不再是「默认库的根」
-# （默认库这个概念已下线）。按书取路径一律用 `library.root_of(b) / b["name"]` ——
-# 它对「库已被移除登记」的书会回退到 OUTPUT_DIR，正是这里。
+# （默认库这个概念已下线）。按书取路径一律用 `library.abs_path(b)`（第 136 期：
+# 它取书目的权威 `path`，多文件夹库里 `root_of(b) / b["name"]` 会指到另一个根上的同名书；
+# 只有拿不到 `path` 时才回落到 `root_of`，而它对「库已被移除登记」的书回退到 OUTPUT_DIR）。
 OUTPUT_DIR = config.OUTPUT_DIR
 
 
@@ -2074,7 +2079,7 @@ def opds_by_author(request: Request, name: str, page: int = Query(1, ge=1)):
         raise HTTPException(404, "没有该作者的书")
     bs = opds.sort_books(bs, "title", "asc")
     return _opds_xml(opds.acquisition_feed(_opds_base(request), f"作者：{target}", "author",
-                                           bs, page=page))
+                                           bs, page=page, group=target))
 
 
 @app.get("/opds/series/{name}")
@@ -2088,7 +2093,7 @@ def opds_by_series(request: Request, name: str, page: int = Query(1, ge=1)):
     bs = opds.sort_books(bs, "series", "asc")
     desc = series_meta.effective_light(target)["description"]
     return _opds_xml(opds.acquisition_feed(_opds_base(request), f"系列：{target}", "series",
-                                           bs, page=page, subtitle=desc))
+                                           bs, page=page, subtitle=desc, group=target))
 
 
 @app.get("/opds/tag/{name}")
@@ -2101,7 +2106,7 @@ def opds_by_tag(request: Request, name: str, page: int = Query(1, ge=1)):
         raise HTTPException(404, "没有该标签的书")
     bs = opds.sort_books(bs, "title", "asc")
     return _opds_xml(opds.acquisition_feed(_opds_base(request), f"标签：{target}", "tag",
-                                           bs, page=page))
+                                           bs, page=page, group=target))
 
 
 @app.get("/opds/search")
@@ -2119,7 +2124,8 @@ def opds_search(request: Request, q: str = Query(""), page: int = Query(1, ge=1)
         bs = []
     bs = opds.sort_books(bs, "title", "asc")
     title = f"搜索：{q}" if term else "搜索（请带 ?q= 参数）"
-    return _opds_xml(opds.acquisition_feed(_opds_base(request), title, "search", bs, page=page))
+    return _opds_xml(opds.acquisition_feed(_opds_base(request), title, "search", bs, page=page,
+                                           extra_query=f"&q={quote(q or '', safe='')}"))
 
 
 @app.get("/opds/book/{bid}")
@@ -2144,7 +2150,7 @@ def opds_download(request: Request, bid: str):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = library.root_of(b) / b["name"]
+    path = library.abs_path(b)
     if not path.is_file():
         raise HTTPException(404, "文件不存在")
     return FileResponse(path, media_type=opds.mime_of(b.get("format")), filename=b["name"])
@@ -2306,8 +2312,8 @@ def opds_lib_by_author(request: Request, lid: str, name: str, page: int = Query(
         raise HTTPException(404, "该书库没有这位作者的书")
     bs = opds.sort_books(bs, "title", "asc")
     return _opds_xml(opds.acquisition_feed(
-        _opds_base(request), f"作者：{target}", "author", bs, page=page,
-        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "author")), "acquisition")
+        _opds_base(request), f"作者：{target}", "author", bs, page=page, group=target,
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, f"author:{target}")), "acquisition")
 
 
 @app.get("/opds/lib/{lid}/series/{name}")
@@ -2323,7 +2329,8 @@ def opds_lib_by_series(request: Request, lid: str, name: str, page: int = Query(
     desc = series_meta.effective_light(target)["description"]
     return _opds_xml(opds.acquisition_feed(
         _opds_base(request), f"系列：{target}", "series", bs, page=page, subtitle=desc,
-        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "series")), "acquisition")
+        group=target, prefix=_opds_prefix(lib_id),
+        feed_id=_opds_fid(lib_id, f"series:{target}")), "acquisition")
 
 
 @app.get("/opds/lib/{lid}/tag/{name}")
@@ -2337,8 +2344,8 @@ def opds_lib_by_tag(request: Request, lid: str, name: str, page: int = Query(1, 
         raise HTTPException(404, "该书库没有这个标签的书")
     bs = opds.sort_books(bs, "title", "asc")
     return _opds_xml(opds.acquisition_feed(
-        _opds_base(request), f"标签：{target}", "tag", bs, page=page,
-        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "tag")), "acquisition")
+        _opds_base(request), f"标签：{target}", "tag", bs, page=page, group=target,
+        prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, f"tag:{target}")), "acquisition")
 
 
 @app.get("/opds/search/description")
@@ -2377,6 +2384,7 @@ def opds_lib_search(request: Request, lid: str, q: str = Query(""),
     title = f"搜索：{q}" if term else "搜索（请带 ?q= 参数）"
     return _opds_xml(opds.acquisition_feed(
         _opds_base(request), title, "search", bs, page=page,
+        extra_query=f"&q={quote(q or '', safe='')}",
         prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "search")), "acquisition")
 
 
@@ -2406,7 +2414,7 @@ def opds_lib_download(request: Request, lid: str, bid: str):
     b = _opds_book_in(lib_id, bid)
     if not b:
         raise HTTPException(404, "书籍不在该书库内")
-    path = library.root_of(b) / b["name"]
+    path = library.abs_path(b)
     if not path.is_file():
         raise HTTPException(404, "文件不存在")
     return FileResponse(path, media_type=opds.mime_of(b.get("format")), filename=b["name"])
@@ -2957,11 +2965,25 @@ def api_book_local_paths(bid: str, request: Request, response: Response):
 # ---------------- 账户（单用户轻登录）----------------
 
 @app.post("/api/auth/login")
-def api_login(payload: dict = Body(...)):
+def api_login(request: Request, payload: dict = Body(...)):
+    """登录。连续失败会退避（第 136 期）。
+
+    PIN 通常只有 4–6 位，未加限制时局域网内一个 for 循环就能穷举 —— 而这条路径
+    **不经过**任何鉴权中间件（它本身是登录口），所以节流只能落在端点自己身上。
+    节流键 = 「账号 + 来源 IP」：换一个 IP 继续试仍会被**账号**维度的退避挡住
+    （键里带账号，同一账号的失败会累加）。
+    """
     user = str(payload.get("user", "") or "")
     pin = str(payload.get("pin", "") or "")
+    host = (request.client.host if request.client else "") or ""
+    key = f"{user}|{host}"
+    wait = auth_mod.throttle_remaining(key)
+    if wait > 0:
+        raise HTTPException(429, f"连续登录失败过多，请 {int(wait) + 1} 秒后再试")
     if not auth_mod.verify_pin(user, pin):
+        auth_mod.note_failure(key)
         raise HTTPException(401, "账号或密码错误")
+    auth_mod.clear_failures(key)
     return {"token": auth_mod.issue_token(user), "user": user}
 
 
@@ -2972,7 +2994,12 @@ def api_me(request: Request):
 
 @app.post("/api/auth/pin")
 def api_change_pin(request: Request, payload: dict = Body(...)):
-    """修改当前账号密码（需校验原密码）。"""
+    """修改当前账号密码（需校验原密码）。
+
+    ⚠️ **改密码会作废此前签发的全部令牌**（第 136 期：令牌签名里带 `pin_hash` 前缀，
+    见 `core/auth.py`）。所以这里必须把**新令牌**一并返回 —— 否则用户在自己这台
+    设备上改完密码，下一个请求就 401、被踢回登录页，看起来像「改密码把我弄坏了」。
+    """
     user = getattr(request.state, "user", "") or ""
     old = str(payload.get("old_pin") or "")
     new = str(payload.get("new_pin") or "")
@@ -2981,7 +3008,7 @@ def api_change_pin(request: Request, payload: dict = Body(...)):
     if len(new) < 4:
         raise HTTPException(400, "新密码至少 4 位")
     db.set_pin(user, new)
-    return {"ok": True}
+    return {"ok": True, "token": auth_mod.issue_token(user)}
 
 
 # ---------------- 阅读器：章节内容 / 资源 / 进度 / 批注 ----------------
@@ -3039,7 +3066,7 @@ def api_book_asset(bid: str, p: str = Query(..., description="zip 内资源相�
     """分发书内资源（EPUB 正文里的插图、书内 CSS、书内字体都走这里）。
 
     ⚠️ 取文件用书目里的 ``path``（索引行按它**实际落在的那个根**拼出来的绝对路径），
-    **不用** ``library.root_of(b) / b["name"]`` —— 那是 best-effort 代表根，多文件夹的
+    **不用** ``library.abs_path(b)`` —— 那是 best-effort 代表根，多文件夹的
     库里会指到**另一个根**下的同名文件（`api_delete_book` 与 `api_book_local_paths`
     的 docstring 都点名批评过那种写法）。
 
@@ -3549,7 +3576,7 @@ def api_book_cover(bid: str):
     if not b:
         raise HTTPException(404, "书籍不存在")
     fmt = (b.get("format") or "").upper()
-    path = library.root_of(b) / b["name"]
+    path = library.abs_path(b)
 
     if fmt in ("CBZ", "CBR"):
         def _comic_cover():
@@ -3626,7 +3653,7 @@ def api_book_file(bid: str):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = library.root_of(b) / b["name"]
+    path = library.abs_path(b)
     if not path.is_file():
         raise HTTPException(404, "文件不存在")
     media = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
@@ -3650,7 +3677,7 @@ def api_book_unpack(bid: str, payload: dict = Body(None)):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = library.root_of(b) / b["name"]
+    path = library.abs_path(b)
     if not pathlib.Path(path).is_file():
         raise HTTPException(400, "这个条目不是文件（目录型条目没有可展开的容器）")
     res = zipkind.unpack(path, remove_source=bool((payload or {}).get("remove_source")))
@@ -3669,7 +3696,7 @@ def api_comic_pages(bid: str):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = library.root_of(b) / b["name"]
+    path = library.abs_path(b)
     if not comics.is_comic(path):
         raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
     problem = comics.backend_problem(path)      # 缺 bsdtar/unrar 或 py7zr —— 唯一判据（第 111 期）
@@ -3683,7 +3710,7 @@ def api_comic_page(bid: str, index: int):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    path = library.root_of(b) / b["name"]
+    path = library.abs_path(b)
     if not comics.is_comic(path):
         raise HTTPException(400, "仅漫画归档（CBZ / CBR）支持漫画阅读")
     problem = comics.backend_problem(path)      # 缺 bsdtar/unrar 或 py7zr —— 唯一判据（第 111 期）
@@ -3720,7 +3747,7 @@ def api_audio_tracks(bid: str):
         raise HTTPException(404, "书籍不存在")
     if (b.get("format") or "").upper() != "AUDIO":
         raise HTTPException(400, "该书不是有声书")
-    return units.tracks_of(library.root_of(b) / b["name"])
+    return units.tracks_of(library.abs_path(b))
 
 
 @app.get("/api/books/{bid}/audio/{index}")
@@ -3738,7 +3765,7 @@ def api_audio_track(bid: str, index: int):
         raise HTTPException(404, "书籍不存在")
     if (b.get("format") or "").upper() != "AUDIO":
         raise HTTPException(400, "该书不是有声书")
-    track = units.track_at(library.root_of(b) / b["name"], index)
+    track = units.track_at(library.abs_path(b), index)
     if not track or not track.is_file():
         raise HTTPException(404, "轨道不存在")
     media = _AUDIO_MIME.get(track.suffix.lower()) \
@@ -3772,7 +3799,7 @@ def _unit_book(bid: str) -> dict:
 def _unit_file(bid: str, index: int):
     """第 index 话的绝对路径；越界 / 文件不在了 ⇒ 404。"""
     b = _unit_book(bid)
-    p = units.unit_path(library.root_of(b) / b["name"], index)
+    p = units.unit_path(library.abs_path(b), index)
     if not p or not p.is_file():
         raise HTTPException(404, "话不存在")
     return p
@@ -3806,7 +3833,7 @@ def api_book_units(bid: str):
       这里就必须是 4 条。
     """
     b = _unit_book(bid)
-    return units.tracks_of(library.root_of(b) / b["name"])
+    return units.tracks_of(library.abs_path(b))
 
 
 @app.get("/api/books/{bid}/units/{index}")
@@ -3985,7 +4012,7 @@ def _progress_file(b: dict, file_rel: str) -> tuple:
     """
     if not file_rel:
         # 书级：沿用原来的判据（`format` 而不是扩展名）—— 老路径的行为不动它
-        target = library.root_of(b) / b["name"]
+        target = library.abs_path(b)
         if target.suffix.lower() in mobicache.EXTS:
             # 第 110 期：MOBI / AZW3 的读目标是**解包产物**（KF8 出 EPUB）⇒ CFI 照常按它算
             # （精确位置不丢）。解不出来（缺解包器 / 坏书 / 纯 MOBI6 出 HTML）⇒
@@ -7874,7 +7901,11 @@ def api_restore_backup(payload: dict = Body(...)):
         raise HTTPException(404, "备份不存在")
     backup = _backup_config()
     try:
-        shutil.copy2(src, config.CONFIG_FILE)
+        # 原子写（第 136 期）：config.yaml 是**活配置**，半截文件会让下次启动
+        # 解析失败回落 DEFAULTS —— 用户的库路径与密钥一起消失。
+        cfg_tmp = config.CONFIG_FILE.with_suffix(".yaml.tmp")
+        shutil.copy2(src, cfg_tmp)
+        cfg_tmp.replace(config.CONFIG_FILE)
     except Exception as e:
         raise HTTPException(500, f"还原失败：{e}")
     _apply_runtime_config()
@@ -7888,7 +7919,10 @@ def api_reset_config():
     try:
         config.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         text = yaml.safe_dump(config.DEFAULTS, allow_unicode=True, sort_keys=False)
-        config.CONFIG_FILE.write_text(text, encoding="utf-8")
+        # 原子写（第 136 期），原因同上。
+        cfg_tmp = config.CONFIG_FILE.with_suffix(".yaml.tmp")
+        cfg_tmp.write_text(text, encoding="utf-8")
+        cfg_tmp.replace(config.CONFIG_FILE)
     except Exception as e:
         raise HTTPException(500, f"重置失败：{e}")
     _apply_runtime_config()
@@ -9185,7 +9219,7 @@ def ko_book_thumb(request: Request, book_id: str):
 def ko_book_file(request: Request, book_id: str):
     _komga_guard(request)
     b = _ko_book(book_id) or _ko_404("书不存在")
-    path = library.root_of(b) / b["name"]
+    path = library.abs_path(b)
     if not path.is_file():
         _ko_404("文件不存在")
     return FileResponse(path, media_type="application/octet-stream",

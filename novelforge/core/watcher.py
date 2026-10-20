@@ -760,7 +760,9 @@ class FolderWatcher:
     # ---------------- 线程控制 ----------------
 
     def _loop(self):
-        while not self._stop.wait(self.tick_interval):
+        while not self._stop.wait(self.interval):  # 第 136 期：tick 直接读 interval，
+        # 别再留 tick_interval 这份副本 —— 它只在 __init__ 取一次，改小间隔后
+        # 界面显示 5s、真实节奏还是 60s，直到重启。
             try:
                 for t in self._derive_targets():
                     if self._stop.is_set():
@@ -835,7 +837,7 @@ class FolderWatcher:
                 if str(b.get("format") or "").upper() not in zipkind.CONTAINER_FORMATS:
                     continue
                 bid = str(b.get("id") or "")
-                path = library.root_of(b) / b["name"]
+                path = library.abs_path(b)
                 try:
                     st = path.stat()
                     fp = f"{st.st_mtime_ns}:{st.st_size}"

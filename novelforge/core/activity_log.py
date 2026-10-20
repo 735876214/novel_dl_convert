@@ -575,6 +575,9 @@ def clear() -> bool:
     """
     with _lock:
         _memory.clear()
+        # 第 136 期：尾随合并窗口里的条目也要丢，否则窗口走完（或 atexit
+        # 兜底）时 flush_pending 会把刚被删掉的条目重新写回 activity.jsonl。
+        _pending.clear()
     try:
         d = log_dir()
         for name in (LOG_FILENAME, JSONL_FILENAME):

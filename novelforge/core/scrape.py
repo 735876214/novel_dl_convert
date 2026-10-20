@@ -174,7 +174,7 @@ def enqueue(book: dict, *, force: bool = False, reason: str = "scan",
         return {"ok": False, "skipped": True, "reason": "该库未配置成品目录"}
 
     name = str(book.get("name") or "")
-    src_path = library.root_of(book) / name
+    src_path = library.abs_path(book)
     sig = publish.source_sig(src_path)
     row = row if row is not None else (db.scrape_get(bid) or {})
     st = str(row.get("status") or "")
@@ -295,7 +295,7 @@ def process(bid, *, fetch: bool = None, gen: int = None) -> dict:
         return _lost(bid, row, lib, "源已不在书目里", gen=gen)
 
     name = str(book.get("name") or row.get("source_rel") or "")
-    src = library.root_of(book) / name
+    src = library.abs_path(book)
     if not src.exists():
         return _lost(bid, row, lib, "源文件已不在", gen=gen)
 
@@ -562,7 +562,7 @@ def plan_naming(library_id=None, pattern: str = "", scope: str = "") -> dict:
             continue                                  # 源已不在书目里（台账另行处置）
         new_rel = publish.relpath_for(book, _rule_cfg(lib_id, pattern, sc))
         name = str(book.get("name") or r.get("source_rel") or "")
-        verdict = publish.rel_verdict(pdir, new_rel, library.root_of(book) / name, old_rel)
+        verdict = publish.rel_verdict(pdir, new_rel, library.abs_path(book), old_rel)
         declined = verdict == publish.REL_DECLINE
         items.append({
             "book_id": bid, "library_id": lib_id,

@@ -16,6 +16,7 @@
 """
 import datetime
 import xml.etree.ElementTree as ET
+from urllib.parse import quote
 
 NS_ATOM = "http://www.w3.org/2005/Atom"
 NS_OPDS = "http://opds-spec.org/2010/catalog"
@@ -288,12 +289,22 @@ def acquisition_feed(
     subtitle: str = "",
     prefix: str = "/opds",
     feed_id: str = None,
+    group: str = "",
+    extra_query: str = "",
 ) -> str:
     """书籍列表 feed（acquisition），带分页。
 
     ``subtitle``（可选）用于「系列：X」这类页面带出系列简介；默认空 → 输出不变。
     ``prefix`` 同 :func:`navigation_feed`；⚠️ self / next / previous / up 四组 href
     都要跟着它走，漏一处就会在单库翻页时跳回全局。
+
+    两个「一漏就静默坏掉」的参数（第 136 期）：
+
+    · ``group``：作者 / 系列 / 标签这三个分段的路由是 ``/{section}/{name}``，
+      **组名必须在路径里**。此前 self / next / previous 只拼到 ``/{section}``，
+      于是「某位作者有 31 本书」时点「下一页」直接 404 —— 页面本身 200，看不出来。
+    · ``extra_query``：除分页之外**翻页时必须继续带着**的参数（目前只有搜索的 ``q``）。
+      此前 ``q`` 只出现在第一页，第 2 页 q 缺省 ⇒ 后端当成「没给搜索词」⇒ 空 feed。
     """
     total = len(books)
     pages = max(1, (total + page_size - 1) // page_size)
@@ -301,21 +312,25 @@ def acquisition_feed(
     chunk = books[(page - 1) * page_size: page * page_size]
     updated = max([b.get("mtime") or 0 for b in books] or [0])
 
-    qs = f"&sort={sort}&order={order}" if section == "all" else ""
+    path = f"{prefix}/{section}" + (f"/{quote(str(group), safe='')}" if group else "")
+    qs = (f"&sort={sort}&order={order}" if section == "all" else "") + extra_query
+    # `up` 指向**分组导航页**（`/opds/author` 这类），不是组内页 —— 它本来就是对的那一档
     up = base + (prefix if section in ("all", "recent", "search") else f"{prefix}/{section}")
     links = [
         {"rel": "start", "href": f"{base}{prefix}", "type_": _NAV_TYPE},
         {"rel": "up", "href": up, "type_": _NAV_TYPE},
-        {"rel": "self", "href": f"{base}{prefix}/{section}?page={page}{qs}", "type_": _ACQ_TYPE},
+        {"rel": "self", "href": f"{base}{path}?page={page}{qs}", "type_": _ACQ_TYPE},
     ]
     if page < pages:
         links.append({"rel": "next",
-                      "href": f"{base}{prefix}/{section}?page={page + 1}{qs}", "type_": _ACQ_TYPE})
+                      "href": f"{base}{path}?page={page + 1}{qs}", "type_": _ACQ_TYPE})
     if page > 1:
         links.append({"rel": "previous",
-                      "href": f"{base}{prefix}/{section}?page={page - 1}{qs}", "type_": _ACQ_TYPE})
+                      "href": f"{base}{path}?page={page - 1}{qs}", "type_": _ACQ_TYPE})
 
-    feed = _feed(title, feed_id or f"urn:novelforge:opds:{section}:{page}", updated, links,
+    # atom:id 也要能区分「同一分段的第 N 页 / 不同组」：客户端按 id 去重与缓存，
+    # 共用同一个 id 会让它把上一份 feed 当成这一份（换作者仍显示上一个作者的书）。
+    feed = _feed(title, feed_id or f"urn:novelforge:opds:{section}:{group}:{page}", updated, links,
                  subtitle=str(subtitle or "").strip())
     # OpenSearch：客户端据此显示「第 N 页 / 共 M 条」
     _e(feed, f"{{{NS_OS}}}totalResults", total)
