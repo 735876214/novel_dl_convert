@@ -159,7 +159,10 @@ async function changePin(): Promise<void> {
   pinOk.value = ''
   pinBusy.value = true
   try {
-    await api.changePin(oldPin.value, newPin.value)
+    const r = await api.changePin(oldPin.value, newPin.value)
+    // 改密码会让旧令牌立刻失效（后端签名里带密码哈希前缀）⇒ 必须换上新票，
+    // 否则下一个请求就 401，用户会以为「改密码把账号弄坏了」。
+    if (r.token) auth._setToken(r.token)
     pinOk.value = '密码已更新'
     oldPin.value = ''
     newPin.value = ''

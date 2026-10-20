@@ -85,7 +85,6 @@ export interface ChangelogEntry {
 
 export interface SourceItem {
   name: string
-  builtin?: boolean
   [key: string]: unknown
 }
 
@@ -4211,9 +4210,12 @@ export const api = {
 
   me: () => request<MeInfo>('/api/auth/me'),
 
-  /** 修改当前账号密码（需原密码） */
+  /** 修改当前账号密码（需原密码）。
+   *
+   * 返回**新令牌**：改密码会让旧令牌立刻失效（签名里带密码哈希前缀），
+   * 调用方必须把 `token` 存回去，否则改完自己被踢回登录页。 */
   changePin: (oldPin: string, newPin: string) =>
-    request<{ ok: boolean }>('/api/auth/pin', {
+    request<{ ok: boolean; token: string }>('/api/auth/pin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ old_pin: oldPin, new_pin: newPin }),
