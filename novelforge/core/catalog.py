@@ -1154,7 +1154,7 @@ def books(library_id=None) -> list:
     return out
 
 
-def find_by_id(bid: str) -> "dict | None":
+def find_by_id(bid: str, unique_only: bool = False) -> "dict | None":
     """按 id 取书（``library.by_id`` 的实现）。
 
     ⚠️ 两条语义必须保住，它们是**用进度 / 批注写错书**换来的：
@@ -1162,9 +1162,13 @@ def find_by_id(bid: str) -> "dict | None":
     1. 命中多本 → 抛 ``BookIdConflict``（不静默取第一条）；
     2. 只认**仍登记在册**的库 —— 库被移除后索引行可能还在（索引是缓存不是真相源），
        不过滤就会让 ``by_id`` 返回一本界面上已经不存在的书。
+
+    ``unique_only=True``（第 128 期）：命中多本时**返回 None 而不是抛异常**，给
+    「跨书清单」这类调用方用 —— 一条坏记录不该让整页打不开（见
+    :func:`novelforge.core.library.by_id_status`）。单书入口照旧用默认值。
     """
     from . import library as _lib
-    hit = _hit_of(bid)
+    hit = _hit_of(bid, unique_only=unique_only)
     if hit is None:
         return None
     row, lib = hit
@@ -1239,10 +1243,20 @@ def _hit_of(bid: str, unique_only: bool = False):
         if unique_only:
             return None
         names = " / ".join(sorted({str(h["rel"]) for h in hits}))
-        libs_txt = "、".join(sorted({str(h["library_id"]) for h in hits}))
+        lib_ids = sorted({str(h["library_id"]) for h in hits})
+        # 第 128 期：文案按**实际情形**说。此前一律写「在多个书库中同名」，可
+        # 「同一库的两个目录下同名」也会撞 id（`book_id` 只由 basename 派生）——
+        # 用户照文案去「跨库冲突」页找，那里却按 `same_name_different_dirs` 报，
+        # 对不上号。
+        libs_txt = "、".join(lib_ids)
+        where = (
+            f"在同一个书库里有两本同名（{names}）"
+            if len(lib_ids) == 1
+            else f"在多个书库中同名（{libs_txt}）：{names}"
+        )
         raise _lib.BookIdConflict(
-            f"《{names}》在多个书库中同名（{libs_txt}），本服务无法确定是哪一本。"
-            f"请到「设置 → 书库管理 → 跨库同名冲突」一键改名消除冲突后重试"
+            f"这个 id 撞了两本书 —— {where}。本服务无法确定是哪一本。"
+            f"请到「设置 → 书库管理 → 同名冲突」一键改名消除冲突后重试"
         )
     row = hits[0]
     lib = by_lid.get(str(row["library_id"]))

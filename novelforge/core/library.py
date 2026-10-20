@@ -1127,6 +1127,23 @@ def by_id(bid: str) -> "dict | None":
     return catalog.find_by_id(bid)
 
 
+def by_id_status(bid: str) -> tuple:
+    """按 id 取书，**把「同名冲突」当成一种状态而不是异常**：返回 ``(book, conflict)``。
+
+    给**跨书清单**用（批注总览 / 批注导出）。理由与第 127 期的序列化兜底同一条：
+    一行坏数据不该让整页打不开 —— 一条旧批注所属的 id 撞了名，用户的**全部**批注
+    就都读不出来（连导出备份都做不了），而修复入口恰恰要用户先去别的页面。
+
+    ``conflict=True`` 时 ``book`` 是 ``None``，由调用方决定怎么标注这一行；
+    **单书入口不许用它** —— 那里必须抛 ``BookIdConflict`` 让服务层翻成 409。
+    """
+    from . import catalog
+    try:
+        return catalog.find_by_id(bid), False
+    except BookIdConflict:
+        return None, True
+
+
 def by_id_raw(bid: str) -> "dict | None":
     """按 id 取书，**不过服务端元数据覆盖层** —— 「文件里原本是什么」。
 

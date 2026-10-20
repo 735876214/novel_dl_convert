@@ -241,6 +241,30 @@ class _FiniteJSONResponse(JSONResponse):
 app = FastAPI(title="NovelForge", version=APP_VERSION, lifespan=lifespan,
               default_response_class=_FiniteJSONResponse)
 
+
+@app.exception_handler(library.BookIdConflict)
+def _book_id_conflict(request: Request, exc: library.BookIdConflict):
+    """同名冲突统一翻成 **409 + 修复入口**（第 128 期）。
+
+    改前只有「删书」一个接口自己 ``except`` 了它，其余**所有**按 id 取书的接口
+    （详情 / 进度 / 批注 / 封面 / 阅读……）一律 500 —— 而 500 的响应体里没有那句话，
+    用户看到的是「服务器内部错误」，不知道「去改名就能修」。旧库里的冲突是按设计
+    可以存在的（入库拦截是第 13 期才补的），所以这条降级路径是**必需品**。
+
+    为什么放在全局而不是逐个接口 ``except``：同一件事有 40+ 个调用点，逐个写必然
+    漏（第 119 期「一行坏数据打掉整页」就是这么漏出来的）。跨书清单（批注总览）
+    不靠这道网 —— 它走 ``library.by_id_status`` 把冲突当状态，整页照常出。
+    """
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": str(exc),
+            "code": "book_id_conflict",
+            "hint": "到「设置 → 书库管理 → 同名冲突」一键改名消除冲突后重试；"
+                    "批注可以在「批注」页先导出备份。",
+        },
+    )
+
 # ---------------- 响应压缩（第 67 期）----------------
 # 「打开书架」最大的一块传输是 GET /api/books：实测 600 本 = **1.36 MB**（其中简介
 # `description` 占 68%），而全站此前**没有任何压缩**。gzip 后体积降到约 1/4，
@@ -4926,11 +4950,15 @@ def api_all_annotations(include_trashed: int = 0):
     """
     out = []
     for a in db.all_annotations(include_trashed=bool(include_trashed)):
-        b = library.by_id(a["book_id"])
+        # 第 128 期：**容错取书**。一条批注所属的 id 撞了名（同名冲突）时，
+        # 以前这里抛 `BookIdConflict` ⇒ 整个批注页 500（连导出备份都做不了，
+        # 而修复入口还要用户先去别的页面）。现在冲突只是这一行的状态。
+        b, conflict = library.by_id_status(a["book_id"])
         out.append({
             **a,
             "book_title": b["title"] if b else a["book_id"],
             "book_author": b["author"] if b else "",
+            "book_conflict": conflict,
         })
     return {"items": out, "total": len(out)}
 
@@ -4965,7 +4993,9 @@ def api_annotation_export(format: str = "markdown", library_id: str = "", book_i
         raise HTTPException(400, "format 只支持 markdown / json / csv")
     rows = []
     for a in db.all_annotations(include_trashed=False):
-        b = library.by_id(a["book_id"])
+        # 同 `/api/annotations`：冲突 / 缺失都不许让导出挂掉 —— 导出本身就是
+        # 「先备份再去修」的那一步。
+        b, conflict = library.by_id_status(a["book_id"])
         if book_id and str(a["book_id"]) != str(book_id):
             continue
         if library_id and str((b or {}).get("library_id") or "") != str(library_id):
@@ -4974,6 +5004,7 @@ def api_annotation_export(format: str = "markdown", library_id: str = "", book_i
             **a,
             "book_title": (b or {}).get("title") or a["book_id"],
             "book_author": (b or {}).get("author") or "",
+            "book_conflict": conflict,
         })
     stamp = time.strftime("%Y%m%d-%H%M%S")
     if fmt == "json":
