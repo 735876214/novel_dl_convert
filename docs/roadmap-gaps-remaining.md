@@ -9050,3 +9050,102 @@ def row(values):
    一条判据（`csvsafe`）覆盖两个 CSV 端点、且不越界去动别的格式，才算既彻底又不过度。
 4. **别在防护里顺手改数据语义**：只处理 `str` 这一条，保住了所有数字列。安全措施的边界若不清晰，很容易把「评分 4 星」变成「字符串 `'4`」，
    而这种回归**不会有任何报错**——只是用户下次排序时发现全乱了。
+
+## 第 133 期（阅读器不再执行书里的脚本：正文按允许清单净化，未知标签降级）
+
+**需求来源**：用户「进行5轮审查并修复」第 5 轮。前四轮撞的是**服务端入口**（路径参数 / 查询参数 / 进程内状态）
+与**导出物**（CSV），这轮撞**交给浏览器的内容** —— 服务端把一段 HTML 发给了阅读器，而阅读器用 `v-html` 直接塞进页面。
+
+### 一、缺陷：书里的 `<script>` 就是应用自己的脚本
+
+`GET /api/books/{bid}/chapter/{index}` 的 `html` 字段，来源是**书**：
+
+- EPUB：`novelforge/core/library.py:1099` 的 `html = _rewrite_assets(_body_of(raw), media, bid)` —— 章节体本来就是
+  XHTML，这里只把插图 / CSS 的 URL 改成本地 asset 地址，**正文原样照发**；
+- TXT / MOBI 的兜底路径：`novelforge/core/txtcache.py` 与 `novelforge/core/mobicache.py` 里
+  `f"<h2>{title}</h2>" + paragraphs_to_html(body)` —— **标题裸拼**，而缩进分章的 `title` 就是书里那一行原文
+  （实测 `<img src=x onerror="alert(1)">` 会成为标题）。
+
+前端没有第二道闸：`frontend/src` 全库**没有** DOMPurify 之类的净化（只有 `Icon.vue` 的注释与
+`BookCover.vue` / `coverTint.ts` 的 `img.onerror`），阅读器三处 `v-html`
+（`frontend/src/views/ReaderView.vue:2718`、`:2746`、`:2759`）照单全收。
+
+真机取证（隔离实例 8484，用 `ebooklib` 手工造 `脚本注入书.epub`，章节体含
+`<script>alert(document.domain)</script>` / `<p onmouseover="alert(1)">` / `<img src=x onerror="alert(2)">` /
+`<a href="javascript:alert(3)">`）：`GET /api/books/{bid}/chapter/1` **原样返回这些串**
+（只有 asset URL 被改写，`onerror` 仍在）。
+
+为什么这条比前四轮严重：阅读器与接口**同源**，书里的脚本拿到的是**用户登录后那个页面** ——
+能读 token、能以用户身份调所有接口（删书、改设置）、能往外发数据。用户对「从外面下载来的书」的预期是
+「内容可能很脏」，**不是「它会执行」**。
+
+### 二、为什么不在前端补一道
+
+前端加净化 = 判据落在**展示层**：接口还在照发危险 HTML，任何绕过前端的读法（`curl` / 第三方客户端 /
+将来加的导出、分享、预览）都还是裸的；而前端已有三处 `v-html`，加第四处就会再漏一次。
+判据必须在**书里的 HTML 变成响应的那一刻** —— `library.chapter_html` 与两条兜底拼串处，那里是**唯一**
+知道「这段 HTML 来自外部」的地方。
+
+### 三、修法：`core/htmlsafe.py` 是唯一判据
+
+新增 `novelforge/core/htmlsafe.py`：
+
+- `sanitize(markup)` —— 给**书里带来的 HTML**。用 lxml 解析成树（本项目已有依赖，`fb2cache` 就用它解析 FB2），
+  再按**允许清单**处理，而不是黑名单：
+  - `DROP_TAGS`（`script` / `style` / `iframe` / `noscript` / `template` / `object` / `applet` / `svg` / `math` /
+    `frame` / `frameset`）连**子树**一起摘 —— 它们的内容是代码或另一篇文档，没有正文价值；
+  - **其余不认识的名字一律降级成 `<span>`**（子树与文字保留、它自己的属性全丢）：`embed` / `link` / `meta` /
+    `base` / `input` / `button` / `form` … 都不在 `ALLOWED_TAGS` 里，于是没有第二处判据要维护；
+  - 属性也走允许清单（`GLOBAL_ATTRS` = `class`/`id`/`title`/`style`/`lang`/`dir`，外加按标签的 `TAG_ATTRS`）——
+    `on*` / `srcdoc` / `srcset` / `formaction` 都不在表里，**自动消失**，不用逐个写黑名单；
+  - `href` / `src` 的值过 `_clean_url`：去掉空白与控制字符后以 `javascript:` / `vbscript:` /
+    `data:text/html` / `data:image/svg` 开头的整条删掉；`style` 里出现 `javascript:` / `expression(` 也删。
+- `escape(text)` / `heading(title)` —— 给**我们自己拼的 HTML**：标题先转义再包 `<h2>`（拼串忘了转义，
+  等于把书名 / 章名当代码写进页面）。
+- `CHAPTER_HTML_VERSION = 1` —— 净化口径的版本（见第五节）。
+
+调用点四处，全部收敛到这一个模块：`novelforge/core/epub_builder.py`（原来的**正则版** `sanitize_html` 删掉，
+改为 `from .htmlsafe import escape as _esc, sanitize as sanitize_html`）、`library.chapter_html`、
+`txtcache`、`mobicache`。
+
+**为什么正则版必须删掉而不是留着**：正则净化能被 `<scr<script>ipt>`、属性里的引号变体、`<svg onload>`
+之类绕过，而这里「绕过一次」的代价是代码执行；留着它 = 留第二份判据（AGENTS §1 单一真值源）。
+
+### 四、实现里踩到的三个真坑（都会造成数据损坏或漏防）
+
+1. **撕子树不等于「删掉一个节点」**：一开始把 `embed` 也放进 `DROP_TAGS`，结果一句 `<embed src=x>` 能让
+   **后面两个 `<p>` 一起消失** —— libxml2 不认 `<embed>` 是空元素，把它后面的内容全收成了它的子树。
+   ⇒ `DROP_TAGS` 收窄成「内容确实是代码」的那批，其余靠允许清单降级成 `<span>`（无损）。
+2. **尾巴文字要接给「它自己的前一个兄弟」**：`<p>a<script>x</script>b<iframe></iframe>c</p>` 里 `b` 是
+   `script` 的 tail、`c` 是 `iframe` 的 tail。写成「接给 `parent[-1]`」时后面的元素还没删，拿到的是**后面**
+   那个 ⇒ 文字顺序变成 `acb`。正确写法是先 `prev = el.getprevious()` 再 `parent.remove(el)`。
+3. **畸形输入会解析出「名字怪异的标签」**：`<span<script>alert(1)` 被 lxml 复原成标签名 `span<script`，
+   黑名单按名字查必然漏 ⇒ **允许清单**下它降级成 `<span>`，`alert(1)` 变成普通文字（不执行、也不丢）。
+
+### 五、缓存：判据变了要让旧缓存失效
+
+章节 HTML 进 Redis（`cache.chapter_key(bid, index, fp, kind)`，`fp` 是**源文件**的 `(大小, mtime)`）。
+源文件没动而净化判据变了 ⇒ 指纹不变 ⇒ 旧缓存继续下发旧形态，能持续一整个 TTL（24 h）。
+⇒ `htmlsafe.CHAPTER_HTML_VERSION` 并进键（`novelforge/server.py` 的 `_chapter_cached` 里
+`fp = f"{fp}:h{version}"`），与 `CHAPTER_RULE_VERSION` / `ENCODING_RULE_VERSION` 同一条规矩：**改判据就 +1**。
+
+### 六、核验
+
+| 项 | 结果 |
+|---|---|
+| 新增 `tests/test_reader_html_133.py` | **10 例**：净化判据（删节点 / 删属性 / 正文一个字不丢 / 畸形输入降级 / 空与纯文本直通）、EPUB 章节接口不再发 `<script>` / `on…=` / `javascript:`、常见排版标签（`<em>` `<strong>` `<blockquote>` `<h2>`）与实体保留、TXT 兜底路径章标题被转义、MOBI 路径判据只有一处、缓存键带净化版本 |
+| 后端全量 | **2603 例（2590 passed / 0 failed / 0 errors / 13 skipped）**，全量 120.3 s |
+| 前端四连 | `bash scripts/frontend-verify.sh` exit 0（本轮**不改前端**：闸在服务端） |
+| `python tests/period_close.py check` | 0 问题 |
+| 真机复验 | 重启后同一本 `脚本注入书.epub` 的 `/chapter/1`：`<script` / `onmouseover` / `onerror` / `javascript:` 全部消失，正文与插图仍在 |
+
+### 七、教训
+
+1. **`v-html` 的输入来源决定它是不是 XSS 边界**：Markdown 渲染与「书里的章节体」用的是同一个机制，
+   区别只在**谁写的**。凡把外部文本塞进 DOM 的地方，要问的是「这段 HTML 的作者是谁」。
+2. **净化用允许清单，不用黑名单**：黑名单要枚举「所有能执行的东西」，而解析器的**复原规则**会造出你没枚举到的
+   名字（`span<script`）；允许清单只枚举「正文排版需要的」，其余一律降级，漏防的表现退化成「多删」。
+3. **「删节点」在解析器眼里不是删除**：元素边界由解析器决定（`<embed>` 把兄弟收成子树）。凡对第三方 HTML
+   做结构变换，都要用**能保留文字**的最小操作，并拿「正文一个字都没丢」当判据。
+4. **安全修复也要管缓存**：判据不在指纹里，就等于「修了但读的人看不见」。这条规矩在本项目已经用过三次
+   （`CHAPTER_RULE_VERSION` / `ENCODING_RULE_VERSION` / 现在 `CHAPTER_HTML_VERSION`）。
