@@ -184,6 +184,12 @@ DEFAULTS = {
         # 改成 True 会让一批本来能用的书源静默失效 —— 那是「静默改变既有行为」，
         # 所以只**提供**开关、由部署者自己决定。MITM 风险与本开关的含义写在设置页里。
         "verify_tls": False,
+        # 第 134 期：书源抓取 / 封面下载要不要**放行内网与回环地址**。
+        # ⚠️ 默认 **False = 校验**：书源规则里的域名是**导入来的**，一条
+        # `http://169.254.169.254/latest/meta-data/` 就能让服务端去取内网内容并当正文读出来
+        # （`core/urlguard.py` 模块注释「书源抓取也过这道闸」）。内网自建源是真实用法，
+        # 所以只**提供**开关、由部署者自己决定 —— 与同节的 `verify_tls` 同一个口径。
+        "allow_private_sources": False,
     },
     # URL 订阅导入（第 94 期阶段 4a）：本站**唯一**由用户指定 URL 的出网点，
     # 因此单独一节配置（判据与护栏见 `core/urlguard.py`）。
@@ -457,24 +463,48 @@ def ensure_dirs():
 #: 表现为「连着点两下保存，第一处设置撤回去了」，而且没有任何报错。
 _OVERRIDES_LOCK = threading.Lock()
 
+#: 上一次 :func:`load_overrides` **I/O 失败**的原因（``None`` = 没失败）。
+#:
+#: 第 134 期：原先 `OSError` 与「坏 JSON」一起走「改名留档 + 返回空 dict」，而紧接着的
+#: :func:`mutate_overrides` 会拿这份空壳**整份写回** ⇒ 一次瞬时读失败（磁盘抖动 / 网络盘
+#: 短暂掉线 / 杀软锁文件）就把集成凭据、更新镜像、追踪开关全静默抹掉，界面还显示「已保存」。
+#: 现在读失败只记在这里、文件**不动**，写入口见它非空即拒绝写入（抛 `OSError` 让上层回错）。
+_OVERRIDES_READ_ERROR: BaseException | None = None
+
 
 def load_overrides() -> dict:
     """读取应用内设置覆盖层（settings.json）。不存在返回空 dict。
 
-    ⚠️ 文件**存在但读不出来**（半截 JSON / 权限 / 编码）时**不再静默返回空 dict** ——
-    那等于「全部设置悄悄回到默认值」：集成凭据、更新镜像、追踪开关全都消失，
-    而界面看起来一切正常。第 120 期改为把它改名留档（``settings.json.corrupt-<ts>``）
-    并打一条日志，然后返回空 dict（否则设置页从此打不开，比丢设置更糟）。
+    ⚠️ 文件**存在但读不出来**时**不静默返回空 dict** —— 那等于「全部设置悄悄回到默认值」：
+    集成凭据、更新镜像、追踪开关全都消失，而界面看起来一切正常。
+
+    两种「读不出来」分开处理（第 134 期把原先合在一起的两条路拆开）：
+
+    * **内容坏**（半截 JSON / 编码错 ⇒ `ValueError`）：改名留档
+      （``settings.json.corrupt-<ts>``）并打日志，然后返回空 dict —— 否则设置页从此打不开，
+      比丢设置更糟。改名之后文件已经不在原处，下一次写入不会覆盖掉它。
+    * **这一下读不到**（权限 / 磁盘抖动 / 网络盘掉线 ⇒ `OSError`）：**文件一个字节都不动**，
+      只把原因记进 :data:`_OVERRIDES_READ_ERROR`，读路径按空覆盖层继续（设置页还能打开），
+      但 :func:`mutate_overrides` 见它非空就**拒绝写回** —— 拿「读失败」当「空的」写回去，
+      才是真正会丢光设置的那一步。
     """
+    global _OVERRIDES_READ_ERROR
     if not SETTINGS_FILE.is_file():
+        _OVERRIDES_READ_ERROR = None
         return {}
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError, TypeError) as e:
+    except (ValueError, TypeError) as e:
+        _OVERRIDES_READ_ERROR = None
         _quarantine_overrides(e)
         return {}
+    except OSError as e:
+        _OVERRIDES_READ_ERROR = e
+        _log.warning("设置覆盖层这一刻读不出来（%s）—— 文件未改动，本次不写回", e)
+        return {}
+    _OVERRIDES_READ_ERROR = None
+    return data if isinstance(data, dict) else {}
 
 
 def _quarantine_overrides(err: BaseException) -> pathlib.Path:
@@ -527,6 +557,12 @@ def mutate_overrides(mutator) -> dict:
     """
     with _OVERRIDES_LOCK:
         ov = load_overrides()
+        if _OVERRIDES_READ_ERROR is not None:
+            # 「读不到」不等于「是空的」：拿空壳 mutator(ov) 回来再整份 save_overrides，
+            # 就把用户**全部**设置覆盖成「只剩本次要改的那几个键」（第 134 期）。
+            # 宁可这次保存失败并如实报错，也不能静默毁掉。
+            raise OSError(
+                f"设置文件读不出来，本次不写入以免覆盖已保存的设置：{_OVERRIDES_READ_ERROR}")
         out = mutator(ov)
         if isinstance(out, dict):
             ov = out

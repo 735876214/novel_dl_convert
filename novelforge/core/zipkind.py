@@ -291,7 +291,19 @@ def unpack(path, *, remove_source: bool = False) -> dict:
         return {"ok": False, "reason": f"打不开容器：{type(e).__name__}",
                 "actions": [], "source_removed": False}
     with arc:
+        # 累计刹车（第 134 期）：单条目闸在 `comics._open` / `arc.read` 里，管的是「这一条」；
+        # 这里管「这一次展开」—— 否则一个 50 MB 的全零 zip 装几百个 128 MiB 条目就能写满盘，
+        # 而自动展开（`watcher._autounpack`）根本不需要用户点。
+        written_bytes = 0
+        written_entries = 0
         for act in plan["actions"]:
+            if (written_entries >= comics.MAX_UNPACK_ENTRIES
+                    or written_bytes >= comics.MAX_UNPACK_BYTES):
+                results.append({**act, "ok": False,
+                                "note": f"本次展开已到上限（{comics.MAX_UNPACK_ENTRIES} 个条目 / "
+                                        f"{comics._fmt_size(comics.MAX_UNPACK_BYTES)}），"
+                                        f"这一条未落盘"})
+                continue
             dest = p.parent / act["dest"]
             if dest.exists():
                 results.append({**act, "ok": False,
@@ -307,6 +319,7 @@ def unpack(path, *, remove_source: bool = False) -> dict:
                 except Exception as e:                # noqa: BLE001
                     results.append({**act, "ok": False, "note": f"复制失败：{e}"})
                     continue
+                written_entries += 1
                 results.append({**act, "ok": True, "note": ""})
                 continue
             try:
@@ -321,6 +334,14 @@ def unpack(path, *, remove_source: bool = False) -> dict:
             if data is None:
                 results.append({**act, "ok": False, "note": "容器内读不到该条目"})
                 continue
+            if written_bytes + len(data) > comics.MAX_UNPACK_BYTES:
+                # 这一条自己没超单条目闸，但「加上之前已落盘的」就超总量 —— 不落盘、
+                # 说清楚是总量到顶，别让用户以为是这条坏了。
+                results.append({**act, "ok": False,
+                                "note": f"本次展开总量已达上限 "
+                                        f"{comics._fmt_size(comics.MAX_UNPACK_BYTES)}，"
+                                        f"这一条未落盘"})
+                continue
             try:
                 tmp = dest.with_name(dest.name + ".part")
                 tmp.write_bytes(data)
@@ -328,6 +349,8 @@ def unpack(path, *, remove_source: bool = False) -> dict:
             except Exception as e:                    # noqa: BLE001
                 results.append({**act, "ok": False, "note": f"写入失败：{e}"})
                 continue
+            written_bytes += len(data)
+            written_entries += 1
             results.append({**act, "ok": True, "note": ""})
     ok = any(r["ok"] for r in results)
     removed, source_note = False, ""

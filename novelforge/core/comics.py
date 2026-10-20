@@ -44,6 +44,17 @@ _JUNK_PARTS = ("__MACOSX/", ".DS_Store", "Thumbs.db", ".thumbnails/")
 #: 它不是用户想调的旋钮，而是「别让服务被一个文件打死」的兜底）。
 MAX_ENTRY_BYTES = 128 * 1024 * 1024
 
+#: 一次「展开」最多落盘的总字节（第 134 期）。
+#:
+#: 单条目闸（上面那个常量）挡不住「**很多**中等条目」：一个 50 MB 的全零 zip 能装几百个
+#: 128 MiB 的条目（压缩比 ~1000:1），展开时把磁盘写满 —— 而 ``watcher._autounpack`` 在
+#: ``libraries.auto_unpack`` 默认开着时是**自动**调 ``zipkind.unpack`` 的，用户一个键都没按。
+#: 2 GiB 是「一本漫画 / 一份文档合集够用」的量级；与单条目闸同理，刻意不做成设置项。
+MAX_UNPACK_BYTES = 2 * 1024 * 1024 * 1024
+
+#: 一次「展开」最多落盘多少个条目（同上：防「小文件 × 十万个」把 inode / 目录项打爆）。
+MAX_UNPACK_ENTRIES = 512
+
 
 class EntryTooLarge(RuntimeError):
     """归档里的单个条目解压后超过 :data:`MAX_ENTRY_BYTES`。
