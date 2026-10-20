@@ -6,7 +6,9 @@
    `.azw` 时被判成 `unknown`（同一个 MOBI 家族，只差一个后缀），连展开都抽不出来；
 2. **图片 + 旁注文档按漫画读** —— 漫画包带一个 `说明.txt` / `ComicInfo.xml` 是常态，
    此前一律判 `mixed` 不可读，结果是「同样的字节存成 `.cbz` 能读、存成 `.zip` 读不了」，
-   而展开也救不回（`_unpack_entries` 只抽文档、不抽图片）；
+   而展开也救不回（`_unpack_entries` 只抽文档、不抽图片）。⚠️ 旁注判据看**名字与类型**
+   （`.xml/.nfo` 这类结构化元数据一律算，`.txt/.md` 只有名字像说明才算）——
+   「一张封面 + `正文.txt`」必须仍判 `mixed`，否则正文会被静默吞掉（第 124 期复审）；
 3. 图片 + **一本真文档**仍然判不准（不猜）—— 放宽不等于瞎猜；
 4. 错标后缀的 `.cbz` 不许假装能读：0 页就得进「待修复」，而不是让阅读器报「没有图片」；
 5. 序号单元里的一话是容器时，渲染器按**内容**选（`.zip` 里是 PDF 就不能塞给漫画阅读器）；
@@ -25,7 +27,7 @@ _PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 32
 
 #: 全部可能的书目 format（`library._probe_entry` 与 `units` 会产出的那些）
 _ALL_FORMATS = ["EPUB", "PDF", "TXT", "MOBI", "AZW3", "AZW", "FB2",
-                "CBZ", "CBR", "ZIP", "AUDIO", "UNITS"]
+                "CBZ", "CBR", "ZIP", "RAR", "7Z", "AUDIO", "UNITS"]
 
 
 def _zip(target, files: dict, compression=zipfile.ZIP_STORED):
@@ -69,6 +71,33 @@ def test_图片加旁注文档按漫画读(tmp_path):
     assert "旁注" in v["reason"]
     # 与同名内容的 .cbz 完全一致（这是「同样的字节存成 .cbz 能读」对照的那一半）
     assert comics.probe(p).get("pages") == 2
+
+
+def test_图片加正文文本仍然判不准(tmp_path):
+    """`.txt` 是本项目的主力书籍格式：「一张封面 + 正文.txt」不能当 1 页漫画读掉。
+
+    第 123 期曾把 `.txt` 一律当旁注 ⇒ 这本书登记成 1 页漫画（`pages=1`、不进「待修复」），
+    而 `unpack_plan` 又因 `kind=="comic"` 拒绝展开 ⇒ 正文既读不到也取不出来（第 124 期
+    复审的 P2）。现在旁注判据看**文件名**：`正文.txt` 不像说明 ⇒ 仍判 `mixed`。
+    """
+    p = _zip(tmp_path / "封面加正文.zip", {"cover.png": _PNG, "正文.txt": "这是一本小说"})
+    v = zipkind.analyze(p)
+    assert v["kind"] == "mixed" and v["readable"] is False
+    assert "正文.txt" in v["reason"]
+    # 真展开路径也确认它没被当成漫画挡住
+    assert zipkind.unpack_plan(p)["ok"] is True
+
+
+def test_旁注判据看名字也看类型(tmp_path):
+    """结构化元数据（`ComicInfo.xml` / `.nfo`）永远是旁注；文本类看名字是否像说明。"""
+    assert zipkind._is_note("ComicInfo.xml")                 # noqa: SLF001 —— 本用例钉的就是判据
+    assert zipkind._is_note("ComicInfo.xml") and zipkind._is_note("sub/说明.txt")
+    assert zipkind._is_note("README.md") and zipkind._is_note("License.txt")
+    assert zipkind._is_note("版权声明.txt")
+    assert not zipkind._is_note("正文.txt") and not zipkind._is_note("第01章.txt")
+    # 名字像说明的文本 + 图 ⇒ 漫画（现状仍然读得动）
+    ok = _zip(tmp_path / "带readme.zip", {"01.png": _PNG, "readme.txt": "来自某站"})
+    assert zipkind.analyze(ok)["kind"] == "comic"
 
 
 def test_图片加真文档仍然判不准(tmp_path):
