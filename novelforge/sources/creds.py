@@ -32,6 +32,10 @@ _ATTRS = ("domain", "path", "expires", "max-age", "secure", "httponly", "samesit
 
 _SUFFIX = ".cookies.txt"
 
+#: 「没有登录态」的固定返回值。**一个口径只有一份**：状态接口 / 登录面板 / 书源列表
+#: 都靠 ``has`` 判断，各写一份字典迟早漂移。
+_EMPTY = {"has": False, "mtime": None, "size": 0, "count": 0, "domains": [], "names": []}
+
 
 def cookie_dir() -> pathlib.Path:
     """Cookie 目录 —— **与 `DownloadManager` 用的是同一个表达式**。
@@ -51,8 +55,23 @@ def cookie_name(rule_name: str) -> str:
 
 
 def cookie_file(rule_name: str) -> pathlib.Path:
-    """某书源的 Cookie 文件路径（`COOKIE_DIR/<规则名>.cookies.txt`）。"""
-    return cookie_dir() / cookie_name(rule_name)
+    """某书源的 Cookie 文件路径（`COOKIE_DIR/<规则名>.cookies.txt`）。
+
+    ⚠️ 名字的判据**不在这里**：书源名同时是**磁盘上的文件名**，那条判据的唯一真值源是
+    :func:`novelforge.sources.rules.rule_name_error`（第 120 期定的：不许路径分隔符 /
+    ``..`` / 前导点 / 超长）。第 129 期才在这里补上调用 —— 此前这处**只拼路径不判名字**，
+    与规则文件那一侧不一致：名字里带 ``..`` 就能把 Cookie 读出 / 写进 ``COOKIE_DIR``
+    之外（``status`` / ``clear`` / ``save`` 三个口子都吃这个名字），超长名字则让
+    ``status()`` 里的 ``is_file()`` 抛 ``OSError(ENAMETOOLONG)``，把「查登录态」变成 500。
+
+    延迟导入 ``rules``（函数内，不是模块级）：``rules`` 要 ``core.network``，而
+    ``network`` 又要 ``creds``（加载 Cookie）—— 模块级导入会成环。
+    """
+    from . import rules                       # 延迟导入：依赖方向见上
+    err = rules.rule_name_error(rule_name)
+    if err:
+        raise ValueError(err)
+    return cookie_dir() / cookie_name(str(rule_name).strip())
 
 
 def parse_cookie_text(text: str) -> list:
@@ -126,10 +145,18 @@ def save(rule_name: str, text: str, domains: list) -> dict:
 
 
 def status(rule_name: str) -> dict:
-    """Cookie 状态：**只有元数据，没有任何 value**。"""
-    p = cookie_file(rule_name)
-    if not p.is_file():
-        return {"has": False, "mtime": None, "size": 0, "count": 0, "domains": [], "names": []}
+    """Cookie 状态：**只有元数据，没有任何 value**。
+
+    名字非法或路径取不到 ⇒ 回「没有登录态」而**不抛** —— 与 ``rules.rule_file_exists``
+    同一个口径（**读**路径上非法名 = 不存在；**写 / 删**路径上必须抛，见 :func:`cookie_file`）。
+    """
+    try:
+        p = cookie_file(rule_name)
+        with_jar = p.is_file()
+    except (ValueError, OSError):
+        return _EMPTY
+    if not with_jar:
+        return _EMPTY
     jar = LWPCookieJar(str(p))
     try:
         jar.load(ignore_discard=True, ignore_expires=True)
@@ -144,9 +171,18 @@ def status(rule_name: str) -> dict:
 
 
 def clear(rule_name: str) -> bool:
-    """清除登录态（删文件）。返回是否真的删掉了 —— 界面据此如实说「本来就没有」。"""
-    p = cookie_file(rule_name)
-    if not p.is_file():
+    """清除登录态（删文件）。返回是否真的删掉了 —— 界面如实说「本来就没有」。
+
+    名字非法 ⇒ ``False``（它不是一条能存在登录态的书源，等价于「本来就没有」）：
+    走 :func:`cookie_file` 的 ``ValueError`` 会让「清除」这个动作回 500，而它本来就
+    没什么可清。
+    """
+    try:
+        p = cookie_file(rule_name)
+        with_file = p.is_file()
+    except (ValueError, OSError):
+        return False
+    if not with_file:
         return False
     try:
         p.unlink()
