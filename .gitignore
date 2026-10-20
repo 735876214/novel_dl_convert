@@ -59,6 +59,10 @@ _test/
 # 测试版 DATA_DIR（docker-compose.test.yml 挂载点，与 /data 隔离、同样不入库）
 /data-test/
 *.db
+# PostgreSQL 数据目录（`docker-compose.yml` 把 ./pgdata 挂进容器 /var/lib/postgresql/data）
+# ⚠️ 与上面几条同一个坑：写 `pgdata/` 会匹配任意层级同名目录 ⇒ 前导斜杠锚定仓库根。
+#    它只在「在仓库根直接 docker compose up」时出现（第 134 期跑修复验证实例时发现没被忽略）。
+/pgdata/
 
 # 多书库（第 10 期）书库来源根目录：就地引用的书库实体落在它下面，不入库
 # ⚠️ 同样必须带前导斜杠（理由见上面 /data/ 那条）

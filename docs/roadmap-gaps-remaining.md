@@ -9149,3 +9149,128 @@ def row(values):
    做结构变换，都要用**能保留文字**的最小操作，并拿「正文一个字都没丢」当判据。
 4. **安全修复也要管缓存**：判据不在指纹里，就等于「修了但读的人看不见」。这条规矩在本项目已经用过三次
    （`CHAPTER_RULE_VERSION` / `ENCODING_RULE_VERSION` / 现在 `CHAPTER_HTML_VERSION`）。
+
+## 第 134 期（五轮审查九条收口：正文丢段 / 掉线误删索引 / 设置读失败清空 / 出站闸 / 展开上限）
+
+来源：用户 `进行5论审查` → 审查报告（对象 `7f6c80f..182ba80`，16 笔提交 / 83 文件 / +6876−999，第 118–133 期；
+结论**无致命**、3 条 P1、3 条 P2、3 条 P3）→ 用户 `修一下`。**9 条全部落地**，每条都有 pytest 断言，
+不含「看着像修了」的改动（`tests/test_hardening_134.py` 15 例）。**不发版**，`VERSION` 仍 `1.3.0`。
+
+### 一、三条 P1（会丢用户数据的）
+
+**F1 净化把「首段裸文字」整段吞掉（第 133 期自己引入的）**
+`novelforge/core/htmlsafe.py::sanitize` 结尾是
+`"".join(etree.tostring(c, encoding="unicode", method="xml") for c in root)` —— 只拼**子元素**，
+`root.text`（根节点下的第一段文字）不在任何子元素里，于是 `<body>第一段纯文本<p>第二段</p></body>` 的
+第一段**无声消失**。EPUB 章节体里「起手就写字、第一段不包块级标签」是常见写法，容器里用同一份代码实测：
+`第一段纯文本` 整段不见，接口 200、无报错 ⇒ 这是**最坏的一类：静默内容丢失**。
+修法：`return escape(root.text or "") + "".join(...)`（裸文字同样要**重新转义**，否则 `&lt;` / `a<b` 这类会被当标签），
+并 `CHAPTER_HTML_VERSION` **1 → 2** —— 章节 HTML 进 Redis 的键里带这个版本号，不升版本 = 存量书命中原缓存、
+修了也看不见（第 133 期自己立的规矩）。
+
+**F7 多根库「一个根掉线」被当成「整库都没了」**
+`novelforge/core/catalog.py::_refresh_locked` 的删除判据是「索引里有、本次没扫到 ⇒ 删」。
+单根库掉线时 `roots` 一个都读不到、`seen` 为空 ⇒ **整库索引行被清空**；NAS 未挂载 / 权限抖一下就会命中，
+而索引是「书架秒开」的真值源，行没了要等重新挂载再扫一遍才回来（期间书架是空的，且 `issues` 里看不到任何提示）。
+修法：先算 `usable_roots`（`is_dir()` + `os.access(R_OK|X_OK)`），再拿两个集合一起判：
+① 行所属的根**还在配置里但这一刻读不到** ⇒ **不**判「没了」（保留行）；
+② 行所属的根**已经从库配置里删掉** ⇒ 该删（那是**配置变了**，不是读不到）；
+③ 一根都不可用且还有配置 ⇒ 本轮直接回 `{"skipped": True, "reason": "root_unavailable"}`，一行不动。
+⚠️ **第一版修过头了**：只写 ① 时，仓库自带用例
+`tests/test_library_count_contract.py::test_改库根之后计数立刻跟着走` 立刻红（`assert 4 == 3`）——
+换了库根以后旧根的行**永远**挂在列表里（变成幽灵书）。所以判据必须是「读不到 ⇒ 留」**与**「不再配置 ⇒ 删」
+两条同时成立，只认一条各自出不同的数据错误。
+
+**F9 `settings.json` 瞬时读失败被当成「没有覆盖层」，下一次保存把全部设置写成 `{}`**
+`novelforge/config.py::load_overrides` 把「文件读不出来」（被别的编辑器截断 / 占锁 / IO 抖 / 权限瞬时不对）
+与「文件不存在」归成同一种结果，回空 dict；随后设置页读到的是**默认值**，用户改任何一项 ⇒
+`mutate_overrides` 读旧值（还是空）→ 合并 → 原子写 ⇒ **磁盘上那份设置被整体覆盖**，其余十几项静默丢失。
+修法：模块级 `_OVERRIDES_READ_ERROR` 记住「这次读是失败的，不是空的」；读失败**不动文件**、按空覆盖层继续
+（设置页还能打开，用户能看见默认值）、记一条 warning；`mutate_overrides` 在这种状态下**直接拒写**
+（`OSError("设置文件读不出来，本次不写入以免覆盖已保存的设置：…")` ⇒ 接口 500 且文案说清原因）。
+只有「解出了 JSON 但形状不对」（`ValueError` / `TypeError`）才走原有的隔离改名路径 —— 那是**内容坏了**，
+与**读不到**是两件事，混在一起就会一边清空设置、一边把好文件改名。
+
+### 二、三条 P2
+
+**F5 压缩包自动展开没有累计上限（单条目上限挡不住数量）**
+第 125 期给 `comics._Archive.read()` 加了 `MAX_ENTRY_BYTES = 128 MiB`，但 `zipkind.unpack` 一个包能展开
+**任意多个**条目：50 MB 的全零 zip（压缩比极高）里放几百个 128 MiB 条目，`watcher` 的自动展开会在用户
+不参与的情况下把它们全落盘。修法：`comics.MAX_UNPACK_BYTES = 2 GiB` + `comics.MAX_UNPACK_ENTRIES = 512`，
+`zipkind.unpack` 里维护 `written_bytes` / `written_entries`：循环开头判一次（已到上限 ⇒ 这一条不再落盘并写明 note），
+写盘前再按**实际字节**判一次（`written_bytes + len(data) > MAX` ⇒ 跳过），只有**真的写成功**才累加
+（先加后写在失败时会虚报限额）。repackage 分支同样计条目数，只计一次。
+
+**F4 书里的 SVG 与站点同源下发**
+`GET /api/books/{bid}/asset` 与封面 `_cover_response` 都是 `Response(bytes, media_type=…)` 直发书内字节，
+**与站点完全同源** ⇒ 书里放一个 `<svg><script>fetch('/api/…', {headers:{Authorization:…}})</script></svg>`
+在用户点开插图时就是「书里的脚本以用户身份调接口」（第 133 期只净化了**正文**，资源是另一条出口）。
+修法：`server.py` 新增 `_MEDIA_UNTRUSTED_HEADERS = {"Cache-Control": "public, max-age=86400",
+"X-Content-Type-Options": "nosniff", "Content-Security-Policy": "sandbox"}`，挂到上述两处响应上 ——
+`sandbox` 让文档型资源进「唯一来源」沙箱（脚本、表单、同源存储全部关掉），`nosniff` 挡住按内容猜类型。
+⚠️ **残留（本轮未动，记录在案）**：另外六处媒体出口（`units` 封面 / 漫画页 / `unit` 页 / 作者头像 / 用户头像 / 字体文件）
+仍走 `FileResponse`、`media_type` 由扩展名派生，没有这三个头。它们不直接下发**书内**字节（漫画页除外），
+但同一类风险要按同一判据收口，留给下一轮统一。
+
+**F3 书源抓取与封面下载从来没过出站闸**
+`core/urlguard.py` 的出站闸（协议白名单 + 域名解析后逐 IP 判全局可达 + 重定向逐跳复查）此前**只挂在
+URL 导入那一条路**上；`sources/manager._client()` 与 `metafetch._download_cover()` 都是裸 `httpx`。
+书源规则是**导入来的**：一条指向 `http://127.0.0.1:8080/…` 或 `http://169.254.169.254/…` 的规则会让服务端
+去取内网内容并当成正文显示（SSRF：云元数据 / NAS 管理页 / 路由器后台）。修法：判据做成**工厂**复用
+（httpx 的 sync / async 事件钩子形状不同，一份实现两处用会有一个是错的）：
+`urlguard.make_request_guard()`（async，给 `AsyncClient`）/ `make_sync_request_guard()`（sync，给 `Client`），
+两者都 `functools.partial(assert_public_url, url, allow_private=…)`；`assert_public_url` 增加 `allow_private`
+参数；新增唯一读点 `allow_private_sources(cfg=None)` → 配置键 `network.allow_private_sources`（默认 **False**）。
+接线：`sources/manager._client()` 传 `request_guard=…`、`metafetch._download_cover()` 用
+`httpx.Client(event_hooks={"request": [make_sync_request_guard()]})` 并以 `client.stream("GET", url)` 取流。
+同步点按 `AGENTS.md` §2 三处一起改：`config.DEFAULTS` → `server.EDITABLE["network"]` → 前端
+`data/settingsFields.ts`（「允许书源访问内网地址」，hint 写明默认关的理由）。
+⚠️ **这是一处行为变更**：默认**不再允许**书源指向内网 / 环回 / 链路本地地址。NAS 上自建书源站（局域网 IP）
+的用户会看到「目标地址不允许」，需显式打开开关 —— 这是刻意的：导入来的规则不该有这个能力，
+而「自建源」是用户自己的部署，他知道自己在开什么。
+
+### 三、三条 P3
+
+**F2 `force` 重扫把「内容已更换」标记清零**：`_refresh_locked` 的 force 分支走 `INSERT OR REPLACE`，
+`replaced` 列不带旧值 ⇒ 第 125 期立的「同一路径换了内容」在用户点「重新扫描」后消失（`issues` 里也不再提示）。
+修法：`stored` 里一并取 `replaced`，重扫时 `replaced_now = bool(cur[2]) if cur is not None else False`，
+新旧比对只看 `(size, mtime)`。
+
+**F8 上传落临时件写盘失败留半截 `.upload-*`**：`_dispatch_into_library` 先写 `.upload-<uuid><suffix>` 再判归库，
+写盘段没有 `try` ⇒ 磁盘满 / 只读挂载时异常冒成裸 500、临时件残留、也没有失败记录。
+修法：写盘包 `except OSError` → 清残留（`missing_ok=True`）+ `activity_log.log_convert_fail` +
+500「上传件写盘失败（可能磁盘已满或没有写权限）：<目录>（<原因>）」。
+
+**F6 媒体令牌进了访问日志**：媒体路径允许 `?token=<token>`（`_MEDIA_TOKEN_PATHS`），uvicorn 的 access log
+原样记完整 URI ⇒ 令牌落进日志文件（用户贴日志求助即泄漏）。修法：`server.py` 加
+`class _RedactMediaToken(logging.Filter)`（只抹 `token=` 的**值**，`(token=)[^&\s"]+` → `\1***`）并挂到
+`logging.getLogger("uvicorn.access")`；**不关 access log**（`start.sh` / `Dockerfile` 的 uvicorn 命令一字未动，
+其余路径的日志原样保留 —— 排障需要那条链路）。
+
+### 四、核验
+
+| 项 | 结果 |
+|---|---|
+| `tests/test_hardening_134.py` | **15 例**：F1 裸文字不丢 + 裸文字里的 `<` 被转义；F7 根不可用不清索引 + 多根库只影响掉线那个根；F2 force 不清 `replaced`；F9 读失败不写回也不动文件 + 坏 JSON 仍隔离留档；F5 展开累计上限；F4 书内资源带沙箱头；F6 令牌被打码 + 其它路径原样；F3 书源默认挡内网 + 开关只认那一个键 + 书源客户端真挂了闸；F8 写盘失败如实报错 |
+| 后端全量 | **2618 例（2596 passed / 0 failed / 0 errors / 22 skipped）**，478.0 s，**在 Linux 容器里跑**（本机沙箱下 python 在仓库外建不了临时目录 ⇒ pytest basetemp 落进仓库根、被 `tests/conftest.py` 的仓库根守卫判红；多出的 9 个 skip 是 node / quickjs 引擎不在容器里） |
+| 前端四连 | `vue-tsc --build` exit 0 / `test:unit` **69 spec, 718 例**全绿 / `build` 成功 / `deploy` 已同步（改了 `settingsFields.ts` ⇒ 必须重建，否则设置页看不到新开关） |
+| 冒烟 | `python -c "import novelforge.server"` OK、`APP_VERSION 1.3.0`；逐条直调判据：`127.0.0.1` / `169.254.169.254` / `file:///etc/passwd` / `192.168.1.5` 默认全拒，`allow_private=True` 时放行；`comics.MAX_UNPACK_BYTES = 2147483648`、`MAX_UNPACK_ENTRIES = 512`；配置默认 `False`；日志打码后 `…&token=*** HTTP/1.1" 200` |
+| `python tests/period_close.py check` | 0 问题 |
+| 顺带 | 仓库根 `pgdata/`（在根目录直接 `docker compose up` 产生）此前没被忽略，`.gitignore` 补 `/pgdata/`（前导斜杠，与 `/data/` 同一个坑） |
+
+### 五、教训
+
+1. **「拼回子树」时根节点的裸文字是第二处**：净化 / 改写第三方 HTML 的收尾表达式若只遍历子元素，
+   根下第一段文字必丢 —— 而它恰是「起手就写字」的常见写法。一条「正文一个字都没丢」的用例就够抓住，
+   问题是没人写（第 133 期写了 10 例，没有一例是无块级包裹的起手段）。
+2. **「配置变了」与「读不到」必须分开判**：混成一条判据时，往「删」偏会清掉掉线根的全部索引、
+   往「留」偏会让换根后的旧行变幽灵书（本轮两版都试过，仓库自带用例当场抓出第二版）。
+   判据写错的方向不是「不够严」，而是**两类事实被折叠成一个**。
+3. **读-改-写的链路上，「读失败」不能退化成「空的」**：空值继续走写回 = 用默认值覆盖用户数据。
+   失败要留痕（模块级状态 + warning）并**拒绝写**；只有「内容坏了」才隔离改名，两者混用会一边清空一边改名。
+4. **出站闸要做成工厂，不能「在用到的地方再写一遍」**：httpx 的 sync / async 钩子形状不同，
+   一份实现两处用必然有一处是错的；而同一判据散在各处时，**新加的出网路径默认没闸**（书源抓取裸奔了一年）。
+5. **资源响应头是内容安全的另一半**：`CSP: sandbox` + `nosniff` 只挡「直接打开 / 按内容猜类型」，
+   书里的脚本该净化还得净化（第 133 期）；但一条出口漏了头，同源 XSS 就回来了。
+6. **日志里出现的秘密等于泄漏**：既然白名单路径允许 `?token=`，就必须在日志**出口**抹掉；
+   关掉 access log 是另一回事（排障链路的价值高于省一行配置）。
