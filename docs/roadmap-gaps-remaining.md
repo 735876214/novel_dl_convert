@@ -8603,3 +8603,89 @@ JSON compliant: inf`。**关键在「一次写、永久坏」**：`inf` 存得�
    写「把输入转成整数」时，这三类要一起接。
 4. **两侧判据拦不住 NaN**：`x <= 0 or x > 86400` 看起来很完备，对 `nan` 却是「两边都放行」。
    区间判断与「是不是数」是两个问题，**必须分开问**。
+
+## 第 128 期（同名冲突的降级路径：单书入口 409，批注总览与导出不再整页打不开）
+
+### 一、冲突不是「不该存在」，而是「已经存在」
+
+`book_id` 只由**文件名**派生（`库id$sha1(basename)[:12]`）。所以「同一个书库里两个目录下的同名书」
+（`作者A/测试书.txt` 与 `作者B/测试书.txt`）会撞同一个 id —— 实测扫描照样把两行都收进
+`book_index`（主键是 `(library_id, root, rel)`，能装下），于是**索引里合法地躺着两条同 id 的行**。
+
+`library.by_id` 对这种情况抛 `BookIdConflict`（不静默取第一条 —— 进度 / 批注只有一份，
+取错书比报错糟），这个判据本身是对的。问题在**冲突没有降级路径**：
+
+- 入库拦截（`IngestConflict`）是**第 13 期**才补的 ⇒ 旧库里本来就有冲突；
+- 更常见的成因是「先有书、后来又在另一个目录放了同名文件」—— 拦截管不到已经入库的书；
+- 而修复入口（改名）要求用户**先能打开应用**。
+
+### 二、实测：一条旧批注就让「批注总览」与「导出」恒 500
+
+隔离实例（8482）造出真冲突（同库 `作者A/测试书.txt` + `作者B/测试书.txt`，同为
+`lib-1f40b560$855aa7e282db`），再给这个 id 塞一条旧批注（模拟「改名之前就划过线」）：
+
+| 请求 | 改前 | 改后 |
+|---|---|---|
+| `GET /api/books/{bid}` | **500** | **409** + `code=book_id_conflict` + 修复指引 |
+| `GET /api/annotations` | **500** | **200**，该行 `book_conflict=true` |
+| `GET /api/annotations/export?format=json` | **500** | **200** |
+| `/api/books`、`/api/stats`、`/api/series`、`/api/authors`、`/api/book-dock`、`/api/library-conflicts`、`/api/scrape/state`、`/api/tasks` | 200 | 200 |
+
+两处 500 里最要命的是**导出**：用户的本能反应是「先备份批注再去改名」，而备份这条路
+自己先挂了 —— 修复入口与备份入口同时不可用，用户没有任何安全的下一步。
+
+栈里其实已经有可行动的文案（`BookIdConflict` 的消息写着「请到「设置 → 书库管理 → …」
+一键改名」），但**它被 500 吞掉了**：响应体只有 `Internal Server Error`。
+全仓 40+ 个 `library.by_id` 调用点里，只有「删书」一处自己 `except` 过它。
+
+### 三、文案还说错了库
+
+同一条消息一律写「**在多个书库中同名**」，可这组是**同一个库**里的两个目录
+（`libs_txt` 去重后只剩一个库 id）。而冲突清单接口按 `kind="same_name_different_dirs"`
+报、修复页也按这个分栏 —— 用户拿着「跨库同名冲突」这句话去「跨库」那一栏找，
+永远找不到那一组。
+
+### 四、修法
+
+1. **单书入口：全局异常处理器**（`novelforge/server.py`）
+   ```python
+   @app.exception_handler(library.BookIdConflict)
+   def _book_id_conflict(request, exc): return JSONResponse(409, {...})
+   ```
+   口径与第 127 期的序列化兜底同一条：**同一件事有 40+ 个调用点，逐个 `except` 必然漏**
+   （第 119 期「一行坏数据打掉整页」就是这么漏出来的）。响应体固定三件：`detail`（原始文案，
+   含是哪两本）、`code="book_id_conflict"`（前端可判）、`hint`（去哪修、批注可先导出）。
+2. **跨书清单：把冲突当状态，不当异常**（`novelforge/core/library.py`）
+   `by_id_status(bid) -> (book, conflict)`：内部走 `catalog.find_by_id(bid, unique_only=True)`，
+   冲突时返回 `(None, True)`。docstring 写明「跨书清单用；**单书入口不许用**」——
+   单书入口必须抛，让它翻成 409。
+3. **两个批注接口改用它**（`/api/annotations` 与导出）：每行多带 `book_conflict`；
+   书名取不到时回退成 id 本身（不编「未知」）。
+4. **文案按情形说**（`novelforge/core/catalog.py`）：库 id 去重后只有一个 ⇒
+   「在同一个书库里有两本同名（A / B）」，否则 ⇒「在多个书库中同名（lib1、lib2）：A / B」；
+   两处统一指向「设置 → 书库管理 → 同名冲突」。
+5. **前端**：`AllAnnotation` 加 `book_conflict`；`canJumpTo()` 遇冲突直接 `false`
+   （能列出但**按 id 打开必然 409**，做成可点就是假交互）；批注总览页在书名后加「同名冲突」
+   chip，tooltip 与跳转提示分三态（冲突 / 序号未知 / 正常）。
+
+### 五、核验
+
+| 项 | 结果 |
+|---|---|
+| 新增用例 | `tests/test_conflict_read_128.py` **5 例**（409 + code + hint + 文案说「同一个书库」/ 总览 200 且标冲突 / 导出 200 / 无冲突时 `false` / 跨库同名不误判） |
+| 相关子系统 | `test_library_conflicts` / `test_name_conflicts` / `test_catalog` / `test_annotations` / `test_bookid_migration` / `test_opds_library` 共 **75 例全绿** |
+| 后端全量 | **2564 例（2551 passed / 0 failed / 0 errors / 13 skipped），159.7 s** |
+| 前端四连 | `bash scripts/frontend-verify.sh` exit 0（type-check / unit / build / deploy） |
+| 真机 | 重启 8482 后：详情 409、总览与导出 200 且带 `book_conflict` |
+
+### 六、四条教训
+
+1. **「合法存在」的坏状态必须有降级路径** —— 判据抛异常是对的，但没有一个地方把它翻成
+   可行动状态时，坏状态就等于「整个功能不可用」；判断标准是「用户能不能走到修复入口」。
+2. **修复入口与备份入口不能同时依赖「状态干净」** —— 导出挂掉把「先备份再修」这条唯一
+   安全路径也堵死了。
+3. **文案是判据的一部分** —— 说「跨库」而实际是「同库两个目录」，用户照着找就是找不到；
+   文案要由**实际数据**（库 id 去重后的个数）决定，不能写死。
+4. **同类错误的规模决定修法位置** —— 同一件事有 40+ 个调用点时，逐个 `except` 是必然漏的
+   写法；该放在**框架边界**（异常处理器）上，而「一行坏数据」的场景放在**逐行容错**上，
+   两者不是二选一。
