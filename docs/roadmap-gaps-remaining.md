@@ -8689,3 +8689,103 @@ JSON compliant: inf`。**关键在「一次写、永久坏」**：`inf` 存得�
 4. **同类错误的规模决定修法位置** —— 同一件事有 40+ 个调用点时，逐个 `except` 是必然漏的
    写法；该放在**框架边界**（异常处理器）上，而「一行坏数据」的场景放在**逐行容错**上，
    两者不是二选一。
+
+## 第 129 期（名字到路径的判据：超长名与非法书源名不再 500，Cookie 路径不再越出 COOKIE_DIR）
+
+### 一、起因：换一个探法，抓到的是一整类
+
+前几期都是「按模块读代码 + 定点复现」。本期换成**对接口本身做穷举**：用
+`from novelforge.server import app` 枚举 `APIRoute`，拿到 **85 条带参路由**（含方法维度共 173 条 GET），
+对每个 `{param}` 填 11 种敌意值（`x` / `0` / `-1` / `..` / `a*300` / `a*300+中` / `%00` /
+`1e400` / `管理员` / `../x` / `x/../y`），扫「有没有 5xx」。
+
+结果一次抓出 **4 处 500**，而且它们**不是四个 bug**：
+
+| 接口 | 触发值 | 栈末帧 |
+|---|---|---|
+| `GET /download/{name:path}` | `a*300` | `server.py:1859 download_file` |
+| `GET /api/sources/{name}/cookie` | `a*300` | `server.py:932 api_source_cookie` → `sources/creds.py:131 status` |
+| `DELETE /api/sources/{name}/cookie` | `a*300` | `creds.clear` |
+| `GET /api/sources/{name}/login-spec` | `a*300` | `server.py:987 api_source_login_spec` → 同一个 `creds.status` |
+
+四处都是 `OSError: [Errno 63] File name too long`。
+
+### 二、根因一：`is_file()` 会抛，而「取不到就 404」的前提不成立
+
+`pathlib` 里那些「问一下有没有」的方法（`is_file` / `is_dir` / `stat` / `exists` 的底层）
+只在**一组特定 errno** 上回 `False`：`_ignore_error` 的白名单是
+ENOENT / ENOTDIR / EBADF / ELOOP / EINVAL —— **`ENAMETOOLONG` 不在里面**。
+
+实测（`os.pathconf("/tmp", "PC_NAME_MAX")` = 255）：
+
+```python
+p = pathlib.Path("/tmp") / ("a" * 300)
+p.resolve()          # 成功 —— 纯字符串运算，不碰文件系统
+p.is_file()          # OSError: [Errno 63] File name too long
+p.stat()             # 同上
+```
+
+于是「`if not p.is_file(): raise 404`」这句在超长名字上**根本走不到 404**，
+直接冒到 FastAPI 变成 500 —— 而它的文案与「文件真的不存在」一模一样地不可行动。
+
+**修法**：这条判据必须**在拼路径之前**问，落在唯一的那处路径入口上。
+`core/fileops.py` 新增：
+
+- `NAME_MAX_BYTES = 255`（POSIX `PC_NAME_MAX` 的常见值；**不去查 `os.pathconf`** ——
+  Windows 上它不可用，而查到的值也不该让行为随挂载点漂移）；
+- `name_too_long(part)` —— 按 **UTF-8 字节**判（不是字符数：85 个汉字 = 255 字节，
+  86 个就超了；这个坑在「用户书名全是中文」时必然踩到）；
+- `_check_part_len(part, name)` —— 超限抛 `ValueError("路径片段太长（N 字节，上限 255）：…")`，
+  接进 `safe_path()` 的既有 `rel.parts` 循环与 `input_path()`（第 119 期立的那处）。
+
+接口层不需要新代码：`safe_path` / `input_path` 的 `ValueError` 本来就翻 400。
+
+### 三、根因二：书源名是文件名，判据却只有一份（在两处该用的地方只用在了一处）
+
+`sources/creds.py::cookie_file()` 原来只有一句
+`return cookie_dir() / f"{rule_name}.cookies.txt"` —— **只拼路径，不问名字**。
+而「书源名就是磁盘上的文件名」这条判据，第 120 期就在 `sources/rules.py::rule_name_error()`
+里立好了（不许路径分隔符 / `..` / 前导点 / 超过 80 字符），规则文件那一侧也接上了，
+**Cookie 这一侧没接** ⇒ 同一个名字在两条路径上被两套标准对待：
+
+- `..` 之类的名字能把 Cookie **读出 / 写进 / 删掉** `COOKIE_DIR` 之外的文件（`status` / `save` / `clear` 三个口子）；
+- 超长名字让 `status()` 里的 `is_file()` 抛 `OSError` ⇒ 查登录态 500。
+
+**修法**：`cookie_file()` 调 `rules.rule_name_error()`（**函数内延迟导入**：
+`rules` 要 `core.network`，而 `network` 又要 `creds` 加载 Cookie，模块级导入会成环）。
+读 / 删两条路径**不抛**：`status()` 与 `clear()` 遇 `ValueError` / `OSError` 一律回
+「没有登录态」（`_EMPTY` 收敛成一份常量）—— 与 `rules.rule_file_exists` 同口径：
+**读路径上非法名 = 不存在；写 / 删路径上必须当场拒**。
+
+### 四、核验
+
+| 项 | 结果 |
+|---|---|
+| 修复后同一条模糊探针 | 1903 次探测（11 值 × 全部带参路由 × 全部方法），**0 个 5xx** |
+| 新增用例 | `tests/test_name_to_path_129.py` **10 例**（字节判据 / 两个路径入口 / Cookie 七种非法名 / 读删不抛 / 四个接口回 4xx 或如实回「没有」） |
+| 全量 | **2574 例（2561 passed / 0 failed / 0 errors / 13 skipped）**，196.4 s |
+| 前端四连 | `bash scripts/frontend-verify.sh` exit 0（本期未改前端） |
+| 顺带修掉的 flaky | `tests/test_annotation_export.py::_bid` —— 见下 |
+
+**顺带修掉的 flaky（同一轮全量里红的）**：`test_按单书收窄` 报「扫描没找到 二.epub」，
+单独跑必绿、满载才红。根因不是本期改动：读路径对「索引非空 + 被标脏」只**有上限地等**
+一拍（`catalog.SETTLE_WAIT` = 0.25 s，到点如实返回现有索引），而那个夹具是
+「写文件 → `invalidate()` → 立刻读」—— 负载高时那一拍等不到后台刷新跑完，就读到旧列表。
+改成 `library.books(force=True)`（显式同步重扫）。
+
+### 五、教训
+
+1. **「取不到就 404」的前提是「取不到」只会有一种原因** —— `is_file()` 的 errno 白名单
+   里没有 ENAMETOOLONG，于是「文件不存在」与「名字根本放不进文件系统」在同一条 `if` 上
+   给出完全不同的结果（404 vs 500）。**凡拿名字拼路径，先问名字能不能落盘**，别等
+   `stat` 来告诉你。
+2. **上限要按字节算**：255 是**字节**。按字符判会在中文书名上放行一半、
+   在 emoji 上错更多；而 85/86 个汉字正好卡在边界上，这就是最容易漏测的那一格。
+3. **「书源名就是文件名」这句话有两处落点**（规则文件 / Cookie 文件），判据立在一处
+   不等于两处都用上了 —— 第 120 期那期的修法只接了其中一处，本期才补齐。**立判据时
+   要顺手 `rg` 一遍「还有谁在拼这个名字」**。
+4. **穷举接口比读代码更快抓到这一类**：11 个值 × 85 条路由 ≈ 半小时，一次抓到 4 个
+   500；而按模块读代码时，「名字长度」这个维度没有任何一处会让人停下来想。
+5. **满载才红的用例是判据缺失，不是运气**：它真正在说「这个夹具依赖了一个产品明确
+   不保证的时序」（有上限的等待）。别用「重跑一次就绿」把它按下去 —— 那条等待的上限
+   会随机器负载变化，最终会以「CI 偶发红」的形式再回来。
