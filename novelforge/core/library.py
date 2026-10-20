@@ -1493,6 +1493,53 @@ def probe_epub(path: pathlib.Path) -> dict:
 # Komga 布局是「一层系列目录 + 书文件」（core/komga.py），所以扫描要跟着下探一层。
 # **只下一层**：Komga 自己也不递归系列目录的子目录，再深只会扫到它不认的文件。
 
+def is_hidden_name(name: str) -> bool:
+    """``.`` 开头的名字算**隐藏**（不是书）。
+
+    **唯一判据**，`library._iter_book_entries` 与 `watcher._iter_entries`
+    （两条摄入路径）共用 —— 第 125 期之前只有收书侧过滤隐藏项，库扫描侧顶层的
+    **文件**分支不判，于是：
+    - macOS 往 SMB / NAS 拷贝时给每个文件配的 AppleDouble 资源叉
+      （``._三体.epub``，204 字节）被当成一本 EPUB 收进书架（``unparsable``）；
+    - ``.upload-*`` / Syncthing 的 ``.stfolder`` 之类临时件同理。
+
+    隐藏文件里没有一本书，所以两条路都直接跳过；**不能**指望用户的排除图案
+    （那管的是「这些名字不要」，与「什么算文件」正交）。
+    """
+    return str(name or "").startswith(".")
+
+
+def _link_flag(ent) -> bool:
+    """``DirEntry`` 的 ``is_symlink()`` —— 读 ``d_type``，**不发 syscall**。"""
+    try:
+        return bool(ent.is_symlink())
+    except OSError:
+        return False
+
+
+def _escapes_root(p: pathlib.Path, root: pathlib.Path, link=None) -> bool:
+    """符号链接指向**库根之外** ⇒ 不算这个库的书（第 125 期）。
+
+    库根是「书的边界」：``DirEntry.is_file()/is_dir()`` 默认跟随符号链接，
+    于是一个指向 ``/tmp/secret.txt`` 的链接会被收成一本书、还能下载到根外的内容。
+    指向根**内**的链接照旧可用（用软链接整理书库是常见做法）。
+
+    ⚠️ ``link`` 必须由调用方从 ``DirEntry`` 传进来（``_link_flag``）：``Path.is_symlink()``
+    在 3.12 走的是 ``Path.lstat()`` ⇒ **每个条目多一次 syscall**，正好抵消第 62 期
+    「每文件只问一次文件系统」的全部收益（`test_增量刷新每文件只问一次文件系统` 会红）。
+    """
+    try:
+        if link is None:
+            link = p.is_symlink()
+        if not link:
+            return False
+        target = p.resolve()
+        base = root.resolve()
+    except OSError:
+        return True
+    return target != base and base not in target.parents
+
+
 def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None, ltype=None) -> list:
     """**一个书库根目录**下的书目条目（平铺 + 一层系列目录），按遍历顺序返回。
 
@@ -1552,10 +1599,15 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None, ltype=None) -> 
         except OSError:                       # 目录项在遍历途中消失：跳过，下一轮再说
             continue
         if is_file:
-            if f.suffix.lower() in allowed and not _excluded(f.name, f.name, patterns):
+            if not is_hidden_name(f.name) and not _escapes_root(f, d, _link_flag(ent)) \
+                    and f.suffix.lower() in allowed \
+                    and not _excluded(f.name, f.name, patterns):
                 out.append(f)
             continue
-        if not is_dir or f.name.startswith("."):
+        if not is_dir or is_hidden_name(f.name):
+            continue
+        # 指向根外的目录链接：连同它下面的东西一概不算本库的书（与文件同理）
+        if _escapes_root(f, d, _link_flag(ent)):
             continue
         # 目录型条目：**整棵子树 = 一本书**。两种形态（平铺音频 / 序号单元树）与
         # 「这个库收不收」的判据全在 `units.collected_by` 一处 —— 本函数只负责加上
@@ -1580,10 +1632,13 @@ def _iter_book_entries(d: pathlib.Path, exts=None, exclude=None, ltype=None) -> 
                 x_is_file, x_is_dir = xent.is_file(), xent.is_dir()
             except OSError:
                 continue
-            if x_is_file and x.suffix.lower() in allowed \
+            if x_is_file and not is_hidden_name(x.name) \
+                    and not _escapes_root(x, d, _link_flag(xent)) \
+                    and x.suffix.lower() in allowed \
                     and not _excluded(rel, x.name, patterns):
                 out.append(x)
-            elif allow_audio_dir and x_is_dir and not x.name.startswith(".") \
+            elif allow_audio_dir and x_is_dir and not is_hidden_name(x.name) \
+                    and not _escapes_root(x, d, _link_flag(xent)) \
                     and audio.is_audio_dir(x) and not _excluded(rel, x.name, patterns):
                 out.append(x)
     return out
@@ -1876,12 +1931,18 @@ def _cheap_facts(f: pathlib.Path) -> "tuple | None":
     return (st.st_size, st.st_mtime, False)
 
 
-def _issues_of(rel: str, size: int, is_dir: bool, unparsable: bool, has_cover: bool) -> list:
+def _issues_of(rel: str, size: int, is_dir: bool, unparsable: bool, has_cover: bool,
+               replaced: bool = False) -> list:
     """条目的**文件派生**缺失项（第 5 期「缺失资源」工具的判定依据）。
 
     ⚠️ 判据必须**只依赖文件自身**（体积 / 是否目录 / 能否解析 / 有没有封面），
     这样它才能在读取时从索引列现算，而不必入库 —— 一旦有服务端状态掺进来
     （如「服务端有没有封面」），索引里那份就会过期。
+
+    ``replaced``（第 125 期）= **同名路径上的文件被换过内容**。它同样是「文件
+    派生」的：判据全在扫描期，只比 ``(size, mtime)`` 与索引现值是否一致，索引里
+    存的是这个结论（``book_index.replaced``），不查任何服务端状态。原先是完全
+    静默的：覆盖进来另一本书，``book_id`` 不变 ⇒ 阅读位置与批注继续指到新正文上。
 
     「服务端封面存在 ⇒ 撤掉 ``no-cover``」是**另一层**的事，在
     :func:`_apply_overlay` 里做（那里才查得到 ``db.cover_ids``）。
@@ -1889,6 +1950,8 @@ def _issues_of(rel: str, size: int, is_dir: bool, unparsable: bool, has_cover: b
     issues = []
     if not is_dir and size == 0:
         issues.append("zero-bytes")
+    if replaced:
+        issues.append("replaced")
     if unparsable:
         issues.append("unparsable")
     elif not has_cover and pathlib.PurePosixPath(rel).suffix.lower() == ".epub":

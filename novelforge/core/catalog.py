@@ -75,7 +75,8 @@ _COLS = (
     "size", "mtime", "format", "title", "author", "series", "series_index",
     "has_cover", "cover", "pages", "pages_source", "tracks",
     "year", "publisher", "isbn", "language", "description",
-    "tags", "narrators", "unparsable", "fixed_layout", "is_dir", "probed_at",
+    "tags", "narrators", "unparsable", "fixed_layout", "is_dir", "replaced",
+    "probed_at",
 )
 
 #: 主键 **必须是 (library_id, root, rel)**，不能是 (library_id, rel)：
@@ -111,6 +112,7 @@ _SCHEMA = (
         unparsable   INTEGER NOT NULL DEFAULT 0,
         fixed_layout INTEGER NOT NULL DEFAULT 0,
         is_dir       INTEGER NOT NULL DEFAULT 0,
+        replaced     INTEGER NOT NULL DEFAULT 0,
         probed_at    DOUBLE PRECISION NOT NULL DEFAULT 0,
         PRIMARY KEY (library_id, root, rel)
     )""",
@@ -195,6 +197,12 @@ def ensure_schema() -> None:
             return
         for stmt in _SCHEMA:
             _exec(stmt)
+        # 补列（第 125 期）：老库的 ``book_index`` 没有 ``replaced``。
+        # `CREATE TABLE IF NOT EXISTS` 不改已有表结构，不补列则 upsert 直接报
+        # 「no such column: replaced」（和 `db._migrate` 里那批补列同一个道理）。
+        cols = {r["name"] for r in _exec(f"PRAGMA table_info({TABLE})").fetchall()}
+        if cols and "replaced" not in cols:
+            _exec(f"ALTER TABLE {TABLE} ADD COLUMN replaced INTEGER NOT NULL DEFAULT 0")
         _commit()
         _ready_done = True
 
@@ -713,6 +721,7 @@ def _refresh_locked(lib: dict, force: bool) -> dict:
                 continue
             seen.add(key)
             cur = stored.get(key)
+            replaced_now = False
             if cur is not None and not force:
                 # 便宜闸门：条目自身没变就整段跳过 —— 一次 stat（音频目录是一次目录列举），
                 # 而不是开 zip。**这是增量刷新的全部价值所在。**
@@ -722,6 +731,11 @@ def _refresh_locked(lib: dict, force: bool) -> dict:
                 if (facts[0], facts[1]) == cur:
                     unchanged += 1
                     continue
+                # 走到这里 = 这一行的 `(size, mtime)` 变了 ⇒ **同名路径上的文件被换过**。
+                # 记进 `replaced` 列，读取时由 `_issues_of` 变成 `replaced` 这条 issue
+                # （第 125 期：此前完全静默 —— book_id 由路径派生，换了内容 id 不变，
+                # 阅读位置与批注就继续指到新正文上）。
+                replaced_now = True
             p = _lib._probe_entry(f)
             if p is None:
                 continue
@@ -740,6 +754,7 @@ def _refresh_locked(lib: dict, force: bool) -> dict:
                 1 if p["unparsable"] else 0,
                 1 if row["fixed_layout"] else 0,
                 1 if p["is_dir"] else 0,
+                1 if replaced_now else 0,
                 time.time(),
             ))
             added += 1
@@ -927,7 +942,8 @@ def _book_of_row(lib: dict, row) -> dict:
         # ⚠️ 用**文件派生**的 has_cover（不是上面那个可能被元数据覆盖层改过的）——
         # 与 `_row_of` 完全一致：no-cover 是扫描期的判定，服务端封面在
         # `_apply_overlay` 里单独撤掉。
-        "issues": _lib._issues_of(rel, size, is_dir, bool(row["unparsable"]), has_cover),
+        "issues": _lib._issues_of(rel, size, is_dir, bool(row["unparsable"]), has_cover,
+                                  bool(row["replaced"])),
         "path": path,
         "library_id": lid,
         "library_type": str(lib.get("type") or "mixed"),

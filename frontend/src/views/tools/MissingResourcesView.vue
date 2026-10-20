@@ -43,6 +43,13 @@ const ISSUE_META: Record<string, { label: string; tone: 'warn' | 'err'; hint: st
     tone: 'warn',
     hint: 'EPUB 里没有引用任何封面图，书架与阅读器里会显示空白占位。',
   },
+  // 第 125 期：同名路径上的文件被换过内容。**不是文件坏了** —— 文件本身完好，
+  // 但 `book_id` 由路径派生 ⇒ 换内容不换 id，阅读位置与批注会静默指到新正文上。
+  replaced: {
+    label: '内容已更换',
+    tone: 'warn',
+    hint: '这个文件名下的内容在上次扫描之后被替换过：阅读进度与批注仍指向旧坐标，需要复核。',
+  },
 }
 
 const items = ref<MissingItem[]>([])
