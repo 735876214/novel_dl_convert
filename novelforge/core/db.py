@@ -3051,10 +3051,14 @@ def clear_unlocked() -> int:
 # 这样「未评分」与「评了 1 星」不会混淆 —— 后者在「Use all five star ratings」里是有效值。
 
 def set_rating(book_id, stars) -> dict:
-    """写入评分（1–5）。越界或非整数抛 ValueError。"""
+    """写入评分（1–5）。越界或非整数抛 ValueError。
+
+    ``OverflowError`` 必须一起接住（第 127 期）：``int(1e400)`` 抛的是它，而它**不是**
+    ``ValueError`` 的子类 —— 漏掉就是「评分填个离谱的数 ⇒ 500」。
+    """
     try:
         s = int(stars)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise ValueError("评分必须是 1–5 的整数")
     if not 1 <= s <= 5:
         raise ValueError("评分必须是 1–5 的整数")

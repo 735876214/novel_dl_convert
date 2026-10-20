@@ -7,6 +7,7 @@ import io
 import hmac
 import json
 import logging
+import math
 import mimetypes
 import pathlib
 import posixpath
@@ -37,7 +38,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                   reading_list,
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    mobicache, fb2cache,
-                   catalog, cache, units, recycle, urlguard)
+                   catalog, cache, units, recycle, urlguard, numbers)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -198,7 +199,47 @@ def _read_version() -> str:
 
 APP_VERSION = _read_version()
 
-app = FastAPI(title="NovelForge", version=APP_VERSION, lifespan=lifespan)
+
+def _drop_nonfinite(v):
+    """把嵌套结构里的非有限 float 换成 ``0.0``（:class:`_FiniteJSONResponse` 专用）。"""
+    if isinstance(v, float):
+        return v if math.isfinite(v) else 0.0
+    if isinstance(v, dict):
+        return {k: _drop_nonfinite(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_drop_nonfinite(x) for x in v]
+    return v
+
+
+class _FiniteJSONResponse(JSONResponse):
+    """序列化兜底（第 127 期）：库里躺着非有限数时，也不许把整页打成 500。
+
+    starlette 的 ``JSONResponse`` 用 ``allow_nan=False`` 序列化，遇到 ``inf`` 会抛
+    ``ValueError: Out of range float values are not JSON compliant`` —— 实测一条
+    ``percent=1e400`` 的进度就能让书架首页 / 统计页 / 书签列表**同时恒 500**。
+    这里的口径是：**「这一行数据坏了」是运维信息，不该变成「应用打不开」**。
+
+    正常路径**零成本** —— 先按原样序列化，只有它真抛了 ``ValueError`` 才走一遍净化
+    （非有限 float → ``0.0``）再序列化一次，并只记一条 warning（不刷屏）。
+    这是最后一道网，不是校验的替代品：入口侧的校验在 :func:`_finite_num` /
+    :func:`_bounded`（见 ``core/numbers.py``）。
+    """
+    _warned = False
+
+    def render(self, content) -> bytes:
+        try:
+            return super().render(content)
+        except ValueError:
+            if not _FiniteJSONResponse._warned:
+                _FiniteJSONResponse._warned = True
+                logging.getLogger("novelforge").warning(
+                    "响应里出现非有限数值（inf/nan），已按 0.0 兜底序列化 —— "
+                    "库里有脏数值，建议核对 progress / reading_status / bookmarks")
+            return super().render(_drop_nonfinite(content))
+
+
+app = FastAPI(title="NovelForge", version=APP_VERSION, lifespan=lifespan,
+              default_response_class=_FiniteJSONResponse)
 
 # ---------------- 响应压缩（第 67 期）----------------
 # 「打开书架」最大的一块传输是 GET /api/books：实测 600 本 = **1.36 MB**（其中简介
@@ -513,6 +554,36 @@ def _human_size(n: int) -> str:
             return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024.0
     return f"{int(n)} B"
+
+
+def _finite_num(raw, name: str) -> float:
+    """客户端给的数值 ⇒ 有限实数；**不是数 / inf / nan ⇒ 400**（第 127 期）。
+
+    为什么这两类必须拦在门口、不能像区间越界那样夹住：``inf`` 存得进 SQLite，却序列化
+    不进 JSON（starlette 用 ``allow_nan=False``）⇒ 一条毒行让**整页 500**（实测书架首页、
+    统计页、书签列表全被打掉）；``NaN`` 连区间比较都拦不住它（与任何数比较皆 ``False``，
+    所以 ``if x <= 0 or x > 86400`` 两侧都放行），会直冲 NOT NULL 约束。
+    收敛规则本身只有一份：``core/numbers.py``。
+    """
+    v = numbers.finite(raw)
+    if v is None:
+        raise HTTPException(400, f"{name} 必须是有限数值")
+    return v
+
+
+def _bounded(payload: dict, key: str, lo: float, hi: float, *,
+             default: float = 0.0, integer: bool = False, name: str = ""):
+    """取 ``payload[key]`` 并夹到 ``[lo, hi]``（第 127 期）。
+
+    契约：缺省 / ``None`` / 空串 ⇒ ``default``；不是数 / inf / nan ⇒ **400**；
+    有限越界 ⇒ **夹住**。越界夹而不报错是有意的 —— 写失败会让这次进度整个丢掉，
+    而「读到 -3 章」与「读到第 0 章」对用户是一回事（详见 ``core/numbers.py``）。
+    """
+    raw = payload.get(key)
+    if raw is None or raw == "":
+        raw = default
+    v = numbers.clamp(_finite_num(raw, name or key), lo, hi)
+    return int(v) if integer else v
 
 
 def _upload_limit(key: str) -> int:
@@ -3878,11 +3949,10 @@ def api_get_progress(bid: str, file_rel: "str | None" = None):
 
 @app.put("/api/books/{bid}/progress")
 def api_set_progress(bid: str, payload: dict = Body(...)):
-    try:
-        locator = int(payload.get("locator", 0))
-        percent = float(payload.get("percent", 0.0))
-    except (TypeError, ValueError):
-        raise HTTPException(400, "locator/percent 必须为数字")
+    # 第 127 期：locator / percent 一律过 `_bounded`（非有限 ⇒ 400，越界 ⇒ 夹住）。
+    # 此前是裸 `int()/float()`：`percent: 1e400` 落库后让书架首页 / 统计页同时 500。
+    locator = _bounded(payload, "locator", 0, numbers.MAX_INDEX, integer=True)
+    percent = _bounded(payload, "percent", 0.0, 100.0)
     # 第 54 期：EPUB 可带「章内字符偏移」（前端 textContent 坐标）⇒ 服务端生成 CFI
     # 落库 —— CFI 格式真值源在 core/epub_cfi.py，前端不自己拼。生成不了（坏书 /
     # 非 EPUB / spine 越界）就存空串：恢复侧回落「章 + 全书百分比」，
@@ -3897,12 +3967,9 @@ def api_set_progress(bid: str, payload: dict = Body(...)):
     cfi = ""
     offset = payload.get("offset")
     if offset is not None and locator >= 0:
-        try:
-            offset = int(offset)
-        except (TypeError, ValueError):
-            raise HTTPException(400, "offset 必须为整数")
-        if offset < 0:
-            raise HTTPException(400, "offset 必须 ≥ 0")
+        # 第 127 期：同样走 `_bounded`（`int(1e400)` 抛 OverflowError，不在原
+        # `except (TypeError, ValueError)` 的覆盖面里 —— 那条会是 500）。
+        offset = _bounded(payload, "offset", 0, numbers.MAX_INDEX, integer=True)
         b = library.by_id(bid)
         if b:
             # CFI 必须按**正在读的那个文件**算：多文件的书里，拿主文件的 spine
@@ -3926,13 +3993,18 @@ def api_get_status(bid: str):
 
 @app.put("/api/books/{bid}/status")
 def api_set_status(bid: str, request: Request, payload: dict = Body(...)):
-    """设置阅读状态。可选 `started_at` / `finished_at`（epoch 秒，0 = 清除后按规则重记）。"""
+    """设置阅读状态。可选 `started_at` / `finished_at`（epoch 秒，0 = 清除后按规则重记）。
+
+    第 127 期：两个日期走 `_bounded`（非有限 ⇒ 400，有限越界夹住）。此前是裸
+    `float()`，`started_at: 1e400` 会写成 `inf`，而状态又被并进书目响应 ⇒
+    `GET /api/books` 此后恒 500。
+    """
     try:
         r = db.set_status(
             bid,
             str(payload.get("status") or ""),
-            started_at=payload.get("started_at"),
-            finished_at=payload.get("finished_at"),
+            started_at=_bounded(payload, "started_at", 0.0, numbers.MAX_EPOCH),
+            finished_at=_bounded(payload, "finished_at", 0.0, numbers.MAX_EPOCH),
         )
         _sync_auto_push(bid, request)
         return r
@@ -4008,9 +4080,16 @@ def api_get_review(bid: str):
 
 @app.put("/api/books/{bid}/review")
 def api_set_review(bid: str, request: Request, payload: dict = Body(...)):
-    """评分与书评一起保存。stars 传 0 = 清除评分；review 传空串 = 清除书评。"""
+    """评分与书评一起保存。stars 传 0 = 清除评分；review 传空串 = 清除书评。
+
+    第 127 期：`int(1e400)` 抛的是 ``OverflowError``（不在 ``except (TypeError,
+    ValueError)`` 覆盖面里 ⇒ 500），改走 `_bounded`（非有限 ⇒ 400，越界夹住 ⇒
+    夹到 5 之前先由 1–5 校验拦下）。
+    """
     try:
-        stars = int(payload.get("stars", 0))
+        # 这里**不夹**（与 percent 口径不同）：评分是用户明确选的值，非法要回话，
+        # 悄悄改成 5 分是替他做了决定。
+        stars = int(numbers.finite(payload.get("stars", 0)))
     except (TypeError, ValueError):
         raise HTTPException(400, "stars 必须是 0–5 的整数")
     if not 0 <= stars <= 5:
@@ -4231,11 +4310,12 @@ def _anchor_off(payload: dict, key: str) -> int:
 
     **不用 0 兜底**：``0`` 是「章首」这个合法偏移，兜成 0 会把每一条没带锚的批注
     都画到章首去 —— 而且画得出来、不报错，没人会发现。
+
+    第 127 期：非有限值（``inf`` / ``nan``）与 ``int(1e400)`` 的 ``OverflowError``
+    也归到「不知道」（此前那条是 500）。
     """
-    try:
-        return int(payload.get(key, -1))
-    except (TypeError, ValueError):
-        return -1
+    v = numbers.finite(payload.get(key))
+    return -1 if v is None or v < 0 else numbers.index(v)
 
 
 @app.post("/api/books/{bid}/annotations")
@@ -4254,7 +4334,7 @@ def api_add_annotation(bid: str, request: Request, payload: dict = Body(...)):
     # 自己算的章内字符偏移，是**真能定位**的那个。老客户端不传这两样，回落 -1/''。
     rid = db.add_annotation(
         bid,
-        int(payload.get("chapter", 0) or 0),
+        _bounded(payload, "chapter", 0, numbers.MAX_INDEX, integer=True),
         quote,
         str(payload.get("color", "yellow") or "yellow"),
         str(payload.get("note", "") or ""),
@@ -4318,11 +4398,11 @@ def api_add_bookmark(bid: str, payload: dict = Body(...)):
     ``anchor`` 是**位置锚**（前端按「章序号 + 章内归一化位置」生成），它是去重键：
     传同一个 anchor 绝不会产生第二条书签。
     """
-    try:
-        percent = float(payload.get("percent", 0.0) or 0.0)
-        chapter = int(payload.get("chapter", 0) or 0)
-    except (TypeError, ValueError):
-        raise HTTPException(400, "chapter/percent 必须为数字")
+    # 第 127 期：`percent` / `chapter` 走 `_bounded` —— 此前 `percent: 1e400`
+    # 会先落行、再在**回写响应时**炸成 500，于是 `GET .../bookmarks` 此后恒 500。
+    percent = _bounded(payload, "percent", 0.0, 100.0)
+    chapter = _bounded(payload, "chapter", 0, numbers.MAX_INDEX, integer=True)
+    base_updated_at = numbers.epoch(payload.get("updated_at"))
     try:
         return db.save_bookmark(
             bid,
@@ -4330,7 +4410,7 @@ def api_add_bookmark(bid: str, payload: dict = Body(...)):
             percent=percent,
             chapter=chapter,
             label=str(payload.get("label", "") or ""),
-            base_updated_at=float(payload.get("updated_at", 0.0) or 0.0),
+            base_updated_at=base_updated_at,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -4343,12 +4423,14 @@ def api_update_bookmark(bid: str, bmid: int, payload: dict = Body(...)):
         res = db.update_bookmark(
             bid, bmid,
             label=payload.get("label"),
-            percent=payload.get("percent"),
-            chapter=payload.get("chapter"),
-            base_updated_at=float(payload.get("updated_at", 0.0) or 0.0),
+            percent=None if payload.get("percent") is None
+            else _bounded(payload, "percent", 0.0, 100.0),
+            chapter=None if payload.get("chapter") is None
+            else _bounded(payload, "chapter", 0, numbers.MAX_INDEX, integer=True),
+            base_updated_at=numbers.epoch(payload.get("updated_at")),
         )
-    except (TypeError, ValueError):
-        raise HTTPException(400, "chapter/percent 必须为数字")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if not res.get("found"):
         raise HTTPException(404, "书签不存在或已在垃圾桶中")
     return res
@@ -6746,9 +6828,10 @@ def _session_num(v, name: str, lo: float, hi: float) -> float:
     """
     if v is None or v == "":
         return db.SESSION_UNKNOWN
-    try:
-        f = float(v)
-    except (TypeError, ValueError):
+    f = numbers.finite(v)
+    if f is None:
+        # 第 127 期：inf / nan 也归这里（此前 `lo <= f <= hi` 对 nan 恒 False 才碰巧被拦，
+        # 而 `inf` 是被这条判据拦的 —— 现在两处统一由 numbers 判「不是数」）。
         raise HTTPException(400, f"{name} 必须为数字")
     if not (lo <= f <= hi):
         raise HTTPException(400, f"{name} 须在 {lo:g}–{hi:g} 之间")
@@ -6775,9 +6858,11 @@ def api_record_session(bid: str, payload: dict = Body(...)):
     ``file_rel`` 是另一回事：**空串有明确含义**「这本书自己」（单文件书 / PDF / 漫画
     全是这一类），不是「不知道哪一轨」，所以它可以安全地缺省。
     """
-    try:
-        seconds = float(payload.get("seconds", 0))
-    except (TypeError, ValueError):
+    # 第 127 期：先判「是不是有限数」再判区间 —— 原先只有区间那两侧，
+    # 而 `nan <= 0` 与 `nan > 86400` **都是 False** ⇒ `seconds: NaN` 直冲 SQLite
+    # （nan→NULL→撞 NOT NULL）才炸成 500。
+    seconds = numbers.finite(payload.get("seconds", 0))
+    if seconds is None:
         raise HTTPException(400, "seconds 必须为数字")
     if seconds <= 0 or seconds > 86400:
         raise HTTPException(400, "seconds 超出合理范围")
