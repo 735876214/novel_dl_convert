@@ -8325,3 +8325,95 @@ CBZ/CBR/PDF ⇒ 随后 400）。`opds._MIME` 缺 FB2 / AZW ⇒ acquisition 链�
    与一本小说的 `正文.txt` 是同一个后缀、同一种「文本」。按后缀放宽 = 必然在两者之间选一个牺牲品。
 2. **契约清单自己也会成为盲区**：`_ALL_FORMATS` 少列 `RAR` / `7Z` 时，这条「覆盖全部书目格式」的用例照样全绿。
    清单要**从真值源派生**（或至少与 `zipkind.CONTAINER_FORMATS` 对齐），不能手抄。
+
+## 第 125 期（入库审查修复：隐藏文件 / 等条件重试 / 解压上限 / 根外链接 / 覆盖标记）
+
+> 来源：用户「继续审计格式识别和入库存在的问题」→ 五条实测取证 → 用户「修复」。
+> 口径：五条**全部是「验收对、判据缺」**——接口回 200、书进了库、页码拿得到，但「该不该进」「能进多大」「进了谁」这三层判据都没有。
+
+### 一、隐藏文件与系统影子文件也进书目（P2）
+
+**症状**：书库根里放 `.隐藏书.txt` 或 macOS 的 `._三体.epub`（AppleDouble，204 B），两本都出现在书架上，
+后者标题 `._三体`、`format=EPUB`、`issues=["unparsable"]`。
+
+**根因**：`library._iter_book_entries` 只在「目录」分支判隐藏（`name.startswith(".")`），
+顶层文件 / 系列层文件 / 音频目录三处分支没有这个判据 —— 而这三处恰恰是 NAS 上系统影子文件最常落地的地方。
+
+**修法**：新增唯一判据 `library.is_hidden_name(name)`，四处分支同批改用；`watcher._iter_entries` 的两处内联判据也收敛到它
+（此前 watcher 自己写了一份，两边一旦分叉就出现「扫描看不见、索引里还在」）。
+AppleDouble 这类文件**不是「该被忽略的格式」，而是「根本不是一本书」**，所以修的是判据而不是加过滤表。
+
+### 二、「等条件」被算成失败，3 次后永久放弃（P2）
+
+**症状**：文件先落在收书目录、书库后建 —— 扫描把「没有可接收的书库」记成 failed，3 次后进
+`_failed` 表不再尝试；建库后文件**仍不收**，必须手动「清空失败记录」。
+
+**根因**：`watcher.handle_file` 把「没有可接收的书库」和「解析失败」归成同一种结局，都走 `fails >= max_retries`。
+两者的区别是：解析失败是**这个文件**的问题，等条件不是 —— 换个环境它自己就好了。
+
+**修法**：新增第三态 `"waiting"`。`handle_file` 回 `("waiting", "没有可接收的书库：…")`；
+`_scan_locked` 见到 waiting 只 `self.state.pop(key)` + `stats["waiting"] += 1`，**不碰 `_failed` 计数**，
+但仍把它放进 `result["failed"]`（界面需要看到「还在等」），并置 `dirty` 让统计刷新。
+`bookdock.rescan` 同步加 waiting 分支：界面标 `error` + 原因，但 `retries` 不加一。
+
+### 三、容器单条目没有解压上限（P2）
+
+**症状**：65,455 B 的 `.cbz` 里塞一个 **64 MiB** 的条目，`GET /api/books/<bid>/comic/0` 回 200 + 67,108,872 B。
+再大一点就是一次由「上传 64 KB」换「读 1 GB 内存」的放大攻击。
+
+**根因**：`comics.page_bytes` 直接 `arc.read(name)`，三个后端（zip / 7z / rar）都没有单条目上限；
+压缩比在这里是**不可信输入**，而代码把它当成了可信尺寸。
+
+**修法**：`comics.MAX_ENTRY_BYTES = 128 MiB` + `EntryTooLarge`（`__init__(self, name, size)`，消息带可读体积）。
+`_Archive.read()` 三后端统一改成「**读 `MAX_ENTRY_BYTES + 1` 字节后判超限**」—— 不先信目录里声明的尺寸
+（zip 的 `file_size` 可以撒谎）；7z 那条先用目录里的 `_size_of(name)` 预判再解压（它没有增量读的接口）。
+`page_bytes` 显式 `except EntryTooLarge: raise` 再走通用 `except`（否则会被吞成「这一页读不出来」）。
+`server.py` 三处取图入口（漫画封面 / 漫画页 / 序号单元页）把它翻成 **413**；`zipkind.unpack` 的 extract 分支
+只把超限那一条记 `{"ok": False, "note": …}` 跳过，不影响同包其它条目。
+顺带把 repackage 分支的 `p.read_bytes()` 换成 `shutil.copyfile(p, tmp)`：整包进内存在同一类输入下是同一个问题。
+
+### 四、根外符号链接被当成库内的书（P3）
+
+**症状**：书库根里 `外部链接.txt -> /tmp/nf-secret.txt`，它进了书目，`chapter/0` 原样吐出根外文件内容。
+
+**根因**：扫描只看 `rglob` 给出的名字与路径，不看「这条路径是不是指到库根外面去了」。
+`pathlib.rglob` 默认不跟符号目录（所以没有环爆），但**符号文件本身就是一个可读入口**。
+
+**修法**：`library._escapes_root(p, root, link=None)` —— 是符号链接且 `resolve()` 后不在根内 ⇒ 不算本库的书；
+根内链接照旧可用（NAS 上「同一本书软链到两个系列目录」是正常用法）。
+`link` 参数必须由调用方从 `DirEntry.is_symlink()` 传进来：`Path.is_symlink()` 在 3.12 里走 `Path.lstat()`，
+**多一次 stat 就抵消了第 62 期「每文件只问一次文件系统」的全部收益**（新增用例里用 monkeypatch 打桩钉住了这点）。
+
+### 五、同名替换后进度与批注静默跟到新文件（P3）
+
+**症状**：`三体.txt` 从 4,600 B 换成 15,200 B（完全另一本书），收书流程按文件名覆盖后，
+`book_id` 不变、阅读进度仍 `locator=3 / 42%`、批注位置也照旧 —— 用户打开发现「进度对不上书」。
+
+**根因**：`book_id` 是「库 id + 路径哈希」，路径不变 ⇒ id 不变，这是对的（换 id 会丢掉所有历史）；
+但**「同一个路径、内容换了」这个事实没有任何地方记录**，界面自然也无从提示。
+
+**修法**：索引表 `book_index` 加 `replaced INTEGER NOT NULL DEFAULT 0` 列（`ensure_schema` 用 `PRAGMA table_info` 补列，
+老库不用重建）；`catalog._refresh_locked` 在非 force 刷新时比较 `(size, mtime)` 与索引现值，
+不同 ⇒ `replaced_now = True` 写进该行；`library._issues_of(...)` 多接一个 `replaced` 参数产出 `issues=["replaced"]`；
+前端 `MissingResourcesView` 的 `ISSUE_META` 加「内容已更换」标签与说明（进度 / 批注需复核）。
+**不做自动清进度**：进度是用户数据，删不删由用户决定，这里只负责把事实摆出来。
+
+### 六、核验
+
+| 项 | 结果 |
+|---|---|
+| 新增 `tests/test_ingest_audit_125.py` | 13 例全过（隐藏 / AppleDouble / 根外链接 / 根内链接 / 解压上限 / unpack 跳过 / 接口 413 / waiting 不计数 / 真失败仍停手 / replaced 标记 / 未变不误标 / 判据单点） |
+| 改写旧用例 | `test_catalog.py` 基准 `>=9`→`>=8` 并断言隐藏文件**不在**基准里；`test_watcher_perlibrary.py` 去掉「到上限就不该再试」前置 |
+| 后端全量 `bash scripts/test.sh` | **2520 例（2507 passed / 0 failed / 0 errors / 13 skipped），115.3 s，exit 0** |
+| 前端 `bash scripts/frontend-verify.sh` | exit 0（type-check + 69 spec / 717 例 + build + deploy；`novelforge/static/v2` 零改动） |
+
+### 七、教训
+
+1. **隐藏判据要按「这一层会不会出现影子文件」写，不按「哪里试过出问题」写**：原来的判据只长在目录分支上，
+   因为当初只在目录里见过 `.DS_Store`；而 AppleDouble 影子文件是**跟着文件走**的。
+   判据一旦有了唯一实现（`is_hidden_name`），就不该再有第二处内联。
+2. **「失败」要区分「这条记录坏了」和「现在还不能做」**：混在一起时，重试上限会变成**丢弃上限**，
+   而且丢弃是静默的 —— 用户看到的是「文件就在目录里，就是不入库」。
+3. **压缩比是不可信输入**：凡「按声明尺寸分配 / 读取」的地方，都要按「**最多读 N+1 字节**」实现，而不是先信元数据。
+4. **性能优化会反过来限定修法的形状**：`_escapes_root` 之所以要调用方传 `link`，是因为第 62 期的
+   「每文件只问一次文件系统」把 `Path.is_symlink()` 变成了不可接受的代价 —— 修 bug 时要接住既有约束，而不是把它推翻。
