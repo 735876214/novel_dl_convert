@@ -2623,6 +2623,37 @@ def task_list(limit: int = 100) -> list:
     return [dict(r) for r in rows]
 
 
+#: 重启时把没跑完的任务收尾成失败时写进 `error` 的话术（**唯一出处**，用例照它断言）。
+TASK_INTERRUPTED = "服务重启时这个任务还没跑完（已中断）；重新操作一次即可"
+
+
+def task_reset_interrupted(note: str = TASK_INTERRUPTED) -> int:
+    """把「重启后不可能再有人推进」的任务标成失败，返回条数（第 131 期）。
+
+    **为什么要这一步**：`tasks` 表里的 `running` 只由**进程内**的后台协程推进
+    （`server._spawn_bg` → 各个 `_run_*`）。进程一死，那一行就再没有下一个写入者了 ——
+    可它仍然留着 ``status='running'``、``progress=50``，而 ``GET /api/tasks`` 只读表、
+    不读进程状态，于是任务页会**永远转圈**。这不是「用户点错了」，是**记录说了谎**：
+    任何读它的人都分辨不出「还在跑」与「跑到一半进程没了」。
+
+    ``queued`` 一并收尾：队列在内存里，重启后不会有人来取，留着同样是在说谎。
+
+    与刮削的 :func:`scrape_reset_running` **不是同一件事** —— 那张表（``scrape_items``）
+    是**可续跑**的持久队列，所以打回 ``pending``；``tasks`` 是**一次性动作的进度条**，
+    没有「从一半接着跑」的语义，只能如实标失败。
+    """
+    now = time.time()
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "UPDATE tasks SET status='failed', progress=100.0, error=?, updated_at=?"
+            " WHERE status IN ('queued','running')",
+            (str(note), now),
+        )
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
 def task_prune(keep: int = 200) -> int:
     """只保留最近 keep 条任务，返回删除条数（防止无限增长）。"""
     keep = max(10, int(keep))

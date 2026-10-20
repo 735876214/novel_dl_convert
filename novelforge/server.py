@@ -91,6 +91,17 @@ async def lifespan(app: FastAPI):
     _init_logging(cfg)
     # 初始化 SQLite 持久层（进度 / 批注 / 账号），表与默认账号在此落地
     db.init()
+    # 第 131 期：重启时把「没跑完」的任务如实收尾成失败。`tasks` 的 running 只由进程内的
+    # 后台协程推进（`_spawn_bg`），进程一死就再没有下一个写入者 ⇒ 不清的话任务页会
+    # 永远显示「进行中 / 50%」，而那个进度是**假的**（见 `db.task_reset_interrupted`）。
+    try:
+        n_interrupted = db.task_reset_interrupted()
+        if n_interrupted:
+            logging.getLogger("novelforge").warning(
+                "有 %s 个任务在上次退出时没跑完，已如实标记为失败", n_interrupted
+            )
+    except Exception as e:  # noqa: BLE001 —— 收尾失败不该阻断启动
+        logging.getLogger("novelforge").exception("复位中断任务失败：%s", e)
     # 多书库：**这里不再播种任何书库** —— 全新部署的书库表就是空的，等用户手动新建。
     # ⚠️ 由此推出两条必须守住的不变量（第 37 期）：
     #   ① 书目为空**不等于**记录都成了孤儿 ⇒ `db.orphans()` 必须把「库已不存在」的书
