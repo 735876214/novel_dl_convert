@@ -2,7 +2,7 @@ import codecs
 import shutil
 from pathlib import Path
 
-from . import audio, preprocess, detect, metadata, epub_builder, komga
+from . import audio, library, preprocess, detect, metadata, epub_builder, komga
 
 # 已是电子书格式的文件直接复制（含漫画归档与**单个**音频文件；
 # 「音频目录」形态由 dispatch 的目录分支单独处理）
@@ -13,8 +13,11 @@ from . import audio, preprocess, detect, metadata, epub_builder, komga
 # 入库后由扫描侧按**内容**分派形态（`core/zipkind.py`），不看后缀猜。
 # 第 110 期：`.azw` 补进来（它是 MOBI 家族、能直读，此前不在任何白名单里 ⇒ 上传会被 400 拒掉）。
 # 第 111 期：`.rar` / `.7z` 同 `.zip` —— 通用容器，原样入库后按内容分派。
-EBOOK_EXT = {".epub", ".mobi", ".azw3", ".azw", ".pdf", ".fb2", ".cbz", ".cbr", ".zip",
-             ".rar", ".7z", ".txt", *audio.AUDIO_EXTS}
+# ⚠️ 第 124 期复审：这里曾是内容与 `library.BOOK_EXTS` **完全相同**的第二份字面量
+# （注释还写着「与后端一致」），于是「只往 `library._EBOOK_EXTS` 加格式」时上传闸门
+# 静默 400 —— `.azw` 那次 400 正是这个形态。现在**派生**自那唯一一份白名单，
+# 别再往这里加字面量（AGENTS.md §1「单一真值源」）。
+EBOOK_EXT = frozenset(library.BOOK_EXTS)
 
 
 def _copy_tree(src: Path, dst: Path) -> None:

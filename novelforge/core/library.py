@@ -1633,7 +1633,9 @@ def type_for_ext(ext) -> str:
     """扩展名 → 库类型（``ebook`` / ``comic`` / ``audiobook``）；认不出来 → ``""``。
 
     这是「格式 → 类型」的**唯一真值源**（第 122 期收敛）：自动归库
-    （`core/library_rules._type_of_name`）与上传白名单判定都走它。
+    （`core/library_rules._type_of_name`）与「入库自动补全」都走它；上传闸门吃的是
+    `pipeline.EBOOK_EXT`，而那份集合**派生自**本模块的 `BOOK_EXTS`（第 124 期复审
+    修掉了它的第二份字面量）—— 加新格式只改上面那一条即可。
 
     ⚠️ 此前 `library_rules` 自己抄了一份 `.epub/.mobi/.azw3/.pdf/.txt/.fb2` 的元组，
     **漏了 `.azw`**（第 110 期就进了 `_EBOOK_EXTS`）—— 于是 `.azw` 上传到了
