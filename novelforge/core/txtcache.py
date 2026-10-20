@@ -28,7 +28,7 @@ import pathlib
 import time
 
 from .. import config
-from . import detect, epub_builder, pipeline, preprocess, reading_list
+from . import detect, epub_builder, htmlsafe, pipeline, preprocess, reading_list
 
 #: 缓存子目录名（小写 / 连字符，与 `pdf/`、`authors/` 同风格）
 CACHE_SUBDIR = "txt-epub"
@@ -334,5 +334,6 @@ def native_chapter_html(book: dict, index: int, *, path=None, root=None) -> dict
         "title": ch.get("title") or f"第 {i + 1} 节",
         # 原生路线没有 z3 标题元素（epub_builder 会给章节加 <h2>），这里把标题也放进正文，
         # 让两条形态读起来一致
-        "html": f"<h2>{ch.get('title') or ''}</h2>" + preprocess.paragraphs_to_html(ch.get("body") or ""),
+        # 标题来自书里的行（缩进分章时就是原样那一行）⇒ 必须转义，见第 133 期。
+        "html": htmlsafe.heading(ch.get("title")) + preprocess.paragraphs_to_html(ch.get("body") or ""),
     }

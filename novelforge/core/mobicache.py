@@ -35,7 +35,7 @@ import threading
 import time
 
 from .. import config
-from . import detect, pipeline, preprocess, reading_list
+from . import detect, htmlsafe, pipeline, preprocess, reading_list
 
 #: 本模块认的扩展名。`.azw` 是未加密的 Mobipocket（Kindle 早期格式），与 `.mobi` 同一条解包
 #: 路径 —— 它此前**不在任何白名单里**（第 110 期补进 `library.BOOK_EXTS` / `_EBOOK_EXTS`）。
@@ -422,5 +422,5 @@ def chapter_html(book: dict, index: int, *, path=None, root=None) -> dict:
         "index": i,
         "total": len(chapters),
         "title": title,
-        "html": f"<h2>{title}</h2>" + preprocess.paragraphs_to_html(ch.get("body") or ""),
+        "html": htmlsafe.heading(title) + preprocess.paragraphs_to_html(ch.get("body") or ""),
     }

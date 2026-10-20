@@ -38,7 +38,8 @@ import uuid
 import zipfile
 
 from .. import config
-from . import audio, audio_meta, comics, db, metadata, reading_list, units, zipkind
+from . import (audio, audio_meta, comics, db, htmlsafe, metadata, reading_list,
+                 units, zipkind)
 
 # 只把这些扩展名当成「书」；与 /api/files 的全量列表不同，这里是有意收窄的。
 # .cbr（RAR 漫画）自第 9 期起在列 —— 由 core/comics.py 的 zip/rar 双后端解压。
@@ -1093,7 +1094,9 @@ def chapter_html(path: pathlib.Path, index: int, bid: str) -> dict:
     media = spine[index]
     with zipfile.ZipFile(path) as z:
         raw = z.read(media).decode("utf-8", "ignore")
-    html = _rewrite_assets(_body_of(raw), media, bid)
+    # ⚠️ 第 133 期：章节体是**书里的 HTML**，而阅读器把它 `v-html` 进页面（同源）。
+    #    净化必须发生在**发出之前** —— 前端没有第二道闸（也别指望它有）。
+    html = htmlsafe.sanitize(_rewrite_assets(_body_of(raw), media, bid))
     title = pathlib.PurePosixPath(media).name
     return {"index": index, "total": len(spine), "title": title, "html": html}
 

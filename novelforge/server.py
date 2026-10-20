@@ -38,7 +38,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                   reading_list,
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    mobicache, fb2cache,
-                   catalog, cache, units, recycle, urlguard, numbers)
+                   catalog, cache, units, recycle, urlguard, numbers, htmlsafe)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -3813,6 +3813,10 @@ def _chapter_cached(bid: str, index: int, src, kind: str, produce, extra: str = 
         return {**out, "html": _with_asset_token(str(out.get("html") or ""), token)}
 
     fp = cache.fingerprint(src)
+    if fp:
+        # 净化口径也算「指纹看不出来的输入」：源文件一个字节没动，但 sanitize 的判据变了
+        # （第 133 期）⇒ 旧缓存里的 HTML 还是旧形态。把版本字段并进键，改判据即整体失效。
+        fp = f"{fp}:h{htmlsafe.CHAPTER_HTML_VERSION}"
     if fp and extra:
         fp = f"{fp}:{extra}"
     if not fp:
