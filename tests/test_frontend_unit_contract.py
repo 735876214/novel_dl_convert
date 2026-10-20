@@ -53,6 +53,10 @@ EXPECTED_SPECS = (
     # ⚠️ 其中「离开在线读时把线上章号写成本地进度」是**实测抓出来的真缺陷**的回归钉。
     "src/views/ReaderView.online.spec.ts",
     "src/stores/library.spec.ts",
+    # 第 135 期：`localDate()` / `localMonth()` 是「本地日」的唯一实现。写回
+    # `toISOString().slice(0, 10)`（UTC 日）时页面照常渲染、补录照常成功，
+    # 只是在东八区 00:00–08:00 落到昨天 —— 当天统计变空，没有任何报错可看。
+    "src/lib/format.spec.ts",
     # 第 40 期：阅读阈值是「全前端唯一的判定入口」，它的行为由这条 spec 兜住
     "src/lib/readingThresholds.spec.ts",
     # 第 86 期：书源列表的统计 / 筛选 / 排序（sources-ui 增强 A~D 的判据源）。
