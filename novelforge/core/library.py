@@ -1898,6 +1898,22 @@ def root_of(book_or_id) -> pathlib.Path:
     return rs[0] if rs else pathlib.Path(config.OUTPUT_DIR)
 
 
+def abs_path(book) -> pathlib.Path:
+    """书的**真实绝对路径**（全仓唯一判据）。
+
+    ``b["path"]`` 是书目产出的权威值（``catalog`` 的 ``root`` 列 + ``rel`` 拼出来的，
+    精确到这本书真正落在哪个根）。而 ``root_of(b) / b["name"]`` 在多文件夹库里只保证
+    「**代表根** + 库内相对名」—— 书在别的根上时，拼出来的是**另一个根上的同名文件**：
+    下载 / 取图 / 渲染要么 404，要么把另一本书给出去（第 136 期统一到这里）。
+
+    只有拿不到 ``path`` 时（还没进索引的新书）才回落到 ``root_of`` 的 best-effort。
+    """
+    raw = str((book or {}).get("path") or "")
+    if raw:
+        return pathlib.Path(raw)
+    return root_of(book) / str((book or {}).get("name") or "")
+
+
 def _dir_facts(f: pathlib.Path) -> tuple:
     """**目录型**条目的 ``(体积, mtime)`` —— 探测与闸门**共用这一处**。
 

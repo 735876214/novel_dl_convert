@@ -79,7 +79,11 @@ def _download_photo(url: str, seed: str) -> str:
     if not buf:
         raise ValueError("头像内容为空")
     fn = _photo_basename(seed)
-    (authors_dir() / fn).write_bytes(bytes(buf))
+    # 原子写（第 136 期）：直写中断留坏图，读侧只能显示裂图。
+    photo = authors_dir() / fn
+    photo_tmp = photo.with_suffix(photo.suffix + ".part")
+    photo_tmp.write_bytes(bytes(buf))
+    photo_tmp.replace(photo)
     return fn
 
 

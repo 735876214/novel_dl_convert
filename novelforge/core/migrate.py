@@ -145,7 +145,7 @@ def compat_reason(book: dict, dst_lib: dict) -> str:
         # 「一话一个 PDF」的书会被拒，理由还写着「认不出有声书目录」—— 判据与事实不符。
         # 白名单必须用**目标库的**（不是 `units.UNIT_EXTS`）：问的就是「**它**扫不扫得到」。
         # 路径不在磁盘上时也一律判为不相容：真搬会失败，理由不会比这更好。
-        path = library.root_of(book) / str(book.get("name") or "")
+        path = library.abs_path(book)
         if units.collected_by(path, allowed, units.merges_for((dst_lib or {}).get("type"))):
             return ""
         return (f"「{label}」只收 {_fmt_exts(allowed)}，"
@@ -341,7 +341,7 @@ def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
             continue
 
         src_lib = str(b.get("library_id") or "")
-        src = pathlib.Path(library.root_of(b)) / str(b.get("name") or "")
+        src = library.abs_path(b)
         it.update(name=str(b.get("name") or ""), title=str(b.get("title") or ""),
                   format=str(b.get("format") or "").upper(), library_id=src_lib,
                   library_name=str((library.get_library(src_lib) or {}).get("name") or ""),

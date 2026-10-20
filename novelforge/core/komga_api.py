@@ -370,7 +370,7 @@ def book_dto(b: dict, series_name: str = "", th=None) -> dict:
         # 而 Komga 客户端要靠 pagesCount 渲染阅读器，所以在这里单本实时算。
         try:
             from . import pdfrender
-            pages = pdfrender.page_count(library.root_of(b) / str(b.get("name") or ""))
+            pages = pdfrender.page_count(library.abs_path(b))
         except Exception:
             pages = 0
     sname = series_name or series_name_of(b)
@@ -491,7 +491,7 @@ def read_progress_dto(b: dict, prog: dict, th=None) -> dict:
 def _spine_href(b: dict, index: int) -> str:
     """章节 index → EPUB 里真实的 spine 路径（读不到就退回一个可用的占位）。"""
     try:
-        path = library.root_of(b) / str(b.get("name") or "")
+        path = library.abs_path(b)
         spine = library._spine(path)
         if 0 <= index < len(spine):
             return unquote(spine[index])
@@ -539,7 +539,7 @@ def apply_read_progress(b: dict, payload: dict = None) -> tuple:
     href = unquote(str((loc or {}).get("href") or "")) if isinstance(loc, dict) else ""
     if href:
         try:
-            spine = library._spine(library.root_of(b) / str(b.get("name") or ""))
+            spine = library._spine(library.abs_path(b))
             if href in spine:
                 locator = spine.index(href)
         except Exception:
@@ -584,7 +584,7 @@ def pages_for(b: dict) -> list:
     from . import comics
 
     fmt = str(b.get("format") or "").upper()
-    path = library.root_of(b) / str(b.get("name") or "")
+    path = library.abs_path(b)
     if fmt in ("CBZ", "CBR"):
         info = comics.pages(path)
         out = []
@@ -623,7 +623,7 @@ def page_image(b: dict, number, convert: str = "") -> tuple:
         return (None, "")
 
     fmt = str(b.get("format") or "").upper()
-    path = library.root_of(b) / str(b.get("name") or "")
+    path = library.abs_path(b)
     if fmt in ("CBZ", "CBR"):
         data, media = comics.page_bytes(path, idx)
         if not data:
@@ -653,7 +653,7 @@ def manifest_for(b: dict) -> dict:
     第三方 App 对 EPUB 多数是**下载后本地读**，manifest 主要给 Komga 官方的 Web 阅读器；
     但生成成本很低，给全了免得客户端在某些流程上撞 404。
     """
-    path = library.root_of(b) / str(b.get("name") or "")
+    path = library.abs_path(b)
     try:
         spine = library._spine(path)
     except Exception:

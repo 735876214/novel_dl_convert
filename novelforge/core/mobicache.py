@@ -106,7 +106,7 @@ def _src_path(book: dict, path=None, root=None) -> pathlib.Path:
     if path is not None:
         return pathlib.Path(path)
     from . import library  # 延迟导入：library.book_detail 会 import 本模块
-    return (root or library.root_of(book)) / book["name"]
+    return (root / book["name"]) if root else library.abs_path(book)
 
 
 def _read_state(cdir: pathlib.Path) -> dict:

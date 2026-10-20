@@ -132,7 +132,7 @@ def _src_path(book: dict, path=None, root=None):
     if path is not None:
         return pathlib.Path(path)
     from . import library  # 延迟导入：library 顶层会 import 本模块的调用方链
-    return (root or library.root_of(book)) / book["name"]
+    return (root / book["name"]) if root else library.abs_path(book)
 
 
 def _read(path: pathlib.Path) -> "tuple[str, dict]":

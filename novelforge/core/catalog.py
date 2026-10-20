@@ -633,9 +633,12 @@ def refresh_library(lib: dict, force: bool = False, blocking: bool = True) -> di
     # unchanged 那种「扫了一遍但什么都没变」是稳态下的绝大多数，绝不能丢 ——
     # 丢了就等于每轮刷新都把列表缓存清一次，缓存等于不存在。
     if out.get("added") or out.get("removed"):
+        # 顺序要紧（第 136 期）：`cache.drop` 吞异常（含熔断期），先忘再删的话，
+        # drop 失败时键还留在 Redis 而集合已经忘了它 ⇒ 此后任何「全库失效」都
+        # 再也删不到这个键，旧列表占满 TTL。先删成功，再忘。
+        cache.drop(cache.book_list_key(lid))
         with _state_lock:
             _cached_libs.discard(lid)      # 下一个写键的人会重新记上
-        cache.drop(cache.book_list_key(lid))
     _mark_nonempty(lid)
     out["seconds"] = round(time.time() - t0, 3)
     _scan_end(lid, out)
@@ -1109,7 +1112,11 @@ def _settle(lib: dict, wait: bool = False) -> None:
     if not _needs_refresh(lid) and _index_has_rows(lid):
         return
     if not _lib.roots_of(lib):
-        _mark_fresh(lid)
+        # 第 136 期：来源文件夹被清空（`PATCH /api/libraries/{lid}` 接受
+        # `source_dirs: []`）时不能只标 fresh 就返回 —— 那样索引里的旧行一条不删，
+        # 书架与计数永远显示「不属于任何库的书」，而且 `_mark_fresh(lid)` 连脏标记
+        # 一起清掉 ⇒ 重启也不自愈，只有手动「重新扫描」才收敛。
+        refresh_library(lib)                 # roots 空 ⇒ seen 空 ⇒ 旧行全按 stale 删掉
         with _state_lock:
             _ready.add(lid)
         return

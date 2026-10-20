@@ -485,7 +485,11 @@ class DownloadManager:
                     ext = Path(str(u).split("?")[0]).suffix.lower()
                     if ext not in audio_mod.AUDIO_EXTS:
                         ext = ".mp3"              # 站点常给 `/audio?id=1` 这种没有扩展名的地址
-                    await asyncio.to_thread((dest / f"第{i}话{ext}").write_bytes, data)
+                    # 原子写（第 136 期）：直写同名轨会先被截断，下载失败即毁掉旧轨。
+                    tr = dest / f"第{i}话{ext}"
+                    tr_tmp = tr.with_suffix(tr.suffix + ".part")
+                    await asyncio.to_thread(tr_tmp.write_bytes, data)
+                    await asyncio.to_thread(tr_tmp.replace, tr)
         except Exception:
             if created:                           # 只清理**本次新建**的目录，不动已有产物
                 import shutil
@@ -583,4 +587,8 @@ class DownloadManager:
         # 把已经读过的章当新章再追加一遍，而**不报任何错**。
         if chapter_count:
             meta["chapters"] = int(chapter_count)
-        sidecar.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        # 原子写（第 136 期）：直写中断会留半截 JSON，追更读点 `json.loads` 抛错 ⇒
+        # 这本书的追更**永久**报错，而旧 sidecar 已被截断、回收站里也没有。
+        s_tmp = sidecar.with_suffix(sidecar.suffix + ".part")
+        s_tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        s_tmp.replace(sidecar)

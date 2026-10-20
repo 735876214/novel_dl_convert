@@ -370,7 +370,7 @@ def publish(book: dict, *, cfg: dict = None, updates: dict = None, cover=None,
             out["skipped"] = True
             out["error"] = "该库未配置成品目录"
             return out
-        src = library.root_of(book) / str(book.get("name") or "")
+        src = library.abs_path(book)
         # ⚠️ 判存在用 ``is_dir`` / ``is_file``，**不要**用 ``src.is_file()`` 一票否决 ——
         # 目录型条目（有声书）是目录，``is_file()`` 为假，会被误判成「源不存在」
         # （元数据 apply 那条链路踩过同一个坑）。
