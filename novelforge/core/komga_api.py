@@ -35,7 +35,7 @@ from urllib.parse import unquote
 
 from .. import config          # ⚠️ config 在上一级（novelforge/），不在 core/ 里
 from . import auth as auth_mod
-from . import db, lib_settings, library
+from . import db, lib_settings, library, numbers
 from .library import norm_key
 
 #: 库 id / 名字的**兜底**常量：多书库后真实值来自 ``libraries`` 表，
@@ -520,25 +520,21 @@ def apply_read_progress(b: dict, payload: dict = None) -> tuple:
         return (int((db.get_progress(b["id"]) or {}).get("locator") or 0), 100.0)
 
     if _is_paged(b):
-        try:
-            page = int(p.get("page") or 0)
-        except (TypeError, ValueError):
-            page = 0
-        total = int(b.get("pages") or 0)
+        # 第 127 期：`int(1e400)` 抛的是 OverflowError（不是 ValueError）⇒ 此前 500。
+        page = numbers.index(numbers.finite(p.get("page")), default=0)
+        total = numbers.index(numbers.finite(b.get("pages")), default=0)
         if page <= 0:
             # 非法页码不覆盖位置（见 docstring）；percent 归零表示「读到这里」没有进度
             return (int((db.get_progress(b["id"]) or {}).get("locator") or 0), 0.0)
         percent = 0.0
         if total > 0:
-            percent = min(100.0, round(page / total * 100.0, 4))
-        return (max(0, page - 1), percent)
+            percent = numbers.percent(round(page / total * 100.0, 4))
+        return (numbers.index(page - 1), percent)
 
     loc = p.get("locator") or {}
     prog = (((loc.get("locations") or {}).get("progression")) if isinstance(loc, dict) else None)
-    try:
-        percent = min(100.0, max(0.0, float(prog) * 100.0))
-    except (TypeError, ValueError):
-        percent = 0.0
+    prog_v = numbers.finite(prog)
+    percent = numbers.percent(0.0 if prog_v is None else prog_v * 100.0)
     locator = None
     href = unquote(str((loc or {}).get("href") or "")) if isinstance(loc, dict) else ""
     if href:

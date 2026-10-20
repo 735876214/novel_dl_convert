@@ -36,7 +36,7 @@ import hashlib
 import pathlib
 import re
 
-from . import epub_cfi
+from . import epub_cfi, numbers
 
 #: XPointer 里的 DocFragment 序号（KOReader 对 EPUB 的分片标识）
 _FRAGMENT = re.compile(r"DocFragment\[(\d+)\]")
@@ -100,14 +100,16 @@ def to_nf(payload: dict) -> tuple:
         if locator < 0:
             raw = str(payload.get("progress") or "").strip()
             if raw.isdigit():
-                locator = max(0, int(raw) - 1)
+                # 第 127 期：也夹住 —— 500 位数字的 locator 存不进 SQLite 的 INTEGER
+                # （`int` 本身不抛，落库时才炸）。
+                locator = min(max(int(raw) - 1, 0), numbers.MAX_INDEX)
             else:
                 locator = 0
-    try:
-        percent = float(payload.get("percentage") or 0) * 100.0
-    except (TypeError, ValueError):
-        percent = 0.0
-    percent = max(0.0, min(100.0, percent))
+    # 第 127 期：`numbers.finite` 先行 —— 原先 `float("nan")` 能过，`min(100.0,
+    # max(0.0, nan))` 的**两个** min/max 都「不认识」nan（比较皆 False ⇒ 原样返回），
+    # 结果把书标成 **100%（读完）**。
+    raw_pct = numbers.finite(payload.get("percentage"))
+    percent = numbers.percent(0.0 if raw_pct is None else raw_pct * 100.0)
     return locator, percent
 
 
