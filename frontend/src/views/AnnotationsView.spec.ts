@@ -44,6 +44,7 @@ function makeAnno(over: Partial<AllAnnotation> = {}): AllAnnotation {
     book_id: 'lib$aaa',
     book_title: '三体',
     book_author: '刘慈欣',
+    book_conflict: false,
     chapter: 4,
     quote: '不要回答',
     color: 'yellow',

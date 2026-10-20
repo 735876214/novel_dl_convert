@@ -25,7 +25,11 @@ export function chapterLabel(a: { chapter: number; chapter_title?: string }): st
  * 用户以为「点进去就到那条批注」，实际到的是第一章开头。宁可少给不可错给：
  * 不显示成链接，用户就不会以为它能点。
  */
-export function canJumpTo(a: { chapter: number }): boolean {
+export function canJumpTo(a: { chapter: number; book_conflict?: boolean }): boolean {
+  // 第 128 期：`book_conflict` = 这条批注的 `book_id` 撞了两本书。服务端能列出它
+  // （批注总览不再整页 500），但**按 id 打开必然 409** —— 所以不许做成可点的链接，
+  // 否则又是「点了没反应 / 报错」的那种假交互。
+  if (a.book_conflict) return false
   return typeof a.chapter === 'number' && a.chapter >= 0
 }
 

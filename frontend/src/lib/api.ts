@@ -1692,6 +1692,11 @@ export interface AllAnnotation extends Annotation {
   book_id: string
   book_title: string
   book_author: string
+  /**
+   * `book_id` 撞了两本书（同名冲突）。此时 `book_title` 回退成 id 本身、
+   * 按 id 打开会 409 ⇒ 界面标注出来且不许做成可点（见 `lib/annotations.ts`）。
+   */
+  book_conflict: boolean
   /** 0 = 活跃；> 0 = 在垃圾桶（软删除时刻）。仅在 `include_trashed=1` 时有意义。 */
   deleted_at: number
 }

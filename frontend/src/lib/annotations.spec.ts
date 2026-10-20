@@ -64,6 +64,11 @@ describe('canJumpTo', () => {
     expect(canJumpTo({ chapter: 7 })).toBe(true)
   })
 
+  it('id 撞名（同名冲突）不可跳 —— 打开必然 409', () => {
+    expect(canJumpTo({ chapter: 0, book_conflict: true })).toBe(false)
+    expect(canJumpTo({ chapter: 0, book_conflict: false })).toBe(true)
+  })
+
   it('序号未知不可跳', () => {
     // 阅读器只认 `?chapter=<序号>`。拿 -1 去跳会落到章首，用户以为「点进去就到那条批注」，
     // 实际到的是第一章开头 —— 界面上还看不出错了。宁可不算链接。

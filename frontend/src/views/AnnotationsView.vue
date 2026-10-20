@@ -200,6 +200,13 @@ async function load(): Promise<void> {
 
 onMounted(load)
 
+/** 书名字段那个元素的 tooltip：三种不可点各说各的理由。 */
+function jumpHint(a: AllAnnotation): string {
+  if (a.book_conflict) return '这本书的 id 与另一本撞名，先修复冲突才能打开'
+  if (!canJumpTo(a)) return '这条批注没有章节序号，跳不过去'
+  return '在阅读器里打开这一章'
+}
+
 function open(a: AllAnnotation): void {
   // 序号未知（设备回传的批注）就没有可跳的目标：`?chapter=-1` 会落到章首，
   // 用户以为「点进去就到那条批注」，实际到的是第一章开头。按钮那边也不渲染它可点。
@@ -459,10 +466,16 @@ async function doExport(): Promise<void> {
                   :class="canJumpTo(a)
                     ? 'cursor-pointer text-primary transition-opacity hover:opacity-80'
                     : 'text-muted-foreground'"
-                  :title="canJumpTo(a) ? '在阅读器里打开这一章' : '这条批注没有章节序号，跳不过去'"
+                  :title="jumpHint(a)"
                   @click="open(a)"
                 >
                   <span :class="canJumpTo(a) ? '' : 'text-foreground'">{{ a.book_title }}</span>
+                  <!-- id 撞名（同名冲突）：这条批注还读得出来，但那本书打不开 -->
+                  <span
+                    v-if="a.book_conflict"
+                    class="ml-1 rounded-full bg-warning/15 px-1.5 py-0.5 text-[10px] font-medium text-warning"
+                    title="这本书的 id 与另一本撞名，先去「设置 → 书库管理 → 同名冲突」改名修复"
+                  >同名冲突</span>
                   <span v-if="a.book_author" class="text-muted-foreground"> · {{ a.book_author }}</span>
                   <!-- 序号未知时显示设备给的章节**标题**；连标题都没有就整段不渲染 -->
                   <span v-if="chapterLabel(a)" class="text-muted-foreground"> · {{ chapterLabel(a) }}</span>
