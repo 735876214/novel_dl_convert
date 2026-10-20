@@ -35,6 +35,7 @@ kind             format          含义
 """
 import pathlib
 import re
+import shutil
 
 from . import comics
 
@@ -296,8 +297,24 @@ def unpack(path, *, remove_source: bool = False) -> dict:
                 results.append({**act, "ok": False,
                                 "note": f"{dest.name} 已存在（不覆盖，请先处理它）"})
                 continue
+            if act["kind"] == "repackage":
+                # 整份另存（容器本身就是一份 EPUB）：**流式复制**，别 `read_bytes()`
+                # 把整包读进内存 —— 那一步对 4 GB 的容器就是一次 OOM（第 125 期）。
+                try:
+                    tmp = dest.with_name(dest.name + ".part")
+                    shutil.copyfile(p, tmp)
+                    tmp.replace(dest)
+                except Exception as e:                # noqa: BLE001
+                    results.append({**act, "ok": False, "note": f"复制失败：{e}"})
+                    continue
+                results.append({**act, "ok": True, "note": ""})
+                continue
             try:
-                data = p.read_bytes() if act["kind"] == "repackage" else arc.read(act["name"])
+                data = arc.read(act["name"])
+            except comics.EntryTooLarge as e:
+                # 单条目解压超上限（第 125 期）：不落盘、如实说是哪一条、多大。
+                results.append({**act, "ok": False, "note": str(e)})
+                continue
             except Exception as e:                    # noqa: BLE001
                 results.append({**act, "ok": False, "note": f"读取失败：{type(e).__name__}"})
                 continue

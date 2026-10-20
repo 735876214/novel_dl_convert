@@ -3379,7 +3379,10 @@ def api_book_cover(bid: str):
 
     if fmt in ("CBZ", "CBR"):
         def _comic_cover():
-            data, media = comics.cover_bytes(path)
+            try:
+                data, media = comics.cover_bytes(path)
+            except comics.EntryTooLarge as e:       # 第 125 期：如实说「这一页太大」
+                raise HTTPException(413, str(e)) from e
             if data is None:
                 raise HTTPException(404, "该漫画没有图片")
             return data, media
@@ -3513,7 +3516,10 @@ def api_comic_page(bid: str, index: int):
     problem = comics.backend_problem(path)      # 缺 bsdtar/unrar 或 py7zr —— 唯一判据（第 111 期）
     if problem:
         raise HTTPException(503, problem)
-    data, media = comics.page_bytes(path, index)
+    try:
+        data, media = comics.page_bytes(path, index)
+    except comics.EntryTooLarge as e:               # 第 125 期：解压炸弹闸门
+        raise HTTPException(413, str(e)) from e
     if data is None:
         raise HTTPException(404, "页不存在")
     return Response(content=data, media_type=media,
@@ -3657,7 +3663,10 @@ def api_unit_pages(bid: str, index: int):
 @app.get("/api/books/{bid}/units/{index}/page/{n}")
 def api_unit_page(bid: str, index: int, n: int):
     """这一话的第 n 页原始字节。越界 ⇒ 404。"""
-    data, media = comics.page_bytes(_unit_comic(bid, index), n)
+    try:
+        data, media = comics.page_bytes(_unit_comic(bid, index), n)
+    except comics.EntryTooLarge as e:               # 同 ②：单元里的话也可能带炸弹
+        raise HTTPException(413, str(e)) from e
     if data is None:
         raise HTTPException(404, "页不存在")
     return Response(content=data, media_type=media,

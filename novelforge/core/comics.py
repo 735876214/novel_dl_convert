@@ -31,6 +31,49 @@ import zipfile
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"}
 _JUNK_PARTS = ("__MACOSX/", ".DS_Store", "Thumbs.db", ".thumbnails/")
 
+#: 单个条目**解压后**允许的最大字节数（第 125 期）。
+#:
+#: 为什么需要这道闸：上传侧只限制**压缩后**大小（``_upload_limit("max_bytes")``），
+#: 而 zip 的压缩比可以做到 ~1000:1 —— 实测一个 65 KB 的 ``.cbz``（单条目 64 MiB 零填充）
+#: 让 ``GET /api/books/{id}/comic/0`` 把 64 MiB 全量读进内存再发出去；把零填充换成
+#: 4 GB，进程就被打爆（NAS 上还会连累同机其它容器）。展开侧
+#: （``zipkind.unpack`` 落盘）同理，只是那一边吃的是磁盘。
+#:
+#: 128 MiB 是「够用」的量级：一页扫描图（含 4000px 的 TIFF 转 PNG）通常 2–20 MB，
+#: 整本漫画的**单页**不会到三位数 MB。真要更大的页，改这里（刻意不做成设置项：
+#: 它不是用户想调的旋钮，而是「别让服务被一个文件打死」的兜底）。
+MAX_ENTRY_BYTES = 128 * 1024 * 1024
+
+
+class EntryTooLarge(RuntimeError):
+    """归档里的单个条目解压后超过 :data:`MAX_ENTRY_BYTES`。
+
+    **故意不是「返回空」**：空会被上层当成「坏包 / 没这一页」，用户看到的是
+    「这本漫画里没有可显示的图片」—— 与真相（这一页大得离谱）完全不是一回事。
+    调用方（server）把它翻成 413 + 一句人话。
+    """
+
+    def __init__(self, name: str, size: int):
+        self.name = name
+        self.size = size
+        super().__init__(
+            f"这个条目解压后有 {_fmt_size(size)}，超过上限 "
+            f"{_fmt_size(MAX_ENTRY_BYTES)}（{name}）")
+
+
+def _fmt_size(n: int) -> str:
+    """给人看的体积（``128 MB`` / ``512 KB`` / ``12 B``）—— 别拿 0.0 MB 糊弄人。"""
+    if n >= 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n} B"
+
+
+def _guard_size(name: str, size: int) -> None:
+    if size > MAX_ENTRY_BYTES:
+        raise EntryTooLarge(name, size)
+
 #: 归档魔数：RAR4/RAR5 都是 "Rar!\x1a\x07"，zip 以 "PK" 开头，7z 是固定 6 字节签名
 _RAR_MAGIC = b"Rar!\x1a\x07"
 _ZIP_MAGICS = (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")
@@ -270,16 +313,28 @@ class _Archive:
         return out
 
     def read(self, name: str):
-        """取一个条目的字节。**取不到回 ``None``**（7z 后端的能力边界，见下）。"""
+        """取一个条目的字节。**取不到回 ``None``**（7z 后端的能力边界，见下）。
+
+        超过 :data:`MAX_ENTRY_BYTES` 抛 :class:`EntryTooLarge` —— 见那里的说明。
+        """
         if self._z is not None:
-            return self._z.read(name)
+            with self._z.open(name) as fp:
+                data = fp.read(MAX_ENTRY_BYTES + 1)
+            _guard_size(name, len(data))
+            return data
         if self._r is not None:
-            return self._r.read(name)
+            with self._r.open(name) as fp:
+                data = fp.read(MAX_ENTRY_BYTES + 1)
+            _guard_size(name, len(data))
+            return data
         # 7z：py7zr 1.1.3 实测**没有**「读单个条目」的直接 API（只有 extract/extractall），
         # 官方给的路子是传一个内存工厂 ⇒ 这里把该条目抽进 BytesIO：**不落盘**、
         # 也**不整包读进内存**（工厂的 limit 按该条目的解压后大小给）。
+        # 条目大小在目录里就有 ⇒ 超限的那条**根本不去解**。
+        size = self._size_of(name)
+        _guard_size(name, size)
         import py7zr.io
-        factory = py7zr.io.BytesIOFactory(limit=max(self._size_of(name), 1))
+        factory = py7zr.io.BytesIOFactory(limit=max(size, 1))
         self._s.reset()                     # py7zr 的句柄有状态：再抽一次前必须复位
         self._s.extract(targets=[name], factory=factory)
         buf = factory.products.get(name)
@@ -343,7 +398,11 @@ def pages(path) -> dict:
 
 
 def page_bytes(path, index: int):
-    """取第 index 页的原始字节 + media type；越界 / 坏包返回 ``(None, "")``。"""
+    """取第 index 页的原始字节 + media type；越界 / 坏包返回 ``(None, "")``。
+
+    ⚠️ 唯独 :class:`EntryTooLarge` **不吞**：吞掉就成了「这一页不存在」，
+    用户看到的是「没有可显示的图片」，而真相是这一页大得离谱（第 125 期）。
+    """
     try:
         with _open(path) as arc:
             names = arc.entries()
@@ -351,6 +410,8 @@ def page_bytes(path, index: int):
                 return (None, "")
             name = names[index][0]
             data = arc.read(name)
+    except EntryTooLarge:
+        raise
     except Exception:
         return (None, "")
     return (data, _media_of(name))
