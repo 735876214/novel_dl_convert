@@ -8865,3 +8865,101 @@ OverflowError: Python int too large to convert to SQLite INTEGER
    所以判据带一个 `minimum` 参数，而不是替调用方做决定。
 4. **模糊测试的对象应该是「签名」而不是「我想到的入口」**：从 `app.routes` + `inspect.signature`
    枚举参数，能让**以后新增的端点自动进射程**；照着代码手写清单，一定会漏掉最像没问题的那一个。
+
+## 第 131 期（任务记录的诚实性：重启后没人推进的「进行中」如实标成失败）
+
+**需求来源**：第 3 轮（用户「进行5轮审查并修复」）。前两轮分别换了**入口形态**（路径参数 / 查询参数）去撞 500，这一轮不再撞入口，而是查「**记录的状态与真实世界会不会脱节**」。
+
+### 一、探法：把「表里有什么」和「谁会推进它」分开看
+
+`tasks` 表是一张进度条表：`id / kind / status / progress / error / created_at / updated_at`。它的 `status='running'` 只有**一个**推进者 ——
+进程内的后台协程（`novelforge/server.py` 的 `_spawn_bg` → 各自的 `_run_*` 函数，跑完写 `done`、抛异常写 `failed`）。
+`GET /api/tasks` 则只是 `db.task_list()` 读表。于是有一个必然的断裂：**进程在任务跑完之前消失，就再没有人会写那一行**。
+
+这不是「异常路径」，是**每一次关停都会发生**的路径：容器更新、`docker compose restart`、宿主重启、
+甚至用户点了一下「停止」。只要那一刻有任务在跑，表里就留一个 `running`。
+
+### 二、实测：一条永远转圈的任务
+
+隔离实例 8483 上手工造一行（模拟「关停时有任务在跑」）：
+
+```sql
+INSERT INTO tasks (id, kind, status, progress, error, created_at, updated_at)
+VALUES ('t-dangling', 'scan', 'running', 50.0, '', 1, 1);
+```
+
+重启进程 → `GET /api/tasks`：
+
+```json
+{"tasks": [{"id": "t-dangling", "kind": "scan", "status": "running", "progress": 50.0, "error": ""}]}
+```
+
+**重启后仍然是 `running 50.0`，其 `error` 是空串。** 前端任务页据此渲染成「进行中 50%」并持续轮询 —— 它永远不会前进，
+也永远不会失败；用户看到的是「扫描卡在 50%」，而实际上**那个扫描在关停那一刻就没了**。这是**记录在说谎**，不是界面 bug。
+
+对照组：刮削队列（`scrape_items`）遇到同样情形有专门的处理 —— `db.scrape_reset_running()` 把 `running` 打回 `pending`。
+但它成立的前提是**那张表是可续跑的队列**：重启后 `scrape_worker` 接着跑。`tasks` 不是队列，它是**一次性动作**的进度条：
+`id` 是一次性的、`kind` 是对用户动作的描述、没有任何 worker 会来认领它。
+
+### 三、修法：启动时把没人推进的如实标成失败
+
+主战场在 `novelforge/core/db.py`（表的所有者），不在 `server.py` 的每个路由里（那是 40+ 个调用点，改不彻底）：
+
+```python
+TASK_INTERRUPTED = "服务重启时这个任务还没跑完（已中断）；重新操作一次即可"
+
+def task_reset_interrupted(note: str = TASK_INTERRUPTED) -> int:
+    with _connect() as conn:
+        cur = conn.execute(
+            "UPDATE tasks SET status='failed', progress=100.0, error=?, updated_at=? "
+            "WHERE status IN ('queued','running')",
+            (note, time.time()),
+        )
+        return cur.rowcount
+```
+
+`progress=100.0` 是刻意的：**进度条走到头**表示「这件事结束了」，而不是「它完成了」—— 结束的原因写在 `error` 里。
+`queued` 也一起收：它同样只在内存里有下一个推进者（队列在进程里），重启后一样没人管。
+
+调用点在 `novelforge/server.py` 的 `lifespan`，紧跟 `db.init()`：
+
+```python
+try:
+    n_interrupted = db.task_reset_interrupted()
+    if n_interrupted:
+        logging.warning("有 %s 个任务在上次退出时没跑完，已如实标记为失败", n_interrupted)
+except Exception:
+    logging.exception("清理上次残留的任务状态失败")
+```
+
+包在 `try/except` 里是必要的：这是启动路径，**它失败不该让服务起不来**（DB 只读、迁移未完成等情形都可能）。
+但**不能静默** —— 失败要 `logging.exception` 留痕。
+
+### 四、为什么不「续跑」，也不「删掉」
+
+- **不续跑**：`tasks` 没有续跑需要的入参（`kind` 只描述动作种类；真正要重跑得由用户再点一次）。给表补一列入参、
+  再写一个认领 worker，是为一个「原本就没有」的能力加半截架构（§7.2 禁投机性抽象、§7.3 禁半截）。
+- **不删掉**：静默删行等于**替用户决定「这件事不重要」**。用户在任务页看不到它，就不知道「上次的扫描其实没跑完」。
+  如实标成失败，用户才可能在下次操作前想起来「上次是不是又白等了」。**记录的职责是说真话，不是好看。**
+
+### 五、核验
+
+| 项 | 结果 |
+|---|---|
+| 修前：关停时 running/queued 的行，重启后 | `running 50.0`、`error=""`，永远转圈 |
+| 修后：同上 | `failed 100.0`、`error=服务重启时这个任务还没跑完（已中断）；重新操作一次即可` |
+| 已 `done` / `failed` 的行 | 不动（`WHERE status IN ('queued','running')`） |
+| 幂等 | 第二次调 `task_reset_interrupted()` 回 0 |
+| 日志 | 恰 1 条 `有 N 个任务在上次退出时没跑完，已如实标记为失败` |
+| 新增用例 | `tests/test_task_recovery_131.py` 4 例（收尾语义 / 幂等 / 走真实 `lifespan` 的接口断言 / 文案单一出处） |
+| 全量 | **2588 例（2575 passed / 0 failed / 0 errors / 13 skipped）**，142.1 s |
+
+### 六、教训
+
+1. **「状态字段」要问一句「谁会写它」**。表里有 `running` 不代表有人负责结束它。凡是只有**进程内**推进者的状态机，
+   都要显式回答「进程没了怎么办」—— 答案不能是「那它就一直 running 吧」。
+2. **同一个词在不同表里含义不同**：`scrape_items.running` 是**队列里被认领的一项**（可续），`tasks.running` 是**一次动作的进度**
+   （不可续）。照抄前者的修法（打回 pending）到后者，会造出一个永远 `pending`、永远没人认领的幽灵。
+3. **区分「失败」与「被打断」的文案要写清楚原因**，别只写 `failed`。用户读到「服务重启时…已中断；重新操作一次即可」，
+   下一步动作是明确的；读到「失败」只会去猜是不是 bug。
+4. **启动期的清理路径必须自己不会阻塞启动**，但也不能静默 —— `try/except` + `logging.exception` 是这里的定式。
