@@ -30,7 +30,8 @@ import re
 #: 否则存量 TXT 书的派生 EPUB 会一直沿用旧目录，改了规则**看不见效果**（缓存命中就返回，
 #: 不会重切）；版本号一变即触发重建，活动日志里也留得下痕迹。
 #: 第 72 期 +1：置信判据加绝对条数兜底、降级产物为空时回退正则、缩进降级认全角空格。
-CHAPTER_RULE_VERSION = 3
+#: 第 126 期 +1：空正文的章吞回正文、整本无正文时退化为「一章全文」（`:func:`absorb_orphan_titles`）。
+CHAPTER_RULE_VERSION = 4
 
 #: 行首锚定：允许行首的行内空白（**含全角空格**，中文文本常用它缩进），但用
 #: ``[ \t　]*`` 而**不是** ``\s*`` —— 后者能吃掉换行，等于没锚定（``^`` 从上一行
@@ -57,6 +58,10 @@ _VOL_TAIL = rf"(?:[：:、\-——]{_SP}[^\n]{{1,{_TITLE_MAX}}}|[ \t　]+[^\n]{{
 #: （``core/reading_list``）据此把它们单独成段 —— 「卷前一段」与「卷尾一段」，且不给序号。
 #: ⚠️ 顺序有意义：``UNNUMBERED_FRONT + UNNUMBERED_BACK`` 拼出来必须与
 #: ``CHAPTER_PATTERNS`` 里那条「捕获整行」的正则**逐字一致**（改词表等于改分章口径）。
+#: 「整本书读不出一章正文」时那一章的标题（第 126 期）。刻意**不用**「正文」—— 那是 ``vol``
+#: 的默认值，两者撞成同一个字符串后界面里就分不清「章节标题」与「卷名」了。
+FULLTEXT_TITLE = "全文"
+
 UNNUMBERED_FRONT = ("序章", "序言", "楔子", "引子", "前言")
 UNNUMBERED_BACK = ("后记", "后記", "尾声", "终章", "番外")
 
@@ -199,12 +204,54 @@ def regex_confident(bounds: list[tuple[int, str]], text: str) -> bool:
     return len(bounds) >= 3 or len(bounds) * 2000 >= len(text)
 
 
+def absorb_orphan_titles(chaps: list[dict]) -> list[dict]:
+    """把「正文为空」的章吞回去 —— 它们的标题只是**一行顶格正文**，不是章标题（第 126 期）。
+
+    第 72 期只堵住了一半：正则**有**边界时，降级产物全空会回退正则边界。可是**一个边界都
+    没有**的全顶格文本（随笔 / 对话体 / 一话一行的网文导出 / 诗歌）没有可回退的东西，于是
+    整本书被切成「一行一章、正文全空」—— 阅读器里满屏标题、点进去只剩 ``<h2>``，正文一个字
+    都读不到（第 126 期实测：三行文本 → 3 章、``<h2>`` 之外零内容）。
+
+    判据（**单一真值源**，`:func:`detect_chapters` 是唯一调用点）：缩进降级里「顶格行 = 章标题」
+    的前提是**它脚下有缩进行**。没有正文的章，说明这行根本不是标题 ⇒ 当普通正文看待：
+
+    · 前面已有章的，并进上一章正文**末尾**（行序不变）；
+    · 前面还没有章的（全书第一行就是它），攒到下一章正文**开头**；
+    · 攒到最后仍然没有一章有正文 ⇒ 整本书就是一章（标题用 ``全文``），正文 = 原文。
+
+    ⚠️ 只动**空正文**的章：真有正文的章一个都不碰，所以「缩进降级认全角空格」那些用例的
+    语义不受影响（第 72 期口径 10）。
+    """
+    out: list[dict] = []
+    pending: list[str] = []          # 还没找到能吞下它们的那一章的空章标题（行序在前）
+    for c in chaps:
+        body = (c.get("body") or "").strip()
+        title = (c.get("title") or "").strip()
+        if body:
+            if pending:
+                c["body"] = "\n".join([*pending, body])
+                pending = []
+            out.append(c)
+        elif out:
+            out[-1]["body"] = (out[-1]["body"] + "\n" + title).strip()
+        else:
+            pending.append(title)
+    if not out and pending:          # 从头到尾一章正文都没有：整本书 = 一章
+        return [{"title": FULLTEXT_TITLE, "body": "\n".join(pending), "vol": "正文"}] if pending else []
+    if pending:                      # 兜底（理论上走不到）：尾部空章并进最后一章
+        out[-1]["body"] = "\n".join([out[-1]["body"], *pending]).strip()
+    return out
+
+
 def detect_chapters(text: str, merge: bool = False) -> list[dict]:
     """章节识别：正则优先，命中率不足时退化为缩进切分。
 
     降级后若**一章正文都没读出来**（全顶格文本必然如此：顶格行全成了章标题、没有
     缩进行当正文），而正则**有**边界，就回到正则边界 —— 几个真边界好过 N 个空正文的
     假章（那种目录在阅读器里表现为「满屏标题、点进去没有正文」）。
+
+    **一个边界都没有**时没有可回退的东西，此时由 :func:`absorb_orphan_titles` 收尾：
+    空正文的章当作普通正文行吞回去，整本书读不出正文就退化成「一章全文」（第 126 期）。
     """
     bounds = regex_bounds(text)
     if bounds and regex_confident(bounds, text):  # 正则有效
@@ -212,7 +259,7 @@ def detect_chapters(text: str, merge: bool = False) -> list[dict]:
     chaps = _split_by_indent(text)  # 缩进降级
     if bounds and not any((c.get("body") or "").strip() for c in chaps):
         return split_by_offsets(text, bounds, merge)
-    return chaps
+    return absorb_orphan_titles(chaps)
 
 
 def detect_chapters_cfg(text: str, cfg: dict | None = None, merge: bool | None = None) -> list[dict]:
@@ -245,16 +292,33 @@ def _split_by_indent(text: str) -> list[dict]:
 
     ⚠️ 缩进字符集必须与 `_LEAD`（正则锚定那边）**一致**：全角空格 `　` 也是缩进。
     只认半角时，用全角缩进的中文文本会被切成「一段一章、正文全空」（第 72 期实测）。
+
+    ⚠️ **第一个顶格行之前**的缩进正文不许丢（第 126 期）：这段文本没有标题可挂，此前
+    `cur is None` 时被直接跳过。整本书都用全角空格缩进、又没有章标记的 TXT（中文排版常态）
+    会因此切出 **0 章** —— 阅读器里整本书一个字都没有（实测：`　　他来了。\n　　她走了。\n`
+    ⇒ `[]`）。现在它们落进一章标题为 ``全文`` 的前置章，行序不变。
     """
-    chaps, cur = [], None
+    chaps: list[dict] = []
+    cur: dict | None = None
+    lead: dict | None = None          # 首个顶格行之前的缩进正文（见上面的 ⚠️）
     for ln in text.splitlines():
         if ln[:1] in (" ", "\t", "　") or not ln.strip():
             if cur is not None:
                 cur["body"] += "\n" + ln
+            elif ln.strip():
+                if lead is None:
+                    lead = {"title": FULLTEXT_TITLE, "body": ln, "vol": "正文"}
+                else:
+                    lead["body"] += "\n" + ln
         else:
+            if lead is not None:
+                chaps.append(lead)
+                lead = None
             if cur:
                 chaps.append(cur)
             cur = {"title": ln.strip(), "body": "", "vol": "正文"}
+    if lead is not None:
+        chaps.append(lead)
     if cur:
         chaps.append(cur)
     for c in chaps:
