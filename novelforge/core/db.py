@@ -3038,12 +3038,16 @@ def upgrade_book_ids() -> dict:
             d = pathlib.Path(str(_dp))
             if not d.is_dir():
                 continue
-        for f in d.rglob("*"):
-            if not f.is_file():
-                continue
-            base = f.name
-            old = hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
-            index.setdefault(old, lid)
+            # ⚠️ 这一层必须**在根的循环里**：放到循环外就只有每库最后一个根参与迁移，
+            #    多根库的书 id 停在旧形态（进度 / 书签 / 批注 / 导出全挂在错的 id 上）；
+            #    而一个根都没有的库会让 `d` 未绑定 → UnboundLocalError → 迁移永不完成、
+            #    `bookid_v2` 标记写不下去，每次启动都重试同一条坏路径（第 135 期）。
+            for f in d.rglob("*"):
+                if not f.is_file():
+                    continue
+                base = f.name
+                old = hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
+                index.setdefault(old, lid)
     old_ids: set = set()
     c = _connect()
     for t in REMAP_TABLES:

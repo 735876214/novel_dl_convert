@@ -301,7 +301,12 @@ docker compose up -d
 - 访问 `http://<NAS-IP>:8992` 上传文件入库
 - **文件直接丢进 `./input` 即可**：自动收进书库并记日志（网页「转换日志」页可看），在线阅读 TXT 时按需生成目录
 - **输入放 `./input`，成品落 `./output`**，互不影响
-- 在线书源：`POST /search`、`POST /download`；内容预览：`GET /content?url=`、`GET /supported?url=`
+- 旧接口（**不在 `/api` 前缀下**，为油猴脚本 / 外部脚本保留、历史上不强制鉴权）：
+  `POST /convert`（上传并转换）、`POST /convert-path`（转换 `./input` 里已有的文件）、
+  `GET /download/{库内相对路径}`（下成品文件）。三者都过 `fileops.input_path` /
+  `fileops.safe_path` 的包含性校验，只在自己目录内生效
+- 在线书源的搜索 / 预览 / 下载全走 `/api/…`（见下方接口表）；旧版的 `POST /search`、
+  `POST /download`、`GET /content`、`GET /supported` 已随在线抓取重构下线
 - 在线阅读（第 93 期）：`/api/books/{id}/online/status|chapters|chapter/{n}`、`online/bind`；
   单本更新：`POST /api/books/{id}/check-update` —— 全部走同一个下载闸门，关着就是 400 + 原因原文
 - Synology Container Manager / QNAP Container Station：新建「项目 / 应用」，目录选上面那个部署目录即可

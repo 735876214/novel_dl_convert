@@ -18,12 +18,11 @@ from __future__ import annotations
 import fnmatch
 import json
 import logging
-import shutil
 import threading
 import time
 from pathlib import Path
 
-from . import activity_log, audio, komga, lib_settings, library, pipeline
+from . import activity_log, audio, komga, landing as _landing, lib_settings, library, pipeline
 from .. import config
 
 STATE_FILENAME = "watcher_state.json"
@@ -533,7 +532,10 @@ class FolderWatcher:
                 enqueue_scrape_async(rel, lib, cfg)
                 return ("added", str(dst))
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(p, dst)
+            # ⚠️ 必须**原子**复制（`.part` → replace）：`copy2` 是原地写，中途死掉就在书库
+            #    根里留半本书，而扫描器会把它当成品索引走（第 135 期）。判据只有一处 ——
+            #    `landing._copy_atomic`，别在这里再写第二份。
+            _landing._copy_atomic(p, dst)
             # 第 75 期：记下 ① 原件在哪（就地库那条分支不会走到这里：源就是成品，
             # 没有独立的 ①，`remember_origin` 内部也会再判一次）
             library.remember_origin(dst, (lib or {}).get("id"), p)
@@ -848,6 +850,17 @@ class FolderWatcher:
                     res = {"ok": False, "reason": str(e), "actions": []}
                 # **无论成败**都记指纹：容器不可变，避免坏包每轮都重试一遍
                 db.state_set(key, fp)
+                if not res.get("ok"):
+                    # 但「跳过」必须留痕：只记指纹不记日志的话，坏包永久跳过且零感知
+                    # —— 用户只会看到「这个压缩包解不开」，不知道系统试过、为什么放弃
+                    # （第 135 期，后台任务诚实性）。换新文件（指纹变）才会重试。
+                    try:
+                        al.log(al.ACTION_ADD, b["name"], al.STATUS_FAIL,
+                               detail=f"自动展开容器失败：{res.get('reason') or '未知原因'}"
+                                      "（源容器保留，已跳过；换新文件才会重试）",
+                               source="autounpack")
+                    except Exception:             # noqa: BLE001 —— 记日志失败不影响展开
+                        pass
                 if res.get("ok"):
                     library.invalidate(b.get("library_id"))
                     try:
@@ -874,10 +887,13 @@ class FolderWatcher:
         t = self._thread
         if t and t.is_alive():
             # 转换是同步 I/O，无法被中断；给足时间让其自然结束。
-            # 超时后线程仍可能短暂存活（daemon），但 WATCHER 已置空、不会再被复用，
-            # 且 state 锁已缩小范围，不会再阻塞 Web 服务的 mark 操作。
             t.join(timeout=max(self.interval + 5, 30))
-        self._thread = None
+        # ⚠️ join 超时（NAS 上的大 EPUB、批量拷贝很常见）时**保留引用**：置空会让
+        #    `start()` 立刻再起一个线程，而它开局就 `_stop.clear()` —— 旧线程于是继续跑，
+        #    两个线程同时扫同一棵树（重复入库 / 重复拷贝 / 重复入队刮削），
+        #    `is_running()` 还谎报「未运行」（第 135 期）。
+        #    留着引用的代价只是 `start()` 返回 False，那是**事实**，不是故障。
+        self._thread = None if not (t and t.is_alive()) else t
 
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())

@@ -347,6 +347,16 @@ def process(bid, *, fetch: bool = None, gen: int = None) -> dict:
             _log(name, f"跳过刮削：{res.get('error')}", ok=True)
             return {"ok": False, "skipped": True, **res}
         return _failed(bid, row, lib_id, res.get("error") or "未知失败", name, gen=gen)
+    except Exception as e:                            # noqa: BLE001
+        # 台账诚实性（第 135 期）：异常若直接上抛，`_loop` 只记一条日志就继续下一批，
+        # 而这一行已置成 `running`、`scrape_pending` 又只取 `pending` ⇒ 这本书永远卡在
+        # 「进行中」，只有重启（`scrape_reset_running`）才自愈。按普通失败记账，
+        # 重试上限与别的失败路径同一口径。
+        try:
+            _failed(bid, row, lib_id, f"{type(e).__name__}: {e}", name, gen=gen)
+        except Exception:                             # noqa: BLE001 —— 连记账都失败只能留日志
+            _logger.exception("刮削异常后登记状态也失败：%s", bid)
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     finally:
         _set_current("")
 

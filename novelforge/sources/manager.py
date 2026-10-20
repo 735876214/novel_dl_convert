@@ -15,10 +15,16 @@ logger = logging.getLogger(__name__)
 
 
 def _safe_name(s: str) -> str:
-    """把书名清洗为安全的文件名（去掉路径分隔与多数特殊字符）。"""
+    """把书名清洗为安全的文件名（去掉路径分隔与多数特殊字符）。
+
+    ⚠️ `..` / `.` / 首尾点与空格必须一并剥掉：只替换分隔符的结果是
+    `out_dir / ".."` = **父目录**，而书名来自书源（不可信）⇒「下载有声书」会往
+    收书目录外面写文件（第 135 期）。Windows 还会静默吃掉结尾的点。
+    """
     s = (s or "book").strip()
     s = re.sub(r"[\\/:*?\"<>|]", "_", s)
-    return s[:120] or "book"
+    s = s.strip(". ")[:120].strip(". ")
+    return s or "book"
 
 from ..core import network, pipeline, reading_list, urlguard
 from .base import REGISTRY

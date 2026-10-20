@@ -127,7 +127,9 @@ async def cmd_search(args):
     reason = mgr.gate_reason()
     if reason:
         print(reason)
-        return
+        # 退出码 2 = 「被拒绝」，不是「成功了但没结果」：脚本 / CI 靠它区分
+        # （第 135 期；返回 0 会让「下载没开」看起来像「网上没这本书」）。
+        raise SystemExit(2)
     res = await mgr.search(args.title)
     items = res["items"]
     print(f"共 {len(items)} 条结果：")
@@ -153,7 +155,7 @@ async def cmd_download(args):
     reason = mgr.gate_reason()
     if reason:
         print(reason)
-        return
+        raise SystemExit(2)                           # 同 cmd_search：拒 = 非 0 退出码
     result = await mgr.fetch_and_convert(item, _resolve_out(args),
                                         {"force": True, "merge": True, "cfg": cfg})
     print(f"已生成：{result}")

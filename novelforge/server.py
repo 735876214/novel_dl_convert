@@ -362,6 +362,32 @@ _MEDIA_UNTRUSTED_HEADERS = {
 }
 
 
+def _media_headers(cache_control: str = "public, max-age=86400") -> dict:
+    """媒体响应头的**唯一**组装点（第 134 期立，第 135 期把全部出口收口到这里）。
+
+    ⚠️ 这一族出口的共同前提：**字节来自书 / 上传件 / 抓来的图**，媒体类型由后缀或
+    书里的声明推出 —— 两者都不可信。散在各处各写一份头，就一定会有一处漏（第 134 期
+    只覆盖了 `/asset` 与封面两处，其余九处漏了一整轮）。加新出口时**只调用这里**。
+    """
+    h = dict(_MEDIA_UNTRUSTED_HEADERS)
+    h["Cache-Control"] = cache_control
+    return h
+
+
+def _media_bytes(data: bytes, media_type: str, *,
+                 cache_control: str = "public, max-age=86400") -> Response:
+    """字节已在内存里的媒体出口（漫画页 / 书内资源 / 封面）。"""
+    return Response(content=data, media_type=media_type,
+                    headers=_media_headers(cache_control))
+
+
+def _media_file(path, media_type: str | None = None, *,
+                cache_control: str = "public, max-age=86400", **kw) -> FileResponse:
+    """磁盘上的媒体出口（`FileResponse` 自带 Range，音频 / 漫画 / 字体要靠它）。"""
+    return FileResponse(path, media_type=media_type,
+                        headers=_media_headers(cache_control), **kw)
+
+
 class _RedactMediaToken(logging.Filter):
     """uvicorn access log 里的 ``?token=…`` 一律打码（第 134 期）。
 
@@ -3054,8 +3080,7 @@ def api_book_asset(bid: str, p: str = Query(..., description="zip 内资源相�
     if data is None:
         raise HTTPException(404, "资源不存在")
     ct = mimetypes.guess_type(name)[0] or "application/octet-stream"
-    return Response(content=data, media_type=ct,
-                    headers=_MEDIA_UNTRUSTED_HEADERS)
+    return _media_bytes(data, ct)
 
 
 @app.get("/api/books/{bid}/epub-css")
@@ -3459,11 +3484,10 @@ def api_purge_custom_field(cid: int):
 def _cover_response(data: bytes, media: str) -> Response:
     """封面的统一出口（HTTP 层的缓存头也在这里，别在分支里各写一遍）。
 
-    封面字节来自**书里 / 抓来的图**，媒体类型同理不可信 ⇒ 与书内资源共用
-    `_MEDIA_UNTRUSTED_HEADERS`（第 134 期）。
+    封面字节来自**书里 / 抓来的图**，媒体类型同理不可信 ⇒ 走 `_media_bytes`
+    （第 134 期立，第 135 期把全部媒体出口收口到这一族 helper）。
     """
-    return Response(content=data, media_type=media or "image/jpeg",
-                    headers=_MEDIA_UNTRUSTED_HEADERS)
+    return _media_bytes(data, media or "image/jpeg")
 
 
 def _cover_cached(bid: str, src, produce):
@@ -3547,9 +3571,8 @@ def api_book_cover(bid: str):
         name = units.cover_in_tree(path) if path.is_dir() else ""
         if not name:
             raise HTTPException(404, "该有声书没有封面" if fmt == "AUDIO" else "该合集没有封面")
-        return FileResponse(path / name,
-                            media_type=mimetypes.guess_type(name)[0] or "image/jpeg",
-                            headers={"Cache-Control": "public, max-age=86400"})
+        return _media_file(path / name,
+                           mimetypes.guess_type(name)[0] or "image/jpeg")
 
     # ⚠️ 服务端抓取的封面**与文件格式无关**（第 87 期修的真 bug）：
     # `core/library._apply_overlay` 对**任何格式**只要库里存了抓取封面就把 `has_cover`
@@ -3607,7 +3630,7 @@ def api_book_file(bid: str):
     if not path.is_file():
         raise HTTPException(404, "文件不存在")
     media = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    return FileResponse(path, media_type=media, headers={"Cache-Control": "private, max-age=3600"})
+    return _media_file(path, media, cache_control="private, max-age=3600")
 
 
 @app.post("/api/books/{bid}/unpack")
@@ -3672,8 +3695,7 @@ def api_comic_page(bid: str, index: int):
         raise HTTPException(413, str(e)) from e
     if data is None:
         raise HTTPException(404, "页不存在")
-    return Response(content=data, media_type=media,
-                    headers={"Cache-Control": "public, max-age=86400"})
+    return _media_bytes(data, media)
 
 
 # ---------------- 有声书（单文件 / 多轨目录）----------------
@@ -3721,8 +3743,7 @@ def api_audio_track(bid: str, index: int):
         raise HTTPException(404, "轨道不存在")
     media = _AUDIO_MIME.get(track.suffix.lower()) \
         or mimetypes.guess_type(track.name)[0] or "application/octet-stream"
-    return FileResponse(track, media_type=media,
-                        headers={"Cache-Control": "private, max-age=3600"})
+    return _media_file(track, media, cache_control="private, max-age=3600")
 
 
 # ---------------- 序号单元合集（一话一文件；漫画 / 有声书库，第 73 期）----------------
@@ -3800,8 +3821,7 @@ def api_book_unit_file(bid: str, index: int):
     p = _unit_file(bid, index)
     media = _AUDIO_MIME.get(p.suffix.lower()) \
         or mimetypes.guess_type(p.name)[0] or "application/octet-stream"
-    return FileResponse(p, media_type=media,
-                        headers={"Cache-Control": "private, max-age=3600"})
+    return _media_file(p, media, cache_control="private, max-age=3600")
 
 
 @app.get("/api/books/{bid}/units/{index}/pages")
@@ -3819,8 +3839,7 @@ def api_unit_page(bid: str, index: int, n: int):
         raise HTTPException(413, str(e)) from e
     if data is None:
         raise HTTPException(404, "页不存在")
-    return Response(content=data, media_type=media,
-                    headers={"Cache-Control": "public, max-age=86400"})
+    return _media_bytes(data, media)
 
 
 def _chapter_read(produce):
@@ -4780,7 +4799,7 @@ def api_author_photo(name: str):
     if not p:
         raise HTTPException(404, "无头像")
     media = _AUTHOR_PHOTO_TYPES.get(p.suffix.lower(), "application/octet-stream")
-    return FileResponse(p, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
+    return _media_file(p, media)
 
 
 @app.post("/api/authors/{name}/bio")
@@ -4979,7 +4998,7 @@ def api_account_avatar():
     if not f.is_file():
         raise HTTPException(404, "无头像")
     media = _USER_AVATAR_TYPES.get(pathlib.Path(p).suffix.lower(), "application/octet-stream")
-    return FileResponse(f, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
+    return _media_file(f, media)
 
 
 @app.post("/api/authors/{name}/fetch")
@@ -6905,7 +6924,7 @@ def api_font_file(fid: str):
     media = {".ttf": "font/ttf", ".otf": "font/otf",
              ".woff": "font/woff", ".woff2": "font/woff2"}.get(p.suffix.lower(), "application/octet-stream")
     # 字体内容不会变（改了就是新文件），长缓存安全
-    return FileResponse(p, media_type=media, headers={"Cache-Control": "public, max-age=86400"})
+    return _media_file(p, media)
 
 
 # ---------------- 阅读时长（会话上报）----------------
@@ -7913,7 +7932,9 @@ def api_watcher_start():
 def api_watcher_stop():
     if WATCHER is not None:
         WATCHER.stop()
-    return {"ok": True, "running": False}
+    # 如实回报：`stop()` 在 join 超时后线程仍在跑（大 EPUB / NAS 拷贝），这时说
+    # `running: false` 就是假话（第 135 期，同「假开关」纪律）。
+    return {"ok": True, "running": bool(WATCHER is not None and WATCHER.is_running())}
 
 
 @app.post("/api/scan")
@@ -9188,7 +9209,7 @@ def ko_book_page(request: Request, book_id: str, number: int, convert: str = "")
     data, media = komga_api.page_image(b, number, convert)
     if not data:
         _ko_404("页不存在")
-    return Response(content=data, media_type=media)
+    return _media_bytes(data, media)
 
 
 @app.get("/api/v1/books/{book_id}/manifest")
