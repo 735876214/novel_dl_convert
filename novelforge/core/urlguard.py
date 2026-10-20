@@ -38,8 +38,21 @@ HTTPS 的证书校验），所以这里**不做**伪装的加固，而是：
 * 拒绝**任一**解析结果为非公网（多 A 记录里混一个内网也拒）；
 * 把这段残余风险写在这里与 `docs/roadmap-gaps-remaining.md`，交给部署者判断
   （单用户 NAS 场景下，能打到这个端口的人通常已经在内网了）。
+
+## 书源抓取也过这道闸（第 134 期）
+
+上面「其余出网目标都由规则白名单决定」这句话，当时被当成了「书源抓取不必再校验」的
+理由 —— **并不成立**：书源规则文件来自用户导入（可从网上抄来），里面的 `domains`
+是**别人写的**；一条 `http://169.254.169.254/latest/meta-data/` 的规则一样能让服务端
+去取内网内容，取到的正文还会进到书里被读出来。所以 `sources/manager._client` 与封面
+下载现在都挂 `make_request_guard()`。
+
+内网自建源（NAS 上另起的站点）是真实用法，所以给了**显式开关** `network.allow_private_sources`
+（默认 **False = 闸门生效**，与 `network.verify_tls` 同一个「默认关、由部署者自己开」的口径）：
+打开后只跳过「是不是内网」这一条，协议仍限 http / https。
 """
 import asyncio
+import functools
 import ipaddress
 import socket
 from urllib.parse import urlsplit
@@ -84,10 +97,32 @@ def resolve(host: str) -> list:
     return out
 
 
-def assert_public_url(url: str) -> str:
+def allow_private_sources(cfg: dict | None = None) -> bool:
+    """书源抓取要不要放行内网目标 —— `network.allow_private_sources` 的**唯一**读点与默认值。
+
+    默认 **False = 校验内网**（第 134 期新增；此前书源抓取根本没接这道闸）。
+    内网自建源是真实用法，所以提供开关而不是写死 —— 但默认必须是关的：
+    「默认替用户去访问 127.0.0.1 / 169.254.169.254」不该是开箱状态。
+
+    `cfg` 给了就用它（`DownloadManager` 收的是注入的配置，测试要能自己造），
+    没给 / 给了空 dict 就自己读一次**全局**配置 —— 与 `network.verify_tls_enabled` 同款。
+    """
+    net = (cfg or {}).get("network") if isinstance(cfg, dict) else None
+    if not isinstance(net, dict):
+        try:
+            from .. import config
+
+            net = config.load_config().get("network") or {}
+        except Exception:                    # noqa: BLE001 —— 读不到配置就按默认（校验）
+            net = {}
+    return bool(net.get("allow_private_sources", False))
+
+
+def assert_public_url(url: str, *, allow_private: bool = False) -> str:
     """校验一个 URL 可以被出站访问；返回原 URL。不允许则抛 :class:`UrlBlocked`。
 
     三种拒法各有各的话说：协议不对、主机名解析不出、**任一**解析结果是内网。
+    ``allow_private=True``（只由 `network.allow_private_sources` 打开）跳过最后一条。
     """
     parts = urlsplit((url or "").strip())
     scheme = (parts.scheme or "").lower()
@@ -96,6 +131,8 @@ def assert_public_url(url: str) -> str:
     host = parts.hostname or ""
     if not host:
         raise UrlBlocked("地址里没有主机名")
+    if allow_private:
+        return url                       # 部署者显式放行内网源（协议仍然受限）
     scope = ip_scope(host)               # 直接就是 IP 的那种（http://127.0.0.1/）
     if scope == "local":
         raise UrlBlocked(f"拒绝访问内网 / 本机地址：{host}")
@@ -113,8 +150,18 @@ def assert_public_url(url: str) -> str:
     return url
 
 
-async def guard_request(request) -> None:
-    """给 ``httpx`` 的请求钩子用（收到的是 `httpx.Request`）：校验不过就抛 :class:`UrlBlocked`。
+def _request_url(request) -> str:
+    """钩子里的 URL 字符串（**唯一**取法）。
+
+    ⚠️ 必须取 `request.url`：钩子拿到的是 `httpx.Request` 对象，`str()` 出来是
+    `"<Request [GET http://…]>"`，`urlsplit` 解不出协议 ⇒ 每个请求都会被误判成
+    「协议：空」而拒绝（URL 导入曾因此恒失败，见 `docs/roadmap-gaps-remaining.md`）。
+    """
+    return str(getattr(request, "url", request))
+
+
+def make_request_guard(*, allow_private: bool = False):
+    """造一个给 **`httpx.AsyncClient`** 用的请求钩子：校验不过就抛 :class:`UrlBlocked`。
 
     挂到 `BrowserClient(request_guard=...)` 后**每一跳**（含重定向）都会先过这里 ——
     httpx 的 request 事件钩子在 `_send_handling_redirects` 的循环里逐个 await，
@@ -130,5 +177,33 @@ async def guard_request(request) -> None:
     * **解析放进线程池** —— `socket.getaddrinfo` 是阻塞调用，直接在事件循环里解析
       会让一次 URL 导入把整个服务卡住（本仓对阻塞调用一律走 `run_in_executor`）。
     """
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, assert_public_url, str(getattr(request, "url", request)))
+    async def _guard(request) -> None:
+        url = _request_url(request)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:                 # 没有事件循环就别卸线程（同步上下文）
+            assert_public_url(url, allow_private=allow_private)
+            return
+        await loop.run_in_executor(
+            None,
+            functools.partial(assert_public_url, url, allow_private=allow_private))
+
+    return _guard
+
+
+def make_sync_request_guard(*, allow_private: bool = False):
+    """**同步**版钩子（``httpx.Client`` 用）。
+
+    为什么必须单开一个：httpx 的同步客户端对 hook 直接 ``hook(request)``（`_client.py`
+    第 976 行），**不 await** —— 把 `make_request_guard()` 造出来的 async 钩子挂上去，
+    校验函数根本不会执行（只会留下一条 ``coroutine was never awaited`` 的 RuntimeWarning），
+    闸门形同虚设。判据仍是同一个 `assert_public_url`，这里只是「怎么被调用」的适配。
+    """
+    def _guard(request) -> None:
+        assert_public_url(_request_url(request), allow_private=allow_private)
+
+    return _guard
+
+
+#: 严格版（URL 订阅导入）：每一跳都必须是公网。既有调用点直接把它当钩子传。
+guard_request = make_request_guard()

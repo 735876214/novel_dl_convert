@@ -203,7 +203,9 @@ class BrowserClient:
             # 改默认值等于静默改掉所有既有书源的抓取行为。要打开就设 `network.verify_tls`。
             # URL 导入那条路**强制 True**（见 `core/urlguard.py`）。
             verify=bool(verify_tls),
-            # 逐跳复查出站目标（URL 导入用）；None = 不查（书源抓取照旧）
+            # 逐跳复查出站目标（第 94 期 URL 导入；第 134 期起**书源抓取与封面下载也都挂**）。
+            # None = 不查 —— 只给测试桩 / 内部调用留的口子，生产侧两处都传
+            # `urlguard.make_request_guard(...)`（异步）或 `make_sync_request_guard()`（同步）。
             event_hooks={"request": [request_guard]} if request_guard else {},
         )
         self.host_replace = host_replace or {}

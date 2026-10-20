@@ -22,7 +22,7 @@
 """
 import httpx
 
-from . import customfields, db, fileops, lib_settings, library, metasources
+from . import customfields, db, fileops, lib_settings, library, metasources, urlguard
 from .library import norm_key
 
 #: 封面下载上限：常见封面 100KB–2MB，超过 8MB 基本是异常图
@@ -606,17 +606,23 @@ def _download_cover(url: str) -> tuple:
     """
     if not str(url or "").lower().startswith(("http://", "https://")):
         raise ValueError("封面地址非法")
-    with httpx.stream("GET", url, timeout=_COVER_TIMEOUT, follow_redirects=True) as r:
-        if r.status_code >= 400:
-            raise ValueError(f"封面下载失败（{r.status_code}）")
-        mt = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
-        if not mt.startswith("image/"):
-            raise ValueError(f"封面不是图片（{mt or '未知类型'}）")
-        buf = bytearray()
-        for chunk in r.iter_bytes(65536):
-            buf.extend(chunk)
-            if len(buf) > MAX_COVER_BYTES:
-                raise ValueError("封面超过 8MB 上限")
+    # 出站闸（第 134 期）：封面地址来自**第三方提供商的搜索结果**，不是本站写的 ——
+    # 没有这道闸时，一个返回 `http://169.254.169.254/latest/meta-data/…` 的「封面」
+    # 就会被服务端取回来落盘。挂 `event_hooks` 而不是先 `assert_public_url` 一次：
+    # 这里开着 `follow_redirects`，首跳公网、302 到内网就绕过了单次校验。
+    with httpx.Client(timeout=_COVER_TIMEOUT, follow_redirects=True,
+                      event_hooks={"request": [urlguard.make_sync_request_guard()]}) as client:
+        with client.stream("GET", url) as r:
+            if r.status_code >= 400:
+                raise ValueError(f"封面下载失败（{r.status_code}）")
+            mt = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
+            if not mt.startswith("image/"):
+                raise ValueError(f"封面不是图片（{mt or '未知类型'}）")
+            buf = bytearray()
+            for chunk in r.iter_bytes(65536):
+                buf.extend(chunk)
+                if len(buf) > MAX_COVER_BYTES:
+                    raise ValueError("封面超过 8MB 上限")
     if not buf:
         raise ValueError("封面内容为空")
     if not mt.endswith("svg") and len(buf) < library._COVER_MIN_BYTES:

@@ -20,7 +20,7 @@ def _safe_name(s: str) -> str:
     s = re.sub(r"[\\/:*?\"<>|]", "_", s)
     return s[:120] or "book"
 
-from ..core import network, pipeline, reading_list
+from ..core import network, pipeline, reading_list, urlguard
 from .base import REGISTRY
 
 #: 追更用的**按路径**互斥锁（第 87 期收尾补）。
@@ -68,6 +68,8 @@ class DownloadManager:
         self.host_replace = host_replace
         # 第 94 期阶段 4a：读点与默认值都在 `network.verify_tls_enabled`（唯一一处）
         self.verify_tls = network.verify_tls_enabled(self.cfg)
+        # 第 134 期：内网目标放行开关，读点与默认值在 `urlguard.allow_private_sources`
+        self.allow_private_sources = urlguard.allow_private_sources(self.cfg)
         dl = self.cfg.get("download", {}) or {}
         self.enabled = dl.get("enabled", False)
 
@@ -82,6 +84,11 @@ class DownloadManager:
             # `clamp_timeout` 一处，这里不写第二份范围判断。
             timeout=network.clamp_timeout(getattr(source, "timeout", None)),
             verify_tls=self.verify_tls,
+            # 出站闸（第 134 期）：规则里的 domains 是**导入来的**，不是本站写的，
+            # 一条指向 169.254.169.254 的规则就能让服务端去取内网内容并当正文读出来。
+            # 放行内网源要显式打开 `network.allow_private_sources`（默认关）。
+            request_guard=urlguard.make_request_guard(
+                allow_private=self.allow_private_sources),
         )
 
     def gate_reason(self, feature: str = "download") -> str:

@@ -102,6 +102,13 @@ export const NETWORK_FIELDS: FieldDef[] = [
       + '关闭意味着抓取内容可能被中间人篡改 —— 自建 NAS 常见做法是同时只在本机 / 局域网访问',
   },
   {
+    path: 'network.allow_private_sources',
+    label: '允许书源访问内网地址',
+    type: 'bool',
+    hint: '默认关闭：书源规则是导入来的，一条指向 127.x / 169.254.x / 192.168.x 的规则会让服务端'
+      + '去取内网内容并当成正文显示。只有「书源站确实自建在自己局域网里」时才打开它',
+  },
+  {
     path: 'source_import.url_enabled',
     label: '允许从 URL 订阅导入书源',
     type: 'bool',
