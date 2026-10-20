@@ -9413,3 +9413,52 @@ Komga 文件）**不是遗漏**：浏览器不会顶层渲染它们。
 5. **审计报告是材料，不是结论**：本轮 14 条里 3 条经核不成立或不准确（「书源只差封面没挂闸」上一期已纠、
    `avatar_path` 的 `unlink` 穿越（写入侧是白名单后缀、值不由接口写）、以及引用了不存在的符号名），
    修之前每条都要能自己指出「哪一行、什么输入、什么后果」。
+
+## 第 136 期（十轮审计：令牌绑密码 / OPDS 分页掉筛选 / 按书取路径收敛 / 刮削队列重启停摆）
+
+### 一、这轮怎么审的
+
+10 个口径各起一个**只读**子审计（入口面 / 出口面 / 并发与事务 / 文件生命周期 / 后台任务 / 前后端契约 / 前端运行时 / 缓存索引 / 文档真值源 / 安全面），报告一律当**材料**：每条自己回到代码核一遍，只想「能指出具体操作序列 + 具体后果」的确定性缺陷。子审计共报 60 余条，采纳并修掉的见下面四节，误判与「设计取舍」逐条记在第五节。
+
+### 二、安全面（我自己核出来的，最优先）
+
+| 编号 | 级别 | 问题 | 修法 |
+|---|---|---|---|
+| S1 | 高 | 改密码后**旧令牌仍然有效**：令牌只是一段随机串，与密码无任何绑定；`api_change_pin` 也不回收已发出的令牌 —— 密码泄露后改密码等于没改 | `core/auth.py` 签发时把「当前密码的版本指纹」写进令牌（`_cred_fingerprint()` = PIN 的 pbkdf2 哈希前 16 位），校验时比对；改密码 ⇒ 指纹变 ⇒ 所有旧令牌立即失效。登录仍返回同形状 `{"token": …}` |
+| S2 | 中 | `/api/auth/login` 无任何节流：4 位 PIN 只有 1 万种，本机/内网可暴力枚举 | 登录失败计数按来源 IP 落内存（5 次 / 5 分钟窗口，超限返回 429 并带 `Retry-After`），成功即清零 |
+| S3 | 中 | 改账号密码的响应**不带新令牌**，前端继续用旧 token ⇒ 改完密码下一秒自己就被踢回登录页 | `POST /api/account/pin` 返回新 token；`ProfilePage.vue` 保存后写回 `localStorage.nf_token`；`frontend/src/lib/api.ts` 的返回类型同步 |
+
+### 三、出口面（OPDS 分页）
+
+`core/opds.py` 的 `acquisition_feed` 生成 `next`/`prev` 链接时**丢了筛选条件**：翻页即掉 `group` 与 `q`，用户点第二页看到的是「全部书目」而不是「这个分组」。修法：把查询串收敛进一个 `_query_keep()`（唯一实现），`next`/`prev` 都经它拼。
+
+### 四、路径与写入纪律
+
+| 编号 | 级别 | 问题 | 修法 |
+|---|---|---|---|
+| P1 | 高 | **按书取路径的第二份实现**：`core/` 与 `sources/` 里 22 处 `library.root_of(book) / book["name"]`。多文件夹库里 `root_of` 只给「代表根」，书在别的根上时指到另一个根上的同名文件（下载 / 取图 / 出版 / 搬库全中） | 全部收敛到 `library.abs_path(book)`（唯一判据），并加静态断言钉住「不许再自己拼」 |
+| P2 | 高 | 追更 sidecar、音轨、作者头像、`config.yaml` 的还原/重置**直写最终名**：中断/磁盘满留半截，旧文件已被截断且不在回收站 | 一律 `.part` + `replace`（`sources/manager.py` 里原本已有原子写法，属第二份实现，同批收敛） |
+| P3 | 中 | 库的 `source_dirs` 被清空后 `_settle` 只 `_mark_fresh` 就返回 ⇒ 索引旧行一条不删，书架永远挂着「不属于任何库的书」，且重启也不自愈 | 该分支改走 `refresh_library(lib)`：roots 空 ⇒ seen 空 ⇒ 旧行按 stale 删净 |
+| P4 | 中 | 丢列表缓存**先忘后删**：`cache.drop` 吞异常（含熔断期），drop 失败时键还在 Redis 而集合已忘掉它 ⇒ 此后任何「全库失效」都删不到 | 顺序反过来：先 `drop` 成功，再 `_cached_libs.discard` |
+
+### 五、状态机诚实性
+
+| 编号 | 级别 | 问题 | 修法 |
+|---|---|---|---|
+| T1 | 致命 | **刮削队列重启后彻底停摆**：进程在刮削中途被杀 ⇒ 行停在 `running`，而 lifespan 的启动门槛只查 `status='pending'` ⇒ worker 永不启动，队列再无人推进，界面一直「进行中」 | 门槛同时看残留 `running` 行（`db.scrape_list(status="running", limit=1)`），worker 起来后 `scrape_reset_running()` 把它们翻回 pending |
+| T2 | 中 | 监听间隔改小不生效：`tick_interval` 是第二份真值源（只在 `__init__` 取一次），热更新只改 `interval` ⇒ 界面显示 5s、真实节奏还是 60s | 删除 `tick_interval`，`_loop` 直接 `wait(self.interval)` |
+| T3 | 中 | 「清空日志」后条目复活：`clear()` 只清 `_memory` 与文件，不清 10s 尾随合并窗口里的 `_pending` | `clear()` 同批 `_pending.clear()` |
+
+### 六、前端
+
+`BookDetailView.vue` 的 `/book/:id` 是**同一条路由记录**，从一个详情页点「相似书」跳到另一本时组件被复用、`onMounted` 不重跑：hero / 目录 / 文件 / 批注仍是上一本，而 similar 与各标签页内部自取数的部分已是新书 —— 同一页里两本书的数据并存。修法：抽出 `loadAll()`，`onMounted(loadAll)` + `watch(bookId, loadAll)`。
+
+### 七、如实说明：报了但**没修**的（都留在这里，不装作已解决）
+
+1. **`GET /download/{name:path}` 匿名可下**（实测无凭据 200）：中间件对非 `/api` 前缀「历史不强制鉴权」，而 README 把这条标为「油猴 / 外部脚本保留」。要修就是一次「旧的脚本接口要不要保留」的产品决定，不在代码审查的授权范围内。
+2. **`/file` 整本书（PDF/EPUB）也带了 `CSP: sandbox`**：app 内 pdf.js 走 `fetch` 不受影响，但浏览器直接打开该 URL 时 Chrome 内置预览可能变下载。需要在真机上确认后决定是否给这条单独放开。
+3. **`publish` / `recycle` / `migrate` 的「先销毁再重建」与跨卷 `shutil.move`**（文件生命周期口径报了 9 条）：正确修法是「先落 stage 再换入」与「跨卷 copy2 + rename」，涉及出版状态机与回收站语义，属结构性改造，必须配一轮真机 kill 验证 —— 放到下一期整段做，不在本轮零散打补丁。
+4. **PG 侧单连接共享事务**：`remap_book_id` 逐表 `except` 假定「语句出错不废整笔」（SQLite 语义），PG 上会整笔回滚却仍报「搬成功」；`catalog._flush()` 的 `executemany` + `commit` 不在同一把锁内同理。修法要么每表 savepoint，要么把批量写收敛进 db 事务 helper —— 属持久层改造，同上。
+5. **并发口径的锁外读改写**（`online_bind_*` / `set_status` / `_maybe_auto_land` / `verify()` 台账、`watcher.state` 键缺根维度）：都是「读在锁外、再用旧快照整行写回」，需要有单测能稳定复现的时序才能验证修法，本轮只记录不盲改。
+6. 前端竞态（`activity.ts` 年份切换、`similar` 无 seq、`SeriesDetailView` / `AuthorDetailView` 的 `watch(name, load)`）与可访问性 4 条（面板关闭后仍在 Tab 序列、可点 `<div>` 无 role/keyboard）：同型问题上一轮已在 `loadFeatures` 上修过一次，收敛成 `useSeq()` 工具函数再统一改，比逐处粘贴更安全。
+7. `MetadataEditor` / `ReadingRecord` 用 `v-show` 常驻 → 每次进详情页多发 3 个请求。本轮试过改 `v-if`，会让「?tab= 不认识」的既有用例取不到元素、且切标签时丢掉未保存草稿，故回退；正确修法是给这两个组件加 `active` 闸（照 `ReadingLogTab` 的写法）。
