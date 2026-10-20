@@ -16,8 +16,8 @@
 kind             format          含义
 ===============  ==============  ==================================================
 ``comic``        ``CBZ``         容器内是图片序列 ⇒ 与 .cbz **完全同等待遇**（可读）
-                              （图片 + 旁注文档，如 `说明.txt` / `ComicInfo.xml`，**也算**
-                              comic —— 见 :data:`_TEXT_DOC_EXTS`）
+                              （图片 + 旁注文档**也算** comic —— 旁注判据见
+                              :data:`_NOTE_DOC_EXTS` / :data:`_NOTE_NAME_RE`）
 ``epub``/``pdf`` 同名大写       容器内**恰好一份**文档（典型是被改了后缀的 EPUB）
 ``nested``       容器自身        内层还是压缩包 ⇒ 需先展开
 ``multi``        容器自身        内有多份文档 ⇒ 需先展开
@@ -34,6 +34,7 @@ kind             format          含义
 一处派生 —— 「待展开清单」（`library.container_books`）就按它筛，**别再手写第二份**。
 """
 import pathlib
+import re
 
 from . import comics
 
@@ -57,11 +58,35 @@ _EPUB_MARKERS = ("mimetype", "META-INF/container.xml")
 _DOC_FORMATS = {".epub": "EPUB", ".pdf": "PDF", ".txt": "TXT", ".mobi": "MOBI",
                 ".azw3": "AZW3", ".azw": "AZW", ".fb2": "FB2"}
 
-#: 容器里**顺带**出现的旁注类文档（说明 / 校验 / 漫画元数据）。它们与图片同时出现时
-#: 不该把整份容器判成「判不准」：漫画包带一个 `说明.txt` / `ComicInfo.xml` 是**常态**，
-#: 按那份文档拒读等于把最常见的形态挡在门外。
-_TEXT_DOC_EXTS = (".txt", ".nfo", ".md", ".rtf", ".html", ".htm", ".xml", ".json",
-                  ".url", ".sfv")
+#: 容器里**顺带**出现的旁注类文档。它们与图片同时出现时不该把整份容器判成「判不准」：
+#: 漫画包带一个 `说明.txt` / `ComicInfo.xml` 是**常态**，按那份文档拒读等于把最常见的
+#: 形态挡在门外。但「放宽」不等于「瞎猜」—— 判据分两层（第 124 期复审修正）：
+
+#: ① 结构化元数据：出现即旁注（`ComicInfo.xml`、`.nfo`、`.sfv` 校验、下载信息），
+#:    它们**不可能是正文**，与文件名无关。
+_NOTE_DOC_EXTS = (".xml", ".nfo", ".sfv", ".url", ".json", ".db")
+
+#: ② 可能是正文的文本类：`.txt` 是本项目的**主力书籍格式**，「一张封面 + 正文.txt」
+#:    与「三张图 + 说明.txt」在字节层面无从区分除非看**文件名**。第 123 期把它们一律
+#:    当旁注，于是前者被判成 1 页漫画（正文既读不到、`unpack_plan` 也因 ``kind=="comic"``
+#:    拒绝展开 ⇒ 内容静默消失）。现在只认「名字像说明」的。
+_TEXT_DOC_EXTS = (".txt", ".md", ".rtf", ".html", ".htm")
+
+#: 名字像旁注的判据（大小写不敏感，匹配文件名主干开头）：
+#: `说明.txt` / `readme.txt` / `README.md` / `License.txt` / `版权声明.txt` / `comicinfo.xml` …
+_NOTE_NAME_RE = re.compile(r"^(read[_ -]?me|说明|注释|info|comicinfo|licen[cs]e|版权|彩蛋|about|metadata)", re.IGNORECASE)
+
+
+def _is_note(name: str) -> bool:
+    """容器内这份文档是**旁注**还是**正文**。
+
+    旁注 = 结构化元数据（:data:`_NOTE_DOC_EXTS`），或名字像说明的文本（:data:`_NOTE_NAME_RE`）。
+    其余一律按正文算 —— 宁可判 ``mixed``（如实说「判不准」），也不静默吞掉一本书的正文。
+    """
+    ext = _suffix(name)
+    if ext in _NOTE_DOC_EXTS:
+        return True
+    return ext in _TEXT_DOC_EXTS and bool(_NOTE_NAME_RE.match(pathlib.PurePath(name).stem.strip()))
 
 #: 内层还是压缩包 ⇒ 需先展开
 _ARCHIVE_EXTS = (".zip", ".cbz", ".cbr", ".rar", ".7z")
@@ -148,7 +173,7 @@ def analyze(path) -> dict:
         # ⚠️ 第 123 期之前这里一律判 mixed 不可读，于是「同样的字节存成 .cbz 能读、存成
         # .zip 读不了」，而且展开也救不回（`_unpack_entries` 只抽文档、不抽图片）——
         # 用户报了「zip 格式的书导入后不能识别」的另一半。
-        stray = [n for n in docs if _suffix(n) not in _TEXT_DOC_EXTS]
+        stray = [n for n in docs if not _is_note(n)]
         if stray:
             out.update(kind="mixed",
                        reason=f"容器内既有 {len(images)} 张图片又有 "
