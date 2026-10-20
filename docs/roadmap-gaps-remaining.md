@@ -8509,3 +8509,97 @@ AppleDouble 这类文件**不是「该被忽略的格式」，而是「根本不
 3. **降级路径要能一路降到底**：正则 → 章落号 → 缩进，三级兜底听着完备，但**最后一级也会产出空章**时，
    等于没有兜底。兜底链的终点必须是「一定读得到全文」。
 4. **改分章口径必须升 `CHAPTER_RULE_VERSION`**：派生缓存不认代码，只认版本号。
+
+## 第 127 期（数值入口的有限性：inf / NaN / 整数溢出不再毒化整页）
+
+**问题来源**：第 127 轮自审（用户「进行下一轮审计并修复」）。这一轮换了个入口 —— 不看功能、
+不看格式，只看**「客户端给的数」从解析到落库再到序列化**这一条链。结论是：整条链上**没有一处**
+检查过「这个数是不是有限的」。
+
+### 一、一个 `percent: 1e400` 能把应用的可读面整个打掉
+
+JSON 规范里没有 `inf` / `NaN` 这两个字面量，可 Python 的 `json` **认**它们：`1e400` 解析成
+`inf`（溢出成浮点无穷），`NaN` 直接给 `nan`。而 `float()` 之后没人再问一句「这是数吗」。
+
+实测（隔离实例，`PUT /api/books/{bid}/progress {"locator":0,"percent":1e400}`）：
+
+| 请求 | 此前 | 现在 |
+|---|---|---|
+| `PUT /api/books/{bid}/progress`（`percent: 1e400`） | **200**（照收，`inf` 落库） | 400「percent 必须是有限数值」 |
+| `GET /api/books`（书架首页） | **500** 恒久 | 200 |
+| `GET /api/books?limit=5` | **500** | 200 |
+| `GET /api/stats?days=30` | **500** | 200 |
+| `GET /api/books/{bid}/progress` | **500** | 200 |
+
+栈是 `starlette/responses.py:195 render` → `ValueError: Out of range float values are not
+JSON compliant: inf`。**关键在「一次写、永久坏」**：`inf` 存得进 SQLite 的 REAL 列（它存得下
+无穷），于是每一次读都要重新序列化它、每一次都 500 —— 用户唯一的出路是手工改库。
+
+同一族还有两条，症状不同、根因相同：
+
+- **书签「先落行、再 500」**：`POST /api/books/{bid}/bookmarks {"percent":1e400}` 此前写库成功、
+  **回写响应时**才炸，于是这条坏行留在库里，`GET .../bookmarks` 此后恒 500（写的时候 500 让人以为
+  「没写进去」，实际写进去了）。
+- **状态时间戳毒化书目**：`PUT /api/books/{bid}/status {"started_at":1e400}` 同理会把 `inf` 写进
+  `reading_status.started_at`，而状态被并进书目响应 ⇒ 书架首页跟着 500。
+
+### 二、`NaN` 与「两侧判据」的错位
+
+`NaN` 与**任何数比较都是 `False`**，所以 `if seconds <= 0 or seconds > 86400` 这类**两侧都写全了**的
+判据一处都拦不住它（实测 `POST .../session {"seconds": NaN}` → **500**，因为 `nan` 落库即 `NULL`、
+撞 `NOT NULL`）。这不是「少写了一个判断」，是**判据选错了**：区间判断能回答「在不在范围内」，
+回答不了「这是不是一个数」——而后者必须先问。
+
+### 三、`int(1e400)` 抛的不是 `ValueError`
+
+`OverflowError` **不是** `ValueError` / `TypeError` 的子类，所以 `except (TypeError, ValueError)`
+一个都接不住。实测四处 500：进度 `locator`、批注 `chapter`、批注 `start_off`、评分 `stars`
+（`db.set_rating` 里同样是 `except (TypeError, ValueError)`）。同理 KOReader 侧
+`raw.isdigit()` 之后 `int(raw)` 能算出 500 位整数，落库时才炸（SQLite 的 INTEGER 是 64 位）。
+
+### 四、同一判据三份实现，缺的是 server 那两份
+
+「百分比夹到 0–100」这件事，`core/koreader.py` 与 `core/komga_api.py` 早就写了
+`max(0.0, min(100.0, x))`，而 `server.py` 的进度与书签路径**什么都没做**（`percent: -5` / `999`
+原样落库，而百分比直接决定「读完」判定与统计，书架会把 999% 显示出来）。
+更值得一提的是 KOReader 那两份 min/max 也**不认识 NaN**（比较皆 False ⇒ 原样返回 NaN），
+实测 `percentage: NaN` 会得到 **100.0** —— 把书标成「读完」。
+
+### 五、修法：判据收成一份，入口拦坏值，出口兜脏值
+
+1. **新建 `novelforge/core/numbers.py`（唯一判据）**：`finite(v)`（非数 / `inf` / `nan` ⇒ `None`，
+   `bool` 也不算数）、`clamp`、`percent(v, default=0.0)`、`index(v, default=0)`、`epoch(v, default=0.0)`，
+   外加 `MAX_INDEX = 10 ** 9`（存得进 SQLite 的 INTEGER）与 `MAX_EPOCH`（公元 9999）。
+   规则写死在模块 docstring 里：**不是数 ⇒ 当成『没有这个值』；有限但越界 ⇒ 夹住**。
+2. **`server.py` 加两个入口 helper**：`_finite_num(raw, name)`（非有限 ⇒ 400，「存不住，也不该存」）、
+   `_bounded(payload, key, lo, hi, default=…, integer=…)`（缺省 ⇒ 默认值；非有限 ⇒ 400；有限越界 ⇒ 夹住）。
+   套用点：进度（`locator` / `percent` / `offset`）、书签 POST/PATCH（`percent` / `chapter` / `updated_at`）、
+   批注（`chapter`；`start_off` / `end_off` 改走 `numbers.index(..., default=-1)`，保住「非法一律 -1」契约）、
+   状态（两个日期夹到 `[0, MAX_EPOCH]`）、会话（`seconds` 先问有限性，再判区间）、评分（两个入口都改）。
+3. **出口兜底 `_FiniteJSONResponse`**：覆写 `render()` —— 先按原样序列化（正常路径**零成本**），
+   只在其抛 `ValueError` 时才走一遍净化（非有限 float → `0.0`）再序列化一次，并只记一条 warning。
+   `app = FastAPI(..., default_response_class=_FiniteJSONResponse)`。
+   口径：**「这一行数据坏了」是运维信息，不该变成「书架打不开」**（升级前的坏库就是这样坏的）。
+4. **两份 min/max 收敛到 `numbers.percent`**：`koreader.to_nf` 与 `komga_api.apply_read_progress`
+   （顺手修掉 NaN ⇒ 100% 的隐藏 bug、以及 Komga 页码的 `int(1e400)`）。
+
+### 六、核验
+
+| 项 | 结果 |
+|---|---|
+| 新增用例 | `tests/test_numeric_input_127.py` **30 例**（入口 400 / 越界夹住 / 序列化兜底 / 判据单元 / KOReader-Komga 两处） |
+| 后端全量 | **2559 例（2546 passed / 0 failed / 0 errors / 13 skipped），248.6 s** |
+| 前端四连 | `bash scripts/frontend-verify.sh` exit 0（`novelforge/static/v2` 零改动） |
+| 真机复验 | 重启隔离实例后：八类坏载荷全部 400、书架/统计/书签/进度四个读面全 200；手工把库里 `percent` 改成 `inf` 后 `GET /api/books` 仍 200 且 `percent` 显示 `0.0`（兜底生效、warning 只记一条） |
+| 收尾对账 | `python tests/period_close.py check` 0 问题 |
+
+### 七、教训
+
+1. **「解析成功」不等于「值可用」**：`float("1e400")` 不抛错、`float("nan")` 不抛错，而它们都
+   **存不进 JSON**。凡是「客户端给的数」，第一步该问的是**有限性**，不是区间。
+2. **序列化层是整个应用的单点**：一个字段坏了，坏的是**整条响应**（书架首页 500），而不是那一行数据。
+   读路径不能假设库里干净 —— 脏值可以是上一版代码写进去的。
+3. **`OverflowError` 不在 `except (TypeError, ValueError)` 里**：`int(1e400)` 抛的就是它。
+   写「把输入转成整数」时，这三类要一起接。
+4. **两侧判据拦不住 NaN**：`x <= 0 or x > 86400` 看起来很完备，对 `nan` 却是「两边都放行」。
+   区间判断与「是不是数」是两个问题，**必须分开问**。
