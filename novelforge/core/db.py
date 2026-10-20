@@ -25,6 +25,7 @@ except Exception:  # pragma: no cover
     ZoneInfo = None  # type: ignore
 
 from .. import config
+from . import numbers
 
 
 _db_path: "pathlib.Path | None" = None
@@ -2283,7 +2284,7 @@ def recent_sessions(limit: int = 50) -> list:
     rows = _connect().execute(
         "SELECT book_id, seconds, started_at, ended_at FROM reading_sessions "
         "ORDER BY ended_at DESC LIMIT ?",
-        (max(1, int(limit)),),
+        (numbers.row_limit(limit),),
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -2551,7 +2552,7 @@ def annotation_feed(book_ids: set | None = None, limit: int = 500) -> list:
     else:
         args = ()
     sql += "ORDER BY created_at DESC LIMIT ?"
-    rows = c.execute(sql, args + (max(1, int(limit)),)).fetchall()
+    rows = c.execute(sql, args + (numbers.row_limit(limit),)).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -2617,7 +2618,7 @@ def task_get(task_id) -> dict | None:
 def task_list(limit: int = 100) -> list:
     """最近的任务（新 → 旧）。"""
     rows = _connect().execute(
-        "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (max(1, int(limit)),)
+        "SELECT * FROM tasks ORDER BY created_at DESC LIMIT ?", (numbers.row_limit(limit),)
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -3501,7 +3502,7 @@ def ledger_history_list(name: str, limit: int = 20) -> list:
     c = _connect()
     rows = c.execute("SELECT id, name, kind, rule_hash, note, created_at"
                      " FROM source_ledger_history WHERE name=? ORDER BY created_at DESC LIMIT ?",
-                     (str(name), int(limit))).fetchall()
+                     (str(name), numbers.row_limit(limit, minimum=0))).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -3550,7 +3551,7 @@ def source_imports_clear() -> int:
 def source_imports(limit: int = 20) -> list:
     c = _connect()
     rows = c.execute("SELECT * FROM source_imports ORDER BY created_at DESC LIMIT ?",
-                     (int(limit),)).fetchall()
+                     (numbers.row_limit(limit, minimum=0),)).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -3922,7 +3923,7 @@ def dock_get(item_id):
 
 def dock_list(status=None, limit=500) -> list:
     """可见条目（不含 ignored），可按状态过滤；新 → 旧。"""
-    limit = max(1, int(limit))
+    limit = numbers.row_limit(limit)
     if status and status in DOCK_STATUSES and status != "ignored":
         rows = _connect().execute(
             "SELECT * FROM book_dock_items WHERE status=? ORDER BY updated_at DESC LIMIT ?",
@@ -4902,7 +4903,7 @@ def scrape_list(library_id=None, status=None, limit=0) -> list:
     q += " ORDER BY updated_at DESC"
     if limit:
         q += " LIMIT ?"
-        args.append(int(limit))
+        args.append(numbers.row_limit(limit, minimum=0))
     return [dict(r) for r in _connect().execute(q, args).fetchall()]
 
 
@@ -4925,7 +4926,7 @@ def scrape_pending(limit=20) -> list:
     """
     rows = _connect().execute(
         "SELECT * FROM scrape_items WHERE status='pending' "
-        "ORDER BY updated_at LIMIT ?", (int(limit),)
+        "ORDER BY updated_at LIMIT ?", (numbers.row_limit(limit, minimum=0),)
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -5145,7 +5146,7 @@ def migration_batches(limit=20) -> list:
     rows = _connect().execute(
         "SELECT batch_id, direction, COUNT(*) n, MIN(created_at) at "
         "FROM library_migrations GROUP BY batch_id, direction ORDER BY at DESC LIMIT ?",
-        (int(limit),),
+        (numbers.row_limit(limit, minimum=0),),
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -5221,7 +5222,7 @@ def recycle_list(limit: int = 0) -> list:
     params: tuple = ()
     if limit and int(limit) > 0:
         sql += " LIMIT ?"
-        params = (int(limit),)
+        params = (numbers.row_limit(limit, minimum=0),)
     rows = _connect().execute(sql, params).fetchall()
     return [dict(r) for r in rows]
 

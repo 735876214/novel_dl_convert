@@ -33,6 +33,10 @@ MAX_INDEX = 10 ** 9
 #: 时间戳（epoch 秒）的合法上限：公元 9999-12-31，与 ``datetime`` 的上限同量级。
 MAX_EPOCH = 253402300799.0
 
+#: 「取多少条」的上限。存在理由见 :func:`row_limit`：SQLite 的整数是 64 位，
+#: 而 10 万条已经远超任何页面的实际需要（``LIMIT 100000`` 与「不限」在单用户书库里等价）。
+MAX_ROWS = 100_000
+
 
 def finite(v) -> "float | None":
     """``v`` ⇒ 有限实数；**不是数 / inf / nan ⇒ ``None``**。
@@ -83,3 +87,21 @@ def epoch(v, default: float = 0.0) -> float:
     """
     f = finite(v)
     return default if f is None else clamp(f, 0.0, MAX_EPOCH)
+
+
+def row_limit(v, minimum: int = 1, cap: int = MAX_ROWS) -> int:
+    """要绑进 SQL ``LIMIT ?`` 的条数：``min(max(minimum, int(v)), cap)``。
+
+    **为什么要有这个函数**（第 130 期）：SQLite 的 INTEGER 是 64 位有符号整数，
+    ``sqlite3`` 在**绑定参数**时对超出范围的对象抛 ``OverflowError`` —— 而这个异常
+    **不在任何调用点的 ``except`` 里**，于是 ``GET /api/tasks?limit=10**30`` 直接 500。
+    ``limit`` 是查询串给的（``int`` / ``str`` 都可能，FastAPI 会先转一次但转不出范围），
+    所以「夹住」这一步只能落在**绑定点**：它是唯一知道「这个整数要进 SQLite」的地方。
+
+    低端语义留给调用方：``task_list`` 传 ``minimum=1``（0 条没有意义），
+    ``recycle_list`` 传 ``minimum=0``（``0`` = 不截断，见其 docstring）。
+    非数 / 非有限 ⇒ ``minimum``（与 :func:`finite` 的判据同源）。
+    """
+    f = finite(v)
+    n = minimum if f is None else int(f)
+    return min(max(minimum, n), cap)
