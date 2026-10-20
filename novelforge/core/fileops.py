@@ -44,6 +44,31 @@ from .filename import UNSAFE_CHARS, strip_unsafe
 
 RECYCLE_DIRNAME = "recycle"
 
+#: 单个路径片段的**字节**上限。取自 POSIX 的 ``PC_NAME_MAX`` 常见值（Linux ext4 / macOS
+#: APFS / NTFS 都是 255 字节）—— 不查 ``os.pathconf``：它在 Windows 上不可用，
+#: 而这里要的是「名字根本没法变成文件」的那条**前置**判据，不是精确的平台能力探测。
+#:
+#: ⚠️ 第 129 期补这条的原因：超长名字不会让 ``Path.resolve()`` 报错，但会让 ``stat()`` /
+#: ``is_file()`` 抛 ``OSError(ENAMETOOLONG)``（``pathlib`` 的 ``_ignore_error`` 只忽略
+#: ENOENT / ENOTDIR / EBADF / ELOOP / EINVAL，**不忽略它**）⇒ 「取不到就 404」的写法
+#: 直接变成 500。而名字是外部输入（``/download/{name:path}``、书源名），必须先判长度。
+NAME_MAX_BYTES = 255
+
+
+def name_too_long(part: str) -> bool:
+    """这个路径片段（文件名）是不是**长到文件系统放不下**（按 UTF-8 字节算）。
+
+    ⚠️ 按**字节**而不是字符：中文一个字 3 字节 ⇒ 名字在字符上「才 90 个」也可能超限。
+    """
+    return len(str(part).encode("utf-8")) > NAME_MAX_BYTES
+
+
+def _check_part_len(part: str, name: str) -> None:
+    """路径片段超长 ⇒ ``ValueError``（交给接口层翻 400，而不是让 ``is_file()`` 抛 500）。"""
+    if name_too_long(part):
+        raise ValueError(
+            f"路径片段太长（{len(part.encode('utf-8'))} 字节，上限 {NAME_MAX_BYTES}）：{part[:24]}…")
+
 #: 命名规则里可用的占位符，前端据此给出提示。**这是全项目唯一真值源** ——
 #: 展开逻辑只有 :func:`fill_pattern` 一份（第 28 期合并，设置页预览与刮削出版共用）。
 #: 第 20 期定下、第 53 期加入 `{narrators}` —— **只加书目里真实存在的字段**（`library.books()` 的
@@ -174,6 +199,7 @@ def safe_path(name: str, library_id=None) -> pathlib.Path:
     for part in rel.parts:
         if UNSAFE_CHARS.search(part):
             raise ValueError(f"文件名含非法字符：{name}")
+        _check_part_len(part, name)
     base = output_dir(library_id).resolve()
     p = (base / raw).resolve()
     # resolve 之后再判一次：符号链接可能把路径指到库根之外
@@ -210,6 +236,8 @@ def input_path(name: str, base=None) -> pathlib.Path:
     rel = pathlib.PurePosixPath(raw)
     if rel.is_absolute() or any(part in ("", ".", "..") for part in rel.parts):
         raise ValueError(f"非法路径（不允许绝对路径或 ..）：{name}")
+    for part in rel.parts:
+        _check_part_len(part, name)
     root = root.resolve()
     p = (root / raw).resolve()
     if p != root and root not in p.parents:
