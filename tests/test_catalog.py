@@ -121,7 +121,13 @@ def test_索引与全量扫盘逐字段一致(cat_lib):
     db.update_library(lib["id"], exclude='["*.draft.*"]')
 
     reference = library._scan_once(db.get_library(lib["id"]))
-    assert len(reference) >= 9, f"基准本身就不对，用例没在测它想测的东西：{len(reference)}"
+    assert len(reference) >= 8, f"基准本身就不对，用例没在测它想测的东西：{len(reference)}"
+    # ⚠️ 隐藏文件与排除图案**都不该在基准里**（第 125 期）：此前顶层文件分支不判隐藏，
+    # 这条基准实际上把 `.隐藏.epub` 也算进去了 —— 于是「对拍一致」只证明两条链路
+    # **一起错**，错的那一本就在两份书目里同时存在。现在把「不该有」也钉住。
+    _ref_names = [b["name"] for b in reference]
+    assert ".隐藏.epub" not in _ref_names, f"隐藏文件进了基准：{_ref_names}"
+    assert "草稿.draft.epub" not in _ref_names, f"排除图案没生效：{_ref_names}"
 
     # 走索引（第一次读 = 冷启动，catalog 会同步扫一遍）
     indexed = library.books(lib["id"])

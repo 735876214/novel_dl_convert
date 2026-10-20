@@ -153,15 +153,15 @@ def test_建库后被拒收过的文件会自动重新收走(client, auth_header
                                             monkeypatch, tmp_path):
     """照着提示建完库，原先被拒收的文件应当**自己**就被收进去。
 
-    这条钉的是 `server._libraries_changed()`（= `library.invalidate()` +
-    `WATCHER.forget_failures()`）里的后半截。没有它的话，拒收与「重试到上限就
-    永久跳过」叠加会变成：用户在提示的指导下建好了库，文件却**再也不被尝试**——
-    他只能删了重投一遍。这与「库的 rules 就是路由表」这个语义毫无关系，
-    纯属失败计数这个实现的副作用。
+    「没有可接收的库」是**等条件**，不是这个文件的失败（第 125 期，`waiting`）：
+    这类结果**不记失败次数**，所以扫多少轮都还会再试。此前它被记进 `failed`，
+    3 轮后撞上 `max_retries` 被永久跳过 —— 用户在提示的指导下建好了库，
+    文件却**再也不被尝试**，只能删了重投一遍；当时靠 `_libraries_changed()` 里
+    顺手清计数来兜，那只是给这个实现的副作用打的补丁。
 
-    刻意把 `max_retries` 设成 1：第一轮就到达上限，于是「再扫一轮」**不会**重试，
-    成败只取决于建库时有没有清计数 —— 否则本用例就算掉了 `forget_failures`
-    也会因为「还没到上限、本来就会重试」而误过。
+    刻意把 `max_retries` 设成 1 并先扫 3 轮：若是老口径（记失败），第一轮就到达
+    上限、第 2 轮起不会再试，本用例必然红。于是它同时钉住两件事：
+    「等条件不消耗重试」+「建库后自动收走」。
     """
     # 清空书库表：本用例要的是「一个库都没有」这个起点（`isolated` 会建一条）
     for l in library.libraries():
@@ -177,8 +177,9 @@ def test_建库后被拒收过的文件会自动重新收走(client, auth_header
     # 让 API 侧的书库增删改作用在**这个**实例上（否则钩子清的是另一个 watcher 的账）
     monkeypatch.setattr(server, "WATCHER", w)
 
-    assert w.scan_once()["failed"], "前置：没有库时应当拒收"
-    assert not w.scan_once()["failed"], "前置：到上限后就不该再试 —— 否则本用例不成立"
+    for _ in range(3):
+        assert w.scan_once()["failed"], "前置：没有库时应当拒收（并一直报出来）"
+    assert w.stats["failed"] == 0, "「没有可接收的库」被记成了文件失败"
 
     root = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "ebooks"
     r = client.post("/api/libraries", headers=auth_headers,
