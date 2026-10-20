@@ -679,13 +679,15 @@ def _refresh_locked(lib: dict, force: bool) -> dict:
     exts = _lib.exts_for_library(lib)
     pats = _lib.parse_excludes(lib.get("exclude"))
 
-    # 现存索引：``(root, rel) -> row``。**只取判据需要的列** —— 把整表读进内存
-    # 在万册书下会白占几十 MB，而增量判据只看 size/mtime。
+    # 现存索引：``(root, rel) -> (size, mtime, replaced)``。**只取判据需要的列** —— 把整表
+    # 读进内存在万册书下会白占几十 MB，而增量判据只看 size/mtime；`replaced` 多取一列是为了
+    # `force` 那一轮能**沿用**它（见下面的 `replaced_now`，第 134 期）。
     stored: dict = {}
     for r in _exec(
-        f"SELECT root, rel, size, mtime FROM {TABLE} WHERE library_id=?", (lid,)
+        f"SELECT root, rel, size, mtime, replaced FROM {TABLE} WHERE library_id=?", (lid,)
     ).fetchall():
-        stored[(str(r["root"]), str(r["rel"]))] = (int(r["size"] or 0), float(r["mtime"] or 0))
+        stored[(str(r["root"]), str(r["rel"]))] = (
+            int(r["size"] or 0), float(r["mtime"] or 0), int(r["replaced"] or 0))
 
     seen: set = set()
     added = unchanged = 0
@@ -721,14 +723,19 @@ def _refresh_locked(lib: dict, force: bool) -> dict:
                 continue
             seen.add(key)
             cur = stored.get(key)
-            replaced_now = False
+            # 第 125 期记下的「同名路径上的文件被换过」是**结论**，不是一次性事件：
+            # 增量那轮看到 (size, mtime) 变了才置 1，而 `force`（全量重探）拿到的是同一份
+            # 判据 —— 判不出「换没换」，只能沿用库里已有的值。照原先「恒置 0」写下去，
+            # 用户点一次「立即扫描 / 强制重扫」（`library.books(force=True)`）就会把这条
+            # issue 抹掉，而且再也不会自愈（upsert 是整列覆盖）。
+            replaced_now = bool(cur[2]) if cur is not None else False
             if cur is not None and not force:
                 # 便宜闸门：条目自身没变就整段跳过 —— 一次 stat（音频目录是一次目录列举），
                 # 而不是开 zip。**这是增量刷新的全部价值所在。**
                 facts = _lib._cheap_facts(f)
                 if facts is None:
                     continue
-                if (facts[0], facts[1]) == cur:
+                if (facts[0], facts[1]) == cur[:2]:
                     unchanged += 1
                     continue
                 # 走到这里 = 这一行的 `(size, mtime)` 变了 ⇒ **同名路径上的文件被换过**。
@@ -762,39 +769,54 @@ def _refresh_locked(lib: dict, force: bool) -> dict:
                 _flush()
     _flush()
 
-    # ---- 「根不可用」保护（第 119 期）----
+    # ---- 「根不可用」保护（第 119 期；第 134 期扩到「单个根掉线」）----
     # `library._iter_book_entries` 对**读不到的目录**是静默返回空列表的
     # （`except Exception: return out`），于是 NAS 未挂载 / 网盘掉线 / 权限被改时，
     # 本轮 `seen` 会是空的，下面那句「索引里有、磁盘上没了 → 删」就会把**整库**
     # 当成「文件被全删了」清空。而这条路径是**自动**的：监听线程每 ``index_interval``
     # （默认 60s）无条件 ``refresh_all`` 兜底一次（见 ``watcher._catalog_tick``）。
     #
-    # 判据只用文件系统：**一个根都访问不了** ⇒ 本轮的「扫到 0 个」不可信，跳过删除。
-    # 反过来说「根都在、就是空的」照旧删（用户真把库清空了），这不是给删除加确认，
-    # 而是拒绝在**读不到**的前提下下「没了」的结论。
+    # 判据只用文件系统：**读不到的根，它下面的行不判「没了」**。反过来说「根都在、就是
+    # 空的」照旧删（用户真把库清空了），这不是给删除加确认，而是拒绝在**读不到**的前提下
+    # 下「没了」的结论。
+    #
+    # ⚠️ 第 134 期补的第二个洞：原先这道闸只在 ``stored and not seen``（**一个条目都没
+    # 扫到**）时生效。一个库配了 A / B 两个根、A 掉线而 B 还有书时，``seen`` 非空 ⇒ 闸
+    # 根本不进，下面的「索引里有、磁盘上没了 → 删」会把 **A 根**的行全删。此时库因 B 的书
+    # 仍然「活着」，``server._orphan_refs`` 的「该库有书才判孤儿」拦不住 —— 用户点一次
+    # 「清理孤儿」就把 A 那批书的进度 / 批注 / 书签**真删**（那是不可逆的）。
+    # 所以判据从「有没有**任一**可用根」改成「**这一行所属的那个根**可不可用」：
+    # 只有根确实读得到的行才配被删，一个根的问题不外溢到别的根。
     #
     # ⚠️ 残留盲区（如实写明，不假装解决）：Docker 的 bind mount 缺失时容器里会
     # **建出一个空目录**，`is_dir()` 为真、可读 —— 这一层分辨不出来，索引仍会被清空
     # （数据本身没危险：挂载回来后重新扫描即恢复，book_id 不变、进度与批注都在）。
     # 真正的不可逆动作在「孤儿清理」那一侧，已由 ``server._orphan_refs`` 的
     # 「该库当前有书被索引到才判孤儿」挡住。
-    if stored and not seen:
-        usable = False
-        for d in roots:
-            try:
-                if pathlib.Path(d).is_dir() and os.access(d, os.R_OK | os.X_OK):
-                    usable = True
-                    break
-            except OSError:
-                continue
-        if not usable:
-            return {"scanned": 0, "added": added, "removed": 0,
-                    "unchanged": unchanged, "skipped": True,
-                    "reason": "root_unavailable"}
+    usable_roots: set = set()
+    for d in roots:
+        try:
+            if pathlib.Path(d).is_dir() and os.access(d, os.R_OK | os.X_OK):
+                usable_roots.add(str(d))
+        except OSError:
+            continue
+    if stored and roots and not usable_roots:
+        return {"scanned": 0, "added": added, "removed": 0,
+                "unchanged": unchanged, "skipped": True,
+                "reason": "root_unavailable"}
 
     # 索引里有、磁盘上没了的行 → 删。按 (root, rel) 精确删，不整库重来
     # （整库重来在「只有一本书变了」时要重写全部 266 行，网络存储上纯属白付）。
-    stale = [k for k in stored if k not in seen]
+    #
+    # 判据看**这一行所属的那个根**（第 134 期），分两种「不在 seen 里」：
+    #   · 根已经从库配置里删掉了（``k[0] not in configured``）⇒ 行该删：那是**配置变了**，
+    #     不是读不到（第 97 期「移除来源根」与「改库根」都靠这条把旧行带走）；
+    #   · 根还在配置里但这一刻读不到 ⇒ **不**判「没了」（见上面的注释：NAS 未挂载）。
+    # 只认其中一条都会出错：只认第一条 ⇒ 单根掉线清整库；只认第二条 ⇒ 换库根后旧根
+    # 的书永远挂在列表里（`tests/test_library_count_contract.py` 的换根用例据此报 4≠3）。
+    configured = {str(d) for d in roots}
+    stale = [k for k in stored
+             if k not in seen and (k[0] not in configured or k[0] in usable_roots)]
     for i in range(0, len(stale), 500):
         chunk = stale[i:i + 500]
         cond = " OR ".join(["(root=? AND rel=?)"] * len(chunk))
