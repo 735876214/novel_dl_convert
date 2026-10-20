@@ -259,7 +259,9 @@ async function retryDetail(): Promise<void> {
   loading.value = false
 }
 
-onMounted(async () => {
+/** 取这一页的全部数据。**换书时也要重跑**（见下面那个 watch） */
+async function loadAll(): Promise<void> {
+  loading.value = true
   // 库实体是面包屑与版本信息「书库」行的数据源；深链进来时它还没加载过
   // （只有去过书库页 / 设置页才会加载），所以这里补一次（幂等，已加载就直接返回）
   library.loadLibraries()
@@ -279,6 +281,17 @@ onMounted(async () => {
       /* ignore */
     }
   }
+}
+
+onMounted(loadAll)
+
+// ⚠️ `/book/:id` 是同一条路由记录：从一个详情页点「相似书」跳到另一本时，
+// 组件被**复用**、onMounted 不会重跑（第 136 期修）。只看 onMounted 的话，
+// hero / 目录 / 文件 / 批注都还是上一本，而 similar 与各标签页内部自取数的
+// 部分已经是新书 —— 同一页里两本书的数据并存，看不出哪块是错的。
+watch(bookId, (id) => {
+  if (!id) return
+  void loadAll()
 })
 </script>
 
