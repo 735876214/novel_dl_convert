@@ -69,15 +69,20 @@ def test_英文与特殊章标记():
 
 
 def test_正则命中太少则退化为缩进切分():
-    """「命中数 × 2000 ≥ 长度」是置信判据：命中太少 ⇒ 缩进降级。"""
+    """「命中数 × 2000 ≥ 长度」是置信判据：命中太少 ⇒ 缩进降级。
+
+    ⚠️ **第 126 期改了这条的口径**：末尾那个「顶格行三」脚下一个缩进行都没有，按缩进
+    降级的假设它本该是章标题，可它没有正文 —— 说明它其实是一行普通正文。旧口径把它留成
+    一个空正文的章（`chaps[2]["body"] == ""`），表现为目录里多一条「点进去什么都没有」的
+    条目。现在它并进上一章的正文末尾（行序不变，见 `detect.absorb_orphan_titles`）。
+    """
     text = "顶格行一\n    缩进正文一\n顶格行二\n    缩进正文二\n顶格行三"
 
     chaps = detect.detect_chapters(text)
 
-    assert [c["title"] for c in chaps] == ["顶格行一", "顶格行二", "顶格行三"]
+    assert [c["title"] for c in chaps] == ["顶格行一", "顶格行二"]
     assert chaps[0]["body"] == "缩进正文一"
-    assert chaps[1]["body"] == "缩进正文二"
-    assert chaps[2]["body"] == ""
+    assert chaps[1]["body"] == "缩进正文二\n顶格行三"
 
 
 def test_merge_把碎片章并入上一章():
