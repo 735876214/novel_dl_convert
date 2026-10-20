@@ -76,3 +76,25 @@ export function statusMeta(status: string): StatusMeta {
   // 未知值走下面的兜底，不抛错也不误判成「进行中」。
   return STATUS_META[status as TaskStatus] ?? { dot: 'queue', text: '未知', cls: '' }
 }
+
+
+/**
+ * **本地**日期串 `YYYY-MM-DD` —— 全前端唯一一处（第 135 期收敛）。
+ *
+ * ⚠️ **别写 `toISOString().slice(0, 10)`**：那是 **UTC** 日期，在东八区本地
+ * 00:00–08:00 之间会算成前一天。服务端口径是本地日（`date` + `start` 合成 naive
+ * 本地时间取 `.timestamp()`，聚合用 `time.localtime()` 分日），两边必须同一把尺子，
+ * 否则「手工补录」会被记到昨天、当天统计是空的。
+ */
+export function localDate(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+}
+
+/** 本地月串 `YYYY-MM`（月历分组用，与 `localDate` 同一时区口径） */
+export function localMonth(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`
+}
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}

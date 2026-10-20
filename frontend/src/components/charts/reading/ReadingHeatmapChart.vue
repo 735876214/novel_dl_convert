@@ -6,6 +6,7 @@ import ChartEmptyState from '@/components/charts/ChartEmptyState.vue'
 import ChartFrame from '@/components/charts/ChartFrame.vue'
 import { api, type ReadingHeatmap, type StatsOverview } from '@/lib/api'
 import { chartShades, useChartTheme } from '@/lib/charts'
+import { localDate } from '@/lib/format'
 
 /**
  * 阅读热力图（上游 `ReadingHeatmapChart.vue`）：GitHub 贡献图那样的日历热力图，
@@ -80,7 +81,7 @@ const values = computed(() => {
   const out: Array<[string, number, number]> = []
   const cursor = new Date(Number(p.year), 0, 1)
   while (cursor.getFullYear() === Number(p.year)) {
-    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`
+    const key = localDate(cursor)
     const hit = byDay.get(key)
     out.push([key, hit ? hit.minutes : 0, hit ? hit.sessions : 0])
     cursor.setDate(cursor.getDate() + 1)

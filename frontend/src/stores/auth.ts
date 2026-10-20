@@ -92,7 +92,17 @@ export const useAuthStore = defineStore('auth', {
         this.user = m.user
         await this.loadProfile()
       } catch {
-        this._setToken('')
+        // `api.request()` 只在 **401** 时删 `nf_token`（并派发 `nf-unauthorized`
+        // 弹出登录门禁）。502（后端重启中）/ 超时 / 断网都属于「暂时问不到」，
+        // 第 135 期前一概清 token ⇒ 服务端打个嗝就把人锁在登录页，还要重输密码。
+        // 以 **localStorage 为准**：401 的清理发生在 api 层，pinia 里的旧值不会变。
+        let alive: string
+        try {
+          alive = localStorage.getItem(TOKEN_KEY) || ''
+        } catch {
+          alive = this.token // 隐私模式读不到 ≠ 未登录，按原值保留
+        }
+        if (!alive) this._setToken('')
       }
       this.ready = true
     },

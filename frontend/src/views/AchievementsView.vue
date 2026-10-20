@@ -8,6 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import { api, type AchievementItem, type AchievementsOverview } from '@/lib/api'
+import { localDate } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -99,9 +100,7 @@ function fmtNum(v: number): string {
 
 function dateOf(ts: number): string {
   if (!ts) return ''
-  const d = new Date(ts * 1000)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  return localDate(new Date(ts * 1000))
 }
 
 function itemOf(i: AchievementItem): string {

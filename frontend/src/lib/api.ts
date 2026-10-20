@@ -10,6 +10,7 @@
  */
 // 类型-only 循环引用在运行时会被擦除，安全（smartScope.ts 需要 BookCard）
 import type { PrefsPayload } from './prefsPayload'
+import { localDate } from './format'
 import type { ImportResult } from './sourceImport'
 import type { SmartScope, ScopeRule } from './smartScope'
 
@@ -3725,7 +3726,7 @@ export const api = {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `library-${new Date().toISOString().slice(0, 10)}.csv`
+    a.download = `library-${localDate()}.csv`
     a.click()
     URL.revokeObjectURL(url)
   },
@@ -3751,7 +3752,7 @@ export const api = {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `annotations-${new Date().toISOString().slice(0, 10)}.${format === 'markdown' ? 'md' : format}`
+    a.download = `annotations-${localDate()}.${format === 'markdown' ? 'md' : format}`
     a.click()
     URL.revokeObjectURL(url)
   },

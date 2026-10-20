@@ -8,6 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, type SourceStatus, type SourceTestResult } from '@/lib/api'
 import { importOutcome, type ImportError } from '@/lib/sourceImport'
+import { localDate } from '@/lib/format'
 import {
   EMPTY_QUERY,
   filterSources,
@@ -314,8 +315,7 @@ function remove(name: string): void {
 
 function fmtTime(ts: number | null): string {
   if (!ts) return ''
-  const d = new Date(ts * 1000)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return localDate(new Date(ts * 1000))
 }
 
 // ---------------- 手动添加（表单）+ 逐源连通性自检（第 57 期）----------------

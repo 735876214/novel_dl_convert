@@ -66,9 +66,16 @@ async function copy(text: string): Promise<void> {
 }
 
 async function toggle(): Promise<void> {
-  setVal('opds.enabled', !enabled.value)
-  await saveSection('opds')
-  ui.toast(enabled.value ? 'OPDS 已开启' : 'OPDS 已关闭')
+  const before = enabled.value
+  setVal('opds.enabled', !before)
+  // ⚠️ `saveSection` 失败**不抛**：它只返回 false 并自己弹「保存失败」。
+  // 第 135 期前这里不看返回值就追一句「OPDS 已开启」—— toast 是单槽，
+  // 失败提示被覆盖成成功；开关也停在新位置，界面与服务端不一致。
+  if (!(await saveSection('opds'))) {
+    setVal('opds.enabled', before)
+    return
+  }
+  ui.toast(before ? 'OPDS 已关闭' : 'OPDS 已开启')
 }
 </script>
 

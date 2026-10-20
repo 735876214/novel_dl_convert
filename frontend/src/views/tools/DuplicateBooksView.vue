@@ -8,7 +8,7 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { useLibraryNames } from '@/composables/useLibraryNames'
-import { api, type DuplicateGroup, type DuplicateItem } from '@/lib/api'
+import { api, apiErrorMessage, type DuplicateGroup, type DuplicateItem } from '@/lib/api'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -172,7 +172,12 @@ function apply(): void {
       ui.toast(`已移入回收目录 ${moved} 个${failed ? `，${failed} 个失败${why ? `（${why}）` : ''}` : ''}`)
       load()
     })
-    .catch((e: Error) => ui.toast(e.message))
+    .catch((e: unknown) => {
+      // `e.message` 是后端响应原文（`{"detail":"…"}`），直接上屏会露出花括号和键名；
+      // 而且失败后不重扫的话，界面还是「待清理」的旧分组，用户会以为没生效（第 135 期）。
+      ui.toast(apiErrorMessage(e, '清理失败'))
+      void load()
+    })
     .finally(() => {
       busy.value = false
     })

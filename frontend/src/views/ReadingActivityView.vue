@@ -9,6 +9,7 @@ import PageHead from '@/components/ui/PageHead.vue'
 import Segment from '@/components/ui/Segment.vue'
 import { type ReadingEvent } from '@/lib/api'
 import { chartShades, useChartTheme } from '@/lib/charts'
+import { localDate } from '@/lib/format'
 import { useActivityStore } from '@/stores/activity'
 
 /**
@@ -57,7 +58,7 @@ const { palette } = useChartTheme()
 const LEVEL_COLORS = computed(() => chartShades(palette.value, 5))
 
 function isoLocal(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return localDate(d)
 }
 
 const calendar = computed(() => {

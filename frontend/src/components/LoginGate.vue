@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
+import { apiErrorMessage } from '@/lib/api'
 import { useAuthStore } from '@/stores/auth'
 
 const emit = defineEmits<{ authed: [] }>()
@@ -19,7 +20,7 @@ async function submit() {
     await auth.login(user.value.trim(), pin.value)
     emit('authed')
   } catch (e) {
-    error.value = e instanceof Error ? e.message : '登录失败'
+    error.value = apiErrorMessage(e, '登录失败')
   } finally {
     loading.value = false
   }

@@ -10,6 +10,7 @@ import PageHead from '@/components/ui/PageHead.vue'
 import { HIGHLIGHT_COLORS, highlightHex, highlightStyleLabel } from '@/data/annotationColors'
 import { canJumpTo, chapterLabel, ORIGIN_LABELS, originLabel } from '@/lib/annotations'
 import { api, type AllAnnotation, type AnnotationOverview, type KoreaderImportResult } from '@/lib/api'
+import { localDate, localMonth } from '@/lib/format'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -50,13 +51,11 @@ const COLOR_LABELS: Record<string, string> = Object.fromEntries(
 
 function fmtDate(ts: number): string {
   if (!ts) return ''
-  const d = new Date(ts * 1000)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return localDate(new Date(ts * 1000))
 }
 
 function monthKey(ts: number): string {
-  const d = new Date(ts * 1000)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  return localMonth(new Date(ts * 1000))
 }
 
 // ---------- 过滤 ----------

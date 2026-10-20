@@ -9,6 +9,7 @@ import Switch from '@/components/ui/Switch.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type LogItem, type LogStorage } from '@/lib/api'
+import { localDate } from '@/lib/format'
 
 /**
  * SERVER → Audit Log（`/settings/admin/audit-log`）
@@ -199,7 +200,7 @@ function exportCsv(): void {
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
   const a = document.createElement('a')
   a.href = url
-  a.download = `audit-${new Date().toISOString().slice(0, 10)}.csv`
+  a.download = `audit-${localDate()}.csv`
   a.click()
   URL.revokeObjectURL(url)
 }

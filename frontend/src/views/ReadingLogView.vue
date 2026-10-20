@@ -6,6 +6,7 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { api, apiErrorMessage, type ReadingLogBook, type ReadingLogDay, type ReadingLogSession } from '@/lib/api'
+import { localDate } from '@/lib/format'
 import { paceText } from '@/lib/readingPace'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
@@ -63,7 +64,7 @@ const busy = ref(false)
 const form = ref({
   book_id: '',
   minutes: 30,
-  date: new Date().toISOString().slice(0, 10),
+  date: localDate(),
   start: '',
 })
 
@@ -117,7 +118,7 @@ function barHeight(sec: number): string {
   return `${Math.max(4, (sec / peak.value) * 100).toFixed(1)}%`
 }
 function dayLabel(d: ReadingLogDay): string {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localDate()
   if (d.date === today) return '今天'
   return d.date.slice(5)
 }

@@ -6,7 +6,7 @@ import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import StatTile from '@/components/ui/StatTile.vue'
 import { api, type BookReadingStats, type ReadingAttempt, type ReadingSessionRow } from '@/lib/api'
-import { fmtDuration, fmtMinutes } from '@/lib/format'
+import { fmtDuration, fmtMinutes, localDate } from '@/lib/format'
 import { paceText } from '@/lib/readingPace'
 import { useUiStore } from '@/stores/ui'
 
@@ -205,9 +205,7 @@ function dayTime(sec: number): string {
  * （`records.*.date`）已经是本地日，两边口径必须一致。
  */
 function dayOnly(sec: number): string {
-  const d = new Date(sec * 1000)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  return localDate(new Date(sec * 1000))
 }
 
 /**

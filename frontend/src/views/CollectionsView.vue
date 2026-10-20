@@ -8,6 +8,7 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
+import { localDate } from '@/lib/format'
 import { useCollectionsStore } from '@/stores/collections'
 
 /** 收藏夹总览：自建收藏夹的增删改与进入。 */
@@ -27,9 +28,7 @@ onMounted(() => collections.load(true))
 
 function fmtDate(sec: number): string {
   if (!sec) return '—'
-  const d = new Date(sec * 1000)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  return localDate(new Date(sec * 1000))
 }
 
 async function create(): Promise<void> {

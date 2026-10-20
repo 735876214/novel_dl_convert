@@ -4,6 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import { api, type BookReview, type ReadingStatus } from '@/lib/api'
+import { localDate } from '@/lib/format'
 import { READ_STATUS_OPTIONS } from '@/lib/readingThresholds'
 import { useUiStore } from '@/stores/ui'
 
@@ -36,7 +37,7 @@ const label = (v: string) => STATUS_OPTIONS.find((o) => o.value === v)?.label ??
 /** <input type=date> 用 YYYY-MM-DD；0 显示为空 */
 function toInput(ts: number): string {
   if (!ts) return ''
-  return new Date(ts * 1000).toISOString().slice(0, 10)
+  return localDate(new Date(ts * 1000))
 }
 function fromInput(s: string): number {
   if (!s) return 0

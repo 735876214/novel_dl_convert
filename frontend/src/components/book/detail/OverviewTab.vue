@@ -5,6 +5,7 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import SimilarBooks from '@/components/book/detail/SimilarBooks.vue'
 import type { BookCard, BookFile, SimilarBook } from '@/lib/api'
+import { localDate } from '@/lib/format'
 import { useLibraryStore } from '@/stores/library'
 
 /**
@@ -52,8 +53,7 @@ function fmtSize(n: number): string {
 
 function fmtDate(ts: number): string {
   if (!ts) return '—'
-  const d = new Date(ts * 1000)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return localDate(new Date(ts * 1000))
 }
 
 /**
