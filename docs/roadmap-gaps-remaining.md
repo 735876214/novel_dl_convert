@@ -9274,3 +9274,142 @@ URL 导入那一条路**上；`sources/manager._client()` 与 `metafetch._downlo
    书里的脚本该净化还得净化（第 133 期）；但一条出口漏了头，同源 XSS 就回来了。
 6. **日志里出现的秘密等于泄漏**：既然白名单路径允许 `?token=`，就必须在日志**出口**抹掉；
    关掉 access log 是另一回事（排障链路的价值高于省一行配置）。
+
+## 第 135 期（第二轮审计：媒体出口收敛 / 刮削台账卡死 / 迁移缩进 / 双线程并扫 / 前端假成功）
+
+来源：用户 `继续下一轮审计并修复`。本轮换两个人肉审计口径并行跑 —— **后端**看「并发与 RLock 代理连接 /
+事务边界 / 软删除读点 / 源不可变与回收站 / 后台任务诚实性 / 缓存失效 / 路径逃逸」，**前端**看「`v-html` 来源 /
+令牌存放与 `?token=` / 路由守卫与 401 / 异步竞态 / `catch {}` 假成功 / 前后端契约 / 假数据」。
+两份报告共 **14 条**（后端 2 高 3 中 2 低，前端 1 高 5 中 1 低），**每条都自己核过再修**（报告是材料不是结论，
+下面「教训 5」列了本轮被判为误判的几条），另加一条我自己实测出来的媒体出口遗漏。**不发版**，`VERSION` 仍 `1.3.0`。
+
+### 一、后端两条高危
+
+**B1 `upgrade_book_ids` 的 `rglob` 缩进跑到根循环之外**
+`novelforge/core/db.py::upgrade_book_ids` 里 `for _dp in _dir_list:` → `d = Path(str(_dp))` → `if not d.is_dir(): continue`
+之后，`for f in d.rglob("*")` 与 `for _dp` **同缩进** ⇒ 每次只处理**最后一个根**，其余根里的书永远拿不到 v2 id；
+首库没有 `source_dirs` 时 `d` 从未绑定 ⇒ `UnboundLocalError`，被 `server.py` 的 lifespan 的 `try` 吞掉，
+`state_set("bookid_v2", "1")` 永不执行 ⇒ **每次启动都重试一遍**（每次重试都只迁一个根）。
+修法：把 `rglob` 到 `index.setdefault(...)` 整段缩进进根循环体，并把「为什么必须按根遍历」写进注释。
+⚠️ **诚实说明**：`tests/test_hardening_135.py::test_没有来源目录的库不再炸迁移` 在旧代码上也能过
+（同一进程里前一个库的 `d` 泄漏到了下一个库），它只钉「零根库也能跑完并置位」，**不是 B1 的复现**；
+真正的复现是 `test_迁移要走到每一个库根`（两个根、索引 ≥ 3）。
+
+**B2 `watcher.stop()` join 超时后仍把线程引用置空**
+`novelforge/core/watcher.py::stop()` 先 `t.join(timeout=max(interval+5, 30))`，然后**无条件** `self._thread = None`。
+join 超时（NAS 上的大 EPUB、批量拷贝很常见）时扫描线程还活着，而 `start()` 只判 `self._thread and is_alive()`
+⇒ 立刻再起一条新线程，新线程开局 `_stop.clear()` ⇒ **旧线程复活、两条线程同时扫同一棵树**
+（重复入库 / 重复拷贝 / 重复入队刮削），而 `is_running()` 正好谎报「未运行」。
+修法：`self._thread = None if not (t and t.is_alive()) else t`，并让 `/api/watcher/stop` 回**真实的**
+`is_running()`（不是「我尽力了」）。留引用的代价只是 `start()` 返回 `False` —— 那是事实，不是故障。
+
+### 二、后端三条中危
+
+**B3 入库存根用 `shutil.copy2` 原地写**：`watcher` 把收书目录里的文件搬进库根时直接 `copy2(p, dst)`，
+扫描可能把**写了一半**的副本当成品书（全仓纪律是「临时文件 + `Path.replace`」，唯一实现是
+`landing._copy_atomic`）⇒ 改走 `_copy_atomic(p, dst)`，`import shutil` 随之去掉（`watcher.py` 只剩这一处用它）。
+
+**B4 `_safe_name` 不挡 `..` ⇒ 音频缓存写到父目录、回滚时 `rmtree` 删父目录**：
+`sources/manager.py::_safe_name` 只把 `[\\/:*?"<>|]` 换掉，书名退化成一串点时 `dest = out_dir / ".."`
+⇒ 缓存 mp3 落到**父目录**，失败回滚的 `shutil.rmtree(dest)` 于是删的是父目录。
+修法：`re.sub` 之后 `s.strip(". ")[:120].strip(". ")`（两端点与空格全部剥掉，空则回落 `book`）。
+同一族判据（名字能不能落盘）在第 129 期已经立过三道（`fileops.name_too_long` / `rules.rule_name_error`），
+这里补的是「清洗后不许是 `.` / `..` 这种目录别名」。
+
+**B5 刮削异常不落台账 ⇒ 状态永远卡在 `running`**：`core/scrape.py::process` 置 `status="running"` 之后
+只有 `finally`（清 `_set_current`）、没有 `except`，异常上抛到 `_loop` 只记一条日志就继续下一批；
+而 `scrape_next_pending` 只取 `status='pending'` ⇒ 这本书记录**永久卡在「进行中」**，只有重启
+（`scrape_reset_running`）才自愈。修法：`except Exception` 里走既有的 `_failed(...)`（重试上限与别的失败路径同一口径），
+返回 `{"ok": False, "error": "<类型>: <消息>"}`；连记账都失败时只留日志（不掩盖原始异常）。
+
+### 三、后端两条低危
+
+**B6 命令行闸门拒绝却 `exit 0`**：`cli.cmd_search` / `cmd_download` 在 `mgr.gate_reason()` 非空时 `print(reason); return`
+⇒ 脚本 / CI 把「下载没开」读成「网上没这本书」（第 71 期立的闸门口径只做了一半）。改成 `raise SystemExit(2)`
+并写清「2 = 被拒绝，不是成功但没结果」。
+
+**B7 自动展开失败只记指纹不记日志**：`watcher._auto_unpack_tick` 的注释本来就写着「无论成败都记指纹」，
+但只有成功才 `activity_log.log` ⇒ 坏包**永久跳过且零感知**（用户只看到「这个压缩包解不开」，不知道系统试过、
+为什么放弃、要换新文件才会重试）。修法：失败分支补一条 `STATUS_FAIL` 活动日志（`source="autounpack"`，
+detail 里写原因 + 「源容器保留，已跳过；换新文件才会重试」），记日志失败不影响展开。
+
+### 四、前端一条高 + 五条中
+
+**F-A（高）设置页的「假成功」**：`useSettingsConfig.saveSection()` **吞错只返回 false**（自己弹过「保存失败」），
+而调用点紧接着 `draft.value = rest` + `ui.toast('已保存')` ⇒ 失败提示被后一个 toast 覆盖（`ui.toast` 是单槽），
+同时草稿被清（刚粘贴的 secret 消失、输入框退回占位符）。`MetadataPage.vue` 7 处 + `clearRow()`、`KomgaPage.vue`、
+`OpdsPage.vue` 的开关都是这个形状。修法：`saveSection` 回布尔；调用点**判真才**改草稿 / 弹成功；开关类失败要
+**把位置退回去**（否则界面显示「已开启」而服务端还是旧值）。
+
+**F-B `auth.init()` 把 5xx / 超时当「未登录」**：`catch { this._setToken('') }` ⇒ 一次网络抖动就强制重登且
+token 不可恢复（401 的清理由 `lib/api.ts` 统一做：删 `localStorage.nf_token` + 派发 `nf-unauthorized`）。
+修法：只在「401 已经清了 token」时置空内存态，其它错误保留 token 并让上层重试。
+
+**F-C 切库串味**：`stores/library.ts::loadFeatures()` 发请求时读 `currentLibraryId`、落地时无条件
+`features.value = res.features || []`，没有单飞闸/序号（对比 `booksInflight`、`ReaderView.loadSeq`）⇒
+快速切库时**旧库的能力覆盖新库**，`hasFeature()` 不自愈（工具栏按错库的能力显隐）。修法：`loadSeq` 单调序号 +
+落地比对。
+
+**F-D 去重清理一条失败吞掉整批**：`DuplicateBooksView.apply()` 用 `Promise.all(...)` + `.catch(e => ui.toast(e.message))`
+⇒ 一条失败既不说「已经搬进去几个」，也不 `load()` 刷新。改 `Promise.allSettled` + 无论成败都 `load()`。
+
+**F-E 登录失败把 JSON 原样显示**：`LoginGate.vue` 的 `e instanceof Error ? e.message : '登录失败'` 在输错 PIN 时
+显示 `{"detail":"账号或密码错误"}` ⇒ 改用 `apiErrorMessage(e, '登录失败')`。
+
+**F-F（系统性）本地日被写成 UTC 日**：全前端 7 处 `new Date().toISOString().slice(0, 10)`
+（阅读记录补录、热力图、成就、批注、合集、活动、审计日志）在东八区 00:00–08:00 会算成**前一天** ——
+补录落到昨天、当天统计是空的，且**没有任何报错**。服务端口径本来就是本地日（`date + start` 合成 naive
+本地时间取 `.timestamp()`，聚合用 `time.localtime()` 分日）。修法：`frontend/src/lib/format.ts` 新增
+`localDate(d?)` / `localMonth(d?)` 作**唯一实现**（`getFullYear/getMonth/getDate`），7 处调用点全部收敛，
+新增 `src/lib/format.spec.ts`（跨时区断言 + 与 `toISOString` 的差异用例）。
+
+### 五、F4 媒体出口收口（第 134 期留的尾巴）
+
+第 134 期只给「书内资源 + 封面」两处加了安全头，其余出口各写各的。本轮把它做成**唯一组装点**：
+`server.py` 新增 `_media_headers(cache_control=…)` / `_media_bytes(data, media_type, …)` /
+`_media_file(path, media_type=None, …)`，`_MEDIA_UNTRUSTED_HEADERS`（`nosniff` + `CSP: sandbox`）只在这一处被引用。
+**12 处出口**全部改走 helper：书内资源 `/asset`、封面 `_cover_response`、有声书/合集封面、原始书籍文件 `/file`
+（`private, max-age=3600`）、漫画页、序号单元页、音频轨、单元字节流、作者头像、账号头像、字体文件、Komga 页面流。
+⚠️ 上一期我数漏了 3 处 `Response(content=…, media_type=…)`（漫画页 / 单元页 / Komga 页）—— **同一判据写在
+两个响应类型上，就一定会漏一处**，这正是收敛的理由。`filename=` 附件下载（`/download`、OPDS 下载、日志、导出、
+Komga 文件）**不是遗漏**：浏览器不会顶层渲染它们。
+新契约 `tests/test_media_headers_135.py`（7 例）：静态断言「`CSP: sandbox` 全仓只出现 1 处、`nosniff` 只 1 处、
+`_MEDIA_UNTRUSTED_HEADERS` 只被 2 处引用、没有第二处手写 `headers={"Cache-Control"…}`」+ 运行时逐族出口验证。
+另补 `tests/test_route_guard_contract.py`（3 例）：AST 扫 `server.py`，**48 条 `/api/v1/` 与 29 条 `/opds` 路由
+全部调到各自的守卫**（唯一例外 `ko_patch_read_progress` 只是转调 `ko_put_read_progress`，白名单写明且不许过期）。
+
+### 六、未修（记录在案，不做「顺手改了」
+
+- **`GET /download/{name:path}` 匿名可下成品文件**（实测：往 `output/` 放一个文件，无凭据 GET 回 200 / 8 字节）。
+  这是**既有设计取舍**：中间件对非 `/api` 前缀「历史不强制鉴权」，README 把 `/convert`、`/convert-path`、`/download`
+  标为「油猴 / 外部脚本保留」。要收紧就是产品决定（会打断这些脚本），本轮只记录。
+- 多标签页无 `storage` 监听（另一标签登出后本标签仍显示旧态）；`ReaderView.saveProgress()` 全 `catch {}` 静默丢进度。
+- `catalog` 的 `DELETE … IN (500 个 ?)` 是 1001 个绑定参数（旧 SQLite 上限 999；现代上限 32766）⇒ 观察项。
+- 列表缓存键没有版本段（`nf:book:list:{lid}`），靠 `TTL_LIST = 120` 收敛 ⇒ 可接受，不引入第二套失效机制。
+- `db.find_annotation_by_anchor` 不带 `deleted_at` 过滤（设计：锚点查询只回答「这一处有没有批注」，软删除由上层表达）。
+
+### 七、核验
+
+| 项 | 结果 |
+|---|---|
+| `tests/test_hardening_135.py` | **8 例**（B1 两根迁移 / 零根库跑完 / B2 停止超时保留引用 / B3 入库存根无 `copy2` / B4 书名清洗不逃父目录 / B5 刮削异常落台账 / B6 退出码 2 / B7 展开失败留痕）——**7 例在旧代码上真红**（用 `git worktree` 拉 `ca50aa9` 跑同一文件验证） |
+| `tests/test_media_headers_135.py` | **7 例**：静态单一来源 4 条 + 运行时漫画封面 / 漫画页 / 书内资源 / `/file` 的 private 缓存 / 字体 / 头像 |
+| `tests/test_route_guard_contract.py` | **3 例**：48 条 `/api/v1/` 与 29 条 `/opds` 路由全覆盖守卫 + 白名单不过期 |
+| 后端全量 | **2636 例（2614 passed / 0 failed / 0 errors / 22 skipped）**，495.0 s，在 Linux 容器里跑（`nf-pytest:py312`，同第 134 期原因） |
+| 前端四连 | `vue-tsc --build` exit 0 / `test:unit` **70 spec, 722 例**全绿（新增 `src/lib/format.spec.ts`）/ `build` 成功 / `deploy` 已同步 |
+| `python tests/period_close.py check` | 0 问题 |
+
+### 八、教训
+
+1. **同一判据写在两种响应类型上 = 一定漏一处**：`Response(...)` 与 `FileResponse(...)` 各自手写安全头时，
+   第 134 期数了 6 处、实际 9 处。收敛成一个组装函数之后，「以后新增出口默认安全」才有可能。
+2. **「吞错的函数 + 无条件的成功提示」就是假成功**：`saveSection` 返回 `false` 而调用点照样弹「已保存」，
+   单槽 toast 让失败提示**活不过一帧**。判据：凡是「先弹成功再打请求」或「不判返回值就改本地态」的地方都要重看。
+3. **每个状态字段都要回答「谁会把它翻出去」**：`scrape_items.running` 的推进者是进程内 worker，
+   异常路径不写台账就等于**这行永远不会被翻成 failed**（与第 131 期 `tasks.running` 同型、不同修法：
+   那边是「重启后没人认领 ⇒ 标失败」，这边是「异常必须当场记账」）。
+4. **缩进类的 bug 只由「数据形状」暴露**：B1 用单根库永远看不出来，两个根 / 零根才现形；
+   所以用例要按**输入形状**（多根、零根、超时、坏包）写，不按代码路径写。
+5. **审计报告是材料，不是结论**：本轮 14 条里 3 条经核不成立或不准确（「书源只差封面没挂闸」上一期已纠、
+   `avatar_path` 的 `unlink` 穿越（写入侧是白名单后缀、值不由接口写）、以及引用了不存在的符号名），
+   修之前每条都要能自己指出「哪一行、什么输入、什么后果」。
