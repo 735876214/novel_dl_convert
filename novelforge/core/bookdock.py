@@ -269,6 +269,12 @@ def rescan(watcher, item_id, library_id=None, root=None) -> dict:
     elif kind == "failed":
         db.dock_update(item_id, status="error", detail=str(detail),
                        retries=int(row.get("retries") or 0) + 1)
+    elif kind == "waiting":
+        # 等条件（没有可接收的库）：**照样如实报错**给用户看，但**不算这个文件的
+        # 失败次数** —— 它没毛病，是配置缺了一环（第 125 期）。计进 retries 会让界面
+        # 读成「这个文件老是失败」，而用户该去做的是建库。
+        db.dock_update(item_id, status="error", detail=str(detail),
+                       retries=int(row.get("retries") or 0))
     else:
         db.dock_update(item_id, status="needs_review", detail=str(detail))
     watcher.mark_processed(src)

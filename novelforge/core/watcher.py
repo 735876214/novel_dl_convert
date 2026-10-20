@@ -214,7 +214,10 @@ class FolderWatcher:
         self._autounpack_last = 0.0
         # 各扫描目标的上次实际扫描时刻（按 tkey 分桶，避免跨目标互相干扰）
         self._target_last: dict = {}
-        self.stats = {"converted": 0, "added": 0, "failed": 0, "scans": 0}
+        # `waiting`（第 125 期）= 「条件没到、下轮再来」的次数（没有可接收的库）。
+        # 它**不计入** `failed`：`failed` 会一路撞上 `max_retries` 被永久跳过，
+        # 而「库还没建」是用户几分钟后就会解决的事，不是这个文件的问题。
+        self.stats = {"converted": 0, "added": 0, "failed": 0, "waiting": 0, "scans": 0}
 
     # ---------------- 状态持久化 ----------------
 
@@ -366,11 +369,12 @@ class FolderWatcher:
         root = root or self.input_dir
         try:
             entries = [p for p in self._iter_files(root)
-                       if not p.name.startswith(".")]
+                       if not library.is_hidden_name(p.name)]
             if root.is_dir():
                 it = root.rglob("*") if self.recursive else root.iterdir()
                 for p in it:
-                    if p.is_dir() and not p.name.startswith(".") and audio.is_audio_dir(p):
+                    if p.is_dir() and not library.is_hidden_name(p.name) \
+                            and audio.is_audio_dir(p):
                         entries.append(p)
         except Exception:
             return []
@@ -460,7 +464,10 @@ class FolderWatcher:
                 from . import library_rules as _lr
                 # `src=p`：通用容器（.zip/.rar/.7z）的形态只能看内容，把识别结果说出来
                 # （第 122 期）—— 否则用户只得到一句「规则都不命中」。
-                return ("failed", "没有可接收的书库："
+                # 第 125 期：这类失败是**等条件**，不是这个文件的毛病 ——
+                # 用户几分钟后就会去建库。若记成 `failed`，3 轮后撞上 `max_retries`
+                # 被永久跳过（`_scan_locked`），建完库文件也不会自己进来。
+                return ("waiting", "没有可接收的书库："
                         + _lr.no_library_reason(name=p.name, src=p))
         cfg = lib_settings.config_for((lib or {}).get("id") or None)
         layout = str((cfg.get("output") or {}).get("layout") or "flat").strip().lower()
@@ -643,6 +650,15 @@ class FolderWatcher:
                     self.state[key] = cur
                     self.stats[kind] += 1
                     result[kind].append({"file": p.name, "output": Path(detail).name})
+                    dirty = True
+                elif kind == "waiting":
+                    # 条件没到（没有可接收的库）：**不留状态**，下轮当新文件再来。
+                    # 留着 `failed` 计数就会在 max_retries 轮后被永久跳过 ——
+                    # 那正是「建完库还得手动再投一次」的原因（第 125 期）。
+                    # 仍然放进 `failed` 列表给界面看：那句话已经说清了该去建哪种库。
+                    self.state.pop(key, None)
+                    self.stats["waiting"] += 1
+                    result["failed"].append({"file": p.name, "error": str(detail)})
                     dirty = True
                 elif kind == "failed":
                     cur["failed"] = int(cur.get("failed", 0)) + 1
