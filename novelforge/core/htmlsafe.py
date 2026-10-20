@@ -33,7 +33,9 @@ from lxml import etree, html as lxml_html
 #: 净化口径的版本。**改动 :func:`sanitize` 的判据就要 +1** —— 章节 HTML 会进 Redis 缓存
 #: （键里是「书 + 章 + 源文件指纹」），源文件没动时指纹不变 ⇒ 不 +1 的话旧缓存会继续下发
 #: 旧形态，等于改判据看不见效果（与本项目 `*_RULE_VERSION` 同一条规矩）。
-CHAPTER_HTML_VERSION = 1
+#: v2（第 134 期）：补上开头裸文本（`root.text`）—— v1 会把「第一个标签之前」的正文丢掉，
+#: 不换版本号的话，已经读过一遍的书还会继续从缓存里拿到缺首段的 HTML。
+CHAPTER_HTML_VERSION = 2
 
 DROP_TAGS = frozenset({
     "script", "style", "iframe", "noscript", "template", "object", "applet",
@@ -150,6 +152,11 @@ def sanitize(markup: str) -> str:
                 del el.attrib[name]
     # 用 XML 序列化：`<br/>` / `<img .../>` 保持自闭合（与库内既有 HTML 的字面形态一致，
     # 前端与 EPUB 阅读器两边都认），HTML 序列化会把它们写成 `<br>`。
-    return "".join(
+    #
+    # ⚠️ `root.text` 必须单独拼在最前面（第 134 期）：它是「第一个子元素**之前**」的裸文本，
+    # 不在任何子元素的 `tostring()` 里。只拼子元素时，一段以裸文字开头的正文
+    # （``第一段<p>第二段</p>`` —— 不少 EPUB 的 `<body>` 就是这样）会**整段丢掉开头**，
+    # 而且缓存 24h 看不出来。解析器已经把实体解码成字符，这里必须重新转义。
+    return escape(root.text or "") + "".join(
         etree.tostring(c, encoding="unicode", method="xml") for c in root
     )
