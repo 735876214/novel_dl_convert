@@ -13,7 +13,12 @@ from novelforge.core import library
 def _bid(root, make_book, name: str) -> str:
     make_book(root, name)
     library.invalidate()
-    books = [b for b in library.books() if b["name"].endswith(name)]
+    # ⚠️ ``force=True`` 不是保险，是**必须**：读路径对「索引非空 + 标脏」只做
+    # **有上限**的等待（``catalog.SETTLE_WAIT`` = 0.25 s，到点如实返回现有索引），
+    # 全量跑起来机器负载高时那一拍等不到后台刷新跑完 ⇒ 第二次调本函数就扫不到
+    # ``二.epub``。第 129 期全量里正是这么红的（单独跑必绿，只有满载才红）。
+    # 写完要立刻读，就得明确要求同步重扫，别赌时序。
+    books = [b for b in library.books(force=True) if b["name"].endswith(name)]
     assert books, f"扫描没找到 {name}"
     return books[0]["id"]
 
