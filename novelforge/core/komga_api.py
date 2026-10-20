@@ -96,8 +96,10 @@ MEDIA_TYPES = {
     "AZW3": "application/x-mobipocket-ebook", "AZW": "application/vnd.amazon.ebook",
     "TXT": "text/plain", "FB2": "application/x-fictionbook+xml",
     "AUDIO": "audio/mpeg", "UNITS": "application/octet-stream",
-    # 「判不出形态的容器」（format 保持 ZIP）——它至少该有个客户端认识的身份：就是一份 zip
-    "ZIP": "application/zip",
+    # 「判不出形态的容器」（format 保持 ZIP / RAR / 7Z，见 `zipkind.CONTAINER_FORMATS`）
+    # ——它至少该有个客户端认识的身份：就是一份压缩包（第 124 期补齐 RAR / 7Z）
+    "ZIP": "application/zip", "RAR": "application/vnd.rar",
+    "7Z": "application/x-7z-compressed",
 }
 #: Komga 用 ``mediaProfile`` 决定用哪个阅读器，而**客户端只有** EPUB / PDF / 漫画归档这四类
 #: 阅读器（上游 `MediaType.kt` 的 ``profile`` 也只在它们身上非空，其余 `fromMediaType` 回 null）。
