@@ -8260,3 +8260,68 @@ CBZ/CBR/PDF ⇒ 随后 400）。`opds._MIME` 缺 FB2 / AZW ⇒ acquisition 链�
    而分开的判据必须写在一处（`_TEXT_DOC_EXTS`），否则下一次又是两份表漂移。
 2. **注释里写着「其次 mixed」不代表代码真的这么做**：`_by_format` 的 mixed 回落长期是死代码，
    而它恰好是「只有综合库」那种部署的唯一活路。**判据的存在性要用用例证明**，注释不算。
+
+## 第 124 期（格式识别复审修复：旁注判据收紧 + 容器媒体类型与上传白名单收敛）
+
+**需求来源**：用户要求用独立审查（`dsh_code_review`）复审第 123 期的格式识别改动。审查结论是
+「方向正确、判定 patch 不正确」—— 1 条 P2 + 2 条 P3，全部关于**判据的覆盖面**，而不是新功能。
+这一期只修这三条，不改任何用户可见的流程。
+
+### 一、旁注判据：放宽与瞎猜之间（P2）
+
+第 123 期把「图片 + 文本文档」一律当旁注（`.txt` 在 `_TEXT_DOC_EXTS` 里）⇒ 判 `comic`。现场是：
+
+| 容器内容 | 第 123 期判定 | 实际后果 |
+|---|---|---|
+| 3 张图 + `说明.txt` | `comic`、`pages=3` | ✅ 想要的效果（漫画包的常态） |
+| 1 张封面 + `正文.txt`（一本小说） | `comic`、`pages=1` | ❌ **正文静默消失**：书目登记成 1 页漫画、`unparsable` 为假（不进「待修复」），而 `unpack_plan` 因 `kind=="comic"` 直接回「已经能直接按漫画阅读，不需要展开」⇒ **既读不到也取不出来** |
+
+根因是判据按**扩展名**分档，而 `.txt` 是本项目的**主力书籍格式**、它在字节层面与「说明文档」无从区分。
+按扩展名放宽，必然要么把 `正文.txt` 吞掉（第 123 期），要么把 `说明.txt` 拒读（第 122 期之前）。
+
+修法是按**语义**分两层（`novelforge/core/zipkind.py`）：
+
+- `_NOTE_DOC_EXTS = (".xml", ".nfo", ".sfv", ".url", ".json", ".db")` —— 结构化元数据，**与文件名无关**，出现即旁注
+  （`ComicInfo.xml`、`.nfo`、`.sfv` 校验、下载信息）；
+- `_NOTE_NAME_RE = r"^(read[_ -]?me|说明|注释|info|comicinfo|licen[cs]e|版权|彩蛋|about|metadata)"`（大小写不敏感）
+  —— 文本类（`.txt/.md/.rtf/.html/.htm`）**只有名字像说明**才算旁注；
+- `_is_note(name)` 是唯一判据，`analyze` 的分档改用它：`stray = [n for n in docs if not _is_note(n)]`。
+
+取舍写进注释：**宁可多报一例 `mixed`（如实说「判不准」、进「待修复」、`unpack_plan` 抽得出正文），
+也不能静默吞掉一本书的正文**。「1 张封面 + `正文.txt`」现在是 `mixed`，「3 张图 + `说明.txt` / `readme.txt` /
+`ComicInfo.xml`」仍是 `comic`。
+
+### 二、容器自身的媒体类型缺 `RAR` / `7Z`（P3）
+
+`_probe_entry` 对**判不出形态**的容器保留后缀大写 ⇒ 书目 `format` 是 `ZIP` / `RAR` / `7Z`（`zipkind.CONTAINER_FORMATS`）。
+第 123 期只补了 `ZIP`，`RAR` / `7Z` 在 `opds._MIME` 与 `komga_api.MEDIA_TYPES` 里都缺键 ⇒ 落 `application/octet-stream`
+—— 正是上一期给 `.azw` / `.fb2` 修掉的同一症状（按 `opds.py` 自己的口径：客户端不认识的类型不出现下载按钮）。
+
+补齐 `application/vnd.rar` / `application/x-7z-compressed`，并把契约用例的 `_ALL_FORMATS` 从只有 `ZIP`
+扩到 `ZIP / RAR / 7Z` —— 清单本身短两档时，用例是「全绿但漏测」。
+
+### 三、上传白名单的第三份拷贝（P3）
+
+`pipeline.EBOOK_EXT` 曾是与 `library.BOOK_EXTS` **内容完全相同**的第二份字面量（实测各 20 项、集合相等），
+而上传闸门吃的正是它（`novelforge/server.py` 的 `_allowed = set(pipeline.EBOOK_EXT)`），
+`library.type_for_ext` 的 docstring 却写着「上传白名单判定都走它」—— 收敛声明与实现不符。
+
+这与第 122 期 `.azw` 那次 400 是同一形态：只往 `library._EBOOK_EXTS` 加格式，上传会**静默 400**。
+修法：`EBOOK_EXT = frozenset(library.BOOK_EXTS)`（注释写明「别再往这里加字面量」），docstring 改成
+「上传闸门吃的是 `pipeline.EBOOK_EXT`，而它派生自 `BOOK_EXTS`」。
+
+### 四、核验
+
+| 项 | 结果 |
+|---|---|
+| `tests/test_format_audit_123.py` | **15 例**（原 13 + 旁注判据 2 例：`test_图片加正文文本仍然判不准`、`test_旁注判据看名字也看类型`） |
+| 相关子集（format_audit / upload_exts / komga / opds） | 38 passed |
+| 后端全量 `bash scripts/test.sh` | **2507 例（2494 passed / 0 failed / 0 errors / 13 skipped），254.3 s，exit 0** |
+| 前端 | 本期无前端改动 |
+
+### 五、两条教训
+
+1. **「放宽判据」要按语义分档，不能按一次事故的现场分档**：旁注 ≠ 文本文件 —— 漫画包的 `说明.txt`
+   与一本小说的 `正文.txt` 是同一个后缀、同一种「文本」。按后缀放宽 = 必然在两者之间选一个牺牲品。
+2. **契约清单自己也会成为盲区**：`_ALL_FORMATS` 少列 `RAR` / `7Z` 时，这条「覆盖全部书目格式」的用例照样全绿。
+   清单要**从真值源派生**（或至少与 `zipkind.CONTAINER_FORMATS` 对齐），不能手抄。
