@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import socket
 import threading
 import time
 from types import SimpleNamespace
@@ -169,9 +170,19 @@ def up(isolated, monkeypatch, tmp_path):  # noqa: ARG001 —— isolated 提供�
 
 
 def _mount_socket(up) -> None:
-    """把 docker.sock「挂上」（建一个空文件即可，真连被 `_docker` 替身拦住）。"""
+    """把 docker.sock「挂上」：**真的建一个 unix socket**（真连仍被 `_docker` 替身拦住）。
+
+    ⚠️ 第 141 期：这里原来建的是空文件。`updater_available()` 现在判「通道在不在」用的是
+    `S_ISSOCK` —— 挂成普通文件 / 目录就是「没通道」（宿主上最常见的挂错方式）。
+    所以夹具必须建真 socket，否则它测的是「一个不可能在生产出现的状态」。
+    建完立刻 close：unix socket 的**文件**不会随之消失，`S_ISSOCK` 依旧成立。
+    """
     p = up.tmp / "docker.sock"
-    p.write_bytes(b"")
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        srv.bind(str(p))
+    finally:
+        srv.close()
     updater.DOCKER_SOCK = str(p)
 
 

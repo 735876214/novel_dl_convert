@@ -122,13 +122,19 @@ def test_节流生效_数据变了TTL内仍给缓存值(client, auth_headers, de
     again = client.get("/api/browse-counts", headers=auth_headers).json()
     assert (first["cached"], again["cached"]) == (False, True), "第二次必须命中缓存"
 
-    # 数据真的变了（又多了一本书）—— TTL 内仍返回旧值，且如实标注 cached
-    _book(default_root, "第二本.epub")
+    # 数据真的变了（又多了一本书）—— TTL 内仍返回旧值，且如实标注 cached。
+    # ⚠️ 这里**必须直接落盘**，不能走 `_book()`：它在结尾调 `library.invalidate()`，
+    # 而第 139 期起「库失效」会连带把这份计数缓存一起作废（侧栏三个数与书目派生自同一批
+    # 成员，只失效一个就会出现「列表 2 本、计数 1 本」）。所以「数据变了」必须表达成
+    # 「文件变了、但没人宣布失效」—— 那才是节流真正要覆盖的窗口。
+    (pathlib.Path(default_root) / "第二本.epub").write_bytes(b"EPUB")
     stale = client.get("/api/browse-counts", headers=auth_headers).json()
     assert stale["cached"] is True and stale["books"] == 1, f"疑似没走缓存：{stale}"
 
-    # 主动失效（扫描完想让数字立刻跟上时走这条）后立刻拿到新值
-    browse_counts.invalidate()
+    # 主动失效（扫描完想让数字立刻跟上时走这条）后立刻拿到新值。
+    # 第 139 期起只需 `library.invalidate()` 一处：它会把书目与这三计数一起作废
+    # （计数是书目的派生视图，少清一个就会出现「列表 2 本、徽标 1 本」）。
+    library.invalidate()
     fresh = client.get("/api/browse-counts", headers=auth_headers).json()
     assert fresh["cached"] is False and fresh["books"] == 2
 
