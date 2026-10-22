@@ -2992,6 +2992,15 @@ function _authToken(): string {
 /** `request()` 的默认超时（第 88 期）。15 秒覆盖绝大多数接口；个别慢接口按需覆盖。 */
 export const DEFAULT_REQUEST_TIMEOUT_MS = 15000
 
+/**
+ * **长任务**接口的超时（第 141 期）。默认 15 秒对「要外呼站点/磁盘」的接口是错的：
+ * 元数据抓取预览（逐本外呼 13 家）、刮削批量应用、备份、建库扫描、索引重建、
+ * 远端版本检查，都可能正经跑几十秒。它们超时**并不等于失败** —— 后端照旧在跑，
+ * 只是界面报了 `TimeoutError`，用户于是重试一次，第二次撞上「已经在跑」的锁，
+ * 看到的是更莫名的错误。这些接口必须显式放长。
+ */
+export const LONG_REQUEST_TIMEOUT_MS = 120000
+
 export interface RequestOptions {
   /**
    * 超时（毫秒）。传 0 = 不限时（谨慎使用：会退回「一直转圈」的老毛病）。
@@ -3196,7 +3205,11 @@ export const api = {
   /** 当前版本 / 远端最新 / 是否有更新 / 一键更新是否可用的快照。 */
   updateStatus: () => request<UpdateStatus>('/api/update/status'),
   /** 手动触发一次远端检查（绕过定时缓存）。 */
-  updateCheck: () => request<UpdateStatus>('/api/update/check', { method: 'POST' }),
+  updateCheck: () =>
+    request<UpdateStatus>('/api/update/check', { method: 'POST' }, {
+      // 外呼 GitHub：代理慢/被限速时 15 秒不够
+      timeoutMs: LONG_REQUEST_TIMEOUT_MS,
+    }),
   /** 一键更新：挂了 docker.sock 时拉取最新镜像并重建自身容器。 */
   updateApply: () => request<UpdateApplyResult>('/api/update/apply', { method: 'POST' }),
 
@@ -3337,7 +3350,10 @@ export const api = {
   watcherStatus: () => request<WatcherStatus>('/api/watcher'),
   watcherStart: () => request<WatcherStatus>('/api/watcher/start', { method: 'POST' }),
   watcherStop: () => request<WatcherStatus>('/api/watcher/stop', { method: 'POST' }),
-  scanNow: () => request<Record<string, unknown>>('/api/scan', { method: 'POST' }),
+  scanNow: () =>
+    request<Record<string, unknown>>('/api/scan', { method: 'POST' }, {
+      timeoutMs: LONG_REQUEST_TIMEOUT_MS,
+    }),
 
   // ---------- 收书目录条目（Book Dock 五态流水线） ----------
   bookDock: (status?: string) =>
@@ -3544,7 +3560,10 @@ export const api = {
 
   /** 实时在线建议（编辑器「在线建议 / 重新获取」用，不写库）。 */
   bookMetadataOnline: (bid: string) =>
-    request<MetadataOnlineResult>(`/api/books/${encodeURIComponent(bid)}/metadata/online`),
+    request<MetadataOnlineResult>(`/api/books/${encodeURIComponent(bid)}/metadata/online`, undefined, {
+      // 外呼多家提供商：慢站点上 15 秒必超
+      timeoutMs: LONG_REQUEST_TIMEOUT_MS,
+    }),
 
   /** 撤销用户覆盖（含「显式清空」）让字段回落到在线值 / 文件原值；**不改写任何文件**。 */
   revertBookMetadata: (bid: string, fields: string[]) =>
@@ -4036,7 +4055,7 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names, limit }),
-    }),
+    }, { timeoutMs: LONG_REQUEST_TIMEOUT_MS }),
 
   /** 应用：只传回预览里确认过的具体值（后端会再校验） */
   metadataApply: (
@@ -4046,7 +4065,7 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ items }),
-    }),
+    }, { timeoutMs: LONG_REQUEST_TIMEOUT_MS }),
 
   /** 元数据完整度分布（force=true 绕过 library 的 5 秒缓存重算） */
   metadataScore: (force = false) =>
@@ -4862,6 +4881,7 @@ export const api = {
     request<{ ok: boolean; id: string; count: number }>(
       `/api/libraries/${encodeURIComponent(id)}/scan`,
       { method: 'POST' },
+      { timeoutMs: LONG_REQUEST_TIMEOUT_MS },
     ),
 
   // ---------- 每库覆盖 + 同名冲突（第 13 期）----------
@@ -5231,7 +5251,10 @@ export const api = {
 
   /** 重建书库索引（清缓存 + 强制重扫 OUTPUT_DIR；只读操作，不动任何文件） */
   rebuildLibrary: () =>
-    request<{ ok: boolean; books: number }>('/api/maintenance/library/rebuild', { method: 'POST' }),
+    request<{ ok: boolean; books: number }>('/api/maintenance/library/rebuild', { method: 'POST' }, {
+      // 整库重建：几千本的 EPUB/CBZ 拼装，必然超过默认 15 秒
+      timeoutMs: LONG_REQUEST_TIMEOUT_MS,
+    }),
 
   /** 清空回收站 —— **真删，不可恢复**（第 81 期：同批清掉回收台账，`ledger_cleared` 是条数） */
   clearRecycle: () =>

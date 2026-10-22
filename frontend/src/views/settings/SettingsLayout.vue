@@ -98,6 +98,20 @@ function discardAll(): void {
           </div>
         </Transition>
 
+        <!-- `config.yaml` 读坏的红条（第 141 期）：下面的表单展示的是**默认值**，
+             不说明白，用户会以为自己保存的路径/凭据还在。 -->
+        <div
+          v-if="cfgDraft.configFileError.value"
+          class="mb-3 flex items-start gap-2 rounded-[10px] border border-destructive/30 bg-destructive/10 px-3.5 py-2 text-[12px]"
+          role="alert"
+        >
+          <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" aria-hidden="true" />
+          <div class="min-w-0">
+            <div class="font-medium text-foreground">config.yaml 读不出来，当前按默认值运行</div>
+            <div class="break-words text-muted-foreground">{{ cfgDraft.configFileError.value }}</div>
+          </div>
+        </div>
+
         <RouterView />
       </div>
     </div>

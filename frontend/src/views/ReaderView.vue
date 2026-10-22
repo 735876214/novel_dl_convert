@@ -1421,8 +1421,19 @@ async function saveProgress(): Promise<void> {
     if (typeof r?.updated_at === 'number') ownWriteAt.value = r.updated_at
     // 第 61 期：把刚写下的进度**就地**同步给书库 store —— 返回首页时「继续阅读」立刻是新值
     library.patchProgress(bookId.value, overallPercent.value, r?.updated_at)
-  } catch {
-    /* 离线或未登录时静默 */
+    if (progressSaveFailed.value) {
+      progressSaveFailed.value = 0
+      ui.toast('阅读进度已恢复保存')
+    }
+  } catch (e) {
+    // ⚠️ 第 141 期：不再静默。此前这里是一句 `catch {}` —— 离线、令牌过期、库只读、
+    // 磁盘满，全都表现为「什么都没发生」：用户读了两个小时，关掉页面进度没了，
+    // 而界面从头到尾没说过一句话。现在**第一次失败就提示**（之后按次数静默，
+    // 免得每 3 秒一条 toast），恢复时再说一句「已恢复保存」。
+    progressSaveFailed.value += 1
+    if (progressSaveFailed.value === 1) {
+      ui.toast(`阅读进度没能保存：${apiErrorMessage(e, '写入失败')}（请检查登录状态或稍后重试）`)
+    }
   }
 }
 
@@ -1432,6 +1443,8 @@ async function saveProgress(): Promise<void> {
 
 /** 本机已知的最新写入时间（载入时读到的 / 每次 PUT 回来的） */
 const ownWriteAt = ref(0)
+/** 进度写入的**连续失败次数**（0 = 正常）。只用来决定「第一次失败提示、恢复时提示」 */
+const progressSaveFailed = ref(0)
 /** 待处理的「别的设备进度」；null = 没有提示 */
 const remoteNote = ref<{ locator: number; percent: number; offset?: number } | null>(null)
 /** 轮询间隔：8s（本地单用户场景，够快又不至于打扰服务端） */

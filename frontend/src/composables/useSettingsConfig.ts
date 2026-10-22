@@ -27,6 +27,8 @@ const overridden = ref<string[]>([])
 const saving = ref(false)
 const loading = ref(false)
 const loadError = ref('')
+/** `config.yaml` 读坏的诊断（空 = 正常）。设置页顶部据此报红条（第 141 期） */
+const configFileError = ref('')
 
 /**
  * 服务端配置的**深拷贝基线**（每次加载/保存成功后刷新）。
@@ -92,6 +94,11 @@ export function useSettingsConfig() {
       try {
         const r = await api.getConfig()
         cfg.value = r.config
+        // `config.yaml` 读坏的诊断（第 141 期）：后端在 `config` 里带 `_config_error`。
+        // 不提示的话，设置页展示的就是**默认值**，运维以为自己的目录配置还在。
+        configFileError.value = String(
+          (r.config as unknown as Record<string, unknown> | undefined)?._config_error ?? '',
+        )
         baseline.value = clone(r.config)
         overridden.value = r.overridden ?? []
         files.value = {
@@ -207,6 +214,7 @@ export function useSettingsConfig() {
     saving,
     loading,
     loadError,
+    configFileError,
     // 未保存改动（草稿 vs 基线）
     dirtySections,
     hasDirty,
