@@ -4,12 +4,14 @@ import type { IconName } from '@/lib/icons'
  * 设置页分区注册表 —— 上游（BookOrbit）设置页信息架构的单一数据源。
  *
  * 对齐依据：`docs/bookorbit/bookorbit-settings-inventory.md`（线上实例逐页采集）。
- * 结构整体与上游一致：6 个分组 / 36 个叶子页，路由为 `/settings/<path>`。
+ * 结构整体与上游一致：6 个分组 / 37 个叶子页，路由为 `/settings/<path>`（**不带分组段**）。
  * 上游 41 页里 **30 页有落点**，另 11 页经**第 49 期裁决已移除**（Icons / Language /
  * Privacy & Sharing / Restrictions / Kobo / Email / Users / Account Activity /
  * Magic Links / OIDC·SSO / Requests）—— 均为单用户本地库下**永无对象**或**已决策不做**
  * 的页；逐页理由与上游结构对照保留在 `docs/bookorbit/bookorbit-settings-inventory.md`。
- * 本项目补充 6 页（`ext` 组 5 页 + `komga`，标 `own`）。
+ * 本项目补充 7 页（`ext` 组 6 页 + `komga`，**页级**标 `own`）。
+ * ⚠️ `own` 只认**页级**（读者：`SettingsSidebar.vue` 的 `pg.own`、`SettingsLayout.vue` 的
+ * `currentPage.own`）；分组上的同名字段是死字段，第 143 期已删。
  *
  * 命名约定（迁移要点 2：不自创中文名）：
  *   - `label` = 上游英文原名，**作为对齐基准，不翻译**
@@ -396,7 +398,6 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
     label: 'EXTENSIONS',
     zh: '本项目扩展',
     icon: 'wrench',
-    own: true,
     pages: [
       p('ext/conversion', 'Conversion', '转换', 'ready', {
         upstream: {

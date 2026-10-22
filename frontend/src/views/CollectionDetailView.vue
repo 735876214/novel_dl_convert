@@ -10,11 +10,13 @@ import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import { api, type CollectionDetail } from '@/lib/api'
 import { useCollectionsStore } from '@/stores/collections'
+import { useUiStore } from '@/stores/ui'
 
 /** 收藏夹详情：夹内书目，可移出或整夹删除。 */
 const route = useRoute()
 const router = useRouter()
 const collections = useCollectionsStore()
+const ui = useUiStore()
 
 const cid = computed(() => Number(route.params.id))
 const detail = ref<CollectionDetail | null>(null)
@@ -40,8 +42,11 @@ watch(cid, load)
 async function remove(bookId: string): Promise<void> {
   try {
     await api.removeFromCollection(cid.value, bookId)
-  } catch {
-    /* ignore */
+  } catch (e) {
+    // ⚠️ 第 142 期：失败必须说话，且**不要**接着 `load()` 假装刷新成功 ——
+    // 静默忽略时用户看到的是「点了没反应」，分不清是没删掉还是列表没刷新
+    ui.toast(e instanceof Error ? e.message : '移出失败')
+    return
   }
   await load()
   await collections.load(true)
@@ -52,8 +57,10 @@ async function removeCollection(): Promise<void> {
   if (!window.confirm(`删除收藏夹「${name}」？（仅删除收藏，不影响书籍文件）`)) return
   try {
     await collections.remove(cid.value)
-  } catch {
-    /* ignore */
+  } catch (e) {
+    // 删失败**不能**导航走：否则用户回到列表看见夹子还在，只能猜「是没删成功还是列表没刷新」
+    ui.toast(e instanceof Error ? e.message : '删除失败')
+    return
   }
   router.push('/collections')
 }

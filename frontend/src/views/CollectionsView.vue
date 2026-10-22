@@ -10,10 +10,12 @@ import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import { localDate } from '@/lib/format'
 import { useCollectionsStore } from '@/stores/collections'
+import { useUiStore } from '@/stores/ui'
 
 /** 收藏夹总览：自建收藏夹的增删改与进入。 */
 const router = useRouter()
 const collections = useCollectionsStore()
+const ui = useUiStore()
 
 const draft = ref('')
 const error = ref('')
@@ -50,8 +52,9 @@ async function remove(id: number, name: string): Promise<void> {
   if (!window.confirm(`删除收藏夹「${name}」？（仅删除收藏，不影响书籍文件）`)) return
   try {
     await collections.remove(id)
-  } catch {
-    /* ignore */
+  } catch (e) {
+    // 第 142 期：删失败原先静默 → 行仍在原地，用户以为界面卡住了
+    ui.toast(e instanceof Error ? e.message : '删除失败')
   }
 }
 

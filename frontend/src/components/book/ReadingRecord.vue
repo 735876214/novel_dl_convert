@@ -4,7 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import { api, type BookReview, type ReadingStatus } from '@/lib/api'
-import { localDate } from '@/lib/format'
+import { localDate, localDateToEpoch } from '@/lib/format'
 import { READ_STATUS_OPTIONS } from '@/lib/readingThresholds'
 import { useUiStore } from '@/stores/ui'
 
@@ -16,7 +16,14 @@ import { useUiStore } from '@/stores/ui'
  *     回到 unread 全清），这里只提供**手工修正**入口 —— 历史日期没法从进度里推断；
  *   · 有了真实状态字段，「搁置 / 弃读」这类进度表达不了的状态才成为可能。
  */
-const props = defineProps<{ bookId: string }>()
+const props = defineProps<{
+  bookId: string
+  /**
+   * 这个标签页是否正被看到（第 142 期，理由见 `MetadataEditor` 同名字段）：
+   * `v-show` 常驻 ⇒ 没有闸门时每次进详情页都白拉 `bookStatus` + `bookReview` 两个接口。
+   */
+  active: boolean
+}>()
 const emit = defineEmits<{ changed: [] }>()
 
 const ui = useUiStore()
@@ -40,9 +47,9 @@ function toInput(ts: number): string {
   return localDate(new Date(ts * 1000))
 }
 function fromInput(s: string): number {
-  if (!s) return 0
-  const t = Date.parse(s) / 1000
-  return Number.isFinite(t) ? t : 0
+  // 本地当日零点（第 142 期）：`Date.parse('YYYY-MM-DD')` 是 UTC 午夜，UTC 以西的时区
+  // 会把「开始日期」自己退一天。
+  return localDateToEpoch(s)
 }
 
 const started = ref('')
@@ -66,8 +73,14 @@ async function load(): Promise<void> {
   loading.value = false
 }
 
-onMounted(load)
-watch(() => props.bookId, load)
+watch(
+  () => [props.active, props.bookId] as const,
+  ([active]) => {
+    if (!active) return
+    void load()
+  },
+  { immediate: true },
+)
 
 // ---- 阅读尝试 / 重读 ----
 // 第 43 期在这里；**第 63 期 3/6 整块搬到了「阅读日志」标签**（`detail/ReadingLogTab.vue`）：

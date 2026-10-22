@@ -109,6 +109,11 @@ function mbOf(bytes: number | undefined): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+/** 孤儿扫描 / 回收站列举的失败原因（第 142 期）：此前 `catch {}` 一律吞掉，界面永远停在
+ * 「加载中…」—— 用户看到的是一个永远转不完的占位，而不是「这块读不出来，去查后端日志」。 */
+const orphanError = ref('')
+const recycleError = ref('')
+
 async function refresh(): Promise<void> {
   try {
     info.value = await api.maintenance()
@@ -117,13 +122,16 @@ async function refresh(): Promise<void> {
   }
   try {
     orphans.value = await api.orphans()
-  } catch {
-    // 孤儿扫描失败不阻塞整页：它只是维护页里的其中一块
+    orphanError.value = ''
+  } catch (e) {
+    // 孤儿扫描失败不阻塞整页：它只是维护页里的其中一块 —— 但必须说出来（第 142 期）
+    orphanError.value = e instanceof Error ? e.message : '孤儿扫描失败'
   }
   try {
     recycle.value = await api.recycleList()
-  } catch {
-    // 回收站列举失败同理：不阻塞整页（下面那块会显示「加载中…」）
+    recycleError.value = ''
+  } catch (e) {
+    recycleError.value = e instanceof Error ? e.message : '回收站列举失败'
   }
 }
 
@@ -378,6 +386,9 @@ onMounted(async () => {
           </div>
         </div>
         <p v-else-if="orphans" class="mt-2 text-[11.5px] text-success">没有孤儿记录</p>
+        <p v-else-if="orphanError" class="mt-2 text-[11.5px] text-danger">
+          孤儿记录读不出来：{{ orphanError }}
+        </p>
       </div>
 
       <div class="flex flex-wrap items-center gap-3 border-t border-border px-4 py-3">
@@ -450,6 +461,9 @@ onMounted(async () => {
           </p>
         </div>
         <p v-else-if="recycle" class="mt-2 text-[11.5px] text-success">没有可还原的台账条目</p>
+        <p v-else-if="recycleError" class="mt-2 text-[11.5px] text-danger">
+          回收站读不出来：{{ recycleError }}
+        </p>
         <p v-else class="mt-2 text-[11.5px] text-muted-foreground">加载中…</p>
       </div>
 

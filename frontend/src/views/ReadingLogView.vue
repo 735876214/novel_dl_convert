@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
@@ -68,11 +68,34 @@ const form = ref({
   start: '',
 })
 
+/**
+ * 「现在 − 时长」→ **同时**回填 `date` 与 `start`（第 142 期）。
+ *
+ * ⚠️ 这两个字段以前只在开表单那一刻算一次，且只算 `start`：
+ *   ① 开表单（默认 30 分钟）后把时长改成 2 小时 —— `start` 不动，结束时间落到未来，
+ *      后端 `ended > now + 60` 一律 400「不能补录未来的会话」，而「补录较长一段」正是这个表单的主用途；
+ *   ② 00:10 补录跨午夜的一段 —— `date` 是今天、`start` 是昨天 23:40，后端按「今天 23:40」合成 ⇒ 同样 400。
+ * 现在两者都由**开始时刻**推出，跨午夜时 `date` 自动退一天。
+ */
+function syncStartFromMinutes(): void {
+  const minutes = Math.max(1, Number(form.value.minutes) || 0)
+  const started = new Date(Date.now() - minutes * 60_000)
+  const p2 = (n: number): string => String(n).padStart(2, '0')
+  form.value.date = localDate(started)
+  form.value.start = `${p2(started.getHours())}:${p2(started.getMinutes())}`
+}
+
+// 时长一改就重算（否则 `start` 停留在旧时长上，见上面那条注释）
+watch(
+  () => form.value.minutes,
+  () => {
+    if (formOpen.value) syncStartFromMinutes()
+  },
+)
+
 function openForm(): void {
   formOpen.value = !formOpen.value
-  if (formOpen.value) {
-    form.value.start = new Date(Date.now() - form.value.minutes * 60000).toTimeString().slice(0, 5)
-  }
+  if (formOpen.value) syncStartFromMinutes()
 }
 
 async function submitSession(): Promise<void> {

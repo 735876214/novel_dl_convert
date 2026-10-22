@@ -90,6 +90,19 @@ export function localDate(d: Date = new Date()): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
 
+/**
+ * 本地日期串 `YYYY-MM-DD` → 本地**当日零点**的 epoch 秒（第 142 期）。
+ *
+ * ⚠️ 别用 `Date.parse('2026-10-22')`：按 ECMAScript 规范它是 **UTC 午夜**，在 UTC 以西的
+ * 时区（NAS 常见 `TZ=America/New_York`）会退回前一天 —— `ReadingRecord` 的「开始日期」
+ * 存下去再读回来就自己退一天。与 `localDate` 同一把尺子：显用本地、存也用本地。
+ */
+export function localDateToEpoch(s: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || '').trim())
+  if (!m) return 0
+  return Math.floor(new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() / 1000)
+}
+
 /** 本地月串 `YYYY-MM`（月历分组用，与 `localDate` 同一时区口径） */
 export function localMonth(d: Date = new Date()): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`

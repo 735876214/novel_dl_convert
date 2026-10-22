@@ -73,7 +73,7 @@ function makeMeta(): BookMetadata {
 }
 
 async function mountEditor(): Promise<VueWrapper> {
-  const w = mount(MetadataEditor, { props: { bookId: BOOK_ID }, global: { plugins: [createPinia()] } })
+  const w = mount(MetadataEditor, { props: { bookId: BOOK_ID, active: true }, global: { plugins: [createPinia()] } })
   await flushPromises()
   return w
 }

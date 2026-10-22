@@ -159,7 +159,14 @@ const similarExpanded = ref(false)
 function loadSimilar(id: string): void {
   similar.value = []
   similarExpanded.value = false
-  api.similarBooks(id, SIMILAR_PREVIEW).then((r) => (similar.value = r.items)).catch(() => {})
+  // ⚠️ 回调里必须再比对一次「当前还是不是这本书」（第 142 期）：换书时前一次的响应
+  // 后到，会把 A 的相似书写进 B 的页面（本页取色 watch 早就这么防了，这里漏了）。
+  api
+    .similarBooks(id, SIMILAR_PREVIEW)
+    .then((r) => {
+      if (bookId.value === id) similar.value = r.items
+    })
+    .catch(() => {})
 }
 /** 展开到上限。拉失败就保持现状 —— 不把 preview 的 6 条清掉假装展开过 */
 async function expandSimilar(): Promise<void> {
@@ -259,27 +266,43 @@ async function retryDetail(): Promise<void> {
   loading.value = false
 }
 
+/**
+ * 每次 `loadAll()` 自增的序号：异步回调回来时只有「仍是最新一次」才允许写 ref（第 142 期）。
+ *
+ * ⚠️ 原先的写法有两处竞态：① 没有序号闸门，`/book/:id` 复用组件时上一次的响应会把
+ * 新书的 `detail / progress / annotations` 覆盖掉；② `bookId.value` 是在 `await` **之后**
+ * 才读的（第一次 `await` 之后用户已经换书，读到的是**新 id**，于是 A 的请求结果被当成 B 的）。
+ * 所以这里：入口先固定 id，每个 await 之后比对 `seq === loadSeq`。
+ */
+let loadSeq = 0
+
 /** 取这一页的全部数据。**换书时也要重跑**（见下面那个 watch） */
 async function loadAll(): Promise<void> {
+  const id = bookId.value
+  const seq = ++loadSeq
   loading.value = true
   // 库实体是面包屑与版本信息「书库」行的数据源；深链进来时它还没加载过
   // （只有去过书库页 / 设置页才会加载），所以这里补一次（幂等，已加载就直接返回）
   library.loadLibraries()
   await library.loadBooks()
+  if (seq !== loadSeq) return
   collections.load()
-  detail.value = await library.getBookDetail(bookId.value)
+  const d = await library.getBookDetail(id)
+  if (seq !== loadSeq) return
+  detail.value = d
   loading.value = false
-  if (detail.value) {
-    try {
-      progress.value = await api.getProgress(bookId.value)
-    } catch {
-      /* 未登录或后端不可用时静默降级 */
-    }
-    try {
-      annotations.value = (await api.listAnnotations(bookId.value)).items
-    } catch {
-      /* ignore */
-    }
+  if (!d) return
+  try {
+    const p = await api.getProgress(id)
+    if (seq === loadSeq) progress.value = p
+  } catch {
+    /* 未登录或后端不可用时静默降级 */
+  }
+  try {
+    const a = (await api.listAnnotations(id)).items
+    if (seq === loadSeq) annotations.value = a
+  } catch {
+    /* ignore */
   }
 }
 
@@ -385,7 +408,7 @@ watch(bookId, (id) => {
     <AnnotationsTab v-show="tab === 'annotations'" :annotations="annotations" @go="goToAnnotation" />
 
     <div v-show="tab === 'metadata'">
-      <MetadataEditor :book-id="bookId" @saved="onMetaSaved" />
+      <MetadataEditor :book-id="bookId" :active="tab === 'metadata'" @saved="onMetaSaved" />
     </div>
 
     <!--
@@ -406,7 +429,7 @@ watch(bookId, (id) => {
 
     <!-- 我的记录（状态 / 日期 / 评分 / 书评） -->
     <div v-show="tab === 'record'">
-      <ReadingRecord :book-id="bookId" @changed="onMetaSaved" />
+      <ReadingRecord :book-id="bookId" :active="tab === 'record'" @changed="onMetaSaved" />
     </div>
   </div>
 

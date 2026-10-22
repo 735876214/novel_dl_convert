@@ -30,7 +30,17 @@ import { useUiStore } from '@/stores/ui'
  * 否则用户会以为把书改脏了。第 22 期起**所有格式都可编辑**（原先限 EPUB 的
  * 理由是「兜底原值来自 OPF」，改动只落库后这条前提已不成立）。
  */
-const props = defineProps<{ bookId: string }>()
+const props = defineProps<{
+  bookId: string
+  /**
+   * 这个标签页是否正被看到（第 142 期）。
+   *
+   * ⚠️ 详情页的标签是 `v-show` 常驻的 ⇒ 没有这道闸门时，**每次**进入任何书籍详情页都会
+   * 无条件拉一次元数据（`api.bookMetadata`），失败还会在「概览」页弹一句「元数据加载失败」——
+   * 一次与用户操作无关的假告警。同页的 `FilesTab` / `ReadingLogTab` 早就是这个形状了。
+   */
+  active: boolean
+}>()
 const emit = defineEmits<{ saved: [] }>()
 
 /** 封面锁的字段键（后端 `db.LOCK_COVER`）——不在 BookMetadataFields 里 */
@@ -87,8 +97,15 @@ async function load(): Promise<void> {
   loading.value = false
 }
 
-onMounted(load)
-watch(() => props.bookId, load)
+// 「第一次被看到」才取数：标签没打开过就不请求（`immediate` 让默认标签也能立刻加载）
+watch(
+  () => [props.active, props.bookId] as const,
+  ([active]) => {
+    if (!active) return
+    void load()
+  },
+  { immediate: true },
+)
 
 const editable = computed(() => meta.value?.editable === true)
 

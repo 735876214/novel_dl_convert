@@ -72,9 +72,13 @@ async function run(key: string, label: string, fn: () => Promise<string>): Promi
 }
 
 function checkNow(): Promise<void> {
+  // ⚠️ 第 142 期：`updateCheck()` 的返回值里带 `error`（后端 GitHub 不可达时 HTTP 仍 200，
+  // 只是 `error="check_failed"`）。此前这里**丢弃返回值**、无条件报「已检查远端版本」，
+  // 于是「检查失败」和「已是最新」在界面上长得一模一样，用户从此不再检查。
   return run('check', '检查', async () => {
-    await api.updateCheck()
-    return '已检查远端版本'
+    const s = await api.updateCheck()
+    if (s.error) throw new Error(`检查失败：${s.error}（可能是网络或代理不通）`)
+    return s.latest ? `已检查远端版本：最新 ${s.latest}` : '已检查远端版本（远端未给出可读版本号）'
   })
 }
 

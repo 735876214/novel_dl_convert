@@ -51,7 +51,14 @@ async function load(): Promise<void> {
 }
 onMounted(load)
 
-async function save(): Promise<void> {
+/**
+ * 写一次 KOReader 配置。**返回是否真的写成功了**（第 142 期）。
+ *
+ * ⚠️ 这里曾有两条静默缺陷：`save()` 自己吞掉异常（后端 400「开启前请先设置同步密码」），
+ * 而 `toggle()` 调完它**无条件**再 toast 一句「已开启进度互通」—— 而 toast 是**单槽位**
+ * （`stores/ui.ts` 后一条覆盖前一条）⇒ 用户只看得到成功，开关还停在错的状态上。
+ */
+async function save(): Promise<boolean> {
   busy.value = true
   try {
     await api.saveKoreader({
@@ -61,19 +68,30 @@ async function save(): Promise<void> {
     })
     password.value = ''
     await load()
-    ui.toast('已保存')
+    return true
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '保存失败')
+    return false
   } finally {
     busy.value = false
   }
 }
 
+/** 「保存」按钮：成功才报成功（失败文案由 `save()` 自己弹，且是唯一一条）。 */
+async function saveManual(): Promise<void> {
+  if (await save()) ui.toast('已保存')
+}
+
 async function toggle(): Promise<void> {
   if (!st.value) return
-  st.value.enabled = !st.value.enabled
-  await save()
-  ui.toast(st.value.enabled ? '已开启进度互通' : '已关闭')
+  const want = !st.value.enabled
+  // 乐观切换，失败回滚：否则界面显示「开」而后端是「关」，刷新才暴露
+  st.value.enabled = want
+  if (!(await save())) {
+    st.value.enabled = !want
+    return
+  }
+  ui.toast(want ? '已开启进度互通' : '已关闭')
 }
 
 async function scan(): Promise<void> {
@@ -171,7 +189,7 @@ async function copyEndpoint(): Promise<void> {
           </label>
         </div>
         <div class="mt-2 flex items-center gap-2">
-          <Button size="sm" variant="primary" :disabled="busy" @click="save">保存</Button>
+          <Button size="sm" variant="primary" :disabled="busy" @click="saveManual">保存</Button>
           <span v-if="st?.has_key" class="text-[11.5px] text-muted-foreground">已设置同步密钥（存的是密码的 MD5）</span>
         </div>
       </div>
