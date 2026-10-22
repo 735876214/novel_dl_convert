@@ -20,6 +20,7 @@
 import json
 import logging
 import os
+import stat
 import socket
 import threading
 import time
@@ -107,9 +108,61 @@ def is_newer(remote: str, local: str) -> bool:
         return False
 
 
+#: 探活结果的缓存时长：`/health` 与 `/api/update/status` 都会被高频轮询，
+#: 每次真发一次 unix socket 请求没必要；60 秒足够（挂载变了重启进程就重探）。
+_PROBE_TTL = 60.0
+_probe_cache: "tuple[float, bool, str]" = (0.0, False, "")
+
+
+def updater_probe(*, force: bool = False) -> "tuple[bool, str]":
+    """docker.sock 到底**能不能用** —— ``(可用, 不可用原因)``（第 141 期）。
+
+    ⚠️ 以前是 ``os.path.exists``：socket 在**不等于**能用。宿主上常见三种「在但没用」：
+    ① 容器里没有访问权限（``Errno 13``）；② 挂成了目录（``compose`` 里路径写错）；
+    ③ 宿主 docker 用的是另一个 socket 路径。三种情况下界面都显示「一键更新可用」，
+    用户点下去才发现不行 —— 而那时已经进入「拉镜像」流程。
+    这里真发一次 ``GET /_ping``（unix socket，1.5 秒超时），把失败原因带回去给界面。
+    """
+    global _probe_cache
+    now = time.time()
+    ts, ok, why = _probe_cache
+    if not force and now - ts < _PROBE_TTL:
+        return ok, why
+    ok, why = False, ""
+    if not os.path.exists(DOCKER_SOCK):
+        why = f"未挂载 {DOCKER_SOCK}"
+    else:
+        try:
+            import httpx
+            transport = httpx.HTTPTransport(uds=DOCKER_SOCK)
+            with httpx.Client(transport=transport, timeout=1.5) as c:
+                r = c.get("http://docker/_ping")
+            ok = r.status_code == 200 and r.text.strip() == "OK"
+            if not ok:
+                why = f"/_ping 回 {r.status_code}"
+        except Exception as e:                       # noqa: BLE001 —— 探活失败就是不可用
+            why = f"{e.__class__.__name__}: {e}"
+    if not ok:
+        logging.getLogger("novelforge").info("一键更新不可用：%s", why)
+    _probe_cache = (now, ok, why)
+    return ok, why
+
+
 def updater_available() -> bool:
-    """是否挂了 docker.sock（默认不挂）。"""
-    return os.path.exists(DOCKER_SOCK)
+    """一键更新**有没有通道**：socket 在、且它确实是 socket（不是写错路径挂成了目录）。
+
+    ⚠️ 第 141 期的判据分工（别再合成一个）：
+    * 本函数 = 「通道在不在」—— 只做一次 `stat`，不联网。`apply_update()` 用它：
+      拉镜像失败会如实回 `pull_failed`，不该因为一次探活抖动就整条路被拦住。
+    * `updater_probe()` = 「通道通不通」—— 真发 `/_ping`，结果给**界面**显示
+      「挂着但用不了」的原因（没权限 / 挂成目录 / 另一个 socket）。
+    把两者合成一个，就会重演第 141 期前的老毛病：界面说「可用」而点了必失；
+    反过来让 `apply_update` 依赖探活，则会把「宿主恰好慢半秒」变成「更新不可用」。
+    """
+    try:
+        return stat.S_ISSOCK(os.stat(DOCKER_SOCK).st_mode)
+    except OSError:
+        return False
 
 
 def _update_cfg() -> "dict":
@@ -205,6 +258,9 @@ def status(local_version: str = "") -> "dict":
             "checked_at": _state["checked_at"],
             "url": _state["url"],
             "updater_available": updater_available(),
+            # 不可用时把**原因**一并回显（第 141 期）：界面要能说「挂着但没权限」
+            # 而不是永远一句「未挂载 docker.sock」
+            "updater_reason": updater_probe()[1],
             "error": _state["error"],
             # 第 80 期：把开关如实回显给前端（横幅要能说明「已开启自动更新」）。
             "check_enabled": bool(ucfg.get("check_enabled", True)),

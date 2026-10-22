@@ -39,6 +39,9 @@ def invalidate(library_id: str = "") -> None:
             _cache.clear()
         else:
             _cache.pop(str(library_id), None)
+            # ⚠️ 键 ``""`` 是**跨库**聚合（侧栏不传 library_id），任何一个库变了它都过期：
+            # 只丢该库的键，侧栏（跨库）仍会显示旧数（第 139 期 H3）。
+            _cache.pop("", None)
 
 
 def _compute(lid: str) -> dict:

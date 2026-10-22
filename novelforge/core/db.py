@@ -9,6 +9,7 @@
   custom_field_defs（自定义字段定义）+ book_custom_values（按书的值）。
 """
 import ast
+import contextlib
 import hashlib
 import logging
 import pathlib
@@ -18,6 +19,8 @@ import json
 import time
 import uuid
 from datetime import datetime, timedelta
+
+from . import numbers
 
 try:  # 时区归一（Python 3.9+ 标准库；极老环境或缺 tzdata 时回落本地时）
     from zoneinfo import ZoneInfo
@@ -1029,13 +1032,6 @@ def init():
             # 唯一索引让「同一段会话的心跳」能 upsert 到同一行而不是插 240 行。
             # ⚠️ 必须建在回填**之后**：PG 上对全为 '' 的列建唯一索引会直接失败，
             # 而这段跑在启动路径上 —— 失败＝起不来。
-            # 外层 try 兜住「老库上次中断留下半成品」：宁可少一条索引也不能让 init() 抛
-            #（与上面 DROP COLUMN 同一种「尽力而为」处理）。
-            try:
-                c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_session_uid "
-                          "ON reading_sessions(book_id, session_uid)")
-            except Exception:
-                pass
         if scols and "start_locator" not in scols:
             c.execute("ALTER TABLE reading_sessions ADD COLUMN start_locator INTEGER NOT NULL DEFAULT -1")
         if scols and "end_locator" not in scols:
@@ -1046,6 +1042,21 @@ def init():
             c.execute("ALTER TABLE reading_sessions ADD COLUMN end_percent REAL NOT NULL DEFAULT -1")
         if scols and "file_rel" not in scols:
             c.execute("ALTER TABLE reading_sessions ADD COLUMN file_rel TEXT NOT NULL DEFAULT ''")
+        if scols:
+            # ⚠️ 第 140 期：唯一索引**独立成幂等段**，不再嵌在「session_uid 列不存在」里。
+            # 列一旦补上，那段就再也不会执行，而 `upsert_session` 的
+            # `ON CONFLICT(book_id, session_uid)` **硬依赖**这个索引（见本函数上方注释）。
+            # 索引哪怕只失败一次（老库半成品 / PG 上残留全 '' 行），此后每次 30s 心跳的
+            # upsert 都因「no unique or exclusion constraint matching」失败 ⇒ 阅读时长
+            # 整段静默不落库；而原来的 `except: pass` 连这一条线索都吞了。
+            # 「老库半成品」仍然不许让 init() 抛（与 DROP COLUMN 同一种「尽力而为」），
+            # 但失败必须有落笔。
+            try:
+                c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_session_uid "
+                          "ON reading_sessions(book_id, session_uid)")
+            except Exception:
+                logging.getLogger("novelforge").exception(
+                    "阅读会话的唯一索引没建成：心跳 upsert 会持续失败（阅读时长不落库）")
         if scols and "source" not in scols:
             # 来源（web / audio / koreader …）。存量行回落**空串 = 未知**，不猜 'web'：
             # 改造前有声书播放器与网页阅读器走的是同一个上报接口，事后分不出来是哪一边。
@@ -1720,17 +1731,17 @@ def purge_bookmark(book_id: str, bookmark_id: int) -> int:
 # ---------------- 收藏夹 ----------------
 
 def list_collections() -> list:
+    """收藏夹列表（**只有登记信息**）。
+
+    ⚠️ 第 139 期删掉了这里原来的两个子查询（``count`` / ``first_book_id``）：
+    它们是「列表里还有几本」的**第二份实现**，与详情页的「解析不到就丢」永远对不上
+    （删书 / 移除书库之后侧栏 5、点进去 4）。现在成员与计数都由
+    ``collection_book_ids_all()`` + ``catalog.alive_ids()`` 一处算出，见
+    ``server.api_collections``。
+    """
     c = _connect()
     rows = c.execute(
-        """SELECT c.id, c.name, c.created_at, c.updated_at,
-                  (SELECT COUNT(*) FROM collection_items i WHERE i.collection_id = c.id) AS count,
-                  -- 第 62 期：原为 `ORDER BY i.rowid`（SQLite 的隐式插入序）。
-                  -- 本表的 id 就是 `INTEGER PRIMARY KEY`，在 SQLite 里**与 rowid
-                  -- 同值**，所以改成 i.id 两边语义完全一致；而 PG 根本没有 rowid，
-                  -- 照搬会在整段 SQL 上抛 `column i.rowid does not exist`。
-                  (SELECT book_id FROM collection_items i
-                    WHERE i.collection_id = c.id ORDER BY i.id LIMIT 1) AS first_book_id
-           FROM collections c ORDER BY c.created_at"""
+        "SELECT id, name, created_at, updated_at FROM collections ORDER BY created_at"
     ).fetchall()
     return [dict(r) for r in rows]
 
@@ -1819,6 +1830,23 @@ def collection_book_ids(cid: int) -> list:
         (cid,),
     ).fetchall()
     return [r["book_id"] for r in rows]
+
+
+def collection_book_ids_all() -> dict:
+    """全部收藏夹的成员 id，按 ``collection_id`` 分组、按加入序（第 139 期）。
+
+    给「收藏夹列表的计数」用：计数与详情页必须走**同一批成员**，再交给
+    ``catalog.alive_ids`` 判哪些还活着 —— 此前计数是采集处额外的 ``COUNT(*)``，
+    两套判据必然对不上（侧栏 5、点进去 4）。
+    """
+    c = _connect()
+    rows = c.execute(
+        "SELECT collection_id, book_id FROM collection_items ORDER BY collection_id, id"
+    ).fetchall()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(int(r["collection_id"]), []).append(r["book_id"])
+    return out
 
 
 def add_book_to_collection(cid: int, book_id: str):
@@ -2104,12 +2132,29 @@ def reading_totals(book_ids: set | None = None) -> dict:
     「这本书属于哪个库」判定，故由调用方（``core/stats.py``）传入该书库的书 id 集合。
     """
     c = _connect()
-    rows = c.execute("SELECT book_id, seconds FROM reading_sessions").fetchall()
-    picked = rows if book_ids is None else [r for r in rows if r["book_id"] in book_ids]
-    return {
-        "seconds": float(sum(float(r["seconds"]) for r in picked)),
-        "sessions": len(picked),
-    }
+    if book_ids is None:
+        row = c.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(seconds), 0) AS s FROM reading_sessions"
+        ).fetchone()
+        return {"seconds": float(row["s"] or 0), "sessions": int(row["n"] or 0)}
+    # ⚠️ 第 140 期：按库统计改在 SQL 里过滤。此前是「整表拉进内存再 Python 过滤」——
+    # `/api/stats` 每次都全表扫 + 全量传输（PG 上尤其明显），而 `idx_session_book`
+    # 这条索引完全用不上。分块 IN（SQLite 的变量上限 999）与 `_hit_of` 同一范式。
+    ids = [str(b) for b in book_ids]
+    if not ids:
+        return {"seconds": 0.0, "sessions": 0}
+    seconds = 0.0
+    sessions = 0
+    for i in range(0, len(ids), 900):
+        part = ids[i:i + 900]
+        q = ",".join(["?"] * len(part))
+        row = c.execute(
+            f"SELECT COUNT(*) AS n, COALESCE(SUM(seconds), 0) AS s "
+            f"FROM reading_sessions WHERE book_id IN ({q})", part
+        ).fetchone()
+        sessions += int(row["n"] or 0)
+        seconds += float(row["s"] or 0)
+    return {"seconds": float(seconds), "sessions": sessions}
 
 
 def local_day(ts) -> "datetime.date":
@@ -2781,6 +2826,14 @@ ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
                  "book_custom_values", "collection_items", "reading_sessions",
                  "reading_attempts", "meta_override", "meta_online", "meta_cover",
                  "book_embeddings", "book_origins", "store_toc", "toc_map",
+                 # 第 140 期：``ratings`` / ``reading_status`` 补进清单。
+                 # 它们此前**不在**这里的理由写着「删书时会主动清理」—— 那是错的：
+                 # `api_delete_book` 的 docstring 明写「**不清关联数据**（含评分与阅读状态）」，
+                 # 全仓只有三个显式端点调 ``clear_rating``、``DELETE FROM reading_status``
+                 # 只在 ``reset_reading_state`` 里出现 ⇒ 删书 / 文件消失 / 移除书库三条路径
+                 # 都不清。少了这两张表，``book_id_refs`` 看不见它们、维护页也清不掉，
+                 # 「评过几星、读没读过」就永久占库（而库里早已没有那本书）。
+                 "ratings", "reading_status",
                  # 第 93 期：源绑定同样是「书走不到就再也看不见、却一直占着库」的行。
                  # 与 store_toc / toc_map 的区别只在于「重建成本」——它们重取一次就有，
                  # 绑定得用户重新选一次源 —— 但**可清理**这件事与成本无关。
@@ -2831,9 +2884,10 @@ def delete_orphans(orphans: dict) -> dict:
 # 不搬就变成一堆走不到的孤儿行（见上方 ORPHAN_TABLES）。
 # 所以**凡是会改变 basename 的移动，都要把关联数据搬过去**。
 
-#: 需要跟着 book_id 迁移的表（与 ORPHAN_TABLES 相比多出 ratings / reading_status /
-#: koreader_docs：ratings / reading_status 在删书时会主动清理，但改名时同样必须跟着走；
-#: koreader_docs 是 KOReader 进度映射，id 换了必须一起搬，否则 KOReader 关联全断）。
+#: 需要跟着 book_id 迁移的表（比 ORPHAN_TABLES 多出 ``koreader_docs``：
+#: 那是 KOReader 进度映射，id 换了必须一起搬，否则 KOReader 关联全断）。
+#: ``ratings`` / ``reading_status`` 第 140 期起也进了 ORPHAN_TABLES —— 它们既该跟着
+#: 改名搬走（否则评分静默失联），也该在书消失后可清理。
 #:
 #: ⚠️ **第 36 期补齐**：``meta_override`` / ``meta_online`` / ``meta_cover`` 一直漏在这里。
 #: 它们同样按 book_id 存，而换库（库前缀变）与改名 / 加卷号（basename 变）都会换 id ⇒
@@ -3007,8 +3061,19 @@ def remap_book_id(old_id, new_id) -> dict:
                     "UPDATE %s SET book_id=? WHERE book_id=?" % t, (new, old)
                 )
                 moved[t] = int(cur.rowcount or 0)
-            except Exception:
-                moved[t] = 0
+            except Exception as e:                       # noqa: BLE001 —— 记账后原样上抛
+                # ⚠️ 第 140 期：这里**不许吞**。两后端的语义本来就相反 ——
+                #   · SQLite：一条语句失败只丢这一张表，前面的照常在事务里等 commit；
+                #   · PG：`pg.py._fail()` 会 `rollback()` **整笔事务** ⇒ 前面搬成功的表
+                #     也一起回滚。
+                # 而 `moved[t] = rowcount` 是失败前逐条累加的 ⇒ 吞掉异常就成了
+                # 「日志说搬了 N 行、实际一行没动」，进度 / 评分 / 批注静默失联且
+                # 只剩手写 SQL 一条出路。搬迁是「改名 / 跨库移动」的组成部分，
+                # 搬不动就该让整个操作失败（调用方有回滚路径），而不是假装成功。
+                logging.getLogger("novelforge").exception("book_id 搬迁失败（表 %s）", t)
+                with contextlib.suppress(Exception):
+                    c.rollback()
+                raise RuntimeError(f"id 搬迁在表 {t} 上失败，已回滚（关联数据未改动）") from e
         c.commit()
     return moved
 
@@ -3054,12 +3119,18 @@ def upgrade_book_ids() -> dict:
                 old = hashlib.sha1(base.encode("utf-8")).hexdigest()[:12]
                 index.setdefault(old, lid)
     old_ids: set = set()
+    failed_tables: list = []
     c = _connect()
     for t in REMAP_TABLES:
         try:
             rows = c.execute("SELECT DISTINCT book_id FROM %s" % t).fetchall()
-        except Exception:
-            rows = []
+        except Exception:                                # noqa: BLE001
+            # ⚠️ 第 140 期：读不出来就**不许写幂等标记**。此前吞成 rows=[] 之后
+            # 还会无条件 `state_set("bookid_v2","1")` ⇒ 这张表整批旧 id 的进度 / 批注
+            # 「迁移完成」却一条没搬，且永不重试（文件已删的孤儿是另一回事，由维护页清）。
+            logging.getLogger("novelforge").exception("升级 book_id：读表 %s 失败，稍后重试", t)
+            failed_tables.append(t)
+            continue
         for r in rows:
             old_ids.add(str(r["book_id"]))
     moved_total = 0
@@ -3072,6 +3143,11 @@ def upgrade_book_ids() -> dict:
             continue
         moved = remap_book_id(old, new)
         moved_total += sum(moved.values())
+    if failed_tables:
+        # 有表没读出来 ⇒ 不落标记，下次启动只补跑剩下的（迁移是幂等的：已搬过的 id
+        # 在新形态下不再出现在「旧 id」集合里）。
+        return {"skipped": False, "indexed": len(index), "old_ids": len(old_ids),
+                "moved": moved_total, "failed_tables": failed_tables}
     state_set("bookid_v2", "1")
     return {"skipped": False, "indexed": len(index),
             "old_ids": len(old_ids), "moved": moved_total}
@@ -5202,6 +5278,20 @@ def migration_last_batch(direction="move") -> str:
 
 # ---- 运行态 KV（app_state）----
 
+def ping() -> bool:
+    """库连接是否还能用（`/health` 用）。**不缓存、不重试**，一次 `SELECT 1`。
+
+    第 141 期：`/health` 原先的 `status` 写死 `"ok"` ⇒ 数据库只读 / 库文件损坏 /
+    盘满时容器依旧 healthy，编排层不重启、监控不告警，而所有读接口已经在 500。
+    """
+    try:
+        _connect().execute("SELECT 1").fetchone()
+        return True
+    except Exception:  # noqa: BLE001 —— 探活失败就是「不健康」，不往上抛
+        logging.getLogger("novelforge").exception("数据库探活失败")
+        return False
+
+
 def state_get(key, default="") -> str:
     row = _connect().execute("SELECT value FROM app_state WHERE key=?", (str(key),)).fetchone()
     return row["value"] if row else str(default)
@@ -5344,8 +5434,15 @@ def set_status(book_id, status, started_at=None, finished_at=None) -> dict:
         raise ValueError("未知阅读状态: %r" % (status,))
     cur_row = get_status(book_id)
     now = time.time()
-    st = float(started_at) if started_at else cur_row.get("started_at") or 0
-    fin = float(finished_at) if finished_at else cur_row.get("finished_at") or 0
+    # ⚠️ 第 140 期：日期一律过 `numbers.epoch`（有限实数 ⇒ 夹进 [0, MAX_EPOCH]；
+    # 非数 / inf / nan ⇒ 回落「库里现有的值」）。此前是裸 `float(...)`，而 `float(inf)`
+    # 不抛 —— 批量端点（`/api/books/batch`）与「再来一遍」的日期曾绕过接口层的
+    # `_bounded`，inf 落库后又被并进 `GET /api/books` 的响应 ⇒ 书架此后**恒 500**，
+    # 且无自愈（JSON 序列化非有限值）。
+    st = numbers.epoch(started_at, float(cur_row.get("started_at") or 0)) \
+        if started_at else cur_row.get("started_at") or 0
+    fin = numbers.epoch(finished_at, float(cur_row.get("finished_at") or 0)) \
+        if finished_at else cur_row.get("finished_at") or 0
 
     if status in ("reading", "finished") and not st:
         st = now
@@ -5399,7 +5496,7 @@ def start_attempt(book_id, started_at=None) -> dict:
     """开新一轮阅读（「再来一遍」）。**幂等**：已有进行中的那一轮就原样返回，不重复开。"""
     bid = str(book_id)
     now = time.time()
-    st = float(started_at) if started_at else now
+    st = numbers.epoch(started_at, now) if started_at else now
     c = _connect()
     with _lock:
         cur = c.execute(
@@ -5426,7 +5523,7 @@ def start_attempt(book_id, started_at=None) -> dict:
 def finish_attempt(book_id, finished_at=None) -> "dict | None":
     """收尾进行中的那一轮。**没有进行中的轮次就返回 None**（不凭空造行）。"""
     bid = str(book_id)
-    fin = float(finished_at) if finished_at else time.time()
+    fin = numbers.epoch(finished_at, time.time()) if finished_at else time.time()
     c = _connect()
     with _lock:
         cur = c.execute(

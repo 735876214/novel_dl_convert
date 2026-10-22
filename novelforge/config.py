@@ -483,6 +483,10 @@ def restrict_perms(path, *, is_dir: bool = False) -> bool:
         return False
 
 
+#: 上一次 :func:`ensure_dirs` 建目录失败的清单（第 141 期；空 = 全建成）。
+_DIRS_FAILED: list = []
+
+
 def ensure_dirs():
     """确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在（容器启动时调用）。
 
@@ -490,19 +494,34 @@ def ensure_dirs():
     输入 / 导出 / 缓存 / 日志不在其列：它们是用户的业务数据（书），收紧权限会改变
     部署者已有的共享目录语义，属于越界。
     """
+    # ⚠️ 第 141 期：建不出来**必须留证**。此前两条 `except: pass` 让「只读挂载 / PUID 不对」
+    # 变成「带病启动 + 零提示」：进程起来了、`/health` 绿、日志里还写着「目录监听已启动」，
+    # 而收书目录根本不存在 —— 用户只能从后面某个不相干的报错反推。
+    # 不阻断启动（只读挂载下的确该能跑），但失败清单要能被 `/health` 看到。
+    failed: list = []
     for d in (INPUT_DIR, OUTPUT_DIR, CONFIG_DIR, COOKIE_DIR, CACHE_DIR, SOURCES_DIR, LOG_DIR, DATA_DIR, BACKUP_DIR, FONTS_DIR):
         try:
             d.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            failed.append(f"{d}: {e}")
     for d in (CONFIG_DIR, COOKIE_DIR, SOURCES_DIR, DATA_DIR, BACKUP_DIR):
         restrict_perms(d, is_dir=True)
     # 每个来源根也要确保存在（就地引用直接读这些目录）
     for r in LIBRARY_SOURCE_ROOTS:
         try:
             r["path"].mkdir(parents=True, exist_ok=True)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            failed.append(f"{r['path']}: {e}")
+    global _DIRS_FAILED
+    _DIRS_FAILED = failed
+    if failed:
+        _log.error("有 %d 个目录建不出来（服务会带病启动）：%s",
+                   len(failed), "; ".join(failed[:5]))
+
+
+def dirs_failed() -> list:
+    """上一次 :func:`ensure_dirs` 没建出来的目录（`/health` 的 `dirs_ok` 判据）。"""
+    return list(_DIRS_FAILED)
 
 
 #: 覆盖层「读—改—写」的进程内互斥。
@@ -623,8 +642,19 @@ def mutate_overrides(mutator) -> dict:
         return ov
 
 
+#: 上一次 :func:`load_config` 读 config.yaml 失败的原因（`None` = 没失败）。
+_CONFIG_ERROR: "str | None" = None
+
+
+def config_error() -> "str | None":
+    """`config.yaml` 这一轮是否读坏了（`/health` 与设置页据此报红条，第 141 期）。"""
+    return _CONFIG_ERROR
+
+
 def load_config() -> dict:
     """加载配置：默认值 → config.yaml → settings.json 覆盖层 → 环境变量。"""
+    global _CONFIG_ERROR
+    _CONFIG_ERROR = None
     data = {k: (v.copy() if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
     file_sec: dict = {}          # config.yaml 里那份（下面用它判断「运维手写过这个键没有」）
     if CONFIG_FILE.is_file():
@@ -638,8 +668,13 @@ def load_config() -> dict:
                         data[k].update(v)
                     else:
                         data[k] = v
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            # ⚠️ 第 141 期：此前这里 `except Exception: pass` —— 一个缩进写错，整个
+            # config.yaml 被静默忽略、带默认值启动、零日志，而 `GET /api/config` 把
+            # 默认值当「当前配置」展示（用户以为自己的目录/库路径还在）。
+            # 与 settings.json 侧第 134 期的口径对齐：**读不出来就说读不出来**，不装成功。
+            _CONFIG_ERROR = f"{CONFIG_FILE}: {e}"   # 声明在函数开头（有 `global`）
+            _log.exception("config.yaml 解析失败，本次按默认值运行：%s", e)
 
     # 应用内「设置」页的覆盖层（config.yaml 之上）
     for k, v in load_overrides().items():

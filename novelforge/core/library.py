@@ -2292,7 +2292,9 @@ def books(library_id=None, force: bool = False) -> list:
         if library_id:
             lib = get_library(library_id)
             if lib:
-                catalog.refresh_library(lib, force=True)
+                # 报告留档：「扫描成功、0 本」与「库根没挂上」必须能分开（第 141 期）
+                catalog.note_report(library_id,
+                                    catalog.refresh_library(lib, force=True))
         else:
             catalog.refresh_all(force=True)
     return catalog.books(library_id)
@@ -2310,8 +2312,13 @@ def invalidate(library_id=None) -> None:
     （**新建书库**时会调），紧接着前端连打的 `/api/libraries`、`/api/books`、
     `migration/preview` 每次都是**冷缓存全量重扫** —— 那正是「新建书库很慢」的根因。
     """
-    from . import catalog
+    from . import browse_counts, catalog
     catalog.invalidate(library_id)
+    # ⚠️ 第 139 期：侧栏「浏览」三计数（作者 / 系列 / 批注）的 60s 进程内缓存也在这里失效。
+    # 此前 `browse_counts.invalidate` **只有测试在调**，生产零调用点 ⇒ 新增 / 删书 / 写批注
+    # 之后 60s 内侧栏仍是旧数字（「作者 3」而作者页列出 4）。本函数是全仓写操作的唯一
+    # 汇聚点（20+ 调用点），挂在这里才不漏。
+    browse_counts.invalidate(str(library_id or ""))
     # ⚠️ 第 88 期试过在这里「顺手派后台刷新」（`catalog.invalidate_and_refresh`），
     # 实测**退回**：本函数有 20+ 个调用点，点火后后台刷新会和调用方紧接着的读断言
     # 赛跑，`tests/test_catalog.py` 里连「顺序 / 序号单元目录」这两条**与契约无关**的

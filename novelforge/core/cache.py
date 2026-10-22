@@ -31,9 +31,12 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import time
+
+logger = logging.getLogger("novelforge")
 
 #: 连接串。**不设 = 不启用**（默认，离线开发与老部署行为不变）。
 _ENV_URL = "NOVELFORGE_REDIS_URL"
@@ -138,14 +141,26 @@ def _conn():
         return c
 
 
+#: 上一次「熔断开始」的时刻（`_trip` 写、`/health` 读；0 = 从没熔断过）。
+_tripped_at: float = 0.0
+
+
 def _trip() -> None:
-    """记一次失败；连续够了就进静默期。"""
-    global _fails, _dead_until
+    """记一次失败；连续够了就进静默期。
+
+    ⚠️ 第 141 期：进静默期时**必须留一条日志**。此前整个模块零 logging ——
+    用户按文档配了 `NOVELFORGE_REDIS_URL` 却起错了服务，表现是「每个请求先多等
+    0.5 秒、然后静默走直读」，界面一切正常、日志一个字都没有，无从判断缓存到底有没有生效。
+    """
+    global _fails, _dead_until, _tripped_at
     _fails += 1
     if _fails >= _FAILS_TO_TRIP:
         _fails = 0
         _dead_until = time.time() + _COOLDOWN
+        _tripped_at = _dead_until
         _bump("trip")
+        logger.warning("Redis 连续 %d 次不可用，缓存已熔断 %d 秒（之后自动重试）：%s",
+                       _FAILS_TO_TRIP, int(_COOLDOWN), url())
 
 
 def _on_error() -> None:
@@ -312,3 +327,16 @@ def stats() -> dict:
     s["tripped"] = time.time() < _dead_until
     s["client"] = _client is not None
     return s
+
+
+def health() -> str:
+    """`/health` 的 `cache` 字段：``"redis"``（在用）/ ``"tripped"``（熔断中）/ ``"none"``（没配）。
+
+    只读进程内状态，**不发网络请求** —— `/health` 会被容器每几十秒打一次，
+    探活探出网络往返就本末倒置了。真话在 :func:`stats`，这里是它的三态摘要。
+    """
+    if not enabled():
+        return "none"
+    if time.time() < _dead_until:
+        return "tripped"
+    return "redis"

@@ -20,10 +20,14 @@
    - **显式锁定的字段**（``meta_locks``）永不改写 —— 即使策略写着 ``overwrite``。
      两者可叠加：没改过但上锁的字段，抓取同样不碰。
 """
+import logging
+
 import httpx
 
 from . import customfields, db, fileops, lib_settings, library, metasources, urlguard
 from .library import norm_key
+
+logger = logging.getLogger(__name__)
 
 #: 封面下载上限：常见封面 100KB–2MB，超过 8MB 基本是异常图
 MAX_COVER_BYTES = 8 * 1024 * 1024
@@ -692,27 +696,41 @@ def apply(items: list, cfg: dict = None) -> dict:
 
             # 封面同样只存服务端缓存；下载失败不阻断元数据写回
             has_cover = False
-            if cover and str(cover.get("url") or "").strip() and db.LOCK_COVER not in locked:
+            cover_error = ""
+            cover_url = str((cover or {}).get("url") or "").strip()
+            if cover_url and db.LOCK_COVER not in locked:
                 try:
-                    data, ctype = _download_cover(str(cover["url"]))
+                    data, ctype = _download_cover(cover_url)
                     db.set_cover(bid, data, ctype)
                     has_cover = True
-                except Exception:                    # noqa: BLE001 —— 封面失败不阻断
+                except Exception as e:               # noqa: BLE001 —— 封面失败不阻断
+                    # ⚠️ 第 141 期：封面失败**必须留证**。此前 `except: has_cover = False`
+                    # 什么都不记，紧接着的「三者皆空」分支抛出「没有需要写入的内容」——
+                    # 元数据其实抓到了、只是封面外呼失败（类型不对 / 超过体积门槛 /
+                    # 站点 403），用户被告知的是「这个源没结果」。
                     has_cover = False
+                    cover_error = str(e) or e.__class__.__name__
+                    logger.exception("封面下载失败（%s）：%s", cover_url, e)
 
             if not updates and not cust and not has_cover:
                 # 被锁挡下的情况要说清楚「为什么没写」—— 否则前端只能看到一句
                 # 「没有需要写入的内容」，会误以为是自己传空了
                 if blocked:
                     raise ValueError("字段已锁定，未写入：" + "、".join(sorted(set(blocked))))
+                if cover_error:
+                    # 归因错会让人白找一轮：这里说的是「封面下载失败」而不是「没内容」
+                    raise ValueError(f"封面下载失败：{cover_error}")
                 raise ValueError("没有需要写入的内容")
         except Exception as e:                       # noqa: BLE001 —— 单本失败不影响其余
             failed.append({"name": name, "error": str(e)})
             continue
         # fields 里如实列出**这一本实际写了什么**（含自定义字段 —— 它们落在另一张表，
         # 但对调用方来说「这本书的这些字段写进去了」是同一件事）
-        applied.append({"name": name, "fields": sorted([*updates.keys(), *cust.keys()]),
-                        "cover": has_cover})
+        row = {"name": name, "fields": sorted([*updates.keys(), *cust.keys()]),
+               "cover": has_cover}
+        if cover_error:
+            row["cover_error"] = cover_error
+        applied.append(row)
         if has_cover:
             covers += 1
 

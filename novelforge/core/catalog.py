@@ -834,6 +834,34 @@ def _refresh_locked(lib: dict, force: bool) -> dict:
             "unchanged": unchanged, "skipped": False}
 
 
+_last_report: dict = {}
+
+
+def last_report() -> dict:
+    """最近一次批量刷新的**逐库结果**（`refresh_all` / `refresh_stale`）。
+
+    第 141 期：这是「扫描完成，0 本」与「库根没挂上」之间**唯一的区分出口**。
+    `library.books(force=True)` 的返回值只是书目列表，刷新阶段的 ``error`` /
+    ``reason="root_unavailable"`` 全被丢掉了 ⇒ 维护页与「立即扫描」只能照着 0 报成功。
+    现在刷新时把报告留在这里，端点回包带上它。
+    """
+    with _state_lock:
+        return {k: dict(v) if isinstance(v, dict) else v
+                for k, v in _last_report.items()}
+
+
+def _remember(out: dict) -> None:
+    with _state_lock:
+        _last_report.clear()
+        _last_report.update(out)
+
+
+def note_report(library_id, result: dict) -> None:
+    """单库刷新后登记一条报告（`library.books(force=True)` 这条路不走 `refresh_all`）。"""
+    with _state_lock:
+        _last_report[str(library_id)] = dict(result or {})
+
+
 def refresh_all(force: bool = False, blocking: bool = True) -> dict:
     """刷新全部库（启动预热 / 「立即扫描」全量 / 监听线程每轮）。"""
     from . import library as _lib
@@ -841,8 +869,15 @@ def refresh_all(force: bool = False, blocking: bool = True) -> dict:
     for lib in _lib.libraries():
         try:
             out[str(lib.get("id"))] = refresh_library(lib, force=force, blocking=blocking)
-        except Exception:                     # noqa: BLE001 —— 一个库坏不该拖垮其余
-            out[str(lib.get("id"))] = {"error": True, "skipped": False}
+        except Exception as e:                # noqa: BLE001 —— 一个库坏不该拖垮其余
+            # ⚠️ 第 141 期：异常对象**不许丢**。此前 `except Exception:` 直接折算成
+            # `{"error": True}`、且调用方又整个扔掉返回值 ⇒ 库根掉线 / 索引表坏了，
+            # 用户看到的是「扫描完成，0 本」，分不出「我把书删光了」与「盘没挂上」。
+            logging.getLogger("novelforge").exception(
+                "库 %s 索引刷新失败：%s", lib.get("id"), e)
+            out[str(lib.get("id"))] = {"error": True, "skipped": False,
+                                      "reason": str(e) or e.__class__.__name__}
+    _remember(out)
     return out
 
 
@@ -863,8 +898,11 @@ def refresh_stale(blocking: bool = False) -> dict:
             continue
         try:
             out[lid] = refresh_library(lib, blocking=blocking)
-        except Exception:                     # noqa: BLE001
-            out[lid] = {"error": True, "skipped": False}
+        except Exception as e:                # noqa: BLE001
+            logging.getLogger("novelforge").exception("库 %s 索引刷新失败：%s", lid, e)
+            out[lid] = {"error": True, "skipped": False,
+                        "reason": str(e) or e.__class__.__name__}
+    _remember(out)
     return out
 
 
@@ -1157,18 +1195,41 @@ def books_of(lib: dict) -> list:
         return []
     _settle(lib)
     lid = str(lib.get("id") or "")
+    # ⚠️ 第 139 期：写缓存前要能判「SELECT 期间有没有人标脏」——**先取快照，再读**。
+    # 此前 `fresh_enough` 在 SELECT 之前求值、`set_json` 在其后：并发的写操作先
+    # `_drop_list()` 删掉键，本次读再把**旧行**写回去（added/removed 为 0 的刷新
+    # 又不会删它）⇒ 最长 120s 的旧列表。带上序号后，这条窗口由下面的比对关掉。
+    with _state_lock:
+        seen_dirty = _dirty.get(lid, 0)
+        seen_seq = _dirty_all_seq
     fresh_enough = not _needs_refresh(lid)
     key = cache.book_list_key(lid)
     hit = cache.get_json(key) if key else None
     if hit is not None:
+        # ⚠️ 命中也要登记，否则这条键对 `_drop_list(None)` 是隐形的：`_cached_libs`
+        # 原只在**写**缓存时登记，重启后（进程内存空）Redis 里已有的列表键谁都删不到，
+        # 全库失效（不带 library_id 的写：元数据编辑 / 挂削 / 落地改名）对它无效 ⇒
+        # 旧标题最多占住 TTL_LIST=120s（第 139 期 H1）。
+        with _state_lock:
+            _cached_libs.add(lid)
         return hit
     rows = _rows_of(lib)
     out = _lib._apply_overlay([_book_of_row(lib, r) for r in rows])
-    if key and fresh_enough:
+    if key and fresh_enough and _unchanged(lid, seen_dirty, seen_seq):
         cache.set_json(key, out, cache.TTL_LIST)
         with _state_lock:
             _cached_libs.add(lid)
     return out
+
+
+def _unchanged(lid: str, seen_dirty: int, seen_seq: int) -> bool:
+    """读期间没人标脏？（写缓存前的最后一道闸门，见 ``books_of``。）
+
+    与 ``_mark_fresh`` 的条件清除同一个判据：按库脏计数与全局序号都没动 ⇒ 本次
+    SELECT 读到的行就是当前的。
+    """
+    with _state_lock:
+        return _dirty.get(lid, 0) == seen_dirty and _dirty_all_seq == seen_seq
 
 
 def books(library_id=None) -> list:
@@ -1181,6 +1242,43 @@ def books(library_id=None) -> list:
     for lib in libs:
         out.extend(books_of(lib))
     return out
+
+
+def alive_ids(bids) -> set:
+    """这批 ``book_id`` 里哪些**仍能唯一定位到一本书**。
+
+    「活着的」= ``find_by_id`` 能返回的那批：索引里有行（书还在盘上、库还登记在册）、
+    且**只命中一本**（同名冲突不算 —— 单书入口会 409，跨书清单会标冲突）。
+
+    ⚠️ 收藏夹的「N 本」必须用它算，与收藏夹详情页**同一判据**（第 139 期 H2）：
+    此前计数是裸 ``COUNT(*) FROM collection_items``、列表侧却按「解析不到就丢」，
+    删书 / 移除书库 / 冲突改名之后两侧就永不收敛 —— 侧栏 5、点进去 4，且无自愈路径。
+    """
+    from . import library as _lib
+    want = [str(b) for b in (bids or []) if str(b or "")]
+    if not want:
+        return set()
+    libs = _lib.libraries()
+    keys = sorted(str(l.get("id") or "") for l in libs)
+    if not keys:
+        return set()
+    # 与 `_hit_of` 同一条读路径：先 settle（索引行由它保证新鲜），再查索引表。
+    for lib in libs:
+        _settle(lib)
+    alive: set = set()
+    for i in range(0, len(keys), 500):
+        chunk = keys[i:i + 500]
+        ql = ",".join(["?"] * len(chunk))
+        for j in range(0, len(want), 500):
+            part = want[j:j + 500]
+            qb = ",".join(["?"] * len(part))
+            rows = _exec(
+                f"SELECT book_id, COUNT(*) AS n FROM {TABLE} "
+                f"WHERE book_id IN ({qb}) AND library_id IN ({ql}) GROUP BY book_id",
+                [*part, *chunk],
+            ).fetchall()
+            alive.update(str(r["book_id"]) for r in rows if int(r["n"]) == 1)
+    return alive
 
 
 def find_by_id(bid: str, unique_only: bool = False) -> "dict | None":

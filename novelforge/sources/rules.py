@@ -73,6 +73,15 @@ from ..core import saferegex
 logger = logging.getLogger(__name__)
 
 
+class ChapterFetchError(RuntimeError):
+    """「目录式取整本」有章节没抓到 —— **整本放弃**，不交半本（第 141 期）。
+
+    为什么不是「跳过失败章」：追更的起点是「本地已有的最后一章」，缺一章就等于那一章
+    **永远**不会被重抓（下次只会从更后面接），读者看到的是一本有洞的书；而失败原因
+    绝大多数是限速 / 网关抖动，重试整次就能好。
+    """
+
+
 # ---------------- 书源变量 `{var:<key>}`（第 86 期）----------------
 # Legado 的 `loginUi` 表单值（番茄的「密钥」、聚合源的「模式 / 音色」）以 `{var:key}` 形式
 # 出现在规则里。**缺失绝不静默留空**：留着原文请求会带着 `%7Bvar%3A密钥%7D` 出去，
@@ -697,8 +706,9 @@ def _extract_regex(html: str, rule: dict):
     """按 regex 规则抽取：优先取第一个命名/位置捕获组，无组则取整段匹配。
 
     ⚠️ 走 `saferegex`（模式来自**书源规则**，正文长度由站点决定）—— 超时会抛
-    `RegexTimeout` 交给上层，由 `manager._search_one` / `_fetch_toc._one` 落成
-    逐条 error，不会中断整本。
+    `RegexTimeout` 交给上层：搜索那一路由 `manager._search_one` 落成逐条 error；
+    取整本那一路由 :meth:`RuleBasedSource._fetch_toc_pass` 收集成「本章失败」，
+    重试一次仍失败则整本报 :class:`ChapterFetchError`（**不把错误写进正文**）。
     """
     pat = saferegex.compile(rule.get("pattern", ""), re.S | re.I)
     m = pat.search(html)
@@ -1130,21 +1140,52 @@ class RuleBasedSource(SourceAdapter):
         return await self._content(html, bp.get("content", {}) or {})
 
     async def _fetch_toc(self, client, book_url: str) -> list[dict]:
-        links = await self.chapter_links(client, book_url)
-        sem = asyncio.Semaphore(self._concurrency)
+        """目录式取整本：**要么完整，要么报错**，不交半本（第 141 期）。
 
-        bodies = {}
+        此前单章失败会被写成正文 ``"（第 N 章抓取失败：…）"`` 交出去 —— 那行字会进
+        留档 txt、进 EPUB、进书库索引，**永久占着第 N 章的位置**：之后每次追更都从
+        「已有的最后一章」往后取，这一章再也不会被重抓，读者看到的是正文里夹着一条
+        错误提示（而任务日志是「完成」）。宁可整本失败让用户重试 —— 抓取失败大多是
+        限速 / 网关抖动，重试能好；写进库里的坏章节不能。
+        """
+        links = await self.chapter_links(client, book_url)
+        if not links:
+            # 目录为空 = 规则没抽到链接（站点改版 / 变量缺）⇒ 上层回落「整页全文」，
+            # 但**不能**返回「0 章的空书」：那会写出一个 0 章产物，且看起来像成功。
+            return []
+        bodies, failed = await self._fetch_toc_pass(client, links)
+        if failed:
+            # 限速 / 5xx 抖动占绝大多数，给失败章**再试一次**（只重试失败的那些）
+            retry = {i: links[i] for i in failed}
+            retry_bodies, retry_failed = await self._fetch_toc_pass(
+                client, retry, index_of=retry)
+            bodies.update(retry_bodies)
+            failed = retry_failed
+        if failed:
+            idx = sorted(failed)
+            names = "、".join((links[i].get("title") or f"第 {i + 1} 章") for i in idx[:5])
+            more = f" 等 {len(idx)} 章" if len(idx) > 5 else ""
+            raise ChapterFetchError(
+                f"{len(idx)}/{len(links)} 章抓取失败（{names}{more}）："
+                f"{failed[idx[0]]} —— 整本已放弃，重试整次下载即可")
+        return [{"title": c["title"], "body": bodies[i]}
+                for i, c in enumerate(links)]
+
+    async def _fetch_toc_pass(self, client, links, index_of=None):
+        """并发抓一批章节，返回 ``(成功 {序号: 正文}, 失败 {序号: 异常})``。"""
+        index_of = index_of if index_of is not None else dict(enumerate(links))
+        sem = asyncio.Semaphore(self._concurrency)
+        bodies, failed = {}, {}
 
         async def _one(i: int, url: str):
             async with sem:
                 try:
                     bodies[i] = await self.chapter_body(client, url)
-                except Exception as e:  # 单章失败不中断整本
-                    bodies[i] = f"（第 {i + 1} 章抓取失败：{e}）"
+                except Exception as e:  # 交回调用方决定（不在这里把错误写进正文）
+                    failed[i] = e
 
-        await asyncio.gather(*(_one(i, c["url"]) for i, c in enumerate(links)))
-        return [{"title": c["title"], "body": bodies.get(i, "")}
-                for i, c in enumerate(links)]
+        await asyncio.gather(*(_one(i, c["url"]) for i, c in index_of.items()))
+        return bodies, failed
 
     async def fetch_media_urls(self, client, item: dict, key: str) -> list:
         """取一类**资源地址清单**（`book.comic` / `book.audio`）：只列地址，不下载。

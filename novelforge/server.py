@@ -9,6 +9,7 @@ import json
 import logging
 import math
 import mimetypes
+import os
 import pathlib
 import posixpath
 import re
@@ -17,6 +18,7 @@ import threading
 import time
 import uuid
 import zipfile
+from collections import Counter
 from urllib.parse import quote, unquote
 
 import yaml
@@ -539,13 +541,51 @@ def index():
     return FileResponse(str(page))
 
 
+def _health_checks() -> dict:
+    """三个真探针 + 两条配置侧的实情（第 141 期）。
+
+    判据取舍（**为什么不全用 503**）：`status` 之前写死 `"ok"`，Docker HEALTHCHECK
+    只判 HTTP 200 ⇒ 数据库只读、盘满、监听线程死了容器也永远「健康」。
+    但**只有「库连不上」回 503**：其余几项（目录不可写、配置读坏）重启容器也修不好，
+    回 503 只会让 compose 无限重启、把「能读的服务」变成「一直重启的服务」。
+    所以：不可服务 ⇒ 503 + `status="down"`；能服务但有毛病 ⇒ 200 + `status="degraded"`
+    + `checks` 明细 + `problems` 人话清单。
+    """
+    checks = {
+        "db": db.ping(),
+        "config_dir_writable": os.access(str(config.CONFIG_DIR), os.W_OK),
+        "watcher_running": bool(WATCHER and WATCHER.is_running()),
+        "cache": cache.health(),
+        "dirs_ok": not config.dirs_failed(),
+        "config_yaml": not config.config_error(),
+    }
+    problems = []
+    if not checks["db"]:
+        problems.append("数据库连不上（所有读接口都会 500）")
+    if not checks["config_dir_writable"]:
+        problems.append(f"配置目录不可写：{config.CONFIG_DIR}（设置保存会失败）")
+    if not checks["watcher_running"]:
+        problems.append("收书监听没在跑（新文件不会被自动收进来）")
+    for d in config.dirs_failed()[:3]:
+        problems.append(f"目录建不出来：{d}")
+    if config.config_error():
+        problems.append(f"config.yaml 读不出来，当前按默认值运行：{config.config_error()}")
+    return {"checks": checks, "problems": problems}
+
+
 @app.get("/health")
-def health():
+def health(response: Response):
+    hc = _health_checks()
+    down = not hc["checks"]["db"]
+    if down:
+        response.status_code = 503
     return {
-        "status": "ok",
+        "status": "down" if down else ("degraded" if hc["problems"] else "ok"),
+        "checks": hc["checks"],
+        "problems": hc["problems"],
         "input": str(INPUT_DIR),
         "output": str(OUTPUT_DIR),
-        "watcher": bool(WATCHER and WATCHER.is_running()),
+        "watcher": hc["checks"]["watcher_running"],
         # 应用版本（**只读**、免鉴权端点，不含任何敏感信息）；前端 About / 更新日志据此渲染
         "version": APP_VERSION,
         # 是否挂了 docker.sock（决定「一键更新」可用与否）；侧栏据此决定是否挂 new 提示
@@ -690,6 +730,19 @@ def _bounded(payload: dict, key: str, lo: float, hi: float, *,
         raw = default
     v = numbers.clamp(_finite_num(raw, name or key), lo, hi)
     return int(v) if integer else v
+
+
+def _opt_epoch(payload: dict, key: str):
+    """可选的日期参数：缺省 / ``None`` / 空串 ⇒ ``None``（这一步不写），其余走 `_bounded`。
+
+    第 140 期：``/api/books/batch`` 与「再来一遍」此前**裸传** ``started_at``，而
+    ``float(inf)`` 不抛 ⇒ ``{"params": {"started_at": 1e400}}`` 能把 inf 写进
+    ``reading_status`` / ``reading_attempts``，此后 ``GET /api/books`` 恒 500
+    （非有限值进不了 JSON 响应）。单书入口早就走 `_bounded`，这三处漏了。
+    """
+    if payload.get(key) in (None, ""):
+        return None
+    return _bounded(payload, key, 0.0, numbers.MAX_EPOCH)
 
 
 def _upload_limit(key: str) -> int:
@@ -2040,8 +2093,12 @@ def opds_root(request: Request):
     counts = {"all": len(bs), "authors": len(a), "series": len(s), "tags": len(t),
               "updated": _opds_updated(bs)}
     # 书库入口只在「可见库多于一个」时出现（单库部署输出与加它之前逐字节一致）
+    # ⚠️ 第 139 期：每库书数从**上面这份 bs** 一次分组算出来，不再逐库调
+    # `library.books(library_id=…)`（那是同一指标的第二份实现，且 N 个库就是 N 次
+    # 全量索引 + 覆盖层查询）。
+    per_lib = Counter(str(b.get("library_id") or "") for b in bs)
     libs = [(str(l.get("id") or ""), str(l.get("name") or ""),
-             len(library.books(library_id=str(l.get("id") or ""))))
+             per_lib.get(str(l.get("id") or ""), 0))
             for l in _opds_visible_libraries()]
     return _opds_xml(opds.navigation_feed(_opds_base(request), counts, libraries=libs),
                      "navigation")
@@ -2700,8 +2757,8 @@ def api_batch(payload: dict = Body(...)):
                 db.set_status(
                     bid,
                     str(params.get("status") or ""),
-                    started_at=params.get("started_at"),
-                    finished_at=params.get("finished_at"),
+                    started_at=_opt_epoch(params, "started_at"),
+                    finished_at=_opt_epoch(params, "finished_at"),
                 )
             elif action == "set_rating":
                 stars = int(params.get("stars", 0))
@@ -4204,7 +4261,7 @@ def api_start_reading_attempt(bid: str, payload: dict = Body(default=None)):
     """开新一轮阅读（「再来一遍」）。**幂等**：已有进行中的那一轮就原样返回，不重复开。"""
     if not library.by_id(bid):
         raise HTTPException(404, "找不到这本书")
-    started_at = (payload or {}).get("started_at")
+    started_at = _opt_epoch(payload or {}, "started_at")
     return {"ok": True, "attempt": db.start_attempt(bid, started_at=started_at)}
 
 
@@ -4213,7 +4270,7 @@ def api_finish_reading_attempt(bid: str, payload: dict = Body(default=None)):
     """收尾进行中的那一轮。没有进行中的轮次返回 404（**不凭空造行**）。"""
     if not library.by_id(bid):
         raise HTTPException(404, "找不到这本书")
-    finished_at = (payload or {}).get("finished_at")
+    finished_at = _opt_epoch(payload or {}, "finished_at")
     row = db.finish_attempt(bid, finished_at=finished_at)
     if row is None:
         raise HTTPException(404, "没有进行中的阅读尝试")
@@ -6081,13 +6138,18 @@ def api_scan_library(lid: str):
         raise HTTPException(404, "书库不存在")
     library.invalidate(lid)
     bs = library.books(lid, force=True)
-    db.set_library_scan(lid, note=f"手动扫描：{len(bs)} 本")
+    rep = (catalog.last_report() or {}).get(lid) or {}
+    note = f"手动扫描：{len(bs)} 本"
+    if rep.get("error") or rep.get("reason"):
+        # 索引刷新失败时**不许**只写「0 本」—— 那与「书都删了」同形（第 141 期）
+        note += f"（索引刷新异常：{rep.get('reason') or '未知'}）"
+    db.set_library_scan(lid, note=note)
     # 若该库有来源子目录且 watcher 在跑，立即触发一次来源目录扫描（摄入新文件）
     if WATCHER is not None and WATCHER.is_running():
         try:
             WATCHER.scan_library_now(lid)
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 —— 旁路，但不许静默（第 141 期）
+            logging.getLogger("novelforge").exception("来源目录扫描失败：%s", e)
     try:
         queued = _enqueue_scrape_for(lid)
     except Exception as e:  # noqa: BLE001 —— 刮削是旁路，绝不因它让扫描报错
@@ -6095,7 +6157,9 @@ def api_scan_library(lid: str):
         queued = 0
     # 扫描 = 书集可能变了 ⇒ 后台补算一轮语义向量（有单飞闸 + 节流，扫描不受它拖慢）
     _schedule_embed_refresh()
-    return {"ok": True, "id": lid, "count": len(bs), "scrape_queued": queued}
+    degraded = bool(rep.get("error") or rep.get("reason"))
+    return {"ok": not degraded, "id": lid, "count": len(bs),
+            "scrape_queued": queued, "refresh": rep}
 
 
 def _enqueue_scrape_for(library_id=None) -> int:
@@ -6622,10 +6686,23 @@ def api_book_move_batches(limit: int = 10):
 
 @app.get("/api/collections")
 def api_collections():
+    """收藏夹列表。
+
+    ⚠️ ``count`` 与详情页**同一判据**（第 139 期 H2）：成员 id 过一遍
+    ``catalog.alive_ids``（书还在、库还登记、id 不冲突），与
+    ``api_collection_detail`` 丢掉的是同一批。此前这里是裸 ``COUNT(*)``，
+    删书 / 移除书库之后侧栏显示 5、点进去只有 4，永不收敛。
+    """
     items = db.list_collections()
+    members = db.collection_book_ids_all()
+    alive = catalog.alive_ids([b for ids in members.values() for b in ids])
     for it in items:
-        bid = it.get("first_book_id")
-        b = library.by_id(bid) if bid else None
+        ids = [b for b in members.get(int(it["id"]), []) if b in alive]
+        it["count"] = len(ids)
+        bid = ids[0] if ids else None
+        it["first_book_id"] = bid
+        # `by_id_status`：一条冲突 id 不该让整个收藏夹列表 500（封面探测只是装饰）
+        b, _conflict = library.by_id_status(bid) if bid else (None, False)
         it["first_book_has_cover"] = bool(b and b.get("has_cover"))
     return {"items": items}
 
@@ -6647,8 +6724,10 @@ def api_collection_detail(cid: int):
     c = db.get_collection(cid)
     if not c:
         raise HTTPException(404, "收藏夹不存在")
+    # ⚠️ 用 `by_id_status` 而不是 `by_id`（第 139 期 M2）：跨书清单里一条 id 撞名
+    # 会让 `by_id` 抛 BookIdConflict ⇒ 整个收藏夹页 500（用户连导出都做不了）。
     books = [_card(b) for bid in db.collection_book_ids(cid)
-             if (b := library.by_id(bid))]
+             if (b := library.by_id_status(bid)[0])]
     return {"id": c["id"], "name": c["name"], "books": books}
 
 
@@ -7357,16 +7436,25 @@ def _apply_watcher_config():
             WATCHER.ignore = list(w["ignore"])
         if "max_retries" in w:
             WATCHER.max_retries = max(0, int(w["max_retries"]))
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 —— 参数是脏的，但**必须有落笔**
+        # 第 141 期：此前是 `except Exception: pass`。脏配置被静默丢掉时，界面上的
+        # 「间隔 30 秒」与实际跑的间隔是两回事，而用户唯一的线索是自己的书没被收进去。
+        logging.getLogger("novelforge").exception("监听参数热应用失败：%s", e)
     enabled = bool(w.get("enabled", True))
     try:
         if enabled and not WATCHER.is_running():
             WATCHER.start()
         elif not enabled and WATCHER.is_running():
             WATCHER.stop()
-    except Exception:
-        pass
+    except Exception as e:  # noqa: BLE001 —— 保存本身不能因为起不来监听而失败
+        # 第 141 期：此前 `except: pass` ⇒ `PUT /api/config` 回 ok、`GET /api/config`
+        # 仍报 `enabled: true`、设置页照旧「已开启」，而收书目录其实一个文件都不收。
+        # 真话只有 `/health` 的 `watcher:false` 泄露，没人会去看。
+        logging.getLogger("novelforge").exception("监听启停失败：%s", e)
+        activity_log.log(activity_log.ACTION_SYNC, "收书监听",
+                         activity_log.STATUS_FAIL,
+                         detail=f"监听{'启动' if enabled else '停止'}失败",
+                         error=str(e), source="config")
 
 
 def _apply_auto_update_config() -> None:
@@ -7402,11 +7490,18 @@ def _apply_runtime_config() -> None:
 @app.get("/api/config")
 def api_get_config():
     cfg = config.load_config()
+    # config.yaml 读坏了要**明说**（第 141 期）：否则设置页展示的是默认值，
+    # 运维以为自己的配置还在，实际整个文件被忽略了（与 settings.json 侧第 134 期同口径）。
+    err = config.config_error()
     llm = dict(cfg.get("llm") or {})
     has_key = bool((llm.get("api_key") or "").strip())
     llm["api_key"] = _KEY_MASK if has_key else ""
     return {
         "config": {
+            # ⚠️ 这两个是**诊断键**（不是可保存配置）：`config.yaml` 读坏 / 目录建不出来时
+            # 设置页要能报红条。它们只出现在响应里，`PUT /api/config` 的 EDITABLE 名单里没有。
+            "_config_error": err or "",
+            "_dirs_failed": config.dirs_failed(),
             "chapter_detection": cfg.get("chapter_detection") or {},
             "traditionalize": bool(cfg.get("traditionalize", False)),
             "output": cfg.get("output") or {},
@@ -7684,7 +7779,14 @@ def api_rebuild_library():
     """重建书库索引：清缓存后强制重扫 OUTPUT_DIR（只读操作，不改任何文件）。"""
     library.invalidate()
     items = library.books(force=True)
-    return {"ok": True, "books": len(items)}
+    # ⚠️ 第 141 期：逐库结果**必须一起回**。此前这里无条件 `{"ok": True, "books": n}`，
+    # 而索引刷新失败（库根掉线 / 索引表坏）与「你把书删光了」在这里长得一模一样 ——
+    # 都是 0 本、都是绿色。维护页据此显示红条。
+    report = catalog.last_report()
+    bad = {lid: r for lid, r in report.items()
+           if isinstance(r, dict) and (r.get("error") or r.get("reason"))}
+    return {"ok": not bad, "books": len(items), "libraries": report,
+            "failed": bad}
 
 
 @app.post("/api/maintenance/recycle/clear")
@@ -7699,18 +7801,32 @@ def api_clear_recycle():
     """
     d = fileops.recycle_dir()
     removed, freed = 0, 0
-    try:
-        for p in list(d.rglob("*")):
-            if not p.is_file():
-                continue
-            try:
-                freed += p.stat().st_size
-                p.unlink()
-                removed += 1
-            except OSError:
-                continue
-    except Exception:
-        pass
+    # ⚠️ 第 141 期：删不掉的文件**必须如实回报**，台账也**不能**一起清空 ——
+    # 以前这里是「逐个 OSError: continue + 外层 except: pass + 无条件 db.recycle_clear()」：
+    # 一个权限问题（容器里 root 建的 0444 文件、NFS 上的 busy 文件）就会让文件留在盘上，
+    # 而台账被清成 0 条 ⇒ 这些文件的还原路径没了，界面上却显示「已清空、释放 0 B」，
+    # 用户永远不知道回收站里还剩东西 —— 而回收站是「删除即回收」承诺的最后一道防线。
+    failed: list = []
+    for p in list(d.rglob("*")):
+        if not p.is_file():
+            continue
+        try:
+            size = p.stat().st_size
+            p.unlink()
+        except OSError as e:
+            failed.append(f"{p.name}: {e.strerror or e}")
+            continue
+        freed += size
+        removed += 1
+    if failed:
+        # 有残留 ⇒ 台账**原样保留**（它记的正是「这些文件还能还原」）。
+        activity_log.log(activity_log.ACTION_RECYCLE, "回收站", activity_log.STATUS_FAIL,
+                         output="; ".join(failed[:5]),
+                         detail=f"清空回收站：删除 {removed} 个文件，"
+                                f"**{len(failed)} 个没删掉**（台账未清）：{'; '.join(failed[:3])}",
+                         source="api")
+        return {"ok": False, "removed": removed, "freed": freed,
+                "ledger_cleared": 0, "failed": failed}
     cleared = db.recycle_clear()
     activity_log.log(activity_log.ACTION_RECYCLE, "回收站", activity_log.STATUS_OK,
                      detail=f"清空回收站：删除 {removed} 个文件，释放 {_human_size(freed)}"
