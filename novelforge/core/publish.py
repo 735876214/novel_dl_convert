@@ -31,7 +31,7 @@ import pathlib
 import shutil
 import time
 
-from . import db, fileops, komga, library
+from . import atomicio, db, fileops, komga, library
 
 #: 副本的生成方式：硬链接（首选）/ 复制（文件系统不支持硬链接时的回退）
 LINK_HARD = "hardlink"
@@ -167,6 +167,22 @@ def same_file(a, b) -> bool:
     return sa.st_dev == sb.st_dev and sa.st_ino == sb.st_ino
 
 
+def _copy_complete(src, dst, is_dir: bool) -> bool:
+    """已有副本是否**完整**（尺寸一致）。问不出来时按完整处理 —— 宁可复用，绝不误删。"""
+    try:
+        if is_dir:
+            files = _tree_files(src)
+            if not files:
+                return dst.is_dir()
+            return all(
+                (dst / rel).is_file() and (dst / rel).stat().st_size == (src / rel).stat().st_size
+                for rel in files
+            )
+        return dst.is_file() and dst.stat().st_size == src.stat().st_size
+    except OSError:
+        return True
+
+
 def link_or_copy(src, dst) -> str:
     """硬链接 ``src`` → ``dst``；文件系统不支持时回退复制。返回 link_mode。
 
@@ -180,7 +196,10 @@ def link_or_copy(src, dst) -> str:
         return LINK_HARD
     except (OSError, NotImplementedError, AttributeError):
         pass
-    shutil.copy2(src, dst)
+    # 回退支是**常态**（EXDEV / EPERM / CIFS），所以它也是唯一会稳定踩到的写盘路径：
+    # 直接 copy2 到成品名，中途死掉就在出版目录里留下一份**名字合法、内容不全**的副本，
+    # 而外部阅读器（Komga 等）挂的正是这个目录 ⇒ 走统一的原子落盘（第 137 期）。
+    atomicio.copy_file(src, dst)
     return LINK_COPY
 
 
@@ -291,7 +310,7 @@ def embed_meta(dst, updates: dict = None, cover=None) -> list:
     href = mt = ""
     if cover:
         data, mt = cover
-        opf_path, _, _ = fileops._read_epub(dst)
+        opf_path, _ = fileops._read_epub(dst)
         if not opf_path:
             raise ValueError("副本没有可定位的 OPF")
         zip_rel, href = fileops.cover_paths(mt, opf_path)
@@ -398,6 +417,15 @@ def publish(book: dict, *, cfg: dict = None, updates: dict = None, cover=None,
         elif verdict == REL_DECLINE:
             rel = free_rel(pdir, rel)
             dst = pdir / rel
+
+        # `exists()` 不等于「完整」：上次崩在复制到一半也会留下同名成品，只问存在就会把
+        # **半份副本永久当成品复用**并误报 hardlink（第 137 期审计）。文件比对尺寸、
+        # 目录型逐文件比对；问不出来（OSError）时按「完整」处理，绝不因不确定而删别人的文件。
+        # ⚠️ EPUB 例外：下面会往副本里**内嵌**元数据 / 封面，尺寸本来就该和源不同，
+        # 拿尺寸比对会把「已内嵌的正常副本」误判成半份、每次出版都回收重建一遍。
+        if (dst.exists() and not (not is_dir and src.suffix.lower() in EMBED_EXTS)
+                and not _copy_complete(src, dst, is_dir)):
+            recycle(dst, why="重建半份副本")
 
         if not dst.exists():
             out["mode"] = link_tree_or_copy(src, dst) if is_dir else link_or_copy(src, dst)

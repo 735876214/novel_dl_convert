@@ -36,9 +36,10 @@ InternalError: Can not call into Python with a time limit set.
 ## 与 Node 通道的关系
 
 `core/network.py` 的 `run_js_sync` / `run_decrypt` 是**第 86 期留下的 Node 通道**
-（**非沙箱**，只为既有契约保留）。书源规则里的 JS 走的是
-`network.run_source_js` —— 沙箱优先，缺 quickjs 才回落 Node 并**在 capabilities 里标出来**。
-这一层的 `run_js` **永远不碰 Node**：它的契约就是「要么沙箱，要么明说没有沙箱」。
+（**非沙箱**，只为既有契约保留；第三方书源文件里的 JS **一律不许走它们**）。书源规则里的 JS
+走的是 `network.run_source_js`：**沙箱优先，没有沙箱就拒绝执行**（第 137 期删掉了回落 Node 的
+降级链 —— 降级时只把「非沙箱」写进 capabilities 的 reason，用户根本不会去看，而那段 JS 在 Node 里
+拿得到 `require('fs')`）。这一层的 `run_js` **永远不碰 Node**：契约就是「要么沙箱，要么明说没有沙箱」。
 """
 import asyncio
 import json

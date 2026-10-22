@@ -235,11 +235,17 @@ def _ingest_target(name: str, library_id, root) -> tuple:
 
 
 def rescan(watcher, item_id, library_id=None, root=None) -> dict:
-    """重新处理单个条目（复用 watcher.handle_file，含日志与降级提示）。
+    """重新处理单个条目（复用 watcher 的单文件入口，含日志与降级提示）。
 
     ``library_id`` / ``root`` 非空 = 用户在界面上**当场指定**了入库目标
     （「入库到…」，第 65 期）：库必须是已登记的，文件夹必须是该库自己的
     （空则取第一个）。两者都空时走既有路由 —— 老调用点的行为一字不改。
+
+    ⚠️ 只能走 ``watcher.rescan_one``（第 137 期）：处理单文件必须与监听线程**互斥**
+    （那把锁是 `watcher._scan_lock`，由 `rescan_one` 自己持），否则请求线程与监听轮次
+    会把同一个文件同时处理两遍 —— 重复拷贝 / 重复 book_id / `_state.fails` 互相覆盖。
+    别在这里直接调 ``watcher.handle_file``，也别碰 ``watcher._scan_lock``（私有锁不该
+    被外部持有）；同理，**持着 `_reg_lock` 时绝不调 watcher**（见 :data:`_reg_lock`）。
     """
     row = _row(item_id)
     item_id = row["id"]
@@ -261,8 +267,9 @@ def rescan(watcher, item_id, library_id=None, root=None) -> dict:
         return db.dock_get(item_id)
 
     db.dock_update(item_id, status="pending", detail="")
-    # 内部已写活动日志；owner_lib / owner_root 都为 None 时走既有 _target 路由
-    kind, detail = watcher.handle_file(src, owner_lib=lib, owner_root=root_path)
+    # 内部已写活动日志；owner_lib / owner_root 都为 None 时走既有 _target 路由。
+    # 走**官方入口**（自带 `_scan_lock`，与监听线程互斥）—— 见本函数 docstring。
+    kind, detail = watcher.rescan_one(src, owner_lib=lib, owner_root=root_path)
     if kind in ("converted", "added"):
         db.dock_update(item_id, status="ready",
                        output=pathlib.Path(str(detail)).name, detail="", retries=0)
@@ -277,7 +284,6 @@ def rescan(watcher, item_id, library_id=None, root=None) -> dict:
                        retries=int(row.get("retries") or 0))
     else:
         db.dock_update(item_id, status="needs_review", detail=str(detail))
-    watcher.mark_processed(src)
     return db.dock_get(item_id)
 
 

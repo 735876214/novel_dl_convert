@@ -49,6 +49,11 @@ _log = logging.getLogger("novelforge")
 
 _thread = None
 _stop = None
+#: 起停锁（第 137 期）：`start_background` 的「查线程 → 换 `_stop` → 建线程」是一段
+#: check-then-act。并发（设置页双击 / 保存配置时在线程池里同步跑）会各起一条追更线程，
+#: 且**后者的新 `_stop` 覆盖前者** ⇒ 前一条永远停不下来（`stop_background` 只 set 最新
+#: 那个），两条线程各跑各的全量外呼。手法与 `watcher.start()` 同一套：一把锁包住整段。
+_start_lock = threading.Lock()
 
 
 def _cfg() -> dict:
@@ -344,18 +349,23 @@ def _run_one(mgr, txt_path):
 
 
 def start_background(interval_hours=None) -> bool:
-    """起后台追更线程（已在跑且没被叫停 ⇒ 什么都不做）。返回是否新起了线程。"""
+    """起后台追更线程（已在跑且没被叫停 ⇒ 什么都不做）。返回是否新起了线程。
+
+    「查 → 换 `_stop` → 建线程」整段在 `_start_lock` 里（第 137 期，理由见 `_start_lock`）。
+    """
     global _thread, _stop
     conf = _cfg()
     hours = int(interval_hours if interval_hours is not None
                 else (conf.get("interval_hours") or 12))
-    if _thread is not None and _thread.is_alive() and _stop is not None and not _stop.is_set():
-        return False
-    _stop = threading.Event()                            # 旧线程攥着旧 Event，不受影响
-    _thread = threading.Thread(target=_loop, args=(max(1, hours), _stop),
-                               name="novelforge-auto-update", daemon=True)
-    _thread.start()
-    return True
+    with _start_lock:
+        if (_thread is not None and _thread.is_alive()
+                and _stop is not None and not _stop.is_set()):
+            return False
+        _stop = threading.Event()                        # 旧线程攥着旧 Event，不受影响
+        _thread = threading.Thread(target=_loop, args=(max(1, hours), _stop),
+                                   name="novelforge-auto-update", daemon=True)
+        _thread.start()
+        return True
 
 
 def _loop(interval_hours: int, stop: threading.Event) -> None:

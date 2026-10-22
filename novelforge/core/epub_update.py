@@ -26,6 +26,8 @@ from __future__ import annotations
 import pathlib
 import zipfile
 
+from . import atomicio
+
 #: EPUB 规范：mimetype 必须是第一条且不压缩
 MIMETYPE = "mimetype"
 _STORED = zipfile.ZIP_STORED
@@ -54,9 +56,10 @@ def copy_with_extra(src, dst, *, extra=None, replace=None) -> pathlib.Path:
     src, dst = pathlib.Path(src), pathlib.Path(dst)
     extra = list(extra or [])
     replace = dict(replace or {})
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_name(dst.name + ".part")
-    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(tmp, "w") as zout:
+    # 原子外壳只有一处实现（`atomicio.access`）：临时名、提交、失败清理都在那儿，
+    # 这里别再自己拼 `.part`（拼错一处 `watcher.ignore` 就认不出来，半本书进书架）。
+    with atomicio.access(dst) as tmp, \
+            zipfile.ZipFile(src) as zin, zipfile.ZipFile(tmp, "w") as zout:
         # 第一条必须先写（EPUB 规范），且保持 STORED
         names = zin.namelist()
         first = names[0] if names else ""
@@ -72,7 +75,6 @@ def copy_with_extra(src, dst, *, extra=None, replace=None) -> pathlib.Path:
             _write_entry(zout, info.filename, data, template=info)
         for name, data in extra:
             _write_entry(zout, name, data)
-    tmp.replace(dst)
     return dst
 
 

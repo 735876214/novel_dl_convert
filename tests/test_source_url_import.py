@@ -388,7 +388,10 @@ def test_分区键指向这两段():
     m = re.search(r"network:\s*\[([^\]]*)\]", _ts())
     assert m, "settingsFields.ts 里找不到 SECTION_KEYS 的 network 条目"
     keys = re.findall(r"'([A-Za-z_]+)'", m.group(1))
-    assert keys == ["network", "download", "logging", "auto_update", "source_import"]
+    # 第 138 期：`logging` 迁出 network 分区（一个段只许一个归属分区，它归 logs）
+    assert keys == ["network", "download", "auto_update", "source_import"]
+    logs = re.search(r"logs:\s*\[([^\]]*)\]", _ts())
+    assert logs and "logging" in logs.group(1), "logs 分区没接住 logging"
 
 
 def test_每个键都有真实读点():

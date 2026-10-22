@@ -15,6 +15,7 @@ import io
 import pathlib
 
 from .. import config          # ⚠️ config 在上一级（novelforge/），不在 core/ 里
+from . import atomicio
 
 #: 默认 2× 渲染：高分屏上才不糊（1× 在手机上明显发虚）
 DEFAULT_SCALE = 2.0
@@ -54,6 +55,9 @@ def render_page(path, index: int, bid: str, scale: float = DEFAULT_SCALE) -> tup
         try:
             from PIL import Image
             with Image.open(cache) as im:
+                # `Image.open` 是**惰性**的：只读文件头，截断的 JPEG 不会报错 ⇒ 必须
+                # `load()` 真解一遍，坏了就落到下面重渲染（否则坏缓存永远命中，第 137 期审计）。
+                im.load()
                 return (cache.read_bytes(), im.size)
         except Exception:
             pass                      # 缓存坏了就当没有，重渲染
@@ -80,8 +84,8 @@ def render_page(path, index: int, bid: str, scale: float = DEFAULT_SCALE) -> tup
             pass
 
     try:
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_bytes(data)
+        # 原子写：半份 JPEG 会被上面的读侧当成好缓存（正是 `sources/online.py` 已写死的判据）。
+        atomicio.write_bytes(cache, data, private=False)
     except Exception:
         pass                          # 缓存写不了不影响本次返回
     return (data, size)

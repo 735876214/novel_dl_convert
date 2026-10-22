@@ -1,8 +1,11 @@
 import codecs
-import shutil
 from pathlib import Path
 
 from . import audio, library, preprocess, detect, metadata, epub_builder, komga
+# 入库落盘一律走同目录 `.part` → `Path.replace`（`atomicio` 是唯一实现）：成品直接落在
+# **被扫描的库根**里，原地写（`shutil.copy2`）中途死掉就留半本书，而扫描器/索引会把
+# 半本书当成成品走完入库（第 137 期审计；判据与 `watcher.py` 第 135 期那处同一条）。
+from . import atomicio
 
 # 已是电子书格式的文件直接复制（含漫画归档与**单个**音频文件；
 # 「音频目录」形态由 dispatch 的目录分支单独处理）
@@ -29,8 +32,8 @@ def _copy_tree(src: Path, dst: Path) -> None:
         if "__MACOSX" in c.parts or c.name in ("Thumbs.db", ".DS_Store"):
             continue
         t = dst / c.relative_to(src)
-        t.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(c, t)
+        # éæä»¶åå­è½çï¼ä¸ç« ä¸æä»¶çæå£°ä¹¦æ´æ è¦å¤å¶å åç§ï¼ä¸­éæ­»æä¸è½çåä»½é³è½¨
+        atomicio.copy_file(c, t)
 
 
 def _layout(cfg: dict) -> str:
@@ -531,6 +534,6 @@ def dispatch(src: Path, out_dir: Path, opts: dict):
         )
         target = _place(out_dir, src.stem, src.suffix.lstrip("."), series, index, cfg)
         _guard(out_dir, target)
-        shutil.copy2(src, target)
+        atomicio.copy_file(src, target)
         return ("copy", target)
     return ("skip", src)

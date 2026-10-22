@@ -440,13 +440,63 @@ DEFAULTS = {
 }
 
 
+# ---------------- 凭据类文件的权限收敛（第 137 期）----------------
+# 病：容器里默认 umask 022 ⇒ 应用写出来的东西是 0644 / 0755（**任何人可读**）。
+# 而这个目录里放的是：`config.yaml` / `settings.json`（各类 API key）、`data/*.db`
+# （`pin_hash` —— 单用户登录的唯一凭据）、`cookies/*.cookies.txt`（第三方站点登录态，
+# 明文）。NAS 上同机别的容器、别的账号、以及走 SMB / NFS 共享这个卷的人都能直接捡走。
+#
+# 修法：**一处**实现，各写入口复用（别在每个模块各写一份 chmod —— 那是最容易漂移的
+# 那种「同一判据多份实现」）。目录 0700 / 文件 0600：属主可读写，其余一律无权限。
+
+#: 凭据文件的权限：``rw-------``
+PRIVATE_FILE_MODE = 0o600
+#: 存放凭据的目录的权限：``rwx------``
+PRIVATE_DIR_MODE = 0o700
+
+
+def restrict_perms(path, *, is_dir: bool = False) -> bool:
+    """把 ``path`` 的权限收紧到「只有属主可读写」（目录 ``0o700`` / 文件 ``0o600``）。
+
+    返回是否**真的**收紧了（Windows 上一律返回 ``False``）。三条口径：
+
+    * **Windows 上整段跳过**（``os.name != "posix"``）：那里的 ``chmod`` 只认只读位，
+      语义与 POSIX 完全不同 —— 照搬过来要么什么都不做要么把文件变成只读，两种都是坑。
+    * **失败不抛**：这是加固，不是业务前提。磁盘是 CIFS 挂载、文件属于别的用户、
+      容器以只读方式挂载…… 这些情况下「保存设置」不该因此变成 500（但会记一条
+      warning，别静默 —— 权限没收紧是要让运维看见的）。
+    * **只改权限，不碰内容 / 不跟随软链**：``chmod`` 走 ``follow_symlinks=False``，
+      于是「配置目录里放一个指向别处的软链」不会被我们顺手改了目标文件的权限。
+
+    调用点（全部是**写凭据**的地方）：:func:`save_overrides`（settings.json）、
+    `core/db.py` 建库连接之后、`sources/creds.save` 存 Cookie 之后，以及
+    :func:`ensure_dirs` 建配置目录之后。
+    """
+    if os.name != "posix":
+        return False
+    mode = PRIVATE_DIR_MODE if is_dir else PRIVATE_FILE_MODE
+    try:
+        os.chmod(path, mode, follow_symlinks=False)
+        return True
+    except (OSError, NotImplementedError) as e:
+        _log.warning("无法收紧 %s 的权限（%s）—— 请自行确认该文件不是全局可读", path, e)
+        return False
+
+
 def ensure_dirs():
-    """确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在（容器启动时调用）。"""
+    """确保输入 / 导出 / 配置 / cookie / 缓存 / 用户书源 / 日志目录存在（容器启动时调用）。
+
+    建完之后把**存凭据的那几个目录**收紧到 ``0o700``（第 137 期，见 :func:`restrict_perms`）。
+    输入 / 导出 / 缓存 / 日志不在其列：它们是用户的业务数据（书），收紧权限会改变
+    部署者已有的共享目录语义，属于越界。
+    """
     for d in (INPUT_DIR, OUTPUT_DIR, CONFIG_DIR, COOKIE_DIR, CACHE_DIR, SOURCES_DIR, LOG_DIR, DATA_DIR, BACKUP_DIR, FONTS_DIR):
         try:
             d.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
+    for d in (CONFIG_DIR, COOKIE_DIR, SOURCES_DIR, DATA_DIR, BACKUP_DIR):
+        restrict_perms(d, is_dir=True)
     # 每个来源根也要确保存在（就地引用直接读这些目录）
     for r in LIBRARY_SOURCE_ROOTS:
         try:
@@ -539,6 +589,9 @@ def save_overrides(data: dict) -> None:
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, SETTINGS_FILE)
+        # 权限收敛（第 137 期）：这个文件里是各类 API key。先写再收紧 ——「原子 + 降权」
+        # 合成一步做完，调用方不需要记得补一次 chmod（记得补的那种，迟早有人忘）。
+        restrict_perms(SETTINGS_FILE)
     except OSError:
         # 临时文件不留在配置目录里（它会出现在「配置目录备份 / 还原」的清单中）
         try:

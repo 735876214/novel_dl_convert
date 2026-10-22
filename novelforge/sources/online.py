@@ -50,6 +50,7 @@ import time
 from pathlib import Path
 
 from .. import config
+from ..core import atomicio
 from ..core.reading_list import text_to_xhtml
 from . import rules
 from .base import REGISTRY
@@ -251,10 +252,7 @@ def _write_text(path: Path, text: str) -> None:
     ⚠️ 缓存也要原子写：半截的正文会被当成「已缓存」，读者看到的是断在中间的一章，
     而且此后**永远命中**那份坏缓存（没有任何东西会去修它）。
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".part")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    atomicio.write_text(path, text, private=False)
 
 
 def _write_json(path: Path, data: dict) -> None:

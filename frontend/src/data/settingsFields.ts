@@ -139,6 +139,17 @@ export const NETWORK_FIELDS: FieldDef[] = [
     type: 'bool',
     hint: '只读章节目录（不取正文）；在图书详情页的「目录」标签里显式点「取目录」才会外呼',
   },
+]
+
+/**
+ * 日志文件的存放位置与内存缓冲（第 138 期从 `NETWORK_FIELDS` 迁来）。
+ *
+ * 判据：**一个顶层配置段只许有一个归属分区**。此前 `logging` 同时挂在 `network` 与 `logs`
+ * 两个分区上，而保存是「按分区整段回传草稿」⇒ 在网络页点保存会把审计日志页**未保存**的
+ * `logging.retention.*` 草稿一起写进 settings.json；反过来改留存又会让两页同时标「未保存」。
+ * 现在 `logging` 只归 `logs`（审计日志页），`SECTION_KEYS.network` 里不再有它。
+ */
+export const LOGGING_FIELDS: FieldDef[] = [
   { path: 'logging.max_entries', label: '日志内存缓冲条数', type: 'number' },
   { path: 'logging.dir', label: '日志目录', type: 'text', placeholder: '留空则用 LOG_DIR' },
 ]
@@ -242,7 +253,8 @@ export const SECTION_KEYS: Record<string, string[]> = {
   conversion: ['chapter_detection', 'traditionalize', 'llm'],
   watcher: ['watcher'],
   // 第 94 期阶段 4a：URL 订阅导入的开关与护栏也在这页（`source_import.*`）
-  network: ['network', 'download', 'logging', 'auto_update', 'source_import'],
+  // 第 138 期：`logging` 已迁出（归 `logs`，见 LOGGING_FIELDS 注释）——一个段只许一个归属分区
+  network: ['network', 'download', 'auto_update', 'source_import'],
   naming: ['naming'],
   upload: ['upload'],
   achievements: ['achievements'],
@@ -251,9 +263,10 @@ export const SECTION_KEYS: Record<string, string[]> = {
   komga: ['output', 'komga'],
   // 元数据抓取的 7 个页面共用同一配置段（同一份 cfg 草稿，各页只改自己的子键）
   metadata: ['metadata_fetch'],
-  // 审计日志留存（第 52 期）：**只**提交 logging 段。
+  // 审计日志（第 52 期留存 / 第 138 期日志文件位置）：**独占** logging 段。
   // 刻意不复用 network 分区 —— 那个分区还含 network / download，连带提交会把别页
   // 未保存的草稿一起写进去（草稿是跨页共享的单例，见 useSettingsConfig）。
+  // 反过来也一样：`logging` 不许再挂到第二页（第 138 期起 `network` 已不含它）。
   logs: ['logging'],
   // 阅读进度口径的全局默认值（页面在「偏好与同步」；每库覆写在书库管理里）
   reading: ['reading'],

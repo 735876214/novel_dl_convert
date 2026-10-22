@@ -92,14 +92,14 @@ def test_写isbn不会覆盖书自己的uuid(tmp_path: pathlib.Path):
     path = tmp_path / "书.epub"
     epub_builder.build_epub({"title": "书", "author": "作者", "language": "zh"},
                             [{"title": "第一章", "body_html": "<p>正文</p>"}], str(path))
-    _opf_path, opf, _blob = fileops._read_epub(path)
+    _opf_path, opf = fileops._read_epub(path)
     uuid_before = library._tag_all(opf, "dc:identifier")[0]
     assert "uuid" in uuid_before.lower() or len(uuid_before) == 36, uuid_before
 
     # patch_epub_meta 返回**实际改动的字段列表**（不是布尔）
     assert fileops.patch_epub_meta(path, {"isbn": "9787539941123"}) == ["isbn"]
 
-    _p, opf2, _b = fileops._read_epub(path)
+    _p, opf2 = fileops._read_epub(path)
     ids = library._tag_all(opf2, "dc:identifier")
     assert uuid_before in ids, f"书自己的标识符被覆盖了：{ids}"
     assert library._isbn_of(opf2) == "9787539941123"
@@ -113,7 +113,7 @@ def test_已有真isbn时是替换而不是追加(tmp_path: pathlib.Path):
     assert fileops.patch_epub_meta(path, {"isbn": "9787539941123"}) == ["isbn"]
     assert fileops.patch_epub_meta(path, {"isbn": "9780306406157"}) == ["isbn"]
 
-    _p, opf, _b = fileops._read_epub(path)
+    _p, opf = fileops._read_epub(path)
     ids = library._tag_all(opf, "dc:identifier")
     assert len(ids) == 2, f"第二次改 ISBN 不该再追加一条：{ids}"
     assert library._isbn_of(opf) == "9780306406157"

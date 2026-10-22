@@ -73,8 +73,10 @@ def _fp(path) -> tuple:
 
 
 def _opf_text(path) -> str:
-    _opf_path, opf, blob = fileops._read_epub(path)
-    assert blob is not None, f"读不出 OPF：{path}"
+    # 第 137 期起 `_read_epub` 只回 `(opf_path, opf)` —— 整包 blob 不再读进内存
+    # （旧调用方拿 blob 是为了整包重写；现在 `_write_epub(path, {条目: 字节})`）。
+    _opf_path, opf = fileops._read_epub(path)
+    assert opf, f"读不出 OPF：{path}"
     return opf
 
 

@@ -28,7 +28,7 @@ import pathlib
 import time
 
 from .. import config
-from . import detect, epub_builder, htmlsafe, pipeline, preprocess, reading_list
+from . import atomicio, detect, epub_builder, htmlsafe, pipeline, preprocess, reading_list
 
 #: 缓存子目录名（小写 / 连字符，与 `pdf/`、`authors/` 同风格）
 CACHE_SUBDIR = "txt-epub"
@@ -119,10 +119,12 @@ def _write_state(cdir: pathlib.Path, state: dict) -> None:
         cdir.mkdir(parents=True, exist_ok=True)
         # ``enc_rule`` 在这里**统一**写入（而不是让每个调用方各写一遍）：编码判据版本
         # 是缓存有效性的一个分量，漏写就等于「判据改了但缓存照旧命中」。
-        (cdir / STATE_NAME).write_text(
+        # 与同文件里正式产物同一手法（`.part` → replace）：此前 state 是直写，别留两套写法。
+        atomicio.write_text(
+            cdir / STATE_NAME,
             json.dumps({**state, "enc_rule": ENC_RULE_VERSION, "at": time.time()},
                        ensure_ascii=False),
-            encoding="utf-8")
+            private=False)
     except Exception:
         # 状态写不进去不是致命错：下次调用重新尝试（最坏是重复转换一次）
         pass

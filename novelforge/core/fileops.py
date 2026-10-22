@@ -39,7 +39,7 @@ import zipfile
 from xml.sax.saxutils import escape
 
 from .. import config
-from . import activity_log, db, komga, library, metadata
+from . import activity_log, comics, db, komga, library, metadata, zipkind
 from .filename import UNSAFE_CHARS, strip_unsafe
 
 RECYCLE_DIRNAME = "recycle"
@@ -527,41 +527,58 @@ def _patch_opf(opf: str, field: str, value: str) -> str:
 
 
 def _read_epub(path) -> tuple:
-    """读出 ``(opf 路径, opf 文本, 全部条目 blob)``；失败返回 ``("", "", None)``。
+    """读出 ``(opf 路径, opf 文本)``；读不出来返回 ``("", "")``。
 
     抽出来是因为「只改 OPF」与「还要增删条目（写入封面图）」两条路径需要同一套读法，
-    各写一份迟早走样。定位 OPF 走 ``META-INF/container.xml``，找不到再退回扫 ``.opf``。
+    各写一份迟早走样。OPF 定位**不在这里**：那是 `library._opf_path(z)`（container.xml →
+    退回扫 ``.opf`` 的唯一实现），本函数只负责「打开、问、读那一条」。
+
+    ⚠️ 第 137 期：旧实现顺手把**全部条目**读成一个 ``{名字: 字节}`` 的 blob（返回值第三个
+    元素），一本 500 MB 的画册式 EPUB 或一份 zip 炸弹就此全量进内存 —— 而这条路径只需要
+    OPF 一处文本。blob 已删：改写走 :func:`_write_epub`，那里**逐条目流式复制**源包。
     """
     try:
         with zipfile.ZipFile(path) as z:
-            infos = z.infolist()
-            opf_path = ""
-            try:
-                container = z.read("META-INF/container.xml").decode("utf-8", "ignore")
-                m = re.search(r'full-path="([^"]+)"', container)
-                if m:
-                    opf_path = m.group(1)
-            except Exception:
-                opf_path = ""
+            opf_path = library._opf_path(z)
             if not opf_path:
-                opfs = [n for n in z.namelist() if n.lower().endswith(".opf")]
-                if not opfs:
-                    return ("", "", None)
-                opf_path = opfs[0]
-            opf = z.read(opf_path).decode("utf-8", "ignore")
-            blob = {info.filename: (info, z.read(info)) for info in infos}
-        return (opf_path, opf, blob)
+                return ("", "")
+            return (opf_path, zipkind.read_entry(z, opf_path).decode("utf-8", "ignore"))
     except Exception:
-        return ("", "", None)
+        return ("", "")
 
 
-def _write_epub(path, blob) -> bool:
-    """把 blob 写成新的 zip 并**原子替换**（失败时清理临时文件）。"""
+def _write_epub(path, replaced: dict) -> bool:
+    """把源包逐条目复制成新 zip（``replaced`` 里的换成新字节）并**原子替换**。
+
+    ``replaced`` = ``{zip 内路径: 字节}``：源包里已有的条目**替换**，没有的**追加**。
+    其余条目**原样流式复制**（`ZipInfo` 整个写过去 ⇒ 压缩方式 / 时间戳不变）。
+
+    三条为什么：
+    · **不建全量 blob**：第 137 期之前这里先把整包读成字典，一次「抓封面」就能把内存
+      按书的大小翻一倍；现在峰值 = 单条目上限（`comics.MAX_ENTRY_BYTES`，读的那一条
+      超了直接抛 `EntryTooLarge` ⇒ 这次改写失败、源文件一字不动）。
+    · **先 close 源包再 replace**：Windows 上重命名一个仍被打开的文件会失败，而这条路径
+      在开发机上也要能跑。
+    · **失败清理临时文件**：`.tmp-epub` 绝不能留在书库目录里被扫描当成一本书。
+    """
     tmp = path.with_name(path.name + ".tmp-epub")
+    pending = dict(replaced)
     try:
-        with zipfile.ZipFile(tmp, "w") as z:
-            for info, content in blob.values():
-                z.writestr(info, content)
+        with zipfile.ZipFile(path) as src, zipfile.ZipFile(tmp, "w") as out:
+            for info in src.infolist():
+                if info.filename in pending:
+                    out.writestr(info, pending.pop(info.filename))
+                elif info.is_dir():
+                    out.writestr(info, b"")
+                else:
+                    # 同一个上限闸（唯一实现 `comics.read_capped`）：复制也要过闸，
+                    # 否则「改一处 OPF」就成了一颗 zip 炸弹的解压入口。
+                    with src.open(info) as fp:
+                        out.writestr(info, comics.read_capped(fp, info.filename))
+            for name, data in pending.items():       # 新增条目（如封面图）
+                zi = zipfile.ZipInfo(name)
+                zi.compress_type = zipfile.ZIP_DEFLATED
+                out.writestr(zi, data)
         tmp.replace(path)
         return True
     except Exception:
@@ -579,14 +596,13 @@ def _rewrite_zip_opf(path: pathlib.Path, transform) -> bool:
     返回 True 表示**成功**（transform 没产生改动也算成功）；任何异常返回 False。
     注意这里**只能改 OPF 文本**；要增删 zip 条目（如写入封面图）请用 :func:`rewrite_epub`。
     """
-    opf_path, opf, blob = _read_epub(path)
-    if blob is None:
+    opf_path, opf = _read_epub(path)
+    if not opf_path:
         return False
     new_opf = transform(opf)
     if new_opf == opf:
         return True
-    blob[opf_path] = (blob[opf_path][0], new_opf.encode("utf-8"))
-    return _write_epub(path, blob)
+    return _write_epub(path, {opf_path: new_opf.encode("utf-8")})
 
 
 # ---------------- 封面写入（元数据抓取用）----------------
@@ -644,22 +660,16 @@ def rewrite_epub(path, *, updates: dict = None, transform=None, add_files: dict 
     - ``add_files``：``{zip 内路径: bytes}``，同名条目**替换**
     - OPF 与条目都没变化时返回 True 且**不重写文件**（避免无谓地改 mtime）
     """
-    opf_path, opf, blob = _read_epub(path)
-    if blob is None:
+    opf_path, opf = _read_epub(path)
+    if not opf_path:
         return False
     new_opf = transform(opf) if transform else patch_opf_meta(opf, updates or {})
     adds = {k: v for k, v in (add_files or {}).items() if v}
     if new_opf == opf and not adds:
         return True
-    blob[opf_path] = (blob[opf_path][0], new_opf.encode("utf-8"))
-    for name, data in adds.items():
-        if name in blob:
-            blob[name] = (blob[name][0], data)
-        else:
-            zi = zipfile.ZipInfo(name)
-            zi.compress_type = zipfile.ZIP_DEFLATED
-            blob[name] = (zi, data)
-    return _write_epub(path, blob)
+    # 只把「要改的那几条」交给写入端：其余条目由 `_write_epub` 从源包**流式复制**
+    # （第 137 期之前这里维护的是一份全量 blob，见 `_read_epub` 的说明）。
+    return _write_epub(path, {opf_path: new_opf.encode("utf-8"), **adds})
 
 
 def patch_epub_meta(path: pathlib.Path, updates: dict) -> list:

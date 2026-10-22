@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from .. import config
-from ..core import db
+from ..core import atomicio, db
 from . import creds                         # cookie 文件名只有一处（`creds.cookie_file`）
 from . import online                       # 只为了转调 `online.support_reason`（见 `sources_status`）
 from .base import REGISTRY, register
@@ -83,9 +83,10 @@ def add_rule(rule: dict) -> Path:
         raise ValueError("；".join(errs))
     _sources_dir()                       # 确保目录存在（路径本身由 `rule_file_path` 给出）
     path = rule_file_path(rule["name"])
-    path.write_text(
-        json.dumps(rule, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    # 原子写：半份 JSON 会让书源「消失」—— 读侧 `json.loads` 直接 except（重新注册失败），
+    # 启动装载失败也只打一行 warn（第 137 期审计）。用户手写的规则不该被一次中断吃掉。
+    atomicio.write_text(path, json.dumps(rule, ensure_ascii=False, indent=2),
+                        private=False)
     if _ledger_enabled(rule.get("name")):
         register_rule(rule)
     return path

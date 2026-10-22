@@ -57,7 +57,7 @@ import secrets
 import shutil
 
 from .. import config
-from . import library, lib_settings, publish, reading_list
+from . import atomicio, library, lib_settings, publish, reading_list
 
 _log = logging.getLogger("novelforge")
 
@@ -320,9 +320,7 @@ def _write_text(path: pathlib.Path, text: str) -> None:
     留档写一半就会被当成「本地已有这么多章」，于是下次追更从错误的位置开始、
     **静默丢章** —— 这类半成品比没有更糟。
     """
-    tmp = path.with_suffix(path.suffix + ".part")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(path)
+    atomicio.write_text(path, text, private=False)
 
 
 def _park(path):
@@ -350,10 +348,11 @@ def _copy_atomic(src: pathlib.Path, dst: pathlib.Path) -> None:
     收书目录里 ⇒ 监听线程会把它当成一本新书收进书架。``*.part`` 在 `config` 的 watcher
     忽略清单里（`watcher.ignore`），所以宁可留一个垃圾文件，也不留半本书
     —— 与 `sources/manager.py` 里留档 txt 的写法同一手法。
+
+    第 137 期起具体实现收敛到 :func:`atomicio.copy_file` —— 这里只保留"落地侧"的名字与
+    判据说明，别再在这里写第二份 `.part` 逻辑。
     """
-    tmp = dst.with_name(dst.name + ".part")
-    shutil.copy2(src, tmp)
-    tmp.replace(dst)
+    atomicio.copy_file(src, dst)
 
 
 # ---------------- 落地 / 更新 ----------------

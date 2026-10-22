@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import pathlib
 import threading
@@ -62,8 +63,57 @@ _current = ""
 #: 有了世代号，「**已被作废的那一轮不得落库**」成为可强制的事实：
 #: `stop()` / `start()` 推进世代 ⇒ 旧世代的一切写入被拒。
 #: 代价只是「那条留到下次重来」—— 而它本来就是既有恢复路径
-#: （``start()`` 会 ``scrape_reset_running()`` 把 running 打回 pending）。
+#: （启动流程调 ``reset_interrupted()`` 把 running 打回 pending，第 137 期从 ``start()``
+#: 里抬出来：``enabled=false`` 的部署重启后不会调 ``start()``，复位不能挂在它的门上）。
 _epoch = 0
+
+#: **按书互斥**（第 137 期）：``bid`` → 该书的 ``Lock``。
+#:
+#: 为什么必须有：一条书的处理并不只发生在 worker 里 —— ``enqueue``（扫描 / 用户点
+#: 「重新刮削」）、``process``（worker 与本进程的请求线程）、``verify``（定时校验）、
+#: ``resolve``（页面处置）都可能在**不同线程**里同时动同一本。而 `publish` 的出版是
+#: 无锁 check-then-act（``dst.exists()`` → 回收 → ``link_or_copy``）：
+#:
+#: - 两方同时出版 ⇒ 一方把另一方**刚建好的副本**移进回收站（用户看到副本消失）；
+#: - ``verify`` 恰好在「副本被短暂回收」的窗口里跑 ⇒ 行被标成 ``removed``，而
+#:   ``enqueue`` 对 `_HELD` 状态直接返回 ⇒ 这本书**永远不再自动出版**（要人工救）；
+#: - ``enqueue(force=True)`` 若与 worker 的收尾并发 ⇒ 用户那次「重新刮削」被收尾的
+#:   无条件回写（``force_fetch=0``）吞掉，或反过来把刚出版的行打回 pending。
+#:
+#: 锁边界（**只圈「状态机迁移 + 副本落地」这一段**）：四类操作里，`publish` 的副本
+#: 落地与随之的状态写入必须同锁；`metafetch` 的外呼也在锁内，因为它的结果接着就要
+#: 写进副本、与出版是同一段判定（拆开就又出现「读快照 → 写副本」的窗口）。
+#: 停摆风险由**锁的粒度**兜住：一把锁只锁**一本书**，别的书照跑（worker 本来就是
+#: 单线程串行，所以队列节奏不受影响）；唯一的代价是「同一本书被重复点」时后到者
+#: **排队等**，那是正确语义（用户的动作不会丢），不是停摆。
+#: 锁**不嵌套**（不会在持 A 书锁时去要 B 书锁）⇒ 无 AB-BA。用完即清（见 `_bid_guard`），
+#: 否则几千本书的台账会留下几千把空锁。
+_bid_locks: dict = {}
+#: 只管 `_bid_locks` 这张表本身（拿它 → 取/建该书锁 → 立刻放，绝不跨着干活）
+_bid_locks_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _bid_guard(bid):
+    """持有一本书的互斥锁（见 :data:`_bid_locks`）。**所有**该书的处置都从这里过。
+
+    用法：``with _bid_guard(bid): <状态机迁移 + 副本落地>``。
+    ⚠️ 不要嵌套（同一 bid 再进一次会自锁）；不要在里面等别的书。
+    """
+    key = str(bid)
+    with _bid_locks_lock:
+        entry = _bid_locks.get(key)
+        if entry is None:
+            entry = _bid_locks[key] = [threading.Lock(), 0]
+        entry[1] += 1                      # [锁, 引用计数]：等锁的人也算，别把锁抽走
+    try:
+        with entry[0]:
+            yield
+    finally:
+        with _bid_locks_lock:
+            entry[1] -= 1
+            if entry[1] <= 0:
+                _bid_locks.pop(key, None)
 
 
 # ---------------- 配置 / 状态查询 ----------------
@@ -160,6 +210,12 @@ def enqueue(book: dict, *, force: bool = False, reason: str = "scan",
 
     ``row`` 可由调用方**批量预取**后传入（见 :func:`enqueue_library`）——
     逐本查库在整库入队时是几千次查询，虽然不致命，但没必要。
+
+    **与收尾共用按书锁**（第 137 期）：读台账 → 判定 → 写 ``pending`` 整段在
+    :func:`_bid_guard` 里。否则用户在这本书**正在被 worker 处理**时点「重新刮削」，
+    请求会被 ``status='running'`` 的「已在队列中」早退掉（或者刚写的 ``force_fetch=1``
+    被 worker 收尾的无条件 ``force_fetch=0`` 盖掉）—— 用户的动作**静默无效**。
+    现在它排在那一轮之后落地：状态机看到的是「跑完了 → 再排一次，且强制重抓」。
     """
     book = book or {}
     bid = str(book.get("id") or "")
@@ -175,38 +231,39 @@ def enqueue(book: dict, *, force: bool = False, reason: str = "scan",
 
     name = str(book.get("name") or "")
     src_path = library.abs_path(book)
-    sig = publish.source_sig(src_path)
-    row = row if row is not None else (db.scrape_get(bid) or {})
-    st = str(row.get("status") or "")
-    if row and not force:
-        same_src = (int(row.get("src_size") or 0) == sig[0]
-                    and float(row.get("src_mtime") or 0) == float(sig[1]))
-        # 「原文件已按确认回收」是**持有**状态，但用户若把文件重新放回源目录，
-        # 意图就很明确了（他要这本书回来）：此时放行，否则这一行永远没有出口 ——
-        # 该状态下页面不给任何按钮，重新入队又被挡，等于把这本书锁死。
-        if st == "source_removed" and src_path.exists():
-            pass
-        elif st == "ok":
-            rel = str(row.get("link_rel") or "")
-            if same_src and rel and (pdir / rel).exists():
-                return {"ok": True, "skipped": True, "reason": "已是最新"}
-        elif st in ("pending", "running"):
-            return {"ok": True, "skipped": True, "reason": "已在队列中"}
-        elif st in _HELD:
-            return {"ok": False, "skipped": True, "reason": _HELD[st]}
-        elif st == "failed" and not same_src:
-            pass                                      # 源换了 → 值得再试一次
-        elif st == "failed" and int(row.get("attempts") or 0) >= _max_attempts(lib_id):
-            # 已用尽自动重试次数：**不要每次扫描都再触发一遍**，等人工在页面上处理
-            return {"ok": False, "skipped": True,
-                    "reason": "已连续失败，请人工重试（页面可「重新刮削」）"}
-        attempts = int(row.get("attempts") or 0) if same_src else 0
-    else:
-        attempts = 0
-    db.scrape_set(bid, library_id=lib_id, source_rel=name, status="pending",
-                  src_size=sig[0], src_mtime=sig[1], attempts=attempts,
-                  force_fetch=1 if force else 0, error="")
-    return {"ok": True, "queued": True, "reason": reason}
+    sig = publish.source_sig(src_path)                # 文件 stat：放在锁外，够不着状态机
+    with _bid_guard(bid):                             # 读 → 判定 → 写，必须原子
+        row = row if row is not None else (db.scrape_get(bid) or {})
+        st = str(row.get("status") or "")
+        if row and not force:
+            same_src = (int(row.get("src_size") or 0) == sig[0]
+                        and float(row.get("src_mtime") or 0) == float(sig[1]))
+            # 「原文件已按确认回收」是**持有**状态，但用户若把文件重新放回源目录，
+            # 意图就很明确了（他要这本书回来）：此时放行，否则这一行永远没有出口 ——
+            # 该状态下页面不给任何按钮，重新入队又被挡，等于把这本书锁死。
+            if st == "source_removed" and src_path.exists():
+                pass
+            elif st == "ok":
+                rel = str(row.get("link_rel") or "")
+                if same_src and rel and (pdir / rel).exists():
+                    return {"ok": True, "skipped": True, "reason": "已是最新"}
+            elif st in ("pending", "running"):
+                return {"ok": True, "skipped": True, "reason": "已在队列中"}
+            elif st in _HELD:
+                return {"ok": False, "skipped": True, "reason": _HELD[st]}
+            elif st == "failed" and not same_src:
+                pass                                  # 源换了 → 值得再试一次
+            elif st == "failed" and int(row.get("attempts") or 0) >= _max_attempts(lib_id):
+                # 已用尽自动重试次数：**不要每次扫描都再触发一遍**，等人工在页面上处理
+                return {"ok": False, "skipped": True,
+                        "reason": "已连续失败，请人工重试（页面可「重新刮削」）"}
+            attempts = int(row.get("attempts") or 0) if same_src else 0
+        else:
+            attempts = 0
+        db.scrape_set(bid, library_id=lib_id, source_rel=name, status="pending",
+                      src_size=sig[0], src_mtime=sig[1], attempts=attempts,
+                      force_fetch=1 if force else 0, error="")
+        return {"ok": True, "queued": True, "reason": reason}
 
 
 def enqueue_library(library_id=None, *, force: bool = False) -> dict:
@@ -263,8 +320,18 @@ def process(bid, *, fetch: bool = None, gen: int = None) -> dict:
     ``gen``：调用方的 worker 世代号（见 ``_epoch``）。**只有后台 worker 传**；
     同步调用与接口触发一律 ``None`` = 不受世代约束。传入时，一旦那一轮被作废，
     本函数在**每个落库点**停手并返回 ``{"aborted": True}`` —— 条目留待下轮重来。
+
+    **按书互斥**（第 137 期）：整段在 :func:`_bid_guard` 里跑，与同一本书的
+    ``enqueue`` / ``verify`` / ``resolve`` 串行 —— 理由（无锁出版会互相回收副本、
+    verify 把行标成 removed 后 enqueue 永久拒收）见 :data:`_bid_locks`。
     """
     bid = str(bid)
+    with _bid_guard(bid):
+        return _process_locked(bid, fetch=fetch, gen=gen)
+
+
+def _process_locked(bid, *, fetch: bool = None, gen: int = None) -> dict:
+    """`process` 的本体。调用方**必须**已持有该 ``bid`` 的按书锁（见 `_bid_guard`）。"""
 
     def stale() -> bool:
         return _stale(gen)
@@ -408,25 +475,36 @@ def verify(library_id=None, gen: int = None) -> dict:
         if _stale(gen):
             break
         bid = str(row.get("book_id"))
-        lib = library.get_library(row.get("library_id"))
-        if not lib:
-            continue
-        pdir = publish.publish_dir(str(lib.get("id")))
-        rel = str(row.get("link_rel") or "")
-        name = str(row.get("source_rel") or bid)
-        src = _lib_source_path(lib, name)
-        copy = (pdir / rel) if (pdir and rel) else None
-        if copy is not None and not copy.exists():
-            db.scrape_set(bid, status="removed", removed_at=time.time(),
-                          removed_path=str(copy),
-                          error="硬链接副本已删除，原文件待确认")
-            _log(name, f"硬链接副本已删除，原文件待确认（原文件：{src}）")
-            removed.append({"book_id": bid, "name": name,
-                            "source": str(src), "removed_path": str(copy)})
-        elif not src.exists():
-            db.scrape_set(bid, status="orphan", error="原文件已不在，副本为唯一留存")
-            _log(name, f"原文件已不在，副本为唯一留存：{copy}")
-            orphan.append({"book_id": bid, "name": name, "copy": str(copy)})
+        with _bid_guard(bid):                    # 与 process / enqueue / resolve 串行
+            # **锁内重取**再判一次状态（第 137 期）：外面那份快照可能已经过期 ——
+            # worker 刚处理完（副本正在落地 / 刚落完），或用户刚处置过。拿旧快照下判断，
+            # 就会把「其实好着」的行标成 `removed`，而 `enqueue` 对 `_HELD` 状态直接
+            # 返回 ⇒ 这本书**永远不再自动出版**，只能人工救。判据永远是「此刻库里这一行」。
+            cur = db.scrape_get(bid) or {}
+            if str(cur.get("status") or "") != "ok":
+                continue
+            if _stale(gen):
+                break
+            row = {**row, **cur}
+            lib = library.get_library(row.get("library_id"))
+            if not lib:
+                continue
+            pdir = publish.publish_dir(str(lib.get("id")))
+            rel = str(row.get("link_rel") or "")
+            name = str(row.get("source_rel") or bid)
+            src = _lib_source_path(lib, name)
+            copy = (pdir / rel) if (pdir and rel) else None
+            if copy is not None and not copy.exists():
+                db.scrape_set(bid, status="removed", removed_at=time.time(),
+                              removed_path=str(copy),
+                              error="硬链接副本已删除，原文件待确认")
+                _log(name, f"硬链接副本已删除，原文件待确认（原文件：{src}）")
+                removed.append({"book_id": bid, "name": name,
+                                "source": str(src), "removed_path": str(copy)})
+            elif not src.exists():
+                db.scrape_set(bid, status="orphan", error="原文件已不在，副本为唯一留存")
+                _log(name, f"原文件已不在，副本为唯一留存：{copy}")
+                orphan.append({"book_id": bid, "name": name, "copy": str(copy)})
     return {"checked": len(rows), "removed": removed, "orphan": orphan}
 
 
@@ -454,15 +532,27 @@ def _lib_source_path(lib: dict, name: str) -> "pathlib.Path":
 
 
 def resolve(bid, action: str) -> dict:
-    """执行用户在某本书上的显式处置。**任何状态流转都只能从这里回到 ok**。"""
+    """执行用户在某本书上的显式处置。**任何状态流转都只能从这里回到 ok**。
+
+    ``rebuild`` 直接转给 :func:`process`（它自带按书锁）；其余动作在
+    :func:`_bid_guard` 里做 —— 这些动作会**移文件 / 改状态**（回收副本、回收原文件），
+    与 worker / ``verify`` 并发时正是「一方把另一方刚建的副本收走」「verify 把行标成
+    removed」的那条竞态（第 137 期，见 :data:`_bid_locks`）。
+    """
     action = str(action or "").strip()
     if action not in ACTIONS:
         return {"ok": False, "error": f"未知动作：{action}"}
-    row = db.scrape_get(bid)
+    if action == "rebuild":
+        return process(bid, fetch=False)             # 走 process ⇒ 自己的按书锁
+    with _bid_guard(bid):
+        return _resolve_locked(bid, action)
+
+
+def _resolve_locked(bid, action: str) -> dict:
+    """`resolve` 的本体（非 rebuild 分支）。调用方**必须**已持有该 ``bid`` 的按书锁。"""
+    row = db.scrape_get(bid)                        # 锁内取：上面那份快照可能已过期
     if not row:
         return {"ok": False, "error": "没有这本书的刮削台账"}
-    if action == "rebuild":
-        return process(bid, fetch=False)
 
     lib = library.get_library(row.get("library_id")) or {}
     name = str(row.get("source_rel") or bid)
@@ -611,6 +701,10 @@ def republish(subset=None, library_id=None) -> dict:
                and (not allow or it["book_id"] in allow)]
     items = []
     for it in targets:
+        # 单本重出版 = `resolve('rebuild')` = `process(fetch=False)` ⇒ **自带按书锁**
+        # （第 137 期）。批量时逐本排队跑：它与用户在页面上点同一本书的重建、
+        # 与 worker 的刮削轮次都不会同时写那份副本（否则一方的旧副本回收会吃掉
+        # 另一方刚建好的副本）。
         res = resolve(it["book_id"], "rebuild")
         items.append({"book_id": it["book_id"], "name": it["name"],
                       "old_rel": it["old_rel"], "new_rel": it["new_rel"],
@@ -638,11 +732,33 @@ def run_once(limit: int = _BATCH) -> dict:
     return {"processed": len(items), "items": items}
 
 
+def reset_interrupted() -> int:
+    """把上次进程被杀时残留的 ``running`` 打回 ``pending`` → 返回改动行数。
+
+    **这是启动流程的事，不是 `start()` 的事**（第 137 期划开）：``start()`` 是每次
+    「开始刮削 / 入队」都要调的，而复位只该在**进程启动时**做一次。以前它挂在
+    ``start()`` 的门里，于是 ``scrape.enabled=false`` 的部署重启后**根本不会调
+    ``start()``** ⇒ 那些 ``running`` 行永久显示「进行中」，``scrape_pending``（只取
+    ``pending``）也永不消费 —— 队列整体停摆。现在由启动流程（``server`` lifespan）
+    无条件调用一次，与「起不起 worker」解耦。
+
+    单独拆出来还有个好处：复位会**推进世代号**（见 ``_epoch``），必须发生在任何
+    worker 起来**之前**，否则会把新一轮 worker 的写入一起作废。
+    """
+    global _epoch
+    with _lock:
+        _epoch += 1                     # 旧世代的一切残留写入从此被拒
+    try:
+        return int(db.scrape_reset_running() or 0)
+    except Exception:                             # noqa: BLE001 —— 启动路径不因复位失败而崩
+        _logger.exception("复位残留的刮削 running 行失败")
+        return 0
+
+
 def start() -> bool:
     """启动后台 worker（幂等）。返回是否**本次**真的启动了。
 
-    启动时把残留的 ``running`` 打回 ``pending`` —— 上次进程被 kill 时进行中的
-    条目不该永远卡住。
+    **只负责起线程**：残留 ``running`` 的复位是启动流程的事（见 :func:`reset_interrupted`）。
     """
     global _thread, _stop, _epoch
     with _lock:
@@ -650,10 +766,6 @@ def start() -> bool:
             return False
         _stop = False
         _epoch += 1                     # 新一轮 = 新世代（上一轮的残留写入从此被拒）
-        try:
-            db.scrape_reset_running()
-        except Exception:                             # noqa: BLE001
-            pass
         _thread = threading.Thread(target=_loop, name="nf-scrape", daemon=True)
         _thread.start()
         return True

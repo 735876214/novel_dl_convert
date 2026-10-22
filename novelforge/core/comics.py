@@ -28,6 +28,8 @@ import pathlib
 import re
 import zipfile
 
+from . import atomicio
+
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif"}
 _JUNK_PARTS = ("__MACOSX/", ".DS_Store", "Thumbs.db", ".thumbnails/")
 
@@ -61,15 +63,24 @@ class EntryTooLarge(RuntimeError):
 
     **故意不是「返回空」**：空会被上层当成「坏包 / 没这一页」，用户看到的是
     「这本漫画里没有可显示的图片」—— 与真相（这一页大得离谱）完全不是一回事。
-    调用方（server）把它翻成 413 + 一句人话。
+    调用方（server）把它翻成 413 + 一句人话；书籍本体那边按「坏书跳过」登记
+    （见 `zipkind.read_entry` 的说明）。
+
+    ⚠️ 常量与这个异常都只在**本模块**定义一次（第 137 期）：`zipkind.read_entry` 是
+    「读归档条目」的入口，转发这里的闸；`library` / `fileops` / `comics` 自己都别再写
+    第二套上限判断 —— 第 125 期只给漫画页加了闸，书籍本体（container.xml / OPF /
+    章节 / CSS / `fileops` 的整包读取）全是裸 ``z.read()``，一份几百 KB 的 zip 炸弹就能
+    让**自动扫描**（用户什么都没点）把内存吃光。
     """
 
-    def __init__(self, name: str, size: int):
+    def __init__(self, name: str, size: int, limit: int | None = None):
+        limit = MAX_ENTRY_BYTES if limit is None else limit
         self.name = name
         self.size = size
+        self.limit = limit
         super().__init__(
             f"这个条目解压后有 {_fmt_size(size)}，超过上限 "
-            f"{_fmt_size(MAX_ENTRY_BYTES)}（{name}）")
+            f"{_fmt_size(limit)}（{name}）")
 
 
 def _fmt_size(n: int) -> str:
@@ -81,9 +92,35 @@ def _fmt_size(n: int) -> str:
     return f"{n} B"
 
 
-def _guard_size(name: str, size: int) -> None:
-    if size > MAX_ENTRY_BYTES:
-        raise EntryTooLarge(name, size)
+def _guard_size(name: str, size: int, limit: int | None = None) -> None:
+    """``limit`` 缺省时**每次调用现读**模块级 :data:`MAX_ENTRY_BYTES`。
+
+    ⚠️ 不能写成 ``limit: int = MAX_ENTRY_BYTES``：默认值在 ``def`` 执行时（导包那一刻）
+    就被绑定，之后改 ``comics.MAX_ENTRY_BYTES``（用例 monkeypatch / 运维临时调小）对它
+    **完全没有影响**，闸门悄悄变成 128 MiB 恒值 —— 第 137 期收敛这道闸时就踩了这个坑，
+    `tests/test_ingest_audit_125.py` 三条用例当场变红（这正是它们存在的意义）。
+    """
+    limit = MAX_ENTRY_BYTES if limit is None else limit
+    if size > limit:
+        raise EntryTooLarge(name, size, limit)
+
+
+def read_capped(fp, name: str, limit: int | None = None) -> bytes:
+    """从一个**已打开**的归档条目流里读字节，超上限抛 :class:`EntryTooLarge`。
+
+    **这是「读条目」的唯一实现**（第 137 期）：``_Archive.read``（zip / rar 分支）与
+    ``zipkind.read_entry``（书籍本体那一侧）都调它，不再各写一份 ``fp.read()``。
+
+    为什么是「读 ``limit + 1`` 字节再多读一个」而不是先查目录里的 ``file_size``：
+    目录里的大小是**压缩包自己声称的**，一个精心构造的归档可以声称 12 KB、实际解出 4 GB
+    （zip 的 ``file_size`` 与实际解压字节不符时 ``zipfile`` 照样往下解）。只信**真实读到的
+    字节数**，多读的那一个字节就是「已经超了」的证据 —— 于是内存峰值天然被钉在
+    ``limit`` 附近，而不是在 OOM 之后才发现。
+    """
+    limit = MAX_ENTRY_BYTES if limit is None else limit
+    data = fp.read(limit + 1)
+    _guard_size(name, len(data), limit)
+    return data
 
 #: 归档魔数：RAR4/RAR5 都是 "Rar!\x1a\x07"，zip 以 "PK" 开头，7z 是固定 6 字节签名
 _RAR_MAGIC = b"Rar!\x1a\x07"
@@ -112,12 +149,11 @@ def write_cbz(dest, pages):
     · **页序 = 传入顺序**：调用方负责有序（站点给的顺序就是阅读顺序，本函数不重排）。
     """
     dest = pathlib.Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_name(dest.name + ".part")
-    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
+    # 临时名 / 提交 / 失败清理只有一处实现（`atomicio.access`）—— 别在这儿再拼 `.part`
+    with atomicio.access(dest) as tmp, \
+            zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
         for name, data in pages:
             z.writestr(str(name), data)
-    tmp.replace(dest)
     return dest
 
 
@@ -326,18 +362,15 @@ class _Archive:
     def read(self, name: str):
         """取一个条目的字节。**取不到回 ``None``**（7z 后端的能力边界，见下）。
 
-        超过 :data:`MAX_ENTRY_BYTES` 抛 :class:`EntryTooLarge` —— 见那里的说明。
+        超过 :data:`MAX_ENTRY_BYTES` 抛 :class:`EntryTooLarge` —— 闸门只有
+        :func:`read_capped` 一处，这里只是把「已打开的条目流」交给它。
         """
         if self._z is not None:
             with self._z.open(name) as fp:
-                data = fp.read(MAX_ENTRY_BYTES + 1)
-            _guard_size(name, len(data))
-            return data
+                return read_capped(fp, name)
         if self._r is not None:
             with self._r.open(name) as fp:
-                data = fp.read(MAX_ENTRY_BYTES + 1)
-            _guard_size(name, len(data))
-            return data
+                return read_capped(fp, name)
         # 7z：py7zr 1.1.3 实测**没有**「读单个条目」的直接 API（只有 extract/extractall），
         # 官方给的路子是传一个内存工厂 ⇒ 这里把该条目抽进 BytesIO：**不落盘**、
         # 也**不整包读进内存**（工厂的 limit 按该条目的解压后大小给）。

@@ -26,7 +26,7 @@ def _safe_name(s: str) -> str:
     s = s.strip(". ")[:120].strip(". ")
     return s or "book"
 
-from ..core import network, pipeline, reading_list, urlguard
+from ..core import atomicio, network, pipeline, reading_list, urlguard
 from .base import REGISTRY
 
 #: 追更用的**按路径**互斥锁（第 87 期收尾补）。
@@ -286,11 +286,10 @@ class DownloadManager:
         else:
             body = str(text)
         txt_path = input_dir / f"{stem}.txt"
-        t_tmp = txt_path.with_suffix(txt_path.suffix + ".part")
         # ⚠️ 同步文件 I/O 一律扔线程池（第 118 期）：整本正文可能几 MB、书库常在 NAS 上，
         #    占着事件循环会让同进程的其它请求一起卡住（口径同 `server.py`）。
-        await asyncio.to_thread(t_tmp.write_text, body, encoding="utf-8")
-        await asyncio.to_thread(t_tmp.replace, txt_path)
+        # 临时名 / 提交 / 失败清理只有一处实现（第 137 期：`atomicio`）。
+        await asyncio.to_thread(atomicio.write_text, txt_path, body, private=False)
 
         if chapters:
             await asyncio.to_thread(self.write_sidecar, txt_path, item, out_dir,
@@ -413,11 +412,9 @@ class DownloadManager:
         except Exception:                                    # noqa: BLE001 —— 读不到当空
             old = ""
         add_txt = "\n\n".join(f"{ch.get('title', '')}\n{ch.get('body', '')}" for ch in fresh)
-        t_tmp = txt_path.with_suffix(txt_path.suffix + ".part")
-        await asyncio.to_thread(t_tmp.write_text,
-                                (old.rstrip() + "\n\n" + add_txt).strip() + "\n",
-                                encoding="utf-8")
-        await asyncio.to_thread(t_tmp.replace, txt_path)
+        await asyncio.to_thread(
+            atomicio.write_text, txt_path,
+            (old.rstrip() + "\n\n" + add_txt).strip() + "\n", private=False)
 
         # ② EPUB：**只追加**（既有条目字节不变 ⇒ 阅读数据 index 不漂移）
         out_dir = Path(meta.get("output_dir") or txt_path.parent)
@@ -437,10 +434,8 @@ class DownloadManager:
         meta["chapters"] = len(chapters)
         if chapters:
             meta["last_title"] = chapters[-1].get("title") or ""
-        s_tmp = sidecar.with_suffix(sidecar.suffix + ".part")
-        await asyncio.to_thread(s_tmp.write_text,
-                                json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-        await asyncio.to_thread(s_tmp.replace, sidecar)
+        await asyncio.to_thread(atomicio.write_text, sidecar,
+                                json.dumps(meta, ensure_ascii=False), private=False)
         report["added"] = len(fresh)
         return report
 
@@ -487,9 +482,7 @@ class DownloadManager:
                         ext = ".mp3"              # 站点常给 `/audio?id=1` 这种没有扩展名的地址
                     # 原子写（第 136 期）：直写同名轨会先被截断，下载失败即毁掉旧轨。
                     tr = dest / f"第{i}话{ext}"
-                    tr_tmp = tr.with_suffix(tr.suffix + ".part")
-                    await asyncio.to_thread(tr_tmp.write_bytes, data)
-                    await asyncio.to_thread(tr_tmp.replace, tr)
+                    await asyncio.to_thread(atomicio.write_bytes, tr, data, private=False)
         except Exception:
             if created:                           # 只清理**本次新建**的目录，不动已有产物
                 import shutil
@@ -527,9 +520,8 @@ class DownloadManager:
             while f"第{n}话{ext}" in names:
                 n += 1                            # 撞名跳号：绝不覆盖既有轨
             name = f"第{n}话{ext}"
-            tmp = dest / (name + ".part")
-            await asyncio.to_thread(tmp.write_bytes, await client.get_bytes(u))
-            await asyncio.to_thread(tmp.replace, dest / name)
+            await asyncio.to_thread(atomicio.write_bytes, dest / name,
+                                    await client.get_bytes(u), private=False)
             names.add(name)
             added.append(name)
             n += 1
@@ -589,6 +581,4 @@ class DownloadManager:
             meta["chapters"] = int(chapter_count)
         # 原子写（第 136 期）：直写中断会留半截 JSON，追更读点 `json.loads` 抛错 ⇒
         # 这本书的追更**永久**报错，而旧 sidecar 已被截断、回收站里也没有。
-        s_tmp = sidecar.with_suffix(sidecar.suffix + ".part")
-        s_tmp.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
-        s_tmp.replace(sidecar)
+        atomicio.write_text(sidecar, json.dumps(meta, ensure_ascii=False), private=False)

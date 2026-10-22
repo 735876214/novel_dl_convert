@@ -17,7 +17,7 @@ import time
 import httpx
 
 from .. import config
-from . import db, library
+from . import atomicio, db, library
 from .library import norm_key
 
 OL_AUTHOR_SEARCH = "https://openlibrary.org/search/authors.json"
@@ -79,11 +79,8 @@ def _download_photo(url: str, seed: str) -> str:
     if not buf:
         raise ValueError("头像内容为空")
     fn = _photo_basename(seed)
-    # 原子写（第 136 期）：直写中断留坏图，读侧只能显示裂图。
-    photo = authors_dir() / fn
-    photo_tmp = photo.with_suffix(photo.suffix + ".part")
-    photo_tmp.write_bytes(bytes(buf))
-    photo_tmp.replace(photo)
+    # 原子写：直写中断留坏图，读侧只能显示裂图 —— 实现收敛在 `atomicio`（第 137 期）。
+    atomicio.write_bytes(authors_dir() / fn, bytes(buf), private=False)
     return fn
 
 
@@ -270,7 +267,9 @@ def set_photo(name: str, data: bytes, ext: str = "jpg") -> dict:
     fn = _photo_basename(f"local:{name}:{time.time()}")
     if not fn.endswith(f".{ext}"):
         fn = fn.rsplit(".", 1)[0] + f".{ext}"
-    (authors_dir() / fn).write_bytes(data)
+    # 原子落盘（`.part` → replace）：直写中断会留下**名字合法、内容为半截**的图片，
+    # 读侧只能显示裂图，且没有任何东西会去重写它（同模块下载那条早已这么改，第 137 期把上传这条对齐）。
+    atomicio.write_bytes(authors_dir() / fn, data, private=False)
     db.set_author_photo_local(name, fn)
     return effective(name)
 

@@ -31,9 +31,10 @@ from __future__ import annotations
 import logging
 import os
 import pathlib
-import shutil
 import subprocess
 import time
+
+from . import atomicio
 
 _log = logging.getLogger("novelforge")
 
@@ -72,10 +73,14 @@ def _rotate(d: pathlib.Path, reason: str) -> "list[str]":
     removed: "list[str]" = []
     for old in files[: max(0, len(files) - _BACKUP_KEEP)]:
         try:
-            old.unlink()
+            # 轮转是**后台自动动作**，不是用户显式删除 ⇒ 按 AGENTS.md §1「删除一律移入回收站」
+            # 走 `publish.recycle`（台账可还原）。此前这里直接 `unlink()`，是全仓唯一一处
+            # 「非用户动作却真删数据」的路径（第 137 期审计）。
+            from . import publish
+            publish.recycle(old, why="备份轮转（超过保留份数）")
             removed.append(str(old))
-        except Exception:  # noqa: BLE001 —— 删不掉旧备份不该让这次备份算失败
-            _log.warning("删不掉旧备份 %s", old)
+        except Exception:  # noqa: BLE001 —— 移不走旧备份不该让这次备份算失败
+            _log.warning("移不走旧备份 %s", old)
     return removed
 
 
@@ -86,7 +91,18 @@ def _dump_pg(dest: pathlib.Path) -> str:
     dsn = pg._dsn()          # 读不到 DSN 时它自己抛 PgUnavailable（消息带正确口径）
     # -Fc 自定义格式：压缩、单文件、单进程单连接 ⇒ 直接落盘、还原更快。
     # --no-owner/--no-acl：还原进本项目自己的库时不依赖原库里的角色与权限。
-    cmd = ["pg_dump", "-Fc", "--no-owner", "--no-acl", "-d", dsn, "-f", str(dest)]
+    # 先写同目录 `.part`、校验非空后再 replace 成正式名：pg_dump 超时（1800s）或被 kill
+    # 会留下一份**名字完全正常**的半份归档，而 `_rotate` 会把它计入 5 份配额 —— 运维在还原
+    # 时才发现它是坏的（第 137 期审计）。临时名与失败清理都交给 `atomicio.access`：
+    # 它是全仓唯一实现，这里不再自己拼 `.part`、也不再自己写清理分支。
+    with atomicio.access(dest) as tmp:
+        _run_pg_dump(dsn, tmp)
+    return str(dest)
+
+
+def _run_pg_dump(dsn: str, tmp: pathlib.Path) -> None:
+    """把 ``pg_dump -Fc`` 的输出写进 ``tmp``（临时件）；失败抛 :class:`SnapshotError`。"""
+    cmd = ["pg_dump", "-Fc", "--no-owner", "--no-acl", "-d", dsn, "-f", str(tmp)]
     try:
         # ⚠️ 显式 `encoding="utf-8"`：`text=True` 的默认编码是**系统区域编码**（Windows 是 GBK），
         # pg_dump 的 stderr 里出现非 GBK 字节就会在读线程撞 `UnicodeDecodeError`，
@@ -103,9 +119,8 @@ def _dump_pg(dest: pathlib.Path) -> str:
     if p.returncode != 0:
         raise SnapshotError(
             f"pg_dump 失败（退出码 {p.returncode}）：{(p.stderr or '').strip()[-_ERR_TAIL:]}")
-    if not dest.is_file() or dest.stat().st_size == 0:
+    if not tmp.is_file() or tmp.stat().st_size == 0:
         raise SnapshotError("pg_dump 退出码为 0 但没留下备份文件（已中止本次更新）")
-    return str(dest)
 
 
 def _copy_sqlite(dest: pathlib.Path) -> str:
@@ -116,7 +131,9 @@ def _copy_sqlite(dest: pathlib.Path) -> str:
     if not src.is_file():
         raise SnapshotError(f"找不到 SQLite 数据文件 {src}（已中止本次更新）")
     try:
-        shutil.copy2(src, dest)
+        # 原子拷贝（`.part` → replace）：热拷途中失败/被 kill 不能留在 BACKUP_DIR 里一份
+        # 名字正常的半份 .db（第 137 期审计）。
+        atomicio.copy_file(src, dest)
     except Exception as e:  # noqa: BLE001
         raise SnapshotError(f"拷贝 SQLite 数据文件失败：{e}（已中止本次更新）") from e
     if not dest.is_file() or dest.stat().st_size == 0:

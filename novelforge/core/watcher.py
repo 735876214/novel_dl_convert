@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import concurrent.futures
 import fnmatch
 import json
 import logging
@@ -27,12 +28,24 @@ from .. import config
 
 STATE_FILENAME = "watcher_state.json"
 
-#: 旁路线程登记表：`*_async` 派生的那些「发了就不管」的线程。
-#: 为什么要登记：它们都要**查库**（`library.find` → `publish_dir` → `db.get_library`），
-#: 而测试收尾 / 进程关停会关掉 DB 连接 —— 线程晚一步动手就会在已关闭的连接上查库，
+_logger = logging.getLogger("novelforge.watcher")
+
+#: 旁路工作的**有界**执行器：`*_async` 派生那些「发了就不管」的任务（元数据抓取 /
+#: 刮削入队），它们都要**查库**（`library.find` → `publish_dir` → `db.get_library`），
+#: 而测试收尾 / 进程关停会关掉 DB 连接 —— 晚一步动手就会在已关闭的连接上查库，
 #: 本仓实测到过解释器 **segfault**（全量 pytest 跑到后半程突然崩、连汇总行都打不出来）。
-#: 登记后配 :func:`wait_pending`，收尾方就能在关库**之前**等它们收干净。
-_BG_THREADS: dict = {}
+#: 所以它们必须被登记，配 :func:`wait_pending` 让收尾方在关库**之前**等干净。
+#:
+#: 为什么**有界**（第 137 期）：旧实现是「一本一条 daemon 线程」，批量导入 1000 本
+#: 就是峰值 2000 条线程同时外呼公网（每线程 8 MB 栈 + 抢 GIL），NAS 小盒子会被自己的
+#: 线程数拖死，且登记表只增不减。4 条工作线程足以把「晚几秒补上元数据」做完 ——
+#: 派生的这些任务本来就是**可排队**的（晚一点做没有语义差别）。
+_BG_WORKERS = 4
+_BG_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=_BG_WORKERS, thread_name_prefix="novelforge-bg"
+)
+#: 在跑 + 排队中的作业（收尾要连**排队中的**一起等，见 `wait_pending`）
+_BG_JOBS: dict = {}
 _BG_LOCK = threading.Lock()
 
 #: 进程内**唯一**的监听器实例（第 93 期）。创建点只有 `server._start_watcher` 一处，
@@ -54,34 +67,56 @@ def current():
     return _current
 
 
-def _spawn_bg(target, name: str) -> threading.Thread:
-    """起一个**被登记**的旁路线程（daemon，不阻塞主流程）。"""
-    th = threading.Thread(target=target, daemon=True, name=name)
+def _run_bg(target, name: str) -> None:
+    """执行器里的作业外壳：**吞掉一切异常**（旁路增强失败不能惊动别人），但留痕。"""
+    try:
+        target()
+    except Exception:                          # noqa: BLE001 —— 旁路任务，失败只记账
+        _logger.exception("旁路任务失败：%s", name)
+
+
+def _forget_bg(job) -> None:
     with _BG_LOCK:
-        _BG_THREADS[id(th)] = th
-    th.start()
-    return th
+        _BG_JOBS.pop(id(job), None)
+
+
+def _spawn_bg(target, name: str) -> concurrent.futures.Future | None:
+    """把旁路任务**排队**进有界执行器（不阻塞主流程），返回可等待的 future。
+
+    为什么不再是一本一条线程：见 :data:`_BG_WORKERS`（批量导入时的线程爆炸）。
+    ``name`` 只用于异常日志 —— 线程由执行器复用，不再按任务命名。
+    执行器在解释器退出时已关停（``RuntimeError``）⇒ 返回 ``None``（本来就不该阻塞主流程）。
+    """
+    try:
+        job = _BG_POOL.submit(_run_bg, target, name)
+    except RuntimeError:                       # 解释器正在退出：旁路任务本来就无所谓
+        return None
+    with _BG_LOCK:
+        _BG_JOBS[id(job)] = job
+    job.add_done_callback(_forget_bg)
+    return job
 
 
 def wait_pending(timeout: float = 5.0) -> int:
-    """等所有旁路线程结束 → 返回**超时后仍未结束**的数量（``0`` = 全收干净了）。
+    """等所有旁路作业（**在跑 + 排队中**）结束 → 返回仍未结束的数量（``0`` = 全收干净了）。
 
     调用点：测试的 ``isolated`` 夹具在 ``db.close()`` **之前**（见 ``tests/conftest.py``）；
     将来若做优雅关停，也应在这里等一次再拆连接。
+
+    第 137 期改了执行方式（线程 → 有界执行器），**语义不变**，但有两处必须照新模型写：
+    ① 排队中的作业也算「未结束」—— 只看在跑的 4 条线程会在关库时漏掉队列里的作业；
+    ② ``timeout`` 是**总量**上限，不是每个作业各一份（旧实现会因作业数暴涨被放大 N 倍）。
     """
     deadline = time.monotonic() + max(0.0, float(timeout))
     while True:
         with _BG_LOCK:
-            for tid in [k for k, t in _BG_THREADS.items() if not t.is_alive()]:
-                _BG_THREADS.pop(tid, None)
-            alive = list(_BG_THREADS.values())
-        if not alive:
+            pending = [j for j in _BG_JOBS.values() if not j.done()]
+        if not pending:
             return 0
         left = deadline - time.monotonic()
         if left <= 0:
-            return len(alive)
-        for t in alive:
-            t.join(timeout=min(0.25, left))
+            return len(pending)
+        concurrent.futures.wait(pending, timeout=min(0.25, left))
 
 
 def auto_fetch_async(name: str, cfg: dict | None, kind: str | None = None) -> None:
@@ -193,11 +228,23 @@ class FolderWatcher:
 
         self._lock = threading.Lock()       # 仅保护 state 字典的短临界区
         self._scan_lock = threading.Lock()  # 串行化扫描轮次，避免并行重复处理
+        # 起停锁（第 137 期）：`start()` 的「查线程 → `_stop.clear()` → 建线程 → start」
+        # 是一段 check-then-act，两个并发调用（设置页双击 / 保存配置时 `_apply_watcher_config`
+        # 在线程池里同步跑）会各自看到 `is_alive()` 为假 ⇒ 起出两条
+        # `novelforge-watcher` 扫同一棵树（重复入库 / 重复拷贝 / 重复入队刮削）。
+        # `stop()` 也持它：否则「stop 还在 join、start 已经 clear」= 第 135 期那种双线程。
+        # 一把锁足够，不为 start/stop 各来一把（两把就有 AB-BA 的可能）。
+        # ⚠️ 监听线程自己**绝不**碰它（它只做扫描/索引/展开），所以 `stop()` 在锁内 join
+        #    不会自锁。
+        self._ctl_lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         # 已「首轮」过的扫描目标集合（逐个目标独立判定历史存量是否处理）
         self._primed: set = set()
         self.last_scan = 0.0
+        #: 最近一次 tick 子系统失败的原因（`status()` 下发，界面看得见）。日志会滚走，
+        #: 这个字符串留在状态里直到下次失败/成功复位（第 137 期：失败不再零日志）。
+        self.last_error = ""
         # 主循环 tick 间隔（秒）：短间隔轮询，各目标按自己的 interval/cron 决定是否真扫
         self.tick_interval = float(self.interval)
         # 第 62 期：书目索引的**全量兜底**间隔（秒）。脏库每轮都刷，但「用户绕过 App
@@ -216,7 +263,10 @@ class FolderWatcher:
         # `waiting`（第 125 期）= 「条件没到、下轮再来」的次数（没有可接收的库）。
         # 它**不计入** `failed`：`failed` 会一路撞上 `max_retries` 被永久跳过，
         # 而「库还没建」是用户几分钟后就会解决的事，不是这个文件的问题。
-        self.stats = {"converted": 0, "added": 0, "failed": 0, "waiting": 0, "scans": 0}
+        # `errors`（第 137 期）= tick 子系统抛异常的次数。以前这类失败零日志、界面上
+        # 完全看不出来（「监听在跑但文件永远不进来」只能靠猜），现在计数 + `last_error`。
+        self.stats = {"converted": 0, "added": 0, "failed": 0, "waiting": 0, "scans": 0,
+                      "errors": 0}
 
     # ---------------- 状态持久化 ----------------
 
@@ -563,6 +613,30 @@ class FolderWatcher:
             return self._scan_locked(self.input_dir, owner_lib=None,
                                      tkey="input", library_id=None)
 
+    def rescan_one(self, src, owner_lib=None, owner_root=None) -> tuple:
+        """**外部单文件处理的唯一入口** → ``(kind, detail)``，与 `handle_file` 同值。
+
+        为什么需要它（第 137 期）：`handle_file` 本身**不持锁**，所有监听线程入口
+        （`scan_once` / `_scan_target` → `_scan_locked`）都在 `_scan_lock` 里调它。
+        而「收书目录 → 重新处理」（`bookdock.rescan`，跑在请求线程里）以前直接调
+        `handle_file` ⇒ 同一文件被两个线程同时处理：重复拷贝（一本书两份 / 两个
+        book_id）、`_state.fails` 互相覆盖、跨库同名闸门同时放行。
+
+        现在锁收进本入口，调用方**看不到** `_scan_lock` 这个私有锁，也就没人会绕开它
+        （不要在外面再包一层：锁不可重入）。
+        ⚠️ 调用方**不得**持着 `bookdock._reg_lock` 进来 —— 那条不变量是「持 `_reg_lock`
+        时绝不碰 watcher」，反向会与监听线程的 `mark_processed`（取 `self._lock`）
+        形成 AB-BA。
+        锁粒度 = 一次 `handle_file` + 其后的 `mark_processed`（与 `_scan_locked` 逐文件
+        那一段同一条边界）：里面只有本地磁盘 I/O，**不含外呼** —— 元数据抓取与刮削
+        入队都是 `_spawn_bg` 派给旁路执行器的（见 `_BG_WORKERS`），所以不会拖住扫描轮次。
+        """
+        src = Path(src)
+        with self._scan_lock:
+            kind, detail = self.handle_file(src, owner_lib=owner_lib, owner_root=owner_root)
+            self.mark_processed(src)
+            return kind, detail
+
     def forget_failures(self) -> None:
         """**忘掉**失败过的条目，让它们下一轮当新文件重新尝试。
 
@@ -763,22 +837,42 @@ class FolderWatcher:
         while not self._stop.wait(self.interval):  # 第 136 期：tick 直接读 interval，
         # 别再留 tick_interval 这份副本 —— 它只在 __init__ 取一次，改小间隔后
         # 界面显示 5s、真实节奏还是 60s，直到重启。
-            try:
-                for t in self._derive_targets():
-                    if self._stop.is_set():
-                        break
-                    if not t["watch"]:
-                        continue
-                    if self._should_scan(t):
-                        self._scan_target(t)
-                if self._stop.is_set():
-                    break
-                self._catalog_tick()
-                if self._stop.is_set():
-                    break
-                self._auto_unpack_tick()
-            except Exception:                     # 单轮异常不能让监听线程死掉
-                time.sleep(self.tick_interval)
+            # 三个子系统**各自** try（第 137 期）：旧写法是整段一个 `except: time.sleep(...)`，
+            # 于是 ① 任何一处炸掉都是**零日志**（NAS 上「监听在线但文件永远不进来」——
+            # 权限 / 磁盘满 / 库配置坏 —— 只能靠猜）；② 还额外多睡一个 tick；
+            # ③ 索引刷新失败会连带跳过同一轮的容器展开。现在每段留痕、互不连累，
+            # 依旧保证「单轮异常不能让线程死掉」。
+            self._phase("扫描目标", self._scan_phase)
+            if self._stop.is_set():
+                break
+            self._phase("书目索引", self._catalog_tick)
+            if self._stop.is_set():
+                break
+            self._phase("容器自动展开", self._auto_unpack_tick)
+
+    def _scan_phase(self) -> None:
+        """本轮要扫的目标（受 `_stop` 中断；逐目标独立，坏一个不影响下一个）。"""
+        for t in self._derive_targets():
+            if self._stop.is_set():
+                return
+            if not t["watch"]:
+                continue
+            if self._should_scan(t):
+                self._scan_target(t)
+
+    def _phase(self, what: str, fn) -> None:
+        """跑一个 tick 子系统：失败**留痕**、**不杀线程**、不影响下一个子系统。
+
+        为什么 `exception` 而不是 `debug`：这三个子系统的失败在旧实现里是完全静默的，
+        而它们的失败恰恰是「功能没生效」的唯一线索。计数进 `stats["errors"]` 是因为
+        日志会滚走、进程会重启，而状态里的计数和 `last_error` 一直可查（`status()` 下发）。
+        """
+        try:
+            fn()
+        except Exception as e:                    # noqa: BLE001 —— 单轮异常不能让线程死掉
+            self.stats["errors"] = self.stats.get("errors", 0) + 1
+            self.last_error = f"{what}失败：{e}"
+            _logger.exception("监听轮次「%s」失败（累计 %d 次）", what, self.stats["errors"])
 
     def _catalog_tick(self) -> None:
         """书目索引的增量刷新（第 62 期）。跑在**本监听线程**里，**不新起线程**。
@@ -875,27 +969,43 @@ class FolderWatcher:
             logging.getLogger("novelforge").debug("容器自动展开一轮失败", exc_info=True)
 
     def start(self) -> bool:
-        if self._thread and self._thread.is_alive():
-            return False
-        self._stop.clear()
-        self._thread = threading.Thread(
-            target=self._loop, name="novelforge-watcher", daemon=True
-        )
-        self._thread.start()
-        return True
+        """起监听线程（幂等）→ 真的起了返回 ``True``，已经在跑返回 ``False``。
+
+        「查线程 + `_stop.clear()` + 建线程 + start」整段在 `self._ctl_lock` 里（第 137 期）：
+        它是典型的 check-then-act —— 两个并发调用（设置页双击 / 保存配置时
+        `server._apply_watcher_config` 在线程池里同步跑）都会看到 `is_alive()` 为假，
+        于是各起一条 `novelforge-watcher` 扫同一棵树。`_stop.clear()` 尤其致命：
+        后建的那条把停止信号清掉，先建的那条于是永远停不下来。
+        """
+        with self._ctl_lock:
+            if self._thread and self._thread.is_alive():
+                return False
+            self._stop.clear()
+            self._thread = threading.Thread(
+                target=self._loop, name="novelforge-watcher", daemon=True
+            )
+            self._thread.start()
+            return True
 
     def stop(self):
-        self._stop.set()
-        t = self._thread
-        if t and t.is_alive():
-            # 转换是同步 I/O，无法被中断；给足时间让其自然结束。
-            t.join(timeout=max(self.interval + 5, 30))
-        # ⚠️ join 超时（NAS 上的大 EPUB、批量拷贝很常见）时**保留引用**：置空会让
-        #    `start()` 立刻再起一个线程，而它开局就 `_stop.clear()` —— 旧线程于是继续跑，
-        #    两个线程同时扫同一棵树（重复入库 / 重复拷贝 / 重复入队刮削），
-        #    `is_running()` 还谎报「未运行」（第 135 期）。
-        #    留着引用的代价只是 `start()` 返回 False，那是**事实**，不是故障。
-        self._thread = None if not (t and t.is_alive()) else t
+        """停监听线程（与 `start()` 共用 `self._ctl_lock`，见那里的说明）。
+
+        持锁到 join 结束，是为了让「stop 还没 join 完、start 已经把 `_stop` 清掉」
+        这个窗口彻底不存在 —— 那正是第 135 期修过一次、第 137 期在 `start()` 侧
+        补全的另一半。监听线程自己从不取这把锁，所以锁内 join 不会自锁。
+        """
+        with self._ctl_lock:
+            self._stop.set()
+            t = self._thread
+            if t and t.is_alive():
+                # 转换是同步 I/O，无法被中断；给足时间让其自然结束。
+                t.join(timeout=max(self.interval + 5, 30))
+            # ⚠️ join 超时（NAS 上的大 EPUB、批量拷贝很常见）时**保留引用**：置空会让
+            #    `start()` 立刻再起一个线程，而它开局就 `_stop.clear()` —— 旧线程于是继续跑，
+            #    两个线程同时扫同一棵树（重复入库 / 重复拷贝 / 重复入队刮削），
+            #    `is_running()` 还谎报「未运行」（第 135 期）。
+            #    留着引用的代价只是 `start()` 返回 False，那是**事实**，不是故障。
+            self._thread = None if not (t and t.is_alive()) else t
 
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
@@ -929,6 +1039,7 @@ class FolderWatcher:
             "copy_non_txt": self.copy_non_txt,
             "ignore": self.ignore,
             "last_scan": self.last_scan,
+            "last_error": self.last_error,
             "stats": dict(self.stats),
             "targets": targets,
         }

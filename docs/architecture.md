@@ -244,7 +244,8 @@ payload ─► intake.sniff_and_adapt()            # 认格式：格式注册表
 - **`field_report` 与 `unsupported_fields` 分工不同**：前者是**交代**（每一项去哪儿了），
   后者是**判定依据**（决定 verdict）。⚠️ 合并会让带发现页的源被误杀。
 - **安全层**：`core/jssandbox`（规则里的第三方 JS 走 quickjs，时间 / 内存 / 栈三道上限；
-  不可用则如实回落 Node 并标「非沙箱」）· `core/saferegex`（执行期正则超时，反 ReDoS）·
+  **没有沙箱就不执行** —— 第 137 期删掉了「回落 Node 并标非沙箱」的降级链：那段 JS 来自第三方书源文件，
+  在 Node 里拿得到 `require('fs')`，而「非沙箱」只写在用户不会看的 `reason` 里）· `core/saferegex`（执行期正则超时，反 ReDoS）·
   `core/urlguard`（**URL 导入是本项目唯一让用户提供地址的出网点**：只放行 http/https、
   解析出的每个 IP 必须全球可路由、**重定向逐跳复查**；DNS rebinding 用「连已校验 IP + 保留 Host」
   缓解，**残余 TOCTOU 如实记录**）· `core/network`（响应体上限、全局并发、每源超时）。

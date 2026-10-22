@@ -509,17 +509,21 @@ async def run_decrypt(js: str, text: str) -> str:
     return res["v"]
 
 
-# ---------------- 书源规则里的 JS：沙箱优先（第 94 期阶段 4b）----------------
-
-#: 「回落到 Node」只提醒一次：每次请求都刷一遍等价于没有日志。
-_sandbox_warned = {"done": False}
+# ---------------- 书源规则里的 JS：**只有**沙箱（第 94 期阶段 4b，第 137 期收紧）----------------
 
 
 def js_engine() -> dict:
-    """规则里的 JS 会由**谁**执行 —— 沙箱优先，缺 quickjs 才回落 Node。
+    """规则里的 JS 会由**谁**执行 —— 只有沙箱，没有沙箱就是**不执行**。
 
-    回落是**如实标注**的，不是偷偷的：`/api/sources/capabilities` 原样下发这个 dict，
-    界面 / 文档据此说清「这台机器上规则里的 JS 跑在没有超时的 Node 通道里」。
+    `/api/sources/capabilities` 原样下发这个 dict，界面 / 文档 / 审计面据此对用户说清
+    「这台机器上规则里的 JS 跑不了，缺的是 quickjs」。``engine`` 空串 + ``reason`` 有人话
+    = 「本部署没有可用的执行通道」。
+
+    ⚠️ 第 137 期**删掉了「无沙箱就回落 Node 并标出来」那半条路**（连同 :data:`_sandbox_warned`
+    那条「只 warn 一次」的分支）：那段 JS 是**第三方书源文件**里的，在 Node 通道里拿得到
+    ``require('fs')`` —— 一份抄来的规则就能读走 ``CONFIG_DIR`` 里的 Cookie 与密钥，而
+    「非沙箱」这件事只写在 capabilities 的 reason 里，用户根本不会去看。没有沙箱就拒绝，
+    比「悄悄降级 + 事后标注」诚实得多（也符合 AGENTS.md §7.1：不留降级垫片）。
     """
     sb = jssandbox.state()
     if sb["available"]:
@@ -527,14 +531,10 @@ def js_engine() -> dict:
                 "limits": {"time": sb["time_limit"], "memory": sb["memory_limit"],
                            "stack": sb["stack_limit"]},
                 "reason": ""}
-    node = node_state()
-    why = f"缺 JS 沙箱：{sb['reason']}"
-    if node["available"]:
-        why += "；再回落 Node 通道（**非沙箱**、无超时 / 内存 / 栈上限）"
-    else:
-        why += "；本机也没有 Node ⇒ 书源规则里的 JS 片段跑不了（其余书源不受影响）"
-    return {"sandbox": False, "engine": "node" if node["available"] else "",
-            "version": node["version"], "limits": {}, "reason": why}
+    return {"sandbox": False, "engine": "", "version": "", "limits": {},
+            "reason": f"缺 JS 沙箱：{sb['reason']}；"
+                      f"⇒ 书源规则里的 JS 片段在本次部署**会被拒绝执行**"
+                      f"（不会退到无沙箱的 Node 通道；其余书源不受影响）"}
 
 
 async def run_source_js(js: str, text: str) -> str:
@@ -543,15 +543,14 @@ async def run_source_js(js: str, text: str) -> str:
     契约与 :func:`run_decrypt` 逐字一致：``__args[0]`` 与全局 ``result`` 都是输入，
     片段用 ``return`` 交出**字符串**，拿不到就如实报错。
 
-    引擎选择只有这一处：有沙箱就在沙箱里跑（带时间 / 内存 / 栈上限），
-    没有才回落 Node 通道，并在 :func:`js_engine` 里如实说明**那不是沙箱**。
+    **没有沙箱 ⇒ 抛错，绝不执行**（第 137 期）：错误类型是
+    :class:`jssandbox.JSSandboxUnavailable`（``RuntimeError`` 的子类，既有的
+    ``except Exception`` 兜底照旧），消息说明「这条规则需要 JS 沙箱、当前部署没提供」。
+    由调用链（`sources/rules`、书源测试、capabilities）如实报给用户 / 审计面 ——
+    **不**静默降级到无沙箱通道，也**不**留开关：那段代码的安全性不该由部署者去关。
     """
     eng = js_engine()
-    if eng["sandbox"]:
-        return _demand_str(await jssandbox.run_js(js, text))
-    if not eng["engine"]:
-        raise RuntimeError(eng["reason"])
-    if not _sandbox_warned["done"]:
-        _sandbox_warned["done"] = True
-        logger.warning("书源规则里的 JS 正走 Node 通道（无沙箱、无超时）：%s", eng["reason"])
-    return await run_decrypt(js, text)
+    if not eng["sandbox"]:
+        raise jssandbox.JSSandboxUnavailable(
+            f"该规则需要 JS 沙箱，当前部署未提供 ⇒ 拒绝执行：{eng['reason']}")
+    return _demand_str(await jssandbox.run_js(js, text))

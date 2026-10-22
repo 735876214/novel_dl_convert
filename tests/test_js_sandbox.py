@@ -219,7 +219,7 @@ def test_三道上限都是普通Exception():
         assert issubclass(exc, RuntimeError) and issubclass(exc, Exception)
 
 
-# ---------------- ③ 路由：沙箱优先，回落要如实标注 ----------------
+# ---------------- ③ 路由：只有沙箱，没有沙箱就拒绝执行（第 137 期）----------------
 
 def test_有沙箱时走沙箱(monkeypatch):
     calls = _fake_sandbox(monkeypatch, result="正文")
@@ -229,64 +229,49 @@ def test_有沙箱时走沙箱(monkeypatch):
     assert calls == [("return result;", ("密",))]
 
 
-def test_没沙箱时回落Node并且标注非沙箱(monkeypatch):
+def test_没沙箱时拒绝执行而不是回落Node(monkeypatch):
+    """第 137 期：**没有沙箱 ⇒ 不执行**（原来这里是「回落 Node + warn 一次」）。
+
+    病在通道本身：那段 JS 来自**第三方书源文件**，在 Node 通道里拿得到 `require('fs')`，
+    一份抄来的规则就能读走 `CONFIG_DIR` 里的 Cookie 与密钥；而「非沙箱」只写在
+    capabilities 的 reason 里，用户根本不会去看。所以哪怕本机有 Node 也**不许**降级 ——
+    「悄悄降级 + 事后标注」等于把这个绕过口子合法化。
+    """
     _no_sandbox(monkeypatch)
     monkeypatch.setattr(network, "node_state",
                         lambda refresh=False: {"available": True, "bin": "node",
                                                "version": "v22.0.0", "reason": ""})
     seen = []
 
-    async def fake_decrypt(js, text):
+    async def fake_decrypt(js, text):                            # noqa: ARG001
         seen.append((js, text))
         return "Node 跑的"
 
     monkeypatch.setattr(network, "run_decrypt", fake_decrypt)
-    monkeypatch.setitem(network._sandbox_warned, "done", True)   # 别在测试里刷日志
 
     eng = network.js_engine()
-    assert eng["sandbox"] is False and eng["engine"] == "node"
-    assert "非沙箱" in eng["reason"] and "quickjs" in eng["reason"]
-    assert asyncio.run(network.run_source_js("return result;", "密")) == "Node 跑的"
-    assert seen == [("return result;", "密")]
-
-
-def test_沙箱与Node都没有时报人话(monkeypatch):
-    _no_sandbox(monkeypatch)
-    monkeypatch.setattr(network, "node_state",
-                        lambda refresh=False: {"available": False, "bin": "node",
-                                               "version": "", "reason": "找不到 Node"})
-    called = []
-
-    async def fake_decrypt(js, text):                            # noqa: ARG001
-        called.append(1)
-        return "不该走到这里"
-
-    monkeypatch.setattr(network, "run_decrypt", fake_decrypt)
-    eng = network.js_engine()
-    assert eng["engine"] == "" and "Node" in eng["reason"]
-    with pytest.raises(RuntimeError) as e:
+    assert eng["sandbox"] is False and eng["engine"] == "", "没有沙箱就不该再报出任何执行通道"
+    assert "quickjs" in eng["reason"] and "拒绝执行" in eng["reason"]
+    with pytest.raises(jssandbox.JSSandboxUnavailable) as e:
         asyncio.run(network.run_source_js("return result;", "密"))
-    assert "quickjs" in str(e.value) and "Node" in str(e.value)
-    assert called == [], "两条通道都没有就不许再试任何一条"
+    assert "拒绝执行" in str(e.value) and "沙箱" in str(e.value)
+    assert seen == [], "没有沙箱就不许碰无沙箱的 Node 通道"
+
+    # 再调一次还是拒绝（这条判断不再有「只 warn 一次」的状态机）
+    with pytest.raises(jssandbox.JSSandboxUnavailable):
+        asyncio.run(network.run_source_js("return result;", "密"))
+    assert seen == []
 
 
-def test_回落时只提醒一次(monkeypatch):
-    """每个请求刷一行日志等于没有日志。"""
+def test_沙箱缺失的报错说清当前部署未提供(monkeypatch):
+    """报错要能读懂：说清**为什么**跑不了、缺的是哪个东西，而不是一句系统错误。"""
     _no_sandbox(monkeypatch)
-    monkeypatch.setattr(network, "node_state",
-                        lambda refresh=False: {"available": True, "bin": "node",
-                                               "version": "v22", "reason": ""})
-    monkeypatch.setitem(network._sandbox_warned, "done", False)
-    warnings: list = []
-    monkeypatch.setattr(network.logger, "warning", lambda *a, **kw: warnings.append(a))
-
-    async def fake_decrypt(js, text):                            # noqa: ARG001
-        return "ok"
-
-    monkeypatch.setattr(network, "run_decrypt", fake_decrypt)
-    asyncio.run(network.run_source_js("return result;", "a"))
-    asyncio.run(network.run_source_js("return result;", "b"))
-    assert len(warnings) == 1, warnings
+    eng = network.js_engine()
+    assert eng["engine"] == "" and "沙箱" in eng["reason"]
+    with pytest.raises(RuntimeError) as e:                 # 兜底口径：RuntimeError 的子类
+        asyncio.run(network.run_source_js("return result;", "密"))
+    msg = str(e.value)
+    assert "该规则需要 JS 沙箱" in msg and "当前部署未提供" in msg and "quickjs" in msg
 
 
 def test_沙箱交回非字符串时按同一口径报错(monkeypatch):
@@ -373,10 +358,11 @@ def test_capabilities报出js通道(client, auth_headers):
 
 
 def test_能力接口在沙箱缺失时如实标非沙箱(client, auth_headers, monkeypatch):
+    """无沙箱的部署上，界面读到的是「这条规则会被拒绝执行」，不是一个空 reason。"""
     _no_sandbox(monkeypatch)
     monkeypatch.setattr(network, "node_state",
                         lambda refresh=False: {"available": True, "bin": "node",
                                                "version": "v22", "reason": ""})
     body = client.get("/api/sources/capabilities", headers=auth_headers).json()
-    assert body["js"]["sandbox"] is False
-    assert "非沙箱" in body["hints"]["js"]
+    assert body["js"]["sandbox"] is False and body["js"]["engine"] == ""
+    assert "拒绝执行" in body["hints"]["js"] and "quickjs" in body["hints"]["js"]

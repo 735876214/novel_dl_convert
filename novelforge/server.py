@@ -1956,6 +1956,12 @@ _OPDS_401 = {"WWW-Authenticate": 'Basic realm="NovelForge OPDS", charset="UTF-8"
 
 
 def _opds_guard(request: Request) -> None:
+    """`/opds/*` 的鉴权（HTTP Basic，账号就是应用账号）。
+
+    ⚠️ **PIN 校验必须走 `auth.verify_pin`**（第 137 期）：失败退避只在那一处实现。
+    这里原先直接调 `auth.verify_pin` 而不过任何闸门 —— 与登录口相比，`/opds` 就是一个
+    没有退避的 4 位 PIN 预言机（穷举一万次即得管理员 PIN）。
+    """
     if not (config.load_config().get("opds") or {}).get("enabled"):
         raise HTTPException(404, "OPDS 未启用")
     header = request.headers.get("Authorization") or ""
@@ -1966,13 +1972,31 @@ def _opds_guard(request: Request) -> None:
         user, _, pin = raw.partition(":")
     except Exception:
         raise HTTPException(401, "凭据格式错误", headers=_OPDS_401)
-    if not user or not auth_mod.verify_pin(user, pin):
+    if not user:
         raise HTTPException(401, "账号或 PIN 不正确", headers=_OPDS_401)
+    try:
+        ok = auth_mod.verify_pin(user, pin, auth_mod.client_host(request))
+    except auth_mod.Throttled:
+        # 不带 WWW-Authenticate：这不是「凭据不对、再输一次」，而是「先等一会儿」
+        raise HTTPException(429, "连续认证失败过多，请稍后再试")
+    if not ok:
+        raise HTTPException(401, "账号或 PIN 不正确", headers=_OPDS_401)
+
+
+def _request_scheme(request: Request) -> str:
+    """客户端**实际**用的协议（``http`` / ``https``）—— 反代后面也判得对。
+
+    反代部署看 ``X-Forwarded-Proto``（NAS 常见；可能是 ``https,http`` 这样的链，取第一段），
+    直连看 URL scheme。**唯一一处**：OPDS 的目录链接与 Komga 会话 cookie 的 ``Secure``
+    都从这里派生 —— 两处各写一遍就会出现「链接是 https、cookie 却不带 Secure」这种不一致。
+    """
+    raw = request.headers.get("x-forwarded-proto") or request.url.scheme or "http"
+    return str(raw).split(",")[0].strip().lower()
 
 
 def _opds_base(request: Request) -> str:
     """客户端看到的根地址。优先 X-Forwarded-*，兼容反代/子路径部署（NAS 常见）。"""
-    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    proto = _request_scheme(request)
     host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
     prefix = (request.headers.get("x-forwarded-prefix") or "").rstrip("/")
     return f"{proto}://{host}{prefix}"
@@ -2966,24 +2990,20 @@ def api_book_local_paths(bid: str, request: Request, response: Response):
 
 @app.post("/api/auth/login")
 def api_login(request: Request, payload: dict = Body(...)):
-    """登录。连续失败会退避（第 136 期）。
+    """登录。连续失败会退避。
 
-    PIN 通常只有 4–6 位，未加限制时局域网内一个 for 循环就能穷举 —— 而这条路径
-    **不经过**任何鉴权中间件（它本身是登录口），所以节流只能落在端点自己身上。
-    节流键 = 「账号 + 来源 IP」：换一个 IP 继续试仍会被**账号**维度的退避挡住
-    （键里带账号，同一账号的失败会累加）。
+    PIN 通常只有 4–6 位，未加限制时局域网内一个 for 循环就能穷举。**退避的实现只有一处**
+    —— `auth.verify_pin`（第 137 期收敛；此前这段把计数 / 键 / 阈值抄在端点里，而 OPDS 与
+    Komga 的 Basic 校验同样验 PIN 却完全不过闸）。这里只负责把「被挡住了」翻成 429。
     """
     user = str(payload.get("user", "") or "")
     pin = str(payload.get("pin", "") or "")
-    host = (request.client.host if request.client else "") or ""
-    key = f"{user}|{host}"
-    wait = auth_mod.throttle_remaining(key)
-    if wait > 0:
-        raise HTTPException(429, f"连续登录失败过多，请 {int(wait) + 1} 秒后再试")
-    if not auth_mod.verify_pin(user, pin):
-        auth_mod.note_failure(key)
+    try:
+        ok = auth_mod.verify_pin(user, pin, auth_mod.client_host(request))
+    except auth_mod.Throttled as e:
+        raise HTTPException(429, f"连续登录失败过多，请 {int(e.wait) + 1} 秒后再试")
+    if not ok:
         raise HTTPException(401, "账号或密码错误")
-    auth_mod.clear_failures(key)
     return {"token": auth_mod.issue_token(user), "user": user}
 
 
@@ -2996,14 +3016,18 @@ def api_me(request: Request):
 def api_change_pin(request: Request, payload: dict = Body(...)):
     """修改当前账号密码（需校验原密码）。
 
-    ⚠️ **改密码会作废此前签发的全部令牌**（第 136 期：令牌签名里带 `pin_hash` 前缀，
-    见 `core/auth.py`）。所以这里必须把**新令牌**一并返回 —— 否则用户在自己这台
-    设备上改完密码，下一个请求就 401、被踢回登录页，看起来像「改密码把我弄坏了」。
+    ⚠️ **改密码会作废此前签发的全部令牌**（令牌签名里带凭据指纹，见 `core/auth.py`）。
+    所以这里必须把**新令牌**一并返回 —— 否则用户在自己这台设备上改完密码，
+    下一个请求就 401、被踢回登录页，看起来像「改密码把我弄坏了」。
     """
     user = getattr(request.state, "user", "") or ""
     old = str(payload.get("old_pin") or "")
     new = str(payload.get("new_pin") or "")
-    if not user or not auth_mod.verify_pin(user, old):
+    try:
+        ok = bool(user) and auth_mod.verify_pin(user, old, auth_mod.client_host(request))
+    except auth_mod.Throttled:
+        raise HTTPException(429, "连续认证失败过多，请稍后再试")
+    if not ok:
         raise HTTPException(400, "原密码不正确")
     if len(new) < 4:
         raise HTTPException(400, "新密码至少 4 位")
@@ -5270,14 +5294,27 @@ def _publish_path_allowed(raw, extra_roots=()) -> "pathlib.Path | None":
 
 
 def _writable_dir(p: pathlib.Path) -> bool:
-    """真实试写一次 —— 只看权限位会漏掉只读挂载等情形。"""
+    """真实试写一次 —— 只看权限位会漏掉只读挂载 / 只读 ACL 等情形。
+
+    ⚠️ 这个探针**写在用户的书目录里**（`GET /api/libraries` 每次请求都会跑），所以：
+
+    ① 名字必须唯一（pid 无用，进程内并发就够踩）——`uuid4` 前缀 + 随机后缀。
+       固定名 `.nf-write-probe` 时两个并发请求会互相踩：A 刚建、B `unlink()` 掉，
+       A 的 `unlink()` 抛 `FileNotFoundError` ⇒ **明明可写的库被报成只读**。
+    ② 清理一律走 `finally` + `missing_ok=True`：写成功之后才抛的任何异常
+       （包括并发 unlink 抢先）都不能把垃圾永久留在用户的目录里。
+    """
+    probe = p / f".nf-write-probe-{uuid.uuid4().hex[:12]}"
     try:
-        probe = p / ".nf-write-probe"
         probe.write_text("", encoding="utf-8")
-        probe.unlink()
         return True
     except Exception:
         return False
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+        except Exception:                               # noqa: BLE001
+            pass
 
 
 def _library_dto(lib: dict, counts: dict = None) -> dict:
@@ -7189,6 +7226,26 @@ EDITABLE: dict = {
 _KEY_MASK = "••••••••"
 
 
+def _secret_cfg_keys() -> frozenset:
+    """所有**会被 GET /api/config 掩码回显**的凭据键名（写入侧的「掩码 = 保持原值」判据）。
+
+    与回显侧共用一张表：`metadata_fetch` 的 secret 字段集合（`metasources.secret_fields()`，
+    由书源注册表派生，加一家带 secret 的书源自动纳入）+ 各分区里手写的 `api_key`。
+    第 138 期立：写侧若再各写一份键名清单，就是「掩码掩了、写回没拦」的第二份真值源。
+    """
+    return frozenset(metasources.secret_fields()) | {"api_key"}
+
+
+def _is_mask(v) -> bool:
+    """``v`` 是不是「保持原值」的掩码哨兵（第 138 期：这个比较只许写一处）。
+
+    GET 侧把凭据回显成 :data:`_KEY_MASK`，写侧于是必须能认出「用户没改它」。
+    两处各写一遍 ``== _KEY_MASK`` 就是两份判据 —— 将来改哨兵（比如换成空串）时
+    必有一处漏改，而漏改的表现是**把掩码写进配置**。
+    """
+    return isinstance(v, str) and v.strip() == _KEY_MASK
+
+
 def _flatten_overrides(data: dict, prefix: str = "") -> list:
     """把覆盖层展开成点号键列表，便于界面提示「哪些键被覆盖了」。"""
     out: list = []
@@ -7496,21 +7553,35 @@ def api_put_config(payload: dict = Body(...)):
         patch["update"]["image"] = _validate_update_image(str(up_img))
 
     def _merge(ov: dict) -> None:
-        """把本次 patch 并进覆盖层（在 `config.mutate_overrides` 的锁内执行）。"""
-        for k, v in patch.items():
-            if isinstance(v, dict) and isinstance(ov.get(k), dict):
-                ov[k] = {**ov[k], **v}
-            else:
-                ov[k] = v
+        """把本次 patch 并进覆盖层（在 `config.mutate_overrides` 的锁内执行）。
 
-        # api_key 为掩码 / 空 → 沿用现有值，避免「回显即覆盖」
-        llm_ov = ov.get("llm")
-        if isinstance(llm_ov, dict):
-            key = (llm_ov.get("api_key") or "").strip()
-            if key in ("", _KEY_MASK):
-                llm_ov.pop("api_key", None)
-                if not llm_ov:
-                    ov.pop("llm", None)
+        ⚠️ **掩码 = 保持原值**（第 138 期）。`GET /api/config` 把已保存的凭据回显成
+        `_KEY_MASK`，而前端按分区**整段回传**（`useSettingsConfig` → `SECTION_KEYS`）
+        ⇒ 掩码会原样写回，把真密钥覆盖成 ``••••••••``；此时 `has_<键名>=True`、界面照旧
+        显示「已配置」，用户直到抓取 401 才发现，而旧值已不可恢复 —— 完全静默的数据丢失。
+
+        此前只有 `llm.api_key` 一家做了这件事（其余 dedup 在 integrations / koreader 的
+        **专用端点**里各自写了一遍），于是 `metadata_fetch` 的 5 个 secret 与
+        `komga.api_key` 全都「点一下开关就丢密钥」。这里改成**对所有分区所有键通用**：
+          · 字符串值 == 掩码        ⇒ 丢弃该键（沿用覆盖层里已有的值）；
+          · 凭据键的字符串值为空    ⇒ 丢弃该键（= 清除覆盖、回落默认，留给用户真的清空）。
+        非凭据键的空串照旧原样落库（`update.image` 空串 = 回落环境变量，是有语义的）。
+        """
+        secrets = _secret_cfg_keys()
+
+        for k, v in patch.items():
+            if not isinstance(v, dict):
+                ov[k] = v
+                continue
+            base = dict(ov[k]) if isinstance(ov.get(k), dict) else {}
+            for sk, sv in v.items():
+                if _is_mask(sv):
+                    continue
+                if sk in secrets and isinstance(sv, str) and not sv.strip():
+                    base.pop(sk, None)
+                    continue
+                base[sk] = sv
+            ov[k] = base
 
     # 第 120 期：写盘失败必须报出来。`config.save_overrides` 此前吞掉所有异常，
     # 于是磁盘满 / 只读挂载 / 配置目录无权限时这里照样回 `{"ok": true}` ——
@@ -8412,7 +8483,7 @@ def api_koreader_save(payload: dict = Body(...)):
         "key": str(cur.get("key") or "").strip(),
     }
     pw = str((payload or {}).get("password") or "")
-    if pw and pw != _KEY_MASK:
+    if pw and not _is_mask(pw):
         patch["key"] = hashlib.md5(pw.encode("utf-8")).hexdigest()
     if patch["enabled"] and not patch["key"]:
         raise HTTPException(400, "开启前请先设置同步密码")
@@ -8787,6 +8858,10 @@ def _komga_guard(request: Request) -> str:
     except komga_api.KomgaAuthError as e:
         if str(e) == "disabled":
             raise HTTPException(404, "Komga 兼容服务未启用")
+        if str(e) == "throttled":
+            # PIN 退避挡住了（判据在 auth.verify_pin，与登录口同一套）：
+            # 429 而不是 401 —— 凭据本身没被判错，客户端不该弹密码框
+            raise HTTPException(429, "连续认证失败过多，请稍后再试")
         raise HTTPException(401, "凭据无效", headers=_KO_401)
 
 
@@ -8996,18 +9071,32 @@ def _ko_library_id_of(payload: dict) -> str:
 
 @app.post("/api/v1/login")
 def ko_login(request: Request):
-    """校验凭据 + 发会话 cookie（无状态签名）。204 是 Komga 的语义。"""
+    """校验凭据 + 发会话 cookie。204 是 Komga 的语义。
+
+    cookie 里装的是 :func:`auth.issue_token` 那张与应用共用的令牌（第 137 期）——
+    此前这里是本模块自造的「对用户名做 HMAC」串：常量密钥兜底、无过期、不绑凭据版本，
+    任何没设 AUTH_SECRET 的部署都能离线算出来，等于把整库交出去。现在同一密钥、
+    同一凭据版本、同一有效期（``TOKEN_TTL`` ⇒ ``max_age``），改 PIN 即全部作废。
+
+    ``secure`` 按**本部署实际的 TLS 判据**派生（:func:`_request_scheme`）：
+    ⚠️ 别拿 `network.verify_tls` 当判据 —— 那个开关管的是**出站抓书源时校不校验证书**
+    （`core/network.verify_tls_enabled`），与本部署自己是不是 HTTPS 无关；用它会让
+    明文部署也以为「在 TLS 后面」，cookie 照样裸奔。
+    """
     user = _komga_guard(request)
     resp = Response(status_code=204)
-    resp.set_cookie(komga_api.SESSION_COOKIE, komga_api.session_token(user),
-                    httponly=True, samesite="lax")
+    resp.set_cookie(komga_api.SESSION_COOKIE, auth_mod.issue_token(user),
+                    max_age=auth_mod.TOKEN_TTL, httponly=True, samesite="lax",
+                    secure=_request_scheme(request) == "https")
     return resp
 
 
 @app.post("/api/logout")
-def ko_logout():
+def ko_logout(request: Request):
     resp = Response(status_code=204)
-    resp.delete_cookie(komga_api.SESSION_COOKIE)
+    # Secure 要与下发时一致：带 Secure 的 cookie 只能在 https 下被清掉，否则删不掉
+    resp.delete_cookie(komga_api.SESSION_COOKIE, samesite="lax",
+                       secure=_request_scheme(request) == "https")
     return resp
 
 

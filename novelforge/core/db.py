@@ -167,6 +167,11 @@ def _connect():
 
                     c = sqlite3.connect(str(db_path()), check_same_thread=False)
                     c.row_factory = sqlite3.Row
+                    # 权限收敛（第 137 期）：库文件里存着 `pin_hash` —— 单用户登录的唯一
+                    # 凭据。umask 022 下新建的库是 0644，同机任何账号拷走一份就能离线爆破。
+                    # 收敛动作只有一处实现（`config.restrict_perms`）；PG 后端没有本机文件，
+                    # 不需要这一步。失败只记 warning，不影响建连。
+                    config.restrict_perms(db_path())
                     _conn = c
                     _conn_proxy = _Conn(c)
     return _conn_proxy

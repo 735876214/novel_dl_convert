@@ -411,6 +411,29 @@ def _no_metasource_cache_leak():
 
 
 @pytest.fixture(autouse=True)
+def _no_pin_throttle_leak():
+    """用例**默认从干净的退避计数开始**（第 137 期）。
+
+    `auth._fails`（`"账号|来源IP" -> (失败次数, 解禁时刻)`）是**进程级**可变状态，
+    跨用例留存会造出最难查的那类「单独跑绿、全量跑红」：
+
+    - 上一条用例为了验退避故意错了 8 次 PIN ⇒ 同一个 `"admin|testclient"` 键带着
+      指数退避进入下一条用例，于是下一条的 `auth_headers` 登录直接被 429 打回来，
+      看起来像「登录坏了」；
+    - 反过来也成立：用例里断言「第一次失败是 401」时，继承来的计数会把它变成 429。
+
+    退避本身的行为由 `tests/test_hardening_137_credentials.py` 专门钉住（那里自带清场）。
+    """
+    from novelforge.core import auth as _auth
+
+    _auth._fails.clear()
+    try:
+        yield
+    finally:
+        _auth._fails.clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_live_dns_in_tests(monkeypatch):
     """用例**默认不出网做 DNS 查询**（第 104 期）。
 

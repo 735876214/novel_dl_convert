@@ -20,6 +20,7 @@ import struct
 import time
 
 from .. import config
+from . import atomicio
 
 # 白名单：与上游一致（TTF / OTF / WOFF / WOFF2）
 FONT_EXTS = {".ttf", ".otf", ".woff", ".woff2"}
@@ -229,7 +230,9 @@ def save_font(filename: str, data: bytes) -> dict:
     while target.exists():
         target = d / f"{stem}-{i}{suffix}"
         i += 1
-    target.write_bytes(data)
+    # 原子写：字体几十 MB，中断会留下名字合法的截断字体 —— `list_fonts` 照常列出、
+    # @font-face 一加载整页乱码，还占掉 MAX_FONTS 配额（第 137 期审计）。
+    atomicio.write_bytes(target, data, private=False)
     family, style, weight, italic, family_key = (
         _font_meta(data) if ext in (".ttf", ".otf") else ("", "", None, None, "")
     )

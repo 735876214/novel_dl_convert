@@ -9,6 +9,7 @@ import Switch from '@/components/ui/Switch.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type LogItem, type LogStorage } from '@/lib/api'
+import { LOGGING_FIELDS } from '@/data/settingsFields'
 import { localDate } from '@/lib/format'
 
 /**
@@ -467,6 +468,29 @@ function downloadLog(): void {
         <p class="basis-full text-[11.5px] text-muted-foreground">
           归档就在日志目录里（<span class="font-mono">{{ storage?.retention ? 'activity-*.log / .jsonl' : 'activity-*.log / .jsonl' }}</span>）；
           「下载 activity.log」给的是当前文件，归档请到日志目录取。
+        </p>
+      </div>
+
+      <!-- 日志文件位置与内存缓冲（第 138 期从网络页迁来：`logging` 只归本页） -->
+      <div class="flex flex-wrap items-end gap-4 px-4 py-3.5">
+        <label
+          v-for="f in LOGGING_FIELDS"
+          :key="f.path"
+          class="text-[12px] text-muted-foreground"
+        >
+          <span class="mb-1 block text-[12.5px] font-medium text-foreground">{{ f.label }}</span>
+          <input
+            :value="String(val(f.path) ?? '')"
+            :type="f.type === 'number' ? 'number' : 'text'"
+            :placeholder="f.placeholder || ''"
+            class="h-8 rounded-md border border-border bg-muted px-2 text-[12px] text-foreground outline-none focus:border-ring"
+            :class="f.type === 'number' ? 'w-28' : 'w-72'"
+            @change="setVal(f.path, f.type === 'number' ? Number(($event.target as HTMLInputElement).value || 0) : ($event.target as HTMLInputElement).value)"
+          >
+        </label>
+        <p class="basis-full text-[11.5px] text-muted-foreground">
+          日志目录留空则用 `LOG_DIR`（容器里是数据目录下的 logs）；改目录后需重启进程才生效。
+          这两项与上面的留存策略同属 `logging` 段，一起保存。
         </p>
       </div>
     </Card>

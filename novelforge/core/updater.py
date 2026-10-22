@@ -67,6 +67,13 @@ _lock = threading.Lock()
 #: 当前后台检查线程的停止信号。**每次 `start_background` 换一个新的**（见该函数说明）。
 _stop = threading.Event()
 _thread: "threading.Thread | None" = None
+#: 起停锁（第 137 期）：`start_background` 的「查线程 → 换 `_stop` → 建线程」是一段
+#: check-then-act。并发（设置页双击 / 保存配置时在线程池里同步跑 `_apply_update_config`）
+#: 会各起一条线程，且**后者的新 `_stop` 覆盖前者** ⇒ 前一条线程攥着一个再没人
+#: `set()` 的 Event，永远停不下来（`stop_background` 只影响最新的那个）：
+#: 「界面显示已关闭、其实还在每 6 小时查一次并可能自动更新」。
+#: 手法与 `watcher.start()` 同一套：一把锁包住整段（不要两把，那就有 AB-BA）。
+_start_lock = threading.Lock()
 
 
 # ---------------- 出网（可 monkeypatch，绝不真连进测试）----------------
@@ -254,12 +261,13 @@ def start_background(interval_hours: int = 6) -> None:
     """
     _load_persisted()
     global _thread, _stop
-    if _thread is not None and _thread.is_alive() and not _stop.is_set():
-        return                                    # 已在跑且没被叫停 ⇒ 不重复起
-    _stop = threading.Event()                     # 旧线程攥着旧 Event，不受影响
-    _thread = threading.Thread(target=_loop, args=(max(1, int(interval_hours)), _stop),
-                               name="update-check", daemon=True)
-    _thread.start()
+    with _start_lock:                             # 查 → 换 Event → 建线程，必须原子
+        if _thread is not None and _thread.is_alive() and not _stop.is_set():
+            return                                # 已在跑且没被叫停 ⇒ 不重复起
+        _stop = threading.Event()                 # 旧线程攥着旧 Event，不受影响
+        _thread = threading.Thread(target=_loop, args=(max(1, int(interval_hours)), _stop),
+                                   name="update-check", daemon=True)
+        _thread.start()
 
 
 def _tick() -> None:

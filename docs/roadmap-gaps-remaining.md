@@ -9462,3 +9462,79 @@ Komga 文件）**不是遗漏**：浏览器不会顶层渲染它们。
 5. **并发口径的锁外读改写**（`online_bind_*` / `set_status` / `_maybe_auto_land` / `verify()` 台账、`watcher.state` 键缺根维度）：都是「读在锁外、再用旧快照整行写回」，需要有单测能稳定复现的时序才能验证修法，本轮只记录不盲改。
 6. 前端竞态（`activity.ts` 年份切换、`similar` 无 seq、`SeriesDetailView` / `AuthorDetailView` 的 `watch(name, load)`）与可访问性 4 条（面板关闭后仍在 Tab 序列、可点 `<div>` 无 role/keyboard）：同型问题上一轮已在 `loadFeatures` 上修过一次，收敛成 `useSeq()` 工具函数再统一改，比逐处粘贴更安全。
 7. `MetadataEditor` / `ReadingRecord` 用 `v-show` 常驻 → 每次进详情页多发 3 个请求。本轮试过改 `v-if`，会让「?tab= 不认识」的既有用例取不到元素、且切标签时丢掉未保存草稿，故回退；正确修法是给这两个组件加 `active` 闸（照 `ReadingLogTab` 的写法）。
+
+## 第 137 期（审计收口：落盘原子性收敛 / 登录退避三入口 / 令牌指纹不可逆 / 书源 JS 不降级）
+
+**需求来源**：用户「审计整个项目，分 10 轮修复 / 部署」。第 136 期把「同一判据的第二份实现」当主线（22 处拼路径、sidecar 原子写），本期沿同一条线打三个更深的点：**落盘**、**认证闸门**、**JS 执行通道**。
+
+### 一、落盘原子性收敛（新增 `novelforge/core/atomicio.py`）
+
+文件生命周期审计报了 10 条，全是同一个形状：**直写最终名**（`open(dst,"w")` / `shutil.copy2` / `Path.write_text` / 自己拼 `.part`），中断 / 磁盘满 / 容器被 kill 时留下半截文件，而旧内容已被截断、也不在回收站。此前仓库里已有 4 份各自的写法，第 136 期收敛过一次 sidecar / 音轨 / 头像 / 活配置 —— **只要还留着第二种写法，就还会有第三处漏**，本期把判据本身收成一个模块：
+
+| 判据 | 说明 |
+|---|---|
+| `PART_SUFFIX` / `tmp_path_for(dst)` | 临时件后缀**必须**与 `config`/`watcher` 的忽略清单一致（`*.part`），名字写错一处 = 半本书被当成品收进书架 |
+| `access(dst)` | **流式写的原子外壳**（`zipfile.ZipFile` / `pg_dump` 这类要「自己写一个路径」的写手）：交出同目录临时名，退出时提交，异常时清理 |
+| `_commit` | `tmp.replace(dst)`（同目录 ⇒ 不会退化成跨设备的 `EXDEV` 拷贝） |
+| `_restrict(p, 0o600)` | POSIX 才 `chmod`；**且必须在 replace 之前** —— 先 replace 再 chmod 会留下「已是最终名字、仍是 umask 0644」的泄露窗口 |
+| `write_text` / `write_bytes` / `copy_file` | 三种便捷形状，实现都只有一行、全部走 `access`（三条口径不重抄） |
+
+调用点同批收敛：`pipeline`（入库副本）、`publish`（出版副本）、`backup`（pg_dump 归档 / 配置备份 / 还原）、`authors`（头像）、`sources/store`（书源规则）、`sources/manager`（留档 txt / 追更追加 / sidecar / 音频轨 ×5）、`sources/online`（在线缓存）、`fonts`、`pdfrender`、`txtcache`、`epub_update`（追更重打包）、`comics.write_cbz`、`zipkind`（展开 / 整包另存）、`landing`。跑完 `rg '\.part\b' novelforge` 只剩注释与 `atomicio` 自身 —— 判据只有一处。
+
+另外两处**权限**收敛：`settings.json`（装各家 API key）与库文件 `novelforge.db`（装 `pin_hash`）新建后一律 0600。umask 022 下默认 0644，同机任何账号 `cp` 一份就能离线爆破 4 位 PIN。收敛动作统一走 `config.restrict_perms`（Windows 整段跳过、失败只记 warning，不把「保存设置」变成 500）。
+
+### 二、PIN 退避只有一处实现（内建在 `auth.verify_pin`）
+
+第 136 期给 `/api/auth/login` 加了失败退避，但**只有那一条入口**：`/opds/*`（`server._opds_guard`）与 `/api/v1/*`（Komga 兼容层）同样在比对 PIN，却直接调 `auth.verify_pin` 不过任何闸门 ⇒ 两个**没有闸门的 4 位 PIN 预言机**（一万次穷举即得管理员 PIN）。本期把判据搬进 `auth`：
+
+- `verify_pin(user, pin, host)`：先查退避（超限抛 `Throttled(wait)`）→ 再比对 → 失败计数 / 成功清零；
+- `client_host(request)` 是**来源 IP 的唯一取法**（`auth` 不碰请求对象，三个入口各自传进来）；
+- `Throttled` 只表达「被挡住、还要等多久」，三条入口各自翻成自己的形状（登录 429 + 中文提示、OPDS / Komga 401 + `WWW-Authenticate`、`/api/account/pin` 400/429）—— **判据一处，形状各归各**；
+- 退避期内**连正确 PIN 也返回 429**（先查闸、后比对 = fail closed），这条写进了用例。
+
+### 三、令牌里的凭据指纹必须不可逆
+
+第 136 期把「`pin_hash` 前 12 位」拼进令牌版本段，用来实现「改 PIN ⇒ 旧令牌立即失效」。问题是那 12 位是**凭据明文的半截**：令牌会进 URL（`_MEDIA_TOKEN_PATHS` / `_with_asset_token`），反代日志与浏览器历史都留档，而 `_pin_matches` 是**无盐单轮 sha256** ⇒ 拿到那 12 位就能离线穷举出 PIN。改为 `HMAC(secret, "user:pin_hash")[:12]`：对外仍是 12 位十六进制，语义（改 PIN 即失效）不变，但**反推不回凭据**。同时把 `TOKEN_TTL` 立为唯一常量（Komga 会话 cookie 的 `max_age` 复用它），并删掉 Komga 自造会话令牌（常量密钥 HMAC、无过期、不绑凭据版本）—— 改签 `auth.issue_token` 的同一张令牌。
+
+### 四、书源规则里的 JS：没有沙箱就不执行
+
+`network.run_source_js` 原先是「沙箱优先，缺 quickjs 才回落 Node 通道，并在 capabilities 里标注非沙箱」。那段 JS 来自**第三方书源文件**，在 Node 通道里拿得到 `require('fs')` ⇒ 一份抄来的规则就能读走 `CONFIG_DIR` 里的 Cookie 与密钥，而「非沙箱」只写在用户不会看的 `reason` 里。本期删掉回落分支（连同「只 warn 一次」的 `_sandbox_warned`）：没有沙箱就抛 `jssandbox.JSSandboxUnavailable`，capabilities 如实回报「本次部署会拒绝执行」（AGENTS §7.1：不留降级垫片）。
+
+**防回归要点**
+
+- `tests/test_hardening_137_atomic_io.py`：判据单测（同目录临时件 / 失败不留残渣 / 0600 / `access` 提交与清理）+ **静态断言**（谁还在自己拼 `.part`、谁还在 `shutil.copy2(src, …)` 直写）+ 真实调用点的「中断后不产生半截成品」。
+- `tests/test_hardening_137_credentials.py`：三入口都走 `verify_pin` 的静态断言（`auth.` / `auth_mod.` 两种写法都算）+ 运行时退避（401 → 429）+ 退避期内正确 PIN 亦被挡 + 令牌不含凭据哈希前缀 + Komga 会话 cookie 带 `max_age` / `Secure`（`_request_scheme` 反代感知）+ 改 PIN 即作废旧会话。
+- `tests/test_hardening_137_concurrency.py`：`watcher._phase` 单轮异常留痕（`stats.errors` + `last_error` + 日志）且线程继续存活；并发写同一目标不产出半文件。
+- `tests/conftest.py` 新增 autouse `_no_pin_throttle_leak`：`auth._fails` 是**进程级**可变状态，上一条用例为验退避故意错的 8 次 PIN 会带着指数退避进入下一条（`auth_headers` 登录直接 429）⇒ 典型的「单独跑绿、全量跑红」。
+
+
+## 第 138 期（掩码回写把真密钥覆盖成掩码 / 一个配置段挂在两个设置页）
+
+**需求来源**：用户「审计整个项目，分 10 轮修复 / 部署」。前后端契约审计（第 137 期派出）报回两个问题，第一个属**静默数据损坏**，第二个属「同一判据两处归属」—— 都是第 136 期「单一真值源」主线的延续。
+
+### 一、致命：掩码回显 + 整段回传 = 把真密钥写没了
+
+链路（三处各自成立、缺一不漏）：
+
+1. `GET /api/config` 把凭据回显成 `_KEY_MASK = "••••••••"`（`_mask_metadata_fetch` / `_mask_komga` / `_mask_llm`）；
+2. 前端 `useSettingsConfig.saveSection()` 按分区**整段回传草稿**（草稿是跨页共享的单例，本来就有意如此）；
+3. 写入侧只有 `llm.api_key` 做了「值 == 掩码 ⇒ 不修改」的 dedup，`komga.api_key` 的 dedup 写在 integrations 端点里，`metadata_fetch.*` 的 5 个 secret **一个都没有**。
+
+于是：打开「元数据抓取」页，动一下开关点保存 ⇒ `settings.json` 里的豆瓣 key / Google Books key 被覆盖成 `••••••••`，`has_google_books_key` 仍为 True、界面照旧「已配置」，用户直到下一次抓取 401 才发现，而旧值不可恢复（覆盖层写进 settings.json，没有备份）。**点一次开关就丢密钥**，且全程没有任何报错。
+
+修法（判据收敛，不再逐键）：
+
+- `server._secret_cfg_keys()` = `metasources.secret_fields()` ∪ `{"api_key"}` —— **回显侧与写入侧共用同一张表**，新增一个 secret 只改 `metasources` 一处；
+- `_merge()` 对**所有分区的所有键**通用：字符串 == 当前掩码 ⇒ 丢弃该键（保持原值）；**凭据键**收到空串 ⇒ 清除覆盖（回落默认 / 环境变量），非凭据键空串照旧落库；
+- 删掉 `server.py` 里 `llm.api_key` 与 integrations 端点里 `komga.api_key` 两处单点 dedup —— 同一个语义只留一处。
+
+### 二、一个配置段只许有一个归属分区
+
+`logging` 同时挂在 `SECTION_KEYS.network` 与 `SECTION_KEYS.logs` 上，而草稿是跨页共享的单例 ⇒ 在网络页点保存会把审计日志页**未保存**的 `logging.retention.*` 一起写进 `settings.json`；反过来改留存又让两页同时标「未保存」。现在 `logging` **只归 `logs`**：新增 `LOGGING_FIELDS`（`logging.max_entries` / `logging.dir`）由 `AuditLogPage.vue` 渲染，`network` 分区的 `SECTION_KEYS` 里不再有它；`MetadataPage.vue` 同步改用本页字段表。
+
+**防回归要点**
+
+- 新增 `tests/test_config_mask_roundtrip.py`（11 例）：7 个凭据键**参数化**走真实 `GET /api/config` → `PUT` 往返，断言「回传掩码不动原值」；`komga.api_key` 走 integrations 端点同断言；凭据键空串清覆盖；非凭据键空串照旧落库。
+  **为什么必须走真接口**：这个缺陷的全部成因都在「回显」与「写入」两个端点之间的**约定**上，任何只测 `_merge()` 单函数的用例都抓不到（第 137 期就是因此才让它在静态审阅里活了半天）。
+- 归属分区没有再单独立用例：`SECTION_KEYS` 是前端常量，`tests/test_settings_nav_contract.py` 已守着「设置页 ↔ 路由 ↔ 侧栏」三处一致；本期的守法是**结构约定**（一条注释写着「一个段只许一个归属分区」）+ `frontend-verify.sh` 的 type-check / build。
+

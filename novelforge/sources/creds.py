@@ -141,6 +141,12 @@ def save(rule_name: str, text: str, domains: list) -> dict:
             comment=None, comment_url=None, rest={}, rfc2109=False,
         ))
     jar.save(ignore_discard=True, ignore_expires=True)
+    # 权限收敛（第 137 期）：这个文件是**第三方站点的登录态、明文**，而 `jar.save()` 按
+    # 进程 umask 建文件（容器里 022 ⇒ 0644）—— 同机任何账号都能直接抄走别人的登录态。
+    # 收紧动作只有一处实现（`config.restrict_perms`），文件 0600 + 目录 0700 一起做。
+    p = cookie_file(rule_name)
+    config.restrict_perms(p.parent, is_dir=True)
+    config.restrict_perms(p)
     return status(rule_name)
 
 

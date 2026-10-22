@@ -29,7 +29,6 @@
 import datetime
 import hashlib
 import hmac
-import os
 import pathlib
 from urllib.parse import unquote
 
@@ -81,10 +80,13 @@ def thresholds_of(th, b) -> tuple:
     return th(book_library_id(b))
 
 
-#: 会话 cookie（Komga 官方 Web 用这个；第三方 App 多数直接用 Basic）
+#: 会话 cookie 的名字（Komga 官方 Web 用这个；第三方 App 多数直接用 Basic）。
+#: ⚠️ 名字是唯一的 —— **值不再由本模块自造**：第 137 期删掉了「对用户名做 HMAC」的那套
+#: 自造会话令牌（源码里写死的常量密钥兜底、无过期、不绑凭据版本 ⇒ 任何没设 AUTH_SECRET
+#: 的部署都能被人照着源码离线算出会话串，进而拿到整库）。
+#: 现在 cookie 里装的是 :func:`auth.issue_token` 签发的、与应用共用的那张令牌
+#: （同一密钥、同一凭据版本、同一 ``TOKEN_TTL``）。
 SESSION_COOKIE = "KOMGA-SESSION"
-#: 会话签名密钥：复用部署时已有的 AUTH_SECRET，不新增配置项
-_SESSION_SECRET = (os.getenv("AUTH_SECRET") or "novelforge-komga").encode()
 
 #: 格式 → Komga 客户端要的媒体类型。
 #: ⚠️ 第 123 期补齐 FB2 / AZW / AUDIO / UNITS：此前一律落 `application/octet-stream`，
@@ -145,17 +147,6 @@ def _day(value) -> str:
 
 # ---------------- 认证 ----------------
 
-def session_token(user: str) -> str:
-    """会话 token = 对用户名的 HMAC（无状态：服务端不存会话表）。"""
-    return hmac.new(_SESSION_SECRET, user.encode(), hashlib.sha256).hexdigest()
-
-
-def _session_user(token: str) -> str:
-    cfg = (config.load_config().get("komga") or {})
-    user = str(cfg.get("username") or "admin")
-    return user if token and hmac.compare_digest(token, session_token(user)) else ""
-
-
 def verify(request) -> str:
     """校验凭据，返回身份标识；失败抛 :class:`KomgaAuthError`。
 
@@ -163,7 +154,12 @@ def verify(request) -> str:
 
     1. ``X-API-Key`` 头 —— 需在设置页填写 API Key 才有
     2. ``HTTP Basic`` —— 用**应用账号**（用户名 + 登录 PIN），与 OPDS 同一套凭据
-    3. ``KOMGA-SESSION`` cookie —— 供官方 Web 那类会走登录流程的客户端
+    3. ``KOMGA-SESSION`` cookie —— 供官方 Web 那类会走登录流程的客户端；
+       里面装的是 :func:`auth.issue_token` 签发的那张令牌（见 ``SESSION_COOKIE`` 处说明）
+
+    ⚠️ **Basic 这条必须走 `auth.verify_pin`**（第 137 期）：PIN 的失败退避只有那处实现。
+    这里若直接用 ``_pin_matches`` 之类绕过去，`/api/v1` 就是一个没有闸门的 4 位 PIN 预言机
+    —— 与 `/opds` 同一类缺陷。被退避挡住时抛 ``throttled``，由调用方转 429。
     """
     cfg = (config.load_config().get("komga") or {})
     if not cfg.get("enabled"):
@@ -184,11 +180,15 @@ def verify(request) -> str:
         except Exception:
             user, pin = "", ""
         want_user = str(cfg.get("username") or "admin")
-        if user == want_user and pin and auth_mod.verify_pin(user, pin):
-            return user
+        if user == want_user and pin:
+            try:
+                if auth_mod.verify_pin(user, pin, auth_mod.client_host(request)):
+                    return user
+            except auth_mod.Throttled:
+                raise KomgaAuthError("throttled")
 
     tok = request.cookies.get(SESSION_COOKIE) or ""
-    user = _session_user(tok)
+    user = auth_mod.verify_token(tok) or ""
     if user:
         return user
     raise KomgaAuthError("invalid")

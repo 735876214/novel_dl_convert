@@ -153,8 +153,9 @@ function setDraft(sid: string, key: string, v: string): void {
   draft.value = { ...draft.value, [fieldKey(sid, key)]: v }
   // 同时写进**页面级配置草稿**：这样页面自己的「保存」也能把行内改动一起落库。
   // （否则行内改动只存在于组件局部，用户点页面的「保存」会以为存了、其实没存。）
-  // 静默态（用户没动过的 secret）不会被写进来 —— 它仍是后端的掩码值，而掩码值
-  // 在后端是「不修改」语义（见 server 的 _KEY_MASK 注释），所以不会被覆盖成掩码字符串。
+  // 静默态（用户没动过的 secret）不会被写进来 —— 它仍是后端的掩码值，而掩码值在后端
+  // 是「不修改」语义（`PUT /api/config` 的 `_merge` 对**任意分区任意键**丢弃掩码值，
+  // 判据见 server 的 `_secret_cfg_keys`），所以整段回传也不会把真密钥覆盖成掩码。
   setVal(`metadata_fetch.${key}`, v)
 }
 /** 控件当前值：改过 → 草稿；没改 → select 显示已保存值、secret 留空（占位符提示已设置） */

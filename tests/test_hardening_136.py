@@ -35,15 +35,25 @@ def test_按书取路径不许再自己拼根目录和书名():
 
 
 def test_追更_sidecar_与音轨都是原子写():
-    """直写最终名会「先截断后失败」——半截 JSON 让追更永久报错，旧轨被毁且无留档。"""
+    """直写最终名会「先截断后失败」——半截 JSON 让追更永久报错，旧轨被毁且无留档。
+
+    第 137 期起「怎么原子写」只有 `core/atomicio.py` 一处实现（临时名 / 提交 / 失败清理 /
+    权限），所以这里断言的是**调用它**，而不是某个具体手写形状 —— 早先钉 `.part")`
+    字面量的写法，一收敛就变成「测的是旧实现」了。
+    """
     text = _src("sources/manager.py")
-    assert '.part")' in text, "sidecar / 音轨的原子写写法不见了"
+    assert "atomicio.write_text(sidecar" in text or "atomicio.write_text, sidecar" in text, \
+        "sidecar 没走 atomicio"
+    assert "atomicio.write_bytes" in text, "音轨没走 atomicio"
     assert 'sidecar.write_text(json.dumps' not in text, "sidecar 退回直写"
     assert "(dest / f\"第{i}话{ext}\").write_bytes" not in text, "音轨退回直写"
+    assert '.part")' not in text, "还留着手写的 `.part` 拼接（应只用 atomicio）"
 
 
 def test_作者头像与活配置都是原子写():
-    assert "photo_tmp.write_bytes(bytes(buf))" in _src("core/authors.py")
+    authors = _src("core/authors.py")
+    assert "atomicio.write_bytes" in authors, "头像没走 atomicio"
+    assert ".part" not in authors.replace("`.part`", ""), "还留着手写的 `.part` 拼接"
     server = (ROOT / "novelforge" / "server.py").read_text(encoding="utf-8")
     assert 'cfg_tmp.replace(config.CONFIG_FILE)' in server
     assert "shutil.copy2(src, config.CONFIG_FILE)" not in server

@@ -35,9 +35,8 @@ kind             format          含义
 """
 import pathlib
 import re
-import shutil
 
-from . import comics
+from . import atomicio, comics
 
 #: 需要内容分派才能定形态的扩展名（`.cbz` / `.cbr` 是漫画专属后缀，不走这里）。
 #: 第 111 期：`.rar` / `.7z` 与 `.zip` 同列 —— 三者都是**通用容器**。
@@ -50,6 +49,29 @@ CONTAINER_FORMATS = tuple(e.lstrip(".").upper() for e in CONTAINER_EXTS)
 
 #: 容器内出现任一 ⇔ 它其实是一份 EPUB
 _EPUB_MARKERS = ("mimetype", "META-INF/container.xml")
+
+
+# ---------------- 读条目：全项目唯一的「带上限的读」（第 137 期）----------------
+# 病：第 125 期只给**漫画页**加了 ``MAX_ENTRY_BYTES`` 闸，**书籍本体**（EPUB 的
+# container.xml / OPF / 章节 / CSS，以及 `fileops` 把整包读成 blob）全是裸 ``z.read()``。
+# 一份几百 KB 的 zip 炸弹（单条目解压后 4 GB 零字节）就能让**自动扫描**把内存吃光 ——
+# 而扫描是用户什么都没点时后台自己跑的。所以「怎么读条目」只留这一处，上限与异常
+# 仍是 `comics` 里的那一份（别在这里再写一套常量）。
+
+
+def read_entry(z, name: str, limit: int | None = None) -> bytes:
+    """从**已打开**的 ``zipfile.ZipFile`` 读一个条目的字节，超上限抛 ``EntryTooLarge``。
+
+    这是书籍本体读条目的**唯一入口**（`library` / `fileops` / 展开）—— 换掉裸
+    ``z.read(name)`` 的每一处都调它，于是「上限」只有 `comics.MAX_ENTRY_BYTES` 一个真值源。
+
+    语义与 ``ZipFile.read`` **逐字一致**：名字不存在时照样抛 ``KeyError``（调用方原本就
+    靠它 / ``name in z.namelist()`` 分支），**只**多了「解压后超上限」这一个新失败方式。
+    那个失败是 ``comics.EntryTooLarge``：**调用方必须自己接住并降级成「这本书读不了」**，
+    不许让它冒泡成整次扫描的异常（见 `library._opf_path` 等处的 ``except Exception`` 口径）。
+    """
+    with z.open(name) as fp:
+        return comics.read_capped(fp, name, limit)
 
 #: 容器内**恰好一份**这些文档时，它就是这个格式。
 #: ⚠️ `.mobi` / `.azw3` / `.azw` 三个必须与 `core/mobicache.EXTS` 同进同出（契约：
@@ -313,9 +335,7 @@ def unpack(path, *, remove_source: bool = False) -> dict:
                 # 整份另存（容器本身就是一份 EPUB）：**流式复制**，别 `read_bytes()`
                 # 把整包读进内存 —— 那一步对 4 GB 的容器就是一次 OOM（第 125 期）。
                 try:
-                    tmp = dest.with_name(dest.name + ".part")
-                    shutil.copyfile(p, tmp)
-                    tmp.replace(dest)
+                    atomicio.copy_file(p, dest)
                 except Exception as e:                # noqa: BLE001
                     results.append({**act, "ok": False, "note": f"复制失败：{e}"})
                     continue
@@ -343,9 +363,7 @@ def unpack(path, *, remove_source: bool = False) -> dict:
                                         f"这一条未落盘"})
                 continue
             try:
-                tmp = dest.with_name(dest.name + ".part")
-                tmp.write_bytes(data)
-                tmp.replace(dest)
+                atomicio.write_bytes(dest, data, private=False)
             except Exception as e:                    # noqa: BLE001
                 results.append({**act, "ok": False, "note": f"写入失败：{e}"})
                 continue

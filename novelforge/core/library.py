@@ -449,7 +449,7 @@ def cover_path(path: pathlib.Path) -> str:
             opf_path = _opf_path(z)
             if not opf_path:
                 return ""
-            opf = z.read(opf_path).decode("utf-8", "ignore")
+            opf = zipkind.read_entry(z, opf_path).decode("utf-8", "ignore")
             return _cover_in(z, opf, opf_path)
     except Exception:
         return ""
@@ -558,7 +558,7 @@ def _toc_entries(path: pathlib.Path) -> list:
             opf_path = _opf_path(z)
             if not opf_path:
                 return []
-            opf = z.read(opf_path).decode("utf-8", "ignore")
+            opf = zipkind.read_entry(z, opf_path).decode("utf-8", "ignore")
             base = pathlib.PurePosixPath(opf_path).parent
 
             doc_path = None
@@ -579,7 +579,7 @@ def _toc_entries(path: pathlib.Path) -> list:
             if not doc_path:
                 return []
             try:
-                doc = z.read(doc_path).decode("utf-8", "ignore")
+                doc = zipkind.read_entry(z, doc_path).decode("utf-8", "ignore")
             except Exception:
                 return []
             doc_dir = str(pathlib.PurePosixPath(doc_path).parent)
@@ -670,7 +670,7 @@ def _ncx_entries(doc: str, doc_dir: str) -> list:
 def _opf_path(z: zipfile.ZipFile) -> str:
     """从 container.xml 解析 OPF 路径；找不到时退化为首个 .opf。"""
     try:
-        container = z.read("META-INF/container.xml").decode("utf-8", "ignore")
+        container = zipkind.read_entry(z, "META-INF/container.xml").decode("utf-8", "ignore")
         m = re.search(r'full-path="([^"]+)"', container)
         if m:
             return m.group(1)
@@ -706,7 +706,7 @@ def _spine_items(path: pathlib.Path) -> list:
             opf_path = _opf_path(z)
             if not opf_path:
                 return []
-            opf = z.read(opf_path).decode("utf-8", "ignore")
+            opf = zipkind.read_entry(z, opf_path).decode("utf-8", "ignore")
             base = pathlib.PurePosixPath(opf_path).parent
             manifest = {}
             for m in re.finditer(r'<item\b([^>]*)/>', opf):
@@ -963,7 +963,7 @@ def _load_css(z: zipfile.ZipFile, name: str, bid: str, seen: set, depth: int = 0
         return ""
     seen.add(name)
     try:
-        raw = z.read(name).decode("utf-8", "ignore")
+        raw = zipkind.read_entry(z, name).decode("utf-8", "ignore")
     except Exception:                                        # noqa: BLE001 —— 坏条目跳过
         return ""
     base = pathlib.PurePosixPath(name).parent
@@ -1000,7 +1000,7 @@ def chapter_assets(path: pathlib.Path, bid: str) -> dict:
             opf_path = _opf_path(z)
             if not opf_path:
                 return dict(empty)
-            opf = z.read(opf_path).decode("utf-8", "ignore")
+            opf = zipkind.read_entry(z, opf_path).decode("utf-8", "ignore")
             opf_base = pathlib.PurePosixPath(opf_path).parent
 
             # ① manifest 里声明为 CSS 的条目（`<link rel=stylesheet>` 指向的就是它们）。
@@ -1093,7 +1093,7 @@ def chapter_html(path: pathlib.Path, index: int, bid: str) -> dict:
         raise IndexError("章节不存在")
     media = spine[index]
     with zipfile.ZipFile(path) as z:
-        raw = z.read(media).decode("utf-8", "ignore")
+        raw = zipkind.read_entry(z, media).decode("utf-8", "ignore")
     # ⚠️ 第 133 期：章节体是**书里的 HTML**，而阅读器把它 `v-html` 进页面（同源）。
     #    净化必须发生在**发出之前** —— 前端没有第二道闸（也别指望它有）。
     html = htmlsafe.sanitize(_rewrite_assets(_body_of(raw), media, bid))
@@ -1471,7 +1471,7 @@ def probe_epub(path: pathlib.Path) -> dict:
         with zipfile.ZipFile(path) as z:
             opf_path = ""
             try:
-                container = z.read("META-INF/container.xml").decode("utf-8", "ignore")
+                container = zipkind.read_entry(z, "META-INF/container.xml").decode("utf-8", "ignore")
                 m = re.search(r'full-path="([^"]+)"', container)
                 if m:
                     opf_path = m.group(1)
@@ -1483,7 +1483,7 @@ def probe_epub(path: pathlib.Path) -> dict:
                     out["unparsable"] = True
                     return out
                 opf_path = names[0]
-            opf = z.read(opf_path).decode("utf-8", "ignore")
+            opf = zipkind.read_entry(z, opf_path).decode("utf-8", "ignore")
             out["title"] = _tag_text(opf, "dc:title")
             out["author"] = _tag_text(opf, "dc:creator")
             out["series"] = _series_of(opf)

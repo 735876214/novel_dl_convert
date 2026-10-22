@@ -18,6 +18,7 @@ import pathlib
 import httpx
 
 from . import detect as regex_detect
+from . import network, urlguard
 
 WINDOW = 6000          # 单窗口字符数
 OVERLAP = 400          # 窗口重叠，消除边界割裂
@@ -131,7 +132,24 @@ class HybridChapterDetector:
         return self._parse(content)
 
     async def _chat(self, system: str, user: str) -> str:
-        async with httpx.AsyncClient(timeout=60, verify=False) as c:
+        # 出网的两条纪律（第 137 期），写法与 `core/metafetch.py` / `sources/manager.py` 对齐：
+        #
+        # ① `verify=` **只问** `network.verify_tls_enabled()` —— 它是 `network.verify_tls`
+        #    这个配置键的唯一读点与默认值。这里原先写死 `verify=False`：用户在设置里打开
+        #    「校验证书」后，书源抓取与 AI 分章走的是**同一条出网**，却只有书源那条生效，
+        #    AI 分章仍无条件不校验（MITM 下 API key 与整章正文都在明文可见范围内），
+        #    而且界面上一点提示都没有。
+        # ② 挂**出站闸** `urlguard.make_request_guard()`：`llm.base_url` 是设置里填的地址，
+        #    一次打错 / 一次抄来的配置就能让服务端去取内网内容（169.254.169.254 之类），
+        #    而取回来的东西会被当成「章节边界」进正文 —— 与书源抓取同一个理由。
+        #    ⚠️ 这道闸默认拒内网目标；局域网自建 LLM（如 http://192.168.x.x:11434/v1）
+        #    会被它挡下，目前**没有** AI 专用的放行开关 —— 如实留在这里，不许为了「让
+        #    内网 LLM 能用」把闸悄悄摘掉（要支持就另立一个可关的开关，见 AGENTS.md §1）。
+        async with httpx.AsyncClient(
+            timeout=60,
+            verify=network.verify_tls_enabled(),
+            event_hooks={"request": [urlguard.make_request_guard()]},
+        ) as c:
             r = await c.post(
                 self.base_url + "/chat/completions",
                 headers={
