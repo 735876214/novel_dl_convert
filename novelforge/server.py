@@ -30,6 +30,7 @@ from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddle
 
 from .core import pipeline, activity_log, library, fileops, publish, scrape, updater, changelog
 from .core import autoupdate                      # 第 86 期：书籍追更的后台调度
+from .core import backup                          # 备份/轮转（第 143 期收敛：唯一归属处）
 from .core import landing                          # 第 93 期：源站内容落到「这本书自己」上
 from .core import zipkind                        # 第 87 期：容器展开
 from .core import watcher as watcher_mod
@@ -551,6 +552,7 @@ def _health_checks() -> dict:
     所以：不可服务 ⇒ 503 + `status="down"`；能服务但有毛病 ⇒ 200 + `status="degraded"`
     + `checks` 明细 + `problems` 人话清单。
     """
+    overrides_err = config.overrides_error()
     checks = {
         "db": db.ping(),
         "config_dir_writable": os.access(str(config.CONFIG_DIR), os.W_OK),
@@ -558,6 +560,12 @@ def _health_checks() -> dict:
         "cache": cache.health(),
         "dirs_ok": not config.dirs_failed(),
         "config_yaml": not config.config_error(),
+        # 第 144 期：目录可写 ≠ 设置读得出来。以 root 首跑留下 `root:root 0600` 的
+        # settings.json 后按 compose 注释切 `user:`，就落进「设置全回落默认值 + 保存报错
+        # + /health 全绿」的三角 —— 这也是 compose 那个开关的隐藏雷区。
+        "settings_readable": overrides_err is None,
+        # 第 144 期：默认口令还在用（局域网 8992 直通，等于口令公开）。
+        "default_pin": not auth_mod.uses_default_pin(),
     }
     problems = []
     if not checks["db"]:
@@ -570,6 +578,11 @@ def _health_checks() -> dict:
         problems.append(f"目录建不出来：{d}")
     if config.config_error():
         problems.append(f"config.yaml 读不出来，当前按默认值运行：{config.config_error()}")
+    if overrides_err is not None:
+        problems.append(
+            f"设置覆盖层（settings.json）读不出来，当前所有设置都按默认值运行：{overrides_err}")
+    if not checks["default_pin"]:
+        problems.append("仍在使用初始口令 changeme —— 请到「设置 → 个人资料」改掉")
     return {"checks": checks, "problems": problems}
 
 
@@ -6258,18 +6271,6 @@ _SCRAPE_LABELS = {
 }
 
 
-def _scrape_actions(status: str) -> list:
-    """该状态下**允许**用户做的处置（界面据此渲染按钮，后端仍会二次校验）。"""
-    st = str(status or "")
-    if st == "removed":
-        return ["delete_source", "keep_source", "rebuild"]
-    if st == "orphan":
-        return ["keep_copy", "recycle_copy"]
-    if st in ("kept", "failed", "skipped"):
-        return ["rebuild"]
-    return []
-
-
 @app.get("/api/scrape/state")
 def api_scrape_state(library_id: str = "", status: str = "", q: str = ""):
     """刮削台账：概览计数 + 条目列表 + worker 运行态（页面轮询此端点）。
@@ -6314,7 +6315,7 @@ def api_scrape_state(library_id: str = "", status: str = "", q: str = ""):
             "removed_path": str(r.get("removed_path") or ""),
             "confirmed_at": float(r.get("confirmed_at") or 0),
             "updated_at": float(r.get("updated_at") or 0),
-            "actions": _scrape_actions(st),
+            "actions": scrape.actions_for(st),
             "degraded": st in ("removed", "orphan"),
         })
     counts = db.scrape_counts(lid or None)
@@ -7345,14 +7346,10 @@ def _backup_config() -> str:
     """
     if not config.CONFIG_FILE.is_file():
         return ""
-    try:
-        config.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1e6) % 1000000:06d}"
-        dst = config.BACKUP_DIR / f"config-{stamp}.yaml"
-        shutil.copy2(config.CONFIG_FILE, dst)
-        return dst.name
-    except Exception:
-        return ""
+    # 备份归属 `core.backup`（第 143 期收敛）：文件名怎么起、留几份、旧份怎么移走，
+    # 都只该有一处判据。这里原先自己 `mkdir + 微秒戳 + shutil.copy2`，绕开了 `_rotate`
+    # ⇒ `config-*.yaml` 只增不减。
+    return backup.copy_config()
 
 
 def _sanitize_config(payload: dict) -> dict:

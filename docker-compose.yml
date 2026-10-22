@@ -204,10 +204,6 @@ services:
       # 轮询间隔（秒）。NAS 上 input 多为 SMB / NFS 挂载，建议 >= 3
       - WATCH_INTERVAL=5
 
-      # ———— 可选：MOBI / AZW3 派生需要 Calibre 的 ebook-convert ————
-      # 镜像默认不含它；注释掉／留空时，输出格式为 mobi / azw3 的任务自动降级为 EPUB（日志写明原因）
-      # - EBOOK_CONVERT_BIN=/usr/bin/ebook-convert
-
       # ———— 可选：容器要走代理才能访问书源 / 在线元数据时（Clash 类跑在 NAS 主机上）————
       # host.docker.internal 需要 Docker 20.10+，老引擎请改填 NAS 的局域网 IP
       # - HTTP_PROXY=http://host.docker.internal:7890
@@ -237,11 +233,9 @@ services:
     command: ["sh", "/app/start.sh"]
 
     healthcheck:
-      test:
-        - "CMD"
-        - "python"
-        - "-c"
-        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)"
+      # 认 $PORT（第 144 期）：上面 PORT 默认 8000，但它是可改的 —— 写死端口的话
+      # 一旦把 PORT 改成 9000，容器就永远 unhealthy，而服务其实好着。
+      test: ["CMD-SHELL", "python -c \"import os,urllib.request,sys; p=os.environ.get('PORT') or '8000'; sys.exit(0 if urllib.request.urlopen('http://localhost:'+p+'/health').status==200 else 1)\""]
       interval: 30s
       timeout: 5s
       retries: 3

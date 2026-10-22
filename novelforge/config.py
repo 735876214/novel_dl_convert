@@ -206,14 +206,15 @@ DEFAULTS = {
     },
     # 可选：hybrid/ai 模式下 AI 分章兜底（不填 api_key 则仅用正则 + 缩进降级）
     "llm": {"api_key": "", "base_url": "https://api.openai.com/v1", "model": "gpt-4o-mini"},
-    # 输入目录自动监听：txt 转 EPUB，其它文件直接导出
+    # 输入目录自动监听：已知格式（含 .txt）**原样复制**进目标书库根；
+    # 其余格式看 copy_non_txt（第 62 期起 txt 不再转 EPUB，见 core/pipeline.dispatch）
     "watcher": {
         "enabled": True,            # 服务启动时自动监听（也可用环境变量 AUTO_WATCH 覆盖）
         "interval": 5.0,            # 轮询间隔（秒）；NAS 网络挂载建议 >=3s
         "recursive": False,         # 是否递归子目录
         "settle_seconds": 1.0,      # 每次稳定判定的等待间隔
         "stable_rounds": 2,         # 连续 N 次读到相同大小才认为写入完成
-        "copy_non_txt": True,       # 非 txt 文件原样导出到 output
+        "copy_non_txt": True,       # 除 txt 外的格式收不收（收 ⇒ 同样原样复制进书库）
         "process_existing": True,   # 启动时是否处理 input 里已有的存量文件
         "max_retries": 3,           # 单个文件失败重试上限，超过则记为失败并跳过
         "ignore": [
@@ -649,6 +650,19 @@ _CONFIG_ERROR: "str | None" = None
 def config_error() -> "str | None":
     """`config.yaml` 这一轮是否读坏了（`/health` 与设置页据此报红条，第 141 期）。"""
     return _CONFIG_ERROR
+
+
+def overrides_error() -> "BaseException | None":
+    """`settings.json`（设置覆盖层）这一刻**读不读得出来**（第 144 期）。
+
+    `None` = 读得出来；非 `None` = 读不出来，**当前按「没有任何覆盖」在跑**。
+
+    ⚠️ 这个状态此前完全不可见：`load_overrides()` 读失败就 `return {}`（只打一条 warning），
+    于是「文件存在但读不了」（典型：以 root 首跑留下 `root:root 0600` 的 settings.json，
+    之后按 compose 注释切 `user:`）表现为**所有设置静默变回默认值**、保存时报错，
+    而 `/health` 仍然 `status=ok`。这正是本仓自己命名的「假配置」。
+    """
+    return _OVERRIDES_READ_ERROR
 
 
 def load_config() -> dict:

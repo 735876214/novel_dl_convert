@@ -124,18 +124,21 @@ ENV PYTHONUNBUFFERED=1 \
 #   libstdc++6       —— Node 二进制的动态依赖；已存在时 apt 直接跳过，几乎不增加体积
 #   libarchive-tools —— 提供 bsdtar，CBR（RAR 漫画）靠它解压（rarfile 的后端，第 9 期）。
 #                       libarchive 支持 RAR4/RAR5 读取；不装则 .cbr 无法打开（接口会返回 503）。
+#   postgresql-client —— 提供 pg_dump / pg_restore（第 144 期）。`core/backup.snapshot()` 在
+#                       `NOVELFORGE_DB=pg` 下**只**调 `pg_dump -Fc`，而镜像此前没有它 ⇒
+#                       「更新前自动备份」一次都没成功过，`updater` 因此每次都停在
+#                       `backup_failed`（一键更新 100% 失败），而 README 承诺的正是这张网。
+#                       ⚠️ 客户端主版本必须 **≥ 服务端**（compose 用 postgres:16-alpine）：
+#                       本镜像基线（trixie）带 17，可 dump 16；若把基线退回 bookworm（client 15）
+#                       会得到 `pg_dump: server version: 16.x ... aborting` —— 那时必须走 PGDG 源。
 RUN apt-get -o Acquire::Retries=5 update \
     && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
-       tzdata libstdc++6 libarchive-tools \
+       tzdata libstdc++6 libarchive-tools postgresql-client \
     && rm -rf /var/lib/apt/lists/*
 
-# 可选：MOBI / AZW3 派生需要 Calibre 的 ebook-convert —— 体积很大，默认**不安装**。
-# 需要时二选一：
-#   1) 自备镜像：在上面 apt 安装里加上 calibre（镜像会显著变大）
-#   2) 复用外部二进制：容器外提供 ebook-convert，用环境变量传入路径：
-#        -e EBOOK_CONVERT_BIN=/path/to/ebook-convert
-# 未提供时，输出格式为 mobi / azw3 的任务会**自动降级为 EPUB**，并在活动日志中写明原因
-# （EPUB 始终产出，在线阅读只依赖 EPUB）。
+# ⚠️ 第 144 期删掉了 `EBOOK_CONVERT_BIN` 的说明 —— 那个键**代码里零引用**：
+# 第 62 期起产物只剩 EPUB（`config.py` 的 layout 段写明「整条派生链路连同那个键一起没了」），
+# 镜像 / compose / 测试 compose 三处却还在教运维打开它（打开了什么都不会发生，也没有日志）。
 
 # 只搬构建产物：venv 与 node 二进制，编译工具链 / apt 缓存自然被丢弃
 COPY --from=builder /opt/venv /opt/venv
@@ -160,8 +163,10 @@ RUN chmod +x /app/start.sh \
 
 EXPOSE 8000
 
+# 端口只有一个真值源：`start.sh` 里的 `${PORT:-8000}`（第 144 期）。这里原先写死 8000，
+# 于是设 `PORT=9000` 后服务照常跑、健康检查永远打 8000 ⇒ 容器永久 unhealthy。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"
+    CMD python -c "import os,urllib.request,sys; p=os.environ.get('PORT') or '8000'; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:'+p+'/health', timeout=3).status == 200 else 1)"
 
 STOPSIGNAL SIGTERM
 

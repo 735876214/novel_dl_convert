@@ -81,8 +81,6 @@ services:
       - AUTH_SECRET=change-this-to-a-long-random-string
       # 本地调试想手动触发扫描时，可打开下面这行关掉自动监听
       # - AUTO_WATCH=false
-      # 可选：MOBI / AZW3 派生需要 Calibre 的 ebook-convert（镜像默认不含，注释掉则降级 EPUB）
-      # - EBOOK_CONVERT_BIN=/usr/bin/ebook-convert
       # 可选：容器要走代理才能访问书源 / 在线元数据时（Clash 类跑在宿主机上）
       # - HTTP_PROXY=http://host.docker.internal:7890
       # - HTTPS_PROXY=http://host.docker.internal:7890

@@ -204,6 +204,11 @@ watcher:
 logging:
   dir: ""                 # 留空则用 LOG_DIR
   max_entries: 2000       # 接口读取的内存缓冲条数
+  retention:              # 第 52 期：活动日志留存策略（**默认关闭** = 单文件一直追加）
+    enabled: false        # 打开后当前文件超过 max_bytes 就轮转成带时间戳的归档
+    max_bytes: 5242880    # 单个活动日志文件的上限（字节，默认 5 MiB）
+    keep: 5               # 归档保留份数（超出的移入回收站，不直接删）
+    compress: true        # 归档是否 gzip（读取会自动跨归档，审计页仍连续）
 update:                   # 第 78 期：版本检查与一键更新（第 80 期起四个键保存即生效；第 84 期加固）
   check_enabled: true     # 容器启动即查一次 + 每 interval_hours 小时检查 GitHub 最新版本（出网失败静默忽略；关掉即停后台线程）
   interval_hours: 6       # 定时检查间隔（小时）；启动即首检（不等一个间隔），保存后立即按新间隔重启

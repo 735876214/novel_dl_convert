@@ -1179,6 +1179,21 @@ def _rebuild_progress(c) -> None:
     c.execute("DROP TABLE progress_old")
 
 
+#: 首次初始化的占位口令。`_seed_user` 用它建号，`auth.uses_default_pin()` 按它判「还没改」
+#: （`/health` 的 problems 与设置页据此提示 —— 局域网里裸奔的 8992 就是它在兜底）。
+DEFAULT_PIN = "changeme"
+
+
+def pin_hash(username: str, pin: str) -> str:
+    """口令哈希 —— **唯一实现**（`:112 auth._pin_matches` / `_seed_user` / `set_pin` 三处共用）。
+
+    无盐单轮 sha256 是既有取舍（单用户自托管、PIN 只 4 位，加盐也只防彩虹表）；
+    真正防爆破的是 `auth.verify_pin` 的退避。第 144 期只把这份**算法**收敛到一处 ——
+    三份拷贝里任何一份被改动（例如有人「顺手加个盐」）都会让另一处的账号登不进去。
+    """
+    return hashlib.sha256(f"{username}:{pin}".encode("utf-8")).hexdigest()
+
+
 def _seed_user(c):
     """仅在账号**不存在**时按环境变量创建（AUTH_USER / AUTH_PIN）。
 
@@ -1191,20 +1206,19 @@ def _seed_user(c):
     row = c.execute("SELECT id FROM users WHERE username=?", (user,)).fetchone()
     if row:
         return
-    pin = os.getenv("AUTH_PIN", "changeme")
-    h = hashlib.sha256(f"{user}:{pin}".encode("utf-8")).hexdigest()
+    pin = os.getenv("AUTH_PIN", DEFAULT_PIN)
     c.execute(
         "INSERT INTO users(username, pin_hash, created_at) VALUES(?,?,?)",
-        (user, h, time.time()),
+        (user, pin_hash(user, pin), time.time()),
     )
 
 
 def set_pin(username: str, pin: str) -> None:
     """修改密码（哈希落库）。"""
-    h = hashlib.sha256(f"{username}:{pin}".encode("utf-8")).hexdigest()
     c = _connect()
     with _lock:
-        c.execute("UPDATE users SET pin_hash=? WHERE username=?", (h, username))
+        c.execute("UPDATE users SET pin_hash=? WHERE username=?",
+                  (pin_hash(username, pin), username))
         c.commit()
 
 

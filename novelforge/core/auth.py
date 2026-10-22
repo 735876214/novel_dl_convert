@@ -109,8 +109,24 @@ def _clear_failures(key: str) -> None:
         _fails.pop(key, None)
 
 
+def uses_default_pin() -> bool:
+    """是否还有账号在用初始占位口令（`db.DEFAULT_PIN`）。
+
+    比的是**哈希**（与 :func:`_pin_matches` 同一把尺子、同一处实现），所以用户改过口令之后
+    自然为 False。`/health` 的 `problems` 与设置页据此提示 —— 默认交付一个口令公开的入口，
+    又什么都不说的话，NAS 用户永远不会去改它。
+    """
+    try:
+        c = db._connect()
+        rows = c.execute("SELECT username, pin_hash FROM users").fetchall()
+    except Exception:                     # noqa: BLE001 —— 探活不该因为查不到而炸
+        return False
+    return any(hmac.compare_digest(str(r["pin_hash"]), db.pin_hash(str(r["username"]), db.DEFAULT_PIN))
+               for r in rows)
+
+
 def _pin_matches(user: str, pin: str) -> bool:
-    h = hashlib.sha256(f"{user}:{pin}".encode("utf-8")).hexdigest()
+    h = db.pin_hash(user, pin)
     c = db._connect()
     row = c.execute("SELECT pin_hash FROM users WHERE username=?", (user,)).fetchone()
     if not row:
