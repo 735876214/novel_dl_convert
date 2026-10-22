@@ -5101,7 +5101,7 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 
 ### 四、单一真值源（本期收敛 / 复用了九处）
 
-1. **「引擎能执行什么」只有一处**：`rules._MODES` + `rules.audit_native_rule`（诚实闸）。
+1. **「引擎能执行什么」只有一处**：`rules.MODES` + `rules.audit_native_rule`（诚实闸）。
    `legado.analyze` 的 `supported` 由它反推 —— 转换器不再既当运动员又当裁判。
 2. **选择器解析只有一处**：`legado` 的 mini 解析器（`@text` / `@html` / `@attr(x)` / `||` / `&&` /
    索引 `!n`·`.n`）。格式适配器里**绝不出现第二份**。
@@ -9740,3 +9740,172 @@ Docker `HEALTHCHECK` 只看 HTTP 200 ⇒ 数据库只读 / 盘满 / 监听线程
 2. **`except: pass` 是这个项目里最贵的四个字**。它把「可观测」换成「安静」，而安静的问题最后都由用户按「数据丢了」来报。
 3. **探活要探依赖，不探自己**。`/health` 返回常量 `"ok"` 等于没有探活；「能服务但有毛病」与「不能服务」必须分开表达（degraded vs 503），否则编排层会把能用的服务重启到不能用。
 4. **降级要说出来**。读缓存失败、封面失败、配置读坏、更新探测失败 —— 都可以降级继续，但必须有一处（日志 / `/health` / 界面横幅）说清楚。
+
+## 第 142 期（十轮审计 8/10：前端运行时 —— 检查失败别报成功 / 常驻标签页别偷请求 / 静默失败要说话）
+
+**需求来源**：用户「审计整个项目，分 10 轮修复 / 部署」；这一期对应**第 9 轮只读审计**（前端运行时：竞态 / 假交互 / 时区），
+结论 **致命 0 / 高 4 / 中 5**。四件「高」的共同点和第 141 期一样 —— **把没有发生的事演成发生了**，只是这次发生在浏览器里。
+
+### 1. 「检查更新」失败与「已是最新」长得一模一样
+
+`UpdatePage.vue` 的 `checkNow()` 把 `await api.updateCheck()` 的**返回值丢掉了**，无条件报「已检查远端版本」。
+而后端在 GitHub 不可达时**照样回 200**，只是带 `error="check_failed"`（第 78 期的设计：出网失败不阻塞）。
+⇒ 断网 / 代理不通时点检查，界面上写的是「已是最新」，用户从此不再点它 —— 而这是「一键更新」唯一的入口。
+**修法**：`error` 非空时抛人话（`检查失败：check_failed（可能是网络或代理不通）`），成功时把 `latest` 一起显示；
+反馈复用 `run()` 既有的按钮 loading + 失败展示，**不新增第二套提示机制**。
+
+### 2. `v-show` 常驻的标签页在后台偷偷拉接口
+
+`MetadataEditor` / `ReadingRecord` 用 `v-show` 挂在详情页里（第 63 期为「切标签不丢草稿」这么定的），
+而 `onMounted(load)` 无条件加载 ⇒ **每进一次详情页**就把「阅读状态 + 阅读记录 + 元数据方案」三组接口全拉一遍，
+哪怕用户一个标签都没点开（NAS 上每本 3 个请求不算小）。
+**修法**：两个组件加**必填** `active` prop，`watch([active, bookId])` 只在 `active === true` 时 `load()`，
+`BookDetailView` 按当前标签传值。**没有**改成 `v-if` —— 那会丢草稿、并打红既有用例；闸门加在「什么时候发请求」这一层。
+
+### 3. 开始日期在 UTC 以西的时区自己退一天
+
+`ReadingRecord.fromInput()` 用 `Date.parse('2026-10-22')` 换算，而按 ECMAScript 规范那是 **UTC 午夜**：
+`TZ=America/New_York` 的 NAS 上，「开始日期」存进去再读回来是**前一天**，而显示侧 `localDate()` 用的是**本地**口径。
+**修法**：`lib/format.ts` 新增 `localDateToEpoch(s)`（本地当日零点，与 `localDate` 同一把尺子、非法输入回 0），
+`fromInput` 改用它；`format.spec.ts` 加 2 例钉住语义（含 `''` / 乱码回 0）。
+
+### 4. 维护页两块数据的 `catch {}` ⇒ 永远停在「加载中…」
+
+`refresh()` 里孤儿扫描与回收站列举各自 `catch {}`，`loading` 却已经被置回 false ⇒ 界面显示空块，
+用户读成「没有孤儿 / 回收站是空的」，其实是接口挂了。
+**修法**：`orphanError` / `recycleError` 两个 ref，失败时把那**一块**换成可读原因（其余块照常显示），
+与第 141 期「降级要说出来」同一口径。
+
+### 5. 同批清掉的两处假状态
+
+- `settingsNav.ts` 的 `SETTINGS_GROUPS` 里 `ext` 分组上有个**死字段** `own: true` —— 读者只认页级
+  `pg.own`（`SettingsSidebar.vue`）与 `currentPage.own`（`SettingsLayout.vue`），分组级那个从来没人读 ⇒ 删掉。
+- 该文件头注释还写「6 个分组 / 36 个叶子页」「本项目补充 6 页（`ext` 组 5 页）」—— 实为 37 页 / 7 页，同批改；
+  并补一句「路由**不带分组段**」，免得下一个人照注释去拼 `#/settings/<组>/<页>`。
+
+### 6. 防回归
+
+`frontend/src/lib/format.spec.ts` +2 例（`localDateToEpoch` 的本地零点语义 / 非法输入回 0）；
+`npm run type-check` exit 0、`npm run build` exit 0、`npm run deploy` 已同步；
+`npm run test:unit` = **44 failed / 680 passed（724 例 / 70 spec）**，其中 44 条与 HEAD 基线**逐字一致**（属既有失败），
+680 = 基线 678 + 本期新增 2 例。
+
+### 7. 这一期的教训
+
+1. **`await` 了不看返回值 = 没 `await`**。后端「HTTP 200 + `error` 字段」这种形状，前端必须读字段，否则失败被静默吞掉。
+2. **「常驻」是一个决定，不是一个实现细节**：`v-show` 换来「不丢草稿」，就必须同时给出「什么时候才干活」的闸门。
+3. **本地日期串没有时区**：凡「日期选择器 → 后端」，一律显式取本地零点，别让 `Date.parse` 替你决定时区。
+
+## 第 143 期（十轮审计 9/10：文档真值源漂移 —— 点名的主语不存在 / 界面路径成片过期 / 同一判据两份实现）
+
+**需求来源**：用户「审计整个项目，分 10 轮修复 / 部署」；这一期对应**第 8 轮只读审计**（文档 vs 代码的真值源漂移），
+结论 **致命 0 / 高 3 / 中 10 / 低 1**。共同点：**代码是对的、文档是错的，而没有任何用例会因此变红** —— 于是漂移活了十几期。
+
+### 1. 文档点名的真值源 `rules._MODES` 根本不存在
+
+`docs/architecture.md`、`AGENTS.md`、`docs/format-capability-matrix.md`、roadmap 第 94 期段都写「引擎能执行什么只有 `rules._MODES` 一处说了算」，
+而 `novelforge/sources/rules.py` 里的符号是 **`MODES`**（全仓唯一的 `_MODES` 是 `selspec.py` 里另一码事 —— 阅读选择器语法名）。
+**修法**：四处改成 `rules.MODES`；新增用例断言「文档点名的符号真存在，且没人再写 `rules._MODES`」。
+
+### 2. `docs/user-guide.md` 的界面路径成片过期
+
+- 「36 个设置页」（实为 **37**）、「工具 9 个标签」（实为 **8**）；
+- 「设置 → 网络 → 书源导入」「设置 → 扩展 → 转换日志」—— **没有「网络」这个分组**，也**没有「扩展」**；
+- 「工具 → 书库管理 → 副本与容器」—— 第 49 期就已搬到设置页的「维护」；
+- 路由写成 `#/settings/<组>/<页>` —— 实际是 `#/settings/<页>`（分组只决定侧栏归类）。
+
+**修法**：§8 / §9 按 `settingsNav.ts` 与 `ToolsLayout.vue` 的**实况**重写（页名一律用注册表里的 `zh`）。
+**防回归**：新增 `tests/test_docs_ui_paths_contract.py` —— ① 文档里每个页名都必须在注册表里存在；
+② 表里各页数之和 == 注册表页数 == 标题括号里的数字；③ 工具标签名与数量 == `ToolsLayout` 的 `SECTIONS`；
+④ 路由不带分组段。**这一层此前完全没人管**：`test_settings_nav_contract.py` 只核「注册表 ↔ 路由映射」，
+`check_doc_anchors.py` 只核 `file:line` 锚点，裸路径与页名是空白。
+
+### 3. ISBN 形状的判据被抄成了第二份
+
+`core/sync.py` 的 `_hardcover_find_book_id` 自己写了一遍「清洗成 10 / 13 位」的正则，
+而真值源是 `core/metadata.isbn_digits`（第 94 期立的）。**修法**：改调 `metadata.isbn_digits`，删掉本地正则（§1 单一真值源）。
+
+### 4. 刮削状态闸门只有一半
+
+`core/scrape.py` 里「重试 / 重置」两个入口直接改 `status`，不校验「这一行是否还是 running / 是否属于本次 run」
+⇒ 两个并发 run 能互相把对方的状态改掉（台账上看起来是「重置了没反应」）。
+**修法**：把判据收敛成 `scrape._gate(row, run_id)` 一处（内部 `_claim` 也复用它），两个入口都过闸，失败回 409 + 人话原因。
+
+### 5. 配置文件的备份只在一条路径上做
+
+`config.save_overrides` 会先把 `settings.json` 备份一份，而 `server.py` 里「重置设置」那条路径直接清空文件。
+**修法**：`core/backup.copy_config(name)` 收敛「把某份配置复制进 `config/cache/config-backups/`」这一动作（走 `atomicio.copy_file`），两处都用它。
+
+### 6. 其余文档小漂移（同批改完）
+
+- `docs/architecture.md` 的 `core/` 模块清单漏了 20+ 个模块（审计逐个数出来）⇒ 改为「全部 74 个模块」全列（脚本生成、72 字符行宽重排）。
+- `docs/format-capability-matrix.md`、`CHANGELOG.md` 里的旧口径（`_MODES` / 「36 页」/「9 个工具标签」）同批改。
+- `README.md` 配置表补 `logging.retention` 整段 —— 一个「默认关闭、打开就轮转」的开关此前在文档里**根本不存在**。
+- `novelforge/cli.py` / `novelforge/config.py` 的 docstring 与 `AUTO_WATCH` 的说明对齐（「只在 tools 里」这类过期描述）。
+- `frontend/src/data/settingsNav.ts` 的分组级死字段 `own` 删除（第 142 期同批，见那一期 §5）。
+
+### 7. 这一期的教训
+
+1. **文档里的符号名也是契约**：写「唯一真值源是 X」却不钉住 X 的形状，等于给下一个人留了个错字。
+2. **界面路径必须由注册表派生或对账**：手写的「设置 → A → B」在分组重构那天全错，而且**永远不会红**。
+3. **同一判据的两份实现，可能一份在文档、一份在代码** —— 审计时要同时读两边，只读代码的审计永远发现不了这一期的问题。
+
+## 第 144 期（十轮审计 10/10：部署与运维面 —— 备份永远失败 / 永远 unhealthy 的端口 / 永远不提的默认口令）
+
+**需求来源**：用户「审计整个项目，分 10 轮修复 / 部署」；这是**第 10 轮只读审计**（compose / Dockerfile / 健康检查 / 备份 / 恢复），
+结论 **致命 1 / 高 4 / 中 6**。这一期的判据全是「运维能不能看见」，所以防回归也全是**静态字面量 + 只读接口语义**。
+
+### 1. PostgreSQL 部署的「自动备份」从来就没成功过（致命）
+
+`core/backup.snapshot()` 在 `NOVELFORGE_DB=pg` 下只调 `pg_dump -Fc`，而运行镜像里**没有 `pg_dump`**
+（runtime 阶段只装 `tzdata / libstdc++6 / libarchive-tools`）⇒ 每次「更新前自动备份」都落成 `backup_failed`，
+**备份列表永远是空的**，而 README 写着「更新前自动备份」。PG 用户第 ⼀次真出事时才发现手上没有任何备份。
+**修法**：运行阶段 apt 装 `postgresql-client`，并在注释里写明版本口径 —— 客户端主版本**必须 ≥ 服务端**
+（compose 用 `postgres:16-alpine`；trixie 基线自带 17，可 dump 16；若基线退回 bookworm 自带 15，
+会得到 `pg_dump: server version: 16 … aborting`，那时必须走 PGDG 源）。
+
+### 2. 改了 `PORT` 容器就永远 unhealthy
+
+`Dockerfile` 的 `HEALTHCHECK` 与 `docker-compose.yml` 应用服务的 `healthcheck` 都把 `:8000` 写死，
+而 `PORT` 本身是可改的（全仓 9 处 8000 只有这两处不跟着 `PORT` 走）⇒ 用户把 `PORT` 改成 9000，服务好好跑着、
+容器却一直 unhealthy，编排层反复重启（并可能被 NAS 的看门狗直接判死）。
+**修法**：两处都改成读 `$PORT`（缺省 8000）。
+
+### 3. 默认口令 `changeme` 从不被提醒
+
+compose 里明写「部署必须改 `AUTH_USER` / `AUTH_PIN`」，但 NAS 用户装完就忘；`/health`、设置页、活动日志三处都没有任何提示。
+而端口 8992 往往直通局域网 —— 等于一个口令公开的书库。
+**修法**：① `db.pin_hash()` 收敛「口令哈希」这一处实现（此前 `auth._pin_matches` / `db._seed_user` / `db.set_pin`
+三份拷贝，任一份被「顺手加个盐」都会让另一处登不进去），`db.DEFAULT_PIN` 立为唯一常量；
+② `auth.uses_default_pin()` 比**哈希**（与校验同一把尺子，用户改过口令自然为 False）；
+③ `/health` 的 `checks.default_pin` + `problems` 出一条人话（「仍在使用初始口令 changeme —— 请到『设置 → 个人资料』改掉」）。
+
+### 4. `settings.json` 读不出来时 `/health` 全绿
+
+compose 注释教人「把 `/app/config` 换成目录挂载 + 切 `user:`」，照做之后会出现
+「设置全回落默认值 + 保存报错 + `/health` 全绿」的三角 —— 而 `config._OVERRIDES_READ_ERROR` **早就**记下了原因，只是没人读。
+**修法**：新增 `config.overrides_error()`，`/health` 的 `checks.settings_readable` 与 `problems` 如实报出
+（`status="degraded"`，**不是** 503 —— 重启容器修不好这件事，回 503 只会变成无限重启，口径同第 141 期）。
+
+### 5. 死开关 `EBOOK_CONVERT_BIN`
+
+第 62 期起产物只剩 EPUB，那个键在代码里**零引用**，而 Dockerfile 注释、`docker-compose.yml`、
+`docker-compose.test.yml` 三处仍在教运维「需要 MOBI / AZW3 就打开它」（打开了什么都不会发生，也没有日志）—— 典型的假交互。
+**修法**：三处删掉开关行（Dockerfile 留一段「为什么删」的注释，说明第 62 期的决定）；README 同口径。
+
+### 6. 防回归（`tests/test_hardening_144_deploy.py`，6 例）
+
+镜像带 pg 客户端（且注释写了版本口径）/ 健康检查认 `$PORT`（Dockerfile 与 compose 各一条）/ 死开关不再可打开 /
+设置文件读坏时 `/health` 降级并说明原因 / 默认口令时 `/health` 提醒改密码。
+
+### 7. 未修只记在案（第 10 轮审计报的其余条目）
+
+- `docker-compose.yml` 的镜像用 `:latest` + `pull_policy: missing` ⇒ 重建出来的版本不确定（`docker pull` 前后可能是两个版本）。改成固定 tag 会与「一键更新」冲突，留给发布流程统一裁决。
+- compose 默认 `user:` 是 root（数据目录权限交给 Dockerfile 的 `mkdir -p`）；非 root 运行需要先 `chown` 挂载点，属部署文档范畴。
+- `docs/architecture.md` 的「多端」段对 OPDS / Komga 的端口假设仍是 8000（不影响功能，属叙述口径）。
+
+### 8. 这一期的教训
+
+1. **「文档写着自动备份」不是备份**：备份链路每一环（客户端二进制、版本匹配、目标目录可写、失败可见）都得有一条用例或一次真机核验。
+2. **可配置的东西不许有硬编码副本**：`PORT` 改了、探活没改，就是把「能跑的服务」变成「一直重启的服务」。
+3. **安全默认值必须自曝**：默认口令 / 默认密钥这类东西，服务端要么拒绝启动、要么在探活里喊出来 —— 写在 compose 注释里等于没写。

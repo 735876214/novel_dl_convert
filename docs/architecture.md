@@ -16,17 +16,19 @@
 │   · 只做**编排与形状**：参数校验 → 调 core → 组装响应（如 _card 收口 path）│
 └───────────────┬──────────────────────────────────────────────────────────┘
 ┌───────────────▼──────────────────────────────────────────────────────────┐
-│ novelforge/core/* —— 领域逻辑（50+ 个模块，纯 Python，不依赖 FastAPI）     │
-│  library · catalog · db · sqlcompat · pg · cache · fileops · publish ·    │
-│  scrape · metadata · metasources · metafetch · metastore · series_meta ·  │
-│  authors · narrators · stats · achievements · activity · recommend ·      │
-│  embed · epub_cfi · comics · audio · audio_meta · detect · preprocess ·   │
-│  pipeline · watcher · txtcache · mobicache · units · bookdock · features │
-│  lib_settings · library_rules · opds · komga · komga_api · koreader ·     │
-│  koreader_anno · integrations · auth · fonts · customfields · metascore · │
-│  browse_counts · activity_log · ai_detect · network · migrate · pdfrender │
-│  autoupdate（书源追更 / 单本检查更新）· landing（在线读满 5 章落到本地）  │
-│  jssandbox（JS 沙箱）· saferegex（执行期正则超时）· urlguard（出站 URL 闸）│
+│ novelforge/core/* —— 领域逻辑（**全部 74 个模块**，纯 Python，不依赖 FastAPI）│
+│  achievements · activity · activity_log · ai_detect · atomicio · audio · │
+│  audio_meta · auth · authors · autoupdate · backup · bookdock ·          │
+│  browse_counts · cache · catalog · changelog · comics · csvsafe ·        │
+│  customfields · db · detect · embed · epub_builder · epub_cfi ·          │
+│  epub_update · fb2cache · features · filename · fileops · fonts ·        │
+│  htmlsafe · integrations · jssandbox · komga · komga_api · koreader ·    │
+│  koreader_anno · landing · lib_settings · library · library_rules ·      │
+│  metadata · metafetch · metascore · metasources · metastore · migrate ·  │
+│  mobicache · narrators · netdiag · network · numbers · opds · pdfrender ·│
+│  pg · pgmigrate · pipeline · preprocess · publish · reading_list ·       │
+│  recommend · recycle · saferegex · scrape · series_meta · sqlcompat ·    │
+│  stats · sync · txtcache · units · updater · urlguard · watcher · zipkind│
 └───────────────┬──────────────────────────────────────────────────────────┘
                 │
    ┌────────────▼───────────┐   ┌──────────────┐   ┌───────────────────────┐
@@ -238,7 +240,7 @@ payload ─► intake.sniff_and_adapt()            # 认格式：格式注册表
 - **格式轴**（`sources/formats/`）：`nf-native` · `nf-export`（本项目导出信封）· `legado-3` ·
   `legado-2`（**只做键名归一**，交给 `legado` 那唯一一份转换）· `legado-jsonl`。
   加格式 = 加一个 adapter，**执行层一行不改**。
-- **诚实闸**：`rules._MODES` + `rules.audit_native_rule` 是「引擎能执行什么」的**唯一真值源**。
+- **诚实闸**：`rules.MODES` + `rules.audit_native_rule` 是「引擎能执行什么」的**唯一真值源**。
   任何格式的 adapter 产物都必须过它，**不许 adapter 自称可用**。每补一项能力就从
   `_UNSUPPORTED_CONSTRUCTS` 摘一条并补用例（单调变诚实，不会先松后紧）。
 - **`field_report` 与 `unsupported_fields` 分工不同**：前者是**交代**（每一项去哪儿了），
@@ -323,7 +325,7 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    同步壳 `update_book` 内部的 `asyncio.run` 在运行中的循环里会直接抛，用错会让整条自动落地
    与「检查更新」**静默什么都不写**（不报错、盘上零改动）。
 9. **书源导入（第 94 期）**：三条导入入口**共用一条解析路**（`intake`）；拒绝**不许回 200 装成功**；
-   「引擎能不能执行」**只有** `rules._MODES` + `audit_native_rule` 一处说了算（adapter 不许自评）；
+   「引擎能不能执行」**只有** `rules.MODES` + `audit_native_rule` 一处说了算（adapter 不许自评）；
    `field_report`（交代）与 `unsupported_fields`（判定依据）**不许合并**；
    格式轴与执行轴**不合并**；`store.add_rule` 仍是规则文件的**唯一**写者；
    `source_ledger.raw_json` 仍是无损原文（转换必然有损，靠它兜底往返）。
