@@ -27,7 +27,7 @@ from html import unescape as html_unescape
 import httpx
 
 from .. import config
-from . import netdiag
+from . import metadata, netdiag
 from .library import norm_key
 from .sources import registry as _src_registry
 
@@ -1562,8 +1562,10 @@ def search_by_isbn(isbn: str, sources: list = None, limit: int = 3,
     命中即返回该候选并打上 ``exact_isbn=True``、``score=1.0`` —— ISBN 一一对应**同一版本**，
     匹配度无需再用相似度估算。未命中或源失败返回 ``None``（调用方回退到书名 + 作者检索）。
     """
-    digits = re.sub(r"[^0-9Xx]", "", str(isbn or "")).upper()
-    if len(digits) < 10:
+    # 与 `library` / `fileops` 同一把尺子（`metadata.isbn_digits`，第 143 期收敛）：
+    # 这里原先只看 `len(digits) >= 10`，11/12/14 位的垃圾串会被当成 ISBN 发给 13 家源。
+    digits = metadata.isbn_digits(isbn)
+    if not digits:
         return None
     order = [s for s in (sources or DEFAULT_ORDER) if s in SOURCES] or list(DEFAULT_ORDER)
     opts_map = options or {}

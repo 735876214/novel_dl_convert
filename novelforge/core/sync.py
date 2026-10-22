@@ -25,7 +25,7 @@ import unicodedata
 
 import httpx
 
-from . import activity_log, db, library
+from . import activity_log, db, library, metadata
 
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 HARDCOVER_GRAPHQL = "https://api.hardcover.app/v1/graphql"
@@ -159,7 +159,9 @@ def _hardcover_find_book_id(client: httpx.Client, token: str, book: dict) -> tup
     匹配口径：**先 ISBN 精确，退到「规范化书名 + 作者」**；两者都命中不了返回 ``(None, 原因)``。
     只用对方的 ``search`` 查询，一次请求 —— 不做逐本多次探测。
     """
-    isbn = re.sub(r"[^0-9Xx]", "", str(book.get("isbn") or ""))
+    # ISBN 形状判据只有一处（`metadata.isbn_digits`，第 143 期收敛）：
+    # 这里原先自己 `re.sub` 一遍，不校验位数 —— 11/12/14 位的垃圾串会照发给对端。
+    isbn = metadata.isbn_digits(book.get("isbn"))
     title, author = str(book.get("title") or ""), str(book.get("author") or "")
     q = f"isbn:{isbn}" if isbn else f"{title} {author}".strip()
     if not q:

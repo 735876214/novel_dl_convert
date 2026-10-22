@@ -3,7 +3,7 @@
 对应界面 5 个标签：**All / Needs review / Pending / Ready / Error**。真实状态 4 个（+1 个隐藏终态）::
 
     pending       已进投递目录，等待监听处理（文件仍在写入 / 监听暂停）
-    ready         已处理完成（.txt 转 EPUB，或电子书格式直接入库）
+    ready         已处理完成（**原样复制进书库**；第 62 期起 .txt 也不再转 EPUB）
     needs_review  类型不在自动处理范围内，无法自动处理，需人工决定
     error         处理抛异常（见 retries，达上限后 watcher 不再重试）
     ignored       用户显式忽略（**不计入任何标签页**，也不再自动处理）

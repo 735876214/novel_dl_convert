@@ -68,7 +68,7 @@ from .base import SourceAdapter, DEFAULT_HEADERS
 from . import selspec
 from .. import config
 from ..core.network import clamp_timeout
-from ..core import saferegex
+from ..core import filename, saferegex
 
 logger = logging.getLogger(__name__)
 
@@ -98,8 +98,6 @@ _VAR_RE = re.compile(r"\{var:([^}]+)\}")
 # 书源「导入成功却消失」；`name = "../settings"` 更会**覆盖 settings.json 覆盖层**。
 # 现在：名字的判据只有 :func:`rule_name_error` 一处，路径只有 :func:`rule_file_path` 一处。
 
-_NAME_BAD = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
-
 #: 书源名的长度上限。理由：它要当文件名（常见文件系统 255 字节），且台账 / 界面按它做键。
 _NAME_MAX = 80
 
@@ -109,7 +107,7 @@ def rule_name_error(name) -> str:
     s = str(name or "").strip()
     if not s:
         return "缺少 name（唯一标识）"
-    if _NAME_BAD.search(s) or ".." in s:
+    if filename.UNSAFE_CHARS.search(s) or ".." in s:
         return f"name 里不能有路径分隔符或 ..（它同时是文件名）：{s}"
     if s.startswith("."):
         return f"name 不能以 . 开头（会被当隐藏文件）：{s}"

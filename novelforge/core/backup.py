@@ -67,11 +67,11 @@ def _stamp() -> str:
     return time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1e6) % 1000000:06d}"
 
 
-def _rotate(d: pathlib.Path, reason: str) -> "list[str]":
-    """同 ``reason`` 只留最近 :data:`_BACKUP_KEEP` 份，返回被删的路径。"""
-    files = sorted(d.glob(f"pre-update-{reason}-*"), key=lambda p: p.stat().st_mtime)
+def _rotate_glob(d: pathlib.Path, pattern: str, keep: int) -> "list[str]":
+    """按 ``pattern`` 只留最近 ``keep`` 份，其余移入回收站；返回被移走的路径。"""
+    files = sorted(d.glob(pattern), key=lambda p: p.stat().st_mtime)
     removed: "list[str]" = []
-    for old in files[: max(0, len(files) - _BACKUP_KEEP)]:
+    for old in files[: max(0, len(files) - keep)]:
         try:
             # 轮转是**后台自动动作**，不是用户显式删除 ⇒ 按 AGENTS.md §1「删除一律移入回收站」
             # 走 `publish.recycle`（台账可还原）。此前这里直接 `unlink()`，是全仓唯一一处
@@ -82,6 +82,33 @@ def _rotate(d: pathlib.Path, reason: str) -> "list[str]":
         except Exception:  # noqa: BLE001 —— 移不走旧备份不该让这次备份算失败
             _log.warning("移不走旧备份 %s", old)
     return removed
+
+
+def _rotate(d: pathlib.Path, reason: str) -> "list[str]":
+    """同 ``reason`` 只留最近 :data:`_BACKUP_KEEP` 份数据快照，返回被移走的路径。"""
+    return _rotate_glob(d, f"pre-update-{reason}-*", _BACKUP_KEEP)
+
+
+def copy_config() -> str:
+    """把 ``config.yaml`` 复制一份进备份目录（维护页「备份与还原」用的那份）。
+
+    返回落盘文件名；**失败返回空串**（调用方按「没备份成功」处理，与原来一致）。
+
+    ⚠️ 这段原先在 `server._backup_config` 里自己 `mkdir + 微秒戳 + shutil.copy2`（第 143 期
+    收敛）：文件名怎么起已经有 :func:`_stamp` 一处判据，而那份实现还绕开了 :func:`_rotate`
+    ⇒ ``config-*.yaml`` 只增不减（每次改设置都留一份，永远不会清理）。
+    """
+    from .. import config
+
+    try:
+        d = backup_dir()
+        dst = d / f"config-{_stamp()}.yaml"
+        atomicio.copy_file(pathlib.Path(config.CONFIG_FILE), dst, private=True)
+    except Exception:  # noqa: BLE001 —— 备份失败不阻断保存设置
+        _log.warning("配置备份失败", exc_info=True)
+        return ""
+    _rotate_glob(d, "config-*.yaml", _BACKUP_KEEP)
+    return dst.name
 
 
 def _dump_pg(dest: pathlib.Path) -> str:

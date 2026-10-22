@@ -520,6 +520,43 @@ ACTIONS = {
 }
 
 
+#: 状态 → 允许的处置动作（**唯一真值源**，第 143 期从 `server.py` 搬进 core）。
+#
+# 为什么必须住在 core：这张表是「什么状态能做什么」的**判据**，而 `resolve()` 是唯一的执行口。
+# 表放在 API 层、core 只判「动作名存在」时，`kept` 行照样能调 `delete_source` 把源文件搬进
+# 回收站（`_resolve_locked` 只看 action 不看 status），而那张表的 docstring 还写着
+# 「后端仍会二次校验」—— 一句不存在的校验。
+_ACTIONS_BY_STATUS = {
+    # 出版成功：源文件还在 ⇒ 删源 / 保留源 / 把副本回收 / 按当前元数据重出版，都成立
+    "ok": ("delete_source", "keep_source", "keep_copy", "recycle_copy", "rebuild"),
+    # 源文件已不在（用户确认删过 / 被外部搬走）：只剩台账与副本，同样能删登记或重出版
+    "removed": ("delete_source", "keep_source", "keep_copy", "recycle_copy", "rebuild"),
+    "source_removed": ("keep_source", "keep_copy", "recycle_copy", "rebuild"),
+    # 原文件没了只剩副本 —— 处置是「以副本为准」或「把副本也回收」
+    "orphan": ("keep_copy", "recycle_copy", "rebuild"),
+    "kept": ("rebuild",),
+    "failed": ("rebuild",),
+    "skipped": ("rebuild",),
+    # 排队中 / 正在跑：不许手动处置（否则与 worker 抢同一本书）
+    "pending": (),
+    "running": (),
+}
+
+
+def actions_for(status: str) -> list:
+    """该状态下**允许**用户做的处置（界面据此渲染按钮；执行口仍按 :func:`check_action` 校验）。"""
+    return list(_ACTIONS_BY_STATUS.get(str(status or ""), ()))
+
+
+def check_action(status: str, action: str) -> str:
+    """状态闸：返回空串 = 放行，否则返回拒绝原因（中文，直接给界面显示）。"""
+    if action not in ACTIONS:
+        return f"未知动作：{action}"
+    if action not in _ACTIONS_BY_STATUS.get(str(status or ""), ()):
+        return f"该书当前状态（{status or '未知'}）不允许这个操作：{action}"
+    return ""
+
+
 def _lib_source_path(lib: dict, name: str) -> "pathlib.Path":
     """库有多个文件夹（第 41 期）时，返回实际存在的那个根下的同名文件绝对路径；
     都不存在则退到第一个根（仅用于日志 / 提示）。"""
@@ -542,6 +579,14 @@ def resolve(bid, action: str) -> dict:
     action = str(action or "").strip()
     if action not in ACTIONS:
         return {"ok": False, "error": f"未知动作：{action}"}
+    # ⚠️ 状态闸在**这里**判（第 143 期）：`rebuild` 不走锁，其余动作进锁前也要先拒掉 ——
+    #    否则「kept / ok 行调 delete_source 把源文件搬走」这条路一直开着。
+    row = db.scrape_get(bid)
+    if not row:
+        return {"ok": False, "error": "没有这本书的刮削台账"}
+    denied = check_action(str(row.get("status") or ""), action)
+    if denied:
+        return {"ok": False, "error": denied}
     if action == "rebuild":
         return process(bid, fetch=False)             # 走 process ⇒ 自己的按书锁
     with _bid_guard(bid):

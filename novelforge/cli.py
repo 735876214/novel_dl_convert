@@ -195,7 +195,8 @@ def main():
     pc.add_argument("-t", "--test-title", help="测试某标题是否能被正则识别（调试用）")
 
     # watch（监听输入目录）
-    pw = sub.add_parser("watch", help="监听输入目录：txt 自动转 EPUB，非 txt 直接导出")
+    pw = sub.add_parser("watch",
+                        help="监听输入目录：已知格式原样收入书库（第 62 期起 txt 也不再转 EPUB）")
     pw.add_argument("-i", "--interval", type=float, help="轮询间隔秒数（默认取 config.yaml）")
     pw.add_argument("-r", "--recursive", action="store_true", help="递归监听子目录")
     pw.add_argument("--once", action="store_true", help="只扫描一轮就退出（等同 scan）")
