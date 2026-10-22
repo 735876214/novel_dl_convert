@@ -90,3 +90,21 @@ def _resolves(tracked: set, spec: str) -> bool:
         if path.startswith(base + ".") or path.startswith(base + "/index."):
             return True
     return False
+
+
+def test_空目录的_keeper_必须在库里():
+    """`novelforge/static/.gitkeep` 必须入库。
+
+    git **不跟踪空目录**，而 `novelforge/server.py` 在**导入期**就把 `static/` 挂给
+    `StaticFiles(directory=...)`，目录不存在直接抛 `RuntimeError: Directory ... does not exist`
+    —— 于是「本机有目录、clone 下来没有」的环境（CI / 精简镜像）里，
+    **整包 pytest 一条都跑不到就退**。2026-10-19 的 `Tests` 红就是这么来的：
+    `ImportError while loading conftest ... RuntimeError: Directory .../novelforge/static does not exist`。
+
+    `static/v2/` 是构建产物（`_IGNORED_OK` 里放行），所以 keeper 只能放在 `static/` 这一层。
+    """
+    tracked = set(_git("ls-files", "novelforge/static"))
+    assert "novelforge/static/.gitkeep" in tracked, (
+        "`novelforge/static/.gitkeep` 不在版本库里 ⇒ 全新 clone 里这个目录不存在，"
+        "`import novelforge.server` 会在挂载 StaticFiles 时抛 RuntimeError（整轮 pytest 直接退）。"
+    )

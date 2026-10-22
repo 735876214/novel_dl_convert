@@ -82,3 +82,46 @@ def test_白名单与实际用到的一一对应():
         + "\n  ".join(stale)
         + "\n⇒ 要么把对应的 step 加回来，要么从 `ALLOWED` 里删掉。"
     )
+
+
+# ---------------------------------------------------------------- 第 145 期：噪音与基础设施抖动
+
+def _workflow_texts() -> dict:
+    return {p.name: p.read_text(encoding="utf-8") for p in sorted(WORKFLOWS.glob("*.y*ml"))}
+
+
+def test_每个_workflow_都声明了_concurrency():
+    """同一个 ref 的并发 run 必须互相取消/排队。
+
+    2026-09/10 那批红叉里两类都不是代码问题、而是**并发**造成的噪音：
+    ① 两次构建同时往同一份 GHA 层缓存里写 ⇒ `ERROR: error writing layer blob: not_found`；
+    ② 连推两笔时旧 run 被新 run 挤成 `cancelled`（页面上一样是个灰叉）。
+
+    钉住「每个 workflow 都得有 `concurrency:`」，新增 workflow 时才会被迫想一次这件事。
+    """
+    texts = _workflow_texts()
+    assert texts, "一个 workflow 都没扫到？扫描逻辑大概坏了"
+    missing = sorted(name for name, text in texts.items()
+                     if not re.search(r"^concurrency:\s*$", text, re.M))
+    assert not missing, (
+        "这些 workflow 没声明 `concurrency:`（并发 run 会互相挤缓存 / 互相取消）：\n  "
+        + "\n  ".join(missing)
+        + "\n⇒ 补一段：\n"
+          "  concurrency:\n    group: <名字>-${{ github.ref }}\n    cancel-in-progress: true"
+    )
+
+
+def test_镜像构建的缓存导出失败不许判死构建():
+    """`cache-to` 必须带 `ignore-error=true`。
+
+    缓存是**加速手段**，不是交付物：GHA 缓存配额满 / 竞态 / 网络抖动都会让**导出层缓存**失败，
+    而历史上（2026-09-17 起多笔）这类失败会让整个「Build and Push Image」变红 ——
+    镜像其实已经推上去了，人却收到失败通知，只能手动重跑。
+    """
+    text = _workflow_texts()["docker-image.yml"]
+    cache_to = [ln.strip() for ln in text.splitlines() if ln.strip().startswith("cache-to:")]
+    assert cache_to, "docker-image.yml 里找不到 `cache-to:`（构建缓存被整个删了？）"
+    assert all("ignore-error=true" in ln for ln in cache_to), (
+        "`cache-to` 没带 `ignore-error=true` ⇒ 导出缓存失败会把构建判红：\n  "
+        + "\n  ".join(cache_to)
+    )
