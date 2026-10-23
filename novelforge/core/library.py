@@ -38,8 +38,8 @@ import uuid
 import zipfile
 
 from .. import config
-from . import (audio, audio_meta, comics, db, htmlsafe, metadata, reading_list,
-                 units, zipkind)
+from . import (audio, audio_meta, comics, db, htmlsafe, komga, metadata,
+                 reading_list, units, zipkind)
 
 # 只把这些扩展名当成「书」；与 /api/files 的全量列表不同，这里是有意收窄的。
 # .cbr（RAR 漫画）自第 9 期起在列 —— 由 core/comics.py 的 zip/rar 双后端解压。
@@ -74,7 +74,10 @@ BOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".fb2", ".pdf", ".txt", ".cbz", 
 #: （扫描时被忽略），现在是一本可直读的 FB2 ⇒ 存量库里那些 `.fb2` 文件不 +1 就永远不会被
 #: 重探（它们此前连索引行都没有）。扫描期口径也扩了一格：`.fb2` 的 `has_cover` 改由
 #: 内嵌封面探测（`fb2cache.has_embedded_cover`）决定。
-SCAN_RULE_VERSION = 5
+#: 第 137 期一处 —— ⑦ **漫画库的 `series` / `series_index` 由目录布局推断**（见
+#: `series_of_rel`）：条目边界没变，但**卡片字段口径变了** —— 存量行的 `series` 列都是空串，
+#: 不 +1 它们在界面上永远散着（每本一张卡、满屏同名 `Vol.03`）。
+SCAN_RULE_VERSION = 6
 
 # 可能作为封面出现的图片扩展名
 _COVER_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
@@ -114,12 +117,32 @@ _COPY_SUFFIX_RE = re.compile(r"\s*[（(\[【]\s*\d{1,3}\s*[)）\]】]\s*$")
 #: 破折号家族统一（`‐` `‑` `‒` `–` `—` `―` `−` 与 `-` 视作同一个字符）—— 用户口径：
 #: `Vol.01-Vol.13` 与 `Vol.01–Vol.13` 是同一本书，不该算两个名字。
 _DASH_RE = re.compile(r"[‐‑‒–—―−]")
-#: 卷号：`第3卷` / `Vol.01` / `v2`（解析不出就返回空 —— 不猜位置）
+#: 卷号提取（解析不出就返回空 —— 不猜位置）。**取卷号的唯一一处判据**：
+#: :func:`volume_of`（冲突说明 / 系列序号兜底）都从这里取，别在别处另写一套。
+#:
+#: 顺序有意义，命中即返回：
+#:   ① **前导序号**：漫画「一话一压缩包」的枚举（`001 預告.zip`）。必须排在最前 ——
+#:      `002 [第1話] HEADON's Floor.zip` 里同时存在 `002` 与 `第1話`，而**真序是枚举号**；
+#:      让 ② 先命中会把 652 个文件全按「标题里的话数」排序，看起来就是一片乱序。
+#:   ② `第3卷` / `第1話`（`話` 是繁体漫画包的常见写法）
+#:   ③ `Vol.01` / `Volume 2`
+#:   ④ `v2`
+#:   ⑤ 汉化组期号 `【UA汉化组】人蝠#1`
+#:   ⑥ 末尾括号号 `[不識鄰座貓咪和戀愛情感][東立][01]`（只认**结尾**那一个，
+#:      否则 `[01]` 出现在中间的书名会被误切）
 _VOLUME_RES = (
-    re.compile(r"第\s*(\d{1,4})\s*[卷话册集部]"),
+    re.compile(r"^(\d{1,4})[\s._\-]"),
+    re.compile(r"第\s*(\d{1,4})\s*[卷话話册集部]"),
     re.compile(r"\bvol(?:ume)?\.?\s*(\d{1,4})"),
     re.compile(r"\bv\s*(\d{1,3})\b"),
+    re.compile(r"#\s*(\d{1,4})"),
+    re.compile(r"[\[（(【]\s*(\d{1,4})\s*[\]）)】]$"),
 )
+#: 「作者列表」标记：`[中村力斗×野澤ゆき子]` / `[A × B]` —— 见 `_pick_series_name`。
+_AUTHOR_LIST_RE = re.compile(r"[×✕✖]|[\s][xX][\s]")
+#: 目录名的**首括号**（全角 `［］` 也认；`【】` 不认 —— 它是**汉化组**标记）与逐个括号。
+_LEAD_BRACKET_RE = re.compile(r"^[\[［]")
+_BRACKET_TOKEN_RE = re.compile(r"[\[［]([^\]］]+)[\]］]")
 
 
 def conflict_key(name: str) -> str:
@@ -141,18 +164,94 @@ def conflict_key(name: str) -> str:
 
 
 def volume_of(name: str) -> str:
-    """卷号签名（`Vol.01` / `第3卷` / `v2` → ``"1"`` / ``"3"`` / ``"2"``；无则空串）。
+    """卷号签名（`Vol.01` / `第3卷` / `v2` / `#4` / 末尾 `[01]` → ``"1"`` … ；无则空串）。
 
-    只用于**说清结论**（「同为第 3 卷的副本」），判定本身靠 :func:`conflict_key`
-    里保留的数字。解析不出返回空串 —— 不猜位置（既有纪律）。
+    两个调用方：工具页**说清结论**（「同为第 3 卷的副本」），以及
+    :func:`series_of_rel` 给**目录型布局**补 ``series_index``。解析不出返回空串 ——
+    不猜位置（既有纪律）。
+
+    取的是**主名**（不带扩展名）：末尾括号号 `…[01].zip` 是漫画包最常见的卷号写法，
+    带着 `.zip` 就永远匹配不到。副作用是 `三体 (2).cbz` 这种**副本后缀**也会被读成
+    卷号 2 —— 与「第 2 卷」在字符串上本来就无法区分，且它排在那几条明确写法之后，
+    所以只影响「既没有明确卷号、又带副本后缀」的书（少数），且只影响**显示**。
     """
-    base = unicodedata.normalize("NFKC", pathlib.PurePosixPath(str(name or "")).name)
-    low = base.lower()
+    pure = pathlib.PurePosixPath(unicodedata.normalize("NFKC", str(name or "")))
+    low = (pure.stem if pure.suffix else pure.name).lower()
     for rx in _VOLUME_RES:
         m = rx.search(low)
         if m:
             return str(int(m.group(1)))
     return ""
+
+
+def series_of_rel(rel: str) -> "tuple[str, str]":
+    """目录型布局的系列兜底：**顶层目录名 = 系列名**，文件名 = 卷号。
+
+    为什么需要它：漫画包（一话一 zip / 一卷一 cbz）的**文件名里没有系列信息** ——
+    一部 652 话的漫画在盘上就是 652 个 `001 預告.zip`。此前扫描期只认 EPUB 的
+    ``calibre:series``（见 :func:`_series_of`），于是这类库整库 ``series`` 全空，
+    而书架恰好按 ``series`` 折叠 ⇒ 退化成一书一卡、满屏同名 ``Vol.03``（第 137 期）。
+
+    口径与 ``core/komga.py`` 是**同一条**：一层目录 = 一个系列，目录内的文件 = 该系列
+    的各卷（Komga 自己的扫描约定）。目录名**首括号**里的内容是作品名，
+    `[神之塔][SIU][Chap.000-Chap.651]` → ``神之塔`` —— 这是中文漫画包的通行命名。
+
+    只在**漫画库**（``lib.type == "comic"``）里启用，见 :func:`_row_of`：电子书 /
+    有声书库的顶层目录常常是作者名或整张专辑目录（`神奇图书馆1-凯叔-…`），
+    照搬会把无关的书凑成一个假系列，比平铺更麻烦。
+
+    平铺条目（库根下的散文件）返回 ``("", "")`` —— 「一个文件 = 一个独立系列」是
+    合理结果，不猜。
+    """
+    # 扫描最多下探一层（见 `_iter_book_entries`），所以 parent 就是顶层目录；
+    # 判据本身不在这里重写 —— `komga.series_dir` 已经是「相对路径 → 系列目录名」的
+    # 唯一实现（平铺时返回空串）。
+    dirname = komga.series_dir(str(rel or ""))
+    if not dirname:
+        return "", ""
+    pure = pathlib.PurePosixPath(str(rel))
+    # 系列名要**原样**显示给用户（`无限危机：为多元宇宙而战` 里的全角冒号不能被 NFKC
+    # 改成半角 —— 目录名就是这条数据的真值源），所以这里只 strip，不做归一化；
+    # 卷号那一侧（`volume_of`）才需要 NFKC + 去扩展名。
+    name = _pick_series_name(dirname.strip(), pure.stem)
+    if not name:
+        return "", ""
+    return name, volume_of(pure.name)
+
+
+def _pick_series_name(dirname: str, stem: str) -> str:
+    """从目录名里挑出**作品名**（`[作品][作者][出版社][状态]` 这套命名的容错）。
+
+    四种真实变体，都要认（本库 170 个系列目录里各有实例）：
+
+    ① **首括号是作者列表**：`[中村力斗×野澤ゆき子][超超超超喜欢你的100个女孩子][东立]`
+       —— 括号里出现 `×` 就当作者列表，取后面第一个不含 `×` 的括号。
+    ② **首括号是单个作者**：`[よのき][鬼畜英雄][東立]` —— 没有 `×` 可依，用文件名判：
+       首括号的名字**没出现在文件名里**、而后面的括号出现了 ⇒ 后面那个才是作品名
+       （盘上的文件叫 `鬼畜英雄 Vol.01.zip`，没人会把文件名写成作者名）。
+    ③ **目录名本身是残缺的**：`封神演义 全彩版][藤崎龙][23完]`（左边少一个 `[`，
+       来自收书源头而非本程序）—— 不以首括号开头时，取第一个 `]` 之前的那段。
+    ④ 都不是：整目录名就是系列名（`史诗级领地设计师/`）。
+
+    挑不出来就原样返回 —— 宁可用目录名，也不要空串把系列丢掉。
+    「① 和 ② 都认不出」的情况确实存在（`[馬場民雄][究极拉面王]/Vol.01 (2) (2).zip`：
+    单本系列、文件名和括号都没有作品名线索），这种只能留给用户用「元数据覆盖」改；
+    猜错一个单本系列，比整库散成 2043 张卡要轻得多。
+    """
+    if _LEAD_BRACKET_RE.match(dirname):
+        tokens = [t.strip() for t in _BRACKET_TOKEN_RE.findall(dirname)]
+        if tokens:
+            first = tokens[0]
+            if _AUTHOR_LIST_RE.search(first):
+                pick = next((t for t in tokens[1:] if t and not _AUTHOR_LIST_RE.search(t)), "")
+            elif first not in stem:
+                pick = next((t for t in tokens[1:] if t and t in stem), "")
+            else:
+                pick = first
+            return pick or first
+    elif "]" in dirname:
+        return dirname.split("]", 1)[0].strip()
+    return dirname
 
 
 def is_copy_name(a: str, b: str) -> bool:
@@ -2167,6 +2266,15 @@ def _row_of(lib: dict, root: pathlib.Path, f: pathlib.Path, p: dict) -> dict:
     # id 由 basename 派生（见 _book_id），所以挪进系列目录不会换 id
     bid = _book_id(rel, lib.get("id"))
     c1, c2 = _gradient(bid)
+    # 系列：文件内元数据（EPUB 的 `calibre:series`，由 `_series_of` 解析）只有 EPUB / 目录型
+    # 条目才有；漫画包的卷号在**文件名**上、系列在**目录**上，文件里什么都没有。所以漫画库在
+    # 元数据缺席时按目录布局兜底（第 137 期）。顺序不可颠倒：override > OPF > 目录推断
+    # （override 由 `_apply_overlay` 在更外层叠加，这里只处理后面两者）。
+    # ⚠️ 只对漫画库开这道兜底：电子书 / 有声书库的顶层目录常是作者名或整张专辑目录，
+    # 照搬会给无关的书造出假系列（详见 `series_of_rel` 的 docstring）。
+    series, series_index = p["series"], p["series_index"]
+    if not series and (lib.get("type") or "") == "comic":
+        series, series_index = series_of_rel(rel)
     return {
         "id": bid,
         "name": rel,
@@ -2175,8 +2283,8 @@ def _row_of(lib: dict, root: pathlib.Path, f: pathlib.Path, p: dict) -> dict:
         "format": p["format"],
         "title": p["title"],
         "author": p["author"],
-        "series": p["series"],
-        "series_index": p["series_index"],
+        "series": series,
+        "series_index": series_index,
         "has_cover": p["has_cover"],
         "cover": p["cover"],
         "pages": p["pages"],
