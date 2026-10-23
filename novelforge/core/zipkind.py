@@ -127,6 +127,23 @@ def is_container(path) -> bool:
     return pathlib.PurePath(str(path)).suffix.lower() in CONTAINER_EXTS
 
 
+#: 「是压缩包」的后缀全集 = 通用容器 + 漫画归档（`.cbz` / `.cbr`）。
+#: ⚠️ 与 :data:`CONTAINER_EXTS` **不是**一回事：后者是「待展开」那条轴
+#: （漫画归档不进待展开清单 —— 图片档本来就能直接读）；这里问的是「要不要打开看看里面是什么」。
+_ARCHIVE_SUFFIXES = tuple(dict.fromkeys(CONTAINER_EXTS + comics.COMIC_EXTS))
+
+
+def is_archive(path) -> bool:
+    """这个后缀是不是**压缩包**（通用容器 **或** 漫画归档）。
+
+    第 149 期：判据原来散在两处 —— `is_container`（`.zip/.rar/.7z`）与
+    `comics.is_comic`（`.cbz/.cbr`），调用方各取一个，于是「按内容分派」这条路上
+    `.cbr` 被两边都漏掉：摄入被拒时给不出形态提示，用户看到的是「规则都不命中」，
+    而真相是「这台服务器缺 bsdtar」。凡「要不要打开看看里面是什么」都问这里。
+    """
+    return pathlib.PurePath(str(path)).suffix.lower() in _ARCHIVE_SUFFIXES
+
+
 def _suffix(name: str) -> str:
     return pathlib.PurePath(str(name)).suffix.lower()
 
@@ -276,14 +293,60 @@ def _unpack_entries(path) -> list:
     return [n for n in names if _suffix(n) in _UNPACK_EXTS and _safe_entry(n)]
 
 
+#: 待展开清单的结果记忆（第 149 期）。键 = ``(绝对路径, 大小, mtime_ns)``。
+#: 为什么这个指纹够用：「待展开清单」每次请求都要为**每个候选**开一次归档取
+#: `unpack_plan`，而容器内容变了 ⇒ 大小或 mtime 必变 —— 与扫描期那双 (size, mtime)
+#: 是同一把尺子，不必另造一套失效点（第二份判据就是缺陷）。条目数本来很少，
+#: 撞上限就整表清掉，不做 LRU 花活。
+_PLAN_CACHE: "dict[tuple, dict]" = {}
+_PLAN_CACHE_MAX = 512
+
+
+def clear_plan_cache() -> None:
+    """清空记忆（测试与「手工刷新」用；正常路径只靠指纹自然失效）。"""
+    _PLAN_CACHE.clear()
+
+
+def _plan_key(p: pathlib.Path) -> "tuple | None":
+    """缓存键；取不到指纹（文件不在 / 没权限）⇒ ``None`` = 本次不缓存。"""
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    return (str(p.resolve()), st.st_size, st.st_mtime_ns)
+
+
+def _plan_copy(plan: dict) -> dict:
+    """给调用方的副本：`actions` 里是字典，缓存里那份不许被就地改。"""
+    return {**plan, "actions": [dict(a) for a in (plan.get("actions") or ())]}
+
+
 def unpack_plan(path) -> dict:
     """**只算不做**：这个容器展开后会变成什么。返回 ``{ok, actions, reason}``。
 
     `actions` 里每条 ``{kind, name, dest, note}``：`repackage` = 整份另存为新后缀、
     `extract` = 从容器里取一个条目。
+
+    第 149 期起结果按 :data:`_PLAN_CACHE` 的指纹记忆 —— 此前每次请求都现算，
+    容器一多就是「打开工具页等于把每个归档重开一遍」。
     """
-    v = analyze(path)
     p = pathlib.Path(str(path))
+    key = _plan_key(p)
+    if key is not None:
+        hit = _PLAN_CACHE.get(key)
+        if hit is not None:
+            return _plan_copy(hit)
+    plan = _plan_uncached(p)
+    if key is not None:
+        if len(_PLAN_CACHE) >= _PLAN_CACHE_MAX:
+            _PLAN_CACHE.clear()
+        _PLAN_CACHE[key] = _plan_copy(plan)
+    return plan
+
+
+def _plan_uncached(p: pathlib.Path) -> dict:
+    """真正的计算（不记忆）。调用方是 :func:`unpack_plan`。"""
+    v = analyze(p)
     if v["kind"] == "epub":
         # ⚠️ 手做的 zip 里 `mimetype` 可能是**压缩**存的（正规 EPUB 要求它不压缩）。
         # 本项目自己的阅读链路按名字取 OPF、不看压缩标志，所以照样能读；

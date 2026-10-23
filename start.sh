@@ -47,5 +47,30 @@ else
   echo "[start] 缓存层：关闭（未设 NOVELFORGE_REDIS_URL）"
 fi
 
+# 第 149 期：以非 root 运行（compose 的 `user:`）时，挂载目录的属主必须匹配 —— 否则
+# uvicorn 起得来、写配置 / 存进度时才炸，用户看到的是一串 PermissionError 堆栈。
+# 这里启动前先自检，写不进去就直接说清楚「哪个目录」和「该 chown 什么」，然后失败退出。
+if [ "$(id -u)" != "0" ]; then
+  bad=""
+  for d in "${INPUT_DIR:-/app/input}" "${OUTPUT_DIR:-/app/output}" \
+           "${CONFIG_DIR:-/app/config}" "${COOKIE_DIR:-/app/config/cookies}" \
+           "${CACHE_DIR:-/app/config/cache}" "${DATA_DIR:-/app/data}"; do
+    [ -d "$d" ] || continue
+    if ( : > "$d/.novelforge-write-check" ) 2>/dev/null; then
+      rm -f "$d/.novelforge-write-check"
+    else
+      bad="$bad $d"
+    fi
+  done
+  if [ -n "$bad" ]; then
+    echo "[start] [FATAL] 以 uid=$(id -u):$(id -g) 运行，但这些挂载目录写不进去:$bad"
+    echo "[start] [FATAL] 在宿主机上把属主改成该 uid/gid 后重启，例如（cd 到部署目录再执行）："
+    echo "[start] [FATAL]   sudo chown -R $(id -u):$(id -g) ./input ./output ./config ./cookies ./cache ./data"
+    echo "[start] [FATAL] 或者把 compose 里的 user: 去掉（回落到镜像默认的 root）。"
+    exit 1
+  fi
+  echo "[start] 非 root 运行（uid=$(id -u):$(id -g)），挂载目录均可写"
+fi
+
 echo "[start] 启动 uvicorn :${PORT:-8000}"
 exec uvicorn novelforge.server:app --host 0.0.0.0 --port "${PORT:-8000}"

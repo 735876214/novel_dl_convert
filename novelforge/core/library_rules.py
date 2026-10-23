@@ -381,7 +381,10 @@ def _container_shape_hint(libs, name: str, src) -> str:
     if src is None:
         return ""
     try:
-        if not zipkind.is_container(str(src)):
+        # 第 149 期：判据从 `is_container`（只认 `.zip/.rar/.7z`）换成 `is_archive`
+        # （再加 `.cbz/.cbr`）—— 此前 `.cbr` 在这里**直接返回空串**，于是「这台服务器
+        # 缺 bsdtar」这种最该先说的事实，用户看到的却是「规则都不命中」。
+        if not zipkind.is_archive(str(src)):
             return ""
         v = zipkind.analyze(src)
     except Exception:                       # noqa: BLE001 —— 旁路说明，不许把拒收流程打崩

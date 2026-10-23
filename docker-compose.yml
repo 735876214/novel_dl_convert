@@ -11,9 +11,14 @@
 # 停止：docker compose down      （不会删挂载出来的数据目录）
 # 群晖 Container Manager：新建「项目」→ 选择本目录 → 启动
 #
-# 镜像 ghcr.io/735876214/novel_dl_convert:latest 由 GitHub Actions 在每次推送 main 时
-# 构建（linux/amd64 + linux/arm64 双架构），**源码与全部 Python 依赖已烤进镜像** ⇒
-# 容器启动秒级，不需要本地 build，也不需要运行时 clone。
+# 镜像由 GitHub Actions 在每次推送 main 时构建（linux/amd64 + linux/arm64 双架构），
+# **源码与全部 Python 依赖已烤进镜像** ⇒ 容器启动秒级，不需要本地 build，也不需要运行时 clone。
+#
+# ⚠️ 第 149 期：下面 image: 里**钉死版本号**（`:1.4.0`），不再用 `:latest`。
+#    理由：同一台 NAS 上并行跑着别的会话 / 别的部署时，「我到底在跑哪个版本」必须先能
+#    回答得了。固定 tag 下 `docker compose up -d` 不会把你悄悄带到别人的新版本上；
+#    升级就显式改 tag（见下面 image: 那行的注释），再 pull + up -d。
+#    注意：固定 tag 之后，`pull_policy: always` 只会「重新核对同一个 tag」，不等于升级。
 #
 # 挂载出来的宿主机目录（相对路径＝部署目录下，首次启动自动创建，无需手动 mkdir）：
 #   ./input     输入源文件（txt 自动转 EPUB）
@@ -108,12 +113,14 @@ services:
     #   - "6380:6379"
 
   novel_dl_convert:
-    image: ghcr.io/735876214/novel_dl_convert:latest
+    # 钉版本（第 149 期）：升级 = 把冒号后的版本号改成目标版本，再 docker compose pull && docker compose up -d
+    image: ghcr.io/735876214/novel_dl_convert:1.4.0
     container_name: novel_dl_convert
     restart: unless-stopped
     working_dir: /app
     # 可改：missing ＝ 镜像已在本地就不再联网检查，NAS 断网 / ghcr.io 访问受限时照样能启动；
-    # 改成 always ＝ 每次 up 都去 registry 追最新镜像（那时 `docker compose up -d` 即等于更新）。
+    # 改成 always ＝ 每次 up 都去 registry 核对上面那个 tag（第 149 期起 tag 是钉死的版本号，
+    # 所以 always **不等于自动升级**，只是把同一个 tag 重新拉一遍确认没被覆盖）。
     pull_policy: missing
 
     ports:
@@ -213,10 +220,18 @@ services:
       # ⚠️ AI 分章兜底（LLM）**不走环境变量**，请在「设置 → 转换 → 分章」页或
       #    config.yaml 的 llm 段（api_key / base_url / model）里配置。
 
-    # 可选：以指定 UID/GID 运行，避免挂载目录里落下一堆 root 属主文件（群晖常见 1026:100）。
-    # 不写这一行＝按镜像默认的 root 运行。⚠️ 填非 root 时，上面那些宿主机目录的属主必须匹配，
-    # 否则容器写不进去（启动即报权限错）。
-    # user: "1026:100"
+    # 可选：以指定 UID/GID 运行，避免挂载目录里落下一堆 root 属主文件。
+    # 不写这一行＝按镜像默认的 root 运行（既有部署的目录都是 root 属主，改默认会让升级当天
+    # 全部报权限错，所以默认不动）。
+    #
+    # 第 149 期：镜像已内置 `novelforge`（uid/gid **1000**）⇒ 只是想让文件不归 root 时直接写
+    # `user: "1000:1000"` 即可；群晖常见的是 1026:100，非 1000 的话用下面第 3 步换 uid。
+    # 三步（缺一步都会在启动时被 start.sh 拦下并打印该 chown 什么）：
+    #   1) cd 到本文件所在目录
+    #   2) sudo chown -R 1000:1000 ./input ./output ./config ./cookies ./cache ./data ./libraries
+    #      （用 1026:100 就把 1000:1000 换成 1026:100；pgdata 不要动，PG 镜像自己会处理）
+    #   3) 取消下面这行注释、填同一个 uid:gid，然后 docker compose up -d
+    # user: "1000:1000"
 
     # 等 PG 真的能接受连接再起应用：不等的话启动那一刻必然连不上（容器起来了、
     # PG 还在 initdb），`db.init()` 会带着报错失败、容器重启一轮，日志里留一串

@@ -10211,3 +10211,71 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
    而它们的输入输出形状**完全同构**。发现「A 有 B 没有」时，先假设 B 是漏的，再看有没有正当理由。
 3. **一处缺口往往同期出现在相邻读点** —— 「派生件能不能算精确位置」在 MOBI / FB2 都补过一次（第 110 / 112 期），
    TXT 自第 55 期就有派生件却没人回头补。补一个格式时，**把同形状的格式一起数一遍**。
+
+## 第 149 期（部署面收口：镜像 tag 钉死到版本号 / 非 root 运行的配方与启动自检 / 「是不是压缩包」判据收敛 / 待展开清单不再每次重开归档）
+
+> **需求来源**：第 148 期收尾后的一轮「部署面 / 入口面」审计盘点出 5 条积压（用户原话「修一下审计的问题」）。
+> **防回归判据**：`tests/test_hardening_149_deploy.py`（12 例）+ 既有 `tests/test_scripts_contract.py` 的行尾检查。
+
+### 一、5 条积压的处置总表
+
+| # | 条目 | 处置 |
+|---|---|---|
+| ① | 文档称「多端接口监听 `:8000`」，与实际不符 | **已不存在**：`docs/architecture.md` §11「多端接口」是纯表格，全文**无 `8000` 字样**；`:8000` 只出现在 `docs/project-overview.md:63`、`README.md:300` 的 `8992:8000` 端口映射里（那是正确的容器内端口）⇒ **未动代码**，只在此留证 |
+| ② | 镜像 tag 与 `update.image` 各说一套 | 见第二节 |
+| ③ | 没有「非 root 运行」的配方，也没有任何自检 | 见第三节 |
+| ④ | 「是不是压缩包」的判据散在 `zipkind.is_container` 与 `comics.is_comic` 两处 | 见第四节 |
+| ⑤ | 「待展开清单」每次请求都为每个候选重开一次归档 | 见第五节 |
+
+### 二、② 镜像 tag：代码不许替部署方决定（真缺陷）
+
+**症状**：`docker-compose.yml` 的 `image:` 是 `:latest`，而 `config.DEFAULTS["update"]["image"]` 也写死 `:latest`；用户在设置里什么都没改，一键更新拉 `:latest` 并拿它重建容器 —— 于是「我现在跑的是哪个版本」在两处有不同的答案：compose 说 A（一旦有人把它钉到 `1.4.0`），更新器说 `:latest`。更糟的是「更新成功」之后，下一次 `docker compose up -d` 会把容器**退回** compose 里那个旧 tag，看起来像「更新又丢了」。
+
+**根因**：`configured_image()` 的回落链是「显式入参 > `update.image` > 环境变量 > **内置默认**」，**没有任何一环去看部署文件**。而 compose 里的 `image:` 是唯一知道「部署方想要哪个版本」的地方 —— 代码把 `:latest` 当默认，等于替部署方做了一个它无权做的决定。
+
+**修法**（三处同批）：
+1. `novelforge/config.py`：`update.image` 默认改成**空串**，注释写明「留空 ⇒ 用部署文件里容器当前的镜像」；
+2. `novelforge/core/updater.py`：
+   - 新增 `_self_image()` —— 问 docker.sock「我这个容器的 `Config.Image` 是什么」（先按 `HOSTNAME`=容器短 id 直取，失败再列 `/containers/json?all=1` 按 id 前缀认自己），带 60 s 记忆（`configured_image` 会被 `/api/config` 这类读路径调用，不能每次都问 socket）；
+   - `configured_image()` 回落链补一层：`… > 环境变量 > 部署文件的镜像 > 内置默认`；
+   - 新增 `_update_target(explicit)` —— 返回 `(完整引用, repo, tag)`：repo 与默认 tag 由上面的链定；**若 repo 是官方仓库、且已查到最新 release 版本，tag 换成那个确切版本号**（CI 每次发布都会推 `:<VERSION>`，见 `.github/workflows/docker-image.yml`），查不到（离线 / 限流）就原样拉。`apply_update` 改用它；
+   - `_DEFAULT_IMAGE` 拆成 `_DEFAULT_REPO` + `:latest`，避免第二份仓库字面量。
+3. `docker-compose.yml`：`image:` 从 `:latest` 钉到**当前版本** `ghcr.io/735876214/novel_dl_convert:1.4.0`，并在注释里写清「升级后用应用内更新拉到的是**确切 tag**，请把这里一起改掉；只改这里不改那边、或只改那边不改这里，都会各说一套」。
+
+**为什么不干脆让更新器去改 compose**：compose 在宿主机上，容器内看不见也不该改 —— 那会把「部署文件是真值源」变成「容器是」，下一次人工 `up -d` 又翻车。**升级动作的最终一步是人工改部署文件**，这一步必须明说，不能假装自动化了。
+
+### 三、③ 非 root 运行：没有配方 = 事实上只能 root 跑
+
+**症状**：镜像里没有非 root 用户，`start.sh` 也不检查挂载目录属主。用户按 Docker 惯例加 `user: "1026:100"`（compose 里原本只有一行注释掉的样例），容器起得来、uvicorn 也监听成功，但**第一次写配置 / 扫描落索引时**才炸，报的是 `PermissionError` 堆栈 —— 从日志上完全看不出「是你挂载目录属主不对」。
+
+**修法**（三段同批，缺一不可）：
+1. `Dockerfile`：内置 `novelforge`（uid/gid **1000**），并把 `/app/input|output|config|config/cookies|config/cache` 一起 `chown 1000:1000`；**默认仍是 root**（既有部署的挂载目录都是 root 属主，改默认会让所有人升级当天全部报权限错）；
+2. `docker-compose.yml`：`user:` 从「注释掉的 1026:100」改成**可直接用的配方**（`1000:1000` + 宿主机 `chown` 命令 + 说明「默认不启用」）；
+3. `start.sh`：**启动即自检** —— 以非 root 身份运行时逐个 `touch && rm` 挂载目录，写不进去就打印 `[start] [FATAL] … 请 sudo chown -R <uid>:<gid> <部署目录>/{input,output,config,…}` 并 `exit 1`。把「半夜第一次保存设置才炸」提前到「启动第一秒就炸，且告诉你该敲哪条命令」。
+
+### 四、④ 「是不是压缩包」收敛成一份判据（第二份实现 = 缺陷）
+
+**症状**：`zipkind.is_container()`（`.zip/.rar/.7z`）与 `comics.is_comic()`（`.cbz/.cbr` 等）是两个不同的集合，调用方各取一个。`library_rules._container_shape_hint()` 用的是前者 ⇒ **`.cbr` 在那里直接返回空串**：用户把一个 `.cbr` 丢进收书目录，摄入被拒，界面上只显示「规则都不命中」，而真相是「这台服务器没装 bsdtar / unrar」——最该先说的事实反而被吞掉。
+
+**修法**：`zipkind` 新增 `_ARCHIVE_SUFFIXES = CONTAINER_EXTS ∪ comics.COMIC_EXTS` 与 `is_archive()`，`_container_shape_hint` 改用它。注释里钉住两条轴的差别：`CONTAINER_EXTS` 是**「待展开」**那条轴（漫画归档不进待展开清单，图片档本来就能直接读），`is_archive` 问的是**「要不要打开看看里面是什么」**。
+
+### 五、⑤ 待展开清单：每打开一次工具页就把每个归档重开一遍
+
+**症状**：`zipkind.unpack_plan()` 每次都现算（真开归档），而 `/api/maintenance/container-books` 要为**每个候选**算一遍，`container_books` 的 `limit` 是 200 ⇒ 打开「待展开」页 = 200 次归档打开。
+
+**修法**：按 `(绝对路径, st_size, st_mtime_ns)` 记忆结果（`_PLAN_CACHE`，上限 512，超了整表清掉）。**为什么这个指纹够用**：容器内容变了 ⇒ 大小或 mtime 必变 —— 与扫描期那双 `(size, mtime)` 是**同一把尺子**，不另造失效点（第二份判据就是缺陷）。返回给调用方的是**副本**（`actions` 里的字典不许被就地改污染缓存）。
+
+### 六、核验
+
+- 新增 `tests/test_hardening_149_deploy.py` **12 例**：compose 的 tag 钉死且等于仓库 `VERSION`、非 root 配方三段同时在场、`start.sh` 仍是 LF、`_update_target` 换成最新 release 的确切版本 / 查不到时原样拉 / 不改写私有仓库 tag、`configured_image` 的五级回落顺序、拿不到自身镜像时安静回落、`is_archive` 覆盖 `.cbz/.cbr/.zip/.rar/.7z` 且不含 `.epub`、`.cbr` 缺后端时给出能力原因、`unpack_plan` 结果被记忆且不污染缓存、指纹变了就重算。
+- 全量：收 **2788** 例 / **2756 passed** / 14 skipped / 400.3 s；**18 例在本机跑不起来**（与本期无关，逐条核过 message：`socket.AF_UNIX` 缺失 ×11、`bash -n` 只有 WSL 桩 ×4、符号链接需特权 ×2、仓库根守卫被本机绕开 ×1）⇒ 可比口径 **2770**。
+- 手写核验过的行为：`is_archive` 逐后缀、`.cbr` 提示文案「服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）」、`unpack_plan` 两次调用只 `analyze` 一次 + `os.utime` 后重算、`_update_target` 三种分支。
+
+### 七、教训
+
+1. **「部署方钉了什么版本」只能由部署文件回答** —— 代码里的默认值一旦与部署文件不一致，就会在「更新成功但一 `up -d` 又退回」这种时序上骗人。软件不许替用户决定它没被授权决定的事。
+2. **能力缺失要说清是「你没装工具」而不是「你的文件不合规则」** —— 判据分叉（`is_container` vs `is_comic`）的直接后果，是把可修的环境问题伪装成不可修的内容问题。
+3. **同一类判据只许一处**：`is_archive` 立起来之后，凡「要不要打开看看里面是什么」都问它；`CONTAINER_EXTS` 只留「待展开」那条轴。
+4. **缓存键要复用已有的尺子** —— 容器指纹就是扫描期的 `(size, mtime)`，别为缓存另发明一套失效逻辑。
+5. **非 root 这类「部署期才炸」的问题，必须在启动第一秒炸**，并把它该敲的命令一起打出来。
+

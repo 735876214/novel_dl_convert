@@ -37,7 +37,8 @@ _REPO = "735876214/novel_dl_convert"
 _GITHUB_API = f"https://api.github.com/repos/{_REPO}/releases/latest"
 _CACHE_KEY = "update_check"
 # 内置默认镜像；`update.image` 与 `NOVELFORGE_UPDATE_IMAGE` 均可覆盖（第 80 期起 image 真生效）。
-_DEFAULT_IMAGE = "ghcr.io/735876214/novel_dl_convert:latest"
+_DEFAULT_REPO = "ghcr.io/735876214/novel_dl_convert"
+_DEFAULT_IMAGE = _DEFAULT_REPO + ":latest"
 
 #: 自动更新失败后的**退避序列（小时）**，封顶 24h（第 84 期）。
 #:
@@ -178,17 +179,24 @@ def _update_cfg() -> "dict":
 
 
 def configured_image(explicit: str = "") -> str:
-    """镜像来源的**唯一读法**：显式入参 > 配置 `update.image` > 环境变量 > 内置默认。
+    """镜像来源的**唯一读法**：显式入参 > 配置 `update.image` > 环境变量 > **部署文件的镜像** > 内置默认。
 
     第 80 期起 `update.image` 真的生效。此前它只出现在白名单与 `GET /api/config` 回显里，
     后端**没有任何读点** —— 用户改完保存，一键更新照旧拉硬编码镜像（假配置）。
+
+    第 149 期加了一层：都没配时先问「我这个容器现在跑的是哪个镜像」（`_self_image`，即
+    compose 的 `image:`），最后才是内置默认。这样部署方钉了 `1.4.0`，更新器就不会背着它
+    去拉 `:latest`（否则下一次 `docker compose up -d` 又退回 1.4.0，两边各说一套）。
     """
     if (explicit or "").strip():
         return explicit.strip()
     val = str(_update_cfg().get("image") or "").strip()
     if val:
         return val
-    return (os.getenv("NOVELFORGE_UPDATE_IMAGE") or "").strip() or _DEFAULT_IMAGE
+    env = (os.getenv("NOVELFORGE_UPDATE_IMAGE") or "").strip()
+    if env:
+        return env
+    return _self_image() or _DEFAULT_IMAGE
 
 
 def _split_image(image: str) -> "tuple[str, str]":
@@ -393,6 +401,74 @@ def _docker(method: str, path: str, query: "dict | None" = None,
     return resp.status, data
 
 
+#: 运行中容器的镜像引用缓存（秒）。`configured_image` 会被 `/api/config` 等读路径调用，
+#: 不能每次都去问 docker.sock。
+_SELF_IMAGE_TTL = 60.0
+_self_image_cache = {"at": 0.0, "image": ""}
+
+
+def _self_image() -> str:
+    """运行中容器的镜像引用（``Config.Image``，例如 ``ghcr.io/x/y:1.4.0``）；取不到回空串。
+
+    第 149 期：镜像 tag 的**真值源是部署文件**（compose 的 `image:`）。此前更新器把
+    `:latest` 写死在代码里当默认，于是部署方把 compose 固定到 `1.4.0` 之后，更新器仍去拉
+    `:latest` 并拿它重建容器 —— 下一次 `docker compose up -d` 又退回 `1.4.0`，
+    两边对「我现在跑的是哪个版本」各说一套。
+    """
+    now = time.time()
+    if _self_image_cache["image"] and (now - _self_image_cache["at"]) < _SELF_IMAGE_TTL:
+        return _self_image_cache["image"]
+    if not updater_available():
+        return ""
+    host = (os.getenv("HOSTNAME") or socket.gethostname() or "").strip()
+    cands = [f"/containers/{host}/json"] if host else []
+    cands.append("/containers/json?all=1")
+    for path in cands:
+        try:
+            if path.endswith("?all=1"):
+                st, data = _docker("GET", "/containers/json", query={"all": 1})
+            else:
+                st, data = _docker("GET", path)
+            if st != 200:
+                continue
+            import json as _json
+            obj = _json.loads(data)
+            if isinstance(obj, list):          # 列表兜底：按容器 id 前缀认自己
+                obj = next((c for c in obj
+                            if str(c.get("Id") or "").startswith(host)), None)
+                if not obj:
+                    continue
+            image = str((obj.get("Config") or {}).get("Image") or "").strip()
+            if image:
+                _self_image_cache.update(at=now, image=image)
+                return image
+        except Exception:                      # noqa: BLE001 —— 读不到就退回内置默认
+            continue
+    return ""
+
+
+def _update_target(explicit: str = "") -> "tuple[str, str, str]":
+    """更新该拉哪个镜像 ⇒ ``(完整引用, repo, tag)``。
+
+    ① repo 与默认 tag 由「显式入参 > `update.image` > 环境变量 > **部署文件里的镜像** > 内置默认」定；
+    ② repo 是官方仓库、且已查到最新 release 版本 ⇒ tag 换成那个**确切版本号**：
+       CI 每次发布都会推 `:<VERSION>`（见 `.github/workflows/docker-image.yml`），
+       于是「拉到的到底是哪个版本」由 release 决定，不再靠 `:latest` 漂移（第 149 期）；
+    ③ 查不到（离线 / 限流）⇒ 用 ① 的 tag 原样拉，行为与改造前一致。
+    """
+    image = configured_image(explicit)
+    repo, tag = _split_image(image)
+    latest = str(_state.get("latest") or "")
+    if not latest:
+        try:
+            latest = str(_remote_latest()[0] or "")
+        except Exception:                      # noqa: BLE001
+            latest = ""
+    if latest and repo == _DEFAULT_REPO:
+        tag = latest.lstrip("vV")
+    return f"{repo}:{tag}", repo, tag
+
+
 def apply_update(image: str = "", reason: str = "manual") -> "dict":
     """拉取 `update.image` 指的那个镜像并重建自身容器。返回 {ok, stage, ...}。
 
@@ -419,8 +495,7 @@ def apply_update(image: str = "", reason: str = "manual") -> "dict":
     except Exception as e:  # noqa: BLE001 —— 备份模块自身炸了也不能带着数据风险往下走
         _log.exception("更新前备份异常，已中止本次更新")
         return {"ok": False, "stage": "backup_failed", "message": f"更新前备份失败：{e}"}
-    image = configured_image(image)
-    repo, tag = _split_image(image)
+    image, repo, tag = _update_target(image)
     try:
         st, _ = _docker("POST", "/images/create", query={"fromImage": repo, "tag": tag})
         if st != 200:

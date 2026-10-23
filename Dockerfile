@@ -158,8 +158,15 @@ COPY CHANGELOG.md /app/
 COPY --from=frontend /web/dist/ /app/novelforge/static/v2/
 
 # 预建目录：保证配置文件以单文件方式挂载时挂载点一定存在
+# 第 149 期：同时内置非 root 账号 `novelforge`（uid/gid 1000）——想以非 root 运行就在
+# compose 里写 `user: "1000:1000"`，不必自己 build 一个改过 uid 的镜像。
+# ⚠️ 默认**仍是 root**：既有部署的挂载目录都是 root 属主，改默认会让升级当天全部报权限错；
+#    `start.sh` 启动前会自检挂载目录可写性，写不进去就直接打印该 chown 什么再退出。
 RUN chmod +x /app/start.sh \
-    && mkdir -p /app/input /app/output /app/config /app/config/cookies /app/config/cache
+    && mkdir -p /app/input /app/output /app/config /app/config/cookies /app/config/cache \
+    && (getent group 1000 >/dev/null || groupadd -g 1000 novelforge) \
+    && (getent passwd 1000 >/dev/null || useradd -u 1000 -g 1000 -M -s /usr/sbin/nologin novelforge) \
+    && chown 1000:1000 /app/input /app/output /app/config /app/config/cookies /app/config/cache
 
 EXPOSE 8000
 

@@ -435,7 +435,10 @@ DEFAULTS = {
     "update": {
         "check_enabled": True,     # 启动即检 + 每 6h 检查 GitHub 最新版本（设置里可关）
         "interval_hours": 6,      # 定时检查间隔（小时，保存即重启后台线程按新间隔跑）
-        "image": "ghcr.io/735876214/novel_dl_convert:latest",  # 更新拉取镜像（可改加速镜像 / 私有仓库）
+        # 更新拉取镜像（可填加速镜像 / 私有仓库）。**默认留空**：留空 ⇒ 用部署文件里容器
+        # 当前的镜像（compose 的 `image:`，第 149 期）—— 镜像 tag 的真值源只能是部署文件，
+        # 写死在这里就会和 compose 各说一套（compose 钉 1.4.0、这里钉 :latest）。
+        "image": "",
         "auto_apply": False,      # 检查到新版是否自动应用（默认关：只提示，手动点更新）
     },
 }
