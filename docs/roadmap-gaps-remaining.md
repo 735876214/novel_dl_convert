@@ -10306,12 +10306,18 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 | `1.4.0` | `sha256:ad3962…` | **与 `latest` 同一个** —— 已被 149 期覆盖 |
 | `1.4.0` 应有的 | `sha256:990939…` | 即 `:d6a2fcb…`（第 147 期发版那笔）的内容 |
 
-> ⚠️ **历史 tag 没有回填**（如实记录）：要修就得往 GHCR PUT manifest，而本机的
-> `gh` token 只有 `gist / read:org / repo / workflow` 四个 scope（没有 `write:packages`），
-> `PUT /v2/…/manifests/1.4.0` 直接 403。修法二选一：① 用 `gh auth refresh -s write:packages`
-> 换一个带包权限的 token，再 `PUT`（把 `sha256:990939…` 的 index 原样 PUT 到 `1.4.0`，
-> 只改指向不重建）；② 在 CI 里跑一次 `docker buildx imagetools create -t …:1.4.0 …:d6a2fcb…`。
-> 从 1.4.1 起，`:VERSION` 不会再被覆盖，所以这个坑不会继续扩大。谁按 README 的建议把 compose 钉在 `:1.4.0` 上，拿到的其实不是当初发的那一版 —— 「钉住版本」这件事在最需要它的时候失效了（而且没有任何报错）。
+> ✅ **历史 tag 已回填**（`docker-image.yml` 修好之后补的一次性动作）：`:1.4.0` 现在 = `sha256:990939…`
+> = `:d6a2fcb…`，与 `:1.4.0` 应有的内容一致；回填后复核 `:1.4.1` 与 `:latest` 仍是 `sha256:673e339…`
+> （未被这次回填影响）。
+>
+> **回填方式（下次遇到同类补救可以直接照抄）**：本机 `gh` token 只有 `gist / read:org / repo / workflow`
+> 四个 scope，没有 `write:packages` ⇒ 直接 `PUT /v2/…/manifests/1.4.0` 是 403。而
+> `/actions/workflows` 只列出**默认分支**上的 workflow，光是往临时分支推一个只含
+> `workflow_dispatch` 的新 workflow 会 `404 Not Found`（没注册）。可行的绕法是利用 dispatch 的语义：
+> **它跑的是「指定 ref 上的那份 workflow 文件」** —— 于是把临时分支上的 `docker-image.yml` 换成
+> 「只回填、不构建」的同名版本，再 `POST /actions/workflows/356963404/dispatches {ref: "tmp-retag-140"}`，
+> 用 CI 的 `GITHUB_TOKEN`（有 `packages: write`）执行 `docker buildx imagetools create`。
+> 全过程 **main 上没有留下任何临时提交**，跑完删分支（`DELETE /git/refs/heads/tmp-retag-140`）即可。谁按 README 的建议把 compose 钉在 `:1.4.0` 上，拿到的其实不是当初发的那一版 —— 「钉住版本」这件事在最需要它的时候失效了（而且没有任何报错）。
 
 ### 二、修法（三处同批）
 
