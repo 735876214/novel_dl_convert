@@ -213,8 +213,10 @@ update:                   # 第 78 期：版本检查与一键更新（第 80 �
   check_enabled: true     # 容器启动即查一次 + 每 interval_hours 小时检查 GitHub 最新版本（出网失败静默忽略；关掉即停后台线程）
   interval_hours: 6       # 定时检查间隔（小时）；启动即首检（不等一个间隔），保存后立即按新间隔重启
   image: ""               # 一键更新拉取的镜像仓库；留空＝环境变量 NOVELFORGE_UPDATE_IMAGE → **部署文件里容器当前的镜像**（compose 的 image:）→ 内置默认。
-                          # 第 149 期起 tag 不再照着 :latest 漂：拉取时会换成 GitHub 最新 release 的确切版本号（如 :1.5.2），
+                          # 第 149 期起 tag 不再照着 :latest 漂：拉取时会换成 GitHub 最新 release 的确切版本号（如 :1.5.0），
                           # 于是「更新到哪个版本」由 release 决定；私有仓库 / 加速镜像的 tag 按原样用，不改写。
+                          # ⚠️ 因此一键更新 = 升级到**最新发布**，它不看 docker-compose.yml 里钉的那个 tag：更新完成后
+                          # 请把 compose 的 tag 一并改成同一个版本，否则下次 `docker compose up -d` 会按文件退回旧版本。
   auto_apply: false       # 发现新版是否自动应用（默认关：只提示，手动点「立即更新」）
 ```
 
@@ -270,8 +272,10 @@ python -m novelforge logs -n 50 --action 转换 --status 失败
 
 ### 部署方式：直接拉预构建镜像（源码 + 依赖已烤进镜像）
 
-镜像由 GitHub Actions 在每次推送到 `main` 时自动构建并发布（`docker-compose.yml` 里**钉死版本号**，例如
-`ghcr.io/735876214/novel_dl_convert:1.4.1` —— 第 149 期起不用 `:latest`，见下面「更新代码」），
+镜像由 GitHub Actions 在每次推送到 `main` 时自动构建并发布：每次构建都推 `:latest`（最新一次 main 构建，
+**会漂**）与 `:<sha>`（**不可变**，任何时候都精确指回某一笔提交）；**只有仓库根 `VERSION` 变了的那次**再加上
+`:<版本号>`（第 150 期起它不再被后续 main 构建覆盖）。`docker-compose.yml` 里钉的是版本号那个
+（例如 `ghcr.io/735876214/novel_dl_convert:1.4.1`），见下面「更新代码」；
 **源码与全部 Python 依赖已在「构建镜像时」烤进镜像**——不需要 NAS 本地 build，也不需要容器启动时 clone 源码。
 版本号一变（仓库根 `VERSION`），CI 还会自动打 `v<版本>` tag 并创建 GitHub Release（说明取 `CHANGELOG.md` 对应段）。
 因此在 NAS 上**只需要 `docker-compose.yml` 一个文件**（配置全部写在文件里，不依赖任何 `.env`），一条命令即可运行：
@@ -302,7 +306,7 @@ docker compose up -d
 | `./input` / `./output` | 部署目录下同名子目录 | 输入与成品目录，**必须分开** |
 | `./data` | `./data` | SQLite（阅读进度 / 批注 / 账号 / 书库登记），务必落在持久盘 |
 | `AUTH_USER` / `AUTH_PIN` / `AUTH_SECRET` | `admin` / `changeme` / 占位串 | **仅首次启动初始化**，之后在界面「设置 → 账户」里改 |
-| `image:` 的 tag | `1.4.1`（钉死） | **升级就是改这一处**：改成目标版本再 `docker compose pull && docker compose up -d`。固定 tag 下 `pull_policy: always` 只会重新核对同一个 tag，不等于升级 |
+| `image:` 的 tag | `1.4.1`（钉死） | **升级就是改这一处**：改成目标版本再 `docker compose pull && docker compose up -d`。版本号 tag 现在**不可变**（同一个版本号永远指向同一次发布），所以 `pull_policy: always` 只是重新核对它，不等于升级 |
 | `pull_policy` | `missing` | 本地已有镜像就不联网检查，断网也能启动；改成 `always` 则每次 up 都去 registry 核对上面那个 tag |
 | `# user: "1000:1000"` | 注释掉（=root） | 让挂载目录里的文件归某用户所有时取消注释。镜像已内置 `novelforge`（uid/gid **1000**）；群晖常见 `1026:100` 也可，但**必须先把宿主机目录 chown 成同一个 uid:gid**，否则启动时 `start.sh` 会直接报「哪个目录写不进去 + 该 chown 什么」 |
 | `# - HTTP_PROXY=…` | 注释掉（直连） | 容器要走代理才能访问书源 / 在线元数据时取消注释（Clash 跑在 NAS 主机上则填 `http://host.docker.internal:7890`） |
@@ -332,10 +336,24 @@ docker compose pull && docker compose up -d
 > 只执行 `docker compose up -d` 不会拉新镜像（`docker-compose.yml` 里默认 `pull_policy: missing`，这是刻意的：
 > 断网或 ghcr.io 访问受限时容器照样能启动）。
 >
-> **第 149 期起镜像 tag 是钉死的版本号**（如 `:1.4.1`），不再用 `:latest`：这样「现在跑的是哪个版本」
-> 由 `docker-compose.yml` 说了算，`up -d` 不会把你悄悄带到别人的新版本上，也不会出现「本地已缓存旧
-> `:latest`、以为升级了其实没变」。升级做法：把 `image:` 的版本号改成目标版本 → `docker compose pull` →
-> `docker compose up -d`。若你确实想让它自己漂，把 tag 改回 `:latest` 并自行承担不可复现的代价。
+> **镜像 tag 的三种用途（第 149 期钉版本、第 150 期把规则修对）**：
+>
+> | tag | 会不会变 | 什么时候用 |
+> |---|---|---|
+> | `:<版本号>`（如 `:1.4.1`） | **不会**（只在仓库 `VERSION` 变成这个号的那次构建产生） | 部署默认钉这个：`up -d` 不会把你悄悄带到别人的新版本上，也不会出现「本地缓存了旧 `:latest`、以为升级了其实没变」 |
+> | `:<sha>`（如 `:d6a2fcb…`） | **永不**，内容与某笔提交一一对应 | 精确回滚 / 精确复现：想知道「三天前那个 bug 到底是哪版」时，这是唯一可靠的锚点 |
+> | `:latest` | 每次 main 构建都覆盖 | 只适合「我就要最新、且不在乎复现」的场景 |
+>
+> **升级**：把 `image:` 的版本号改成目标版本 → `docker compose pull` → `docker compose up -d`。
+> **回滚**：把 `image:` 改成目标版本的 `:<sha>`（或旧版本号）→ 同样两步。
+>
+> ⚠️ **两个边界**：① 版本号 tag 曾经不是这样 —— 第 149 期之前它跟着每次 main 构建走，于是同一个 `:1.4.0`
+> 先后指过三份不同内容；历史上被覆盖的那次已于 2026-10-23 回填成它本该指向的构建。② 应用内「立即更新」/
+> 自动更新拉的是 **GitHub 最新 release 的确切版本号**（它不读 `docker-compose.yml`），所以更新成功后容器跑的
+> 版本可能比文件里钉的新 —— 请把 `image:` 的版本号一并改成同一个版本，否则下一次 `docker compose up -d`
+> 会按文件把容器退回旧版本（这是 compose 的语义，不是故障）。
+>
+> 若你确实想让它自己漂，把 tag 改回 `:latest` 并自行承担不可复现的代价。
 >
 > **以非 root 运行（第 149 期）**：镜像内置了 `novelforge`（uid/gid `1000`），compose 里写
 > `user: "1000:1000"` 即可；但宿主机上那些挂载目录必须先 `chown -R` 成同一个 uid:gid，

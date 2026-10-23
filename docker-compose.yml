@@ -19,6 +19,9 @@
 #    回答得了。固定 tag 下 `docker compose up -d` 不会把你悄悄带到别人的新版本上；
 #    升级就显式改 tag（见下面 image: 那行的注释），再 pull + up -d。
 #    注意：固定 tag 之后，`pull_policy: always` 只会「重新核对同一个 tag」，不等于升级。
+#    另：CI 还推一个不可变的 `:<sha>`（精确指回某笔提交），回滚时把 image: 换成它即可。
+#    应用内「立即更新」拉的是最新 release 的确切版本号（不读本文件）⇒ 更新成功后记得把下面 image:
+#    的版本号同步改掉，否则下一次 `docker compose up -d` 会按本文件退回旧版本。
 #
 # 挂载出来的宿主机目录（相对路径＝部署目录下，首次启动自动创建，无需手动 mkdir）：
 #   ./input     输入源文件（txt 自动转 EPUB）
@@ -113,14 +116,15 @@ services:
     #   - "6380:6379"
 
   novel_dl_convert:
-    # 钉版本（第 149 期）：升级 = 把冒号后的版本号改成目标版本，再 docker compose pull && docker compose up -d
+    # 钉版本（第 149 期；第 150 期起该 tag 不可变）：升级 = 把冒号后的版本号改成目标版本，再
+    # docker compose pull && docker compose up -d；回滚 = 换成目标版本的 :<sha> 或旧版本号。
     image: ghcr.io/735876214/novel_dl_convert:1.4.1
     container_name: novel_dl_convert
     restart: unless-stopped
     working_dir: /app
     # 可改：missing ＝ 镜像已在本地就不再联网检查，NAS 断网 / ghcr.io 访问受限时照样能启动；
-    # 改成 always ＝ 每次 up 都去 registry 核对上面那个 tag（第 149 期起 tag 是钉死的版本号，
-    # 所以 always **不等于自动升级**，只是把同一个 tag 重新拉一遍确认没被覆盖）。
+    # 改成 always ＝ 每次 up 都去 registry 核对上面那个 tag（第 150 期起版本号 tag 不可变，
+    # 所以 always **不等于自动升级** —— 同一个 tag 拉回来永远是同一份内容）。
     pull_policy: missing
 
     ports:
