@@ -4107,29 +4107,44 @@ def _progress_file(b: dict, file_rel: str) -> tuple:
     if not file_rel:
         # 书级：沿用原来的判据（`format` 而不是扩展名）—— 老路径的行为不动它
         target = library.abs_path(b)
-        if target.suffix.lower() in mobicache.EXTS:
-            # 第 110 期：MOBI / AZW3 的读目标是**解包产物**（KF8 出 EPUB）⇒ CFI 照常按它算
-            # （精确位置不丢）。解不出来（缺解包器 / 坏书 / 纯 MOBI6 出 HTML）⇒
-            # 不生成 CFI 并如实回落「章 + 全书百分比」，**进度本身照常落库**。
-            unpacked, kind = mobicache.read_target(b, path=target)
-            if kind == "epub" and unpacked is not None:
-                return unpacked, True
+        is_main = True
+    else:
+        try:
+            target = fileops.safe_path(file_rel, b.get("library_id"))
+        except ValueError:
             return None, False
-        if target.suffix.lower() in fb2cache.EXTS:
-            # 第 112 期：FB2 的读目标是**派生 EPUB** ⇒ CFI 照常按它算（精确位置不丢）。
-            # 解析不出来（坏书 / 锁定）⇒ 不生成 CFI 并如实回落「章 + 全书百分比」，
-            # **进度本身照常落库**。
-            derived, kind = fb2cache.read_target(b, path=target)
-            if kind == "epub" and derived is not None:
-                return derived, True
-            return None, False
-        return target, (b.get("format") or "").upper() == "EPUB"
-    try:
-        target = fileops.safe_path(file_rel, b.get("library_id"))
-    except ValueError:
+        # 「先转后用」的格式（TXT / MOBI / FB2）派生件缓存目录是**按书**分的：只有主文件
+        # 才能问它的派生读目标 —— 拿同名的**兄弟文件**去问会把这本的书派生件建到另一份
+        # 正文上（缓存投毒），CFI 也会算在错误的文本上。
+        is_main = target == library.abs_path(b)
+    if is_main and target.suffix.lower() in mobicache.EXTS:
+        # 第 110 期：MOBI / AZW3 的读目标是**解包产物**（KF8 出 EPUB）⇒ CFI 照常按它算
+        # （精确位置不丢）。解不出来（缺解包器 / 坏书 / 纯 MOBI6 出 HTML）⇒
+        # 不生成 CFI 并如实回落「章 + 全书百分比」，**进度本身照常落库**。
+        unpacked, kind = mobicache.read_target(b, path=target)
+        if kind == "epub" and unpacked is not None:
+            return unpacked, True
         return None, False
-    # 指定了文件就按**那个文件自己**的扩展名判是不是 EPUB（书级的 format 说的是主文件）
-    return target, target.suffix.lower() == ".epub"
+    if is_main and target.suffix.lower() in fb2cache.EXTS:
+        # 第 112 期：FB2 的读目标是**派生 EPUB** ⇒ CFI 照常按它算（精确位置不丢）。
+        # 解析不出来（坏书 / 锁定）⇒ 不生成 CFI 并如实回落「章 + 全书百分比」，
+        # **进度本身照常落库**。
+        derived, kind = fb2cache.read_target(b, path=target)
+        if kind == "epub" and derived is not None:
+            return derived, True
+        return None, False
+    if is_main and target.suffix.lower() == ".txt":
+        # 第 146 期：TXT 的读目标同样是**派生 EPUB**（第 55 期起就存在，但这一处一直没
+        # 接上 ⇒ TXT 的 `progress.cfi` 恒为空、`offset` 永不下发，恢复只能靠「全书百分比
+        # 按比例折回章内」，与 MOBI / FB2 那段不对称）。判据仍只有一处
+        # ——`txtcache.derived_epub`，与详情目录 / 单章正文同一口径。
+        # 转不动（空文本 / 坏编码 / 超大 / 构建失败）⇒ 不生成 CFI，照旧回落原生分章。
+        derived = txtcache.derived_epub(b, path=target)
+        return (derived, True) if derived is not None else (None, False)
+    if file_rel:
+        # 指定了文件就按**那个文件自己**的扩展名判是不是 EPUB（书级的 format 说的是主文件）
+        return target, target.suffix.lower() == ".epub"
+    return target, (b.get("format") or "").upper() == "EPUB"
 
 
 @app.get("/api/books/{bid}/progress")

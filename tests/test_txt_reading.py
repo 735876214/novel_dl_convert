@@ -15,6 +15,7 @@
 """
 import json
 import pathlib
+import threading
 
 import pytest
 
@@ -465,3 +466,137 @@ def test_正文读不出时留一条失败活动日志(tmp_path, logdir, monkeyp
                         lambda path, err: (calls.append(1), real(path, err))[1])
     assert txtcache.derived_epub(book, path=p) is None
     assert not calls, "失败状态已落盘，第二次请求不该再写日志"
+
+
+# ---------------------------------------------------------------------------
+# 第 146 期：派生件的**构建**过程（并发 / 自愈）与 TXT 的精确进度
+# ---------------------------------------------------------------------------
+
+def test_并发首次打开只组装一次且不落失败标记(tmp_path, monkeypatch):
+    """开一本书时详情与首章是两个独立请求，几乎同时到 —— 构建必须串行。
+
+    此前 `derived_epub` 让两个线程认准**同一个** ``derived.epub.tmp``：先到的那个
+    一看文件在就先 ``unlink``（Windows 上直接 ``PermissionError``），或双双往同一路径
+    写，写出半个 zip。失败那条还会把 ``failed`` 写进 `state.json` —— 而 ``failed``
+    是**粘住**的（源指纹没变就一直命中它）⇒ 这本书**永久**回落原生分章，还刷一条假的
+    「正文读不出」日志，直到源文件被改动才自愈。
+    """
+    p = pathlib.Path(tmp_path) / "并发.txt"
+    p.write_text("\n".join(f"第{i}章 标题{i}\n" + "正文内容在这里，写长一点。" * 20
+                           for i in range(1, 5)), encoding="utf-8")
+    book = {"id": "lib$race", "title": "并发", "author": ""}
+
+    calls: list = []
+    real = txtcache.epub_builder.build_epub
+
+    def _spy(*a, **kw):                       # noqa: ANN002, ANN003
+        calls.append(1)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(txtcache.epub_builder, "build_epub", _spy)
+
+    results: list = []
+    barrier = threading.Barrier(8)
+
+    def _work() -> None:
+        barrier.wait()                        # 尽可能让 8 个线程真的同时进
+        results.append(txtcache.derived_epub(book, path=p))
+
+    threads = [threading.Thread(target=_work) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(results) == 8
+    assert all(r is not None for r in results), f"并发首次构建全都该拿到派生件：{results}"
+    assert len(calls) == 1, f"同一本书只该组装一次（锁内双检），实际 {len(calls)} 次"
+    cdir = txtcache._cache_dir(book["id"])
+    assert (cdir / txtcache.EPUB_NAME).exists()
+    assert txtcache._read_state(cdir).get("status") == "ok", txtcache._read_state(cdir)
+    assert not _leftovers(cdir), "成功构建后不该留下临时目录/临时件"
+
+
+def test_派生件被删掉后自愈重建(tmp_path):
+    """`state.json` 说 ``ok`` 但成品文件没了（清缓存 / 磁盘清理）⇒ 必须重建成品。
+
+    此前这里直接 ``return None``：文件没了、状态说成功，于是这本书**永久**回落到
+    原生分章，每条请求都重新算一遍「命中但文件不存在」。`core/fb2cache.py` 的
+    ``_lookup`` 早就把这种情形视同未命中（注释写明「不是错误」），两条派生缓存
+    没有理由不一致。
+    """
+    p = pathlib.Path(tmp_path) / "自愈.txt"
+    p.write_text("第1章 甲\n" + "甲。" * 100 + "\n第2章 乙\n" + "乙。" * 100, encoding="utf-8")
+    book = {"id": "lib$selfheal", "title": "自愈", "author": ""}
+    cdir = txtcache._cache_dir(book["id"])
+
+    first = txtcache.derived_epub(book, path=p)
+    assert first is not None and first.exists(), "前置失败：这本该转得动"
+    assert txtcache._read_state(cdir).get("status") == "ok"
+
+    first.unlink()                            # 只删成品，state.json 原样留着（还是 ok）
+    assert txtcache._read_state(cdir).get("status") == "ok"
+
+    again = txtcache.derived_epub(book, path=p)
+    assert again is not None, "成品被删掉后必须重建，不能永久回落原生分章"
+    assert again.exists() and again == first
+
+
+def test_构建失败不留半成品也不留临时目录(tmp_path, logdir, monkeypatch):   # noqa: ARG001
+    p = pathlib.Path(tmp_path) / "组装炸了.txt"
+    p.write_text("第1章 甲\n" + "甲。" * 100, encoding="utf-8")
+    book = {"id": "lib$boom", "title": "组装炸了", "author": ""}
+    cdir = txtcache._cache_dir(book["id"])
+
+    def _boom(*a, **kw):                      # noqa: ANN002, ANN003
+        raise RuntimeError("组装炸了")
+
+    monkeypatch.setattr(txtcache.epub_builder, "build_epub", _boom)
+    assert txtcache.derived_epub(book, path=p) is None
+    assert not (cdir / txtcache.EPUB_NAME).exists()
+    assert not _leftovers(cdir), "失败路线不能留下 .stage-* / .old-* 残骸"
+    assert txtcache._read_state(cdir).get("status") == "failed"
+
+
+def test_TXT进度带精确CFI_端点往返(client, auth_headers, default_root):   # noqa: ARG001
+    """第 146 期：TXT 的读目标是**派生 EPUB**（第 55 期起就存在，`_progress_file` 一直没接）。
+
+    不接的后果：TXT 的 `progress.cfi` 恒为空、`offset` 永不下发，跨端续读只能靠
+    「全书百分比按比例折回章内」，而 MOBI（第 110 期）/ FB2（第 112 期）都已按派生件
+    算出精确位置。
+    """
+    bid = _scan(default_root, "进度.txt")
+    chaps = _flat_chapters(client.get(f"/api/books/{bid}", headers=auth_headers).json())
+    assert len(chaps) >= 3, "前置失败：这本 TXT 该有目录"
+
+    r = client.put(f"/api/books/{bid}/progress", headers=auth_headers,
+                   json={"locator": 1, "percent": 12.5, "offset": 10})
+    assert r.status_code == 200, r.text
+
+    body = client.get(f"/api/books/{bid}/progress", headers=auth_headers).json()
+    assert body["locator"] == 1 and body["percent"] == pytest.approx(12.5)
+    assert body["cfi"].startswith("epubcfi(/6/"), body["cfi"]
+    assert body["offset"] == 10, "服务端反解的偏移必须与保存时同值（同一个派生件）"
+
+
+def test_转不动的TXT进度仍落库只是没有CFI(client, auth_headers, default_root, monkeypatch):  # noqa: ARG001
+    """派生件不可用**不是**保存进度的前置条件：进度照常落库，只退回「章 + 百分比」。"""
+    monkeypatch.setattr(txtcache, "SOURCE_MAX_BYTES", 1)      # 任何 TXT 都算超大
+    bid = _scan(default_root, "无派生.txt")
+
+    r = client.put(f"/api/books/{bid}/progress", headers=auth_headers,
+                   json={"locator": 2, "percent": 40.0, "offset": 10})
+    assert r.status_code == 200, r.text
+    body = client.get(f"/api/books/{bid}/progress", headers=auth_headers).json()
+    assert body["locator"] == 2 and body["percent"] == pytest.approx(40.0)
+    assert body["cfi"] == "", "没有派生件就没有 CFI"
+    assert "offset" not in body
+
+
+def _leftovers(cdir: pathlib.Path) -> list:
+    """派生缓存目录区里的临时残骸（``.stage-*`` / ``<bid>.old-*``）名字。"""
+    parent = cdir.parent
+    if not parent.exists():
+        return []
+    return [x.name for x in parent.iterdir()
+            if x.name.startswith(".") or ".old-" in x.name]

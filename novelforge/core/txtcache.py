@@ -15,16 +15,24 @@ TXT 直接阅读缺的不止是渲染 —— 目录、批注、CFI 精确位置�
 ⚠️ **形态一经确定就锁定**（`state.json` 记**源文件指纹 + 分章规则版本**）：两条路线的
 章节 index 都是 0 基、索引空间已对齐（派生 EPUB 用 ``nav=False`` 组装，spine 不含 nav
 目录页），但**目录条目数仍可能因分章细节而不同**；为免「今天有 EPUB、清个缓存变原生」时
-章节号漂移让既有批注跳错章，只在**源文件本身变化**（mtime/size 变）**或分章规则版本变化**
-时才重建。后者是第 62 期补的：规则改了而源一个字没动时，光比源指纹会一直命中旧派生件，
-**改了规则看不见效果**。
+章节号漂移让既有批注跳错章，只在**源文件本身变化**（mtime/size 变）**或分章 / 编码判据
+版本变化**时才重建。后者是第 62 / 72 期补的：规则改了而源一个字没动时，光比源指纹会一直
+命中旧派生件，**改了看不见效果**。
+
+⚠️ **「锁定」指的是形态，不是「坏了就不修」**（第 146 期）：派生件**文件被删掉**而
+`state.json` 还写着 ``ok`` 时视同未命中、重建一次（见 :func:`_lookup`）—— 否则清一次缓存
+就让这本书**永久**回落原生分章。真正失败（空文本 / 编码全坏 / 超大 / 组装异常）的
+``failed`` 标记才是粘住的那个：它的成因在源文件里，重试只会重复失败。
 
 分章/编码/组装三处都不另写实现：`detect`（唯一分章真值源）、
 `pipeline.decode_file`（唯一编码探测 + 读取；第 89 期起它**绝不静默丢字节**，
 坏字节以 U+FFFD 呈现并计数上报，见 `decode_info`）、`epub_builder.build_epub`（唯一组装）。
 """
 import json
+import os
 import pathlib
+import shutil
+import threading
 import time
 
 from .. import config
@@ -60,6 +68,18 @@ ENC_RULE_VERSION = pipeline.ENCODING_RULE_VERSION
 
 #: 规则升级导致重建时，活动日志里 `file` 一栏用的**固定主体**。见 :func:`_log_rule_rebuild`。
 FILE_LABEL = "TXT 派生缓存"
+
+#: **构建锁**（第 146 期）：整条派生链路是「读源码 → 切章 → 组装 zip → 换入」，
+#: 中途被打断会留下半个 zip。而同一本书**天然会被并发读到**：打开一本书时详情页
+#: （`:func:`derived_epub` 定形态）与首章正文（`:func:`native_chapter_html` /
+#: `library.chapter_html`）是两个独立请求，追更落地与刮削也会在后台线程里问目录。
+#: 此前没有锁：两个线程会认准**同一个** ``derived.epub.tmp``，先到的一看文件在就先
+#: ``unlink``（Windows 上直接 ``PermissionError``），或双双写同一个路径写出**半个 zip**；
+#: 失败那条还会把一句 ``failed`` 写进 `state.json` —— 而 ``failed`` 是**粘住**的
+#: （源指纹没变就一直命中它），于是这本书**永久**回落到原生分章，还刷一条假的
+#: 「正文读不出」日志，直到源文件被改动才自愈。
+#: 与 `core/fb2cache.py` 的 ``_BUILD_LOCK`` 同一个范式（那里第 112 期就是这么解的）。
+_BUILD_LOCK = threading.Lock()
 
 
 def _cache_dir(book_id: str) -> pathlib.Path:
@@ -215,11 +235,65 @@ def _chapters(book: dict, path: pathlib.Path) -> list:
     return chapters
 
 
+def _sweep(parent: pathlib.Path, book_id: str) -> None:
+    """清掉上一次构建留下的临时目录（``.stage-<bid>-*`` 与 ``<bid>.old-*``）。
+
+    在**持锁**时调用，所以「别的线程正在写」这个可能性不存在；能在这里的一律是
+    上次进程被打断的残骸（崩溃 / 强杀 / 断电）。不清理的话它们会永远躺在缓存目录里。
+    """
+    if not parent.exists():
+        return
+    for leftover in list(parent.iterdir()):
+        name = leftover.name
+        if name.startswith(f".stage-{book_id}-") or name.startswith(f"{book_id}.old-"):
+            shutil.rmtree(leftover, ignore_errors=True)
+
+
+def _swap_in(stage: pathlib.Path, final: pathlib.Path) -> None:
+    """把建好的 ``stage`` 目录整体换到 ``final``（同名替换，中途不留半成品）。"""
+    parent = final.parent
+    old = parent / f"{final.name}.old-{os.getpid()}-{int(time.time() * 1000)}"
+    had_old = final.exists()
+    if had_old:
+        final.replace(old)
+    try:
+        stage.replace(final)
+    except Exception:
+        if had_old and old.exists():          # 换不进去就把旧的还回去，绝不留下「什么都没有」
+            old.replace(final)
+        raise
+    if had_old:
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def _lookup(cdir: pathlib.Path, fp: str) -> tuple:
+    """``(结论, 派生件路径)``：``hit`` 可直接用 / ``locked`` 不重建 / ``miss`` 该构建。
+
+    派生件**被手工删掉**（清缓存、用户删了 ``cache/`` 的一部分）而 ``state.json``
+    还写着 ``ok`` 时，结论是 ``miss`` —— 唯一正确的反应是**再建一次**。
+    此前这里直接 ``return None``：文件没了、state 说成功，于是这本书**永久**回落到
+    原生分章（还对每条请求都重新算一遍「命中但文件不存在」），只有源文件被改动
+    才自愈。`core/fb2cache.py` 的 ``_lookup`` 早就把这种情形视同未命中（注释写明
+    「不是错误」），两条派生缓存没有理由不一致。
+    """
+    state = _read_state(cdir)
+    if not (state.get("fingerprint") == fp and state.get("rule") == RULE_VERSION
+            and state.get("enc_rule") == ENC_RULE_VERSION):
+        return "miss", None
+    if state.get("status") != "ok":
+        return "locked", None
+    epub = cdir / EPUB_NAME
+    return ("hit", epub) if epub.exists() else ("miss", None)
+
+
 def derived_epub(book: dict, *, path=None, root=None):
     """TXT 书 → 派生 EPUB 路径；不可转 / 失败 ⇒ ``None``（调用方回落原生分章）。
 
-    命中规则：源指纹没变**且编码判据版本没变**且上次成功 ⇒ 直接返回既有缓存（**不重复转换**）；
-    源指纹没变、但上次失败 ⇒ 仍返回 ``None``（保持形态稳定，别一会儿 EPUB 一会儿原生）。
+    命中规则：源指纹没变**且分章规则版本没变**且**编码判据版本没变**且上次成功
+    ⇒ 直接返回既有缓存（**不重复转换**）；源指纹没变、但上次确实失败过 ⇒ 仍返回
+    ``None``（保持形态稳定，别一会儿 EPUB 一会儿原生）。
+
+    构建全程持 `_BUILD_LOCK`、在 ``.stage-*`` 里组装、成功才整体换入 —— 见那里的注释。
     """
     p = _src_path(book, path, root)
     if p.suffix.lower() != ".txt" or not p.is_file():
@@ -233,19 +307,25 @@ def derived_epub(book: dict, *, path=None, root=None):
         return None
 
     cdir = _cache_dir(bid)
+    kind, target = _lookup(cdir, fp)
+    if kind != "miss":
+        return target
+    with _BUILD_LOCK:
+        # 双检：等锁的这一小会儿，别的线程可能已经把派生件建好了（构建要几百毫秒，
+        # 而开书的那两个请求几乎是同时到的 —— 这里几乎每次都会命中）。
+        kind, target = _lookup(cdir, fp)
+        if kind != "miss":
+            return target
+        return _build(book, p, cdir, fp)
+
+
+def _build(book: dict, p: pathlib.Path, cdir: pathlib.Path, fp: str):
+    """真正的构建（调用方**必须**已持有 `_BUILD_LOCK`）。成功返回派生件路径，失败 ``None``。"""
     state = _read_state(cdir)
-    # 三个分量缺一不可：源指纹（源变了）、分章规则（切法变了）、**编码判据**（解出来的
-    # 文本变了）。老 state.json 没有 ``enc_rule`` ⇒ 这里不命中 ⇒ 重建一次；这正是
-    # 「已缓存成 ok 的乱码派生件」唯一的失效通道。
-    if (state.get("fingerprint") == fp and state.get("rule") == RULE_VERSION
-            and state.get("enc_rule") == ENC_RULE_VERSION):
-        if state.get("status") != "ok":
-            return None
-        epub = cdir / EPUB_NAME
-        return epub if epub.exists() else None
-    # 走到这里有两种可能：源变了，或**分章规则版本变了**（源指纹没动）。后者要留痕 ——
-    # 否则用户升完级只看到目录变了，不知道是谁改的。
-    if state.get("fingerprint") == fp:
+    # 走到这里有两种可能：源变了，或**分章 / 编码判据版本变了**（源指纹没动）。
+    # 后者要留痕 —— 否则用户升完级只看到目录变了，不知道是谁改的。
+    if (state.get("fingerprint") == fp
+            and (state.get("rule") != RULE_VERSION or state.get("enc_rule") != ENC_RULE_VERSION)):
         _log_rule_rebuild(p)
 
     if p.stat().st_size > SOURCE_MAX_BYTES:
@@ -253,6 +333,8 @@ def derived_epub(book: dict, *, path=None, root=None):
                             "reason": f"source > {SOURCE_MAX_BYTES} bytes"})
         return None
 
+    parent = cdir.parent
+    stage = None
     try:
         chapters = _chapters(book, p)
         if not chapters or not any((c.get("body") or "").strip() for c in chapters):
@@ -264,25 +346,26 @@ def derived_epub(book: dict, *, path=None, root=None):
             "author": str(book.get("author") or ""),
             "language": str(book.get("language") or "zh") or "zh",
         }
-        cdir.mkdir(parents=True, exist_ok=True)
-        tmp = cdir / (EPUB_NAME + ".tmp")
-        if tmp.exists():
-            tmp.unlink()
+        parent.mkdir(parents=True, exist_ok=True)
+        _sweep(parent, cdir.name)
+        stage = parent / f".stage-{cdir.name}-{os.getpid()}-{int(time.time() * 1000)}"
+        stage.mkdir(parents=True, exist_ok=True)
         # nav=False：spine 不含 nav 目录页 ⇒ 章节 index 0 基，与原生分章**索引空间对齐**
         # （两条路线的 index 语义一致，形态切换不会让章节号整体挪位）
-        epub_builder.build_epub(meta, chapters, str(tmp), nav=False)
-        final = cdir / EPUB_NAME
-        tmp.replace(final)          # 原子落盘：半成品绝不留在最终路径上
+        epub_builder.build_epub(meta, chapters, str(stage / EPUB_NAME), nav=False)
         # 第 89 期：把「本次解码用的编码 + 有几个字节解不出」一并写进 state ——
         # ① 章节接口靠它把结果如实带给阅读器（`decode_info` 优先读这里，省一次全量解码）；
         # ② 缓存有效性判定也顺带把这两个值留下痕迹。
         info = decode_info(book, path=p)
-        _write_state(cdir, {"status": "ok", "fingerprint": fp, "rule": RULE_VERSION,
-                            "chapters": len(chapters),
-                            "encoding": info.get("encoding", ""),
-                            "undecodable": int(info.get("undecodable") or 0)})
-        return final
+        _write_state(stage, {"status": "ok", "fingerprint": fp, "rule": RULE_VERSION,
+                             "chapters": len(chapters),
+                             "encoding": info.get("encoding", ""),
+                             "undecodable": int(info.get("undecodable") or 0)})
+        _swap_in(stage, cdir)
+        return cdir / EPUB_NAME
     except Exception as e:
+        if stage is not None:                          # 半成品必须清掉，别留 .stage-* 垃圾
+            shutil.rmtree(stage, ignore_errors=True)
         _write_state(cdir, {"status": "failed", "fingerprint": fp, "rule": RULE_VERSION,
                             "reason": str(e)[:160]})
         # 只在**真正尝试过并失败**时记一条：状态落盘后，同一份源的下一次请求会走前面的
