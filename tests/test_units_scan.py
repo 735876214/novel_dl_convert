@@ -279,7 +279,10 @@ def test_口径版本不一致时全量重探一次(isolated, tmp_path, make_lib
     # 第 111 期：`.rar` / `.7z` 进白名单（三类库都收）⇒ 同理，同一个库里原先被忽略的
     # 容器文件会变成书目条目，故 3 → 4。
     # 第 112 期：`.fb2` 进白名单（`BOOK_EXTS` / `_EBOOK_EXTS`）⇒ 同理，故 4 → 5。
-    assert library.SCAN_RULE_VERSION == 5, "第 112 期 `.fb2` 进白名单 ⇒ 版本应为 5"
+    # 第 137 期：漫画库的 `series` / `series_index` 改由目录布局推断（`library.series_of_rel`）
+    # ⇒ 条目边界没变，但**卡片字段口径变了**：存量行的 series 列都是空串（2043/2043），
+    # 不 +1 它们在界面上永远散成一张张同名 `Vol.03`，故 5 → 6。
+    assert library.SCAN_RULE_VERSION == 6, "第 137 期 漫画 series 由目录推断 ⇒ 版本应为 6"
     root = tmp_path / "comic"
     lib = make_library("c4", "漫画库", "comic", root)
     _tree(root, BOOK_DIR, BOOK_FILES)
