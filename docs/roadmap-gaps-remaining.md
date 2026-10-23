@@ -10118,3 +10118,96 @@ OPF 纯文本字段都解实体 / 写侧转义与读侧解实体往返对称 / �
 2. **一处事实只开一次包** —— 页数、封面、「能不能读」分开算，迟早分叉；封面与第 1 页不是同一张时，用户不会报错，只会觉得「这软件有点怪」。
 3. **剥标签与解实体是两件事** —— 纯文本字段要「剥标签 + 解实体」，`dc:description` 要「解实体 + 不剥标签」，方向相反。
    写侧 `escape` 了，读侧就必须 `unescape`，否则往返必变形。
+
+## 第 148 期（TXT 在线阅读：两个并发请求就能把这本书读废 —— 派生件构建没有串行化 / 成品被删永不重建 / 进度拿不到精确位置）
+
+**需求来源**：用户「审查本项目 txt 格式书籍入库、刮削、阅读、进度等方面的问题，并修复」（第 148 期）。
+
+### 1. 症状（判据都来自代码路径，不是猜）
+
+| 面 | 症状 |
+|---|---|
+| 阅读 | 首次打开一本 TXT 时，详情页（定目录形态）与首章正文是**两个并发请求**；两者都可能拿到原生分章，活动日志里多出一条假的「正文读不出」，而且**之后一直是原生分章** —— 重启进程 / 重启浏览器都一样，只有源文件被改动才恢复 |
+| 阅读 | 缓存被清过（整目录删过、或只删了 `cache/txt-epub/<bid>/` 里的 `derived.epub`）的书**永久**回落原生分章，哪怕 `state.json` 还写着 `status: ok` |
+| 阅读 | Windows 上并发开同一本书，偶发 `PermissionError: ... derived.epub.tmp`；或两路各写一半，得到一个**半个 zip**（章节数比目录多/少） |
+| 进度 | TXT 的 `GET /api/books/{bid}/progress` **从来没有 `offset`**、`cfi` 恒为空串 ⇒ 换设备续读只能按 `percent/100×total − 章号` 估算章内位置，长章节偏几十屏；KOReader / Komga 侧同样拿不到精确位置 |
+
+### 2. 根因：同一范式在 `core/fb2cache.py` 里是对的，`core/txtcache.py` 少了三件东西
+
+`txtcache.derived_epub`（TXT 在线阅读的**唯一形态来源**，第 55 期起）此前是：
+`读源码 → 切章 → 组装 zip → 写到 ``derived.epub.tmp`` → ``tmp.replace(final)`` → 写 `state.json`。三个缺口：
+
+1. **没有构建锁、也没有 stage 目录**：两个并发线程认准**同一个** `.tmp` 路径，先到的一看文件在就 `unlink`
+   （Windows 上直接 `PermissionError`），或双双往同一路径写 ⇒ 半个 zip。而失败分支会把 `status: failed`
+   写进 `state.json`，**failed 是粘住的**（源指纹没变就一直命中它）⇒ 该书永久回落原生分章 + 一条假日志。
+2. **产物缺失不复建**：命中三分量（源指纹 / 分章规则 / 编码判据）后是 `return epub if epub.exists() else None`
+   —— 文件被删、state 说成功 ⇒ 永远 `None`，**永不重建**。`fb2cache._lookup` 早就把这种情形视同 miss（注释写「不是错误」）。
+3. **没有 stale 清理**：进程被打断（崩溃 / 强杀 / 断电）留下的 `.tmp` 没有任何人回收。
+
+进度侧是**另一条独立漏项**：`server._progress_file` 里 MOBI（第 110 期）与 FB2（第 112 期）都有「派生件 ⇒ `(target, True)`」
+的分支，**TXT 没有** —— 它落到末尾 `return target, (b.get("format") or "").upper() == "EPUB"`，
+而 TXT 的 `format` 不是 EPUB ⇒ `is_epub=False` ⇒ 既不生成 CFI、GET 也不反解 `offset`。
+TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False)`，章节 index 0 基、与原生分章索引空间对齐），
+没有任何理由不给它算位置。
+
+### 3. 修法（两处，都照既有唯一实现收敛，不新写第二份）
+
+**① `novelforge/core/txtcache.py` —— 照 `fb2cache` 的范式补齐三件**
+- 模块级 `_BUILD_LOCK = threading.Lock()`；`derived_epub` 缩成「`_lookup` → 命中即返 / 持锁**双检**再 `_build`」。
+- `_lookup(cdir, fp)` 返回 `("hit"|"locked"|"miss", path)`：三分量不全命中 ⇒ `miss`；`status != "ok"` ⇒ `locked`（**失败才粘住**）；
+  三分量命中但 `derived.epub` 不存在 ⇒ **`miss`（重建）**。
+- `_build` 在 `parent/.stage-<bid>-<pid>-<ms>/` 里组装 + 写 state，成功后 `_swap_in(stage, cdir)` 整体换入
+  （旧的先改名成 `<bid>.old-<pid>-<ms>`，换入失败则回滚，成功再删旧的）；失败则 `rmtree(stage)` + 写 `failed` state。
+- `_sweep(parent, bid)` 清上一次进程留下的 `.stage-*` / `<bid>.old-*` 残骸（只在持锁时调用）。
+- 模块 docstring 补两段：三处版本分量（源指纹 / 分章规则 / 编码判据），以及**「锁定」指的是形态，不是「坏了就不修」** ——
+  真正失败的 `failed` 才粘住，因为它的成因在源文件里，重试只会重复失败。
+
+**② `novelforge/server.py::_progress_file` —— 重构成「先定 target + `is_main`，再按格式分派」**
+书级（`file_rel` 空）仍用 `format` 判 EPUB、给了 `file_rel` 仍用扩展名判 EPUB，**MOBI / FB2 两段语义逐字节不变**，
+只多一段：`if is_main and target.suffix.lower() == ".txt": derived = txtcache.derived_epub(b, path=target); return (derived, True) if derived is not None else (None, False)`。
+`is_main = target == library.abs_path(b)` 这个前置是必要的：派生缓存目录按**书**分，只有主文件才能问派生读目标，否则缓存投毒。
+
+### 4. 核验（新增 5 例，其中 4 例先赤后绿）
+
+`tests/test_txt_reading.py` 17 → **22 例**，`tests/test_txt_reading.py` 全绿：
+
+| 用例 | 钉住什么 |
+|---|---|
+| `test_并发首次打开只组装一次且不落失败标记` | `Barrier(8)` + 8 线程同调 `derived_epub`，spy `epub_builder.build_epub` ⇒ **只组装 1 次**、全部非 `None`、state `ok`、无 `.stage-*` 残留（旧代码在这里会互删 tmp / 落 failed） |
+| `test_派生件被删掉后自愈重建` | 建好后只 `unlink` 派生件（state 仍 `ok`）⇒ 再调必须返回**同一个存在的路径**（旧代码回 `None`） |
+| `test_构建失败不留半成品也不留临时目录` | `build_epub` 抛异常 ⇒ 返回 `None`、无 `derived.epub`、无 `.stage-*`、state `failed` |
+| `test_TXT进度带精确CFI_端点往返` | `PUT /api/books/{bid}/progress {locator:1, percent:12.5, offset:10}` ⇒ `GET` 回 `cfi.startswith("epubcfi(/6/")` **且 `offset == 10`** |
+| `test_转不动的TXT进度仍落库只是没有CFI` | `SOURCE_MAX_BYTES` 调到 1 ⇒ PUT 仍 200、`cfi == ""`、**没有 `offset` 键**（CFI 是锦上添花，不许把进度保存弄失败） |
+
+全量（本机）：收集 **2769 例**、**2738 passed / 17 failed（全部本机环境）/ 14 skipped**，497.6 s；
+剔除 17 例环境失败后 **2752 例**。同一口径的收集数 **2764 → 2769（+5，即本期新增用例）**。
+
+### 5. 已核查为「不是缺陷」的项（别下次又当 bug 修一遍）
+
+- `/api/books/{bid}/epub-css` 对 TXT 回空样式、`/api/books/{bid}/cover` 对 TXT 回 404「该格式没有内嵌封面」：
+  派生 EPUB 是 `build_epub(..., css=None, images=None)` 组装的，**既无图片也无书内样式** ⇒ 现有行为与实际内容一致，接上去只是空转。
+- `/api/books/{bid}/chapter/{index}` 的 TXT 分支（`derived_epub` 优先 + `native_chapter_html` 兜底 + 附带 `text_encoding`）本来是对的。
+- `watcher.handle_file`：TXT 与 EPUB **同路原样复制**（第 62 期口径，`copy_non_txt` 只拦非 txt），无 TXT 专属缺陷。
+- `publish.publish` 只对 `EMBED_EXTS = (".epub",)` 做 `embed_meta`，TXT 只产副本、元数据只落 DB，日志里如实写「（无元数据可写）」。
+- `pipeline.dispatch` 对 `.txt` 原样 `atomicio.copy_file`，入库侧**不套**命名规则（只有出版侧 `publish.relpath_for` 用 `fileops.fill_pattern`）。
+- `traditionalize` 对「投递入库」不生效，但前端 `data/settingsFields.ts` 的 hint 已如实标注「仅对书源下载与 CLI 转换生效」。
+- `watcher._opts` 已无调用方（死代码）；价值极低，不与本期主题混在一起改。
+
+### 6. 本机口径（如实）
+
+- `bash scripts/test.sh` 在本机起不来（`Bash/E_ACCESSDENIED`，WSL 桩）⇒ 直跑 `.venv\Scripts\python.exe -m pytest`；
+  本机 python 进程在仓库外建不了临时目录（DSH 沙箱）⇒ basetemp 落回仓库根、撞 `tests/conftest.py` 的仓库根守卫，
+  本期用**一次性放行补丁（不入库，收尾已 `git checkout` 还原）**把 `.nftmp` 排除在守卫之外才跑通。
+- 17 例在本机跑不起来且**与本期改动无关**：10 例 `test_updater.py`（无 `AF_UNIX` 等）、4 例 `test_scripts_contract.py`
+  （`bash -n` 只有 WSL 桩）、2 例 `test_ingest_audit_125.py`（符号链接需特权）、1 例 `test_hardening_141_error_paths.py`。
+  所以基线句写 **2752 例（2738 passed / 14 skipped）**，并在同一句里注明收集数是 **2769**。
+- 前端未改（`ReaderView` 的 `fileRel` 对单文件书返回 `undefined` ⇒ 进度本来就按**书级**读写，正好命中新加的 TXT 分支）⇒ 未跑四连。
+
+### 7. 这一期的教训
+
+1. **「锁定」有两种含义，别混成一种** —— 形态锁定（不许今天 EPUB 明天原生，批注会跳章）说的是**成功产物**；
+   失败标记要粘住，但**产物不见了必须重建**。`return epub if epub.exists() else None` 就是把两件事混成了一件。
+2. **同一类派生物必须走同一个范式** —— `fb2cache` 有锁、有 stage、有 stale 清理、有「产物缺失视同 miss」，`txtcache` 一样都没有，
+   而它们的输入输出形状**完全同构**。发现「A 有 B 没有」时，先假设 B 是漏的，再看有没有正当理由。
+3. **一处缺口往往同期出现在相邻读点** —— 「派生件能不能算精确位置」在 MOBI / FB2 都补过一次（第 110 / 112 期），
+   TXT 自第 55 期就有派生件却没人回头补。补一个格式时，**把同形状的格式一起数一遍**。
