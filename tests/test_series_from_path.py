@@ -1,4 +1,4 @@
-"""系列兜底推断（第 137 期）：漫画库「一层目录 = 一个系列」在**扫描期**落地。
+"""系列兜底推断（第 145 期）：漫画库「一层目录 = 一个系列」在**扫描期**落地。
 
 背景：漫画包（一话一 zip / 一卷一 cbz）的文件里没有任何系列元数据，盘上就是
 652 个 `001 預告.zip`。此前扫描期只认 EPUB 的 `calibre:series`，于是漫画库整库
@@ -89,7 +89,7 @@ def _books(lib):
 def test_漫画库扫描期写入系列与序号(isolated, tmp_path, make_library):  # noqa: ARG001
     root = tmp_path / "comic"
     root.mkdir()
-    lib = make_library("c137", "漫画库", "comic", root)
+    lib = make_library("c145", "漫画库", "comic", root)
     _put(root, "[神之塔][SIU][Chap.000-Chap.651]/001 預告.zip")
     _put(root, "[神之塔][SIU][Chap.000-Chap.651]/002 [第1話] HEADON's Floor.zip")
     _put(root, "史诗级领地设计师/001 第1話.zip")
@@ -108,7 +108,7 @@ def test_电子书库不按目录推系列(isolated, tmp_path, make_library):  #
     照搬会把作者的四本书凑成一个假系列。"""
     root = tmp_path / "ebook"
     root.mkdir()
-    lib = make_library("e137", "电子书库", "ebook", root)
+    lib = make_library("e145", "电子书库", "ebook", root)
     _put(root, "刘慈欣/三体.epub", b"EPUB")
     _put(root, "刘慈欣/球状闪电.epub", b"EPUB")
 
@@ -123,7 +123,7 @@ def test_有声书库不按目录推系列(isolated, tmp_path, make_library):  #
     专辑里的每条音轨是同一本书的一部分，不是一本书一个系列。"""
     root = tmp_path / "audio"
     root.mkdir()
-    lib = make_library("a137", "有声书库", "audiobook", root)
+    lib = make_library("a145", "有声书库", "audiobook", root)
     _put(root, "专辑/01.mp3", b"ID3" + b"\x00" * 64)
     _put(root, "专辑/02.mp3", b"ID3" + b"\x00" * 64)
 
@@ -137,7 +137,7 @@ def test_文件内元数据优先于目录推断(isolated, tmp_path, make_librar
     否则按目录名重算会把用户在 OPF / 覆盖层里写好的系列冲掉。"""
     root = tmp_path / "comic"
     root.mkdir()
-    lib = make_library("p137", "漫画库", "comic", root)
+    lib = make_library("p145", "漫画库", "comic", root)
     f = _put(root, "[占位目录]/第3卷.cbz")
 
     p = library._probe_entry(f)

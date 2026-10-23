@@ -74,7 +74,7 @@ BOOK_EXTS = (".epub", ".mobi", ".azw3", ".azw", ".fb2", ".pdf", ".txt", ".cbz", 
 #: （扫描时被忽略），现在是一本可直读的 FB2 ⇒ 存量库里那些 `.fb2` 文件不 +1 就永远不会被
 #: 重探（它们此前连索引行都没有）。扫描期口径也扩了一格：`.fb2` 的 `has_cover` 改由
 #: 内嵌封面探测（`fb2cache.has_embedded_cover`）决定。
-#: 第 137 期一处 —— ⑦ **漫画库的 `series` / `series_index` 由目录布局推断**（见
+#: 第 145 期一处 —— ⑦ **漫画库的 `series` / `series_index` 由目录布局推断**（见
 #: `series_of_rel`）：条目边界没变，但**卡片字段口径变了** —— 存量行的 `series` 列都是空串，
 #: 不 +1 它们在界面上永远散着（每本一张卡、满屏同名 `Vol.03`）。
 SCAN_RULE_VERSION = 6
@@ -190,7 +190,7 @@ def series_of_rel(rel: str) -> "tuple[str, str]":
     为什么需要它：漫画包（一话一 zip / 一卷一 cbz）的**文件名里没有系列信息** ——
     一部 652 话的漫画在盘上就是 652 个 `001 預告.zip`。此前扫描期只认 EPUB 的
     ``calibre:series``（见 :func:`_series_of`），于是这类库整库 ``series`` 全空，
-    而书架恰好按 ``series`` 折叠 ⇒ 退化成一书一卡、满屏同名 ``Vol.03``（第 137 期）。
+    而书架恰好按 ``series`` 折叠 ⇒ 退化成一书一卡、满屏同名 ``Vol.03``（第 145 期）。
 
     口径与 ``core/komga.py`` 是**同一条**：一层目录 = 一个系列，目录内的文件 = 该系列
     的各卷（Komga 自己的扫描约定）。目录名**首括号**里的内容是作品名，
@@ -2268,7 +2268,7 @@ def _row_of(lib: dict, root: pathlib.Path, f: pathlib.Path, p: dict) -> dict:
     c1, c2 = _gradient(bid)
     # 系列：文件内元数据（EPUB 的 `calibre:series`，由 `_series_of` 解析）只有 EPUB / 目录型
     # 条目才有；漫画包的卷号在**文件名**上、系列在**目录**上，文件里什么都没有。所以漫画库在
-    # 元数据缺席时按目录布局兜底（第 137 期）。顺序不可颠倒：override > OPF > 目录推断
+    # 元数据缺席时按目录布局兜底（第 145 期）。顺序不可颠倒：override > OPF > 目录推断
     # （override 由 `_apply_overlay` 在更外层叠加，这里只处理后面两者）。
     # ⚠️ 只对漫画库开这道兜底：电子书 / 有声书库的顶层目录常是作者名或整张专辑目录，
     # 照搬会给无关的书造出假系列（详见 `series_of_rel` 的 docstring）。
