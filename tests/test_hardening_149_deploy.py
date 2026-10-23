@@ -144,17 +144,24 @@ def test_is_archive_覆盖漫画归档(name, want):
     assert zipkind.is_archive(name) is want
 
 
-def test_cbr缺后端时给出能力原因(tmp_path):
-    """`.cbr` 打不开时必须说「缺 RAR 解压能力」。
+def test_cbr不再被短路_识别结果一定说出来(monkeypatch):
+    """`.cbr` 的识别结果必须被说出来（此前 `is_container` 只认 `.zip/.rar/.7z` ⇒ 直接空串）。
 
-    此前 `library_rules` 用 `is_container` 判，`.cbr` 直接返回空串 ⇒ 界面把
-    「这台服务器缺 bsdtar」说成「规则都不命中」，用户完全没法自救。
+    第 149 期：这条判据钉在**分流**上，不依赖真实归档解析 —— 造一个假 RAR 头当夹具，
+    本机没 bsdtar 时 `analyze` 判 `broken`、CI 有 bsdtar 时判 `empty`（第 149 期
+    CI 就这么红过一次）。那是环境的结论，不是这条分流的结论。
     """
-    src = tmp_path / "缺工具.cbr"
-    src.write_bytes(b"Rar!\x1a\x07\x00" + b"\x00" * 64)
-    hint = library_rules._container_shape_hint([], src.name, src)
-    assert hint, "「文件名」形态上必须给出提示"
-    assert "RAR" in hint or "解压能力" in hint, hint
+    monkeypatch.setattr(zipkind, "analyze",
+                        lambda p: {"kind": "comic", "evidence": {"images": 12}})
+    hint = library_rules._container_shape_hint([], "缺工具.cbr", "缺工具.cbr")
+    assert hint and "漫画" in hint, hint
+
+    monkeypatch.setattr(
+        zipkind, "analyze",
+        lambda p: {"kind": "broken", "reason": "服务器缺少 RAR 解压能力（需 bsdtar 或 unrar）"},
+    )
+    hint = library_rules._container_shape_hint([], "缺工具.cbr", "缺工具.cbr")
+    assert hint and "RAR" in hint and "解压能力" in hint, hint
 
 
 # ---------------------------------------------------------------- 待展开记忆
