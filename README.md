@@ -271,7 +271,7 @@ python -m novelforge logs -n 50 --action 转换 --status 失败
 ### 部署方式：直接拉预构建镜像（源码 + 依赖已烤进镜像）
 
 镜像由 GitHub Actions 在每次推送到 `main` 时自动构建并发布（`docker-compose.yml` 里**钉死版本号**，例如
-`ghcr.io/735876214/novel_dl_convert:1.4.0` —— 第 149 期起不用 `:latest`，见下面「更新代码」），
+`ghcr.io/735876214/novel_dl_convert:1.4.1` —— 第 149 期起不用 `:latest`，见下面「更新代码」），
 **源码与全部 Python 依赖已在「构建镜像时」烤进镜像**——不需要 NAS 本地 build，也不需要容器启动时 clone 源码。
 版本号一变（仓库根 `VERSION`），CI 还会自动打 `v<版本>` tag 并创建 GitHub Release（说明取 `CHANGELOG.md` 对应段）。
 因此在 NAS 上**只需要 `docker-compose.yml` 一个文件**（配置全部写在文件里，不依赖任何 `.env`），一条命令即可运行：
@@ -302,7 +302,7 @@ docker compose up -d
 | `./input` / `./output` | 部署目录下同名子目录 | 输入与成品目录，**必须分开** |
 | `./data` | `./data` | SQLite（阅读进度 / 批注 / 账号 / 书库登记），务必落在持久盘 |
 | `AUTH_USER` / `AUTH_PIN` / `AUTH_SECRET` | `admin` / `changeme` / 占位串 | **仅首次启动初始化**，之后在界面「设置 → 账户」里改 |
-| `image:` 的 tag | `1.4.0`（钉死） | **升级就是改这一处**：改成目标版本再 `docker compose pull && docker compose up -d`。固定 tag 下 `pull_policy: always` 只会重新核对同一个 tag，不等于升级 |
+| `image:` 的 tag | `1.4.1`（钉死） | **升级就是改这一处**：改成目标版本再 `docker compose pull && docker compose up -d`。固定 tag 下 `pull_policy: always` 只会重新核对同一个 tag，不等于升级 |
 | `pull_policy` | `missing` | 本地已有镜像就不联网检查，断网也能启动；改成 `always` 则每次 up 都去 registry 核对上面那个 tag |
 | `# user: "1000:1000"` | 注释掉（=root） | 让挂载目录里的文件归某用户所有时取消注释。镜像已内置 `novelforge`（uid/gid **1000**）；群晖常见 `1026:100` 也可，但**必须先把宿主机目录 chown 成同一个 uid:gid**，否则启动时 `start.sh` 会直接报「哪个目录写不进去 + 该 chown 什么」 |
 | `# - HTTP_PROXY=…` | 注释掉（直连） | 容器要走代理才能访问书源 / 在线元数据时取消注释（Clash 跑在 NAS 主机上则填 `http://host.docker.internal:7890`） |
@@ -332,7 +332,7 @@ docker compose pull && docker compose up -d
 > 只执行 `docker compose up -d` 不会拉新镜像（`docker-compose.yml` 里默认 `pull_policy: missing`，这是刻意的：
 > 断网或 ghcr.io 访问受限时容器照样能启动）。
 >
-> **第 149 期起镜像 tag 是钉死的版本号**（如 `:1.4.0`），不再用 `:latest`：这样「现在跑的是哪个版本」
+> **第 149 期起镜像 tag 是钉死的版本号**（如 `:1.4.1`），不再用 `:latest`：这样「现在跑的是哪个版本」
 > 由 `docker-compose.yml` 说了算，`up -d` 不会把你悄悄带到别人的新版本上，也不会出现「本地已缓存旧
 > `:latest`、以为升级了其实没变」。升级做法：把 `image:` 的版本号改成目标版本 → `docker compose pull` →
 > `docker compose up -d`。若你确实想让它自己漂，把 tag 改回 `:latest` 并自行承担不可复现的代价。

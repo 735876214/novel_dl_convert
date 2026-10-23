@@ -10283,3 +10283,55 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
    判据要钉在**分流**（`.cbr` 的识别结果会不会被说出来）上，用 `monkeypatch` 给定 `analyze` 的返回，
    不要用「我以为最小的二进制样本」去赌第三方工具怎么解析它。这与第 5 期的教训同源：**能本地通过的用例不等于能表达契约的用例**。
 
+## 第 150 期（镜像 tag 的发布规则修正 + 发版 1.4.1（148/149/150 三期合集））
+
+> **需求来源**：用户「从GitHub上获取新的」。核对结果是**远端没有比本地更新的东西**（远端 main 就是我上一轮推的 `030ff38`，857 个 blob 与工作区逐字节一致），但核对过程里撞出两件真问题：① 我上一轮推的那笔 **CI 的 Tests 是红的**；② 「版本 tag」这套发布规则本身在漂移。用户选定：**修 CI tag 漂移 + 发版 1.4.1**。
+> **防回归判据**：`tests/test_hardening_149_deploy.py`（compose 的 tag 必须等于仓库 `VERSION`）+ `tests/test_changelog_render.py`（新版本段必须存在且上屏内容 == 取段结果）+ `tests/test_period_records_contract.py`（R7：`docs/TODO.md` 的版本字面量必须等于 `VERSION`）。
+
+### 一、`:VERSION` 这个 tag 为什么是坏的（证据）
+
+`docker-image.yml` 原来每次推 `main` 都推三条 tag：`:latest`、`:<VERSION>`、`:<sha>`。问题在第二条 —— 它**跟着每次 main 构建走**，于是：
+
+| 构建 | 提交 | `:1.4.0` 实际指向 |
+|---|---|---|
+| 第 147 期发版 | `d6a2fcb` | 第 147 期的内容 ✅ |
+| 第 148 期 | `c4894fe` | 被覆盖成第 148 期的内容 ⚠️ |
+| 第 149 期 | `030ff38` | 又被覆盖成第 149 期的内容 ⚠️ |
+
+也就是说：**同一个「1.4.0」先后是三种内容**。谁按 README 的建议把 compose 钉在 `:1.4.0` 上，拿到的其实不是当初发的那一版 —— 「钉住版本」这件事在最需要它的时候失效了（而且没有任何报错）。
+
+### 二、修法（三处同批）
+
+1. `.github/workflows/docker-image.yml`
+   - `tags:` 里**删掉** `:<VERSION>`，只留 `:latest`（最新一次 main 的构建，会漂，但语义明确）与 `:<sha>`（**不可变**，任何时候都能精确指回某一笔提交）；
+   - `checkout` 加 `fetch-depth: 2`：要判断「这次提交有没有改 `VERSION`」，得看得见上一提交；
+   - 新增 `版本号变了吗` 步（`git diff --quiet HEAD^ HEAD -- VERSION`）；
+   - 新增**条件**步「版本变了 ⇒ 把 `:<VERSION>` 指向本次构建」：`docker buildx imagetools create -t …:<VERSION> …:<sha>` —— 只改 tag 指向、**不重建**（省一整个多架构构建），版本号没变时 `:<VERSION>` 保持上一次发布的内容不动。
+2. `VERSION` 1.4.0 → **1.4.1**；`CHANGELOG.md` 补 `## V1.4.1 — 2026-10-23` 段（把 148 / 149 / 150 三期一次交付；Release notes 与「新功能」页都读它）。
+3. `docker-compose.yml` 与 `README.md` 的 tag 示例同步到 `1.4.1`（`tests/test_hardening_149_deploy.py` 断言两者必须一致）。
+
+**为什么不在 `release.yml` 里补打版本 tag**：`release.yml` 用 `GITHUB_TOKEN` 推 `v*` tag，而这种推送**不会**再触发其他 workflow（GitHub 的限制）⇒ 版本 tag 只能在镜像构建这次运行里产生。这也解释了为什么原来把它塞进 `tags:`。
+
+### 三、顺带修掉的 CI 红（本机绿、CI 红）
+
+上一轮（第 149 期）的 Tests 运行是**红**的，红在我自己新写的一条用例：`test_cbr缺后端时给出能力原因` 造了一个「假 RAR 头」（`Rar!\x1a\x07\x00` + 64 个 0）当 `.cbr` 夹具。
+
+- 本机没有 bsdtar ⇒ `zipkind.analyze` 判 `broken`，理由里带 RAR ⇒ 断言「`RAR` in hint」通过；
+- CI 的 ubuntu runner **有 bsdtar** ⇒ 同一个文件被判 `empty`（「是个空容器」）⇒ 断言红。
+
+修法：判据钉在**分流**上（`.cbr` 的识别结果会不会被说出来），用 `monkeypatch` 给定 `analyze` 的返回，不再拿「我以为最小的二进制样本」去赌第三方工具怎么解析它。顺带把 `tests/test_changelog_render.py` 里「最新段必须以 `### 新功能` 开头」这条**硬编码撰写习惯**的断言，改成「上屏内容 == `changelog.section(version)`」—— 一个以修复为主的版本，首个分组叫「修复：…」完全正当，要防的是「notes 是空的 / 掺了别的东西」。
+
+### 四、核验
+
+- 目标用例：`test_hardening_149_deploy` / `test_changelog_render` / `test_version_contract` / `test_ci_actions_contract` / `test_update_config_contract` / `test_period_records_contract` **73 例全绿**；`docker-image.yml` 用 `yaml.safe_load` 解析通过（步骤顺序：Checkout → Read version → QEMU → Buildx → Login → Build and push → 版本号变了吗 → 版本变了 ⇒ 打 `:<VERSION>` → Ensure package is public）。
+- 全量：收 **2788** 例 / **2756 passed** / 14 skipped / 493.1 s，**18 例失败与本机环境有关**（与第 149 期同一批：无 `AF_UNIX` ×11、`bash -n` 只有 WSL 桩 ×4、符号链接需特权 ×2、仓库根守卫被本机绕开 ×1）⇒ 可比口径 **2770**，与上一期持平（本期没有新增用例）。
+- 版本一致性：`docs/TODO.md` §0 的 `VERSION` 字面量、`AGENTS.md` §4 基线、`VERSION` 文件、`CHANGELOG` 最新段、compose 的 `image:` tag **五处同源**（`period_close check` 0 问题、`check_doc_anchors` 硬错 0 条）。
+- 发布链路：推上去后 `Release` 会自动打 `v1.4.1` tag 并用 `CHANGELOG` 的 `V1.4.1` 段建 Release；`Build and Push Image` 因为「`VERSION` 变了」而把 `:1.4.1` 指向本次构建，同时照旧推 `:latest` 与 `:<sha>`。
+
+### 五、教训
+
+1. **「钉住版本」只有在 tag 不可变时才成立** —— 一个会被后续构建反复覆盖的版本 tag，比 `:latest` 更有害：它让人以为钉住了。
+2. **不可变的引用要留给机制，不要留给人记** —— `:<sha>` 从第 147 期起就一直在推，但没人拿它当回滚锚点；现在它有了明确职责。
+3. **本机绿 ≠ 契约成立** —— 第 149 期那条 `.cbr` 用例就是「我以为最小的二进制样本」，环境一换结论就翻转（详见第 149 期教训 6）。
+4. **CI 红了要当天查** —— 上一轮我推完只核了「commit 里 13 个文件都在」，没核 `Tests` 的结论；这次是用户让我去 GitHub 取新东西时才发现的。
+

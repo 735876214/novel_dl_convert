@@ -32,6 +32,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # 第 150 期：要判断「这次提交有没有改 VERSION」，得能看到上一提交
+          fetch-depth: 2
 
       # 版本号单一真值源：从仓库根 VERSION 文件读取，注入镜像 LABEL（见 Dockerfile 的 APP_VERSION）
       - name: Read version
@@ -63,16 +66,42 @@ jobs:
           provenance: false # 关掉来源证明清单，避免老版本 Docker / 群晖套件拉多架构镜像时解析异常
           build-args: |
             APP_VERSION=${{ steps.version.outputs.version }}
-          # 第 109 期（v1.0.0）起多推一个**版本 tag**：NAS 端可 `image: …:1.0.0` 固定住版本、
-          # 需要时回滚到上一个版本；`latest` 仍是「最新一次 main 的构建」。
+          # ⚠️ 第 150 期：这里**不再**直接推 `:<VERSION>`。它原来每推一次 main 就覆盖一次，
+          # 于是同一个 `1.4.0` 先后指过第 147 / 148 / 149 三种内容的构建 ——
+          # 「钉住版本号」反而失效（`pull :1.4.0` 拿到的不一定是当初发的那一版）。
+          # 现在三条 tag 各司其职：
+          #   `latest`    = 最新一次 main 的构建（会漂，用于「我要最新」）
+          #   `:<sha>`    = 这一笔提交的构建（**不可变**，任何时候都能精确指回来）
+          #   `:<VERSION>`= 只在**版本号变化**时指向本次构建（见下面「版本变了 ⇒ 打 :VERSION」）
           tags: |
             ghcr.io/735876214/novel_dl_convert:latest
-            ghcr.io/735876214/novel_dl_convert:${{ steps.version.outputs.version }}
             ghcr.io/735876214/novel_dl_convert:${{ github.sha }}
           cache-from: type=gha
           # `ignore-error=true`：缓存**导出**失败（GHA 缓存配额 / 竞态 / 网络）只记一条 warning，
           # 不把整个构建判红 —— 缓存是加速手段，不是交付物。第 145 期加。
           cache-to: type=gha,mode=max,ignore-error=true
+
+      # 第 150 期：`VERSION` 与上一提交比 —— 变了才说明「这是一次发布」。
+      - name: 版本号变了吗
+        id: verchg
+        run: |
+          if ! git rev-parse -q --verify HEAD^ >/dev/null; then
+            echo "changed=1" >> "$GITHUB_OUTPUT"          # 首个提交，按变了处理
+          elif git diff --quiet HEAD^ HEAD -- VERSION; then
+            echo "changed=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 只在版本号变化时改 `:<VERSION>` 的指向 —— 用 imagetools **只改 tag、不重建**
+      # （省一整个多架构构建）。版本号没变 ⇒ `:<VERSION>` 保持上一次发布的内容不变，
+      # 这正是「钉住版本」该有的语义。
+      - name: 版本变了 ⇒ 把 `:<VERSION>` 指向本次构建
+        if: steps.verchg.outputs.changed == '1'
+        run: |
+          docker buildx imagetools create \
+            -t ghcr.io/735876214/novel_dl_convert:${{ steps.version.outputs.version }} \
+            ghcr.io/735876214/novel_dl_convert:${{ github.sha }}
 
       # 公开镜像，确保 NAS 匿名即可 pull
       - name: Ensure package is public

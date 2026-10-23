@@ -49,9 +49,16 @@ def test_找不到版本段返回空串():
 
 
 def test_命令行入口_成功与失败(capsys):
-    """CI 的两条路：找到 ⇒ 0 且 notes 上屏；找不到 ⇒ 非 0 且**不产出空 notes**。"""
+    """CI 的两条路：找到 ⇒ 0 且 notes 上屏；找不到 ⇒ 非 0 且**不产出空 notes**。
+
+    第 150 期：这里原来硬断言「输出里含 `### 新功能`」—— 那是**撰写习惯**，不是取段的契约：
+    一个以修复为主的版本，首个分组叫「修复：…」完全正当。改成「上屏内容 == `section()` 的结果」
+    （真正要防的是「notes 是空的 / 掺了别的东西」），分组名不再被钉死。
+    """
     assert changelog.main([VER]) == 0
-    assert "### 新功能" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert out.strip() == changelog.section(VER).strip(), "上屏内容必须就是这一版段落的原文"
+    assert out.strip().startswith("### "), "段落应从第一个分组标题开始"
 
     assert changelog.main(["9.9.9"]) == 1
     assert "9.9.9" in capsys.readouterr().err
