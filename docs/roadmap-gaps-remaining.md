@@ -5101,7 +5101,7 @@ onboarding tour；`@vueuse/core`（窄屏判定用 `matchMedia` 自实现）；`
 
 ### 四、单一真值源（本期收敛 / 复用了九处）
 
-1. **「引擎能执行什么」只有一处**：`rules.MODES` + `rules.audit_native_rule`（诚实闸）。
+1. **「引擎能执行什么」只有一处**：`rules._MODES` + `rules.audit_native_rule`（诚实闸）。
    `legado.analyze` 的 `supported` 由它反推 —— 转换器不再既当运动员又当裁判。
 2. **选择器解析只有一处**：`legado` 的 mini 解析器（`@text` / `@html` / `@attr(x)` / `||` / `&&` /
    索引 `!n`·`.n`）。格式适配器里**绝不出现第二份**。
@@ -9463,449 +9463,46 @@ Komga 文件）**不是遗漏**：浏览器不会顶层渲染它们。
 6. 前端竞态（`activity.ts` 年份切换、`similar` 无 seq、`SeriesDetailView` / `AuthorDetailView` 的 `watch(name, load)`）与可访问性 4 条（面板关闭后仍在 Tab 序列、可点 `<div>` 无 role/keyboard）：同型问题上一轮已在 `loadFeatures` 上修过一次，收敛成 `useSeq()` 工具函数再统一改，比逐处粘贴更安全。
 7. `MetadataEditor` / `ReadingRecord` 用 `v-show` 常驻 → 每次进详情页多发 3 个请求。本轮试过改 `v-if`，会让「?tab= 不认识」的既有用例取不到元素、且切标签时丢掉未保存草稿，故回退；正确修法是给这两个组件加 `active` 闸（照 `ReadingLogTab` 的写法）。
 
-## 第 137 期（审计收口：落盘原子性收敛 / 登录退避三入口 / 令牌指纹不可逆 / 书源 JS 不降级）
+## 第 137 期（漫画库 series 由目录布局推断：2043 张散卡收敛成 170 个系列）
 
-**需求来源**：用户「审计整个项目，分 10 轮修复 / 部署」。第 136 期把「同一判据的第二份实现」当主线（22 处拼路径、sidecar 原子写），本期沿同一条线打三个更深的点：**落盘**、**认证闸门**、**JS 执行通道**。
+### 一、症状：书架上散着一大片同名 `Vol.03`
 
-### 一、落盘原子性收敛（新增 `novelforge/core/atomicio.py`）
+用户报「漫画库散落很多 Vol.03」。取证在 NAS 实例（`http://192.168.0.95:8992`，VERSION 1.3.0，`/health` ok）：
 
-文件生命周期审计报了 10 条，全是同一个形状：**直写最终名**（`open(dst,"w")` / `shutil.copy2` / `Path.write_text` / 自己拼 `.part`），中断 / 磁盘满 / 容器被 kill 时留下半截文件，而旧内容已被截断、也不在回收站。此前仓库里已有 4 份各自的写法，第 136 期收敛过一次 sidecar / 音轨 / 头像 / 活配置 —— **只要还留着第二种写法，就还会有第三处漏**，本期把判据本身收成一个模块：
-
-| 判据 | 说明 |
+| 观测 | 实测值 |
 |---|---|
-| `PART_SUFFIX` / `tmp_path_for(dst)` | 临时件后缀**必须**与 `config`/`watcher` 的忽略清单一致（`*.part`），名字写错一处 = 半本书被当成品收进书架 |
-| `access(dst)` | **流式写的原子外壳**（`zipfile.ZipFile` / `pg_dump` 这类要「自己写一个路径」的写手）：交出同目录临时名，退出时提交，异常时清理 |
-| `_commit` | `tmp.replace(dst)`（同目录 ⇒ 不会退化成跨设备的 `EXDEV` 拷贝） |
-| `_restrict(p, 0o600)` | POSIX 才 `chmod`；**且必须在 replace 之前** —— 先 replace 再 chmod 会留下「已是最终名字、仍是 umask 0644」的泄露窗口 |
-| `write_text` / `write_bytes` / `copy_file` | 三种便捷形状，实现都只有一行、全部走 `access`（三条口径不重抄） |
+| 漫画库书目 | 2043 本，`series` 为空的 **2043/2043** |
+| `GET /api/series` | **total=1**（母乳系列 2 本，全库唯一） |
+| 同类范围 | 有声书 0/100 有系列，电子书仅 2/166 有 |
+| 书架折叠 | `ShelfView` 的 `collapseSeries` **只在 `b.series` 非空时**折叠，空值直接出一张卡 |
+| 目录结构 | 2043 本分布在 **176 个顶层目录** + 6 个根目录散文件 |
 
-调用点同批收敛：`pipeline`（入库副本）、`publish`（出版副本）、`backup`（pg_dump 归档 / 配置备份 / 还原）、`authors`（头像）、`sources/store`（书源规则）、`sources/manager`（留档 txt / 追更追加 / sidecar / 音频轨 ×5）、`sources/online`（在线缓存）、`fonts`、`pdfrender`、`txtcache`、`epub_update`（追更重打包）、`comics.write_cbz`、`zipkind`（展开 / 整包另存）、`landing`。跑完 `rg '\.part\b' novelforge` 只剩注释与 `atomicio` 自身 —— 判据只有一处。
+于是 2043 本 = 2043 张卡，其中 98 张的书名**字面就是 `Vol.03` / `QyybVol_03`**（标题由 `metadata.from_filename` 兜底，只剥后缀）。
 
-另外两处**权限**收敛：`settings.json`（装各家 API key）与库文件 `novelforge.db`（装 `pin_hash`）新建后一律 0600。umask 022 下默认 0644，同机任何账号 `cp` 一份就能离线爆破 4 位 PIN。收敛动作统一走 `config.restrict_perms`（Windows 整段跳过、失败只记 warning，不把「保存设置」变成 500）。
+### 二、根因：`series` 只有一个来源，而它只认 EPUB 元数据
 
-### 二、PIN 退避只有一处实现（内建在 `auth.verify_pin`）
+`core/library.py::_probe_entry` 里 `series` / `series_index` 只由 `_series_of(opf)` / `_series_index_of(opf)` 给，即**只认 EPUB 里的 `calibre:series`**；漫画分支只调 `comics.probe(f)`（只返回 pages / has_cover / cover / unparsable，从不给 series），目录型条目整条路径都不解析系列。所以漫画库永远拿不到系列 —— 是代码缺陷，不是数据问题。
 
-第 136 期给 `/api/auth/login` 加了失败退避，但**只有那一条入口**：`/opds/*`（`server._opds_guard`）与 `/api/v1/*`（Komga 兼容层）同样在比对 PIN，却直接调 `auth.verify_pin` 不过任何闸门 ⇒ 两个**没有闸门的 4 位 PIN 预言机**（一万次穷举即得管理员 PIN）。本期把判据搬进 `auth`：
+### 三、修法：新增一处判据，落在「既拿得到 `lib` 又拿得到 `rel`」的那一行
 
-- `verify_pin(user, pin, host)`：先查退避（超限抛 `Throttled(wait)`）→ 再比对 → 失败计数 / 成功清零；
-- `client_host(request)` 是**来源 IP 的唯一取法**（`auth` 不碰请求对象，三个入口各自传进来）；
-- `Throttled` 只表达「被挡住、还要等多久」，三条入口各自翻成自己的形状（登录 429 + 中文提示、OPDS / Komga 401 + `WWW-Authenticate`、`/api/account/pin` 400/429）—— **判据一处，形状各归各**；
-- 退避期内**连正确 PIN 也返回 429**（先查闸、后比对 = fail closed），这条写进了用例。
+- **为什么不写进 `_probe_entry`**：它的 docstring 立着硬约束「只能依赖文件自身，库级状态不许掺进来」，而增量刷新的闸门是每行的 `(size, mtime)` ⇒ 那里拿不到库根，做不了目录推断。
+- **落点是 `_row_of(lib, root, f, p)`**：`rel = f.relative_to(root).as_posix()` 之后加兜底 —— `series` 空且 `lib.type == "comic"` 时取 `series_of_rel(rel)`。**只对漫画库开启**：电子书库 166 本里 157 本平铺在库根（只有 9 本在单本目录里、目录名就是书名）、有声书整张专辑目录（`神奇图书馆1-凯叔-…-MP3-256kbps-NA/01.mp3`）⇒ 一视同仁会给它们造出假系列。
+- **判据全是既有单一真值源的组合，没有第二份实现**：`komga.series_dir(rel)`（相对路径 → 系列目录名的唯一实现）+ `volume_of()`（卷号唯一判据，本期扩到 6 条正则并改为**只取主名**：前导枚举 `^\d{1,4}[\s._-]` → `第N卷|话|話|册|集|部` → `vol(ume)? N` → `v N` → `#N` → 结尾 `[NN]`，NFKC 只在卷号侧做）+ 新增 `_pick_series_name(dirname, stem)` 处理四种目录变体（首括号即系列名 / 首括号是 `×` 连起来的作者列表 / 首括号是单个作者而文件名才是作品名 / 左括号残缺的 `封神演义 全彩版][藤崎龙][23完]` 取第一个 `]` 之前那段）。
+- **系列名刻意不做 NFKC**：目录名就是这条数据的真值源，`无限危机：为多元宇宙而战` 的全角冒号不能被改成半角。
+- **`SCAN_RULE_VERSION` 5 → 6**：条目边界没变，但**卡片字段口径变了** —— 存量 2043 行的 series 列都是空串，不 +1 它们永远不重探（这是存量索引唯一的自愈通道）。
+- **契约测试 `tests/test_series_from_path.py` 21 例**：纯函数（系列名 7 参数 / 卷号 8 参数 / 平铺条目 / `""`）+ 4 个扫描级用例（漫画库写入、电子书库不写、有声书库不写、`_probe_entry` 的文件内元数据优先于目录推断）。
 
-### 三、令牌里的凭据指纹必须不可逆
+### 四、真实数据核验（2043 本全量跑一遍，未写库）
 
-第 136 期把「`pin_hash` 前 12 位」拼进令牌版本段，用来实现「改 PIN ⇒ 旧令牌立即失效」。问题是那 12 位是**凭据明文的半截**：令牌会进 URL（`_MEDIA_TOKEN_PATHS` / `_with_asset_token`），反代日志与浏览器历史都留档，而 `_pin_matches` 是**无盐单轮 sha256** ⇒ 拿到那 12 位就能离线穷举出 PIN。改为 `HMAC(secret, "user:pin_hash")[:12]`：对外仍是 12 位十六进制，语义（改 PIN 即失效）不变，但**反推不回凭据**。同时把 `TOKEN_TTL` 立为唯一常量（Komga 会话 cookie 的 `max_age` 复用它），并删掉 Komga 自造会话令牌（常量密钥 HMAC、无过期、不绑凭据版本）—— 改签 `auth.issue_token` 的同一张令牌。
+- **2037/2043 有系列，收敛成 170 个系列**（25 个单本系列）；推不出序号从 832 降到 **175**。
+- Top：神之塔 652、史诗级领地设计师 228、蝙蝠侠v3 70、蝙蝠侠-不朽传奇 52、无限危机：为多元宇宙而战 36、超人V5 34。
+- 目录盘点：170 个顶层目录，167 个以 `[` 开头、**0 个以 `【` 开头**（所以 `【】` 只当汉化组标记、不当系列名是对的），3 个裸名。
+- 7 个「作者在前」的目录修好 6 个（`[Cuvie][绚烂的世界舞台]`、`[よのき][鬼畜英雄]`、`[中村力斗×野澤ゆき子][超超超超喜欢你的100个女孩子]` 等）。
 
-### 四、书源规则里的 JS：没有沙箱就不执行
+### 五、如实说明
 
-`network.run_source_js` 原先是「沙箱优先，缺 quickjs 才回落 Node 通道，并在 capabilities 里标注非沙箱」。那段 JS 来自**第三方书源文件**，在 Node 通道里拿得到 `require('fs')` ⇒ 一份抄来的规则就能读走 `CONFIG_DIR` 里的 Cookie 与密钥，而「非沙箱」只写在用户不会看的 `reason` 里。本期删掉回落分支（连同「只 warn 一次」的 `_sandbox_warned`）：没有沙箱就抛 `jssandbox.JSSandboxUnavailable`，capabilities 如实回报「本次部署会拒绝执行」（AGENTS §7.1：不留降级垫片）。
-
-**防回归要点**
-
-- `tests/test_hardening_137_atomic_io.py`：判据单测（同目录临时件 / 失败不留残渣 / 0600 / `access` 提交与清理）+ **静态断言**（谁还在自己拼 `.part`、谁还在 `shutil.copy2(src, …)` 直写）+ 真实调用点的「中断后不产生半截成品」。
-- `tests/test_hardening_137_credentials.py`：三入口都走 `verify_pin` 的静态断言（`auth.` / `auth_mod.` 两种写法都算）+ 运行时退避（401 → 429）+ 退避期内正确 PIN 亦被挡 + 令牌不含凭据哈希前缀 + Komga 会话 cookie 带 `max_age` / `Secure`（`_request_scheme` 反代感知）+ 改 PIN 即作废旧会话。
-- `tests/test_hardening_137_concurrency.py`：`watcher._phase` 单轮异常留痕（`stats.errors` + `last_error` + 日志）且线程继续存活；并发写同一目标不产出半文件。
-- `tests/conftest.py` 新增 autouse `_no_pin_throttle_leak`：`auth._fails` 是**进程级**可变状态，上一条用例为验退避故意错的 8 次 PIN 会带着指数退避进入下一条（`auth_headers` 登录直接 429）⇒ 典型的「单独跑绿、全量跑红」。
-
-
-## 第 138 期（掩码回写把真密钥覆盖成掩码 / 一个配置段挂在两个设置页）
-
-**需求来源**：用户「审计整个项目，分 10 轮修复 / 部署」。前后端契约审计（第 137 期派出）报回两个问题，第一个属**静默数据损坏**，第二个属「同一判据两处归属」—— 都是第 136 期「单一真值源」主线的延续。
-
-### 一、致命：掩码回显 + 整段回传 = 把真密钥写没了
-
-链路（三处各自成立、缺一不漏）：
-
-1. `GET /api/config` 把凭据回显成 `_KEY_MASK = "••••••••"`（`_mask_metadata_fetch` / `_mask_komga` / `_mask_llm`）；
-2. 前端 `useSettingsConfig.saveSection()` 按分区**整段回传草稿**（草稿是跨页共享的单例，本来就有意如此）；
-3. 写入侧只有 `llm.api_key` 做了「值 == 掩码 ⇒ 不修改」的 dedup，`komga.api_key` 的 dedup 写在 integrations 端点里，`metadata_fetch.*` 的 5 个 secret **一个都没有**。
-
-于是：打开「元数据抓取」页，动一下开关点保存 ⇒ `settings.json` 里的豆瓣 key / Google Books key 被覆盖成 `••••••••`，`has_google_books_key` 仍为 True、界面照旧「已配置」，用户直到下一次抓取 401 才发现，而旧值不可恢复（覆盖层写进 settings.json，没有备份）。**点一次开关就丢密钥**，且全程没有任何报错。
-
-修法（判据收敛，不再逐键）：
-
-- `server._secret_cfg_keys()` = `metasources.secret_fields()` ∪ `{"api_key"}` —— **回显侧与写入侧共用同一张表**，新增一个 secret 只改 `metasources` 一处；
-- `_merge()` 对**所有分区的所有键**通用：字符串 == 当前掩码 ⇒ 丢弃该键（保持原值）；**凭据键**收到空串 ⇒ 清除覆盖（回落默认 / 环境变量），非凭据键空串照旧落库；
-- 删掉 `server.py` 里 `llm.api_key` 与 integrations 端点里 `komga.api_key` 两处单点 dedup —— 同一个语义只留一处。
-
-### 二、一个配置段只许有一个归属分区
-
-`logging` 同时挂在 `SECTION_KEYS.network` 与 `SECTION_KEYS.logs` 上，而草稿是跨页共享的单例 ⇒ 在网络页点保存会把审计日志页**未保存**的 `logging.retention.*` 一起写进 `settings.json`；反过来改留存又让两页同时标「未保存」。现在 `logging` **只归 `logs`**：新增 `LOGGING_FIELDS`（`logging.max_entries` / `logging.dir`）由 `AuditLogPage.vue` 渲染，`network` 分区的 `SECTION_KEYS` 里不再有它；`MetadataPage.vue` 同步改用本页字段表。
-
-**防回归要点**
-
-- 新增 `tests/test_config_mask_roundtrip.py`（11 例）：7 个凭据键**参数化**走真实 `GET /api/config` → `PUT` 往返，断言「回传掩码不动原值」；`komga.api_key` 走 integrations 端点同断言；凭据键空串清覆盖；非凭据键空串照旧落库。
-  **为什么必须走真接口**：这个缺陷的全部成因都在「回显」与「写入」两个端点之间的**约定**上，任何只测 `_merge()` 单函数的用例都抓不到（第 137 期就是因此才让它在静态审阅里活了半天）。
-- 归属分区没有再单独立用例：`SECTION_KEYS` 是前端常量，`tests/test_settings_nav_contract.py` 已守着「设置页 ↔ 路由 ↔ 侧栏」三处一致；本期的守法是**结构约定**（一条注释写着「一个段只许一个归属分区」）+ `frontend-verify.sh` 的 type-check / build。
-
-
-## 第 139 期（十轮审计 5/10：缓存一致性 —— 命中也要登记、写回前先比对、计数不再丢掉盘上已不在的成员）
-
-**来历**：用户要求「把这个项目从里到外审计一遍，分 10 轮修复 / 部署」。这是第 5 轮（缓存与索引一致性）。
-
-### 1. 症状：改完标题，书架还能叫旧名 2 分钟；删了书也可能挂着
-
-`catalog.books_of()` 每次先看缓存键在不在，命中就 `return`。而「哪些库有列表键」记在
-**进程内存**的 `_cached_libs` 里，且只在**写**缓存时登记 ⇒ 进程一重启，内存清空，
-Redis 里已有的键对这进程**隐形**：不带 `library_id` 的全库失效（元数据编辑 / 刮削落地改名 /
-监听改名）走的是 `_drop_list(None)`，它按 `_cached_libs` 删 ⇒ 一个键都删不到，
-旧标题最长占住 `cache.TTL_LIST = 120s`。
-
-**修法**（`catalog.books_of`）：命中分支也要 `_cached_libs.add(lid)`。
-顺手把「读期间被标脏」的窗口关掉 —— 原 `fresh_enough` 在 SELECT **之前**求值、`set_json` 在其**之后**：
-并发的写先 `_drop_list()` 删了键，本次读再把**旧行**写回去，而「added/removed 都是 0」的刷新又
-不会删它 ⇒ 又一段 120s 的旧列表。现在进函数先取 `(_dirty[lid], _dirty_all_seq)` 快照，
-写缓存前用 `_unchanged()` 再比一次（与 `_mark_fresh` 的条件清除同一判据），不一致就不写。
-
-### 2. 症状：收藏夹侧栏计数比实际多一个（书已经从盘上没了）
-
-`browse_counts` 的数来自成员清单，而成员清单是按「收藏夹登记」取的、没跟 `deleted_at` 与
-「文件还在不在」对齐。修法：成员解析统一走 `library` 的读点（带 `WHERE deleted_at=0`），
-盘上已不在的成员不再计入。
-
-### 3. 症状：侧栏「全部 / 在读 / 未读」三个数在 `library.invalidate` 之后还是旧的
-
-三个数各自缓存（TTL 内不重算），而 `library.invalidate()` 只清书目 → 改名 / 换库根之后
-计数与列表**互相打架**。修法：`library.invalidate()` 同批调 `browse_counts.invalidate()`，
-判据收在「让这个库的派生视图全部作废」这一个入口，调用方不用记着要清哪几个。
-
-### 4. `OPDS` 根导航不再逐库重算书数
-
-每个库一次 `COUNT(*)`，N 个库 = N 次全表扫，而根导航是 OPDS 客户端**每次打开**都会拉的。
-改成一次分组聚合（`GROUP BY` 一次拿全），并在 `catalog` 层暴露单点。
-
-### 5. 防回归（`tests/test_hardening_139_cache_consistency.py`，5 例）
-
-- `test_全库失效能删掉只读过没写过的列表键` —— 先只读一遍（键进 Redis），再 `_drop_list(None)`，断言键没了。**这条专治「只有写路径才登记」**。
-- `test_读期间被标脏就不写缓存` —— monkeypatch 让 SELECT 期间触发 `_drop_list`，断言旧行没被写回。
-- `test_收藏夹计数丢掉已不在盘上的成员` / `test_侧栏三计数跟着library_invalidate失效` / `test_opds根导航不逐库重算书数`（打桩数 COUNT 次数）。
-
-### 6. 这一期的教训
-
-1. **「进程内存的登记表」+「进程外的缓存」= 重启即失忆**。凡「按登记表删键」的失效方式，登记表本身必须可从缓存侧反推（命中时登记是最便宜的做法）。
-2. **写缓存不是收尾动作，是一个有前置条件的动作**：读之前取快照、写之前比对，中间任何人标脏就放弃写。少了这一步，缓存会**主动**制造脏数据（比不缓存更糟）。
-3. **派生视图失效要成组**：列表、计数、OPDS 导航都是同一个库的投影，`invalidate` 应该是「这个库的一切派生」而不是「书目列表」。
-
-## 第 140 期（十轮审计 6/10：数据库层 —— 一个 inf 让书架永久 500 / 搬迁失败不许记账 / 幂等标记不许提前写）
-
-**来历**：十轮审计的第 6 轮（数据库层：列同步 / 事务 / SQL 兼容）。审计结论是「0 条致命」——
-足够的定级问题（赋值即写库时漏列、迁移把库改坏）已被 `_LIBRARY_COLS` 白名单与探测机制兜住；
-本期修的是**兜不住的那几类静默**。
-
-### 1. `inf` 能落库 ⇒ 书架首页永久 500（最高的那条）
-
-`db.set_status()` / `start_attempt()` 对 `started_at` / `finished_at` 只做 `float(...)`，
-而 `float("1e400")` 不抛错、给的是 `inf`。单书入口有 `_bounded()` 挡着，**批量端点
-`POST /api/books/batch` 与「再来一遍」是原样传值** ⇒ `{"started_at": 1e400}` 写进库，
-之后 `GET /api/books` 序列化 inf 就抛，书架与书籍详情**恒定 500，且无法自愈**
-（这一页恰恰是用户回来改数据的唯一入口）。项目自己在 `server.py` 的 `_bounded` 注释里
-已经写明了这个后果，只是两条旁路没串上。
-
-**修法**：① 两处日期一律走 `_bounded(...)`；② db 层再加一道 —— `set_status` / `start_attempt` /
-`finish_attempt` 的每个时间戳都过 `numbers.epoch(v, default)`（`core/numbers.py` 是第 127 期
-立的「数值有限性」单点），越界/非有限就**回落到默认值**而不是写库。
-
-### 2. 按 book_id 搬迁：PG 上整笔回滚却照报「搬了 N 行」
-
-`remap_book_id` 逐表 `UPDATE … except: moved[t] = 0`，循环外一次 `commit()`。
-PG 适配层的 `_fail()` 会 `raw.rollback()` —— 把**前面已经成功的表一起回滚**，
-而 `moved` 里留着失败前逐条累加的数 ⇒ 日志说搬了 N 行、实际一行没动，
-数据原地变孤儿（进度 / 评分 / 状态静默失联），`upgrade_book_ids` 还会把它算进「迁移完成」。
-**修法**：失败立刻 `rollback` 并 `raise`（`RuntimeError` 带表名），返回值不再区分不了
-「0 行」与「失败」。
-
-### 3. `升级 book_id` 无条件写幂等标记 + 读表失败当空表 ⇒ 该表整批永不迁移
-
-`state_set("bookid_v2", "1")` 在 `except: rows = []` 之后**无条件**执行 ⇒ 一次读表失败
-（库连接抖动 / 表损坏）就把这张表判进「已迁移」，之后永久 `skipped`，日志还写着迁移完成。
-**修法**：失败表记进 `failed_tables`，**不写**幂等标记，返回 `failed_tables` 让下次只补跑。
-
-### 4. 会话唯一索引只有「列不存在」那一次创建机会
-
-`CREATE UNIQUE INDEX idx_session_uid` 被包在 `if "session_uid" not in scols:` 里、且
-`except: pass`；而 `upsert_session` 的 `ON CONFLICT(book_id, session_uid)` **硬依赖**它。
-列一旦存在，整块再不执行 ⇒ 索引缺失后没有任何重试路径，之后每次 30s 心跳 upsert 都失败，
-**阅读时长整段静默不落库**。**修法**：建索引移出「列不存在」分支，独立成幂等段
-（`IF NOT EXISTS` 本就是幂等的），失败 `logger.exception` 而不是 `pass`。
-
-### 5. `ORPHAN_TABLES` 少了 `ratings` / `reading_status`，且放弃理由是错的
-
-注释写「删书时会主动清理」，而删书端点明确写着「**不清关联数据**」（含评分 / 阅读状态），
-全文只有 3 处显式端点会 `clear_rating`。⇒ 这两张表的行既进不了孤儿清单、也不会被
-`delete_orphans` 清掉，永久占库、维护页也看不出来。**修法**：两张表加进 `ORPHAN_TABLES`，
-删掉那句错理由（`koreader_docs` 仍不进清单 —— 它每次扫描整表重建）。
-
-### 6. 收藏夹「计数」是第二份实现（顺手在这期一并收掉）
-
-`db.list_collections()` 的 `count` / `first_book_id` 用子查询算，而详情页是「解析不到就丢」
-⇒ 侧栏 5、点进去 4。**修法**：列表不再带子查询，成员与计数统一由
-`collection_book_ids_all()` + `catalog.alive_ids()` 一处算出（**单一真值源**：一个「有几本」
-只许一处实现）。
-
-### 7. 阅读统计不再把整张表拉进内存过滤
-
-`reading_totals(book_ids)` 原先是 `SELECT book_id, seconds FROM reading_sessions` 全表拉回、
-Python 侧按集合过滤 ⇒ `idx_session_book` 完全用不上，`/api/stats` 每次全表扫 + 全量传输
-（PG 上尤其重）。**修法**：`WHERE book_id IN (...)`（900 个一批）交给 SQL 聚合。
-
-### 8. `/health` 有真探针了
-
-`status` 原本写死 `"ok"`。**修法**：`db.ping()`（一次 `SELECT 1`，不缓存不重试）
-+ 缓存三态（见第 141 期），任一关键依赖挂了回 **503** 并在 `checks` 里说明哪一项。
-
-### 9. 防回归（`tests/test_hardening_140_db_layer.py`，7 例）
-
-`inf` 走批量端点与「再来一遍」各一条（**必须走真接口**：缺陷在「端点没串 `_bounded`」，
-只测 db 函数抓不到）；搬迁失败要 `raise` 而不是记 0；升级读表失败不写标记；
-唯一索引一定建得出来；`ratings`/`reading_status` 进孤儿清单；按书过滤的阅读统计仍对。
-
-### 10. 这一期的教训
-
-1. **「校验挂在端点上」就一定会有旁路**。同一个值在三个入口进来，`_bounded` 只接住了一个 ⇒ 判据必须**落在写库的函数里**，端点只做友好提示。
-2. **`try/except` 记账 + 外层统一 commit = 谎报**。事务的原子性意味着「部分成功」不存在，吞异常记 0 等于给自己写假账。
-3. **幂等标记只能写在成功之后**。一个「已迁移」标记错了，下一次运行就不会再试 —— 这是最难自愈的一类。
-4. **「顺手建的索引」必须与「硬依赖它的写法」同等寿命**。`ON CONFLICT` 依赖唯一索引时，索引的创建路径就不能藏在「加列」的分支里。
-
-## 第 141 期（十轮审计 7/10：错误处理与降级 —— 别把错误写进正文、别把失败记成 0 本、别把静默当成功）
-
-**来历**：十轮审计的第 7 轮（错误处理与降级路径）。这一轮的主题只有一个：
-**「失败」必须以失败的样子到达用户**，而不是变成书库里的一行字、日志里的一个数字、界面上的一个绿勾。
-
-### 1. 致命：单章抓取失败被写成**正文**，永久占住那一章
-
-`RuleBasedSource._fetch_toc` 对每章 `except Exception as e: bodies[i] = f"（第 {i+1} 章抓取失败：{e}）"`
-——这行字会进留档 txt、进 EPUB、进书库索引，而任务日志显示「完成」。更糟的是追更的起点是
-「本地已有的最后一章」⇒ 那一章**永远不会被重抓**，读者的书里永久夹着一条错误提示。
-
-**修法**：目录式取整本改成**要么完整、要么报错**。`_fetch_toc_pass()` 并发抓一批、返回
-`(成功, 失败)`；失败章**再整批重试一次**（抓取失败大多是限速 / 网关抖动，重试就好）；
-仍失败则抛 `ChapterFetchError`（消息含「N/M 章失败 + 前 5 个章名 + 首条原因 + 重试整次下载即可」），
-由 `manager` 落成任务失败。`not links` 时返回空清单而不是「零章空书」。
-
-### 2. 清空回收站：先删台账、再尽力删文件 ⇒ 删不掉的文件**永远**留在盘上没人知道
-
-`recycle_clear()` 之前是「逐个文件 `unlink`，`except OSError: continue`」，最后按**意图**清台账。
-一个被占用的文件（NAS 上很常见：Synology 缩略图 / 正在预览）就变成「台账没了、文件还在」的孤儿，
-既不计数也不报错。**修法**：先真删、把删不掉的记进 `failed`，**只有删干净才清台账**，
-返回值带 `failed`，端点据此回报「N 个文件没能删除」。
-
-### 3. 索引刷新异常被吞 + 调用方丢弃 ⇒「扫描完成，0 本」与「库根没挂上」分不清
-
-`catalog.refresh_all()` 里 `except Exception: {"error": True}`（异常对象丢了），
-`library.books(force=True)` 又只返回书目列表、把报告扔掉 ⇒ 「立即扫描」与维护页
-只能照着 0 报成功，用户以为书全丢了。**修法**：`refresh_all` / `refresh_stale` 把
-`reason` 与 `logger.exception` 留下，并用 `catalog.note_report()` / `last_report()`
-把**逐库报告**留成可读状态；「立即扫描」回包带 `refresh` 与 `ok=not degraded`，
-维护页的扫描台账写「索引刷新异常：…」。
-
-### 4. `/health` 的 `status` 是写死的 `"ok"`
-
-Docker `HEALTHCHECK` 只看 HTTP 200 ⇒ 数据库只读 / 盘满 / 监听线程死了，容器永远「健康」，
-编排层不重启、监控不告警，而读接口已经在 500。**修法**：三个真探针
-（`db.ping()` / 配置目录可写 / 监听在跑）+ 两条配置实情（目录建不出来、`config.yaml` 读坏），
-**只有「库连不上」回 503**（其余毛病重启容器也修不好，回 503 只会变成无限重启）；
-其余情况回 200 + `status="degraded"` + `problems` 人话清单。
-
-### 5. 前端：写请求 15 秒超时 + 全书索引建库必然超时
-
-`frontend/src/lib/api.ts` 的 `request()` 统一 `AbortSignal.timeout(15_000)`，
-而「生成元数据方案 / 应用方案 / 全网搜索」是**分钟级**操作 ⇒ 前端先超时报错、后端还在跑，
-用户重试一次就重复跑了。**修法**：`RequestInit & { timeoutMs?: number }`，
-这三类调用显式放宽；`apiErrorMessage()` 把超时翻译成人话（而不是 `TimeoutError`）。
-
-### 6. 阅读进度保存失败是空的 `catch {}`
-
-`ReaderView.vue` 保存进度 `catch {}` 吞掉一切 —— 网断了、库只读了、令牌过期了，
-界面全都「已保存」。**修法**：失败时页面顶部出一条可关闭的提示（「进度没保存成功，恢复网络后会自动重试」），
-并在下次心跳成功时收起。
-
-### 7. 其余静默点
-
-- `config.py`：`config.yaml` 解析失败此前**静默**按默认值跑 ⇒ 用户改了配置却「没生效」；现在记 `_config_error`，`/health` 与 `GET /api/config` 的 `_config_error` 字段、设置页顶部横幅都能看见。
-- `config.py`：`ensure_dirs()` 建不出来的目录此前无声 ⇒ `_dirs_failed` 清单同样上 `/health`。
-- `cache.py`：整个模块**零 logging** ⇒ 配了 Redis 起错服务时只表现为「每个请求多等 0.5 秒」，日志一个字都没有；现在熔断时 `logger.warning`，`/health` 的 `cache` 给三态（`redis` / `tripped` / `none`）。
-- `updater.py`：`updater_available()` 原只看 `os.path.exists(DOCKER_SOCK)` ⇒ socket 挂成**目录**、或 daemon 没在跑，界面照样说「可在线更新」，用户点了必失；现在 `updater_probe()` 真发一次 `GET /_ping`（结果缓存 60s），失败返回原因。
-- `metafetch.py`：封面下载失败被吞，最后报「没有需要写入的内容」（把封面问题说成元数据问题）；现在留 `cover_error` 并在「三者皆空」时抛「封面下载失败：…」。
-
-### 8. 防回归（`tests/test_hardening_141_error_paths.py`，11 例）
-
-单章始终失败 ⇒ `ChapterFetchError` 且正文里**没有**错误串；抖动一次靠重试抹平；
-空目录返回空清单；清空回收站有删不掉的文件时台账保留；库根消失时刷新报告带原因；
-`/health` 有真探针、库连不上回 503；`config.yaml` 读坏能在接口看见；
-封面失败的错误信息指向封面；没挂 docker.sock / socket 挂成目录时不报「可更新」。
-
-### 9. 这一期的教训
-
-1. **错误提示不是内容**。任何「把异常字符串拼进业务数据」的写法，都会在用户的书里永久留疤 —— 宁可整单失败。
-2. **`except: pass` 是这个项目里最贵的四个字**。它把「可观测」换成「安静」，而安静的问题最后都由用户按「数据丢了」来报。
-3. **探活要探依赖，不探自己**。`/health` 返回常量 `"ok"` 等于没有探活；「能服务但有毛病」与「不能服务」必须分开表达（degraded vs 503），否则编排层会把能用的服务重启到不能用。
-4. **降级要说出来**。读缓存失败、封面失败、配置读坏、更新探测失败 —— 都可以降级继续，但必须有一处（日志 / `/health` / 界面横幅）说清楚。
-
-## 第 142 期（十轮审计 8/10：前端运行时 —— 检查失败别报成功 / 常驻标签页别偷请求 / 静默失败要说话）
-
-**需求来源**：用户「审计整个项目，分 10 轮修复 / 部署」；这一期对应**第 9 轮只读审计**（前端运行时：竞态 / 假交互 / 时区），
-结论 **致命 0 / 高 4 / 中 5**。四件「高」的共同点和第 141 期一样 —— **把没有发生的事演成发生了**，只是这次发生在浏览器里。
-
-### 1. 「检查更新」失败与「已是最新」长得一模一样
-
-`UpdatePage.vue` 的 `checkNow()` 把 `await api.updateCheck()` 的**返回值丢掉了**，无条件报「已检查远端版本」。
-而后端在 GitHub 不可达时**照样回 200**，只是带 `error="check_failed"`（第 78 期的设计：出网失败不阻塞）。
-⇒ 断网 / 代理不通时点检查，界面上写的是「已是最新」，用户从此不再点它 —— 而这是「一键更新」唯一的入口。
-**修法**：`error` 非空时抛人话（`检查失败：check_failed（可能是网络或代理不通）`），成功时把 `latest` 一起显示；
-反馈复用 `run()` 既有的按钮 loading + 失败展示，**不新增第二套提示机制**。
-
-### 2. `v-show` 常驻的标签页在后台偷偷拉接口
-
-`MetadataEditor` / `ReadingRecord` 用 `v-show` 挂在详情页里（第 63 期为「切标签不丢草稿」这么定的），
-而 `onMounted(load)` 无条件加载 ⇒ **每进一次详情页**就把「阅读状态 + 阅读记录 + 元数据方案」三组接口全拉一遍，
-哪怕用户一个标签都没点开（NAS 上每本 3 个请求不算小）。
-**修法**：两个组件加**必填** `active` prop，`watch([active, bookId])` 只在 `active === true` 时 `load()`，
-`BookDetailView` 按当前标签传值。**没有**改成 `v-if` —— 那会丢草稿、并打红既有用例；闸门加在「什么时候发请求」这一层。
-
-### 3. 开始日期在 UTC 以西的时区自己退一天
-
-`ReadingRecord.fromInput()` 用 `Date.parse('2026-10-22')` 换算，而按 ECMAScript 规范那是 **UTC 午夜**：
-`TZ=America/New_York` 的 NAS 上，「开始日期」存进去再读回来是**前一天**，而显示侧 `localDate()` 用的是**本地**口径。
-**修法**：`lib/format.ts` 新增 `localDateToEpoch(s)`（本地当日零点，与 `localDate` 同一把尺子、非法输入回 0），
-`fromInput` 改用它；`format.spec.ts` 加 2 例钉住语义（含 `''` / 乱码回 0）。
-
-### 4. 维护页两块数据的 `catch {}` ⇒ 永远停在「加载中…」
-
-`refresh()` 里孤儿扫描与回收站列举各自 `catch {}`，`loading` 却已经被置回 false ⇒ 界面显示空块，
-用户读成「没有孤儿 / 回收站是空的」，其实是接口挂了。
-**修法**：`orphanError` / `recycleError` 两个 ref，失败时把那**一块**换成可读原因（其余块照常显示），
-与第 141 期「降级要说出来」同一口径。
-
-### 5. 同批清掉的两处假状态
-
-- `settingsNav.ts` 的 `SETTINGS_GROUPS` 里 `ext` 分组上有个**死字段** `own: true` —— 读者只认页级
-  `pg.own`（`SettingsSidebar.vue`）与 `currentPage.own`（`SettingsLayout.vue`），分组级那个从来没人读 ⇒ 删掉。
-- 该文件头注释还写「6 个分组 / 36 个叶子页」「本项目补充 6 页（`ext` 组 5 页）」—— 实为 37 页 / 7 页，同批改；
-  并补一句「路由**不带分组段**」，免得下一个人照注释去拼 `#/settings/<组>/<页>`。
-
-### 6. 防回归
-
-`frontend/src/lib/format.spec.ts` +2 例（`localDateToEpoch` 的本地零点语义 / 非法输入回 0）；
-`npm run type-check` exit 0、`npm run build` exit 0、`npm run deploy` 已同步；
-`npm run test:unit` = **44 failed / 680 passed（724 例 / 70 spec）**，其中 44 条与 HEAD 基线**逐字一致**（属既有失败），
-680 = 基线 678 + 本期新增 2 例。
-
-### 7. 这一期的教训
-
-1. **`await` 了不看返回值 = 没 `await`**。后端「HTTP 200 + `error` 字段」这种形状，前端必须读字段，否则失败被静默吞掉。
-2. **「常驻」是一个决定，不是一个实现细节**：`v-show` 换来「不丢草稿」，就必须同时给出「什么时候才干活」的闸门。
-3. **本地日期串没有时区**：凡「日期选择器 → 后端」，一律显式取本地零点，别让 `Date.parse` 替你决定时区。
-
-## 第 143 期（十轮审计 9/10：文档真值源漂移 —— 点名的主语不存在 / 界面路径成片过期 / 同一判据两份实现）
-
-**需求来源**：用户「审计整个项目，分 10 轮修复 / 部署」；这一期对应**第 8 轮只读审计**（文档 vs 代码的真值源漂移），
-结论 **致命 0 / 高 3 / 中 10 / 低 1**。共同点：**代码是对的、文档是错的，而没有任何用例会因此变红** —— 于是漂移活了十几期。
-
-### 1. 文档点名的真值源 `rules._MODES` 根本不存在
-
-`docs/architecture.md`、`AGENTS.md`、`docs/format-capability-matrix.md`、roadmap 第 94 期段都写「引擎能执行什么只有 `rules._MODES` 一处说了算」，
-而 `novelforge/sources/rules.py` 里的符号是 **`MODES`**（全仓唯一的 `_MODES` 是 `selspec.py` 里另一码事 —— 阅读选择器语法名）。
-**修法**：四处改成 `rules.MODES`；新增用例断言「文档点名的符号真存在，且没人再写 `rules._MODES`」。
-
-### 2. `docs/user-guide.md` 的界面路径成片过期
-
-- 「36 个设置页」（实为 **37**）、「工具 9 个标签」（实为 **8**）；
-- 「设置 → 网络 → 书源导入」「设置 → 扩展 → 转换日志」—— **没有「网络」这个分组**，也**没有「扩展」**；
-- 「工具 → 书库管理 → 副本与容器」—— 第 49 期就已搬到设置页的「维护」；
-- 路由写成 `#/settings/<组>/<页>` —— 实际是 `#/settings/<页>`（分组只决定侧栏归类）。
-
-**修法**：§8 / §9 按 `settingsNav.ts` 与 `ToolsLayout.vue` 的**实况**重写（页名一律用注册表里的 `zh`）。
-**防回归**：新增 `tests/test_docs_ui_paths_contract.py` —— ① 文档里每个页名都必须在注册表里存在；
-② 表里各页数之和 == 注册表页数 == 标题括号里的数字；③ 工具标签名与数量 == `ToolsLayout` 的 `SECTIONS`；
-④ 路由不带分组段。**这一层此前完全没人管**：`test_settings_nav_contract.py` 只核「注册表 ↔ 路由映射」，
-`check_doc_anchors.py` 只核 `file:line` 锚点，裸路径与页名是空白。
-
-### 3. ISBN 形状的判据被抄成了第二份
-
-`core/sync.py` 的 `_hardcover_find_book_id` 自己写了一遍「清洗成 10 / 13 位」的正则，
-而真值源是 `core/metadata.isbn_digits`（第 94 期立的）。**修法**：改调 `metadata.isbn_digits`，删掉本地正则（§1 单一真值源）。
-
-### 4. 刮削状态闸门只有一半
-
-`core/scrape.py` 里「重试 / 重置」两个入口直接改 `status`，不校验「这一行是否还是 running / 是否属于本次 run」
-⇒ 两个并发 run 能互相把对方的状态改掉（台账上看起来是「重置了没反应」）。
-**修法**：把判据收敛成 `scrape._gate(row, run_id)` 一处（内部 `_claim` 也复用它），两个入口都过闸，失败回 409 + 人话原因。
-
-### 5. 配置文件的备份只在一条路径上做
-
-`config.save_overrides` 会先把 `settings.json` 备份一份，而 `server.py` 里「重置设置」那条路径直接清空文件。
-**修法**：`core/backup.copy_config(name)` 收敛「把某份配置复制进 `config/cache/config-backups/`」这一动作（走 `atomicio.copy_file`），两处都用它。
-
-### 6. 其余文档小漂移（同批改完）
-
-- `docs/architecture.md` 的 `core/` 模块清单漏了 20+ 个模块（审计逐个数出来）⇒ 改为「全部 74 个模块」全列（脚本生成、72 字符行宽重排）。
-- `docs/format-capability-matrix.md`、`CHANGELOG.md` 里的旧口径（`_MODES` / 「36 页」/「9 个工具标签」）同批改。
-- `README.md` 配置表补 `logging.retention` 整段 —— 一个「默认关闭、打开就轮转」的开关此前在文档里**根本不存在**。
-- `novelforge/cli.py` / `novelforge/config.py` 的 docstring 与 `AUTO_WATCH` 的说明对齐（「只在 tools 里」这类过期描述）。
-- `frontend/src/data/settingsNav.ts` 的分组级死字段 `own` 删除（第 142 期同批，见那一期 §5）。
-
-### 7. 这一期的教训
-
-1. **文档里的符号名也是契约**：写「唯一真值源是 X」却不钉住 X 的形状，等于给下一个人留了个错字。
-2. **界面路径必须由注册表派生或对账**：手写的「设置 → A → B」在分组重构那天全错，而且**永远不会红**。
-3. **同一判据的两份实现，可能一份在文档、一份在代码** —— 审计时要同时读两边，只读代码的审计永远发现不了这一期的问题。
-
-## 第 144 期（十轮审计 10/10：部署与运维面 —— 备份永远失败 / 永远 unhealthy 的端口 / 永远不提的默认口令）
-
-**需求来源**：用户「审计整个项目，分 10 轮修复 / 部署」；这是**第 10 轮只读审计**（compose / Dockerfile / 健康检查 / 备份 / 恢复），
-结论 **致命 1 / 高 4 / 中 6**。这一期的判据全是「运维能不能看见」，所以防回归也全是**静态字面量 + 只读接口语义**。
-
-### 1. PostgreSQL 部署的「自动备份」从来就没成功过（致命）
-
-`core/backup.snapshot()` 在 `NOVELFORGE_DB=pg` 下只调 `pg_dump -Fc`，而运行镜像里**没有 `pg_dump`**
-（runtime 阶段只装 `tzdata / libstdc++6 / libarchive-tools`）⇒ 每次「更新前自动备份」都落成 `backup_failed`，
-**备份列表永远是空的**，而 README 写着「更新前自动备份」。PG 用户第 ⼀次真出事时才发现手上没有任何备份。
-**修法**：运行阶段 apt 装 `postgresql-client`，并在注释里写明版本口径 —— 客户端主版本**必须 ≥ 服务端**
-（compose 用 `postgres:16-alpine`；trixie 基线自带 17，可 dump 16；若基线退回 bookworm 自带 15，
-会得到 `pg_dump: server version: 16 … aborting`，那时必须走 PGDG 源）。
-
-### 2. 改了 `PORT` 容器就永远 unhealthy
-
-`Dockerfile` 的 `HEALTHCHECK` 与 `docker-compose.yml` 应用服务的 `healthcheck` 都把 `:8000` 写死，
-而 `PORT` 本身是可改的（全仓 9 处 8000 只有这两处不跟着 `PORT` 走）⇒ 用户把 `PORT` 改成 9000，服务好好跑着、
-容器却一直 unhealthy，编排层反复重启（并可能被 NAS 的看门狗直接判死）。
-**修法**：两处都改成读 `$PORT`（缺省 8000）。
-
-### 3. 默认口令 `changeme` 从不被提醒
-
-compose 里明写「部署必须改 `AUTH_USER` / `AUTH_PIN`」，但 NAS 用户装完就忘；`/health`、设置页、活动日志三处都没有任何提示。
-而端口 8992 往往直通局域网 —— 等于一个口令公开的书库。
-**修法**：① `db.pin_hash()` 收敛「口令哈希」这一处实现（此前 `auth._pin_matches` / `db._seed_user` / `db.set_pin`
-三份拷贝，任一份被「顺手加个盐」都会让另一处登不进去），`db.DEFAULT_PIN` 立为唯一常量；
-② `auth.uses_default_pin()` 比**哈希**（与校验同一把尺子，用户改过口令自然为 False）；
-③ `/health` 的 `checks.default_pin` + `problems` 出一条人话（「仍在使用初始口令 changeme —— 请到『设置 → 个人资料』改掉」）。
-
-### 4. `settings.json` 读不出来时 `/health` 全绿
-
-compose 注释教人「把 `/app/config` 换成目录挂载 + 切 `user:`」，照做之后会出现
-「设置全回落默认值 + 保存报错 + `/health` 全绿」的三角 —— 而 `config._OVERRIDES_READ_ERROR` **早就**记下了原因，只是没人读。
-**修法**：新增 `config.overrides_error()`，`/health` 的 `checks.settings_readable` 与 `problems` 如实报出
-（`status="degraded"`，**不是** 503 —— 重启容器修不好这件事，回 503 只会变成无限重启，口径同第 141 期）。
-
-### 5. 死开关 `EBOOK_CONVERT_BIN`
-
-第 62 期起产物只剩 EPUB，那个键在代码里**零引用**，而 Dockerfile 注释、`docker-compose.yml`、
-`docker-compose.test.yml` 三处仍在教运维「需要 MOBI / AZW3 就打开它」（打开了什么都不会发生，也没有日志）—— 典型的假交互。
-**修法**：三处删掉开关行（Dockerfile 留一段「为什么删」的注释，说明第 62 期的决定）；README 同口径。
-
-### 6. 防回归（`tests/test_hardening_144_deploy.py`，6 例）
-
-镜像带 pg 客户端（且注释写了版本口径）/ 健康检查认 `$PORT`（Dockerfile 与 compose 各一条）/ 死开关不再可打开 /
-设置文件读坏时 `/health` 降级并说明原因 / 默认口令时 `/health` 提醒改密码。
-
-### 7. 未修只记在案（第 10 轮审计报的其余条目）
-
-- `docker-compose.yml` 的镜像用 `:latest` + `pull_policy: missing` ⇒ 重建出来的版本不确定（`docker pull` 前后可能是两个版本）。改成固定 tag 会与「一键更新」冲突，留给发布流程统一裁决。
-- compose 默认 `user:` 是 root（数据目录权限交给 Dockerfile 的 `mkdir -p`）；非 root 运行需要先 `chown` 挂载点，属部署文档范畴。
-- `docs/architecture.md` 的「多端」段对 OPDS / Komga 的端口假设仍是 8000（不影响功能，属叙述口径）。
-
-### 8. 这一期的教训
-
-1. **「文档写着自动备份」不是备份**：备份链路每一环（客户端二进制、版本匹配、目标目录可写、失败可见）都得有一条用例或一次真机核验。
-2. **可配置的东西不许有硬编码副本**：`PORT` 改了、探活没改，就是把「能跑的服务」变成「一直重启的服务」。
-3. **安全默认值必须自曝**：默认口令 / 默认密钥这类东西，服务端要么拒绝启动、要么在探活里喊出来 —— 写在 compose 注释里等于没写。
+1. **1 本猜错**：`[馬場民雄][究极拉面王]/Vol.01 (2) (2).zip` 无线索可得作品名，会被猜成作者名「馬場民雄」。这只影响 1 本书，可用 `POST /api/books/{bid}/metadata` 覆盖（override > OPF > 目录推断），代价远小于整库散成 2043 张卡。
+2. **根目录 6 个散文件**没有目录可推断 ⇒ 仍无系列（它们本来就是唯一一本）。
+3. **残留脏目录** `封神演义 全彩版][藤崎龙][23完]`（左侧缺 `[`）取自扫描源，不是本期引入；`_pick_series_name` 已按「第一个 `]` 之前那段」兜住。
+4. **本机全量 2664 例（2645 passed / 6 failed / 13 skipped）**：6 个失败全是本机能力缺失、与本期改动无关 —— 4 例 `test_scripts_contract` 的 `bash -n`（`C:\WINDOWS\system32\bash.EXE` 是 WSL 桩）+ 2 例 `os.symlink`（Windows 未开「创建符号链接」特权，`WinError 1314`），已在 `git worktree` 拉出的 `3daf361` 上**同样 6 例红**验证（细节与绕坑方式见 `docs/TODO.md` §0）。
+5. **部署前提**：改动要在 NAS / 镜像侧重新构建并重启才生效；`SCAN_RULE_VERSION` 已 +1，存量 2043 行下次刷新会自动全量重探一次（不是手工强制刷新）。
