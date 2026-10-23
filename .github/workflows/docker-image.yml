@@ -39,7 +39,10 @@ jobs:
       # 版本号单一真值源：从仓库根 VERSION 文件读取，注入镜像 LABEL（见 Dockerfile 的 APP_VERSION）
       - name: Read version
         id: version
-        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+        # ⚠️ 第 150 期：必须去掉 `\r`。`$(cat VERSION)` 只吃掉行尾 `\n`，CRLF 文件会把 `\r`
+        # 留在版本号里，于是镜像 tag 变成 `1.4.1<CR>`，`docker buildx imagetools` 报
+        # `ERROR: invalid reference format`（实测踩过）；`build-args` 也会带上这个脏字节。
+        run: echo "version=$(tr -d '\r\n' < VERSION)" >> "$GITHUB_OUTPUT"
 
       # 多架构：x86 NAS 与 ARM NAS（群晖部分机型 / 树莓派）都能直接 pull
       - name: Set up QEMU

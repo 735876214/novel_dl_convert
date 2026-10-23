@@ -27,6 +27,20 @@ def test_health_exposes_version_matching_single_source(client):
     assert body["version"], "版本号不应为空"
 
 
+def test_VERSION_文件必须是单行且不带CR():
+    """第 150 期：`VERSION` 里的 `\r` 会被 CI 原样带进镜像 tag。
+
+    `$(cat VERSION)` 只吃掉行尾的 `\n`，所以 CRLF 文件读出来是 `1.4.1\r`；CI 拿它去
+    `docker buildx imagetools create -t …:1.4.1<CR>` 时 docker 报
+    `ERROR: invalid reference format`（第 150 期的镜像构建就是这么红的）。
+    真值源本身就不该带空白，这里钉死。
+    """
+    raw = (ROOT / "VERSION").read_bytes()
+    assert b"\r" not in raw, "VERSION 不能有 CR（CI 会把 \r 带进镜像 tag）"
+    assert raw.endswith(b"\n") and raw.count(b"\n") == 1, "VERSION 必须是单行、以单个换行结尾"
+    assert raw[:-1] == raw[:-1].strip(), "VERSION 不能有前后空白"
+
+
 def test_版本真值源就是仓库根的VERSION文件():
     """`_read_version()` 必须原样给出仓库根 `VERSION` 的内容（别读别处、别加工）。"""
     expected = (ROOT / "VERSION").read_text(encoding="utf-8").strip()

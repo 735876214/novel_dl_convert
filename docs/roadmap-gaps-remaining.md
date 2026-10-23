@@ -10298,7 +10298,20 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 | 第 148 期 | `c4894fe` | 被覆盖成第 148 期的内容 ⚠️ |
 | 第 149 期 | `030ff38` | 又被覆盖成第 149 期的内容 ⚠️ |
 
-也就是说：**同一个「1.4.0」先后是三种内容**。谁按 README 的建议把 compose 钉在 `:1.4.0` 上，拿到的其实不是当初发的那一版 —— 「钉住版本」这件事在最需要它的时候失效了（而且没有任何报错）。
+也就是说：**同一个「1.4.0」先后是三种内容**。实测（GHCR manifest 查询，第 150 期）：
+
+| tag | digest 前半 | 说明 |
+|---|---|---|
+| `latest` | `sha256:ad3962…` | 第 149 期（`030ff38`）的构建 |
+| `1.4.0` | `sha256:ad3962…` | **与 `latest` 同一个** —— 已被 149 期覆盖 |
+| `1.4.0` 应有的 | `sha256:990939…` | 即 `:d6a2fcb…`（第 147 期发版那笔）的内容 |
+
+> ⚠️ **历史 tag 没有回填**（如实记录）：要修就得往 GHCR PUT manifest，而本机的
+> `gh` token 只有 `gist / read:org / repo / workflow` 四个 scope（没有 `write:packages`），
+> `PUT /v2/…/manifests/1.4.0` 直接 403。修法二选一：① 用 `gh auth refresh -s write:packages`
+> 换一个带包权限的 token，再 `PUT`（把 `sha256:990939…` 的 index 原样 PUT 到 `1.4.0`，
+> 只改指向不重建）；② 在 CI 里跑一次 `docker buildx imagetools create -t …:1.4.0 …:d6a2fcb…`。
+> 从 1.4.1 起，`:VERSION` 不会再被覆盖，所以这个坑不会继续扩大。谁按 README 的建议把 compose 钉在 `:1.4.0` 上，拿到的其实不是当初发的那一版 —— 「钉住版本」这件事在最需要它的时候失效了（而且没有任何报错）。
 
 ### 二、修法（三处同批）
 
@@ -10326,6 +10339,13 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 - 目标用例：`test_hardening_149_deploy` / `test_changelog_render` / `test_version_contract` / `test_ci_actions_contract` / `test_update_config_contract` / `test_period_records_contract` **73 例全绿**；`docker-image.yml` 用 `yaml.safe_load` 解析通过（步骤顺序：Checkout → Read version → QEMU → Buildx → Login → Build and push → 版本号变了吗 → 版本变了 ⇒ 打 `:<VERSION>` → Ensure package is public）。
 - 全量：收 **2788** 例 / **2756 passed** / 14 skipped / 493.1 s，**18 例失败与本机环境有关**（与第 149 期同一批：无 `AF_UNIX` ×11、`bash -n` 只有 WSL 桩 ×4、符号链接需特权 ×2、仓库根守卫被本机绕开 ×1）⇒ 可比口径 **2770**，与上一期持平（本期没有新增用例）。
 - 版本一致性：`docs/TODO.md` §0 的 `VERSION` 字面量、`AGENTS.md` §4 基线、`VERSION` 文件、`CHANGELOG` 最新段、compose 的 `image:` tag **五处同源**（`period_close check` 0 问题、`check_doc_anchors` 硬错 0 条）。
+- **首次构建失败与修法**（同一期内的第二次提交）：`docker buildx imagetools create` 报
+  `ERROR: invalid reference format`。真因不是 YAML，而是 **`VERSION` 文件本身是 CRLF**
+  （7 字节 `31 2e 34 2e 31 0d 0a`）：`$(cat VERSION)` 只吃掉 `\n`，`\r` 留在版本号里 ⇒ tag 成了
+  `1.4.1<CR>` ⇒ docker 解析不了引用。修法四处同批：① `VERSION` 改成 LF（6 字节）；
+  ② `.gitattributes` 加 `VERSION text eol=lf`（本机 `core.autocrlf=true`，不钉会被写回 CRLF）；
+  ③ workflow 读版本改成 `$(tr -d '\r\n' < VERSION)` 做防御；④ 新增
+  `tests/test_version_contract.py::test_VERSION_文件必须是单行且不带CR` 钉死。
 - 发布链路：推上去后 `Release` 会自动打 `v1.4.1` tag 并用 `CHANGELOG` 的 `V1.4.1` 段建 Release；`Build and Push Image` 因为「`VERSION` 变了」而把 `:1.4.1` 指向本次构建，同时照旧推 `:latest` 与 `:<sha>`。
 
 ### 五、教训
@@ -10333,5 +10353,8 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 1. **「钉住版本」只有在 tag 不可变时才成立** —— 一个会被后续构建反复覆盖的版本 tag，比 `:latest` 更有害：它让人以为钉住了。
 2. **不可变的引用要留给机制，不要留给人记** —— `:<sha>` 从第 147 期起就一直在推，但没人拿它当回滚锚点；现在它有了明确职责。
 3. **本机绿 ≠ 契约成立** —— 第 149 期那条 `.cbr` 用例就是「我以为最小的二进制样本」，环境一换结论就翻转（详见第 149 期教训 6）。
-4. **CI 红了要当天查** —— 上一轮我推完只核了「commit 里 13 个文件都在」，没核 `Tests` 的结论；这次是用户让我去 GitHub 取新东西时才发现的。
+4. **真值源文件的行尾也是契约** —— `VERSION` 里一个看不见的 `\r` 能让多架构构建白跑十分钟，
+   而本地所有用例都是绿的（`_read_version()` 里 `strip()` 把它吃掉了）。凡是「被 shell 读走」的
+   文件，行尾必须钉成 LF 并有断言。
+5. **CI 红了要当天查** —— 上一轮我推完只核了「commit 里 13 个文件都在」，没核 `Tests` 的结论；这次是用户让我去 GitHub 取新东西时才发现的。
 
