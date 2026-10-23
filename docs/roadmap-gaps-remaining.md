@@ -9992,3 +9992,129 @@ compose 注释教人「把 `/app/config` 换成目录挂载 + 切 `user:`」，�
    只在 `comic` 上开不是「最小改动」，而是**唯一正确**的开关。
 5. **部署前提**：`127.0.0.1:8992` 不通，运行实例只在 NAS（`http://192.168.0.95:8992`，VERSION 1.3.0）；
    本期改动要在 NAS / 镜像侧重构建并重启才生效，届时存量 2043 行靠 `SCAN_RULE_VERSION` 差异自动全量重探一次。
+## 第 146 期（GitHub 上反复报错的三个真因：源码目录被静默忽略 / 层缓存并发写 / 空目录不进 clone）
+
+**需求来源**：用户「解决一下 GitHub 上面经常报错的问题」。做法是把仓库里 **300 次 workflow run** 逐条过一遍，
+把非 success 的 **51 条**全部下载日志核对（不是看标题猜），归结成三个原因：
+
+| 条数 | 挂在哪 | 报错原文 | 真因 |
+|---|---|---|---|
+| **49** | `Build and Push Image` | `npm run build` → `No such file or directory` | `.gitignore` 里 `input/` 没写前导斜杠 ⇒ 匹配**任意层级**同名目录，`frontend/src/components/ui/input/` 从未入库 |
+| **1** | `Build and Push Image` | `error writing layer blob: not_found` | 两次构建同时往同一份 GHA 层缓存写 |
+| **1** | `Tests` | `RuntimeError: Directory .../novelforge/static does not exist` | git 不跟踪空目录，而 `server.py` **导入期**就把 `static/` 挂给 `StaticFiles` ⇒ 整轮 pytest 一条没跑到就退 |
+
+另有每笔推送挤出的若干 `Release → cancelled`（同一 ref 连推两笔，旧 run 被取代）—— 不是失败，但是噪音。
+
+### 1. 49/50 的构建失败 = 源码目录从未进过仓库（第 105 期根因的复核）
+
+`.gitignore` 的模式**不写前导斜杠就匹配任意层级**：`input/` 这条把 `frontend/src/components/ui/input/`（一个**源码**目录）
+一起吞了。本机文件一直在（所以本机构建永远绿），只有从 clone 构建才报 `No such file or directory` —— 这类缺陷
+**在开发机上永远看不出来**。第 105 期把运行时目录一律锚定仓库根（`/input/` `/output/` `/cache/` …），
+并加了 `git ls-files --others --ignored --exclude-standard -- frontend/src novelforge` 的复验；这一期把它与
+「空目录 keeper」一起固化成 CI 面判据（见第 3 节）。
+
+### 2. 基础设施抖动不许把构建判死：并发组 + 缓存导出 `ignore-error`
+
+- **`concurrency`**：三个 workflow 都声明了并发组 —— `tests` / `docker-image` 按 ref 取消旧的（`cancel-in-progress: true`），
+  `release` **不取消**（发布中的 tag 不能被后来的推送吞掉）。镜像构建另加 `timeout-minutes: 45`：宁可因「太慢」失败，
+  也不要一个 run 挂几小时不动。
+- **`cache-to: type=gha,mode=max,ignore-error=true`**：缓存是**加速手段、不是交付物**，导出失败只记一条 warning
+  （`layer blob: not_found` 就是这一档 —— 两次构建同写一份层缓存撞出来的）。
+- 顺带把 `docker-image.yml` 的 CRLF 行尾统一成 LF：`*.sh` / `Dockerfile` 早有 `.gitattributes` 钉子，`*.yml` 没有，
+  而这条 workflow 是历史上唯一一份 CRLF 的。
+
+### 3. 「空目录不进 clone」是整轮一条没跑到级别的故障
+
+`server.py` 在**导入期**把 `novelforge/static/` 挂给 `StaticFiles`，而 git 不跟踪空目录 ⇒ 从 clone 装出来的环境
+`import novelforge.server` 直接 `RuntimeError`，pytest 连收集都做完就退（2026-10-19 那次 Tests 红即此）。
+`.gitkeep` 当天补上了，但**没有用例钉住** —— 这一期补两条：
+`tests/test_source_tracking_contract.py::test_空目录的_keeper_必须在库里`、
+`tests/test_ci_actions_contract.py` 的 concurrency / 缓存导出两条静态判据。
+
+### 4. 防回归（`tests/test_ci_actions_contract.py` 4 例 + `tests/test_source_tracking_contract.py` 1 例）
+
+每个 workflow 都声明了 `concurrency`（新增 workflow 会被逼着想一遍）/ 镜像构建的 `cache-to` 带 `ignore-error=true` /
+`.github/workflows/*.yml` 里用到的 action 都在已登记的大版本上且白名单一一对应 / `novelforge/static/.gitkeep` 必须在库里。
+
+### 5. 这一期的教训
+
+1. **「CI 红」和「代码回归」是两件事**：先按报错原文分类（49 / 1 / 1），再决定改代码还是改流水线 —— 这三条里**没有一条**是产品代码的问题。
+2. **基础设施的失败模式也要有判据**：缓存竞态、空目录、并发写，都只能在流水线层看见；本地跑一万遍测试也照不出来。
+
+## 第 147 期（格式识别与书籍导入：同一份字节换个名字就有两种结论）
+
+**需求来源**：用户「进行 20 轮审查，重点放在格式识别、书籍导入等方面」。这一期的缺陷有一个共同形状 ——
+**同一份字节、换个文件名，系统给出两种结论**：`.zip` 走内容分派、`.cbz` 按后缀猜；页数与封面在两次开包里各算一次；
+标题里的 `&amp;` 在 OPF 里转义过、读回来却不还原。三条都会让书架**显示假的真值**（假页数、假封面、假标题），
+而且都不报错 —— 静默错是最坏的一类。
+
+### 1. `.cbz` 按后缀猜形态 ⇒ 改了后缀的 EPUB 被数成「1 页漫画」（静默错）
+
+`library._probe_entry` 原先只让 `.zip` 走 `zipkind.analyze`（内容分派），`.cbz` / `.cbr` 一律按后缀当漫画，
+再调 `comics.probe` 数页。而 `zipkind` 的模块文档自己写着「`.cbz` 与 `.zip` 在字节层面本就等价」——
+于是一份**改名的 EPUB**（`书.cbz`）里那张 `cover.jpg` 恰好被 `comics._keep` 算作一页 ⇒ 书架显示「1 页漫画」，
+点开是漫画阅读器里孤零零一张图；更糟的是**页数不为 0，第 123 期「0 页 ⇒ 后缀与内容不符」那道闸门也拦不住**。
+
+**修法**：归档书（通用容器 `.zip/.rar/.7z` **加**漫画后缀 `.cbz/.cbr`）一律走 `zipkind.analyze` 按内容定形态。
+命名仍分两档：`.zip/.rar/.7z` 由内容定名（图片档 ⇒ 归一成 `CBZ`，前端阅读器认的就是 `CBZ`），
+`.cbz/.cbr` 保留自己的后缀名。判据刻意用 `zipkind.is_container(f)` 而不是 `comics.is_comic(f)` ——
+后者**包含** `.zip/.rar/.7z`，拿它当「后缀已经是漫画名」会把 `.zip` 也排除掉，图片档就再也归一不成 `CBZ`。
+
+### 2. 「能不能按漫画读」与「几页、封面是哪张」必须出自同一次开包
+
+`comics.probe()` 只为了数页与取封面而独立开一次包，与 `zipkind.analyze` 是**两份判据**；
+两份一旦分叉，书架上那张封面与阅读器里的第 1 页就会是两张不同的图（排序口径不同时尤其明显）。
+**修法**：`zipkind.analyze` 直接给出 `pages` / `cover`（`_comic_facts()`，按 `comics._natural_key` 排序取第一张，
+与阅读器同序），`comics.probe()` **删除**（不留兼容垫片），`library._probe_entry` 的 `info.update(...)` 直接用这两个事实。
+
+### 3. OPF 纯文本字段只剥标签不解实体 ⇒ 书架上字面显示 `&amp;`
+
+标题 / 作者 / 出版社 / 语言 / 系列 / 题材六个字段各写了一遍 `re.sub(r"<[^>]+>", "", x).strip()` ——
+**只剥标签、不解实体**。于是 `<dc:title>Pride &amp; Prejudice</dc:title>` 在书架上**字面**显示 `Pride &amp; Prejudice`，
+作者里的 `O&#8217;Brien` 同理。真实语料（Standard Ebooks / 出版社英文书）里这类实体是**常态**，不是边角样例；
+而写侧 `fileops._set_text_element` 是 `escape` 过的 —— 读写不对称，出版副本被重新探测时必然变形。
+**修法**：新增 `library._plain()`（剥标签 + `html_unescape` **一次**）作为这六个字段的**唯一判据**；
+`_series_index_of` / `_isbn_of`（先还原实体再判形状：`&#45;` 也是连字符）/ `_subjects_of` 同批改走它。
+`dc:description` **不动**：它在真实 OPF 里常常是双写转义的 HTML 片段（`&lt;p&gt;…`），只需要解实体、**不能剥标签**，
+顺序与纯文本字段刚好相反，所以仍是独立函数。
+
+### 4. `probe_epub` 里 OPF 定位的第二份实现
+
+`probe_epub` 把「`META-INF/container.xml` 的 `full-path` → 退化首个 `.opf`」**原地又写了一遍**，
+而本文件另有 5 处调用点（`_cover_in` / `_pages_in` / `_spine_items` / `cover_path` / 写回）走的是 `_opf_path()`。
+两份判据分叉时，书目显示的信息与阅读器打开的将是**两个不同的 OPF**（同一本书说两套话）。
+**修法**：`probe_epub` 改用 `_opf_path(z)`，删掉那份内联实现。
+
+### 5. 「要先展开才能入库」的漫画后缀容器，没有任何按钮可点
+
+装在 `.cbz` / `.cbr` 里**不是图片序列**的书被探针记成 `unparsable`，理由写的是「要先展开才能入库」——
+但它**不在**「待展开」清单里（该清单只收 `zipkind.CONTAINER_FORMATS` 即 `.zip/.rar/.7z`），
+而把漫画后缀塞进那个常量又会把**整个漫画库**拖进待展开清单。于是那句话指向一个不存在的按钮。
+**修法**：`library.container_books` 的判据抽成 `_is_unpack_candidate()`，收两类：通用容器**且**没分派出形态，
+或后缀是漫画归档**且**书目上挂着 `unparsable` —— 读得动的 `.cbz` 一本都不会出现在这里。
+
+### 6. 防回归（`tests/test_import_identify_147.py` 12 例）
+
+装了 EPUB 的 `.cbz` 不许当一页漫画 / 图片 `.cbz` 与图片 `.zip` 同判且 `.zip` 归一成 `CBZ` /
+装文档的 `.zip` 仍是 `ZIP` 且如实标无法解析 / 页数与封面出自同一次分析且封面就是第 1 页 / 非漫画形态不带页数封面 /
+OPF 纯文本字段都解实体 / 写侧转义与读侧解实体往返对称 / 没有 `container.xml` 的 EPUB 退回首个 OPF /
+一个 OPF 都没有时如实报无法解析 / 归档书都走内容分派（参数化 `.cbz` `.cbr` `.zip` `.rar` `.7z`）/
+装文档的 `.cbz` 进待展开清单 / 普通 `.zip` 仍在待展开清单。
+同批更新三份既有用例（`test_epub_description.py` 的 title 断言按新口径、`test_format_audit_123.py` 不再调已删的 `comics.probe`、
+`test_zip_dispatch.py` 的注释口径）。
+
+### 7. 未修只记在案
+
+- `.cbr`（RAR 漫画）的「读不动」依赖系统 `bsdtar` / `unrar`：镜像里有、开发机不一定有 ⇒ 该档的 `unparsable`
+  在缺依赖时也会出现，理由文案统一写「要先展开才能入库」，不细分「缺工具」与「内容不是图片」。
+  要细分得先给 `zipkind` 一条「环境能力」判据，属另一期的事。
+- 待展开清单每次请求仍**现算**（每个候选开一次归档取 `unpack_plan`）。容器条目通常很少，且这是用户主动打开的工具页；
+  真到几百个容器时需要一份缓存 + 失效点，同样留给「清单真的变长」那天。
+
+### 8. 这一期的教训
+
+1. **等价的字节必须走同一条判据** —— 「后缀不同 ⇒ 结论不同」在导入面就是静默数据错误；写「`.cbz` 与 `.zip` 字节等价」的
+   注释与只给 `.zip` 走内容分派的代码，是同一份仓库里的两句互相打脸的话。
+2. **一处事实只开一次包** —— 页数、封面、「能不能读」分开算，迟早分叉；封面与第 1 页不是同一张时，用户不会报错，只会觉得「这软件有点怪」。
+3. **剥标签与解实体是两件事** —— 纯文本字段要「剥标签 + 解实体」，`dc:description` 要「解实体 + 不剥标签」，方向相反。
+   写侧 `escape` 了，读侧就必须 `unescape`，否则往返必变形。
