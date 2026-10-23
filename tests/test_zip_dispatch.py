@@ -68,7 +68,7 @@ def test_图文混装与多份文档都判不出_不猜(tmp_path):
 
 
 def test_坏包与空包(tmp_path):
-    """坏包如实报、空包如实报 —— 两者都**不抛异常**（与 comics.probe 同口径）。"""
+    """坏包如实报、空包如实报 —— 两者都**不抛异常**（与 ``comics.entries`` 同口径）。"""
     broken = tmp_path / "broken.zip"
     broken.write_bytes("这不是压缩包".encode("utf-8"))
     v = zipkind.analyze(broken)

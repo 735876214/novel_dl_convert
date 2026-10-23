@@ -147,17 +147,37 @@ def _junk(name: str) -> bool:
     return pathlib.PurePath(name).name.startswith(".")
 
 
+def _comic_facts(images: list) -> dict:
+    """漫画包的两条阅读事实：页数 + 封面条目。
+
+    ``images`` 来自 ``comics.names()`` 经 ``comics._keep`` 筛过、但**未排序**
+    （归档顺序）。取页第一页与 ``comics.entries`` 一样按 ``_natural_key`` 排 ——
+    封面必须与阅读器里的第 1 页是同一张，否则书架上的封面点和进去看到的不是一页。
+    """
+    if not images:
+        return {"pages": 0, "cover": ""}
+    return {"pages": len(images),
+            "cover": sorted(images, key=comics._natural_key)[0]}      # noqa: SLF001
+
+
 def analyze(path) -> dict:
     """判定容器里到底是什么。**只读、不改盘、不抛异常**。
 
-    返回 ``{kind, format, reason, readable, needs_unwrap, evidence}``：
+    返回 ``{kind, format, reason, readable, needs_unwrap, evidence, pages, cover}``：
     ``format`` 是该形态**对应**的书目 format（只有 ``comic`` 一档会被上层直接采用，
     其余各档上层一律记成 ``ZIP`` + 无法解析 —— 见模块文档）。
-    坏包 / 缺 RAR 依赖折算成 ``broken``（与 `comics.probe` 同口径，绝不抛异常）。
+    坏包 / 缺 RAR 依赖折算成 ``broken``（与 ``comics.entries`` 同口径，绝不抛异常）。
+
+    ``pages`` / ``cover`` 只在 ``comic`` 一档有值（其余恒 0 / 空串），给书目探测**直接
+    使用**：第 147 期起「这个容器能不能按漫画读」与「读出来有几页、封面是哪张」出自
+    **同一次开包**。此前书目扫描先按后缀猜（`.cbz` 一律当漫画）再调一次
+    ``comics.probe``（已随第 147 期删除）数页 —— 于是「`.cbz` 里装的其实是一份 EPUB」会被数成
+    「一本只有 1 页的漫画」（EPUB 里那张 `cover.jpg` 恰好算一页），页数不为 0，
+    连第 123 期那道「0 页 ⇒ 后缀与内容不符」的闸门都拦不住。
     """
     p = pathlib.Path(str(path))
     out = {"kind": "unknown", "format": _container_format(p), "reason": "", "readable": False,
-           "needs_unwrap": False,
+           "needs_unwrap": False, "pages": 0, "cover": "",
            "evidence": {"files": 0, "images": 0, "docs": [], "archives": 0, "sample": []}}
     # 「缺解压能力」与本文件坏要分开说：前者是**服务器**的问题（`.rar` 缺 bsdtar、`.7z`
     # 缺 py7zr），把它塞进下面那个 except 里会变成「不是可读的压缩包（ModuleNotFoundError）」
@@ -188,7 +208,7 @@ def analyze(path) -> dict:
         out.update(kind="nested", needs_unwrap=True,
                    reason=f"容器内还有 {len(archives)} 个压缩包，需要先展开")
     elif images and not docs:
-        out.update(kind="comic", format="CBZ", readable=True,
+        out.update(kind="comic", format="CBZ", readable=True, **_comic_facts(images),
                    reason=f"容器内是 {len(images)} 张图片，按漫画包读取")
     elif images and docs:
         # 「图片 + 文档」有两种：**漫画包顺带一份旁注**（说明 / ComicInfo.xml —— 常态，
@@ -204,7 +224,7 @@ def analyze(path) -> dict:
                               f"判不准该按漫画读还是按文档读（不猜）")
         else:
             notes = [pathlib.PurePath(n).name for n in docs[:3]]
-            out.update(kind="comic", format="CBZ", readable=True,
+            out.update(kind="comic", format="CBZ", readable=True, **_comic_facts(images),
                        reason=f"容器内是 {len(images)} 张图片（另有 {len(docs)} 份旁注文档："
                               f"{'、'.join(notes)}，按漫画读时忽略）")
             out["evidence"] = {**out["evidence"], "ignored_docs": [str(n) for n in docs]}

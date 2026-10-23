@@ -161,6 +161,12 @@ def test_其他字段不受影响(tmp_path, isolated):                          
 
     真实语料实测：title / creator / publisher / language 与真 XML 解析器
     **0/30 不一致** ⇒ 它们本来就是对的不许被这次修改波及。
+
+    ⚠️ 第 147 期改了口径（这条断言随之更新）：``&amp;`` 在 title 上**必须解开**。
+    原先「实测 0/30 不一致 ⇒ 这条路上没有实体可用」的推论是**采样不足**：
+    被测语料里没有一本英文书，而 ``&amp;`` / ``&#8217;`` 正是英文出版物 OPF 的常态。
+    现在 title / creator / publisher / language / 系列 / 题材一律走 :func:`library._plain`
+    （剥标签 + 解一次实体），与 ``fileops._set_text_element`` 的 ``escape`` 成为一对。
     """
     opf = ('<?xml version="1.0" encoding="utf-8"?>'
            '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">'
@@ -177,10 +183,8 @@ def test_其他字段不受影响(tmp_path, isolated):                          
     out = library.probe_epub(_epub_with_opf(tmp_path, opf))
 
     assert out["description"] == "<p>描述</p>", "描述解了实体"
-    # ⚠️ title 走 `_tag_text`（剥标签、**不解**实体）—— 这是**既有**行为，本次没改它：
-    #    真实语料里 title 与真解析器 0/30 不一致，说明这条路上没有实体可用（或解不解都一样）。
-    #    这里如实钉住**当前**行为，将来要不要给 title 也解实体是**另一件事**。
-    assert out["title"] == "书名 &amp; 副标题"
+    # title 走 `_tag_text` → `_plain`（剥标签 + 解实体，第 147 期）。
+    assert out["title"] == "书名 & 副标题"
     assert out["author"] == "作者甲"
     assert out["publisher"] == "出版社"
     assert out["language"] == "zh"

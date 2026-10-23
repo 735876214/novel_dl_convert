@@ -408,26 +408,6 @@ def _media_of(name: str) -> str:
     return mimetypes.guess_type(name)[0] or "application/octet-stream"
 
 
-def probe(path) -> dict:
-    """书目扫描用：页数 / 是否有封面 / 封面条目。
-
-    坏包 / 缺 RAR 依赖 / 魔数不符 → ``unparsable=True``（与 EPUB 同口径，不抛异常）。
-    """
-    out = {"has_cover": False, "cover": "", "pages": 0, "pages_source": "archive",
-           "unparsable": False}
-    try:
-        with _open(path) as arc:
-            names = arc.entries()
-            out["pages"] = len(names)
-            if names:
-                out["has_cover"] = True
-                out["cover"] = names[0][0]
-    except Exception:
-        out["unparsable"] = True
-        out["pages_source"] = ""
-    return out
-
-
 def pages(path) -> dict:
     """页清单。``index`` 是**序号**（0 起），不是归档内的名字 —— 前端按序号取图。"""
     try:

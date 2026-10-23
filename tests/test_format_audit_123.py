@@ -70,7 +70,8 @@ def test_图片加旁注文档按漫画读(tmp_path):
     assert v["evidence"]["ignored_docs"] == ["说明.txt"]
     assert "旁注" in v["reason"]
     # 与同名内容的 .cbz 完全一致（这是「同样的字节存成 .cbz 能读」对照的那一半）
-    assert comics.probe(p).get("pages") == 2
+    # ⚠️ 第 147 期：`comics.probe` 删除 —— 页数/封面就是 `analyze` 的事实（同一次开包）
+    assert v["pages"] == 2 and v["cover"] == "01.png"
 
 
 def test_图片加正文文本仍然判不准(tmp_path):

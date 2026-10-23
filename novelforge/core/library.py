@@ -299,7 +299,7 @@ def _series_index_of(opf: str) -> str:
         m = re.search(pat, opf, re.S | re.I)
         if not m:
             continue
-        raw = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+        raw = _plain(m.group(1))
         if not raw:
             continue
         try:
@@ -310,11 +310,28 @@ def _series_index_of(opf: str) -> str:
     return ""
 
 
+def _plain(xml: str) -> str:
+    """OPF 里一段**纯文本字段**的原文 → 人看得见的值：剥标签 + **解一次实体**。
+
+    这是「标题 / 作者 / 出版社 / 语言 / 系列 / 题材怎么读」的**唯一判据**（第 147 期）：
+    此前五个字段各写一遍 ``re.sub(r"<[^>]+>", "", x).strip()``，只剥标签不解实体 ——
+    于是 ``<dc:title>Pride &amp; Prejudice</dc:title>`` 在书架上**字面显示
+    ``Pride &amp; Prejudice``**，作者名里的 ``&#8217;``（O&#8217;Brien）同理。
+    真实语料（Standard Ebooks / 出版社出的英文书）里这类实体是常态，不是边角样例。
+
+    ⚠️ 与 ``fileops._set_text_element`` 里的 ``escape`` 是一对：写侧转义、读侧就得
+    还原，否则「写进去再扫回来」的往返会变形 —— 出版副本正是这么被重新探测的。
+    ⚠️ ``&lt;p&gt;`` 这种**双写转义**的整段 HTML 只属于 ``dc:description``，
+    走 :func:`_dc_description`（它只解实体、**不剥标签**，顺序相反）。
+    """
+    return html_unescape(re.sub(r"<[^>]+>", "", xml)).strip()
+
+
 def _tag_text(xml: str, tag: str) -> str:
     m = re.search(rf"<{tag}[^>]*>(.*?)</{tag}>", xml, re.S | re.I)
     if not m:
         return ""
-    return re.sub(r"<[^>]+>", "", m.group(1)).strip()
+    return _plain(m.group(1))
 
 
 def _dc_description(opf: str) -> str:
@@ -323,7 +340,8 @@ def _dc_description(opf: str) -> str:
     为什么单独一个函数而不复用 :func:`_tag_text`：``dc:description`` 在真实 OPF 里
     常常是**双写转义**的 HTML 片段（实测 Standard Ebooks 30/30 本写作 ``&lt;p&gt;…``），
     所以它需要的处理和 ``dc:title`` 这类纯文本字段**刚好相反**：
-    - 纯文本字段（title / creator / publisher / language）：要**剥标签**，实体不解也无害。
+    - 纯文本字段（title / creator / publisher / language）：要**剥标签 + 解实体**，
+      见 :func:`_plain`（第 147 期起实体也解；此前不解，标题里的 ``&amp;`` 会原样上屏）。
     - description：要**解一次实体**（否则用户界面上直接看到 ``&lt;p&gt;`` 字面量），
       但**不能剥标签**（解出来的 ``<p>`` / ``<i>`` 是描述本身的内容，
       而它在很多源里本就是 HTML 片段 —— 剥了就丢信息）。
@@ -392,7 +410,7 @@ def _series_of(opf: str) -> str:
     ):
         m = re.search(pat, opf, re.S | re.I)
         if m:
-            v = re.sub(r"<[^>]+>", "", m.group(1)).strip()
+            v = _plain(m.group(1))
             if v:
                 return v
     return ""
@@ -570,13 +588,14 @@ def _isbn_of(opf: str) -> str:
     这里原先用的是 `[\\dxX-]{10,17}` 的**子串**匹配，会把 UUID 当 ISBN —— 见该函数的注释。
     """
     for t in _tag_all(opf, "dc:identifier"):
-        if metadata.isbn_digits(t):
-            return re.sub(r"<[^>]+>", "", t).strip()
+        v = _plain(t)                       # 先还原实体再判形状：`&#45;` 也是连字符
+        if metadata.isbn_digits(v):
+            return v
     return ""
 
 
 def _subjects_of(opf: str) -> list:
-    return [re.sub(r"<[^>]+>", "", t).strip() for t in _tag_all(opf, "dc:subject") if t.strip()]
+    return [v for t in _tag_all(opf, "dc:subject") if (v := _plain(t))]
 
 
 def _book_id(name: str, library_id: str = None) -> str:
@@ -1374,20 +1393,39 @@ def copy_groups() -> list:
     return out
 
 
-def container_books(limit: int = 200) -> list:
-    """**按内容分派不出形态的容器**清单（`zipkind.CONTAINER_FORMATS`，第 87 期）：展开操作的入口。
+def _is_unpack_candidate(b: dict) -> bool:
+    """这条书目该不该出现在「待展开的压缩包」里（判据见 :func:`container_books`）。
 
-    只列**通用容器**（`.zip` / `.rar` / `.7z`）且**没能分派出形态**的那些 —— 图片档已经
-    归一成 `CBZ`（能直接读），不在此列。判据取 `zipkind.CONTAINER_FORMATS` 而不是写死
-    `"ZIP"`：第 111 期加 `.rar` / `.7z` 时，写死的那一份会让它们**从待展开清单里消失**
-    （文件在盘上、书架上打进不了，且界面上一个字都不提）。
+    抽成函数是为了让上面那段文档注释与代码判据**只描述一件事**；调用点只有一处。
+    """
+    if str(b.get("format") or "").upper() in zipkind.CONTAINER_FORMATS:
+        return True
+    ext = pathlib.PurePath(str(b.get("name") or "")).suffix.lower()
+    return ext in comics.COMIC_EXTS and "unparsable" in (b.get("issues") or ())
+
+
+def container_books(limit: int = 200) -> list:
+    """**按内容分派不出形态的容器**清单（第 87 期）：展开操作的入口。
+
+    列两类，判据分别是「是通用容器」与「是漫画归档且读不了」：
+
+    · **通用容器**（`.zip` / `.rar` / `.7z`，`zipkind.CONTAINER_FORMATS`）且**没能分派出
+      形态**的那些 —— 图片档已经归一成 `CBZ`（能直接读），不在此列。判据取
+      `zipkind.CONTAINER_FORMATS` 而不是写死 `"ZIP"`：第 111 期加 `.rar` / `.7z` 时，
+      写死的那一份会让它们**从待展开清单里消失**（文件在盘上、书架上进不了，且界面上
+      一个字都不提）。
+    · **漫画后缀**（`.cbz` / `.cbr`）里装的**不是图片序列**的那些（第 147 期）。这类书
+      被探针记成 `unparsable`，理由说的是「要先展开才能入库」—— 而第 147 期之前它根本
+      不在本清单里，那句话没有按钮可点（`.cbz` 不在 `CONTAINER_FORMATS` 里，把它加进去
+      又会把**整个漫画库**拖进待展开清单）。所以判据按「后缀是漫画归档 **且** 书目上挂着
+      `unparsable`」取 —— 读得动的 `.cbz` 一本都不会出现在这里。
     `reason` / `targets` **现算**（每次开一次归档；容器条目通常很少，
     而且这是用户主动打开的工具页，不是列表热路径）。`limit` 是防御：真遇到几百个
     容器时别让一次请求卡住界面（前端会显示实际条数）。
     """
     out = []
     for b in books():
-        if str(b.get("format") or "").upper() not in zipkind.CONTAINER_FORMATS:
+        if not _is_unpack_candidate(b):
             continue
         plan = zipkind.unpack_plan(pathlib.Path(root_of(b)) / b["name"])
         out.append({
@@ -1568,20 +1606,15 @@ def probe_epub(path: pathlib.Path) -> dict:
     }
     try:
         with zipfile.ZipFile(path) as z:
-            opf_path = ""
-            try:
-                container = zipkind.read_entry(z, "META-INF/container.xml").decode("utf-8", "ignore")
-                m = re.search(r'full-path="([^"]+)"', container)
-                if m:
-                    opf_path = m.group(1)
-            except Exception:
-                opf_path = ""
+            # OPF 定位走 :func:`_opf_path` —— 第 147 期收敛：这里曾把同一套逻辑
+            # （container.xml 的 ``full-path`` → 退化首个 ``.opf``）**原地又写了一遍**，
+            # 与本文件另外 5 处调用点（`_cover_in` / `_pages_in` / `_spine_items` /
+            # `cover_path` / `fileops` 的写回）成了两份实现。两份判据一旦分叉，
+            # 书目显示的信息与阅读器打开的将是**两个不同的 OPF**（同一本书说两套话）。
+            opf_path = _opf_path(z)
             if not opf_path:
-                names = [n for n in z.namelist() if n.lower().endswith(".opf")]
-                if not names:
-                    out["unparsable"] = True
-                    return out
-                opf_path = names[0]
+                out["unparsable"] = True
+                return out
             opf = zipkind.read_entry(z, opf_path).decode("utf-8", "ignore")
             out["title"] = _tag_text(opf, "dc:title")
             out["author"] = _tag_text(opf, "dc:creator")
@@ -2149,15 +2182,33 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
     }
     tracks = 0
     fmt = f.suffix.lstrip(".").upper()
-    # `.zip` 是**通用容器**（第 87 期）：真实形态由内容定（`core/zipkind.py`），不看后缀。
-    # 只有「里面是图片」这一档能读，且把它**归一成 CBZ** —— 于是封面接口、逐页接口、
-    # 前端阅读器的既有 CBZ 判据**全部自动生效（上层零分支）**。
-    # 其余各档（内部是别的文档 / 嵌套 / 混装 / 坏包）**不假装能读**：记成无法解析，
-    # 让它在「待修复」分面里看得见 —— 文件在盘上、书目里却找不到，比拒收更糟。
-    zip_v = zipkind.analyze(f) if zipkind.is_container(f) else None
+    # 归档书（`.zip` 通用容器 + `.cbz/.cbr` 漫画后缀）的**内容形态一律按内容定**
+    # （第 147 期）：`zipkind` 模块文档写明「`.cbz` 与 `.zip` 在字节层面本就等价」，
+    # 只让 `.zip` 走内容分派、让 `.cbz` 按后缀猜，等于同一份字节换个名就有两种结论 ——
+    # 实测反例：一份**改了后缀的 EPUB**（`书.cbz`）里那张 `cover.jpg` 被 `_keep` 算作
+    # 一页 ⇒ 书架把它当「1 页漫画」，点开是漫画阅读器里的孤零零一张图，且因为页数不为 0，
+    # 第 123 期那道「0 页 ⇒ 后缀与内容不符」的闸门也拦不住（静默错，最坏的一种）。
+    # ⚠️ 只有 `.zip/.rar/.7z` 是**待展开容器**（`zipkind.is_container` / `container_books`）——
+    # 漫画后缀**不进**那条轴：图片档本来就能直接读，没有「展开」这个出路。
+    # 「里面是图片」这一档能读，且 `.zip` 把它**归一成 CBZ** —— 于是封面接口、逐页接口、
+    # 前端阅读器的既有 CBZ 判据**全部自动生效（上层零分支）**；其余各档（内部是别的文档 /
+    # 嵌套 / 混装 / 坏包）**不假装能读**，记成无法解析，让它在「待修复」分面里看得见
+    # —— 文件在盘上、书目里却找不到，比拒收更糟。
+    zip_v = (zipkind.analyze(f)
+             if (not is_dir and (zipkind.is_container(f) or comics.is_comic(f))) else None)
     if zip_v is not None:
         if zip_v["readable"]:
-            fmt = zip_v["format"] or fmt
+            # 判据用 `is_container` 而不是 `comics.is_comic`：后者**包含** `.zip/.rar/.7z`，
+            # 拿它当「后缀已经是漫画名」会把 `.zip` 也排除掉，图片档就再也归一不成 CBZ
+            # —— 前端阅读器认的正是 format=CBZ，一旦退化成 ZIP 就整档打不开。
+            # 所以：`.zip/.rar/.7z` 由内容定名（图片档 ⇒ CBZ）；`.cbz/.cbr` 保留自己的后缀名。
+            if zipkind.is_container(f):
+                fmt = zip_v["format"] or fmt
+            # 页数与封面出自**同一次**开包判定（`analyze` 的 pages/cover），不再二次开包
+            info.update({"has_cover": bool(zip_v["pages"]),
+                         "cover": zip_v["cover"],
+                         "pages": zip_v["pages"],
+                         "pages_source": "archive"})
         else:
             info["unparsable"] = True
     if shape == "units":
@@ -2194,21 +2245,6 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
             info["unparsable"] = True
     elif f.suffix.lower() == ".epub":
         info = probe_epub(f)
-    elif comics.is_comic(f) and (zip_v is None or zip_v["kind"] == "comic"):
-        # 漫画（CBZ / CBR / ZIP 的图片档）：页数与封面都是**真实值**（不是估算），
-        # pages_source = "archive"。
-        # ⚠️ `.zip` 必须带上后面那条附加判据：它已经进了 `comics.COMIC_EXTS`，而
-        # `is_comic` **只看后缀** —— 少了这一条，一个「内部其实是 EPUB」的 zip 也会
-        # 被当成漫画去数页（数出来的是 EPUB 里的插图张数），用户看到一本假的漫画。
-        info.update(comics.probe(f))
-        # 0 页且没报错 ⇒ **后缀与内容不符**（典型：`.cbz` 里装的是一份文档，第 123 期）。
-        # 此前这种情况一声不吭：书架显示「0 页」、也不进「待修复」，点开才由阅读器报
-        # 「这本漫画里没有可显示的图片」—— 用户只能猜。判据借用 `zipkind.analyze`
-        # （内容分派），不在本函数另写一套：只有「里面确实是图片序列」才不标问题。
-        if not info.get("pages") and not info.get("unparsable"):
-            v2 = zip_v if zip_v is not None else zipkind.analyze(f)
-            if v2.get("kind") != "comic":
-                info["unparsable"] = True
     elif f.suffix.lower() == ".fb2":
         # 第 112 期：FB2 直读 —— 扫描期只做**廉价头部扫描**判有没有内嵌封面（整本 XML 解析
         # 留给派生缓存 `fb2cache`，别把「丢一本书进库」变成一次 XML 解析）。
