@@ -1,0 +1,14 @@
+# DevEco / hvigor 构建产物 —— 只忽略构建目录，不忽略源码。
+# 注意：模式一律带前导斜杠锚定本目录，避免匹配到任意层级（AGENTS.md 陷阱表：
+# `input/` 曾因不锚定而吞掉 `frontend/src/components/ui/input/` 达 15 期）。
+/.hvigor/
+/.idea/
+/.preview/
+/local.properties
+/oh_modules/
+/entry/build/
+/entry/oh_modules/
+/build/
+*.hap
+*.hsp
+*.app

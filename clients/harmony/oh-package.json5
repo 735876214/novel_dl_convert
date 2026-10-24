@@ -1,0 +1,11 @@
+{
+  "modelVersion": "5.0.0",
+  "name": "novelforge-harmony",
+  "version": "1.0.0",
+  "description": "NovelForge 鸿蒙端（纯瘦客户端：书架/详情原生，阅读面用 ArkWeb 载入 NAS 上已有的 SPA）",
+  "main": "",
+  "author": "",
+  "license": "",
+  "dependencies": {},
+  "devDependencies": {}
+}

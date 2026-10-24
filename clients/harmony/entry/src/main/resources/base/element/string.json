@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "NovelForge 阅读端"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "书斋"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "书斋"
+    }
+  ]
+}
