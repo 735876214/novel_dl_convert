@@ -52,7 +52,7 @@ Set-Location <本目录>
 | 签名 | **未做** | 需要调试证书；本机 `~\.ohos\config` 为空，DevEco 自动生成调试证书要登录华为账号 |
 | 安装 / 真机运行 | **未做** | `hdc list targets` 返回 `[Empty]`，本机没有连接设备 |
 | 与服务端联调 | **未做** | 同上；接口契约按 `tests/test_client_contract.py` 的 13 例快照写，但没对真实 NAS 跑过 |
-| 交互观感 | **未做** | 原生页面的视觉稿有（`../harmonyos-mockup/`），但 ArkUI 实现没在真机上看过 |
+| 交互观感 | **未做** | 视觉稿在 `design/harmonyos-client.html`（可交互 HTML），但 ArkUI 实现没在真机上看过 |
 
 签名 + 侧载的下一步：DevEco 里 `File → Project Structure → Signing Configs` 勾选
 「Automatically generate signing」（需登录华为账号），把生成的 `signingConfigs` 写进
