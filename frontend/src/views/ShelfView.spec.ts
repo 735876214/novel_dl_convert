@@ -125,6 +125,7 @@ beforeEach(async () => {
       { path: '/book/:id', name: 'book', component: { template: '<div />' } },
       { path: '/read/:id', name: 'read', component: { template: '<div />' } },
       { path: '/listen/:id', name: 'listen', component: { template: '<div />' } },
+      { path: '/series/:name', name: 'series-detail', component: { template: '<div />' } },
     ],
   })
   await router.push('/')
@@ -210,5 +211,137 @@ describe('ShelfView：⋮ 与快速预览的接线', () => {
     await w.find('[aria-label="关闭预览"]').trigger('click')
     await flushPromises()
     expect(w.find('[role="dialog"]').exists()).toBe(false)
+  })
+})
+
+/**
+ * 系列折叠行的**标题口径**（第 152 期）。
+ *
+ * 这一族坏起来完全静默：`Row.book` 是**代表本**（决定封面画哪一张），它的 `title`
+ * 只代表那一册。表格视图曾经直接拿它当书名列，于是同一行在网格里叫系列名、
+ * 在表格里叫 `Vol.04` —— 用户看到的是一堆「Vol.04 没合并」，而数据库里 series 是对的
+ * （实测那 42 本 `Vol.NN` 全都带正确的系列名与册号）。
+ *
+ * 所以三个视图 + 首字母分桶都要钉同一句话：**折叠行显示的是系列名，不是某一册的文件名**。
+ */
+const SERIES = 'Angel Beats! -The Last Operation-'
+/** 代表本（按入库时间倒序首次出现的那本）文件名就是纯卷号 —— 用户库里真实存在 */
+const VOL_SHELF: BookCard[] = [
+  makeBook({
+    id: 'lib$v4',
+    title: 'Vol.04',
+    name: `${SERIES}/Vol.04.zip`,
+    series: SERIES,
+    series_index: '4',
+    format: 'CBZ',
+    pages: 190,
+    mtime: 1700000400,
+  }),
+  makeBook({
+    id: 'lib$v3',
+    title: 'Vol.03',
+    name: `${SERIES}/Vol.03.zip`,
+    series: SERIES,
+    series_index: '3',
+    format: 'CBZ',
+    pages: 180,
+    mtime: 1700000300,
+  }),
+]
+
+describe('ShelfView：折叠行显示系列名（不是代表本的 Vol.NN）', () => {
+  for (const view of ['grid', 'list', 'table'] as ViewKind[]) {
+    it(`${view}：标题是系列名，且不出现代表本的文件名 Vol.04`, async () => {
+      m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
+      const w = await mountShelf(view, true)
+      expect(w.text()).toContain(SERIES)
+      expect(w.text()).not.toContain('Vol.04')
+      expect(w.text()).not.toContain('Vol.03')
+    })
+  }
+
+  it('首字母分桶跟着系列名走（A，而不是代表本的 V）', async () => {
+    m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
+    const w = await mountShelf('grid', true)
+    const buckets = w.findAll('[data-bucket]').map((el) => el.attributes('data-bucket'))
+    expect(buckets).toContain('A')
+    expect(buckets).not.toContain('V')
+  })
+
+  it('表格的系列头行：格式 / 页数 / 进度 / 评分四列留空（不拿代表本的数冒充整组）', async () => {
+    m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
+    const w = await mountShelf('table', true)
+    const cells = w.findAll('tbody tr').at(0)?.findAll('td') ?? []
+    const text = cells.map((c) => (c.text() || '').trim())
+    // 列序：书名 / 作者 / 系列 / 格式 / 页数 / 进度 / 评分 / 操作
+    expect(text[3]).toBe('—')
+    expect(text[4]).toBe('—')
+    expect(text[5]).toBe('—')
+    expect(text[6]).toBe('—')
+  })
+
+  it('展开系列后成员行仍是各自的册名（系列名只属于折叠行）', async () => {
+    m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
+    const w = await mountShelf('table', true)
+    await w.findAll('tbody tr').at(0)?.findAll('button')[0].trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('Vol.03')
+    expect(w.text()).toContain('Vol.04')
+  })
+})
+
+/**
+ * 折叠行的**点击落点**（第 152 期）。
+ *
+ * 用户原话：「折叠系列后，文件里面只有一本书，点击开始阅读不能从第一册开始读，不能看目录」。
+ * 真因是折叠行点了之后打开的是**代表本**（`rows` 里挑来画封面的那一册，常常是 `Vol.04`）的
+ * 详情页 —— 那页只有一本书、没有目录、也没有「从第一册开始」。
+ *
+ * 所以这里钉的是三条落点：折叠行 → **系列详情**（目录 + 开始阅读）；展开后的成员行 →
+ * 那一册自己；系列名当路径参数必须编码（`：` `☆` `/` 都在真实系列名里出现过）。
+ */
+describe('ShelfView：折叠行点进去是系列详情，成员行点进去是那一册', () => {
+  const seriesUrl = `/series/${encodeURIComponent(SERIES)}`
+
+  async function clickSeriesRow(view: ViewKind): Promise<VueWrapper> {
+    m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
+    const w = await mountShelf(view, true)
+    const target =
+      view === 'grid'
+        ? w.find('[data-bucket] button')
+        : view === 'list'
+          ? w.find('[data-bucket]')
+          : w.find('tbody tr')
+    await target.trigger('click')
+    await flushPromises()
+    return w
+  }
+
+  for (const view of ['grid', 'list', 'table'] as ViewKind[]) {
+    it(`${view}：点折叠行 → 系列详情（不是某一册的详情）`, async () => {
+      await clickSeriesRow(view)
+      expect(router.currentRoute.value.path).toBe(seriesUrl)
+    })
+  }
+
+  it('展开后点成员行 → 那一册的详情（不是系列）', async () => {
+    m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
+    const w = await mountShelf('table', true)
+    await w.findAll('tbody tr').at(0)?.findAll('button')[0].trigger('click') // 展开
+    await flushPromises()
+    // 成员行按系列序号升序：Vol.03 在前
+    await w.findAll('tbody tr').at(0)!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/book/lib$v3')
+  })
+
+  it('缩略图点击 = 直接阅读时，折叠行**仍然**进系列详情（没有「一册」可读）', async () => {
+    m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
+    const w = await mountShelf('grid', true)
+    useShelfPrefsStore().patch({ thumbnailClick: 'reader' })
+    await flushPromises()
+    await w.find('[data-bucket] button').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe(seriesUrl)
   })
 })

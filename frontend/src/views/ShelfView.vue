@@ -20,7 +20,7 @@ import {
   sortBySeriesIndex,
   tagsLabel,
 } from '@/lib/bookInfo'
-import { THUMBNAIL_READER_FORMATS } from '@/lib/bookOpen'
+import { bookClickPath, seriesDetailPath } from '@/lib/bookOpen'
 import { statusBucket } from '@/lib/readingThresholds'
 import { bucketKeyOf, buildBuckets } from '@/lib/shelfBuckets'
 import {
@@ -177,17 +177,25 @@ async function runBatch(action: string, params: Record<string, unknown>): Promis
 }
 
 // 多选模式下，点卡片/行是「切换选中」而不是「打开详情」
-function onGridClick(r: any): void {
+function onGridClick(r: Row): void {
   if (!r.book) return
   if (selectMode.value && !isSeriesRow(r)) { toggleSelect(r.book.id); return }
-  if (r.book) openBook(r.book.id, r.book.format)
+  // 系列折叠行代表的是**整个系列**：点进去要能看到目录、从第一册读 —— 那是系列详情页。
+  // 第 152 期之前这里打开的是「代表本」（封面取哪一张的那一册）⇒ 用户点了「启程」那本
+  // `Vol.04` 的详情页，看到的只有一本书，也没有目录（用户原话）。
+  if (isSeriesRow(r)) { router.push(seriesDetailPath(seriesName(r))); return }
+  openBook(r.book.id, r.book.format)
 }
-function onEntryClick(e: any): void {
+function onEntryClick(e: ListEntry): void {
+  if (e.kind === 'seriesOpen') { router.push(seriesDetailPath(e.name || '')); return }
   if (!e.book) return
   if (selectMode.value && e.kind === 'book') { toggleSelect(e.book.id); return }
   openBook(e.book.id, e.book.format)
 }
-function onTableRowClick(row: any): void {
+function onTableRowClick(row: TableRow): void {
+  // 系列头行（折叠中的整组）：与网格 / 列表同口径 —— 进系列详情（目录 + 从第一册开始）。
+  // 用 `row.book.series` 而不是 `row.toggle`：单本系列没有 toggle，但同样是系列头行。
+  if (row.head) { router.push(seriesDetailPath(row.book.series || '')); return }
   if (!row.book) return
   // 系列行（带 toggle）没有勾选框，与网格口径一致：不参与多选
   if (selectMode.value && !row.toggle) { toggleSelect(row.book.id); return }
@@ -435,10 +443,14 @@ function isFinishedOf(b: BookCard): boolean {
  */
 const renderRows = computed<Row[]>(() => rows.value)
 
-/** 首字母分桶（第 43 期）：以每行的代表本（系列折叠行取首本）的书名首字分桶 */
-const buckets = computed(() =>
-  buildBuckets(renderRows.value.map((r) => r.book.title || r.book.name)),
-)
+/**
+ * 首字母分桶（第 43 期）：按**这一行的标题**（`rowTitle`）的首字分桶。
+ *
+ * 第 152 期修正：这里原取代表本的书名 —— 系列折叠行于是按「代表本叫 `Vol.04`」
+ * 分到 `#` / `V` 桶，而卡片上明明写着系列名（`Angel Beats! …`）。同一行在跳转条与
+ * 卡片上有两个首字母，跳过去永远是错的桶。
+ */
+const buckets = computed(() => buildBuckets(renderRows.value.map(rowTitle)))
 
 /** 当前视口所在的桶（滚动时更新；用于高亮跳转条） */
 const activeBucket = ref('')
@@ -638,6 +650,35 @@ function seriesName(r: Row): string {
   return r.book.series || ''
 }
 
+/**
+ * **一行的标题 —— 网格 / 列表 / 表格 / 首字母分桶共用的唯一口径**（第 152 期）。
+ *
+ * 系列折叠行 = **系列名**；单本书 = 书名。
+ *
+ * ⚠️ 为什么必须是一处：`Row.book` 是**代表本**（`representativeOf` 挑的那本，
+ * 决定「封面画哪一张」），它的 `title` 只代表那一册。表格视图的书名列此前直接取
+ * `row.book.title`，于是 `Angel Beats!/Vol.04.zip` 那一行在表格里叫「Vol.04」、
+ * 在网格/列表里叫系列名 —— 同一行两个标题，用户看到的就是「一堆 Vol.04 没合并」。
+ *
+ * 代表本是「封面用哪张」这个概念，**不是**「这一行叫什么」。两者混用就会在
+ * 某一册的文件名恰好是纯卷号时把系列名整个丢掉。
+ */
+function rowTitle(r: Row): string {
+  const series = isSeriesRow(r) ? seriesName(r) : ''
+  return series || r.book.title || r.book.name || ''
+}
+
+/**
+ * 画到 `BookCover` 上的那本书：系列行**只换标题**，其余（id / 渐变色 / 封面图）仍取代表本。
+ *
+ * `BookCover` 在没有真封面时拿 `book.title` 当占位文字 —— 直接用代表本就会在一张
+ * 「N 册」的系列卡上印出 `Vol.04`（用户库里 6 本确实没有封面，实测）。封面该画谁
+ * 与这一行叫什么，是两个问题，各有各的答案。
+ */
+function coverBookOf(r: Row): BookCard {
+  return isSeriesRow(r) ? { ...r.book, title: rowTitle(r) } : r.book
+}
+
 function isExpanded(r: Row): boolean {
   return expanded.value.includes(seriesName(r))
 }
@@ -661,36 +702,73 @@ type ListEntry = {
   book?: BookCard
   name?: string
   count?: number
+  /** 这一项的标题（`rowTitle` 的口径）：系列行 = 系列名，单本 = 书名。data-bucket 用它 */
+  title: string
 }
 
 const listEntries = computed<ListEntry[]>(() => {
   const out: ListEntry[] = []
   for (const r of renderRows.value) {
     if (!isSeriesRow(r)) {
-      out.push({ key: r.key, kind: 'book', book: r.book })
+      out.push({ key: r.key, kind: 'book', book: r.book, title: rowTitle(r) })
       continue
     }
     if (!isExpanded(r)) {
-      out.push({ key: r.key, kind: 'seriesOpen', book: r.book, name: seriesName(r), count: r.members.length })
+      out.push({
+        key: r.key,
+        kind: 'seriesOpen',
+        book: r.book,
+        name: seriesName(r),
+        count: r.members.length,
+        title: rowTitle(r),
+      })
       continue
     }
-    for (const b of r.members) out.push({ key: b.id, kind: 'book', book: b })
-    out.push({ key: 'close:' + r.key, kind: 'seriesClose', name: seriesName(r), count: r.members.length })
+    for (const b of r.members) out.push({ key: b.id, kind: 'book', book: b, title: b.title || b.name || '' })
+    out.push({
+      key: 'close:' + r.key,
+      kind: 'seriesClose',
+      name: seriesName(r),
+      count: r.members.length,
+      title: rowTitle(r),
+    })
   }
   return out
 })
 
-/** 表格行：同样拍平（折叠时每组只出首本，展开则全出） */
-const tableRows = computed(() => {
-  const out: Array<{ key: string; book: BookCard; toggle: { name: string; count: number } | null }> = []
+/**
+ * 表格行（拍平后的形状）。`head` 见下面的 computed；`title` 见 `rowTitle`。
+ */
+type TableRow = {
+  key: string
+  book: BookCard
+  title: string
+  head: boolean
+  toggle: { name: string; count: number } | null
+}
+
+/**
+ * 表格行：同样拍平（折叠时每组只出首本，展开则全出）。
+ *
+ * `head` = **这一行代表整个系列**（折叠中的系列头行）。它决定三件事：书名列用系列名
+ * （`title`，见 `rowTitle`）、格式 / 页数 / 进度 / 评分四列**留空**、以及点击进
+ * **系列详情页**（目录 + 从第一册开始）而不是某一册 ——
+ * 与网格「系列行不给格式徽章、不给进度条」同一条口径（一个系列可能混多种格式，
+ * 拿代表本的数字冒充整个系列就是在报假数）。展开后的成员行 `head` 为 false，照常给值。
+ */
+const tableRows = computed<TableRow[]>(() => {
+  const out: TableRow[] = []
   for (const r of renderRows.value) {
     const isSeries = isSeriesRow(r)
     const open = isExpanded(r)
     r.members.forEach((b, i) => {
       if (isSeries && !open && i > 0) return // 折叠时只出首本
+      const head = isSeries && !open && i === 0
       out.push({
         key: r.key + ':' + b.id,
         book: b,
+        title: head ? rowTitle(r) : b.title || b.name || '',
+        head,
         toggle:
           isSeries && r.members.length > 1 && i === 0
             ? { name: seriesName(r), count: r.members.length }
@@ -860,14 +938,7 @@ function chip(active: boolean): string {
  * 前者少一个 TXT，那是这个设置项的既有口径，本期一个字不改（详见那里的注释）。
  */
 function openBook(id: string, format?: string): void {
-  if (
-    prefs.prefs.thumbnailClick === 'reader' &&
-    THUMBNAIL_READER_FORMATS.has((format || '').toUpperCase())
-  ) {
-    router.push(`/read/${id}`)
-    return
-  }
-  router.push(`/book/${id}`)
+  router.push(bookClickPath({ id, format }, prefs.prefs.thumbnailClick))
 }
 
 // ---------------- 书卡 ⋮ 菜单（第 64 期）----------------
@@ -1207,7 +1278,7 @@ const INPUT_CLS =
         v-for="r in renderRows"
         :key="r.key"
         class="group"
-        :data-bucket="bucketKeyOf(r.book.title || r.book.name)"
+        :data-bucket="bucketKeyOf(rowTitle(r))"
       >
         <!--
           封面盒 —— **⋮ 锚在它的右下角**，所以它必须只包着封面。
@@ -1224,13 +1295,7 @@ const INPUT_CLS =
           <button
             type="button"
             class="block w-full cursor-pointer text-left"
-            :aria-label="
-              display.prefs.cardInfoMode === 'off'
-                ? isSeriesRow(r)
-                  ? seriesName(r)
-                  : r.book.title || r.book.name
-                : undefined
-            "
+            :aria-label="display.prefs.cardInfoMode === 'off' ? rowTitle(r) : undefined"
             @click="onGridClick(r)"
           >
             <input
@@ -1275,7 +1340,7 @@ const INPUT_CLS =
                 <div v-for="n in 4 - mosaicMembers(r).length" :key="`pad-${n}`" class="bg-muted" />
               </div>
             </template>
-            <BookCover v-else :book="r.book" :show-title="!showAuthor()" />
+            <BookCover v-else :book="coverBookOf(r)" :show-title="!showAuthor()" />
             <!-- 系列行的「N 册」在右下角 —— 系列行**不给菜单**，所以右下角不会撞 -->
             <span
               v-if="isSeriesRow(r)"
@@ -1303,7 +1368,7 @@ const INPUT_CLS =
                 v-if="isSeriesRow(r) || display.prefs.primaryLabel !== 'none'"
                 class="truncate text-[12px] font-medium text-white"
               >
-                <template v-if="isSeriesRow(r)">{{ seriesName(r) }}</template>
+                <template v-if="isSeriesRow(r)">{{ rowTitle(r) }}</template>
                 <template v-else>{{ primaryLabelOf(r.book) }}</template>
               </div>
               <div
@@ -1335,7 +1400,7 @@ const INPUT_CLS =
             v-if="isSeriesRow(r) || display.prefs.primaryLabel !== 'none'"
             class="mt-2 truncate text-[12.5px] font-medium text-foreground"
           >
-            <template v-if="isSeriesRow(r)">{{ seriesName(r) }}</template>
+            <template v-if="isSeriesRow(r)">{{ rowTitle(r) }}</template>
             <template v-else>
               {{ primaryLabelOf(r.book) }}
               <!-- 主标签是书名时，保留原有的「系列号」后缀（默认档与改造前一字不差） -->
@@ -1383,7 +1448,7 @@ const INPUT_CLS =
         v-for="e in listEntries"
         :key="e.key"
         padding="sm"
-        :data-bucket="e.book ? bucketKeyOf(e.book.title || e.book.name) : undefined"
+        :data-bucket="bucketKeyOf(e.title)"
         :class="e.kind === 'book' ? 'cursor-pointer transition-colors hover:bg-muted/50' : 'border-dashed'"
         @click="onEntryClick(e)"
       >
@@ -1393,7 +1458,7 @@ const INPUT_CLS =
             <BookCover v-if="e.book" :book="e.book" :show-title="false" :interactive="false" />
           </div>
           <div class="min-w-0 flex-1">
-            <div class="truncate text-[13px] font-medium text-foreground">{{ e.name }}</div>
+            <div class="truncate text-[13px] font-medium text-foreground">{{ e.title }}</div>
             <div class="mt-0.5 text-[11.5px] text-muted-foreground">
               {{ e.count }} 本 · {{ e.book?.author || '未知作者' }}
             </div>
@@ -1478,7 +1543,7 @@ const INPUT_CLS =
           <tr
             v-for="(row, i) in tableRows"
             :key="row.key"
-            :data-bucket="bucketKeyOf(row.book.title || row.book.name)"
+            :data-bucket="bucketKeyOf(row.title)"
             class="cursor-pointer border-b border-border/60 transition-colors last:border-b-0 hover:bg-muted/50"
             :class="display.prefs.zebraStriping && i % 2 === 1 ? 'bg-muted/30' : ''"
             @click="onTableRowClick(row)"
@@ -1493,8 +1558,11 @@ const INPUT_CLS =
               />
             </td>
             <td class="max-w-[18rem] truncate px-3 py-2 text-[12.5px] text-foreground">
-              {{ row.book.title || row.book.name }}
-              <span v-if="seriesIndexLabel(row.book)" class="ml-1 font-mono text-[10.5px] text-muted-foreground">
+              {{ row.title }}
+              <span
+                v-if="!row.head && seriesIndexLabel(row.book)"
+                class="ml-1 font-mono text-[10.5px] text-muted-foreground"
+              >
                 {{ seriesIndexLabel(row.book) }}
               </span>
               <span
@@ -1510,17 +1578,22 @@ const INPUT_CLS =
             <td class="max-w-[10rem] truncate px-3 py-2 text-[12px] text-muted-foreground">
               {{ row.book.series || '—' }}
             </td>
+            <!--
+              系列头行（`row.head`，折叠中的整个系列）的四列一律留空：一个系列可能混多种
+              格式、页数与进度是**每册各自**的数，拿代表本的数字冒充整组就是在报假数 ——
+              与网格「系列行不给格式徽章 / 不给进度条」是同一口径（第 152 期）。
+            -->
             <td class="px-3 py-2 font-mono text-[11.5px] text-muted-foreground">
-              {{ (row.book.format || '').toUpperCase() || '—' }}
+              {{ row.head ? '—' : (row.book.format || '').toUpperCase() || '—' }}
             </td>
             <td class="px-3 py-2 text-[12px] text-muted-foreground tabular-nums">
-              {{ row.book.pages ? `${row.book.pages}${row.book.pages_source === 'estimate' ? '≈' : ''}` : '—' }}
+              {{ row.head || !row.book.pages ? '—' : `${row.book.pages}${row.book.pages_source === 'estimate' ? '≈' : ''}` }}
             </td>
             <td class="px-3 py-2 text-[12px] text-muted-foreground tabular-nums">
-              {{ Math.round(row.book.percent ?? 0) }}%
+              {{ row.head ? '—' : `${Math.round(row.book.percent ?? 0)}%` }}
             </td>
             <td class="px-3 py-2 text-[11.5px] text-amber-500">
-              {{ (row.book.stars ?? 0) > 0 ? '★'.repeat(row.book.stars ?? 0) : '—' }}
+              {{ !row.head && (row.book.stars ?? 0) > 0 ? '★'.repeat(row.book.stars ?? 0) : '—' }}
             </td>
             <!-- 末列 = 行操作列：系列行放「展开 / 收起」，单本书行放 ⋮（表头一字不改） -->
             <td class="px-3 py-2">
