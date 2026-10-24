@@ -12,5 +12,7 @@
 *.hap
 *.hsp
 *.app
+# DevEco 的静态分析缓存（分析/构建时自动生成，含机器相关路径）
+/.appanalyzer/
 # 视觉稿的真渲染截图不入库（约 8 MB），需要时用 design/README.md 里的命令重出。
 /design/shots/
