@@ -390,7 +390,10 @@ const sorted = computed(() => {
 type Row = { key: string; book: BookCard; members: BookCard[] }
 
 const rows = computed<Row[]>(() => {
-  if (!prefs.prefs.collapseSeries) {
+  // 多选态**不折叠**（第 152 期审计）：系列行不参与多选，而默认折叠开着时网格里 2037 本
+  // 都躲在系列卡里 —— 「全选」只能选中那 6 本没有系列的，批量操作等于失效。
+  // 进多选就展开成一本一行，选完退出再折叠（不需要额外状态：`selectMode` 就是那个开关）。
+  if (!prefs.prefs.collapseSeries || selectMode.value) {
     return sorted.value.map((b) => ({ key: b.id, book: b, members: [b] }))
   }
   const out: Row[] = []

@@ -371,17 +371,15 @@ describe('ShelfView：表格多选口径与折叠卡的册数', () => {
     return mountShelf('table', true)
   }
 
-  it('系列头行不给勾选框；展开后每一册（含首册）都能选', async () => {
+  it('多选态自动展开系列（表格同样）：每一册都能勾选，且不会去勾「系列头」', async () => {
     const w = await mountTableCollapsed()
-    await enterSelect(w)
-    // 折叠时只有头行 → 一个勾选框都没有
+    // 折叠 + 非多选：勾选列整列都不渲染
     expect(w.findAll('tbody input[type="checkbox"]').length).toBe(0)
 
-    const expand = w.findAll('tbody tr').at(0)!.findAll('button')
-      .find((b) => (b.text() || '').includes('展开'))
-    await expand!.trigger('click')
-    await flushPromises()
+    await enterSelect(w)
+    // 第 152 期审计：多选态不折叠 —— 否则「全选」只覆盖没有系列的那几本
     expect(w.findAll('tbody input[type="checkbox"]').length).toBe(VOL_SHELF.length)
+    expect(w.findAll('tbody tr').length).toBe(VOL_SHELF.length)
   })
 
   it('展开后首册行仍有 ⋮ 与「收起」，且不再挂「系列 N 册」角标', async () => {
@@ -412,6 +410,16 @@ describe('ShelfView：表格多选口径与折叠卡的册数', () => {
     const w = await mountShelf('grid', true)
     for (let i = 0; i < 6; i++) await flushPromises()
     expect(w.text()).toContain(`${VOL_SHELF.length} 册`)
+  })
+
+  it('进入多选后自动展开系列 —— 否则「全选」只能选中没有系列的那几本', async () => {
+    m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
+    const w = await mountShelf('grid', true)
+    expect(w.findAll('[data-bucket]').length).toBe(1) // 折叠：一张系列卡
+
+    await enterSelect(w)
+    expect(w.findAll('[data-bucket]').length).toBe(VOL_SHELF.length) // 多选：一册一张，都能勾
+    expect(w.findAll('input[type="checkbox"]').length).toBe(VOL_SHELF.length)
   })
 
   it('只有一册的「系列」当普通书行：有 ⋮、显示自己的书名、没有「1 册」角标', async () => {
