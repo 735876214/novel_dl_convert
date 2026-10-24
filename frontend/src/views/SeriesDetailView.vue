@@ -18,8 +18,10 @@ import {
   sortBySeriesIndex,
   tagsLabel,
 } from '@/lib/bookInfo'
+import { bookClickPath, isAudioBook, openTargetOf } from '@/lib/bookOpen'
 import { api, type BookCard, type SeriesGaps, type SeriesGroup, type SeriesMeta,
          type SeriesMetaState } from '@/lib/api'
+import { useShelfPrefsStore } from '@/stores/shelfPrefs'
 
 /**
  * 系列详情：该系列下的全部书目。
@@ -39,6 +41,7 @@ import { api, type BookCard, type SeriesGaps, type SeriesGroup, type SeriesMeta,
  */
 const route = useRoute()
 const router = useRouter()
+const prefs = useShelfPrefsStore()
 const name = computed(() => String(route.params.name))
 const books = ref<BookCard[]>([])
 const groups = ref<SeriesGroup[]>([])
@@ -68,6 +71,30 @@ const firstId = computed(() => {
   const first = sortBySeriesIndex(books.value).find((b) => b.series_index)
   return first ? first.id : null
 })
+
+/**
+ * 「开始阅读」的目标 = **第一册**（按系列序号；一本都没序号时退回落库顺序的首本）。
+ *
+ * 为什么不用「代表本」：书架上折叠卡片的代表本只是「封面画哪张」（`representativeOf`），
+ * 与阅读顺序无关 —— 拿它当阅读起点会让一个 28 册的系列从第 18 册开始读。
+ * 为什么不在这一页做「继续阅读」：系列详情接口的 `books` 不带进度（`percent` / `status`
+ * 只在 `/api/books` 上补齐），在这里推算「读到哪了」就是第二份进度口径。
+ */
+const firstBook = computed<BookCard | null>(() => {
+  const arr = sortBySeriesIndex(books.value)
+  return arr.find((b) => b.series_index) ?? arr[0] ?? null
+})
+
+/** 有声书说「收听」，其余说「阅读」—— 与书卡菜单同一判据（`isAudioBook`） */
+const startLabel = computed(() => (firstBook.value && isAudioBook(firstBook.value) ? '开始收听' : '开始阅读'))
+
+/** 从头读：能就地打开的进阅读器 / 播放器，打不开的退到详情页（那里至少有下载与元数据） */
+function startReading(): void {
+  const b = firstBook.value
+  if (!b) return
+  const target = openTargetOf(b)
+  router.push(target ? target.to : `/book/${b.id}`)
+}
 
 const sorted = computed(() => {
   const arr = sortBySeriesIndex(books.value)
@@ -125,7 +152,21 @@ watch(name, load)
       <Icon name="arrowLeft" class="h-3.5 w-3.5" />全部系列
     </button>
 
-    <PageHead :title="name" :desc="`共 ${books.length} 册 · 按系列序号排序`" />
+    <div class="flex items-start gap-3">
+      <PageHead class="min-w-0 flex-1" :title="name" :desc="`共 ${books.length} 册 · 按系列序号排序`" />
+      <!-- 「从第一册开始」：书架上折叠卡片的点击落点就是这里（第 152 期）。
+           目标取系列序号最小的那本，不是折叠卡的代表本 —— 那两个是不同的概念。 -->
+      <Button
+        v-if="firstBook"
+        size="sm"
+        variant="primary"
+        class="mt-1 shrink-0"
+        :title="`从第一册（${firstBook.title || firstBook.name}）开始`"
+        @click="startReading"
+      >
+        {{ startLabel }}
+      </Button>
+    </div>
     <!-- 缺册（第 43 期）：按 series_index 数字集合求 [1..max] 的补集；无序号 / 非数字另行说明。
          判定全在后端（library.series_gaps），前端只展示，避免两处口径走样。 -->
     <div
@@ -199,7 +240,7 @@ watch(name, load)
           :key="b.id"
           type="button"
           class="group cursor-pointer text-left"
-          @click="router.push(`/book/${b.id}`)"
+          @click="router.push(bookClickPath(b, prefs.prefs.thumbnailClick))"
         >
           <div class="relative">
             <BookCover :book="b" :show-title="false" />

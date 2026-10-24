@@ -96,6 +96,36 @@ export function openTargetOf(b: { id: string } & Formattable): OpenTarget | null
 }
 
 /**
+ * 系列详情页的路径 —— **系列名进 URL 的唯一拼法**（第 152 期）。
+ *
+ * 三个入口都要它：系列总览点卡片、书架点**折叠行**（聚合行的落点必须是「聚合物」，
+ * 不是代表本那一册）、以及别处指向某个系列的深链。系列名里 `：` `/` `☆` `!` 都出现过，
+ * 不编码会拼出另一条路由 —— 而且只在少数系列上出错，很难发现。
+ */
+export function seriesDetailPath(name: string): string {
+  return `/series/${encodeURIComponent(name)}`
+}
+
+/**
+ * 「点这张书卡之后去哪儿」—— 缩略图点击偏好（详情 / 直接阅读）的**唯一**落点判据。
+ *
+ * 第 152 期从 `ShelfView.openBook` 抽出来：系列详情页的卷列表也是封面卡，
+ * 两处各写一遍就会出现「同一偏好、两页给两个落点」。
+ *
+ * ⚠️ 用 `THUMBNAIL_READER_FORMATS` 而不是 `READER_FORMATS`：两者的差异是既有事实，
+ * 见上面那个常量的注释（TXT 不在其中）。
+ */
+export function bookClickPath(
+  b: { id: string } & Formattable,
+  thumbnailClick: 'details' | 'reader',
+): string {
+  if (thumbnailClick === 'reader' && THUMBNAIL_READER_FORMATS.has((b.format || '').toUpperCase())) {
+    return `/read/${b.id}`
+  }
+  return `/book/${b.id}`
+}
+
+/**
  * 「编辑元数据」的深链（第 98 期）—— 指向详情页的元数据页签（`?tab=metadata`）。
  *
  * 为什么收在这里：这条路由**两个入口**都要（书卡 ⋮ 菜单、快速预览浮层），

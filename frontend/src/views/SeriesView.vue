@@ -10,6 +10,7 @@ import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import Segment from '@/components/ui/Segment.vue'
 import { api, type SeriesItem } from '@/lib/api'
+import { seriesDetailPath } from '@/lib/bookOpen'
 
 /**
  * 系列总览：按 EPUB 元数据里的 series 聚合。
@@ -50,7 +51,7 @@ async function load(): Promise<void> {
 onMounted(load)
 
 function open(name: string): void {
-  router.push(`/series/${encodeURIComponent(name)}`)
+  router.push(seriesDetailPath(name))
 }
 </script>
 
