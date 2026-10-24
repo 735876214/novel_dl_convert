@@ -10456,3 +10456,20 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 
 1. **`Tests` 偶发红**：`tests/test_db_concurrency_contract.py::test_锁是重入锁` 用 `acquire(blocking=False)` 抢锁，撞上后台线程（`catalog._spawn_bg` / 刮削 / watcher）正在写库就必红 —— CI 2026-10-24 实红一次，而 `.codebuddy/memory/2026-10-02.md` 早就记着它是偶发。口径改成：先 `acquire(timeout=10)` **等到拿得到**，再在同一线程重入一次验「可重入」；等不到才报，并指向「有线程长期持锁」。
 2. **`Build and Push Image` 的「假红」**：run 页长期挂着 `Process completed with exit code 22` —— 来自「Ensure package is public」的 `curl -f`（22 = HTTP 4xx）。job 一直是 success，但页面上看起来像构建挂了，而 `GITHUB_TOKEN` 不是用户包的管理员、那个 PUT 注定 403。改成：先 GET 读现状（已 public 就跳过），读不到发 `::notice::`，真需要改才 PUT（失败发 `::warning::`），**任何一条路都 `exit 0`**；并新增契约 `test_ci_actions_contract.py::test_可见性步骤不再在_run_页留一条失败标注`（不许 `-f`/`--fail`、必须有 notice/warning、必须 `exit 0`）。
+
+### 七、执行冲突修复（用户「对这 10 组执行修复」）
+
+- `GET /api/library-conflicts`：**10 组**，全部 `same_name_different_dirs`、`cross_library=0`，共 53 本。
+- `POST /api/library-conflicts/apply`：**43 条改名**（每组留 1 本不动），返回 **43 renamed / 0 errors / 43 remapped** ——
+  走的是 `fileops.apply_conflict_rename`（唯一会改 basename 的入口，**从不 unlink**，进度/批注/评分随 `db.remap_book_id` 迁移）。
+- 刷新书库索引（`POST /api/libraries/lib-6a0b30d3/scan`，80–84 s）：`/api/library-conflicts` → **total 0**；
+  全库 **重名 id 0 个**（原 10 组 / 53 本）。原先 409 的两个 id 实测 `GET /api/books/<id>` / `/comic` / `/cover` **全 200**，
+  `/comic` 回 148 页；`冥战录` 13 册、`series_gaps.missing = []`。
+- ⚠️ **执行中发现并同批修掉的真缺陷**：`suggest_name(use_dir=True)` 把目录名放在**前面**（`{dir} - {stem}`），
+  而漫画目录名常带卷号**范围**（`[冥战录][韋宗成][Vol.01-Vol.13]`）⇒ 改名后 `volume_of` 取第一个 `Vol.N`，
+  **每一册都被读成第 1 卷**（冥战录 4 册全成 `#1`，缺册统计还假报「缺 2、3、4 号」）。
+  修法：目录名放**后面**（`{stem} - {dir}`），原卷号仍是第一个匹配；新增
+  `tests/test_name_conflicts.py::test_建议名不改变卷号`（改前会红），并按新方案把这 6 个文件再改名一次
+  （6 renamed / 0 errors），复核 `冥战录` 序号 1–13 连续、`missing = []`。
+- 该代码修复**未发版**（`VERSION` 仍 `1.4.4`）：它只影响「以后点一键改名时给出的建议名」，
+  下次发版带上即可；`main` 领先于最后一次 tag 属常态。
