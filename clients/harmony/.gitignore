@@ -12,3 +12,5 @@
 *.hap
 *.hsp
 *.app
+# 视觉稿的真渲染截图不入库（约 8 MB），需要时用 design/README.md 里的命令重出。
+/design/shots/

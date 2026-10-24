@@ -1,0 +1,1959 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>NovelForge · 鸿蒙端样式稿</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   NovelForge · 鸿蒙端样式稿（单文件交互原型）
+   ──────────────────────────────────────────────────────────────
+   颜色 / 圆角 / 阴影全部取自仓库真值源：
+     frontend/src/assets/theme/tokens.css  (:root 与 .dark 两套)
+     frontend/src/assets/theme/radius.css  (--radius 默认 0.625rem)
+   视觉规则见 docs/DESIGN.md：组件不得硬编码色值，一律走语义 token。
+   本文件仅供评审观感，不是要进仓库的生产代码（故未用 Tailwind / SFC）。
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── 令牌：与 tokens.css 同意同值（浅色） ───────────────────── */
+:root{
+  color-scheme:light;
+  --tint-h:80; --tint-c:0.006; --tint-c-surface:var(--tint-c);
+
+  --background:oklch(0.99 var(--tint-c-surface) var(--tint-h));
+  --foreground:oklch(0.145 var(--tint-c-surface) var(--tint-h));
+  --card:oklch(0.975 var(--tint-c-surface) var(--tint-h));
+  --card-foreground:oklch(0.145 var(--tint-c-surface) var(--tint-h));
+  --popover:oklch(0.975 var(--tint-c-surface) var(--tint-h));
+  --primary:oklch(0.21 var(--tint-c-surface) var(--tint-h));
+  --primary-foreground:oklch(0.985 0.004 var(--tint-h));
+  --secondary:oklch(0.955 var(--tint-c-surface) var(--tint-h));
+  --secondary-foreground:oklch(0.21 var(--tint-c-surface) var(--tint-h));
+  --muted:oklch(0.955 var(--tint-c-surface) var(--tint-h));
+  --muted-foreground:oklch(0.52 0.001 var(--tint-h));
+  --accent:oklch(0.955 var(--tint-c-surface) var(--tint-h));
+  --destructive:oklch(0.577 0.245 27.325);
+  --success:oklch(0.52 0.14 148);
+  --warning:oklch(0.52 0.13 68);
+  --info:oklch(0.55 0.12 255);
+  --star-highlight:oklch(0.76 0.18 90);
+
+  --border:oklch(0.878 var(--tint-c-surface) var(--tint-h));
+  --input:oklch(0.878 var(--tint-c-surface) var(--tint-h));
+  --ring:oklch(0.65 var(--tint-c-surface) var(--tint-h));
+
+  --surface-1:oklch(0.975 var(--tint-c-surface) var(--tint-h));
+  --surface-2:oklch(0.955 var(--tint-c-surface) var(--tint-h));
+  --surface-3:oklch(0.93 var(--tint-c-surface) var(--tint-h));
+  --surface-4:oklch(0.91 var(--tint-c-surface) var(--tint-h));
+  --scrim:oklch(0.2 0.02 var(--tint-h) / 0.35);
+
+  --elevation-xs:0 1px 2px oklch(0 0 0 / .05);
+  --elevation-sm:0 1px 3px oklch(0 0 0 / .08), 0 1px 2px oklch(0 0 0 / .06);
+  --elevation-md:0 4px 6px -1px oklch(0 0 0 / .08), 0 2px 4px -2px oklch(0 0 0 / .06);
+  --elevation-lg:0 10px 15px -3px oklch(0 0 0 / .08), 0 4px 6px -4px oklch(0 0 0 / .05);
+  --elevation-xl:0 20px 25px -5px oklch(0 0 0 / .1), 0 8px 10px -6px oklch(0 0 0 / .06);
+
+  --radius:0.625rem;
+  --radius-sm:calc(var(--radius) * .6);
+  --radius-lg:calc(var(--radius) * 1.4);
+  --radius-pill:2.5rem;
+
+  /* 固定色（tokens.css 里的"事实色"，不随 accent 变） */
+  --pill-format-epub:oklch(0.55 0.14 150);
+  --pill-format-txt:oklch(0.55 0.03 60);
+  --pill-format-pdf:oklch(0.55 0.17 25);
+  --pill-format-mobi:oklch(0.55 0.18 275);
+  --format-ebook:oklch(0.58 0.16 263);
+  --volume-read:oklch(0.6 0.16 148);
+  --volume-reading:oklch(0.74 0.15 72);
+  --volume-unread:oklch(0.855 var(--tint-c-surface) var(--tint-h));
+
+  /* 样式稿自有：印章朱砂。仅用于"当前章 / 书签"这类不可替代的标记，
+     不参与任何大面积着色，避免破坏暖中性基调。 */
+  --seal:oklch(0.55 0.17 25);
+  --pill-web:oklch(0.55 0.16 245);
+  --pill-koreader:oklch(0.52 0.2 295);
+  --seal-soft:oklch(0.55 0.17 25 / .1);
+
+  --font-sans:"HarmonyOS Sans SC","HarmonyOS Sans","MiSans","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+  --font-serif:"Songti SC","Source Han Serif SC","Noto Serif SC","SimSun",Georgia,"Times New Roman",serif;
+  --font-mono:"JetBrains Mono","Cascadia Mono",ui-monospace,SFMono-Regular,Consolas,monospace;
+  --dot-color:oklch(0.82 var(--tint-c-surface) var(--tint-h));
+
+  /* 阅读面底色 / 墨色：由当前外观主题决定，与外壳同源 */
+  --bg-paper:oklch(0.955 0.014 84);
+  --ink:oklch(0.26 0.02 70);
+  --ink-dim:oklch(0.48 0.02 70);
+}
+
+html[data-skin="night"]{
+  color-scheme:dark;
+  --tint-c:0.0175; --tint-c-surface:var(--tint-c);
+  --background:oklch(0.145 var(--tint-c-surface) var(--tint-h));
+  --foreground:oklch(0.985 0.001 var(--tint-h));
+  --card:oklch(0.18 var(--tint-c-surface) var(--tint-h));
+  --card-foreground:oklch(0.985 0.001 var(--tint-h));
+  --popover:oklch(0.18 var(--tint-c-surface) var(--tint-h));
+  --primary:oklch(0.91 var(--tint-c-surface) var(--tint-h));
+  --primary-foreground:oklch(0.18 var(--tint-c-surface) var(--tint-h));
+  --secondary:oklch(0.245 var(--tint-c-surface) var(--tint-h));
+  --secondary-foreground:oklch(0.985 0.001 var(--tint-h));
+  --muted:oklch(0.245 var(--tint-c-surface) var(--tint-h));
+  --muted-foreground:oklch(0.725 0.001 var(--tint-h));
+  --accent:oklch(0.245 var(--tint-c-surface) var(--tint-h));
+  --destructive:oklch(0.704 0.191 22.216);
+  --success:oklch(0.72 0.15 148);
+  --warning:oklch(0.8 0.13 75);
+  --info:oklch(0.72 0.12 255);
+  --star-highlight:oklch(0.84 0.17 95);
+  --border:oklch(1 0 0 / 10%);
+  --input:oklch(1 0 0 / 15%);
+  --ring:oklch(0.52 0.008 var(--tint-h));
+  --surface-1:oklch(0.18 var(--tint-c-surface) var(--tint-h));
+  --surface-2:oklch(0.235 var(--tint-c-surface) var(--tint-h));
+  --surface-3:oklch(0.245 var(--tint-c-surface) var(--tint-h));
+  --surface-4:oklch(0.295 var(--tint-c-surface) var(--tint-h));
+  --scrim:oklch(0.06 0.01 var(--tint-h) / 0.62);
+  --elevation-sm:0 1px 3px oklch(0 0 0 / .5), 0 1px 2px oklch(0 0 0 / .4);
+  --elevation-md:0 4px 8px -1px oklch(0 0 0 / .5), 0 2px 4px -2px oklch(0 0 0 / .4);
+  --elevation-lg:0 10px 20px -3px oklch(0 0 0 / .5), 0 4px 8px -4px oklch(0 0 0 / .4);
+  --elevation-xl:0 20px 30px -5px oklch(0 0 0 / .6), 0 8px 12px -6px oklch(0 0 0 / .4);
+  --seal:oklch(0.72 0.15 25);
+  --pill-web:oklch(0.72 0.14 245);
+  --pill-koreader:oklch(0.72 0.17 295);
+  --seal-soft:oklch(0.72 0.15 25 / .14);
+  --volume-unread:oklch(0.315 var(--tint-c-surface) var(--tint-h));
+  --dot-color:oklch(0.3 var(--tint-c-surface) var(--tint-h));
+  --bg-paper:oklch(0.175 0.008 70);
+  --ink:oklch(0.82 0.01 80);
+  --ink-dim:oklch(0.6 0.01 80);
+}
+
+/* ── 护眼：第三档外观主题。同样是「只换变量」，覆盖全部界面 ── */
+html[data-skin="green"]{
+  color-scheme:light;
+  --tint-h:145; --tint-c:0.022; --tint-c-surface:var(--tint-c);
+  --background:oklch(0.945 0.026 145);
+  --foreground:oklch(0.245 0.024 150);
+  --card:oklch(0.967 0.022 145);
+  --card-foreground:oklch(0.245 0.024 150);
+  --popover:oklch(0.967 0.022 145);
+  --primary:oklch(0.34 0.05 150);
+  --primary-foreground:oklch(0.97 0.015 145);
+  --secondary:oklch(0.912 0.030 145);
+  --secondary-foreground:oklch(0.30 0.030 150);
+  --muted:oklch(0.912 0.030 145);
+  --muted-foreground:oklch(0.455 0.024 150);
+  --accent:oklch(0.912 0.030 145);
+  --destructive:oklch(0.545 0.19 27);
+  --success:oklch(0.50 0.14 148);
+  --warning:oklch(0.50 0.13 68);
+  --info:oklch(0.52 0.12 255);
+  --star-highlight:oklch(0.72 0.16 90);
+  --border:oklch(0.855 0.030 145);
+  --input:oklch(0.855 0.030 145);
+  --ring:oklch(0.60 0.06 150);
+  --surface-1:oklch(0.967 0.022 145);
+  --surface-2:oklch(0.935 0.026 145);
+  --surface-3:oklch(0.905 0.028 145);
+  --surface-4:oklch(0.878 0.030 145);
+  --scrim:oklch(0.2 0.03 150 / 0.38);
+  --volume-unread:oklch(0.865 0.028 145);
+  --dot-color:oklch(0.83 0.030 145);
+  --bg-paper:oklch(0.925 0.028 145);
+  --ink:oklch(0.27 0.02 150);
+  --ink-dim:oklch(0.46 0.02 150);
+}
+
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
+body{
+  font-family:var(--font-sans);
+  font-size:14px; line-height:1.5;
+  color:var(--foreground);
+  background:
+    radial-gradient(var(--dot-color) 1px, transparent 1px) 0 0/22px 22px,
+    var(--background);
+  min-height:100vh;
+  padding:40px 32px 64px;
+  /* 不做 background-color 过渡：外观主题靠换变量，对简写做过渡会让底色卡在旧值
+     （与 .reader 同一根因，实测 computed 不变）。整站换肤是瞬时的。 */
+}
+::selection{background:var(--seal-soft)}
+
+/* ── 版面：题头 + 三栏（说明 / 手机 / 开关） ───────────────── */
+.masthead{max-width:1440px;margin:0 auto 30px;display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap}
+.masthead .kicker{
+  font-family:var(--font-mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  color:var(--muted-foreground);
+}
+.masthead h1{
+  font-family:var(--font-serif);font-weight:600;font-size:34px;line-height:1.15;
+  letter-spacing:-.01em;margin:8px 0 10px;
+}
+.masthead h1 em{font-style:normal;color:var(--muted-foreground)}
+.masthead p{margin:0;max-width:62ch;color:var(--muted-foreground);font-size:13px;line-height:1.65}
+.masthead code,.notes code{font-family:var(--font-mono);font-size:11.5px;background:var(--secondary);padding:1px 5px;border-radius:5px;color:var(--secondary-foreground)}
+.legend{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.tag{
+  font-size:11px;letter-spacing:.02em;padding:5px 10px;border-radius:var(--radius-pill);
+  border:1px solid var(--border);background:var(--card);color:var(--muted-foreground);white-space:nowrap;
+}
+
+.stage{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:minmax(240px,1fr) auto minmax(240px,1fr);gap:40px;align-items:start}
+
+/* ── 侧栏说明卡 ─────────────────────────────────────────────── */
+.notes{display:flex;flex-direction:column;gap:14px;position:sticky;top:24px}
+.note{
+  background:var(--card);border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:16px 18px;box-shadow:var(--elevation-sm);
+}
+.note h2{
+  font-family:var(--font-serif);font-size:15px;font-weight:600;margin:0 0 10px;
+  display:flex;align-items:center;gap:8px;
+}
+.note h2::before{content:"";width:3px;height:14px;border-radius:2px;background:var(--seal);flex:none}
+.note ul{margin:0;padding-left:16px;color:var(--muted-foreground);font-size:12.5px;line-height:1.75}
+.note li+li{margin-top:6px}
+.note li b{color:var(--foreground);font-weight:600}
+.note .hint{margin:10px 0 0;font-size:12px;color:var(--muted-foreground);padding-top:10px;border-top:1px dashed var(--border)}
+
+/* 开关行 */
+.switch-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0}
+.switch-row+.switch-row{border-top:1px solid var(--border)}
+.switch-row span{font-size:12.5px}
+.switch-row small{display:block;color:var(--muted-foreground);font-size:11px;margin-top:2px}
+.sw{
+  position:relative;width:40px;height:23px;border-radius:var(--radius-pill);flex:none;
+  background:var(--surface-3);border:1px solid var(--border);cursor:pointer;
+  transition:background-color .2s ease;
+}
+.sw::after{
+  content:"";position:absolute;top:2px;left:2px;width:17px;height:17px;border-radius:50%;
+  background:var(--background);box-shadow:var(--elevation-xs);
+  transition:transform .22s cubic-bezier(.32,.72,0,1);
+}
+.sw[aria-checked="true"]{background:var(--primary);border-color:var(--primary)}
+.sw[aria-checked="true"]::after{transform:translateX(17px);background:var(--primary-foreground)}
+.seg-mini{display:flex;gap:4px;background:var(--secondary);padding:3px;border-radius:var(--radius-pill)}
+.seg-mini button{
+  border:0;background:transparent;color:var(--muted-foreground);font-family:inherit;font-size:11.5px;
+  padding:4px 10px;border-radius:var(--radius-pill);cursor:pointer;
+}
+.seg-mini button[aria-pressed="true"]{background:var(--card);color:var(--foreground);box-shadow:var(--elevation-xs)}
+
+/* ── 手机外壳 ───────────────────────────────────────────────── */
+.device{position:relative;width:390px;flex:none}
+.phone{
+  position:relative;width:390px;height:844px;border-radius:46px;padding:10px;
+  background:linear-gradient(160deg,oklch(0.32 0.006 80),oklch(0.19 0.006 80) 60%,oklch(0.28 0.006 80));
+  box-shadow:var(--elevation-xl),0 0 0 1px oklch(1 0 0 / .08) inset,0 40px 80px -30px oklch(0 0 0 / .45);
+}
+.phone::before{ /* 侧键 */
+  content:"";position:absolute;right:-2px;top:180px;width:3px;height:76px;border-radius:2px;
+  background:oklch(0.42 0.006 80);
+}
+.screen{
+  position:relative;width:100%;height:100%;border-radius:37px;overflow:hidden;
+  background:var(--background);color:var(--foreground);
+  display:flex;flex-direction:column;isolation:isolate;
+}
+/* 刘海：鸿蒙风格居中胶囊 */
+.screen::after{
+  content:"";position:absolute;top:9px;left:50%;transform:translateX(-50%);
+  width:86px;height:22px;border-radius:var(--radius-pill);
+  background:oklch(0.12 0 0);z-index:60;pointer-events:none;
+}
+.statusbar{
+  height:44px;flex:none;display:flex;align-items:center;justify-content:space-between;
+  padding:0 22px;font-family:var(--font-mono);font-size:12px;font-weight:600;
+  color:var(--foreground);z-index:55;position:relative;
+}
+.statusbar .right{display:flex;align-items:center;gap:6px}
+.sig{display:flex;align-items:flex-end;gap:2px;height:10px}
+.sig i{width:2.5px;border-radius:1px;background:currentColor;opacity:.9}
+.sig i:nth-child(1){height:4px}.sig i:nth-child(2){height:6px}.sig i:nth-child(3){height:8px}.sig i:nth-child(4){height:10px}
+.batt{width:20px;height:10px;border:1.4px solid currentColor;border-radius:3px;position:relative}
+.batt::before{content:"";position:absolute;inset:1.5px;right:5px;background:currentColor;border-radius:1px}
+.batt::after{content:"";position:absolute;right:-3px;top:2.4px;width:2px;height:4px;background:currentColor;border-radius:0 2px 2px 0}
+
+/* 视图容器 */
+.views{flex:1;min-height:0;position:relative}
+.view{
+  position:absolute;inset:0;display:flex;flex-direction:column;
+  opacity:0;visibility:hidden;transform:translateY(8px);
+  transition:opacity .26s ease,transform .3s cubic-bezier(.32,.72,0,1),visibility .26s;
+}
+.view[data-active="true"]{opacity:1;visibility:visible;transform:none}
+.scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+.scroll::-webkit-scrollbar{width:5px}
+.scroll::-webkit-scrollbar-thumb{background:var(--surface-4);border-radius:9px}
+.pad{padding:0 20px}
+
+/* ── 通用组件 ───────────────────────────────────────────────── */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  height:46px;padding:0 20px;border:1px solid transparent;border-radius:var(--radius);
+  font-family:inherit;font-size:14px;font-weight:600;cursor:pointer;
+  background:var(--primary);color:var(--primary-foreground);
+  transition:transform .12s ease,opacity .2s ease;
+}
+.btn:active{transform:scale(.985)}
+.btn.block{width:100%}
+.btn.ghost{background:transparent;color:var(--foreground);border-color:var(--border)}
+.btn.ghost:active{background:var(--secondary)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.icon-btn{
+  width:34px;height:34px;display:grid;place-items:center;border:0;border-radius:var(--radius-sm);
+  background:transparent;color:var(--muted-foreground);cursor:pointer;
+}
+.icon-btn:active{background:var(--secondary)}
+.pill{
+  display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:var(--radius-pill);
+  font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
+}
+.pill[data-fmt="epub"]{color:var(--pill-format-epub);background:color-mix(in oklch,var(--pill-format-epub) 14%,transparent)}
+.pill[data-fmt="txt"]{color:var(--pill-format-txt);background:color-mix(in oklch,var(--pill-format-txt) 14%,transparent)}
+.pill[data-fmt="pdf"]{color:var(--pill-format-pdf);background:color-mix(in oklch,var(--pill-format-pdf) 14%,transparent)}
+.pill[data-fmt="mobi"]{color:var(--pill-format-mobi);background:color-mix(in oklch,var(--pill-format-mobi) 14%,transparent)}
+
+/* ── 页头（大衬线标题，沿用页头范式 PageHead） ─────────────── */
+.pagehead{padding:6px 20px 14px;display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.pagehead h2{
+  font-family:var(--font-serif);font-size:27px;font-weight:600;letter-spacing:-.01em;margin:0;
+}
+.pagehead .sub{margin:4px 0 0;font-size:11.5px;color:var(--muted-foreground);font-family:var(--font-mono);letter-spacing:.02em}
+.pagehead .tools{display:flex;gap:2px;align-items:center;padding-top:4px}
+
+/* ══ 1. 登录 / 连接 ═════════════════════════════════════════ */
+.login{flex:1;display:flex;flex-direction:column;justify-content:center;padding:0 26px 40px}
+.brand{text-align:center;margin-bottom:34px}
+.brand .mark{
+  width:64px;height:64px;margin:0 auto 16px;border-radius:18px;
+  background:linear-gradient(150deg,var(--surface-3),var(--surface-4));
+  border:1px solid var(--border);display:grid;place-items:center;
+  font-family:var(--font-serif);font-size:30px;color:var(--foreground);
+  box-shadow:var(--elevation-md);
+}
+.brand h1{font-family:var(--font-serif);font-size:23px;font-weight:600;margin:0 0 6px;letter-spacing:.01em}
+.brand p{margin:0;font-size:11.5px;color:var(--muted-foreground);font-family:var(--font-mono);letter-spacing:.04em}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:11.5px;font-weight:600;color:var(--muted-foreground);margin-bottom:6px;letter-spacing:.02em}
+.field .input{
+  display:flex;align-items:center;gap:8px;height:46px;padding:0 12px;
+  background:var(--card);border:1px solid var(--input);border-radius:var(--radius);
+  box-shadow:var(--elevation-xs);
+}
+.field .input:focus-within{border-color:var(--ring);box-shadow:0 0 0 3px color-mix(in oklch,var(--ring) 26%,transparent)}
+.field input{
+  flex:1;min-width:0;border:0;background:transparent;outline:none;color:var(--foreground);
+  font-family:var(--font-mono);font-size:13px;
+}
+.field input::placeholder{color:var(--muted-foreground);opacity:.7}
+.probe{
+  display:flex;align-items:center;gap:8px;margin:2px 0 20px;padding:10px 12px;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);
+  font-size:11.5px;color:var(--muted-foreground);font-family:var(--font-mono);
+}
+.dot{width:7px;height:7px;border-radius:50%;flex:none;background:var(--success);box-shadow:0 0 0 3px color-mix(in oklch,var(--success) 18%,transparent)}
+.dot.warn{background:var(--warning);box-shadow:0 0 0 3px color-mix(in oklch,var(--warning) 18%,transparent)}
+.dot.bad{background:var(--destructive);box-shadow:0 0 0 3px color-mix(in oklch,var(--destructive) 18%,transparent)}
+.probe b{color:var(--foreground);font-weight:600}
+.login .fine{margin:18px 0 0;text-align:center;font-size:11px;color:var(--muted-foreground);line-height:1.7}
+.gate{
+  margin:0 0 16px;padding:12px 14px;border-radius:var(--radius);
+  background:color-mix(in oklch,var(--destructive) 9%,transparent);
+  border:1px solid color-mix(in oklch,var(--destructive) 32%,transparent);
+  font-size:12px;line-height:1.6;color:var(--foreground);display:none;
+}
+.gate.show{display:block}
+.gate strong{color:var(--destructive)}
+
+/* ══ 2. 书架 ════════════════════════════════════════════════ */
+.seg{display:flex;gap:3px;background:var(--secondary);padding:3px;border-radius:var(--radius-pill)}
+.seg button{
+  border:0;background:transparent;color:var(--muted-foreground);font-family:inherit;
+  font-size:11.5px;font-weight:600;padding:5px 11px;border-radius:var(--radius-pill);cursor:pointer;
+  display:flex;align-items:center;gap:5px;transition:background-color .18s,color .18s;
+}
+.seg button[aria-pressed="true"]{background:var(--card);color:var(--foreground);box-shadow:var(--elevation-xs)}
+
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px 10px;padding:2px 16px 28px}
+.card-book{border:0;background:transparent;padding:0;text-align:left;cursor:pointer;font-family:inherit;color:inherit;display:block;width:100%}
+.cover{
+  position:relative;aspect-ratio:2/3;border-radius:var(--radius-sm) var(--radius) var(--radius) var(--radius-sm);
+  overflow:hidden;box-shadow:var(--elevation-md);
+  transition:transform .3s cubic-bezier(.32,.72,0,1),box-shadow .3s ease;
+}
+.card-book:active .cover{transform:translateY(-3px) scale(.985);box-shadow:var(--elevation-lg)}
+.cover .cloth{position:absolute;inset:0;opacity:.5;mix-blend-mode:overlay;
+  background:repeating-linear-gradient(90deg,oklch(1 0 0/.16) 0 1px,transparent 1px 3px)}
+.cover .spine{position:absolute;left:0;top:0;bottom:0;width:6px;
+  background:linear-gradient(90deg,oklch(0 0 0/.3),oklch(0 0 0/.05));}
+.cover .ctitle{
+  position:absolute;top:8px;right:8px;writing-mode:vertical-rl;
+  font-family:var(--font-serif);font-size:12.5px;font-weight:600;line-height:1.1;
+  letter-spacing:.1em;color:oklch(0.97 0.01 80);text-shadow:0 1px 2px oklch(0 0 0/.3);
+  max-height:calc(100% - 44px);overflow:hidden;
+}
+.cover .seal{
+  position:absolute;left:9px;bottom:8px;width:18px;height:18px;border-radius:2px;
+  background:var(--seal);color:oklch(0.99 0 0);display:grid;place-items:center;
+  font-family:var(--font-serif);font-size:10px;line-height:1;box-shadow:0 1px 3px oklch(0 0 0/.35);
+}
+.cover .badge-anno{
+  position:absolute;right:5px;bottom:5px;height:15px;padding:0 4px;border-radius:var(--radius-pill);
+  background:oklch(0 0 0/.42);backdrop-filter:blur(6px);color:oklch(0.97 0 0);
+  font-size:9px;font-family:var(--font-mono);display:flex;align-items:center;gap:2px;
+}
+.meta{margin-top:7px}
+.meta .t{font-size:11.5px;font-weight:600;line-height:1.3;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta .a{font-size:9.5px;color:var(--muted-foreground);margin-top:2px;display:flex;align-items:center;gap:6px}
+.bar{height:2.5px;border-radius:9px;background:var(--volume-unread);margin-top:5px;overflow:hidden}
+.bar i{display:block;height:100%;border-radius:9px;background:var(--volume-reading);transition:width .5s ease}
+.meta .p{font-family:var(--font-mono);font-size:9px;color:var(--muted-foreground);margin-top:4px;display:flex;justify-content:space-between}
+
+.listbook{
+  display:flex;gap:14px;align-items:center;width:100%;padding:12px;border:0;border-radius:var(--radius);
+  background:transparent;cursor:pointer;font-family:inherit;color:inherit;text-align:left;
+  transition:background-color .18s ease;
+}
+.listbook:active{background:var(--secondary)}
+.listbook .mini{width:46px;height:66px;border-radius:3px var(--radius-sm) var(--radius-sm) 3px;flex:none;position:relative;overflow:hidden;box-shadow:var(--elevation-sm)}
+.listbook .mini span{position:absolute;top:6px;right:7px;writing-mode:vertical-rl;font-family:var(--font-serif);font-size:11px;color:oklch(0.97 0.01 80);letter-spacing:.1em}
+.listbook .body{flex:1;min-width:0}
+.listbook .body .t{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.listbook .body .a{font-size:11px;color:var(--muted-foreground);margin-top:3px;display:flex;align-items:center;gap:6px}
+.listbook .right{text-align:right;flex:none;font-family:var(--font-mono);font-size:10.5px;color:var(--muted-foreground)}
+.listbook .right b{display:block;font-size:13px;color:var(--foreground);font-family:var(--font-sans)}
+.list-wrap{padding:0 8px 28px}
+
+/* ── 书库切换条（数据来自 GET /api/libraries） ─────────────── */
+.libbar{
+  display:flex;align-items:center;gap:8px;width:calc(100% - 32px);margin:0 16px 12px;
+  padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--card);cursor:pointer;font-family:inherit;color:inherit;text-align:left;
+  transition:background-color .18s ease;
+}
+.libbar:active{background:var(--secondary)}
+.libbar .lb-name{font-size:12.5px;font-weight:600;flex:1;min-width:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.libbar .lb-count{font-family:var(--font-mono);font-size:10px;color:var(--muted-foreground)}
+.libbar .lb-sync{width:6px;height:6px;border-radius:50%;background:var(--muted-foreground);flex:none}
+.libbar .lb-sync.busy{background:var(--warning);animation:count-pulse 1.4s ease-in-out infinite}
+.libbar svg.chev{color:var(--muted-foreground);flex:none}
+
+/* 库列表行 */
+.librow{display:flex;align-items:center;gap:10px;padding:11px 14px;border-top:1px solid var(--border);
+  cursor:pointer;font-family:inherit;color:inherit;background:transparent;border-left:0;border-right:0;border-bottom:0;width:100%;text-align:left}
+.librow:first-of-type{border-top:0}
+.librow[aria-pressed="true"]{background:var(--secondary)}
+.librow .lr-main{flex:1;min-width:0}
+.librow .lr-name{font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px}
+.librow .lr-meta{font-size:10.5px;color:var(--muted-foreground);margin-top:2px;
+  font-family:var(--font-mono)}
+.librow .lr-n{font-family:var(--font-mono);font-size:11px;color:var(--muted-foreground);flex:none}
+.librow .tick{color:var(--seal);flex:none}
+
+/* 来源文件夹行（新建书库向导） */
+.srcrow{display:flex;align-items:center;gap:9px;padding:9px 14px;border-top:1px solid var(--border);font-size:12px}
+.srcrow:first-of-type{border-top:0}
+.srcrow .box{width:15px;height:15px;border:1.5px solid var(--input);border-radius:3px;flex:none;
+  display:grid;place-items:center;transition:background-color .15s,border-color .15s}
+.srcrow[aria-pressed="true"] .box{background:var(--primary);border-color:var(--primary)}
+.srcrow .box svg{opacity:0;color:var(--primary-foreground)}
+.srcrow[aria-pressed="true"] .box svg{opacity:1}
+.srcrow .p{font-family:var(--font-mono);font-size:10.5px;color:var(--muted-foreground);margin-top:1px}
+
+/* 移书：目标库行（不相容置灰 + 原样显示原因） */
+.mvrow{display:flex;align-items:flex-start;gap:9px;padding:11px 14px;border-top:1px solid var(--border);
+  width:100%;text-align:left;background:transparent;border-left:0;border-right:0;border-bottom:0;
+  font-family:inherit;color:inherit;cursor:pointer}
+.mvrow:first-of-type{border-top:0}
+.mvrow[disabled]{opacity:.55;cursor:not-allowed}
+.mvrow .radio{width:15px;height:15px;border-radius:50%;border:1.5px solid var(--input);flex:none;margin-top:1px;
+  display:grid;place-items:center}
+.mvrow[aria-pressed="true"] .radio{border-color:var(--seal)}
+.mvrow[aria-pressed="true"] .radio::after{content:"";width:7px;height:7px;border-radius:50%;background:var(--seal)}
+.mvrow .reason{font-size:10.5px;color:var(--warning);margin-top:3px;line-height:1.45}
+
+.card-book.nocache,.listbook.nocache{opacity:.5}
+.offline-note{
+  display:flex;align-items:center;gap:6px;margin:0 0 14px;padding:8px 11px;border-radius:var(--radius-sm);
+  background:color-mix(in oklch,var(--warning) 13%,transparent);color:var(--warning);
+  font-size:11px;line-height:1.45;
+}
+/* 缓存角标 */
+.nocache-tag{font-family:var(--font-mono);font-size:9px;letter-spacing:.02em;color:var(--muted-foreground);opacity:.75}
+.cached-dot{display:inline-flex;align-items:center;gap:3px;font-family:var(--font-mono);
+  font-size:9px;color:var(--success)}
+.tag-off{display:inline-flex;align-items:center;gap:4px;height:19px;padding:0 7px;border-radius:var(--radius-pill);
+  background:color-mix(in oklch,var(--warning) 16%,transparent);color:var(--warning);
+  font-size:10px;font-weight:600;font-family:inherit}
+
+/* ── 底部导航（TabBar 范式） ───────────────────────────────── */
+.tabbar{
+  flex:none;height:66px;display:grid;grid-template-columns:repeat(4,1fr);
+  align-items:start;padding-top:6px;
+  background:color-mix(in oklch,var(--background) 88%,transparent);
+  backdrop-filter:blur(18px) saturate(1.4);
+  border-top:1px solid var(--border);z-index:40;position:relative;
+}
+.tabbar button{
+  border:0;background:transparent;cursor:pointer;font-family:inherit;
+  display:flex;flex-direction:column;align-items:center;gap:3px;
+  color:var(--muted-foreground);font-size:10px;font-weight:500;padding:4px 0 0;
+  transition:color .2s ease;
+}
+.tabbar button svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.tabbar button[aria-current="true"]{color:var(--foreground);font-weight:600}
+.tabbar button[aria-current="true"] svg{stroke-width:2}
+.tabbar .ind{width:4px;height:4px;border-radius:50%;background:var(--seal);margin-top:1px;opacity:0;transition:opacity .2s}
+.tabbar button[aria-current="true"] .ind{opacity:1}
+
+/* ══ 3. 详情 ════════════════════════════════════════════════ */
+.navbar{
+  flex:none;height:48px;display:flex;align-items:center;gap:10px;padding:0 14px 0 8px;
+  background:color-mix(in oklch,var(--background) 86%,transparent);
+  backdrop-filter:blur(16px);border-bottom:1px solid transparent;
+}
+.navbar .title{
+  flex:1;min-width:0;font-size:13.5px;font-weight:600;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.navbar .title small{display:block;font-weight:400;font-size:10.5px;color:var(--muted-foreground);font-family:var(--font-mono)}
+.detail-hero{display:flex;gap:16px;padding:8px 20px 18px}
+.detail-hero .bigcover{
+  width:96px;height:142px;border-radius:4px var(--radius) var(--radius) 4px;flex:none;position:relative;overflow:hidden;
+  box-shadow:var(--elevation-lg);
+}
+.detail-hero .bigcover .ctitle{font-size:15px;top:10px;right:10px}
+.hero-meta{flex:1;min-width:0;display:flex;flex-direction:column}
+.hero-meta h3{font-family:var(--font-serif);font-size:20px;font-weight:600;margin:6px 0 4px;line-height:1.25}
+.hero-meta .by{font-size:12px;color:var(--muted-foreground);margin-bottom:10px}
+.hero-meta .chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:auto}
+.chip{
+  font-size:10.5px;padding:4px 8px;border-radius:var(--radius-sm);
+  background:var(--secondary);color:var(--secondary-foreground);border:1px solid var(--border);
+  font-family:var(--font-mono);letter-spacing:.02em;
+}
+.progress-card{
+  margin:0 20px 20px;padding:14px 16px;border-radius:var(--radius-lg);
+  background:var(--card);border:1px solid var(--border);box-shadow:var(--elevation-sm);
+}
+.progress-card .row{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:9px}
+.progress-card .row span{font-size:11px;color:var(--muted-foreground);font-family:var(--font-mono)}
+.progress-card .row b{font-size:19px;font-family:var(--font-serif);font-weight:600}
+.progress-card .bar{height:5px;margin:0 0 13px}
+.progress-card .bar i{background:var(--seal)}
+.progress-card .hint{font-size:10.5px;color:var(--muted-foreground);margin:9px 0 0;text-align:center;font-family:var(--font-mono)}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;margin:0 20px 20px;background:var(--border);border-radius:var(--radius);overflow:hidden;border:1px solid var(--border)}
+.stats div{background:var(--card);padding:11px 10px;text-align:center}
+.stats b{display:block;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+.stats span{font-size:10px;color:var(--muted-foreground);letter-spacing:.02em}
+.sect{margin:0 20px 8px;display:flex;align-items:center;justify-content:space-between}
+.sect h4{font-family:var(--font-serif);font-size:14px;font-weight:600;margin:0;letter-spacing:.02em}
+.sect .cnt{font-size:10.5px;color:var(--muted-foreground);font-family:var(--font-mono)}
+.vol{margin:0 20px 16px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--card)}
+.vol-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:8px 12px;background:var(--surface-2);border-bottom:1px solid var(--border);
+  font-size:11px;font-weight:600;color:var(--muted-foreground);letter-spacing:.04em;
+}
+.vol-head .n{font-family:var(--font-mono);font-weight:400;opacity:.8}
+.chap{
+  display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px 11px 12px;border:0;background:transparent;
+  font-family:inherit;font-size:12.5px;color:var(--foreground);text-align:left;cursor:pointer;
+  border-bottom:1px solid var(--border);overflow:hidden;
+}
+.chap:last-child{border-bottom:0}
+.chap:active{background:var(--secondary)}
+.chap .idx{
+  font-family:var(--font-mono);font-size:10px;color:var(--muted-foreground);
+  min-width:26px;flex:none;text-align:right;
+}
+.chap .tt{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chap.now{background:var(--seal-soft)}
+.chap.now .idx{color:var(--seal);font-weight:700}
+.chap .flag{font-size:9.5px;color:var(--seal);font-family:var(--font-mono);flex:none}
+.desc{margin:0 20px 26px;font-size:12px;line-height:1.8;color:var(--muted-foreground)}
+
+/* 封面跟着外观主题走：暗色下压暗、护眼下收一点饱和。
+   不这么做，夜间书架会变成一排发光的色块。 */
+html[data-skin="night"] .cover{filter:brightness(.74) saturate(.86)}
+html[data-skin="green"] .cover{filter:saturate(.9) brightness(.97)}
+
+/* ══ 4. 阅读面（ArkWeb 容器观感） ═══════════════════════════ */
+.reader{
+  position:absolute;inset:0;display:flex;flex-direction:column;z-index:20;
+  /* 底色 / 墨色来自全局外观主题（--bg-paper / --ink）。
+     不在这里做 background-color 过渡：对简写做过渡会让变量切换后颜色卡在旧值（实测 computed 不变）。 */
+  background-color:var(--bg-paper);color:var(--ink);
+}
+.reader::before{ /* 纸纹 + 暗角，纯 CSS，不引外部图片 */
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(120% 90% at 50% 0%, transparent 55%, oklch(0 0 0/.06) 100%),
+    repeating-linear-gradient(0deg, oklch(0 0 0/.012) 0 1px, transparent 1px 4px);
+  mix-blend-mode:multiply;
+}
+html[data-skin="night"] .reader::before{mix-blend-mode:screen;opacity:.5}
+.rtop{
+  flex:none;height:50px;display:flex;align-items:center;gap:6px;padding:0 10px;
+  position:relative;z-index:3;opacity:0;transform:translateY(-6px);
+  transition:opacity .24s ease,transform .28s ease;
+}
+.reader.tools .rtop{opacity:1;transform:none}
+.rtop .title{flex:1;text-align:center;font-size:12px;color:var(--ink-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 6px}
+.rtop .icon-btn{color:var(--ink-dim)}
+.rtop .icon-btn:active{background:color-mix(in oklch,var(--ink) 10%,transparent)}
+.rbody{flex:1;min-height:0;overflow-y:auto;padding:0 30px 46px;scrollbar-width:none;position:relative;z-index:2}
+.rbody::-webkit-scrollbar{display:none}
+.rbody .chtitle{
+  font-family:var(--font-serif);font-size:calc(var(--rfs) * .82);line-height:1.5;
+  font-weight:600;text-align:center;margin:6px 0 26px;color:var(--ink);
+  letter-spacing:.02em;
+}
+.rbody h5{font-family:var(--font-serif);font-size:13px;font-weight:400;color:var(--ink-dim);text-align:center;margin:34px 0 0;letter-spacing:.06em}
+.rbody p{
+  font-family:var(--font-serif);font-size:var(--rfs);line-height:var(--rlh);
+  text-align:justify;text-indent:2em;margin:0 0 .85em;color:var(--ink);
+  letter-spacing:.01em;
+}
+/* 首字下沉：只作用于正文第一段（.drop），否则会误伤提示行 —— 段首缩进也必须去掉 */
+.rbody p.drop{text-indent:0}
+.rbody p.drop::first-letter{
+  float:left;font-size:2.9em;line-height:.9;padding:.04em .1em 0 0;
+  font-weight:600;color:var(--seal);
+}
+.rbody .caution{
+  font-family:var(--font-mono);font-size:10px;line-height:1.7;color:var(--ink-dim);
+  text-align:center;margin:0 0 18px;padding:7px 10px;border-radius:var(--radius-sm);
+  border:1px dashed color-mix(in oklch,var(--ink) 22%,transparent);opacity:.85;
+}
+.rbody .eof{
+  font-family:var(--font-mono);font-size:10.5px;color:var(--ink-dim);text-align:center;
+  margin:26px 0 40px;letter-spacing:.1em;opacity:.75;
+}
+.rfoot{
+  flex:none;height:30px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 30px 6px;font-family:var(--font-mono);font-size:10px;color:var(--ink-dim);z-index:2;
+  transition:opacity .2s ease;
+}
+.reader.tools .rfoot{opacity:0}
+/* 唤出工具栏后的底部面板 */
+.rtools{
+  position:absolute;left:0;right:0;bottom:0;z-index:10;
+  padding:14px 20px 22px;border-radius:var(--radius-lg) var(--radius-lg) 0 0;
+  background:color-mix(in oklch,var(--bg-paper) 86%,var(--ink));
+  border-top:1px solid color-mix(in oklch,var(--ink) 16%,transparent);
+  box-shadow:var(--elevation-xl);
+  backdrop-filter:blur(20px);
+  transform:translateY(110%);transition:transform .3s cubic-bezier(.32,.72,0,1);
+  color:var(--ink);
+}
+.reader.tools .rtools{transform:none}
+.rtools .grp{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+.rtools .grp:last-child{margin-bottom:0}
+.rtools .lbl{font-size:11.5px;color:color-mix(in oklch,var(--ink) 60%,transparent);flex:none;width:44px}
+.themes{display:flex;gap:8px}
+.swatch{
+  width:38px;height:38px;border-radius:var(--radius-sm);border:1px solid var(--border);cursor:pointer;
+  display:grid;place-items:center;font-family:var(--font-serif);font-size:12px;position:relative;
+  transition:transform .16s ease;
+}
+/* 选中的主题用一枚朱砂角标标记 —— 只靠 outline 在暗色下几乎看不见 */
+.swatch[aria-pressed="true"]{outline:1px solid color-mix(in oklch,var(--ink) 55%,transparent);outline-offset:2px}
+.swatch[aria-pressed="true"]::after{
+  content:"";position:absolute;right:1px;top:1px;width:8px;height:8px;border-radius:50%;
+  background:var(--seal);box-shadow:0 0 0 1.5px color-mix(in oklch,var(--bg-paper) 88%,var(--ink));
+}
+.swatch:active{transform:scale(.94)}
+.swatch[data-t="paper"]{background:oklch(0.955 0.014 84);color:oklch(0.3 0.02 70)}
+.swatch[data-t="night"]{background:oklch(0.175 0.008 70);color:oklch(0.8 0.01 80)}
+.swatch[data-t="green"]{background:oklch(0.925 0.028 145);color:oklch(0.3 0.02 150)}
+.stepper{display:flex;align-items:center;gap:2px;background:color-mix(in oklch,var(--ink) 9%,transparent);border-radius:var(--radius-pill);padding:3px}
+.stepper button{
+  width:30px;height:28px;border:0;background:transparent;color:var(--foreground);font-family:var(--font-serif);
+  font-size:13px;cursor:pointer;border-radius:var(--radius-pill);
+}
+.rtools .stepper button{color:var(--ink)}
+.stepper button:active{background:color-mix(in oklch,var(--ink) 12%,transparent)}
+.stepper .val{min-width:44px;text-align:center;font-family:var(--font-mono);font-size:11.5px;color:color-mix(in oklch,var(--ink) 68%,transparent)}
+.rtools .row2{display:flex;gap:8px}
+.rtools .row2 .btn{flex:1;height:40px;font-size:12.5px;
+  background:color-mix(in oklch,var(--ink) 8%,transparent);color:var(--ink);
+  border-color:color-mix(in oklch,var(--ink) 18%,transparent)}
+
+/* 浮层：目录 / 批注 */
+.sheet{
+  position:absolute;left:0;right:0;bottom:0;max-height:88%;z-index:30;
+  display:flex;flex-direction:column;
+  background:var(--background);color:var(--foreground);
+  border-radius:var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow:var(--elevation-xl);
+  transform:translateY(100%);transition:transform .3s cubic-bezier(.32,.72,0,1);
+}
+.sheet.open{transform:none}
+/* 浮层要压在 tabbar 之上，否则底部主按钮被遮 */
+.sheet{z-index:90}
+.rbody .chtitle{text-align:center;text-align-last:center}
+.rbody h5{text-align-last:center}
+.sheet-foot,.sheet .scroll{position:relative;z-index:1}
+.sheet .scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:none}
+.sheet .scroll::-webkit-scrollbar{display:none}
+.rtop{z-index:3}
+.offline-note{margin:2px 0 10px}
+.sheet-head{
+  flex:none;height:52px;display:flex;align-items:center;gap:8px;padding:0 12px;
+  border-bottom:1px solid var(--border);
+}
+.sheet-head h4{font-family:var(--font-serif);font-size:15px;font-weight:600;margin:0;flex:1}
+.anno{
+  padding:13px 16px;border-bottom:1px solid var(--border);display:flex;gap:10px;
+}
+.librow{padding-right:16px;overflow:hidden}
+#nl-src .srcrow:last-child{border-bottom:0}
+#nl-src{border-radius:var(--radius);overflow:hidden}
+.librow .lr-main{min-width:0}
+.librow .lr-name,.librow .lr-meta{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.anno .mark{width:3px;border-radius:2px;background:var(--star-highlight);flex:none}
+.anno .mark[data-src='web']{background:var(--pill-web)}
+.anno .mark[data-src='koreader']{background:var(--pill-koreader)}
+.anno .q{font-family:var(--font-serif);font-size:12.5px;line-height:1.7;color:var(--foreground)}
+.anno .n{font-size:11.5px;line-height:1.6;color:var(--muted-foreground);margin-top:6px}
+.anno .m{font-family:var(--font-mono);font-size:10px;color:var(--muted-foreground);margin-top:7px;letter-spacing:.02em}
+
+/* ══ 5. 设置 ════════════════════════════════════════════════ */
+.group{margin:0 20px 18px;border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;background:var(--card)}
+.group>.hd{
+  padding:9px 14px;background:var(--surface-2);border-bottom:1px solid var(--border);
+  font-size:10.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);
+}
+.row{display:flex;align-items:center;gap:12px;padding:13px 14px;border-bottom:1px solid var(--border);width:100%;background:transparent;border-left:0;border-right:0;border-top:0;font-family:inherit;color:inherit;text-align:left;cursor:pointer}
+.row:last-child{border-bottom:0}
+.row .l{flex:1;min-width:0;font-size:13px}
+.row .l small{display:block;font-size:10.5px;color:var(--muted-foreground);margin-top:3px;line-height:1.5}
+.row .v{font-size:12px;color:var(--muted-foreground);font-family:var(--font-mono);flex:none;max-width:132px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .chev{color:var(--muted-foreground);flex:none;opacity:.7}
+.row.danger .l{color:var(--destructive)}
+.row select{
+  font-family:var(--font-mono);font-size:11.5px;color:var(--foreground);background:var(--secondary);
+  border:1px solid var(--border);border-radius:var(--radius-sm);padding:6px 8px;outline:none;
+}
+.kv{font-family:var(--font-mono);font-size:11px;color:var(--muted-foreground);word-break:break-all}
+.section-title{margin:0 20px 8px;font-size:10.5px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-foreground)}
+
+/* ══ 6. 断网 / 版本门禁 覆盖层 ══════════════════════════════ */
+.overlay{
+  position:absolute;inset:0;z-index:70;display:none;flex-direction:column;
+  align-items:center;justify-content:center;padding:0 36px;text-align:center;
+  background:var(--background);
+}
+.overlay.show{display:flex}
+.overlay .ico{
+  width:60px;height:60px;border-radius:18px;display:grid;place-items:center;margin-bottom:20px;
+  background:var(--surface-2);border:1px solid var(--border);color:var(--muted-foreground);
+}
+.overlay h3{font-family:var(--font-serif);font-size:19px;font-weight:600;margin:0 0 10px}
+.overlay p{margin:0 0 20px;font-size:12px;line-height:1.75;color:var(--muted-foreground)}
+.overlay .why{
+  width:100%;text-align:left;font-family:var(--font-mono);font-size:10.5px;line-height:1.8;
+  background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius);
+  padding:11px 12px;color:var(--muted-foreground);margin-bottom:22px;
+}
+.overlay .why b{color:var(--foreground)}
+.overlay .btn{width:100%}
+.overlay .alt{margin-top:12px;font-size:11.5px;color:var(--muted-foreground);background:none;border:0;font-family:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+
+/* Toast */
+.toast{
+  position:absolute;left:50%;bottom:88px;transform:translate(-50%,14px);z-index:80;
+  background:var(--primary);color:var(--primary-foreground);font-size:12px;
+  padding:9px 16px;border-radius:var(--radius-pill);box-shadow:var(--elevation-lg);
+  opacity:0;pointer-events:none;transition:opacity .2s ease,transform .26s cubic-bezier(.32,.72,0,1);
+  max-width:82%;text-align:center;line-height:1.5;
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* 章节切换动效 */
+@keyframes turn-in{from{opacity:0;transform:translateX(26px)}to{opacity:1;transform:none}}
+.turn{animation:turn-in .34s cubic-bezier(.32,.72,0,1) both}
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms!important;transition-duration:.01ms!important}
+}
+
+/* 响应式：窄屏把说明挪到手机下面 */
+@media (max-width:1180px){
+  .stage{grid-template-columns:1fr;justify-items:center}
+  .notes{position:static;max-width:520px;width:100%}
+}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div>
+    <div class="kicker">NovelForge · HarmonyOS Client · Style Prototype</div>
+    <h1>书斋 <em>— 鸿蒙端样式稿</em></h1>
+    <p>纯瘦客户端（书在 NAS、进度在 NAS、端内只存 <code>baseUrl</code> <code>token</code> <code>deviceId</code>）。
+       颜色圆角阴影全部取自仓库真值源 <code>tokens.css</code>，阅读面按 R1 路线做成“ArkWeb 载入现有 SPA”的观感。</p>
+  </div>
+  <div class="legend">
+    <span class="tag">tokens.css 同值</span>
+    <span class="tag">radius 0.625rem</span>
+    <span class="tag">暖中性 tint-h 80</span>
+    <span class="tag">零外部依赖</span>
+  </div>
+</header>
+
+<main class="stage">
+
+  <!-- ── 左：设计取舍 ─────────────────────────────────────── -->
+  <aside class="notes">
+    <div class="note">
+      <h2>照抄的部分</h2>
+      <ul>
+        <li><b>语义 token 不硬编码</b>：卡片、边框、阴影全走 <code>--card</code> / <code>--border</code> / <code>--elevation-*</code>，切暗色只换一层变量。</li>
+        <li><b>暖中性底</b>：<code>--tint-h:80</code>，所以灰面偏米，不像通用后台的冷灰。</li>
+        <li><b>大标题用衬线</b>：书架 / 详情 / 浮层标题走 <code>--font-serif</code>，与正文无衬线分层。</li>
+        <li><b>格式胶囊用固定色</b>：EPUB 绿 / TXT 灰褐 / PDF 红，色相不跟 accent 漂移。</li>
+        <li><b>行+标签+控件</b>：设置页完全是 BookOrbit 的设置范式。</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h2>为鸿蒙端做的取舍</h2>
+      <ul>
+        <li><b>切库走真接口</b>：<code>GET /api/libraries</code> 给库清单；<code>/api/books</code> 没有 <code>library_id</code>，端上取全量后按 <code>library_id</code> 本地过滤（与网页端同一口径）。</li>
+                <li><b>移书是四步</b>：<code>targets</code>（搬不进去的库置灰并原样显示原因）→ <code>preflight</code>（逐本理由）→ <code>plan</code>（混进一本不相容就整批 400）→ <code>apply</code>（后台真搬，轮询 <code>/api/tasks/{tid}</code>）。</li>
+                <li><b>同步是拉取，不是推送</b>：后端无 WebSocket / SSE（<code>apply</code> 注释写明「不引入 SSE」）。端上动作立刻 POST，之后靠 <code>/api/libraries/scan-state</code> + 任务行轮询 + 下拉刷新。</li>
+                <li><b>已开始读的书落本地</b>：判定只一条 —— 有进度（<code>percent &gt; 0</code>）就缓存整本章节 HTML 与目录，断网照读；没缓存的书断网如实报错，绝不给空书架。</li>
+        <li><b>章节不自造编号</b>：右侧灰字直接是服务端的 spine <code>index</code>（章节接口的入参），没有“第 N 章”的第二次实现。</li>
+        <li><b>进度条只有一条真值</b>：数字来自 <code>GET /progress</code>，不本地推算。</li>
+        <li><b>断网就如实报错</b>：不给空书架、不给假进度（AGENTS §1 不做假数据）。</li>
+        <li><b>版本门禁</b>：连之前先打 <code>/health</code> 比版本，过旧只提示不硬拦。</li>
+      </ul>
+      <p class="hint">右侧开关可以切外壳明暗、模拟断网、模拟服务端过旧 —— 三个最容易在评审时被问到的状态。</p>
+    </div>
+  </aside>
+
+  <!-- ── 中：手机 ─────────────────────────────────────────── -->
+  <div class="device">
+    <div class="phone">
+      <div class="screen" id="screen">
+
+        <div class="statusbar">
+          <span>9:41</span>
+          <span class="right">
+            <span class="sig"><i></i><i></i><i></i><i></i></span>
+            <svg width="14" height="11" viewBox="0 0 14 11" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
+              <path d="M1 3.6a8.4 8.4 0 0 1 12 0M3.4 6.2a5.2 5.2 0 0 1 7.2 0M5.8 8.6a2 2 0 0 1 2.4 0"/>
+            </svg>
+            <span class="batt"></span>
+          </span>
+        </div>
+
+        <div class="views">
+
+          <!-- ═══ 1. 登录 / 连接 ═══ -->
+          <section class="view" id="v-login" data-active="true">
+            <div class="login">
+              <div class="brand">
+                <div class="mark">书</div>
+                <h1>NovelForge</h1>
+                <p>阅读端 · 书在你自己家里</p>
+              </div>
+
+              <div class="gate" id="gate">
+                <strong>服务端版本过旧</strong><br>
+                这台 NAS 是 <span id="gate-have">1.2.0</span>，本 App 需要 ≥ 1.4.0。<br>
+                仍可继续，但书架或正文可能显示异常。
+              </div>
+
+              <div class="field">
+                <label>服务器地址</label>
+                <div class="input">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--muted-foreground);flex:none">
+                    <rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/>
+                    <path d="M7 7h.01M7 17h.01"/>
+                  </svg>
+                  <input id="addr" value="http://192.168.1.20:8992" spellcheck="false">
+                </div>
+              </div>
+
+              <div class="field">
+                <label>访问口令</label>
+                <div class="input">
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="color:var(--muted-foreground);flex:none">
+                    <rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3"/>
+                  </svg>
+                  <input id="pin" type="password" value="changeme" spellcheck="false">
+                </div>
+              </div>
+
+              <div class="probe" id="probe">
+                <span class="dot"></span>
+                <span>已连上 · <b id="probe-ver">1.4.0</b> · <b>db ok</b> · 12ms</span>
+              </div>
+
+              <button class="btn block" id="do-login">连接</button>
+              <p class="fine">这个 App 不注册账号，也不在本地存书。<br>所有内容与进度都在你自己的 NAS 上。</p>
+            </div>
+          </section>
+
+          <!-- ═══ 2. 书架 ═══ -->
+          <section class="view" id="v-shelf">
+            <div class="pagehead">
+              <div>
+                <h2>书架</h2>
+                <p class="sub" id="shelf-sub">8 本 · 全部书库</p>
+              </div>
+              <div class="tools">
+                <div class="seg" id="view-toggle">
+                  <button data-v="grid" aria-pressed="true">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+                    网格
+                  </button>
+                  <button data-v="list" aria-pressed="false">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+                    列表
+                  </button>
+                </div>
+              </div>
+            </div>
+            <button class="libbar" id="lib-switch">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h6v14H4zM14 5h6v14h-6z"/></svg>
+              <span class="lb-name" id="lib-name">全部书库</span>
+              <span class="lb-sync" id="lib-sync"></span>
+              <span class="lb-count" id="lib-count">8 本</span>
+              <svg class="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+            <div class="scroll"><div id="shelf-body"></div></div>
+            <nav class="tabbar" data-tabs>
+              <button data-go="shelf" aria-current="true">
+                <svg viewBox="0 0 24 24"><path d="M4 5h6v14H4zM14 5h6v14h-6z"/></svg>书架<span class="ind"></span>
+              </button>
+              <button data-go="read" data-need-book>
+                <svg viewBox="0 0 24 24"><path d="M12 6.5C10.5 5 8 4.5 4 5v13c4-.5 6.5 0 8 1.5 1.5-1.5 4-2 8-1.5V5c-4-.5-6.5 0-8 1.5zM12 6.5v13"/></svg>阅读<span class="ind"></span>
+              </button>
+              <button data-go="settings">
+                <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>设置<span class="ind"></span>
+              </button>
+              <button data-go="about">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></svg>关于<span class="ind"></span>
+              </button>
+            </nav>
+          </section>
+
+          <!-- ═══ 3. 详情 ═══ -->
+          <section class="view" id="v-detail">
+            <div class="navbar">
+              <button class="icon-btn" data-back="shelf">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 6l-6 6 6 6"/></svg>
+              </button>
+              <span class="title" id="d-title">红楼梦<small id="d-sub">曹雪芹 · EPUB</small></span>
+              <button class="icon-btn" title="加入收藏（演示）">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h12v18l-6-4.2L6 21z"/></svg>
+              </button>
+            </div>
+            <div class="scroll" id="detail-body"></div>
+          </section>
+
+          <!-- ═══ 4. 阅读面 ═══ -->
+          <section class="view" id="v-read">
+            <div class="reader" id="reader">
+              <div class="rtop">
+                <button class="icon-btn" data-back="detail">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 6l-6 6 6 6"/></svg>
+                </button>
+                <span class="title" id="r-title">红楼梦 · 第一回</span>
+                <button class="icon-btn" id="open-toc">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M4 6h12M4 12h12M4 18h8"/></svg>
+                </button>
+              </div>
+              <div class="rbody" id="r-body"></div>
+              <div class="rfoot">
+                <span id="r-page">第 1 / 12 页</span>
+                <span id="r-pct">12%</span>
+              </div>
+              <div class="rtools">
+                <div class="grp">
+                  <span class="lbl">主题</span>
+                  <div class="themes" id="r-themes">
+                    <button class="swatch" data-t="paper" aria-pressed="true">纸</button>
+                    <button class="swatch" data-t="night" aria-pressed="false">夜</button>
+                    <button class="swatch" data-t="green" aria-pressed="false">护</button>
+                  </div>
+                  <div class="stepper">
+                    <button id="fs-down">A−</button>
+                    <span class="val" id="fs-val">19px</span>
+                    <button id="fs-up">A+</button>
+                  </div>
+                </div>
+                <div class="row2">
+                  <button class="btn" id="open-anno">批注 12</button>
+                  <button class="btn" id="open-toc2">目录</button>
+                  <button class="btn" id="next-chap">下一回</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 目录浮层 -->
+            <div class="sheet" id="sheet-toc">
+              <div class="sheet-head">
+                <h4>目录</h4>
+                <span class="kv" id="toc-count"></span>
+                <button class="icon-btn" data-close-sheet>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+              </div>
+              <div class="scroll" id="toc-body" style="padding-bottom:24px"></div>
+            </div>
+
+            <!-- 批注浮层 -->
+            <div class="sheet" id="sheet-anno">
+              <div class="sheet-head">
+                <h4>批注</h4>
+                <span class="kv">来自 NAS · 可同步 KOReader</span>
+                <button class="icon-btn" data-close-sheet>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+              </div>
+              <div class="scroll" id="anno-body" style="padding-bottom:24px"></div>
+            </div>
+
+            
+          </section>
+
+          <!-- ═══ 5. 设置 ═══ -->
+          <section class="view" id="v-settings">
+            <div class="pagehead">
+              <div>
+                <h2>设置</h2>
+                <p class="sub">偏好存在 NAS，不随重装丢失</p>
+              </div>
+            </div>
+            <div class="scroll">
+              <p class="section-title">阅读</p>
+              <div class="group">
+                <div class="row">
+                  <span class="l">外观主题</span>
+                  <div class="themes" id="s-themes" style="gap:6px">
+                    <button class="swatch" data-t="paper" aria-pressed="true" style="width:30px;height:30px">纸</button>
+                    <button class="swatch" data-t="night" aria-pressed="false" style="width:30px;height:30px">夜</button>
+                    <button class="swatch" data-t="green" aria-pressed="false" style="width:30px;height:30px">护</button>
+                  </div>
+                </div>
+                <div class="row">
+                  <span class="l">字号<small>正文整体缩放，与网页端同一档</small></span>
+                  <div class="stepper">
+                    <button data-fs="down">A−</button>
+                    <span class="val" id="s-fs-val">19px</span>
+                    <button data-fs="up">A+</button>
+                  </div>
+                </div>
+                <div class="row">
+                  <span class="l">翻页方式</span>
+                  <select id="s-mode">
+                    <option>横向翻页</option>
+                    <option>滚动</option>
+                    <option>上下翻页</option>
+                  </select>
+                </div>
+              </div>
+
+              <p class="section-title">同步</p>
+              <div class="group">
+                <div class="row">
+                  <span class="l">服务器<small id="s-addr">http://192.168.1.20:8992</small></span>
+                  <span class="v" id="s-ver">1.4.0</span>
+                </div>
+                <div class="row">
+                  <span class="l">设备标识<small>重装 App 会变；偏好仍可从 NAS 拉回</small></span>
+                  <span class="v" id="s-did">hm-8f3a…</span>
+                </div>
+                <div class="row">
+                  <span class="l">立即同步进度</span>
+                  <span class="v" id="s-sync">刚刚</span>
+                </div>
+              </div>
+
+              <p class="section-title">数据</p>
+              <div class="group">
+                <div class="row">
+                  <span class="l">已缓存到本地<small>只有「读过的书」才缓存，断网也能读</small></span>
+                  <span class="v"><b id="s-cache-n">7</b> 本</span>
+                </div>
+                <div class="row">
+                  <span class="l">缓存占用<small>章节 HTML + 目录 + 封面</small></span>
+                  <span class="v" id="s-cache-size">21.6 MB</span>
+                </div>
+                <button class="row" id="cache-manage">
+                  <span class="l">管理缓存<small>按书清理；清掉不影响 NAS 上的书与批注</small></span>
+                  <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+                </button>
+                <button class="row danger" id="clear-local">
+                  <span class="l">清空本地数据并退出<small>书籍与批注仍在 NAS 上，不会被删</small></span>
+                  <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
+                </button>
+              </div>
+            </div>
+            <nav class="tabbar" data-tabs>
+              <button data-go="shelf">
+                <svg viewBox="0 0 24 24"><path d="M4 5h6v14H4zM14 5h6v14h-6z"/></svg>书架<span class="ind"></span>
+              </button>
+              <button data-go="read" data-need-book>
+                <svg viewBox="0 0 24 24"><path d="M12 6.5C10.5 5 8 4.5 4 5v13c4-.5 6.5 0 8 1.5 1.5-1.5 4-2 8-1.5V5c-4-.5-6.5 0-8 1.5zM12 6.5v13"/></svg>阅读<span class="ind"></span>
+              </button>
+              <button data-go="settings" aria-current="true">
+                <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>设置<span class="ind"></span>
+              </button>
+              <button data-go="about">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></svg>关于<span class="ind"></span>
+              </button>
+            </nav>
+          </section>
+
+          <!-- ═══ 6. 关于 ═══ -->
+          <section class="view" id="v-about">
+            <div class="pagehead">
+              <div>
+                <h2>关于</h2>
+                <p class="sub">NovelForge 阅读端 · 侧载版本</p>
+              </div>
+            </div>
+            <div class="scroll">
+              <div style="text-align:center;padding:6px 20px 22px">
+                <div class="brand" style="margin:0">
+                  <div class="mark" style="width:56px;height:56px;font-size:26px">书</div>
+                </div>
+                <div style="font-family:var(--font-mono);font-size:11px;color:var(--muted-foreground);margin-top:10px">
+                  App 1.0.0 (build 1) · HarmonyOS NEXT
+                </div>
+              </div>
+
+              <div class="group">
+                <div class="row">
+                  <span class="l">服务端<small id="a-addr">http://192.168.1.20:8992</small></span>
+                </div>
+                <div class="row">
+                  <span class="l">服务端版本<small>来自 <code style="font-family:var(--font-mono);font-size:10.5px">GET /health</code></small></span>
+                  <span class="v" id="a-ver" style="display:flex;align-items:center;gap:6px"><span class="dot"></span>1.4.0</span>
+                </div>
+                <div class="row">
+                  <span class="l">接口契约快照<small>服务端字段改了就红的那道门禁</small></span>
+                  <span class="v">v1 · 9 组</span>
+                </div>
+              </div>
+
+              <p class="section-title">这个 App 不做什么</p>
+              <div class="group">
+                <div class="row"><span class="l">不存书、不缓存章节<small>断网就完全不可用，会明确告诉你连不上，而不是显示空书架</small></span></div>
+                <div class="row"><span class="l">不注册账号、不找回口令<small>账号只在你自己的 NAS 上</small></span></div>
+                <div class="row"><span class="l">不上传任何统计<small>没有第三方 SDK，没有埋点</small></span></div>
+              </div>
+
+              <p class="desc" style="margin-top:18px;text-align:center;font-size:11px">
+                视觉规则与组件范式参照 BookOrbit（AGPL-3.0）。<br>本样式稿仅用于评审，不是生产代码。
+              </p>
+            </div>
+            <nav class="tabbar" data-tabs>
+              <button data-go="shelf">
+                <svg viewBox="0 0 24 24"><path d="M4 5h6v14H4zM14 5h6v14h-6z"/></svg>书架<span class="ind"></span>
+              </button>
+              <button data-go="read" data-need-book>
+                <svg viewBox="0 0 24 24"><path d="M12 6.5C10.5 5 8 4.5 4 5v13c4-.5 6.5 0 8 1.5 1.5-1.5 4-2 8-1.5V5c-4-.5-6.5 0-8 1.5zM12 6.5v13"/></svg>阅读<span class="ind"></span>
+              </button>
+              <button data-go="settings">
+                <svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>设置<span class="ind"></span>
+              </button>
+              <button data-go="about" aria-current="true">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/></svg>关于<span class="ind"></span>
+              </button>
+            </nav>
+          </section>
+
+        
+        <!-- 书库浮层 -->
+            <div class="sheet" id="sheet-lib">
+              <div class="sheet-head">
+                <h4>书库</h4>
+                <span class="kv">GET /api/libraries</span>
+                <button class="icon-btn" data-close-sheet>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+              </div>
+              <div class="scroll" style="padding-bottom:12px"><div id="lib-body"></div></div>
+              <div style="padding:10px 12px 14px;border-top:1px solid var(--border);display:flex;gap:8px">
+                <button class="btn" id="lib-new" style="flex:1;height:38px;font-size:12.5px">新建书库</button>
+                <button class="btn ghost" id="lib-move" style="flex:1;height:38px;font-size:12.5px">移动书…</button>
+              </div>
+            </div>
+
+            <!-- 新建书库向导 -->
+            <div class="sheet" id="sheet-newlib">
+              <div class="sheet-head">
+                <h4>新建书库</h4>
+                <span class="kv">只登记，不动文件</span>
+                <button class="icon-btn" data-close-sheet>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+              </div>
+              <div class="scroll" style="padding-bottom:12px">
+                <div style="padding:14px 16px 0">
+                  <div class="field">
+                    <label>库名</label>
+                    <div class="input"><input id="nl-name" placeholder="例如：推理小说" autocomplete="off"></div>
+                  </div>
+                  <div class="field">
+                    <label>类型（决定扫描白名单，选错＝书在这个库里不出现）</label>
+                    <div class="seg" id="nl-type" style="width:100%">
+                      <button data-t="ebook" aria-pressed="true" style="flex:1;justify-content:center">电子书</button>
+                      <button data-t="comic" aria-pressed="false" style="flex:1;justify-content:center">漫画</button>
+                      <button data-t="audiobook" aria-pressed="false" style="flex:1;justify-content:center">听书</button>
+                    </div>
+                  </div>
+                </div>
+                <p class="section-title">内容来源（NAS 上的文件夹）</p>
+                <div class="group" style="margin-top:0"><div id="nl-src"></div></div>
+                <p class="note" style="margin:-6px 16px 4px;padding:9px 12px">来源必须落在已配置的来源根内 —— 向导只让你从根下浏览并勾选，不允许手填任意路径。</p>
+              </div>
+              <div style="padding:10px 12px 14px;border-top:1px solid var(--border);display:flex;gap:8px">
+                <button class="btn ghost" id="nl-cancel" style="flex:1;height:38px;font-size:12.5px">取消</button>
+                <button class="btn" id="nl-create" style="flex:1.4;height:38px;font-size:12.5px">创建</button>
+              </div>
+            </div>
+
+            <!-- 移动书浮层 -->
+            <div class="sheet" id="sheet-move">
+              <div class="sheet-head">
+                <h4>移动到…</h4>
+                <span class="kv" id="mv-sub">已选 0 本</span>
+                <button class="icon-btn" data-close-sheet>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                </button>
+              </div>
+              <div class="scroll" style="padding-bottom:12px">
+                <div style="padding:12px 16px 4px;display:flex;gap:6px;flex-wrap:wrap" id="mv-books"></div>
+                <p class="section-title">目标库（不相容的会置灰并说明原因）</p>
+                <div class="group" style="margin-top:0"><div id="mv-targets"></div></div>
+                <div id="mv-progress" style="display:none;padding:14px 16px 0">
+                  <div class="bar" style="height:4px;margin:0 0 8px"><i id="mv-bar" style="width:0%"></i></div>
+                  <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10.5px;color:var(--muted-foreground)">
+                    <span id="mv-count">已完成 0 / 3</span><span id="mv-pct">0%</span>
+                  </div>
+                </div>
+                <p class="note" style="margin:12px 16px 0" id="mv-note">整批闸门：只要有一本进不去目标库，<code>plan</code> 就整批拒绝、一本都不搬 —— 不会“悄悄搬能搬的那几本”。</p>
+              </div>
+              <div style="padding:10px 12px 14px;border-top:1px solid var(--border);display:flex;gap:8px">
+                <button class="btn" id="mv-start" style="flex:1;height:38px;font-size:12.5px">开始移动</button>
+              </div>
+            </div>
+
+      </div><!-- /views -->
+
+        <!-- 断网覆盖层 -->
+        <div class="overlay" id="ov-offline">
+          <div class="ico">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <path d="M2 2l20 20"/><path d="M8.5 15.5a5 5 0 0 1 5.6-1.1M12 19h.01"/>
+              <path d="M5 11.5a10 10 0 0 1 4-2.4M19 11.5a10 10 0 0 0-3.2-2.1M22 8A16 16 0 0 0 9 4.6"/>
+            </svg>
+          </div>
+          <h3 id="off-title">连不上 NAS</h3>
+          <p id="off-p">网络断了，但你已经读过的书都在手机里 —— 书架里带「已缓存」标记的照样能读。</p>
+          <div class="why" id="off-why">
+            <b>原因</b> 192.168.1.20:8992 未响应（超时 5s）<br>
+            <b>可以</b> 继续读已缓存的 <b id="off-n">7</b> 本，进度先记在本地<br>
+            <b>建议</b> 检查是否连在同一 Wi-Fi，或 NAS 是否在休眠
+          </div>
+          <button class="btn" id="retry">重试连接</button>
+          <button class="alt" id="off-shelf">去读书架（已缓存 7 本）</button>
+        </div>
+
+        <!-- 版本门禁覆盖层 -->
+        <div class="overlay" id="ov-stale">
+          <div class="ico" style="color:var(--warning)">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+              <path d="M12 3l9 16H3z"/><path d="M12 9v4M12 16h.01"/>
+            </svg>
+          </div>
+          <h3>服务端版本过旧</h3>
+          <p>这台 NAS 的服务端是 <b id="stale-have">1.2.0</b>，本 App 依赖 ≥ <b>1.4.0</b> 的接口。</p>
+          <div class="why">
+            覆盖层不是用来拦你的：<b>继续</b>仍能打开书架，<br>
+            但字段缺失的地方会如实显示“不支持”，不会用旧数据凑数。
+          </div>
+          <button class="btn" id="stale-continue">仍然继续</button>
+          <button class="alt" data-go="settings">去改服务器地址</button>
+        </div>
+
+        <div class="toast" id="toast"></div>
+      </div><!-- /screen -->
+    </div>
+    <p style="text-align:center;margin:16px 0 0;font-size:11.5px;color:var(--muted-foreground);font-family:var(--font-mono)">
+      点书 → 详情 · 详情「继续读」→ 阅读面 · 点正文唤出工具栏
+    </p>
+  </div>
+
+  <!-- ── 右：开关 ─────────────────────────────────────────── -->
+  <aside class="notes">
+    <div class="note">
+      <h2>试用开关</h2>
+      <div class="switch-row">
+        <span>模拟断网<small>看它是否如实报错</small></span>
+        <div class="sw" id="sw-offline" role="switch" aria-checked="false"></div>
+      </div>
+      <div class="switch-row">
+        <span>模拟服务端过旧<small>触发 /health 版本门禁</small></span>
+        <div class="sw" id="sw-stale" role="switch" aria-checked="false"></div>
+      </div>
+      <div class="switch-row">
+        <span>外观主题<small>夜间 / 护眼贯穿全部界面</small></span>
+        <div class="seg-mini" id="note-theme">
+          <button data-t="paper" aria-pressed="true">纸</button>
+          <button data-t="night" aria-pressed="false">夜</button>
+          <button data-t="green" aria-pressed="false">护</button>
+        </div>
+      </div>
+    </div>
+    <div class="note">
+      <h2>评审时先看这四处</h2>
+      <ul>
+        <li><b>阅读面</b>：正文是宋体 + 首字下沉，纸/夜/护三档；这层在真机上由 ArkWeb 载入现有 SPA，端上不复刻排版。</li>
+        <li><b>书架</b>：封面是 CSS 渐变+竖排书名（不是图片），进度细线来自服务端 percent。</li>
+        <li><b>详情</b>：章节按卷分组，右侧灰字是 spine <code>index</code>；当前章用朱砂底标记。</li>
+        <li><b>断网态</b>：整屏说明原因，而不是留一个空书架 —— 这是「不做假数据」在 UI 上的样子。</li>
+      </ul>
+    </div>
+  </aside>
+
+</main>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   演示数据：全部为公版书目（正文取公版原文节选）。
+   真实端上这些值一律来自 /api/*，端内不落库。
+   ══════════════════════════════════════════════════════════════ */
+const BOOKS = [
+  {
+    id:'hlm', t:'红楼梦', a:'曹雪芹', fmt:'epub', pct:37, anno:12, hue:352, seal:'红',
+    vols:[
+      {v:'卷一', range:'第 1–3 回', ch:[
+        {i:0,t:'第一回　甄士隐梦幻识通灵　贾雨村风尘怀闺秀'},
+        {i:1,t:'第二回　贾夫人仙逝扬州城　冷子兴演说荣国府'},
+        {i:2,t:'第三回　贾雨村夤缘复旧职　林黛玉抛父进京都'},
+      ]},
+      {v:'卷二', range:'第 4–6 回', ch:[
+        {i:3,t:'第四回　薄命女偏逢薄命郎　葫芦僧乱判葫芦案'},
+        {i:4,t:'第五回　游幻境指迷十二钗　饮仙醪曲演红楼梦'},
+        {i:5,t:'第六回　贾宝玉初试云雨情　刘姥姥一进荣国府'},
+      ]},
+    ],
+    body:[
+      '此开卷第一回也。作者自云：因曾历过一番梦幻之后，故将真事隐去，而借“通灵”之说，撰此《石头记》一书也。故曰“甄士隐”云云。',
+      '但书中所记何事何人？自又云：今风尘碌碌，一事无成，忽念及当日所有之女子，一一细考较去，觉其行止见识，皆出于我之上。何我堂堂须眉，诚不若彼裙钗哉？',
+      '实愧则有余，悔又无益之大无可如何之日也。当此则自欲将已往所赖天恩祖德、锦衣纨袴之时，饫甘餍肥之日，背父兄教育之恩，负师友规谈之德，以至今日一技无成、半生潦倒之罪，编述一集，以告天下人。',
+      '我之罪固不免，然闺阁中本自历历有人，万不可因我之不肖，自护己短，一并使其泯灭也。',
+      '虽今日之茅椽蓬牖，瓦灶绳床，其晨夕风露，阶柳庭花，亦未有妨我之襟怀笔墨者。',
+    ],
+  },
+  {id:'xyj', t:'西游记', a:'吴承恩', fmt:'epub', pct:64, anno:5, hue:265, seal:'西',
+   vols:[{v:'卷一', range:'第 1–3 回', ch:[
+     {i:0,t:'第一回　灵根育孕源流出　心性修持大道生'},
+     {i:1,t:'第二回　悟彻菩提真妙理　断魔归本合元神'},
+     {i:2,t:'第三回　四海千山皆拱伏　九幽十类尽除名'}]}],
+   body:['诗曰：混沌未分天地乱，茫茫渺渺无人见。自从盘古破鸿蒙，开辟从兹清浊辨。',
+         '覆载群生仰至仁，发明万物皆成善。欲知造化会元功，须看西游释厄传。',
+         '盖闻天地之数，有十二万九千六百岁为一元。将一元分为十二会，乃子、丑、寅、卯、辰、巳、午、未、申、酉、戌、亥之十二支也。']},
+  {id:'sgy', t:'三国演义', a:'罗贯中', fmt:'txt', pct:100, anno:31, hue:40, seal:'三',
+   vols:[{v:'卷一', range:'第 1–2 回', ch:[
+     {i:0,t:'第一回　宴桃园豪杰三结义　斩黄巾英雄首立功'},
+     {i:1,t:'第二回　张翼德怒鞭督邮　何国舅谋诛宦竖'}]}],
+   body:['话说天下大势，分久必合，合久必分。週末七国纷争，并入于秦；及秦灭之后，楚、汉分争，又并入于汉；',
+         '汉朝自高祖斩白蛇而起义，一统天下，后来光武中兴，传至献帝，遂分为三国。']},
+  {id:'shz', t:'水浒传', a:'施耐庵', fmt:'epub', pct:12, anno:0, hue:150, seal:'水',
+   vols:[{v:'卷一', range:'第 1–2 回', ch:[
+     {i:0,t:'第一回　张天师祈禳瘟疫　洪太尉误走妖魔'},
+     {i:1,t:'第二回　王教头私走延安府　九纹龙大闹史家村'}]}],
+   body:['纷纷五代乱离间，一旦云开复见天。草木百年新雨露，车书万里旧江山。',
+         '寻常巷陌陈罗绮，几处楼台奏管弦。天下太平无事日，莺花无限日高眠。']},
+  {id:'lzzy', t:'聊斋志异', a:'蒲松龄', fmt:'txt', pct:0, anno:0, hue:295, seal:'聊',
+   vols:[{v:'卷一', range:'第 1–2 篇', ch:[
+     {i:0,t:'考城隍'},{i:1,t:'耳中人'}]}],
+   body:['予姊丈之祖，宋公讳焘，邑廪生。一日，病卧，见吏人持牒，牵白颠马来，云：“请赴试。”公言：“文宗未临，何遽得考？”',
+         '吏不言，但敦促之。公力疾乘马从去，路甚生疏。至一城郭，如王者都。']},
+  {id:'rlb', t:'儒林外史', a:'吴敬梓', fmt:'epub', pct:22, anno:3, hue:200, seal:'儒',
+   vols:[{v:'卷一', range:'第 1–2 回', ch:[
+     {i:0,t:'第一回　说楔子敷陈大义　借名流隐括全文'},
+     {i:1,t:'第二回　王孝廉村学识同科　周蒙师暮年登上第'}]}],
+   body:['人生南北多歧路，将相神仙，也要凡人做。百代兴亡朝复暮，江风吹倒前朝树。',
+         '功名富贵无凭据，费尽心情，总把流光误。浊酒三杯沉醉去，水流花谢知何处。']},
+  {id:'jhy', t:'镜花缘', a:'李汝珍', fmt:'epub', pct:48, anno:7, hue:100, seal:'镜',
+   vols:[{v:'卷一', range:'第 1–2 回', ch:[
+     {i:0,t:'第一回　女魁星北斗垂景象　老王母西池赐芳筵'},
+     {i:1,t:'第二回　发正言花仙顺时令　定罚约月姊助风狂'}]}],
+   body:['且说天下名山，除王母所住昆仑之外，海岛中有三座名山：一名蓬莱，二名方丈，三名瀛洲。',
+         '都是道路窵远，其高异常，因非士人足迹所到，所以自古无人问津。']},
+  {id:'fssj', t:'浮生六记', a:'沈复', fmt:'txt', pct:8, anno:2, hue:172, seal:'浮',
+   vols:[{v:'卷一', range:'闺房记乐', ch:[{i:0,t:'闺房记乐'},{i:1,t:'闲情记趣'}]}],
+   body:['余生乾隆癸未冬十一月二十有二日，正值太平盛世，且在衣冠之家，居苏州沧浪亭畔，天之厚我可谓至矣。',
+         '东坡云：“事如春梦了无痕”，苟不记之笔墨，未免有辜彼苍之厚。']},
+];
+
+/* 库实体：字段形状对齐 GET /api/libraries 的 items[]
+   （id / name / type / 书数 / 是否在扫 / 是否存在） */
+const LIBS = [
+  {id:'lib-cn',    name:'古典小说', type:'ebook', n:6, scanning:false, exists:true},
+  {id:'lib-essay', name:'笔记小品', type:'ebook', n:2, scanning:false, exists:true},
+  {id:'lib-comic', name:'漫画',     type:'comic', n:0, scanning:true,  exists:true},
+];
+/* 每本书所属库（真值在服务端 library_id；样式稿里就地标注） */
+const BOOK_LIB = { hlm:'lib-cn', xyj:'lib-cn', sgy:'lib-cn', shz:'lib-cn',
+                   lzzy:'lib-cn', rlb:'lib-cn', jhy:'lib-essay', fssj:'lib-essay' };
+const libOf = b => BOOK_LIB[b.id] || 'lib-cn';
+/* 「已开始阅读的书内容落本地」—— 判定口径只此一处：pct > 0 即已开始读 */
+const isCached = b => b.pct > 0;
+
+const ANNOS = [
+  {q:'假作真时真亦假，无为有处有还无。', n:'两句就把整部书的读法说了：真假互为镜像。', m:'第一回 · 色 黄 · 网页端录入', s:'web'},
+  {q:'满纸荒唐言，一把辛酸泪。', n:'作者自题，落在开卷最前面，位置 start_off=42。', m:'第一回 · 色 青 · KOReader 同步', s:'koreader'},
+  {q:'都云作者痴，谁解其中味。', n:'批注锚点由服务端存，客户端不解释 CFI。', m:'第一回 · 色 粉 · 网页端录入', s:'web'},
+];
+
+const state = { view:'login', bookId:null, theme:'paper', fs:19, mode:'grid',
+                dark:false, offline:false, stale:false, chapter:0, tools:false,
+                lib:'*', moveSel:[], moveTarget:null };
+
+/* ── 工具 ─────────────────────────────────────────────────── */
+const $  = (s,r=document)=>r.querySelector(s);
+const $$ = (s,r=document)=>[...r.querySelectorAll(s)];
+const book = id => BOOKS.find(b => b.id === id);
+const flatChapters = b => b.vols.flatMap(v => v.ch);
+
+function coverHTML(b, cls=''){
+  return `<div class="cover ${cls}" style="background:
+      radial-gradient(120% 80% at 20% 0%, oklch(0.68 0.1 ${b.hue}), transparent 60%),
+      linear-gradient(155deg, oklch(0.6 0.1 ${b.hue}), oklch(0.42 0.08 ${b.hue}) 55%, oklch(0.29 0.05 ${b.hue}))">
+      <div class="cloth"></div><div class="spine"></div>
+      <div class="ctitle">${b.t}</div>
+      <div class="seal">${b.seal}</div>
+      ${b.anno ? `<div class="badge-anno">✎ ${b.anno}</div>` : ''}
+    </div>`;
+}
+
+let toastTimer;
+function toast(msg){
+  const el = $('#toast'); el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(()=>el.classList.remove('show'), 2000);
+}
+
+/* ── 视图切换 ─────────────────────────────────────────────── */
+function go(name){
+  state.view = name;
+  $$('.view').forEach(v => v.dataset.active = String(v.id === 'v-'+name));
+  $$('.tabbar button').forEach(b => b.setAttribute('aria-current', String(b.dataset.go === name)));
+  if (name === 'read') { state.tools = false; $('#reader').classList.remove('tools'); }
+  if (name === 'detail' && state.bookId) renderDetail(state.bookId);
+  if (name === 'read' && state.bookId) renderReader();
+}
+function backTo(name){ go(name); }
+
+/* ── 书架 ─────────────────────────────────────────────────── */
+const booksInLib = () => state.lib === '*' ? BOOKS
+  : BOOKS.filter(b => libOf(b) === state.lib);
+
+function renderShelf(){
+  const body = $('#shelf-body');
+  const list = booksInLib();
+  const lb = LIBS.find(l => l.id === state.lib);
+  $('#lib-name').textContent = lb ? lb.name : '全部书库';
+  $('#lib-count').textContent = `${list.length} 本`;
+  $('#lib-sync').className = 'lb-sync' + (LIBS.some(l => l.scanning) ? ' busy' : '');
+  const cn = cachedBooks().length;
+  const nEl = $('#s-cache-n'), szEl = $('#s-cache-size');
+  if (nEl) nEl.textContent = cn;
+  if (szEl) szEl.textContent = (cn * 3.1).toFixed(1) + ' MB';
+  $('#shelf-sub').textContent = lb
+    ? `${list.length} 本 · ${lb.type === 'comic' ? '漫画库' : lb.type === 'audiobook' ? '听书库' : '电子书库'}`
+    : `${list.length} 本 · 全部书库`;
+  if (state.mode === 'grid'){
+    body.className = 'grid';
+    body.innerHTML = list.map(b => `
+      <button class="card-book${state.offline && !isCached(b) ? ' nocache' : ''}" data-book="${b.id}">
+        ${coverHTML(b)}
+        <div class="meta">
+          <span class="t">${b.t}</span>
+          <div class="a"><span>${b.a}</span><span class="pill" data-fmt="${b.fmt}">${b.fmt}</span></div>
+          <div class="bar"><i style="width:${b.pct}%"></i></div>
+          <div class="p"><span>${b.pct}%</span><span>${isCached(b) ? '<span class="cached-dot">⇣ 已缓存</span>' : '<span class="nocache-tag">未缓存</span>'}</span></div>
+        </div>
+      </button>`).join('');
+  } else {
+    body.className = 'list-wrap';
+    body.innerHTML = list.map(b => `
+      <button class="listbook${state.offline && !isCached(b) ? ' nocache' : ''}" data-book="${b.id}">
+        <div class="mini" style="background:linear-gradient(155deg,oklch(0.6 0.1 ${b.hue}),oklch(0.35 0.06 ${b.hue}))">
+          <span>${b.t}</span>
+        </div>
+        <div class="body">
+          <div class="t">${b.t}</div>
+          <div class="a"><span>${b.a}</span><span class="pill" data-fmt="${b.fmt}">${b.fmt}</span>
+            ${b.anno ? `<span style="font-family:var(--font-mono);font-size:10px">✎ ${b.anno}</span>` : ''}</div>
+          <div class="bar" style="margin-top:8px"><i style="width:${b.pct}%"></i></div>
+        </div>
+        <div class="right"><b>${b.pct}%</b>${b.pct ? '读到一半' : '未读'}</div>
+      </button>`).join('');
+  }
+  $$('[data-book]', body).forEach(el => el.onclick = () => {
+    const b = book(el.dataset.book);
+    if (state.offline && !isCached(b)) { needCache(b); return; }
+    state.bookId = el.dataset.book; state.chapter = 0;
+    renderDetail(state.bookId); go('detail');
+  });
+}
+
+/* ── 详情 ─────────────────────────────────────────────────── */
+function renderDetail(id){
+  const b = book(id); if (!b) return;
+  const chapters = flatChapters(b);
+  const cur = chapters[Math.min(state.chapter, chapters.length-1)];
+  $('#d-title').innerHTML = `${b.t}<small>${b.a} · ${b.fmt.toUpperCase()}</small>`;
+  $('#detail-body').innerHTML = `
+    <div class="detail-hero">
+      ${coverHTML(b,'bigcover')}
+      <div class="hero-meta">
+        <h3>${b.t}</h3>
+        <div class="by">${b.a}</div>
+        <div class="chips">
+          <span class="chip">${chapters.length} 章</span>
+          <span class="chip">${b.anno} 条批注</span>
+          <span class="chip">${b.pct}%</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="progress-card">
+      <div class="row"><span>阅读进度</span><b>${b.pct}%</b></div>
+      <div class="bar"><i style="width:${b.pct}%"></i></div>
+      <button class="btn block" data-read>
+        ${b.pct ? '继续读 · ' + cur.t.split('　')[0] : '开始阅读'}
+      </button>
+      <p class="hint">上次读到 · 昨天 21:04 · 与网页端同步</p>
+    </div>
+
+    <div class="stats">
+      <div><b>${chapters.length}</b><span>章节</span></div>
+      <div><b>${b.anno}</b><span>批注</span></div>
+      <div><b>${b.pct ? '6.2h' : '—'}</b><span>累计</span></div>
+    </div>
+
+    <div class="sect"><h4>目录</h4><span class="cnt">按卷分组 · 序号即 spine index</span></div>
+    ${b.vols.map(v => `
+      <div class="vol">
+        <div class="vol-head"><span>${v.v}</span><span class="n">${v.range}</span></div>
+        ${v.ch.map(c => `
+          <button class="chap ${c.i === state.chapter ? 'now' : ''}" data-ch="${c.i}">
+            <span class="idx">${c.i}</span>
+            <span class="tt">${c.t}</span>
+            ${c.i === state.chapter ? '<span class="flag">当前</span>' : ''}
+          </button>`).join('')}
+      </div>`).join('')}
+
+    <div class="sect"><h4>简介</h4></div>
+    <p class="desc">${b.t}，${b.a}著。此处为样式稿占位：真实文案来自书库索引里的 description（卡片接口只给 has_description，正文详情接口才带全文）。</p>
+  `;
+  $$('[data-ch]', $('#detail-body')).forEach(el => el.onclick = () => {
+    state.chapter = Number(el.dataset.ch); openReader();
+  });
+  const r = $('[data-read]', $('#detail-body')); if (r) r.onclick = openReader;
+}
+
+/* ── 本地缓存（判定只有一处：isCached） ───────────────────── */
+const cachedBooks = () => BOOKS.filter(isCached);
+
+function needCache(b){
+  $('#off-title').textContent = '这本还没缓存到手机';
+  $('#off-p').innerHTML = `《${b.t}》你还没开始读，所以手机里没有它的正文 —— 现在连不上 NAS，取不到内容。`;
+  $('#off-why').innerHTML =
+    `<b>原因</b> 192.168.1.20:8992 未响应（超时 5s）<br>` +
+    `<b>可以</b> 先读已缓存的 ${cachedBooks().length} 本；或联网后打开这本，首次打开会自动缓存<br>` +
+    `<b>不会</b> 给空书架、也不会给假进度`;
+  $('#off-shelf').textContent = `去读书架（已缓存 ${cachedBooks().length} 本）`;
+  $('#ov-offline').classList.add('show');
+}
+function resetOfflineCopy(){
+  $('#off-title').textContent = '连不上 NAS';
+  $('#off-p').textContent = '网络断了，但你已经读过的书都在手机里 —— 书架里带「已缓存」标记的照样能读。';
+  $('#off-why').innerHTML =
+    `<b>原因</b> 192.168.1.20:8992 未响应（超时 5s）<br>` +
+    `<b>可以</b> 继续读已缓存的 ${cachedBooks().length} 本，进度先记在本地<br>` +
+    `<b>建议</b> 检查是否连在同一 Wi-Fi，或 NAS 是否在休眠`;
+  $('#off-shelf').textContent = `去读书架（已缓存 ${cachedBooks().length} 本）`;
+}
+
+/* ── 书库（GET /api/libraries 的 items[] 形状） ────────────── */
+const LIB_TYPES = { ebook:'电子书库', comic:'漫画库', audiobook:'听书库' };
+
+function renderLibs(){
+  const rows = [{id:'*', name:'全部书库', type:'', n:BOOKS.length,
+                 scanning:false}].concat(LIBS);
+  $('#lib-body').innerHTML = rows.map(l => `
+    <button class="librow" data-lib="${l.id}" aria-pressed="${state.lib === l.id}">
+      <div class="lr-main">
+        <div class="lr-name">${l.name}${l.scanning ? '<span class="tag-off">正在建立索引…</span>' : ''}</div>
+        <div class="lr-meta">${l.id === '*' ? '不过滤 · 所有库的合集' : `${LIB_TYPES[l.type] || l.type} · ${l.id}`}</div>
+      </div>
+      <span class="lr-n">${l.n} 本</span>
+      ${state.lib === l.id ? '<svg class="tick" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg>' : ''}
+    </button>`).join('');
+  $$('[data-lib]').forEach(el => el.onclick = () => {
+    state.lib = el.dataset.lib;
+    renderLibs(); renderShelf();
+    $('#sheet-lib').classList.remove('open');
+    toast(`已切到「${$('#lib-name').textContent}」· ${booksInLib().length} 本`);
+  });
+}
+function openLib(){ renderLibs(); $('#sheet-lib').classList.add('open'); }
+
+/* 新建书库向导：来源文件夹只能从来源根下勾 */
+const SRC_DIRS = [
+  {p:'/data/library/古典小说',   n:6},
+  {p:'/data/library/笔记小品',   n:2},
+  {p:'/data/library/漫画',       n:0},
+  {p:'/data/library/收书目录/2026', n:41},
+];
+let newLib = { name:'', type:'ebook', dirs:[] };
+
+function renderSrc(){
+  $('#nl-src').innerHTML = SRC_DIRS.map(d => `
+    <div class="srcrow" data-src="${d.p}" aria-pressed="${newLib.dirs.includes(d.p)}">
+      <span class="box"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="M4 12.5l5 5L20 6.5"/></svg></span>
+      <div style="flex:1;min-width:0">
+        <div class="p">${d.p}</div>
+        <div style="font-size:10px;color:var(--muted-foreground);margin-top:1px">${d.n} 个文件</div>
+      </div>
+    </div>`).join('');
+  $$('[data-src]').forEach(el => el.onclick = () => {
+    const v = el.dataset.src;
+    newLib.dirs = newLib.dirs.includes(v)
+      ? newLib.dirs.filter(x => x !== v) : newLib.dirs.concat(v);
+    renderSrc();
+  });
+}
+function openNewLib(){
+  newLib = { name:'', type:'ebook', dirs:[] };
+  $('#nl-name').value = '';
+  $$('#nl-type button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.t === 'ebook')));
+  renderSrc();
+  $('#sheet-lib').classList.remove('open');
+  $('#sheet-newlib').classList.add('open');
+}
+
+/* 移书：相容判定口径与后端扫描白名单一致 */
+const FMT_BY_TYPE = {
+  ebook: ['epub','txt','mobi','azw3','pdf'],
+  comic: ['cbz','cbr','zip'],
+  audiobook: ['mp3','m4a','flac','aac'],
+};
+const compatible = (b, l) => (FMT_BY_TYPE[l.type] || FMT_BY_TYPE.ebook).includes(b.fmt);
+
+function renderMove(){
+  const ids = state.moveSel;
+  $('#mv-sub').textContent = `已选 ${ids.length} 本`;
+  $('#mv-books').innerHTML = ids.length
+    ? ids.map(id => `<span class="chip" data-un="${id}" style="cursor:pointer">${book(id).t} ×</span>`).join('')
+    : '<span class="kv">没有选中的书 —— 先在书架里长按多选</span>';
+  $$('[data-un]').forEach(el => el.onclick = () => {
+    state.moveSel = state.moveSel.filter(x => x !== el.dataset.un);
+    renderMove();
+  });
+  $('#mv-targets').innerHTML = LIBS.map(l => {
+    const bad = ids.map(book).filter(b => !compatible(b, l));
+    const off = bad.length > 0;
+    const fmts = [...new Set(bad.map(b => b.fmt))].join(' / ');
+    return `<button class="mvrow" data-tgt="${l.id}" ${off ? 'disabled' : ''} aria-pressed="${state.moveTarget === l.id}">
+      <span class="radio"></span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600">${l.name}
+          <span style="font-family:var(--font-mono);font-size:10px;color:var(--muted-foreground);font-weight:400">${l.n} 本</span></div>
+        <div class="reason" style="color:${off ? 'var(--warning)' : 'var(--success)'}">${off
+          ? `${bad.map(b => b.t).join('、')} 进不去：${LIB_TYPES[l.type]}的白名单不含 ${fmts}，搬过去等于把书搬没了`
+          : '全部可搬'}</div>
+      </div>
+    </button>`;
+  }).join('');
+  $$('[data-tgt]').forEach(el => el.onclick = () => {
+    if (el.hasAttribute('disabled')) return;
+    state.moveTarget = el.dataset.tgt; renderMove();
+  });
+  const startBtn = $('#mv-start');
+  startBtn.disabled = !state.moveTarget;
+  startBtn.textContent = state.moveTarget
+    ? `开始移动 · ${ids.length} 本 → ${LIBS.find(l => l.id === state.moveTarget).name}`
+    : '先选一个目标库';
+}
+function openMove(){
+  state.moveSel = booksInLib().filter(isCached).slice(0, 3).map(b => b.id);
+  state.moveTarget = null;
+  $('#mv-progress').style.display = 'none';
+  $('#mv-bar').style.width = '0%';
+  $('#mv-count').textContent = `已完成 0 / ${state.moveSel.length}`;
+  $('#mv-note').innerHTML = '整批闸门：只要有一本进不去目标库，<code>plan</code> 就整批拒绝、一本都不搬 —— 不会“悄悄搬能搬的那几本”。';
+  renderMove();
+  $('#sheet-lib').classList.remove('open');
+  $('#sheet-move').classList.add('open');
+}
+
+/* ── 阅读面 ───────────────────────────────────────────────── */
+function openReader(){
+  const b = book(state.bookId);
+  if (state.offline && b && !isCached(b)) { needCache(b); return; }
+  go('read'); renderReader();
+}
+function renderReader(){
+  const b = book(state.bookId); if (!b) return;
+  const chapters = flatChapters(b);
+  const c = chapters[Math.min(state.chapter, chapters.length-1)];
+  const pct = Math.min(100, Math.round(((state.chapter + 0.35) / chapters.length) * 100));
+  $('#r-title').textContent = `${b.t} · ${c.t.split('　')[0]}`;
+  $('#r-body').innerHTML = `
+    <div class="turn">
+      ${state.offline ? '<div class="offline-note">⇣ 离线阅读 · 正文来自本地缓存；进度先记在手机上，联网后自动补传</div>' : ''}
+      <h5>${b.t}</h5>
+      <div class="chtitle">${c.t}</div>
+      ${state.chapter > 0 ? '<p class="caution">样式稿：正文按回目从 NAS 取，这里复用第一回原文演示排版</p>' : ''}
+      ${b.body.map((p, i) => `<p class="${i === 0 ? 'drop' : ''}">${p}</p>`).join('')}
+      <div class="eof">— 样式稿节选至此 —</div>
+    </div>`;
+  $('#r-body').scrollTop = 0;
+  $('#r-page').textContent = `第 ${state.chapter + 1} / ${chapters.length} 回`;
+  $('#r-pct').textContent = `${pct}%`;
+  applyTheme(); applyFs();
+}
+
+const THEME_NAME = { paper:'纸', night:'夜', green:'护眼' };
+function applyTheme(announce){
+  /* 唯一真值源：<html data-skin>。阅读面、书架、详情、设置、浮层、覆盖层
+     全部读同一套 token，因此夜间 / 护眼是整机生效，不是只有阅读面生效。 */
+  document.documentElement.dataset.skin = state.theme;
+  if (announce) toast(`外观 · ${THEME_NAME[state.theme] || state.theme}（全站）`);
+  $$('.swatch').forEach(s => s.setAttribute('aria-pressed', String(s.dataset.t === state.theme)));
+  $$('#note-theme button').forEach(s => s.setAttribute('aria-pressed', String(s.dataset.t === state.theme)));
+}
+function applyFs(){
+  $('#reader').style.setProperty('--rfs', state.fs + 'px');
+  $('#reader').style.setProperty('--rlh', '1.9');
+  $('#fs-val').textContent = state.fs + 'px';
+  $('#s-fs-val').textContent = state.fs + 'px';
+}
+
+/* ── 目录 / 批注浮层 ─────────────────────────────────────── */
+function openToc(){
+  const b = book(state.bookId); if (!b) return;
+  const chapters = flatChapters(b);
+  $('#toc-count').textContent = `${chapters.length} 章`;
+  $('#toc-body').innerHTML = b.vols.map(v => `
+    <div class="vol" style="margin:14px 16px">
+      <div class="vol-head"><span>${v.v}</span><span class="n">${v.range}</span></div>
+      ${v.ch.map(c => `<button class="chap ${c.i===state.chapter?'now':''}" data-ch="${c.i}">
+        <span class="idx">${c.i}</span><span class="tt">${c.t}</span></button>`).join('')}
+    </div>`).join('');
+  $$('[data-ch]', $('#toc-body')).forEach(el => el.onclick = () => {
+    state.chapter = Number(el.dataset.ch);
+    $('#sheet-toc').classList.remove('open'); renderReader();
+  });
+  $('#sheet-toc').classList.add('open');
+}
+function openAnno(){
+  $('#anno-body').innerHTML = ANNOS.map(a => `
+    <div class="anno">
+      <div class="mark" data-src="${a.s}"></div>
+      <div style="flex:1;min-width:0">
+        <div class="q">${a.q}</div>
+        <div class="n">${a.n}</div>
+        <div class="m">${a.m}</div>
+      </div>
+    </div>`).join('');
+  $('#sheet-anno').classList.add('open');
+}
+
+/* ── 事件绑定 ─────────────────────────────────────────────── */
+$('#do-login').onclick = () => {
+  if (state.offline) { $('#ov-offline').classList.add('show'); return; }
+  if (state.stale) { $('#ov-stale').classList.add('show'); return; }
+  $('#s-addr').textContent = $('#addr').value;
+  $('#a-addr').textContent = $('#addr').value;
+  renderShelf(); go('shelf');
+  toast('已连接 · 令牌存本地，30 天有效');
+};
+$('#addr').oninput = e => { $('#s-addr').textContent = e.target.value; $('#a-addr').textContent = e.target.value; };
+$('#retry').onclick = () => {
+  $('#ov-offline').classList.remove('show');
+  if (state.offline) { setTimeout(()=>$('#ov-offline').classList.add('show'), 320); toast('仍然连不上 · 检查 Wi-Fi'); }
+};
+$('#stale-continue').onclick = () => {
+  $('#ov-stale').classList.remove('show');
+  renderShelf(); go('shelf'); toast('已按旧版本继续 · 缺失字段会如实标注');
+};
+
+$$('[data-go]').forEach(el => el.onclick = () => go(el.dataset.go));
+$$('[data-back]').forEach(el => el.onclick = () => backTo(el.dataset.back));
+$$('[data-close-sheet]').forEach(el => el.onclick = () => el.closest('.sheet').classList.remove('open'));
+
+$('#lib-switch').onclick = openLib;
+$('#lib-new').onclick = openNewLib;
+$('#lib-move').onclick = openMove;
+$('#nl-cancel').onclick = () => $('#sheet-newlib').classList.remove('open');
+$('#nl-type').onclick = e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  newLib.type = btn.dataset.t;
+  $$('#nl-type button').forEach(b => b.setAttribute('aria-pressed', String(b === btn)));
+};
+$('#nl-create').onclick = () => {
+  const name = $('#nl-name').value.trim();
+  if (!name) { toast('库名不能为空（后端会 400）'); return; }
+  if (!newLib.dirs.length) { toast('至少选一个来源文件夹（source_dirs 必须落在来源根内）'); return; }
+  const id = 'lib-new' + (LIBS.length + 1);
+  LIBS.push({ id, name, type:newLib.type, n:0, scanning:true, exists:true });
+  state.lib = id;
+  $('#sheet-newlib').classList.remove('open');
+  renderLibs(); renderShelf();
+  toast(`已在 NAS 登记「${name}」· 后台扫描中，书目会自己长出来`);
+};
+$('#mv-start').onclick = () => {
+  if (!state.moveTarget) { toast('先选一个目标库'); return; }
+  const ids = state.moveSel.slice(), tgt = state.moveTarget, total = ids.length || 1;
+  const tname = LIBS.find(l => l.id === tgt).name;
+  $('#mv-progress').style.display = 'block';
+  let done = 0;
+  const step = () => {
+    done++;
+    const pct = Math.round(done / total * 100);
+    $('#mv-bar').style.width = pct + '%';
+    $('#mv-count').textContent = `已完成 ${done} / ${total}`;
+    if (done < total) { setTimeout(step, 380); return; }
+    ids.forEach(id => { BOOK_LIB[id] = tgt; });
+    LIBS.forEach(l => { l.n = BOOKS.filter(b => libOf(b) === l.id).length; });
+    renderLibs(); renderShelf();
+    $('#mv-note').innerHTML = `<b>批次 b_20261023-01</b> 已执行完：${total} 本移到「${tname}」。台账见 <code>GET /api/book-move/batches</code>，可回滚（<code>/rollback</code>）。`;
+    toast(`已移动 ${total} 本 · 台账已落库`);
+  };
+  setTimeout(step, 320);
+};
+$('#cache-manage').onclick = () => toast('样式稿未做清理浮层；真机按书清理，清掉不影响 NAS');
+$('#off-shelf').onclick = () => { $('#ov-offline').classList.remove('show'); go('shelf'); };
+
+$('#view-toggle').onclick = e => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  state.mode = btn.dataset.v;
+  $$('#view-toggle button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === state.mode)));
+  renderShelf();
+};
+
+/* 阅读面：点正文唤出工具栏；滚到底自动进入下一回 */
+$('#r-body').onclick = () => { state.tools = !state.tools; $('#reader').classList.toggle('tools', state.tools); };
+$('#r-body').onscroll = e => {
+  const el = e.target;
+  if (el.scrollHeight - el.scrollTop - el.clientHeight < 8) {
+    const max = flatChapters(book(state.bookId)).length - 1;
+    if (state.chapter < max) { state.chapter++; renderReader(); toast('已同步进度到 NAS'); }
+  }
+};
+$('#r-themes').onclick = e => { const b = e.target.closest('.swatch'); if (!b) return; state.theme = b.dataset.t; applyTheme(true); };
+$('#note-theme').onclick = e => { const b = e.target.closest('button'); if (!b) return; state.theme = b.dataset.t; applyTheme(true); };
+$('#s-themes').onclick = e => { const b = e.target.closest('.swatch'); if (!b) return; state.theme = b.dataset.t; applyTheme(true); };
+
+const fsStep = d => { state.fs = Math.min(28, Math.max(14, state.fs + d)); applyFs(); };
+$('#fs-up').onclick = () => fsStep(1);
+$('#fs-down').onclick = () => fsStep(-1);
+$$('[data-fs]').forEach(b => b.onclick = () => fsStep(b.dataset.fs === 'up' ? 1 : -1));
+$('#open-toc').onclick = openToc;
+$('#open-toc2').onclick = openToc;
+$('#open-anno').onclick = openAnno;
+$('#next-chap').onclick = () => {
+  const max = flatChapters(book(state.bookId)).length - 1;
+  if (state.chapter >= max) return toast('已经是最后一回');
+  state.chapter++; renderReader(); toast('已同步进度到 NAS');
+};
+$('#s-mode').onchange = e => toast('偏好已存到 NAS · ' + e.target.value);
+$('#clear-local').onclick = () => {
+  state.bookId = null; go('login');
+  toast('本地 3 个值已清空 · 书和批注还在 NAS 上');
+};
+
+/* ── 右侧开关 ─────────────────────────────────────────────── */
+function bindSwitch(sel, fn){
+  const el = $(sel);
+  el.onclick = () => {
+    const on = el.getAttribute('aria-checked') !== 'true';
+    el.setAttribute('aria-checked', String(on)); fn(on);
+  };
+}
+bindSwitch('#sw-offline', on => {
+  state.offline = on;
+  if (on) { resetOfflineCopy(); $('#ov-offline').classList.add('show'); }
+  else { $('#ov-offline').classList.remove('show'); toast('网络已恢复 · 待同步的进度已补传'); }
+  renderShelf();
+});
+bindSwitch('#sw-stale', on => {
+  state.stale = on;
+  $('#gate').classList.toggle('show', on);
+  $('#probe').innerHTML = on
+    ? '<span class="dot warn"></span><span>已连上 · <b>1.2.0</b> · 需要 ≥ 1.4.0</span>'
+    : '<span class="dot"></span><span>已连上 · <b>1.4.0</b> · <b>db ok</b> · 12ms</span>';
+  $('#s-ver').textContent = on ? '1.2.0' : '1.4.0';
+  $('#a-ver').innerHTML = on
+    ? '<span class="dot warn"></span>1.2.0'
+    : '<span class="dot"></span>1.4.0';
+  toast(on ? '服务端版本过旧（演示）' : '服务端版本正常');
+});
+
+/* ── 启动 ─────────────────────────────────────────────────── */
+renderShelf(); applyTheme(); applyFs();
+
+/* 支持 ?view=shelf|detail|read|settings|about|offline 直接落到某个状态，
+   方便评审时截单页（例如 ?view=read&theme=night&dark=1&tools=1）。 */
+(function bootFromQuery(){
+  const q = new URLSearchParams(location.search);
+  if (q.get('dark') === '1') state.theme = 'night';   /* 老截图命令的兼容写法 */
+  if (q.get('off') === '1'){
+    state.offline = true;
+    $('#sw-offline').setAttribute('aria-checked', 'true');
+    $('#ov-offline').classList.remove('show');
+    resetOfflineCopy();
+  }
+  if (q.get('lib')) state.lib = q.get('lib');
+  if (q.get('mode')) state.mode = q.get('mode');
+  if (q.get('book')) state.bookId = q.get('book');
+  if (q.get('ch')) state.chapter = Number(q.get('ch'));
+  if (q.get('theme')) state.theme = q.get('theme');
+  if (q.get('fs')) state.fs = Number(q.get('fs'));
+  const v = q.get('view'); if (!v) return;
+  if (v === 'shelf'){ renderShelf(); go('shelf'); }
+  else if (v === 'detail'){ state.bookId = q.get('book') || 'hlm'; state.chapter = Number(q.get('ch') || 0); go('detail'); }
+  else if (v === 'read'){
+    state.bookId = q.get('book') || 'hlm'; state.chapter = Number(q.get('ch') || 0);
+    go('read'); renderReader();
+    if (q.get('tools') === '1'){ state.tools = true; $('#reader').classList.add('tools'); }
+  }
+  else if (v === 'settings' || v === 'about') go(v);
+  else if (v === 'offline') $('#ov-offline').classList.add('show');
+  else if (v === 'stale'){ $('#ov-stale').classList.add('show'); }
+  else if (v === 'login' && q.get('stale') === '1'){
+    $('#gate').classList.add('show');
+    $('#probe').innerHTML = '<span class="dot warn"></span><span>已连上 · <b>1.2.0</b> · 需要 ≥ 1.4.0</span>';
+  }
+  if (q.get('sheet') === 'toc') openToc();
+  if (q.get('sheet') === 'anno') openAnno();
+  if (q.get('sheet') === 'lib') openLib();
+  if (q.get('sheet') === 'newlib') openNewLib();
+  if (q.get('sheet') === 'move') openMove();
+  if (q.get('off') === '1'){ renderShelf(); if (state.view === 'read') renderReader(); }
+  applyTheme(); applyFs();
+})();
+
+</script>
+</body>
+</html>
