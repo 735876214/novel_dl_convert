@@ -99,8 +99,10 @@ export function openTargetOf(b: { id: string } & Formattable): OpenTarget | null
  * 系列详情页的路径 —— **系列名进 URL 的唯一拼法**（第 152 期）。
  *
  * 三个入口都要它：系列总览点卡片、书架点**折叠行**（聚合行的落点必须是「聚合物」，
- * 不是代表本那一册）、以及别处指向某个系列的深链。系列名里 `：` `/` `☆` `!` 都出现过，
- * 不编码会拼出另一条路由 —— 而且只在少数系列上出错，很难发现。
+ * 不是代表本那一册）、以及别处指向某个系列的深链。编码必须走 `encodeURIComponent`：
+ * 真实系列名里出现过 `☆` `!` `【】` 与全角 `：`（实测 171 个系列），ASCII `/` 目前没有
+ * （0/171）—— 但 `/` 一旦出现，不编码就会拼出**另一条路由**（404 或落进别的系列），
+ * 而这种错只在那一两个系列上发生，很难被发现。
  */
 export function seriesDetailPath(name: string): string {
   return `/series/${encodeURIComponent(name)}`

@@ -170,3 +170,66 @@ describe('SeriesDetailView：目录与「从第一册开始」', () => {
     expect(router.currentRoute.value.path).toBe('/read/lib$n1')
   })
 })
+
+/**
+ * 首册**打不开**的情形（第 152 期审计时在真实库里抓到的唯一一例：
+ * `青春期笨蛋不做理性小魔女的梦` 的 `Vol.01 (2) (2).zip` 是解析失败的容器）。
+ *
+ * 只按序号取起点的话，「开始阅读」会跳到一本读不了的书 —— 那不是开始阅读。
+ * 目录里也要如实标出来，否则坏册与正常册长得一模一样。
+ */
+describe('SeriesDetailView：首册打不开时', () => {
+  const BAD_FIRST: BookCard[] = [
+    makeBook({ id: 'lib$bad', title: 'Vol.01', series_index: '1', format: 'ZIP', pages: 0, issues: ['unparsable'] }),
+    makeBook({ id: 'lib$ok', title: 'Vol.02', series_index: '2', format: 'CBZ', pages: 120 }),
+  ]
+
+  beforeEach(() => {
+    m.seriesDetail.mockResolvedValue({
+      name: '测试系列',
+      count: BAD_FIRST.length,
+      books: BAD_FIRST,
+      groups: [],
+      meta: null,
+      meta_state: null,
+      gaps: null,
+    } as never)
+  })
+
+  it('从**下一本可读的册**开始，而不是跳进死页面', async () => {
+    const w = await mountSeries()
+    const btn = buttonByText(w, '开始阅读')
+    expect(btn).toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/read/lib$ok')
+  })
+
+  it('按钮 title 说出真正的起点（不是「第一册」这种会落空的承诺）', async () => {
+    const w = await mountSeries()
+    expect(buttonByText(w, '开始阅读')?.attributes('title')).toContain('Vol.02')
+  })
+
+  it('目录里把解析失败的那册标出来', async () => {
+    const w = await mountSeries()
+    expect(w.text()).toContain('解析失败')
+  })
+
+  it('全部打不开时退回序号最小的那本（按钮还在，进详情页看原因）', async () => {
+    m.seriesDetail.mockResolvedValue({
+      name: '测试系列',
+      count: 1,
+      books: [makeBook({ id: 'lib$bad2', title: 'Vol.01', series_index: '1', format: 'ZIP', pages: 0, issues: ['unparsable'] })],
+      groups: [],
+      meta: null,
+      meta_state: null,
+      gaps: null,
+    } as never)
+    const w = await mountSeries()
+    const btn = buttonByText(w, '开始阅读')
+    expect(btn).toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/book/lib$bad2')
+  })
+})

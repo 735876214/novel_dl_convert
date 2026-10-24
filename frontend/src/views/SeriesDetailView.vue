@@ -73,16 +73,23 @@ const firstId = computed(() => {
 })
 
 /**
- * 「开始阅读」的目标 = **第一册**（按系列序号；一本都没序号时退回落库顺序的首本）。
+ * 「开始阅读」的目标 = **系列顺序里第一本真的能打开的**。
  *
- * 为什么不用「代表本」：书架上折叠卡片的代表本只是「封面画哪张」（`representativeOf`），
- * 与阅读顺序无关 —— 拿它当阅读起点会让一个 28 册的系列从第 18 册开始读。
- * 为什么不在这一页做「继续阅读」：系列详情接口的 `books` 不带进度（`percent` / `status`
- * 只在 `/api/books` 上补齐），在这里推算「读到哪了」就是第二份进度口径。
+ * 顺序按 `sortBySeriesIndex`（序号小的在前，无序号垫底）；「能不能打开」用 `openTargetOf`
+ * —— 它本来就是「阅读 / 收听」的**唯一**判据。两处口径合起来才避免下面的坑：
+ *
+ * - **不取代表本**：折叠卡的代表本只是「封面画哪张」（`representativeOf`），与阅读顺序无关
+ *   —— 拿它当起点会让一个 28 册的系列从第 18 册开始读。
+ * - **跳过打不开的册**：真实库里就有一例（`青春期笨蛋不做理性小魔女的梦` 的 `Vol.01 (2) (2).zip`
+ *   是解析失败的容器，`pages=0` / `issues=['unparsable']`）。只按序号取，按钮会把人送进
+ *   一本打不开的书 —— 那不是「开始阅读」。
+ * - **一本都打不开时**退回序号最小的那本：至少能进详情页看清原因，而不是把按钮藏起来。
+ * - 不做「继续阅读」：系列详情接口的 `books` 不带进度（`percent` / `status` 只在
+ *   `/api/books` 上补齐），在这一页推算「读到哪了」就是第二份进度口径。
  */
 const firstBook = computed<BookCard | null>(() => {
   const arr = sortBySeriesIndex(books.value)
-  return arr.find((b) => b.series_index) ?? arr[0] ?? null
+  return arr.find((b) => openTargetOf(b)) ?? arr.find((b) => b.series_index) ?? arr[0] ?? null
 })
 
 /** 有声书说「收听」，其余说「阅读」—— 与书卡菜单同一判据（`isAudioBook`） */
@@ -161,7 +168,7 @@ watch(name, load)
         size="sm"
         variant="primary"
         class="mt-1 shrink-0"
-        :title="`从第一册（${firstBook.title || firstBook.name}）开始`"
+        :title="`从这本开始：${firstBook.title || firstBook.name}`"
         @click="startReading"
       >
         {{ startLabel }}
@@ -263,6 +270,14 @@ watch(name, load)
               class="absolute bottom-1 left-1 rounded bg-primary px-1.5 py-0.5 text-[10.5px] font-semibold text-white"
             >
               首册
+            </span>
+            <!-- 解析失败（`issues` 里带 unparsable）：目录里**如实标**，不然一册坏书看起来与正常册一样，
+                 点进去才发现读不了。措辞与「工具 → 缺失资源」「统计」两处一致。 -->
+            <span
+              v-if="b.issues?.includes('unparsable')"
+              class="absolute right-1 bottom-1 rounded bg-destructive px-1.5 py-0.5 text-[10px] font-semibold text-white"
+            >
+              解析失败
             </span>
           </div>
 
