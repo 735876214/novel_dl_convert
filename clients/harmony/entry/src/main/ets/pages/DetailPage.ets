@@ -1,6 +1,6 @@
 import { router } from '@kit.ArkUI';
 import { Api, ApiError } from '../common/Api';
-import { BookDetail, ChapterRef, DetailParams, VolumeGroup } from '../common/Models';
+import { BookDetail, ChapterRef, DetailParams, Progress, VolumeGroup } from '../common/Models';
 import { Palette, Theme } from '../common/Theme';
 
 @Entry
@@ -8,12 +8,34 @@ import { Palette, Theme } from '../common/Theme';
 struct DetailPage {
   @StorageProp('skin') skin: string = 'paper';
   @State detail: BookDetail | null = null;
+  @State progress: Progress | null = null;
   @State loading: boolean = true;
   @State error: string = '';
   private bid: string = '';
 
   private pal(): Palette {
     return Theme.of(this.skin);
+  }
+
+  /**
+   * 已读百分比：**只来自** `GET /api/books/{bid}/progress`。
+   *
+   * 曾经这里读的是 `detail.percent` —— 详情接口根本没有这个字段（见
+   * `Models.BookDetail` 的注释），于是 `undefined` 一路传到
+   * `Math.floor(len * undefined / 100)` 变成 `NaN`，`list[NaN]` 是
+   * `undefined`，点「继续阅读」直接崩（真机日志：
+   * `TypeError: Cannot read property index of undefined` @ DetailPage.ets:135）。
+   */
+  private pct(): number {
+    const p = this.progress;
+    if (p === null) {
+      return 0;
+    }
+    const v = p.percent;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+      return 0;
+    }
+    return v > 100 ? 100 : v;
   }
 
   aboutToAppear(): void {
@@ -36,6 +58,12 @@ struct DetailPage {
       this.error = err.message;
     } finally {
       this.loading = false;
+    }
+    // 进度单独取：拿不到不影响看目录（进度只是「接着读」用的）
+    try {
+      this.progress = await Api.get<Progress>('/api/books/' + this.bid + '/progress');
+    } catch (e) {
+      this.progress = null;
     }
   }
 
@@ -112,7 +140,7 @@ struct DetailPage {
                 Text('已读')
                   .fontSize(11)
                   .fontColor(this.pal().muted)
-                Text(Math.round(this.detail.percent) + '%')
+                Text(Math.round(this.pct()) + '%')
                   .fontSize(20)
                   .fontColor(this.pal().ink)
                   .margin({ top: 2 })
@@ -127,12 +155,23 @@ struct DetailPage {
                 .borderRadius(10)
                 .onClick(() => {
                   const list = this.chapters();
-                  if (list.length > 0) {
-                    // 回到上次读到的章：percent→章节只是近似定位，
-                    // 精确位置由服务端 progress 的 locator 决定，端上不重算。
-                    const i = Math.min(list.length - 1,
-                      Math.floor(list.length * this.detail!.percent / 100));
-                    this.open(list[i].index!);
+                  if (list.length === 0) {
+                    return;
+                  }
+                  // 回到上次读到的章：percent→章节只是**近似定位**，
+                  // 精确位置由服务端 progress 的 locator / cfi 决定，端上不重算。
+                  // 下标必须夹在 [0, len-1]：percent 为 NaN / 负数 / >100 时
+                  // 直接取下标会拿到 undefined（真机崩溃的成因）。
+                  let i = Math.floor(list.length * this.pct() / 100);
+                  if (!Number.isFinite(i) || i < 0) {
+                    i = 0;
+                  }
+                  if (i > list.length - 1) {
+                    i = list.length - 1;
+                  }
+                  const ch: ChapterRef | undefined = list[i];
+                  if (ch !== undefined && ch.index !== undefined) {
+                    this.open(ch.index);
                   }
                 })
             }

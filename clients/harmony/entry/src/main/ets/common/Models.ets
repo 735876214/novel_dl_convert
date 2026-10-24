@@ -50,14 +50,35 @@ export interface VolumeGroup {
   chapters: ChapterRef[];
 }
 
-/** GET /api/books/{bid} */
+/**
+ * GET /api/books/{bid}
+ *
+ * ⚠️ 详情**没有** `percent`：阅读进度只在 `GET /api/books` 的卡片上
+ * （server.py 的 `api_books` 用 `db.all_progress()` 现拼）和
+ * `GET /api/books/{bid}/progress` 上。详情是 `library.book_detail()` 的
+ * 直接产物，里面没有进度字段。
+ */
 export interface BookDetail {
   id: string;
   name: string;
   format: string;
   library_id: string;
-  percent: number;
   chapters: VolumeGroup[];
+}
+
+/**
+ * GET /api/books/{bid}/progress —— 阅读位置的**真值源**。
+ *
+ * 无记录时服务端回 `{locator:0, percent:0, cfi:'', file_rel:null}`（没有 `updated_at`）。
+ * `cfi` 由服务端 `core/epub_cfi.py` 生成，**端上不实现 CFI**，只用 `percent`
+ * 做「回到大概哪一章」的近似定位。
+ */
+export interface Progress {
+  locator: number;
+  percent: number;
+  cfi: string;
+  updated_at?: number;
+  file_rel: string | null;
 }
 
 /** GET /api/books/{bid}/chapter/{index} */
