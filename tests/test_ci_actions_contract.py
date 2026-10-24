@@ -125,3 +125,39 @@ def test_镜像构建的缓存导出失败不许判死构建():
         "`cache-to` 没带 `ignore-error=true` ⇒ 导出缓存失败会把构建判红：\n  "
         + "\n  ".join(cache_to)
     )
+
+
+# ---------------------------------------------------------------- 第 152 期：run 页的「假红」
+
+def test_可见性步骤不再在_run_页留一条失败标注():
+    """`Ensure package is public` 不许用 curl 的失败模式（`-f` / `--fail`），且必须自行兜底。
+
+    事实：这一跑从第 105 期起长期在 run 页挂着一条 `Process completed with exit code 22`
+    —— curl 的 **22 = HTTP 4xx**。`continue-on-error: true` 让 job 仍是 success，所以
+    **CI 判据不会红**，但页面上那一条红标注看起来就像构建挂了（第 114 期的记录里也只能
+    把它写成「不是失败」）。而 `GITHUB_TOKEN` 并不是这个**用户所有**包的管理员 ——
+    那个 PUT 在 CI 里注定 403，靠重试永远修不好。
+
+    第 152 期改成：先 GET 读现状（已 public 就跳过），读不到发 `::notice::`、
+    真需要改才 PUT（失败发 `::warning::`），**任何一条路都 `exit 0`**。
+    这里钉三件事：不用 `-f`、有 `::notice::`/`::warning::`、显式 `exit 0`。
+    """
+    text = _workflow_texts()["docker-image.yml"]
+    marker = "- name: Ensure package is public"
+    assert marker in text, "docker-image.yml 里找不到 `Ensure package is public` 这一步"
+    step = re.split(r"\n      - name:", text.split(marker, 1)[1], maxsplit=1)[0]
+    # 注释里可以**讨论**这个坏写法（本步骤的注释就写着「别用 curl -f」），只扫可执行行
+    code_lines = [ln for ln in step.splitlines() if not ln.strip().startswith("#")]
+
+    bad = [ln.strip() for ln in code_lines
+           if re.search(r"curl\s+-[A-Za-z]*f", ln) or "--fail" in ln]
+    assert not bad, (
+        "这一步又用上了 curl 的失败模式（HTTP 4xx ⇒ 非 0 退出 ⇒ run 页一条「exit code 22」红标注）：\n  "
+        + "\n  ".join(bad)
+    )
+    assert "::notice::" in step or "::warning::" in step, (
+        "读不到 / 改不动可见性时必须给出人话（`::notice::` 或 `::warning::`），"
+        "不能只是一句 curl 的报错"
+    )
+    assert "exit 0" in step, "这一步必须显式 `exit 0`：可见性改不动不该把「镜像已推上去」判成失败"
+

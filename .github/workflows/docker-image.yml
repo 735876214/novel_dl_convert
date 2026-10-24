@@ -106,13 +106,50 @@ jobs:
             -t ghcr.io/735876214/novel_dl_convert:${{ steps.version.outputs.version }} \
             ghcr.io/735876214/novel_dl_convert:${{ github.sha }}
 
-      # 公开镜像，确保 NAS 匿名即可 pull
+      # 公开镜像，确保 NAS 匿名即可 pull。
+      #
+      # ⚠️ 第 152 期：这一步此前是 `curl -fsSL -X PUT …` + `continue-on-error: true`。
+      # 它**不会让构建失败**，但 curl 的 `-f` 会把 4xx 变成非 0 退出，于是 run 页长期挂着
+      # 一条「Process completed with exit code 22」—— 看起来像构建挂了（第 114 期的记录里
+      # 也把它列为「不是失败」的噪音）。而且 `GITHUB_TOKEN` 并不是这个**用户所有**包的
+      # 管理员，那个 PUT 在 CI 里注定 403。
+      #
+      # 现在的口径（任何一条路都**不以非 0 退出**）：
+      #   ① 先 GET 读现状：已经 public 就跳过（幂等，也不发无意义的写请求）；
+      #   ② 读到了、且确实不是 public，才尝试 PUT；失败发 `::warning::` 并说明去 Packages 页手动改；
+      #   ③ 读不到（token 权限不足等）发 `::notice::` —— 这不是构建失败，只是「核对不了」。
       - name: Ensure package is public
         if: github.event_name == 'push'
-        continue-on-error: true
         run: |
-          curl -fsSL -X PUT \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github+json" \
-            https://api.github.com/user/packages/container/novel_dl_convert/visibility \
-            -d '{"visibility":"public"}'
+          set -u
+          api="https://api.github.com"
+          auth="Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}"
+          accept="Accept: application/vnd.github+json"
+          pkg="$api/user/packages/container/novel_dl_convert"
+
+          read_vis() {
+            # 只读：打印 visibility 字段；读不到打印空串（**不**用 curl -f，见上）
+            python3 -c "import json;print(json.load(open('pkg.json')).get('visibility',''))" 2>/dev/null || true
+          }
+
+          code=$(curl -sS -o pkg.json -w '%{http_code}' -H "$auth" -H "$accept" "$pkg" || echo 000)
+          vis=""
+          if [ "$code" = "200" ]; then vis=$(read_vis); fi
+
+          if [ "$vis" = "public" ]; then
+            echo "镜像可见性已是 public，跳过。"
+            exit 0
+          fi
+
+          if [ "$code" != "200" ]; then
+            echo "::notice::无法通过 API 核对镜像可见性（HTTP $code）——GITHUB_TOKEN 不是该用户包的管理员。镜像此前已公开可匿名 pull；如不确定，请在 GitHub 的 Packages 页面确认一次。"
+            exit 0
+          fi
+
+          code=$(curl -sS -o put.json -w '%{http_code}' -X PUT -H "$auth" -H "$accept" \
+            "$pkg/visibility" -d '{"visibility":"public"}' || echo 000)
+          case "$code" in
+            2*) echo "镜像已设为 public。" ;;
+            *)  echo "::warning::无法通过 API 把镜像设为 public（HTTP $code）——请在 GitHub 的 Packages 页面手动确认一次。响应：$(head -c 300 put.json 2>/dev/null || true)" ;;
+          esac
+          exit 0

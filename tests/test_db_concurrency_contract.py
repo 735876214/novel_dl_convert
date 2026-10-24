@@ -74,13 +74,26 @@ def test_语句结果在锁内就已物化(isolated):  # noqa: ARG001
 
 
 def test_锁是重入锁(isolated):  # noqa: ARG001
-    """``with _lock:`` 块里还会再调 ``c.execute`` —— 非重入锁会把自己锁死。"""
+    """``with _lock:`` 块里还会再调 ``c.execute`` —— 非重入锁会把自己锁死。
+
+    ⚠️ 为什么**不**用 ``acquire(blocking=False)`` 直接抢（第 152 期）：全仓有后台线程
+    （`catalog._spawn_bg` 的索引刷新、刮削 worker、watcher）会短暂持锁；抢不到只能说明
+    「此刻有别的线程在写库」，**不能**说明这不是重入锁 —— CI 2026-10-24 就这么红过一次
+    （`.codebuddy/memory/2026-10-02.md` 也记着这条偶发）。它还会把红指向一个不存在的缺陷。
+
+    口径改成：**先等到拿得到**（后台线程迟早放锁，给 10s 上限），再在**同一线程**里重入
+    一次 —— 这才是在验「可重入」。等不到就报出来，并明确指向「有线程长期持锁」。
+    """
     assert isinstance(db._lock, type(threading.RLock())), \
         "必须是 RLock：代理会对同一线程重入取锁"
-    assert db._lock.acquire(blocking=False)
-    assert db._lock.acquire(blocking=False), "重入失败：会与既有 with _lock 块死锁"
-    db._lock.release()
-    db._lock.release()
+    assert db._lock.acquire(timeout=10), (
+        "等 10s 仍拿不到 db._lock —— 有线程长期持锁（该查后台任务收尾，而不是怀疑锁的类型）"
+    )
+    try:
+        assert db._lock.acquire(blocking=False), "重入失败：会与既有 with _lock 块死锁"
+        db._lock.release()
+    finally:
+        db._lock.release()
 
 
 def test_并发读写下不抛异常且每库覆写不丢(isolated):  # noqa: ARG001
