@@ -135,7 +135,9 @@ function visibleIds(): string[] {
   if (prefs.prefs.view === 'list') {
     for (const e of listEntries.value) if (e.kind === 'book') push(e.book)
   } else if (prefs.prefs.view === 'table') {
-    for (const row of tableRows.value) if (!row.toggle) push(row.book)
+    // 「全选」按**是不是一本书**判（`head`），不按有没有 toggle：展开后的首册行带 toggle（那是
+    // 「收起」按钮），但它同属这一批可见的书 —— 按 toggle 判会让每个系列漏选 1 本（审计实测）。
+    for (const row of tableRows.value) if (!row.head) push(row.book)
   } else {
     for (const r of renderRows.value) if (!isSeriesRow(r)) push(r.book)
   }
@@ -409,7 +411,14 @@ const rows = computed<Row[]>(() => {
   }
   // 系列内部按序号重排：整理结果继承了外层排序，系列内顺序仍可能是乱的
   return out.map((r) => {
-    if (!isSeriesRow(r) || r.members.length <= 1) return r
+    if (!isSeriesRow(r)) return r
+    // **只有一册的「系列」不是聚合行**（第 152 期审计）：真实库里 25 个单本系列若当整组渲染，
+    // 就会丢掉 ⋮ 菜单（删 / 评分 / 状态都点不到）、表格四列留空、标题还被系列名顶掉
+    // （而有的系列名本身就是错抽的 `Vol.01` / 作者名）。退回普通书行 —— 与折叠功能出现之前一致。
+    if (r.members.length === 1) {
+      const only = r.members[0]
+      return { key: only.id, book: only, members: r.members }
+    }
     const members = sortBySeriesIndex(r.members)
     return { ...r, members, book: representativeOf(members, r.book) }
   })
@@ -569,6 +578,27 @@ function rebuildMoreObserver(): void {
 function loadNextPage(): void {
   void library.loadMoreShelfBooks()
 }
+
+/**
+ * 折叠开启时**把分页源续拉到底**（第 152 期审计发现的计数缺陷）。
+ *
+ * 分组与「N 册」只能在全量上算：首屏只取 120 本（`BOOKS_PAGE_SIZE`），一个 4 册的系列
+ * 会被显示成「3 册」，滑到底才补齐 —— 而卡片上那枚数字在那之前就是错的
+ * （线上实测：可塑性记忆 3/4）。分页本身不取消（首屏照样秒开），只是折叠态下在后台续拉。
+ *
+ * ⚠️ 失败即停：`booksError` 一旦有值就不再自动续拉（否则「加载失败 → loading 复位 →
+ *    再次触发」会变成无限重试）；用户仍可点页脚的「加载更多」重试。
+ */
+watch(
+  [() => prefs.prefs.collapseSeries, () => library.shelfHasMore, () => library.shelfLoadingMore],
+  () => {
+    if (prefs.prefs.collapseSeries && library.shelfHasMore
+        && !library.shelfLoadingMore && !library.booksError) {
+      void library.loadMoreShelfBooks()
+    }
+  },
+  { immediate: true },
+)
 
 /**
  * 「筛选结果为空但还有更多」的诚实态（第 88 期 C 批）。
@@ -1549,8 +1579,10 @@ const INPUT_CLS =
             @click="onTableRowClick(row)"
           >
             <td v-if="selectMode" class="px-3 py-2">
+              <!-- 系列头行不是一本书：不给勾选框（勾上只会静默选中代表本那一册）。
+                   展开后的首册是**真书**，照常可选。 -->
               <input
-                v-if="row.book"
+                v-if="row.book && !row.head"
                 type="checkbox"
                 class="h-4 w-4 cursor-pointer accent-primary"
                 :checked="selected.has(row.book.id)"
@@ -1565,8 +1597,10 @@ const INPUT_CLS =
               >
                 {{ seriesIndexLabel(row.book) }}
               </span>
+              <!-- 「系列 N 册」只属于**折叠态的头行**；展开后首册行也带 toggle（那一行上的
+                   按钮是「收起」），但它是真书，不该多出一枚系列角标 -->
               <span
-                v-if="row.toggle"
+                v-if="row.head && row.toggle"
                 class="ml-1.5 rounded bg-muted px-1 text-[10px] text-muted-foreground tabular-nums"
               >
                 系列 {{ row.toggle.count }} 册
@@ -1595,9 +1629,18 @@ const INPUT_CLS =
             <td class="px-3 py-2 text-[11.5px] text-amber-500">
               {{ !row.head && (row.book.stars ?? 0) > 0 ? '★'.repeat(row.book.stars ?? 0) : '—' }}
             </td>
-            <!-- 末列 = 行操作列：系列行放「展开 / 收起」，单本书行放 ⋮（表头一字不改） -->
+            <!-- 末列 = 行操作列：头行只有「展开」；展开后的首册行**两样都有**（⋮ + 收起）——
+                 此前是 `v-else`，展开后首册那本会丢掉 ⋮（第 152 期审计实测）。 -->
             <td class="px-3 py-2">
               <div class="flex items-center justify-end gap-1">
+                <BookActionsMenu
+                  v-if="!row.head"
+                  :book="row.book"
+                  :menu-key="row.key"
+                  variant="table"
+                  @preview="openPreview"
+                  @changed="onMenuChanged"
+                />
                 <Button
                   v-if="row.toggle"
                   size="sm"
@@ -1606,14 +1649,6 @@ const INPUT_CLS =
                 >
                   {{ expanded.includes(row.toggle.name) ? '收起' : '展开' }}
                 </Button>
-                <BookActionsMenu
-                  v-else
-                  :book="row.book"
-                  :menu-key="row.key"
-                  variant="table"
-                  @preview="openPreview"
-                  @changed="onMenuChanged"
-                />
               </div>
             </td>
           </tr>

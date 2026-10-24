@@ -32,6 +32,7 @@ vi.mock('@/lib/api', () => ({
     bookMoveBatches: vi.fn(),
     bookDetail: vi.fn(),
     deleteBook: vi.fn(),
+    collections: vi.fn(),
     downloadUrl: vi.fn((name: string) => `/download/${name}`),
     coverUrl: vi.fn((id: string) => `/api/books/${id}/cover`),
   },
@@ -43,6 +44,7 @@ const m = {
   readingThresholds: vi.mocked(api.readingThresholds),
   bookMoveBatches: vi.mocked(api.bookMoveBatches),
   bookDetail: vi.mocked(api.bookDetail),
+  collections: vi.mocked(api.collections),
 }
 
 // ---------------- 夹具 ----------------
@@ -116,6 +118,7 @@ beforeEach(async () => {
   m.books.mockResolvedValue({ items: SHELF, total: SHELF.length })
   m.readingThresholds.mockResolvedValue({ library_id: '', started: 0, finished: 99.5 })
   m.bookMoveBatches.mockResolvedValue({ items: [] })
+  m.collections.mockResolvedValue({ items: [] })
   m.bookDetail.mockImplementation(async (id: string) => makeDetail(SHELF.find((b) => b.id === id) as BookCard))
 
   router = createRouter({
@@ -343,5 +346,83 @@ describe('ShelfView：折叠行点进去是系列详情，成员行点进去是�
     await w.find('[data-bucket] button').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.path).toBe(seriesUrl)
+  })
+})
+
+/**
+ * 表格视图的系列行**多选口径** + 折叠卡的**册数**（第 152 期审计抓出来的两处）。
+ *
+ * 两处都坏得静默：
+ * - 头行带勾选框 ⇒ 勾上只选中代表本那一册（用户以为选中了整个系列），而「全选」又把它排除；
+ *   展开后首册行带 toggle ⇒ 那本书丢掉 ⋮、多出一枚「系列 N 册」角标，「全选」每系列再漏 1 本。
+ * - 折叠后「N 册」只数**已加载**的分页（首屏 120 本）⇒ 4 册的系列显示成「3 册」，
+ *   滑到底才补齐 —— 卡片上的数字在那之前就是错的。
+ */
+describe('ShelfView：表格多选口径与折叠卡的册数', () => {
+  async function enterSelect(w: VueWrapper): Promise<void> {
+    const btn = w.findAll('button').find((b) => (b.text() || '').trim() === '多选')
+    expect(btn).toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+  }
+
+  async function mountTableCollapsed(): Promise<VueWrapper> {
+    m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
+    return mountShelf('table', true)
+  }
+
+  it('系列头行不给勾选框；展开后每一册（含首册）都能选', async () => {
+    const w = await mountTableCollapsed()
+    await enterSelect(w)
+    // 折叠时只有头行 → 一个勾选框都没有
+    expect(w.findAll('tbody input[type="checkbox"]').length).toBe(0)
+
+    const expand = w.findAll('tbody tr').at(0)!.findAll('button')
+      .find((b) => (b.text() || '').includes('展开'))
+    await expand!.trigger('click')
+    await flushPromises()
+    expect(w.findAll('tbody input[type="checkbox"]').length).toBe(VOL_SHELF.length)
+  })
+
+  it('展开后首册行仍有 ⋮ 与「收起」，且不再挂「系列 N 册」角标', async () => {
+    const w = await mountTableCollapsed()
+    await w.findAll('tbody tr').at(0)!.findAll('button')
+      .find((b) => (b.text() || '').includes('展开'))!.trigger('click')
+    await flushPromises()
+
+    const first = w.findAll('tbody tr').at(0)!
+    expect(first.find('[data-book-menu-trigger]').exists()).toBe(true)
+    expect(first.text()).toContain('收起')
+    expect(first.text()).not.toContain(`系列 ${VOL_SHELF.length} 册`)
+  })
+
+  it('折叠开启时把分页续拉到底 —— 「N 册」不能只数首屏（120 本）', async () => {
+    // 122 本：前 120 本没有系列，同系列的两本落在第二页
+    const many: BookCard[] = Array.from({ length: 120 }, (_, i) =>
+      makeBook({ id: `lib$p${i}`, title: `书${i}`, name: `书${i}.epub`, mtime: 1700000000 - i }))
+    many.push(makeBook({ id: 'lib$s1', title: 'Vol.01', name: 'S/Vol.01.zip', series: 'S', series_index: '1', mtime: 2 }))
+    many.push(makeBook({ id: 'lib$s2', title: 'Vol.02', name: 'S/Vol.02.zip', series: 'S', series_index: '2', mtime: 1 }))
+    m.books.mockImplementation(async (opts?: { limit?: number; offset?: number }) => {
+      const off = opts?.offset ?? 0
+      const lim = opts?.limit ?? many.length
+      const items = many.slice(off, off + lim)
+      return { items, total: many.length, has_more: off + items.length < many.length }
+    })
+
+    const w = await mountShelf('grid', true)
+    for (let i = 0; i < 6; i++) await flushPromises()
+    expect(w.text()).toContain(`${VOL_SHELF.length} 册`)
+  })
+
+  it('只有一册的「系列」当普通书行：有 ⋮、显示自己的书名、没有「1 册」角标', async () => {
+    // 真实库里有 25 个单本系列；其中有的系列名本身就是错抽的 `Vol.01` / 作者名
+    const SOLO: BookCard[] = [
+      makeBook({ id: 'lib$solo', title: '孤单的一本', name: 'Solo/Vol.01.zip', series: 'Solo', series_index: '1', format: 'CBZ' }),
+    ]
+    m.books.mockResolvedValue({ items: SOLO, total: SOLO.length })
+    const w = await mountShelf('grid', true)
+    expect(w.text()).toContain('孤单的一本')
+    expect(w.text()).not.toContain('1 册')
+    expect(w.find('[data-book-menu-trigger]').exists()).toBe(true)
   })
 })
