@@ -14,7 +14,7 @@
 # 镜像由 GitHub Actions 在每次推送 main 时构建（linux/amd64 + linux/arm64 双架构），
 # **源码与全部 Python 依赖已烤进镜像** ⇒ 容器启动秒级，不需要本地 build，也不需要运行时 clone。
 #
-# ⚠️ 第 149 / 150 期：下面 image: 里**钉死版本号**（`:1.4.1`），不再用 `:latest`。
+# ⚠️ 第 149 / 150 期：下面 image: 里**钉死版本号**（`:1.4.2`），不再用 `:latest`。
 #    理由：同一台 NAS 上并行跑着别的会话 / 别的部署时，「我到底在跑哪个版本」必须先能
 #    回答得了。固定 tag 下 `docker compose up -d` 不会把你悄悄带到别人的新版本上；
 #    升级就显式改 tag（见下面 image: 那行的注释），再 pull + up -d。
@@ -118,7 +118,7 @@ services:
   novel_dl_convert:
     # 钉版本（第 149 期；第 150 期起该 tag 不可变）：升级 = 把冒号后的版本号改成目标版本，再
     # docker compose pull && docker compose up -d；回滚 = 换成目标版本的 :<sha> 或旧版本号。
-    image: ghcr.io/735876214/novel_dl_convert:1.4.1
+    image: ghcr.io/735876214/novel_dl_convert:1.4.2
     container_name: novel_dl_convert
     restart: unless-stopped
     working_dir: /app

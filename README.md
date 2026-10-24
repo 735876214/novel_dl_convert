@@ -275,7 +275,7 @@ python -m novelforge logs -n 50 --action 转换 --status 失败
 镜像由 GitHub Actions 在每次推送到 `main` 时自动构建并发布：每次构建都推 `:latest`（最新一次 main 构建，
 **会漂**）与 `:<sha>`（**不可变**，任何时候都精确指回某一笔提交）；**只有仓库根 `VERSION` 变了的那次**再加上
 `:<版本号>`（第 150 期起它不再被后续 main 构建覆盖）。`docker-compose.yml` 里钉的是版本号那个
-（例如 `ghcr.io/735876214/novel_dl_convert:1.4.1`），见下面「更新代码」；
+（例如 `ghcr.io/735876214/novel_dl_convert:1.4.2`），见下面「更新代码」；
 **源码与全部 Python 依赖已在「构建镜像时」烤进镜像**——不需要 NAS 本地 build，也不需要容器启动时 clone 源码。
 版本号一变（仓库根 `VERSION`），CI 还会自动打 `v<版本>` tag 并创建 GitHub Release（说明取 `CHANGELOG.md` 对应段）。
 因此在 NAS 上**只需要 `docker-compose.yml` 一个文件**（配置全部写在文件里，不依赖任何 `.env`），一条命令即可运行：
@@ -306,7 +306,7 @@ docker compose up -d
 | `./input` / `./output` | 部署目录下同名子目录 | 输入与成品目录，**必须分开** |
 | `./data` | `./data` | SQLite（阅读进度 / 批注 / 账号 / 书库登记），务必落在持久盘 |
 | `AUTH_USER` / `AUTH_PIN` / `AUTH_SECRET` | `admin` / `changeme` / 占位串 | **仅首次启动初始化**，之后在界面「设置 → 账户」里改 |
-| `image:` 的 tag | `1.4.1`（钉死） | **升级就是改这一处**：改成目标版本再 `docker compose pull && docker compose up -d`。版本号 tag 现在**不可变**（同一个版本号永远指向同一次发布），所以 `pull_policy: always` 只是重新核对它，不等于升级 |
+| `image:` 的 tag | `1.4.2`（钉死） | **升级就是改这一处**：改成目标版本再 `docker compose pull && docker compose up -d`。版本号 tag 现在**不可变**（同一个版本号永远指向同一次发布），所以 `pull_policy: always` 只是重新核对它，不等于升级 |
 | `pull_policy` | `missing` | 本地已有镜像就不联网检查，断网也能启动；改成 `always` 则每次 up 都去 registry 核对上面那个 tag |
 | `# user: "1000:1000"` | 注释掉（=root） | 让挂载目录里的文件归某用户所有时取消注释。镜像已内置 `novelforge`（uid/gid **1000**）；群晖常见 `1026:100` 也可，但**必须先把宿主机目录 chown 成同一个 uid:gid**，否则启动时 `start.sh` 会直接报「哪个目录写不进去 + 该 chown 什么」 |
 | `# - HTTP_PROXY=…` | 注释掉（直连） | 容器要走代理才能访问书源 / 在线元数据时取消注释（Clash 跑在 NAS 主机上则填 `http://host.docker.internal:7890`） |
@@ -340,7 +340,7 @@ docker compose pull && docker compose up -d
 >
 > | tag | 会不会变 | 什么时候用 |
 > |---|---|---|
-> | `:<版本号>`（如 `:1.4.1`） | **不会**（只在仓库 `VERSION` 变成这个号的那次构建产生） | 部署默认钉这个：`up -d` 不会把你悄悄带到别人的新版本上，也不会出现「本地缓存了旧 `:latest`、以为升级了其实没变」 |
+> | `:<版本号>`（如 `:1.4.2`） | **不会**（只在仓库 `VERSION` 变成这个号的那次构建产生） | 部署默认钉这个：`up -d` 不会把你悄悄带到别人的新版本上，也不会出现「本地缓存了旧 `:latest`、以为升级了其实没变」 |
 > | `:<sha>`（如 `:d6a2fcb…`） | **永不**，内容与某笔提交一一对应 | 精确回滚 / 精确复现：想知道「三天前那个 bug 到底是哪版」时，这是唯一可靠的锚点 |
 > | `:latest` | 每次 main 构建都覆盖 | 只适合「我就要最新、且不在乎复现」的场景 |
 >
