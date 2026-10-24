@@ -250,6 +250,16 @@ EXPECTED_SPECS = (
     "src/stores/libraryWizard.spec.ts",
     "src/stores/loadDedup.spec.ts",
     "src/stores/prefSync.spec.ts",
+    # 第 152 期：书架偏好的**口径版本**。第 152 期把「系列默认折叠」的默认值
+    # false → true，而 `save()` 在任何字段变动时都整份落盘 ⇒ 老存档里那枚
+    # `collapseSeries:false` 会永远压着新默认值：表现是「漫画库照旧一册一张卡」，
+    # **不报错、界面上也看不出哪里不对**。本机存档与**服务端设备记录**两个落点都要钉
+    # （少钉后者 ⇒ 换台设备回来又被旧值盖掉）。
+    "src/stores/shelfPrefs.spec.ts",
+    # 第 152 期：系列详情页的**阅读入口**。折叠行点进来的是这一页（目录），
+    # 而「开始阅读」必须从**序号最小的那册**开始 —— 起点写错时按钮照样能点、
+    # 阅读器照样打开，只是从第 18 册读起，不报错也看不出来。
+    "src/views/SeriesDetailView.spec.ts",
     "src/views/AnnotationsView.spec.ts",
     "src/views/ExploreView.spec.ts",
     "src/views/ReaderView.remoteProgress.spec.ts",
