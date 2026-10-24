@@ -140,7 +140,7 @@ components/
 | `prefsBridge.ts` | `notifyPrefsChanged()`、`suppressing` | 偏好变更广播（解循环依赖） |
 | `charts.ts` | `chartTheme()`、`chartPalette()`、`useChartTheme()` | 图表注册与主题 |
 | `bookInfo.ts` | `seriesIndexLabel()`、`sortBySeriesIndex()`、`formatLabel()`、`tagsLabel()` | 书卡信息展示 |
-| `bookOpen.ts` | `openTargetOf()`、`isAudioBook()` | 「能否在线打开 / 去哪儿读」 |
+| `bookOpen.ts` | `openTargetOf()`、`isAudioBook()`、`bookClickPath()`（缩略图点击偏好的落点）、`seriesDetailPath()`（系列名进 URL 的唯一拼法） | 「能否在线打开 / 去哪儿读」 |
 | `readingProgress.ts` | `progressForFile()` | 「恢复位置取哪行进度」（文件级优先） |
 | `unitsProgress.ts` | `toPercent(index, within, total)`、`fromPercent(percent, total)` | 「话 / 轨 ↔ 百分比」换算（合集与有声书**共用一份**；含 `BOUNDARY_EPS` 浮点边界容差） |
 | `readingSession.ts` | `createSessionReporter()`、`attachReaderClock()` | 阅读会话边界与累计（30s 心跳合一） |

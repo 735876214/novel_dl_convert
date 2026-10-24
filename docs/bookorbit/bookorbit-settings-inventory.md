@@ -249,9 +249,9 @@ SERVER
 |---|---|---|---|---|
 | Thumbnail clicks | 分段（2） | 未能采集 | `Read first`（有可读文件直接进阅读器）/ `Open details`（进详情页） | ✅ **第 32 期已实现**（`stores/shelfPrefs.ts` 的 `thumbnailClick`，默认 `details`；书架网格 / 列表 / 表格三处点击都走它） |
 | Show filter preview by default | 开关 | 未能采集 | 打开智能书架时自动展开筛选与排序摘要 | ✅ **第 32 期已实现**（`shelfPrefs.ts` 的 `filtersOpenByDefault`，默认关；只定初值，之后开合跟随用户操作） |
-| Collapse series by default | 开关 | 未能采集 | 在书库/收藏夹/智能书架中把同系列书折叠为一张卡 | ✅ **第 32 期已实现**（`shelfPrefs.ts` 的 `collapseSeries`，默认关） |
+| Collapse series by default | 开关 | 未能采集 | 在书库/收藏夹/智能书架中把同系列书折叠为一张卡 | ✅ **第 32 期已实现**（`shelfPrefs.ts` 的 `collapseSeries`；**第 152 期起默认开**，落盘/同步都带 `rev`（`SHELF_PREFS_REV`），旧存档里的旧默认值作废） |
 
-**本项目落地**（**第 32 期改判**）：本页已由 `placeholder` 改 **`ready`**，**上游三项全部做实** —— 缩略图点击行为 / 筛选预览默认展开 / 系列默认折叠，字段落在 `stores/shelfPrefs.ts`（落盘键 `nf-shelf-prefs`，与 `coverPrefs` / `theme` 一样走 localStorage，**不进服务端偏好同步**：这是书架级偏好，归属边界与 `displayPrefs` 不同）。因三项全做，**页尾没有「上游还有、本项目未支持」的对照卡**。
+**本项目落地**（**第 32 期改判**，第 152 期补正）：本页已由 `placeholder` 改 **`ready`**，**上游三项全部做实** —— 缩略图点击行为 / 筛选预览默认展开 / 系列默认折叠，字段落在 `stores/shelfPrefs.ts`（落盘键 `nf-shelf-prefs`，与 `coverPrefs` / `theme` 一样走 localStorage）。⚠️ 上句原写「**不进服务端偏好同步**」，与第 43 期的实际实现相反：`collapseSeries` 已进第 7 块 `shelf`（其余两项仍只存本机）。因三项全做，**页尾没有「上游还有、本项目未支持」的对照卡**。
 
 ### 2.7 YOU → Display → Language（`/settings/appearance/language`）
 
