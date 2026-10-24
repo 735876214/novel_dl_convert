@@ -6,7 +6,7 @@ import { AUDIO_PREFS_DEFAULT, type AudioPrefs } from './audioPrefs'
 import { COMIC_PREFS_DEFAULT, type ComicPrefs } from './comicPrefs'
 import { PDF_PREFS_DEFAULT, type PdfPrefs } from './pdfPrefs'
 import { READER_PREFS_DEFAULT, type ReaderPrefs } from './readerPrefs'
-import { SHELF_PREFS_DEFAULT } from '@/stores/shelfPrefs'
+import { SHELF_PREFS_DEFAULT, SHELF_PREFS_REV } from '@/stores/shelfPrefs'
 
 /**
  * 偏好载荷：**七块**，与服务端 `PREFS_BLOCKS` 一一对应。
@@ -52,9 +52,15 @@ export interface PrefsPayload {
  * 其余书架偏好（视图 / 排序 / 缩略图点击 / 筛选默认展开 / 书卡密度）仍**只存本机**：
  * 它们是「这台设备怎么看书架」，换设备本就该各是各的；只有「系列是否默认折叠」
  * 属于「我怎么看这个书库」，与上游 `series-collapse-prefs` 同口径。
+ *
+ * `rev` 是**口径版本**（第 152 期）：与 `shelfPrefs.SHELF_PREFS_REV` 同一个常量，
+ * 不带版本或版本不符的块（第 152 期之前推上来的那些）里的 `collapseSeries` 一律作废、
+ * 取默认值 —— 服务端设备记录里存着的那枚 `false` 是「旧默认值被顺手落盘」的产物，
+ * 不是用户的选择，不处理就会把刚翻过来的默认值又压回去。见 :func:`normalizeShelf`。
  */
 export interface ShelfSyncPrefs {
   collapseSeries: boolean
+  rev: number
 }
 
 /** 与后端一致的块名白名单（第 9 期起含 audio；第 43 期加 shelf） */
@@ -71,9 +77,26 @@ export const APPEARANCE_DEFAULT: AppearancePrefs = {
   ...DISPLAY_PREFS_DEFAULT,
 }
 
-/** 书架同步块默认值：与 `shelfPrefs` 的 `collapseSeries` 初值同源（缺省关闭） */
+/** 书架同步块默认值：与 `shelfPrefs` 的 `collapseSeries` 初值同源（第 152 期起缺省**折叠**） */
 export const SHELF_SYNC_DEFAULT: ShelfSyncPrefs = {
   collapseSeries: SHELF_PREFS_DEFAULT.collapseSeries,
+  rev: SHELF_PREFS_REV,
+}
+
+/**
+ * 书架块归一化：**版本不符的块按「没推过」处理**。
+ *
+ * 为什么不能只靠默认值浅合并：`{...SHELF_SYNC_DEFAULT, ...old}` 会把旧块的
+ * `collapseSeries:false` 原样带过来（它是个合法布尔），于是旧默认值永远赢。
+ * 版本号是唯一能区分「用户关掉了」与「旧默认值被落盘」的信息。
+ */
+function normalizeShelf(raw: Partial<ShelfSyncPrefs> | null | undefined): ShelfSyncPrefs {
+  const r = (raw || {}) as Partial<ShelfSyncPrefs>
+  const ok = r.rev === SHELF_PREFS_REV && typeof r.collapseSeries === 'boolean'
+  return {
+    collapseSeries: ok ? (r.collapseSeries as boolean) : SHELF_SYNC_DEFAULT.collapseSeries,
+    rev: SHELF_PREFS_REV,
+  }
 }
 
 /** 补齐缺省字段、丢弃未知块，得到一份可用于比较与推送的完整载荷 */
@@ -86,7 +109,7 @@ export function normalizePayload(raw: Partial<PrefsPayload> | null | undefined):
     audio: { ...AUDIO_PREFS_DEFAULT, ...(r.audio || {}) },
     appearance: { ...APPEARANCE_DEFAULT, ...(r.appearance || {}) },
     cover: { ...COVER_PREFS_DEFAULT, ...(r.cover || {}) },
-    shelf: { ...SHELF_SYNC_DEFAULT, ...(r.shelf || {}) },
+    shelf: normalizeShelf(r.shelf),
   }
 }
 

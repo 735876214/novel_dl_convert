@@ -88,7 +88,7 @@ function setCollapseSeries(v: boolean): void {
         <div class="min-w-0 flex-1">
           <div class="text-[13px] font-medium text-foreground">系列默认折叠</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
-            同一系列的书在书架里默认合成一张卡 / 一行
+            同一系列的书在书架里默认合成一张卡 / 一行（第 152 期起默认开启；一册一个文件的书库靠它收敛）
           </div>
         </div>
         <Switch

@@ -137,7 +137,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['LIBRARY BEHAVIOR'],
           items: ['Thumbnail clicks（Read first / Open details）', 'Show filter preview by default', 'Collapse series by default'],
         },
-        note: '已实现上游该页全部三项（缩略图点击 / 筛选预览默认展开 / 系列默认折叠）—— 故无「未支持」对照卡。三项存本机，与书架视图偏好同一份，不随账号同步。',
+        note: '已实现上游该页全部三项（缩略图点击 / 筛选预览默认展开 / 系列默认折叠）—— 故无「未支持」对照卡。前两项存本机（与书架视图偏好同一份），「系列默认折叠」随账号同步（shelf 块）；该项第 152 期起默认开启（一册一个文件的漫画库不再散成一张张「Vol.03」卡片，想一册一卡可在这里关掉）。',
       }),
       p('reader/ebook', 'eBook', '电子书', 'ready', {
         upstream: {

@@ -96,8 +96,11 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
         ...display.prefs,
       },
       cover: { ...cover.prefs },
-      // 书架块 = 只挑随账号走的那一项（系列默认折叠，第 43 期）
-      shelf: { collapseSeries: shelf.prefs.collapseSeries },
+      // 书架块 = 只挑随账号走的那一项（系列默认折叠，第 43 期）。
+      // ⚠️ `rev` 必须一起带上（第 152 期）：`normalizeShelf` 认不出本机的口径版本时，
+      // 会把 `collapseSeries` 当成**旧存档**丢掉换成默认值 —— 于是用户刚关掉的折叠
+      // 在推上去的那一刻被改回「开」，且不会有任何报错。
+      shelf: { collapseSeries: shelf.prefs.collapseSeries, rev: shelf.prefs.rev },
     })
   }
 

@@ -27,7 +27,7 @@ export interface ShelfPrefs {
   view: ShelfView
   sort: ShelfSort
   dir: SortDir
-  /** 折叠同系列：同系列的书合成一张卡 / 一行 */
+  /** 折叠同系列：同系列的书合成一张卡 / 一行（第 152 期起**默认开**） */
   collapseSeries: boolean
   /**
    * 缩略图点击行为（对应上游 Behavior 页的 Thumbnail clicks）。
@@ -39,7 +39,24 @@ export interface ShelfPrefs {
    * ⚠️ 这是**偏好**（初值），不是当前开合状态 —— 用户展开/收起一次不该改掉默认值。
    */
   filtersOpenByDefault: boolean
+  /**
+   * 落盘口径版本。**只用于让某一版的默认值翻盘时，旧存档不继续压着新默认**（见 `read()`）。
+   * 与 `core/units.py` 的 `SCAN_RULE_VERSION` 同一套思路：口径变了就 +1，
+   * 存量数据靠版本差自愈一次，而不是留一条「如果是旧值就……」的分支。
+   */
+  rev: number
 }
+
+/**
+ * 书架偏好口径版本（第 152 期：1 → 2）。
+ *
+ * 第 152 期把 `collapseSeries` 的默认值由 `false` 翻成 `true`。**只改默认值是不够的**：
+ * `save()` 在任何字段变动时都会整份落盘（用户从没碰过那个开关，`collapseSeries:false`
+ * 也会被顺手写进 localStorage 并同步到服务端设备记录），于是老存档里那枚 `false`
+ * 会一直压着新默认 —— 漫画库永远是一册一张卡。+1 之后旧存档里的这一项作废、
+ * 重新取默认值；其余字段（视图 / 排序 / 缩略图点击 / 筛选默认展开）照旧沿用。
+ */
+export const SHELF_PREFS_REV = 2
 
 const KEY = 'nf-shelf-prefs'
 
@@ -47,9 +64,15 @@ export const SHELF_PREFS_DEFAULT: ShelfPrefs = {
   view: 'grid',
   sort: 'added',
   dir: 'desc',
-  collapseSeries: false,
+  // 第 152 期：默认**折叠**。上游 BookOrbit 的同一项叫「Collapse series by default」；
+  // 本项目第 32 期实现时定为「默认关」，实测代价是：漫画库（一册一个文件的形态）
+  // 永远是 2043 张卡、其中 42 张标题就是 `Vol.03` / `Vol.04`（第 145 期已把 series 数据
+  // 补全，但可见行为要用户自己找到那个开关才会变）。系列数据既然已经有了，
+  // 默认就该按系列收敛 —— 想一册一卡的用户可以关掉它。
+  collapseSeries: true,
   thumbnailClick: 'details',
   filtersOpenByDefault: false,
+  rev: SHELF_PREFS_REV,
 }
 
 export const THUMBNAIL_CLICK_OPTIONS: { value: ThumbnailClick; label: string; hint: string }[] = [
@@ -84,6 +107,9 @@ function read(): ShelfPrefs {
     const raw = localStorage.getItem(KEY)
     if (!raw) return { ...SHELF_PREFS_DEFAULT }
     const p = JSON.parse(raw) as Partial<ShelfPrefs>
+    // 版本不符（第 152 期之前的存档）⇒ **`collapseSeries` 作废重取默认**，其余照旧沿用。
+    // 只作废这一项而不是整份重置：视图 / 排序这些的语义没变，没有理由一起丢掉。
+    const revOk = p.rev === SHELF_PREFS_REV
     return {
       view: SHELF_VIEW_OPTIONS.some((o) => o.value === p.view)
         ? (p.view as ShelfView)
@@ -92,12 +118,15 @@ function read(): ShelfPrefs {
         ? (p.sort as ShelfSort)
         : SHELF_PREFS_DEFAULT.sort,
       dir: p.dir === 'asc' || p.dir === 'desc' ? p.dir : SHELF_PREFS_DEFAULT.dir,
-      collapseSeries: Boolean(p.collapseSeries),
+      collapseSeries: revOk && typeof p.collapseSeries === 'boolean'
+        ? p.collapseSeries
+        : SHELF_PREFS_DEFAULT.collapseSeries,
       // 老存档没有这个字段 ⇒ 落回 `details`，与开关出现之前的行为一致
       thumbnailClick: THUMBNAIL_CLICK_OPTIONS.some((o) => o.value === p.thumbnailClick)
         ? (p.thumbnailClick as ThumbnailClick)
         : SHELF_PREFS_DEFAULT.thumbnailClick,
       filtersOpenByDefault: Boolean(p.filtersOpenByDefault),
+      rev: SHELF_PREFS_REV,
     }
   } catch {
     return { ...SHELF_PREFS_DEFAULT }
