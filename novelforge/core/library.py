@@ -1471,7 +1471,8 @@ def suggest_name(name: str, library_id=None, root=None, *, use_dir: bool = False
     流程（它会把关联数据一起搬，见 ``db.remap_book_id``）。
 
     ``use_dir=True``（第 87 期）先试**带父目录名**的候选：`科幻/Vol.01.cbz`
-    → `科幻/科幻 - Vol.01.cbz`。同名但不同目录的两条本来就是**不同的书**，
+    → `科幻/Vol.01 - 科幻.cbz`（目录名放**后面**，第 152 期：见下面的注释）。
+    同名但不同目录的两条本来就是**不同的书**，
     用 `(2)` 区分等于让用户以后完全看不出哪本是哪本（用户口径：`(2)` 是
     没有信息量的名字）。带目录名的候选撞了才回落到 `(N)` 那一套。
     """
@@ -1479,7 +1480,12 @@ def suggest_name(name: str, library_id=None, root=None, *, use_dir: bool = False
     stem, suffix, parent = p.stem, p.suffix, str(p.parent)
     cands = []
     if use_dir and parent not in ("", "."):
-        cands.append(f"{pathlib.PurePosixPath(parent).name} - {stem}{suffix}")
+        # ⚠️ 目录名放**后面**（第 152 期）。放前面（`科幻 - Vol.01.cbz`）会把卷号挤到目录名
+        # 之后，而系列目录名里常带卷号**范围**（`[冥战录][韋宗成][Vol.01-Vol.13]`）——
+        # `volume_of` 取的是第一个 `Vol.N`，于是每一册都被读成第 1 卷（真实库实测：
+        # 冥战录 4 册全成 #1，缺册统计还假报「缺 2、3、4 号」）。
+        # 放在后面则原文件的卷号仍是第一个匹配，册号不受影响。
+        cands.append(f"{stem} - {pathlib.PurePosixPath(parent).name}{suffix}")
     cands += [f"{stem} ({i}){suffix}" for i in range(2, 100)]
     for cand in cands:
         rel = cand if parent in ("", ".") else f"{parent}/{cand}"

@@ -97,8 +97,10 @@ def test_同名不同目录_建议名带目录而不是无意义的括号数字(
     # 保留项 = 扫描顺序的第一条（确定性：目录名按 Unicode 排序，"奇" < "科"）
     assert g["keep"] == "奇幻/Vol.01.txt"
     assert g["keep"] == g["items"][0]["name"]
-    assert "科幻 - Vol.01.txt" in g["suggest"], \
-        f"建议名要带目录名做区分，而不是 `Vol.01 (2).txt`：{g['suggest']}"
+    # 第 152 期：目录名放**后面** —— 放前面会把卷号挤到目录名之后（目录名常带
+    # `[Vol.01-Vol.13]` 这种范围，`volume_of` 就会读错册号）。
+    assert g["suggest"] == "科幻/Vol.01 - 科幻.txt", \
+        f"建议名要带目录名做区分，且卷号仍在最前面：{g['suggest']}"
 
 
 def test_同目录副本被单独列出来并给出该留哪份(isolated, default_root):  # noqa: ARG001
@@ -144,12 +146,29 @@ def test_建议名撞了就回落括号数字(isolated, default_root, tmp_path):
     default_root.mkdir(parents=True, exist_ok=True)
     (default_root / "科幻").mkdir(parents=True, exist_ok=True)
     (default_root / "科幻" / "Vol.01.txt").write_text("x", encoding="utf-8")
-    (default_root / "科幻" / "科幻 - Vol.01.txt").write_text("占位", encoding="utf-8")
+    (default_root / "科幻" / "Vol.01 - 科幻.txt").write_text("占位", encoding="utf-8")
     library.invalidate()
     got = library.suggest_name("科幻/Vol.01.txt", root=default_root, use_dir=True)
-    assert got != "科幻/科幻 - Vol.01.txt", "候选已被占用就不能再建议它"
+    assert got != "科幻/Vol.01 - 科幻.txt", "候选已被占用就不能再建议它"
     assert pathlib.PurePosixPath(got).parent == pathlib.PurePosixPath("科幻"), \
         "建议名必须留在同一个目录里（改名不该顺手搬家）"
+
+
+def test_建议名不改变卷号(isolated, default_root):  # noqa: ARG001
+    """目录名放**后面**：建议名必须让 `volume_of` 读回**同一册号**（第 152 期）。
+
+    起因是真实库：`[冥战录][韋宗成][Vol.01-Vol.13]/Vol.02 (2) (2).zip` 按旧方案
+    （目录名放前面）改名后成了 `…[Vol.01-Vol.13] - Vol.02 (2) (2).zip`，
+    `volume_of` 取第一个 `Vol.N` ⇒ 四册全读成 **#1**，系列页顺序与缺册统计一起错。
+    """
+    default_root.mkdir(parents=True, exist_ok=True)
+    d = default_root / "[冥战录][韋宗成][Vol.01-Vol.13]"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "Vol.02 (2) (2).zip").write_text("x", encoding="utf-8")
+    library.invalidate()
+
+    got = library.suggest_name(f"{d.name}/Vol.02 (2) (2).zip", root=default_root, use_dir=True)
+    assert library.volume_of(got) == "2", f"建议名把册号读错了：{got!r} → {library.volume_of(got)!r}"
 
 
 def test_副本清单接口存在且形状稳定(client, auth_headers):
