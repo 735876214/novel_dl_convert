@@ -9,6 +9,7 @@ import ComicReader from '@/components/reader/ComicReader.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
 import { api, type UnitItem, type UnitPos, type UnitRef } from '@/lib/api'
 import { fromPercent, toPercent } from '@/lib/unitsProgress'
+import { useSeriesNext } from '@/lib/seriesNext'
 import { useLibraryStore } from '@/stores/library'
 
 /**
@@ -46,6 +47,8 @@ const props = defineProps<{
 
 const router = useRouter()
 const library = useLibraryStore()
+/** 末话读完后的跨册续接（第 152 期）：与漫画 / PDF / 有声书三处共用同一个真值源 */
+const { goToNextVolume } = useSeriesNext()
 
 const total = computed(() => props.units.length)
 const index = ref(0)
@@ -106,9 +109,29 @@ function onUnitPos(p: UnitPos): void {
   void save()
 }
 
-/** 这一话读完了、书里还有下一话 ⇒ 换话（并让下一话的音频自动接着放） */
+/** 这一话读完了、书里还有下一话 ⇒ 换话（并让下一话的音频自动接着放）；
+ *  **已经是末话** ⇒ 跨册续接（第 152 期）：此前这里只是不动作 —— 书内最后一话读完
+ *  既不跳下一册也不给任何提示，用户面对的是一屏静止的画面（漫画 / PDF / 有声书三处
+ *  在同一情形都会走 `goToNextVolume`，唯独合集这一层漏了）。
+ *
+ *  ⚠️ 谁来判开关：`pastEnd` 有两条路到这里 —— ① `go()` 的「越过末页」（键盘 / 翻页热区，
+ *  **不判开关**：注释写明「未开启则原地不动」由 `goToNextVolume` 的 `enabled` 门兜）；
+ *  ② 连续滚动触底的 `maybeAutoNextAtBottom`（**已判过** `autoNext`）。这里若再判一次
+ *  偏好，就得挑「漫画的 `autoNext` 还是 PDF 的 `autoNext`」—— 第二份真值源。所以
+ *  `enabled: true` 放行、由 `goToNextVolume` 统一处理提示（无系列 / 已是末册 / 失败）。
+ *  代价是「越末页」这条路在开关关着时也会弹一次「没有系列信息」—— 与三处阅读器的
+ *  既有口径一致（音频在开关关着时静默，是因为它只有触底一条路）。 */
 function onUnitEnd(): void {
-  void goUnit(index.value + 1, true)
+  if (index.value + 1 < total.value) {
+    void goUnit(index.value + 1, true)
+    return
+  }
+  void goToNextVolume({
+    enabled: true,
+    series: props.series,
+    bookId: props.bookId,
+    routeBase: '/read',
+  })
 }
 
 /**

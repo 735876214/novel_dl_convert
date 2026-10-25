@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { defineComponent, h } from 'vue'
 
 import { api, type UnitItem, type UnitRef } from '@/lib/api'
+import { resetSeriesNextState } from '@/lib/seriesNext'
 import UnitsReader from '@/components/reader/UnitsReader.vue'
 
 /**
@@ -16,12 +17,13 @@ import UnitsReader from '@/components/reader/UnitsReader.vue'
  * 只有用例守得住。
  */
 vi.mock('@/lib/api', () => ({
-  api: { getProgress: vi.fn(), setProgress: vi.fn() },
+  api: { getProgress: vi.fn(), setProgress: vi.fn(), seriesDetail: vi.fn() },
 }))
 
 const m = {
   getProgress: vi.mocked(api.getProgress),
   setProgress: vi.mocked(api.setProgress),
+  seriesDetail: vi.mocked(api.seriesDetail),
 }
 
 /**
@@ -243,5 +245,85 @@ describe('UnitsReader · 进度独占写入', () => {
     await flushPromises()
     expect(lastWrite()).toEqual(['u1', 0, 0])                // 回到第 1 话开头
     expect(wrapper.text()).toContain('1 / 4')
+  })
+})
+
+/**
+ * 末话之后的**跨册续接**（第 152 期）：此前书内最后一话读完只是不动作 —— 既不跳下一册
+ * 也不给任何提示（漫画 / PDF / 有声书三处在同一情形都会走 `goToNextVolume`，唯独合集
+ * 这一层漏了）。走的是同一个真值源：`lib/seriesNext.goToNextVolume`，routeBase = `/read`。
+ */
+describe('UnitsReader · 末话跨册续接', () => {
+  function mountLastUnit(series: string): Promise<{ wrapper: VueWrapper; router: Router }> {
+    // `goToNextVolume` 的单飞闸与提示节流是**模块级**的：前面用例触发过的状态会漏进来，
+    // 这里显式清掉（helper 本来就是给测试用的）
+    resetSeriesNextState()
+    m.seriesDetail.mockReset()
+    m.seriesDetail.mockResolvedValue({ books: [] } as never)
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/', component: { render: () => h('div') } },
+        { path: '/read/:id', component: { render: () => h('div') } },
+      ],
+    })
+    const wrapper = mount(UnitsReader, {
+      props: {
+        bookId: 'u1',
+        title: '转生魔女宣告毁灭',
+        series,
+        units: makeUnits(['pdf', 'pdf']),
+      },
+      global: {
+        plugins: [router],
+        stubs: { PdfReader: PdfStub, ComicReader: ComicStub, AudioPlayer: AudioStub },
+      },
+    })
+    return flushPromises().then(() => ({ wrapper, router }))
+  }
+
+  it('书内末话读完 + 有系列 ⇒ 跳到系列的下一册（/read/{id}）', async () => {
+    const { wrapper, router } = await mountLastUnit('某系列')
+    m.seriesDetail.mockResolvedValue({
+      books: [
+        { id: 'u1', series: '某系列', series_index: '1' },
+        { id: 'vol2', series: '某系列', series_index: '2' },
+      ],
+    } as never)
+
+    // 第一次 unitEnd：在第 1 话（共 2 话）⇒ 书内换话
+    child(wrapper).vm.$emit('unitEnd')
+    await flushPromises()
+    expect(wrapper.text()).toContain('2 / 2')
+
+    // 第二次 unitEnd：已在末话 ⇒ 没有下一话 ⇒ 跨册
+    child(wrapper).vm.$emit('unitEnd')
+    await flushPromises()
+    expect(m.seriesDetail).toHaveBeenCalledWith('某系列')
+    expect(router.currentRoute.value.path).toBe('/read/vol2')
+  })
+
+  it('没有系列信息 ⇒ 如实提示，不跳转（与三处阅读器同一文案）', async () => {
+    const { wrapper, router } = await mountLastUnit('')
+    // 两支 unitEnd（第 1 话换话、末话跨册）都不该碰系列接口
+    child(wrapper).vm.$emit('unitEnd')
+    await flushPromises()
+    child(wrapper).vm.$emit('unitEnd')
+    await flushPromises()
+    expect(m.seriesDetail).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.path).toBe('/')
+  })
+
+  it('书内还有下一话时 unitEnd **不**走系列（换话优先）', async () => {
+    const { wrapper } = await mountLastUnit('某系列')
+    m.seriesDetail.mockResolvedValue({
+      books: [{ id: 'u1', series: '某系列', series_index: '1' }],
+    } as never)
+
+    // 现在在第 1 话（共 2 话）—— 读完 ⇒ 书内换话
+    child(wrapper).vm.$emit('unitEnd')
+    await flushPromises()
+    expect(m.seriesDetail).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('2 / 2')
   })
 })
