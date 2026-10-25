@@ -47,8 +47,15 @@ const libraryStore = useLibraryStore()
 /** 加载失败后不再重试（避免坏图反复触发 onerror），直接走占位 */
 const failed = ref(false)
 
+/**
+ * 请求的封面宽度（物理像素）。卡片最宽处是详情页 hero 的 176 CSS px ⇒ 2x 屏 352，
+ * 480 留了余量；书架卡片只有 150–180 px。原图常是 1000+ px（实测 186 KB/张），
+ * 一屏 120 张就是二十多 MB —— 这是「打开书架慢」里最容易被漏掉的一段（第 152 期）。
+ */
+const THUMB_WIDTH = 480
+
 const src = computed(() =>
-  props.book.id && props.book.has_cover ? api.coverUrl(props.book.id) : '',
+  props.book.id && props.book.has_cover ? api.coverUrl(props.book.id, THUMB_WIDTH) : '',
 )
 
 // 列表复用组件实例时若换了书，重置失败态，否则新书会沿用上一本的失败结论
@@ -120,6 +127,8 @@ const statusLabel = computed(() => statusLabelOf(props.book, libraryStore.curren
       class="absolute inset-0 h-full w-full scale-110 object-cover opacity-70 blur-lg"
       aria-hidden="true"
       alt=""
+      loading="lazy"
+      decoding="async"
     >
 
     <!-- 封面本体 -->

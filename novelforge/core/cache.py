@@ -247,15 +247,19 @@ def chapter_key(bid: str, index: int, fp: str, kind: str = "epub") -> str:
     return f"{_PREFIX}chapter:{kind}:{bid}:{index}:{fp}"
 
 
-def cover_key(bid: str, fp: str) -> str:
-    """封面字节的键：``(书, 源文件指纹)``。
+def cover_key(bid: str, fp: str, width: int = 0) -> str:
+    """封面字节的键：``(书, 源文件指纹[, 缩略宽度])``。
 
     ⚠️ 键里带指纹而不是只有 book_id，是**故意的**：封面没有「按书失效」那条路
     （写封面的在线抓取只调 ``library.invalidate()``，那是不带书号的），指纹是唯一
     能自证「换了没换」的东西。因此这条缓存只覆盖「从文件里读封面」的分支；
     服务端封面（``meta_cover``）那一支不进这里 —— 见 ``server._cover_cached``。
+
+    第 152 期：同一个 id 现在会以不同宽度被请求（卡片 480 / 详情更大），**宽度必须进键** ——
+    否则先请求小图的人会让所有人拿到小图（再放大会糊）。
     """
-    return f"{_PREFIX}cover:{bid}:{fp}"
+    base = f"{_PREFIX}cover:{bid}:{fp}"
+    return f"{base}:w{int(width)}" if width else base
 
 
 def css_key(bid: str, fp: str) -> str:

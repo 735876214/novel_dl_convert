@@ -33,6 +33,7 @@ from .core import autoupdate                      # 第 86 期：书籍追更的
 from .core import backup                          # 备份/轮转（第 143 期收敛：唯一归属处）
 from .core import landing                          # 第 93 期：源站内容落到「这本书自己」上
 from .core import zipkind                        # 第 87 期：容器展开
+from .core import thumbs                         # 第 152 期：封面缩略（?w=）
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, achievements, activity, recommend,
                    fonts, comics, audio, opds, koreader, integrations, sync,
@@ -310,7 +311,32 @@ app.add_middleware(
 )
 
 STATIC_DIR = pathlib.Path(__file__).parent / "static"
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+class _ImmutableStatic(StaticFiles):
+    """静态资源带缓存头（第 152 期）。
+
+    前端构建产物在 `assets/` 下、文件名带内容 hash（`index-C0gTUMu4.js`）—— 内容变了名字
+    必变，所以可以放心 `immutable` + 一年。此前一律没有 `Cache-Control`：每次进站都要对
+    首屏那二十来个 chunk 逐个发条件请求（304 也是**一次 RTT**），在 NAS 上把首屏拖慢几百毫秒。
+
+    非 `assets/` 下的静态文件（字体目录、杂项）保守给 1 小时 —— 它们没有 hash，不能 immutable。
+    """
+
+    async def get_response(self, path, scope):      # type: ignore[override]
+        resp = await super().get_response(path, scope)
+        if resp.status_code == 200:
+            # ⚠️ `path` 是 Starlette 按**平台分隔符**拼出来的（Windows 上是 `v2\assets\x.js`），
+            # 直接 grep "/assets/" 在 Windows 上恒为假 —— 统一成正斜杠再判（实测审计抓到的）。
+            norm = "/" + str(path).replace("\\", "/")
+            resp.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable" if "/assets/" in norm
+                else "public, max-age=3600"
+            )
+        return resp
+
+
+app.mount("/static", _ImmutableStatic(directory=str(STATIC_DIR)), name="static")
 
 INPUT_DIR = config.INPUT_DIR
 # ⚠️ 多书库（第 10 期）后这**不是**「唯一的根」，第 37 期起也不再是「默认库的根」
@@ -539,7 +565,12 @@ def index():
             503,
             "前端尚未构建：请在 frontend/ 下执行 npm install && npm run build && npm run deploy",
         )
-    return FileResponse(str(page))
+    # ⚠️ 页面壳必须每次重验证（第 152 期）：它引用的 chunk 名随构建变化，缓存住旧壳
+    # 会让升级后仍指向已删的旧 bundle（白屏 / 404）。
+    # 注意 `FileResponse` **不处理条件 GET**（实测带 If-None-Match 仍回 200），所以这里
+    # 换来的不是 304 而是「每次拿一份 2 KB 的壳」—— 壳很小，这个代价可以接受；
+    # 想要 304 得自己比 ETag 再回 304，属于下一次优化。
+    return FileResponse(str(page), headers={"Cache-Control": "no-cache"})
 
 
 def _health_checks() -> dict:
@@ -3611,8 +3642,11 @@ def _cover_response(data: bytes, media: str) -> Response:
     return _media_bytes(data, media or "image/jpeg")
 
 
-def _cover_cached(bid: str, src, produce):
+def _cover_cached(bid: str, src, produce, width: int = 0):
     """封面字节的读缓存（第 62 期 C）。``src`` = 封面**从中读出的那个文件**。
+
+    第 152 期加 ``width``：给定时先缩到该宽度（`core/thumbs.resize_jpeg`），**宽度进缓存键**
+    —— 否则先请求小图的人会让所有人拿到小图。``width=0``（缺省）时键与行为与改造前逐字相同。
 
     存的是 ``媒体类型 + b"\\n" + 字节``：媒体类型只有几十字节，为它把整张图 base64
     一遍（+33%）不划算，而媒体类型里不可能有换行 —— 第一个 ``\\n`` 就是分界。
@@ -3624,7 +3658,7 @@ def _cover_cached(bid: str, src, produce):
     这是对计划书 ``cover:{book_id}`` 的一处**收窄**，理由如实记在这里。
     """
     fp = cache.fingerprint(src)
-    key = cache.cover_key(bid, fp) if fp else ""
+    key = cache.cover_key(bid, fp, width) if fp else ""
     if key:
         # 信封的拆装包一层兜底：缓存层本身（get/set）已经不会抛，但**上面这几行解码**
         # 是我们自己写的，脏数据不该让「取封面」这个动作失败 —— 读不通就当未命中。
@@ -3637,6 +3671,12 @@ def _cover_cached(bid: str, src, produce):
         except Exception:                      # noqa: BLE001
             pass
     data, media = produce()
+    # 缩略（第 152 期）：`resize_jpeg` 在「本来就够小 / 失败」时**原样返回同一个对象**，
+    # 用身份判断而不是比较字节 —— 省一次比较，也让「没缩」时媒体类型保持不变。
+    if width:
+        small = thumbs.resize_jpeg(data, width)
+        if small is not data:
+            data, media = small, "image/jpeg"
     if key:
         try:
             cache.set_bytes(key, media.encode("latin-1") + b"\n" + data, cache.TTL_COVER)
@@ -3646,8 +3686,8 @@ def _cover_cached(bid: str, src, produce):
 
 
 @app.get("/api/books/{bid}/cover")
-def api_book_cover(bid: str):
-    """书籍封面。
+def api_book_cover(bid: str, w: int = 0):
+    """书籍封面。``?w=NNN`` 可要缩略图（第 152 期，见 `core/thumbs.py`）。
 
     分支（按格式）：
       · **EPUB**：OPF 指定的内嵌图（`library.cover_path`）；
@@ -3665,7 +3705,12 @@ def api_book_cover(bid: str):
     第 62 期 C：CBZ/CBR 与 EPUB 内嵌图这两条**从文件里读**的分支套了一层 Redis 读缓存
     （键带文件指纹，见 ``_cover_cached``）；服务端封面与有声书封面不套 —— 前者没有
     版本列可挂、后者本来就是 ``FileResponse``。
+
+    第 152 期：``?w=NNN`` 要缩略图（卡片 480 px 足够，原图实测 186 KB/张，一屏 120 张
+    就是二十多 MB）。宽度先夹到 ``thumbs.MIN_WIDTH..MAX_WIDTH`` —— 夹在**进缓存键之前**，
+    否则 ``?w=1024`` 与 ``?w=99999`` 会对同一份字节存两份缓存。
     """
+    width = thumbs.clamp_width(w)
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
@@ -3681,7 +3726,7 @@ def api_book_cover(bid: str):
             if data is None:
                 raise HTTPException(404, "该漫画没有图片")
             return data, media
-        return _cover_cached(bid, path, _comic_cover)
+        return _cover_cached(bid, path, _comic_cover, width)
 
     if fmt in ("AUDIO", "UNITS"):
         # 目录型条目（有声书 / 序号单元树）的封面：找的是 `cover` / `folder` / `poster`
@@ -3692,8 +3737,16 @@ def api_book_cover(bid: str):
         name = units.cover_in_tree(path) if path.is_dir() else ""
         if not name:
             raise HTTPException(404, "该有声书没有封面" if fmt == "AUDIO" else "该合集没有封面")
-        return _media_file(path / name,
-                           mimetypes.guess_type(name)[0] or "image/jpeg")
+        cover = path / name
+        # `?w=` 也要覆盖这一支（第 152 期审计：有声书封面同样是原图，`cover.jpg` 常是
+        # 扫描书封）。不给 w 时仍是 `FileResponse`（Range / 媒体类型与改造前一致）。
+        if width:
+            try:
+                data = cover.read_bytes()
+            except OSError:
+                raise HTTPException(404, "封面文件读不出来") from None
+            return _cover_response(thumbs.resize_jpeg(data, width), "image/jpeg")
+        return _media_file(cover, mimetypes.guess_type(name)[0] or "image/jpeg")
 
     # ⚠️ 服务端抓取的封面**与文件格式无关**（第 87 期修的真 bug）：
     # `core/library._apply_overlay` 对**任何格式**只要库里存了抓取封面就把 `has_cover`
@@ -3704,6 +3757,12 @@ def api_book_cover(bid: str):
     server_cover = db.get_cover(bid)
     if server_cover:
         data, sct = server_cover
+        # `?w=` 同样覆盖抓取封面（第 152 期）：它和文件内封面一样可能是大图，
+        # 而这张表没有文件指纹、不进 `_cover_cached`，所以在这里原地缩。
+        if width:
+            small = thumbs.resize_jpeg(data, width)
+            if small is not data:
+                data, sct = small, "image/jpeg"
         return _cover_response(data, sct or "image/jpeg")
 
     if fmt == "FB2":
@@ -3733,7 +3792,7 @@ def api_book_cover(bid: str):
             raise HTTPException(500, f"读取封面失败：{e}")
         return data, mimetypes.guess_type(cover)[0] or "image/jpeg"
 
-    return _cover_cached(bid, path, _embedded)
+    return _cover_cached(bid, path, _embedded, width)
 
 
 @app.get("/api/books/{bid}/file")

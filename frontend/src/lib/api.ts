@@ -3436,9 +3436,18 @@ export const api = {
    * 后端只为 `/cover` 与 `/asset` 这两个**只读图片接口**接受 query 令牌
    * （见 `server._request_token`），其余接口仍只认请求头。
    */
-  coverUrl: (bid: string) => {
+  /**
+   * 封面 URL。``width`` 给定时后端按该宽度出缩略图（第 152 期，`core/thumbs.py`）：
+   * 原图实测 186 KB/张，书架一屏 120 张就是二十多 MB —— 卡片只要 ~360 物理像素。
+   * 详情页 / 取色也用缩略图（取色只看颜色，不需要原尺寸）。
+   */
+  coverUrl: (bid: string, width?: number) => {
     const t = _authToken()
-    return `/api/books/${encodeURIComponent(bid)}/cover${t ? `?token=${encodeURIComponent(t)}` : ''}`
+    const q = new URLSearchParams()
+    if (width) q.set('w', String(Math.round(width)))
+    if (t) q.set('token', t)
+    const suffix = q.toString() ? `?${q.toString()}` : ''
+    return `/api/books/${encodeURIComponent(bid)}/cover${suffix}`
   },
 
   // ---------- 漫画（CBZ / CBR）----------
