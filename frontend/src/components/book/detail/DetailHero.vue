@@ -8,9 +8,11 @@ import Icon from '@/components/ui/Icon.vue'
 import ProgressBar from '@/components/ui/ProgressBar.vue'
 import RatingStars from '@/components/ui/RatingStars.vue'
 import { api, type BookCard, type OnlineStatus, type ProgressState } from '@/lib/api'
+import { seriesDetailPath } from '@/lib/bookOpen'
 import { statusLabelOf } from '@/lib/readingThresholds'
 import { useCollectionsStore } from '@/stores/collections'
 import { useLibraryStore } from '@/stores/library'
+import { useRouter } from 'vue-router'
 
 /**
  * 详情页顶部：封面 + 标题区 + 操作行（第 63 期从 `BookDetailView` 抽出并重排）。
@@ -36,6 +38,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{ start: []; download: []; online: [] }>()
 
+const router = useRouter()
 const library = useLibraryStore()
 const collections = useCollectionsStore()
 
@@ -146,7 +149,18 @@ onMounted(() => {
 
     <div class="min-w-0 flex-1">
       <div class="mb-2 flex flex-wrap items-center gap-1.5">
-        <Badge v-if="book.series" tone="accent">{{ book.series }}</Badge>
+        <!-- 系列徽章 = **链接**（第 152 期）：折叠系列点进来的是书详情，得有一条路回到
+             系列详情（目录 + 全部册）。有系列名才渲染；路径拼法全站唯一（seriesDetailPath）。 -->
+        <button
+          v-if="book.series"
+          type="button"
+          class="inline-flex cursor-pointer items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-0.5 text-[11.5px] font-medium text-primary transition-colors hover:bg-primary/20"
+          :title="`查看系列「${book.series}」的全部册`"
+          @click="router.push(seriesDetailPath(book.series))"
+        >
+          {{ book.series }}
+          <Icon name="arrowRight" class="h-3 w-3" />
+        </button>
         <Badge v-for="t in (book.tags || []).slice(0, 3)" :key="t">{{ t }}</Badge>
       </div>
 
