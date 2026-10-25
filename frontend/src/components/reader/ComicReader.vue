@@ -8,6 +8,7 @@ import { api, type SessionExtra, type UnitPos, type UnitRef } from '@/lib/api'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import { progressForFile } from '@/lib/readingProgress'
 import { useSeriesNext } from '@/lib/seriesNext'
+import { useSeriesToc } from '@/lib/seriesToc'
 import { toPercent } from '@/lib/unitsProgress'
 import {
   COMIC_BGS,
@@ -65,6 +66,14 @@ const router = useRouter()
 const library = useLibraryStore()
 /** 自动翻到系列下一册（第 66 期）：实现收敛到 `lib/seriesNext.ts` 单一真值源 */
 const { goToNextVolume } = useSeriesNext()
+/** 系列目录侧栏（第 152 期）：折叠系列后的跳册入口，与 PDF 阅读器共用同一份 */
+const toc = useSeriesToc(computed(() => props.series), computed(() => props.bookId))
+const showSeriesToc = ref(false)
+
+function jumpToVolume(id: string): void {
+  showSeriesToc.value = false
+  router.push(`/read/${id}`)
+}
 
 const prefs = ref<ComicPrefs>(readComicPrefs())
 watch(prefs, (v) => saveComicPrefs(v), { deep: true })
@@ -570,6 +579,18 @@ watch([shownPages, isInfinite, () => total.value], () => {
       <Button size="sm" variant="ghost" title="返回详情" @click="router.push(`/book/${props.bookId}`)">
         <Icon name="arrowLeft" class="h-4 w-4" />
       </Button>
+      <!-- 系列目录（第 152 期）：有系列才显示 —— 无系列时摆一颗点了只有一句「无系列」
+           的按钮是假交互 -->
+      <Button
+        v-if="toc.hasSeries"
+        size="sm"
+        variant="ghost"
+        title="系列目录"
+        :class="showSeriesToc ? 'bg-muted text-foreground' : ''"
+        @click="showSeriesToc = !showSeriesToc"
+      >
+        <Icon name="book" class="h-4 w-4" />
+      </Button>
       <div class="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{{ props.title }}</div>
 
       <Button size="sm" variant="ghost" title="上一页" :disabled="page <= 1" @click="prev">
@@ -642,9 +663,44 @@ watch([shownPages, isInfinite, () => total.value], () => {
     <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
     <div v-else-if="error" class="py-20 text-center text-[13px] text-destructive">{{ error }}</div>
 
+    <div v-else class="relative flex min-h-0 flex-1">
+      <!-- 系列目录侧栏（第 152 期）：与 `UnitsReader` 的话目录同形（左侧 aside + 高亮当前册）。
+           跳册用 `/read/{id}` 直达 —— 合集那样「换实例」的形态在这里不存在，一本漫画就是一本。 -->
+      <aside
+        v-if="showSeriesToc"
+        class="w-60 shrink-0 overflow-y-auto border-r border-border py-2 pr-2"
+      >
+        <div class="mb-1.5 truncate px-2 text-[11px] text-muted-foreground" :title="toc.name">
+          系列「{{ toc.name }}」共 {{ toc.books.length }} 册
+        </div>
+        <div v-if="toc.loading" class="px-2 py-3 text-[11.5px] text-muted-foreground">加载中…</div>
+        <div v-else-if="toc.error" class="px-2 py-3 text-[11.5px] text-destructive">
+          系列目录加载失败：{{ toc.error }}
+        </div>
+        <template v-else>
+          <button
+            v-for="(b, i) in toc.books"
+            :key="b.id"
+            type="button"
+            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-[12.5px] transition-colors"
+            :class="i === toc.currentIndex ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
+            :title="b.title || b.name"
+            @click="jumpToVolume(b.id)"
+          >
+            <span class="w-7 shrink-0 text-center text-[10.5px] tabular-nums">
+              {{ b.series_index ? `#${b.series_index}` : '—' }}
+            </span>
+            <span class="truncate">{{ b.title || b.name }}</span>
+          </button>
+          <div v-if="!toc.books.length" class="px-2 py-3 text-[11.5px] text-muted-foreground">
+            这个系列没有可显示的册
+          </div>
+        </template>
+      </aside>
+
     <!-- 页图区 -->
     <div
-      v-show="!loading && !error"
+      v-show="true"
       ref="boxRef"
       class="min-h-0 flex-1 overflow-auto"
       :style="bgStyle"
@@ -683,6 +739,7 @@ watch([shownPages, isInfinite, () => total.value], () => {
           :alt="`第 ${n} 页`"
         >
       </div>
+    </div>
     </div>
   </div>
 </template>

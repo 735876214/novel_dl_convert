@@ -16,6 +16,7 @@ import {
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import { progressForFile } from '@/lib/readingProgress'
 import { useSeriesNext } from '@/lib/seriesNext'
+import { useSeriesToc } from '@/lib/seriesToc'
 import { toPercent } from '@/lib/unitsProgress'
 import { useLibraryStore } from '@/stores/library'
 
@@ -62,6 +63,14 @@ const router = useRouter()
 const library = useLibraryStore()
 /** 自动翻到系列下一册（第 66 期）：实现收敛到 `lib/seriesNext.ts` 单一真值源 */
 const { goToNextVolume } = useSeriesNext()
+/** 系列目录侧栏（第 152 期）：与漫画阅读器共用同一份（`lib/seriesToc.ts`） */
+const toc = useSeriesToc(computed(() => props.series), computed(() => props.bookId))
+const showSeriesToc = ref(false)
+
+function jumpToVolume(id: string): void {
+  showSeriesToc.value = false
+  router.push(`/read/${id}`)
+}
 
 const prefs = ref<PdfPrefs>(readPdfPrefs())
 watch(prefs, (v) => savePdfPrefs(v), { deep: true })
@@ -504,6 +513,17 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
       <Button size="sm" variant="ghost" title="返回详情" @click="router.push(`/book/${props.bookId}`)">
         <Icon name="arrowLeft" class="h-4 w-4" />
       </Button>
+      <!-- 系列目录（第 152 期）：有系列才显示；单话模式不给 —— 那时跳册是合集层的事 -->
+      <Button
+        v-if="toc.hasSeries && !unitMode"
+        size="sm"
+        variant="ghost"
+        title="系列目录"
+        :class="showSeriesToc ? 'bg-muted text-foreground' : ''"
+        @click="showSeriesToc = !showSeriesToc"
+      >
+        <Icon name="book" class="h-4 w-4" />
+      </Button>
       <div class="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{{ props.title }}</div>
 
       <!-- 第 61 期：漫画库里的 PDF 可以切回「漫画形态」读（单/双页、右到左、无间隙连续）。
@@ -559,9 +579,43 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
     </div>
     <div v-else-if="error" class="py-20 text-center text-[13px] text-destructive">{{ error }}</div>
 
+    <div v-else class="relative flex min-h-0 flex-1">
+      <!-- 系列目录侧栏（第 152 期）：与漫画阅读器同形（`lib/seriesToc.ts` 共用一份） -->
+      <aside
+        v-if="showSeriesToc"
+        class="w-60 shrink-0 overflow-y-auto border-r border-border py-2 pr-2"
+      >
+        <div class="mb-1.5 truncate px-2 text-[11px] text-muted-foreground" :title="toc.name">
+          系列「{{ toc.name }}」共 {{ toc.books.length }} 册
+        </div>
+        <div v-if="toc.loading" class="px-2 py-3 text-[11.5px] text-muted-foreground">加载中…</div>
+        <div v-else-if="toc.error" class="px-2 py-3 text-[11.5px] text-destructive">
+          系列目录加载失败：{{ toc.error }}
+        </div>
+        <template v-else>
+          <button
+            v-for="(b, i) in toc.books"
+            :key="b.id"
+            type="button"
+            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-[12.5px] transition-colors"
+            :class="i === toc.currentIndex ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
+            :title="b.title || b.name"
+            @click="jumpToVolume(b.id)"
+          >
+            <span class="w-7 shrink-0 text-center text-[10.5px] tabular-nums">
+              {{ b.series_index ? `#${b.series_index}` : '—' }}
+            </span>
+            <span class="truncate">{{ b.title || b.name }}</span>
+          </button>
+          <div v-if="!toc.books.length" class="px-2 py-3 text-[11.5px] text-muted-foreground">
+            这个系列没有可显示的册
+          </div>
+        </template>
+      </aside>
+
     <!-- 画布区 -->
     <div
-      v-show="!loading && !error"
+      v-show="true"
       ref="boxRef"
       class="min-h-0 flex-1 overflow-auto bg-neutral-200/70 dark:bg-neutral-900/60"
       @scroll="onScroll"
@@ -588,6 +642,7 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
           </div>
         </template>
       </div>
+    </div>
     </div>
   </div>
 </template>
