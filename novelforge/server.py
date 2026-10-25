@@ -313,6 +313,16 @@ app.add_middleware(
 STATIC_DIR = pathlib.Path(__file__).parent / "static"
 
 
+def _static_cache_control(path) -> str:
+    r"""静态文件的 Cache-Control —— **判据只有这一处**（测试直接调它，不必绕 Starlette）。
+
+    `path` 由 Starlette 按**平台分隔符**给出（Windows 是 ``v2\assets\x.js``），统一成正斜杠
+    再判；`/assets/` 下是带内容 hash 的构建产物，可以 immutable 一年。
+    """
+    norm = "/" + str(path).replace("\\", "/")
+    return "public, max-age=31536000, immutable" if "/assets/" in norm else "public, max-age=3600"
+
+
 class _ImmutableStatic(StaticFiles):
     """静态资源带缓存头（第 152 期）。
 
@@ -326,13 +336,7 @@ class _ImmutableStatic(StaticFiles):
     async def get_response(self, path, scope):      # type: ignore[override]
         resp = await super().get_response(path, scope)
         if resp.status_code == 200:
-            # ⚠️ `path` 是 Starlette 按**平台分隔符**拼出来的（Windows 上是 `v2\assets\x.js`），
-            # 直接 grep "/assets/" 在 Windows 上恒为假 —— 统一成正斜杠再判（实测审计抓到的）。
-            norm = "/" + str(path).replace("\\", "/")
-            resp.headers["Cache-Control"] = (
-                "public, max-age=31536000, immutable" if "/assets/" in norm
-                else "public, max-age=3600"
-            )
+            resp.headers["Cache-Control"] = _static_cache_control(path)
         return resp
 
 

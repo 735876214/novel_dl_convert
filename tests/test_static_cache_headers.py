@@ -57,16 +57,18 @@ def test_页面壳每次重验证(tmp_path, monkeypatch):
 
     assert resp.headers.get("cache-control") == "no-cache"
 
-def test_平台分隔符不影响_immutable_判定(tmp_path):
+def test_平台分隔符不影响_immutable_判定():
     r"""Starlette 的 `get_response(path)` 用的是**平台分隔符**：Windows 上是 ``v2\assets\x.js``。
 
     第 152 期审计抓到：第一版实现直接 grep ``"/assets/"``，在 Windows 上恒为假 ⇒ 开发机
-    永远拿不到 immutable（生产是 Linux 所以没暴露）。这里钉住「两种分隔符同一结论」。
+    永远拿不到 immutable（生产是 Linux 所以没暴露）。判据抽成 `_static_cache_control` 之后
+    这里直接钉它 —— **不经过 Starlette**，两种分隔符在任何平台上都能验。
+
+    （第一版这个用例是把反斜杠路径直接喂给 `get_response`：在 Linux 上那不是分隔符，
+      于是 404 —— CI 红了一次。判据与「Starlette 怎么传」解耦后不再依赖平台。）
     """
-    (tmp_path / "assets").mkdir()
-    (tmp_path / "assets" / "x-1.js").write_text("x", encoding="utf-8")
-    st = server._ImmutableStatic(directory=str(tmp_path))
-
-    resp = asyncio.run(st.get_response("assets\\x-1.js", _scope("/static/assets/x-1.js")))
-
-    assert "immutable" in resp.headers.get("cache-control", "")
+    assert "immutable" in server._static_cache_control("assets\\x-1.js")
+    assert "immutable" in server._static_cache_control("v2/assets/x-1.js")
+    assert "immutable" in server._static_cache_control("v2\\assets\\x-1.js")
+    assert "immutable" not in server._static_cache_control("cover.jpg")
+    assert "max-age=3600" in server._static_cache_control("v2/cover.jpg")
