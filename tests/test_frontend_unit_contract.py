@@ -245,6 +245,10 @@ EXPECTED_SPECS = (
     "src/lib/readingProgress.spec.ts",
     "src/lib/searchResults.spec.ts",
     "src/lib/seriesNext.spec.ts",
+    # 第 152 期：漫画 / PDF 阅读器的**系列目录侧栏**共用数据层（`lib/seriesToc.ts`）。
+    # 坏起来静默：侧栏空着（接口失败没给 error）或高亮错行（currentIndex 拍脑袋），
+    # 「点开 28 册的系列只能一册一册翻」就这样无声复发。
+    "src/lib/seriesToc.spec.ts",
     "src/lib/textAnchor.spec.ts",
     "src/lib/unitsProgress.spec.ts",
     "src/stores/libraryWizard.spec.ts",
