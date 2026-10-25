@@ -204,7 +204,7 @@ function open(entry: Entry): void {
               v-for="b in selectedBooks"
               :key="b.id"
               type="button"
-              class="group w-full cursor-pointer text-left"
+              class="group w-full cursor-pointer text-left [content-visibility:auto] [contain-intrinsic-size:auto_260px]"
               @click="router.push(`/book/${b.id}`)"
             >
               <BookCover :book="b" />

@@ -319,7 +319,7 @@ function downloadLog(): void {
 
     <p v-if="err" class="mb-3 text-[11.5px] text-destructive">{{ err }}</p>
 
-    <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
+    <Card role="status" aria-live="polite" v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
 
     <Card v-else-if="visible.length" padding="none">
       <!-- 表头 -->

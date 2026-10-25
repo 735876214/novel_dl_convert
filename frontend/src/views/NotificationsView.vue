@@ -128,7 +128,7 @@ const TABS = [
       </button>
     </div>
 
-    <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <!-- 加载失败：给错误文案 + 重试，不得退化成「暂无通知」 -->
     <Card v-else-if="error" padding="sm" class="mb-4">

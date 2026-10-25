@@ -224,7 +224,7 @@ function pickPhoto(): void {
 
     <PageHead :title="name" :desc="`共 ${books.length} 本`" />
 
-    <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <!-- 加载失败：可重试的错误态（不与「这位作者名下的书被移除了」空态混淆） -->
     <Card v-else-if="error" padding="sm">
@@ -384,7 +384,7 @@ function pickPhoto(): void {
           v-for="b in sorted"
           :key="b.id"
           type="button"
-          class="group cursor-pointer text-left"
+          class="group cursor-pointer text-left [content-visibility:auto] [contain-intrinsic-size:auto_260px]"
           @click="router.push(`/book/${b.id}`)"
         >
           <BookCover :book="b" />

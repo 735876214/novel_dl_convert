@@ -167,7 +167,7 @@ function goConvert(): void {
       <span class="text-[11.5px] text-muted-foreground">共扫描 {{ total }} 本书目</span>
     </div>
 
-    <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
+    <Card role="status" aria-live="polite" v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
 
     <!-- 加载失败：可重试的错误态。**尤其重要** —— 否则失败会被读成「没有发现缺失资源」（一切正常）。 -->
     <Card v-else-if="error" padding="sm">

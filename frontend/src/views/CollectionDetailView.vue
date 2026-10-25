@@ -83,7 +83,7 @@ async function removeCollection(): Promise<void> {
       </Button>
     </div>
 
-    <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <!-- 加载失败：可重试的错误态（不与「这个收藏夹还是空的」空态混淆） -->
     <Card v-else-if="error" padding="sm" class="mb-4">
@@ -98,7 +98,7 @@ async function removeCollection(): Promise<void> {
       v-else-if="detail && detail.books.length"
       class="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8"
     >
-      <div v-for="b in detail.books" :key="b.id" class="group relative">
+      <div v-for="b in detail.books" :key="b.id" class="group relative [content-visibility:auto] [contain-intrinsic-size:auto_260px]">
         <button
           type="button"
           class="w-full cursor-pointer text-left"

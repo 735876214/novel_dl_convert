@@ -139,7 +139,7 @@ onMounted(() => loadConfig())
           </div>
         </div>
       </template>
-      <div v-else class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
+      <div role="status" aria-live="polite" v-else class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
     </Card>
 
     <!-- 预览结果 -->

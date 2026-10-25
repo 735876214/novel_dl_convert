@@ -208,7 +208,7 @@ watch(name, load)
       部分书目在 EPUB 元数据里没有系列序号，已排在末尾并标注「序号未知」。
     </p>
 
-    <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <!-- 加载失败：可重试的错误态（不与「这个系列暂时没有书」空态混淆） -->
     <Card v-else-if="error" padding="sm">
@@ -242,11 +242,17 @@ watch(name, load)
         <div
           class="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8"
         >
+        <!--
+          每张卡都挂 `content-visibility: auto`（第 152 期）：最大系列有 652 册，此前 652 个
+          卡片的布局 / 绘制全部在首帧完成（封面图本身已是 lazy）。`contain-intrinsic-size: auto 260px`
+          给离屏卡片一个高度占位，滚动条与跳转锚点不受影响；`auto` 表示渲染过一次后记住真实高度，
+          不会因为标题换行而抖。
+        -->
         <button
           v-for="b in sec.books"
           :key="b.id"
           type="button"
-          class="group cursor-pointer text-left"
+          class="group cursor-pointer text-left [content-visibility:auto] [contain-intrinsic-size:auto_260px]"
           @click="router.push(bookClickPath(b, prefs.prefs.thumbnailClick))"
         >
           <div class="relative">
@@ -267,7 +273,7 @@ watch(name, load)
             <!-- 首册标记（FIRST IN SERIES） -->
             <span
               v-if="b.id === firstId"
-              class="absolute bottom-1 left-1 rounded bg-primary px-1.5 py-0.5 text-[10.5px] font-semibold text-white"
+              class="absolute bottom-1 left-1 rounded bg-primary px-1.5 py-0.5 text-[10.5px] font-semibold text-primary-foreground"
             >
               首册
             </span>

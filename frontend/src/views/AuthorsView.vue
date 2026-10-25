@@ -129,7 +129,7 @@ function open(name: string): void {
   <div>
     <PageHead title="作者" :desc="`共 ${items.length} 位作者`" />
 
-    <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <!-- 加载失败：可重试的错误态（不与「还没有作者」空态混淆） -->
     <Card v-else-if="error" padding="sm">

@@ -201,7 +201,7 @@ function dayLabel(d: ReadingLogDay): string {
       </div>
     </Card>
 
-    <div v-if="loading" class="py-16 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading" class="py-16 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <EmptyState
       v-else-if="failed"

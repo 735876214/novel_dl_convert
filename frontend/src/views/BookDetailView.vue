@@ -78,7 +78,8 @@ watch(
   async ([bid, hasCover, tintMode]) => {
     tint.value = null
     if (!bid || !hasCover || tintMode === 'off') return
-    const result = await extractCoverTint(api.coverUrl(String(bid)))
+    // 取色只要颜色，不需要原尺寸：走 240 px 的缩略图（第 152 期，后端 `?w=`）
+    const result = await extractCoverTint(api.coverUrl(String(bid), 240))
     // 竞态：取色是异步的，回来时可能已经切到别的书了
     if (String(book.value?.id ?? '') === String(bid)) tint.value = result
   },
@@ -319,7 +320,7 @@ watch(bookId, (id) => {
 </script>
 
 <template>
-  <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+  <div role="status" aria-live="polite" v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
   <div v-else-if="book">
     <!-- 面包屑 -->

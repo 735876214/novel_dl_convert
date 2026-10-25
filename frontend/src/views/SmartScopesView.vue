@@ -245,7 +245,7 @@ function opLabel(op: ScopeOp): string {
         </button>
       </div>
 
-      <p v-if="loading" class="py-6 text-center text-[12.5px] text-muted-foreground">加载中…</p>
+      <p role="status" aria-live="polite" v-if="loading" class="py-6 text-center text-[12.5px] text-muted-foreground">加载中…</p>
       <div v-else-if="error" class="flex flex-wrap items-center gap-2 py-4 text-[12.5px] text-destructive">
         <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
         <span>加载智能书架失败：{{ error }}</span>

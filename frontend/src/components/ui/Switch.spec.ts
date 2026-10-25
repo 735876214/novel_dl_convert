@@ -51,7 +51,7 @@ describe('Switch（共享开关胶囊）', () => {
     expect(on.emitted('update:modelValue')).toEqual([[false]])
   })
 
-  it('轨道只用主题变量；圆点是唯一的写死白色（刻意，配半透明细边）', () => {
+  it('轨道与圆点都只用主题变量（圆点在浅色下仍是白色，深色下自动反色）', () => {
     const w = mount(Switch, { props: { modelValue: true } })
     // 轨道随主题走（开 = 主题色），不写死
     expect(cls(w.find('button'))).toContain('bg-primary')
@@ -60,10 +60,12 @@ describe('Switch（共享开关胶囊）', () => {
     expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
     expect(html).not.toMatch(/\brgb(a)?\(/)
     expect(html).not.toMatch(/\boklch\(/)
-    // 圆点刻意固定白色（用户口径：与主题色不一致），不再是随主题的 `bg-card`
+    // 圆点必须是「主色的反色」：第 152 期实测，深色主题下 `--primary` 是近白，
+    // 写死 `bg-white` 的圆点与轨道对比度只有 **1.30:1**（开着还是关着看不出来）。
+    // `--primary-foreground` 在浅色主题下就是近白（保留原先的观感），深色下自动变近黑。
     const thumb = cls(w.find('span'))
-    expect(thumb).toContain('bg-white')
-    expect(thumb).not.toContain('bg-card')
+    expect(thumb).toContain('bg-primary-foreground')
+    expect(thumb).not.toContain('bg-white')
   })
 
   it('尺寸与过渡是唯一口径（改动会立刻红，避免又长出一个「大胶囊」）', () => {
@@ -82,7 +84,7 @@ describe('Switch（共享开关胶囊）', () => {
     // 细边框：白色圆点在浅色轨道上对比偏弱，没有这道边轮廓几乎看不出来
     // ⇒ 刻意用**半透明黑**（不随主题变）勾边，深浅两套主题里都成立
     expect(thumb).toContain('border-black/15')
-    expect(thumb).toContain('bg-white')
+    expect(thumb).toContain('bg-primary-foreground')
   })
 
   it('disabled：带原生 disabled 与禁用光标/降透明；禁用态样式只有这一处定义', () => {

@@ -170,7 +170,7 @@ function loadMore(): void {
       </div>
     </div>
 
-    <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <template v-else-if="data">
       <!-- 贡献热力图 -->

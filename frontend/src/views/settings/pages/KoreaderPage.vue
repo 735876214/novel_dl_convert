@@ -133,7 +133,7 @@ async function copyEndpoint(): Promise<void> {
       <span v-else class="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">已关闭</span>
     </div>
 
-    <Card v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
+    <Card role="status" aria-live="polite" v-if="loading" class="py-10 text-center text-[12.5px] text-muted-foreground">加载中…</Card>
 
     <!-- 加载失败：可重试的错误态（不与「已关闭」混淆） -->
     <Card v-else-if="error" padding="sm">

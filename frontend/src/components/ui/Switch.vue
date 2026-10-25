@@ -48,8 +48,14 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>()
     :class="modelValue ? 'bg-primary' : 'bg-muted'"
     @click="emit('update:modelValue', !props.modelValue)"
   >
+    <!--
+      旋钮用 `bg-primary-foreground` 而不是写死 `bg-white`（第 152 期审计）：深色主题下
+      `--primary` 翻成**近白**（tokens.css 的 .dark 块），白旋钮压在浅轨道上对比度只有
+      1.30:1 —— 开关开着还是关着完全看不出来。`--primary-foreground` 正是「主色上的前景」，
+      浅色主题近白、深色主题近黑，两个主题都自动成立（与 IconButton 注释里那条禁令同源）。
+    -->
     <span
-      class="pointer-events-none absolute top-[2px] left-0 h-[14px] w-[14px] rounded-full border border-black/15 bg-white shadow-xs transition-transform duration-200"
+      class="pointer-events-none absolute top-[2px] left-0 h-[14px] w-[14px] rounded-full border border-black/15 bg-primary-foreground shadow-xs transition-transform duration-200"
       :class="modelValue ? 'translate-x-[16px]' : 'translate-x-[2px]'"
     />
   </button>

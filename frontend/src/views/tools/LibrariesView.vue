@@ -479,7 +479,7 @@ async function confirmRemove(): Promise<void> {
         </div>
       </div>
 
-      <div v-if="loading && !libs.length" class="px-4 py-6 text-[12.5px] text-muted-foreground">加载中…</div>
+      <div role="status" aria-live="polite" v-if="loading && !libs.length" class="px-4 py-6 text-[12.5px] text-muted-foreground">加载中…</div>
       <!-- 加载失败：可重试的错误态（不能与「还没有书库」这个正常初始态混淆） -->
       <div v-else-if="error && !libs.length" class="px-4 py-6">
         <div class="text-[12.5px] font-medium text-destructive">书库信息加载失败</div>

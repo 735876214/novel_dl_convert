@@ -2278,7 +2278,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
-    <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <!-- 在线读不可用（第 93 期）：一页**如实的说明** + 回本地阅读的入口。
          为什么单开一页而不是复用下面的 EmptyState：那个的文案是「找不到这本书」——

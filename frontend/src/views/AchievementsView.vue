@@ -135,7 +135,7 @@ onMounted(load)
       </Button>
     </div>
 
-    <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <!-- 加载失败：可重试的错误态（不与「没有成就」空态混淆） -->
     <Card v-else-if="error" padding="sm" class="mb-4">

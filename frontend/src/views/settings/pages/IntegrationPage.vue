@@ -154,7 +154,7 @@ async function toggleAutoPush(): Promise<void> {
     </div>
 
     <Card padding="none">
-      <div v-if="loading" class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
+      <div role="status" aria-live="polite" v-if="loading" class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
       <div v-else-if="error" class="flex flex-wrap items-center gap-2 px-4 py-6 text-[12.5px] text-destructive">
         <span>凭据配置加载失败：{{ error }}</span>
         <Button size="sm" variant="secondary" class="ml-auto" @click="load">重试</Button>

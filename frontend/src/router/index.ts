@@ -1,68 +1,6 @@
 import type { Component } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 
-import AchievementsView from '@/views/AchievementsView.vue'
-import ReadingActivityView from '@/views/ReadingActivityView.vue'
-import BookDetailView from '@/views/BookDetailView.vue'
-import ReaderView from '@/views/ReaderView.vue'
-import AudioPlayerView from '@/views/AudioPlayerView.vue'
-import AnnotationsView from '@/views/AnnotationsView.vue'
-import AuthorDetailView from '@/views/AuthorDetailView.vue'
-import AuthorsView from '@/views/AuthorsView.vue'
-import CollectionDetailView from '@/views/CollectionDetailView.vue'
-import CollectionsView from '@/views/CollectionsView.vue'
-import NotificationsView from '@/views/NotificationsView.vue'
-import SeriesDetailView from '@/views/SeriesDetailView.vue'
-import SeriesView from '@/views/SeriesView.vue'
-import ReadingLogView from '@/views/ReadingLogView.vue'
-import DashboardView from '@/views/DashboardView.vue'
-import DocumentationView from '@/views/DocumentationView.vue'
-import ExploreView from '@/views/ExploreView.vue'
-import BrowseView from '@/views/BrowseView.vue'
-import PlaceholderView from '@/views/PlaceholderView.vue'
-import LibrariesView from '@/views/tools/LibrariesView.vue'
-import SettingsLayout from '@/views/settings/SettingsLayout.vue'
-import SettingsPlaceholder from '@/views/settings/SettingsPlaceholder.vue'
-import AboutPage from '@/views/settings/pages/AboutPage.vue'
-import AdvancedPage from '@/views/settings/pages/AdvancedPage.vue'
-import AuditLogPage from '@/views/settings/pages/AuditLogPage.vue'
-import BookDockPage from '@/views/settings/pages/BookDockPage.vue'
-import ConversionPage from '@/views/settings/pages/ConversionPage.vue'
-import UpdatePage from '@/views/settings/pages/UpdatePage.vue'
-import CoverPage from '@/views/settings/pages/CoverPage.vue'
-import FileNamingPage from '@/views/settings/pages/FileNamingPage.vue'
-import MaintenancePage from '@/views/settings/pages/MaintenancePage.vue'
-import NetworkPage from '@/views/settings/pages/NetworkPage.vue'
-import NotificationsPage from '@/views/settings/pages/NotificationsPage.vue'
-import ProfilePage from '@/views/settings/pages/ProfilePage.vue'
-import ReaderEbookPage from '@/views/settings/pages/ReaderEbookPage.vue'
-import ThemePage from '@/views/settings/pages/ThemePage.vue'
-import WatcherPage from '@/views/settings/pages/WatcherPage.vue'
-import ShelfView from '@/views/ShelfView.vue'
-import SmartScopesView from '@/views/SmartScopesView.vue'
-import ReaderFontsPage from '@/views/settings/pages/ReaderFontsPage.vue'
-import PdfPage from '@/views/settings/pages/PdfPage.vue'
-import ComicsPage from '@/views/settings/pages/ComicsPage.vue'
-import BehaviorPage from '@/views/settings/pages/BehaviorPage.vue'
-import LayoutPage from '@/views/settings/pages/LayoutPage.vue'
-import ReaderAudioPage from '@/views/settings/pages/ReaderAudioPage.vue'
-import OpdsPage from '@/views/settings/pages/OpdsPage.vue'
-import KomgaPage from '@/views/settings/pages/KomgaPage.vue'
-import KoreaderPage from '@/views/settings/pages/KoreaderPage.vue'
-import IntegrationPage from '@/views/settings/pages/IntegrationPage.vue'
-import MetadataPage from '@/views/settings/pages/MetadataPage.vue'
-import PreferenceSyncPage from '@/views/settings/pages/PreferenceSyncPage.vue'
-import TaskCenterView from '@/views/TaskCenterView.vue'
-import WhatsNewView from '@/views/WhatsNewView.vue'
-import DuplicateBooksView from '@/views/tools/DuplicateBooksView.vue'
-import EntityManagerView from '@/views/tools/EntityManagerView.vue'
-import LocalConvertView from '@/views/tools/LocalConvertView.vue'
-import LogsView from '@/views/tools/LogsView.vue'
-import MissingResourcesView from '@/views/tools/MissingResourcesView.vue'
-import OutputView from '@/views/tools/OutputView.vue'
-import SourcesView from '@/views/tools/SourcesView.vue'
-import SourceToolsView from '@/views/tools/SourceToolsView.vue'
-import ToolsLayout from '@/views/tools/ToolsLayout.vue'
 import { SETTINGS_HOME, SETTINGS_PAGES } from '@/data/settingsNav'
 
 /**
@@ -71,49 +9,55 @@ import { SETTINGS_HOME, SETTINGS_PAGES } from '@/data/settingsNav'
  * 未在此表中的页一律落到 `SettingsPlaceholder`：只读展示上游该页的分组与设置项，
  * 并统一标注「未支持」（对齐 `docs/bookorbit/bookorbit-settings-inventory.md` 的迁移约定 3）。
  * 用映射表而不是在注册表里直接引用组件，是为了让 `data/settingsNav.ts` 保持纯数据、可被非 UI 代码复用。
+ *
+ * ⚠️ 第 152 期起默认写成 **懒加载器**（`() => import('…')`）：30 个设置页此前全部打进首屏
+ * 主包（它们合计是整个 `views/settings/pages` 目录），而用户一次只会打开一页。
+ * 同步写法仍然允许（`libraries` 那条沿用），类型是两者的联合。
  */
-export const SETTINGS_PAGE_COMPONENTS: Record<string, Component> = {
-  'account/profile': ProfilePage,
-  'account/notifications': NotificationsPage,
-  'appearance/theme': ThemePage,
-  'appearance/book-covers': CoverPage,
-  'appearance/behavior': BehaviorPage,
-  'appearance/layout': LayoutPage,
-  'reader/ebook': ReaderEbookPage,
-  'reader/pdf': PdfPage,
-  'reader/comics': ComicsPage,
-  'reader/audio': ReaderAudioPage,
-  'reader/general': PreferenceSyncPage,
+type AsyncPage = Component | (() => Promise<{ default: Component }>)
+
+export const SETTINGS_PAGE_COMPONENTS: Record<string, AsyncPage> = {
+  'account/profile': () => import('@/views/settings/pages/ProfilePage.vue'),
+  'account/notifications': () => import('@/views/settings/pages/NotificationsPage.vue'),
+  'appearance/theme': () => import('@/views/settings/pages/ThemePage.vue'),
+  'appearance/book-covers': () => import('@/views/settings/pages/CoverPage.vue'),
+  'appearance/behavior': () => import('@/views/settings/pages/BehaviorPage.vue'),
+  'appearance/layout': () => import('@/views/settings/pages/LayoutPage.vue'),
+  'reader/ebook': () => import('@/views/settings/pages/ReaderEbookPage.vue'),
+  'reader/pdf': () => import('@/views/settings/pages/PdfPage.vue'),
+  'reader/comics': () => import('@/views/settings/pages/ComicsPage.vue'),
+  'reader/audio': () => import('@/views/settings/pages/ReaderAudioPage.vue'),
+  'reader/general': () => import('@/views/settings/pages/PreferenceSyncPage.vue'),
   // 同一组件两种形态：本项目单用户部署下「阅读字体」与「服务端字体」是同一份库
-  'reader/fonts': ReaderFontsPage,
-  'admin/server-fonts': ReaderFontsPage,
-  'library/file-naming': FileNamingPage,
-  'library/maintenance': MaintenancePage,
+  'reader/fonts': () => import('@/views/settings/pages/ReaderFontsPage.vue'),
+  'admin/server-fonts': () => import('@/views/settings/pages/ReaderFontsPage.vue'),
+  'library/file-naming': () => import('@/views/settings/pages/FileNamingPage.vue'),
+  'library/maintenance': () => import('@/views/settings/pages/MaintenancePage.vue'),
   // 第 49 期：书库管理并入设置页（原「工具 → 书库管理」入口已移除）
-  libraries: LibrariesView,
-  'admin/audit-log': AuditLogPage,
-  'admin/book-dock': BookDockPage,
-  'ext/conversion': ConversionPage,
-  'ext/update': UpdatePage,
-  'ext/watcher': WatcherPage,
-  'ext/network': NetworkPage,
-  'ext/advanced': AdvancedPage,
-  'ext/about': AboutPage,
-  opds: OpdsPage,
-  komga: KomgaPage,
-  koreader: KoreaderPage,
+  libraries: () => import('@/views/tools/LibrariesView.vue'),
+  'admin/audit-log': () => import('@/views/settings/pages/AuditLogPage.vue'),
+  'admin/book-dock': () => import('@/views/settings/pages/BookDockPage.vue'),
+  'ext/conversion': () => import('@/views/settings/pages/ConversionPage.vue'),
+  'ext/update': () => import('@/views/settings/pages/UpdatePage.vue'),
+  'ext/watcher': () => import('@/views/settings/pages/WatcherPage.vue'),
+  'ext/network': () => import('@/views/settings/pages/NetworkPage.vue'),
+  'ext/advanced': () => import('@/views/settings/pages/AdvancedPage.vue'),
+  'ext/about': () => import('@/views/settings/pages/AboutPage.vue'),
+  opds: () => import('@/views/settings/pages/OpdsPage.vue'),
+  komga: () => import('@/views/settings/pages/KomgaPage.vue'),
+  koreader: () => import('@/views/settings/pages/KoreaderPage.vue'),
   // 三家外部服务共用一个组件，靠 props 区分（见下方 SETTINGS_PAGE_PROPS）
-  hardcover: IntegrationPage,
-  readwise: IntegrationPage,
-  storygraph: IntegrationPage,
+  hardcover: () => import('@/views/settings/pages/IntegrationPage.vue'),
+  readwise: () => import('@/views/settings/pages/IntegrationPage.vue'),
+  storygraph: () => import('@/views/settings/pages/IntegrationPage.vue'),
   // 元数据抓取的 7 页共用一个组件，props.section 决定展示哪些区块
-  'metadata/providers': MetadataPage,
-  'metadata/field-rules': MetadataPage,
-  'metadata/custom-fields': MetadataPage,
-  'metadata/score': MetadataPage,
-  'metadata/auto-fetch': MetadataPage,
-  'metadata/authors': MetadataPage,
-  'metadata/genre-blocklist': MetadataPage,
+  'metadata/providers': () => import('@/views/settings/pages/MetadataPage.vue'),
+  'metadata/field-rules': () => import('@/views/settings/pages/MetadataPage.vue'),
+  'metadata/custom-fields': () => import('@/views/settings/pages/MetadataPage.vue'),
+  'metadata/score': () => import('@/views/settings/pages/MetadataPage.vue'),
+  'metadata/auto-fetch': () => import('@/views/settings/pages/MetadataPage.vue'),
+  'metadata/authors': () => import('@/views/settings/pages/MetadataPage.vue'),
+  'metadata/genre-blocklist': () => import('@/views/settings/pages/MetadataPage.vue'),
 }
 
 /** 需要传 props 的设置页（当前只有字体页的两种形态） */
@@ -146,7 +90,7 @@ const settingsChildren = SETTINGS_PAGES.map((page) => {
     : {
         path: page.path,
         name: page.name,
-        component: SettingsPlaceholder,
+        component: () => import('@/views/settings/SettingsPlaceholder.vue'),
         props: () => ({ page }),
       }
 })
@@ -161,51 +105,55 @@ const settingsChildren = SETTINGS_PAGES.map((page) => {
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
-    { path: '/', name: 'dashboard', component: DashboardView },
-    { path: '/explore', name: 'explore', component: ExploreView },
+    { path: '/', name: 'dashboard', component: () => import('@/views/DashboardView.vue') },
+    { path: '/explore', name: 'explore', component: () => import('@/views/ExploreView.vue') },
     // 「收书目录」（Book Dock）的**侧栏一级入口**（第 65 期）。
     // 与设置里那一条 `/settings/admin/book-dock` 指向**同一个组件** —— 上游也是
     // 两处都有。之所以不能只留设置里那条：`/settings*` 前缀会让整个左栏换成
     // 设置侧栏（App.vue 判断 `path.startsWith('/settings')`），而这里是从首页
     // 侧栏点进来的，左栏不该变脸。
-    { path: '/book-dock', name: 'book-dock', component: BookDockPage },
-    { path: '/tasks', name: 'tasks', component: TaskCenterView },
-    { path: '/shelf', name: 'shelf', component: ShelfView },
-    { path: '/smart-scopes', name: 'smart-scopes', component: SmartScopesView },
-    { path: '/book/:id', name: 'book', component: BookDetailView },
-    { path: '/read/:id', name: 'read', component: ReaderView },
+    { path: '/book-dock', name: 'book-dock', component: () => import('@/views/settings/pages/BookDockPage.vue') },
+    { path: '/tasks', name: 'tasks', component: () => import('@/views/TaskCenterView.vue') },
+    { path: '/shelf', name: 'shelf', component: () => import('@/views/ShelfView.vue') },
+    { path: '/smart-scopes', name: 'smart-scopes', component: () => import('@/views/SmartScopesView.vue') },
+    { path: '/book/:id', name: 'book', component: () => import('@/views/BookDetailView.vue') },
+    { path: '/read/:id', name: 'read', component: () => import('@/views/ReaderView.vue') },
     // 在线阅读（第 93 期）：**同一个阅读器组件**，靠 `route.name` 分模式。
     // 不复用 `/read/:id?online=1` 是刻意的 —— 查询参数不影响组件复用，
     // 「本地读着读着切成在线」不会有任何反应；两条路由各自是一份现场。
     // 主题 / 字号 / 版式 / 翻页 / 滚动 / 目录抽屉全部共用同一份实现（只换数据来源）。
-    { path: '/online/:id', name: 'online', component: ReaderView },
-    { path: '/listen/:id', name: 'listen', component: AudioPlayerView },
-    { path: '/series', name: 'series', component: SeriesView },
-    { path: '/series/:name', name: 'series-detail', component: SeriesDetailView },
-    { path: '/authors', name: 'authors', component: AuthorsView },
-    { path: '/authors/:name', name: 'author-detail', component: AuthorDetailView },
+    { path: '/online/:id', name: 'online', component: () => import('@/views/ReaderView.vue') },
+    { path: '/listen/:id', name: 'listen', component: () => import('@/views/AudioPlayerView.vue') },
+    { path: '/series', name: 'series', component: () => import('@/views/SeriesView.vue') },
+    { path: '/series/:name', name: 'series-detail', component: () => import('@/views/SeriesDetailView.vue') },
+    { path: '/authors', name: 'authors', component: () => import('@/views/AuthorsView.vue') },
+    { path: '/authors/:name', name: 'author-detail', component: () => import('@/views/AuthorDetailView.vue') },
     // 实体总览（第 34 期）：按元数据维度浏览**本地**书目。
     // ⚠️ 与 /explore「探索发现」是两件事 —— 那个是外部书源检索（POST /api/search），
     //    路径与名字都要分开，别合并。
-    { path: '/browse', name: 'browse', component: BrowseView },
-    { path: '/annotations', name: 'annotations', component: AnnotationsView },
-    { path: '/collections', name: 'collections', component: CollectionsView },
-    { path: '/collections/:id', name: 'collection-detail', component: CollectionDetailView },
+    { path: '/browse', name: 'browse', component: () => import('@/views/BrowseView.vue') },
+    { path: '/annotations', name: 'annotations', component: () => import('@/views/AnnotationsView.vue') },
+    { path: '/collections', name: 'collections', component: () => import('@/views/CollectionsView.vue') },
+    { path: '/collections/:id', name: 'collection-detail', component: () => import('@/views/CollectionDetailView.vue') },
     // 统计页懒加载：它是全站唯一引 ECharts 的页面（第 32 期），动态 import 让它
     // 单独成 chunk，图表库不进主包。同属「重依赖不进主包」的思路 ——
     // 另一处是 PdfReader.vue:222 在组件内动态 import pdfjs（那个是组件级，不在路由层）。
     { path: '/stats', name: 'stats', component: () => import('@/views/StatsView.vue') },
-    { path: '/log', name: 'log', component: ReadingLogView },
-    { path: '/notify', name: 'notify', component: NotificationsView },
-    { path: '/achievements', name: 'achievements', component: AchievementsView },
-    { path: '/reading-activity', name: 'reading-activity', component: ReadingActivityView },
-    { path: '/whats-new', name: 'whats-new', component: WhatsNewView },
-    { path: '/docs', name: 'docs', component: DocumentationView },
+    { path: '/log', name: 'log', component: () => import('@/views/ReadingLogView.vue') },
+    { path: '/notify', name: 'notify', component: () => import('@/views/NotificationsView.vue') },
+    { path: '/achievements', name: 'achievements', component: () => import('@/views/AchievementsView.vue') },
+    // 阅读热力图页**懒加载**（第 152 期）：它是全站唯一在「非图表页」里 import
+    // `@/lib/charts` 的地方，而那个模块会把整个 ECharts（约 300 KB gzip）拖进**首屏**
+    // 包 —— 首屏因此白白多下载一个 887 KB 的 chunk。改成 `() => import()` 后
+    // ECharts 只在真正的图表页（本页 / 统计页）才加载。
+    { path: '/reading-activity', name: 'reading-activity', component: () => import('@/views/ReadingActivityView.vue') },
+    { path: '/whats-new', name: 'whats-new', component: () => import('@/views/WhatsNewView.vue') },
+    { path: '/docs', name: 'docs', component: () => import('@/views/DocumentationView.vue') },
 
     // 设置：嵌套路由，每个叶子页有独立 URL（可直达、可刷新、可分享）
     {
       path: '/settings',
-      component: SettingsLayout,
+      component: () => import('@/views/settings/SettingsLayout.vue'),
       children: [
         { path: '', redirect: SETTINGS_HOME },
         // 上游实测存在的别名：/settings/system 会被上游重定向到「文件命名」。
@@ -220,26 +168,48 @@ const router = createRouter({
     // 第 49 期：书库管理迁到设置页（settings-libraries），不再占工具页标签。
     {
       path: '/tools',
-      component: ToolsLayout,
+      component: () => import('@/views/tools/ToolsLayout.vue'),
       children: [
         { path: '', redirect: { name: 'tools-entity-manager' } },
-        { path: 'entities', name: 'tools-entity-manager', component: EntityManagerView },
-        { path: 'duplicates', name: 'tools-duplicate-books', component: DuplicateBooksView },
-        { path: 'missing', name: 'tools-missing-resources', component: MissingResourcesView },
-        { path: 'sources', name: 'tools-sources', component: SourcesView },
+        { path: 'entities', name: 'tools-entity-manager', component: () => import('@/views/tools/EntityManagerView.vue') },
+        { path: 'duplicates', name: 'tools-duplicate-books', component: () => import('@/views/tools/DuplicateBooksView.vue') },
+        { path: 'missing', name: 'tools-missing-resources', component: () => import('@/views/tools/MissingResourcesView.vue') },
+        { path: 'sources', name: 'tools-sources', component: () => import('@/views/tools/SourcesView.vue') },
         // 第 86 期能力的接线页（导入 / 台账 / 登录 / 验证）
-        { path: 'source-tools', name: 'tools-source-tools', component: SourceToolsView },
-              { path: 'output', name: 'tools-output', component: OutputView },
-        { path: 'local', name: 'tools-local', component: LocalConvertView },
-        { path: 'logs', name: 'tools-logs', component: LogsView },
+        { path: 'source-tools', name: 'tools-source-tools', component: () => import('@/views/tools/SourceToolsView.vue') },
+              { path: 'output', name: 'tools-output', component: () => import('@/views/tools/OutputView.vue') },
+        { path: 'local', name: 'tools-local', component: () => import('@/views/tools/LocalConvertView.vue') },
+        { path: 'logs', name: 'tools-logs', component: () => import('@/views/tools/LogsView.vue') },
       ],
     },
 
     // 未知路由兜底：正式视图现已全部实现，侧栏每个 id 都有真实路由（见 AppSidebar 的
     // PATH_BY_ID），这两条只是「链接写错了」时的落点，不再是「尚未实现的视图」。
-    { path: '/placeholder/:id', name: 'placeholder', component: PlaceholderView },
-    { path: '/:pathMatch(.*)*', name: 'fallback', component: PlaceholderView },
+    { path: '/placeholder/:id', name: 'placeholder', component: () => import('@/views/PlaceholderView.vue') },
+    { path: '/:pathMatch(.*)*', name: 'fallback', component: () => import('@/views/PlaceholderView.vue') },
   ],
+})
+
+/**
+ * 懒加载 chunk 失联 ⇒ **整页重载一次**（第 152 期）。
+ *
+ * 起因：路由全部改成 `() => import()` 之后，每个页面是一个带 hash 的 chunk；而
+ * `frontend/scripts/deploy.mjs` 是「先删目标目录、再整体拷贝」—— 部署那一刻开着的
+ * 旧页面，点进一个**没访问过**的路由时它的 chunk 已经不在服务器上了 ⇒ 动态 import 404、
+ * 页面白屏且没有任何提示。重载会拿到新的 `index.html` 与新的 chunk，用户几乎无感。
+ *
+ * ⚠️ 必须防死循环：chunk 是真没了（服务端回滚 / 静态目录被清空）时无条件重载会变成
+ * 刷新风暴。同一标签页 30 秒内只自动重载一次，之后把错误交给上层（控制台可见）。
+ */
+const CHUNK_ERR_RE = /Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk .* failed|dynamically imported module/i
+let chunkReloadedAt = 0
+router.onError((err: unknown) => {
+  const msg = err instanceof Error ? err.message : String(err ?? '')
+  if (!CHUNK_ERR_RE.test(msg)) return
+  const now = Date.now()
+  if (now - chunkReloadedAt < 30_000) return
+  chunkReloadedAt = now
+  window.location.reload()
 })
 
 export default router

@@ -62,6 +62,31 @@ let sleepTimer: number | undefined
 const unitMode = computed(() => !!props.unit)
 const total = computed(() => (unitMode.value ? 1 : props.tracks.length))
 const current = computed<AudioTrack | null>(() => (unitMode.value ? null : props.tracks[index.value] ?? null))
+
+/**
+ * 轨列表的**渲染窗口**（第 152 期审计实测）：最长的一本有声书有 7,464 轨，全量进 DOM
+ * 是 **30,211 个节点 / 7,508 个按钮**，单次长任务 1.1 秒 —— 而那块列表只有 280px 高。
+ * 默认渲染 200 条，底部「显示更多」每次再加 500；**当前轨永远在窗口内**（从进度恢复
+ * 到第 6,000 轨时也不会出现「高亮项在窗口外」）。
+ */
+const TRACK_WINDOW = 200
+const TRACK_MORE = 500
+const trackLimit = ref(TRACK_WINDOW)
+const shownTracks = computed(() => {
+  const n = props.tracks.length
+  const size = Math.min(n, Math.max(1, trackLimit.value))
+  if (n <= size) return props.tracks
+  // **以当前轨为中心开窗**：只取前缀的话，从第 6,000 轨续播时仍要渲染前 6,001 条
+  // （第 152 期审计实测指出的第一版缺陷）。窗口随 `index` 移动，当前轨永远在可见区。
+  const half = Math.floor(size / 2)
+  const start = index.value < half ? 0 : Math.min(index.value - half, n - size)
+  return props.tracks.slice(start, start + size)
+})
+function showMoreTracks(): void {
+  trackLimit.value += TRACK_MORE
+}
+// 换书时窗口复位（组件可能被复用）
+watch(() => props.bookId, () => { trackLimit.value = TRACK_WINDOW })
 const src = computed(() => {
   if (unitMode.value) return props.unit ? api.unitFileUrl(props.bookId, props.unit.index) : ''
   return current.value ? api.audioTrackUrl(props.bookId, index.value) : ''
@@ -452,7 +477,7 @@ onBeforeUnmount(() => {
     <div v-if="total > 1" class="mt-4 border-t border-border pt-3">
       <div class="mb-2 text-[11.5px] font-medium text-muted-foreground">共 {{ total }} 轨</div>
       <ol class="max-h-[280px] space-y-0.5 overflow-auto">
-        <li v-for="t in tracks" :key="t.index">
+        <li v-for="t in shownTracks" :key="t.index">
           <button
             type="button"
             class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] transition-colors"
@@ -465,6 +490,16 @@ onBeforeUnmount(() => {
           </button>
         </li>
       </ol>
+      <!-- 轨道多时先只渲染一窗（见 `shownTracks` 的注释）；这一条是**显式**的「还有多少」，
+           不做无限滚动的自动加载 —— 那会在用户只是往下翻找某一轨时把列表越拉越长。 -->
+      <button
+        v-if="shownTracks.length < total"
+        type="button"
+        class="mt-1 w-full cursor-pointer rounded-md px-2 py-1.5 text-center text-[11.5px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        @click="showMoreTracks"
+      >
+        显示更多（还有 {{ total - shownTracks.length }} 轨）
+      </button>
     </div>
   </div>
 </template>

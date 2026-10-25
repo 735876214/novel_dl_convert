@@ -1310,7 +1310,7 @@ const INPUT_CLS =
       <div
         v-for="r in renderRows"
         :key="r.key"
-        class="group"
+        class="group [content-visibility:auto] [contain-intrinsic-size:auto_260px]"
         :data-bucket="bucketKeyOf(rowTitle(r))"
       >
         <!--

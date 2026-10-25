@@ -295,7 +295,7 @@ function logout(): void {
           @update="setVal(f.path, $event)"
         />
       </template>
-      <div v-else class="px-4 py-6 text-center text-[12px] text-muted-foreground">加载中…</div>
+      <div role="status" aria-live="polite" v-else class="px-4 py-6 text-center text-[12px] text-muted-foreground">加载中…</div>
 
       <div class="flex items-center justify-end border-t border-border px-4 py-3">
         <Button size="sm" variant="primary" :disabled="saving" @click="saveSection('achievements')">
@@ -331,7 +331,7 @@ function logout(): void {
           @update="setVal(f.path, $event)"
         />
       </template>
-      <div v-else class="px-4 py-6 text-center text-[12px] text-muted-foreground">加载中…</div>
+      <div role="status" aria-live="polite" v-else class="px-4 py-6 text-center text-[12px] text-muted-foreground">加载中…</div>
 
       <div class="flex items-center justify-end border-t border-border px-4 py-3">
         <Button size="sm" variant="primary" :disabled="saving" @click="saveSection('reading')">

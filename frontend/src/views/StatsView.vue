@@ -247,7 +247,7 @@ const readingCharts = computed<StatisticsChartTile[]>(() => chartsOf('reading'))
 
     <ChartConfigPanel v-if="configOpen" :tab="tab" />
 
-    <div v-if="loading && !s" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading && !s" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <!-- 加载失败：可重试的错误态（不与「暂无数据」空态混淆） -->
     <Card v-else-if="error && !s" padding="sm">

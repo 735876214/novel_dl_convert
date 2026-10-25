@@ -876,7 +876,7 @@ function testExisting(name: string): void {
           下载功能当前关闭：在 <code class="font-mono">config.yaml</code> 设 <code class="font-mono">download.enabled: true</code> 后，书源才可用于搜索与下载。
         </p>
 
-        <div v-if="loading" class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
+        <div role="status" aria-live="polite" v-if="loading" class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
 
         <!-- 加载失败：可重试的错误态（不与「还没有书源」空态混淆） -->
         <div v-else-if="error" class="flex flex-wrap items-center gap-2 px-4 py-6 text-[12.5px] text-destructive">

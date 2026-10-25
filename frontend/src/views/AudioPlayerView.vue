@@ -71,7 +71,7 @@ function fmtSize(n: number): string {
       <Icon name="arrowLeft" class="h-3.5 w-3.5" />返回详情
     </button>
 
-    <div v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
+    <div role="status" aria-live="polite" v-if="loading" class="py-20 text-center text-[13px] text-muted-foreground">加载中…</div>
 
     <EmptyState
       v-else-if="error || !book"

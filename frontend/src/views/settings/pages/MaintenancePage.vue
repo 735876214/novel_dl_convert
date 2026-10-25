@@ -300,7 +300,7 @@ onMounted(async () => {
           </span>
         </div>
       </template>
-      <div v-else class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
+      <div role="status" aria-live="polite" v-else class="px-4 py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
     </Card>
 
     <!-- UPDATES（第 84 期）：上游那条「Check for updates」本项目第 78 期就实现了，
@@ -464,7 +464,7 @@ onMounted(async () => {
         <p v-else-if="recycleError" class="mt-2 text-[11.5px] text-danger">
           回收站读不出来：{{ recycleError }}
         </p>
-        <p v-else class="mt-2 text-[11.5px] text-muted-foreground">加载中…</p>
+        <p role="status" aria-live="polite" v-else class="mt-2 text-[11.5px] text-muted-foreground">加载中…</p>
       </div>
 
       <!-- 无台账孤儿：第 81 期之前的历史回收，或用户手工丢进回收目录的东西 -->
