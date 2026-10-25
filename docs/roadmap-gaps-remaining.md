@@ -10410,10 +10410,10 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 
 - **前端四连**（`bash scripts/frontend-verify.sh`）：type-check / unit（**72 文件 / 761 例**）/ build / deploy 全绿。
 - 新增/改动的用例：`shelfPrefs.spec.ts`（默认值、旧存档作废、其余字段沿用、当前版本的 `false` 被尊重、坏存档不抛错、同步块三个分流、归一化幂等）；`ShelfView.spec.ts` 新增「三视图标题都是系列名、不出现 `Vol.04`」「分桶是 A 不是 V」「表格系列头行四列留空」「展开后成员行仍是各自册名」，以及**点击落点**五例（三视图点折叠行 → `/series/<名字>`、展开后点成员行 → `/book/<id>`、缩略图点击=直接阅读时折叠行仍进系列页）；新增 `SeriesDetailView.spec.ts`（目录列全册、「开始阅读」从序号最小那册起、按钮 `title` 说出起点、点某册进详情、偏好为直接阅读时进阅读器、全无序号时退回首本）。
-- **后端全量**：收 **2803** 例 / **2776 passed** / 0 failed（除下述环境项）/ 0 errors / **14 skipped**，734.8 s；
+- **后端全量**：收 **2816** 例 / **2789 passed** / 0 failed（除下述环境项）/ 0 errors / **14 skipped**，778.2 s；
   **13 例在本机跑不起来**（与本期改动无关，CI 容器里正常）：`test_updater.py` ×10（本机 `socket` 无 `AF_UNIX`）+
   `test_hardening_141_error_paths.py::test_通道与探活是两件事` ×1 + `test_ingest_audit_125.py` ×2（符号链接需特权）
-  ⇒ **可比口径 2790 例（2776 passed / 14 skipped）**。
+  ⇒ **可比口径 2803 例（2789 passed / 14 skipped）**。
   ⚠️ 本机口径：`.venv` 解释器在仓库外建不了临时目录（`tempfile.gettempdir()` 落回仓库根 ⇒ 撞 `tests/conftest.py`
   的仓库根守卫，1643 例会整片报错）⇒ 本轮用**系统解释器 + `.venv` 的 site-packages**（`PYTHONPATH`）跑，临时目录才落回 `%TEMP%`。
 - `python tests/check_doc_anchors.py`：**硬错 0 条**；`python tests/period_close.py check`：0 问题。
@@ -10473,3 +10473,33 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
   （6 renamed / 0 errors），复核 `冥战录` 序号 1–13 连续、`missing = []`。
 - 该代码修复**未发版**（`VERSION` 仍 `1.4.4`）：它只影响「以后点一键改名时给出的建议名」，
   下次发版带上即可；`main` 领先于最后一次 tag 属常态。
+
+### 八、界面与加载速度审计（用户「持续审计并优化显示界面效果和加载速度」）
+
+**方法**：四路只读并行（首屏 / 大列表 / 后端读路径 / 视觉一致性），每条发现再独立复核；
+所有数字都是在**真实实例**（1.4.5，2309 本）与**真实构建产物**上量的，不看代码猜。
+
+**这一批改了什么（按实测收益排序）**：
+
+| 改动 | 改前 | 改后 | 依据 |
+|---|---|---|---|
+| 路由全部懒加载 + ECharts 移出首屏 | 首屏 JS ≈ **678 KB gzip**（index 376 + 含 ECharts 的 helper 302） | ≈ **162 KB gzip**（+ 落地页 Dashboard 32 KB） | 线上 `/static/v2` 实测；`frontend/dist` 构建对比 |
+| 封面缩略图 `?w=480` | 单张封面 186 KB（抽样中位 2.1 MB、最大 3.8 MB） | **37.5 KB（20%）**；一屏 120 张 22 MB → 4.5 MB | `core/thumbs.py` 实测同一张 1200×1600 封面；端点 `?w=` |
+| 大列表离屏渲染 | 系列页 652 张卡全量布局/绘制 | `content-visibility:auto` + `contain-intrinsic-size:auto 260px` | 无头 Edge 审计结论；4 个网格统一 |
+| 有声书轨列表开窗 | 7,464 轨 → 30,211 节点 / 单次长任务 1.1 s | 先渲染 200 条，「显示更多」+500；当前轨恒在窗口内 | 无头 Edge 实测（最长的那本） |
+| 静态资源缓存头 | 无 `Cache-Control`，每次进站逐个 304 | `assets/*` → `immutable, max-age=31536000`；页面壳 → `no-cache` | curl 实测响应头；新增 `tests/test_static_cache_headers.py` |
+| 深色主题反色 | Switch 旋钮 1.30:1、「首册」徽章文字隐形 | 改用 `--primary-foreground`（两主题自动成立） | 按 tokens.css 的 oklch 算 WCAG 对比度 |
+| 封面缩略覆盖全部五条分支 | 只覆盖 CBZ/EPUB | 有声书 / 合集 / 服务端抓取封面也支持 `?w=` | 复核指出三条分支仍直出原图 |
+| 轨窗口以当前轨为中心 | 前缀窗口：从第 6,000 轨续播要渲染 6,001 行 | 以 `index` 为中心开 200 行窗口，随播放移动 | 复核实测指出的第一版缺陷 |
+| 静态缓存头的平台分隔符 | `"/assets/" in path` 在 Windows 上恒为假（Starlette 传的是 `\`） | 统一成正斜杠再判（生产 Linux 本来不受影响，开发机不再失真） | 复核用 Starlette 源码 + 本机实测抓到 |
+| 部署后旧页面进新路由 | 旧 chunk 已删 ⇒ 动态 import 404、白屏无提示 | `router.onError` 命中 chunk 加载失败时整页重载一次（30s 内一次，防刷新风暴） | `deploy.mjs` 先删后拷 + 全懒加载两件事叠加 |
+| 加载态可访问性 | 33 处「加载中…」没有可访问性语义 | 一律补 `role="status" aria-live="polite"` | 审计 grep（全仓仅 1 处 aria-busy） |
+
+**如实记录的未做项（下一批候选，都带证据）**：
+
+1. **`/api/series/{name}` 把书目发两遍**（顶层 `books` + `groups[].books`，神之塔 803 KB 中 436 KB 是重复；gzip 后 68.5 KB）。改法是把 `groups` 收成 `{media,label,ids}`、前端映射；因为要动接口形状与 `SeriesDetail` 类型，留到下一批。
+2. **首屏无条件拉全量 `/api/books`**（1.76 MB raw / 146 KB gzip / 0.23 s）：侧栏「全部书库」计数用的是 `library.books.length`，而 `/api/libraries` 的 599 B 里已带每库 `book_count`。要做需把「计数」与「书目」两条读路径拆开，牵涉仪表盘 4 个部件。
+3. **`/api/stats` 每次首页重算**（116–157 ms，遍历 2309 本，无缓存）：加 15–30 s TTL 会让「刚读完的进度」在仪表盘上迟一拍，需要先定口径。
+4. **加载态不统一**：15 个页面是「加载中…」纯文字、其余是骨架；系列详情从 180 px 直接跳到约 20,600 px（CLS）。统一成带 `role=status` 的骨架。
+5. **对比度细节**：`text-muted-foreground/80` 浅色仅 2.81:1、部分格式徽章 3.97–4.29:1、空星 1.32:1。
+6. **多选态书架仍渲染全部书卡**（2309 卡 / 43,705 节点）：正确做法是虚拟滚动；目前靠 `content-visibility` 缓解，未做窗口化 —— 「全选」必须覆盖全量，窗口化会把它变成静默的选择子集。
