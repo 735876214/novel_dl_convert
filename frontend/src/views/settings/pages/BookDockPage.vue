@@ -22,6 +22,7 @@ import {
 import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useUiStore } from '@/stores/ui'
+import { onRealtime } from '@/lib/realtime'
 
 /**
  * SERVER → Book Dock（`/settings/admin/book-dock`）
@@ -49,15 +50,20 @@ import { useUiStore } from '@/stores/ui'
  * 是把既有取舍写明白（详见 `docs/user-guide.md` §2）。
  */
 
+interface WatcherStats {
+  converted?: number
+  added?: number
+  failed?: number
+  scans?: number
+}
+
 interface WatcherInfo extends WatcherStatus {
   input?: string
   output?: string
   interval?: number
-  processed?: number
-  failed?: number
-  converted?: number
-  added?: number
-  scans?: number
+  /** ⚠️ `/api/watcher` 把计数放在 **`stats` 下**（core/watcher.py 的 `status()`），
+   *  顶层没有 converted/added/failed/scans。此前这里按顶层读 ⇒ 四个格子恒为 0。 */
+  stats?: WatcherStats
 }
 
 const ui = useUiStore()
@@ -80,10 +86,10 @@ const autoProcess = computed(() => Boolean(val('watcher.enabled')))
 const dirty = computed(() => cfg.value != null && autoProcess.value !== running.value)
 
 const counters = computed(() => [
-  { k: '已转换', v: watcher.value?.converted ?? watcher.value?.processed ?? 0 },
-  { k: '已添加', v: watcher.value?.added ?? 0 },
-  { k: '失败', v: watcher.value?.failed ?? 0 },
-  { k: '扫描轮次', v: watcher.value?.scans ?? 0 },
+  { k: '已转换', v: watcher.value?.stats?.converted ?? 0 },
+  { k: '已添加', v: watcher.value?.stats?.added ?? 0 },
+  { k: '失败', v: watcher.value?.stats?.failed ?? 0 },
+  { k: '扫描轮次', v: watcher.value?.stats?.scans ?? 0 },
 ])
 
 // ---- 五态流水线（B3）：All / Needs review / Pending / Ready / Error ----
@@ -563,11 +569,25 @@ async function onPickedFile(e: Event): Promise<void> {
   }
 }
 
+// 实时刷新（第 153 期）：后端在条目增/删/改、扫描收尾时推 `book-dock:changed`。
+// 一次扫描会推很多条，**500ms 合并一次**；断线时本页仍靠手动刷新/重新进入。
+let offRealtime: (() => void) | null = null
+let dockReloadTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleDockReload(): void {
+  if (dockReloadTimer !== null) return
+  dockReloadTimer = setTimeout(() => {
+    dockReloadTimer = null
+    void refresh()
+  }, 500)
+}
+
 onMounted(async () => {
   window.addEventListener('dragenter', onDragEnter)
   window.addEventListener('dragover', onDragOver)
   window.addEventListener('dragleave', onDragLeave)
   window.addEventListener('drop', onDrop)
+  offRealtime = onRealtime('book-dock:changed', () => scheduleDockReload())
   try {
     health.value = await api.health()
   } catch {
@@ -586,6 +606,12 @@ onBeforeUnmount(() => {
   window.removeEventListener('dragover', onDragOver)
   window.removeEventListener('dragleave', onDragLeave)
   window.removeEventListener('drop', onDrop)
+  offRealtime?.()
+  offRealtime = null
+  if (dockReloadTimer !== null) {
+    clearTimeout(dockReloadTimer)
+    dockReloadTimer = null
+  }
 })
 </script>
 
@@ -675,7 +701,7 @@ onBeforeUnmount(() => {
 
       <!-- 计数 -->
       <div class="grid grid-cols-2 gap-x-4 gap-y-2 px-4 py-3.5 sm:grid-cols-4">
-        <div v-for="c in counters" :key="c.k" class="min-w-0">
+        <div v-for="c in counters" :key="c.k" class="min-w-0" :data-dock-counter="c.k">
           <div class="text-[11px] text-muted-foreground">{{ c.k }}</div>
           <div class="mt-0.5 text-[13px] font-medium text-foreground tabular-nums">{{ c.v }}</div>
         </div>

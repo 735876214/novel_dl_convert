@@ -501,4 +501,20 @@ describe('BookDockPage · 工具栏「上传」（第 70 期）', () => {
     expect(vi.mocked(api.convertDrop)).not.toHaveBeenCalled()
     expect(ui.toastMessage).toContain('还没有书库')
   })
+
+  it('统计读 watcher.stats（顶层没有这几个字段），不再恒显示 0', async () => {
+    // 第 153 期：`/api/watcher` 的 status() 把计数放在 stats 下。
+    // 之前按顶层读 ⇒ 四个格子永远是 0，页面看起来「监听没在干活」。
+    vi.mocked(api.watcherStatus).mockResolvedValue({
+      running: true,
+      stats: { converted: 12, added: 9, failed: 2, scans: 34 },
+    } as never)
+    const w = await mountPage()
+    const cell = (k: string): string => w.find(`[data-dock-counter="${k}"]`).text()
+
+    expect(cell('已转换')).toContain('12')
+    expect(cell('已添加')).toContain('9')
+    expect(cell('失败')).toContain('2')
+    expect(cell('扫描轮次')).toContain('34')
+  })
 })
