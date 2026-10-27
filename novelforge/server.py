@@ -3801,6 +3801,80 @@ def _cover_cached(bid: str, src, produce, width: int = 0):
     return _cover_response(data, media)
 
 
+#: 封面编辑器（第 155 期）接受的栅格格式。**不收 SVG**：SVG 是可执行文档，
+#: 走「上传」比走「在线抓取」多一层用户自担风险，而这条路径的收益不值得开。
+_COVER_UPLOAD_MAX = 8 * 1024 * 1024
+_COVER_UPLOAD_TYPES = {
+    "JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp", "GIF": "image/gif",
+}
+
+
+def _validate_cover_upload(data: bytes) -> str:
+    """用 Pillow 验一遍上传的封面，返回 media_type；坏图 / 超限直接 4xx。
+
+    只认 Pillow 能解开的光栅图 —— 伪造成 `.jpg` 的任意字节会在这里被拦下，
+    而不是等到浏览器 `<img>` 解码失败才暴露。
+    """
+    if not data:
+        raise HTTPException(400, "封面文件为空")
+    if len(data) > _COVER_UPLOAD_MAX:
+        raise HTTPException(413, "封面超过 8MB 上限")
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(data)) as im:
+            fmt = (im.format or "").upper()
+            im.verify()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(400, "不是可识别的图片文件") from None
+    mt = _COVER_UPLOAD_TYPES.get(fmt)
+    if not mt:
+        raise HTTPException(400, f"不支持的图片格式：{fmt or '未知'}")
+    return mt
+
+
+@app.post("/api/books/{bid}/cover")
+async def api_upload_cover(bid: str, file: UploadFile = File(...)):
+    """上传自定义封面（第 155 期）。只落服务端 DB，不写书文件。"""
+    if not library.by_id_status(bid)[0]:
+        raise HTTPException(404, "书籍不存在")
+    data = await file.read(_COVER_UPLOAD_MAX + 1)
+    mt = _validate_cover_upload(data)
+    db.set_cover(bid, data, mt)
+    # 列表缓存里带着 has_cover；封面变了要立刻让卡片跟上（详情不读列表缓存）。
+    catalog.invalidate(None)
+    return {"ok": True, "media_type": mt, "bytes": len(data)}
+
+
+@app.post("/api/books/{bid}/cover/url")
+def api_cover_from_url(bid: str, payload: dict = Body(...)):
+    """从 URL 抓一张封面（第 155 期）。出站闸与体积/小图校验复用 metafetch。"""
+    if not library.by_id_status(bid)[0]:
+        raise HTTPException(404, "书籍不存在")
+    url = str((payload or {}).get("url") or "").strip()
+    if not url:
+        raise HTTPException(400, "url 不能为空")
+    try:
+        data, mt = metafetch._download_cover(url)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    db.set_cover(bid, data, mt or "image/jpeg")
+    catalog.invalidate(None)
+    return {"ok": True, "media_type": mt or "image/jpeg", "bytes": len(data)}
+
+
+@app.delete("/api/books/{bid}/cover")
+def api_delete_cover(bid: str):
+    """移除服务端封面（回退内嵌封面 / 渐变占位）。不碰书文件。"""
+    if not library.by_id_status(bid)[0]:
+        raise HTTPException(404, "书籍不存在")
+    removed = db.get_cover(bid) is not None
+    db.set_cover(bid, b"")
+    catalog.invalidate(None)
+    return {"ok": True, "removed": removed}
+
+
 @app.get("/api/books/{bid}/cover")
 def api_book_cover(bid: str, w: int = 0):
     """书籍封面。``?w=NNN`` 可要缩略图（第 152 期，见 `core/thumbs.py`）。

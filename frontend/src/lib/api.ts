@@ -3477,6 +3477,34 @@ export const api = {
     return `/api/books/${encodeURIComponent(bid)}/cover${suffix}`
   },
 
+  /** 上传自定义封面（第 155 期）；落服务端 DB，不改书文件。 */
+  uploadCover: (bid: string, file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return request<{ ok: boolean; media_type: string; bytes: number }>(
+      `/api/books/${encodeURIComponent(bid)}/cover`,
+      { method: 'POST', body: form },
+    )
+  },
+
+  /** 从 URL 抓封面（后端出站闸 + 体积/小图校验）。 */
+  coverFromUrl: (bid: string, url: string) =>
+    request<{ ok: boolean; media_type: string; bytes: number }>(
+      `/api/books/${encodeURIComponent(bid)}/cover/url`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      },
+    ),
+
+  /** 移除服务端封面（回退内嵌 / 占位）。 */
+  deleteCover: (bid: string) =>
+    request<{ ok: boolean; removed: boolean }>(
+      `/api/books/${encodeURIComponent(bid)}/cover`,
+      { method: 'DELETE' },
+    ),
+
   // ---------- 漫画（CBZ / CBR）----------
   /** 漫画页清单。前端按 index 逐页取图，不一次拉整本（一话可能几十 MB） */
   comicPages: (bid: string) =>

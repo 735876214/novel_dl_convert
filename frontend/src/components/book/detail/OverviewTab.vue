@@ -137,6 +137,57 @@ async function resetAdded(): Promise<void> {
     addedError.value = e instanceof Error ? e.message : '恢复失败'
   }
 }
+
+// ---------------- 封面（第 155 期）----------------
+const coverBusy = ref(false)
+const coverUrlDraft = ref('')
+const coverError = ref('')
+
+async function uploadCover(e: Event): Promise<void> {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  coverBusy.value = true
+  coverError.value = ''
+  try {
+    await api.uploadCover(props.book.id, file)
+    emit('refresh')
+  } catch (err) {
+    coverError.value = err instanceof Error ? err.message : '上传失败'
+  } finally {
+    coverBusy.value = false
+    input.value = ''
+  }
+}
+
+async function applyCoverUrl(): Promise<void> {
+  const url = coverUrlDraft.value.trim()
+  if (!url) return
+  coverBusy.value = true
+  coverError.value = ''
+  try {
+    await api.coverFromUrl(props.book.id, url)
+    coverUrlDraft.value = ''
+    emit('refresh')
+  } catch (err) {
+    coverError.value = err instanceof Error ? err.message : '抓取失败'
+  } finally {
+    coverBusy.value = false
+  }
+}
+
+async function removeCover(): Promise<void> {
+  coverBusy.value = true
+  coverError.value = ''
+  try {
+    await api.deleteCover(props.book.id)
+    emit('refresh')
+  } catch (err) {
+    coverError.value = err instanceof Error ? err.message : '移除失败'
+  } finally {
+    coverBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -223,6 +274,40 @@ async function resetAdded(): Promise<void> {
         </div>
         <p v-if="addedError" class="mt-1 text-[11px] text-destructive">{{ addedError }}</p>
       </div>
+    </Card>
+
+    <!-- 封面（第 155 期）：只存服务端 DB，不写书文件 -->
+    <Card class="mt-4">
+      <h3 class="mb-2 text-[13px] font-semibold text-foreground">封面</h3>
+      <p class="mb-2 text-[11.5px] text-muted-foreground">
+        自定义封面只保存在应用数据库，不写回书文件；移除后回退内嵌封面或渐变占位。
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <input
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif"
+          aria-label="上传封面"
+          class="max-w-[12rem] text-[11.5px] text-muted-foreground file:mr-2 file:cursor-pointer file:rounded-md file:border file:border-border file:bg-muted file:px-2 file:py-1 file:text-[11.5px] file:text-foreground"
+          :disabled="coverBusy"
+          @change="uploadCover"
+        >
+        <input
+          v-model="coverUrlDraft"
+          type="url"
+          aria-label="封面 URL"
+          placeholder="https://…"
+          class="h-7 min-w-[10rem] flex-1 rounded-md border border-border bg-card px-2 text-[12px] text-foreground outline-none focus:border-ring"
+          :disabled="coverBusy"
+          @keyup.enter="applyCoverUrl"
+        >
+        <Button size="sm" variant="secondary" :disabled="coverBusy || !coverUrlDraft.trim()" @click="applyCoverUrl">
+          从 URL 应用
+        </Button>
+        <Button size="sm" variant="ghost" :disabled="coverBusy" @click="removeCover">
+          移除服务端封面
+        </Button>
+      </div>
+      <p v-if="coverError" class="mt-1 text-[11px] text-destructive">{{ coverError }}</p>
     </Card>
   </div>
 </template>
