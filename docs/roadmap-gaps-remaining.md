@@ -10510,3 +10510,24 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 11. **书架 CLS 0.081**：首字母跳转条在数据到达后才出现，把网格往下推；给它预留高度即可。
 12. **弹窗遮罩 5 种写死不透明度**（只有 2 处用 `--scrim`）、`text-muted-foreground/80` 浅色 2.81:1、20 个格式徽章 10 个 3.97–4.29:1、空星 1.32:1 —— 视觉 token 层面的收口，改动面广但单点风险低。
 13. **首屏字体最多 202 KB（4 个 woff2 分片）且没有 preload**；`blurred` 封面形态与 stack/mosaic 折叠形态会让同一屏的封面请求数乘 2–4 倍（缩略图已把单张降到 37.5 KB，收益相应变小）。
+
+## 第 153 期（BookOrbit 全量对齐：独立复核 + Phase 0 工程地基）
+
+**需求来源**：用户要求「梳理本项目与 `http://192.168.0.95:3400/` 项目功能上的异同，不参考本项目原本写的异同点，重新做，并把差异内容列出如何整改」；随后追加范围：§3.5 有声书/播客全做、§3.1 上游有本项目没有的全做（写回书文件跳过）、read-along 做、PWA / 实时更新 / 安全响应头 / URL 形态照 BookOrbit 做。
+
+**取证（未登录、只读、不采信旧文档）**：抓取线上构建产物（`last-modified: 2026-10-20`）⇒ **320 条** `/api/v1` 路径 / **472 个** chunk（**42 个**设置页）/ **13 个** i18n 命名空间；本地比对 **346 条**路由 / 76 个 core 模块 / 24 个视图 / 37 个设置页 / 鸿蒙端 / CLI。10 个功能域独立比对 + 每域对抗性核查（**10/10 全部核查**；catalog / metadata 首轮 agent 失败后单独重跑）。结论：同/近同约 **125**、本项目独有 **76**、上游独有 **196**、同名不同义 **108**；四类差距 = 书目与治理的可表达性、有声书/播客、read-along、平台形态。
+
+**本期实施（Phase 0 · 工程地基）**：
+1. 新增 `docs/bookorbit/bookorbit-live-diff-2026-10.md`（含附录 A/B/C 全表）与 `bookorbit-live-inventory-2026-10.md`（320 API / 472 chunk / 42 设置页 / 13 i18n 命名空间）；
+   旧的三份对照文档**未采信**，只在 README/AGENTS 的文档地图里并列。
+2. **history 路由**：`createWebHistory`；FastAPI `/{path:path}` SPA 兜底（保留前缀 + 静态扩展名白名单；`/content` 仍 404；未匹配的非 GET 也回 404 而不是 405）；`boot.js` 把旧 `/#/x` 重写成 `/x`。
+3. **全局安全响应头**：CSP / Referrer-Policy / X-Frame-Options / CORP / Permissions-Policy；内联 theme-init 外置为 `boot.js`；媒体出口的 `CSP: sandbox` 用 `setdefault` 保住（`tests/test_media_headers_135.py` 同步 2 → 3，仍是单一数据源）。
+4. **PWA**：manifest + 192/512/maskable PNG + apple-touch-icon + `theme-color` + **Service Worker**（根路径提供 + `Service-Worker-Allowed: /`；导航 network-first、`/assets/` cache-first、API/WS 不缓存）。
+5. **实时**：`core/events.py` 进程内事件总线 + `/ws`（token 鉴权，4401 拒绝）；发布点 = 活动日志 / `db.set_progress` / Book Dock / 刮削状态；前端 `lib/realtime.ts` + 指数退避重连 + 轮询回退；通知角标与 Book Dock 已接线（500–600ms 合并刷新）。
+6. **修 Book Dock 统计恒 0**：读 `watcher.stats.*`（`/api/watcher` 的 `status()` 把计数放在 `stats` 下），spec 断言非 0。
+
+**防回归**：新增 `tests/test_spa_routing.py`（9 例：深链 / 带点系列名 / API 404 / 静态缺失 / 后端前缀 / 安全头 / 媒体 sandbox / SW 头 / SW 缺失）、`tests/test_realtime.py`（3 例）、`frontend/src/lib/realtime.spec.ts`（4 例）、`BookDockPage.spec.ts` +1；`/content` 404 与「POST 已删接口不得 405」由既有 `test_api_smoke` / `test_komga_client` / `test_naming_publish` 钉住；新 spec 已登记 `tests/test_frontend_unit_contract.py`。
+
+**有意差异**：WebSocket 是原生协议（上游 Socket.IO），事件名对齐；SW 不缓存 API/WS（安全优先）；全局 CSP 不覆盖媒体 sandbox；旧 `#/` 链接只在启动时迁移，不再支持运行时改 hash 导航。
+
+**下一步**：Phase 1 书目与治理（排序 / 按库凭据 / 分面 / 分桶 / added-at / 受管副本批量改名 / 封面编辑器 / 重复治理 / 实体 7 类 / 服务端筛选分页 / 评分权重版本 …，见 `docs/TODO.md` P0 段）；评估项 TTS / Kobo / KOReader 插件另行立项。
