@@ -28,6 +28,8 @@ const { nameOf } = useLibraryNames()
 
 const groups = ref<DuplicateGroup[]>([])
 const total = ref(0)
+/** 已持久化的「不是重复」对数（第 154 期）；>0 时页头给「恢复显示」 */
+const dismissed = ref(0)
 const loading = ref(true)
 const busy = ref(false)
 /** 加载失败信息：失败不能退化成「没有发现重复书籍」。 */
@@ -119,6 +121,7 @@ function load(): void {
     .then((r) => {
       groups.value = r.groups ?? []
       total.value = r.total ?? 0
+      dismissed.value = r.dismissed ?? 0
       // 重新扫描后重建保留项：**保留用户已选的**（只要那一项还在这组里），
       // 否则回落到默认 —— 否则每次切回标签都会把用户的选择重置掉。
       const next: Record<string, string> = {}
@@ -138,9 +141,35 @@ function load(): void {
     })
 }
 
+/** 标记「这组不是重复」（第 154 期）：持久化后重新加载，组会从列表消失。 */
+async function dismissGroup(g: DuplicateGroup): Promise<void> {
+  const ids = g.items.map((it) => it.id).filter((x): x is string => !!x)
+  if (ids.length < 2) {
+    ui.toast('这一组缺少 book_id，无法标记（刷新后重试）')
+    return
+  }
+  try {
+    await api.dismissDuplicates(ids)
+    ui.toast('已标记为「不是重复」，以后不再提示')
+    load()
+  } catch (e) {
+    ui.toast(apiErrorMessage(e, '标记失败'))
+  }
+}
+
+/** 恢复显示所有被标记为「不是重复」的组合。 */
+async function restoreDismissals(): Promise<void> {
+  try {
+    const r = await api.clearDuplicateDismissals()
+    ui.toast(r.removed ? `已恢复 ${r.removed} 条判定` : '没有可恢复的判定')
+    load()
+  } catch (e) {
+    ui.toast(apiErrorMessage(e, '恢复失败'))
+  }
+}
+
 /** 改阈值后重扫。换阈值等于换判定口径，用户已选的保留项可能已不在组里，交给 load 兜底 */
-function setThreshold(v: number): void {
-  if (threshold.value === v) return
+function setThreshold(v: number): void {  if (threshold.value === v) return
   threshold.value = v
   load()
 }
@@ -210,11 +239,21 @@ function apply(): void {
       <span class="text-[11.5px] text-muted-foreground">
         共扫描 {{ total }} 本书目，发现 {{ groups.length }} 组重复
       </span>
+      <span v-if="dismissed" class="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
+        已忽略 {{ dismissed }} 条两两判定
+        <button
+          type="button"
+          class="cursor-pointer text-primary hover:underline"
+          @click="restoreDismissals"
+        >恢复显示</button>
+      </span>
     </div>
 
     <p class="text-[11.5px] text-muted-foreground">
-      判定口径：<span class="text-foreground">同作者</span>（归一化后一致为前提）+
-      书名相似度 ≥ {{ threshold }}%。前提之外只看书名，标点、空格与「校对版全本」这类版本后缀都会先被忽略。
+      判定口径：<span class="text-foreground">文件内容相同</span>（同尺寸候选按 sha256）或
+      <span class="text-foreground">ISBN 相同</span>，或
+      <span class="text-foreground">同作者</span> + 书名相似度 ≥ {{ threshold }}%。
+      同名不同作者不算；同一物理文件被两个库各登记一次也不会被当成重复。
     </p>
 
     <p v-if="lastRecycleDir" class="flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
@@ -246,7 +285,8 @@ function apply(): void {
             </h3>
             <span class="truncate text-[11.5px] text-muted-foreground">{{ g.author }}</span>
             <Badge v-if="g.cross_library" tone="accent">跨库重复</Badge>
-            <Badge class="ml-auto">{{ g.items.length }} 份</Badge>
+            <Button size="sm" variant="ghost" class="ml-auto" @click="dismissGroup(g)">不是重复</Button>
+            <Badge>{{ g.items.length }} 份</Badge>
           </div>
 
           <p class="border-b border-border/60 bg-muted/40 px-4 py-2 text-[11.5px] text-muted-foreground">

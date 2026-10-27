@@ -295,6 +295,14 @@ def init():
                 added_at   REAL NOT NULL,
                 updated_at REAL NOT NULL
             );
+            -- 重复书的「不是重复」持久判定（第 154 期）：键是**一对 book_id 的有序拼接**
+            -- （`min|max`），不存 book_id 列 —— 因此不进 ORPHAN/REMAP 清单。
+            -- 改名 / 换库后旧键自然不再命中（等于自动失效），不会误伤新书；
+            -- 想恢复只需删掉这一行（`DELETE /api/duplicates/dismissals`）。
+            CREATE TABLE IF NOT EXISTS duplicate_dismissals (
+                pair_key   TEXT PRIMARY KEY,
+                created_at REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS annotations (
                 id         INTEGER PRIMARY KEY,
                 book_id    TEXT NOT NULL,
@@ -4306,6 +4314,42 @@ def clear_book_added_in(bids) -> int:
             n += int(cur.rowcount or 0)
         c.commit()
     return n
+
+
+# ---------------- 重复书「不是重复」判定（第 154 期）----------------
+
+def dismissal_keys() -> set:
+    """已持久化的「不是重复」对：``{pair_key}``。"""
+    rows = _connect().execute("SELECT pair_key FROM duplicate_dismissals").fetchall()
+    return {str(r["pair_key"]) for r in rows}
+
+
+def add_dismissals(pair_keys) -> int:
+    """记录若干对「不是重复」；幂等。返回新增行数。"""
+    keys = [str(k) for k in (pair_keys or []) if str(k or "")]
+    if not keys:
+        return 0
+    now = time.time()
+    c = _connect()
+    n = 0
+    with _lock:
+        for k in keys:
+            cur = c.execute(
+                "INSERT OR IGNORE INTO duplicate_dismissals(pair_key, created_at) VALUES(?,?)",
+                (k, now),
+            )
+            n += int(cur.rowcount or 0)
+        c.commit()
+    return n
+
+
+def clear_dismissals() -> int:
+    """清空全部「不是重复」判定（恢复显示）。返回删除行数。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM duplicate_dismissals")
+        c.commit()
+        return int(cur.rowcount or 0)
 
 
 # ---------------- 元数据 override / online（第 8 期）----------------

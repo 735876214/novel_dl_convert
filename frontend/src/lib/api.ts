@@ -341,6 +341,8 @@ export interface EntityRenameResult {
 }
 
 export interface DuplicateItem {
+  /** book_id（第 154 期：「不是重复」判定要它；旧响应没有该字段时前端跳过该操作） */
+  id?: string
   name: string
   size: number
   mtime: number
@@ -4053,9 +4055,23 @@ export const api = {
    * libraryId 为空 = 全部书库；给定时只在该库内比对。组上的 cross_library 标跨库重复。
    */
   duplicates: (threshold = 85, libraryId = '') =>
-    request<{ groups: DuplicateGroup[]; total: number; threshold: number }>(
+    request<{ groups: DuplicateGroup[]; total: number; threshold: number; dismissed?: number }>(
       `/api/duplicates?threshold=${threshold}${libraryId ? `&library_id=${encodeURIComponent(libraryId)}` : ''}`,
     ),
+
+  /** 把这组书标记为「不是重复」（第 154 期）。 */
+  dismissDuplicates: (ids: string[]) =>
+    request<{ ok: boolean; added: number; pairs: number }>('/api/duplicates/dismiss', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }),
+
+  /** 清空全部「不是重复」判定。 */
+  clearDuplicateDismissals: () =>
+    request<{ ok: boolean; removed: number }>('/api/duplicates/dismissals', {
+      method: 'DELETE',
+    }),
 
   // ---------- Komga 库布局（输出侧）----------
   /** 预览「整理为 Komga 布局」：哪些书会移进系列目录（只算不改） */

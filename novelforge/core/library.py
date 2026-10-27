@@ -2736,21 +2736,22 @@ def entities(kind: str, library_id=None) -> dict:
     return {"type": kind, "items": items, "total": len(bs)}
 
 
-def duplicate_groups(threshold: int = 85, library_id=None) -> dict:
-    """重复书目分组：**归一化后同作者 + 书名相似度 ≥ threshold**。
+def duplicate_groups(threshold: int = 85, library_id=None, dismissed=None) -> dict:
+    """重复书目分组：**同作者书名相似 / ISBN 相同 / 文件内容相同**。
 
-    与上游 Calibre 的「Similar-title threshold」同口径（默认 85%）：
-      · 作者必须一致（归一化后完全相同）—— 同名不同作者的书不是重复；
-      · 书名用 difflib 相似度比较，阈值可调：调低抓更多近似（含「XX 第2版」这类），
-        调高只留几乎全同的；
-      · 没有作者的书只在同样缺作者的书之间互比，避免把一堆「佚名」混作一组。
+    三类判据（第 154 期起）：
+      · **文件内容完全相同**：同尺寸候选按 sha256 比对（只哈希同尺寸的文件；
+        >512 MB 的大文件跳过，避免一次工具页扫描把 NAS 读满）；
+      · **ISBN 相同**：`metadata.isbn_digits` 归一后相同（非空才参与）；
+      · **同作者 + 书名相似度 ≥ threshold**（默认 85%，同 Calibre 口径）。
 
-    聚类用并查集单链法：A~B、B~C 达标会把 A、B、C 并成一组（传递闭包），
-    这与「人工看重复」的直觉一致 —— 中间那本把两头的书连起来了。
+    聚类用**全局并查集**：三类边都并进同一棵树，所以「A/B 文件相同、B/C 书名相似」
+    会得到一组而不是两组。同一物理文件被两个库各登记一次（判据是绝对 ``path``）
+    **不并组** —— 那不是重复的书，是同一份文件登记了两遍；清掉其中一条会把唯一
+    那份文件搬进回收站（第 121 期实测整本消失）。
 
-    ``library_id`` 给定时只在该库内找重复（工具页默认只看当前库）；缺省 = 全部书库。
-    每条 item 都带 ``library_id``，组上给 ``cross_library`` —— 「全部书库」范围下
-    分属不同库的重复会被明确标成**跨库重复**（这正是最该被注意的情形）。
+    ``dismissed`` 是「不是重复」的 pair key 集合（``db.dismissal_keys()``）：**一组里
+    所有两两组合都被忽略**时整组不返回；只忽略了一部分时仍返回（剩下的是真候选）。
     """
     from difflib import SequenceMatcher
 
@@ -2759,98 +2760,158 @@ def duplicate_groups(threshold: int = 85, library_id=None) -> dict:
     except (TypeError, ValueError):
         threshold = 85
     thr = threshold / 100.0
+    dismissed = {str(x) for x in (dismissed or ())}
 
     bs = books(library_id)
+    n = len(bs)
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def path_of(i: int) -> str:
+        return str(bs[i].get("path") or "")
+
+    def same_physical(i: int, j: int) -> bool:
+        p = path_of(i)
+        return bool(p) and p == path_of(j)
+
+    def join(i: int, j: int) -> None:
+        if i == j or same_physical(i, j):
+            return
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[rj] = ri
+
+    # 1) 书名相似（同作者）—— 便宜预筛的数学下界见原实现注释，别删。
     by_author: dict = {}
-    for b in bs:
+    for i, b in enumerate(bs):
         t = norm_key(b["title"])
-        if not t:
+        if t:
+            by_author.setdefault(norm_key(b["author"]), []).append((i, t))
+    for items in by_author.values():
+        m = len(items)
+        if m < 2:
             continue
-        by_author.setdefault(norm_key(b["author"]), []).append((b, t))
-
-    groups = []
-    for akey, items in by_author.items():
-        n = len(items)
-        if n < 2:
-            continue
-        parent = list(range(n))
-
-        # ⚠️ `find` 闭包捕获外层循环变量 `parent`（ruff B023 会报）。**这里不是缺陷**：
-        # 它只在本轮被调用（并查集用完即弃），下一轮 `parent` 已经重新绑定、旧闭包不再被引用。
-        # 唯一真缺陷的形态是「把闭包存起来事后调用」，见本文件别处一律显式传参的写法。
-        def find(x: int) -> int:
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-
-        for i in range(n):
-            for j in range(i + 1, n):
-                ti, tj = items[i][1], items[j][1]
-                # ⚠️ **同一物理文件**（同一个 ``path`` 被两个库各登记一次，例如 ebook 库
-                # 与 comic 库指向同一个文件夹、白名单都含 .zip）**不是两本重复的书**，
-                # 是同一本被登记了两遍（第 121 期修的缺陷）。把它算进重复组的后果很重：
-                # 用户「保留一本、清掉另一本」时，`recycle_items` 按路径把**唯一那份文件**
-                # 搬进回收站，保留方跟着消失（实测整本从书架消失）。
-                # 判据只用 ``path``：它是索引行按实际落点拼出的绝对路径，与 name 无关。
-                if str(items[i][0].get("path") or "") == str(items[j][0].get("path") or "") != "":
-                    continue
-                # 便宜预筛：ratio = 2M/(lenA+lenB) 且 M ≤ min，故 ratio ≤ 2*min/(min+max)。
-                # 由此得必要条件 max/min ≤ (2-thr)/thr —— 超过它相似度**数学上不可能**达标。
-                # ⚠️ 不能用「长度差占比」(lenA-lenB)/max：那不是有效下界
-                #    （"abc"/"abcd" 长度差 25%，相似度仍有 0.857，会被误杀）。
-                lo, hi = (len(ti), len(tj)) if len(ti) <= len(tj) else (len(tj), len(ti))
+        for a in range(m):
+            for c in range(a + 1, m):
+                ia, ta = items[a]
+                ic, tc = items[c]
+                lo, hi = (len(ta), len(tc)) if len(ta) <= len(tc) else (len(tc), len(ta))
                 if not lo or hi / lo > (2 - thr) / thr:
                     continue
-                if SequenceMatcher(None, ti, tj).ratio() >= thr:
-                    ri, rj = find(i), find(j)
-                    if ri != rj:
-                        parent[rj] = ri
+                if SequenceMatcher(None, ta, tc).ratio() >= thr:
+                    join(ia, ic)
 
-        clusters: dict = {}
-        for idx in range(n):
-            clusters.setdefault(find(idx), []).append(items[idx])
+    # 2) ISBN 相同
+    by_isbn: dict = {}
+    for i, b in enumerate(bs):
+        isbn = metadata.isbn_digits(b.get("isbn"))
+        if isbn:
+            by_isbn.setdefault(isbn, []).append(i)
+    for idxs in by_isbn.values():
+        for j in idxs[1:]:
+            join(idxs[0], j)
 
-        for members in clusters.values():
-            # 兜底去重：传递闭包可能把「同一文件的两条登记」经第三本连进同一组
-            # （A~B、B~C 达标），这里按 path 再收一次，只留第一条。
-            seen_paths: set = set()
-            deduped = []
-            for m in members:
-                p = str(m[0].get("path") or "")
-                if p and p in seen_paths:
+    # 3) 文件内容相同（只哈希同尺寸的普通文件；>512MB 跳过）
+    MAX_HASH = 512 * 1024 * 1024
+    by_size: dict = {}
+    for i, b in enumerate(bs):
+        sz = int(b.get("size") or 0)
+        if sz > 0:
+            by_size.setdefault(sz, []).append(i)
+    file_hash: dict = {}
+    for sz, idxs in by_size.items():
+        if len(idxs) < 2 or sz > MAX_HASH:
+            continue
+        buckets: dict = {}
+        for i in idxs:
+            p = pathlib.Path(path_of(i))
+            try:
+                if not p.is_file():
                     continue
-                if p:
-                    seen_paths.add(p)
-                deduped.append(m)
-            members = deduped
-            if len(members) < 2:
+                h = hashlib.sha256()
+                with p.open("rb") as f:
+                    for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                        h.update(chunk)
+            except OSError:
                 continue
-            ms = [m[0] for m in members]
-            # 组内最小相似度 = 这组「最不像的一对」，是判定强度最诚实的体现
+            digest = h.hexdigest()
+            file_hash[i] = digest
+            buckets.setdefault(digest, []).append(i)
+        for same in buckets.values():
+            for j in same[1:]:
+                join(same[0], j)
+
+    clusters: dict = {}
+    for i in range(n):
+        clusters.setdefault(find(i), []).append(i)
+
+    groups = []
+    for members in clusters.values():
+        # 同一物理文件的多条登记只留第一条（与旧实现同口径）
+        seen_paths: set = set()
+        keep: list = []
+        for i in members:
+            p = path_of(i)
+            if p and p in seen_paths:
+                continue
+            if p:
+                seen_paths.add(p)
+            keep.append(i)
+        if len(keep) < 2:
+            continue
+
+        ids = [str(bs[i].get("id") or "") for i in keep]
+        pairs = {
+            (min(ids[a], ids[c]) + "|" + max(ids[a], ids[c]))
+            for a in range(len(ids)) for c in range(a + 1, len(ids))
+            if ids[a] and ids[c]
+        }
+        if dismissed and pairs and pairs <= dismissed:
+            continue
+
+        isbns = {metadata.isbn_digits(bs[i].get("isbn")) for i in keep}
+        hashes = {file_hash.get(i, "") for i in keep}
+        tlist = [norm_key(bs[i].get("title")) for i in keep]
+        if len(hashes) == 1 and next(iter(hashes)):
+            reason, similarity = "文件内容完全相同", 100
+        elif len(isbns) == 1 and next(iter(isbns)):
+            reason, similarity = "ISBN 相同", 100
+        elif len(set(tlist)) == 1 and tlist and tlist[0]:
+            reason, similarity = "书名与作者完全相同", 100
+        else:
+            reason = f"同作者 · 书名相似度 ≥ {threshold}%"
             sims = [
-                SequenceMatcher(None, members[i][1], members[j][1]).ratio()
-                for i in range(len(members)) for j in range(i + 1, len(members))
+                SequenceMatcher(None, tlist[a], tlist[c]).ratio()
+                for a in range(len(tlist)) for c in range(a + 1, len(tlist))
+                if tlist[a] and tlist[c]
             ]
-            exact = len({m[1] for m in members}) == 1
-            libs = {str(m[0].get("library_id") or "") for m in members}
-            groups.append({
-                "key": f"{akey}|{ms[0]['id']}",
-                "reason": ("书名与作者完全相同" if exact
-                           else f"同作者 · 书名相似度 ≥ {threshold}%"),
-                "similarity": round(min(sims) * 100) if sims else 100,
-                "title": ms[0]["title"],
-                "author": ms[0]["author"],
-                "cross_library": len(libs) > 1,
-                "items": [
-                    {"name": i["name"], "size": i["size"], "mtime": i["mtime"],
-                     "format": i["format"], "library_id": i.get("library_id")}
-                    for i in ms
-                ],
-            })
+            similarity = round(min(sims) * 100) if sims else 0
+
+        libs = {str(bs[i].get("library_id") or "") for i in keep}
+        key_ids = [x for x in ids if x]
+        groups.append({
+            "key": f"{norm_key(bs[keep[0]]['author'])}|{min(key_ids) if key_ids else ''}",
+            "reason": reason,
+            "similarity": similarity,
+            "title": bs[keep[0]]["title"],
+            "author": bs[keep[0]]["author"],
+            "cross_library": len(libs) > 1,
+            "items": [
+                {"id": bs[i].get("id"), "name": bs[i]["name"], "size": bs[i]["size"],
+                 "mtime": bs[i]["mtime"], "format": bs[i]["format"],
+                 "library_id": bs[i].get("library_id")}
+                for i in keep
+            ],
+        })
     # 跨库重复排前面：分属不同库的同名书是最该先看的（它们还会撞 book_id）
     groups.sort(key=lambda g: (not g["cross_library"], -len(g["items"]), -g["similarity"]))
-    return {"groups": groups, "total": len(bs), "threshold": threshold}
+    return {"groups": groups, "total": len(bs), "threshold": threshold,
+            "dismissed": len(dismissed)}
 
 
 def missing_items(library_id=None) -> dict:

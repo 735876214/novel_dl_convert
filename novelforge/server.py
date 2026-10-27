@@ -10124,7 +10124,34 @@ def api_duplicates(threshold: int = Query(85, ge=50, le=100), library_id: str = 
     组上的 ``cross_library`` = **跨库重复**（分属不同库）——最该先处理的那批：
     它们往往同时撞 ``book_id``，会连带出「进度张冠李戴」的冲突（见 /api/library-conflicts）。
     """
-    return library.duplicate_groups(threshold, _opt_library(library_id) or None)
+    return library.duplicate_groups(threshold, _opt_library(library_id) or None,
+                                    db.dismissal_keys())
+
+
+@app.post("/api/duplicates/dismiss")
+def api_duplicates_dismiss(payload: dict = Body(...)):
+    """把这组书两两标记为「不是重复」（第 154 期）。
+
+    body ``{"ids": [book_id, ...]}``（至少 2 个）。持久化的是**有序 pair key**
+    （`min|max`）—— 一组里所有 pair 都被忽略时，`/api/duplicates` 才不再返回该组；
+    只忽略一部分时仍返回剩下的候选。改名 / 换库后旧 key 自然失效，不会误伤新书。
+    """
+    ids = (payload or {}).get("ids")
+    if not isinstance(ids, list) or len(ids) < 2:
+        raise HTTPException(400, "ids 至少要有 2 个 book_id")
+    vals = sorted({str(x) for x in ids if str(x or "")})
+    if len(vals) < 2:
+        raise HTTPException(400, "ids 至少要有 2 个不同的 book_id")
+    pairs = [min(a, b) + "|" + max(a, b)
+             for i, a in enumerate(vals) for b in vals[i + 1:]]
+    added = db.add_dismissals(pairs)
+    return {"ok": True, "added": added, "pairs": len(pairs)}
+
+
+@app.delete("/api/duplicates/dismissals")
+def api_duplicates_clear_dismissals():
+    """清空全部「不是重复」判定（恢复显示）。"""
+    return {"ok": True, "removed": db.clear_dismissals()}
 
 
 @app.post("/api/duplicates/resolve")
