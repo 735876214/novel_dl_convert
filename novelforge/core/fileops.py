@@ -39,7 +39,7 @@ import zipfile
 from xml.sax.saxutils import escape
 
 from .. import config
-from . import activity_log, comics, db, komga, library, metadata, zipkind
+from . import activity_log, comics, db, entities, komga, library, metadata, zipkind
 from .filename import UNSAFE_CHARS, strip_unsafe
 
 RECYCLE_DIRNAME = "recycle"
@@ -357,7 +357,8 @@ def _mark_conflicts(items: list) -> list:
 
 
 def plan_entity_rename(kind: str, frm: str, to: str, library_id=None) -> dict:
-    """把某作者 / 系列名批量改成另一个名字 —— **只写服务端元数据，不动源文件名**。
+    """把某个实体名（第 159 期起 6 类：作者 / 系列 / 题材 / 出版社 / 语言 / 演播者）
+    批量改成另一个名字 —— **只写服务端元数据，不动源文件名**。
 
     第 28 期起与「批量重命名」合并，改名的落盘口径只剩「按命名规则重出版**副本**」
     （见 ``core/scrape.republish``）；本函数因此只产出「该字段生效值等于 ``frm`` 的书」
@@ -376,11 +377,11 @@ def plan_entity_rename(kind: str, frm: str, to: str, library_id=None) -> dict:
         raise ValueError("原名称与新名称都不能为空")
     if not sanitize_stem(to):
         raise ValueError("新名称含非法字符")
-    field = "author" if kind == "author" else "series"
+    entities.field_of(kind)          # 未知类型在这里抛 ValueError（接口层转 400）
 
     items = []
     for b in library.books(library_id):
-        if (b.get(field) or "").strip() != frm:
+        if frm not in entities.values_of(b, kind):
             continue
         name = str(b.get("name") or "")
         items.append({**_mk_item(name, name), "meta_only": True,
@@ -694,7 +695,10 @@ def patch_epub_meta(path: pathlib.Path, updates: dict) -> list:
 # ---------------- 应用 ----------------
 
 def apply_entity_rename(kind: str, frm: str, to: str, library_id=None) -> dict:
-    """把某作者 / 系列名下所有书的该字段写成 ``to``（**只写服务端元数据**）。
+    """把某实体名下所有书的该字段写成 ``to``（**只写服务端元数据**）。
+
+    6 类实体（作者 / 系列 / 题材 / 出版社 / 语言 / 演播者）共用这一条实现；
+    题材与演播者是多值字段，改名只替换**命中的那个标签**，同书其余标签原样保留。
 
     **要改哪些书由这里自己算**（该字段生效值 == ``frm``），不接受调用方传条目：
     预览可能已经过期，让调用方指定目标等于把「动哪些文件 / 写哪些书」交给它 ——
@@ -711,18 +715,28 @@ def apply_entity_rename(kind: str, frm: str, to: str, library_id=None) -> dict:
         raise ValueError("原名称与新名称都不能为空")
     if not sanitize_stem(to):
         raise ValueError("新名称含非法字符")
-    field = "author" if kind == "author" else "series"
+    field, multi = entities.field_of(kind)
 
     done, errors = [], []
     for b in library.books(library_id):
-        if (b.get(field) or "").strip() != frm:
+        vals = entities.values_of(b, kind)
+        if frm not in vals:
             continue
         bid = str(b.get("id") or "")
         name = str(b.get("name") or "")
         try:
             if not bid:
                 raise ValueError("书目缺少 id")
-            db.set_override(bid, field, to)
+            if multi:
+                # 只替换命中的标签；合并同名（A、B 都改成 C）时去重且保序。
+                out = []
+                for tok in vals:
+                    nv = to if tok == frm else tok
+                    if nv not in out:
+                        out.append(nv)
+                db.set_override(bid, field, str(out))
+            else:
+                db.set_override(bid, field, to)
         except Exception as e:                            # noqa: BLE001
             errors.append({"name": name, "error": str(e)})
             activity_log.log(activity_log.ACTION_RENAME, name, activity_log.STATUS_FAIL,

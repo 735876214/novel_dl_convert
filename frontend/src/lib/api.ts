@@ -286,7 +286,7 @@ export interface BookDockResponse {
 
 // ---------- 工具页（实体管理 / 重排册号 / 重复书籍 / 缺失资源） ----------
 
-export type EntityKind = 'author' | 'series'
+export type EntityKind = 'author' | 'series' | 'tag' | 'publisher' | 'language' | 'narrator'
 
 export interface EntityItem {
   name: string

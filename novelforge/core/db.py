@@ -4387,10 +4387,24 @@ def is_cleared(field: str, value) -> bool:
     return str(value) == META_CLEAR and clearable(field)
 
 
+_LIST_META_FIELDS = ("tags", "narrators")
+
+
 def _meta_out(field: str, value):
-    """把覆盖值翻译成对外形态：哨兵 → 「无值」（``tags`` / ``narrators`` 给空列表，其余给空串）。"""
+    """把覆盖值翻译成对外形态。
+
+    - 哨兵 → 「无值」（``tags`` / ``narrators`` 给空列表，其余给空串）；
+    - **多值字段的覆盖值存的是 ``str(list)``** ⇒ 这里必须还原成列表，
+      否则 ``GET /api/books/{bid}/metadata`` 的 ``fields.tags`` 会是
+      ``"['科幻', '经典']"`` 这串 repr，编辑器 ``.join('、')`` 直接抛 TypeError
+      （第 159 期实测：实体改名写入 tags 覆盖后，详情页元数据表单打不开）。
+      解析口径与 `get_effective_meta` / `metastore._online_value` 同一份
+      （``_parse_tags``，兼容 str(list) 与分隔符串）。
+    """
     if is_cleared(field, value):
-        return [] if str(field) in ("tags", "narrators") else ""
+        return [] if str(field) in _LIST_META_FIELDS else ""
+    if str(field) in _LIST_META_FIELDS:
+        return _parse_tags(value)
     return value
 
 

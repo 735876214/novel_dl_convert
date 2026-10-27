@@ -38,8 +38,8 @@ import uuid
 import zipfile
 
 from .. import config
-from . import (audio, audio_meta, comics, db, htmlsafe, komga, metadata,
-                 reading_list, units, zipkind)
+from . import (audio, audio_meta, comics, db, entities as entity_kinds, htmlsafe, komga,
+                 metadata, reading_list, units, zipkind)
 
 # 只把这些扩展名当成「书」；与 /api/files 的全量列表不同，这里是有意收窄的。
 # .cbr（RAR 漫画）自第 9 期起在列 —— 由 core/comics.py 的 zip/rar 双后端解压。
@@ -2724,18 +2724,20 @@ def book_detail(name: str, library_id=None, book: "dict | None" = None) -> dict 
 # ---------------- 聚合 ----------------
 
 def entities(kind: str, library_id=None) -> dict:
-    """按作者或系列聚合：``{type, items: [{name, count, books}]}``。
+    """按实体维度聚合：``{type, items: [{name, count, books}]}``。
 
+    第 159 期起支持 6 类（作者 / 系列 / 题材 / 出版社 / 语言 / 演播者），
+    kind→字段的映射只在 `core.entities` 一处（改名 / 应用 / 入参校验共用）。
+
+    题材与演播者是**多值**：一本书有几个标签就进几个分组（分组内列书名）。
     ``library_id`` 给定时**只看该库**（工具页的「范围：当前库」）；缺省 = 全部书库。
     """
-    field = "author" if kind == "author" else "series"
+    entity_kinds.field_of(kind)      # 未知类型抛 ValueError（接口层转 400）
     bs = books(library_id)
     bucket: dict = {}
     for b in bs:
-        key = (b.get(field) or "").strip()
-        if not key:
-            continue
-        bucket.setdefault(key, []).append(b["name"])
+        for key in entity_kinds.values_of(b, kind):
+            bucket.setdefault(key, []).append(b["name"])
     items = [
         {"name": k, "count": len(v), "books": v}
         for k, v in sorted(bucket.items(), key=lambda kv: (-len(kv[1]), kv[0]))

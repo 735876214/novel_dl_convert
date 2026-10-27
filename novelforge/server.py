@@ -44,7 +44,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
-                   events)
+                   events, entities)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -8864,18 +8864,25 @@ def _opt_library(library_id) -> str:
     return lid
 
 
+def _entity_type(raw) -> str:
+    """实体类型入参校验 —— 合法集合的唯一真值源是 `core.entities.KINDS`。"""
+    kind = str(raw or "author")
+    try:
+        entities.field_of(kind)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    return kind
+
+
 @app.get("/api/entities")
 def api_entities(type_: str = Query("author", alias="type"), library_id: str = ""):
-    if type_ not in ("author", "series"):
-        raise HTTPException(400, "type 只能是 author 或 series")
-    return library.entities(type_, _opt_library(library_id) or None)
+    kind = _entity_type(type_)
+    return library.entities(kind, _opt_library(library_id) or None)
 
 
 @app.post("/api/entities/rename/preview")
 def api_entity_rename_preview(payload: dict = Body(...)):
-    type_ = str(payload.get("type") or "author")
-    if type_ not in ("author", "series"):
-        raise HTTPException(400, "type 只能是 author 或 series")
+    type_ = _entity_type(payload.get("type"))
     try:
         return fileops.plan_entity_rename(
             type_,
@@ -8898,9 +8905,7 @@ def api_entity_rename_apply(payload: dict = Body(...)):
     ``from`` 自己算（见 ``fileops.apply_entity_rename``），预览过期也改不错。
     列表 / 详情 / 实体聚合按新名字走（见 ``library._scan_once`` 的批量合并）。
     """
-    type_ = str(payload.get("type") or "author")
-    if type_ not in ("author", "series"):
-        raise HTTPException(400, "type 只能是 author 或 series")
+    type_ = _entity_type(payload.get("type"))
     try:
         return fileops.apply_entity_rename(
             type_,
@@ -8915,9 +8920,7 @@ def api_entity_rename_apply(payload: dict = Body(...)):
 @app.post("/api/entities/merge")
 def api_entity_merge(payload: dict = Body(...)):
     """合并实体：与改名同构（源名 → 目标名），只返回预览，不直接改文件。"""
-    type_ = str(payload.get("type") or "author")
-    if type_ not in ("author", "series"):
-        raise HTTPException(400, "type 只能是 author 或 series")
+    type_ = _entity_type(payload.get("type"))
     try:
         return fileops.plan_merge(
             type_,

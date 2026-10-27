@@ -14,10 +14,11 @@ import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /**
- * 实体管理：按作者 / 系列聚合成品书目，可重命名、可合并。
+ * 实体管理：按 6 类元数据维度聚合书目（第 159 期：作者 / 系列 / 题材 / 出版社 / 语言 / 演播者），
+ * 可重命名、可合并。收藏夹是第 7 类，但它有独立的数据表与页面，不在这里重复入口。
  *
  * 数据源是扫描各库的书目（后端没有图书库实体）。第 28 期起改名是**纯元数据操作**：
- * 只写服务端元数据覆盖（author / series），源文件名与文件内容都不动 ——
+ * 只写服务端元数据覆盖，源文件名与文件内容都不动 ——
  * 书目的 `book_id` 由文件名派生，所以关联数据（进度 / 批注 / 评分）也不会断链。
  * 想让**副本**名跟着变，去「转换日志 → 刮削 → 命名规则」按规则重出版（那条路只改副本名）。
  *
@@ -28,10 +29,23 @@ const ui = useUiStore()
 const library = useLibraryStore()
 const { nameOf } = useLibraryNames()
 
-const KINDS = [
+const KINDS: { value: EntityKind; label: string }[] = [
   { value: 'author', label: '作者' },
   { value: 'series', label: '系列' },
+  { value: 'tag', label: '题材' },
+  { value: 'publisher', label: '出版社' },
+  { value: 'language', label: '语言' },
+  { value: 'narrator', label: '演播者' },
 ]
+
+const KIND_ICONS: Record<EntityKind, string> = {
+  author: 'users',
+  series: 'layers',
+  tag: 'bookmark',
+  publisher: 'library',
+  language: 'globe',
+  narrator: 'volume',
+}
 
 const kind = ref<EntityKind>('author')
 const items = ref<EntityItem[]>([])
@@ -60,7 +74,7 @@ const filtered = computed(() => {
 
 const cleanCount = computed(() => (plan.value?.items ?? []).filter((i) => !i.conflict).length)
 const conflictCount = computed(() => (plan.value?.items ?? []).filter((i) => i.conflict).length)
-const noun = computed(() => (kind.value === 'author' ? '作者' : '系列'))
+const noun = computed(() => KINDS.find((k) => k.value === kind.value)?.label || '实体')
 
 /** 书名 → 所属库（判断一个作者 / 系列是否横跨多个库） */
 const libraryOfBook = computed<Record<string, string>>(() => {
@@ -209,7 +223,7 @@ function applyPlan(): void {
     <Card v-else-if="filtered.length" padding="none">
       <div v-for="it in filtered" :key="it.name" class="border-b border-border last:border-b-0">
         <div class="flex items-center gap-2.5 px-4 py-3">
-          <Icon :name="kind === 'author' ? 'users' : 'layers'" class="h-4 w-4 text-muted-foreground" />
+          <Icon :name="KIND_ICONS[kind]" class="h-4 w-4 text-muted-foreground" />
           <span class="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">{{ it.name }}</span>
           <Badge>{{ it.count }} 本</Badge>
           <Badge v-if="spreadLibraries[it.name]" tone="accent">跨 {{ spreadLibraries[it.name] }} 个库</Badge>
@@ -265,7 +279,7 @@ function applyPlan(): void {
             </div>
 
             <p v-else class="text-[11.5px] leading-relaxed text-muted-foreground">
-              没有书的该字段等于这个名字。改名只写服务端元数据（作者 / 系列），
+              没有书的该字段等于这个名字。改名只写服务端元数据，
               不移动文件、不改文件内容 —— 所以「命中 0 本」就是当前范围里没有可改的书。
             </p>
 
@@ -282,12 +296,12 @@ function applyPlan(): void {
 
     <EmptyState
       v-else
-      :icon="kind === 'author' ? 'users' : 'layers'"
+      :icon="KIND_ICONS[kind]"
       :title="keyword ? '没有匹配的实体' : `还没有可管理的${noun}`"
       :desc="
         keyword
           ? '换个关键词，或清空筛选框看全部。'
-          : '导出目录里出现成品文件后，这里会按 EPUB 元数据自动聚合出作者与系列。'
+          : '导出目录里出现成品文件后，这里会按书目元数据自动聚合出这些实体。'
       "
     />
   </div>
