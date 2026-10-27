@@ -7960,6 +7960,7 @@ def api_stats(
     days: int = Query(28, ge=7, le=365),
     top: int = Query(8, ge=1, le=50),
     library_id: str = Query(""),
+    brief: int = Query(0, ge=0, le=1),
 ):
     """统计聚合。days 控制节奏图窗口（dashboard 用默认 28，统计页可传 7/28/90）；
     top 控制 Top 榜长度（统计页可展开到 50）。
@@ -7967,7 +7968,14 @@ def api_stats(
     ``library_id`` 第 30 期新增：**空串 = 全部书库**（默认，输出与加该参数之前逐字节
     一致）；给了库 id 就只统计该库。未知库 = 空库，不 404（与 `/api/duplicates`
     的 `library_id: str = ""` 同一条惯例）。阅读会话没有库维度，按「书属于哪个库」判。
+
+    ``brief=1``（第 162 期）：只算仪表盘部件真正读的那批键（`stats.brief`），
+    跳过统计页专属的重计算（五年会话明细 / 逐本 metascore 审计 / Top-50 / 图表序列）。
+    仪表盘每次进站都要拉这份，而它只读完整响应里 ~3.6% 的字节 —— 完整口径由统计页
+    用默认（不带 brief）取。
     """
+    if brief:
+        return stats.brief(days, library_id)
     return stats.overview(days, top, library_id)
 
 

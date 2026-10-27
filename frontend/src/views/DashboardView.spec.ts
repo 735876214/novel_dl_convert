@@ -17,10 +17,10 @@ import DashboardView from '@/views/DashboardView.vue'
  */
 vi.mock('@/lib/api', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/lib/api')>()
-  return { ...real, api: { ...real.api, stats: vi.fn() } }
+  return { ...real, api: { ...real.api, stats: vi.fn(), statsBrief: vi.fn() } }
 })
 
-const m = api as unknown as { stats: Mock }
+const m = api as unknown as { statsBrief: Mock }
 
 /** 部件行 / 书架行 / 两个空态都是重组件（各自还要拉数据）⇒ 一律替身，只验页级骨架与错误 */
 const STUBS = {
@@ -51,7 +51,7 @@ async function mountView() {
 
 describe('DashboardView：页级三态（第 98 期）', () => {
   it('两条首屏请求都没 settle、书目还在路上 ⇒ 页级骨架，且不渲染部件行', async () => {
-    m.stats.mockReturnValue(new Promise(() => {})) // 永远不 settle = 真的还在路上
+    m.statsBrief.mockReturnValue(new Promise(() => {})) // 永远不 settle = 真的还在路上
     useLibraryStore().loading = true
 
     const w = await mountView()
@@ -64,7 +64,7 @@ describe('DashboardView：页级三态（第 98 期）', () => {
   })
 
   it('统计一到手就不再遮（哪怕书目还在路上）—— 有真数据就不许盖住', async () => {
-    m.stats.mockResolvedValue({ library_id: '' })
+    m.statsBrief.mockResolvedValue({ library_id: '' })
     useLibraryStore().loading = true
 
     const w = await mountView()
@@ -75,7 +75,7 @@ describe('DashboardView：页级三态（第 98 期）', () => {
   })
 
   it('没有任何请求在路上时**不**显示骨架（不许凭「刚进页面」就遮）', async () => {
-    m.stats.mockReturnValue(new Promise(() => {}))
+    m.statsBrief.mockReturnValue(new Promise(() => {}))
     useLibraryStore().loading = false
 
     const w = await mountView()
@@ -85,7 +85,7 @@ describe('DashboardView：页级三态（第 98 期）', () => {
   })
 
   it('两条都失败且什么都没拿到 ⇒ 页级错误，且「重试」把两条一起重拉', async () => {
-    m.stats.mockRejectedValue(new Error('统计挂了'))
+    m.statsBrief.mockRejectedValue(new Error('统计挂了'))
     const lib = useLibraryStore()
     lib.loading = false
     const reload = vi.spyOn(lib, 'loadBooks').mockResolvedValue(undefined)
@@ -98,12 +98,12 @@ describe('DashboardView：页级三态（第 98 期）', () => {
     expect(w.text()).toContain('统计挂了')
     expect(w.text()).toContain('书库挂了')
 
-    m.stats.mockClear()
+    m.statsBrief.mockClear()
     const btn = w.findAll('button').find((b) => b.text().trim() === '重试')
     expect(btn, '页级错误要有一个「重试」').toBeTruthy()
     await btn!.trigger('click')
 
-    expect(m.stats).toHaveBeenCalledTimes(1) // 统计那一发
+    expect(m.statsBrief).toHaveBeenCalledTimes(1) // 统计那一发
     expect(reload).toHaveBeenCalledWith(true) // …与书目那一发（一起重试）
     w.unmount()
   })

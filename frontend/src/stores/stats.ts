@@ -40,7 +40,10 @@ export const useStatsStore = defineStore('stats', () => {
     inflight = (async () => {
       error.value = ''
       try {
-        data.value = await api.stats(28, lid)
+        // 第 162 期：仪表盘只读统计的一小角（实测 ~3.6% 字节），改走 brief 接口 ——
+        // 服务端跳过统计页专属的重计算（五年会话明细 / 逐本审计 / Top-50 / 图表序列）。
+        // 键与完整份同名同形，部件零改动；图表键**不出现**，部件读不到时各自走空态。
+        data.value = await api.statsBrief(lid)
         loaded.value = true
       } catch (e) {
         /* 未登录或后端不可用：保持为空，但记下错误供仪表盘提示 */

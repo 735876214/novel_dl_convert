@@ -16,6 +16,7 @@ const A = vi.hoisted(() => ({
   libraries: vi.fn(),
   readingThresholds: vi.fn(),
   stats: vi.fn(),
+  statsBrief: vi.fn(),
   collections: vi.fn(),
   createCollection: vi.fn(),
 }))
@@ -46,11 +47,11 @@ describe('并发拉取去重（单飞闸）', () => {
     expect(A.libraries).toHaveBeenCalledTimes(1)
   })
 
-  it('stats.load 并发 3 次 → 只打 1 次 /api/stats', async () => {
-    A.stats.mockResolvedValue({ library_id: '' })
+  it('stats.load 并发 3 次 → 只打 1 次 /api/stats（brief）', async () => {
+    A.statsBrief.mockResolvedValue({ library_id: '' })
     const s = useStatsStore()
     await Promise.all([s.load(), s.load(), s.load()])
-    expect(A.stats).toHaveBeenCalledTimes(1)
+    expect(A.statsBrief).toHaveBeenCalledTimes(1)
   })
 
   it('collections.load 并发 2 次 → 只打 1 次 /api/collections', async () => {

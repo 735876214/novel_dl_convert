@@ -160,6 +160,143 @@ def _five_number(values: list) -> dict:
     return {"min": v[0], "q1": q(0.25), "median": q(0.5), "q3": q(0.75), "max": v[-1]}
 
 
+#: 仪表盘 brief 模式要算的键（第 162 期）。**判据只有一个**：九个仪表盘部件
+#: （``frontend/src/components/dashboard/widgets/*.vue``）真正读到的键 —— 逐个
+#: 文件核过（books.total/size/by_format/languages、authors.total、series.total、
+#: reading.finished/streak/days/sessions、added_28d、reading_28d、added_month、
+#: window、hours）。完整口径（图表序列 / 体积榜 / 会话明细 / metascore 逐本审计）
+#: 只属于统计页，`overview()` 才算它们；brief 模式省下的正是那批最贵的
+#: （``session_log`` 五年全表扫、每本 ``metascore.audit``、Top-50 物化、四个 Top 榜）。
+#: 图表序列键**不出现**（不是给空值）—— 部件读不到时各自有「数据未接入」的空态，
+#: 与后端未落地时的既有行为一致。
+_BRIEF_KEYS = (
+    "books", "reading", "added_28d", "reading_28d", "authors", "series",
+    "window", "hours", "added_month", "library_id",
+)
+
+
+def _classify_status(raw, pct: float, started_th: float, finished_th: float) -> str:
+    """一本书的阅读状态归类（**唯一真值源**，``overview`` 与 ``brief`` 共用）。
+
+    真实状态优先；没有状态行的书按进度兜底推导 —— paused/abandoned 归入在读：
+    它们都「翻过」，和未读不是一回事。判据与书架 / 书目列表同源（第 40 期阈值）。
+    """
+    if raw == "finished":
+        return "finished"
+    if raw == "unread":
+        return "unread"
+    if raw in ("reading", "paused", "abandoned"):
+        return "reading"
+    if pct <= started_th:
+        return "unread"
+    if pct >= finished_th:
+        return "finished"
+    return "reading"
+
+
+def brief(days: int = 28, library_id: str = "") -> dict:
+    """仪表盘用的小份统计（第 162 期）：只算 `_BRIEF_KEYS` 里的键，成本与键同小。
+
+    **为什么单独一份**：仪表盘每次进站都要拉 `/api/stats`（9 个部件共用一次请求），
+    而完整 `overview()` 的成本大头 —— 五年会话明细全表扫（`db.session_log`）、
+    逐本 `metascore.audit`、Top-50 体积榜、十二条图表序列 —— 全是**统计页专属**：
+    实测 2,309 本的库里，仪表盘 9 个部件只读响应里 **3.6%** 的字节，完整份却要付
+    全部计算（端到端 129–317 ms）。聚合判据与完整份**同一处**（状态归类走
+    `_classify_status`），键**同名同形**，前端零改动。
+    """
+    try:
+        days = max(7, min(int(days), 365))
+    except (TypeError, ValueError):
+        days = 28
+
+    lid = (library_id or "").strip()
+    started_th, finished_th = lib_settings.reading_thresholds(lid or None)
+    bs = library.books(lid or None)
+    ids = {b["id"] for b in bs} if lid else None
+    total = len(bs)
+
+    # ---- 书库侧聚合（与 overview 的 bs 循环同一批判据，只留部件要的维度）----
+    by_format: dict = {}
+    authors: dict = {}
+    series: dict = {}
+    size = 0
+    languages: set = set()
+    finished = 0
+    statuses = db.all_statuses()
+    now = time.time()
+    today_d = db.local_day(now)
+    buckets = [0] * days
+    added_month = 0
+    now_lt = time.localtime(now)
+    for b in bs:
+        f = b.get("format") or "?"
+        by_format[f] = by_format.get(f, 0) + 1
+        size += int(b.get("size") or 0)
+        a = (b.get("author") or "").strip()
+        if a:
+            authors[a] = authors.get(a, 0) + 1
+        s = (b.get("series") or "").strip()
+        if s:
+            series[s] = series.get(s, 0) + 1
+        lg = (b.get("language") or "").strip()
+        if lg:
+            languages.add(lg)
+        if _classify_status((statuses.get(b["id"]) or {}).get("status"),
+                            0.0, started_th, finished_th) == "finished":
+            finished += 1
+        # 近 N 天入库节奏（与 overview 同口径：added_at 覆盖，未覆盖=文件 mtime；
+        # ≤0 的时间戳不进任何桶）
+        when = b.get("added_at") or b.get("mtime") or 0
+        if when > 0:
+            d = (today_d - db.local_day(when)).days
+            if 0 <= d < days:
+                buckets[days - 1 - d] += 1
+            lt = time.localtime(when)
+            if lt.tm_year == now_lt.tm_year and lt.tm_mon == now_lt.tm_mon:
+                added_month += 1
+
+    tot = db.reading_totals(ids)
+    active = db.active_days(ids)
+    day_set = set(active)
+    # 连续阅读天数：与 overview 同一条判据（今天有阅读从今天起算，否则从昨天；
+    # 逐日递减用日期运算，夏令时切换不会跳日）。
+    streak = 0
+    today = today_d.isoformat()
+    yesterday = (today_d - _ONE_DAY).isoformat()
+    if today in day_set or yesterday in day_set:
+        i = 0 if today in day_set else 1
+        while (today_d - _ONE_DAY * i).isoformat() in day_set:
+            streak += 1
+            i += 1
+
+    return {
+        "books": {
+            "total": total,
+            "size": size,
+            "by_format": by_format,
+            "languages": len(languages),
+        },
+        # top 与完整份同形（空数组）：部件与潜在第三方调用方读不到时按「无数据」处理，
+        # 不用为 brief 写第二条判空分支。
+        "authors": {"total": len(authors), "top": []},
+        "series": {"total": len(series), "top": []},
+        "reading": {
+            "finished": finished,
+            "seconds": tot["seconds"],
+            "sessions": tot["sessions"],
+            "avg_seconds": (tot["seconds"] / tot["sessions"]) if tot["sessions"] else 0.0,
+            "streak": streak,
+            "days": len(active),
+        },
+        "window": days,
+        "library_id": lid,
+        "added_28d": buckets,
+        "added_month": added_month,
+        "hours": db.hour_histogram(ids),
+        "reading_28d": db.daily_seconds(days, ids),
+    }
+
+
 def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     # 越界值收敛到安全范围，而不是 400 —— 统计是展示型接口，宁可得体降级
     try:
@@ -170,7 +307,6 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
         top = max(1, min(int(top), 50))
     except (TypeError, ValueError):
         top = 8
-
     lid = (library_id or "").strip()
     # 第 40 期：阅读阈值改由配置下发（全局 `reading.*` + 每库覆写）。
     # 按库筛选时取**该库的生效值**，不筛选时取全局 —— 与书目列表 / 书架的判定同源，
@@ -379,19 +515,14 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
             funnel["reached75"] += 1
         if pct >= finished_th:
             funnel["completed"] += 1
-        # 真实状态优先；没有状态行的书才按进度兜底推导（与 stats 口径一致）。
-        # paused/abandoned 归入在读：它们都「翻过」，和未读不是一回事。
-        raw = (statuses.get(b["id"]) or {}).get("status")
-        if raw == "finished":
+        # 真实状态优先；没有状态行的书才按进度兜底推导 —— 判据在 `_classify_status`
+        # （第 162 期收口：仪表盘 brief 与这里**必须**同一处，否则两份口径会走岔）。
+        cls = _classify_status((statuses.get(b["id"]) or {}).get("status"),
+                               pct, started_th, finished_th)
+        if cls == "finished":
             finished += 1
-        elif raw == "unread":
+        elif cls == "unread":
             unread += 1
-        elif raw in ("reading", "paused", "abandoned"):
-            reading += 1
-        elif pct <= started_th:
-            unread += 1
-        elif pct >= finished_th:
-            finished += 1
         else:
             reading += 1
         if p:

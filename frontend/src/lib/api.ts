@@ -5545,6 +5545,15 @@ export const api = {
       `/api/stats?days=${days}&top=50${libraryId ? `&library_id=${encodeURIComponent(libraryId)}` : ''}`,
     ),
 
+  // 仪表盘专用的小份统计（第 162 期）：服务端跳过统计页专属的重计算
+  // （五年会话明细 / 逐本元数据审计 / Top-50 / 图表序列），只返回部件读的键。
+  // 键与完整份同名同形，部件零改动；图表键**不出现**（不是空值），
+  // 部件读不到时各自走既有的「数据未接入」空态。
+  statsBrief: (libraryId = '') =>
+    request<StatsOverview>(
+      `/api/stats?days=28&brief=1${libraryId ? `&library_id=${encodeURIComponent(libraryId)}` : ''}`,
+    ),
+
   readingActivity: (libraryId = '', year?: number, limit = 120) =>
     request<ReadingActivity>(
       `/api/reading-activity?limit=${limit}${libraryId ? `&library_id=${encodeURIComponent(libraryId)}` : ''}${year ? `&year=${year}` : ''}`,

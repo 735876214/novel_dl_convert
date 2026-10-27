@@ -4,7 +4,6 @@ import { useRouter } from 'vue-router'
 
 import { useWidgetState } from '@/composables/useWidgetState'
 import type { WidgetSize } from '@/data/dashboard'
-import { useLibraryStore } from '@/stores/library'
 import { useStatsStore } from '@/stores/stats'
 
 /**
@@ -18,12 +17,10 @@ defineProps<{
   size?: WidgetSize
 }>()
 
-const library = useLibraryStore()
 const stats = useStatsStore()
 const router = useRouter()
 
 onMounted(() => {
-  library.loadBooks()
   stats.load()
 })
 
@@ -37,7 +34,10 @@ function fmtBytes(bytes: number): string {
 const s = computed(() => stats.data)
 
 const cards = computed(() => [
-  { label: '书籍', value: String(s.value?.books.total ?? library.books.length), to: '/shelf' },
+  // ⚠️ 回退链别写回 `library.books.length`：那是 1.9 MB 全量书目的副产物，
+  // brief 统计里 books.total 恒有（第 162 期起仪表盘走 statsBrief）；
+  // 统计失败时四格一起走 error 态，不需要「拿书目顶一下」这条隐式依赖。
+  { label: '书籍', value: String(s.value?.books.total ?? 0), to: '/shelf' },
   { label: '作者', value: String(s.value?.authors.total ?? 0), to: '/authors' },
   { label: '系列', value: String(s.value?.series.total ?? 0), to: '/series' },
   { label: '占用', value: fmtBytes(s.value?.books.size ?? 0), to: '/stats' },
