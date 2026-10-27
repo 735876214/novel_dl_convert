@@ -1392,6 +1392,32 @@ def _hit_of(bid: str, unique_only: bool = False):
     return row, lib
 
 
+def totals(library_ids=None) -> dict:
+    """全库汇总（第 154 期）：书数 / 总字节 / 缺封面数。
+
+    ``library_ids=None`` = 全部索引行；给列表 = 只统计这些库（``/api/libraries``
+    传当前登记的库，避免已移除库的残留索引把总数撑大）。一次聚合查询，不扫盘。
+    """
+    where, params = "", ()
+    if library_ids is not None:
+        ids = [str(x) for x in library_ids]
+        if not ids:
+            return {"books": 0, "bytes": 0, "missing_covers": 0}
+        where = " WHERE library_id IN (" + ",".join("?" * len(ids)) + ")"
+        params = tuple(ids)
+    row = _exec(
+        f"SELECT COUNT(*) AS books, COALESCE(SUM(size),0) AS bytes, "
+        f"COALESCE(SUM(CASE WHEN has_cover=0 THEN 1 ELSE 0 END),0) AS missing_covers "
+        f"FROM {TABLE}{where}",
+        params,
+    ).fetchone()
+    return {
+        "books": int(row["books"] or 0) if row else 0,
+        "bytes": int(row["bytes"] or 0) if row else 0,
+        "missing_covers": int(row["missing_covers"] or 0) if row else 0,
+    }
+
+
 def counts() -> dict:
     """``{library_id: 书目数}`` —— 一次 GROUP BY。
 

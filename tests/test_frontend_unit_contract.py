@@ -296,6 +296,9 @@ EXPECTED_SPECS = (
     # （用户只当「后台慢」）；4401 还重连 ⇒ 每个页面都拿废令牌空转；普通断开不重连 ⇒
     # 网络抖一下后实时永久失效；`stopRealtime` 不关连接 ⇒ 退出登录后仍在收事件。
     "src/lib/realtime.spec.ts",
+    # 第 154 期：收藏夹手动排序。乐观换位后若服务端失败必须**回滚到服务端顺序** ——
+    # 只显示 toast 不回滚的话，界面会一直撒谎到下次刷新。
+    "src/stores/collections.spec.ts",
 )
 
 

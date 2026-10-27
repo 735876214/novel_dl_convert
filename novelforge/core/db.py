@@ -336,7 +336,8 @@ def init():
             CREATE TABLE IF NOT EXISTS collections (
                 id         INTEGER PRIMARY KEY,
                 name       TEXT UNIQUE NOT NULL,
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS collection_items (
                 id            INTEGER PRIMARY KEY,
@@ -429,7 +430,8 @@ def init():
                 name       TEXT NOT NULL,
                 rules      TEXT NOT NULL,                      -- JSON: [{field, op, value}]
                 "match"    TEXT NOT NULL DEFAULT 'all',        -- all = 且 / any = 或（保留字，见上）
-                created_at REAL NOT NULL
+                created_at REAL NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0          -- 手动排序（第 154 期）
             );
             CREATE TABLE IF NOT EXISTS opds_sources (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -999,6 +1001,19 @@ def init():
         if "updated_at" not in ccols:
             c.execute("ALTER TABLE collections ADD COLUMN updated_at REAL NOT NULL DEFAULT 0")
             c.execute("UPDATE collections SET updated_at = created_at WHERE updated_at = 0")
+        # 第 154 期：collections 补 sort_order（手动排序）。存量行回填为 id ——
+        # id 与 created_at 同向（自增主键），列表在「从未手动排过」时保持原来的
+        # 「最早创建在前」，用户第一次拖动后才会写入 0..n 的显式顺序。
+        if "sort_order" not in ccols:
+            c.execute("ALTER TABLE collections ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            c.execute("UPDATE collections SET sort_order = id WHERE sort_order = 0")
+        # 第 154 期：smart_scopes 补 sort_order。存量回填为 id（与「越新越靠前」的
+        # 旧口径 `created_at DESC` 方向相反 —— 列表排序仍是 `sort_order ASC` 优先，
+        # 全 0 时才回落 `created_at DESC`，所以这里回填 id 只为「拖动过的夹」有稳定基准）。
+        scols = {r["name"] for r in c.execute("PRAGMA table_info(smart_scopes)")}
+        if scols and "sort_order" not in scols:
+            c.execute("ALTER TABLE smart_scopes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+            c.execute("UPDATE smart_scopes SET sort_order = id WHERE sort_order = 0")
         # 第 32 期：authors 补「排序名」两列（在线值 / 本地覆盖分列，与 bio 同构）。
         # 老库不补列则作者排序与覆盖读写会报 no such column。两列都有 NOT NULL DEFAULT ''，
         # 存量行照旧可读 —— 空串即「没有排序名」，排序回退到 name，与加列前完全一致。
@@ -1767,14 +1782,32 @@ def list_collections() -> list:
     """
     c = _connect()
     rows = c.execute(
-        "SELECT id, name, created_at, updated_at FROM collections ORDER BY created_at"
+        "SELECT id, name, created_at, updated_at, sort_order FROM collections "
+        "ORDER BY sort_order, created_at"
     ).fetchall()
     return [dict(r) for r in rows]
 
 
+def reorder_collections(ids: list) -> None:
+    """按给定顺序写 ``sort_order`` 0..n（第 154 期）。
+
+    调用方负责校验「ids 是当前全部 id 的一个排列」—— 这里只写，不猜缺失项。
+    写点收在 DB 一处，前端与路由都不自己算顺序。
+    """
+    seq = [int(x) for x in ids]
+    c = _connect()
+    with _lock:
+        for i, cid in enumerate(seq):
+            c.execute("UPDATE collections SET sort_order=? WHERE id=?", (i, cid))
+        c.commit()
+
+
 def get_collection(cid: int):
     c = _connect()
-    row = c.execute("SELECT id, name, created_at FROM collections WHERE id=?", (cid,)).fetchone()
+    row = c.execute(
+        "SELECT id, name, created_at, updated_at, sort_order FROM collections WHERE id=?",
+        (cid,),
+    ).fetchone()
     return dict(row) if row else None
 
 
@@ -3754,9 +3787,19 @@ def source_vars_clear(name: str, key: str = "") -> int:
 
 def list_scopes() -> list:
     rows = _connect().execute(
-        "SELECT * FROM smart_scopes ORDER BY created_at DESC, id DESC"
+        "SELECT * FROM smart_scopes ORDER BY sort_order, created_at DESC, id DESC"
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def reorder_scopes(ids: list) -> None:
+    """按给定顺序写 ``sort_order`` 0..n（第 154 期）。校验由调用方负责。"""
+    seq = [int(x) for x in ids]
+    c = _connect()
+    with _lock:
+        for i, sid in enumerate(seq):
+            c.execute("UPDATE smart_scopes SET sort_order=? WHERE id=?", (i, sid))
+        c.commit()
 
 
 def get_scope(scope_id):
@@ -5235,6 +5278,16 @@ def update_library(lid, **fields) -> "dict | None":
         )
         c.commit()
     return get_library(lid)
+
+
+def reorder_libraries(ids: list) -> None:
+    """按给定顺序写 ``libraries.sort_order`` 0..n（第 154 期）。校验由调用方负责。"""
+    seq = [str(x) for x in ids]
+    c = _connect()
+    with _lock:
+        for i, lid in enumerate(seq):
+            c.execute("UPDATE libraries SET sort_order=? WHERE id=?", (i, lid))
+        c.commit()
 
 
 def delete_library(lid) -> bool:

@@ -69,5 +69,17 @@ export const useCollectionsStore = defineStore('collections', () => {
     await load(true)
   }
 
-  return { items, loaded, error, load, create, remove, rename }
+  /** 手动排序（第 154 期）：先本地换位，再整份提交；失败回落服务端顺序。 */
+  async function reorder(ids: number[]): Promise<void> {
+    const byId = new Map(items.value.map((c) => [c.id, c]))
+    items.value = ids.map((id) => byId.get(id)).filter((c): c is CollectionItem => !!c)
+    try {
+      items.value = (await api.reorderCollections(ids)).items
+    } catch (e) {
+      await load(true)
+      throw e
+    }
+  }
+
+  return { items, loaded, error, load, create, remove, rename, reorder }
 })

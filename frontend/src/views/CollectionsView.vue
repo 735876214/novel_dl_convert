@@ -9,13 +9,29 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import { localDate } from '@/lib/format'
+import { useDndSort } from '@/composables/useDndSort'
 import { useCollectionsStore } from '@/stores/collections'
 import { useUiStore } from '@/stores/ui'
 
-/** 收藏夹总览：自建收藏夹的增删改与进入。 */
+/** 收藏夹总览：自建收藏夹的增删改、手动排序与进入。 */
 const router = useRouter()
 const collections = useCollectionsStore()
 const ui = useUiStore()
+
+/** 拖拽 / 键盘（上移下移）共用同一个提交口（第 154 期）。 */
+async function move(from: number, to: number): Promise<void> {
+  if (to < 0 || to >= collections.items.length || from === to) return
+  const ids = collections.items.map((c) => c.id)
+  const [moved] = ids.splice(from, 1)
+  ids.splice(to, 0, moved)
+  try {
+    await collections.reorder(ids)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '排序失败')
+  }
+}
+
+const dnd = useDndSort({ onCommit: (from, to) => void move(from, to) })
 
 const draft = ref('')
 const error = ref('')
@@ -105,9 +121,16 @@ async function commitRename(id: number): Promise<void> {
 
     <div v-if="collections.items.length" class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
       <Card
-        v-for="c in collections.items"
+        v-for="(c, index) in collections.items"
         :key="c.id"
+        :data-collection-card="c.id"
+        :draggable="true"
         class="transition-colors hover:border-ring"
+        :class="dnd.dragOverIndex.value === index ? 'ring-1 ring-ring' : ''"
+        @dragstart="dnd.onDragStart(index, $event)"
+        @dragover="dnd.onDragOver(index, $event)"
+        @drop.prevent="dnd.onDrop(index)"
+        @dragend="dnd.onDragEnd"
       >
         <div class="flex items-center gap-3">
           <!-- 首书封面预览（无成员时回退星标占位） -->
@@ -147,6 +170,26 @@ async function commitRename(id: number): Promise<void> {
           </div>
 
           <div class="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              class="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              title="上移"
+              aria-label="上移"
+              :disabled="index === 0"
+              @click.stop="move(index, index - 1)"
+            >
+              <Icon name="chev" class="h-3.5 w-3.5 rotate-180" />
+            </button>
+            <button
+              type="button"
+              class="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              title="下移"
+              aria-label="下移"
+              :disabled="index === collections.items.length - 1"
+              @click.stop="move(index, index + 1)"
+            >
+              <Icon name="chev" class="h-3.5 w-3.5" />
+            </button>
             <button
               type="button"
               class="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"

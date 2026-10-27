@@ -19,6 +19,7 @@ import {
 } from '@/lib/smartScope'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
+import { useDndSort } from '@/composables/useDndSort'
 
 /**
  * 自定义智能书架管理页：规则的增删改。
@@ -51,6 +52,25 @@ onMounted(async () => {
   await library.loadBooks()
   await load()
 })
+
+/** 手动排序（第 154 期）：拖拽与上下移共用一个提交口。 */
+async function move(from: number, to: number): Promise<void> {
+  if (to < 0 || to >= scopes.value.length || from === to) return
+  const ids = scopes.value.map((s) => s.id)
+  const [moved] = ids.splice(from, 1)
+  ids.splice(to, 0, moved)
+  const byId = new Map(scopes.value.map((s) => [s.id, s]))
+  scopes.value = ids.map((id) => byId.get(id)).filter((s): s is SmartScope => !!s)
+  try {
+    scopes.value = (await api.reorderSmartScopes(ids)).items
+    library.scopes.splice(0, library.scopes.length, ...scopes.value)
+  } catch (e) {
+    await load()
+    ui.toast(e instanceof Error ? e.message : '排序失败')
+  }
+}
+
+const dnd = useDndSort({ onCommit: (from, to) => void move(from, to) })
 
 // ---------- 编辑表单 ----------
 const editing = ref<number | null>(null) // null = 不在编辑；-1 = 新建
@@ -262,9 +282,16 @@ function opLabel(op: ScopeOp): string {
       </p>
 
       <div
-        v-for="s in scopes"
+        v-for="(s, index) in scopes"
         :key="s.id"
+        :data-scope-row="s.id"
+        :draggable="true"
         class="flex items-center gap-3 border-b border-border/60 py-2.5 last:border-b-0"
+        :class="dnd.dragOverIndex.value === index ? 'bg-muted/60' : ''"
+        @dragstart="dnd.onDragStart(index, $event)"
+        @dragover="dnd.onDragOver(index, $event)"
+        @drop.prevent="dnd.onDrop(index)"
+        @dragend="dnd.onDragEnd"
       >
         <div class="min-w-0 flex-1">
           <div class="truncate text-[13px] font-medium text-foreground">{{ s.name }}</div>
@@ -275,6 +302,8 @@ function opLabel(op: ScopeOp): string {
         <span class="shrink-0 text-[11.5px] text-muted-foreground tabular-nums">
           {{ evaluateScope(library.books as BookCard[], s.rules, s.match).length }} 本
         </span>
+        <button type="button" class="shrink-0 cursor-pointer text-[12px] text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40" title="上移" aria-label="上移" :disabled="index === 0" @click="move(index, index - 1)">↑</button>
+        <button type="button" class="shrink-0 cursor-pointer text-[12px] text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40" title="下移" aria-label="下移" :disabled="index === scopes.length - 1" @click="move(index, index + 1)">↓</button>
         <button type="button" class="shrink-0 cursor-pointer text-[12px] text-muted-foreground hover:text-foreground" @click="openOnShelf(s)">打开</button>
         <button type="button" class="shrink-0 cursor-pointer text-[12px] text-muted-foreground hover:text-foreground" @click="startEdit(s)">编辑</button>
         <button type="button" class="shrink-0 cursor-pointer text-[12px] text-muted-foreground hover:text-destructive" @click="remove(s)">删除</button>

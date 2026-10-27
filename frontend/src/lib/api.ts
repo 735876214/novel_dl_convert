@@ -1775,6 +1775,8 @@ export interface CollectionItem {
   created_at: number
   /** 最后修改时间（秒）；成员增删或重命名都会刷新（第 47 期） */
   updated_at: number
+  /** 手动排序键（第 154 期；越小越前） */
+  sort_order?: number
   /** 首本成员的书 id（用于总览卡封面预览）；无成员为 null */
   first_book_id: string | null
   /** 首本成员是否有真实封面 */
@@ -2625,6 +2627,8 @@ export interface LibraryEntity {
 export interface LibrariesResult {
   items: LibraryEntity[]
   total: number
+  /** 全库汇总（第 154 期）：库数 / 书数 / 总字节 / 缺封面数 */
+  totals?: { libraries: number; books: number; bytes: number; missing_covers: number }
   /**
    * 库类型。`exts` = 该类型的**默认扫描白名单**（第 40 期）——
    * 新建向导的「允许的格式」选完类型就用它带出默认勾选集。
@@ -3812,6 +3816,14 @@ export const api = {
   deleteSmartScope: (id: number) =>
     request<{ ok: boolean }>(`/api/smart-scopes/${id}`, { method: 'DELETE' }),
 
+  /** 智能书架手动排序（第 154 期）：ids 必须是当前全部 id 的一个排列。 */
+  reorderSmartScopes: (ids: number[]) =>
+    request<{ items: SmartScope[] }>('/api/smart-scopes/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }),
+
   // ---------- 偏好模式 / 设备（按设备的偏好同步）----------
   prefProfiles: () => request<{ items: PrefProfile[] }>('/api/prefs/profiles'),
 
@@ -4609,6 +4621,14 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
 
+  /** 收藏夹手动排序（第 154 期）：ids 必须是当前全部 id 的一个排列。 */
+  reorderCollections: (ids: number[]) =>
+    request<{ items: CollectionItem[] }>('/api/collections/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }),
+
   addToCollection: (id: number, bookId: string) =>
     request<{ ok: boolean }>(`/api/collections/${id}/books`, {
       method: 'POST',
@@ -4729,6 +4749,14 @@ export const api = {
 
   /** 书库实体列表（含书数 / 是否存在 / 可写）。 */
   libraries: () => request<LibrariesResult>('/api/libraries'),
+
+  /** 书库手动排序（第 154 期）：ids 必须是当前全部书库 id 的一个排列。 */
+  reorderLibraries: (ids: string[]) =>
+    request<LibrariesResult>('/api/libraries/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    }),
 
   /**
    * 每库的**扫描状态**（第 88 期）。

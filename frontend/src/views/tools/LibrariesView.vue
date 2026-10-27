@@ -25,6 +25,7 @@ import LibraryCopiesPanel from '@/components/tools/LibraryCopiesPanel.vue'
 import LibrarySettingsPanel from '@/components/tools/LibrarySettingsPanel.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type LibraryEntity, type LibraryType } from '@/lib/api'
+import { fmtBytes } from '@/lib/format'
 import { ICONS } from '@/lib/icons'
 import { isAbsolutePath, pathsOverlap } from '@/lib/paths'
 import { useLibraryStore } from '@/stores/library'
@@ -38,6 +39,8 @@ const wizard = useLibraryWizardStore()
 const { cfg, loadConfig } = useSettingsConfig()
 
 const libs = ref<LibraryEntity[]>([])
+/** 全库汇总（第 154 期）：书数 / 总字节 / 缺封面数；接口未下发时为 null。 */
+const totals = ref<{ libraries: number; books: number; bytes: number; missing_covers: number } | null>(null)
 // `exts` = 该库类型的**默认扫描白名单**（后端 `/api/libraries` 下发）。前端不自己抄一份 ——
 // 抄了就会与扫描口径走散（第 40 期「允许的格式」chips 的默认勾选集就是它）。
 const types = ref<{ value: LibraryType; label: string; exts: string[] }[]>([])
@@ -63,6 +66,7 @@ async function reload(force = false): Promise<void> {
   try {
     const res = await api.libraries()
     libs.value = res.items
+    totals.value = res.totals ?? null
     types.value = res.types
     sourceRoots.value = res.source_roots ?? []
     await library.loadLibraries(true)
@@ -163,8 +167,26 @@ const visibleLibs = computed(() => {
   return list
 })
 
-/** 时间戳 → 「3 天前」这类相对说法（上游 LAST SCAN 就是这么显示的） */
-function ago(ts: number): string {
+/** 只有「默认顺序 + 无过滤」时才能上/下移：排序/过滤态下移动会与看到的顺序不一致。 */
+const canReorder = computed(() => sortBy.value === 'order' && !filter.value.trim())
+
+/** 书库手动排序（第 154 期）：提交完整 id 顺序，服务端按 0..n 落 sort_order。 */
+async function moveLibrary(index: number, delta: number): Promise<void> {
+  const to = index + delta
+  if (!canReorder.value || to < 0 || to >= libs.value.length) return
+  const ids = libs.value.map((l) => l.id)
+  const [moved] = ids.splice(index, 1)
+  ids.splice(to, 0, moved)
+  try {
+    const res = await api.reorderLibraries(ids)
+    libs.value = res.items
+    await library.loadLibraries(true)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '排序失败')
+  }
+}
+
+/** 时间戳 → 「3 天前」这类相对说法（上游 LAST SCAN 就是这么显示的） */function ago(ts: number): string {
   if (!ts) return '从未扫描'
   const diff = Date.now() / 1000 - ts
   if (diff < 60) return '刚刚'
@@ -453,6 +475,9 @@ async function confirmRemove(): Promise<void> {
         <div class="flex flex-wrap items-center gap-2">
           <span class="text-[13px] font-medium text-foreground">书库</span>
           <Badge>{{ visibleLibs.length }} / {{ libs.length }}</Badge>
+          <span v-if="totals" class="text-[11.5px] text-muted-foreground tabular-nums">
+            共 {{ totals.books }} 本 · {{ fmtBytes(totals.bytes) }} · {{ totals.missing_covers }} 本缺封面
+          </span>
           <div class="ml-auto flex flex-wrap items-center gap-2">
             <input
               v-model="filter"
@@ -508,7 +533,7 @@ async function confirmRemove(): Promise<void> {
         这样「这个库怎么建的」「它现在健康吗」不用点开就能看全。
       -->
       <div
-        v-for="l in visibleLibs"
+        v-for="(l, index) in visibleLibs"
         :key="l.id"
         class="border-b border-border px-4 py-3 last:border-b-0"
       >
@@ -523,6 +548,28 @@ async function confirmRemove(): Promise<void> {
           <span class="text-[12.5px] font-medium text-foreground">{{ l.name }}</span>
           <Badge v-if="l.publish_path" tone="ok">刮削出版</Badge>
           <div class="ml-auto flex shrink-0 gap-1">
+            <button
+              v-if="canReorder"
+              type="button"
+              class="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              title="上移"
+              aria-label="书库上移"
+              :disabled="index === 0"
+              @click="moveLibrary(index, -1)"
+            >
+              <Icon name="chev" class="h-3.5 w-3.5 rotate-180" />
+            </button>
+            <button
+              v-if="canReorder"
+              type="button"
+              class="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              title="下移"
+              aria-label="书库下移"
+              :disabled="index === visibleLibs.length - 1"
+              @click="moveLibrary(index, 1)"
+            >
+              <Icon name="chev" class="h-3.5 w-3.5" />
+            </button>
             <Button size="sm" variant="ghost" @click="toggleSettings(l.id)">
               {{ settingsFor === l.id ? '收起设置' : '设置' }}
             </Button>

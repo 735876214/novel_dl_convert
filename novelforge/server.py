@@ -5759,10 +5759,15 @@ def _norm_excludes(raw) -> str:
 def api_libraries():
     """**库实体**列表（含书数 / 是否存在 / 可写）。格式分面见 ``/api/library-facets``。"""
     counts = _book_counts()
-    items = [_library_dto(l, counts) for l in library.libraries()]
+    libs = library.libraries()
+    items = [_library_dto(l, counts) for l in libs]
     items.sort(key=lambda x: (x["sort_order"], x["name"]))
     return {
         "items": items, "total": len(items),
+        # 第 154 期：全库汇总（书数 / 总字节 / 缺封面）。一次聚合查询，不扫盘；
+        # 只统计**当前登记**的库（已移除库的残留索引不算进来）。
+        "totals": {"libraries": len(items),
+                   **catalog.totals([l.get("id") for l in libs])},
         # 第 40 期：`exts` = 该类型的**默认扫描白名单**，供新建向导的「允许的格式」
         # 一选类型就带出默认勾选集（前端不许自己抄一份 —— 抄了就会与扫描口径走散）。
         "types": [{"value": t, "label": _LIB_TYPE_LABELS.get(t, t),
@@ -5771,6 +5776,23 @@ def api_libraries():
         "source_roots": [{"name": r["name"], "path": str(r["path"])}
                          for r in config.LIBRARY_SOURCE_ROOTS],
     }
+
+
+@app.post("/api/libraries/reorder")
+def api_reorder_libraries(payload: dict = Body(...)):
+    """书库手动排序（第 154 期）。body: ``{"ids": ["lib-a", "lib-b"]}``。
+
+    必须是当前全部库 id 的一个排列；``/api/libraries`` 的下发顺序同样是
+    （sort_order, name），所以拖完刷新即一致。
+    """
+    ids = (payload or {}).get("ids")
+    if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
+        raise HTTPException(400, "ids 必须是字符串数组")
+    current = {str(l.get("id")) for l in library.libraries()}
+    if len(ids) != len(set(ids)) or set(ids) != current:
+        raise HTTPException(400, "ids 必须是当前全部书库的一个排列")
+    db.reorder_libraries(ids)
+    return api_libraries()
 
 
 @app.get("/api/libraries/scan-state")
@@ -6898,6 +6920,23 @@ def api_collections():
     return {"items": items}
 
 
+@app.post("/api/collections/reorder")
+def api_reorder_collections(payload: dict = Body(...)):
+    """收藏夹手动排序（第 154 期）。body: ``{"ids": [1, 3, 2]}``。
+
+    **必须传当前全部 id 的一个排列** —— 少一个 id 会让它停在旧 sort_order 上、
+    与新顺序交错，界面看起来「拖了但没生效」。校验放在路由一处。
+    """
+    ids = (payload or {}).get("ids")
+    if not isinstance(ids, list) or not all(isinstance(x, int) for x in ids):
+        raise HTTPException(400, "ids 必须是整数数组")
+    current = {int(c["id"]) for c in db.list_collections()}
+    if len(ids) != len(set(ids)) or set(ids) != current:
+        raise HTTPException(400, "ids 必须是当前全部收藏夹的一个排列")
+    db.reorder_collections(ids)
+    return api_collections()
+
+
 @app.post("/api/collections")
 def api_create_collection(payload: dict = Body(...)):
     name = str(payload.get("name") or "").strip()
@@ -7024,6 +7063,22 @@ def api_smart_scopes():
             rules = []
         out.append({**s, "rules": rules})
     return {"items": out}
+
+
+@app.post("/api/smart-scopes/reorder")
+def api_reorder_smart_scopes(payload: dict = Body(...)):
+    """智能书架手动排序（第 154 期）。body: ``{"ids": [3, 1, 2]}``。
+
+    口径与收藏夹一致：必须是当前全部 id 的一个排列，否则 400。
+    """
+    ids = (payload or {}).get("ids")
+    if not isinstance(ids, list) or not all(isinstance(x, int) for x in ids):
+        raise HTTPException(400, "ids 必须是整数数组")
+    current = {int(s["id"]) for s in db.list_scopes()}
+    if len(ids) != len(set(ids)) or set(ids) != current:
+        raise HTTPException(400, "ids 必须是当前全部智能书架的一个排列")
+    db.reorder_scopes(ids)
+    return api_smart_scopes()
 
 
 @app.post("/api/smart-scopes")

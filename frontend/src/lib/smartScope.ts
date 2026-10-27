@@ -31,6 +31,8 @@ export interface SmartScope {
   /** all = 规则全部满足（且），any = 满足其一（或） */
   match: 'all' | 'any'
   created_at: number
+  /** 手动排序键（第 154 期；越小越前） */
+  sort_order?: number
 }
 
 /** 每个字段允许的操作（与后端校验一致） */
