@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
+import BatchMetadataDialog from '@/components/book/BatchMetadataDialog.vue'
 import BookActionsMenu from '@/components/book/BookActionsMenu.vue'
 import BookMoveDialog from '@/components/book/BookMoveDialog.vue'
 import BookPreviewDialog from '@/components/book/BookPreviewDialog.vue'
@@ -208,6 +209,16 @@ function onTableRowClick(row: TableRow): void {
   // 系列行（带 toggle）没有勾选框，与网格口径一致：不参与多选
   if (selectMode.value && !row.toggle) { toggleSelect(row.book.id); return }
   openBook(row.book.id, row.book.format)
+}
+
+/** 批量编辑元数据（第 157 期）：弹窗里只填要统一的字段，服务端逐本校验并回执。 */
+const batchMetaOpen = ref(false)
+function openBatchMeta(): void {
+  if (selected.value.size) batchMetaOpen.value = true
+}
+async function onBatchMetaDone(): Promise<void> {
+  await library.refreshBooks()
+  selected.value = new Set()
 }
 
 function batchStatus(s: string): void { runBatch('set_status', { status: s }) }
@@ -1266,6 +1277,9 @@ const INPUT_CLS =
         </select>
         <Button size="sm" :disabled="!batchCollection" @click="batchAddToCollection">加入</Button>
         <span class="h-4 w-px bg-border" />
+        <Button size="sm" variant="ghost" :disabled="!selected.size" @click="openBatchMeta">
+          编辑元数据
+        </Button>
         <Button size="sm" variant="ghost" :disabled="!selected.size" @click="openMove">
           移动到书库
         </Button>
@@ -1290,6 +1304,13 @@ const INPUT_CLS =
       :book-ids="moveIds"
       @close="moveOpen = false"
       @moved="onMoved"
+    />
+
+    <BatchMetadataDialog
+      :open="batchMetaOpen"
+      :book-ids="[...selected]"
+      @close="batchMetaOpen = false"
+      @done="onBatchMetaDone"
     />
 
     <!-- 首屏骨架（第 88 期）：数据还在路上时给可见反馈 —— 改造前这里**没有任何反馈**，

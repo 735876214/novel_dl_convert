@@ -3535,6 +3535,48 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
     }
 
 
+@app.post("/api/books/batch-metadata")
+def api_batch_set_metadata(payload: dict = Body(...)):
+    """批量编辑元数据（第 157 期）：对选中的书**逐本**走单书编辑的同一套校验与写入。
+
+    为什么是服务端循环而不是前端循环：
+
+    - 同一份字段白名单 / 清空哨兵 / 自定义字段类型校验**只该有一处实现**。这里直接调
+      `api_set_book_metadata`，不复制任何一条判据 —— 前端循环则要么漏判、要么抄一份；
+    - 一次请求给一份**逐本回执**（成功 / 失败原因），几百本也不必几百个往返。
+
+    ``fields`` 的三种取值语义与单书完全一致（非空 = 覆盖、``null`` = 显式清空、
+    空串 = 撤销覆盖）。批量界面只发非空字段，但 **API 不限制** —— 与单书保持同构。
+
+    边界：一次最多 500 本（防止误点「全选」把整库写成同一个作者）；某本失败不影响其它本。
+    """
+    ids = payload.get("ids") or []
+    fields = payload.get("fields") or {}
+    cust = payload.get("custom") or {}
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(400, "ids 必须是非空数组")
+    if not isinstance(fields, dict) or not isinstance(cust, dict):
+        raise HTTPException(400, "fields / custom 必须是对象")
+    if not fields and not cust:
+        raise HTTPException(400, "没有可改写的字段")
+    if len(ids) > 500:
+        raise HTTPException(400, "一次最多编辑 500 本，请分批操作")
+
+    results: list = []
+    for raw_id in ids:
+        bid = str(raw_id)
+        try:
+            r = api_set_book_metadata(bid, {"fields": fields, "custom": cust})
+            results.append({"id": bid, "ok": True, "changed": r.get("changed") or []})
+        except HTTPException as e:
+            results.append({"id": bid, "ok": False, "error": str(e.detail)})
+        except Exception as e:                     # noqa: BLE001 —— 逐本隔离，别让一本坏掉全批
+            results.append({"id": bid, "ok": False, "error": f"{type(e).__name__}: {e}"})
+    saved = sum(1 for r in results if r["ok"])
+    return {"ok": saved == len(results), "results": results,
+            "saved": saved, "failed": len(results) - saved}
+
+
 @app.get("/api/books/{bid}/metadata/online")
 def api_book_metadata_online(bid: str):
     """实时在线候选（编辑器「在线建议 / 重新获取」用）。**不写库**。"""
@@ -6539,6 +6581,85 @@ def api_scan_library(lid: str):
     degraded = bool(rep.get("error") or rep.get("reason"))
     return {"ok": not degraded, "id": lid, "count": len(bs),
             "scrape_queued": queued, "refresh": rep}
+
+
+@app.post("/api/libraries/{lid}/upload")
+async def api_upload_to_library(lid: str, files: list[UploadFile] = File(...)):
+    """把浏览器选的文件**直接放进该库的内容来源目录**（第 157 期）。
+
+    与「收书目录上传」（`/convert`）的区别：那条路会复制一份进库、可做命名与
+    格式归一；这条是「用户就是要往这个文件夹里放一份」，**不转换、不复制、不改名**
+    （只做安全清洗与冲突退让），落点就是库的第一个来源目录。
+
+    ⚠️ **边界（刻意如此）**：
+
+    - 只写**第一个**来源目录（多文件夹库没有「哪个子目录」的语义；要分流请走收书目录）。
+    - 文件名按 `fileops.sanitize_stem` 清洗（与命名规则同一份判据），扩展名小写；
+      **绝不覆盖**同名文件 —— 冲突走 `recycle.free_path`（`x (2).epub`）。
+    - 扩展名必须被该库收录（`library.accepts_ext`，与扫描同一份白名单）——
+      否则就是「文件落盘了、书目里却看不见」的隐形文件。
+    - 空文件拒收；单文件上限与其它上传一致（`upload.max_bytes`）。
+    - **本端点不扫描、不建索引**：落盘后由调用方走既有的
+      `POST /api/libraries/{lid}/scan`（界面会自动接着调）—— 扫描只有一条流水
+      （含刮削入队 / 嵌入刷新），不在这里另起一份。
+    - 逐文件回执：`status` 为 `ok` / `rejected` / `failed`，每一条都给原因；
+      一批里有失败不影响其它文件。
+    """
+    lib = db.get_library(lid)
+    if not lib:
+        raise HTTPException(404, "书库不存在")
+    roots = library.roots_of(lib)
+    if not roots:
+        raise HTTPException(400, "该书库没有内容来源目录，无法直传")
+    root = roots[0]
+    if not root.is_dir():
+        raise HTTPException(400, f"书库目录不存在或不可访问：{root}")
+
+    limit = _upload_limit("max_bytes")
+    items: list = []
+    for up in files:
+        raw = str(up.filename or "").replace("\\", "/")
+        base = pathlib.PurePosixPath(raw).name
+        suffix = pathlib.PurePosixPath(base).suffix.lower()
+        stem = fileops.sanitize_stem(pathlib.PurePosixPath(base).stem) if base else ""
+        if not base or not stem or not suffix:
+            items.append({"name": raw, "status": "rejected",
+                          "reason": "文件名不合法（需要主名与扩展名）"})
+            continue
+        name = f"{stem}{suffix}"
+        if not library.accepts_ext(lib, name):
+            items.append({"name": raw, "status": "rejected",
+                          "reason": f"该库不收录 {suffix} 格式（可在「书库设置 → 允许格式」里加）"})
+            continue
+        try:
+            data = await _read_capped(up, limit)
+        except HTTPException as e:
+            items.append({"name": raw, "status": "rejected", "reason": str(e.detail)})
+            continue
+        if not data:
+            items.append({"name": raw, "status": "rejected", "reason": "空文件（0 字节）"})
+            continue
+        dst = recycle.free_path(root / name)
+        # 先写隐藏临时件再原子改名：监听线程 / 扫描可能同时在看这个目录，
+        # 半成品不能以真名出现在书目里（与收书目录上传同一套做法，第 122 期）。
+        tmp = root / f".upload-{uuid.uuid4().hex}{suffix}"
+        try:
+            await asyncio.to_thread(tmp.write_bytes, data)
+            await asyncio.to_thread(tmp.replace, dst)
+        except OSError as e:
+            try:
+                await asyncio.to_thread(tmp.unlink, missing_ok=True)
+            except OSError:
+                pass
+            items.append({"name": raw, "status": "failed",
+                          "reason": f"写盘失败（磁盘已满或没有写权限）：{e.strerror or e}"})
+            continue
+        items.append({"name": raw, "saved_as": dst.name, "path": str(dst),
+                      "bytes": len(data), "status": "ok"})
+
+    saved = sum(1 for it in items if it["status"] == "ok")
+    return {"ok": saved > 0, "root": str(root), "items": items,
+            "saved": saved, "rejected": len(items) - saved}
 
 
 def _enqueue_scrape_for(library_id=None) -> int:

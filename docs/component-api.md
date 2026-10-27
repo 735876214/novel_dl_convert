@@ -114,6 +114,7 @@ components/
 | `BookPreviewDialog` | 快速预览浮层（内容取自书卡，详情补章节数）。`actions` 模式（书架行开的）给**五个动作**：加入收藏 / 删除 / 编辑元数据（**只 emit**，父组件深链 `?tab=metadata`）/ 移动到书库…（**只 emit**，父组件开 `BookMoveDialog`）/ 详细信息 —— 浮层里**没有就地编辑器**（见 `docs/bookorbit/bookorbit-dashboard-styles.md` §7.8） |
 | `BookMoveDialog` | 跨库移动（选目标库 → 预检 → 确认） |
 | `MetadataEditor` | 单书元数据编辑（覆盖 / 恢复在线 / 清空的分层语义） |
+| `BatchMetadataDialog` | 书架多选的批量元数据编辑（第 157 期）：只发非空字段（留空 = 不修改），服务端逐本回执；不做批量清空 |
 | `ReadingRecord` | 「我的记录」标签（状态 + 起止 + 评分 + 书评 + 轮次） |
 | `SeriesMetaPanel` | 系列级元数据面板（简介/出版社/首发年/题材）；⚠️「恢复在线」**只提交那一个字段**（空串=清除该字段覆盖） |
 | `SeriesRenumberDialog` | 重排系列序号（先预览再应用，不动文件） |

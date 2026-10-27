@@ -6,6 +6,7 @@ import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, type BookMetadata, type BookMetadataFields, type BookMetadataWriteFields } from '@/lib/api'
 import { CATALOG_FIELDS, DB_ONLY_FIELDS, FIELD_LABELS, IDENTITY_FIELDS } from '@/lib/metadataFields'
+import { parseTokenList } from '@/lib/tags'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -211,18 +212,12 @@ function onlineText(k: keyof BookMetadataFields): string {
 }
 
 function parseTags(): string[] {
-  return tagText.value
-    .split(/[、,，]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
+  return parseTokenList(tagText.value)
 }
 
-/** 演播者草稿解析（第 53 期，与题材同规则） */
+/** 演播者草稿解析（第 53 期，与题材同规则 —— 同一份 `parseTokenList`） */
 function parseNarrators(): string[] {
-  return narratorText.value
-    .split(/[、,，]/)
-    .map((s) => s.trim())
-    .filter(Boolean)
+  return parseTokenList(narratorText.value)
 }
 
 // ---------------- 自定义字段（第 35 期）----------------

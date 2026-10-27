@@ -406,6 +406,51 @@ async function submitDialog(): Promise<void> {
   }
 }
 
+/**
+ * 书库直传（第 157 期）：把浏览器选的文件**直接放进该库的内容来源目录**。
+ *
+ * 与「收书目录上传」不同：不转换、不复制、不改名（只做安全清洗与冲突退让）。
+ * 端点本身不扫描 —— 这里上传成功后接着调 `scanLibrary`，让新文件走同一条扫描流水。
+ */
+const uploadInput = ref<HTMLInputElement | null>(null)
+const uploadTarget = ref<LibraryEntity | null>(null)
+
+function pickUpload(l: LibraryEntity): void {
+  uploadTarget.value = l
+  const el = uploadInput.value
+  if (el) {
+    // 只把该库**生效**的白名单设成选择器过滤（真正的判定仍在服务端）
+    el.accept = (l.exts_effective || []).map((e) => (e.startsWith('.') ? e : `.${e}`)).join(',')
+  }
+  el?.click()
+}
+
+async function onUploadPicked(e: Event): Promise<void> {
+  const input = e.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  const l = uploadTarget.value
+  input.value = ''
+  if (!l || !files.length) return
+  busy.value = `upload:${l.id}`
+  try {
+    const res = await api.uploadToLibrary(l.id, files)
+    const bad = res.items.filter((it) => it.status !== 'ok')
+    let msg = `「${l.name}」已上传 ${res.saved} 个文件`
+    if (bad.length) msg += `，${bad.length} 个未收：${bad[0].name}（${bad[0].reason || bad[0].status}）`
+    ui.toast(msg)
+    if (res.saved) {
+      const scanRes = await api.scanLibrary(l.id)
+      ui.toast(`「${l.name}」已刷新书目：${scanRes.count} 本`)
+      await reload()
+    }
+  } catch (err) {
+    ui.toast(err instanceof Error ? err.message : '上传失败')
+  } finally {
+    uploadTarget.value = null
+    busy.value = ''
+  }
+}
+
 async function scan(l: LibraryEntity): Promise<void> {
   busy.value = `scan:${l.id}`
   try {
@@ -572,6 +617,15 @@ async function confirmRemove(): Promise<void> {
             </button>
             <Button size="sm" variant="ghost" @click="toggleSettings(l.id)">
               {{ settingsFor === l.id ? '收起设置' : '设置' }}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              :disabled="!!busy || !l.exists || !l.writable"
+              :title="!l.exists ? '内容来源不存在' : (!l.writable ? '内容来源只读' : '把文件直接放进该库的内容来源目录（不转换、不覆盖同名）')"
+              @click="pickUpload(l)"
+            >
+              {{ busy === `upload:${l.id}` ? '上传中…' : '上传' }}
             </Button>
             <Button size="sm" variant="ghost" :disabled="!!busy" @click="scan(l)">
               {{ busy === `scan:${l.id}` ? '扫描中…' : '扫描' }}
@@ -1048,5 +1102,14 @@ async function confirmRemove(): Promise<void> {
         </div>
       </div>
     </div>
+
+    <input
+      ref="uploadInput"
+      type="file"
+      multiple
+      class="hidden"
+      aria-hidden="true"
+      @change="onUploadPicked"
+    >
   </div>
 </template>

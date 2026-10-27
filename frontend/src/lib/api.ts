@@ -2521,6 +2521,24 @@ export interface MetadataWriteResult {
   custom_ignored: string[]
 }
 
+/** POST /api/books/batch-metadata 的逐本回执（第 157 期）。 */
+export interface BatchMetadataItem {
+  id: string
+  ok: boolean
+  /** 本本**实际发生变化**的字段（与单书同一判据） */
+  changed?: string[]
+  /** 失败原因（书不存在 / 没有可改写的字段…），与单书那条 400 的 detail 同源 */
+  error?: string
+}
+
+export interface BatchMetadataResult {
+  /** 全部成功才为 true；部分失败时逐本看 `results` */
+  ok: boolean
+  results: BatchMetadataItem[]
+  saved: number
+  failed: number
+}
+
 /**
  * 自定义字段的**定义**（第 35 期，`/api/custom-fields`）。
  *
@@ -2660,6 +2678,26 @@ export interface LibraryPrescanResult {
   books: number
   skipped_top: number
   by_ext: Record<string, number>
+}
+
+/** 书库直传上传的逐文件回执（第 157 期）。每条都带原因，一批里有失败不影响其它文件。 */
+export interface LibraryUploadItem {
+  name: string
+  status: 'ok' | 'rejected' | 'failed'
+  reason?: string
+  /** 实际落盘名：同名冲突时是 `x (2).epub`（绝不覆盖） */
+  saved_as?: string
+  path?: string
+  bytes?: number
+}
+
+export interface LibraryUploadResult {
+  ok: boolean
+  /** 落点（该库的第一个内容来源目录） */
+  root: string
+  items: LibraryUploadItem[]
+  saved: number
+  rejected: number
 }
 
 /**
@@ -3620,6 +3658,19 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(custom ? { fields, custom } : { fields }),
+    }),
+
+  /**
+   * 批量编辑元数据（第 157 期）：服务端逐本走**单书那套**校验与写入，返回逐本回执。
+   *
+   * ⚠️ 别在前端循环 `setBookMetadata`：那会把「字段白名单 / null 清空哨兵 /
+   * 自定义字段类型校验」再判一遍，早晚与单书写法走散。一次最多 500 本。
+   */
+  batchSetMetadata: (ids: string[], fields: BookMetadataWriteFields) =>
+    request<BatchMetadataResult>('/api/books/batch-metadata', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, fields }),
     }),
 
   /** 实时在线建议（编辑器「在线建议 / 重新获取」用，不写库）。 */
@@ -4857,6 +4908,21 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
+
+  /**
+   * 书库直传上传（第 157 期）：文件直接落该库的内容来源目录，**不转换 / 不复制**。
+   *
+   * ⚠️ 端点**不扫描** —— 上传成功后请接着调 `scanLibrary(lid)`，
+   * 让新文件走同一条扫描流水（含刮削入队 / 嵌入刷新）。
+   */
+  uploadToLibrary: (lid: string, files: File[]) => {
+    const form = new FormData()
+    for (const f of files) form.append('files', f)
+    return request<LibraryUploadResult>(
+      `/api/libraries/${encodeURIComponent(lid)}/upload`,
+      { method: 'POST', body: form },
+    )
+  },
 
   /**
    * 每库的**扫描状态**（第 88 期）。
