@@ -87,6 +87,10 @@ EXPECTED_SPECS = (
     # 那批书的该字段全部撤销覆盖（`null` 则是清空），且没有任何报错。失败回执同理：
     # 部分失败显示成「全部成功」会让用户以为改完了。
     "src/components/book/BatchMetadataDialog.spec.ts",
+    # 第 158 期：表格列面板。坏起来全是「勾了没生效 / 导入覆盖掉自己的视图」，
+    # 所以 store 侧钉规则（规范顺序 / 至少一列 / 同名不覆盖 / 上限），组件侧钉接线。
+    "src/stores/tablePrefs.spec.ts",
+    "src/components/book/TableColumnsPanel.spec.ts",
     # 第 63 期：详情页此前**零测试**。重做时修掉两个 bug（概览里那个挂错地方的 `v-else`、
     # 面包屑读全局 `shelfTitle`），两条都不是崩溃型 —— 页面照常渲染，只是多一块 / 显示
     # 上一次导航的标题。没有 spec 的话下次重排还会原样长回来。

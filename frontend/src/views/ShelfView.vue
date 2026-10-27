@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import BatchMetadataDialog from '@/components/book/BatchMetadataDialog.vue'
+import TableColumnsPanel from '@/components/book/TableColumnsPanel.vue'
 import BookActionsMenu from '@/components/book/BookActionsMenu.vue'
 import BookMoveDialog from '@/components/book/BookMoveDialog.vue'
 import BookPreviewDialog from '@/components/book/BookPreviewDialog.vue'
@@ -37,6 +38,7 @@ import {
 } from '@/stores/displayPrefs'
 import { AUTO_CONTINUE_MAX_PAGES, useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
+import { TABLE_COLUMNS, useTablePrefsStore } from '@/stores/tablePrefs'
 import { useUiStore } from '@/stores/ui'
 import {
   CARD_INFO_OPTIONS,
@@ -58,6 +60,7 @@ import {
 const library = useLibraryStore()
 const prefs = useShelfPrefsStore()
 const display = useDisplayPrefsStore()
+const table = useTablePrefsStore()
 const router = useRouter()
 const ui = useUiStore()
 
@@ -933,7 +936,18 @@ function mosaicMembers(r: Row): BookCard[] {
   return r.members.slice(0, 4)
 }
 
-const TABLE_COLS = ['书名', '作者', '系列', '格式', '页数', '进度', '评分']
+/** 表格视图的列面板（第 158 期）：显隐 / 行高 / 冻结书名 / 命名视图。 */
+const colsOpen = ref(false)
+/** 可见列（顺序即表格列序；书名与操作列不在其中，固定显示） */
+const visibleCols = computed(() => TABLE_COLUMNS.filter((c) => table.prefs.columns.includes(c.key)))
+/** 行高密度 → 单元格上下内边距（只作用于 td，表头保持固定节奏） */
+const cellPad = computed(() => ({
+  compact: 'py-1',
+  standard: 'py-2',
+  comfortable: 'py-3',
+}[table.prefs.density]))
+/** 冻结书名列：横向滚动时吸附在左侧 */
+const freezeCls = computed(() => (table.prefs.freezeTitle ? 'sticky left-0 z-[1] bg-card' : ''))
 
 const filterHint = computed(() => {
   const f = library.shelfFacet
@@ -1153,6 +1167,13 @@ const INPUT_CLS =
           >
             {{ v.label }}
           </button>
+        </div>
+
+        <div v-if="prefs.prefs.view === 'table'" class="relative">
+          <Button size="sm" :variant="colsOpen ? 'primary' : 'ghost'" @click="colsOpen = !colsOpen">
+            列
+          </Button>
+          <TableColumnsPanel :open="colsOpen" @close="colsOpen = false" />
         </div>
 
         <Button size="sm" :variant="selectMode ? 'primary' : 'ghost'" class="ml-2" @click="enterSelect">
@@ -1655,11 +1676,17 @@ const INPUT_CLS =
         <thead>
           <tr class="border-b border-border">
             <th
-              v-for="c in TABLE_COLS"
-              :key="c"
+              class="px-3 py-2 text-[11.5px] font-semibold text-muted-foreground"
+              :class="!selectMode ? freezeCls : ''"
+            >
+              书名
+            </th>
+            <th
+              v-for="c in visibleCols"
+              :key="c.key"
               class="px-3 py-2 text-[11.5px] font-semibold text-muted-foreground"
             >
-              {{ c }}
+              {{ c.label }}
             </th>
             <th class="w-8 px-3 py-2" />
             <th class="w-20 px-3 py-2" />
@@ -1674,7 +1701,7 @@ const INPUT_CLS =
             :class="display.prefs.zebraStriping && i % 2 === 1 ? 'bg-muted/30' : ''"
             @click="onTableRowClick(row)"
           >
-            <td v-if="selectMode" class="px-3 py-2">
+            <td v-if="selectMode" class="px-3" :class="cellPad">
               <!-- 系列头行不是一本书：不给勾选框（勾上只会静默选中代表本那一册）。
                    展开后的首册是**真书**，照常可选。 -->
               <input
@@ -1685,7 +1712,10 @@ const INPUT_CLS =
                 @click.stop="toggleSelect(row.book.id)"
               />
             </td>
-            <td class="max-w-[18rem] truncate px-3 py-2 text-[12.5px] text-foreground">
+            <td
+              class="max-w-[18rem] truncate px-3 text-[12.5px] text-foreground"
+              :class="[cellPad, !selectMode ? freezeCls : '']"
+            >
               {{ row.title }}
               <span
                 v-if="!row.head && seriesIndexLabel(row.book)"
@@ -1702,10 +1732,18 @@ const INPUT_CLS =
                 系列 {{ row.toggle.count }} 册
               </span>
             </td>
-            <td class="max-w-[10rem] truncate px-3 py-2 text-[12px] text-muted-foreground">
+            <td
+              v-if="table.prefs.columns.includes('author')"
+              class="max-w-[10rem] truncate px-3 text-[12px] text-muted-foreground"
+              :class="cellPad"
+            >
               {{ row.book.author || '—' }}
             </td>
-            <td class="max-w-[10rem] truncate px-3 py-2 text-[12px] text-muted-foreground">
+            <td
+              v-if="table.prefs.columns.includes('series')"
+              class="max-w-[10rem] truncate px-3 text-[12px] text-muted-foreground"
+              :class="cellPad"
+            >
               {{ row.book.series || '—' }}
             </td>
             <!--
@@ -1713,21 +1751,37 @@ const INPUT_CLS =
               格式、页数与进度是**每册各自**的数，拿代表本的数字冒充整组就是在报假数 ——
               与网格「系列行不给格式徽章 / 不给进度条」是同一口径（第 152 期）。
             -->
-            <td class="px-3 py-2 font-mono text-[11.5px] text-muted-foreground">
+            <td
+              v-if="table.prefs.columns.includes('format')"
+              class="px-3 font-mono text-[11.5px] text-muted-foreground"
+              :class="cellPad"
+            >
               {{ row.head ? '—' : (row.book.format || '').toUpperCase() || '—' }}
             </td>
-            <td class="px-3 py-2 text-[12px] text-muted-foreground tabular-nums">
+            <td
+              v-if="table.prefs.columns.includes('pages')"
+              class="px-3 text-[12px] text-muted-foreground tabular-nums"
+              :class="cellPad"
+            >
               {{ row.head || !row.book.pages ? '—' : `${row.book.pages}${row.book.pages_source === 'estimate' ? '≈' : ''}` }}
             </td>
-            <td class="px-3 py-2 text-[12px] text-muted-foreground tabular-nums">
+            <td
+              v-if="table.prefs.columns.includes('progress')"
+              class="px-3 text-[12px] text-muted-foreground tabular-nums"
+              :class="cellPad"
+            >
               {{ row.head ? '—' : `${Math.round(row.book.percent ?? 0)}%` }}
             </td>
-            <td class="px-3 py-2 text-[11.5px] text-amber-500">
+            <td
+              v-if="table.prefs.columns.includes('rating')"
+              class="px-3 text-[11.5px] text-amber-500"
+              :class="cellPad"
+            >
               {{ !row.head && (row.book.stars ?? 0) > 0 ? '★'.repeat(row.book.stars ?? 0) : '—' }}
             </td>
             <!-- 末列 = 行操作列：头行只有「展开」；展开后的首册行**两样都有**（⋮ + 收起）——
                  此前是 `v-else`，展开后首册那本会丢掉 ⋮（第 152 期审计实测）。 -->
-            <td class="px-3 py-2">
+            <td class="px-3" :class="cellPad">
               <div class="flex items-center justify-end gap-1">
                 <BookActionsMenu
                   v-if="!row.head"

@@ -115,6 +115,7 @@ components/
 | `BookMoveDialog` | 跨库移动（选目标库 → 预检 → 确认） |
 | `MetadataEditor` | 单书元数据编辑（覆盖 / 恢复在线 / 清空的分层语义） |
 | `BatchMetadataDialog` | 书架多选的批量元数据编辑（第 157 期）：只发非空字段（留空 = 不修改），服务端逐本回执；不做批量清空 |
+| `TableColumnsPanel` | 表格视图的列面板（第 158 期）：列显隐 / 行高 / 冻结书名列 / 命名视图（导入导出）；规则在 `stores/tablePrefs.ts` |
 | `ReadingRecord` | 「我的记录」标签（状态 + 起止 + 评分 + 书评 + 轮次） |
 | `SeriesMetaPanel` | 系列级元数据面板（简介/出版社/首发年/题材）；⚠️「恢复在线」**只提交那一个字段**（空串=清除该字段覆盖） |
 | `SeriesRenumberDialog` | 重排系列序号（先预览再应用，不动文件） |
