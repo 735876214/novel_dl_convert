@@ -263,11 +263,23 @@ describe('ShelfView：折叠行显示系列名（不是代表本的 Vol.NN）', 
     })
   }
 
-  it('首字母分桶跟着系列名走（A，而不是代表本的 V）', async () => {
+  it('书名轴分桶跟着系列名走（A，而不是代表本的 V）', async () => {
+    m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
+    const w = await mountShelf('grid', true)
+    // 第 156 期起跳转条跟随排序维度 ⇒ 先切回书名轴再验「系列名分桶」
+    useShelfPrefsStore().patch({ sort: 'title' })
+    await flushPromises()
+    const buckets = w.findAll('[data-bucket]').map((el) => el.attributes('data-bucket'))
+    expect(buckets).toContain('A')
+    expect(buckets).not.toContain('V')
+  })
+
+  it('入库时间轴按年份分桶（默认排序就是入库时间）', async () => {
     m.books.mockResolvedValue({ items: VOL_SHELF, total: VOL_SHELF.length })
     const w = await mountShelf('grid', true)
     const buckets = w.findAll('[data-bucket]').map((el) => el.attributes('data-bucket'))
-    expect(buckets).toContain('A')
+    // 夹具 mtime = 1700000300（2023 年）⇒ 年份桶
+    expect(buckets).toContain('2023')
     expect(buckets).not.toContain('V')
   })
 

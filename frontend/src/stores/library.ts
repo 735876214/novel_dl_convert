@@ -234,6 +234,17 @@ export const useLibraryStore = defineStore('library', () => {
   }
 
   /**
+   * 按**分面键**筛书的**全量**投影（第 156 期）。
+   *
+   * 与 `facetBooksOf(src, key)` 同一套判据，只是取源是**全量** `scopedBooks` 而不是
+   * 书架的分页缓冲 —— 书架筛选面板的计数要在「当前库 / 当前分面 / 当前智能书架」范围内
+   * 覆盖全库，才不会被首屏分页截断。
+   */
+  function facetBooks(key: string): BookCard[] {
+    return facetBooksOf(scopedBooks.value, key)
+  }
+
+  /**
    * 进度推导（第 40 期起阈值可配，判定收敛到 `lib/readingThresholds.ts`）。
    *
    * ⚠️ 语义与前身一致：**只看进度**（不看 `b.status`）—— 这个函数的下游是书架的
@@ -773,6 +784,7 @@ export const useLibraryStore = defineStore('library', () => {
     shelfFacet,
     allTags,
     shelfBooks,
+    facetBooks,
     continueReading,
     patchProgress,
     isSmart,

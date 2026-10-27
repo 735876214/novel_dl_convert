@@ -22,7 +22,13 @@ import {
 } from '@/lib/bookInfo'
 import { bookClickPath, seriesDetailPath } from '@/lib/bookOpen'
 import { statusBucket } from '@/lib/readingThresholds'
-import { bucketKeyOf, buildBuckets } from '@/lib/shelfBuckets'
+import {
+  bucketKeyOfSort,
+  buildBuckets,
+  UNKNOWN_BUCKET,
+  type BucketSort,
+} from '@/lib/shelfBuckets'
+import { coverCounts, statusCounts, tallyTags, tallyText } from '@/lib/shelfFacets'
 import {
   useDisplayPrefsStore,
   type CardPrimaryLabel,
@@ -288,13 +294,31 @@ onMounted(() => library.loadShelfFirstPage())
  */
 const source = computed(() => library.shelfBooks)
 
-function uniq(xs: string[]): string[] {
-  return [...new Set(xs.filter(Boolean))].sort((a, b) => a.localeCompare(b, 'zh'))
-}
+/**
+ * **分面计数的数据源**（第 156 期）：全量书目，而不是已加载的那几页。
+ *
+ * 第 88 期起书架首屏只拉第一页，原先的选项却从这一页 `uniq` 出来 ——
+ * 大库里「某种语言 / 某个题材」在前几页没出现时，下拉里就没有这一项（假缺失）。
+ * 全量 `books` 由侧栏 / 应用启动那条既有路径拉回；若它还没到，退回已加载页
+ * （这时与改造前行为一致，至少不空）。
+ *
+ * **范围与书架的基础筛选源完全一致**（当前库 / 当前分面 / 当前智能书架），只是取源换成全量；
+ * 不叠加筛选面板自己的五项 —— 每个选项告诉用户「选它会有多少本」，不随已选项忽大忽小。
+ */
+const facetSource = computed<BookCard[]>(() => {
+  if (!library.loaded) return library.shelfBooks   // 全量还没到 ⇒ 退回已加载页（与改造前一致）
+  if (library.shelfFacet) return library.facetBooks(library.shelfFacet)
+  if (library.smartKey) return library.smartBooks(library.smartKey)
+  return library.scopedBooks
+})
 
-const formatOptions = computed(() => uniq(source.value.map((b) => (b.format || '').toUpperCase())))
-const languageOptions = computed(() => uniq(source.value.map((b) => (b.language || '').trim())))
-const tagOptions = computed(() => uniq(source.value.flatMap((b) => b.tags || [])))
+const formatOptions = computed(() =>
+  tallyText(facetSource.value.map((b) => b.format), (v) => v.trim().toUpperCase()),
+)
+const languageOptions = computed(() => tallyText(facetSource.value.map((b) => b.language)))
+const tagOptions = computed(() => tallyTags(facetSource.value))
+const coverFacet = computed(() => coverCounts(facetSource.value))
+const statusFacet = computed(() => statusCounts(facetSource.value, library.currentLibraryId))
 
 const fFormat = ref('')
 const fLanguage = ref('')
@@ -456,13 +480,50 @@ function isFinishedOf(b: BookCard): boolean {
 const renderRows = computed<Row[]>(() => rows.value)
 
 /**
- * 首字母分桶（第 43 期）：按**这一行的标题**（`rowTitle`）的首字分桶。
+ * **当前排序维度对应的跳转轴**（第 156 期）：桶的键集合必须与排序字段绑定 ——
+ * 按作者排序时还按书名分桶，跳过去永远是错的桶。
+ *
+ * 进度 / 页数 / 评分是数值轴，没有自然分桶；**不硬造**（「0–25%」这类区间是筛选条件，
+ * 不是跳转目标）。这种情况下跳转条不显示，而不是继续显示一套与排序无关的书名首字母。
+ */
+const bucketSort = computed<BucketSort | null>(() => {
+  switch (prefs.prefs.sort) {
+    case 'title':
+      return 'title'
+    case 'author':
+      return 'author'
+    case 'series':
+      return 'series'
+    case 'added':
+      return 'added'
+    default:
+      return null
+  }
+})
+
+/** 一行的桶键（三套渲染共用）。`title` 是这一行的显示标题（见 `rowTitle`）。 */
+function bucketKeyFor(title: string, book?: BookCard | null): string {
+  return bucketKeyOfSort(bucketSort.value ?? 'title', title, book)
+}
+
+/**
+ * 跳转分桶（第 43 期；第 156 期跟随排序维度）。
  *
  * 第 152 期修正：这里原取代表本的书名 —— 系列折叠行于是按「代表本叫 `Vol.04`」
  * 分到 `#` / `V` 桶，而卡片上明明写着系列名（`Angel Beats! …`）。同一行在跳转条与
- * 卡片上有两个首字母，跳过去永远是错的桶。
+ * 卡片上有两个首字母，跳过去永远是错的桶。现在与渲染共用 `bucketKeyFor`。
+ *
+ * 日期轴的空值进 `未知` 桶、**不隐藏**（与上游 unknownDate 同语义）。
  */
-const buckets = computed(() => buildBuckets(renderRows.value.map(rowTitle)))
+const buckets = computed(() => {
+  const axis = bucketSort.value
+  if (!axis) return []
+  return buildBuckets(
+    renderRows.value.map((r) => bucketKeyFor(rowTitle(r), r.book)),
+    (k) => k,
+    axis === 'added' ? UNKNOWN_BUCKET : '#',
+  )
+})
 
 /** 当前视口所在的桶（滚动时更新；用于高亮跳转条） */
 const activeBucket = ref('')
@@ -1143,7 +1204,7 @@ const INPUT_CLS =
           <span class="text-[11px] text-muted-foreground">格式</span>
           <select v-model="fFormat" :class="INPUT_CLS">
             <option value="">全部</option>
-            <option v-for="f in formatOptions" :key="f" :value="f">{{ f }}</option>
+            <option v-for="f in formatOptions" :key="f.value" :value="f.value">{{ f.value }}（{{ f.count }}）</option>
           </select>
         </label>
 
@@ -1151,7 +1212,7 @@ const INPUT_CLS =
           <span class="text-[11px] text-muted-foreground">语言</span>
           <select v-model="fLanguage" :class="INPUT_CLS">
             <option value="">全部</option>
-            <option v-for="l in languageOptions" :key="l" :value="l">{{ l }}</option>
+            <option v-for="l in languageOptions" :key="l.value" :value="l.value">{{ l.value }}（{{ l.count }}）</option>
           </select>
         </label>
 
@@ -1159,7 +1220,7 @@ const INPUT_CLS =
           <span class="text-[11px] text-muted-foreground">题材（EPUB 元数据）</span>
           <select v-model="fTag" :class="INPUT_CLS">
             <option value="">全部</option>
-            <option v-for="t in tagOptions" :key="t" :value="t">{{ t }}</option>
+            <option v-for="t in tagOptions" :key="t.value" :value="t.value">{{ t.value }}（{{ t.count }}）</option>
           </select>
         </label>
 
@@ -1167,8 +1228,8 @@ const INPUT_CLS =
           <span class="text-[11px] text-muted-foreground">封面</span>
           <select v-model="fCover" :class="INPUT_CLS">
             <option value="all">全部</option>
-            <option value="yes">有封面</option>
-            <option value="no">无封面</option>
+            <option value="yes">有封面（{{ coverFacet.yes }}）</option>
+            <option value="no">无封面（{{ coverFacet.no }}）</option>
           </select>
         </label>
 
@@ -1176,9 +1237,9 @@ const INPUT_CLS =
           <span class="text-[11px] text-muted-foreground">阅读状态</span>
           <select v-model="fStatus" :class="INPUT_CLS">
             <option value="all">全部</option>
-            <option value="unread">未读</option>
-            <option value="reading">在读</option>
-            <option value="finished">已读完</option>
+            <option value="unread">未读（{{ statusFacet.unread }}）</option>
+            <option value="reading">在读（{{ statusFacet.reading }}）</option>
+            <option value="finished">已读完（{{ statusFacet.finished }}）</option>
           </select>
         </label>
 
@@ -1245,10 +1306,21 @@ const INPUT_CLS =
     </div>
 
     <template v-else>
-    <!-- 首字母分桶跳转（第 43 期）：按书名首字分桶，非拉丁字符统一归 # 桶。
-         桶数不足 3 时不显示 —— 两三个桶的「跳转」只是噪音。 -->
+    <!-- 跳转分桶（第 43 期；第 156 期跟随排序维度）：书名/作者/系列按首字、入库时间按年份；
+         非拉丁字符统一归 # 桶，无日期的归「未知」桶。
+         桶数不足 3 时不显示 —— 两三个桶的「跳转」只是噪音。
+
+         第 152 期：**加载期占位**。这条是 `sticky` 且带 `mb-3`，它一出现就把整张网格
+         往下推 —— 无头浏览器实测书架 CLS 0.081（两次位移都由它引起）。加载期先留出
+         同样的高度（`h-[2.4rem]` ≈ 按钮 1.4rem + 上下 padding 0.75rem + mb-3），
+         数据到了就地换成真条，位置不再跳。 -->
     <div
-      v-if="sorted.length && buckets.length >= 3"
+      v-if="library.loading && !source.length"
+      class="mb-3 h-[2.4rem]"
+      aria-hidden="true"
+    />
+    <div
+      v-else-if="sorted.length && buckets.length >= 3"
       class="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-1 rounded-lg bg-background/85 px-1 py-1.5 backdrop-blur"
     >
       <button
@@ -1311,7 +1383,7 @@ const INPUT_CLS =
         v-for="r in renderRows"
         :key="r.key"
         class="group [content-visibility:auto] [contain-intrinsic-size:auto_260px]"
-        :data-bucket="bucketKeyOf(rowTitle(r))"
+        :data-bucket="bucketKeyFor(rowTitle(r), r.book)"
       >
         <!--
           封面盒 —— **⋮ 锚在它的右下角**，所以它必须只包着封面。
@@ -1481,7 +1553,7 @@ const INPUT_CLS =
         v-for="e in listEntries"
         :key="e.key"
         padding="sm"
-        :data-bucket="bucketKeyOf(e.title)"
+        :data-bucket="bucketKeyFor(e.title, e.book)"
         :class="e.kind === 'book' ? 'cursor-pointer transition-colors hover:bg-muted/50' : 'border-dashed'"
         @click="onEntryClick(e)"
       >
@@ -1576,7 +1648,7 @@ const INPUT_CLS =
           <tr
             v-for="(row, i) in tableRows"
             :key="row.key"
-            :data-bucket="bucketKeyOf(row.title)"
+            :data-bucket="bucketKeyFor(row.title, row.book)"
             class="cursor-pointer border-b border-border/60 transition-colors last:border-b-0 hover:bg-muted/50"
             :class="display.prefs.zebraStriping && i % 2 === 1 ? 'bg-muted/30' : ''"
             @click="onTableRowClick(row)"
