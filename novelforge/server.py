@@ -1509,7 +1509,7 @@ async def api_toc_fetch(payload: dict = Body(...)):
     reason = mgr.gate_reason(feature="toc")
     if reason:
         raise HTTPException(400, reason)
-    detail = library.book_detail(b["name"], b.get("library_id")) or {}
+    detail = library.book_detail(b["name"], b.get("library_id"), book=b) or {}
     local = [c for g in (detail.get("chapters") or []) for c in (g.get("chapters") or [])]
     try:
         res = await toc_sources.fetch_toc(
@@ -2950,7 +2950,7 @@ def api_book_detail(bid: str):
     b = library.by_id(bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
-    detail = library.book_detail(b["name"], b.get("library_id"))
+    detail = library.book_detail(b["name"], b.get("library_id"), book=b)
     if not detail:
         raise HTTPException(404, "书籍不存在")
     # 第 63 期 5/6：绝对路径**按访问来源**给（`_card` 的说明），要它的地方是
@@ -5034,7 +5034,11 @@ def api_series_detail(name: str):
     第 12 期补 ``meta`` / ``meta_state``：系列级元数据的生效值与逐字段明细，
     供系列页展示简介与编辑器渲染「已本地修改 / 恢复在线」。
     """
-    bs = [_card(x) for x in library.series_books(name)]
+    # ⚠️ 只扫一次全库（第 152 期）：下面 meta / meta_state / gaps 三处原本各调一次
+    # `library.series_books()`，连同这一次共 **4 遍 2,309 本** —— 实测占本请求 180 ms
+    # 里的 60–66 ms。四处的答案必须是同一批书，所以把这一次的结果传下去。
+    rows = library.series_books(name)
+    bs = [_card(x) for x in rows]
     if not bs:
         raise HTTPException(404, "系列不存在")
     buckets: dict = {}
@@ -5053,10 +5057,11 @@ def api_series_detail(name: str):
             for t in order
         ],
         # 单系列查询：这里做**完整**分层（含成员书聚合），成本可接受
-        "meta": series_meta.effective(name),
-        "meta_state": series_meta.state(name),
+        # （第 152 期：成员书目只扫一次，三处共用 `rows` —— 见函数开头的注释）
+        "meta": series_meta.effective(name, books=rows),
+        "meta_state": series_meta.state(name, books=rows),
         # 第 43 期：缺册（按 series_index 数字集合求 [1..max] 的补集；无序号/非数字另计）
-        "gaps": library.series_gaps(name),
+        "gaps": library.series_gaps(name, books=rows),
     }
 
 

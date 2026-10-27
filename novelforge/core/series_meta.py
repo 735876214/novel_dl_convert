@@ -72,13 +72,17 @@ def _as_tags(value) -> list:
     return out
 
 
-def _aggregate(name: str) -> dict:
+def _aggregate(name: str, books: "list | None" = None) -> dict:
     """从**成员书的 OPF** 汇总系列级事实（零猜测）。
 
     出版社取「出现最多的那个」（一个系列换过出版社时，多数派比第一册更有代表性）；
     首发年取最早的一个；题材取并集（保序）；册数就是成员书本数。
+
+    ⚠️ ``books`` 可由调用方传入（第 152 期）：`library.series_books()` 每次都要把全库
+    2,309 本过一遍，而系列详情端点原本要调它 **4 次**（本函数 + `state()` + 端点自身 +
+    `series_gaps()`）—— 实测占该请求 180 ms 里的 60–66 ms。传进来就只扫一次。
     """
-    bs = library.series_books(str(name or ""))
+    bs = books if books is not None else library.series_books(str(name or ""))
 
     pubs = [str(b.get("publisher") or "").strip() for b in bs]
     pubs = [p for p in pubs if p]
@@ -119,7 +123,7 @@ def _pick(row: dict, field: str, agg_value: str) -> tuple:
     return str(row.get(field) or "").strip(), False
 
 
-def effective(name: str) -> dict:
+def effective(name: str, books: "list | None" = None) -> dict:
     """系列生效元数据（供系列页 / Komga / OPDS 三处展示）。
 
     字段语义见模块 docstring：``owned_count`` 与 ``declared_count`` **不可混用**。
@@ -128,7 +132,7 @@ def effective(name: str) -> dict:
     """
     name = str(name or "").strip()
     row = db.get_series_meta(name) or {}
-    agg = _aggregate(name)
+    agg = _aggregate(name, books)
 
     description, desc_ov = _pick(row, "description", "")   # 本地无从推断系列简介
     publisher, pub_ov = _pick(row, "publisher", agg["publisher"])
@@ -200,14 +204,14 @@ def effective_light(name: str, row: dict = None) -> dict:
     }
 
 
-def state(name: str) -> dict:
+def state(name: str, books: "list | None" = None) -> dict:
     """逐字段明细（编辑器用）：生效值 / 在线值 / 聚合值 / 是否被本地覆盖。
 
     与 ``metastore.state()`` 同形状，前端据此渲染「已本地修改」徽标与「恢复在线」。
     """
     name = str(name or "").strip()
     row = db.get_series_meta(name) or {}
-    agg = _aggregate(name)
+    agg = _aggregate(name, books)
     local_cols = {
         "description": "description_local", "publisher": "publisher_local",
         "first_year": "first_year_local", "tags": "tags_local",

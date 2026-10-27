@@ -1515,8 +1515,11 @@ def series_books(name: str) -> list:
     return [b for b in books() if (b.get("series") or "").strip() == name]
 
 
-def series_gaps(name: str) -> dict:
+def series_gaps(name: str, books: "list | None" = None) -> dict:
     """按 ``calibre:series_index`` 找出该系列**缺失的册号**（第 43 期）。
+
+    ``books`` 可由调用方传入（第 152 期）：`series_books()` 每次都要把全库过一遍，
+    系列详情端点本来要调它四次；传进来就只扫一次。
 
     判据（**唯一真值源**，前端不再自己算）：
       · 只对**数字序号**判定：把各册 ``series_index`` 解析成整数集合，取 ``[1..max]``
@@ -1529,7 +1532,7 @@ def series_gaps(name: str) -> dict:
     返回 ``{missing, max_index, numbered, unnumbered, has_unnumbered,
     non_numeric, has_non_numeric, total}``。
     """
-    bs = series_books(name)
+    bs = books if books is not None else series_books(name)
     nums: set = set()
     unnumbered = 0
     non_numeric = 0
@@ -2648,9 +2651,13 @@ def _toc_apply(b: dict, chapters: list) -> tuple:
         chapters, row.get("entries") or [], db.toc_map_get(book_id, row["source"])), items, row["source"]
 
 
-def book_detail(name: str, library_id=None) -> dict | None:
-    """单本详情：基础元数据 + 真实章节树 + 同 stem 的成品文件列表（音频另给轨道清单）。"""
-    b = find(name, library_id)
+def book_detail(name: str, library_id=None, book: "dict | None" = None) -> dict | None:
+    """单本详情：基础元数据 + 真实章节树 + 同 stem 的成品文件列表（音频另给轨道清单）。
+
+    ``book`` 可由调用方传入（第 152 期）：调用点已经 `by_id()` 拿到那一行了，
+    再让本函数 `find()` 按名字扫一遍全库就是白扫一次（详情页每开一次付一次）。
+    """
+    b = book if book is not None else find(name, library_id)
     if not b:
         return None
     root = root_of(b)
