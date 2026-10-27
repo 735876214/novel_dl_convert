@@ -10725,3 +10725,46 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 
 **下一步（没做、留档）**：`/api/series/{name}` 的 `groups[].books` 收 ids（第 152 期 §九已评估：只省 ~13 ms，
 要动公开响应形状，不做）；单 uvicorn worker 的并发排队（读路径重构，与并行会话的前端改动撞车，暂缓）。
+
+## 第 162 期（仪表盘统计 brief 模式（/api/stats?brief=1））
+
+**需求来源**：用户「优化加载速度，可以缓存的尽量不要全量加载」（续第 161 期）。
+
+**根因（真实实例实测）**：`/api/stats` 在 2,309 本的库上是 **49 KB / 129–317 ms**，
+仪表盘每次进站都要拉一次（9 个部件共用一次请求）。但逐部件核过的结果是：九个部件
+真正读的键只有 **3.6% 的字节**（`books.total/size/by_format/languages`、
+`authors.total`、`series.total`、`reading.finished/streak/days/sessions`、
+`added_28d`、`reading_28d`、`added_month`、`window`、`hours`）——其余 96% 是
+统计页专属的图表序列，而为它们买单的还有三笔**后端重计算**：
+`db.session_log` **五年全表扫**（1825 天窗）、逐本 `metascore.audit`、Top-50 体积榜。
+
+**修法**（不缓存、不抽样，是把「算」与「传」都砍到部件真正要的量）：
+
+| 改动 | 改前 | 改后 | 依据 |
+|---|---|---|---|
+| `stats.brief()`（`core/stats.py`） | 仪表盘走完整 `overview()` | 独立实现：只算部件要的聚合，**跳过**五年扫表 / metascore 审计 / Top-50 / 图表序列 | 逐部件键审计（九件并集） |
+| `GET /api/stats?brief=1`（`server.py`） | 一个出口 | `brief=1` 走 `brief()`；缺省走 `overview()`（统计页 URL 逐字节不变） | `test_stats_brief_162.py` 7 例 |
+| 前端 `stats.load()` 改 `api.statsBrief` | 仪表盘拉 49 KB | 拉小份（空库实测 1.1 KB → 0.5 KB；重库收益更大） | `stores/stats.ts` |
+| `LibraryOverviewWidget` 的回退链 | `stats.data?.books.total ?? library.books.length`（隐式依赖 1.9 MB 全量书目） | `?? 0`（brief 里该键恒有；统计失败走 error 态） | 回退链注释 |
+| `_classify_status()` 收口 | 状态归类内联在 `overview()` 里 | 抽成函数，`overview` 与 `brief` 共用 —— **判据不分叉** | 第 40 期阈值口径 |
+
+**护栏**（`tests/test_stats_brief_162.py`，7 例）：
+
+- **键不缺**：部件读的键与子形状（`books` 四字段 / `reading` 五字段 / `authors.total`…）逐条断言；
+- **重键缺席**：24 个统计页专属键（`session_timeline` / `largest` / `library_metadata` /
+  `metadata_score` / 图表序列…）在 brief 里**不出现**（不是空值）；
+- **判据不分叉**：`reading.finished` / `books.total` / `by_format` / `languages` 与完整份逐一相等；
+- **收益兑现**：brief 体积 < 完整份的 1/4（这条守着「将来有人顺手把重键加回来」）；
+- 缺省（不带 `brief`）输出与从前一致（统计页向后兼容）。
+
+**防回归**：`tests/test_stats_brief_162.py`（7 例）；`loadDedup.spec.ts` 的 stats 单飞闸
+改认 `statsBrief`；`DashboardView.spec.ts` 的页级三态改桩 `statsBrief`；前端四连通过。
+
+**核验**：后端全量 **2876 例（2863 passed / 13 环境失败 / 14 skipped），537 s** ——
+13 例与本批无关（见 §0 基线注）；本地实例实测 brief/full 两出口形状对拍（逐键 JSON 相等）
+与体积差；空库实例 brief 474 B vs full 1136 B。
+
+**没做（如实留档）**：`/api/stats` 的**服务端 TTL 缓存**仍然不做 —— 第 152 期的理由原样成立
+（它同时依赖书目索引与阅读会话两处可变数据，没有进度写入的失效钩子）；brief 模式把
+「每次现算」的成本降到了仪表盘可接受的水平，不需要再叠缓存。LongWait / NeglectedGems
+两个部件保留 `loadBooks()`：它们按 `percent` / `updated_at` 逐本筛，属于真需求。
