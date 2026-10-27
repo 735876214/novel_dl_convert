@@ -260,6 +260,20 @@ def init():
                 pin_hash   TEXT NOT NULL,
                 created_at REAL NOT NULL
             );
+            -- 只读客户端凭据（第 160 期）：给 OPDS 这类外部阅读器的独立账号。
+            -- ⚠️ 它们**只**能读目录 / 封面 / 下载（`/opds/*`），进不了 `/api/*`；
+            -- 每个凭据可限定一组书库（空串 = 全部可见库）。`pin_hash` 与 users 同一算法
+            -- （`db.pin_hash`），响应里**永不**下发（只给 has_pin 之类的布尔）。
+            CREATE TABLE IF NOT EXISTS client_credentials (
+                id           TEXT PRIMARY KEY,
+                username     TEXT UNIQUE NOT NULL,
+                label        TEXT NOT NULL DEFAULT '',
+                pin_hash     TEXT NOT NULL,
+                library_ids  TEXT NOT NULL DEFAULT '',
+                enabled      INTEGER NOT NULL DEFAULT 1,
+                created_at   REAL NOT NULL DEFAULT 0,
+                last_used_at REAL NOT NULL DEFAULT 0
+            );
             -- 语义向量（第 54 期）：每本书一行，vec = core/embed.py 按「当前语料 + 模型」
             -- 派生的 float32 小端定长向量。它是**纯派生缓存**（删了随时可由 recompute
             -- 重建），但行丢了 ⇒ 相似书的余弦一路静默回落词袋，所以仍按含 book_id 表的
@@ -1252,6 +1266,108 @@ def set_pin(username: str, pin: str) -> None:
     with _lock:
         c.execute("UPDATE users SET pin_hash=? WHERE username=?",
                   (pin_hash(username, pin), username))
+        c.commit()
+
+
+# ---------------- 只读客户端凭据（第 160 期）----------------
+# 外部阅读器（OPDS 客户端）只支持 HTTP Basic，而单用户应用的 PIN 一旦给出去就等于
+# 交出管理员。这里存**独立账号**：只能读 `/opds/*`，且可限定书库范围。
+# ⚠️ 读函数一律**不含** pin_hash（响应层不该有机会把它带出去）；需要校验的只有
+# `get_client_credential()` 这一个入口。
+
+_CRED_COLS = {"label", "pin_hash", "library_ids", "enabled"}
+
+
+def _cred_out(row) -> dict:
+    """对外形态：范围解析成数组（空数组 = 全部可见库）。"""
+    raw = str(row["library_ids"] or "").strip()
+    try:
+        arr = json.loads(raw) if raw else []
+    except Exception:
+        arr = []
+    ids = [str(x) for x in arr] if isinstance(arr, list) else []
+    return {
+        "id": str(row["id"]),
+        "username": str(row["username"]),
+        "label": str(row["label"] or ""),
+        "library_ids": ids,
+        "enabled": bool(row["enabled"]),
+        "created_at": float(row["created_at"] or 0),
+        "last_used_at": float(row["last_used_at"] or 0),
+    }
+
+
+def list_client_credentials() -> list:
+    rows = _connect().execute(
+        "SELECT id, username, label, library_ids, enabled, created_at, last_used_at "
+        "FROM client_credentials ORDER BY created_at, id"
+    ).fetchall()
+    return [_cred_out(r) for r in rows]
+
+
+def get_client_credential(username: str) -> "dict | None":
+    """按用户名取**校验用**行（含 pin_hash）。只给认证入口用。"""
+    row = _connect().execute(
+        "SELECT id, username, label, pin_hash, library_ids, enabled, created_at, last_used_at "
+        "FROM client_credentials WHERE username=?", (str(username),)
+    ).fetchone()
+    if not row:
+        return None
+    out = _cred_out(row)
+    out["pin_hash"] = str(row["pin_hash"] or "")
+    return out
+
+
+def create_client_credential(cid, username, label, pin_hash_value, library_ids="") -> dict:
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO client_credentials"
+            "(id, username, label, pin_hash, library_ids, enabled, created_at, last_used_at) "
+            "VALUES(?,?,?,?,?,1,?,0)",
+            (str(cid), str(username), str(label or ""), str(pin_hash_value),
+             str(library_ids or ""), time.time()),
+        )
+        c.commit()
+    row = c.execute(
+        "SELECT id, username, label, library_ids, enabled, created_at, last_used_at "
+        "FROM client_credentials WHERE id=?", (str(cid),)
+    ).fetchone()
+    return _cred_out(row) if row else {}
+
+
+def update_client_credential(cid, **fields) -> "dict | None":
+    cols = {k: v for k, v in fields.items() if k in _CRED_COLS}
+    c = _connect()
+    with _lock:
+        if cols:
+            c.execute(
+                "UPDATE client_credentials SET " + ", ".join(f"{k}=?" for k in cols)
+                + " WHERE id=?",
+                (*cols.values(), str(cid)),
+            )
+            c.commit()
+    row = c.execute(
+        "SELECT id, username, label, library_ids, enabled, created_at, last_used_at "
+        "FROM client_credentials WHERE id=?", (str(cid),)
+    ).fetchone()
+    return _cred_out(row) if row else None
+
+
+def delete_client_credential(cid) -> bool:
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM client_credentials WHERE id=?", (str(cid),))
+        c.commit()
+    return bool(cur.rowcount)
+
+
+def touch_client_credential(cid) -> None:
+    """记一次成功认证（列表上显示「最近使用」）。失败不写 —— 别让爆破留下痕迹。"""
+    c = _connect()
+    with _lock:
+        c.execute("UPDATE client_credentials SET last_used_at=? WHERE id=?",
+                  (time.time(), str(cid)))
         c.commit()
 
 

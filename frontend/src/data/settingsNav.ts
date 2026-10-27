@@ -307,7 +307,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['SERVER', 'ENDPOINT', 'OPDS ACCOUNTS', 'OPDS NOTES'],
           items: ['OPDS Catalog Server 开关', '端点地址（可复制）', 'OPDS 账号管理', '排序（Recently Added / Title / Author / Series 各升降序）'],
         },
-        note: '已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页（?page=）与排序（?sort=recent|title|author|series&order=）。第 14 期起支持按书库分别暴露：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 /opds/lib/<库 id>，可在「设置 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404）。鉴权用 HTTP Basic + 应用账号（OPDS 客户端只会发 Basic，所以 /opds 不走 /api 的 Bearer 中间件）。未支持：独立 OPDS 账号体系。',
+        note: '已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页（?page=）与排序（?sort=recent|title|author|series&order=）。第 14 期起支持按书库分别暴露：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 /opds/lib/<库 id>，可在「设置 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404）。鉴权用 HTTP Basic：管理员账号或**独立只读账号**（OPDS 客户端只会发 Basic，所以 /opds 不走 /api 的 Bearer 中间件）；第 160 期起可在本页新建只读账号并限定可见书库（账号只能读 /opds，进不了 /api）。未支持：账号到期时间、按客户端细分的下载权限。',
       }),
       p('koreader', 'KOReader', 'KOReader 进度互通', 'ready', {
         upstream: {

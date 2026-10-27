@@ -4,7 +4,7 @@ import { computed, onMounted, ref } from 'vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
-import { api, type LibraryEntity } from '@/lib/api'
+import { api, type LibraryEntity, type OpdsCredential } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 
@@ -21,7 +21,8 @@ import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vu
  * 每个书库有独立地址 `/opds/lib/<库 id>`，可以只订阅其中一个。逐库开关在
  * 「设置 → 书库管理 → 每库设置」的「对 OPDS 暴露」（默认全部暴露）。
  *
- * 未支持：独立的 OPDS 账号体系（上游可为不同客户端建不同账号与权限）。
+ * 第 160 期补上**独立只读账号**：只能读 `/opds/*`，可限定书库范围 —— 给外部阅读器
+ * 的 PIN 不再等于交出管理员账号（判据在 `auth.verify_client` / `auth.client_library_scope`）。
  */
 const ui = useUiStore()
 const { cfg, saving, val, setVal, loadConfig, saveSection } = useSettingsConfig()
@@ -35,6 +36,7 @@ onMounted(async () => {
   } catch {
     libs.value = []   // 书库列表取不到不影响本页其它开关，不弹错
   }
+  await loadCreds()
 })
 
 const enabled = computed(() => Boolean(val('opds.enabled')))
@@ -54,6 +56,88 @@ const account = computed(() => {
 })
 
 /** 存**被复制的那条地址**（而不是布尔值）：多行列地址时不会一起变成「已复制」 */
+/** 输入框样式（本页新建只读账号表单用） */
+const INPUT =
+  'h-8 rounded-md border border-border bg-card px-2 text-[12px] text-foreground outline-none focus:border-ring'
+
+// ---------------- 只读客户端凭据（第 160 期）----------------
+const creds = ref<OpdsCredential[]>([])
+const credBusy = ref('')
+const newLabel = ref('')
+const newUser = ref('')
+const newPin = ref('')
+/** 新建时勾选的书库；**一个都不勾 = 全部可见库**（与后端空数组语义一致） */
+const newLibs = ref<string[]>([])
+
+function libName(id: string): string {
+  return libs.value.find((l) => l.id === id)?.name || id
+}
+
+function scopeText(c: OpdsCredential): string {
+  return c.library_ids.length ? c.library_ids.map(libName).join('、') : '全部可见书库'
+}
+
+function fmtUsed(ts: number): string {
+  if (!ts) return '从未使用'
+  return new Date(ts * 1000).toLocaleString()
+}
+
+async function loadCreds(): Promise<void> {
+  try {
+    creds.value = (await api.opdsCredentials()).items ?? []
+  } catch {
+    creds.value = []   // 取不到不影响本页开关；新建时后端会给出真实原因
+  }
+}
+
+async function createCred(): Promise<void> {
+  if (credBusy.value || !newUser.value.trim() || !newPin.value) return
+  credBusy.value = 'create'
+  try {
+    await api.createOpdsCredential({
+      username: newUser.value.trim(),
+      pin: newPin.value,
+      label: newLabel.value.trim(),
+      library_ids: newLibs.value,
+    })
+    ui.toast('只读账号已创建')
+    newLabel.value = ''
+    newUser.value = ''
+    newPin.value = ''
+    newLibs.value = []
+    await loadCreds()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '创建失败')
+  } finally {
+    credBusy.value = ''
+  }
+}
+
+async function toggleCred(c: OpdsCredential): Promise<void> {
+  credBusy.value = c.id
+  try {
+    await api.updateOpdsCredential(c.id, { enabled: !c.enabled })
+    await loadCreds()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '操作失败')
+  } finally {
+    credBusy.value = ''
+  }
+}
+
+async function removeCred(c: OpdsCredential): Promise<void> {
+  credBusy.value = c.id
+  try {
+    await api.deleteOpdsCredential(c.id)
+    ui.toast(`已删除账号 ${c.username}`)
+    await loadCreds()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '删除失败')
+  } finally {
+    credBusy.value = ''
+  }
+}
+
 const copied = ref('')
 async function copy(text: string): Promise<void> {
   try {
@@ -142,11 +226,87 @@ async function toggle(): Promise<void> {
 
       <div class="border-b border-border px-4 py-3.5">
         <div class="mb-1.5 text-[13px] font-medium text-foreground">账号</div>
-        <div class="text-[12.5px] text-muted-foreground">
-          用户名 <code class="font-mono text-foreground">{{ account }}</code>，密码 = 你的登录 PIN。
-          OPDS 客户端用 HTTP Basic 认证，只认这套应用账号（不另建一套凭据）。
+        <div class="text-[12.5px] leading-relaxed text-muted-foreground">
+          管理员账号 <code class="font-mono text-foreground">{{ account }}</code> + 登录 PIN
+          → 可看<strong>全部可见书库</strong>。第 160 期起还可以建<strong>只读账号</strong>：
+          它只能读 OPDS 目录 / 封面 / 下载，且可限定只看某几个库（给孩子的设备、只订阅漫画库）。
         </div>
-        <div class="mt-1.5 text-[11.5px] text-amber-600 dark:text-amber-400">
+
+        <ul v-if="creds.length" class="mt-2.5 space-y-1.5">
+          <li
+            v-for="c in creds"
+            :key="c.id"
+            class="flex flex-wrap items-center gap-2 rounded-md border border-border px-2.5 py-1.5"
+          >
+            <span class="min-w-0 text-[12.5px] text-foreground">
+              <b>{{ c.username }}</b>
+              <span v-if="c.label" class="ml-1 text-muted-foreground">（{{ c.label }}）</span>
+            </span>
+            <span class="text-[11.5px] text-muted-foreground">{{ scopeText(c) }}</span>
+            <span class="text-[11px] text-muted-foreground/80">{{ fmtUsed(c.last_used_at) }}</span>
+            <span
+              class="rounded-full px-1.5 py-0.5 text-[10.5px]"
+              :class="c.enabled
+                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                : 'bg-muted text-muted-foreground'"
+            >
+              {{ c.enabled ? '启用' : '停用' }}
+            </span>
+            <div class="ml-auto flex gap-1">
+              <Button size="sm" variant="ghost" :disabled="!!credBusy" @click="toggleCred(c)">
+                {{ c.enabled ? '停用' : '启用' }}
+              </Button>
+              <Button size="sm" variant="ghost" :disabled="!!credBusy" @click="removeCred(c)">删除</Button>
+            </div>
+          </li>
+        </ul>
+        <p v-else class="mt-2 text-[11.5px] text-muted-foreground">还没有只读账号（管理员账号照常可用）。</p>
+
+        <div class="mt-3 grid gap-2 sm:grid-cols-3">
+          <label class="flex flex-col gap-1">
+            <span class="text-[11px] text-muted-foreground">备注</span>
+            <input v-model="newLabel" type="text" :class="INPUT" placeholder="如 孩子的平板" :disabled="!!credBusy">
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="text-[11px] text-muted-foreground">用户名</span>
+            <input v-model="newUser" type="text" :class="INPUT" placeholder="3–32 位" :disabled="!!credBusy">
+          </label>
+          <label class="flex flex-col gap-1">
+            <span class="text-[11px] text-muted-foreground">PIN</span>
+            <input v-model="newPin" type="password" :class="INPUT" placeholder="至少 4 位" :disabled="!!credBusy">
+          </label>
+        </div>
+        <div v-if="libs.length" class="mt-2">
+          <div class="text-[11.5px] text-muted-foreground">可看的书库（<strong>一个都不勾 = 全部可见书库</strong>）</div>
+          <div class="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+            <label
+              v-for="l in libs"
+              :key="l.id"
+              class="flex cursor-pointer items-center gap-1.5 text-[12px] text-foreground"
+            >
+              <input
+                v-model="newLibs"
+                type="checkbox"
+                :value="l.id"
+                class="h-3.5 w-3.5 cursor-pointer accent-primary"
+                :disabled="!!credBusy"
+              >
+              {{ l.name }}
+            </label>
+          </div>
+        </div>
+        <div class="mt-2 flex justify-end">
+          <Button
+            size="sm"
+            variant="primary"
+            :disabled="!!credBusy || !newUser.trim() || !newPin"
+            @click="createCred"
+          >
+            {{ credBusy === 'create' ? '创建中…' : '新建只读账号' }}
+          </Button>
+        </div>
+
+        <div class="mt-2 text-[11.5px] text-amber-600 dark:text-amber-400">
           注意：Basic 认证是明文传输，请只在可信内网（或套 HTTPS 的反向代理）下开启。
         </div>
       </div>
@@ -155,7 +315,7 @@ async function toggle(): Promise<void> {
         <div class="mb-2 text-[13px] font-medium text-foreground">客户端怎么填</div>
         <ol class="ml-4 list-decimal space-y-1 text-[12.5px] text-muted-foreground">
           <li>在阅读器里找「添加 OPDS 目录 / 网络书库」这类入口</li>
-          <li>地址填上面的端点，用户名填 <code class="font-mono">{{ account }}</code>，密码填 PIN</li>
+          <li>地址填上面的端点，用户名 / PIN 填管理员账号，或上面新建的只读账号</li>
           <li>保存后会看到「全部书籍 / 最近添加 / 按作者 / 按系列 / 按标签 / 搜索」</li>
         </ol>
         <p class="mt-2 text-[11.5px] text-muted-foreground">
@@ -170,10 +330,10 @@ async function toggle(): Promise<void> {
       label="OPDS"
       :groups="['SERVER', 'ENDPOINT', 'OPDS ACCOUNTS', 'OPDS NOTES']"
       :items="[
-        'OPDS 账号管理（独立账号 / 每客户端权限 / 失效时间）——本项目用应用账号',
+        '每客户端权限细分（只读 / 可下载分区 / 到期时间）——第 160 期只做「只读 + 书库范围」',
         '仅 HTTPS 的强制开关（上游为按部署方式给建议）',
       ]"
-      note="本项目已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页与排序参数、Basic 认证（账号=应用账号），以及按书库分别暴露（每个书库有独立地址，可逐库开关）。"
+      note="本项目已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页与排序参数、Basic 认证（管理员账号或**独立只读账号**，后者可限定书库），以及按书库分别暴露（每个书库有独立地址，可逐库开关）。"
     />
   </div>
 </template>

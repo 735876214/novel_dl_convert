@@ -22,6 +22,7 @@
 """
 import hashlib
 import hmac
+import json
 import os
 import threading
 import time
@@ -151,6 +152,55 @@ def verify_pin(user: str, pin: str, host: str) -> bool:
         return True
     _note_failure(key)
     return False
+
+
+def verify_client(username: str, pin: str, host: str) -> "dict | None":
+    """校验**只读客户端凭据**（第 160 期）：成功返回凭据行（含 library_ids），失败 `None`。
+
+    与 :func:`verify_pin` 分开是刻意的：那张表是**管理员账号**，这张表只能读
+    `/opds/*`。退避共用同一套实现，但键加 `client:` 前缀 —— 两套凭据的失败计数
+    互不连坐（管理员输错不该把正在用的阅读器锁了，反之亦然）。
+
+    ⚠️ 失败一律 `_note_failure`，**包括用户名不存在**：否则「哪些用户名存在」可以
+    靠响应时间/退避差异探出来。
+    """
+    key = f"client:{username}|{host}"
+    wait = _throttle_remaining(key)
+    if wait > 0:
+        raise Throttled(wait)
+    row = db.get_client_credential(username)
+    if not row or not row.get("enabled"):
+        _note_failure(key)
+        return None
+    if not hmac.compare_digest(str(row.get("pin_hash") or ""), db.pin_hash(username, pin)):
+        _note_failure(key)
+        return None
+    _clear_failures(key)
+    db.touch_client_credential(row["id"])
+    return row
+
+
+def client_library_scope(cred: dict) -> "frozenset | None":
+    """凭据允许的书库 id 集合；`None` = 不限定（全部可见库）。
+
+    存的是 JSON 数组文本；坏值按「不限定」处理会**放大**权限，所以坏值一律回空集合
+    （即什么都看不到）—— 宁可让客户端 404，也不要把本该受限的账号放成全库。
+    """
+    raw = (cred or {}).get("library_ids")
+    if isinstance(raw, list):
+        arr = raw
+    else:
+        text = str(raw or "").strip()
+        if not text:
+            return None
+        try:
+            arr = json.loads(text)
+        except Exception:
+            return frozenset()
+    if not isinstance(arr, list):
+        return frozenset()
+    ids = {str(x) for x in arr if str(x or "").strip()}
+    return frozenset(ids) if ids else None
 
 
 def issue_token(user: str) -> str:

@@ -2169,11 +2169,17 @@ _OPDS_401 = {"WWW-Authenticate": 'Basic realm="NovelForge OPDS", charset="UTF-8"
 
 
 def _opds_guard(request: Request) -> None:
-    """`/opds/*` 的鉴权（HTTP Basic，账号就是应用账号）。
+    """`/opds/*` 的鉴权（HTTP Basic）：**管理员账号**或**只读客户端凭据**（第 160 期）。
 
-    ⚠️ **PIN 校验必须走 `auth.verify_pin`**（第 137 期）：失败退避只在那一处实现。
-    这里原先直接调 `auth.verify_pin` 而不过任何闸门 —— 与登录口相比，`/opds` 就是一个
-    没有退避的 4 位 PIN 预言机（穷举一万次即得管理员 PIN）。
+    判定顺序固定：
+      1. 先按管理员账号校验（`auth.verify_pin`，带失败的退避）；
+      2. 不通过再按只读客户端凭据校验（`auth.verify_client`，同一套退避、独立计数键）；
+      3. 两条都不通过 → 401。
+
+    只读凭据的**书库范围**写进 `request.state.opds_scope`（`None` = 不限定）——
+    本段所有读点都经 `_opds_books` / `_opds_lib` 取数，范围只有那一处判据。
+
+    ⚠️ PIN 校验必须走 auth 模块（第 137 期）：失败退避只在那一处实现。
     """
     if not (config.load_config().get("opds") or {}).get("enabled"):
         raise HTTPException(404, "OPDS 未启用")
@@ -2187,13 +2193,65 @@ def _opds_guard(request: Request) -> None:
         raise HTTPException(401, "凭据格式错误", headers=_OPDS_401)
     if not user:
         raise HTTPException(401, "账号或 PIN 不正确", headers=_OPDS_401)
+
+    host = auth_mod.client_host(request)
+    admin_throttled = False
+    # 只对**管理员用户名**走 verify_pin：只读账号每次请求都去撞一次会让管理员维度的
+    # 失败计数无谓增长（第 6 次起每次都要先吃一个 Throttled 再落到凭据校验）。
+    admin_user = str((db.get_user_profile() or {}).get("username") or "")
+    is_admin_name = bool(admin_user) and user == admin_user
+    if is_admin_name:
+        try:
+            if auth_mod.verify_pin(user, pin, host):
+                request.state.opds_scope = None      # 管理员 = 全部可见库
+                return
+        except auth_mod.Throttled:
+            # 管理员维度被退避：继续走只读凭据 —— 两者计数键互不连坐；
+            # 但两条都不通过时仍报 429（先看退避、后比凭据 = fail closed）
+            admin_throttled = True
     try:
-        ok = auth_mod.verify_pin(user, pin, auth_mod.client_host(request))
+        cred = auth_mod.verify_client(user, pin, host)
     except auth_mod.Throttled:
         # 不带 WWW-Authenticate：这不是「凭据不对、再输一次」，而是「先等一会儿」
         raise HTTPException(429, "连续认证失败过多，请稍后再试")
-    if not ok:
-        raise HTTPException(401, "账号或 PIN 不正确", headers=_OPDS_401)
+    if cred:
+        request.state.opds_scope = auth_mod.client_library_scope(cred)
+        return
+    if admin_throttled:
+        raise HTTPException(429, "连续认证失败过多，请稍后再试")
+    raise HTTPException(401, "账号或 PIN 不正确", headers=_OPDS_401)
+
+
+def _opds_scope(request: Request) -> "frozenset | None":
+    """当前请求的只读书库范围（`None` = 不限定）。管理员路径由 guard 显式置 None。"""
+    return getattr(request.state, "opds_scope", None)
+
+
+def _opds_books(request: Request, library_id=None) -> list:
+    """OPDS 的**唯一取书入口**：在凭据允许的书库范围内返回书目。
+
+    单库调用在范围外一律 404（与「库不存在」同形，不给「有但不让你看」的暗示）。
+    """
+    scope = _opds_scope(request)
+    if library_id:
+        lid = str(library_id)
+        if scope is not None and lid not in scope:
+            raise HTTPException(404, "书库不存在或未对 OPDS 暴露")
+        return library.books(library_id=lid)
+    bs = library.books()
+    return bs if scope is None else [b for b in bs
+                                     if str(b.get("library_id") or "") in scope]
+
+
+def _opds_book(request: Request, bid: str) -> "dict | None":
+    """按 id 取书，并校验它在当前凭据的书库范围内。"""
+    b = library.by_id(bid)
+    if not b:
+        return None
+    scope = _opds_scope(request)
+    if scope is not None and str(b.get("library_id") or "") not in scope:
+        return None
+    return b
 
 
 def _request_scheme(request: Request) -> str:
@@ -2248,7 +2306,7 @@ def _opds_updated(bs: list) -> float:
 def opds_root(request: Request):
     """根导航 feed（客户端订阅这个地址）。"""
     _opds_guard(request)
-    bs = library.books()
+    bs = _opds_books(request)
     a, s, t = _opds_groups(bs)
     counts = {"all": len(bs), "authors": len(a), "series": len(s), "tags": len(t),
               "updated": _opds_updated(bs)}
@@ -2259,7 +2317,7 @@ def opds_root(request: Request):
     per_lib = Counter(str(b.get("library_id") or "") for b in bs)
     libs = [(str(l.get("id") or ""), str(l.get("name") or ""),
              per_lib.get(str(l.get("id") or ""), 0))
-            for l in _opds_visible_libraries()]
+            for l in _opds_visible_libraries(request)]
     return _opds_xml(opds.navigation_feed(_opds_base(request), counts, libraries=libs),
                      "navigation")
 
@@ -2268,7 +2326,7 @@ def opds_root(request: Request):
 def opds_all(request: Request, page: int = Query(1, ge=1),
              sort: str = Query("recent"), order: str = Query("desc")):
     _opds_guard(request)
-    bs = opds.sort_books(library.books(), sort, order)
+    bs = opds.sort_books(_opds_books(request), sort, order)
     return _opds_xml(opds.acquisition_feed(_opds_base(request), "全部书籍", "all", bs,
                                            page=page, sort=sort, order=order))
 
@@ -2276,14 +2334,14 @@ def opds_all(request: Request, page: int = Query(1, ge=1),
 @app.get("/opds/recent")
 def opds_recent(request: Request, page: int = Query(1, ge=1)):
     _opds_guard(request)
-    bs = opds.sort_books(library.books(), "recent", "desc")
+    bs = opds.sort_books(_opds_books(request), "recent", "desc")
     return _opds_xml(opds.acquisition_feed(_opds_base(request), "最近添加", "recent", bs, page=page))
 
 
 @app.get("/opds/authors")
 def opds_authors(request: Request):
     _opds_guard(request)
-    bs = library.books()
+    bs = _opds_books(request)
     a, _, _ = _opds_groups(bs)
     return _opds_xml(opds.group_navigation(_opds_base(request), "按作者", "author", a,
                                            _opds_updated(bs)), "navigation")
@@ -2292,7 +2350,7 @@ def opds_authors(request: Request):
 @app.get("/opds/series")
 def opds_series(request: Request):
     _opds_guard(request)
-    bs = library.books()
+    bs = _opds_books(request)
     _, s, _ = _opds_groups(bs)
     # 系列简介一并下发，订阅端在系列列表就能看到（作者 / 标签页不传 → 输出与之前一致）
     rows = db.all_series_meta()
@@ -2305,7 +2363,7 @@ def opds_series(request: Request):
 @app.get("/opds/tags")
 def opds_tags(request: Request):
     _opds_guard(request)
-    bs = library.books()
+    bs = _opds_books(request)
     _, _, t = _opds_groups(bs)
     return _opds_xml(opds.group_navigation(_opds_base(request), "按标签", "tag", t,
                                            _opds_updated(bs)), "navigation")
@@ -2315,7 +2373,7 @@ def opds_tags(request: Request):
 def opds_by_author(request: Request, name: str, page: int = Query(1, ge=1)):
     _opds_guard(request)
     target = unquote(name).strip()
-    bs = [b for b in library.books() if (b.get("author") or "").strip() == target]
+    bs = [b for b in _opds_books(request) if (b.get("author") or "").strip() == target]
     if not bs:
         raise HTTPException(404, "没有该作者的书")
     bs = opds.sort_books(bs, "title", "asc")
@@ -2327,7 +2385,7 @@ def opds_by_author(request: Request, name: str, page: int = Query(1, ge=1)):
 def opds_by_series(request: Request, name: str, page: int = Query(1, ge=1)):
     _opds_guard(request)
     target = unquote(name).strip()
-    bs = [b for b in library.books() if (b.get("series") or "").strip() == target]
+    bs = [b for b in _opds_books(request) if (b.get("series") or "").strip() == target]
     if not bs:
         raise HTTPException(404, "没有该系列的书")
     # 系列内按「系列序号」自然序（sort=series 用的是同系列键，正好）
@@ -2341,7 +2399,7 @@ def opds_by_series(request: Request, name: str, page: int = Query(1, ge=1)):
 def opds_by_tag(request: Request, name: str, page: int = Query(1, ge=1)):
     _opds_guard(request)
     target = unquote(name).strip()
-    bs = [b for b in library.books()
+    bs = [b for b in _opds_books(request)
           if target in [str(x).strip() for x in (b.get("tags") or [])]]
     if not bs:
         raise HTTPException(404, "没有该标签的书")
@@ -2355,7 +2413,7 @@ def opds_search(request: Request, q: str = Query(""), page: int = Query(1, ge=1)
     """搜索。客户端在搜索框提交时带上 q（OpenSearch 惯例）。"""
     _opds_guard(request)
     term = (q or "").strip().lower()
-    bs = library.books()
+    bs = _opds_books(request)
     if term:
         bs = [b for b in bs
               if term in (b.get("title") or "").lower()
@@ -2372,7 +2430,7 @@ def opds_search(request: Request, q: str = Query(""), page: int = Query(1, ge=1)
 @app.get("/opds/book/{bid}")
 def opds_book(request: Request, bid: str):
     _opds_guard(request)
-    b = library.by_id(bid)
+    b = _opds_book(request, bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
     return _opds_xml(opds.book_feed(_opds_base(request), b))
@@ -2382,13 +2440,15 @@ def opds_book(request: Request, bid: str):
 def opds_cover(request: Request, bid: str):
     """封面：直接复用应用内的封面实现（EPUB 内嵌图 / CBZ 第一页），避免两份解析逻辑走样。"""
     _opds_guard(request)
+    if not _opds_book(request, bid):
+        raise HTTPException(404, "书籍不存在")
     return api_book_cover(bid)
 
 
 @app.get("/opds/download/{bid}")
 def opds_download(request: Request, bid: str):
     _opds_guard(request)
-    b = library.by_id(bid)
+    b = _opds_book(request, bid)
     if not b:
         raise HTTPException(404, "书籍不存在")
     path = library.abs_path(b)
@@ -2409,17 +2469,20 @@ def opds_download(request: Request, bid: str):
 # 3. **「不可见」与「不存在」对客户端一律 404**。不给任何「这里有个库只是不让你看」的暗示。
 
 
-def _opds_visible_libraries() -> list:
-    """对 OPDS 可见的书库：库类型具备该能力，且开关开着。
+def _opds_visible_libraries(request: Request) -> list:
+    """对 OPDS 可见的书库：库类型具备该能力、开关开着、且在凭据范围内（第 160 期）。
 
     开关取 **每库覆写 ?? 全局**（与 `lib_settings` 的其它覆盖项同口径）：全局默认
     `opds.expose = True`，即**全部书库都暴露**，与加这个开关之前的行为完全一致。
     """
     cfg = config.load_config()
     default = bool((cfg.get("opds") or {}).get("expose", True))
+    scope = _opds_scope(request)
     out = []
     for lib in library.libraries():
         lid = str(lib.get("id") or "")
+        if scope is not None and lid not in scope:
+            continue
         if not features.allows_setting(str(lib.get("type") or "mixed"), "opds.expose"):
             continue                        # 库类型没这能力 → 覆写即便残留也不生效
         ov = lib_settings.overrides(lid).get("opds.expose")
@@ -2429,10 +2492,10 @@ def _opds_visible_libraries() -> list:
     return out
 
 
-def _opds_lib(lid: str) -> dict:
-    """取一个**对 OPDS 可见**的书库；不存在 / 不可见都 404。"""
+def _opds_lib(request: Request, lid: str) -> dict:
+    """取一个**对 OPDS 可见**（且在凭据范围内）的书库；不存在 / 不可见都 404。"""
     target = unquote(str(lid or "")).strip()
-    for lib in _opds_visible_libraries():
+    for lib in _opds_visible_libraries(request):
         if str(lib.get("id") or "") == target:
             return lib
     raise HTTPException(404, "书库不存在或未对 OPDS 暴露")
@@ -2447,12 +2510,12 @@ def _opds_fid(lib_id: str, section: str) -> str:
     return f"urn:novelforge:opds:lib:{lib_id}:{section}"
 
 
-def _opds_book_in(lib_id: str, bid: str) -> "dict | None":
+def _opds_book_in(request: Request, lib_id: str, bid: str) -> "dict | None":
     """在该库书目内按 id 取书 —— **不用** `library.by_id`（跨库同名会抛 `BookIdConflict`）。
 
     单库模式下的详情 / 封面 / 下载都经过这里，于是「这本书在不在该库」只有这一处判定。
     """
-    for b in library.books(library_id=lib_id):
+    for b in _opds_books(request, lib_id):
         if b.get("id") == bid:
             return b
     return None
@@ -2462,20 +2525,20 @@ def _opds_book_in(lib_id: str, bid: str) -> "dict | None":
 def opds_libraries(request: Request):
     """书库导航：列出对 OPDS 可见的书库，每个带册数。"""
     _opds_guard(request)
-    libs = _opds_visible_libraries()
+    libs = _opds_visible_libraries(request)
     rows = [(str(l.get("id") or ""), str(l.get("name") or ""),
-             len(library.books(library_id=str(l.get("id") or "")))) for l in libs]
+             len(_opds_books(request, str(l.get("id") or "")))) for l in libs]
     return _opds_xml(opds.library_navigation(_opds_base(request), rows,
-                                             _opds_updated(library.books())), "navigation")
+                                             _opds_updated(_opds_books(request))), "navigation")
 
 
 @app.get("/opds/lib/{lid}")
 def opds_lib_root(request: Request, lid: str):
     """单库根导航（客户端可以只订阅这一个库）。"""
     _opds_guard(request)
-    lib = _opds_lib(lid)
+    lib = _opds_lib(request, lid)
     lib_id = str(lib["id"])
-    bs = library.books(library_id=lib_id)
+    bs = _opds_books(request, lib_id)
     a, s, t = _opds_groups(bs)
     counts = {"all": len(bs), "authors": len(a), "series": len(s), "tags": len(t),
               "updated": _opds_updated(bs)}
@@ -2489,8 +2552,8 @@ def opds_lib_root(request: Request, lid: str):
 def opds_lib_all(request: Request, lid: str, page: int = Query(1, ge=1),
                  sort: str = Query("recent"), order: str = Query("desc")):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
-    bs = opds.sort_books(library.books(library_id=lib_id), sort, order)
+    lib_id = str(_opds_lib(request, lid)["id"])
+    bs = opds.sort_books(_opds_books(request, lib_id), sort, order)
     return _opds_xml(opds.acquisition_feed(
         _opds_base(request), "全部书籍", "all", bs, page=page, sort=sort, order=order,
         prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "all")), "acquisition")
@@ -2499,8 +2562,8 @@ def opds_lib_all(request: Request, lid: str, page: int = Query(1, ge=1),
 @app.get("/opds/lib/{lid}/recent")
 def opds_lib_recent(request: Request, lid: str, page: int = Query(1, ge=1)):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
-    bs = opds.sort_books(library.books(library_id=lib_id), "recent", "desc")
+    lib_id = str(_opds_lib(request, lid)["id"])
+    bs = opds.sort_books(_opds_books(request, lib_id), "recent", "desc")
     return _opds_xml(opds.acquisition_feed(
         _opds_base(request), "最近添加", "recent", bs, page=page,
         prefix=_opds_prefix(lib_id), feed_id=_opds_fid(lib_id, "recent")), "acquisition")
@@ -2509,8 +2572,8 @@ def opds_lib_recent(request: Request, lid: str, page: int = Query(1, ge=1)):
 @app.get("/opds/lib/{lid}/authors")
 def opds_lib_authors(request: Request, lid: str):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
-    bs = library.books(library_id=lib_id)
+    lib_id = str(_opds_lib(request, lid)["id"])
+    bs = _opds_books(request, lib_id)
     a, _, _ = _opds_groups(bs)
     return _opds_xml(opds.group_navigation(
         _opds_base(request), "按作者", "author", a, _opds_updated(bs),
@@ -2520,8 +2583,8 @@ def opds_lib_authors(request: Request, lid: str):
 @app.get("/opds/lib/{lid}/series")
 def opds_lib_series(request: Request, lid: str):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
-    bs = library.books(library_id=lib_id)
+    lib_id = str(_opds_lib(request, lid)["id"])
+    bs = _opds_books(request, lib_id)
     _, s, _ = _opds_groups(bs)
     rows = db.all_series_meta()
     descs = {name: series_meta.effective_light(name, rows.get(name) or {})["description"]
@@ -2534,8 +2597,8 @@ def opds_lib_series(request: Request, lid: str):
 @app.get("/opds/lib/{lid}/tags")
 def opds_lib_tags(request: Request, lid: str):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
-    bs = library.books(library_id=lib_id)
+    lib_id = str(_opds_lib(request, lid)["id"])
+    bs = _opds_books(request, lib_id)
     _, _, t = _opds_groups(bs)
     return _opds_xml(opds.group_navigation(
         _opds_base(request), "按标签", "tag", t, _opds_updated(bs),
@@ -2545,9 +2608,9 @@ def opds_lib_tags(request: Request, lid: str):
 @app.get("/opds/lib/{lid}/author/{name}")
 def opds_lib_by_author(request: Request, lid: str, name: str, page: int = Query(1, ge=1)):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
+    lib_id = str(_opds_lib(request, lid)["id"])
     target = unquote(name).strip()
-    bs = [b for b in library.books(library_id=lib_id)
+    bs = [b for b in _opds_books(request, lib_id)
           if (b.get("author") or "").strip() == target]
     if not bs:
         raise HTTPException(404, "该书库没有这位作者的书")
@@ -2560,9 +2623,9 @@ def opds_lib_by_author(request: Request, lid: str, name: str, page: int = Query(
 @app.get("/opds/lib/{lid}/series/{name}")
 def opds_lib_by_series(request: Request, lid: str, name: str, page: int = Query(1, ge=1)):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
+    lib_id = str(_opds_lib(request, lid)["id"])
     target = unquote(name).strip()
-    bs = [b for b in library.books(library_id=lib_id)
+    bs = [b for b in _opds_books(request, lib_id)
           if (b.get("series") or "").strip() == target]
     if not bs:
         raise HTTPException(404, "该书库没有这个系列的书")
@@ -2577,9 +2640,9 @@ def opds_lib_by_series(request: Request, lid: str, name: str, page: int = Query(
 @app.get("/opds/lib/{lid}/tag/{name}")
 def opds_lib_by_tag(request: Request, lid: str, name: str, page: int = Query(1, ge=1)):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
+    lib_id = str(_opds_lib(request, lid)["id"])
     target = unquote(name).strip()
-    bs = [b for b in library.books(library_id=lib_id)
+    bs = [b for b in _opds_books(request, lib_id)
           if target in [str(x).strip() for x in (b.get("tags") or [])]]
     if not bs:
         raise HTTPException(404, "该书库没有这个标签的书")
@@ -2601,7 +2664,7 @@ def opds_search_description(request: Request):
 def opds_lib_search_description(request: Request, lid: str):
     """单库版 OSDD：模板落在该库内（订阅单个库时搜索也只搜这个库）。"""
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
+    lib_id = str(_opds_lib(request, lid)["id"])
     return Response(
         content=opds.search_description(_opds_base(request), prefix=_opds_prefix(lib_id)),
         media_type="application/opensearchdescription+xml")
@@ -2611,9 +2674,9 @@ def opds_lib_search_description(request: Request, lid: str):
 def opds_lib_search(request: Request, lid: str, q: str = Query(""),
                     page: int = Query(1, ge=1)):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
+    lib_id = str(_opds_lib(request, lid)["id"])
     term = (q or "").strip().lower()
-    bs = library.books(library_id=lib_id)
+    bs = _opds_books(request, lib_id)
     if term:
         bs = [b for b in bs
               if term in (b.get("title") or "").lower()
@@ -2632,8 +2695,8 @@ def opds_lib_search(request: Request, lid: str, q: str = Query(""),
 @app.get("/opds/lib/{lid}/book/{bid}")
 def opds_lib_book(request: Request, lid: str, bid: str):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
-    b = _opds_book_in(lib_id, bid)
+    lib_id = str(_opds_lib(request, lid)["id"])
+    b = _opds_book_in(request, lib_id, bid)
     if not b:
         raise HTTPException(404, "书籍不在该书库内")
     return _opds_xml(opds.book_feed(_opds_base(request), b, prefix=_opds_prefix(lib_id)))
@@ -2642,8 +2705,8 @@ def opds_lib_book(request: Request, lid: str, bid: str):
 @app.get("/opds/lib/{lid}/cover/{bid}")
 def opds_lib_cover(request: Request, lid: str, bid: str):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
-    if not _opds_book_in(lib_id, bid):
+    lib_id = str(_opds_lib(request, lid)["id"])
+    if not _opds_book_in(request, lib_id, bid):
         raise HTTPException(404, "书籍不在该书库内")
     return api_book_cover(bid)
 
@@ -2651,14 +2714,109 @@ def opds_lib_cover(request: Request, lid: str, bid: str):
 @app.get("/opds/lib/{lid}/download/{bid}")
 def opds_lib_download(request: Request, lid: str, bid: str):
     _opds_guard(request)
-    lib_id = str(_opds_lib(lid)["id"])
-    b = _opds_book_in(lib_id, bid)
+    lib_id = str(_opds_lib(request, lid)["id"])
+    b = _opds_book_in(request, lib_id, bid)
     if not b:
         raise HTTPException(404, "书籍不在该书库内")
     path = library.abs_path(b)
     if not path.is_file():
         raise HTTPException(404, "文件不存在")
     return FileResponse(path, media_type=opds.mime_of(b.get("format")), filename=b["name"])
+
+
+# ---------------- OPDS 只读客户端凭据（第 160 期）----------------
+# 外部阅读器只能发 HTTP Basic，而单用户应用的 PIN 给出去等于交出管理员。这里管理
+# **独立只读账号**：只能读 `/opds/*`，可限定书库范围。判据与校验在 auth 模块
+# （`verify_client` / `client_library_scope`），本段只做管理员侧的 CRUD 与入参规整。
+
+_CRED_USER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{2,31}$")
+
+
+def _cred_username(raw) -> str:
+    name = str(raw or "").strip()
+    if not _CRED_USER_RE.match(name):
+        raise HTTPException(400, "用户名需 3–32 位，只能用字母 / 数字 / _ . -（首字符为字母或数字）")
+    admin = str((db.get_user_profile() or {}).get("username") or "")
+    if admin and name.lower() == admin.lower():
+        raise HTTPException(400, "不能与管理员账号同名")
+    return name
+
+
+def _cred_pin(raw) -> str:
+    pin = str(raw or "")
+    if not 4 <= len(pin) <= 64:
+        raise HTTPException(400, "PIN 需 4–64 位")
+    if pin.strip() != pin:
+        raise HTTPException(400, "PIN 不能有前后空白")
+    return pin
+
+
+def _cred_libraries(raw) -> str:
+    """校验并规整书库范围：`[]` / 缺省 = 全部；否则每个 id 必须存在。返回 JSON 文本。"""
+    if raw in (None, ""):
+        return ""
+    if not isinstance(raw, list):
+        raise HTTPException(400, "library_ids 必须是数组")
+    ids: list = []
+    for x in raw:
+        lid = str(x or "").strip()
+        if not lid:
+            continue
+        if not db.get_library(lid):
+            raise HTTPException(400, f"书库不存在：{lid}")
+        if lid not in ids:
+            ids.append(lid)
+    return json.dumps(ids, ensure_ascii=False) if ids else ""
+
+
+@app.get("/api/opds/credentials")
+def api_opds_credentials():
+    """只读客户端账号列表（**不含 PIN / 哈希**）。"""
+    return {"items": db.list_client_credentials()}
+
+
+@app.post("/api/opds/credentials")
+def api_opds_credential_create(payload: dict = Body(...)):
+    """新建一个只读账号。用户名唯一、不能与管理员同名。"""
+    username = _cred_username(payload.get("username"))
+    pin = _cred_pin(payload.get("pin"))
+    label = str(payload.get("label") or "").strip()[:64]
+    libs = _cred_libraries(payload.get("library_ids"))
+    if db.get_client_credential(username):
+        raise HTTPException(400, "用户名已存在")
+    cred = db.create_client_credential(str(uuid.uuid4()), username, label,
+                                       db.pin_hash(username, pin), libs)
+    activity_log.log(activity_log.ACTION_RENAME, username, activity_log.STATUS_OK,
+                     detail="新建 OPDS 只读账号", source="api")
+    return {"ok": True, "credential": cred}
+
+
+@app.patch("/api/opds/credentials/{cid}")
+def api_opds_credential_update(cid: str, payload: dict = Body(...)):
+    """改标签 / PIN / 书库范围 / 启停。**用户名不可改**（客户端已经存进地址里了）。"""
+    row = next((c for c in db.list_client_credentials() if c["id"] == str(cid)), None)
+    if not row:
+        raise HTTPException(404, "账号不存在")
+    fields: dict = {}
+    if "label" in payload:
+        fields["label"] = str(payload.get("label") or "").strip()[:64]
+    if payload.get("pin") not in (None, ""):
+        pin = _cred_pin(payload.get("pin"))
+        fields["pin_hash"] = db.pin_hash(row["username"], pin)
+    if "library_ids" in payload:
+        fields["library_ids"] = _cred_libraries(payload.get("library_ids"))
+    if "enabled" in payload:
+        fields["enabled"] = 1 if payload.get("enabled") else 0
+    out = db.update_client_credential(cid, **fields) if fields else row
+    return {"ok": True, "credential": out}
+
+
+@app.delete("/api/opds/credentials/{cid}")
+def api_opds_credential_delete(cid: str):
+    """删除后该账号立即失效（Basic 每次请求都查表，没有会话可残留）。"""
+    if not db.delete_client_credential(cid):
+        raise HTTPException(404, "账号不存在")
+    return {"ok": True, "removed": str(cid)}
 
 
 # ---------------- 书库（图书馆浏览 / 书籍详情）----------------

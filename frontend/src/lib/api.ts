@@ -2701,6 +2701,21 @@ export interface LibraryUploadResult {
 }
 
 /**
+ * OPDS 只读客户端凭据（第 160 期，`/api/opds/credentials`）。
+ *
+ * ⚠️ 接口**不回传** PIN 或哈希；`library_ids` 为空数组 = 不限定书库。
+ */
+export interface OpdsCredential {
+  id: string
+  username: string
+  label: string
+  library_ids: string[]
+  enabled: boolean
+  created_at: number
+  last_used_at: number
+}
+
+/**
  * 单个书库的**扫描状态**（第 88 期 `GET /api/libraries/scan-state`）。
  *
  * 用于「导入后第一次打开特别慢」的**感知**：后端正在刷新索引时，界面显示
@@ -5085,6 +5100,36 @@ export const api = {
       `/api/libraries/${encodeURIComponent(id)}/scan`,
       { method: 'POST' },
       { timeoutMs: LONG_REQUEST_TIMEOUT_MS },
+    ),
+
+  // ---------- OPDS 只读客户端凭据（第 160 期） ----------
+  opdsCredentials: () => request<{ items: OpdsCredential[] }>('/api/opds/credentials'),
+
+  createOpdsCredential: (payload: {
+    username: string
+    pin: string
+    label?: string
+    library_ids?: string[]
+  }) =>
+    request<{ ok: boolean; credential: OpdsCredential }>('/api/opds/credentials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  updateOpdsCredential: (
+    id: string,
+    payload: { label?: string; pin?: string; library_ids?: string[]; enabled?: boolean },
+  ) =>
+    request<{ ok: boolean; credential: OpdsCredential }>(
+      `/api/opds/credentials/${encodeURIComponent(id)}`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
+    ),
+
+  deleteOpdsCredential: (id: string) =>
+    request<{ ok: boolean; removed: string }>(
+      `/api/opds/credentials/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
     ),
 
   // ---------- 每库覆盖 + 同名冲突（第 13 期）----------
