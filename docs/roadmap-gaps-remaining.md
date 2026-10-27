@@ -10531,3 +10531,20 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 **有意差异**：WebSocket 是原生协议（上游 Socket.IO），事件名对齐；SW 不缓存 API/WS（安全优先）；全局 CSP 不覆盖媒体 sandbox；旧 `#/` 链接只在启动时迁移，不再支持运行时改 hash 导航。
 
 **下一步**：Phase 1 书目与治理（排序 / 按库凭据 / 分面 / 分桶 / added-at / 受管副本批量改名 / 封面编辑器 / 重复治理 / 实体 7 类 / 服务端筛选分页 / 评分权重版本 …，见 `docs/TODO.md` P0 段）；评估项 TTS / Kobo / KOReader 插件另行立项。
+
+## 第 154 期（BookOrbit 对齐 Phase 1A：排序 / 汇总 / 入库时间 / 预扫）
+
+**需求来源**：用户 2026-10-26 的指令「§3.1 上游有本项目没有的所有做一下」；本期先落地 Phase 1A 的前四项（结构类、可独立验收）。
+
+**功能范围与修法**：
+
+1. **收藏夹 / 智能书架 / 书库手动排序**：`collections` / `smart_scopes` 补 `sort_order`（老库自动加列，回填 id；列表按 `sort_order` 优先、全 0 时保持原 `created_at` 顺序）；新增 `reorder_collections` / `reorder_scopes` / `reorder_libraries`（0..n 的唯一写点）与三个 `POST .../reorder` 路由 —— 三者都要求「当前全部 id 的一个排列」，少一个 / 重复 / 未知 id 一律 400。前端收藏夹卡片、智能书架行、书库列表（默认顺序 + 无过滤时）支持拖拽与 ↑↓；排序/过滤态隐藏箭头，避免「看到的顺序」与「提交的顺序」不一致。
+2. **全库汇总**：`catalog.totals(ids)` 一次聚合（COUNT / SUM(size) / 缺封面），只统计**当前登记**的库；`GET /api/libraries` 追加 `totals`（库数 / 书数 / 总字节 / 缺封面），书库管理页头显示。
+3. **入库时间可编辑 / 可重算**：新增 `book_added(book_id, added_at)` 覆盖表（含 book_id，已登记 `ORPHAN_TABLES` / `REMAP_TABLES`）；生效值 = 覆盖 ?? 文件 mtime。`catalog.books_of` 在**读缓存前后都叠加**覆盖（否则缓存会记住旧日期），`find_by_id` 同样生效；stats（入库节奏 / 本月入库 / 滞后）、CSV 导出、书架「最近添加」、LongWait 全部改读 `added_at`。`PUT /api/books/{bid}/added-at`（null=恢复文件时间）、`POST /api/libraries/{lid}/recompute-added-at`（本期只支持 `source=mtime`，即在**一处**清掉该库全部覆盖）。详情页概览「入库」行可改日期。
+4. **建库前只读预扫**：`library.prescan` 与真正扫描共用 `_iter_book_entries`（同一套白名单 / 排除 / 目录合并判据），返回可读性、预计书数、格式分布、顶层跳过数；`POST /api/libraries/prescan` 的目录必须落在来源根白名单（复用 `_library_root_allowed`）。建库向导「来源」页加「预扫一下」，目录 / 类型 / 白名单 / 排除任一变化即清空旧结果。
+
+**防回归**：`tests/test_sorting_and_totals_154.py`（7 例：三类排序落库 / 非完整排列 400 / totals 与 book_count 对账）、`tests/test_added_at_154.py`（3 例：覆盖 / 清除 / 整库重算 / 非法入参）、`tests/test_prescan_154.py`（2 例：白名单 + 顶层跳过 / 目录闸门与非法 type）、`frontend/src/stores/collections.spec.ts`（2 例，已登记 `EXPECTED_SPECS`）；`client_api_surface.json` 补 `added_at`，`test_catalog` 的扫描/索引字段对拍同步。
+
+**核验**：后端全量（见 §0 基线；13 例本机环境失败与本批无关）+ 前端四连；真机冒烟待 Phase 1A 收口时统一做。
+
+**下一步**：Phase 1A 余下 —— 分面计数 / 跳转分桶 / 受管副本批量改名 / 正则导入向导 / 封面编辑器 / 重复书治理 / 实体 7 类 / 表视图列面板 / 批量元数据编辑 / 书库直传上传 / 按库只读凭据。
