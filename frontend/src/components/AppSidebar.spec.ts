@@ -169,4 +169,22 @@ describe('AppSidebar（第 65 期导航改造）', () => {
     expect(rowOf(w, '作者')).toBe('作者')
     expect(rowOf(w, '系列')).toBe('系列')
   })
+
+  it('「全部书库」徽标 = 各库 book_count 之和（第 161 期）', async () => {
+    // ⚠️ 这个数字**不来自全量书目**：桩里 `api.books` 一直返回空列表，
+    // 徽标仍按 `/api/libraries` 的 `book_count` 算 —— 否则侧栏又会被迫拉 1.9 MB 整库。
+    const libs = {
+      items: [
+        { id: 'lib-a', name: '甲库', book_count: 3 },
+        { id: 'lib-b', name: '乙库', book_count: 4 },
+      ],
+      total: 2,
+      types: [],
+      source_roots: [],
+    } as unknown as Awaited<ReturnType<typeof api.libraries>>
+    vi.mocked(api.libraries).mockResolvedValue(libs)
+
+    const w = await mountSidebar(makeRouter())
+    expect(rowOf(w, '全部书库')).toBe('全部书库7')
+  })
 })

@@ -184,14 +184,16 @@ function whenIdle(fn: () => void): void {
 }
 
 onMounted(() => {
-  // 关键路径：**全量书目**（侧栏计数 / 仪表盘 / BrowseView 等共用）+ 库列表（侧栏「库」组）—— 立刻发。
-  // ⚠️ 书架页 `onMounted` 走的是**另一条**分页路（`loadShelfFirstPage`，只取第一页），与本处的
-  // 全量 `loadBooks` 是两个不同请求、互不阻塞（第 88 期 C 批修正后如此）；本处仍是「全量 `books`
-  // 何时到齐」的唯一关键路径（`loaded` 单飞闸拦的是**同一路**的并发调用）。
-  library.loadBooks()
+  // 「库」组与「全部书库」计数只认 `/api/libraries`（600 B），立刻发。
   library.loadLibraries()
-  // 次要预取：让出首屏，等空闲再发
+  // 其余预取（含**全量书目**）让出首屏，等空闲再发（第 161 期）。
+  // ⚠️ 全量 `books` 是 1.9 MB / 146 KB gzip（2,309 本），而书架首屏只要它自己的第一页
+  // （`loadShelfFirstPage`，另一条路、只取 120 本）。把整库塞进关键路径，只会和首屏
+  // 抢同一条连接与同一个服务端进程 —— 晚一个空闲帧到齐的代价是「智能书架徽标 / 筛选
+  // 面板计数晚一步」，书架本身早就渲染完了。需要全量的页面仍各自调 `loadBooks()`
+  // （`loaded` 单飞闸保证同一路只发一次）。
   whenIdle(() => {
+    library.loadBooks()
     collections.load()
     library.loadScopes()
     // 能力清单要跟着**当前库**走（含刷新后恢复上次选中的库）
@@ -210,6 +212,23 @@ const ITEM_FEATURE: Record<string, string> = {
 }
 
 /**
+ * 「全部书库」徽标 = 各库 `book_count` 之和（第 161 期）。
+ *
+ * ⚠️ 别改回 `library.books.length`：那是**全量书目**（1.9 MB）的副产物，而徽标只需要
+ * 一个数字 —— 全量现在由空闲预取触发，用它会让数字先显示 0 再跳变。这里与下面每个
+ * 库的徽标**同一份来源**（`/api/libraries` 的 `book_count`），两处必然对得上
+ * （实测 166 + 100 + 2043 = 2309 = 书目总数）。
+ *
+ * 还没拉到库列表时返回 `null`（= 不渲染胶囊），不是 0 —— 0 是个具体数字，
+ * 会与「真的一本都没有」混淆（与 `SidebarBadge` 的口径一致）。
+ */
+const allBooksCount = computed<number | null>(() =>
+  library.librariesLoaded
+    ? library.libraryEntities.reduce((n, x) => n + (Number(x.book_count) || 0), 0)
+    : null,
+)
+
+/**
  * 「库」= **真实书库实体**（含「全部书库」），点击即切库；
  * 「收藏夹」用 SQLite 数据，「智能书架」用真实阅读状态计数；其余组保持 NAV_GROUPS 原样。
  * 最后统一按**当前库的能力清单**裁剪 —— 未选库（全部书库）时不裁剪。
@@ -221,7 +240,7 @@ const groups = computed(() =>
         ...g,
         items: [
           // 「全部书库」置顶：它是**默认态**，也必须是能随时回来的出口
-          { id: 'lib:', label: '全部书库', icon: 'library', count: library.books.length },
+          { id: 'lib:', label: '全部书库', icon: 'library', count: allBooksCount.value ?? undefined },
           ...library.libraryEntities.map((x) => ({
             id: `lib:${x.id}`,
             label: x.name,

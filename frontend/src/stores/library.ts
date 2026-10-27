@@ -521,6 +521,10 @@ export const useLibraryStore = defineStore('library', () => {
       loadBooks(true),
       // 书架分页源**没用过**（用户没进过书架）就不必刷 —— 别为看不见的页面多发一次请求
       shelfLoaded.value ? loadShelfFirstPage(true) : Promise.resolve(),
+      // 各库的 `book_count`（侧栏徽标 + 「全部书库」计数）也要跟着变（第 161 期）。
+      // 它来自 `/api/libraries`（600 B）而不是书目列表 —— 侧栏的数字从此不再依赖
+      // 全量书目，所以「数据变了」这条汇聚点必须把这份数字一起刷新，否则徽标会停在旧值。
+      loadLibraries(true),
     ])
   }
 

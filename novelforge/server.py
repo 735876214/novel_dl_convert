@@ -25,7 +25,7 @@ import yaml
 
 from fastapi import (FastAPI, UploadFile, File, Form, HTTPException, Query, Body, Request,
                      WebSocket, WebSocketDisconnect)
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
@@ -290,6 +290,110 @@ def _book_id_conflict(request: Request, exc: library.BookIdConflict):
                     "批注可以在「批注」页先导出备份。",
         },
     )
+
+# ---------------- 条件请求：GET /api/* 的 ETag（第 161 期）----------------
+#
+# 「每次打开都重新拉一遍整库」是用户能直接感觉到的那一类慢：`/api/books` 在 2,309 本
+# 的库上是 **1.9 MB / 146 KB gzip**，而它每次进站都会被拉一次（侧栏计数 / 仪表盘 /
+# 浏览页共用）。这里给 GET `/api/*` 的 JSON 响应贴 ETag：数据没变时浏览器把上次存的
+# 那份留着，我们只回一行 **304**（无正文）。
+#
+# ⚠️ 这是**传输层**缓存，不是数据缓存 —— 与第 152 期试过又回退的 `/api/stats` TTL
+# 缓存是两件不同的事：响应体**每次照样现算**（所以不存在第二份真值源，也不存在
+# 「写完进度立刻看统计读到旧值」），变的只是「内容一样就不重复传」。
+#
+# 注册位置在 GZip **之前**（函数式中间件里「先注册 = 更靠内」）：这样 ETag 算的是
+# 未压缩的 JSON，同一个实体在 `Accept-Encoding: identity` 与 `gzip` 下是同一个标签。
+_API_CACHE_CONTROL = "private, no-cache"
+#: 超过这个体积就不贴 ETag（把已读出的字节原样放行）。当前最大的 JSON 是
+#: `/api/books` ≈ 1.9 MB，留足余量；真出现超大响应时不值得为它再扫一遍算哈希。
+_ETAG_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _etag_of(body: bytes) -> str:
+    """响应体的 ETag（带引号）。形状只由这一处决定。"""
+    return '"' + hashlib.sha1(body).hexdigest() + '"'
+
+
+def _etag_matches(if_none_match: str, etag: str) -> bool:
+    """``If-None-Match`` 是否命中（支持 ``*`` / 逗号分隔 / ``W/`` 前缀）。
+
+    RFC 9110 §13.1.2 的**弱比较**：两边都去掉 ``W/`` 再比 —— 我们发出的是强标签，
+    客户端（或中间层）把它弱化后回传时也要能命中，否则条件请求永远失效。
+    """
+    want = etag[2:] if etag.startswith("W/") else etag
+    for part in str(if_none_match or "").split(","):
+        p = part.strip()
+        if not p:
+            continue
+        if p == "*":
+            return True
+        if p.startswith("W/"):
+            p = p[2:]
+        if p == want:
+            return True
+    return False
+
+
+@app.middleware("http")
+async def _api_etag_middleware(request: Request, call_next):
+    """GET ``/api/*`` 的 JSON 200 响应带 ETag；命中 ``If-None-Match`` 时回 304。
+
+    只处理「200 + JSON」：401（未登录）、二进制 / 媒体出口（封面、音轨、下载）与
+    写操作一概不碰 —— 它们要么不能缓存，要么字节不可信、ETag 没有意义。
+    """
+    if request.method != "GET" or not request.url.path.startswith("/api/"):
+        return await call_next(request)
+    response = await call_next(request)
+    if response.status_code != 200 or "application/json" not in response.headers.get("content-type", ""):
+        return response
+    # ⚠️ 端点自己定了缓存语义就**不要改写**（判据只有端点知道）：
+    # 典型是 `/api/books/{bid}/local-paths` 的 `no-store` —— 那个响应取决于请求者
+    # 来自本机还是远程，给它贴 ETag / 换成 `private, no-cache` 等于把「绝不缓存」
+    # 降级成「可以存」，服务器绝对路径就可能被中间层回放给远程。
+    if response.headers.get("cache-control"):
+        return response
+
+    chunks: list[bytes] = []
+    size = 0
+    overflow = False
+    async for chunk in response.body_iterator:
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > _ETAG_MAX_BYTES:
+            overflow = True
+            break
+    if overflow:
+        # 超大响应：把已读出的前缀接回去、原样放行（不贴 ETag）。
+        async def _replay():
+            for c in chunks:
+                yield c
+            async for c in response.body_iterator:
+                yield c
+
+        return StreamingResponse(_replay(), status_code=200,
+                                 headers=dict(response.headers), background=response.background)
+
+    body = b"".join(chunks)
+    etag = _etag_of(body)
+    if _etag_matches(request.headers.get("if-none-match", ""), etag):
+        # 304 不能带正文；`Content-Encoding` / `Content-Length` 也一并去掉（它们说的是
+        # 那份**没有被发出去**的表示，留着会误导中间层）。
+        return Response(status_code=304, headers={
+            "ETag": etag,
+            "Cache-Control": _API_CACHE_CONTROL,
+            "Vary": "Authorization",
+        })
+    headers = dict(response.headers)
+    headers["ETag"] = etag
+    headers["Cache-Control"] = _API_CACHE_CONTROL
+    # 合并而不是覆盖：端点若已声明 `Vary`（例如按 Origin），凭空丢掉它会让缓存
+    # 开始错误地跨维度复用。
+    vary = headers.get("Vary", "")
+    if "authorization" not in vary.lower():
+        headers["Vary"] = f"{vary}, Authorization" if vary else "Authorization"
+    return Response(content=body, status_code=200, headers=headers, background=response.background)
+
 
 # ---------------- 响应压缩（第 67 期）----------------
 # 「打开书架」最大的一块传输是 GET /api/books：实测 600 本 = **1.36 MB**（其中简介
