@@ -72,6 +72,31 @@
 
 ## 1. 待办（按优先级）
 
+### P0 · BookOrbit 全量对齐（第 153 期起，五期）
+
+> 对照与取证：`docs/bookorbit/bookorbit-live-diff-2026-10.md`（196 条上游独有 / 108 条同名不同义 /
+> 76 条本项目独有，附全表）与 `docs/bookorbit/bookorbit-live-inventory-2026-10.md`（320 API / 472 chunk /
+> 42 设置页）。范围按用户 2026-10-26 的决定：§3.1 与 §3.5 全做（写回书文件跳过）；read-along 做；
+> PWA / 实时 / 安全头 / history 路由照上游做。**每期按 AGENTS §1/§2 的同步点同批收口。**
+
+- [x] **Phase 0 · 工程地基**（第 153 期）：对照文档 + 取证清单；history 路由 + SPA 兜底 + 旧 hash 迁移；
+  全局安全响应头 + theme-init 外置；PWA manifest/图标/SW；WebSocket `/ws` + 事件总线 + 前端重连/轮询回退；
+  修 Book Dock 统计恒 0。
+- [ ] **Phase 1 · 书目与治理**（6–8 周）：排序 / 按库只读凭据 / 概览 / 预扫描 / 分面 / 分桶 / added-at /
+  受管副本批量改名 / 正则导入向导 / 封面编辑器 / 重复书四类依据 + dismissals / 实体 7 类 / 批量元数据编辑 /
+  表视图列面板 / 合集分页 / 导出粒度 / 阅读状态 8 档 / 智能范围表达力 + 服务端求值 / 服务端筛选 + DB 分页 /
+  多级排序 + 规则筛选器 / 仪表盘偏好服务端 / 评分权重可配 + 版本 / 移动 preflight 指纹。
+  **不做**：写回书文件；kobo-sync 标志（Kobo 仍评估）。
+- [ ] **Phase 2 · 有声书 + 播客**（8–12 周）：2A 有声书增强；2B 播客内核/订阅；2C 单集/队列/下载/转录；
+  2D 合集/智能范围/智能播放列表/目录搜索/继续收听。删除与清理一律回收站。
+- [ ] **Phase 3 · read-along**（3–5 周）：SMIL 解析与识别；`book_media_overlays` + `read_aloud_sync`
+  （含 `book_id`，同批进 remap 清单）；句子级同步；位置回写；去音频导出。
+- [ ] **Phase 4 · 阅读器/收书/统计/运维收口**（8–10 周）：EPUB/PDF 搜索、PDF 文字层/批注、
+  快捷键/全屏/跳转、Dock 入库前工作流、扫描历史、登录审计、通知/成就补全、命令面板、
+  自定义图标、KOReader 治理、Hardcover 进度、逐源搜索健康、只读登记导入；
+  另修「作者抓取开关是死配置」（`metadata_fetch.authors.fetch_bio/fetch_photo/sources` 无后端读点）。
+- [ ] **评估项**（不排期）：TTS（自托管 OpenAI-compatible）、Kobo 设备同步 / KEPUB、KOReader 双向批注插件。
+
 ### P0 · 已立项，需独立一期
 
 - （**空**）本节自第 93 期起清空 —— 那期交付了 `online-fallback`（上一轮唯一挂起的第 86 期 ⑦

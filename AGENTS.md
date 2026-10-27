@@ -124,7 +124,7 @@ bash scripts/dev-instance.sh 8412
 | `db` 报 `InterfaceError` / 段错误 | 只走 `db._connect()`（持 `RLock` 的代理连接）；别抓裸连接、别绕开锁 | `docs/development.md` §3 |
 | win32 目录 `st_size` 恒 0 | 「空文件」判据要 `not is_dir() and st_size == 0`；目录体积用 `watcher._sig()` | `MEMORY-REF.md`（搜索 `st_size`） |
 | 能力键判隐显轴 | `library.hasFeature(k)` 判的是**侧栏当前选中的库**；读者侧要判「**这本书**属于哪个库」 | —（本行即判据） |
-| 设置页 `note` 里的 `**` 原样显示 | `note` 是**纯文本插值**（`**` / 反引号 / `<strong>` 不渲染），且只有占位页渲染 note；前端设置页路由是 `#/settings/<page.path>`（**不带分组段**） | —（本行即判据） |
+| 设置页 `note` 里的 `**` 原样显示 | `note` 是**纯文本插值**（`**` / 反引号 / `<strong>` 不渲染），且只有占位页渲染 note；前端设置页路由是 `/settings/<page.path>`（**不带分组段**；第 153 期起是 history 路由，旧 `#/…` 链接自动迁移） | —（本行即判据） |
 | 真站点全挂，但单测 100% 绿 | 重建 / 包装 HTTP 响应时**必须摘掉 `Content-Encoding` / `Content-Length`**（`network._drop_entity_headers`）—— 留着会让 httpx 把已解压的字节再解一次，而桩站正文从不压缩 ⇒ 单测抓不到。凡这类改动，收尾必须拿**真实地址**核一次 | roadmap 第 94 期段 |
 | 3.13+ 装 `quickjs` 整条失败 | `requirements.txt` 的 `python_version < "3.13"` 标记不能少（它只有 cp38–cp312 预编译包） | `requirements.txt` 注释 |
 | 源码目录被**静默忽略**（本机永远看不出来） | `.gitignore` 模式**不写前导斜杠**会匹配任意层级同名目录（`input/` 曾吞掉 `frontend/src/components/ui/input/` 达 15 期，只有 CI 从 clone 构建才报）⇒ 运行时目录一律锚定仓库根（`/input/` `/output/` `/cache/` …）；新增源码目录后跑 `git ls-files --others --ignored --exclude-standard -- frontend/src novelforge` 复验 | `.gitignore` 注释 + `tests/test_source_tracking_contract.py`（已钉） |
@@ -202,6 +202,8 @@ bash scripts/dev-instance.sh 8412
 | `docs/roadmap-verification.md` | 路线图完成度核查快照（第 94 期，**不采信文档状态标记**、只认实证） |
 | `docs/agents-audit-95.md` | 第 95 期 AGENTS 合规审计快照（历史文件，行号会漂移） |
 | `docs/bookorbit/bookorbit-*.md` | 既有上游对照基线（capability-gap / module-inventory / settings-inventory / feature-flows / library-contract / dashboard-styles） |
+| `docs/bookorbit/bookorbit-live-diff-2026-10.md` | **2026-10 线上实例独立复核**（不采信旧对照；196 条上游独有 / 108 条同名不同义 / 76 条本项目独有，附全表与整改分期） |
+| `docs/bookorbit/bookorbit-live-inventory-2026-10.md` | 线上实例**取证清单**（320 条 API / 472 个 chunk / 42 个设置页 / 13 个 i18n 命名空间） |
 | `docs/review/` | 历史评审快照（backend / frontend code_review_report、上游截图记录） |
 | `docs/roadmap-gaps-remaining.md` | 逐期实施记录（**活文档**，最新期在末尾，按 `## 第 N 期` 搜） |
 | `README.md` | 面向部署者/使用者的完整说明（NAS 部署、配置表、CLI） |
