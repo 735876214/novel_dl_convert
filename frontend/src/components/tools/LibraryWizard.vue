@@ -32,6 +32,7 @@ import Icon from '@/components/ui/Icon.vue'
 import {
   api,
   type LibraryEntity,
+  type LibraryPrescanResult,
   type LibraryType,
 } from '@/lib/api'
 import { ICONS } from '@/lib/icons'
@@ -271,6 +272,43 @@ const blockReason = computed(() => {
 })
 
 const busy = ref(false)
+
+// ---------------- 建库前预扫（第 154 期）----------------
+const prescan = ref<LibraryPrescanResult | null>(null)
+const prescanBusy = ref(false)
+const prescanError = ref('')
+const prescanFormats = computed(() => {
+  if (!prescan.value) return ''
+  return Object.entries(prescan.value.by_ext)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, n]) => `${k} ${n}`)
+    .join(' · ')
+})
+
+async function runPrescan(): Promise<void> {
+  if (!selectedDirs.value.length) return
+  prescanBusy.value = true
+  prescanError.value = ''
+  try {
+    prescan.value = await api.prescanLibrary({
+      source_dirs: selectedDirs.value.map((d) => d.path),
+      type: form.type,
+      allowed_exts: fmtTouched.value ? form.allowed_exts : undefined,
+      exclude: form.exclude_text.split(/[,，\n]/).map((s) => s.trim()).filter(Boolean),
+    })
+  } catch (e) {
+    prescan.value = null
+    prescanError.value = e instanceof Error ? e.message : '预扫失败'
+  } finally {
+    prescanBusy.value = false
+  }
+}
+
+/** 目录 / 类型 / 白名单一变，上一次预扫结果就过期了 —— 不留在界面上误导。 */
+watch([selectedDirs, () => form.type, () => form.allowed_exts, () => form.exclude_text], () => {
+  prescan.value = null
+  prescanError.value = ''
+}, { deep: true })
 
 /**
  * 建库。三页签下没有「步骤」概念，「创建」始终可点（受 `blockReason` 禁用）；
@@ -573,6 +611,25 @@ onMounted(async () => {
               <div v-else class="text-[11px] text-muted-foreground">
                 尚未选择任何文件夹。点击上方来源根浏览并「添加此文件夹」。
               </div>
+            </div>
+
+            <!-- 建库前预扫（第 154 期）：只读，不写索引、不碰文件 -->
+            <div class="mt-2 flex flex-wrap items-center gap-2 text-[11.5px]">
+              <Button
+                size="sm"
+                variant="secondary"
+                data-test="wizard-prescan"
+                :disabled="!selectedDirs.length || prescanBusy"
+                @click="runPrescan"
+              >
+                {{ prescanBusy ? '预扫中…' : '预扫一下' }}
+              </Button>
+              <span v-if="prescan" class="text-muted-foreground">
+                预计 <b class="text-foreground tabular-nums">{{ prescan.books }}</b> 本
+                <template v-if="prescanFormats">（{{ prescanFormats }}）</template>
+                <template v-if="prescan.skipped_top">· 顶层跳过 {{ prescan.skipped_top }} 个文件</template>
+              </span>
+              <span v-if="prescanError" class="text-destructive">{{ prescanError }}</span>
             </div>
 
             <div>

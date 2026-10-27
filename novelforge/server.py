@@ -5840,6 +5840,36 @@ def api_reorder_libraries(payload: dict = Body(...)):
     return api_libraries()
 
 
+@app.post("/api/libraries/prescan")
+def api_libraries_prescan(payload: dict = Body(...)):
+    """建库前只读预扫（第 154 期）：给定来源目录，返回会收进多少本 / 什么格式。
+
+    body: ``{"source_dirs": [...], "type": "ebook", "allowed_exts": [...], "exclude": [...]}``。
+    目录必须落在来源根白名单内（与建库同一条 :func:`_library_root_allowed`）——
+    预扫也是「读用户的盘」，不能借它浏览任意路径。不写索引、不碰文件。
+    """
+    dirs = (payload or {}).get("source_dirs") or (payload or {}).get("paths") or []
+    if not isinstance(dirs, list) or not dirs:
+        raise HTTPException(400, "source_dirs 必须是非空数组")
+    ltype = str((payload or {}).get("type") or "mixed")
+    if ltype not in db.LIBRARY_TYPES:
+        raise HTTPException(400, "type 非法")
+    allowed = (payload or {}).get("allowed_exts")
+    exclude = (payload or {}).get("exclude")
+    items = []
+    for raw in dirs:
+        root = _library_root_allowed(raw)
+        items.append(library.prescan(root, ltype, allowed, exclude))
+    by_ext: dict = {}
+    for it in items:
+        for k, n in (it.get("by_ext") or {}).items():
+            by_ext[k] = by_ext.get(k, 0) + int(n)
+    return {"items": items,
+            "books": sum(int(it.get("books") or 0) for it in items),
+            "skipped_top": sum(int(it.get("skipped_top") or 0) for it in items),
+            "by_ext": by_ext}
+
+
 @app.get("/api/libraries/scan-state")
 def api_libraries_scan_state():
     """每库的**书目索引扫描状态**（第 88 期）：前端据此轮询显示「正在建立索引…」。

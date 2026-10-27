@@ -2410,6 +2410,63 @@ def _scan_once(lib: dict = None) -> list:
     return _apply_overlay(books)
 
 
+def prescan(root, ltype: str = "mixed", allowed_exts=None, exclude=None) -> dict:
+    """建库前**只读预扫**（第 154 期）：这个目录会收进多少本书、什么格式。
+
+    与真正的扫描共用 :func:`_iter_book_entries`（同一份白名单 / 排除 / 目录合并
+    判据），所以「预扫说有 N 本」与「建完扫出来 N 本」不会对不上。不写索引、不碰文件。
+
+    ``skipped`` 只统计**顶层文件**里被白名单 / 排除规则挡掉的数量 —— 刻意不递归整棵树
+    （那会把一次建库前置检查变成全盘遍历）；字段名就叫 ``skipped_top``，不假装是全量。
+    """
+    p = pathlib.Path(str(root or ""))
+    out = {"path": str(p), "exists": p.is_dir(), "readable": False,
+           "books": 0, "dirs": 0, "by_ext": {}, "files_seen": 0, "skipped_top": 0}
+    if not out["exists"]:
+        return out
+    try:
+        out["readable"] = os.access(p, os.R_OK | os.X_OK)
+    except OSError:
+        out["readable"] = False
+    if not out["readable"]:
+        return out
+    # parse_exts / parse_excludes 读的是库表里的「JSON 数组文本」；API 传进来的是
+    # 真数组 —— 先序列化，别让「列表形状不认」退化成「没设过 ⇒ 收全格式」。
+    def _as_col(v):
+        return json.dumps(list(v), ensure_ascii=False) if isinstance(v, (list, tuple)) else v
+
+    exts = parse_exts(_as_col(allowed_exts)) or _exts_for_type(ltype)
+    patterns = parse_excludes(_as_col(exclude))
+    entries = _iter_book_entries(p, exts, patterns, ltype)
+    by_ext: dict = {}
+    dirs = 0
+    for f in entries:
+        if f.is_dir():
+            dirs += 1
+            key = "(目录)"
+        else:
+            key = f.suffix.lower().lstrip(".") or "(无扩展名)"
+        by_ext[key] = by_ext.get(key, 0) + 1
+    out.update({"books": len(entries), "dirs": dirs, "by_ext": by_ext})
+    try:
+        for ent in os.scandir(p):
+            try:
+                is_file = ent.is_file()
+            except OSError:
+                continue
+            if not is_file:
+                continue
+            out["files_seen"] += 1
+            name = ent.name
+            suffix = pathlib.PurePosixPath(name).suffix.lower()
+            if (not is_hidden_name(name)
+                    and (suffix not in exts or _excluded(name, name, patterns))):
+                out["skipped_top"] += 1
+    except OSError:
+        pass
+    return out
+
+
 def _books_of(lib: dict, force: bool = False) -> list:
     """单个库的书目 —— 第 62 期起**读索引**，不再扫盘。
 

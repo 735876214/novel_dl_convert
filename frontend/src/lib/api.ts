@@ -2641,6 +2641,25 @@ export interface LibrariesResult {
   source_roots: { name: string; path: string }[]
 }
 
+/** 建库前只读预扫（第 154 期）：目录可读性 / 预计书数 / 格式分布。 */
+export interface LibraryPrescanItem {
+  path: string
+  exists: boolean
+  readable: boolean
+  books: number
+  dirs: number
+  by_ext: Record<string, number>
+  files_seen: number
+  skipped_top: number
+}
+
+export interface LibraryPrescanResult {
+  items: LibraryPrescanItem[]
+  books: number
+  skipped_top: number
+  by_ext: Record<string, number>
+}
+
 /**
  * 单个书库的**扫描状态**（第 88 期 `GET /api/libraries/scan-state`）。
  *
@@ -4780,6 +4799,19 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids }),
+    }),
+
+  /** 建库前只读预扫（第 154 期）：不写索引、不碰文件。 */
+  prescanLibrary: (payload: {
+    source_dirs: string[]
+    type?: string
+    allowed_exts?: string[]
+    exclude?: string[]
+  }) =>
+    request<LibraryPrescanResult>('/api/libraries/prescan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     }),
 
   /**
