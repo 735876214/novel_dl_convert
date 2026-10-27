@@ -799,7 +799,7 @@ function pickConfirm(): void {
                   <span v-if="it.library_name"> · {{ it.library_name }}</span>
                 </div>
                 <!-- 源 → 副本：这一行的存在意义就是让用户看清「改的是副本，不是原文件」 -->
-                <div class="mt-1 flex items-start gap-1 text-[10.5px] text-muted-foreground/80">
+                <div class="mt-1 flex items-start gap-1 text-[10.5px] text-muted-foreground">
                   <Icon name="book" class="mt-0.5 h-3 w-3 shrink-0" />
                   <span class="min-w-0 flex-1 truncate" :title="it.source_path">{{ it.name }}</span>
                   <Icon name="arrowRight" class="mt-0.5 h-3 w-3 shrink-0" />

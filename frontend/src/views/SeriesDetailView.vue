@@ -294,7 +294,7 @@ watch(name, load)
           <div v-if="pubLabel(b)" class="truncate text-[10.5px] text-muted-foreground">
             {{ pubLabel(b) }}
           </div>
-          <div v-if="tagsLabel(b)" class="truncate text-[10.5px] text-muted-foreground/80">
+          <div v-if="tagsLabel(b)" class="truncate text-[10.5px] text-muted-foreground">
             {{ tagsLabel(b) }}
           </div>
         </button>

@@ -103,7 +103,7 @@ function open(name: string): void {
         <!-- 简介摘要：有值才渲染（第 12 期 C3）；没抓到的系列不占位、不留空行 -->
         <div
           v-if="(s.description ?? '').trim()"
-          class="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-muted-foreground/80"
+          class="mt-0.5 line-clamp-2 text-[10.5px] leading-snug text-muted-foreground"
         >
           {{ s.description }}
         </div>
