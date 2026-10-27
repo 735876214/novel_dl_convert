@@ -5,34 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>书籍轨道 · NovelForge</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231c1a17'/%3E%3Cpath d='M9 8h7a3 3 0 013 3v13a2 2 0 00-2-2H9z' fill='%23f7f3ec' opacity='.95'/%3E%3Cpath d='M23 8h-1.5a3 3 0 00-3 3v13a2 2 0 012-2H23z' fill='%23f7f3ec' opacity='.6'/%3E%3C/svg%3E">
-<script>
-  // 主题预置：在首屏渲染前执行，避免深浅色闪白（FOUC）。
-  // 逻辑与 BookOrbit 的 /theme-init.js 一致，localStorage 键：
-  //   theme  默认 'system'  → 可选 dark / light / system
-  //   accent 默认 'neutral' → 对应 accents.css 里的 accent-<name> 类
-  //   radius 默认 'default' → 对应 radius.css 里的 radius-<name> 类
-  // 值均以 JSON 序列化后存储。
-  (function () {
-    function readStoredValue(key, fallback) {
-      var stored = localStorage.getItem(key)
-      if (stored === null) return fallback
-      try { return JSON.parse(stored) } catch (e) { return stored }
-    }
-
-    var theme = readStoredValue('theme', 'system')
-    var accent = readStoredValue('accent', 'neutral')
-    var radius = readStoredValue('radius', 'default')
-
-    var systemDark = typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-color-scheme: dark)').matches
-    var isDark = theme === 'dark' || (theme !== 'light' && systemDark)
-
-    var root = document.documentElement
-    if (isDark) root.classList.add('dark')
-    if (accent !== 'neutral') root.classList.add('accent-' + accent)
-    if (radius !== 'default') root.classList.add('radius-' + radius)
-  })()
-</script>
+<meta name="theme-color" content="#1c1a17">
+<!-- 构建 base（开发期 `/`，生产 `/static/v2/`）；boot.js 用它注册根作用域的 Service Worker -->
+<meta name="nf-base" content="%BASE_URL%">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="NovelForge">
+<link rel="manifest" href="%BASE_URL%manifest.webmanifest">
+<link rel="apple-touch-icon" href="%BASE_URL%icons/apple-touch-icon-180.png">
+<!-- 启动前置脚本（旧 hash 链接迁移 + 主题预置）：必须外置，全局 CSP 是 script-src 'self' -->
+<script src="%BASE_URL%boot.js"></script>
 </head>
 <body>
 <div id="app"></div>

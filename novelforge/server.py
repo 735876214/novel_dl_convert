@@ -23,7 +23,8 @@ from urllib.parse import quote, unquote
 
 import yaml
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Body, Request
+from fastapi import (FastAPI, UploadFile, File, Form, HTTPException, Query, Body, Request,
+                     WebSocket, WebSocketDisconnect)
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
@@ -42,7 +43,8 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                   reading_list,
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    mobicache, fb2cache,
-                   catalog, cache, units, recycle, urlguard, numbers, htmlsafe)
+                   catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
+                   events)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -259,7 +261,11 @@ class _FiniteJSONResponse(JSONResponse):
 
 
 app = FastAPI(title="NovelForge", version=APP_VERSION, lifespan=lifespan,
-              default_response_class=_FiniteJSONResponse)
+              default_response_class=_FiniteJSONResponse,
+              # 第 153 期：history 路由后 `/docs` 归前端「文档」页所有。
+              # Swagger UI 关闭（它在鉴权中间件后面本来就打不开）；OpenAPI schema
+              # 仍留在 `/openapi.json` —— 鸿蒙端的版本契约用例与工具链都读它。
+              docs_url=None, redoc_url=None, openapi_url="/openapi.json")
 
 
 @app.exception_handler(library.BookIdConflict)
@@ -494,6 +500,94 @@ async def _auth_middleware(request: Request, call_next):
                 activity_log.set_actor(user)
     return await call_next(request)
 
+
+#: 全局安全响应头（第 153 期，对齐上游 BookOrbit 的 helmet 口径）。
+#:
+#: **只补默认值**（`setdefault`）：媒体出口（`_media_headers`）刻意用
+#: `CSP: sandbox` 把不可信 SVG 关进无脚本沙箱 —— 那一份优先级更高，不能被这里覆盖。
+#:
+#: CSP 的取舍：
+#: - `script-src 'self'`：所有脚本都是外置文件（启动逻辑已挪到 `/static/v2/boot.js`，
+#:   内联 <script> 会被这条挡掉）；`'wasm-unsafe-eval'` 给 pdf.js 的 WASM 解码。
+#: - `style-src 'unsafe-inline'`：Vue 的 `:style` 会写 style 属性，Tailwind 也有运行时样式。
+#: - `worker-src 'self' blob:`：pdf.js 的 worker（部分构建走 blob）。
+#: - `connect-src 'self' ws: wss:`：同源 API + 第 153 期新增的 WebSocket。
+#: - `frame-ancestors 'self'`：内网自托管允许同源嵌入，不允许外站套壳。
+_SECURITY_HEADERS = {
+    # 与媒体出口共用同一个字面量（`test_media_headers_135` 钉住「安全头只在一处组装」）。
+    "X-Content-Type-Options": _MEDIA_UNTRUSTED_HEADERS["X-Content-Type-Options"],
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Content-Security-Policy": (
+        "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; "
+        "object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; "
+        "font-src 'self' data:; media-src 'self' data: blob:; "
+        "connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-src 'self' blob:"
+    ),
+}
+
+
+@app.middleware("http")
+async def _security_headers_middleware(request: Request, call_next):
+    """给每个响应补全局安全头（后注册 = 外层，401 响应也会带上）。"""
+    resp = await call_next(request)
+    for key, value in _SECURITY_HEADERS.items():
+        resp.headers.setdefault(key, value)
+    return resp
+
+
+# ---------------- 实时事件（WebSocket，第 153 期）----------------
+# 浏览器 WebSocket 不能自定义请求头，所以 token 走 query（与 `/api/.../asset?token=`
+# 同一取舍）；明文只在内网 HTTP 上出现，与页面本身同级。
+# 事件只是「提前知道该刷新了」：断线后前端回退轮询，HTTP 仍是唯一真值源。
+_WS_UNAUTHORIZED = 4401          # 自定义关闭码：前端见到它就不重连（令牌无效）
+
+
+@app.websocket("/ws")
+async def ws_events(websocket: WebSocket):
+    token = (websocket.query_params.get("token") or "").strip()
+    user = auth_mod.verify_token(token) if token else None
+    if not user:
+        await websocket.close(code=_WS_UNAUTHORIZED)
+        return
+
+    await websocket.accept()
+    queue = events.subscribe()
+    try:
+        await websocket.send_json({
+            "event": "hello",
+            "ts": round(time.time(), 3),
+            "data": {"user": user, "version": APP_VERSION},
+        })
+        while True:
+            # 同时等「总线来事件」与「客户端发消息/断开」——只等前者的话，
+            # 客户端静默断开要等到下一条事件才会被发现（订阅者白白留着）。
+            recv = asyncio.create_task(websocket.receive_text())
+            emit = asyncio.create_task(queue.get())
+            done, pending = await asyncio.wait(
+                {recv, emit}, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            if recv in done:
+                try:
+                    recv.result()
+                except WebSocketDisconnect:
+                    break
+                except Exception:
+                    break
+            if emit in done:
+                await websocket.send_json(emit.result())
+    except WebSocketDisconnect:
+        pass
+    except Exception:                     # 发送失败 / 循环关闭：按断开处理
+        pass
+    finally:
+        events.unsubscribe(queue)
+
+
 # 后台任务已落 SQLite（见 core/db.py 的 tasks 表）：重启后仍可查历史任务，
 # 前端也不再需要伪造进度条。原先这里是进程内字典 `TASKS: dict = {}`（重启即清空）。
 
@@ -575,6 +669,24 @@ def index():
     # 换来的不是 304 而是「每次拿一份 2 KB 的壳」—— 壳很小，这个代价可以接受；
     # 想要 304 得自己比 ETag 再回 304，属于下一次优化。
     return FileResponse(str(page), headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/sw.js", include_in_schema=False)
+def service_worker():
+    """Service Worker（第 153 期）：必须从**根路径**提供，作用域才能覆盖全站。
+
+    文件本身是前端 `public/sw.js` 的构建产物（部署后在 `static/v2/sw.js`）。
+    `Service-Worker-Allowed: /` 是跨目录作用域的唯一合法方式；`no-cache` 保证
+    升级后浏览器立刻拿到新 SW（缓存旧 SW 会让「新壳」规则迟迟不生效）。
+    """
+    path = STATIC_DIR / "v2" / "sw.js"
+    if not path.is_file():
+        raise HTTPException(404, "Service Worker 尚未构建")
+    return FileResponse(
+        str(path),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"},
+    )
 
 
 def _health_checks() -> dict:
@@ -10063,3 +10175,52 @@ async def convert_path(path: str = Form(...), traditionalize: bool = Form(False)
         src, src.name,
         {"traditionalize": traditionalize, "force": True, "merge": True, "cfg": config.load_config()},
         "api", size=src.stat().st_size)
+
+
+# ---------------- SPA 兜底（history 路由，第 153 期）----------------
+# 前端从 hash 路由改成 history 路由后，`/shelf`、`/settings/...` 这类深链
+# 刷新时服务器必须回 **index.html**，否则 404。规则只有三条：
+#   1. `/api` `/opds` `/koreader` `/download` `/static` `/health` `/ws` 前缀**永不**兜底
+#      —— 这些是后端自己的面（/ws 是第 153 期新增的 WebSocket）。
+#   2. 以已知静态资源扩展名结尾的**永不**兜底 —— 缺资源就该 404，不能回一份 HTML
+#      （浏览器会把 HTML 当 JS 执行，报一堆莫名其妙的语法错误）。
+#   3. 其余 GET 一律回 index.html，由前端路由决定落哪个页面。
+# 注意 `series/Vol.04` 这类**带点但不是扩展名**的路径必须走兜底 —— 所以判的是
+# 「扩展名白名单」，不是「有没有点」。
+_SPA_RESERVED_PREFIXES = frozenset({
+    "api", "opds", "koreader", "download", "static", "health", "ws",
+    # 第 97 期删掉的旧内容端点：删了就要 404，不能被 SPA 兜底回一份 200 的 HTML
+    # （`tests/test_api_smoke.py::test_旧内容端点已随零调用者移除` 钉着这条）。
+    "content",
+})
+_SPA_ASSET_EXTS = frozenset({
+    "js", "mjs", "css", "map", "json", "webmanifest", "wasm",
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "avif",
+    "woff", "woff2", "ttf", "otf", "eot",
+    "txt", "xml", "rss", "atom",
+    "mp3", "m4a", "m4b", "aac", "wav", "ogg", "opus", "flac",
+    "epub", "pdf", "cbz", "cbr", "zip", "rar", "7z", "fb2", "mobi", "azw3",
+})
+
+
+@app.api_route(
+    "/{path:path}",
+    methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    include_in_schema=False,
+)
+def _spa_fallback(path: str, request: Request):
+    """history 路由的 SPA 兜底：非后端前缀、非静态扩展名 ⇒ 回 index.html。
+
+    ⚠️ 必须**接所有方法**：只注册 GET 时，未匹配的 `POST /api/removed` 会命中
+    「路径存在但方法不对」⇒ Starlette 回 **405**，而删除接口的契约是 **404**
+    （`test_komga_client` / `test_naming_publish` 都用 404 钉着）。非 GET/HEAD
+    一律 404，且不返回外壳。
+    """
+    if request.method not in ("GET", "HEAD"):
+        raise HTTPException(404, "Not Found")
+    if path.split("/", 1)[0] in _SPA_RESERVED_PREFIXES:
+        raise HTTPException(404, "Not Found")
+    name = path.rsplit("/", 1)[-1]
+    if "." in name and name.rsplit(".", 1)[-1].lower() in _SPA_ASSET_EXTS:
+        raise HTTPException(404, "Not Found")
+    return index()

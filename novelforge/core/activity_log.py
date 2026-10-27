@@ -447,6 +447,19 @@ def _emit(entry: dict) -> None:
     else:
         _logger.info(line_txt)
 
+    # 实时通知（第 153 期）：活动日志是通知的唯一数据源，新增一条就推一次。
+    # 只推「有新条目」这个事实，正文由前端按既有 /api/notifications 拉取 ——
+    # 事件不是第二份真值源，断线时前端仍以 HTTP 为准。
+    try:
+        from . import events
+        events.publish("notifications:new", {
+            "action": entry.get("action", ""),
+            "status": entry.get("status", ""),
+            "file": entry.get("file", ""),
+        })
+    except Exception:                     # 总线不可用绝不能影响写日志
+        pass
+
 
 # 便捷写法：语义化封装，调用处不必记常量
 def log_convert_ok(file, output, **kw):

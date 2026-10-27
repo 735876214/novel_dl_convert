@@ -38,7 +38,7 @@ onMounted(async () => {
 })
 
 const enabled = computed(() => Boolean(val('opds.enabled')))
-/** 端点是同源根路径（应用挂在 /，#/x 是 hash 路由，不影响 /opds） */
+/** 端点是同源根路径（应用挂在 /，前端路由不占用 /opds） */
 const origin = computed(() => window.location.origin)
 const endpoint = computed(() => `${origin.value}/opds`)
 /** 单库地址：库 id 可能含中文 / 空格，URL 里必须编码 */

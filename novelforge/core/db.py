@@ -1338,6 +1338,18 @@ def set_progress(book_id: str, locator: int, percent: float, cfi: str = "",
             (book_id, str(file_rel or ""), locator, percent, str(cfi or ""), now),
         )
         c.commit()
+    # 实时进度（第 153 期）：所有写入口（NF 阅读器 / Komga / KOReader / 完成标记）
+    # 都汇到这一处，所以发布点也只放这里 —— 别在各路由里再补一份。
+    try:
+        from . import events
+        events.publish("book:progress-changed", {
+            "book_id": book_id,
+            "file_rel": str(file_rel or ""),
+            "percent": percent,
+            "updated_at": now,
+        })
+    except Exception:
+        pass
     return now
 
 

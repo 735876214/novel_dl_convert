@@ -1,5 +1,5 @@
 import type { Component } from 'vue'
-import { createRouter, createWebHashHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 
 import { SETTINGS_HOME, SETTINGS_PAGES } from '@/data/settingsNav'
 
@@ -96,14 +96,18 @@ const settingsChildren = SETTINGS_PAGES.map((page) => {
 })
 
 /**
- * 使用 hash history：FastAPI 没有 SPA 兜底路由，
- * history 模式下刷新 /dashboard 之类路径会 404。
- * hash 模式零后端改动，对内网工具完全够用。
+ * 使用 history 模式（第 153 期起）：URL 与上游 BookOrbit 一致（`/shelf`、`/settings/...`），
+ * 深链可直达、可分享、不会被 `#` 截断。
+ *
+ * 依赖两端同批改动：① FastAPI 的 SPA 兜底（`server.py` 的 `/{path:path}`，
+ * 非 `/api` `/opds` `/koreader` `/download` `/static` `/health` 且无扩展名时回 `index.html`）；
+ * ② `index.html` 里把旧 hash 链接（`/#/shelf`）在启动前重写成 `/shelf`，老书签不失效。
+ * 开发期由 Vite 自带的 history fallback 承担，无需额外配置。
  *
  * 尚未迁移的视图统一落到 PlaceholderView（含通配兜底），避免为占位创建一次性桩文件。
  */
 const router = createRouter({
-  history: createWebHashHistory(),
+  history: createWebHistory(),
   routes: [
     { path: '/', name: 'dashboard', component: () => import('@/views/DashboardView.vue') },
     { path: '/explore', name: 'explore', component: () => import('@/views/ExploreView.vue') },

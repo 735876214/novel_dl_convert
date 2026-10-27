@@ -25,10 +25,18 @@ import pathlib
 import threading
 import time
 
-from . import (activity_log, db, fileops, lib_settings, library, metafetch,
+from . import (activity_log, db, events, fileops, lib_settings, library, metafetch,
                metastore, publish)
 
 _logger = logging.getLogger("novelforge.scrape")
+
+
+def _publish_status(status: str, **data) -> None:
+    """把刮削状态推给前端（第 153 期）；总线不可用时静默（页面仍可轮询）。"""
+    try:
+        events.publish("book-metadata-fetch:status", {"status": status, **data})
+    except Exception:
+        pass
 
 #: worker 空闲时的等待时长（有活干就立刻继续，不必等满）
 _IDLE_WAIT = 5.0
@@ -263,6 +271,7 @@ def enqueue(book: dict, *, force: bool = False, reason: str = "scan",
         db.scrape_set(bid, library_id=lib_id, source_rel=name, status="pending",
                       src_size=sig[0], src_mtime=sig[1], attempts=attempts,
                       force_fetch=1 if force else 0, error="")
+        _publish_status("queued", book_id=bid)
         return {"ok": True, "queued": True, "reason": reason}
 
 
@@ -371,6 +380,7 @@ def _process_locked(bid, *, fetch: bool = None, gen: int = None) -> dict:
     if stale():
         return _aborted()
     db.scrape_set(bid, status="running", library_id=lib_id, source_rel=name)
+    _publish_status("running", book_id=bid)
     _set_current(name)
     try:
         # ① 在线刮削（可选）：结果照旧只落服务端（meta_online / meta_cover），
@@ -407,11 +417,13 @@ def _process_locked(bid, *, fetch: bool = None, gen: int = None) -> dict:
             mode = "硬链接" if res.get("mode") == publish.LINK_HARD else "复制"
             extra = "，已内嵌元数据" if res.get("embedded") or res.get("cover") else "（无元数据可写）"
             _log(name, f"刮削出版：{res.get('rel')}（{mode}{extra}）")
+            _publish_status("ok", book_id=bid, rel=res.get("rel") or "")
             return {"ok": True, **res}
         if res.get("skipped"):
             db.scrape_set(bid, status="skipped", error=res.get("error") or "",
                           force_fetch=0)
             _log(name, f"跳过刮削：{res.get('error')}", ok=True)
+            _publish_status("skipped", book_id=bid)
             return {"ok": False, "skipped": True, **res}
         return _failed(bid, row, lib_id, res.get("error") or "未知失败", name, gen=gen)
     except Exception as e:                            # noqa: BLE001
@@ -437,6 +449,8 @@ def _failed(bid, row, lib_id, error: str, name: str, gen: int = None) -> dict:
     db.scrape_set(bid, status="failed" if over else "pending", attempts=attempts,
                   error=error)
     _log(name, f"刮削失败（第 {attempts} 次）：{error}", ok=False)
+    _publish_status("failed" if over else "pending", book_id=bid,
+                    attempts=attempts, error=error)
     return {"ok": False, "error": error, "attempts": attempts, "give_up": over}
 
 

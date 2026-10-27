@@ -35,7 +35,15 @@ import shutil
 import threading
 import time
 
-from . import activity_log, db, fileops, library, pipeline
+from . import activity_log, db, events, fileops, library, pipeline
+
+
+def _publish_changed(item_id: str = "") -> None:
+    """通知前端「收书目录变了」（第 153 期）。总线不可用时静默 —— 界面仍有轮询兜底。"""
+    try:
+        events.publish("book-dock:changed", {"item": item_id})
+    except Exception:
+        pass
 
 #: 登记写入的互斥锁（第 65 期）：``rename`` 的「磁盘改名 + 登记行改名」、
 #: ``reconcile`` / ``note_scan`` 的对账写入都在它里面，避免改名与对账交错
@@ -170,6 +178,7 @@ def note_scan(result: dict) -> None:
                 detail=str((it or {}).get("error") or "处理失败"),
                 retries=int(prev.get("retries") or 0) + 1,
             )
+    _publish_changed()
 
 
 def payload(watcher, status=None) -> dict:
@@ -284,6 +293,7 @@ def rescan(watcher, item_id, library_id=None, root=None) -> dict:
                        retries=int(row.get("retries") or 0))
     else:
         db.dock_update(item_id, status="needs_review", detail=str(detail))
+    _publish_changed(item_id)
     return db.dock_get(item_id)
 
 
@@ -354,6 +364,7 @@ def rename(watcher, item_id, new_name) -> dict:
                        f"原文件名：{old_name}")
     activity_log.log(activity_log.ACTION_RENAME, new_name, activity_log.STATUS_OK,
                      detail=f"收书目录改名：{old_name} → {new_name}", source="api")
+    _publish_changed(new_name)
     return db.dock_get(new_name)
 
 
@@ -365,6 +376,7 @@ def ignore(watcher, item_id) -> dict:
     db.dock_update(item_id, status="ignored", detail="已忽略，不再自动处理")
     activity_log.log(activity_log.ACTION_SKIP, name, activity_log.STATUS_OK,
                      detail="收书目录：忽略该条目", source="api")
+    _publish_changed(item_id)
     return db.dock_get(item_id)
 
 
@@ -390,4 +402,5 @@ def remove(watcher, item_id) -> dict:
         activity_log.log(activity_log.ACTION_RECYCLE, name, activity_log.STATUS_OK,
                          output=recycled, detail="从收书目录移入回收目录", source="api")
     db.dock_delete(item_id)
+    _publish_changed(item_id)
     return {"ok": True, "name": name, "recycled": recycled}

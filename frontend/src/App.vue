@@ -16,12 +16,24 @@ import { useAuthStore } from '@/stores/auth'
 import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useSettingsSearch } from '@/composables/useSettingsSearch'
+import { startRealtime, stopRealtime } from '@/lib/realtime'
 
 // ⚠️ 第 65 期：`useUiStore` 与 `ui` 已从这里删掉 —— 它在本文件唯一的用途是
 // 「Esc 关任务抽屉」，而抽屉已改成顶栏浮层（`TaskFlyout.vue`），Esc 由浮层自管。
 const tasks = useTasksStore()
 const theme = useThemeStore()
 const auth = useAuthStore()
+// 实时事件（第 153 期）：登录后连 `/ws`；退出/令牌失效即断开。
+// 只影响「提前刷新」，不改变任何数据来源 —— 断线时各 store 的轮询照旧。
+watch(
+  () => auth.token,
+  (t) => {
+    if (t) startRealtime(t)
+    else stopRealtime()
+  },
+  { immediate: true },
+)
+onUnmounted(() => stopRealtime())
 const library = useLibraryStore()
 const wizard = useLibraryWizardStore()
 const route = useRoute()

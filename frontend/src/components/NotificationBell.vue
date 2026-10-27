@@ -6,6 +6,7 @@ import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { api, type NotificationItem } from '@/lib/api'
+import { onRealtime } from '@/lib/realtime'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -88,13 +89,33 @@ function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') open.value = false
 }
 
+// 实时刷新（第 153 期）：活动日志每写一条后端就推 `notifications:new`。
+// 批量转换会连续推很多条，**600ms 合并一次**，避免把角标刷新变成请求风暴。
+let offRealtime: (() => void) | null = null
+let reloadTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleReload(): void {
+  if (reloadTimer !== null) return
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null
+    void load()
+  }, 600)
+}
+
 onMounted(() => {
   void load()
+  offRealtime = onRealtime('notifications:new', () => scheduleReload())
   document.addEventListener('click', onDocClick)
   document.addEventListener('keydown', onKey)
 })
 
 onUnmounted(() => {
+  offRealtime?.()
+  offRealtime = null
+  if (reloadTimer !== null) {
+    clearTimeout(reloadTimer)
+    reloadTimer = null
+  }
   document.removeEventListener('click', onDocClick)
   document.removeEventListener('keydown', onKey)
 })

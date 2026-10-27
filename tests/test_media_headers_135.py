@@ -54,8 +54,10 @@ def test_安全头只有一处组装点():
     """
     assert SERVER_SRC.count('"Content-Security-Policy": "sandbox"') == 1
     assert SERVER_SRC.count('"X-Content-Type-Options": "nosniff"') == 1
-    # 定义 + helper 里 `dict(...)` 复制一次，就这两处
-    assert SERVER_SRC.count("_MEDIA_UNTRUSTED_HEADERS") == 2
+    # 定义 + helper 里 `dict(...)` 复制一次 + 全局安全响应头复用同一个字典项
+    # （第 153 期：`_SECURITY_HEADERS` 不另写一份 `nosniff` 字面量）。**仍然是单一数据源** ——
+    # 新增出口只能改 `_MEDIA_UNTRUSTED_HEADERS`，这里数到第四处就说明有人又抄了一份。
+    assert SERVER_SRC.count("_MEDIA_UNTRUSTED_HEADERS") == 3
 
 
 def test_媒体出口不自己拼缓存头():
