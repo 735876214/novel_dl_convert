@@ -982,6 +982,9 @@ def _book_of_row(lib: dict, row) -> dict:
         "name": rel,
         "size": size,
         "mtime": float(row["mtime"] or 0),
+        # 入库时间（第 154 期）：默认 = 文件 mtime；`books_of` 会用
+        # `book_added` 覆盖层改写这个字段，其余地方只认 `added_at`。
+        "added_at": float(row["mtime"] or 0),
         "format": str(row["format"] or ""),
         "title": str(row["title"] or ""),
         "author": str(row["author"] or ""),
@@ -1168,6 +1171,21 @@ def _settle(lib: dict, wait: bool = False) -> None:
     refresh_library(lib)                             # 冷启动第一次：同步扫（否则空书架）
 
 
+def _with_added_at(items: list) -> list:
+    """把 `book_added` 覆盖层并进书目：``added_at = 覆盖值 or 文件 mtime``。
+
+    在**读缓存前后都要调用**：缓存里存的是上次算出的值，而覆盖可能在两次读之间
+    被改过（`PUT /api/books/{id}/added-at`）—— 不重算就会读到旧日期。
+    """
+    if not items:
+        return items
+    from . import db as _db
+    ov = _db.book_added_map([b.get("id") for b in items])
+    for b in items:
+        b["added_at"] = float(ov.get(str(b.get("id")), b.get("mtime") or 0))
+    return items
+
+
 def books_of(lib: dict) -> list:
     """一个库的书目（读索引 + 服务端元数据覆盖层）。**请求路径上的那个入口。**
 
@@ -1212,9 +1230,9 @@ def books_of(lib: dict) -> list:
         # 旧标题最多占住 TTL_LIST=120s（第 139 期 H1）。
         with _state_lock:
             _cached_libs.add(lid)
-        return hit
+        return _with_added_at(hit)
     rows = _rows_of(lib)
-    out = _lib._apply_overlay([_book_of_row(lib, r) for r in rows])
+    out = _with_added_at(_lib._apply_overlay([_book_of_row(lib, r) for r in rows]))
     if key and fresh_enough and _unchanged(lid, seen_dirty, seen_seq):
         cache.set_json(key, out, cache.TTL_LIST)
         with _state_lock:
@@ -1299,7 +1317,7 @@ def find_by_id(bid: str, unique_only: bool = False) -> "dict | None":
     if hit is None:
         return None
     row, lib = hit
-    return _lib._apply_overlay([_book_of_row(lib, row)])[0]
+    return _with_added_at(_lib._apply_overlay([_book_of_row(lib, row)]))[0]
 
 
 def raw_book(bid: str) -> "dict | None":

@@ -4322,6 +4322,51 @@ def _progress_file(b: dict, file_rel: str) -> tuple:
     return target, (b.get("format") or "").upper() == "EPUB"
 
 
+@app.put("/api/books/{bid}/added-at")
+def api_set_added_at(bid: str, payload: dict = Body(...)):
+    """设置 / 清除「入库时间」覆盖（第 154 期）。
+
+    body ``{"added_at": <epoch 秒>}`` 写入；``{"added_at": null}`` 清除（恢复为
+    文件 mtime）。生效值 = 覆盖值 or 文件 mtime，写点只有 `db.set_book_added`
+    / `db.clear_book_added` 两处。
+    """
+    book, _conflict = library.by_id_status(bid)
+    if not book:
+        raise HTTPException(404, "书不存在")
+    raw = (payload or {}).get("added_at", None)
+    if raw is None:
+        db.clear_book_added(bid)
+        return {"ok": True, "book_id": bid, "overridden": False,
+                "added_at": float(book.get("added_at") or book.get("mtime") or 0)}
+    try:
+        ts = float(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "added_at 必须是时间戳（秒）") from None
+    if not (ts > 0):
+        raise HTTPException(400, "added_at 必须是正数时间戳")
+    db.set_book_added(bid, ts)
+    return {"ok": True, "book_id": bid, "overridden": True, "added_at": ts}
+
+
+@app.post("/api/libraries/{lid}/recompute-added-at")
+def api_recompute_added_at(lid: str, payload: dict = Body(None)):
+    """按文件 mtime 重算一个库的入库时间（第 154 期）。
+
+    当前只支持 ``source="mtime"``：它 = **清除该库所有覆盖**，让生效值回落文件时间。
+    「首次导入时间 / 文件创建时间」需要额外的历史列，不在本期投机性加。
+    """
+    lib = library.get_library(lid)
+    if not lib:
+        raise HTTPException(404, "书库不存在")
+    source = str((payload or {}).get("source") or "mtime")
+    if source != "mtime":
+        raise HTTPException(400, "目前只支持 source=mtime")
+    books = library.books(lid)
+    cleared = db.clear_book_added_in([b.get("id") for b in books])
+    return {"ok": True, "library_id": lid, "source": source,
+            "books": len(books), "cleared": cleared}
+
+
 @app.get("/api/books/{bid}/progress")
 def api_get_progress(bid: str, file_rel: "str | None" = None):
     """读阅读进度。两个口径（第 63 期 4/6）：

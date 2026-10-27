@@ -19,6 +19,7 @@
     "has_more",
     "items",
     "items[]",
+    "items[].added_at",
     "items[].annotation_count",
     "items[].author",
     "items[].c1",
@@ -71,6 +72,7 @@
     "total"
   ],
   "detail": [
+    "added_at",
     "author",
     "c1",
     "c2",

@@ -65,7 +65,9 @@ const allBooks = computed<BookCard[]>(() => {
     case 'discover':
       return discoverBooks.value
     case 'recent':
-      return [...library.books].sort((a, b) => (b.mtime || 0) - (a.mtime || 0))
+      return [...library.books].sort(
+        (a, b) => (b.added_at || b.mtime || 0) - (a.added_at || a.mtime || 0),
+      )
     case 'scope':
       return props.shelf.scope ? library.smartBooks(props.shelf.scope) : library.books
     default:

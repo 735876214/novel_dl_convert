@@ -6,7 +6,7 @@
   `core/lib_settings.reading_thresholds`），本模块不再自己写死数字 ——
   全仓凡是要判「已读完 / 在读 / 未读」的地方都从同一处取，否则会出现
   「统计里算已读完、书架上还是在读」。
-- 「入库节奏」＝ 按成品文件 mtime 落在最近 N 天内的数量（与阅读无关）。
+- 「入库节奏」＝ 按 `added_at`（用户可覆盖；未覆盖时=成品文件 mtime）落在最近 N 天内的数量（与阅读无关）。
 - 「最近在读」＝ progress 表里按 updated_at 倒序的书。
 
 时间窗口（days）与 Top 榜长度（top）参数化：dashboard 用默认 28/8，
@@ -257,9 +257,10 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
             decades[yi // 10 * 10] = decades.get(yi // 10 * 10, 0) + 1
             yearly[yi] = yearly.get(yi, 0) + 1
             year_titles.setdefault(yi, []).append(b["title"])
-        # 入库月份（按文件 mtime）。mtime<=0 是「没有时间戳」的异常文件：time.localtime(0)
+        # 入库月份（第 154 期起按 `added_at`：用户可覆盖；没覆盖时它=文件 mtime）。
+        # mtime<=0 是「没有时间戳」的异常文件：time.localtime(0)
         # 是 1970-01，放进去会在时间轴最左端造出一根假柱子，故直接不进序列。
-        mt = b.get("mtime") or 0
+        mt = b.get("added_at") or b.get("mtime") or 0
         if mt > 0:
             lt_m = time.localtime(mt)
             mk = (lt_m.tm_year, lt_m.tm_mon)
@@ -403,14 +404,15 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
             })
     recent.sort(key=lambda r: r["updated_at"], reverse=True)
 
-    # 近 N 天入库节奏（按文件 mtime；buckets[0] = N 天前，buckets[-1] = 今天）
+    # 近 N 天入库节奏（按 `added_at`：用户可覆盖，未覆盖时=文件 mtime；
+    # buckets[0] = N 天前，buckets[-1] = 今天）
     # 天口径统一走 ``db.local_day``（第 119 期）：此前是 ``// 86400`` 的滚动 24 小时桶，
     # 而「今天」在别处是日历日，前端却按「N 天前」标注 ⇒ 标签最多错一整天。
     now = time.time()
     today_d = db.local_day(now)
     buckets = [0] * days
     for b in bs:
-        d = (today_d - db.local_day(b.get("mtime") or 0)).days
+        d = (today_d - db.local_day(b.get("added_at") or b.get("mtime") or 0)).days
         if 0 <= d < days:
             buckets[days - 1 - d] += 1
 
@@ -434,11 +436,11 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
             streak += 1
             i += 1
 
-    # 本月入库（按文件 mtime 的日历月）
+    # 本月入库（按 `added_at` 的日历月；未覆盖时=文件 mtime）
     now_lt = time.localtime(now)
     added_month = 0
     for b in bs:
-        lt = time.localtime(b.get("mtime") or 0)
+        lt = time.localtime(b.get("added_at") or b.get("mtime") or 0)
         if lt.tm_year == now_lt.tm_year and lt.tm_mon == now_lt.tm_mon:
             added_month += 1
 

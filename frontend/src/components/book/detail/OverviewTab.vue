@@ -5,7 +5,8 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import SimilarBooks from '@/components/book/detail/SimilarBooks.vue'
 import type { BookCard, BookFile, SimilarBook } from '@/lib/api'
-import { localDate } from '@/lib/format'
+import { api } from '@/lib/api'
+import { localDate, localDateToEpoch } from '@/lib/format'
 import { useLibraryStore } from '@/stores/library'
 
 /**
@@ -28,6 +29,8 @@ const emit = defineEmits<{
   download: [string]
   expandSimilar: []
   openBook: [string]
+  /** 入库时间改完后父级重拉详情（book 是 props，不能就地改）。 */
+  refresh: []
 }>()
 
 /** 与组件 `SimilarBooks` 的 preview 同一个数：父级据此判断「是否可能还有更多」 */
@@ -70,7 +73,7 @@ const libraryName = computed(() => {
 /**
  * 版本信息区的行（第 30 期补全）：
  * - 书库（归属库，来自 book.library_id）
- * - 入库（与导出 CSV「入库日期」同源：都是文件 mtime）
+ * - 入库（单独一行，可编辑；与导出 CSV「入库日期」同源：`added_at` 覆盖 ?? 文件 mtime）
  * - 页数（非 EPUB 恒 0 → 不展示；带来源标注：估算值 / 归档真实值）
  * 移除原先写死「字数：未知」的假值行（项目约定不做假交互）。
  */
@@ -79,7 +82,6 @@ const versionRows = computed<Array<{ k: string; v: string; hint?: string }>>(() 
   const rows: Array<{ k: string; v: string; hint?: string }> = []
   rows.push({ k: '系列', v: b.series || '独立作品' })
   if (libraryName.value) rows.push({ k: '书库', v: libraryName.value })
-  if (b.mtime) rows.push({ k: '入库', v: fmtDateSlash(b.mtime) })
   rows.push({ k: '出版年', v: b.year || '未知' })
   rows.push({ k: '出版社', v: b.publisher || '未知' })
   rows.push({ k: '语言', v: b.language || '未知' })
@@ -98,6 +100,43 @@ const versionRows = computed<Array<{ k: string; v: string; hint?: string }>>(() 
   }
   return rows
 })
+
+// ---------------- 入库时间（第 154 期，可编辑）----------------
+const editingAdded = ref(false)
+const addedDraft = ref('')
+const addedError = ref('')
+const addedTs = computed(() => props.book.added_at || props.book.mtime || 0)
+
+function startEditAdded(): void {
+  addedError.value = ''
+  addedDraft.value = localDate(new Date(addedTs.value * 1000))
+  editingAdded.value = true
+}
+
+async function saveAdded(): Promise<void> {
+  const ts = localDateToEpoch(addedDraft.value)
+  if (!ts) {
+    addedError.value = '请选择有效日期'
+    return
+  }
+  try {
+    await api.setBookAddedAt(props.book.id, ts)
+    editingAdded.value = false
+    emit('refresh')
+  } catch (e) {
+    addedError.value = e instanceof Error ? e.message : '保存失败'
+  }
+}
+
+async function resetAdded(): Promise<void> {
+  try {
+    await api.setBookAddedAt(props.book.id, null)
+    editingAdded.value = false
+    emit('refresh')
+  } catch (e) {
+    addedError.value = e instanceof Error ? e.message : '恢复失败'
+  }
+}
 </script>
 
 <template>
@@ -161,6 +200,29 @@ const versionRows = computed<Array<{ k: string; v: string; hint?: string }>>(() 
           </dd>
         </div>
       </dl>
+
+      <!-- 入库时间（第 154 期）：单独一行，可改成别的日期或恢复为文件时间 -->
+      <div class="mt-3 border-t border-border pt-2.5">
+        <div class="flex flex-wrap items-center gap-2 text-[11.5px]">
+          <span class="w-[4.5rem] shrink-0 text-muted-foreground">入库</span>
+          <template v-if="!editingAdded">
+            <span class="tabular-nums text-foreground">{{ addedTs ? fmtDateSlash(addedTs) : '未知' }}</span>
+            <button type="button" class="cursor-pointer text-primary hover:underline" @click="startEditAdded">修改</button>
+          </template>
+          <template v-else>
+            <input
+              v-model="addedDraft"
+              type="date"
+              aria-label="入库日期"
+              class="h-7 rounded-md border border-border bg-card px-2 text-[12px] text-foreground outline-none focus:border-ring"
+            >
+            <Button size="sm" variant="primary" @click="saveAdded">保存</Button>
+            <Button size="sm" variant="ghost" @click="editingAdded = false">取消</Button>
+            <Button size="sm" variant="ghost" @click="resetAdded">恢复为文件时间</Button>
+          </template>
+        </div>
+        <p v-if="addedError" class="mt-1 text-[11px] text-destructive">{{ addedError }}</p>
+      </div>
     </Card>
   </div>
 </template>

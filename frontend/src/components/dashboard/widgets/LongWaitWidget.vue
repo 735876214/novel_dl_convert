@@ -27,7 +27,9 @@ onMounted(() => library.loadBooks())
 const book = computed(() => {
   const unread = library.books.filter((b) => !(b.percent ?? 0))
   if (!unread.length) return null
-  return [...unread].sort((a, b) => (a.mtime || 0) - (b.mtime || 0))[0]
+  return [...unread].sort(
+    (a, b) => (a.added_at || a.mtime || 0) - (b.added_at || b.mtime || 0),
+  )[0]
 })
 
 /** 打开目标（能读就读、能听就听；都没有这个按钮干脆不出现，见模板） */
@@ -40,7 +42,7 @@ function openBook(): void {
 }
 
 const days = computed(() => {
-  const t = book.value?.mtime ?? 0
+  const t = book.value?.added_at ?? book.value?.mtime ?? 0
   if (!t) return 0
   return Math.max(0, Math.floor((Date.now() / 1000 - t) / 86400))
 })

@@ -2322,6 +2322,9 @@ def _row_of(lib: dict, root: pathlib.Path, f: pathlib.Path, p: dict) -> dict:
         "name": rel,
         "size": p["size"],
         "mtime": p["mtime"],
+        # 入库时间（第 154 期）：默认=文件 mtime；服务端 `book_added` 覆盖层在
+        # `catalog.books_of` 读取时改写。扫描与索引两条路径字段必须一致。
+        "added_at": p["mtime"],
         "format": p["format"],
         "title": p["title"],
         "author": p["author"],
@@ -2499,7 +2502,9 @@ def export_rows() -> list:
             "language": b.get("language") or "",
             "isbn": b.get("isbn") or "",
             "tags": "、".join(b.get("tags") or []),
-            "added": time.strftime("%Y-%m-%d", time.localtime(b.get("mtime") or 0)),
+            # 入库日期（第 154 期）：与 /api/books 的 added_at 同一口径（可覆盖）。
+            "added": time.strftime("%Y-%m-%d",
+                                   time.localtime(b.get("added_at") or b.get("mtime") or 0)),
         })
     return rows
 

@@ -285,6 +285,16 @@ def init():
                 created_at  REAL NOT NULL,
                 updated_at  REAL NOT NULL
             );
+            -- 入库时间覆盖（第 154 期）：默认「入库时间」= 文件 mtime（stats / 书架
+            -- 「最近添加」/ 详情页都按它）。从别处整库拷进来的书 mtime 常被保留，
+            -- 时间线会全部堆在搬迁当天；本表让用户逐本改，或整库恢复为文件时间。
+            -- ⚠️ 独立表而不是 book_index 加列：索引是派生表（重扫即重建，
+            -- REMAP_DERIVED_TABLES 不搬），加了也留不住。
+            CREATE TABLE IF NOT EXISTS book_added (
+                book_id    TEXT PRIMARY KEY,
+                added_at   REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS annotations (
                 id         INTEGER PRIMARY KEY,
                 book_id    TEXT NOT NULL,
@@ -2896,7 +2906,9 @@ ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
                  # 第 93 期：源绑定同样是「书走不到就再也看不见、却一直占着库」的行。
                  # 与 store_toc / toc_map 的区别只在于「重建成本」——它们重取一次就有，
                  # 绑定得用户重新选一次源 —— 但**可清理**这件事与成本无关。
-                 "online_bind")
+                 "online_bind",
+                 # 第 154 期：入库时间覆盖。书没了这一行没有意义。
+                 "book_added")
 
 
 def book_id_refs() -> dict:
@@ -2958,7 +2970,7 @@ REMAP_TABLES = (
     "progress", "annotations", "bookmarks", "meta_locks", "book_custom_values",
     "collection_items", "reading_sessions", "reading_attempts", "ratings", "reading_status",
     "koreader_docs", "meta_override", "meta_online", "meta_cover", "book_embeddings",
-    "book_origins", "online_bind",
+    "book_origins", "online_bind", "book_added",
 )
 # ⚠️ 第 93 期的 ``online_bind`` 加在这里，**不加进** :data:`REMAP_DERIVED_TABLES` ——
 #    它与 store_toc / toc_map 长得很像（都是「从某个源取回来的东西」），但性质相反：
@@ -4228,6 +4240,72 @@ def origin_delete(book_id) -> bool:
         cur = c.execute("DELETE FROM book_origins WHERE book_id=?", (str(book_id),))
         c.commit()
         return bool(cur.rowcount)
+
+
+# ---------------- 入库时间覆盖（第 154 期）----------------
+# 默认值是文件 mtime；本表只存**用户显式改过**的书。读侧一律
+# `effective = override or mtime`，写侧只有这三个函数。
+
+def book_added_map(bids) -> dict:
+    """``{book_id: added_at}``；只含**有覆盖**的书（没覆盖的不出现在结果里）。"""
+    want = [str(b) for b in (bids or []) if str(b or "")]
+    out: dict = {}
+    if not want:
+        return out
+    c = _connect()
+    for i in range(0, len(want), 500):
+        part = want[i:i + 500]
+        q = ",".join(["?"] * len(part))
+        for r in c.execute(
+            f"SELECT book_id, added_at FROM book_added WHERE book_id IN ({q})", part
+        ).fetchall():
+            out[str(r["book_id"])] = float(r["added_at"] or 0)
+    return out
+
+
+def set_book_added(book_id, added_at) -> float:
+    """写一本书的入库时间覆盖（epoch 秒）；返回写入值。"""
+    bid = str(book_id or "")
+    ts = float(added_at)
+    if not bid or not (ts > 0):
+        raise ValueError("added_at 必须是正数时间戳")
+    now = time.time()
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO book_added(book_id, added_at, updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(book_id) DO UPDATE SET "
+            "added_at=excluded.added_at, updated_at=excluded.updated_at",
+            (bid, ts, now),
+        )
+        c.commit()
+    return ts
+
+
+def clear_book_added(book_id) -> bool:
+    """删掉一本书的覆盖（恢复为文件 mtime）。返回是否真的删到行。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM book_added WHERE book_id=?", (str(book_id),))
+        c.commit()
+        return bool(cur.rowcount)
+
+
+def clear_book_added_in(bids) -> int:
+    """批量删覆盖（「按文件时间重算」）。返回删除行数。"""
+    want = [str(b) for b in (bids or []) if str(b or "")]
+    if not want:
+        return 0
+    c = _connect()
+    n = 0
+    with _lock:
+        for i in range(0, len(want), 500):
+            part = want[i:i + 500]
+            q = ",".join(["?"] * len(part))
+            cur = c.execute(f"DELETE FROM book_added WHERE book_id IN ({q})", part)
+            n += int(cur.rowcount or 0)
+        c.commit()
+    return n
 
 
 # ---------------- 元数据 override / online（第 8 期）----------------

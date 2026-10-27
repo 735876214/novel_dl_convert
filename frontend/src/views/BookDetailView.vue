@@ -380,6 +380,7 @@ watch(bookId, (id) => {
       @download="download"
       @expand-similar="expandSimilar"
       @open-book="(id) => router.push(`/book/${id}`)"
+      @refresh="loadAll"
     />
 
     <ChaptersTab

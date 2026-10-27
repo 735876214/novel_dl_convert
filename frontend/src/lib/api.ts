@@ -1029,6 +1029,8 @@ export interface BookCard {
   format: string
   size: number
   mtime: number
+  /** 入库时间（第 154 期）：服务端已合并「用户覆盖 or 文件 mtime」 */
+  added_at?: number
   /** 封面占位渐变（oklch），由后端按 id 派生，保证稳定 */
   c1: string
   c2: string
@@ -3697,6 +3699,28 @@ export const api = {
     request<{ ok: boolean; removed: Record<string, number>; total: number }>(
       `/api/books/${encodeURIComponent(bid)}/reset-reading-state`,
       { method: 'POST' },
+    ),
+
+  /** 入库时间（第 154 期）：传 null = 清除覆盖，恢复为文件 mtime。 */
+  setBookAddedAt: (bid: string, addedAt: number | null) =>
+    request<{ ok: boolean; book_id: string; added_at: number; overridden: boolean }>(
+      `/api/books/${encodeURIComponent(bid)}/added-at`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ added_at: addedAt }),
+      },
+    ),
+
+  /** 按文件 mtime 重算一个库的入库时间（清除该库全部覆盖）。 */
+  recomputeAddedAt: (lid: string) =>
+    request<{ ok: boolean; library_id: string; source: string; books: number; cleared: number }>(
+      `/api/libraries/${encodeURIComponent(lid)}/recompute-added-at`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: 'mtime' }),
+      },
     ),
 
   bookReview: (bid: string) =>
