@@ -10548,3 +10548,18 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 **核验**：后端全量（见 §0 基线；13 例本机环境失败与本批无关）+ 前端四连；真机冒烟待 Phase 1A 收口时统一做。
 
 **下一步**：Phase 1A 余下 —— 分面计数 / 跳转分桶 / 受管副本批量改名 / 正则导入向导 / 封面编辑器 / 重复书治理 / 实体 7 类 / 表视图列面板 / 批量元数据编辑 / 书库直传上传 / 按库只读凭据。
+
+## 第 155 期（BookOrbit 对齐 Phase 1A：重复书治理 + 封面编辑器）
+
+**需求来源**：用户「继续」推进 BookOrbit 对齐 Phase 1A；本期做重复书治理与封面编辑器两项。
+
+**功能范围与修法**：
+
+1. **重复书三类判据 + 「不是重复」持久化**：`library.duplicate_groups` 改为**全局并查集** —— 文件内容（同尺寸候选 sha256，>512 MB 跳过）、ISBN（`metadata.isbn_digits` 归一后相同）、同作者书名相似度三类边并进同一棵树；同一物理文件被两个库各登记一次（绝对 `path` 相同）**仍不并组**（第 121 期口径：清掉一条会把唯一那份文件搬进回收站）。新增 `duplicate_dismissals(pair_key)` 表与读取/写入/清空三个函数；`pair_key = min|max book_id`，**不含 book_id 列** ⇒ 不进 ORPHAN/REMAP，改名后自然失效。接口：`GET /api/duplicates` 带 `dismissed` 并按 pair 过滤；`POST /api/duplicates/dismiss`（一组 ids → 全部两两组合）、`DELETE /api/duplicates/dismissals`（全部恢复）。前端重复书籍页：组头「不是重复」按钮 + 页头「已忽略 N 条 · 恢复显示」，判定口径文案同步三类判据。
+2. **封面编辑器（单本）**：`POST /api/books/{bid}/cover`（multipart；Pillow 验图 + 8 MB 上限；只收 JPEG/PNG/WEBP/GIF，**不收 SVG** —— 可执行文档不走上传路径）、`POST /cover/url`（复用 `metafetch._download_cover` 的出站闸与体积/小图校验）、`DELETE /cover`（回退内嵌/占位）。全部只落 `db.set_cover`，源文件一字节不动；写后 `catalog.invalidate(None)` 让列表卡片的 `has_cover` 立刻跟上（详情不走列表缓存）。前端详情页概览新增「封面」卡：上传 / URL 应用 / 移除服务端封面。**未做**：按库批量刷新与「从文件重新提取」——它们与 Phase 4 的「按库刷新封面」同一批，避免现在先写一套半成品读取分支。
+
+**防回归**：`tests/test_duplicates_155.py`（2 例：三类判据并查集 / 持久化与恢复）、`tests/test_cover_editor_155.py`（2 例：上传回读同一份字节 + 移除回退 / 非法图片与内网 URL 被拒）；`test_catalog` / `test_client_contract` / `test_remap_tables` 随新增字段与表同步通过。
+
+**核验**：后端全量（见 §0 基线；13 例本机环境失败与本批无关）+ 前端四连。
+
+**下一步**：Phase 1A 余下 —— 分面计数 / 跳转分桶 / 受管副本批量改名 / 正则导入向导 / 实体 7 类 / 表视图列面板 / 批量元数据编辑 / 书库直传上传 / 按库只读凭据 / 按库刷新封面。
