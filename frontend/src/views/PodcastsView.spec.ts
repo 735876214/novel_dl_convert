@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { api, type PodcastEpisode } from '@/lib/api'
+import { api, type PodcastContinueItem, type PodcastEpisode } from '@/lib/api'
 import PodcastsView from '@/views/PodcastsView.vue'
 
 /**
@@ -33,6 +33,7 @@ vi.mock('@/lib/api', () => ({
     getPodcastAuto: vi.fn(),
     setPodcastAuto: vi.fn(),
     podcastTranscript: vi.fn(),
+    podcastContinue: vi.fn(),
   },
 }))
 
@@ -55,6 +56,7 @@ const m = {
   delBm: vi.mocked(api.deletePodcastBookmark),
   autoSet: vi.mocked(api.setPodcastAuto),
   tr: vi.mocked(api.podcastTranscript),
+  cont: vi.mocked(api.podcastContinue),
 }
 
 const POD = {
@@ -70,15 +72,16 @@ const EP: PodcastEpisode = {
   published_at: 1700000000, duration_sec: 3723, audio_url: 'https://cdn/1.mp3',
   audio_type: 'audio/mpeg', episode_no: 1, season_no: 0, explicit: false,
   download_state: '', download_error: '', downloaded_at: 0, local_bytes: 0, has_local: false,
-  position_sec: 0, played_at: 0, has_transcript: false, transcript_type: '',
+  position_sec: 0, played_at: 0, has_transcript: false, transcript_type: '', last_played_at: 0,
 }
 
-async function mountView(episodes: PodcastEpisode[] = [EP]) {
+async function mountView(episodes: PodcastEpisode[] = [EP], cont: PodcastContinueItem[] = []) {
   const pinia = createPinia()
   setActivePinia(pinia)
   m.list.mockResolvedValue({ items: [POD], total: 1 })
   m.prog.mockResolvedValue({})
   m.eps.mockResolvedValue({ items: episodes, total: episodes.length })
+  m.cont.mockResolvedValue({ items: cont, total: cont.length })
   const w = mount(PodcastsView, { global: { plugins: [pinia] } })
   await flushPromises()
   return w
@@ -306,5 +309,24 @@ describe('PodcastsView', () => {
     expect(m.tr).toHaveBeenCalledWith('e1')
     expect(w.text()).toContain('第一句')
     expect(w.text()).toContain('第二句')
+  })
+
+  it('继续收听与单集搜索', async () => {
+    const w = await mountView(
+      [{ ...EP, id: 'e1', title: '苹果' }, { ...EP, id: 'e2', title: '香蕉' }],
+      [{ id: 'e2', podcast_id: 'p1', podcast_title: '测试播客', title: '香蕉',
+        position_sec: 30, duration_sec: 60, audio_url: 'https://cdn/2.mp3',
+        download_state: '', last_played_at: 1 }],
+    )
+    expect(w.text()).toContain('继续收听')
+    expect(w.text()).toContain('继续播放')
+
+    await w.findAll('button').find((b) => b.text() === '单集')!.trigger('click')
+    await flushPromises()
+    await w.find('input[aria-label="搜索单集"]').setValue('苹果')
+    await flushPromises()
+    expect(w.text()).toContain('苹果')
+    // 「香蕉」仍会出现在上方「继续收听」卡里；单集列表只剩「苹果」⇒ 全文只出现一次
+    expect((w.text().match(/香蕉/g) || []).length).toBe(1)
   })
 })

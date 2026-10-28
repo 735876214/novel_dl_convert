@@ -3292,6 +3292,13 @@ def api_podcast_transcript(eid: str):
         raise HTTPException(400, str(e)) from None
 
 
+@app.get("/api/podcasts/continue")
+def api_podcasts_continue(limit: int = Query(20, ge=1, le=100)):
+    """播客版「继续收听」（第 183 期）：听过未完播的单集，按最近播放倒序。"""
+    items = db.list_continue_podcast_episodes(limit)
+    return {"items": items, "total": len(items)}
+
+
 @app.post("/api/podcasts/{pid}/refresh")
 def api_podcast_refresh(pid: str):
     """重新抓取：新单集 upsert，旧单集保留（失败时什么都不改）。"""

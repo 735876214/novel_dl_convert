@@ -440,6 +440,8 @@ def init():
                 transcript_type       TEXT NOT NULL DEFAULT '',
                 transcript_text       TEXT NOT NULL DEFAULT '',
                 transcript_fetched_at REAL NOT NULL DEFAULT 0,
+                -- 最近一次播放（第 183 期）：「继续收听」按它倒序
+                last_played_at REAL NOT NULL DEFAULT 0,
                 created_at   REAL NOT NULL DEFAULT 0,
                 deleted_at   REAL NOT NULL DEFAULT 0,
                 UNIQUE(podcast_id, guid)
@@ -1198,6 +1200,8 @@ def init():
             c.execute("ALTER TABLE podcast_episodes ADD COLUMN transcript_type TEXT NOT NULL DEFAULT ''")
             c.execute("ALTER TABLE podcast_episodes ADD COLUMN transcript_text TEXT NOT NULL DEFAULT ''")
             c.execute("ALTER TABLE podcast_episodes ADD COLUMN transcript_fetched_at REAL NOT NULL DEFAULT 0")
+        if ecols and "last_played_at" not in ecols:
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN last_played_at REAL NOT NULL DEFAULT 0")
         if scols and "source" not in scols:
             # 来源（web / audio / koreader …）。存量行回落**空串 = 未知**，不猜 'web'：
             # 改造前有声书播放器与网页阅读器走的是同一个上报接口，事后分不出来是哪一边。
@@ -4243,6 +4247,7 @@ def list_podcast_episodes(podcast_id: str, limit: int = 200) -> list:
         "played_at": float(r["played_at"] or 0),
         "has_transcript": bool(str(r["transcript_url"] or "") or str(r["transcript_text"] or "")),
         "transcript_type": str(r["transcript_type"] or ""),
+        "last_played_at": float(r["last_played_at"] or 0),
     } for r in rows]
 
 
@@ -4280,6 +4285,28 @@ def set_episode_download(eid: str, state: str, *, local_path="", error="", size=
              now if state == "downloaded" else 0, str(eid)),
         )
         c.commit()
+
+
+def list_continue_podcast_episodes(limit: int = 20) -> list:
+    """「继续收听」（第 183 期）：在听过、未完播的单集，按最近播放倒序。"""
+    rows = _connect().execute(
+        "SELECT e.*, p.title AS podcast_title FROM podcast_episodes e"
+        " JOIN podcasts p ON p.id = e.podcast_id"
+        " WHERE e.deleted_at=0 AND p.deleted_at=0 AND e.position_sec>0 AND e.played_at=0"
+        " ORDER BY e.last_played_at DESC, e.id LIMIT ?",
+        (max(1, min(int(limit or 20), 100)),),
+    ).fetchall()
+    return [{
+        "id": str(r["id"]),
+        "podcast_id": str(r["podcast_id"]),
+        "podcast_title": str(r["podcast_title"] or ""),
+        "title": str(r["title"] or ""),
+        "position_sec": float(r["position_sec"] or 0),
+        "duration_sec": int(r["duration_sec"] or 0),
+        "audio_url": str(r["audio_url"] or ""),
+        "download_state": str(r["download_state"] or ""),
+        "last_played_at": float(r["last_played_at"] or 0),
+    } for r in rows]
 
 
 def get_episode_transcript(eid: str) -> "dict | None":
@@ -4374,8 +4401,9 @@ def set_episode_progress(eid: str, position: float, duration: float = 0) -> dict
     pos = max(0.0, float(position or 0))
     with _lock:
         c.execute(
-            "UPDATE podcast_episodes SET position_sec=MAX(position_sec, ?) WHERE id=?",
-            (pos, str(eid)),
+            "UPDATE podcast_episodes SET position_sec=MAX(position_sec, ?),"
+            " last_played_at=? WHERE id=?",
+            (pos, time.time(), str(eid)),
         )
         if duration > 0 and pos >= duration * 0.95:
             c.execute(
@@ -4391,8 +4419,8 @@ def mark_episode_played(eid: str, played: bool = True) -> dict:
     c = _connect()
     with _lock:
         if played:
-            c.execute("UPDATE podcast_episodes SET played_at=? WHERE id=?",
-                      (time.time(), str(eid)))
+            c.execute("UPDATE podcast_episodes SET played_at=?, last_played_at=? WHERE id=?",
+                      (time.time(), time.time(), str(eid)))
         else:
             c.execute("UPDATE podcast_episodes SET played_at=0, position_sec=0 WHERE id=?",
                       (str(eid),))

@@ -5,7 +5,7 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type Podcast, type PodcastBookmark, type PodcastEpisode } from '@/lib/api'
+import { api, type Podcast, type PodcastBookmark, type PodcastContinueItem, type PodcastEpisode } from '@/lib/api'
 import { usePodcastQueueStore } from '@/stores/podcastQueue'
 import { useUiStore } from '@/stores/ui'
 
@@ -32,12 +32,17 @@ const busy = ref('')
 const error = ref('')
 
 const selectedPodcast = computed(() => pods.value.find((p) => p.id === selected.value) || null)
+/** 播客版「继续收听」（第 183 期）：跨订阅的「听过未完播」 */
+const contItems = ref<PodcastContinueItem[]>([])
+/** 单集搜索词（第 183 期）：只过滤当前订阅的单集列表 */
+const q = ref('')
 
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
     pods.value = (await api.podcasts()).items
+    contItems.value = (await api.podcastContinue(20).catch(() => ({ items: [] }))).items
     if (selected.value && !pods.value.some((p) => p.id === selected.value)) {
       selected.value = ''
       episodes.value = []
@@ -250,10 +255,14 @@ const episodeCounts = computed(() => {
   return c
 })
 
-const filteredEpisodes = computed(() =>
-  epFilter.value === 'all' ? episodes.value
-    : episodes.value.filter((e) => epState(e) === epFilter.value),
-)
+const filteredEpisodes = computed(() => {
+  const term = q.value.trim().toLowerCase()
+  return episodes.value.filter((e) => {
+    if (epFilter.value !== 'all' && epState(e) !== epFilter.value) return false
+    if (!term) return true
+    return `${e.title} ${e.description}`.toLowerCase().includes(term)
+  })
+})
 
 const EP_FILTERS: { value: 'all' | 'unplayed' | 'playing' | 'played'; label: string }[] = [
   { value: 'all', label: '全部' },
@@ -302,6 +311,20 @@ function setAutoNext(v: boolean): void {
 // ---------------- 播放队列（第 180 期） ----------------
 // 队列存快照（id + 标题 + 订阅），播放时回订阅里按 id 取当前那一集；
 // 播完优先取队首，队列空才走「播完自动连播」的列表顺序。
+async function playContinue(it: PodcastContinueItem): Promise<void> {
+  if (it.podcast_id !== selected.value) await open(it.podcast_id)
+  const ep = episodes.value.find((x) => x.id === it.id)
+  if (!ep) {
+    ui.toast('这一集不在当前列表里（可能已被移除）')
+    return
+  }
+  const el = audioEls[ep.id]
+  if (el) {
+    el.currentTime = it.position_sec
+    void el.play().catch(() => { /* 浏览器拦住就等用户点播放 */ })
+  }
+}
+
 function toggleQueue(e: PodcastEpisode): void {
   if (queue.has(e.id)) {
     queue.remove(e.id)
@@ -553,6 +576,25 @@ function fmtDate(ts: number): string {
       <p v-if="error" class="mt-1.5 text-[11.5px] text-destructive">{{ error }}</p>
     </Card>
 
+    <!-- 播客版「继续收听」（第 183 期）：跨订阅，按最近播放倒序 -->
+    <Card v-if="contItems.length">
+      <h3 class="mb-2 text-[13px] font-semibold text-foreground">继续收听</h3>
+      <ul class="divide-y divide-border">
+        <li v-for="it in contItems" :key="it.id" class="flex flex-wrap items-center gap-2 py-2 text-[12px]">
+          <button
+            type="button"
+            class="min-w-0 flex-1 cursor-pointer truncate text-left text-foreground hover:text-primary"
+            @click="playContinue(it)"
+          >{{ it.title }}</button>
+          <span class="shrink-0 text-[11px] text-muted-foreground">{{ it.podcast_title }}</span>
+          <span class="shrink-0 text-[11px] text-muted-foreground tabular-nums">
+            {{ fmtPos(it.position_sec) }}<template v-if="it.duration_sec"> / {{ fmtDuration(it.duration_sec) }}</template>
+          </span>
+          <Button size="sm" variant="ghost" @click="playContinue(it)">继续播放</Button>
+        </li>
+      </ul>
+    </Card>
+
     <div v-if="loading" class="py-8 text-center text-[12.5px] text-muted-foreground">加载中…</div>
 
     <EmptyState
@@ -674,6 +716,13 @@ function fmtDate(ts: number): string {
             </ul>
           </div>
           <div class="mb-2 flex flex-wrap items-center gap-1">
+            <input
+              v-model="q"
+              type="search"
+              aria-label="搜索单集"
+              placeholder="搜索单集…"
+              class="h-7 w-40 rounded-md border border-border bg-card px-2 text-[11.5px] text-foreground outline-none focus:border-ring"
+            >
             <button
               v-for="f in EP_FILTERS"
               :key="f.value"

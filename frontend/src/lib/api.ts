@@ -2647,6 +2647,19 @@ export interface BackupItem {
 /** 库类型：决定功能显隐矩阵（见后端 core/features.py） */
 export type LibraryType = 'ebook' | 'comic' | 'audiobook' | 'mixed'
 
+/** 播客「继续收听」条目（第 183 期）。 */
+export interface PodcastContinueItem {
+  id: string
+  podcast_id: string
+  podcast_title: string
+  title: string
+  position_sec: number
+  duration_sec: number
+  audio_url: string
+  download_state: '' | 'downloading' | 'downloaded' | 'failed'
+  last_played_at: number
+}
+
 /** 播客单集书签（第 177 期）：位置到秒去重。 */
 export interface PodcastBookmark {
   id: string
@@ -2706,6 +2719,8 @@ export interface PodcastEpisode {
   /** 官方转录（第 182 期）：feed 里有没有转录 / 类型（vtt/srt/json…） */
   has_transcript: boolean
   transcript_type: string
+  /** 最近一次播放（第 183 期）；「继续收听」按它排序 */
+  last_played_at: number
 }
 
 /** 书库实体（`/api/libraries`，第 10 期起） */
@@ -5135,6 +5150,11 @@ export const api = {
     request<{ ok: boolean; moved_to: string }>(
       `/api/podcasts/episodes/${encodeURIComponent(eid)}/download`,
       { method: 'DELETE' },
+    ),
+
+  podcastContinue: (limit = 20) =>
+    request<{ items: PodcastContinueItem[]; total: number }>(
+      `/api/podcasts/continue?limit=${limit}`,
     ),
 
   podcastTranscript: (eid: string) =>
