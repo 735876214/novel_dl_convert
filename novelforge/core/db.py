@@ -401,6 +401,11 @@ def init():
                 categories     TEXT NOT NULL DEFAULT '',
                 explicit       INTEGER NOT NULL DEFAULT 0,
                 last_fetched_at REAL NOT NULL DEFAULT 0,
+                -- 订阅健康（第 174 期）：最近一次尝试 / 最近一次成功 / 连续失败次数 / 失败原因
+                last_attempt_at REAL NOT NULL DEFAULT 0,
+                last_ok_at     REAL NOT NULL DEFAULT 0,
+                fail_count     INTEGER NOT NULL DEFAULT 0,
+                last_error     TEXT NOT NULL DEFAULT '',
                 created_at     REAL NOT NULL DEFAULT 0,
                 deleted_at     REAL NOT NULL DEFAULT 0
             );
@@ -1137,6 +1142,13 @@ def init():
             except Exception:
                 logging.getLogger("novelforge").exception(
                     "阅读会话的唯一索引没建成：心跳 upsert 会持续失败（阅读时长不落库）")
+        # 播客健康列（第 174 期）：老库补列；新库建表时已带（幂等）。
+        pcols = {r["name"] for r in c.execute("PRAGMA table_info(podcasts)")}
+        if pcols and "last_attempt_at" not in pcols:
+            c.execute("ALTER TABLE podcasts ADD COLUMN last_attempt_at REAL NOT NULL DEFAULT 0")
+            c.execute("ALTER TABLE podcasts ADD COLUMN last_ok_at REAL NOT NULL DEFAULT 0")
+            c.execute("ALTER TABLE podcasts ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0")
+            c.execute("ALTER TABLE podcasts ADD COLUMN last_error TEXT NOT NULL DEFAULT ''")
         if scols and "source" not in scols:
             # 来源（web / audio / koreader …）。存量行回落**空串 = 未知**，不猜 'web'：
             # 改造前有声书播放器与网页阅读器走的是同一个上报接口，事后分不出来是哪一边。
@@ -4002,7 +4014,8 @@ def source_ledger_rename(old: str, new: str) -> bool:
 # 一切读点带 `deleted_at=0`（软删除）；彻底删除本期不提供 UI。
 
 _PODCAST_COLS = {"title", "author", "description", "artwork_url", "categories",
-                 "explicit", "last_fetched_at"}
+                 "explicit", "last_fetched_at", "last_attempt_at", "last_ok_at",
+                 "fail_count", "last_error"}
 
 
 def _podcast_out(row) -> dict:
@@ -4016,6 +4029,10 @@ def _podcast_out(row) -> dict:
         "categories": json.loads(str(row["categories"] or "[]")) if row["categories"] else [],
         "explicit": bool(row["explicit"]),
         "last_fetched_at": float(row["last_fetched_at"] or 0),
+        "last_attempt_at": float(row["last_attempt_at"] or 0),
+        "last_ok_at": float(row["last_ok_at"] or 0),
+        "fail_count": int(row["fail_count"] or 0),
+        "last_error": str(row["last_error"] or ""),
         "created_at": float(row["created_at"] or 0),
     }
 

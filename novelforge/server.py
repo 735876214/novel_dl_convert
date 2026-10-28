@@ -3002,6 +3002,27 @@ def api_podcast_subscribe(payload: dict = Body(...)):
         raise HTTPException(400, str(e)) from None
 
 
+@app.get("/api/podcasts/opml")
+def api_podcasts_opml_export():
+    """导出全部订阅为 OPML（返回 JSON 里的字符串：前端存成文件即可）。"""
+    return {"opml": podcasts.opml_export()}
+
+
+@app.post("/api/podcasts/opml")
+def api_podcasts_opml_import(payload: dict = Body(...)):
+    """导入 OPML：逐条订阅，一条失败不影响其它，逐条回报。"""
+    try:
+        return podcasts.opml_import(str(payload.get("opml") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/podcasts/refresh-all")
+def api_podcasts_refresh_all():
+    """刷新全部订阅（逐条隔离）。失败原因逐条回，且已落进订阅健康的 fail_count / last_error。"""
+    return podcasts.refresh_all()
+
+
 @app.post("/api/podcasts/{pid}/refresh")
 def api_podcast_refresh(pid: str):
     """重新抓取：新单集 upsert，旧单集保留（失败时什么都不改）。"""

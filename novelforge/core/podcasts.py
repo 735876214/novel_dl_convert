@@ -205,21 +205,36 @@ def _int(raw: str) -> int:
 
 
 def _apply(pid: str, feed_url: str, meta: dict, episodes: list) -> dict:
+    now = time.time()
     db.update_podcast(pid,
                       title=meta["title"], author=meta["author"],
                       description=meta["description"], artwork_url=meta["artwork_url"],
                       categories=meta["categories"], explicit=1 if meta["explicit"] else 0,
-                      last_fetched_at=time.time())
+                      last_fetched_at=now, last_attempt_at=now, last_ok_at=now,
+                      last_error="", fail_count=0)
     added, updated = db.upsert_podcast_episodes(pid, episodes)
     return {"podcast": db.get_podcast(pid), "added": added, "updated": updated,
             "total": len(episodes)}
 
 
+def _record_failure(pid: str, exc: Exception) -> None:
+    """失败的**落账**：只记最近尝试 / 原因 / 连续失败数，**不动**已抓到的单集。"""
+    pod = db.get_podcast(pid) or {}
+    db.update_podcast(pid, last_attempt_at=time.time(),
+                      last_error=str(exc)[:500],
+                      fail_count=int(pod.get("fail_count") or 0) + 1)
+
+
 def subscribe(feed_url: str) -> dict:
     """订阅（或刷新已订阅的同一 feed）。**用户显式动作**才出网。"""
     url = str(feed_url or "").strip()
-    meta, episodes = parse_feed(_fetch(url))
     existing = db.podcast_by_feed(url)
+    try:
+        meta, episodes = parse_feed(_fetch(url))
+    except ValueError as e:
+        if existing and not existing.get("deleted"):
+            _record_failure(existing["id"], e)
+        raise
     if existing:
         pid = existing["id"]
         if existing.get("deleted"):
@@ -236,11 +251,102 @@ def subscribe(feed_url: str) -> dict:
 
 
 def refresh(podcast_id: str) -> dict:
-    """重新抓取已订阅的 feed（失败保留旧单集，不清空）。"""
+    """重新抓取已订阅的 feed（失败保留旧单集，只把失败落账）。"""
     pod = db.get_podcast(podcast_id)
     if not pod:
         raise LookupError("订阅不存在")
-    meta, episodes = parse_feed(_fetch(pod["feed_url"]))
+    try:
+        meta, episodes = parse_feed(_fetch(pod["feed_url"]))
+    except ValueError as e:
+        _record_failure(str(pod["id"]), e)
+        raise
     out = _apply(str(pod["id"]), pod["feed_url"], meta, episodes)
     out["created"] = False
     return out
+
+
+def refresh_all() -> dict:
+    """刷新全部订阅（逐条隔离：一条失败不影响其它）。"""
+    ok = failed = 0
+    items = []
+    for p in db.list_podcasts():
+        try:
+            r = refresh(str(p["id"]))
+            ok += 1
+            items.append({"id": p["id"], "title": p["title"], "ok": True,
+                          "added": r["added"], "updated": r["updated"]})
+        except (LookupError, ValueError) as e:
+            failed += 1
+            items.append({"id": p["id"], "title": p["title"], "ok": False,
+                          "error": str(e)})
+    return {"ok": ok, "failed": failed, "items": items}
+
+
+# ---------------- OPML（导入 / 导出，第 174 期）----------------
+
+MAX_OPML_BYTES = 2 * 1024 * 1024
+MAX_OPML_FEEDS = 500
+
+
+def opml_export() -> str:
+    """全部订阅 → OPML 2.0（播客客户端通用的订阅清单）。"""
+    from xml.sax.saxutils import quoteattr
+
+    rows = []
+    for p in db.list_podcasts():
+        title = p["title"] or p["feed_url"]
+        rows.append(
+            '    <outline type="rss" text={t} title={t} xmlUrl={u}/>'.format(
+                t=quoteattr(title), u=quoteattr(p["feed_url"])))
+    nl = chr(10)
+    return nl.join([
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<opml version="2.0">',
+        '  <head><title>NovelForge 播客订阅</title></head>',
+        '  <body>',
+        *rows,
+        '  </body>',
+        '</opml>',
+        '',
+    ])
+
+
+def opml_import(text: str) -> dict:
+    """导入 OPML：逐条订阅，**一条失败不影响其它**，逐条回报结果。
+
+    只认带 `xmlUrl` 的 outline（目录型 outline 只是分组，不订阅）。
+    """
+    raw = str(text or "")
+    if len(raw.encode("utf-8", "replace")) > MAX_OPML_BYTES:
+        raise ValueError("OPML 文件过大（上限 2 MB）")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as e:
+        raise ValueError(f"OPML 不是合法的 XML：{e}") from None
+    urls = []
+    seen = set()
+
+    def walk(el) -> None:
+        for ch in list(el):
+            u = str(ch.get("xmlUrl") or "").strip()
+            if u and u not in seen:
+                seen.add(u)
+                urls.append(u)
+            walk(ch)
+
+    walk(root)
+    if len(urls) > MAX_OPML_FEEDS:
+        raise ValueError(f"一次最多导入 {MAX_OPML_FEEDS} 个订阅")
+    added = refreshed = 0
+    failed = []
+    for u in urls:
+        try:
+            r = subscribe(u)
+            if r.get("created"):
+                added += 1
+            else:
+                refreshed += 1
+        except ValueError as e:
+            failed.append({"feed_url": u, "error": str(e)})
+    return {"total": len(urls), "added": added, "refreshed": refreshed,
+            "failed": failed}

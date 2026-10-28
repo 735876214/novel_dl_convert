@@ -2658,6 +2658,11 @@ export interface Podcast {
   categories: string[]
   explicit: boolean
   last_fetched_at: number
+  /** 订阅健康（第 174 期）：最近尝试 / 最近成功 / 连续失败数 / 失败原因 */
+  last_attempt_at: number
+  last_ok_at: number
+  fail_count: number
+  last_error: string
   created_at: number
 }
 
@@ -5050,6 +5055,24 @@ export const api = {
     request<{ ok: boolean; removed: string }>(
       `/api/podcasts/${encodeURIComponent(id)}`,
       { method: 'DELETE' },
+    ),
+
+  /** OPML 导出 / 导入（第 174 期）：播客客户端的通用订阅清单格式。 */
+  podcastsOpml: () => request<{ opml: string }>('/api/podcasts/opml'),
+
+  importPodcastsOpml: (opml: string) =>
+    request<{ total: number; added: number; refreshed: number; failed: { feed_url: string; error: string }[] }>(
+      '/api/podcasts/opml',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ opml }) },
+      { timeoutMs: LONG_REQUEST_TIMEOUT_MS },
+    ),
+
+  refreshAllPodcasts: () =>
+    request<{ ok: number; failed: number; items: { id: string; title: string; ok: boolean; added?: number; updated?: number; error?: string }[] }>(
+      '/api/podcasts/refresh-all',
+      { method: 'POST' },
+      { timeoutMs: LONG_REQUEST_TIMEOUT_MS },
     ),
 
   /** 书库手动排序（第 154 期）：ids 必须是当前全部书库 id 的一个排列。 */

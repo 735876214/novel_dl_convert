@@ -18,6 +18,9 @@ vi.mock('@/lib/api', () => ({
     refreshPodcast: vi.fn(),
     podcastEpisodes: vi.fn(),
     deletePodcast: vi.fn(),
+    podcastsOpml: vi.fn(),
+    importPodcastsOpml: vi.fn(),
+    refreshAllPodcasts: vi.fn(),
   },
 }))
 
@@ -27,12 +30,16 @@ const m = {
   refresh: vi.mocked(api.refreshPodcast),
   eps: vi.mocked(api.podcastEpisodes),
   del: vi.mocked(api.deletePodcast),
+  opml: vi.mocked(api.podcastsOpml),
+  importOpml: vi.mocked(api.importPodcastsOpml),
+  refreshAll: vi.mocked(api.refreshAllPodcasts),
 }
 
 const POD = {
   id: 'p1', feed_url: 'https://x/feed.xml', title: '测试播客', author: '某某',
   description: '', artwork_url: '', categories: ['科技'], explicit: false,
-  last_fetched_at: 0, created_at: 0,
+  last_fetched_at: 0, last_attempt_at: 0, last_ok_at: 0, fail_count: 0, last_error: '',
+  created_at: 0,
 }
 
 const EP = {
@@ -90,5 +97,27 @@ describe('PodcastsView', () => {
     await w.findAll('button').find((b) => b.text() === '移除')!.trigger('click')
     await flushPromises()
     expect(m.del).toHaveBeenCalledWith('p1')
+  })
+
+  it('OPML：导入走文件内容，导出触发下载，全部刷新调后端', async () => {
+    const w = await mountView()
+    m.importOpml.mockResolvedValue({ total: 2, added: 1, refreshed: 1, failed: [] })
+    m.opml.mockResolvedValue({ opml: '<?xml version="1.0"?><opml/>' })
+    m.refreshAll.mockResolvedValue({ ok: 1, failed: 0, items: [] })
+    // 导出 / 全部刷新接后端即可（下载动作由浏览器 API 完成，不在本 spec 断言）
+    await w.findAll('button').find((b) => b.text() === '导出 OPML')!.trigger('click')
+    await flushPromises()
+    expect(m.opml).toHaveBeenCalled()
+    await w.findAll('button').find((b) => b.text() === '全部刷新')!.trigger('click')
+    await flushPromises()
+    expect(m.refreshAll).toHaveBeenCalled()
+
+    // 导入：用 File + change 事件模拟文件选择
+    const file = new File([new Blob(['<opml/>'])], 'x.opml', { type: 'text/xml' })
+    const input = w.find('input[type="file"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    await flushPromises()
+    expect(m.importOpml).toHaveBeenCalled()
   })
 })

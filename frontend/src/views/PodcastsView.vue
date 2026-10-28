@@ -113,6 +113,65 @@ async function open(id: string): Promise<void> {
   }
 }
 
+// ---------------- OPML 与批量刷新（第 174 期） ----------------
+const opmlInput = ref<HTMLInputElement | null>(null)
+
+async function importOpml(e: Event): Promise<void> {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file || busy.value) return
+  busy.value = 'opml'
+  error.value = ''
+  try {
+    const r = await api.importPodcastsOpml(await file.text())
+    ui.toast(`导入 ${r.total} 条：新增 ${r.added}、刷新 ${r.refreshed}`
+      + (r.failed.length ? `、失败 ${r.failed.length}（${r.failed[0].error}）` : ''))
+    await load()
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '导入失败'
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function exportOpml(): Promise<void> {
+  if (busy.value) return
+  busy.value = 'opml'
+  try {
+    const { opml } = await api.podcastsOpml()
+    const blob = new Blob([opml], { type: 'text/x-opml;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'novelforge-podcasts.opml'
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '导出失败'
+  } finally {
+    busy.value = ''
+  }
+}
+
+async function refreshAll(): Promise<void> {
+  if (busy.value) return
+  busy.value = 'refresh-all'
+  error.value = ''
+  try {
+    const r = await api.refreshAllPodcasts()
+    ui.toast(r.failed
+      ? `刷新完成：成功 ${r.ok}、失败 ${r.failed}`
+      : `刷新完成：${r.ok} 个订阅全部成功`)
+    await load()
+    if (selected.value) await open(selected.value)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '批量刷新失败'
+  } finally {
+    busy.value = ''
+  }
+}
+
 function fmtDuration(sec: number): string {
   if (!sec) return ''
   const h = Math.floor(sec / 3600)
@@ -135,6 +194,14 @@ function fmtDate(ts: number): string {
       <span class="text-[11.5px] text-muted-foreground">
         订阅 RSS 播客源；单集由浏览器直接从发布方播放，不转存
       </span>
+      <div class="ml-auto flex gap-1">
+        <input ref="opmlInput" type="file" accept=".opml,.xml,text/xml" class="hidden" aria-hidden="true" @change="importOpml">
+        <Button size="sm" variant="ghost" :disabled="!!busy" @click="opmlInput?.click()">导入 OPML</Button>
+        <Button size="sm" variant="ghost" :disabled="!!busy || !pods.length" @click="exportOpml">导出 OPML</Button>
+        <Button size="sm" variant="ghost" :disabled="!!busy || !pods.length" @click="refreshAll">
+          {{ busy === 'refresh-all' ? '刷新中…' : '全部刷新' }}
+        </Button>
+      </div>
     </div>
 
     <Card>
@@ -196,6 +263,11 @@ function fmtDate(ts: number): string {
                 {{ p.author || '未知作者' }}
                 <span v-if="p.categories.length"> · {{ p.categories.join('、') }}</span>
                 <span v-if="p.last_fetched_at"> · 上次刷新 {{ fmtDate(p.last_fetched_at) }}</span>
+                <span
+                  v-if="p.fail_count"
+                  class="text-destructive"
+                  :title="p.last_error"
+                > · 失败 {{ p.fail_count }} 次</span>
               </div>
             </div>
             <div class="flex shrink-0 gap-1">
