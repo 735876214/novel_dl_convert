@@ -3281,6 +3281,17 @@ def api_podcast_auto_set(pid: str, payload: dict = Body(...)):
         raise HTTPException(400, str(e)) from None
 
 
+@app.get("/api/podcasts/episodes/{eid}/transcript")
+def api_podcast_transcript(eid: str):
+    """单集官方转录（feed 的 `<podcast:transcript>`）：按需抓取并缓存；没有就如实说明。"""
+    try:
+        return podcasts.transcript(eid)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
 @app.post("/api/podcasts/{pid}/refresh")
 def api_podcast_refresh(pid: str):
     """重新抓取：新单集 upsert，旧单集保留（失败时什么都不改）。"""

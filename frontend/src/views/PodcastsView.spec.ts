@@ -32,6 +32,7 @@ vi.mock('@/lib/api', () => ({
     deletePodcastBookmark: vi.fn(),
     getPodcastAuto: vi.fn(),
     setPodcastAuto: vi.fn(),
+    podcastTranscript: vi.fn(),
   },
 }))
 
@@ -53,6 +54,7 @@ const m = {
   addBm: vi.mocked(api.addPodcastBookmark),
   delBm: vi.mocked(api.deletePodcastBookmark),
   autoSet: vi.mocked(api.setPodcastAuto),
+  tr: vi.mocked(api.podcastTranscript),
 }
 
 const POD = {
@@ -68,7 +70,7 @@ const EP: PodcastEpisode = {
   published_at: 1700000000, duration_sec: 3723, audio_url: 'https://cdn/1.mp3',
   audio_type: 'audio/mpeg', episode_no: 1, season_no: 0, explicit: false,
   download_state: '', download_error: '', downloaded_at: 0, local_bytes: 0, has_local: false,
-  position_sec: 0, played_at: 0,
+  position_sec: 0, played_at: 0, has_transcript: false, transcript_type: '',
 }
 
 async function mountView(episodes: PodcastEpisode[] = [EP]) {
@@ -292,5 +294,17 @@ describe('PodcastsView', () => {
     await flushPromises()
 
     expect(m.autoSet).toHaveBeenCalledWith('p1', { auto_keep: 3, auto_clean: true })
+  })
+
+  it('官方转录：按需读取并显示；没有转录的单集不显示入口', async () => {
+    const w = await mountView([{ ...EP, id: 'e1', has_transcript: true }])
+    await w.findAll('button').find((b) => b.text() === '单集')!.trigger('click')
+    await flushPromises()
+    m.tr.mockResolvedValue({ available: true, kind: 'text/vtt', text: '第一句\n第二句' })
+    await w.findAll('button').find((b) => b.text() === '转录')!.trigger('click')
+    await flushPromises()
+    expect(m.tr).toHaveBeenCalledWith('e1')
+    expect(w.text()).toContain('第一句')
+    expect(w.text()).toContain('第二句')
   })
 })

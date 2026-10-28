@@ -105,6 +105,33 @@ async function remove(p: Podcast): Promise<void> {
   }
 }
 
+// ---------------- 官方转录（第 182 期） ----------------
+// 只读 feed 给的转录文件（按需抓取并缓存）；没有就如实说明「不做 ASR」。
+const trFor = ref('')
+const trText = ref('')
+const trReason = ref('')
+const trBusy = ref(false)
+
+async function toggleTranscript(e: PodcastEpisode): Promise<void> {
+  if (trFor.value === e.id) {
+    trFor.value = ''
+    return
+  }
+  trFor.value = e.id
+  trText.value = ''
+  trReason.value = ''
+  trBusy.value = true
+  try {
+    const r = await api.podcastTranscript(e.id)
+    trText.value = r.text || ''
+    trReason.value = r.available ? '' : (r.reason || '没有可用的转录')
+  } catch (err) {
+    trReason.value = err instanceof Error ? err.message : '读取转录失败'
+  } finally {
+    trBusy.value = false
+  }
+}
+
 // ---------------- 自动策略（第 181 期） ----------------
 // 自动下载「最新 N 集」在刷新之后执行；听完清理只清本地副本（回收站）。
 const autoKeep = ref(0)
@@ -723,6 +750,12 @@ function fmtDate(ts: number): string {
                 class="shrink-0 cursor-pointer text-[11px] text-primary hover:underline"
                 @click="toggleQueue(e)"
               >{{ queue.has(e.id) ? '移出队列' : '加入队列' }}</button>
+              <button
+                v-if="e.has_transcript"
+                type="button"
+                class="shrink-0 cursor-pointer text-[11px] text-primary hover:underline"
+                @click="toggleTranscript(e)"
+              >转录</button>
             </div>
             <p v-if="e.description" class="mt-0.5 line-clamp-2 text-[11.5px] leading-relaxed text-muted-foreground">
               {{ e.description }}
@@ -760,6 +793,12 @@ function fmtDate(ts: number): string {
                 </li>
               </ul>
               <p v-else class="mt-1 text-[11px] text-muted-foreground">还没有书签。</p>
+            </div>
+            <div v-if="trFor === e.id" class="mt-1.5 rounded-md border border-border bg-muted/30 p-2">
+              <div class="text-[11px] text-muted-foreground">官方转录</div>
+              <p v-if="trBusy" class="mt-1 text-[11px] text-muted-foreground">读取中…</p>
+              <p v-else-if="trReason" class="mt-1 text-[11px] text-muted-foreground">{{ trReason }}</p>
+              <pre v-else class="mt-1 max-h-[16rem] overflow-auto whitespace-pre-wrap text-[11.5px] leading-relaxed text-foreground">{{ trText }}</pre>
             </div>
           </li>
         </ul>

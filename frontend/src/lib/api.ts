@@ -2703,6 +2703,9 @@ export interface PodcastEpisode {
   /** 播放进度（第 176 期）：秒数 / 首次听完时间（0 = 没听完） */
   position_sec: number
   played_at: number
+  /** 官方转录（第 182 期）：feed 里有没有转录 / 类型（vtt/srt/json…） */
+  has_transcript: boolean
+  transcript_type: string
 }
 
 /** 书库实体（`/api/libraries`，第 10 期起） */
@@ -5132,6 +5135,11 @@ export const api = {
     request<{ ok: boolean; moved_to: string }>(
       `/api/podcasts/episodes/${encodeURIComponent(eid)}/download`,
       { method: 'DELETE' },
+    ),
+
+  podcastTranscript: (eid: string) =>
+    request<{ available: boolean; kind: string; text: string; reason?: string }>(
+      `/api/podcasts/episodes/${encodeURIComponent(eid)}/transcript`,
     ),
 
   savePodcastProgress: (eid: string, positionSec: number, durationSec = 0) =>

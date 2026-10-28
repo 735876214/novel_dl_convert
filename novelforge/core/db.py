@@ -435,6 +435,11 @@ def init():
                 -- 播放进度（第 176 期）：轨内秒数 / 首次听完的时间（0 = 没听完）
                 position_sec   REAL NOT NULL DEFAULT 0,
                 played_at      REAL NOT NULL DEFAULT 0,
+                -- 官方转录（第 182 期）：feed 里的 <podcast:transcript>；正文按需抓取并缓存
+                transcript_url        TEXT NOT NULL DEFAULT '',
+                transcript_type       TEXT NOT NULL DEFAULT '',
+                transcript_text       TEXT NOT NULL DEFAULT '',
+                transcript_fetched_at REAL NOT NULL DEFAULT 0,
                 created_at   REAL NOT NULL DEFAULT 0,
                 deleted_at   REAL NOT NULL DEFAULT 0,
                 UNIQUE(podcast_id, guid)
@@ -1188,6 +1193,11 @@ def init():
         if ecols and "position_sec" not in ecols:
             c.execute("ALTER TABLE podcast_episodes ADD COLUMN position_sec REAL NOT NULL DEFAULT 0")
             c.execute("ALTER TABLE podcast_episodes ADD COLUMN played_at REAL NOT NULL DEFAULT 0")
+        if ecols and "transcript_url" not in ecols:
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN transcript_url TEXT NOT NULL DEFAULT ''")
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN transcript_type TEXT NOT NULL DEFAULT ''")
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN transcript_text TEXT NOT NULL DEFAULT ''")
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN transcript_fetched_at REAL NOT NULL DEFAULT 0")
         if scols and "source" not in scols:
             # 来源（web / audio / koreader …）。存量行回落**空串 = 未知**，不猜 'web'：
             # 改造前有声书播放器与网页阅读器走的是同一个上报接口，事后分不出来是哪一边。
@@ -4181,7 +4191,8 @@ def upsert_podcast_episodes(podcast_id: str, items: list) -> "tuple[int, int]":
             c.execute(
                 "INSERT INTO podcast_episodes(id, podcast_id, guid, title, description,"
                 " published_at, duration_sec, audio_url, audio_type, episode_no, season_no,"
-                " explicit, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                " explicit, transcript_url, transcript_type, created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(podcast_id, guid) DO UPDATE SET "
                 " title=excluded.title, description=excluded.description,"
                 " published_at=excluded.published_at, duration_sec=excluded.duration_sec,"
@@ -4192,7 +4203,9 @@ def upsert_podcast_episodes(podcast_id: str, items: list) -> "tuple[int, int]":
                  str(it.get("description") or ""), float(it.get("published_at") or 0),
                  int(it.get("duration_sec") or 0), str(it.get("audio_url") or ""),
                  str(it.get("audio_type") or ""), int(it.get("episode_no") or 0),
-                 int(it.get("season_no") or 0), 1 if it.get("explicit") else 0, time.time()),
+                 int(it.get("season_no") or 0), 1 if it.get("explicit") else 0,
+                 str(it.get("transcript_url") or ""), str(it.get("transcript_type") or ""),
+                 time.time()),
             )
             if exists:
                 updated += 1
@@ -4228,6 +4241,8 @@ def list_podcast_episodes(podcast_id: str, limit: int = 200) -> list:
         "has_local": bool(str(r["local_path"] or "")),
         "position_sec": float(r["position_sec"] or 0),
         "played_at": float(r["played_at"] or 0),
+        "has_transcript": bool(str(r["transcript_url"] or "") or str(r["transcript_text"] or "")),
+        "transcript_type": str(r["transcript_type"] or ""),
     } for r in rows]
 
 
@@ -4263,6 +4278,31 @@ def set_episode_download(eid: str, state: str, *, local_path="", error="", size=
             " local_path=?, local_bytes=?, downloaded_at=? WHERE id=?",
             (str(state), str(error or "")[:500], str(local_path or ""), int(size or 0),
              now if state == "downloaded" else 0, str(eid)),
+        )
+        c.commit()
+
+
+def get_episode_transcript(eid: str) -> "dict | None":
+    row = _connect().execute(
+        "SELECT transcript_url, transcript_type, transcript_text, transcript_fetched_at"
+        " FROM podcast_episodes WHERE id=? AND deleted_at=0", (str(eid),)
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "url": str(row["transcript_url"] or ""),
+        "type": str(row["transcript_type"] or ""),
+        "text": str(row["transcript_text"] or ""),
+        "fetched_at": float(row["transcript_fetched_at"] or 0),
+    }
+
+
+def save_episode_transcript(eid: str, text: str) -> None:
+    c = _connect()
+    with _lock:
+        c.execute(
+            "UPDATE podcast_episodes SET transcript_text=?, transcript_fetched_at=?"
+            " WHERE id=?", (str(text or ""), time.time(), str(eid)),
         )
         c.commit()
 

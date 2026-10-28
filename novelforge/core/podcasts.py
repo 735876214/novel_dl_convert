@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import email.utils
 import html
+import json
 import os
 import pathlib
 import queue
@@ -188,6 +189,7 @@ def parse_feed(xml_text: str) -> "tuple[dict, list]":
         if not audio_url:
             continue                                   # 没有音频地址的单集没法播，不建条目
         guid = _text(item, "guid") or audio_url
+        tr = _child(item, "transcript")
         episodes.append({
             "guid": guid,
             "title": _text(item, "title") or "未命名单集",
@@ -199,6 +201,8 @@ def parse_feed(xml_text: str) -> "tuple[dict, list]":
             "episode_no": _int(_text(item, "episode")),
             "season_no": _int(_text(item, "season")),
             "explicit": _explicit(_text(item, "explicit")),
+            "transcript_url": str((tr.get("url") if tr is not None else "") or "").strip(),
+            "transcript_type": str((tr.get("type") if tr is not None else "") or "").strip(),
         })
     return meta, episodes
 
@@ -424,6 +428,59 @@ def local_audio_path(eid: str) -> "pathlib.Path | None":
 # 位置只增不减（拖回去重听不改小），听满 95% 记 played_at；手动「标未播」才会清零。
 
 PLAYED_THRESHOLD = 0.95
+
+
+# ---------------- 官方转录（第 182 期）----------------
+# 只读 feed 里 `<podcast:transcript>` 指向的文件（SRT / VTT / JSON / 纯文本），
+# **不做 ASR**：没有转录地址就如实说没有，不假装能转写。
+
+MAX_TRANSCRIPT_CHARS = 200_000
+
+_TS_LINE = re.compile(
+    r"^\s*(?:\d+\s*$|\d{1,2}:\d{2}(?::\d{2})?[.,]\d{3}\s*-->.*|WEBVTT.*)$", re.I)
+
+
+def _plain_transcript(raw: str, kind: str) -> str:
+    """SRT / VTT → 纯文本行；JSON（podcast 转录规范）取 segments 的正文。"""
+    text = str(raw or "").replace("\ufeff", "")
+    if "json" in (kind or "").lower() or text.lstrip().startswith("{"):
+        try:
+            data = json.loads(text)
+        except Exception:                         # noqa: BLE001 —— 不是 JSON 就按文本走
+            data = None
+        if isinstance(data, dict):
+            segs = data.get("segments") or data.get("transcript") or []
+            if isinstance(segs, list):
+                parts = []
+                for s in segs:
+                    if isinstance(s, dict):
+                        v = s.get("text") or s.get("body") or ""
+                        if v:
+                            parts.append(str(v).strip())
+                if parts:
+                    text = "\n".join(parts)
+    lines = [ln.strip() for ln in text.splitlines()]
+    out = [ln for ln in lines if ln and not _TS_LINE.match(ln)]
+    return "\n".join(out)[:MAX_TRANSCRIPT_CHARS]
+
+
+def transcript(eid: str) -> dict:
+    """取单集官方转录：有缓存直接用；没有就按 feed 给的地址抓一次并缓存。"""
+    info = db.get_episode_transcript(eid)
+    if info is None:
+        raise LookupError("单集不存在")
+    if info["text"]:
+        return {"available": True, "kind": info["type"], "text": info["text"]}
+    if not info["url"]:
+        return {"available": False, "kind": "", "text": "",
+                "reason": "该单集没有官方转录（本项目不做 ASR 转写）"}
+    raw = _fetch(info["url"])
+    text = _plain_transcript(raw, info["type"])
+    if not text:
+        return {"available": False, "kind": info["type"], "text": "",
+                "reason": "转录文件里没有可显示的文本"}
+    db.save_episode_transcript(eid, text)
+    return {"available": True, "kind": info["type"], "text": text}
 
 
 # ---------------- 自动策略（第 181 期）----------------
