@@ -162,11 +162,18 @@ def preview(pattern: str, target: str = "stem", library_id=None) -> dict:
 
 
 def apply(pattern: str, target: str = "stem", library_id=None, book_ids=None) -> dict:
-    """把规则写成服务端覆盖。**重新算**（不信任预览条目），`book_ids` 只作收窄。"""
+    """把规则写成服务端覆盖。**重新算**（不信任预览条目），`book_ids` 只作收窄。
+
+    ⚠️ 写入是**一条事务**（第 171 期）：先把每一行算齐，最后 `db.set_overrides` 一次提交。
+    逐行 `db.set_override` 时每行一次 `commit()`（实测 2.26 ms/行，fsync 主导），
+    「整库匹配上规则」的典型用法（2,000 本 × 2 字段）≈ **9.5 s**，已顶到前端 15 s 超时。
+    代价：写入期间的 DB 级异常会整批失败（此前是逐本隔离）—— 但这里的写入是同一张表、
+    同一条语句，失败必然是系统性原因（磁盘 / 连接），逐本重试没有意义。
+    """
     rx, fields, tgt = compile_rule(pattern, target)
     narrow = {str(x) for x in (book_ids or []) if str(x or "").strip()}
     bs = library.books(str(library_id)) if library_id else library.books()
-    done, errors = [], []
+    planned, rows = [], []
     for b in bs:
         bid = str(b.get("id") or "")
         if not bid or (narrow and bid not in narrow):
@@ -181,16 +188,21 @@ def apply(pattern: str, target: str = "stem", library_id=None, book_ids=None) ->
             write[f] = val
         if not write:
             continue
+        for f, val in write.items():
+            # 多值字段按 `str(list)` 落库（与单书编辑同一种形态，读侧统一解析）
+            rows.append((bid, f, str(val) if isinstance(val, list) else val,
+                         str(ch_of(hit, f, "from") or "")))
+        planned.append({"book_id": bid, "name": hit["name"],
+                        "library_id": hit["library_id"], "fields": sorted(write)})
+    done, errors = [], []
+    if planned:
         try:
-            for f, val in write.items():
-                # 多值字段按 `str(list)` 落库（与单书编辑同一种形态，读侧统一解析）
-                db.set_override(bid, f, str(val) if isinstance(val, list) else val,
-                                orig=str(ch_of(hit, f, "from") or ""))
-        except Exception as e:                        # noqa: BLE001 —— 逐本隔离
-            errors.append({"book_id": bid, "name": hit["name"], "error": str(e)})
-            continue
-        done.append({"book_id": bid, "name": hit["name"],
-                     "library_id": hit["library_id"], "fields": sorted(write)})
+            db.set_overrides(rows)
+        except Exception as e:                        # noqa: BLE001 —— 整批失败如实回执
+            errors.append({"book_id": "", "name": "",
+                           "error": f"写入失败（{len(planned)} 本未写入）：{e}"})
+        else:
+            done = planned
     library.invalidate()
     if done:
         activity_log.log(activity_log.ACTION_METADATA, "正则提取元数据",
