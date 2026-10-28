@@ -81,6 +81,7 @@ async function mountView(episodes: PodcastEpisode[] = [EP]) {
 describe('PodcastsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()
   })
 
   it('订阅列表来自后端；点单集取回单集并渲染音频地址', async () => {
@@ -238,5 +239,30 @@ describe('PodcastsView', () => {
     await audios[0].trigger('ended')
     await flushPromises()
     expect(secondPlay.mock.calls.length).toBe(before)
+  })
+
+  it('播放队列：加入 / 面板显示 / 播完优先取队首', async () => {
+    const w = await mountView([
+      { ...EP, id: 'e1', title: '第一集' },
+      { ...EP, id: 'e2', title: '第二集' },
+    ])
+    await w.findAll('button').find((b) => b.text() === '单集')!.trigger('click')
+    await flushPromises()
+
+    // 把第二集加入队列
+    const addBtns = w.findAll('button').filter((b) => b.text() === '加入队列')
+    await addBtns[1].trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('播放队列（1）')
+    expect(w.text()).toContain('移出队列')
+
+    // 第一集播完 ⇒ 取队首（第二集）播放，且队列清空
+    const audios = w.findAll('audio')
+    const secondPlay = vi.fn(() => Promise.resolve())
+    ;(audios[1].element as HTMLAudioElement).play = secondPlay as never
+    await audios[0].trigger('ended')
+    await flushPromises()
+    expect(secondPlay).toHaveBeenCalled()
+    expect(w.text()).not.toContain('播放队列（1）')
   })
 })

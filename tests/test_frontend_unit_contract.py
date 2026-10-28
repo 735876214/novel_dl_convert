@@ -90,6 +90,8 @@ EXPECTED_SPECS = (
     # 第 158 期：表格列面板。坏起来全是「勾了没生效 / 导入覆盖掉自己的视图」，
     # 所以 store 侧钉规则（规范顺序 / 至少一列 / 同名不覆盖 / 上限），组件侧钉接线。
     "src/stores/tablePrefs.spec.ts",
+    # 第 180 期：播客播放队列（本机持久化）。重复入队 / 顺序 / 刷新丢失都不报错。
+    "src/stores/podcastQueue.spec.ts",
     "src/components/book/TableColumnsPanel.spec.ts",
     # 第 165 期：文件名提取的接线。坏起来都是「点了没反应」：预览没接 api、
     # 应用后没重算预览（用户仍看到「会改写 3 本」）。规则本身在后端用例里钉。

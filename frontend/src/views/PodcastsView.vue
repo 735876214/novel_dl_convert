@@ -6,6 +6,7 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, type Podcast, type PodcastBookmark, type PodcastEpisode } from '@/lib/api'
+import { usePodcastQueueStore } from '@/stores/podcastQueue'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -20,6 +21,7 @@ import { useUiStore } from '@/stores/ui'
  * 「下载了一堆其实不会再听的音频」。
  */
 const ui = useUiStore()
+const queue = usePodcastQueueStore()
 
 const pods = ref<Podcast[]>([])
 const episodes = ref<PodcastEpisode[]>([])
@@ -239,6 +241,34 @@ function setAutoNext(v: boolean): void {
   }
 }
 
+// ---------------- 播放队列（第 180 期） ----------------
+// 队列存快照（id + 标题 + 订阅），播放时回订阅里按 id 取当前那一集；
+// 播完优先取队首，队列空才走「播完自动连播」的列表顺序。
+function toggleQueue(e: PodcastEpisode): void {
+  if (queue.has(e.id)) {
+    queue.remove(e.id)
+    ui.toast('已移出播放队列')
+    return
+  }
+  const pod = selectedPodcast.value
+  const ok = queue.enqueue({
+    episodeId: e.id,
+    podcastId: e.podcast_id,
+    title: e.title,
+    podcastTitle: pod?.title || '',
+  })
+  ui.toast(ok ? '已加入播放队列' : '队列已满或已存在')
+}
+
+async function playQueueItem(it: { episodeId: string; podcastId: string }): Promise<void> {
+  if (it.podcastId !== selected.value) {
+    await open(it.podcastId)
+  }
+  const ep = episodes.value.find((x) => x.id === it.episodeId)
+  if (ep) playEpisode(ep)
+  else ui.toast('这一集已不在订阅里')
+}
+
 function playEpisode(e: PodcastEpisode): void {
   const el = audioEls[e.id]
   if (!el) return
@@ -267,6 +297,11 @@ function onEpisodeEnded(e: PodcastEpisode, ev: Event): void {
   void api.savePodcastProgress(e.id, dur, dur)
     .then(() => { e.position_sec = dur; e.played_at = Date.now() })
     .catch(() => { /* 同上 */ })
+  const nextQ = queue.shift()
+  if (nextQ) {
+    void playQueueItem(nextQ)
+    return
+  }
   playNext(e)
 }
 
@@ -533,6 +568,30 @@ function fmtDate(ts: number): string {
           desc="点上面的「刷新」去发布方那里取最新一期。"
         />
         <template v-else>
+          <!-- 播放队列（第 180 期）：播完优先取队首；跨订阅也允许 -->
+          <div v-if="queue.items.length" class="mb-2 rounded-md border border-border p-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-[11.5px] font-medium text-muted-foreground">
+                播放队列（{{ queue.items.length }}）
+              </span>
+              <Button size="sm" variant="ghost" class="ml-auto" @click="queue.clear()">清空</Button>
+            </div>
+            <ul class="mt-1 space-y-0.5">
+              <li v-for="it in queue.items" :key="it.episodeId" class="flex items-center gap-2 text-[11.5px]">
+                <button
+                  type="button"
+                  class="min-w-0 flex-1 cursor-pointer truncate text-left text-foreground hover:text-primary"
+                  @click="playQueueItem(it)"
+                >{{ it.title }}</button>
+                <span class="shrink-0 text-muted-foreground">{{ it.podcastTitle }}</span>
+                <button
+                  type="button"
+                  class="shrink-0 cursor-pointer text-[11px] text-muted-foreground hover:text-destructive"
+                  @click="queue.remove(it.episodeId)"
+                >移除</button>
+              </li>
+            </ul>
+          </div>
           <div class="mb-2 flex flex-wrap items-center gap-1">
             <button
               v-for="f in EP_FILTERS"
@@ -605,6 +664,11 @@ function fmtDate(ts: number): string {
                 class="shrink-0 cursor-pointer text-[11px] text-primary hover:underline"
                 @click="toggleBookmarks(e)"
               >书签</button>
+              <button
+                type="button"
+                class="shrink-0 cursor-pointer text-[11px] text-primary hover:underline"
+                @click="toggleQueue(e)"
+              >{{ queue.has(e.id) ? '移出队列' : '加入队列' }}</button>
             </div>
             <p v-if="e.description" class="mt-0.5 line-clamp-2 text-[11.5px] leading-relaxed text-muted-foreground">
               {{ e.description }}
