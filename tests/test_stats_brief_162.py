@@ -31,7 +31,8 @@ def test_brief_包含部件要的全部键(client, auth_headers):
         assert key in d, f"brief 缺了部件要读的键：{key}"
     # 子形状也要齐（部件直接下钻到这些字段）
     assert {"total", "size", "by_format", "languages"} <= set(d["books"])
-    assert {"finished", "streak", "days", "sessions", "seconds"} <= set(d["reading"])
+    # annotations 第 163 期并入（成就判定 `_metrics()` 读它）
+    assert {"finished", "streak", "days", "sessions", "seconds", "annotations"} <= set(d["reading"])
     assert "total" in d["authors"] and "total" in d["series"]
     assert isinstance(d["added_28d"], list) and isinstance(d["reading_28d"], list)
     assert isinstance(d["hours"], list) and isinstance(d["added_month"], int)
@@ -60,6 +61,8 @@ def test_brief_与完整份的_finished_一致(client, auth_headers, default_roo
     full = client.get("/api/stats", headers=auth_headers).json()
     brief = client.get("/api/stats?brief=1", headers=auth_headers).json()
     assert brief["reading"]["finished"] == full["reading"]["finished"]
+    # annotations 也同源（成就判定切到 brief 后，这条必须与完整份一致）
+    assert brief["reading"]["annotations"] == full["reading"]["annotations"]
     assert brief["books"]["total"] == full["books"]["total"]
     assert brief["books"]["by_format"] == full["books"]["by_format"]
     assert brief["books"]["languages"] == full["books"]["languages"]

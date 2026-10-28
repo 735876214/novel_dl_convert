@@ -2801,16 +2801,33 @@ def duplicate_groups(threshold: int = 85, library_id=None, dismissed=None) -> di
         t = norm_key(b["title"])
         if t:
             by_author.setdefault(norm_key(b["author"]), []).append((i, t))
+    # 二元组（bigram）集合的**包含率**预筛（第 163 期）：先比字符二元组再上
+    # SequenceMatcher。真实库的痛点是「作者全空」的大桶 —— 2,176 本共享一个
+    # 「未知」作者名时，长度预筛放行的对仍有 ~89 万，全量 SequenceMatcher 实测
+    # ~20 s（工具页一次转圈半分钟）。二元组包含率（交集 / 较小集合）只在
+    # 「两个书名几乎不共享任何相邻字符对」时才把这对扔掉；对真相似的书名
+    # （实验里 ratio ≥ 0.85 的 7,631 对变异对）包含率的实测下界 0.25，门限
+    # 取 0.3 留有余量 —— 比它严就丢真阳性，比它松就退化回全量比对。
+    # SequenceMatcher 仍是**唯一的判定**，这里只是省掉「必然到不了阈值」的对。
     for items in by_author.values():
         m = len(items)
         if m < 2:
             continue
+        bags = [None] * m
         for a in range(m):
+            ia, ta = items[a]
+            bags[a] = {ta[i:i + 2] for i in range(max(1, len(ta) - 1))}
+        for a in range(m):
+            ia, ta = items[a]
+            ga = bags[a]
             for c in range(a + 1, m):
-                ia, ta = items[a]
                 ic, tc = items[c]
                 lo, hi = (len(ta), len(tc)) if len(ta) <= len(tc) else (len(tc), len(ta))
                 if not lo or hi / lo > (2 - thr) / thr:
+                    continue
+                gc = bags[c]
+                inter = len(ga & gc)
+                if inter / min(len(ga), len(gc)) < 0.3:
                     continue
                 if SequenceMatcher(None, ta, tc).ratio() >= thr:
                     join(ia, ic)

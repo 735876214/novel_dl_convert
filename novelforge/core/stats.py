@@ -223,6 +223,8 @@ def brief(days: int = 28, library_id: str = "") -> dict:
     languages: set = set()
     finished = 0
     statuses = db.all_statuses()
+    annos = db.annotation_counts()
+    prog = db.all_progress()
     now = time.time()
     today_d = db.local_day(now)
     buckets = [0] * days
@@ -241,8 +243,13 @@ def brief(days: int = 28, library_id: str = "") -> dict:
         lg = (b.get("language") or "").strip()
         if lg:
             languages.add(lg)
+        # ⚠️ 进度要传给 _classify_status：无状态行的书走「进度兜底」分支（阈值真正
+        # 起作用的那条）。第 163 期审查抓到的缺陷就是这里传了常量 0.0 ⇒ brief 的
+        # finished 恒 0 —— `test_成就与统计同源` 当场红。
+        p = prog.get(b["id"])
         if _classify_status((statuses.get(b["id"]) or {}).get("status"),
-                            0.0, started_th, finished_th) == "finished":
+                            float(p["percent"]) if p else 0.0,
+                            started_th, finished_th) == "finished":
             finished += 1
         # 近 N 天入库节奏（与 overview 同口径：added_at 覆盖，未覆盖=文件 mtime；
         # ≤0 的时间戳不进任何桶）
@@ -287,6 +294,9 @@ def brief(days: int = 28, library_id: str = "") -> dict:
             "avg_seconds": (tot["seconds"] / tot["sessions"]) if tot["sessions"] else 0.0,
             "streak": streak,
             "days": len(active),
+            # 与完整份同形（成就判定 `_metrics()` 读它，第 163 期起成就走 brief）：
+            # 按库筛选时必须按 bs 取（annos 是全部书的批注计数）；全库时两者相等
+            "annotations": sum(annos.get(b["id"], 0) for b in bs),
         },
         "window": days,
         "library_id": lid,

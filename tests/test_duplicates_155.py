@@ -66,3 +66,52 @@ def test_不是重复持久化与恢复(client, auth_headers, make_library, make
     assert r.status_code == 200, r.text
     assert r.json()["removed"] >= 1
     assert client.get("/api/duplicates", headers=auth_headers).json()["groups"]
+
+
+def test_大桶不因_bigram_预筛丢真相似(monkeypatch):
+    """第 163 期：bigram 包含率预筛的**安全性**钉在这里。
+
+    场景 = 真实库的痛点：2,000+ 本书共享一个空作者名（「未知」），长度预筛放行的对
+    有 ~89 万，全量 SequenceMatcher 实测 ~20 s。预筛必须在**不丢真相似**的前提下
+    把 SequenceMatcher 的调用数压下来 —— 这条用例把「不丢」钉死（「快」由门限注释
+    里的实验数字保证，不在此处跑秒表，避免看机器快慢的 flake）。
+    """
+    import time as _t
+
+    from difflib import SequenceMatcher
+
+    # 一只 500 本的「未知」大桶：噪声书名互不相似 + 3 对刻意构造的真相似
+    # （ratio ≥ 0.85 但 bigram 包含率偏低 → 门限附近）。
+    books = [
+        _book(str(i), f"书{i}",
+              title=f"第{i}卷风起云涌{('甲乙丙丁戊己庚辛'[i % 8])}部曲",
+              author="未知")
+        for i in range(500)
+    ]
+    similar_pairs = [
+        ("星際大争霸之銀河英雄傳說典藏版全二卷", "星際大争霸之銀河英雄傅說典藏版全二卷"),
+        ("斗罗大陆外传神界传说最新修订完整版", "斗罗大陆外傅神界传说最新修订完整版"),
+        ("魔法学徒之黎明篇第1-12卷完结合集", "魔法学徒之黎眀篇第1-12卷完结合集"),
+    ]
+    for j, (t1, t2) in enumerate(similar_pairs):
+        books.append(_book(f"s{j}a", f"甲{j}", title=t1, author="未知"))
+        books.append(_book(f"s{j}b", f"甲{j}", title=t2, author="未知"))
+    monkeypatch.setattr(library, "books", lambda lid=None: books)
+
+    t0 = _t.perf_counter()
+    out = library.duplicate_groups(85)
+    elapsed = _t.perf_counter() - t0
+    # 组里带 group.title（代表本）与 members 的 id 映射回书名
+    by_id = {b["id"]: b for b in books}
+    names = []
+    for g in out["groups"]:
+        titles = {by_id[it["id"]]["title"] for it in g["items"] if it["id"] in by_id}
+        names.append(titles)
+    for _, (t1, t2) in enumerate(similar_pairs):
+        assert any(t1 in ns and t2 in ns for ns in names), \
+            f"预筛把真相似对丢了：{t1!r} / {t2!r}"
+    # 门限注释里的换算：无预筛 ~30 s（本机）/ 89 万对；有预筛 < 5 s。
+    # 宽松上限只防「有人把门限改成 0 退化回全量」，不测具体秒数。
+    assert elapsed < 15, f"duplicate_groups 耗时 {elapsed:.1f}s —— 预筛疑似失效"
+    # 交叉验证：门限后命中的对确实过得了 SequenceMatcher（自证「唯一的判定」还在）。
+    assert SequenceMatcher(None, *similar_pairs[0]).ratio() >= 0.85

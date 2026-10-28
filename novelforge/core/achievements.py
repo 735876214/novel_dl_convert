@@ -64,7 +64,7 @@ ACHIEVEMENTS: list = [
      "name": "阅读一百小时", "desc": "累计阅读 100 小时"},
     # ⚠️ 文案里**不写死百分比**（第 40 期起阈值可配，见 core/lib_settings.reading_thresholds）：
     # 写死就会出现「说明书说 99.5%、实际按用户设的值判」的自相矛盾。
-    # 判定本身走 `_metrics()["finished"]` → `stats.overview()`，与统计 / 书架同源。
+    # 判定本身走 `_metrics()["finished"]` → `stats.brief()`，与书架的统计同源（第 163 期起）。
     {"key": "finished_1", "group": GROUP_READING, "metric": "finished", "target": 1,
      "name": "读完第一本", "desc": "读完第一本书（进度达到「已读完阈值」）"},
     {"key": "finished_10", "group": GROUP_READING, "metric": "finished", "target": 10,
@@ -95,8 +95,14 @@ ACHIEVEMENTS: list = [
 
 
 def _metrics() -> dict:
-    """当前可用的度量值。**成就判定只认这张表** —— 新增 metric 在这里加一行。"""
-    ov = stats.overview()
+    """当前可用的度量值。**成就判定只认这张表** —— 新增 metric 在这里加一行。
+
+    第 163 期起取数走 ``stats.brief()``：成就判定要的 11 个度量里 10 个都在 brief
+    （`reading.annotations` 也已并入），而 brief 跳过了完整份的五年会话扫表与逐本
+    元数据审计 —— 成就页因此不用再付统计页专属的那笔成本（此前是每次 GET
+    `/api/achievements` 都跑一遍完整 `overview()`）。
+    """
+    ov = stats.brief()
     r = ov["reading"]
     return {
         "books": float(ov["books"]["total"]),

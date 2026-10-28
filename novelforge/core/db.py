@@ -2463,7 +2463,14 @@ def weekday_histogram(book_ids: set | None = None, days: int = 365) -> list:
     floor = now - days * 86400
     seconds = [0.0] * 7
     events = [0] * 7
-    for r in c.execute("SELECT book_id, seconds, started_at FROM reading_sessions").fetchall():
+    # ⚠️ 第 163 期：窗口下界推到 SQL（``idx_session_end`` 索引 + ended_at 范围）——
+    # 此前是无条件全表拉，会话表上了量后这步是 stats.overview() 里仅次于
+    # session_log 的扫表。会话窗口按 started_at 归日，但 ended_at >= started_at
+    # ⇒「ended_at 在窗口内」是「started_at 在窗口外」的超集，作为下界过滤**不漏**。
+    for r in c.execute(
+        "SELECT book_id, seconds, started_at FROM reading_sessions WHERE ended_at >= ?",
+        (floor,),
+    ).fetchall():
         if book_ids is not None and r["book_id"] not in book_ids:
             continue
         ts = r["started_at"]
@@ -2713,6 +2720,11 @@ def reading_day_minutes(book_ids: set | None = None) -> list:
     返回 ``[(day 'YYYY-MM-DD', minutes, sessions), ...]``（已排序）。
     对齐上游 ``reading-session.ts`` 的 ``dailySummary{day,totalMinutes}[]``。
     ``book_ids`` 语义同 ``reading_totals``（None = 全部）。
+
+    ⚠️ 热力图的**口径是全部历史**（`activity.heatmap` 的 year 过滤在 Python 里做
+    —— years 是「筛掉其它年」而不是「只查那一年」，保证 ``active_days`` /
+    ``total_minutes`` 的分母判断不变），所以这里不做窗口下界；会话表上了量后
+    这仍是全表扫，但它只在「阅读活动」页出现，不在任何进站路径上。
     """
     c = _connect()
     rows = c.execute(
@@ -2730,21 +2742,43 @@ def reading_day_minutes(book_ids: set | None = None) -> list:
 
 
 def session_feed(book_ids: set | None = None, limit: int = 500) -> list:
-    """最近的阅读会话（新 → 旧），时间轴用。``book_ids`` 语义同 ``reading_totals``。"""
+    """最近的阅读会话（新 → 旧），时间轴用。``book_ids`` 语义同 ``reading_totals``。
+
+    ⚠️ 第 163 期：``book_ids`` 过滤**只在库维度筛选时生效**（None = 不过滤，直接
+    ``LIMIT``），此前是无条件全表 ``ORDER BY`` 再在 Python 里扔 —— 会话表上了量
+    （万级行）时这是活动页最贵的一步。``idx_session_end`` 索引让带库过滤的分支也能
+    走 ``ORDER BY ended_at`` 的索引序，不必物化全表。
+    """
     c = _connect()
-    rows = c.execute(
-        "SELECT book_id, seconds, ended_at FROM reading_sessions ORDER BY ended_at DESC"
-    ).fetchall()
-    out = []
-    for r in rows:
-        if book_ids is not None and r["book_id"] not in book_ids:
-            continue
-        out.append({
+    lim = max(1, int(limit))
+    if book_ids is None:
+        rows = c.execute(
+            "SELECT book_id, seconds, ended_at FROM reading_sessions "
+            "ORDER BY ended_at DESC LIMIT ?", (lim,),
+        ).fetchall()
+    else:
+        ids = [str(b) for b in book_ids]
+        rows = []
+        # 分块 IN（SQLite 变量上限 900，与 reading_totals 同一范式）；
+        # 每块各自取 lim 条再合并重排 —— 跨块不能简单拼接（后块的「最新」可能
+        # 比前块的还新），排序键只有 ended_at，重排成本 = 块数 × lim。
+        for i in range(0, len(ids), 900):
+            part = ids[i:i + 900]
+            q = ",".join(["?"] * len(part))
+            rows.extend(c.execute(
+                f"SELECT book_id, seconds, ended_at FROM reading_sessions "
+                f"WHERE book_id IN ({q}) ORDER BY ended_at DESC LIMIT ?", [*part, lim],
+            ).fetchall())
+        rows.sort(key=lambda r: r["ended_at"], reverse=True)
+        rows = rows[:lim]
+    return [
+        {
             "book_id": r["book_id"],
             "seconds": float(r["seconds"]),
             "ended_at": float(r["ended_at"]),
-        })
-    return out[: max(1, int(limit))]
+        }
+        for r in rows
+    ]
 
 
 def session_log(days: int = 1825, book_ids: set | None = None) -> list:
