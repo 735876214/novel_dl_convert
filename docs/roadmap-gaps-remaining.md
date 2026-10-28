@@ -10883,3 +10883,64 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 **核验**：后端全量（见 §0 基线）+ 前端四连（804 例）。
 
 **下一步**：2A 余项 —— M4B 内嵌章节导航 / 首页「继续收听」独立行 / 跨页迷你播放器 / 倍速细调与按书覆盖 / 睡眠「本轨结束」/ 整本 ZIP 打包下载。
+
+## 第 170 期（批量动作收口（单事务批量写 / 自动推送合并 / Komga 集合批量化））
+
+**需求来源**：用户「持续审计」。方法不变：先在真实规模上量，再改；改完对拍。
+
+**实测（本地 2,000 本的真实形状书目）**：`POST /api/books/batch` 一次改 2,000 本需要
+**6.46 s**，500 本 1.43 s —— 与书本数**线性**。拆开看是两笔：
+
+| 组成 | 2,000 本耗时 | 原因 |
+|---|---|---|
+| 逐本判存在性 | **1.0 s** | 每本一次 `library.by_id`（settle + 索引查询 + overlay 两次批量查询） |
+| 逐本写入 | **5.5 s** | `set_rating` / `set_status` / `add_book_to_collection` **各自 `commit()` 一次**；PG 上每次还要走网络与 WAL flush |
+
+前端默认请求超时是 **15 s**（`lib/api.ts` 的 `DEFAULT_REQUEST_TIMEOUT_MS`）：NAS 上的 PG
+很容易越线 —— 界面弹「批量操作失败」，**服务端却已经把数据写完**。这不是「慢」，是**错的反馈**。
+
+**修法**（判据仍只有一处，批量只是换掉「逐本提交」）：
+
+| 改动 | 改前 | 改后 |
+|---|---|---|
+| 存在性 | 逐本 `library.by_id` | 一次 `catalog.alive_ids`（与收藏夹计数、书架列表同一判据） |
+| 评分 | 逐本 `set_rating` / `clear_rating` | `db.set_ratings` / `db.clear_ratings`（executemany + 一条事务）；校验抽成 `db._norm_stars` 两处共用 |
+| 阅读状态 | 逐本 `set_status` | `db.set_statuses`（一次读当前状态 + 同一条日期规则 `db._status_dates` + `_sync_attempt` + 一条事务） |
+| 收藏夹 | 逐本 `add_book_to_collection`（写 + 再刷 `updated_at`，两次提交） | `db.add_books_to_collection` / `remove_books_from_collection` |
+| Komga 集合 | `POST /api/v1/collections`、`PUT …/series`、`DELETE …/series/{id}` 逐本写 —— 652 本的系列 = **1,300+ 次提交** | 同上批量函数 |
+
+结果（同一份 2,000 本）：批量评分 **6.46 s → 0.023 s**；批量设「已读完」**0.047 s**；
+1,000 本入收藏夹 0.018 s（再点一次幂等 0.010 s）。
+
+**同批修掉两处一致性缺口**：
+
+1. **批量写入从不触发外部服务的自动推送**（`_sync_auto_push`）。单本改评分 / 状态 /
+   批注都会推，批量改同样的东西不推 ⇒ 配了 Hardcover / Readwise「自动推送」的用户，
+   批量整理完的书在对面**永远不出现**。现在 `sync.auto_push` 接受一串 id：
+   一次批量只起**一个**旁路线程、`run` 一次（`run` 内部会建一条任务记录 ——
+   逐本调就是几百个线程 + 几百条任务记录）。
+2. **`sync.wait_pending` 没进测试收尾**。`tests/conftest.py::_quiesce_background`
+   收了 scrape / watcher / catalog / embed / 后台长操作，唯独漏了同步旁路线程 ——
+   而它们要查库（`_iter_payloads` → `library.by_id`），晚一步就在已关闭的连接上查
+   （正是那个函数文档里写的故障）。顺手把契约与 `watcher` / `catalog` 统一：
+   返回「未结束数量」并清掉已结束的登记项（否则 `_BG_THREADS == {}` 那条断言会被
+   前面任何一次推送污染 —— 这次的用例就是这样撞上的）。
+
+**防回归**（`tests/test_batch_bulk_166.py`，9 例）：
+
+- 批量评分 / 状态与单本**同值同规则**：paused 保留 started_at、回到 unread 两个日期清零、
+  进 finished 记读完时间；
+- 批量设状态仍维护阅读轮次（`_sync_attempt`）—— 只写状态不写轮次，统计页的轮次就断了；
+- 收藏夹批量加入幂等（再点一次不涨成员）、批量移出真的没了；
+- 不存在的 id 进 `failed`、其余照做；坏评分整批记失败且**零写入**；
+- **结构性判据**（数提交而不是掐秒表，避免「看机器快慢」的 flake）：20 本书批量评分
+  只提交 **≤2 次**；收藏夹批量加入 / 移出同理 —— 退回逐本 `commit()` 这条会立刻红；
+- 批量写入触发**一次**自动推送且带上全部 id（`test_integration_sync` 另加一条单元用例，
+  钉「一串 id 只起一个线程、只 `run` 一次」）。
+
+**核验**：后端全量 2893 例（2865 passed / 13 环境失败 / 14 skipped）；`period_close check` 0 问题。
+
+**没做（如实留档）**：`/api/duplicates` 预筛后仍有 ~6 s —— 剩下的是「2,176 本大桶里
+二元组集合两两求交」；再快需要前缀过滤的集合相似 join（另一套判据），而它只是工具页，
+留作候选。`POST /api/books/batch-metadata`（第 157 期）仍是逐本写：它的目标是「逐本不同
+的值」，批量化要先定「部分失败」的口径，不在本批范围。
