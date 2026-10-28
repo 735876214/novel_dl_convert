@@ -4446,6 +4446,22 @@ def api_audio_tracks(bid: str):
     return units.tracks_of(library.abs_path(b))
 
 
+@app.get("/api/books/{bid}/audio/heard")
+def api_audio_heard(bid: str):
+    """有声书里哪些轨**听过**（第 168 期）：由 `reading_sessions.file_rel` 派生。
+
+    没有「手动标记」入口 —— 听过就是有过收听会话，未听就是没有；想清空只能清会话记录。
+    单文件有声书（1 轨）不产生 `file_rel`，返回空列表（前端据此不显示已听标记）。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    if (b.get("format") or "").upper() != "AUDIO":
+        raise HTTPException(400, "该书不是有声书")
+    items = db.heard_audio_files(bid)
+    return {"items": items, "total": len(items)}
+
+
 @app.get("/api/books/{bid}/audio/{index}")
 def api_audio_track(bid: str, index: int):
     """单轨音频流。

@@ -21,6 +21,7 @@ vi.mock('@/lib/api', () => ({
     setProgress: vi.fn(),
     recordSession: vi.fn(),
     audioTrackUrl: vi.fn((id: string, i: number) => `/audio/${id}/${i}`),
+    audioHeard: vi.fn(),
     unitFileUrl: vi.fn(),
   },
 }))
@@ -32,6 +33,7 @@ const m = {
   progress: vi.mocked(api.getProgress),
   setProgress: vi.mocked(api.setProgress),
   session: vi.mocked(api.recordSession),
+  heard: vi.mocked(api.audioHeard),
 }
 
 const TRACKS = [
@@ -61,6 +63,7 @@ async function mountPlayer() {
   m.del.mockResolvedValue({ ok: true, trashed: true })
   m.setProgress.mockResolvedValue({ updated_at: 0 } as never)
   m.session.mockResolvedValue({} as never)
+  m.heard.mockResolvedValue({ items: ['02.mp3'], total: 1 })
   const w = mount(AudioPlayer, {
     props: { bookId: 'b1', tracks: TRACKS },
     global: { plugins: [pinia] },
@@ -96,6 +99,14 @@ describe('AudioPlayer 书签', () => {
       label: '这里好听',
     })
     expect(m.list).toHaveBeenCalledTimes(2)      // 挂载一次 + 加完刷新一次
+  })
+
+  it('已听标记来自后端（只有列在 items 里的轨显示）', async () => {
+    const w = await mountPlayer()
+    expect(m.heard).toHaveBeenCalledWith('b1')
+    const marks = w.findAll('span').filter((s) => s.text() === '已听')
+    expect(marks).toHaveLength(1)
+    expect(w.text()).toContain('已听 1')
   })
 
   it('删除书签走软删除接口', async () => {

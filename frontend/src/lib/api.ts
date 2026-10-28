@@ -3673,6 +3673,15 @@ export const api = {
     return `/api/books/${encodeURIComponent(bid)}/audio/${index}${t ? `?token=${encodeURIComponent(t)}` : ''}`
   },
 
+  /**
+   * 有声书里**听过**的轨（第 168 期）：`reading_sessions.file_rel` 派生，没有手动标记。
+   * 单文件有声书（1 轨）恒为空 —— 前端据此不显示已听标记。
+   */
+  audioHeard: (bid: string) =>
+    request<{ items: string[]; total: number }>(
+      `/api/books/${encodeURIComponent(bid)}/audio/heard`,
+    ),
+
   // ---------- 通知（活动日志 + 已读态）----------
   notifications: (limit = 100) =>
     request<{ items: NotificationItem[]; count: number; unread: number; unread_total: number }>(

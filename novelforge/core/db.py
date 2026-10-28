@@ -2781,6 +2781,21 @@ def session_feed(book_ids: set | None = None, limit: int = 500) -> list:
     ]
 
 
+def heard_audio_files(book_id: str) -> list:
+    """有声书里**有过收听会话**的轨（第 168 期）。
+
+    数据来自 `reading_sessions.file_rel`（播放器把当前轨的 basename 作为会话标签上报）。
+    只认 `source='audio'`：文本阅读器也会写 `file_rel`（多文件书的库内相对路径），
+    不按来源过滤会把文字书的文件名当成轨名返回。
+    """
+    rows = _connect().execute(
+        "SELECT DISTINCT file_rel FROM reading_sessions "
+        "WHERE book_id=? AND source='audio' AND file_rel<>'' ORDER BY file_rel",
+        (str(book_id),),
+    ).fetchall()
+    return [str(r["file_rel"]) for r in rows]
+
+
 def session_log(days: int = 1825, book_ids: set | None = None) -> list:
     """按时间窗取会话**明细**（新 → 旧）：``{book_id, seconds, started_at, ended_at}``。
 

@@ -122,6 +122,18 @@ async function removeBookmark(b: Bookmark): Promise<void> {
   }
 }
 
+// ---------------- 单轨「已听」标记（第 168 期）----------------
+// 数据来源只有一处：`reading_sessions.file_rel`（播放器把当前轨 basename 当会话标签）。
+// **没有手动标记** —— 听过就是有过收听会话，未听就是没有。
+const heard = ref<Set<string>>(new Set())
+
+function loadHeard(): void {
+  if (unitMode.value) return
+  api.audioHeard(props.bookId)
+    .then((r) => { heard.value = new Set(r.items || []) })
+    .catch(() => { /* 读不到就不显示标记，不影响播放 */ })
+}
+
 const speed = ref(prefs.speed)
 const volume = ref(prefs.volume)
 const skipBack = ref(prefs.skipBack)
@@ -158,7 +170,7 @@ function showMoreTracks(): void {
   trackLimit.value += TRACK_MORE
 }
 // 换书时窗口复位（组件可能被复用）
-watch(() => props.bookId, () => { trackLimit.value = TRACK_WINDOW; loadBookmarks() })
+watch(() => props.bookId, () => { trackLimit.value = TRACK_WINDOW; loadBookmarks(); loadHeard() })
 const src = computed(() => {
   if (unitMode.value) return props.unit ? api.unitFileUrl(props.bookId, props.unit.index) : ''
   return current.value ? api.audioTrackUrl(props.bookId, index.value) : ''
@@ -295,7 +307,7 @@ async function onEnded(): Promise<void> {
   // 最后一轨放完：先落盘，再决定跨册续接还是停下
   saveProgress()
   session.pause()
-  void session.flush()
+  void session.flush().then(loadHeard)
   // 跨册续接（第 61 期起；第 66 期收敛到 `lib/seriesNext.ts` 单一真值源）：
   // 开关关着时静默停下；开着则**无系列也会如实提示**（此前是静默停下）。
   const advanced = await goToNextVolume({
@@ -319,7 +331,7 @@ function onPause(): void {
   lastTick = 0
   saveProgress()
   session.pause()
-  void session.flush()
+  void session.flush().then(loadHeard)
 }
 
 /**
@@ -399,6 +411,7 @@ function seekWhenReady(seconds: number): void {
 onMounted(async () => {
   session.begin()
   loadBookmarks()
+  loadHeard()
   if (unitMode.value) {
     // 单话模式：恢复到哪由上层给（`within`，0–1 的**话内**比例），**不问服务端** ——
     // 书级的 percent 是整本书的坐标，子阅读器手里没有 `total` 语义（话数 ≠ 轨数）就换不出来。
@@ -593,7 +606,10 @@ onBeforeUnmount(() => {
 
     <!-- 轨道列表（多轨时才有意义） -->
     <div v-if="total > 1" class="mt-4 border-t border-border pt-3">
-      <div class="mb-2 text-[11.5px] font-medium text-muted-foreground">共 {{ total }} 轨</div>
+      <div class="mb-2 flex items-center gap-2 text-[11.5px] font-medium text-muted-foreground">
+        <span>共 {{ total }} 轨</span>
+        <span v-if="heard.size" class="text-[11px] text-muted-foreground/80">已听 {{ heard.size }}</span>
+      </div>
       <ol class="max-h-[280px] space-y-0.5 overflow-auto">
         <li v-for="t in shownTracks" :key="t.index">
           <button
@@ -604,7 +620,12 @@ onBeforeUnmount(() => {
           >
             <Icon v-if="t.index === index && playing" name="play" class="h-3 w-3 shrink-0" />
             <span v-else class="w-3 shrink-0 text-center text-[10.5px] text-muted-foreground tabular-nums">{{ t.index + 1 }}</span>
-            <span class="truncate">{{ t.name }}</span>
+            <span class="min-w-0 flex-1 truncate">{{ t.name }}</span>
+            <span
+              v-if="heard.has(t.name)"
+              class="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground"
+              title="听过这一轨（由收听会话派生）"
+            >已听</span>
           </button>
         </li>
       </ol>
