@@ -68,6 +68,96 @@ def test_不是重复持久化与恢复(client, auth_headers, make_library, make
     assert client.get("/api/duplicates", headers=auth_headers).json()["groups"]
 
 
+def test_内容比对先比首尾_中间不同不算副本(monkeypatch, tmp_path):
+    """第 181 期：两级哈希的**安全性**与**必要性**。
+
+    真实库的痛点是「同尺寸就整本 sha256」：2,309 本里 24 本与他人同尺寸，合计 **3.33 GB**，
+    全读一遍正是「重复书」页 19 s 里的大头，而真正的副本只有几组。改成先比首尾各 64 KiB：
+      · 相同文件必定同尺寸同首尾 ⇒ **不会漏**（下面前两本逐字节相同，必须并组）；
+      · 首尾相同、中间不同 ⇒ 仍会读完再判，**不会误报**（`f.epub`）；
+      · 首尾就不同 ⇒ **不读整本** —— 用「喂进 sha256 的字节数」结构性证明，不掐秒表。
+    """
+    import hashlib
+
+    P = library._PARTIAL_DIGEST
+    size = 2 * 1024 * 1024
+    head = b"H" * P
+    tail = b"T" * P
+    mid_a = b"A" * (size - 2 * P)
+    mid_f = b"F" * (size - 2 * P)
+
+    a = tmp_path / "a.epub"
+    b = tmp_path / "b.epub"
+    f = tmp_path / "f.epub"
+    a.write_bytes(head + mid_a + tail)
+    b.write_bytes(head + mid_a + tail)      # 与 a 逐字节相同
+    f.write_bytes(head + mid_f + tail)      # 首尾同、中间不同
+    others = []
+    for k in range(6):
+        p = tmp_path / f"o{k}.epub"
+        p.write_bytes(bytes([k + 1]) + head[1:] + mid_a + tail)   # 首字节就不同
+        others.append(p)
+
+    books = [
+        _book(str(i), p.name, title=f"互不相似的书名{i}", author=f"作者{i}",
+              size=size, path=str(p))
+        for i, p in enumerate([a, b, f, *others])
+    ]
+    monkeypatch.setattr(library, "books", lambda lid=None: books)
+
+    counted = {"n": 0}
+
+    class _Hash:
+        def __init__(self):
+            self._h = hashlib.sha256()
+
+        def update(self, chunk):
+            counted["n"] += len(chunk)
+            self._h.update(chunk)
+
+        def hexdigest(self):
+            return self._h.hexdigest()
+
+    class _Mod:
+        @staticmethod
+        def sha256():
+            return _Hash()
+
+    monkeypatch.setattr(library, "hashlib", _Mod())
+
+    out = library.duplicate_groups(99)
+    groups = [g for g in out["groups"] if g["reason"] == "文件内容完全相同"]
+    assert groups, "逐字节相同的两本必须并组（两级哈希不许漏）"
+    assert {it["id"] for it in groups[0]["items"]} == {"0", "1"}
+
+    # 首尾相同、中间不同 ⇒ 不能被当成副本（也没有第三本被拉进来）
+    assert all({it["id"] for it in g["items"]} <= {"0", "1"} for g in groups), \
+        "中间不同的文件被误判成副本"
+    # 结构性判据：6 本「首字节就不同」的只该被读 2×64 KiB，整本读会到 9×2 MiB
+    assert counted["n"] < 12 * 1024 * 1024, \
+        f"喂进哈希的字节数 {counted['n'] / 1048576:.1f} MiB —— 首尾预筛疑似失效"
+
+
+def test_quick_ratio_是真实比值的上界():
+    """`quick_ratio() >= ratio()` 恒成立 ⇒ 先比它**不会丢任何真相似**（第 181 期）。
+
+    这条是把「先比上界」这个优化钉在**判据**上，而不是钉在耗时上（第 163 期已说明：
+    别对这台机器快慢写断言）。
+    """
+    import itertools
+
+    from difflib import SequenceMatcher
+
+    glyphs = "天地玄黄宇宙洪荒日升月盈中华书库武侠奇"
+    corpus = ["".join(c) for c in itertools.product(glyphs[:5], repeat=3)]
+    corpus += [f"第{n}卷{g}风起云涌" for n, g in enumerate(glyphs)]
+    pairs = list(itertools.combinations(corpus[:40], 2))
+    assert len(pairs) > 700
+    for x, y in pairs:
+        sm = SequenceMatcher(None, x, y)
+        assert sm.quick_ratio() + 1e-12 >= sm.ratio(), (x, y)
+
+
 def test_大桶不因_bigram_预筛丢真相似(monkeypatch):
     """第 163 期：bigram 包含率预筛的**安全性**钉在这里。
 

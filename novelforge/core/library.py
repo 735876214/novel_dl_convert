@@ -2745,6 +2745,65 @@ def entities(kind: str, library_id=None) -> dict:
     return {"type": kind, "items": items, "total": len(bs)}
 
 
+#: 内容比对的两级哈希门限（第 181 期）：先比「首尾各 64 KiB」的摘要，只有它相同才逐字节读完。
+#: **相同文件必定同尺寸且同首尾** ⇒ 这是**必要性判据**，不会漏；而真实库里同尺寸的文件
+#: 绝大多数内容并不相同（真实库实测：2,309 本里只有 24 本与他人同尺寸，但它们合计
+#: **3.33 GB** —— 全读一遍正是「重复书」页 19 s 里的大头，结果只捞出几组真副本）。
+_PARTIAL_DIGEST = 64 * 1024
+
+
+def _content_digest(path: pathlib.Path, *, partial: bool) -> tuple[str, bool] | None:
+    """文件内容摘要。返回 ``(摘要, 是否已是全文摘要)``；读不了 ⇒ ``None``。
+
+    ``partial=True`` 且文件大于 ``2 * _PARTIAL_DIGEST`` 时只读首尾各 64 KiB（第二项为
+    ``False``）；小文件读一遍就是全文摘要（第二项为 ``True``），省掉第二遍读。
+    """
+    try:
+        size = path.stat().st_size
+        h = hashlib.sha256()
+        with path.open("rb") as f:
+            if partial and size > _PARTIAL_DIGEST * 2:
+                h.update(f.read(_PARTIAL_DIGEST))
+                f.seek(-_PARTIAL_DIGEST, os.SEEK_END)
+                h.update(f.read(_PARTIAL_DIGEST))
+                return h.hexdigest(), False
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest(), True
+    except OSError:
+        return None
+
+
+def _same_content(idxs, path_of) -> dict:
+    """同一尺寸桶内按**文件内容**分组（两级哈希，见 `_PARTIAL_DIGEST`）。
+
+    返回 ``{全文摘要: [索引, ...]}``，只含 ≥2 本的组（唯一内容没有意义）。读不了的
+    文件直接跳过 —— 与旧实现同口径。
+    """
+    rough: dict = {}
+    complete: dict = {}
+    for i in idxs:
+        got = _content_digest(pathlib.Path(path_of(i)), partial=True)
+        if got is None:
+            continue
+        digest, whole = got
+        rough.setdefault(digest, []).append(i)
+        complete[digest] = whole
+    groups = {d: g for d, g in rough.items() if len(g) >= 2}
+    if not groups:
+        return {}
+    out: dict = {}
+    for digest, members in groups.items():
+        if complete[digest]:        # 小文件：首尾就是全部，不必再读一遍
+            out[digest] = members
+            continue
+        for i in members:           # 首尾相同 ≠ 全文相同：只有这几本才值得读完
+            got = _content_digest(pathlib.Path(path_of(i)), partial=False)
+            if got is not None:
+                out.setdefault(got[0], []).append(i)
+    return {d: g for d, g in out.items() if len(g) >= 2}
+
+
 def duplicate_groups(threshold: int = 85, library_id=None, dismissed=None) -> dict:
     """重复书目分组：**同作者书名相似 / ISBN 相同 / 文件内容相同**。
 
@@ -2829,7 +2888,14 @@ def duplicate_groups(threshold: int = 85, library_id=None, dismissed=None) -> di
                 inter = len(ga & gc)
                 if inter / min(len(ga), len(gc)) < 0.3:
                     continue
-                if SequenceMatcher(None, ta, tc).ratio() >= thr:
+                sm = SequenceMatcher(None, ta, tc)
+                # 第 181 期：`quick_ratio()` 是 `ratio()` 的**上界**（同样的多重集交集计数，
+                # 但不建匹配块）—— 上界都到不了阈值，真实比值必然也到不了，所以先比它
+                # **不会丢任何真相似**。实测（真实库 2,309 本、2,176 本同属「未知」作者的
+                # 大桶）：过完 bigram 预筛还剩 260,204 对，直接算 ratio 5.26 s；先比
+                # quick_ratio 只要 2.12 s（只有 8,238 对进入真正的 ratio），命中的 7,688
+                # 对完全一致。
+                if sm.quick_ratio() >= thr and sm.ratio() >= thr:
                     join(ia, ic)
 
     # 2) ISBN 相同
@@ -2843,6 +2909,7 @@ def duplicate_groups(threshold: int = 85, library_id=None, dismissed=None) -> di
             join(idxs[0], j)
 
     # 3) 文件内容相同（只哈希同尺寸的普通文件；>512MB 跳过）
+    #    第 181 期：两级哈希 —— 先比首尾（`_same_content`），只有首尾也相同的才全文读完。
     MAX_HASH = 512 * 1024 * 1024
     by_size: dict = {}
     for i, b in enumerate(bs):
@@ -2853,22 +2920,9 @@ def duplicate_groups(threshold: int = 85, library_id=None, dismissed=None) -> di
     for sz, idxs in by_size.items():
         if len(idxs) < 2 or sz > MAX_HASH:
             continue
-        buckets: dict = {}
-        for i in idxs:
-            p = pathlib.Path(path_of(i))
-            try:
-                if not p.is_file():
-                    continue
-                h = hashlib.sha256()
-                with p.open("rb") as f:
-                    for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                        h.update(chunk)
-            except OSError:
-                continue
-            digest = h.hexdigest()
-            file_hash[i] = digest
-            buckets.setdefault(digest, []).append(i)
-        for same in buckets.values():
+        for digest, same in _same_content(idxs, path_of).items():
+            for i in same:
+                file_hash[i] = digest
             for j in same[1:]:
                 join(same[0], j)
 
