@@ -109,6 +109,45 @@ describe('AudioPlayer 书签', () => {
     expect(w.text()).toContain('已听 1')
   })
 
+  it('倍速：档位扩到 0.5–3，细调按钮按 0.05 步进并夹住边界', async () => {
+    const w = await mountPlayer()
+    const sel = w.find('select[aria-label="播放倍速"]')
+    const values = sel.findAll('option').map((o) => o.element.value)
+    expect(values).toContain('0.5')
+    expect(values).toContain('3')
+
+    await sel.setValue('3')
+    const up = w.findAll('button').find((b) => b.attributes('title') === '升 0.05 倍速')!
+    expect(up.attributes('disabled')).toBeDefined()      // 已在 3x，升不动
+
+    await sel.setValue('1')
+    await flushPromises()
+    await w.findAll('button').find((b) => b.attributes('title') === '升 0.05 倍速')!.trigger('click')
+    await flushPromises()
+    // 细调后不在预设档位里，下拉里要能显示它（不能是空白）
+    expect((w.find('select[aria-label="播放倍速"]').element as HTMLSelectElement).value).toBe('1.05')
+    expect(w.text()).toContain('1.05x（细调）')
+  })
+
+  it('睡眠：本轨结束模式在播完时暂停并复位；+15 分钟可延长倒计时', async () => {
+    const w = await mountPlayer()
+    const sel = w.find('select[aria-label="睡眠定时"]')
+    expect(sel.findAll('option').map((o) => o.text())).toContain('本轨结束')
+
+    await sel.setValue('15')
+    expect(w.text()).toContain('15:00')
+    await w.findAll('button').find((b) => b.text().includes('+15 分钟'))!.trigger('click')
+    expect(w.text()).toContain('30:00')
+
+    await sel.setValue('track-end')
+    expect(w.text()).toContain('本轨结束')
+    // 本轨结束模式没有倒计时可延 ⇒ 不再显示 +15
+    expect(w.findAll('button').some((b) => b.text().includes('+15 分钟'))).toBe(false)
+    await w.find('audio').trigger('ended')
+    await flushPromises()
+    expect((w.find('select[aria-label="睡眠定时"]').element as HTMLSelectElement).value).toBe('off')
+  })
+
   it('删除书签走软删除接口', async () => {
     const w = await mountPlayer()
     const del = w.findAll('button').filter((b) => b.text() === '删除')[0]

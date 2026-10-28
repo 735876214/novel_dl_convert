@@ -4,7 +4,16 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, type AudioTrack, type Bookmark, type SessionExtra, type UnitPos, type UnitRef } from '@/lib/api'
-import { AUDIO_SKIP_BACKS, AUDIO_SKIP_FORWARDS, AUDIO_SLEEPS, AUDIO_SPEEDS, readAudioPrefs } from '@/lib/audioPrefs'
+import {
+  AUDIO_SKIP_BACKS,
+  AUDIO_SLEEPS,
+  AUDIO_SLEEP_TRACK_END,
+  AUDIO_SPEED_MAX,
+  AUDIO_SPEED_MIN,
+  AUDIO_SPEED_STEP,
+  AUDIO_SPEEDS,
+  readAudioPrefs,
+} from '@/lib/audioPrefs'
 import { createSessionReporter } from '@/lib/readingSession'
 import { useSeriesNext } from '@/lib/seriesNext'
 import { fromPercent, toPercent } from '@/lib/unitsProgress'
@@ -138,8 +147,17 @@ const speed = ref(prefs.speed)
 const volume = ref(prefs.volume)
 const skipBack = ref(prefs.skipBack)
 const skipForward = ref(prefs.skipForward)
+type SleepChoice = 'off' | '15' | '30' | '60' | '90' | typeof AUDIO_SLEEP_TRACK_END
+/** 细调后的倍速可能不在预设档位里 —— 下拉要能显示它（否则 select 会显示空白） */
+const speedIsPreset = computed(() => (AUDIO_SPEEDS as readonly number[]).includes(speed.value))
+
+/** 睡眠模式：数字档位 = 倒计时；track-end = 本轨播完暂停（第 169 期） */
+const sleepChoice = ref<SleepChoice>(
+  prefs.sleepMinutes ? (String(prefs.sleepMinutes) as SleepChoice) : 'off',
+)
 const sleepMinutes = ref(prefs.sleepMinutes)
 const sleepLeft = ref(0)          // 剩余秒数（0 = 未启用）
+const sleepAtTrackEnd = ref(false)
 let sleepTimer: number | undefined
 
 /** 单话模式：播的是合集里的一个文件，不是「一本书的若干轨」 */
@@ -279,6 +297,14 @@ function onTime(): void {
 }
 
 async function onEnded(): Promise<void> {
+  // 睡眠「本轨结束」：自然播完就停在原地（不续下一轨 / 下一话）
+  if (sleepAtTrackEnd.value) {
+    audio.value?.pause()
+    sleepAtTrackEnd.value = false
+    sleepChoice.value = 'off'
+    ui.toast('本轨结束，已按睡眠定时暂停')
+    return
+  }
   if (unitMode.value) {
     // 单话模式：这一话放完了。先上报末尾位置，再决定「续下一话」还是「跨册续接」
     reportUnitPos()
@@ -376,20 +402,57 @@ function saveProgress(): void {
 
 // ---------------- 睡眠定时 ----------------
 
-function applySleep(): void {
+function clearSleepTimer(): void {
   if (sleepTimer) { window.clearInterval(sleepTimer); sleepTimer = undefined }
+}
+
+/**
+ * 设置睡眠模式（第 169 期）：数字档位 = 倒计时，`track-end` = **本轨播完就暂停**。
+ *
+ * 「本轨结束」只在**自然播完**时停（`onEnded`）—— 用户手动切轨/拖进度不该被它拦住，
+ * 那是明确的操作意图，不是「睡前放着」。
+ */
+function setSleep(choice: SleepChoice): void {
+  sleepChoice.value = choice
+  sleepAtTrackEnd.value = choice === AUDIO_SLEEP_TRACK_END
+  clearSleepTimer()
+  if (sleepAtTrackEnd.value) {
+    sleepLeft.value = 0
+    sleepMinutes.value = 0
+    return
+  }
+  const mins = choice === 'off' ? 0 : Number(choice)
+  sleepMinutes.value = Number.isFinite(mins) ? mins : 0
   if (!sleepMinutes.value) { sleepLeft.value = 0; return }
   sleepLeft.value = sleepMinutes.value * 60
   sleepTimer = window.setInterval(() => {
     sleepLeft.value -= 1
     if (sleepLeft.value <= 0) {
       audio.value?.pause()
-      if (sleepTimer) { window.clearInterval(sleepTimer); sleepTimer = undefined }
+      clearSleepTimer()
       sleepLeft.value = 0
       sleepMinutes.value = 0
+      sleepChoice.value = 'off'
       ui.toast('睡眠定时结束，已暂停播放')
     }
   }, 1000)
+}
+
+function onSleepChange(e: Event): void {
+  setSleep((e.target as HTMLSelectElement).value as SleepChoice)
+}
+
+/** 「+15 分钟」：倒计时中延长；本来没开就开 15 分钟。本轨结束模式没有倒计时可延。 */
+function extendSleep(): void {
+  if (sleepAtTrackEnd.value) return
+  if (sleepLeft.value > 0) { sleepLeft.value += 15 * 60; return }
+  setSleep('15')
+}
+
+/** 倍速细调（第 169 期）：按 0.05 步进并夹在 0.5–3，避免出现 3.0000001 这类浮点尾巴。 */
+function nudgeSpeed(delta: number): void {
+  const next = Math.round((Number(speed.value) + delta) * 100) / 100
+  speed.value = Math.min(AUDIO_SPEED_MAX, Math.max(AUDIO_SPEED_MIN, next))
 }
 
 // 改变倍速 / 音量立即生效
@@ -427,7 +490,7 @@ onMounted(async () => {
     }
     // 上一话放完自动续过来的那一话自动开播（用户点目录换话时不自动播 —— 那是明确的「我要看这一话」）
     if (props.autoplay) void audio.value?.play().catch(() => { /* 浏览器拦住就等用户点播放 */ })
-    applySleep()
+    if (sleepChoice.value !== 'off') setSleep(sleepChoice.value)
     return
   }
   try {
@@ -442,7 +505,7 @@ onMounted(async () => {
   } catch {
     /* 无进度从头发起 */
   }
-  applySleep()
+  if (sleepChoice.value !== 'off') setSleep(sleepChoice.value)
 })
 
 onBeforeUnmount(() => {
@@ -569,33 +632,62 @@ onBeforeUnmount(() => {
 
     <!-- 倍速 / 音量 / 睡眠定时 -->
     <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-border pt-3">
-      <label class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
-        倍速
+      <!-- ⚠️ 用 div 不用 label：按钮也是 labelable 元素，label 的点击转发会把
+           「点 +」再转成「点第一个按钮（−）」，步进互相抵消（第 169 期 vitest 实测）。 -->
+      <div class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+        <span>倍速</span>
+        <button
+          type="button"
+          class="h-6 w-6 cursor-pointer rounded border border-border text-[12px] leading-none text-foreground transition-colors hover:bg-muted disabled:opacity-40"
+          title="降 0.05 倍速"
+          :disabled="speed <= AUDIO_SPEED_MIN"
+          @click="nudgeSpeed(-AUDIO_SPEED_STEP)"
+        >−</button>
         <select
           v-model.number="speed"
+          aria-label="播放倍速"
           class="rounded-md border border-border bg-muted px-2 py-1 text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
         >
+          <option v-if="!speedIsPreset" :value="speed">{{ speed }}x（细调）</option>
           <option v-for="s in AUDIO_SPEEDS" :key="s" :value="s">{{ s }}x</option>
         </select>
-      </label>
+        <button
+          type="button"
+          class="h-6 w-6 cursor-pointer rounded border border-border text-[12px] leading-none text-foreground transition-colors hover:bg-muted disabled:opacity-40"
+          title="升 0.05 倍速"
+          :disabled="speed >= AUDIO_SPEED_MAX"
+          @click="nudgeSpeed(AUDIO_SPEED_STEP)"
+        >+</button>
+      </div>
 
       <label class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
         <Icon name="volume" class="h-3.5 w-3.5" />
         <input v-model.number="volume" type="range" min="0" max="1" step="0.05" class="w-24 cursor-pointer accent-primary">
       </label>
 
-      <label class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+      <div class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
         <Icon name="moon" class="h-3.5 w-3.5" />
-        睡眠
+        <span>睡眠</span>
         <select
-          v-model.number="sleepMinutes"
+          :value="sleepChoice"
+          aria-label="睡眠定时"
           class="rounded-md border border-border bg-muted px-2 py-1 text-[12px] text-foreground outline-none focus:border-ring focus:bg-card"
-          @change="applySleep"
+          @change="onSleepChange"
         >
-          <option v-for="m in AUDIO_SLEEPS" :key="m" :value="m">{{ m ? `${m} 分钟` : '关闭' }}</option>
+          <option value="off">关闭</option>
+          <option v-for="m in AUDIO_SLEEPS.filter((x) => x > 0)" :key="m" :value="String(m)">{{ m }} 分钟</option>
+          <option :value="AUDIO_SLEEP_TRACK_END">本轨结束</option>
         </select>
+        <button
+          v-if="sleepChoice !== 'off' && !sleepAtTrackEnd"
+          type="button"
+          class="cursor-pointer rounded border border-border px-1.5 py-0.5 text-[11px] text-foreground transition-colors hover:bg-muted"
+          title="延长 15 分钟"
+          @click="extendSleep"
+        >+15 分钟</button>
         <span v-if="sleepLeft" class="tabular-nums text-primary">{{ fmt(sleepLeft) }}</span>
-      </label>
+        <span v-else-if="sleepAtTrackEnd" class="text-primary">本轨结束</span>
+      </div>
 
       <span class="ml-auto text-[11px] text-muted-foreground">
         跳转间隔：快退 {{ skipBack }}s / 快进 {{ skipForward }}s（可在设置里改）

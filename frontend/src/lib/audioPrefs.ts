@@ -8,7 +8,7 @@
 import { notifyPrefsChanged } from './prefsBridge'
 
 export interface AudioPrefs {
-  /** 默认倍速（0.75–2） */
+  /** 默认倍速（0.5–3，第 169 期扩档） */
   speed: number
   /** 默认音量 0–1 */
   volume: number
@@ -39,14 +39,23 @@ export const AUDIO_PREFS_DEFAULT: AudioPrefs = {
   autoNextBook: true,
 }
 
-/** 倍速档位（对齐上游 0.75x–2x；第 51 期补回 1.75x） */
-export const AUDIO_SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2] as const
+/** 倍速档位（第 169 期由 0.75–2 扩到 0.5–3：有声书常见慢速精听与 2.5/3 速通听） */
+export const AUDIO_SPEEDS = [0.5, 0.75, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3] as const
+/** 倍速细调的边界与步进（播放器上的 −/+ 按钮；与档位同一把尺子） */
+export const AUDIO_SPEED_MIN = 0.5
+export const AUDIO_SPEED_MAX = 3
+export const AUDIO_SPEED_STEP = 0.05
 /** 快退间隔档位（秒） */
 export const AUDIO_SKIP_BACKS = [5, 10, 15, 30] as const
 /** 快进间隔档位（秒） */
 export const AUDIO_SKIP_FORWARDS = [10, 15, 30, 60] as const
 /** 睡眠定时档位（分钟）；0 = 关闭 */
 export const AUDIO_SLEEPS = [0, 15, 30, 60, 90] as const
+/**
+ * 睡眠模式「本轨结束」（第 169 期）：播放器独有 —— 播完当前轨就暂停。
+ * 设置页仍只列分钟档（那是**默认时长**，不是「关掉的方式」）。
+ */
+export const AUDIO_SLEEP_TRACK_END = 'track-end' as const
 
 export function readAudioPrefs(): AudioPrefs {
   try {
