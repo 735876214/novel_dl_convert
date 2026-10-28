@@ -27,6 +27,9 @@ vi.mock('@/lib/api', () => ({
     podcastEpisodeAudioUrl: vi.fn((eid: string) => `/local/${eid}`),
     savePodcastProgress: vi.fn(),
     markPodcastEpisodePlayed: vi.fn(),
+    podcastBookmarks: vi.fn(),
+    addPodcastBookmark: vi.fn(),
+    deletePodcastBookmark: vi.fn(),
   },
 }))
 
@@ -44,6 +47,9 @@ const m = {
   clean: vi.mocked(api.cleanPodcastEpisode),
   prog: vi.mocked(api.savePodcastProgress),
   played: vi.mocked(api.markPodcastEpisodePlayed),
+  bms: vi.mocked(api.podcastBookmarks),
+  addBm: vi.mocked(api.addPodcastBookmark),
+  delBm: vi.mocked(api.deletePodcastBookmark),
 }
 
 const POD = {
@@ -181,5 +187,29 @@ describe('PodcastsView', () => {
     await w.findAll('button').find((b) => b.text() === '标已播')!.trigger('click')
     await flushPromises()
     expect(m.played).toHaveBeenCalledWith('e1', true)
+  })
+
+  it('单集书签：打开列表、加在当前时间、删除', async () => {
+    const w = await mountView()
+    m.bms.mockResolvedValue({ items: [{ id: 'bm1', episode_id: 'e1', position_sec: 30,
+      title: '0:30', note: '', created_at: 0 }], total: 1 })
+    m.addBm.mockResolvedValue({ id: 'bm2', episode_id: 'e1', position_sec: 0,
+      title: '0:00', note: '', created_at: 0 })
+    m.delBm.mockResolvedValue({ ok: true, removed: 'bm1' })
+
+    await w.findAll('button').find((b) => b.text() === '单集')!.trigger('click')
+    await flushPromises()
+    await w.findAll('button').find((b) => b.text() === '书签')!.trigger('click')
+    await flushPromises()
+    expect(m.bms).toHaveBeenCalledWith('e1')
+    expect(w.text()).toContain('0:30')
+
+    await w.findAll('button').find((b) => b.text() === '加在当前时间')!.trigger('click')
+    await flushPromises()
+    expect(m.addBm).toHaveBeenCalledWith('e1', { position_sec: 0, title: '0:00' })
+
+    await w.findAll('button').find((b) => b.text() === '删除')!.trigger('click')
+    await flushPromises()
+    expect(m.delBm).toHaveBeenCalledWith('bm1')
   })
 })

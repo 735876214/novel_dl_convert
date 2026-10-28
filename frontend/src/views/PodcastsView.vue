@@ -5,7 +5,7 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type Podcast, type PodcastEpisode } from '@/lib/api'
+import { api, type Podcast, type PodcastBookmark, type PodcastEpisode } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -243,6 +243,62 @@ async function togglePlayed(e: PodcastEpisode): Promise<void> {
   }
 }
 
+// ---------------- 单集书签（第 177 期） ----------------
+// 位置到秒去重（同集同秒重复添加 = 更新标题/备注）；删除是软删除，再添加会复活。
+const audioEls: Record<string, HTMLAudioElement> = {}
+const bmFor = ref('')
+const bmItems = ref<PodcastBookmark[]>([])
+
+function bindAudio(eid: string, el: unknown): void {
+  if (el) audioEls[eid] = el as HTMLAudioElement
+  else delete audioEls[eid]
+}
+
+async function toggleBookmarks(e: PodcastEpisode): Promise<void> {
+  if (bmFor.value === e.id) {
+    bmFor.value = ''
+    bmItems.value = []
+    return
+  }
+  bmFor.value = e.id
+  bmItems.value = []
+  try {
+    bmItems.value = (await api.podcastBookmarks(e.id)).items
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '读取书签失败'
+  }
+}
+
+async function addBookmark(e: PodcastEpisode): Promise<void> {
+  const el = audioEls[e.id]
+  const pos = Math.floor(el?.currentTime ?? e.position_sec ?? 0)
+  try {
+    await api.addPodcastBookmark(e.id, { position_sec: pos, title: fmtPos(pos) })
+    ui.toast('已加书签')
+    if (bmFor.value === e.id) bmItems.value = (await api.podcastBookmarks(e.id)).items
+    else await toggleBookmarks(e)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '加书签失败'
+  }
+}
+
+async function removeBookmark(b: PodcastBookmark): Promise<void> {
+  try {
+    await api.deletePodcastBookmark(b.id)
+    bmItems.value = bmItems.value.filter((x) => x.id !== b.id)
+    ui.toast('书签已删除')
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '删除失败'
+  }
+}
+
+function jumpBookmark(e: PodcastEpisode, b: PodcastBookmark): void {
+  const el = audioEls[e.id]
+  if (!el) return
+  el.currentTime = b.position_sec
+  void el.play().catch(() => { /* 浏览器拦住就等用户点播放 */ })
+}
+
 function audioSrc(e: PodcastEpisode): string {
   return e.download_state === 'downloaded' ? api.podcastEpisodeAudioUrl(e.id) : e.audio_url
 }
@@ -314,6 +370,12 @@ function fmtDuration(sec: number): string {
   const s = sec % 60
   return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
     : `${m}:${String(s).padStart(2, '0')}`
+}
+
+/** 时间点（书签 / 当前位置）：0 也要显示成 `0:00`（与时长不同，0 是一个真实位置） */
+function fmtPos(sec: number): string {
+  const s = Math.max(0, Math.floor(sec || 0))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
 function fmtDate(ts: number): string {
@@ -493,6 +555,11 @@ function fmtDate(ts: number): string {
                 class="shrink-0 cursor-pointer text-[11px] text-muted-foreground hover:text-primary"
                 @click="togglePlayed(e)"
               >{{ e.played_at ? '标未播' : '标已播' }}</button>
+              <button
+                type="button"
+                class="shrink-0 cursor-pointer text-[11px] text-primary hover:underline"
+                @click="toggleBookmarks(e)"
+              >书签</button>
             </div>
             <p v-if="e.description" class="mt-0.5 line-clamp-2 text-[11.5px] leading-relaxed text-muted-foreground">
               {{ e.description }}
@@ -501,12 +568,35 @@ function fmtDate(ts: number): string {
               v-if="e.audio_url"
               controls
               preload="none"
+              :ref="(el) => bindAudio(e.id, el)"
               :src="audioSrc(e)"
               class="mt-1.5 h-8 w-full"
               @loadedmetadata="onEpisodeLoaded(e, $event)"
               @timeupdate="onEpisodeTime(e, $event)"
               @ended="onEpisodeEnded(e, $event)"
             />
+            <div v-if="bmFor === e.id" class="mt-1.5 rounded-md border border-border bg-muted/30 p-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-[11px] text-muted-foreground">单集书签</span>
+                <Button size="sm" variant="ghost" @click="addBookmark(e)">加在当前时间</Button>
+              </div>
+              <ul v-if="bmItems.length" class="mt-1 space-y-0.5">
+                <li v-for="b in bmItems" :key="b.id" class="flex items-center gap-2 text-[11.5px]">
+                  <button
+                    type="button"
+                    class="shrink-0 cursor-pointer font-mono text-primary tabular-nums hover:underline"
+                    @click="jumpBookmark(e, b)"
+                  >{{ fmtPos(b.position_sec) }}</button>
+                  <span class="min-w-0 flex-1 truncate text-muted-foreground">{{ b.title || b.note }}</span>
+                  <button
+                    type="button"
+                    class="shrink-0 cursor-pointer text-[11px] text-muted-foreground hover:text-destructive"
+                    @click="removeBookmark(b)"
+                  >删除</button>
+                </li>
+              </ul>
+              <p v-else class="mt-1 text-[11px] text-muted-foreground">还没有书签。</p>
+            </div>
           </li>
         </ul>
         </template>

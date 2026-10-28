@@ -3086,6 +3086,38 @@ def api_podcast_episode_played(eid: str, payload: dict = Body(default=None)):
         raise HTTPException(404, str(e)) from None
 
 
+@app.get("/api/podcasts/episodes/{eid}/bookmarks")
+def api_podcast_bookmarks(eid: str):
+    """单集书签（按位置升序）。"""
+    if not db.get_podcast_episode(eid):
+        raise HTTPException(404, "单集不存在")
+    items = db.list_podcast_bookmarks(eid)
+    return {"items": items, "total": len(items)}
+
+
+@app.post("/api/podcasts/episodes/{eid}/bookmarks")
+def api_podcast_bookmark_add(eid: str, payload: dict = Body(...)):
+    """加书签（同集同秒幂等：更新标题/备注；软删过的复活）。"""
+    if not db.get_podcast_episode(eid):
+        raise HTTPException(404, "单集不存在")
+    pos = numbers.finite(payload.get("position_sec", 0))
+    if pos is None or pos < 0:
+        raise HTTPException(400, "position_sec 必须是非负有限数")
+    return db.save_podcast_bookmark(
+        eid, pos,
+        title=str(payload.get("title") or "")[:200],
+        note=str(payload.get("note") or "")[:2000],
+    )
+
+
+@app.delete("/api/podcasts/episode-bookmarks/{bid}")
+def api_podcast_bookmark_delete(bid: str):
+    """删除书签 = 软删除（可从同位置再添加复活）。"""
+    if not db.delete_podcast_bookmark(bid):
+        raise HTTPException(404, "书签不存在")
+    return {"ok": True, "removed": bid}
+
+
 @app.post("/api/podcasts/{pid}/refresh")
 def api_podcast_refresh(pid: str):
     """重新抓取：新单集 upsert，旧单集保留（失败时什么都不改）。"""

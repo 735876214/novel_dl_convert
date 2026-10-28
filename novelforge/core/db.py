@@ -436,6 +436,18 @@ def init():
                 UNIQUE(podcast_id, guid)
             );
             CREATE INDEX IF NOT EXISTS idx_podcast_ep ON podcast_episodes(podcast_id);
+            -- 单集书签（第 177 期）：位置到秒去重；与书的 bookmarks 表分开（那边按 book_id）。
+            CREATE TABLE IF NOT EXISTS podcast_episode_bookmarks (
+                id           TEXT PRIMARY KEY,
+                episode_id   TEXT NOT NULL,
+                position_sec INTEGER NOT NULL,
+                title        TEXT NOT NULL DEFAULT '',
+                note         TEXT NOT NULL DEFAULT '',
+                created_at   REAL NOT NULL DEFAULT 0,
+                deleted_at   REAL NOT NULL DEFAULT 0,
+                UNIQUE(episode_id, position_sec)
+            );
+            CREATE INDEX IF NOT EXISTS idx_podcast_bm ON podcast_episode_bookmarks(episode_id);
             CREATE TABLE IF NOT EXISTS tasks (
                 id         TEXT PRIMARY KEY,
                 type       TEXT NOT NULL DEFAULT 'download',
@@ -4242,6 +4254,61 @@ def set_episode_download(eid: str, state: str, *, local_path="", error="", size=
              now if state == "downloaded" else 0, str(eid)),
         )
         c.commit()
+
+
+def _podcast_bm_out(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "episode_id": str(row["episode_id"]),
+        "position_sec": int(row["position_sec"] or 0),
+        "title": str(row["title"] or ""),
+        "note": str(row["note"] or ""),
+        "created_at": float(row["created_at"] or 0),
+    }
+
+
+def list_podcast_bookmarks(episode_id: str) -> list:
+    rows = _connect().execute(
+        "SELECT * FROM podcast_episode_bookmarks WHERE episode_id=? AND deleted_at=0"
+        " ORDER BY position_sec, created_at", (str(episode_id),)
+    ).fetchall()
+    return [_podcast_bm_out(r) for r in rows]
+
+
+def save_podcast_bookmark(episode_id: str, position_sec, title="", note="") -> dict:
+    """同集同秒幂等：重复添加更新标题/备注；软删过的复活（created_at 保留）。"""
+    pos = max(0, int(position_sec or 0))
+    c = _connect()
+    with _lock:
+        row = c.execute(
+            "SELECT id FROM podcast_episode_bookmarks WHERE episode_id=? AND position_sec=?",
+            (str(episode_id), pos),
+        ).fetchone()
+        if row:
+            c.execute(
+                "UPDATE podcast_episode_bookmarks SET title=?, note=?, deleted_at=0 WHERE id=?",
+                (str(title or ""), str(note or ""), str(row["id"])),
+            )
+            bid = str(row["id"])
+        else:
+            bid = uuid.uuid4().hex
+            c.execute(
+                "INSERT INTO podcast_episode_bookmarks(id, episode_id, position_sec, title, note,"
+                " created_at) VALUES(?,?,?,?,?,?)",
+                (bid, str(episode_id), pos, str(title or ""), str(note or ""), time.time()),
+            )
+        c.commit()
+        out = c.execute("SELECT * FROM podcast_episode_bookmarks WHERE id=?", (bid,)).fetchone()
+    return _podcast_bm_out(out)
+
+
+def delete_podcast_bookmark(bid: str) -> bool:
+    c = _connect()
+    with _lock:
+        cur = c.execute("UPDATE podcast_episode_bookmarks SET deleted_at=? WHERE id=? AND deleted_at=0",
+                        (time.time(), str(bid)))
+        c.commit()
+    return bool(cur.rowcount)
 
 
 def set_episode_progress(eid: str, position: float, duration: float = 0) -> dict:

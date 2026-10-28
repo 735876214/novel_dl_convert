@@ -2647,6 +2647,16 @@ export interface BackupItem {
 /** 库类型：决定功能显隐矩阵（见后端 core/features.py） */
 export type LibraryType = 'ebook' | 'comic' | 'audiobook' | 'mixed'
 
+/** 播客单集书签（第 177 期）：位置到秒去重。 */
+export interface PodcastBookmark {
+  id: string
+  episode_id: string
+  position_sec: number
+  title: string
+  note: string
+  created_at: number
+}
+
 /** 播客订阅（第 173 期）—— 独立的订阅子系统，不属于任何「书库」。 */
 export interface Podcast {
   id: string
@@ -5110,6 +5120,23 @@ export const api = {
       `/api/podcasts/episodes/${encodeURIComponent(eid)}/progress`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ position_sec: positionSec, duration_sec: durationSec }) },
+    ),
+
+  podcastBookmarks: (eid: string) =>
+    request<{ items: PodcastBookmark[]; total: number }>(
+      `/api/podcasts/episodes/${encodeURIComponent(eid)}/bookmarks`,
+    ),
+
+  addPodcastBookmark: (eid: string, b: { position_sec: number; title?: string; note?: string }) =>
+    request<PodcastBookmark>(
+      `/api/podcasts/episodes/${encodeURIComponent(eid)}/bookmarks`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) },
+    ),
+
+  deletePodcastBookmark: (bid: string) =>
+    request<{ ok: boolean; removed: string }>(
+      `/api/podcasts/episode-bookmarks/${encodeURIComponent(bid)}`,
+      { method: 'DELETE' },
     ),
 
   markPodcastEpisodePlayed: (eid: string, played: boolean) =>
