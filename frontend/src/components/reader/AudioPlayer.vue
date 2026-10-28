@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type AudioTrack, type SessionExtra, type UnitPos, type UnitRef } from '@/lib/api'
+import { api, type AudioTrack, type Bookmark, type SessionExtra, type UnitPos, type UnitRef } from '@/lib/api'
 import { AUDIO_SKIP_BACKS, AUDIO_SKIP_FORWARDS, AUDIO_SLEEPS, AUDIO_SPEEDS, readAudioPrefs } from '@/lib/audioPrefs'
 import { createSessionReporter } from '@/lib/readingSession'
 import { useSeriesNext } from '@/lib/seriesNext'
@@ -50,6 +50,78 @@ const currentTime = ref(0)
 const ready = ref(false)
 const error = ref('')
 
+// ---------------- 书签（第 167 期）----------------
+// 复用既有 `bookmarks` 表：anchor 编码音频坐标 `audio:<轨号>:<轨内秒>`，`chapter` = 轨号，
+// `percent` = 整本书百分比（与进度同一把尺子）。**单话模式不做书签**：一话一个
+// `AudioPlayer` 实例，书签应属于整本书而不是某一话的临时实例（如实留到合集阅读器再说）。
+const bookmarks = ref<Bookmark[]>([])
+const bmDraft = ref('')
+const bmBusy = ref(false)
+const AUDIO_ANCHOR = 'audio:'
+
+function loadBookmarks(): void {
+  if (unitMode.value) return
+  api.listBookmarks(props.bookId)
+    .then((r) => {
+      bookmarks.value = (r.items || []).filter((b) => String(b.anchor || '').startsWith(AUDIO_ANCHOR))
+    })
+    .catch(() => { /* 书签读不到不影响播放；下次进页再试 */ })
+}
+
+/** `audio:<轨号>:<秒>` → 坐标；坏锚（历史数据 / 手改）按 0 处理，不让整页炸 */
+function bmPos(b: Bookmark): { track: number; sec: number } {
+  const parts = String(b.anchor || '').split(':')
+  return { track: Math.max(0, Number(parts[1]) || 0), sec: Math.max(0, Number(parts[2]) || 0) }
+}
+
+function bmText(b: Bookmark): string {
+  const { track, sec } = bmPos(b)
+  return total.value > 1 ? `第 ${track + 1} 轨 · ${fmt(sec)}` : fmt(sec)
+}
+
+async function addBookmarkHere(): Promise<void> {
+  if (unitMode.value || bmBusy.value || !ready.value) return
+  const track = index.value
+  const sec = Math.floor(currentTime.value)
+  const anchor = `${AUDIO_ANCHOR}${track}:${sec}`
+  const fallback = total.value > 1 ? `第 ${track + 1} 轨 ${fmt(sec)}` : fmt(sec)
+  bmBusy.value = true
+  try {
+    await api.addBookmark(props.bookId, {
+      anchor,
+      chapter: track,
+      percent: Math.round(percent.value),
+      label: bmDraft.value.trim() || fallback,
+    })
+    bmDraft.value = ''
+    loadBookmarks()
+    ui.toast('已加书签')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '加书签失败')
+  } finally {
+    bmBusy.value = false
+  }
+}
+
+/** 跳到书签：换轨后在元数据到达时定位到秒数；同轨且已就绪就直接跳 */
+function jumpBookmark(b: Bookmark): void {
+  const { track, sec } = bmPos(b)
+  if (track !== index.value) goto(track, false)
+  if (ready.value && track === index.value) seekTo(sec)
+  else seekWhenReady(sec)
+  void audio.value?.play().catch(() => { /* 浏览器拦住就等用户点播放 */ })
+}
+
+async function removeBookmark(b: Bookmark): Promise<void> {
+  try {
+    await api.deleteBookmark(props.bookId, b.id)
+    loadBookmarks()
+    ui.toast('书签已移入垃圾桶')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '删除失败')
+  }
+}
+
 const speed = ref(prefs.speed)
 const volume = ref(prefs.volume)
 const skipBack = ref(prefs.skipBack)
@@ -86,7 +158,7 @@ function showMoreTracks(): void {
   trackLimit.value += TRACK_MORE
 }
 // 换书时窗口复位（组件可能被复用）
-watch(() => props.bookId, () => { trackLimit.value = TRACK_WINDOW })
+watch(() => props.bookId, () => { trackLimit.value = TRACK_WINDOW; loadBookmarks() })
 const src = computed(() => {
   if (unitMode.value) return props.unit ? api.unitFileUrl(props.bookId, props.unit.index) : ''
   return current.value ? api.audioTrackUrl(props.bookId, index.value) : ''
@@ -326,6 +398,7 @@ function seekWhenReady(seconds: number): void {
 
 onMounted(async () => {
   session.begin()
+  loadBookmarks()
   if (unitMode.value) {
     // 单话模式：恢复到哪由上层给（`within`，0–1 的**话内**比例），**不问服务端** ——
     // 书级的 percent 是整本书的坐标，子阅读器手里没有 `total` 语义（话数 ≠ 轨数）就换不出来。
@@ -434,6 +507,51 @@ onBeforeUnmount(() => {
       >
         <Icon name="skipForward" class="h-4 w-4" />
       </button>
+    </div>
+
+    <!-- 书签（第 167 期）：时间点 + 备注；复用 bookmarks 表，anchor = audio:<轨>:<秒> -->
+    <div v-if="!unitMode" class="mt-4 border-t border-border pt-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-[11.5px] font-medium text-muted-foreground">书签</span>
+        <input
+          v-model="bmDraft"
+          type="text"
+          aria-label="书签备注"
+          placeholder="备注（可空）"
+          class="h-7 min-w-[8rem] flex-1 rounded-md border border-border bg-card px-2 text-[11.5px] text-foreground outline-none focus:border-ring"
+          @keyup.enter="addBookmarkHere"
+        >
+        <Button size="sm" :disabled="!ready || bmBusy" @click="addBookmarkHere">
+          加在当前时间
+        </Button>
+      </div>
+      <ul v-if="bookmarks.length" class="mt-1.5 max-h-[10rem] space-y-0.5 overflow-auto">
+        <li
+          v-for="b in bookmarks"
+          :key="b.id"
+          class="flex items-center gap-2 rounded px-1 py-0.5 hover:bg-muted"
+        >
+          <button
+            type="button"
+            class="shrink-0 cursor-pointer font-mono text-[11.5px] text-primary tabular-nums hover:underline"
+            :title="`跳到 ${bmText(b)}`"
+            @click="jumpBookmark(b)"
+          >
+            {{ bmText(b) }}
+          </button>
+          <span class="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">{{ b.label }}</span>
+          <button
+            type="button"
+            class="shrink-0 cursor-pointer text-[11px] text-muted-foreground hover:text-destructive"
+            @click="removeBookmark(b)"
+          >
+            删除
+          </button>
+        </li>
+      </ul>
+      <p v-else class="mt-1 text-[11px] text-muted-foreground">
+        还没有书签。播放到想记的位置，点「加在当前时间」。
+      </p>
     </div>
 
     <!-- 倍速 / 音量 / 睡眠定时 -->
