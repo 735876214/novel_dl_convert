@@ -3147,53 +3147,87 @@ def api_clear_rating(bid: str, request: Request):
 #    FastAPI 按注册顺序匹配，参数化路由在前会把 "batch" 当成书 id 吞掉
 #    （与 /api/books/export 同一个坑）。
 @app.post("/api/books/batch")
-def api_batch(payload: dict = Body(...)):
+def api_batch(request: Request, payload: dict = Body(...)):
     """批量动作：镜像单本能力，但一次作用于多本书。
 
     动作（与现有单本接口一一对应，不引入新数据模型）：
-      · set_status         params: {status, started_at?, finished_at?} → db.set_status
-      · set_rating         params: {stars}（0 = 清除评分）→ set_rating / clear_rating
-      · add_to_collection  params: {collection_id} → db.add_book_to_collection
+      · set_status         params: {status, started_at?, finished_at?} → db.set_statuses
+      · set_rating         params: {stars}（0 = 清除评分）→ set_ratings / clear_ratings
+      · add_to_collection  params: {collection_id} → db.add_books_to_collection
 
-    逐本执行，单本失败不影响其余；返回成功/失败清单，前端据此提示。
+    **为什么是批量实现而不是循环调单本**（第 170 期）：单本那三个函数各自
+    `commit()` 一次，2,000 本实测 **5.5 s**（本地 SQLite；NAS 上的 PG 每事务还要走
+    网络与 WAL flush），叠加「逐本按 id 查存在性」的 **1 s**，整批 6.5 s —— 已经顶到前端
+    15 s 请求超时：界面报「批量操作失败」，**服务端却已经把数据写完**。
+    现在存在性一次批量判（`catalog.alive_ids`，与收藏夹计数同一判据），写入一条事务。
+    判据本身仍只有一处：评分校验 `db._norm_stars`、状态日期规则 `db._status_dates`、
+    轮次维护 `db._sync_attempt`，单本与批量共用。
+
+    逐本结果如实回执：不存在的 id 进 ``failed``，其余照常执行（单本失败不影响其余）。
+    坏**参数**（如非有限的时间戳）在写入前整批 400 —— 坏的是参数，不是某本书。
+
+    ⚠️ 存在性判据走**索引**（`catalog.alive_ids`，与书架列表、收藏夹计数同一份）：
+    用户能选中就说明它在索引里，所以这里不取 `by_id` 那条「同步 settle」的代价。
+    索引正被后台刷新时的极短窗口内、或 id 撞名（同一 id 命中多本）时，这些 id
+    会进 ``failed``（**不再让整批 409**）—— 与 `/api/annotations`「冲突只是这一行的
+    状态」同一口径。
     """
     if not isinstance(payload, dict):
         raise HTTPException(400, "请求体必须是 JSON 对象")
     action = str(payload.get("action") or "")
-    ids = payload.get("ids") or []
+    raw_ids = payload.get("ids") or []
     params = payload.get("params") or {}
-    if not isinstance(ids, list) or not ids:
+    if not isinstance(raw_ids, list) or not raw_ids:
         raise HTTPException(400, "ids 必须为非空数组")
     if action not in ("set_status", "set_rating", "add_to_collection"):
         raise HTTPException(400, f"不支持的批量动作：{action}")
 
+    # ---- 参数先校验一次（坏参数整批 400，且在**任何写入之前**）----
+    status = started_arg = finished_arg = None
+    stars = 0
+    cid = 0
+    if action == "set_status":
+        status = str(params.get("status") or "")
+        started_arg = _opt_epoch(params, "started_at")
+        finished_arg = _opt_epoch(params, "finished_at")
+    elif action == "set_rating":
+        try:
+            stars = int(params.get("stars") or 0)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, f"评分必须是 1–5 的整数（收到：{params.get('stars')!r}）") from e
+    else:
+        try:
+            cid = int(params.get("collection_id") or 0)
+        except (TypeError, ValueError) as e:
+            raise HTTPException(400, "collection_id 必须是整数") from e
+
+    ids = [str(b) for b in raw_ids]
+    # ---- 存在性一次判完（一行一句的 `by_id` 曾占整批 2 s 里的 1 s）----
+    alive = catalog.alive_ids(ids)
+    ok_ids = [b for b in ids if b in alive]
+    failed = [{"id": b, "error": "书籍不存在或无法唯一定位"} for b in ids if b not in alive]
+
     succeeded: list = []
-    failed: list = []
-    for bid in ids:
-        bid = str(bid)
-        if not library.by_id(bid):
-            failed.append({"id": bid, "error": "书籍不存在"})
-            continue
+    if ok_ids:
         try:
             if action == "set_status":
-                db.set_status(
-                    bid,
-                    str(params.get("status") or ""),
-                    started_at=_opt_epoch(params, "started_at"),
-                    finished_at=_opt_epoch(params, "finished_at"),
-                )
+                db.set_statuses(ok_ids, status,
+                                started_at=started_arg, finished_at=finished_arg)
             elif action == "set_rating":
-                stars = int(params.get("stars", 0))
                 if stars == 0:
-                    db.clear_rating(bid)
+                    db.clear_ratings(ok_ids)
                 else:
-                    db.set_rating(bid, stars)
-            elif action == "add_to_collection":
-                db.add_book_to_collection(int(params.get("collection_id")), bid)
+                    db.set_ratings(ok_ids, stars)
+            else:
+                db.add_books_to_collection(cid, ok_ids)
         except (ValueError, TypeError) as e:
-            failed.append({"id": bid, "error": str(e)})
-            continue
-        succeeded.append(bid)
+            # 动作级失败（未知状态 / 评分越界）⇒ 这批全部记失败，回执原因与单本一致
+            failed.extend({"id": b, "error": str(e)} for b in ok_ids)
+        else:
+            succeeded = ok_ids
+            # 与单本同一条旁路（默认关）：一次批量改几百本时也**只起一个**同步线程 ——
+            # 逐本调 `_sync_auto_push` 会起几百个线程、各建一条任务记录（第 170 期收口）。
+            _sync_auto_push(ok_ids, request)
     return {"ok": True, "total": len(ids), "succeeded": succeeded, "failed": failed}
 
 
@@ -9593,8 +9627,11 @@ def api_integration_save(service: str, payload: dict = Body(None)):
     return {"ok": True}
 
 
-def _sync_auto_push(book_id: str, request: Request) -> None:
+def _sync_auto_push(book_id, request: Request) -> None:
     """写入后触发外部服务同步（**旁路、默认关、失败不影响本次写入**）。
+
+    ``book_id`` 也可以是一串 id（批量端点，第 170 期）：那种形状只起一个旁路线程、
+    发一次同步 —— 逐本调会起几百个线程，每个还各建一条任务记录。
 
     操作者必须在**请求线程内**取好再交给后台线程 —— 新线程的 ContextVar 是空的，
     不传会把「谁做的」记成未记录。
@@ -10415,8 +10452,10 @@ def ko_collection_create(request: Request, payload: dict = Body(None)):
         cid = db.create_collection(name)
     except Exception:                    # noqa: BLE001 —— 靠 name 的 UNIQUE 撞库判重
         raise HTTPException(409, "同名收藏夹已存在") from None
-    for b in _ko_series_books(request, body.get("seriesIds") or []):
-        db.add_book_to_collection(cid, str(b.get("id") or ""))
+    # 第 170 期：一次批量写（一条事务）。Komga 客户端一次就能带上整库的系列，
+    # 逐本 `add_book_to_collection` 是「每本两次提交」，客户端那边表现为超时。
+    db.add_books_to_collection(cid, [str(b.get("id") or "")
+                                     for b in _ko_series_books(request, body.get("seriesIds") or [])])
     return komga_api.collection_dto(cid, name, time.time(), _ko_collection_groups(request, cid))
 
 
@@ -10470,8 +10509,8 @@ def ko_collection_replace_series(request: Request, cid: int, payload: dict = Bod
     _komga_guard(request)
     row = _ko_collection_or_404(cid)
     db.clear_collection(cid)
-    for b in _ko_series_books(request, (payload or {}).get("seriesIds") or []):
-        db.add_book_to_collection(cid, str(b.get("id") or ""))
+    db.add_books_to_collection(cid, [str(b.get("id") or "") for b in
+                                     _ko_series_books(request, (payload or {}).get("seriesIds") or [])])
     return komga_api.collection_dto(cid, row["name"], row.get("created_at"),
                                     _ko_collection_groups(request, cid))
 
@@ -10483,8 +10522,7 @@ def ko_collection_remove_series(request: Request, cid: int, series_id: str):
     found = _ko_find_series(request, series_id)
     if not found:
         _ko_404("系列不存在")
-    for b in found[1]:
-        db.remove_book_from_collection(cid, str(b.get("id") or ""))
+    db.remove_books_from_collection(cid, [str(b.get("id") or "") for b in found[1]])
     return Response(status_code=204)
 
 

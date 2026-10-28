@@ -313,6 +313,24 @@ def test_自动推送开关打开才起线程(monkeypatch):
     assert called == ["admin"]        # 操作者必须在请求线程取好再传进来
 
 
+def test_自动推送可一次带一串_id_只起一个线程(monkeypatch):
+    """第 170 期：批量端点一次改几百本 —— 必须**一次** `run`，而不是每本一个线程。
+
+    逐本调 `auto_push` 会起 N 个线程、每个还各建一条任务记录（`sync.run` 里
+    `task_create`），批量 2,000 本时那本身就是一次事故。
+    """
+    monkeypatch.setattr(sync, "_config",
+                        lambda: {"integrations": {"readwise": {"token": "t",
+                                                               "auto_push": True}}})
+    calls: list = []
+    monkeypatch.setattr(sync, "run", lambda *a, **k: calls.append((a, k)) or {})
+    sync.auto_push(["b1", "b2", "b3"], base_url="http://x/", actor="admin")
+    sync.wait_pending(timeout=5)
+    assert len(calls) == 1, f"起了 {len(calls)} 次同步"
+    args, kwargs = calls[0]
+    assert args[1] == ["b1", "b2", "b3"] and kwargs.get("actor") == "admin"
+
+
 # ---------------- 端点到端点到契约 ----------------
 
 def test_sync端点_未配置凭据给出明确结果(client, auth_headers):

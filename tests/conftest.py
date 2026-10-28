@@ -308,6 +308,15 @@ def _quiesce_background() -> None:
         left += _catalog.wait_pending(5.0)
     except Exception:                                 # noqa: BLE001
         pass
+    # 第 170 期：外部服务**自动推送**的旁路线程（`core/sync.auto_push` 派生的那批）。
+    # 与上面几类同理：它们要查库（`_iter_payloads` → `library.by_id`），
+    # 没收干净就会拿着下一个用例的连接干活。此前这里漏了它 —— 只是默认关、
+    # 平时没人点火，才一直没炸。
+    try:
+        from novelforge.core import sync as _sync
+        left += _sync.wait_pending(5.0)
+    except Exception:                                 # noqa: BLE001
+        pass
     try:
         from novelforge import server
         w = getattr(server, "WATCHER", None)

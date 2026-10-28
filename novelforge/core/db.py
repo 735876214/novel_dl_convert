@@ -2055,6 +2055,82 @@ def add_book_to_collection(cid: int, book_id: str):
             _touch_collection(cid)
 
 
+def add_books_to_collection(cid: int, book_ids) -> int:
+    """批量加入收藏夹（第 170 期）：**一条事务**，返回**新**加入的本数。
+
+    已在夹里的跳过（`UNIQUE(collection_id, book_id)` 是表上的硬约束，
+    与单本 `add_book_to_collection` 同一张表）；只有真有新增时才刷新收藏夹的
+    `updated_at` —— 与单本那条「已存在则不动行」的口径一致。
+
+    ⚠️ 「新加入几本」用**插入前先查已有的**算，不依赖 `executemany` 的 rowcount：
+    SQLite 与 psycopg 对 `INSERT OR IGNORE` / `ON CONFLICT DO NOTHING` 的 rowcount
+    口径不同，而这个数字要给用户看。
+    """
+    ids = [str(b) for b in book_ids if str(b or "")]
+    if not ids:
+        return 0
+    have = _collection_member_set(cid, ids)
+    missing = [b for b in ids if b not in have]
+    if not missing:
+        return 0
+    now = time.time()
+    c = _connect()
+    with _lock:
+        for i in range(0, len(missing), 900):
+            part = missing[i:i + 900]
+            c.executemany(
+                "INSERT OR IGNORE INTO collection_items(collection_id, book_id, added_at) "
+                "VALUES(?,?,?)",
+                [(int(cid), b, now) for b in part],
+            )
+        c.commit()
+    _touch_collection(cid)
+    return len(missing)
+
+
+def _collection_member_set(cid: int, ids: list) -> set:
+    """这批 id 里此刻**已在**该收藏夹中的那一部分（分块 IN，与全仓同一范式）。"""
+    if not ids:
+        return set()
+    c = _connect()
+    out: set = set()
+    for i in range(0, len(ids), 900):
+        part = ids[i:i + 900]
+        q = ",".join(["?"] * len(part))
+        rows = c.execute(
+            f"SELECT book_id FROM collection_items WHERE collection_id=? AND book_id IN ({q})",
+            [int(cid), *part],
+        ).fetchall()
+        out.update(str(r["book_id"]) for r in rows)
+    return out
+
+
+def remove_books_from_collection(cid: int, book_ids) -> int:
+    """批量移出收藏夹（第 170 期）：**一条事务**，返回真正删掉的本数。
+
+    Komga 兼容层的「整体替换系列」正是「先清空、再逐本加入」—— 逐本调单本函数时
+    每本两次提交（删除 + 刷 `updated_at`），652 本的一个系列就是一千多次提交。
+    """
+    ids = [str(b) for b in book_ids if str(b or "")]
+    if not ids:
+        return 0
+    c = _connect()
+    removed = 0
+    with _lock:
+        for i in range(0, len(ids), 900):
+            part = ids[i:i + 900]
+            q = ",".join(["?"] * len(part))
+            cur = c.execute(
+                f"DELETE FROM collection_items WHERE collection_id=? AND book_id IN ({q})",
+                [int(cid), *part],
+            )
+            removed += int(cur.rowcount or 0)
+        c.commit()
+    if removed:
+        _touch_collection(cid)
+    return removed
+
+
 def remove_book_from_collection(cid: int, book_id: str):
     c = _connect()
     with _lock:
@@ -3411,8 +3487,8 @@ def clear_unlocked() -> int:
 # 星级只存 1–5 的整数，**不做 0 星**：0 表示「未评分」，用「没有这一行」表达，
 # 这样「未评分」与「评了 1 星」不会混淆 —— 后者在「Use all five star ratings」里是有效值。
 
-def set_rating(book_id, stars) -> dict:
-    """写入评分（1–5）。越界或非整数抛 ValueError。
+def _norm_stars(stars) -> int:
+    """评分归一 + 校验（**唯一判据**，单本 `set_rating` 与批量 `set_ratings` 共用）。
 
     ``OverflowError`` 必须一起接住（第 127 期）：``int(1e400)`` 抛的是它，而它**不是**
     ``ValueError`` 的子类 —— 漏掉就是「评分填个离谱的数 ⇒ 500」。
@@ -3423,6 +3499,12 @@ def set_rating(book_id, stars) -> dict:
         raise ValueError("评分必须是 1–5 的整数")
     if not 1 <= s <= 5:
         raise ValueError("评分必须是 1–5 的整数")
+    return s
+
+
+def set_rating(book_id, stars) -> dict:
+    """写入评分（1–5）。越界或非整数抛 ValueError（判据在 :func:`_norm_stars`）。"""
+    s = _norm_stars(stars)
     c = _connect()
     with _lock:
         c.execute(
@@ -3432,6 +3514,47 @@ def set_rating(book_id, stars) -> dict:
         )
         c.commit()
     return {"book_id": str(book_id), "stars": s}
+
+
+def set_ratings(book_ids, stars) -> int:
+    """批量写同一评分（第 170 期）：**一条事务**，返回写入本数。
+
+    为什么要有它：批量端点此前逐本调 `set_rating`，而那个函数每本 `commit()` 一次 ——
+    2,000 本实测 **5.5 s**（本地 SQLite；NAS 上的 PG 每事务还要走网络与 WAL flush，
+    更慢），足以撞前端 15 s 请求超时：界面报「批量操作失败」，服务端却已经把数据写完。
+    校验口径仍只有一处（`_norm_stars`），这里只把「逐本提交」换成一次提交。
+    """
+    s = _norm_stars(stars)
+    ids = [str(b) for b in book_ids if str(b or "")]
+    if not ids:
+        return 0
+    now = time.time()
+    c = _connect()
+    with _lock:
+        c.executemany(
+            "INSERT INTO ratings(book_id, stars, updated_at) VALUES(?,?,?) "
+            "ON CONFLICT(book_id) DO UPDATE SET stars=excluded.stars, updated_at=excluded.updated_at",
+            [(b, s, now) for b in ids],
+        )
+        c.commit()
+    return len(ids)
+
+
+def clear_ratings(book_ids) -> int:
+    """批量取消评分（一条事务）。返回**真正删掉**的行数（本来没评的不算）。"""
+    ids = [str(b) for b in book_ids if str(b or "")]
+    if not ids:
+        return 0
+    c = _connect()
+    removed = 0
+    with _lock:
+        for i in range(0, len(ids), 900):
+            part = ids[i:i + 900]
+            q = ",".join(["?"] * len(part))
+            cur = c.execute(f"DELETE FROM ratings WHERE book_id IN ({q})", part)
+            removed += int(cur.rowcount or 0)
+        c.commit()
+    return removed
 
 
 def get_rating(book_id) -> int:
@@ -5800,29 +5923,24 @@ def _sync_attempt(c, bid, status, st, fin, now) -> None:
     )
 
 
-def set_status(book_id, status, started_at=None, finished_at=None) -> dict:
-    """设置阅读状态并维护起止日期。
+def _status_dates(status: str, cur_st: float, cur_fin: float,
+                  started_at, finished_at, now: float) -> tuple:
+    """状态的**日期规则**（唯一判据，单本 `set_status` 与批量 `set_statuses` 共用）。
 
-    日期规则（保证状态与日期不自相矛盾）：
-      · 进入 reading/finished 且 started_at 为空 → 记为现在（开始读过才谈得上读）；
-      · 进入 finished 且 finished_at 为空 → 记为现在；
-      · 离开 finished → finished_at 清零（「读完」的日期只对「已读完」有意义）；
-      · 回到 unread → 两个日期都清零（重来一遍）。
+    · 进入 reading/finished 且 started_at 为空 → 记为现在（开始读过才谈得上读）；
+    · 进入 finished 且 finished_at 为空 → 记为现在；
+    · 离开 finished → finished_at 清零（「读完」的日期只对「已读完」有意义）；
+    · 回到 unread → 两个日期都清零（重来一遍）。
     显式传入的日期优先 —— 详情页允许手工修正历史日期。
+
+    ⚠️ 第 140 期：日期一律过 `numbers.epoch`（有限实数 ⇒ 夹进 [0, MAX_EPOCH]；
+    非数 / inf / nan ⇒ 回落「库里现有的值」）。此前是裸 `float(...)`，而 `float(inf)`
+    不抛 —— 批量端点（`/api/books/batch`）与「再来一遍」的日期曾绕过接口层的
+    `_bounded`，inf 落库后又被并进 `GET /api/books` 的响应 ⇒ 书架此后**恒 500**，
+    且无自愈（JSON 序列化非有限值）。
     """
-    if status not in READ_STATUSES:
-        raise ValueError("未知阅读状态: %r" % (status,))
-    cur_row = get_status(book_id)
-    now = time.time()
-    # ⚠️ 第 140 期：日期一律过 `numbers.epoch`（有限实数 ⇒ 夹进 [0, MAX_EPOCH]；
-    # 非数 / inf / nan ⇒ 回落「库里现有的值」）。此前是裸 `float(...)`，而 `float(inf)`
-    # 不抛 —— 批量端点（`/api/books/batch`）与「再来一遍」的日期曾绕过接口层的
-    # `_bounded`，inf 落库后又被并进 `GET /api/books` 的响应 ⇒ 书架此后**恒 500**，
-    # 且无自愈（JSON 序列化非有限值）。
-    st = numbers.epoch(started_at, float(cur_row.get("started_at") or 0)) \
-        if started_at else cur_row.get("started_at") or 0
-    fin = numbers.epoch(finished_at, float(cur_row.get("finished_at") or 0)) \
-        if finished_at else cur_row.get("finished_at") or 0
+    st = numbers.epoch(started_at, float(cur_st or 0)) if started_at else cur_st or 0
+    fin = numbers.epoch(finished_at, float(cur_fin or 0)) if finished_at else cur_fin or 0
 
     if status in ("reading", "finished") and not st:
         st = now
@@ -5832,8 +5950,19 @@ def set_status(book_id, status, started_at=None, finished_at=None) -> dict:
         fin = 0.0
     if status == "unread":
         st = 0.0
-    if status in ("paused", "abandoned"):
-        pass  # 搁置/弃读保留已开始的日期，它记录的是「什么时候开始翻的」
+    # paused / abandoned 保留已开始的日期：它记录的是「什么时候开始翻的」，故不置零
+    return st, fin
+
+
+def set_status(book_id, status, started_at=None, finished_at=None) -> dict:
+    """设置阅读状态并维护起止日期（日期规则见 :func:`_status_dates`）。"""
+    if status not in READ_STATUSES:
+        raise ValueError("未知阅读状态: %r" % (status,))
+    cur_row = get_status(book_id)
+    now = time.time()
+    st, fin = _status_dates(status, cur_row.get("started_at") or 0,
+                            cur_row.get("finished_at") or 0,
+                            started_at, finished_at, now)
 
     c = _connect()
     with _lock:
@@ -5848,6 +5977,45 @@ def set_status(book_id, status, started_at=None, finished_at=None) -> dict:
         c.commit()
     return {"book_id": str(book_id), "status": status,
             "started_at": st, "finished_at": fin, "updated_at": now}
+
+
+def set_statuses(book_ids, status, started_at=None, finished_at=None) -> int:
+    """批量设同一阅读状态（第 170 期）：**一条事务**，返回写入本数。
+
+    与 :func:`set_status` 的关系和 `set_ratings` / `set_rating` 一样：日期规则、
+    轮次维护（`_sync_attempt`）都复用同一份实现，只是把「每本一次 ``commit()``」
+    换成整批一次提交 —— 批量端点此前 2,000 本要 5 秒以上，原因是逐本提交而不是计算。
+
+    每本的历史日期**各自保留**（`set_status` 的语义就是「没显式给就沿用这本自己的」），
+    所以当前状态行一次批量读出，不逐本查。
+    """
+    if status not in READ_STATUSES:
+        raise ValueError("未知阅读状态: %r" % (status,))
+    ids = [str(b) for b in book_ids if str(b or "")]
+    if not ids:
+        return 0
+    cur_rows = all_statuses()
+    now = time.time()
+    rows = []
+    for bid in ids:
+        cur = cur_rows.get(bid) or {}
+        st, fin = _status_dates(status, cur.get("started_at") or 0,
+                                cur.get("finished_at") or 0,
+                                started_at, finished_at, now)
+        rows.append((bid, status, st, fin, now))
+    c = _connect()
+    with _lock:
+        c.executemany(
+            "INSERT INTO reading_status(book_id, status, started_at, finished_at, updated_at) "
+            "VALUES(?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET status=excluded.status, "
+            "started_at=excluded.started_at, finished_at=excluded.finished_at, "
+            "updated_at=excluded.updated_at",
+            rows,
+        )
+        for bid, _s, st, fin, _now in rows:
+            _sync_attempt(c, bid, status, st, fin, now)
+        c.commit()
+    return len(rows)
 
 
 # ---------------- 阅读尝试 / 重读（第 43 期）----------------

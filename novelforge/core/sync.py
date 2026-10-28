@@ -55,20 +55,31 @@ def _spawn_bg(target, name: str) -> threading.Thread:
     return th
 
 
-def wait_pending(timeout: float = 10.0) -> None:
-    """等所有同步旁路线程结束（测试 / 关停用）。"""
+def wait_pending(timeout: float = 10.0) -> int:
+    """等所有同步旁路线程结束 → 返回仍未结束的数量（``0`` = 全收干净了）。
+
+    与 ``watcher.wait_pending`` / ``catalog.wait_pending`` 同一契约（第 170 期统一）：
+    调用点在测试的收尾里（``tests/conftest.py::_quiesce_background``，**必须在
+    ``db.close()`` 之前**）—— 这些线程会查库，晚一步动手就会在已关闭的连接上查。
+
+    ⚠️ 顺手清掉**已结束**的登记项：调用方（`test_integration_sync`）用
+    ``_BG_THREADS == {}`` 断言「默认关时不起线程」，登记表若不清理，前面任何一次
+    推送都会把这条断言变成假红。
+    """
     deadline = time.time() + max(0.0, timeout)
-    while time.time() < deadline:
-        with _BG_LOCK:
-            alive = [t for t in _BG_THREADS.values() if t.is_alive()]
-        if not alive:
-            return
-        for t in alive:
-            t.join(timeout=0.2)
+    while True:
         with _BG_LOCK:
             for k, t in list(_BG_THREADS.items()):
                 if not t.is_alive():
                     _BG_THREADS.pop(k, None)
+            alive = list(_BG_THREADS.values())
+        if not alive:
+            return 0
+        left = deadline - time.time()
+        if left <= 0:
+            return len(alive)
+        for t in alive:
+            t.join(timeout=min(0.2, max(0.0, left)))
 
 
 # ---------------- 归一化与匹配 ----------------
@@ -474,8 +485,12 @@ def auto_push_on(service: str) -> bool:
         return False
 
 
-def auto_push(book_id: str, base_url: str = "", actor: str = "") -> None:
+def auto_push(book_id, base_url: str = "", actor: str = "") -> None:
     """新增批注 / 改状态 / 改评分书评后的**旁路**推送。
+
+    ``book_id`` 可以是**一个 id 或一串 id**（第 170 期）：批量端点（`/api/books/batch`）
+    一次改的是几百上千本，逐本调这里会起几百个线程、每个各建一条任务记录；
+    一串 id 只起**一个**线程、发一次 ``run`` —— 与单本走的是同一条推送链路。
 
     ⚠️ 与 ``core/watcher.auto_fetch_async`` 同一纪律：先查开关（未开直接返回，零开销），
     开了就在 daemon 线程里跑，并**吞掉全部异常** —— 同步失败绝不能影响用户刚做的那次写入。
@@ -483,14 +498,16 @@ def auto_push(book_id: str, base_url: str = "", actor: str = "") -> None:
     ``actor`` 由调用方在**请求线程内**取好再传进来：新线程的 ContextVar 是空的，
     不传就会把「谁做的」记成未记录。
     """
+    raw = book_id if isinstance(book_id, (list, tuple, set)) else [book_id]
+    ids = [str(b) for b in raw if str(b or "").strip()]
     svcs = [s for s in ("hardcover", "readwise") if auto_push_on(s)]
-    if not svcs or not str(book_id or "").strip():
+    if not svcs or not ids:
         return
 
     def _run():
         for s in svcs:
             try:
-                run(s, [book_id], base_url=base_url, actor=actor)
+                run(s, ids, base_url=base_url, actor=actor)
             except Exception:
                 pass
 
