@@ -10768,3 +10768,23 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 （它同时依赖书目索引与阅读会话两处可变数据，没有进度写入的失效钩子）；brief 模式把
 「每次现算」的成本降到了仪表盘可接受的水平，不需要再叠缓存。LongWait / NeglectedGems
 两个部件保留 `loadBooks()`：它们按 `percent` / `updated_at` 逐本筛，属于真需求。
+
+## 第 163 期（Komga 兼容层支持只读客户端凭据）
+
+**需求来源**：用户「继续」推进 BookOrbit 对齐 Phase 1A；把第 160 期的只读凭据延伸到 **Komga 兼容层** —— 同一张表、同一套范围判据，不新增第二种凭据语义。
+
+**功能范围与修法**：
+
+1. **认证（`komga_api.verify_scoped`）**：`verify()` 拆成两层 —— 带范围的重载返回 `(身份, 书库范围)`，旧签名 `verify()` 保持返回 `str`（老的调用点不感知范围）。Basic 这条的判定顺序与 OPDS（第 160 期）完全一致：先按管理员用户名走 `verify_pin`，不通过再走 `verify_client`，两条都不通过才 401；只对管理员用户名做 `verify_pin`（只读账号每次请求都撞一次会让管理员维度的失败计数无谓增长）。API Key 与 `KOMGA-SESSION` 会话令牌**不受范围限制**（它们本来就是管理员侧凭据）。
+
+2. **范围传递与判定（`server._komga_guard`）**：范围写进 `request.state.komga_scope`（`None` = 不限定）；`_ko_visible_libraries` / `_ko_visible_ids` / `_ko_books` / `_ko_grouped` / `_ko_book` / `_ko_find_series` / `_ko_siblings` / `_ko_collection_groups` 全部改为**显式接 `request`** —— Komga 段所有取书点都从这几条走，范围外一律「不存在」（库列表不出现、书列表过滤、按 id 直连 404），与第 14 期「不可见与不存在同形」同一条口径。
+
+3. **改签名波及面（如实记录）**：Komga 段 9 个内部辅助 + 全部 handler 的取书调用都串了 `request` 参数；`test_komga_client` 的 14 例全程绿（含收藏夹 / 兄弟册 / 上一册下一册），`test_func_audit_121`（两个守卫不同名）与 `test_hardening_137`（退避与正确 PIN 在退避期仍 429）同步通过。
+
+**边界**：只读凭据仍进不了 `/api/*`（该前缀只认 Bearer，上一期已钉）；Komga 的写侧（标记已读 / 收藏夹编辑）暂不按凭据细分 —— 只读账号技术上能写 `/api/v1` 的读进度，与上游「客户端回写进度」行为一致，本期如实留档不假装限制。
+
+**防回归**：`tests/test_komga_credentials_163.py`（2 例：范围过滤与按 id 直连 404 + 管理员不受影响 / 停用立即生效 + API Key 不受范围限制）。
+
+**核验**：后端全量（见 §0 基线）+ 目标契约组。
+
+**下一步**：Phase 1A 余下 —— 受管副本批量改名 / 正则导入向导。
