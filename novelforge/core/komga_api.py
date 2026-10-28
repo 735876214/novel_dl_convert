@@ -153,13 +153,29 @@ def verify(request) -> str:
     三种方式（与 Komga 一致），任何一种通过即可：
 
     1. ``X-API-Key`` 头 —— 需在设置页填写 API Key 才有
-    2. ``HTTP Basic`` —— 用**应用账号**（用户名 + 登录 PIN），与 OPDS 同一套凭据
+    2. ``HTTP Basic`` —— 用**应用账号**（用户名 + 登录 PIN）或**只读客户端凭据**（第 163 期）
     3. ``KOMGA-SESSION`` cookie —— 供官方 Web 那类会走登录流程的客户端；
        里面装的是 :func:`auth.issue_token` 签发的那张令牌（见 ``SESSION_COOKIE`` 处说明）
 
-    ⚠️ **Basic 这条必须走 `auth.verify_pin`**（第 137 期）：PIN 的失败退避只有那处实现。
-    这里若直接用 ``_pin_matches`` 之类绕过去，`/api/v1` 就是一个没有闸门的 4 位 PIN 预言机
-    —— 与 `/opds` 同一类缺陷。被退避挡住时抛 ``throttled``，由调用方转 429。
+    ⚠️ **Basic 这条必须走 `auth.verify_pin` / `auth.verify_client`**（第 137 / 160 期）：
+    PIN 的失败退避只有那两处实现。这里若直接用 ``_pin_matches`` 之类绕过去，
+    `/api/v1` 就是一个没有闸门的 4 位 PIN 预言机 —— 与 `/opds` 同一类缺陷。
+    被退避挡住时抛 ``throttled``，由调用方转 429。
+
+    只读凭据的**书库范围**通过 ``KomgaAuthError`` 之外的正向返回值传递：
+    返回 ``(identity, scope)`` 的重载见 :func:`verify_scoped` —— 本函数保持旧签名
+    （返回 ``str``），老的调用点不感知范围（管理员路径行为不变）。
+    """
+    ident, _scope = verify_scoped(request)
+    return ident
+
+
+def verify_scoped(request) -> "tuple[str, frozenset | None]":
+    """:func:`verify` 的带范围版本（第 163 期）。
+
+    返回 ``(身份标识, 书库范围)``；范围 ``None`` = 不限定（管理员 / API Key / 会话令牌），
+    ``frozenset`` = 只读凭据允许的书库 id 集合。调用方（``server._komga_guard``）把它
+    写进 ``request.state.komga_scope``，取书只经 ``_ko_books`` / ``_ko_book`` 判定。
     """
     cfg = (config.load_config().get("komga") or {})
     if not cfg.get("enabled"):
@@ -169,7 +185,7 @@ def verify(request) -> str:
     key = (request.headers.get("x-api-key") or "").strip()
     expected = str(cfg.get("api_key") or "").strip()
     if key and expected and hmac.compare_digest(key, expected):
-        return "apikey"
+        return "apikey", None
 
     auth = request.headers.get("authorization") or ""
     if auth.lower().startswith("basic "):
@@ -179,18 +195,30 @@ def verify(request) -> str:
             user, _, pin = raw.partition(":")
         except Exception:
             user, pin = "", ""
-        want_user = str(cfg.get("username") or "admin")
-        if user == want_user and pin:
+        if user and pin:
+            want_user = str(cfg.get("username") or "admin")
+            admin_throttled = False
+            # 只对管理员用户名走 verify_pin（与第 160 期 OPDS 同一条理由）：
+            # 只读账号每次请求都去撞一次会让管理员维度的失败计数无谓增长。
+            if user == want_user:
+                try:
+                    if auth_mod.verify_pin(user, pin, auth_mod.client_host(request)):
+                        return user, None
+                except auth_mod.Throttled:
+                    admin_throttled = True
             try:
-                if auth_mod.verify_pin(user, pin, auth_mod.client_host(request)):
-                    return user
+                cred = auth_mod.verify_client(user, pin, auth_mod.client_host(request))
             except auth_mod.Throttled:
+                raise KomgaAuthError("throttled")
+            if cred:
+                return user, auth_mod.client_library_scope(cred)
+            if admin_throttled:
                 raise KomgaAuthError("throttled")
 
     tok = request.cookies.get(SESSION_COOKIE) or ""
     user = auth_mod.verify_token(tok) or ""
     if user:
-        return user
+        return user, None
     raise KomgaAuthError("invalid")
 
 

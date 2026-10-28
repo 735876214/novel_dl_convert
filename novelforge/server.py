@@ -9760,15 +9760,19 @@ def _komga_guard(request: Request) -> str:
     契约 `tests/test_func_audit_121.py::test_两个守卫不再同名`.
     """
     try:
-        return komga_api.verify(request)
+        ident, scope = komga_api.verify_scoped(request)
     except komga_api.KomgaAuthError as e:
         if str(e) == "disabled":
             raise HTTPException(404, "Komga 兼容服务未启用")
         if str(e) == "throttled":
-            # PIN 退避挡住了（判据在 auth.verify_pin，与登录口同一套）：
+            # PIN 退避挡住了（判据在 auth.verify_pin / verify_client，与登录口同一套）：
             # 429 而不是 401 —— 凭据本身没被判错，客户端不该弹密码框
             raise HTTPException(429, "连续认证失败过多，请稍后再试")
         raise HTTPException(401, "凭据无效", headers=_KO_401)
+    # 第 163 期：只读凭据的书库范围挂进请求状态，取书只经 _ko_books / _ko_book 判定
+    # （None = 不限定：管理员 / API Key / 会话令牌）。
+    request.state.komga_scope = scope
+    return ident
 
 
 def _ko_404(msg: str = "不存在"):
@@ -9863,8 +9867,16 @@ def _ko_read_filter(payload: dict):
 # **默认等于今天的行为**（不传库 = 全部**可见**库），且可见性判定只有这一处。
 
 
-def _ko_visible_libraries() -> list:
+def _ko_scope(request: Request) -> "frozenset | None":
+    """当前请求的只读书库范围（第 163 期；``None`` = 不限定：管理员 / API Key / 会话）。"""
+    return getattr(getattr(request, "state", None), "komga_scope", None)
+
+
+def _ko_visible_libraries(request: Request) -> list:
     """对 Komga 客户端可见的书库：库类型具备 ``komga`` 能力，**且开关开着**（第 22 期）。
+
+    第 163 期叠加第三层：只读凭据的书库范围（``request.state.komga_scope``）——
+    范围外一律「不存在」。
 
     **有声书库天然不具备**（见 `features.FEATURES_BY_TYPE`）：Komga 没有音频模型，
     有声书落到客户端就是打不开的坏条目 —— 所以从**书库**这一层挡掉，而不是让每本书
@@ -9876,9 +9888,12 @@ def _ko_visible_libraries() -> list:
     """
     cfg = config.load_config()
     default = bool((cfg.get("komga") or {}).get("expose", True))
+    scope = _ko_scope(request)
     out = []
     for lib in library.libraries():
         lid = str(lib.get("id") or "")
+        if scope is not None and lid not in scope:
+            continue                        # 只读凭据的范围外 =「不存在」（第 163 期）
         if not features.allows_setting(str(lib.get("type") or "mixed"), "komga.expose"):
             continue                        # 库类型没这能力 → 覆写即便残留也不生效
         ov = lib_settings.overrides(lid).get("komga.expose")
@@ -9888,19 +9903,19 @@ def _ko_visible_libraries() -> list:
     return out
 
 
-def _ko_visible_ids() -> set:
-    return {str(l.get("id") or "") for l in _ko_visible_libraries()}
+def _ko_visible_ids(request: Request) -> set:
+    return {str(l.get("id") or "") for l in _ko_visible_libraries(request)}
 
 
-def _ko_books(library_id=None) -> list:
+def _ko_books(request: Request, library_id=None) -> list:
     """Komga 视图下的书目：只含可见库；不给库时按可见库逐个取再合并。"""
     lid = str(library_id or "").strip()
     if lid:
-        if lid not in _ko_visible_ids():
+        if lid not in _ko_visible_ids(request):
             return []                    # 不可见的库对客户端就是「没有」
         return library.books(library_id=lid)
     out = []
-    for lib in _ko_visible_libraries():
+    for lib in _ko_visible_libraries(request):
         out.extend(library.books(library_id=str(lib.get("id") or "")))
     return out
 
@@ -9914,15 +9929,15 @@ def _ko_series_key(b: dict):
         return (1e9, str(b.get("title") or ""))
 
 
-def _ko_grouped(library_id=None) -> dict:
+def _ko_grouped(request: Request, library_id=None) -> dict:
     """可见库范围内的 ``{系列名: [书…]}``。"""
     lid = str(library_id or "").strip()
     if lid:
-        if lid not in _ko_visible_ids():
+        if lid not in _ko_visible_ids(request):
             return {}
         return komga_api.grouped(lid)
     out: dict = {}
-    for lib in _ko_visible_libraries():
+    for lib in _ko_visible_libraries(request):
         for name, items in komga_api.grouped(str(lib.get("id") or "")).items():
             out.setdefault(name, []).extend(items)
     for items in out.values():           # 跨库同名系列合并后要重排一次
@@ -9930,7 +9945,7 @@ def _ko_grouped(library_id=None) -> dict:
     return out
 
 
-def _ko_book(bid: str):
+def _ko_book(request: Request, bid: str):
     """Komga 视图下按 id 取单本书：**不在可见库里的书对客户端等于不存在**（返回 ``None``）。
 
     不能直接返回 `library.by_id` 的结果 —— 关掉某库的「对 Komga 暴露」后，
@@ -9939,16 +9954,16 @@ def _ko_book(bid: str):
     b = library.by_id(bid)
     if not b:
         return None
-    return b if str(b.get("library_id") or "") in _ko_visible_ids() else None
+    return b if str(b.get("library_id") or "") in _ko_visible_ids(request) else None
 
 
-def _ko_find_series(key: str):
+def _ko_find_series(request: Request, key: str):
     """在**可见库**范围内按系列 id / 名字找系列（找不到返回 ``None``）。
 
     与 `komga_api.find_series` 匹配规则相同（名字或 ``series_id`` 命中），
     但只遍历可见库 —— 关掉暴露的库，其系列的单系列地址也一并 404。
     """
-    for sname, items in _ko_grouped().items():
+    for sname, items in _ko_grouped(request).items():
         if sname == key or komga_api.series_id(sname) == key:
             return (sname, items)
     return None
@@ -10026,19 +10041,19 @@ def ko_me(request: Request):
 def ko_libraries(request: Request):
     """客户端第一步就调它（多书库后**逐库**返回；有声书库不进 Komga）。"""
     _komga_guard(request)
-    return [komga_api.library_dto(lib) for lib in _ko_visible_libraries()]
+    return [komga_api.library_dto(lib) for lib in _ko_visible_libraries(request)]
 
 
 # ---- 系列（latest 必须先于 {series_id}）----
 
-def _ko_series_page(page: int, size: int, sort: str, library_id: str = "") -> dict:
+def _ko_series_page(request: Request, page: int, size: int, sort: str, library_id: str = "") -> dict:
     """``library_id`` 为空 = 全部**可见**书库（与加参数前一致）。"""
     # 列表端点遍历**全部**系列 → 走轻量分层（不聚合），一次取全元数据行
     rows = db.all_series_meta()
     th = komga_api.threshold_resolver()      # 第 40 期：一次解析、逐系列复用（见 komga_api）
     items = [komga_api.series_dto(name, bs, series_meta.effective_light(name, rows.get(name) or {}),
                                   th)
-             for name, bs in _ko_grouped(library_id).items()]
+             for name, bs in _ko_grouped(request, library_id).items()]
     return komga_api.paginate(_ko_sorted(items, sort, "name"), page, size)
 
 
@@ -10050,7 +10065,7 @@ def ko_series_get(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
     ``library_id`` 为空 = 全部**可见**书库（与加参数前一致）。
     """
     _komga_guard(request)
-    return _ko_series_page(page, size, sort, library_id)
+    return _ko_series_page(request, page, size, sort, library_id)
 
 
 @app.post("/api/v1/series/list")
@@ -10058,7 +10073,7 @@ def ko_series_list(request: Request, payload: dict = Body(None),
                    page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
     """筛选条件里的 ``libraryId`` 现在真的生效（此前 payload 被整个丢掉）。"""
     _komga_guard(request)
-    return _ko_series_page(page, size, sort, _ko_library_id_of(payload))
+    return _ko_series_page(request, page, size, sort, _ko_library_id_of(payload))
 
 
 @app.get("/api/v1/series/latest")
@@ -10068,14 +10083,14 @@ def ko_series_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZ
     rows = db.all_series_meta()
     th = komga_api.threshold_resolver()
     items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}), th)
-             for n, bs in _ko_grouped(library_id).items()]
+             for n, bs in _ko_grouped(request, library_id).items()]
     return komga_api.paginate(_ko_sorted(items, "lastModifiedDate,desc"), page, size)
 
 
 @app.get("/api/v1/series/{series_id}")
 def ko_series_one(request: Request, series_id: str):
     _komga_guard(request)
-    found = _ko_find_series(series_id)
+    found = _ko_find_series(request, series_id)
     if not found:
         _ko_404("系列不存在")
     name, items = found
@@ -10088,7 +10103,7 @@ def ko_series_one(request: Request, series_id: str):
 def ko_series_books(request: Request, series_id: str, page: int = _KO_PAGE,
                     size: int = _KO_SIZE, sort: str = ""):
     _komga_guard(request)
-    found = _ko_find_series(series_id)
+    found = _ko_find_series(request, series_id)
     if not found:
         _ko_404("系列不存在")
     name, items = found
@@ -10101,7 +10116,7 @@ def ko_series_books(request: Request, series_id: str, page: int = _KO_PAGE,
 def ko_series_thumb(request: Request, series_id: str):
     """系列封面 = 该系列**第一本有封面的书**的封面。"""
     _komga_guard(request)
-    found = _ko_find_series(series_id)
+    found = _ko_find_series(request, series_id)
     if not found:
         _ko_404("系列不存在")
     _name, items = found
@@ -10113,9 +10128,9 @@ def ko_series_thumb(request: Request, series_id: str):
 
 # ---- 书籍（latest / ondeck 必须先于 {book_id}）----
 
-def _ko_books_dto(sort: str = "", library_id: str = "") -> list:
+def _ko_books_dto(request: Request, sort: str = "", library_id: str = "") -> list:
     th = komga_api.threshold_resolver()      # 第 40 期：逐本构造 DTO，解析器必须只建一次
-    return _ko_sorted([komga_api.book_dto(b, th=th) for b in _ko_books(library_id)], sort, "name")
+    return _ko_sorted([komga_api.book_dto(b, th=th) for b in _ko_books(request, library_id)], sort, "name")
 
 
 @app.get("/api/v1/books")
@@ -10126,14 +10141,14 @@ def ko_books_get(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
     ``library_id`` 为空 = 全部**可见**书库（与加参数前一致）。
     """
     _komga_guard(request)
-    return komga_api.paginate(_ko_books_dto(sort, library_id), page, size)
+    return komga_api.paginate(_ko_books_dto(request, sort, library_id), page, size)
 
 
 @app.post("/api/v1/books/list")
 def ko_books_list(request: Request, payload: dict = Body(None),
                   page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
     _komga_guard(request)
-    bs = _ko_books()                     # 可见库范围内（有声书库不进 Komga）
+    bs = _ko_books(request)                     # 可见库范围内（有声书库不进 Komga）
     flt = _ko_read_filter(payload)
     if flt:
         bs = [b for b in bs if flt(b)]
@@ -10146,7 +10161,7 @@ def ko_books_list(request: Request, payload: dict = Body(None),
 def ko_books_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
                     library_id: str = ""):
     _komga_guard(request)
-    return komga_api.paginate(_ko_sorted(_ko_books_dto("", library_id),
+    return komga_api.paginate(_ko_sorted(_ko_books_dto(request, "", library_id),
                                          "lastModifiedDate,desc"), page, size)
 
 
@@ -10156,7 +10171,7 @@ def ko_books_ondeck(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE
     _komga_guard(request)
     th = komga_api.threshold_resolver()
     out = []
-    for name, items in _ko_grouped().items():
+    for name, items in _ko_grouped(request).items():
         pcts = [float((db.get_progress(b["id"]) or {}).get("percent") or 0) for b in items]
         # 「在读」= 过了该书的开始阈值、且还没到它的读完阈值（第 40 期：口径随书所属库）
         fin = [komga_api.thresholds_of(th, b)[1] for b in items]
@@ -10177,7 +10192,7 @@ def ko_series_mark_read(request: Request, series_id: str):
     （见 `komga_api.mark_series_read`）。
     """
     _komga_guard(request)
-    found = _ko_find_series(series_id)
+    found = _ko_find_series(request, series_id)
     if not found:
         _ko_404("系列不存在")
     komga_api.mark_series_read(found[1], completed=True)
@@ -10188,7 +10203,7 @@ def ko_series_mark_read(request: Request, series_id: str):
 def ko_series_mark_unread(request: Request, series_id: str):
     """标记整个系列为**未读**（Komga 官方：``DELETE`` → 204）。"""
     _komga_guard(request)
-    found = _ko_find_series(series_id)
+    found = _ko_find_series(request, series_id)
     if not found:
         _ko_404("系列不存在")
     komga_api.mark_series_read(found[1], completed=False)
@@ -10198,14 +10213,14 @@ def ko_series_mark_unread(request: Request, series_id: str):
 @app.get("/api/v1/books/{book_id}")
 def ko_book_one(request: Request, book_id: str):
     _komga_guard(request)
-    b = _ko_book(book_id) or _ko_404("书不存在")
+    b = _ko_book(request, book_id) or _ko_404("书不存在")
     return komga_api.book_dto(b, th=komga_api.threshold_resolver())
 
 
 @app.get("/api/v1/books/{book_id}/thumbnail")
 def ko_book_thumb(request: Request, book_id: str):
     _komga_guard(request)
-    if not _ko_book(book_id):
+    if not _ko_book(request, book_id):
         _ko_404("书不存在")
     return api_book_cover(book_id)
 
@@ -10213,7 +10228,7 @@ def ko_book_thumb(request: Request, book_id: str):
 @app.get("/api/v1/books/{book_id}/file")
 def ko_book_file(request: Request, book_id: str):
     _komga_guard(request)
-    b = _ko_book(book_id) or _ko_404("书不存在")
+    b = _ko_book(request, book_id) or _ko_404("书不存在")
     path = library.abs_path(b)
     if not path.is_file():
         _ko_404("文件不存在")
@@ -10224,7 +10239,7 @@ def ko_book_file(request: Request, book_id: str):
 @app.get("/api/v1/books/{book_id}/pages")
 def ko_book_pages(request: Request, book_id: str):
     _komga_guard(request)
-    b = _ko_book(book_id) or _ko_404("书不存在")
+    b = _ko_book(request, book_id) or _ko_404("书不存在")
     pages = komga_api.pages_for(b)
     if not pages:
         raise HTTPException(400, "该格式不支持页面流：请下载文件后本地阅读")
@@ -10234,7 +10249,7 @@ def ko_book_pages(request: Request, book_id: str):
 @app.get("/api/v1/books/{book_id}/pages/{number}")
 def ko_book_page(request: Request, book_id: str, number: int, convert: str = ""):
     _komga_guard(request)
-    b = _ko_book(book_id) or _ko_404("书不存在")
+    b = _ko_book(request, book_id) or _ko_404("书不存在")
     data, media = komga_api.page_image(b, number, convert)
     if not data:
         _ko_404("页不存在")
@@ -10244,7 +10259,7 @@ def ko_book_page(request: Request, book_id: str, number: int, convert: str = "")
 @app.get("/api/v1/books/{book_id}/manifest")
 def ko_book_manifest(request: Request, book_id: str):
     _komga_guard(request)
-    b = _ko_book(book_id) or _ko_404("书不存在")
+    b = _ko_book(request, book_id) or _ko_404("书不存在")
     return Response(content=json.dumps(komga_api.manifest_for(b), ensure_ascii=False),
                     media_type="application/webpub+json")
 
@@ -10252,7 +10267,7 @@ def ko_book_manifest(request: Request, book_id: str):
 @app.put("/api/v1/books/{book_id}/read-progress")
 def ko_put_read_progress(request: Request, book_id: str, payload: dict = Body(None)):
     _komga_guard(request)
-    b = _ko_book(book_id) or _ko_404("书不存在")
+    b = _ko_book(request, book_id) or _ko_404("书不存在")
     locator, percent = komga_api.apply_read_progress(b, payload)
     db.set_progress(book_id, locator, percent)
     return Response(status_code=204)
@@ -10261,7 +10276,7 @@ def ko_put_read_progress(request: Request, book_id: str, payload: dict = Body(No
 @app.delete("/api/v1/books/{book_id}/read-progress")
 def ko_delete_read_progress(request: Request, book_id: str):
     _komga_guard(request)
-    if not _ko_book(book_id):
+    if not _ko_book(request, book_id):
         _ko_404("书不存在")
     db.set_progress(book_id, 0, 0)
     return Response(status_code=204)
@@ -10278,9 +10293,9 @@ def ko_patch_read_progress(request: Request, book_id: str, payload: dict = Body(
 # 各自系列再给出去。成员一律过 Komga 可见性过滤：有声书库的书不会从收藏夹漏进客户端。
 
 
-def _ko_collection_groups(cid) -> dict:
+def _ko_collection_groups(request: Request, cid) -> dict:
     """收藏夹成员 → ``{系列名: [书…]}``（只保留对 Komga 可见的书）。"""
-    visible = {str(b.get("id") or ""): b for b in _ko_books()}
+    visible = {str(b.get("id") or ""): b for b in _ko_books(request)}
     out: dict = {}
     for bid in db.collection_book_ids(cid):
         b = visible.get(str(bid or ""))
@@ -10292,11 +10307,11 @@ def _ko_collection_groups(cid) -> dict:
     return out
 
 
-def _ko_series_books(ids: list) -> list:
+def _ko_series_books(request: Request, ids: list) -> list:
     """系列 id（或名字）列表 → 这些系列里的书；同一系列只算一次。"""
     out, seen = [], set()
     for sid in ids or []:
-        found = _ko_find_series(str(sid))
+        found = _ko_find_series(request, str(sid))
         if not found:
             continue
         name, items = found
@@ -10319,7 +10334,7 @@ def ko_collections(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
                    sort: str = ""):
     _komga_guard(request)
     items = [komga_api.collection_dto(r["id"], r["name"], r.get("created_at"),
-                                      _ko_collection_groups(r["id"]))
+                                      _ko_collection_groups(request, r["id"]))
              for r in db.list_collections()]
     return komga_api.paginate(_ko_sorted(items, sort, "name"), page, size)
 
@@ -10335,9 +10350,9 @@ def ko_collection_create(request: Request, payload: dict = Body(None)):
         cid = db.create_collection(name)
     except Exception:                    # noqa: BLE001 —— 靠 name 的 UNIQUE 撞库判重
         raise HTTPException(409, "同名收藏夹已存在") from None
-    for b in _ko_series_books(body.get("seriesIds") or []):
+    for b in _ko_series_books(request, body.get("seriesIds") or []):
         db.add_book_to_collection(cid, str(b.get("id") or ""))
-    return komga_api.collection_dto(cid, name, time.time(), _ko_collection_groups(cid))
+    return komga_api.collection_dto(cid, name, time.time(), _ko_collection_groups(request, cid))
 
 
 @app.get("/api/v1/collections/{cid}")
@@ -10345,7 +10360,7 @@ def ko_collection_one(request: Request, cid: int):
     _komga_guard(request)
     row = _ko_collection_or_404(cid)
     return komga_api.collection_dto(row["id"], row["name"], row.get("created_at"),
-                                    _ko_collection_groups(cid))
+                                    _ko_collection_groups(request, cid))
 
 
 @app.patch("/api/v1/collections/{cid}")
@@ -10361,7 +10376,7 @@ def ko_collection_rename(request: Request, cid: int, payload: dict = Body(None))
     except Exception:                    # noqa: BLE001 —— 同上，重名撞 UNIQUE
         raise HTTPException(409, "同名收藏夹已存在") from None
     return komga_api.collection_dto(cid, name, row.get("created_at"),
-                                    _ko_collection_groups(cid))
+                                    _ko_collection_groups(request, cid))
 
 
 @app.delete("/api/v1/collections/{cid}")
@@ -10380,7 +10395,7 @@ def ko_collection_series(request: Request, cid: int, page: int = _KO_PAGE,
     rows = db.all_series_meta()
     th = komga_api.threshold_resolver()
     items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}), th)
-             for n, bs in _ko_collection_groups(cid).items()]
+             for n, bs in _ko_collection_groups(request, cid).items()]
     return komga_api.paginate(_ko_sorted(items, "", "name"), page, size)
 
 
@@ -10390,17 +10405,17 @@ def ko_collection_replace_series(request: Request, cid: int, payload: dict = Bod
     _komga_guard(request)
     row = _ko_collection_or_404(cid)
     db.clear_collection(cid)
-    for b in _ko_series_books((payload or {}).get("seriesIds") or []):
+    for b in _ko_series_books(request, (payload or {}).get("seriesIds") or []):
         db.add_book_to_collection(cid, str(b.get("id") or ""))
     return komga_api.collection_dto(cid, row["name"], row.get("created_at"),
-                                    _ko_collection_groups(cid))
+                                    _ko_collection_groups(request, cid))
 
 
 @app.delete("/api/v1/collections/{cid}/series/{series_id}")
 def ko_collection_remove_series(request: Request, cid: int, series_id: str):
     _komga_guard(request)
     _ko_collection_or_404(cid)
-    found = _ko_find_series(series_id)
+    found = _ko_find_series(request, series_id)
     if not found:
         _ko_404("系列不存在")
     for b in found[1]:
@@ -10413,7 +10428,7 @@ def ko_collection_thumb(request: Request, cid: int):
     """夹封面 = 成员里**第一本有封面**的书。"""
     _komga_guard(request)
     _ko_collection_or_404(cid)
-    for items in _ko_collection_groups(cid).values():
+    for items in _ko_collection_groups(request, cid).values():
         for b in items:
             if b.get("has_cover"):
                 return api_book_cover(b["id"])
@@ -10434,15 +10449,15 @@ def ko_collection_thumb_unsupported(request: Request, cid: int):
 # 而不是编造数据或让客户端撞 404 报错页。
 
 
-def _ko_siblings(b: dict) -> list:
+def _ko_siblings(request: Request, b: dict) -> list:
     """同系列的书（系列内已排好序）；取不到就退化成「只有自己」。"""
-    found = _ko_find_series(komga_api.series_name_of(b))
+    found = _ko_find_series(request, komga_api.series_name_of(b))
     return list(found[1]) if found else [b]
 
 
-def _ko_sibling(b: dict, offset: int):
+def _ko_sibling(request: Request, b: dict, offset: int):
     """系列内偏移 ``offset`` 本的邻居；没有就返回 ``None``。"""
-    items = _ko_siblings(b)
+    items = _ko_siblings(request, b)
     ids = [str(x.get("id") or "") for x in items]
     try:
         idx = ids.index(str(b.get("id") or ""))
@@ -10487,7 +10502,7 @@ def ko_referential(request: Request):
     """
     _komga_guard(request)
     authors, series, tags, langs, pubs, years = set(), set(), set(), set(), set(), set()
-    for b in _ko_books():
+    for b in _ko_books(request):
         if b.get("author"):
             authors.add(str(b["author"]).strip())
         if b.get("series"):
@@ -10511,7 +10526,7 @@ def ko_referential(request: Request):
 def ko_library_one(request: Request, library_id: str):
     """单库详情（对 Komga 不可见的库与不存在一律 404）。"""
     _komga_guard(request)
-    for lib in _ko_visible_libraries():
+    for lib in _ko_visible_libraries(request):
         if str(lib.get("id") or "") == str(library_id):
             return komga_api.library_dto(lib)
     _ko_404("书库不存在")
@@ -10520,8 +10535,8 @@ def ko_library_one(request: Request, library_id: str):
 @app.get("/api/v1/books/{book_id}/previous")
 def ko_book_previous(request: Request, book_id: str):
     _komga_guard(request)
-    b = _ko_book(book_id) or _ko_404("书不存在")
-    prev = _ko_sibling(b, -1)
+    b = _ko_book(request, book_id) or _ko_404("书不存在")
+    prev = _ko_sibling(request, b, -1)
     if not prev:
         _ko_404("没有上一本")
     return komga_api.book_dto(prev, komga_api.series_name_of(prev),
@@ -10531,8 +10546,8 @@ def ko_book_previous(request: Request, book_id: str):
 @app.get("/api/v1/books/{book_id}/next")
 def ko_book_next(request: Request, book_id: str):
     _komga_guard(request)
-    b = _ko_book(book_id) or _ko_404("书不存在")
-    nxt = _ko_sibling(b, 1)
+    b = _ko_book(request, book_id) or _ko_404("书不存在")
+    nxt = _ko_sibling(request, b, 1)
     if not nxt:
         _ko_404("没有下一本")
     return komga_api.book_dto(nxt, komga_api.series_name_of(nxt),
@@ -10546,7 +10561,7 @@ def ko_series_analyze(request: Request, series_id: str):
     客户端点了不该报错；但也**不假装真的分析了什么**。
     """
     _komga_guard(request)
-    if not _ko_find_series(series_id):
+    if not _ko_find_series(request, series_id):
         _ko_404("系列不存在")
     return Response(status_code=204)
 
@@ -10563,13 +10578,13 @@ def ko_series_collections(request: Request, series_id: str, page: int = _KO_PAGE
     成员书里是否有属于该系列的书。系列不存在 → 404（不静默给空列表）。
     """
     _komga_guard(request)
-    found = _ko_find_series(series_id)
+    found = _ko_find_series(request, series_id)
     if not found:
         _ko_404("系列不存在")
     name, _items = found
     rows = []
     for row in db.list_collections():
-        groups = _ko_collection_groups(row["id"])
+        groups = _ko_collection_groups(request, row["id"])
         if name in groups:
             rows.append(komga_api.collection_dto(row["id"], row["name"],
                                                 row.get("created_at"), groups))
@@ -10584,7 +10599,7 @@ def ko_book_readlists(request: Request, book_id: str, page: int = _KO_PAGE,
     书不存在仍按 Komga 惯例 404（先确认它在可见书目里）。
     """
     _komga_guard(request)
-    if not _ko_book(book_id):
+    if not _ko_book(request, book_id):
         _ko_404("书不存在")
     return komga_api.paginate([], page, size)
 
