@@ -1,6 +1,6 @@
 import { computed, ref } from 'vue'
 
-import { SECTION_KEYS } from '@/data/settingsFields'
+import { SECTION_KEYS } from '@/data/settingsSections'
 import { api, type AppConfig } from '@/lib/api'
 import { payloadEqual } from '@/lib/prefsPayload'
 import { useUiStore } from '@/stores/ui'

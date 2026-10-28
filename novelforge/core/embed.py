@@ -24,10 +24,22 @@ SVD 代价与库规模同阶（几千本书秒级）；批式让「新语料 / �
 """
 import math
 
-import numpy as np
-
 from .. import config
 from .recommend import _text_tokens  # 词元判据唯一来源（CJK 二元组 / 拉丁 ≥2 字母词）
+
+def _np():
+    """惰性导入 numpy（第 179 期）。
+
+    为什么要这样：`server.py` 在启动时 `from .core import embed`（第 54 期起 /similar
+    用），而 numpy 是个 **55 MB** 的包 —— 模块级 import 会把它的加载（实测约 134 ms +
+    二三十 MB 常驻）压到**每次容器启动**的路径上。它的实际用途只有「算向量 / 读向量 /
+    算余弦」这几处，服务启动路径（书架、详情、阅读）一行都不碰。
+
+    局部 import 不是第二份实现 —— 模块对象只有一份，这里只是**推迟加载**。
+    """
+    import numpy as np
+
+    return np
 
 #: 潜概念维度。书目短文本下 128 足够容纳主要语义轴，再大只会放大噪音。
 DIM = 128
@@ -80,6 +92,7 @@ class LSAEmbedder:
         书数不足 ``MIN_BOOKS`` 或词表为空 ⇒ 返回 ``{}``（调用方别落库，
         读端自然整路回落词袋，而不是留一套只含噪音的向量）。
         """
+        np = _np()
         ids: list = []
         rows: list = []
         for b in books:
@@ -143,6 +156,7 @@ class ModelEmbedder:
         return "st:" + self.path.name
 
     def fit(self, books: list) -> dict:
+        np = _np()
         texts = [corpus_of(b) + "\n" + str(b.get("description") or "") for b in books]
         try:
             if self._model is None:
@@ -184,6 +198,7 @@ def load_vectors() -> dict:
 
     旧 tag 的行（换过模型 / 语料口径）一律忽略 —— 宁可整路回落词袋，也不新旧混排。
     """
+    np = _np()
     from . import db
     tag = get_backend().tag
     out: dict = {}
@@ -198,6 +213,7 @@ def load_vectors() -> dict:
 
 def vec_cosine(a, b) -> float:
     """稠密向量余弦；任一侧为零向量（未产向量不该进这里，兜底）⇒ 0。"""
+    np = _np()
     na = float(np.linalg.norm(a))
     nb = float(np.linalg.norm(b))
     if na == 0.0 or nb == 0.0:

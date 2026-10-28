@@ -30,6 +30,9 @@ from novelforge import config, server
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SETTINGS_FIELDS_TS = ROOT / "frontend" / "src" / "data" / "settingsFields.ts"
+#: 第 179 期：`SECTION_KEYS` 的定义搬到了独立模块（`settingsFields.ts` 只 re-export）。
+#: 分区归属要读**定义处**，读 re-export 那份等于没钉。
+SETTINGS_SECTIONS_TS = ROOT / "frontend" / "src" / "data" / "settingsSections.ts"
 
 #: 白名单里的四个键 → 每个键**必须**存在的读点（文件, 源码里必须出现的片段）。
 #: 键名以 `.get("<键>"` 的形式出现；读点多于一处是允许的，这里只要求「至少这些」。
@@ -86,11 +89,12 @@ def test_白名单与设置页控件逐字一致():
 
 def test_设置页分区键指向_update_段():
     """`SECTION_KEYS.update` 决定保存时提交哪个顶层键 —— 指错就整段存不进去。"""
-    text = _read(SETTINGS_FIELDS_TS)
-    m = re.search(r"update:\s*\[([^\]]*)\]", text)
-    assert m, "settingsFields.ts 里找不到 SECTION_KEYS 的 update 条目"
+    sections = _read(SETTINGS_SECTIONS_TS)
+    m = re.search(r"update:\s*\[([^\]]*)\]", sections)
+    assert m, "settingsSections.ts 里找不到 SECTION_KEYS 的 update 条目"
     assert re.findall(r"'([A-Za-z_]+)'", m.group(1)) == ["update"]
     # 字段路径的前缀必须就是它（否则 saveSection 收集不到）
+    text = _read(SETTINGS_FIELDS_TS)
     assert all(f"update.{k}" in text for k in server.EDITABLE["update"])
 
 

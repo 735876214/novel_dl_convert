@@ -78,3 +78,13 @@ _test/
 #   ⚠️ 删出索引还不够，**必须同时忽略**：VS Code 下次自己写配置时，它又会以未跟踪文件冒出来。
 #   ⚠️ 带前导斜杠（理由同上面 /data/ 那条）：别把将来的 `frontend/.vscode/` 一起忽略掉。
 /.vscode/settings.json
+
+# 脚本在**仓库根**建的临时实例 / 测试残留（第 179 期补）：
+#   · `scripts/dev-instance.sh` 每跑一次就在根下建 `nf-dev-<时间戳>-<pid>/`（隔离的
+#     input/output/config/... ，几百 KB 到几 MB）；
+#   · `.venv` 解释器在仓库外建不了临时目录时，`tempfile` 会落回仓库根（`pytest-of-*`；
+#     `novelforge-tests-*` 是更老的一批）。
+# 此前**都没被忽略** —— 一次 `git add -A` 就会把整个 dev 实例卷进提交。
+/nf-dev-*/
+/novelforge-tests-*/
+/pytest-of-*/

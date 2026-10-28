@@ -2,6 +2,7 @@ import type { Component } from 'vue'
 import { createRouter, createWebHistory } from 'vue-router'
 
 import { SETTINGS_HOME, SETTINGS_PAGES } from '@/data/settingsNav'
+import { reloadOnChunkError } from '@/lib/chunkReload'
 
 /**
  * 设置页叶子路由 → 真实页面组件。
@@ -198,26 +199,10 @@ const router = createRouter({
   ],
 })
 
-/**
- * 懒加载 chunk 失联 ⇒ **整页重载一次**（第 152 期）。
- *
- * 起因：路由全部改成 `() => import()` 之后，每个页面是一个带 hash 的 chunk；而
- * `frontend/scripts/deploy.mjs` 是「先删目标目录、再整体拷贝」—— 部署那一刻开着的
- * 旧页面，点进一个**没访问过**的路由时它的 chunk 已经不在服务器上了 ⇒ 动态 import 404、
- * 页面白屏且没有任何提示。重载会拿到新的 `index.html` 与新的 chunk，用户几乎无感。
- *
- * ⚠️ 必须防死循环：chunk 是真没了（服务端回滚 / 静态目录被清空）时无条件重载会变成
- * 刷新风暴。同一标签页 30 秒内只自动重载一次，之后把错误交给上层（控制台可见）。
- */
-const CHUNK_ERR_RE = /Failed to fetch dynamically imported module|Importing a module script failed|Loading chunk .* failed|dynamically imported module/i
-let chunkReloadedAt = 0
+// 懒加载 chunk 失联 ⇒ 整页重载一次（第 152 期）。判据与防刷新风暴的计时器
+// 都收在 `lib/chunkReload`（第 179 期）—— 条件组件（`defineAsyncComponent`）走同一条。
 router.onError((err: unknown) => {
-  const msg = err instanceof Error ? err.message : String(err ?? '')
-  if (!CHUNK_ERR_RE.test(msg)) return
-  const now = Date.now()
-  if (now - chunkReloadedAt < 30_000) return
-  chunkReloadedAt = now
-  window.location.reload()
+  reloadOnChunkError(err)
 })
 
 export default router

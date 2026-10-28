@@ -8,7 +8,7 @@ import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import Segment from '@/components/ui/Segment.vue'
 import { type ReadingEvent } from '@/lib/api'
-import { chartShades, useChartTheme } from '@/lib/charts'
+import { chartShades, useChartTheme } from '@/lib/chartTheme'
 import { localDate } from '@/lib/format'
 import { useActivityStore } from '@/stores/activity'
 

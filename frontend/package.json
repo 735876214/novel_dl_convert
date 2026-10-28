@@ -6,7 +6,7 @@
   "description": "NovelForge 前端（Vue 3 SFC + Tailwind v4，视觉层照搬 BookOrbit）",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/precompress.mjs dist",
     "preview": "vite preview",
     "type-check": "vue-tsc --build",
     "test:unit": "vitest run",

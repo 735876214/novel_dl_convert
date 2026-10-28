@@ -101,7 +101,7 @@ MISSING / OOR / BLANK / COMMENT —— **这是预期噪声，不必再修**；�
 | :71 | `router/index.ts:172` | `:179` | `/achievements` |
 | :73 | `router/index.ts:174` / `:173` / `:91` | `:182` / `:181` / `:95` | `/docs` / `/whats-new` / `/settings/ext/about` |
 | :104 | `server.py:2270-2283` | `:2297-2308` | `GET /api/libraries`（原指到 `_norm_rules` 的 docstring） |
-| :104 | `router/index.ts:154-209` | `:157-216` | 路由全表区间 |
+| :104 | 原引 `router/index.ts:154-209` | `:112-199` | 路由全表区间（第 179 期实测：routes 数组在 112–199） |
 | :124 | 原引 `BookDetailView.vue:487-505` | `:528-545` | 详情页「文件」标签（原为章节 tab 的搜索框） |
 | :124 | 原引 `BookDetailView.vue:404-415` | `:445-475` | 概览侧栏「成品文件」（原为制版说明） |
 | :150 | `views/ReaderView.vue:28-31` | 补 `:805` | 原引是文件头注释；实际渲染在 `:805` 的 `v-html="html"` |

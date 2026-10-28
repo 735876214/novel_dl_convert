@@ -1,4 +1,11 @@
 <script setup lang="ts">
+// ⚠️ **副作用导入**（第 179 期）：本文件是全站唯一渲染 `<VChart>` 的地方，图型 / 组件 /
+// 渲染器的注册就绑在这一行上 —— 谁挂 VChart，谁就一定先跑过 `echartsUse([...])`。
+// 此前注册只靠「各图 import `@/lib/charts` 的配色函数」顺带触发；配色拆到
+// `lib/chartTheme`（纯计算、不引 ECharts）之后，那条隐式链子就断了：
+// 某个图若改从 chartTheme 取配色，VChart 会带着「未注册渲染器」挂载 —— 报错只进 console、
+// 图是空白的，构建和类型检查都发现不了。绑在壳上才是一劳永逸的。
+import '@/lib/charts'
 import VChart from 'vue-echarts'
 
 /**

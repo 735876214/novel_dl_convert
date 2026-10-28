@@ -347,6 +347,10 @@ def test_真取回时内网地址连客户端都不建(monkeypatch):
 # ---------------- ④ 配置契约（三处同步点 + 真实读点）----------------
 
 TS = ROOT / "frontend" / "src" / "data" / "settingsFields.ts"
+#: 第 179 期：`SECTION_KEYS` 搬到独立模块（AppHeader 不再为了它把整份 settingsFields
+#: 拽进首屏 preload）。\`settingsFields.ts\` 仍 re-export 它，但**定义**只在这里 ——
+#: 判据要读定义处，读 re-export 等于什么都没钉。
+SECTIONS_TS = ROOT / "frontend" / "src" / "data" / "settingsSections.ts"
 
 #: 键 → 必须存在的读点（文件, 源码片段）。没有读点的键 = 假配置（本仓点名的红线）。
 READ_POINTS: dict[str, list[tuple[str, str]]] = {
@@ -359,6 +363,10 @@ READ_POINTS: dict[str, list[tuple[str, str]]] = {
 
 def _ts() -> str:
     return TS.read_text(encoding="utf-8")
+
+
+def _sections() -> str:
+    return SECTIONS_TS.read_text(encoding="utf-8")
 
 
 def _frontend_keys(prefix: str) -> set:
@@ -385,12 +393,12 @@ def test_network_verify_tls_三处一致():
 
 def test_分区键指向这两段():
     """`SECTION_KEYS.network` 漏了 `source_import` ⇒ 界面上改了存不进去（隐蔽的假开关）。"""
-    m = re.search(r"network:\s*\[([^\]]*)\]", _ts())
-    assert m, "settingsFields.ts 里找不到 SECTION_KEYS 的 network 条目"
+    m = re.search(r"network:\s*\[([^\]]*)\]", _sections())
+    assert m, "settingsSections.ts 里找不到 SECTION_KEYS 的 network 条目"
     keys = re.findall(r"'([A-Za-z_]+)'", m.group(1))
     # 第 138 期：`logging` 迁出 network 分区（一个段只许一个归属分区，它归 logs）
     assert keys == ["network", "download", "auto_update", "source_import"]
-    logs = re.search(r"logs:\s*\[([^\]]*)\]", _ts())
+    logs = re.search(r"logs:\s*\[([^\]]*)\]", _sections())
     assert logs and "logging" in logs.group(1), "logs 分区没接住 logging"
 
 

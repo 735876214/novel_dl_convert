@@ -221,7 +221,7 @@
 **入口层差异**（`main.css`，影响 token 生效方式，属**形态不同**）：
 
 - 上游 `client/src/assets/main.css` 第 1–4 行：`@import '@fontsource-variable/inter'`、`'@fontsource-variable/fraunces'`、`'tailwindcss'`、**`'tw-animate-css'`**；
-- 本项目 `frontend/src/assets/main.css`：`@import './fonts.css'`（自托管 10 个 woff2）+ `'tailwindcss'`，**未引 `tw-animate-css`**，动效由本文件 keyframes 提供；
+- 本项目 `frontend/src/assets/main.css`：`@import './fonts.css'`（自托管拉丁分片；第 179 期起 2 个，原 10 个）+ `'tailwindcss'`，**未引 `tw-animate-css`**，动效由本文件 keyframes 提供；
 - 动效词汇表两侧一致：`fade-in 0.25s` / `fade-up 0.3s`（`translateY(8px)`）/ `scale-in 0.25s` / `shimmer 1.5s` / `shake 0.3s` / `float 3s` / `count-pulse 0.2s` / `progress-stripes 0.5s`，且都包在 `@media (prefers-reduced-motion: no-preference)` 内；
   本项目**额外**提供 `prefers-reduced-motion: reduce` 的全局降级，并有 `:focus-visible` 全局焦点环与元素级基线（上游对应能力来自 shadcn 组件类）。
 

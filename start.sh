@@ -9,8 +9,16 @@ set -e
 
 echo "[start] NovelForge 启动中（依赖已内置，跳过安装）"
 
-# 依赖自检：正常路径下约 0.5s，异常时给出可操作的报错
-if ! python -c "import fastapi, uvicorn, ebooklib" 2>/dev/null; then
+# 依赖自检：**只查得到、不导入**（第 179 期）。
+# `find_spec` 实测 4.7 ms，而真 import 一遍这三个包要 ~497 ms —— 且 uvicorn 随后会把
+# 同一批模块**再导入一次**，等于每次启动白烧半秒。
+# 代价（刻意选的那一边）：路径在、包却装坏了（缺 .so / 元数据损毁）这里判不出来，
+# 由 uvicorn 自己的 traceback 兜底 —— 正常 wheel 安装不会走到那里。
+has_mod() {
+  python -c 'import importlib.util, sys; sys.exit(0 if all(importlib.util.find_spec(m) for m in sys.argv[1:]) else 1)' "$@" 2>/dev/null
+}
+
+if ! has_mod fastapi uvicorn ebooklib; then
   echo "[start] [FATAL] Python 依赖缺失，/opt/venv 可能未正确写入镜像。"
   echo "[start] [FATAL] 请重新构建镜像：docker build -t novelforge ."
   exit 1
@@ -20,7 +28,7 @@ fi
 # 悄悄 pip install 会让「镜像里到底有什么」变得不可知；缺了就直接说清楚怎么补。
 case "$(echo "${NOVELFORGE_DB:-sqlite}" | tr 'A-Z' 'a-z')" in
   pg|postgres|postgresql)
-    if ! python -c "import psycopg" 2>/dev/null; then
+    if ! has_mod psycopg; then
       echo "[start] [FATAL] 选了 PostgreSQL（NOVELFORGE_DB=${NOVELFORGE_DB}）但没装驱动。"
       echo "[start] [FATAL] 镜像应包含 psycopg[binary]；请确认 requirements.txt 已生效并重建镜像。"
       exit 1
@@ -37,7 +45,7 @@ esac
 # 与 PG 那条的区别是有意的：PG 是数据后端，缺驱动 = 数据没地方去，必须失败；
 # 缓存缺驱动 = 只是慢一点，不该让服务起不来。
 if [ -n "${NOVELFORGE_REDIS_URL:-}" ]; then
-  if python -c "import redis" 2>/dev/null; then
+  if has_mod redis; then
     echo "[start] 缓存层：Redis（${NOVELFORGE_REDIS_URL}）"
   else
     echo "[start] [WARN] 配了 NOVELFORGE_REDIS_URL 但没装 redis 包 —— 本次启动缓存整层关闭。"

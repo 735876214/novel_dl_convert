@@ -12,7 +12,10 @@
  * 升级语义：`CACHE` 换名 → activate 时删掉所有旧缓存；导航 network-first 保证
  * 新壳先到手，不会出现「旧壳找已删 chunk」。
  */
-const CACHE = 'nf-shell-v1'
+// 第 179 期：v1 → v2。静态资源开始带 `Vary: Accept-Encoding`（预压缩件协商），
+// 换一代缓存名让旧缓存整批作废一次 —— 避免「旧条目按新 Vary 匹配不上 / 或复用错编码」。
+// activate 会删掉所有非当前名的缓存，用户侧无感。
+const CACHE = 'nf-shell-v2'
 
 self.addEventListener('install', () => {
   // 不等旧页面关掉：新 SW 立即接管，配合 network-first 不会发旧壳。

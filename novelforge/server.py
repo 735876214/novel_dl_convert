@@ -27,6 +27,8 @@ from fastapi import (FastAPI, UploadFile, File, Form, HTTPException, Query, Body
                      WebSocket, WebSocketDisconnect)
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.datastructures import Headers
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.gzip import DEFAULT_EXCLUDED_CONTENT_TYPES, GZipMiddleware
 
 from .core import pipeline, activity_log, library, fileops, publish, scrape, updater, changelog
@@ -422,6 +424,29 @@ app.add_middleware(
 
 STATIC_DIR = pathlib.Path(__file__).parent / "static"
 
+# 字体 MIME（第 179 期，**判据只有这一处**）：Python 的 `mimetypes` 认不认 `.woff2`
+# 取决于平台 —— Windows 读注册表、精简 Linux 镜像常常没有 `/etc/mime.types` 里那一行，
+# 于是静态出口回 `application/octet-stream`，而响应又带 `X-Content-Type-Options: nosniff`：
+# 浏览器据此可能**拒用**这份字体，表现是「自托管字体静默回退系统字体」（线上实测 1.4.5
+# 的 10 个 woff2 全是 octet-stream）。
+#
+# ⚠️ 只在导入时登记一次**不够**：`ebooklib.utils.guess_type()` 会调 `mimetypes.init()`，
+# 而 `init()` 是**重建全局库**（`_db = MimeTypes()`），把 `add_type` 的条目整批冲掉 ——
+# 只要进程里出版过一本 EPUB，启动时登记的字体类型就没了。全量用例就是这么抓到的
+# （单跑绿、连跑红，因为 ebooklib 的模块级 `mimetype_initialised` 已被别的用例置位）。
+# ⇒ 判据收成一个幂等函数：导入时登记一次，**字体请求进来时再核一次**（只有字体付这点开销）。
+_FONT_TYPES = {".woff2": "font/woff2", ".woff": "font/woff"}
+
+
+def _ensure_font_types() -> None:
+    """把 `_FONT_TYPES` 补进全局 `mimetypes` 库（幂等；已被第三方库冲掉时重新登记）。"""
+    for ext, typ in _FONT_TYPES.items():
+        if mimetypes.guess_type("font" + ext)[0] != typ:
+            mimetypes.add_type(typ, ext)
+
+
+_ensure_font_types()
+
 
 def _static_cache_control(path) -> str:
     r"""静态文件的 Cache-Control —— **判据只有这一处**（测试直接调它，不必绕 Starlette）。
@@ -433,17 +458,131 @@ def _static_cache_control(path) -> str:
     return "public, max-age=31536000, immutable" if "/assets/" in norm else "public, max-age=3600"
 
 
+#: 构建期会生成 `.gz` / `.br` 旁路件的静态后缀（`frontend/scripts/precompress.mjs` 同一份清单）。
+#: 字体 / 图片**不压**：它们本身已是压缩格式，再压只费 CPU。
+_COMPRESSIBLE_EXTS = frozenset(
+    {".js", ".mjs", ".css", ".svg", ".json", ".webmanifest", ".map", ".txt", ".wasm"}
+)
+
+
+def _accepts_encoding(accept_encoding: str, coding: str) -> bool:
+    """客户端是否接受 ``coding``（处理 `name;q=0` 与 `*`）。
+
+    只做**够用**的解析：逗号分隔、认 `q=`、`q=0` 视为拒绝。之所以还要认 `*`，是因为
+    RFC 允许它代表「其它任意编码」；不认会让「显式写了 `*`」的客户端拿不到预压缩件。
+
+    ⚠️ `*` **只兜底、不覆盖**：`br;q=0, *` 是「我不要 br」而不是「我什么都要」——
+    写 `q=0` 的客户端通常就是**解不了**这种编码（发过去是
+    `ERR_CONTENT_DECODING_FAILED` 白屏，而 gzip 一侧被 `GZipMiddleware` 的子串判断
+    挡住看不出来）。显式条目的 q 优先于 `*`。
+    """
+    explicit = star = None
+    for part in str(accept_encoding or "").lower().split(","):
+        piece = part.strip()
+        if not piece:
+            continue
+        name, _, params = piece.partition(";")
+        name = name.strip()
+        q = 1.0
+        for prm in params.split(";"):
+            k, _, v = prm.strip().partition("=")
+            if k.strip() == "q":
+                try:
+                    q = float(v)
+                except ValueError:
+                    q = 1.0
+        if name == coding:
+            explicit = q if explicit is None else max(explicit, q)
+        elif name == "*":
+            star = q if star is None else max(star, q)
+    q = explicit if explicit is not None else star
+    return bool(q and q > 0)
+
+
+def _precompressed(path, accept_encoding: str):
+    """选**预压缩旁路件**：``(文件路径, Content-Encoding)``；没有 / 不接受 ⇒ ``None``。
+
+    判据只有这一处（`_ImmutableStatic` 用）。旁路件是构建期产物（与 ``X`` 同目录的
+    ``X.br`` / ``X.gz``），**优先 br**（更小），客户端不报 br 时用 gz —— 浏览器只在
+    安全上下文才报 br，所以 `http://<NAS>:8992` 上实际生效的是 `.gz`。
+    """
+    p = pathlib.Path(path)
+    if p.suffix.lower() not in _COMPRESSIBLE_EXTS or not p.is_file():
+        return None
+    for suffix, coding in ((".br", "br"), (".gz", "gzip")):
+        cand = p.with_name(p.name + suffix)
+        if cand.is_file() and _accepts_encoding(accept_encoding, coding):
+            return cand, coding
+    return None
+
+
+def _vary_with(vary: str, token: str) -> str:
+    """在既有 ``Vary`` 上追加一个维度（已存在则原样返回）。"""
+    have = [v.strip() for v in str(vary or "").split(",") if v.strip()]
+    if token.lower() not in {v.lower() for v in have}:
+        have.append(token)
+    return ", ".join(have)
+
+
 class _ImmutableStatic(StaticFiles):
-    """静态资源带缓存头（第 152 期）。
+    """静态资源带缓存头（第 152 期）+ 预压缩件协商（第 179 期）。
 
     前端构建产物在 `assets/` 下、文件名带内容 hash（`index-C0gTUMu4.js`）—— 内容变了名字
     必变，所以可以放心 `immutable` + 一年。此前一律没有 `Cache-Control`：每次进站都要对
     首屏那二十来个 chunk 逐个发条件请求（304 也是**一次 RTT**），在 NAS 上把首屏拖慢几百毫秒。
 
     非 `assets/` 下的静态文件（字体目录、杂项）保守给 1 小时 —— 它们没有 hash，不能 immutable。
+
+    ## 预压缩（第 179 期）
+
+    构建期给每个压缩得动的产物生成了 `X.gz` / `X.br`；这里按 `Accept-Encoding` **直接发**
+    那一份，省掉每次请求的现压（实测主 JS gzip 一次 78 ms，identity 只要 19 ms）。
+
+    ⚠️ 三条边界：
+      · **直接请求 `.gz` / `.br` 一律 404** —— 它们是给服务端选用的旁路件，被当普通静态
+        文件下载出去就是一串压缩字节冒充 JS；
+      · **带 `Range` 的请求走原文件** —— 区间语义是按**原始字节**定义的，用压缩件回区间
+        会错位（`GZipMiddleware` 同样跳过 206，见其 `partial_response` 分支）；
+      · 304 也要带 `Content-Encoding` / `Vary`：`NotModifiedResponse` 会把
+        `content-encoding` 摘掉（它只保留少数几个头），而浏览器要按这组头复用缓存体。
     """
 
     async def get_response(self, path, scope):      # type: ignore[override]
+        if str(path).lower().endswith((".gz", ".br")):
+            return Response(status_code=404)
+        if pathlib.Path(path).suffix.lower() in _FONT_TYPES:
+            _ensure_font_types()        # `mimetypes.init()` 可能已经把登记冲掉（见 `_FONT_TYPES`）
+        headers = Headers(scope=scope)
+        # 三条「不走旁路件」的情形：
+        #   · `Range`：区间语义按**原始字节**定义（见类 docstring）；
+        #   · 只带 `If-Modified-Since`、不带 `If-None-Match`：它**无法区分两种表示** ——
+        #     旁路件与原件是同一批 `cpSync` 出来的，`Last-Modified` 常常同秒命中 304，
+        #     而客户端手里那份缓存体可能是**未压缩**的；再贴 `Content-Encoding: gzip`
+        #     就是把 identity 体标记成压缩体（缓存据此解码 ⇒ ERR_CONTENT_DECODING_FAILED）。
+        #     这类复验交给原文件走一遍，行为与改前逐字一致。
+        if not headers.get("range") and not (
+            headers.get("if-modified-since") and not headers.get("if-none-match")
+        ):
+            picked = _precompressed(pathlib.Path(self.directory) / path,
+                                    headers.get("accept-encoding", ""))
+            if picked is not None:
+                _target, coding = picked
+                try:
+                    # 交给父类发**旁路件**：ETag / Content-Length / If-None-Match 都是
+                    # 按实际发出的那份文件算的（自己拼 FileResponse 得把这三件事再写一遍）
+                    resp = await super().get_response(path + _target.suffix, scope)
+                except StarletteHTTPException:
+                    resp = None                    # 旁路件刚被删掉（部署瞬间）⇒ 回落原文件
+                if resp is not None:
+                    # 走到这里 ⇒ 要么是 200，要么是 **ETag 命中**的 304（上面的分支已经把
+                    # 「只带 If-Modified-Since」排除掉了）。ETag 是按旁路件算的，所以 304
+                    # 也能如实说「你手里那份就是压缩体」—— 而 `NotModifiedResponse` 会把
+                    # `content-encoding` 摘掉，必须补回，否则浏览器拿旧头 + 旧体解码出错。
+                    resp.headers["Content-Encoding"] = coding
+                    resp.headers["Vary"] = _vary_with(resp.headers.get("vary"), "Accept-Encoding")
+                    if resp.status_code == 200:
+                        resp.headers["Cache-Control"] = _static_cache_control(path)
+                    return resp
         resp = await super().get_response(path, scope)
         if resp.status_code == 200:
             resp.headers["Cache-Control"] = _static_cache_control(path)

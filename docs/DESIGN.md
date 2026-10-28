@@ -13,7 +13,7 @@
 `frontend/src/assets/main.css` 是唯一入口，**顺序不可变**：
 
 ```
-fonts.css            ← 自托管字体（10 个 woff2），必须在 tailwindcss 之前，保证 @font-face 先注册
+fonts.css            ← 自托管字体（2 个拉丁分片，第 179 期从 10 个裁来），必须在 tailwindcss 之前，保证 @font-face 先注册
 tailwindcss
 theme/tokens.css     ← 原子变量（--background / --muted-foreground …）
 theme/accents.css    ← 65 档 accent class，覆盖 --tint-h 与 --primary

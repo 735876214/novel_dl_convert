@@ -39,3 +39,37 @@ node_modules
 frontend/node_modules
 frontend/dist
 novelforge/static/v2
+
+# ———— 第 179 期：构建上下文瘦身 ————
+# 下面这些**从不进入镜像层**（Dockerfile 只 COPY start.sh / config.yaml / novelforge/ /
+# VERSION / CHANGELOG.md），但默认会随上下文一起打包发送 —— 实测约 84 MB（pgdata 48 MB、
+# clients 17 MB、tests 13 MB、docs 2.3 MB、.codebuddy 1.6 MB、.playwright-cli 1.3 MB…）。
+# 每个 build / CI 都要传一遍，纯粹是浪费。注意：`.dockerignore` 不是 `.gitignore`，
+# 裸名只匹配**上下文根**下同名路径 —— 所以 `scripts` 不会误伤 `frontend/scripts`
+# （预压缩脚本就在那里，`npm run build` 要调它，绝不能排除）。
+docs/
+tests/
+clients/
+scripts/
+pgdata/
+libraries/
+data/
+data-test/
+examples/
+.codebuddy/
+.codebudy/
+.claude/
+.vscode/
+.playwright-cli/
+.localtmp*
+.nf-*
+nf-dev-*
+nf-bt-py/
+novelforge-tests-*
+pytest-of-*
+pytest.ini
+requirements-dev.txt
+docker-compose.test.yml
+AGENTS.md
+LICENSE
+THIRD-PARTY-NOTICES.md

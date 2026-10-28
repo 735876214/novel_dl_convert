@@ -65,11 +65,16 @@ RUN pip install --no-cache-dir --upgrade pip --index-url "${PIP_INDEX}" \
 # 「启动即 ImportError」的风险不划算；若确认依赖树用不到，把 rm -rf 里再加两行即可：
 #   /opt/venv/lib/python*/site-packages/setuptools \
 #   /opt/venv/lib/python*/site-packages/setuptools-* \
+# 第 179 期：顺手删掉各上游包**自带的** `tests/` 目录（numpy / croniter / certifi …）。
+# 本地 .venv 里这类目录合计约 17 MB，镜像里同样是死重。只匹配**目录名恰好是 tests** 的
+# 那一层 —— `numpy/testing` 是运行时要用的模块，不能碰；`.dist-info` 也保留
+# （`core/jssandbox.py` / `core/mobicache.py` 用 `importlib.metadata.version()` 取版本）。
 RUN rm -rf /opt/venv/lib/python*/site-packages/pip \
            /opt/venv/lib/python*/site-packages/pip-* \
            /opt/venv/lib/python*/site-packages/wheel \
            /opt/venv/lib/python*/site-packages/wheel-* \
     && find /opt/venv -type f -name '*.a' -delete \
+    && find /opt/venv -type d -name tests -prune -exec rm -rf {} + \
     && find /opt/venv -type f -name '*.so*' -exec sh -c 'for f; do strip --strip-unneeded "$f" 2>/dev/null || true; done' _ {} +
 
 # ============================ 阶段 2：Node 源 ============================
@@ -147,7 +152,9 @@ COPY --from=nodejs  /usr/local/bin/node /usr/local/bin/node
 WORKDIR /app
 
 # 精确 COPY，避免把本地 venv/、_test/、input/ 等目录带进镜像
-COPY start.sh requirements.txt config.yaml /app/
+# 第 179 期：不再把 requirements.txt 拷进运行镜像 —— 没有任何代码读 `/app/requirements.txt`
+# （builder 用的是 /tmp 下那份；start.sh 的自检是 `find_spec`，不读文件）。
+COPY start.sh config.yaml /app/
 COPY novelforge/ /app/novelforge/
 # 第 78 期：版本号与更新日志进镜像（单一真值源 APP_VERSION + 离线更新内容）
 COPY VERSION /app/

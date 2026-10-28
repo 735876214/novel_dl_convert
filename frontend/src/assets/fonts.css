@@ -1,62 +1,24 @@
 /* ── Self-hosted variable fonts ──────────────────────────────
    来源：BookOrbit（github.com/bookorbit/bookorbit, AGPL-3.0）
-   字体本体已下载到 ./fonts/（10 个 woff2，共约 293 KB），
-   与远端 /assets/ 下同名同字节，不依赖任何外部字体服务（默认取向，非硬约束）。
+   字体本体在 ./fonts/（**2 个 woff2，共约 85 KB**），不依赖任何外部字体服务
+   （默认取向，非硬约束）。
 
-   两处 unicode-range 修正（抓取工具把范围吃成了通配符）：
+   ⚠️ 第 179 期裁剪：原来有 10 个分片（293 KB），只保留**拉丁主分片**。
+   本项目界面是中文，**没有 CJK 字体**（中文一律走系统字体），自托管字体实际只服务
+   Latin/digits。被删掉的 8 个分片：
+
+     · Inter cyrillic / cyrillic-ext / greek / greek-ext / vietnamese（96.7 KB）
+       —— unicode-range 与界面上可能出现的任何字符都不相交，纯死重；
+     · Inter latin-ext / Fraunces latin-ext（119 KB）与 Fraunces vietnamese（11.6 KB）
+       —— 只在「高位拉丁字符」（波兰语 ł、越南语 ạ 这类）出现时才下载。
+       删掉这些后，这类字形**回落到系统字体**（用户已确认可接受；Latin-1 的
+       重音字符 é/ü/ñ 仍由 latin 分片覆盖）。
+
+   一处 unicode-range 修正（抓取工具把范围吃成了通配符）：
      · Inter latin 分片：U+?? → U+0-FF
-     · Inter greek-ext 分片：U+1F?? → U+1F00-1FFF
    ────────────────────────────────────────────────────────────── */
 
 /* ============ Inter Variable（全站 UI） ============ */
-@font-face {
-  font-family: "Inter Variable";
-  font-style: normal;
-  font-display: swap;
-  font-weight: 100 900;
-  src: url(fonts/inter-cyrillic-ext-wght-normal-BOeWTOD4.woff2) format("woff2-variations");
-  unicode-range: U+460-52F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F;
-}
-@font-face {
-  font-family: "Inter Variable";
-  font-style: normal;
-  font-display: swap;
-  font-weight: 100 900;
-  src: url(fonts/inter-cyrillic-wght-normal-DqGufNeO.woff2) format("woff2-variations");
-  unicode-range: U+301, U+400-45F, U+490-491, U+4B0-4B1, U+2116;
-}
-@font-face {
-  font-family: "Inter Variable";
-  font-style: normal;
-  font-display: swap;
-  font-weight: 100 900;
-  src: url(fonts/inter-greek-ext-wght-normal-DlzME5K_.woff2) format("woff2-variations");
-  unicode-range: U+1F00-1FFF;
-}
-@font-face {
-  font-family: "Inter Variable";
-  font-style: normal;
-  font-display: swap;
-  font-weight: 100 900;
-  src: url(fonts/inter-greek-wght-normal-CkhJZR-_.woff2) format("woff2-variations");
-  unicode-range: U+370-377, U+37A-37F, U+384-38A, U+38C, U+38E-3A1, U+3A3-3FF;
-}
-@font-face {
-  font-family: "Inter Variable";
-  font-style: normal;
-  font-display: swap;
-  font-weight: 100 900;
-  src: url(fonts/inter-vietnamese-wght-normal-CBcvBZtf.woff2) format("woff2-variations");
-  unicode-range: U+102-103, U+110-111, U+128-129, U+168-169, U+1A0-1A1, U+1AF-1B0, U+300-301, U+303-304, U+308-309, U+323, U+329, U+1EA0-1EF9, U+20AB;
-}
-@font-face {
-  font-family: "Inter Variable";
-  font-style: normal;
-  font-display: swap;
-  font-weight: 100 900;
-  src: url(fonts/inter-latin-ext-wght-normal-DO1Apj_S.woff2) format("woff2-variations");
-  unicode-range: U+100-2BA, U+2BD-2C5, U+2C7-2CC, U+2CE-2D7, U+2DD-2FF, U+304, U+308, U+329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
 @font-face {
   font-family: "Inter Variable";
   font-style: normal;
@@ -67,22 +29,6 @@
 }
 
 /* ============ Fraunces Variable（标题衬线） ============ */
-@font-face {
-  font-family: "Fraunces Variable";
-  font-style: normal;
-  font-display: swap;
-  font-weight: 100 900;
-  src: url(fonts/fraunces-vietnamese-wght-normal-CnvboYUG.woff2) format("woff2-variations");
-  unicode-range: U+102-103, U+110-111, U+128-129, U+168-169, U+1A0-1A1, U+1AF-1B0, U+300-301, U+303-304, U+308-309, U+323, U+329, U+1EA0-1EF9, U+20AB;
-}
-@font-face {
-  font-family: "Fraunces Variable";
-  font-style: normal;
-  font-display: swap;
-  font-weight: 100 900;
-  src: url(fonts/fraunces-latin-ext-wght-normal-Ca2vKHc0.woff2) format("woff2-variations");
-  unicode-range: U+100-2BA, U+2BD-2C5, U+2C7-2CC, U+2CE-2D7, U+2DD-2FF, U+304, U+308, U+329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
 @font-face {
   font-family: "Fraunces Variable";
   font-style: normal;

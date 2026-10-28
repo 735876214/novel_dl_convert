@@ -9,7 +9,17 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import AppToast from '@/components/AppToast.vue'
 import LoginGate from '@/components/LoginGate.vue'
 import GuidedTourModal from '@/components/settings/GuidedTourModal.vue'
-import LibraryWizard from '@/components/tools/LibraryWizard.vue'
+import { lazyComponent } from '@/lib/chunkReload'
+// 第 179 期：**只有「新建书库」向导**改按需加载（6.9 KB gzip）—— 它只在用户点按钮时
+// 出现、是 z-50 浮层、不占布局、也没有持久化标记。
+// ⚠️ 另外两件**刻意保持静态导入**，评审实测过，不是漏改：
+//   · 设置侧栏是**布局的一部分**（桌面 240px / 折叠 3rem / 手机抽屉不占流）：异步化的
+//     空窗会让内容区先铺满再被推开，而「同宽骨架」要在 `App.vue` 再复制一份「侧栏多宽」
+//     的判断（第 152 期起那份判据在 `components/ui/sidebar`）—— 为 1.8 KB gzip 造第二
+//     份真值源，不划算；
+//   · 首次引导在 `showTour = true` 的**同一个同步块**里就写了「已看过」标记，而部署窗口
+//     里 chunk 可能 404 ⇒ 整页重载 ⇒ 标记已落盘、引导再也不弹（`markTourSeen` 无回滚点）。
+const LibraryWizard = lazyComponent(() => import('@/components/tools/LibraryWizard.vue'))
 import { useTasksStore } from '@/stores/tasks'
 import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
