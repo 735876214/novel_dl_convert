@@ -2673,6 +2673,10 @@ export interface Podcast {
   last_ok_at: number
   fail_count: number
   last_error: string
+  /** 自动策略（第 181 期）：自动下载最新 N 集（0=关） / 听完清理本地副本 */
+  auto_download: boolean
+  auto_keep: number
+  auto_clean: boolean
   created_at: number
 }
 
@@ -5093,6 +5097,21 @@ export const api = {
       '/api/podcasts/refresh-all',
       { method: 'POST' },
       { timeoutMs: LONG_REQUEST_TIMEOUT_MS },
+    ),
+
+  getPodcastAuto: (pid: string) =>
+    request<{ auto_download: boolean; auto_keep: number; auto_clean: boolean }>(
+      `/api/podcasts/${encodeURIComponent(pid)}/auto`,
+    ),
+
+  setPodcastAuto: (
+    pid: string,
+    payload: { auto_keep?: number; auto_download?: boolean; auto_clean?: boolean },
+  ) =>
+    request<{ auto_download: boolean; auto_keep: number; auto_clean: boolean }>(
+      `/api/podcasts/${encodeURIComponent(pid)}/auto`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload) },
     ),
 
   /** 单集下载（第 175 期）：排队后状态在 `podcast_episodes.download_state`。 */

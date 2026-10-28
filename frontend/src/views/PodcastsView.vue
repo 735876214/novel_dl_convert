@@ -105,8 +105,39 @@ async function remove(p: Podcast): Promise<void> {
   }
 }
 
+// ---------------- 自动策略（第 181 期） ----------------
+// 自动下载「最新 N 集」在刷新之后执行；听完清理只清本地副本（回收站）。
+const autoKeep = ref(0)
+const autoClean = ref(false)
+const autoBusy = ref(false)
+
+function syncAuto(): void {
+  const p = selectedPodcast.value
+  autoKeep.value = p?.auto_keep ?? 0
+  autoClean.value = p?.auto_clean ?? false
+}
+
+async function saveAuto(): Promise<void> {
+  const p = selectedPodcast.value
+  if (!p || autoBusy.value) return
+  autoBusy.value = true
+  try {
+    const keep = Math.max(0, Math.min(50, Math.round(Number(autoKeep.value) || 0)))
+    const r = await api.setPodcastAuto(p.id, { auto_keep: keep, auto_clean: autoClean.value })
+    autoKeep.value = r.auto_keep
+    autoClean.value = r.auto_clean
+    ui.toast(keep ? `已开启：自动下载最新 ${keep} 集` : '已关闭自动下载')
+    await load()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '保存失败'
+  } finally {
+    autoBusy.value = false
+  }
+}
+
 async function open(id: string): Promise<void> {
   selected.value = id
+  syncAuto()
   episodes.value = []
   try {
     episodes.value = (await api.podcastEpisodes(id)).items
@@ -560,6 +591,29 @@ function fmtDate(ts: number): string {
           <Button size="sm" variant="ghost" class="ml-auto" :disabled="!!busy || !episodes.length" @click="downloadAll">
             {{ busy === 'download-all' ? '排队中…' : '下载全部未下载' }}
           </Button>
+        </div>
+        <div class="mb-2 flex flex-wrap items-center gap-2 text-[11.5px] text-muted-foreground">
+          <span>自动下载最新</span>
+          <input
+            v-model.number="autoKeep"
+            type="number"
+            min="0"
+            max="50"
+            aria-label="自动下载最新集数"
+            class="h-7 w-16 rounded-md border border-border bg-card px-1.5 text-[11.5px] text-foreground outline-none focus:border-ring"
+            :disabled="autoBusy"
+          >
+          <span>集（0 = 关闭）</span>
+          <label class="ml-2 flex cursor-pointer items-center gap-1">
+            <input
+              v-model="autoClean"
+              type="checkbox"
+              class="h-3.5 w-3.5 cursor-pointer accent-primary"
+              :disabled="autoBusy"
+            >
+            听完清理本地副本
+          </label>
+          <Button size="sm" variant="ghost" :disabled="autoBusy" @click="saveAuto">保存自动策略</Button>
         </div>
         <EmptyState
           v-if="!episodes.length"

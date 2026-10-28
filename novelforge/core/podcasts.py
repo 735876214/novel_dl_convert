@@ -219,8 +219,9 @@ def _apply(pid: str, feed_url: str, meta: dict, episodes: list) -> dict:
                       last_fetched_at=now, last_attempt_at=now, last_ok_at=now,
                       last_error="", fail_count=0)
     added, updated = db.upsert_podcast_episodes(pid, episodes)
+    auto_queued = _auto_download(pid)
     return {"podcast": db.get_podcast(pid), "added": added, "updated": updated,
-            "total": len(episodes)}
+            "total": len(episodes), "auto_queued": auto_queued}
 
 
 def _record_failure(pid: str, exc: Exception) -> None:
@@ -425,17 +426,87 @@ def local_audio_path(eid: str) -> "pathlib.Path | None":
 PLAYED_THRESHOLD = 0.95
 
 
+# ---------------- 自动策略（第 181 期）----------------
+# 自动下载「最新 N 集」在**刷新之后**执行（订阅 / 刷新是用户显式动作）；
+# 听完清理只在 `played_at` 刚被记下时触发，且**只清本地副本**（移入回收站）。
+
+MAX_AUTO_KEEP = 50
+
+
+def auto_settings(podcast_id: str) -> dict:
+    pod = db.get_podcast(podcast_id)
+    if not pod:
+        raise LookupError("订阅不存在")
+    return {k: pod[k] for k in ("auto_download", "auto_keep", "auto_clean")}
+
+
+def set_auto(podcast_id: str, *, auto_download=None, auto_keep=None, auto_clean=None) -> dict:
+    """设置自动策略：`auto_keep` 0..50（0 = 关闭自动下载）。"""
+    pod = db.get_podcast(podcast_id)
+    if not pod:
+        raise LookupError("订阅不存在")
+    fields = {}
+    if auto_download is not None:
+        fields["auto_download"] = 1 if auto_download else 0
+    if auto_clean is not None:
+        fields["auto_clean"] = 1 if auto_clean else 0
+    if auto_keep is not None:
+        try:
+            keep = int(auto_keep)
+        except (TypeError, ValueError):
+            raise ValueError("auto_keep 必须是整数") from None
+        if not 0 <= keep <= MAX_AUTO_KEEP:
+            raise ValueError(f"auto_keep 必须在 0–{MAX_AUTO_KEEP} 之间")
+        fields["auto_keep"] = keep
+        fields["auto_download"] = 1 if keep > 0 else 0
+    db.update_podcast(podcast_id, **fields)
+    return auto_settings(podcast_id)
+
+
+def _auto_download(podcast_id: str) -> int:
+    """按策略把「最新 N 集」里还没下载的排队；返回新排队数。"""
+    pod = db.get_podcast(podcast_id)
+    if not pod or not pod["auto_download"] or pod["auto_keep"] <= 0:
+        return 0
+    queued = 0
+    for ep in db.list_podcast_episodes(podcast_id, limit=pod["auto_keep"]):
+        if ep["download_state"] in ("downloading", "downloaded"):
+            continue
+        if not ep.get("audio_url"):
+            continue
+        db.set_episode_download(ep["id"], "downloading")
+        _ensure_worker()
+        _q.put(ep["id"])
+        queued += 1
+    return queued
+
+
+def _maybe_clean(eid: str) -> None:
+    """听完清理：仅当该订阅开了 auto_clean 且本地有副本时，把副本移入回收站。"""
+    ep = db.get_podcast_episode(eid)
+    if not ep or not ep.get("played_at"):
+        return
+    pod = db.get_podcast(ep["podcast_id"])
+    if pod and pod["auto_clean"] and ep["download_state"] == "downloaded":
+        clean_download(eid)
+
+
 def save_progress(eid: str, position: float, duration: float = 0) -> dict:
     """写入播放位置；`duration > 0` 且听满阈值时同时记 played_at（第一次）。"""
     if not db.get_podcast_episode(eid):
         raise LookupError("单集不存在")
-    return db.set_episode_progress(eid, float(position or 0), float(duration or 0))
+    ep = db.set_episode_progress(eid, float(position or 0), float(duration or 0))
+    _maybe_clean(eid)
+    return ep
 
 
 def mark_played(eid: str, played: bool = True) -> dict:
     if not db.get_podcast_episode(eid):
         raise LookupError("单集不存在")
-    return db.mark_episode_played(eid, bool(played))
+    ep = db.mark_episode_played(eid, bool(played))
+    if played:
+        _maybe_clean(eid)
+    return ep
 
 
 # ---------------- OPML（导入 / 导出，第 174 期）----------------

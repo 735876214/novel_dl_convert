@@ -406,6 +406,10 @@ def init():
                 last_ok_at     REAL NOT NULL DEFAULT 0,
                 fail_count     INTEGER NOT NULL DEFAULT 0,
                 last_error     TEXT NOT NULL DEFAULT '',
+                -- 自动策略（第 181 期）：自动下载最新 N 集（0=关）/ 听完清理本地副本
+                auto_download  INTEGER NOT NULL DEFAULT 0,
+                auto_keep      INTEGER NOT NULL DEFAULT 0,
+                auto_clean     INTEGER NOT NULL DEFAULT 0,
                 created_at     REAL NOT NULL DEFAULT 0,
                 deleted_at     REAL NOT NULL DEFAULT 0
             );
@@ -1170,6 +1174,10 @@ def init():
             c.execute("ALTER TABLE podcasts ADD COLUMN last_ok_at REAL NOT NULL DEFAULT 0")
             c.execute("ALTER TABLE podcasts ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0")
             c.execute("ALTER TABLE podcasts ADD COLUMN last_error TEXT NOT NULL DEFAULT ''")
+        if pcols and "auto_download" not in pcols:
+            c.execute("ALTER TABLE podcasts ADD COLUMN auto_download INTEGER NOT NULL DEFAULT 0")
+            c.execute("ALTER TABLE podcasts ADD COLUMN auto_keep INTEGER NOT NULL DEFAULT 0")
+            c.execute("ALTER TABLE podcasts ADD COLUMN auto_clean INTEGER NOT NULL DEFAULT 0")
         ecols = {r["name"] for r in c.execute("PRAGMA table_info(podcast_episodes)")}
         if ecols and "download_state" not in ecols:
             c.execute("ALTER TABLE podcast_episodes ADD COLUMN local_path TEXT NOT NULL DEFAULT ''")
@@ -4046,7 +4054,7 @@ def source_ledger_rename(old: str, new: str) -> bool:
 
 _PODCAST_COLS = {"title", "author", "description", "artwork_url", "categories",
                  "explicit", "last_fetched_at", "last_attempt_at", "last_ok_at",
-                 "fail_count", "last_error"}
+                 "fail_count", "last_error", "auto_download", "auto_keep", "auto_clean"}
 
 
 def _podcast_out(row) -> dict:
@@ -4064,6 +4072,9 @@ def _podcast_out(row) -> dict:
         "last_ok_at": float(row["last_ok_at"] or 0),
         "fail_count": int(row["fail_count"] or 0),
         "last_error": str(row["last_error"] or ""),
+        "auto_download": bool(row["auto_download"]),
+        "auto_keep": int(row["auto_keep"] or 0),
+        "auto_clean": bool(row["auto_clean"]),
         "created_at": float(row["created_at"] or 0),
     }
 

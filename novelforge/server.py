@@ -3257,6 +3257,30 @@ def api_podcast_bookmark_delete(bid: str):
     return {"ok": True, "removed": bid}
 
 
+@app.get("/api/podcasts/{pid}/auto")
+def api_podcast_auto_get(pid: str):
+    try:
+        return podcasts.auto_settings(pid)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+
+
+@app.patch("/api/podcasts/{pid}/auto")
+def api_podcast_auto_set(pid: str, payload: dict = Body(...)):
+    """自动策略：自动下载最新 N 集（0 = 关） / 听完清理本地副本。"""
+    try:
+        return podcasts.set_auto(
+            pid,
+            auto_download=payload.get("auto_download"),
+            auto_keep=payload.get("auto_keep"),
+            auto_clean=payload.get("auto_clean"),
+        )
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
 @app.post("/api/podcasts/{pid}/refresh")
 def api_podcast_refresh(pid: str):
     """重新抓取：新单集 upsert，旧单集保留（失败时什么都不改）。"""

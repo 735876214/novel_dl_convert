@@ -30,6 +30,8 @@ vi.mock('@/lib/api', () => ({
     podcastBookmarks: vi.fn(),
     addPodcastBookmark: vi.fn(),
     deletePodcastBookmark: vi.fn(),
+    getPodcastAuto: vi.fn(),
+    setPodcastAuto: vi.fn(),
   },
 }))
 
@@ -50,12 +52,14 @@ const m = {
   bms: vi.mocked(api.podcastBookmarks),
   addBm: vi.mocked(api.addPodcastBookmark),
   delBm: vi.mocked(api.deletePodcastBookmark),
+  autoSet: vi.mocked(api.setPodcastAuto),
 }
 
 const POD = {
   id: 'p1', feed_url: 'https://x/feed.xml', title: '测试播客', author: '某某',
   description: '', artwork_url: '', categories: ['科技'], explicit: false,
   last_fetched_at: 0, last_attempt_at: 0, last_ok_at: 0, fail_count: 0, last_error: '',
+  auto_download: false, auto_keep: 0, auto_clean: false,
   created_at: 0,
 }
 
@@ -232,8 +236,13 @@ describe('PodcastsView', () => {
     await flushPromises()
     expect(secondPlay).toHaveBeenCalledTimes(1)
 
-    // 关掉开关后不再自动播
-    await w.find('input[type="checkbox"]').setValue(false)
+    // 关掉开关后不再自动播（按标签定位：面板里还有「听完清理」复选框）
+    const autoNextBox = w.findAll('input[type="checkbox"]').find((c) => {
+      const label = c.element.closest('label')?.textContent || ''
+      return label.includes('播完自动连播')
+    })
+    expect(autoNextBox).toBeTruthy()
+    await autoNextBox!.setValue(false)
     await flushPromises()
     const before = secondPlay.mock.calls.length
     await audios[0].trigger('ended')
@@ -264,5 +273,24 @@ describe('PodcastsView', () => {
     await flushPromises()
     expect(secondPlay).toHaveBeenCalled()
     expect(w.text()).not.toContain('播放队列（1）')
+  })
+
+  it('自动策略：保存最新 N 集与听完清理', async () => {
+    const w = await mountView()
+    await w.findAll('button').find((b) => b.text() === '单集')!.trigger('click')
+    await flushPromises()
+
+    m.autoSet.mockResolvedValue({ auto_download: true, auto_keep: 3, auto_clean: true })
+    await w.find('input[aria-label="自动下载最新集数"]').setValue('3')
+    const clean = w.findAll('input[type="checkbox"]').find((c) => {
+      const label = c.element.closest('label')?.textContent || ''
+      return label.includes('听完清理')
+    })
+    expect(clean).toBeTruthy()
+    await clean!.setValue(true)
+    await w.findAll('button').find((b) => b.text() === '保存自动策略')!.trigger('click')
+    await flushPromises()
+
+    expect(m.autoSet).toHaveBeenCalledWith('p1', { auto_keep: 3, auto_clean: true })
   })
 })
