@@ -226,12 +226,48 @@ function onEpisodeLoaded(e: PodcastEpisode, ev: Event): void {
   }
 }
 
+// ---------------- 播完自动连播（第 178 期） ----------------
+// 只做「本页内的上一集 / 下一集」：播放器仍是页面内的 <audio>（跨页全局播放器是另一件事）。
+const autoNext = ref(localStorage.getItem('podcast-autonext') !== '0')
+
+function setAutoNext(v: boolean): void {
+  autoNext.value = v
+  try {
+    localStorage.setItem('podcast-autonext', v ? '1' : '0')
+  } catch {
+    /* 隐私模式：本次会话仍生效 */
+  }
+}
+
+function playEpisode(e: PodcastEpisode): void {
+  const el = audioEls[e.id]
+  if (!el) return
+  void el.play().catch(() => { /* 浏览器拦住就等用户点播放 */ })
+}
+
+/** 播完自动放列表里的下一条（列表按发布时间倒序，所以「下一条」= 更早的一集） */
+function playNext(e: PodcastEpisode): void {
+  if (!autoNext.value) return
+  const i = episodes.value.findIndex((x) => x.id === e.id)
+  const next = i >= 0 ? episodes.value[i + 1] : undefined
+  if (next) playEpisode(next)
+}
+
+/** 同一时刻只允许一个在播（浏览器允许多个 <audio> 同时响） */
+function onEpisodePlay(e: PodcastEpisode, ev: Event): void {
+  for (const [id, el] of Object.entries(audioEls)) {
+    if (id !== e.id && !el.paused) el.pause()
+  }
+  void ev
+}
+
 function onEpisodeEnded(e: PodcastEpisode, ev: Event): void {
   const el = ev.target as HTMLAudioElement
   const dur = el?.duration || e.position_sec || 0
   void api.savePodcastProgress(e.id, dur, dur)
     .then(() => { e.position_sec = dur; e.played_at = Date.now() })
     .catch(() => { /* 同上 */ })
+  playNext(e)
 }
 
 async function togglePlayed(e: PodcastEpisode): Promise<void> {
@@ -508,6 +544,15 @@ function fmtDate(ts: number): string {
             >
               {{ f.label }} <span class="tabular-nums opacity-70">{{ episodeCounts[f.value] }}</span>
             </button>
+            <label class="ml-auto flex cursor-pointer items-center gap-1 text-[11.5px] text-muted-foreground">
+              <input
+                type="checkbox"
+                class="h-3.5 w-3.5 cursor-pointer accent-primary"
+                :checked="autoNext"
+                @change="setAutoNext(($event.target as HTMLInputElement).checked)"
+              >
+              播完自动连播
+            </label>
           </div>
         <ul class="divide-y divide-border">
           <li v-for="e in filteredEpisodes" :key="e.id" class="py-2.5">
@@ -571,6 +616,7 @@ function fmtDate(ts: number): string {
               :ref="(el) => bindAudio(e.id, el)"
               :src="audioSrc(e)"
               class="mt-1.5 h-8 w-full"
+              @play="onEpisodePlay(e, $event)"
               @loadedmetadata="onEpisodeLoaded(e, $event)"
               @timeupdate="onEpisodeTime(e, $event)"
               @ended="onEpisodeEnded(e, $event)"

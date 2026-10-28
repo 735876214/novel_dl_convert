@@ -67,11 +67,12 @@ const EP: PodcastEpisode = {
   position_sec: 0, played_at: 0,
 }
 
-async function mountView() {
+async function mountView(episodes: PodcastEpisode[] = [EP]) {
   const pinia = createPinia()
   setActivePinia(pinia)
   m.list.mockResolvedValue({ items: [POD], total: 1 })
-  m.eps.mockResolvedValue({ items: [EP], total: 1 })
+  m.prog.mockResolvedValue({})
+  m.eps.mockResolvedValue({ items: episodes, total: episodes.length })
   const w = mount(PodcastsView, { global: { plugins: [pinia] } })
   await flushPromises()
   return w
@@ -211,5 +212,31 @@ describe('PodcastsView', () => {
     await w.findAll('button').find((b) => b.text() === '删除')!.trigger('click')
     await flushPromises()
     expect(m.delBm).toHaveBeenCalledWith('bm1')
+  })
+
+  it('播完自动连播：默认开，关掉后不自动放下一集', async () => {
+    localStorage.removeItem('podcast-autonext')
+    const w = await mountView([
+      { ...EP, id: 'e1', title: '第一集' },
+      { ...EP, id: 'e2', title: '第二集' },
+    ])
+    await w.findAll('button').find((b) => b.text() === '单集')!.trigger('click')
+    await flushPromises()
+
+    const audios = w.findAll('audio')
+    expect(audios).toHaveLength(2)
+    const secondPlay = vi.fn(() => Promise.resolve())
+    ;(audios[1].element as HTMLAudioElement).play = secondPlay as never
+    await audios[0].trigger('ended')
+    await flushPromises()
+    expect(secondPlay).toHaveBeenCalledTimes(1)
+
+    // 关掉开关后不再自动播
+    await w.find('input[type="checkbox"]').setValue(false)
+    await flushPromises()
+    const before = secondPlay.mock.calls.length
+    await audios[0].trigger('ended')
+    await flushPromises()
+    expect(secondPlay.mock.calls.length).toBe(before)
   })
 })
