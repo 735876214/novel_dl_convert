@@ -159,6 +159,14 @@ class _Pattern:
     def pattern(self):
         return self._pattern_text
 
+    @property
+    def groupindex(self):
+        """命名分组 → 序号（第 165 期：正则导入要按**字段名**取值）。
+
+        两个后端（`regex` / `re`）都有这个属性，这里只是把同一件事暴露出来。
+        """
+        return getattr(self._pat, "groupindex", {}) or {}
+
 
 def compile(pattern, flags: int = 0, timeout: float = DEFAULT_TIMEOUT) -> _Pattern:
     """编译一条**执行期**正则（模式来自书源规则 ⇒ 需要超时保护）。

@@ -91,6 +91,9 @@ EXPECTED_SPECS = (
     # 所以 store 侧钉规则（规范顺序 / 至少一列 / 同名不覆盖 / 上限），组件侧钉接线。
     "src/stores/tablePrefs.spec.ts",
     "src/components/book/TableColumnsPanel.spec.ts",
+    # 第 165 期：文件名提取的接线。坏起来都是「点了没反应」：预览没接 api、
+    # 应用后没重算预览（用户仍看到「会改写 3 本」）。规则本身在后端用例里钉。
+    "src/views/tools/PathImportView.spec.ts",
     # 第 63 期：详情页此前**零测试**。重做时修掉两个 bug（概览里那个挂错地方的 `v-else`、
     # 面包屑读全局 `shelfTitle`），两条都不是崩溃型 —— 页面照常渲染，只是多一块 / 显示
     # 上一次导航的标题。没有 spec 的话下次重排还会原样长回来。

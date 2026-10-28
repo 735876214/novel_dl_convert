@@ -44,7 +44,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
-                   events, entities)
+                   events, entities, pathmeta)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -3837,6 +3837,55 @@ def api_batch_set_metadata(payload: dict = Body(...)):
     saved = sum(1 for r in results if r["ok"])
     return {"ok": saved == len(results), "results": results,
             "saved": saved, "failed": len(results) - saved}
+
+
+@app.get("/api/books/path-import/meta")
+def api_path_import_meta():
+    """正则导入的**可选项**：匹配范围与可写字段（唯一真值源在 `core.pathmeta`）。
+
+    前端不静态抄一份 —— 抄了之后加字段 / 改范围就会两边不一致。
+    """
+    return {
+        "targets": [{"value": k, "label": v} for k, v in pathmeta.TARGETS.items()],
+        "fields": list(pathmeta.ALLOWED_FIELDS),
+        "limit": pathmeta.PREVIEW_LIMIT,
+    }
+
+
+@app.post("/api/books/path-import/preview")
+def api_path_import_preview(payload: dict = Body(...)):
+    """按正则从文件名 / 路径提取元数据的**只读预览**（第 165 期）。
+
+    命名分组必须是可写的元数据字段（`fileops.METADATA_FIELDS`）；空匹配值的字段
+    **不写**（不把「没提取到」当清空）。本端点不落库、不碰文件。
+    """
+    p = payload or {}
+    try:
+        return pathmeta.preview(str(p.get("pattern") or ""),
+                                str(p.get("target") or "stem"),
+                                _opt_library(p.get("library_id")) or None)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/books/path-import/apply")
+def api_path_import_apply(payload: dict = Body(...)):
+    """把正则结果写成服务端覆盖（第 165 期）。
+
+    **不信任预览条目**：`book_ids` 只作收窄，规则由服务端重新算（与实体改名同一条纪律）。
+    写入走 `db.set_override` —— 与单书编辑同一条路径，书文件一字节不动。
+    """
+    p = payload or {}
+    ids = p.get("book_ids")
+    if ids is not None and not isinstance(ids, list):
+        raise HTTPException(400, "book_ids 必须是数组")
+    try:
+        return pathmeta.apply(str(p.get("pattern") or ""),
+                              str(p.get("target") or "stem"),
+                              _opt_library(p.get("library_id")) or None,
+                              ids)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
 
 
 @app.get("/api/books/{bid}/metadata/online")

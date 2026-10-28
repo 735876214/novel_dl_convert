@@ -183,6 +183,8 @@ const router = createRouter({
         { path: 'source-tools', name: 'tools-source-tools', component: () => import('@/views/tools/SourceToolsView.vue') },
               { path: 'output', name: 'tools-output', component: () => import('@/views/tools/OutputView.vue') },
         { path: 'local', name: 'tools-local', component: () => import('@/views/tools/LocalConvertView.vue') },
+        // 第 165 期：按正则从文件名 / 路径批量提取元数据
+        { path: 'path-import', name: 'tools-path-import', component: () => import('@/views/tools/PathImportView.vue') },
         { path: 'logs', name: 'tools-logs', component: () => import('@/views/tools/LogsView.vue') },
       ],
     },

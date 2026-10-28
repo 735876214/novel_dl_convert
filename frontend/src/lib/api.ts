@@ -2539,6 +2539,52 @@ export interface BatchMetadataResult {
   failed: number
 }
 
+/** 正则导入：可选项（第 165 期，`/api/books/path-import/meta`）。 */
+export interface PathImportMeta {
+  targets: { value: string; label: string }[]
+  /** 可写的元数据字段（命名分组只认这些） */
+  fields: string[]
+  limit: number
+}
+
+export interface PathImportChange {
+  field: string
+  from: string | string[] | null
+  to: string | string[]
+}
+
+export interface PathImportItem {
+  book_id: string
+  name: string
+  title: string
+  library_id?: string
+  matched: boolean
+  /** 提取出的新值（空分组不出现在这里） */
+  values: Record<string, string | string[]>
+  /** 只含**真的会变**的字段 */
+  changes: PathImportChange[]
+}
+
+export interface PathImportPreview {
+  target: string
+  fields: string[]
+  items: PathImportItem[]
+  total: number
+  matched: number
+  unmatched: number
+  /** 会真的被改写的本数（匹配但值没变的不算） */
+  changed: number
+  truncated: boolean
+  limit: number
+}
+
+export interface PathImportResult {
+  count: number
+  items: { book_id: string; name: string; library_id?: string; fields: string[] }[]
+  errors: { book_id: string; name: string; error: string }[]
+  fields: string[]
+}
+
 /**
  * 自定义字段的**定义**（第 35 期，`/api/custom-fields`）。
  *
@@ -3686,6 +3732,30 @@ export const api = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids, fields }),
+    }),
+
+  // ---------- 正则导入（第 165 期） ----------
+  pathImportMeta: () => request<PathImportMeta>('/api/books/path-import/meta'),
+
+  /** 只读预览：匹配多少本、哪些字段会变。不写库。 */
+  pathImportPreview: (payload: { pattern: string; target?: string; library_id?: string }) =>
+    request<PathImportPreview>('/api/books/path-import/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  /** 应用：服务端重新算，`book_ids` 只作收窄。写的是服务端覆盖，不动书文件。 */
+  pathImportApply: (payload: {
+    pattern: string
+    target?: string
+    library_id?: string
+    book_ids?: string[]
+  }) =>
+    request<PathImportResult>('/api/books/path-import/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     }),
 
   /** 实时在线建议（编辑器「在线建议 / 重新获取」用，不写库）。 */

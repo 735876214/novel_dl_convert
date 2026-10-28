@@ -41,6 +41,8 @@ const SECTIONS: ToolSection[] = [
   // 标签跟 `features.labels()["convert"]` 同步：第 62 期 TXT 改成「只入库不转换」后，
   // 这个页面（路由名仍是 tools-local）做的是**手动投递入库**，不再是转换。
   { label: '本地导入', routeName: 'tools-local', feature: 'convert' },
+  // 第 165 期：按正则从文件名 / 路径提取元数据（一次性操作，不落常驻规则）
+  { label: '文件名提取', routeName: 'tools-path-import' },
   { label: '转换日志', routeName: 'tools-logs' },
 ]
 
