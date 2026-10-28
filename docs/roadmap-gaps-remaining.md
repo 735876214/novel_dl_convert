@@ -11161,3 +11161,130 @@ fsync 主导；2,000 行连调 4.52 s）。而「从文件名提取元数据」�
 **核验**：后端全量（与第 177 期同一轮，见 §0 基线）+ 前端四连。
 
 **下一步**：2C 其余 —— 播放队列、自动下载规则与听完清理（回收站）、单集转录；随后 2D 播客合集 / 智能范围 / 智能播放列表 / 目录搜索 / 播客版「继续收听」。
+
+## 第 179 期（体积与加载速度（前端按需化 / 静态预压缩 / 镜像与仓库瘦身））
+
+**需求来源**：用户「梳理项目各类文件，在不影响功能的情况下减少体积，优化加载速度」；
+范围确认覆盖「前端加载 / 部署镜像 / 仓库与工作区 / 后端读路径」，并**接受字体回退**
+（非拉丁字形交回系统字体）。
+
+**改前基线（本地构建产物 + 线上 1.4.5 实测）**
+
+| 项 | 数值 |
+|---|---|
+| 入口 `index-*.js` | 282,706 B（**94.8 KB gzip**）；首屏 `modulepreload` **23** 个 chunk |
+| `charts-*.js`（ECharts：11 图型 + 11 组件 + SVG 渲染器） | 791,764 B（261 KB gzip） |
+| 字体 | **10** 个 woff2，300,288 B |
+| 静态出口 | 每请求现压（主 JS gzip 一次 78 ms，identity 19 ms） |
+| `.dockerignore` 覆盖 | 缺 docs / tests / clients / pgdata 等 —— 构建上下文 ~**100 MB** |
+| venv | 含上游包自带的 `tests/`（本地 .venv 约 17 MB） |
+| 启动 | `import embed` 即加载 numpy（55 MB 包）；`start.sh` 另起 Python 进程 import 一遍（~0.5 s） |
+| `.git` | **94 MB**（其中 64.56 MiB 是 4,504 个松散对象） |
+
+**改了什么**
+
+### A. 前端按需化（收益最大，零交互变化）
+
+| 改动 | 改前 | 改后 |
+|---|---|---|
+| 拆 `lib/charts.ts`：配色/主题搬到 `lib/chartTheme.ts`，`charts.ts` 只留 ECharts 注册并转出 | 「阅读活动」页为了 5 档热力图颜色下载 **773 KB / 255 KB gzip** ECharts | 该页只引 `chartTheme-*.js`（**0 处**引用 `charts-*`）；`/stats`、详情页图表不受影响 |
+| `App.vue`：**只有「新建书库」向导**改按需加载 | 静态打进入口包 | 独立 chunk（6.9 KB gzip），点按钮才取 |
+| `SECTION_KEYS` 拆到 `data/settingsSections.ts` | 整份 `settingsFields` 被 AppHeader 拽进首屏 preload | 首屏 preload **23 → 22** 个 chunk |
+| 字体裁到 2 个拉丁分片 | 10 个 / 293 KB | **2 个 / 84,876 B**（−71%；cyrillic/greek/vietnamese 永不匹配中文界面，latin-ext 按用户确认回退系统字体） |
+
+入口包：282,706 → **262,881 B**（94.8 → **89.7 KB** gzip；brotli 74,657 B）。
+
+⚠️ 拆分的**关键约束**：ECharts 的注册副作用此前靠「各图 import 配色函数」顺带触发，
+拆开后这条隐式链就断了。现在注册**绑在 `ChartFrame.vue`**（全站唯一渲染 `<VChart>` 的地方）
+上显式 `import '@/lib/charts'` —— 谁挂图壳，谁就必然先注册。
+
+⚠️ **另外两件「明显该异步」的条件组件，评审实测后刻意保持静态导入**（不是漏改）：
+- **设置侧栏**（1.8 KB gzip）：它是布局的一部分（桌面 240px / 折叠 3rem / 手机抽屉不占流）。
+  `defineAsyncComponent` 的 `loadingComponent` 要等默认 `delay`=200 ms 才渲染 ⇒ 那一段窗口
+  侧栏列宽为 0、内容先铺满再被推开；而「同宽骨架」得在 `App.vue` 复制一份「侧栏多宽」的
+  判断（判据在 `components/ui/sidebar`，折叠态还要读 `state`）⇒ 为 1.8 KB 造第二份真值源。
+- **首次引导**（2.1 KB gzip）：`showTour = true` 与 `markTourSeen()` 在**同一个同步块**里，
+  标记先落盘；异步化后若 chunk 取不到（部署窗口里的旧壳打新服务端、删掉最后一个库触发，
+  两条都是 `App.vue` 自己注释里写明的路径），整页重载 ⇒ 标记已落盘、引导再也不弹。
+去掉这两条后 `lazyComponent()` 也不再需要 `loadingComponent` / `delay` 参数，一并删掉
+（不留「以后可能要」的选项）。
+
+### B. 静态资源预压缩（省服务端 CPU）
+
+- 构建期（`frontend/scripts/precompress.mjs`，挂在 `npm run build` 上，所以 Docker 的
+  frontend 阶段也生成）给 `dist/assets` 每个压缩得动的产物生成 `.gz`（level 9）与 `.br`（q11）。
+- `_ImmutableStatic` 按 `Accept-Encoding` **直接发预压缩件**：`Content-Encoding` + `Vary`
+  齐全、补回 `Content-Length`（此前 chunked）；`Range` 请求走原文件；**直接请求 `.gz`/`.br`
+  一律 404**；304 也带编码头（`NotModifiedResponse` 会摘掉 `content-encoding`）。
+- ⚠️ 如实说明：浏览器只在**安全上下文**才报 `br`，本项目的 `http://<NAS>:8992` 实际走 `.gz`
+  ⇒ **字节数不变**，省的是**每次请求的压缩 CPU**（97 个产物的旁路件合 1225 KB gz / 1019 KB br）。
+- Service Worker 缓存名 `nf-shell-v1 → v2`（新增 `Vary` 维度，换一代让旧条目整批作废）。
+- 评审又补了两条**只在真机才炸**的边界（都已修 + 有用例）：
+  - `Accept-Encoding: br;q=0, *` 里 `*` **只兜底、不覆盖**显式 `q=0`。第一版用 `max()` 合并，
+    等于把「我不要 br」读成「我要 br」—— 客户端写 `q=0` 通常就是解不了，
+    发过去是 `ERR_CONTENT_DECODING_FAILED`；gzip 一侧被 `GZipMiddleware` 的子串判断挡住，
+    所以只有 br 会暴露。
+  - **只带 `If-Modified-Since`、不带 `If-None-Match` 的复验不走旁路件**：旁路件与原件是
+    `deploy.mjs` 同一批 `cpSync` 出来的、`Last-Modified` 常常同秒 ⇒ 用旁路件判 304，
+    而客户端手里是**未压缩**的体，再贴 `Content-Encoding: gzip` 就是把 identity 体标记成
+    压缩体（缓存据此解码，那支 JS 永不执行）。这类请求回落原文件，行为与改前逐字一致。
+
+### C. 顺带修掉的真实缺陷：字体 MIME
+
+线上 1.4.5 的 10 个 woff2 **全部**被发成 `application/octet-stream`，而响应带
+`X-Content-Type-Options: nosniff` —— 浏览器可能据此拒用，自托管字体实际一直静默回退系统字体
+（所以「10 个分片」从来没在浏览器里生效过）。现在启动时 `mimetypes.add_type` 登记
+`font/woff2` / `font/woff`，本地实测响应头为 `content-type: font/woff2`。
+
+⚠️ **全量用例抓到「登记一次不够」**：单跑 `test_static_cache_headers.py` 绿、连跑全量红，
+`content-type` 又是 octet-stream。根因不在我们的代码 —— `ebooklib.utils.guess_type()` 里调了
+`mimetypes.init()`，而它会 `_db = MimeTypes()` **重建全局库**，把 `add_type` 的条目整批冲掉。
+也就是说：**只要进程里出版过一本 EPUB，字体 MIME 就又丢了**（与线上症状同一个出口）。
+修法不是「再 add 一次」，而是把判据收成幂等函数 `_ensure_font_types()`：导入时调一次，
+**字体请求进来时再核一次**（只有字体付这点开销）；用例用「把全局库换成空库」确定性复现
+`init()` 那次重建，断言请求进来时自己补回。
+
+### D. 镜像与启动
+
+- `.dockerignore` 补齐（docs / tests / clients / scripts / pgdata / .codebuddy / .playwright-cli /
+  `nf-dev-*` …）：构建上下文 **~100 MB → ~15 MB**（不进镜像层，省的是每次 build / CI 的传输）。
+  注：**不能**排除 `frontend/`（预压缩脚本在 `frontend/scripts`，`npm run build` 要调它）。
+- 运行层不再 `COPY requirements.txt`（没有代码读 `/app/requirements.txt`）。
+- builder 删掉上游包自带的 `tests/` 目录（只匹配目录名**恰好**是 `tests` 的那一层 ——
+  `numpy/testing` 是运行时模块；`.dist-info` 保留，`jssandbox`/`mobicache` 要用 `metadata.version`）。
+- `core/embed.py` 的 numpy 改**函数内惰性导入**（启动不再加载 55 MB 的包；首次 `/similar` /
+  重算时才加载）。
+- `start.sh` 依赖自检改 `importlib.util.find_spec`（实测 4.7 ms vs 真 import 497 ms，
+  且 uvicorn 随后还会再导入一遍）。
+
+### E. 仓库
+
+- `.gitignore` 补 `/nf-dev-*/`、`/novelforge-tests-*/`、`/pytest-of-*/` —— `scripts/dev-instance.sh`
+  每跑一次就在仓库根建一个 `nf-dev-*` 实例目录，此前**没被忽略**，一次 `git add -A` 就会把它卷进提交。
+- `git gc --prune=now`：`.git` **94 MB → 15 MB**（64.56 MiB 松散对象打进单 pack；不改写历史、
+  不丢可达对象）。
+
+**防回归**
+
+- `tests/test_static_cache_headers.py` 扩 **10** 例（6 → 16）：gzip/br 选择、`q=0`、无旁路件回落、
+  直接请求 404、`Range` 走原文件、304 仍带 `Content-Encoding`/`Vary`、不可压类型不选旁路件、
+  编码协商边界（含 `*` 不覆盖 `q=0`）、**只带 `If-Modified-Since` 的复验**、字体 MIME；
+  **另有一例专门复现「全局 `mimetypes` 被重建」**（见 C 段）。
+- `tests/test_deploy_context.py`（5 例）：运行层不含 requirements.txt、builder 的 tests 裁剪写法、
+  `.dockerignore` 覆盖清单（且不得排除 frontend/）、预压缩清单与 `server._COMPRESSIBLE_EXTS`
+  逐项一致、`npm run build` 挂着预压缩。
+- **两处既有契约用例要跟着搬**（`SECTION_KEYS` 换了文件）：`test_source_url_import.py` 的
+  `test_分区键指向这两段`、`test_update_config_contract.py` 的 `test_设置页分区键指向_update_段`
+  改读 `settingsSections.ts` 的**定义处** —— 读 `settingsFields.ts` 的 re-export 等于什么都没钉。
+  这两条是全量跑出来的：拆模块时「定义搬走、断言还在旧文件」只会表现为红，不会自己跟上。
+
+**核验**：前端四连（83 spec / 821 例 + `vue-tsc` + 构建 + 部署）；后端全量 **2931** 例
+（2904 passed / 14 skipped；13 failed 全是本机环境项，与本期无关：`AF_UNIX` ×11、符号链接特权 ×2）；
+13 环境失败 / 14 skipped）；本地实例实测 —— `index-*.js` 带 `content-encoding: gzip` +
+`content-length` + `immutable`、304 带编码头、`Range` 回 206 且是原文件、直接 `.gz` 为 404、
+woff2 为 `font/woff2`、`/reading-activity` 不再拉 `charts-*`。
+
+**没做（明确边界）**：删 node 二进制（书源 JS 解密要用）、删 numpy/Pillow/psycopg 等
+（功能开关）、拆 charts 的 11 图型（每类都有图在用）、拆 ChartGrid 的 30 个图组件
+（第 33 期已记录「收益小改动大」）、history rewrite（`.git` 只做 gc）、字体 preload
+（要在构建期把 hash 文件名注入 index.html，收益仅文本首绘的一点时间）。
