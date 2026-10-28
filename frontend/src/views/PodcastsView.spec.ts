@@ -25,6 +25,8 @@ vi.mock('@/lib/api', () => ({
     downloadAllPodcastEpisodes: vi.fn(),
     cleanPodcastEpisode: vi.fn(),
     podcastEpisodeAudioUrl: vi.fn((eid: string) => `/local/${eid}`),
+    savePodcastProgress: vi.fn(),
+    markPodcastEpisodePlayed: vi.fn(),
   },
 }))
 
@@ -40,6 +42,8 @@ const m = {
   dl: vi.mocked(api.downloadPodcastEpisode),
   dlAll: vi.mocked(api.downloadAllPodcastEpisodes),
   clean: vi.mocked(api.cleanPodcastEpisode),
+  prog: vi.mocked(api.savePodcastProgress),
+  played: vi.mocked(api.markPodcastEpisodePlayed),
 }
 
 const POD = {
@@ -54,6 +58,7 @@ const EP: PodcastEpisode = {
   published_at: 1700000000, duration_sec: 3723, audio_url: 'https://cdn/1.mp3',
   audio_type: 'audio/mpeg', episode_no: 1, season_no: 0, explicit: false,
   download_state: '', download_error: '', downloaded_at: 0, local_bytes: 0, has_local: false,
+  position_sec: 0, played_at: 0,
 }
 
 async function mountView() {
@@ -148,5 +153,33 @@ describe('PodcastsView', () => {
     await flushPromises()
     expect(w.find('audio').attributes('src')).toBe('/local/e1')
     expect(w.text()).toContain('已下载')
+  })
+
+  it('播放状态筛选与手动标已播', async () => {
+    m.eps.mockResolvedValue({
+      items: [
+        { ...EP, id: 'e1', title: '未播', position_sec: 0, played_at: 0 },
+        { ...EP, id: 'e2', title: '进行中', position_sec: 30, played_at: 0 },
+        { ...EP, id: 'e3', title: '已播', position_sec: 100, played_at: 1700000000 },
+      ],
+      total: 3,
+    })
+    const w = await mountView()
+    await w.findAll('button').find((b) => b.text() === '单集')!.trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('进行中')
+    expect(w.text()).toContain('已播')
+
+    // 点「未播」筛选：只剩那一集
+    await w.findAll('button').find((b) => b.text().startsWith('未播'))!.trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('未播')
+    expect(w.text()).not.toContain('已播 1')
+
+    // 手动标已播接后端
+    m.played.mockResolvedValue({})
+    await w.findAll('button').find((b) => b.text() === '标已播')!.trigger('click')
+    await flushPromises()
+    expect(m.played).toHaveBeenCalledWith('e1', true)
   })
 })

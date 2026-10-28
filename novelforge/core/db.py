@@ -428,6 +428,9 @@ def init():
                 download_error TEXT NOT NULL DEFAULT '',
                 downloaded_at  REAL NOT NULL DEFAULT 0,
                 local_bytes    INTEGER NOT NULL DEFAULT 0,
+                -- 播放进度（第 176 期）：轨内秒数 / 首次听完的时间（0 = 没听完）
+                position_sec   REAL NOT NULL DEFAULT 0,
+                played_at      REAL NOT NULL DEFAULT 0,
                 created_at   REAL NOT NULL DEFAULT 0,
                 deleted_at   REAL NOT NULL DEFAULT 0,
                 UNIQUE(podcast_id, guid)
@@ -1162,6 +1165,9 @@ def init():
             c.execute("ALTER TABLE podcast_episodes ADD COLUMN download_error TEXT NOT NULL DEFAULT ''")
             c.execute("ALTER TABLE podcast_episodes ADD COLUMN downloaded_at REAL NOT NULL DEFAULT 0")
             c.execute("ALTER TABLE podcast_episodes ADD COLUMN local_bytes INTEGER NOT NULL DEFAULT 0")
+        if ecols and "position_sec" not in ecols:
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN position_sec REAL NOT NULL DEFAULT 0")
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN played_at REAL NOT NULL DEFAULT 0")
         if scols and "source" not in scols:
             # 来源（web / audio / koreader …）。存量行回落**空串 = 未知**，不猜 'web'：
             # 改造前有声书播放器与网页阅读器走的是同一个上报接口，事后分不出来是哪一边。
@@ -4197,6 +4203,8 @@ def list_podcast_episodes(podcast_id: str, limit: int = 200) -> list:
         "downloaded_at": float(r["downloaded_at"] or 0),
         "local_bytes": int(r["local_bytes"] or 0),
         "has_local": bool(str(r["local_path"] or "")),
+        "position_sec": float(r["position_sec"] or 0),
+        "played_at": float(r["played_at"] or 0),
     } for r in rows]
 
 
@@ -4217,6 +4225,8 @@ def get_podcast_episode(eid: str) -> "dict | None":
         "download_error": str(row["download_error"] or ""),
         "downloaded_at": float(row["downloaded_at"] or 0),
         "local_bytes": int(row["local_bytes"] or 0),
+        "position_sec": float(row["position_sec"] or 0),
+        "played_at": float(row["played_at"] or 0),
     }
 
 
@@ -4232,6 +4242,47 @@ def set_episode_download(eid: str, state: str, *, local_path="", error="", size=
              now if state == "downloaded" else 0, str(eid)),
         )
         c.commit()
+
+
+def set_episode_progress(eid: str, position: float, duration: float = 0) -> dict:
+    """写播放位置；`duration > 0` 且听满 **95%** 时记 `played_at`（只记第一次）。
+
+    位置只增不减：用户拖回去重听不会把「已播到 80%」改回 20%（下次打开仍从 80% 续）。
+    """
+    ep = get_podcast_episode(eid)
+    if not ep:
+        raise LookupError("单集不存在")
+    c = _connect()
+    pos = max(0.0, float(position or 0))
+    with _lock:
+        c.execute(
+            "UPDATE podcast_episodes SET position_sec=MAX(position_sec, ?) WHERE id=?",
+            (pos, str(eid)),
+        )
+        if duration > 0 and pos >= duration * 0.95:
+            c.execute(
+                "UPDATE podcast_episodes SET played_at=? WHERE id=? AND played_at=0",
+                (time.time(), str(eid)),
+            )
+        c.commit()
+    return get_podcast_episode(eid) or {}
+
+
+def mark_episode_played(eid: str, played: bool = True) -> dict:
+    """手动标已播 / 未播（未播同时把位置清零，否则「未播却停在 80%」自相矛盾）。"""
+    c = _connect()
+    with _lock:
+        if played:
+            c.execute("UPDATE podcast_episodes SET played_at=? WHERE id=?",
+                      (time.time(), str(eid)))
+        else:
+            c.execute("UPDATE podcast_episodes SET played_at=0, position_sec=0 WHERE id=?",
+                      (str(eid),))
+        c.commit()
+    ep = get_podcast_episode(eid)
+    if not ep:
+        raise LookupError("单集不存在")
+    return ep
 
 
 def clear_episode_download(eid: str) -> None:

@@ -2686,6 +2686,9 @@ export interface PodcastEpisode {
   local_bytes: number
   /** 有本地副本（下载完成后为 true；文件被外部删掉时仍为 true，播放前会回退） */
   has_local: boolean
+  /** 播放进度（第 176 期）：秒数 / 首次听完时间（0 = 没听完） */
+  position_sec: number
+  played_at: number
 }
 
 /** 书库实体（`/api/libraries`，第 10 期起） */
@@ -5100,6 +5103,20 @@ export const api = {
     request<{ ok: boolean; moved_to: string }>(
       `/api/podcasts/episodes/${encodeURIComponent(eid)}/download`,
       { method: 'DELETE' },
+    ),
+
+  savePodcastProgress: (eid: string, positionSec: number, durationSec = 0) =>
+    request<Record<string, unknown>>(
+      `/api/podcasts/episodes/${encodeURIComponent(eid)}/progress`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ position_sec: positionSec, duration_sec: durationSec }) },
+    ),
+
+  markPodcastEpisodePlayed: (eid: string, played: boolean) =>
+    request<Record<string, unknown>>(
+      `/api/podcasts/episodes/${encodeURIComponent(eid)}/played`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ played }) },
     ),
 
   /** 本地副本播放 URL（带 `?token=`：`<audio>` 带不了 Authorization）。 */

@@ -419,6 +419,25 @@ def local_audio_path(eid: str) -> "pathlib.Path | None":
     return p if p.is_file() else None
 
 
+# ---------------- 播放进度（第 176 期）----------------
+# 位置只增不减（拖回去重听不改小），听满 95% 记 played_at；手动「标未播」才会清零。
+
+PLAYED_THRESHOLD = 0.95
+
+
+def save_progress(eid: str, position: float, duration: float = 0) -> dict:
+    """写入播放位置；`duration > 0` 且听满阈值时同时记 played_at（第一次）。"""
+    if not db.get_podcast_episode(eid):
+        raise LookupError("单集不存在")
+    return db.set_episode_progress(eid, float(position or 0), float(duration or 0))
+
+
+def mark_played(eid: str, played: bool = True) -> dict:
+    if not db.get_podcast_episode(eid):
+        raise LookupError("单集不存在")
+    return db.mark_episode_played(eid, bool(played))
+
+
 # ---------------- OPML（导入 / 导出，第 174 期）----------------
 
 MAX_OPML_BYTES = 2 * 1024 * 1024

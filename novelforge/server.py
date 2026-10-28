@@ -3063,6 +3063,29 @@ def api_podcast_download_all(pid: str):
         raise HTTPException(404, str(e)) from None
 
 
+@app.post("/api/podcasts/episodes/{eid}/progress")
+def api_podcast_episode_progress(eid: str, payload: dict = Body(...)):
+    """保存单集播放位置（位置只增不减；听满 95% 记 `played_at`）。"""
+    pos = numbers.finite(payload.get("position_sec", 0))
+    dur = numbers.finite(payload.get("duration_sec", 0))
+    if pos is None or dur is None or pos < 0 or dur < 0:
+        raise HTTPException(400, "position_sec / duration_sec 必须是非负有限数")
+    try:
+        return podcasts.save_progress(eid, pos, dur)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+
+
+@app.post("/api/podcasts/episodes/{eid}/played")
+def api_podcast_episode_played(eid: str, payload: dict = Body(default=None)):
+    """手动标已播 / 未播（未播同时清零位置）。"""
+    played = bool((payload or {}).get("played", True))
+    try:
+        return podcasts.mark_played(eid, played)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+
+
 @app.post("/api/podcasts/{pid}/refresh")
 def api_podcast_refresh(pid: str):
     """重新抓取：新单集 upsert，旧单集保留（失败时什么都不改）。"""

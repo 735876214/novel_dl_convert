@@ -176,6 +176,73 @@ async function refreshAll(): Promise<void> {
 // 状态只认服务端的 `download_state`；这里只做「排队 → 轮询 → 播放本地副本」。
 let pollTimer: number | undefined
 
+// ---------------- 播放进度与筛选（第 176 期） ----------------
+const epFilter = ref<'all' | 'unplayed' | 'playing' | 'played'>('all')
+
+function epState(e: PodcastEpisode): 'unplayed' | 'playing' | 'played' {
+  if (e.played_at) return 'played'
+  return e.position_sec > 0 ? 'playing' : 'unplayed'
+}
+
+const episodeCounts = computed(() => {
+  const c = { all: episodes.value.length, unplayed: 0, playing: 0, played: 0 }
+  for (const e of episodes.value) c[epState(e)] += 1
+  return c
+})
+
+const filteredEpisodes = computed(() =>
+  epFilter.value === 'all' ? episodes.value
+    : episodes.value.filter((e) => epState(e) === epFilter.value),
+)
+
+const EP_FILTERS: { value: 'all' | 'unplayed' | 'playing' | 'played'; label: string }[] = [
+  { value: 'all', label: '全部' },
+  { value: 'unplayed', label: '未播' },
+  { value: 'playing', label: '进行中' },
+  { value: 'played', label: '已播' },
+]
+
+/** 每集最后保存进度的时间（5 秒节流；`<audio>` 的 timeupdate 一秒多次） */
+const lastSaveAt: Record<string, number> = {}
+
+function onEpisodeTime(e: PodcastEpisode, ev: Event): void {
+  const el = ev.target as HTMLAudioElement
+  if (!el || !Number.isFinite(el.duration) || el.duration <= 0) return
+  const now = Date.now()
+  if ((lastSaveAt[e.id] || 0) + 5000 > now) return
+  lastSaveAt[e.id] = now
+  const pos = el.currentTime
+  void api.savePodcastProgress(e.id, pos, el.duration)
+    .then(() => { e.position_sec = Math.max(e.position_sec, pos) })
+    .catch(() => { /* 进度写失败不影响播放 */ })
+}
+
+function onEpisodeLoaded(e: PodcastEpisode, ev: Event): void {
+  const el = ev.target as HTMLAudioElement
+  if (!el) return
+  // 续播：位置有意义且没到最后 5 秒时跳过去
+  if (e.position_sec > 2 && (!el.duration || e.position_sec < el.duration - 5)) {
+    el.currentTime = e.position_sec
+  }
+}
+
+function onEpisodeEnded(e: PodcastEpisode, ev: Event): void {
+  const el = ev.target as HTMLAudioElement
+  const dur = el?.duration || e.position_sec || 0
+  void api.savePodcastProgress(e.id, dur, dur)
+    .then(() => { e.position_sec = dur; e.played_at = Date.now() })
+    .catch(() => { /* 同上 */ })
+}
+
+async function togglePlayed(e: PodcastEpisode): Promise<void> {
+  try {
+    await api.markPodcastEpisodePlayed(e.id, !e.played_at)
+    if (selected.value) await open(selected.value)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '操作失败'
+  }
+}
+
 function audioSrc(e: PodcastEpisode): string {
   return e.download_state === 'downloaded' ? api.podcastEpisodeAudioUrl(e.id) : e.audio_url
 }
@@ -367,10 +434,31 @@ function fmtDate(ts: number): string {
           title="还没有单集"
           desc="点上面的「刷新」去发布方那里取最新一期。"
         />
-        <ul v-else class="divide-y divide-border">
-          <li v-for="e in episodes" :key="e.id" class="py-2.5">
+        <template v-else>
+          <div class="mb-2 flex flex-wrap items-center gap-1">
+            <button
+              v-for="f in EP_FILTERS"
+              :key="f.value"
+              type="button"
+              class="cursor-pointer rounded-full px-2.5 py-0.5 text-[11.5px] font-medium transition-colors"
+              :class="epFilter === f.value ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground'"
+              @click="epFilter = f.value"
+            >
+              {{ f.label }} <span class="tabular-nums opacity-70">{{ episodeCounts[f.value] }}</span>
+            </button>
+          </div>
+        <ul class="divide-y divide-border">
+          <li v-for="e in filteredEpisodes" :key="e.id" class="py-2.5">
             <div class="flex flex-wrap items-baseline gap-2">
               <span class="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">{{ e.title }}</span>
+              <span
+                v-if="e.played_at"
+                class="shrink-0 rounded bg-primary/10 px-1 text-[10px] text-primary"
+              >已播</span>
+              <span
+                v-else-if="e.position_sec > 0"
+                class="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground"
+              >进行中 {{ Math.round((e.position_sec / Math.max(1, e.duration_sec || e.position_sec)) * 100) }}%</span>
               <span
                 v-if="e.download_state === 'downloading'"
                 class="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground"
@@ -400,6 +488,11 @@ function fmtDate(ts: number): string {
                 class="shrink-0 cursor-pointer text-[11px] text-muted-foreground hover:text-destructive"
                 @click="cleanEpisode(e)"
               >清理</button>
+              <button
+                type="button"
+                class="shrink-0 cursor-pointer text-[11px] text-muted-foreground hover:text-primary"
+                @click="togglePlayed(e)"
+              >{{ e.played_at ? '标未播' : '标已播' }}</button>
             </div>
             <p v-if="e.description" class="mt-0.5 line-clamp-2 text-[11.5px] leading-relaxed text-muted-foreground">
               {{ e.description }}
@@ -410,9 +503,13 @@ function fmtDate(ts: number): string {
               preload="none"
               :src="audioSrc(e)"
               class="mt-1.5 h-8 w-full"
+              @loadedmetadata="onEpisodeLoaded(e, $event)"
+              @timeupdate="onEpisodeTime(e, $event)"
+              @ended="onEpisodeEnded(e, $event)"
             />
           </li>
         </ul>
+        </template>
       </Card>
     </template>
   </div>
