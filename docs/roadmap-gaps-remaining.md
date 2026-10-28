@@ -10788,3 +10788,42 @@ TXT 派生 EPUB 与 FB2 派生物是同一类东西（`build_epub(..., nav=False
 **核验**：后端全量（见 §0 基线）+ 目标契约组。
 
 **下一步**：Phase 1A 余下 —— 受管副本批量改名 / 正则导入向导。
+
+## 第 164 期（读路径第二轮审计（重复页 bigram 预筛 / 成就走 brief / 会话查询收敛））
+
+**需求来源**：用户「持续进行审计」（第 161/162 期性能批的续篇）。方法不变：线上逐端点计时，
+只修有实测数字的。
+
+**线上计时结果（2,309 本 / 1.4.7 部署）**：绝大多数端点 5–60 ms 健康带内；抓到两个异常：
+
+| 端点 | 实测 | 根因 |
+|---|---|---|
+| `GET /api/duplicates` | **19–24 s**（两次复测） | 2,176 本书作者全空 → 共享「未知」一个大桶；长度预筛放行 **89 万对**，全量 `SequenceMatcher`（本机微基准同形状 ~30 s） |
+| `GET /api/achievements` | **210–380 ms** | `_metrics()` 每次跑完整 `stats.overview()`（含五年会话扫表 + 逐本 metascore 审计），而成就只读 11 个标量度量 |
+
+**修法**：
+
+| 改动 | 改前 | 改后 | 依据 |
+|---|---|---|---|
+| `duplicate_groups` 的 bigram 包含率预筛（`core/library.py`） | 89 万对全量 `SequenceMatcher` | 字符二元组包含率 < 0.3 的对直接跳过；真实形状 A/B 对拍 **16.5 s → 6.1 s**（剩余成本在 ISBN / 并查集 / 分组构造） | 同一份 2,309 本书目形状、同机器两次运行 |
+| 成就判定 `_metrics()` 走 `stats.brief()`（第 162 期的出口） | 每次成就 GET 跑完整 overview | brief 只算要的聚合；`reading.annotations` 并入 brief（成就度量之一） | 162 期键审计 + `test_stats_brief_162` 扩了 annotations 断言 |
+| brief 的 `finished` 修复（审查中抓到的**真缺陷**） | `_classify_status` 被传常量 `0.0` ⇒ 无状态行的书走不进进度兜底分支，brief 的 finished **恒 0** | 传真实进度（`db.all_progress()`） | 全量当场红 `test_成就与统计同源`（`assert 0.0 == 1.0`），修后 33 例绿 |
+| `session_feed` 的库过滤下推 SQL（`core/db.py`） | 无条件全表 `ORDER BY ended_at DESC` 再 Python 扔 | `book_ids=None` 直接 `LIMIT`；有过滤走分块 `IN`（900，与 `reading_totals` 同范式）+ 块内 `LIMIT`，`idx_session_end` 索引序 | 20k 行内存库：全表拉 12 ms → 带过滤分支不再物化全表 |
+| `weekday_histogram` 的窗口下界推 SQL | 全表拉 | `WHERE ended_at >= floor`（`ended_at >= started_at` ⇒ 该下界是超集，**不漏**） | 同上 |
+
+**bigram 门限的依据（为什么不拍脑袋）**：对 7,631 对随机变异（增删改 ≤20% 字符）测了
+`ratio ≥ 0.85` 时二元组包含率的**实测下界 0.25**；门限取 0.3 留余量 —— 比它严会丢真阳性，
+比它松退化回全量。`SequenceMatcher` 仍是**唯一判定**，预筛只省「必然到不了阈值」的对。
+安全性由 `test_大桶不因_bigram_预筛丢真相似` 钉死：500 本大桶 + 3 对门限附近的真相似，
+全都要成组；另给 15 s 宽松上限防门限被改回 0。
+
+**防回归**：`tests/test_duplicates_155.py` 增 1 例（安全性 + 耗时上限）；`test_stats_brief_162.py`
+扩 annotations 形状与同源断言；`test_reading_thresholds.py` 的同源三连（统计 / 成就 / Komga）复绿。
+
+**核验**：后端全量 **2879 例（2866 passed / 13 环境失败 / 14 skipped）** —— 13 例与本批无关
+（见 §0 基线注）；前端四连通过（本批无前端改动）。
+
+**没做（如实留档）**：`reading_day_minutes`（阅读活动热力图）仍是全表扫 —— 它的口径是
+**全部历史**（year 过滤在 Python 里做，是「筛掉其它年」不是「只查那一年」），只在活动页出现、
+不在进站路径上；`reading-log` 的 20k 会话聚合实测 ~70 ms（内存库），暂不构成瓶颈；
+`hour_histogram` 与 `active_days` 的全表拉在 brief 路径上，量级同 reading-log，先观察。
