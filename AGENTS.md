@@ -96,7 +96,7 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 
 ```bash
 # 后端全量测试（离线）—— 脚本已清 proxy、已带 junitxml，有 failed/errors 即退 1
-bash scripts/test.sh                       # 当前基线 2893 例（2865 passed / 14 skipped；只增不减）
+bash scripts/test.sh                       # 当前基线 2896 例（2869 passed / 14 skipped；只增不减）
 bash scripts/test.sh tests/test_catalog.py -k 某关键字
 
 # 前端四连（type-check → unit → build → deploy，缺一不可）
