@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { api } from '@/lib/api'
+import { api, type PodcastEpisode } from '@/lib/api'
 import PodcastsView from '@/views/PodcastsView.vue'
 
 /**
@@ -21,6 +21,10 @@ vi.mock('@/lib/api', () => ({
     podcastsOpml: vi.fn(),
     importPodcastsOpml: vi.fn(),
     refreshAllPodcasts: vi.fn(),
+    downloadPodcastEpisode: vi.fn(),
+    downloadAllPodcastEpisodes: vi.fn(),
+    cleanPodcastEpisode: vi.fn(),
+    podcastEpisodeAudioUrl: vi.fn((eid: string) => `/local/${eid}`),
   },
 }))
 
@@ -33,6 +37,9 @@ const m = {
   opml: vi.mocked(api.podcastsOpml),
   importOpml: vi.mocked(api.importPodcastsOpml),
   refreshAll: vi.mocked(api.refreshAllPodcasts),
+  dl: vi.mocked(api.downloadPodcastEpisode),
+  dlAll: vi.mocked(api.downloadAllPodcastEpisodes),
+  clean: vi.mocked(api.cleanPodcastEpisode),
 }
 
 const POD = {
@@ -42,10 +49,11 @@ const POD = {
   created_at: 0,
 }
 
-const EP = {
+const EP: PodcastEpisode = {
   id: 'e1', podcast_id: 'p1', guid: 'g1', title: '第 1 集', description: '简介',
   published_at: 1700000000, duration_sec: 3723, audio_url: 'https://cdn/1.mp3',
   audio_type: 'audio/mpeg', episode_no: 1, season_no: 0, explicit: false,
+  download_state: '', download_error: '', downloaded_at: 0, local_bytes: 0, has_local: false,
 }
 
 async function mountView() {
@@ -119,5 +127,26 @@ describe('PodcastsView', () => {
     await input.trigger('change')
     await flushPromises()
     expect(m.importOpml).toHaveBeenCalled()
+  })
+
+  it('下载：点“下载”调后端；已下载的单集播放本地地址', async () => {
+    const w = await mountView()
+    m.dl.mockResolvedValue({ ok: true, state: 'downloading' })
+    await w.findAll('button').find((b) => b.text() === '单集')!.trigger('click')
+    await flushPromises()
+    await w.findAll('button').find((b) => b.text() === '下载')!.trigger('click')
+    await flushPromises()
+    expect(m.dl).toHaveBeenCalledWith('e1')
+
+    // 已下载：audio 的 src 走本地出口（带 token 的 URL 由 api 生成）
+    m.eps.mockResolvedValue({
+      items: [{ ...EP, download_state: 'downloaded', has_local: true }],
+      total: 1,
+    })
+    // 第一次点了「单集」后按钮变「收起」—— 再点一次重新拉取单集
+    await w.findAll('button').find((b) => b.text() === '收起')!.trigger('click')
+    await flushPromises()
+    expect(w.find('audio').attributes('src')).toBe('/local/e1')
+    expect(w.text()).toContain('已下载')
   })
 })

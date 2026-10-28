@@ -490,6 +490,8 @@ _MEDIA_TOKEN_PATHS = (
     re.compile(r"^/api/books/[^/]+/audio/\d+$"),
     # 整本有声书 ZIP（第 171 期）：<a download> 同样是原生请求
     re.compile(r"^/api/books/[^/]+/audio/zip$"),
+    # 播客本地副本（第 175 期）：<audio src> 原生请求
+    re.compile(r"^/api/podcasts/episodes/[^/]+/audio$"),
     # 序号单元书的单话 / 单页（第 73 期）：音频话是 <audio src>、漫画话的单页是
     # <img src> —— 都是浏览器原生请求。PDF 话不在此列：它走 fetch + httpHeaders
     # （与 `/file` 同款），鉴权面不扩大。
@@ -3021,6 +3023,44 @@ def api_podcasts_opml_import(payload: dict = Body(...)):
 def api_podcasts_refresh_all():
     """刷新全部订阅（逐条隔离）。失败原因逐条回，且已落进订阅健康的 fail_count / last_error。"""
     return podcasts.refresh_all()
+
+
+@app.post("/api/podcasts/episodes/{eid}/download")
+def api_podcast_episode_download(eid: str):
+    """把一集加入下载队列（串行 worker；状态在 `download_state`）。"""
+    try:
+        return podcasts.enqueue_download(eid)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.delete("/api/podcasts/episodes/{eid}/download")
+def api_podcast_episode_clean(eid: str):
+    """清理本地副本：移入回收站（从不直接删），并清掉下载状态。"""
+    try:
+        return podcasts.clean_download(eid)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+
+
+@app.get("/api/podcasts/episodes/{eid}/audio")
+def api_podcast_episode_audio(eid: str):
+    """播放**本地副本**（下载完成的单集）。没下载 / 文件丢了 → 404（前端回退远端地址）。"""
+    p = podcasts.local_audio_path(eid)
+    if not p:
+        raise HTTPException(404, "该单集没有本地副本")
+    return FileResponse(p)
+
+
+@app.post("/api/podcasts/{pid}/download-all")
+def api_podcast_download_all(pid: str):
+    """把该订阅下还没下载的单集全部排队（逐集隔离，状态在 episodes 里）。"""
+    try:
+        return podcasts.download_all(pid)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
 
 
 @app.post("/api/podcasts/{pid}/refresh")

@@ -19,13 +19,19 @@ from __future__ import annotations
 
 import email.utils
 import html
+import os
+import pathlib
+import queue
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 
 import httpx
 
-from . import db
+from .. import config
+from . import db, fileops
 
 TIMEOUT = 20.0
 MAX_BYTES = 8 * 1024 * 1024
@@ -280,6 +286,137 @@ def refresh_all() -> dict:
             items.append({"id": p["id"], "title": p["title"], "ok": False,
                           "error": str(e)})
     return {"ok": ok, "failed": failed, "items": items}
+
+
+# ---------------- 单集下载（第 175 期）----------------
+# 下载落 `CACHE_DIR/podcast-audio`（派生数据，可清理）；清理**移入回收站**而不是删。
+# 串行 worker：一个进程一个队列，避免「批量下载 200 集」时开 200 个线程把站点打挂。
+# 全部状态落在 `podcast_episodes.download_state`，接口与页面都从那里读，不另建内存状态。
+
+DOWNLOAD_DIRNAME = "podcast-audio"
+MAX_AUDIO_BYTES = 2 * 1024 * 1024 * 1024
+_AUDIO_SUFFIXES = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".opus", ".wav", ".flac")
+_q: "queue.Queue[str]" = queue.Queue()
+_worker_started = False
+_worker_lock = threading.Lock()
+
+
+def _download_dir(podcast_id: str) -> pathlib.Path:
+    d = config.CACHE_DIR / DOWNLOAD_DIRNAME / str(podcast_id)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _audio_suffix(url: str) -> str:
+    suf = pathlib.PurePosixPath(urlparse(str(url or "")).path).suffix.lower()
+    return suf if suf in _AUDIO_SUFFIXES else ".mp3"
+
+
+def _download_bytes(url: str, tmp: pathlib.Path) -> int:
+    """把音频写到 `tmp`，返回字节数。**单独抽出便于测试打桩**（离线用例不打真网）。"""
+    size = 0
+    with httpx.stream("GET", url, headers=_HEADERS, timeout=TIMEOUT,
+                      follow_redirects=True) as r:
+        r.raise_for_status()
+        with open(tmp, "wb") as f:
+            for chunk in r.iter_bytes(65536):
+                size += len(chunk)
+                if size > MAX_AUDIO_BYTES:
+                    raise ValueError(f"音频超过上限（{MAX_AUDIO_BYTES // 1024 // 1024 // 1024} GB）")
+                f.write(chunk)
+    return size
+
+
+def _download_one(eid: str) -> None:
+    ep = db.get_podcast_episode(eid)
+    if not ep or not ep.get("audio_url"):
+        return
+    d = _download_dir(ep["podcast_id"])
+    dest = d / f"{str(eid)[:16]}{_audio_suffix(ep['audio_url'])}"
+    tmp = dest.with_name(dest.name + ".part")
+    try:
+        size = _download_bytes(ep["audio_url"], tmp)
+        os.replace(tmp, dest)                       # 原子落位：半成品永不以真名出现
+        db.set_episode_download(eid, "downloaded", local_path=str(dest), size=size)
+    except Exception as e:                          # noqa: BLE001 —— 逐条隔离，状态如实落库
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        db.set_episode_download(eid, "failed", error=f"{type(e).__name__}: {e}")
+
+
+def _worker() -> None:
+    while True:
+        eid = _q.get()
+        try:
+            _download_one(eid)
+        finally:
+            _q.task_done()
+
+
+def _ensure_worker() -> None:
+    global _worker_started
+    with _worker_lock:
+        if _worker_started:
+            return
+        threading.Thread(target=_worker, name="podcast-download", daemon=True).start()
+        _worker_started = True
+
+
+def enqueue_download(eid: str) -> dict:
+    """把一集加入下载队列（幂等：已下载 / 正在下载直接返回当前状态）。"""
+    ep = db.get_podcast_episode(eid)
+    if not ep:
+        raise LookupError("单集不存在")
+    if ep["download_state"] in ("downloading", "downloaded"):
+        return {"ok": True, "state": ep["download_state"]}
+    if not ep.get("audio_url"):
+        raise ValueError("这一集没有音频地址")
+    db.set_episode_download(eid, "downloading")
+    _ensure_worker()
+    _q.put(str(eid))
+    return {"ok": True, "state": "downloading"}
+
+
+def download_all(podcast_id: str) -> dict:
+    """把该订阅下**还没下载**的单集全部排队。"""
+    if not db.get_podcast(podcast_id):
+        raise LookupError("订阅不存在")
+    queued = 0
+    for ep in db.list_podcast_episodes(podcast_id, limit=2000):
+        if ep["download_state"] in ("downloading", "downloaded"):
+            continue
+        if not ep.get("audio_url"):
+            continue
+        db.set_episode_download(ep["id"], "downloading")
+        _ensure_worker()
+        _q.put(ep["id"])
+        queued += 1
+    return {"ok": True, "queued": queued}
+
+
+def clean_download(eid: str) -> dict:
+    """清理本地副本：**移入回收站**（从不直接删），并清掉下载状态。"""
+    ep = db.get_podcast_episode(eid)
+    if not ep:
+        raise LookupError("单集不存在")
+    local = str(ep.get("local_path") or "")
+    moved = ""
+    if local:
+        p = pathlib.Path(local)
+        if p.is_file():
+            moved = str(fileops.recycle_path(p, reason="清理播客下载"))
+    db.clear_episode_download(eid)
+    return {"ok": True, "moved_to": moved}
+
+
+def local_audio_path(eid: str) -> "pathlib.Path | None":
+    ep = db.get_podcast_episode(eid)
+    if not ep or ep.get("download_state") != "downloaded":
+        return None
+    p = pathlib.Path(str(ep.get("local_path") or ""))
+    return p if p.is_file() else None
 
 
 # ---------------- OPML（导入 / 导出，第 174 期）----------------

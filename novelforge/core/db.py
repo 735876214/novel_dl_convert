@@ -422,6 +422,12 @@ def init():
                 episode_no   INTEGER NOT NULL DEFAULT 0,
                 season_no    INTEGER NOT NULL DEFAULT 0,
                 explicit     INTEGER NOT NULL DEFAULT 0,
+                -- 下载（第 175 期）：本地副本路径 / 状态（''|downloading|downloaded|failed）/ 原因 / 字节
+                local_path     TEXT NOT NULL DEFAULT '',
+                download_state TEXT NOT NULL DEFAULT '',
+                download_error TEXT NOT NULL DEFAULT '',
+                downloaded_at  REAL NOT NULL DEFAULT 0,
+                local_bytes    INTEGER NOT NULL DEFAULT 0,
                 created_at   REAL NOT NULL DEFAULT 0,
                 deleted_at   REAL NOT NULL DEFAULT 0,
                 UNIQUE(podcast_id, guid)
@@ -1149,6 +1155,13 @@ def init():
             c.execute("ALTER TABLE podcasts ADD COLUMN last_ok_at REAL NOT NULL DEFAULT 0")
             c.execute("ALTER TABLE podcasts ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0")
             c.execute("ALTER TABLE podcasts ADD COLUMN last_error TEXT NOT NULL DEFAULT ''")
+        ecols = {r["name"] for r in c.execute("PRAGMA table_info(podcast_episodes)")}
+        if ecols and "download_state" not in ecols:
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN local_path TEXT NOT NULL DEFAULT ''")
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN download_state TEXT NOT NULL DEFAULT ''")
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN download_error TEXT NOT NULL DEFAULT ''")
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN downloaded_at REAL NOT NULL DEFAULT 0")
+            c.execute("ALTER TABLE podcast_episodes ADD COLUMN local_bytes INTEGER NOT NULL DEFAULT 0")
         if scols and "source" not in scols:
             # 来源（web / audio / koreader …）。存量行回落**空串 = 未知**，不猜 'web'：
             # 改造前有声书播放器与网页阅读器走的是同一个上报接口，事后分不出来是哪一边。
@@ -4179,7 +4192,57 @@ def list_podcast_episodes(podcast_id: str, limit: int = 200) -> list:
         "episode_no": int(r["episode_no"] or 0),
         "season_no": int(r["season_no"] or 0),
         "explicit": bool(r["explicit"]),
+        "download_state": str(r["download_state"] or ""),
+        "download_error": str(r["download_error"] or ""),
+        "downloaded_at": float(r["downloaded_at"] or 0),
+        "local_bytes": int(r["local_bytes"] or 0),
+        "has_local": bool(str(r["local_path"] or "")),
     } for r in rows]
+
+
+def get_podcast_episode(eid: str) -> "dict | None":
+    row = _connect().execute(
+        "SELECT * FROM podcast_episodes WHERE id=? AND deleted_at=0", (str(eid),)
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": str(row["id"]),
+        "podcast_id": str(row["podcast_id"]),
+        "guid": str(row["guid"]),
+        "title": str(row["title"] or ""),
+        "audio_url": str(row["audio_url"] or ""),
+        "local_path": str(row["local_path"] or ""),
+        "download_state": str(row["download_state"] or ""),
+        "download_error": str(row["download_error"] or ""),
+        "downloaded_at": float(row["downloaded_at"] or 0),
+        "local_bytes": int(row["local_bytes"] or 0),
+    }
+
+
+def set_episode_download(eid: str, state: str, *, local_path="", error="", size=0) -> None:
+    """写下载状态。`downloaded` 时同时记完成时间；失败只记原因（保留旧本地副本字段）。"""
+    c = _connect()
+    now = time.time()
+    with _lock:
+        c.execute(
+            "UPDATE podcast_episodes SET download_state=?, download_error=?,"
+            " local_path=?, local_bytes=?, downloaded_at=? WHERE id=?",
+            (str(state), str(error or "")[:500], str(local_path or ""), int(size or 0),
+             now if state == "downloaded" else 0, str(eid)),
+        )
+        c.commit()
+
+
+def clear_episode_download(eid: str) -> None:
+    c = _connect()
+    with _lock:
+        c.execute(
+            "UPDATE podcast_episodes SET local_path='', download_state='',"
+            " download_error='', downloaded_at=0, local_bytes=0 WHERE id=?",
+            (str(eid),),
+        )
+        c.commit()
 
 
 # ---- 覆盖前备份（可回滚）----

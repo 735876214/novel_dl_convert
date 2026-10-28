@@ -971,6 +971,28 @@ def recycle_items(names: list, reason: str = "") -> dict:
     return {"moved": moved, "errors": errors, "recycle_dir": str(dest_dir)}
 
 
+def recycle_path(src, reason: str = "") -> pathlib.Path:
+    """把**任意一个文件**移入回收目录（时间戳命名 + 台账），返回落点。
+
+    与 :func:`recycle_items` 的区别只在「源文件不必在书库里」：播客下载的音频存在
+    缓存目录，清理同样必须走回收站（第 173 期起播客下载复用这一条）。**从不 unlink**。
+    """
+    p = pathlib.Path(src)
+    if not p.is_file():
+        raise ValueError("文件不存在")
+    dest_dir = recycle_dir()
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    size = size_of(p)
+    dst = dest_dir / recycled_name(p.name, stamp)
+    n = 1
+    while dst.exists():
+        dst = dest_dir / recycled_name(p.name, stamp, n)
+        n += 1
+    shutil.move(str(p), str(dst))
+    db.recycle_note(p, dst.name, why=reason or "移入回收目录", size=size)
+    return dst
+
+
 def resolve_duplicates(keep: str, remove: list) -> dict:
     """重复书籍处理：``remove`` 里的文件移入回收目录，``keep`` 仅用于日志备注。"""
     keep = (keep or "").strip()

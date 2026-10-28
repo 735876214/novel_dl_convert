@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
@@ -172,6 +172,74 @@ async function refreshAll(): Promise<void> {
   }
 }
 
+// ---------------- 单集下载（第 175 期） ----------------
+// 状态只认服务端的 `download_state`；这里只做「排队 → 轮询 → 播放本地副本」。
+let pollTimer: number | undefined
+
+function audioSrc(e: PodcastEpisode): string {
+  return e.download_state === 'downloaded' ? api.podcastEpisodeAudioUrl(e.id) : e.audio_url
+}
+
+function startPolling(): void {
+  if (pollTimer) return
+  pollTimer = window.setInterval(async () => {
+    if (!selected.value) {
+      window.clearInterval(pollTimer)
+      pollTimer = undefined
+      return
+    }
+    try {
+      episodes.value = (await api.podcastEpisodes(selected.value)).items
+    } catch {
+      return
+    }
+    if (!episodes.value.some((x) => x.download_state === 'downloading')) {
+      window.clearInterval(pollTimer)
+      pollTimer = undefined
+    }
+  }, 2000)
+}
+
+onBeforeUnmount(() => {
+  if (pollTimer) window.clearInterval(pollTimer)
+  pollTimer = undefined
+})
+
+async function downloadEpisode(e: PodcastEpisode): Promise<void> {
+  try {
+    await api.downloadPodcastEpisode(e.id)
+    e.download_state = 'downloading'
+    startPolling()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '下载失败'
+  }
+}
+
+async function cleanEpisode(e: PodcastEpisode): Promise<void> {
+  try {
+    await api.cleanPodcastEpisode(e.id)
+    ui.toast('本地副本已移入回收站')
+    if (selected.value) await open(selected.value)
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '清理失败'
+  }
+}
+
+async function downloadAll(): Promise<void> {
+  if (!selected.value || busy.value) return
+  busy.value = 'download-all'
+  try {
+    const r = await api.downloadAllPodcastEpisodes(selected.value)
+    ui.toast(r.queued ? `已排队 ${r.queued} 集` : '没有需要下载的单集')
+    await open(selected.value)
+    startPolling()
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '批量下载失败'
+  } finally {
+    busy.value = ''
+  }
+}
+
 function fmtDuration(sec: number): string {
   if (!sec) return ''
   const h = Math.floor(sec / 3600)
@@ -284,10 +352,15 @@ function fmtDate(ts: number): string {
       </Card>
 
       <Card v-if="selectedPodcast">
-        <h3 class="mb-2 text-[13px] font-semibold text-foreground">
-          {{ selectedPodcast.title }} · 单集
-          <span class="ml-1 text-[11px] font-normal text-muted-foreground">共 {{ episodes.length }} 集</span>
-        </h3>
+        <div class="mb-2 flex flex-wrap items-center gap-2">
+          <h3 class="text-[13px] font-semibold text-foreground">
+            {{ selectedPodcast.title }} · 单集
+            <span class="ml-1 text-[11px] font-normal text-muted-foreground">共 {{ episodes.length }} 集</span>
+          </h3>
+          <Button size="sm" variant="ghost" class="ml-auto" :disabled="!!busy || !episodes.length" @click="downloadAll">
+            {{ busy === 'download-all' ? '排队中…' : '下载全部未下载' }}
+          </Button>
+        </div>
         <EmptyState
           v-if="!episodes.length"
           icon="volume"
@@ -298,10 +371,35 @@ function fmtDate(ts: number): string {
           <li v-for="e in episodes" :key="e.id" class="py-2.5">
             <div class="flex flex-wrap items-baseline gap-2">
               <span class="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">{{ e.title }}</span>
+              <span
+                v-if="e.download_state === 'downloading'"
+                class="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground"
+              >下载中</span>
+              <span
+                v-else-if="e.download_state === 'downloaded'"
+                class="shrink-0 rounded bg-emerald-500/15 px-1 text-[10px] text-emerald-600 dark:text-emerald-400"
+              >已下载</span>
+              <span
+                v-else-if="e.download_state === 'failed'"
+                class="shrink-0 rounded bg-destructive/14 px-1 text-[10px] text-destructive"
+                :title="e.download_error"
+              >下载失败</span>
               <span class="shrink-0 text-[11px] text-muted-foreground">{{ fmtDate(e.published_at) }}</span>
               <span v-if="e.duration_sec" class="shrink-0 text-[11px] text-muted-foreground tabular-nums">
                 {{ fmtDuration(e.duration_sec) }}
               </span>
+              <button
+                v-if="e.download_state !== 'downloaded' && e.download_state !== 'downloading' && e.audio_url"
+                type="button"
+                class="shrink-0 cursor-pointer text-[11px] text-primary hover:underline"
+                @click="downloadEpisode(e)"
+              >下载</button>
+              <button
+                v-if="e.download_state === 'downloaded'"
+                type="button"
+                class="shrink-0 cursor-pointer text-[11px] text-muted-foreground hover:text-destructive"
+                @click="cleanEpisode(e)"
+              >清理</button>
             </div>
             <p v-if="e.description" class="mt-0.5 line-clamp-2 text-[11.5px] leading-relaxed text-muted-foreground">
               {{ e.description }}
@@ -310,7 +408,7 @@ function fmtDate(ts: number): string {
               v-if="e.audio_url"
               controls
               preload="none"
-              :src="e.audio_url"
+              :src="audioSrc(e)"
               class="mt-1.5 h-8 w-full"
             />
           </li>

@@ -2679,6 +2679,13 @@ export interface PodcastEpisode {
   episode_no: number
   season_no: number
   explicit: boolean
+  /** 下载（第 175 期）：'' | downloading | downloaded | failed */
+  download_state: '' | 'downloading' | 'downloaded' | 'failed'
+  download_error: string
+  downloaded_at: number
+  local_bytes: number
+  /** 有本地副本（下载完成后为 true；文件被外部删掉时仍为 true，播放前会回退） */
+  has_local: boolean
 }
 
 /** 书库实体（`/api/libraries`，第 10 期起） */
@@ -5074,6 +5081,32 @@ export const api = {
       { method: 'POST' },
       { timeoutMs: LONG_REQUEST_TIMEOUT_MS },
     ),
+
+  /** 单集下载（第 175 期）：排队后状态在 `podcast_episodes.download_state`。 */
+  downloadPodcastEpisode: (eid: string) =>
+    request<{ ok: boolean; state: string }>(
+      `/api/podcasts/episodes/${encodeURIComponent(eid)}/download`,
+      { method: 'POST' },
+    ),
+
+  downloadAllPodcastEpisodes: (pid: string) =>
+    request<{ ok: boolean; queued: number }>(
+      `/api/podcasts/${encodeURIComponent(pid)}/download-all`,
+      { method: 'POST' },
+    ),
+
+  /** 清理本地副本（移入回收站）。 */
+  cleanPodcastEpisode: (eid: string) =>
+    request<{ ok: boolean; moved_to: string }>(
+      `/api/podcasts/episodes/${encodeURIComponent(eid)}/download`,
+      { method: 'DELETE' },
+    ),
+
+  /** 本地副本播放 URL（带 `?token=`：`<audio>` 带不了 Authorization）。 */
+  podcastEpisodeAudioUrl: (eid: string) => {
+    const t = _authToken()
+    return `/api/podcasts/episodes/${encodeURIComponent(eid)}/audio${t ? `?token=${encodeURIComponent(t)}` : ''}`
+  },
 
   /** 书库手动排序（第 154 期）：ids 必须是当前全部书库 id 的一个排列。 */
   reorderLibraries: (ids: string[]) =>
