@@ -2745,7 +2745,7 @@ def entities(kind: str, library_id=None) -> dict:
     return {"type": kind, "items": items, "total": len(bs)}
 
 
-#: 内容比对的两级哈希门限（第 181 期）：先比「首尾各 64 KiB」的摘要，只有它相同才逐字节读完。
+#: 内容比对的两级哈希门限（第 182 期）：先比「首尾各 64 KiB」的摘要，只有它相同才逐字节读完。
 #: **相同文件必定同尺寸且同首尾** ⇒ 这是**必要性判据**，不会漏；而真实库里同尺寸的文件
 #: 绝大多数内容并不相同（真实库实测：2,309 本里只有 24 本与他人同尺寸，但它们合计
 #: **3.33 GB** —— 全读一遍正是「重复书」页 19 s 里的大头，结果只捞出几组真副本）。
@@ -2889,7 +2889,7 @@ def duplicate_groups(threshold: int = 85, library_id=None, dismissed=None) -> di
                 if inter / min(len(ga), len(gc)) < 0.3:
                     continue
                 sm = SequenceMatcher(None, ta, tc)
-                # 第 181 期：`quick_ratio()` 是 `ratio()` 的**上界**（同样的多重集交集计数，
+                # 第 182 期：`quick_ratio()` 是 `ratio()` 的**上界**（同样的多重集交集计数，
                 # 但不建匹配块）—— 上界都到不了阈值，真实比值必然也到不了，所以先比它
                 # **不会丢任何真相似**。实测（真实库 2,309 本、2,176 本同属「未知」作者的
                 # 大桶）：过完 bigram 预筛还剩 260,204 对，直接算 ratio 5.26 s；先比
@@ -2909,7 +2909,7 @@ def duplicate_groups(threshold: int = 85, library_id=None, dismissed=None) -> di
             join(idxs[0], j)
 
     # 3) 文件内容相同（只哈希同尺寸的普通文件；>512MB 跳过）
-    #    第 181 期：两级哈希 —— 先比首尾（`_same_content`），只有首尾也相同的才全文读完。
+    #    第 182 期：两级哈希 —— 先比首尾（`_same_content`），只有首尾也相同的才全文读完。
     MAX_HASH = 512 * 1024 * 1024
     by_size: dict = {}
     for i, b in enumerate(bs):
