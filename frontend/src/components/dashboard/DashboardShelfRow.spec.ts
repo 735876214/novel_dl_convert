@@ -37,7 +37,7 @@ function book(over: Partial<BookCard>): BookCard {
 
 let router: Router
 
-async function mountRow(books: BookCard[]) {
+async function mountRow(books: BookCard[], shelf?: Record<string, unknown>) {
   const lib = useLibraryStore()
   lib.books = books
   lib.loaded = true
@@ -46,7 +46,11 @@ async function mountRow(books: BookCard[]) {
   vi.spyOn(lib, 'loadLibraries').mockResolvedValue(undefined)
 
   const w = mount(DashboardShelfRow, {
-    props: { shelf: { id: 'recent', type: 'recent', title: '最近添加', rows: 1, enabled: true } },
+    props: {
+      shelf: shelf
+        ? (shelf as never)
+        : { id: 'recent', type: 'recent', title: '最近添加', rows: 1, enabled: true },
+    },
     global: { plugins: [router] },
   })
   await flushPromises()
@@ -148,5 +152,36 @@ describe('DashboardShelfRow：点封面直接读（第 108 期）', () => {
 
     expect(router.currentRoute.value.path).toBe('/shelf')
     w.unmount()
+  })
+})
+
+describe('DashboardShelfRow：继续收听（第 171 期）', () => {
+  const listenShelf = { id: 'shelf-listen', type: 'listen', title: '继续收听', rows: 1, enabled: true }
+
+  it('只显示有声书（与「继续阅读」同一份进度阈值，再按格式过滤）', async () => {
+    const w = await mountRow(
+      [
+        book({ id: 'aud-1', title: '有声书一', format: 'AUDIO', percent: 30 }),
+        book({ id: 'ep-1', title: '电子书一', format: 'EPUB', percent: 50 }),
+      ],
+      listenShelf,
+    )
+    expect(w.findAll('button.shelf-cover-enter')).toHaveLength(1)
+    expect(w.text()).toContain('有声书一')
+    expect(w.text()).not.toContain('电子书一')
+  })
+
+  it('没有在听的有声书时整行不渲染（不听书的用户界面零变化）', async () => {
+    const w = await mountRow([book({ id: 'ep-1', format: 'EPUB', percent: 50 })], listenShelf)
+    expect(w.find('section').exists()).toBe(false)
+  })
+
+  it('「查看全部」带着 ?fmt=AUDIO 进书架（不混进电子书）', async () => {
+    const w = await mountRow([book({ id: 'aud-1', format: 'AUDIO', percent: 30 })], listenShelf)
+    const all = w.findAll('button').find((b) => b.text().includes('查看全部'))!
+    await all.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/shelf')
+    expect(router.currentRoute.value.query.fmt).toBe('AUDIO')
   })
 })

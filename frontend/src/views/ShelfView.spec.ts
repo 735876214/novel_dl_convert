@@ -446,3 +446,18 @@ describe('ShelfView：表格多选口径与折叠卡的册数', () => {
     expect(w.find('[data-book-menu-trigger]').exists()).toBe(true)
   })
 })
+
+describe('ShelfView：?fmt=AUDIO 落地（第 171 期）', () => {
+  it('按格式预设筛选，结果为空时给「没有符合条件的书」而不是谎报全空', async () => {
+    await router.push('/?fmt=AUDIO')
+    const w = await mountShelf('grid', false)
+    // 筛选面板默认收起；直接改开合状态，断言的是「预设值有没有进筛选」
+    useShelfPrefsStore().filtersOpen = true
+    await flushPromises()
+
+    const sel = w.find('select[aria-label="格式"]').element as HTMLSelectElement
+    expect(sel.value).toBe('AUDIO')
+    // 夹具全是 EPUB ⇒ 筛出来为空（诚实空态，不是「书架是空的」）
+    expect(w.text()).toContain('没有符合条件的书')
+  })
+})

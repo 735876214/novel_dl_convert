@@ -62,6 +62,9 @@ const allBooks = computed<BookCard[]>(() => {
   switch (props.shelf.type) {
     case 'continue':
       return library.continueReading
+    case 'listen':
+      // 与 continue 同一份进度阈值，只按格式过滤 —— 不另算「在听」判据。
+      return library.continueReading.filter((b) => (b.format || '').toUpperCase() === 'AUDIO')
     case 'discover':
       return discoverBooks.value
     case 'recent':
@@ -91,6 +94,9 @@ const visibleBooks = computed(() => scopedBooks.value.slice(0, fetchLimit.value)
 /** 多行分带（rows = 1 时只有一带，渲染与改造前逐字节等价） */
 const bands = computed(() => chunkIntoBands(visibleBooks.value, shelfRows.value))
 
+/** 「继续收听」行在**没有在听的有声书**时整行不渲染（不听书的用户界面零变化） */
+const hidden = computed(() => props.shelf.type === 'listen' && empty.value)
+
 /** 数据态：书库书目没回来 = 加载中（library 无 error 字段） */
 const loading = computed(() => !library.loaded)
 const empty = computed(() => !loading.value && visibleBooks.value.length === 0)
@@ -103,6 +109,7 @@ const emptyByScope = computed(() => empty.value && allBooks.value.length > 0)
 
 /** 书架类型的表头图标（走 lib/icons.ts 的注册表，不散落内联 SVG） */
 const SHELF_TYPE_ICON: Record<ShelfType, string> = {
+  listen: 'volume',
   continue: 'book',
   recent: 'sparkle',
   discover: 'star',
@@ -124,6 +131,11 @@ function pct(b: BookCard): number {
 function openAll(): void {
   if (props.shelf.type === 'continue') library.openSmart('在读', 'reading')
   else library.openShelf(props.shelf.title)
+  if (props.shelf.type === 'listen') {
+    // 书架按格式收窄到有声书（ShelfView 读 `?fmt=`）；不这么做「查看全部」会混进电子书
+    router.push({ path: '/shelf', query: { fmt: 'AUDIO' } })
+    return
+  }
   router.push('/shelf')
 }
 
@@ -145,6 +157,7 @@ function openBook(b: BookCard): void {
 
 <template>
   <section
+    v-if="!hidden"
     class="group/shelf min-w-0 overflow-hidden rounded-2xl border border-primary/40 bg-card/30 shadow-sm backdrop-blur-[1px]"
   >
     <!-- 表头：图标块 + 标题 + 计数胶囊 + （查看全部）+ 悬停滚动按钮 -->

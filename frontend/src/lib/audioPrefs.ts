@@ -68,6 +68,46 @@ export function readAudioPrefs(): AudioPrefs {
   }
 }
 
+// ---------------- 按书倍速覆盖（第 171 期）----------------
+// 与全局默认分开存：一本外语书常听 0.75x、一本播客式有声书常听 1.5x，互相不该牵连。
+// 键是 bookId（不是文件名）—— 书改名 / 换位置不影响。
+
+const BOOK_SPEED_KEY = 'audio-book-speeds'
+
+function readBookSpeeds(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(BOOK_SPEED_KEY)
+    const data = raw ? JSON.parse(raw) : null
+    return data && typeof data === 'object' ? (data as Record<string, number>) : {}
+  } catch {
+    return {}
+  }
+}
+
+/** 某本书的倍速覆盖；没有 / 坏值返回 `null`（= 用全局默认） */
+export function readBookSpeed(bookId: string): number | null {
+  const v = Number(readBookSpeeds()[String(bookId)] ?? NaN)
+  if (!Number.isFinite(v)) return null
+  return Math.min(AUDIO_SPEED_MAX, Math.max(AUDIO_SPEED_MIN, Math.round(v * 100) / 100))
+}
+
+/** 写 / 清某本书的倍速覆盖（`null` = 清除）。只落本机，不进偏好同步载荷。 */
+export function writeBookSpeed(bookId: string, speed: number | null): void {
+  try {
+    const all = readBookSpeeds()
+    if (speed == null) delete all[String(bookId)]
+    else {
+      all[String(bookId)] = Math.min(
+        AUDIO_SPEED_MAX,
+        Math.max(AUDIO_SPEED_MIN, Math.round(Number(speed) * 100) / 100),
+      )
+    }
+    localStorage.setItem(BOOK_SPEED_KEY, JSON.stringify(all))
+  } catch {
+    /* 隐私模式等场景静默失败 */
+  }
+}
+
 export function saveAudioPrefs(prefs: AudioPrefs): void {
   try {
     localStorage.setItem(AUDIO_PREFS_KEY, JSON.stringify(prefs))

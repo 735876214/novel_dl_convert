@@ -13,7 +13,7 @@ import {
   type WidgetId,
 } from '@/data/dashboard'
 
-const SHELF_TYPES: ShelfType[] = ['continue', 'recent', 'discover', 'scope']
+const SHELF_TYPES: ShelfType[] = ['continue', 'recent', 'discover', 'scope', 'listen']
 
 /**
  * 仪表盘偏好：部件的启用与顺序、书架行的启用与顺序。

@@ -44,7 +44,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
-                   events, entities, pathmeta)
+                   events, entities, pathmeta, m4b, audiobook_zip)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -488,6 +488,8 @@ _MEDIA_TOKEN_PATHS = (
     re.compile(r"^/api/account/avatar$"),
     # 有声书单轨：<audio src> 同样是原生请求，带不了 Authorization（第 9 期）
     re.compile(r"^/api/books/[^/]+/audio/\d+$"),
+    # 整本有声书 ZIP（第 171 期）：<a download> 同样是原生请求
+    re.compile(r"^/api/books/[^/]+/audio/zip$"),
     # 序号单元书的单话 / 单页（第 73 期）：音频话是 <audio src>、漫画话的单页是
     # <img src> —— 都是浏览器原生请求。PDF 话不在此列：它走 fetch + httpHeaders
     # （与 `/file` 同款），鉴权面不扩大。
@@ -4494,6 +4496,57 @@ def api_audio_heard(bid: str):
         raise HTTPException(400, "该书不是有声书")
     items = db.heard_audio_files(bid)
     return {"items": items, "total": len(items)}
+
+
+@app.get("/api/books/{bid}/audio/chapters")
+def api_audio_chapters(bid: str):
+    """M4B / M4A 的**内嵌章节**（第 171 期）：`moov/udta/chpl`，毫秒起点。
+
+    只对单文件有声书有意义：目录形态返回空；没有 `chpl` 也返回空（不按大小硬切章节）。
+    前端在列表为空时不显示章节区 —— 不摆一个永远空的控件。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    if (b.get("format") or "").upper() != "AUDIO":
+        raise HTTPException(400, "该书不是有声书")
+    path = library.abs_path(b)
+    items = m4b.chapters(path)
+    return {
+        "items": items,
+        "supported": str(path).lower().endswith(m4b.CHAPTER_EXTS),
+    }
+
+
+@app.get("/api/books/{bid}/audio/zip")
+def api_audio_zip(bid: str):
+    """整本有声书打包下载（第 171 期）：**流式 ZIP**，不落临时大文件。
+
+    归档内文件名统一加序号前缀（`001 - 01.mp3`）：音频目录里同名文件（不同子目录）在
+    平铺 ZIP 里会互相覆盖，序号同时给出确定的播放顺序。
+    """
+    b = library.by_id(bid)
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    if (b.get("format") or "").upper() != "AUDIO":
+        raise HTTPException(400, "该书不是有声书")
+    base = library.abs_path(b)
+    items = (units.tracks_of(base) or {}).get("items") or []
+    files = []
+    for i, it in enumerate(items):
+        p = units.track_at(base, i)
+        if p is None:
+            continue
+        base_name = pathlib.PurePosixPath(str(it.get("name") or "")).name or p.name
+        files.append((f"{i + 1:03d} - {base_name}", p))
+    if not files:
+        raise HTTPException(404, "这本书没有可打包的音频")
+    stem = fileops.sanitize_stem(str(b.get("title") or b.get("name") or "")) or "audiobook"
+    headers = {
+        "Content-Disposition": "attachment; filename*=UTF-8''" + quote(stem + ".zip"),
+    }
+    return StreamingResponse(audiobook_zip.stream_zip(files),
+                             media_type="application/zip", headers=headers)
 
 
 @app.get("/api/books/{bid}/audio/{index}")

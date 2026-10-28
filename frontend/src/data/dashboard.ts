@@ -102,10 +102,13 @@ export const DEFAULT_WIDGET_IDS: WidgetId[] = [
 ]
 
 /**
- * 书架行类型（对齐 BookOrbit 的四种）：
- *   continue 继续阅读 / recent 最近添加 / discover 随机发现 / scope 智能书架
+ * 书架行类型（对齐 BookOrbit；第 171 期补 `listen`）：
+ *   continue 继续阅读 / recent 最近添加 / discover 随机发现 / scope 智能书架 / **listen 继续收听**
+ *
+ * `listen` 与 `continue` 用**同一个进度阈值**（`library.continueReading`），只是再按
+ * `format === 'AUDIO'` 过滤 —— 不另算一套「在听」判据。
  */
-export type ShelfType = 'continue' | 'recent' | 'discover' | 'scope'
+export type ShelfType = 'continue' | 'recent' | 'discover' | 'scope' | 'listen'
 
 export interface ShelfDef {
   id: string
@@ -146,12 +149,16 @@ export const SCOPE_OPTIONS: { key: string; label: string }[] = [
 export const MAX_SHELVES = 6
 
 export const DEFAULT_SHELVES: ShelfDef[] = [
+  // 第 171 期：有声书的「继续收听」独立行。**没有在听的有声书时整行不渲染**
+  // （见 DashboardShelfRow 的 hidden 判据）⇒ 不听书的用户界面零变化。
+  { id: 'shelf-listen', type: 'listen', title: '继续收听', enabled: true },
   { id: 'shelf-continue', type: 'continue', title: '继续阅读', enabled: true },
   { id: 'shelf-recent', type: 'recent', title: '最近添加', enabled: true },
   { id: 'shelf-discover', type: 'discover', title: '发现新书', enabled: true },
 ]
 
 export const SHELF_TYPE_LABEL: Record<ShelfType, string> = {
+  listen: '继续收听',
   continue: '继续阅读',
   recent: '最近添加',
   discover: '随机发现',

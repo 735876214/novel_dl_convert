@@ -3980,6 +3980,12 @@ export const api = {
     URL.revokeObjectURL(url)
   },
 
+  /** M4B / M4A 的内嵌章节（第 171 期）：毫秒起点；`supported=false` = 不是 M4B/M4A。 */
+  audioChapters: (bid: string) =>
+    request<{ items: { title: string; start_ms: number }[]; supported: boolean }>(
+      `/api/books/${encodeURIComponent(bid)}/audio/chapters`,
+    ),
+
   /**
    * 导出批注（第 43 期）：`format` ∈ markdown / json / csv，可按书库或单书收窄。
    * 同样走 blob 下载（`/api` 要求 Bearer 头，`<a download>` 带不了）。
@@ -4004,6 +4010,12 @@ export const api = {
     a.download = `annotations-${localDate()}.${format === 'markdown' ? 'md' : format}`
     a.click()
     URL.revokeObjectURL(url)
+  },
+
+  /** 整本有声书 ZIP 下载 URL（第 171 期）：流式打包；`<a download>` 同样走 `?token=`。 */
+  audioZipUrl: (bid: string) => {
+    const t = _authToken()
+    return `/api/books/${encodeURIComponent(bid)}/audio/zip${t ? `?token=${encodeURIComponent(t)}` : ''}`
   },
 
   /** 批量动作（详见后端 api_batch）。逐本执行，返回成功/失败清单。 */

@@ -22,6 +22,7 @@ vi.mock('@/lib/api', () => ({
     recordSession: vi.fn(),
     audioTrackUrl: vi.fn((id: string, i: number) => `/audio/${id}/${i}`),
     audioHeard: vi.fn(),
+    audioChapters: vi.fn(),
     unitFileUrl: vi.fn(),
   },
 }))
@@ -34,6 +35,7 @@ const m = {
   setProgress: vi.mocked(api.setProgress),
   session: vi.mocked(api.recordSession),
   heard: vi.mocked(api.audioHeard),
+  chapters: vi.mocked(api.audioChapters),
 }
 
 const TRACKS = [
@@ -48,7 +50,7 @@ function bookmark(id: number, anchor: string, label: string) {
   }
 }
 
-async function mountPlayer() {
+async function mountPlayer(chapters: { title: string; start_ms: number }[] = []) {
   const pinia = createPinia()
   setActivePinia(pinia)
   m.list.mockResolvedValue({
@@ -64,6 +66,7 @@ async function mountPlayer() {
   m.setProgress.mockResolvedValue({ updated_at: 0 } as never)
   m.session.mockResolvedValue({} as never)
   m.heard.mockResolvedValue({ items: ['02.mp3'], total: 1 })
+  m.chapters.mockResolvedValue({ items: chapters, supported: true })
   const w = mount(AudioPlayer, {
     props: { bookId: 'b1', tracks: TRACKS },
     global: { plugins: [pinia] },
@@ -146,6 +149,42 @@ describe('AudioPlayer 书签', () => {
     await w.find('audio').trigger('ended')
     await flushPromises()
     expect((w.find('select[aria-label="睡眠定时"]').element as HTMLSelectElement).value).toBe('off')
+  })
+
+  it('按书倍速：记为本书后落本机，清除则回全局默认', async () => {
+    const w = await mountPlayer()
+    const sel = w.find('select[aria-label="播放倍速"]')
+    await sel.setValue('1.5')
+    await flushPromises()
+    await w.findAll('button').find((b) => b.text() === '仅本书')!.trigger('click')
+    await flushPromises()
+
+    const stored = JSON.parse(localStorage.getItem('audio-book-speeds') || '{}')
+    expect(stored.b1).toBe(1.5)
+    expect(w.findAll('button').some((b) => b.text() === '本书 ×')).toBe(true)
+
+    await w.findAll('button').find((b) => b.text() === '本书 ×')!.trigger('click')
+    await flushPromises()
+    expect(JSON.parse(localStorage.getItem('audio-book-speeds') || '{}')).toEqual({})
+    expect((w.find('select[aria-label="播放倍速"]').element as HTMLSelectElement).value).toBe('1')
+  })
+
+  it('已有本书覆盖时，打开就是那本书的倍速', async () => {
+    localStorage.setItem('audio-book-speeds', JSON.stringify({ b1: 1.25 }))
+    const w = await mountPlayer()
+    expect((w.find('select[aria-label="播放倍速"]').element as HTMLSelectElement).value).toBe('1.25')
+  })
+
+  it('M4B 章节：有 chpl 时显示章节列表与上一章/下一章', async () => {
+    const w = await mountPlayer([
+      { title: '第一章', start_ms: 0 },
+      { title: '第二章', start_ms: 65000 },
+    ])
+    expect(w.text()).toContain('共 2 章')
+    expect(w.text()).toContain('第一章')
+    expect(w.text()).toContain('02:00'.replace('02:00', '1:05'))   // 65000ms = 1:05
+    expect(w.findAll('button').some((b) => b.text() === '上一章')).toBe(true)
+    expect(w.findAll('button').some((b) => b.text() === '下一章')).toBe(true)
   })
 
   it('删除书签走软删除接口', async () => {

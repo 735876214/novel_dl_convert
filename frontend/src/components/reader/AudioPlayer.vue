@@ -13,6 +13,8 @@ import {
   AUDIO_SPEED_STEP,
   AUDIO_SPEEDS,
   readAudioPrefs,
+  readBookSpeed,
+  writeBookSpeed,
 } from '@/lib/audioPrefs'
 import { createSessionReporter } from '@/lib/readingSession'
 import { useSeriesNext } from '@/lib/seriesNext'
@@ -131,6 +133,38 @@ async function removeBookmark(b: Bookmark): Promise<void> {
   }
 }
 
+// ---------------- M4B 内嵌章节（第 171 期）----------------
+// 只对单文件 M4B/M4A 有意义（服务端按 moov/udta/chpl 解析）；空数组 = 这本书没有章节信息，
+// 章节区连壳都不渲染 —— 不摆一个永远空的控件。
+const chapters = ref<{ title: string; start_ms: number }[]>([])
+
+function loadChapters(): void {
+  if (unitMode.value) return
+  api.audioChapters(props.bookId)
+    .then((r) => { chapters.value = r.items || [] })
+    .catch(() => { chapters.value = [] })
+}
+
+/** 当前所在的章（按播放时间反查；没有章节时为 -1） */
+const chapterIndex = computed(() => {
+  if (!chapters.value.length) return -1
+  const ms = currentTime.value * 1000
+  let idx = 0
+  for (let i = 0; i < chapters.value.length; i += 1) {
+    if (ms + 1 >= chapters.value[i].start_ms) idx = i
+    else break
+  }
+  return idx
+})
+
+function gotoChapter(i: number): void {
+  if (i < 0 || i >= chapters.value.length) return
+  const sec = chapters.value[i].start_ms / 1000
+  if (ready.value) seekTo(sec)
+  else seekWhenReady(sec)
+  void audio.value?.play().catch(() => { /* 浏览器拦住就等用户点播放 */ })
+}
+
 // ---------------- 单轨「已听」标记（第 168 期）----------------
 // 数据来源只有一处：`reading_sessions.file_rel`（播放器把当前轨 basename 当会话标签）。
 // **没有手动标记** —— 听过就是有过收听会话，未听就是没有。
@@ -143,7 +177,9 @@ function loadHeard(): void {
     .catch(() => { /* 读不到就不显示标记，不影响播放 */ })
 }
 
-const speed = ref(prefs.speed)
+// 按书覆盖（第 171 期）：有本书专属值就用它，否则用全局默认
+const bookSpeed = ref<number | null>(readBookSpeed(props.bookId))
+const speed = ref(bookSpeed.value ?? prefs.speed)
 const volume = ref(prefs.volume)
 const skipBack = ref(prefs.skipBack)
 const skipForward = ref(prefs.skipForward)
@@ -188,7 +224,15 @@ function showMoreTracks(): void {
   trackLimit.value += TRACK_MORE
 }
 // 换书时窗口复位（组件可能被复用）
-watch(() => props.bookId, () => { trackLimit.value = TRACK_WINDOW; loadBookmarks(); loadHeard() })
+watch(() => props.bookId, (bid) => {
+  trackLimit.value = TRACK_WINDOW
+  loadBookmarks()
+  loadHeard()
+  loadChapters()
+  // 换书：倍速跟着换成那本书的覆盖值（没有就回全局默认）
+  bookSpeed.value = readBookSpeed(bid)
+  speed.value = bookSpeed.value ?? prefs.speed
+})
 const src = computed(() => {
   if (unitMode.value) return props.unit ? api.unitFileUrl(props.bookId, props.unit.index) : ''
   return current.value ? api.audioTrackUrl(props.bookId, index.value) : ''
@@ -456,7 +500,28 @@ function nudgeSpeed(delta: number): void {
 }
 
 // 改变倍速 / 音量立即生效
-watch(speed, (v) => { if (audio.value) audio.value.playbackRate = v })
+watch(speed, (v) => {
+  if (audio.value) audio.value.playbackRate = v
+  // 已设「仅本书」时，后续细调要落回那本书的覆盖值，否则下次打开又变回旧值
+  if (bookSpeed.value != null) {
+    bookSpeed.value = v
+    writeBookSpeed(props.bookId, v)
+  }
+})
+
+/** 「仅本书」开关：没有覆盖 ⇒ 记下当前倍速；已有覆盖 ⇒ 清除并回全局默认 */
+function toggleBookSpeed(): void {
+  if (bookSpeed.value != null) {
+    writeBookSpeed(props.bookId, null)
+    bookSpeed.value = null
+    speed.value = prefs.speed
+    ui.toast('已恢复全局倍速')
+    return
+  }
+  bookSpeed.value = speed.value
+  writeBookSpeed(props.bookId, speed.value)
+  ui.toast(`已记为本书 ${speed.value}x`)
+}
 watch(volume, (v) => { if (audio.value) audio.value.volume = v })
 watch(src, () => { ready.value = false })
 
@@ -475,6 +540,7 @@ onMounted(async () => {
   session.begin()
   loadBookmarks()
   loadHeard()
+  loadChapters()
   if (unitMode.value) {
     // 单话模式：恢复到哪由上层给（`within`，0–1 的**话内**比例），**不问服务端** ——
     // 书级的 percent 是整本书的坐标，子阅读器手里没有 `total` 语义（话数 ≠ 轨数）就换不出来。
@@ -542,6 +608,28 @@ onBeforeUnmount(() => {
         <span>{{ fmt(currentTime) }}</span>
         <span>{{ ready ? fmt(duration) : '--:--' }}</span>
       </div>
+    </div>
+
+    <!-- M4B 内嵌章节（第 171 期）：有章节才出现；上一章 / 下一章 + 当前章名 -->
+    <div v-if="chapters.length" class="mt-2 flex items-center justify-center gap-2 text-[11.5px]">
+      <button
+        type="button"
+        class="cursor-pointer rounded border border-border px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+        :disabled="chapterIndex <= 0"
+        title="上一章"
+        @click="gotoChapter(chapterIndex - 1)"
+      >上一章</button>
+      <span class="min-w-0 max-w-[16rem] truncate text-center text-foreground">
+        {{ chapters[chapterIndex]?.title || '' }}
+        <span class="text-muted-foreground tabular-nums">{{ chapterIndex + 1 }} / {{ chapters.length }}</span>
+      </span>
+      <button
+        type="button"
+        class="cursor-pointer rounded border border-border px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+        :disabled="chapterIndex >= chapters.length - 1"
+        title="下一章"
+        @click="gotoChapter(chapterIndex + 1)"
+      >下一章</button>
     </div>
 
     <!-- 主控件 -->
@@ -630,6 +718,25 @@ onBeforeUnmount(() => {
       </p>
     </div>
 
+    <!-- 章节列表（单文件 M4B）：点任一章跳到它的起点 -->
+    <div v-if="chapters.length" class="mt-3 border-t border-border pt-3">
+      <div class="mb-1.5 text-[11.5px] font-medium text-muted-foreground">共 {{ chapters.length }} 章</div>
+      <ol class="max-h-[12rem] space-y-0.5 overflow-auto">
+        <li v-for="(ch, ci) in chapters" :key="ci">
+          <button
+            type="button"
+            class="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-[12px] transition-colors"
+            :class="ci === chapterIndex ? 'bg-[var(--shell-accent-tint)] text-primary' : 'text-foreground/90 hover:bg-muted'"
+            @click="gotoChapter(ci)"
+          >
+            <span class="w-6 shrink-0 text-right text-[10.5px] text-muted-foreground tabular-nums">{{ ci + 1 }}</span>
+            <span class="min-w-0 flex-1 truncate">{{ ch.title }}</span>
+            <span class="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">{{ fmt(ch.start_ms / 1000) }}</span>
+          </button>
+        </li>
+      </ol>
+    </div>
+
     <!-- 倍速 / 音量 / 睡眠定时 -->
     <div class="mt-4 flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-border pt-3">
       <!-- ⚠️ 用 div 不用 label：按钮也是 labelable 元素，label 的点击转发会把
@@ -658,6 +765,17 @@ onBeforeUnmount(() => {
           :disabled="speed >= AUDIO_SPEED_MAX"
           @click="nudgeSpeed(AUDIO_SPEED_STEP)"
         >+</button>
+        <button
+          type="button"
+          class="cursor-pointer rounded border px-1.5 py-0.5 text-[10.5px] transition-colors"
+          :class="bookSpeed != null
+            ? 'border-primary/60 text-primary hover:bg-muted'
+            : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'"
+          :title="bookSpeed != null ? '清除本书专属倍速，回到全局默认' : '把当前倍速记为这本书专属（其他书不受影响）'"
+          @click="toggleBookSpeed"
+        >
+          {{ bookSpeed != null ? '本书 ×' : '仅本书' }}
+        </button>
       </div>
 
       <label class="flex items-center gap-2 text-[11.5px] text-muted-foreground">

@@ -108,6 +108,11 @@ function fmtSize(n: number): string {
               <span>{{ tracks.length }} 轨</span>
               <span v-if="totalSize">{{ fmtSize(totalSize) }}</span>
               <span v-if="book.year">{{ book.year }}</span>
+              <a
+                :href="api.audioZipUrl(bookId)"
+                class="cursor-pointer text-primary hover:underline"
+                :title="`把这本书的全部音频打成一个 ZIP 下载（${tracks.length} 个文件）`"
+              >下载整本（ZIP）</a>
             </div>
           </div>
         </div>

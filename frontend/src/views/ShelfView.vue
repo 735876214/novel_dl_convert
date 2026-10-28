@@ -294,6 +294,13 @@ const route = useRoute()
 // 顶栏全局搜索会跳到这里并带上 ?q=关键词（原先顶栏只弹提示，没接线）
 const keyword = ref(String(route.query.q || ''))
 watch(() => route.query.q, (q) => { keyword.value = String(q || '') })
+/**
+ * 顶栏 / 仪表盘可以带 `?fmt=AUDIO` 进来（第 171 期「继续收听 → 查看全部」）：
+ * 把格式筛选预设成该值，落地就是一屏有声书。非空值只做大写归一，不校验是否存在于选项 ——
+ * 库里一本该格式都没有时，筛选结果为空的提示本来就由空态负责。
+ */
+const fmtQuery = ref(String(route.query.fmt || '').trim().toUpperCase())
+watch(() => route.query.fmt, (v) => { fmtQuery.value = String(v || '').trim().toUpperCase() })
 /** 已展开的系列名 */
 const expanded = ref<string[]>([])
 
@@ -334,7 +341,7 @@ const tagOptions = computed(() => tallyTags(facetSource.value))
 const coverFacet = computed(() => coverCounts(facetSource.value))
 const statusFacet = computed(() => statusCounts(facetSource.value, library.currentLibraryId))
 
-const fFormat = ref('')
+const fFormat = ref(fmtQuery.value)
 const fLanguage = ref('')
 const fTag = ref('')
 const fCover = ref<'all' | 'yes' | 'no'>('all')
@@ -346,6 +353,9 @@ const hasFilter = computed(
     fCover.value !== 'all' ||
     fStatus.value !== 'all',
 )
+
+// 路由里的 fmt 变化（再次点「查看全部」/ 前进后退）⇒ 同步筛选值
+watch(fmtQuery, (v) => { if (v) fFormat.value = v })
 
 function clearFilters(): void {
   fFormat.value = ''
@@ -1234,8 +1244,11 @@ const INPUT_CLS =
       <div class="flex flex-wrap items-end gap-3">
         <label class="flex flex-col gap-1">
           <span class="text-[11px] text-muted-foreground">格式</span>
-          <select v-model="fFormat" :class="INPUT_CLS">
+          <select v-model="fFormat" aria-label="格式" :class="INPUT_CLS">
             <option value="">全部</option>
+            <!-- 路由带来的格式（`?fmt=AUDIO`）如果全库一本都没有，选项列表里不会有它 ——
+                 不补这一条的话 select 会显示空白，用户看不出为什么书架是空的 -->
+            <option v-if="fFormat && !formatOptions.some((o) => o.value === fFormat)" :value="fFormat">{{ fFormat }}</option>
             <option v-for="f in formatOptions" :key="f.value" :value="f.value">{{ f.value }}（{{ f.count }}）</option>
           </select>
         </label>
