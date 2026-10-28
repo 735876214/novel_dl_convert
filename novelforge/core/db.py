@@ -389,6 +389,39 @@ def init():
             );
             CREATE INDEX IF NOT EXISTS idx_session_book ON reading_sessions(book_id);
             CREATE INDEX IF NOT EXISTS idx_session_end ON reading_sessions(ended_at);
+            -- 播客订阅（第 173 期）：与「书库」无关 —— 播客是**网络订阅**，不是目录扫描，
+            -- 所以单独两张表，不挂在 libraries / books 上（没有任何 book_id）。
+            CREATE TABLE IF NOT EXISTS podcasts (
+                id             TEXT PRIMARY KEY,
+                feed_url       TEXT NOT NULL UNIQUE,
+                title          TEXT NOT NULL DEFAULT '',
+                author         TEXT NOT NULL DEFAULT '',
+                description    TEXT NOT NULL DEFAULT '',
+                artwork_url    TEXT NOT NULL DEFAULT '',
+                categories     TEXT NOT NULL DEFAULT '',
+                explicit       INTEGER NOT NULL DEFAULT 0,
+                last_fetched_at REAL NOT NULL DEFAULT 0,
+                created_at     REAL NOT NULL DEFAULT 0,
+                deleted_at     REAL NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS podcast_episodes (
+                id           TEXT PRIMARY KEY,
+                podcast_id   TEXT NOT NULL,
+                guid         TEXT NOT NULL,
+                title        TEXT NOT NULL DEFAULT '',
+                description  TEXT NOT NULL DEFAULT '',
+                published_at REAL NOT NULL DEFAULT 0,
+                duration_sec INTEGER NOT NULL DEFAULT 0,
+                audio_url    TEXT NOT NULL DEFAULT '',
+                audio_type   TEXT NOT NULL DEFAULT '',
+                episode_no   INTEGER NOT NULL DEFAULT 0,
+                season_no    INTEGER NOT NULL DEFAULT 0,
+                explicit     INTEGER NOT NULL DEFAULT 0,
+                created_at   REAL NOT NULL DEFAULT 0,
+                deleted_at   REAL NOT NULL DEFAULT 0,
+                UNIQUE(podcast_id, guid)
+            );
+            CREATE INDEX IF NOT EXISTS idx_podcast_ep ON podcast_episodes(podcast_id);
             CREATE TABLE IF NOT EXISTS tasks (
                 id         TEXT PRIMARY KEY,
                 type       TEXT NOT NULL DEFAULT 'download',
@@ -3962,6 +3995,174 @@ def source_ledger_rename(old: str, new: str) -> bool:
         c.execute("UPDATE source_ledger_history SET name=? WHERE name=?", (str(new), str(old)))
         c.commit()
     return bool(n)
+
+
+# ---------------- 播客订阅（第 173 期）----------------
+# 两张表都不含 book_id ⇒ 不进 ORPHAN/REMAP 清单（那里管的是「书 id 变了关联数据要跟着搬」）。
+# 一切读点带 `deleted_at=0`（软删除）；彻底删除本期不提供 UI。
+
+_PODCAST_COLS = {"title", "author", "description", "artwork_url", "categories",
+                 "explicit", "last_fetched_at"}
+
+
+def _podcast_out(row) -> dict:
+    return {
+        "id": str(row["id"]),
+        "feed_url": str(row["feed_url"]),
+        "title": str(row["title"] or ""),
+        "author": str(row["author"] or ""),
+        "description": str(row["description"] or ""),
+        "artwork_url": str(row["artwork_url"] or ""),
+        "categories": json.loads(str(row["categories"] or "[]")) if row["categories"] else [],
+        "explicit": bool(row["explicit"]),
+        "last_fetched_at": float(row["last_fetched_at"] or 0),
+        "created_at": float(row["created_at"] or 0),
+    }
+
+
+def list_podcasts() -> list:
+    rows = _connect().execute(
+        "SELECT * FROM podcasts WHERE deleted_at=0 ORDER BY created_at DESC, id"
+    ).fetchall()
+    return [_podcast_out(r) for r in rows]
+
+
+def get_podcast(pid: str) -> "dict | None":
+    row = _connect().execute(
+        "SELECT * FROM podcasts WHERE id=? AND deleted_at=0", (str(pid),)
+    ).fetchone()
+    return _podcast_out(row) if row else None
+
+
+def podcast_by_feed(feed_url: str) -> "dict | None":
+    """含**已软删**的订阅：重订阅同一 feed 时应复用那一行（复活），而不是撞 UNIQUE。"""
+    row = _connect().execute(
+        "SELECT * FROM podcasts WHERE feed_url=?", (str(feed_url or ""),)
+    ).fetchone()
+    if not row:
+        return None
+    out = _podcast_out(row)
+    out["deleted"] = float(row["deleted_at"] or 0) > 0
+    return out
+
+
+def create_podcast(feed_url: str, *, title="", author="", description="",
+                   artwork_url="", categories=None, explicit=False) -> dict:
+    pid = uuid.uuid4().hex
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO podcasts(id, feed_url, title, author, description, artwork_url,"
+            " categories, explicit, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (pid, str(feed_url), str(title or ""), str(author or ""), str(description or ""),
+             str(artwork_url or ""), json.dumps(list(categories or []), ensure_ascii=False),
+             1 if explicit else 0, time.time()),
+        )
+        c.commit()
+    return get_podcast(pid) or {}
+
+
+def update_podcast(pid: str, **fields) -> "dict | None":
+    cols = {k: v for k, v in fields.items() if k in _PODCAST_COLS}
+    # 列的类型规整只在这里做一次：分类是 JSON 文本、explicit 是 0/1（调用方给 list/bool）。
+    if "categories" in cols:
+        cols["categories"] = json.dumps(list(cols["categories"] or []), ensure_ascii=False)
+    if "explicit" in cols:
+        cols["explicit"] = 1 if cols["explicit"] else 0
+    c = _connect()
+    with _lock:
+        if cols:
+            c.execute(
+                "UPDATE podcasts SET " + ", ".join(f"{k}=?" for k in cols)
+                + " WHERE id=? AND deleted_at=0",
+                (*cols.values(), str(pid)),
+            )
+            c.commit()
+    return get_podcast(pid)
+
+
+def delete_podcast(pid: str) -> bool:
+    """移除订阅 = 软删除（清单元数据保留；重订阅同一 feed 会复用这行并复活）。"""
+    c = _connect()
+    with _lock:
+        cur = c.execute("UPDATE podcasts SET deleted_at=? WHERE id=? AND deleted_at=0",
+                        (time.time(), str(pid)))
+        c.commit()
+    return bool(cur.rowcount)
+
+
+def revive_podcast(pid: str) -> "dict | None":
+    c = _connect()
+    with _lock:
+        c.execute("UPDATE podcasts SET deleted_at=0 WHERE id=?", (str(pid),))
+        c.commit()
+    return get_podcast(pid)
+
+
+def upsert_podcast_episodes(podcast_id: str, items: list) -> "tuple[int, int]":
+    """按 `(podcast_id, guid)` upsert；返回 `(新增, 更新)`。
+
+    ⚠️ `deleted_at` **不在 UPDATE 里**：用户删过的单集不应该因为一次刷新又冒出来
+    （本期还没有删除单集的入口，但库层先把语义定死）。
+    """
+    if not items:
+        return 0, 0
+    pid = str(podcast_id)
+    added = updated = 0
+    c = _connect()
+    with _lock:
+        for it in items:
+            guid = str(it.get("guid") or "").strip()
+            if not guid:
+                continue
+            exists = c.execute(
+                "SELECT 1 FROM podcast_episodes WHERE podcast_id=? AND guid=?",
+                (pid, guid),
+            ).fetchone()
+            c.execute(
+                "INSERT INTO podcast_episodes(id, podcast_id, guid, title, description,"
+                " published_at, duration_sec, audio_url, audio_type, episode_no, season_no,"
+                " explicit, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                " ON CONFLICT(podcast_id, guid) DO UPDATE SET "
+                " title=excluded.title, description=excluded.description,"
+                " published_at=excluded.published_at, duration_sec=excluded.duration_sec,"
+                " audio_url=excluded.audio_url, audio_type=excluded.audio_type,"
+                " episode_no=excluded.episode_no, season_no=excluded.season_no,"
+                " explicit=excluded.explicit",
+                (uuid.uuid4().hex, pid, guid, str(it.get("title") or ""),
+                 str(it.get("description") or ""), float(it.get("published_at") or 0),
+                 int(it.get("duration_sec") or 0), str(it.get("audio_url") or ""),
+                 str(it.get("audio_type") or ""), int(it.get("episode_no") or 0),
+                 int(it.get("season_no") or 0), 1 if it.get("explicit") else 0, time.time()),
+            )
+            if exists:
+                updated += 1
+            else:
+                added += 1
+        c.commit()
+    return added, updated
+
+
+def list_podcast_episodes(podcast_id: str, limit: int = 200) -> list:
+    rows = _connect().execute(
+        "SELECT * FROM podcast_episodes WHERE podcast_id=? AND deleted_at=0"
+        " ORDER BY published_at DESC, id LIMIT ?",
+        (str(podcast_id), max(1, min(int(limit or 200), 2000))),
+    ).fetchall()
+    return [{
+        "id": str(r["id"]),
+        "podcast_id": str(r["podcast_id"]),
+        "guid": str(r["guid"]),
+        "title": str(r["title"] or ""),
+        "description": str(r["description"] or ""),
+        "published_at": float(r["published_at"] or 0),
+        "duration_sec": int(r["duration_sec"] or 0),
+        "audio_url": str(r["audio_url"] or ""),
+        "audio_type": str(r["audio_type"] or ""),
+        "episode_no": int(r["episode_no"] or 0),
+        "season_no": int(r["season_no"] or 0),
+        "explicit": bool(r["explicit"]),
+    } for r in rows]
 
 
 # ---- 覆盖前备份（可回滚）----

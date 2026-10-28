@@ -117,6 +117,8 @@ const router = createRouter({
     // 设置侧栏（App.vue 判断 `path.startsWith('/settings')`），而这里是从首页
     // 侧栏点进来的，左栏不该变脸。
     { path: '/book-dock', name: 'book-dock', component: () => import('@/views/settings/pages/BookDockPage.vue') },
+    // 播客订阅（第 173 期）：独立子系统，顶层路由（不是书库）
+    { path: '/podcasts', name: 'podcasts', component: () => import('@/views/PodcastsView.vue') },
     { path: '/tasks', name: 'tasks', component: () => import('@/views/TaskCenterView.vue') },
     { path: '/shelf', name: 'shelf', component: () => import('@/views/ShelfView.vue') },
     { path: '/smart-scopes', name: 'smart-scopes', component: () => import('@/views/SmartScopesView.vue') },

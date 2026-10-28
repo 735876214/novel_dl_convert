@@ -21,9 +21,9 @@ describe('data/nav', () => {
   /** 侧栏全部条目的 id（含各分组） */
   const allIds = (): string[] => NAV_GROUPS.flatMap((g) => g.items.map((i) => i.id))
 
-  it('主导航只剩三项：仪表盘 / 探索发现 / 收书目录', () => {
+  it('主导航是四项：仪表盘 / 探索发现 / 收书目录 / 播客', () => {
     expect(main, '找不到 title 为 null 的主导航组').toBeTruthy()
-    expect(main!.items.map((i) => i.id)).toEqual(['dashboard', 'search', 'book-dock'])
+    expect(main!.items.map((i) => i.id)).toEqual(['dashboard', 'search', 'book-dock', 'podcasts'])
   })
 
   it('收书目录紧跟探索发现，且是同一组里的一级项', () => {

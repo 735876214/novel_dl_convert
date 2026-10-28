@@ -44,7 +44,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
-                   events, entities, pathmeta, m4b, audiobook_zip)
+                   events, entities, pathmeta, m4b, audiobook_zip, podcasts)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -630,7 +630,7 @@ _SECURITY_HEADERS = {
         "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; "
         "object-src 'none'; script-src 'self' 'wasm-unsafe-eval'; "
         "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; "
-        "font-src 'self' data:; media-src 'self' data: blob:; "
+        "font-src 'self' data:; media-src 'self' data: blob: https:; "
         "connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-src 'self' blob:"
     ),
 }
@@ -2981,6 +2981,52 @@ def _books_int_arg(raw, name: str):
         return int(s)
     except (TypeError, ValueError):
         raise HTTPException(400, f"{name} 必须是整数")
+
+
+# ---------------- 播客订阅（第 173 期）----------------
+# 播客是**订阅子系统**，不挂在 libraries / books 上（理由见 core/podcasts.py 文件头）。
+# 出网只由这些端点里的用户显式动作触发；失败一律 400 + 可读中文。
+
+@app.get("/api/podcasts")
+def api_podcasts():
+    items = db.list_podcasts()
+    return {"items": items, "total": len(items)}
+
+
+@app.post("/api/podcasts")
+def api_podcast_subscribe(payload: dict = Body(...)):
+    """订阅一个 RSS 地址（已订阅同一地址 = 刷新；软删过的会复活，不撞 UNIQUE）。"""
+    try:
+        return podcasts.subscribe(str(payload.get("feed_url") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post("/api/podcasts/{pid}/refresh")
+def api_podcast_refresh(pid: str):
+    """重新抓取：新单集 upsert，旧单集保留（失败时什么都不改）。"""
+    try:
+        return podcasts.refresh(pid)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.get("/api/podcasts/{pid}/episodes")
+def api_podcast_episodes(pid: str, limit: int = Query(200, ge=1, le=2000)):
+    if not db.get_podcast(pid):
+        raise HTTPException(404, "订阅不存在")
+    items = db.list_podcast_episodes(pid, limit)
+    return {"items": items, "total": len(items)}
+
+
+@app.delete("/api/podcasts/{pid}")
+def api_podcast_delete(pid: str):
+    """移除订阅 = 软删除（单集元数据保留；重订阅会复活）。"""
+    if not db.delete_podcast(pid):
+        raise HTTPException(404, "订阅不存在")
+    return {"ok": True, "removed": pid}
 
 
 @app.get("/api/books")

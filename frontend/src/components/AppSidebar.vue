@@ -98,6 +98,7 @@ const PATH_BY_ID: Record<string, string> = {
   search: '/explore',
   // 顶层路由（不是 /settings/admin/book-dock）：从侧栏点进去时左栏要保持是主侧栏
   'book-dock': '/book-dock',
+  podcasts: '/podcasts',
   browse: '/browse',
   series: '/series',
   authors: '/authors',
@@ -122,6 +123,7 @@ function pathFor(id: string): string {
 const PATH_TO_ID: Array<[string, string]> = [
   ['/explore', 'search'],
   ['/book-dock', 'book-dock'],
+  ['/podcasts', 'podcasts'],
   ['/browse', 'browse'],
   ['/series', 'series'],
   ['/authors', 'authors'],

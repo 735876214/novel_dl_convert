@@ -2647,6 +2647,35 @@ export interface BackupItem {
 /** 库类型：决定功能显隐矩阵（见后端 core/features.py） */
 export type LibraryType = 'ebook' | 'comic' | 'audiobook' | 'mixed'
 
+/** 播客订阅（第 173 期）—— 独立的订阅子系统，不属于任何「书库」。 */
+export interface Podcast {
+  id: string
+  feed_url: string
+  title: string
+  author: string
+  description: string
+  artwork_url: string
+  categories: string[]
+  explicit: boolean
+  last_fetched_at: number
+  created_at: number
+}
+
+export interface PodcastEpisode {
+  id: string
+  podcast_id: string
+  guid: string
+  title: string
+  description: string
+  published_at: number
+  duration_sec: number
+  audio_url: string
+  audio_type: string
+  episode_no: number
+  season_no: number
+  explicit: boolean
+}
+
 /** 书库实体（`/api/libraries`，第 10 期起） */
 export interface LibraryEntity {
   id: string
@@ -4993,6 +5022,35 @@ export const api = {
 
   /** 书库实体列表（含书数 / 是否存在 / 可写）。 */
   libraries: () => request<LibrariesResult>('/api/libraries'),
+
+  // ---------- 播客订阅（第 173 期） ----------
+  podcasts: () => request<{ items: Podcast[]; total: number }>('/api/podcasts'),
+
+  /** 订阅（已订阅同一地址 = 刷新；软删过的会复活）。出网由后端发起。 */
+  subscribePodcast: (feedUrl: string) =>
+    request<{ podcast: Podcast; added: number; updated: number; total: number; created: boolean }>(
+      '/api/podcasts',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ feed_url: feedUrl }) },
+    ),
+
+  refreshPodcast: (id: string) =>
+    request<{ podcast: Podcast; added: number; updated: number; total: number }>(
+      `/api/podcasts/${encodeURIComponent(id)}/refresh`,
+      { method: 'POST' },
+      { timeoutMs: LONG_REQUEST_TIMEOUT_MS },
+    ),
+
+  podcastEpisodes: (id: string, limit = 200) =>
+    request<{ items: PodcastEpisode[]; total: number }>(
+      `/api/podcasts/${encodeURIComponent(id)}/episodes?limit=${limit}`,
+    ),
+
+  deletePodcast: (id: string) =>
+    request<{ ok: boolean; removed: string }>(
+      `/api/podcasts/${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+    ),
 
   /** 书库手动排序（第 154 期）：ids 必须是当前全部书库 id 的一个排列。 */
   reorderLibraries: (ids: string[]) =>
