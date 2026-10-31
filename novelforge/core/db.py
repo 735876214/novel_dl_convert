@@ -5235,9 +5235,11 @@ def delete_device(did) -> bool:
 #     那是「进度」不是「状态」—— 想读、搁置、弃读根本表达不出来；
 #     起止日期也没有任何落点。现在落表，进度推导只作为**无状态行时的兜底**。
 #
-# 状态集合刻意保持 5 个（与上游对齐）：unread / reading / finished / paused / abandoned。
-# 「想读」由收藏夹承担，不在这里重复。
-READ_STATUSES = ("unread", "reading", "finished", "paused", "abandoned")
+# 状态集合（第 201 期扩到 8 个）：unread / want_to_read / reading / rereading /
+# finished / skimmed / paused / abandoned。上游叫 on_hold / read 的两档在本项目里
+# 分别就是 **paused** / **finished**（同义，不另造键；`read` 与 `on_hold` 不落库）。
+READ_STATUSES = ("unread", "want_to_read", "reading", "rereading", "finished",
+                 "skimmed", "paused", "abandoned")
 
 
 def get_status(book_id) -> dict:
@@ -6951,15 +6953,16 @@ def _status_dates(status: str, cur_st: float, cur_fin: float,
     st = numbers.epoch(started_at, float(cur_st or 0)) if started_at else cur_st or 0
     fin = numbers.epoch(finished_at, float(cur_fin or 0)) if finished_at else cur_fin or 0
 
-    if status in ("reading", "finished") and not st:
+    if status in ("reading", "rereading", "finished", "skimmed") and not st:
         st = now
-    if status == "finished" and not fin:
+    if status in ("finished", "skimmed") and not fin:
         fin = now
-    if status != "finished":
+    if status not in ("finished", "skimmed"):
         fin = 0.0
-    if status == "unread":
+    if status in ("unread", "want_to_read"):
         st = 0.0
-    # paused / abandoned 保留已开始的日期：它记录的是「什么时候开始翻的」，故不置零
+        fin = 0.0
+    # paused / abandoned / rereading 保留已开始的日期：它记录的是「什么时候开始翻的」。
     return st, fin
 
 

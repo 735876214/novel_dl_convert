@@ -128,8 +128,11 @@ describe('阅读阈值 · statusBucket（5 状态→筛选三档，第 41 期）
 
   it('reading / paused / abandoned 都进「在读」桶（过滤器 UI 仅三档）', () => {
     expect(statusBucket({ status: 'reading', percent: 0 })).toBe('reading')
+    expect(statusBucket({ status: 'rereading', percent: 0 })).toBe('reading')
     expect(statusBucket({ status: 'paused', percent: 0 })).toBe('reading')
     expect(statusBucket({ status: 'abandoned', percent: 0 })).toBe('reading')
+    expect(statusBucket({ status: 'want_to_read', percent: 0 })).toBe('unread')
+    expect(statusBucket({ status: 'skimmed', percent: 0 })).toBe('finished')
   })
 
   it('没有状态行时按进度阈值兜底（含 percent 够高 → 已读完）', () => {

@@ -287,7 +287,7 @@ async function undoMove(): Promise<void> {
   }
 }
 function statusText(s: string): string {
-  return ({ unread: '未读', reading: '在读', finished: '已读完', paused: '搁置', abandoned: '弃读' } as Record<string, string>)[s] ?? s
+  return ({ unread: '未读', want_to_read: '想读', reading: '在读', rereading: '重读', finished: '已读完', skimmed: '略读', paused: '搁置', abandoned: '弃读' } as Record<string, string>)[s] ?? s
 }
 
 const route = useRoute()
@@ -1298,7 +1298,7 @@ const INPUT_CLS =
         <Button size="sm" variant="ghost" @click="selectAllVisible">全选 / 取消</Button>
         <span class="h-4 w-px bg-border" />
         <span class="text-[12px] text-muted-foreground">标记：</span>
-        <Button v-for="s in ['reading', 'finished', 'paused', 'abandoned', 'unread']" :key="s" size="sm" variant="ghost" @click="batchStatus(s)">
+        <Button v-for="s in ['want_to_read', 'reading', 'rereading', 'finished', 'skimmed', 'paused', 'abandoned', 'unread']" :key="s" size="sm" variant="ghost" @click="batchStatus(s)">
           {{ statusText(s) }}
         </Button>
         <span class="h-4 w-px bg-border" />

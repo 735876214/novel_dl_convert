@@ -178,14 +178,16 @@ _BRIEF_KEYS = (
 def _classify_status(raw, pct: float, started_th: float, finished_th: float) -> str:
     """一本书的阅读状态归类（**唯一真值源**，``overview`` 与 ``brief`` 共用）。
 
-    真实状态优先；没有状态行的书按进度兜底推导 —— paused/abandoned 归入在读：
-    它们都「翻过」，和未读不是一回事。判据与书架 / 书目列表同源（第 40 期阈值）。
+    真实状态优先；没有状态行的书按进度兜底推导 —— rereading/paused/abandoned 归入在读、
+    skimmed 归入读完、want_to_read 归入未读（判据与书架 / 书目列表同源）。
     """
     if raw == "finished":
         return "finished"
-    if raw == "unread":
+    if raw in ("unread", "want_to_read"):
         return "unread"
-    if raw in ("reading", "paused", "abandoned"):
+    if raw == "skimmed":
+        return "finished"
+    if raw in ("reading", "rereading", "paused", "abandoned"):
         return "reading"
     if pct <= started_th:
         return "unread"

@@ -1023,6 +1023,11 @@ export interface BookLocalPaths {
 }
 
 /** 书架网格与详情页共用的书籍卡片（对齐 docs/bookorbit/bookorbit-library-contract.md）。 */
+/** 阅读状态取值（第 201 期扩到 8 档；真值源是后端 `db.READ_STATUSES`）。 */
+export type ReadingStatusValue =
+  | 'unread' | 'want_to_read' | 'reading' | 'rereading'
+  | 'finished' | 'skimmed' | 'paused' | 'abandoned'
+
 export interface BookCard {
   id: string
   name: string
@@ -1030,7 +1035,7 @@ export interface BookCard {
   author: string
   series: string
   /** 真实阅读状态；**null = 没设过状态**，界面用进度兜底推导（不能当 unread 用） */
-  status?: 'unread' | 'reading' | 'finished' | 'paused' | 'abandoned' | null
+  status?: ReadingStatusValue | null
   started_at?: number
   finished_at?: number
   /** 系列内序号（字符串，空串 = 无）。解析见 core/library._series_index_of */
@@ -2448,7 +2453,7 @@ export interface MetadataRevertResult {
 /** 阅读状态行（`GET/PUT /api/books/{bid}/status`）。时间戳为 epoch 秒，0 = 未发生 */
 export interface ReadingStatus {
   book_id: string
-  status: 'unread' | 'reading' | 'finished' | 'paused' | 'abandoned'
+  status: ReadingStatusValue
   started_at: number
   finished_at: number
   updated_at: number
@@ -5273,7 +5278,7 @@ export const api = {
 
   /** 抓取全部作者的在线元数据。 */
   fetchAllAuthors: () =>
-    request<{ total: number; ok: number; failed: number }>('/api/authors/fetch-all', {
+    request<{ total: number; ok: number; failed: number; skipped?: string }>('/api/authors/fetch-all', {
       method: 'POST',
     }),
 

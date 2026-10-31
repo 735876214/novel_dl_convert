@@ -37,7 +37,8 @@ READWISE_PAUSE = 0.3
 
 #: 本项目阅读状态 → Hardcover ``status_id``。
 #: ⚠️ 只映射**三个能确定的**取值：1 = Want to Read、2 = Currently Reading、3 = Read。
-#: ``paused`` / ``abandoned`` 在 Hardcover 没有一一对应的官方状态，
+#: ``want_to_read`` / ``rereading`` / ``skimmed`` / ``paused`` / ``abandoned`` 在 Hardcover
+#: 没有一一对应的官方状态（want_to_read 与 rereading 虽可近似映射，但会改变既有上报语义），
 #: 与其挑一个近似的把它写错，不如**不上报状态**（仍可推评分与书评），并在结果里说明。
 STATUS_IDS = {"unread": 1, "reading": 2, "finished": 3}
 

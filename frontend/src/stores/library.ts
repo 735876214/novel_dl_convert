@@ -205,17 +205,16 @@ export const useLibraryStore = defineStore('library', () => {
    * 判据只有这一份，两处不会各说各话。
    */
   function smartBooksOf(src: BookCard[], key: string): BookCard[] {
-    const byStatus = (s: string) => (b: BookCard) => (b.status ?? derivedStatus(b)) === s
     switch (key) {
       case 'recent':
         return [...src].sort((a, b) => (b.mtime || 0) - (a.mtime || 0)).slice(0, 50)
       case 'unread':
-        return src.filter(byStatus('unread'))
+        return src.filter((b) => ['unread', 'want_to_read'].includes(b.status ?? derivedStatus(b)))
       case 'reading':
-        // 搁置/弃读都「翻过」，与在读同属「未读完」的浏览心智
-        return src.filter((b) => ['reading', 'paused', 'abandoned'].includes(b.status ?? derivedStatus(b)))
+        // 重读 / 搁置 / 弃读都「翻过」，与在读同属「未读完」的浏览心智
+        return src.filter((b) => ['reading', 'rereading', 'paused', 'abandoned'].includes(b.status ?? derivedStatus(b)))
       case 'finished':
-        return src.filter(byStatus('finished'))
+        return src.filter((b) => ['finished', 'skimmed'].includes(b.status ?? derivedStatus(b)))
       case 'annotated':
         return src.filter((b) => (b.annotation_count ?? 0) > 0)
       default:

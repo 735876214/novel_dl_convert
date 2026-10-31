@@ -136,8 +136,9 @@ export function statusBucket(
 ): DerivedStatus {
   const s = b.status
   if (s) {
-    if (s === 'finished') return 'finished'
-    // reading / paused / abandoned：已开始的都进「在读」桶
+    if (s === 'finished' || s === 'skimmed') return 'finished'
+    if (s === 'unread' || s === 'want_to_read') return 'unread'
+    // reading / rereading / paused / abandoned：已开始的都进「在读」桶
     return 'reading'
   }
   return statusFromPercent(b.percent, thresholdsFor(libraryId))
@@ -146,8 +147,11 @@ export function statusBucket(
 /** 中文文案（`lib/bookInfo.ts` 的 `statusLabel` 与它同源）。 */
 const LABELS: Record<string, string> = {
   unread: '未读',
+  want_to_read: '想读',
   reading: '在读',
+  rereading: '重读',
   finished: '已读完',
+  skimmed: '略读',
   paused: '搁置',
   abandoned: '弃读',
 }
@@ -161,10 +165,11 @@ export function statusLabelOf(
 }
 
 /**
- * 五态的**可选项清单**（值 + 文案），供「设置状态」这类要列出全部状态的界面用。
+ * 八态的**可选项清单**（值 + 文案），供「设置状态」这类要列出全部状态的界面用。
  *
  * 从 `LABELS` 派生，不另写一份 —— 文案两处不一样就会出现「选的是同一项、
  * 显示的名字不同」。后端的 `db.READ_STATUSES` 是这张表的真值源，顺序与它一致。
+ * 上游的 `read` / `on_hold` 在本项目分别就是 `finished` / `paused`（同义，不另造键）。
  *
  * ⚠️ 它**只列可选项**，不判断「当前是哪一项」：`statusLabelOf` 在没有状态行时会
  * 按进度兜底推导，拿它去给某一项打勾会把「从没设过状态」显示成「未读」。
@@ -172,8 +177,11 @@ export function statusLabelOf(
  */
 export const READ_STATUS_OPTIONS: readonly { value: string; label: string }[] = [
   'unread',
+  'want_to_read',
   'reading',
+  'rereading',
   'finished',
+  'skimmed',
   'paused',
   'abandoned',
 ].map((v) => ({ value: v, label: LABELS[v] }))

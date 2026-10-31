@@ -651,7 +651,7 @@ describe('BookActionsMenu：添加到收藏（子菜单）', () => {
 })
 
 describe('BookActionsMenu：设置状态（子菜单）', () => {
-  it('从没设过状态 ⇒ 五项一项都不打勾，另给一行不可点的「未设置」', async () => {
+  it('从没设过状态 ⇒ 八项一项都不打勾，另给一行不可点的「未设置」', async () => {
     // `status` 缺省 = null（`BookCard.status` 的注释明写：null 不是 unread）
     const w = await mountMenu(makeCard({ percent: 0 }))
     await openMenu(w)
@@ -659,8 +659,11 @@ describe('BookActionsMenu：设置状态（子菜单）', () => {
 
     expect(subItems().map((b) => (b.textContent || '').trim())).toEqual([
       '未读',
+      '想读',
       '在读',
+      '重读',
       '已读完',
+      '略读',
       '搁置',
       '弃读',
     ])

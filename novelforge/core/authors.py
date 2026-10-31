@@ -84,14 +84,30 @@ def _download_photo(url: str, seed: str) -> str:
     return fn
 
 
+def _author_cfg() -> dict:
+    """作者抓取配置（第 202 期接通）：`metadata_fetch.authors.{enabled,fetch_bio,fetch_photo,sources}`。"""
+    mf = (config.load_config() or {}).get("metadata_fetch") or {}
+    return mf.get("authors") or {}
+
+
 def fetch_author(name: str) -> dict:
     """抓取单个作者的在线信息（传记 + 头像），落库并返回结果。
 
     返回 ``{name, ok, bio?, has_photo?, error?}``；**不抛异常**。
+    配置（`metadata_fetch.authors`）决定是否抓、抓哪部分、允许哪些来源 —— 与书籍元数据
+    的 `enabled` 闸门同口径：关着就如实拒绝，不偷偷外呼。
     """
     name = str(name or "").strip()
     if not name:
         return {"name": name, "ok": False, "error": "作者名为空"}
+    cfg = _author_cfg()
+    fetch_bio = bool(cfg.get("fetch_bio", True))
+    fetch_photo = bool(cfg.get("fetch_photo", True))
+    if not fetch_bio and not fetch_photo:
+        return {"name": name, "ok": False, "error": "传记与头像抓取都已关闭"}
+    sources = [str(s) for s in (cfg.get("sources") or ["openlibrary"])]
+    if "openlibrary" not in sources:
+        return {"name": name, "ok": False, "error": "作者来源未包含 openlibrary"}
     try:
         r = httpx.get(OL_AUTHOR_SEARCH, params={"q": name, "limit": "5"},
                       timeout=_TIMEOUT, headers=_HEADERS)
@@ -105,21 +121,25 @@ def fetch_author(name: str) -> dict:
         return {"name": name, "ok": False, "error": "OpenLibrary 未找到匹配的作者"}
 
     key = match.get("key") or ""
-    try:
-        rd = httpx.get(OL_AUTHOR_DETAIL.format(key=key), timeout=_TIMEOUT, headers=_HEADERS)
-        rd.raise_for_status()
-        detail = rd.json() or {}
-    except Exception as e:  # noqa: BLE001
-        return {"name": name, "ok": False, "error": f"作者详情获取失败：{e}"}
+    bio = ""
+    detail = {}
+    if fetch_bio or fetch_photo:
+        try:
+            rd = httpx.get(OL_AUTHOR_DETAIL.format(key=key), timeout=_TIMEOUT, headers=_HEADERS)
+            rd.raise_for_status()
+            detail = rd.json() or {}
+        except Exception as e:  # noqa: BLE001
+            return {"name": name, "ok": False, "error": f"作者详情获取失败：{e}"}
 
-    bio = detail.get("bio") or ""
-    if isinstance(bio, dict):
-        bio = bio.get("value") or ""
-    bio = str(bio).strip()
+    if fetch_bio:
+        bio = detail.get("bio") or ""
+        if isinstance(bio, dict):
+            bio = bio.get("value") or ""
+        bio = str(bio).strip()
 
     photos = detail.get("photos") or []
     photo_path = ""
-    if photos:
+    if fetch_photo and photos:
         try:
             photo_path = _download_photo(OL_PHOTO.format(pid=photos[0]), f"{name}:{photos[0]}")
         except Exception:  # noqa: BLE001 - 头像失败不致命，传记仍可用
@@ -130,8 +150,14 @@ def fetch_author(name: str) -> dict:
 
 
 def fetch_all() -> dict:
-    """抓取全部作者（按 ``library.authors_list()`` 聚合）。返回 ``{total, ok, failed}``。"""
+    """抓取全部作者（按 ``library.authors_list()`` 聚合）。返回 ``{total, ok, failed}``。
+
+    作者抓取关闭时**不逐个空转**：直接返回 ``skipped`` 原因（与 `metafetch.plan` 的
+    「未启用」口径一致）。
+    """
     names = [a["name"] for a in library.authors_list()]
+    if not bool(_author_cfg().get("enabled", False)):
+        return {"total": len(names), "ok": 0, "failed": 0, "skipped": "作者抓取未开启"}
     ok = failed = 0
     for n in names:
         if fetch_author(n).get("ok"):

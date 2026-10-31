@@ -283,6 +283,11 @@ async function runAuthorFetch(): Promise<void> {
   authorFetchResult.value = ''
   try {
     const r = await api.fetchAllAuthors()
+    if (r.skipped) {
+      authorFetchResult.value = r.skipped
+      ui.toast(r.skipped)
+      return
+    }
     authorFetchResult.value = `成功 ${r.ok} / 共 ${r.total}` + (r.failed ? `，失败 ${r.failed}` : '')
     ui.toast(`作者抓取完成：成功 ${r.ok} / 共 ${r.total}`)
   } catch (e) {
