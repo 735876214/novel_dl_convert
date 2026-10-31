@@ -78,6 +78,7 @@ const retMaxMb = computed(() =>
   Math.max(1, Math.round(Number(val('logging.retention.max_bytes') || 5242880) / 1048576)),
 )
 const retKeep = computed(() => Math.max(1, Number(val('logging.retention.keep') || 5)))
+const retMaxDays = computed(() => Math.max(0, Number(val('logging.retention.max_days') || 0)))
 const retCompress = computed(() => Boolean(val('logging.retention.compress')))
 
 function setRet(key: string, v: unknown): void {
@@ -509,6 +510,18 @@ async function exportServerCsv(): Promise<void> {
             step="1"
             class="h-8 w-24 rounded-md border border-border bg-muted px-2 text-[12px] text-foreground outline-none focus:border-ring"
             @change="setRet('keep', Math.max(1, Number(($event.target as HTMLInputElement).value || 1)))"
+          >
+        </label>
+        <label class="text-[12px] text-muted-foreground">
+          <span class="mb-1 block text-[12.5px] font-medium text-foreground">归档最长保留天数</span>
+          <input
+            :value="retMaxDays"
+            type="number"
+            min="0"
+            max="3650"
+            step="1"
+            class="h-8 w-24 rounded-md border border-border bg-muted px-2 text-[12px] text-foreground outline-none focus:border-ring"
+            @change="setRet('max_days', Math.max(0, Math.min(3650, Number(($event.target as HTMLInputElement).value || 0))))"
           >
         </label>
         <label class="flex cursor-pointer items-center gap-2 pb-2 text-[12.5px] text-foreground">

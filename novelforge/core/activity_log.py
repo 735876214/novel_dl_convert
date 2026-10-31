@@ -180,6 +180,8 @@ def retention_cfg() -> dict:
         "enabled": bool(r.get("enabled")),
         "max_bytes": max(64 * 1024, int(r.get("max_bytes") or 5 * 1024 * 1024)),
         "keep": max(1, int(r.get("keep") or 5)),
+        # 0 = 不按时间清理；上限 3650 天（配置笔误不该把归档一次删光）
+        "max_days": max(0, min(int(r.get("max_days") or 0), 3650)),
         "compress": bool(r.get("compress", True)),
     }
     _cfg_cache.update(at=now, val=out)
@@ -275,14 +277,23 @@ def _archive_jsonls() -> list:
     return sorted(out, key=lambda p: p.name, reverse=True)
 
 
-def _prune_archives(d: pathlib.Path, keep: int) -> None:
-    """每类归档只保留最近 keep 份。"""
+def _prune_archives(d: pathlib.Path, keep: int, max_days: int = 0) -> None:
+    """每类归档只保留最近 keep 份；`max_days > 0` 时再按文件 mtime 删过旧的（第 205 期）。"""
+    cutoff = (time.time() - max_days * 86400) if max_days > 0 else 0
     for kind in (".log.gz", ".jsonl.gz", ".log", ".jsonl"):
         try:
             files = sorted(d.glob(f"{ARCHIVE_PREFIX}*{kind}"))
         except OSError:
             continue
-        for old in (files[:-keep] if len(files) > keep else []):
+        stale = set(files[:-keep] if len(files) > keep else [])
+        if cutoff:
+            for f in files:
+                try:
+                    if f.stat().st_mtime < cutoff:
+                        stale.add(f)
+                except OSError:
+                    pass
+        for old in stale:
             try:
                 old.unlink()
             except OSError:
@@ -310,7 +321,7 @@ def _rotate_if_needed(d: pathlib.Path) -> None:
                 src.unlink(missing_ok=True)
             else:
                 src.rename(dst)
-        _prune_archives(d, cfg["keep"])
+        _prune_archives(d, cfg["keep"], cfg.get("max_days") or 0)
     except Exception:
         pass
 

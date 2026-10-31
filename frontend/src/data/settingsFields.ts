@@ -165,6 +165,12 @@ export const NETWORK_FIELDS: FieldDef[] = [
 export const LOGGING_FIELDS: FieldDef[] = [
   { path: 'logging.max_entries', label: '日志内存缓冲条数', type: 'number' },
   { path: 'logging.dir', label: '日志目录', type: 'text', placeholder: '留空则用 LOG_DIR' },
+  {
+    path: 'logging.retention.max_days',
+    label: '归档最长保留天数',
+    type: 'number',
+    hint: '0 = 不按时间清理（只看份数）；上限 3650 天',
+  },
 ]
 
 /** 维护 → 上传上限（对应上游 Maintenance 页的 UPLOADS 分组） */

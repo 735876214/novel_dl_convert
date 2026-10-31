@@ -238,6 +238,8 @@ DEFAULTS = {
             "enabled": False,
             "max_bytes": 5 * 1024 * 1024,
             "keep": 5,
+            # 第 205 期：归档超过 N 天也删（0 = 不按时间，只看 keep）。
+            "max_days": 0,
             "compress": True,
         },
     },
