@@ -161,7 +161,10 @@ beforeEach(() => {
     created_at: 0,
     last_seen: 0,
   } satisfies PrefDevice)
-  vi.mocked(api.notifications).mockResolvedValue({ items: [], count: 0, unread: 0, unread_total: 0 })
+  vi.mocked(api.notifications).mockResolvedValue({
+    items: [], count: 0, total: 0, offset: 0, next_offset: null,
+    has_more: false, unread: 0, unread_total: 0,
+  })
   vi.mocked(api.tasks).mockResolvedValue({ items: [], count: 0 })
 })
 

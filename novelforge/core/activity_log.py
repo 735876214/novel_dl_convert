@@ -55,6 +55,10 @@ ACTION_RESET = "重置"
 # 外部服务同步（第 52 期）：把阅读状态 / 评分书评 / 书摘推给 Hardcover / Readwise。
 # 它是**写向第三方**的动作，属于要有审计留痕的一类，故单列一个取值。
 ACTION_SYNC = "同步"
+# 登录 / 登出（第 192 期）：鉴权事件属于审计的一部分。成功与失败都记；
+# 失败条目的 `detail` 写原因（密码错误 / 退避中），`file` 写尝试的账号。
+ACTION_LOGIN = "登录"
+ACTION_LOGOUT = "登出"
 
 # ---- 结果 ----
 STATUS_OK = "成功"
@@ -481,7 +485,7 @@ def log_add_fail(file, detail, **kw):
 # ---------------- 读取 ----------------
 
 def recent(limit: int = 200, action: str = "", status: str = "", q: str = "",
-           actor: str = "") -> list:
+           actor: str = "", since: float = 0, until: float = 0) -> list:
     """读取最近的活动记录（新→旧），支持按操作 / 结果 / 关键字 / 操作者过滤。
 
     内存缓冲只含**本次进程**写入的记录。原实现仅在「内存为空」时才回填 jsonl，
@@ -512,6 +516,17 @@ def recent(limit: int = 200, action: str = "", status: str = "", q: str = "",
     if actor:
         # 精确匹配（操作者是账号名或「系统」，不是搜索词）—— 与 q 的子串语义刻意不同
         items = [e for e in items if str(e.get("actor") or "").strip() == actor]
+    if since or until:
+        # 日期范围（第 192 期）：按 `ts_epoch`（毫秒时间戳的秒侧），边界含端点。
+        def _ts(e: dict) -> float:
+            try:
+                return float(e.get("ts_epoch") or 0)
+            except (TypeError, ValueError):
+                return 0.0
+        if since:
+            items = [e for e in items if _ts(e) >= float(since)]
+        if until:
+            items = [e for e in items if 0 < _ts(e) <= float(until)]
     return items[:limit] if limit and limit > 0 else items
 
 

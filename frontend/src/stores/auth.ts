@@ -50,6 +50,8 @@ export const useAuthStore = defineStore('auth', {
     },
 
     logout() {
+      // 第 192 期：先发登出审计（请求头在调用时同步取 token），再清本地 —— 不阻塞界面。
+      void api.logout().catch(() => {})
       this._setToken('')
       this.user = ''
       this.displayName = ''

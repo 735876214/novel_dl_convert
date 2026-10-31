@@ -198,6 +198,12 @@ async function copyEndpoint(): Promise<void> {
         <div class="mb-1.5 flex flex-wrap items-center gap-2 text-[13px] font-medium text-foreground">
           <span>文档索引</span>
           <Badge tone="accent">已索引 {{ st?.doc_count ?? 0 }} / {{ st?.book_count ?? 0 }}</Badge>
+          <span v-if="st?.unmatched_docs" class="text-[11px] text-destructive">
+            未匹配 {{ st.unmatched_docs }} 条
+          </span>
+        </div>
+        <div v-if="st?.unmatched_docs" class="mb-2.5 text-[11.5px] text-destructive">
+          有些文档索引对应的书已经不在书库（换库 / 改名 / 删除）。点「扫描书库」重建索引即可清掉这些条目。
         </div>
         <div class="mb-2.5 text-[11.5px] text-muted-foreground">
           KOReader 用 <b>partialMD5</b>（只采样 12 个点，不是整文件 MD5）标识文档，本项目用文件名派生的 id，
@@ -216,7 +222,9 @@ async function copyEndpoint(): Promise<void> {
             </thead>
             <tbody>
               <tr v-for="d in docs" :key="d.book_id" class="border-t border-border/60">
-                <td class="px-3 py-1.5 text-foreground">{{ d.title }}</td>
+                <td class="px-3 py-1.5" :class="d.matched ? 'text-foreground' : 'text-destructive'">
+                  {{ d.matched ? (d.title || d.name) : '（书已不在书库）' }}
+                </td>
                 <td class="px-3 py-1.5 font-mono text-muted-foreground">{{ d.name }}</td>
                 <td class="px-3 py-1.5 font-mono text-muted-foreground">{{ d.doc_md5 }}</td>
               </tr>

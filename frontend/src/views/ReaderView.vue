@@ -11,6 +11,7 @@ import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
 import UnitsReader from '@/components/reader/UnitsReader.vue'
 import ReadAloudBar from '@/components/ReadAloudBar.vue'
+import ReaderSearchPanel from '@/components/ReaderSearchPanel.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
 import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type OnlineChapters, type OnlineStatus, type ReadAloudInfo, type SessionExtra } from '@/lib/api'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
@@ -603,12 +604,61 @@ function onReaderClick(e: MouseEvent): void {
   else if (x > (rect.width * 2) / 3) flip(1)
 }
 
+function jumpSearchHit(chapterIndex: number): void {
+  showSearch.value = false
+  const p = flat.value.findIndex((x) => x.index === chapterIndex)
+  if (p < 0) {
+    ui.toast('这一章无法定位（章节序号缺失）')
+    return
+  }
+  void loadChapter(p)
+}
+
+/** 按全书百分比跳转：章号取整、余数作为章内比例交给 `loadChapter` 的 restore 参数。 */
+function jumpPercent(): void {
+  const raw = Number(jumpPct.value)
+  if (!Number.isFinite(raw) || !total.value) return
+  const pct = Math.min(100, Math.max(0, raw))
+  const exact = (pct / 100) * total.value
+  let p = Math.floor(exact)
+  let frac = exact - p
+  if (p >= total.value) {
+    p = total.value - 1
+    frac = 1
+  }
+  jumpPct.value = ''
+  showSettings.value = false
+  void loadChapter(p, frac)
+}
+
+/** 跳到本章第 N 页（仅翻页模式有意义；页码 1 基，与界面显示一致）。 */
+function jumpPage(): void {
+  const n = Number(jumpPageNo.value)
+  if (!Number.isFinite(n)) return
+  page.value = Math.min(pageCount.value - 1, Math.max(0, Math.floor(n) - 1))
+  jumpPageNo.value = ''
+  showSettings.value = false
+}
+
+async function toggleFullscreen(): Promise<void> {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen()
+    else await document.documentElement.requestFullscreen()
+  } catch {
+    /* 浏览器不允许（iframe / 无用户手势）时保持原样，不报错 */
+  }
+}
+
 function onKeydown(e: KeyboardEvent): void {
   // Esc 收起打开的面板，并把焦点还给打开它的按钮（第 93 期）。
   // ⚠️ 必须在 `paged` 之前判：滚动模式下没有翻页键，但面板一样得能关。
   // 一次只关一层（自下而上），且**不吞**没有面板时的 Esc —— 那是别的组件的（如弹窗）。
   if (e.key === 'Escape') {
-    if (showSettings.value) {
+    if (showHelp.value) {
+      showHelp.value = false
+    } else if (showSearch.value) {
+      showSearch.value = false
+    } else if (showSettings.value) {
       showSettings.value = false
       restoreFocus(settingsBtn.value)
     } else if (showNotes.value) {
@@ -619,6 +669,23 @@ function onKeydown(e: KeyboardEvent): void {
       restoreFocus(tocBtn.value)
     }
     return
+  }
+  const tag = (e.target as HTMLElement | null)?.tagName || ''
+  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+  if (!typing) {
+    if (e.key === '?') {
+      showHelp.value = !showHelp.value
+      return
+    }
+    if (e.key === '/' && canSearch.value) {
+      e.preventDefault()
+      showSearch.value = !showSearch.value
+      return
+    }
+    if (e.key.toLowerCase() === 'f' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      void toggleFullscreen()
+      return
+    }
   }
   if (!paged.value) return
   if (e.key === 'ArrowRight' || e.key === 'PageDown') flip(1)
@@ -735,6 +802,12 @@ function prefApplies(key: NumPrefKey): boolean {
 const showSettings = ref(false)
 const showToc = ref(false)
 const showNotes = ref(false)
+// 第 189 期：书内搜索 / 快捷键帮助 / 按百分比或页码跳转
+const showSearch = ref(false)
+const showHelp = ref(false)
+const jumpPct = ref('')
+const jumpPageNo = ref('')
+const canSearch = computed(() => fmt.value === 'EPUB' && !isOnline.value)
 
 /**
  * 打开面板的那三个按钮。只为「Esc 收面板后把焦点还回去」而存在 ——
@@ -2471,6 +2544,9 @@ onBeforeUnmount(() => {
         <Button ref="tocBtn" size="sm" variant="ghost" title="目录" @click="showToc = !showToc">
           <Icon name="book" class="h-4 w-4" />
         </Button>
+        <Button v-if="canSearch" size="sm" variant="ghost" title="书内搜索（/）" @click="showSearch = !showSearch">
+          <Icon name="search" class="h-4 w-4" />
+        </Button>
         <div class="min-w-0 flex-1">
           <div class="truncate text-[12px] text-muted-foreground">{{ book.title }}</div>
           <div class="truncate text-[13px] font-medium text-foreground">{{ chapterTitle }}</div>
@@ -2498,6 +2574,39 @@ onBeforeUnmount(() => {
                 页宽由书本身决定，字号 / 行高 / 缩进 / 分栏等重排设置对它不适用，只有主题、
                 阅读模式与左右内边距会生效。
               </span>
+            </div>
+
+            <div class="mb-3">
+              <div class="mb-1.5 text-[11px] text-muted-foreground">跳转（第 189 期）</div>
+              <div class="flex flex-wrap items-center gap-1.5">
+                <input
+                  v-model="jumpPct"
+                  type="number"
+                  min="0"
+                  max="100"
+                  aria-label="跳转百分比"
+                  placeholder="全书百分比"
+                  class="h-7 w-24 rounded-md border border-border bg-card px-1.5 text-[11.5px] text-foreground outline-none focus:border-ring"
+                  @keyup.enter="jumpPercent"
+                >
+                <Button size="sm" variant="ghost" @click="jumpPercent">按百分比跳转</Button>
+                <template v-if="paged">
+                  <input
+                    v-model="jumpPageNo"
+                    type="number"
+                    min="1"
+                    :max="pageCount"
+                    aria-label="跳转页码"
+                    placeholder="本章页码"
+                    class="h-7 w-24 rounded-md border border-border bg-card px-1.5 text-[11.5px] text-foreground outline-none focus:border-ring"
+                    @keyup.enter="jumpPage"
+                  >
+                  <Button size="sm" variant="ghost" @click="jumpPage">跳到该页</Button>
+                </template>
+              </div>
+              <p class="mt-1 text-[10.5px] leading-snug text-muted-foreground">
+                百分比按全书章节数定位；页码只在本章内跳（翻页模式）。
+              </p>
             </div>
 
             <div class="mb-3">
@@ -2701,6 +2810,15 @@ onBeforeUnmount(() => {
         class="mt-2"
         @cue="onReadAloudCue"
         @close="closeReadAloud"
+      />
+
+      <!-- 书内搜索（第 189 期）：只支持 EPUB（PDF 的正文层还没接） -->
+      <ReaderSearchPanel
+        v-if="showSearch && canSearch"
+        :book-id="bookId"
+        class="mt-2"
+        @jump="jumpSearchHit"
+        @close="showSearch = false"
       />
 
       <!-- TXT 解码提示（第 89 期）：只在**确有字节解不出**时出现，低调但明确 ——
@@ -3074,6 +3192,33 @@ onBeforeUnmount(() => {
       </div>
       </template>
     </template>
+
+    <!-- 快捷键帮助（第 189 期）：`?` 开合；点遮罩或 × 关闭 -->
+    <div
+      v-if="showHelp"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      @click.self="showHelp = false"
+    >
+      <div class="w-full max-w-sm rounded-lg border border-border bg-card p-4 shadow-xl">
+        <div class="flex items-center gap-2">
+          <h3 class="text-[13px] font-semibold text-foreground">阅读器快捷键</h3>
+          <button
+            type="button"
+            class="ml-auto cursor-pointer text-muted-foreground hover:text-foreground"
+            aria-label="关闭快捷键帮助"
+            @click="showHelp = false"
+          >×</button>
+        </div>
+        <ul class="mt-2 space-y-1 text-[11.5px] text-muted-foreground">
+          <li><kbd>←</kbd> / <kbd>→</kbd>（或 <kbd>PgUp</kbd> / <kbd>PgDn</kbd>）：翻页（翻页模式）</li>
+          <li><kbd>/</kbd>：书内搜索（EPUB）</li>
+          <li><kbd>F</kbd>：切换全屏</li>
+          <li><kbd>Esc</kbd>：关闭当前面板</li>
+          <li><kbd>?</kbd>：打开 / 关闭本帮助</li>
+        </ul>
+        <p class="mt-2 text-[10.5px] text-muted-foreground">输入框里打字时这些快捷键不生效（除 Esc）。</p>
+      </div>
+    </div>
   </div>
 </template>
 

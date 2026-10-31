@@ -34,6 +34,8 @@ vi.mock('@/lib/api', () => ({
     readAloud: vi.fn(),
     saveReadAloudSync: vi.fn(),
     readAloudAudioUrl: vi.fn((bid: string, href: string) => `/ra/${bid}?p=${href}`),
+    exportReadAloud: vi.fn(),
+    searchBook: vi.fn(),
   },
   apiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
@@ -51,6 +53,7 @@ const m = {
   epubCss: vi.mocked(api.epubCss),
   readAloud: vi.mocked(api.readAloud),
   saveReadAloudSync: vi.mocked(api.saveReadAloudSync),
+  searchBook: vi.mocked(api.searchBook),
 }
 
 /**
@@ -126,6 +129,7 @@ function stubApi(book: BookDetail): void {
     total: 0, cues: [], sync: { cue_index: 0, position_sec: 0, updated_at: 0 },
   })
   m.saveReadAloudSync.mockResolvedValue({ cue_index: 0, position_sec: 0, updated_at: 0 })
+  m.searchBook.mockResolvedValue({ items: [], total: 0, truncated: false, scanned: 0, query: '' })
 }
 
 /**
@@ -1004,6 +1008,60 @@ describe('ReaderView · read-along（第 188 期）', () => {
     const { wrapper } = await mountReader()
     await flushPromises()
     expect(wrapper.text()).not.toContain('朗读')
+    wrapper.unmount()
+  })
+})
+
+describe('ReaderView · 书内搜索 / 快捷键 / 跳转（第 189 期）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    localStorage.clear()
+    Element.prototype.scrollIntoView = vi.fn()
+    stubApi(makeBook())
+  })
+
+  it('书内搜索：结果来自接口，点结果跳到对应章', async () => {
+    m.searchBook.mockResolvedValue({
+      items: [{ chapter_index: 1, title: '第二章', snippet: '…潮汐…', offset: 3, match: '潮汐' }],
+      total: 1, truncated: false, scanned: 2, query: '潮汐',
+    })
+    const { wrapper } = await mountReader()
+    await wrapper.findAll('button').find((b) => b.attributes('title') === '书内搜索（/）')!.trigger('click')
+    await flushPromises()
+    await wrapper.find('input[aria-label="书内搜索"]').setValue('潮汐')
+    await wrapper.findAll('button').find((b) => b.text() === '搜索')!.trigger('click')
+    await flushPromises()
+    expect(m.searchBook).toHaveBeenCalledWith('book-a', '潮汐')
+    expect(wrapper.text()).toContain('第二章')
+
+    await wrapper.findAll('button').find((b) => b.text().includes('第二章'))!.trigger('click')
+    await flushPromises()
+    expect(m.chapter).toHaveBeenCalledWith('book-a', 1)
+    wrapper.unmount()
+  })
+
+  it('? 打开快捷键帮助，F 请求全屏', async () => {
+    const fs = vi.fn(() => Promise.resolve())
+    ;(document.documentElement as unknown as { requestFullscreen: typeof fs }).requestFullscreen = fs
+    const { wrapper } = await mountReader()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: '?' }))
+    await flushPromises()
+    expect(wrapper.text()).toContain('阅读器快捷键')
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }))
+    await flushPromises()
+    expect(fs).toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('按百分比跳转：50% → 全书第 1 章（两章中的后一章）', async () => {
+    const { wrapper } = await mountReader()
+    await wrapper.findAll('button').find((b) => b.attributes('title') === '阅读设置')!.trigger('click')
+    await flushPromises()
+    await wrapper.find('input[aria-label="跳转百分比"]').setValue('50')
+    await wrapper.findAll('button').find((b) => b.text() === '按百分比跳转')!.trigger('click')
+    await flushPromises()
+    expect(m.chapter).toHaveBeenCalledWith('book-a', 1)
     wrapper.unmount()
   })
 })

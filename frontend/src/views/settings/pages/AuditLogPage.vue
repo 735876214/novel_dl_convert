@@ -34,6 +34,19 @@ const fAction = ref('')
 const fStatus = ref('')
 const fQ = ref('')
 const fActor = ref('')
+/** 日期范围（第 192 期）：本地日 00:00:00 – 23:59:59.999 */
+const fSince = ref('')
+const fUntil = ref('')
+
+function dayStart(s: string): number {
+  const t = new Date(`${s}T00:00:00`).getTime()
+  return Number.isFinite(t) ? t / 1000 : 0
+}
+
+function dayEnd(s: string): number {
+  const t = new Date(`${s}T23:59:59.999`).getTime()
+  return Number.isFinite(t) ? t / 1000 : 0
+}
 /** 操作者下拉的候选（后端另行取全量，**不受当前筛选影响** —— 否则选中一个就切不回来） */
 const actors = ref<string[]>([])
 
@@ -81,7 +94,7 @@ async function saveRetention(): Promise<void> {
   void load() // 存盘情况随日志一起返回，保存后重取以刷新显示
 }
 
-const ACTIONS = ['转换', '添加', '跳过', '重命名', '清理', '刮削']
+const ACTIONS = ['转换', '添加', '跳过', '重命名', '清理', '刮削', '登录', '登出']
 const STATUSES = ['成功', '失败']
 
 /** 类别由动作归并（上游有独立类别体系，本项目没有） */
@@ -91,6 +104,8 @@ const CATEGORY: Record<string, string> = {
   重命名: '文件变更',
   清理: '清理',
   跳过: '跳过',
+  登录: '账号',
+  登出: '账号',
 }
 
 function categoryOf(action: unknown): string {
@@ -108,6 +123,8 @@ async function load(): Promise<void> {
       status: fStatus.value || undefined,
       q: fQ.value.trim() || undefined,
       actor: fActor.value || undefined,
+      since: fSince.value ? dayStart(fSince.value) : undefined,
+      until: fUntil.value ? dayEnd(fUntil.value) : undefined,
     })
     items.value = r.items
     actors.value = r.actors ?? []
@@ -125,6 +142,8 @@ function resetFilters(): void {
   fStatus.value = ''
   fQ.value = ''
   fActor.value = ''
+  fSince.value = ''
+  fUntil.value = ''
   fCategory.value = ''
   onlyNoActor.value = false
   void load()
@@ -268,6 +287,21 @@ function downloadLog(): void {
           <option value="">全部操作者</option>
           <option v-for="a in actors" :key="a" :value="a">{{ a }}</option>
         </select>
+        <input
+          v-model="fSince"
+          type="date"
+          aria-label="起始日期"
+          class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+          @change="load"
+        >
+        <span class="text-[11px] text-muted-foreground">—</span>
+        <input
+          v-model="fUntil"
+          type="date"
+          aria-label="结束日期"
+          class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+          @change="load"
+        >
         <input
           v-model="fQ"
           type="text"

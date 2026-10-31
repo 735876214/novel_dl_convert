@@ -9,6 +9,7 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import AppToast from '@/components/AppToast.vue'
 import LoginGate from '@/components/LoginGate.vue'
 import GuidedTourModal from '@/components/settings/GuidedTourModal.vue'
+import CommandPalette from '@/components/CommandPalette.vue'
 import { lazyComponent } from '@/lib/chunkReload'
 // 第 179 期：**只有「新建书库」向导**改按需加载（6.9 KB gzip）—— 它只在用户点按钮时
 // 出现、是 z-50 浮层、不占布局、也没有持久化标记。
@@ -25,7 +26,6 @@ import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
-import { useSettingsSearch } from '@/composables/useSettingsSearch'
 import { startRealtime, stopRealtime } from '@/lib/realtime'
 
 // ⚠️ 第 65 期：`useUiStore` 与 `ui` 已从这里删掉 —— 它在本文件唯一的用途是
@@ -65,6 +65,8 @@ const route = useRoute()
  */
 const showLogin = ref(!auth.authenticated)
 const showTour = ref(false)
+/** 命令面板（第 194 期）：⌘/Ctrl+K，登录后才可打开 */
+const showPalette = ref(false)
 
 /**
  * 首次使用引导（第 38 期）：**一个书库都没有**时弹一次。
@@ -109,10 +111,9 @@ const isSettingsRoute = computed(() => route.path.startsWith('/settings'))
  * 不是阅读界面，用户口径说的是阅读 —— 要收进去只需在这里加一个名字。
  */
 const isImmersiveRoute = computed(() => route.name === 'read' || route.name === 'online')
-const settingsSearch = useSettingsSearch()
 
 /**
- * ⌘K / Ctrl+K 聚焦全局搜索。
+ * ⌘K / Ctrl+K 打开命令面板（第 194 期）。
  *
  * 设置区例外：那里由 `SettingsSearchPanel` 接管（上游同样是「设置区搜设置项」），
  * 否则一次按键会同时聚焦顶栏搜索框并弹出设置搜索浮层。
@@ -123,8 +124,9 @@ const settingsSearch = useSettingsSearch()
 function onKeydown(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
     e.preventDefault()
-    if (isSettingsRoute.value) settingsSearch.togglePanel()
-    else document.getElementById('globalSearch')?.focus()
+    // 第 194 期：⌘K 打开**命令面板**（页面 / 设置 / 书名）。设置页的搜索面板
+    // 仍在侧栏里可直接点；把它也塞进 ⌘K 会让同一个快捷键有两种含义。
+    if (!showLogin.value) showPalette.value = true
   }
 }
 
@@ -244,6 +246,7 @@ onUnmounted(() => {
   </SidebarProvider>
 
   <!-- 首次使用引导（第 38 期）：0 个书库时弹一次，见上面 showTour 的说明 -->
+  <CommandPalette v-if="!showLogin" :open="showPalette" @close="showPalette = false" />
   <GuidedTourModal v-model:open="showTour" />
 
   <!-- 「新增书库」全局向导（第 55 期）：各入口就地弹窗、不再跳设置页。

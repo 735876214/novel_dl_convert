@@ -145,6 +145,13 @@ export const NETWORK_FIELDS: FieldDef[] = [
     type: 'bool',
     hint: '默认开启：在播客页搜索节目目录（iTunes Search API）；只在点「搜索目录」时外呼，失败不影响手动填 RSS 地址',
   },
+  {
+    path: 'download.filename_pattern',
+    label: '下载文件名模式',
+    type: 'text',
+    placeholder: '{name}.{ext}',
+    hint: '只影响浏览器「另存为」的名字，不改磁盘上的成品文件；{name} = 原文件名（不含扩展名），{ext} = 扩展名（不含点）',
+  },
 ]
 
 /**

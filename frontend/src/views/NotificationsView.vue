@@ -29,17 +29,56 @@ const busy = ref(false)
 const error = ref('')
 const filter = ref<'all' | 'fail' | 'ok'>('all')
 const prefs = ref<NotifyPrefs>(readNotifyPrefs())
+const total = ref(0)
+const hasMore = ref(false)
+let nextOffset = 0
+const PAGE = 50
 
-async function load(): Promise<void> {
+async function load(reset = true): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    items.value = (await api.notifications(200)).items
+    const r = await api.notifications(PAGE, reset ? 0 : nextOffset)
+    items.value = reset ? r.items : [...items.value, ...r.items]
+    total.value = r.total
+    nextOffset = r.next_offset ?? 0
+    hasMore.value = r.has_more
   } catch (e) {
-    items.value = []
+    if (reset) items.value = []
     error.value = e instanceof Error ? e.message : '加载失败'
   }
   loading.value = false
+}
+
+function loadMore(): void {
+  if (!hasMore.value || loading.value) return
+  void load(false)
+}
+
+async function dismiss(n: NotificationItem): Promise<void> {
+  busy.value = true
+  try {
+    await api.dismissNotifications({ ids: [n.id] })
+    ui.toast('已隐藏这条通知（活动日志未删）')
+    await load()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '隐藏失败')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function dismissAll(): Promise<void> {
+  busy.value = true
+  try {
+    const r = await api.dismissNotifications({ all: true })
+    ui.toast(`已隐藏 ${r.dismissed} 条通知（活动日志未删）`)
+    await load()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '隐藏失败')
+  } finally {
+    busy.value = false
+  }
 }
 
 onMounted(() => {
@@ -94,16 +133,26 @@ const TABS = [
     <div class="mb-4 flex flex-wrap items-center gap-2">
       <PageHead
         title="通知中心"
-        :desc="`未读 ${unreadCount} 条 · 显示 ${visible.length} 条 · 失败 ${failCount} 条`"
+        :desc="`共 ${total} 条 · 未读 ${unreadCount} 条 · 显示 ${visible.length} 条 · 失败 ${failCount} 条`"
       />
-      <Button
-        size="sm"
-        class="ml-auto"
-        :disabled="busy || unreadCount === 0"
-        @click="markRead('all')"
-      >
-        全部已读
-      </Button>
+      <div class="ml-auto flex gap-1">
+        <Button
+          size="sm"
+          :disabled="busy || unreadCount === 0"
+          @click="markRead('all')"
+        >
+          全部已读
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          :disabled="busy || total === 0"
+          title="只从通知中心隐藏，活动日志一条不删"
+          @click="dismissAll"
+        >
+          隐藏全部
+        </Button>
+      </div>
     </div>
 
     <!-- 被类别偏好过滤时的提示：避免用户以为记录丢失 -->
@@ -135,7 +184,7 @@ const TABS = [
       <div class="flex flex-wrap items-center gap-2 text-[12px] text-destructive">
         <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
         <span>加载通知失败：{{ error }}</span>
-        <Button size="sm" variant="secondary" class="ml-auto" :disabled="busy" @click="load">
+        <Button size="sm" variant="secondary" class="ml-auto" :disabled="busy" @click="load()">
           重试
         </Button>
       </div>
@@ -172,6 +221,13 @@ const TABS = [
               </span>
               <span class="truncate text-[12.5px] text-foreground">{{ str(n, 'file') }}</span>
               <span class="ml-auto shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ str(n, 'ts') }}</span>
+              <button
+                type="button"
+                class="shrink-0 cursor-pointer px-1 text-[13px] leading-none text-muted-foreground transition-colors hover:text-destructive"
+                aria-label="隐藏这条通知"
+                title="只从通知中心隐藏，活动日志不删"
+                @click.stop="dismiss(n)"
+              >×</button>
             </div>
             <p v-if="str(n, 'output')" class="mt-0.5 truncate text-[11.5px] text-muted-foreground">
               → {{ str(n, 'output') }}
@@ -185,6 +241,11 @@ const TABS = [
           </div>
         </div>
       </Card>
+      <div v-if="hasMore" class="flex justify-center py-2">
+        <Button size="sm" variant="ghost" :disabled="loading" @click="loadMore">
+          {{ loading ? '加载中…' : '加载更多' }}
+        </Button>
+      </div>
     </div>
 
     <EmptyState
@@ -198,8 +259,9 @@ const TABS = [
       <div class="flex gap-2 text-[11.5px] leading-relaxed text-muted-foreground">
         <Icon name="alert" class="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
-          已读态存在服务端（<span class="font-mono">notifications_read</span> 表），多端一致；
-          清空活动日志时会一并清除已读标记（日志没了，标记也就没有意义）。
+          已读态存在服务端（<span class="font-mono">notifications_read</span> 表），隐藏态在
+          <span class="font-mono">notifications_dismissed</span> 表，多端一致；
+          「隐藏」只从通知中心移除，<strong>活动日志一条不删</strong>；清空活动日志时两套标记一并清除。
           本页仍是<strong>日志视图</strong>，不是上游那种可投递到邮件的服务端通知。
         </span>
       </div>

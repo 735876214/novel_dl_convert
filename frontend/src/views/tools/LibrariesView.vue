@@ -24,7 +24,7 @@ import LibraryConflictPanel from '@/components/tools/LibraryConflictPanel.vue'
 import LibraryCopiesPanel from '@/components/tools/LibraryCopiesPanel.vue'
 import LibrarySettingsPanel from '@/components/tools/LibrarySettingsPanel.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
-import { api, type LibraryEntity, type LibraryType } from '@/lib/api'
+import { api, type LibraryEntity, type LibraryType, type ScanHistoryItem } from '@/lib/api'
 import { fmtBytes } from '@/lib/format'
 import { ICONS } from '@/lib/icons'
 import { isAbsolutePath, pathsOverlap } from '@/lib/paths'
@@ -139,6 +139,21 @@ const fmtTouched = ref(false)
 
 /** 编辑态：当前正在改的库实体（「上次扫描」页签要读它的历史） */
 const editingLib = computed(() => libs.value.find((l) => l.id === editingId.value) || null)
+
+// 扫描历史（第 191 期）：编辑弹窗打开时按需取，不随列表加载。
+const scanHistory = ref<ScanHistoryItem[]>([])
+const historyBusy = ref(false)
+
+async function loadHistory(lid: string): Promise<void> {
+  historyBusy.value = true
+  try {
+    scanHistory.value = (await api.scanHistory(lid)).items
+  } catch {
+    scanHistory.value = []
+  } finally {
+    historyBusy.value = false
+  }
+}
 
 /** 全局的「刮削出版」开关（用于判断该库是继承还是覆写） */
 const globalScrape = computed(
@@ -334,6 +349,7 @@ function openWizard(): void {
 async function openEdit(l: LibraryEntity): Promise<void> {
   editingId.value = l.id
   dlgTab.value = 'contents'
+  void loadHistory(l.id)
   fmtTouched.value = l.allowed_exts.length > 0
   form.value = {
     name: l.name,
@@ -457,6 +473,7 @@ async function scan(l: LibraryEntity): Promise<void> {
     const res = await api.scanLibrary(l.id)
     ui.toast(`「${l.name}」扫描完成：${res.count} 本`)
     await reload()
+    if (editingId.value === l.id) void loadHistory(l.id)
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '扫描失败')
   } finally {
@@ -1024,6 +1041,29 @@ async function confirmRemove(): Promise<void> {
               扫描 = 重新读一遍库根目录：新文件会被收进书目，被移走的书会从书目里消失。
               开了自动刮削的库，扫描后新书会自动进刮削队列（进度看「工具 → 转换日志 → 刮削」）。
             </div>
+            <div v-if="scanHistory.length" class="rounded-md border border-border">
+              <div class="border-b border-border px-3 py-1.5 text-[11px] font-medium text-muted-foreground">
+                最近扫描（{{ scanHistory.length }} 次）
+              </div>
+              <ul class="divide-y divide-border">
+                <li v-for="h in scanHistory" :key="h.id" class="px-3 py-1.5 text-[11.5px]">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <span class="font-medium text-foreground">{{ ago(h.finished_at) }}</span>
+                    <span :class="h.status === 'ok' ? 'text-success' : 'text-destructive'">
+                      {{ h.status === 'ok' ? '正常' : '降级' }}
+                    </span>
+                    <span class="text-muted-foreground">
+                      {{ h.books }} 本 · 新增 {{ h.added }} · 移除 {{ h.removed }}
+                      <template v-if="h.scanned"> · 扫描 {{ h.scanned }}</template>
+                    </span>
+                  </div>
+                  <div v-if="h.note" class="mt-0.5 truncate text-[11px] text-muted-foreground" :title="h.note">
+                    {{ h.note }}
+                  </div>
+                </li>
+              </ul>
+            </div>
+            <p v-else-if="historyBusy" class="text-[11.5px] text-muted-foreground">读取扫描历史…</p>
             <Button size="sm" :disabled="!!busy" @click="scan(editingLib)">
               {{ busy === `scan:${editingLib.id}` ? '扫描中…' : '立即扫描' }}
             </Button>

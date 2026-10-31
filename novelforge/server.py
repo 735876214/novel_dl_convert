@@ -46,7 +46,8 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
-                   events, entities, pathmeta, m4b, audiobook_zip, podcasts, readaloud)
+                   events, entities, pathmeta, m4b, audiobook_zip, podcasts, readaloud, booksearch,
+                   pdfsearch)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -1693,6 +1694,12 @@ async def api_search(payload: dict = Body(...)):
     except Exception as e:
         raise HTTPException(502, f"搜索失败: {e}")
     items = res["items"]
+    # 第 193 期：逐源搜索健康落台账（被闸门跳过的不算失败 —— 那是用户的选择）。
+    for s in res["sources"]:
+        if s.get("skipped"):
+            continue
+        db.record_source_search(s.get("name") or "", bool(s.get("ok")),
+                                str(s.get("error") or ""))
     return {
         "count": len(items),
         "results": items,
@@ -2402,7 +2409,12 @@ def download_file(name: str, library_id: str = ""):
         raise HTTPException(400, str(e))
     if not target.is_file():
         raise HTTPException(404, "文件不存在")
-    return FileResponse(target, filename=target.name)
+    dl = (config.load_config() or {}).get("download") or {}
+    pattern = str(dl.get("filename_pattern") or "{name}.{ext}")
+    out_name = (pattern.replace("{name}", target.stem)
+                .replace("{ext}", target.suffix.lstrip(".")))
+    out_name = fileops.sanitize_stem(out_name) or target.name
+    return FileResponse(target, filename=out_name)
 
 
 # ---------------- OPDS 目录订阅源 ----------------
@@ -3986,13 +3998,30 @@ def api_login(request: Request, payload: dict = Body(...)):
     """
     user = str(payload.get("user", "") or "")
     pin = str(payload.get("pin", "") or "")
+    host = auth_mod.client_host(request)
     try:
-        ok = auth_mod.verify_pin(user, pin, auth_mod.client_host(request))
+        ok = auth_mod.verify_pin(user, pin, host)
     except auth_mod.Throttled as e:
+        activity_log.log(activity_log.ACTION_LOGIN, user or "(空)", activity_log.STATUS_FAIL,
+                         detail=f"连续失败过多，退避 {int(e.wait) + 1} 秒（来自 {host}）",
+                         actor=user)
         raise HTTPException(429, f"连续登录失败过多，请 {int(e.wait) + 1} 秒后再试")
     if not ok:
+        activity_log.log(activity_log.ACTION_LOGIN, user or "(空)", activity_log.STATUS_FAIL,
+                         detail=f"账号或密码错误（来自 {host}）", actor=user)
         raise HTTPException(401, "账号或密码错误")
+    activity_log.log(activity_log.ACTION_LOGIN, user, activity_log.STATUS_OK,
+                     detail=f"来自 {host}", actor=user)
     return {"token": auth_mod.issue_token(user), "user": user}
+
+
+@app.post("/api/auth/logout")
+def api_logout(request: Request):
+    """登出（第 192 期）：只记审计 + 告诉前端清 token；会话令牌本身无状态（见 `/api/logout` 是 Komga 协议）。"""
+    user = str(getattr(request.state, "user", "") or "")
+    activity_log.log(activity_log.ACTION_LOGOUT, user or "(未知)", activity_log.STATUS_OK,
+                     detail=f"来自 {auth_mod.client_host(request)}", actor=user)
+    return {"ok": True}
 
 
 @app.get("/api/auth/me")
@@ -5286,6 +5315,48 @@ def _chapter_cached(bid: str, index: int, src, kind: str, produce, extra: str = 
     out = _chapter_read(produce)
     cache.set_json(key, out, cache.TTL_CHAPTER)
     return done(out)
+
+
+@app.get("/api/books/{bid}/search")
+def api_book_search(bid: str, q: str = Query(..., description="搜索词"),
+                    limit: int = Query(50, ge=1, le=200)):
+    """EPUB 书内全文搜索（第 189 期）：按章节返回第一条命中 + 上下文。"""
+    b = library.by_id(bid)
+    raw = str((b or {}).get("path") or "")
+    if not b or not raw:
+        raise HTTPException(404, "书籍不存在")
+    try:
+        return booksearch.search_epub(pathlib.Path(raw), q, limit)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.get("/api/books/{bid}/pdf/outline")
+def api_pdf_outline(bid: str):
+    """PDF 大纲（第 195 期）：书签树拍平，page 为 1 基（0 = 没有页码目标）。"""
+    b = library.by_id(bid)
+    raw = str((b or {}).get("path") or "")
+    if not b or not raw:
+        raise HTTPException(404, "书籍不存在")
+    try:
+        items = pdfsearch.outline(pathlib.Path(raw))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/books/{bid}/pdf/search")
+def api_pdf_search(bid: str, q: str = Query(..., description="搜索词"),
+                   limit: int = Query(100, ge=1, le=200)):
+    """PDF 文内搜索（第 195 期）：按页返回第一条命中 + 上下文。"""
+    b = library.by_id(bid)
+    raw = str((b or {}).get("path") or "")
+    if not b or not raw:
+        raise HTTPException(404, "书籍不存在")
+    try:
+        return pdfsearch.search(pathlib.Path(raw), q, limit)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
 
 
 @app.get("/api/books/{bid}/chapter/{index}")
@@ -7541,6 +7612,7 @@ def api_scan_library(lid: str):
     lib = db.get_library(lid)
     if not lib:
         raise HTTPException(404, "书库不存在")
+    started = time.time()
     library.invalidate(lid)
     bs = library.books(lid, force=True)
     rep = (catalog.last_report() or {}).get(lid) or {}
@@ -7549,6 +7621,9 @@ def api_scan_library(lid: str):
         # 索引刷新失败时**不许**只写「0 本」—— 那与「书都删了」同形（第 141 期）
         note += f"（索引刷新异常：{rep.get('reason') or '未知'}）"
     db.set_library_scan(lid, note=note)
+    degraded = bool(rep.get("error") or rep.get("reason"))
+    history = db.add_scan_history(lid, started_at=started, books=len(bs), report=rep,
+                                  status="degraded" if degraded else "ok", note=note)
     # 若该库有来源子目录且 watcher 在跑，立即触发一次来源目录扫描（摄入新文件）
     if WATCHER is not None and WATCHER.is_running():
         try:
@@ -7562,9 +7637,17 @@ def api_scan_library(lid: str):
         queued = 0
     # 扫描 = 书集可能变了 ⇒ 后台补算一轮语义向量（有单飞闸 + 节流，扫描不受它拖慢）
     _schedule_embed_refresh()
-    degraded = bool(rep.get("error") or rep.get("reason"))
     return {"ok": not degraded, "id": lid, "count": len(bs),
-            "scrape_queued": queued, "refresh": rep}
+            "scrape_queued": queued, "refresh": rep, "history_id": history.get("id")}
+
+
+@app.get("/api/libraries/{lid}/scan-history")
+def api_library_scan_history(lid: str, limit: int = Query(20, ge=1, le=100)):
+    """每库扫描历史（第 191 期）：最近在前，最多保留 100 行。"""
+    if not db.get_library(lid):
+        raise HTTPException(404, "书库不存在")
+    items = db.list_scan_history(lid, limit)
+    return {"items": items, "total": len(items)}
 
 
 @app.post("/api/libraries/{lid}/upload")
@@ -8754,7 +8837,7 @@ EDITABLE: dict = {
     # `url_enabled` 默认关 ⇒ 必须可写，否则界面上「打开了」而后端照旧拒 = 假开关。
     "source_import": {"url_enabled", "max_bytes", "timeout", "verify_tls"},
     # 第 85 期批次 B：`toc_enabled` = 「从官方书城取目录」的独立开关（闸门的用途维度）
-    "download": {"enabled", "toc_enabled"},
+    "download": {"enabled", "toc_enabled", "filename_pattern"},
     # 第 86 期：**书籍追更**调度（与 `update`「应用自身版本」不是一回事）。
     # ⚠️ 默认 `enabled=true`（需求口径），所以这里必须可写 —— 否则界面关不掉它，
     # 后台照跑 = 假开关（本仓有专门一条纪律）。
@@ -9753,10 +9836,11 @@ def api_metadata_score(force: bool = False):
 
 @app.get("/api/logs")
 def api_logs(limit: int = Query(200, ge=1, le=5000), action: str = "",
-             status: str = "", q: str = "", actor: str = ""):
+             status: str = "", q: str = "", actor: str = "",
+             since: float = Query(0, ge=0), until: float = Query(0, ge=0)):
     return {
         "items": activity_log.recent(limit=limit, action=action, status=status, q=q,
-                                     actor=actor),
+                                     actor=actor, since=since, until=until),
         "count": activity_log.count(),
         "dir": str(activity_log.log_dir()),
         # 操作者下拉的候选：**不受 actor 参数影响**（否则选中一个就切不回来）。
@@ -9779,31 +9863,51 @@ def _notif_id(entry: dict) -> str:
 
 
 @app.get("/api/notifications")
-def api_notifications(limit: int = Query(100, ge=1, le=1000)):
-    """通知列表（新 → 旧），**在活动日志之上附加已读态**。
-
-    不改变日志本身：已读只是围绕日志条目的一个标记表，
-    清空日志时标记一并清掉（见 api_logs_clear）。
-    """
-    items = activity_log.recent(limit=limit)
+def api_notifications(limit: int = Query(50, ge=1, le=1000),
+                      offset: int = Query(0, ge=0, le=1000)):
+    """通知列表（新 → 旧，**分页**），在活动日志之上附加已读态、过滤已隐藏条目。"""
+    all_items = activity_log.recent(limit=1000)
     read_ids = db.notification_read_ids()
-    for it in items:
-        it["id"] = _notif_id(it)
-        it["read"] = it["id"] in read_ids
+    dismissed = db.notification_dismissed_ids()
+    visible = []
+    unread_total = 0
+    for it in all_items:
+        nid = _notif_id(it)
+        if nid in dismissed:
+            continue
+        it["id"] = nid
+        it["read"] = nid in read_ids
+        if not it["read"]:
+            unread_total += 1
+        visible.append(it)
 
-    # `unread` 只数本页；顶栏浮层角标需要**全量**未读数，所以另算 `unread_total`。
-    # 上限取 1000：日志内存缓冲是 2000 条（core/activity_log._memory），一半足以覆盖实际使用。
-    total_unread = 0
-    for entry in activity_log.recent(limit=1000):
-        if _notif_id(entry) not in read_ids:
-            total_unread += 1
-
+    total = len(visible)
+    page = visible[offset:offset + limit]
+    next_offset = offset + len(page)
+    has_more = next_offset < total
     return {
-        "items": items,
-        "count": len(items),
-        "unread": sum(1 for it in items if not it["read"]),
-        "unread_total": total_unread,
+        "items": page,
+        "count": len(page),
+        "total": total,
+        "offset": offset,
+        "next_offset": next_offset if has_more else None,
+        "has_more": has_more,
+        "unread": sum(1 for it in page if not it["read"]),
+        "unread_total": unread_total,
     }
+
+
+@app.post("/api/notifications/dismiss")
+def api_notifications_dismiss(payload: dict = Body(...)):
+    """隐藏通知（**只从通知中心移除，不动活动日志**）。body：`{ids:[…]}` 或 `{all:true}`。"""
+    payload = payload or {}
+    if payload.get("all"):
+        ids = [_notif_id(e) for e in activity_log.recent(limit=1000)]
+    else:
+        ids = [str(i) for i in (payload.get("ids") or [])]
+    if not ids:
+        raise HTTPException(400, "没有要隐藏的通知")
+    return {"ok": True, "dismissed": db.dismiss_notifications(ids)}
 
 
 @app.post("/api/notifications/read")
@@ -9833,10 +9937,11 @@ def api_logs_download():
 
 @app.delete("/api/logs")
 def api_logs_clear():
-    """清空活动日志。日志没了，围绕它的已读标记也就没有意义，一并清掉。"""
+    """清空活动日志。日志没了，围绕它的已读 / 隐藏标记也就没有意义，一并清掉。"""
     ok = activity_log.clear()
     cleared = db.clear_notifications_read()
-    return {"ok": ok, "read_marks_cleared": cleared}
+    dismissed = db.clear_notification_dismissals()
+    return {"ok": ok, "read_marks_cleared": cleared, "dismiss_marks_cleared": dismissed}
 
 
 # ---------------- 工具页：实体管理 / 重排册号 / 重复书籍 / 缺失资源 ----------------
@@ -10096,12 +10201,16 @@ def ko_get_progress(request: Request, document: str):
 @app.get("/api/koreader")
 def api_koreader_status():
     cfg = _ko_cfg()
+    bs = {b["id"]: b for b in library.books()}
+    docs = db.list_koreader_docs()
     return {
         "enabled": bool(cfg.get("enabled")),
         "username": str(cfg.get("username") or ""),
         "has_key": bool(str(cfg.get("key") or "").strip()),
-        "doc_count": len(db.list_koreader_docs()),
-        "book_count": len(library.books()),
+        "doc_count": len(docs),
+        "book_count": len(bs),
+        # 第 197 期：文档索引里有、书库里已经没有的条目（重建索引会清掉）
+        "unmatched_docs": sum(1 for d in docs if d.get("book_id") not in bs),
     }
 
 
@@ -10146,8 +10255,10 @@ def api_koreader_docs():
     out = []
     for d in db.list_koreader_docs():
         b = bs.get(d["book_id"]) or {}
-        out.append({**d, "title": b.get("title") or "", "name": b.get("name") or ""})
-    return {"items": out}
+        out.append({**d, "title": b.get("title") or "", "name": b.get("name") or "",
+                    "matched": bool(b)})
+    return {"items": out,
+            "unmatched": sum(1 for x in out if not x["matched"])}
 
 
 # ---------------- 外部服务集成（Hardcover / Readwise / StoryGraph）----------------
@@ -10426,6 +10537,19 @@ def api_metadata_probe(payload: dict = Body(None)):
             continue
         out[sid] = metasources.probe(sid, opts or None)
     return {"items": out}
+
+
+@app.get("/api/metadata/cache")
+def api_metadata_cache():
+    """元数据检索缓存现状（第 193 期）：进程内 LRU 条数 / 上限。"""
+    return metasources.cache_stats()
+
+
+@app.delete("/api/metadata/cache")
+def api_metadata_cache_clear():
+    """清空元数据检索缓存（只影响进程内缓存，不改任何书 / 台账）。"""
+    cleared = metasources.clear_cache()
+    return {"ok": True, "cleared": cleared, **metasources.cache_stats()}
 
 
 @app.post("/api/metadata/plan")

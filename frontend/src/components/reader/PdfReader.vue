@@ -4,7 +4,7 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type SessionExtra, type UnitPos, type UnitRef } from '@/lib/api'
+import { api, type PdfOutlineItem, type PdfSearchHit, type SessionExtra, type UnitPos, type UnitRef } from '@/lib/api'
 import {
   PDF_FITS,
   PDF_SCROLL_MODES,
@@ -70,6 +70,68 @@ const showSeriesToc = ref(false)
 function jumpToVolume(id: string): void {
   showSeriesToc.value = false
   router.push(`/read/${id}`)
+}
+
+// ---------------- 大纲 / 文内搜索（第 195 期） ----------------
+// 两者都是侧栏；同时只开一个。大纲按需拉（加密 / 坏 PDF 会如实报错），搜索只在点按钮时
+// 才解析 —— 都是用户显式动作。
+const showOutline = ref(false)
+const showPdfSearch = ref(false)
+const outlineItems = ref<PdfOutlineItem[]>([])
+const outlineBusy = ref(false)
+const outlineMsg = ref('')
+const pdfQuery = ref('')
+const pdfHits = ref<PdfSearchHit[]>([])
+const pdfSearchBusy = ref(false)
+const pdfSearchMsg = ref('')
+
+async function loadOutline(): Promise<void> {
+  outlineBusy.value = true
+  outlineMsg.value = ''
+  try {
+    outlineItems.value = (await api.pdfOutline(props.bookId)).items
+    if (!outlineItems.value.length) outlineMsg.value = '这本 PDF 没有大纲'
+  } catch (e) {
+    outlineItems.value = []
+    outlineMsg.value = e instanceof Error ? e.message : '大纲读取失败'
+  } finally {
+    outlineBusy.value = false
+  }
+}
+
+async function toggleOutline(): Promise<void> {
+  showOutline.value = !showOutline.value
+  if (showOutline.value) {
+    showPdfSearch.value = false
+    await loadOutline()
+  }
+}
+
+async function togglePdfSearch(): Promise<void> {
+  showPdfSearch.value = !showPdfSearch.value
+  if (showPdfSearch.value) showOutline.value = false
+}
+
+async function runPdfSearch(): Promise<void> {
+  const q = pdfQuery.value.trim()
+  if (!q || pdfSearchBusy.value) return
+  pdfSearchBusy.value = true
+  pdfSearchMsg.value = ''
+  try {
+    const r = await api.pdfSearch(props.bookId, q)
+    pdfHits.value = r.items
+    if (!r.items.length) pdfSearchMsg.value = `没有找到（扫描 ${r.scanned} 页）`
+  } catch (e) {
+    pdfHits.value = []
+    pdfSearchMsg.value = e instanceof Error ? e.message : '搜索失败'
+  } finally {
+    pdfSearchBusy.value = false
+  }
+}
+
+function jumpPdfPage(p: number): void {
+  if (!p || p < 1) return
+  go(Math.min(total.value, p))
 }
 
 const prefs = ref<PdfPrefs>(readPdfPrefs())
@@ -524,6 +586,24 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
       >
         <Icon name="book" class="h-4 w-4" />
       </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        title="PDF 大纲"
+        :class="showOutline ? 'bg-muted text-foreground' : ''"
+        @click="toggleOutline"
+      >
+        <Icon name="task" class="h-4 w-4" />
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        title="PDF 文内搜索"
+        :class="showPdfSearch ? 'bg-muted text-foreground' : ''"
+        @click="togglePdfSearch"
+      >
+        <Icon name="search" class="h-4 w-4" />
+      </Button>
       <div class="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{{ props.title }}</div>
 
       <!-- 第 61 期：漫画库里的 PDF 可以切回「漫画形态」读（单/双页、右到左、无间隙连续）。
@@ -611,6 +691,61 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
             这个系列没有可显示的册
           </div>
         </template>
+      </aside>
+
+      <!-- PDF 大纲（第 195 期）：与系列目录同形；page=0 的条目没有页码目标，只展示不跳 -->
+      <aside
+        v-if="showOutline"
+        class="w-60 shrink-0 overflow-y-auto border-r border-border py-2 pr-2"
+      >
+        <div class="mb-1.5 px-2 text-[11px] text-muted-foreground">大纲{{ outlineItems.length ? `（${outlineItems.length} 条）` : '' }}</div>
+        <div v-if="outlineBusy" class="px-2 py-3 text-[11.5px] text-muted-foreground">读取中…</div>
+        <div v-else-if="outlineMsg" class="px-2 py-3 text-[11.5px] text-muted-foreground">{{ outlineMsg }}</div>
+        <button
+          v-for="(it, i) in outlineItems"
+          :key="`${i}:${it.title}`"
+          type="button"
+          class="block w-full cursor-pointer truncate rounded-md px-2 py-1 text-left text-[12.5px] transition-colors"
+          :class="it.page ? 'text-muted-foreground hover:bg-muted hover:text-foreground' : 'text-muted-foreground/60'"
+          :style="{ paddingLeft: `${8 + it.level * 12}px` }"
+          :title="it.title"
+          :disabled="!it.page"
+          @click="jumpPdfPage(it.page)"
+        >
+          {{ it.title }}<span v-if="it.page" class="ml-1 text-[10px] tabular-nums">P{{ it.page }}</span>
+        </button>
+      </aside>
+
+      <!-- PDF 文内搜索（第 195 期）：按页返回第一条命中；点结果跳页 -->
+      <aside
+        v-if="showPdfSearch"
+        class="w-64 shrink-0 overflow-y-auto border-r border-border py-2 pr-2"
+      >
+        <div class="flex gap-1 px-2">
+          <input
+            v-model="pdfQuery"
+            type="search"
+            aria-label="PDF 文内搜索"
+            placeholder="搜索正文…"
+            class="h-7 min-w-0 flex-1 rounded-md border border-border bg-card px-1.5 text-[11.5px] text-foreground outline-none focus:border-ring"
+            @keyup.enter="runPdfSearch"
+          >
+          <Button size="sm" variant="ghost" :disabled="pdfSearchBusy || !pdfQuery.trim()" @click="runPdfSearch">
+            {{ pdfSearchBusy ? '…' : '搜索' }}
+          </Button>
+        </div>
+        <p v-if="pdfSearchMsg" class="mt-1 px-2 text-[11px] text-muted-foreground">{{ pdfSearchMsg }}</p>
+        <div v-if="pdfHits.length" class="mt-1 px-2 text-[11px] text-muted-foreground">命中 {{ pdfHits.length }} 页</div>
+        <button
+          v-for="h in pdfHits"
+          :key="`${h.page}:${h.offset}`"
+          type="button"
+          class="block w-full cursor-pointer rounded-md px-2 py-1 text-left text-[11.5px] text-muted-foreground hover:bg-muted hover:text-foreground"
+          @click="jumpPdfPage(h.page)"
+        >
+          <span class="font-medium text-foreground">第 {{ h.page }} 页</span>
+          <span class="mt-0.5 block leading-snug">{{ h.snippet }}</span>
+        </button>
       </aside>
 
     <!-- 画布区 -->

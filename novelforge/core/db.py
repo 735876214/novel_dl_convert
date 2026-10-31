@@ -532,6 +532,28 @@ def init():
                 notif_id  TEXT PRIMARY KEY,
                 read_at   REAL NOT NULL
             );
+            -- 通知「隐藏」（第 190 期）：只从通知中心移除，**不动活动日志**。
+            -- 与已读是两件事：已读 = 看过；隐藏 = 不想再看到这一条。
+            CREATE TABLE IF NOT EXISTS notifications_dismissed (
+                notif_id     TEXT PRIMARY KEY,
+                dismissed_at REAL NOT NULL
+            );
+            -- 每库扫描历史（第 191 期）：手动扫描一次记一行；保留最近 100 行。
+            -- 不含 book_id（按 library_id），与书库列表的 last_scan_at 是两件事：
+            -- 后者只留最后一次，这里让「上次扫描健康吗」能看一段时间的节奏。
+            CREATE TABLE IF NOT EXISTS scan_history (
+                id          INTEGER PRIMARY KEY,
+                library_id  TEXT NOT NULL,
+                started_at  REAL NOT NULL DEFAULT 0,
+                finished_at REAL NOT NULL DEFAULT 0,
+                status      TEXT NOT NULL DEFAULT 'ok',
+                books       INTEGER NOT NULL DEFAULT 0,
+                scanned     INTEGER NOT NULL DEFAULT 0,
+                added       INTEGER NOT NULL DEFAULT 0,
+                removed     INTEGER NOT NULL DEFAULT 0,
+                note        TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_scan_history_lib ON scan_history(library_id, finished_at DESC);
             CREATE TABLE IF NOT EXISTS achievements (
                 key        TEXT PRIMARY KEY,
                 name       TEXT NOT NULL,
@@ -774,7 +796,12 @@ def init():
                 verify_ms        INTEGER NOT NULL DEFAULT 0,
                 verify_error     TEXT NOT NULL DEFAULT '',
                 last_update_at   REAL,
-                last_update_note TEXT NOT NULL DEFAULT ''
+                last_update_note TEXT NOT NULL DEFAULT '',
+                -- 搜索健康（第 193 期）：连续失败次数 / 上次搜索时间 / 上次失败原因。
+                -- 只在真实搜索后落账；被闸门跳过的源不算失败（那是用户的选择）。
+                search_fail_count INTEGER NOT NULL DEFAULT 0,
+                last_search_at    REAL,
+                last_search_error TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_source_ledger_site ON source_ledger(dedup_key);
             -- 覆盖前备份（第 86 期）：`overwrite` / `update` 一律先把旧规则原文存这里，可回滚。
@@ -1150,6 +1177,15 @@ def init():
         # 本项目自己写的批注只知道序号，界面照旧显示「第 N 章」。
         if acols and "chapter_title" not in acols:
             c.execute("ALTER TABLE annotations ADD COLUMN chapter_title TEXT NOT NULL DEFAULT ''")
+        # 第 193 期：书源搜索健康三列（老库幂等补列）。
+        slcols = {r["name"] for r in c.execute("PRAGMA table_info(source_ledger)")}
+        if slcols:
+            if "search_fail_count" not in slcols:
+                c.execute("ALTER TABLE source_ledger ADD COLUMN search_fail_count INTEGER NOT NULL DEFAULT 0")
+            if "last_search_at" not in slcols:
+                c.execute("ALTER TABLE source_ledger ADD COLUMN last_search_at REAL")
+            if "last_search_error" not in slcols:
+                c.execute("ALTER TABLE source_ledger ADD COLUMN last_search_error TEXT NOT NULL DEFAULT ''")
         # 第 47 期：collections 补 updated_at（最后修改时间），供收藏夹总览展示。
         # 存量行回填为 created_at（首次创建即最后一次改动），与加列前语义一致。
         ccols = {r["name"] for r in c.execute("PRAGMA table_info(collections)")}
@@ -3228,6 +3264,41 @@ def clear_notifications_read() -> int:
         return int(cur.rowcount or 0)
 
 
+# ---------------- 通知隐藏（第 190 期） ----------------
+# 与已读分开：已读 = 看过；隐藏 = 不想在通知中心再看到。活动日志本身一条不少。
+
+def dismiss_notifications(ids) -> int:
+    """隐藏若干通知（重复隐藏不报错）。返回**新增**条数。"""
+    now = time.time()
+    added = 0
+    c = _connect()
+    with _lock:
+        for raw in ids or []:
+            key = str(raw or "").strip()
+            if not key:
+                continue
+            cur = c.execute(
+                "INSERT OR IGNORE INTO notifications_dismissed(notif_id, dismissed_at)"
+                " VALUES(?,?)", (key, now),
+            )
+            added += int(cur.rowcount or 0)
+        c.commit()
+    return added
+
+
+def notification_dismissed_ids() -> set:
+    rows = _connect().execute("SELECT notif_id FROM notifications_dismissed").fetchall()
+    return {r["notif_id"] for r in rows}
+
+
+def clear_notification_dismissals() -> int:
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM notifications_dismissed")
+        c.commit()
+        return int(cur.rowcount or 0)
+
+
 # ---------------- 成就 ----------------
 # 两张表的分工：
 #   achievements      目录的**物化副本**（条目定义在 core/achievements.ACHIEVEMENTS）。
@@ -4092,6 +4163,25 @@ def source_ledger_upsert(name: str, **fields) -> dict:
     return source_ledger_get(name)
 
 
+def record_source_search(name: str, ok: bool, error: str = "") -> None:
+    """记一次真实搜索的结果（第 193 期）：成功清零、失败累加。台账里没有的源跳过。"""
+    now = time.time()
+    c = _connect()
+    with _lock:
+        if ok:
+            c.execute(
+                "UPDATE source_ledger SET search_fail_count=0, last_search_at=?,"
+                " last_search_error='' WHERE name=?", (now, str(name)),
+            )
+        else:
+            c.execute(
+                "UPDATE source_ledger SET search_fail_count=search_fail_count+1,"
+                " last_search_at=?, last_search_error=? WHERE name=?",
+                (now, str(error or "")[:500], str(name)),
+            )
+        c.commit()
+
+
 def source_ledger_set_enabled(name: str, enabled: bool) -> "dict | None":
     """改启停（台账是唯一真值源；文件不动）。"""
     if not source_ledger_get(name):
@@ -4517,6 +4607,8 @@ def set_read_aloud_sync(bid: str, cue_index: int, position_sec: float) -> dict:
         c.commit()
     return get_read_aloud_sync(bid)
 
+
+def upsert_podcast_episodes(podcast_id: str, items: list) -> "tuple[int, int]":
     """按 `(podcast_id, guid)` upsert；返回 `(新增, 更新)`。
 
     ⚠️ `deleted_at` **不在 UPDATE 里**：用户删过的单集不应该因为一次刷新又冒出来
@@ -6591,6 +6683,60 @@ def set_library_scan(lid, note="") -> None:
         c.execute("UPDATE libraries SET last_scan_at=?, last_scan_note=? WHERE id=?",
                   (time.time(), str(note or ""), str(lid)))
         c.commit()
+
+
+SCAN_HISTORY_KEEP = 100
+
+
+def add_scan_history(lid, *, started_at: float, books: int, report: dict,
+                     status: str, note: str) -> dict:
+    """记一次手动扫描；每库只保留最近 `SCAN_HISTORY_KEEP` 行。"""
+    rep = report or {}
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "INSERT INTO scan_history(library_id, started_at, finished_at, status, books,"
+            " scanned, added, removed, note) VALUES(?,?,?,?,?,?,?,?,?)",
+            (str(lid), float(started_at or 0), time.time(), str(status),
+             int(books or 0), int(rep.get("scanned") or 0), int(rep.get("added") or 0),
+             int(rep.get("removed") or 0), str(note or "")),
+        )
+        hid = int(cur.lastrowid or 0)
+        stale = c.execute(
+            "SELECT id FROM scan_history WHERE library_id=? ORDER BY finished_at DESC, id DESC"
+            " LIMIT -1 OFFSET ?", (str(lid), SCAN_HISTORY_KEEP),
+        ).fetchall()
+        if stale:
+            ids = [int(r["id"]) for r in stale]
+            c.execute("DELETE FROM scan_history WHERE id IN (%s)"
+                      % ",".join("?" for _ in ids), ids)
+        c.commit()
+    row = c.execute("SELECT * FROM scan_history WHERE id=?", (hid,)).fetchone()
+    return _scan_history_out(row) if row else {}
+
+
+def _scan_history_out(row) -> dict:
+    return {
+        "id": int(row["id"]),
+        "library_id": str(row["library_id"]),
+        "started_at": float(row["started_at"] or 0),
+        "finished_at": float(row["finished_at"] or 0),
+        "status": str(row["status"] or ""),
+        "books": int(row["books"] or 0),
+        "scanned": int(row["scanned"] or 0),
+        "added": int(row["added"] or 0),
+        "removed": int(row["removed"] or 0),
+        "note": str(row["note"] or ""),
+    }
+
+
+def list_scan_history(lid, limit: int = 20) -> list:
+    rows = _connect().execute(
+        "SELECT * FROM scan_history WHERE library_id=?"
+        " ORDER BY finished_at DESC, id DESC LIMIT ?",
+        (str(lid), max(1, min(int(limit or 20), 100))),
+    ).fetchall()
+    return [_scan_history_out(r) for r in rows]
 
 
 # ---- 迁移台账（幂等 + 回滚依据）----

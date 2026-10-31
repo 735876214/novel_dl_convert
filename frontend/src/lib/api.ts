@@ -246,6 +246,9 @@ export interface LogQuery {
   q?: string
   /** 操作者（登录账号名），**精确匹配**；空/不传 = 不过滤 */
   actor?: string
+  /** 起止时间（epoch 秒，含端点；第 192 期） */
+  since?: number
+  until?: number
 }
 
 export interface WatcherStatus {
@@ -648,6 +651,8 @@ export interface KoreaderStatus {
   doc_count: number
   /** 书库里的总数（用来看还有多少书没索引） */
   book_count: number
+  /** 文档索引里有、书库里已经没有的条目（第 197 期；重建索引会清掉） */
+  unmatched_docs: number
 }
 
 /** 一本书的 KOReader 文档索引（`GET /api/koreader/docs`） */
@@ -660,6 +665,8 @@ export interface KoreaderDoc {
   /** md5(basename)：checksum_method=FILENAME 时用 */
   alt_md5: string
   size: number
+  /** 第 197 期：这个文档索引还能对上书库里的书吗 */
+  matched: boolean
 }
 
 /** `POST /api/komga/layout/preview`：整理为 Komga 库布局的预览（只算不改） */
@@ -1155,6 +1162,38 @@ export interface ReadAloudInfo {
   total: number
   cues: ReadAloudCue[]
   sync: { cue_index: number; position_sec: number; updated_at: number }
+}
+
+/** EPUB 书内搜索命中（第 189 期）。 */
+export interface BookSearchHit {
+  chapter_index: number
+  title: string
+  snippet: string
+  offset: number
+  match: string
+}
+
+export interface BookSearchResult {
+  items: BookSearchHit[]
+  total: number
+  truncated: boolean
+  scanned: number
+  query: string
+}
+
+/** PDF 大纲 / 文内搜索（第 195 期）。 */
+export interface PdfOutlineItem {
+  title: string
+  /** 1 基页码；0 = 该书签没有页码目标（URI / 命名目标） */
+  page: number
+  level: number
+}
+
+export interface PdfSearchHit {
+  page: number
+  snippet: string
+  offset: number
+  match: string
 }
 
 /** 单条音轨（目录型有声书里一章一文件） */
@@ -2811,6 +2850,20 @@ export interface PodcastEpisode {
   last_played_at: number
 }
 
+/** 每库扫描历史（第 191 期）。 */
+export interface ScanHistoryItem {
+  id: number
+  library_id: string
+  started_at: number
+  finished_at: number
+  status: 'ok' | 'degraded' | string
+  books: number
+  scanned: number
+  added: number
+  removed: number
+  note: string
+}
+
 /** 书库实体（`/api/libraries`，第 10 期起） */
 export interface LibraryEntity {
   id: string
@@ -3701,6 +3754,8 @@ export const api = {
     if (query.status) p.set('status', query.status)
     if (query.q) p.set('q', query.q)
     if (query.actor) p.set('actor', query.actor)
+    if (query.since) p.set('since', String(query.since))
+    if (query.until) p.set('until', String(query.until))
     const qs = p.toString()
     // 注意：后端的 count 字段未必是数字（activity_log.count() 可能返回聚合对象），
     // 因此类型放宽为 unknown，由调用方归一化。
@@ -3847,10 +3902,25 @@ export const api = {
     ),
 
   // ---------- 通知（活动日志 + 已读态）----------
-  notifications: (limit = 100) =>
-    request<{ items: NotificationItem[]; count: number; unread: number; unread_total: number }>(
-      `/api/notifications?limit=${limit}`,
-    ),
+  notifications: (limit = 100, offset = 0) =>
+    request<{
+      items: NotificationItem[]
+      count: number
+      total: number
+      offset: number
+      next_offset: number | null
+      has_more: boolean
+      unread: number
+      unread_total: number
+    }>(`/api/notifications?limit=${limit}&offset=${offset}`),
+
+  /** 隐藏通知（第 190 期）：只从通知中心移除，活动日志不动。 */
+  dismissNotifications: (payload: { ids?: string[]; all?: boolean }) =>
+    request<{ ok: boolean; dismissed: number }>('/api/notifications/dismiss', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
 
   markNotificationsRead: (payload: { ids?: string[]; all?: boolean }) =>
     request<{ ok: boolean; marked: number }>('/api/notifications/read', {
@@ -4439,6 +4509,14 @@ export const api = {
   /** 提供商目录（第 57 期：分组 + 启用 / 配置现状；设置页「提供商」页的唯一数据源） */
   metadataProviders: () => request<MetadataProvidersResult>('/api/metadata/providers'),
 
+  /** 元数据检索缓存（第 193 期）：进程内 LRU 条数 / 上限；可显式清空。 */
+  metadataCache: () => request<{ entries: number; max: number }>('/api/metadata/cache'),
+
+  clearMetadataCache: () =>
+    request<{ ok: boolean; cleared: number; entries: number; max: number }>(
+      '/api/metadata/cache', { method: 'DELETE' },
+    ),
+
   /**
    * 元数据来源**真联网体检**（第 59 期）：并发跑、单家超时、失败分门别类。**只读**。
    * 不传 `query` ⇒ 用**各家样本**（地区性目录用当地书名，否则会误报「无结果」）。
@@ -4592,6 +4670,23 @@ export const api = {
   readAloud: (id: string) =>
     request<ReadAloudInfo>(`/api/books/${encodeURIComponent(id)}/read-aloud`),
 
+  /** EPUB 书内全文搜索（第 189 期）：每章返回第一条命中 + 上下文。 */
+  searchBook: (id: string, q: string, limit = 50) =>
+    request<BookSearchResult>(
+      `/api/books/${encodeURIComponent(id)}/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+
+  /** PDF 大纲 / 文内搜索（第 195 期）。 */
+  pdfOutline: (id: string) =>
+    request<{ items: PdfOutlineItem[]; total: number }>(
+      `/api/books/${encodeURIComponent(id)}/pdf/outline`,
+    ),
+
+  pdfSearch: (id: string, q: string, limit = 100) =>
+    request<{ items: PdfSearchHit[]; total: number; truncated: boolean; scanned: number }>(
+      `/api/books/${encodeURIComponent(id)}/pdf/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    ),
+
   saveReadAloudSync: (id: string, cueIndex: number, positionSec: number) =>
     request<{ cue_index: number; position_sec: number; updated_at: number }>(
       `/api/books/${encodeURIComponent(id)}/read-aloud/sync`,
@@ -4690,6 +4785,9 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ user, pin }),
     }),
+
+  /** 登出（第 192 期）：服务端只记审计，令牌本身无状态；前端随后清本地 token。 */
+  logout: () => request<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
 
   me: () => request<MeInfo>('/api/auth/me'),
 
@@ -5598,6 +5696,12 @@ export const api = {
       `/api/libraries/${encodeURIComponent(id)}/scan`,
       { method: 'POST' },
       { timeoutMs: LONG_REQUEST_TIMEOUT_MS },
+    ),
+
+  /** 每库扫描历史（第 191 期）：最近在前，最多保留 100 行。 */
+  scanHistory: (id: string, limit = 20) =>
+    request<{ items: ScanHistoryItem[]; total: number }>(
+      `/api/libraries/${encodeURIComponent(id)}/scan-history?limit=${limit}`,
     ),
 
   // ---------- OPDS 只读客户端凭据（第 160 期） ----------

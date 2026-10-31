@@ -111,6 +111,31 @@ const providers = ref<MetadataProvider[]>([])
 const providersLoading = ref(false)
 /** 目录加载失败的原因（**不静默**：空列表必须能解释自己） */
 const providersError = ref('')
+/** 检索缓存（第 193 期）：进程内 LRU，条数 / 上限 + 显式清空 */
+const cacheStats = ref<{ entries: number; max: number } | null>(null)
+const cacheBusy = ref(false)
+
+async function loadCache(): Promise<void> {
+  try {
+    cacheStats.value = await api.metadataCache()
+  } catch {
+    cacheStats.value = null
+  }
+}
+
+async function clearCache(): Promise<void> {
+  if (cacheBusy.value) return
+  cacheBusy.value = true
+  try {
+    const r = await api.clearMetadataCache()
+    cacheStats.value = { entries: r.entries, max: r.max }
+    ui.toast(r.cleared ? `已清空 ${r.cleared} 条检索缓存` : '缓存本来就是空的')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '清空缓存失败')
+  } finally {
+    cacheBusy.value = false
+  }
+}
 const probes = ref<Record<string, { ok: boolean; message: string; ms: number }>>({})
 const probing = ref(false)
 
@@ -637,13 +662,19 @@ onMounted(() => {
   void loadConfig()
   void loadProviders()
   void library.loadBooks()
-  if (props.section === 'providers') void loadHealth()
+  if (props.section === 'providers') {
+    void loadHealth()
+    void loadCache()
+  }
   if (props.section === 'custom-fields') void loadDefs()
 })
 /** 7 页共用组件：**必须监听 prop**，否则路由切换时组件实例被复用、数据不重载 */
 watch(() => props.section, () => {
   void loadProviders()
-  if (props.section === 'providers') void loadHealth()
+  if (props.section === 'providers') {
+    void loadHealth()
+    void loadCache()
+  }
   planItems.value = []
   picked.value = new Set()
   defDraft.value = { label: '', type: 'text', default_value: '' }
@@ -678,6 +709,21 @@ watch(() => props.section, () => {
         <Button size="sm" :variant="mf.enabled ? 'ghost' : 'primary'" :disabled="saving"
                 @click="setVal('metadata_fetch.enabled', !mf.enabled); saveSection('metadata')">
           {{ mf.enabled ? '关闭' : '开启' }}
+        </Button>
+      </div>
+    </Card>
+
+    <!-- 检索缓存（第 193 期）：进程内 LRU，进程重启即清空；这里只让「现在占多少」可见、可清 -->
+    <Card v-if="has('sources')" class="mt-4" padding="none">
+      <div class="flex flex-wrap items-center gap-3 px-4 py-3">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">检索缓存</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            {{ cacheStats ? `已缓存 ${cacheStats.entries} / ${cacheStats.max} 条（进程内，重启即清空）` : '缓存统计读取失败' }}
+          </div>
+        </div>
+        <Button size="sm" variant="ghost" :disabled="cacheBusy || !cacheStats" @click="clearCache">
+          {{ cacheBusy ? '清空中…' : '清空缓存' }}
         </Button>
       </div>
     </Card>
