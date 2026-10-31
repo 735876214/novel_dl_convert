@@ -52,6 +52,10 @@ onMounted(() => {
         <span class="text-[11.5px] text-muted-foreground">
           每本书按字段权重算 0–100 分，这里是全库分布
         </span>
+        <span v-if="data" class="text-[11px] text-muted-foreground">
+          权重版本 v{{ data.weight_version }}（可在设置 → 扩展 → 高级的
+          <code class="font-mono">metadata_score.weights</code> 覆盖）
+        </span>
         <Button size="sm" class="ml-auto" :disabled="loading" @click="load(true)">
           {{ loading ? '计算中…' : '重新计算' }}
         </Button>

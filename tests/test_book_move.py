@@ -212,6 +212,21 @@ def test_有声书目录的副本整树随迁(env):
 # ③ 冲突：拒绝覆盖 + 一键改名；不相容 / 源没了 -> 搬不动
 # ---------------------------------------------------------------------------
 
+def test_目标已有内容相同的文件_按指纹跳过(env):
+    """第 203 期：同名且内容相同 ⇒ skip（不搬、不覆盖、不说成冲突）。"""
+    src = _epub(env["a"]["root"], "三体.epub")
+    dst = env["b"]["root"] / "三体.epub"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(src.read_bytes())
+    bid = _book(env["a"], "三体.epub")["id"]
+
+    pv = migrate.move_preview([bid], "b")
+    item = pv["items"][0]
+    assert item["status"] == "skip" and "内容相同" in item["reason"]
+    assert migrate.move_plan([bid], "b")["batch_id"] == ""
+    assert (env["b"]["root"] / "三体.epub").read_bytes() == src.read_bytes()
+
+
 def test_同名拒绝覆盖并给建议名(env):
     _epub(env["a"]["root"], "三体.epub")
     _epub(env["b"]["root"], "三体.epub")            # 乙库已有同名（内容不同）

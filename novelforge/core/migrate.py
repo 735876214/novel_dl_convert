@@ -291,6 +291,25 @@ def _clean_new_name(raw, book: dict, dst_lib: dict) -> str:
     return name
 
 
+def _same_content(a: pathlib.Path, b: pathlib.Path) -> bool:
+    """两份**文件**内容是否完全相同（第 203 期：跨库移动的指纹判重）。
+
+    复用 `library._content_digest`（两级哈希）—— 不与重复书页各写一份摘要实现。
+    目录型条目（有声书一章一目录）不做内容比对：逐文件比没有「同一本书」的语义，
+    照旧按「目标已有同名」冲突处理。
+    """
+    try:
+        if a.is_dir() or b.is_dir():
+            return False
+        if a.stat().st_size != b.stat().st_size:
+            return False
+    except OSError:
+        return False
+    ga = library._content_digest(a, partial=False)
+    gb = library._content_digest(b, partial=False)
+    return bool(ga and gb and ga[0] == gb[0])
+
+
 def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
     """选择集 → 逐条预检（相容 / 冲突 / 副本计划）。**只读**：不建目录、不写库、不动文件。
 
@@ -377,6 +396,13 @@ def _move_items(book_ids, dst_library_id: str, decisions) -> tuple:
         it["dst"] = str(dst)
         clash = library.id_conflict_with(name, dst_lib_id)
         if dst.exists():
+            # 目标已有**内容相同**的文件：不是「撞名」，是同一份内容已经在目标库了。
+            # 记为 skip（不搬、不覆盖），并如实说明判据 —— 用户不会以为「点了移动却没动」。
+            if action != "rename" and _same_content(src, dst):
+                it.update(status="skip",
+                          reason="目标库已有内容相同的文件（按文件指纹判定，不重复搬）")
+                items.append(it)
+                continue
             hit = clash["name"] if clash else ""
             if action == "rename":
                 it.update(status="blocked", blocked_kind="name",

@@ -8862,6 +8862,8 @@ EDITABLE: dict = {
     "koreader": {"enabled", "username", "key"},
     # 播客目录搜索（第 187 期）：默认开、可关；关掉后端点 403 并说明原因。
     "podcasts": {"directory_search"},
+    # 元数据完整度权重（第 204 期）：weights 是 `{字段: 0–100}`，version 是口径标注。
+    "metadata_score": {"weights", "version"},
     # 整块覆盖：三家服务的字段各不相同，逐键白名单只会让新增字段时漏改
     "integrations": {"hardcover", "readwise", "storygraph"},
     # 元数据抓取：顶层子键白名单（`fields` 这类嵌套结构不再逐层校验 ——
@@ -9155,6 +9157,8 @@ def api_get_config():
             "update": cfg.get("update") or {},
             # 播客（第 187 期）：目录搜索开关（硬编码键列表 ⇒ EDITABLE 与本列表都要加）。
             "podcasts": cfg.get("podcasts") or {},
+            # 元数据完整度权重（第 204 期）：weights / version。
+            "metadata_score": cfg.get("metadata_score") or {},
             # 阅读状态口径的全局默认值（第 40 期）。每库生效值另走
             # `GET /api/reading-thresholds?library_id=`（含覆写合并），不在这里算。
             "reading": cfg.get("reading") or {},
@@ -9840,7 +9844,7 @@ def api_book_dock_delete(item_id: str):
 
 @app.get("/api/metadata-score")
 def api_metadata_score(force: bool = False):
-    return metascore.payload(library.books(force=force))
+    return metascore.payload(library.books(force=force), cfg=config.load_config())
 
 
 # ---------------- 活动日志 ----------------

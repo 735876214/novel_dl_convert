@@ -283,6 +283,12 @@ DEFAULTS = {
     "podcasts": {
         "directory_search": True,
     },
+    # 元数据完整度权重（第 204 期）：`weights` 覆盖 `metascore.FIELDS` 的默认权重，
+    # `version` 只作口径标注（分数不落库，历史展示值按当时版本解释）。
+    "metadata_score": {
+        "weights": {},
+        "version": 1,
+    },
     # 外部服务凭据（第 4 期）。三家都**不是 OAuth**：
     #   Hardcover   → API Token（账号设置页生成），GraphQL + Bearer
     #   Readwise    → API Token，REST + `Authorization: Token`

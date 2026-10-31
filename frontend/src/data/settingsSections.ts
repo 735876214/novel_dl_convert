@@ -34,7 +34,7 @@ export const SECTION_KEYS: Record<string, string[]> = {
   // Komga 页有两块：输出布局（output.layout）+ 兼容服务端（komga.*）
   komga: ['output', 'komga'],
   // 元数据抓取的 7 个页面共用同一配置段（同一份 cfg 草稿，各页只改自己的子键）
-  metadata: ['metadata_fetch'],
+  metadata: ['metadata_fetch', 'metadata_score'],
   // 审计日志（第 52 期留存 / 第 138 期日志文件位置）：**独占** logging 段。
   // 刻意不复用 network 分区 —— 那个分区还含 network / download，连带提交会把别页
   // 未保存的草稿一起写进去（草稿是跨页共享的单例，见 useSettingsConfig）。

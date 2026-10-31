@@ -52,6 +52,48 @@ from __future__ import annotations
 
 from . import library
 
+#: 默认权重（可被 `metadata_score.weights` 覆盖；第 204 期）。
+_DEFAULT_WEIGHTS = None  # 延迟到 FIELDS 定义后填充，见 _weights()
+
+
+def _weights(cfg: dict = None) -> dict:
+    """生效权重：默认表 + 配置覆盖（第 204 期）。
+
+    只认**已知字段**且值可转为 0–100 的实数；坏值忽略（不把配置错误变成负分 / 500）。
+    `metadata_score.version` 只用于标注「这批分数按哪版权重算的」，不参与计算。
+    """
+    global _DEFAULT_WEIGHTS
+    if _DEFAULT_WEIGHTS is None:
+        _DEFAULT_WEIGHTS = {k: v[1] for k, v in FIELDS.items()}
+    out = dict(_DEFAULT_WEIGHTS)
+    if cfg is None:
+        try:
+            from .. import config as _config
+            cfg = _config.load_config() or {}
+        except Exception:  # noqa: BLE001 —— 配置读坏不该让评分整块失败
+            cfg = {}
+    sec = (cfg or {}).get("metadata_score") or {}
+    raw = sec.get("weights") if isinstance(sec, dict) else None
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if k not in out:
+                continue
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= f <= 100:
+                out[k] = round(f, 2)
+    return out
+
+
+def _weight_version(cfg: dict = None) -> int:
+    try:
+        sec = (cfg or {}).get("metadata_score") or {}
+        return max(0, int(sec.get("version") or 1))
+    except (TypeError, ValueError):
+        return 1
+
 #: 5 个权重分组：(key, 英文名, 中文名)
 GROUPS = (
     ("core", "Core", "核心标识"),
@@ -143,27 +185,29 @@ def _present(b: dict, key: str) -> bool:
     return bool(str(v if v is not None else "").strip())
 
 
-def _applicable(b: dict) -> float:
+def _applicable(b: dict, weights: dict) -> float:
     """该格式下的适用权重和（分母）。"""
     is_epub = (b.get("format") or "").upper() == "EPUB"
     return sum(
-        w for k, (_g, w, _l) in FIELDS.items() if not (k in _EPUB_ONLY and not is_epub)
+        weights.get(k, 0.0) for k in FIELDS if not (k in _EPUB_ONLY and not is_epub)
     )
 
 
-def audit(b: dict) -> dict:
+def audit(b: dict, weights: dict = None) -> dict:
     """单本评分：得分 + 已命中 / 缺失字段（缺的按权重从高到低排，便于按优先级补）。"""
+    weights = _weights() if weights is None else weights
     earned = 0.0
     present: list = []
     missing: list = []
-    for key, (_g, w, label) in FIELDS.items():
+    for key, (_g, _default_w, label) in FIELDS.items():
+        w = weights.get(key, 0.0)
         if _present(b, key):
             earned += w
             present.append(key)
         else:
             missing.append({"key": key, "label": label, "weight": w})
     missing.sort(key=lambda m: -m["weight"])
-    denom = _applicable(b) or 1.0
+    denom = _applicable(b, weights) or 1.0
     return {
         "id": b.get("id") or "",
         "name": b.get("name") or "",
@@ -222,23 +266,26 @@ def summary(books=None, scores=None) -> dict:
     """
     if scores is None:
         bs = library.books() if books is None else books
-        scores = [audit(b)["score"] for b in bs]
+        w = _weights()
+        scores = [audit(b, w)["score"] for b in bs]
     return _summarize(list(scores))
 
 
-def payload(books=None, lowest: int = 12) -> dict:
+def payload(books=None, lowest: int = 12, cfg: dict = None) -> dict:
     """完整载荷：摘要 + 权重模型（含字段覆盖率）+ 最低分书目 + 不计分说明。"""
     bs = library.books() if books is None else books
-    audits = [audit(b) for b in bs]
+    weights = _weights(cfg)
+    audits = [audit(b, weights) for b in bs]
     n = len(bs)
 
     groups = []
     for gkey, glabel, gzh in GROUPS:
         fields = []
         gweight = 0.0
-        for key, (gk, w, label) in FIELDS.items():
+        for key, (gk, _w, label) in FIELDS.items():
             if gk != gkey:
                 continue
+            w = weights.get(key, 0.0)
             gweight += w
             coverage = round(sum(1 for b in bs if _present(b, key)) / n * 100, 1) if n else 0.0
             fields.append({"key": key, "label": label, "weight": w, "coverage": coverage})
@@ -254,6 +301,8 @@ def payload(books=None, lowest: int = 12) -> dict:
     return {
         **_summarize([a["score"] for a in audits]),
         "groups": groups,
+        "weights": weights,
+        "weight_version": _weight_version(cfg),
         "lowest": order[:lowest_n],
         "not_scored": list(NOT_SCORED),
         "notes": list(NOTES),

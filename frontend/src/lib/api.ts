@@ -575,6 +575,9 @@ export interface MetadataScoreResponse {
   buckets: MetadataScoreBucket[]
   groups: MetadataScoreGroup[]
   lowest: MetadataScoreBook[]
+  /** 生效权重（字段 → 权重；第 204 期）与口径版本 */
+  weights: Record<string, number>
+  weight_version: number
   not_scored: Array<{ key: string; label: string; why: string }>
   notes: string[]
 }
