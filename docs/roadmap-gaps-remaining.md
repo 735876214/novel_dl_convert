@@ -11399,3 +11399,43 @@ woff2 为 `font/woff2`、`/reading-activity` 不再拉 `charts-*`。
   「把计算本身变便宜」，不是「记账」。真机复测若仍 >5 s 再评估。
 - **不动** `/api/books`（146 KB gzip，且带 ETag，回访免费）与 `/api/stats`（45 KB / 0.13 s）。
 - 文件哈希的 **512 MB 上限**保留：一次工具页扫描不该把 NAS 读满。
+
+## 第 182 期（播客单集官方转录（feed 转录 / 剥时间码 / 缓存））
+
+**需求来源**：用户「继续」；Phase 2C 收口 —— 单集官方转录。
+
+**功能范围与修法**：
+
+1. **数据（`podcast_episodes` +4 列）**：`transcript_url` / `transcript_type` / `transcript_text` / `transcript_fetched_at`。老库幂等补列；RSS 解析时读 `<podcast:transcript url type>`（podcast namespace），列表接口只下发 `has_transcript` / `transcript_type`，**不下发正文**（几百 KB 的文本不该跟着每页列表走）。
+
+2. **按需抓取与缓存**：`GET /api/podcasts/episodes/{eid}/transcript` 第一次按 feed 给的地址抓取（沿用 RSS 的出网边界：http(s) only、20 s、8 MiB、跟随重定向），转成纯文本后**落库缓存**；第二次直接读缓存，不再出网。转成纯文本的规则：VTT / SRT 剥 `WEBVTT` 头、序号行与 `00:00:01.000 --> …` 时间码；JSON（podcast 转录规范）取 `segments` 的 `text/body`；上限 20 万字符。
+
+3. **诚实边界**：**不做 ASR**。feed 没有 `podcast:transcript` 时返回 `available:false` 并写明「本项目不做 ASR 转写」；转录文件里没有可显示文本时同样如实说明。前端只在 `has_transcript` 为真时显示「转录」入口（不摆永远打不开的按钮），展开后是只读文本（`pre-wrap`，限高滚动）。
+
+**防回归**：`tests/test_podcast_transcript_182.py`（3 例：抓取并剥时间码 + 第二次走缓存不再出网 / 无转录如实说明与 404 / JSON segments 解析）；`PodcastsView.spec.ts` 增 1 例（按需读取并显示）。
+
+**核验**：后端全量（见 §0 基线）+ 前端四连（827 例）。
+
+**下一步**：2D —— 播客合集 / 播客智能范围（按单集出结果）/ 智能播放列表 / 播客目录搜索 / 播客版「继续收听」；之后 Phase 3（read-along）与 Phase 4 收口。
+
+## 第 183 期（播客版继续收听 + 单集搜索）
+
+**需求来源**：用户「继续」；Phase 2D 起步 —— 播客版「继续收听」与单集搜索。
+
+**功能范围与修法**：
+
+1. **`podcast_episodes.last_played_at`（+1 列，老库幂等补列）**：进度写入（每 5 s 心跳 / 手动标已播）时更新。「继续收听」按它倒序 —— 用 `published_at` 会把「刚听了一半的旧单集」排到最后，用 `position_sec` 则把「往后拖得远」误当成「最近在听」。
+
+2. **继续收听查询（`db.list_continue_podcast_episodes`）**：`JOIN podcasts` 取 `position_sec > 0 AND played_at = 0`，**两侧都带 `deleted_at=0`**（移除的订阅连同其单集一起从列表消失），按 `last_played_at DESC` 排序，`limit` 1–100。端点 `GET /api/podcasts/continue`。
+
+3. **页面「继续收听」卡**：跨订阅列出「听过未完播」，显示单集名 / 订阅名 / 已听进度；点「继续播放」若不在当前订阅则**先切订阅**再定位单集，并从**上次位置**开始播（`<audio>.currentTime`）。
+
+4. **单集搜索**：列表上方新增搜索框（标题 + 简介，大小写不敏感），与「全部 / 未播 / 进行中 / 已播」筛选**叠加**（先筛状态再筛词）。
+
+**边界（如实留档）**：继续收听是**页面内**卡片（跨页全局播放器仍是第 172 期的独立立项）；不区分「播客库」，因为播客本来就是跨订阅的平面集合；搜索只在**当前订阅**的单集内（跨订阅搜索属 2D 的「目录搜索」，另有开关与降级设计）。
+
+**防回归**：`tests/test_podcast_continue_183.py`（排序 / 排除已播与未播 / limit / 移除订阅后消失）；`PodcastsView.spec.ts` 增 1 例（继续收听卡渲染 + 搜索只留命中项）。
+
+**核验**：后端全量（见 §0 基线）+ 前端四连（828 例）。
+
+**下一步**：2D 其余 —— 播客合集、播客智能范围（按单集出结果）、智能播放列表、播客目录搜索；之后 Phase 3（read-along）与 Phase 4 收口。
