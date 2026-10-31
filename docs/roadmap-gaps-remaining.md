@@ -11439,3 +11439,250 @@ woff2 为 `font/woff2`、`/reading-activity` 不再拉 `charts-*`。
 **核验**：后端全量（见 §0 基线）+ 前端四连（828 例）。
 
 **下一步**：2D 其余 —— 播客合集、播客智能范围（按单集出结果）、智能播放列表、播客目录搜索；之后 Phase 3（read-along）与 Phase 4 收口。
+
+## 第 185 期（播客合集（只装订阅 / 软删过滤 / 重订阅恢复））
+
+**需求来源**：用户「继续」；Phase 2D —— 播客合集。
+
+**功能范围与修法**：
+
+1. **数据（两张新表）**：`podcast_collections`（id / name UNIQUE / created_at / sort_order）与 `podcast_collection_items`（collection_id + podcast_id UNIQUE）。成员**只认未软删的订阅**：查询时 `JOIN podcasts … AND p.deleted_at=0`，所以移除订阅后合集计数立即归零，但成员行保留 —— 重订阅同一 feed 复活原行后，合集里的位置自动回来（与订阅的软删语义同构）。
+
+2. **接口**：`GET/POST /api/podcast-collections`、`PUT/DELETE /api/podcast-collections/{cid}`、`POST/DELETE /api/podcast-collections/{cid}/items[/{pid}]`。合集名空 / 超过 80 字 / 重名 400，未知合集或订阅 404；加入幂等，移出幂等。合集本身是纯元数据，删除只删登记（与书合集同口径，不动任何文件）。
+
+3. **页面**：播客页新增合集条 —— 芯片显示「名称（本数）」，点芯片按合集筛选订阅列表；「全部订阅」回到全集；新建 / 重命名 / 删除走同一行输入；每行订阅有「加入合集…」下拉，筛选态下多一个「移出合集」。空合集如实显示「这个合集还没有节目」，不摆假行。
+
+**边界（如实留档）**：合集只装订阅（节目），不装单集、不装书（与书合集分表，避免把 `book_id` 语义带进播客）；本轮不做合集手动排序（列表按创建时间倒序，够用且少一个同步点）。
+
+**防回归**：`tests/test_podcast_collections_185.py`（2 例：增删改与名称校验 / 成员幂等 + 软删过滤 + 重订阅恢复）；`PodcastsView.spec.ts` 增 1 例（新建 → 加入 → 按合集筛选 → 移出）。
+
+**核验**：后端全量（见 §0 基线）；前端四连（见第 188 期收口的 834 例）。
+
+
+## 第 186 期（播客智能播放列表（单集轴规则 / 内置预设 / 队列快照））
+
+**需求来源**：用户「继续」；Phase 2D —— 播客智能范围 + 智能播放列表。
+
+**功能范围与修法**：
+
+1. **一张规则表覆盖两个概念**：`podcast_playlists`（id / name UNIQUE / kind = rules|queue / rules JSON / match all|any / items JSON / created_at / sort_order）。「智能范围」与「智能播放列表」在单集轴上本来就是同一件事 —— 都是一组保存的筛选规则；**不为它们造第二套规则引擎**。`kind=queue` 是另一种条目：从当前播放队列保存的快照（`episode_id` + 标题 + 订阅），播放时按 id 回订阅取当前单集。
+
+2. **规则字段与语义**：`title` / `podcast`（contains / not_contains / equals）、`status`（unplayed / playing / played）、`duration`（分钟，at_least / at_most）、`published`（发布天数，at_least / at_most）、`downloaded` / `explicit`（yes / no）。操作语义（大小写归一、多值 / 数值比较）抽到 `lib/scopeOps.ts`，**书级 `smartScope.ts` 同批改为复用它** —— 同一个 `contains` 不再有两份实现。
+
+3. **求值位置**：前端求值（与书级 scope 现有口径一致），取源是新增的 `GET /api/podcasts/episodes`（全部未软删订阅的单集 lite，按发布时间倒序，最多 2000 条，不含转录正文）。后端只做规则形状校验（未知字段 / 操作 / 取值一律 400，不静默丢弃），存储与求值各一处。
+
+4. **内置四条**：快速听（未播 + ≤30 分钟）、继续收听（进行中）、已下载、本周更新（7 天内 + 未播）—— 与保存的规则走**同一条求值路径**，不写死在界面里。页面可：加规则、选 all/any、保存、点芯片查看命中单集、全部加入队列、从队列保存快照、删除。
+
+**边界（如实留档）**：规则只覆盖上面列出的单集字段（不做简介全文规则）；求值范围是最近 2000 集（单用户量级足够，超出部分不假装命中）；规则播放列表不自动刷新，点开时取当前单集快照求值。
+
+**防回归**：`tests/test_podcast_playlists_186.py`（3 例：规则校验与增删改 / 队列快照 / 全部单集取源与软删过滤）；`PodcastsView.spec.ts` 增 2 例（内置求值 + 加入队列 / 保存规则 + 删除）。
+
+**核验**：后端全量（见 §0 基线）；前端四连（见第 188 期收口的 834 例）。
+
+
+## 第 187 期（播客目录搜索（iTunes Search / 默认开 / 失败降级））
+
+**需求来源**：用户「继续」；Phase 2D —— 播客目录搜索（用户 2026-10-26 的决定：播客外部面默认开、可关、失败降级）。
+
+**功能范围与修法**：
+
+1. **后端代取**：`core/podcasts.directory_search(term)` 走 iTunes Search API（`media=podcast&entity=podcast`），沿用本模块唯一的出网入口 `_fetch`（http(s) only / 20 s / 8 MiB / 跟随重定向）。只返回**带 `feedUrl`** 的结果（能直接订阅），按 feed URL 去重；解析 `collectionName / artistName / artworkUrl600 / genres / trackCount / collectionId`。空词 400，坏 JSON / 坏形状 400，网络失败转中文 400。
+
+2. **开关**：`config.DEFAULTS["podcasts"]["directory_search"] = True`；同批进 `server.EDITABLE`、`GET /api/config` 硬编码键列表、`settingsSections.SECTION_KEYS.network`、`settingsFields.NETWORK_FIELDS`（设置 → 网络与下载）。关闭时端点 **403 并说明**「已在设置中关闭」，不是静默空列表；界面仍可手动填 RSS 地址。
+
+3. **页面**：订阅卡里加「搜索播客目录」输入框 + 按钮；结果行显示封面 / 名称 / 作者 / 集数，点「订阅」把 feed 填进订阅框并直接调用现有订阅接口（成功后清空搜索结果）。搜索失败只在 `dirMsg` 里显示原因，不影响页面其它功能。
+
+**边界（如实留档）**：只接 iTunes 一家目录（无统一播客目录标准；多家并存只会让「搜不到」变成猜）；目录搜索不自动订阅、不在页面加载时出网；关闭开关后前端不做本地隐藏（设置页与播客页是两次加载），而是让后端如实 403。
+
+**防回归**：`tests/test_podcast_directory_187.py`（3 例：解析 / 去重 / 丢弃无 feed；开关关闭 403；空词与坏响应 400）；`tests/test_update_config_contract.py` 覆盖新增配置段的四处同步；`PodcastsView.spec.ts` 增 1 例（搜索 → 点订阅走订阅接口）。
+
+**核验**：后端全量（见 §0 基线）；前端四连（见第 188 期收口的 834 例）。
+
+
+## 第 188 期（read-along 媒体叠加（SMIL 解析 / 句子同步 / 去音频导出））
+
+**需求来源**：用户「继续」；Phase 3 —— read-along / 媒体叠加 EPUB。
+
+**功能范围与修法**：
+
+1. **解析（`core/readaloud.py`，唯一判据源）**：只认 EPUB3 media overlays —— OPF manifest 的 content item 带 `media-overlay="<smil-id>"`，SMIL 的每个 `<par>` 用 `<text src="章节#片段"/>` + `<audio src clipBegin clipEnd/>` 对齐一句话。支持 `1.5s` / `1500ms` / `0:00:01.500` 三种时间码；`text/audio` 路径相对 SMIL 所在目录解析，拒绝绝对路径与 `..` 越界；音频条目不存在 / 缺时间码的句子逐句丢弃（不猜）。`chapter_index` 直接取 `library._spine()` 的下标 —— 与阅读进度 / 批注同一坐标，不另造章节顺序。
+
+2. **状态如实标注**：没有 SMIL / 没有可用句子 / 不是 EPUB ⇒ `unsupported` + 中文原因；部分章节没有叠加、部分音频缺失、部分句子缺时间码 ⇒ `partial` + 原因；全部覆盖 ⇒ `ready`。前端只在 `available` 时显示朗读条，不摆灰按钮。
+
+3. **缓存与音频提取**：`book_media_overlays` 一本书一行（`epub_path` + mtime + size 作失效判据 + `cues` JSON）；mtime/size 变了就重扫。音频按需从 EPUB 提取到 `CACHE_DIR/read-aloud/<bid>/<sha1(路径)>.<ext>`（临时文件 + `os.replace`），源文件一个字节不改；`<audio>` 走 `?token=` 的媒体出口，并加进 `_MEDIA_TOKEN_PATHS`。
+
+4. **接口与位置**：`GET /api/books/{bid}/read-aloud`（cues + sync）、`PUT /read-aloud/sync`（cue 序号 + 音频秒，非负、越界 400）、`GET /read-aloud/audio?p=`（只允许 cues 里登记过的音频）、`POST /read-aloud/export`（去音频副本）。`read_aloud_sync` 只让「上次朗读到哪」能接上；**阅读进度仍是主坐标**，两者不互相覆盖。
+
+5. **阅读器**：新增 `ReadAloudBar.vue` —— 上一句 / 播放 / 暂停 / 下一句 / 停止 / 关闭 / 导出无音频 EPUB；按 cue 的音频片段播放（`clip_begin` → `clip_end` 自动进下一句），位置 5 秒节流回写。父组件按 `chapter_index` 切章，再按片段 id 找正文元素高亮并滚到视野中间；连续流模式下从章块里找（`chunkArt`），找不到片段不报错、不猜位置。
+
+6. **去音频导出**：`publish.export_deaudio_epub()`（唯一写文件模块）写出**新副本**：去掉 SMIL 条目、`audio/*` 条目、OPF 里的 `media-overlay` 属性与对应 manifest 项，其余内容逐字节复制；写盘走 `atomicio.access`（临时件 + replace）。
+
+7. **remap**：`read_aloud_sync` 进 `REMAP_TABLES` / `ORPHAN_TABLES`（改名跟着搬、书没了可清）；`book_media_overlays` 进 `REMAP_DERIVED_TABLES` / `ORPHAN_TABLES`（书文件投影，不搬、重扫重算）。
+
+**边界（如实留档）**：只支持标准 SMIL 媒体叠加；非标准时间轴 / 没有片段 id 的书如实标 `partial` 或 `unsupported`，不做假同步；**不做 ASR**（没有媒体叠加的书不会「自动生成朗读」）；句子级同步是「按 cue 播放 + 按片段 id 高亮」，不改写正文、不改阅读进度。
+
+**防回归**：`tests/test_read_aloud_188.py`（4 例：解析与位置回写 / 音频按需提取与令牌 / 无叠加与部分叠加如实说明 / 去音频导出且源文件不变）；`tests/test_remap_tables.py` 覆盖两张新表；`ReaderView.spec.ts` 增 2 例（有叠加：朗读条 + 高亮当前句 + 下一句 / 无叠加：不显示）。
+
+**核验**：后端全量（见 §0 基线）；前端四连 **834 例**（84 spec）。
+
+
+## 第 189 期（EPUB 书内搜索 + 阅读器快捷键 / 全屏 / 跳转）
+
+**需求来源**：用户「继续」；Phase 4 —— 阅读器收口。
+
+**功能范围与修法**：
+
+1. **EPUB 书内搜索**：`core/booksearch.py` 只读 EPUB zip，按 spine 逐章取正文、剥标签（script / style / 标签 / 实体）后做大小写不敏感的子串匹配；每章返回**第一条**命中 + 前后文（`chapter_index` 用 spine 下标，与进度 / 批注同一坐标）。单章读取上限 4 MB，命中上限 200；`GET /api/books/{bid}/search`。非 EPUB 400，空词 400，未知书 404。
+
+2. **阅读器搜索面板**：工具栏放大镜（`/` 快捷键）打开；结果按「章标题 + 上下文」列出，点一条只**跳到那一章**（片段不保证在当前连续流窗口里，不假装能精确滚到句）。
+
+3. **快捷键与跳转**：`?` 打开快捷键帮助（←/→、`/`、F、Esc）；`F` 切换全屏（浏览器不允许时静默保持原样）；设置面板新增「按全书百分比跳转」与「本章页码跳转」（翻页模式）；输入框里打字时快捷键不生效（除 Esc）。
+
+**边界（如实留档）**：书内搜索只支持 EPUB（PDF 走第 195 期的文内搜索）；不建全文索引（索引与书文件会走散，搜索直接读书文件）；搜索结果是「每章第一条」，同一章多处命中不重复列。
+
+**防回归**：`tests/test_book_search_189.py`（2 例：命中 / 上下文 / 大小写 / limit 截断 / 无命中；空词与 404）；`ReaderView.spec.ts` 增 3 例（搜索 → 跳章 / `?` 帮助 + F 全屏 / 百分比跳转）。
+
+**核验**：后端全量（见 §0 基线）；前端四连 841 例。
+
+
+## 第 190 期（通知中心分页 / 隐藏 / 清空）
+
+**需求来源**：用户「继续」；Phase 4 —— 通知模型补全。
+
+**功能范围与修法**：
+
+1. **隐藏（与已读分开）**：新表 `notifications_dismissed(notif_id PK, dismissed_at)`。`POST /api/notifications/dismiss` 支持 `{ids:[…]}` / `{all:true}`；隐藏只从**通知中心**移除，**活动日志一条不删**（与「已读」是两件事：已读 = 看过，隐藏 = 不想再看到）。清空活动日志时两套标记一并清除。
+
+2. **分页**：`GET /api/notifications` 增加 `offset`，返回 `total / next_offset / has_more`；列表先过滤已隐藏，再切页 —— 否则隐藏几条后 offset 会跳页。`unread_total` 只数未隐藏的条目。默认每页 50（顶栏浮层仍取 8）。
+
+3. **页面**：通知中心改为「首屏 50 + 加载更多」（追加而不是替换）；每行多一个 ×（`@click.stop`，不触发「标已读」）；页头多「隐藏全部」并如实说明「活动日志不删」。
+
+**边界（如实留档）**：类别偏好仍是客户端过滤（作用范围是已加载的页）；分页不是游标（日志是追加写的内存环，offset 足够）；隐藏是服务端多端一致的，不落 localStorage。
+
+**防回归**：`tests/test_notifications_190.py`（2 例：分页 + 隐藏单条 + 隐藏全部；清空日志同时清标记）；新增 `NotificationsView.spec.ts`（2 例：隐藏接线 / 加载更多带 offset 并追加）并登记 `EXPECTED_SPECS`。
+
+**核验**：后端全量（见 §0 基线）；前端四连 841 例。
+
+
+## 第 191 期（每库扫描历史）
+
+**需求来源**：用户「继续」；Phase 4 —— 书库运维可见性。
+
+**功能范围与修法**：
+
+1. **数据**：`scan_history(id, library_id, started_at, finished_at, status, books, scanned, added, removed, note)`；每库只保留最近 100 行（插入后按 `finished_at` 倒序裁掉更旧的）。不含 `book_id`（按库聚合，不进 remap 清单）。
+
+2. **落账点**：`POST /api/libraries/{lid}/scan` 在真实扫描完成后写一行 —— `status=ok|degraded`、`books`=当前书目数、`scanned/added/removed` 直接取 `catalog.last_report()`；索引刷新异常时 note 仍如实带上原因（与 `last_scan_note` 同一条文案）。返回值多一个 `history_id`。
+
+3. **接口与页面**：`GET /api/libraries/{lid}/scan-history?limit=`（最近在前）；书库编辑弹窗「上次扫描」页签在摘要下多一个历史列表（时间 / 状态 / 本数 / 新增 / 移除 / 备注），打开弹窗时按需取，不随列表页加载。
+
+**边界（如实留档）**：只记**手动扫描**（含「扫描全部」逐库调用）；后台定时扫描/监听摄入不写历史 —— 它们每轮都可能发生，写进来只会把用户主动扫描的记录淹掉。历史是元数据，不存书架快照。
+
+**防回归**：`tests/test_scan_history_191.py`（1 例：两次扫描 → 最近在前 / 状态 / 新增数 / limit / 未知库 404）。
+
+**核验**：后端全量（见 §0 基线）；前端四连 841 例。
+
+
+## 第 192 期（登录 / 登出审计 + 审计日期筛选）
+
+**需求来源**：用户「继续」；Phase 4 —— 审计补全。
+
+**功能范围与修法**：
+
+1. **审计事件**：`activity_log` 新增 `ACTION_LOGIN="登录"` / `ACTION_LOGOUT="登出"`。登录成功记「成功 + 账号 + 来源 host」；密码错误记「失败 + 原因」；退避拦截同样记失败（原因写「退避 N 秒」）。新增 `POST /api/auth/logout` 只记登出审计（令牌无状态，由前端清本地 token）；`auth.logout()` 先发请求再清 token，不阻塞界面。
+
+2. **日期筛选**：`activity_log.recent` 增加 `since/until`（按 `ts_epoch`，含端点）；`GET /api/logs` 透传；审计页新增起止日期输入（本地日 00:00:00 – 23:59:59.999），与动作 / 结果 / 操作者 / 关键字叠加。动作下拉与类别归并补上「登录 / 登出 → 账号」。
+
+**边界（如实留档）**：登录失败也进活动日志 —— 既是审计也是「谁在猜密码」的线索；日志缓冲 2000 条，暴力撞库可能把旧记录挤出内存环（盘上 jsonl 仍在，审计页的「加载更多」会从 jsonl 回填）。登出不做服务端令牌吊销（单用户无状态 token，吊销另属一项）。
+
+**防回归**：`tests/test_auth_audit_192.py`（2 例：成功 / 失败 / 登出都落审计；日期范围三向断言）。
+
+**核验**：后端全量（见 §0 基线）；前端四连 841 例。
+
+
+## 第 193 期（元数据缓存统计 + 书源搜索健康）
+
+**需求来源**：用户「继续」；Phase 4 —— 元数据与书源的可观测性。
+
+**功能范围与修法**：
+
+1. **检索缓存可见**：`GET /api/metadata/cache` 回 `metasources.cache_stats()`（进程内 LRU 条数 / 上限）；`DELETE /api/metadata/cache` 清空并返回清掉条数。设置 → 元数据 → 提供商页顶部多一张「检索缓存」卡，显示 `已缓存 N / 上限` + 清空按钮；缓存是进程内的，重启即空。
+
+2. **书源搜索健康**：`source_ledger` 补三列（`search_fail_count` / `last_search_at` / `last_search_error`，老库幂等补列）。`/api/search` 在逐源结果回来后落账：成功清零，失败累加并写原因；**被闸门跳过的源不算失败**（那是用户关掉了下载，不是源挂了）。台账接口原样带出三列，前端已有的台账页可直接显示（本轮不新增控件，避免第二处口径）。
+
+**边界（如实留档）**：缓存统计只覆盖 **元数据检索**（`_SEARCH_CACHE`），不是整站缓存；搜索健康只在用户真实搜索时更新，不主动探活（探活另有 `/api/metadata/probe` 与书源「验证」）。台账里没有的源（例如内置、未导入的）不会插行。
+
+**防回归**：`tests/test_metadata_cache_health_193.py`（2 例：缓存统计 / 清空；搜索成功清零、失败累加、台账接口带列、未知源静默跳过）。
+
+**核验**：后端全量（见 §0 基线）；前端四连 841 例。
+
+
+## 第 194 期（⌘K 命令面板）
+
+**需求来源**：用户「继续」；Phase 4 —— 运维收口。
+
+**功能范围与修法**：
+
+1. **全局入口**：`CommandPalette.vue` 挂 `App.vue`（登录后才渲染）；`⌘/Ctrl+K` 打开（原先这个快捷键只是聚焦顶栏搜索框）。面板内输入即筛，↑↓ 选择、回车跳转、Esc 关闭；点遮罩关闭。
+
+2. **可搜范围**：页面导航（17 项）、37 个设置页（`SETTINGS_PAGES` 的 `zh` / `label`）、书库书目（当前已加载的 `library.books`，按书名 / 作者匹配，最多 8 条 → `/book/:id`）。不在这里执行写操作（删书 / 移除书库 / 批量动作），面板只是入口。
+
+3. **边界**：书目来源是**已加载列表**，冷启动时可能为空（不额外打接口 —— 面板不该因为打开就拉全库）；没有模糊拼写匹配（子串足够，且不猜）。
+
+**防回归**：新增 `CommandPalette.spec.ts`（2 例：筛页面回车跳转 + Esc 关闭；书名命中 → `/book/:id`）并登记 `EXPECTED_SPECS`。
+
+**核验**：前端四连 841 例；后端零改动。
+
+
+## 第 195 期（PDF 大纲 + 文内搜索）
+
+**需求来源**：用户「继续」；Phase 4 —— PDF 阅读器收口。
+
+**功能范围与修法**：
+
+1. **后端（`core/pdfsearch.py`，pypdfium2 惰性导入）**：`outline(path)` 用 `PdfDocument.get_toc()` 拍平书签树，返回 `{title, page(1 基；0=没有页码目标), level}`；`search(path, q)` 逐页 `get_textpage().get_text_range()` 取文本，大小写不敏感找第一条命中，返回 `{page, snippet, offset, match}` + `scanned / truncated`（上限 200，单页文本上限 200 万字符）。缺依赖 / 打不开 / 加密都转中文 `ValueError`（接口 400）。
+
+2. **接口**：`GET /api/books/{bid}/pdf/outline`、`GET /api/books/{bid}/pdf/search?q=&limit=`；未知书 404。
+
+3. **阅读器**：PDF 工具栏多「大纲」「文内搜索」两个按钮，各自开一个左侧栏（与系列目录同形、互斥）；大纲按 level 缩进，`page>0` 才可点（0 如实禁用）；搜索结果显示页码 + 上下文，点一条 `go(page)`。扫描版 PDF 没有文字层 ⇒ 搜索如实显示「没有找到（扫描 N 页）」，不编造。
+
+**边界（如实留档）**：不做 PDF 文字层渲染 / 选区高亮 / 批注（pypdfium2 只提供文本与坐标，前端文字层与批注是独立一大块）；不做站外链接确认；大纲与搜索都在用户点按钮时解析，不预取。
+
+**防回归**：`tests/test_pdf_search_195.py`（3 例：大纲 + 搜索（假 PDFium）/ 空词与缺依赖 / 端点接线与 404）。
+
+**核验**：后端全量（见 §0 基线）；前端四连 841 例。
+
+
+## 第 196 期（下载文件名模式）
+
+**需求来源**：用户「继续」；Phase 4 —— 下载体验收口。
+
+**功能范围与修法**：
+
+1. **配置**：`download.filename_pattern` 默认 `{name}.{ext}`；同批进 `server.EDITABLE`、`GET /api/config`（download 整块回显，键已自动带出）、`settingsSections.SECTION_KEYS.network`（download 已在该页）、`settingsFields.NETWORK_FIELDS`（新增文本项，hint 写明两个占位符）。
+
+2. **生效点**：`GET /download/{name:path}` 只在 `FileResponse(filename=…)` 上应用模式 —— **只改浏览器「另存为」的名字**，磁盘上的成品文件一个字节不动。展开后走 `fileops.sanitize_stem` 清洗非法字符；清洗成空则回落原名。
+
+**边界（如实留档）**：占位符只有 `{name}`（原文件名去扩展名）与 `{ext}`（扩展名去点）；不支持书目元数据占位符（下载接口只拿到文件，不去反查书，反查会让改名/多库场景出现第二个真值源）。模式里不含 `{ext}` 时文件名就没有扩展名 —— 这是用户显式写的，不自动补。
+
+**防回归**：`tests/test_download_pattern_196.py`（1 例：模式生效于 Content-Disposition / 非法字符被清洗 / 磁盘文件不变）。
+
+**核验**：后端全量（见 §0 基线）；前端四连 841 例。
+
+
+## 第 197 期（KOReader 未匹配文档可见）
+
+**需求来源**：用户「继续」；Phase 4 —— KOReader 治理。
+
+**功能范围与修法**：
+
+1. **后端**：`GET /api/koreader` 增加 `unmatched_docs`（文档索引里有、当前书库里已没有的条目数）；`GET /api/koreader/docs` 每条带 `matched` 布尔，并返回汇总 `unmatched`。判定只问 `library.books()` 一次（不逐条查）。
+
+2. **页面**：KOReader 设置页的文档索引卡显示「未匹配 N 条」红字与一句说明（换库 / 改名 / 删除会导致），并说明「扫描书库」重建索引会清掉这些行；文档表里未匹配行的书名显示「（书已不在书库）」、标红。**不新增删除按钮** —— 重建索引本来就是整表重算（`replace_koreader_docs`），再放一个逐条删除只会多一条同义路径。
+
+**边界（如实留档）**：仍不做「设备列表 / 撤销某台设备」（kosync 协议不携带可辨识的设备名，凭空造一个只会是假数据）；注解 / 书签同步仍未做（kosync 只同步进度）。
+
+**防回归**：`tests/test_koreader_unmatched_197.py`（1 例：未见过的书 → 计数 1 / `matched=false`；重建索引后归零）。
+
+**核验**：后端全量（见 §0 基线）；前端四连 841 例。
+
