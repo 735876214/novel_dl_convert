@@ -274,6 +274,12 @@ DEFAULTS = {
         "username": "koreader",
         "key": "",
     },
+    # 播客（第 187 期）：目录搜索（iTunes Search API）。
+    # 默认**开启**（用户 2026-10-26 的决定：播客外部面默认开、可关、失败降级）；
+    # 只在用户点「搜索目录」时出网，失败时保留手动填 RSS 地址的路径。
+    "podcasts": {
+        "directory_search": True,
+    },
     # 外部服务凭据（第 4 期）。三家都**不是 OAuth**：
     #   Hardcover   → API Token（账号设置页生成），GraphQL + Bearer
     #   Readwise    → API Token，REST + `Authorization: Token`

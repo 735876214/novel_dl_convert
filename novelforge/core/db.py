@@ -491,6 +491,27 @@ def init():
                 created_at REAL NOT NULL,
                 sort_order INTEGER NOT NULL DEFAULT 0
             );
+            -- read-along 媒体叠加（第 188 期）：**一本书一行**，cues 是 JSON 数组
+            -- （text/audio 的 zip 内相对路径 + 片段 + 起止秒）。它是书文件的投影 ⇒
+            -- 改名 / 换库不搬（REMAP_DERIVED_TABLES），下次打开重扫即可。
+            CREATE TABLE IF NOT EXISTS book_media_overlays (
+                book_id    TEXT PRIMARY KEY,
+                epub_path  TEXT NOT NULL DEFAULT '',
+                mtime      REAL NOT NULL DEFAULT 0,
+                size       INTEGER NOT NULL DEFAULT 0,
+                status     TEXT NOT NULL DEFAULT '',
+                reason     TEXT NOT NULL DEFAULT '',
+                cues       TEXT NOT NULL DEFAULT '[]',
+                scanned_at REAL NOT NULL DEFAULT 0
+            );
+            -- 朗读位置（第 188 期）：cue 序号 + 音频秒数；**阅读进度仍是主坐标**，
+            -- 这张表只让「上次朗读到哪」在重开时能接上。按书一行，改名要跟着搬。
+            CREATE TABLE IF NOT EXISTS read_aloud_sync (
+                book_id      TEXT PRIMARY KEY,
+                cue_index    INTEGER NOT NULL DEFAULT 0,
+                position_sec REAL NOT NULL DEFAULT 0,
+                updated_at   REAL NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS tasks (
                 id         TEXT PRIMARY KEY,
                 type       TEXT NOT NULL DEFAULT 'download',
@@ -3287,7 +3308,9 @@ ORPHAN_TABLES = ("progress", "annotations", "bookmarks", "meta_locks",
                  # 绑定得用户重新选一次源 —— 但**可清理**这件事与成本无关。
                  "online_bind",
                  # 第 154 期：入库时间覆盖。书没了这一行没有意义。
-                 "book_added")
+                 "book_added",
+                 # 第 188 期：朗读位置；媒体叠加缓存同样是「书没了就没有意义」的行。
+                 "read_aloud_sync", "book_media_overlays")
 
 
 def book_id_refs() -> dict:
@@ -3350,6 +3373,8 @@ REMAP_TABLES = (
     "collection_items", "reading_sessions", "reading_attempts", "ratings", "reading_status",
     "koreader_docs", "meta_override", "meta_online", "meta_cover", "book_embeddings",
     "book_origins", "online_bind", "book_added",
+    # 第 188 期：朗读位置跟着书搬（媒体叠加缓存是文件投影，进 REMAP_DERIVED_TABLES）。
+    "read_aloud_sync",
 )
 # ⚠️ 第 93 期的 ``online_bind`` 加在这里，**不加进** :data:`REMAP_DERIVED_TABLES` ——
 #    它与 store_toc / toc_map 长得很像（都是「从某个源取回来的东西」），但性质相反：
@@ -3376,7 +3401,7 @@ REMAP_EXPLICIT_TABLES = ("scrape_items",)
 #: 于是行变成「book_id 已经是新名字了，rel 还是旧路径」，正好破坏
 #: ``book_id == _book_id(rel, library_id)`` 这条派生不变式 —— ``by_id`` 会拿着一行
 #: 自称指向某本书、路径却指向不存在文件的记录去开文件。契约测试认这份清单。
-REMAP_DERIVED_TABLES = ("book_index", "store_toc", "toc_map")
+REMAP_DERIVED_TABLES = ("book_index", "store_toc", "toc_map", "book_media_overlays")
 # ⚠️ 后两张是**第 85 期的外部数据缓存**（书城目录 + 章节映射），与 `book_index` 同属「不搬」
 #    那一类，但**理由不同**：它们的主键含来源与书城序号，通用搬迁那种「整表 UPDATE」一旦
 #    撞上主键就会被外层 `except` 吞成「搬 0 行」（正是 :func:`_remap_bookmarks` 那个坑）；
@@ -4429,7 +4454,69 @@ def list_all_podcast_episodes(limit: int = 2000) -> list:
     } for r in rows]
 
 
-def upsert_podcast_episodes(podcast_id: str, items: list) -> "tuple[int, int]":
+# ---------------- read-along 媒体叠加（第 188 期）----------------
+
+def get_media_overlay(bid: str) -> "dict | None":
+    row = _connect().execute(
+        "SELECT * FROM book_media_overlays WHERE book_id=?", (str(bid),)
+    ).fetchone()
+    if not row:
+        return None
+    return {
+        "book_id": str(row["book_id"]),
+        "epub_path": str(row["epub_path"] or ""),
+        "mtime": float(row["mtime"] or 0),
+        "size": int(row["size"] or 0),
+        "status": str(row["status"] or ""),
+        "reason": str(row["reason"] or ""),
+        "cues": _json_list(row["cues"]),
+        "scanned_at": float(row["scanned_at"] or 0),
+    }
+
+
+def save_media_overlay(bid: str, *, epub_path: str, mtime: float, size: int,
+                       status: str, reason: str, cues: list) -> dict:
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO book_media_overlays(book_id, epub_path, mtime, size, status,"
+            " reason, cues, scanned_at) VALUES(?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(book_id) DO UPDATE SET epub_path=excluded.epub_path,"
+            " mtime=excluded.mtime, size=excluded.size, status=excluded.status,"
+            " reason=excluded.reason, cues=excluded.cues, scanned_at=excluded.scanned_at",
+            (str(bid), str(epub_path), float(mtime), int(size), str(status),
+             str(reason), json.dumps(list(cues or []), ensure_ascii=False), time.time()),
+        )
+        c.commit()
+    return get_media_overlay(bid) or {}
+
+
+def get_read_aloud_sync(bid: str) -> dict:
+    row = _connect().execute(
+        "SELECT * FROM read_aloud_sync WHERE book_id=?", (str(bid),)
+    ).fetchone()
+    if not row:
+        return {"cue_index": 0, "position_sec": 0.0, "updated_at": 0.0}
+    return {
+        "cue_index": int(row["cue_index"] or 0),
+        "position_sec": float(row["position_sec"] or 0),
+        "updated_at": float(row["updated_at"] or 0),
+    }
+
+
+def set_read_aloud_sync(bid: str, cue_index: int, position_sec: float) -> dict:
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO read_aloud_sync(book_id, cue_index, position_sec, updated_at)"
+            " VALUES(?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET"
+            " cue_index=excluded.cue_index, position_sec=excluded.position_sec,"
+            " updated_at=excluded.updated_at",
+            (str(bid), int(cue_index), float(position_sec), time.time()),
+        )
+        c.commit()
+    return get_read_aloud_sync(bid)
+
     """按 `(podcast_id, guid)` upsert；返回 `(新增, 更新)`。
 
     ⚠️ `deleted_at` **不在 UPDATE 里**：用户删过的单集不应该因为一次刷新又冒出来

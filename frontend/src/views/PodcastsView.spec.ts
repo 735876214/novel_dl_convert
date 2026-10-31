@@ -34,6 +34,7 @@ vi.mock('@/lib/api', () => ({
     setPodcastAuto: vi.fn(),
     podcastTranscript: vi.fn(),
     podcastContinue: vi.fn(),
+    searchPodcastDirectory: vi.fn(),
     podcastCollections: vi.fn(),
     createPodcastCollection: vi.fn(),
     renamePodcastCollection: vi.fn(),
@@ -68,6 +69,7 @@ const m = {
   autoSet: vi.mocked(api.setPodcastAuto),
   tr: vi.mocked(api.podcastTranscript),
   cont: vi.mocked(api.podcastContinue),
+  dir: vi.mocked(api.searchPodcastDirectory),
   colls: vi.mocked(api.podcastCollections),
   newColl: vi.mocked(api.createPodcastCollection),
   renameColl: vi.mocked(api.renamePodcastCollection),
@@ -444,5 +446,25 @@ describe('PodcastsView', () => {
     await w.findAll('button').find((b) => b.text() === '删除播放列表')!.trigger('click')
     await flushPromises()
     expect(m.delPl).toHaveBeenCalledWith(5)
+  })
+
+  it('目录搜索：显示带 feedUrl 的结果，点订阅直接走订阅接口', async () => {
+    m.dir.mockResolvedValue({
+      items: [{ title: '示例播客', author: '主播', feed_url: 'https://x/dir.xml',
+        artwork_url: '', categories: ['科技'], episode_count: 12, itunes_id: '1' }],
+      total: 1,
+    })
+    const w = await mountView()
+    await w.find('input[aria-label="搜索播客目录"]').setValue('示例')
+    await w.findAll('button').find((b) => b.text() === '搜索目录')!.trigger('click')
+    await flushPromises()
+    expect(m.dir).toHaveBeenCalledWith('示例')
+    expect(w.text()).toContain('示例播客')
+
+    m.sub.mockResolvedValue({ podcast: POD, added: 1, updated: 0, total: 1, created: true })
+    const subs = w.findAll('button').filter((b) => b.text() === '订阅')
+    await subs[subs.length - 1].trigger('click')
+    await flushPromises()
+    expect(m.sub).toHaveBeenCalledWith('https://x/dir.xml')
   })
 })

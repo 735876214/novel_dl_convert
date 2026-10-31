@@ -1135,6 +1135,28 @@ export interface BookDetail extends BookCard {
   units?: UnitItem[]
 }
 
+/** read-along 的一句话 ↔ 音频片段（第 188 期）。 */
+export interface ReadAloudCue {
+  /** 全局序号（朗读顺序） */
+  ordinal: number
+  /** 这句话所属章节 = spine 下标（与阅读进度同一坐标）；-1 = 对不上 */
+  chapter_index: number
+  text_href: string
+  fragment: string
+  audio_href: string
+  clip_begin: number
+  clip_end: number
+}
+
+export interface ReadAloudInfo {
+  available: boolean
+  status: 'ready' | 'partial' | 'unsupported' | string
+  reason: string
+  total: number
+  cues: ReadAloudCue[]
+  sync: { cue_index: number; position_sec: number; updated_at: number }
+}
+
 /** 单条音轨（目录型有声书里一章一文件） */
 export interface AudioTrack {
   index: number
@@ -2659,6 +2681,17 @@ export interface PodcastContinueItem {
   audio_url: string
   download_state: '' | 'downloading' | 'downloaded' | 'failed'
   last_played_at: number
+}
+
+/** 播客目录搜索结果（第 187 期）：只含带 feedUrl 的条目，可直接订阅。 */
+export interface PodcastDirectoryItem {
+  title: string
+  author: string
+  feed_url: string
+  artwork_url: string
+  categories: string[]
+  episode_count: number
+  itunes_id: string
 }
 
 /** 播客单集书签（第 177 期）：位置到秒去重。 */
@@ -4555,6 +4588,41 @@ export const api = {
   bookDetail: (id: string) =>
     request<BookDetail>(`/api/books/${encodeURIComponent(id)}`),
 
+  /** read-along 媒体叠加（第 188 期）：一本书的句子 ↔ 音频片段与上次朗读位置。 */
+  readAloud: (id: string) =>
+    request<ReadAloudInfo>(`/api/books/${encodeURIComponent(id)}/read-aloud`),
+
+  saveReadAloudSync: (id: string, cueIndex: number, positionSec: number) =>
+    request<{ cue_index: number; position_sec: number; updated_at: number }>(
+      `/api/books/${encodeURIComponent(id)}/read-aloud/sync`,
+      { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cue_index: cueIndex, position_sec: positionSec }) },
+    ),
+
+  /** 朗读音频 URL（带 `?token=`：`<audio>` 原生请求带不了 Authorization）。 */
+  readAloudAudioUrl: (id: string, href: string) => {
+    const t = _authToken()
+    return `/api/books/${encodeURIComponent(id)}/read-aloud/audio?p=${encodeURIComponent(href)}${t ? `&token=${encodeURIComponent(t)}` : ''}`
+  },
+
+  /** 导出**去音频** EPUB（第 188 期）：POST + Bearer，回 blob 触发浏览器下载。 */
+  exportReadAloud: async (id: string): Promise<void> => {
+    const headers = new Headers()
+    const token = _authToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    const res = await fetch(`/api/books/${encodeURIComponent(id)}/read-aloud/export`, {
+      method: 'POST', headers,
+    })
+    if (!res.ok) throw new Error(`导出失败（${res.status}）`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'read-along-无音频.epub'
+    a.click()
+    URL.revokeObjectURL(url)
+  },
+
   /** 可用的书城目录来源（含闸门状态与每个来源的诚实档位，第 85 期批次 B） */
   tocSources: () =>
     request<{ items: TocSourceItem[]; enabled: boolean; reason: string }>('/api/toc/sources'),
@@ -5156,6 +5224,14 @@ export const api = {
 
   /** OPML 导出 / 导入（第 174 期）：播客客户端的通用订阅清单格式。 */
   podcastsOpml: () => request<{ opml: string }>('/api/podcasts/opml'),
+
+  /** 目录搜索（第 187 期）：后端代取（iTunes Search API）；关闭时 403。 */
+  searchPodcastDirectory: (q: string) =>
+    request<{ items: PodcastDirectoryItem[]; total: number }>(
+      `/api/podcasts/directory?q=${encodeURIComponent(q)}`,
+      {},
+      { timeoutMs: LONG_REQUEST_TIMEOUT_MS },
+    ),
 
   importPodcastsOpml: (opml: string) =>
     request<{ total: number; added: number; refreshed: number; failed: { feed_url: string; error: string }[] }>(

@@ -139,6 +139,12 @@ export const NETWORK_FIELDS: FieldDef[] = [
     type: 'bool',
     hint: '只读章节目录（不取正文）；在图书详情页的「目录」标签里显式点「取目录」才会外呼',
   },
+  {
+    path: 'podcasts.directory_search',
+    label: '播客目录搜索',
+    type: 'bool',
+    hint: '默认开启：在播客页搜索节目目录（iTunes Search API）；只在点「搜索目录」时外呼，失败不影响手动填 RSS 地址',
+  },
 ]
 
 /**

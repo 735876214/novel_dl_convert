@@ -26,7 +26,7 @@ export const SECTION_KEYS: Record<string, string[]> = {
   watcher: ['watcher'],
   // 第 94 期阶段 4a：URL 订阅导入的开关与护栏也在这页（`source_import.*`）
   // 第 138 期：`logging` 已迁出（归 `logs`，见 LOGGING_FIELDS 注释）——一个段只许一个归属分区
-  network: ['network', 'download', 'auto_update', 'source_import'],
+  network: ['network', 'download', 'auto_update', 'source_import', 'podcasts'],
   naming: ['naming'],
   upload: ['upload'],
   achievements: ['achievements'],

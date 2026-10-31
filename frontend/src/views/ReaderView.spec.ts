@@ -30,6 +30,10 @@ vi.mock('@/lib/api', () => ({
     setProgress: vi.fn(),
     // 第 76 期：书内样式（书内排版开关与注入位置的用例需要它）
     epubCss: vi.fn(),
+    // 第 188 期：read-along（没有媒体叠加时阅读器照旧，不显示朗读条）
+    readAloud: vi.fn(),
+    saveReadAloudSync: vi.fn(),
+    readAloudAudioUrl: vi.fn((bid: string, href: string) => `/ra/${bid}?p=${href}`),
   },
   apiErrorMessage: (_e: unknown, fallback: string) => fallback,
 }))
@@ -45,6 +49,8 @@ const m = {
   addBookmark: vi.mocked(api.addBookmark),
   setProgress: vi.mocked(api.setProgress),
   epubCss: vi.mocked(api.epubCss),
+  readAloud: vi.mocked(api.readAloud),
+  saveReadAloudSync: vi.mocked(api.saveReadAloudSync),
 }
 
 /**
@@ -114,6 +120,12 @@ function stubApi(book: BookDetail): void {
   m.setProgress.mockResolvedValue({ ok: true, updated_at: 1000 })
   // 默认「这本书没有书内样式」⇒ 回落应用排版（既有用例的行为逐字不变）
   m.epubCss.mockResolvedValue({ css: '', sheets: [], fixed_layout: false })
+  // 默认「这本书没有媒体叠加」⇒ 不显示朗读条（既有用例的行为逐字不变）
+  m.readAloud.mockResolvedValue({
+    available: false, status: 'unsupported', reason: '这本书没有可用的媒体叠加（SMIL）',
+    total: 0, cues: [], sync: { cue_index: 0, position_sec: 0, updated_at: 0 },
+  })
+  m.saveReadAloudSync.mockResolvedValue({ cue_index: 0, position_sec: 0, updated_at: 0 })
 }
 
 /**
@@ -949,6 +961,49 @@ describe('ReaderView · 设置面板的定位（第 108 期响应式横扫补记
     const wrapper = await openSettings()
 
     expect(wrapper.get('.z-30').classes()).toContain('max-w-full')
+    wrapper.unmount()
+  })
+})
+
+describe('ReaderView · read-along（第 188 期）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    localStorage.clear()
+    Element.prototype.scrollIntoView = vi.fn()
+    stubApi(makeBook())
+    m.chapter.mockResolvedValue({
+      index: 0, total: 2, title: '第一章',
+      html: '<p id="p1">第一句</p><p id="p2">第二句</p>',
+    })
+  })
+
+  it('有媒体叠加时显示朗读条，并按片段 id 高亮当前句', async () => {
+    m.readAloud.mockResolvedValue({
+      available: true, status: 'ready', reason: '', total: 2,
+      cues: [
+        { ordinal: 0, chapter_index: 0, text_href: 'OEBPS/1.xhtml', fragment: 'p1',
+          audio_href: 'OEBPS/a.mp3', clip_begin: 0, clip_end: 1 },
+        { ordinal: 1, chapter_index: 0, text_href: 'OEBPS/1.xhtml', fragment: 'p2',
+          audio_href: 'OEBPS/a.mp3', clip_begin: 1, clip_end: 2 },
+      ],
+      sync: { cue_index: 0, position_sec: 0, updated_at: 0 },
+    })
+    const { wrapper } = await mountReader()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('朗读')
+    expect(wrapper.find('.nf-read-aloud-active').element.id).toBe('p1')
+    await wrapper.findAll('button').find((b) => b.text() === '下一句')!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('第 2 / 2 句')
+    expect(wrapper.find('.nf-read-aloud-active').element.id).toBe('p2')
+    wrapper.unmount()
+  })
+
+  it('没有媒体叠加时不显示朗读条', async () => {
+    const { wrapper } = await mountReader()
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('朗读')
     wrapper.unmount()
   })
 })

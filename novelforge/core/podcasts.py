@@ -27,7 +27,7 @@ import re
 import threading
 import time
 import xml.etree.ElementTree as ET
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 import httpx
 
@@ -169,6 +169,62 @@ def _fetch(url: str) -> str:
     except httpx.HTTPError as e:
         raise ValueError(f"抓取订阅失败：{type(e).__name__}") from None
     return b"".join(chunks).decode("utf-8", "replace")
+
+
+#: 目录搜索（第 187 期）：iTunes Search API，用户显式点搜索才出网。
+DIRECTORY_LIMIT = 20
+DIRECTORY_URL = "https://itunes.apple.com/search"
+
+
+def directory_search(term: str, limit: int = DIRECTORY_LIMIT) -> list:
+    """按名字搜播客目录；只返回**带 feedUrl** 的结果（可直接订阅）。
+
+    开关在 `config.DEFAULTS["podcasts"]["directory_search"]`（默认开）。关闭时抛
+    `PermissionError`（接口层 403），与「网络不通」区分开 —— 前者是用户的选择，
+    后者是失败降级（UI 仍可手动填 RSS 地址）。
+    """
+    cfg = (config.load_config() or {}).get("podcasts") or {}
+    if not bool(cfg.get("directory_search", True)):
+        raise PermissionError("播客目录搜索已在「设置 → 网络与下载」关闭")
+    q = str(term or "").strip()
+    if not q:
+        raise ValueError("请输入要搜索的播客名")
+    if len(q) > 100:
+        q = q[:100]
+    url = DIRECTORY_URL + "?" + urlencode({
+        "media": "podcast", "entity": "podcast", "limit": max(1, min(int(limit), 50)), "term": q,
+    })
+    raw = _fetch(url)
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        raise ValueError("目录服务返回的不是有效 JSON") from None
+    results = data.get("results") if isinstance(data, dict) else None
+    if not isinstance(results, list):
+        raise ValueError("目录服务返回格式不对")
+
+    out: list = []
+    seen: set = set()
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        feed = str(r.get("feedUrl") or "").strip()
+        if not re.match(r"^https?://", feed, re.I) or feed in seen:
+            continue
+        seen.add(feed)
+        genres = r.get("genres")
+        out.append({
+            "title": str(r.get("collectionName") or r.get("trackName") or "").strip(),
+            "author": str(r.get("artistName") or "").strip(),
+            "feed_url": feed,
+            "artwork_url": str(r.get("artworkUrl600") or r.get("artworkUrl100") or "").strip(),
+            "categories": [str(g) for g in genres if g] if isinstance(genres, list) else [],
+            "episode_count": int(r.get("trackCount") or 0),
+            "itunes_id": str(r.get("collectionId") or ""),
+        })
+        if len(out) >= max(1, min(int(limit), 50)):
+            break
+    return out
 
 
 def _local(tag) -> str:

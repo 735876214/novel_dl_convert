@@ -30,8 +30,10 @@ import os
 import pathlib
 import shutil
 import time
+import zipfile
+import xml.etree.ElementTree as ET
 
-from . import atomicio, db, fileops, komga, library
+from . import atomicio, db, fileops, komga, library, readaloud
 
 #: 副本的生成方式：硬链接（首选）/ 复制（文件系统不支持硬链接时的回退）
 LINK_HARD = "hardlink"
@@ -42,6 +44,61 @@ EMBED_EXTS = (".epub",)
 
 #: 同名冲突时的编号上限（超过基本是配置炸了，早失败早发现）
 _MAX_DUP = 100
+
+
+def _xml_local(tag) -> str:
+    return str(tag).rsplit("}", 1)[-1]
+
+
+def export_deaudio_epub(src, dest, audio_hrefs) -> pathlib.Path:
+    """导出**去音频 / 去媒体叠加**的 EPUB 副本（第 188 期 read-along 的交付变体）。
+
+    只写 ``dest``（新副本）：源文件只读；``dest`` 走 ``atomicio.access``（临时件 + replace）。
+    去掉的东西三样：SMIL 条目、audio/* 条目、OPF 里的 ``media-overlay`` 属性与对应 manifest 项。
+    其它内容（正文、插图、样式、字体、目录）逐字节复制。
+    """
+    src = pathlib.Path(src)
+    dest = pathlib.Path(dest)
+    drop = {str(x) for x in (audio_hrefs or []) if x}
+    with zipfile.ZipFile(src) as zin:
+        names = set(zin.namelist())
+        if "META-INF/container.xml" not in names:
+            raise ValueError("不是有效的 EPUB（缺少 META-INF/container.xml）")
+        container = zin.read("META-INF/container.xml")
+        croot = ET.fromstring(container)
+        rootfile = next((el for el in croot.iter() if _xml_local(el.tag) == "rootfile"), None)
+        opf_path = (rootfile.get("full-path") if rootfile is not None else "") or ""
+        if not opf_path or opf_path not in names:
+            raise ValueError("EPUB 的包文件（OPF）不存在")
+        opf = ET.fromstring(zin.read(opf_path))
+        manifest = next((el for el in opf.iter() if _xml_local(el.tag) == "manifest"), None)
+        if manifest is not None:
+            for item in list(manifest):
+                if _xml_local(item.tag) != "item":
+                    continue
+                mt = str(item.get("media-type") or "").lower()
+                href = readaloud.join_entry(opf_path, str(item.get("href") or ""))
+                if mt == "application/smil+xml" or mt.startswith("audio/") or (href and href in drop):
+                    if href:
+                        drop.add(href)
+                    manifest.remove(item)
+                    continue
+                for k in list(item.attrib):
+                    if _xml_local(k) == "media-overlay":
+                        del item.attrib[k]
+        new_opf = ET.tostring(opf, encoding="utf-8", xml_declaration=True)
+
+        with atomicio.access(dest) as tmp:
+            with zipfile.ZipFile(tmp, "w") as zout:
+                zout.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+                zout.writestr("META-INF/container.xml", container)
+                zout.writestr(opf_path, new_opf)
+                for info in zin.infolist():
+                    name = info.filename
+                    if name in ("mimetype", "META-INF/container.xml", opf_path) or name in drop:
+                        continue
+                    zout.writestr(info, zin.read(name))
+    return dest
 
 
 #: 整树枚举时跳过的噪声（与 ``pipeline._copy_tree`` 的入库侧过滤同口径）

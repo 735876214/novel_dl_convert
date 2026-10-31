@@ -10,8 +10,9 @@ import Switch from '@/components/ui/Switch.vue'
 import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
 import UnitsReader from '@/components/reader/UnitsReader.vue'
+import ReadAloudBar from '@/components/ReadAloudBar.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
-import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type OnlineChapters, type OnlineStatus, type SessionExtra } from '@/lib/api'
+import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type OnlineChapters, type OnlineStatus, type ReadAloudInfo, type SessionExtra } from '@/lib/api'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import { progressForFile } from '@/lib/readingProgress'
 import {
@@ -209,6 +210,10 @@ const currentIndex = computed(() => flat.value[pos.value]?.index ?? 0)
 const html = ref('')
 const chapterTitle = ref('')
 const local = ref(0)
+// read-along（第 188 期）：只有 EPUB 且这本书真有媒体叠加时才显示朗读条。
+const readAloud = ref<ReadAloudInfo | null>(null)
+const raCue = ref(-1)
+let raEl: HTMLElement | null = null
 /** 章节加载中（第 61 期）：连点目录时必须有反馈，否则「点了没反应」 */
 const chapterLoading = ref(false)
 
@@ -2131,6 +2136,76 @@ async function loadOnline(): Promise<void> {
 }
 
 /** 取数并铺好**这一本**书的阅读现场。抽成函数是为了让首次挂载与同路由换书共用同一条路。 */
+async function loadReadAloud(): Promise<void> {
+  readAloud.value = null
+  if (isOnline.value || fmt.value !== 'EPUB') return
+  try {
+    const info = await api.readAloud(bookId.value)
+    readAloud.value = info.available ? info : null
+  } catch {
+    readAloud.value = null
+  }
+}
+
+/**
+ * 朗读到第 N 句：切到该句所在章（`chapter_index` 由后端按 spine 算好），
+ * 再按片段 id 找到元素、高亮并滚到视野中间。
+ *
+ * 找不到片段（畸形 SMIL / 书内没有这个 id）时**不报错**：朗读照常继续，
+ * 只是正文不跳 —— 不猜一个附近的位置当替代。
+ */
+async function applyReadAloudHighlight(i: number): Promise<void> {
+  const cue = readAloud.value?.cues[i]
+  if (!cue) return
+  await nextTick()
+  // 连续流模式（默认）：正文在章块里，不是全局 `contentRef`。
+  const root = (cue.chapter_index >= 0 ? chunkArt(cue.chapter_index) : null) ?? contentRef.value
+  const el = root && cue.fragment
+    ? Array.from(root.querySelectorAll<HTMLElement>('[id]')).find((x) => x.id === cue.fragment) ?? null
+    : null
+  if (raEl) raEl.classList.remove('nf-read-aloud-active')
+  raEl = el
+  if (el) {
+    el.classList.add('nf-read-aloud-active')
+    if (typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }
+  }
+}
+
+/**
+ * 朗读到第 N 句：切到该句所在章（`chapter_index` 由后端按 spine 算好），
+ * 再按片段 id 找到元素、高亮并滚到视野中间。
+ *
+ * 找不到片段（畸形 SMIL / 书内没有这个 id）时**不报错**：朗读照常继续，
+ * 只是正文不跳 —— 不猜一个附近的位置当替代。
+ */
+async function onReadAloudCue(i: number): Promise<void> {
+  const cue = readAloud.value?.cues[i]
+  if (!cue) return
+  raCue.value = i
+  if (cue.chapter_index >= 0 && cue.chapter_index !== currentIndex.value) {
+    await loadChapter(cue.chapter_index)
+  }
+  await applyReadAloudHighlight(i)
+}
+
+// 首屏正文是**异步**加载的：朗读条先挂载并发出 cue 时 `contentRef` 还是空的。
+// 正文变了就按当前 cue 再标一次（只改 DOM class，不发事件，不会绕回来）。
+watch(html, () => {
+  if (readAloud.value && raCue.value >= 0) void applyReadAloudHighlight(raCue.value)
+})
+// 连续流模式不经过 `html`（正文在章块里）：章块窗口或可见章变了也要重标一次。
+watch([pos, chunks], () => {
+  if (readAloud.value && raCue.value >= 0) void applyReadAloudHighlight(raCue.value)
+})
+
+function closeReadAloud(): void {
+  readAloud.value = null
+  if (raEl) raEl.classList.remove('nf-read-aloud-active')
+  raEl = null
+}
+
 async function load(): Promise<void> {
   const name = String(route.name || '')
   // 不是阅读器路由（已经在往别的页走了）⇒ 一个字都别动：现场要留给 `onBeforeUnmount`
@@ -2163,6 +2238,7 @@ async function load(): Promise<void> {
   } catch {
     /* ignore */
   }
+  await loadReadAloud()
   loading.value = false
 
   // 有声书不属于阅读器：直接转去播放器（详情页按钮已分流，这里是深链兜底）
@@ -2617,6 +2693,16 @@ onBeforeUnmount(() => {
         <div class="h-full bg-primary transition-[width] duration-300" :style="{ width: `${overallPercent}%` }" />
       </div>
 
+      <!-- read-along（第 188 期）：有媒体叠加才出现；只读 EPUB -->
+      <ReadAloudBar
+        v-if="readAloud && !isOnline"
+        :book-id="bookId"
+        :info="readAloud"
+        class="mt-2"
+        @cue="onReadAloudCue"
+        @close="closeReadAloud"
+      />
+
       <!-- TXT 解码提示（第 89 期）：只在**确有字节解不出**时出现，低调但明确 ——
            编码是猜的、且坏字节被 U+FFFD 顶替，这两件事实用户有权知道。 -->
       <div
@@ -3044,6 +3130,12 @@ onBeforeUnmount(() => {
 .reader-content :deep(.nf-hl) {
   border-radius: 2px;
   padding: 0 1px;
+}
+/* read-along 当前句（第 188 期）：只标位置，不改字号 / 行高，避免正文重排导致朗读跳动 */
+.reader-content :deep(.nf-read-aloud-active) {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+  outline: 1px solid var(--primary);
+  border-radius: 2px;
 }
 
 /* 固定版式（pre-paginated）：整页已排好版，这里把**上面那套重排样式全部中和掉** ——

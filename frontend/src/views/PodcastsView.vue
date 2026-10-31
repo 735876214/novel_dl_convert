@@ -5,7 +5,7 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type Podcast, type PodcastBookmark, type PodcastCollection, type PodcastContinueItem, type PodcastEpisode, type PodcastEpisodeLite, type PodcastPlaylist } from '@/lib/api'
+import { api, type Podcast, type PodcastBookmark, type PodcastCollection, type PodcastContinueItem, type PodcastDirectoryItem, type PodcastEpisode, type PodcastEpisodeLite, type PodcastPlaylist } from '@/lib/api'
 import {
   BUILTIN_PLAYLISTS,
   EPISODE_FIELD_LABELS,
@@ -405,6 +405,36 @@ async function subscribe(): Promise<void> {
   } finally {
     busy.value = ''
   }
+}
+
+// ---------------- 目录搜索（第 187 期） ----------------
+// 只有点「搜索目录」才出网；开关关闭 / 网络失败都在 dirMsg 里如实说明，手动填 RSS 照旧可用。
+const dirTerm = ref('')
+const dirResults = ref<PodcastDirectoryItem[]>([])
+const dirBusy = ref(false)
+const dirMsg = ref('')
+
+async function searchDir(): Promise<void> {
+  const q = dirTerm.value.trim()
+  if (!q || dirBusy.value) return
+  dirBusy.value = true
+  dirMsg.value = ''
+  try {
+    dirResults.value = (await api.searchPodcastDirectory(q)).items
+    if (!dirResults.value.length) dirMsg.value = '目录里没有找到带 RSS 地址的节目'
+  } catch (e) {
+    dirResults.value = []
+    dirMsg.value = e instanceof Error ? e.message : '目录搜索失败'
+  } finally {
+    dirBusy.value = false
+  }
+}
+
+async function subscribeFromDir(it: PodcastDirectoryItem): Promise<void> {
+  feedUrl.value = it.feed_url
+  await subscribe()
+  dirResults.value = []
+  dirTerm.value = ''
 }
 
 async function refresh(p: Podcast): Promise<void> {
@@ -904,6 +934,43 @@ function fmtDate(ts: number): string {
       <p class="mt-1.5 text-[11px] text-muted-foreground">
         只支持 RSS 2.0（含 iTunes 扩展）；Atom 源会如实拒绝。同一地址重复订阅 = 刷新。
       </p>
+
+      <!-- 目录搜索（第 187 期）：后端代取；开关关闭 / 失败都如实说明，不挡手动填地址 -->
+      <div class="mt-2 flex flex-wrap items-end gap-2">
+        <label class="flex min-w-[14rem] flex-1 flex-col gap-1">
+          <span class="text-[11px] text-muted-foreground">搜索播客目录</span>
+          <input
+            v-model="dirTerm"
+            type="search"
+            aria-label="搜索播客目录"
+            placeholder="按节目名搜索（iTunes）"
+            class="h-8 rounded-md border border-border bg-card px-2 text-[12px] text-foreground outline-none focus:border-ring"
+            @keyup.enter="searchDir"
+          >
+        </label>
+        <Button size="sm" variant="ghost" :disabled="dirBusy || !dirTerm.trim()" @click="searchDir">
+          {{ dirBusy ? '搜索中…' : '搜索目录' }}
+        </Button>
+      </div>
+      <p v-if="dirMsg" class="mt-1.5 text-[11.5px] text-destructive">{{ dirMsg }}</p>
+      <ul v-if="dirResults.length" class="mt-1.5 divide-y divide-border rounded-md border border-border">
+        <li v-for="it in dirResults" :key="it.feed_url" class="flex flex-wrap items-center gap-2 px-2 py-1.5 text-[11.5px]">
+          <img
+            v-if="it.artwork_url"
+            :src="it.artwork_url"
+            alt=""
+            referrerpolicy="no-referrer"
+            class="h-8 w-8 shrink-0 rounded border border-border object-cover"
+          >
+          <div class="min-w-0 flex-1">
+            <div class="truncate font-medium text-foreground">{{ it.title || it.feed_url }}</div>
+            <div class="truncate text-[11px] text-muted-foreground">
+              {{ it.author || '未知作者' }}<template v-if="it.episode_count"> · {{ it.episode_count }} 集</template>
+            </div>
+          </div>
+          <Button size="sm" variant="primary" :disabled="!!busy" @click="subscribeFromDir(it)">订阅</Button>
+        </li>
+      </ul>
       <p v-if="error" class="mt-1.5 text-[11.5px] text-destructive">{{ error }}</p>
     </Card>
 

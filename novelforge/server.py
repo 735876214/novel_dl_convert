@@ -46,7 +46,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
-                   events, entities, pathmeta, m4b, audiobook_zip, podcasts)
+                   events, entities, pathmeta, m4b, audiobook_zip, podcasts, readaloud)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -631,6 +631,8 @@ _MEDIA_TOKEN_PATHS = (
     re.compile(r"^/api/books/[^/]+/audio/zip$"),
     # 播客本地副本（第 175 期）：<audio src> 原生请求
     re.compile(r"^/api/podcasts/episodes/[^/]+/audio$"),
+    # read-along 朗读音频（第 188 期）：<audio src> 原生请求
+    re.compile(r"^/api/books/[^/]+/read-aloud/audio$"),
     # 序号单元书的单话 / 单页（第 73 期）：音频话是 <audio src>、漫画话的单页是
     # <img src> —— 都是浏览器原生请求。PDF 话不在此列：它走 fetch + httpHeaders
     # （与 `/file` 同款），鉴权面不扩大。
@@ -3164,6 +3166,18 @@ def api_podcasts_refresh_all():
     return podcasts.refresh_all()
 
 
+@app.get("/api/podcasts/directory")
+def api_podcast_directory(q: str = Query("", max_length=100)):
+    """播客目录搜索（第 187 期）：用户显式点搜索才出网；开关关闭时 403。"""
+    try:
+        items = podcasts.directory_search(q)
+    except PermissionError as e:
+        raise HTTPException(403, str(e)) from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    return {"items": items, "total": len(items)}
+
+
 @app.post("/api/podcasts/episodes/{eid}/download")
 def api_podcast_episode_download(eid: str):
     """把一集加入下载队列（串行 worker；状态在 `download_state`）。"""
@@ -4849,6 +4863,103 @@ def api_book_file(bid: str):
         raise HTTPException(404, "文件不存在")
     media = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     return _media_file(path, media, cache_control="private, max-age=3600")
+
+
+# ---------------- read-along / 媒体叠加（第 188 期）----------------
+# 只认 EPUB3 SMIL；解析/缓存判据在 core/readaloud.py，这里只做 HTTP 与失效判断。
+
+def _book_epub(bid: str) -> "tuple[dict, pathlib.Path]":
+    b = library.by_id(bid)
+    raw = str((b or {}).get("path") or "")
+    if not b or not raw:
+        raise HTTPException(404, "书籍不存在")
+    return b, pathlib.Path(raw)
+
+
+def _overlay_for(bid: str, path: pathlib.Path) -> dict:
+    """缓存命中判据 = 同一个文件路径 + mtime + size；变了就重扫（书文件只读，很少变）。"""
+    cached = db.get_media_overlay(bid)
+    try:
+        st = path.stat()
+        mtime, size = float(st.st_mtime), int(st.st_size)
+    except OSError:
+        mtime, size = 0.0, 0
+    if (cached and cached["epub_path"] == str(path)
+            and abs(cached["mtime"] - mtime) < 1e-6 and cached["size"] == size):
+        return cached
+    data = readaloud.inspect(path)
+    return db.save_media_overlay(
+        bid, epub_path=str(path), mtime=data["mtime"], size=data["size"],
+        status=data["status"], reason=data["reason"], cues=data["cues"],
+    )
+
+
+@app.get("/api/books/{bid}/read-aloud")
+def api_read_aloud(bid: str):
+    """一本书的媒体叠加（句子 ↔ 音频片段）与上次朗读位置。"""
+    _b, path = _book_epub(bid)
+    ov = _overlay_for(bid, path)
+    cues = ov["cues"]
+    return {
+        "available": ov["status"] in ("ready", "partial"),
+        "status": ov["status"],
+        "reason": ov["reason"],
+        "total": len(cues),
+        "cues": cues,
+        "sync": db.get_read_aloud_sync(bid),
+    }
+
+
+@app.get("/api/books/{bid}/read-aloud/audio")
+def api_read_aloud_audio(bid: str, p: str = Query(..., description="SMIL 里的音频条目路径")):
+    """朗读音频（按需从 EPUB 提取到缓存；`<audio>` 原生请求走 `?token=`）。"""
+    _b, path = _book_epub(bid)
+    ov = _overlay_for(bid, path)
+    if str(p) not in {str(c.get("audio_href") or "") for c in ov["cues"]}:
+        raise HTTPException(404, "该音频不属于这本书的媒体叠加")
+    fp = readaloud.cache_audio(bid, path, str(p))
+    if not fp:
+        raise HTTPException(404, "音频资源不存在")
+    media = mimetypes.guess_type(fp.name)[0] or "audio/mpeg"
+    return _media_file(fp, media, cache_control="private, max-age=3600")
+
+
+@app.put("/api/books/{bid}/read-aloud/sync")
+def api_read_aloud_sync(bid: str, payload: dict = Body(...)):
+    """保存朗读位置（cue 序号 + 音频秒数）；阅读进度仍是主坐标，这张表只管续读。"""
+    _b, path = _book_epub(bid)
+    ov = _overlay_for(bid, path)
+    if ov["status"] not in ("ready", "partial"):
+        raise HTTPException(400, ov["reason"] or "这本书没有可用的媒体叠加")
+    try:
+        idx = int(payload.get("cue_index") or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "cue_index 必须是整数") from None
+    pos = numbers.finite(payload.get("position_sec", 0))
+    if pos is None or pos < 0 or idx < 0:
+        raise HTTPException(400, "cue_index / position_sec 必须是非负数")
+    if idx >= len(ov["cues"]):
+        raise HTTPException(400, "cue_index 超出范围")
+    return db.set_read_aloud_sync(bid, idx, pos)
+
+
+@app.post("/api/books/{bid}/read-aloud/export")
+def api_read_aloud_export(bid: str):
+    """导出**去音频** EPUB 副本（去掉 SMIL / 音频 / media-overlay）；源文件只读。"""
+    b, path = _book_epub(bid)
+    ov = _overlay_for(bid, path)
+    if ov["status"] not in ("ready", "partial"):
+        raise HTTPException(400, ov["reason"] or "这本书没有可用的媒体叠加")
+    out_dir = config.CACHE_DIR / "read-aloud-export"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    dest = out_dir / f"{bid}.epub"
+    try:
+        publish.export_deaudio_epub(path, dest, [c["audio_href"] for c in ov["cues"]])
+    except (ValueError, OSError, zipfile.BadZipFile) as e:
+        raise HTTPException(400, f"导出失败：{e}") from None
+    name = str(b.get("title") or path.stem) + "-无音频.epub"
+    return FileResponse(dest, media_type="application/epub+zip", filename=name,
+                        headers=_media_headers("private, max-age=0"))
 
 
 @app.post("/api/books/{bid}/unpack")
@@ -8655,6 +8766,8 @@ EDITABLE: dict = {
     "achievements": {"enabled"},
     "opds": {"enabled", "expose"},
     "koreader": {"enabled", "username", "key"},
+    # 播客目录搜索（第 187 期）：默认开、可关；关掉后端点 403 并说明原因。
+    "podcasts": {"directory_search"},
     # 整块覆盖：三家服务的字段各不相同，逐键白名单只会让新增字段时漏改
     "integrations": {"hardcover", "readwise", "storygraph"},
     # 元数据抓取：顶层子键白名单（`fields` 这类嵌套结构不再逐层校验 ——
@@ -8946,6 +9059,8 @@ def api_get_config():
             },
             # 版本检查与一键更新（第 78 期）：整段回显；四个键都在白名单里且**都有读点**。
             "update": cfg.get("update") or {},
+            # 播客（第 187 期）：目录搜索开关（硬编码键列表 ⇒ EDITABLE 与本列表都要加）。
+            "podcasts": cfg.get("podcasts") or {},
             # 阅读状态口径的全局默认值（第 40 期）。每库生效值另走
             # `GET /api/reading-thresholds?library_id=`（含覆写合并），不在这里算。
             "reading": cfg.get("reading") or {},
