@@ -459,6 +459,38 @@ def init():
                 UNIQUE(episode_id, position_sec)
             );
             CREATE INDEX IF NOT EXISTS idx_podcast_bm ON podcast_episode_bookmarks(episode_id);
+            -- 播客合集（第 185 期）：只装**订阅（节目）**，不装单集、更不装书。
+            -- 与 book 的 collections 分开：那边按 book_id 去重、挂在书库上；播客没有 book_id，
+            -- 硬塞会把「书合集」的读点带回不存在的行。成员随订阅软删自动从列表消失，但行保留
+            -- （重订阅同一 feed 复活后，合集里的位置还在）。
+            CREATE TABLE IF NOT EXISTS podcast_collections (
+                id         INTEGER PRIMARY KEY,
+                name       TEXT UNIQUE NOT NULL,
+                created_at REAL NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS podcast_collection_items (
+                id            INTEGER PRIMARY KEY,
+                collection_id INTEGER NOT NULL,
+                podcast_id    TEXT NOT NULL,
+                added_at      REAL NOT NULL,
+                UNIQUE(collection_id, podcast_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_podcast_citem_coll ON podcast_collection_items(collection_id);
+            CREATE INDEX IF NOT EXISTS idx_podcast_citem_pod ON podcast_collection_items(podcast_id);
+            -- 播客智能播放列表（第 186 期）：单集轴的保存筛选（rules）或队列快照（items）。
+            -- 与书级 smart_scopes 分表：那边按 book_id / 书字段求值；这里按单集字段求值。
+            -- `match` 加双引号（保留字，同 smart_scopes.match）。
+            CREATE TABLE IF NOT EXISTS podcast_playlists (
+                id         INTEGER PRIMARY KEY,
+                name       TEXT UNIQUE NOT NULL,
+                kind       TEXT NOT NULL DEFAULT 'rules',
+                rules      TEXT NOT NULL DEFAULT '[]',
+                "match"    TEXT NOT NULL DEFAULT 'all',
+                items      TEXT NOT NULL DEFAULT '[]',
+                created_at REAL NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS tasks (
                 id         TEXT PRIMARY KEY,
                 type       TEXT NOT NULL DEFAULT 'download',
@@ -4170,6 +4202,231 @@ def revive_podcast(pid: str) -> "dict | None":
         c.execute("UPDATE podcasts SET deleted_at=0 WHERE id=?", (str(pid),))
         c.commit()
     return get_podcast(pid)
+
+
+# ---------------- 播客合集（第 185 期）----------------
+# 成员只认**未软删**的订阅：移除订阅后合集计数立即归零，但成员行保留 ——
+# 重订阅同一 feed 会复活原行，合集里的位置也就回来了（与软删语义同构）。
+
+def _podcast_collection_out(row, podcast_ids: list) -> dict:
+    return {
+        "id": int(row["id"]),
+        "name": str(row["name"] or ""),
+        "created_at": float(row["created_at"] or 0),
+        "sort_order": int(row["sort_order"] or 0),
+        "podcast_ids": podcast_ids,
+        "count": len(podcast_ids),
+    }
+
+
+def _podcast_collection_members() -> dict:
+    rows = _connect().execute(
+        "SELECT ci.collection_id, ci.podcast_id FROM podcast_collection_items ci"
+        " JOIN podcasts p ON p.id=ci.podcast_id AND p.deleted_at=0"
+        " ORDER BY ci.added_at, ci.id"
+    ).fetchall()
+    out: dict[int, list] = {}
+    for r in rows:
+        out.setdefault(int(r["collection_id"]), []).append(str(r["podcast_id"]))
+    return out
+
+
+def list_podcast_collections() -> list:
+    members = _podcast_collection_members()
+    rows = _connect().execute(
+        "SELECT * FROM podcast_collections ORDER BY sort_order, created_at DESC, id DESC"
+    ).fetchall()
+    return [_podcast_collection_out(r, members.get(int(r["id"]), [])) for r in rows]
+
+
+def get_podcast_collection(cid: int) -> "dict | None":
+    row = _connect().execute(
+        "SELECT * FROM podcast_collections WHERE id=?", (int(cid),)
+    ).fetchone()
+    if not row:
+        return None
+    return _podcast_collection_out(row, _podcast_collection_members().get(int(cid), []))
+
+
+def create_podcast_collection(name: str) -> dict:
+    c = _connect()
+    with _lock:
+        if c.execute("SELECT 1 FROM podcast_collections WHERE name=?", (str(name),)).fetchone():
+            raise ValueError("合集名已存在")
+        cur = c.execute(
+            "INSERT INTO podcast_collections(name, created_at) VALUES(?,?)",
+            (str(name), time.time()),
+        )
+        cid = int(cur.lastrowid)
+        c.commit()
+    return get_podcast_collection(cid) or {}
+
+
+def rename_podcast_collection(cid: int, name: str) -> "dict | None":
+    c = _connect()
+    with _lock:
+        if not c.execute("SELECT 1 FROM podcast_collections WHERE id=?", (int(cid),)).fetchone():
+            return None
+        if c.execute("SELECT 1 FROM podcast_collections WHERE name=? AND id<>?",
+                     (str(name), int(cid))).fetchone():
+            raise ValueError("合集名已存在")
+        c.execute("UPDATE podcast_collections SET name=? WHERE id=?", (str(name), int(cid)))
+        c.commit()
+    return get_podcast_collection(cid)
+
+
+def delete_podcast_collection(cid: int) -> bool:
+    c = _connect()
+    with _lock:
+        c.execute("DELETE FROM podcast_collection_items WHERE collection_id=?", (int(cid),))
+        cur = c.execute("DELETE FROM podcast_collections WHERE id=?", (int(cid),))
+        c.commit()
+    return bool(cur.rowcount)
+
+
+def add_podcast_to_collection(cid: int, pid: str) -> bool:
+    """幂等：已在合集里不报错也不重复插。合集 / 订阅不存在由调用方先判（404）。"""
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO podcast_collection_items(collection_id, podcast_id, added_at)"
+            " VALUES(?,?,?) ON CONFLICT(collection_id, podcast_id) DO NOTHING",
+            (int(cid), str(pid), time.time()),
+        )
+        c.commit()
+    return True
+
+
+def remove_podcast_from_collection(cid: int, pid: str) -> bool:
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "DELETE FROM podcast_collection_items WHERE collection_id=? AND podcast_id=?",
+            (int(cid), str(pid)),
+        )
+        c.commit()
+    return bool(cur.rowcount)
+
+
+# ---------------- 播客智能播放列表（第 186 期）----------------
+# kind='rules'：存单集轴的筛选规则（前端用 lib/episodeScope.ts 求值）；
+# kind='queue'：存队列快照（从「播放队列」保存，播放时按 id 回订阅取当前单集）。
+
+def _json_list(raw) -> list:
+    try:
+        out = json.loads(str(raw or "[]"))
+    except (TypeError, ValueError):
+        return []
+    return out if isinstance(out, list) else []
+
+
+def _podcast_playlist_out(row) -> dict:
+    return {
+        "id": int(row["id"]),
+        "name": str(row["name"] or ""),
+        "kind": str(row["kind"] or "rules"),
+        "rules": _json_list(row["rules"]),
+        "match": str(row["match"] or "all"),
+        "items": _json_list(row["items"]),
+        "created_at": float(row["created_at"] or 0),
+        "sort_order": int(row["sort_order"] or 0),
+    }
+
+
+def list_podcast_playlists() -> list:
+    rows = _connect().execute(
+        "SELECT * FROM podcast_playlists ORDER BY sort_order, created_at DESC, id DESC"
+    ).fetchall()
+    return [_podcast_playlist_out(r) for r in rows]
+
+
+def get_podcast_playlist(plid: int) -> "dict | None":
+    row = _connect().execute(
+        "SELECT * FROM podcast_playlists WHERE id=?", (int(plid),)
+    ).fetchone()
+    return _podcast_playlist_out(row) if row else None
+
+
+def create_podcast_playlist(name: str, *, kind="rules", rules=None,
+                            match="all", items=None) -> dict:
+    c = _connect()
+    with _lock:
+        if c.execute("SELECT 1 FROM podcast_playlists WHERE name=?", (str(name),)).fetchone():
+            raise ValueError("播放列表名已存在")
+        cur = c.execute(
+            "INSERT INTO podcast_playlists(name, kind, rules, \"match\", items, created_at)"
+            " VALUES(?,?,?,?,?,?)",
+            (str(name), str(kind), json.dumps(list(rules or []), ensure_ascii=False),
+             str(match), json.dumps(list(items or []), ensure_ascii=False), time.time()),
+        )
+        plid = int(cur.lastrowid)
+        c.commit()
+    return get_podcast_playlist(plid) or {}
+
+
+def update_podcast_playlist(plid: int, *, name: str, kind: str, rules=None,
+                            match: str, items=None) -> "dict | None":
+    c = _connect()
+    with _lock:
+        if not c.execute("SELECT 1 FROM podcast_playlists WHERE id=?", (int(plid),)).fetchone():
+            return None
+        if c.execute("SELECT 1 FROM podcast_playlists WHERE name=? AND id<>?",
+                     (str(name), int(plid))).fetchone():
+            raise ValueError("播放列表名已存在")
+        c.execute(
+            "UPDATE podcast_playlists SET name=?, kind=?, rules=?, \"match\"=?, items=?"
+            " WHERE id=?",
+            (str(name), str(kind),
+             json.dumps(list(rules or []), ensure_ascii=False), str(match),
+             json.dumps(list(items or []), ensure_ascii=False), int(plid)),
+        )
+        c.commit()
+    return get_podcast_playlist(plid)
+
+
+def delete_podcast_playlist(plid: int) -> bool:
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM podcast_playlists WHERE id=?", (int(plid),))
+        c.commit()
+    return bool(cur.rowcount)
+
+
+def list_all_podcast_episodes(limit: int = 2000) -> list:
+    """全部未软删订阅的单集（播放列表 / 智能范围的求值取源）。
+
+    不含本地路径与转录正文；描述保留（标题/简介搜索要用）。
+    """
+    rows = _connect().execute(
+        "SELECT e.id, e.podcast_id, p.title AS podcast_title, e.guid, e.title,"
+        " e.description, e.published_at, e.duration_sec, e.audio_url, e.audio_type,"
+        " e.episode_no, e.season_no, e.explicit, e.download_state, e.local_bytes,"
+        " e.position_sec, e.played_at, e.last_played_at"
+        " FROM podcast_episodes e JOIN podcasts p ON p.id=e.podcast_id AND p.deleted_at=0"
+        " WHERE e.deleted_at=0 ORDER BY e.published_at DESC, e.id LIMIT ?",
+        (max(1, min(int(limit or 2000), 5000)),),
+    ).fetchall()
+    return [{
+        "id": str(r["id"]),
+        "podcast_id": str(r["podcast_id"]),
+        "podcast_title": str(r["podcast_title"] or ""),
+        "guid": str(r["guid"] or ""),
+        "title": str(r["title"] or ""),
+        "description": str(r["description"] or ""),
+        "published_at": float(r["published_at"] or 0),
+        "duration_sec": int(r["duration_sec"] or 0),
+        "audio_url": str(r["audio_url"] or ""),
+        "audio_type": str(r["audio_type"] or ""),
+        "episode_no": int(r["episode_no"] or 0),
+        "season_no": int(r["season_no"] or 0),
+        "explicit": bool(r["explicit"]),
+        "download_state": str(r["download_state"] or ""),
+        "local_bytes": int(r["local_bytes"] or 0),
+        "has_local": str(r["download_state"] or "") == "downloaded",
+        "position_sec": float(r["position_sec"] or 0),
+        "played_at": float(r["played_at"] or 0),
+        "last_played_at": float(r["last_played_at"] or 0),
+    } for r in rows]
 
 
 def upsert_podcast_episodes(podcast_id: str, items: list) -> "tuple[int, int]":

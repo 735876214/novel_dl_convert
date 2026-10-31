@@ -3299,6 +3299,122 @@ def api_podcasts_continue(limit: int = Query(20, ge=1, le=100)):
     return {"items": items, "total": len(items)}
 
 
+# ---------------- 播客合集（第 185 期）----------------
+# 合集只装订阅（节目），不装单集、不装书；成员按软删过滤（`db._podcast_collection_members`）。
+
+@app.get("/api/podcast-collections")
+def api_podcast_collections():
+    items = db.list_podcast_collections()
+    return {"items": items, "total": len(items)}
+
+
+@app.post("/api/podcast-collections")
+def api_podcast_collection_create(payload: dict = Body(...)):
+    try:
+        return db.create_podcast_collection(podcasts.collection_name(payload.get("name")))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.put("/api/podcast-collections/{cid}")
+def api_podcast_collection_rename(cid: int, payload: dict = Body(...)):
+    try:
+        out = db.rename_podcast_collection(cid, podcasts.collection_name(payload.get("name")))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    if not out:
+        raise HTTPException(404, "合集不存在")
+    return out
+
+
+@app.delete("/api/podcast-collections/{cid}")
+def api_podcast_collection_delete(cid: int):
+    if not db.delete_podcast_collection(cid):
+        raise HTTPException(404, "合集不存在")
+    return {"ok": True, "removed": cid}
+
+
+@app.post("/api/podcast-collections/{cid}/items")
+def api_podcast_collection_add(cid: int, payload: dict = Body(...)):
+    """把订阅加入合集（幂等：重复加入不报错）。"""
+    if not db.get_podcast_collection(cid):
+        raise HTTPException(404, "合集不存在")
+    pid = str(payload.get("podcast_id") or "")
+    if not db.get_podcast(pid):
+        raise HTTPException(404, "订阅不存在")
+    db.add_podcast_to_collection(cid, pid)
+    return db.get_podcast_collection(cid) or {}
+
+
+@app.delete("/api/podcast-collections/{cid}/items/{pid}")
+def api_podcast_collection_remove(cid: int, pid: str):
+    if not db.get_podcast_collection(cid):
+        raise HTTPException(404, "合集不存在")
+    db.remove_podcast_from_collection(cid, pid)
+    return db.get_podcast_collection(cid) or {}
+
+
+# ---------------- 播客智能播放列表（第 186 期）----------------
+# 单集轴的保存筛选：kind=rules 存规则（前端求值），kind=queue 存队列快照。
+
+@app.get("/api/podcasts/episodes")
+def api_podcast_episodes_all(limit: int = Query(2000, ge=1, le=5000)):
+    """全部订阅的单集（播放列表 / 智能范围的求值取源；不含转录正文）。"""
+    items = db.list_all_podcast_episodes(limit)
+    return {"items": items, "total": len(items)}
+
+
+@app.get("/api/podcast-playlists")
+def api_podcast_playlists():
+    items = db.list_podcast_playlists()
+    return {"items": items, "total": len(items)}
+
+
+def _playlist_payload(payload: dict) -> dict:
+    kind = str(payload.get("kind") or "rules")
+    if kind not in ("rules", "queue"):
+        raise ValueError("kind 只能是 rules 或 queue")
+    name = podcasts.playlist_name(payload.get("name"))
+    match = podcasts.playlist_match(payload.get("match"))
+    rules = podcasts.playlist_rules(payload.get("rules"))
+    items = podcasts.playlist_items(payload.get("items"))
+    if kind == "queue" and not items:
+        raise ValueError("队列是空的，没有可保存的单集")
+    if kind == "rules" and not rules:
+        raise ValueError("至少加一条规则（空规则会命中全部单集）")
+    return {"name": name, "kind": kind, "match": match, "rules": rules, "items": items}
+
+
+@app.post("/api/podcast-playlists")
+def api_podcast_playlist_create(payload: dict = Body(...)):
+    try:
+        data = _playlist_payload(payload)
+        return db.create_podcast_playlist(**data)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.put("/api/podcast-playlists/{plid}")
+def api_podcast_playlist_update(plid: int, payload: dict = Body(...)):
+    try:
+        data = _playlist_payload(payload)
+        out = db.update_podcast_playlist(plid, **data)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    if not out:
+        raise HTTPException(404, "播放列表不存在")
+    return out
+
+
+@app.delete("/api/podcast-playlists/{plid}")
+def api_podcast_playlist_delete(plid: int):
+    if not db.delete_podcast_playlist(plid):
+        raise HTTPException(404, "播放列表不存在")
+    return {"ok": True, "removed": plid}
+
+
+
+
 @app.post("/api/podcasts/{pid}/refresh")
 def api_podcast_refresh(pid: str):
     """重新抓取：新单集 upsert，旧单集保留（失败时什么都不改）。"""

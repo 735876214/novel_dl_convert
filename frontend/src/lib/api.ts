@@ -13,6 +13,7 @@ import type { PrefsPayload } from './prefsPayload'
 import { localDate } from './format'
 import type { ImportResult } from './sourceImport'
 import type { SmartScope, ScopeRule } from './smartScope'
+import type { EpisodeRule } from './episodeScope'
 
 export interface HealthInfo {
   status: string
@@ -2670,6 +2671,60 @@ export interface PodcastBookmark {
   created_at: number
 }
 
+/** 播客合集（第 185 期）：只装订阅（节目），成员按未软删的订阅过滤。 */
+export interface PodcastCollection {
+  id: number
+  name: string
+  created_at: number
+  sort_order: number
+  podcast_ids: string[]
+  count: number
+}
+
+/** 全部订阅的单集（第 186 期）：播放列表 / 智能范围的求值取源。 */
+export interface PodcastEpisodeLite {
+  id: string
+  podcast_id: string
+  podcast_title: string
+  guid: string
+  title: string
+  description: string
+  published_at: number
+  duration_sec: number
+  audio_url: string
+  audio_type: string
+  episode_no: number
+  season_no: number
+  explicit: boolean
+  download_state: '' | 'downloading' | 'downloaded' | 'failed'
+  local_bytes: number
+  has_local: boolean
+  position_sec: number
+  played_at: number
+  last_played_at: number
+}
+
+/** 队列快照条目（播放列表 kind=queue 用）。 */
+export interface PodcastQueueSnapshot {
+  episode_id: string
+  title: string
+  podcast_id: string
+  podcast_title: string
+}
+
+/** 播客智能播放列表（第 186 期）：规则筛选或队列快照。 */
+export interface PodcastPlaylist {
+  id: number
+  name: string
+  kind: 'rules' | 'queue'
+  rules: EpisodeRule[]
+  match: 'all' | 'any'
+  items: PodcastQueueSnapshot[]
+  created_at: number
+  sort_order: number
+}
+
+
 /** 播客订阅（第 173 期）—— 独立的订阅子系统，不属于任何「书库」。 */
 export interface Podcast {
   id: string
@@ -5156,6 +5211,77 @@ export const api = {
     request<{ items: PodcastContinueItem[]; total: number }>(
       `/api/podcasts/continue?limit=${limit}`,
     ),
+
+  /** 播客合集（第 185 期）：只装订阅；成员随订阅软删自动从列表消失。 */
+  podcastCollections: () =>
+    request<{ items: PodcastCollection[]; total: number }>('/api/podcast-collections'),
+
+  createPodcastCollection: (name: string) =>
+    request<PodcastCollection>('/api/podcast-collections', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
+
+  renamePodcastCollection: (cid: number, name: string) =>
+    request<PodcastCollection>(`/api/podcast-collections/${cid}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    }),
+
+  deletePodcastCollection: (cid: number) =>
+    request<{ ok: boolean; removed: number }>(`/api/podcast-collections/${cid}`, {
+      method: 'DELETE',
+    }),
+
+  addPodcastToCollection: (cid: number, podcastId: string) =>
+    request<PodcastCollection>(`/api/podcast-collections/${cid}/items`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ podcast_id: podcastId }),
+    }),
+
+  removePodcastFromCollection: (cid: number, podcastId: string) =>
+    request<PodcastCollection>(
+      `/api/podcast-collections/${cid}/items/${encodeURIComponent(podcastId)}`,
+      { method: 'DELETE' },
+    ),
+
+  /** 智能播放列表（第 186 期）：取源是全部订阅的单集 lite。 */
+  podcastEpisodesAll: (limit = 2000) =>
+    request<{ items: PodcastEpisodeLite[]; total: number }>(
+      `/api/podcasts/episodes?limit=${limit}`,
+    ),
+
+  podcastPlaylists: () =>
+    request<{ items: PodcastPlaylist[]; total: number }>('/api/podcast-playlists'),
+
+  createPodcastPlaylist: (payload: {
+    name: string
+    kind: 'rules' | 'queue'
+    match?: 'all' | 'any'
+    rules?: EpisodeRule[]
+    items?: PodcastQueueSnapshot[]
+  }) =>
+    request<PodcastPlaylist>('/api/podcast-playlists', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  updatePodcastPlaylist: (plid: number, payload: {
+    name: string
+    kind: 'rules' | 'queue'
+    match?: 'all' | 'any'
+    rules?: EpisodeRule[]
+    items?: PodcastQueueSnapshot[]
+  }) =>
+    request<PodcastPlaylist>(`/api/podcast-playlists/${plid}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
+
+  deletePodcastPlaylist: (plid: number) =>
+    request<{ ok: boolean; removed: number }>(`/api/podcast-playlists/${plid}`, {
+      method: 'DELETE',
+    }),
 
   podcastTranscript: (eid: string) =>
     request<{ available: boolean; kind: string; text: string; reason?: string }>(

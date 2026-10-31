@@ -5,7 +5,18 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
-import { api, type Podcast, type PodcastBookmark, type PodcastContinueItem, type PodcastEpisode } from '@/lib/api'
+import { api, type Podcast, type PodcastBookmark, type PodcastCollection, type PodcastContinueItem, type PodcastEpisode, type PodcastEpisodeLite, type PodcastPlaylist } from '@/lib/api'
+import {
+  BUILTIN_PLAYLISTS,
+  EPISODE_FIELD_LABELS,
+  EPISODE_FIELD_OPS,
+  EPISODE_OP_LABELS,
+  episodeRuleText,
+  evaluateEpisodeScope,
+  type EpisodeRule,
+  type EpisodeScopeField,
+  type EpisodeScopeOp,
+} from '@/lib/episodeScope'
 import { usePodcastQueueStore } from '@/stores/podcastQueue'
 import { useUiStore } from '@/stores/ui'
 
@@ -37,12 +48,332 @@ const contItems = ref<PodcastContinueItem[]>([])
 /** 单集搜索词（第 183 期）：只过滤当前订阅的单集列表 */
 const q = ref('')
 
+// ---------------- 播客合集（第 185 期） ----------------
+// 只装订阅（节目），不装单集 / 不装书。成员按未软删的订阅过滤：移除订阅后计数归零，
+// 重订阅同一 feed 复活原行，合集里的位置也跟着回来。
+const colls = ref<PodcastCollection[]>([])
+const activeColl = ref<number | null>(null)
+const collName = ref('')
+const collBusy = ref(false)
+
+const activeCollection = computed(
+  () => colls.value.find((c) => c.id === activeColl.value) || null,
+)
+const visiblePods = computed(() => {
+  const c = activeCollection.value
+  if (!c) return pods.value
+  const ids = new Set(c.podcast_ids)
+  return pods.value.filter((p) => ids.has(p.id))
+})
+
+async function createColl(): Promise<void> {
+  const name = collName.value.trim()
+  if (!name || collBusy.value) return
+  collBusy.value = true
+  error.value = ''
+  try {
+    const c = await api.createPodcastCollection(name)
+    colls.value = [c, ...colls.value]
+    activeColl.value = c.id
+    collName.value = c.name
+    ui.toast(`已新建合集「${c.name}」`)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '新建合集失败'
+  } finally {
+    collBusy.value = false
+  }
+}
+
+async function renameColl(): Promise<void> {
+  const c = activeCollection.value
+  const name = collName.value.trim()
+  if (!c || !name || collBusy.value) return
+  collBusy.value = true
+  error.value = ''
+  try {
+    const out = await api.renamePodcastCollection(c.id, name)
+    colls.value = colls.value.map((x) => (x.id === out.id ? out : x))
+    ui.toast(`合集已改名为「${out.name}」`)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '重命名失败'
+  } finally {
+    collBusy.value = false
+  }
+}
+
+async function deleteColl(): Promise<void> {
+  const c = activeCollection.value
+  if (!c || collBusy.value) return
+  collBusy.value = true
+  error.value = ''
+  try {
+    await api.deletePodcastCollection(c.id)
+    colls.value = colls.value.filter((x) => x.id !== c.id)
+    activeColl.value = null
+    collName.value = ''
+    ui.toast(`已删除合集「${c.name}」`)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '删除合集失败'
+  } finally {
+    collBusy.value = false
+  }
+}
+
+function selectColl(c: PodcastCollection | null): void {
+  activeColl.value = c ? c.id : null
+  collName.value = c ? c.name : ''
+}
+
+function replaceColl(out: PodcastCollection): void {
+  colls.value = colls.value.map((x) => (x.id === out.id ? out : x))
+}
+
+async function addToColl(p: Podcast, ev: Event): Promise<void> {
+  const sel = ev.target as HTMLSelectElement
+  const cid = Number(sel.value)
+  sel.value = ''
+  if (!cid || collBusy.value) return
+  collBusy.value = true
+  error.value = ''
+  try {
+    replaceColl(await api.addPodcastToCollection(cid, p.id))
+    ui.toast(`已把「${p.title}」加入合集`)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '加入合集失败'
+  } finally {
+    collBusy.value = false
+  }
+}
+
+async function removeFromActive(p: Podcast): Promise<void> {
+  const c = activeCollection.value
+  if (!c || collBusy.value) return
+  collBusy.value = true
+  error.value = ''
+  try {
+    replaceColl(await api.removePodcastFromCollection(c.id, p.id))
+    ui.toast(`已把「${p.title}」移出合集`)
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : '移出合集失败'
+  } finally {
+    collBusy.value = false
+  }
+}
+
+// ---------------- 智能播放列表（第 186 期） ----------------
+// 规则存服务端（podcast_playlists），求值在 lib/episodeScope.ts；取源是全部订阅的单集 lite。
+// 内置四条（快速听 / 继续收听 / 已下载 / 本周更新）不落库，与保存的规则走同一条求值路径。
+const allEps = ref<PodcastEpisodeLite[]>([])
+let allEpsLoaded = false
+const playlists = ref<PodcastPlaylist[]>([])
+const activePl = ref<number | null>(null)
+const activeBuiltin = ref('')
+const plRows = ref<{ id: string; title: string; podcast_id: string; podcast_title: string; duration_sec: number; status: string }[]>([])
+const plName = ref('')
+const plMatch = ref<'all' | 'any'>('all')
+const draftRules = ref<EpisodeRule[]>([])
+const ruleField = ref<EpisodeScopeField>('status')
+const ruleOp = ref<EpisodeScopeOp>('equals')
+const ruleValue = ref('')
+const plBusy = ref(false)
+const plMsg = ref('')
+
+const ruleOps = computed(() => EPISODE_FIELD_OPS[ruleField.value])
+type BuiltinPl = (typeof BUILTIN_PLAYLISTS)[number]
+
+function setRuleField(): void {
+  ruleOp.value = EPISODE_FIELD_OPS[ruleField.value][0]
+}
+
+function resetDraft(): void {
+  draftRules.value = []
+  ruleValue.value = ''
+  plMsg.value = ''
+}
+
+function addDraftRule(): void {
+  const value = ruleValue.value.trim()
+  if (!value) {
+    plMsg.value = '先填规则值'
+    return
+  }
+  draftRules.value = [...draftRules.value, { field: ruleField.value, op: ruleOp.value, value }]
+  ruleValue.value = ''
+  plMsg.value = ''
+}
+
+function removeDraftRule(i: number): void {
+  draftRules.value = draftRules.value.filter((_, idx) => idx !== i)
+}
+
+async function ensureAllEps(): Promise<boolean> {
+  if (allEpsLoaded) return true
+  try {
+    allEps.value = (await api.podcastEpisodesAll()).items
+    allEpsLoaded = true
+    return true
+  } catch (e) {
+    plMsg.value = e instanceof Error ? e.message : '读取单集失败'
+    return false
+  }
+}
+
+function rowsOf(eps: PodcastEpisodeLite[]) {
+  return eps.map((e) => ({
+    id: e.id,
+    title: e.title,
+    podcast_id: e.podcast_id,
+    podcast_title: e.podcast_title,
+    duration_sec: e.duration_sec,
+    status: Number(e.played_at ?? 0) > 0 ? '已播' : Number(e.position_sec ?? 0) > 0 ? '进行中' : '未播',
+  }))
+}
+
+async function applyBuiltin(b: BuiltinPl): Promise<void> {
+  activePl.value = null
+  activeBuiltin.value = b.key
+  plMsg.value = ''
+  if (!(await ensureAllEps())) return
+  plRows.value = rowsOf(evaluateEpisodeScope(allEps.value, b.rules, b.match))
+}
+
+async function applySaved(p: PodcastPlaylist): Promise<void> {
+  activePl.value = p.id
+  activeBuiltin.value = ''
+  plMsg.value = ''
+  if (p.kind === 'queue') {
+    plRows.value = p.items.map((it) => ({
+      id: it.episode_id,
+      title: it.title,
+      podcast_id: it.podcast_id,
+      podcast_title: it.podcast_title,
+      duration_sec: 0,
+      status: '',
+    }))
+    return
+  }
+  if (!(await ensureAllEps())) return
+  plRows.value = rowsOf(evaluateEpisodeScope(allEps.value, p.rules, p.match))
+}
+
+async function savePlaylist(): Promise<void> {
+  const name = plName.value.trim()
+  if (!name) {
+    plMsg.value = '先填播放列表名'
+    return
+  }
+  if (!draftRules.value.length) {
+    plMsg.value = '至少加一条规则（空规则会命中全部单集）'
+    return
+  }
+  plBusy.value = true
+  plMsg.value = ''
+  try {
+    const p = await api.createPodcastPlaylist({
+      name, kind: 'rules', match: plMatch.value, rules: draftRules.value,
+    })
+    playlists.value = [p, ...playlists.value]
+    resetDraft()
+    await applySaved(p)
+    ui.toast(`已保存播放列表「${p.name}」`)
+  } catch (e) {
+    plMsg.value = e instanceof Error ? e.message : '保存播放列表失败'
+  } finally {
+    plBusy.value = false
+  }
+}
+
+async function saveFromQueue(): Promise<void> {
+  const name = plName.value.trim()
+  if (!name) {
+    plMsg.value = '先填播放列表名'
+    return
+  }
+  if (!queue.items.length) {
+    plMsg.value = '播放队列是空的'
+    return
+  }
+  plBusy.value = true
+  plMsg.value = ''
+  try {
+    const p = await api.createPodcastPlaylist({
+      name, kind: 'queue',
+      items: queue.items.map((it) => ({
+        episode_id: it.episodeId,
+        title: it.title,
+        podcast_id: it.podcastId,
+        podcast_title: it.podcastTitle,
+      })),
+    })
+    playlists.value = [p, ...playlists.value]
+    resetDraft()
+    await applySaved(p)
+    ui.toast(`已把队列保存为「${p.name}」`)
+  } catch (e) {
+    plMsg.value = e instanceof Error ? e.message : '保存队列失败'
+  } finally {
+    plBusy.value = false
+  }
+}
+
+async function deletePlaylist(): Promise<void> {
+  const p = playlists.value.find((x) => x.id === activePl.value)
+  if (!p || plBusy.value) return
+  plBusy.value = true
+  try {
+    await api.deletePodcastPlaylist(p.id)
+    playlists.value = playlists.value.filter((x) => x.id !== p.id)
+    activePl.value = null
+    plRows.value = []
+    ui.toast(`已删除播放列表「${p.name}」`)
+  } catch (e) {
+    plMsg.value = e instanceof Error ? e.message : '删除播放列表失败'
+  } finally {
+    plBusy.value = false
+  }
+}
+
+const plTitle = computed(() => {
+  if (activeBuiltin.value) {
+    return BUILTIN_PLAYLISTS.find((b) => b.key === activeBuiltin.value)?.name || ''
+  }
+  return playlists.value.find((p) => p.id === activePl.value)?.name || ''
+})
+
+async function playPlRow(row: { id: string; podcast_id: string }): Promise<void> {
+  await playQueueItem({ episodeId: row.id, podcastId: row.podcast_id })
+}
+
+function addAllPlToQueue(): void {
+  let added = 0
+  for (const row of plRows.value) {
+    if (queue.enqueue({
+      episodeId: row.id,
+      podcastId: row.podcast_id,
+      title: row.title,
+      podcastTitle: row.podcast_title,
+    })) added += 1
+  }
+  ui.toast(added ? `已加入队列 ${added} 集` : '这些单集已在队列里')
+}
+
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
     pods.value = (await api.podcasts()).items
     contItems.value = (await api.podcastContinue(20).catch(() => ({ items: [] }))).items
+    colls.value = (await api.podcastCollections().catch(() => ({ items: [] }))).items
+    playlists.value = (await api.podcastPlaylists().catch(() => ({ items: [] }))).items
+    allEpsLoaded = false
+    if (activeColl.value && !colls.value.some((c) => c.id === activeColl.value)) {
+      activeColl.value = null
+      collName.value = ''
+    }
+    if (activePl.value && !playlists.value.some((p) => p.id === activePl.value)) {
+      activePl.value = null
+      plRows.value = []
+    }
     if (selected.value && !pods.value.some((p) => p.id === selected.value)) {
       selected.value = ''
       episodes.value = []
@@ -576,6 +907,158 @@ function fmtDate(ts: number): string {
       <p v-if="error" class="mt-1.5 text-[11.5px] text-destructive">{{ error }}</p>
     </Card>
 
+    <!-- 播客合集（第 185 期）：只装订阅（节目），计数按未软删的订阅算 -->
+    <Card>
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-[11.5px] font-medium text-muted-foreground">合集</span>
+        <button
+          v-for="c in colls"
+          :key="c.id"
+          type="button"
+          class="cursor-pointer rounded-full border px-2 py-0.5 text-[11.5px]"
+          :class="c.id === activeColl
+            ? 'border-primary bg-primary/10 text-primary'
+            : 'border-border text-muted-foreground hover:text-foreground'"
+          @click="selectColl(c)"
+        >{{ c.name }}（{{ c.count }}）</button>
+        <button
+          v-if="activeCollection"
+          type="button"
+          class="cursor-pointer rounded-full border border-border px-2 py-0.5 text-[11.5px] text-muted-foreground hover:text-foreground"
+          @click="selectColl(null)"
+        >全部订阅</button>
+        <div class="ml-auto flex flex-wrap items-center gap-1">
+          <input
+            v-model="collName"
+            aria-label="合集名"
+            placeholder="合集名"
+            class="h-7 w-32 rounded-md border border-border bg-card px-1.5 text-[11.5px] text-foreground outline-none focus:border-ring"
+            :disabled="collBusy"
+            @keyup.enter="activeCollection ? renameColl() : createColl()"
+          >
+          <Button
+            size="sm"
+            variant="ghost"
+            :disabled="collBusy || !collName.trim()"
+            @click="activeCollection ? renameColl() : createColl()"
+          >{{ activeCollection ? '重命名合集' : '新建合集' }}</Button>
+          <Button v-if="activeCollection" size="sm" variant="ghost" :disabled="collBusy" @click="deleteColl">
+            删除合集
+          </Button>
+        </div>
+      </div>
+      <p class="mt-1.5 text-[11px] text-muted-foreground">
+        合集只装订阅（节目）；移除订阅后计数归零，重订阅同一 feed 会恢复合集里的位置。
+      </p>
+    </Card>
+
+    <!-- 智能播放列表（第 186 期）：规则存服务端，求值在前端 lib/episodeScope.ts -->
+    <Card>
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-[11.5px] font-medium text-muted-foreground">智能播放列表</span>
+        <button
+          v-for="b in BUILTIN_PLAYLISTS"
+          :key="b.key"
+          type="button"
+          class="cursor-pointer rounded-full border px-2 py-0.5 text-[11.5px]"
+          :class="activeBuiltin === b.key
+            ? 'border-primary bg-primary/10 text-primary'
+            : 'border-border text-muted-foreground hover:text-foreground'"
+          @click="applyBuiltin(b)"
+        >{{ b.name }}</button>
+        <button
+          v-for="p in playlists"
+          :key="p.id"
+          type="button"
+          class="cursor-pointer rounded-full border px-2 py-0.5 text-[11.5px]"
+          :class="p.id === activePl
+            ? 'border-primary bg-primary/10 text-primary'
+            : 'border-border text-muted-foreground hover:text-foreground'"
+          @click="applySaved(p)"
+        >{{ p.name }}（{{ p.kind === 'queue' ? p.items.length + ' 集' : '规则' }}）</button>
+        <Button v-if="activePl" size="sm" variant="ghost" class="ml-auto" :disabled="plBusy" @click="deletePlaylist">
+          删除播放列表
+        </Button>
+      </div>
+      <p class="mt-1.5 text-[11px] text-muted-foreground">
+        内置规则与保存的规则走同一条求值路径；「从队列保存」存队列快照（不是规则）。
+      </p>
+      <div class="mt-2 flex flex-wrap items-end gap-2">
+        <label class="flex flex-col gap-0.5">
+          <span class="text-[10.5px] text-muted-foreground">名称</span>
+          <input
+            v-model="plName"
+            aria-label="播放列表名"
+            class="h-7 w-32 rounded-md border border-border bg-card px-1.5 text-[11.5px] text-foreground outline-none focus:border-ring"
+          >
+        </label>
+        <label class="flex flex-col gap-0.5">
+          <span class="text-[10.5px] text-muted-foreground">匹配</span>
+          <select v-model="plMatch" aria-label="播放列表匹配" class="h-7 rounded-md border border-border bg-card px-1 text-[11.5px] text-foreground outline-none focus:border-ring">
+            <option value="all">全部满足</option>
+            <option value="any">任一满足</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-0.5">
+          <span class="text-[10.5px] text-muted-foreground">字段</span>
+          <select v-model="ruleField" aria-label="规则字段" class="h-7 rounded-md border border-border bg-card px-1 text-[11.5px] text-foreground outline-none focus:border-ring" @change="setRuleField">
+            <option v-for="(label, key) in EPISODE_FIELD_LABELS" :key="key" :value="key">{{ label }}</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-0.5">
+          <span class="text-[10.5px] text-muted-foreground">操作</span>
+          <select v-model="ruleOp" aria-label="规则操作" class="h-7 rounded-md border border-border bg-card px-1 text-[11.5px] text-foreground outline-none focus:border-ring">
+            <option v-for="op in ruleOps" :key="op" :value="op">{{ EPISODE_OP_LABELS[op] }}</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-0.5">
+          <span class="text-[10.5px] text-muted-foreground">值</span>
+          <input
+            v-model="ruleValue"
+            aria-label="规则值"
+            placeholder="如 unplayed / 30 / yes"
+            class="h-7 w-32 rounded-md border border-border bg-card px-1.5 text-[11.5px] text-foreground outline-none focus:border-ring"
+            @keyup.enter="addDraftRule"
+          >
+        </label>
+        <Button size="sm" variant="ghost" @click="addDraftRule">加规则</Button>
+        <Button size="sm" variant="ghost" :disabled="plBusy" @click="savePlaylist">保存播放列表</Button>
+        <Button size="sm" variant="ghost" :disabled="plBusy || !queue.items.length" @click="saveFromQueue">
+          从队列保存
+        </Button>
+      </div>
+      <ul v-if="draftRules.length" class="mt-1.5 space-y-0.5">
+        <li v-for="(r, i) in draftRules" :key="i" class="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+          <span class="flex-1">{{ episodeRuleText(r) }}</span>
+          <button type="button" class="cursor-pointer text-destructive hover:underline" @click="removeDraftRule(i)">移除</button>
+        </li>
+      </ul>
+      <p v-if="plMsg" class="mt-1.5 text-[11.5px] text-destructive">{{ plMsg }}</p>
+
+      <div v-if="plTitle" class="mt-2 rounded-md border border-border p-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-[11.5px] font-medium text-foreground">{{ plTitle }}（{{ plRows.length }} 集）</span>
+          <Button size="sm" variant="ghost" class="ml-auto" :disabled="!plRows.length" @click="addAllPlToQueue">
+            全部加入队列
+          </Button>
+        </div>
+        <p v-if="!plRows.length" class="mt-1 text-[11.5px] text-muted-foreground">没有命中的单集。</p>
+        <ul v-else class="mt-1 divide-y divide-border">
+          <li v-for="r in plRows" :key="r.id" class="flex flex-wrap items-center gap-2 py-1.5 text-[11.5px]">
+            <button
+              type="button"
+              class="min-w-0 flex-1 cursor-pointer truncate text-left text-foreground hover:text-primary"
+              @click="playPlRow(r)"
+            >{{ r.title }}</button>
+            <span class="shrink-0 text-[11px] text-muted-foreground">{{ r.podcast_title }}</span>
+            <span v-if="r.duration_sec" class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ fmtDuration(r.duration_sec) }}</span>
+            <span v-if="r.status" class="shrink-0 text-[11px] text-muted-foreground">{{ r.status }}</span>
+            <Button size="sm" variant="ghost" @click="playPlRow(r)">播放</Button>
+          </li>
+        </ul>
+      </div>
+    </Card>
+
     <!-- 播客版「继续收听」（第 183 期）：跨订阅，按最近播放倒序 -->
     <Card v-if="contItems.length">
       <h3 class="mb-2 text-[13px] font-semibold text-foreground">继续收听</h3>
@@ -608,7 +1091,7 @@ function fmtDate(ts: number): string {
       <Card padding="none">
         <ul class="divide-y divide-border">
           <li
-            v-for="p in pods"
+            v-for="p in visiblePods"
             :key="p.id"
             class="flex flex-wrap items-center gap-3 px-4 py-3"
             :class="p.id === selected ? 'bg-muted/40' : ''"
@@ -638,7 +1121,20 @@ function fmtDate(ts: number): string {
                 > · 失败 {{ p.fail_count }} 次</span>
               </div>
             </div>
-            <div class="flex shrink-0 gap-1">
+            <div class="flex shrink-0 flex-wrap items-center gap-1">
+              <select
+                v-if="colls.length"
+                :aria-label="`加入合集：${p.title}`"
+                class="h-7 rounded-md border border-border bg-card px-1 text-[11px] text-foreground outline-none focus:border-ring"
+                :disabled="collBusy"
+                @change="addToColl(p, $event)"
+              >
+                <option value="">加入合集…</option>
+                <option v-for="c in colls" :key="c.id" :value="c.id">{{ c.name }}</option>
+              </select>
+              <Button v-if="activeCollection" size="sm" variant="ghost" :disabled="collBusy" @click="removeFromActive(p)">
+                移出合集
+              </Button>
               <Button size="sm" variant="ghost" :disabled="!!busy" @click="open(p.id)">
                 {{ p.id === selected ? '收起' : '单集' }}
               </Button>
@@ -649,6 +1145,9 @@ function fmtDate(ts: number): string {
             </div>
           </li>
         </ul>
+        <p v-if="!visiblePods.length" class="px-4 py-6 text-center text-[12px] text-muted-foreground">
+          这个合集还没有节目 —— 用每行的「加入合集…」把订阅加进来。
+        </p>
       </Card>
 
       <Card v-if="selectedPodcast">

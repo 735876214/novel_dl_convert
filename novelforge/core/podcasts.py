@@ -37,6 +37,109 @@ from . import db, fileops
 TIMEOUT = 20.0
 MAX_BYTES = 8 * 1024 * 1024
 MAX_DESCRIPTION = 6000
+#: 合集名上限（第 185 期）：超长名字只会把侧栏撑坏，截断会让两个名字撞成同一个。
+COLLECTION_NAME_MAX = 80
+
+
+def collection_name(raw) -> str:
+    """合集名的唯一规整口（创建与改名共用）。空名拒绝，首尾空白不计。"""
+    name = str(raw or "").strip()
+    if not name:
+        raise ValueError("合集名不能为空")
+    if len(name) > COLLECTION_NAME_MAX:
+        raise ValueError(f"合集名最多 {COLLECTION_NAME_MAX} 个字符")
+    return name
+
+
+# ---------------- 智能播放列表（第 186 期）----------------
+# 单集轴的规则（与书级 smart_scopes 的语义同构：空值恒真、all=且 / any=或），
+# 但字段集不同 —— 单集没有作者/系列，只有时长 / 发布天数 / 播放状态 / 下载状态。
+PLAYLIST_NAME_MAX = 80
+PLAYLIST_FIELDS = {
+    "title": ("contains", "not_contains", "equals"),
+    "podcast": ("contains", "not_contains", "equals"),
+    "status": ("equals",),
+    "duration": ("at_least", "at_most"),
+    "published": ("at_least", "at_most"),
+    "downloaded": ("equals",),
+    "explicit": ("equals",),
+}
+PLAYLIST_MAX_ITEMS = 200
+
+
+def playlist_name(raw) -> str:
+    name = str(raw or "").strip()
+    if not name:
+        raise ValueError("播放列表名不能为空")
+    if len(name) > PLAYLIST_NAME_MAX:
+        raise ValueError(f"播放列表名最多 {PLAYLIST_NAME_MAX} 个字符")
+    return name
+
+
+def playlist_match(raw) -> str:
+    match = str(raw or "all")
+    if match not in ("all", "any"):
+        raise ValueError("match 只能是 all 或 any")
+    return match
+
+
+def playlist_rules(raw) -> list:
+    """规整并校验规则；范围外的字段 / 操作 / 取值一律 400（不静默丢弃）。"""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("rules 必须是数组")
+    out = []
+    for r in raw:
+        if not isinstance(r, dict):
+            raise ValueError("每条规则必须是对象")
+        field = str(r.get("field") or "")
+        op = str(r.get("op") or "")
+        value = str(r.get("value") or "").strip()
+        if field not in PLAYLIST_FIELDS:
+            raise ValueError(f"未知字段：{field}")
+        if op not in PLAYLIST_FIELDS[field]:
+            raise ValueError(f"字段 {field} 不支持操作 {op}")
+        if len(value) > 200:
+            raise ValueError("规则值最多 200 个字符")
+        if field in ("duration", "published"):
+            if value:
+                try:
+                    n = float(value)
+                except ValueError:
+                    raise ValueError(f"{field} 的规则值必须是数字") from None
+                if n < 0:
+                    raise ValueError(f"{field} 的规则值不能为负")
+        elif field == "status" and value and value not in ("unplayed", "playing", "played"):
+            raise ValueError("status 只能是 unplayed / playing / played")
+        elif field in ("downloaded", "explicit") and value and value not in ("yes", "no"):
+            raise ValueError(f"{field} 只能是 yes / no")
+        out.append({"field": field, "op": op, "value": value})
+    return out
+
+
+def playlist_items(raw) -> list:
+    """队列快照：只留播放需要的四个字段，最多 200 条。"""
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("items 必须是数组")
+    out = []
+    for it in raw[:PLAYLIST_MAX_ITEMS]:
+        if not isinstance(it, dict):
+            continue
+        eid = str(it.get("episode_id") or "").strip()
+        if not eid:
+            continue
+        out.append({
+            "episode_id": eid,
+            "title": str(it.get("title") or "")[:300],
+            "podcast_id": str(it.get("podcast_id") or ""),
+            "podcast_title": str(it.get("podcast_title") or "")[:300],
+        })
+    return out
+
+
 
 _HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

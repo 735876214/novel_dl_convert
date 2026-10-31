@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { api, type PodcastContinueItem, type PodcastEpisode } from '@/lib/api'
+import { api, type PodcastContinueItem, type PodcastEpisode, type PodcastEpisodeLite } from '@/lib/api'
 import PodcastsView from '@/views/PodcastsView.vue'
 
 /**
@@ -34,6 +34,17 @@ vi.mock('@/lib/api', () => ({
     setPodcastAuto: vi.fn(),
     podcastTranscript: vi.fn(),
     podcastContinue: vi.fn(),
+    podcastCollections: vi.fn(),
+    createPodcastCollection: vi.fn(),
+    renamePodcastCollection: vi.fn(),
+    deletePodcastCollection: vi.fn(),
+    addPodcastToCollection: vi.fn(),
+    removePodcastFromCollection: vi.fn(),
+    podcastEpisodesAll: vi.fn(),
+    podcastPlaylists: vi.fn(),
+    createPodcastPlaylist: vi.fn(),
+    updatePodcastPlaylist: vi.fn(),
+    deletePodcastPlaylist: vi.fn(),
   },
 }))
 
@@ -57,6 +68,17 @@ const m = {
   autoSet: vi.mocked(api.setPodcastAuto),
   tr: vi.mocked(api.podcastTranscript),
   cont: vi.mocked(api.podcastContinue),
+  colls: vi.mocked(api.podcastCollections),
+  newColl: vi.mocked(api.createPodcastCollection),
+  renameColl: vi.mocked(api.renamePodcastCollection),
+  delColl: vi.mocked(api.deletePodcastCollection),
+  addColl: vi.mocked(api.addPodcastToCollection),
+  remColl: vi.mocked(api.removePodcastFromCollection),
+  allEps: vi.mocked(api.podcastEpisodesAll),
+  pls: vi.mocked(api.podcastPlaylists),
+  newPl: vi.mocked(api.createPodcastPlaylist),
+  editPl: vi.mocked(api.updatePodcastPlaylist),
+  delPl: vi.mocked(api.deletePodcastPlaylist),
 }
 
 const POD = {
@@ -75,6 +97,13 @@ const EP: PodcastEpisode = {
   position_sec: 0, played_at: 0, has_transcript: false, transcript_type: '', last_played_at: 0,
 }
 
+const LITE: PodcastEpisodeLite = {
+  id: 'e1', podcast_id: 'p1', podcast_title: '测试播客', guid: 'g1', title: '第 1 集',
+  description: '简介', published_at: 1700000000, duration_sec: 1200, audio_url: '',
+  audio_type: '', episode_no: 1, season_no: 0, explicit: false, download_state: '',
+  local_bytes: 0, has_local: false, position_sec: 0, played_at: 0, last_played_at: 0,
+}
+
 async function mountView(episodes: PodcastEpisode[] = [EP], cont: PodcastContinueItem[] = []) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -82,6 +111,8 @@ async function mountView(episodes: PodcastEpisode[] = [EP], cont: PodcastContinu
   m.prog.mockResolvedValue({})
   m.eps.mockResolvedValue({ items: episodes, total: episodes.length })
   m.cont.mockResolvedValue({ items: cont, total: cont.length })
+  m.colls.mockResolvedValue({ items: [], total: 0 })
+  m.pls.mockResolvedValue({ items: [], total: 0 })
   const w = mount(PodcastsView, { global: { plugins: [pinia] } })
   await flushPromises()
   return w
@@ -328,5 +359,90 @@ describe('PodcastsView', () => {
     expect(w.text()).toContain('苹果')
     // 「香蕉」仍会出现在上方「继续收听」卡里；单集列表只剩「苹果」⇒ 全文只出现一次
     expect((w.text().match(/香蕉/g) || []).length).toBe(1)
+  })
+
+  it('播客合集：新建 / 加入 / 按合集筛选 / 移出', async () => {
+    const w = await mountView()
+    // 新建：POST 后成为当前合集
+    m.newColl.mockResolvedValue({ id: 2, name: '故事', created_at: 0, sort_order: 0,
+      podcast_ids: [], count: 0 })
+    await w.find('input[aria-label="合集名"]').setValue('故事')
+    await w.findAll('button').find((b) => b.text() === '新建合集')!.trigger('click')
+    await flushPromises()
+    expect(m.newColl).toHaveBeenCalledWith('故事')
+    expect(w.text()).toContain('故事（0）')
+    expect(w.text()).toContain('这个合集还没有节目')
+
+    // 新建后默认筛选到空合集；切回「全部订阅」才能看到订阅行并加入
+    await w.findAll('button').find((b) => b.text() === '全部订阅')!.trigger('click')
+    await flushPromises()
+    // 加入：下拉选合集 → 后端返回新成员
+    m.addColl.mockResolvedValue({ id: 2, name: '故事', created_at: 0, sort_order: 0,
+      podcast_ids: ['p1'], count: 1 })
+    await w.find('select[aria-label="加入合集：测试播客"]').setValue('2')
+    await flushPromises()
+    expect(m.addColl).toHaveBeenCalledWith(2, 'p1')
+    expect(w.text()).toContain('故事（1）')
+    expect(w.text()).toContain('测试播客')
+
+    // 点合集筛选：只剩成员，「移出」入口出现
+    await w.findAll('button').find((b) => b.text() === '故事（1）')!.trigger('click')
+    await flushPromises()
+    m.remColl.mockResolvedValue({ id: 2, name: '故事', created_at: 0, sort_order: 0,
+      podcast_ids: [], count: 0 })
+    await w.findAll('button').find((b) => b.text() === '移出合集')!.trigger('click')
+    await flushPromises()
+    expect(m.remColl).toHaveBeenCalledWith(2, 'p1')
+    expect(w.text()).toContain('这个合集还没有节目')
+  })
+
+  it('智能播放列表：内置规则求值 + 全部加入队列', async () => {
+    m.allEps.mockResolvedValue({ items: [LITE], total: 1 })
+    const w = await mountView()
+    await w.findAll('button').find((b) => b.text() === '快速听')!.trigger('click')
+    await flushPromises()
+    expect(m.allEps).toHaveBeenCalled()
+    expect(w.text()).toContain('快速听（1 集）')
+
+    await w.findAll('button').find((b) => b.text() === '全部加入队列')!.trigger('click')
+    await flushPromises()
+    const q = JSON.parse(localStorage.getItem('podcast-queue') || '[]')
+    expect(q[0].episodeId).toBe('e1')
+  })
+
+  it('智能播放列表：保存规则 / 求值 / 删除', async () => {
+    m.allEps.mockResolvedValue({ items: [LITE], total: 1 })
+    m.newPl.mockResolvedValue({
+      id: 5, name: '未播短集', kind: 'rules', match: 'all',
+      rules: [
+        { field: 'status', op: 'equals', value: 'unplayed' },
+        { field: 'duration', op: 'at_most', value: '30' },
+      ],
+      items: [], created_at: 0, sort_order: 0,
+    })
+    const w = await mountView()
+    await w.find('input[aria-label="播放列表名"]').setValue('未播短集')
+    await w.find('input[aria-label="规则值"]').setValue('unplayed')
+    await w.findAll('button').find((b) => b.text() === '加规则')!.trigger('click')
+    await w.find('select[aria-label="规则字段"]').setValue('duration')
+    await w.find('select[aria-label="规则操作"]').setValue('at_most')
+    await w.find('input[aria-label="规则值"]').setValue('30')
+    await w.findAll('button').find((b) => b.text() === '加规则')!.trigger('click')
+    await w.findAll('button').find((b) => b.text() === '保存播放列表')!.trigger('click')
+    await flushPromises()
+
+    expect(m.newPl).toHaveBeenCalledWith({
+      name: '未播短集', kind: 'rules', match: 'all',
+      rules: [
+        { field: 'status', op: 'equals', value: 'unplayed' },
+        { field: 'duration', op: 'at_most', value: '30' },
+      ],
+    })
+    expect(w.text()).toContain('未播短集（1 集）')
+
+    m.delPl.mockResolvedValue({ ok: true, removed: 5 })
+    await w.findAll('button').find((b) => b.text() === '删除播放列表')!.trigger('click')
+    await flushPromises()
+    expect(m.delPl).toHaveBeenCalledWith(5)
   })
 })

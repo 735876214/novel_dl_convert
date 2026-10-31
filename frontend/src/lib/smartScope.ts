@@ -1,5 +1,6 @@
 import type { BookCard } from './api'
 import { statusOf as statusOfBook } from './readingThresholds'
+import { listHit, norm, numHit, textHit } from './scopeOps'
 
 /**
  * 自定义智能书架：规则的**存储在后端**（smart_scopes 表），**求值在前端**——
@@ -84,54 +85,36 @@ function statusOf(b: BookCard): string {
   return statusOfBook(b)
 }
 
-function norm(v: unknown): string {
-  return String(v ?? '').trim().toLowerCase()
-}
-
 /** 单条规则对一本书的判定。空 value 的规则视为恒真（用户还没填完，先不排除书） */
 function ruleHit(b: BookCard, r: ScopeRule): boolean {
   const v = String(r.value ?? '').trim()
   if (!v) return true
-  const needle = v.toLowerCase()
   switch (r.field) {
     case 'title':
     case 'author':
     case 'series':
     case 'publisher':
-    case 'language': {
-      const hay = norm(b[r.field])
-      if (r.op === 'equals') return hay === needle
-      if (r.op === 'not_contains') return !hay.includes(needle)
-      return hay.includes(needle)
-    }
-    case 'tag': {
-      const tags = (b.tags || []).map(norm)
-      if (r.op === 'not_contains') return !tags.some((t) => t.includes(needle))
-      if (r.op === 'equals') return tags.includes(needle)
-      return tags.some((t) => t.includes(needle))
-    }
+    case 'language':
+      return textHit(b[r.field], r.op, v)
+    case 'tag':
+      return listHit(b.tags || [], r.op, v)
     case 'format':
-      return (b.format || '').toUpperCase() === v.toUpperCase()
+      return textHit(b.format, 'equals', v)
     case 'status':
-      return statusOf(b) === v
-    case 'stars': {
-      const n = Number(b.stars ?? 0)
-      return r.op === 'at_most' ? n <= Number(v) : n >= Number(v)
-    }
+      return textHit(statusOf(b), 'equals', v)
+    case 'stars':
+      return numHit(Number(b.stars ?? 0), r.op, Number(v))
     case 'year': {
       const y = Number(String(b.year ?? '').replace(/\D/g, ''))
       if (!y) return false // 没标年份的书不参与年份比较，别被 0 归到「至多」
-      return r.op === 'at_most' ? y <= Number(v) : y >= Number(v)
+      return numHit(y, r.op, Number(v))
     }
-    case 'annotations': {
-      const n = Number(b.annotation_count ?? 0)
-      return r.op === 'at_most' ? n <= Number(v) : n >= Number(v)
-    }
+    case 'annotations':
+      return numHit(Number(b.annotation_count ?? 0), r.op, Number(v))
     case 'added': {
       const t = Number(b.mtime ?? 0)
       if (!t) return false // 没有 mtime 的条目不参与「库里放了多少天」的比较
-      const days = (Date.now() / 1000 - t) / 86400
-      return r.op === 'at_most' ? days <= Number(v) : days >= Number(v)
+      return numHit((Date.now() / 1000 - t) / 86400, r.op, Number(v))
     }
     default:
       return true
