@@ -11736,3 +11736,46 @@ woff2 为 `font/woff2`、`/reading-activity` 不再拉 `charts-*`。
 
 **核验**：后端全量（见 §0 基线）；前端四连 841 例。
 
+## 第 201 期（阅读状态 8 档）
+
+**需求来源**：用户「继续」；Phase 1 遗留项 —— 阅读状态 8 档。
+
+**功能范围与修法**：
+
+1. **后端**：`db.READ_STATUSES` 从 5 档扩到 8 档：`unread / want_to_read / reading / rereading / finished / skimmed / paused / abandoned`。上游的 `read` / `on_hold` **不另造键**（分别就是 `finished` / `paused`）。日期规则（`_status_dates`，单本与批量共用）：`want_to_read` 与 `unread` 一样清零起止日期；`rereading` 开始时间若有则保留、完成时间清零；`skimmed` 视为读完（有完成时间），但仍以 `status` 区分，不与 `finished` 混为一档。
+
+2. **前端**：`readingThresholds.ts` 的 `LABELS` / `READ_STATUS_OPTIONS` / `statusBucket` 同步 8 档；筛选三档的归并：`want_to_read → 未读`、`rereading → 在读`、`skimmed → 已读完`。书架「标记」批量按钮与书卡菜单都列出 8 项；`library.ts` 的智能书架取数同步（未读含想读、在读含重读、已读完含略读）。统计口径 `stats._bucket` 同步（不把新状态当未知落到进度兜底）。
+
+3. **类型**：`api.ts` 新增 `ReadingStatusValue` 单一别名，`BookCard.status` 与 `ReadingStatus.status` 都引用它（不再两处各抄一份 union）。
+
+**边界（如实留档）**：Hardcover 仍只上报 `unread/reading/finished` 三档（`want_to_read` / `rereading` 可近似映射，但会改变既有上报语义，本期不改）；OPDS / Komga 不暴露状态语义（协议没有对应字段）。状态筛选仍收敛为三档（未读 / 在读 / 已读完），8 档只在「标记」与书卡文案里表达。
+
+**防回归**：`tests/test_reading_status_201.py`（8 档取值 + 日期规则）；`readingThresholds.spec.ts` 增新状态归并断言；`BookActionsMenu.spec.ts` 的状态菜单改为 8 项。
+
+**核验**：后端全量（见 §0 基线）；前端四连 841 例。
+
+
+## 第 202 期（作者抓取配置接通）
+
+**需求来源**：`docs/TODO.md` Phase 4 遗留缺陷 —— `metadata_fetch.authors.fetch_bio / fetch_photo / sources` 在设置页可改，但后端没有任何读点（死配置）。
+
+**功能范围与修法**：
+
+1. **配置读取**：`core/authors._author_cfg()` 统一取 `metadata_fetch.authors`；
+   `fetch_author` 按 `fetch_bio` / `fetch_photo` 决定抓哪部分（只抓头像时不请求 / 不写传记；
+   只抓传记时不下载头像），`sources` 不含 `openlibrary` 时如实拒绝（本项目作者源只有它）。
+   两个都关 ⇒ 直接拒绝，不白跑一次注定无结果的外呼。
+
+2. **`enabled` 的语义**：只闸**批量抓取**（`fetch_all` 未开启时返回 `skipped: "作者抓取未开启"`，
+   不逐个空转）；**单作者手动抓取仍可用** —— 与设置页既有文案「关闭后仍可手动触发单次抓取」一致，
+   不偷偷改变用户已看到的承诺。
+
+3. **页面**：批量按钮在 `skipped` 时直接显示原因（不再显示「成功 0 / 共 N」这种像执行过的假结果）。
+
+**边界（如实留档）**：作者源仍只有 OpenLibrary（`sources` 只是「允许列表」，不是多源合并）；
+作者抓取没有自动调度（`enabled` 目前只影响批量按钮，自动抓取仍属未做项）。
+
+**防回归**：`tests/test_author_config_202.py`（4 例：关闭时批量跳过 / 两部分都关与来源不含 openlibrary 拒绝 / 只抓传记不下载头像 / 只抓头像不写传记）。
+
+**核验**：后端全量（见 §0 基线）；前端四连 841 例。
+
