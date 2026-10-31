@@ -235,6 +235,8 @@ export interface LogStorage {
     enabled: boolean
     max_bytes: number
     keep: number
+    /** 0 = 不按天清理（第 205 期） */
+    max_days: number
     compress: boolean
   }
 }

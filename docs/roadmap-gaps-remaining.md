@@ -11814,3 +11814,19 @@ woff2 为 `font/woff2`、`/reading-activity` 不再拉 `charts-*`。
 
 **核验**：后端全量（见 §0 基线）；前端四连 841 例。
 
+## 第 205 期（审计归档按天保留）
+
+**需求来源**：用户「继续」；Phase 4 —— 审计留存补全（按天保留）。
+
+**功能范围与修法**：
+
+1. **配置**：`logging.retention.max_days` 默认 0（= 不按时间清理，只看份数）；上限 3650 天、负值归 0（笔误不该把归档一次删光）。`retention_cfg` 统一规整；`_prune_archives(d, keep, max_days)` 在原有「保留最近 N 份」之外，按文件 mtime 删超过 N 天的归档。
+
+2. **页面**：审计页留存区新增「归档最长保留天数」输入（0–3650）；`settingsFields.LOGGING_FIELDS` 同步，`SECTION_KEYS.logs` 已覆盖 logging 段。
+
+**边界（如实留档）**：只清理**归档**（`activity-*.log/.jsonl[.gz]`），当前 `activity.log` / `.jsonl` 永远不按天删（那是正在写的文件）；按天清理与按份数清理是「或」关系，任一条件命中即删；mtime 读不到的文件跳过（不误删）。
+
+**防回归**：`tests/test_activity_retention_205.py`（2 例：过期归档删除 / 0 值不按天清理；配置越界规整）。
+
+**核验**：后端全量（见 §0 基线）；前端四连（见收口基线）。
+

@@ -208,6 +208,7 @@ logging:
     enabled: false        # 打开后当前文件超过 max_bytes 就轮转成带时间戳的归档
     max_bytes: 5242880    # 单个活动日志文件的上限（字节，默认 5 MiB）
     keep: 5               # 归档保留份数（超出的移入回收站，不直接删）
+    max_days: 0           # 归档最长保留天数（0 = 不按时间清；第 205 期）
     compress: true        # 归档是否 gzip（读取会自动跨归档，审计页仍连续）
 update:                   # 第 78 期：版本检查与一键更新（第 80 期起四个键保存即生效；第 84 期加固）
   check_enabled: true     # 容器启动即查一次 + 每 interval_hours 小时检查 GitHub 最新版本（出网失败静默忽略；关掉即停后台线程）
