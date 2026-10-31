@@ -2265,6 +2265,8 @@ export interface AchievementItem {
   unlocked_at: number
   /** metric 名拼错时为 false —— 用于暴露配置错误，而不是静默算成 0 */
   known_metric: boolean
+  /** 离目标还差多少（第 198 期；已解锁为「已解锁」） */
+  hint: string
 }
 
 export interface AchievementsOverview {
@@ -3771,6 +3773,28 @@ export const api = {
 
   clearLogs: () =>
     request<{ ok: boolean; read_marks_cleared?: number }>('/api/logs', { method: 'DELETE' }),
+
+  /** 审计日志服务端导出（第 199 期）：与审计页同一套筛选，CSV 带 BOM。 */
+  exportLogs: async (query: LogQuery = {}): Promise<void> => {
+    const p = new URLSearchParams()
+    for (const k of ['action', 'status', 'q', 'actor'] as const) {
+      if (query[k]) p.set(k, String(query[k]))
+    }
+    if (query.since) p.set('since', String(query.since))
+    if (query.until) p.set('until', String(query.until))
+    const headers = new Headers()
+    const token = _authToken()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    const res = await fetch(`/api/logs/export?${p.toString()}`, { headers })
+    if (!res.ok) throw new Error(`导出失败（${res.status}）`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `audit-log-${localDate()}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  },
 
   logsDownloadUrl: () => '/api/logs/download',
 

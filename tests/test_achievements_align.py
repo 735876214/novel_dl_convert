@@ -32,3 +32,15 @@ def test_evaluate_groups_aligned(client, auth_headers):
     res = achievements.evaluate(auto_unlock=False)
     groups = {it["group"] for it in res["items"]}
     assert groups <= ALLOWED
+
+
+def test_成就提示语与剩余量(client, auth_headers, isolated):
+    assert achievements._hint("books", 3, 10, False) == "还差 7 本"
+    assert achievements._hint("hours", 1.5, 10, False) == "还差 8.5 小时"
+    assert achievements._hint("books", 0, 1, True) == "已解锁"
+    assert achievements._hint("nope", 0, 1, False) == "度量名不存在"
+    res = achievements.evaluate(auto_unlock=False)
+    for it in res["items"]:
+        assert it["hint"], it["key"]
+        if it["known_metric"] and not it["unlocked"]:
+            assert it["hint"].startswith("还差 "), it["key"]

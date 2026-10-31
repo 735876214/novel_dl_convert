@@ -4735,6 +4735,10 @@ async def api_upload_cover(bid: str, file: UploadFile = File(...)):
     db.set_cover(bid, data, mt)
     # 列表缓存里带着 has_cover；封面变了要立刻让卡片跟上（详情不读列表缓存）。
     catalog.invalidate(None)
+    b = library.by_id(bid) or {}
+    activity_log.log(activity_log.ACTION_METADATA, str(b.get("name") or bid),
+                     activity_log.STATUS_OK, source="api",
+                     detail=f"封面：上传（{len(data)} 字节）")
     return {"ok": True, "media_type": mt, "bytes": len(data)}
 
 
@@ -4752,6 +4756,10 @@ def api_cover_from_url(bid: str, payload: dict = Body(...)):
         raise HTTPException(400, str(e)) from None
     db.set_cover(bid, data, mt or "image/jpeg")
     catalog.invalidate(None)
+    b = library.by_id(bid) or {}
+    activity_log.log(activity_log.ACTION_METADATA, str(b.get("name") or bid),
+                     activity_log.STATUS_OK, source="api",
+                     detail=f"封面：从 URL 抓取（{len(data)} 字节）")
     return {"ok": True, "media_type": mt or "image/jpeg", "bytes": len(data)}
 
 
@@ -4763,6 +4771,9 @@ def api_delete_cover(bid: str):
     removed = db.get_cover(bid) is not None
     db.set_cover(bid, b"")
     catalog.invalidate(None)
+    b = library.by_id(bid) or {}
+    activity_log.log(activity_log.ACTION_METADATA, str(b.get("name") or bid),
+                     activity_log.STATUS_OK, source="api", detail="封面：移除服务端封面")
     return {"ok": True, "removed": removed}
 
 
@@ -9848,6 +9859,29 @@ def api_logs(limit: int = Query(200, ge=1, le=5000), action: str = "",
         # 第 52 期：存盘情况（当前字节数 / 归档份数 / 生效的留存策略）—— 审计页据此展示。
         "storage": activity_log.storage_info(),
     }
+
+
+@app.get("/api/logs/export")
+def api_logs_export(action: str = "", status: str = "", q: str = "", actor: str = "",
+                    since: float = Query(0, ge=0), until: float = Query(0, ge=0)):
+    """审计日志**服务端导出 CSV**（第 199 期）：应用与审计页一致的筛选，最多 5000 条。
+
+    BOM 是为了 Excel 双击打开时中文不乱码（与批注导出同一做法）。
+    """
+    items = activity_log.recent(limit=5000, action=action, status=status, q=q,
+                                actor=actor, since=since, until=until)
+    cols = ("ts", "action", "status", "file", "output", "detail", "size",
+            "duration_ms", "source", "actor")
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(cols)
+    for it in items:
+        w.writerow(["" if it.get(c) is None else it.get(c) for c in cols])
+    body = "﻿" + buf.getvalue()
+    return Response(
+        content=body.encode("utf-8"), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="audit-log.csv"'},
+    )
 
 
 def _notif_id(entry: dict) -> str:

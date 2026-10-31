@@ -11,6 +11,7 @@ import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type LogItem, type LogStorage } from '@/lib/api'
 import { LOGGING_FIELDS } from '@/data/settingsFields'
 import { localDate } from '@/lib/format'
+import { useUiStore } from '@/stores/ui'
 
 /**
  * SERVER → Audit Log（`/settings/admin/audit-log`）
@@ -26,6 +27,7 @@ import { localDate } from '@/lib/format'
  * 名字**汇总（`/api/logs` 的 `actors`），不受当前筛选影响，故选中后仍能切回来。
  */
 
+const ui = useUiStore()
 const items = ref<LogItem[]>([])
 const loading = ref(true)
 const err = ref('')
@@ -241,6 +243,22 @@ function downloadLog(): void {
   a.download = 'activity.log'
   a.click()
 }
+
+/** 服务端导出（第 199 期）：与当前筛选一致、不受「已加载页」限制（后端最多 5000 条）。 */
+async function exportServerCsv(): Promise<void> {
+  try {
+    await api.exportLogs({
+      action: fAction.value || undefined,
+      status: fStatus.value || undefined,
+      q: fQ.value.trim() || undefined,
+      actor: fActor.value || undefined,
+      since: fSince.value ? dayStart(fSince.value) : undefined,
+      until: fUntil.value ? dayEnd(fUntil.value) : undefined,
+    })
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '导出失败')
+  }
+}
 </script>
 
 <template>
@@ -254,6 +272,7 @@ function downloadLog(): void {
       </span>
       <Button size="sm" class="ml-auto" :disabled="loading" @click="load">刷新</Button>
       <Button size="sm" :disabled="!visible.length" @click="exportCsv">导出当前筛选 CSV</Button>
+      <Button size="sm" @click="exportServerCsv">服务端导出 CSV</Button>
       <Button size="sm" @click="downloadLog">下载 activity.log</Button>
     </div>
 

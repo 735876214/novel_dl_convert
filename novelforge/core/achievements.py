@@ -156,6 +156,25 @@ def sync_catalog() -> int:
     return len(ACHIEVEMENTS)
 
 
+_REMAIN_UNITS = {
+    "books": "本", "authors": "位作者", "series": "个系列", "languages": "种语言",
+    "size_gb": "GB", "sessions": "次阅读", "hours": "小时", "finished": "本",
+    "streak": "天", "days": "天", "annotations": "条批注",
+}
+
+
+def _hint(metric: str, cur: float, target: float, unlocked: bool) -> str:
+    """离目标还差多少（第 198 期）；已解锁就直说，metric 打错字时如实指出。"""
+    if unlocked:
+        return "已解锁"
+    unit = _REMAIN_UNITS.get(metric)
+    if unit is None:
+        return "度量名不存在"
+    left = max(0.0, float(target) - float(cur))
+    txt = f"{left:.1f}".rstrip("0").rstrip(".")
+    return f"还差 {txt} {unit}"
+
+
 def evaluate(auto_unlock: bool = True) -> dict:
     """算出每条成就的进度，并（默认）把达标项解锁。返回完整概览。"""
     if not enabled():
@@ -198,6 +217,7 @@ def evaluate(auto_unlock: bool = True) -> dict:
             "unlocked": is_unlocked,
             "unlocked_at": float(unlocked.get(key, 0.0)),
             "known_metric": known,
+            "hint": _hint(metric, cur, target, is_unlocked),
         })
 
     bucket: dict = {}

@@ -71,7 +71,10 @@ async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    data.value = await api.achievements()
+    const r = await api.achievements()
+    data.value = r
+    // 第 198 期：首次达标就在打开页面时提示（解锁只增不退，提示只是当下的反馈）
+    if (r.newly_unlocked?.length) ui.toast(`解锁成就 ${r.newly_unlocked.length} 项`)
   } catch (e) {
     data.value = null
     error.value = e instanceof Error ? e.message : '成就加载失败'
@@ -250,7 +253,10 @@ onMounted(load)
                   <span v-if="i.unlocked" class="ml-auto text-success">
                     {{ dateOf(i.unlocked_at) }}
                   </span>
-                  <span v-else class="ml-auto text-muted-foreground">{{ i.percent }}%</span>
+                  <template v-else>
+                    <span class="ml-auto text-muted-foreground">{{ i.hint }}</span>
+                    <span class="text-muted-foreground tabular-nums">{{ i.percent }}%</span>
+                  </template>
                 </div>
                 <!-- metric 打错字时暴露出来，而不是静默显示 0 -->
                 <div v-if="!i.known_metric" class="mt-1 text-[10.5px] text-destructive">
