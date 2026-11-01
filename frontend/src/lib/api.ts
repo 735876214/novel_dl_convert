@@ -2548,6 +2548,14 @@ export interface PrefDevice {
 }
 
 /** 上传的阅读字体（`GET /api/fonts`）。id = 文件名，name = 字体族名（解析不出时回落文件名） */
+/** 自定义图标（第 216 期）：只含 SVG path 的 d 片段。 */
+export interface CustomIcon {
+  key: string
+  name: string
+  paths: string[]
+  created_at: number
+}
+
 export interface FontItem {
   id: string
   name: string
@@ -4372,6 +4380,20 @@ export const api = {
   // ---------- 阅读字体（后端字体库；上传后可在阅读器里选用）----------
   fonts: () =>
     request<{ items: FontItem[]; max_bytes: number; max_count: number }>('/api/fonts'),
+
+  /** 自定义图标（第 216 期）：只含 SVG path d 片段。 */
+  customIcons: () => request<{ items: CustomIcon[]; total: number }>('/api/custom-icons'),
+
+  createCustomIcon: (name: string, svg: string) =>
+    request<CustomIcon>('/api/custom-icons', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, svg }),
+    }),
+
+  deleteCustomIcon: (key: string) =>
+    request<{ ok: boolean; removed: string }>(
+      `/api/custom-icons/${encodeURIComponent(key)}`, { method: 'DELETE' },
+    ),
 
   /** 上传字体（multipart）。Content-Type 交给浏览器自动带 boundary，不能手写。 */
   uploadFont: async (file: File): Promise<FontItem> => {

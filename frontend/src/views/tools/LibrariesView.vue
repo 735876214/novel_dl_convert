@@ -27,6 +27,7 @@ import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type LibraryEntity, type LibraryType, type ScanHistoryItem } from '@/lib/api'
 import { fmtBytes } from '@/lib/format'
 import { ICONS } from '@/lib/icons'
+import { useCustomIconsStore } from '@/stores/customIcons'
 import { isAbsolutePath, pathsOverlap } from '@/lib/paths'
 import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
@@ -305,7 +306,9 @@ function editRemoveDir(p: string): void {
 }
 
 /** 图标 key 的**唯一真相源**在前端（`lib/icons.ts`）；后端只存 key，不维护白名单。 */
-const ICON_NAMES = Object.keys(ICONS)
+const customIcons = useCustomIconsStore()
+customIcons.ensureLoaded()
+const ICON_NAMES = computed(() => [...Object.keys(ICONS), ...customIcons.keys])
 
 /** 某库类型的**默认扫描白名单**（来自 `/api/libraries` 的 `types[].exts`，不在前端抄一份） */
 function extsOf(type: LibraryType): string[] {

@@ -46,7 +46,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    lib_settings, browse_counts, customfields, embed, epub_cfi, txtcache,
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
-                   events, entities, pathmeta, m4b, audiobook_zip, podcasts, readaloud, booksearch,
+                   events, entities, pathmeta, m4b, audiobook_zip, podcasts, readaloud, booksearch, customicons,
                    pdfsearch)
 from . import config
 from .sources import REGISTRY, DownloadManager
@@ -8683,6 +8683,30 @@ def api_pref_device_delete(device_id: str):
 # ---------------- 阅读字体（上传 / 列表 / 分发）----------------
 # 本项目是单用户部署：上游的「阅读字体（每用户，上限 50）」与「服务端字体（上限 200）」
 # 在这里是**同一份库** —— 两个设置页读写同一组接口，上限取服务端口径。
+
+@app.get("/api/custom-icons")
+def api_custom_icons():
+    """自定义图标（第 216 期）：只含 SVG 的 path d 片段。"""
+    items = db.list_custom_icons()
+    return {"items": items, "total": len(items)}
+
+
+@app.post("/api/custom-icons")
+def api_custom_icon_create(payload: dict = Body(...)):
+    try:
+        name = customicons.icon_name(payload.get("name"))
+        paths = customicons.parse_svg(payload.get("svg"))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    return db.create_custom_icon(name, paths)
+
+
+@app.delete("/api/custom-icons/{key}")
+def api_custom_icon_delete(key: str):
+    if not db.delete_custom_icon(key):
+        raise HTTPException(404, "图标不存在")
+    return {"ok": True, "removed": key}
+
 
 @app.get("/api/fonts")
 def api_fonts():

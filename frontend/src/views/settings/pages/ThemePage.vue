@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
+import Icon from '@/components/ui/Icon.vue'
 import Card from '@/components/ui/Card.vue'
 import Segment from '@/components/ui/Segment.vue'
 import SwatchGrid from '@/components/ui/SwatchGrid.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { ACCENTS } from '@/data/accents'
 import { RADIUS_OPTIONS, THEME_LABEL, useThemeStore } from '@/stores/theme'
+import { useCustomIconsStore } from '@/stores/customIcons'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -22,6 +24,38 @@ import { useUiStore } from '@/stores/ui'
 const theme = useThemeStore()
 const ui = useUiStore()
 const router = useRouter()
+const customIcons = useCustomIconsStore()
+const iconName = ref('')
+const iconSvg = ref('')
+const iconBusy = ref(false)
+const iconError = ref('')
+
+onMounted(() => void customIcons.load())
+
+async function addIcon(): Promise<void> {
+  if (iconBusy.value || !iconName.value.trim() || !iconSvg.value.trim()) return
+  iconBusy.value = true
+  iconError.value = ''
+  try {
+    const it = await customIcons.create(iconName.value.trim(), iconSvg.value)
+    iconName.value = ''
+    iconSvg.value = ''
+    ui.toast(`图标「${it.name}」已添加`)
+  } catch (e) {
+    iconError.value = e instanceof Error ? e.message : '添加图标失败'
+  } finally {
+    iconBusy.value = false
+  }
+}
+
+async function removeIcon(key: string): Promise<void> {
+  try {
+    await customIcons.remove(key)
+    ui.toast('图标已删除')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '删除失败')
+  }
+}
 
 const themeOptions = computed(() =>
   (['light', 'dark', 'system'] as const).map((v) => ({ value: v, label: THEME_LABEL[v] })),
@@ -94,6 +128,58 @@ function resetAppearance(): void {
         </div>
         <Button size="sm" @click="router.push('/settings/reader/general')">偏好与同步</Button>
       </div>
+    </Card>
+
+    <!-- 自定义图标（第 216 期）：只收 SVG 的 path d；按钮/库图标选择器都能选 -->
+    <Card class="mt-4" padding="none">
+      <div class="border-b border-border px-4 py-3">
+        <div class="text-[13px] font-medium text-foreground">自定义图标</div>
+        <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+          粘贴 SVG（只提取 &lt;path d&gt;，不保留脚本 / 外链），添加后可在书库图标里选用
+        </div>
+      </div>
+      <div v-if="customIcons.items.length" class="flex flex-wrap gap-2 border-b border-border px-4 py-3">
+        <div
+          v-for="it in customIcons.items"
+          :key="it.key"
+          class="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-[11.5px]"
+        >
+          <Icon :name="it.key" class="h-4 w-4 text-foreground" />
+          <span class="max-w-28 truncate text-muted-foreground">{{ it.name }}</span>
+          <button
+            type="button"
+            class="cursor-pointer text-[11px] text-destructive hover:underline"
+            @click="removeIcon(it.key)"
+          >删除</button>
+        </div>
+      </div>
+      <div v-else class="border-b border-border px-4 py-3 text-[11.5px] text-muted-foreground">
+        还没有自定义图标。
+      </div>
+      <div class="flex flex-wrap items-end gap-2 px-4 py-3">
+        <label class="flex flex-col gap-1">
+          <span class="text-[11px] text-muted-foreground">名称</span>
+          <input
+            v-model="iconName"
+            aria-label="图标名称"
+            class="h-7 w-32 rounded-md border border-border bg-card px-1.5 text-[11.5px] text-foreground outline-none focus:border-ring"
+          >
+        </label>
+        <label class="flex min-w-[16rem] flex-1 flex-col gap-1">
+          <span class="text-[11px] text-muted-foreground">SVG 源码</span>
+          <textarea
+            v-model="iconSvg"
+            aria-label="图标 SVG"
+            rows="3"
+            placeholder="<svg viewBox='0 0 24 24'><path d='…'/></svg>"
+            class="rounded-md border border-border bg-card px-1.5 py-1 font-mono text-[11px] text-foreground outline-none focus:border-ring"
+          />
+        </label>
+        <Button size="sm" variant="primary" :disabled="iconBusy || !iconName.trim() || !iconSvg.trim()" @click="addIcon">
+          {{ iconBusy ? '添加中…' : '添加图标' }}
+        </Button>
+      </div>
+      <p v-if="iconError" class="px-4 pb-3 text-[11.5px] text-destructive">{{ iconError }}</p>
     </Card>
 
     <SettingsUnsupportedCard

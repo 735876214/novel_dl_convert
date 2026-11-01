@@ -554,6 +554,14 @@ def init():
                 note        TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_scan_history_lib ON scan_history(library_id, finished_at DESC);
+            -- 自定义图标（第 216 期）：只存 SVG 的 path d 片段（服务端解析时重建），
+            -- 不存完整 SVG（避免把脚本 / 外链带进 v-html）。
+            CREATE TABLE IF NOT EXISTS custom_icons (
+                key        TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                paths      TEXT NOT NULL DEFAULT '[]',
+                created_at REAL NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS achievements (
                 key        TEXT PRIMARY KEY,
                 name       TEXT NOT NULL,
@@ -3297,6 +3305,51 @@ def clear_notification_dismissals() -> int:
         cur = c.execute("DELETE FROM notifications_dismissed")
         c.commit()
         return int(cur.rowcount or 0)
+
+
+# ---------------- 自定义图标（第 216 期） ----------------
+
+def _custom_icon_out(row) -> dict:
+    return {
+        "key": str(row["key"]),
+        "name": str(row["name"] or ""),
+        "paths": [str(x) for x in _json_list(row["paths"])],
+        "created_at": float(row["created_at"] or 0),
+    }
+
+
+def list_custom_icons() -> list:
+    rows = _connect().execute(
+        "SELECT * FROM custom_icons ORDER BY created_at, key"
+    ).fetchall()
+    return [_custom_icon_out(r) for r in rows]
+
+
+def get_custom_icon(key: str) -> "dict | None":
+    row = _connect().execute(
+        "SELECT * FROM custom_icons WHERE key=?", (str(key),)
+    ).fetchone()
+    return _custom_icon_out(row) if row else None
+
+
+def create_custom_icon(name: str, paths: list) -> dict:
+    c = _connect()
+    key = "custom-" + uuid.uuid4().hex[:12]
+    with _lock:
+        c.execute(
+            "INSERT INTO custom_icons(key, name, paths, created_at) VALUES(?,?,?,?)",
+            (key, str(name), json.dumps(list(paths), ensure_ascii=False), time.time()),
+        )
+        c.commit()
+    return get_custom_icon(key) or {}
+
+
+def delete_custom_icon(key: str) -> bool:
+    c = _connect()
+    with _lock:
+        cur = c.execute("DELETE FROM custom_icons WHERE key=?", (str(key),))
+        c.commit()
+    return bool(cur.rowcount)
 
 
 # ---------------- 成就 ----------------

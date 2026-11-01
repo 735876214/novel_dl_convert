@@ -36,6 +36,7 @@ import {
   type LibraryType,
 } from '@/lib/api'
 import { ICONS } from '@/lib/icons'
+import { useCustomIconsStore } from '@/stores/customIcons'
 import { isAbsolutePath, pathsOverlap } from '@/lib/paths'
 import { useUiStore } from '@/stores/ui'
 
@@ -363,12 +364,14 @@ async function submit(): Promise<void> {
 // 图标选择器
 // ---------------------------------------------------------------------------
 /** 图标表**唯一真相源**在前端（`lib/icons.ts`）—— 后端只存 key，不维护白名单。 */
-const ICON_NAMES = Object.keys(ICONS)
+const customIcons = useCustomIconsStore()
+customIcons.ensureLoaded()
+const ICON_NAMES = computed(() => [...Object.keys(ICONS), ...customIcons.keys])
 const iconQuery = ref('')
 
 const iconChoices = computed(() => {
   const q = iconQuery.value.trim().toLowerCase()
-  return q ? ICON_NAMES.filter((n) => n.toLowerCase().includes(q)) : ICON_NAMES
+  return q ? ICON_NAMES.value.filter((n) => n.toLowerCase().includes(q)) : ICON_NAMES.value
 })
 
 onMounted(async () => {

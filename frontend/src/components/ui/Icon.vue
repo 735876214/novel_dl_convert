@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 
 import { iconPath } from '@/lib/icons'
+import { useCustomIconsStore } from '@/stores/customIcons'
 
 const props = withDefaults(
   defineProps<{
@@ -12,7 +13,10 @@ const props = withDefaults(
   { class: '' },
 )
 
-const path = computed(() => iconPath(props.name))
+const custom = useCustomIconsStore()
+custom.ensureLoaded()
+
+const path = computed(() => custom.pathOf(props.name) || iconPath(props.name))
 </script>
 
 <template>
