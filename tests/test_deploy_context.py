@@ -60,3 +60,35 @@ def test_构建脚本会生成旁路件():
     只挂 `deploy` 的话镜像里不会有 `.gz`（服务端只能回落现压，优化静默失效）。"""
     pkg = (ROOT / "frontend" / "package.json").read_text(encoding="utf-8")
     assert '"build": "vite build && node scripts/precompress.mjs dist"' in pkg
+
+
+def test_瘦身开关默认开启且真的能省下来():
+    """第 212 期：`INSTALL_NODE` / `INSTALL_PG_CLIENT` 两个 build-arg。
+
+    钉三件最容易写错的事：
+    1. **默认必须是 1**（构建结果与改造前一致，老命令不受影响）；
+    2. node 必须经 `/out/` 中转 —— 若沿用「COPY 进运行层再 `rm`」，那 125 MB 已经落在
+       下层里，删了镜像也不会变小（这是最像优化、实际零收益的写法）；
+    3. `postgresql-client` 必须真的挂在开关上（它连带 63 MB，其中 49 MB 是 Perl）。
+    """
+    text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "ARG INSTALL_NODE=1" in text, "INSTALL_NODE 默认必须是 1"
+    assert "ARG INSTALL_PG_CLIENT=1" in text, "INSTALL_PG_CLIENT 默认必须是 1"
+    assert re.search(r"COPY --from=nodejs\s+/out/ /usr/local/bin/", text), \
+        "node 必须从 /out/ 中转（空目录 ⇒ 不产出文件）"
+    assert "rm -f /usr/local/bin/node" not in text, \
+        "先 COPY 再 rm 删不掉下层字节，等于没瘦身"
+    assert 'if [ "${INSTALL_PG_CLIENT}" = "1" ]' in text, \
+        "postgresql-client 没有挂在开关上"
+
+
+def test_构建挂了缓存挂载():
+    """pip / npm 的 BuildKit 缓存挂载（第 212 期）：重建时不再重下，且缓存不进镜像层。
+
+    ⚠️ 它与 `PIP_NO_CACHE_DIR=1` 互斥 —— 那条 ENV 会把 pip 缓存整个关掉，挂载等于白加。
+    """
+    text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    assert "--mount=type=cache,target=/root/.cache/pip" in text
+    assert "--mount=type=cache,target=/root/.npm" in text
+    # 只看**生效的赋值**（注释里提到这个名字是说明用的）
+    assert not re.search(r"(?m)^\s*PIP_NO_CACHE_DIR=", text), "会与 pip 缓存挂载冲突"

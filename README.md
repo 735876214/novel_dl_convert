@@ -657,8 +657,21 @@ docker build --build-arg NODE_VERSION=22 -t novelforge .
 | `runtime` | `python:3.12-slim` + venv + 源码 | 是 |
 
 瘦身要点：编译工具链不进最终镜像；venv 剔除 pip/wheel、`.so` 去符号；只取 Node 二进制而
-不带 npm/文档；按路径精确 COPY 配合 `.dockerignore`。若不需要 JS 解密能力，删掉 runtime
-阶段 `COPY --from=nodejs` 那一行可再省约 90~110MB（镜像里最大的单个文件）。
+不带 npm/文档；按路径精确 COPY 配合 `.dockerignore`；pip / npm 都挂了 BuildKit 缓存挂载
+（重建时不再重下几十 MB，缓存**不写进镜像层**）。
+
+第 212 期起有两个**按需关闭的 build-arg**（默认都开，构建结果与之前逐层一致；
+两个都关实测 **704 MB → 453 MB**）：
+
+```bash
+# 只用 SQLite、也不需要「书源 JS 解密」时
+docker build --build-arg INSTALL_NODE=0 --build-arg INSTALL_PG_CLIENT=0 -t novelforge .
+```
+
+| 开关 | 镜像省 | 关了会丢什么 |
+|---|---|---|
+| `INSTALL_NODE=0` | **125 MB** | 靠 Node 执行书源 JS 的能力（`NODE_BIN` 指向不存在的路径，这类书源在**使用时**直接报错，其余功能不受影响） |
+| `INSTALL_PG_CLIENT=0` | **63 MB**（其中 49 MB 是 `postgresql-client` 拖来的 Perl） | `NOVELFORGE_DB=pg` 与「更新前自动备份」—— 那条路只调 `pg_dump`，关了会停在 `backup_failed` |
 
 ## 扩展一个新书源
 

@@ -12,8 +12,12 @@
 #   - 按路径精确 COPY + .dockerignore：venv/、_test/、.git/、本地 input/output 不进构建上下文
 #
 # 构建：docker build -t novelforge .
-# 极致瘦身（不需要 JS 解密时）：删掉 runtime 阶段 `COPY --from=nodejs` 与 ENV 里的 NODE_BIN 即可，
-# 那是最终镜像里最大的单个文件（约 90~110MB）。
+# 瘦身开关（第 212 期起**不用改文件**，全部是 build-arg，默认都开）：
+#   --build-arg INSTALL_NODE=0        ⇒ −125 MB（Node 二进制；只有「书源靠 JS 解密」才用得到）
+#   --build-arg INSTALL_PG_CLIENT=0   ⇒ −63 MB（postgresql-client，其中 49 MB 是 Perl；
+#                                        只有 PG 后端 / 一键更新的 pg_dump 备份才需要）
+#   --build-arg INSTALL_BUILD_TOOLS=0 ⇒ 跳过 build-essential（amd64 上依赖都有现成 wheel）
+# 两个关掉后实测 704 MB → 约 516 MB，apt 那一步也从 57 s 降到十几秒。
 
 ARG PY_VERSION=3.12
 ARG NODE_VERSION=22
@@ -27,7 +31,6 @@ ARG APP_VERSION
 FROM python:${PY_VERSION}-slim AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_NO_CACHE_DIR=1 \
     PIP_DEFAULT_TIMEOUT=100
 
 # 顶层 ARG 只作用于 FROM 行，阶段内使用需重新声明
@@ -57,8 +60,12 @@ COPY requirements.txt /tmp/requirements.txt
 # 允许替换 PyPI 源（国内网络 / 私有源），默认仍是官方源，CI 行为不变：
 #   docker build --build-arg PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple .
 ARG PIP_INDEX=https://pypi.org/simple
-RUN pip install --no-cache-dir --upgrade pip --index-url "${PIP_INDEX}" \
-    && pip install --no-cache-dir --index-url "${PIP_INDEX}" -r /tmp/requirements.txt
+# 第 212 期：`--mount=type=cache` 让**重建**时直接复用本机的 wheel 缓存（不再重下几十 MB），
+# 而缓存挂载**不写进镜像层**（层里仍然干干净净）。它替代了原来的 `PIP_NO_CACHE_DIR=1`
+# —— 那条 ENV 会把缓存也关掉，等于每次重建都从零下载。
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=shared \
+    pip install --upgrade pip --index-url "${PIP_INDEX}" \
+    && pip install --index-url "${PIP_INDEX}" -r /tmp/requirements.txt
 
 # 裁剪 venv：运行时不再需要装包，pip / wheel 连同 native .so 的符号表一起去掉。
 # 说明：保留 setuptools / pkg_resources —— 少数库会在运行时 import 它们，为这几 MB 冒
@@ -81,6 +88,16 @@ RUN rm -rf /opt/venv/lib/python*/site-packages/pip \
 # 与 python:${PY_VERSION}-slim 同为 Debian bookworm 基线，glibc 版本一致，二进制可直接搬
 FROM node:${NODE_VERSION}-bookworm-slim AS nodejs
 
+# 第 212 期：`INSTALL_NODE=0` 时本阶段**不产出**二进制。
+# 为什么不「COPY 进运行层再 rm」：那样 125 MB 已经落在下层里，删了也还在（镜像不变小）。
+# 所以改成「按开关决定 /out 里有没有东西」，运行层统一 `COPY /out/`：
+# 开关关掉时 /out 是空目录，COPY 成功且不产出任何文件。
+# 什么时候可以关：不用任何「靠 Node 执行书源 JS」的能力（`NODE_BIN` 指向不存在的路径，
+# 这类书源会在使用时直接报错，其余功能不受影响）。
+ARG INSTALL_NODE=1
+RUN mkdir -p /out \
+    && if [ "${INSTALL_NODE}" = "1" ]; then cp /usr/local/bin/node /out/node; fi
+
 # ============================ 阶段 2.5：前端构建 ============================
 # 构建 Vue 3 + Vite + Tailwind v4 前端，产物落 /web/dist。
 # node_modules 与源码都只活在本阶段，不会进入最终镜像。
@@ -93,7 +110,9 @@ WORKDIR /web
 
 # 先 COPY 清单再装依赖：源码变动不会让依赖层失效
 COPY frontend/package.json frontend/package-lock.json frontend/.npmrc /web/
-RUN npm config set registry "${NPM_REGISTRY}" \
+# 第 212 期：npm 缓存挂载 —— 重建时不再重下 ~325 MB 的 tarball（缓存不进镜像层）。
+RUN --mount=type=cache,target=/root/.npm \
+    npm config set registry "${NPM_REGISTRY}" \
     && npm ci --no-audit --no-fund
 
 COPY frontend/ /web/
@@ -136,9 +155,17 @@ ENV PYTHONUNBUFFERED=1 \
 #                       ⚠️ 客户端主版本必须 **≥ 服务端**（compose 用 postgres:16-alpine）：
 #                       本镜像基线（trixie）带 17，可 dump 16；若把基线退回 bookworm（client 15）
 #                       会得到 `pg_dump: server version: 16.x ... aborting` —— 那时必须走 PGDG 源。
+#
+# 第 212 期：`INSTALL_PG_CLIENT=0` 可跳过 postgresql-client —— 实测它连带 **63 MB**，
+# 其中 **49 MB 是 Perl**（libperl5.40 28.6 + perl-modules-5.40 19.5 + perl 0.8，
+# 都是 postgresql-client-common 的包装脚本要的）。apt 这一步也是首次构建里**最慢**的一段
+# （实测 56.9 s / 全量构建 71.8 s）。关掉的前提：**不用 PostgreSQL 后端**（`NOVELFORGE_DB=pg`）、
+# 也不需要「更新前自动备份」—— 那条路只调 `pg_dump`，关了就会停在 `backup_failed`。
+ARG INSTALL_PG_CLIENT=1
 RUN apt-get -o Acquire::Retries=5 update \
     && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
-       tzdata libstdc++6 libarchive-tools postgresql-client \
+       tzdata libstdc++6 libarchive-tools \
+       $(if [ "${INSTALL_PG_CLIENT}" = "1" ]; then echo postgresql-client; fi) \
     && rm -rf /var/lib/apt/lists/*
 
 # ⚠️ 第 144 期删掉了 `EBOOK_CONVERT_BIN` 的说明 —— 那个键**代码里零引用**：
@@ -147,7 +174,8 @@ RUN apt-get -o Acquire::Retries=5 update \
 
 # 只搬构建产物：venv 与 node 二进制，编译工具链 / apt 缓存自然被丢弃
 COPY --from=builder /opt/venv /opt/venv
-COPY --from=nodejs  /usr/local/bin/node /usr/local/bin/node
+# 第 212 期：从 `/out/` 取（`INSTALL_NODE=0` 时它是空目录，这一行就不产出任何文件）
+COPY --from=nodejs  /out/ /usr/local/bin/
 
 WORKDIR /app
 
