@@ -5186,7 +5186,7 @@ export const api = {
   collectionDetail: (id: number) =>
     request<CollectionDetail>(`/api/collections/${id}`),
 
-  /** 收藏夹书目分页（第 207 期）。 */
+  /** 收藏夹书目分页（第 210 期）。 */
   collectionBooks: (id: number, limit = 50, offset = 0) =>
     request<{ items: BookCard[]; total: number; offset: number;
       next_offset: number | null; has_more: boolean }>(

@@ -103,7 +103,7 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       // 会把 `collapseSeries` 当成**旧存档**丢掉换成默认值 —— 于是用户刚关掉的折叠
       // 在推上去的那一刻被改回「开」，且不会有任何报错。
       shelf: { collapseSeries: shelf.prefs.collapseSeries, rev: shelf.prefs.rev },
-      // 仪表盘块（第 206 期）：部件 / 书架行 / 总布局，换设备一致。
+      // 仪表盘块（第 209 期）：部件 / 书架行 / 总布局，换设备一致。
       dashboard: dashboard.exportSync(),
     })
   }
@@ -111,6 +111,11 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
   /** 把远端载荷应用到本机（写缓存 + 外观重挂 class）；期间抑制通知，避免回环推送 */
   function applyPayload(raw: Partial<PrefsPayload> | null | undefined): void {
     const p = normalizePayload(raw)
+    // 老载荷没有 dashboard 块（第 209 期之前推上来的）：**不要**把 normalizePayload 补的
+    // 默认值应用下去 —— 那会把用户本机的仪表盘布局在升级后的第一次 boot 悄悄重置。
+    // 等本机下次推送把 dashboard 块补上，之后才以服务端为准。
+    const hasDashboard = Boolean(raw && typeof raw === 'object'
+      && (raw as Record<string, unknown>).dashboard)
     suppressing(() => {
       saveReaderPrefs(p.reader)
       savePdfPrefs(p.pdf)
@@ -127,8 +132,9 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       display.applyRemote(p.appearance)
       // shelf 块同理：只喂可同步键（collapseSeries），本机专属的书架字段不动
       shelf.applyRemote(p.shelf)
-      // 仪表盘块（第 206 期）：服务端值经同一套合并 / 归一再落进 store
-      dashboard.applyRemote(p.dashboard)
+      // 仪表盘块（第 209 期）：服务端值经同一套合并 / 归一再落进 store；
+      // 老载荷缺这一块时保持本机现状（见上面 hasDashboard 的说明）。
+      if (hasDashboard) dashboard.applyRemote(p.dashboard)
     })
   }
 

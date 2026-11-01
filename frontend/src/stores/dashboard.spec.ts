@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { useDashboardStore } from '@/stores/dashboard'
 
 /**
- * 第 206 期：仪表盘偏好进入偏好同步载荷。
+ * 第 209 期：仪表盘偏好进入偏好同步载荷。
  * 坏起来是「换设备后布局没跟过来」或「远端脏数据把本地书架行打散」。
  */
 describe('dashboard store · 同步块', () => {

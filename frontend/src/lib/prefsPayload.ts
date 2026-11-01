@@ -56,7 +56,7 @@ export interface PrefsPayload {
   dashboard: DashboardSyncPrefs
 }
 
-/** 仪表盘同步块（第 206 期）：部件 / 书架行 / 总布局，换设备一致。 */
+/** 仪表盘同步块（第 209 期）：部件 / 书架行 / 总布局，换设备一致。 */
 export interface DashboardSyncPrefs {
   widgets: { id: WidgetId; enabled: boolean }[]
   shelves: ShelfDef[]
@@ -80,7 +80,7 @@ export interface ShelfSyncPrefs {
   rev: number
 }
 
-/** 与后端一致的块名白名单（第 9 期起含 audio；第 43 期加 shelf；第 206 期加 dashboard） */
+/** 与后端一致的块名白名单（第 9 期起含 audio；第 43 期加 shelf；第 209 期加 dashboard） */
 export const PAYLOAD_BLOCKS = ['reader', 'pdf', 'comic', 'audio', 'appearance', 'cover', 'shelf', 'dashboard'] as const
 
 /**

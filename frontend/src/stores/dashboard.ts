@@ -20,7 +20,7 @@ const SHELF_TYPES: ShelfType[] = ['continue', 'recent', 'discover', 'scope', 'li
 /**
  * 仪表盘偏好：部件的启用与顺序、书架行的启用与顺序。
  *
- * 与 BookOrbit 的差异（第 206 期已对齐）：部件 / 书架行 / 总布局现在也进**偏好同步载荷**
+ * 与 BookOrbit 的差异（第 209 期已对齐）：部件 / 书架行 / 总布局现在也进**偏好同步载荷**
  * （`dashboard` 块），换设备一致；localStorage 仍是首屏与离线的缓存（同步层 boot 时以服务端为准）。
  */
 const WIDGET_KEY = 'dashboard-widgets'

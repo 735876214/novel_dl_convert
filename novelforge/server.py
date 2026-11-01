@@ -8321,7 +8321,7 @@ def api_collection_detail(cid: int):
 @app.get("/api/collections/{cid}/books")
 def api_collection_books(cid: int, limit: int = Query(50, ge=1, le=200),
                          offset: int = Query(0, ge=0)):
-    """收藏夹书目**分页**（第 207 期）：与详情页同一判据（冲突 / 已消失的 id 跳过）。"""
+    """收藏夹书目**分页**（第 210 期）：与详情页同一判据（冲突 / 已消失的 id 跳过）。"""
     c = db.get_collection(cid)
     if not c:
         raise HTTPException(404, "收藏夹不存在")

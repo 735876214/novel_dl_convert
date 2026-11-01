@@ -91,7 +91,7 @@ def test_member_changes_first_book_and_updated_at(client, auth_headers, make_lib
 
 
 def test_收藏夹书目分页(client, auth_headers, make_library, tmp_path):
-    """第 207 期：limit/offset 与 total/has_more；冲突 / 已消失的 id 跳过。"""
+    """第 210 期：limit/offset 与 total/has_more；冲突 / 已消失的 id 跳过。"""
     root = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "coll-page"
     make_library("coll-page-lib", "分页库", "ebook", root)
     root.mkdir(parents=True, exist_ok=True)

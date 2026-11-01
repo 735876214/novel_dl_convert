@@ -11900,3 +11900,43 @@ woff2 为 `font/woff2`、`/reading-activity` 不再拉 `charts-*`。
 - 不动**原图**分支：不带 `?w=` 时仍逐字节原样下发（既有调用方与 Range 语义都不受影响）。
 - `method=6` 单张编码约 68 ms，但只在**缓存未命中**时付一次（`_cover_cached` 有 Redis 缓存 +
   浏览器 24 h 缓存）；换 `method` 省的是这点 CPU、赔的是体积，不值。
+
+## 第 209 期（仪表盘偏好存服务端）
+
+**需求来源**：用户「继续」；Phase 1 遗留项 —— 仪表盘偏好存服务端。
+
+**功能范围与修法**：
+
+1. **新偏好块 `dashboard`**（第八块）：`{widgets: [{id, enabled}], shelves: ShelfDef[], shelf_layout}`。后端 `PREFS_BLOCKS` 与前端 `PAYLOAD_BLOCKS` 同批加；`normalizePayload` 补默认值（部件默认启用集合、默认书架行 `rows=1/library_ids=[]`、单列布局）。同步层 `collect()` 收 `dashboard.exportSync()`，`applyPayload()` 调 `dashboard.applyRemote()`。
+
+2. **store 接桥**：`stores/dashboard.ts` 的本地写入 watcher 落 localStorage 后调 `notifyPrefsChanged()`；`applyRemote` 在 `suppressing()` 里赋值，避免「应用远端值又推回去」的回环。远端值仍走 store 原有的 `mergeWidgets` / `mergeShelves` / `normalizeLayout` —— 注册表新增项自动补、未知类型行丢弃、脏布局回落单列，**不把服务端脏数据直接塞进界面**。
+
+3. **localStorage 仍是缓存**：首屏 / 离线照旧从三个本地键读；服务端是同步真值源（冲突规则沿用 prefSync 既有策略）。
+
+**边界（如实留档）**：仪表盘块存的是**布局偏好**，不存任何书目 / 统计数据；脏块不会 500（store 侧归一化），但也不会被「智能修复」成用户没想到的布局 —— 只回落默认。模式（profile）现在也会带上仪表盘块，换设备套用模式后布局一致。
+
+**防回归**：`tests/test_prefs_shelf_block.py` 增 2 例（块白名单 / 创建含 dashboard 块的模式）；新增 `stores/dashboard.spec.ts`（2 例：applyRemote 合并与快照拷贝 / 脏块夹回）并登记 `EXPECTED_SPECS`。
+
+**核验**：后端全量（见 §0 基线）；前端四连（见收口基线）。
+
+> 期号说明：本轮原提交写作 206/207，但 206/207 已被并行会话占用；功能与用例已计入第 208 期在合并 HEAD 上的基线，故 §0 基线不另增。
+
+
+## 第 210 期（收藏夹书目分页）
+
+**需求来源**：用户「继续」；Phase 1 遗留项 —— 合集分页查询。
+
+**功能范围与修法**：
+
+1. **接口**：`GET /api/collections/{cid}/books?limit=50&offset=0`，返回 `{items,total,offset,next_offset,has_more}`。成员判定与详情页**同一处**：`db.collection_book_ids` → `library.by_id_status`（冲突 / 已消失的 id 跳过），所以分页的 `total` 与收藏夹列表的 `count` 仍是同一口径。
+
+2. **页面**：收藏夹详情改为首屏 50 本 + 「加载更多（已加载 / 总数）」；`PageHead` 的「共 N 本」取分页 `total`，不再用已加载页数。移出成员后重置到第一页（`load()`），避免旧分页偏移与列表对不上。
+
+**边界（如实留档）**：`GET /api/collections/{cid}` 仍返回全量 books（Komga 兼容与其它读点照旧），分页是**新增**出口，不改既有契约；排序沿用成员加入顺序（没有按书名 / 入库时间排序，本轮不新增排序轴）。
+
+**防回归**：`tests/test_collections.py` 增 1 例（3 本：limit=2 两页 / total / has_more / next_offset / 未知夹 404）。
+
+**核验**：后端全量（见 §0 基线）；前端四连 843 例。
+
+> 期号说明：本轮原提交写作 206/207，但 206/207 已被并行会话占用；功能与用例已计入第 208 期在合并 HEAD 上的基线，故 §0 基线不另增。
+

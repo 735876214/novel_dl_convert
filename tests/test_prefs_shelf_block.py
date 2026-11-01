@@ -20,7 +20,7 @@ def test_后端块白名单含shelf():
 
 
 def test_后端块白名单含dashboard():
-    """第 206 期：仪表盘偏好也走偏好同步。"""
+    """第 209 期：仪表盘偏好也走偏好同步。"""
     assert "dashboard" in server.PREFS_BLOCKS
 
 
