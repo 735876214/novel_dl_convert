@@ -12,7 +12,7 @@
 #   - 按路径精确 COPY + .dockerignore：venv/、_test/、.git/、本地 input/output 不进构建上下文
 #
 # 构建：docker build -t novelforge .
-# 瘦身开关（第 212 期起**不用改文件**，全部是 build-arg，默认都开）：
+# 瘦身开关（第 213 期起**不用改文件**，全部是 build-arg，默认都开）：
 #   --build-arg INSTALL_NODE=0        ⇒ −125 MB（Node 二进制；只有「书源靠 JS 解密」才用得到）
 #   --build-arg INSTALL_PG_CLIENT=0   ⇒ −63 MB（postgresql-client，其中 49 MB 是 Perl；
 #                                        只有 PG 后端 / 一键更新的 pg_dump 备份才需要）
@@ -60,7 +60,7 @@ COPY requirements.txt /tmp/requirements.txt
 # 允许替换 PyPI 源（国内网络 / 私有源），默认仍是官方源，CI 行为不变：
 #   docker build --build-arg PIP_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple .
 ARG PIP_INDEX=https://pypi.org/simple
-# 第 212 期：`--mount=type=cache` 让**重建**时直接复用本机的 wheel 缓存（不再重下几十 MB），
+# 第 213 期：`--mount=type=cache` 让**重建**时直接复用本机的 wheel 缓存（不再重下几十 MB），
 # 而缓存挂载**不写进镜像层**（层里仍然干干净净）。它替代了原来的 `PIP_NO_CACHE_DIR=1`
 # —— 那条 ENV 会把缓存也关掉，等于每次重建都从零下载。
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=shared \
@@ -88,7 +88,7 @@ RUN rm -rf /opt/venv/lib/python*/site-packages/pip \
 # 与 python:${PY_VERSION}-slim 同为 Debian bookworm 基线，glibc 版本一致，二进制可直接搬
 FROM node:${NODE_VERSION}-bookworm-slim AS nodejs
 
-# 第 212 期：`INSTALL_NODE=0` 时本阶段**不产出**二进制。
+# 第 213 期：`INSTALL_NODE=0` 时本阶段**不产出**二进制。
 # 为什么不「COPY 进运行层再 rm」：那样 125 MB 已经落在下层里，删了也还在（镜像不变小）。
 # 所以改成「按开关决定 /out 里有没有东西」，运行层统一 `COPY /out/`：
 # 开关关掉时 /out 是空目录，COPY 成功且不产出任何文件。
@@ -110,7 +110,7 @@ WORKDIR /web
 
 # 先 COPY 清单再装依赖：源码变动不会让依赖层失效
 COPY frontend/package.json frontend/package-lock.json frontend/.npmrc /web/
-# 第 212 期：npm 缓存挂载 —— 重建时不再重下 ~325 MB 的 tarball（缓存不进镜像层）。
+# 第 213 期：npm 缓存挂载 —— 重建时不再重下 ~325 MB 的 tarball（缓存不进镜像层）。
 RUN --mount=type=cache,target=/root/.npm \
     npm config set registry "${NPM_REGISTRY}" \
     && npm ci --no-audit --no-fund
@@ -156,7 +156,7 @@ ENV PYTHONUNBUFFERED=1 \
 #                       本镜像基线（trixie）带 17，可 dump 16；若把基线退回 bookworm（client 15）
 #                       会得到 `pg_dump: server version: 16.x ... aborting` —— 那时必须走 PGDG 源。
 #
-# 第 212 期：`INSTALL_PG_CLIENT=0` 可跳过 postgresql-client —— 实测它连带 **63 MB**，
+# 第 213 期：`INSTALL_PG_CLIENT=0` 可跳过 postgresql-client —— 实测它连带 **63 MB**，
 # 其中 **49 MB 是 Perl**（libperl5.40 28.6 + perl-modules-5.40 19.5 + perl 0.8，
 # 都是 postgresql-client-common 的包装脚本要的）。apt 这一步也是首次构建里**最慢**的一段
 # （实测 56.9 s / 全量构建 71.8 s）。关掉的前提：**不用 PostgreSQL 后端**（`NOVELFORGE_DB=pg`）、
@@ -174,7 +174,7 @@ RUN apt-get -o Acquire::Retries=5 update \
 
 # 只搬构建产物：venv 与 node 二进制，编译工具链 / apt 缓存自然被丢弃
 COPY --from=builder /opt/venv /opt/venv
-# 第 212 期：从 `/out/` 取（`INSTALL_NODE=0` 时它是空目录，这一行就不产出任何文件）
+# 第 213 期：从 `/out/` 取（`INSTALL_NODE=0` 时它是空目录，这一行就不产出任何文件）
 COPY --from=nodejs  /out/ /usr/local/bin/
 
 WORKDIR /app

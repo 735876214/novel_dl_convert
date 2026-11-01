@@ -38,7 +38,7 @@ services:
         INSTALL_BUILD_TOOLS: "0"
         # 国内 PyPI 源，比 pypi.org 快很多
         PIP_INDEX: "https://pypi.tuna.tsinghua.edu.cn/simple"
-        # 第 212 期：两个**按需关闭**的瘦身开关（默认 1 = 开，行为与以前一致）。
+        # 第 213 期：两个**按需关闭**的瘦身开关（默认 1 = 开，行为与以前一致）。
         # 本测试 compose 跑的是 SQLite，所以这两个都可以关掉，镜像 704 MB → 约 516 MB：
         #   INSTALL_PG_CLIENT=0 ⇒ −63 MB（postgresql-client，其中 49 MB 是它拖来的 Perl）。
         #       只在 `NOVELFORGE_DB=pg` 或「更新前自动备份（pg_dump）」时需要。

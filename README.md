@@ -660,7 +660,7 @@ docker build --build-arg NODE_VERSION=22 -t novelforge .
 不带 npm/文档；按路径精确 COPY 配合 `.dockerignore`；pip / npm 都挂了 BuildKit 缓存挂载
 （重建时不再重下几十 MB，缓存**不写进镜像层**）。
 
-第 212 期起有两个**按需关闭的 build-arg**（默认都开，构建结果与之前逐层一致；
+第 213 期起有两个**按需关闭的 build-arg**（默认都开，构建结果与之前逐层一致；
 两个都关实测 **704 MB → 453 MB**）：
 
 ```bash

@@ -63,7 +63,7 @@ def test_构建脚本会生成旁路件():
 
 
 def test_瘦身开关默认开启且真的能省下来():
-    """第 212 期：`INSTALL_NODE` / `INSTALL_PG_CLIENT` 两个 build-arg。
+    """第 213 期：`INSTALL_NODE` / `INSTALL_PG_CLIENT` 两个 build-arg。
 
     钉三件最容易写错的事：
     1. **默认必须是 1**（构建结果与改造前一致，老命令不受影响）；
@@ -83,7 +83,7 @@ def test_瘦身开关默认开启且真的能省下来():
 
 
 def test_构建挂了缓存挂载():
-    """pip / npm 的 BuildKit 缓存挂载（第 212 期）：重建时不再重下，且缓存不进镜像层。
+    """pip / npm 的 BuildKit 缓存挂载（第 213 期）：重建时不再重下，且缓存不进镜像层。
 
     ⚠️ 它与 `PIP_NO_CACHE_DIR=1` 互斥 —— 那条 ENV 会把 pip 缓存整个关掉，挂载等于白加。
     """
