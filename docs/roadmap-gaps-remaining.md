@@ -12028,6 +12028,18 @@ psycopg=PG 后端、pypdfium2=PDF、quickjs=书源 JS、rarfile=CBR…）。砍�
 - 不替换 apt 源：那属于部署策略，写死在 Dockerfile 里会在别的网络环境下帮倒忙
   （同理 `PIP_INDEX` / `NPM_REGISTRY` 保持「可传、默认官方」）。
 
+**审计补记（同日复盘第 179–213 期时发现并修掉）**
+
+- **缩略图重编码会丢 EXIF 方向**：浏览器显示 JPEG 时按 `Orientation` 自动旋转，而重编码把 EXIF
+  一并丢掉 ⇒ 带方向标记的封面被转 90°（实测 1200×1600 + 方向 6 → 输出 480×640，应为 480×360）。
+  老代码在「宽图被缩」这条路上就有同样缺陷，第 208 期把重编码范围扩到「字节重的窄图」后影响面变大
+  ⇒ 在 `thumbs.resize_image` 里先 `exif_transpose`，用例断言输出尺寸与「不再带方向标记」。
+- **注释与实测对不上**：Dockerfile 头注释写「约 516 MB」（手算估值），实测 **453 MB**；`thumbs` 把
+  「同尺寸重编码 −26~40%」说成「缩到 480 px 的收益」，而那批封面本来就是 427×600、没缩过。
+  `duplicate_groups` 的 docstring 也仍停在「同尺寸候选按 sha256 比对」。三处都按实测改写。
+- **发现但没改**：Komga `/api/v1/books/{id}/thumbnail` 调 `api_book_cover(book_id)` 时不传 `w`
+  ⇒ Komga 客户端每本拿 300 KB 原图。改一行即可，但那是**对外行为变更**，留待单独立期。
+
 ## 第 214 期（元数据批量抓取：暂停 / 继续 / 取消 + 预览汇总）
 
 **需求来源**：用户「继续」；Phase 4 —— 元数据批处理控制。
@@ -12043,4 +12055,22 @@ psycopg=PG 后端、pypdfium2=PDF、quickjs=书源 JS、rarfile=CBR…）。砍�
 **防回归**：`MetadataPage` 无独立 spec（它依赖设置配置/书库 store，整套挂载成本高）；本轮只加前端状态机与汇总，`vue-tsc` / build 通过；后端零改动，基线沿用第 212 期。
 
 **核验**：后端基线沿用 2971（2957 passed / 14 skipped）；前端四连 845 例。
+
+## 第 215 期（成就展示柜）
+
+**需求来源**：用户「继续」；Phase 4 —— 成就展示柜。
+
+**功能范围与修法**：
+
+1. **偏好块 `achievements`**（第九块）：`{display_case: string[]}`，最多 3 个、去重、只存**成就 key**（进度 / 解锁时间仍由后端实时算）。后端 `PREFS_BLOCKS` 与前端 `PAYLOAD_BLOCKS` 同批加；`normalizePayload` 缺省空数组并去重截断。
+
+2. **store 与同步**：`stores/achievementsPrefs.ts` 管本机缓存、钉/取消、`applyRemote` / `exportSync`；写 localStorage 后 `notifyPrefsChanged()`。prefSync 收集并应用该块，且与 dashboard 一样：**旧载荷没有 achievements 块时不应用默认值**（否则升级后第一次 boot 会把本机展示柜清空）。
+
+3. **页面**：成就页顶部显示展示柜（只在有已钉**且仍解锁**的项时出现）；每个已解锁成就行多「放入展示柜 / 移出展示柜」，未解锁项不显示入口（不摆无意义按钮）。
+
+**边界（如实留档）**：展示柜只放成就 key，不存快照（成就名/描述随目录更新）；上限 3 是产品口径，不做拖拽排序（钉的顺序即展示顺序）；未解锁 / 已从目录消失的 key 自动忽略。
+
+**防回归**：`tests/test_prefs_shelf_block.py` 增 2 例（块白名单 / 创建含 achievements 块的模式）；新增 `stores/achievementsPrefs.spec.ts`（2 例：去重上限与移出 / applyRemote 截断与快照拷贝）并登记 `EXPECTED_SPECS`。
+
+**核验**：后端全量（见 §0 基线）；前端四连（见收口基线）。
 
