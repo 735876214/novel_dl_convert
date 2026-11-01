@@ -8318,6 +8318,30 @@ def api_collection_detail(cid: int):
     return {"id": c["id"], "name": c["name"], "books": books}
 
 
+@app.get("/api/collections/{cid}/books")
+def api_collection_books(cid: int, limit: int = Query(50, ge=1, le=200),
+                         offset: int = Query(0, ge=0)):
+    """收藏夹书目**分页**（第 207 期）：与详情页同一判据（冲突 / 已消失的 id 跳过）。"""
+    c = db.get_collection(cid)
+    if not c:
+        raise HTTPException(404, "收藏夹不存在")
+    books = []
+    for bid in db.collection_book_ids(cid):
+        b = library.by_id_status(bid)[0]
+        if b:
+            books.append(b)
+    total = len(books)
+    page = books[offset:offset + limit]
+    next_offset = offset + len(page)
+    return {
+        "items": [_card(b) for b in page],
+        "total": total,
+        "offset": offset,
+        "next_offset": next_offset if next_offset < total else None,
+        "has_more": next_offset < total,
+    }
+
+
 @app.delete("/api/collections/{cid}")
 def api_delete_collection(cid: int):
     db.delete_collection(cid)
@@ -8478,7 +8502,7 @@ def api_delete_smart_scope(sid: int):
 #   · 删模式只把引用设备的 active_profile_id 置空（来源标记），设备配置不动；
 #   · 设备上报（PUT）不写活动日志（每次启动都发生，无审计价值），只有模式变更写。
 
-PREFS_BLOCKS = {"reader", "pdf", "comic", "audio", "appearance", "cover", "shelf"}
+PREFS_BLOCKS = {"reader", "pdf", "comic", "audio", "appearance", "cover", "shelf", "dashboard"}
 PREFS_MAX_BYTES = 64 * 1024
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 

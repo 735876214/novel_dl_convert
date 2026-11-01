@@ -88,3 +88,31 @@ def test_member_changes_first_book_and_updated_at(client, auth_headers, make_lib
     assert item["count"] == 1
     assert item["first_book_id"] == bid
     assert item["updated_at"] >= before_ts  # 成员变动刷新「最后修改」
+
+
+def test_收藏夹书目分页(client, auth_headers, make_library, tmp_path):
+    """第 207 期：limit/offset 与 total/has_more；冲突 / 已消失的 id 跳过。"""
+    root = pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"]) / "coll-page"
+    make_library("coll-page-lib", "分页库", "ebook", root)
+    root.mkdir(parents=True, exist_ok=True)
+    for name in ("一.epub", "二.epub", "三.epub"):
+        (root / name).write_bytes(b"EPUB")
+    library.invalidate()
+    bids = [b["id"] for b in library.books("coll-page-lib")]
+    assert len(bids) == 3
+
+    cid = _create(client, auth_headers, "分页夹").json()["id"]
+    for bid in bids:
+        assert client.post(f"/api/collections/{cid}/books", headers=auth_headers,
+                           json={"book_id": bid}).status_code == 200
+
+    r = client.get(f"/api/collections/{cid}/books",
+                   params={"limit": 2, "offset": 0}, headers=auth_headers).json()
+    assert r["total"] == 3 and len(r["items"]) == 2
+    assert r["has_more"] is True and r["next_offset"] == 2
+    r2 = client.get(f"/api/collections/{cid}/books",
+                    params={"limit": 2, "offset": 2}, headers=auth_headers).json()
+    assert len(r2["items"]) == 1 and r2["has_more"] is False and r2["next_offset"] is None
+
+    assert client.get("/api/collections/999999/books",
+                      headers=auth_headers).status_code == 404

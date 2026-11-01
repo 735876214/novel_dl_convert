@@ -10,6 +10,7 @@ import { onPrefsChanged, suppressing } from '@/lib/prefsBridge'
 import { normalizePayload, payloadEqual, type PrefsPayload } from '@/lib/prefsPayload'
 import { readReaderPrefs, saveReaderPrefs } from '@/lib/readerPrefs'
 import { useCoverPrefsStore } from '@/stores/coverPrefs'
+import { useDashboardStore } from '@/stores/dashboard'
 import { useDisplayPrefsStore } from '@/stores/displayPrefs'
 import { useShelfPrefsStore } from '@/stores/shelfPrefs'
 import { useThemeStore, type RadiusMode, type ThemeMode } from '@/stores/theme'
@@ -58,6 +59,7 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
   const cover = useCoverPrefsStore()
   const display = useDisplayPrefsStore()
   const shelf = useShelfPrefsStore()
+  const dashboard = useDashboardStore()
 
   const deviceId = ref(deviceIdOf())
   const deviceName = ref(deviceNameOf())
@@ -101,6 +103,8 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       // 会把 `collapseSeries` 当成**旧存档**丢掉换成默认值 —— 于是用户刚关掉的折叠
       // 在推上去的那一刻被改回「开」，且不会有任何报错。
       shelf: { collapseSeries: shelf.prefs.collapseSeries, rev: shelf.prefs.rev },
+      // 仪表盘块（第 206 期）：部件 / 书架行 / 总布局，换设备一致。
+      dashboard: dashboard.exportSync(),
     })
   }
 
@@ -123,6 +127,8 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       display.applyRemote(p.appearance)
       // shelf 块同理：只喂可同步键（collapseSeries），本机专属的书架字段不动
       shelf.applyRemote(p.shelf)
+      // 仪表盘块（第 206 期）：服务端值经同一套合并 / 归一再落进 store
+      dashboard.applyRemote(p.dashboard)
     })
   }
 

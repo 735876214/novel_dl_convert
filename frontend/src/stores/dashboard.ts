@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 
+import { notifyPrefsChanged, suppressing } from '@/lib/prefsBridge'
+import type { DashboardSyncPrefs } from '@/lib/prefsPayload'
 import {
   DEFAULT_SHELF_LAYOUT,
   DEFAULT_SHELVES,
@@ -18,12 +20,8 @@ const SHELF_TYPES: ShelfType[] = ['continue', 'recent', 'discover', 'scope', 'li
 /**
  * 仪表盘偏好：部件的启用与顺序、书架行的启用与顺序。
  *
- * 与 BookOrbit 的差异（已知偏离，已在计划中标注）：
- *   BookOrbit 把 widget 偏好存服务端账户、shelf 偏好存 localStorage；
- *   本项目**两者都存 localStorage** —— 理由是它们是「这块屏幕怎么摆」的
- *   **本地视图偏好**，不是「外观 / 阅读偏好」，故与 `stores/statsChartPrefs`、
- *   `stores/shelfPrefs` 同档，**不进偏好同步载荷**（`lib/prefsPayload.ts`）。
- *   代价是换设备不同步；要改成服务端只需替换这里的读写实现，渲染层契约不变。
+ * 与 BookOrbit 的差异（第 206 期已对齐）：部件 / 书架行 / 总布局现在也进**偏好同步载荷**
+ * （`dashboard` 块），换设备一致；localStorage 仍是首屏与离线的缓存（同步层 boot 时以服务端为准）。
  */
 const WIDGET_KEY = 'dashboard-widgets'
 const SHELF_KEY = 'dashboard-shelves'
@@ -121,9 +119,38 @@ export const useDashboardStore = defineStore('dashboard', () => {
   /** 书架总布局：单列 / 两列（第 82 期对齐 BookOrbit 的 SHELF_LAYOUT） */
   const shelfLayout = ref<ShelfLayout>(normalizeLayout(readJson<unknown>(LAYOUT_KEY, null)))
 
-  watch(widgets, (v) => writeJson(WIDGET_KEY, v), { deep: true })
-  watch(shelves, (v) => writeJson(SHELF_KEY, v), { deep: true })
-  watch(shelfLayout, (v) => writeJson(LAYOUT_KEY, v))
+  watch(widgets, (v) => {
+    writeJson(WIDGET_KEY, v)
+    notifyPrefsChanged()
+  }, { deep: true })
+  watch(shelves, (v) => {
+    writeJson(SHELF_KEY, v)
+    notifyPrefsChanged()
+  }, { deep: true })
+  watch(shelfLayout, (v) => {
+    writeJson(LAYOUT_KEY, v)
+    notifyPrefsChanged()
+  })
+
+  /** 同步层用：当前值的可序列化快照（深拷贝，避免把响应式代理塞进 payload）。 */
+  function exportSync(): DashboardSyncPrefs {
+    return {
+      widgets: widgets.value.map((w) => ({ ...w })),
+      shelves: shelves.value.map((s) => ({ ...s, library_ids: [...(s.library_ids || [])] })),
+      shelf_layout: shelfLayout.value,
+    }
+  }
+
+  /** 同步层用：应用服务端载荷（仍走同一套合并/归一化，脏数据不会直接落进界面）。 */
+  function applyRemote(raw?: Partial<DashboardSyncPrefs> | null): void {
+    if (!raw) return
+    suppressing(() => {
+      widgets.value = mergeWidgets(Array.isArray(raw.widgets) ? (raw.widgets as WidgetPref[]) : null)
+      shelves.value = mergeShelves(Array.isArray(raw.shelves) ? (raw.shelves as ShelfDef[]) : null)
+        .map((s) => ({ ...s }))
+      shelfLayout.value = normalizeLayout(raw.shelf_layout)
+    })
+  }
 
   const enabledWidgets = computed(() => widgets.value.filter((w) => w.enabled))
   const enabledShelves = computed(() => shelves.value.filter((s) => s.enabled))
@@ -262,5 +289,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
     removeShelf,
     addShelf,
     reset,
+    exportSync,
+    applyRemote,
   }
 })

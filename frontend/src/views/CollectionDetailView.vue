@@ -8,7 +8,7 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
-import { api, type CollectionDetail } from '@/lib/api'
+import { api, type BookCard, type CollectionDetail } from '@/lib/api'
 import { useCollectionsStore } from '@/stores/collections'
 import { useUiStore } from '@/stores/ui'
 
@@ -20,17 +20,37 @@ const ui = useUiStore()
 
 const cid = computed(() => Number(route.params.id))
 const detail = ref<CollectionDetail | null>(null)
+const books = ref<BookCard[]>([])
+const total = ref(0)
+const hasMore = ref(false)
+let nextOffset = 0
+const PAGE = 50
 const loading = ref(true)
 /** 加载失败信息：失败不能退化成「这个收藏夹还是空的」。 */
 const error = ref('')
+
+async function loadBooks(reset = true): Promise<void> {
+  const r = await api.collectionBooks(cid.value, PAGE, reset ? 0 : nextOffset)
+  books.value = reset ? r.items : [...books.value, ...r.items]
+  total.value = r.total
+  hasMore.value = r.has_more
+  nextOffset = r.next_offset ?? 0
+}
+
+function loadMore(): void {
+  if (!hasMore.value) return
+  void loadBooks(false)
+}
 
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
     detail.value = await api.collectionDetail(cid.value)
+    await loadBooks(true)
   } catch (e) {
     detail.value = null
+    books.value = []
     error.value = e instanceof Error ? e.message : '加载失败'
   }
   loading.value = false
@@ -77,7 +97,7 @@ async function removeCollection(): Promise<void> {
     </button>
 
     <div class="flex items-start justify-between gap-3">
-      <PageHead :title="detail?.name ?? '收藏夹'" :desc="`共 ${detail?.books.length ?? 0} 本`" />
+      <PageHead :title="detail?.name ?? '收藏夹'" :desc="`共 ${total} 本`" />
       <Button v-if="detail" variant="danger" size="sm" @click="removeCollection">
         <Icon name="trash" class="h-3.5 w-3.5" />删除收藏夹
       </Button>
@@ -95,10 +115,10 @@ async function removeCollection(): Promise<void> {
     </Card>
 
     <div
-      v-else-if="detail && detail.books.length"
+      v-else-if="books.length"
       class="grid grid-cols-2 gap-x-4 gap-y-5 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6 2xl:grid-cols-8"
     >
-      <div v-for="b in detail.books" :key="b.id" class="group relative [content-visibility:auto] [contain-intrinsic-size:auto_260px]">
+      <div v-for="b in books" :key="b.id" class="group relative [content-visibility:auto] [contain-intrinsic-size:auto_260px]">
         <button
           type="button"
           class="w-full cursor-pointer text-left"
@@ -118,9 +138,12 @@ async function removeCollection(): Promise<void> {
         </button>
       </div>
     </div>
+    <div v-if="hasMore" class="mt-4 flex justify-center">
+      <Button size="sm" variant="ghost" @click="loadMore">加载更多（{{ books.length }} / {{ total }}）</Button>
+    </div>
 
     <EmptyState
-      v-else
+      v-if="!loading && !error && !books.length"
       icon="star"
       title="这个收藏夹还是空的"
       desc="到书籍详情页点「加入收藏」把书放进来。"

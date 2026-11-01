@@ -5186,6 +5186,13 @@ export const api = {
   collectionDetail: (id: number) =>
     request<CollectionDetail>(`/api/collections/${id}`),
 
+  /** 收藏夹书目分页（第 207 期）。 */
+  collectionBooks: (id: number, limit = 50, offset = 0) =>
+    request<{ items: BookCard[]; total: number; offset: number;
+      next_offset: number | null; has_more: boolean }>(
+      `/api/collections/${id}/books?limit=${limit}&offset=${offset}`,
+    ),
+
   deleteCollection: (id: number) =>
     request<{ ok: boolean }>(`/api/collections/${id}`, { method: 'DELETE' }),
 

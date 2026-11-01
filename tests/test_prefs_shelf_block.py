@@ -19,6 +19,23 @@ def test_后端块白名单含shelf():
     assert "shelf" in server.PREFS_BLOCKS
 
 
+def test_后端块白名单含dashboard():
+    """第 206 期：仪表盘偏好也走偏好同步。"""
+    assert "dashboard" in server.PREFS_BLOCKS
+
+
+def test_创建含dashboard块的模式成功(client, auth_headers):
+    r = client.post(
+        "/api/prefs/profiles",
+        headers=auth_headers,
+        json={"name": "仪表盘模式", "payload": {"dashboard": {
+            "widgets": [{"id": "library-overview", "enabled": True}],
+            "shelves": [], "shelf_layout": "two-columns"}}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["payload"]["dashboard"]["shelf_layout"] == "two-columns"
+
+
 def test_创建含shelf块的模式成功(client, auth_headers):
     r = client.post(
         "/api/prefs/profiles",

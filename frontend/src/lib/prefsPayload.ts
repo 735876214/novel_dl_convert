@@ -7,11 +7,20 @@ import { COMIC_PREFS_DEFAULT, type ComicPrefs } from './comicPrefs'
 import { PDF_PREFS_DEFAULT, type PdfPrefs } from './pdfPrefs'
 import { READER_PREFS_DEFAULT, type ReaderPrefs } from './readerPrefs'
 import { SHELF_PREFS_DEFAULT, SHELF_PREFS_REV } from '@/stores/shelfPrefs'
+import {
+  DEFAULT_SHELF_LAYOUT,
+  DEFAULT_SHELVES,
+  DEFAULT_WIDGET_IDS,
+  WIDGET_IDS,
+  type ShelfDef,
+  type ShelfLayout,
+  type WidgetId,
+} from '@/data/dashboard'
 
 /**
- * 偏好载荷：**七块**，与服务端 `PREFS_BLOCKS` 一一对应。
+ * 偏好载荷：**八块**，与服务端 `PREFS_BLOCKS` 一一对应。
  *
- * ⚠️ 七块背后其实是 **9 个 localStorage 键**（`appearance` 一块 = 主题 / 点缀色 / 圆角
+ * ⚠️ 八块背后其实是 **9 个 localStorage 键**（`appearance` 一块 = 主题 / 点缀色 / 圆角
  * 三个独立键；`shelf` 一块 = 系列默认折叠，第 43 期并入）—— 按「模块」枚举会漏键，
  * 所以这里按块定义、在同步层里逐块读写。
  *
@@ -44,6 +53,14 @@ export interface PrefsPayload {
   appearance: AppearancePrefs
   cover: CoverPrefs
   shelf: ShelfSyncPrefs
+  dashboard: DashboardSyncPrefs
+}
+
+/** 仪表盘同步块（第 206 期）：部件 / 书架行 / 总布局，换设备一致。 */
+export interface DashboardSyncPrefs {
+  widgets: { id: WidgetId; enabled: boolean }[]
+  shelves: ShelfDef[]
+  shelf_layout: ShelfLayout
 }
 
 /**
@@ -63,8 +80,8 @@ export interface ShelfSyncPrefs {
   rev: number
 }
 
-/** 与后端一致的块名白名单（第 9 期起含 audio；第 43 期加 shelf） */
-export const PAYLOAD_BLOCKS = ['reader', 'pdf', 'comic', 'audio', 'appearance', 'cover', 'shelf'] as const
+/** 与后端一致的块名白名单（第 9 期起含 audio；第 43 期加 shelf；第 206 期加 dashboard） */
+export const PAYLOAD_BLOCKS = ['reader', 'pdf', 'comic', 'audio', 'appearance', 'cover', 'shelf', 'dashboard'] as const
 
 /**
  * 外观默认值：主题部分与 stores/theme.ts 的初值一致（system / neutral / default）；
@@ -83,6 +100,13 @@ export const SHELF_SYNC_DEFAULT: ShelfSyncPrefs = {
   rev: SHELF_PREFS_REV,
 }
 
+/** 仪表盘块默认值：与 `stores/dashboard.ts` 的初始合并结果同源。 */
+export const DASHBOARD_SYNC_DEFAULT: DashboardSyncPrefs = {
+  widgets: WIDGET_IDS.map((id) => ({ id, enabled: DEFAULT_WIDGET_IDS.includes(id) })),
+  shelves: DEFAULT_SHELVES.map((s) => ({ ...s, rows: 1, library_ids: [] })),
+  shelf_layout: DEFAULT_SHELF_LAYOUT,
+}
+
 /**
  * 书架块归一化：**版本不符的块按「没推过」处理**。
  *
@@ -99,6 +123,15 @@ function normalizeShelf(raw: Partial<ShelfSyncPrefs> | null | undefined): ShelfS
   }
 }
 
+function normalizeDashboard(raw: Partial<DashboardSyncPrefs> | null | undefined): DashboardSyncPrefs {
+  const r = (raw || {}) as Partial<DashboardSyncPrefs>
+  return {
+    widgets: Array.isArray(r.widgets) ? r.widgets : DASHBOARD_SYNC_DEFAULT.widgets.map((w) => ({ ...w })),
+    shelves: Array.isArray(r.shelves) ? r.shelves : DASHBOARD_SYNC_DEFAULT.shelves.map((s) => ({ ...s })),
+    shelf_layout: r.shelf_layout === 'two-columns' ? 'two-columns' : DEFAULT_SHELF_LAYOUT,
+  }
+}
+
 /** 补齐缺省字段、丢弃未知块，得到一份可用于比较与推送的完整载荷 */
 export function normalizePayload(raw: Partial<PrefsPayload> | null | undefined): PrefsPayload {
   const r = (raw || {}) as Partial<PrefsPayload>
@@ -110,6 +143,7 @@ export function normalizePayload(raw: Partial<PrefsPayload> | null | undefined):
     appearance: { ...APPEARANCE_DEFAULT, ...(r.appearance || {}) },
     cover: { ...COVER_PREFS_DEFAULT, ...(r.cover || {}) },
     shelf: normalizeShelf(r.shelf),
+    dashboard: normalizeDashboard(r.dashboard),
   }
 }
 
