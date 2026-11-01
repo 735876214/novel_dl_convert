@@ -4652,7 +4652,7 @@ def _cover_response(data: bytes, media: str) -> Response:
 def _cover_cached(bid: str, src, produce, width: int = 0):
     """封面字节的读缓存（第 62 期 C）。``src`` = 封面**从中读出的那个文件**。
 
-    第 152 期加 ``width``：给定时先缩到该宽度（`core/thumbs.resize_jpeg`），**宽度进缓存键**
+    第 152 期加 ``width``：给定时先缩到该宽度（`core/thumbs.resize_image`），**宽度进缓存键**
     —— 否则先请求小图的人会让所有人拿到小图。``width=0``（缺省）时键与行为与改造前逐字相同。
 
     存的是 ``媒体类型 + b"\\n" + 字节``：媒体类型只有几十字节，为它把整张图 base64
@@ -4678,12 +4678,13 @@ def _cover_cached(bid: str, src, produce, width: int = 0):
         except Exception:                      # noqa: BLE001
             pass
     data, media = produce()
-    # 缩略（第 152 期）：`resize_jpeg` 在「本来就够小 / 失败」时**原样返回同一个对象**，
-    # 用身份判断而不是比较字节 —— 省一次比较，也让「没缩」时媒体类型保持不变。
+    # 缩略（第 152 期）：`resize_image` 在「本来就够小 / 失败」时**原样返回同一个对象**，
+    # 用身份判断而不是比较字节 —— 省一次比较，也让「没缩」时媒体类型保持不变
+    # （第 206 期起缩略图是 WebP，没重编码就不能贴 `image/webp`）。
     if width:
-        small = thumbs.resize_jpeg(data, width)
+        small = thumbs.resize_image(data, width)
         if small is not data:
-            data, media = small, "image/jpeg"
+            data, media = small, thumbs.THUMB_MEDIA
     if key:
         try:
             cache.set_bytes(key, media.encode("latin-1") + b"\n" + data, cache.TTL_COVER)
@@ -4837,7 +4838,10 @@ def api_book_cover(bid: str, w: int = 0):
                 data = cover.read_bytes()
             except OSError:
                 raise HTTPException(404, "封面文件读不出来") from None
-            return _cover_response(thumbs.resize_jpeg(data, width), "image/jpeg")
+            small = thumbs.resize_image(data, width)
+            if small is data:                       # 本来就够小 ⇒ 原图 + 原媒体类型
+                return _cover_response(data, mimetypes.guess_type(name)[0] or "image/jpeg")
+            return _cover_response(small, thumbs.THUMB_MEDIA)
         return _media_file(cover, mimetypes.guess_type(name)[0] or "image/jpeg")
 
     # ⚠️ 服务端抓取的封面**与文件格式无关**（第 87 期修的真 bug）：
@@ -4852,9 +4856,9 @@ def api_book_cover(bid: str, w: int = 0):
         # `?w=` 同样覆盖抓取封面（第 152 期）：它和文件内封面一样可能是大图，
         # 而这张表没有文件指纹、不进 `_cover_cached`，所以在这里原地缩。
         if width:
-            small = thumbs.resize_jpeg(data, width)
+            small = thumbs.resize_image(data, width)
             if small is not data:
-                data, sct = small, "image/jpeg"
+                data, sct = small, thumbs.THUMB_MEDIA
         return _cover_response(data, sct or "image/jpeg")
 
     if fmt == "FB2":

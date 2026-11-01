@@ -4,11 +4,12 @@
 系列页 652 张，全尺寸下发意味着几十 MB 的流量 —— 而卡片上它们只占 150–180 CSS px
 （2x 屏 ≈ 360 物理像素）。这是「打开书架慢」里最容易被漏掉的一段：接口本身只有几十 KB。
 
-**只做一件事**：等比缩到给定宽度，编码成 JPEG。所有判断都收在本模块：
+**只做一件事**：等比缩到给定宽度，编码成 **WebP**（第 206 期起；此前是 JPEG，实测同尺寸
+小 26–40%）。所有判断都收在本模块：
 - 宽度先夹到 ``MIN_WIDTH..MAX_WIDTH``（调用方传什么都安全）；
 - 原图本来就比目标窄 ⇒ **原样返回**（放大会糊，且白白重新编码）；
 - 任何解码/编码失败 ⇒ **原样返回**（缩略图是优化，不是可用性前提 —— 拿不到图比拿不到图更糟）；
-- 带了 alpha 的 PNG 铺白底再转 JPEG（透明像素转成黑色是最常见的「封面变黑」来源）。
+- 带了 alpha 的 PNG 铺白底再编码（透明像素转成黑色是最常见的「封面变黑」来源）。
 
 ⚠️ 这是「封面缩略」的**唯一实现**：`server._cover_cached` 是唯一调用方。别在端点里
 再抄一份 ``Image.open``（本项目已有 ``komga_api`` 的「转 JPEG」那一段，它做的是**格式转换**
@@ -25,6 +26,14 @@ MAX_WIDTH = 1024
 #: 编码质量。82 在封面这种大面积渐变的图上肉眼无差，体积约为 92 的一半。
 QUALITY = 82
 
+#: 缩略图的编码与媒体类型（第 206 期：JPEG → WebP）。
+#: 实测同一批真机封面缩到 480 px 宽：WebP(q82) 比 JPEG(q82) 小 **26–40%**
+#: （8 张合计 531,256 → 382,420 B，−28%；单张 18–22 KB）。2026 年所有在用的浏览器
+#: 都能直接 `<img>` 解 WebP ⇒ 不做 `Accept` 协商（那要多一份缓存键与一条回退分支）。
+#: ⚠️ 只在**真的重编码**时才能用这个类型 —— 没缩时返回的是原图字节，`resize_image`
+#: 原样返回同一个对象，调用方靠它判断要不要换媒体类型。
+THUMB_MEDIA = "image/webp"
+
 
 def clamp_width(width: int) -> int:
     """把调用方给的宽度夹进合法区间；非数字 / 非正数 → 0（= 不缩）。"""
@@ -37,10 +46,11 @@ def clamp_width(width: int) -> int:
     return max(MIN_WIDTH, min(MAX_WIDTH, w))
 
 
-def resize_jpeg(data: bytes, width: int) -> bytes:
-    """等比缩到 ``width`` 宽并以 JPEG 返回；**任何失败都返回原字节**。
+def resize_image(data: bytes, width: int) -> bytes:
+    """等比缩到 ``width`` 宽并以 **WebP** 返回；**任何失败都返回原字节（同一个对象）**。
 
-    调用方只在「确实要缩」时才调它（宽度合法且原图更大由这里自己判）。
+    调用方只在「确实要缩」时才调它（宽度合法且原图更大由这里自己判）；返回原对象
+    就说明没重编码 ⇒ 媒体类型沿用原图的，别贴 `THUMB_MEDIA`。
     """
     w = clamp_width(width)
     if not w or not data:
@@ -54,10 +64,28 @@ def resize_jpeg(data: bytes, width: int) -> bytes:
             if im.width <= w:
                 return data                             # 本来就够小：不放大、不重编码
             height = max(1, round(im.height * (w / im.width)))
-            thumb = im.convert("RGB") if im.mode not in ("RGB", "L") else im
-            thumb = thumb.resize((w, height), Image.LANCZOS)
+            thumb = _flatten(im).resize((w, height), Image.LANCZOS)
             buf = io.BytesIO()
-            thumb.save(buf, "JPEG", quality=QUALITY, optimize=True)
+            # `method=6` 是最慢也最小的一档：缩略图只算一次、之后进缓存，值得这点 CPU
+            thumb.save(buf, "WEBP", quality=QUALITY, method=6)
             return buf.getvalue()
     except Exception:                                   # noqa: BLE001 —— 坏图 / 不认识的格式
         return data
+
+
+def _flatten(im) -> "object":
+    """带透明的图**铺白底**再交给编码器；其余直接转 RGB。
+
+    ⚠️ 不能只 `convert("RGB")`：那一步只是**丢掉 alpha 通道**，透明像素的 RGB 通常是
+    (0,0,0) ⇒ 缩略图整片发黑（模块头注释里那条「封面变黑」说的就是它）。第 206 期之前
+    这里确实写成了 `convert("RGB")` —— 判据与注释不一致，属于「注释比代码诚实」的反例。
+    """
+    from PIL import Image
+
+    has_alpha = im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+    if not has_alpha:
+        return im if im.mode == "RGB" else im.convert("RGB")
+    rgba = im.convert("RGBA")
+    bg = Image.new("RGB", rgba.size, (255, 255, 255))
+    bg.paste(rgba, mask=rgba.getchannel("A"))
+    return bg
