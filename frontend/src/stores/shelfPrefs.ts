@@ -27,6 +27,9 @@ export interface ShelfPrefs {
   view: ShelfView
   sort: ShelfSort
   dir: SortDir
+  /** 次级排序（第 212 期）：空串 = 不启用；与主排序相同的键会被忽略 */
+  sort2: ShelfSort | ''
+  dir2: SortDir
   /** 折叠同系列：同系列的书合成一张卡 / 一行（第 152 期起**默认开**） */
   collapseSeries: boolean
   /**
@@ -64,6 +67,8 @@ export const SHELF_PREFS_DEFAULT: ShelfPrefs = {
   view: 'grid',
   sort: 'added',
   dir: 'desc',
+  sort2: '',
+  dir2: 'asc',
   // 第 152 期：默认**折叠**。上游 BookOrbit 的同一项叫「Collapse series by default」；
   // 本项目第 32 期实现时定为「默认关」，实测代价是：漫画库（一册一个文件的形态）
   // 永远是 2043 张卡、其中 42 张标题就是 `Vol.03` / `Vol.04`（第 145 期已把 series 数据
@@ -118,6 +123,9 @@ function read(): ShelfPrefs {
         ? (p.sort as ShelfSort)
         : SHELF_PREFS_DEFAULT.sort,
       dir: p.dir === 'asc' || p.dir === 'desc' ? p.dir : SHELF_PREFS_DEFAULT.dir,
+      sort2: p.sort2 === '' ? '' : (SHELF_SORT_OPTIONS.some((o) => o.value === p.sort2)
+        ? (p.sort2 as ShelfSort) : SHELF_PREFS_DEFAULT.sort2),
+      dir2: p.dir2 === 'asc' || p.dir2 === 'desc' ? p.dir2 : SHELF_PREFS_DEFAULT.dir2,
       collapseSeries: revOk && typeof p.collapseSeries === 'boolean'
         ? p.collapseSeries
         : SHELF_PREFS_DEFAULT.collapseSeries,

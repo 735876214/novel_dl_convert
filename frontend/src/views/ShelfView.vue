@@ -24,6 +24,7 @@ import {
 } from '@/lib/bookInfo'
 import { bookClickPath, seriesDetailPath } from '@/lib/bookOpen'
 import { statusBucket } from '@/lib/readingThresholds'
+import { sortBooks } from '@/lib/shelfSort'
 import {
   bucketKeyOfSort,
   buildBuckets,
@@ -44,6 +45,7 @@ import {
   CARD_INFO_OPTIONS,
   SHELF_SORT_OPTIONS,
   SHELF_VIEW_OPTIONS,
+  type ShelfSort,
   useShelfPrefsStore,
 } from '@/stores/shelfPrefs'
 
@@ -406,42 +408,10 @@ const filtered = computed(() =>
   }),
 )
 
-const sorted = computed(() => {
-  const list = [...filtered.value]
-  const s = prefs.prefs.sort
-  const sign = prefs.prefs.dir === 'asc' ? 1 : -1
-
-  /** 文本比较：空值统一排到最后，否则空书名会挤在最前面 */
-  const byText = (a: string, b: string): number => {
-    if (!a && !b) return 0
-    if (!a) return 1
-    if (!b) return -1
-    return a.localeCompare(b, 'zh')
-  }
-
-  list.sort((x, y) => {
-    switch (s) {
-      case 'title':
-        return sign * byText(x.title || x.name, y.title || y.name)
-      case 'author':
-        return sign * byText(x.author, y.author)
-      case 'series':
-        // 系列排序要连序号一起比，否则同一系列内部顺序是随机的
-        return (
-          sign * (byText(x.series, y.series) || Number(x.series_index || 0) - Number(y.series_index || 0))
-        )
-      case 'progress':
-        return sign * ((x.percent ?? 0) - (y.percent ?? 0))
-      case 'pages':
-        return sign * ((x.pages ?? 0) - (y.pages ?? 0))
-      case 'stars':
-        return sign * ((x.stars ?? 0) - (y.stars ?? 0))
-      default:
-        return sign * ((x.mtime ?? 0) - (y.mtime ?? 0))
-    }
-  })
-  return list
-})
+const sorted = computed(() =>
+  sortBooks(filtered.value, prefs.prefs.sort, prefs.prefs.dir,
+    prefs.prefs.sort2, prefs.prefs.dir2),
+)
 
 /** 折叠后的条目：普通书一条，同系列合成一条 */
 type Row = { key: string; book: BookCard; members: BookCard[] }
@@ -740,7 +710,7 @@ async function continueSearch(): Promise<void> {
 
 // 排序 / 筛选 / 搜索一变 ⇒ 重置续拉预算（新口径重新拥有整份预算），并重新评估要不要续拉。
 watch(
-  () => [prefs.prefs.sort, prefs.prefs.dir, keyword.value, fFormat.value, fLanguage.value,
+  () => [prefs.prefs.sort, prefs.prefs.dir, prefs.prefs.sort2, prefs.prefs.dir2, keyword.value, fFormat.value, fLanguage.value,
     fTag.value, fCover.value, fStatus.value],
   () => {
     library.resetShelfQuery()
@@ -1213,6 +1183,27 @@ const INPUT_CLS =
           @click="prefs.patch({ dir: prefs.prefs.dir === 'asc' ? 'desc' : 'asc' })"
         >
           {{ prefs.prefs.dir === 'asc' ? '↑' : '↓' }}
+        </Button>
+        <select
+          :value="prefs.prefs.sort2"
+          aria-label="次级排序"
+          :class="[INPUT_CLS, 'shrink-0']"
+          @change="prefs.patch({ sort2: ($event.target as HTMLSelectElement).value as never })"
+        >
+          <option value="">其次：无</option>
+          <option
+            v-for="o in SHELF_SORT_OPTIONS.filter((x) => x.value !== prefs.prefs.sort)"
+            :key="o.value"
+            :value="o.value"
+          >其次：{{ o.label }}</option>
+        </select>
+        <Button
+          v-if="prefs.prefs.sort2"
+          size="sm"
+          :title="prefs.prefs.dir2 === 'asc' ? '次级升序' : '次级降序'"
+          @click="prefs.patch({ dir2: prefs.prefs.dir2 === 'asc' ? 'desc' : 'asc' })"
+        >
+          {{ prefs.prefs.dir2 === 'asc' ? '↑' : '↓' }}
         </Button>
         <Button
           size="sm"
