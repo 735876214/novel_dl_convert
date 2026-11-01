@@ -26,6 +26,7 @@ import { useThemeStore } from '@/stores/theme'
 import { useAuthStore } from '@/stores/auth'
 import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
+import { useCustomIconsStore } from '@/stores/customIcons'
 import { startRealtime, stopRealtime } from '@/lib/realtime'
 
 // ⚠️ 第 65 期：`useUiStore` 与 `ui` 已从这里删掉 —— 它在本文件唯一的用途是
@@ -46,6 +47,7 @@ watch(
 onUnmounted(() => stopRealtime())
 const library = useLibraryStore()
 const wizard = useLibraryWizardStore()
+const customIcons = useCustomIconsStore()
 const route = useRoute()
 
 /**
@@ -145,6 +147,7 @@ async function bootstrapShell(): Promise<void> {
   // 任务数据来自服务端真实任务表（不是本地种子）；只在有未结束任务时才轮询，
   // 空闲时自动停止 —— 见 stores/tasks.ts。
   void tasks.refresh()
+  void customIcons.load()
   // 首次使用引导：只认 `hasNoLibraries`（= **成功拉到且确实是 0 个**），拉取失败时不弹
   await library.loadLibraries()
 }
