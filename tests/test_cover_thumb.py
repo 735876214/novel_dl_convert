@@ -133,3 +133,22 @@ def test_宽度够小但字节很重也要重编码():
         assert im2.format == "WEBP"
         assert im2.size == (427, 600), "不放大，只重压"
     assert len(out) < len(raw), "重编码必须真的更小"
+
+
+def test_带_EXIF_方向的封面按显示方向重编码():
+    """第 213 期审计抓到的：浏览器显示 JPEG 会按 EXIF `Orientation` 自动旋转，而**重编码会
+    丢掉 EXIF** —— 不先转正，带方向标记的封面会被转 90°。
+
+    1200×1600 + 方向 6（顺时针 90°）⇒ 浏览器里是 **1600×1200**；缩到 480 宽应得
+    **480×360**，而不是按原始像素算出的 480×640。
+    """
+    im = Image.new("RGB", (1200, 1600), (200, 30, 30))
+    exif = Image.Exif()
+    exif[0x0112] = 6                       # Orientation: rotate 90 CW
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=98, exif=exif)
+
+    out = thumbs.resize_image(buf.getvalue(), 480)
+    with Image.open(io.BytesIO(out)) as o:
+        assert o.size == (480, 360), f"应按 EXIF 转正后再缩，实际 {o.size}"
+        assert o.getexif().get(0x0112) is None, "重编码后不该再带方向标记"

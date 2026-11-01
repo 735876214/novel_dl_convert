@@ -17,7 +17,8 @@
 #   --build-arg INSTALL_PG_CLIENT=0   ⇒ −63 MB（postgresql-client，其中 49 MB 是 Perl；
 #                                        只有 PG 后端 / 一键更新的 pg_dump 备份才需要）
 #   --build-arg INSTALL_BUILD_TOOLS=0 ⇒ 跳过 build-essential（amd64 上依赖都有现成 wheel）
-# 两个关掉后实测 704 MB → 约 516 MB，apt 那一步也从 57 s 降到十几秒。
+# 两个关掉后实测 704 MB → **453 MB**；apt 那一步 56.9 s → 14.9 s（差的主要是包集，
+# 不代表同网络的稳定耗时 —— 这一步本来就随 deb 源在 15–57 s 之间波动）。
 
 ARG PY_VERSION=3.12
 ARG NODE_VERSION=22

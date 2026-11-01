@@ -2809,10 +2809,13 @@ def duplicate_groups(threshold: int = 85, library_id=None, dismissed=None) -> di
     """重复书目分组：**同作者书名相似 / ISBN 相同 / 文件内容相同**。
 
     三类判据（第 154 期起）：
-      · **文件内容完全相同**：同尺寸候选按 sha256 比对（只哈希同尺寸的文件；
-        >512 MB 的大文件跳过，避免一次工具页扫描把 NAS 读满）；
+      · **文件内容完全相同**：同尺寸候选做**两级** sha256（第 184 期）—— 先比首尾各
+        64 KiB，只有它相同才整本读完（`_content_digest` / `_same_content`）；
+        >512 MB 的大文件跳过，避免一次工具页扫描把 NAS 读满；
       · **ISBN 相同**：`metadata.isbn_digits` 归一后相同（非空才参与）；
-      · **同作者 + 书名相似度 ≥ threshold**（默认 85%，同 Calibre 口径）。
+      · **同作者 + 书名相似度 ≥ threshold**（默认 85%，同 Calibre 口径）：先过长度与
+        bigram 包含率两道预筛，再比 `quick_ratio()` 这个**上界**，最后才上
+        `SequenceMatcher.ratio()`（第 163 / 184 期）。
 
     聚类用**全局并查集**：三类边都并进同一棵树，所以「A/B 文件相同、B/C 书名相似」
     会得到一组而不是两组。同一物理文件被两个库各登记一次（判据是绝对 ``path``）

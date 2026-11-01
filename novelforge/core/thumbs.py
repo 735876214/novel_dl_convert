@@ -28,9 +28,11 @@ MAX_WIDTH = 1024
 QUALITY = 82
 
 #: 缩略图的编码与媒体类型（第 208 期：JPEG → WebP）。
-#: 实测同一批真机封面缩到 480 px 宽：WebP(q82) 比 JPEG(q82) 小 **26–40%**
-#: （8 张合计 531,256 → 382,420 B，−28%；单张 18–22 KB）。2026 年所有在用的浏览器
-#: 都能直接 `<img>` 解 WebP ⇒ 不做 `Accept` 协商（那要多一份缓存键与一条回退分支）。
+#: 实测（真机 8 张书封，原图只有 427×600 却重 292 KB —— 抓来的 JPEG 质量给到 95+）：
+#:   · **同尺寸重编码**：WebP(q82) 比 JPEG(q82) 小 26–40%（8 张 531,256 → 382,420 B）；
+#:   · **相对原图**（也就是用户真正省下的）：2,325 KB → 373 KB，**−84%**。
+#: 2026 年所有在用的浏览器都能直接 `<img>` 解 WebP ⇒ 不做 `Accept` 协商
+#: （那要多一份缓存键与一条回退分支）。
 #: ⚠️ 只在**真的重编码**时才能用这个类型 —— 没缩时返回的是原图字节，`resize_image`
 #: 原样返回同一个对象，调用方靠它判断要不要换媒体类型。
 THUMB_MEDIA = "image/webp"
@@ -63,13 +65,18 @@ def resize_image(data: bytes, width: int) -> bytes:
     if not w or not data:
         return data
     try:
-        from PIL import Image
+        from PIL import Image, ImageOps
     except Exception:                                   # noqa: BLE001 —— 没装 Pillow 就退回原图
         return data
     try:
         with Image.open(io.BytesIO(data)) as im:
             if im.width <= w and len(data) <= REENCODE_OVER:
                 return data                             # 真的够小：不放大、不重编码
+            # ⚠️ EXIF 方向（第 213 期审计）：浏览器显示 JPEG 时会按 `Orientation` 自动旋转，
+            # 而**重编码会丢掉 EXIF** —— 不先转正，带方向标记的封面就会转 90°。
+            # 这个缺陷在「宽图被缩」这条路上一直存在，本期把重编码范围扩大到「字节重的窄图」
+            # 后影响面变大，所以在这里收口（判据只有这一处）。
+            im = ImageOps.exif_transpose(im)
             target = min(w, im.width)                   # 窄图不放大，只重压
             height = max(1, round(im.height * (target / im.width)))
             thumb = _flatten(im).resize((target, height), Image.LANCZOS)
