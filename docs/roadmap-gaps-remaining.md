@@ -11972,3 +11972,58 @@ woff2 为 `font/woff2`、`/reading-activity` 不再拉 `charts-*`。
 
 **核验**：后端全量（见 §0 基线）；前端四连（见收口基线）。
 
+## 第 213 期（镜像瘦身开关 + 构建缓存（704 MB → 453 MB））
+
+**需求来源**：用户「从这个文件安装 docker，为何安装特别重」—— 指的是 `docker-compose.test.yml`
+那条**本地构建**路径。先量再改，不靠猜。
+
+**改前基线（`docker history` 分层 + 一次 `--no-cache` 全量构建，本机实测）**
+
+镜像 **704 MB**：
+
+| 层 | 大小 | 里面是什么 |
+|---|---|---|
+| `/opt/venv` | 191 MB | numpy 54 / Pillow 23 / psycopg_binary 20 / lxml 12 / Cryptodome 10 / pypdfium2 8 / quickjs 7 / redis 6 … |
+| Node 二进制 | **125 MB** | 只为「书源 JS 解密」 |
+| apt 层 | 72.7 MB | **其中 49 MB 是 Perl**（libperl5.40 28.6 + perl-modules-5.40 19.5 + perl 0.8）—— `postgresql-client-common` 的包装脚本带进来的 |
+| python:3.12-slim 基座 | ~120 MB | |
+| 前端产物 + 源码 | 10.6 MB | 应用代码其实只有 3 MB 出头 |
+
+构建 **71.8 s**（基座镜像已在本机缓存）：apt 56.9 s（关键路径）、pip 42.7 s、npm 17.5 s、
+vite 13.3 s —— 后三者与 apt **并行**执行，串行和 152 s。也就是说「装得重」的主体是
+**三套工具链**（Python 依赖、Node 前端依赖、Node 运行时），不是源码。
+
+**改了什么**
+
+1. **两个按需关闭的 build-arg**（默认都是 `1`，构建结果与改造前逐层一致，老命令不受影响）：
+   - `INSTALL_NODE=0` ⇒ **−125 MB**（丢「书源靠 Node 执行 JS」这一项能力）；
+   - `INSTALL_PG_CLIENT=0` ⇒ **−63 MB**（丢 `NOVELFORGE_DB=pg` 与「更新前自动备份」）。
+   两个都关实测：**704 MB → 453 MB（−36%）**。
+2. **node 的搬运改成经 `/out/` 中转**（按开关决定里面有没有文件）。
+   ⚠️ **不能**写成「COPY 进运行层再 `rm`」—— 那 125 MB 已经落在下层里，删掉镜像也不会变小。
+   这是最像优化、实际收益为零的写法，用例专门钉住。
+3. **pip / npm 改 BuildKit 缓存挂载**（`--mount=type=cache`）：重建复用本机缓存，缓存
+   **不写进镜像层**；同时删掉 `PIP_NO_CACHE_DIR=1` —— 那条 ENV 会把 pip 缓存整个关掉，
+   与挂载互斥（加了等于白加）。同环境再跑一次 `--no-cache`：**71.8 s → 45.8 s**
+   （pip 42.7 → 24.0 s；apt 那一步仍随网络在 24–57 s 波动，本期没动它）。
+
+**为什么不是「把依赖砍掉」**：venv 里每一项都是功能开关（numpy=相似推荐、Pillow=封面、
+psycopg=PG 后端、pypdfium2=PDF、quickjs=书源 JS、rarfile=CBR…）。砍任何一项都是少一个能力，
+所以本期只做「**用不到的那两套运行时 / 工具链可以显式关掉**」，默认行为一点不改。
+
+**防回归（`tests/test_deploy_context.py` 7 例，新增 2 例）**
+
+- 两个开关**默认必须是 1**；`postgresql-client` 必须真的挂在 `INSTALL_PG_CLIENT` 上；
+- node 必须从 `/out/` 中转，且**不许**出现「先 COPY 再 `rm -f /usr/local/bin/node`」；
+- pip / npm 两处缓存挂载存在，且没有与它互斥的 `PIP_NO_CACHE_DIR=` 赋值（注释里提到不算）。
+
+**核验**：两次真实构建 + `docker run` 检查 —— 瘦身镜像里 **没有 node、没有 pg_dump**，
+`import novelforge.server` 正常；默认镜像仍有 node 与 `pg_dump`、大小仍是 704 MB（行为不变）。
+后端全量 2986 例（2959 passed / 14 skipped / 13 例本机环境项）。
+
+**没做 / 边界**
+
+- 不把 venv 按功能拆成多个镜像变体：用户要的是「一个能跑的镜像」，多份变体 = 多份要同步的真值源。
+- 不动 `INSTALL_BUILD_TOOLS` 的既有语义（它管的是 arm64 上可能缺 wheel 时的编译工具链）。
+- 不替换 apt 源：那属于部署策略，写死在 Dockerfile 里会在别的网络环境下帮倒忙
+  （同理 `PIP_INDEX` / `NPM_REGISTRY` 保持「可传、默认官方」）。
