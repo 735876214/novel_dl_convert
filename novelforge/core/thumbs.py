@@ -7,7 +7,8 @@
 **只做一件事**：等比缩到给定宽度，编码成 **WebP**（第 206 期起；此前是 JPEG，实测同尺寸
 小 26–40%）。所有判断都收在本模块：
 - 宽度先夹到 ``MIN_WIDTH..MAX_WIDTH``（调用方传什么都安全）；
-- 原图本来就比目标窄 ⇒ **原样返回**（放大会糊，且白白重新编码）；
+- 原图本来就比目标窄 ⇒ **不放大**；但字节很重的窄图（`REENCODE_OVER`）仍按原尺寸重压 ——
+  真机书封 427×600 却有 392 KB，只按宽度判「够小」会让书架继续下几十 MB；
 - 任何解码/编码失败 ⇒ **原样返回**（缩略图是优化，不是可用性前提 —— 拿不到图比拿不到图更糟）；
 - 带了 alpha 的 PNG 铺白底再编码（透明像素转成黑色是最常见的「封面变黑」来源）。
 
@@ -46,11 +47,17 @@ def clamp_width(width: int) -> int:
     return max(MIN_WIDTH, min(MAX_WIDTH, w))
 
 
+#: 原图字节超过这个值就**重编码**，即使宽度已经够小（第 206 期）。
+#: 真机书封普遍只有 427×600 却有 **392 KB**（抓来的 JPEG 质量给到 95+），按「宽度够小」
+#: 判会把它们原样下发 —— 书架一屏 120 张仍是 30+ MB。判据必须是**字节**，不是宽度。
+REENCODE_OVER = 120 * 1024
+
+
 def resize_image(data: bytes, width: int) -> bytes:
     """等比缩到 ``width`` 宽并以 **WebP** 返回；**任何失败都返回原字节（同一个对象）**。
 
-    调用方只在「确实要缩」时才调它（宽度合法且原图更大由这里自己判）；返回原对象
-    就说明没重编码 ⇒ 媒体类型沿用原图的，别贴 `THUMB_MEDIA`。
+    三种「原样返回」：宽度非法 / 解码失败 / **重编码反而不更小**。宽度不超目标但字节
+    很重的图（见 `REENCODE_OVER`）仍会按原尺寸重编码 —— 编码完更大就退回原图。
     """
     w = clamp_width(width)
     if not w or not data:
@@ -61,14 +68,17 @@ def resize_image(data: bytes, width: int) -> bytes:
         return data
     try:
         with Image.open(io.BytesIO(data)) as im:
-            if im.width <= w:
-                return data                             # 本来就够小：不放大、不重编码
-            height = max(1, round(im.height * (w / im.width)))
-            thumb = _flatten(im).resize((w, height), Image.LANCZOS)
+            if im.width <= w and len(data) <= REENCODE_OVER:
+                return data                             # 真的够小：不放大、不重编码
+            target = min(w, im.width)                   # 窄图不放大，只重压
+            height = max(1, round(im.height * (target / im.width)))
+            thumb = _flatten(im).resize((target, height), Image.LANCZOS)
             buf = io.BytesIO()
             # `method=6` 是最慢也最小的一档：缩略图只算一次、之后进缓存，值得这点 CPU
             thumb.save(buf, "WEBP", quality=QUALITY, method=6)
-            return buf.getvalue()
+            out = buf.getvalue()
+            # 不变量：缩略图**永远不比原图大**（纯色小图重编码可能略大）
+            return out if len(out) < len(data) else data
     except Exception:                                   # noqa: BLE001 —— 坏图 / 不认识的格式
         return data
 

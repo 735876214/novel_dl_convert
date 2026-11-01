@@ -110,3 +110,26 @@ def test_没有重编码时媒体类型仍是原图(isolated, default_root, clie
     assert r.status_code == 200
     assert r.content == small, "比目标还小 ⇒ 原样返回，不放大、不重编码"
     assert r.headers["content-type"].startswith("image/png"), r.headers["content-type"]
+
+
+def test_宽度够小但字节很重也要重编码():
+    """真机书封普遍 427×600 却有 **392 KB**（抓来的 JPEG 质量给到 95+）。第 206 期的第一版
+    只按「宽度是否超过目标」判，于是这些图**原样下发** —— 书架一屏 120 张仍是 30+ MB，
+    WebP 一点没生效。判据必须是**字节**（`thumbs.REENCODE_OVER`）。
+    """
+    im = Image.new("RGB", (427, 600))
+    px = im.load()
+    for y in range(600):
+        for x in range(427):
+            px[x, y] = ((x * 7 + y * 13) % 256, (x * 31 + y * 17) % 256, (x * 11 + y * 29) % 256)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=98)
+    raw = buf.getvalue()
+    assert len(raw) > thumbs.REENCODE_OVER, f"前提：这张图要够重（{len(raw)} B）"
+
+    out = thumbs.resize_image(raw, 480)
+    assert out is not raw, "宽度没超目标但字节很重 ⇒ 仍要重编码"
+    with Image.open(io.BytesIO(out)) as im2:
+        assert im2.format == "WEBP"
+        assert im2.size == (427, 600), "不放大，只重压"
+    assert len(out) < len(raw), "重编码必须真的更小"
