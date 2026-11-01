@@ -44,3 +44,10 @@ def test_成就提示语与剩余量(client, auth_headers, isolated):
         assert it["hint"], it["key"]
         if it["known_metric"] and not it["unlocked"]:
             assert it["hint"].startswith("还差 "), it["key"]
+        assert "eta_days" in it
+
+
+def test_成就_ETA_估算():
+    assert achievements._eta_days(1, 10, 0.5) == 18
+    assert achievements._eta_days(10, 10, 1) is None
+    assert achievements._eta_days(1, 10, 0) is None

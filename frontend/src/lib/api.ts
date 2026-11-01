@@ -2277,6 +2277,8 @@ export interface AchievementItem {
   known_metric: boolean
   /** 离目标还差多少（第 198 期；已解锁为「已解锁」） */
   hint: string
+  /** 按最近 30 天日均速度估算还差几天（第 217 期；无速度 / 已解锁为 null） */
+  eta_days: number | null
 }
 
 export interface AchievementsOverview {

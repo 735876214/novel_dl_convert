@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import math
 import time
 
 from .. import config
@@ -175,6 +176,46 @@ def _hint(metric: str, cur: float, target: float, unlocked: bool) -> str:
     return f"还差 {txt} {unit}"
 
 
+def _eta_days(current: float, target: float, rate_per_day: float) -> "int | None":
+    """按最近 30 天日均速度估算还差几天；速度 <=0 或已达标返回 None（不编造）。"""
+    if rate_per_day <= 0 or current >= target:
+        return None
+    return max(1, math.ceil((float(target) - float(current)) / float(rate_per_day)))
+
+
+def _rates() -> dict:
+    """最近 30 天的日均速度（第 217 期）：只给**真正随时间累积**的 metric。
+
+    书库规模（books / authors / series…）与连续天数不在此列 —— 它们的「速度」不是
+    用户能线性推进的东西，给一个天数只会误导。
+    """
+    since = time.time() - 30 * 86400
+    c = db._connect()
+    try:
+        sec = float((c.execute(
+            "SELECT COALESCE(SUM(seconds), 0) AS s FROM reading_sessions WHERE ended_at>=?",
+            (since,),
+        ).fetchone() or {})["s"] or 0)
+        sessions = int((c.execute(
+            "SELECT COUNT(*) AS n FROM reading_sessions WHERE ended_at>=?", (since,),
+        ).fetchone() or {})["n"] or 0)
+        finished = int((c.execute(
+            "SELECT COUNT(*) AS n FROM reading_attempts WHERE finished_at>=?", (since,),
+        ).fetchone() or {})["n"] or 0)
+        annotations = int((c.execute(
+            "SELECT COUNT(*) AS n FROM annotations WHERE created_at>=? AND deleted_at=0",
+            (since,),
+        ).fetchone() or {})["n"] or 0)
+    except Exception:  # noqa: BLE001 —— 只是估算，读不到就不给 ETA
+        return {}
+    return {
+        "hours": sec / 30 / 3600,
+        "sessions": sessions / 30,
+        "finished": finished / 30,
+        "annotations": annotations / 30,
+    }
+
+
 def evaluate(auto_unlock: bool = True) -> dict:
     """算出每条成就的进度，并（默认）把达标项解锁。返回完整概览。"""
     if not enabled():
@@ -182,6 +223,7 @@ def evaluate(auto_unlock: bool = True) -> dict:
 
     sync_catalog()
     m = _metrics()
+    rates = _rates()
     unlocked = db.unlocked_map()
     newly: list = []
     items: list = []
@@ -218,6 +260,7 @@ def evaluate(auto_unlock: bool = True) -> dict:
             "unlocked_at": float(unlocked.get(key, 0.0)),
             "known_metric": known,
             "hint": _hint(metric, cur, target, is_unlocked),
+            "eta_days": None if is_unlocked else _eta_days(cur, target, rates.get(metric, 0)),
         })
 
     bucket: dict = {}

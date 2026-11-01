@@ -292,6 +292,7 @@ onMounted(load)
                   </span>
                   <template v-else>
                     <span class="ml-auto text-muted-foreground">{{ i.hint }}</span>
+                    <span v-if="i.eta_days" class="text-muted-foreground">· 约 {{ i.eta_days }} 天</span>
                     <span class="text-muted-foreground tabular-nums">{{ i.percent }}%</span>
                   </template>
                 </div>
