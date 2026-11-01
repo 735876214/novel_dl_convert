@@ -9,6 +9,7 @@ import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
 import { api, type AchievementItem, type AchievementsOverview } from '@/lib/api'
 import { localDate } from '@/lib/format'
+import { useAchievementsPrefsStore } from '@/stores/achievementsPrefs'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -22,6 +23,7 @@ import { useUiStore } from '@/stores/ui'
  * `devices` 因缺阅读会话 source 列刻意不做）。本页保证「目录 → 判定 → 解锁 → 展示」链路可用。
  */
 const ui = useUiStore()
+const pins = useAchievementsPrefsStore()
 const data = ref<AchievementsOverview | null>(null)
 const loading = ref(true)
 const busy = ref(false)
@@ -60,6 +62,19 @@ const grouped = computed(() => {
     }))
     .filter((g) => g.items.length > 0)
 })
+
+/** 展示柜：按用户钉的顺序取已解锁项（数据未到 / 已不存在的 key 自动忽略）。 */
+const pinned = computed(() => {
+  const all = data.value?.items ?? []
+  return pins.prefs.display_case
+    .map((k) => all.find((i) => i.key === k && i.unlocked))
+    .filter((i): i is AchievementItem => Boolean(i))
+})
+
+function togglePin(i: AchievementItem): void {
+  if (!i.unlocked) return
+  pins.toggle(i.key)
+}
 
 const pct = computed(() => {
   const d = data.value
@@ -171,6 +186,20 @@ onMounted(load)
     </Card>
 
     <template v-else-if="data">
+      <!-- 展示柜（第 215 期）：用户钉的最多 3 个已解锁成就；没钉就不占版面 -->
+      <Card v-if="pinned.length" class="mb-4" padding="sm">
+        <div class="mb-2 flex items-center gap-2 text-[11.5px] text-muted-foreground">
+          <Icon name="star" class="h-3.5 w-3.5 text-primary" />
+          展示柜（{{ pinned.length }} / 3）
+        </div>
+        <div class="grid gap-2 sm:grid-cols-3">
+          <div v-for="i in pinned" :key="i.key" class="rounded-md border border-border bg-muted/40 px-3 py-2">
+            <div class="truncate text-[12.5px] font-medium text-foreground">{{ i.name }}</div>
+            <div class="mt-0.5 text-[11px] text-muted-foreground">{{ dateOf(i.unlocked_at) }}</div>
+          </div>
+        </div>
+      </Card>
+
       <Card class="mb-4" padding="sm">
         <div class="flex items-center gap-3">
           <span class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/12 text-primary">
@@ -237,7 +266,15 @@ onMounted(load)
                 <Icon :name="i.unlocked ? 'check' : 'star'" class="h-3.5 w-3.5" />
               </span>
               <div class="min-w-0 flex-1">
-                <div class="truncate text-[12.5px] font-medium text-foreground">{{ i.name }}</div>
+                <div class="flex items-center gap-2">
+                  <div class="min-w-0 flex-1 truncate text-[12.5px] font-medium text-foreground">{{ i.name }}</div>
+                  <button
+                    v-if="i.unlocked"
+                    type="button"
+                    class="shrink-0 cursor-pointer text-[10.5px] text-muted-foreground hover:text-primary"
+                    @click.stop="togglePin(i)"
+                  >{{ pins.has(i.key) ? '移出展示柜' : '放入展示柜' }}</button>
+                </div>
                 <div class="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{{ i.desc }}</div>
 
                 <div class="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-muted">

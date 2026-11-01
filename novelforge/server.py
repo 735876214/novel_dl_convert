@@ -8527,7 +8527,7 @@ def api_delete_smart_scope(sid: int):
 #   · 删模式只把引用设备的 active_profile_id 置空（来源标记），设备配置不动；
 #   · 设备上报（PUT）不写活动日志（每次启动都发生，无审计价值），只有模式变更写。
 
-PREFS_BLOCKS = {"reader", "pdf", "comic", "audio", "appearance", "cover", "shelf", "dashboard"}
+PREFS_BLOCKS = {"reader", "pdf", "comic", "audio", "appearance", "cover", "shelf", "dashboard", "achievements"}
 PREFS_MAX_BYTES = 64 * 1024
 _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 

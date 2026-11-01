@@ -16,6 +16,11 @@ import {
   type ShelfLayout,
   type WidgetId,
 } from '@/data/dashboard'
+import {
+  ACHIEVEMENTS_PREFS_DEFAULT,
+  DISPLAY_CASE_MAX,
+  type AchievementsPrefs,
+} from '@/stores/achievementsPrefs'
 
 /**
  * 偏好载荷：**八块**，与服务端 `PREFS_BLOCKS` 一一对应。
@@ -54,6 +59,7 @@ export interface PrefsPayload {
   cover: CoverPrefs
   shelf: ShelfSyncPrefs
   dashboard: DashboardSyncPrefs
+  achievements: AchievementsPrefs
 }
 
 /** 仪表盘同步块（第 209 期）：部件 / 书架行 / 总布局，换设备一致。 */
@@ -81,7 +87,7 @@ export interface ShelfSyncPrefs {
 }
 
 /** 与后端一致的块名白名单（第 9 期起含 audio；第 43 期加 shelf；第 209 期加 dashboard） */
-export const PAYLOAD_BLOCKS = ['reader', 'pdf', 'comic', 'audio', 'appearance', 'cover', 'shelf', 'dashboard'] as const
+export const PAYLOAD_BLOCKS = ['reader', 'pdf', 'comic', 'audio', 'appearance', 'cover', 'shelf', 'dashboard', 'achievements'] as const
 
 /**
  * 外观默认值：主题部分与 stores/theme.ts 的初值一致（system / neutral / default）；
@@ -105,6 +111,11 @@ export const DASHBOARD_SYNC_DEFAULT: DashboardSyncPrefs = {
   widgets: WIDGET_IDS.map((id) => ({ id, enabled: DEFAULT_WIDGET_IDS.includes(id) })),
   shelves: DEFAULT_SHELVES.map((s) => ({ ...s, rows: 1, library_ids: [] })),
   shelf_layout: DEFAULT_SHELF_LAYOUT,
+}
+
+/** 成就展示柜默认值（第 215 期）。 */
+export const ACHIEVEMENTS_SYNC_DEFAULT: AchievementsPrefs = {
+  display_case: [...ACHIEVEMENTS_PREFS_DEFAULT.display_case],
 }
 
 /**
@@ -144,6 +155,11 @@ export function normalizePayload(raw: Partial<PrefsPayload> | null | undefined):
     cover: { ...COVER_PREFS_DEFAULT, ...(r.cover || {}) },
     shelf: normalizeShelf(r.shelf),
     dashboard: normalizeDashboard(r.dashboard),
+    achievements: {
+      display_case: Array.isArray(r.achievements?.display_case)
+        ? r.achievements!.display_case.filter((x): x is string => typeof x === 'string').slice(0, DISPLAY_CASE_MAX)
+        : [...ACHIEVEMENTS_SYNC_DEFAULT.display_case],
+    },
   }
 }
 

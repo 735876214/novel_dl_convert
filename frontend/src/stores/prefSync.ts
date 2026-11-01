@@ -9,6 +9,7 @@ import { readPdfPrefs, savePdfPrefs } from '@/lib/pdfPrefs'
 import { onPrefsChanged, suppressing } from '@/lib/prefsBridge'
 import { normalizePayload, payloadEqual, type PrefsPayload } from '@/lib/prefsPayload'
 import { readReaderPrefs, saveReaderPrefs } from '@/lib/readerPrefs'
+import { useAchievementsPrefsStore } from '@/stores/achievementsPrefs'
 import { useCoverPrefsStore } from '@/stores/coverPrefs'
 import { useDashboardStore } from '@/stores/dashboard'
 import { useDisplayPrefsStore } from '@/stores/displayPrefs'
@@ -60,6 +61,7 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
   const display = useDisplayPrefsStore()
   const shelf = useShelfPrefsStore()
   const dashboard = useDashboardStore()
+  const achievements = useAchievementsPrefsStore()
 
   const deviceId = ref(deviceIdOf())
   const deviceName = ref(deviceNameOf())
@@ -105,6 +107,7 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       shelf: { collapseSeries: shelf.prefs.collapseSeries, rev: shelf.prefs.rev },
       // 仪表盘块（第 209 期）：部件 / 书架行 / 总布局，换设备一致。
       dashboard: dashboard.exportSync(),
+      achievements: achievements.exportSync(),
     })
   }
 
@@ -116,6 +119,8 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
     // 等本机下次推送把 dashboard 块补上，之后才以服务端为准。
     const hasDashboard = Boolean(raw && typeof raw === 'object'
       && (raw as Record<string, unknown>).dashboard)
+    const hasAchievements = Boolean(raw && typeof raw === 'object'
+      && (raw as Record<string, unknown>).achievements)
     suppressing(() => {
       saveReaderPrefs(p.reader)
       savePdfPrefs(p.pdf)
@@ -135,6 +140,8 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
       // 仪表盘块（第 209 期）：服务端值经同一套合并 / 归一再落进 store；
       // 老载荷缺这一块时保持本机现状（见上面 hasDashboard 的说明）。
       if (hasDashboard) dashboard.applyRemote(p.dashboard)
+      // 成就展示柜（第 215 期）：同样只在服务端确实有这个块时才应用
+      if (hasAchievements) achievements.applyRemote(p.achievements)
     })
   }
 

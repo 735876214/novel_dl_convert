@@ -49,6 +49,8 @@ EXPECTED_SPECS = (
     # 第 190 期：通知中心的分页 / 单条隐藏 / 隐藏全部。坏起来是「点了没反应」或
     # 「加载更多把第一页替换掉」—— 两者都不报错，只是列表看起来没变 / 变短。
     "src/views/NotificationsView.spec.ts",
+    # 第 215 期：成就展示柜（去重 / 上限 3 / 远端归一化 / 快照拷贝）。
+    "src/stores/achievementsPrefs.spec.ts",
     # 第 212 期：书架主/次级排序（同键次级不生效、空文本排最后、系列带序号）。
     "src/lib/shelfSort.spec.ts",
     # 第 209 期：仪表盘偏好同步块（applyRemote 合并 / 脏块夹回 / 快照是拷贝）。

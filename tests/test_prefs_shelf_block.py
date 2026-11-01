@@ -24,6 +24,21 @@ def test_后端块白名单含dashboard():
     assert "dashboard" in server.PREFS_BLOCKS
 
 
+def test_后端块白名单含achievements():
+    """第 215 期：成就展示柜也走偏好同步。"""
+    assert "achievements" in server.PREFS_BLOCKS
+
+
+def test_创建含achievements块的模式成功(client, auth_headers):
+    r = client.post(
+        "/api/prefs/profiles",
+        headers=auth_headers,
+        json={"name": "展示柜模式", "payload": {"achievements": {"display_case": ["a", "b"]}}},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["payload"]["achievements"]["display_case"] == ["a", "b"]
+
+
 def test_创建含dashboard块的模式成功(client, auth_headers):
     r = client.post(
         "/api/prefs/profiles",
