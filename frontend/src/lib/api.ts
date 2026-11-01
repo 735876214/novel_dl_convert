@@ -4233,11 +4233,15 @@ export const api = {
    * 用 blob 触发下载：`/api` 一律要求 Bearer 头，`<a download>` 带不了，
    * 所以不能像 /cover 那样直接给 URL（那是后端专门为图片开的 ?token= 口子）。
    */
-  exportBooks: async (): Promise<void> => {
+  exportBooks: async (opts: { libraryId?: string; columns?: string[]; personal?: boolean } = {}): Promise<void> => {
     const headers = new Headers()
     const token = _authToken()
     if (token) headers.set('Authorization', `Bearer ${token}`)
-    const res = await fetch('/api/books/export', { headers })
+    const q = new URLSearchParams()
+    if (opts.libraryId) q.set('library_id', opts.libraryId)
+    if (opts.columns?.length) q.set('columns', opts.columns.join(','))
+    if (opts.personal === false) q.set('personal', '0')
+    const res = await fetch(`/api/books/export${q.toString() ? `?${q}` : ''}`, { headers })
     if (!res.ok) throw new Error(`导出失败（${res.status}）`)
     const blob = await res.blob()
     const url = URL.createObjectURL(blob)

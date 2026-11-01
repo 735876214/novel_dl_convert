@@ -3570,15 +3570,43 @@ def api_books(limit: str | None = None, offset: str | None = None):
 # ⚠️ 导出端点必须注册在 /api/books/{bid} **之前**：
 #    FastAPI 按注册顺序匹配，参数化路由在前会把 "export" 当成书 id 吞掉。
 @app.get("/api/books/export")
-def api_export_books():
-    """导出全部书目为 CSV（含阅读进度 / 状态 / 评分），供 Excel / Calibre 查看。
+def api_export_books(library_id: str = "", columns: str = "",
+                     personal: int = Query(1, ge=0, le=1)):
+    """导出书目为 CSV（第 211 期支持**库范围 / 列选择 / 个人数据剥离**）。
 
-    CSV 前面加 UTF-8 BOM：不加的话 Excel（Windows）按本地编码解析，中文全乱码。
+    - `library_id` 空 = 全部书库；
+    - `columns` 逗号分隔的列键（空 = 全部；未知键 400）；
+    - `personal=0` 去掉阅读进度 / 状态 / 评分 / 批注数（分享给他人时不带个人数据）。
+
+    CSV 前加 UTF-8 BOM，否则 Windows Excel 按本地编码解析、中文全乱码。
     """
     import csv
     import io
 
     from fastapi import Response
+
+    cols = [
+        ("title", "书名"), ("name", "文件名"), ("author", "作者"), ("series", "系列"),
+        ("series_index", "序号"), ("format", "格式"), ("size", "大小(字节)"),
+        ("year", "出版年"), ("publisher", "出版社"), ("language", "语言"),
+        ("isbn", "ISBN"), ("tags", "题材"), ("added", "入库日期"),
+        ("percent", "阅读进度%"), ("status", "阅读状态"), ("stars", "评分"),
+        ("annotations", "批注数"),
+    ]
+    labels = dict(cols)
+    personal_keys = {"percent", "status", "stars", "annotations"}
+    keys = [k for k, _ in cols]
+    if columns.strip():
+        keys = [x.strip() for x in columns.split(",") if x.strip()]
+        bad = [x for x in keys if x not in labels]
+        if bad:
+            raise HTTPException(400, "未知导出列：" + "、".join(bad))
+    if not personal:
+        keys = [k for k in keys if k not in personal_keys]
+    if not keys:
+        raise HTTPException(400, "没有可导出的列")
+    if library_id and not db.get_library(library_id):
+        raise HTTPException(404, "书库不存在")
 
     prog = db.all_progress()
     statuses = db.all_statuses()
@@ -3587,23 +3615,20 @@ def api_export_books():
 
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(csvsafe.row(["书名", "文件名", "作者", "系列", "序号", "格式", "大小(字节)",
-                           "出版年", "出版社", "语言", "ISBN", "题材", "入库日期",
-                           "阅读进度%", "阅读状态", "评分", "批注数"]))
-    for b in library.export_rows():
+    w.writerow(csvsafe.row([labels[k] for k in keys]))
+    for b in library.export_rows(library_id or None):
         bid = b["id"]
         st = statuses.get(bid)
-        w.writerow(csvsafe.row([
-            b["title"], b["name"], b["author"], b["series"], b["series_index"],
-            b["format"], b["size"], b["year"], b["publisher"], b["language"],
-            b["isbn"], b["tags"], b["added"],
-            round(float(prog[bid]["percent"]), 1) if prog.get(bid) else 0,
-            (st or {}).get("status") or "",
-            ratings.get(bid, 0),
-            annos.get(bid, 0),
-        ]))
+        values = {
+            **b,
+            "percent": round(float(prog[bid]["percent"]), 1) if prog.get(bid) else 0,
+            "status": (st or {}).get("status") or "",
+            "stars": ratings.get(bid, 0),
+            "annotations": annos.get(bid, 0),
+        }
+        w.writerow(csvsafe.row([values.get(k, "") for k in keys]))
     return Response(
-        content="\ufeff" + buf.getvalue(),
+        content="﻿" + buf.getvalue(),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="library-export.csv"'},
     )

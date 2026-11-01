@@ -2540,14 +2540,15 @@ def invalidate(library_id=None) -> None:
     # 的 SETTLE_WAIT）、服务启动预热（prewarm_async）、监听线程每轮增量刷新。
 
 
-def export_rows() -> list:
+def export_rows(library_id=None) -> list:
     """书目元数据的平铺行（CSV 导出用）。
 
-    字段来自 ``books()``（文件派生 + 服务端元数据合并）。阅读进度 / 状态 / 评分在
-    另一批表里，由接口层合并 —— 本函数不查这些表。
+    `library_id` 给定时只导出该库（第 211 期）。字段来自 ``books()``（文件派生 +
+    服务端元数据合并）。阅读进度 / 状态 / 评分在另一批表里，由接口层合并 ——
+    本函数不查这些表。
     """
     rows = []
-    for b in books():
+    for b in books(library_id):
         rows.append({
             "id": b.get("id") or "",
             "title": b.get("title") or "",

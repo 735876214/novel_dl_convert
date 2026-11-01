@@ -114,10 +114,19 @@ function createLib(): void {
   void wizard.show({ onCreated: () => void library.refreshBooks() })
 }
 
-/** 导出全部书目 CSV（含阅读进度/状态/评分），交给系统下载 */
+// 导出选项（第 211 期）：范围 / 是否带个人阅读数据。默认保持旧行为（全部 + 带个人数据）。
+const showExport = ref(false)
+const exportCurrent = ref(false)
+const exportPersonal = ref(true)
+
+/** 导出书目 CSV，交给系统下载 */
 async function onExport(): Promise<void> {
   try {
-    await api.exportBooks()
+    await api.exportBooks({
+      libraryId: exportCurrent.value ? library.currentLibraryId : undefined,
+      personal: exportPersonal.value,
+    })
+    showExport.value = false
     ui.toast('已导出书目 CSV')
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '导出失败')
@@ -1234,7 +1243,26 @@ const INPUT_CLS =
         >
           {{ o.label }}
         </button>
-        <Button size="sm" variant="ghost" class="ml-auto" @click="onExport">导出 CSV</Button>
+        <div class="relative ml-auto">
+          <Button size="sm" variant="ghost" @click="showExport = !showExport">导出 CSV</Button>
+          <div
+            v-if="showExport"
+            class="absolute right-0 z-30 mt-1 w-60 rounded-lg border border-border bg-card p-3 shadow-lg"
+          >
+            <label class="flex cursor-pointer items-center gap-2 text-[12px] text-foreground">
+              <input v-model="exportCurrent" type="checkbox" class="h-3.5 w-3.5 accent-primary">
+              仅当前书库
+            </label>
+            <label class="mt-2 flex cursor-pointer items-start gap-2 text-[12px] text-foreground">
+              <input v-model="exportPersonal" type="checkbox" class="mt-0.5 h-3.5 w-3.5 accent-primary">
+              <span>包含阅读进度 / 状态 / 评分 / 批注数</span>
+            </label>
+            <p class="mt-1.5 text-[10.5px] leading-snug text-muted-foreground">
+              只导出服务端书目的元数据，不写回任何书文件。
+            </p>
+            <Button size="sm" variant="primary" class="mt-2 w-full" @click="onExport">开始导出</Button>
+          </div>
+        </div>
         <Button size="sm" variant="ghost" @click="prefs.reset()">恢复默认</Button>
       </div>
     </Card>
