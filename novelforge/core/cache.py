@@ -247,7 +247,7 @@ def chapter_key(bid: str, index: int, fp: str, kind: str = "epub") -> str:
     return f"{_PREFIX}chapter:{kind}:{bid}:{index}:{fp}"
 
 
-#: 封面缓存的**编码代次**（第 206 期）。缩略图从 JPEG 换成 WebP 了：键必须换代 ——
+#: 封面缓存的**编码代次**（第 208 期）。缩略图从 JPEG 换成 WebP 了：键必须换代 ——
 #: 否则 Redis 里那批按 JPEG 编码的旧条目会被贴成 `image/webp` 发出去（字节与媒体类型
 #: 不符，响应又带 `X-Content-Type-Options: nosniff`，浏览器直接拒显）。换代 = 旧条目
 #: 自然过期，不用去猜哪些键是旧的。
@@ -264,7 +264,7 @@ def cover_key(bid: str, fp: str, width: int = 0) -> str:
 
     第 152 期：同一个 id 现在会以不同宽度被请求（卡片 480 / 详情更大），**宽度必须进键** ——
     否则先请求小图的人会让所有人拿到小图（再放大会糊）。
-    第 206 期：缩略图编码从 JPEG 换成 WebP ⇒ 键里再带一个**编码代次**（见 `_COVER_ENCODING`）。
+    第 208 期：缩略图编码从 JPEG 换成 WebP ⇒ 键里再带一个**编码代次**（见 `_COVER_ENCODING`）。
     """
     base = f"{_PREFIX}cover:{_COVER_ENCODING}:{bid}:{fp}"
     return f"{base}:w{int(width)}" if width else base

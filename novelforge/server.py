@@ -4680,7 +4680,7 @@ def _cover_cached(bid: str, src, produce, width: int = 0):
     data, media = produce()
     # 缩略（第 152 期）：`resize_image` 在「本来就够小 / 失败」时**原样返回同一个对象**，
     # 用身份判断而不是比较字节 —— 省一次比较，也让「没缩」时媒体类型保持不变
-    # （第 206 期起缩略图是 WebP，没重编码就不能贴 `image/webp`）。
+    # （第 208 期起缩略图是 WebP，没重编码就不能贴 `image/webp`）。
     if width:
         small = thumbs.resize_image(data, width)
         if small is not data:

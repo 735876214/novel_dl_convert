@@ -1,4 +1,4 @@
-"""封面缩略图（第 152 期立，第 206 期改编码）：`?w=` 的纯函数与端点契约。
+"""封面缩略图（第 152 期立，第 208 期改编码）：`?w=` 的纯函数与端点契约。
 
 **为什么要它**：封面是原始尺寸下发的（实测 186 KB/张）。书架一屏 120 张、系列页 652 张，
 全尺寸意味着几十 MB 的流量 —— 而卡片上只占 150–180 CSS px。「打开书架慢」里最容易被
@@ -82,7 +82,7 @@ def test_端点按_w_出缩略图且默认仍是原图(isolated, default_root, c
 
 
 def test_透明像素铺白底而不是发黑():
-    """第 206 期顺手修的真缺陷：原来只 `convert("RGB")` —— 那一步是**丢掉 alpha 通道**，
+    """第 208 期顺手修的真缺陷：原来只 `convert("RGB")` —— 那一步是**丢掉 alpha 通道**，
     透明像素的 RGB 通常是 (0,0,0) ⇒ 缩略图整片发黑。模块头注释一直写着「铺白底」，
     代码却没铺（注释比代码诚实，属于判据与实现不一致）。
     """
@@ -97,7 +97,7 @@ def test_透明像素铺白底而不是发黑():
 def test_没有重编码时媒体类型仍是原图(isolated, default_root, client,  # noqa: ARG001
                                           auth_headers):
     """原图比目标宽度窄 ⇒ `resize_image` 原样返回 ⇒ 媒体类型**必须**还是原图的
-    （第 206 期改成 WebP 后这条更要紧：给 PNG 贴 `image/webp` + `nosniff` = 直接拒显）。"""
+    （第 208 期改成 WebP 后这条更要紧：给 PNG 贴 `image/webp` + `nosniff` = 直接拒显）。"""
     from novelforge.core import comics
 
     default_root.mkdir(parents=True, exist_ok=True)
@@ -113,7 +113,7 @@ def test_没有重编码时媒体类型仍是原图(isolated, default_root, clie
 
 
 def test_宽度够小但字节很重也要重编码():
-    """真机书封普遍 427×600 却有 **392 KB**（抓来的 JPEG 质量给到 95+）。第 206 期的第一版
+    """真机书封普遍 427×600 却有 **392 KB**（抓来的 JPEG 质量给到 95+）。第 208 期的第一版
     只按「宽度是否超过目标」判，于是这些图**原样下发** —— 书架一屏 120 张仍是 30+ MB，
     WebP 一点没生效。判据必须是**字节**（`thumbs.REENCODE_OVER`）。
     """
