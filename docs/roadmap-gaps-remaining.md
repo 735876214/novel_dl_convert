@@ -12074,3 +12074,21 @@ psycopg=PG 后端、pypdfium2=PDF、quickjs=书源 JS、rarfile=CBR…）。砍�
 
 **核验**：后端全量（见 §0 基线）；前端四连（见收口基线）。
 
+## 第 216 期（自定义图标库）
+
+**需求来源**：用户「继续」；Phase 4 —— 自定义图标库。
+
+**功能范围与修法**：
+
+1. **数据与解析**：新表 `custom_icons(key, name, paths, created_at)`；`core/customicons.py` 只从上传的 SVG 里提取 **`<path d="…">`**，重建为 `paths` 数组 —— **不存完整 SVG**（图标最终以 `v-html` 画进按钮，完整 SVG 的脚本 / `on*` / 外链 `<image>` 会一起带进来）。上限：SVG 256 KB、200 条 path、单条 d 20 000 字符；没有 path / 解析失败 / 超限一律 400 并说明原因。
+
+2. **接口**：`GET/POST /api/custom-icons`、`DELETE /api/custom-icons/{key}`；key 由服务端生成（`custom-…`），前端不指定。自托管、不出网。
+
+3. **前端**：`stores/customIcons.ts` 按需加载一次并缓存；`Icon` 组件先查自定义 key，再回落内置 `iconPath`（同一条渲染路径）；书库管理 / 建库向导的图标选择器把自定义 key 追加到内置列表。设置 → 外观 → 主题页底部新增管理卡（列表预览 / 删除 / 名称 + SVG 粘贴添加）。
+
+**边界（如实留档）**：只支持**线条型 path** 图标（圆 / 矩形 / 多边形不转换 —— 要支持就得再维护一套元素白名单，收益低、攻击面大）；图标是全局资源，不进偏好同步（与字体同档）；删除是硬删除（纯用户资源，无书文件/台账语义）。
+
+**防回归**：`tests/test_custom_icons_216.py`（2 例：只保留 path d / 增删与 404；坏输入逐类 400）；新增 `stores/customIcons.spec.ts`（2 例：pathOf 只拼 path 标记 + 加载缓存 / 创建追加与删除）并登记 `EXPECTED_SPECS`。
+
+**核验**：后端全量（见 §0 基线）；前端四连（见收口基线）。
+
