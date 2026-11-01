@@ -212,3 +212,4 @@
 - **209** 仪表盘偏好同步（**旧载荷缺块时不能把默认值应用下去**）：① 新块 dashboard 进 PREFS_BLOCKS/PAYLOAD_BLOCKS；② store 的本地写入要 notifyPrefsChanged，远端应用要在 suppressing 里；③ `applyPayload` 必须先判断原载荷**有没有** dashboard 块，否则升级后第一次 boot 会用默认布局覆盖本机布局。
 - **210** 收藏夹分页（**total 必须与列表 count 同一判据**）：① 分页走 `collection_book_ids` + `by_id_status`，冲突/已消失 id 跳过；② 旧的全量 `GET /api/collections/{cid}` 保持不动；③ 移出成员后重置第一页，避免旧 offset 与列表对不上。
 - **211** 书目导出粒度（**「个人数据剥离」是列选择的一种默认预设**）：① 列键 / 中文表头在路由一处定义，未知列 400；② personal=0 从列集合里去掉进度 / 状态 / 评分 / 批注，不和 columns 打架；③ export_rows 加可选库范围参数，默认全部，旧调用逐字不变；④ 页面只暴露两个预设，不复制表视图的整套列定义。
+- **212** 书架多级排序（**次级键只在主键相同时介入**）：① 排序规则抽到 `lib/shelfSort.ts`，模板旁不再藏比较逻辑；② `sort2` 空 / 与主键相同 ⇒ 忽略；③ 文本比较沿用 `localeCompare(zh)`、空值排最后；④ 只做两级，三级以上收益低且 UI 挤。
