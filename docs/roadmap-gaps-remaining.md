@@ -12092,3 +12092,21 @@ psycopg=PG 后端、pypdfium2=PDF、quickjs=书源 JS、rarfile=CBR…）。砍�
 
 **核验**：后端全量（见 §0 基线）；前端四连（见收口基线）。
 
+## 第 217 期（成就 ETA）
+
+**需求来源**：用户「继续」；Phase 4 —— 成就 ETA。
+
+**功能范围与修法**：
+
+1. **速度口径**：`achievements._rates()` 只看**最近 30 天**的真实流水 —— 阅读时长（`reading_sessions.seconds` 求和）、阅读次数（会话行数）、读完（`reading_attempts.finished_at`）、批注（`annotations.created_at`，排除软删），各自除以 30 得日均速度。读不到表单条时返回空 dict（只是估算，绝不打断成就页）。
+
+2. **估算**：`_eta_days(cur, target, rate)` = `ceil((target-cur)/rate)`，最小 1 天；已达标 / 速度为 0 / 未知 metric 返回 `null`（不编造）。每条成就输出 `eta_days`；页面在「还差 X」后显示「· 约 N 天」，没有估算就不显示。
+
+3. **只给能线性推进的项**：书库规模（books / authors / series / languages / size）、连续天数（streak / active days）**不给 ETA** —— 它们的「速度」不是用户能稳定线性推进的东西，给天数只会误导。
+
+**边界（如实留档）**：ETA 是**启发式**（近 30 天线性外推），不预测习惯变化；没有历史快照，所以只能用流水表反推；单位是「天」，不精确到小时。
+
+**防回归**：`tests/test_achievements_align.py` 增 1 例（`_eta_days` 边界）+ 现有断言补「每条都有 eta_days 键」。
+
+**核验**：后端全量（见 §0 基线）；前端四连（见收口基线）。
+
