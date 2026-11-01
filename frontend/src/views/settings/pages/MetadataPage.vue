@@ -436,6 +436,49 @@ const planItems = ref<MetadataPlanItem[]>([])
 const picked = ref<Set<string>>(new Set())
 const running = ref(false)
 const progress = ref({ done: 0, total: 0 })
+/** 批量预览的控制状态（第 214 期）：暂停 / 继续 / 取消只在**两本书之间**生效。 */
+const batchState = ref<'idle' | 'running' | 'paused' | 'cancelled'>('idle')
+let batchWaiters: (() => void)[] = []
+let batchCancelled = false
+
+function waitIfPaused(): Promise<void> {
+  if (batchState.value !== 'paused') return Promise.resolve()
+  return new Promise((resolve) => batchWaiters.push(resolve))
+}
+
+function pauseBatch(): void {
+  if (batchState.value === 'running') batchState.value = 'paused'
+}
+
+function resumeBatch(): void {
+  if (batchState.value !== 'paused') return
+  batchState.value = 'running'
+  const ws = batchWaiters
+  batchWaiters = []
+  ws.forEach((w) => w())
+}
+
+function cancelBatch(): void {
+  if (batchState.value === 'cancelled') return
+  batchCancelled = true
+  batchState.value = 'cancelled'
+  const ws = batchWaiters
+  batchWaiters = []
+  ws.forEach((w) => w())
+}
+
+const planBreakdown = computed(() => {
+  const items = planItems.value
+  let writable = 0
+  let skipped = 0
+  let covers = 0
+  for (const i of items) {
+    if (i.skipped || !Object.keys(i.changes || {}).length) skipped += 1
+    else writable += 1
+    if (i.cover) covers += 1
+  }
+  return { writable, skipped, covers }
+})
 /** 预览时**配置里的**来源顺序（后端随结果回传）：用来判断某本的 `sources_order` 是否被重排过 */
 const planConfiguredOrder = ref<string[]>([])
 
@@ -474,13 +517,19 @@ async function runPlan(): Promise<void> {
     return
   }
   running.value = true
+  batchState.value = 'running'
+  batchCancelled = false
   planItems.value = []
   picked.value = new Set()
   progress.value = { done: 0, total: targets.length }
   const acc: MetadataPlanItem[] = []
   try {
-    // 逐本调用：每本要外呼每个源，一次全库必然超时；逐本还能实时显示进度
+    // 逐本调用：每本要外呼每个源，一次全库必然超时；逐本还能实时显示进度。
+    // ⚠️ 暂停 / 取消只在**两本书之间**生效（正在外呼的那一本不中断 —— 中断请求会留下
+    // 半份结果，而这里没有可恢复的事务语义）。
     for (const b of targets) {
+      await waitIfPaused()
+      if (batchCancelled) break
       const r = await api.metadataPlan([b.name])
       if (r.sources?.length) planConfiguredOrder.value = r.sources
       acc.push(...(r.items ?? []))
@@ -489,11 +538,14 @@ async function runPlan(): Promise<void> {
     }
     picked.value = new Set(acc.filter((i) => !i.skipped && Object.keys(i.changes).length).map((i) => i.name))
     const withChanges = acc.filter((i) => Object.keys(i.changes).length || i.cover).length
-    ui.toast(`预览完成：${withChanges} 本有可补内容`)
+    ui.toast(batchCancelled
+      ? `已取消：已预览 ${acc.length} 本`
+      : `预览完成：${withChanges} 本有可补内容`)
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '预览失败')
   } finally {
     running.value = false
+    batchState.value = 'idle'
   }
 }
 
@@ -1182,6 +1234,13 @@ watch(() => props.section, () => {
           <Button size="sm" :disabled="running || !mf.enabled" @click="runPlan">
             {{ running ? '处理中…' : '开始预览' }}
           </Button>
+          <Button v-if="running && batchState === 'running'" size="sm" variant="ghost" @click="pauseBatch">
+            暂停
+          </Button>
+          <Button v-if="running && batchState === 'paused'" size="sm" variant="primary" @click="resumeBatch">
+            继续
+          </Button>
+          <Button v-if="running" size="sm" variant="ghost" @click="cancelBatch">取消</Button>
           <Button size="sm" variant="primary" :disabled="running || !picked.size" @click="applyPicked">
             应用选中（{{ picked.size }}）
           </Button>
@@ -1194,6 +1253,10 @@ watch(() => props.section, () => {
         点「开始预览」后，这里会逐本列出候选与将要写入的内容 —— 预览<strong>不会改动任何文件</strong>。
       </div>
       <div v-else class="max-h-[520px] overflow-auto">
+        <div class="border-b border-border px-4 py-2 text-[11.5px] text-muted-foreground">
+          可写 {{ planBreakdown.writable }} 本 · 跳过 / 无可补 {{ planBreakdown.skipped }} 本
+          <template v-if="planBreakdown.covers"> · 含封面 {{ planBreakdown.covers }} 张</template>
+        </div>
         <table class="w-full text-[12px]">
           <thead class="sticky top-0 bg-card text-left text-muted-foreground">
             <tr>
