@@ -27,6 +27,10 @@ WORKFLOWS = pathlib.Path(__file__).resolve().parents[1] / ".github" / "workflows
 #:   `docker/login-action`         v3 = node20 → **v4 起 node24**
 #:   `actions/setup-python`        **v6 = node24**（第 118 期新增：`.github/workflows/tests.yml`
 #:                                用它装 3.12 跑后端全量；2026-10-19 抓 `v6/action.yml` 核过 `runs.using: node24`）
+#:   `actions/setup-node`          **v6 = node24**（第 247 期新增：前端 CI 门用它装 Node 24；
+#:                                v4 是 node20、v5 起才是 node24 —— 抓 `v6/action.yml` 核过
+#:                                `runs.using: node24`，`inputs:`（node-version / cache /
+#:                                cache-dependency-path）与 v4 逐字相同）
 #: 升级时同批核过 `inputs:` 无更名 —— 本仓用到的那些一个都没动，所以是纯版本号替换。
 ALLOWED = frozenset({
     "actions/checkout@v7",
@@ -35,6 +39,7 @@ ALLOWED = frozenset({
     "docker/setup-buildx-action@v4",
     "docker/setup-qemu-action@v4",
     "actions/setup-python@v6",
+    "actions/setup-node@v6",
 })
 
 #: `uses:` 行（带不带 `- ` 前缀都要认）；`[^\s#]+` 顺带把行尾注释切掉。

@@ -80,8 +80,11 @@ jobs:
 
       # ⚠️ 24.x 与本机一致（`AGENTS.md` §4：Node 走 nvm 24.x）。
       # `npm ci` 用 `package-lock.json`（锁文件）⇒ 与本机装的是同一套依赖。
+      # ⚠️ `setup-node` **必须用 v6**：v4 是 node20 运行时（GHA 会告警并强制跑 node24），
+      # v5 起才是 node24 —— 已抓上游 `v6/action.yml` 核过 `runs.using: node24`，
+      # `inputs:`（node-version / cache / cache-dependency-path）与 v4 逐字相同。
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: npm
