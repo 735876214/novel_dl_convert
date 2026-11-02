@@ -77,3 +77,30 @@ def test_已完成的下载不算残留(episode):
         assert podcasts._stale_download(eid, db.get_podcast_episode(eid)) is False
     finally:
         done.unlink(missing_ok=True)
+
+
+def test_列表接口会把残留的_downloading_复位(client, auth_headers, episode):
+    """⚠️ 第 244 期：列表接口**必须**复位，否则界面永远显示「下载中」。
+
+    前端在 ``download_state === 'downloading'`` 时**不显示下载按钮**
+    （``PodcastsView.vue``）⇒ 用户**点不到**第二次下载 ⇒ 那一集卡死在「下载中」，
+    只能删了重订。`enqueue_download` 里的复位救不了 —— 它压根不会被调用。
+    """
+    eid = str(episode["id"])
+    pid = str(episode["podcast_id"])
+    db.set_episode_download(eid, "downloading")
+
+    r = client.get(f"/api/podcasts/{pid}/episodes", headers=auth_headers).json()
+    states = {str(x["id"]): x.get("download_state") for x in r["items"]}
+    assert states.get(eid) != "downloading", "列表接口没复位残留的 downloading"
+    assert db.get_podcast_episode(eid)["download_state"] != "downloading"
+
+
+def test_全部单集列表也会复位(client, auth_headers, episode):
+    """`GET /api/podcasts/episodes`（播客页的「全部」那条路）同样要复位。"""
+    eid = str(episode["id"])
+    db.set_episode_download(eid, "downloading")
+
+    r = client.get("/api/podcasts/episodes", headers=auth_headers).json()
+    states = {str(x["id"]): x.get("download_state") for x in r["items"]}
+    assert states.get(eid) != "downloading", "全部单集列表没复位残留的 downloading"

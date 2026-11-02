@@ -567,6 +567,11 @@ def _stale_download(eid: str, ep: dict) -> bool:
     """
     if str(ep.get("download_state") or "") != "downloading":
         return False
+    # 「已有成品」的两种判据：`list_podcast_episodes` 给 `local_path`，
+    # `list_all_podcast_episodes` 只给 `has_local`（不吐路径）—— 两个都要认。
+    if "has_local" in ep:
+        if bool(ep.get("has_local")):
+            return False                    # 已有成品 ⇒ 不是残留
     lp = str(ep.get("local_path") or "")
     if lp and pathlib.Path(lp).is_file():
         return False                        # 已有成品 ⇒ 不是残留
@@ -590,6 +595,29 @@ def reset_stale_downloads() -> int:
         if _stale_download(str(ep.get("id") or ""), ep):
             db.set_episode_download(str(ep.get("id") or ""), "", error="")
             n += 1
+    return n
+
+
+def reset_stale_in(items: list) -> int:
+    """把**这批**单集里残留的 ``downloading`` 复位成「未下载」→ 返回复位的条数。
+
+    ⚠️ 第 244 期：第 242 期加了 :func:`reset_stale_downloads`（扫全表）与
+    :func:`enqueue_download` 里的惰性复位，但**列表接口没接** ⇒ 界面上的那一集
+    永远显示「下载中」。而前端在 ``download_state === 'downloading'`` 时
+    **不显示下载按钮**（``PodcastsView.vue``）⇒ 用户**点不到**第二次下载
+    ⇒ 那一集卡死在「下载中」，只能删了重订。
+
+    这里按**本次返回的那批**逐条判定（不是扫全表）：返回条数有限、且绝大多数
+    不是 ``downloading`` ⇒ 立即返回，成本可忽略。
+    """
+    n = 0
+    for ep in (items or []):
+        eid = str(ep.get("id") or "")
+        if not eid or not _stale_download(eid, ep):
+            continue
+        db.set_episode_download(eid, "", error="")
+        ep["download_state"] = ""
+        n += 1
     return n
 
 

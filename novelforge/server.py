@@ -117,6 +117,18 @@ async def lifespan(app: FastAPI):
             )
     except Exception as e:  # noqa: BLE001 —— 收尾失败不该阻断启动
         logging.getLogger("novelforge").exception("复位中断任务失败：%s", e)
+    # 第 244 期：播客里**残留的 `downloading`** 也要在启动时复位一次 ——
+    # 进程被杀 / 容器重启后那一集会永远卡在「下载中」，而前端在「下载中」时
+    # **不显示下载按钮** ⇒ 用户无法自救（列表接口也会惰性复位，见
+    # `podcasts.reset_stale_in`；这里是启动时的一次性全量清扫）。
+    try:
+        n_stale = podcasts.reset_stale_downloads()
+        if n_stale:
+            logging.getLogger("novelforge").warning(
+                "有 %s 集播客卡在「下载中」（上次退出时没跑完），已复位为未下载", n_stale
+            )
+    except Exception as e:  # noqa: BLE001 —— 自愈失败不该阻断启动
+        logging.getLogger("novelforge").exception("复位残留下载状态失败：%s", e)
     # 多书库：**这里不再播种任何书库** —— 全新部署的书库表就是空的，等用户手动新建。
     # ⚠️ 由此推出两条必须守住的不变量（第 37 期）：
     #   ① 书目为空**不等于**记录都成了孤儿 ⇒ `db.orphans()` 必须把「库已不存在」的书
@@ -3392,6 +3404,9 @@ def api_podcast_collection_remove(cid: int, pid: str):
 def api_podcast_episodes_all(limit: int = Query(2000, ge=1, le=5000)):
     """全部订阅的单集（播放列表 / 智能范围的求值取源；不含转录正文）。"""
     items = db.list_all_podcast_episodes(limit)
+    # 同上：列表里若有残留的 `downloading`，在这里复位（否则界面永远显示「下载中」，
+    # 而下载按钮此时不可点 ⇒ 用户无法自救）。
+    podcasts.reset_stale_in(items)
     return {"items": items, "total": len(items)}
 
 
@@ -3462,6 +3477,9 @@ def api_podcast_episodes(pid: str, limit: int = Query(200, ge=1, le=2000)):
     if not db.get_podcast(pid):
         raise HTTPException(404, "订阅不存在")
     items = db.list_podcast_episodes(pid, limit)
+    # ⚠️ 第 244 期：残留的 `downloading` 要在这里复位 —— 前端在「下载中」时
+    # **不显示下载按钮** ⇒ 用户点不到第二次下载 ⇒ 那一集卡死在「下载中」。
+    podcasts.reset_stale_in(items)
     return {"items": items, "total": len(items)}
 
 
