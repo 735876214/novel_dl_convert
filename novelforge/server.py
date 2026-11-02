@@ -1010,6 +1010,10 @@ def _health_checks() -> dict:
         problems.append(f"目录建不出来：{d}")
     if config.config_error():
         problems.append(f"config.yaml 读不出来，当前按默认值运行：{config.config_error()}")
+    # 第 252 期：段类型写坏 ⇒ 该段已按默认值跑（服务**还能用**，但那段的设置没生效）。
+    # 这不是「整个配置读不出来」，是**另一件事** ⇒ 单独一条、说清是哪些段。
+    for k in config.bad_sections():
+        problems.append(f"配置的「{k}」段类型不对（应为键值映射），该段已按默认值运行")
     if overrides_err is not None:
         problems.append(
             f"设置覆盖层（settings.json）读不出来，当前所有设置都按默认值运行：{overrides_err}")
@@ -9553,6 +9557,9 @@ def api_get_config():
             # 设置页要能报红条。它们只出现在响应里，`PUT /api/config` 的 EDITABLE 名单里没有。
             "_config_error": err or "",
             "_dirs_failed": config.dirs_failed(),
+            # 第 252 期：**段类型写坏**而被降级的段名（诊断键，同上不可保存）。
+            # 那些段此刻展示的是**默认值** —— 不说出来，用户以为自己的设置还在。
+            "_bad_sections": config.bad_sections(),
             "chapter_detection": cfg.get("chapter_detection") or {},
             "traditionalize": bool(cfg.get("traditionalize", False)),
             "output": cfg.get("output") or {},
@@ -10137,6 +10144,17 @@ def api_put_raw_config(payload: dict = Body(...)):
         raise HTTPException(400, f"YAML 语法错误：{e}")
     if not isinstance(data, dict):
         raise HTTPException(400, "配置根节点必须是键值映射")
+
+    # ⚠️ 第 252 期：**段类型**也要校验（此前只校验「YAML 语法」与「根是映射」）。
+    # `watcher: "abc"` 此前能写进去 ⇒ 之后每次 `load_config()` 都让
+    # `data["watcher"]` 变成字符串 ⇒ 后续取键**抛** ⇒ **每个 API 都 500**、
+    # **连启动路径都抛**（容器起不来）⇒ 自愈只剩「手改 config.yaml」。
+    # ⇒ 写入口就把写坏的段**拒掉**（400 + 说清是哪个段），
+    # 读入口另有**降级**兜底（`config.load_config`）—— 盘上已有的坏配置不该让服务死。
+    bad = config.section_type_errors(data)
+    if bad:
+        raise HTTPException(
+            400, f"这些段必须是键值映射（写成别的类型会让服务起不来）：{'、'.join(bad)}")
 
     backup = _backup_config()
     tmp = config.CONFIG_FILE.with_name("config.yaml.tmp")
