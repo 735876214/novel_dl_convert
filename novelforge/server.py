@@ -1112,6 +1112,10 @@ def _health_checks() -> dict:
     # 这不是「整个配置读不出来」，是**另一件事** ⇒ 单独一条、说清是哪些段。
     for k in _health_probe(config.bad_sections, [], name="bad_sections"):
         problems.append(f"配置的「{k}」段类型不对（应为键值映射），该段已按默认值运行")
+    # ⚠️ 第 261 期：**不认识的键**要报出来 —— 那些设置**静默失效**
+    # （最常见是拼错：写了 `watcher.interva`，生效的却是 `watcher.interval` 的默认值）。
+    for k in _health_probe(config.unknown_config_keys, [], name="unknown_keys"):
+        problems.append(f"配置里有不认识的键「{k}」（多半是拼错了，这个设置不会生效）")
     if overrides_err is not None:
         problems.append(
             f"设置覆盖层（settings.json）读不出来，当前所有设置都按默认值运行：{overrides_err}")
@@ -9726,6 +9730,9 @@ def api_get_config():
             # 第 252 期：**段类型写坏**而被降级的段名（诊断键，同上不可保存）。
             # 那些段此刻展示的是**默认值** —— 不说出来，用户以为自己的设置还在。
             "_bad_sections": config.bad_sections(),
+            # ⚠️ 第 261 期：**不认识的键**（多半是拼错的 ⇒ 那个设置**静默失效**）。
+            # 不说出来 ⇒ 用户改完发现「没生效」却查不出原因。
+            "_unknown_keys": config.unknown_config_keys(),
             "chapter_detection": cfg.get("chapter_detection") or {},
             "traditionalize": bool(cfg.get("traditionalize", False)),
             "output": cfg.get("output") or {},

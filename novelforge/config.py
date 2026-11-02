@@ -728,6 +728,50 @@ _CONFIG_ERROR: "str | None" = None
 #: 混进同一个键会让设置页把两件事说成同一句。
 _BAD_SECTIONS: "list[str]" = []
 
+#: 上一次 :func:`load_config` 里**不认识**的键（`[]` = 没有）。
+#:
+#: 第 261 期：config.yaml 里写了一个**不存在的键**（最常见是**拼错**：
+#: `watcher.interva` 而不是 `watcher.interval`）⇒ 那个设置**静默失效**
+#: —— 用户以为自己改了（界面回显的仍是默认值，他看不出差别），
+#: 而**零提示**（`config_error()` 是空的、`/health` 全绿）。
+#: ⇒ 这正是本仓最忌讳的「假配置」形态：**写下了 ≠ 生效了，也没人说**。
+#:
+#: ⇒ 现在把不认识的键**列出来**（`unknown_keys()`），由 `GET /api/config` 的
+#: `_unknown_keys` 与 `/health` 的 `problems` 报出来（与第 252 期的
+#: `_bad_sections` 同一范式）。
+_UNKNOWN_KEYS: "list[str]" = []
+
+
+def unknown_keys(data) -> list:
+    """``data`` 里**不认识**的键（点号路径，升序）。
+
+    判据**只有一处**（这里）：一个键在 :data:`DEFAULTS` 里**压根不存在**
+    ⇒ 它**不会被任何读点消费** ⇒ 写了等于没写。
+
+    ⚠️ **只看一层**（顶层键 / 某段的直接子键），**不递归** ——
+    递归会撞上「结构型」的键（`metadata_fetch.fields` 是一整张映射、
+    `network.host_replace` 是用户自定的键值对、`watcher.ignore` 是模式列表）
+    ⇒ 那些的「子键」本来就**没有**固定的名单，递归判会**误报**一大片。
+    ⇒ 只在**能确定**的那一层判（顶层 / 段的直接子键）。
+
+    ⚠️ **不认识的键不会被丢掉** —— 它们仍然会进 `data`（不破坏任何东西），
+    本期只**报出来**（让用户知道自己拼错了）。
+    """
+    if not isinstance(data, dict):
+        return []
+    out: list = []
+    for key, val in data.items():
+        if key not in DEFAULTS:
+            out.append(str(key))
+            continue
+        default = DEFAULTS[key]
+        if not isinstance(default, dict) or not isinstance(val, dict):
+            continue
+        for sub in val:
+            if sub not in default:
+                out.append(f"{key}.{sub}")
+    return sorted(out)
+
 
 def section_type_errors(data) -> list:
     """``data`` 里**段类型不对**的段名（升序）。
@@ -761,6 +805,15 @@ def section_type_errors(data) -> list:
 def bad_sections() -> list:
     """上一轮 :func:`load_config` 里**被降级**的段名（`[]` = 没有）。"""
     return list(_BAD_SECTIONS)
+
+
+def unknown_config_keys() -> list:
+    """上一轮 :func:`load_config` 里**不认识的**键（点号路径，`[]` = 没有）。
+
+    ⚠️ 第 261 期：这些键**不会被任何读点消费** ⇒ 写了等于没写
+    （最常见是**拼错**）。报出来，用户才知道自己拼错了。
+    """
+    return list(_UNKNOWN_KEYS)
 
 
 #: **无条件覆盖**用户设置的环境变量（键 → 环境变量名）。
@@ -863,9 +916,10 @@ def _differs_from_default(value, default) -> bool:
 
 def load_config() -> dict:
     """加载配置：默认值 → config.yaml → settings.json 覆盖层 → 环境变量。"""
-    global _CONFIG_ERROR, _BAD_SECTIONS
+    global _CONFIG_ERROR, _BAD_SECTIONS, _UNKNOWN_KEYS
     _CONFIG_ERROR = None
     _BAD_SECTIONS = []
+    _UNKNOWN_KEYS = []
     data = {k: (v.copy() if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
     file_sec: dict = {}          # config.yaml 里那份（下面用它判断「运维手写过这个键没有」）
     if CONFIG_FILE.is_file():
@@ -912,6 +966,20 @@ def load_config() -> dict:
             _log.error("配置的 %r 段类型不对（应为映射），本次按默认值运行", k)
         for k in bad:
             data[k] = dict(DEFAULTS[k])
+
+    # ⚠️ 第 261 期：**不认识的键要报出来**（最常见是**拼错**）。
+    # `watcher.interva: 999`（而不是 `watcher.interval`）⇒ 那个设置**静默失效**：
+    # 生效的是默认值 5.0，而 `config_error()` 是空的、`/health` 全绿、设置页回显的
+    # 也是默认值 ⇒ **用户完全看不出来自己拼错了** ⇒ 「写下了 ≠ 生效了，也没人说」。
+    # ⇒ 这里把不认识的键**列出来**（`unknown_keys()`）。
+    # ⚠️ 判据在**合并之后**跑 ⇒ config.yaml 与 settings.json 两个来源都算。
+    # ⚠️ **不认识的键不会被丢掉**（它们仍然进 `data`，不破坏任何东西）——
+    #    本期只**报出来**（用户自己决定要不要改）。
+    unknown = unknown_keys(data)
+    if unknown:
+        _UNKNOWN_KEYS = unknown
+        _log.warning("配置里有不认识的键（多半是拼错了，这些设置不会生效）：%s",
+                     "、".join(unknown))
 
     # 环境变量覆盖监听开关 / 轮询间隔：容器部署时无需改配置文件
     auto = os.getenv("AUTO_WATCH")
