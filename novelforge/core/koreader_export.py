@@ -36,6 +36,7 @@ from __future__ import annotations
 import pathlib
 import time
 
+from . import atomicio
 from .koreader_anno import SUFFIX, export_paths_for
 
 #: 本项目的样式 → KOReader 的 ``drawer``（与 `DRAWER_TO_STYLE` 反向）。
@@ -278,7 +279,10 @@ def apply_export(book_file: pathlib.Path, rows: list, chapter_titles=None) -> di
     target = pathlib.Path(plan["path"])
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(plan["preview"], encoding="utf-8")
+        # 原子写（第 244 期）：原先是 `write_text` —— 非原子。写盘途中 KOReader
+        # 读到**半截**导出位点 ⇒ 它那边的导出记录坏掉（用户得手动修）。
+        # 走全仓统一的 `atomicio`（同目录临时文件 + `Path.replace`）。
+        atomicio.write_text(target, plan["preview"], private=False)
     except OSError as e:
         return {"ok": False, "error": f"写 {target.name} 失败：{e}", **{
             k: plan[k] for k in ("path", "existing", "add", "total", "skipped")}}

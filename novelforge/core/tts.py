@@ -35,6 +35,8 @@ import time
 
 import httpx
 
+from . import atomicio
+
 #: 默认的 OpenAI-compatible 语音端点（**自托管 / 局域网**用）。
 DEFAULT_BASE = "http://127.0.0.1:8000"
 DEFAULT_VOICE = "alloy"
@@ -252,7 +254,12 @@ def synthesize(text: str, voice: str = "", speed: float = 0) -> dict:
     path = _cache_path(blob)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(blob)
+        # ⚠️ 第 244 期：原先是 `path.write_bytes(blob)` —— **非原子**。写盘途中
+        # 另一个请求命中同名路径（内容哈希 ⇒ 同文本必同路径）⇒ `GET /api/tts/audio/{name}`
+        # 读到**半截 mp3**（`<audio>` 截断 / 播不出声）。改用全仓统一的原子写
+        # （`atomicio`：同目录临时文件 + `Path.replace`）—— 与 authors / fonts /
+        # landing / zipkind 同一口径。
+        atomicio.write_bytes(path, blob, private=False)
     except OSError as e:
         return {"ok": False, "message": f"音频落盘失败：{e}",
                 "path": "", "bytes": len(blob), "chunks": len(blocks)}
