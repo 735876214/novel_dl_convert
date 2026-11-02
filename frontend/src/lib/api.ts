@@ -2820,6 +2820,13 @@ export interface ConfigPayload {
   overrides: Record<string, unknown>
   /** 被 settings.json 覆盖的点号键（提示「改了 config.yaml 但不生效」的原因） */
   overridden: string[]
+  /**
+   * 被**环境变量无条件覆盖**的点号键（第 244 期）。
+   *
+   * 这几个键在界面上改了不起作用（部署时环境变量把它压回去）⇒ 界面据此标注
+   * 「由环境变量接管」，不做假交互。
+   */
+  env_overridden?: string[]
   config_file: string
   settings_file: string
   backup_dir: string

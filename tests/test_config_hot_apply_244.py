@@ -100,3 +100,25 @@ def test_构造监听器时也要夹下界(isolated):
     w = watcher_mod.FolderWatcher(cfg={"watcher": {"interval": 0, "settle_seconds": 0}})
     assert w.interval == watcher_mod.MIN_INTERVAL, w.interval
     assert w.settle_seconds == watcher_mod.MIN_SETTLE_SECONDS, w.settle_seconds
+
+
+def test_被环境变量接管的键要如实回显(client, auth_headers, isolated, monkeypatch):
+    """`AUTO_WATCH` / `WATCH_INTERVAL` 是**无条件覆盖** ⇒ 界面改了没用 ⇒ 必须说清。
+
+    界面上那个输入框改了不起作用（部署时环境变量把它压回去）⇒ 不标注就是
+    「假交互」（AGENTS §1：不做假交互）。后端如实回 `env_overridden`，
+    前端据此禁用控件并说明原因（第 244 期）。
+    """
+    monkeypatch.setenv("AUTO_WATCH", "false")
+    monkeypatch.setenv("WATCH_INTERVAL", "9")
+    r = client.get("/api/config", headers=auth_headers).json()
+    keys = list(r.get("env_overridden") or [])
+    assert "watcher.enabled" in keys, keys
+    assert "watcher.interval" in keys, keys
+
+
+def test_没有环境变量时回显空表(client, auth_headers, isolated, monkeypatch):
+    monkeypatch.delenv("AUTO_WATCH", raising=False)
+    monkeypatch.delenv("WATCH_INTERVAL", raising=False)
+    r = client.get("/api/config", headers=auth_headers).json()
+    assert not (r.get("env_overridden") or []), r.get("env_overridden")

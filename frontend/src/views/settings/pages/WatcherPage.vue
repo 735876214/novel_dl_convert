@@ -27,7 +27,7 @@ interface WatcherInfo extends WatcherStatus {
 }
 
 const ui = useUiStore()
-const { cfg, saving, val, setVal, loadConfig, saveSection, ignoreText } = useSettingsConfig()
+const { cfg, saving, val, setVal, loadConfig, saveSection, ignoreText, envOverridden } = useSettingsConfig()
 
 const watcher = ref<WatcherInfo | null>(null)
 const health = ref<HealthInfo | null>(null)
@@ -163,6 +163,7 @@ onMounted(async () => {
           :key="f.path"
           :field="f"
           :value="val(f.path)"
+          :env-locked="envOverridden.includes(f.path)"
           @update="setVal(f.path, $event)"
         />
 

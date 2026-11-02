@@ -24,6 +24,13 @@ const files = ref<{ config_file: string; settings_file: string; backup_dir: stri
 })
 /** 被 settings.json 覆盖的点号键 */
 const overridden = ref<string[]>([])
+/**
+ * 被**环境变量无条件覆盖**的点号键（第 244 期）。
+ *
+ * 这几个键在界面上改了不起作用（`AUTO_WATCH` / `WATCH_INTERVAL` 会把它压回去）
+ * ⇒ 字段行据此标注「由环境变量接管」，不做假交互。
+ */
+const envOverridden = ref<string[]>([])
 const saving = ref(false)
 const loading = ref(false)
 const loadError = ref('')
@@ -101,6 +108,7 @@ export function useSettingsConfig() {
         )
         baseline.value = clone(r.config)
         overridden.value = r.overridden ?? []
+        envOverridden.value = r.env_overridden ?? []
         files.value = {
           config_file: r.config_file,
           settings_file: r.settings_file,
@@ -211,6 +219,7 @@ export function useSettingsConfig() {
     cfg,
     files,
     overridden,
+    envOverridden,
     saving,
     loading,
     loadError,

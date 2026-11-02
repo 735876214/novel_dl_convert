@@ -711,6 +711,35 @@ def mutate_overrides(mutator) -> dict:
 _CONFIG_ERROR: "str | None" = None
 
 
+#: **无条件覆盖**用户设置的环境变量（键 → 环境变量名）。
+#:
+#: ⚠️ 第 244 期：这两个键在 `load_config` 里是**无条件覆盖**（不像
+#: `metadata_fetch.cache_ttl` / `detail_fetch` 那样「人写过就以人写的为准」）
+#: ⇒ 部署时设了它们，**用户在设置页改同一个键就是白改**（保存成功、界面显示新值、
+#: 下次读配置又被环境变量压回去）。这是「假交互」—— 界面上给了一个**实际无效**的输入框。
+#:
+#: 修法不是取消覆盖（部署者设环境变量就是想钉死它），而是**如实告诉界面**：
+#: `GET /api/config` 回一个 `env_overridden` 列表，前端在该字段上标注
+#: 「由环境变量接管」。判据只有这一处（`env_overridden()`）。
+_ENV_OVERRIDES = (
+    ("watcher.enabled", "AUTO_WATCH"),
+    ("watcher.interval", "WATCH_INTERVAL"),
+)
+
+
+def env_overridden() -> list:
+    """当前**被环境变量无条件覆盖**的配置键（形如 ``watcher.interval``）。
+
+    界面据此标注「这个键由环境变量接管，改这里没用」—— 见 `_ENV_OVERRIDES`
+    的说明（为什么是「无条件覆盖」而不是「兜底」）。
+    """
+    out: list = []
+    for key, env in _ENV_OVERRIDES:
+        if os.getenv(env) is not None:
+            out.append(key)
+    return out
+
+
 def config_error() -> "str | None":
     """`config.yaml` 这一轮是否读坏了（`/health` 与设置页据此报红条，第 141 期）。"""
     return _CONFIG_ERROR

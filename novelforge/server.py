@@ -9537,6 +9537,10 @@ def api_get_config():
         },
         "overrides": config.load_overrides(),
         "overridden": _flatten_overrides(config.load_overrides()),
+        # ⚠️ 第 244 期：被**环境变量无条件覆盖**的键（`watcher.enabled` /
+        # `watcher.interval`）—— 界面上那些输入框改了不起作用（部署时环境变量把它压回去）
+        # ⇒ 界面据此标注「由环境变量接管」，不做假交互。判据在 `config.env_overridden()`。
+        "env_overridden": config.env_overridden(),
         "config_file": str(config.CONFIG_FILE),
         "settings_file": str(config.SETTINGS_FILE),
         "backup_dir": str(config.BACKUP_DIR),

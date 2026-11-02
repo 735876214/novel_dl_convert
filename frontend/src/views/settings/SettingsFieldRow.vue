@@ -8,7 +8,17 @@ import type { FieldDef } from '@/data/settingsFields'
  * 从原 SettingsView.vue 的三处重复渲染（转换 / 监听 / 网络）抽成一个组件，
  * 控件分支与类串与原实现保持一致。
  */
-defineProps<{ field: FieldDef; value: string | number | boolean | undefined }>()
+defineProps<{
+  field: FieldDef
+  value: string | number | boolean | undefined
+  /**
+   * 这个键**被环境变量接管**（第 244 期）⇒ 界面上改了不起作用
+   * （部署时 `AUTO_WATCH` / `WATCH_INTERVAL` 会把它压回去）。
+   *
+   * 诚实闸：禁用控件 + 说清原因，而不是让用户改完发现「保存了但没生效」。
+   */
+  envLocked?: boolean
+}>()
 const emit = defineEmits<{ update: [value: string | number | boolean] }>()
 </script>
 
@@ -17,17 +27,22 @@ const emit = defineEmits<{ update: [value: string | number | boolean] }>()
     <div class="min-w-0 flex-1">
       <div class="text-[13px] font-medium text-foreground">{{ field.label }}</div>
       <div v-if="field.hint" class="mt-0.5 text-[11.5px] text-muted-foreground">{{ field.hint }}</div>
+      <div v-if="envLocked" class="mt-0.5 text-[11.5px] text-warning">
+        由环境变量接管（{{ field.path }}）—— 在这里改不会生效
+      </div>
     </div>
 
     <Switch
       v-if="field.type === 'bool'"
       :model-value="Boolean(value)"
+      :disabled="envLocked"
       @update:model-value="emit('update', $event)"
     />
 
     <select
       v-else-if="field.type === 'select'"
       :value="value"
+      :disabled="envLocked"
       class="h-8 shrink-0 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
       @change="emit('update', ($event.target as HTMLSelectElement).value)"
     >
@@ -38,6 +53,7 @@ const emit = defineEmits<{ update: [value: string | number | boolean] }>()
       v-else-if="field.type === 'number'"
       type="number"
       :value="value"
+      :disabled="envLocked"
       class="h-8 w-24 shrink-0 rounded-md border border-border bg-muted px-2 text-right text-[12.5px] text-foreground outline-none focus:border-ring"
       @input="emit('update', Number(($event.target as HTMLInputElement).value))"
     >
@@ -46,6 +62,7 @@ const emit = defineEmits<{ update: [value: string | number | boolean] }>()
       v-else
       :type="field.type === 'password' ? 'password' : 'text'"
       :value="value"
+      :disabled="envLocked"
       :placeholder="field.placeholder ?? ''"
       class="h-8 w-64 max-w-[50%] shrink-0 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
       @input="emit('update', ($event.target as HTMLInputElement).value)"
