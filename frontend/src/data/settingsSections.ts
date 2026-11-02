@@ -26,7 +26,8 @@ export const SECTION_KEYS: Record<string, string[]> = {
   watcher: ['watcher'],
   // 第 94 期阶段 4a：URL 订阅导入的开关与护栏也在这页（`source_import.*`）
   // 第 138 期：`logging` 已迁出（归 `logs`，见 LOGGING_FIELDS 注释）——一个段只许一个归属分区
-  network: ['network', 'download', 'auto_update', 'source_import', 'podcasts'],
+  // 第 235 期：TTS（自托管 / 局域网的 OpenAI-compatible 引擎）也在「网络与下载」页
+  network: ['network', 'download', 'auto_update', 'source_import', 'podcasts', 'tts'],
   naming: ['naming'],
   upload: ['upload'],
   achievements: ['achievements'],

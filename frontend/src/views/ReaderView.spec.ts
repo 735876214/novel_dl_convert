@@ -32,6 +32,8 @@ vi.mock('@/lib/api', () => ({
     epubCss: vi.fn(),
     // 第 188 期：read-along（没有媒体叠加时阅读器照旧，不显示朗读条）
     readAloud: vi.fn(),
+    // 第 235 期：TTS 默认**未启用** ⇒ 界面上不摆朗读入口
+    ttsStatus: vi.fn().mockResolvedValue({ enabled: false, base_url: "", model: "", voice: "", speed: 1, has_key: false }),
     saveReadAloudSync: vi.fn(),
     readAloudAudioUrl: vi.fn((bid: string, href: string) => `/ra/${bid}?p=${href}`),
     exportReadAloud: vi.fn(),

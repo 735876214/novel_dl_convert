@@ -23,6 +23,8 @@ import ReaderView from '@/views/ReaderView.vue'
  */
 vi.mock('@/lib/api', () => ({
   api: {
+    // 第 235 期：TTS 默认**未启用** ⇒ 界面上不摆朗读入口
+    ttsStatus: vi.fn().mockResolvedValue({ enabled: false, base_url: "", model: "", voice: "", speed: 1, has_key: false }),
     bookDetail: vi.fn(),
     listAnnotations: vi.fn(),
     listBookmarks: vi.fn(),

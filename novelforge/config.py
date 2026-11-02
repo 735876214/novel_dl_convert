@@ -303,6 +303,18 @@ DEFAULTS = {
         "readwise": {"token": "", "auto_push": False},
         "storygraph": {"session": "", "remember_token": "", "auto_push": False},
     },
+    # TTS（文本转语音，第 235 期）：**自托管 / 局域网**的 OpenAI-compatible 引擎。
+    # ⚠️ 默认**关**（这是「向外部服务发请求」的动作，必须用户显式打开）。
+    # ⚠️ `base_url` 默认指向本机 —— 本项目默认**不出网**（AGENTS.md 第 1 节）。
+    "tts": {
+        "enabled": False,
+        "base_url": "http://127.0.0.1:8000",
+        "api_key": "",
+        "model": "tts-1",
+        "voice": "alloy",
+        "speed": 1.0,
+        "timeout": 60,
+    },
     # 元数据自动抓取与治理（第 5 期）。
     # 会**外呼公网**（OpenLibrary / Google Books），所以默认关闭，由用户显式打开。
     "metadata_fetch": {

@@ -11,6 +11,7 @@ import PdfReader from '@/components/reader/PdfReader.vue'
 import ComicReader from '@/components/reader/ComicReader.vue'
 import UnitsReader from '@/components/reader/UnitsReader.vue'
 import ReadAloudBar from '@/components/ReadAloudBar.vue'
+import TtsBar from '@/components/TtsBar.vue'
 import ReaderSearchPanel from '@/components/ReaderSearchPanel.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
 import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type OnlineChapters, type OnlineStatus, type ReadAloudInfo, type SessionExtra } from '@/lib/api'
@@ -804,6 +805,15 @@ const showToc = ref(false)
 const showNotes = ref(false)
 // 第 189 期：书内搜索 / 快捷键帮助 / 按百分比或页码跳转
 const showSearch = ref(false)
+/** TTS 朗读条第 235 期：默认关（用户自己开）；正文取当前章的纯文本。 */
+const showTts = ref(false)
+/** 服务端说 TTS 已启用吗？**没启用就不摆入口**（不做假交互）。 */
+const ttsAvailable = ref(false)
+void api.ttsStatus().then((s) => { ttsAvailable.value = Boolean(s?.enabled) }).catch(() => {
+  ttsAvailable.value = false
+})
+/** 当前章的纯文本（喂 TTS）—— 取 `textContent`（与进度 / 批注共用的那把尺子）。 */
+const ttsText = computed(() => currentChapterRoot()?.textContent?.trim() ?? '')
 const showHelp = ref(false)
 const jumpPct = ref('')
 const jumpPageNo = ref('')
@@ -2569,6 +2579,17 @@ onBeforeUnmount(() => {
         <Button v-if="canSearch" size="sm" variant="ghost" title="书内搜索（/）" @click="showSearch = !showSearch">
           <Icon name="search" class="h-4 w-4" />
         </Button>
+        <!-- TTS 朗读（第 235 期）：**只在服务端说「已启用」时才摆这颗按钮** ——
+             没启用就摆一个点开是空的入口 = 假交互。 -->
+        <Button
+          v-if="ttsAvailable"
+          size="sm"
+          variant="ghost"
+          title="朗读（TTS）"
+          @click="showTts = !showTts"
+        >
+          <Icon name="volume" class="h-4 w-4" />
+        </Button>
         <div class="min-w-0 flex-1">
           <div class="truncate text-[12px] text-muted-foreground">{{ book.title }}</div>
           <div class="truncate text-[13px] font-medium text-foreground">{{ chapterTitle }}</div>
@@ -2832,6 +2853,14 @@ onBeforeUnmount(() => {
         class="mt-2"
         @cue="onReadAloudCue"
         @close="closeReadAloud"
+      />
+
+      <!-- TTS 朗读条第 235 期）：只在用户自己打开时出现（默认关） -->
+      <TtsBar
+        v-if="showTts && !isOnline"
+        :text="ttsText"
+        class="mt-2"
+        @close="showTts = false"
       />
 
       <!-- 书内搜索（第 189 期）：只支持 EPUB（PDF 的正文层还没接） -->

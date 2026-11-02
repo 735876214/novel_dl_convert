@@ -6,7 +6,7 @@ import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import SettingsFieldRow from '@/views/settings/SettingsFieldRow.vue'
-import { NETWORK_FIELDS } from '@/data/settingsFields'
+import { NETWORK_FIELDS, TTS_FIELDS } from '@/data/settingsFields'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 
 /**
@@ -45,6 +45,24 @@ onMounted(() => loadConfig())
           :value="val(f.path)"
           @update="setVal(f.path, $event)"
         />
+
+        <div class="border-t border-border">
+          <div class="px-4 py-3">
+            <div class="mb-1.5 text-[13px] font-medium text-foreground">
+              TTS（朗读）
+            </div>
+            <div class="mb-2 text-[11.5px] text-muted-foreground">
+              指向**你自己**跑的 OpenAI-compatible 语音服务（默认关）；本项目不外呼云厂商
+            </div>
+            <SettingsFieldRow
+              v-for="f in TTS_FIELDS"
+              :key="f.path"
+              :field="f"
+              :value="val(f.path)"
+              @update="setVal(f.path, $event)"
+            />
+          </div>
+        </div>
 
         <div class="px-4 py-3">
           <div class="mb-1.5 text-[13px] font-medium text-foreground">域名替换</div>

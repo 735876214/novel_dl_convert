@@ -1861,6 +1861,16 @@ export interface AnnotationOverview {
   longest_quiet_weeks: number
 }
 
+/** TTS 状态（`GET /api/tts`，第 235 期）。 */
+export interface TtsStatus {
+  enabled: boolean
+  base_url: string
+  model: string
+  voice: string
+  speed: number
+  has_key: boolean
+}
+
 /** KOReader 批注**导出**（`POST /api/annotations/export-koreader`）的返回（第 234 期）。 */
 export interface KoreaderExportPlan {
   ok: boolean
@@ -3864,6 +3874,25 @@ export const api = {
     request<{ ok: boolean; name: string; recycled: string }>(
       `/api/book-dock/${encodeURIComponent(id)}/delete`,
       { method: 'POST' },
+    ),
+
+  // ---------- TTS（自托管 / 局域网的 OpenAI-compatible 引擎，第 235 期）----------
+
+  /** TTS 状态（**不含** api_key —— 那是凭据）。`enabled=false` 时界面不摆朗读条。 */
+  ttsStatus: () => request<TtsStatus>('/api/tts'),
+
+  /** 连通性探针（打真请求；不通就如实说）。 */
+  ttsProbe: () => request<{ ok: boolean; message: string }>('/api/tts/probe', { method: 'POST' }),
+
+  /** 合成一段文本 → 音频（落缓存目录，不落书文件）。 */
+  ttsSpeak: (text: string, voice = '') =>
+    request<{ ok: boolean; message: string; url?: string; bytes?: number; chunks?: number }>(
+      '/api/tts/speak',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, voice }),
+      },
     ),
 
   // ---------- 外部书库的只读登记（第 229 期）----------

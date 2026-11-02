@@ -5068,6 +5068,63 @@ def _overlay_for(bid: str, path: pathlib.Path) -> dict:
     )
 
 
+# ---------------- TTS（自托管 / 局域网的 OpenAI-compatible 引擎，第 235 期）----------------
+#
+# ⚠️ **默认关**（`tts.enabled`）；地址由后端配置，前端只看到开关与几个字段。
+# ⚠️ **不出网**：默认 `base_url` 指向本机；这是「向外部服务发请求」的动作，
+# 必须由用户显式打开（与 AGENTS.md 第 1 节的默认取向一致）。
+
+@app.get("/api/tts")
+def api_tts_status():
+    """TTS 状态（**不含** api_key —— 那是凭据）。"""
+    from .core import tts
+    return tts.status()
+
+
+@app.post("/api/tts/probe")
+def api_tts_probe():
+    """连通性探针（**打真请求**；不通就如实说，不假装可用）。"""
+    from .core import tts
+    return tts.probe()
+
+
+@app.post("/api/tts/speak")
+def api_tts_speak(payload: dict = Body(...)):
+    """合成一段文本 → 音频（落**缓存目录**，不落书文件）。
+
+    body: ``{"text": "...", "voice": "", "speed": 0}``。
+    """
+    from .core import tts
+    text = str((payload or {}).get("text") or "")
+    voice = str((payload or {}).get("voice") or "")
+    try:
+        speed = float((payload or {}).get("speed") or 0)
+    except (TypeError, ValueError):
+        speed = 0
+    res = tts.synthesize(text, voice=voice, speed=speed)
+    if res.get("ok"):
+        res["url"] = tts.speak_url(res["path"])
+    return res
+
+
+@app.get("/api/tts/audio/{name}")
+def api_tts_audio(name: str):
+    """缓存里的合成音频（供 `<audio>` 播放）。
+
+    ⚠️ 只服务**缓存目录里**的文件（名字白名单校验 ⇒ 不许穿越到别处）。
+    """
+    import re as _re
+    from fastapi.responses import FileResponse
+
+    if not _re.fullmatch(r"[0-9a-f]{32}\.mp3", name or ""):
+        raise HTTPException(404, "音频不存在")
+    from . import config
+    p = config.CACHE_DIR / "tts" / name
+    if not p.is_file():
+        raise HTTPException(404, "音频不存在")
+    return FileResponse(str(p), media_type="audio/mpeg")
+
+
 @app.get("/api/books/{bid}/read-aloud")
 def api_read_aloud(bid: str):
     """一本书的媒体叠加（句子 ↔ 音频片段）与上次朗读位置。"""
@@ -9107,6 +9164,8 @@ EDITABLE: dict = {
     # 元数据完整度权重（第 204 期）：weights 是 `{字段: 0–100}`，version 是口径标注。
     "metadata_score": {"weights", "version"},
     # 整块覆盖：三家服务的字段各不相同，逐键白名单只会让新增字段时漏改
+    # 第 235 期：TTS（自托管 / 局域网的 OpenAI-compatible 引擎）。默认关。
+    "tts": {"enabled", "base_url", "api_key", "model", "voice", "speed", "timeout"},
     "integrations": {"hardcover", "readwise", "storygraph"},
     # 元数据抓取：顶层子键白名单（`fields` 这类嵌套结构不再逐层校验 ——
     # 它们的形状由前端页面保证，后端只在应用时逐字段判定合法性）。
@@ -9399,6 +9458,18 @@ def api_get_config():
             "update": cfg.get("update") or {},
             # 播客（第 187 期）：目录搜索开关（硬编码键列表 ⇒ EDITABLE 与本列表都要加）。
             "podcasts": cfg.get("podcasts") or {},
+            # TTS（第 235 期）：自托管 / 局域网的 OpenAI-compatible 引擎。
+            # ⚠️ `api_key` 是凭据 → 掩码（与 llm / komga 同一口径）。
+            "tts": {
+                "enabled": bool((cfg.get("tts") or {}).get("enabled")),
+                "base_url": str((cfg.get("tts") or {}).get("base_url") or ""),
+                "api_key": _KEY_MASK if str((cfg.get("tts") or {}).get("api_key") or "").strip() else "",
+                "has_api_key": bool(str((cfg.get("tts") or {}).get("api_key") or "").strip()),
+                "model": str((cfg.get("tts") or {}).get("model") or ""),
+                "voice": str((cfg.get("tts") or {}).get("voice") or ""),
+                "speed": float((cfg.get("tts") or {}).get("speed") or 1.0),
+                "timeout": float((cfg.get("tts") or {}).get("timeout") or 60.0),
+            },
             # 元数据完整度权重（第 204 期）：weights / version。
             "metadata_score": cfg.get("metadata_score") or {},
             # 阅读状态口径的全局默认值（第 40 期）。每库生效值另走

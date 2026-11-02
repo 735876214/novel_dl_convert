@@ -155,6 +155,38 @@ export const NETWORK_FIELDS: FieldDef[] = [
 ]
 
 /**
+ * TTS（文本转语音，第 235 期）：**自托管 / 局域网**的 OpenAI-compatible 引擎。
+ *
+ * ⚠️ 默认**关** —— 这是「向外部服务发请求」的动作，必须用户显式打开
+ * （本项目默认不出网，见 AGENTS.md 第 1 节）。
+ */
+export const TTS_FIELDS: FieldDef[] = [
+  {
+    path: 'tts.enabled',
+    label: '启用 TTS（朗读）',
+    type: 'bool',
+    hint: '默认关闭。开启后由**你自己**跑的 OpenAI-compatible 语音服务合成；本项目不外呼云厂商',
+  },
+  {
+    path: 'tts.base_url',
+    label: '语音服务地址',
+    type: 'text',
+    placeholder: 'http://127.0.0.1:8000',
+    hint: 'OpenAI-compatible 的 `/v1/audio/speech` 端点所在的自托管 / 局域网服务',
+  },
+  {
+    path: 'tts.api_key',
+    label: 'API Key',
+    type: 'password',
+    hint: '局域网自托管通常留空；已配置时留空即可，不会覆盖原值',
+  },
+  { path: 'tts.model', label: '模型', type: 'text', placeholder: 'tts-1' },
+  { path: 'tts.voice', label: '音色', type: 'text', placeholder: 'alloy' },
+  { path: 'tts.speed', label: '语速', type: 'number', hint: '0.5–2.0，默认 1' },
+  { path: 'tts.timeout', label: '超时（秒）', type: 'number', hint: '默认 60；长文本会分块合成' },
+]
+
+/**
  * 日志文件的存放位置与内存缓冲（第 138 期从 `NETWORK_FIELDS` 迁来）。
  *
  * 判据：**一个顶层配置段只许有一个归属分区**。此前 `logging` 同时挂在 `network` 与 `logs`
