@@ -10,7 +10,21 @@
 
 ## 0. 当前状态
 
-- HEAD = 第 117 期 AGENTS.md 索引化 + 本机陷阱外移 + 常用命令脚本化（第 95–116 期逐期历史见 §2 与 `git log --oneline`） + 第 148 期 TXT 派生件构建串行化 / 成品被删自愈 / 进度接上派生件 CFI + 第 149 期部署面收口：镜像 tag 钉死到版本号 / 非 root 运行的配方与启动自检 / 「是不是压缩包」判据收敛 / 待展开清单不再每次重开归档 + 第 150 期镜像 tag 的发布规则修正 + 发版 1.4.1（148/149/150 三期合集） + 第 152 期漫画库「Vol.04 没合并」的最后一环：折叠行标题取代表本 / 折叠默认关 + 第 153 期BookOrbit 全量对齐：独立复核 + Phase 0 工程地基 + 第 154 期BookOrbit 对齐 Phase 1A：排序 / 汇总 / 入库时间 / 预扫 + 第 155 期BookOrbit 对齐 Phase 1A：重复书治理 + 封面编辑器 + 第 156 期书架分面计数 + 跳转跟随排序 + 第 157 期书库直传上传 + 批量元数据编辑 + 第 158 期表格视图列面板（显隐 / 行高 / 冻结 / 命名视图） + 第 159 期实体管理扩到 6 类 + 修复多值覆盖值形态 + 第 160 期OPDS 只读客户端凭据（可限定书库） + 第 161 期GET /api/* 条件请求（ETag/304）+ 侧栏计数与全量书目解耦 + 第 162 期仪表盘统计 brief 模式（/api/stats?brief=1） + 第 163 期Komga 兼容层支持只读客户端凭据 + 第 164 期读路径第二轮审计（重复页 bigram 预筛 / 成就走 brief / 会话查询收敛） + 第 165 期按正则从文件名提取元数据（工具 → 文件名提取） + 第 167 期有声书书签（时间点 + 备注） + 第 168 期有声书单轨「已听」标记 + 第 169 期有声书倍速 0.5–3 + 睡眠「+15 分钟 / 本轨结束」 + 第 170 期批量动作收口（单事务批量写 / 自动推送合并 / Komga 集合批量化） + 第 171 期覆盖写入批量事务（工具 → 文件名提取的整库规则） + 第 172 期Phase 2A 收口（继续收听 / 按书倍速 / M4B 章节 / 整本 ZIP） + 第 173 期播客订阅内核（RSS 订阅 / 刷新 / 单集试听） + 第 174 期播客订阅管理（OPML / 健康落账 / 批量刷新） + 第 175 期播客单集下载（队列 / 本地播放 / 清理） + 第 176 期播客单集播放进度 / 已播状态 / 筛选 + 第 177 期播客单集书签（时间点 / 同秒幂等 / 软删除） + 第 178 期播客单集播完自动连播 + 单实例播放 + 第 179 期体积与加载速度（前端按需化 / 静态预压缩 / 镜像与仓库瘦身） + 第 180 期播客播放队列（本机持久化 / 跨订阅 / 播完优先取队首） + 第 181 期播客自动下载最新 N 集 + 听完清理本地副本 + 第 184 期重复书页 19.4 s 收口（两级内容哈希 / quick_ratio 上界预筛） + 第 182 期播客单集官方转录（feed 转录 / 剥时间码 / 缓存） + 第 183 期播客版继续收听 + 单集搜索 + 第 185 期播客合集（只装订阅 / 软删过滤 / 重订阅恢复） + 第 186 期播客智能播放列表（单集轴规则 / 内置预设 / 队列快照） + 第 187 期播客目录搜索（iTunes Search / 默认开 / 失败降级） + 第 188 期read-along 媒体叠加（SMIL 解析 / 句子同步 / 去音频导出） + 第 189 期EPUB 书内搜索 + 阅读器快捷键 / 全屏 / 跳转 + 第 190 期通知中心分页 / 隐藏 / 清空 + 第 191 期每库扫描历史 + 第 192 期登录 / 登出审计 + 审计日期筛选 + 第 193 期元数据缓存统计 + 书源搜索健康 + 第 194 期⌘K 命令面板 + 第 195 期PDF 大纲 + 文内搜索 + 第 196 期下载文件名模式 + 第 197 期KOReader 未匹配文档可见 + 第 198 期成就提示语：还差多少 + 第 199 期审计日志服务端 CSV 导出 + 第 200 期封面变更审计 + 第 201 期阅读状态 8 档 + 第 202 期作者抓取配置接通 + 第 203 期跨库移动指纹判重 + 第 204 期元数据完整度权重可配 + 版本标注 + 第 205 期审计归档按天保留 + 第 208 期封面缩略图判据改字节（真机 −84%） + 第 209 期仪表盘偏好存服务端 + 第 210 期收藏夹书目分页 + 第 211 期书目导出粒度 + 第 212 期书架多级排序 + 第 213 期镜像瘦身开关 + 构建缓存（704 MB → 453 MB） + 第 214 期元数据批量抓取：暂停 / 继续 / 取消 + 预览汇总 + 第 215 期成就展示柜 + 第 216 期自定义图标库 + 第 217 期成就 ETA + 第 218 期智能书架：服务端求值 + 规则表达力 + 第 219 期审计遗留三条（目录客户端封面 / pip 缓存锁 / App.vue 结构）；`VERSION` = `1.4.7`（第 152 期发版，含系列页/详情页读路径与 CLS）—— 单一真值源，`GET /health` 下发；
+- HEAD = 第 219 期（审计遗留三条：目录客户端封面 / pip 缓存锁 / App.vue 结构）
+  + 第 218 期智能书架：服务端求值 + 规则表达力 + 第 217 期成就 ETA + 第 216 期自定义图标库
+  + 第 215 期成就展示柜 + 第 214 期元数据批量抓取 + 第 213 期镜像瘦身开关与构建缓存
+  + 第 212 期书架多级排序 + 第 211 期书目导出粒度 + 第 210 期收藏夹分页 + 第 209 期仪表盘偏好服务端
+  + 第 208 期封面缩略图判据改字节 + 第 205 期审计归档按天保留 + 第 200–204 期封面变更审计 /
+  阅读状态 8 档 / 作者抓取配置 / 跨库移动指纹 / 元数据权重可配 + 第 194–199 期 ⌘K 命令面板 /
+  PDF 搜索 / KOReader / 成就提示语 / 审计导出 + 第 189–193 期 EPUB 搜索 / 通知中心 / 扫描历史 /
+  登录审计 / 元数据缓存统计 + 第 185–188 期播客合集 / 智能播放列表 / 目录搜索 / read-along
+  + 第 179 期体积与加载速度（按需化 / 静态预压缩 / 镜像与仓库瘦身）+ 第 173–178 期播客订阅 /
+  管理 / 下载 / 进度 / 书签 / 连播 + 第 164–172 期读路径审计 / 文件名提取 / 有声书书签与倍速 /
+  批量事务 / Phase 2A 收口 + 第 153–163 期 BookOrbit 对齐与 brief 模式 / Komga 凭据 / 条件请求
+  + 第 148–152 期 TXT 派生件 / 部署面收口 / 发版 1.4.1 / 漫画库 Vol.04 最后一环
+  ⚠️ **逐期一句话在 §2，完整叙事在 `docs/roadmap-gaps-remaining.md`**（最新期在文件末尾）；
+  这条链只留**里程碑分组**，别再逐期追加 —— 它是每次会话必读的。
+  `VERSION` = `1.4.7`（第 152 期发版，含系列页/详情页读路径与 CLS）—— 单一真值源，`GET /health` 下发；
   v0.x 阶段「第 N 期 = V0.N.0」的约定自 V1.0.0 起终止，改为**按里程碑发版**
   （第 147 期里程碑 = 格式识别与导入的判据收敛 —— 同一份字节只许一种结论；最新段 `CHANGELOG.md` 的 `V1.4.7 — 2026-10-27` 覆盖系列页/详情页读路径与 CLS，`V1.4.6` 覆盖首屏与显示优化，`V1.4.5` 覆盖合集跨册续接 / 漫画·PDF 系列目录 / 书详情回系列，`V1.4.4` 覆盖多选补修，`V1.4.3` 覆盖审计与 CI 噪音，`V1.4.2` 覆盖第 152 期主体）。
 - 测试基线（第 219 期实测）：后端 **2988 例（2974 passed / 0 failed / 0 errors / 14 skipped）**，全量 604.86 s；
@@ -22,32 +36,17 @@
   后端全量复用第 179 期在合并 HEAD 上的同一轮（508.00 s；本轮只改前端与文档）。
   本机 `.venv` 解释器在仓库外建不了临时目录（`tempfile.gettempdir()` 落回仓库根 ⇒ 撞 `tests/conftest.py` 的仓库根守卫，
   1643 例会整片报错）⇒ 全量用**系统解释器 + `.venv` 的 site-packages**（`PYTHONPATH`）跑，临时目录才落回 `%TEMP%`。
-- 第 150 期的基线：后端 **2770 例（2756 passed / 0 failed / 0 errors / 14 skipped）**，全量 493.1 s（收集 2788、18 例本机环境失败；本期没有新增用例）；
-- 第 149 期的基线：后端 **2770 例（2756 passed / 0 failed / 0 errors / 14 skipped）**，全量 400.3 s（本机直跑口径，同一批 18 例环境失败；用例数不变是因为本期没有新增用例，只改了一条用例的判据与一处 CI 配置）；
-- 第 148 期（再上一期）的基线：后端 **2752 例（2738 passed / 0 failed / 0 errors / 14 skipped）**，全量 497.6 s（本机直跑口径）；
-  ⚠️ 收 **2769** 例、其中 **17 例在本机跑不起来**（与本期改动无关，CI 容器里正常）：`test_updater.py` ×10、
-  `test_scripts_contract.py` ×4（`bash -n` 只有 WSL 桩）、`test_ingest_audit_125.py` ×2（符号链接需特权）、
-  `test_hardening_141_error_paths.py` ×1（无 `AF_UNIX`）⇒ **可比口径 = 2769 − 17 = 2752**；
-  同口径的收集数 **2764 → 2769（+5，即本期新增用例）**，用例名差集里没有消失的用例。
-- 上一期（第 147 期）的全量基线：后端 2764 例（2741 passed / 0 failed / 0 errors / 23 skipped），六分片合计 6075.0 s；
-  ⚠️ 那一期全量**在 Linux 容器里跑**（`docker create -w /app` + `python:3.12-slim` 衍生的 `nf-test` 镜像 + `requirements-dev.txt`；
-  宿主路径**挂不进容器**（`/workspace` 在 docker 宿主侧不存在）⇒ 只能 `docker cp . <cid>:/app` 送代码，
-  `docker cp` 每个约 30–40 s 是串行瓶颈）；6 分片并行跑（`/tmp/nf-docs/shard0..5.txt`，各写自己的 `--junitxml`），
-  **墙钟约 21 min，六分片合计 6075.0 s**（单分片最慢 1195.4 s），
-  这是本机 8 核 + 容器工具体系的数字，
-  跨机比耗时没意义，只比 **junit 里的用例名差集**。
-  skipped 23 全部是 **node / quickjs 引擎在容器里没有**（那些用例整组 skip），**总数 2764 − 23 = 2741 才是可比的量**。
-  （第 118–124 期同一天的几次全量：104.7 / 115.0 / 313.9 / 477.9 / 243.8 / 218.8 / 152.1 / 112.0 / 254.3 s —— **本机 Docker Desktop 的 VM 吃 8 核 +
-  经 virtiofs 挂载 `/var/folders`（pytest 的 tmp 就在那儿）**，
-  `--durations` 最慢一例仅 8.3 s、无单点热点 ⇒ 耗时随环境波动，**别拿它比第 118 期的 104.7 s**）；
-  CI 同环境（ubuntu 24.04 + Python 3.12、干净 clone）走同一条 `bash scripts/test.sh`，含本期 15 例（第 134 期 `test_hardening_134.py`）。
-  第 129 期同批修掉一条**满载才红**的夹具：`tests/test_annotation_export.py::_bid` 原来「写文件 → `invalidate()` → 立刻读」，
-  而读路径对「索引非空 + 标脏」只做**有上限**的等待（`catalog.SETTLE_WAIT` = 0.25 s）⇒ 满载时读到旧列表，
-  报「扫描没找到 二.epub」（单跑必绿）。改成 `library.books(force=True)` 显式要求同步重扫。
-  ⚠️ **跨期比基线要连着 skipped 与「总数」一起读**：第 117 期 skipped 26 → 13 是 `quickjs` 装上了；
-  第 118 期 2404 → 2428 里的 **24 例不是新写的**，是本机 `.venv` 缺 `py7zr` 时两个模块的**模块级 `importorskip`
-  把 26 例整体吃掉**（junit 里只剩 2 条模块级 skip）—— 判据是**拿两台机器的 junit 做用例名差集**，不是看 skipped 计数。
-  **别把 `.venv` 升到 3.13+**（`quickjs` 只有 cp38–cp312 包，见 `AGENTS.md` §5）。
+- **历史基线（第 148–150 期）**：后端 2752 / 2770 / 2770 例（2752 / 2756 / 2756 passed，14 skipped），
+  全量 497.6 / 493.1 / 400.3 s；第 147 期那次在 Linux 容器里六分片并行（墙钟约 21 min）。
+  ⚠️ **比基线要连着 skipped 与「总数」一起读** —— skipped 变化可能来自环境（`quickjs` 装没装、
+  `py7zr` 缺失时模块级 `importorskip` 整组吃掉），**不是**新写的用例 ⇒ 判据是**拿两台机器的
+  junit 做用例名差集**，不是看 skipped 计数。别拿耗时互比（随环境波动，无单点热点）。
+  逐期数字见 `docs/roadmap-gaps-remaining.md` 各期段与 `git log`。
+  ⚠️ **仍在生效的操作约束**（不是历史，别跟着上面一起压掉）：
+  · **别把 `.venv` 升到 3.13+** —— `quickjs` 只有 cp38–cp312 包（见 `AGENTS.md` §5）。
+  · 夹具若「写文件 → `invalidate()` → 立刻读」，读路径对「索引非空 + 标脏」只做**有上限**的等待
+    （`catalog.SETTLE_WAIT` = 0.25 s）⇒ 满载时读到旧列表（单跑必绿）。要同步重扫就显式调
+    `library.books(force=True)`（第 129 期 `test_annotation_export.py::_bid` 的教训）。
 - 前端（第 135 期实测）：**70 spec / 722 例**全绿、`vue-tsc --build` exit 0、`build + deploy` 跑过（`scripts/frontend-verify.sh` 等价四连）；
   本期前端改 17 个文件（`lib/format.ts` 新增 `localDate` / `localMonth` 作本地日的**唯一实现**，7 处 `toISOString().slice(0, 10)` 全部收敛；设置页四个页面改「判返回值才提示成功」；`auth.ts` 不再把 5xx 当未登录；`library.ts` 给 `loadFeatures` 加序号；`DuplicateBooksView` 改 `allSettled`；`LoginGate` 用 `apiErrorMessage`），新增 `src/lib/format.spec.ts`（`EXPECTED_SPECS` 已登记），`package-lock.json` 零改动；
   `novelforge/static/v2` 是**构建产物且不入库**（`.gitignore` 忽略）⇒ 它变与不变都不在 `git status` 里。
@@ -303,19 +302,19 @@
 | 109 | 发版 V1.0.0：把第 95–108 期的积累一次性发布 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 109 期段 |
 | 108 | 仪表盘直读 + 侧栏抽屉判据按设备 + 阅读沉浸 + 设置面板点外关（用户 m09721 追问响应式后补横扫 17 视口 × 5 路由 = `FAILS=0`，并修掉窄屏设置面板跑出视口的既有缺陷）—— 细节见 `docs/roadmap-gaps-remaining.md` 第 108 期段 |
 | 107 | 自动化收尾：落位器 + 三方对账 —— 细节见 `docs/roadmap-gaps-remaining.md` 第 107 期段 |
-| 106 | **记忆体系精简（收尾只写两处）**（用户 2026-10-06 直接提出 m08584：做完一期要把同一段「根因 / 证据 / 修法 / 核验」抄 **5 处**（`docs/roadmap-gaps-remaining.md` 本期段 / `MEMORY.md` / `MEMORY-REF.md` / `memory/YYYY-MM-DD.md` 当日日志 / `docs/TODO.md` 头部+§0+§1+§2+§3）+ `AGENTS.md` 基线；经 `ask_user_question` 选定**方案 B「先把记忆三件合并，再谈自动化」**）：① `.codebuddy/memory/MEMORY.md`（48903 B / 86 行 → **8588 字符 / 92 行**）只留**铁律小节 + 一期一行索引**，逐期索引正文（24857 字符）移入存档；② `.codebuddy/memory/MEMORY-REF.md`（207485 B / 1777 行 → **14635 字符 / 122 行**）保留行 1–116 主题部分，改成**按主题的域手册**（逐期原文 106673 字符移入存档，**不再按期号追加**，只有新领域知识才补小节）；③ **取消当日日志**（2026-10-06 起不再新建 `memory/YYYY-MM-DD.md`，既有日期文件保留为历史）；④ 逐期铁律全文 → 新存档 `.codebuddy/memory/MEMORY-PERIODS.md`（**132070 字符 / 1696 行**，A=原 `MEMORY.md` 索引 75–105 期、B=原 `MEMORY-REF.md` 逐期原文 53–105 期，**两份原样合入**、已在文件头标注 81–105 期重叠属历史、未合并以免丢信息；缺 62–65 / 74–78 / 80 期只在 A 里有）。⚠️ **文件名一律不动** —— 它们被 `AGENTS.md:15`、`AGENTS.md:165`、`docs/development.md:79`、`novelforge/core/sqlcompat.py:7`（引 `MEMORY.md`「自动化测试」小节，该小节**保留**）、`tests/test_engine_urlspec.py:205`、`tests/test_library_count_contract.py:19` 引用。规则落点：`AGENTS.md` §0 第 3 条（读哪三份）+ §6「**每期收尾只写两处（第 106 期起，用户 m08584 要求精简）**」（① roadmap 本期段 = **唯一叙事** ② `MEMORY.md` 索引加一行 ③ 不再建当日日志 ④ 不再按期号追加 `MEMORY-REF.md` ⑤ 存档只读、按 `### 第 N 期` 搜 ⑥ `docs/TODO.md` 与 `AGENTS.md` 基线数字仍同批更新）、`docs/development.md` 回归清单同条。**守恒核验**：脚本 `nf_p106_restructure.py` 写前断言索引标记/逐期标记各唯一、写后断言旧索引与逐期原文**逐字**仍在存档且**不在**两个新文件里（输出 `moved_index=24857 moved_periods=106673`、两条 `check → True`）；`python tests/check_doc_anchors.py` **exit 0**（纯文档改动，未动代码与用例 ⇒ 基线仍 2311 例）。**没做**：自动化（脚本生成索引 / 漂移校验）按用户选择**留到下一轮**（**不发版**，`VERSION` 仍 0.94.0） |
-| 105 | **CI「Build and Push Image」全失败修好**（用户 2026-10-06 直接立项）：先查历史 —— 该工作流 **run 288–317 全 failure**（2026-10-03 起），最后一次 success 是 run 217（2026-10-01，sha `99ee3494`）⇒ **既存故障**，与第 104 期那几笔提交无关。失败步骤 = job `build` 第 7 步 `Build and push`（`docker/build-push-action@v6`）；annotation **只给最后一行**，真正的 vite 报错要用本机 `git credential fill` 的 token 下 `GET /actions/jobs/<id>/logs`（⚠️ 返回**纯文本日志**、不是 zip）才拿到：`[UNLOADABLE_DEPENDENCY] Could not load src/components/ui/input`（`SidebarInput.vue:4`）。**根因**：`.gitignore` 的 `input/` **不带前导斜杠** ⇒ 匹配**任意层级**同名目录 ⇒ 第 90 期新增的 `frontend/src/components/ui/input/`（`Input.vue` + `index.ts`）**从未入库**；本机文件一直在 ⇒ 本地 `npm run build` / `vue-tsc` / 单测**永远绿**，CI 从 clone 构建才断链。**修法**：运行时目录全部锚定仓库根（`/input/` `/output/` `/cookies/` `/cache/` `/config/cookies/` `/config/cache/`）+ 补回那两个文件，**刻意不加任何兜底**（不在 workflow 里 `git add -f`、不给 vite 加 alias）。**防回归**：`tests/test_source_tracking_contract.py` 两例（源码树不许有被 `.gitignore` 忽略的文件；`@/` 别名导入必须落在**已入库**路径上），**「改动前会红」已实测**。**核验口径**：在本工作区构建成功**不算证明**（工作区本来就有那两个文件）—— 必须 `git clone` 到临时目录（只有已入库内容）再跑 `docker build --target frontend`（实测 `#10 RUN npm run build` **真执行**、`✓ built in 2.44s`、EXIT=0）。后端全量 **2311 例全绿**（+2）。**CI 已转绿**：推送后 `Build and Push Image` run **318**（id `37394372273`，head_sha `ea2ad51`，约 11 分钟）conclusion **success** —— job `build` 第 7 步 `Build and push` 与第 8 步 `Ensure package is public` **全 success**（失败时是第 7 步 failure / 第 8 步 skipped）⇒ **自 run 217（2026-10-01）起连续 30 次失败终止**（**不发版**，`VERSION` 仍 0.94.0） |
-| 104 | 出网**失败归因**（用户 2026-10-06 在 ask_user_question 里选 A）+ 前端类型红收口：先查出**本机 DNS 被上游污染**（`openlibrary.org`→`31.13.112.4` / `www.goodreads.com`→`128.242.240.253`，而 `8.8.8.8`→`199.59.149.201` / `199.59.148.6`，`hosts` 无自定义行、`1.1.1.1` 无应答）—— 此前一律报「超时」，用户会去修一个**根本没坏**的源（仓规：误报比不测更糟）。新增叶子模块 `novelforge/core/netdiag.py`：① **数据路径只做纯函数分类**（`classify_exc` / `describe_exc`，零 I/O，`search()` 失败多回一个 `fail` 键）② **诊断路径才交叉核对**（手写 UDP DNS 查询本机 vs `8.8.8.8`/`1.1.1.1`，按 host 缓存 60 s；两个 I/O 缝可注入）③ 污染 ⇒ 结论升级 `dns_polluted` 并**把两边地址写进原因**；公共解析器答不上来 ⇒ 如实说「无法交叉核对」，**未知 ≠ 污染**。`HEALTH_KINDS` 12→17 类（`dns` / `dns_polluted` / `tls` / `proxy` / `connect_timeout`，中文文案由后端下发，前端零新文案；`healthClass` 把这四类归**琥珀**＝本机环境问题，别再指着站点）。顺带**收口 `vue-tsc` 3.3.12 的 `TS2339`**：`MetadataEditor.vue` 五处重复的字段中文名（其中 :614 在模板内联箭头里）收敛成一个 `labelOf(k: string)` ⇒ `--build --force` **exit 0**（此前 `.vue(614,40)` 恰 1 条、EXIT=2）。测试 **+35 例**（`tests/test_netdiag.py` 23 / 健康归因 12，含把 `[Errno -2] Name or service not known` 从 `network` **故意改判** `dns`）、新增 `tests/conftest.py` 的 `_no_live_dns_in_tests`（全测试进程**零真实 DNS**）；后端全量 **2309 例全绿**、前端 686 例（**不发版**，`VERSION` 仍 0.94.0） |
-| 103 | 元数据字段**接线**（用户 2026-10-05 在 ask_user_question 里选 A：`series` / `series_index` / `narrators` 三项**早就建模、消费者全在**（`fileops.METADATA_FIELDS` / `metascore.FIELDS` 的 series 4.0 + series_index 3.0 / 命名规则 `{series}` `{series_index}` / Komga `seriesIndex` / 系列视图 / `db._CLEARABLE` `_META_FIELDS` / `patch_opf_meta`），**唯独这条抓取线从未接上** —— `_entry` 是固定键白名单、`metafetch` 无映射 ⇒ 抓到了也被静默丢掉）：① 顺手修 **RanobeDB 详情补全从未生效**（真机响应套在 `book` 键里，`{**b, **fetched}` 只并进一个键 ⇒ 作者/出版社/简介**全空且不报错**、`score_candidate` 只剩书名 0.7 < 阈值 0.75 ⇒ 这家源在默认配置下**永远进不了合并**，白挂两期）② **五个同步点**（`_entry` / `_CURRENT`·`_VALUE_KEYS`·`_FINALIZE_FIELDS` / `DEFAULTS['metadata_fetch']['fields']` / 前端 `POLICY_FIELDS` / 前端**写死的 spec 断言**「不含 series」）③ 卷号**只认 `^\d+(?:\.\d+)?$`**（错值比空值严重：它喂命名规则与 Komga `seriesIndex`）、`_best_series` **取卷号最小那支**（Audible 数组顺序三次实测倒置、Goodreads item 内层 `$4d:…:series` 是引用**要二次解析**、RanobeDB 卷号 = `series.books` 位置 + 1 且 29 册核过 28/29）④ **演播者四处口径**（`_LIST_FIELDS` + `_as_list`；`merge_values` 里 **不跨源合并** —— 两个源常是两次不同录音，拼起来会造出**从未存在**的阵容；`metastore.effective`/`state` 的在线分支此前给 `"['Scott Brick']"` 这串 repr，改 `_online_value` 走 `db._parse_tags`）⑤ 三项默认 **`fill_only`**（系列参与命名规则与系列视图、抓取收益在没值的书上；演播者本地值来自音频标签=权威源；老配置整表 overwrite 的用户仍按 overwrite 走，已在 `config.py` 写明）；Audnexus（SSL EOF）/ Open Library `series`（超时）/ Audible `subtitle` 三条**未核验不接线**挂 TODO；测试 **+11 例**、后端全量 **2274 例全绿**（**不发版**，`VERSION` 仍 0.94.0） |
-| 102 | 元数据抓取**地基**（用户 2026-10-05 直接提出，非从 TODO 取条目）：① 14 家源声明**收口**到 `novelforge/core/sources/`（`Provider` 数据类 + `DECLARED`，`SOURCES`/`GROUPS`/`IMPLEMENTED`/`LANG_AFFINITY`/`LANG_BROAD`/`SOURCE_ID_FIELD`/`HEALTH_SAMPLES` **7 张手工表改派生**，逐字段验算 14 家旧键全等，只多 `kind`/`rate_limit`/`cache_ttl`）② 进程内**缓存 + 按源限流**（`time.monotonic` 计时、只缓存「成功且非空」、命中浅拷贝防分数污染；`force=True` = 诊断模式**缓存与限流都旁路**，否则体检 4 路并发会被自己的 sleep 拖成**假 timeout**）③ **按记录标识取详情**（只接真机核验过的 iTunes / Open Library；Google Books 匿名 429 / Audnexus 本机不可达 / Goodreads 302 ⇒ **不声明**，如实中文回绝）④ 配置两键 `cache_ttl`（默认 `None` = 按各来源声明，不写死 600）/ `detail_fetch`（默认**关**，不改既有书的抓取结果）+ 环境变量**只兜底不覆盖** + 前端两个开关；顺带修掉一个**假配置**（`metasources.py` 从未 import `config` ⇒ `cache_ttl` 写完两期无人读，被裸 `except` 吞掉）＋ 新增 `test_metasource_registry_contract` 15 / `test_metasources_cache` 21 / `test_metasources_detail` 24 / `test_config_readback_contract` 19（**不发版**，`VERSION` 仍 0.94.0） |
-| 101 | 书源网页抓取收口：**Goodreads 旧结构（`<tr itemscope>`/`bookTitle`/`authorName`）已被站点下线 ⇒ 整家恒返 0 条**，改用 React Server Components 的 **RSC flight payload** 解析（同一真样本 604317 B：0 条 → **19 条**，多作者/年份/封面/provider_id 全对，未解析引用残留 0）+ **AWS WAF 挑战页归因**与「站点改版 / 站点主动拒绝」分开（Goodreads / Libro.fm 同套防护，取决于 IP 信誉）＋ 夹具 2 个、`tests/test_metasources_scrape.py` 12→24 例（**不发版**，`VERSION` 仍 0.94.0） |
-| 100 | EPUB 解析换成熟解析器**实测后删除该立项**：37 本真实第三方 EPUB（Standard Ebooks，30 本含 OPF）逐字段对比「现有正则」vs「`xml.etree.ElementTree`」——`title`/`creator`/`publisher`/`language` **0/30 不一致**、真解析器**零失败**（CDATA/DOCTYPE/非标准实体/单引号属性/疑未声明前缀 **全为 0**）⇒ 标题承诺的收益是 0，风险（`unbound prefix`/`undefined entity` 整份作废）恰是第三方 OPF 会遇到的那类；`tests/test_epub_xml_parse.py`（5 例）**保留**为将来换解析器的验收条件。另立并修掉**唯一站得住的差异**：`dc:description` 不解 HTML 实体（30/30 本实测 `html.unescape(旧) == 真解析器` 逐字成立）⇒ 新增 `_dc_description()`（解一次实体、**保留标签**），前后端可见性已证实（前端 `{{ }}` 文本插值不做二次解码）；新增 `tests/test_epub_description.py`（7 例，改动前 4 例实测会红）（**不发版**，`VERSION` 仍 0.94.0） |
-| 99 | 元数据抓取**真机核验** + 三处线上真 bug：① Audible `response_groups` 带非法组名 `publisher` ⇒ 400、**整家永远 0 结果**（`publisher_name` 是**字段**，随 `product_desc` 照旧返回）② Lubimyczytac **多作者截断**（卡内多作者多个 `<a>`，旧实现三次独立 `findall` 按下标配对）③ Amazon 的 JS 校验页（`200` + `bm-verify` 跳转、**不含验证码关键词**）**静默 0 条**；Lubimyczytac 改逐卡 `bs4` + `_soup` 缺库如实回落；新增 `tests/test_metasources_scrape.py`（12 例，此前六家脆弱源解析逻辑零覆盖）+ 真机夹具；Goodreads/Kobo/Libro.fm 三家**取不到样本 ⇒ 挂起**（**不发版**，`VERSION` 仍 0.94.0） |
-| 98 | 仪表盘余留三条：**页级三态**（判据 = 聚合首屏真请求：`stores/stats` 的 `loaded`/`error` + `stores/library` 的 `loading`/`booksError`；唯一实现 `frontend/src/lib/dashboardPageState.ts` + 页级骨架 / 页级错误与「一起重试」）+ **快速预览补两个动作**（「编辑元数据」深链 `?tab=metadata`，**不挂第二个 `MetadataEditor`**；「移动到书库…」复用 `BookMoveDialog`）+ **上游首页截图像素级对照完成**（收尾换能读图的模型做完；结论：无需要修的视觉偏差；`docs/bookorbit/bookorbit-dashboard-styles.md` §7.8）（**不发版**，`VERSION` 仍 0.94.0） |
-| 97 | 第 95 期审计四条 `[low]` 全清：`gate_reason` 的不参与判定 `source` 形参**删除**（17 处调用点 / 11 处传参 + 2 个测试桩）/ `manager._mark` **不再写**冗余历史键 `_source`（读侧 `source_of` 保留）/ `config.LIBRARY_SOURCE_DIR` Python 别名**删除**（环境变量回退照旧，18 个测试文件改读 `LIBRARY_SOURCE_ROOTS[0]["path"]`）/ 零消费者旧式端点 `GET /content` **删除**并补 404 断言（**不发版**，`VERSION` 仍 0.94.0） |
-| 96 | 数据安全两处口径落地：展开容器的「删源」改为**移入回收站**（`publish.recycle` + 台账，可还原）+ 自动落地/显式覆盖**先把被替换的文件移入回收站**（回收失败即中止、盘上零改动）；报告写实（不再对显式覆盖说「本地读不了」）（**不发版**，`VERSION` 仍 0.94.0） |
+| 106 | **记忆体系精简（收尾只写两处）**+ `AGENTS.md` 基线； |
+| 105 | **CI「Build and Push Image」全失败修好**：先查历史 —— 该工作流 **run 288–317 全 failure**（2026-10-03 起），最后一次 success 是 run 217（2026-10-01… |
+| 104 | 出网**失败归因**+ 前端类型红收口：先查出**本机 DNS 被上游污染**（`openlibrary.org`→`31.13.112.4` / `www.goodreads.com`→`128.242.240.253`… |
+| 103 | 元数据字段**接线**，**唯独这条抓取线从未接上** —— `_entry` 是固定键白名单、`metafetch` 无映射 ⇒ 抓到了也被静默丢掉）：① 顺手修 **RanobeDB 详情补全从未生效**（真机响应套在 `book` 键里… |
+| 102 | 元数据抓取**地基**：① 14 家源声明**收口**到 `novelforge/core/sources/`（`Provider` 数据类 + `DECLARED`… |
+| 101 | 书源网页抓取收口：**Goodreads 旧结构（`<tr itemscope>`/`bookTitle`/`authorName`）已被站点下线 ⇒ 整家恒返 0 条**… |
+| 100 | EPUB 解析换成熟解析器**实测后删除该立项**：37 本真实第三方 EPUB（Standard Ebooks… |
+| 99 | 元数据抓取**真机核验** + 三处线上真 bug：① Audible `response_groups` 带非法组名 `publisher` ⇒ 400、**整家永远 0 结果**（`publisher_name` 是**字段**… |
+| 98 | 仪表盘余留三条：**页级三态**（判据 = 聚合首屏真请求：`stores/stats` 的 `loaded`/`error` + `stores/library` 的 `loading`/`booksError`… |
+| 97 | 第 95 期审计四条 `[low]` 全清：`gate_reason` 的不参与判定 `source` 形参**删除**（17 处调用点 / 11 处传参 + 2 个测试桩）/ `manager._mark` **不再写**冗余历史键 `_source`（读侧 `source_o… |
+| 96 | 数据安全两处口径落地：展开容器的「删源」改为**移入回收站**（`publish.recycle` + 台账，可还原）+ 自动落地/显式覆盖**先把被替换的文件移入回收站**（回收失败即中止、盘上零改动）； |
 | 95 | `AGENTS.md` 新增 §7「工程原则」+ 按 `AGENTS.md` 做合规审计与整改（九处旧路径、三处死代码、文件名判据收口、视觉 token 守卫、404 断言）（**不发版**，`VERSION` 仍 0.94.0） |
-| 94 | 书源导入静默失败修复 + 格式适配器轴（native / 导出 / Legado 3.x / 阅读 2.x / JSONL）+ 转换诚实闸 + 引擎能力（XPath / `##` 替换 / 索引语法 / 选择器后缀 / URL 选项字典 / 续页 / 多编码）+ 安全层（JS 沙箱 / 正则超时 / URL 导入 SSRF 闸）+ 字段去向全量报告（V0.94.0） |
+| 94 | 书源导入静默失败修复 + 格式适配器轴（native / 导出 / Legado 3.x / 阅读 2.x / JSONL）+ 转换诚实闸 + 引擎能力（XPath / `##` 替换 / 索引语法 / 选择器后缀 / URL 选项字典 / 续页 / 多编码）+ 安全层（JS 沙… |
 | 93 | 在线阅读（接用户自己的书源）+ 章节缓存与断网降级 + 跨客户端进度 + 读满 5 章自动落地 + 单本「检查更新」；删「仅放行公版源」（V0.93.0） |
 | 92 | 工具页窄屏重排：外壳去掉 `min-w-[32rem]` / 标签条改换行 + 窄屏下拉（V0.92.0） |
 | 91 | TODO 台账化 + 未登录 401 探测归零 + 元数据来源权重 + 窄屏「更多」菜单 + 浮层键盘可达 + 本地导入改投递（V0.91.0） |
