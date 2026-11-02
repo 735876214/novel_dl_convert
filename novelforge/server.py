@@ -10190,6 +10190,20 @@ def api_restore_backup(payload: dict = Body(...)):
     src = config.BACKUP_DIR / name
     if not src.is_file():
         raise HTTPException(404, "备份不存在")
+    # ⚠️ 第 252 期：**还原也是写入口** ⇒ 同样要拦「段类型写坏」。
+    # 备份是 config.yaml 的副本，而 config.yaml 可能**早就**被写坏过（旧版本写入的 /
+    # 手改的）⇒ 还原它 = 把坏配置再放回盘上 ⇒ 与 `PUT /api/config/raw` 同一把闸。
+    try:
+        with open(src, "r", encoding="utf-8") as f:
+            _backup_data = yaml.safe_load(f) or {}
+    except Exception as e:
+        raise HTTPException(400, f"备份读不出来：{e}")
+    if not isinstance(_backup_data, dict):
+        raise HTTPException(400, "备份的根节点必须是键值映射")
+    bad = config.section_type_errors(_backup_data)
+    if bad:
+        raise HTTPException(
+            400, f"备份里这些段必须是键值映射（还原它们会让服务起不来）：{'、'.join(bad)}")
     backup = _backup_config()
     try:
         # 原子写（第 136 期）：config.yaml 是**活配置**，半截文件会让下次启动

@@ -135,6 +135,38 @@ def test_raw写入口_好配置照旧能写(client, auth_headers, own_cfg):
     assert (own_cfg / "config.yaml").is_file()
 
 
+def test_还原备份_拒掉段类型写坏的备份(client, auth_headers, own_cfg, monkeypatch):
+    """**还原也是写入口** ⇒ 同一把闸。
+
+    备份是 config.yaml 的**副本**，而 config.yaml 可能早就被写坏过（旧版本写入的 /
+    手改的）⇒ 还原它 = 把坏配置再放回盘上。
+    """
+    import yaml
+    backups_dir = own_cfg.parent / "backups"
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config, "BACKUP_DIR", backups_dir)
+    (backups_dir / "config-bad.yaml").write_text(
+        yaml.safe_dump({"watcher": "abc"}), encoding="utf-8")
+    r = client.post("/api/config/restore", headers=auth_headers,
+                    json={"name": "config-bad.yaml"})
+    assert r.status_code == 400, r.text
+    assert "watcher" in r.text, r.text
+    assert not (own_cfg / "config.yaml").exists(), "被拒的还原不该落盘"
+
+
+def test_还原备份_好备份照旧能还原(client, auth_headers, own_cfg, monkeypatch):
+    import yaml
+    backups_dir = own_cfg.parent / "backups"
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config, "BACKUP_DIR", backups_dir)
+    (backups_dir / "config-ok.yaml").write_text(
+        yaml.safe_dump({"watcher": {"enabled": False}}), encoding="utf-8")
+    r = client.post("/api/config/restore", headers=auth_headers,
+                    json={"name": "config-ok.yaml"})
+    assert r.status_code == 200, r.text
+    assert (own_cfg / "config.yaml").is_file()
+
+
 # ---------------- ③ 接口层：如实回报 ----------------
 
 def test_health_报出坏段(client, auth_headers, own_cfg):
