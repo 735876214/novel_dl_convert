@@ -14125,3 +14125,133 @@ for p in list(d.rglob("*")):
    修法：公开响应只留前端要用的（version / 状态），其余挪到**鉴权后**的端点。
 9. **`/api/config/raw` 的 PUT 没有大小上限**（低）：贴一个 10 MB 的 YAML ⇒
    之后每次 `load_config()` 都解析 10 MB ⇒ 全站变慢。
+
+## 第 252 期（持续审计第十一轮：一个段写坏，服务就起不来（config.yaml 的段类型没人管））
+
+**需求来源**：持续审计任务（24 小时窗口，起点 2026-11-02 14:10）。
+
+> 本轮第 0 步：上一轮已收尾 ✔；工作区的在途改动只在 `clients/harmony/**` 与两个
+> 客户端测试文件上 ⇒ `novelforge/server.py` / `novelforge/core/config.py` 空闲
+> ⇒ 本轮可以改它们（零冲突）。
+
+### 一、config.yaml 里**一个段**写坏 ⇒ **服务起不来**（高）
+
+上一轮记的候选 0 是「段类型写坏会让全站 500」。本轮**实测**发现它比记录的**更严重**
+—— 不是 500，是**服务起不来**。
+
+**触发条件**：`config.yaml` 里某个**顶层段**被写成别的类型。最容易中招的写法是
+**少写一个子键**（`watcher:` 后面什么都没有）—— YAML 解析出来就是 `None`。
+
+**根因**（`core/config.py` 的 `load_config()`）：合并阶段**不看类型**，
+把 `watcher: "abc"` 里的字符串**整个塞进** `data["watcher"]` ⇒ 后续
+`data.setdefault("watcher", {})["enabled"] = …` 抛 `TypeError`、
+`(cfg.get("watcher") or {}).get(...)` 抛 `AttributeError`。
+
+⇒ `load_config()` **抛** ⇒ 后果有两层，**都很重**：
+
+1. **每个 API 都 500**（每个 API 都调 `load_config()`）⇒ 服务废掉；
+2. **连启动路径都抛** —— `server.lifespan` 里那句
+   `(cfg.get("watcher") or {}).get("enabled", True)` ⇒ **容器根本起不来**，
+   `docker compose up` 直接失败、healthcheck 从来不绿。
+
+⇒ **自愈路径只剩「手改 config.yaml」** —— 而用户往往是**通过界面**把它写坏的
+（`PUT /api/config/raw` 此前**只**校验「YAML 语法」与「根节点是映射」，
+**不校验各段的类型** ⇒ 坏配置能从界面上写进去）。
+
+**实测（本轮）**：
+
+| 写法 | 修前 | 修后 |
+|---|---|---|
+| `watcher: "abc"` | `LOAD RAISED: AttributeError 'str' object has no attribute 'get'` | 降级，坏段回默认值 |
+| `watcher:`（空，最常见） | `LOAD RAISED: TypeError 'NoneType' object does not support item assignment` | 降级，坏段回默认值 |
+| `watcher: [1, 2]` | 抛 | 降级，坏段回默认值 |
+
+**修法**（两层，缺一不可）：
+
+1. **写入口拦**（`PUT /api/config/raw` **与** `POST /api/config/restore`）：
+   各段的**类型**也校验 ⇒ 写坏的段
+   **拒掉**（400 + 说清是哪个段）⇒ 坏配置**不再能从界面上写进去**。
+   ⚠️ **还原备份也是写入口** —— 备份是 config.yaml 的**副本**，而 config.yaml
+   可能**早就**被写坏过（旧版本写入的 / 手改的）⇒ 还原它 = 把坏配置再放回盘上。
+   判据只有一处（`config.section_type_errors`），读侧与两处写侧共用；
+2. **读路径降级**（`config.load_config()`）：**类型不对的段整段降级回默认值**、
+   **其余段照旧**、`load_config()` **不抛** ⇒ 盘上**已有**的坏配置不再让服务死。
+   ⚠️ 配置坏了不该让**整个服务**失声（探活端点尤其要活着 —— 第 251 期刚给它兜过一层）。
+
+**降级必须留证**（否则用户以为自己的设置还在）：段名进 `config.bad_sections()` ⇒
+
+- `/health` 的 `problems`（一条一条说清是哪个段）—— ⚠️ **只走 `problems`**，
+  **不给 `checks` 加字段**：`/health` 是**免鉴权**端点，而
+  `tests/test_client_contract.py` 的「字段面快照」把它的形状钉死了
+  （多一个字段就红）⇒ 机器可读的那份放在**鉴权后**的端点；
+- `GET /api/config` 的 `_bad_sections`（诊断键，与 `_config_error` 同层）——
+  这才是**机器可读**的那份；
+- 前端设置页的**红条**（「配置里有段被写坏了，那些段正按默认值运行」）。
+
+⚠️ `_config_error` **不**用它 —— 那个键的含义是「config.yaml **整个**读不出来」
+（第 141 期的语义）；「读出来了但某一段类型不对」是**另一件事**，混进同一个键会让
+设置页把两件事说成同一句。
+
+**防回归**：`tests/test_config_section_types_252.py`（16 例：读路径不抛 / 该段回默认 /
+其余段照旧 / 启动路径不抛 / 空段也降级 / 降级留证 / 好配置不误报 / 标量键写错不算坏段 /
+写入口拒掉三种坏段 / 被拒的配置不落盘 / 好配置照旧能写 / **还原坏备份被拒** /
+**好备份照旧能还原** / `/health` 与 `GET /api/config` 报出坏段 / 坏段时 API 照样能用）。
+⚠️ **回退后 14 例红**（16 例里剩下那 2 例是**对照**用例：好配置照旧能写 /
+好备份照旧能还原 ⇒ 修前也该绿）。
+
+### 二、顺带查实的一个**潜伏**缺陷（本轮**没改**，记进下一轮）
+
+`metadata_fetch.cache_ttl` / `detail_fetch` 的环境变量兜底判据是
+**「settings.json / config.yaml 里人写过这个键没有」**（`core/config.py` 的
+`written` 判定）。而 `POST /api/config/reset` 会把 **`DEFAULTS` 整份**序列化进
+config.yaml ⇒ 其中**带着** `cache_ttl: null` ⇒ 「键存在」⇒ **环境变量从此不再兜底**。
+
+实测：跑完 `test_config_write_entries_246.py`（它调了 reset）之后，
+`NOVELFORGE_METADATA_CACHE_TTL=120` **不再生效**（`cache_ttl` 拿到 `None`）。
+
+⚠️ **它为什么一直没人发现**：`test_config_readback_contract.py::test_环境变量只在没人写过时兜底`
+**单跑必绿**、**全量也绿** —— 因为按**文件名字母序**，
+`test_config_readback_contract.py` 排在 `test_config_write_entries_246.py` **前面**
+⇒ 污染发生在它**跑完之后** ⇒ 断言查不到。
+（本轮是**手工按这个顺序组合**才撞出来的 —— **「全量绿」不等于「没有顺序依赖」**。）
+
+修法方向：判据「人写过」应当看**值是不是真的被人改过**，而不是「键在不在」；
+`null`（= 默认值、= 没改）不该算「写过」。
+
+### 本轮扫过、确认零缺陷的角度（别重查）
+
+`PUT /api/config`（设置页那条）**写不出坏段** —— `_sanitize_config` 对非 dict 值
+`continue`（丢掉）⇒ 只有 `raw` 与 `restore` 两条路能写进去，**这两条都堵住了** ·
+`POST /api/config/reset` 写的是 `DEFAULTS` 序列化（结构必然合法）·
+`DELETE /api/config/overrides` 只删文件 · settings.json 覆盖层写坏段 ⇒ **同样降级**
+（它与 config.yaml 合并进同一个 dict，判据在**合并之后**跑 ⇒ 两个来源都覆盖）·
+其余 23 个顶层段的**子键**类型写错 ⇒ 由各自的读点兜底（`watcher.interval` 走
+`interval_of` 夹回、`reading.*` 走 `lib_settings._pct` 回落、`logging.max_entries`
+走 `int()` try）⇒ **不抛**，危害与顶层段不在一个量级 · 标量键（`traditionalize`）
+写错只是取值怪，**不会抛** ⇒ 不算坏段。
+
+### 下一轮候选
+
+0. ⭐ **`cache_ttl` / `detail_fetch` 的环境变量兜底被「重置配置」悄悄废掉**（中，
+   **本轮已查实**）：见上面第二节。修法：判据「人写过」看**值**，不看**键在不在**。
+1. **扫描入库的派生值仍无长度上限**（第 250 期那件事的第三个入口）：
+   `_subjects_of`（`tags`）不限条数、`description` 不限长 ⇒ 会把**索引**与
+   `book_index` 撑大。⚠️ `tags` / `narrators` 可**无损**截断；`description` 截断
+   是**有损**的 ⇒ 要先想清楚再动；
+2. **自定义字段值也该限长**（不进列表 ⇒ 不影响全库体积，但详情页会卡）；
+3. **抓取预览阶段就标出「这个字段太长」**（现在只有提交后才知道）；
+4. 扫描入库的 title 最多 255 字符（文件名长度）⇒ 用户覆盖的上限 200 与它**不一致**；
+5. 收藏夹数量无上限 ⇒ `collection_ids` 数组长度无界（低）；
+6. **「清缓存」删不掉的文件被静默跳过**（口径与回收站那条不一致）：
+   `api_clear_cache` 是 `except Exception: continue` ⇒ 回执说「清掉了 N 个」
+   而实际有残留。回收站那条第 141 期专门修过（「删不掉的必须如实回报」）；
+7. **`_health_checks()` 整体该包 try**（探活端点不许因**任何**一项检查抛异常而失声）；
+8. **`/health` 的公开响应仍泄露内部事实**：`checks.default_pin`（是不是还在用默认口令）、
+   `checks.cache`（有没有配 Redis）、`input`/`output`/`logs` 的**绝对路径**、
+   `problems` 里带路径的条目 ⇒ **免鉴权** ⇒ 任何人都能拿到。
+   修法：公开响应只留前端要用的（version / 状态），其余挪到**鉴权后**的端点；
+9. **`/api/config/raw` 的 PUT 没有大小上限**（低）：贴一个 10 MB 的 YAML ⇒
+   之后每次 `load_config()` 都解析 10 MB ⇒ 全站变慢；
+10. **`/api/config/raw` 能否也拦「未知顶层键」**（低）：写进去的陌生键会被
+    `load_config` 原样带进 `data`（`data[k] = v`）⇒ 与 DEFAULTS 无关的键
+    静默躺在配置里，无人消费也无人提示。
