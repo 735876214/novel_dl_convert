@@ -13107,7 +13107,7 @@ KOReader 的同步凭据是**一个共享密码**（kosync 协议如此：`usern
 （`_read_capped` 边读边限）/ 后端面向用户的文案（0 处开发措辞）/ 能力键
 （前端四处消费点 × `ALL_FEATURES` 18 个，无静默缺失）。
 
-**核验**：后端全量 __TESTS__ 例（__PASSED__ passed / 14 skipped / 13 例本机环境项）；
+**核验**：后端全量 **3103** 例（3089 passed / 14 skipped / 13 例本机环境项，730 s）；
 前端未改；`python tests/period_close.py check` = **0 问题**。
 
 ## 第 237 期（KEPUB 导出 —— Kobo 那条评估项的最小闭环）
