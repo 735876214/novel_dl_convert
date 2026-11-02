@@ -47,7 +47,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
                    events, entities, pathmeta, m4b, audiobook_zip, podcasts, readaloud, booksearch, customicons,
-                   pdfsearch, bookrules, bookfilter)
+                   pdfsearch, bookrules, bookfilter, dockpreview)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -9977,6 +9977,19 @@ def api_book_dock_rescan(item_id: str, payload: dict = Body(None)):
                       library_id=str(p.get("library_id") or ""),
                       root=str(p.get("root") or ""))
     return {"ok": True, "item": item}
+
+
+@app.get("/api/book-dock/{item_id}/preview")
+def api_book_dock_preview(item_id: str, library_id: str = ""):
+    """入库前预览（第 224 期）：名字 / 封面 / 查重 —— **只读**。
+
+    目标库给 `library_id` 时才算落点名与查重（预览名必须与实际落盘**同一份判据**）。
+    条目不存在 ⇒ 404；条目在但文件已不在投递目录 ⇒ 如实说明（预览不猜）。
+    """
+    try:
+        return dockpreview.preview_item(_get_watcher(), item_id, library_id=library_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e)) from None
 
 
 @app.post("/api/book-dock/{item_id}/rename")

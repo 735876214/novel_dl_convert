@@ -14,6 +14,7 @@ import {
   api,
   apiErrorMessage,
   type BookDockItem,
+  type BookDockPreview,
   type BookDockResponse,
   type HealthInfo,
   type LibraryEntity,
@@ -326,6 +327,31 @@ const ingestLibId = ref('')
 const ingestRoot = ref('')
 const ingestBusy = ref(false)
 
+/**
+ * 入库前预览（第 224 期）：名字 / 封面 / 查重 —— **只读**。
+ *
+ * ⚠️ 落点名与实际落盘**同一份判据**（服务端 `publish.relpath_for`）：预览说
+ * 「书名.epub」而实际落成别的名字，是最难查的一类缺陷。
+ */
+const ingestPreview = ref<BookDockPreview | null>(null)
+const previewBusy = ref(false)
+const previewError = ref('')
+
+async function loadPreview(): Promise<void> {
+  const it = ingestItem.value
+  if (!it) return
+  previewBusy.value = true
+  previewError.value = ''
+  try {
+    ingestPreview.value = await api.bookDockPreview(it.id, ingestLibId.value)
+  } catch (e) {
+    ingestPreview.value = null
+    previewError.value = e instanceof Error ? e.message : '预览失败'
+  } finally {
+    previewBusy.value = false
+  }
+}
+
 /** 待入库条目的扩展名（判「这个库收不收得了它」用）。 */
 const ingestExt = computed(() => {
   const n = ingestItem.value?.name ?? ''
@@ -363,18 +389,23 @@ async function openIngest(it: BookDockItem): Promise<void> {
   const pick = libs.find(libAccepts) ?? libs[0]
   ingestLibId.value = pick?.id ?? ''
   ingestRoot.value = pick?.source_dirs?.[0] ?? ''
+  void loadPreview()
 }
 
 function closeIngest(): void {
   ingestItem.value = null
   ingestLibId.value = ''
   ingestRoot.value = ''
+  ingestPreview.value = null
+  previewError.value = ''
 }
 
 function chooseIngestLib(l: LibraryEntity): void {
   ingestLibId.value = l.id
   // 换库就换文件夹：默认仍是该库的第一个（口径 7）
   ingestRoot.value = l.source_dirs?.[0] ?? ''
+  // 换库 ⇒ 落点名与查重都换范围 ⇒ 重取预览
+  void loadPreview()
 }
 
 async function confirmIngest(): Promise<void> {
@@ -1009,6 +1040,66 @@ onBeforeUnmount(() => {
             「{{ ingestLib.name }}」还没有文件夹：先到书库管理给它加一个来源目录。
           </p>
         </template>
+
+        <!-- 入库前预览（第 224 期）：名字 / 封面 / 查重 —— **只读**，不拦入库 -->
+        <div class="mt-4 rounded-md border border-border bg-muted/40 p-3">
+          <div class="flex items-center gap-2">
+            <span class="text-[12.5px] font-medium text-foreground">入库前预览</span>
+            <span v-if="previewBusy" class="text-[11px] text-muted-foreground">读取中…</span>
+            <button
+              type="button"
+              class="ml-auto cursor-pointer text-[11.5px] text-primary hover:underline"
+              :disabled="previewBusy"
+              @click="loadPreview"
+            >
+              重新预览
+            </button>
+          </div>
+          <p v-if="previewError" class="mt-1.5 text-[11.5px] text-destructive">
+            预览失败：{{ previewError }}
+          </p>
+          <template v-else-if="ingestPreview">
+            <dl class="mt-2 space-y-1 text-[11.5px]">
+              <div class="flex gap-2">
+                <dt class="w-16 shrink-0 text-muted-foreground">书名</dt>
+                <dd class="min-w-0 flex-1 truncate text-foreground">
+                  {{ ingestPreview.title || '（读不出）' }}
+                  <span v-if="ingestPreview.author" class="text-muted-foreground">
+                    · {{ ingestPreview.author }}
+                  </span>
+                </dd>
+              </div>
+              <div class="flex gap-2">
+                <dt class="w-16 shrink-0 text-muted-foreground">落点名</dt>
+                <dd class="min-w-0 flex-1 truncate font-mono text-foreground" :title="ingestPreview.target_rel">
+                  {{ ingestPreview.target_rel || '（算不出来）' }}
+                </dd>
+              </div>
+              <div class="flex gap-2">
+                <dt class="w-16 shrink-0 text-muted-foreground">封面</dt>
+                <dd class="min-w-0 flex-1 text-foreground">
+                  {{ ingestPreview.has_cover ? '有' : '无' }}
+                </dd>
+              </div>
+            </dl>
+            <p v-if="ingestPreview.warnings.length" class="mt-1.5 text-[11px] text-warning">
+              {{ ingestPreview.warnings.join('；') }}
+            </p>
+            <div v-if="ingestPreview.duplicates.length" class="mt-2 rounded border border-warning/50 bg-warning/10 p-2">
+              <p class="text-[11.5px] font-medium text-foreground">
+                可能与库里的书重复（{{ ingestPreview.duplicates.length }} 本）—— **只提示，不拦入库**
+              </p>
+              <p
+                v-for="d in ingestPreview.duplicates"
+                :key="d.book_id"
+                class="mt-0.5 truncate text-[11px] text-muted-foreground"
+                :title="`${d.title} · ${d.reasons.join('、')}`"
+              >
+                「{{ d.title || d.book_id }}」—— {{ d.reasons.join('、') }}
+              </p>
+            </div>
+          </template>
+        </div>
 
         <div class="mt-5 flex flex-wrap items-center gap-2">
           <span class="text-[11.5px] text-muted-foreground">

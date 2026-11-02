@@ -277,6 +277,33 @@ export interface BookDockItem {
   updated_at: number
 }
 
+/**
+ * 收书目录的**入库前预览**（第 224 期）—— **只读**。
+ *
+ * ⚠️ 名字预览与实际落盘**同一份判据**（服务端 `publish.relpath_for`）：
+ * 预览叫「书名.epub」而实际落盘成别的名字，是最难查的一类缺陷。
+ */
+export interface BookDockPreview {
+  item_id: string
+  name: string
+  ext: string
+  size: number
+  title: string
+  author: string
+  series: string
+  /** ISBN（查重判据之一；空 = 这份文件没有 ISBN） */
+  isbn: string
+  has_cover: boolean
+  /** 目标库 id（空 = 没指定） */
+  target_library: string
+  /** 按目标库命名规则算出的落点相对路径（空 = 算不出来） */
+  target_rel: string
+  /** 与目标库已有书的重复候选（**只提示，不拦截**） */
+  duplicates: { book_id: string; title: string; author: string; reasons: string[] }[]
+  /** 如实说明（读不出书名 / 没有封面 / 库不存在 …） */
+  warnings: string[]
+}
+
 export interface BookDockTab {
   key: 'all' | 'needs_review' | 'pending' | 'ready' | 'error'
   label: string
@@ -3755,6 +3782,12 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       },
+    ),
+  /** 入库前预览（只读）：名字 / 封面 / 查重。`libraryId` 给了才算落点名与查重。 */
+  bookDockPreview: (id: string, libraryId = '') =>
+    request<BookDockPreview>(
+      `/api/book-dock/${encodeURIComponent(id)}/preview`
+      + (libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : ''),
     ),
   bookDockIgnore: (id: string) =>
     request<{ ok: boolean; item: BookDockItem }>(

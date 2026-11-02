@@ -31,6 +31,7 @@ vi.mock('@/lib/api', () => ({
     bookDockRename: vi.fn(),
     bookDockIgnore: vi.fn(),
     bookDockDelete: vi.fn(),
+    bookDockPreview: vi.fn(),
     // 页面上有按钮但用例不点（照实列出，免得真发请求）
     watcherStart: vi.fn(),
     watcherStop: vi.fn(),
@@ -173,6 +174,12 @@ function rows(w: VueWrapper) {
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.mocked(api.bookDock).mockResolvedValue(dockResponse([A, B]))
+  vi.mocked(api.bookDockPreview).mockResolvedValue({
+    item_id: 'i-a', name: 'a.epub', ext: '.epub', size: 1,
+    title: '预览书名', author: '作者甲', series: '', isbn: '', has_cover: true,
+    target_library: 'lib-e', target_rel: '预览书名.epub',
+    duplicates: [], warnings: [],
+  })
   vi.mocked(api.health).mockResolvedValue({ input: 'D:/input' } as never)
   vi.mocked(api.watcherStatus).mockResolvedValue({ running: false } as never)
   vi.mocked(api.getConfig).mockResolvedValue({
@@ -255,7 +262,13 @@ describe('BookDockPage（第 65 期 3/5）', () => {
     await flushPromises()
     expect(rows(w)).toHaveLength(1)
 
-    vi.mocked(api.bookDock).mockResolvedValue(dockResponse([A, B])) // 它又回来了
+    vi.mocked(api.bookDock).mockResolvedValue(dockResponse([A, B]))
+  vi.mocked(api.bookDockPreview).mockResolvedValue({
+    item_id: 'i-a', name: 'a.epub', ext: '.epub', size: 1,
+    title: '预览书名', author: '作者甲', series: '', isbn: '', has_cover: true,
+    target_library: 'lib-e', target_rel: '预览书名.epub',
+    duplicates: [], warnings: [],
+  }) // 它又回来了
     await rescan().trigger('click')
     await flushPromises()
     expect(w.text(), '已消失的条目回来后又被勾上了（幽灵 id 没摘）').toContain('已选 0 / 2')
@@ -516,5 +529,40 @@ describe('BookDockPage · 工具栏「上传」（第 70 期）', () => {
     expect(cell('已添加')).toContain('9')
     expect(cell('失败')).toContain('2')
     expect(cell('扫描轮次')).toContain('34')
+  })
+})
+
+describe('BookDockPage 第 224 期：入库前预览', () => {
+  it('打开「入库到…」就取预览，并显示落点名与重复候选', async () => {
+    vi.mocked(api.bookDockPreview).mockResolvedValue({
+      item_id: 'i-a', name: 'a.epub', ext: '.epub', size: 1,
+      title: '预览书名', author: '作者甲', series: '', isbn: '', has_cover: false,
+      target_library: 'lib-e', target_rel: '预览书名.epub',
+      duplicates: [{ book_id: 'b1', title: '已有的书', author: '作者甲',
+                     reasons: ['书名与作者完全相同'] }],
+      warnings: ['这份 EPUB 没有可用封面'],
+    })
+    const w = await mountPage()
+    await openIngest(w)
+    await flushPromises()
+
+    // 预览要**带目标库**（落点名与查重都按那个库算）
+    expect(vi.mocked(api.bookDockPreview).mock.calls[0]).toEqual(['i-a', 'lib-e'])
+    expect(w.text()).toContain('预览书名')
+    expect(w.text()).toContain('预览书名.epub')
+    expect(w.text()).toContain('没有可用封面')
+    // 重复候选要显示出来，且**明说只提示不拦**
+    expect(w.text()).toContain('已有的书')
+    expect(w.text()).toContain('只提示，不拦入库')
+  })
+
+  it('预览失败如实显示，不装作「没有重复」', async () => {
+    vi.mocked(api.bookDockPreview).mockRejectedValue(new Error('条目不存在'))
+    const w = await mountPage()
+    await openIngest(w)
+    await flushPromises()
+
+    expect(w.text()).toContain('预览失败')
+    expect(w.text()).toContain('条目不存在')
   })
 })
