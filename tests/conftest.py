@@ -516,6 +516,12 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     from novelforge.core import activity_log as _activity_log
     # `set_dir` 会把目录缓存成进程级常量 ⇒ 每个用例都要重设（否则还是上一个的目录）
     _activity_log.set_dir(tmp_path / "logs")
+    # ⚠️ **内存缓冲也要清**（第 240 期）：`set_dir` 只换目录，而 `_memory` / `_pending`
+    # 是**进程级**的 ⇒ 换目录不会清它 ⇒ 上一个用例写的条目会漏进下一个用例的查询
+    # （第 226 期让「重建时保留内存里未落盘的条目」之后，这个泄漏才显形：
+    #  `test_auth_audit_192.py::test_审计日期范围筛选` 在全量里红、单跑绿）。
+    # 只清缓冲、**不动磁盘上的文件**（那属于 `clear()`，此处不该删）。
+    _activity_log.reset_buffer()
     db.close()
     # 第 62 期：PG 后端下「换一套空库」= 把 schema 整个重建。
     # SQLite 那条路不需要这一步 —— 上面那行 monkeypatch 已经把 DATA_DIR 指到一个

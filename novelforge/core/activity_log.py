@@ -622,6 +622,20 @@ def count() -> dict:
     return {"total": len(_memory), "success": ok, "failed": fail}
 
 
+def reset_buffer() -> None:
+    """只清**内存缓冲**（`_memory` 与合并窗口 `_pending`），不动磁盘上的文件。
+
+    ⚠️ 用例隔离要用这个，**不要**用 `clear()`（那会把文件也删了）：
+    第 226 期起「重建缓冲时保留内存里未落盘的条目」是对的，但内存缓冲本身
+    是**进程级**的 ⇒ 换目录（`set_dir`）并不会让它清空 ⇒ 上一个用例写的条目
+    会漏进下一个用例的查询（表现：`test_auth_audit_192.py::test_审计日期范围筛选`
+    在全量里红、单跑绿）。
+    """
+    with _lock:
+        _memory.clear()
+        _pending.clear()
+
+
 def clear() -> bool:
     """清空日志文件、**归档**与内存缓冲。
 
