@@ -598,6 +598,72 @@ def _subjects_of(opf: str) -> list:
     return [v for t in _tag_all(opf, "dc:subject") if (v := _plain(t))]
 
 
+#: 扫描期**派生值**的长度上限（字段 → 字符数）。
+#:
+#: ⚠️ 第 254 期：这些值来自**书文件内部**（OPF）⇒ **不受信任** ⇒ 必须有上限。
+#: 此前**一个都没有** ⇒ 一个 11.6 KB 的 EPUB 能造出 **1.2 MB** 的简介 +
+#: **53 KB** 的标签（实测**放大 107 倍**）；100 本这样的书 ⇒ 索引表多 **3.9 MB**。
+#:
+#: ⚠️ **判据与第 250 期那条共用一份**（`db.metadata_field_limits()`）——
+#: 那份是「用户写入 / 在线抓取」的上限表，本表是「扫描派生」的。
+#: 两边**必须同口径**（同字段、同上限）⇒ 否则「扫描出来的简介比手填的能长 10 倍」
+#: 这种怪事会出现。**唯一的例外**是 `tags` / `narrators`：**它们是数组**，
+#: 上限按「整段序列化后的字符数」算（与第 250 期那两个字段的口径一致）。
+_SCAN_LIMITS = None
+
+
+def _scan_limit(field: str) -> int:
+    """扫描期某字段的长度上限（字符数）。
+
+    ⚠️ 判据**只有一处**（`db.metadata_field_limits()` —— 第 250 期那张表）。
+    这里**不另抄一份**（抄了就会漂）⇒ 新增字段时不用改这里。
+    """
+    global _SCAN_LIMITS
+    if _SCAN_LIMITS is None:
+        _SCAN_LIMITS = dict(db.metadata_field_limits())
+    return int(_SCAN_LIMITS.get(field, 200))
+
+
+def _clip(value: str, field: str) -> str:
+    """把扫描出来的字符串**截断**到该字段的上限。
+
+    ⚠️ 第 254 期：扫描期是**截断**而不是拒绝 —— 扫描是**批量**动作，
+    一本书的简介过长不该让**整轮扫描**失败（拒绝会让那本书进不了索引）。
+    ⚠️ 截断**必须留痕**吗？不留 —— 但要在**文档里说清**这是有损的
+    （简介被截 ⇒ 详情页显示的简介变短）。
+    """
+    s = str(value or "")
+    limit = _scan_limit(field)
+    return s if len(s) <= limit else s[:limit]
+
+
+def _clip_list(values, field: str) -> list:
+    """把扫描出来的**数组**截断到上限（按**入库后那段字符串**的长度算）。
+
+    ⚠️ 第 254 期：`tags` / `narrators` 是**数组**，入库时序列化成 JSON
+    （`catalog._dumps`）⇒ 上限必须按 **JSON 后的长度**算，否则中文标签
+    （`json.dumps(..., ensure_ascii=False)` 下 1 字 1 字符，但**分隔符与引号**
+    也占字符）会让实际长度**超出上限**（实测 2004 > 2000）。
+    ⇒ 这里直接量 `json.dumps` 的结果长度 —— **与入库用的是同一个序列化器**。
+
+    ⚠️ **优先丢后面的**（列表顺序本身没有语义）与**先截断每一条**：
+    一条超长的标签本身就不该占满整个预算。
+    ⚠️ 单条截到 ``limit - 4``（留出 JSON 的「两个方括号 + 两个引号」）——
+    否则一条恰好等于上限的标签序列化后**必然超限**（实测 2002 > 2000）
+    ⇒ 它会被整条丢掉（用户看到的是「这条标签不见了」，而不是「它被截短了」）。
+    """
+    limit = _scan_limit(field)
+    out: list = []
+    for v in (values or []):
+        item = str(v or "")
+        item = item[:max(1, limit - 4)]   # 单条也不许超长（留出括号与引号）
+        cand = out + [item]
+        if len(json.dumps(cand, ensure_ascii=False)) > limit:
+            break
+        out = cand
+    return out
+
+
 def _book_id(name: str, library_id: str = None) -> str:
     """文件名 → 稳定短 id（用于 URL 与前端主键，避免暴露中文文件名）。
 
@@ -1625,10 +1691,10 @@ def probe_epub(path: pathlib.Path) -> dict:
                 out["unparsable"] = True
                 return out
             opf = zipkind.read_entry(z, opf_path).decode("utf-8", "ignore")
-            out["title"] = _tag_text(opf, "dc:title")
-            out["author"] = _tag_text(opf, "dc:creator")
-            out["series"] = _series_of(opf)
-            out["series_index"] = _series_index_of(opf)
+            out["title"] = _clip(_tag_text(opf, "dc:title"), "title")
+            out["author"] = _clip(_tag_text(opf, "dc:creator"), "author")
+            out["series"] = _clip(_series_of(opf), "series")
+            out["series_index"] = _clip(_series_index_of(opf), "series_index")
             # 复用已打开的 zip，不再二次解包
             out["cover"] = _cover_in(z, opf, opf_path)
             out["has_cover"] = _cover_usable(z, out["cover"])
@@ -1636,11 +1702,15 @@ def probe_epub(path: pathlib.Path) -> dict:
                 # 无效 / 缺失封面：连路径一起清掉，避免前端去请求一张注定解不开的图
                 out["cover"] = ""
             out["year"] = _year_of(opf)
-            out["publisher"] = _tag_text(opf, "dc:publisher")
+            out["publisher"] = _clip(_tag_text(opf, "dc:publisher"), "publisher")
             out["isbn"] = _isbn_of(opf)
-            out["language"] = _tag_text(opf, "dc:language")
-            out["description"] = _dc_description(opf)
-            out["tags"] = _subjects_of(opf)
+            out["language"] = _clip(_tag_text(opf, "dc:language"), "language")
+            # ⚠️ 第 254 期：**扫描出来的值一律过长度上限**（判据 `_scan_limit`，
+            # 与第 250 期那张表同口径）—— 它们来自**书文件内部**，不受信任。
+            # 此前**一个都没有** ⇒ 一个 11.6 KB 的 EPUB 能造出 1.2 MB 的简介
+            # （放大 107 倍）⇒ 100 本这样的书就把索引表撑大 3.9 MB。
+            out["description"] = _clip(_dc_description(opf), "description")
+            out["tags"] = _clip_list(_subjects_of(opf), "tags")
             out["fixed_layout"] = _fixed_layout_of(opf)
             out["pages"] = _pages_in(z, opf, opf_path)
             if out["pages"]:
@@ -2230,7 +2300,8 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
         try:
             _probe = units.first_audio(f)
             if _probe is not None:
-                info["narrators"] = audio_meta.extract(_probe).get("narrators") or []
+                info["narrators"] = _clip_list(
+                    audio_meta.extract(_probe).get("narrators") or [], "narrators")
         except Exception:
             info["narrators"] = []
         # 封面可能埋在子树里（`cover_in_tree` 在树根时与 `cover_in_dir` 同值）
@@ -2244,7 +2315,8 @@ def _probe_entry(f: pathlib.Path) -> "dict | None":
         try:
             _probe = audio.first_audio_file(f)
             if _probe is not None:
-                info["narrators"] = audio_meta.extract(_probe).get("narrators") or []
+                info["narrators"] = _clip_list(
+                    audio_meta.extract(_probe).get("narrators") or [], "narrators")
         except Exception:
             info["narrators"] = []
         if is_dir:
