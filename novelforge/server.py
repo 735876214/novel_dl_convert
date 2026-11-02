@@ -4266,7 +4266,11 @@ def api_book_asset(bid: str, p: str = Query(..., description="zip 内资源相�
         with zipfile.ZipFile(src) as z:
             name = _asset_entry(z, p)
             if name:
-                data = z.read(name)
+                # 第 242 期：走**统一入口** `zipkind.read_entry`（带解压后大小上限）——
+                # 此前这里是裸 `z.read()`，一个几百 KB 的 zip 炸弹就能把内存吃光。
+                data = zipkind.read_entry(z, name)
+    except comics.EntryTooLarge as e:           # 第 242 期：解压炸弹闸门（如实说「太大」）
+        raise HTTPException(413, str(e)) from e
     except (zipfile.BadZipFile, OSError):
         data = None
     if data is None:
@@ -5011,9 +5015,12 @@ def api_book_cover(bid: str, w: int = 0):
             with zipfile.ZipFile(path) as z:
                 if cover not in z.namelist():
                     raise HTTPException(404, "封面资源不存在")
-                data = z.read(cover)
+                # 第 242 期：同上一处 —— 裸 `z.read()` 会绕过解压炸弹上限。
+                data = zipkind.read_entry(z, cover)
         except HTTPException:
             raise
+        except comics.EntryTooLarge as e:       # 第 242 期：必须在 except Exception 之前
+            raise HTTPException(413, str(e)) from e
         except Exception as e:
             raise HTTPException(500, f"读取封面失败：{e}")
         return data, mimetypes.guess_type(cover)[0] or "image/jpeg"
@@ -10874,15 +10881,10 @@ def _sync_progress_push(book_id: str, request: Request) -> None:
     与 `_sync_auto_push` 同一纪律：先查开关（未开直接返回，零开销），
     开了就在 daemon 线程里跑，并**吞掉全部异常**。
     """
-    import threading
-
-    def _run():
-        try:
-            sync.push_progress([book_id], actor=activity_log.current_actor())
-        except Exception:
-            pass
-
-    threading.Thread(target=_run, daemon=True, name="nf-hc-progress").start()
+    # 第 242 期：改走 `sync.push_progress_async` —— 此前这里自己起线程、**句柄丢弃**，
+    # 于是这个**写库**的旁路线程收不干净（与 `core/sync.py` 里其它旁路线程同一形态，
+    # 收尾清单认它们：`tests/conftest.py::_quiesce_background` → `sync.wait_pending`）。
+    sync.push_progress_async([book_id], actor=activity_log.current_actor())
 
 
 @app.post("/api/integrations/{service}/preview")

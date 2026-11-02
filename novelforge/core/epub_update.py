@@ -198,9 +198,12 @@ def append_chapters(epub, chapters, *, lang: str = "zh") -> dict:
             raise ValueError("这个 EPUB 里找不到 OPF（不是标准结构，拒绝改）")
         nums = [int(m.group(1)) for m in (re.search(_CHAPTER_RE_SRC, n) for n in names) if m]
         start = (max(nums) + 1) if nums else 0
-        opf = z.read(opf_path).decode("utf-8")
-        nav = z.read(nav_path).decode("utf-8") if nav_path else ""
-        ncx = z.read(ncx_path).decode("utf-8") if ncx_path else ""
+        # 第 242 期：走 `zipkind.read_entry`（**按实际读到的字节数掐**）——
+        # 裸 `z.read()` 会被「声称很小、实际极大」的归档绕过。
+        from . import zipkind
+        opf = zipkind.read_entry(z, opf_path).decode("utf-8")
+        nav = zipkind.read_entry(z, nav_path).decode("utf-8") if nav_path else ""
+        ncx = zipkind.read_entry(z, ncx_path).decode("utf-8") if ncx_path else ""
     play = ncx.count("<navPoint") + 1
     extra: list = []
     added: list = []

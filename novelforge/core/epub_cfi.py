@@ -30,6 +30,10 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 
+#: 第 242 期：读 EPUB 条目统一走 `zipkind.read_entry`（**带解压后大小上限**）。
+#: 这里**函数内导入** —— `zipkind` 与本模块互不依赖，但顶层导入会让
+#: 「谁先被导入」变成隐式约定（`zipkind` 会拉 `comics`，`comics` 又拉别的）。
+
 #: 完整 CFI 的外壳（``epubcfi( … )``）
 _CFI_BODY = re.compile(r"^epubcfi\((.*)\)$", re.S)
 #: spine 步（``/6/{2·(spine 序号+1)}!``）—— /6 = OPF 的 spine 元素（metadata /2、
@@ -97,8 +101,12 @@ def _body_of_doc(path, spine_index: int):
             # None 也缓存（坏书反复读不反复解析）；Element 的真值判断已弃用，
             # 必须用 ``is not None`` 判缓存命中
             return cached if cached is not None else None
+        from . import zipkind
         with zipfile.ZipFile(p) as z:
-            raw = z.read(spine[int(spine_index)]).decode("utf-8", "ignore")
+            # 第 242 期：走**统一入口** `zipkind.read_entry`（带解压后大小上限）——
+            # 此前是裸 `z.read()`：恶意 EPUB 只要让 spine 指向一个超大条目，
+            # 就能把内存吃光（`except Exception` 把它降级成「这本书读不了」）。
+            raw = zipkind.read_entry(z, spine[int(spine_index)]).decode("utf-8", "ignore")
         root = _parse(raw)
         body = None
         if root is not None:

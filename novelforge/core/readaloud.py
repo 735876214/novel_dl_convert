@@ -89,10 +89,16 @@ def _seconds(raw) -> "float | None":
 
 
 def _read(z: zipfile.ZipFile, name: str) -> bytes:
-    info = z.getinfo(name)
-    if info.file_size > MAX_XML_BYTES:
-        raise ValueError(f"{name} 超过 {MAX_XML_BYTES // 1024 // 1024} MB 上限")
-    return z.read(name)
+    """读一个 XML 条目（**带真实上限**）。
+
+    ⚠️ 第 242 期：此前查的是 `info.file_size` —— 那是**压缩包自己声称的**大小，
+    精心构造的归档可以声称 12 KB、实际解出 4 GB（见 `comics.read_capped` 的注释）
+    ⇒ 那是**假安全**。改走 `zipkind.read_entry`（**按实际读到的字节数掐**），
+    `limit` 仍传本模块自己的阈值，不放宽。
+    """
+    from . import zipkind
+
+    return zipkind.read_entry(z, name, MAX_XML_BYTES)
 
 
 def _unsupported(path: pathlib.Path, reason: str) -> dict:

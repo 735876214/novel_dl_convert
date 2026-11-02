@@ -11,7 +11,7 @@ import pathlib
 import re
 import zipfile
 
-from . import library
+from . import zipkind, library
 
 #: 单个章节最多读这么多字节（超过的畸形章节跳过，不把一次搜索拖成分钟级）。
 MAX_CHAPTER_BYTES = 4 * 1024 * 1024
@@ -67,10 +67,12 @@ def search_epub(path, query: str, limit: int = 50) -> dict:
             if href not in names:
                 continue
             try:
-                info = z.getinfo(href)
-                if info.file_size > MAX_CHAPTER_BYTES:
-                    continue
-                text = plain_text(z.read(href).decode("utf-8", "ignore"))
+                # 第 242 期：走 `zipkind.read_entry`（**按实际读到的字节数掐**）。
+                # 此前只查 `info.file_size` —— 那���**压缩包自己声称的**大小，
+                # 精心构造的归档可以声称 12 KB、实际解出 4 GB（见 `comics.read_capped`
+                # 的注释）⇒ 那是**假安全**。`limit` 传本模块自己的阈值，不放宽。
+                text = plain_text(
+                    zipkind.read_entry(z, href, MAX_CHAPTER_BYTES).decode("utf-8", "ignore"))
             except (KeyError, OSError, zipfile.BadZipFile):
                 continue
             scanned += 1
