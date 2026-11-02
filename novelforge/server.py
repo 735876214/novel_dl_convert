@@ -995,7 +995,16 @@ def _health_checks() -> dict:
         # 监控（Uptime 之类）一直报警，而他什么都没做错。
         # ⇒ 只在**监听本该开着**（`watcher.enabled`）却没跑时才报；
         # `checks.watcher_running` 这个事实照旧给（前端与监控仍能看到「没在跑」）。
-        if (config.load_config().get("watcher") or {}).get("enabled", True):
+        # ⚠️ 读配置要**兜住异常**：`load_config()` 在 config.yaml 写坏时会抛
+        # （第 251 期实测：段类型不对 ⇒ `data["watcher"]` 不是 dict ⇒ 后续取键抛）
+        # ⇒ `/health` 跟着 500 ⇒ Docker HEALTHCHECK 失败 ⇒ 「服务完全没反应」。
+        # 探活端点**必须**在任何配置异常下都能回话 ⇒ 读不出来就按「开着」算
+        # （保守：宁可多报一条问题，不可让探活自己挂掉）。
+        try:
+            _watcher_on = bool((config.load_config().get("watcher") or {}).get("enabled", True))
+        except Exception:                    # noqa: BLE001 —— 探活不许因配置坏掉而失声
+            _watcher_on = True
+        if _watcher_on:
             problems.append("收书监听没在跑（新文件不会被自动收进来）")
     for d in config.dirs_failed()[:3]:
         problems.append(f"目录建不出来：{d}")
