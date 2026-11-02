@@ -337,6 +337,7 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    | 播客「残留下载」判据（这一集此刻有没有人在下） | `novelforge/core/podcasts.py` 的 `_stale_download`（复位点：列表端点 `reset_stale_in` + 启动时 `reset_stale_downloads`） |
    | 配置值**算不算「人写过」**（环境变量兜底的前提） | `novelforge/config.py` 的 `_differs_from_default()`（第 253 期：**按来源分别判** —— settings.json 里出现 ⇒ 算写过；config.yaml 里只算「与默认值不同」才算 ⇒ 「重置配置」写下的默认值不是人的选择） |
 | **清理动作的如实回报**（删不掉的怎么说） | `novelforge/server.py` 的 `api_clear_cache` / `api_clear_recycle`（第 141 / 256 期：**回执恒定带 `failed`** —— 删不掉的**必须列出来**且 `ok=False`；「说清空了却没清干净」比「没清干净」更坏） |
+| **探针抛异常时怎么说**（探活不许失声） | `novelforge/server.py` 的 `_health_probe`（第 257 期：抛异常的那项**降级成「探不出」**（**不是「正常」** —— 那会掩盖它本该报告的事）+ **留痕**进 `problems`；其余照旧回话 ⇒ `/health` **永远能回话**，否则 Docker HEALTHCHECK 失败 ⇒ 容器被反复重启） |
    | 书目列表缓存的**键语义**（哪个口径能进缓存） | `novelforge/core/catalog.py` 的 `books_of`（键 `book_list_key(lid)` 只表示「该库的全量书目」⇒ **分页结果既不读也不写它**，第 244 期） |
    | 配置**段的类型**是否合法（段被写坏 ⇒ 降级还是抛） | `novelforge/config.py` 的 `section_type_errors()`（第 252 期：写入口 `PUT /api/config/raw` 与读入口 `load_config()` **共用**这一个判据 —— 段类型写坏 ⇒ 该段降级回默认值，**服务不得因此起不来**） |
    | 图片处理（能力有无 / 解码像素闸 / 透明像素底色） | `novelforge/core/imaging.py` 的 `state` / `open_image` / `flatten`（第 248 期：缩略图 `novelforge/core/thumbs.py` 与格式转换 `novelforge/core/komga_api.py` **共用**这两条判据，但「缩到多宽 / 编成什么格式」各管各的，刻意不合并） |
