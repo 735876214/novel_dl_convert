@@ -8,32 +8,9 @@
 
 - 不回退、不顺手提交别人的改动；本机 IDE 配置不入库（`.vscode/settings.json` 已从仓库移除并在 `.gitignore` 里钉住）。
 - 加 / 删功能都要**彻底**：路由 + 模块 + db CRUD + 能力键 + 前端 + 文档 + 记忆 + 「接口 404」断言，一处不落。
-- **单一真值源**：同一判据只许一处实现 —— 发现第二份 = 缺陷。
-- 书文件**只读**；删除一律**移入回收站**（从不 `unlink`）；软删除的一切读点带 `WHERE deleted_at=0`。
-- 不手写 `static/v2`；不新增 compose 文件；不写假数据；不为省事把界面资源丢给外部 CDN。
-- 跑测试用 `scripts/test.sh`；收尾 `python tests/period_close.py check` **0 问题**才算完。
-
-## 0. 开工前三件事（顺序别调）
-
-1. **`git log --oneline -12` + `git status --short`**
-   - 本项目**可能有别的 AI 会话在并行推进**；**期号会被别人用掉** —— 别沿用旧计划里的期号。
-   - 别人未提交/已提交的改动**不回退、不顺手提交**；工作区里不是你的改动不要一起 commit。
-2. **读 `docs/TODO.md`** 看当前任务与优先级；读本轮相关的 `docs/roadmap-gaps-remaining.md` 段落（最新期在**末尾**，按 `## 第 N 期` 搜）。
-3. **读 `.codebuddy/memory/MEMORY.md`（铁律 + 一期一行索引）+ `MEMORY-REF.md`（按主题的域细节 / 运行手册）**；
-   本机（Windows）专属陷阱见 `docs/development-windows.md` —— **换机器 / 容器请忽略它**。
-
-## 1. 改动纪律（硬约束，违反会被判为回归）
-
-- **加 / 删功能都要彻底**（同批改完、一处不落）：
-  - **新增**：路由 → 模块 → db CRUD → 能力键 → 前端页/路由/api → 文档 → 记忆 → 「接口 404」断言。
-  - **删除**：删路由 → 删模块 → 删 db CRUD → 删能力键 → 删前端页/路由/api → 删文档 → 改记忆索引 →
-    删/改 404 断言 → `rg` 全文确认无残留引用（**不留兼容垫片 / 回退分支**，见 §7.1）。
-- **单一真值源**：同一判据**只许有一处实现**。典型：命名规则 `fileops.fill_pattern`、路径判据 `frontend/src/lib/paths.ts`、
-  阅读状态阈值 `lib_settings.reading_thresholds` ↔ `lib/readingThresholds.ts`、续接 `lib/seriesNext.ts`、
-  ISBN 形状 `metadata.isbn_digits`、位置换算 `core/epub_cfi.py`、图表入口 `lib/charts.ts`；
-  第 94 期又立六处：书源导入路由 `sources/intake.py`、格式轴 `sources/formats/*`（与执行轴 `base.REGISTRY` **正交**）、
-  「引擎能执行什么」`rules.MODES` + `rules.audit_native_rule`（**诚实闸** —— adapter 不许自评可用）、
-  编码探测 `pipeline.decode_bytes`、执行期正则 `core/saferegex`、阅读选择器解析与转换 `sources/legado.*`（formats 只包装）。
+- **单一真值源**：同一判据**只许有一处实现**。已立的 18 条判据清单（**判据 → 文件:符号**）在
+  `docs/architecture.md` §14 的「判据唯一真值源清单」表里 —— **表中的路径由用例钉住**
+  （`tests/test_truth_source_table.py`），别再在各文档里各抄一份举例（抄的必漂）。
   发现第二份拷贝 = 缺陷，先收敛再改行为。
 - **数据只落服务端 DB，绝不写回书文件**（`core/publish.py` 是唯一仍写文件的模块；它写的也是**副本**，源文件绝对只读）。
 - **源不可变**：副本禁原地写（临时文件 + `Path.replace`）；删除一律**移入回收站**（`CONFIG_DIR/cache/recycle`），**从不 `unlink`**。

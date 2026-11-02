@@ -16,22 +16,23 @@
 │   · 只做**编排与形状**：参数校验 → 调 core → 组装响应（如 _card 收口 path）│
 └───────────────┬──────────────────────────────────────────────────────────┘
 ┌───────────────▼──────────────────────────────────────────────────────────┐
-│ novelforge/core/* —— 领域逻辑（**全部 86 个模块**，纯 Python，不依赖 FastAPI）│
+│ novelforge/core/* —— 领域逻辑（**全部 87 个模块**，纯 Python，不依赖 FastAPI）│
 │  achievements · activity · activity_log · ai_detect · atomicio ·         │
 │  audio · audio_meta · audiobook_zip · auth · authors · autoupdate ·      │
-│  backup · bookdock · bookrules · booksearch · browse_counts · cache ·    │
-│  catalog · changelog · comics · csvsafe · customfields · customicons ·   │
-│  db · detect · embed · entities · epub_builder · epub_cfi ·              │
-│  epub_update · events · fb2cache · features · filename · fileops ·       │
-│  fonts · htmlsafe · integrations · jssandbox · komga · komga_api ·       │
-│  koreader · koreader_anno · landing · lib_settings · library ·           │
-│  library_rules · m4b · metadata · metafetch · metascore · metasources ·  │
-│  metastore · migrate · mobicache · narrators · netdiag · network ·       │
-│  numbers · opds · pathmeta · pdfrender · pdfsearch · pg · pgmigrate ·    │
-│  pipeline · podcasts · preprocess · publish · readaloud ·                │
-│  reading_list · recommend · recycle · saferegex · scrape ·               │
-│  series_meta · sqlcompat · stats · sync · thumbs · txtcache · units ·    │
-│  updater · urlguard · watcher · zipkind ·                                │
+│  backup · bookdock · bookfilter · bookrules · booksearch ·               │
+│  browse_counts · cache · catalog · changelog · comics · csvsafe ·        │
+│  customfields · customicons · db · detect · embed · entities ·           │
+│  epub_builder · epub_cfi · epub_update · events · fb2cache · features ·  │
+│  filename · fileops · fonts · htmlsafe · integrations · jssandbox ·      │
+│  komga · komga_api · koreader · koreader_anno · landing ·                │
+│  lib_settings · library · library_rules · m4b · metadata · metafetch ·   │
+│  metascore · metasources · metastore · migrate · mobicache ·             │
+│  narrators · netdiag · network · numbers · opds · pathmeta ·             │
+│  pdfrender · pdfsearch · pg · pgmigrate · pipeline · podcasts ·          │
+│  preprocess · publish · readaloud · reading_list · recommend ·           │
+│  recycle · saferegex · scrape · series_meta · sqlcompat · stats ·        │
+│  sync · thumbs · txtcache · units · updater · urlguard · watcher ·       │
+│  zipkind ·                                                               │
 └───────────────┬──────────────────────────────────────────────────────────┘
                 │
    ┌────────────▼───────────┐   ┌──────────────┐   ┌───────────────────────┐
@@ -133,7 +134,7 @@ graph LR
   I --> J[activity_log 记一条]
 ```
 - 监听用**轮询**而非 inotify（NAS 上 SMB/NFS 事件不可靠）；`(size, mtime)` 存 `watcher_state.json`，重启不重复处理。
-- **分章唯一真值源 = `core/detect.py`**（出版 / 书源 / TXT 阅读共用）；行首锚定 + 卷/`【第1章】`/`（一）` 形态。
+- **分章唯一真值源 = `novelforge/core/detect.py`**（出版 / 书源 / TXT 阅读共用）；行首锚定 + 卷/`【第1章】`/`（一）` 形态。
 - **条目的三种形态（第 73 期）**：普通文件；**平铺音频目录**（一章一文件，`01.mp3…12.mp3`）；
   **序号单元树**（`《书名》/第1卷/第1话.pdf` —— 子树里 ≥2 个**不同序号**、能解析出序号的媒体文件
   ⇒ 整棵树 = 一本书）。形态判据唯一真值源 = `core/units.py`（`shape_of` 的顺序是**先平铺音频、
@@ -188,11 +189,11 @@ graph LR
 - **进度按「文件」维度**（多文件的书各存各的读点），书级位置由文件级聚合。
 - **序号单元合集**（`format === 'UNITS'`，第 73 期）由 `UnitsReader` 逐话读（话目录 + 上/下一话 +
   读完自动续）。进度**仍是 `progress` 那一行 `percent`**（零新列、零迁移，与有声书逐字相同），
-  口径 `percent = (话号 + 话内比例) / 话数 × 100`，换算唯一真值源 = 前端 `lib/unitsProgress.ts`。
+  口径 `percent = (话号 + 话内比例) / 话数 × 100`，换算唯一真值源 = 前端 `frontend/src/lib/unitsProgress.ts`。
   **进度由上层独占**：`UnitsReader` 是唯一写它的地方；三个复用的子阅读器（PDF / 漫画 / 音频）
   进入单话模式后**不读不写**，只上报 `unitPos`（带 `index` —— 上层据此丢弃换话时旧组件的过期上报）
   与 `unitEnd`（读完续下一话；末话仍走 `seriesNext` 翻下一册）。
-- **位置换算唯一真值源 = `core/epub_cfi.py`**（CFI ↔ XPointer ↔ 章内字符偏移）；
+- **位置换算唯一真值源 = `novelforge/core/epub_cfi.py`**（CFI ↔ XPointer ↔ 章内字符偏移）；
   `progress.cfi` **只由 NF 阅读器写入**，其它来源（KOReader / Komga / 完成标记）写进度时**一律清空 cfi**（防「章已变、CFI 挂旧章」）。
 - **阅读尝试（轮次）**：`reading_attempts`，一轮 =「开始读 → 读完」；自动维护挂 `db.set_status`；`reset_reading_state` **四清**。
 - **阅读时长**：`reading_sessions`（一次连续阅读 = 一行，30s 心跳合一）；PDF / 漫画也计时。
@@ -250,7 +251,7 @@ payload ─► intake.sniff_and_adapt()            # 认格式：格式注册表
   后者是**判定依据**（决定 verdict）。⚠️ 合并会让带发现页的源被误杀。
 - **安全层**：`core/jssandbox`（规则里的第三方 JS 走 quickjs，时间 / 内存 / 栈三道上限；
   **没有沙箱就不执行** —— 第 137 期删掉了「回落 Node 并标非沙箱」的降级链：那段 JS 来自第三方书源文件，
-  在 Node 里拿得到 `require('fs')`，而「非沙箱」只写在用户不会看的 `reason` 里）· `core/saferegex`（执行期正则超时，反 ReDoS）·
+  在 Node 里拿得到 `require('fs')`，而「非沙箱」只写在用户不会看的 `reason` 里）· `novelforge/core/saferegex.py`（执行期正则超时，反 ReDoS）·
   `core/urlguard`（**URL 导入是本项目唯一让用户提供地址的出网点**：只放行 http/https、
   解析出的每个 IP 必须全球可路由、**重定向逐跳复查**；DNS rebinding 用「连已校验 IP + 保留 Host」
   缓解，**残余 TOCTOU 如实记录**）· `core/network`（响应体上限、全局并发、每源超时）。
@@ -306,7 +307,28 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 2. 请求路径不扫盘（读索引）；书目列表并发只拉一次。
    改了「条目边界或卡片字段口径」⇒ `library.SCAN_RULE_VERSION` +1（否则存量索引不自愈，改完看不到变化）。
 3. `db` 只经 `db._connect()`；软删除读点带 `deleted_at=0`。
-4. 命名规则 / 路径判据 / 阈值 / 续接 / ISBN / CFI / 序号单元 / 话↔百分比 / **窄屏断点（`lib/viewport.ts`）** 等判据各只有一处实现。
+4. **判据唯一真值源清单**（发现第二份实现 = 缺陷 ⇒ 先收敛再改行为）：
+
+   | 判据 | 唯一实现 |
+   |---|---|
+   | 命名规则（占位符展开） | `novelforge/core/fileops.py` 的 `fill_pattern`（`PATTERN_FIELDS` 是字段清单真值源） |
+   | 路径判据（相对 / 绝对、库根内外） | `frontend/src/lib/paths.ts` |
+   | 阅读状态阈值 | `lib_settings.reading_thresholds` ↔ 前端 `frontend/src/lib/readingThresholds.ts` |
+   | 续接（读到哪 / 接哪本） | `frontend/src/lib/seriesNext.ts` |
+   | ISBN 形状 | `novelforge/core/metadata.py` 的 `isbn_digits` |
+   | 位置换算（CFI ↔ XPointer ↔ 章内偏移） | `novelforge/core/epub_cfi.py` |
+   | 图表入口（ECharts 注册 / 主题） | `frontend/src/lib/charts.ts`（配色纯计算在 `frontend/src/lib/chartTheme.ts`） |
+   | 分章（行首锚定 + 卷 / `【第1章】` / `（一）` 形态） | `novelforge/core/detect.py` |
+   | 「一棵树 = 一本书」形态判据 | `novelforge/core/units.py` 的 `shape_of` |
+   | 话 ↔ 百分比（`percent = (话号 + 话内比例) / 话数 × 100`） | 前端 `frontend/src/lib/unitsProgress.ts` |
+   | 窄屏断点 | 前端 `frontend/src/lib/viewport.ts` 的 `NARROW_QUERY` |
+   | 侧栏折叠态 / 宽度 | `frontend/src/components/ui/sidebar/SidebarProvider.vue` 经 `useSidebar()` 下发 |
+   | 「引擎能执行什么」（诚实闸） | `novelforge/sources/rules.py` 的 `MODES` + `audit_native_rule` |
+   | 引擎支持格式 | `novelforge/sources/formats/*`（格式轴，与执行轴**正交**） |
+   | 书源导入解析 | `novelforge/sources/intake.py`（三条入口共用一条路） |
+   | 编码探测 | `novelforge/core/pipeline.py` 的 `decode_bytes` |
+   | 执行期正则 | `novelforge/core/saferegex.py` |
+   | 版本号 | 仓库根 `VERSION`（`server.APP_VERSION` 读它，只由 `GET /health` 下发） |
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
    ⚠️ **第 82 期显式新增运行时依赖 `vue-draggable-plus@^0.6.1`**（仪表盘部件行内拖拽）：理由是原生 HTML5 DnD
