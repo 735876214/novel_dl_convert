@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 import type { AppConfig, MaintenanceInfo, OrphansInfo, RecycleListPayload } from '@/lib/api'
 import { api } from '@/lib/api'
+import { useUiStore } from '@/stores/ui'
 import MaintenancePage from '@/views/settings/pages/MaintenancePage.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 
@@ -125,5 +126,58 @@ describe('MaintenancePage UPDATES 对照归置（第 84 期）', () => {
     expect(card.props('groups')).toContain('IMPORT')
     expect(card.props('groups')).toContain('RECOMMENDATIONS')
     expect(card.props('items')).toContain('Refresh recommendation index')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 第 256 期：**删不掉的必须说出来**（后端给了 `failed`，前端**必须读**）
+// ---------------------------------------------------------------------------
+
+describe('清理动作要如实回报（第 256 期）', () => {
+  /**
+   * 点某个「清理」按钮之后，toast 里说了什么。
+   *
+   * ⚠️ **按点击处理函数定位**，不按按钮文字 —— 「清空缓存」那一条的**标题**
+   * 是个独立的 `<div>`（按钮上只写「清空」），按文字找会撞错按钮。
+   */
+  async function toastAfter(handler: 'clearCache' | 'clearRecycle'): Promise<string> {
+    const w = await mountPage()
+    // 直接调组件暴露的处理函数（按钮的点击最终落到它）
+    const vm = w.vm as unknown as Record<string, () => void>
+    vm[handler]()
+    await flushPromises()
+    await flushPromises()
+    return useUiStore().toastMessage
+  }
+
+  it('清缓存有没删掉的要说出来（不能只说「已清理 N 项」）', async () => {
+    vi.mocked(api.clearCache).mockResolvedValue({
+      ok: false, removed: 1, failed: ['删不掉.txt: Permission denied'], preserved: 'C:/recycle',
+    })
+    const msg = await toastAfter('clearCache')
+    expect(msg).toContain('没删掉')
+    expect(msg).toContain('删不掉.txt')
+  })
+
+  it('清回收站有没删掉的也要说出来', async () => {
+    // 清空回收站是**真删** ⇒ 页面上有二次确认
+    // ⚠️ happy-dom 里**没有** `window.confirm`（`vi.spyOn` 会报
+    // 「can only spy on a function」）⇒ 直接**定义**一个。
+    ;(window as unknown as { confirm: () => boolean }).confirm = () => true
+    vi.mocked(api.clearRecycle).mockResolvedValue({
+      ok: false, removed: 2, freed: 100, ledger_cleared: 0, failed: ['busy.epub: Permission denied'],
+    })
+    const msg = await toastAfter('clearRecycle')
+    expect(msg).toContain('没删掉')
+    expect(msg).toContain('busy.epub')
+  })
+
+  it('全删得掉时说的是「已清理」（不吓唬用户）', async () => {
+    vi.mocked(api.clearCache).mockResolvedValue({
+      ok: true, removed: 3, failed: [], preserved: 'C:/recycle',
+    })
+    const msg = await toastAfter('clearCache')
+    expect(msg).toContain('已清理')
+    expect(msg).not.toContain('没删掉')
   })
 })

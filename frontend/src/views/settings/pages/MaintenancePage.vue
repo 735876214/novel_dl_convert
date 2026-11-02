@@ -157,6 +157,12 @@ function rebuild(): Promise<void> {
 function clearCache(): Promise<void> {
   return run('cache', '清空缓存', async () => {
     const r = await api.clearCache()
+    // ⚠️ 第 256 期：**没删掉的必须说出来**（此前静默跳过 ⇒ 用户以为清干净了，
+    // 缓存目录却越攒越多）。与回收站那条同一口径（第 141 期）。
+    const failed = r.failed ?? []
+    if (failed.length) {
+      return `已清理 ${r.removed} 项，但**${failed.length} 项没删掉**（仍在盘上）：${failed.slice(0, 3).join('；')}`
+    }
     return `已清理缓存 ${r.removed} 项（回收站已保留）`
   })
 }
@@ -215,6 +221,12 @@ function clearRecycle(): Promise<void> {
     const r = await api.clearRecycle()
     // ⚠️ 第 251 期：计数是**条目**（文件 + 目录）—— 回收站里确实会有目录
     // （`core/publish.py` 的 `recycle()` 用 `shutil.move`，删库时回收整个目录）。
+    // ⚠️ 第 256 期：**没删掉的必须说出来**（后端第 141 期就给了 `failed`，
+    // 但前端一直没读 ⇒ 回收站里还剩东西，界面却只说「已清空」）。
+    const failed = r.failed ?? []
+    if (failed.length) {
+      return `已删除 ${r.removed} 个条目、释放 ${fmtBytes(r.freed)}，但**${failed.length} 个没删掉**（仍在盘上）：${failed.slice(0, 3).join('；')}`
+    }
     return `已清空回收站：删除 ${r.removed} 个条目，释放 ${fmtBytes(r.freed)}（台账 ${r.ledger_cleared} 条）`
   })
 }

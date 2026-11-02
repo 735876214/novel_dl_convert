@@ -6429,7 +6429,19 @@ export const api = {
     }),
 
   clearCache: () =>
-    request<{ ok: boolean; removed: number; preserved?: string }>('/api/cache/clear', { method: 'POST' }),
+    request<{
+      ok: boolean
+      removed: number
+      /**
+       * **没删掉的**条目（`名字: 原因`）—— 第 256 期。
+       *
+       * ⚠️ 此前删不掉的文件被**静默跳过**，回执照旧说「已清理 N 项」
+       * ⇒ 用户以为清干净了，缓存目录却**越攒越多**。
+       * ⇒ 与回收站那条**同一口径**（第 141 期）：删不掉的**必须说**。
+       */
+      failed?: string[]
+      preserved?: string
+    }>('/api/cache/clear', { method: 'POST' }),
 
   // ---------- 维护 ----------
   maintenance: () => request<MaintenanceInfo>('/api/maintenance'),
@@ -6443,10 +6455,17 @@ export const api = {
 
   /** 清空回收站 —— **真删，不可恢复**（第 81 期：同批清掉回收台账，`ledger_cleared` 是条数） */
   clearRecycle: () =>
-    request<{ ok: boolean; removed: number; freed: number; ledger_cleared: number }>(
-      '/api/maintenance/recycle/clear',
-      { method: 'POST' },
-    ),
+    request<{
+      ok: boolean
+      removed: number
+      freed: number
+      ledger_cleared: number
+      /**
+       * **没删掉的**条目（`名字: 原因`）—— 第 141 期就有，但前端**一直没读它**
+       * ⇒ 回收站里还剩东西，界面却只说「已清空、释放 N B」（第 256 期补）。
+       */
+      failed?: string[]
+    }>('/api/maintenance/recycle/clear', { method: 'POST' }),
 
   // ---------- 高级：config.yaml 原文 ----------
   getRawConfig: () => request<RawConfig>('/api/config/raw'),
