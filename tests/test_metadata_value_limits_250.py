@@ -128,3 +128,14 @@ def test_元数据详情会下发逐字段上限(client, auth_headers, isolated,
     limits = r.json()["limits"]
     assert limits["title"] == db._FIELD_MAX_LEN["title"], limits
     assert limits["author"] == db._FIELD_MAX_LEN["author"], limits
+
+
+def test_抓取值超长时回执要如实列出_skipped_long(isolated):
+    """⚠️ 第 250 期：跳过 ≠ 已写入 ⇒ 回执必须说清「哪个字段没写进去」。
+
+    否则界面说「已写入」而库里没有 —— 那正是「写下了 ≠ 用户看得见」的老形态。
+    """
+    # 直接测 db 层与 metafetch 的接线：超长的在线值被跳过，且**被如实列出**。
+    skipped = db.set_online("lib$x$b1", {"title": ("长" * 5000, "src")})
+    assert skipped == ["title"], skipped
+    assert db.get_online("lib$x$b1") == {}

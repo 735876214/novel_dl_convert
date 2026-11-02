@@ -676,10 +676,16 @@ def apply(items: list, cfg: dict = None) -> dict:
             # 一个「上锁之前渲染的」预览页 —— 这里再挡一道，锁的语义才不会被过期页面绕过。
             locked = db.get_locks(bid)
             blocked = sorted(k for k in updates if k in locked)
+            # ⚠️ 第 250 期：**超长被跳过的字段**（与「被锁」是两回事）：
+            #   · 被锁 ⇒ 用户要求保护 ⇒ **报错**（不写）；
+            #   · 超长 ⇒ 写不进去 ⇒ **跳过**并如实回报（不能因它把整次抓取判失败）。
+            skipped_long: list = []
             updates = {k: v for k, v in updates.items() if k not in locked}
             # 在线值只记服务端（供展示与「恢复在线」回退），不下写文件
             if updates:
-                db.set_online(bid, {k: (v, "") for k, v in updates.items()})
+                # ⚠️ 第 250 期：长度超限的字段会被**跳过**（不能因一家站点返回异常值
+                # 就毁掉整次抓取）⇒ 必须**如实回报**，否则回执说「已写入」而库里没有。
+                skipped_long += db.set_online(bid, {k: (v, "") for k, v in updates.items()})
 
             # 第 35 期：自定义字段走**另一张表**（book_custom_values），按定义的类型校验后写入。
             # 与元数据字段的区别：空串对自定义字段是**有意义的**（= 用户显式清空，
@@ -728,6 +734,9 @@ def apply(items: list, cfg: dict = None) -> dict:
         # 但对调用方来说「这本书的这些字段写进去了」是同一件事）
         row = {"name": name, "fields": sorted([*updates.keys(), *cust.keys()]),
                "cover": has_cover}
+        if skipped_long:
+            # ⚠️ 第 250 期：超长没写进去的字段**要如实列出**（否则回执说「已写入」而库里没有）。
+            row["skipped_long"] = sorted(set(skipped_long))
         if cover_error:
             row["cover_error"] = cover_error
         applied.append(row)

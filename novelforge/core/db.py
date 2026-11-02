@@ -5824,10 +5824,18 @@ def all_overrides() -> dict:
     return out
 
 
-def set_online(book_id, fields) -> None:
-    """批量写入在线抓取值：``fields`` 为 ``{field: (value, source)}``。空值跳过。"""
+def set_online(book_id, fields) -> list:
+    """批量写入在线抓取值：``fields`` 为 ``{field: (value, source)}``。空值跳过。
+
+    返回**被跳过的字段名**列表（⚠️ 第 250 期：长度超限的字段）。
+
+    ⚠️ 为什么要有返回值：超长的字段被跳过后，调用方**必须如实回报**
+    （「这个字段太长，没写进去」），否则回执会说「已写入」而库里没有 ——
+    那正是「写下了 ≠ 用户看得见」的老形态。
+    """
     bid = str(book_id)
     now = time.time()
+    skipped: list = []
     c = _connect()
     with _lock:
         for f, (val, src) in (fields or {}).items():
@@ -5839,6 +5847,7 @@ def set_online(book_id, fields) -> None:
             # ⚠️ 处置与用户写入**故意不同**：这里**跳过该字段**而不是抛错 ——
             # 一家返回异常值不该毁掉整次抓取（其它字段照写）。
             if _too_long(f, v):
+                skipped.append(str(f))
                 continue
             c.execute(
                 "INSERT INTO meta_online(book_id, field, value, source, fetched_at) VALUES(?,?,?,?,?) "
@@ -5847,6 +5856,7 @@ def set_online(book_id, fields) -> None:
                 (bid, str(f), v, str(src or ""), now),
             )
         c.commit()
+    return skipped
 
 
 def get_online(book_id) -> dict:
