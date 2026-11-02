@@ -28,10 +28,34 @@ for p in list(d.rglob("*")):
 from __future__ import annotations
 
 import pathlib
+import shutil
+
+import pytest
 
 from novelforge.core import fileops, publish
 
 API_CLEAR = "/api/maintenance/recycle/clear"
+
+
+@pytest.fixture(autouse=True)
+def _clean_recycle():
+    """每个用例前后把回收目录清空（含**目录**）。
+
+    ⚠️ 回收目录是**整个测试会话共用**的（`isolated` 只隔离目录树）⇒ 留下的东西
+    会被别的用例的「删掉 N 个、留 M 个」断言带跑。
+    """
+    d = fileops.recycle_dir()
+    for p in sorted(d.rglob("*"), reverse=True):
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+        elif p.is_file():
+            p.unlink()
+    yield
+    for p in sorted(d.rglob("*"), reverse=True):
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+        elif p.is_file():
+            p.unlink()
 
 
 def _put_back_dir(name: str = "一个目录") -> pathlib.Path:

@@ -13,6 +13,7 @@
 """
 import asyncio
 import pathlib
+import shutil
 import socket
 
 import pytest
@@ -78,8 +79,13 @@ def test_清空回收站有删不掉的文件时保留台账(client, auth_header
     d.mkdir(parents=True, exist_ok=True)
     # 回收站目录是**整个测试会话共用**的（`isolated` 只隔离目录树）—— 别的用例留下的文件
     # 会把 `removed` 计数带跑，这里先清干净，让「删掉 1 个、留 1 个」成为唯一可能的事实。
-    for leftover in list(d.rglob("*")):
-        if leftover.is_file():
+    for leftover in sorted(d.rglob("*"), reverse=True):
+        # ⚠️ 第 251 期：**目录也要清**（此前只清文件）—— 清空端点现在按顶层条目处理
+        # （目录走 rmtree），别的用例留在回收站里的**目录**会被一起算进 `removed`
+        # ⇒ 这里不清干净就会把本用例的「删掉 1 个、留 1 个」带跑。
+        if leftover.is_dir():
+            shutil.rmtree(leftover, ignore_errors=True)
+        elif leftover.is_file():
             leftover.unlink()
     good, bad = d / "能删.txt", d / "删不掉.txt"
     good.write_text("a", encoding="utf-8")
