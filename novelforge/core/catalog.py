@@ -1307,7 +1307,15 @@ def books_of(lib: dict, limit: int = 0, offset: int = 0) -> list:
         seen_dirty = _dirty.get(lid, 0)
         seen_seq = _dirty_all_seq
     fresh_enough = not _needs_refresh(lid)
-    key = cache.book_list_key(lid)
+    # ⚠️ 第 244 期：分页与全量**共用一个键**会让两者互相污染 ——
+    # 分页那次只把「一页」写进 `book:list:{lid}`（键只含库 id，不含 limit/offset），
+    # 之后任何**不分页**的读命中它 ⇒ 把 30 本当成全库返回（侧栏 / 统计 / 第三方）。
+    # 反向同理（第二页写进去的是「第 121–150 本」）。不报错、不为空，就是「少了一截」，
+    # 最多 TTL_LIST=120s 或下一次写操作才自愈。
+    # 判据：**键的语义是「该库的全量书目」**，分页结果是另一个语义 ⇒ 分页既不读也不写它。
+    # （分页本来也不该吃全量缓存：命中 2309 条再切 30 条，比直接读索引更贵。）
+    paged = bool(limit or offset)
+    key = "" if paged else cache.book_list_key(lid)
     hit = cache.get_json(key) if key else None
     if hit is not None:
         # ⚠️ 命中也要登记，否则这条键对 `_drop_list(None)` 是隐形的：`_cached_libs`

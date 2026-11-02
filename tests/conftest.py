@@ -703,3 +703,39 @@ def make_library(isolated) -> "callable":  # noqa: ARG001
         return lib
 
     return _make
+
+
+@pytest.fixture
+def fake_redis(monkeypatch) -> dict:
+    """把缓存层换成**进程内 dict** —— 模拟「配了 Redis」的部署。
+
+    ⚠️ 为什么需要它（第 244 期）：默认部署**不配** Redis（`core/cache.py` 的文件头
+    明说「不设连接串 ⇒ 整个模块是空操作」）⇒ **缓存类缺陷在离线环境根本观测不到**，
+    用例会恒绿（假绿）：「缓存键串了」「缓存没失效」「两个语义共用一个键」这几类
+    真实缺陷，pytest 一个都抓不到。
+
+    这里把 `cache._get/_set/_del` 换成一个进程内 dict —— 键空间、TTL 语义都与真
+    Redis 一致地**够用**（TTL 不模拟：缓存类缺陷的判据是「有没有串 / 有没有失效」，
+    不是「过没过期」）。
+
+    **唯一实现**：两个用例文件（`test_paged_cache_isolation_244.py`、
+    `test_calibre_import_229.py`）都从这里取，别再各写一份。
+    """
+    from novelforge.core import cache as cache_mod
+
+    store: dict = {}
+
+    def _get(key: str):
+        return store.get(key)
+
+    def _set(key: str, data, ttl: int) -> None:
+        store[key] = data
+
+    def _del(*keys: str) -> None:
+        for k in keys:
+            store.pop(k, None)
+
+    monkeypatch.setattr(cache_mod, "_get", _get)
+    monkeypatch.setattr(cache_mod, "_set", _set)
+    monkeypatch.setattr(cache_mod, "_del", _del)
+    return store
