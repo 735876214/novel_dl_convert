@@ -9839,11 +9839,20 @@ def api_clear_cache():
     回收站一起删掉。而「重复书籍 / 缺失资源」两个工具页明确向用户承诺
     「不是真删，移入回收目录，随时可以人工找回」，清一次缓存就把这个承诺作废了。
     那属于数据丢失，不属于缓存清理，因此这里显式跳过。
+
+    ⚠️ 第 256 期：**删不掉的必须如实回报**（与回收站那条**同一口径** ——
+    第 141 期专门修过它：「说清空了却没清干净」比「没清干净」更坏）。
+    此前这里是「逐个 ``except Exception: continue`` + 外层 ``except: pass``」⇒
+    一个权限问题（容器里 root 建的只读文件、NFS 上的 busy 文件）就让文件留在盘上，
+    而回执照旧说「已清理缓存 N 项」⇒ **用户永远不知道缓存里还剩东西**
+    ⇒ 缓存目录会**越攒越多**（而用户以为每次都清干净了）。
+    ⇒ 现在回执带 ``failed``（删不掉的条目 + 原因），有残留时 ``ok=False``。
     """
     removed = 0
+    failed: list = []
     recycle = fileops.recycle_dir()
     try:
-        for f in config.CACHE_DIR.iterdir():
+        for f in list(config.CACHE_DIR.iterdir()):
             try:
                 if f.resolve() == recycle.resolve():
                     continue          # 回收站保留，它有自己的清理入口（/api/maintenance/recycle/clear）
@@ -9852,11 +9861,21 @@ def api_clear_cache():
                 else:
                     f.unlink()
                 removed += 1
-            except Exception:
+            except OSError as e:
+                failed.append(f"{f.name}: {e.strerror or e}")
                 continue
-    except Exception:
-        pass
-    return {"ok": True, "removed": removed, "preserved": str(recycle)}
+    except OSError as e:
+        # 连目录都读不出来（权限 / 已被挪走）⇒ 也要说，不能装作清完了
+        failed.append(f"{config.CACHE_DIR}: {e.strerror or e}")
+    if failed:
+        activity_log.log(activity_log.ACTION_RECYCLE, "缓存", activity_log.STATUS_FAIL,
+                         output="; ".join(failed[:5]),
+                         detail=f"清空缓存：删除 {removed} 项，**{len(failed)} 项没删掉**："
+                                f"{'; '.join(failed[:3])}",
+                         source="api")
+        return {"ok": False, "removed": removed, "failed": failed,
+                "preserved": str(recycle)}
+    return {"ok": True, "removed": removed, "failed": [], "preserved": str(recycle)}
 
 
 # ---------------- 维护页（对应上游 Maintenance 页）----------------
@@ -9984,7 +10003,12 @@ def api_clear_recycle():
                      detail=f"清空回收站：删除 {removed} 个条目，释放 {_human_size(freed)}"
                             f"（台账清掉 {cleared} 条）",
                      source="api")
-    return {"ok": True, "removed": removed, "freed": freed, "ledger_cleared": cleared}
+    return {"ok": True, "removed": removed, "freed": freed, "ledger_cleared": cleared,
+            # ⚠️ 第 256 期：**成功时也带 `failed`**（空列表）——
+            # 此前只有失败分支才带这个键 ⇒ 响应**形状**随结果变
+            # （前端要么 `?? []` 兜，要么读到一个 undefined）。
+            # ⇒ 形状**恒定**，前端只读一处判据。
+            "failed": []}
 
 
 # ---------------- 回收站还原（第 81 期）----------------
