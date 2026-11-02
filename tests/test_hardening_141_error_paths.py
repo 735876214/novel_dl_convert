@@ -129,19 +129,23 @@ def test_库根消失时刷新报告带原因(isolated, make_library, tmp_path):
 
 # ---------------- ④ 配置与健康检查说真话 ----------------
 
-def test_健康检查有真探针格式(client):
-    body = client.get("/health").json()
+def test_健康检查有真探针格式(client, auth_headers):
+    """⚠️ 第 258 期：`checks` 明细在**鉴权后**的 `GET /api/health`
+    （免鉴权的那份只给状态 / 版本 / 有几条问题）。"""
+    body = client.get("/api/health", headers=auth_headers).json()
     assert body["status"] in ("ok", "degraded"), body
     for k in ("db", "config_dir_writable", "watcher_running", "dirs_ok", "config_yaml"):
         assert k in body["checks"], body["checks"]
 
 
-def test_库连不上时健康检查回503(client, monkeypatch):
+def test_库连不上时健康检查回503(client, auth_headers, monkeypatch):
     monkeypatch.setattr(db, "ping", lambda: False)
     r = client.get("/health")
     assert r.status_code == 503
     assert r.json()["status"] == "down"
-    assert any("数据库" in p for p in r.json()["problems"])
+    # 人话清单在鉴权后的端点上（第 258 期）
+    d = client.get("/api/health", headers=auth_headers)
+    assert any("数据库" in p for p in d.json()["problems"]), d.json()
 
 
 def test_config_destroyed要能看见(client, auth_headers, isolated, monkeypatch, tmp_path):  # noqa: ARG001

@@ -179,7 +179,8 @@ def test_health_报出坏段(client, auth_headers, own_cfg):
     """
     _write(own_cfg, 'watcher: "abc"\n')
     config.load_config()
-    body = client.get("/health").json()
+    # ⚠️ 第 258 期：人话清单在**鉴权后**的端点上（免鉴权的那份只给条数）
+    body = client.get("/api/health", headers=auth_headers).json()
     assert any("watcher" in p for p in body["problems"]), body["problems"]
 
 

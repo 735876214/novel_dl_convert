@@ -21,7 +21,12 @@ from __future__ import annotations
 
 
 def _health(client, headers) -> dict:
-    r = client.get("/health", headers=headers)
+    """**鉴权后**的完整快照（第 258 期：`problems` 挪到了 `GET /api/health`）。
+
+    ⚠️ 免鉴权的 `/health` 现在**只给条数**（`problem_count`）——
+    人话清单带**绝对路径** ⇒ 不能给任何人（第 258 期）。
+    """
+    r = client.get("/api/health", headers=headers)
     assert r.status_code in (200, 503), r.text
     return r.json()
 

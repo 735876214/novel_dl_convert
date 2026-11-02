@@ -69,7 +69,7 @@ def test_compose_健康检查用_PORT():
 
 # ---------------- /health 的两条新真话 ----------------
 
-def test_设置文件读坏时_health_降级并说明原因():
+def test_设置文件读坏时_health_降级并说明原因(auth_headers):
     """设置覆盖层读不出来时服务照跑（按默认值），但 `/health` 必须报出来。
 
     第 144 期审计（部署面）：compose 里把 `/app/config` 换挂成目录、又按注释切 `user:` 之后，
@@ -82,7 +82,8 @@ def test_设置文件读坏时_health_降级并说明原因():
     orig = config.overrides_error
     try:
         config.overrides_error = lambda: ValueError("坏掉的 JSON")
-        body = client.get("/health").json()
+        # ⚠️ 第 258 期：`checks` / `problems` 在**鉴权后**的端点上
+        body = client.get("/api/health", headers=auth_headers).json()
     finally:
         config.overrides_error = orig
     assert body["checks"]["settings_readable"] is False
@@ -90,7 +91,7 @@ def test_设置文件读坏时_health_降级并说明原因():
     assert body["status"] == "degraded"
 
 
-def test_默认口令时_health_提醒改密码(client):
+def test_默认口令时_health_提醒改密码(client, auth_headers):
     """`AUTH_PIN` 缺省仍是 changeme —— 部署说明写着「务必改」，服务端就该自己报出来。
 
     用 conftest 的 `client` 夹具（它会建库、建表、种账号），不要自己 new 一个 TestClient：
@@ -101,7 +102,13 @@ def test_默认口令时_health_提醒改密码(client):
 
     try:
         db.set_pin(TEST_USER, db.DEFAULT_PIN)
-        body = client.get("/health").json()
+        # ⚠️ 第 258 期：`checks` / `problems` 在**鉴权后**的端点上
+        # ⚠️ **改口令会让旧票作废**（`auth.verify_token` 比 `_cred_version`）
+        # ⇒ 这里改完口令要**重新登录**拿新票，否则请求是 401。
+        r = client.post("/api/auth/login", json={"user": TEST_USER, "pin": db.DEFAULT_PIN})
+        assert r.status_code == 200, f"登录失败：{r.status_code} {r.text}"
+        body = client.get("/api/health",
+                          headers={"Authorization": f"Bearer {r.json()['token']}"}).json()
     finally:
         db.set_pin(TEST_USER, TEST_PIN)          # 复原，别把退避之外的登录态带坏
     assert body["checks"]["default_pin"] is False

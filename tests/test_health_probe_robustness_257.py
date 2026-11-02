@@ -34,29 +34,30 @@ def test_一个探针抛异常_端点照样回话(client, monkeypatch):
     r = client.get("/health")
     assert r.status_code in (200, 503), r.text
     body = r.json()
-    assert "status" in body and "checks" in body and "problems" in body, body
+    # ⚠️ 第 258 期：免鉴权的那份**只给条数**（`checks` / `problems` 在鉴权后的端点上）
+    assert "status" in body and "problem_count" in body, body
 
 
-def test_抛异常的探针降级成探不出(client, monkeypatch):
+def test_抛异常的探针降级成探不出(client, auth_headers, monkeypatch):
     """⚠️ 降级成「探不出」而不是「正常」——
     `default_pin` 的探针炸了却报「没人在用默认口令」，**恰恰掩盖了它本该报告的事**。"""
     monkeypatch.setattr(db, "ping", lambda: (_ for _ in ()).throw(RuntimeError("炸了")))
-    body = client.get("/health").json()
+    body = client.get("/api/health", headers=auth_headers).json()
     assert body["checks"]["db"] is False, body["checks"]
 
 
-def test_降级要留痕_说得出哪个探针坏了(client, monkeypatch):
+def test_降级要留痕_说得出哪个探针坏了(client, auth_headers, monkeypatch):
     """降级必须**看得见** —— 否则「探针炸了」会被伪装成「那项正常」。"""
     monkeypatch.setattr(db, "ping", lambda: (_ for _ in ()).throw(RuntimeError("炸了")))
-    body = client.get("/health").json()
+    body = client.get("/api/health", headers=auth_headers).json()
     assert any("探针" in p for p in body["problems"]), body["problems"]
     assert any("db" in p for p in body["problems"]), body["problems"]
 
 
-def test_一个探针坏_其余探针照旧回话(client, monkeypatch):
+def test_一个探针坏_其余探针照旧回话(client, auth_headers, monkeypatch):
     """一个坏了**不许**连累其余（否则一次异常就让全部信息都瞎了）。"""
     monkeypatch.setattr(cache, "health", lambda: (_ for _ in ()).throw(RuntimeError("炸了")))
-    body = client.get("/health").json()
+    body = client.get("/api/health", headers=auth_headers).json()
     # 其余探针的值照旧给（不是默认值）
     assert body["checks"]["db"] is True, body["checks"]
     assert body["checks"]["config_dir_writable"] is True, body["checks"]
@@ -71,10 +72,10 @@ def test_库连不上仍然是_503(client, monkeypatch):
     assert r.json()["status"] == "down"
 
 
-def test_探针坏了不等于_down(client, monkeypatch):
+def test_探针坏了不等于_down(client, auth_headers, monkeypatch):
     """探针**自己**炸了 ≠ 库连不上 ⇒ 不该报 `down`。"""
     monkeypatch.setattr(cache, "health", lambda: (_ for _ in ()).throw(RuntimeError("炸了")))
-    body = client.get("/health").json()
+    body = client.get("/api/health", headers=auth_headers).json()
     assert body["status"] != "down", body
     assert body["status"] == "degraded", body
 
