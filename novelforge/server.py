@@ -10611,6 +10611,12 @@ def ko_put_progress(request: Request, payload: dict = Body(...)):
         raise HTTPException(404, "文档不在书库索引里：请先在「设置 → KOReader」扫描书库")
     locator, percent = koreader.to_nf(payload)
     db.set_progress(row["book_id"], locator, percent)
+    # 第 240 期：顺手记一次设备同步（**不另存一份真值源** —— 设备信息就落在
+    # 「写进度」这条路径上，与进度同一时刻）。
+    db.touch_koreader_device(
+        str((payload or {}).get("device_id") or (payload or {}).get("device") or ""),
+        str((payload or {}).get("username") or ""),
+    )
     return {"document": doc, "timestamp": int(time.time())}
 
 
@@ -10648,6 +10654,8 @@ def api_koreader_status():
         "book_count": len(bs),
         # 第 197 期：文档索引里有、书库里已经没有的条目（重建索引会清掉）
         "unmatched_docs": sum(1 for d in docs if d.get("book_id") not in bs),
+        # 第 240 期：连过本服务器的设备数（只读展示，见 `/api/koreader/devices`）
+        "device_count": len(db.list_koreader_devices()),
     }
 
 
@@ -10673,6 +10681,51 @@ def api_koreader_save(payload: dict = Body(...)):
     except OSError as e:                     # 第 120 期：写不进去要如实报（别回 ok:true）
         raise HTTPException(500, f"设置写入失败：{e}")
     return {"ok": True}
+
+
+@app.post("/api/koreader/reset")
+def api_koreader_reset(payload: dict = Body(None)):
+    """**重置同步凭据**（第 240 期）：清 key + 自动关闭 + **进度数据不动**。
+
+    ⚠️ 这一步会**断开全部设备**（它们的 key 立刻失效）⇒ 必须让用户在界面上确认。
+    ⚠️ **进度数据不动**：设备的阅读进度在本项目里（``progress`` 表），换 key 不影响它；
+    把进度一起清掉是「重置凭据」不该做的事。
+    """
+    _confirm = bool((payload or {}).get("confirm"))
+    if not _confirm:
+        raise HTTPException(400, "重置会断开全部设备，请确认后重试")
+
+    def _merge(ov: dict) -> None:
+        cur = _ko_cfg()
+        ov["koreader"] = {
+            "enabled": False,
+            "username": str(cur.get("username") or "").strip() or "koreader",
+            "key": "",
+        }
+
+    try:
+        config.mutate_overrides(_merge)
+    except OSError as e:
+        raise HTTPException(500, f"设置写入失败：{e}")
+    return {"ok": True, "message": "已重置同步凭据；全部设备需要重新填密码。进度数据保留。"}
+
+
+@app.get("/api/koreader/devices")
+def api_koreader_devices():
+    """设备列表（只读）：**谁**在用这台服务器、最后一次同步是什么时候。
+
+    ⚠️ 数据来源是「写进度时顺手记的一行」（`koreader_devices`），**不是**另存一份
+    真值源 —— 与进度同一条路径、同一时刻。
+    """
+    out = []
+    for d in db.list_koreader_devices():
+        out.append({
+            "device_id": str(d.get("device_id") or ""),
+            "username": str(d.get("username") or ""),
+            "last_sync": float(d.get("last_sync") or 0),
+            "sync_count": int(d.get("sync_count") or 0),
+        })
+    return {"items": out}
 
 
 @app.post("/api/koreader/scan")

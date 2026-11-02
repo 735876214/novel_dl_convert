@@ -732,6 +732,8 @@ export interface KoreaderStatus {
   book_count: number
   /** 文档索引里有、书库里已经没有的条目（第 197 期；重建索引会清掉） */
   unmatched_docs: number
+  /** 连过本服务器的设备数（第 240 期；明细见 `koreaderDevices()`） */
+  device_count: number
 }
 
 /** 一本书的 KOReader 文档索引（`GET /api/koreader/docs`） */
@@ -1859,6 +1861,15 @@ export interface AnnotationOverview {
   weeks: number
   /** 最长的一段「连续无批注」周数，含最后一次批注到本周的空档 */
   longest_quiet_weeks: number
+}
+
+/** KOReader 设备（第 240 期）：只读展示。 */
+export interface KoreaderDevice {
+  device_id: string
+  username: string
+  /** 最后一次同步的时间（epoch 秒） */
+  last_sync: number
+  sync_count: number
 }
 
 /** TTS 状态（`GET /api/tts`，第 235 期）。 */
@@ -4862,6 +4873,17 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }),
+
+  /** 重置同步凭据（第 240 期）：清 key + 自动关闭 + **进度数据不动**。 */
+  resetKoreaderCredentials: () =>
+    request<{ ok: boolean; message: string }>('/api/koreader/reset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    }),
+
+  /** 设备列表（第 240 期，只读）：谁在用这台服务器、最后一次同步是什么时候。 */
+  koreaderDevices: () => request<{ items: KoreaderDevice[] }>('/api/koreader/devices'),
 
   /** 重建文档索引（为每本书算 partialMD5，KOReader 靠它认出是哪本） */
   koreaderScan: () =>

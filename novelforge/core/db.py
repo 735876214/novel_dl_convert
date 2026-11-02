@@ -637,6 +637,15 @@ def init():
             -- 偏好「模式」：具名的整套偏好快照。payload 是 JSON（块名 reader/pdf/comic/
             -- appearance/cover 由前端定义），后端只做**浅校验**（见 server._check_payload）——
             -- 偏好字段随功能演进，深校验会把两端耦死。
+            -- KOReader 设备（第 240 期）：进度同步时**顺手**记一行「哪台设备、什么时候」。
+            -- ⚠️ **不是另存一份真值源** —— 设备信息就落在「写进度」这条路径上，
+            -- 与进度同一行、同一时刻，不另开一张表（另开 = 两个真值源）。
+            CREATE TABLE IF NOT EXISTS koreader_devices (
+                device_id   TEXT PRIMARY KEY,
+                username    TEXT NOT NULL DEFAULT '',
+                last_sync   REAL NOT NULL DEFAULT 0,
+                sync_count  INTEGER NOT NULL DEFAULT 0
+            );
             CREATE TABLE IF NOT EXISTS pref_profiles (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 name       TEXT NOT NULL,
@@ -5119,6 +5128,40 @@ def delete_scope(scope_id) -> bool:
 # ---------------- KOReader 文档索引（document md5 → 书）----------------
 # KOReader 用 partialMD5 标识文档（见 core/koreader.py），本项目用 book_id。
 # 两边对不上就同步不了，所以需要一张映射表；扫描是幂等的，故用整表重建。
+
+def touch_koreader_device(device_id: str, username: str = "") -> None:
+    """记一次 KOReader 设备同步（**顺手**落在写进度那条路径上）。
+
+    ⚠️ 同一次同步**只记一行设备**（按 `device_id` upsert），不按书记 ——
+    设备列表是「有哪些设备在用这台服务器」，不是「每本书每台设备一行」。
+    """
+    did = str(device_id or "").strip()
+    if not did:
+        return
+    now = time.time()
+    c = _connect()
+    with _lock:
+        c.execute(
+            "INSERT INTO koreader_devices(device_id, username, last_sync, sync_count) "
+            "VALUES(?,?,?,1) "
+            "ON CONFLICT(device_id) DO UPDATE SET "
+            "  last_sync=excluded.last_sync, "
+            "  sync_count=koreader_devices.sync_count+1, "
+            "  username=CASE WHEN excluded.username<>'' THEN excluded.username "
+            "              ELSE koreader_devices.username END",
+            (did, str(username or ""), now),
+        )
+        c.commit()
+
+
+def list_koreader_devices() -> list:
+    """设备列表（最近同步的在前）。"""
+    rows = _connect().execute(
+        "SELECT device_id, username, last_sync, sync_count FROM koreader_devices "
+        "ORDER BY last_sync DESC, device_id"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
 
 def list_koreader_docs() -> list:
     rows = _connect().execute(

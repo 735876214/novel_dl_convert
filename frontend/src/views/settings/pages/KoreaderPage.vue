@@ -4,7 +4,8 @@ import { computed, onMounted, ref } from 'vue'
 import Badge from '@/components/ui/Badge.vue'
 import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
-import { api, type KoreaderDoc, type KoreaderStatus } from '@/lib/api'
+import { api, type KoreaderDevice, type KoreaderDoc, type KoreaderStatus } from '@/lib/api'
+import { localDate } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 
@@ -29,6 +30,8 @@ const busy = ref(false)
 const error = ref('')
 
 const username = ref('')
+/** 设备列表（第 240 期）：只读。 */
+const devices = ref<KoreaderDevice[]>([])
 const password = ref('')
 
 const endpoint = computed(() => `${window.location.origin}/koreader`)
@@ -41,6 +44,7 @@ async function load(): Promise<void> {
     st.value = await api.koreaderStatus()
     username.value = st.value.username
     docs.value = (await api.koreaderDocs()).items
+    devices.value = (await api.koreaderDevices()).items
   } catch (e) {
     st.value = null
     docs.value = []
@@ -104,6 +108,33 @@ async function scan(): Promise<void> {
     ui.toast(e instanceof Error ? e.message : '扫描失败')
   } finally {
     busy.value = false
+  }
+}
+
+/**
+ * 重置同步凭据（第 240 期）：清 key + 自动关闭 + **进度数据不动**。
+ *
+ * ⚠️ 这一步会**断开全部设备** ⇒ 必须先弹确认框说清后果，不能一点就执行。
+ */
+const resetting = ref(false)
+
+async function resetCredentials(): Promise<void> {
+  if (resetting.value) return
+  if (!window.confirm(
+    '重置同步凭据会让全部已连接的设备立刻断开（它们的同步密码不再有效）。\n'
+    + '设备需要重新填写同步密码才能继续同步。\n'
+    + '已经同步过来的阅读进度会保留。\n\n'
+    + '确定要重置吗？',
+  )) return
+  resetting.value = true
+  try {
+    const r = await api.resetKoreaderCredentials()
+    await load()
+    ui.toast(r.message || '已重置同步凭据')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '重置失败')
+  } finally {
+    resetting.value = false
   }
 }
 
@@ -209,7 +240,39 @@ async function copyEndpoint(): Promise<void> {
           KOReader 用 <b>partialMD5</b>（只采样 12 个点，不是整文件 MD5）标识文档，本项目用文件名派生的 id，
           两边需要一张对照表。改动书库后请重新扫描。
         </div>
-        <Button size="sm" :disabled="busy" @click="scan">{{ busy ? '处理中…' : '扫描书库' }}</Button>
+        <div class="flex flex-wrap items-center gap-2">
+          <Button size="sm" :disabled="busy" @click="scan">{{ busy ? '处理中…' : '扫描书库' }}</Button>
+          <!-- 重置凭据（第 240 期）：会断开全部设备 ⇒ 弹确认说清后果 -->
+          <Button
+            size="sm"
+            variant="ghost"
+            data-koreader-act="reset"
+            :disabled="resetting || !st?.has_key"
+            title="清掉同步密码并关闭互通（已同步的进度保留；设备需重新填密码）"
+            @click="resetCredentials"
+          >
+            {{ resetting ? '重置中…' : '重置同步凭据' }}
+          </Button>
+        </div>
+
+        <!-- 设备列表（第 240 期）：只读展示「谁在用这台服务器」 -->
+        <div v-if="devices.length" class="mt-3">
+          <div class="mb-1.5 text-[12px] font-medium text-foreground">
+            已连接的设备（{{ devices.length }}）
+          </div>
+          <div
+            v-for="d in devices"
+            :key="d.device_id"
+            class="flex flex-wrap items-center gap-2 border-b border-border/60 py-1.5 text-[11.5px] last:border-b-0"
+          >
+            <span class="font-mono text-foreground">{{ d.device_id || '（未带设备名）' }}</span>
+            <span v-if="d.username" class="text-muted-foreground">· {{ d.username }}</span>
+            <span class="text-muted-foreground">
+              · 同步 {{ d.sync_count }} 次
+              <template v-if="d.last_sync">· 最后 {{ localDate(new Date(d.last_sync * 1000)) }}</template>
+            </span>
+          </div>
+        </div>
 
         <div v-if="docs.length" class="mt-3 max-h-[280px] overflow-auto rounded-md border border-border">
           <table class="w-full text-[11.5px]">
