@@ -15,10 +15,16 @@
 ⚠️ 这是「封面缩略」的**唯一实现**：`server._cover_cached` 是唯一调用方。别在端点里
 再抄一份 ``Image.open``（本项目已有 ``komga_api`` 的「转 JPEG」那一段，它做的是**格式转换**
 不是缩放，两者的判据不同，刻意不合并 —— 合并会让漫画页转码跟着受缩略图策略影响）。
+
+**第 248 期**：解码前的**像素闸**与「透明像素铺白底」都挪到了 `core/imaging.py` ——
+它们是**图片处理的通用判据**（上传验图、Komga 转码也要用），放在这里就变成了第二份实现。
+本模块仍然只管「缩到多宽、编成什么格式」。
 """
 from __future__ import annotations
 
 import io
+
+from . import imaging
 
 #: 允许的宽度区间。低于 64 看不清、高于 1024 就比原始封面还费流量。
 MIN_WIDTH = 64
@@ -69,7 +75,11 @@ def resize_image(data: bytes, width: int) -> bytes:
     except Exception:                                   # noqa: BLE001 —— 没装 Pillow 就退回原图
         return data
     try:
-        with Image.open(io.BytesIO(data)) as im:
+        # ⚠️ 走 `imaging.open_image`（像素闸）：封面是**外部内容**，而纯色大图压缩率极高
+        # （实测 12000×12000 的 PNG 只有 450 KB，真解码要 411 MB）⇒ 必须有解码前的闸。
+        # 超限时它抛 `TooManyPixels`，被下面兜住 ⇒ **仍然原样返回原图**（缩略图是优化，
+        # 不是可用性前提 —— 见模块头第 12 行）。
+        with imaging.open_image(data) as im:
             if im.width <= w and len(data) <= REENCODE_OVER:
                 return data                             # 真的够小：不放大、不重编码
             # ⚠️ EXIF 方向（第 213 期审计）：浏览器显示 JPEG 时会按 `Orientation` 自动旋转，
@@ -79,7 +89,7 @@ def resize_image(data: bytes, width: int) -> bytes:
             im = ImageOps.exif_transpose(im)
             target = min(w, im.width)                   # 窄图不放大，只重压
             height = max(1, round(im.height * (target / im.width)))
-            thumb = _flatten(im).resize((target, height), Image.LANCZOS)
+            thumb = imaging.flatten(im).resize((target, height), Image.LANCZOS)
             buf = io.BytesIO()
             # `method=6` 是最慢也最小的一档：缩略图只算一次、之后进缓存，值得这点 CPU
             thumb.save(buf, "WEBP", quality=QUALITY, method=6)
@@ -88,21 +98,3 @@ def resize_image(data: bytes, width: int) -> bytes:
             return out if len(out) < len(data) else data
     except Exception:                                   # noqa: BLE001 —— 坏图 / 不认识的格式
         return data
-
-
-def _flatten(im) -> "object":
-    """带透明的图**铺白底**再交给编码器；其余直接转 RGB。
-
-    ⚠️ 不能只 `convert("RGB")`：那一步只是**丢掉 alpha 通道**，透明像素的 RGB 通常是
-    (0,0,0) ⇒ 缩略图整片发黑（模块头注释里那条「封面变黑」说的就是它）。第 208 期之前
-    这里确实写成了 `convert("RGB")` —— 判据与注释不一致，属于「注释比代码诚实」的反例。
-    """
-    from PIL import Image
-
-    has_alpha = im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
-    if not has_alpha:
-        return im if im.mode == "RGB" else im.convert("RGB")
-    rgba = im.convert("RGBA")
-    bg = Image.new("RGB", rgba.size, (255, 255, 255))
-    bg.paste(rgba, mask=rgba.getchannel("A"))
-    return bg

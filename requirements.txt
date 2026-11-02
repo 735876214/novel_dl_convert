@@ -2,6 +2,15 @@ ebooklib>=0.18
 httpx>=0.27
 pyyaml>=6.0
 opencc-python-reimplemented>=0.1.7
+# 图片处理（第 248 期）：四个用途 —— 封面缩略图（`core/thumbs.py`，WebP 重编码）、
+# 封面上传验图（`server._validate_cover_upload`）、PDF 页渲染（`core/pdfrender.py` 经
+# `pypdfium2` 的 `to_pil()`）、Komga 页面转 JPEG（`core/komga_api.py`）。
+# 判据**只有一处**：`core/imaging.py`（能力上报 / 解码像素闸 / alpha 铺白底）。
+# 它**不是硬依赖**：缺了由 `imaging.state()` 如实标 `available:false`，能力接口与
+# `/health` 都会报出来，缺能力的路径回 **503 说清缺什么**（不是 404「页不存在」
+# 那种假象）。纯 wheel，无系统库依赖。
+# ⚠️ 体积不小（约 23 MB，wheel 自带 libjpeg/libwebp）—— 但这四项能力没有替代品，
+# 且缩略图是真省流量的（第 208 期实测真机 8 张书封 −84% 体积）。
 Pillow>=10.0
 fastapi>=0.110
 uvicorn>=0.29

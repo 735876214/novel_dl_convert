@@ -37,6 +37,7 @@ from .core import backup                          # 备份/轮转（第 143 期�
 from .core import landing                          # 第 93 期：源站内容落到「这本书自己」上
 from .core import zipkind                        # 第 87 期：容器展开
 from .core import thumbs                         # 第 152 期：封面缩略（?w=）
+from .core import imaging                       # 第 248 期：图片处理的通用判据（能力 / 像素闸 / alpha）
 from .core import watcher as watcher_mod
 from .core import (db, stats, auth as auth_mod, achievements, activity, recommend,
                    fonts, comics, audio, opds, koreader, integrations, sync,
@@ -980,6 +981,8 @@ def _health_checks() -> dict:
         "settings_readable": overrides_err is None,
         # 第 144 期：默认口令还在用（局域网 8992 直通，等于口令公开）。
         "default_pin": not auth_mod.uses_default_pin(),
+        # 第 248 期：Pillow 在不在（缺它 ⇒ 封面缩略 / 上传验图 / PDF 页渲染不可用）。
+        "pillow": imaging.available(),
     }
     problems = []
     if not checks["db"]:
@@ -997,6 +1000,12 @@ def _health_checks() -> dict:
             f"设置覆盖层（settings.json）读不出来，当前所有设置都按默认值运行：{overrides_err}")
     if not checks["default_pin"]:
         problems.append("仍在使用初始口令 changeme —— 请到「设置 → 个人资料」改掉")
+    # ⚠️ 第 248 期：缺 Pillow 属于「能服务但有毛病」⇒ 进 `problems` 而**不是** 503 ——
+    # 重启容器不会装上 Pillow，回 503 只会让 compose 无限重启，把能读的服务变成一直重启的服务
+    # （口径同本函数开头那段：只有「库连不上」才 503）。封面缩略 / 上传验图 / PDF 页渲染
+    # 三件事会不可用，但书架、阅读、元数据都不受影响。
+    if not checks["pillow"]:
+        problems.append(imaging.REASON + "（封面缩略图、封面上传校验、PDF 页渲染不可用）")
     return {"checks": checks, "problems": problems}
 
 
@@ -1605,7 +1614,8 @@ async def api_toc_probe(payload: dict = Body(None)):
 
 @app.get("/api/sources/capabilities")
 def api_sources_capabilities(refresh: bool = Query(False)):
-    """运行环境能力：**哪些可选依赖真的在** —— Node（JS 解密）/ lxml（XPath）/ regex（正则超时）。
+    """运行环境能力：**哪些可选依赖真的在** —— Node（JS 解密）/ lxml（XPath）/ regex（正则超时）
+    / Pillow（图片处理）。
 
     ⚠️ 为什么值得单独一个接口：Docker 镜像自带 Node（多阶段构建 + `NODE_BIN`），
     但**NAS / 手工部署未必有** —— 而 `NODE_BIN` 默认是 `"node"`。
@@ -1614,20 +1624,28 @@ def api_sources_capabilities(refresh: bool = Query(False)):
 
     同理：**缺 `regex` 时执行期正则就没有超时保护**（只剩长度兜底），缺 `lxml` 时
     XPath 取不到值 —— 两者都**如实报**，不因为「有兜底」就冒充安全（第 94 期阶段 4c）。
+
+    ⚠️ **Pillow 是第 248 期加的**：缺它时封面缩略图 / 上传验图 / PDF 页渲染都不工作，
+    而此前这三条全是**静默降级**（用户拿到原图、或收到「不是可识别的图片文件」这种
+    假错误）。现在如实报出来，界面可以提前说「这台服务器没有图片处理能力」。
     """
     st = network_mod.node_state(refresh=bool(refresh))
     reg = saferegex.state()
     lxml_ok = source_rules.lxml_available()
     js = network_mod.js_engine()
+    pil = imaging.state()
     hints = {
         "node": "" if st.get("available") else (st.get("reason") or "需要 Node 才能运行解密脚本"),
         "regex": reg["reason"],
         "lxml": "" if lxml_ok else "未安装 lxml ⇒ XPath 规则取不到值（`pip install lxml`）",
         # 沙箱可用时 `reason` 为空；不可用时那句话必须能直接显示给用户
         "js": js["reason"],
+        # 同款：可用时为空串，不可用时是能直接显示的一句话（第 248 期）
+        "pillow": pil["reason"],
     }
     return {"node": st, "regex": reg, "lxml": {"available": lxml_ok, "reason": hints["lxml"]},
             "js": js,
+            "pillow": pil,
             "decrypt": bool(st.get("available")),
             "hints": hints,
             # 旧字段保留（既有前端与 `tests/test_js_node.py` 钉着它）
@@ -4857,16 +4875,26 @@ def _validate_cover_upload(data: bytes) -> str:
 
     只认 Pillow 能解开的光栅图 —— 伪造成 `.jpg` 的任意字节会在这里被拦下，
     而不是等到浏览器 `<img>` 解码失败才暴露。
+
+    ⚠️ **第 248 期：三种失败必须分得开**（此前一律回 400「不是可识别的图片文件」，
+    那在缺 Pillow 的机器上是**说谎** —— 用户的图没问题，是这台服务器少装了一个包）：
+
+    - 缺 Pillow ⇒ **503** + 「服务器缺少图片处理能力（需 Pillow）」（能力缺失）；
+    - 像素数超限 ⇒ **413**（解压炸弹，与「超过 8MB 上限」同类：内容太大，装不下）；
+    - 真的是坏图 ⇒ **400**「不是可识别的图片文件」。
     """
     if not data:
         raise HTTPException(400, "封面文件为空")
     if len(data) > _COVER_UPLOAD_MAX:
         raise HTTPException(413, "封面超过 8MB 上限")
     try:
-        from PIL import Image
-        with Image.open(io.BytesIO(data)) as im:
+        with imaging.open_image(data) as im:
             fmt = (im.format or "").upper()
             im.verify()
+    except imaging.MissingPillow as e:
+        raise HTTPException(503, str(e)) from None
+    except imaging.TooManyPixels as e:
+        raise HTTPException(413, f"封面尺寸过大：{e}") from None
     except HTTPException:
         raise
     except Exception:
@@ -11696,7 +11724,13 @@ def ko_book_pages(request: Request, book_id: str):
 def ko_book_page(request: Request, book_id: str, number: int, convert: str = ""):
     _komga_guard(request)
     b = _ko_book(request, book_id) or _ko_404("书不存在")
-    data, media = komga_api.page_image(b, number, convert)
+    try:
+        data, media = komga_api.page_image(b, number, convert)
+    except imaging.MissingPillow as e:
+        # ⚠️ 第 248 期：缺 Pillow ⇒ **503** 说清缺什么，而不是 404「页不存在」。
+        # PDF 页要经 `pypdfium2.to_pil()` —— 那需要 Pillow；没有它就是**这台服务器**
+        # 没有图片处理能力，页其实是在的。回 404 会让客户端以为「这本书没有这一页」。
+        raise HTTPException(503, str(e)) from None
     if not data:
         _ko_404("页不存在")
     return _media_bytes(data, media)

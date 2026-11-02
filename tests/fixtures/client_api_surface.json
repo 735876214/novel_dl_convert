@@ -139,6 +139,7 @@
     "checks.db",
     "checks.default_pin",
     "checks.dirs_ok",
+    "checks.pillow",
     "checks.settings_readable",
     "checks.watcher_running",
     "input",

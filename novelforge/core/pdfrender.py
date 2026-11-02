@@ -15,7 +15,7 @@ import io
 import pathlib
 
 from .. import config          # ⚠️ config 在上一级（novelforge/），不在 core/ 里
-from . import atomicio
+from . import atomicio, imaging
 
 #: 默认 2× 渲染：高分屏上才不糊（1× 在手机上明显发虚）
 DEFAULT_SCALE = 2.0
@@ -42,7 +42,15 @@ def page_count(path) -> int:
 
 
 def render_page(path, index: int, bid: str, scale: float = DEFAULT_SCALE) -> tuple:
-    """渲染指定页 → ``(jpeg 字节, (width, height))``；越界或损坏返回 ``(None, None)``。"""
+    """渲染指定页 → ``(jpeg 字节, (width, height))``；越界或损坏返回 ``(None, None)``。
+
+    ⚠️ **缺 Pillow 时抛 :class:`imaging.MissingPillow`**（第 248 期），而不是回
+    ``(None, None)`` —— 后者会被端点翻译成 **404「页不存在」**，那是**假象**：
+    PDF 在、页也在，是这台服务器没有图片处理能力（``pypdfium2`` 的 ``to_pil()``
+    需要 Pillow）。端点据此回 **503** 并说清缺什么。
+    """
+    if not imaging.available():
+        raise imaging.MissingPillow(imaging.REASON)
     try:
         index = int(index)
     except (TypeError, ValueError):
@@ -75,6 +83,8 @@ def render_page(path, index: int, bid: str, scale: float = DEFAULT_SCALE) -> tup
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=JPEG_QUALITY)
         data, size = buf.getvalue(), img.size
+    except imaging.MissingPillow:
+        raise                       # 缺能力 ≠ 页坏了（上面已判过，这里是防御性兜底）
     except Exception:
         return (None, None)
     finally:

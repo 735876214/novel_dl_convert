@@ -640,6 +640,14 @@ def page_image(b: dict, number, convert: str = "") -> tuple:
 
     `convert='jpeg'`（Komga 的查询参数）对 CBZ 也转码：客户端偶尔会用它统一格式，
     但转码有成本 —— 只有确实不是 jpeg 且客户端要求时才转。
+
+    ⚠️ **缺 Pillow 时抛 :class:`imaging.MissingPillow`**（第 248 期），而不是回
+    ``(None, "")`` —— 后者会被端点翻译成 **404「页不存在」**，那是**假象**：书在、页也在，
+    是这台服务器没有图片处理能力。端点据此回 **503** 并说清缺什么。
+
+    ⚠️ 但**只有 PDF 分支会抛**：CBZ 的转码失败时**回原图**（``convert=jpeg`` 是客户端的
+    格式偏好，不是可用性前提 —— 原图仍能显示）；PDF 没有退路（页就是由
+    ``pypdfium2.to_pil()`` 渲染的，没 Pillow 就渲染不出来）。
     """
     from . import comics
 
@@ -657,16 +665,23 @@ def page_image(b: dict, number, convert: str = "") -> tuple:
         if not data:
             return (None, "")
         if (convert or "").lower() in ("jpeg", "jpg") and "jpeg" not in media:
-            try:
-                import io
+            import io
 
-                from PIL import Image
+            from . import imaging
+            try:
                 buf = io.BytesIO()
-                with Image.open(io.BytesIO(data)) as im:
-                    im.convert("RGB").save(buf, "JPEG", quality=88)
+                # ⚠️ 走 `imaging.flatten`（铺白底）而不是 `convert("RGB")`：后者只是
+                # **丢掉 alpha 通道**，透明像素的 RGB 是 (0,0,0) ⇒ 透明 PNG 转出来整片
+                # 全黑（实测）。这是「透明像素不能变黑」判据的第二份实现，第 248 期收敛。
+                with imaging.open_image(data) as im:
+                    imaging.flatten(im).save(buf, "JPEG", quality=88)
                 return (buf.getvalue(), "image/jpeg")
             except Exception:
-                return (data, media)          # 转码失败就用原图，别让客户端拿不到
+                # 转码失败就用原图，别让客户端拿不到。**缺 Pillow 也走这里** ——
+                # 「格式统一」是客户端的偏好，不是可用性前提；原图仍能正常显示。
+                # ⚠️ 但这**不是**「缺能力就静默」：能力由 `imaging.state()` 如实上报，
+                # 缺 Pillow 时 Komga 端的 PDF 页渲染会走 503（那条**没有**原图可退）。
+                return (data, media)
         return (data, media)
     if fmt == "PDF":
         from . import pdfrender
