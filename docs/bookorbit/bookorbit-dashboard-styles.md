@@ -519,7 +519,7 @@ PNG 已按 §0 取回（`docs/images/dashboard-overview.png`，5.68 MB，**落�
 
 | 维度 | 上游 | 本项目 | 判断 |
 |---|---|---|---|
-| 部件卡外壳 | `h-55 rounded-2xl border border-primary/40 bg-card/30 shadow-sm backdrop-blur-[1px]`，宽度 `w-[220px]` / `w-[336px]` | **逐字一致** | ✅ |
+| 部件卡外壳 | `h-55 rounded-2xl border border-primary/40 bg-card/30 shadow-sm backdrop-blur-[1px]`…（已落地） | **逐字一致** | ✅ |
 | 书架行外壳 | 同款 `rounded-2xl border border-primary/40 bg-card/30` | **逐字一致** | ✅ |
 | 侧栏结构 | 品牌块 → 主导航 → LIBRARIES（带计数）→ SMART SCOPES（带计数）→ COLLECTIONS（带计数）→ 底部 | 品牌块 → 主导航 → 浏览 → 库（带计数 + 筛选框）→ 智能书架 → 收藏夹 → 帮助 → 底部版本号 | ◐ **本项目分区更细**（多出「浏览」「帮助/说明书/更新日志/关于」），符合本项目「本地阅读器」形态 |
 | 顶部栏 | 搜索框居中偏左，右侧 10 个图标 | 搜索框左侧 + 右侧 10 个图标 | ◐ 图标数量一致，布局微差 |

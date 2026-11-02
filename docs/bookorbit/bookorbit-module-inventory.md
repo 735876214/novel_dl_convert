@@ -304,7 +304,7 @@
 | 批注级位置换算（CFI / kobo span / kepub DOM） | `annotation` / `position-converter` | **部分**：仅进度级 XPointer↔章（`novelforge/core/koreader.py:63`） | 与 §4.2 `position-converter` 同判：单用户单设备收益低 |
 | 实体**删除**策略 | `entity-manager` | **部分**：仅作者/系列的改名 + 合并（`novelforge/core/fileops.py:218/254`） | 源文件名无写入口 ⇒ 删除退化为纯元数据操作，收益窄 |
 | 元数据提取器扩到 6 类 | `metadata` | **部分**：仅 EPUB 全解析（见 §2 第 40 行） | 非 EPUB 本项目**刻意不解析**（`novelforge/core/library.py:1234`） |
-| 在线 provider 扩到 13 个 | `metadata-fetch` | **已覆盖（第 57 期）**：14 家全部接入（`novelforge/core/metasources.py` 注册表 + `_FETCHERS`，契约 `tests/test_metadata_providers.py` 钉住 `IMPLEMENTED == _FETCHERS.keys()`） | 原判「刻意维持内置 2 源」已被用户改判：**全部接入**；页面抓取型 6 家如实标「易失效」，单源失败不打断整轮 |
+| 在线 provider 扩到 13 个 | `metadata-fetch` | 已覆盖：14 家全部接入（`novelforge/core/metasources.py` 注册表 + `_FETCHERS`，契约 `tests/test_metadata_providers.py` 钉住…（第 57 期已落地） | 原判「刻意维持内置 2 源」已被用户改判：**全部接入**；页面抓取型 6 家如实标「易失效」，单源失败不打断整轮 |
 
 **C. 与定位或既有决策不容（不做）**
 

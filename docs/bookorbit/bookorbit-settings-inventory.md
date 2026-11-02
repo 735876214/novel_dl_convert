@@ -531,7 +531,7 @@ SERVER
 
 | 设置项 | 控件 | 当前值 | 说明 | 本项目可行性 |
 |---|---|---|---|---|
-| 各书库的模式分配 | 列表 | 9 个书库均为 `Folder as Book` | 「A library with a pattern of its own wins. Every other library follows the global default for its organization mode.」 | ✅（本项目命名规则存服务端，工具页默认载入） |
+| 各书库的模式分配 | 列表 | 9 个书库均为 `Folder as Book` | 「A library with a pattern of its own wins. Every other library follows the global default for its…（已落地） | ✅（本项目命名规则存服务端，工具页默认载入） |
 | File as Book default 模式 | 文本 | 见下方代码块（含 13 个 token） | 「Each file is one book.」；当前无书库使用该默认 | ✅（本项目 bulk-rename 的核心规则来源） |
 | 按钮 | 按钮 | — | `Examples`、`Reset to shipped default` | ✅ |
 | Cross-platform path sanitization | 开关 | 未能采集 | 替换 Windows 不接受的字元，预览会反映该设置 | ✅ |
