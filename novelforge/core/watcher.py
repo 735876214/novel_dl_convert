@@ -28,6 +28,43 @@ from .. import config
 
 STATE_FILENAME = "watcher_state.json"
 
+#: 监听间隔的**下界**（秒）。第 244 期：此前 `watcher.interval` 没有任何下界 ——
+#: 用户在设置页填 0.1 ⇒ 主循环每 0.1 秒轮询一次（NAS 上是持续 stat + 打开目录）
+#: ⇒ CPU 打满。前端 hint 只说「NAS 建议 ≥3」—— **建议不是闸门**。
+MIN_INTERVAL = 1.0
+#: 「写入稳定等待」的下界（秒）。此前同样没有下界：填 0 ⇒ `_stop.wait(0)` 立即返回
+#: ⇒ `_wait_stable` 在**一瞬间**读完大小（通常相同）⇒ 立刻判「写入完成」
+#: ⇒ **半截文件被复制进书库**。这个比 interval 更危险，必须夹。
+MIN_SETTLE_SECONDS = 0.1
+
+
+def _clamp_positive(value, default: float, minimum: float) -> float:
+    """把一个「秒数」夹到 ``[minimum, +∞)``；脏值 / 缺失 ⇒ 用默认值。
+
+    ⚠️ 唯一实现：`FolderWatcher.__init__`（读配置）与 `server._apply_watcher_config`
+    （热应用）都调它 —— 两处各写一份夹法就是「同一判据两处实现」（AGENTS §1）。
+    """
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    if v != v:                    # NaN = 脏值 ⇒ 用默认值
+        return float(default)
+    # 0 / 负数 = 用户填了一个「无效但可夹」的数 ⇒ 夹到下界，**不**回落默认
+    # （回落会悄悄把用户填的数换成另一个数；而且 settle_seconds=0 会让
+    #  「写入稳定等待」完全失效 ⇒ 半截文件被当写完）。
+    return max(float(minimum), v)
+
+
+def interval_of(raw, default: float = 5.0) -> float:
+    """`watcher.interval` → 夹过下界的秒数。"""
+    return _clamp_positive(raw, default, MIN_INTERVAL)
+
+
+def settle_seconds_of(raw, default: float = 1.0) -> float:
+    """`watcher.settle_seconds` → 夹过下界的秒数。"""
+    return _clamp_positive(raw, default, MIN_SETTLE_SECONDS)
+
 _logger = logging.getLogger("novelforge.watcher")
 
 #: 旁路工作的**有界**执行器：`*_async` 派生那些「发了就不管」的任务（元数据抓取 /
@@ -205,9 +242,9 @@ class FolderWatcher:
         self.cfg = cfg if cfg is not None else config.load_config()
         w = (self.cfg or {}).get("watcher", {}) or {}
 
-        self.interval = float(kw.get("interval") or w.get("interval") or 5.0)
+        self.interval = interval_of(kw.get("interval") or w.get("interval"))
         self.recursive = bool(kw.get("recursive", w.get("recursive", False)))
-        self.settle_seconds = float(w.get("settle_seconds", 1.0))
+        self.settle_seconds = settle_seconds_of(w.get("settle_seconds"))
         self.stable_rounds = max(1, int(w.get("stable_rounds", 2)))
         self.copy_non_txt = bool(w.get("copy_non_txt", True))
         self.process_existing = bool(w.get("process_existing", True))

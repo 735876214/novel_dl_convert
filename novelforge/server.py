@@ -9363,7 +9363,9 @@ def _apply_watcher_config():
     WATCHER.cfg = cfg
     try:
         if w.get("interval"):
-            WATCHER.interval = float(w["interval"])
+            # 夹下界（唯一实现在 `core/watcher.py` 的 `interval_of` —— 与
+            # `FolderWatcher.__init__` 共用，两处各写一份就是「同一判据两处实现」）。
+            WATCHER.interval = watcher_mod.interval_of(w["interval"])
         if "recursive" in w:
             WATCHER.recursive = bool(w["recursive"])
         if "copy_non_txt" in w:
@@ -9379,7 +9381,8 @@ def _apply_watcher_config():
         # 它们是**纯运行时参数**（`_is_stable` 每轮现读 `self.stable_rounds` /
         # `self.settle_seconds`），热应用安全：改了立即影响下一轮的稳定判定。
         if "settle_seconds" in w:
-            WATCHER.settle_seconds = float(w["settle_seconds"])
+            # 同上：`settle_seconds_of` 夹下界（0 ⇒ 半截文件被当写完）。
+            WATCHER.settle_seconds = watcher_mod.settle_seconds_of(w["settle_seconds"])
         if "stable_rounds" in w:
             WATCHER.stable_rounds = max(1, int(w["stable_rounds"]))
     except Exception as e:  # noqa: BLE001 —— 参数是脏的，但**必须有落笔**

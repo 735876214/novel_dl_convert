@@ -63,3 +63,40 @@ def test_日志缓冲条数夹到至少一条(client, auth_headers, isolated):
 
     client.put("/api/config", headers=auth_headers,
                json={"logging": {"max_entries": 2000}})
+
+
+def test_监听间隔与稳定等待要夹下界(client, auth_headers, isolated, monkeypatch):
+    """0 / 负数 / 极小数都要夹住。
+
+    ⚠️ `settle_seconds=0` 最危险：`_stop.wait(0)` 立即返回 ⇒ `_wait_stable` 在
+    **一瞬间**读完大小（通常相同）⇒ 立刻判「写入完成」⇒ **半截文件被复制进书库**。
+    ⚠️ `interval=0.1` 让主循环每 0.1 秒轮询一次 ⇒ NAS 上 CPU 打满。
+    夹边界的**唯一实现**在 `core/watcher.py`（`interval_of` / `settle_seconds_of`），
+    `__init__` 与热应用共用。
+    """
+    from novelforge import server as server_mod
+    from novelforge.core import watcher as watcher_mod
+
+    w = watcher_mod.FolderWatcher(cfg={"watcher": {}})
+    monkeypatch.setattr(server_mod, "WATCHER", w)
+
+    r = client.put("/api/config", headers=auth_headers,
+                   json={"watcher": {"interval": 0.1, "settle_seconds": 0}})
+    assert r.status_code == 200, r.text
+    assert w.interval == watcher_mod.MIN_INTERVAL, w.interval
+    assert w.settle_seconds == watcher_mod.MIN_SETTLE_SECONDS, w.settle_seconds
+
+    # 负数同样要夹（不能变成负的等待时间）
+    client.put("/api/config", headers=auth_headers,
+               json={"watcher": {"interval": -5, "settle_seconds": -1}})
+    assert w.interval == watcher_mod.MIN_INTERVAL, w.interval
+    assert w.settle_seconds == watcher_mod.MIN_SETTLE_SECONDS, w.settle_seconds
+
+
+def test_构造监听器时也要夹下界(isolated):
+    """读配置那条路（`__init__`）同样要夹 —— 环境变量 / 配置文件都能给 0。"""
+    from novelforge.core import watcher as watcher_mod
+
+    w = watcher_mod.FolderWatcher(cfg={"watcher": {"interval": 0, "settle_seconds": 0}})
+    assert w.interval == watcher_mod.MIN_INTERVAL, w.interval
+    assert w.settle_seconds == watcher_mod.MIN_SETTLE_SECONDS, w.settle_seconds
