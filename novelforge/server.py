@@ -9454,6 +9454,26 @@ def _apply_runtime_config() -> None:
     _apply_auto_update_config()
 
 
+def _apply_log_config() -> None:
+    """日志相关的配置热应用（**留存策略缓存** + **内存缓冲条数**）。
+
+    ⚠️ 第 246 期：这两条此前**只**挂在 ``PUT /api/config`` 一条路上 ⇒
+    「改 config.yaml 原文 / 还原备份 / 重置配置 / 清覆盖层」这四条路改完配置后
+    **不生效**（第 244 期刚给 ``logging.max_entries`` 补上的真读点，在这些路上又变回
+    「假配置」；留存策略则最多 5 秒后自愈）。第 80 期立的纪律是「五个写入口都要挂」，
+    这里补齐 —— 与 :func:`_apply_runtime_config` 同一范式（它已经五个入口都有了）。
+    """
+    try:
+        # 第 52 期：留存策略在日志模块里有 5 秒缓存，配置一改就必须失效 ——
+        # 否则刚开启留存，页面上的「存盘情况」仍按旧值显示未启用。
+        activity_log.invalidate_retention_cache()
+        # 第 244 期：内存缓冲条数（`logging.max_entries`）此前没有读点（假配置）；
+        # 补上读点后这里热应用 —— 改了立即生效。
+        activity_log.set_max_entries(activity_log.max_entries())
+    except Exception as e:  # noqa: BLE001 —— 参数是脏的，缓冲保持原样
+        logging.getLogger("novelforge").exception("日志配置热应用失败：%s", e)
+
+
 @app.get("/api/config")
 def api_get_config():
     cfg = config.load_config()
@@ -9673,15 +9693,7 @@ def api_put_config(payload: dict = Body(...)):
     except OSError as e:
         raise HTTPException(500, f"设置写入失败：{e}")
     _apply_runtime_config()
-    # 第 52 期：留存策略在日志模块里有 5 秒缓存，配置一改就必须失效 ——
-    # 否则刚开启留存，页面上的「存盘情况」仍按旧值显示未启用。
-    activity_log.invalidate_retention_cache()
-    # 第 244 期：内存缓冲条数（`logging.max_entries`）此前**没有读点** ——
-    # 能保存、能回显，缓冲恒为 2000 条（假配置）。这里热应用：改了立即生效。
-    try:
-        activity_log.set_max_entries(activity_log.max_entries())
-    except Exception as e:  # noqa: BLE001 —— 参数是脏的，缓冲保持原样
-        logging.getLogger("novelforge").exception("日志缓冲条数热应用失败：%s", e)
+    _apply_log_config()
     return {"ok": True, "overrides": ov}
 
 
@@ -10061,6 +10073,7 @@ def api_put_raw_config(payload: dict = Body(...)):
     except Exception as e:
         raise HTTPException(500, f"写入失败：{e}")
     _apply_runtime_config()
+    _apply_log_config()
     return {"ok": True, "backup": backup}
 
 
@@ -10095,6 +10108,7 @@ def api_restore_backup(payload: dict = Body(...)):
     except Exception as e:
         raise HTTPException(500, f"还原失败：{e}")
     _apply_runtime_config()
+    _apply_log_config()
     return {"ok": True, "restored": name, "backup": backup}
 
 
@@ -10112,6 +10126,7 @@ def api_reset_config():
     except Exception as e:
         raise HTTPException(500, f"重置失败：{e}")
     _apply_runtime_config()
+    _apply_log_config()
     return {"ok": True, "backup": backup}
 
 
@@ -10124,6 +10139,7 @@ def api_clear_overrides():
     except Exception as e:
         raise HTTPException(500, f"清除失败：{e}")
     _apply_runtime_config()
+    _apply_log_config()
     return {"ok": True}
 
 
