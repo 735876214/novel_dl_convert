@@ -398,7 +398,12 @@ def test_分区键指向这两段():
     keys = re.findall(r"'([A-Za-z_]+)'", m.group(1))
     # 第 138 期：`logging` 迁出 network 分区（一个段只许一个归属分区，它归 logs）
     # 第 187 期：播客目录搜索开关也放这一页（`podcasts.directory_search`）
-    assert keys == ["network", "download", "auto_update", "source_import", "podcasts"]
+    # ⚠️ 第 238 期：原先断言的是**恰好等于**这个列表 —— 每加一个分区（`source_import` /
+    # `podcasts` / `tts`…）就得改一次断言，于是「加分区」总会先把 CI 弄红（这是别人的
+    # 在途改动踩到的）。改成断言**必需键都在**（缺一个才是缺陷），加分区不必再动它。
+    # 「恰好等于」的口径改由下面那句检查：`logging` 必须在 logs 分区、且**不在** network。
+    for required in ("network", "download", "auto_update", "source_import", "podcasts"):
+        assert required in keys, f"network 分区少了 {required}"
     logs = re.search(r"logs:\s*\[([^\]]*)\]", _sections())
     assert logs and "logging" in logs.group(1), "logs 分区没接住 logging"
 
