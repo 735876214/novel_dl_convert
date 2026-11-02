@@ -105,9 +105,15 @@ def allowed_restore_dirs() -> list:
     out = []
     for d in (config.INPUT_DIR, config.OUTPUT_DIR):
         try:
-            out.append(pathlib.Path(d).resolve())
+            rp = pathlib.Path(d).resolve()
         except OSError:
             continue
+        # ⚠️ **目录必须真实存在**才算白名单成员（第 242 期补）：
+        # 部署机上 `OUTPUT_DIR` 常是**默认值** `/app/output`（容器路径），
+        # 在 Windows 开发机上它解析成 `C:\app\output` —— 那个目录并不存在，
+        # 却会让「往那儿写」被判成合法。
+        if rp.is_dir():
+            out.append(rp)
     try:
         for lib in library.libraries():
             for r in library.roots_of(lib):

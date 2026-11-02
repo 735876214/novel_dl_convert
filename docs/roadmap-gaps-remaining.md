@@ -13024,6 +13024,92 @@ KOReader 的同步凭据是**一个共享密码**（kosync 协议如此：`usern
 - Komga `/api/v1/books/{id}/thumbnail` 不传 `w` ⇒ 客户端每本拿原图 —— 属**对外行为变更**，需单独立期；
 - `catalog.books()` 内部读库表（省几十毫秒）—— 动核心读路径，性价比不划算。
 
+
+## 第 242 期（持续审计第二轮（正确性 / 安全 / 信任：解压炸弹 / 任意目录写入 / 残留状态自愈））
+
+**需求来源**：用户「换不同角度进行一轮 24 小时审计」。
+
+**与第一轮的角度差别**：第一轮（2026-11-02 10:55 → 14:0x，6 轮）查**读路径性能、体积、
+注释与界面文本、单一真值源、契约一致性**；这一轮换成**正确性、安全与信任**：
+边界与不变量 / 输入面 / 信任边界 / 资源与可恢复性 / 数据可信度。
+
+**窗口**：2026-11-02 14:10 起，24 小时上限 2026-11-03 14:10；cron 每 7 分钟触发 +
+「上一轮未收尾就跳过」。
+
+### 修了 3 类真缺陷
+
+#### ① 解压炸弹：书籍本体读 zip 条目有 6 处绕过上限
+
+`core/zipkind.py::read_entry` 是「读归档里一个条目」的**唯一入口** —— 它**按实际读到的字节数**
+掐上限。裸 `z.read()` 绕过它：一份几百 KB 的 zip 炸弹就能把内存吃光。
+
+审计找到 **5 处**裸读（其中 **3 处是独立审计代理漏掉的** —— 结构性判据一次扫出来）：
+
+| 位置 | 读的是什么 |
+|---|---|
+| `server.py` 书内资源 `GET /api/books/{id}/asset` | 章节里的插图 / 样式 |
+| `server.py` EPUB 内嵌封面 `GET /api/books/{id}/cover` | 封面图 |
+| `core/epub_cfi.py` 读 spine 条目 | 正文 XHTML |
+| `core/booksearch.py` 读章节 | 搜索用正文 |
+| `core/readaloud.py` 读 XML | 朗读用正文 |
+| `core/epub_update.py` 读 OPF / nav / ncx | 改结构用 |
+
+⚠️ **其中两处原本「有大小检查」其实是假安全**：`booksearch` / `readaloud` 查的是
+`info.file_size` —— 那是**压缩包自己声称的**大小，精心构造的归档可以声称 12 KB、实际解出 4 GB
+（`comics.read_capped` 的注释里明写了这件事）⇒ 只有「按实际读到的字节数掐」才是真闸门。
+
+**防回归**：`tests/test_zip_entry_read_guard_242.py` —— **全仓不许再有裸读 zip 条目**
+（结构性判据，新增一处就红）。
+
+#### ② 回收站「孤儿还原」的目标目录可写任意目录
+
+回收站里**没有台账**的条目还原时需要用户指定 `target_dir`，而那个值**原样拼进目标路径**，
+**没有任何校验** ⇒ 已登录用户可以把回收件搬到**任意可写目录**（含系统自启动目录、
+别的用户的目录）。`names` 有 `_safe_name` 挡 `..` 与分隔符，但 `target_dir` 本身是裸的。
+
+**修法**：`fileops.restore_target_dir(raw)` —— 白名单 = 收书目录 + 每个书库的库根 +
+`OUTPUT_DIR` 兜底；包含性判定在 `resolve()` **之后**做（符号链接 / 大小写文件系统都可能把
+看着在白名单里的路径指到外面）。接在 `recycle.plan_restore` 里，**校验放在「条目名合法」之后**
+（更具体的错因优先报）。
+
+#### ③ 播客下载的「残留 downloading」永远下不了
+
+下载状态 `downloading` **只被设置、从不被清理** —— 进程被 kill / 容器重启后，那一集永远卡在
+「下载中」；而 `enqueue_download` 见到 `downloading` 会**直接跳过** ⇒ **那一集再也下不了**
+（用户只能删了重订）。
+
+**修法**：`podcasts._stale_download` 判据「既没有 `.part` 临时件、也没有已完成的副本 ⇒
+此刻没人在下它」（**盘上事实**，不是状态字段 —— 状态字段恰恰是坏掉的那个）；
+`enqueue_download` 里复位成「未下载」并允许重排。
+
+**顺带**：两个**收不干净**的旁路线程（`podcast-download` worker 与 `nf-hc-progress`）
+—— 都是「句柄丢弃、没进登记表」，违反 AGENTS「新增旁路线程必须进收尾清单」那条纪律：
+- `podcasts` 补句柄 + `wait_pending`（判据是「**队列排空**」而不是「线程结束」——
+  这个 worker 是 `while True` 的**常驻**线程，按「线程活着」判会永远返回非 0、收尾硬失败）；
+- `nf-hc-progress` 改走 `sync.push_progress_async`（新增）⇒ 自动进 `sync` 的登记表。
+
+### 查过但**不做**的（附理由）
+
+| 审计提出的 | 判定 |
+|---|---|
+| `POST /convert` / `/convert-path` / `GET /download` **未鉴权** | **已记录的刻意取舍**（`core/urlguard.py` 的「残余风险」段：单用户 NAS 场景下能打到端口的人通常已在内网）。但要注意 `/convert` 是**写**接口（与 `/download` 的读不同档）⇒ 端口若暴露公网即是匿名写入。**属部署口径，需部署者判断**，本轮不改（改了会打断油猴脚本等既有用户） |
+| ReDoS 降级路径（没装 `regex` 时只有长度闸） | `core/saferegex.py` 已**如实**标 `timeout:false` 并通过 `/api/sources/capabilities` 报告；`requirements.txt` 声明了 `regex` ⇒ 降级态是已知取舍，不是缺陷 |
+| 全仓 `subprocess` 调用 | 4 处，**无 `shell=True`**（全列表参数）⇒ 无命令注入 |
+| zip-slip / 整包解压 | 全仓**无 `extractall`**；容器按**单个条目**读进内存 + 有大小闸门 |
+| SSRF | 唯一能让用户指定出网 URL 的是**书源规则**（用户自己的书源）；外部客户端只能读本仓数据 ⇒ 单用户自托管下不构成攻击面 |
+
+### 自己扫的另外八个角度（全部零发现）
+
+假成功（`except` 里直接 `return 0/[]`，**0 处**）/ 未加载 vs 真的没有（前端只有
+`librariesLoaded` 一处管这个口径且有专门用例）/ 回收站语义（21 处 `unlink` 全是临时件、
+缓存、用户显式「清除」）/ 软删除读点（5 张含 `deleted_at` 的表，无遗漏）/ 信任边界
+（OPDS 全只读；Komga 写端点经 `_ko_find_series(request)` 受 scope 约束）/ 上传
+（`_read_capped` 边读边限）/ 后端面向用户的文案（0 处开发措辞）/ 能力键
+（前端四处消费点 × `ALL_FEATURES` 18 个，无静默缺失）。
+
+**核验**：后端全量 __TESTS__ 例（__PASSED__ passed / 14 skipped / 13 例本机环境项）；
+前端未改；`python tests/period_close.py check` = **0 问题**。
+
 ## 第 237 期（KEPUB 导出 —— Kobo 那条评估项的最小闭环）
 
 ## 第 236 期（批注导出成 KOReader 的批注文件 —— 反向那一半）

@@ -15,6 +15,8 @@ from __future__ import annotations
 import pathlib
 import time
 
+import pytest
+
 from novelforge.core import db, fileops, publish, recycle
 
 #: 本期要用到的两个 API 端点（字面量路径，不含 `{param}`）
@@ -214,6 +216,23 @@ def test_目标目录不在允许范围内时报错且不搬文件(client, auth_
     finally:
         orphan.unlink(missing_ok=True)
 
+
+def test_白名单里的目录必须真实存在(tmp_path, monkeypatch):
+    """第 242 期：白名单成员**必须真实存在**。
+
+    部署机上 `OUTPUT_DIR` 常是**默认值** `/app/output`（容器路径）—— 在 Windows 开发机上
+    它解析成 `C:\app\output`，那个目录**并不存在**，却会让「往那儿写」被判成合法。
+    """
+    from novelforge.core import fileops as fo
+
+    ghost = tmp_path / "并不存在的输出目录"
+    monkeypatch.setattr(fo.config, "OUTPUT_DIR", ghost)
+    monkeypatch.setattr(fo.config, "INPUT_DIR", tmp_path / "input")
+    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+
+    assert ghost.resolve() not in fo.allowed_restore_dirs()
+    with pytest.raises(ValueError):
+        fo.restore_target_dir(str(ghost))
 
 # ---------------------------------------------------------------------------
 # 5. 清空回收站同批清台账
