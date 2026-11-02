@@ -213,7 +213,9 @@ function clearRecycle(): Promise<void> {
     return Promise.resolve()
   return run('recycle', '清空回收站', async () => {
     const r = await api.clearRecycle()
-    return `已清空回收站：删除 ${r.removed} 个文件，释放 ${fmtBytes(r.freed)}（台账 ${r.ledger_cleared} 条）`
+    // ⚠️ 第 251 期：计数是**条目**（文件 + 目录）—— 回收站里确实会有目录
+    // （`core/publish.py` 的 `recycle()` 用 `shutil.move`，删库时回收整个目录）。
+    return `已清空回收站：删除 ${r.removed} 个条目，释放 ${fmtBytes(r.freed)}（台账 ${r.ledger_cleared} 条）`
   })
 }
 

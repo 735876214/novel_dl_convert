@@ -9865,12 +9865,22 @@ def api_clear_recycle():
     # 而台账被清成 0 条 ⇒ 这些文件的还原路径没了，界面上却显示「已清空、释放 0 B」，
     # 用户永远不知道回收站里还剩东西 —— 而回收站是「删除即回收」承诺的最后一道防线。
     failed: list = []
-    for p in list(d.rglob("*")):
-        if not p.is_file():
-            continue
+    # ⚠️ 第 251 期：按**顶层条目**处理（此前是 `d.rglob("*")` + `if not p.is_file(): continue`
+    # ⇒ **目录被整个跳过**）：回收站里**确实会有目录** —— `core/publish.py` 的
+    # `recycle()` 用 `shutil.move`，删库时回收的是**整个目录**。
+    # 于是旧实现把目录里的文件删掉、**空目录壳留着**，而台账又照常被清 ⇒
+    # 那些空目录成了「无台账孤儿」⇒ 界面说「已清空、释放 N B」，实际有残留 ——
+    # 回收站是「删除即回收」承诺的**最后一道防线**（第 141 期刚修过同一类问题）。
+    #
+    # 顶层处理还有一个好处：计数不再重复（rglob 会把目录内的文件数一遍，
+    # 目录再被 rmtree 删一遍）。
+    for p in list(d.iterdir()):
         try:
-            size = p.stat().st_size
-            p.unlink()
+            size = fileops.size_of(p)       # 目录取**整树**和（win32 下 st_size 恒 0）
+            if p.is_dir():
+                shutil.rmtree(p)
+            else:
+                p.unlink()
         except OSError as e:
             failed.append(f"{p.name}: {e.strerror or e}")
             continue
@@ -9880,14 +9890,14 @@ def api_clear_recycle():
         # 有残留 ⇒ 台账**原样保留**（它记的正是「这些文件还能还原」）。
         activity_log.log(activity_log.ACTION_RECYCLE, "回收站", activity_log.STATUS_FAIL,
                          output="; ".join(failed[:5]),
-                         detail=f"清空回收站：删除 {removed} 个文件，"
+                         detail=f"清空回收站：删除 {removed} 个条目，"
                                 f"**{len(failed)} 个没删掉**（台账未清）：{'; '.join(failed[:3])}",
                          source="api")
         return {"ok": False, "removed": removed, "freed": freed,
                 "ledger_cleared": 0, "failed": failed}
     cleared = db.recycle_clear()
     activity_log.log(activity_log.ACTION_RECYCLE, "回收站", activity_log.STATUS_OK,
-                     detail=f"清空回收站：删除 {removed} 个文件，释放 {_human_size(freed)}"
+                     detail=f"清空回收站：删除 {removed} 个条目，释放 {_human_size(freed)}"
                             f"（台账清掉 {cleared} 条）",
                      source="api")
     return {"ok": True, "removed": removed, "freed": freed, "ledger_cleared": cleared}
