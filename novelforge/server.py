@@ -10330,9 +10330,15 @@ def api_logs_export(action: str = "", status: str = "", q: str = "", actor: str 
             "duration_ms", "source", "actor")
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(cols)
+    # 表头也套一层（`cols` 是服务端写死的常量 ⇒ 套了不变）—— 好处是「所有 writerow
+    # 都套 csvsafe」成为**一条不用例外**的判据（第 244 期的用例就按这条钉）。
+    w.writerow(csvsafe.row(list(cols)))
     for it in items:
-        w.writerow(["" if it.get(c) is None else it.get(c) for c in cols])
+        # ⚠️ 第 244 期：此前**没有**走 `csvsafe.row` ⇒ 审计日志的 CSV 也是公式注入面。
+        # 这里的字符串**用户可控**：书名（从外面拖进来的 EPUB 自带文件名）、操作者账号名。
+        # 一本叫 `=cmd|'/c calc'!A0` 的书 ⇒ 用户导出审计日志、在 Excel 里双击打开 ⇒
+        # 那段文字被当公式求值（第 132 期防的正是这个，此处漏了）。
+        w.writerow(csvsafe.row(["" if it.get(c) is None else it.get(c) for c in cols]))
     body = "﻿" + buf.getvalue()
     return Response(
         content=body.encode("utf-8"), media_type="text/csv; charset=utf-8",
