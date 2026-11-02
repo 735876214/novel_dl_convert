@@ -20,6 +20,7 @@
    - **显式锁定的字段**（``meta_locks``）永不改写 —— 即使策略写着 ``overwrite``。
      两者可叠加：没改过但上锁的字段，抓取同样不碰。
 """
+import json
 import logging
 
 import httpx
@@ -193,6 +194,54 @@ def preset_to_fields(preset: str) -> dict:
     else:
         mode = "overwrite"
     return {k: mode for k in _FINALIZE_FIELDS}
+
+
+def _too_long_value(field: str, value, *, custom: bool = False) -> bool:
+    """这个抓取值**会不会因为超长而写不进去**（预览阶段就要知道）。
+
+    ⚠️ 第 259 期：写入侧超长 ⇒ **跳过该字段**（第 250 期的元数据字段 /
+    第 255 期的自定义字段）⇒ 预览阶段必须能**提前**知道，否则界面说
+    「要改成这个」、实际写不进去，用户**只在提交后**才知道。
+
+    ⚠️ 判据**只有一处**（各自的表）：元数据字段用 `db.metadata_field_limits()`
+    （第 250 期那张），自定义字段用 `customfields.value_limits()`（第 255 期那张）
+    —— **不另抄一份**（抄了就会与写入侧漂移：预览说「不超长」、写入侧却跳过）。
+
+    ⚠️ **数组字段**（`tags` / `narrators`）按**整段序列化后的长度**算
+    —— 与写入侧 `db._as_list` 的存法一致。
+    """
+    if custom:
+        limits = customfields.value_limits()
+        limit = int(limits.get(str(field or ""), 200))
+    else:
+        limits = db.metadata_field_limits()
+        limit = int(limits.get(str(field or ""), 200))
+    if isinstance(value, (list, tuple)):
+        n = len(json.dumps(list(value), ensure_ascii=False))
+    else:
+        n = len(str(value or ""))
+    return n > limit
+
+
+def _mark_too_long(changes: dict, custom_keys: set | None = None) -> dict:
+    """给 ``changes`` 里**超长**的项标上 ``too_long``（预览阶段的如实标记）。
+
+    ⚠️ 第 259 期：写入侧超长 ⇒ **跳过该字段**（不写）⇒ 预览阶段就要说清，
+    否则用户**只在提交后**的 toast 里才知道「这个字段没写进去」。
+
+    ⚠️ **自定义字段**走**另一张上限表**（`customfields.value_limits()`，
+    第 255 期那张）—— 键空间不同（不是 OPF 字段名）⇒ 分开判。
+
+    ⚠️ ``custom_keys`` **由调用方传进来**（`plan` 已经取过一次全量的字段定义）
+    —— **不要在这里查库**（预览是**每本书一条** ⇒ 查库会变成 N 次）。
+    """
+    keys = custom_keys or set()
+    for key, ch in (changes or {}).items():
+        if not isinstance(ch, dict):
+            continue
+        if _too_long_value(key, ch.get("to"), custom=str(key) in keys):
+            ch["too_long"] = True
+    return changes
 
 
 def _field_policy(b_policy: dict, field: str) -> str:
@@ -383,6 +432,9 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
     # 第 35 期：自定义字段定义（含默认值）与各书现有值，同样一次取全
     defs = db.list_custom_fields()
     custom_values = db.all_custom_field_values()
+    # ⚠️ 第 259 期：预览要标「哪些字段太长」（自定义字段走**另一张**上限表）
+    # ⇒ 这里**一次**算出自定义字段的键集合（**不逐书查库** —— 预览是每本书一条）。
+    custom_keys = {str(d.get("key") or "") for d in defs}
     for b in books:
         locked = locks.get(b["id"], set())
         base = {
@@ -449,7 +501,7 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             errs = [v.get("error") for v in res["sources"].values() if v.get("error")]
             base["error"] = errs[0] if errs else "没有找到候选"
             # 没有在线候选 ≠ 没有可写的东西：自定义字段的默认值不依赖在线源
-            base["changes"] = dict(cust_changes)
+            base["changes"] = _mark_too_long(dict(cust_changes), custom_keys)
             items.append(base)
             continue
 
@@ -492,7 +544,8 @@ def plan(names: list = None, cfg: dict = None, limit: int = None, threshold: flo
             changes[field] = {"from": cur, "to": value,
                               "source": meta_src.get("source") or best["source"],
                               "score": meta_src.get("score") or best["score"]}
-        base["changes"] = changes
+        # ⚠️ 第 259 期：**超长的值在预览里就要标出来**（见 `_mark_too_long`）。
+        base["changes"] = _mark_too_long(changes, custom_keys)
 
         cover_pol = _field_policy(b_policy, "cover")
         # 封面锁用独立键 `cover`（第 35 期）：策略说覆盖也没用，锁在就不动它
@@ -696,6 +749,15 @@ def apply(items: list, cfg: dict = None) -> dict:
             for k, v in fields.items():
                 if k not in cdefs or k in locked:
                     continue
+                # ⚠️ 第 259 期：**超长的自定义字段值也要「跳过」而不是「抛」** ——
+                # 与元数据字段**同一口径**（第 250 期：一家返回异常值不该毁掉整次抓取）。
+                # 此前这里直接 `normalize`（超限**抛**）⇒ 一个超长的自定义字段值
+                # 会让**整次抓取**失败（该书一个字都写不进去）。
+                # ⚠️ 判据**只有一处**：`customfields.value_limits()`（第 255 期那张）
+                # —— 与写入侧 `customfields.normalize` 用的是**同一张表**。
+                if _too_long_value(k, v, custom=True):
+                    skipped_long.append(str(k))
+                    continue
                 cust[k] = customfields.normalize(cdefs[k]["type"], v)
             if cust:
                 db.set_custom_field_values(bid, cust)
@@ -726,6 +788,11 @@ def apply(items: list, cfg: dict = None) -> dict:
                 if cover_error:
                     # 归因错会让人白找一轮：这里说的是「封面下载失败」而不是「没内容」
                     raise ValueError(f"封面下载失败：{cover_error}")
+                # ⚠️ 第 259 期：**全是超长被跳过**也要说清是哪个字段 ——
+                # 否则用户看到「没有需要写入的内容」，会以为自己传空了
+                # （而真相是：值太长，写不进去）。
+                if skipped_long:
+                    raise ValueError("字段太长，未写入：" + "、".join(sorted(set(skipped_long))))
                 raise ValueError("没有需要写入的内容")
         except Exception as e:                       # noqa: BLE001 —— 单本失败不影响其余
             failed.append({"name": name, "error": str(e)})
