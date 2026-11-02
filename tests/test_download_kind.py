@@ -81,5 +81,17 @@ def test_按类型分流到对应下载器(tmp_path):
 
 def test_只有文本链路才标记txt已处理():
     """`mark_recent` 的调用必须挂在 `kind == "text"` 分支里（源码级断言，防回归）。"""
-    src = inspect.getsource(server._run_download)
-    assert 'kind == "text" and WATCHER is not None' in src
+    # ⚠️ 不用 `inspect.getsource`（第 230 期修）：它读**磁盘上的当前文件**并按
+    # `co_firstlineno` 定位 —— 文件在进程启动后被改动过，截出来就是**别的函数**的源码
+    # （断言会报莫名其妙的话）。改用**函数对象自己**的代码常量，与文件、行号无关。
+    # 判据：**字节码**里有「"text" 常量 + COMPARE_OP + WATCHER 名字」这三要素
+    # （`if kind == "text" and WATCHER is not None:` 这句在运行时是**比较表达式**，
+    #  不是字面量常量 ⇒ 只能从字节码看）。
+    import dis
+
+    consts = {c for c in server._run_download.__code__.co_consts if isinstance(c, str)}
+    names = set(server._run_download.__code__.co_names)
+    ops = {i.opname for i in dis.get_instructions(server._run_download)}
+    assert "text" in consts, "少了 kind == \"text\" 的比较"
+    assert "WATCHER" in names, "少了 WATCHER"
+    assert "COMPARE_OP" in ops, "少了那次比较 —— 分支条件可能变了"

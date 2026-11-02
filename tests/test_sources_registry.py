@@ -66,7 +66,10 @@ def test_模板源_generic_不再注册():
 
     assert issubclass(generic.GenericHtmlSource, SourceAdapter)
     # 它会抛 NotImplementedError 这件事本身是**模板的正确形态**（等使用者去实现）
-    assert "NotImplementedError" in inspect.getsource(generic.GenericHtmlSource.search)
+    # ⚠️ 不用 `inspect.getsource`（第 230 期修）：它读**磁盘上的当前文件**并按
+    # `co_firstlineno` 定位 —— 文件被改动过就会截出别的函数。`raise NotImplementedError`
+    # 在代码对象里表现为**名字**（`co_names`）。
+    assert "NotImplementedError" in set(generic.GenericHtmlSource.search.__code__.co_names)
 
 
 def test_generic_不在书源清单里(isolated):

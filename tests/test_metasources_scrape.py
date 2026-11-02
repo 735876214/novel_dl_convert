@@ -381,13 +381,21 @@ def test_页面型的唯一出网处就是_get_text():
 
     若哪天有人给某家加了**自己的**出网调用（绕过 `_get_text`），这条会红：
     那些用例就会偷偷变成真出网用例。
+
+    ⚠️ **不用 `inspect.getsource`**（第 230 期修）：它读**磁盘上的当前文件**并按
+    `co_firstlineno` 定位 —— 文件在进程启动后被任何人改动过（哪怕只是加两行注释），
+    截出来��就是**别的函数**的源码，于是断言报「`_search_goodreads` 应当经 `_get_text`」
+    这种莫名其妙的话。改用**函数对象自己**的代码常量（`fn.__code__.co_consts`）——
+    与磁盘文件、与行号都无关。
     """
-    import inspect
     for fn in (metasources._search_amazon, metasources._search_goodreads,
                metasources._search_librofm, metasources._search_lubimyczytac):
-        src = inspect.getsource(fn)
-        assert "httpx." not in src, f"{fn.__name__} 不该自己出网"
-        assert "_get_text(" in src, f"{fn.__name__} 应当经 _get_text 出网"
+        consts = [c for c in fn.__code__.co_consts if isinstance(c, str)]
+        joined = "\n".join(consts)
+        names = {n for n in fn.__code__.co_names}
+        assert "httpx" not in names, f"{fn.__name__} 不该自己出网"
+        assert "_get_text" in names or "_get_text(" in joined, \
+            f"{fn.__name__} 应当经 _get_text 出网"
 
 
 def test_没装bs4时ubs4型解析如实回落空列表(monkeypatch):
