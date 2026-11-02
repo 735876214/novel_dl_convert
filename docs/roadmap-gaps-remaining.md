@@ -12403,6 +12403,76 @@ CSS 已接进 `main.css` / `boot.js` 也套 class / **强度没落在 body 的 o
 
 **核验**：后端全量（见 §0 基线）；前端四连（92 spec / 864 例）。
 
+## 第 228 期（读路径四处重复劳动收口（/api/stats 配置读盘 2309 → 1 次））
+
+**需求来源**：用户「创建持续任务，对本项目进行持续性的审计和修复，直到没有审计问题或持续时间超过 24 小时」
+⇒ 建成**每小时**触发的持续任务（第 227 期），并**立即跑第一轮**，不等触发。
+
+**第一轮审计的三个维度与结果**
+
+| 维度 | 结果 |
+|---|---|
+| **单一真值源 / 同步点一致性** | **0 条不一致**（六个同步点逐一程序化比对：配置分区三处、偏好块两处、`_LIBRARY_COLS`、含 book_id 的 23 张表 × 四份 remap 清单、13 家书源 × `DECLARED` × 配置键、231 个前端 URL ↔ 430 个后端路由全部命中） |
+| **读路径（每请求重算 / 重复劳动）** | **6 条真问题** —— 本期修 4 条、明确不做 2 条 |
+| **界面文本** | **8 处漏网**（第 222 期只修了 `settingsNav.ts` 一个文件）—— 本期修，见第 226 期提交 |
+
+### A. 读路径：四处「重复劳动」（全部**不改变输出**）
+
+1. **`/api/stats` 每请求重读 config.yaml 约 2,309 次** —— `metascore.audit(b)` 不传 `weights`
+   时每本都调 `_weights()` ⇒ `config.load_config()`（读 config.yaml + settings.json + 解析 YAML）。
+   实测（2,309 本）：**配置读盘 2,309 → 1 次，耗时 916 → 37 ms（−96%）**，结果逐字一致。
+   修法：算一次 `metascore.weights()` 逐本传进去 —— **范式照抄 `metascore.payload`**（它早就是这么做的）。
+2. **`POST /api/reading-log` 为「这本还在吗」扫一遍全库** —— `any(b["id"] == bid for b in library.books())`。
+   `library.by_id` 是**带索引的一条 SELECT**（第 62 期起就有，`by_id` 的 docstring 记着这件事）。
+   ⚠️ 行为变化一处：同名冲突书原来能记进度，现在 `by_id` 抛 `BookIdConflict` ⇒ 全局处理器翻
+   **409 + 修复入口**（第 128 期口径，与其它按 id 取书的接口一致 —— 冲突书不该继续记进度）。
+3. **维护页两处用 `len(library.books())` 数书** —— 一次全量物化只为一个整数。改用
+   `catalog.totals(...)` 的一次 COUNT，并**只统计当前登记的库**（口径与 `books()` 一致：已移除库的
+   残留索引行不算进来；范式同 `/api/libraries` 的 `totals`）。
+4. **系列元数据三个端点 + Komga 系列端点各扫 3 遍全库** —— 第 152 期已把系列**详情页**的
+   4 遍扫描收成 1 遍并**传参复用**（`series_meta.effective(name, books)` / `state(name, books)`
+   都收 `books`），但**兄弟端点**没跟着改。改成一次 `series_books(name)` 复用；Komga 那边成员书
+   已在 `items` 手上，直接传进去。
+
+### B. 明确**不做**的两条（量过才决定）
+
+- **`/api/books/{id}/similar` 的向量缓存**：实测全量解码 + 逐本建词袋 **106 ms/次**
+  （解码 91 ms + 词袋 15 ms），但要**常驻 3.4 MB**。这是**低频端点**（用户手动点「找相似」），
+  106 ms 完全无感 ⇒ **不值得**为它引入进程内缓存（3.4 MB 常驻 + 失效点风险）。
+  失效点本身是清楚的（唯一写路径 `embed.refresh()` → `db.set_embeddings`），留待真有痛点时再做。
+- **`stats.overview` 的 4 趟独立循环**（主循环 / 入库节奏 / 本月入库 / 语言集合）：每趟只是
+  内存遍历，收益约几 ms，优先级最低。
+
+### C. 用户可见文本里的期号泄漏（8 处，跨 5 个文件）
+
+第 222 期只修了 `settingsNav.ts`。用同一判据扫全前端，又找出：
+`ReaderView.vue`（**显示给用户的**「跳转（第 189 期）」）、`OpdsPage.vue`（三处）、
+`SettingsUnsupportedCard.vue`、`MaintenancePage.vue`、`PlaceholderView.vue`、
+`settingsFields.ts`、`whatsNew.ts`。
+⇒ 全部改成**用户需要知道的事实**（有什么 / 限制 / 什么不支持），删掉期号与开发口径。
+
+**防回归**：新增 `tests/test_user_visible_text.py`（2 例）—— 扫全前端 `.vue`/`.ts` 的**可见文本节点**
+与**用户可见属性**（title / label / placeholder / description / desc / message / aria-label），
+命中「第 N 期 / 已实现 / 本项目实现 / 上游该页」即失败；**注释跳过**（注释里带期号是对的）。
+第二例验「判据本身有效」—— 防止这条用例变成永远绿的空壳。
+
+**另两条修法各一条用例**（共 10 例）
+- `tests/test_metascore_weights_once.py`（4 例）：批量评分**只读一次配置**（打桩数 `load_config`
+  调用次数）、传权重**不改变结果**、`overview` 本身也不许逐本读盘；
+- `tests/test_no_full_scan_for_existence.py`（3 例）+ `tests/test_series_meta_single_scan.py`（3 例）：
+  「按 id 存在性检查不许扫全库」「数书口径必须与 `books()` 一致」「系列端点的扫描次数上限」。
+
+**核验**：后端全量 3057 例（2943 passed / 14 skipped / 13 例本机环境项）；
+前端四连 92 spec / 864 例全绿（第 226 期那批文案改动已跑过）。
+
+**这一轮的教训**
+
+- **第 222 期只修了一个文件就以为修完了** —— 同一类缺陷跨 5 个文件。⇒ 判据要**扫全仓**并
+  **固化成用例**，不能靠「找到一处改一处」。
+- 审计代理报的「疑似可缓存」要看**失效点**与**收益量级**：`/similar` 的失效点其实清楚
+  （`embed.refresh()` 是唯一写路径），但 106 ms / 3.4 MB 的量级不值得 ⇒ 明确不做，并写下理由。
+
+
 ## 第 229 期（外部书库的只读登记导入）
 
 **需求来源**：用户「继续」；Phase 4 余项「只读登记导入」。
@@ -12444,3 +12514,93 @@ CSS 已接进 `main.css` / `boot.js` 也套 class / **强度没落在 body 的 o
 （正常 / 文件不在库里 / 格式收不了）/ 登记落到覆盖层且**文件不动** / 没扫到书时如实说明）。
 
 **核验**：后端全量（见 §0 基线）；前端四连（92 spec / 864 例）。
+
+## 第 230 期（Hardcover 端点收敛到一处真值源）
+
+**需求来源**：持续审计任务（每小时触发）的**第二轮**。上一轮修的是「读路径的重复劳动」，
+本轮换维度：**单一真值源**（深挖）+ **体积**（找生成物）。
+
+**审计的四个维度与结果**
+
+| 维度 | 结果 |
+|---|---|
+| **单一真值源** | **1 条真缺陷**（Hardcover 端点抄了三份）—— 本期修 |
+| **体积** | 必读四文件 **132 KB**；跟踪文件 941 个 / 12.45 MB；**未发现可删的纯生成物**（详见下） |
+| **注释与界面文本** | 上一轮已修完并固化成用例，本轮**零新增** |
+| **契约一致性 / 404 断言** | 由独立代理在查（本段写作时结果未回，见后续期段） |
+
+### A. 单一真值源：Hardcover 端点抄了三份
+
+用「**跨模块相同字面量**」粗筛（提取 ≥12 字符的字面量，跨 `novelforge/core/*.py` 比对，
+只留含中文或像路径/枚举的串以压掉 `"/api/"` 这类通用串），逐条人工核实后找到：
+
+```
+integrations.HARDCOVER_GRAPHQL = "https://api.hardcover.app/v1/graphql"
+metasources.HARDCOVER          = "https://api.hardcover.app/v1/graphql"
+sync.HARDCOVER_GRAPHQL          = "https://api.hardcover.app/v1/graphql"
+```
+
+三处**完全相同**、用途也相同（都是 POST GraphQL 到同一端点）。⇒ 换域名 / 改版本要改三处，
+**漏一处就静默打到旧端点**（不报错，只是打不通 —— 正是本仓自己命名的「静默失败」）。
+
+**修法**：`integrations` 是真值源 —— 它**只依赖 httpx、不 import 任何 core 内模块**，
+是最底层（用例专门钉住「它保持叶子模块」，否则被引用方 import 它就可能成环）；
+`sync` 与 `metasources` 改成 `from .integrations import HARDCOVER_GRAPHQL`
+（后者用 `as HARDCOVER` 保留原名，**调用点一行未改**）。
+⇒ 代码里该 URL 现在**只出现 1 次**（另两处是 docstring 里的说明文字，不是代码）。
+
+**防回归**：`tests/test_external_endpoint_single_source.py`（3 例）——
+① 端点字面量只许出现一次；② 引用方确实 `from .integrations import`（不是自己又定义一个同值的）；
+③ 真值源保持叶子模块（`integrations.py` 不 import 任何 core 内模块）。
+
+### B. 体积维度：查过了，没有可删的
+
+- **必读四文件**：`AGENTS.md` 19.8 KB + `docs/TODO.md` 48.5 KB + `MEMORY.md` 51.7 KB +
+  `MEMORY-REF.md` 15.3 KB = **132 KB**（比上轮 128 KB 略涨 —— 并行会话加了内容，非本轮所致）。
+- **跟踪文件** 941 个 / 12.45 MB（`frontend` 3.75 / `novelforge` 2.93 / `tests` 2.69 /
+  `docs` 2.07 / `.codebuddy` 0.50 / `clients` 0.25 / 根 0.24 MB）。
+- **生成物候选**：带「自动生成 / 快照 / 导出」字样的跟踪文件逐个看过 —— `docs/TODO.md` 自身、
+  `docs/agents-audit-95.md`（第 95 期审计快照，AGENTS 文档地图与 roadmap 都引用着）、
+  `docs/component-api.md`、`docs/roadmap-verification.md` —— **全是活文档**，不是可删的生成物。
+  ⇒ 本轮**没有**删除。
+- **重复实现粗筛**：同名函数 + 相同实现指纹（去掉注释与 docstring 后的哈希）跨模块比对 ⇒
+  **0 处逐字相同**。
+
+### B2. 「接口 404 断言」：唯一的实际违反点已补上
+
+用 `git log --all -p | grep '^-@app\.'` 程序化还原 `server.py` 历史上**所有被删除的路由**，
+再逐条到 `tests/` 找 404 断言：
+
+- **已钉住的 6 组**：`/api/requests/config`、`/api/library-facets`、`GET /content`、
+  `/api/metadata/sources`、`/api/rename/preview|apply`、`/api/opds/sources` —— 齐备。
+- **真缺陷**：`/api/library-migrations/*` **七个端点**（第 77 期 `b5503bc` 删）——
+  删除时 `core/migrate.py:10` 与 `server.py:6822` 的**注释**记得，但 `tests/` **零命中**。
+  这是全仓**唯一**「删了整组端点却没有 404 断言」的情况，与 AGENTS §1 直接相悖。
+  ⇒ 补 `tests/test_api_smoke.py::test_按格式归库端点已随第77期移除`（七个 method+path 逐个断 404）。
+- **明确不做**（历史遗留）：`POST /search`、`POST /download`、`GET /supported`、`GET /files`、
+  `GET /sources`、`/convert-path-form` 这批**早期非 `/api` 路径**下线时没有 404 断言 ——
+  那批删除**早于 404 断言纪律确立**（`142ed62` / `cd091d9`），且 `/download` 现在是**活路由**
+  （`server.py:2388` 的 `/download/{name:path}`，书下载）。给从未被断言过的历史路径补断言，
+  等于追认当初就该有，且有把**活路由**误判成死路由的风险 ⇒ 不补，记在这里。
+
+其余专项：`/api/scan` **没删**（`server.py:8072`，前端 `api.ts:3793` 在调）；
+`/api/convert`、`/api/tags`、`/api/settings`、`/api/dashboard`、`/api/scrape/tasks`
+**从未存在过**；`/api/books/{bid}/online/*` 全套活着且有 404 用例（`test_online_bind.py` 等）。
+
+### C. 读路径与界面文本：上一轮已收口，本轮零新增
+
+第 228 期已修 4 处读路径重复劳动（`/api/stats` 的配置读盘 2,309 → 1 次、−96%）并加了 10 例用例；
+第 226 期已把「用户可见文本里的期号泄漏」全部修掉并固化成 `tests/test_user_visible_text.py`。
+本轮复跑两条判据：**零新增**。
+
+**核验**：后端全量 3057 例（2943 passed / 14 skipped / 13 例本机环境项）；
+前端未改（纯后端收敛）。
+
+**这一轮的教训**
+
+- **粗筛要给线索、不能给结论**：「跨模块相同字面量」扫出的候选里，`'items 必须是非空数组'`
+  这类**错误文案**重复是合理的（不同模块各自的入参校验），`https://openlibrary.org` 那种
+  **域名**重复也未必是缺陷（一个是 API 根、一个是官网）⇒ 逐条人工核实后才敢动手。
+- **选真值源要看依赖方向**：`integrations` 只 import httpx ⇒ 它是最底层、可以当别人的依赖；
+  若它反过来 import 了 `sync`，收敛就会造成循环导入。用例钉住「它保持叶子模块」。
+
