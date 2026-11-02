@@ -810,6 +810,57 @@ def overrides_error() -> "BaseException | None":
     return _OVERRIDES_READ_ERROR
 
 
+def env_cache_ttl() -> "int | None":
+    """环境变量 `NOVELFORGE_METADATA_CACHE_TTL` 的值（没设 / 填错 ⇒ `None`）。
+
+    ⚠️ 第 253 期：这是**兜底链**的最后一环，写入口也要用它
+    （`server._drop_env_echo`）—— 回显带回来的那个值若与环境变量相同，
+    它就**不是用户的选择**，不该被存进覆盖层。
+    """
+    raw = os.getenv(_ENV_CACHE_TTL)
+    if raw is None:
+        return None
+    try:
+        return int(raw.strip())
+    except (TypeError, ValueError):
+        return None                     # 填错的忽略：一个笔误不该让服务起不来
+
+
+def env_detail_fetch() -> "bool | None":
+    """环境变量 `NOVELFORGE_METADATA_DETAIL_FETCH` 的值（没设 ⇒ `None`）。"""
+    raw = os.getenv(_ENV_DETAIL_FETCH)
+    if raw is None:
+        return None
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _differs_from_default(value, default) -> bool:
+    """``value`` 与**默认值**不同吗（= 是不是「人真的改过」）。
+
+    ⚠️ 第 253 期：这是 **config.yaml** 那一侧「人写过」的判据。
+    判据**只有一处**（这里）。
+
+    * 值缺失（`None`）⇒ 不算「改过」（= 没这个键）；
+    * 值 == 默认值 ⇒ **不算**「改过」——
+      「重置配置」把 `DEFAULTS` 整份写进 config.yaml，里面带着
+      `cache_ttl: null` / `detail_fetch: false`，那**不是**人的选择；
+    * 值 != 默认值 ⇒ 算「改过」。
+
+    ⚠️ **但 `0` 与「没设」是两件事**：`cache_ttl=0` = 关闭缓存（用户明确要的），
+    它**不等于**默认值（`None`）⇒ 算「改过」⇒ 环境变量不得插手
+    （见 `test_config_readback_contract.py::test_零是关闭缓存`）。
+
+    ⚠️ 类型不同也算「改过」（`False` vs `0`）。
+    """
+    if value is None:
+        return False
+    if default is None:
+        return True                     # 默认是 None 而值非 None ⇒ 算改过（`0` 也算）
+    if isinstance(value, bool) != isinstance(default, bool):
+        return True
+    return value != default
+
+
 def load_config() -> dict:
     """加载配置：默认值 → config.yaml → settings.json 覆盖层 → 环境变量。"""
     global _CONFIG_ERROR, _BAD_SECTIONS
@@ -881,20 +932,39 @@ def load_config() -> dict:
     # 所以规则是：settings.json / config.yaml 里人写过就以人写的为准，没人写过才用环境变量。
     mf = data.get("metadata_fetch")
     if isinstance(mf, dict):
-        written: dict = {}
-        for src in (load_overrides(), file_sec):
-            sec = src.get("metadata_fetch") if isinstance(src, dict) else None
-            if isinstance(sec, dict):
-                written.update(sec)
-        if "cache_ttl" not in written:
-            raw_ttl = os.getenv(_ENV_CACHE_TTL)
-            if raw_ttl is not None:
-                try:
-                    mf["cache_ttl"] = int(raw_ttl.strip())
-                except (TypeError, ValueError):
-                    pass                 # 填错的忽略：一个笔误不该让服务起不来
-        if "detail_fetch" not in written:
-            raw_detail = os.getenv(_ENV_DETAIL_FETCH)
-            if raw_detail is not None:
-                mf["detail_fetch"] = raw_detail.strip().lower() in ("1", "true", "yes", "on")
+        # ⚠️ 第 253 期：**「人写过」要分来源看**。
+        #
+        # 两个来源的含义**根本不同**：
+        #   · **settings.json** = 应用内设置页的覆盖层 ⇒ 出现在这里的值**就是**
+        #     用户在界面上选的（前端保存分区时提交**整段**）⇒ 键在 ⇒ 就算「人写过」；
+        #   · **config.yaml** = 运维手写的文件 ⇒ 「重置配置」会把它**整份**写成
+        #     `DEFAULTS` 的序列化（里面带着 `cache_ttl: null` / `detail_fetch: false`）
+        #     ⇒ 键在**不代表**人写过 ⇒ 只在**值与默认值不同**时才算。
+        #
+        # ⚠️ 此前这段是 `(load_overrides(), file_sec)` 合并 ⇒ **config.yaml 后写、
+        # 优先级反而更高** ⇒ 「重置配置」留下的 `cache_ttl: null` 把用户在
+        # settings.json 里写的 `0` **盖掉** ⇒ 「用户明明设了，环境变量却当成没写」。
+        # ⇒ 现在**按来源分别判断**，且 settings.json 优先。
+        ov = load_overrides()
+        ov_mf = ov.get("metadata_fetch") if isinstance(ov, dict) else None
+        yaml_mf = file_sec.get("metadata_fetch") if isinstance(file_sec, dict) else None
+
+        def _written(key: str, default):
+            """这个键算不算「人写过」（settings.json 优先，其次 config.yaml）。"""
+            if isinstance(ov_mf, dict) and key in ov_mf:
+                return True                # 用户在界面上选过 ⇒ 以用户为准
+            if isinstance(yaml_mf, dict) and key in yaml_mf:
+                # config.yaml 里的值：只有**与默认值不同**才算「人写过」
+                # （「重置配置」写下的默认值不是人的选择）
+                return _differs_from_default(yaml_mf[key], default)
+            return False
+
+        env_ttl = env_cache_ttl()
+        env_detail = env_detail_fetch()
+        if not _written("cache_ttl", DEFAULTS["metadata_fetch"]["cache_ttl"]):
+            if env_ttl is not None:
+                mf["cache_ttl"] = env_ttl
+        if not _written("detail_fetch", DEFAULTS["metadata_fetch"]["detail_fetch"]):
+            if env_detail is not None:
+                mf["detail_fetch"] = env_detail
     return data
