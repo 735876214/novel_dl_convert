@@ -9638,6 +9638,27 @@ def api_get_config():
     }
 
 
+def _drop_env_echo(mf: dict, key: str, env_value) -> None:
+    """把 ``mf[key]`` 里「**只是环境变量回显回来的**」那个值丢掉。
+
+    ⚠️ 第 253 期：设置页保存分区时提交**整段**，而回显里这两个键装的是
+    **环境变量算出来的值** ⇒ 用户点一次「保存」就把那个值**当成了自己的选择**
+    存进覆盖层 ⇒ 运维后来改环境变量不再生效。
+
+    ⇒ 值与环境变量**相同** ⇒ 丢掉（它不是用户选的，继续由环境变量兜底）；
+    值**不同** ⇒ 保留（用户改了，意图不能丢）。
+    """
+    if env_value is None:
+        return                          # 没有环境变量 ⇒ 没什么可丢的
+    if key not in mf:
+        return
+    val = mf[key]
+    if isinstance(val, bool) != isinstance(env_value, bool):
+        return                          # 类型不同 ⇒ 不是同一个值
+    if val == env_value:
+        mf.pop(key, None)
+
+
 @app.put("/api/config")
 def api_put_config(payload: dict = Body(...)):
     patch = _sanitize_config(payload or {})
@@ -9693,6 +9714,27 @@ def api_put_config(payload: dict = Body(...)):
             if val > 2592000:
                 raise HTTPException(400, "缓存有效期最多 30 天（再长就不是缓存，而是拿旧数据冒充新数据）")
             mf["cache_ttl"] = val
+
+    # ⚠️ 第 253 期：**环境变量的值不许被「存回覆盖层」**。
+    #
+    # 设置页保存「元数据」分区时提交**整段** `metadata_fetch`
+    # （`SECTION_KEYS.metadata` = `['metadata_fetch', 'metadata_score']`），
+    # 而回显里 `cache_ttl` / `detail_fetch` 装的是**环境变量算出来的值** ——
+    # 部署者设的 `NOVELFORGE_METADATA_CACHE_TTL=120`，回显出来就是 `120`。
+    # 用户点一次「保存」⇒ 那个 `120` 被**当成用户的选择**写进 settings.json
+    # ⇒ ① 环境变量的兜底从此失效；② 运维后来改环境变量也**不再生效**
+    # （实测：env 从 120 改成 300，界面上还是 120）。
+    #
+    # ⇒ 写入口就把「与环境变量那个值相同」的项**丢掉**（不写进覆盖层）
+    # ⇒ 它继续由环境变量兜底 ⇒ 运维改环境变量照旧生效。
+    # ⚠️ 只丢「**与环境变量的值相同**」的（那才是回显带回来的），
+    # 用户**改成别的值**时照旧写进去（用户的意图不能被丢掉）。
+    if isinstance(mf, dict):
+        _drop_env_echo(mf, "cache_ttl", config.env_cache_ttl())
+        _drop_env_echo(mf, "detail_fetch", config.env_detail_fetch())
+        if not mf:
+            mf.pop("cache_ttl", None)
+            mf.pop("detail_fetch", None)
 
     # 第 94 期阶段 4a：URL 导入的两条数必须是**正**数 —— 这里与上面那组刻意不同口径：
     # `max_bytes: 0` 在这条路上不是「不限制」而是「什么都取不回来」，属于把功能关死却不
