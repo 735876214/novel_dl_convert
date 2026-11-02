@@ -8,7 +8,7 @@
  *
  * 两件事，顺序不能换：
  *   1. 旧 hash 链接迁移：`/#/shelf` → `/shelf`（第 153 期把 hash 路由改成 history）。
- *   2. 主题预置：在首屏渲染前套 dark / accent-* / radius-*，避免 FOUC。
+ *   2. 主题预置：在首屏渲染前套 dark / accent-* / radius-* / texture-*，避免 FOUC。
  */
 ;(function () {
   // 1) 旧 hash 链接迁移。只认 `#/` 开头，纯锚点（#top）不动。
@@ -36,6 +36,9 @@
   var theme = readStoredValue('theme', 'system')
   var accent = readStoredValue('accent', 'neutral')
   var radius = readStoredValue('radius', 'default')
+  // 第 227 期：背景纹理。**始终套 class**（含 `texture-none`）—— CSS 里 `texture-none`
+  // 把强度归零；与 stores/theme.ts 的 applyClasses 同一口径。
+  var texture = readStoredValue('texture', 'none')
 
   var systemDark =
     typeof window.matchMedia === 'function' &&
@@ -46,6 +49,7 @@
   if (isDark) root.classList.add('dark')
   if (accent !== 'neutral') root.classList.add('accent-' + accent)
   if (radius !== 'default') root.classList.add('radius-' + radius)
+  root.classList.add('texture-' + (texture || 'none'))
 
   // 3) Service Worker（第 153 期）：统一注册在根路径 `/sw.js`。
   //    后端用 `Service-Worker-Allowed: /` 把作用域放到全站；开发期由 Vite 的

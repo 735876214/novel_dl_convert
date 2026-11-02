@@ -20,6 +20,7 @@
  *   tokens.css      定义 --background / --muted-foreground 等原子变量
  *   accents.css     65 档 accent class，覆盖 --tint-h 与 --primary
  *   radius.css      4 档圆角，覆盖 --radius 与 --shell-radius
+ *   texture.css     背景纹理（第 227 期）：10 档纯 CSS 纹理 + 强度闸
  *   bridge.css      @theme inline 桥接层，把变量映射成 Tailwind 工具类
  *   cover-effects   书封视觉效果
  * bridge.css 依赖 tokens.css 里的变量已存在，务必排在它之后。
@@ -27,6 +28,7 @@
 @import './theme/tokens.css';
 @import './theme/accents.css';
 @import './theme/radius.css';
+@import './theme/texture.css';
 @import './theme/bridge.css';
 @import './theme/cover-effects.css';
 

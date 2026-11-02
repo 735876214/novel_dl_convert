@@ -97,6 +97,8 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
         theme: theme.theme,
         accent: theme.accent,
         radius: theme.radius,
+        // 第 227 期：背景纹理随账号走（它是「我怎么看你这个应用」，与主题同档）
+        texture: theme.texture,
         ...display.prefs,
       },
       cover: { ...cover.prefs },
@@ -131,6 +133,9 @@ export const usePrefSyncStore = defineStore('prefSync', () => {
         theme: p.appearance.theme as ThemeMode,
         accent: p.appearance.accent,
         radius: p.appearance.radius as RadiusMode,
+        // ⚠️ 老载荷没有 `texture` ⇒ 不传 ⇒ `applyRemote` 不动本机的纹理
+        // （否则换设备会把「我特意关掉的纹理」打开）。
+        ...(p.appearance.texture ? { texture: p.appearance.texture } : {}),
       })
       // 同一个 appearance 块喂两个 store：各自只挑自己认识的键（theme 只取三件套，
       // display 只取布局字段），互不污染 —— 两边的 applyRemote 都做了逐键校验

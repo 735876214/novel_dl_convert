@@ -9,7 +9,7 @@ import Segment from '@/components/ui/Segment.vue'
 import SwatchGrid from '@/components/ui/SwatchGrid.vue'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
 import { ACCENTS } from '@/data/accents'
-import { RADIUS_OPTIONS, THEME_LABEL, useThemeStore } from '@/stores/theme'
+import { RADIUS_OPTIONS, TEXTURE_OPTIONS, THEME_LABEL, useThemeStore } from '@/stores/theme'
 import { useCustomIconsStore } from '@/stores/customIcons'
 import { useUiStore } from '@/stores/ui'
 
@@ -75,6 +75,12 @@ function onRadius(v: string): void {
   ui.toast('圆角已更新')
 }
 
+/** 背景纹理（第 227 期）：换档即换 `<html>` 上的 `texture-<key>` class。 */
+function onTexture(v: string): void {
+  theme.setTexture(v)
+  ui.toast('背景纹理已更新')
+}
+
 function resetAppearance(): void {
   theme.setTheme('system')
   theme.setAccent('neutral')
@@ -117,6 +123,17 @@ function resetAppearance(): void {
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">全局联动，含卡片、输入框与胶囊</div>
         </div>
         <Segment :options="RADIUS_OPTIONS" :model-value="theme.radius" @update:model-value="onRadius" />
+      </div>
+
+      <div class="flex items-center gap-4 border-t border-border px-4 py-3.5">
+        <div class="min-w-0 flex-1">
+          <div class="text-[13px] font-medium text-foreground">背景纹理</div>
+          <div class="mt-0.5 text-[11.5px] text-muted-foreground">
+            共 {{ TEXTURE_OPTIONS.length }} 档 · 纯 CSS 绘制，不引图片、不出网；
+            纹理很淡，不影响正文对比度
+          </div>
+        </div>
+        <Segment :options="TEXTURE_OPTIONS" :model-value="theme.texture" @update:model-value="onTexture" />
       </div>
 
       <div class="flex items-center gap-4 border-t border-border px-4 py-3.5">

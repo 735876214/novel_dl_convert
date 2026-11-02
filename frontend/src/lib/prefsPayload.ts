@@ -48,6 +48,8 @@ export interface AppearancePrefs extends DisplayPrefs {
   theme: string
   accent: string
   radius: string
+  /** 背景纹理（第 227 期）：`texture-<key>` 的 key（`none` = 关）。 */
+  texture: string
 }
 
 export interface PrefsPayload {
@@ -97,6 +99,7 @@ export const APPEARANCE_DEFAULT: AppearancePrefs = {
   theme: 'system',
   accent: 'neutral',
   radius: 'default',
+  texture: 'none',
   ...DISPLAY_PREFS_DEFAULT,
 }
 

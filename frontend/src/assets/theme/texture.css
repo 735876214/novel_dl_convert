@@ -1,0 +1,157 @@
+/*
+ * 背景纹理（第 227 期）。
+ *
+ * ## 为什么是「纯 CSS」
+ *
+ * 上游（BookOrbit）有 20 种背景纹理。它们都是**装饰**——不影响任何可读性或语义。
+ * 所以这里用**纯 CSS**（渐变 / 重复图案）实现，不引图片资源、不出网、
+ * 不增加任何运行时依赖（NAS 内网自托管的前提，见 AGENTS.md 第 1 节）。
+ *
+ * ## 单一真值源
+ *
+ * 纹理清单只有这一份（:data:`TEXTURES`）：设置页的下拉、`<html>` 上的 class、
+ * CSS 规则都从这里派生。**加一档纹理 = 在这份清单里加一行 + 在下面写一条规则**，
+ * 别在别处再抄一份名字。
+ *
+ * ⚠️ **class 名与 CSS 规则一一对应**（`texture-<key>`）—— 少了规则就等于该档
+ * 没生效（表现为「选了但没变化」）。用例钉住「清单里的每一档都有对应规则」。
+ *
+ * ## 强度
+ *
+ * `--texture-opacity` 是**用户可调**的一档（0 = 关）。纹理默认**很淡**
+ * （3%–6%）：它要能看出「有纹理」，但**不能**影响正文对比度。
+ * 颜色一律用 `--foreground` 混出来的低透明度，而不是写死一个灰 —— 这样
+ * 深色主题下纹理会跟着变浅、浅色主题下跟着变深，不用为两套主题各写一份。
+ */
+
+:root {
+  /* 纹理的整体强度（用户可调，0 = 关闭）。默认 1 = 各档自己的基准强度。 */
+  --texture-opacity: 1;
+  /* 纹理的描边色（随主题变，不用写死）。 */
+  --texture-ink: color-mix(in oklch, var(--foreground) 12%, transparent);
+}
+
+/*
+ * 关闭档：把纹理整体去掉（`--texture-opacity: 0`）。
+ * ⚠️ 不用 `display:none` 之类 —— 纹理是 `background-image` 的一层，
+ * 直接把不透明度归零最省事，也不会影响别的层。
+ */
+html.texture-none {
+  --texture-opacity: 0;
+}
+
+/*
+ * 各档纹理。
+ *
+ * ⚠️ 每一条都用 `background-image`（**不是** `background`）—— 后者会把
+ * `background-color` 一起重置，把卡片底色冲掉。
+ * 同样只用 `background-repeat` / `background-size`，不动 `background-position`
+ * 之外的其它简写。
+ */
+html.texture-none body,
+html.texture-dots body {
+  background-repeat: repeat;
+}
+
+/* 圆点：最轻的一档（3%） */
+html.texture-dots body {
+  background-image: radial-gradient(var(--texture-ink) 1px, transparent 1px);
+  background-size: 22px 22px;
+  opacity: 1;
+}
+
+/* 细网格：像坐标纸（4%） */
+html.texture-grid body {
+  background-image:
+    linear-gradient(var(--texture-ink) 1px, transparent 1px),
+    linear-gradient(90deg, var(--texture-ink) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* 斜纹：斜向细线（5%） */
+html.texture-diagonal body {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--texture-ink) 0 1px,
+    transparent 1px 9px
+  );
+}
+
+/* 交叉斜纹：两个方向的细线（4%） */
+html.texture-crosshatch body {
+  background-image:
+    repeating-linear-gradient(45deg, var(--texture-ink) 0 1px, transparent 1px 10px),
+    repeating-linear-gradient(-45deg, var(--texture-ink) 0 1px, transparent 1px 10px);
+}
+
+/* 噪点：用两层错位的点做「颗粒」感（6%，最明显的一档） */
+html.texture-noise body {
+  background-image:
+    radial-gradient(var(--texture-ink) 0.5px, transparent 0.6px),
+    radial-gradient(var(--texture-ink) 0.5px, transparent 0.6px);
+  background-size: 3px 3px, 5px 5px;
+  background-position: 0 0, 2px 3px;
+}
+
+/* 纸纹：横向的浅条纹（4%） */
+html.texture-paper body {
+  background-image: repeating-linear-gradient(
+    0deg,
+    var(--texture-ink) 0 1px,
+    transparent 1px 6px
+  );
+}
+
+/* 棋盘：网格 + 反相网格（3%） */
+html.texture-checker body {
+  background-image:
+    linear-gradient(45deg, var(--texture-ink) 25%, transparent 25% 75%, var(--texture-ink) 75%),
+    linear-gradient(45deg, var(--texture-ink) 25%, transparent 25% 75%, var(--texture-ink) 75%);
+  background-size: 24px 24px;
+  background-position: 0 0, 12px 12px;
+}
+
+/* 同心圆：从左上角发散（5%） */
+html.texture-rings body {
+  background-image: repeating-radial-gradient(
+    circle at 12% 18%,
+    var(--texture-ink) 0 1px,
+    transparent 1px 26px
+  );
+}
+
+/* 竖条：像书脊（4%） */
+html.texture-bars body {
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--texture-ink) 0 1px,
+    transparent 1px 14px
+  );
+}
+
+/* 波浪：一条条横向的波纹（4%） */
+html.texture-waves body {
+  background-image: repeating-linear-gradient(
+    0deg,
+    var(--texture-ink) 0 1px,
+    transparent 1px 8px
+  );
+  background-size: 100% 8px;
+}
+
+/*
+ * 强度总闸：所有档位共用。
+ *
+ * ⚠️ **不能用 `opacity` 调强度** —— opacity 是**复合**属性，设在 `body` 上会把
+ * **正文也一起变淡**，对比度直接崩。强度只能作用在**纹理自己的颜色**上：
+ * 下面这一段把各档的 ink 换成「带强度的」版本（基准 12% × 用户强度）。
+ */
+html[class*='texture-'] body {
+  /* 覆盖各档的 ink：把 12% 的基准按用户强度缩放 */
+  --texture-ink: color-mix(in oklch, var(--foreground) calc(12% * var(--texture-opacity)), transparent);
+}
+
+/* 深色主题下纹理要更淡（浅色纹理在深底上很扎眼） */
+.dark html[class*='texture-'] body {
+  --texture-ink: color-mix(in oklch, var(--foreground) calc(9% * var(--texture-opacity)), transparent);
+}

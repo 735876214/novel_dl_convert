@@ -29,6 +29,27 @@ export const RADIUS_OPTIONS: Array<{ value: RadiusMode; label: string }> = [
   { value: 'pill', label: '胶囊' },
 ]
 
+/**
+ * 背景纹理档位（第 227 期）。
+ *
+ * ⚠️ **这份清单是唯一真值源**：设置页的下拉、`<html>` 上的 class（`texture-<key>`）
+ * 与 `assets/theme/texture.css` 的规则**一一对应**。加一档 = 这里加一行 +
+ * CSS 里写一条规则；少写规则就等于该档「选了没变化」。
+ */
+export const TEXTURE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'none', label: '无' },
+  { value: 'dots', label: '圆点' },
+  { value: 'grid', label: '网格' },
+  { value: 'diagonal', label: '斜纹' },
+  { value: 'crosshatch', label: '交叉斜纹' },
+  { value: 'noise', label: '噪点' },
+  { value: 'paper', label: '纸纹' },
+  { value: 'checker', label: '棋盘' },
+  { value: 'rings', label: '同心圆' },
+  { value: 'bars', label: '竖条' },
+  { value: 'waves', label: '波浪' },
+]
+
 function readStored<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key)
@@ -71,6 +92,8 @@ export const useThemeStore = defineStore('theme', () => {
   const theme = ref<ThemeMode>(readStored<ThemeMode>('theme', 'system'))
   const accent = ref<string>(readStored<string>('accent', 'neutral'))
   const radius = ref<RadiusMode>(readStored<RadiusMode>('radius', 'default'))
+  /** 背景纹理（第 227 期）：`texture-<key>` class。默认 `none`（不改变现有观感）。 */
+  const texture = ref<string>(readStored<string>('texture', 'none'))
 
   const isDark = computed(() => theme.value === 'dark' || (theme.value !== 'light' && prefersDark()))
 
@@ -84,6 +107,11 @@ export const useThemeStore = defineStore('theme', () => {
 
     stripClassPrefix('radius-')
     if (radius.value !== 'default') el.classList.add(`radius-${radius.value}`)
+
+    // 第 227 期：背景纹理。**始终挂 class**（含 `none`）—— CSS 里 `texture-none`
+    // 把强度归零；这样「切档」只需要换 class，不必记「上一个是什么」。
+    stripClassPrefix('texture-')
+    el.classList.add(`texture-${texture.value || 'none'}`)
   }
 
   function setTheme(next: ThemeMode): void {
@@ -113,6 +141,14 @@ export const useThemeStore = defineStore('theme', () => {
     applyClasses()
   }
 
+  /** 背景纹理（第 227 期）。未知档位回落 `none`（不选一个 CSS 里没有的档）。 */
+  function setTexture(next: string): void {
+    const ok = TEXTURE_OPTIONS.some((o) => o.value === next)
+    texture.value = ok ? next : 'none'
+    writeStored('texture', texture.value)
+    applyClasses()
+  }
+
   /** 「跟随系统」时系统深浅切换要实时反映 */
   function watchSystem(): void {
     if (typeof window.matchMedia !== 'function') return
@@ -128,7 +164,7 @@ export const useThemeStore = defineStore('theme', () => {
    * ⚠️ 仍必须经 `applyClasses()` 这一个入口挂 class —— 不要为了「快」直接改 DOM。
    * 写入期间抑制通知（否则会把刚拉下来的值又推回服务端）。
    */
-  function applyRemote(next: Partial<{ theme: ThemeMode; accent: string; radius: RadiusMode }>): void {
+  function applyRemote(next: Partial<{ theme: ThemeMode; accent: string; radius: RadiusMode; texture: string }>): void {
     suppressing(() => {
       if (next.theme && THEME_ORDER.includes(next.theme)) {
         theme.value = next.theme
@@ -142,6 +178,10 @@ export const useThemeStore = defineStore('theme', () => {
         radius.value = next.radius
         writeStored('radius', radius.value)
       }
+      if (typeof next.texture === 'string' && TEXTURE_OPTIONS.some((o) => o.value === next.texture)) {
+        texture.value = next.texture
+        writeStored('texture', texture.value)
+      }
     })
     applyClasses()
   }
@@ -150,12 +190,14 @@ export const useThemeStore = defineStore('theme', () => {
     theme,
     accent,
     radius,
+    texture,
     isDark,
     applyClasses,
     setTheme,
     cycleTheme,
     setAccent,
     setRadius,
+    setTexture,
     watchSystem,
     applyRemote,
   }
