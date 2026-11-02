@@ -448,7 +448,7 @@ def _collect_surface(client, auth_headers, make_library, make_epub) -> dict[str,
     return surface
 
 
-def test_version_is_single_source(client):
+def test_version_is_single_source(client, auth_headers):
     """`/health` 与 `/openapi.json` 的版本号都必须等于仓库根 `VERSION`。
 
     端上的版本协商只有这一个判据：`GET /health`（免鉴权、登录前就能问）拿 `version`，
@@ -466,8 +466,17 @@ def test_version_is_single_source(client):
     h = client.get("/health")          # 不带任何头：登录前的预检就靠它免鉴权
     assert h.status_code == 200, h.text
     body = h.json()
-    assert {"status", "checks", "problems", "version"} <= set(body), sorted(body)
+    # ⚠️ 第 258 期：免鉴权的 `/health` **只给不含内部事实的东西**
+    # （状态 / 版本 / 能否一键更新 / 有几条问题）——
+    # 各项 `checks` 明细、绝对路径、`problems` 人话清单都在**鉴权后**的 `GET /api/health`。
+    assert {"status", "version", "problem_count"} <= set(body), sorted(body)
     assert body["version"] == ver, f"/health 版本与 VERSION 不一致：{body['version']} != {ver}"
+
+    # 完整快照在**鉴权后**的端点上（同一个判据，不另算一份）
+    d = client.get("/api/health", headers=auth_headers)
+    assert d.status_code == 200, d.text
+    detail = d.json()
+    assert {"status", "checks", "problems", "version", "input", "output"} <= set(detail), sorted(detail)
 
     spec = client.get("/openapi.json")  # 非 `/api` 前缀同样免鉴权（中间件 :445 只拦 /api）
     assert spec.status_code == 200, spec.text[:200]

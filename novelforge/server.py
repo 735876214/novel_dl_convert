@@ -1081,6 +1081,16 @@ def health(response: Response):
 
     ⇒ 每一项都可能出错的地方都经 :func:`_health_probe` 兜住（判据只有那一处）：
     探针抛异常 ⇒ 那项**降级**（按「探不出」算）+ 说进 `problems`，**其余照旧回话**。
+
+    ⚠️ 第 258 期：**这个端点是免鉴权的 ⇒ 它只回「不含内部事实」的东西**。
+    此前它把 `input` / `output` / `logs` 三个**绝对路径**、`checks.default_pin`
+    （是不是还在用默认口令）、`checks.cache`（有没有配 Redis）、以及带路径的
+    `problems` 全都发出去 ⇒ **任何人**（不用登录）都能拿到：
+      · NAS 上的**目录结构**（收书 / 导出 / 日志目录在哪儿）；
+      · **账号是不是还在用初始口令** `changeme`（局域网 8992 直通时这是安全信息）；
+      · 有没有配 Redis（部署形态）。
+    ⇒ 那些**挪到鉴权后的** `GET /api/health`（同一个 `_health_checks()` 判据，
+    **不另算一份**）；这里只留前端**免鉴权也要**的：状态 / 版本 / 能否一键更新。
     """
     hc = _health_checks()
     down = not hc["checks"]["db"]
@@ -1088,17 +1098,41 @@ def health(response: Response):
         response.status_code = 503
     return {
         "status": "down" if down else ("degraded" if hc["problems"] else "ok"),
-        "checks": hc["checks"],
-        "problems": hc["problems"],
-        "input": str(INPUT_DIR),
-        "output": str(OUTPUT_DIR),
-        "watcher": hc["checks"]["watcher_running"],
+        # ⚠️ 第 258 期：只给「能不能服务」与「有没有毛病」，**不给**各项明细
+        # （`checks` 里含默认口令、Redis 等**内部事实**）。
+        # ⚠️ 但 `problems` 也要**脱敏** —— 它带绝对路径（配置目录、目录建不出来…）。
+        # ⇒ 只回**条数**；人话清单在鉴权后的 `GET /api/health`。
+        "problem_count": len(hc["problems"]),
         # 应用版本（**只读**、免鉴权端点，不含任何敏感信息）；前端 About / 更新日志据此渲染
         "version": APP_VERSION,
         # 是否挂了 docker.sock（决定「一键更新」可用与否）；侧栏据此决定是否挂 new 提示
         "updater_available": _health_probe(
             updater.updater_available, False, name="updater_available"),
+    }
+
+
+@app.get("/api/health")
+def api_health_detailed():
+    """**鉴权后**的完整健康快照（第 258 期）—— 免鉴权的 `/health` 放不下的那些。
+
+    放这里的是**内部事实**：`checks` 的各项明细（含 `default_pin` = 是不是还在用
+    初始口令、`cache` = 有没有配 Redis）、带**绝对路径**的 `problems`、
+    以及 `input` / `output` / `logs` 三个目录。
+
+    ⚠️ 判据**只有一份**（`_health_checks()`）—— 公共端点与这里**读的是同一份**，
+    不各算一遍（各算一遍就会漂：两个端点对同一件事给出不同结论）。
+    """
+    hc = _health_checks()
+    return {
+        "status": "down" if not hc["checks"]["db"] else (
+            "degraded" if hc["problems"] else "ok"),
+        "version": APP_VERSION,
+        "checks": hc["checks"],
+        "problems": hc["problems"],
+        "input": str(INPUT_DIR),
+        "output": str(OUTPUT_DIR),
         "logs": str(_health_probe(activity_log.log_dir, "", name="log_dir")),
+        "watcher": hc["checks"]["watcher_running"],
     }
 
 
