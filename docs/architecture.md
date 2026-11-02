@@ -339,6 +339,7 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 | **清理动作的如实回报**（删不掉的怎么说） | `novelforge/server.py` 的 `api_clear_cache` / `api_clear_recycle`（第 141 / 256 期：**回执恒定带 `failed`** —— 删不掉的**必须列出来**且 `ok=False`；「说清空了却没清干净」比「没清干净」更坏） |
 | **探针抛异常时怎么说**（探活不许失声） | `novelforge/server.py` 的 `_health_probe`（第 257 期：抛异常的那项**降级成「探不出」**（**不是「正常」** —— 那会掩盖它本该报告的事）+ **留痕**进 `problems`；其余照旧回话 ⇒ `/health` **永远能回话**，否则 Docker HEALTHCHECK 失败 ⇒ 容器被反复重启） |
 | **免鉴权端点能回什么**（内部事实的边界） | `novelforge/server.py` 的 `health` / `api_health_detailed`（第 258 期：免鉴权的 `/health` **只给**状态 / 版本 / 能否一键更新 / **有几条问题**；`checks` 明细 / `problems` 人话 / 三个**绝对路径**在**鉴权后**的 `GET /api/health` ⇒ 免鉴权拿到 = 泄露 NAS 目录结构与「还在用默认口令」这种安全信息） |
+| **抓取值会不会因为超长而写不进去**（预览要与写入一致） | `novelforge/core/metafetch.py` 的 `_too_long_value` / `_mark_too_long`（第 259 期：判据**复用**写入侧那两张表 —— 元数据 `db.metadata_field_limits()` / 自定义 `customfields.value_limits()`；预览给超长字段标 `too_long` ⇒ **提交前**就知道会丢；写入侧**一律跳过**（不抛）⇒ 一家返回异常值不该毁掉**整次**抓取） |
    | 书目列表缓存的**键语义**（哪个口径能进缓存） | `novelforge/core/catalog.py` 的 `books_of`（键 `book_list_key(lid)` 只表示「该库的全量书目」⇒ **分页结果既不读也不写它**，第 244 期） |
    | 配置**段的类型**是否合法（段被写坏 ⇒ 降级还是抛） | `novelforge/config.py` 的 `section_type_errors()`（第 252 期：写入口 `PUT /api/config/raw` 与读入口 `load_config()` **共用**这一个判据 —— 段类型写坏 ⇒ 该段降级回默认值，**服务不得因此起不来**） |
    | 图片处理（能力有无 / 解码像素闸 / 透明像素底色） | `novelforge/core/imaging.py` 的 `state` / `open_image` / `flatten`（第 248 期：缩略图 `novelforge/core/thumbs.py` 与格式转换 `novelforge/core/komga_api.py` **共用**这两条判据，但「缩到多宽 / 编成什么格式」各管各的，刻意不合并） |
