@@ -21,6 +21,14 @@ import type { IconName } from '@/lib/icons'
  *   - `ready`       已有真实实现
  *   - `placeholder` 本项目无该后端能力，页面只读展示上游结构并标注「未支持」
  *     （第 49 期后占位页**清零**，机制保留，供将来新增未支持页时复用）
+ *
+ * ⚠️ **第 222 期（注释与界面文本分流）**：`note` 是**直接显示给用户**的设置页说明，
+ *   它此前混着**面向开发者的历史叙述**（「已实现」「第 N 期补齐」「上游该页 N 项全覆盖」）——
+ *   用户看到「第 51 期」没有任何意义，而那段历史在 `docs/roadmap-gaps-remaining.md` 与
+ *   `docs/bookorbit/bookorbit-settings-inventory.md` 里都有。
+ *   ⇒ `note` 现在只留「有什么功能 / 默认值 / 限制 / 未支持什么」。
+ *   **被删掉的历史去哪了**：逐期实施记录在 `docs/roadmap-gaps-remaining.md`（唯一叙事），
+ *   上游逐页对照在 `docs/bookorbit/bookorbit-settings-inventory.md` —— **别再塞回 `note`**。
  */
 
 export interface UpstreamPage {
@@ -100,7 +108,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['PREFERENCES', 'SECURITY & ACCESS', 'Connected Accounts'],
           items: ['头像上传 / 移除', 'Full name', 'Username（不可改）', 'Email（只读）', 'Timezone', 'Enable achievements', 'Guided Tour 重放', 'Change password', 'Connected Accounts（OIDC）'],
         },
-        note: '本项目为单用户轻登录：已实现账号展示、修改密码、头像上传/移除、显示名、时区（接通时间类成就）、成就开关与新手引导重放；OIDC / Email 在单用户场景无意义，故不提供。',
+        note: '单用户轻登录：账号展示、修改密码、头像上传/移除、显示名、时区、成就开关与新手引导重放。OIDC / Email 在单用户场景无意义，故不提供。',
       }),
       p('appearance/theme', 'Theme', '主题', 'ready', {
         upstream: {
@@ -110,10 +118,10 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['保存位置（本机 / 账号）', 'Color scheme（Light / Dark / System）', 'Accent color（64 档）', 'Corner radius（Sharp / Default / Rounded / Pill）', 'Background pattern（20 个图案）'],
           uncaptured: '点缀色与背景图案的「当前值」在上游存在信号分歧，未能确证。',
         },
-        note: '本项目实现主题 / 点缀色（65 档）/ 圆角；「保存位置」已由「偏好与同步」页统管（外观与阅读偏好整套同步，也可按设备各用各的）；「背景图案」为未支持。',
+        note: '主题 / 点缀色（65 档）/ 圆角；「保存位置」在「偏好与同步」页统管（外观与阅读偏好整套同步，也可按设备各用各的）；「背景图案」未支持。',
       }),
       p('appearance/book-covers', 'Book Covers', '封面样式', 'ready', {
-        note: '已实现：真实内嵌封面 + 填充方式（填满 / 自然贴底 / 模糊底图）+ 书脊（含第 20 期的「漫画是否显示书脊」开关）+ 阴影强度 + 6 种卡片叠加层（第 51 期补「系列号」）+ 详情页封面取色（第 20 期；第 51 期加「关闭 / 单色 / 双色」三档），存本机、改完立即生效。未支持：封面搜索提供者（依赖在线封面抓取，本项目不做封面搜索）、叠加层「锁定状态」（本项目没有锁定这一实体）。',
+        note: '真实内嵌封面 + 填充方式（填满 / 自然贴底 / 模糊底图）+ 书脊（含「漫画是否显示书脊」开关）+ 阴影强度 + 6 种卡片叠加层（含「系列号」）+ 详情页封面取色（关闭 / 单色 / 双色三档），存本机、改完立即生效。未支持：封面搜索提供者、叠加层「锁定状态」。',
         upstream: {
           title: 'Book Covers',
           desc: 'Cover shadows, spine effects, and placeholder art.',
@@ -128,7 +136,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['LIBRARY GRID LAYOUT', 'SERIES DISPLAY', 'AUTHOR GRID', 'LIST AND TABLE VIEWS'],
           items: ['Cover size behavior（全部同步 / 各视图独立）', 'Portrait cover size（130px）', 'Square cover size（150px）', 'Portrait grid spacing（28px）', 'Square grid spacing（28px）', 'Card info mode（On hover / Below cover / Off）', 'Collapsed series cover（Stack / Mosaic / First / Latest / First Unread）', 'Author cover size（120px）/ shape（Circle / Square）', 'Zebra striping'],
         },
-        note: '已实现封面尺寸 / 网格间距 / 卡片信息位置 / 卡片主次标签（第 51 期）/ 折叠系列封面五形态（第 51 期：首册 / 最新 / 首册未读 / 堆叠 / 马赛克）/ 作者封面尺寸与形状 / 表格隔行底色，均真作用于书架与作者页；卡片主次标签取不到值时回退成书名 / 作者（不留空行），「堆叠」「马赛克」是纯 CSS 多封面组合（不额外请求）。上游的「尺寸同步方式」「方形封面尺寸」「方形网格间距」在本项目没有对应实体（只有一套网格、只有竖版封面），仍在页尾对照卡列明，不造假控件。这几项属外观，随账号同步（并入 appearance 块，未新增第七块）。',
+        note: '封面尺寸 / 网格间距 / 卡片信息位置 / 卡片主次标签 / 折叠系列封面五形态（首册 / 最新 / 首册未读 / 堆叠 / 马赛克）/ 作者封面尺寸与形状 / 表格隔行底色，均真作用于书架与作者页；卡片主次标签取不到值时回退成书名 / 作者（不留空行），「堆叠」「马赛克」是纯 CSS 多封面组合。这几项属外观，随账号同步。',
       }),
       p('appearance/behavior', 'Behavior', '浏览行为', 'ready', {
         upstream: {
@@ -137,7 +145,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['LIBRARY BEHAVIOR'],
           items: ['Thumbnail clicks（Read first / Open details）', 'Show filter preview by default', 'Collapse series by default'],
         },
-        note: '已实现上游该页全部三项（缩略图点击 / 筛选预览默认展开 / 系列默认折叠）—— 故无「未支持」对照卡。前两项存本机（与书架视图偏好同一份），「系列默认折叠」随账号同步（shelf 块）；该项第 152 期起默认开启（一册一个文件的漫画库不再散成一张张「Vol.03」卡片，想一册一卡可在这里关掉）。',
+        note: '缩略图点击 / 筛选预览默认展开 / 系列默认折叠。前两项存本机（与书架视图偏好同一份），「系列默认折叠」随账号同步（shelf 块）。默认开启系列默认折叠（一册一个文件的漫画库不再散成一张张「Vol.03」卡片，想一册一卡可在这里关掉）。',
       }),
       p('reader/ebook', 'eBook', '电子书', 'ready', {
         upstream: {
@@ -146,7 +154,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['NEW BOOKS', 'LAYOUT', 'THEME', 'TYPOGRAPHY', 'ADVANCED'],
           items: ['Apply my settings to new books', 'Reading flow（Paginated / Scrolled）', 'Fixed-layout page spreads', 'Columns', 'Dark mode（13 档变体）', 'Font', 'Font style', 'Font size', 'Line height', 'Paragraph spacing', 'Justify text', 'Hyphenation', 'Letter / Word spacing', 'First-line indent', 'Max content width', 'Column gap'],
         },
-        note: '本项目实现「阅读模式 / 13 档主题 / 字体 / 字重样式 / 字号 / 行高 / 内容宽度 / 文本区左右内边距 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 15 项，以及第 51 期补齐的「固定版式页宽」（跟随书籍 / 单页 / 并排两页；只对 fixed_layout 的书生效，且仍不注入任何重排设置）；未支持：新书套用设置（Apply my settings to new books，本项目排版是全局单一来源、新书一律套用，该开关要解决的问题天然不存在）。',
+        note: '「阅读模式 / 13 档主题 / 字体 / 字重样式 / 字号 / 行高 / 内容宽度 / 文本区左右内边距 / 段落间距 / 首行缩进 / 字距 / 词距 / 分栏 / 两端对齐 / 断词」共 15 项，以及「固定版式页宽」（跟随书籍 / 单页 / 并排两页；只对 fixed_layout 的书生效，且仍不注入任何重排设置）。未支持：新书套用设置（本项目排版是全局单一来源、新书一律套用，该开关要解决的问题天然不存在）。',
       }),
       p('reader/pdf', 'PDF', 'PDF', 'ready', {
         upstream: {
@@ -155,7 +163,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['LAYOUT', 'ZOOM'],
           items: ['Scroll mode（Page / Scrolled / Horizontal）', 'Page spread（None / Odd / Even / Auto）', 'Default fit（Fit Page / Fit Width / Automatic / Custom）'],
         },
-        note: '已实现：滚动模式（翻页 / 纵向 / 横向）、页展（单页 / 双页奇右 / 偶右 / 自动）、适配方式、自定义缩放、阅读进度 —— 上游该页三项至此全覆盖，故无「未支持」对照卡。渲染用 pdf.js，懒加载（打开 PDF 才下载）。⚠️ 第 51 期订正：此前未支持卡里那条「页与页之间的自定义间距（Spread gap）」实为「漫画页」的上游条目（PDF 页的上游清单里没有它），已移除以免口径串页。',
+        note: '滚动模式（翻页 / 纵向 / 横向）、页展（单页 / 双页奇右 / 偶右 / 自动）、适配方式、自定义缩放、阅读进度。渲染用 pdf.js，懒加载（打开 PDF 才下载）。',
       }),
       p('reader/comics', 'Comics', '漫画', 'ready', {
         upstream: {
@@ -164,7 +172,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['VIEW', 'DISPLAY'],
           items: ['Reading mode（Paginated / Infinite spaced / Infinite no gaps）', 'Page view（Single / Two-page）', 'Fit mode（Page / Width / Height / Actual）', 'Reading direction（L to R / R to L）', 'Spread alignment', 'Spread gap', 'Wide-page handling', 'Force two-page on small screens', 'Auto-advance to next book', 'Background color'],
         },
-        note: '已实现：阅读模式（翻页 / 纵向连续 / 纵向连续无间隙）、页视图（单页 / 双页）、适配方式、阅读方向（含日漫右→左）、跨页对齐、宽页处理、小屏强制双页、自动翻到下一本（第 51 期补齐，四项都真作用于阅读器）、页间距、背景色、阅读进度 —— 上游该页 10 项至此全覆盖，故无「未支持」对照卡。自动翻下一本按 series_index 取下一册（用既有的 GET /api/series/{name}，不新增接口），无系列或已是末册时只提示、不跳转。支持 CBZ 与 CBR：CBR 由服务端的 zip/rar 双后端解压（bsdtar，容器内由 libarchive-tools 提供），两种格式在阅读器里体验完全一致。',
+        note: '阅读模式（翻页 / 纵向连续 / 纵向连续无间隙）、页视图（单页 / 双页）、适配方式、阅读方向（含日漫右→左）、跨页对齐、宽页处理、小屏强制双页、自动翻到下一本、页间距、背景色、阅读进度。自动翻下一本按 series_index 取下一册（用既有的 GET /api/series/{name}，不新增接口），无系列或已是末册时只提示、不跳转。支持 CBZ 与 CBR：CBR 由服务端的 zip/rar 双后端解压，两种格式在阅读器里体验完全一致。',
       }),
       p('reader/audio', 'Audiobook', '有声书', 'ready', {
         upstream: {
@@ -173,7 +181,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['PLAYBACK', 'SKIP CONTROLS'],
           items: ['Default playback speed（0.75x–2x）', 'Default volume', 'Skip back duration（5/10/15/30s）', 'Skip forward duration（10/15/30/60s）'],
         },
-        note: '已实现：默认倍速（0.75x–2x，第 51 期补回 1.75x 档）、默认音量、快退间隔（5/10/15/30 秒）、快进间隔（10/15/30/60 秒）、睡眠定时默认时长 —— 上游该页 4 项全覆盖。播放器另提供轨道列表与按秒进度保存（跨设备同步）；有声书支持「一个目录 = 一本书」（一章一文件）与单个音频文件两种形态。',
+        note: '默认倍速（0.75x–2x）、默认音量、快退间隔（5/10/15/30 秒）、快进间隔（10/15/30/60 秒）、睡眠定时默认时长。播放器另提供轨道列表与按秒进度保存（跨设备同步）；有声书支持「一个目录 = 一本书」（一章一文件）与单个音频文件两种形态。',
       }),
       p('reader/fonts', 'Fonts', '阅读字体', 'ready', {
         upstream: {
@@ -182,7 +190,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['UPLOAD FONTS', 'YOUR FONTS'],
           items: ['上传字体（TTF / OTF / WOFF / WOFF2，单个 ≤50MB）', '字体列表（上限 50）'],
         },
-        note: '已实现：字体上传 / 列表 / 删除 / 在阅读器中选用。族名从字体 name 表解析（TTF/OTF），解析不出时回落文件名并以文件名显示。本项目单用户，上限取服务端口径（200）。',
+        note: '字体上传 / 列表 / 删除 / 在阅读器中选用。族名从字体 name 表解析（TTF/OTF），解析不出时回落文件名并以文件名显示。本项目单用户，上限取服务端口径（200）。',
       }),
       p('reader/general', 'General', '偏好与同步', 'ready', {
         upstream: {
@@ -191,10 +199,10 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['WHERE TO SAVE READER PREFERENCES'],
           items: ['阅读偏好保存位置（This device only / My account）'],
         },
-        note: '本项目把它扩展为「偏好与同步」：偏好可存成具名模式（整套快照，含外观），供不同设备套用；每台设备也可各用各的。应用模式 = 拷贝内容，因此别人改模式本体不会让你被动变化。已知限制：无实时推送 —— 其它设备的改动需本机下次打开或点「立即同步」才可见。',
+        note: '「偏好与同步」：偏好可存成具名模式（整套快照，含外观），供不同设备套用；每台设备也可各用各的。应用模式 = 拷贝内容，因此别人改模式本体不会让你被动变化。已知限制：无实时推送 —— 其它设备的改动需本机下次打开或点「立即同步」才可见。',
       }),
       p('account/notifications', 'Notifications', '通知', 'ready', {
-        note: '已实现：按活动类别设「关闭 / 仅失败 / 全部」。差异——上游是服务端投递（可走邮件），本项目无投递渠道，开关为客户端过滤，生效范围是通知中心与日志。',
+        note: '按活动类别设「关闭 / 仅失败 / 全部」。差异——上游是服务端投递（可走邮件），本项目无投递渠道，开关为客户端过滤，生效范围是通知中心与日志。',
         upstream: {
           title: 'Notifications',
           desc: 'What BookOrbit tells you about, and where.',
@@ -217,7 +225,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['LIBRARY', 'CONTENTS', 'AUTOMATION', 'LAST SCAN'],
           items: ['书库列表（组织模式 / 文件夹 / 书数 / 占用 / 格式分布）', 'Watch folders', 'Scheduled scan', 'Write to file', 'Rename files', '最后扫描状态与原因', 'Scan All', 'Add Library', '排序（默认 / 名称 / 书数 / 占用 / 最后扫描）'],
         },
-        note: '本页即操作页（第 49 期起，原「工具 → 书库管理」入口已并入此处，工具页不再单列）。已实现（第 10 期）：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用，一个库可引用多个来源文件夹）、来源文件夹投递、按子目录名 / 格式 / 关键词自动归库（投递时选目标库）、以及「库类型 → 功能显隐」。已实现（第 13 期）：每库独立覆盖投递布局 / 产物格式、递归与复制非 txt、元数据抓取策略与字段、命名规则（未覆写则继承全局）；以及入库时的跨库同名拦截与一键改名。',
+        note: '本页即操作页（原「工具 → 书库管理」入口已并入此处，工具页不再单列）：多书库实体（类型：电子书 / 漫画 / 有声书 / 混合；存放方式：就地引用，一个库可引用多个来源文件夹）、来源文件夹投递、按子目录名 / 格式 / 关键词自动归库（投递时选目标库）、以及「库类型 → 功能显隐」。每库可独立覆盖投递布局 / 产物格式、递归与复制非 txt、元数据抓取策略与字段、命名规则（未覆写则继承全局）；以及入库时的跨库同名拦截与一键改名。',
       }),
       p('metadata/providers', 'Providers', '元数据来源', 'ready', {
         upstream: {
@@ -280,7 +288,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['每书库命名模式（Folder as Book / File as Book）', 'File as Book 默认模式', '13 个 TOKENS', '7 个 MODIFIERS', '4 类 STRUCTURE（optional / fallback / folder / or）', '4 个配方', '元数据缺失时的降级预览', 'Cross-platform path sanitization'],
         },
         link: { to: '/tools/logs?tab=scrape', label: '刮削面板 → 命名规则' },
-        note: '已实现：命名规则存服务端（config.naming，每库可覆写）+ 4 个配方 + 生效预览，支持后端 PATTERN_FIELDS 的全部占位符（书名 / 作者 / 演播者 / 系列 / 系列序号 / 卷号 / 出版年 / 出版社 / 语言 / 扩展名；前端 RENAME_TOKENS 与之逐字一致，由 tests/test_naming_tokens.py 钉住）。第 28 期起规则只作用于「副本名」（改名不再动源文件，批量重命名工具已并入刮削面板的「命名规则」区块，可预览并一键重出版）。上游的 13 token / 7 修饰符 / 结构语法未支持。',
+        note: '命名规则存服务端（config.naming，每库可覆写）+ 4 个配方 + 生效预览，支持后端 PATTERN_FIELDS 的全部占位符（书名 / 作者 / 演播者 / 系列 / 系列序号 / 卷号 / 出版年 / 出版社 / 语言 / 扩展名；前端 RENAME_TOKENS 与之逐字一致，由 tests/test_naming_tokens.py 钉住）。规则只作用于「副本名」（改名不再动源文件，批量重命名工具已并入刮削面板的「命名规则」区块，可预览并一键重出版）。上游的 13 token / 7 修饰符 / 结构语法未支持。',
       }),
       p('library/maintenance', 'Maintenance', '维护', 'ready', {
         upstream: {
@@ -290,7 +298,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['Maximum upload file size limit', 'Import library data（从其它书库工具一次性导入）', 'Refresh recommendation index', 'Backfill achievements', 'Check for updates（查 GitHub 新版本）'],
         },
         link: { to: '/tools/duplicates', label: '重复书籍清理' },
-        note: '已实现：UPLOADS 上传上限（可配置且生效）、ACHIEVEMENTS 的成就重算（Backfill）、书库索引重建、缓存清理、回收站清空与各目录占用统计、UPDATES 版本检查与更新（第 78 期实现上游那条 Check for updates，且扩展出检查间隔 / 镜像拉取 / 一键更新 / 自动更新；开关与状态集中在「扩展 → 更新」页，见该页说明卡）。IMPORT（从其它书库工具一次性导入）/ RECOMMENDATIONS（刷新推荐索引）在容器部署口径下未实现，页内以只读条目列出。',
+        note: 'UPLOADS 上传上限（可配置且生效）、ACHIEVEMENTS 的成就重算（Backfill）、书库索引重建、缓存清理、回收站清空与各目录占用统计、UPDATES 版本检查与更新（检查间隔 / 镜像拉取 / 一键更新 / 自动更新；开关与状态集中在「扩展 → 更新」页，见该页说明卡）。IMPORT（从其它书库工具一次性导入）/ RECOMMENDATIONS（刷新推荐索引）在容器部署口径下未实现，页内以只读条目列出。',
       }),
     ],
   },
@@ -307,7 +315,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['SERVER', 'ENDPOINT', 'OPDS ACCOUNTS', 'OPDS NOTES'],
           items: ['OPDS Catalog Server 开关', '端点地址（可复制）', 'OPDS 账号管理', '排序（Recently Added / Title / Author / Series 各升降序）'],
         },
-        note: '已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页（?page=）与排序（?sort=recent|title|author|series&order=）。第 14 期起支持按书库分别暴露：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 /opds/lib/<库 id>，可在「设置 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404）。鉴权用 HTTP Basic：管理员账号或独立只读账号（OPDS 客户端只会发 Basic，所以 /opds 不走 /api 的 Bearer 中间件）；第 160 期起可在本页新建只读账号并限定可见书库（账号只能读 /opds，进不了 /api）。未支持：账号到期时间、按客户端细分的下载权限。',
+        note: '目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页（?page=）与排序（?sort=recent|title|author|series&order=）。按书库分别暴露：可见库多于一个时根 feed 多一个「按书库」入口，每个书库有独立地址 /opds/lib/<库 id>，可在「设置 → 书库管理 → 每库设置」逐库关掉（默认全部暴露，关掉后直连返回 404）。鉴权用 HTTP Basic：管理员账号或独立只读账号（OPDS 客户端只会发 Basic，所以 /opds 不走 /api 的 Bearer 中间件）；可在本页新建只读账号并限定可见书库（账号只能读 /opds，进不了 /api）。未支持：账号到期时间、按客户端细分的下载权限。',
       }),
       p('koreader', 'KOReader', 'KOReader 进度互通', 'ready', {
         upstream: {
@@ -316,11 +324,11 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['KOREADER STATUS', 'SETUP', 'DEVICES', 'PLUGIN ACTIVITY', 'UNMATCHED KOREADER BOOKS', 'MANUAL KOREADER LINKS', 'SETUP GUIDE', 'DANGER ZONE'],
           items: ['Progress sync 开关', '同步账号与凭据', 'KOReader sync URL', '预置 BookOrbit 插件下载', '设备管理（退役 / 删除数据）', '未匹配书目与手动链接', '删除同步凭据'],
         },
-        note: '本项目实现 kosync 协议的服务端：healthcheck / users/auth / users/create / syncs/progress（GET+PUT）。三个必须精确的协议细节：①鉴权头是 x-auth-user / x-auth-key，key = 密码的 MD5（不是 Basic，服务端也只存这个哈希）；②文档标识是 partialMD5（只采样 12 个点，偏移 1024×4^i，i=-1..10，不读第 0 字节、读不满即停），另有 checksum_method=FILENAME 的 md5(basename) 变体，两种都索引；③percentage 是 0–1，progress 对 EPUB 是 XPointer、PDF/漫画是页码。进度映射：DocFragment[N] ↔ 本项目章节序号（N-1），PDF/漫画用页码；反向的 XPointer 只定位到章首，准确位置由 percentage 兜底。未支持：多设备管理、注解/书签同步。',
+        note: 'kosync 协议的服务端：healthcheck / users/auth / users/create / syncs/progress（GET+PUT）。三个必须精确的协议细节：①鉴权头是 x-auth-user / x-auth-key，key = 密码的 MD5（不是 Basic，服务端也只存这个哈希）；②文档标识是 partialMD5（只采样 12 个点，偏移 1024×4^i，i=-1..10，不读第 0 字节、读不满即停），另有 checksum_method=FILENAME 的 md5(basename) 变体，两种都索引；③percentage 是 0–1，progress 对 EPUB 是 XPointer、PDF/漫画是页码。进度映射：DocFragment[N] ↔ 本项目章节序号（N-1），PDF/漫画用页码；反向的 XPointer 只定位到章首，准确位置由 percentage 兜底。未支持：多设备管理、注解/书签同步。',
       }),
       p('komga', 'Komga', 'Komga 库布局', 'ready', {
         own: true,
-        note: '本项目实现「输出侧」：输出布局开关（output.layout —— 有系列的书落 系列名/系列名 #N.ext，无系列保持平铺）+ 既有库整理（先预览、再应用）。会改 basename 的条目在应用时自动迁移阅读进度 / 批注 / 评分 / 收藏（按 book_id 搬迁），整理库不会把进度清零。系列来源：EPUB 的 calibre:series 优先，判不出则从文件名推断（系列 第01卷 / 系列 #1 / 系列 (01) / 系列 - 01），都判不出就原地不动。第 15 期起兼容服务端补齐：客户端可按书库浏览（系列与书籍都按库过滤，老客户端的 GET 端点同样生效）、系列级「全部已读 / 全部未读」（只把百分比顶到 100，不清除读者位置）、CBR 拿到正确的媒体类型；有声书库不进 Komga（Komga 没有音频模型，硬塞进去只会得到打不开的坏条目）。第 22 期起还能逐库决定是否暴露：在「设置 → 书库管理 → 每库设置」关掉某库的「对 Komga 暴露」，它就不进客户端书库列表，直连它的系列 / 书籍地址也一并 404（默认全部暴露，与加这个开关之前一致）。未支持「接入侧」：从 Komga 拉书目 / 下载入库、双向同步进度。',
+        note: '「输出侧」：输出布局开关（output.layout —— 有系列的书落 系列名/系列名 #N.ext，无系列保持平铺）+ 既有库整理（先预览、再应用）。会改 basename 的条目在应用时自动迁移阅读进度 / 批注 / 评分 / 收藏（按 book_id 搬迁），整理库不会把进度清零。系列来源：EPUB 的 calibre:series 优先，判不出则从文件名推断（系列 第01卷 / 系列 #1 / 系列 (01) / 系列 - 01），都判不出就原地不动。客户端可按书库浏览（系列与书籍都按库过滤，老客户端的 GET 端点同样生效）、系列级「全部已读 / 全部未读」（只把百分比顶到 100，不清除读者位置）、CBR 拿到正确的媒体类型；有声书库不进 Komga（Komga 没有音频模型，硬塞进去只会得到打不开的坏条目）。可逐库决定是否暴露：在「设置 → 书库管理 → 每库设置」关掉某库的「对 Komga 暴露」，它就不进客户端书库列表，直连它的系列 / 书籍地址也一并 404（默认全部暴露）。未支持「接入侧」：从 Komga 拉书目 / 下载入库、双向同步进度。',
       }),
     ],
   },
@@ -336,7 +344,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           desc: 'Sync reading status and reviews with Hardcover.',
           items: ['API Token（已设置 / 未设置）', 'Validate token', 'Save'],
         },
-        note: '已实现：API Token 存储（掩码回显，提交掩码 = 不修改）+ 真实连通性验证（向 Hardcover GraphQL 发 { me { id username } } 探针）；第 52 期起支持推送阅读状态与书评（按 ISBN → 规范化书名+作者 匹配对方书，匹配不上则跳过并记原因，绝不模糊强推），以及预览 / 立即同步 / 自动推送开关（默认关）。⚠️ 其鉴权失败也可能返回 200 + errors，故每次响应都查 errors 字段。',
+        note: 'API Token 存储（掩码回显，提交掩码 = 不修改）+ 真实连通性验证（向 Hardcover GraphQL 发 { me { id username } } 探针）；支持推送阅读状态与书评（按 ISBN → 规范化书名+作者 匹配对方书，匹配不上则跳过并记原因，绝不模糊强推），以及预览 / 立即同步 / 自动推送开关（默认关）。⚠️ 其鉴权失败也可能返回 200 + errors，故每次响应都查 errors 字段。',
       }),
       p('readwise', 'Readwise', 'Readwise', 'ready', {
         upstream: {
@@ -344,7 +352,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           desc: 'Send your highlights to Readwise automatically.',
           items: ['Access Token（已设置 / 未设置）', 'Test', 'Enable sync（自动推送高亮）', 'Save'],
         },
-        note: '已实现：Access Token 存储 + 真实验证（GET /api/v2/auth/ 探针，204 即通过，不是 200）；第 52 期起支持推送书摘（按批 ≤100、外带稳定 id 作去重键、限流退避），Enable sync 即 auto_push 开关（默认关）+ 预览 / 立即同步 / 自动推送。⚠️ 仍按 204 判定成功。',
+        note: 'Access Token 存储 + 真实验证（GET /api/v2/auth/ 探针，204 即通过，不是 200）；支持推送书摘（按批 ≤100、外带稳定 id 作去重键、限流退避），Enable sync 即 auto_push 开关（默认关）+ 预览 / 立即同步 / 自动推送。⚠️ 仍按 204 判定成功。',
       }),
       p('storygraph', 'StoryGraph', 'StoryGraph', 'ready', {
         upstream: {
@@ -353,7 +361,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           items: ['_storygraph_session（Cookie，已设置 / 未设置）', 'remember_user_token（Cookie，已设置 / 未设置）', 'Validate cookies', 'Save'],
           uncaptured: '上游说明：StoryGraph 无公开 API，此集成复用登录态 Cookie，可能因对方改版失效。',
         },
-        note: '已实现：两个 Cookie 存储（掩码回显）+ 第 52 期起提供真实可用的 Cookie 有效性校验（用两个 Cookie 请求对方站点，最终跳登录页 / 命中登录表单即失效，200 且无障碍即有效，连接异常单独归类；纯启发式，对方改版即可能失效）。不做同步 —— StoryGraph 无公开 API，上游亦只能靠登录态 Cookie。',
+        note: '两个 Cookie 存储（掩码回显）+ 真实可用的 Cookie 有效性校验（用两个 Cookie 请求对方站点，最终跳登录页 / 命中登录表单即失效，200 且无障碍即有效，连接异常单独归类；纯启发式，对方改版即可能失效）。不做同步 —— StoryGraph 无公开 API，上游亦只能靠登录态 Cookie。',
       }),
     ],
   },
@@ -364,7 +372,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
     icon: 'settings',
     pages: [
       p('admin/book-dock', 'Book Dock', '收书目录', 'ready', {
-        note: '已实现：投递目录（= 输入目录）+ 监听状态与启停 + 自动处理开关 + 处理计数 + 入库后自动抓元数据（watcher 旁路调用 auto_fetch，按所属库的策略执行）；第 52 期起支持自动定稿（开关映射 auto_on_import、阈值界面 0–100 内部换算 0–1、合并模式预设 覆盖 / 安全合并 / 仅用内嵌 映射既有 fields 逐字段策略），入库目标沿用各库自己的来源目录（不做单点目标库 / 文件夹设置）。',
+        note: '投递目录（= 输入目录）+ 监听状态与启停 + 自动处理开关 + 处理计数 + 入库后自动抓元数据（watcher 旁路调用 auto_fetch，按所属库的策略执行）；支持自动定稿（开关映射 auto_on_import、阈值界面 0–100 内部换算 0–1、合并模式预设 覆盖 / 安全合并 / 仅用内嵌 映射既有 fields 逐字段策略），入库目标沿用各库自己的来源目录（不做单点目标库 / 文件夹设置）。',
         upstream: {
           title: 'Book Dock',
           desc: 'Quick actions shown on book pages.',
@@ -380,10 +388,10 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
           groups: ['UPLOAD FONTS', 'SERVER FONTS'],
           items: ['上传字体（TTF / OTF / WOFF / WOFF2，单个 ≤50MB）', '字体列表（上限 200，对所有用户生效）'],
         },
-        note: '已实现：与「阅读字体」共用同一份字体库（本项目单用户部署，无「每用户 / 服务端」两级），上限 200；第 52 期起同族字体的 Regular / Bold / Italic 变体按字重 / 斜体归组并注入对应 @font-face，阅读器套用加粗 / 斜体时命中真实变体而非浏览器合成。',
+        note: '与「阅读字体」共用同一份字体库（本项目单用户部署，无「每用户 / 服务端」两级），上限 200；同族字体的 Regular / Bold / Italic 变体按字重 / 斜体归组并注入对应 @font-face，阅读器套用加粗 / 斜体时命中真实变体而非浏览器合成。',
       }),
       p('admin/audit-log', 'Audit Log', '审计日志', 'ready', {
-        note: '已实现：直接读活动日志并显示操作者（actor 为本次新增，历史条目按「未记录」渲染）+ 类别归并 + 按动作/结果/关键字筛选 + 第 50 期加载更多与导出 CSV；第 52 期起支持留存策略（按大小轮转 / 保留 N 份 / 可选压缩，默认关闭 = 单文件一直追加）。',
+        note: '直接读活动日志并显示操作者（actor 为本次新增，历史条目按「未记录」渲染）+ 类别归并 + 按动作/结果/关键字筛选 + 加载更多与导出 CSV；支持留存策略（按大小轮转 / 保留 N 份 / 可选压缩，默认关闭 = 单文件一直追加）。',
         upstream: {
           title: 'Audit Log',
           desc: '带操作者与类别的审计流水。',
@@ -436,7 +444,7 @@ export const SETTINGS_GROUPS: SettingsGroupDef[] = [
       }),
       p('ext/update', 'Updates', '更新', 'ready', {
         own: true,
-        note: '第 78 期新增：版本号单一真值源（仓库根 VERSION + 后端 APP_VERSION）。「检查新版本」默认开，出网失败静默忽略；「发现新版自动更新」默认关，需手动点「立即更新」。第 80 期起四个键保存后即时生效（不必重启进程），并可自定义「更新拉取镜像」以走加速镜像源。一键更新须在 docker-compose.yml 的 volumes 下挂 /var/run/docker.sock 才生效（取消注释该行），未挂载时「新功能」页降级为复制升级命令。第 84 期加固：容器启动即校验一次版本（不等检查间隔）、自动更新失败按 1 小时到 6 小时到 24 小时退避重试（不再失败一次即永久放弃）、拉镜像前先自动备份业务数据（备份失败即中止本次更新），页内状态卡如实显示自动更新是否可用及其原因。',
+        note: '版本号单一真值源（仓库根 VERSION + 后端 APP_VERSION）。「检查新版本」默认开，出网失败静默忽略；「发现新版自动更新」默认关，需手动点「立即更新」。四个键保存后即时生效（不必重启进程），并可自定义「更新拉取镜像」以走加速镜像源。一键更新须在 docker-compose.yml 的 volumes 下挂 /var/run/docker.sock 才生效（取消注释该行），未挂载时「新功能」页降级为复制升级命令。容器启动即校验一次版本（不等检查间隔）、自动更新失败按 1 小时 → 6 小时 → 24 小时退避重试、拉镜像前先自动备份业务数据（备份失败即中止本次更新），页内状态卡如实显示自动更新是否可用及其原因。',
       }),
     ],
   },
