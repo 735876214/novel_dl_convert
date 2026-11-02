@@ -6193,7 +6193,7 @@ def get_effective_meta(bids) -> dict:
             ).fetchall():
                 on.setdefault(r["book_id"], {})[r["field"]] = r["value"]
     out: dict = {}
-    # ⚠️ 第 232 期：**只遍历「真的有值」的字段**，不是把 `_META_FIELDS`（25 个）
+    # ⚠️ 第 233 期：**只遍历「真的有值」的字段**，不是把 `_META_FIELDS`（25 个）
     # 逐字段试一遍。2309 本的库里，后者是 5.7 万次 dict.get（实测 66 ms / 3 次
     # ⇒ 整条列表接口的 1/4），而绝大多数书**一个覆盖值都没有** ⇒ 合并结果本就是空的。
     # 遍历的字段集合 = (o ∪ n) ∩ _META_FIELDS（**权威字段集**仍以 `_META_FIELDS` 为准：

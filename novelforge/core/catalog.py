@@ -957,7 +957,7 @@ def _loads(s) -> list:
 def _root_prefix(root: str) -> str:
     """把来源根归一成**可拼前缀**（解析一次，供逐行拼路径用）。
 
-    ⚠️ 第 232 期：逐行写 ``str(pathlib.Path(root) / rel)`` 会让 ``pathlib``
+    ⚠️ 第 233 期：逐行写 ``str(pathlib.Path(root) / rel)`` 会让 ``pathlib``
     **每行都重新解析一遍根路径**（`_parse_path` / `drive` / `__str__`）——
     实测 2309 本的库里，这一句占 `_book_of_row` 的一半以上时间
     （`pathlib.__str__` 146 ms / 3 次，即**整条列表接口的一半**）。
@@ -988,7 +988,7 @@ def _book_of_row(lib: dict, row, prefixes: dict = None) -> dict:
     ``library_id``/``library_type``）现算。两边的口径靠 `test_catalog.py` 的
     对拍用例钉住 —— 一旦哪边加了字段而另一边没跟上，那条用例会红。
 
-    ``prefixes`` 是**按 root 预归一好的前缀表**（第 232 期）：批量调用时由调用方
+    ``prefixes`` 是**按 root 预归一好的前缀表**（第 233 期）：批量调用时由调用方
     按 root 各算一次，避免每行都让 ``pathlib`` 重新解析一遍根路径（实测那是这函数
     最大的开销）。不给时按老路自己算（单本调用方走这条）。
     """
@@ -1268,7 +1268,7 @@ def books_of(lib: dict) -> list:
             _cached_libs.add(lid)
         return _with_added_at(hit)
     rows = _rows_of(lib)
-    # 来源根归一**按 root 各一次**（第 232 期）：一个库可能有多个来源根，
+    # 来源根归一**按 root 各一次**（第 233 期）：一个库可能有多个来源根，
     # 同名文件在两个根下都合法 ⇒ 前缀必须按 root 分开。
     _prefixes = {}
     for r in rows:
