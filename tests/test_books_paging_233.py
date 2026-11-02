@@ -74,6 +74,21 @@ def test_提前切页时总数不因分页而变(client, auth_headers, isolated,
     assert r2["has_more"] is False
 
 
+def test_只给_offset_不给_limit_等于不限(client, auth_headers, isolated,
+                                                  tmp_path, make_library, make_book):
+    """`limit=0` 的语义是「**不限**」（不是「取 0 条」）。
+
+    ⚠️ 这条是第一版 DB 侧取页踩的坑：按页取时把 `limit=0` 当成了「取 0 条」，
+    结果「只给 offset」的分页请求返回了**空列表**。
+    """
+    _seed(tmp_path, make_library, make_book, 30)
+    full = client.get("/api/books", headers=auth_headers).json()["items"]
+    body = client.get("/api/books", headers=auth_headers,
+                      params={"offset": 5}).json()
+    assert [x["id"] for x in body["items"]] == [x["id"] for x in full[5:]]
+    assert body["total"] == 30
+
+
 def test_规则筛选时不提前切(client, auth_headers, isolated,
                                           tmp_path, make_library, make_book):
     """规则要判命中 ⇒ 必须看**全部**书；提前切会把后面的书漏掉。"""
