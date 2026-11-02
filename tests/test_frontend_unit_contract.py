@@ -46,6 +46,9 @@ REQUIRED_DEV_DEPS = ("vitest", "@vue/test-utils", "happy-dom")
 #: 新增时在它上面补一行说明「它护的是什么、写错会怎么静默失效」—— 那才是这张表的价值。
 EXPECTED_SPECS = (
     "src/views/ReaderView.spec.ts",
+    # 第 222 期：PDF 文字层的坐标换算（PDF 用户空间 ↔ CSS 像素）。
+    # 坏起来是「选中的字和看到的位置对不上」—— 不报错，只是高亮 / 选区全错位。
+    "src/lib/pdfTextLayer.spec.ts",
     # 第 218 期：智能书架规则清单 / 预览都走服务端。坏起来是「表单字段写死在前端、
     # 后端加字段界面上没有」或「预览失败显示 0 本」（把错误说成空结果）。
     "src/views/SmartScopesView.spec.ts",

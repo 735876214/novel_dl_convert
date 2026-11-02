@@ -14,6 +14,8 @@ import {
   type PdfPrefs,
 } from '@/lib/pdfPrefs'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
+import { buildTextLayer, pagePlainText, type PdfTextSpan } from '@/lib/pdfTextLayer'
+import { highlightHex } from '@/data/annotationColors'
 import { progressForFile } from '@/lib/readingProgress'
 import { useSeriesNext } from '@/lib/seriesNext'
 import { useSeriesToc } from '@/lib/seriesToc'
@@ -58,9 +60,20 @@ const emit = defineEmits<{
   unitPos: [UnitPos]
   /** 单话模式：这一话读完了，且**书里还有下一话**（末话的跨册续接不走这里，见 `pastEnd`） */
   unitEnd: []
+  /** 第 222 期：添加了批注 —— 上层据此刷新批注列表（它持有那份数组） */
+  annotated: []
 }>()
 const router = useRouter()
 const library = useLibraryStore()
+/** 轻提示（第 222 期）：批注保存的结果。**不引 ui store** —— PDF 阅读器不弹浮层，
+    用一个就地的小提示条就够了（见模板里的 `annoMsg`）。 */
+const annoMsg = ref('')
+let annoMsgTimer: ReturnType<typeof setTimeout> | null = null
+function toast(text: string): void {
+  annoMsg.value = text
+  if (annoMsgTimer !== null) clearTimeout(annoMsgTimer)
+  annoMsgTimer = setTimeout(() => { annoMsg.value = '' }, 2500)
+}
 /** 自动翻到系列下一册（第 66 期）：实现收敛到 `lib/seriesNext.ts` 单一真值源 */
 const { goToNextVolume } = useSeriesNext()
 /** 系列目录侧栏（第 152 期）：与漫画阅读器共用同一份（`lib/seriesToc.ts`） */
@@ -227,6 +240,14 @@ function setCanvas(n: number, el: unknown): void {
   else canvases.delete(n)
 }
 
+/** 文字层的容器（第 222 期）：每页一个，与 canvas 同尺寸同位置 */
+const textLayers = new Map<number, HTMLElement>()
+
+function setTextLayer(n: number, el: unknown): void {
+  if (el instanceof HTMLElement) textLayers.set(n, el)
+  else textLayers.delete(n)
+}
+
 function setSlot(n: number, el: unknown): void {
   if (!(el instanceof HTMLElement)) {
     slots.delete(n)
@@ -258,12 +279,312 @@ async function renderPage(n: number): Promise<void> {
     drawn.value = new Set(drawn.value).add(n)
     const slot = slots.get(n)
     if (slot && n === 1) base.value = { w: vp.width / scale.value || base.value.w, h: vp.height / scale.value || base.value.h }
+    // 第 222 期：文字层与 canvas **同一个 viewport** —— 换算错一处，选中的字就偏。
+    await renderTextLayer(n, p, vp)
   } catch {
     /* 单页渲染失败不致命，其余页继续 */
   } finally {
     busy.delete(n)
   }
 }
+
+// ---------------- 文字层（第 222 期）----------------
+//
+// canvas 只是图像：没有文字层就**选不了字**、做不了批注。这里把 pdf.js 的文字项
+// 叠成一层透明的、绝对定位的文字（坐标换算见 `lib/pdfTextLayer.ts`）。
+//
+// ⚠️ 文字层**按需**生成（跟 canvas 同一个懒渲染节奏）：一次性给几百页都取文字
+// 会把打开时间从秒级拖到分钟级（每页都要跑一遍字体度量）。
+
+/** 每页的文字层片段（换算好的 CSS 坐标） */
+const pageSpans = new Map<number, PdfTextSpan[]>()
+
+// ---------------- 选区与批注（第 222 期）----------------
+//
+// PDF 的「章」= **页**：`chapter` 字段装页码（0 起，与 EPUB 的 spine 序号同一个字段，
+// 不同坐标系 —— 见 `docs/user-guide.md` 的说明）。
+//
+// 锚点是**页内字符偏移**（`start_off` / `end_off`），不是像素坐标：像素随缩放变，
+// 字符偏移不会 —— 缩放后重画高亮仍落在同一段字上。
+
+const selText = ref('')
+/** 选区所在页（1 起）与页内字符偏移 */
+const selAnchor = ref<{ page: number; start: number; end: number } | null>(null)
+/** 批注浮层的位置（视口坐标） */
+const selPos = ref<{ x: number; y: number } | null>(null)
+const noteDraft = ref('')
+const annoColor = ref('yellow')
+const annoStyle = ref('highlight')
+const savingAnno = ref(false)
+
+/**
+ * 这一页已有的批注（第 222 期）：画在文字层上。
+ *
+ * 形状与 EPUB 那边一致：按**页内字符偏移**定位，不是像素 —— 缩放后重画仍落在同一段字上。
+ */
+const pageAnnos = ref<Record<number, PdfAnno[]>>({})
+/** 批注列表（侧栏）：按页排序，用户能看也能删 */
+const annoList = ref<PdfAnno[]>([])
+const showAnnos = ref(false)
+
+interface PdfAnno {
+  id: number
+  quote: string
+  color: string
+  style: string
+  note: string
+  start_off: number
+  end_off: number
+  /** 所在页（1 起）。只有侧栏那份列表带 —— 按页分组那份不带。 */
+  page?: number
+}
+
+/** 取这本书的批注（页码 = `chapter` + 1）。失败**不打断阅读**。 */
+async function loadPdfAnnotations(): Promise<void> {
+  try {
+    const res = await api.listAnnotations(props.bookId)
+    const byPage: Record<number, PdfAnno[]> = {}
+    for (const a of res.items || []) {
+      const ch = Number(a.chapter)
+      const s = Number(a.start_off ?? -1)
+      const e = Number(a.end_off ?? -1)
+      // 没有偏移的（别处导入的）**画不出来** —— 不猜位置，如实不画
+      if (!Number.isFinite(ch) || ch < 0 || s < 0 || e <= s) continue
+      ;(byPage[ch + 1] ||= []).push({
+        id: a.id,
+        quote: a.quote,
+        color: a.color,
+        style: a.style,
+        note: a.note,
+        start_off: s,
+        end_off: e,
+      })
+    }
+    pageAnnos.value = byPage
+    annoList.value = Object.entries(byPage)
+      .flatMap(([p, list]: [string, PdfAnno[]]) =>
+        list.map((a: PdfAnno) => ({ ...a, page: Number(p) })))
+      .sort((a: { page: number }, b: { page: number }) => a.page - b.page)
+    paintHighlights()
+  } catch {
+    /* 拉不到批注：只是不显示高亮，不影响读 */
+  }
+}
+
+/** 删一条批注（**软删除**：服务端把行标成已删，可从批注页的垃圾桶恢复）。 */
+async function removePdfAnno(id: number): Promise<void> {
+  try {
+    await api.deleteAnnotation(props.bookId, id)
+    annoList.value = annoList.value.filter((a) => a.id !== id)
+    // ⚠️ `Object.keys` 给的是 **string** 键 ⇒ 索引要用 `Number(k)`（否则 TS 报索引类型不对）
+    const next: Record<number, PdfAnno[]> = {}
+    for (const [k, list] of Object.entries(pageAnnos.value)) {
+      next[Number(k)] = (list || []).filter((a: PdfAnno) => a.id !== id)
+    }
+    pageAnnos.value = next
+    paintHighlights()
+    emit('annotated')
+  } catch (e) {
+    toast(e instanceof Error ? e.message : '删除失败')
+  }
+}
+
+/**
+ * 把这一页的批注画成**覆盖层**（半透明色块 / 下划线）。
+ *
+ * ⚠️ 覆盖层**只画形状、不带文字**（文字仍在下面的透明文字层里）—— 否则选中时
+ * 会拿到两份字（覆盖层那份不可选）。
+ */
+function paintHighlights(): void {
+  for (const [n, host] of textLayers) {
+    host.querySelectorAll('[data-hl]').forEach((el) => el.remove())
+    for (const a of pageAnnos.value[n] || []) {
+      const box = highlightRect(n, a)
+      if (!box) continue
+      const el = document.createElement('div')
+      el.setAttribute('data-hl', String(a.id))
+      el.style.position = 'absolute'
+      el.style.left = `${box.left}px`
+      el.style.top = `${box.top}px`
+      el.style.width = `${box.width}px`
+      el.style.height = `${box.height}px`
+      el.style.pointerEvents = 'none'
+      const c = highlightHex(a.color)
+      if (a.style === 'underline') {
+        el.style.borderBottom = `2px solid ${c}`
+      } else if (a.style === 'strikethrough') {
+        el.style.borderBottom = `2px solid ${c}`
+        el.style.opacity = '0.75'
+      } else if (a.style === 'note') {
+        el.style.borderBottom = `2px dotted ${c}`
+      } else {
+        el.style.background = c
+        el.style.opacity = '0.4'
+      }
+      host.appendChild(el)
+    }
+  }
+}
+
+/**
+ * 字符偏移 → 页面上的矩形。
+ *
+ * 做法：按文字层片段的顺序累加字符数，找到覆盖该区间的那些片段，取它们的
+ * 并集矩形（同一行内的多个片段合起来）。
+ */
+function highlightRect(n: number, a: PdfAnno): { left: number; top: number; width: number; height: number } | null {
+  const spans = pageSpans.get(n)
+  if (!spans || !spans.length) return null
+  let pos = 0
+  let left = Infinity
+  let right = -Infinity
+  let top = Infinity
+  let bottom = -Infinity
+  let hit = false
+  for (const s of spans) {
+    const start = pos
+    const end = pos + s.text.length
+    pos = end
+    if (end <= a.start_off || start >= a.end_off) continue
+    hit = true
+    left = Math.min(left, s.left)
+    right = Math.max(right, s.left + s.width)
+    top = Math.min(top, s.top)
+    bottom = Math.max(bottom, s.top + s.height)
+  }
+  if (!hit) return null
+  return { left, top, width: Math.max(2, right - left), height: Math.max(2, bottom - top) }
+}
+
+/** 选区落在哪一页（靠最近的文字层容器反查，不靠坐标推算） */
+function pageOfNode(node: Node | null): number {
+  const el = node instanceof HTMLElement ? node : node?.parentElement
+  const layer = el?.closest('[data-text-page]')
+  if (!layer) return 0
+  return Number(layer.getAttribute('data-text-page') || 0) || 0
+}
+
+/** 选区在页内的字符偏移（按文字层片段的顺序累加） */
+function offsetsInPage(page: number, range: Range): { start: number; end: number } | null {
+  const spans = pageSpans.get(page)
+  const host = textLayers.get(page)
+  if (!spans || !host) return null
+  // 选区起止在文字层里的位置 ⇒ 换算成字符偏移。
+  // ⚠️ 用 `Range.toString()` 的长度当偏移：它与 `pagePlainText` 的口径**一致**
+  // （都是「文字层里的字符序列」），所以偏移能直接回放成高亮。
+  const pre = document.createRange()
+  pre.selectNodeContents(host)
+  // ⚠️ 变量声明在 try **外面**：声明在 try 里的话，catch 之后（以及 try 之外的
+  // return）就看不到它 —— TypeScript 会直接报「no value exists in scope」。
+  let start = -1
+  let end = -1
+  try {
+    pre.setEnd(range.startContainer, range.startOffset)
+    start = pre.toString().length
+    pre.setEnd(range.endContainer, range.endOffset)
+    end = pre.toString().length
+  } catch {
+    return null
+  }
+  return { start, end }
+}
+
+function onPdfSelect(): void {
+  const sel = window.getSelection()
+  if (!sel || sel.isCollapsed) {
+    selAnchor.value = null
+    selPos.value = null
+    return
+  }
+  const range = sel.getRangeAt(0)
+  const p = pageOfNode(range.startContainer)
+  if (!p) {
+    selAnchor.value = null
+    selPos.value = null
+    return
+  }
+  const text = sel.toString().trim()
+  // 与 EPUB 同一上限（500 字）—— 太长的选区多半是「拖了一下」，不是有意选中
+  if (!text || text.length > 500) {
+    selAnchor.value = null
+    selPos.value = null
+    return
+  }
+  const offs = offsetsInPage(p, range)
+  if (!offs || offs.end <= offs.start) {
+    selAnchor.value = null
+    selPos.value = null
+    return
+  }
+  const rect = range.getBoundingClientRect()
+  selText.value = text
+  selAnchor.value = { page: p, start: offs.start, end: offs.end }
+  selPos.value = { x: rect.left + rect.width / 2, y: rect.top }
+  noteDraft.value = ''
+}
+
+function cancelPdfAnno(): void {
+  selAnchor.value = null
+  selPos.value = null
+  selText.value = ''
+  noteDraft.value = ''
+  window.getSelection()?.removeAllRanges()
+}
+
+async function savePdfAnno(): Promise<void> {
+  const a = selAnchor.value
+  if (!a || savingAnno.value) return
+  savingAnno.value = true
+  try {
+    await api.addAnnotation(props.bookId, {
+      chapter: a.page - 1,          // 页码 1 起 ⇒ chapter 0 起
+      quote: selText.value,
+      color: annoColor.value,
+      note: noteDraft.value.trim(),
+      style: annoStyle.value,
+      start_off: a.start,
+      end_off: a.end,
+    })
+    toast('已添加批注')
+    cancelPdfAnno()
+    emit('annotated')
+  } catch (e) {
+    toast(e instanceof Error ? e.message : '添加批注失败')
+  } finally {
+    savingAnno.value = false
+  }
+}
+async function renderTextLayer(n: number, pdfPage: any, viewport: any): Promise<void> {
+  const host = textLayers.get(n)
+  if (!host) return
+  let spans: PdfTextSpan[] | null = null
+  try {
+    const tc = await pdfPage.getTextContent()
+    spans = buildTextLayer(tc.items || [], viewport)
+  } catch {
+    // 这一页没有文字层（扫描件 / 加密 / 字体异常）——**如实留空**，不编造
+    spans = []
+  }
+  pageSpans.set(n, spans)
+  host.textContent = ''
+  for (const s of spans) {
+    const el = document.createElement('span')
+    el.textContent = s.text
+    el.style.left = `${s.left}px`
+    el.style.top = `${s.top}px`
+    el.style.fontSize = `${s.height}px`
+    el.style.fontFamily = 'sans-serif'
+    // 透明但**可选**：颜色透明 + `user-select: text`（默认就是可选，别用 none）
+    el.style.color = 'transparent'
+    el.style.position = 'absolute'
+    el.style.whiteSpace = 'pre'
+    el.style.transformOrigin = '0 0'
+    host.appendChild(el)
+  }
+  // 高亮覆盖层画在**文字层片段之后**（同一容器里，靠 DOM 顺序决定层叠）
+  paintHighlights()
+}
+
 
 /** 缩放/适配变化后必须重画（canvas 的像素尺寸已变） */
 function redraw(): void {
@@ -505,6 +826,8 @@ onMounted(async () => {
     await new Promise((r) => setTimeout(r, 150))
     if (prefs.value.scrollMode !== 'page') slots.get(page.value)?.scrollIntoView({ block: 'start' })
     settled = true
+    // 第 222 期：取这本书已有的批注（画成高亮）。失败不影响读。
+    void loadPdfAnnotations()
     // 文档真的打开了、能读了才开始计时（打不开的书不该留下零散会话）
     session.begin()
     clock = attachReaderClock(session)
@@ -603,6 +926,16 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
         @click="togglePdfSearch"
       >
         <Icon name="search" class="h-4 w-4" />
+      </Button>
+      <!-- 第 222 期：批注侧栏（PDF 的批注在本阅读器里，EPUB 的在主阅读器那边） -->
+      <Button
+        size="sm"
+        variant="ghost"
+        title="批注"
+        :class="showAnnos ? 'bg-muted text-foreground' : ''"
+        @click="showAnnos = !showAnnos"
+      >
+        <Icon name="star" class="h-4 w-4" />
       </Button>
       <div class="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">{{ props.title }}</div>
 
@@ -716,6 +1049,40 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
         </button>
       </aside>
 
+      <!-- 批注侧栏（第 222 期）：按页列出；点一条跳到那一页 -->
+      <aside
+        v-if="showAnnos"
+        class="w-64 shrink-0 overflow-y-auto border-r border-border py-2 pr-2"
+      >
+        <div class="px-2 text-[11px] text-muted-foreground">批注{{ annoList.length ? `（${annoList.length} 条）` : '' }}</div>
+        <p v-if="!annoList.length" class="px-2 py-3 text-[11.5px] text-muted-foreground">
+          在页面上选中文字即可添加高亮与笔记。
+        </p>
+        <div
+          v-for="a in annoList"
+          :key="a.id"
+          class="group mb-1.5 cursor-pointer rounded-md border border-border px-2 py-1.5 transition-colors hover:bg-muted"
+          @click="a.page && jumpPdfPage(a.page)"
+        >
+          <div class="flex items-start gap-1.5">
+            <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :style="{ background: highlightHex(a.color) }" />
+            <div class="min-w-0 flex-1">
+              <p class="line-clamp-3 text-[11.5px] leading-snug text-foreground">「{{ a.quote }}」</p>
+              <p v-if="a.note" class="mt-0.5 text-[11px] text-muted-foreground">{{ a.note }}</p>
+              <p class="mt-0.5 text-[10px] text-muted-foreground">第 {{ a.page ?? 1 }} 页</p>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 cursor-pointer text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground"
+              title="移入垃圾桶（可在「批注」页的垃圾桶里恢复）"
+              @click.stop="removePdfAnno(a.id)"
+            >
+              <Icon name="trash" class="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
       <!-- PDF 文内搜索（第 195 期）：按页返回第一条命中；点结果跳页 -->
       <aside
         v-if="showPdfSearch"
@@ -754,14 +1121,22 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
       ref="boxRef"
       class="min-h-0 flex-1 overflow-auto bg-neutral-200/70 dark:bg-neutral-900/60"
       @scroll="onScroll"
+      @mouseup="onPdfSelect"
     >
       <div
         class="flex min-h-full items-start justify-center gap-3 p-5"
         :class="prefs.scrollMode === 'horizontal' ? 'flex-row' : 'flex-col items-center'"
       >
         <template v-if="prefs.scrollMode === 'page'">
-          <div v-for="n in shown" :key="n" :data-page="n" :ref="(el) => setSlot(n, el)" class="bg-white shadow-sm" :style="slotStyle(n)">
+          <div v-for="n in shown" :key="n" :data-page="n" :ref="(el) => setSlot(n, el)" class="relative bg-white shadow-sm" :style="slotStyle(n)">
             <canvas :ref="(el) => setCanvas(n, el)" />
+            <!-- 第 222 期：文字层（透明但可选）—— 没有它就选不了字 -->
+            <div
+              :ref="(el) => setTextLayer(n, el)"
+              :data-text-page="n"
+              class="absolute inset-0 overflow-hidden"
+              style="line-height: 1"
+            />
           </div>
         </template>
         <template v-else>
@@ -770,13 +1145,71 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
             :key="n"
             :data-page="n"
             :ref="(el) => setSlot(n, el)"
-            class="shrink-0 bg-white shadow-sm"
+            class="relative shrink-0 bg-white shadow-sm"
             :style="slotStyle(n)"
           >
             <canvas :ref="(el) => setCanvas(n, el)" />
+            <!-- 第 222 期：文字层（透明但可选）—— 没有它就选不了字 -->
+            <div
+              :ref="(el) => setTextLayer(n, el)"
+              :data-text-page="n"
+              class="absolute inset-0 overflow-hidden"
+              style="line-height: 1"
+            />
           </div>
         </template>
       </div>
+
+      <!-- 批注浮层（第 222 期）：选中文字后出现在选区上方 -->
+      <div
+        v-if="selPos && selAnchor"
+        class="fixed z-50 w-64 rounded-lg border border-border bg-card p-2.5 shadow-lg"
+        :style="{ left: `${Math.max(8, selPos.x - 128)}px`, top: `${Math.max(8, selPos.y - 96)}px` }"
+      >
+        <p class="line-clamp-2 text-[11.5px] leading-snug text-muted-foreground">「{{ selText }}」</p>
+        <input
+          v-model="noteDraft"
+          type="text"
+          aria-label="批注内容"
+          placeholder="写点什么（可空）"
+          class="mt-2 h-7 w-full rounded-md border border-border bg-muted px-2 text-[11.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring"
+          @keyup.enter="savePdfAnno"
+        >
+        <div class="mt-2 flex items-center gap-1.5">
+          <select
+            v-model="annoColor"
+            aria-label="批注颜色"
+            class="h-7 rounded-md border border-border bg-muted px-1.5 text-[11px] text-foreground outline-none focus:border-ring"
+          >
+            <option value="yellow">黄</option>
+            <option value="green">绿</option>
+            <option value="blue">蓝</option>
+            <option value="pink">粉</option>
+          </select>
+          <select
+            v-model="annoStyle"
+            aria-label="批注样式"
+            class="h-7 rounded-md border border-border bg-muted px-1.5 text-[11px] text-foreground outline-none focus:border-ring"
+          >
+            <option value="highlight">高亮</option>
+            <option value="underline">下划线</option>
+            <option value="strikethrough">删除线</option>
+            <option value="note">纯笔记</option>
+          </select>
+          <Button size="sm" variant="primary" class="ml-auto" :disabled="savingAnno" @click="savePdfAnno">
+            {{ savingAnno ? '保存中…' : '保存' }}
+          </Button>
+          <Button size="sm" variant="ghost" @click="cancelPdfAnno">取消</Button>
+        </div>
+      </div>
+
+      <!-- 轻提示（第 222 期）：批注保存结果 -->
+      <p
+        v-if="annoMsg"
+        class="pointer-events-none absolute bottom-3 left-1/2 z-50 -translate-x-1/2 rounded-full bg-card px-3 py-1.5 text-[11.5px] text-foreground shadow"
+      >
+        {{ annoMsg }}
+      </p>
     </div>
     </div>
   </div>
