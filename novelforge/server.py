@@ -6755,6 +6755,50 @@ def api_import_koreader_annotations(apply: int = 0):
     return koreader_anno.scan_and_import(apply=bool(apply))
 
 
+@app.post("/api/annotations/export-koreader")
+def api_export_koreader_annotations(payload: dict = Body(...)):
+    """把一本书的批注**导出成 KOReader 的批注文件**（第 234 期，反向那一半）。
+
+    ⚠️ **写的是用户设备上的文件** —— 只写 KOReader 自己的导出位点
+    （`core/koreader_anno.export_paths_for`：书的旁边 / 书的 sidecar 目录）。
+
+    - `apply=0`（默认）**只算不改**：返回「会写哪个文件、会写几条」与文件内容预览；
+    - `apply=1` 才落盘。
+    - **不覆盖用户的批注**：导出前先读现有文件，把本项目的批注**并进去** ——
+      用户在设备上写的那些不能丢。
+
+    ⚠️ **这不是 kosync**：官方 kosync 只同步阅读进度，没有批注端点
+    （同 `core/koreader_anno.py` 文件头的查证）—— KOReader 的批注跨设备同步走的是
+    **文件**，所以这里也走文件。
+    """
+    from .core import koreader_export
+
+    payload = payload or {}
+    apply = int(payload.get("apply") or 0)
+    book_id = str(payload.get("book_id") or "").strip()
+    if not book_id:
+        raise HTTPException(400, "需要 book_id")
+    book = library.by_id(str(book_id))
+    if not book:
+        raise HTTPException(404, "书籍不存在")
+    rows = db.list_annotations(str(book_id))
+    # 书的**实际文件**（按库根 + 库内相对路径定位）
+    lib = library.get_library(str(book.get("library_id") or ""))
+    book_file = None
+    if lib:
+        for root in library.roots_of(lib):
+            cand = root / pathlib.PurePosixPath(str(book.get("name") or ""))
+            if cand.is_file():
+                book_file = cand
+                break
+    if book_file is None:
+        raise HTTPException(404, "找不到这本书的文件（无法定位导出位点）")
+    if apply:
+        return koreader_export.apply_export(book_file, rows)
+    return {"ok": True, "applied": False,
+            **koreader_export.plan_export(book_file, rows)}
+
+
 @app.get("/api/annotations/export")
 def api_annotation_export(format: str = "markdown", library_id: str = "", book_id: str = ""):
     """导出批注（第 43 期）：``format`` ∈ markdown / json / csv，可按书库或单书收窄。

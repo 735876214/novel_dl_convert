@@ -1861,6 +1861,25 @@ export interface AnnotationOverview {
   longest_quiet_weeks: number
 }
 
+/** KOReader 批注**导出**（`POST /api/annotations/export-koreader`）的返回（第 234 期）。 */
+export interface KoreaderExportPlan {
+  ok: boolean
+  /** 已落盘（`apply=1`）才是真；预览时为假 */
+  applied?: boolean
+  /** 会写/已写的文件路径 */
+  path: string
+  /** 文件里**已有**的批注条数（来自用户的设备） */
+  existing: number
+  /** 本次**新增**的条数 */
+  add: number
+  /** 写完后文件里的总条数 */
+  total: number
+  /** 没有引文、导不出去的条数 */
+  skipped: number
+  /** 文件内容预览（`apply=1` 时也带） */
+  preview: string
+}
+
 /**
  * KOReader 批注导入（`POST /api/annotations/import-koreader`）的返回。
  *
@@ -5475,6 +5494,18 @@ export const api = {
    * `apply = false`（默认）**只看不写**：先让用户看到「会导多少条」再落库。
    * 导入是幂等的，但**永不删除** —— 格式里没有墓碑。
    */
+  /**
+   * 把一本书的批注**导出成 KOReader 的批注文件**（第 234 期，反向那一半）。
+   *
+   * ⚠️ `apply=false` 只算不改（返回文件预览）；`apply=true` 才落盘。
+   */
+  exportKoreaderAnnotations: (bookId: string, apply = false) =>
+    request<KoreaderExportPlan>('/api/annotations/export-koreader', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ book_id: bookId, apply: apply ? 1 : 0 }),
+    }),
+
   importKoreaderAnnotations: (apply = false) =>
     request<KoreaderImportResult>(
       `/api/annotations/import-koreader${apply ? '?apply=1' : ''}`,

@@ -407,7 +407,12 @@ watch(bookId, (id) => {
       @download="download"
     />
 
-    <AnnotationsTab v-show="tab === 'annotations'" :annotations="annotations" @go="goToAnnotation" />
+    <AnnotationsTab
+      v-show="tab === 'annotations'"
+      :annotations="annotations"
+      :book-id="bookId"
+      @go="goToAnnotation"
+    />
 
     <div v-show="tab === 'metadata'">
       <MetadataEditor :book-id="bookId" :active="tab === 'metadata'" @saved="onMetaSaved" />
