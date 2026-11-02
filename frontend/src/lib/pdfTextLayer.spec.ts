@@ -20,22 +20,32 @@ import {
  * 这里的 viewport 就按 pdf.js 的真实形状写（y 分量为负）。
  */
 
-/** 缩放 1 的 viewport（**pdf.js 的真实形状**：y 分量取负，y 轴翻转已在其中）。 */
+/**
+ * 缩放 1 的 viewport —— **pdf.js 实测值**（不是手写的）。
+ *
+ * 取自一份真实 PDF（200×100 的页面，`BT /F1 12 Tf 10 80 Td (Hello PDF) Tj ET`）：
+ * `page.getViewport({scale:1}).transform` = `[1,0,0,-1,0,100]`，同一页的文字项
+ * `transform` = `[12,0,0,12,10,80]`、`width` = 54.672、`height` = 12。
+ *
+ * ⚠️ **y 分量取负**（`-1`）—— pdf.js 的 y 轴翻转**已经在 viewport 里**了，
+ * 文字层**不必**再翻一次（手工再翻一次会让所有文字跑到页面外面去）。
+ */
 const VIEWPORT = { width: 200, height: 100, transform: [1, 0, 0, -1, 0, 100] }
 
+/** pdf.js 的文字项形状：transform = [a,b,c,d,e,f]，其中 a/d 是字号、e/f 是基线位置。 */
 function item(str: string, x: number, y: number, width = 10, height = 12): PdfTextItem {
-  // transform = [a, b, c, d, e, f]：文字空间 → 用户空间（字号 12、基线在 (x, y)）
-  return { str, transform: [1, 0, 0, 1, x, y], width, height }
+  return { str, transform: [12, 0, 0, 12, x, y], width, height }
 }
 
 describe('pdfTextLayer', () => {
-  it('spanRect：基线在 PDF 下方 ⇒ DOM 里在字的下方', () => {
-    // PDF 用户空间里基线 y=80（离页底 80）⇒ 设备坐标 y = 100 - 80 = 20
-    const r = spanRect(item('A', 10, 80), VIEWPORT)
+  it('spanRect：真实 pdf.js 数据 ⇒ 基线在 PDF 下方，DOM 里字的顶边在基线之上', () => {
+    // 实测：viewport [1,0,0,-1,0,100] × item [12,0,0,12,10,80]
+    //   ⇒ 设备坐标基线 (10, 20)（100 - 80），字的顶边 = 20 - 12 = 8
+    const r = spanRect(item('Hello PDF', 10, 80, 54.672, 12), VIEWPORT)
     expect(r.left).toBeCloseTo(10, 5)
     expect(r.height).toBeCloseTo(12, 5)
-    // 字的顶边在基线之上 12
     expect(r.top).toBeCloseTo(8, 5)
+    expect(r.width).toBeCloseTo(54.672, 3)
   })
 
   it('spanRect：viewport 有位移时 x / y 都跟着走', () => {
@@ -43,6 +53,16 @@ describe('pdfTextLayer', () => {
     const r = spanRect(item('A', 10, 80), vp)
     expect(r.left).toBeCloseTo(15, 5)     // 5 + 10
     expect(r.top).toBeCloseTo(107 - 80 - 12, 5)
+  })
+
+  it('spanRect：缩放 2 时宽 / 高 / 位置一起放大（viewport 变、item 不变）', () => {
+    // 缩放只改 viewport —— 文字层必须用**渲染 canvas 时的那一个**
+    const vp2 = { width: 400, height: 200, transform: [2, 0, 0, -2, 0, 200] }
+    const r = spanRect(item('Hello PDF', 10, 80, 54.672, 12), vp2)
+    expect(r.left).toBeCloseTo(20, 5)
+    expect(r.height).toBeCloseTo(24, 5)
+    expect(r.top).toBeCloseTo(200 - 160 - 24, 5)
+    expect(r.width).toBeCloseTo(109.344, 2)
   })
 
   it('buildTextLayer：按 top / left 排序（同一行按 left）', () => {

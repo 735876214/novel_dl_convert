@@ -447,6 +447,8 @@ function highlightRect(n: number, a: PdfAnno): { left: number; top: number; widt
     pos = end
     if (end <= a.start_off || start >= a.end_off) continue
     hit = true
+    // ⚠️ 宽度要用**拉伸后**的（`s.width` 已是拉伸前的自然位置 + PDF 写死的宽）——
+    // 高亮框与文字层用同一套坐标，两者才对得上。
     left = Math.min(left, s.left)
     right = Math.max(right, s.left + s.width)
     top = Math.min(top, s.top)
@@ -574,11 +576,14 @@ async function renderTextLayer(n: number, pdfPage: any, viewport: any): Promise<
     el.style.top = `${s.top}px`
     el.style.fontSize = `${s.height}px`
     el.style.fontFamily = 'sans-serif'
-    // 透明但**可选**：颜色透明 + `user-select: text`（默认就是可选，别用 none）
+    // 透明但**可选**：颜色透明（字仍然可选、能被选中）
     el.style.color = 'transparent'
     el.style.position = 'absolute'
     el.style.whiteSpace = 'pre'
     el.style.transformOrigin = '0 0'
+    // ⚠️ 横向拉伸（pdf.js 自己的文字层也这么做，见 pdf_viewer.css 的 `.textLayer`）：
+    // PDF 里的字宽是写死的值，与字体自然宽无关 —— 不拉伸的话选区框与看到的字对不齐。
+    el.style.transform = `scaleX(${s.scaleX})`
     host.appendChild(el)
   }
   // 高亮覆盖层画在**文字层片段之后**（同一容器里，靠 DOM 顺序决定层叠）

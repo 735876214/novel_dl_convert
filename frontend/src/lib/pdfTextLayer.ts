@@ -54,6 +54,15 @@ export interface PdfTextSpan {
   height: number
   /** 是否行尾（pdf.js 用它标段落） */
   eol: boolean
+  /**
+   * 横向拉伸系数（= 文字实际宽 / 该字号下的自然宽）。
+   *
+   * ⚠️ **必须带上**：PDF 的文字宽度由「字距 + 字号」决定，与字体本身的自然宽度
+   * 无关（`width` 是 PDF 里写死的值）。不拉伸的话，选区的高亮框会与看到的字
+   * **对不齐** —— 这正是 pdf.js 自己的文字层用 `scaleX` 的原因
+   * （见 `pdfjs-dist/web/pdf_viewer.css` 的 `.textLayer` 规则）。
+   */
+  scaleX: number
 }
 
 /**
@@ -91,7 +100,7 @@ function mul(m1: number[], m2: number[]): number[] {
 export function spanRect(
   item: PdfTextItem,
   viewport: { width: number; height: number; transform: number[] },
-): { left: number; top: number; width: number; height: number } {
+): { left: number; top: number; width: number; height: number; scaleX: number } {
   const vp = viewport.transform
   const it = item.transform
   const t = mul(vp, it)
@@ -102,11 +111,18 @@ export function spanRect(
   // `t[4] / t[5]` = 文字基线原点的设备坐标（y 向下：基线在字的下方）
   const left = t[4] ?? 0
   const top = (t[5] ?? 0) - height
+  const width = Math.max(1, (item.width || 0) * scale)
+  // 横向拉伸：PDF 里写死的字宽 ÷ 该字号下的自然宽。
+  // 自然宽按「字号 × 0.5 × 字符数」估（西文平均字宽约 0.5em；中文约 1em，
+  // 估得偏小 ⇒ scaleX 偏大，仍是**等比**拉伸，不会把字压变形）。
+  const natural = Math.max(1, (item.height || 12) * 0.5 * Math.max(1, item.str?.length || 1))
+  const scaleX = Math.max(0.05, Math.min(20, width / natural))
   return {
     left,
     top,
-    width: Math.max(1, (item.width || 0) * scale),
+    width,
     height,
+    scaleX,
   }
 }
 
@@ -137,6 +153,7 @@ export function buildTextLayer(
       width: r.width,
       height: r.height,
       eol: Boolean(it.hasEOL),
+      scaleX: r.scaleX,
     })
   }
   spans.sort((a, b) => (Math.abs(a.top - b.top) > lineTolerance ? a.top - b.top : a.left - b.left))
