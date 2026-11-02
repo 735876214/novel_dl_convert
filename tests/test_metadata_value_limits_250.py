@@ -93,3 +93,38 @@ def test_两个入口共用同一套上限判据():
     assert dbmod._too_long("title", "x" * 10) == 0
     # 未知字段按兜底上限算
     assert dbmod._too_long("没登记的字段", "x" * (dbmod._DEFAULT_FIELD_MAX_LEN + 1)) > 0
+
+
+def test_服务端把长度超限翻成_400(client, auth_headers, isolated, make_library, make_book, tmp_path):
+    """⚠️ 第 250 期：超限是**用户的输入问题** ⇒ 4xx + 人话，不是 500「服务器错误」。
+
+    （上限的闸门在存储层 `core/db.py`，这里是**服务端**那一侧的翻译。）
+    """
+    root = tmp_path / "lib"
+    make_library("lib$m", "限长库", "ebook", root)
+    make_book(root, "三体.epub")
+    from novelforge.core import library
+    library.invalidate()
+    bid = library.books("lib$m")[0]["id"]
+
+    r = client.post(f"/api/books/{bid}/metadata", headers=auth_headers,
+                    json={"fields": {"title": "长" * 5000}})
+    assert r.status_code == 400, (r.status_code, r.text[:200])
+    assert "太长" in str(r.json().get("detail", "")), r.text[:200]
+
+
+def test_元数据详情会下发逐字段上限(client, auth_headers, isolated,
+                                    make_library, make_book, tmp_path):
+    """前端据此给输入框加 `maxlength`（前端**不抄**一份上限表）。"""
+    root = tmp_path / "lib"
+    make_library("lib$lim", "下发库", "ebook", root)
+    make_book(root, "三体.epub")
+    from novelforge.core import library
+    library.invalidate()
+    bid = library.books("lib$lim")[0]["id"]
+
+    r = client.get(f"/api/books/{bid}/metadata", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    limits = r.json()["limits"]
+    assert limits["title"] == db._FIELD_MAX_LEN["title"], limits
+    assert limits["author"] == db._FIELD_MAX_LEN["author"], limits

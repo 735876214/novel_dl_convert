@@ -110,6 +110,17 @@ watch(
 
 const editable = computed(() => meta.value?.editable === true)
 
+/**
+ * 某字段的**长度上限**（字符）—— 来自后端下发的 `limits`（第 250 期）。
+ *
+ * ⚠️ 上限表**只有一份**（后端 `core/db.py` 的 `_FIELD_MAX_LEN`）；前端**不抄**，
+ * 只在 `maxlength` 上引用它 ⇒ 用户**输入时**就知道有上限，而不是提交后吃 500。
+ * 后端没给（老服务 / 该字段未登记）⇒ 不设上限（`undefined` ⇒ 浏览器不限制）。
+ */
+function limitOf(k: string): number | undefined {
+  return meta.value?.limits?.[k]
+}
+
 /** 是否有任意字段被用户本地覆盖（决定「恢复全部为在线」是否可用） */
 const hasOverrides = computed(() =>
   !!meta.value && Object.values(meta.value.meta).some((m) => m.overridden),
@@ -407,7 +418,13 @@ const INPUT_CLS =
                   {{ meta.meta[k]?.locked ? '已锁定' : '锁定' }}
                 </button>
               </span>
-              <input v-model="form[k] as string" type="text" :disabled="!editable" :class="INPUT_CLS">
+              <input
+                v-model="form[k] as string"
+                type="text"
+                :disabled="!editable"
+                :maxlength="limitOf(k)"
+                :class="INPUT_CLS"
+              >
               <div
                 v-if="meta.meta[k]?.overridden || fmt(form[k] as string)"
                 class="mt-1 flex flex-wrap items-center gap-2 text-[11px]"

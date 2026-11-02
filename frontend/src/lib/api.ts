@@ -2546,6 +2546,14 @@ export interface BookMetadata {
    * 顺序即定义的排序。值不是 OPF 字段 —— 它们存 `book_custom_values`。
    */
   custom: CustomFieldState[]
+  /**
+   * 逐字段的**长度上限**（字符）—— 第 250 期。
+   *
+   * ⚠️ 上限表**只有一份**（后端 `core/db.py` 的 `_FIELD_MAX_LEN`，那是写入时的真正闸门）；
+   * 这里只**下发**，前端拿它给输入框加 `maxlength` ⇒ 用户**输入时**就知道有上限，
+   * 而不是提交后吃一个「服务器错误」。前端**不要**自己抄一份上限表（会漂移）。
+   */
+  limits?: Record<string, number>
 }
 
 /** `GET /api/books/{bid}/metadata/online` */

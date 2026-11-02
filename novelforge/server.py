@@ -4415,7 +4415,25 @@ def api_book_metadata(bid: str):
         "locked": metastore.locked_fields(b),
         # 自定义字段：只给**该书适用且未归档**的定义 + 这本书的当前值（按定义顺序）
         "custom": customfields.state(b),
+        # ⚠️ 第 250 期：逐字段的**长度上限**（字符）—— 前端据此给输入框加 `maxlength`，
+        # 用户**输入时**就知道有上限，而不是提交后吃一个「服务器错误」。
+        # 上限表只有一份（`core/db.py` 的 `_FIELD_MAX_LEN`，那是**写入时**的判据）；
+        # 这里只下发**可编辑字段**的那些，未登记的字段按兜底上限给。
+        "limits": _metadata_limits(),
     }
+
+
+def _metadata_limits() -> dict:
+    """可编辑元数据字段的长度上限（字段 → 字符数）。
+
+    ⚠️ 判据**只有一处**：`core/db.py` 的 `_FIELD_MAX_LEN`（写入时的真正闸门）。
+    这里**只读不改**，前端拿它做 `maxlength` ⇒ 前端不必抄一份上限表
+    （抄一份 = 第二份实现，会漂移）。
+    """
+    out = {}
+    for f in fileops.METADATA_FIELDS:
+        out[f] = int(db._FIELD_MAX_LEN.get(f, db._DEFAULT_FIELD_MAX_LEN))
+    return out
 
 
 @app.post("/api/books/{bid}/metadata")
@@ -4467,10 +4485,15 @@ def api_set_book_metadata(bid: str, payload: dict = Body(...)):
             new_val = db.META_CLEAR
         else:
             new_val = str(accepted[f] or "").strip()
-        if new_val != str(before[f] or "").strip():
-            db.set_override(bid, f, new_val, orig=before[f])
-        else:
-            db.set_override(bid, f, "")
+        try:
+            if new_val != str(before[f] or "").strip():
+                db.set_override(bid, f, new_val, orig=before[f])
+            else:
+                db.set_override(bid, f, "")
+        except ValueError as e:
+            # ⚠️ 第 250 期：长度超限（`core/db.py` 的 `_FIELD_MAX_LEN`）是**用户的输入问题**
+            # ⇒ 4xx + 人话，不是 500「服务器错误」。
+            raise HTTPException(400, str(e)) from None
 
     library.invalidate()
     # 自定义字段（第 35 期）：按定义的类型校验后写进 book_custom_values。

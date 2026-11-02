@@ -220,3 +220,28 @@ describe('元数据编辑器 · 提供商 ID 没有 OPF 原值', () => {
     expect(label.text()).not.toContain('回到文件原值')
   })
 })
+
+// ---------------------------------------------------------------------------
+// 第 250 期：字段的**长度上限**由后端下发，前端只引用、不抄一份
+// ---------------------------------------------------------------------------
+
+describe('字段长度上限（第 250 期）', () => {
+  it('输入框的 maxlength 用后端下发的 limits', async () => {
+    const meta = makeMeta()
+    meta.limits = { title: 200, author: 100 }
+    m.load.mockResolvedValue(meta)
+    const w = await mountEditor()
+
+    expect(input(w, 'title').attributes('maxlength')).toBe('200')
+    expect(input(w, 'author').attributes('maxlength')).toBe('100')
+  })
+
+  it('后端没给上限时不限制输入（老服务兼容）', async () => {
+    const meta = makeMeta()
+    delete meta.limits
+    m.load.mockResolvedValue(meta)
+    const w = await mountEditor()
+
+    expect(input(w, 'title').attributes('maxlength')).toBeUndefined()
+  })
+})
