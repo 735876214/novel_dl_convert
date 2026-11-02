@@ -245,3 +245,54 @@ describe('字段长度上限（第 250 期）', () => {
     expect(input(w, 'title').attributes('maxlength')).toBeUndefined()
   })
 })
+
+// ---------------------------------------------------------------------------
+// 第 255 期：**自定义字段**的**长度上限**同样由后端下发（键是**类型**）
+// ---------------------------------------------------------------------------
+
+describe('自定义字段的长度上限（第 255 期）', () => {
+  /** 自定义字段的输入框（按 label 里的中文显示名定位） */
+  function customInput(w: VueWrapper, label: string) {
+    const el = w.findAll('label').find((l) => l.text().includes(label))
+    if (!el) throw new Error(`页面上找不到自定义字段「${label}」`)
+    return el.find('input')
+  }
+
+  function withCustom(type: string, label: string): BookMetadata {
+    const meta = makeMeta()
+    meta.custom_limits = { text: 8000, number: 8000, date: 8000, list: 8000 }
+    meta.custom = [
+      {
+        key: 'note',
+        label,
+        type,
+        default_value: '',
+        value: type === 'list' ? [] : '',
+      } as never,
+    ]
+    return meta
+  }
+
+  it('自定义字段的 maxlength 用后端下发的 custom_limits', async () => {
+    m.load.mockResolvedValue(withCustom('text', '备注'))
+    const w = await mountEditor()
+
+    expect(customInput(w, '备注').attributes('maxlength')).toBe('8000')
+  })
+
+  it('按**类型**取上限（键是类型不是字段名）', async () => {
+    m.load.mockResolvedValue(withCustom('number', '册数'))
+    const w = await mountEditor()
+
+    expect(customInput(w, '册数').attributes('maxlength')).toBe('8000')
+  })
+
+  it('后端没给上限时不限制输入（老服务兼容）', async () => {
+    const meta = withCustom('text', '备注')
+    delete meta.custom_limits
+    m.load.mockResolvedValue(meta)
+    const w = await mountEditor()
+
+    expect(customInput(w, '备注').attributes('maxlength')).toBeUndefined()
+  })
+})

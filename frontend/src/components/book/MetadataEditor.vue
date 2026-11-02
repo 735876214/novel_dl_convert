@@ -121,6 +121,16 @@ function limitOf(k: string): number | undefined {
   return meta.value?.limits?.[k]
 }
 
+/**
+ * **自定义字段**的长度上限（字符）—— 来自后端下发的 `custom_limits`（第 255 期）。
+ *
+ * ⚠️ 键是**类型**而不是字段名（自定义字段是用户自己定义的，类型可配）⇒
+ * 按 `custom[].type` 查。⚠️ 前端**不抄**上限表（抄一份 = 第二份实现，会漂移）。
+ */
+function customLimitOf(type: string): number | undefined {
+  return meta.value?.custom_limits?.[type]
+}
+
 /** 是否有任意字段被用户本地覆盖（决定「恢复全部为在线」是否可用） */
 const hasOverrides = computed(() =>
   !!meta.value && Object.values(meta.value.meta).some((m) => m.overridden),
@@ -641,6 +651,7 @@ const INPUT_CLS =
               v-model="customForm[c.key]"
               :type="c.type === 'number' ? 'number' : 'text'"
               :disabled="!editable"
+              :maxlength="customLimitOf(c.type)"
               :placeholder="c.default_value ? `默认：${c.default_value}` : ''"
               :class="INPUT_CLS"
             >

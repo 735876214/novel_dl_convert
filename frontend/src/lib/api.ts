@@ -2563,6 +2563,15 @@ export interface BookMetadata {
    * 而不是提交后吃一个「服务器错误」。前端**不要**自己抄一份上限表（会漂移）。
    */
   limits?: Record<string, number>
+  /**
+   * **自定义字段**值的长度上限（**类型** → 字符数）—— 第 255 期。
+   *
+   * ⚠️ 键是**类型**（`text` / `number` / `date` / `list`）而不是字段名：
+   * 自定义字段是**用户自己定义的**（类型可配）⇒ 上限按类型给，
+   * 前端按 `custom[].type` 查即可（不必给每个字段单开一个键）。
+   * ⚠️ 同样**只下发、不在前端抄**（抄一份 = 第二份实现，会漂移）。
+   */
+  custom_limits?: Record<string, number>
 }
 
 /** `GET /api/books/{bid}/metadata/online` */
@@ -4273,6 +4282,13 @@ export const api = {
       items: CustomFieldDef[]
       types: Array<{ key: string; label: string }>
       trashed?: CustomFieldDef[]
+      /**
+       * **值的**长度上限（**类型** → 字符数）—— 第 255 期。
+       *
+       * ⚠️ 键是**类型**（自定义字段的字段类型可配）⇒ 按类型查上限。
+       * ⚠️ 同样**只下发、不在前端抄**（抄一份 = 第二份实现，会漂移）。
+       */
+      limits?: Record<string, number>
     }>(`/api/custom-fields${includeTrashed ? '?include_trashed=1' : ''}`),
 
   /** 新建定义。`key` 缺省由显示名派生（纯中文名会派生出一个名字摘要，不是随机值）。 */

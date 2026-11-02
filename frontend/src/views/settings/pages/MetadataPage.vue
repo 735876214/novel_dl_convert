@@ -607,6 +607,8 @@ function short(v: unknown): string {
 const defs = ref<CustomFieldDef[]>([])
 const defsTrashed = ref<CustomFieldDef[]>([])
 const defTypes = ref<Array<{ key: string; label: string }>>([])
+/** 自定义字段**值**的长度上限（类型 → 字符数）—— 后端下发（第 255 期）。 */
+const defLimits = ref<Record<string, number>>({})
 const defBusy = ref(false)
 const defDraft = ref({ label: '', type: 'text', default_value: '' })
 
@@ -616,6 +618,7 @@ async function loadDefs(): Promise<void> {
     defs.value = r.items
     defsTrashed.value = r.trashed ?? []
     defTypes.value = r.types
+    defLimits.value = r.limits ?? {}
   } catch { /* 未登录 / 后端未就绪：与本节其它请求一样静默 */ }
 }
 
@@ -1425,6 +1428,7 @@ watch(() => props.section, () => {
         </select>
         <input
           v-model="defDraft.default_value"
+          :maxlength="defLimits[defDraft.type]"
           placeholder="默认值（可空；空则不参与抓取）"
           class="h-8 min-w-[12rem] flex-1 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
         >
@@ -1463,6 +1467,7 @@ watch(() => props.section, () => {
           </select>
           <input
             :value="d.default_value"
+            :maxlength="defLimits[d.type]"
             placeholder="默认值（抓取补空用；留空则不参与抓取）"
             class="h-8 min-w-[12rem] flex-1 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
             @change="patchDef(d, { default_value: ($event.target as HTMLInputElement).value })"
