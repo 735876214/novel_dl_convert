@@ -1,0 +1,551 @@
+# 逐期索引全文存档（只读）
+
+> 这是 `.codebuddy/memory/MEMORY.md` 的「逐期铁律索引」一节的**原文归档**（第 220 期）。
+> `MEMORY.md` 里那一节现在只留**一行摘要**（期号 + 主题 + 指针），每次会话注入的体积因此
+> 从 185 KB 降到 ~25 KB；**要查某一期的完整教训时来这份文件**（按期号搜 `### 第 N 期`）。
+>
+> ⚠️ **只读、不追加**：新一期的完整教训照旧写进 `docs/roadmap-gaps-remaining.md` 的本期段
+> （那是唯一叙事），`MEMORY.md` 索引里加一行摘要 + 这里加一节全文 —— 两处都要写，
+> 但都不在「每次必读」的范围里。
+>
+> 收录范围：第 84–219 期（更早的全文见 `MEMORY-PERIODS.md`；第 1–53 期本仓无逐期记录）。
+
+### 第 ≤74 期
+
+见 `docs/TODO.md` §2 交付索引 + `MEMORY-PERIODS.md`（老期号铁律全文）。
+
+### 第 75–79 期
+
+删书回收三份 / `Switch` 圆点白（75）；EPUB 插图 URL 只在 `library._rewrite_assets` + `_rewrite_css_urls` 拼、书内样式独立端点**不进正文容器**（76）；跨库移动与按格式归库链（77–78）；序号单元第四形态「前缀 + 尾部编号」+ 存量自愈 + 冒烟纪律（79）。
+
+### 第 80–83 期
+
+`update` 四键全有读点、**假开关即缺陷**（80）；「移除书库」只删登记 + `recycle_items`（不含 `book_id`）+ 回收站还原 + `recycled_name` ≤255B（81）；首页对齐上游：两步走 / 壳上移 / 行内拖拽 / 真实数据态（82）；仪表盘余留：库范围 / 第 13 件部件 / 快速预览 / 封面上场（83）。
+
+### 第 84 期
+
+（**期号曾被并行会话占用**）自动更新：退避状态机（1h→6h→24h）+ 启动即检 + 更新前备份（失败即中止）。
+
+### 第 85 期
+
+目录体系：`core/reading_list.py`（卷/段唯一真值源）+ `core/toc_sources.py`（**只取目录**）+ `download.toc_enabled`（默认关）；番茄/起点内置规则第 91 期真机核过（番茄书页可用 / 搜索 404）。
+
+### 第 86 期
+
+书源体系 + 追更：16 接口全有界面入口；`autoupdate` 默认开启、**只调 `update_report`**；`manager.update_lock` 防并发丢章。
+
+### 第 87 期
+
+`.zip` 按内容分派（`zipkind.py`，`format` 归一 `CBZ`）；三处静默失败修复；重名判据收敛（**不改 `book_id` 规则**）；`format-capability-matrix.md` 契约。
+
+### 第 88 期
+
+脏库读**不扫盘**（派后台 + `SETTLE_WAIT=0.25`；显式扫描仍同步）；`/api/books` 加 `limit`/`offset`（不传=全量）；书架用**独立分页源**。
+
+### 第 89 期
+
+`requestAck()` 修上传假报错（不解析响应体）；`ENCODING_RULE_VERSION=2`，BOM 优先 + 坏字节**不静默丢**、计数上报。
+
+### 第 90 期
+
+外壳侧栏照搬上游 `ui/sidebar`（基座 `reka-ui`）：折叠态/宽度的唯一真值源 = `SidebarProvider`；窄屏断点唯一真值源 = `lib/viewport.ts`。
+
+### 第 91 期
+
+未登录 401 探测归零 = `showLogin` **初值** + 抽 `bootstrapShell()`（`@authed` 必须复跑，漏了不报错）；**数 401 只能读访问日志**。
+
+### 第 92 期
+
+工具页窄屏：`ui-smoke` 的 `off` 是**原始** `getBoundingClientRect()`（不过滤横滚容器内元素）；`ovf=false` **不是**没问题（溢出被横滚容器吸收、缺陷不报错）。
+
+### 第 93 期
+
+在线阅读（接用户自己的书源）+ 章节缓存 + 跨客户端进度 + 读满 5 章自动落地；按用户要求删掉「仅放行公版源」；**正文净化唯一实现 = `sources/rules.html_to_text`**。
+
+### 第 94 期
+
+书源导入**三条入口收敛成一条**（`sources/intake.py`；拒绝**不再回 200 装成功**）；格式轴（5 adapter）与执行轴 `base.REGISTRY` **正交**。
+
+### 第 95 期
+
+`AGENTS.md` 新增 **§7「工程原则」**（8 条 + 两条边界：数据安全语义与 DB 迁移**不是**兼容层）；并按 `AGENTS.md` 做了一轮合规审计。
+
+### 第 96 期
+
+数据安全：⚠️ **「删除」与「覆盖」是同一条纪律** —— 任何会动用户文件的路径都必须**先 `publish.recycle`**（回收站 + 台账 ⇒ 可还原）。
+
+### 第 97 期
+
+第 95 期审计四条 `[low]` 全清（用户拍板候选 C）：`gate_reason` 的 `source` 形参删除 / 死参数 / 测试专用别名 / 零消费者端点。
+
+### 第 98 期
+
+仪表盘余留三条 + 一条**上游事实更正**：**页级三态**判据 = **聚合首屏真请求**（`stores/stats` + `stores/library`）。
+
+### 第 99 期
+
+元数据抓取**真机核验** + 三处**线上真 bug**：① Audible 整家永远 0 结果（`response_groups` 带**非法组名** `publisher` ⇒ 接口回 400）。
+
+### 第 100 期
+
+EPUB 解析换成熟解析器这条待办**实测后删除**（37 本真实 EPUB 逐字段对比 ⇒ 零收益）；`dc:description` 与 `dc:title` 的需求**刚好相反**。
+
+### 第 101 期
+
+书源网页抓取收口：**Goodreads 整家失效**（真结果页结构各 0 次，旧正则恒 0 条）⇒ 改用 **RSC flight payload** 解析；AWS WAF 三家分开归因。
+
+### 第 102 期
+
+元数据抓取**地基**（来源声明收口 `core/sources/` + 缓存 + 限流 + 按 ID 详情 + 两个配置键）。⚠️ **不新建 `providers/`** —— `metasources.py` 就是现有可插拔系统（§7.1 第二份实现 = 缺陷）。
+
+### 第 103 期
+
+把 `series` / `series_index` / `narrators` 接进抓取线（用户选 A）。⚠️ **性质是「接线」不是「加能力」**（字段早就建模）；RanobeDB 详情补全**从未生效**（0.7 < 0.75 阈值）。
+
+### 第 104 期
+
+出网失败归因（用户选 A）：`core/netdiag.py` 把「DNS 解析失败 / 解析被污染 / 连接被阻断 / TLS / 代理 / 超时」分开 + 收口前端类型红。⚠️ **本机 DNS 被上游污染**（`openlibrary.org` → `31.13.x`，而 8.8.8.8 给 `199.59.149.201`）—— 看到 `dns_polluted` **先查本机 DNS，别改代码**。
+
+### 第 105 期
+
+⚠️ **CI 镜像构建失败的真因：源码被 `.gitignore` 静默忽略** —— `input/` 少前导斜杠吞掉 `frontend/src/components/ui/input/`（第 90 期新增）⇒ CI 从 clone 构建报 `[UNLOADABLE_DEPENDENCY]`；**本机文件一直在 ⇒ 本地永远绿**（「本地复现」不算证明，要用干净 clone 验）。防回归 `tests/test_source_tracking_contract.py`。
+
+### 第 106 期
+
+记忆体系精简（用户 m08584）：**收尾只写两处** = roadmap 本期段（唯一叙事）+ 本表一行；`MEMORY-REF.md` 改为**按主题**的域手册（不再按期号追加）；**当日日志取消**；第 53–105 期逐期全文存档 = `MEMORY-PERIODS.md`（只读）；三个文件名一律不动。
+
+### 第 107 期
+
+自动化收尾（用户 m08782「再谈自动化」）：机械的几处交给 `tests/period_close.py` —— `new` 一次落位 / `check` 只读对账 R1–R8；⚠️ **工具只摆位置、不写叙事也不提炼**，缺锚点或期号已占用**整体拒绝**（绝不改一半）、**不猜数字**（没给 `--numbers` 就让人手改）、逐文件保住**行尾与 BOM**（否则假 diff）。⚠️ **对账不能追溯历史**：§2 是第 62 期才开始记的（53–61 无行）、74/78 反过来 ⇒ `STRICT_FROM=107`，历史错位只 warning（补一条从来没存在过的记录 = 编造）。
+
+### 第 108 期
+
+阅读动线四改（用户 m09151；五处歧义经 m09230 全部选推荐项）：仪表盘封面**直接开书**（`frontend/src/lib/bookOpen.ts` 的 `openTargetOf` 是唯一真值源，端点读不动的格式去详情页）／侧栏抽屉判据从「纯宽度」改成 `DRAWER_QUERY = 窄屏 or (pointer: coarse and ≤1023.98px)`（手机横屏与平板收起，桌面窗口拖窄仍两栏）／阅读路由**整屏沉浸 = 外壳根本不渲染**（`/listen` 刻意不在内：它是播放器不是阅读界面）／设置面板补 document 级 `click` + `contains` 收面板（用 click 冒泡而非 pointerdown ⇒ 翻页模式下只收面板、不翻页）。⚠️ 三条教训：**本仓 SPA 是 hash 路由**（探测要用 `#/read/<id>`；`location.pathname` 恒为 `/`，按路径导航拿到的是服务端 404）／**VTU 默认挂游离树**，测 document 级监听的用例必须 `attachTo: document.body`，否则会以「看着像产品 bug」的形式假红／新增前端 spec 必须登记进 `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`，否则全量 pytest 红。
+
+### 第 109 期
+
+发版 V1.0.0（用户 m09886）：把第 95–108 期连续十四轮「只提交不发版」的积累一次性发布；镜像起多推一个 `:1.0.0` 版本 tag（NAS 端可固定版本 / 需要时回滚）。
+
+### 第 110 期
+
+MOBI/AZW3/AZW **直读 = 解包，不是转换**（用户 m00255「mobi直接阅读，不进行转化」+ m00226「有成熟功能和模块的，不要自研」）：`core/mobicache.py` 把书自身 KF8 内容解包到 `CACHE_DIR/mobi-unpack/<book_id>/`（**不进书库、不写回源文件**）；KF8 出真 EPUB ⇒ 目录/正文/插图/书内样式/**CFI 与批注**全复用，纯 MOBI6 出 HTML ⇒ 如实降级（无插图/样式、`cfi` 留空）。⚠️ **四个读点（目录表 / 单章 / 资源与样式 / 进度 CFI）必须收敛到一个「读目标」判据**（`mobicache.read_target`）—— 第 87 期那四条不一致就是同一判据写四遍的产物。⚠️ 教训：`elif suffix in mobicache.EXTS:` 里再 `from . import mobicache` 会让它成**局部名**而条件先求值 ⇒ `UnboundLocalError`、**详情接口全线 500**（延迟导入必须放分支第一行）；`.azw` 进白名单要 `SCAN_RULE_VERSION` 2→3。⚠️ 本机跑 pytest 除清空 6 个 proxy 变量外还有两道沙箱坎：`0o700` 目录**不可枚举**（垫片把 `os.mkdir` 的 0o700 改 0o777）、`--basetemp` **不能放仓库根**（conftest 有仓库根防删除守卫）；前端命令（vite 起子进程）在受限沙箱下必然 `spawn EPERM` ⇒ 需提权一次。⚠️ 许可证：`mobi` GPL-3.0-only + 既有 `EbookLib` AGPL-3.0 ⇒ 本项目整体 **AGPL-3.0**（首次补 `LICENSE` + `THIRD-PARTY-NOTICES.md`；`quickjs` 上游未标注许可证）。
+
+### 第 111 期
+
+`.rar`/`.7z` 与 `.zip` 走**同一套容器判据**（用户 m00875「接着做阶段②」）：`zipkind.CONTAINER_EXTS` 三个壳、图片档一律**归一成 `CBZ`**（`.rar` 漫画第一次能直接读）、其余进「待展开」清单由人显式按；`comics._Archive` 加**第三个后端** `py7zr`（**纯 Python、不需要外部解压器** ⇒ 容器镜像不必再装系统包；1.1.3 **没有**「读单条目」API ⇒ `py7zr.io.BytesIOFactory(limit=条目解压后大小)` + `extract(targets=[name], factory=)`，每次抽取前 `reset()`；`writestr` 参数是 `(data, arcname)`）。⚠️ 教训：`analyze` 把「没分派出形态」的 `format` **写死 `"ZIP"`**、而待展开清单按 `format=="ZIP"` 筛 ⇒ 新容器会**静默消失**（文件在盘上、界面一个字不提）—— 判据一律**派生**（`CONTAINER_FORMATS`）；同理 `.rar`/`.7z` 进白名单要 `SCAN_RULE_VERSION` 3→4。⚠️ 「缺解压能力」与「这本书坏了」必须**分开且只有一处判据**（`comics.backend_problem`；此前散在 server 三处守卫里，`.7z` 一进来就漏成「容器里一个文件都没有」的静默失败）。⚠️ `.rar` 造不出样本（`rarfile` 只读，本机 `tool_setup()` 抛 `RarCannotExec`）⇒ 只测诚实路径，**绝不伪造「读过 RAR」的结论**。
+
+### 第 112 期
+
+FB2 直读 + 容器自动展开（用户拍板三项：**默认开、可关**；展开后**源容器原样保留**；FB2 做**完整深度**⇒ 归一成派生 EPUB）：`core/fb2cache.py` 把 `.fb2` 这份单文件 XML 解析后组装成 `CACHE_DIR/fb2-epub/<bid>/derived.epub`，**目录/单章/插图/书内样式/CFI 与批注零新代码复用**（`read_target` 是唯一读目标判据，五个读点都问它）；`epub_builder.build_epub` 加可选 `images=`（默认 `None` ⇒ 既有调用方产物逐字不变）。⚠️ 教训：**不引新依赖** —— `fb2reader` 只是元数据抽取器（`save_body_as_html` 写的是 prettify 后的**原始 FB2 XML**，不是 HTML），已评估并否决；stdlib `ElementTree` + **可选** lxml `recover=True` 兜底（没装只是少一层，**不是 503**）。⚠️ 派生缓存的缓存键必须带**自愈分量**（`state.json` 的 `recover`）—— 只记源指纹的话，先前「无 lxml 所以失败」的文件**永远锁死**。⚠️ 白名单新增格式必须 `SCAN_RULE_VERSION` 4→5：那些 `.fb2` 此前**连索引行都没有**，不 +1 就永远不重探（比报错更难排查）。⚠️ 「不做自动展开、必须由人按」那条纪律**作废并同批改写**（六处文档/注释）：`watcher._auto_unpack_tick()` 跑在**既有监听线程**里、节流 `index_interval`、指纹记 `app_state` 的 `autounpack:{bid}`（**无论成败都记** ⇒ 坏包不刷屏、源一改就重试）。
+
+### 第 113 期
+
+Audible `subtitle` 接线（用户原话「todo的当前状态太长了，精简一下。精简完成做一下剩下的任务」；**不发版**，`VERSION` 仍 `1.3.0`）：把顶层 `subtitle` 接进抓取线，净改动只有 `metasources._entry`/`_search_audible` 两行 + `config` 一个默认值 + `kinds` 一个集合项，**前端零改动**；默认策略 `overwrite` → `fill_only`（与 `series`/`series_index`/`narrators` 同档）。⚠️ **教训：TODO 里预估的「四处同步」实测只缺一处** —— `subtitle` 自第 63 期就整套建模好了（`_VALUE_KEYS`/`_FINALIZE_FIELDS`/前端 `POLICY_FIELDS`/`fileops.METADATA_FIELDS` 全在），缺的只是候选结构那个键 ⇒ **动手前先查既有建模，别照抄待办里的估计**。⚠️ 更隐蔽的一条：原默认 `overwrite` 被写成「会改书名」的风险，但它其实**从没有源填过**（候选结构缺键 ⇒ 一直空转）—— **接线之前，一个字段的默认策略值可能根本没有实际含义**；接线后 `fill_only` 才真正意味着「只在没有副标题的书上补」（`library._apply_overlay` 会把生效值并进书对象 ⇒ `cur` 非空即跳过）。⚠️ `subtitle` 是 **DB-only**（无 OPF 元素，与 `narrators`/9 个提供商 ID 同档），**别写成「写进书文件」**。⚠️ 真机核过（经本机代理 `127.0.0.1:7897`）：Audible 的顶层 `subtitle` **随现有 `response_groups=product_desc` 返回**，**别为它加组**（第 99 期：加一个非法组名 ⇒ 接口 400 ⇒ 整家永远 0 结果）。同批把 `docs/TODO.md` §0 从 46 行压到 17 行：与 `AGENTS.md` §5 重复的本机陷阱**整块删掉、改成一条指针**，19 期的 HEAD 链压成「最近一期 + 一句历史指针」，落位器的四个锚点（`- HEAD = ` 前缀 + 同一物理行的 `` ；`VERSION` ``、逐字基线句、`第 113 期`、非表格行的版本字面量）全部保住。
+
+### 第 114 期
+
+CI 的 5 个 action 升到 Node 24 运行时（用户原话「修一下 CI 的 5 个 action 仍跑在 Node 20 运行时」；**不发版**，`VERSION` 仍 `1.3.0`）：`actions/checkout@v4`→**v7**、`docker/build-push-action@v6`→**v7**、`setup-buildx@v3`→**v4**、`setup-qemu@v3`→**v4**、`login@v3`→**v4**（共 6 处 `uses:`，`checkout` 两个 workflow 各一次）——**纯版本号替换**。⚠️ **升级前必须逐个 diff 上游 `action.yml` 的 `inputs:`**：实查确认本仓用到的 13 个输入（`context`/`file`/`push`/`platforms`/`provenance`/`build-args`/`tags`/`cache-from`/`cache-to`/`registry`/`username`/`password`/`fetch-depth`）**一个都没更名**，所以 `with:` 一个字都不用动（`setup-buildx@v4` 砍的是 `config`/`config-inline`/`install` 三个弃用输入；`setup-qemu@v4` 加了 `reset`）。⚠️ 判「哪个大版本是 node24」要**抓 `action.yml` 看 `runs.using`**、别信记忆：`@v4`/`@v3`/`@v6` 那批全是 `node20`（GitHub 已在 node24 上强制跑它们）；`v4.0.0`+ 的 docker action 都要求 **Actions Runner ≥ v2.327.1**（`ubuntu-latest` 满足）。⚠️ 教训：**「记进 TODO」挡不住这条 warning，得让全量 pytest 能红** —— 第 105 期就记下了，却一直挂到第 113 期 ⇒ 新增 `tests/test_ci_actions_contract.py`（离线、手写 `ALLOWED` 白名单，**正反两向都钉**：用到的都在白名单里 + 白名单里没有用不上的；不联网读上游是刻意的，「过期」正是逼人有意改一次的动力）；**「改动前会红」已实测**（改回 `@v4` ⇒ `2 failed`，`try/finally` 还原并核对字节）。📌 真判据永远是 **CI 自己那一跑**（第 105 期的教训）：既核 `conclusion == success`，也核那条 Node 20 warning **确实消失** —— 只核 success 不够，warning 还在就说明升级没生效。
+
+### 第 115 期
+
+核验演播者：摘掉 Audnexus、Audible 接按 ASIN 取详情（用户原话「核验 演播者（narrators）」；**不发版**，`VERSION` 仍 `1.3.0`）：核到**根**上 —— `api.audnexus.com` 与 `audnexus.com` 在权威 `.com` TLD 上回 **NXDOMAIN**（不是第 103 期记的 `SSL EOF`，也不是本机 DNS 污染），真接口是 `https://api.audnex.us`；而它 **`/books?title=…` 实测 404**（只有 `/books/{asin}` / `/authors/{asin}` / `/books/{asin}/chapters`）⇒ `_search_audnexus` 打的那条路由**在任何 host 上都不存在** ⇒ 这家四期来**从未可能产出任何东西**，却一直占着界面开关、替 `narrators` 打勾（**假能力**）。更实锤：`_audnexus_entry` 的 docstring 与 registry `note` 都自称给「演播者/系列」，**函数体一个都没映射**（**死声明**）；且它的 `series` **恒为 `null`**（连 Dune 都是）。⇒ 按用户拍板**彻底摘掉、不留兼容垫片**（§7.1），改接 **Audible 自带的 `GET /1.0/catalog/products/{asin}`**（真机核过：回 `{"product": {…}}`、与检索**同形状**、且**多给 `series`** Dune #1 / The Dune Sequence #12）。提供商 **14 → 13 家**、`DETAIL_SOURCES` **2 → 3 家**（audible / itunes / openlibrary）；`metafetch._detail_first` 零改动（`SOURCE_ID_FIELD["audible"]` 早已在）。⚠️ 教训：① **字段映射抽成一处 `_audible_entry(p)`**（检索与详情共用）—— 详情路径不许再抄第二份（同 `_itunes_entry`/`_detail_itunes` 的规矩）；② `response_groups` 也收口成常量 `AUDIBLE_RESPONSE_GROUPS`（第 99 期：**检索与详情必须逐字同组**，加一个非法组名 ⇒ 400 ⇒ 整家永远 0 结果）；③ **区域必须跟着走**（`opts["region"]`）—— UK/DE/JP 的 ASIN 在 US 站查不到，而 `_detail_key` 已把 opts 并进缓存键 ⇒ 不串缓存（第 102 期立的地基，本轮只复用）；④ **「14 家」是散落字面量、不是单一真值源**（`config.py` / `kinds.py` / `metafetch.py`×2 / `metasources.py`×10 / 前端 `MetadataPage.vue` 用户可见文案 / `api.ts` / 三份文档）⇒ 改完必须 grep 回读为 0，而 `docs/roadmap-*` 与 `memory/**` 里的「14 家」**不许改**（那是历史）；⑤ 用户的旧配置里可能还留着 `audnexus`，来源过滤走 `is_implemented()` ⇒ 静默过滤，已实测不炸；⑥ `_entry` 对多值字段（`tags`/`narrators`）**截前 8 项**（用例断言要按截断后的列表，这是本轮新暴露、**已记进 roadmap 的未决项**）。「改动前会红」已实测（摘掉 `detail_name` ⇒ 5 例失败，还原即绿），改完**再打一次真实地址**核过映射。
+
+### 第 116 期
+
+修可动手待办：多值字段上限按字段分 + 前端 flaky 超时（用户原话「修一下可动手待办」，直接取 `docs/TODO.md` §1 **A 组**那三条；**不发版**，`VERSION` 仍 `1.3.0`）：① **多值字段上限收成一张表** `metasources.MULTI_VALUE_MAX = {"tags": 8, "narrators": 32}` —— ⚠️ 旧写法是**同一判据的三份实现**（`_entry` 的 `[:8]`×2、`metafetch._candidate_values` 的 `vals[:8]`、`metafetch.MERGE_MAX_TAGS = 8`）⇒ **只改一处没用**（另两处会再砍一次），所以第 115 期真机《Dune》**12 位**演播者落库只剩 8 位；表放在**被依赖的下游** `metasources`（`metafetch` 本已 import 它，反向成环），`MERGE_MAX_TAGS` **删除**（§7.1）。⚠️ **为什么分字段而不是统一放宽/取消**：`tags` 是「尽力而为的标签」、多源**合并**就靠 8 项防爆（OL 的 `subject` 拆开常上百条）；`narrators` 是**这版录音的事实阵容**，砍一半是**丢事实**（32 远超真实阵容，实测最多 12 位）。⚠️ 上限一律按字段取（`MULTI_VALUE_MAX[field]`）—— 新增多值字段忘登记会**立刻 `KeyError`**，不静默退默认值。⚠️ **没有回填既有库**（只影响之后的抓取写入）。② 前端 flaky 收到 `testTimeout: 15000`：⚠️ **根因是 vitest 给每个 spec 各建一次 happy-dom**（`isolate` 默认开；第 104 期记 `67 次 / 256.61 s / 占 55%`，本期复测 `69 次 / 72.75 s / 48%`），那几秒记在**恰好排在它后面**的用例头上 ⇒ **命中的用例会换、别按行号认领**，也**别当「刚改的东西坏了」**；vitest 提示的 `pool: 'vmThreads'` / `isolate: false` 会改 717 例的隔离语义，属另一件事。③ `fileops.py` 的 OPF 改写正则按第 95 期审计（`docs/agents-audit-95.md:183`）**保留**，只把它从 A 组挪进 C 组 —— ⚠️ **动手前先看 A 组条目是不是真的「有判据可动手」**：它的判据本来就是「不动」。⚠️ 改前端**只动测试配置**时产物逐字节不变（`git status` 里 `static/v2` 零改动可证）—— 但仍要走完 `build + deploy`。「改动前会红」已实测（`MULTI_VALUE_MAX["narrators"]` 改回 8 ⇒ **4 例失败**，还原即全绿）。
+
+### 第 117 期
+
+`AGENTS.md` 索引化 + 本机（Windows）陷阱外移 + 常用命令脚本化（**不发版**，`VERSION` 仍 `1.3.0`）：把入口从「什么都说一点」改成**索引** —— 开头加「30 秒红线」六条、§2 同步点表**补第三列「契约测试」**（把「漏了会红」的判据摆进表里）、§4 命令改成调 `scripts/*.sh`、§5 从 19 行散文改成**三列表**（症状 / 关键词 → 判据与处理 → 去哪看）、§6 收尾写成**七步顺序**、文末新增「记忆与收尾」表；**只对这台开发机成立**的陷阱（IDE safe-delete shim / nvm / 本机 DNS 污染 / pwsh 编码 / msedge 冒烟 / 端口占用）整块外移成 `docs/development-windows.md`（第一段就写死「换机器 / 容器忽略，**不要当成项目规则**」），`MEMORY-REF.md` 与 `TODO` §0 原地**只留指针**。⚠️ 教训：① **外移必须留指针** —— 「文档里搜不到」等于删掉（连「我查过了」这个事实一起丢）⇒ 搬完要 **grep 回读**被删的关键词（`ledger.plan` + `isolated` 落 `docs/development.md` §4、`st_size` 仍在 `MEMORY-REF.md`、`vue-tsc 3.3.12` 在 roadmap）；② **索引化必须配「跳转有效」的契约**（`tests/test_agents_index_contract.py`）：反引号里写成仓库内相对路径的指针必须**真实存在**，判据用白名单**前缀 + 后缀**（否则 `server.EDITABLE` / `db._connect()` 会被误判成路径）、且**扫到 0 条也要红**（防判据自己失效）；③ 命令收成 `scripts/`（`test.sh` / `frontend-verify.sh` / `dev-instance.sh` + 共用 `_lib.sh`，**判据只许有一份**）后立刻暴露一处**静默漏跑** —— 脚本选中的 `.venv` 是 **3.12.10**（`quickjs` 装得上），而过去几期的全量用 `.workbuddy` 的 3.14.3 跑 ⇒ `test_js_sandbox.py` 的 **13 例一直静默跳过**（skipped 26 → 13、passed +13，**全量照样全绿**）⇒ **别把 `.venv` 升到 3.13+**（`quickjs` 只有 cp38–cp312 包）；④ 「本机专属」与「跨环境通用」混在一张表里，代价是**每个换机器 / 容器的读者都要自己重判一遍**，且必然长出第二、第三份拷贝（本次是 §5 与 `MEMORY-REF.md`「运行 / UI 验证」、`TODO` §0 三处）；⑤ 判断「指针还有没有落点」不能只看文档 —— 关键词进 roadmap 或只读存档也算**没丢**（本题面是「能不能找回来」，不是「必须在哪个文件里」）；⑥ **用例的落点一律给 `tmp_path`，绝不给相对路径** —— `BrowserClient` 的 `aclose()` 会 `_save_cookies()` 落盘，传 `cookie_dir="."` 就让每次全量在**仓库根**留下 18 B 的空 `LWPCookieJar`（`git status` 永远脏一个，且没人会想到是测试干的）；修它而不是加 `.gitignore`（盖住 = 让它继续悄悄落），判据用**根目录快照名字差集**（删文件 → 只跑那个用例 → 文件重生即坐实）；⑦ **本机 IDE 配置一律不入库** —— `.vscode/settings.json` 第 117 期**从仓库移除 + `.gitignore` 钉住**（此前它「被跟踪却永不提交」，每期收尾都要人工排除；用户 09-21 口径：仓库内不得出现机器相关路径，各人配在本机 **User 设置**里）；⚠️ 删出索引**还必须忽略**，否则 VS Code 自己写回时又变成未跟踪文件 —— **规则从「靠人记」改成「靠工具挡」**。
+
+### 第 118 期
+
+跨平台审查修复：pytest 进 CI + 六条平台假设缺陷（用户原话「审查代码是否存在问题」→「全部修复」；**不发版**，`VERSION` 仍 `1.3.0`）：审出来的是**产品代码全清、工具链全红** —— ① **pytest 从来不在 CI 跑**（只有 docker build 与 release）⇒ 「代码假设了 Windows」这类缺陷永存：`tests/conftest.py` 的仓库根守卫**不认 `dir_fd`**，POSIX 的 `shutil.rmtree` 删子项走 `os.unlink(name, dir_fd=fd)` ⇒ 裸文件名按 cwd(=仓库根) 解析 ⇒ 12 例**数据安全用例**（覆盖前留档 / FB2 重建 / 音频中途失败）必红，还被 `BaseExceptionGroup` 伪装成「事件循环坏了」；② `scripts/test.sh` 里 `"$PY）"` 在 macOS 自带 **bash 3.2** 下把全角括号吞进**变量名** ⇒ `set -u` 报 `PY: unbound variable`、一条测试没跑就 exit 1 ⇒ 变量一律 `${VAR}` 并由 `tests/test_scripts_contract.py` 钉住（含 `bash -n` 与 LF）；③ 新增 `.github/workflows/tests.yml`（ubuntu + **py3.12**，入口就是 `bash scripts/test.sh`）—— **门一开立刻抓到第三条**：`novelforge/static/` 从未入库（`.gitignore` 只忽略 `v2/`），全新 clone 在 **import 期** `StaticFiles(directory=…)` 就炸 ⇒ 入库 `.gitkeep`（删了本地立刻大声炸，不需要额外用例）；④ `mobi` 是**软依赖**（缺了回 503）却硬报错 ⇒ 三处补丁前 `importorskip`，**不做**模块级 skip（有个用例恰恰在模拟没装）；⑤ `async` 里的同步磁盘 I/O（`landing._first_landing` / `manager` 下载与 sidecar / 头像 `write_bytes`）一律 `asyncio.to_thread`，书库在 NAS 上一次 `rmtree` 会按住整个事件循环。⚠️ **最大教训**：**「全绿」≠「跑全了」** —— 本机 `.venv` 缺 `py7zr`，两个模块的**模块级 `importorskip` 把 26 例整体吃掉**（junit 里只剩 2 条模块级 skip），总数少 24 而全量照样全绿（第 117 期 `test_js_sandbox` 13 例是同类第一次）⇒ 判据是**拿两台机器的 junit 做用例名差集**，且换机器 / 重建 `.venv` 后要把 `requirements.txt` 的软依赖逐条对一遍。⚠️ 复现 Linux 的最小姿势：`git clone --local` 一份（38 MB、不含 `.venv`）再 `docker run -v …:/w -w /w ubuntu:24.04`（**别挂带本机 `.venv` 的工作区**，`_lib.sh` 会优先用它）。⚠️ 本轮基线升到 **2428 例**（macOS 2415 passed / 13 skipped；CI 环境 2408 passed / 20 skipped），两处基线由落位器写（**勿手改**）。
+
+### 第 119 期
+
+全量**逻辑**审查（用户原话「全量审查代码逻辑性」→「全部修掉」；**不发版**，`VERSION` 仍 `1.3.0`）：`novelforge/` 50,948 行 + `frontend/src` 73,673 行逐层过，10 条**全部实证后**再修 —— P1 两条：① `POST /convert-path` 直拼 `INPUT_DIR / path`，而这条路由**不强制鉴权** ⇒ `path=../secret.epub` 实测 **200 + `application/epub+zip` + 原始字节**（未鉴权任意文件读取）⇒ 新增 `fileops.input_path()` 作「收书目录内路径」的**唯一**入口（`/convert` 的 `file.filename` 同批过闸；不限层级、不套 `UNSAFE_CHARS`）；② 库根掉线 → `library.py` 静默 `except: return []` → `_refresh_locked` 把这轮「没扫到」的行**全删**（`watcher` 每 60s 自动跑）→ `_orphan_refs` 把该库全部进度/批注判成孤儿 → `db.delete_orphans` **真 DELETE**（这一步不可逆）⇒ 三道护栏：根**全**不可用则 `skipped/root_unavailable` 不删、孤儿清单追加 `live_libs` 约束、`recycle.restore_one` 目标库根不在就拒绝（原来 `mkdir -p` 会造幻影目录并把文件搬走）。⚠️ **最大教训：「状态码对」≠「校验对」** —— 修复前那次 400 是 `library_rules.target_root` 返回 None（mixed 库不收该格式）挡的，换个 typed 库就 200 ⇒ **测安全边界必须桩掉业务规则**，否则测的是业务不是边界。⚠️ 第二条：**数据丢失链 = 三个各自看起来都合理的默认值**（静默 `except` → 空集当全删 → 孤儿清理真 DELETE），单看谁都不像缺陷。⚠️ P2 两条：`daily_seconds` 是**滚动 24h 桶**、`active_days`/`streak`/`completion_months` 是日历日、两张直方图走账号时区 ⇒ 前端「N 天前」标签系统性错位、点阵与连续天数能互相矛盾 ⇒ 新增 `db.local_day()` 作「**哪一天**」唯一判据（「哪个**时段**」继续走 `_reading_zone`，两个问题分开，各自只有一处实现），逐日递减改用 `timedelta`（夏令时本地日不是恒等 86400 秒）；Komga 的 `if not locator` 把**第 0 章**（合法值就是 0）当成「href 没对上」⇒ 读者在第一章时位置永不更新（探针 `(7, 2.0)`：percent 动了位置没动）⇒ 用 `None` 当哨兵，同批让 `page ≤ 0` 只把 percent 归零、**保留位置**（与 `completed: true` 保留 locator 同一取向）。⚠️ P3：上传落盘 `src.write_bytes` 进 `to_thread`；7 处 `asyncio.create_task(...)` **丢弃返回值**（弱引用，任务可能跑完前被 GC、异常只打 stderr）⇒ 统一 `server._spawn_bg()` 留强引用 + 记未捕获异常（`_ops_*` 是**另一个东西**：只答「有没有长操作在跑」，两者都留）；`paginate` 与 Spring `PageImpl` 对齐（空集合 `totalPages=0`、越界页空 content 且 `number` 回显）；书名兜底排序加 `{numeric:true}`；ruff 死导入 9 处 + 未用变量 4 处（`core/autoupdate.py` 的 `meta = json.loads(...)` 其实是**留档解析闸门**，改成裸调用 + 注释，别当纯垃圾删）。⚠️ **核过但报「不是缺陷」的也写下来**：`library.py` 的 B023 闭包（`find` 只在本轮被调用，下一轮 `parent` 已重绑定）、8 处 `zip()` 无 `strict=`、`activity_log` 的 naive `datetime.now()`（给人看的本地墙钟，`ts_epoch` 才可排序；komga/opds 早已 `timezone.utc`）、`publish.py` 落盘**不加**挂载校验（源不在时早已 skip，加了反而退化成「首发布要多级父目录都存在」，副本丢失源仍在）。⚠️ 基线 **2450 例**（2437 passed / 13 skipped，新增 22 例）；本机全量 314 s / 478 s **不可与第 118 期的 104.7 s 比**（Docker Desktop VM 吃 8 核 + virtiofs 挂 `/var/folders`，`load avg` 20，`--durations` 最慢一例 8.3 s ⇒ 环境负载，不是回归）。
+
+### 第 120 期
+
+第二轮逻辑审计：书源名就是文件名 + 设置写不进去还回 ok（用户原话「继续修复」；**不发版**，`VERSION` 仍 `1.3.0`）：本轮换口径审「**看起来成功、实际没发生 / 发生了却不该发生**」，两条都是**静默**的 —— ① 书源名 `name` 同时是 `SOURCES_DIR/<name>.json` 与 `COOKIE_DIR/<name>.cookies.txt` 的主干，而它**没有任何校验**（探针：`add_rule({"name": "../../evil"})` 写到 `CONFIG_DIR/evil.json`，**sources 目录之外**；`load_user_sources()` 只 glob 目录内 ⇒ 重启后这条源**凭空消失**；`name="../settings"` 则会**覆盖 settings.json 覆盖层**，集成凭据 / 更新镜像全在里面）⇒ 名字判据收敛 `rules.rule_name_error()`、路径收敛 `rules.rule_file_path()` / `rule_file_exists()`（此路径原先在 **8 处各拼一遍**：`store.py:75/93/115/192`、`ledger.py:58`、`rules.py:95`、`server.py:755`、`probe.py:62/93`；cookie 名字也拼了两处，改调 `creds.cookie_file()`），三个入口（`validate_rule` / `register_rule` / `add_rule`）全部过闸。② `config.save_overrides()` 是 `open(...,"w")` + `except Exception: pass`，而四条写入口（`PUT /api/config`、`/api/koreader`、`/api/integrations/{service}`、`customfields.drop_legacy_override`）无条件回 `{"ok": true}` ⇒ 磁盘满 / 只读挂载 / 配置目录没权限时**界面显示「已保存」、重启后设置全没**；写一半断电还会留下半截 JSON，被 `load_overrides()` 的 `except: return {}` 当「没有覆盖层」⇒ **全部设置静默回默认值** ⇒ 原子落盘（临时文件 + fsync + `os.replace`）+ 失败**抛 `OSError`**（三个接口转 500，前端本来就把 `detail` 抛给页面）+ 读不出来时**改名留档** `settings.json.corrupt-<ts>` 并打 warning；新增 `config.mutate_overrides()` 把「读—改—写」放进同一把锁（此前四处各自 load+save，并发保存会**互相抹键**，��样不报错）。⚠️ **教训**：① **一个名字被 8 处拼成路径 = 8 次漏掉校验的机会** —— 「路径只有一处构造」与「名字只有一处置信」是同一件事的两面；② `except Exception: pass` 出现在**写入口**上是「静默写不进」的标准配方，配上界面的「已保存」比直接报错难查十倍；③ 负面结论也要留档：102 处删除/移动/替换调用点（含 21 处 `unlink`）逐处核过**没有一处删书文件或副本**，428 处静默 `except` 里**零处**返回 `{"ok": True}`，音轨与漫画页都是自然序，`FileResponse` 自带 Range，`units.py` 纯读零落盘。⚠️ 基线 **2467 例**（2454 passed / 13 skipped，新增 17 例 `tests/test_logic_audit_120.py`），本机全量 115.0 s。
+
+### 第 121 期
+
+功能审查：同名守卫覆盖 KOReader / 同一文件双库登记 / 假监听 / 封面当章节（用户原话「审查代码功能」→「修复一下」；**不发版**，`VERSION` 仍 `1.3.0`）：审法换了视角 —— 不看代码怎么写，只起隔离实例按「用户会做的事」走一遍（登录 / 收书 / 转换 / TXT·EPUB·CBZ·UNITS·AUDIO 阅读 / 进度 / 批注 / 书签 / OPDS·Komga·KOReader 互通 / 出版 / 回收站），以接口实际返回为准。四条都已修并留 11 例契约：① **同名不同职责 = 静默功能丢失**：`novelforge/server.py` 里 `_ko_guard` 定义了两次（`:8059` 判 `koreader.enabled` + MD5 key，`:8526` 转发 `komga_api.verify` 判 `komga.enabled`），后定义覆盖前定义 ⇒ 只开 KOReader 的部署 `users/auth`、`syncs/progress` 全 **404「Komga 兼容服务未启用」**（而 `users/create` 201，因为它用另一个 `_ko_cfg()`）；反过来只开 Komga 时应用账号能同步 KOReader。修法：第二个改名 `_komga_guard(`（45 处），契约 `tests/test_func_audit_121.py::test_两个守卫不再同名`。② **去重的判等键要与数据身份一致**：书 id = `库id$sha1(路径)` ⇒ 同一物理文件被两个库各登记一次就有两条 id；`duplicate_groups` 只按作者+书名聚类、不看路径，于是判成「两本重复的书」，`recycle_items` 按同一个绝对路径 `shutil.move` ⇒ **搬走保留方唯一那份**（实测 keep 那本也 404「书籍不存在」，可回收台账恢复）。修法两层：`duplicate_groups` 同 `path` 跳过 + 聚类后按 `path` 兜底去重；`recycle_items` 用 `library.books()` 建「路径→书 id」表，同路径还有活行就 `ValueError` 拒搬（前端 toast 补首个失败原因）。③ **开关语义别二分成一个键**：`watcher._derive_targets` 用 `watcher.enabled` 决定收书目录是否 `watch`，而 `AUTO_WATCH` 覆盖它 ⇒ `AUTO_WATCH=false` 下 `POST /api/watcher/start` 回 `running:true` 却 **2 分钟不收书**（修前）；改成 `watch` 恒 `True`（`enabled` 只表达「启动时自动起线程」），实测丢 txt **4 秒**入库。④ **改目录别改坐标空间**：EPUB `_spine` 忽略 `linear="no"`，封面页被列成第 1 章 ⇒ 拆 `_spine_items() -> [(href, linear)]`，`_spine()` 保持原样（它是 index 空间，`epub_cfi`/`komga_api`/`chapter_html` 都靠它，改它会把已存进度与批注的 index 整体平移），只让 `_reading_list` 跳过非线性项、编号按已列条数重排，整条 spine 都非线性时照旧全列。**试过又撤掉**：顺手过滤 `properties="nav"` 的目录页 → 8 个既有用例按「nav 也是一章」断言，全红，撤回并把理由写进 docstring。基线 **2478 例（2465 passed / 13 skipped），243.8 s**（同一天 104.7–477.9 s 波动，本机 Docker Desktop VM 与 virtiofs 所致）；前端 `scripts/frontend-verify.sh` exit 0（69 spec / 717 例）。
+
+### 第 122 期
+
+zip 上传被判没有库：先落临时件再判形态 + 前端白名单补齐（用户原话「zip 格式的书导入后不能识别」；**不发版**，`VERSION` 仍 `1.3.0`）：同一份字节存成 `.cbz` 上传 200、存成 `.zip` 400 —— 三处漂移叠加：① `novelforge/server.py::_dispatch_into_library` **先判落点再落盘**，而通用容器的形态只能看内容（`zipkind.analyze`）⇒ 判的时候文件还不存在，每个 zip 都被判「没有可接收这个文件的书库」⇒ 改成「`_read_capped` → 写点号临时件 `.upload-<uuid><suffix>` → 用临时件判归库 → 拒收时**先算 why 再 unlink**（顺序反了会退化成「打不开」）→ 通过则 `tmp.replace(src)` 原子改真名」；顺带 `except OSError` → 500「书库目录写入失败（可能未挂载或没有写权限）」而不是甩堆栈。② `frontend/src/views/tools/LocalConvertView.vue:52-55` 的 `ALLOWED_EXT` 是 `pipeline.EBOOK_EXT` 的**第二份拷贝且已漂移三代**（缺 `.azw .zip .rar .7z`），注释还写着「与后端一致」⇒ 用户拖 zip 进来前端自己过滤掉、一个都不投递（`BookDockPage` 直连 `convertDrop` 无白名单，所以只有本地转换页中招）。③ `novelforge/core/library_rules.py` 又自抄 `_COMIC_EXT`/`_EBOOK_EXT` 两份元组、**漏 `.azw`** ⇒ 过得了 pipeline 那道闸、归库时判不出类型被判「没有库」⇒ 新增 `library.type_for_ext()` 立为「格式 → 类型」唯一真值源。另加 `library_rules._container_shape_hint()`：拒收时说出**识别结果**（「里面是 2 张图片，要按漫画包才读得动；现有书库都不收漫画（当前：电子书库）——新建漫画库或把后缀改成 .cbz」/ 混装「判不准，不猜」/ 文档包 / 嵌套 / 多文件 / 损坏 / 空包各自指向「工具 → 书库管理 → 待展开的压缩包」），`watcher` 同批走 `no_library_reason(name=…, src=…)`。⚠️ **教训**：① **注释写着「与后端一致」不等于一致** —— 同一份允许集写两遍必然漂移，且**用户看得见的那个入口先坏**（后端收得进、前端根本不让投）⇒ 用 pytest 解析两端源码比集合钉住（`tests/test_upload_exts_contract.py` 5 例：逐项一致 / 容器与 `.azw` 在列 / 无重复 / `ACCEPT` 派生自同一份 / 前端只此一处）；② **「判不出形态」有时是「文件还不存在」** —— 判据依赖内容时必须先落盘再判，拒收路径的顺序（先算原因再删临时件）也是行为的一部分；③ 报错要说**识别结果**而不是规则名称，用户才知道该建漫画库还是改后缀。⚠️ 基线 **2492 例**（2479 passed / 13 skipped，新增 14 例：`tests/test_zip_upload_122.py` 9 + `tests/test_upload_exts_contract.py` 5），全量 218.8 s；前端 `scripts/frontend-verify.sh` exit 0（69 spec / 717 例，spec 数未变）。
+
+### 第 123 期
+
+格式识别审查：图文混装永久不可读 + 兼容层媒体表落后（用户原话「审查一下格式识别相关的代码」→「修一下」；**不发版**，`VERSION` 仍 `1.3.0`）：审的是「同一个字节序列，换个后缀就换个命运」的那些地方 —— ① **图文混装一刀切判死 = 把最常见的打包方式挡在门外**：`zipkind.analyze` 原来「图片 + 任何文档」就判 `mixed`（不可读），而漫画包带 `说明.txt` / `ComicInfo.xml` 是常态；更糟的是 `unpack_plan` 只抽 `_UNPACK_EXTS` 里的文档、**图片不在其中** ⇒ 展开也救不回。实测同一份字节：`.cbz` → `comics.probe` `pages=2` 能读，`.zip` → `kind=mixed readable=False`。修法：把文档拆成**旁注**（`_TEXT_DOC_EXTS`：txt/nfo/md/rtf/html/xml/json/url/sfv）与**真文档**（epub/pdf/mobi/azw3/azw/fb2）—— 图片 + 全是旁注 ⇒ 按漫画读（记 `evidence["ignored_docs"]`、reason 写明忽略了几份），图片 + 有真文档 ⇒ 仍 `mixed` 且 reason **点名是哪一份**。② **兼容层媒体表落后于格式表**：`komga_api.MEDIA_TYPES` 缺 FB2/AZW/AUDIO/UNITS/ZIP，`_PROFILES.get(fmt, "DIVINA")` 的默认值让**所有**格式变漫画（点「阅读」是 0 页空阅读器，`pages_for` 只认 CBZ/CBR/PDF ⇒ 400）；`opds._MIME` 缺 FB2/AZW ⇒ acquisition `type=application/octet-stream`，按 `opds.py` 自己的注释「客户端不认识就不出现下载按钮」⇒ 这两类书在 OPDS 里下不了。修法：两表补齐；`_PROFILES` 只留客户端**真有**阅读器的四种，其余 `status="UNSUPPORTED"` + `mediaProfile=None`（已核上游 `Media.kt` 的 `Status` 枚举与 `MediaType.fromMediaType` 只认 ZIP/RAR/EPUB/PDF）。③ `.azw` 在容器里认不出（`_DOC_FORMATS` 漏它，而 `_UNPACK_EXTS` 由它派生 ⇒ 连展开都抽不出）；`.cbz` 里装 txt 时 `pages=0 unparsable=False`（书架 0 页、不进退修复）—— 修法都是**复用**判据：文档表补 `.azw` 并注「与 `mobicache.EXTS` 同进同出」，`_probe_entry` 在「0 页且没报错」时借 `zipkind.analyze` 复核内容，不是图片序列就标 `unparsable`。④ **三处手抄格式集合**：`units.kind_of` 对 `.zip/.rar/.7z` 一律回 `comic`（一话一个装 PDF/EPUB 的 zip 被塞进漫画阅读器、0 页）⇒ 容器按 `zipkind.analyze` 判内容、判不出回空串（前端给下载，不假装能读）；`watcher.auto_fetch_async` 的手抄 allow-list **漏 `.txt`**（主力格式永不触发自动补全，手动刮削却一直可用）⇒ 改用 `library.type_for_ext`；`library_rules.decide` 第 2 步 `in ("ebook","comic","audiobook")` 把 `_by_format` 的 **mixed 回落就地丢弃** ⇒ 只建一个综合库的部署按格式**一本都收不进来**；`server._ANY_MEDIA_EXTS` 是第二份拷贝 ⇒ 派生自 `library.BOOK_EXTS`。⚠️ mixed 兜底的位置是关键：放在关键词**之前**会抢走关键字路由（第 40 期两条用例钉着），放在**之后**才两头都对。⚠️ **教训**：① **「放宽判据」与「诚实报错」是两件事** —— 混装容器有「旁注（常态）」与「真歧义（不猜）」两种，一刀切两边都错，分开判且判据只写一处；② **注释里写着「其次 mixed」不代表代码真的这么做** —— `_by_format` 的 mixed 回落长期是死代码，而它恰是「只有综合库」部署的唯一活路；**判据的存在性要用用例证明，注释不算**。⚠️ 基线 **2505 例**（2492 passed / 13 skipped，新增 13 例 `tests/test_format_audit_123.py`，另改写 `tests/test_watcher_auto_fetch.py::test_auto_fetch_async_allowlist_and_kind` 的 `.txt` 口径），全量 112.0 s；本期无前端改动。
+
+### 第 124 期
+
+格式识别复审修复：旁注判据收紧 + 容器媒体类型与上传白名单收敛（来源：用户要求用独立审查（`dsh_code_review`）复审第 123 期，结论「方向正确、patch 不正确」= 1 条 P2 + 2 条 P3；**不发版**，`VERSION` 仍 `1.3.0`）：① **P2 按后缀放宽判据 = 必然吞掉一类内容**：第 123 期把 `.txt` 当「旁注」，于是「1 张封面 + `正文.txt`」被判成 `comic` —— 书目登记成 1 页漫画、`unparsable` 为假（不进「待修复」），而 `unpack_plan` 因 `kind=="comic"` 直接回「不需要展开」⇒ **正文既读不到也取不出来（静默数据可见性丢失）**。修法：判据按语义分两层 —— `_NOTE_DOC_EXTS`（`.xml/.nfo/.sfv/.url/.json/.db`，结构化元数据，出现即旁注、与文件名无关）+ `_NOTE_NAME_RE`（readme/说明/注释/info/comicinfo/license/版权/彩蛋/about/metadata 开头，大小写不敏感）+ `_is_note(name)` 唯一判据；取舍写死：**宁可多报一例 `mixed`（如实说判不准、进「待修复」、`unpack_plan` 抽得出正文），也不能静默吞正文**。② **P3 容器自身的媒体类型漏两档**：判不出形态的容器书目 `format` 保留 `ZIP`/`RAR`/`7Z`，第 123 期只补 `ZIP` ⇒ `RAR`/`7Z` 在 `opds._MIME` 与 `komga_api.MEDIA_TYPES` 里仍落 octet-stream（客户端不出下载按钮）；同批把契约清单 `_ALL_FORMATS` 从只列 `ZIP` 扩到 `ZIP/RAR/7Z`。③ **P3 上传白名单是第三份拷贝**：`pipeline.EBOOK_EXT` 与 `library.BOOK_EXTS` 内容完全相同（各 20 项），上传闸门吃前者、`type_for_ext` docstring 却声称「上传走它」；形态同 `.azw` 那次 400（只往 `library._EBOOK_EXTS` 加格式 ⇒ 上传静默 400）⇒ 改成 `EBOOK_EXT = frozenset(library.BOOK_EXTS)`。⚠️ **教训**：① **放宽判据要按语义分档，不能按一次事故的现场分档** —— 旁注 ≠ 文本文件（`说明.txt` 与 `正文.txt` 同后缀）；② **契约清单自己也会成为盲区**：`_ALL_FORMATS` 少两档时「覆盖全部格式」的用例照样全绿 —— 清单要从真值源派生（或与 `zipkind.CONTAINER_FORMATS` 对齐），不能手抄。⚠️ 基线 **2507 例**（2494 passed / 13 skipped，新增 2 例），全量 254.3 s；本期无前端改动。
+
+### 第 125 期
+
+入库审查修复：隐藏文件 / 等条件重试 / 解压上限 / 根外链接 / 覆盖标记（来源：用户「继续审计格式识别和入库存在的问题」→ 五条实测取证 →「修复」；**不发版**，`VERSION` 仍 `1.3.0`）：五条**全部是「验收对、判据缺」** —— 接口回 200、书进了库、页码拿得到，但「该不该进」「能进多大」「进了谁」三层判据都没有。① **隐藏判据长错了层**：`library._iter_book_entries` 只在**目录**分支判 `startswith('.')`（当初只在目录里见过 `.DS_Store`），顶层文件 / 系列层文件 / 音频目录三处没有 ⇒ `.隐藏书.txt` 与 macOS 的 `._三体.epub`（AppleDouble，204 B）都进书目（标题 `._三体`、`format=EPUB`、`issues=['unparsable']`）⇒ 新增唯一判据 `library.is_hidden_name()`，四处分支同批改用，`watcher._iter_entries` 的两处内联判据也收敛到它（此前两边各一份，分叉就出现「扫描看不见、索引里还在」）。② **「等条件」被算成失败 = 重试上限变成丢弃上限**：`watcher.handle_file` 把「没有可接收的书库」与「解析失败」归成同一种结局，都走 `fails >= max_retries(3)` ⇒ 文件先落盘、书库后建时前 3 轮已把它丢进 `_failed`，**建库后仍不收**（须手动清失败记录）⇒ 新增第三态 `"waiting"`：`handle_file` 回 `("waiting", "没有可接收的书库：…")`，`_scan_locked` 只 `state.pop` + `stats["waiting"] += 1`（**不碰 `_failed` 计数**），仍放进 `result["failed"]` 给界面看；`bookdock.rescan` 同步加分支（界面标 error + 原因，`retries` 不加一）。③ **压缩比是不可信输入**：`comics.page_bytes` 直 `arc.read(name)`，三后端（zip/7z/rar）都没有单条目上限 ⇒ 65,455 B 的 `.cbz` 里塞 64 MiB 条目实测 `GET /api/books/<bid>/comic/0` 回 **200 + 67,108,872 B**（上传 64 KB 换读 1 GB 内存）⇒ `MAX_ENTRY_BYTES = 128 MiB` + `EntryTooLarge(name, size)`，`_Archive.read()` 三后端统一「**读 `MAX+1` 字节后判超限**」（不先信 zip 的 `file_size`，它可以撒谎；7z 无增量读接口，先用目录尺寸预判再解压），`page_bytes` 显式 `except EntryTooLarge: raise`（否则被通用 `except` 吞成「这一页读不出来」），`server.py` 三处取图入口翻成 **413**；`zipkind.unpack` 的 extract 分支只跳过超限那一条，repackage 分支的 `p.read_bytes()` 同批换 `shutil.copyfile()`（整包进内存在同一类输入下是同一个问题）。④ **符号文件就是可读入口**：书库根里 `外部链接.txt -> /tmp/nf-secret.txt` 入库且 `chapter/0` 原样吐根外内容（`rglob` 不跟符号目录 ⇒ 无环爆，但文件级链接没拦）⇒ `_escapes_root(p, root, link=None)`：是符号链接且 `resolve()` 后不在根内就不算本库的书，**根内链接照旧**（NAS 上同书软链到两个系列目录是正常用法）；`link` 必须由调用方从 `DirEntry.is_symlink()` 传入 —— `Path.is_symlink()` 在 3.12 走 `Path.lstat()`，**多一次 stat 就抵消第 62 期「每文件只问一次文件系统」的全部收益**（用例用 monkeypatch 打桩钉住「不发 syscall」）。⑤ **同一路径换了内容没人知道**：4600 B → 15200 B 覆盖后 `book_id`（库 id + 路径哈希）不变是对的（换 id 会丢全部历史），但「内容换了」这个事实没落任何地方 ⇒ `book_index` 加 `replaced INTEGER NOT NULL DEFAULT 0`（`ensure_schema` 用 `PRAGMA table_info` 补列），`_refresh_locked` 在非 force 刷新时比 `(size, mtime)` ⇒ `replaced_now`，`library._issues_of(..., replaced=False)` 产出 `issues=['replaced']`，前端 `MissingResourcesView.ISSUE_META` 加「内容已更换」标签；**不做自动清进度**（进度是用户数据，这里只负责把事实摆出来）。⚠️ **教训**：① 判据要按「**这一层会不会出现影子文件**」写，不按「哪里试过出问题」写 —— AppleDouble 影子文件是**跟着文件走**的；② 「失败」必须区分「这条记录坏了」与「现在还不能做」，混在一起时重试上限会变成**静默丢弃上限**；③ 凡「按声明尺寸读取 / 分配」的地方一律按「最多读 N+1 字节」实现；④ **性能优化会反过来限定修法的形状**（`_escapes_root` 的 `link` 参数就是接住既有约束，而不是把第 62 期推翻）。⚠️ 两条旧用例按新语义改写：`tests/test_catalog.py::test_索引与全量扫盘逐字段一致` 基准 `>=9`→`>=8` 并断言隐藏文件**不在**基准里（原基准隐含依赖了「顶层不判隐藏」这个 bug，只证明两条链路一起错）；`tests/test_watcher_perlibrary.py::test_建库后被拒收过的文件会自动重新收走` 删掉「到上限后就不该再试」前置（改为 3 轮都报 failed 且 `stats['failed'] == 0`）。⚠️ 基线 **2520 例**（2507 passed / 13 skipped，新增 13 例 `tests/test_ingest_audit_125.py`），全量 115.3 s；前端 `scripts/frontend-verify.sh` exit 0（69 spec / 717 例，本期只加 `replaced` 标签、spec 数未变）。
+
+### 第 126 期
+
+分章完整性：全顶格无标记退化成一章全文 / 全缩进文本不再切出零章（来源：用户「进行下一轮审计并修复」；**不发版**，`VERSION` 仍 `1.3.0`）：两条 P1 都出在 `novelforge/core/detect.py` 的缩进兜底，而且**都是「一读就现形」的静默数据丢失**。① **全顶格 + 零章标记 ⇒ 一行一章、正文全空**：`"他来了。\n她走了。\n"` 切出 2 章、每章 `body=''`，接口 `GET /api/books/<bid>/chapter/0` 只回 `{"html": "<h2>他来了。</h2>"}` —— 整本只剩标题（随笔 / 诗歌 / 一话一行导出的 TXT 全是这个形状）。根因：产章三级兜底「正则 → 章落号 → 缩进」的**最后一级也有前提**（顶格行 = 标题、缩进行 = 正文），全书顶格时每行都被判成标题，产出的章自然全是空正文，而**没人检查「章有没有正文」**。② **整本全角空格缩进（中文排版常态）⇒ 切出 0 章、整本打不开**：`"　　他来了。\n　　她走了。\n"` → 0 章；`_split_by_indent` 的第一个 `cur is None` 分支（本意跳书名 / 作者行）把首个顶格行之前的缩进正文**全跳过且不留痕**，混合文本 `"　　缩进一。\n　　缩进二。\n他插了一句。\n"` 只剩 1 章、前两行凭空消失。修法（唯一产章入口）：新增 `FULLTEXT_TITLE = "全文"`（刻意不用「正文」，那是 `vol` 的默认值，同名会让卷名与章名在界面无法区分）+ 新增 `absorb_orphan_titles(chaps)` —— **空正文的章不当章、当普通正文行**：前面已有章就并进上一章正文**末尾**（误判成标题的行原本就在那儿），前面还没章就攒到下一个有正文的章**开头**，全都没正文 ⇒ 退化成单章 `{"title": "全文", "body": <全文>, "vol": "正文"}`；**有正文的章一个不碰**（对切得对的书是零改动）。`detect_chapters()` 出口改为 `return absorb_orphan_titles(chaps)`，四条产章路径全部过这道闸。`_split_by_indent` 第一个 `cur is None` 不再跳过，改攒成前置章 `lead`（标题同为「全文」），首个顶格行出现时先 append。`CHAPTER_RULE_VERSION` 3 → 4（派生 EPUB 缓存键带它，**不升版本 = 存量 TXT 命中原缓存、改了看不见**）。实测：散文书 `chapter/0` → `total=1` + `<h2>全文</h2>` + 三段 `<p>`，派生 EPUB 重建为单个 `EPUB/c0000.xhtml`；全缩进文本 0 章 → 1 章且正文完整；真章节文本（`第一章 …`）章数 / 正文 / 卷名**全不变**。⚠️ **教训**：① **「正文为空」是判据错位的信号，不是内容的性质** —— 凡靠**形状**（缩进 / 空行 / 行首符号）推断结构的地方，都必须有「推断失败 ⇒ 退化成不推断」的出口；② **同一函数里两个 `cur is None` 是同一类错误的两个出口**（跳过前置内容 / 保留空章，根子都是「必须先有标题才能有正文」）—— 修的是判据，不是两处 if；③ **降级链的终点必须保证「一定读得到全文」**：三级兜底听着完备，最后一级也会产出空章时等于没有兜底；④ 改分章口径**必须升 `CHAPTER_RULE_VERSION`**，派生缓存不认代码只认版本号。⚠️ 一条旧用例按新语义改写：`tests/test_detect_chapters.py::test_正则命中太少则退化为缩进切分` 的旧断言 `chaps[2]["body"] == ""` **钉的就是缺陷本身**（把「一行一章、正文全空」当期望结果），改为断言标题为 「顶格行一 / 顶格行二」且 `chaps[1]["body"] == "缩进正文二\n顶格行三"` —— 用例能锁住行为，锁不住「这个行为对不对」。⚠️ 保留待议（**未修、不算本期缺陷**）：对白体里顶格引号行仍会被当章标题（结构怪但内容不丢）；`split_by_offsets` 的 body 首行含标题行、正则路径「首个边界之前的内容被丢弃」都是**刻意契约**。⚠️ 基线 **2529 例**（2516 passed / 13 skipped，新增 9 例 `tests/test_chapter_integrity_126.py`），全量 117.8 s；本期无前端改动。
+
+### 第 127 期
+
+数值入口的有限性：inf / NaN / 整数溢出不再毒化整页（来源：用户「进行下一轮审计并修复」；**不发版**，`VERSION` 仍 `1.3.0`）：这轮不看功能、只看**「客户端给的数」从解析 → 落库 → 序列化**这条链，结论是整条链上**没有一处**问过「这个数是不是有限的」。JSON 规范没有 `inf` / `NaN` 字面量，可 Python 的 `json` 认 —— `1e400` 解析成 `inf`、`NaN` 直接给 `nan`，而 `float()` 之后没人再问一句。① **一次写坏、永久坏**：`PUT /api/books/<bid>/progress {"percent": 1e400}` 此前回 **200**、`inf` 落库（SQLite 的 REAL 存得下无穷），而 starlette 的 `JSONResponse` 用 `allow_nan=False` 序列化 ⇒ 此后 `GET /api/books`（书架首页）、`GET /api/stats`、`GET /api/books/<bid>/progress` **同时恒 500**（`ValueError: Out of range float values are not JSON compliant: inf`），用户唯一出路是手工改库；同族两条：书签 `percent: 1e400` **写库成功、回写响应时才 500**（坏行留在库里 ⇒ 书签列表恒 500）、状态 `started_at: 1e400` 写进 `reading_status` ⇒ 书架首页跟着 500（状态并进书目）。② **两侧判据拦不住 NaN**：`if seconds <= 0 or seconds > 86400` 看起来完备，可 `nan` 与任何数比较皆 `False` ⇒ 两边都放行，`POST .../session {"seconds": NaN}` 直冲 SQLite（`nan`→`NULL`→撞 `NOT NULL`）才 500。③ **`int(1e400)` 抛的不是 ValueError**：`OverflowError` 既不是 `ValueError` 也不是 `TypeError` 的子类，`except (TypeError, ValueError)` 一个都接不住 ⇒ 进度 `locator` / 批注 `chapter` / 批注 `start_off` / 评分 `stars` 四处 500（`db.set_rating` 里同款）；KOReader 侧 `raw.isdigit()` 后 `int(raw)` 能算出 500 位整数，落库时才炸（SQLite INTEGER 是 64 位）。④ **同一判据三份实现，缺的是 server 那两份**：「百分比夹 0–100」`core/koreader.py` 与 `core/komga_api.py` 早写了 `max(0.0, min(100.0, x))`，`server.py` 的进度 / 书签路径**什么都没做**（`-5` / `999` 原样落库，而百分比直接决定「读完」判定与统计）；更妙的是那两份 min/max 也**不认识 NaN**（比较皆 False ⇒ 原样返回），实测 `percentage: NaN` 得到 **100.0** —— 把书标成读完。修法：新建 `novelforge/core/numbers.py` 作**唯一判据**（`finite` / `clamp` / `percent` / `index` / `epoch`，`MAX_INDEX = 10 ** 9` 存得进 SQLite、`MAX_EPOCH` = 公元 9999；`bool` 不算数）；`server.py` 加 `_finite_num(raw, name)`（非有限 ⇒ 400，「存不住也不该存」）与 `_bounded(payload, key, lo, hi, default=…, integer=…)`（缺省 ⇒ 默认值、非有限 ⇒ 400、**有限越界 ⇒ 夹住**），套到进度 / 书签 / 批注 / 状态 / 会话 / 评分六处（批注锚保留「非法一律 -1」契约，改走 `numbers.index(..., default=-1)`）；出口加 `_FiniteJSONResponse`（覆写 `render()`：**先按原样序列化、只在抛 ValueError 时**才净化再渲染一次并记一条 warning，正常路径零成本；`app = FastAPI(..., default_response_class=_FiniteJSONResponse)`）；`koreader` / `komga_api` 两份 min/max 收敛到 `numbers.percent`（顺带修掉 NaN ⇒ 100% 与 Komga 页码 `int(1e400)`）。⚠️ **教训**：① **「解析成功」不等于「值可用」** —— `float("1e400")` / `float("nan")` 都不抛错，却都存不进 JSON；凡「客户端给的数」，第一步该问**有限性**，不是区间；② **序列化层是整个应用的单点**：一个字段坏了坏的是**整条响应**，读路径不能假设库里干净（脏值可能是上一版代码写的）⇒ 入口拦 + 出口兜**两道都要**；③ `OverflowError` 不在 `except (TypeError, ValueError)` 里，写「把输入转成整数」时三类要一起接；④ **区间判断与「是不是数」是两个问题**，`nan` 会把「两侧都写全」的判据变成两侧都放行。⚠️ 真机复验（重启隔离实例 8481）：八类坏载荷全部 400、书架 / 统计 / 书签 / 进度四个读面全 200；手工把库里 `percent` 改成 `inf` 后 `GET /api/books` 仍 200 且显示 `0.0`（兜底生效、warning 只记一条）。⚠️ 基线 **2559 例**（2546 passed / 13 skipped，新增 30 例 `tests/test_numeric_input_127.py`），全量 248.6 s；本期无前端改动（`scripts/frontend-verify.sh` 仍 exit 0）。
+
+### 第 128 期
+
+同名冲突的降级路径：单书入口 409，批注总览与导出不再整页打不开（来源：用户「继续审计并修复」；**不发版**，`VERSION` 仍 `1.3.0`）：`book_id` 只由**文件名**派生（`库id$sha1(basename)[:12]`）⇒ 「同一个书库里两个目录下的同名书」（`作者A/测试书.txt` 与 `作者B/测试书.txt`）撞同一个 id，而 `book_index` 主键是 `(library_id, root, rel)`，**两行都收得下** ⇒ 冲突是**合法存在**的旧状态（入库拦截 `IngestConflict` 是第 13 期才补的，且「先有书、后又在另一目录放同名文件」根本拦不到）。`library.by_id` 对它抛 `BookIdConflict`（不静默取第一条 —— 进度/批注只有一份，取错比报错糟），判据没错；错在**全仓 40+ 个 `by_id` 调用点只有「删书」一处 `except` 过它**。实测（隔离实例 8482，同库两目录同名 + 给该 id 塞一条旧批注）改前：`GET /api/books/{bid}` **500**、`GET /api/annotations` **500**、`GET /api/annotations/export?format=json` **500** —— 而 `BookIdConflict` 的消息里本来就写着「去改名」的指引，**被 500 吞掉了**（响应体只剩 `Internal Server Error`）；最要命的是导出：用户的本能是「先备份批注再去改名」，备份自己先挂 ⇒ 修复入口与备份入口同时不可用，没有任何安全的下一步。其余面（`/api/books`、`/api/stats`、`/api/series`、`/api/authors`、`/api/book-dock`、`/api/library-conflicts`、`/api/scrape/state`、`/api/tasks`）一直 200。另一条：文案一律写「**在多个书库中同名**」，可这组是**同一个库**的两个目录（`libs_txt` 去重后只剩一个库 id），而冲突清单按 `kind="same_name_different_dirs"` 报 ⇒ 用户拿着这句话去「跨库」那栏永远找不到。修法：① **框架边界**加 `@app.exception_handler(library.BookIdConflict)` → `JSONResponse(409, {detail, code="book_id_conflict", hint})`（同一件事 40+ 个调用点，逐个 `except` 必然漏 —— 与第 119 期「一行坏数据打掉整页」同型）；② 跨书清单改用 `library.by_id_status(bid) -> (book, conflict)`（内部 `catalog.find_by_id(bid, unique_only=True)`，冲突返回 `(None, True)`；docstring 写死「**单书入口不许用**，那里必须抛了翻 409」）；③ `/api/annotations` 与导出每行多带 `book_conflict`，书名取不到时回退成 id 本身（不编「未知」）；④ `catalog.find_by_id` 加 `unique_only` 参数，冲突文案按 `len(lib_ids)==1` 分「在同一个书库里有两本同名」/「在多个书库中同名」，统一指向「设置 → 书库管理 → 同名冲突」；⑤ 前端 `AllAnnotation` 加必填 `book_conflict`、`canJumpTo()` 遇冲突 `false`（能列出但按 id 打开必然 409，做成可点就是假交互）、批注总览页加「同名冲突」chip + 三态 `jumpHint()`。⚠️ **教训**：① **「合法存在」的坏状态必须有降级路径** —— 判据抛异常是对的，但没有一处把它翻成可行动状态时，坏状态就等于整个功能不可用；标准是「用户能不能走到修复入口」；② **修复入口与备份入口不能同时依赖「状态干净」**；③ **文案是判据的一部分**：说「跨库」而实际同库两目录，用户照着找就是找不到 —— 文案要由实际数据决定，不能写死；④ **同类错误的规模决定修法位置**：40+ 调用点该放框架边界（异常处理器），而「一行坏数据」场景放逐行容错，两者不是二选一。⚠️ 改了 `frontend/src/lib/api.ts` 的必填字段后，`frontend/src/views/AnnotationsView.spec.ts` 的 `makeAnno()` 样例对象必须同批补 `book_conflict: false`，否则 `vue-tsc` 报 TS2322（四连第一步就红）。⚠️ 基线 **2564 例**（2551 passed / 13 skipped，新增 5 例 `tests/test_conflict_read_128.py`），全量 159.7 s；相关子系统 75 例（conflicts / name_conflicts / catalog / annotations / bookid_migration / opds_library）全绿。
+
+### 第 129 期
+
+名字到路径的判据：超长名与非法书源名不再 500，Cookie 路径不再越出 COOKIE_DIR（来源：用户「进行5轮审查并修复」第 1 轮；**不发版**，`VERSION` 仍 `1.3.0`）：换探法 —— 用 `from novelforge.server import app` 枚举 `APIRoute`，拿 **85 条带参路由 × 11 种敌意值**（`x`/`0`/`-1`/`..`/`a*300`/`a*300+中`/`%00`/`1e400`/`管理员`/`../x`/`x/../y`）× 全部方法穷举扫 5xx，一次抓到 **4 处 500**：`GET /download/{name:path}`、`GET`+`DELETE /api/sources/{name}/cookie`、`GET /api/sources/{name}/login-spec`，全是 `OSError: [Errno 63] File name too long`。⚠️ **根因一：`pathlib` 的「问一下有没有」只在白名单 errno 上回 False** —— `_ignore_error` 只忽略 ENOENT/ENOTDIR/EBADF/ELOOP/EINVAL，**`ENAMETOOLONG` 不在里面**（实测 `resolve()` 成功、`is_file()`/`stat()`/`is_dir()` 全抛；`os.pathconf("/tmp","PC_NAME_MAX")`=255），于是「取不到就 404」在超长名字上**走不到 404**、直接冒成 500。⚠️ **根因二：名字判据只接了一半** —— 「书源名就是文件名」的判据第 120 期早已立在 `sources/rules.py::rule_name_error`（拒分隔符/`..`/前导点/超 80 字符），规则文件那侧接上了，`sources/creds.py::cookie_file()` 却只拼 `cookie_dir()/f"{rule_name}.cookies.txt"` **不问名字** ⇒ `..` 能把 Cookie 读出/写进/删掉 `COOKIE_DIR` 之外（`status`/`save`/`clear` 三个口子），超长名字让 `status()` 的 `is_file()` 抛 OSError。修法：① `core/fileops.py` 新增 `NAME_MAX_BYTES = 255`（POSIX `PC_NAME_MAX` 常见值；**不查 `os.pathconf`** —— Windows 不可用且不该随挂载点漂移）、`name_too_long(part)`（按 **UTF-8 字节**判：85 汉字=255 字节刚够、86 超）、`_check_part_len(part, name)`（抛 `ValueError("路径片段太长（N 字节，上限 255）：…")`），接进 `safe_path()` 既有 `rel.parts` 循环 + `input_path()`（第 119 期立的入口），接口层零改动（`ValueError` 本就翻 400）；② `creds.cookie_file()` 调 `rules.rule_name_error`（**函数内延迟导入**，否则 `rules`→`core.network`→`creds` 成环），`status()`/`clear()` 遇 `ValueError`/`OSError` 一律回 `_EMPTY`/`False`（**读路径非法名 = 不存在；写删路径必须当场拒**，与 `rules.rule_file_exists` 同口径）。复扫 **1903 次探测 0 个 5xx**。⚠️ **教训**：① 「取不到就 404」的前提是「取不到只有一种原因」—— 凡拿名字拼路径，**先问名字能不能落盘**，别等 `stat` 告诉你；② **上限按字节算**（255 是字节不是字符，85/86 汉字正好卡边界，含中文书名的项目必踩）；③ **立判据时要 `rg` 一遍「还有谁在拼这个名字」** —— 同一句话有两处落点，立在一处不等于两处都用上；④ **穷举接口比读代码更快抓这类**：11 值 × 85 路由 ≈ 半小时抓 4 个 500，而按模块读代码时「名字长度」不会让人停下来想；⑤ **满载才红的用例是判据缺失不是运气**：`tests/test_annotation_export.py::_bid` 的「写文件→`invalidate()`→立刻读」依赖了产品**明确不保证**的时序（`catalog.SETTLE_WAIT` = 0.25 s 的有上限等待，到点如实返回旧索引），改成 `library.books(force=True)` 同步重扫 —— 用「重跑就绿」按下去，最终会以 CI 偶发红回来。⚠️ 基线 **2574 例**（2561 passed / 13 skipped，新增 10 例 `tests/test_name_to_path_129.py`），全量 196.4 s；前端四连 exit 0（本期未改前端）。
+
+### 第 130 期
+
+查询串的条数：limit 超范围不再 500，LIMIT 绑定统一夹进 SQLite 整数范围（来源：用户「进行5轮审查并修复」第 2 轮；**不发版**，`VERSION` 仍 `1.3.0`）：探法从「给入口灌坏值」换成**从函数签名枚举参数** —— `inspect.signature(route.endpoint)` 认出每条 GET 的**查询参数**，逐个灌 12 种值（`-1`/`0`/`1e400`/`10**30`/`abc`/`%00`/`中`/`a*300`/`1.5`/`NaN`/`true`/空串），**1176 次探测**抓到 **3 处 500**：`GET /api/sources/imports`、`GET /api/sources/{name}/history`、`GET /api/tasks`，坏值都是 `limit=10**30`。⚠️ **根因不是「没校验」，是「Python int 没有上限、SQLite INTEGER 只有 64 位」** —— `sqlite3` 在 `execute(sql, params)` **绑定参数**时才抛 `OverflowError: Python int too large to convert to SQLite INTEGER`，它不是 `ValueError`/`TypeError`，不在任何调用点的 `except` 里 ⇒ 冒到 ASGI 变 500（栈：`server.py:792 api_source_imports` → `core/db.py:3552 source_imports` → `db.py:116 execute`）。修法：`core/numbers.py` 新增 `MAX_ROWS = 100_000` 与 `row_limit(v, minimum=1, cap=MAX_ROWS)` = `min(max(minimum, int(v)), cap)`（非数/非有限 ⇒ `minimum`，判据与 `finite` 同源），**调用点是 `db.py` 里 10 处 `LIMIT ?` 的绑定点**（`recent_sessions`/会话列表/`task_list`/`ledger_history_list`/`source_imports`/`dock_list`/`scrape_next_pending` 等），**不是 5 个接口**：绑定点是唯一知道「这个整数要进 SQLite」的地方，接口层夹了下一个新接口照样炸。低端语义**不统一**、由调用方传 `minimum`（`task_list` = 1，`recycle_list`/`migration_batches`/`scrape_next_pending` = 0，`recycle_list` 的 `0` 仍是「不截断」）。复扫 **1176 次探测 0 个 5xx**。⚠️ **教训**：① **「能转成 int」不等于「能存进 SQLite」** —— 范围判据的边界是**存储引擎**不是语言类型，这已是第三次同族（`inf`/`NaN` 第 127 期、文件名 255 字节第 129 期）；② **性能护栏参数该夹住不该拒绝**（`limit=10**30` 不是攻击，是客户端算错，夹到 10 万既保住「全给我」又不让服务端组荒谬结果集）；③ **判据落在最下游知道语义的那层，但低端语义交给调用方**（`0` 在 `recycle_list` 是「全部」、在 `task_list` 是「至少 1 条」）；④ **模糊测试的对象应该是「签名」而不是「我想到的入口」** —— 从 `app.routes` + `inspect.signature` 枚举能让以后新增端点自动进射程，手写清单必漏最像没问题的那一个。⚠️ 基线 **2584 例**（2571 passed / 13 skipped，新增 10 例 `tests/test_limit_bounds_130.py`），全量 140.9 s；本轮未改前端（未跑四连）。
+
+### 第 131 期
+
+任务记录的诚实性：重启后没人推进的「进行中」如实标成失败（来源：用户「进行5轮审查并修复」第 3 轮；**不发版**，`VERSION` 仍 `1.3.0`）：本轮不撞入口，改查「**记录的状态与真实世界会不会脱节**」。`tasks` 表（`id/kind/status/progress/error/created_at/updated_at`）的 `status='running'` 只有**一个**推进者 —— **进程内的**后台协程（`server.py` 的 `_spawn_bg` → `_run_*`：跑完写 `done`、抛异常写 `failed`），而 `GET /api/tasks` 只是 `db.task_list()` 读表 ⇒ **进程在任务跑完前消失，就再没有人会写那一行**；这不是异常路径，是**每次关停都会发生**的路径（容器更新 / `docker compose restart` / 宿主重启 / 用户点停止）。真机取证（隔离实例 8483）：`INSERT INTO tasks (...) VALUES ('t-dangling','scan','running',50.0,'',1,1)` → 重启 → `GET /api/tasks` 仍回 `{"status":"running","progress":50.0,"error":""}` ⇒ 前端渲染成「进行中 50%」并持续轮询，**永远不前进也永远不失败**（用户以为扫描卡住，其实那次扫描在关停时就没了）——**是记录在说谎，不是界面 bug**。⚠️ **别照抄刮削队列的修法**：`db.scrape_reset_running()` 把 `running` 打回 `pending` 成立，是因为 `scrape_items` 是**可续跑队列**（重启后 `scrape_worker` 接着认领）；`tasks` 是**一次性动作的进度条**，没有 worker 会来认领，打回 pending 只会造出永远 pending 的幽灵。修法：`core/db.py` 在 `task_list` 之后加模块常量 `TASK_INTERRUPTED = "服务重启时这个任务还没跑完（已中断）；重新操作一次即可"` 与 `def task_reset_interrupted(note: str = TASK_INTERRUPTED) -> int`（`UPDATE tasks SET status='failed', progress=100.0, error=?, updated_at=? WHERE status IN ('queued','running')`，返回 `rowcount`；`queued` 一起收 —— 它的推进者同样只在内存里）；调用点在 `server.py` 的 `lifespan`、紧跟 `db.init()`，包 `try/except Exception: logging.exception(...)`（**启动路径不能因它起不来，但也不能静默**），`n_interrupted` 非 0 时 `logging.warning("有 %s 个任务在上次退出时没跑完，已如实标记为失败")`。`progress=100.0` 是刻意的：**进度条走到头 = 「这件事结束了」，不是「它完成了」**，结束原因写在 `error` 里。**不续跑**（`tasks` 没有重跑所需的入参，补一列入参 + 认领 worker = 为「原本就没有」的能力加半截架构，违反 §7.2/§7.3）；**也不删行**（静默删 = 替用户决定「这件事不重要」，用户就不知道上次其实没跑完）。新增 `tests/test_task_recovery_131.py` 4 例（收尾语义且不动 done / 幂等回 0 / 走真实 `lifespan` 后 `/api/tasks` 回来 `failed` + `db.TASK_INTERRUPTED` / 文案单一出处）；⚠️ 该用例的坑：`isolated` + `db.init()` 建行后 `with TestClient(app)`，登录必须 `from conftest import TEST_PIN, TEST_USER`（`admin`/`test1234`，写 `changeme` 会 401）。⚠️ **教训**：① **「状态字段」要问一句「谁会写它」** —— 表里有 `running` 不代表有人负责结束它，凡只有进程内推进者的状态机都要显式回答「进程没了怎么办」，答案不能是「那就一直 running 吧」；② **同一个词在不同表里含义不同**（`scrape_items.running` = 队列里被认领的一项，可续；`tasks.running` = 一次动作的进度，不可续），照抄前者的修法会造幽灵；③ **「失败」与「被打断」的文案要写出原因与下一步**（用户读到「重新操作一次即可」才知道干什么，读到裸 `failed` 只会以为有 bug）；④ **启动期的清理路径必须自己不会阻塞启动**，但也不能静默。⚠️ 基线 **2588 例**（2575 passed / 13 skipped，新增 4 例 `tests/test_task_recovery_131.py`），全量 142.1 s；本轮未改前端（未跑四连）。
+
+### 第 132 期
+
+导出的 CSV 里，书里的文字会变成 Excel 公式（来源：用户「进行5轮审查并修复」第 4 轮；**不发版**，`VERSION` 仍 `1.3.0`）：前 3 轮撞的都是**入口**（路径参数 / 查询参数 / 进程内状态），这轮换到**出口** —— 产品交给用户的文件里，有没有谁把「书里的字」当成了「程序」。`server.py` 里写 CSV 的只有两处，两处都直接 `csv.writer` 原样输出：`GET /api/books/export`（书名/文件名/作者/系列/题材，来自**书目元数据**）与 `GET /api/annotations/export?format=csv`（`quote`/`note`，是**从书里复制出来的原文**）。⚠️ **CSV 不是数据格式，是表格软件的输入**：Excel / LibreOffice / Sheets 打开时，以 `=` `+` `-` `@` `\t` `\r` 开头的格子会被当**公式求值**（OWASP CSV / Formula Injection；`=cmd|'/c calc'!A0` 是经典 DDE 执行链，现代 Excel 弹「是否启用」—— 而用户点的理由是「这是我自己导出的书库清单」）。实测（8483 未打补丁）：`/api/books/export` 输出 `=1+1.csv注入书,=1+1.csv注入书.txt,…`、批注 CSV 输出 `并发书,未知,0,=cmd|'/c calc'!A0,@SUM(1+1),…`，两处**全部裸奔**；书名不是「用户手输的危险串」，文件名 / EPUB 元数据都可能是**从外面拖进来的书**自带的。修法：新增 `novelforge/core/csvsafe.py`（判据唯一实现）—— `RISKY_PREFIXES = ("=", "+", "-", "@", "\t", "\r")`、`GUARD = "'"`、`cell(v)`（**只对 `isinstance(v, str)` 生效**，命中起始字符则 `GUARD + v`）、`row(values)`；`server.py` 两处 `w.writerow(...)` → `w.writerow(csvsafe.row(...))`（表头一起过）。三个刻意取舍：① **只动 `str`** —— 数字列（评分/序号/进度%/批注数/章节号）原样交给 writer，加前缀会让 Excel 当文本、排序求和全废，而这类回归**不报错**只在用户排序时暴露；② 用**单引号**而非反引号/空格 —— Excel 与 LibreOffice 都原生认「前导 `'` = 后面是文本」且显示时隐藏它，脚本解析会多一个 `'` 是刻意的（宁可多一个引号，也不能让书里的文字变成命令）；③ **只在有表格软件的出口做** —— JSON 不动（`{"quote":"=1+1"}` 不会被求值，动了反而破坏「备份可原样回灌」）、markdown 不动，所以判据放 CSV 写出处，**不放「所有导出的公共层」**。新增 `tests/test_csv_injection_132.py` 5 例（判据单元含 `-1`/`4`/`12.5`/`None` 原样、书目导出恶意书名被当文本、数字列保持数值、批注 quote/note 被当文本、json 与 md 不受影响）。⚠️ 用例坑：pytest 函数名里**不能有空格**（`def test_批注导出_json 与 markdown 不受影响` 直接 `SyntaxError: expected '('`）；另外我给「+86 是区号」那条把 note 写成了 `-不是减号`，断言却写在 quotes 里 ⇒ 先确认**是 quote 还是 note** 再断言。真机复验走**新起的 8484**（打补丁后的进程）：书目列 `'=1+1.csv注入书`、批注 `'=cmd|'/c calc'!A0` / `'@SUM(1+1)` —— 同一份数据同一串命令，只差进程有没有重启。⚠️ **教训**：① **导出不是「把数据搬出去」，是「交给另一个解释器」** —— CSV 的正确性判据不在我们自己的解析器里，而在**用户用哪个软件打开它**；凡产出 CSV / HTML / URL / 命令行的端点都要问「接收方会怎么解释这段文本」；② **不可信输入按来源划**：书名来自文件系统与 EPUB 元数据、摘录来自书里的原文，「是我自己导出的」≠「内容是我自己写的」；③ **防护要落在有风险的那一层**（JSON/markdown 跟着变形 = 「备份回灌不回去」的新缺陷）；④ **别在防护里顺手改数据语义**（只处理 `str` 这一条保住所有数字列，安全措施的边界不清就会静默改掉「评分 4 星」）。⚠️ 基线 **2593 例**（2580 passed / 13 skipped，新增 5 例 `tests/test_csv_injection_132.py`），全量 123.0 s；本轮未改前端（未跑四连）。
+
+### 第 133 期
+
+阅读器不再执行书里的脚本：正文按允许清单净化，未知标签降级（来源：用户「进行5轮审查并修复」第 5 轮；**不发版**，`VERSION` 仍 `1.3.0`）：前四轮撞的是服务端入口（路径 / 查询参数 / 进程内状态）与导出物（CSV），这轮撞**交给浏览器的内容** —— 阅读器把整章 HTML `v-html` 进页面（**同源**），而这段 HTML 的来源是**书**：EPUB 章节体本来就 XHTML，`library.chapter_html` 里 `_rewrite_assets(_body_of(raw), media, bid)` 只改写插图 / CSS 的 URL、正文原样照发；TXT / MOBI 的兜底路径还 `f"<h2>{title}</h2>" + paragraphs_to_html(body)` **裸拼标题**，而缩进分章的 title 就是书里那一行原文。前端**没有第二道闸**（`frontend/src` 全库无 DOMPurify，阅读器三处 `v-html`：`frontend/src/views/ReaderView.vue:2718`/`:2746`/`:2759`）。真机取证（隔离实例 8484 + `ebooklib` 手工造 `脚本注入书.epub`）：`GET /api/books/{bid}/chapter/1` **原样返回** `<script>alert(document.domain)</script>` / `onmouseover=` / `onerror=` / `javascript:` —— 等于「从外面下载来的书」里的脚本成了应用自己的脚本（能读 token、能以用户身份调接口、能删书）。⚠️ **别在前端补一道**：判据落在展示层 ⇒ 接口还在照发危险 HTML，`curl` / 第三方客户端 / 未来的导出一律裸奔，且前端已有三处 `v-html`、加第四处就再漏一次；判据只能在「书里的 HTML 变成响应的那一刻」。修法：新增 `novelforge/core/htmlsafe.py` 作**唯一判据** —— `sanitize(markup)` 用 lxml 解析成树后按**允许清单**处理：`DROP_TAGS`（`script`/`style`/`iframe`/`noscript`/`template`/`object`/`applet`/`svg`/`math`/`frame`/`frameset`）连**子树**摘掉；**其余不认识的名字一律降级成 `<span>`**（子树与文字保留、属性全丢）⇒ `embed`/`link`/`meta`/`base`/`input`/`button`/`form` 这些不在 `ALLOWED_TAGS` 里，**没有第二处判据要维护**；属性同样走允许清单（`GLOBAL_ATTRS` = class/id/title/style/lang/dir + 按标签的 `TAG_ATTRS`）⇒ `on*`/`srcdoc`/`srcset`/`formaction` 自动消失；`href`/`src` 过 `_clean_url`（`javascript:`/`vbscript:`/`data:text/html`/`data:image/svg` 起始的整条删），`style` 里出现 `javascript:`/`expression(` 也删；另有 `escape()` 与 `heading(title)`（标题先转义再包 `<h2>`）。调用点四处收敛：`epub_builder`（**正则版 `sanitize_html` 删除**，改 `from .htmlsafe import escape as _esc, sanitize as sanitize_html`）/ `library.chapter_html` / `txtcache` / `mobicache`。缓存：章节 HTML 进 Redis（键里只有源文件 `(大小, mtime)` 指纹）⇒ 源文件没动而判据变了会继续下发旧形态一整个 TTL（24 h），故加 `htmlsafe.CHAPTER_HTML_VERSION = 1` 并进键（`server._chapter_cached` 里 `fp = f"{fp}:h{version}"`）。⚠️ **教训**：① **`v-html` 的输入来源决定它是不是 XSS 边界** —— Markdown 渲染与「书里的章节体」机制相同，区别只在**谁写的**；凡把外部文本塞进 DOM，要问「这段 HTML 的作者是谁」。② **净化用允许清单，不用黑名单** —— 黑名单要枚举「所有能执行的东西」，而解析器的**复原规则**会造出你没枚举到的名字（实测 `<span<script>alert(1)` 被 lxml 复原成标签名 `span<script`，黑名单必漏）；允许清单只枚举「正文排版需要的」，漏防退化成「多删」。③ **「删节点」在解析器眼里不是删除** —— 一开始把 `embed` 放进 `DROP_TAGS`，libxml2 不认它是空元素、把它后面的内容全收成子树 ⇒ 一句 `<embed src=x>` 让**后面两个 `<p>` 一起消失**；收窄 `DROP_TAGS` 到「内容确实是代码」的那批才无损。④ **尾巴文字要接给「它自己的前一个兄弟」** —— 写成「接给 `parent[-1]`」时后面的元素还没删，拿到的是后面那个，`a<script>x</script>b<iframe></iframe>c` 会变成 `acb`；正确是先 `prev = el.getprevious()` 再 `parent.remove(el)`。⑤ **安全修复也要管缓存** —— 判据不在指纹里就等于「修了但读的人看不见」（`CHAPTER_RULE_VERSION` / `ENCODING_RULE_VERSION` / 现在 `CHAPTER_HTML_VERSION` 同一条规矩）。⚠️ 基线 **2603 例**（2590 passed / 13 skipped，新增 10 例 `tests/test_reader_html_133.py`），全量 120.3 s；本轮未改前端（闸在服务端，四连仍跑过 exit 0）。
+
+### 第 134 期
+
+五轮审查九条收口：正文丢段 / 掉线误删索引 / 设置读失败清空 / 出站闸 / 展开上限（来源：用户 `进行5论审查` → 报告（对象 `7f6c80f..182ba80`，第 118–133 期，无致命、3×P1 / 3×P2 / 3×P3）→ 用户 `修一下`；**不发版**，`VERSION` 仍 `1.3.0`）：① **P1 F1 净化吞首段裸文字** —— `core/htmlsafe.py::sanitize` 结尾只拼**子元素**（`"".join(etree.tostring(c) for c in root)`），`root.text` 不在任何子元素里 ⇒ `<body>第一段<p>第二段</p></body>` 的第一段无声消失（容器实测，接口 200 无报错）；修 `escape(root.text or "") + …`（裸文字同样要转义）+ `CHAPTER_HTML_VERSION` 1→2（键里不带版本 = 存量书命中原缓存、修了看不见）。② **P1 F7 多根库单根掉线清整库索引** —— `core/catalog.py::_refresh_locked` 判「索引里有、本次没扫到 ⇒ 删」，`roots` 全读不到时 `seen` 空 ⇒ 整库行被删（NAS 未挂载即命中）；修成**两类事实分开判**：`usable_roots`（`is_dir()` + `os.access(R_OK|X_OK)`）与 `configured` 一起用 —— 根**还在配置但读不到** ⇒ 留；根**已从配置删掉** ⇒ 删；一根都不可用且还有配置 ⇒ `skipped/root_unavailable` 一行不动。⚠️ 第一版只写「读不到⇒留」直接把 `tests/test_library_count_contract.py::test_改库根之后计数立刻跟着走` 打红（`assert 4 == 3`：换根后旧根行变幽灵书）—— **只认一条各自出不同的数据错误**。③ **P1 F9 设置瞬时读失败 = 下次保存清空全部设置** —— `config.load_overrides` 把「读不出来」当「不存在」回空 dict，设置页显示默认值，用户改一项 ⇒ `mutate_overrides` 拿空旧值合并写回 ⇒ 磁盘上那份设置被整体覆盖；修：模块级 `_OVERRIDES_READ_ERROR` 记状态、读失败**不动文件**按空覆盖层继续 + warning，`mutate_overrides` 直接拒写（`OSError("设置文件读不出来，本次不写入以免覆盖已保存的设置：…")`），只有**解出 JSON 但形状不对**（ValueError/TypeError）才隔离改名。④ **P2 F5 展开无累计上限** —— 单条目 128 MiB 挡不住「几百个 128 MiB 条目」（全零 zip 压缩比极高），而 `zipkind.unpack` 由 `watcher` 自动调用 ⇒ `comics.MAX_UNPACK_BYTES = 2 GiB` + `MAX_UNPACK_ENTRIES = 512`，循环开头 + 写前各判一次，**写成功才累加**。⑤ **P2 F4 书内 SVG 同源下发** —— asset 与封面都是 `Response` 直发书内字节（与站点同源，书里的脚本能以用户身份调接口）⇒ `_MEDIA_UNTRUSTED_HEADERS`（`nosniff` + `CSP: sandbox` + `Cache-Control`）挂两处；**残留**：另外六处媒体出口（units 封面 / 漫画页 / unit 页 / 作者头像 / 用户头像 / 字体）仍走 `FileResponse`、类型由扩展名派生，留给下一轮统一。⑥ **P2 F3 书源抓取与封面下载从没过出站闸** —— `core/urlguard.py` 的闸此前只挂 URL 导入那条路，`sources/manager._client` / `metafetch._download_cover` 裸 httpx ⇒ 导入来的规则可让服务端取 `127.0.0.1` / `169.254.169.254`（SSRF）；修：判据做成**工厂**（httpx sync / async 钩子形状不同，一份实现两处用必有一处错）`make_request_guard()` / `make_sync_request_guard()` + `assert_public_url(..., allow_private=)` + 唯一读点 `allow_private_sources()`，配置键 `network.allow_private_sources`（默认 **False**），按 §2 三处同批（DEFAULTS → EDITABLE → `settingsFields.ts`）。⚠️ **行为变更**：默认不再允许书源指向内网，NAS 自建源需显式开开关。⑦ **P3 F2** force 重扫 `INSERT OR REPLACE` 丢 `replaced` ⇒ stored 带上 `replaced`、`replaced_now = bool(cur[2])`、比对只看 `(size, mtime)`；**P3 F8** 上传临时件写盘无 `try` ⇒ 包 `except OSError` → 清残留 + `log_convert_fail` + 500「上传件写盘失败（可能磁盘已满或没有写权限）」；**P3 F6** `?token=` 进 uvicorn access log ⇒ `_RedactMediaToken(logging.Filter)` 挂 `uvicorn.access`（只抹值 `token=***`），**不关 access log**。⚠️ **教训**：① **「拼回子树」时根节点裸文字是第二处**（第 133 期 10 例没有一例是无块级包裹的起手段）；② **「配置变了」与「读不到」必须分开判** —— 错的方向不是「不够严」，而是**两类事实被折叠成一个**；③ **读-改-写链路上「读失败」不能退化成「空的」**（空值继续写回 = 用默认值覆盖用户数据）；④ **出站闸要做成工厂**，同一判据散在各处时**新加的出网路径默认没闸**；⑤ 资源响应头是内容安全的另一半（`CSP: sandbox` + `nosniff` 只挡直接打开，正文净化仍要做）；⑥ **日志里出现的秘密等于泄漏**，出口抹值优于关日志。⚠️ 基线 **2618 例**（2596 passed / 22 skipped / 0 failed，新增 15 例 `tests/test_hardening_134.py`），全量 478.0 s —— **在 Linux 容器里跑**（本机沙箱下 python 在仓库外建不了临时目录 ⇒ basetemp 落进仓库根、被 `tests/conftest.py` 的仓库根守卫判红；多出的 9 个 skip 是 node / quickjs 不在容器里，**总数 2618 才是跨机可比的量**）；前端四连 exit 0（69 spec / **718 例**，改了 `settingsFields.ts` ⇒ 必须 `deploy`）；顺带 `.gitignore` 补 `/pgdata/`（前导斜杠锚定仓库根）。
+
+### 第 135 期
+
+第二轮审计：媒体出口收敛 / 刮削台账卡死 / 迁移缩进 / 双线程并扫 / 前端假成功（来源：用户 `继续下一轮审计并修复`；换了两个人肉审计口径并行跑 —— 后端看「并发与 RLock 代理连接 / 事务边界 / 软删除读点 / 源不可变与回收站 / 后台任务诚实性 / 缓存失效 / 路径逃逸」，前端看「`v-html` 来源 / 令牌与 `?token=` / 401 / 异步竞态 / `catch {}` 假成功 / 前后端契约 / 假数据」，共报 **14 条**（后端 2 高 3 中 2 低、前端 1 高 5 中 1 低），**每条都自己核过再修**；**不发版**，`VERSION` 仍 `1.3.0`）：① **B1 `upgrade_book_ids` 的 `rglob` 缩进跑到根循环之外** —— `for _dp in _dir_list:` → `d = Path(...)` → `if not d.is_dir(): continue` 之后，`for f in d.rglob("*")` 与 `for _dp` **同缩进** ⇒ 每个库只迁**最后一个根**；首库没有 `source_dirs` 时 `d` 从未绑定 ⇒ `UnboundLocalError` 被 lifespan 的 `try` 吞掉、`state_set("bookid_v2", "1")` 永不执行 ⇒ **每次启动重试一遍**（每次只迁一个根）；把 `rglob` 整段缩进进循环体。② **B2 `watcher.stop()` join 超时后仍把线程引用置空** —— `t.join(timeout=max(interval+5, 30))` 之后无条件 `self._thread = None`，而 `start()` 只判 `is_alive()` ⇒ 超时（NAS 上的大 EPUB / 批量拷贝很常见）时**旧线程复活 + 新线程并存、两条线程同扫一棵树**（重复入库 / 重复拷贝 / 重复入队刮削），`is_running()` 正好谎报；改成 `None if not (t and t.is_alive()) else t`，`/api/watcher/stop` 回**真实的** `is_running()`（留引用的代价只是 `start()` 返回 `False` —— 那是事实，不是故障）。③ **B3 入库存根用 `shutil.copy2` 原地写** ⇒ 扫描可能把**写了一半**的副本当成品书（全仓纪律是 `.part` + `Path.replace`，唯一实现 `landing._copy_atomic`）⇒ 改走 `_copy_atomic`，`import shutil` 随之去掉。④ **B4 `_safe_name` 不挡 `..`** —— 书名退化成一串点时 `dest = out_dir / ".."` ⇒ 音频缓存写进**父目录**、失败回滚的 `shutil.rmtree(dest)` 删的是父目录；修 `s.strip(". ")[:120].strip(". ")`（空则回落 `book`）。⑤ **B5 刮削异常不落台账** —— `scrape.process` 置 `status="running"` 之后只有 `finally`、没有 `except`，异常上抛到 `_loop` 只记一条日志，而 `scrape_next_pending` 只取 `pending` ⇒ 这一行**永久卡在 running**、只有重启才自愈；补 `except Exception` → 走既有 `_failed(...)`（重试上限与别的失败路径同一口径）+ 返回 `{"ok": False, "error": ...}`。⑥ **B6 CLI 闸门拒绝却 `exit 0`** ⇒ 脚本把「下载没开」读成「网上没这本书」，`cmd_search` / `cmd_download` 改 `raise SystemExit(2)`。⑦ **B7 自动展开失败只记指纹不留痕** ⇒ 坏包永久跳过且零感知，补一条 `STATUS_FAIL` 活动日志（`source="autounpack"`，detail 写原因 + 「源容器保留，已跳过；换新文件才会重试」）。前端：**F-A（高）设置页「假成功」** —— `useSettingsConfig.saveSection()` **吞错只 return false**（自己弹过「保存失败」），而调用点紧接着 `draft.value = rest` + `ui.toast('已保存')` ⇒ 失败提示被后一个 toast 覆盖（单槽）、草稿被清（刚粘贴的 secret 消失、控件退回占位符）；`MetadataPage` 7 处 + `clearRow()`、`KomgaPage`、`OpdsPage` 开关同形 ⇒ 判返回值才提示成功，**开关失败要把位置退回去**（否则界面「已开启」而服务端是旧值）。**F-B `auth.init()` 把 5xx / 超时当未登录** ⇒ 一次网络抖动就强制重登且 token 不可恢复（401 的清理由 `lib/api.ts` 统一做：删 `localStorage.nf_token` + 派发 `nf-unauthorized`）⇒ 只在「token 已被清」时置空内存态，其它错误保留 token。**F-C 切库串味** —— `library.loadFeatures()` 发请求时读 `currentLibraryId`、落地时无条件 `features.value = res.features`，没有单飞闸/序号（对比 `booksInflight` / `ReaderView.loadSeq`）⇒ 快速切库时**旧库能力覆盖新库**、`hasFeature()` 不自愈；加单调 `loadSeq` + 落地比对。**F-D 去重清理 `Promise.all` + `catch` 吞整批** ⇒ 一条失败既不说「已经搬进去几个」也不 `load()` 刷新，改 `allSettled` + 无论成败都 `load()`。**F-E 登录失败把 `{"detail":…}` 原样上屏** ⇒ 用 `apiErrorMessage(e, '登录失败')`。**F-F（系统性）7 处 `new Date().toISOString().slice(0, 10)`** ⇒ 东八区 00:00–08:00 全部算成**前一天**（补录落到昨天、当天统计是空的，且**没有任何报错**），而服务端口径本来就是本地日 ⇒ `frontend/src/lib/format.ts` 新增 `localDate` / `localMonth` 作**唯一实现**，7 处调用点全部收敛 + 新增 `src/lib/format.spec.ts`。另把第 134 期留的 **F4 媒体出口**收成唯一组装点（`_media_headers` / `_media_bytes` / `_media_file`，**12 处**出口全走 helper：书内 `/asset`、封面、合集封面、原始书籍文件 `/file`（`private, max-age=3600`）、漫画页、序号单元页、音频轨、单元字节流、作者头像、账号头像、字体、Komga 页面流；`CSP: sandbox` 全仓只出现 1 处），并新增 `test_route_guard_contract.py`（AST 扫 `server.py`：48 条 `/api/v1/` + 29 条 `/opds` 路由全部调到各自的守卫）。⚠️ **教训**：① 同一判据写在 `Response` 与 `FileResponse` 两种响应类型上**必然漏一处**（上一期数 6 处、实际 9 处）；② **「吞错的函数 + 无条件的成功提示」= 假成功**，单槽 toast 让失败提示活不过一帧；③ 每个状态字段都要回答「**谁会把它翻出去**」（`tasks.running` 第 131 期是「重启后没人认领」，`scrape_items.running` 是「异常必须当场记账」，同型不同修法）；④ **缩进类 bug 只由「数据形状」暴露** —— 单根库永远看不出 B1，两个根 / 零根才现形 ⇒ 用例按输入形状写；⑤ **审计报告是材料不是结论** —— 本轮 3 条经核不成立或不准确（「书源只差封面没挂闸」上一期已纠、`avatar_path` 的 `unlink` 穿越（写入侧是白名单后缀、值不由接口写）、以及引用了不存在的符号名），修之前每条都要能指出「哪一行、什么输入、什么后果」。⚠️ **未修只记在案**：`GET /download/{name:path}` **匿名可下成品文件**（实测：往 `output/` 放文件，无凭据 GET 回 200 / 8 字节）—— 既有设计取舍（中间件对非 `/api` 前缀「历史不强制鉴权」，README 把三条标为油猴 / 外部脚本保留），收紧是产品决定。⚠️ 新增 **18 例**（`test_hardening_135.py` 8 / `test_media_headers_135.py` 7 / `test_route_guard_contract.py` 3），其中 7 例在 `git worktree` 拉出的 `ca50aa9` 上**真红**（不是自证摆设）；⚠️ 基线 **2636 例（2614 passed / 0 failed / 0 errors / 22 skipped）**，全量 495.0 s（Linux 容器 `nf-pytest:py312`，与第 134 期同因）；前端四连 exit 0（**70 spec / 722 例**；新增 spec 必须登记 `EXPECTED_SPECS`，否则 `tests/test_frontend_unit_contract.py` 会红）。
+
+### 第 136 期
+
+十轮审计：令牌绑密码 / OPDS 分页掉筛选 / 按书取路径收敛 / 刮削队列重启停摆（来源：用户 `进行10轮审计并修复`；**不发版**，`VERSION` 仍 `1.3.0`）：① **致命 T1 刮削队列重启后彻底停摆** —— 进程在刮削中途被杀 ⇒ `scrape_items` 行停在 `running`，而 lifespan 的启动门槛只查 `status='pending'`（`db.scrape_pending(limit=1)`）⇒ worker 永不启动、队列再无人推进，界面一直「进行中」直到用户手动点一次「立即刮削」；修：门槛同时看残留 `running` 行，worker 起来后 `scrape_reset_running()` 翻回 pending。② **高 S1 改密码后旧令牌仍然有效** —— 令牌只是随机串、与密码无绑定，`api_change_pin` 也不回收已发出的令牌⇒ 密码泄露后改密码等于没改；修：签发时把「密码版本指纹」（PIN 的 pbkdf2 前 16 位）写进令牌、校验时比对。配对 S2 登录失败节流（5 次 / 5 分钟，429 + `Retry-After`）、S3 改密码响应直接下发新令牌（否则改完自己就被踢）。③ **高 P1 按书取路径有第二份实现** —— `core/` 与 `sources/` 里 22 处 `library.root_of(book) / book["name"]`，多文件夹库里 `root_of` 只给「代表根」⇒ 书在别的根上时指到另一个根上的同名文件（下载 / 取图 / 出版 / 搬库全中）；全部收敛到 `library.abs_path(book)` + 静态断言钉住（`tests/test_hardening_136.py`）。④ **高 P2 直写最终名四处** —— 追更 sidecar（同文件本已有原子写法，属第二份实现）、音轨、作者头像、活配置 `config.yaml` 的还原 / 重置：中断或磁盘满留半截，旧文件已被截断且不在回收站；一律 `.part` + `replace`。⑤ **中 P3 库的 `source_dirs` 被清空后只 `_mark_fresh` 就返回** ⇒ 索引旧行一条不删、书架永远挂着「不属于任何库的书」，重启也不自愈；改走 `refresh_library`（roots 空 ⇒ seen 空 ⇒ 旧行按 stale 删净）。⑥ **中 P4 丢列表缓存先忘后删** —— `cache.drop` 吞异常（含熔断期），drop 失败时键还在 Redis 而集合已忘掉它 ⇒ 此后任何「全库失效」都删不到；顺序反过来。⑦ **中 T2 监听间隔改小不生效** —— `tick_interval` 是第二份真值源（只在 `__init__` 取一次），热更只改 `interval` ⇒ 界面显示 5s、真实节奏还是 60s；删掉副本，`_loop` 直接 `wait(self.interval)`。⑧ **中 T3「清空日志」后条目复活** —— `clear()` 只清 `_memory` 与文件、不清 10s 尾随合并窗口的 `_pending`；清空动作常紧跟一次操作发生，几乎必中窗口；同批 `_pending.clear()`。⑨ **OPDS 分页掉筛选（出口面）** —— `acquisition_feed` 生成 `next`/`prev` 时丢 `group` 与 `q`，用户点第二页看到的是「全部书目」；查询串收敛进唯一 `_query_keep()`。⑩ **前端致命 F1** —— `/book/:id` 是同一条路由记录，从详情页点「相似书」跳另一本时组件被复用、`onMounted` 不重跑 ⇒ hero / 目录 / 文件 / 批注仍是上一本，而 similar 与各标签页内部自取数的部分已是新书（同页两本书数据并存）；抽 `loadAll()` + `onMounted(loadAll)` + `watch(bookId, loadAll)`。⑪ **删掉死声明** `SourceItem.builtin`（后端从不返回，谁照类型用会把内置源数永远算 0）。⚠️ **教训**：① **「重启后谁把状态翻出去」要逐个状态字段回答**（`scrape_items.running` 与第 135 期 `tasks.running` 同型不同修法：一个是「异常必须当场记账」、一个是「启动门槛要能看见它」）；② 令牌与服务端状态**无绑定**时「改密码」不是安全动作，指纹要进令牌；③ **同一判据只要还有第二种写法，就有第二个错的地方**（22 处拼路径、sidecar 处的两份原子写）；④ 「只标 fresh 就返回」这类**短路分支**是幽灵数据的温床 —— 短路必须回答「谁负责删旧行」；⑤ **一次性审计报告当材料，不当结论**：本轮 60 余条里既有真缺陷（T1 致命）也有推演（PG 单连接事务、跨卷 `shutil.move`），后者要能给出「哪一行、什么输入、什么后果」才动手。⚠️ **未修只记在案**（roadmap 第七节）：`GET /download/{name:path}` 匿名可下成品文件（既有设计取舍，收紧是产品决定）、`/file` 整本书也带 `CSP: sandbox`（需真机确认 PDF 预览）、`publish` / `recycle` / `migrate` 的「先销毁再重建」与跨卷 `move`（结构性改造，要配真机 kill 验证）、PG 单连接共享事务下的 `remap_book_id` / `catalog._flush`、并发口径的锁外读改写 7 条、前端竞态与可访问性 8 条。⚠️ 新增 **7 例** `tests/test_hardening_136.py`（静态判据 + 运行时契约，全部在容器里跑绿）；⚠️ 基线 **2643 例（2621 passed / 0 failed / 0 errors / 22 skipped）**，全量 420.7 s（Linux 容器 `nf-pytest:py312`）；前端四连 exit 0（70 spec / 722 例；试过的 `v-if` 改法会打红既有用例并让切标签丢草稿，已回退并记入待办）。
+
+### 第 137 期
+
+审计收口：落盘原子性收敛成一个模块 / PIN 退避三入口共用一处 / 令牌里的凭据指纹必须不可逆 / 书源 JS 没有沙箱就不执行（来源：用户「审计整个项目，分 10 轮修复 / 部署」；**不发版**，`VERSION` 仍 `1.3.0`）：① **落盘判据立成模块** —— 文件生命周期审计的 10 条全是「直写最终名」，而仓库里同时存在 4 份各自的 `.part` 手法（含 pg_dump、音轨、留档 txt、在线缓存、追加重打包），第 136 期只收敛了一批 ⇒ 新建 `core/atomicio.py`（`PART_SUFFIX` / `tmp_path_for` / `access`（流式写的唯一外壳）/ `write_text` / `write_bytes` / `copy_file` / `_restrict`），**临时名、提交、失败清理、权限收敛四条口径只写一遍**，15 个模块 20+ 处调用点同批收敛（`rg '\.part\b' novelforge` 只剩注释）；`settings.json` 与 `novelforge.db`（装 `pin_hash`）新建即 0600 —— umask 022 下默认 0644，同机任何账号拷走就能离线爆破 4 位 PIN。② **退避只有一处实现** —— 第 136 期的退避只挂在 `/api/auth/login`，而 `/opds/*` 与 `/api/v1/*` 同样比对 PIN 却直接调 `auth.verify_pin`、不过任何闸门 ⇒ 两个**没有闸门的 4 位 PIN 预言机**；修法是把判据搬进 `verify_pin(user, pin, host)`（`Throttled(wait)` 只表达「挡住多久」，三条入口各自翻成自己的响应形状，来源 IP 走唯一取法 `client_host()`），**退避期内连正确 PIN 也 429**（先查闸、后比对 = fail closed）。③ **令牌里的凭据指纹必须不可逆** —— 第 136 期把 `pin_hash[:12]` 明文拼进令牌版本段，而令牌会进 URL（`_with_asset_token`）、进反代日志，`_pin_matches` 又是无盐单轮 sha256 ⇒ 拿到那 12 位就能离线穷举出 PIN；改 `HMAC(secret, "user:pin_hash")[:12]`，语义（改 PIN 即失效）不变；`TOKEN_TTL` 立为唯一常量，Komga 常量密钥自造会话令牌整段删除、改签同一张令牌并补 `max_age` / `Secure`（`_request_scheme` 反代感知）。④ **没沙箱的 JS 不再执行** —— `network.run_source_js` 原先「缺 quickjs 就回落 Node 通道并标注非沙箱」，而那段 JS 来自第三方书源文件、在 Node 里拿得到 `require('fs')` ⇒ 一份抄来的规则就能读走配置目录里的 Cookie 与密钥，而「非沙箱」只写在用户不会看的 `reason` 里；删掉回落分支（§7.1 不留降级垫片），capabilities 如实回报「本次部署会拒绝执行」。⚠️ **教训**：① 判据收敛要**连边角写手一起收**（`zipfile` / `pg_dump` 拿不到「一组字节」，只有「流式外壳」这一种形状能覆盖它们 —— 三形状里少一个，剩下那个就会被各写一遍）；② **闸门挂在端点上就一定会漏掉下一条入口**，判据要挂在「校验凭据」这个动作本身上；③ **令牌会进日志**，凡放进令牌的派生值都必须不可逆；④ **降级链的每一级都要自己安全** —— 「悄悄降级 + 事后标注」等于把安全责任转给用户。⚠️ 新增 **3 个用例文件 35 例**（`test_hardening_137_atomic_io.py` 静态判据 + 中断不留半截 / `_credentials.py` 三入口退避 + 令牌形状 + Komga 会话 / `_concurrency.py` 监听单轮异常留痕），`conftest.py` 新增 autouse `_no_pin_throttle_leak`（`auth._fails` 是进程级状态，上一条用例的退避会带进下一条 ⇒ 「单独跑绿、全量跑红」）。
+
+### 第 138 期
+
+掩码回写把真密钥覆盖成「••••••••」/ 一个配置段挂在两个设置页（来源：用户「审计整个项目，分 10 轮修复 / 部署」；**不发版**，`VERSION` 仍 `1.3.0`）：① **致命、完全静默** —— `GET /api/config` 把凭据回显成 `_KEY_MASK`，前端 `useSettingsConfig.saveSection()` 按分区**整段回传草稿**，而写入侧只给 `llm.api_key` 做了「掩码 = 不修改」的 dedup（`komga.api_key` 的 dedup 又写在 integrations 端点里、`metadata_fetch` 的 5 个 secret 完全没有）⇒ 在元数据页点一次开关就把 `settings.json` 里的真 key 覆盖成 `••••••••`，`has_*` 仍 True、界面照旧「已配置」，用户直到抓取 401 才发现，旧值不可恢复。修法：判据收敛到 `server._secret_cfg_keys()`（= `metasources.secret_fields()` ∪ `{"api_key"}`，与回显侧共用同一张表）+ `_merge` 对**所有分区所有键**通用（字符串 == 掩码 ⇒ 丢弃；凭据键空串 ⇒ 清除覆盖回落默认；非凭据键空串照旧落库），删掉两处单点 dedup。② **一个配置段只许有一个归属分区** —— `logging` 同时挂在 `SECTION_KEYS.network` 与 `.logs`，草稿又是跨页共享单例 ⇒ 网络页保存会把审计日志页未保存的 `logging.retention.*` 一起写进 `settings.json`，反过来改留存又让两页同时标「未保存」；`logging` 只归 `logs`，新增 `LOGGING_FIELDS` 由 `AuditLogPage.vue` 渲染。⚠️ **教训**：① **掩码回显 + 整段回传 = 静默覆盖**，掩码语义必须由**写入侧**统一认（不能每个端点各认一次）；② 回显用的键名清单与写入用的键名清单必须**同一张表**，否则新加一个 secret 就漏一个；③ **归属分区是判据，不是排版** —— 一个段挂两页，两页的草稿就会互相污染。⚠️ 新增 `tests/test_config_mask_roundtrip.py` 11 例（7 个凭据键参数化走真实 GET→PUT 往返 + 清空语义 + 非凭据空串）。
+
+### 第 139 期
+
+缓存命中也要登记键、写回前先比对脏代际、派生计数只有一处实现（来源：十轮审计第 5 轮「缓存与索引一致性」；**不发版**，`VERSION` 仍 `1.3.0`）：① **「进程内存登记表」+「进程外缓存」= 重启即失忆** —— `_cached_libs` 只在**写**缓存时登记，重启后内存空，Redis 里已有的列表键对 `_drop_list(None)`（元数据编辑 / 刮削改名 / 监听改名）**隐形** ⇒ 旧标题最长占住 `TTL_LIST=120s`；修法：`books_of` **命中也要 `_cached_libs.add(lid)`**。② **写缓存是有前置条件的动作** —— 原 `fresh_enough` 在 SELECT 前求值、`set_json` 在其后 ⇒ 并发的写先删键、本次读再把旧行写回，而「added/removed 都为 0」的刷新又不删它；现在先取 `(_dirty[lid], _dirty_all_seq)` 快照，写前 `_unchanged()` 再比一次。③ **派生视图要成组失效** —— `library.invalidate()` 同批调 `browse_counts.invalidate()`，否则改名 / 换库根之后侧栏三个计数与列表互相打架。④ **收藏夹「有几本」只许一处实现** —— `db.list_collections()` 的子查询 `COUNT(*)` 与详情页「解析不到就丢」永远对不上（侧栏 5、点进去 4）；删掉子查询，统一走 `collection_book_ids_all()` + `catalog.alive_ids()`。⑤ OPDS 根导航不再逐库 `COUNT(*)`（N 次全表扫 → 一次分组聚合）。⚠️ **教训**：① 凡「按登记表删键」的失效方式，登记表必须能从缓存侧反推（命中即登记最便宜）；② 缓存写回少了「脏代际比对」这一步，会**主动**制造脏数据，比不缓存更糟。⚠️ 新增 `tests/test_hardening_139_cache_consistency.py` 5 例。
+
+### 第 140 期
+
+一个 `inf` 让书架永久 500 / 事务里吞异常记 0 行 = 假账 / 幂等标记不许提前写（来源：十轮审计第 6 轮「数据库层」；**不发版**）：① **校验挂在端点上就一定会有旁路** —— `_bounded()` 只接住单书入口，`POST /api/books/batch` 与「再来一遍」是裸传 `params.get("started_at")`，而 `float("1e400")` 不抛错给的是 `inf` ⇒ inf 落库后 `GET /api/books` 序列化即抛，书架与书籍详情**恒定 500 且无自愈**（而那正是用户回来改数据的唯一入口）；修法：两处走 `server._opt_epoch()`（`_bounded` + `numbers.MAX_EPOCH`），**db 层再加一道** `numbers.epoch(v, default)` 回落。② **`except` 里记账 + 外层统一 commit = 谎报** —— `remap_book_id` 逐表 `except: moved[t]=0`，PG 侧 `_fail()` 已 `rollback()` 掉**前面成功的表**，`moved` 却留着失败前的累加 ⇒ 日志说搬了 N 行、实际一行没动；改为失败即 `rollback` + `raise RuntimeError(带表名)`。③ **幂等标记只能写在成功之后** —— `upgrade_book_ids` 的 `state_set("bookid_v2","1")` 原先在 `except: rows=[]` 之后**无条件**执行 ⇒ 一次读表失败就把该表判进「已迁移」，永久 `skipped`；改为 `failed_tables` 不写标记、下次只补跑。④ **顺手建的索引必须与硬依赖它的写法同等寿命** —— `CREATE UNIQUE INDEX idx_session_uid` 被包在 `if "session_uid" not in scols:` 里且 `except: pass`，而 `upsert_session` 的 `ON CONFLICT(book_id, session_uid)` 硬依赖它 ⇒ 索引缺失后再无重试路径，每次 30s 心跳 upsert 都失败、阅读时长整段静默不落库；改为独立幂等段 + `logger.exception`。⑤ `ORPHAN_TABLES` 补 `ratings` / `reading_status`（原注释说「删书时会主动清理」，而删书端点明确写着不清关联数据 ⇒ 这两张表的行既看不见也清不掉）。⑥ `reading_totals` 不再整表拉内存过滤（`WHERE book_id IN (…)` 900 一批）。⚠️ **教训**：同一个值从多个入口进来时，判据要落在**写库的函数里**，端点只做友好提示；「部分成功」在事务里不存在，吞异常记 0 等于给自己写假账。⚠️ 新增 `tests/test_hardening_140_db_layer.py` 7 例（`inf` 两条必须走真接口）。
+
+### 第 141 期
+
+单章失败不许写成正文 / 清空回收站先删文件后清台账 / `/health` 要有真探针（来源：十轮审计第 7 轮「错误处理与降级」；**不发版**）：① **错误提示不是内容** —— `_fetch_toc` 把单章异常写成正文 `"（第 N 章抓取失败：…）"`，这行字会进留档 txt、EPUB 与索引，而追更起点是「本地已有的最后一章」⇒ 那一章**永远**不会被重抓；改为「要么完整、要么报错」：`_fetch_toc_pass()` 返回成功/失败两表，失败章**整批重试一次**，仍失败抛 `ChapterFetchError`（含 N/M、前 5 章名、首条原因、重试整次下载即可），由 manager 落成任务失败。② **删台账必须晚于删文件** —— `recycle_clear()` 原按「意图」清台账、被占用的文件静默留下 ⇒ 台账没了文件还在、谁都不知道；改为先删、删不掉的进 `failed`、**删干净才清台账**、端点回报「N 个文件没能删除」。③ **`except: pass` 是这个项目里最贵的四个字** —— `refresh_all` 吞掉异常对象、调用方又丢弃返回值 ⇒ 「扫描完成 0 本」与「库根没挂上」分不清；现在 `reason` + `logger.exception` + `catalog.last_report()`，扫描台账写「索引刷新异常：…」，回包带 `ok=not degraded`。④ **探活要探依赖** —— `/health` 的 `status` 原写死 `"ok"` ⇒ 库只读 / 盘满 / 监听死掉容器永远 healthy；现在三探针（`db.ping()` / 配置目录可写 / 监听在跑）+ 两条配置实情，**只有「库连不上」回 503**（其余重启也修不好，回 503 只会无限重启），其余 200 + `status="degraded"` + `problems`。⑤ **降级要说出来** —— `config.yaml` 解析失败、`ensure_dirs` 建不出目录、Redis 熔断、`updater_available` 只看 socket 存在、封面下载失败被吞成「没有需要写入的内容」、阅读进度保存 `catch {}`，全部改为「日志 / `/health` / 界面横幅」留痕；`/health.cache` 给 `redis`/`tripped`/`none` 三态，`updater_probe()` 真发 `GET /_ping`（缓存 60 s），前端 `request()` 支持 `timeoutMs`（全书索引建库是分钟级操作，15 s 统一超时必然误报）。⚠️ **教训**：任何「把异常字符串拼进业务数据」的写法都会在用户书里永久留疤；「能服务但有毛病」与「不能服务」必须分开表达，否则编排层会把能用的服务重启到不能用。⚠️ 新增 `tests/test_hardening_141_error_paths.py` 11 例。
+
+### 第 142 期
+
+前端「把没发生的事演成发生了」：检查失败别报成功 / 常驻标签页别偷请求 / 本地日期别过 UTC（来源：十轮审计第 9 轮前端运行时，致命 0 / 高 4 / 中 5；**不发版**，`VERSION` 仍 `1.3.0`）：① **`await` 了不看返回值 = 没 `await`** —— `UpdatePage.checkNow()` 丢掉 `api.updateCheck()` 的返回值、无条件报「已检查远端版本」，而后端在 GitHub 不可达时**照样回 200**（只带 `error="check_failed"`，第 78 期「出网失败不阻塞」的设计）⇒ 断网时界面写的是「已是最新」，用户从此不再点检查，而这是「一键更新」唯一入口；修法是读字段、失败抛人话（带上「可能是网络或代理不通」）、成功显示 `latest`，**复用 `run()` 既有的按钮态，不新增第二套提示机制**。② **「常驻」是一个决定，不是一个实现细节** —— `MetadataEditor` / `ReadingRecord` 用 `v-show`（第 63 期为了切标签不丢草稿）+ `onMounted(load)` ⇒ 每进一次详情页白拉三组接口；加**必填** `active` prop、`watch([active, bookId])` 只在 `active===true` 时 `load()`，**没有**改成 `v-if`（那会丢草稿、打红既有用例）—— 闸门加在「什么时候发请求」这一层。③ **本地日期串没有时区** —— `Date.parse('2026-10-22')` 按规范是 **UTC 午夜**，`TZ=America/New_York` 的 NAS 上「开始日期」存进去读回来退一天，而显示侧 `localDate()` 是本地口径；新增 `format.localDateToEpoch()`（本地当日零点，与 `localDate` 同一把尺子、非法输入回 0），`format.spec.ts` +2 例。④ **静默失败要说出来** —— 维护页孤儿扫描 / 回收站列举各自 `catch {}`（`loading` 已置 false）⇒ 空块被读成「没有孤儿 / 回收站是空的」；改 `orphanError` / `recycleError`，只把那一块换成可读原因。⑤ 同批清掉分组级死字段 `own`（读者只认页级 `pg.own`）与注释里的「6 组 / 36 页」（实为 6 组 / 37 页）。⚠️ 前端四连：`type-check` 0 错、`build` 0 错、`deploy` 已同步、`test:unit` **44 failed / 680 passed（724 例 / 70 spec）**——44 条与 HEAD 基线逐字一致（既有失败），680 = 基线 678 + 本期 2 例。
+
+### 第 143 期
+
+文档里的真值源是假的才最贵：点名的主语不存在 / 界面路径成片过期 / 同一判据在文档与代码各有一份（来源：十轮审计第 8 轮文档 vs 代码漂移，致命 0 / 高 3 / 中 10 / 低 1；**不发版**）：① **文档点名的符号必须真存在** —— 四份文档写「引擎能执行什么只有 `rules._MODES` 一处说了算」，而 `sources/rules.py` 里的符号是 **`MODES`**（唯一的 `_MODES` 是 `selspec.py` 里另一样东西）⇒ 文档自证真值源却指错了名字；改成 `rules.MODES` 并加用例钉住。② **界面路径必须由注册表派生或对账** —— `docs/user-guide.md` 写「36 个设置页」（37）、「工具 9 个标签」（8）、「设置 → 网络 → 书源导入」（没有「网络」分组）、「工具 → 书库管理 → 副本与容器」（第 49 期已搬到设置页「维护」）、路由 `#/settings/<组>/<页>`（实际不带分组段）；**这一层此前完全没人管**（`test_settings_nav_contract.py` 只核「注册表 ↔ 路由映射」、`check_doc_anchors.py` 只核 `file:line`，裸路径与页名是空白）⇒ 新增 `tests/test_docs_ui_paths_contract.py` 6 例：页名 ⊆ 注册表 / 页数·分组数与标题一致 / 工具标签名·数量 == `ToolsLayout.SECTIONS` / 路由不带分组段 / 文档点名的 `rules.MODES` 存在 / README 写明 `logging.retention` 每个键。③ **同一判据两份实现，往往一份在文档、一份在代码** —— 只读代码的审计永远发现不了这一期的问题（ISBN 形状在 `sync.py` 抄了第二份正则、`scrape` 的「重试 / 重置」绕过状态闸门、`server.py` 重置设置绕过配置备份）。④ 顺带：`architecture.md` 的 `core/` 清单漏 20+ 模块（改为全列 74 个）、README 补 `logging.retention` 整段（「默认关闭、打开就轮转」的开关在文档里根本不存在）。⚠️ 教训：**文档里的符号名也是契约** —— 写「唯一真值源是 X」就必须有用例钉住 X 的形状。
+
+### 第 144 期
+
+部署面：写着「自动备份」的镜像里没有 `pg_dump` / 改了 `PORT` 容器永远 unhealthy / 默认口令 `changeme` 从不被提（来源：十轮审计第 10 轮部署与运维面，致命 1 / 高 4 / 中 6；**不发版**）：① **「文档写着自动备份」不是备份** —— `core/backup.snapshot()` 在 `NOVELFORGE_DB=pg` 下只调 `pg_dump -Fc`，而运行镜像里**没有 `pg_dump`**（runtime 只装 `tzdata / libstdc++6 / libarchive-tools`）⇒ 每次「更新前自动备份」落成 `backup_failed`、备份列表永远为空；修法是运行阶段装 `postgresql-client`，**客户端主版本必须 ≥ 服务端**（compose 是 `postgres:16-alpine`，trixie 基线带 17 可 dump 16；基线退回 bookworm 自带 15 就会 `server version: 16 … aborting`，那时必须走 PGDG 源）。② **可配置的东西不许有硬编码副本** —— `Dockerfile` 的 `HEALTHCHECK` 与 `docker-compose.yml` 的 `healthcheck` 都写死 `:8000`（全仓 9 处 8000 只有这两处不跟 `PORT`），用户改 `PORT=9000` 就变成「服务好好的、容器一直重启」；两处改为读 `$PORT`。③ **安全默认值必须自曝** —— compose 注释教「部署必须改 `AUTH_PIN`」，但 `/health` / 设置页 / 活动日志三处都不提；现在 `db.pin_hash()` 收敛「口令哈希」唯一实现（此前 `auth._pin_matches` / `db._seed_user` / `db.set_pin` 三份拷贝，任一份「顺手加盐」都会让另一处登不进去）、`db.DEFAULT_PIN` 立为唯一常量、`auth.uses_default_pin()` 比**哈希**、`/health` 出 `default_pin` + 人话 `problems`。④ **能服务但有毛病 ≠ 不能服务** —— `settings.json` 读坏（compose 注释教的「目录挂载 + 切 `user:`」就会触发）此前 `/health` 全绿；新增 `config.overrides_error()` 上探活，回 `degraded` **不是** 503（重启修不好，口径同第 141 期）。⑤ 删掉三处死开关 `EBOOK_CONVERT_BIN`（第 62 期起零引用，Dockerfile 留「为什么删」的注释）。⚠️ 新增 `tests/test_hardening_144_deploy.py` 6 例，全是**静态字面量 + 只读接口语义** —— 这类判据没有运行时用例会顺带覆盖到，不钉就一定会再漂。
+
+### 第 145 期
+
+漫画库 series 恒空：2043 张散卡收敛成 170 个系列（来源：用户「http://192.168.0.95:8992/ 整理本地的书，看看为什么漫画库散落很多 Vol.03」；**不发版**，`VERSION` 仍 `1.3.0`）：用户真机取证 —— 漫画库 2043 本 `series` 全空（2043/2043）、`GET /api/series` **total=1**（母乳系列 2 本）、有声 0/100 与电子书 2/166 同型；`ShelfView.collapseSeries` 只在 `b.series` 非空时折叠 ⇒ 书架退化成 2043 张独立卡，标题由 `metadata.from_filename` 兜底成文件名 ⇒ **98 本标题字面就是 `Vol.03`**、221 本含 `Vol`；2043 本散在 176 个顶层目录（最大 `[神之塔][SIU][Chap.000-Chap.651]` 652 本）。**根因**：`core/library.py` 的 `series`/`series_index` 只有 `_series_of(opf)` 一条来源（只认 EPUB 的 `calibre:series`），`_probe_entry` 的漫画分支只调 `comics.probe(f)`（只回 pages/has_cover/cover），目录型条目完全不解析 —— 而漫画的系列信息**只在目录布局里**（一层目录 = 一个系列，`core/komga.py` 头部早已写明的 Komga 约定）。⚠️ **关键约束**：`_probe_entry(f)` 的 docstring 写死「只能依赖文件自身，库级状态不许掺进来」（增量闸门是每行 `(size,mtime)`），它**拿不到库根** ⇒ 目录推断不能写在那里；唯一同时握有 `lib` 与 `rel` 的地方是 `_row_of(lib, root, f, p)`。**修法**：① 新增 `library.series_of_rel(rel)` = `komga.series_dir(rel)`（相对路径→系列目录名的既有唯一实现，不复制）+ `_pick_series_name(dirname, stem)` + `volume_of(...)`（卷号既有唯一实现）；② `_pick_series_name` 首括号优先、`[作者×作者][作品]` 按 `×` 跳过作者列表、首 token **不在文件名里**（`[よのき][鬼畜英雄]` 而文件叫 `鬼畜英雄 Vol.01.zip`）就取下一个在文件名里的、残缺目录 `封神演义 全彩版][藤崎龙][23完]`（左缺 `[`）取第一个 `]` 之前 —— **`【】` 不认**（那是汉化组标记）；③ `_row_of` 加兜底 `override > OPF > 目录推断`，且**只对 `lib.type == "comic"` 开启**（ebook 157/166 平铺在库根、audiobook 是整张专辑目录 `专辑/01.mp3` ⇒ 无差别开启就是造 157 个假系列）；④ `volume_of` 取主名（`[01].zip` 的 `.zip` 永远匹配不到）+ NFKC，`_VOLUME_RES` 扩成 6 条且前导枚举 `^(\d{1,4})[\s._-]` **必须最前**（否则 `002 [第1話] …` 会按话数挤到 1 号）；⑤ `SCAN_RULE_VERSION` **5 → 6** —— 条目边界没变但**卡片字段口径变了**，存量行 series 列都是空串，而 `catalog._refresh_locked` 只对 `(size,mtime)` 变化或 force 的行调 `_row_of` ⇒ 这是存量 2043 行**唯一**的自愈通道。**真实数据核验**（用户库 2043 本全量跑 `series_of_rel`）：**2037/2043 推出系列、收敛成 170 个系列**（25 个单本系列），推不出序号 **832 → 175**；Top 神之塔 652 / 史诗级领地设计师 228 / 蝙蝠侠v3 70；170 个顶层目录里 167 个以 `[` 开头、**0** 个以 `【` 开头、3 个裸名；7 个「作者在前」目录修好 6 个。**防回归** `tests/test_series_from_path.py` **21 例**（17 例纯函数参数化 + 4 例扫描级：comic 写入 / ebook 同布局不写 / audiobook 不写 / 文件内元数据优先于目录推断）+ `tests/test_units_scan.py` 口径版本探针 5 → 6。⚠️ **已知脏点**：`[馬場民雄][究极拉面王]/Vol.01 (2) (2).zip`（单本、文件名无线索）被猜成作者名，只能靠元数据覆盖改；库根 6 个散文件无目录 ⇒ 仍无系列；`封神演义 全彩版][藤崎龙][23完]` 目录名左缺 `[`（扫描源如此）。⚠️ **教训**：① **「唯一产出点」不等于「唯一判断点」** —— 先问「这个函数能不能拿到判据要的输入」（`_probe_entry` 看不见库根，兜底只能落 `_row_of`，写错地方就破坏增量闸门契约）；② **卡片字段口径变了也要 bump `SCAN_RULE_VERSION`**（原注释只写「改变条目边界」）；③ **一条判据一个实现** —— 目录布局是**新轴**，不是把 `komga.infer` 的 `_SERIES_PATTERNS` 再抄一份（它要求卷号在结尾，覆盖不了 `Vol.01 封神计划发动` 这类中段写法）；④ **同一套目录布局在不同库类型里含义不同**（ebook 平铺 / audiobook 整张专辑），只在 `comic` 上开不是「最小改动」而是**唯一正确**的开关。⚠️ **本机口径**：`bash scripts/test.sh` 起不来（`Bash/E_ACCESSDENIED`，WSL 桩）⇒ 直跑 `.venv\Scripts\python.exe -m pytest`；且本机 python 在仓库外建不了临时目录（DSH 沙箱，`diagnose-windows-sandbox-acl.ps1` 已排除 ACL：VERDICT=NOT_THIS_CLASS）⇒ basetemp 落回仓库根、撞 `tests/conftest.py` 仓库根守卫，本期用**一次性插件（不入库）**关掉守卫才跑通；**18 例在本机无法运行**（10 例 `test_updater.py` + 1 例 `test_hardening_141_error_paths.py` 本机 `socket` 无 `AF_UNIX`；4 例 `test_scripts_contract.py` 的 `bash -n` 只有 WSL 桩；2 例 `test_ingest_audit_125.py` 符号链接需特权；1 例 `test_repo_root_guard.py` 守卫被插件关掉无法自证），**CI 容器内这 18 例正常**。⚠️ 基线（本机实测、已剔除上述 18 例）**2730 例（2716 passed / 0 failed / 0 errors / 14 skipped）**，全量 468.0 s；按 CI 口径应为 2748 例。本期未改前端（未跑四连）。
+
+### 第 146 期
+
+GitHub 上反复报错的三个真因：源码目录被静默忽略 / 层缓存并发写 / 空目录不进 clone（用户原话「解决一下 github 上面经常报错的问题」；**不发版**，`VERSION` 仍 `1.3.0`）：把 300 次 run 里 51 条非 success **全部下载日志核对**（不看标题猜），归类 **49 + 1 + 1** —— 49 条是 `npm run build` 报 `No such file or directory`（`.gitignore` 的 `input/` 没写前导斜杠 ⇒ 匹配任意层级，吞掉 `frontend/src/components/ui/input/` 达 15 期；**本机文件一直在，所以本机永远绿，只有 clone 构建才红**，第 105 期已修但没钉在流水线层）、1 条 `error writing layer blob: not_found`（两次构建同时往同一份 GHA 层缓存写）、1 条 Tests **整轮一条没跑到**（`server.py` 在导入期把 `novelforge/static/` 挂给 `StaticFiles`，而 git 不跟踪空目录）。修法：① 三个 workflow 都声明 `concurrency` —— `tests`/`docker-image` 按 ref 取消旧的（`cancel-in-progress: true`）、`release` **不取消**（发布中的 tag 不能被后来的推送吞掉），镜像构建另加 `timeout-minutes: 45`；② `cache-to: type=gha,mode=max,ignore-error=true`（**缓存是加速手段、不是交付物**）；③ `docker-image.yml` CRLF→LF（`*.sh`/`Dockerfile` 早有 `.gitattributes` 钉子，`*.yml` 没有）；④ 新增 `tests/test_ci_actions_contract.py` 4 例（每个 workflow 都要有 concurrency / 镜像缓存导出不许判死构建 / action 大版本 + 白名单一一对应）+ `tests/test_source_tracking_contract.py::test_空目录的_keeper_必须在库里`。⚠️ **教训**：**「CI 红」和「代码回归」是两件事** —— 先按报错原文分类（49/1/1），再决定改代码还是改流水线；基础设施的失败模式（缓存竞态、空目录、并发写）只能在流水线层看见，本地跑一万遍也照不出来。
+
+### 第 147 期
+
+格式识别与导入：同一份字节换个名字就有两种结论（用户原话「进行 20 轮审查，重点放在格式识别、书籍导入等方面」；**里程碑发版 `VERSION` 1.3.0 → 1.4.0**）：① **`.cbz` 按后缀猜形态 = 静默错** —— `.zip` 走内容分派、`.cbz/.cbr` 按后缀当漫画，而 `zipkind` 的文档自己写着「两者字节等价」⇒ 一份**改名的 EPUB**（`书.cbz`）里那张 `cover.jpg` 被 `comics._keep` 算作一页，书架显示「1 页漫画」，且**页数不为 0 让第 123 期「0 页 ⇒ 内容不符」的闸门失效**；现在归档书一律走 `zipkind.analyze`，`.zip/.rar/.7z` 由内容定名（图片档 ⇒ 归一成 `CBZ`）、`.cbz/.cbr` 保留自己的后缀名，判据刻意用 `zipkind.is_container` 而非 `comics.is_comic`（后者**包含** `.zip/.rar/.7z`，拿它当「后缀已是漫画名」会把图片档的归一挡掉）。② **一处事实只开一次包** —— `zipkind.analyze` 新增 `pages`/`cover`（`_comic_facts()` 按 `comics._natural_key` 排序取第一张 ⇒ 封面 == 阅读器第 1 页），`comics.probe()` **删除**（不留兼容垫片）。③ **剥标签与解实体方向相反** —— OPF 纯文本字段各写一遍 `re.sub(r"<[^>]+>", "", x)` 只剥标签不解实体 ⇒ `<dc:title>Pride &amp; Prejudice</dc:title>` 在书架上**字面**显示 `&amp;`（英文出版物 OPF 里 `&amp;`/`&#8217;` 是常态，不是边角样例）；新增 `library._plain()`（剥标签 + `html_unescape` **一次**）作为 title/creator/publisher/language/系列/题材的**唯一判据**，与写侧 `fileops._set_text_element` 的 `escape` 成对（读写不对称 ⇒ 出版副本重探测必变形），`_series_index_of`/`_isbn_of`（先还原实体再判形状）/`_subjects_of` 同批改走它，`dc:description` 保持「解实体、**不剥标签**」。④ `probe_epub` 里 OPF 定位的**第二份实现**收敛到 `library._opf_path()`（本文件另 5 处调用点同源）。⑤ `container_books` 增第二类判据 `_is_unpack_candidate()`：后缀是漫画归档**且**书目挂 `unparsable`（此前「要先展开才能入库」那句话**没有按钮可点**，把漫画后缀塞进 `CONTAINER_FORMATS` 又会把整个漫画库拖进清单）。⚠️ **教训**：等价的字节必须走同一条判据；一处事实只开一次包（分开算迟早分叉）；写侧 escape 了、读侧就必须 unescape。⚠️ 新增 `tests/test_import_identify_147.py` 12 例（含装文档的 `.cbz` 进待展开清单、写读往返对称）。
+
+### 第 148 期
+
+TXT 在线阅读：两个并发请求就能把这本书读废（用户原话「审查本项目 txt 格式书籍入库、刮削、阅读、进度等方面的问题，并修复」；**不发版**，`VERSION` 仍 `1.4.0`）：① **派生件构建没有串行化** —— `core/txtcache.py` 的 `derived_epub` 全程无锁、写同一个 `derived.epub.tmp` 且先 `unlink` 再写，而「详情（定目录形态）」与「首章正文」是**两个并发请求** ⇒ 两个线程互删临时件（Windows 上直接 `PermissionError`）或双双写同一路径得到**半个 zip**；失败那条还把 `status: failed` 写进 `state.json`，而 failed 是**粘住的**（源指纹没变就一直命中）⇒ 该书**永久**回落原生分章 + 刷一条假的「正文读不出」，只有源文件被改动才自愈。② **产物被删永不重建** —— `return epub if epub.exists() else None`（`core/fb2cache.py::_lookup` 早就把这种情形视同 miss，注释写着「不是错误」）。③ **进度拿不到精确位置（独立漏项）** —— `server._progress_file` 里 MOBI（第 110 期）/ FB2（第 112 期）都有「派生件 ⇒ `(target, True)`」分支，TXT 没有 ⇒ 落到 `format == "EPUB"` 那句判 False，`progress.cfi` 恒空、`GET` 不下发 `offset`，换设备续读只能按 `percent/100×total − 章号` 估算章内位置，而 TXT 派生 EPUB 自第 55 期就有（`build_epub(..., nav=False)`，index 0 基，与原生分章索引空间对齐）。**修法**：① 照 `fb2cache` 范式收敛 —— 模块级 `_BUILD_LOCK` + 持锁**双检**、在 `parent/.stage-<bid>-<pid>-<ms>` 里组装再 `_swap_in` 整体换入（失败回滚旧目录）、`_lookup` 把「三分量命中但产物不存在」判 `miss` 重建、`_sweep` 清进程被打断留下的 `.stage-*`/`.old-*` 残骸（**只有真正失败的 failed 才粘住**，成因在源文件里，重试只会重复失败）；② `_progress_file` 重构成「先定 target + `is_main = target == library.abs_path(b)`，再按格式分派」，MOBI/FB2 两段语义**逐字节不变**，只多一段 `.txt` ⇒ `txtcache.derived_epub` 得 `(derived, True)` / `(None, False)`。⚠️ **教训**：「锁定」有两种含义别混成一种 —— 形态锁定（不许今天 EPUB 明天原生）说的是**成功产物**，**产物不见了必须重建**；同一类派生物必须走同一个范式（`fb2cache` 有锁/有 stage/有 stale 清理、`txtcache` 一样都没有，而两者输入输出**完全同构**）；补一个格式的读点时，把同形状的格式一起数一遍（MOBI/FB2 都补过，TXT 漏了 115 期没人回头补）。⚠️ **新增 5 例**（`tests/test_txt_reading.py` 17 → 22）：8 线程 `Barrier` 并发首开只组装一次且不落失败标记 / 派生件被删后自愈重建 / 构建失败不留半成品与临时目录 / TXT 进度端点往返带精确 CFI（`cfi.startswith("epubcfi(/6/")` 且 `offset == 10`）/ 转不动的 TXT 进度仍落库只是没有 CFI。⚠️ **已核查非缺陷（勿再改）**：`epub-css` 对 TXT 回空样式、`cover` 回 404（派生 EPUB 是 `css=None, images=None` 组装的，接上去只是空转）；`watcher.handle_file` TXT 与 EPUB 同路原样复制（第 62 期口径）；`publish.publish` 只对 `EMBED_EXTS=(".epub",)` 做 `embed_meta`（TXT 只产副本、元数据只落 DB，日志如实写「（无元数据可写）」）；`pipeline.dispatch` 对 `.txt` 原样 `atomicio.copy_file`、入库侧**不套**命名规则；`traditionalize` 对投递入库不生效但前端 hint 已如实标注；`watcher._opts` 无调用方（死代码，未删）。⚠️ **本机口径**：`bash scripts/test.sh` 本机起不来（`Bash/E_ACCESSDENIED`）⇒ 直跑 `.venv\Scripts\python.exe -m pytest`，并给 `tests/conftest.py` 打**一次性放行补丁**（把 `.nftmp` 排除出仓库根守卫，**不入库**，收尾 `git checkout` 已还原）；基线 **2752 例（2738 passed / 14 skipped）**，全量 497.6 s（收集 2769，17 例本机跑不起来）。⚠️ 期号被并行会话占用：本提交原按第 146 期写，推送被拒后发现远端已有第 146 / 147 期 ⇒ 期号改 **148**，用 `git reset --hard origin/main` + `git cherry-pick` 把自己的提交搬上去（别 rebase 别人的本地旧期提交）。前端未改（`ReaderView` 的 `fileRel` 对单文件书返回 `undefined` ⇒ 进度本就按**书级**读写，正好命中新分支）⇒ 未跑四连。
+
+### 第 149 期
+
+部署面收口：代码不许替部署方决定用哪个镜像 tag（用户原话「修一下审计的问题」；第 150 期同批发版 `VERSION` 1.4.0 → 1.4.1）：① **镜像 tag 两处各说一套** —— `docker-compose.yml` 的 `image:` 是 `:latest`、`config.DEFAULTS["update"]["image"]` 也写死 `:latest`，而 `configured_image()` 的回落链「显式入参 > 配置 > 环境变量 > 内置默认」**没有任何一环去看部署文件** ⇒ 部署方把 compose 钉到 `1.4.0` 之后，更新器仍去拉 `:latest` 并拿它重建容器，于是「更新成功」但下一次 `docker compose up -d` 又退回 `1.4.0`，两边对「我现在跑的是哪个版本」各说一套。修法：`update.image` 默认改**空串**（注释写明留空 = 用部署文件里的镜像）；`updater` 新增 `_self_image()`（问 docker.sock 要本容器的 `Config.Image`，先按 `HOSTNAME`=短 id 直取、失败再列 `/containers/json?all=1` 按 id 前缀认自己，带 60 s 记忆 —— `configured_image` 会被 `/api/config` 这类读路径调用）并让回落链变成「显式 > 配置 > 环境 > **部署文件** > 内置默认」；新增 `_update_target()` 返回 `(完整引用, repo, tag)`，**官方仓库 + 已查到最新 release ⇒ tag 换成那个确切版本号**（CI 每次发布都推 `:<VERSION>`），查不到就原样拉；`compose` 的 `image:` 钉到 `1.4.0` 并注明「升级后请把这里一起改掉」。**没做**：让更新器改 compose —— compose 在宿主机、容器内看不见也不该改，那会把真值源搬到容器里。② **非 root 运行没有配方也没有自检** —— 镜像里无普通用户、`start.sh` 不验挂载目录属主 ⇒ 用户按 Docker 惯例加 `user: "1026:100"` 后容器起得来、写配置时才炸，日志只有一个 `PermissionError` 堆栈。修法：Dockerfile 内置 `novelforge`（uid/gid 1000）并 `chown` 五个运行时目录、compose 的 `user:` 从注释样例改成可直接用的 `1000:1000` 配方（**默认仍 root**，既有部署的挂载目录都是 root 属主，改默认会让所有人升级当天全炸）、`start.sh` 启动即以非 root 身份逐目录 `touch && rm` 自检，写不进就打印 `[start] [FATAL] … sudo chown -R <uid>:<gid> <部署目录>/{input,output,config,…}` 并 `exit 1`。③ **「是不是压缩包」有两份判据** —— `zipkind.is_container`（`.zip/.rar/.7z`）与 `comics.is_comic`（`.cbz/.cbr`），而 `library_rules._container_shape_hint` 用前者 ⇒ **`.cbr` 直接返回空串**，用户把 `.cbr` 丢进收书目录被拒时只看到「规则都不命中」，真相是「这台服务器缺 bsdtar / unrar」。修法：新增 `zipkind.is_archive()` = `_ARCHIVE_SUFFIXES`（`CONTAINER_EXTS` ∪ `comics.COMIC_EXTS`），`_container_shape_hint` 改用它；注释钉住两条轴 —— `CONTAINER_EXTS` 是「**待展开**」那条轴（漫画归档不进待展开清单），`is_archive` 问的是「要不要打开看看里面是什么」。④ **待展开清单每次重开归档** —— `unpack_plan` 现算，而 `/api/maintenance/container-books` 的 `limit=200` ⇒ 打开一次工具页 = 200 次开包。修法：按 `(绝对路径, st_size, st_mtime_ns)` 记忆（`_PLAN_CACHE` 上限 512，撞上限整表清），**指纹刻意复用扫描期那双 `(size, mtime)`**（同一把尺子）；返回**副本**，`actions` 里的字典不许被调用方就地改污染缓存。⑤ 五条积压里的「文档称多端接口监听 `:8000`」**经核实已不存在**（`docs/architecture.md` §11 是纯表格、全文无 `8000`；`:8000` 只在 `docs/project-overview.md:63` 与 `README.md:300` 的 `8992:8000` 映射里，是对的）⇒ **未动代码**。⚠️ **教训**：**「部署方钉了什么版本」只能由部署文件回答** —— 代码里的默认值一旦与部署文件不一致，就会在「更新成功但一 `up -d` 又退回」这种时序上骗人；**能力缺失要说清是「你没装工具」而不是「你的文件不合规则」** —— 判据分叉的直接后果是把可修的环境问题伪装成不可修的内容问题；**非 root 这类「部署期才炸」的问题必须在启动第一秒炸**，并把它该敲的命令一起打出来。⚠️ 新增 `tests/test_hardening_149_deploy.py` 12 例；基线 **2770 例（2756 passed / 14 skipped）**，全量 400.3 s（收集 2788，18 例本机跑不起来：`AF_UNIX` ×11 / `bash -n` ×4 / 符号链接 ×2 / 仓库根守卫 ×1）。⚠️ **CI 红过一次，是本机绿 CI 红的典型**：`.cbr` 那条用例原本造「假 RAR 头」`Rar!` + 64 个 0 当夹具 —— 本机没 bsdtar ⇒ `analyze` 判 `broken`（提示带 RAR），CI 有 bsdtar ⇒ 判 `empty`（「空容器」）⇒ 断言「RAR in hint」红。改成 `monkeypatch` 给定 `analyze` 返回、只钉**分流**（`.cbr` 的识别结果会不会被说出来）。**夹具不许让环境当裁判**。
+
+### 第 150 期
+
+版本 tag 会被后续 main 构建覆盖 ⇒「钉住版本」是假动作（用户原话「从GitHub上获取新的」；**里程碑发版 `VERSION` 1.4.0 → 1.4.1**）：① **根因**：`docker-image.yml` 每次推 `main` 都推 `:latest` / `:<VERSION>` / `:<sha>` 三条 tag，而 `:<VERSION>` **跟着每次构建走** ⇒ 同一个 `1.4.0` 先后指过第 147（`d6a2fcb`）/ 148（`c4894fe`）/ 149（`030ff38`）三种内容；按 README 把 compose 钉 `:1.4.0` 的人拿到的不是当初发的那版，且没有任何报错。**修法**：① `tags:` 删掉 `:<VERSION>`，只留 `:latest`（会漂、语义明确）与 `:<sha>`（**不可变**，精确指回某一笔提交）；② `checkout` 加 `fetch-depth: 2`，新增「版本号变了吗」步（`git diff --quiet HEAD^ HEAD -- VERSION`）；③ 新增**条件**步「版本变了 ⇒ `docker buildx imagetools create -t …:<VERSION> …:<sha>`」—— 只改 tag 指向、**不重建**，版本号没变时 `:<VERSION>` 保持不动。**为什么不在 `release.yml` 补打**：它用 `GITHUB_TOKEN` 推的 `v*` tag **不会**再触发别的 workflow ⇒ 版本 tag 只能在镜像构建那次运行里产生（这也是原来把它塞进 `tags:` 的原因）。④ 顺带修掉上一轮 **CI 红**（`test_cbr缺后端时给出能力原因`）：夹具造「假 RAR 头」`Rar!`+64 个 0 —— 本机没 bsdtar �� `analyze` 判 `broken`（理由带 RAR），CI 有 bsdtar ⇒ 判 `empty`（空容器）⇒ 断言红；改成 `monkeypatch` 给定 `analyze` 返回、只钉**分流**。⑤ `tests/test_changelog_render.py` 里「最新段必须以 `### 新功能` 开头」这条**硬编码撰写习惯**的断言改成「上屏内容 == `changelog.section(version)`」（修复为主的版本，首个分组叫「修复：…」完全正当）。⑥ `VERSION` 1.4.1 + `CHANGELOG` 的 `V1.4.1` 段（148 + 149 + 150 三期合集）+ compose/README 的 tag 同步（`test_hardening_149_deploy` 断言 compose tag == `VERSION`）+ R7 的 §0 版本字面量。⚠️ **教训**：**「钉住版本」只有在 tag 不可变时才成立** —— 会被后续构建反复覆盖的版本 tag 比 `:latest` 更有害；**不可变的引用要留给机制**（`:<sha>` 一直在推，但没人当回滚锚点）；**CI 红了要当天查**（上一轮只核了 commit 里的文件清单，没核 `Tests` 的结论，这次是用户让我去 GitHub 取新东西才发现）。⚠️ 还踩了一个坑：`VERSION` 是 **CRLF**（7 字节），CI 里 `$(cat VERSION)` 只吃 `\n`、`\r` 留在版本号里 ⇒ 镜像 tag 成 `1.4.1<CR>` ⇒ `imagetools` 报 `invalid reference format`（首次构建就红了）；修法 = `VERSION` 改 LF + `.gitattributes` 加 `VERSION text eol=lf` + workflow 用 `$(tr -d '\r\n' < VERSION)` + 新增 `test_VERSION_文件必须是单行且不带CR`。**教训：会被 shell 读走的真值源文件，行尾也是契约。**
+
+### 第 152 期
+
+漫画库「Vol.04 没合并」的最后一环：**数据早就对了，坏在可见行为**（用户原话「漫画库里仍然散落很多 vol.04、vol.03 的书没有合并」；**发版 `VERSION` 1.4.1 → 1.4.2 → 1.4.3**（1.4.3 = 收尾后的审计补修））：① **先登实例只读取证**（`GET /api/books` 2309 本 / `/api/libraries`）：漫画库 2043 本里 `series` 为空**只有 6 本**、推出 **170 个系列**、一个顶层目录被拆成多系列的 **0 个**，42 本标题就是 `Vol.NN` 的书**全部**带正确系列名与册号（`Vol.04.zip` → `Angel Beats! -The Last Operation-` #4）⇒ 第 145 期的目录推断没坏，**别去动后端分组**。② **根因两条都在渲染层**：(a) 折叠行的标题取的是 `Row.book`（**代表本** = `representativeOf` 挑的那本，语义是「封面画哪一张」）的 `title` —— 表格视图书名列直接渲染 `row.book.title`，于是同一行在网格叫系列名、在表格叫 `Vol.04`；`buckets`（首字母分桶）、`data-bucket`、aria-label、`BookCover` 无封面占位文字也各取各的；(b) **「折叠系列」默认关**（第 32 期口径，上游 BookOrbit 称 *Collapse series by default*），而 `save()` 在任何字段变动时**整份落盘**并推同步 ⇒ 用户从没碰过的开关也被写成「false 是他的选择」，实测该账号 10 台设备记录**9 台是 false** ⇒ **只翻默认值等于没翻**。③ **修法（单一真值源）**：`ShelfView.rowTitle(r)` = 系列行取系列名 / 单本取书名，网格 hover+below-cover、列表、表格、分桶、`data-bucket`、aria-label **全部**改走它；`coverBookOf(r)` 只把 `title` 换掉再交给 `BookCover`（id/渐变色/封面图仍取代表本）；表格新增 `head` 字段 —— 系列头行的格式/页数/进度/评分四列留空（与网格「系列行不给格式徽章、不给进度条」同口径）；`SHELF_PREFS_REV` **1 → 2**（口径版本，与 `SCAN_RULE_VERSION` 同一思路）：`read()` 版本不符**只作废 `collapseSeries`**（视图/排序照旧沿用）、`prefsPayload.normalizeShelf()` 对**无版本/旧版本的服务端块**同样作废、`prefSync.collect()` 推送时**必须带 `rev`**（不带会被自己的归一化当成旧存档，把用户刚关掉的折叠偷偷改回开）。④ **防回归**：新增 `frontend/src/stores/shelfPrefs.spec.ts`（11 例，已登记进 `tests/test_frontend_unit_contract.py` 的 `EXPECTED_SPECS`）+ `ShelfView.spec.ts` 新增 6 例（三视图标题都是系列名且不出现 `Vol.04` / 分桶是 A 不是 V / 表格系列头行四列留空 / 展开后成员行仍是各自册名）。⑤ **同一轮的第二条用户反馈**「折叠系列后，文件里面只有一本书，点击开始阅读不能从第一册开始读，不能看目录」：折叠行点开的是**代表本**那一册的详情页 —— 聚合行必须能点进「聚合物」。修法：三视图的系列头行一律进 `/series/<名字>`（`seriesDetailPath()`，与 `SeriesView` 同一编码口径；表格用新增的 `head` 判定，单本系列 `toggle` 为 null 也照样进），系列详情页新增「开始阅读 / 开始收听」= **`sortBySeriesIndex` 后的首册**（全无序号退回落库首本；不用「继续阅读」—— 系列详情接口的 `books` 不带进度，那里推算就是第二份进度口径）；缩略图点击偏好的落点抽成 `lib/bookOpen.bookClickPath()`（`ShelfView.openBook` 与系列卷列表共用，否则同一偏好两页两个落点）。新增 `SeriesDetailView.spec.ts`（6 例：目录列全册 / 起点是序号最小那册 / 按钮 title 说起点 / 点某册进详情 / 直接阅读偏好进阅读器 / 全无序号退回首本）。⚠️ **教训**：**「默认值」也是存量数据** —— 整份落盘会把「没碰过的开关」写成「用户的选择」，翻默认值必须同批翻**口径版本**（本机 + 服务端两处）；**代表本是「封面画哪张」，不是「这一行叫什么」** —— 混用会在某册文件名恰好是纯卷号时把系列名整个丢掉；**先取证再改代码**（一小时只读拉真实数据，才没有去加第四份「猜系列名」的判据）。⚠️ **期号**：并行会话占了 151（鸿蒙端 `num`/`index`），本批用 **152**，且未碰 `clients/harmony` 与 `tests/test_client_contract.py`。⚠️ **基线**：后端收 2816 例 / **2789 passed** / 14 skipped，全量 778.2 s（**13 例本机环境失败**：`test_updater.py` ×10 无 `AF_UNIX` + `test_hardening_141_error_paths` ×1 + `test_ingest_audit_125.py` ×2 符号链接需特权 ⇒ 可比口径 **2803**）；前端四连 **72 文件 / 761 例**。⚠️ 本机 `.venv` 解释器建不了仓库外临时目录（落回仓库根 ⇒ 撞 conftest 仓库根守卫、1643 例整片报错）⇒ 用**系统解释器 + `.venv` 的 site-packages（PYTHONPATH）**跑。
+
+### 第 153 期
+
+BookOrbit 全量对齐：独立复核 + Phase 0 工程地基（**对齐上游先对齐口径**）：① 证据面 = 线上 bundle（320 API / 472 chunk / 42 设置页 / 13 i18n）+ 本地源码；结论必须分四类（真缺口 / 定位外 / 红线禁止 / 需取证），否则「缺失数」没有意义。② history 路由**必须同批**做 SPA 兜底 + 旧 `#/` 迁移；兜底要按「保留前缀 + 静态扩展名白名单」判，且接所有方法 —— 只注册 GET 会让已删的 `POST /api/x` 回 **405** 而不是 404；删掉的 `/content` 也要进保留前缀。③ 全局 CSP 用 `setdefault` 保住媒体出口的 `CSP: sandbox`；内联 theme-init 必须外置成 `boot.js`（`script-src 'self'`）。④ 实时事件只推「该刷新了」，HTTP 仍是唯一真值源；前端 4401 停止重连、其它断开指数退避、轮询兜底。⑤ 元数据域核查抓到「作者抓取开关是死配置」（`fetch_bio/fetch_photo/sources` 无后端读点），列为 Phase 4 必修。
+
+### 第 154 期
+
+BookOrbit 对齐 Phase 1A：排序 / 汇总 / 入库时间 / 预扫（**四件都栽在「同一判据两处」边上**）：① 排序写点只在 `db.reorder_*`，路由统一要求「当前全部 id 的排列」——少一个 id 会让它停在旧 sort_order 上与新顺序交错，界面看着「拖了没生效」。② `added_at` 覆盖层必须在**读缓存前后都叠**：缓存里存的是上次算出的日期，不重算就会在缓存 TTL 内一直显示旧值；`find_by_id` 与 `books_of` 两条读路径都要过，`library._row_of` 也要有默认值（`test_catalog` 的扫描/索引字段对拍会红）。③ `parse_exts/parse_excludes` 读的是「JSON 数组文本」列，API 传真数组必须先 `json.dumps`，否则被当成「没设过 ⇒ 收全格式」。④ 预扫必须复用 `_iter_book_entries`（白名单/排除/目录合并同一套判据），否则「预扫 N 本、建完 M 本」。
+
+### 第 155 期
+
+BookOrbit 对齐 Phase 1A：重复书治理 + 封面编辑器（**判据合并容易、判据的副作用不容易**）：① 重复组用**全局并查集**（内容 / ISBN / 同作者书名相似三类边同树），但「同一物理文件被两个库各登记」必须**保持不并组**——并了以后清一条会把唯一那份文件搬进回收站（第 121 期口径）。② 忽略记录用 `pair_key`（min|max book_id）而**不带 book_id 列**，自然不进 ORPHAN/REMAP，改名后自动失效；若带 book_id 就得同时改四处 remap 清单。③ 封面写入口只落 `db.set_cover` 并 `catalog.invalidate(None)`，否则列表卡片的 `has_cover` 在缓存 TTL 内不会变；SVG 不走上传（可执行文档）。
+
+### 第 156 期
+
+书架分面计数 + 跳转跟随排序（**分页之后，凡是「从已加载页算出来」的界面都在说谎**）：① 筛选选项与计数原从 `shelfBooks`（首屏一页）`uniq` 出来 ⇒ 大库缺项、无本数；改走 `scopedBooks` / 新增 `facetBooks(key)` / `smartBooks(key)` 的**全量**投影，范围与 `shelfBooks` 同源（当前库 / 分面 / 智能书架），未加载时才退回分页缓冲。② 计数口径必须与筛选**同一套**（`statusBucket` 判状态、格式大写、语言 trim、题材多值展开），否则「下拉 12 本、筛出 11 本」永远不会报错。③ 跳转条的桶键必须跟排序字段绑定（数值轴不硬造区间桶、无日期进「未知」不隐藏），三套渲染的 `data-bucket` 与跳转条共用同一个取键函数。④ **不加服务端端点**：启动时本来就整份拉 `/api/books`，再写一套 Python 计数就是第二份判据；真做服务端分面要先改成 DB 侧筛选分页。
+
+### 第 157 期
+
+书库直传上传 + 批量元数据编辑（**批量入口最容易长成第二套判据**）：① 直传只落库的**第一个**来源目录，判定全部复用既有单一真值源（`fileops.sanitize_stem` / `library.accepts_ext` / `recycle.free_path`），且**端点自己不扫描** —— 扫描（含刮削入队 / 嵌入刷新）只保留一条流水，界面接着调既有 scan；② 批量元数据**逐本调** `api_set_book_metadata`，字段白名单 / `null` 清空哨兵 / 自定义字段校验一条都不复制；③ 前端「留空 = 不修改」必须只发非空字段 —— 空串在单书语义里是「撤销覆盖」、`null` 是「清空」，误发会把整批静默改掉；④ 多值输入（题材 / 演播者）统一 `lib/tags.ts` 的 `parseTokenList`，单书与批量共用。
+
+### 第 158 期
+
+表格视图列面板（显隐 / 行高 / 冻结 / 命名视图）（**先分清偏好属于「这台设备」还是「这个人」**）：① 列显隐 / 行高 / 冻结是设备级（同 `shelfPrefs` 的视图与排序），只落 localStorage，**不进 `PREFS_BLOCKS` 同步载荷** —— 进去会把共用账号的两台设备互相改掉。② 列集合按**规范顺序**存（不按勾选顺序）、**至少留一列**、书名与操作列不可隐藏（判据在 store 一处，面板只渲染六列）。③ 命名视图导入**同名不覆盖**、逐条校验、上限 50 —— 覆盖会让用户丢了自己的那份；视图 id 用时间戳+序号，不用随机数（测试可复现）。④ 默认全列 + 标准行高 + 不冻结 = 改造前逐像素一致，装完不惊动任何人。
+
+### 第 159 期
+
+实体管理扩到 6 类 + 修复多值覆盖值形态（**扩类最容易翻出「只在显示层解析」的旧债**）：① `kind → (字段, 是否多值)` 只有 `core/entities.py` 一处，聚合 / 改名 / 入参校验全从它派生；第二份映射的表现是「预览 0 本」或「应用后字段没变」，不报错。② 多值字段（题材 / 演播者）改名只替换**命中的标签**、其余原样，合并同名时去重保序；聚合按生效值分组。③ `db._meta_out` 必须把多值覆盖值的 `str(list)` **还原成列表** —— 它此前只翻「显式清空」哨兵，于是 `GET /metadata` 的 `fields.tags` 是 repr 串，详情页编辑器 `.join` 直接抛 TypeError（扩类写 tags 覆盖后才暴露）。④ 收藏夹是第 7 类，但有独立表与页面，不塞进这张表（否则第二套改入口）。
+
+### 第 160 期
+
+OPDS 只读客户端凭据（可限定书库）（**给出去的每一份凭据都要能单独收回**）：① 管理员 PIN 给外部阅读器 = 交出整站；独立凭据可限定书库、可停用、可删除，且 Basic 每次请求都查表 —— 停用立即生效，没有会话可残留。② 范围解析**坏值回空集合而不是「不限定」** —— 解析失败放大权限是安全事故，404 只是体验问题。③ 与管理员退避共用一套实现但计数键分开（`client:` 前缀）：管理员输错不该锁正在用的阅读器；用户名不存在也记失败（否则可探测用户名）。④ 越界一律 404 与「不存在」同形，不给「有但不让你看」的暗示（沿用第 14 期口径）。⑤ settingsNav 的 note 是纯文本插值，写 `**` 会被原样显示 —— 契约测试这次抓到了。
+
+### 第 161 期
+
+GET /api/* 条件请求（ETag/304）+ 侧栏计数与全量书目解耦（**缓存要在传输层做，不在数据层做**）：① ETag 中间件只处理「GET + 200 + JSON」，且**端点已声明 `Cache-Control` 就不改写**（`local-paths` 的 `no-store` 随请求者来源而变，贴 ETag 等于把「绝不缓存」降级成「可以存」）；② ETag 在**未压缩**字节上算（注册在 GZip 之内），否则 identity/gzip 两个标签、换编码回访条件请求永远失效；③ 304 必须剥 `Content-Encoding`/`Content-Length`（它们说的是那份没发出去的表示）；④ 与第 152 期回退的 `/api/stats` TTL 缓存是两件事：响应**每次照样现算**，没有第二份真值源、没有失效钩子问题；⑤ 侧栏「全部书库」徽标改按 `/api/libraries` 的 `book_count` 求和（实测 166+100+2043=2309 与书目总数一致），全量书目降为空闲预取 —— 改这条必须同批给 `refreshBooks()` 加 `loadLibraries(true)`，否则徽标停在旧值；⑥ 期号**开工时再看**：计划时还是 158，落位时已被并行会话用到 160。
+
+### 第 162 期
+
+仪表盘统计 brief 模式（/api/stats?brief=1）（**先数清楚谁在读什么，再决定砍什么**）：① 仪表盘 9 个部件只读 `/api/stats` 完整响应里 **3.6%** 的字节，却每次进站都付全额计算 —— 重的大头（`db.session_log` **五年全表扫** / 逐本 `metascore.audit` / Top-50 / 图表序列）全是统计页专属；② 修法是**独立实现的小份聚合**（`stats.brief()`），不是「完整份挑键回传」—— 那样计算一分没省；键**同名同形**（`top` 给空数组、`avg_seconds` 补齐），前端零改动；③ 状态归类抽成 `_classify_status()` 收口 —— brief 与 overview **必须共用同一份判据**，否则两份口径走岔；④ 护栏里最值钱的一条：**brief 体积 < 完整份的 1/4** —— 它守着「将来有人顺手把重键加回 brief」这条最省事的路；⑤ 统计页专属键在 brief 里**缺席而不是给空值**：缺席让响应如实变小、前端走「数据未接入」空态，空值则会让图表画出一堆零柱子。
+
+### 第 163 期
+
+Komga 兼容层支持只读客户端凭据（**第二种协议接入同一份凭据 = 判据不许有第二种形态**）：① `verify` 拆 `verify_scoped`（返回身份+范围），旧签名原样保留 —— 调用点分批感知，语义不分叉；范围判据与 OPDS（第 160 期）完全同源。② API Key 与会话令牌**不受范围限制**（它们本来就是管理员侧凭据），只对 Basic 的管理员用户名走 `verify_pin`。③ 改签名的波及面比预想大：Komga 段 9 个取书辅助 + 全部 handler 都串了 `request` —— 范围判定必须只经这几条走，漏一条就是越权直连。
+
+### 第 164 期
+
+读路径第二轮审计（重复页 bigram 预筛 / 成就走 brief / 会话查询收敛）（**预筛改判定之前，先量安全下界**）：① 重复页 24 s 的根因是「作者全空 → 2,176 本一个大桶 → 89 万对全量 SequenceMatcher」；修法 = 字符二元组包含率预筛，门限 0.3 来自 7,631 对随机变异的**实测下界 0.25**（再严丢真阳性，再松退化回全量）；A/B 对拍 16.5 s → 6.1 s，SequenceMatcher 仍是唯一判定。② 成就判定切到 `stats.brief()` 时**当场抓出 brief 的真缺陷**：`_classify_status` 被传常量 0.0 ⇒ 按进度兜底的分支永远判不出「已读完」，`test_成就与统计同源` 红 —— 「无状态行走进度兜底」这条路径正是阈值真正起作用的那条，抄调用点时最容易把参数抄丢。③ 会话表的全表拉（`session_feed` / `weekday_histogram`）都能收：前者 `LIMIT` + 分块 IN，后者用 `ended_at >= started_at` 推出**超集下界**（不漏）；但 `reading_day_minutes` 刻意**不收** —— 它的口径是全部历史，year 过滤在 Python 里做是「筛掉其它年」不是「只查那一年」，且只在活动页出现。
+
+### 第 165 期
+
+按正则从文件名提取元数据（**用户输入的执行期正则必须走 saferegex，且「应用」不许信任预览**）：① 命名分组只认 `METADATA_FIELDS`，拼错直接 400 并列出组名（静默无效果比报错难查）；② 空匹配值 = 不写该字段，绝不把「没提取到」当清空；多值字段按 `_parse_tags` 落库、与单书编辑同形；③ `apply` 用服务端重新算，`book_ids` 只作收窄（与实体改名同一条纪律）；④ 可写字段 / 匹配范围由后端 meta 端点下发，前端不静态抄一份；⑤ 基线口径要说明是干净 HEAD 还是主工作区 —— 并行会话的未提交用例会差出十几例。
+
+### 第 167 期
+
+有声书书签（**复用既有数据模型，别为媒体形态另起一套**）：① `anchor = audio:<轨号>:<轨内秒>`、`chapter` = 轨号、`percent` = 整本书百分比（与进度同一把尺子 `lib/unitsProgress`）、`label` = 备注；② 软删除 / 去重 / 墓碑复活全部沿用 `bookmarks` 契约，服务端零改动；③ 列表只认 `audio:` 锚，文本书签不会混进来；④ 单话模式（合集里的一话）不做书签：一话一个播放器实例，书签属于整本书，等合集阅读器那一层再补。
+
+### 第 168 期
+
+有声书单轨「已听」标记（**派生数据要交代清楚来源与边界**）：① 只认 `source='audio'` 的会话 —— 文本阅读器也写 `file_rel`（多文件书的库内相对路径），不筛来源会把书名当轨名；② 单文件书不产生 `file_rel` ⇒ 不显示标记，不猜；③ **没有手动标记入口**：状态只来自真实收听，另立「已听」表立刻与收听数据打架；④ 徽标随会话落库刷新（暂停 / 播完时 `flush().then(loadHeard)`）。
+
+### 第 169 期
+
+倍速 0.5–3 + 睡眠扩展（**`<label>` 里放按钮会吃掉点击**）：① 档位 / 边界常量集中在 `audioPrefs`；细调出的值不在预设档时，下拉必须额外渲染一条 option，否则 select 显示空白；② 睡眠「本轨结束」只拦**自然播完**（手动切轨 / 拖进度是明确操作，不拦），「+15 分钟」按剩余时间延长；③ `<button>` 也是 labelable 元素 —— `<label>` 的点击转发会把「点 +」再转成「点第一个按钮（−）」，+0.05 与 −0.05 互相抵消，界面上永远调不动倍速（vitest 抓到）；含交互控件的行一律用 `<div>`。
+
+### 第 170 期
+
+批量动作收口（单事务批量写 / 自动推送合并 / Komga 集合批量化）（**「逐本 commit」会把「慢」变成「错」**）：① 批量端点改 2,000 本 6.46 s = 逐本判存在性 1.0 s + 逐本 `commit()` 5.5 s，而前端默认超时 15 s ⇒ 界面报「批量操作失败」、服务端其实写完了 —— 这种慢不是体验问题，是**错误反馈**；② 修法不是缓存，是把「逐本提交」换成一条事务（存在性一次 `catalog.alive_ids`，评分 / 状态 / 收藏夹各一个批量函数），判据仍各只有一处（`_norm_stars` / `_status_dates` / `_sync_attempt` 单本与批量共用）；③ 批量写入此前**从不**触发外部服务自动推送而单本会 —— 补的时候必须让 `sync.auto_push` 吃「一串 id」（一次一个线程、一次 `run`），逐本调是几百个线程 + 几百条任务记录；④ `sync.wait_pending` 没在 `_quiesce_background` 里 ⇒ 同步旁路线程会拿已关闭的连接查库，顺手统一契约（返回未结束数 + 清理已结束登记项），否则 `_BG_THREADS == {}` 断言会被任何一次推送污染；⑤ 判「有没有退回逐本提交」用**数提交次数**的结构性用例，别掐秒表。
+
+### 第 171 期
+
+覆盖写入批量事务（工具 → 文件名提取的整库规则）（**「整库套规则」是逐行 commit 最贵的用法**）：① `db.set_override` 一行一次 `commit()` = **2.26 ms/行**（fsync 主导），而「从文件名提取元数据」的典型用法就是整库套一个正则（2,000 本 × 2 字段 ≈ 9.5 s）⇒ 又是顶到前端 15 s 超时的同一类缺陷；② 修法同第 170 期：`db.set_overrides(rows)` 一条事务，两条 SQL（`_OVR_UPSERT` / `_OVR_DELETE`）与归一函数 `_ovr_norm` 抽成模块级常量**单本与批量共用**（判据仍只有一处）；4,000 行 9.5 s → 0.022 s；③ 代价要写进 docstring：整批一个事务 ⇒ DB 级异常时整批失败（同一张表同一条语句，失败必然是系统性的，逐本重试没意义）；④ 判「有没有退回逐行」照旧用**数提交次数**（注意常量里还包含活动日志 / 目录失效那几次，阈值别卡死在 2）。
+
+### 第 172 期
+
+Phase 2A 收口（**播放器的数据先想清楚归属**）：① 「继续收听」= `continueReading` ∩ AUDIO，同一阈值不另算；空行不渲染；「查看全部」带 `?fmt=AUDIO`，书架还要为「选项里没有的格式」补一条 option，否则 select 显示空白；② 按书倍速存 `bookId → speed`，细调后要同步回覆盖值、换书切到该书值；③ M4B 章节只认 `moov/udta/chpl`、按 box 头 seek 只读 `moov`，不退回章节轨、不按大小切；④ ZIP 用**不可 seek 管道 + data descriptor** 流式打包（绝不落临时大文件），归档名带序号防同名覆盖；⑤ 跨页迷你播放器需要全局单例播放器，按 §7.3 单独立项，不做半截。
+
+### 第 173 期
+
+播客订阅内核（**新子系统先问「它属于哪个既有模型」**）：① 播客**不做成库类型** —— 库是「要扫描的目录」，播客是远端 RSS；硬塞会让建库向导要目录、扫描器报空。独立两表、无 book_id；② 只解析 RSS 2.0 + iTunes 扩展，Atom 没有真实样本就明确拒绝；没有 enclosure 的单集不建条目；③ 出网只由显式动作触发（订阅/刷新），http(s) only、20s、8 MiB、跟随重定向；④ 软删订阅按 `feed_url UNIQUE` 复活；刷新 upsert **不复活**用户删过的单集（deleted_at 不进 UPDATE）；⑤ 远端音频要放行 CSP 的 `media-src https:`，否则播放器静默无声。
+
+### 第 174 期
+
+播客订阅管理（**「失败」也是一条要落库的数据**）：① 刷新失败只落账 `last_attempt_at / last_error / fail_count`，**不动**已抓到的单集；成功清零并更新 last_ok_at；② 订阅时同 feed 失败也落账（软删行不记）；③ OPML 只认 `xmlUrl`、去重、上限 500、逐条回报，一条失败不连累其它；④ 批量刷新逐条隔离，失败同样落账；⑤ 导出必须 `quoteattr`（标题里有引号/&），导入限制 2 MB。
+
+### 第 175 期
+
+播客单集下载（**批量行为要有并发上限，清理仍要进回收站**）：① 单进程**一个串行 worker**（队列）—— 「每集一个线程」会在批量 200 集时同时打 200 个连接；② 临时件 + `os.replace` 原子落位、单集 2 GiB 上限；③ 清理复用新增的 `fileops.recycle_path()`（任意文件移入回收站 + 台账），**从不 unlink**；④ 本地播放出口进 `_MEDIA_TOKEN_PATHS`，没本地副本 404 → 前端回退远端地址；⑤ 下载状态只落库（重启后仍对得上）。
+
+### 第 176 期
+
+播客单集播放进度（**「位置」不是「游标」**）：① `position_sec` 只增不减（`MAX(position_sec, ?)`）—— 拖回去重听不改小，下次仍从最远处续；② 听满 95% 记 `played_at`（第一次），手动「标未播」**同时清零位置**，否则「未播却停在 80%」自相矛盾；③ 进度入参必须非负有限数（`numbers.finite`），`inf`/`NaN`/负数 400；④ 播放器 5s 节流上报、`loadedmetadata` 续播（最后 5 秒内不跳）、`ended` 记满；写库失败不影响播放。
+
+### 第 177 期
+
+播客单集书签（**不同主体的同名概念不许共用一张表**）：① 书书签以 `book_id` + 章/CFI 为锚，播客单集不是书 —— 新表 `podcast_episode_bookmarks`（episode_id + 秒唯一），不造假 book_id；② 同秒幂等（更新标题/备注）、软删后再加是复活同一行；③ 位置取整到秒才有去重意义；④ `0:00` 是真实位置，不能复用时长为空串的格式化。
+
+### 第 178 期
+
+播客单集自动连播（**浏览器允许多个音频同时响，没人会替你挡**）：① `ended` 先回写位置/已播再按当前列表顺序连播（列表倒序 ⇒ 下一条 = 更早的一集），开关存 localStorage 默认开；② `play` 时暂停其它所有 `<audio>` 实例 —— 不挡就是两个声音叠在一起且界面无提示；③ 这是**页内**连播，不是跨页全局播放器；后者要提升为 App 级单例（第 172 期单独立项）。
+
+### 第 179 期
+
+体积与加载速度（前端按需化 / 静态预压缩 / 镜像与仓库瘦身）（**「明显的优化」先要证明它不改行为 —— 三条全是评审/全量跑出来的**）：① 只有「点按钮才出现、不占布局、无持久标记」的条件组件才配 `defineAsyncComponent`（本期只有「新建书库」向导）：设置侧栏异步化后 `loadingComponent` 要等默认 `delay`=200 ms 才渲染，空窗里内容先铺满再被推开；而「同宽骨架」得复制「侧栏多宽」的判据（桌面 240 / 折叠 3rem / 抽屉 0）＝ 第二份真值源。首次引导更狠 —— `showTour = true` 与 `markTourSeen()` 在**同一个同步块**，chunk 取不到就整页重载、标记已落盘 ⇒ 引导再也不弹（`markTourSeen` 无回滚点）。② 拆 `lib/charts.ts` 时 ECharts 的注册副作用是靠「各图 import 配色函数」**隐式**触发的，拆完必须把注册**显式绑到 `ChartFrame.vue`**（全站唯一挂 `<VChart>` 的地方）；判据是产物里 `ReadingActivityView-*.js` 不引用 `charts-*.js`。③ 静态预压缩件要**走 `super().get_response(path+suffix)` 发**（ETag / Content-Length / 304 / Range 全部继承），四条边界都得钉：`Range` 与「只带 `If-Modified-Since` 的复验」回落原文件（旁路件与原件同秒共 mtime ⇒ 会把 identity 体标成 gzip）、`.gz`/`.br` 直连 404、`Accept-Encoding` 里 `*` **只兜底不覆盖**显式 `q=0`、304 要补回被 `NotModifiedResponse` 摘掉的编码头。④ 浏览器只在**安全上下文**才报 `br` ⇒ `http://<NAS>` 上真正生效的是 `.gz`，收益是 CPU 不是字节。⑤ 字体 MIME 不能只在导入时 `add_type`：`ebooklib.utils.guess_type()` 会调 `mimetypes.init()` **重建全局库**、把登记冲掉（出版过一本 EPUB 就复发）⇒ 判据收成幂等的 `_ensure_font_types()`，字体请求进来再核一次。⑥ 拆模块时**既有契约用例要跟着搬**（`test_source_url_import` / `test_update_config_contract` 读 `SECTION_KEYS` 的定义处）；新文件不入库会让 `test_source_tracking_contract` 红 —— 先 `git add` 再跑全量。
+
+### 第 180 期
+
+播客播放队列（**队列存「待播」不存「历史」，且存快照不存对象**）：① 快照 = 单集 id + 标题 + 订阅标题，落 localStorage（上限 100、设备级）；播放时按 id 回订阅取**当前**那一集（下载状态/进度会变）；② 入队去重，按加入顺序 shift；③ `ended` 先取队首、队列空才走列表连播；④ 跨订阅播放先切订阅再找单集；⑤ 仍是**页内**队列，跨页迷你播放器按第 172 期单独立项。
+
+### 第 181 期
+
+播客自动下载最新 N 集 + 听完清理本地副本（**「自动」只挂在用户显式刷新之后**）：① 自动下载不是独立调度器 —— 刷新成功后才排最新 N 集，`auto_keep=0` 与 `auto_download=0` 必须互相锁死；② 听完清理只清本地副本、走 `fileops.recycle_path()` 进回收站，进度 / 书签 / 单集元数据都保留；③ 清理触发点只在 `played_at` **首次**落库，重复心跳不能反复清。
+
+### 第 184 期
+
+重复书页 19.4 s 收口（**先比「便宜且必要」的上界/前缀，再上贵的真判定 —— 比加缓存、调阈值都安全**）：① 判「文件内容相同」只需要**同尺寸 + 同首尾**：先比首尾各 64 KiB 的 sha256，只有它相同才逐字节读完（真机 2,309 本里 24 本同尺寸、合计 **3.33 GB**，全读一遍只捞出几组副本）；相同文件必定同尺寸同首尾 ⇒ **必要性判据，漏不了**；首尾同而中间不同 ⇒ 仍读完再判，**误不了**；≤128 KiB 一次读完即全文摘要，别读第二遍。② 判「书名相似 ≥ t」先比 `SequenceMatcher.quick_ratio()` —— 它是 `ratio()` 的**上界**（多重集交集计数、不建匹配块），上界不达标就不必真算：260,204 对 → 8,238 对，5.95 s → **2.69 s**，命中集合**差集 0**。③ 为什么不缓存：329 KB 响应要按阈值 / 书库 / dismiss 三键记，扫描、软删、dismiss 三条路都得记得失效 —— 「把计算变便宜」不需要新失效点；为什么不调预筛门限：会丢真阳性。④ 真机 1.4.5 缺第 162 期 `brief` 与第 163 期 bigram 预筛，**不同源的数字别相减**（同一份书名在两边差一个数量级），只用来定位「谁是大头」。
+
+### 第 182 期
+
+播客单集官方转录（**转录是「按需抓取 + 落库缓存」，不是列表字段**）：① 列表只带 `has_transcript` / `transcript_type`，正文第一次打开才抓，第二次直接读缓存；② SRT / VTT 剥 `WEBVTT` 头、序号行与时间码，JSON 取 `segments` 的 text/body；③ 正文上限 20 万字符；④ 没有转录时如实说明「本项目不做 ASR」，不摆永远打不开的入口。
+
+### 第 183 期
+
+播客版继续收听 + 单集搜索（**「最近在听」要用 `last_played_at`，不是进度或发布时间**）：① 进度写入（心跳 / 手动标已播）时更新 `last_played_at`，续听按它倒序；② 查询 `JOIN podcasts` 且**两侧都带 `deleted_at=0`**（移除订阅后单集不再出现）；③ 续播先切订阅再定位单集，`currentTime` 从上次位置开始；④ 搜索只筛当前订阅，与「全部 / 未播 / 进行中 / 已播」叠加。
+
+### 第 185 期
+
+播客合集（**合集是纯元数据，成员随订阅软删消失、重订阅复活**）：① 成员查询 `JOIN podcasts … deleted_at=0`，计数即时归零但成员行保留；② 合集与书合集分表，不把 `book_id` 语义带进播客；③ 删除合集只删登记，不动任何文件。
+
+### 第 186 期
+
+播客智能播放列表（**「智能范围」与「播放列表」在单集轴上是同一件事**）：① 一张 `podcast_playlists` 同时承载 rules / queue 两种 kind，不造第二套规则引擎；② 操作语义抽到 `scopeOps.ts`，书级 `smartScope` 同批复用；③ 规则求值在前端、取源是全部单集 lite；后端只校验形状，空规则拒绝。
+
+### 第 187 期
+
+播客目录搜索（**默认开、可关、失败降级**）：① 只返回带 `feedUrl` 的结果，按 feed 去重；② 开关四处同步（DEFAULTS / EDITABLE / GET config / settingsFields）且 `SECTION_KEYS.network` 要加段；③ 关闭时端点 403 并说明，不静默空列表。
+
+### 第 188 期
+
+read-along 媒体叠加（**只认 EPUB3 SMIL，不假装支持别的**）：① `chapter_index` 直接取 spine 下标，与进度 / 批注同一坐标；② 缓存失效判据 = 路径 + mtime + size；③ 音频按需提取到缓存、源文件只读；④ `read_aloud_sync` 搬、`book_media_overlays` 不搬（投影）；⑤ 去音频导出写新副本，源文件逐字节不变。
+
+### 第 189 期
+
+EPUB 书内搜索 + 阅读器快捷键（**搜索直接读书文件，不建第二份索引**）：① 每章只返回第一条命中；② 点结果只跳章（片段不保证在当前连续流窗口里，不假装精确滚动）；③ 快捷键在输入框里不生效；④ 百分比跳转把余数交给 `loadChapter` 的 restore，页码只在本章内。
+
+### 第 190 期
+
+通知分页 / 隐藏（**「已读」与「隐藏」是两件事**）：① 隐藏只从通知中心移除，活动日志一条不删；② 分页必须**先过滤隐藏再切 offset**，否则隐藏几条后会跳页；③ 清空活动日志时两套标记一并清。
+
+### 第 191 期
+
+每库扫描历史（**只记手动扫描**）：① 后台定时扫描每轮都发生，写进来会淹掉用户主动扫描；② 每库保留最近 100 行；③ 表按 library_id，不含 book_id，不进 remap。
+
+### 第 192 期
+
+登录 / 登出审计（**失败也是要留痕的事件**）：① 成功 / 密码错误 / 退避拦截都写；② 登出端点只审计，令牌仍无状态，由前端清本地；③ 日期筛选按 `ts_epoch` 且含端点。
+
+### 第 193 期
+
+元数据缓存统计 + 书源搜索健康（**跳过 ≠ 失败**）：① 缓存是进程内 LRU，重启即空；② 被闸门跳过的源不累加失败次数（那是用户的选择）；③ 台账里没有的源静默跳过，不插行。
+
+### 第 194 期
+
+⌘K 命令面板（**面板只是入口，不是第二个操作台**）：① 只做页面 / 设置 / 书名导航，不执行删除等写操作；② 书目取已加载列表，不为打开面板额外拉全库；③ 原 ⌘K「聚焦搜索框」被替换，设置页搜索仍可直接点。
+
+### 第 195 期
+
+PDF 大纲 + 文内搜索（**没有文字层就如实说没找到**）：① pypdfium2 惰性导入，缺依赖只让本功能不可用；② 书签 page=0 表示没有页码目标，只展示不跳；③ 扫描版 PDF 搜不到是事实，不编造结果；④ 不越界做文字层 / 批注（那是独立一大块）。
+
+### 第 196 期
+
+下载文件名模式（**只改 Content-Disposition**）：① 模式只影响浏览器另存为，磁盘成品文件不动；② 展开后走 `sanitize_stem`，清洗成空则回落原名；③ 占位符只有 `{name}` / `{ext}`，不反查书目（避免第二个真值源）。
+
+### 第 197 期
+
+KOReader 未匹配文档（**不新增逐条删除路径**）：① 未匹配 = 文档索引里有、`library.books()` 里没有；② 重建索引本来就整表重算，逐条删除只是同义路径；③ 设备列表仍不做 —— kosync 不携带可辨识设备名，造出来就是假数据。
+
+### 第 198 期
+
+成就提示语（**「还差多少」可以算，「还要几天」算不准就不给**）：① 按 metric 单位算剩余量，已解锁直说；② metric 打错字说「度量名不存在」，不显示假 0；③ 不做 ETA —— 书库类 metric 不随时间累积，给个不准的天数比不给更误导。
+
+### 第 199 期
+
+审计服务端 CSV（**两个导出入口语义不同，不合并**）：① 服务端导出 = 全量匹配 + 原始列（5000 上限），客户端导出 = 已加载页 + 中文列；② CSV 带 BOM 供 Excel；③ 参数与 `/api/logs` 同一套筛选。
+
+### 第 200 期
+
+封面变更审计（**日志写在成功之后**）：① 上传 / URL / 移除三条写路径各留一条 `元数据` 审计；② 失败路径不写成功日志；③ 沿用既有动作枚举，不新增只出现三次的分类；④ 这是留痕，不是封面版本历史。
+
+### 第 201 期
+
+阅读状态 8 档（**上游的 read / on_hold 不另造键**）：① 8 档只用于「标记」与书卡文案，筛选仍收敛三档；② want_to_read 清零日期、rereading 保留开始时间、skimmed 记完成时间；③ Hardcover 仍只上报三档（近似映射会改既有语义）；④ 前端用 `ReadingStatusValue` 单一别名，不在两处各抄 union。
+
+### 第 202 期
+
+作者抓取配置接通（**死配置的判据是「有没有读点」，不是「界面有没有开关」**）：① fetch_bio / fetch_photo / sources 在 `fetch_author` 真实生效；② `enabled` 只挡批量抓取，单作者手动仍可用（与页面既有文案一致）；③ 两个都关直接拒绝，不白跑注定失败的外呼。
+
+### 第 203 期
+
+跨库移动指纹判重（**同内容不是「撞名」**）：① 目标同名文件先比 sha256 两级哈希，内容相同 ⇒ skip，不报 conflict、不建议改名再搬一份；② 只比目标同名文件，不做全库哈希（那会把预检变成全库扫描）；③ 目录型条目不做内容比对。
+
+### 第 204 期
+
+元数据权重可配（**权重只有一份生效值**）：① `_weights(cfg)` = 默认 + 覆盖，只认已知字段与 0–100 实数，坏值忽略；② audit / summary / payload 全走同一份权重；③ `version` 只标注口径、不参与计算，也不自动迁移（权重是用户显式改的）。
+
+### 第 205 期
+
+审计归档按天保留（**按天清理只碰归档，不碰正在写的日志**）：① `max_days` 0=关闭、上限 3650、负值归 0；② 份数与天数任一命中即删；③ mtime 读不到的文件跳过；④ 新增配置键必须同批补 README（`test_docs_ui_paths_contract` 会红）。
+
+### 第 208 期
+
+封面缩略图：判据从「宽度」改成「字节」（**只测编码器、不测判据 —— 量到的百分比只是「如果它会触发」**）：① 真机书封普遍只有 427×600 却重 292 KB（抓来的 JPEG 质量给到 95+），而缩略函数第一句是 `if im.width <= w: return data` ⇒ `?w=480` **原样下发**；第一笔只把编码 JPEG→WebP，8 张合计与改前**逐字节相同**（531K→382K 那个 −28% 是在「已经会重编码的输入」上量的，真实链路一次都没触发）。② 判据换成字节：`REENCODE_OVER = 120 KiB` —— 宽度没超目标但字节超了，就**按原尺寸重压**（不放大），并守住「重编码不比原图大，否则退回原图」；真机 8 张 2,325 KB → **373 KB（−84%）**，一屏 120 张 34.1 MB → 5.5 MB。③ 换编码必须**同步换缓存键代次**（`_COVER_ENCODING`）：旧 JPEG 字节被贴成 `image/webp` + `nosniff` = 浏览器拒显。④ 顺手抓到的真缺陷：注释写着「透明 PNG 铺白底」，代码却只 `convert("RGB")`（丢 alpha ⇒ 透明处 RGB 多为 0 ⇒ 整片发黑）—— 文档声称的行为要用一张透明图验一次。
+
+### 第 209 期
+
+仪表盘偏好同步（**旧载荷缺块时不能把默认值应用下去**）：① 新块 dashboard 进 PREFS_BLOCKS/PAYLOAD_BLOCKS；② store 的本地写入要 notifyPrefsChanged，远端应用要在 suppressing 里；③ `applyPayload` 必须先判断原载荷**有没有** dashboard 块，否则升级后第一次 boot 会用默认布局覆盖本机布局。
+
+### 第 210 期
+
+收藏夹分页（**total 必须与列表 count 同一判据**）：① 分页走 `collection_book_ids` + `by_id_status`，冲突/已消失 id 跳过；② 旧的全量 `GET /api/collections/{cid}` 保持不动；③ 移出成员后重置第一页，避免旧 offset 与列表对不上。
+
+### 第 211 期
+
+书目导出粒度（**「个人数据剥离」是列选择的一种默认预设**）：① 列键 / 中文表头在路由一处定义，未知列 400；② personal=0 从列集合里去掉进度 / 状态 / 评分 / 批注，不和 columns 打架；③ export_rows 加可选库范围参数，默认全部，旧调用逐字不变；④ 页面只暴露两个预设，不复制表视图的整套列定义。
+
+### 第 212 期
+
+书架多级排序（**次级键只在主键相同时介入**）：① 排序规则抽到 `lib/shelfSort.ts`，模板旁不再藏比较逻辑；② `sort2` 空 / 与主键相同 ⇒ 忽略；③ 文本比较沿用 `localeCompare(zh)`、空值排最后；④ 只做两级，三级以上收益低且 UI 挤。
+
+### 第 213 期
+
+镜像瘦身开关 + 构建缓存（**「先 COPY 再 rm」不叫瘦身 —— 判据要落在层与开关上**）：① 704 MB 的构成：venv 191 + Node 125 + apt 72.7（**49 MB 是 Perl**，`postgresql-client-common` 带进来的）+ 基座 ~120；构建 71.8 s 的关键路径是 apt 56.9 s 与 pip 42.7 s（npm/vite 与之并行，串行和 152 s）⇒「装得重」是三套工具链，不是源码。② 两个**默认开启**的 build-arg：`INSTALL_NODE=0`（−125 MB，丢「书源 JS 解密」）、`INSTALL_PG_CLIENT=0`（−63 MB，丢 PG 后端与 `pg_dump` 备份）⇒ 全关实测 **453 MB**。③ node 必须经 `/out/` 中转：「COPY 进运行层再 `rm`」字节已落在下层，镜像不会变小（最像优化、收益为零的写法，用例钉住）。④ 缓存挂载与 `PIP_NO_CACHE_DIR=1` **互斥**：后者把 pip 缓存整个关掉，`--mount=type=cache` 等于白加；去掉它后同环境 `--no-cache` 71.8 → 45.8 s。
+
+### 第 214 期
+
+元数据批量预览控制（**暂停/取消只在两本书之间生效**）：① 正在外呼的那一本不中断（没有可恢复的事务语义）；② 取消保留已取结果，不重试失败本；③ 批量仍是前端逐本循环，不做服务端任务队列。
+
+### 第 215 期
+
+成就展示柜（**只存 key、不存快照**）：① 上限 3、去重、钉选顺序即展示顺序；② 只显示仍解锁的项，未解锁不摆入口；③ 进 achievements 偏好块，旧载荷缺块时不应用默认值（否则升级清空本机展示柜）。
+
+### 第 216 期
+
+自定义图标（**只存 path d，不存完整 SVG**）：① 图标用 v-html 渲染，完整 SVG 会带脚本/on*/外链；② 上限 256 KB / 200 条 / 单条 2 万字符，坏输入 400；③ Icon 组件不逐实例发请求 —— 登录后 App 统一加载，测试无 Pinia 时回落内置表；④ 只支持线条型 path。
+
+### 第 217 期
+
+成就 ETA（**只给能线性推进的累积项**）：① 速度只看最近 30 天真实流水（时长 / 会话 / 读完 / 批注），除 30；② `ceil(剩余/速度)`，最小 1 天；③ 书库规模与连续天数不给 ETA（速度不是用户能稳定推进的）；④ 读不到流水就不给，不编造。
+
+### 第 218 期
+
+智能书架服务端求值（**规则判定只许一份实现**）：① `core/bookrules.py` 同时声明字段 / 操作 / 校验 / 求值，`GET /api/book-rules` 下发清单，前端 `smartScope.ts` 只剩类型与展示；② 计数 / 预览 / `GET /api/books?scope_id=` 共用 `_enriched_cards` + `_rule_context`（状态兜底按书所属库阈值），否则「侧栏 N、点进去 M」；③「为空 / 不为空」不要求填值，非法数值的老规则**不命中**而不是当成全部；④ 自定义书架结果是全量命中，书架页单独处理骨架 / 失败 / 页脚，不给它接「加载更多」。
+
+### 第 219 期
+
+审计遗留三条（**同一判据要覆盖「所有入口」，而不只是主入口**）：① OPDS ×2 与 Komga ×3 的封面端点此前都不传 `w` ⇒ 客户端每本拿约 300 KB 原图（书封才 427×600），而 Web 端第 152 期起就在缩 —— 判据收敛成 `_CATALOG_COVER_WIDTH`（480，WebP 后约 47 KB），用例钉「共有几个调用点、每个都必须带上它」，漏一个（正是缺陷形态）就红；② pip 缓存挂载 `sharing=shared` 在并发构建时可能打印反序列化告警，改 `locked` 的代价只是两个构建排队；③ 结构性小修（`const` 夹在 import 之间）**单独一笔**，别混进行为改动 —— 否则 review 时分不清哪行有语义。
