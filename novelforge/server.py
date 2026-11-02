@@ -6010,7 +6010,11 @@ def api_add_session(payload: dict = Body(...)):
     import time as _time
 
     bid = str(payload.get("book_id") or "")
-    if not any(b["id"] == bid for b in library.books()):
+    # 第 226 期：原来为了「这本还在吗」**扫一遍全库**（2,309 本 ⇒ 一次全量物化），
+    # 只为回答一个是非题。`library.by_id` 是**带索引的一条 SELECT**（第 62 期起）。
+    # 同名冲突时它抛 `BookIdConflict` ⇒ 全局处理器翻成 **409 + 修复入口**（第 128 期口径），
+    # 与其它按 id 取书的接口一致 —— 冲突书**不该**继续记进度（会写到不明的那本上）。
+    if library.by_id(bid) is None:
         raise HTTPException(404, "书不存在或已被移除")
 
     try:
@@ -6300,12 +6304,17 @@ def api_series_detail(name: str):
 @app.get("/api/series/{name}/meta")
 def api_series_meta(name: str):
     """系列元数据：生效值 + 逐字段明细（编辑器渲染「已本地修改 / 恢复在线」用）。"""
-    if not library.series_books(name):
+    # 第 226 期：第 152 期已把系列详情页的 4 遍全库扫描收成 1 遍并传参复用，
+    # 但这三个**兄弟端点**没跟着改 —— 它们各自 `series_books(name)`（= 全库扫描）
+    # 一次，`effective` / `state` 内部又各扫一次 ⇒ 一个请求扫 3 遍。
+    # `effective(name, books)` / `state(name, books)` 本就收 books 参数，照用即可。
+    rows = library.series_books(name)
+    if not rows:
         raise HTTPException(404, "系列不存在")
     return {
         "ok": True,
-        "meta": series_meta.effective(name),
-        "state": series_meta.state(name),
+        "meta": series_meta.effective(name, rows),
+        "state": series_meta.state(name, rows),
         "fields": list(series_meta.FIELDS),
         "labels": series_meta.LABELS,
     }
@@ -6317,7 +6326,9 @@ def api_set_series_meta(name: str, payload: dict = Body(...)):
 
     与作者侧同一语义：用户改过的不会被再次抓取冲掉。
     """
-    if not library.series_books(name):
+    # 第 226 期：同上面的 GET —— 一次扫描，复用给 `series_meta.state`（见该函数签名）。
+    rows = library.series_books(name)
+    if not rows:
         raise HTTPException(404, "系列不存在")
     p = payload or {}
     unknown = [k for k in p if k not in series_meta.FIELDS]
@@ -6331,16 +6342,19 @@ def api_set_series_meta(name: str, payload: dict = Body(...)):
         raise HTTPException(400, str(e))
     activity_log.log(activity_log.ACTION_METADATA, name, activity_log.STATUS_OK,
                      detail="编辑系列元数据：" + "、".join(sorted(p)), source="api")
-    return {"ok": True, "meta": meta, "state": series_meta.state(name)}
+    return {"ok": True, "meta": meta, "state": series_meta.state(name, rows)}
 
 
 @app.post("/api/series/{name}/fetch")
 def api_fetch_series_meta(name: str):
     """抓取单个系列的在线元数据。**失败不抛** —— 抓不到就如实回「未找到」。"""
-    if not library.series_books(name):
+    # 第 226 期：同上面的 GET —— 一次扫描。
+    rows = library.series_books(name)
+    if not rows:
         raise HTTPException(404, "系列不存在")
     res = series_meta.fetch_one(name)
-    return {"ok": bool(res.get("ok")), "result": res, **series_meta.effective(name)}
+    # 第 226 期：`effective` 传 rows（复用同一份成员书目，不再自己扫一遍）
+    return {"ok": bool(res.get("ok")), "result": res, **series_meta.effective(name, rows)}
 
 
 @app.post("/api/series/fetch-all")
@@ -9545,7 +9559,11 @@ def api_maintenance():
             # 单独列一份是让「清理在线缓存」这个按钮能如实报出「要腾掉多少」。
             "online_cache": online_mod.cache_stats(),
         },
-        "library": {"books": len(library.books())},
+        # 第 226 期：原来用「全库书目列表的长度」数书 —— 一次**全量物化**
+        # （SELECT + 覆盖层 2 查询 + 2,309 行拼装）只为一个整数。改用 `catalog.totals`
+        # 的一次 COUNT，并只统计**当前登记**的库（口径与 `books()` 一致：
+        # 已移除库的残留索引行不算进来 —— 范式同 `/api/libraries` 的 `totals`）。
+        "library": {"books": catalog.totals([l.get("id") for l in library.libraries()])["books"]},
     }
 
 
@@ -9769,7 +9787,9 @@ def _orphans() -> dict:
         total += len(bad)
         tables[name] = {"books": len(bad), "sample": bad[:10]}
     return {"tables": tables, "total": total,
-            "library_books": len(library.books())}
+            # 第 226 期：同「维护概览」—— 一次 COUNT 代替一次全库物化
+            # （口径一致：只数当前登记的库）。
+            "library_books": catalog.totals([l.get("id") for l in library.libraries()])["books"]}
 
 
 @app.get("/api/maintenance/orphans")
@@ -11194,7 +11214,9 @@ def ko_series_one(request: Request, series_id: str):
         _ko_404("系列不存在")
     name, items = found
     # 单系列查询：完整分层（含成员书聚合），成本可接受
-    return komga_api.series_dto(name, items, series_meta.effective(name),
+    # 第 226 期：`effective` 把**已有的成员书 items** 传进去 —— 它内部本来会自己
+    # 再扫一遍成员书目（等于同一个请求里扫两次）。
+    return komga_api.series_dto(name, items, series_meta.effective(name, items),
                                 komga_api.threshold_resolver())
 
 

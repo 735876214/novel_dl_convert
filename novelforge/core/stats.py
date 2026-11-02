@@ -443,7 +443,11 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     # 元数据侧取 metascore 的达标本数（阈值 = 已公示的分档边界 70）。
     # audit 的返回值这里要**用全**：既取 score（下面算达标率），也取 present（下面算
     # 逐字段覆盖率）—— 第 33 期之前只取 score，等于把已经算好的字段命中信息扔了。
-    audits = [metascore.audit(b) for b in bs]
+    # ⚠️ 第 226 期：**权重只算一次**再逐本传进去 —— 不传时 `audit` 每本都会读一遍
+    # config.yaml + settings.json（2,309 本 ⇒ 一个请求读 2,309 次 YAML）。范式照抄
+    # `metascore.payload`（它早就是这么做的）。
+    _w = metascore.weights()
+    audits = [metascore.audit(b, _w) for b in bs]
     scores = [a["score"] for a in audits]
     metadata_ok = sum(1 for s in scores if s >= metascore.METADATA_OK)
 
@@ -761,7 +765,7 @@ def overview(days: int = 28, top: int = 8, library_id: str = "") -> dict:
     # **刻意不跟随 library_id**（见文件头第 2 条）：切库时另取全库书目做横向对比，
     # 全库时直接复用上面那一份（同一次扫描结果，不重扫盘）。
     scope = bs if not lid else library.books()
-    scope_audits = audits if not lid else [metascore.audit(b) for b in scope]
+    scope_audits = audits if not lid else [metascore.audit(b, _w) for b in scope]
     lib_hits: dict = {}
     lib_n: dict = {}
     for b, a in zip(scope, scope_audits):

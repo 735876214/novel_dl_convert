@@ -61,6 +61,11 @@ def _weights(cfg: dict = None) -> dict:
 
     只认**已知字段**且值可转为 0–100 的实数；坏值忽略（不把配置错误变成负分 / 500）。
     `metadata_score.version` 只用于标注「这批分数按哪版权重算的」，不参与计算。
+
+    ⚠️ **每次调用都会读一遍 config.yaml + settings.json**（`config.load_config()`）——
+    单次调用很便宜，但**逐本调用**就是「每本书读一次盘」（第 226 期审计：2,309 本的书库
+    ⇒ 一个 `/api/stats` 请求读 2,309 次 YAML）。批量评分请像 `payload` 那样**算一次、
+    传给 `audit(b, weights)`**。
     """
     global _DEFAULT_WEIGHTS
     if _DEFAULT_WEIGHTS is None:
@@ -85,6 +90,19 @@ def _weights(cfg: dict = None) -> dict:
             if 0 <= f <= 100:
                 out[k] = round(f, 2)
     return out
+
+
+def weights(cfg: dict = None) -> dict:
+    """**生效权重**（`metadata_score.weights` 覆盖后的那一份）—— 给批量评分用。
+
+    为什么要有这个公开入口：`_weights()` 每次调用都读一遍 config.yaml + settings.json
+    （`config.load_config()`），单次很便宜、**逐本调用就是每本书读一次盘**
+    （第 226 期审计：2,309 本 ⇒ 一个 `/api/stats` 读 2,309 次 YAML）。
+    ⇒ 批量路径请**算一次、传给 `audit(b, weights)`**（`payload` 与 `stats.overview` 都这么做）。
+
+    读配置失败时按默认权重继续（不把配置错误变成 500）—— 与 `_weights` 同一口径。
+    """
+    return _weights(cfg)
 
 
 def _weight_version(cfg: dict = None) -> int:
@@ -194,7 +212,11 @@ def _applicable(b: dict, weights: dict) -> float:
 
 
 def audit(b: dict, weights: dict = None) -> dict:
-    """单本评分：得分 + 已命中 / 缺失字段（缺的按权重从高到低排，便于按优先级补）。"""
+    """单本评分：得分 + 已命中 / 缺失字段（缺的按权重从高到低排，便于按优先级补）。
+
+    ⚠️ **批量调用请先算一次 `weights()` 传进来** —— 不传时每本都会读一遍 config.yaml
+    （第 226 期审计：2,309 本 ⇒ 一次 `/api/stats` 读 2,309 次 YAML）。`payload` 就是这么做的。
+    """
     weights = _weights() if weights is None else weights
     earned = 0.0
     present: list = []
