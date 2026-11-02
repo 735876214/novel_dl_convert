@@ -44,6 +44,14 @@ const configFileError = ref('')
  * 用户在设置页看到的也是默认值 —— 不说出来，他会以为自己的设置还在。
  */
 const badSections = ref<string[]>([])
+/**
+ * **不认识的**配置键（第 261 期，空 = 没有）。
+ *
+ * ⚠️ 那些键**不会被任何读点消费** ⇒ 写了等于没写（最常见是**拼错**：
+ * `watcher.interva` 而不是 `watcher.interval`）⇒ 不说出来 ⇒ 用户改完
+ * 发现「没生效」却查不出原因。
+ */
+const unknownKeys = ref<string[]>([])
 
 /**
  * 服务端配置的**深拷贝基线**（每次加载/保存成功后刷新）。
@@ -119,6 +127,12 @@ export function useSettingsConfig() {
           (r.config as unknown as Record<string, unknown> | undefined)?._bad_sections,
         )
           ? (((r.config as unknown as Record<string, unknown>)._bad_sections) as string[])
+          : []
+        // 第 261 期：**不认识的键**（多半是拼错的 ⇒ 那个设置**静默失效**）。
+        unknownKeys.value = Array.isArray(
+          (r.config as unknown as Record<string, unknown> | undefined)?._unknown_keys,
+        )
+          ? (((r.config as unknown as Record<string, unknown>)._unknown_keys) as string[])
           : []
         baseline.value = clone(r.config)
         overridden.value = r.overridden ?? []
@@ -239,6 +253,7 @@ export function useSettingsConfig() {
     loadError,
     configFileError,
     badSections,
+    unknownKeys,
     // 未保存改动（草稿 vs 基线）
     dirtySections,
     hasDirty,

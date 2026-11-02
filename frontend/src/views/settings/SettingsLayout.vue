@@ -130,6 +130,22 @@ function discardAll(): void {
           </div>
         </div>
 
+        <!-- ⚠️ 第 261 期：**不认识的键**（多半是拼错的 ⇒ 那个设置**静默失效**）。
+             不说出来 ⇒ 用户改完发现「没生效」却查不出原因。 -->
+        <div
+          v-if="cfgDraft.unknownKeys.value.length"
+          class="mb-3 flex items-start gap-2 rounded-[10px] border border-destructive/30 bg-destructive/10 px-3.5 py-2 text-[12px]"
+          role="alert"
+        >
+          <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" aria-hidden="true" />
+          <div class="min-w-0">
+            <div class="font-medium text-foreground">配置里有不认识的键，那些设置不会生效</div>
+            <div class="break-words text-muted-foreground">
+              {{ cfgDraft.unknownKeys.value.join('、') }}（多半是拼错了 —— 这些键没人读）
+            </div>
+          </div>
+        </div>
+
         <RouterView />
       </div>
     </div>
