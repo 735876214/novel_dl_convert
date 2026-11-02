@@ -12604,3 +12604,78 @@ sync.HARDCOVER_GRAPHQL          = "https://api.hardcover.app/v1/graphql"
 - **选真值源要看依赖方向**：`integrations` 只 import httpx ⇒ 它是最底层、可以当别人的依赖；
   若它反过来 import 了 `sync`，收敛就会造成循环导入。用例钉住「它保持叶子模块」。
 
+## 第 232 期（404 断言补齐 + 四处行号敏感的源码断言改写）
+
+**需求来源**：持续审计任务（每小时触发）的第二轮收尾。上一轮（第 230 期）修了
+「Hardcover 端点抄三份」；本轮补上它遗留的另一半 —— **「接口 404 断言」齐不齐**。
+
+### A. 「接口 404 断言」：全仓唯一违反点已补
+
+用 `git log --all -p | grep '^-@app\.'` 程序化还原 `server.py` 历史上**所有被删除的路由**，
+再逐条到 `tests/` 找 404 断言：
+
+- **已钉住的 6 组**：`/api/requests/config`（求书）、`/api/library-facets`（第 95 期）、
+  `GET /content`（第 97 期）、`/api/metadata/sources`、`/api/rename/preview|apply`、
+  `/api/opds/sources` —— 齐备。
+- **真缺陷**：`/api/library-migrations/*` **七个端点**（preview / plan / apply / rollback /
+  batches / dismiss / reset-gate，第 77 期 `b5503bc` 删）—— 删除时
+  `core/migrate.py:10` 与 `server.py:6822` 的**注释**记得，但 `tests/` **零命中**。
+  这是全仓**唯一**「删了整组端点却没有 404 断言」的情况，与 AGENTS §1
+  「删功能要一处不落（含『接口 404』断言）」直接相悖。
+  ⇒ 补 `tests/test_api_smoke.py::test_按格式归库端点已随第77期移除`（七个 method+path 逐个断 404）。
+- **明确不做**：早期非 `/api` 路径（`POST /search`、`POST /download`、`GET /supported`、
+  `GET /files`、`GET /sources`、`/convert-path-form`）下线时没有 404 断言 ——
+  那批删除**早于 404 断言纪律确立**（`142ed62` / `cd091d9`），且 `/download` 现在是**活路由**
+  （`server.py:2388` 的 `/download/{name:path}`，书下载）。给从未被断言过的历史路径补断言，
+  等于追认当初就该有，且有把**活路由**误判成死路由的风险 ⇒ 不补，理由写在这里。
+
+其余专项：`/api/scan` **没删**（`server.py:8072`，前端 `api.ts:3793` 在调）；
+`/api/convert`、`/api/tags`、`/api/settings`、`/api/dashboard`、`/api/scrape/tasks`
+**从未存在过**；`/api/books/{bid}/online/*` 全套活着且有 404 用例（`test_online_bind.py` 等）。
+
+### B. 顺带修掉一个**测试写法本身**的脆弱：行号敏感的源码断言
+
+第 230 期给 `metasources.py` 加了 3 行注释 + 1 行 import（+3 −1 行）⇒ 后续函数行号偏移。
+全量跑时 `test_metasources_scrape.py` 红了：
+
+```
+AssertionError: _search_goodreads 应当经 _get_text 出网
+  （实际截出来的是 _rsc_series 的源码）
+```
+
+**这不是偶发** —— `inspect.getsource(fn)` 读**磁盘上的当前文件**并按 `co_firstlineno` 定位，
+**文件在进程启动后被任何人改动过**（哪怕只加两行注释）就会截出别的函数。
+⇒ 全仓 4 处同类断言一并改掉：
+
+| 用例 | 原写法 | 改成 |
+|---|---|---|
+| `test_metasources_scrape` | `getsource(fn)` 找 `_get_text(` | `fn.__code__.co_names` / `co_consts` |
+| `test_hardening_137_concurrency` | `getsource(fn)` 找 `_bid_guard(` | 同上 |
+| `test_sources_registry` | `getsource(...search)` 找 `NotImplementedError` | `co_names` |
+| `test_download_kind` | `getsource(_run_download)` 找整句条件 | **字节码**（`dis`）：`COMPARE_OP` + `"text"` 常量 + `WATCHER` 名字 |
+
+最后一处只能用字节码：`if kind == "text" and WATCHER is not None:` 在运行时是**比较表达式**，
+不是字面量常量 ⇒ `co_consts` 里没有那句整串。
+
+**判据本身也验过**（防止变成永远绿的空壳）：用「故意改坏的假函数」逐条测 —— 正常函数全 True、
+改坏的全 False，四处都能抓到违规。
+
+### C. 这一轮顺带核过的（零发现）
+
+- **配置键一致性**：`EDITABLE ⊆ DEFAULTS`（段内键也逐个核），24 个顶层键，唯一不在 `EDITABLE`
+  的是 `scrape`（只读段，正常）。
+- **前端 ↔ 后端路由**：426 条后端路由 × `frontend/src/lib/api.ts` 的 231 条调用 ⇒ **零孤儿**
+  （`/opds/*`、`/koreader/*`、`/api/v1/*` 等外部客户端路径除外）。
+- **文档 ↔ 代码**：user-guide / project-overview / README 里出现的端点与配置键逐条核实，
+  3 条疑似命中全是占位符写法差异（误报）。
+
+**核验**：后端全量 3071 例（3043 passed / 14 skipped / 13 例本机环境项）；
+前端未改（纯后端与测试改动）。
+
+**这一轮的教训**
+
+- **「源码级断言」看着稳，其实脆** —— 它把「文件内容」与「行号」绑在一起，而这两个都会变。
+  判据要落在**代码对象 / 字节码**上（与文件、与行号都无关）。
+- 审计发现的「单跑绿、全量红」要先分清是**谁**造成的：这一轮 3 例里，1 例是我改文件引起的
+  行号漂移（真问题，已修），2 例是并行会话的在途改动（不是回归）。
+
