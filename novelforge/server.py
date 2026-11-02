@@ -6814,7 +6814,7 @@ def api_import_koreader_annotations(apply: int = 0):
 
 @app.post("/api/annotations/export-koreader")
 def api_export_koreader_annotations(payload: dict = Body(...)):
-    """把一本书的批注**导出成 KOReader 的批注文件**（第 234 期，反向那一半）。
+    """把一本书的批注**导出成 KOReader 的批注文件**（第 236 期，反向那一半）。
 
     ⚠️ **写的是用户设备上的文件** —— 只写 KOReader 自己的导出位点
     （`core/koreader_anno.export_paths_for`：书的旁边 / 书的 sidecar 目录）。

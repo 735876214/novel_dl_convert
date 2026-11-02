@@ -26,7 +26,7 @@ const props = defineProps<{ annotations: Annotation[]; bookId: string }>()
  */
 const emit = defineEmits<{ go: [Annotation] }>()
 
-// ---- 导出成 KOReader 的批注文件（第 234 期）----
+// ---- 导出成 KOReader 的批注文件（第 236 期）----
 //
 // ⚠️ **写的是用户设备上的文件** —— 所以默认**只算不改**（预览），
 // 用户点了「写出」才落盘。
@@ -62,7 +62,7 @@ async function confirmExport(): Promise<void> {
 
 <template>
   <div>
-    <!-- 导出成 KOReader 的批注文件（第 234 期）：反向那一半 -->
+    <!-- 导出成 KOReader 的批注文件（第 236 期）：反向那一半 -->
     <Card v-if="annotations.length" class="mb-3" padding="sm">
       <div class="flex flex-wrap items-center gap-2">
         <div class="min-w-0 flex-1">

@@ -1871,7 +1871,7 @@ export interface TtsStatus {
   has_key: boolean
 }
 
-/** KOReader 批注**导出**（`POST /api/annotations/export-koreader`）的返回（第 234 期）。 */
+/** KOReader 批注**导出**（`POST /api/annotations/export-koreader`）的返回（第 236 期）。 */
 export interface KoreaderExportPlan {
   ok: boolean
   /** 已落盘（`apply=1`）才是真；预览时为假 */
@@ -5524,7 +5524,7 @@ export const api = {
    * 导入是幂等的，但**永不删除** —— 格式里没有墓碑。
    */
   /**
-   * 把一本书的批注**导出成 KOReader 的批注文件**（第 234 期，反向那一半）。
+   * 把一本书的批注**导出成 KOReader 的批注文件**（第 236 期，反向那一半）。
    *
    * ⚠️ `apply=false` 只算不改（返回文件预览）；`apply=true` 才落盘。
    */
