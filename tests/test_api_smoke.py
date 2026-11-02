@@ -163,7 +163,12 @@ def test_书库列表不再有默认库(client, auth_headers, test_lib_id):
     assert "source_dirs" in items[0]
     # 新建向导按已配置来源根浏览 / 下钻
     assert any(r["path"] == str(pathlib.Path(config.LIBRARY_SOURCE_ROOTS[0]["path"])) for r in data["source_roots"])
-    assert {t["value"] for t in data["types"]} == {"ebook", "comic", "audiobook", "mixed"}
+    # ⚠️ 第 239 期：原先写死 4 个类型值 —— 加一种库类型就先红一次 CI。
+    # 改成与**真值源**（`core/migrate.TYPE_LABELS`，后端 `server._LIB_TYPE_LABELS` 转发它）
+    # 比对：既不写死，又能在真值源改了时立刻红。
+    from novelforge.core.migrate import TYPE_LABELS
+
+    assert {t["value"] for t in data["types"]} == set(TYPE_LABELS)
 
 
 def test_一个书库都没有时列表真的为空(client, auth_headers, test_lib_id):
