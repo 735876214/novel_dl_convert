@@ -957,6 +957,32 @@ def service_worker():
     )
 
 
+def _health_probe(fn, default, *, name: str):
+    """跑一个探针，**它抛异常也不许让 `/health` 挂掉**。
+
+    ⚠️ 第 257 期：探活端点是**最后一道能说话的地方** ——
+    Docker HEALTHCHECK 只判 HTTP 200 ⇒ `/health` 一旦 500，
+    编排层就会**反复重启容器**（而服务其实好好的，只是某个探针炸了）。
+    ⇒ 每个探针**各自兜住**：抛异常的那一个**降级成它的兜底值**
+    （探不出 = 不好），其余照旧回话。
+
+    ⚠️ **降级要留痕**：异常写进 `problems`（用户看得到「哪一项探针坏了」），
+    否则「探针自己炸了」会被伪装成「那项正常」。
+
+    ⚠️ 判据**只有一处**（这里）—— 别在别处再包一遍 try。
+    """
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001 —— 探活不许因任何一项检查抛异常而失声
+        logging.getLogger("novelforge").exception("健康检查探针 %s 抛异常：%s", name, e)
+        _probe_failures.append(f"{name}: {type(e).__name__}: {e}")
+        return default
+
+
+#: 本轮 :func:`_health_checks` 里**探针自己抛了**的那些（人话清单，进 `problems`）。
+_probe_failures: list = []
+
+
 def _health_checks() -> dict:
     """三个真探针 + 两条配置侧的实情（第 141 期）。
 
@@ -966,23 +992,35 @@ def _health_checks() -> dict:
     回 503 只会让 compose 无限重启、把「能读的服务」变成「一直重启的服务」。
     所以：不可服务 ⇒ 503 + `status="down"`；能服务但有毛病 ⇒ 200 + `status="degraded"`
     + `checks` 明细 + `problems` 人话清单。
+
+    ⚠️ 第 257 期：**整体兜一层**（此前只有「读配置」那一处兜过）。
+    探活端点是**最后一道能说话的地方** ⇒ 任何一项检查抛异常都**不许**让它 500
+    （500 ⇒ HEALTHCHECK 失败 ⇒ 编排层**反复重启容器**，而服务其实好好的）。
+    ⇒ 每项探针经 :func:`_health_probe` 各自兜住，坏的那项**降级**，
+    其余照旧回话；**降级要留痕**（进 `problems`）。
     """
+    global _probe_failures
+    _probe_failures = []
     overrides_err = config.overrides_error()
     checks = {
-        "db": db.ping(),
-        "config_dir_writable": os.access(str(config.CONFIG_DIR), os.W_OK),
-        "watcher_running": bool(WATCHER and WATCHER.is_running()),
-        "cache": cache.health(),
-        "dirs_ok": not config.dirs_failed(),
-        "config_yaml": not config.config_error(),
+        "db": _health_probe(db.ping, False, name="db"),
+        "config_dir_writable": _health_probe(
+            lambda: os.access(str(config.CONFIG_DIR), os.W_OK), False, name="config_dir_writable"),
+        "watcher_running": _health_probe(
+            lambda: bool(WATCHER and WATCHER.is_running()), False, name="watcher_running"),
+        "cache": _health_probe(cache.health, "none", name="cache"),
+        "dirs_ok": _health_probe(lambda: not config.dirs_failed(), False, name="dirs_ok"),
+        "config_yaml": _health_probe(lambda: not config.config_error(), False, name="config_yaml"),
         # 第 144 期：目录可写 ≠ 设置读得出来。以 root 首跑留下 `root:root 0600` 的
         # settings.json 后按 compose 注释切 `user:`，就落进「设置全回落默认值 + 保存报错
         # + /health 全绿」的三角 —— 这也是 compose 那个开关的隐藏雷区。
-        "settings_readable": overrides_err is None,
+        "settings_readable": _health_probe(
+            lambda: overrides_err is None, False, name="settings_readable"),
         # 第 144 期：默认口令还在用（局域网 8992 直通，等于口令公开）。
-        "default_pin": not auth_mod.uses_default_pin(),
+        "default_pin": _health_probe(
+            lambda: not auth_mod.uses_default_pin(), True, name="default_pin"),
         # 第 248 期：Pillow 在不在（缺它 ⇒ 封面缩略 / 上传验图 / PDF 页渲染不可用）。
-        "pillow": imaging.available(),
+        "pillow": _health_probe(imaging.available, False, name="pillow"),
     }
     problems = []
     if not checks["db"]:
@@ -1006,13 +1044,14 @@ def _health_checks() -> dict:
             _watcher_on = True
         if _watcher_on:
             problems.append("收书监听没在跑（新文件不会被自动收进来）")
-    for d in config.dirs_failed()[:3]:
+    for d in _health_probe(lambda: config.dirs_failed(), [], name="dirs_failed")[:3]:
         problems.append(f"目录建不出来：{d}")
-    if config.config_error():
-        problems.append(f"config.yaml 读不出来，当前按默认值运行：{config.config_error()}")
+    _cfg_err = _health_probe(config.config_error, None, name="config_error")
+    if _cfg_err:
+        problems.append(f"config.yaml 读不出来，当前按默认值运行：{_cfg_err}")
     # 第 252 期：段类型写坏 ⇒ 该段已按默认值跑（服务**还能用**，但那段的设置没生效）。
     # 这不是「整个配置读不出来」，是**另一件事** ⇒ 单独一条、说清是哪些段。
-    for k in config.bad_sections():
+    for k in _health_probe(config.bad_sections, [], name="bad_sections"):
         problems.append(f"配置的「{k}」段类型不对（应为键值映射），该段已按默认值运行")
     if overrides_err is not None:
         problems.append(
@@ -1025,11 +1064,24 @@ def _health_checks() -> dict:
     # 三件事会不可用，但书架、阅读、元数据都不受影响。
     if not checks["pillow"]:
         problems.append(imaging.REASON + "（封面缩略图、封面上传校验、PDF 页渲染不可用）")
+    # ⚠️ 第 257 期：**探针自己抛了**的那些也要说出来 ——
+    # 否则「探针炸了」会被伪装成「那项正常」（例如 `default_pin` 的探针炸了
+    # ⇒ 降级成「没人在用默认口令」⇒ **恰恰掩盖了它本该报告的那件事**）。
+    for msg in _probe_failures:
+        problems.append(f"健康检查探针自身出错（该项按「探不出」处理）：{msg}")
     return {"checks": checks, "problems": problems}
 
 
 @app.get("/health")
 def health(response: Response):
+    """探活端点 —— **必须永远能回话**（第 257 期）。
+
+    ⚠️ Docker HEALTHCHECK 只判 HTTP 200 ⇒ 这里一 500，编排层就会**反复重启容器**
+    （而服务其实好好的，只是某个探针炸了）⇒ 探活端点是**最后一道能说话的地方**。
+
+    ⇒ 每一项都可能出错的地方都经 :func:`_health_probe` 兜住（判据只有那一处）：
+    探针抛异常 ⇒ 那项**降级**（按「探不出」算）+ 说进 `problems`，**其余照旧回话**。
+    """
     hc = _health_checks()
     down = not hc["checks"]["db"]
     if down:
@@ -1044,8 +1096,9 @@ def health(response: Response):
         # 应用版本（**只读**、免鉴权端点，不含任何敏感信息）；前端 About / 更新日志据此渲染
         "version": APP_VERSION,
         # 是否挂了 docker.sock（决定「一键更新」可用与否）；侧栏据此决定是否挂 new 提示
-        "updater_available": updater.updater_available(),
-        "logs": str(activity_log.log_dir()),
+        "updater_available": _health_probe(
+            updater.updater_available, False, name="updater_available"),
+        "logs": str(_health_probe(activity_log.log_dir, "", name="log_dir")),
     }
 
 
