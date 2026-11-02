@@ -68,15 +68,17 @@ def _seed_dock(root: pathlib.Path, name: str = "预览.epub") -> str:
 # 纯函数：元数据探测与查重
 # ---------------------------------------------------------------------------
 
-def test_探测元数据_坏文件不抛():
-    """坏 EPUB ⇒ 空元数据（预览要能继续，不能因一个坏文件炸掉）。"""
-    bad = pathlib.Path("C:/Users/qingr/AppData/Local/Temp/nf-bad.epub")
+def test_探测元数据_坏文件不抛(tmp_path):
+    """坏 EPUB ⇒ 空元数据（预览要能继续，不能因一个坏文件炸掉）。
+
+    ⚠️ 第 233 期修：原用例把**开发者本机的绝对路径**写死
+    （`C:/Users/qingr/AppData/Local/Temp/nf-bad.epub`）⇒ 本机绿、**CI（Linux）必红**
+    （`FileNotFoundError`，见 CI run 41388057583）。改用 pytest 的 `tmp_path` 夹具。
+    """
+    bad = tmp_path / "坏文件.epub"
     bad.write_bytes(b"not a zip")
-    try:
-        meta = dockpreview._probe_meta(bad)
-        assert meta == {} or meta.get("unparsable")
-    finally:
-        bad.unlink(missing_ok=True)
+    meta = dockpreview._probe_meta(bad)
+    assert meta == {} or meta.get("unparsable")
 
 
 def test_查重_同书名同作者算重复(client, auth_headers, isolated, tmp_path,
