@@ -12133,3 +12133,40 @@ psycopg=PG 后端、pypdfium2=PDF、quickjs=书源 JS、rarfile=CBR…）。砍�
 **顺手核对（不新做）**：受管副本批量改名已由刮削「命名规则 → 重出版」覆盖（`scrape.plan_naming` / `republish`：预览、冲突拒绝、`remap_book_id`），**不另建第二个入口**；已在 TODO 的 Phase 1 剩余项里如实标注。
 
 **核验**：后端全量（见 §0 基线）；前端四连（91 spec / 852 例）。
+
+## 第 219 期（审计遗留三条（目录客户端封面 / pip 缓存锁 / App.vue 结构））
+
+**需求来源**：用户「都修掉」—— 第 213 期复盘审计里标为「发现但没改」的三条，本期一次收尾。
+
+**改了什么**
+
+1. **目录客户端一直在拿原图**（最实质的一条）。这**五个**端点此前都调
+   `api_book_cover(bid)` 而**不传 `w`**：`/opds/cover/{bid}`、`/opds/lib/{lid}/cover/{bid}`、
+   `/api/v1/books/{id}/thumbnail`、`/api/v1/series/{id}/thumbnail`、
+   `/api/v1/collections/{cid}/thumbnail`。
+   真机书封只有 427×600 却重约 300 KB ⇒ 客户端列几百本系列就是几十 MB，
+   而 Web 端早就在用 `?w=480`（第 152 期）。
+   判据收敛成 `server._CATALOG_COVER_WIDTH = 480`（与 Web 卡片同宽，WebP 后约 47 KB），
+   五个调用点全部带上 —— **同一判据只有一处**，别再让某个端点自己决定宽度。
+   用例 `tests/test_cover_thumb.py::test_目录类客户端也要缩略封面` 钉的是
+   「共有几个调用点、每个都必须带它」：漏一个（正是本期的缺陷形态）立刻红。
+2. **pip 缓存挂载 `sharing=shared` → `sharing=locked`**：并发构建时 pip 的 http 缓存
+   可能打印反序列化告警（不致命但会淹没日志）；锁住的代价只是两个构建排队。
+   本地 `docker build` 复验通过（`sharing=locked` 被 BuildKit 接受）。
+3. **`App.vue` 的 `const LibraryWizard` 从 import 语句中间挪到导入块之后**。纯结构：
+   ES 里合法、`vue-tsc` 也过，但把「常量定义」夹在 import 之间读起来像漏了什么。
+
+**核验**：`tests/test_cover_thumb.py` + Komga + OPDS 相关用例共 **44 例通过**；
+`vue-tsc` exit 0、`App.spec.ts` 4 例通过；`docker build`（含 `sharing=locked`）通过；
+后端全量 3001 例（2974 passed / 14 skipped / 13 例本机环境项）。
+
+**边界（如实写）**
+
+- 目录客户端的封面**固定 480 宽**、编码 WebP，**不做 `Accept` 协商**（与 Web 同一判据）。
+  代价是「极老的、不认 WebP 的客户端」会显示不出图 —— 2026 年可视为不存在
+  （KOReader / Komga 各客户端都直解 WebP）。要做协商就等于多一份缓存键 + 一条回退分支，
+  与第 208 期「不做协商」的口径冲突，本期不动。
+- **没有**给 Komga 缩略图加行为级用例（要复刻 `enable_komga` 的全局配置覆盖与
+  `_ko_book` 的库可见性上下文，成本高于收益）：本期钉的是「调用点必须带宽度」这个
+  结构性判据，而「`?w=` 真的会缩」由第 208 期的端点用例覆盖。
+- 不把 `_CATALOG_COVER_WIDTH` 做成可配置项：没有真实需求，加配置 = 多一处可能不同步的真值源。
