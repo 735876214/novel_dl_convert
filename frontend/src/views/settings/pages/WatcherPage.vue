@@ -8,7 +8,7 @@ import Card from '@/components/ui/Card.vue'
 import SettingsFieldRow from '@/views/settings/SettingsFieldRow.vue'
 import { WATCHER_FIELDS } from '@/data/settingsFields'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
-import { api, type HealthInfo, type WatcherStatus } from '@/lib/api'
+import { api, type HealthDetail, type WatcherStatus } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -30,7 +30,7 @@ const ui = useUiStore()
 const { cfg, saving, val, setVal, loadConfig, saveSection, ignoreText, envOverridden } = useSettingsConfig()
 
 const watcher = ref<WatcherInfo | null>(null)
-const health = ref<HealthInfo | null>(null)
+const health = ref<HealthDetail | null>(null)
 
 async function refreshRuntime(): Promise<void> {
   try {
@@ -83,7 +83,9 @@ async function clearLogs(): Promise<void> {
 
 onMounted(async () => {
   try {
-    health.value = await api.health()
+    // ⚠️ 第 258 期：路径与 `checks` 明细是**内部事实** ⇒ 走**鉴权后**的端点
+    // （免鉴权的 `/health` 只回状态 / 版本 / 有几条问题）。
+    health.value = await api.healthDetailed()
   } catch {
     /* ignore */
   }

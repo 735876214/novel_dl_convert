@@ -17,15 +17,34 @@ import type { EpisodeRule } from './episodeScope'
 
 export interface HealthInfo {
   status: string
-  input: string
-  output: string
-  watcher: boolean
   /** 应用版本（后端单一真值源下发；前端 About / 更新日志据此渲染，不再手写版本号） */
   version: string
   /** 是否挂了 docker.sock（决定「一键更新」是否可用；侧栏据此决定是否挂 new 提示） */
   updater_available?: boolean
-  /** 活动日志目录（后端 /health 会返回） */
-  logs?: string
+  /**
+   * 有几条问题（第 258 期）—— **只给条数**。
+   *
+   * ⚠️ 人话清单在**鉴权后**的 `healthDetailed().problems` 里
+   * ⇒ 免鉴权的这个端点不泄露路径等内部事实。
+   */
+  problem_count?: number
+}
+
+/**
+ * **鉴权后**的完整健康快照（第 258 期）。
+ *
+ * ⚠️ 含内部事实：`checks.default_pin`（是不是还在用初始口令）、
+ * `checks.cache`（有没有配 Redis）、带**绝对路径**的 `problems`、
+ * 以及三个目录 ⇒ **必须鉴权**才给。
+ */
+export interface HealthDetail {
+  status: string
+  checks: Record<string, unknown>
+  problems: string[]
+  input: string
+  output: string
+  logs: string
+  watcher: boolean
 }
 
 /** 更新检查快照（GET /api/update/status）。 */
@@ -3709,7 +3728,18 @@ async function requestAck(path: string, init?: RequestInit): Promise<void> {
 }
 
 export const api = {
+  /**
+   * **免鉴权**的探活端点（第 258 期）—— 只回「不含内部事实」的东西：
+   * 状态 / 版本 / 能否一键更新 / 有几条问题。
+   *
+   * ⚠️ 它**不再**回 `checks` 的各项明细、`problems` 的人话清单、
+   * 以及 `input` / `output` / `logs` 三个**绝对路径**
+   * ⇒ 免鉴权就能拿到 NAS 的目录结构与「是不是还在用默认口令」这种安全信息。
+   * ⇒ 要那些的**鉴权后**走 `api.healthDetailed()`。
+   */
   health: () => request<HealthInfo>('/health'),
+  /** **鉴权后**的完整健康快照（含 `checks` 明细 / `problems` 人话 / 三个目录）。 */
+  healthDetailed: () => request<HealthDetail>('/api/health'),
 
   // ---------- 版本检查与更新（第 78 期）----------
   /** 「新功能」页数据源：解析仓库 CHANGELOG.md（离线可读）。 */

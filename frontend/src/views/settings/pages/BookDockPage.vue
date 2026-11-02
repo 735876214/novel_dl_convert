@@ -16,7 +16,7 @@ import {
   type BookDockItem,
   type BookDockPreview,
   type BookDockResponse,
-  type HealthInfo,
+  type HealthDetail,
   type LibraryEntity,
   type WatcherStatus,
 } from '@/lib/api'
@@ -78,7 +78,7 @@ function openWizard(): void {
 }
 
 const watcher = ref<WatcherInfo | null>(null)
-const health = ref<HealthInfo | null>(null)
+const health = ref<HealthDetail | null>(null)
 
 const dropDir = computed(() => health.value?.input ?? watcher.value?.input ?? '—')
 const running = computed(() => Boolean(watcher.value?.running))
@@ -620,7 +620,9 @@ onMounted(async () => {
   window.addEventListener('drop', onDrop)
   offRealtime = onRealtime('book-dock:changed', () => scheduleDockReload())
   try {
-    health.value = await api.health()
+    // ⚠️ 第 258 期：路径与 `checks` 明细是**内部事实** ⇒ 走**鉴权后**的端点
+    // （免鉴权的 `/health` 只回状态 / 版本 / 有几条问题）。
+    health.value = await api.healthDetailed()
   } catch {
     /* ignore */
   }

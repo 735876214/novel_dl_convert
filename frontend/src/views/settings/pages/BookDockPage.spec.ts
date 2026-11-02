@@ -26,6 +26,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     bookDock: vi.fn(),
     health: vi.fn(),
+    healthDetailed: vi.fn(),
     watcherStatus: vi.fn(),
     bookDockRescan: vi.fn(),
     bookDockRename: vi.fn(),
@@ -180,7 +181,9 @@ beforeEach(() => {
     target_library: 'lib-e', target_rel: '预览书名.epub',
     duplicates: [], warnings: [],
   })
-  vi.mocked(api.health).mockResolvedValue({ input: 'D:/input' } as never)
+  // ⚠️ 第 258 期：路径是**内部事实** ⇒ 本页改走**鉴权后**的 `healthDetailed`
+  // （免鉴权的 `/health` 只回状态 / 版本 / 有几条问题）。
+  vi.mocked(api.healthDetailed).mockResolvedValue({ input: 'D:/input' } as never)
   vi.mocked(api.watcherStatus).mockResolvedValue({ running: false } as never)
   vi.mocked(api.getConfig).mockResolvedValue({
     config: { watcher: { enabled: false } } as unknown as AppConfig,
