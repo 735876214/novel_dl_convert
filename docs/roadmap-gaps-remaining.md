@@ -13908,3 +13908,42 @@ Pillow 自带的 `Image.MAX_IMAGE_PIXELS = 89478485` 只是**告警**闸（默�
 - **体积闸不等于解压炸弹闸**：纯色大图压缩率极高（450 KB ↔ 411 MB）⇒ 必须查**像素数**。
 - **判据被复制成两份时，其中一份是错的**：`thumbs._flatten` 早就修好了，
   `komga_api` 那一处却还留着 ⇒ 收敛到一处（`imaging.flatten`）才算真修。
+
+## 第 249 期（持续审计第八轮：缓存失效点的补漏 / 往返对称 / 事务边界 —— **五个角度零发现**，补一个安全盲区）
+
+**需求来源**：持续审计任务（24 小时窗口，起点 2026-11-02 14:10）。
+
+> ⚠️ 本轮**第 0 步**判定「工作区有另一个 AI 会话的在途改动」（它在写第 248 期：
+> 改 `novelforge/server.py` / `core/pdfrender.py` / `core/thumbs.py` / 新增 `core/imaging.py`）
+> ⇒ 按纪律本轮**只做只读审计 + 零产品代码改动**。
+> 唯一动的是**新增一个测试文件**（`tests/test_customicons_security_249.py`）—— 不碰任何
+> 共享文件 ⇒ 与并行会话零冲突。
+
+### 本轮扫过的五个角度（**全部零发现**）
+
+| 角度 | 查了什么 | 结论 |
+|---|---|---|
+| **缓存失效点（写侧）** | 写操作是否都让书目列表缓存失效；写侧 `library.invalidate` 的 14 个调用点 | 全部覆盖（fileops×4 / landing / metafetch / migrate×2 / pathmeta / scrape / calibreimport / series_meta / watcher / server）；覆盖层是**读时合并**（`meta_override` 在 `_apply_overlay` 里盖住索引里的旧值）⇒ invalidate 后仍显示新值 ⇒ 零缺陷 |
+| **缓存失效点（键侧）** | `cache.drop` 的调用点覆盖哪些键；`cache.set_json/set_bytes` 的键与语义是否匹配 | `drop` 只用于**书目列表键**（章节 / 封面 / CSS 靠**指纹自失效**，第 62 期设计）；四个写点的键语义各不相同（列表 / 章节 / CSS / 封面）⇒ 零缺陷 |
+| **导入 / 导出往返的剩余格式** | 偏好块（前端 `PAYLOAD_BLOCKS` ↔ 后端 `PREFS_BLOCKS`）、书源规则、OPML、KOReader 批注、批注 CSV/JSON/MD、书目 CSV | 偏好块**九块**前后端完全一致（契约 `test_prefs_shelf_block.py` 钉住）；其余格式第 236/244 期已核 ⇒ 零缺陷（**一处过时注释**：`prefsPayload.ts` 写「八块」而实际九块，契约测试拦不住注释漂移 ⇒ 记一笔） |
+| **事务边界** | AST 扫 `core/db.py` 里**每个函数**的 `commit()` 次数 | **零个**函数有 2 次以上 `commit()` ⇒ 每个函数的写入都是**一条事务**；跨模块的「DB + 动文件」本就无法同事务（设计如此）⇒ 零缺陷 |
+| **覆盖率盲区** | `core/` 下每个模块被多少测试文件提到 | 只有 `customicons`（安全相关！）与 `preprocess`（间接被 TXT 转换覆盖）偏薄 ⇒ 见下 |
+
+### 补的一个安全盲区：`customicons` 此前**零测试**
+
+`core/customicons.py`（第 216 期）是**安全相关**的模块：自定义图标最终会以 `v-html`
+画进按钮（与内置图标同一条渲染路径）⇒ 服务端**只提取** `<path d="…">` 的 `d` 字符串，
+前端再拼成 `<path d=…/>` ⇒ 完整 SVG 里的 `<script>` / `on*` / 外链 `<image>` 不会跟着进来。
+
+而这个模块此前**零测试**（`tests/` 里连名字都不出现）⇒ **那套判据没有网**：
+改动它（哪怕只是「顺手支持一下 circle」）不会有任何用例拦住回归。
+
+⇒ 补 `tests/test_customicons_security_249.py`（9 例）：只取 path 的 `d` / 非 path 元素不收 /
+**脚本与外链不进结果** / SVG 大小上限 / 单条 `d` 长度上限 / path 数上限 / 坏 XML 说人话 /
+空内容拒绝 / 图标名长度上限。
+
+### 本轮未做（留给下一轮）
+
+- ⭐ **公开的 `/health` 泄露「默认口令还在用」**（安全类，可直接利用）：要动
+  `novelforge/server.py` ⇒ **本轮被并行会话占用**（它正在改这个文件）⇒ 下一轮做。
+- 其余候选见第 247 期段的清单。
