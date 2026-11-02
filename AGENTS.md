@@ -73,7 +73,7 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 
 ```bash
 # 后端全量测试（离线）—— 脚本已清 proxy、已带 junitxml，有 failed/errors 即退 1
-bash scripts/test.sh                       # 当前基线 2988 例（2974 passed / 14 skipped；只增不减）
+bash scripts/test.sh                       # 当前基线 3014 例（2987 passed / 14 skipped；只增不减）
 bash scripts/test.sh tests/test_catalog.py -k 某关键字
 
 # 前端四连（type-check → unit → build → deploy，缺一不可）
@@ -181,7 +181,7 @@ bash scripts/dev-instance.sh 8412
 | `docs/bookorbit/bookorbit-*.md` | 既有上游对照基线（capability-gap / module-inventory / settings-inventory / feature-flows / library-contract / dashboard-styles） |
 | `docs/bookorbit/bookorbit-live-diff-2026-10.md` | **2026-10 线上实例独立复核**（不采信旧对照；196 条上游独有 / 108 条同名不同义 / 76 条本项目独有，附全表与整改分期） |
 | `docs/bookorbit/bookorbit-live-inventory-2026-10.md` | 线上实例**取证清单**（320 条 API / 472 个 chunk / 42 个设置页 / 13 个 i18n 命名空间） |
-| `docs/review/` | 历史评审快照（backend / frontend code_review_report、上游截图记录） |
+| `docs/review/` | 上游 BookOrbit **取证记录**（逐页采集 / 设置清单，截图已移出仓库） |
 | `docs/roadmap-gaps-remaining.md` | 逐期实施记录（**活文档**，最新期在末尾，按 `## 第 N 期` 搜） |
 | `README.md` | 面向部署者/使用者的完整说明（NAS 部署、配置表、CLI） |
 | `scripts/` | 一键验证脚本（`test.sh` / `frontend-verify.sh` / `dev-instance.sh`，见 §4） |
