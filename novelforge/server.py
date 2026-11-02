@@ -5068,6 +5068,22 @@ def _overlay_for(bid: str, path: pathlib.Path) -> dict:
     )
 
 
+# ---------------- KEPUB 导出（第 237 期）----------------
+#
+# ⚠️ **不做 Kobo 设备同步**（那是 XL 级的私有协议复刻）—— 本期只做**最小闭环**：
+# 导出一份 KEPUB 副本，用户自己经 Calibre-Web / Kobo 桌面端投递。
+
+@app.post("/api/books/{bid}/export-kepub")
+def api_export_kepub(bid: str):
+    """把一本书导出成 KEPUB（Kobo 用的 EPUB 副本）。**源文件只读**。"""
+    from .core import kepub
+
+    res = kepub.export_book(bid)
+    if not res.get("ok"):
+        raise HTTPException(400, res.get("message") or "导出失败")
+    return {"ok": True, **res}
+
+
 # ---------------- TTS（自托管 / 局域网的 OpenAI-compatible 引擎，第 235 期）----------------
 #
 # ⚠️ **默认关**（`tts.enabled`）；地址由后端配置，前端只看到开关与几个字段。

@@ -51,6 +51,25 @@ const props = defineProps<{
 
 const emit = defineEmits<{ download: [string] }>()
 
+/** KEPUB 导出（第 237 期）：Kobo 用的 EPUB 副本（源文件只读）。 */
+const kepubBusy = ref(false)
+/** 只有 EPUB 才摆这个入口（Kobo 读不了别的格式）。 */
+const isEpub = computed(() => props.mainFormat.toUpperCase() === 'EPUB')
+
+async function exportKepub(): Promise<void> {
+  if (kepubBusy.value) return
+  kepubBusy.value = true
+  try {
+    const r = await api.exportKepub(props.bookId)
+    if (r.ok) ui.toast(`已导出 KEPUB（${fmtBytes(r.bytes)}）`)
+    else ui.toast(r.message || '导出失败')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '导出失败')
+  } finally {
+    kepubBusy.value = false
+  }
+}
+
 const ui = useUiStore()
 
 const paths = ref<Record<string, string>>({})
@@ -202,6 +221,19 @@ const isDirBook = computed(() => props.files.length === 0 && (props.mainFormat |
             @click="copyPath(main.path)"
           >
             {{ copied === main.path ? '已复制' : '复制路径' }}
+          </Button>
+          <!-- KEPUB 导出（第 237 期）：给 Kobo 用的 EPUB 副本。
+               ⚠️ **只给 EPUB**摆这个按钮 —— Kobo 读不了 PDF / 漫画 / 有声书，
+               摆一个必然失败的按钮就是假交互。 -->
+          <Button
+            v-if="isEpub"
+            size="sm"
+            data-test="export-kepub"
+            title="导出成 KEPUB（Kobo 用的 EPUB 副本；源文件不动）"
+            :disabled="kepubBusy"
+            @click="exportKepub"
+          >
+            {{ kepubBusy ? '导出中…' : '导出 KEPUB' }}
           </Button>
         </div>
 

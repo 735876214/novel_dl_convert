@@ -3876,6 +3876,15 @@ export const api = {
       { method: 'POST' },
     ),
 
+  // ---------- KEPUB 导出（第 237 期）----------
+
+  /** 导出成 KEPUB（Kobo 用的 EPUB 副本；源文件只读）。 */
+  exportKepub: (bookId: string) =>
+    request<{ ok: boolean; path: string; bytes: number; message: string }>(
+      `/api/books/${encodeURIComponent(bookId)}/export-kepub`,
+      { method: 'POST' },
+    ),
+
   // ---------- TTS（自托管 / 局域网的 OpenAI-compatible 引擎，第 235 期）----------
 
   /** TTS 状态（**不含** api_key —— 那是凭据）。`enabled=false` 时界面不摆朗读条。 */
