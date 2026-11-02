@@ -1323,6 +1323,11 @@ watch(() => props.section, () => {
                     <span v-if="(v as any).source" class="text-[10.5px] opacity-70">
                       · {{ (v as any).source }}
                     </span>
+                    <!-- ⚠️ 第 259 期：**超长的值提交时会被跳过**（写入侧超限 ⇒ 跳过该字段）⇒
+                         预览阶段就要说清，否则用户只在提交后的 toast 里才知道「没写进去」。 -->
+                    <span v-if="(v as any).too_long" class="text-[10.5px] text-warning">
+                      · 太长了，提交时会跳过（写不进去）
+                    </span>
                   </div>
                 </div>
                 <div v-else-if="i.cover" class="text-[11.5px] text-muted-foreground">仅封面</div>

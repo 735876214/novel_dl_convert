@@ -537,7 +537,22 @@ export interface MetadataPlanItem {
   /** 最佳候选是否达到置信度阈值 */
   auto_ok: boolean
   /** 字段级改动：{字段: {from, to, source, score}}（字段名是 OPF 口径，年份叫 date） */
-  changes: Record<string, { from: unknown; to: unknown; source: string; score: number }>
+  changes: Record<
+    string,
+    {
+      from: unknown
+      to: unknown
+      source: string
+      score: number
+      /**
+       * 这个值**超长** ⇒ 提交时会被**跳过**（写入侧超限 ⇒ 跳过该字段，第 250 期）。
+       *
+       * ⚠️ 第 259 期：预览阶段就标出来 —— 否则界面说「要改成这个」、
+       * 实际写不进去，用户**只在提交后**的 toast 里才知道。
+       */
+      too_long?: boolean
+    }
+  >
   cover: { url: string; action: string; source: string; score: number } | null
   /**
    * 该书被**显式锁定**的字段（第 35 期，含封面用的独立键 `cover`）。
