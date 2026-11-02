@@ -2703,7 +2703,7 @@ def opds_cover(request: Request, bid: str):
     _opds_guard(request)
     if not _opds_book(request, bid):
         raise HTTPException(404, "书籍不存在")
-    return api_book_cover(bid)
+    return api_book_cover(bid, _CATALOG_COVER_WIDTH)
 
 
 @app.get("/opds/download/{bid}")
@@ -2969,7 +2969,7 @@ def opds_lib_cover(request: Request, lid: str, bid: str):
     lib_id = str(_opds_lib(request, lid)["id"])
     if not _opds_book_in(request, lib_id, bid):
         raise HTTPException(404, "书籍不在该书库内")
-    return api_book_cover(bid)
+    return api_book_cover(bid, _CATALOG_COVER_WIDTH)
 
 
 @app.get("/opds/lib/{lid}/download/{bid}")
@@ -4802,6 +4802,12 @@ def api_delete_cover(bid: str):
                      activity_log.STATUS_OK, source="api", detail="封面：移除服务端封面")
     return {"ok": True, "removed": removed}
 
+
+#: 目录类客户端（OPDS / Komga）要的封面宽度（第 219 期审计）。
+#: 这些端点此前**不传 `w`** ⇒ 直接把原图发出去：真机书封只有 427×600 却重约 300 KB，
+#: 客户端一次列几百本系列就是几十 MB。480 与 Web 卡片同宽，重编码后约 47 KB。
+#: **判据只有这一处**：OPDS 两个 cover 端点 + Komga 三个 thumbnail 端点都用它。
+_CATALOG_COVER_WIDTH = 480
 
 @app.get("/api/books/{bid}/cover")
 def api_book_cover(bid: str, w: int = 0):
@@ -11090,7 +11096,7 @@ def ko_series_thumb(request: Request, series_id: str):
     _name, items = found
     for b in items:
         if b.get("has_cover"):
-            return api_book_cover(b["id"])
+            return api_book_cover(b["id"], _CATALOG_COVER_WIDTH)
     _ko_404("该系列没有可用封面")
 
 
@@ -11190,7 +11196,7 @@ def ko_book_thumb(request: Request, book_id: str):
     _komga_guard(request)
     if not _ko_book(request, book_id):
         _ko_404("书不存在")
-    return api_book_cover(book_id)
+    return api_book_cover(book_id, _CATALOG_COVER_WIDTH)
 
 
 @app.get("/api/v1/books/{book_id}/file")
@@ -11400,7 +11406,7 @@ def ko_collection_thumb(request: Request, cid: int):
     for items in _ko_collection_groups(request, cid).values():
         for b in items:
             if b.get("has_cover"):
-                return api_book_cover(b["id"])
+                return api_book_cover(b["id"], _CATALOG_COVER_WIDTH)
     _ko_404("该收藏夹没有可用封面")
 
 

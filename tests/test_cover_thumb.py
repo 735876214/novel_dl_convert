@@ -152,3 +152,24 @@ def test_带_EXIF_方向的封面按显示方向重编码():
     with Image.open(io.BytesIO(out)) as o:
         assert o.size == (480, 360), f"应按 EXIF 转正后再缩，实际 {o.size}"
         assert o.getexif().get(0x0112) is None, "重编码后不该再带方向标记"
+
+
+def test_目录类客户端也要缩略封面():
+    """第 219 期审计：OPDS（2 个）与 Komga（3 个）的封面端点此前**都不传 `w`** ⇒
+    客户端每本拿约 300 KB 原图（书封才 427×600），一次列几百本系列就是几十 MB。
+
+    判据收敛成 `server._CATALOG_COVER_WIDTH` 一处；这条用例钉的是**没有端点漏传** ——
+    少一个就是「某个客户端继续下原图」，而那种事肉眼看不出来。
+    """
+    import pathlib
+    import re
+
+    from novelforge import server
+
+    text = pathlib.Path(server.__file__).read_text(encoding="utf-8")
+    calls = [c for c in re.findall(r"api_book_cover\([^)]*\)", text)
+             if not c.startswith("api_book_cover(bid:")]
+    assert len(calls) == 5, f"预期 OPDS×2 + Komga×3 共 5 个调用点，实际 {calls}"
+    for c in calls:
+        assert "_CATALOG_COVER_WIDTH" in c, f"这个封面端点没带宽度：{c}"
+    assert server._CATALOG_COVER_WIDTH == 480

@@ -64,7 +64,9 @@ ARG PIP_INDEX=https://pypi.org/simple
 # 第 213 期：`--mount=type=cache` 让**重建**时直接复用本机的 wheel 缓存（不再重下几十 MB），
 # 而缓存挂载**不写进镜像层**（层里仍然干干净净）。它替代了原来的 `PIP_NO_CACHE_DIR=1`
 # —— 那条 ENV 会把缓存也关掉，等于每次重建都从零下载。
-RUN --mount=type=cache,target=/root/.cache/pip,sharing=shared \
+# `sharing=locked`（审计改）：pip 的 http 缓存在并发写时可能打印反序列化告警，锁住代价
+# 只是两个构建排队——比偶发告警好查。
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     pip install --upgrade pip --index-url "${PIP_INDEX}" \
     && pip install --index-url "${PIP_INDEX}" -r /tmp/requirements.txt
 

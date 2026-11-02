@@ -11,6 +11,14 @@ import LoginGate from '@/components/LoginGate.vue'
 import GuidedTourModal from '@/components/settings/GuidedTourModal.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
 import { lazyComponent } from '@/lib/chunkReload'
+import { useTasksStore } from '@/stores/tasks'
+import { useThemeStore } from '@/stores/theme'
+import { useAuthStore } from '@/stores/auth'
+import { useLibraryStore } from '@/stores/library'
+import { useLibraryWizardStore } from '@/stores/libraryWizard'
+import { useCustomIconsStore } from '@/stores/customIcons'
+import { startRealtime, stopRealtime } from '@/lib/realtime'
+
 // 第 179 期：**只有「新建书库」向导**改按需加载（6.9 KB gzip）—— 它只在用户点按钮时
 // 出现、是 z-50 浮层、不占布局、也没有持久化标记。
 // ⚠️ 另外两件**刻意保持静态导入**，评审实测过，不是漏改：
@@ -21,13 +29,6 @@ import { lazyComponent } from '@/lib/chunkReload'
 //   · 首次引导在 `showTour = true` 的**同一个同步块**里就写了「已看过」标记，而部署窗口
 //     里 chunk 可能 404 ⇒ 整页重载 ⇒ 标记已落盘、引导再也不弹（`markTourSeen` 无回滚点）。
 const LibraryWizard = lazyComponent(() => import('@/components/tools/LibraryWizard.vue'))
-import { useTasksStore } from '@/stores/tasks'
-import { useThemeStore } from '@/stores/theme'
-import { useAuthStore } from '@/stores/auth'
-import { useLibraryStore } from '@/stores/library'
-import { useLibraryWizardStore } from '@/stores/libraryWizard'
-import { useCustomIconsStore } from '@/stores/customIcons'
-import { startRealtime, stopRealtime } from '@/lib/realtime'
 
 // ⚠️ 第 65 期：`useUiStore` 与 `ui` 已从这里删掉 —— 它在本文件唯一的用途是
 // 「Esc 关任务抽屉」，而抽屉已改成顶栏浮层（`TaskFlyout.vue`），Esc 由浮层自管。
