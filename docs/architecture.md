@@ -330,6 +330,9 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    | 执行期正则 | `novelforge/core/saferegex.py` |
    | 书目规则求值（智能书架 / 临时筛选 / 规则筛选器） | `novelforge/core/bookrules.py`（字段 / 操作 / 校验 / 求值同源；`GET /api/book-rules` 下发清单） |
    | 内联筛选规则的解析与上限 | `novelforge/core/bookfilter.py`（`parse_inline` / `rules_from_query`） |
+   | KOReader 批注文件的**格式**（写与读逐字对称） | `novelforge/core/koreader_export.py`（写）↔ `novelforge/core/koreader_anno.py`（读） |
+   | KEPUB 的结构（Kobo 要的三样 + `mimetype` 不压缩） | `novelforge/core/kepub.py` 的 `export_kepub` |
+   | TTS 分块与合成（句末切块 / 两种响应形态） | `novelforge/core/tts.py` 的 `_chunks` / `_audio_bytes` |
    | 版本号 | 仓库根 `VERSION`（`server.APP_VERSION` 读它，只由 `GET /health` 下发） |
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
@@ -341,7 +344,7 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    `@lucide/vue@^1.50`（图标，按需引入）。
    **四者都只在前端构建期打包、运行期不出网**（字体 / 图标一律随 bundle 自托管，符合第 80 期口径）。
    实测代价：主包 `index.js` 1,173,783 → 1,237,288 B（**+63.5 KB raw**；gzip 365.15 kB，构建输出），
-   其中还含本期新写的侧栏/sheet/tooltip 代码本身。`clsx` / `tailwind-merge` 是**既有**依赖（`lib/utils.ts` 的 `cn()` 用它们）。
+   其中还含本期新写的侧栏/sheet/tooltip 代码本身。`clsx` / `tailwind-merge` 是**既有**依赖（`frontend/src/lib/utils.ts` 的 `cn()` 用它们）。
 7. 新的后台线程必须进测试收尾清单（`_quiesce_background`）。
 8. **在线阅读（第 93 期）**：正文一律纯文本（第三方标记永不进 `v-html`）；缓存只落 `CACHE_DIR/online/`；
    落地 / 更新只写「这本书自己的位置」（同名 ⇒ 同一个 `book_id`，**绝不新建第二条书目** ——
