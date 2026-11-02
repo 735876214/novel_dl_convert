@@ -648,7 +648,7 @@ export interface IntegrationTestResult {
 }
 
 /**
- * 外部书库的**只读登记**预览（第 228 期）：读 Calibre 的 `metadata.db`。
+ * 外部书库的**只读登记**预览（第 229 期）：读 Calibre 的 `metadata.db`。
  *
  * ⚠️ 只算不改 —— 真正登记走 `calibreRegister`（写**覆盖层**，不碰文件）。
  */
@@ -3847,7 +3847,7 @@ export const api = {
       { method: 'POST' },
     ),
 
-  // ---------- 外部书库的只读登记（第 228 期）----------
+  // ---------- 外部书库的只读登记（第 229 期）----------
 
   /** 读 Calibre 的 `metadata.db` 并给出**登记计划**（只算不改）。 */
   calibrePreview: (dbPath: string, root: string) =>

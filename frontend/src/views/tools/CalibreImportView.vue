@@ -9,7 +9,7 @@ import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
 /**
- * 外部书库的**只读登记**导入（第 228 期）。
+ * 外部书库的**只读登记**导入（第 229 期）。
  *
  * ## 它做什么
  *
