@@ -73,7 +73,7 @@ docs/                       文档（见下「文档地图」）；bookorbit/ �
 
 ```bash
 # 后端全量测试（离线）—— 脚本已清 proxy、已带 junitxml，有 failed/errors 即退 1
-bash scripts/test.sh                       # 当前基线 3103 例（3089 passed / 14 skipped；只增不减）
+bash scripts/test.sh                       # 当前基线 3138 例（3110 passed / 27 skipped；只增不减）
 bash scripts/test.sh tests/test_catalog.py -k 某关键字
 
 # 前端四连（type-check → unit → build → deploy，缺一不可）
@@ -106,6 +106,8 @@ bash scripts/dev-instance.sh 8412
 | 3.13+ 装 `quickjs` 整条失败 | `requirements.txt` 的 `python_version < "3.13"` 标记不能少（它只有 cp38–cp312 预编译包） | `requirements.txt` 注释 |
 | 源码目录被**静默忽略**（本机永远看不出来） | `.gitignore` 模式**不写前导斜杠**会匹配任意层级同名目录（`input/` 曾吞掉 `frontend/src/components/ui/input/` 达 15 期，只有 CI 从 clone 构建才报）⇒ 运行时目录一律锚定仓库根（`/input/` `/output/` `/cache/` …）；新增源码目录后跑 `git ls-files --others --ignored --exclude-standard -- frontend/src novelforge` 复验 | `.gitignore` 注释 + `tests/test_source_tracking_contract.py`（已钉） |
 | 计数 / 汇总行读不到 | 计数一律用 `--junitxml` 解析（`scripts/test.sh` 已内置）；`pytest.ini` 已含 `addopts=-q`，**别再加 `-q`** | `docs/development.md` §4 |
+| 「缓存坏了」的用例**恒绿** | 默认部署**不配** Redis（`core/cache.py` 是空操作）⇒ 缓存类缺陷在离线环境**根本观测不到**。写这类用例必须**自带缓存**：把 `cache._get/_set/_del` 换成进程内 dict（见 `tests/test_paged_cache_isolation_244.py` 的 `fake_redis` 夹具）。同理：**用例没红不等于缺陷不存在** —— 回去看它为什么没红 | roadmap 第 244 期段 |
+| Windows 上 `os.replace` 报 `WinError 5` | 目标文件正被另一个句柄打开（哪怕只是读）⇒ 原子替换失败。**读与替换必须互斥**（锁用 `RLock`，否则持锁后再读会自锁死），外部进程占用还要**短退避重试** | `novelforge/config.py` 的 `_replace_with_retry` |
 
 ## 6. 提交与交付
 

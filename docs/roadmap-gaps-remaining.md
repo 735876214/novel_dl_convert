@@ -13268,3 +13268,260 @@ HTTP 错误如实说 / 响应里没有音频如实说 / 兼容实现的 base64 J
 
 **核验**：后端全量（见 §0 基线）；前端四连（93 spec / 870 例）。
 
+
+## 第 244 期（持续审计第四轮：缓存失效点 / 配置生效路径 —— **缓存串页 / 假配置 / 不热应用 / 无效输入框 / 死代码**）
+
+**需求来源**：持续审计任务（24 小时窗口，起点 2026-11-02 14:10）。
+
+**这一轮找到 7 类真缺陷 + 2 类清理**：四个在「**保存 / 写了 ≠ 用户看得见**」这条缝上
+（界面说已生效、行为没变；两个语义不同的结果共用一个缓存键），另有配置缺下界、
+Windows 上的写读撞车，以及死代码清理与「本机环境项该 skip 而不是红」。
+
+### 一、分页结果写进了全量书目的缓存键（高）
+
+**根因**：第 233 期给 `/api/books` 加了「提前切片」（`catalog.books_of(lib, limit, offset)`），
+而 `books_of` 的缓存键 `cache.book_list_key(lid)` **只含库 id**（语义是「该库的全量书目」）。
+分页那次把**一页**的结果写进了同一个键 ⇒
+
+- 之后任何**不分页**的读（侧栏 / 统计 / 第三方 / 不分页的视图）命中它，
+  把 30 本当成**全库**返回 ⇒「书架突然只剩 30 本」「共 N 本对不上」；
+- 反向同样成立：`offset=120` 的第二页把「第 121–150 本」写进同一个键。
+
+不报错、不为空，就是「少了一截」，最多 `TTL_LIST=120s` 或下一次写操作才自愈。
+
+⚠️ **只在配了 Redis 的部署上显现**（默认部署不配 ⇒ 缓存层是空操作 ⇒ 每次现读，
+不串页）—— 这也是为什么它能活到今天，也是为什么**缓存类缺陷的用例必须自带缓存**
+（见第五节那条纪律）。
+
+**修法**：键的语义是「全量」，分页是另一个语义 ⇒ **分页既不读也不写它**
+（`catalog.py` 的 `books_of`）。分页本来也不该吃全量缓存：命中 2309 条再切 30 条，
+比直接读索引更贵。
+
+**防回归**：`tests/test_paged_cache_isolation_244.py`（3 例：分页后全量仍是全量 /
+第二页不污染 / 交替请求两种口径各自稳定）。
+
+> ⚠️ 这三个用例**自带「假 Redis」**（把 `cache._get/_set/_del` 换成进程内 dict）。
+> 原因：默认部署**不配** Redis（缓存层是空操作）⇒ 这类缺陷在离线环境**根本观测不到**，
+> 用例会恒绿（假绿）。**「缓存类缺陷的用例必须自带缓存」** 是本轮新增的纪律。
+
+### 二、Calibre 登记写完覆盖层却不失效书目缓存（中）
+
+`core/calibreimport.py` 的 `apply_registration` 写 `db.set_overrides`（书名 / 作者 / 系列…）
+却**没有** `library.invalidate()`。而覆盖层是**读时合并**的、列表缓存里存的是
+**上一次合并好的结果** ⇒ 登记完书架上仍是旧标题，直到 TTL 到点或别的写操作顺手失效。
+前端登记完只弹 toast、**不重取列表** ⇒ 用户直接看到「登记了但没生效」。
+
+这是全仓**唯一**漏掉这一句的覆盖层写点（`pathmeta` / `series_meta` / `metafetch` /
+`fileops` 的批量改名 / server 的各元数据端点都有）。
+
+**防回归**：`tests/test_calibre_import_229.py` 的
+`test_登记_立刻重取列表要看到新标题`（自带假缓存；回退修复即红）。
+
+### 三、监听器的两个稳定判定参数保存后不生效（中）
+
+`watcher.settle_seconds` / `watcher.stable_rounds` 在 `EDITABLE` 白名单里、可保存、
+可回显，但 `_apply_watcher_config` **只热应用** `interval` / `recursive` / `copy_non_txt` /
+`ignore` / `max_retries` —— 这两个键**只在 `Watcher.__init__` 读一次** ⇒ 保存成功、
+界面显示新值，监听线程仍按旧值判「写入是否稳定」，**直到重启进程**。
+
+用户把「写入稳定等待」从 1s 调到 5s（大文件经 NAS 拖进收书目录）⇒ 界面显示已保存，
+行为仍是 1s ⇒ 半截文件被当成写完就复制。
+
+**修法**：这两个是**纯运行时参数**（`_is_stable` 每轮现读 `self.stable_rounds` /
+`self.settle_seconds`），热应用安全 —— 加进 `_apply_watcher_config` 即可。
+
+### 四、`logging.max_entries` 是假配置（中）
+
+能保存、能回显、**全仓没有任何读点**：内存环形缓冲恒为
+`deque(maxlen=2000)`（`core/activity_log.py`）。用户把「日志内存缓冲条数」改成 500，
+审计页的可见历史仍是 2000 条。违反了本仓自己的纪律（「没有读点的键就是假配置」）。
+
+**修法**：给它**真的读点** —— `activity_log.max_entries()`（读配置）与
+`activity_log.set_max_entries()`（`deque.maxlen` 不可改 ⇒ 重建并搬走现有条目），
+配置保存端点与 `lifespan` 启动时各热应用一次。
+
+**防回归**：`tests/test_config_hot_apply_244.py`（3 例：两个 watcher 参数保存后立刻生效 /
+缓冲条数保存后立刻生效且装 50 条只留 37 条 / 0 被夹到 1）。
+
+### 五、两处非原子写（TTS 缓存 / KOReader 导出位点）
+
+`tts.synthesize` 原先 `path.write_bytes(blob)`、`koreader_export.apply_export` 原先
+`write_text(...)` —— **非原子**。写盘途中另一个请求 / KOReader 读到**半截文件**
+（`<audio>` 截断播不出声 / 导出记录坏掉）。两处都改走全仓统一的 `atomicio`
+（同目录临时文件 + `Path.replace`），与 `authors` / `fonts` / `landing` / `zipkind` 同一口径。
+
+### 六、`db.py` 里六个无人调用的函数（死代码）
+
+扫 `db.py` 的公开函数、逐个查全仓（含测试）引用：`all_online` / `bookmark_counts` /
+`current_attempt` / `delete_attempts` / `get_koreader_doc` / `source_ledger_rename`
+**零调用**。逐个核实「有没有被等价实现取代」：
+
+| 函数 | 为什么确定是死的 |
+|---|---|
+| `all_online` | `get_effective_meta` 里已内联查 `meta_online`（**第二份实现**） |
+| `bookmark_counts` | 前端**不显示**书签数（只管书签本身）⇒ 无读点 |
+| `current_attempt` / `delete_attempts` | `reset_reading_state` 自己删 attempts |
+| `get_koreader_doc` | 用的是 `find_koreader_doc` / `list_koreader_docs` |
+| `source_ledger_rename` | 书源改名功能**根本不存在**（台账改名走不到这条） |
+
+按 §7.1「不为向后兼容留路」直接删，不留垫片。
+
+### 七、再删六个死函数（外加一个随之失效的常量）
+
+扫全仓（含测试）零引用的公开函数，逐个核实「有没有被等价实现取代 / 是不是注册式调用」：
+
+| 函数 | 判定 |
+|---|---|
+| `comics.is_cbz` / `is_cbr` | `is_comic` 已覆盖同一判据（只看扩展名） |
+| `preprocess.apply_custom_tags` | 注释写「默认管线未启用，按需调用」，但**没有任何调用方** ⇒ 投机性预留（§7.2 禁） |
+| `sources/kinds.provides` | `fields_of` + `KIND_HAS_COVER` 是真值源，`provides` 只是包装且零引用 |
+| `watcher.build_watcher` | 便捷包装，零引用 |
+| `sources/toc_sources.catalogue` | 接口自己遍历 `SOURCES`，它只是拷贝 |
+| `cli.cmd_logs` | **不是**死代码 —— CLI 用 `globals()[f"cmd_{cmd}"]` 反射调用（注册式） |
+
+`provides` 删掉后 `KIND_HAS_COVER` 也无人读了（它的唯一消费者就是 `provides`）
+⇒ 一并删，不留「没人读的第二份判据」。
+
+### 八、本机环境项此前是**硬红**，不是 skip
+
+全量里 15 条红，其中 14 条是本机环境项：`socket.AF_UNIX` 在 Windows 的 socket 模块里
+**根本不存在**（更新器那批用例要挂真 socket 才能测「通道在不在」的 `S_ISSOCK`）；
+符号链接在 Windows 要开发者模式 / 管理员（WinError 1314）。
+
+它们此前是硬红（Windows 红、CI 绿）⇒ **每次全量都要人工分辨「哪几条是环境项」**，
+基线行也跟着漂。改成一进来就 `skip`，判据放 `tests/conftest.py`
+（`HAS_AF_UNIX` / `HAS_SYMLINK`，**唯一一处**），各用例引用它。
+
+**教训**：环境差异应该表现为 **skip**（可数、可忽略），而不是红（每次都要人工分拣）。
+
+### 九、监听的两个「秒数」配置此前没有下界（顺着第三项查出来的）
+
+`watcher.interval` 与 `watcher.settle_seconds` 能保存、能回显、能热应用（本期第三项），
+但**没有任何下界**：
+
+- `interval=0.1` ⇒ 主循环每 0.1 秒轮询一次（NAS 上是持续 stat + 打开目录）⇒ CPU 打满。
+  前端 hint 只写「NAS 网络挂载建议 ≥3」—— **建议不是闸门**；
+- `settle_seconds=0` 更危险 ⇒ `_stop.wait(0)` 立即返回 ⇒ `_wait_stable` 在**一瞬间**
+  读完大小（通常相同）⇒ 立刻判「写入完成」⇒ **半截文件被复制进书库**。
+
+**修法**：夹边界的唯一实现在 `core/watcher.py`（`interval_of` / `settle_seconds_of`），
+`FolderWatcher.__init__`（读配置那条路）与 `server._apply_watcher_config`（热应用那条路）
+共用 —— 两处各写一份夹法就是「同一判据两处实现」。
+
+**语义**：0 / 负数 ⇒ 夹到下界（**不**回落默认 —— 回落会悄悄把用户填的数换成另一个数）；
+只有解析不出数字才回落默认。
+
+### 十、设置覆盖层的「读」与「原子替换」会撞车（Windows 特有）
+
+全量里偶发两条红（`test_komga_credentials_163` / `test_opds_library`），报的是
+`PermissionError [WinError 5]`：`settings.json.tmp -> settings.json`。
+
+**根因**：Windows 上 `os.replace` 的**目标**文件若正被另一个句柄打开（哪怕只是
+另一个线程在读），会直接报「拒绝访问」。而 `load_overrides()` **不持锁** ⇒
+`load_config()`（每个读配置的地方都走它）与 `save_overrides()` 的替换撞车时，
+保存直接失败（用户看到「设置写入失败」）。
+
+**修法两处，缺一不可**：
+① `_OVERRIDES_LOCK` 改成 `RLock`，并让**读**也持锁 ⇒ 同进程内读写互斥
+（普通 `Lock` 会让 `mutate_overrides` 持锁后再调 `load_overrides` **自锁死**）；
+② `os.replace` 加短退避重试（`_replace_with_retry`，总时长 ≈100 ms）⇒ 外部进程
+（另一个容器 / 另一个 uvicorn worker / 备份脚本）瞬时占用时也能成；一直失败仍
+原样抛，不静默。
+
+**防回归**：`tests/test_config_write_race_244.py`（4 例：读不撞替换 / 撞上瞬时占用
+会重试 / 一直失败要抛 / 锁可重入）。
+
+### 十一、播客残留的「下载中」在列表里卡死（第 242 期的残留缺陷）
+
+第 242 期修了「残留 `downloading` ⇒ 再点一次能重排」，但**列表接口没接** ⇒
+界面上的那一集永远显示「下载中」。而前端在 `download_state === 'downloading'` 时
+**不显示下载按钮**（`PodcastsView.vue`）⇒ 用户**点不到**第二次下载 ⇒ 那一集
+卡死在「下载中」，只能删了重订。`enqueue_download` 里的复位救不了 —— 它压根
+不会被调用。
+
+**修法两处**：
+① `podcasts.reset_stale_in(items)`：按**本次返回的那批**逐条判定并复位
+（不是扫全表 —— 返回条数有限，且绝大多数不是 `downloading` ⇒ 成本可忽略）；
+两个列表端点（`/api/podcasts/{pid}/episodes` 与 `/api/podcasts/episodes`）都接上；
+② 启动时（`lifespan`）调一次 `reset_stale_downloads` 做全量清扫 —— 一次性，
+让重启后界面第一眼就是对的。
+
+**顺带修**：`_stale_download` 原先只认 `local_path`，而 `list_all_podcast_episodes`
+不吐路径、只给 `has_local` ⇒ 「已有成品」那条判据在那条路上失效。
+
+**防回归**：`tests/test_podcast_stale_download_242.py` 补 2 例（单订阅列表 / 全部单集
+列表都要复位；回退即红）。
+
+### 十二、被环境变量接管的配置键：界面给了个**改了不起作用**的输入框
+
+`watcher.enabled`（`AUTO_WATCH`）与 `watcher.interval`（`WATCH_INTERVAL`）在
+`load_config` 里是**无条件覆盖**（不像 `metadata_fetch.cache_ttl` / `detail_fetch`
+那样「人写过就以人写的为准」）⇒ 部署时设了它们，用户在设置页改同一个键就是白改：
+保存成功、界面显示新值、下次读配置又被环境变量压回去。
+
+界面上那是一个**实际无效**的输入框 ⇒ AGENTS §1「不做假交互」。
+
+**修法**：判据只有一处（`config._ENV_OVERRIDES` / `config.env_overridden()`）——
+后端在 `GET /api/config` 顶层回 `env_overridden` 列表；前端 `useSettingsConfig`
+取它，`SettingsFieldRow` 收到 `envLocked` 就**禁用控件并说明「由环境变量接管」**。
+
+⚠️ 顺带发现：`useSettingsConfig` 里的 `overridden`（被 settings.json 覆盖的键）
+**前端零消费** —— 那条「改了 config.yaml 但不生效」的提示其实一直没显示。本期没动它
+（不是缺陷，只是既有的一处未用），记在这里供后续判断。
+
+### 十三、审计日志导出漏了 CSV 公式注入防护（第 132 期的一处遗漏）
+
+第 132 期给书目导出与批注导出都套了 `csvsafe.row`，但 **`GET /api/logs/export`
+的 `writerow` 没套** ⇒ 它的字符串同样**用户可控**：
+
+- `file` / `output` —— **书名**（从外面拖进来的 EPUB 自带文件名）；
+- `actor` —— 登录账号名。
+
+一本叫 `=cmd|'/c calc'!A0` 的书 ⇒ 用户导出审计日志、在 Excel 里双击打开 ⇒
+那段文字被当公式求值（第 132 期防的正是这个，此处漏了）。
+
+**修法**：审计日志导出的数据行**与表头**都走 `csvsafe.row`（表头是服务端写死的
+常量，套了不变）⇒ 「所有 CSV 导出的 `writerow` 都套 `csvsafe`」成为一条
+**不用例外**的判据。
+
+**防回归**：`tests/test_csv_injection_244.py`（AST 扫全仓 CSV 导出端点的每一个
+`writerow` 都必须套 `csvsafe.row` + 端到端断言危险前缀被加单引号）。
+
+### 本轮扫过、确认零缺陷的角度（别重查）
+
+| 角度 | 查了什么 | 结论 |
+|---|---|---|
+| 软删除读点 | `annotations` / `bookmarks` / `custom_field_defs` 三张表的**全部** SELECT | 无过滤的两处**都是故意**（`save_*` 要拿墓碑行来复活、`all_annotations(include_trashed=)` 的开关）⇒ 零缺陷 |
+| 前端接口 vs 服务端路由 | 前端 `lib/api.ts` 的 **147 条字面量路径**逐条比对服务端 367 条路由 | 全部命中（两条「未命中」是**注释**里的示例与已删旧端点）⇒ 零缺口 |
+| 建了从不读的表 | 59 张表按出现次数排序 | 只有 `opds_sources` 出现 1 次 —— 那是**第 16 期已删功能**的有意遗留（roadmap 第 254 行明写「建表语句保留，老库可能已有」）⇒ 零缺陷 |
+| 数值上限 | 前端所有 `limit` 的来源与后端夹边界 | 后端在 `Query(ge/le)` 或 DB 层 `numbers.row_limit` 统一夹住（第 243 期已核）⇒ 零缺陷 |
+| 文件句柄 | 全仓裸 `open(` / 裸 `ZipFile(`（不 `with`） | 零处（`comics._Archive` 有 `close` + 上下文管理器，调用点全用 `with`）⇒ 零缺陷 |
+| 缓存键碰撞 | 四个 Redis 键生成函数（`book:list` / `chapter` / `cover` / `css`） | 命名空间独立、无共用；其余缓存是进程内 dict ⇒ 零缺陷（**但**分页那条是例外，见第一节） |
+| 后端下发字段 vs 前端声明 | `BookCard` 36 个字段逐个比对 | 只有 `cover`（封面**文件名**，非路径）前端没声明 —— 无泄露风险、体积可忽略 ⇒ 不改 |
+| 数据库加列的幂等 | 全部 `ALTER TABLE` | 都带 `NOT NULL DEFAULT` ⇒ 老数据满足约束；用 `PRAGMA table_info` 判存在（第 125 期）⇒ 零缺陷 |
+| 死代码 | 全仓公开函数逐个查引用（含 `db.py` 之外的全部模块） | 找到 11 个真死函数 + 1 个随之失效的常量（已删）；`cli.cmd_logs` 是**反射调用**、不是死代码 ⇒ 粗筛要排掉注册式调用 |
+| 出网层的超时 / 重试 / 上限 | `core/network.py` | 超时、重试、字节上限、TLS、逐跳出站复查齐备 ⇒ 零缺陷 |
+| 删除路径 | 全仓 `unlink` / `rmtree` | 全部落在缓存 / 临时 / 派生目录（用户数据一律走回收站）⇒ 零缺陷 |
+| 鉴权覆盖 | 46 个 `/api/v1/*`（Komga 兼容面，中间件**故意放行**、由各路由自己校验）逐个扫「有没有 `_komga_guard`」 | 全部有（`ko_patch_read_progress` 直接调 `ko_put_read_progress` ⇒ 鉴权在里面）⇒ 零缺陷 |
+| `Content-Disposition` 注入 | 全部 `filename=` 用法 | Starlette 的 `FileResponse` 走 RFC 5987 编码；手写的几处文件名都是服务端生成 ⇒ 零缺陷 |
+
+### 下一轮候选（本期**没做**，留待后续轮次）
+
+**批注 Markdown 导出的结构不对**（`GET /api/annotations/export?format=markdown`）：
+书名直接进 `## {bt}`、批注原文直接进 `- {quote}`，**没有任何转义** ⇒
+
+- 书名含换行（Linux / NAS 上的文件名允许）⇒ 一行变两个标题；
+- 批注原文**多行**（引用一段话，很常见）⇒ 续行脱离列表项，在 Obsidian / VS Code 里
+  显示成散段落；
+- 原文以 `#` / `-` / `>` 开头 ⇒ 被当成别的结构。
+
+⇒ 需要一个 markdown 转义层（标题去换行 / 列表项内换行缩进 2 空格）。本期没做：
+它是**导出格式的细节**（不丢数据），而本轮已经修了 13 项，优先级靠后。
+
+### 顺带记下的纪律
+
+- **「缓存类缺陷的用例必须自带缓存」**：默认不配 Redis ⇒ 缓存类缺陷在离线环境恒绿。
+  本轮三个缓存用例都用「进程内 dict 假缓存」把判据变成有牙齿的。
+- **粗筛后必须「读过代码确认」**：本轮三个缺陷都是子代理粗筛给出线索、我逐个读代码核实后
+  才动手的；其中「分页污染全量键」的第一版用例因**多库**（测试夹具自带一个 `default` 库）
+  根本没走分页路径而恒绿 —— **用例没红不等于缺陷不存在**，要回去看它为什么没红。

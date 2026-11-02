@@ -334,6 +334,9 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    | KEPUB 的结构（Kobo 要的三样 + `mimetype` 不压缩） | `novelforge/core/kepub.py` 的 `export_kepub` |
    | TTS 分块与合成（句末切块 / 两种响应形态） | `novelforge/core/tts.py` 的 `_chunks` / `_audio_bytes` |
    | 版本号 | 仓库根 `VERSION`（`server.APP_VERSION` 读它，只由 `GET /health` 下发） |
+   | 被**环境变量无条件覆盖**的配置键 | `novelforge/config.py` 的 `_ENV_OVERRIDES` / `env_overridden()`（第 244 期：这两个键在设置页改了不起作用 ⇒ 界面据此标注「由环境变量接管」） |
+   | 播客「残留下载」判据（这一集此刻有没有人在下） | `novelforge/core/podcasts.py` 的 `_stale_download`（复位点：列表端点 `reset_stale_in` + 启动时 `reset_stale_downloads`） |
+   | 书目列表缓存的**键语义**（哪个口径能进缓存） | `novelforge/core/catalog.py` 的 `books_of`（键 `book_list_key(lid)` 只表示「该库的全量书目」⇒ **分页结果既不读也不写它**，第 244 期） |
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
    ⚠️ **第 82 期显式新增运行时依赖 `vue-draggable-plus@^0.6.1`**（仪表盘部件行内拖拽）：理由是原生 HTML5 DnD
