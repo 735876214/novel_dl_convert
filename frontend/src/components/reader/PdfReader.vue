@@ -270,16 +270,19 @@ async function renderPage(n: number): Promise<void> {
     canvas.style.width = `${Math.floor(vp.width)}px`
     canvas.style.height = `${Math.floor(vp.height)}px`
     const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    await p.render({
-      canvasContext: ctx,
-      viewport: vp,
-      transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
-    }).promise
+    if (ctx) {
+      await p.render({
+        canvasContext: ctx,
+        viewport: vp,
+        transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
+      }).promise
+    }
     drawn.value = new Set(drawn.value).add(n)
     const slot = slots.get(n)
     if (slot && n === 1) base.value = { w: vp.width / scale.value || base.value.w, h: vp.height / scale.value || base.value.h }
     // 第 223 期：文字层与 canvas **同一个 viewport** —— 换算错一处，选中的字就偏。
+    // ⚠️ **不依赖 canvas 渲染成功**：文字层与链接热区是**另外两件事**，
+    // 画布失败（比如没有 2D 上下文的环境）不该连字都选不了。
     await renderTextLayer(n, p, vp)
   } catch {
     /* 单页渲染失败不致命，其余页继续 */
@@ -557,7 +560,13 @@ async function savePdfAnno(): Promise<void> {
   }
 }
 async function renderTextLayer(n: number, pdfPage: any, viewport: any): Promise<void> {
-  const host = textLayers.get(n)
+  // ⚠️ 文字层容器可能还没挂上（ref 回调的时序）—— 那就**等一拍**再试，
+  // 拿不到就**这一页不画**（如实留空），下���次重画时自然会补上。
+  let host = textLayers.get(n)
+  if (!host) {
+    await new Promise((r) => setTimeout(r, 0))
+    host = textLayers.get(n)
+  }
   if (!host) return
   let spans: PdfTextSpan[] | null = null
   try {
@@ -588,6 +597,8 @@ async function renderTextLayer(n: number, pdfPage: any, viewport: any): Promise<
   }
   // 高亮覆盖层画在**文字层片段之后**（同一容器里，靠 DOM 顺序决定层叠）
   paintHighlights()
+  // 链接热区（站外链要确认）：与文字层同批读，注释层取的是同一页
+  void loadLinkAnnos(n, pdfPage, viewport)
 }
 
 
@@ -770,6 +781,171 @@ function maybeAutoNextAtBottom(): void {
 function zoomBy(d: number): void {
   prefs.value.fit = 'custom'
   prefs.value.zoom = Math.min(3, Math.max(0.5, Math.round((prefs.value.zoom + d) * 4) / 4))
+}
+
+// ---------------- 拖拽平移（第 231 期）----------------
+//
+// 放大之后页面装不下 ⇒ 要能**拖着看**。上游（BookOrbit）有这一条，本项目原先只有
+// 滚动条（横向滚动模式下还得先切模式）。
+//
+// ⚠️ **只在「放得下装不下」时接管拖拽**：内容没超出可视区时，拖拽应当是**选中文字**
+// （第 223 期的文字层）—— 抢走鼠标会让用户选不了字。所以判据是「内容比容器大」。
+//
+// ⚠️ **判定用指针位移，不用事件目标**：拖到文字层上时事件目标会变，但我们要的是
+// 「从按下那一点算起移动了多少」。
+
+/** 拖拽平移的状态（null = 没在拖） */
+const pan = ref<{ x: number; y: number; scrollLeft: number; scrollTop: number } | null>(null)
+
+/** 内容是否比容器大（装不下了 ⇒ 该允许拖拽平移） */
+function overflows(): boolean {
+  const el = boxRef.value
+  if (!el) return false
+  if (prefs.value.scrollMode === 'horizontal') {
+    return el.scrollWidth > el.clientWidth + 1
+  }
+  return el.scrollHeight > el.clientHeight + 1
+}
+
+function onPointerDown(e: PointerEvent): void {
+  // 只用主键；内容装得下 ⇒ 不接管（让用户去选文字）
+  if (e.button !== 0 || !overflows()) return
+  const el = boxRef.value
+  if (!el) return
+  pan.value = {
+    x: e.clientX,
+    y: e.clientY,
+    scrollLeft: el.scrollLeft,
+    scrollTop: el.scrollTop,
+  }
+  // 抓住内容 ⇒ 不要选中文本（否则拖完会留下一片选区）
+  try {
+    window.getSelection()?.removeAllRanges()
+  } catch {
+    /* ignore */
+  }
+  el.setPointerCapture?.(e.pointerId)
+}
+
+function onPointerMove(e: PointerEvent): void {
+  const st = pan.value
+  const el = boxRef.value
+  if (!st || !el) return
+  el.scrollLeft = st.scrollLeft - (e.clientX - st.x)
+  if (prefs.value.scrollMode !== 'horizontal') {
+    el.scrollTop = st.scrollTop - (e.clientY - st.y)
+  }
+}
+
+function onPointerUp(e: PointerEvent): void {
+  if (!pan.value) return
+  pan.value = null
+  try {
+    boxRef.value?.releasePointerCapture?.(e.pointerId)
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 拖拽时的光标（抓取 / 抓取中） */
+const panCursor = computed(() => {
+  if (pan.value) return 'grabbing'
+  return overflows() ? 'grab' : ''
+})
+
+// ---------------- 站外链确认（第 231 期）----------------
+//
+// PDF 里的「链接注释」常常指向**站外地址**。直接点开 = 让 PDF 里的一个外链把用户
+// 带去任意站点 —— 本项目是自托管的阅读器，不该替它做这个决定。
+//
+// ⚠️ **不做「看起来能点」的假链接**：注释层（链接热区）**必须真的能点**，
+// 点了**先弹确认**（显示目标地址），用户点了「打开」才真的去。
+// 内链（跳到本文档的某页）直接放行 —— 那是文档内部的事。
+
+/** 待确认的外链（null = 没有待确认的） */
+const pendingLink = ref<{ url: string; rect: { left: number; top: number; width: number; height: number }; page: number } | null>(null)
+
+/** 这一页的链接注释（按页缓存） */
+const linkAnnos = new Map<number, { url: string; rect: { left: number; top: number; width: number; height: number } }[]>()
+
+/** 读这一页的链接注释（`getAnnotations` 一次拿整页）。 */
+async function loadLinkAnnos(n: number, pdfPage: any, viewport: any): Promise<void> {
+  if (linkAnnos.has(n)) return
+  const out: { url: string; rect: { left: number; top: number; width: number; height: number } }[] = []
+  try {
+    const annos = await pdfPage.getAnnotations({ intent: 'display' })
+    for (const a of annos || []) {
+      if (!a || a.subtype !== 'Link') continue
+      const url = String(a.url || a.unsafeUrl || '')
+      if (!url) continue
+      const r = a.rect
+      if (!r || r.length !== 4) continue
+      // PDF 的 rect 原点在左下 ⇒ 翻到 DOM 的左上原点
+      const x1 = Math.min(r[0], r[2]) * (viewport.transform[0] || 1) + (viewport.transform[4] || 0)
+      const y1 = Math.min(r[1], r[3]) * (viewport.transform[3] || 1) + (viewport.transform[5] || 0)
+      const x2 = Math.max(r[0], r[2]) * (viewport.transform[0] || 1) + (viewport.transform[4] || 0)
+      const y2 = Math.max(r[1], r[3]) * (viewport.transform[3] || 1) + (viewport.transform[5] || 0)
+      out.push({
+        url,
+        rect: {
+          left: x1,
+          top: viewport.height - y2,
+          width: Math.max(2, x2 - x1),
+          height: Math.max(2, Math.abs(y2 - y1)),
+        },
+      })
+    }
+  } catch {
+    // 读不到注释（加密 / 坏文件）⇒ 如实留空，不造热区
+    out.length = 0
+  }
+  linkAnnos.set(n, out)
+  paintLinkLayer(n)
+}
+
+/** 把链接热区画成**真能点**的透明按钮（不是假链接）。 */
+function paintLinkLayer(n: number): void {
+  const host = textLayers.get(n)
+  if (!host) return
+  host.querySelectorAll('[data-pdf-link]').forEach((el) => el.remove())
+  for (const [i, l] of (linkAnnos.get(n) || []).entries()) {
+    const el = document.createElement('button')
+    el.type = 'button'
+    el.setAttribute('data-pdf-link', String(i))
+    el.setAttribute('aria-label', `打开外部链接：${l.url}`)
+    el.title = l.url
+    el.style.position = 'absolute'
+    el.style.left = `${l.rect.left}px`
+    el.style.top = `${l.rect.top}px`
+    el.style.width = `${l.rect.width}px`
+    el.style.height = `${l.rect.height}px`
+    el.style.background = 'transparent'
+    el.style.border = 'none'
+    el.style.padding = '0'
+    el.style.cursor = 'pointer'
+    el.style.zIndex = '2'
+    el.addEventListener('click', (ev) => {
+      ev.preventDefault()
+      ev.stopPropagation()
+      pendingLink.value = { url: l.url, rect: l.rect, page: n }
+    })
+    host.appendChild(el)
+  }
+}
+
+/** 确认框：真的去站外 */
+function openPendingLink(): void {
+  const l = pendingLink.value
+  if (!l) return
+  pendingLink.value = null
+  // ⚠️ 只允许 http / https —— `javascript:` 之类一律不放行（PDF 里的外链是不可信的输入）
+  if (!/^https?:\/\//i.test(l.url)) return
+  window.open(l.url, '_blank', 'noopener,noreferrer')
+}
+
+/** 放弃：不出站 */
+function cancelPendingLink(): void {
+  pendingLink.value = null
 }
 
 function onKeydown(e: KeyboardEvent): void {
@@ -1125,8 +1301,13 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
       v-show="true"
       ref="boxRef"
       class="min-h-0 flex-1 overflow-auto bg-neutral-200/70 dark:bg-neutral-900/60"
+      :style="panCursor ? { cursor: panCursor } : undefined"
       @scroll="onScroll"
       @mouseup="onPdfSelect"
+      @pointerdown="onPointerDown"
+      @pointermove="onPointerMove"
+      @pointerup="onPointerUp"
+      @pointercancel="onPointerUp"
     >
       <div
         class="flex min-h-full items-start justify-center gap-3 p-5"
@@ -1205,6 +1386,27 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
             {{ savingAnno ? '保存中…' : '保存' }}
           </Button>
           <Button size="sm" variant="ghost" @click="cancelPdfAnno">取消</Button>
+        </div>
+      </div>
+
+      <!-- 站外链确认（第 231 期）：PDF 里的外链**先问一句**再打开 -->
+      <div
+        v-if="pendingLink"
+        class="fixed inset-0 z-[70] grid place-items-center bg-black/35 p-4"
+        @click.self="cancelPendingLink"
+      >
+        <div class="w-[min(30rem,94vw)] rounded-lg border border-border bg-card p-4 shadow-2xl">
+          <div class="text-[13px] font-semibold text-foreground">要打开这个外部链接？</div>
+          <p class="mt-2 break-all rounded-md bg-muted px-2 py-1.5 font-mono text-[11.5px] text-foreground">
+            {{ pendingLink.url }}
+          </p>
+          <p class="mt-2 text-[11.5px] text-muted-foreground">
+            这是 PDF 里的站外链接 —— 内容由书籍提供，确认后会在新标签页打开。
+          </p>
+          <div class="mt-3 flex items-center justify-end gap-2">
+            <Button size="sm" variant="ghost" @click="cancelPendingLink">取消</Button>
+            <Button size="sm" variant="primary" @click="openPendingLink">打开</Button>
+          </div>
         </div>
       </div>
 
