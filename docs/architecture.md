@@ -16,23 +16,22 @@
 │   · 只做**编排与形状**：参数校验 → 调 core → 组装响应（如 _card 收口 path）│
 └───────────────┬──────────────────────────────────────────────────────────┘
 ┌───────────────▼──────────────────────────────────────────────────────────┐
-│ novelforge/core/* —— 领域逻辑（**全部 87 个模块**，纯 Python，不依赖 FastAPI）│
-│  achievements · activity · activity_log · ai_detect · atomicio ·         │
-│  audio · audio_meta · audiobook_zip · auth · authors · autoupdate ·      │
-│  backup · bookdock · bookfilter · bookrules · booksearch ·               │
-│  browse_counts · cache · catalog · changelog · comics · csvsafe ·        │
-│  customfields · customicons · db · detect · embed · entities ·           │
-│  epub_builder · epub_cfi · epub_update · events · fb2cache · features ·  │
-│  filename · fileops · fonts · htmlsafe · integrations · jssandbox ·      │
-│  komga · komga_api · koreader · koreader_anno · landing ·                │
-│  lib_settings · library · library_rules · m4b · metadata · metafetch ·   │
-│  metascore · metasources · metastore · migrate · mobicache ·             │
-│  narrators · netdiag · network · numbers · opds · pathmeta ·             │
-│  pdfrender · pdfsearch · pg · pgmigrate · pipeline · podcasts ·          │
-│  preprocess · publish · readaloud · reading_list · recommend ·           │
-│  recycle · saferegex · scrape · series_meta · sqlcompat · stats ·        │
-│  sync · thumbs · txtcache · units · updater · urlguard · watcher ·       │
-│  zipkind ·                                                               │
+│ novelforge/core/* —— 领域逻辑（**全部 93 个模块**，纯 Python，不依赖 FastAPI）│
+│ achievements · activity · activity_log · ai_detect · atomicio · audio ·  │
+│ audio_meta · audiobook_zip · auth · authors · autoupdate · backup ·      │
+│ bookdock · bookfilter · bookrules · booksearch · browse_counts · cache · │
+│ calibreimport · catalog · changelog · comics · csvsafe · customfields ·  │
+│ customicons · db · detect · dockpreview · embed · entities ·             │
+│ epub_builder · epub_cfi · epub_update · events · fb2cache · features ·   │
+│ filename · fileops · fonts · htmlsafe · imaging · integrations ·         │
+│ jssandbox · kepub · komga · komga_api · koreader · koreader_anno ·       │
+│ koreader_export · landing · lib_settings · library · library_rules ·     │
+│ m4b · metadata · metafetch · metascore · metasources · metastore ·       │
+│ migrate · mobicache · narrators · netdiag · network · numbers · opds ·   │
+│ pathmeta · pdfrender · pdfsearch · pg · pgmigrate · pipeline · podcasts ·│
+│ preprocess · publish · readaloud · reading_list · recommend · recycle ·  │
+│ saferegex · scrape · series_meta · sqlcompat · stats · sync · thumbs ·   │
+│ tts · txtcache · units · updater · urlguard · watcher · zipkind ·        │
 └───────────────┬──────────────────────────────────────────────────────────┘
                 │
    ┌────────────▼───────────┐   ┌──────────────┐   ┌───────────────────────┐
@@ -337,6 +336,7 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    | 被**环境变量无条件覆盖**的配置键 | `novelforge/config.py` 的 `_ENV_OVERRIDES` / `env_overridden()`（第 244 期：这两个键在设置页改了不起作用 ⇒ 界面据此标注「由环境变量接管」） |
    | 播客「残留下载」判据（这一集此刻有没有人在下） | `novelforge/core/podcasts.py` 的 `_stale_download`（复位点：列表端点 `reset_stale_in` + 启动时 `reset_stale_downloads`） |
    | 书目列表缓存的**键语义**（哪个口径能进缓存） | `novelforge/core/catalog.py` 的 `books_of`（键 `book_list_key(lid)` 只表示「该库的全量书目」⇒ **分页结果既不读也不写它**，第 244 期） |
+   | 图片处理（能力有无 / 解码像素闸 / 透明像素底色） | `novelforge/core/imaging.py` 的 `state` / `open_image` / `flatten`（第 248 期：缩略图 `novelforge/core/thumbs.py` 与格式转换 `novelforge/core/komga_api.py` **共用**这两条判据，但「缩到多宽 / 编成什么格式」各管各的，刻意不合并） |
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
    ⚠️ **第 82 期显式新增运行时依赖 `vue-draggable-plus@^0.6.1`**（仪表盘部件行内拖拽）：理由是原生 HTML5 DnD

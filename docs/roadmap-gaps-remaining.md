@@ -13893,7 +13893,7 @@ Pillow 自带的 `Image.MAX_IMAGE_PIXELS = 89478485` 只是**告警**闸（默�
 
 ### 核验
 
-- `tests/test_pillow_contract_248.py`（**15 例**）：缺 Pillow 时上传 503 / PDF 页抛
+- `tests/test_pillow_contract_248.py`（**16 例**）：缺 Pillow 时上传 503 / PDF 页抛
   `MissingPillow` / 能力接口与 `/health` 如实报 / 像素闸拦得住 12000×12000 / 缩略路径
   对超限图**原样返回原图**（不解码）/ Komga 转码透明区是白底不是黑。
   ⚠️ 缺 Pillow 的用例靠 **monkeypatch 拦 import** 模拟（不真的卸包）——
@@ -13947,3 +13947,4 @@ Pillow 自带的 `Image.MAX_IMAGE_PIXELS = 89478485` 只是**告警**闸（默�
 - ⭐ **公开的 `/health` 泄露「默认口令还在用」**（安全类，可直接利用）：要动
   `novelforge/server.py` ⇒ **本轮被并行会话占用**（它正在改这个文件）⇒ 下一轮做。
 - 其余候选见第 247 期段的清单。
+
