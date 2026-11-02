@@ -30,7 +30,7 @@ withDefaults(
         <span class="font-mono text-[11px] text-muted-foreground">{{ label }}</span>
       </div>
       <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
-        {{ note || '以下条目在上游该页存在，本项目未实现，仅作只读对照。' }}
+        {{ note || '以下条目是上游有、本项目不支持的功能，仅作只读对照。' }}
       </p>
     </div>
 

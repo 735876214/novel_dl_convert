@@ -13,7 +13,7 @@ export interface WhatsNewEntry {
 export const WHATS_NEW: WhatsNewEntry[] = [
   {
     date: '2026-09-18',
-    title: '补齐上游缺口（第 6 期）',
+    title: '补齐上游缺口',
     tag: '优化',
     items: [
       '顶栏新增「外观」快捷浮层：主题 / 点缀色 / 圆角一处搞定',

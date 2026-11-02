@@ -33,7 +33,7 @@ const key = computed(() => {
     <EmptyState
       icon="alert"
       :title="`${key} 不存在`"
-      desc="该页面不存在或链接有误（所有正式视图均已实现，这里仅作未知路由兜底）。"
+      desc="该页面不存在或链接有误。"
     >
       <template #action>
         <Button variant="primary" @click="router.push('/')">返回仪表盘</Button>

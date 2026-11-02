@@ -228,7 +228,7 @@ async function toggle(): Promise<void> {
         <div class="mb-1.5 text-[13px] font-medium text-foreground">账号</div>
         <div class="text-[12.5px] leading-relaxed text-muted-foreground">
           管理员账号 <code class="font-mono text-foreground">{{ account }}</code> + 登录 PIN
-          → 可看<strong>全部可见书库</strong>。第 160 期起还可以建<strong>只读账号</strong>：
+          → 可看<strong>全部可见书库</strong>。还可以建<strong>只读账号</strong>：
           它只能读 OPDS 目录 / 封面 / 下载，且可限定只看某几个库（给孩子的设备、只订阅漫画库）。
         </div>
 
@@ -330,10 +330,10 @@ async function toggle(): Promise<void> {
       label="OPDS"
       :groups="['SERVER', 'ENDPOINT', 'OPDS ACCOUNTS', 'OPDS NOTES']"
       :items="[
-        '每客户端权限细分（只读 / 可下载分区 / 到期时间）——第 160 期只做「只读 + 书库范围」',
+        '每客户端权限细分（只读 / 可下载分区 / 到期时间）——本项目只做「只读 + 书库范围」',
         '仅 HTTPS 的强制开关（上游为按部署方式给建议）',
       ]"
-      note="本项目已实现：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页与排序参数、Basic 认证（管理员账号或**独立只读账号**，后者可限定书库），以及按书库分别暴露（每个书库有独立地址，可逐库开关）。"
+      note="已支持：目录开关、端点地址（可复制）、全部/最近/按作者/按系列/按标签/搜索/单书详情/封面/下载、分页与排序参数、Basic 认证（管理员账号或**独立只读账号**，后者可限定书库），以及按书库分别暴露（每个书库有独立地址，可逐库开关）。"
     />
   </div>
 </template>

@@ -196,7 +196,7 @@ function restoreOne(it: RecycledItem): Promise<void> {
 function restoreOrphan(o: RecycleOrphan): Promise<void> {
   const dir = window.prompt(
     `把「${o.stripped}」还原到哪个目录？（绝对路径）\n\n` +
-      '这条没有台账（第 81 期之前的回收，或手工放进回收目录的），所以需要你指定目标目录。',
+      '这条没有台账（早期回收的，或手工放进回收目录的），所以需要你指定目标目录。',
     '',
   )
   if (!dir) return Promise.resolve()
