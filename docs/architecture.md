@@ -341,6 +341,7 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 | **免鉴权端点能回什么**（内部事实的边界） | `novelforge/server.py` 的 `health` / `api_health_detailed`（第 258 期：免鉴权的 `/health` **只给**状态 / 版本 / 能否一键更新 / **有几条问题**；`checks` 明细 / `problems` 人话 / 三个**绝对路径**在**鉴权后**的 `GET /api/health` ⇒ 免鉴权拿到 = 泄露 NAS 目录结构与「还在用默认口令」这种安全信息） |
 | **抓取值会不会因为超长而写不进去**（预览要与写入一致） | `novelforge/core/metafetch.py` 的 `_too_long_value` / `_mark_too_long`（第 259 期：判据**复用**写入侧那两张表 —— 元数据 `db.metadata_field_limits()` / 自定义 `customfields.value_limits()`；预览给超长字段标 `too_long` ⇒ **提交前**就知道会丢；写入侧**一律跳过**（不抛）⇒ 一家返回异常值不该毁掉**整次**抓取） |
 | **请求体**的上限（内存闸） | `novelforge/server.py` 的 `_REQUEST_BODY_MAX` + `_request_body_limit_middleware`（第 260 期：**两道闸** —— 看 `Content-Length`（不读就能拒）+ **流式累计**（chunked）；⚠️ 上传那条路**不走**它 —— 那是 multipart，有自己的 `_read_capped` 分块上限） |
+| **配置里这个键**认不认识（拼错了怎么办） | `novelforge/config.py` 的 `unknown_keys()`（第 261 期：**只看一层** —— 结构型的键（`fields` / `host_replace` / `ignore`）的子键本来就没名单，递归判会误报；⚠️ 不认识的键**只报不删** —— 删了会破坏向前兼容） |
    | 书目列表缓存的**键语义**（哪个口径能进缓存） | `novelforge/core/catalog.py` 的 `books_of`（键 `book_list_key(lid)` 只表示「该库的全量书目」⇒ **分页结果既不读也不写它**，第 244 期） |
    | 配置**段的类型**是否合法（段被写坏 ⇒ 降级还是抛） | `novelforge/config.py` 的 `section_type_errors()`（第 252 期：写入口 `PUT /api/config/raw` 与读入口 `load_config()` **共用**这一个判据 —— 段类型写坏 ⇒ 该段降级回默认值，**服务不得因此起不来**） |
    | 图片处理（能力有无 / 解码像素闸 / 透明像素底色） | `novelforge/core/imaging.py` 的 `state` / `open_image` / `flatten`（第 248 期：缩略图 `novelforge/core/thumbs.py` 与格式转换 `novelforge/core/komga_api.py` **共用**这两条判据，但「缩到多宽 / 编成什么格式」各管各的，刻意不合并） |
