@@ -5733,6 +5733,11 @@ def api_set_progress(bid: str, payload: dict = Body(...)):
             if is_epub:
                 cfi = epub_cfi.cfi_for_position(target, locator, offset)
     at = db.set_progress(bid, locator, percent, cfi, file_rel=file_rel)
+    # 第 225 期：**换章**才推一次进度给 Hardcover（低频触发）。
+    # ⚠️ 绝不挂在每一次翻页上 —— 那是翻页级高频写，逐次外呼纯属浪费。
+    # 判据在 `sync._should_push_progress`（同章内不推 / 换章推）。
+    if sync.auto_push_on("hardcover") and sync._should_push_progress(bid, locator):
+        _sync_progress_push(bid, request)
     # 回带写入时间戳（第 56 期）：前端据此更新「本机上次写入」，避免把自己的保存
     # 当成本机之外的更新而弹提示。
     return {"ok": True, "updated_at": at}
@@ -10588,6 +10593,23 @@ def _sync_auto_push(book_id, request: Request) -> None:
                    actor=activity_log.current_actor())
 
 
+def _sync_progress_push(book_id: str, request: Request) -> None:
+    """把进度推给 Hardcover（**旁路**线程，失败绝不影响用户刚做的那次写入）。
+
+    与 `_sync_auto_push` 同一纪律：先查开关（未开直接返回，零开销），
+    开了就在 daemon 线程里跑，并**吞掉全部异常**。
+    """
+    import threading
+
+    def _run():
+        try:
+            sync.push_progress([book_id], actor=activity_log.current_actor())
+        except Exception:
+            pass
+
+    threading.Thread(target=_run, daemon=True, name="nf-hc-progress").start()
+
+
 @app.post("/api/integrations/{service}/preview")
 def api_integration_preview(service: str):
     """同步预览：**只算不改、零外呼**。
@@ -10613,6 +10635,20 @@ def api_integration_sync(service: str, request: Request, payload: dict = Body(No
     book_ids = [str(x) for x in ids] if isinstance(ids, list) and ids else None
     return sync.run(service, book_ids, base_url=str(request.base_url),
                     actor=activity_log.current_actor())
+
+
+@app.post("/api/integrations/hardcover/progress")
+def api_hardcover_progress(request: Request, payload: dict = Body(None)):
+    """把本地阅读进度推给 Hardcover（第 225 期）。
+
+    ⚠️ **低频触发**：这是「关书 / 换章 / 手动同步」那类时刻的推送，**不是**每次翻页 ——
+    进度是翻页级高频写，逐次外呼纯属浪费（与 `auto_push` 同一条纪律）。
+
+    body: ``{"book_ids": ["..."]}``（不给 = 全部有进度的书）。
+    """
+    ids = (payload or {}).get("book_ids")
+    book_ids = [str(x) for x in ids] if isinstance(ids, list) and ids else None
+    return sync.push_progress(book_ids, actor=activity_log.current_actor())
 
 
 @app.post("/api/integrations/{service}/test")

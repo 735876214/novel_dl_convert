@@ -407,6 +407,142 @@ def run(service: str, book_ids=None, base_url: str = "", actor: str = "") -> dic
                 "pushed": pushed, "skipped": skipped, "failed": failed, "at": time.time()}
 
 
+# ---------------- Hardcover 阅读进度（第 225 期）----------------
+#
+# ⚠️ **只在低频点推**（关书 / 换章 / 手动「立即同步」），**绝不**挂在 `set_progress` 上 ——
+# 那是翻页级高频写，逐次外呼纯属浪费（与 `auto_push` 那条纪律同源）。
+#
+# ⚠️ **进度不是状态**：Hardcover 的 `status_id` 只有「想读 / 在读 / 读完」三档，
+# 而本项目的进度是 0–100 的连续值 ⇒ 只能落在对方的 `progress` 字段（0–1 的比例）。
+# 推的时候**只推 progress，不改 status** —— 两件事分开，语义各自清楚。
+
+#: 进度推送到 Hardcover 的 GraphQL。
+_HC_PROGRESS_MUTATION = """
+mutation ($book_id: Int!, $progress: Float!) {
+  insert_user_book(object: {book_id: $book_id, progress: $progress}) {
+    user_book { id progress }
+  }
+}
+"""
+
+
+def progress_of(book_id: str) -> "float | None":
+    """一本书的阅读进度（0–1）；没有进度行返回 ``None``（**不是 0**）。
+
+    ⚠️ 0 与「没有进度」是**两件事**：0 意味着「翻到了第一页」，而没有进度行意味着
+    「没读过」。推给外部时前者要推 0、后者**不推**。
+    """
+    try:
+        row = db.get_progress(book_id)
+    except Exception:                       # noqa: BLE001 —— 读不到就当没有
+        return None
+    if not row:
+        return None
+    try:
+        pct = float(row.get("percent") or 0)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(1.0, pct / 100.0))
+
+
+def _hardcover_push_progress(client: httpx.Client, token: str, book: dict,
+                             progress: float) -> tuple:
+    """把一本书的进度推给 Hardcover。返回 ``(ok, reason)``。"""
+    if not token:
+        return False, "未配置 API Token"
+    book_id, reason = _hardcover_find_book_id(client, token, book)
+    if not book_id:
+        return False, reason
+    try:
+        r = client.post(HARDCOVER_GRAPHQL, headers=_hc_headers(token),
+                        json={"query": _HC_PROGRESS_MUTATION,
+                              "variables": {"book_id": book_id, "progress": progress}})
+    except httpx.HTTPError as e:
+        return False, f"网络错误：{e}"
+    data = _graphql_json(r)
+    if data is None or (data or {}).get("errors"):
+        return False, "Hardcover 拒绝了这次进度写入"
+    return True, ""
+
+
+#: 每本书的「上次推过进度」状态（进程内）：``{book_id: (locator, timestamp)}``。
+#:
+#: 用途：**换章才推**。进度是翻页级高频写，而外部同步贵 —— 只有「换章」这种
+#: 低频事件才值得推一次（同章内翻页不推）。
+#:
+#: ⚠️ 进程内状态：重启后忘记 ⇒ 换章后会多推一次（无害，重复推同一个值）；
+#: 反过来若持久化，重启后同一章可能**再也不推**（那才是真问题）。故刻意只放内存。
+_PROGRESS_PUSHED: dict = {}
+
+
+def _should_push_progress(book_id: str, locator: int) -> bool:
+    """这次写进度**该不该**推给 Hardcover（换章 ⇒ 推；同章内翻页 ⇒ 不推）。"""
+    key = str(book_id)
+    prev = _PROGRESS_PUSHED.get(key)
+    now = time.time()
+    if prev is not None:
+        prev_locator, prev_at = prev
+        # 同章内 ⇒ 不推（翻页级高频写）
+        if int(prev_locator) == int(locator) and now - prev_at < 3600:
+            return False
+    _PROGRESS_PUSHED[key] = (int(locator), now)
+    return True
+
+
+def push_progress(book_ids=None, actor: str = "") -> dict:
+    """把本地阅读进度推给 Hardcover（**低频触发**：关书 / 换章 / 手动同步）。
+
+    ⚠️ **只推有进度的书**：没有进度行的不推（0 与「没读过」是两件事）。
+    ⚠️ **不覆盖状态**：状态由既有的 `_hardcover_push_one` 负责，两件事分开。
+
+    返回 ``{"ok", "pushed", "skipped": [...], "failed": [...]}``。
+    """
+    creds = ((_config().get("integrations") or {}).get("hardcover") or {})
+    token = str(creds.get("token") or "").strip()
+    if not token:
+        return {"ok": False, "message": "未配置凭据", "pushed": 0,
+                "skipped": [], "failed": []}
+
+    want = {str(b) for b in (book_ids or [])} if book_ids else None
+    rows = []
+    for b in _local_books():
+        bid = str(b.get("id") or "")
+        if not bid or (want is not None and bid not in want):
+            continue
+        pct = progress_of(bid)
+        if pct is None:
+            continue                              # 没进度 ⇒ 不推
+        rows.append((b, pct))
+    if not rows:
+        return {"ok": True, "message": "没有可推的进度", "pushed": 0,
+                "skipped": [], "failed": []}
+
+    pushed = 0
+    skipped: list = []
+    failed: list = []
+    with httpx.Client(timeout=TIMEOUT) as client:
+        for book, pct in rows:
+            ok, reason = _hardcover_push_progress(client, token, book, pct)
+            title = str(book.get("title") or book.get("name") or "")
+            if ok:
+                pushed += 1
+            elif reason and ("未匹配" in reason or "都为空" in reason):
+                skipped.append({"book_id": str(book.get("id") or ""), "title": title,
+                                "reason": reason})
+            else:
+                failed.append({"book_id": str(book.get("id") or ""), "title": title,
+                               "error": reason or "未知错误"})
+    try:
+        activity_log.log(activity_log.ACTION_SYNC, "Hardcover 进度",
+                         activity_log.STATUS_OK if not failed else activity_log.STATUS_FAIL,
+                         source="integration",
+                         detail=f"成功 {pushed} / 跳过 {len(skipped)} / 失败 {len(failed)}",
+                         actor=actor)
+    except Exception:                       # noqa: BLE001 —— 日志失败不影响推送结果
+        pass
+    return {"ok": not failed, "pushed": pushed, "skipped": skipped, "failed": failed}
+
+
 def _run_hardcover(token: str, rows: list) -> tuple:
     matched = pushed = 0
     skipped: list = []

@@ -504,13 +504,29 @@ def recent(limit: int = 200, action: str = "", status: str = "", q: str = "",
     对审计视图是致命的（只看得到重启之后发生的事）。
     现改为：内存不足 limit 条时，用 jsonl 尾部**重建**缓冲。
     jsonl 是追加式且包含本进程刚写的那几条，因此重建结果既完整又有序。
+
+    ⚠️ **重建不能丢内存里还没落盘的条目**（第 226 期）：合并窗口内的条目
+    **只在内存里**（`log()` 先入 `_memory`，窗口走完才 `_emit` 落盘），
+    而 jsonl 尾部**还没有**它们 ⇒ 原先的「`_memory.clear()` 后只填 tail」会
+    把这些条目**整段抹掉**。表现是：审计页在合并窗口内查「刚才那次登录」查不到 ——
+    而那正是用户刚做的事。
+    ⇒ 重建时**先留住内存里的条目**，再按时间序与 tail 合并（tail 里同一条
+    只算一次，靠 `ts_epoch` + 字段比对去重）。
     """
     need = limit if limit and limit > 0 else 0
     if need and len(_memory) < need:
         tail = _read_tail(max(need, _memory.maxlen or 2000))   # 旧 → 新
         if tail:
+            kept = list(_memory)                  # ⚠️ 先留住：合并窗口内的条目还没落盘
             _memory.clear()
-            for e in tail:
+            seen = set()
+            for e in (*tail, *kept):
+                # 去重键：同一 ts_epoch + 同一 action + 同一 file ⇒ 同一条
+                key = (e.get("ts_epoch"), e.get("action"), e.get("file"),
+                       e.get("detail"))
+                if key in seen:
+                    continue
+                seen.add(key)
                 _memory.append(e)
     items = list(reversed(_memory))        # 新 → 旧
 
