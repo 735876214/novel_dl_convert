@@ -87,9 +87,16 @@ _test/
 # 此前**都没被忽略** —— 一次 `git add -A` 就会把整个 dev 实例卷进提交。
 /nf-dev-*/
 /novelforge-tests-*/
-/pytest-of-*/
-# ⚠️ **拼错的目录名**（第 238 期）：`.codebudy/`（少一个 d）—— 某次脚本把 DATA_DIR 写成了
-# 这个路径，落下了一个 360 KB 的测试库。仓库根真正的目录是 `.codebuddy/`（见上面）。
-# 它**不在**上面那条 `.codebuddy/*` 的覆盖范围内 ⇒ 一次 `git add -A` 就会把数据库文件
-# 提交进仓库。带前导斜杠，锚定仓库根。
-/.codebudy/
+/pytest-of-*/
+/nf-junit/            # scripts/test.sh 的 junit 落点；本机 `.venv` 建不了 Temp 目录时会落回仓库根
+
+# ⚠️ **拼错的目录名**（第 238 期）：`.codebudy/`（少一个 d）—— 某次脚本把 DATA_DIR 写成了
+
+# 这个路径，落下了一个 360 KB 的测试库。仓库根真正的目录是 `.codebuddy/`（见上面）。
+
+# 它**不在**上面那条 `.codebuddy/*` 的覆盖范围内 ⇒ 一次 `git add -A` 就会把数据库文件
+
+# 提交进仓库。带前导斜杠，锚定仓库根。
+
+/.codebudy/
+
