@@ -161,17 +161,6 @@ SOURCES: tuple = (
 )
 
 _BY_ID: dict = {s["id"]: s for s in SOURCES}
-
-
-def catalogue() -> list[dict]:
-    """给接口用的注册表（含规则原文，便于用户复制到「书源管理」里修）。
-
-    `usable` 一栏**不在这里算** —— 它取决于闸门（`download.toc_enabled`）与凭据，
-    由调用方把 :func:`state_note` 的结果并进来，免得两处各写一份判定。
-    """
-    return [{k: v for k, v in s.items()} for s in SOURCES]
-
-
 def by_id(source_id: str) -> dict | None:
     return _BY_ID.get(str(source_id or ""))
 

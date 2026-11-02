@@ -66,18 +66,9 @@ FIELDS_OF_KIND = {
     }),
 }
 
-#: 每个 kind 都提供封面（`_entry` 的 `cover_url`，不属 METADATA_FIELDS）。
-#: 写成一个常量是为了让界面与详情补全逻辑**不必再列一遍**。
-KIND_HAS_COVER = frozenset(KINDS)
-
 
 def fields_of(kind: str) -> frozenset:
     """该领域有意义的字段集合；未知 kind ⇒ 空集（调用方按「不知道」处理，不猜）。"""
     return FIELDS_OF_KIND.get(kind, frozenset())
 
 
-def provides(kind: str, field: str) -> bool:
-    """该领域**是否提供**某字段（`cover` 单独判）。"""
-    if field == "cover":
-        return kind in KIND_HAS_COVER
-    return field in fields_of(kind)

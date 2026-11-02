@@ -23,18 +23,6 @@ def paragraphs_to_html(text: str) -> str:
     return "".join(f"<p>{_esc(ln)}</p>" for ln in lines)
 
 
-def apply_custom_tags(text: str) -> str:
-    """可选：把 [img]/[link]/[comment] 转换为 HTML（默认管线未启用，按需调用）。"""
-    def repl(m):
-        if m.group(1) is not None:
-            return f'<img src="{m.group(2)}" referrerpolicy="no-referrer" />'
-        if m.group(3) is not None:
-            return f'<a href="{m.group(3)}" target="_blank">{m.group(4)}</a>'
-        return f"<!-- {m.group(5)} -->"
-
-    return CUSTOM_TAG_RE.sub(repl, text)
-
-
 def traditionalize(text: str, to_simplified: bool = True) -> str:
     """繁体 <-> 简体转换（依赖 opencc-python-reimplemented）。"""
     try:

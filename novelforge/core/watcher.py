@@ -1045,6 +1045,3 @@ class FolderWatcher:
         }
 
 
-def build_watcher(cfg: dict | None = None, **kw) -> FolderWatcher:
-    """按配置构造监听器的便捷入口。"""
-    return FolderWatcher(cfg=cfg, **kw)

@@ -197,14 +197,6 @@ def is_comic(path) -> bool:
     return pathlib.PurePath(str(path)).suffix.lower() in COMIC_EXTS
 
 
-def is_cbz(path) -> bool:
-    return pathlib.PurePath(str(path)).suffix.lower() == ".cbz"
-
-
-def is_cbr(path) -> bool:
-    return pathlib.PurePath(str(path)).suffix.lower() == ".cbr"
-
-
 def rar_available() -> bool:
     """RAR 后端是否可用（``rarfile`` 已装 + 能找到外部解压器）。
 
