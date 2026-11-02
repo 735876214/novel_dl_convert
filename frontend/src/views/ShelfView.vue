@@ -23,8 +23,7 @@ import {
   tagsLabel,
 } from '@/lib/bookInfo'
 import { bookClickPath, seriesDetailPath } from '@/lib/bookOpen'
-import { statusBucket } from '@/lib/readingThresholds'
-import { scopeIdOf } from '@/lib/smartScope'
+import { scopeIdOf, schemaMaps, type ScopeRule } from '@/lib/smartScope'
 import { sortBooks } from '@/lib/shelfSort'
 import {
   bucketKeyOfSort,
@@ -320,6 +319,11 @@ const expanded = ref<string[]>([])
 // `loadBooks()` —— 首屏快正是分页的目的。全量 `books` 由侧栏 / 应用启动那条既有路径（B 批）
 // 负责，两者互不阻塞（`ShelfView.states.spec.ts` 也据此断言「挂载只发一次 /api/books」）。
 onMounted(() => {
+  // 第 221 期：规则筛选器的字段清单（服务端单一真值源）
+  void library.loadRuleSchema()
+  // 第 221 期：**先把筛选口径交给 store，再取第一页** —— 第一页必须已经是筛过的
+  // （否则会出现「首屏给的是未筛的全库第一页、后面才筛」的不一致）。
+  library.setShelfFilter(filterRules.value)
   library.loadShelfFirstPage()
   // 第 218 期：自定义智能书架由服务端求值；进入页面时确保有这份结果
   // （store 的 smartKey watcher 处理切换，这里兜住「直接落地在同一书架」的刷新）。
@@ -375,11 +379,147 @@ const fTag = ref('')
 const fCover = ref<'all' | 'yes' | 'no'>('all')
 const fStatus = ref<'all' | 'unread' | 'reading' | 'finished'>('all')
 
+/**
+ * 筛选面板的五个轴 → **服务端规则**（第 221 期）。
+ *
+ * 为什么要翻译成规则而不是继续在客户端筛：客户端只在**已加载的页**上筛，
+ * 大库里「筛一个排在很后面的格式」只能靠「自动续拉最多 5 页」碰运气 ——
+ * 命中不到就显示「没有符合条件的书」，而库里其实有。翻译成规则交给服务端，
+ * 口径与智能书架**完全一致**（同一个 `core/bookrules.py`）。
+ *
+ * ⚠️ 状态轴用 `status_bucket`（三档）而不是 `status`（八档）：筛选面板给用户的
+ * 就是三档（未读 / 在读 / 已读完），与服务端 `_status_bucket_of` 同一把尺子。
+ */
+const filterRules = computed<ScopeRule[]>(() => {
+  const rs: ScopeRule[] = []
+  if (fFormat.value) rs.push({ field: 'format', op: 'equals', value: fFormat.value })
+  if (fLanguage.value) rs.push({ field: 'language', op: 'equals', value: fLanguage.value })
+  if (fTag.value) rs.push({ field: 'tag', op: 'contains', value: fTag.value })
+  if (fCover.value !== 'all') rs.push({ field: 'has_cover', op: 'equals', value: fCover.value })
+  if (fStatus.value !== 'all') {
+    rs.push({ field: 'status_bucket', op: 'equals', value: fStatus.value })
+  }
+  return rs
+})
+
+// ---------------- 规则筛选器（第 221 期）----------------
+//
+// 与「智能书架」页的表单**同一份清单**（`GET /api/book-rules`）、**同一条求值路径**
+// （服务端 `core/bookrules.py`）。区别只在于：这里是**临时口径**（不落库），
+// 而智能书架是**存下来的**规则（`smart_scopes` 表）。
+
+const rulePanelOpen = ref(false)
+const ruleRows = ref<ScopeRule[]>([])
+const ruleMatch = ref<'all' | 'any'>('all')
+/** 规则命中数的实时预览（服务端算）；null = 还没算 / 算不出来 */
+const rulePreviewCount = ref<number | null>(null)
+const rulePreviewError = ref('')
+
+const ruleFieldOptions = computed(() => library.ruleSchema?.fields || [])
+const ruleMaps = computed(() => schemaMaps(library.ruleSchema))
+
+function ruleOpsFor(field: string): { key: string; label: string }[] {
+  const keys = ruleMaps.value.fieldOps[field] || []
+  return keys
+    .map((k) => ({ key: k, label: ruleMaps.value.opLabels[k] ?? k }))
+}
+
+function ruleValuesFor(field: string): { value: string; label: string }[] {
+  return ruleMaps.value.fieldValues[field] || []
+}
+
+function ruleNeedsValue(r: ScopeRule): boolean {
+  return ruleMaps.value.opNeedsValue[r.op] ?? true
+}
+
+/** 字段切换 ⇒ 操作落到该字段支持的第一个（与智能书架页同一条纪律） */
+function onRuleFieldChange(r: ScopeRule): void {
+  const ops = ruleMaps.value.fieldOps[r.field] || []
+  if (!ops.includes(r.op)) r.op = ops[0] || 'equals'
+}
+
+function addRuleRow(): void {
+  const f = ruleFieldOptions.value.find((x) => x.key === 'author') || ruleFieldOptions.value[0]
+  ruleRows.value = [...ruleRows.value, {
+    field: f?.key || 'author',
+    op: f?.ops[0] || 'contains',
+    value: '',
+  }]
+}
+
+function clearRules(): void {
+  ruleRows.value = []
+  rulePreviewCount.value = null
+  rulePreviewError.value = ''
+}
+
+/** 有效规则（填好了值的；「无需填值」的操作也算有效） */
+const ruleCount = computed(() => ruleRows.value.filter((r) => !ruleNeedsValue(r) || String(r.value ?? '').trim()).length)
+
+/** 规则 → 服务端规则（去掉没填值的，避免「空值恒真」把筛选悄悄放水） */
+const effectiveRules = computed<ScopeRule[]>(() =>
+  ruleRows.value
+    .filter((r) => !ruleNeedsValue(r) || String(r.value ?? '').trim())
+    .map((r) => ({ field: r.field, op: r.op, value: String(r.value ?? '').trim() })),
+)
+
+/**
+ * 规则筛选**并入**分页请求的筛选条件（与那五个下拉并列）。
+ *
+ * ⚠️ 口径必须与智能书架**一致**（服务端同一套 `bookrules`）—— 所以这里不加
+ * 「客户端再筛一遍」的第二道判定。
+ */
+const allFilterRules = computed<ScopeRule[]>(() => [...filterRules.value, ...effectiveRules.value])
+
+// 筛选口径一变（五个下拉 **或** 规则）⇒ 重新拉第一页（服务端按新口径分页）。
+// ⚠️ 用 `force=true`：守卫 `shelfLoaded` 会把「换筛选」当成「已经拉过」。
+watch(allFilterRules, () => {
+  if (isCustomScope.value) return       // 自定义书架走服务端 scope_id，不吃这五项
+  library.setShelfFilter(allFilterRules.value)
+  void library.loadShelfFirstPage(true)
+}, { deep: true })
+
+// 规则改动 ⇒ 防抖后向服务端要一次命中数（预览）。
+let rulePreviewTimer: ReturnType<typeof setTimeout> | null = null
+let rulePreviewSeq = 0
+watch([effectiveRules, ruleMatch], () => {
+  if (rulePreviewTimer !== null) clearTimeout(rulePreviewTimer)
+  if (!effectiveRules.value.length) {
+    rulePreviewCount.value = null
+    rulePreviewError.value = ''
+    return
+  }
+  rulePreviewTimer = setTimeout(() => void refreshRulePreview(), 250)
+}, { deep: true })
+
+async function refreshRulePreview(): Promise<void> {
+  const seq = ++rulePreviewSeq
+  if (!effectiveRules.value.length) return
+  try {
+    const res = await api.previewSmartScope({
+      rules: effectiveRules.value,
+      match: ruleMatch.value,
+      library_id: library.currentLibraryId,
+    })
+    if (seq === rulePreviewSeq) {
+      rulePreviewCount.value = res.count
+      rulePreviewError.value = ''
+    }
+  } catch (e) {
+    if (seq === rulePreviewSeq) {
+      rulePreviewCount.value = null
+      rulePreviewError.value = e instanceof Error ? e.message : '预览失败'
+    }
+  }
+}
+
 const hasFilter = computed(
   () =>
     Boolean(fFormat.value || fLanguage.value || fTag.value) ||
     fCover.value !== 'all' ||
-    fStatus.value !== 'all',
+    fStatus.value !== 'all' ||
+    // 第 221 期：规则也算筛选条件（否则「清除筛选」不会清规则）
+    effectiveRules.value.length > 0,
 )
 
 // 路由里的 fmt 变化（再次点「查看全部」/ 前进后退）⇒ 同步筛选值
@@ -391,17 +531,11 @@ function clearFilters(): void {
   fTag.value = ''
   fCover.value = 'all'
   fStatus.value = 'all'
+  // 第 221 期：一并清掉规则筛选（否则「清除筛选」只清一半）
+  clearRules()
 }
 
-/**
- * 状态筛选用的判定：**真实状态优先**（与书卡文案 `statusLabelOf` 同源）。
- *
- * ⚠️ 第 41 期起走 `lib/readingThresholds.ts` 的 `statusBucket`—— 手动标「已读完」
- * 后筛选也认，不再只看进度。
- */
-function statusOf(b: BookCard): 'unread' | 'reading' | 'finished' {
-  return statusBucket(b, library.currentLibraryId)
-}
+
 
 const searched = computed(() => {
   const q = keyword.value.trim().toLowerCase()
@@ -413,17 +547,18 @@ const searched = computed(() => {
   )
 })
 
-const filtered = computed(() =>
-  searched.value.filter((b) => {
-    if (fFormat.value && (b.format || '').toUpperCase() !== fFormat.value) return false
-    if (fLanguage.value && (b.language || '').trim() !== fLanguage.value) return false
-    if (fTag.value && !(b.tags || []).includes(fTag.value)) return false
-    if (fCover.value === 'yes' && !b.has_cover) return false
-    if (fCover.value === 'no' && b.has_cover) return false
-    if (fStatus.value !== 'all' && statusOf(b) !== fStatus.value) return false
-    return true
-  }),
-)
+/**
+ * 第 221 期：筛选面板那五个轴**不再在客户端判** —— 它们已经翻译成规则交给服务端
+ * （见上面的 `filterRules`），服务端返回的书**已经**是筛过的。
+ *
+ * ⚠️ 留着客户端那五段会变成「第二份判据」：服务端口径是三档状态 / 大小写不敏感，
+ * 客户端那版是另一套（`statusBucket` + 精确匹配）—— 两套不一致时会出现
+ * 「服务端说 12 本、界面只显示 11 本」。
+ *
+ * 关键词搜索**仍在客户端**（它是对**当前已加载页**的即时过滤，不参与分页口径）；
+ * 分面（fmt: / issues: / nocover:）与内置智能书架同理，仍在 `library.shelfBooks` 里裁。
+ */
+const filtered = computed(() => searched.value)
 
 const sorted = computed(() =>
   sortBooks(filtered.value, prefs.prefs.sort, prefs.prefs.dir,
@@ -1052,7 +1187,11 @@ function retryLoad(): void {
  */
 const emptyKind = computed<'no-library' | 'no-books' | 'filtered'>(() => {
   if (library.hasNoLibraries) return 'no-library'
-  return source.value.length ? 'filtered' : 'no-books'
+  // ⚠️ 第 221 期：筛选在**服务端**求值 ⇒ 筛完 `source` 可能直接是空的。
+  // 「有筛选条件」时必须判 `filtered`（书被条件挡掉了），不能落到 `no-books`
+  // —— 那会让用户以为「这个书架本来就没有书」，而库里其实有。
+  if (source.value.length) return 'filtered'
+  return hasFilter.value || keyword.value.trim() ? 'filtered' : 'no-books'
 })
 
 const emptyTitle = computed(() => {
@@ -1307,8 +1446,11 @@ const INPUT_CLS =
       </div>
     </Card>
 
-    <!-- 统一筛选面板（与工具栏同进同出：0 本书时「清除筛选」也是空按钮） -->
-    <Card v-if="source.length && prefs.filtersOpen" class="mb-3" padding="sm">
+    <!-- 统一筛选面板（与工具栏同进同出：0 本书时「清除筛选」也是空按钮）。
+         ⚠️ 第 221 期：筛选**在服务端**求值，筛完可能**一本都不剩** ——
+         面板若还挂在「`source.length` 非空」上，用户就再也打不开它来清除筛选
+         （只能刷新页面）。改成「有书 **或** 有筛选条件」都显示。 -->
+    <Card v-if="(source.length || hasFilter) && prefs.filtersOpen" class="mb-3" padding="sm">
       <div class="flex flex-wrap items-end gap-3">
         <label class="flex flex-col gap-1">
           <span class="text-[11px] text-muted-foreground">格式</span>
@@ -1357,6 +1499,103 @@ const INPUT_CLS =
         </label>
 
         <Button size="sm" class="ml-auto" :disabled="!hasFilter" @click="clearFilters">清除筛选</Button>
+      </div>
+
+      <!-- 规则筛选器（第 221 期）：面板里可以直接写规则（字段 + 操作 + 值）。
+           ⚠️ 与上面那五个下拉**并联**而不是替代：下拉是「常用口径」，规则是「任意口径」。
+           两者都翻译成规则发给服务端（见上面的 `filterRules`），口径同一份。 -->
+      <div class="mt-3 border-t border-border pt-3">
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            class="cursor-pointer text-[12px] font-medium text-primary hover:underline"
+            @click="rulePanelOpen = !rulePanelOpen"
+          >
+            {{ rulePanelOpen ? '收起规则筛选' : '规则筛选（按字段自由组合）' }}
+          </button>
+          <span v-if="ruleCount" class="text-[11.5px] text-muted-foreground">
+            规则命中 <b class="text-foreground tabular-nums">{{ rulePreviewCount ?? '…' }}</b> 本
+            <span v-if="rulePreviewError" class="text-destructive">（{{ rulePreviewError }}）</span>
+          </span>
+        </div>
+
+        <div v-if="rulePanelOpen" class="mt-2 flex flex-col gap-2">
+          <p v-if="!library.ruleSchema" class="text-[12px] text-muted-foreground">
+            字段清单加载失败，规则筛选暂不可用。
+          </p>
+          <template v-else>
+            <div v-for="(r, i) in ruleRows" :key="i" class="flex flex-wrap items-center gap-2">
+              <select
+                v-model="r.field"
+                aria-label="规则字段"
+                class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+                @change="onRuleFieldChange(r)"
+              >
+                <option v-for="f in ruleFieldOptions" :key="f.key" :value="f.key">{{ f.label }}</option>
+              </select>
+              <select
+                v-model="r.op"
+                aria-label="规则操作符"
+                class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+              >
+                <option v-for="o in ruleOpsFor(r.field)" :key="o.key" :value="o.key">{{ o.label }}</option>
+              </select>
+              <select
+                v-if="ruleValuesFor(r.field).length"
+                v-model="r.value"
+                aria-label="规则值"
+                class="h-8 w-44 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+              >
+                <option value="">选择…</option>
+                <option v-for="v in ruleValuesFor(r.field)" :key="v.value" :value="v.value">{{ v.label }}</option>
+              </select>
+              <input
+                v-else-if="ruleNeedsValue(r)"
+                v-model="r.value"
+                type="text"
+                aria-label="规则值"
+                placeholder="值"
+                class="h-8 w-44 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+              >
+              <span v-else class="text-[11.5px] text-muted-foreground">（无需填值）</span>
+              <button
+                type="button"
+                class="cursor-pointer text-[12px] text-muted-foreground hover:text-destructive"
+                @click="ruleRows.splice(i, 1)"
+              >
+                移除
+              </button>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                class="cursor-pointer text-[12px] text-primary hover:underline"
+                @click="addRuleRow"
+              >
+                + 加一条规则
+              </button>
+              <label class="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                匹配
+                <select
+                  v-model="ruleMatch"
+                  aria-label="规则匹配方式"
+                  class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+                >
+                  <option value="all">全部满足（且）</option>
+                  <option value="any">任一满足（或）</option>
+                </select>
+              </label>
+              <Button
+                size="sm"
+                variant="ghost"
+                :disabled="!ruleCount"
+                @click="clearRules"
+              >
+                清除规则
+              </Button>
+            </div>
+          </template>
+        </div>
       </div>
     </Card>
 

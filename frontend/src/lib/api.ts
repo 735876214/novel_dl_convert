@@ -4728,11 +4728,13 @@ export const api = {
    *   · 传了就分页：`total` 仍是**未切片前的总数**，`has_more` 告诉我们还有没有下一页。
    * ⚠️ `limit` / `offset` / `has_more` 三个字段**可选**：拿不到（旧后端）就由 store 兜底推。
    */
-  books: (opts?: { limit?: number; offset?: number; scope_id?: number }) => {
+  books: (opts?: { limit?: number; offset?: number; scope_id?: number; rules?: string }) => {
     const q = new URLSearchParams()
     if (opts && typeof opts.limit === 'number') q.set('limit', String(opts.limit))
     if (opts && typeof opts.offset === 'number') q.set('offset', String(opts.offset))
     if (opts && typeof opts.scope_id === 'number') q.set('scope_id', String(opts.scope_id))
+    // 第 221 期：内联筛选规则（JSON 字符串，服务端同一套求值路径）
+    if (opts && opts.rules) q.set('rules', opts.rules)
     const qs = q.toString()
     return request<{
       items: BookCard[]

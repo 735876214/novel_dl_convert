@@ -10,7 +10,7 @@ import {
   type LibraryScanState,
 } from '@/lib/api'
 import { COLLECTIONS, LIBRARIES, SMART_SHELVES } from '@/data/collections'
-import { scopeIdOf, type SmartScope } from '@/lib/smartScope'
+import { scopeIdOf, type RuleSchema, type ScopeRule, type SmartScope } from '@/lib/smartScope'
 import {
   ensureThresholds,
   isInProgress,
@@ -109,6 +109,25 @@ export const useLibraryStore = defineStore('library', () => {
   const shelfCursor = ref(0)
   /** 自动续拉已用页数（见 `AUTO_CONTINUE_MAX_PAGES`）；排序 / 筛选变化时归零。 */
   const shelfContinuedPages = ref(0)
+
+  // ---------------- 规则字段清单（第 218/221 期：服务端单一真值源） ----------------
+
+  /**
+   * 规则字段 / 操作清单（`GET /api/book-rules`）。
+   *
+   * 前端**不静态抄一份**字段表 —— 加字段只改服务端的 `core/bookrules.py`，
+   * 界面（智能书架管理页 / 书架规则筛选器）都从这份清单渲染。
+   */
+  const ruleSchema = ref<RuleSchema | null>(null)
+
+  async function loadRuleSchema(force = false): Promise<void> {
+    if (ruleSchema.value && !force) return
+    try {
+      ruleSchema.value = await api.ruleSchema()
+    } catch {
+      /* 拿不到清单 ⇒ 规则筛选器显示「字段清单加载失败」，不做假下拉 */
+    }
+  }
 
   // ---------------- 书库（第 10 期多书库） ----------------
 
@@ -474,6 +493,32 @@ export const useLibraryStore = defineStore('library', () => {
   let shelfInflight: Promise<void> | null = null
 
   /**
+   * 书架分页请求带的**筛选规则**（第 221 期）。
+   *
+   * 书架页的五项筛选（格式 / 语言 / 题材 / 封面 / 阅读状态）**在服务端求值**
+   * （`core/bookrules.py`），所以它们必须跟着分页请求一起发过去 ——
+   * 否则「第一页按未筛的全库取、后面在客户端筛」会出现「筛了没命中、库里其实有」。
+   *
+   * 这里存的是**已经翻译好的规则**（`ScopeRule[]`），由 `ShelfView` 写入；
+   * 空数组 = 不筛选（服务端逐字保持旧行为）。
+   */
+  const shelfFilterRules = ref<ScopeRule[]>([])
+  /** 筛选的匹配方式（all = 且 / any = 或）；只对 `shelfFilterRules` 有意义。 */
+  const shelfFilterMatch = ref<'all' | 'any'>('all')
+
+  function setShelfFilter(rules: ScopeRule[], match: 'all' | 'any' = 'all'): void {
+    shelfFilterRules.value = rules
+    shelfFilterMatch.value = match
+  }
+
+  /** 分页请求的筛选参数（空 = 不筛选，服务端逐字保持旧行为）。 */
+  function shelfFilterParam(): string | undefined {
+    const rs = shelfFilterRules.value
+    if (!rs.length) return undefined
+    return JSON.stringify({ rules: rs, match: shelfFilterMatch.value })
+  }
+
+  /**
    * 加载书架的**首页**（第 88 期 C 批修正后的分页入口，`ShelfView` 挂载时调）。
    *
    * 只写 `shelfLoadedBooks`，**不碰**全量 `books` / `loaded` —— 后者由 `loadBooks()` 负责。
@@ -486,7 +531,11 @@ export const useLibraryStore = defineStore('library', () => {
       shelfLoading.value = true
       booksError.value = ''
       try {
-        const res = await api.books({ limit: BOOKS_PAGE_SIZE, offset: 0 })
+        const res = await api.books({
+          limit: BOOKS_PAGE_SIZE,
+          offset: 0,
+          rules: shelfFilterParam(),
+        })
         shelfLoadedBooks.value = res.items
         shelfCursor.value = res.items.length
         shelfTotal.value = typeof res.total === 'number' ? res.total : res.items.length
@@ -526,7 +575,11 @@ export const useLibraryStore = defineStore('library', () => {
       shelfLoadingMore.value = true
       const offset = shelfCursor.value
       try {
-        const res = await api.books({ limit: BOOKS_PAGE_SIZE, offset })
+        const res = await api.books({
+          limit: BOOKS_PAGE_SIZE,
+          offset,
+          rules: shelfFilterParam(),
+        })
         appendShelfUnique(res.items)
         shelfCursor.value += res.items.length
         if (typeof res.total === 'number') shelfTotal.value = res.total
@@ -847,6 +900,11 @@ export const useLibraryStore = defineStore('library', () => {
     shelfContinuedPages,
     loadShelfFirstPage,
     loadMoreShelfBooks,
+    setShelfFilter,
+    shelfFilterRules,
+    shelfFilterMatch,
+    ruleSchema,
+    loadRuleSchema,
     autoLoadMoreShelf,
     resetShelfQuery,
     refreshBooks,

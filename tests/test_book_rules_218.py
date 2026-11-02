@@ -96,6 +96,15 @@ def test_数值_布尔_状态与上下文():
     assert bookrules.evaluate([b], [_rule("status", "equals", "finished")], **ctx) == [b]
     # 没标年份的书不参与年份比较
     assert bookrules.evaluate([_book(year="")], [_rule("year", "at_most", "2020")]) == []
+    # 三档状态（第 221 期给筛选面板用）：finished/skimmed → finished，
+    # reading/rereading/paused/abandoned → reading，unread/want_to_read → unread
+    ctx3 = {"thresholds": (0.0, 99.5), "thresholds_by_library": {}}
+    assert bookrules.evaluate([_book(status="skimmed")], [_rule("status_bucket", "equals", "finished")], **ctx3) != []
+    assert bookrules.evaluate([_book(status="paused")], [_rule("status_bucket", "equals", "reading")], **ctx3) != []
+    assert bookrules.evaluate([_book(status="want_to_read")], [_rule("status_bucket", "equals", "unread")], **ctx3) != []
+    # 真实状态优先于进度：有状态行时，进度 100% 也不改判
+    assert bookrules.evaluate([_book(status="reading", percent=100.0)],
+                              [_rule("status_bucket", "equals", "finished")], **ctx3) == []
     # 入库天数按 added_at（用户可改写的入库时间），不是文件 mtime
     import time as _time
     b2 = _book(added_at=_time.time() - 10 * 86400, mtime=_time.time())

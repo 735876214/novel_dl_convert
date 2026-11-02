@@ -148,7 +148,7 @@ components/
 | `readingSession.ts` | `createSessionReporter()`、`attachReaderClock()` | 阅读会话边界与累计（30s 心跳合一） |
 | `metadataFields.ts` | `FIELD_LABELS`、`CATALOG_FIELDS`、`IDENTITY_FIELDS`、`DB_ONLY_FIELDS` | 元数据字段名与顺序 |
 | `shelfBuckets.ts` | 首字母分桶（A–Z / `#`，不做拼音） | 书架分桶 |
-| `smartScope.ts` | `scopeIdOf()`、`schemaMaps()`、`ruleText()`；求值在服务端 `core/bookrules.py`（`GET /api/book-rules` 下发字段清单） | 智能书架类型与展示辅助（**不含判定**） |
+| `smartScope.ts` | `scopeIdOf()`、`schemaMaps()`、`ruleText()`；求值在服务端 `core/bookrules.py`（`GET /api/book-rules` 下发字段清单） | 智能书架 / 规则筛选器的类型与展示辅助（**不含判定**） |
 | `textAnchor.ts` | 章内字符偏移锚（取/还原同坐标） | 批注位置锚 |
 | `annotations.ts` | `chapterLabel()`、`canJumpTo()`、`originLabel()` | 批注展示口径 |
 | `viewport.ts` | `NARROW_QUERY`（`(max-width: 639.98px)`）、`useNarrowScreen()`、`useNarrowScreenOnMount()` | **窄屏断点的唯一真值源**（外壳侧栏与书架行共用；`shelfRows.ts` 原来那份私有常量已删）。读不到 `matchMedia` 的环境**按宽屏兜底** |

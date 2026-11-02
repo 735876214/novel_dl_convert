@@ -86,6 +86,10 @@ FIELDS: dict = {
     "format": {"label": "格式", "kind": "enum", "ops": ENUM_OPS},
     "status": {"label": "阅读状态", "kind": "enum", "ops": ENUM_OPS,
                "values": _STATUS_VALUES},
+    "status_bucket": {"label": "阅读状态（三档）", "kind": "enum", "ops": ENUM_OPS,
+                      "values": [{"value": "unread", "label": "未读"},
+                                 {"value": "reading", "label": "在读"},
+                                 {"value": "finished", "label": "已读完"}]},
     "library_type": {"label": "书库类型", "kind": "enum", "ops": ENUM_OPS,
                      "values": _LIBRARY_TYPES},
     "pages_source": {"label": "页数来源", "kind": "enum", "ops": ENUM_OPS,
@@ -244,6 +248,32 @@ def _status_of(book: dict, ctx: dict) -> str:
     return "reading" if pct > started else "unread"
 
 
+def _status_bucket_of(book: dict, ctx: dict) -> str:
+    """阅读状态**三档**（未读 / 在读 / 已读完）—— 与书架筛选面板、书卡角标同口径。
+
+    真实状态优先；没有状态行才按进度 + 阈值兜底。三档的归并规则与
+    ``stats._classify_status`` 一致（finished/skimmed → finished；
+    reading/rereading/paused/abandoned → reading；unread/want_to_read → unread）。
+
+    ⚠️ 这个字段是第 221 期为「书架筛选面板」补的：面板给用户的是三档，
+    而 `status` 是八档真实状态 —— 两者不是同一口径，别混用。
+    """
+    raw = str(book.get("status") or "")
+    if raw:
+        if raw in ("finished", "skimmed"):
+            return "finished"
+        if raw in ("unread", "want_to_read"):
+            return "unread"
+        return "reading"
+    by_lib = ctx.get("thresholds_by_library") or {}
+    started, finished = by_lib.get(str(book.get("library_id") or ""),
+                                   ctx.get("thresholds") or (0.0, 99.5))
+    pct = _num(book.get("percent")) or 0.0
+    if pct >= finished:
+        return "finished"
+    return "reading" if pct > started else "unread"
+
+
 def _field_value(book: dict, field: str, ctx: dict):
     if field == "tag":
         return book.get("tags") or []
@@ -261,6 +291,8 @@ def _field_value(book: dict, field: str, ctx: dict):
                                                     str(book.get("library_id") or ""))
     if field == "status":
         return _status_of(book, ctx)
+    if field == "status_bucket":
+        return _status_bucket_of(book, ctx)
     if field == "has_cover":
         return "yes" if book.get("has_cover") else "no"
     if field == "has_description":

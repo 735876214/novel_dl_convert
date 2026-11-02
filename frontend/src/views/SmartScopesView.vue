@@ -41,7 +41,11 @@ const maps = computed(() => schemaMaps(schema.value))
 async function loadSchema(): Promise<void> {
   schemaError.value = ''
   try {
-    schema.value = await api.ruleSchema()
+    // 字段清单走 **store**（第 221 期起与书架规则筛选器共用同一份缓存）——
+    // 两处各拉一次不是问题，但「同一判据两份缓存」会让「加字段后一处更新了另一处没更新」。
+    await library.loadRuleSchema(true)
+    schema.value = library.ruleSchema
+    if (!schema.value) throw new Error('加载字段清单失败')
   } catch (e) {
     schema.value = null
     schemaError.value = e instanceof Error ? e.message : '加载字段清单失败'

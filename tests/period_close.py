@@ -65,6 +65,38 @@ SEC3 = "## 3."
 SEC6 = "## 6."
 SEC4 = "## 4."
 HEAD_LINE = "- HEAD = "
+
+
+def _head_chain_start(todo_text: str) -> int:
+    """§0 那条 HEAD 链的**行号**（-1 = 找不到）。
+
+    ⚠️ 第 220 期起这条链**不再是一行**：并行会话把 §0 的 HEAD 链从「一行串 100+ 期号」
+    压成「里程碑分组」的多行结构，而版本字面量落在**链末的续行**上（``  `VERSION` = ...``），
+    前面还有两行说明「这条链只留里程碑分组，别再逐期追加」。
+
+    这里返回**带版本字面量的那一行**（旧格式里它与 ``- HEAD = `` 同行）——
+    落位要往它前面插期号。找不到带版本字面量的行时，退回 ``- HEAD = `` 的起始行，
+    由调用方报「缺锚点」。
+    """
+    lines = todo_text.split("\n")
+    for i, ln in enumerate(lines):
+        if ln.startswith(HEAD_LINE) and "；`VERSION`" in ln:
+            return i
+    # 多行链：版本字面量在链末的续行上（缩进开头 + `VERSION`）
+    for i, ln in enumerate(lines):
+        if ln.strip().startswith("`VERSION`") and "；`VERSION`" not in ln:
+            return i
+    for i, ln in enumerate(lines):
+        if ln.startswith(HEAD_LINE):
+            return i
+    return -1
+
+
+def _has_version_anchor(ln: str) -> bool:
+    """这一行上有没有版本字面量锚点（旧格式 ``；`VERSION``` / 新格式 ``  `VERSION` = ``）。"""
+    return "；`VERSION`" in ln or ln.strip().startswith("`VERSION`")
+
+
 BASELINE_COMMENT = "# 当前基线"
 TWO_PLACES = "每期收尾只写两处"
 
@@ -431,10 +463,10 @@ def scaffold(
         bad.append(f"`{TODO}` §2 已有 `| {period} |` 行")
     if any(s and s[0] <= period <= s[1] for s in (index_numbers(x) for x in parse_memory_index(memory.text))):
         bad.append(f"`{MEMORY}` 索引已覆盖第 {period} 期")
-    head_i = next((i for i, ln in enumerate(todo.text.split("\n")) if ln.startswith(HEAD_LINE)), -1)
+    head_i = _head_chain_start(todo.text)
     if head_i < 0:
         bad.append(f"`{TODO}` §0 找不到 `{HEAD_LINE}…` 那条 HEAD 链")
-    elif "；`VERSION`" not in todo.text.split("\n")[head_i]:
+    elif not _has_version_anchor(todo.text.split("\n")[head_i]):
         bad.append(f"`{TODO}` §0 的 HEAD 链里没有 `；`VERSION`` 锚点")
     if _span(todo.text.split("\n"), SEC2)[0] < 0:
         bad.append(f"`{TODO}` 找不到 `{SEC2}` 小节")
@@ -474,10 +506,15 @@ def scaffold(
     log.append(f"· `{TODO}` §2 加一行 `| {period} | {title} … |`")
 
     # 4) TODO §0：HEAD 链追加本段
-    head_i = next(i for i, ln in enumerate(tlines) if ln.startswith(HEAD_LINE))
+    head_i = _head_chain_start("\n".join(tlines))
     ln = tlines[head_i]
     cut = ln.rfind("；`VERSION`")
-    tlines[head_i] = ln[:cut] + f" + 第 {period} 期{title}" + ln[cut:]
+    if cut < 0:
+        # 多行链（第 220 期起）：版本字面量是**独立的一行** —— 插在它前面一行，
+        # 保持「里程碑分组 → 版本字面量」的既有顺序。
+        tlines.insert(max(0, head_i - 1), f"  + 第 {period} 期{title}")
+    else:
+        tlines[head_i] = ln[:cut] + f" + 第 {period} 期{title}" + ln[cut:]
     log.append(f"· `{TODO}` §0 HEAD 链追加 `+ 第 {period} 期{title}`")
 
     todo.text = "\n".join(tlines)

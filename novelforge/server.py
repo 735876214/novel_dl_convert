@@ -47,7 +47,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
                    events, entities, pathmeta, m4b, audiobook_zip, podcasts, readaloud, booksearch, customicons,
-                   pdfsearch, bookrules)
+                   pdfsearch, bookrules, bookfilter)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -3529,7 +3529,7 @@ def _rule_context(library_id: str = None) -> dict:
 
 @app.get("/api/books")
 def api_books(limit: str | None = None, offset: str | None = None,
-              scope_id: str | None = None):
+              scope_id: str | None = None, rules: str | None = None):
     """书目列表：附带阅读进度 / 批注数 / 评分 / 阅读状态（来自 SQLite）。
 
     第 88 期：新增 ``scanning`` 字段（**追加，不改既有字段**，保持向后兼容）——
@@ -3557,6 +3557,14 @@ def api_books(limit: str | None = None, offset: str | None = None,
     - 给值时先按 ``core/bookrules.py`` 求值，再做分页；``total`` 是**筛选后**的总数，
       顺序仍是 ``library.books()`` 的既有顺序（不重排）。
     - 非整数 ⇒ **400**；查不到该智能书架 ⇒ **404**（不是静默返回全部书目）。
+
+    第 221 期：新增**可选**查询参数 ``rules``（**内联规则**，JSON 字符串）：
+
+    - 形如 ``{"rules": [{"field": "tag", "op": "contains", "value": "科幻"}], "match": "all"}``
+      （整体 URL 编码）；与 ``scope_id`` **共用同一条求值路径**（``core/bookrules.py``）。
+    - 两者都给 ⇒ 以 ``scope_id`` 为准（已存的书架更具体），``rules`` 被忽略。
+    - 规则非法（未知字段 / 非法操作 / 非法数值 / 超过 60 条）⇒ **400** 且带原因。
+    - 不给 ⇒ 与改造前逐字一致（不筛选）。
 
     ⚠️ 边界（如实写明）：这是 **Python 侧切片**，省的是「响应体积 + 前端渲染行数」，
     **不是** DB 读 —— ``catalog`` 仍是「一条 ``SELECT *`` + 内存排序」，分页与否
@@ -3599,11 +3607,21 @@ def api_books(limit: str | None = None, offset: str | None = None,
         if not scope:
             raise HTTPException(404, "智能书架不存在")
         try:
-            rules = json.loads(scope.get("rules") or "[]")
+            scope_rules = json.loads(scope.get("rules") or "[]")
         except (ValueError, TypeError):
-            rules = []
-        items = bookrules.evaluate(items, rules, str(scope.get("match") or "all"),
+            scope_rules = []
+        items = bookrules.evaluate(items, scope_rules, str(scope.get("match") or "all"),
                                    **_rule_context())
+    else:
+        # ---- 内联规则筛选（第 221 期）：与 scope_id 同一条求值路径 ----
+        raw_rules = str(rules or "").strip()
+        if raw_rules:
+            try:
+                inline, match = bookfilter.rules_from_query(raw_rules)
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from None
+            if inline:
+                items = bookrules.evaluate(items, inline, match, **_rule_context())
     total = len(items)                   # ⚠️ 未切片前的总数（前端算「已显示 N / 共 M」）
     # 切片在**排序之后**（`library.books()` 已有序，见文档串）。
     # `lim is None` ⇒ 不限，返回 `offset` 起的全部；越界时 `items[off:]` 自然是空列表。

@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 
 import { api, type BookCard, type BookDetail } from '@/lib/api'
 import { useBookMenu } from '@/lib/bookMenu'
+import type { RuleSchema } from '@/lib/smartScope'
 import { useShelfPrefsStore, type ShelfView as ViewKind } from '@/stores/shelfPrefs'
 import ShelfView from '@/views/ShelfView.vue'
 
@@ -33,6 +34,9 @@ vi.mock('@/lib/api', () => ({
     bookDetail: vi.fn(),
     deleteBook: vi.fn(),
     collections: vi.fn(),
+    // 第 221 期：规则筛选器的字段清单（服务端单一真值源）+ 规则预览
+    ruleSchema: vi.fn(),
+    previewSmartScope: vi.fn(),
     downloadUrl: vi.fn((name: string) => `/download/${name}`),
     coverUrl: vi.fn((id: string) => `/api/books/${id}/cover`),
   },
@@ -45,6 +49,8 @@ const m = {
   bookMoveBatches: vi.mocked(api.bookMoveBatches),
   bookDetail: vi.mocked(api.bookDetail),
   collections: vi.mocked(api.collections),
+  ruleSchema: vi.mocked(api.ruleSchema),
+  previewSmartScope: vi.mocked(api.previewSmartScope),
 }
 
 // ---------------- 夹具 ----------------
@@ -87,6 +93,25 @@ const SHELF: BookCard[] = [
 
 const STANDALONE = '球状闪电'
 
+/**
+ * 规则字段清单（第 221 期）：**服务端下发**的形状 —— 前端不静态抄一份。
+ * 少了它，规则筛选器就没有字段可渲染（而这在界面上是「面板空着」，不报错）。
+ */
+const RULE_SCHEMA: RuleSchema = {
+  fields: [
+    { key: 'author', label: '作者', kind: 'text', ops: ['contains', 'equals', 'is_empty'] },
+    { key: 'tag', label: '题材', kind: 'list', ops: ['contains', 'is_empty'] },
+    { key: 'status', label: '阅读状态', kind: 'enum', ops: ['equals', 'not_equals'],
+      values: [{ value: 'finished', label: '已读完' }] },
+  ],
+  ops: [
+    { key: 'contains', label: '包含', needs_value: true },
+    { key: 'equals', label: '等于', needs_value: true },
+    { key: 'not_equals', label: '不等于', needs_value: true },
+    { key: 'is_empty', label: '为空', needs_value: false },
+  ],
+}
+
 function makeDetail(b: BookCard): BookDetail {
   return { ...b, chapters: [], files: [{ name: b.name, format: b.format, size: b.size, mtime: b.mtime }] }
 }
@@ -119,6 +144,8 @@ beforeEach(async () => {
   m.readingThresholds.mockResolvedValue({ library_id: '', started: 0, finished: 99.5 })
   m.bookMoveBatches.mockResolvedValue({ items: [] })
   m.collections.mockResolvedValue({ items: [] })
+  m.ruleSchema.mockResolvedValue(RULE_SCHEMA)
+  m.previewSmartScope.mockResolvedValue({ count: 2, total: 3 })
   m.bookDetail.mockImplementation(async (id: string) => makeDetail(SHELF.find((b) => b.id === id) as BookCard))
 
   router = createRouter({
@@ -447,9 +474,22 @@ describe('ShelfView：表格多选口径与折叠卡的册数', () => {
   })
 })
 
-describe('ShelfView：?fmt=AUDIO 落地（第 171 期）', () => {
+describe('ShelfView：?fmt=AUDIO 落地（第 171 期；第 221 期起筛选在服务端）', () => {
   it('按格式预设筛选，结果为空时给「没有符合条件的书」而不是谎报全空', async () => {
     await router.push('/?fmt=AUDIO')
+    // 第 221 期：筛选**在服务端**求值（同一套 `core/bookrules.py`），所以桩必须
+    // 站在服务端的位置上按 `rules` 过滤 —— 否则「界面筛掉了」只是客户端的假象。
+    m.books.mockImplementation(async (opts?: { rules?: string }) => {
+      let items = SHELF
+      if (opts?.rules) {
+        const payload = JSON.parse(opts.rules) as { rules: { field: string; op: string; value: string }[] }
+        items = items.filter((b) => payload.rules.every((r) => {
+          if (r.field === 'format') return (b.format || '').toUpperCase() === r.value
+          return true
+        }))
+      }
+      return { items, total: items.length }
+    })
     const w = await mountShelf('grid', false)
     // 筛选面板默认收起；直接改开合状态，断言的是「预设值有没有进筛选」
     useShelfPrefsStore().filtersOpen = true
@@ -459,5 +499,78 @@ describe('ShelfView：?fmt=AUDIO 落地（第 171 期）', () => {
     expect(sel.value).toBe('AUDIO')
     // 夹具全是 EPUB ⇒ 筛出来为空（诚实空态，不是「书架是空的」）
     expect(w.text()).toContain('没有符合条件的书')
+    // 筛选规则真的发出去了（否则「空」只是因为桩返回了空）
+    expect(m.books).toHaveBeenCalled()
+    const last = m.books.mock.calls[m.books.mock.calls.length - 1][0]
+    expect(String(last?.rules || '')).toContain('"format"')
+  })
+})
+
+describe('ShelfView：规则筛选器（第 221 期）', () => {
+  it('字段来自服务端清单；规则随分页请求发出；预览走服务端', async () => {
+    const w = await mountShelf('grid', false)
+    useShelfPrefsStore().filtersOpen = true
+    await flushPromises()
+
+    // 打开「规则筛选」
+    await w.findAll('button').find((b) => b.text().includes('规则筛选'))!.trigger('click')
+    await flushPromises()
+
+    // 加一条规则（规则行才渲染字段下拉）
+    await w.findAll('button').find((b) => b.text().includes('加一条规则'))!.trigger('click')
+    await flushPromises()
+
+    // 字段下拉的选项来自 `GET /api/book-rules`（不是前端写死的表）
+    const fieldOptions = w.find('select[aria-label="规则字段"]').findAll('option').map((o) => o.text())
+    expect(fieldOptions).toEqual(['作者', '题材', '阅读状态'])
+
+    // 填值 ⇒ 规则随分页请求发给服务端
+    const valueInput = w.find('input[aria-label="规则值"]')
+    await valueInput.setValue('刘慈欣')
+    await flushPromises()
+
+    await vi.waitFor(() => expect(m.previewSmartScope).toHaveBeenCalled(), { timeout: 2000 })
+    expect(m.previewSmartScope.mock.calls[0][0].rules).toEqual([
+      { field: 'author', op: 'contains', value: '刘慈欣' },
+    ])
+
+    const last = m.books.mock.calls[m.books.mock.calls.length - 1][0]
+    expect(String(last?.rules || '')).toContain('"author"')
+    expect(String(last?.rules || '')).toContain('刘慈欣')
+  })
+
+  it('「为空」操作不要求填值，也不进请求', async () => {
+    const w = await mountShelf('grid', false)
+    useShelfPrefsStore().filtersOpen = true
+    await flushPromises()
+    await w.findAll('button').find((b) => b.text().includes('规则筛选'))!.trigger('click')
+    await flushPromises()
+
+    await w.findAll('button').find((b) => b.text().includes('加一条规则'))!.trigger('click')
+    await flushPromises()
+    await w.find('select[aria-label="规则操作符"]').setValue('is_empty')
+    await flushPromises()
+
+    // 无值操作 ⇒ 没有值输入框；规则仍然有效（会去请求）
+    expect(w.find('input[aria-label="规则值"]').exists()).toBe(false)
+    await vi.waitFor(() => expect(m.previewSmartScope).toHaveBeenCalled(), { timeout: 2000 })
+    expect(m.previewSmartScope.mock.calls[0][0].rules).toEqual([
+      { field: 'author', op: 'is_empty', value: '' },
+    ])
+  })
+
+  it('预览失败如实显示，不伪装成 0 本', async () => {
+    m.previewSmartScope.mockRejectedValue(new Error('书库不存在'))
+    const w = await mountShelf('grid', false)
+    useShelfPrefsStore().filtersOpen = true
+    await flushPromises()
+    await w.findAll('button').find((b) => b.text().includes('规则筛选'))!.trigger('click')
+    await flushPromises()
+    await w.findAll('button').find((b) => b.text().includes('加一条规则'))!.trigger('click')
+    await flushPromises()
+    await w.find('input[aria-label="规则值"]').setValue('刘慈欣')
+
+    await vi.waitFor(() => expect(w.text()).toContain('书库不存在'), { timeout: 2000 })
+    expect(w.text()).not.toContain('规则命中 0 本')
   })
 })
