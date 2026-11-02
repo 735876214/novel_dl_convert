@@ -323,14 +323,20 @@ def _quiesce_background() -> None:
     # 与上面几类同一形态（默认关、平时没人点火才一直没炸）。
     try:
         from novelforge.core import podcasts as _podcasts
-        left += _podcasts.wait_pending(5.0)
-        # ⚠️ 第 247 期：播客 worker 是**跨用例常驻**的 daemon 线程（`while True` 阻塞在
-        # `_q.get()`）⇒ 收尾只「等队列排空」**不够**：它还活着，下一个用例入队时它会
-        # 拿着**旧连接**去查**新库**（用例级隔离 = `db.close()` + `db.init()`）⇒
-        # 「单独跑必过、全量跑随机挂」的假故障（实测：Linux 上 `test_podcast_auto_181`
-        # 被前一个文件的残留任务污染而红）。
-        # ⇒ 这里**作废世代号**（`stop_worker`）：残留线程醒来时发现世代变了 ⇒ 直接丢弃
-        # 手上的任务，不查库、不写库、不落文件（与 `core/scrape.py::stop` 同一套做法）。
+        # ⚠️ 第 247 期：**先等在途任务做完、再作废**（顺序反了会偶发红）。
+        # ① 先等：让「正在下载的那一集」把状态写进库（写临时文件 + 落盘 + 写库）；
+        #    慢的 CI runner（Linux、2 核）上 5 秒可能不够 ⇒ 放宽到 20 秒。
+        # ② 再作废：worker 是**跨用例常驻**的 daemon 线程（`while True` 阻塞在
+        #    `_q.get()`）⇒ 光「等队列排空」**不够**：它还活着，下一个用例入队时它会
+        #    拿着**旧连接**去查**新库**（用例级隔离 = `db.close()` + `db.init()`）⇒
+        #    「单独跑必过、全量跑随机挂」的假故障（实测：Linux 上 `test_podcast_auto_181`
+        #    被前一个文件的残留任务污染而红）。
+        #    作废世代号（`stop_worker`）⇒ 残留线程醒来时发现世代变了 ⇒ 直接丢弃
+        #    手上的任务，不查库、不写库、不落文件（与 `core/scrape.py::stop` 同一套做法）。
+        #
+        # ⚠️ ① 超时**不算收尾失败**：那一集本来就慢（用例自己也在等它），收尾不该因此
+        # 把整个用例判红 —— 超时就走 ②（作废 + 清队列），让它安静地作废。
+        _podcasts.wait_pending(20.0)
         _podcasts.stop_worker(0.0)
     except Exception:                                 # noqa: BLE001
         pass

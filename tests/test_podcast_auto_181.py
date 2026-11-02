@@ -38,14 +38,21 @@ def _setup(client, auth_headers, monkeypatch):
 def _wait_state(client, auth_headers, pid, eid, want, timeout=20.0):
     # ⚠️ 第 247 期：超时从 5s 放宽到 **20s** —— 等的是**后台下载线程**（真在干活），
     # 慢的 CI runner（Linux 容器、2 核）上 5s 不够 ⇒ 偶发红。
+    #
+    # 失败时把**整份 items 快照**带进消息：偶发时「最后是 ''」只说明「那一集不在列表里 /
+    # 状态是空」，看不出现场（是 id 变了？还是它压根没被排上？）。
     end = time.time() + timeout
+    items = []
     while time.time() < end:
         items = client.get(f"/api/podcasts/{pid}/episodes", headers=auth_headers).json()["items"]
         st = next((e["download_state"] for e in items if e["id"] == eid), "")
         if st == want:
             return
         time.sleep(0.02)
-    raise AssertionError(f"{eid} 未到 {want}（最后 {st!r}）")
+    raise AssertionError(
+        f"{eid} 未到 {want}（最后 {st!r}）
+  现场 items="
+        + repr([(e.get("title"), e.get("id"), e.get("download_state")) for e in items]))
 
 
 def test_自动下载最新N集_听完清理(client, auth_headers, monkeypatch):
