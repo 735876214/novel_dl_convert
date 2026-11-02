@@ -6193,11 +6193,21 @@ def get_effective_meta(bids) -> dict:
             ).fetchall():
                 on.setdefault(r["book_id"], {})[r["field"]] = r["value"]
     out: dict = {}
+    # ⚠️ 第 232 期：**只遍历「真的有值」的字段**，不是把 `_META_FIELDS`（25 个）
+    # 逐字段试一遍。2309 本的库里，后者是 5.7 万次 dict.get（实测 66 ms / 3 次
+    # ⇒ 整条列表接口的 1/4），而绝大多数书**一个覆盖值都没有** ⇒ 合并结果本就是空的。
+    # 遍历的字段集合 = (o ∪ n) ∩ _META_FIELDS（**权威字段集**仍以 `_META_FIELDS` 为准：
+    # 不在它里面的键不参与合并）。
+    relevant = set(_META_FIELDS)
     for bid in ids:
-        o = ov.get(bid, {})
-        n = on.get(bid, {})
+        o = ov.get(bid)
+        n = on.get(bid)
+        if not o and not n:
+            continue                    # 没有任何覆盖 / 在线值 ⇒ 无可合并
+        o = o or {}
+        n = n or {}
         merged: dict = {}
-        for f in _META_FIELDS:
+        for f in (set(o) | set(n)) & relevant:
             # 哨兵：用户显式要求「这个字段没有值」（清空系列序号 / 清空某个抓来的字段）。
             # 必须**带着无值**并进结果 —— 否则 library 那边只会保留文件里的旧值，
             # 而在线值也会被重新填上（清空就等于没做）。

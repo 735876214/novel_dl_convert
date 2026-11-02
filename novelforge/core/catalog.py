@@ -954,13 +954,43 @@ def _loads(s) -> list:
     return v if isinstance(v, list) else []
 
 
-def _book_of_row(lib: dict, row) -> dict:
+def _root_prefix(root: str) -> str:
+    """把来源根归一成**可拼前缀**（解析一次，供逐行拼路径用）。
+
+    ⚠️ 第 232 期：逐行写 ``str(pathlib.Path(root) / rel)`` 会让 ``pathlib``
+    **每行都重新解析一遍根路径**（`_parse_path` / `drive` / `__str__`）——
+    实测 2309 本的库里，这一句占 `_book_of_row` 的一半以上时间
+    （`pathlib.__str__` 146 ms / 3 次，即**整条列表接口的一半**）。
+
+    而**同一个根的行共享同一个前缀** ⇒ 解析一次、之后只做字符串拼接。
+    ⚠️ **一个库可以有多个来源根**（第 41 期起 `source_dirs` 是数组）⇒
+    前缀必须**按 root 分别缓存**，不能一个库共用一个（否则两个根下的同名文件
+    会算出对方的路径 —— 那正是 `test_catalog.py::test_多文件夹库的两个根都进索引` 拦的）。
+
+    ⚠️ 归一必须与 ``pathlib`` **逐字一致**（``C:/books`` → ``C:ooks``）：
+    `path` 是对外字段（`/api/books/{bid}/local-paths` 等按它定位文件），
+    手工拼（不归一）会与旧行为不同 ⇒ 定位会错。所以这里**先用 pathlib 解析一次**
+    再取其字符串形态，之后逐行只做 ``os.path.join``。
+    """
+    if not root:
+        return ""
+    try:
+        return str(pathlib.Path(root))
+    except Exception:                         # noqa: BLE001 —— 坏根按「拼不出来」处理
+        return ""
+
+
+def _book_of_row(lib: dict, row, prefixes: dict = None) -> dict:
     """索引行 + 库实体 → BookCard 契约的书目条目。
 
     字段与 ``library._row_of`` **逐项对应**（那份是权威定义，这里是它的逆）：
     存起来的直接取，读取时才拼的（``name``/``path``/``c1``/``c2``/``issues``/
     ``library_id``/``library_type``）现算。两边的口径靠 `test_catalog.py` 的
     对拍用例钉住 —— 一旦哪边加了字段而另一边没跟上，那条用例会红。
+
+    ``prefixes`` 是**按 root 预归一好的前缀表**（第 232 期）：批量调用时由调用方
+    按 root 各算一次，避免每行都让 ``pathlib`` 重新解析一遍根路径（实测那是这函数
+    最大的开销）。不给时按老路自己算（单本调用方走这条）。
     """
     from . import library as _lib
 
@@ -972,9 +1002,15 @@ def _book_of_row(lib: dict, row) -> dict:
     is_dir = bool(row["is_dir"])
     has_cover = bool(row["has_cover"])
     c1, c2 = _lib._gradient(bid)
+    root_prefix = ""
+    if prefixes is not None:
+        root_prefix = prefixes.get(root, "")
+    else:
+        root_prefix = _root_prefix(root)
     try:
         # path 现拼：库里存的是根，不是绝对路径 —— 这样挪根 / 改库都不必回填索引
-        path = str(pathlib.Path(root) / rel)
+        path = (os.path.join(root_prefix, rel.replace("/", os.sep))
+                if root_prefix else root)
     except Exception:                         # noqa: BLE001
         path = root
     return {
@@ -1232,7 +1268,15 @@ def books_of(lib: dict) -> list:
             _cached_libs.add(lid)
         return _with_added_at(hit)
     rows = _rows_of(lib)
-    out = _with_added_at(_lib._apply_overlay([_book_of_row(lib, r) for r in rows]))
+    # 来源根归一**按 root 各一次**（第 232 期）：一个库可能有多个来源根，
+    # 同名文件在两个根下都合法 ⇒ 前缀必须按 root 分开。
+    _prefixes = {}
+    for r in rows:
+        _root = str(r["root"] or "")
+        if _root not in _prefixes:
+            _prefixes[_root] = _root_prefix(_root)
+    out = _with_added_at(_lib._apply_overlay(
+        [_book_of_row(lib, r, _prefixes) for r in rows]))
     if key and fresh_enough and _unchanged(lid, seen_dirty, seen_seq):
         cache.set_json(key, out, cache.TTL_LIST)
         with _state_lock:
