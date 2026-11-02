@@ -92,6 +92,56 @@ def output_dir(library_id=None) -> pathlib.Path:
     return config.OUTPUT_DIR
 
 
+def allowed_restore_dirs() -> list:
+    """**回收站「孤儿还原」允许的目标目录**（第 242 期）。
+
+    背景：回收站里**没有台账**的条目（早期回收的、手工放进回收目录的）还原时需要用户
+    指定目标目录。此前那个 ``target_dir`` **原样拼进目标路径**，**没有任何包含性校验** ⇒
+    已登录用户可以把回收件搬到**任意可写目录**（含系统自启动目录、别的用户的目录）。
+
+    这里给出**白名单**：收书目录（`INPUT_DIR`）＋ 每个书库的库根（`output_dir(lid)`）
+    ＋ `OUTPUT_DIR` 兜底。判据只有这一处。
+    """
+    out = []
+    for d in (config.INPUT_DIR, config.OUTPUT_DIR):
+        try:
+            out.append(pathlib.Path(d).resolve())
+        except OSError:
+            continue
+    try:
+        for lib in library.libraries():
+            for r in library.roots_of(lib):
+                try:
+                    out.append(pathlib.Path(r).resolve())
+                except OSError:
+                    continue
+    except Exception:                                   # noqa: BLE001 —— 库表读不到时用上面的兜底
+        pass
+    return out
+
+
+def restore_target_dir(raw: str) -> pathlib.Path:
+    """校验「孤儿还原」的目标目录 → 返回绝对路径；不在白名单里抛 ``ValueError``。
+
+    ⚠️ 包含性判定必须在 ``resolve()`` **之后**做：符号链接 / 大小写文件系统都可能把
+    看起来在白名单里的路径指到外面（同 `input_path` 的做法）。
+    """
+    s = str(raw or "").strip()
+    if not s:
+        raise ValueError("目标目录为空")
+    p = pathlib.Path(s)
+    try:
+        rp = p.resolve()
+    except OSError as e:
+        raise ValueError(f"目标目录无法解析：{s}") from e
+    for base in allowed_restore_dirs():
+        if rp == base or base in rp.parents:
+            return rp
+    raise ValueError(
+        f"目标目录不在允许范围内（只能是收书目录或某个书库的库根）：{s}"
+    )
+
+
 def recycle_dir() -> pathlib.Path:
     d = config.CACHE_DIR / RECYCLE_DIRNAME
     d.mkdir(parents=True, exist_ok=True)

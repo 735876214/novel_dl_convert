@@ -145,6 +145,7 @@ def plan_restore(ids=None, names=None, target_dir: str = "", all_items: bool = F
         items.append({"ledger_id": int(rid), "name": name, "src": str(d / name),
                       "dst": orig, "label": pathlib.Path(orig).name})
     tdir = str(target_dir or "").strip()
+    _base = None
     for nm in (names or []):
         n = str(nm)
         if not _safe_name(n):
@@ -154,8 +155,17 @@ def plan_restore(ids=None, names=None, target_dir: str = "", all_items: bool = F
             errors.append({"name": n, "error": "无台账条目必须指定还原目录"})
             continue
         stripped, _stamp, _seq = strip_stamp(n)
+        # 第 242 期：目标目录**必须过包含性判据**（`fileops.restore_target_dir`）——
+        # 此前它原样拼进目标路径，已登录用户能把回收件搬到**任意可写目录**。
+        # 校验放在**条目名合法之后**（更具体的错因优先报）。
+        if _base is None:
+            try:
+                _base = fileops.restore_target_dir(tdir)
+            except ValueError as e:
+                errors.append({"name": n, "error": str(e)})
+                continue
         items.append({"ledger_id": None, "name": n, "src": str(d / n),
-                      "dst": str(pathlib.Path(tdir) / stripped), "label": stripped})
+                      "dst": str(_base / stripped), "label": stripped})
     return {"items": items, "errors": errors}
 
 

@@ -172,7 +172,9 @@ def test_孤儿还原必须指定目录_指定后按剥前缀的名字落进去(
     assert "必须指定还原目录" in bad.json()["errors"][0]["error"]
     assert orphan.is_file(), "报错时一个文件都不该动"
 
-    target = tmp_path / "归位"
+    # ⚠️ 第 242 期：目标目录必须在**允许范围内**（收书目录 / 库根）——
+    # `tmp_path/"归位"` 与收书目录（`tmp_path/"input"`）是平级 ⇒ 会被拒。
+    target = tmp_path / "input" / "归位"
     ok = client.post(API_RESTORE, headers=auth_headers,
                      json={"names": [orphan.name], "target_dir": str(target)})
     t = _wait_task(client, auth_headers, ok.json()["task_id"])
@@ -181,10 +183,36 @@ def test_孤儿还原必须指定目录_指定后按剥前缀的名字落进去(
     assert not orphan.exists()
 
 
-def test_孤儿条目名不许带路径分隔符(client, auth_headers, isolated):
+def test_孤儿条目名不许带路径分隔符(client, auth_headers, isolated, tmp_path):
+    """条目名带路径分隔符 ⇒ 拒。
+
+    ⚠️ 第 242 期：`target_dir` 现在也要过**包含性判据**（收书目录 / 库根），所以这里
+    给一个**合法**的目标目录 —— 否则会先报「目标目录不在允许范围内」，测的就不是本条意图了。
+    """
     r = client.post(API_RESTORE, headers=auth_headers,
-                    json={"names": ["../../etc/passwd"], "target_dir": "/tmp"})
+                    json={"names": ["../../etc/passwd"], "target_dir": str(tmp_path / "input")})
     assert r.json()["errors"][0]["error"] == "条目名非法"
+
+
+def test_目标目录不在允许范围内时报错且不搬文件(client, auth_headers, isolated, tmp_path):
+    """第 242 期：**目标目录必须过包含性判据**。
+
+    此前 `target_dir` 原样拼进目标路径 ⇒ 已登录用户能把回收件搬到**任意可写目录**
+    （含系统自启动目录、别的用户的目录）。现在只有「收书目录 / 某个书库的库根」被允许。
+    """
+    d = fileops.recycle_dir()
+    orphan = d / "20260101-000000_越界.txt"
+    orphan.write_bytes(b"PAYLOAD")
+    try:
+        r = client.post(API_RESTORE, headers=auth_headers,
+                        json={"names": [orphan.name],
+                              "target_dir": str(tmp_path / "系统自启动目录")})
+        assert r.json()["task_id"] is None, "越界目标目录不该建出任务"
+        errs = r.json()["errors"]
+        assert errs and "不在允许范围内" in errs[0]["error"], errs
+        assert orphan.is_file(), "报错时一个文件都不该动"
+    finally:
+        orphan.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
