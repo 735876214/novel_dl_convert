@@ -505,6 +505,17 @@ def isolated(monkeypatch, tmp_path: pathlib.Path) -> Iterator[None]:
     # 同步让服务端的边界校验（normalize_source_dirs 只认 LIBRARY_SOURCE_ROOTS）放行 tmp_path 下的库根。
     monkeypatch.setattr(config, "LIBRARY_SOURCE_ROOTS",
                         [{"name": "libraries", "path": str(tmp_path / "libraries")}])
+    # ⚠️ **审计日志目录也要用例级隔离**（第 226 期）：`LOG_DIR` 原本是**会话级**的
+    # ⇒ 前一个用例写的「登录」条目会被后一个用例的日期筛选读到
+    # （`test_auth_audit_192.py::test_审计日期范围筛选` 在全量里红、单跑绿 ——
+    # 典型的顺序相关假故障）。
+    #
+    # 隔离方式：把 `LOG_DIR` 环境变量指到本用例专属目录，并**重置 activity_log 的
+    # 目录缓存**（它把第一次算出来的目录缓存成进程级常量，不重置就还是老目录）。
+    monkeypatch.setenv("LOG_DIR", str(tmp_path / "logs"))
+    from novelforge.core import activity_log as _activity_log
+    # `set_dir` 会把目录缓存成进程级常量 ⇒ 每个用例都要重设（否则还是上一个的目录）
+    _activity_log.set_dir(tmp_path / "logs")
     db.close()
     # 第 62 期：PG 后端下「换一套空库」= 把 schema 整个重建。
     # SQLite 那条路不需要这一步 —— 上面那行 monkeypatch 已经把 DATA_DIR 指到一个

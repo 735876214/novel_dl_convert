@@ -43,6 +43,8 @@ const SECTIONS: ToolSection[] = [
   { label: '本地导入', routeName: 'tools-local', feature: 'convert' },
   // 第 165 期：按正则从文件名 / 路径提取元数据（一次性操作，不落常驻规则）
   { label: '文件名提取', routeName: 'tools-path-import' },
+  // 第 228 期：外部书库的只读登记导入（Calibre → 覆盖层，零拷贝）
+  { label: '外部书库登记', routeName: 'tools-calibre-import' },
   { label: '转换日志', routeName: 'tools-logs' },
 ]
 

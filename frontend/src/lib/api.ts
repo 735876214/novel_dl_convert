@@ -647,6 +647,53 @@ export interface IntegrationTestResult {
   unsupported?: boolean
 }
 
+/**
+ * 外部书库的**只读登记**预览（第 228 期）：读 Calibre 的 `metadata.db`。
+ *
+ * ⚠️ 只算不改 —— 真正登记走 `calibreRegister`（写**覆盖层**，不碰文件）。
+ */
+export interface CalibrePreview {
+  ok: boolean
+  books: {
+    calibre_id: number | string
+    title: string
+    author: string
+    series: string
+    series_index: string
+    isbn: string
+    publisher: string
+    year: string
+    tags: string
+    path: string
+    format: string
+  }[]
+  total: number
+  warnings: string[]
+  plan: {
+    items: {
+      path: string
+      title: string
+      author: string
+      series: string
+      series_index: string
+      isbn: string
+      publisher: string
+      year: string
+      tags: string
+    }[]
+    skipped: { title: string; path: string; reason: string }[]
+    warnings: string[]
+  }
+}
+
+export interface CalibreRegisterResult {
+  ok: boolean
+  matched: number
+  written: number
+  skipped: number
+  warnings: string[]
+}
+
 /** 同步预览（`POST /api/integrations/{svc}/preview`）：**只算不改、零外呼** */
 export interface SyncPreview {
   service: string
@@ -3799,6 +3846,23 @@ export const api = {
       `/api/book-dock/${encodeURIComponent(id)}/delete`,
       { method: 'POST' },
     ),
+
+  // ---------- 外部书库的只读登记（第 228 期）----------
+
+  /** 读 Calibre 的 `metadata.db` 并给出**登记计划**（只算不改）。 */
+  calibrePreview: (dbPath: string, root: string) =>
+    request<CalibrePreview>(
+      `/api/calibre/preview?db_path=${encodeURIComponent(dbPath)}`
+      + `&root=${encodeURIComponent(root)}`,
+    ),
+
+  /** 把登记计划落成**元数据覆盖**（只写覆盖层，不碰文件）。 */
+  calibreRegister: (payload: { library_id: string; db_path: string; root: string }) =>
+    request<CalibreRegisterResult>('/api/calibre/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
 
   // ---------- 日志 ----------
   // 存盘情况随 `logs()` 一起返回（第 52 期），无需单独请求。

@@ -47,7 +47,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
                    events, entities, pathmeta, m4b, audiobook_zip, podcasts, readaloud, booksearch, customicons,
-                   pdfsearch, bookrules, bookfilter, dockpreview)
+                   pdfsearch, bookrules, bookfilter, dockpreview, calibreimport)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -10038,6 +10038,57 @@ def api_book_dock_delete(item_id: str):
 # ---------------- 元数据完整度评分（B2）----------------
 # 权重模型与分位聚合都在 core/metascore.py，这里只做透传。
 # force=true 绕过 library 的 5 秒缓存重算 —— 对应页面上的「重新计算」。
+
+# ---------------- 外部书库的只读登记导入（第 228 期）----------------
+#
+# ⚠️ 只做「只读登记」：读 Calibre 的 `metadata.db`，把它的元数据写成**覆盖层**。
+# **不复制文件、不写源、不导其它应用的用户与进度** —— 见 `core/calibreimport.py` 的文件头。
+
+@app.get("/api/calibre/preview")
+def api_calibre_preview(db_path: str, root: str = "", limit: int = Query(5000, ge=1, le=50000)):
+    """读 Calibre 的 `metadata.db` 并给出**登记计划**（只算不改）。
+
+    body 用查询参数：`db_path` = `metadata.db` 的路径、`root` = Calibre 书库根目录
+    （用来定位每个文件）、`limit` = 最多读多少本。
+    """
+    if not db_path:
+        raise HTTPException(400, "需要 metadata.db 的路径")
+    data = calibreimport.read_calibre(pathlib.Path(db_path), limit=limit)
+    if not data["books"] and data["warnings"]:
+        raise HTTPException(400, data["warnings"][0])
+    if not root:
+        return {"ok": True, "books": data["books"], "total": data["total"],
+                "warnings": data["warnings"], "plan": {"items": [], "skipped": [],
+                                                     "warnings": []}}
+    plan = calibreimport.plan_registration(pathlib.Path(root), data["books"])
+    return {"ok": True, "books": data["books"], "total": data["total"],
+            "warnings": data["warnings"], "plan": plan}
+
+
+@app.post("/api/calibre/register")
+def api_calibre_register(payload: dict = Body(...)):
+    """把登记计划落成**元数据覆盖**（只写覆盖层，不碰文件）。
+
+    body: ``{"library_id": "...", "db_path": "...", "root": "..."}``。
+    ⚠️ 那个 Calibre 目录必须**已经**是本项目书库的来源根（先登记目录、再扫到书、再写覆盖）。
+    """
+    lid = str((payload or {}).get("library_id") or "").strip()
+    if not lid:
+        raise HTTPException(400, "需要目标书库 id")
+    lib = library.get_library(lid)
+    if not lib:
+        raise HTTPException(404, "书库不存在")
+    db_path = str((payload or {}).get("db_path") or "").strip()
+    root = str((payload or {}).get("root") or "").strip()
+    if not db_path or not root:
+        raise HTTPException(400, "需要 metadata.db 的路径与书库根目录")
+    data = calibreimport.read_calibre(pathlib.Path(db_path))
+    if not data["books"]:
+        raise HTTPException(400, (data["warnings"] or ["读不到书"])[0])
+    plan = calibreimport.plan_registration(pathlib.Path(root), data["books"])
+    res = calibreimport.apply_registration(lid, plan)
+    return {"ok": True, **res}
+
 
 @app.get("/api/metadata-score")
 def api_metadata_score(force: bool = False):

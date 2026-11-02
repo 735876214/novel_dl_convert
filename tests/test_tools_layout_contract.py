@@ -32,8 +32,9 @@ SRC = ROOT / "frontend" / "src"
 TOOLS_LAYOUT = SRC / "views" / "tools" / "ToolsLayout.vue"
 ROUTER = SRC / "router" / "index.ts"
 
-#: 工具页的标签数（第 165 期实测为 9：新增「文件名提取」）。少一个都意味着有人把某个工具页从台账上摘掉了。
-EXPECTED_SECTION_COUNT = 9
+#: 工具页的标签数（第 165 期实测为 9：新增「文件名提取」；第 228 期为 10：新增「外部书库登记」）。
+#: 少一个都意味着有人把某个工具页从台账上摘掉了。
+EXPECTED_SECTION_COUNT = 10
 
 
 def _strip_html_comments(src: str) -> str:

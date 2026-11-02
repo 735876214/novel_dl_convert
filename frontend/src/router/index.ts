@@ -188,6 +188,8 @@ const router = createRouter({
         { path: 'local', name: 'tools-local', component: () => import('@/views/tools/LocalConvertView.vue') },
         // 第 165 期：按正则从文件名 / 路径批量提取元数据
         { path: 'path-import', name: 'tools-path-import', component: () => import('@/views/tools/PathImportView.vue') },
+        // 第 228 期：外部书库的只读登记导入（Calibre metadata.db → 元数据覆盖层）
+        { path: 'calibre-import', name: 'tools-calibre-import', component: () => import('@/views/tools/CalibreImportView.vue') },
         { path: 'logs', name: 'tools-logs', component: () => import('@/views/tools/LogsView.vue') },
       ],
     },
