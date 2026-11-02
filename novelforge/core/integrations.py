@@ -20,6 +20,9 @@ import httpx
 #: 连接 8s / 整体 20s：只是个探针，不该让用户等
 TIMEOUT = httpx.Timeout(20.0, connect=8.0)
 
+#: Hardcover 的 GraphQL 端点 —— **本仓唯一真值源**（第 230 期收敛）。
+#: 此前 `metasources.HARDCOVER` 与 `sync.HARDCOVER_GRAPHQL` 各写一份字面量
+#: （三处完全相同）⇒ 换域名 / 改版本要改三处，漏一处就静默打到旧端点。
 HARDCOVER_GRAPHQL = "https://api.hardcover.app/v1/graphql"
 READWISE_AUTH = "https://readwise.io/api/v2/auth/"
 

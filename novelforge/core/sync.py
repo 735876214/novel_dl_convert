@@ -26,9 +26,11 @@ import unicodedata
 import httpx
 
 from . import activity_log, db, library, metadata
+#: Hardcover GraphQL 端点 —— **真值源在 `integrations`**（第 230 期收敛；
+#: 此前这里与 `metasources` 各写一份字面量，三处完全相同 ⇒ 改域名要改三处）。
+from .integrations import HARDCOVER_GRAPHQL
 
 TIMEOUT = httpx.Timeout(30.0, connect=10.0)
-HARDCOVER_GRAPHQL = "https://api.hardcover.app/v1/graphql"
 READWISE_HIGHLIGHTS = "https://readwise.io/api/v2/highlights/"
 STORYGRAPH_HOME = "https://app.thestorygraph.com/"
 #: Readwise 单次上限 100 条（超出会被拒）；批间小睡，避免撞 240 req/min 的限流

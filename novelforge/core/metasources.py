@@ -28,6 +28,9 @@ import httpx
 
 from .. import config
 from . import metadata, netdiag
+#: Hardcover GraphQL 端点 —— **真值源在 `integrations`**（第 230 期收敛；
+#: 此前这里与 `sync` 各写一份字面量，三处完全相同 ⇒ 改域名要改三处）。
+from .integrations import HARDCOVER_GRAPHQL as HARDCOVER
 from .library import norm_key
 from .sources import registry as _src_registry
 
@@ -162,7 +165,6 @@ ITUNES = ITUNES_BASE + "/search"
 #: iTunes 按 ``trackId`` 取详情（与检索同主机、同响应形状，只有参数不同）
 ITUNES_LOOKUP = ITUNES_BASE + "/lookup"
 RANOBEDB = "https://ranobedb.org/api/v0"
-HARDCOVER = "https://api.hardcover.app/v1/graphql"
 COMICVINE = "https://comicvine.gamespot.com/api/volumes/"
 ALADIN = "https://www.aladin.co.kr/ttb/api/ItemSearch.aspx"
 AMAZON = "https://www.amazon.com/s"
