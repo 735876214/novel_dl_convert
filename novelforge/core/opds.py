@@ -15,6 +15,7 @@
 用 `ET.Element("feed")` 建出来的仍是**无命名空间**的元素，客户端会解析不到条目。
 """
 import datetime
+import re
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 
@@ -191,7 +192,50 @@ def _feed(title: str, feed_id: str, updated: float, links: list, *,
 
 
 def tostring(feed: ET.Element) -> str:
+    """序列化 feed（**先把非法 XML 字符清掉**）。
+
+    ⚠️ 第 245 期：`ET.tostring` **不校验字符合法性** —— 它只转义 `&` / `<` / `>`，
+    **原样吐出控制字符**。而 XML 1.0 的合法字符集是
+    ``#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]``，
+    其它控制字符（``\\x0b`` 垂直制表符、``\\x08`` 退格…）**一律非法**。
+
+    触发条件：书名 / 作者 / 系列名里含这些字符 —— **POSIX 文件名允许**
+    （只禁 ``/`` 与 ``\\0``）⇒ NAS 上的书名完全可能带（Windows 不允许，所以
+    本机测不出来）。
+
+    后果：生成的 feed **不是良构 XML** ⇒ 客户端（KOReader / OPDS 客户端 / Komga）
+    **整份解析失败、一本书都看不到**；而本项目自己的界面一切正常 ⇒ 极难定位。
+
+    修法：清洗**整棵树**（``text`` 与属性都算）—— 一处，覆盖所有构造路径。
+    """
+    _clean_tree(feed)
     return '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(feed, encoding="unicode")
+
+
+#: XML 1.0 的合法字符（正则形式）：制表 / 换行 / 回车，加上三段 Unicode 区间。
+#: 落在这些区间外的字符（控制字符、孤立代理项、未配对平面字符）**一律剔除**。
+#: ⚠️ 用 \u 转义写，**源码里不出现裸控制字符**
+#: （否则这行自己就成了非法 XML 的样板）。
+_XML_ILLEGAL_RE = re.compile(
+    "[^\u0009\u000A\u000D\u0020-\uD7FF\uE000-\uFFFD\U00010000-\U0010FFFF]"
+)
+
+
+def _clean_text(s: str) -> str:
+    """剔掉一个字符串里的**非法 XML 字符**（其余原样保留）。"""
+    return _XML_ILLEGAL_RE.sub("", s)
+
+
+def _clean_tree(el: ET.Element) -> None:
+    """就地清洗一棵树：每个节点的 ``text`` 与全部属性值。"""
+    if el.text:
+        el.text = _clean_text(el.text)
+    if el.tail:
+        el.tail = _clean_text(el.tail)
+    for k, v in list(el.attrib.items()):
+        el.set(k, _clean_text(v))
+    for child in el:
+        _clean_tree(child)
 
 
 def navigation_feed(base: str, counts: dict, *, prefix: str = "/opds",
