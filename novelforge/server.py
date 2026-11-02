@@ -990,7 +990,13 @@ def _health_checks() -> dict:
     if not checks["config_dir_writable"]:
         problems.append(f"配置目录不可写：{config.CONFIG_DIR}（设置保存会失败）")
     if not checks["watcher_running"]:
-        problems.append("收书监听没在跑（新文件不会被自动收进来）")
+        # ⚠️ 第 251 期：**用户主动关掉监听时这不是「问题」** —— 他就是不要它。
+        # 此前一律报「收书监听没在跑」⇒ `/health` 长期 `degraded` ⇒ 用户自己的
+        # 监控（Uptime 之类）一直报警，而他什么都没做错。
+        # ⇒ 只在**监听本该开着**（`watcher.enabled`）却没跑时才报；
+        # `checks.watcher_running` 这个事实照旧给（前端与监控仍能看到「没在跑」）。
+        if (config.load_config().get("watcher") or {}).get("enabled", True):
+            problems.append("收书监听没在跑（新文件不会被自动收进来）")
     for d in config.dirs_failed()[:3]:
         problems.append(f"目录建不出来：{d}")
     if config.config_error():
