@@ -491,6 +491,25 @@ def _should_push_progress(book_id: str, locator: int) -> bool:
     return True
 
 
+def push_progress_async(book_ids=None, actor: str = "") -> None:
+    """把阅读进度**旁路**推给 Hardcover（失败绝不影响用户刚做的那次写入）。
+
+    ⚠️ 第 242 期：此前这个旁路线程是在 `server.py` 里直接 `threading.Thread(...).start()`
+    起的 —— **句柄丢弃、没进任何登记表** ⇒ 它会写库，却**收不干净**（用例级隔离下会攥着
+    已关闭的连接干活，全量跑实测过 segfault）。与 `core/sync.py` 里其它旁路线程同一形态，
+    收尾清单也认它们（`tests/conftest.py::_quiesce_background` → `sync.wait_pending`）。
+
+    异常**全吞**：这是「用户刚做完的动作已经落库，外部推送失败不该影响它」。
+    """
+    def _run():
+        try:
+            push_progress(book_ids, actor=actor)
+        except Exception:
+            pass
+
+    _spawn_bg(_run, "nf-hc-progress")
+
+
 def push_progress(book_ids=None, actor: str = "") -> dict:
     """把本地阅读进度推给 Hardcover（**低频触发**：关书 / 换章 / 手动同步）。
 

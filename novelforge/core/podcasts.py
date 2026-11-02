@@ -463,6 +463,10 @@ _AUDIO_SUFFIXES = (".mp3", ".m4a", ".m4b", ".aac", ".ogg", ".opus", ".wav", ".fl
 _q: "queue.Queue[str]" = queue.Queue()
 _worker_started = False
 _worker_lock = threading.Lock()
+#: 下载 worker 的线程句柄（第 242 期）：**daemon 线程句柄丢弃就收不干净** ——
+#: 它会写库（`db.set_episode_download`），残留线程在用例级隔离下会攥着已关闭的连接
+#: 干活（全量跑实测过 segfault）。范式同 `core/sync.py` 的 `_BG_THREADS`。
+_worker_thread: "threading.Thread | None" = None
 
 
 def _download_dir(podcast_id: str) -> pathlib.Path:
@@ -520,12 +524,73 @@ def _worker() -> None:
 
 
 def _ensure_worker() -> None:
-    global _worker_started
+    global _worker_started, _worker_thread
     with _worker_lock:
         if _worker_started:
             return
-        threading.Thread(target=_worker, name="podcast-download", daemon=True).start()
+        t = threading.Thread(target=_worker, name="podcast-download", daemon=True)
+        _worker_thread = t
+        t.start()
         _worker_started = True
+
+
+def wait_pending(timeout: float = 10.0) -> int:
+    """等下载队列**排空** → 返回仍未干完的数量（``0`` = 收干净了）。
+
+    与 `core/sync.py` / `core/watcher.py` / `core/catalog.py` 同一契约（第 170 期统一）：
+    调用点在测试的收尾里（`tests/conftest.py::_quiesce_background`，**必须在
+    `db.close()` 之前**）—— 这个 worker 会写库，晚一步动手就会在已关闭的连接上写。
+
+    ⚠️ 判据是「**队列排空**」而不是「线程结束」：这个 worker 是 `while True` 的**常驻**
+    线程（设计上就阻塞在 `_q.get()` 等下一个任务），它**永远不会结束** ⇒ 按「线程活着」
+    判会永远返回非 0，收尾就会硬失败。`queue.join()` 才是对的语义（每个任务在
+    `finally` 里 `task_done()` ⇒ 队列空 ⇒ join 返回）。
+    """
+    deadline = time.time() + max(0.0, timeout)
+    while True:
+        if _q.unfinished_tasks == 0:
+            return 0
+        if time.time() >= deadline:
+            return int(_q.unfinished_tasks)
+        time.sleep(0.05)
+
+
+def _stale_download(eid: str, ep: dict) -> bool:
+    """这一集的 ``downloading`` 是不是**残留**（进程被 kill / 重启留下的）。
+
+    判据：**既没有下载中的临时件、也没有已完成的副本** ⇒ 此刻没人在下它。
+    （下载中的临时件是 ``<最终名>.part``，见 `_download_one`。）
+
+    ⚠️ 为什么需要它：``downloading`` 状态**只被设置、从不被清理**（第 242 期审计发现）——
+    进程被 kill / 容器重启后，那一集永远卡在「下载中」，而 `enqueue_download` 见到
+    `downloading` 会**直接跳过** ⇒ 那一集**再也下不了**（用户只能删了重订）。
+    """
+    if str(ep.get("download_state") or "") != "downloading":
+        return False
+    lp = str(ep.get("local_path") or "")
+    if lp and pathlib.Path(lp).is_file():
+        return False                        # 已有成品 ⇒ 不是残留
+    try:
+        d = _download_dir(str(ep.get("podcast_id") or ""))
+        for f in d.glob("*.part"):
+            return False                    # 有临时件 ⇒ 真的在下（或刚被杀）
+    except OSError:
+        return False
+    return True
+
+
+def reset_stale_downloads() -> int:
+    """把残留的 ``downloading`` 复位成「未下载」→ 返回复位的条数。
+
+    惰性调用点：`enqueue_download`（用户再点一次下载时）与 `list_local`（列本地副本时）。
+    **不主动扫全表** —— 那是后台任务才该做的事。
+    """
+    n = 0
+    for ep in db.list_all_podcast_episodes():
+        if _stale_download(str(ep.get("id") or ""), ep):
+            db.set_episode_download(str(ep.get("id") or ""), "", error="")
+            n += 1
+    return n
 
 
 def enqueue_download(eid: str) -> dict:
@@ -533,6 +598,11 @@ def enqueue_download(eid: str) -> dict:
     ep = db.get_podcast_episode(eid)
     if not ep:
         raise LookupError("单集不存在")
+    # 第 242 期：先把**残留**的 `downloading` 复位（进程被杀后它会卡住「下载中」，
+    # 而下面这行见到 `downloading` 就跳过 ⇒ 那一集再也下不了）。
+    if _stale_download(eid, ep):
+        db.set_episode_download(eid, "", error="")
+        ep = db.get_podcast_episode(eid) or ep
     if ep["download_state"] in ("downloading", "downloaded"):
         return {"ok": True, "state": ep["download_state"]}
     if not ep.get("audio_url"):

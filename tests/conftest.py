@@ -317,6 +317,14 @@ def _quiesce_background() -> None:
         left += _sync.wait_pending(5.0)
     except Exception:                                 # noqa: BLE001
         pass
+    # 第 242 期：**播客下载 worker**（`core/podcasts` 的 `podcast-download` 线程）。
+    # 它**写库**（`db.set_episode_download`），此前**句柄丢弃、没进任何登记表** ⇒ 收不干净。
+    # 与上面几类同一形态（默认关、平时没人点火才一直没炸）。
+    try:
+        from novelforge.core import podcasts as _podcasts
+        left += _podcasts.wait_pending(5.0)
+    except Exception:                                 # noqa: BLE001
+        pass
     try:
         from novelforge import server
         w = getattr(server, "WATCHER", None)
