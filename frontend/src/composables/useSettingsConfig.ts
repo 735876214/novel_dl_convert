@@ -36,6 +36,14 @@ const loading = ref(false)
 const loadError = ref('')
 /** `config.yaml` 读坏的诊断（空 = 正常）。设置页顶部据此报红条（第 141 期） */
 const configFileError = ref('')
+/**
+ * **段类型写坏**而被降级的段名（第 252 期，空 = 正常）。
+ *
+ * 与 `configFileError` 是**两件事**：那是「整个文件读不出来」，
+ * 这是「文件读得出来，但某一段被写成了别的类型」⇒ 那一段正在按**默认值**跑，
+ * 用户在设置页看到的也是默认值 —— 不说出来，他会以为自己的设置还在。
+ */
+const badSections = ref<string[]>([])
 
 /**
  * 服务端配置的**深拷贝基线**（每次加载/保存成功后刷新）。
@@ -106,6 +114,12 @@ export function useSettingsConfig() {
         configFileError.value = String(
           (r.config as unknown as Record<string, unknown> | undefined)?._config_error ?? '',
         )
+        // 第 252 期：**段类型写坏**而被降级的段（诊断键，后端同名字段）。
+        badSections.value = Array.isArray(
+          (r.config as unknown as Record<string, unknown> | undefined)?._bad_sections,
+        )
+          ? (((r.config as unknown as Record<string, unknown>)._bad_sections) as string[])
+          : []
         baseline.value = clone(r.config)
         overridden.value = r.overridden ?? []
         envOverridden.value = r.env_overridden ?? []
@@ -224,6 +238,7 @@ export function useSettingsConfig() {
     loading,
     loadError,
     configFileError,
+    badSections,
     // 未保存改动（草稿 vs 基线）
     dirtySections,
     hasDirty,

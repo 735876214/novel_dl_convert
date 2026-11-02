@@ -112,6 +112,24 @@ function discardAll(): void {
           </div>
         </div>
 
+        <!-- 第 252 期：**段类型写坏**的红条。与上面那条是**两件事**：
+             那是「整个 config.yaml 读不出来」，这里是「文件读得出来，
+             但某一被写成了别的类型」⇒ 那一段正在按**默认值**跑，
+             下面那些表单展示的也是默认值 —— 不说出来，用户以为自己的设置还在。 -->
+        <div
+          v-if="cfgDraft.badSections.value.length"
+          class="mb-3 flex items-start gap-2 rounded-[10px] border border-destructive/30 bg-destructive/10 px-3.5 py-2 text-[12px]"
+          role="alert"
+        >
+          <span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" aria-hidden="true" />
+          <div class="min-w-0">
+            <div class="font-medium text-foreground">配置里有段被写坏了，那些段正按默认值运行</div>
+            <div class="break-words text-muted-foreground">
+              {{ cfgDraft.badSections.value.join('、') }}（这些段必须是键值映射）
+            </div>
+          </div>
+        </div>
+
         <RouterView />
       </div>
     </div>
