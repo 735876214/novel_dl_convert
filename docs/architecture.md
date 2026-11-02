@@ -336,6 +336,7 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    | 被**环境变量无条件覆盖**的配置键 | `novelforge/config.py` 的 `_ENV_OVERRIDES` / `env_overridden()`（第 244 期：这两个键在设置页改了不起作用 ⇒ 界面据此标注「由环境变量接管」） |
    | 播客「残留下载」判据（这一集此刻有没有人在下） | `novelforge/core/podcasts.py` 的 `_stale_download`（复位点：列表端点 `reset_stale_in` + 启动时 `reset_stale_downloads`） |
    | 书目列表缓存的**键语义**（哪个口径能进缓存） | `novelforge/core/catalog.py` 的 `books_of`（键 `book_list_key(lid)` 只表示「该库的全量书目」⇒ **分页结果既不读也不写它**，第 244 期） |
+   | 配置**段的类型**是否合法（段被写坏 ⇒ 降级还是抛） | `novelforge/config.py` 的 `section_type_errors()`（第 252 期：写入口 `PUT /api/config/raw` 与读入口 `load_config()` **共用**这一个判据 —— 段类型写坏 ⇒ 该段降级回默认值，**服务不得因此起不来**） |
    | 图片处理（能力有无 / 解码像素闸 / 透明像素底色） | `novelforge/core/imaging.py` 的 `state` / `open_image` / `flatten`（第 248 期：缩略图 `novelforge/core/thumbs.py` 与格式转换 `novelforge/core/komga_api.py` **共用**这两条判据，但「缩到多宽 / 编成什么格式」各管各的，刻意不合并） |
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
