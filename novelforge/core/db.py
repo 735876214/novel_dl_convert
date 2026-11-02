@@ -5687,9 +5687,53 @@ _OVR_UPSERT = (
 _OVR_DELETE = "DELETE FROM meta_override WHERE book_id=? AND field=?"
 
 
-def _ovr_norm(value, orig) -> tuple:
-    """覆盖值的归一（唯一判据）：去空白；空值 = 撤销覆盖。"""
-    return str(value or "").strip(), str(orig if orig is not None else "").strip()
+#: 覆盖值的**长度上限**（字符）。
+#:
+#: ⚠️ 第 250 期为什么要它：覆盖值会**进书目列表的响应**（`/api/books` 每本书都带
+#: title / author / series…）。此前**没有任何长度限制** ⇒ 用户把书名粘成 1 MB 文本也能
+#: 保存 ⇒ 一页 120 本的响应就是 **120 MB**（每本 1 MB）⇒ 浏览器直接崩；不分页时是
+#: 2309 本 × 1 MB ≈ **2.3 GB** ⇒ 书架彻底打不开，**且没有自愈路径**（除非手改库）。
+#:
+#: 上限**按字段**给，因为有的字段进列表、有的不进：
+#:   · 进列表的短字段（title / author / series…）⇒ 严（几十到几百字符）；
+#:   · `description` / `tags` / `narrators` **不进列表**（第 68 期只发 `has_description`）
+#:     ⇒ 可以宽。
+#:
+#: 判据放在**存储层**（`set_override` / `set_overrides` 共用的 `_ovr_norm`）⇒ 任何调用方
+#: （单书编辑 / 正则导入 / 批量改名 / 实体改名）都受约束，**一处**。
+#: ⚠️ **超限是「拒绝」不是「截断」** —— 截断会静默丢数据（用户以为改了完整值）。
+_FIELD_MAX_LEN = {
+    "title": 200,
+    "author": 100,
+    "series": 100,
+    "series_index": 20,
+    "subtitle": 200,
+    "publisher": 100,
+    "language": 32,
+    "isbn": 32,
+    "date": 32,
+    "description": 8000,
+    "tags": 2000,
+    "narrators": 2000,
+}
+#: 未登记字段（含 `PROVIDER_ID_*`）的兜底上限 —— 按「短字段」算。
+_DEFAULT_FIELD_MAX_LEN = 200
+
+
+def _ovr_norm(value, orig, field: str = "") -> tuple:
+    """覆盖值的归一（唯一判据）：去空白；空值 = 撤销覆盖。
+
+    ⚠️ 第 250 期：**顺带做长度上限校验**（见 `_FIELD_MAX_LEN`）。超限抛
+    :class:`ValueError`（**拒绝**，不截断）—— 调用方（服务端）会把它翻成 4xx。
+    """
+    v = str(value or "").strip()
+    o = str(orig if orig is not None else "").strip()
+    if v:
+        limit = _FIELD_MAX_LEN.get(str(field or ""), _DEFAULT_FIELD_MAX_LEN)
+        if len(v) > limit:
+            raise ValueError(
+                f"「{field}」的值太长（{len(v)} 字符，上限 {limit}）")
+    return v, o
 
 
 def set_override(book_id, field, value, orig=None) -> None:
@@ -5700,7 +5744,7 @@ def set_override(book_id, field, value, orig=None) -> None:
     """
     bid = str(book_id)
     f = str(field)
-    v, o = _ovr_norm(value, orig)
+    v, o = _ovr_norm(value, orig, field)
     c = _connect()
     with _lock:
         if not v:
@@ -5728,7 +5772,7 @@ def set_overrides(items) -> int:
     now = time.time()
     upserts, deletes = [], []
     for book_id, field, value, orig in rows:
-        v, o = _ovr_norm(value, orig)
+        v, o = _ovr_norm(value, orig, field)
         if v:
             upserts.append((str(book_id), str(field), v, o, now))
         else:
