@@ -68,3 +68,28 @@ def test_上限表覆盖了所有会进列表的短字段():
     missing = sorted(f for f in listed if f not in db._FIELD_MAX_LEN)
     assert not missing, f"这些字段进列表却没有长度上限：{missing}"
     assert all(db._FIELD_MAX_LEN[f] <= 500 for f in listed), db._FIELD_MAX_LEN
+
+
+def test_在线抓取值超长则跳过该字段而不是整次失败(isolated):
+    """⚠️ 处置与用户写入**故意不同**。
+
+    用户写入超长 ⇒ **拒绝**（抛错，告诉用户「太长了」）；
+    在线抓取超长 ⇒ **跳过该字段**（不抛）—— 一家站点返回异常大的 title，
+    不该毁掉**整次抓取**（其它字段照写）。
+    """
+    db.set_online("lib$x$b1", {
+        "title": ("长" * 5000, "src"),        # 超长 ⇒ 跳过
+        "author": ("刘慈欣", "src"),          # 正常 ⇒ 写入
+    })
+    got = db.get_online("lib$x$b1")
+    assert "title" not in got, got
+    assert got["author"]["value"] == "刘慈欣", got
+
+
+def test_两个入口共用同一套上限判据():
+    """上限表只有一份（`db._FIELD_MAX_LEN`），两个入口都查它。"""
+    from novelforge.core import db as dbmod
+    assert dbmod._too_long("title", "x" * 1000) > 0
+    assert dbmod._too_long("title", "x" * 10) == 0
+    # 未知字段按兜底上限算
+    assert dbmod._too_long("没登记的字段", "x" * (dbmod._DEFAULT_FIELD_MAX_LEN + 1)) > 0

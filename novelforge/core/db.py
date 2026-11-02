@@ -5720,6 +5720,19 @@ _FIELD_MAX_LEN = {
 _DEFAULT_FIELD_MAX_LEN = 200
 
 
+def _too_long(field: str, value: str) -> int:
+    """这个值是否超长 → 返回超出的字符数（0 = 没超）。
+
+    ⚠️ 判据**只有这一处**（第 250 期）：用户覆盖（`set_override`）与在线抓取值
+    （`set_online`）**都要过它**，但**处置不同**：
+      · 用户写入 ⇒ **拒绝**（抛 ValueError）—— 让用户知道「太长了」；
+      · 抓取 ⇒ **跳过该字段**（不抛）—— 一家返回异常值不该毁掉整次抓取。
+    """
+    limit = _FIELD_MAX_LEN.get(str(field or ""), _DEFAULT_FIELD_MAX_LEN)
+    n = len(str(value or ""))
+    return max(0, n - limit)
+
+
 def _ovr_norm(value, orig, field: str = "") -> tuple:
     """覆盖值的归一（唯一判据）：去空白；空值 = 撤销覆盖。
 
@@ -5820,6 +5833,12 @@ def set_online(book_id, fields) -> None:
         for f, (val, src) in (fields or {}).items():
             v = str(val or "").strip()
             if not v:
+                continue
+            # ⚠️ 第 250 期：**在线抓取值也要限长** —— 它同样进书目列表的响应，
+            # 而它的来源是**外部站点**（可能返回异常大的 title/description）。
+            # ⚠️ 处置与用户写入**故意不同**：这里**跳过该字段**而不是抛错 ——
+            # 一家返回异常值不该毁掉整次抓取（其它字段照写）。
+            if _too_long(f, v):
                 continue
             c.execute(
                 "INSERT INTO meta_online(book_id, field, value, source, fetched_at) VALUES(?,?,?,?,?) "
