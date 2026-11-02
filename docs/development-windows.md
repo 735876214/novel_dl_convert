@@ -23,6 +23,19 @@
   `scripts/*.sh` 已内置，直跑命令时要自己带。
 - 同一个 safe-delete shim 也拦 **PowerShell `Remove-Item`**（**静默不删**）与不带 `-Encoding` 的 `Out-File`
   ⇒ 清临时产物用删除工具、写文件显式给编码（别以为命令报错才算失败）。
+- ⚠️ **`.venv` 的解释器在 `%TEMP%` 里建不了目录**（第 247 期实测）：能写文件、能在仓库内建目录，
+  但 `os.makedirs` 在 `%TEMP%` 下报 `PermissionError [WinError 5]` ⇒ **pytest 的 `tmp_path` 整片报错**
+  （看起来像「测试坏了」，其实是环境）。
+  ⇒ 本机跑后端全量用**系统解释器 + `.venv` 的 site-packages**（`PYTHONPATH` 指过去），
+  并把 `--basetemp` 指到 `%TEMP%` 下一个**事先存在**的新目录（同名已存在时 pytest 的
+  `mkdir` 也会 WinError 5）：
+
+  ```bash
+  PYTHONPATH="$PWD/.venv/Lib/site-packages"     "C:/Users/qingr/python312/python.exe" -m pytest     --junitxml="C:/Users/qingr/AppData/Local/Temp/nf/junit.xml" -q     --basetemp="C:/Users/qingr/AppData/Local/Temp/nf/pt"
+  ```
+
+  ⚠️ `scripts/test.sh` 走的是 `.venv` ⇒ **本机跑它会红**（同一原因）；CI（Linux）正常。
+  这条坑**只在 Windows 本机**出现，Linux 上 `.venv` 建目录没问题。
 
 ## 2. 文件读写（编码坑）
 
