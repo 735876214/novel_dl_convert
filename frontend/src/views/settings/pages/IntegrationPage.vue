@@ -44,6 +44,9 @@ const isStorygraph = computed(() => props.service === 'storygraph')
 const preview = ref<SyncPreview | null>(null)
 const syncResult = ref<SyncResult | null>(null)
 const syncing = ref(false)
+/** 第 225 期：Hardcover 阅读进度推送（**低频**：关书 / 换章 / 手动）。 */
+const pushingProgress = ref(false)
+const progressResult = ref<{ ok: boolean; pushed: number; failed: { title: string; error: string }[] } | null>(null)
 /** 是否已配置凭据：未配置时同步按钮禁用并说明原因（不放「点了没反应」的按钮） */
 const hasCreds = computed(() => Object.values(svc.value?.has ?? {}).some(Boolean))
 
@@ -126,6 +129,25 @@ async function runSync(): Promise<void> {
     ui.toast(e instanceof Error ? e.message : '同步失败')
   } finally {
     syncing.value = false
+  }
+}
+
+/**
+ * 把本地阅读进度推给 Hardcover（第 225 期）。
+ *
+ * ⚠️ 这是**手动**的一次推送；自动的那条在「换章时」由服务端触发（低频）。
+ */
+async function pushProgress(): Promise<void> {
+  pushingProgress.value = true
+  progressResult.value = null
+  try {
+    const r = await api.pushHardcoverProgress()
+    progressResult.value = r
+    ui.toast(r.ok ? `进度已推送：${r.pushed} 本` : `有 ${r.failed.length} 本失败`)
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '进度推送失败')
+  } finally {
+    pushingProgress.value = false
   }
 }
 
@@ -237,6 +259,17 @@ async function toggleAutoPush(): Promise<void> {
         <Button size="sm" :disabled="syncing" @click="runPreview">预览</Button>
         <Button size="sm" variant="primary" :disabled="syncing || !hasCreds" @click="runSync">
           {{ syncing ? '同步中…' : '立即同步' }}
+        </Button>
+        <!-- 第 225 期：进度推送（**只有 Hardcover 收进度**） -->
+        <Button
+          v-if="props.service === 'hardcover'"
+          size="sm"
+          data-int-act="push-progress"
+          :disabled="pushingProgress || !hasCreds"
+          title="把本地的阅读进度推给 Hardcover（自动的那条在换章时触发；这里可手动推一次）"
+          @click="pushProgress"
+        >
+          {{ pushingProgress ? '推送中…' : '推送进度' }}
         </Button>
       </div>
       <p v-if="!hasCreds" class="border-b border-border px-4 pb-3 text-[11.5px] text-muted-foreground">

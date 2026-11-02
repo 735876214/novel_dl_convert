@@ -4714,6 +4714,23 @@ export const api = {
   syncIntegration: (service: string) =>
     request<SyncResult>(`/api/integrations/${service}/sync`, { method: 'POST' }),
 
+  /**
+   * 把本地阅读进度推给 Hardcover（第 225 期）。
+   *
+   * ⚠️ **低频触发**：这是「关书 / 换章 / 手动同步」那类时刻的推送，**不是**每次翻页 ——
+   * 进度是翻页级高频写，逐次外呼纯属浪费。
+   */
+  pushHardcoverProgress: (bookIds?: string[]) =>
+    request<{ ok: boolean; pushed: number; skipped: { title: string; reason: string }[];
+              failed: { title: string; error: string }[] }>(
+      '/api/integrations/hardcover/progress',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bookIds?.length ? { book_ids: bookIds } : {}),
+      },
+    ),
+
   // ---------- KOReader 进度互通 ----------
   koreaderStatus: () => request<KoreaderStatus>('/api/koreader'),
 
