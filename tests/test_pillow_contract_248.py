@@ -178,7 +178,7 @@ def test_能力接口报出_Pillow_这一项(client, auth_headers):
     assert body["hints"]["pillow"] == body["pillow"]["reason"]
 
 
-def test_健康检查在缺_Pillow_时是_degraded_而不是_down(client, monkeypatch):
+def test_健康检查在缺_Pillow_时是_degraded_而不是_down(client, auth_headers, monkeypatch):
     """缺 Pillow 属于「能服务但有毛病」⇒ **200 + degraded**，不是 503。
 
     口径同 `_health_checks` 的注释：只有「库连不上」才回 503 —— 重启容器不会装上
@@ -187,14 +187,17 @@ def test_健康检查在缺_Pillow_时是_degraded_而不是_down(client, monkey
     monkeypatch.setattr(imaging, "available", lambda: False)
     r = client.get("/health")
     assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["status"] == "degraded", body["status"]
+    assert r.json()["status"] == "degraded", r.json()["status"]
+    # ⚠️ 第 258 期：`checks` / `problems` 在**鉴权后**的端点上
+    # （免鉴权的那份只给状态 / 版本 / 有几条问题）。
+    body = client.get("/api/health", headers=auth_headers).json()
     assert body["checks"]["pillow"] is False
     assert any("Pillow" in p for p in body["problems"]), body["problems"]
 
 
-def test_健康检查在有_Pillow_时是_ok(client):
-    body = client.get("/health").json()
+def test_健康检查在有_Pillow_时是_ok(client, auth_headers):
+    # ⚠️ 第 258 期：`checks` / `problems` 在**鉴权后**的端点上
+    body = client.get("/api/health", headers=auth_headers).json()
     assert body["checks"]["pillow"] is True
     assert not any("Pillow" in p for p in body["problems"]), body["problems"]
 
