@@ -328,6 +328,8 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    | 书源导入解析 | `novelforge/sources/intake.py`（三条入口共用一条路） |
    | 编码探测 | `novelforge/core/pipeline.py` 的 `decode_bytes` |
    | 执行期正则 | `novelforge/core/saferegex.py` |
+   | 书目规则求值（智能书架 / 临时筛选 / 规则筛选器） | `novelforge/core/bookrules.py`（字段 / 操作 / 校验 / 求值同源；`GET /api/book-rules` 下发清单） |
+   | 内联筛选规则的解析与上限 | `novelforge/core/bookfilter.py`（`parse_inline` / `rules_from_query`） |
    | 版本号 | 仓库根 `VERSION`（`server.APP_VERSION` 读它，只由 `GET /health` 下发） |
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
