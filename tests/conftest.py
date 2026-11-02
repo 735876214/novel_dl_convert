@@ -324,6 +324,14 @@ def _quiesce_background() -> None:
     try:
         from novelforge.core import podcasts as _podcasts
         left += _podcasts.wait_pending(5.0)
+        # ⚠️ 第 247 期：播客 worker 是**跨用例常驻**的 daemon 线程（`while True` 阻塞在
+        # `_q.get()`）⇒ 收尾只「等队列排空」**不够**：它还活着，下一个用例入队时它会
+        # 拿着**旧连接**去查**新库**（用例级隔离 = `db.close()` + `db.init()`）⇒
+        # 「单独跑必过、全量跑随机挂」的假故障（实测：Linux 上 `test_podcast_auto_181`
+        # 被前一个文件的残留任务污染而红）。
+        # ⇒ 这里**作废世代号**（`stop_worker`）：残留线程醒来时发现世代变了 ⇒ 直接丢弃
+        # 手上的任务，不查库、不写库、不落文件（与 `core/scrape.py::stop` 同一套做法）。
+        _podcasts.stop_worker(0.0)
     except Exception:                                 # noqa: BLE001
         pass
     try:

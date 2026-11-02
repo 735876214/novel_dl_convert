@@ -467,6 +467,12 @@ _worker_lock = threading.Lock()
 #: 它会写库（`db.set_episode_download`），残留线程在用例级隔离下会攥着已关闭的连接
 #: 干活（全量跑实测过 segfault）。范式同 `core/sync.py` 的 `_BG_THREADS`。
 _worker_thread: "threading.Thread | None" = None
+#: **世代号**（第 247 期）：worker 是跨用例常驻的 daemon 线程，而测试的 DB 是用例级
+#: 隔离的（`db.close()` + `db.init()`）—— 一个跨用例活着的线程会拿着旧连接去查新库，
+#: 制造「单独跑必过、全量跑随机挂」的假故障（`core/scrape.py` 的 `_epoch` 是同一套做法）。
+#: `stop_worker()` 作废它（+1）⇒ 残留线程醒来时发现世代变了，直接丢弃手上的任务：
+#: 不查库、不写库、不落文件。
+_gen = 0
 
 
 def _download_dir(podcast_id: str) -> pathlib.Path:
@@ -495,7 +501,20 @@ def _download_bytes(url: str, tmp: pathlib.Path) -> int:
     return size
 
 
-def _download_one(eid: str) -> None:
+def _download_one(eid: str, epoch: int = -1) -> None:
+    """下载一集。
+
+    ⚠️ 第 247 期：``epoch`` 是**世代号**（与 ``core/scrape.py`` 的世代号同一套
+    做法）：worker 是**跨用例常驻**的 daemon 线程，而测试的 DB 是用例级隔离的
+    （``db.close()`` + ``db.init()``）—— 一个跨用例活着的线程会拿着**旧连接**去查
+    **新库**，制造「单独跑必过、全量跑随机挂」的假故障（``scrape.stop`` 的注释里
+    写的正是这件事）。
+
+    ⇒ 取任务时若世代已变（被 :func:`stop_worker` 作废），**直接丢弃**：不查库、
+    不写库、不落文件。
+    """
+    if epoch >= 0 and epoch != _gen:
+        return
     ep = db.get_podcast_episode(eid)
     if not ep or not ep.get("audio_url"):
         return
@@ -504,6 +523,8 @@ def _download_one(eid: str) -> None:
     tmp = dest.with_name(dest.name + ".part")
     try:
         size = _download_bytes(ep["audio_url"], tmp)
+        if epoch >= 0 and epoch != _gen:
+            return                                  # 世代已变 ⇒ 不落盘、不写库
         os.replace(tmp, dest)                       # 原子落位：半成品永不以真名出现
         db.set_episode_download(eid, "downloaded", local_path=str(dest), size=size)
     except Exception as e:                          # noqa: BLE001 —— 逐条隔离，状态如实落库
@@ -511,6 +532,8 @@ def _download_one(eid: str) -> None:
             tmp.unlink(missing_ok=True)
         except OSError:
             pass
+        if epoch >= 0 and epoch != _gen:
+            return                                  # 世代已变 ⇒ 不写库
         db.set_episode_download(eid, "failed", error=f"{type(e).__name__}: {e}")
 
 
@@ -518,7 +541,8 @@ def _worker() -> None:
     while True:
         eid = _q.get()
         try:
-            _download_one(eid)
+            # 世代号取**出队那一刻**的 —— 作废后残留的任务一律丢弃（见 `_download_one`）。
+            _download_one(eid, _gen)
         finally:
             _q.task_done()
 
@@ -532,6 +556,34 @@ def _ensure_worker() -> None:
         _worker_thread = t
         t.start()
         _worker_started = True
+
+
+def stop_worker(timeout: float = 0.0) -> int:
+    """停止下载 worker（**作废世代号** + 清队列）→ 返回被丢弃的排队条数。
+
+    ⚠️ 与 `core/scrape.py::stop` **同一套做法**：真正「收干净」的保证是**世代号 +1**
+    —— 残留线程即使醒来，它手上的任务也**写不进库**了。`timeout` 只是额外等它退出。
+
+    调用点：测试收尾（`tests/conftest.py::_quiesce_background`，**必须在 `db.close()`
+    之前**）与关服务时。
+    """
+    global _gen, _worker_started
+    with _worker_lock:
+        _gen += 1                          # 作废当前世代 —— 这一步才是保证
+        _worker_started = False            # 下次入队会重新起一个 worker
+    dropped = 0
+    while True:
+        try:
+            _q.get_nowait()
+        except queue.Empty:
+            break
+        else:
+            _q.task_done()
+            dropped += 1
+    t = _worker_thread
+    if timeout > 0 and t is not None and t.is_alive():
+        t.join(timeout=timeout)
+    return dropped
 
 
 def wait_pending(timeout: float = 10.0) -> int:
