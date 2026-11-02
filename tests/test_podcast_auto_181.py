@@ -50,8 +50,7 @@ def _wait_state(client, auth_headers, pid, eid, want, timeout=20.0):
             return
         time.sleep(0.02)
     raise AssertionError(
-        f"{eid} 未到 {want}（最后 {st!r}）
-  现场 items="
+        f"{eid} 未到 {want}（最后 {st!r}）\n  现场 items="
         + repr([(e.get("title"), e.get("id"), e.get("download_state")) for e in items]))
 
 
