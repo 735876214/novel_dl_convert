@@ -287,6 +287,13 @@ def apply_registration(library_id: str, plan: dict) -> dict:
                 writes.append((bid, field, val, ""))
     if writes:
         out["written"] = db.set_overrides(writes)
+        # ⚠️ 覆盖层是**读时合并**的，但书目列表的 Redis 缓存里存的是**上一次合并好的结果**
+        # （`catalog.books_of` 在写缓存前调 `library._apply_overlay`）。不失效 ⇒ 登记完之后
+        # 书架上仍是旧标题 / 旧作者，直到 TTL_LIST=120s 或别的写操作顺手失效。
+        # 前端登记完只弹 toast、不重取列表 ⇒ 用户直接看到「没生效」。
+        # 这是全仓**唯一**漏掉这一句的覆盖层写点（`pathmeta` / `series_meta` /
+        # `metafetch` / `fileops` 的批量改名 / server 的各元数据端点都有）。
+        library.invalidate(library_id)
     if out["skipped"]:
         out["warnings"].append(
             f"{out['skipped']} 本没在本项目的书目里找到 —— 先扫描那个来源目录再登记"

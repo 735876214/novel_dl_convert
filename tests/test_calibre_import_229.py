@@ -182,3 +182,31 @@ def test_登记_书还没被扫到要如实说明(client, auth_headers, isolated
     assert res["matched"] == 0
     assert res["skipped"] == 1
     assert res["warnings"], "没扫到书时必须说明（先扫描再登记）"
+
+
+def test_登记_立刻重取列表要看到新标题(client, auth_headers, isolated, tmp_path,
+                                        make_library, make_book, fake_redis):
+    """登记完**立刻**重取书架，必须已经是新标题。
+
+    ⚠️ 书目列表的缓存里存的是**上一次合并好覆盖层的结果**
+    （`catalog.books_of` 在写缓存前调 `library._apply_overlay`）。登记写的是
+    `meta_override` —— 覆盖层是**读时合并**的，所以缓存不失效就看不到新值。
+    前端登记完只弹 toast、不重取列表 ⇒ 用户直接看到「登记了但没生效」。
+    """
+    lib_root = tmp_path / "lib"
+    make_library("lib$1", "主书库", "ebook", lib_root)
+    make_book(lib_root, "三体.epub")
+    library.invalidate()
+
+    # 先读一次 ⇒ 把「旧标题」写进列表缓存
+    assert library.books("lib$1")[0]["title"] != "三体（Calibre）"
+
+    plan = {"items": [{"path": "三体.epub", "title": "三体（Calibre）",
+                        "author": "刘慈欣"}]}
+    res = calibreimport.apply_registration("lib$1", plan)
+    assert res["matched"] == 1, res
+    assert res["written"] > 0
+
+    after = library.books("lib$1")[0]
+    assert after["title"] == "三体（Calibre）", "登记后书架仍是旧标题（列表缓存没失效）"
+    assert after["author"] == "刘慈欣"
