@@ -254,7 +254,7 @@ def test_刮削各入口共用同一把按书锁():
 
     静态钉住四个入口都**亲自**取这把锁 —— 新增入口忘了加锁时这条用例会红。
     """
-    # ⚠️ 不用 `inspect.getsource`（第 230 期修）：它读**磁盘上的当前文件**并按
+    # ⚠️ 不用 `inspect.getsource`（第 232 期修）：它读**磁盘上的当前文件**并按
     # `co_firstlineno` 定位 —— 文件在进程启动后被改动过，截出来就是**别的函数**的源码。
     # 改用**函数对象自己**的代码常量（`co_names` 里的被调函数名 + `co_consts` 里的串）。
     for fn in (scrape.enqueue, scrape.process, scrape.verify, scrape.resolve):
