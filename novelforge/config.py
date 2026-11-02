@@ -710,6 +710,53 @@ def mutate_overrides(mutator) -> dict:
 #: 上一次 :func:`load_config` 读 config.yaml 失败的原因（`None` = 没失败）。
 _CONFIG_ERROR: "str | None" = None
 
+#: 上一次 :func:`load_config` 里**段类型不对**而被迫降级的段名（`[]` = 没有）。
+#:
+#: 第 252 期：config.yaml 里某个**段**被写成别的类型（典型：`watcher: "abc"`）时，
+#: 此前 `data["watcher"]` 变成字符串 ⇒ 后续 `data["watcher"]["enabled"] = …` /
+#: `(cfg.get("watcher") or {}).get(...)` **抛 AttributeError / TypeError** ⇒
+#: `load_config()` 抛 ⇒ **每个 API 都 500**，连**启动路径**（`server.py` 的
+#: `lifespan`）都抛 ⇒ **容器根本起不来**。自愈路径只剩「手改 config.yaml」。
+#:
+#: 现在这类段**降级**（该段回默认值）而不是让整个配置失声 —— 配置坏了不该让
+#: **整个服务**死掉（探活端点尤其要活着）。降级必须**留证**：段名进这里，
+#: 进 `_CONFIG_ERROR`（`/health` 与设置页红条都看得到）。
+_BAD_SECTIONS: "list[str]" = []
+
+
+def section_type_errors(data) -> list:
+    """``data`` 里**段类型不对**的段名（升序）。
+
+    判据**只有一处**（这里）：一个顶层键在 :data:`DEFAULTS` 里是 **dict**，
+    而配置文件里给了**别的类型** ⇒ 这一段被写坏了。
+
+    ⚠️ 只看**顶层段**、不递归看子键 —— 子键类型不对由各自的读点兜底
+    （如 `watcher.interval` 写错由 `watcher.interval_of` 夹回默认值）。
+    顶层段写坏是**会抛**的那一类（`.get()` / `[...]` 直接打在 str / int 上），
+    危害与子键不在一个量级。
+    """
+    if not isinstance(data, dict):
+        return []
+    out = []
+    for key, default in DEFAULTS.items():
+        if not isinstance(default, dict):
+            continue                      # 标量键（traditionalize）写错只是取值怪，不会抛
+        if key not in data:
+            continue                      # 这个段压根没写 ⇒ 回落默认，不算错
+        val = data[key]
+        # ⚠️ `None` **不等于**「没写」—— YAML 里 `watcher:`（键下面什么都没有）
+        # 解析出来就是 `None`，而它**同样会抛**：
+        # `data.setdefault("watcher", {})["enabled"] = …` 对 None 抛 TypeError。
+        # ⇒ 空段也按「写坏了」处理（降级回默认值）。
+        if val is None or not isinstance(val, dict):
+            out.append(key)
+    return sorted(out)
+
+
+def bad_sections() -> list:
+    """上一轮 :func:`load_config` 里**被降级**的段名（`[]` = 没有）。"""
+    return list(_BAD_SECTIONS)
+
 
 #: **无条件覆盖**用户设置的环境变量（键 → 环境变量名）。
 #:
@@ -760,8 +807,9 @@ def overrides_error() -> "BaseException | None":
 
 def load_config() -> dict:
     """加载配置：默认值 → config.yaml → settings.json 覆盖层 → 环境变量。"""
-    global _CONFIG_ERROR
+    global _CONFIG_ERROR, _BAD_SECTIONS
     _CONFIG_ERROR = None
+    _BAD_SECTIONS = []
     data = {k: (v.copy() if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
     file_sec: dict = {}          # config.yaml 里那份（下面用它判断「运维手写过这个键没有」）
     if CONFIG_FILE.is_file():
@@ -789,6 +837,25 @@ def load_config() -> dict:
             data[k] = {**data[k], **v}
         else:
             data[k] = v
+
+    # ⚠️ 第 252 期：**段类型写坏**的降级。
+    # 上面两步把 `watcher: "abc"` 里的字符串**整个塞进** `data["watcher"]`
+    # ⇒ 后面 `data.setdefault("watcher", {})["enabled"] = …` 抛 TypeError、
+    # `(cfg.get("watcher") or {}).get(...)` 抛 AttributeError ⇒ `load_config()` 抛
+    # ⇒ **每个 API 都 500**、**连启动路径都抛**（`lifespan` 里那句）⇒ 容器起不来。
+    # ⇒ 这里把**类型不对的段**整段降级回默认值（该段回默认，**其余段照旧**），
+    # 并把段名记进 `_BAD_SECTIONS` —— 降级必须**留证**。
+    # ⚠️ 判据在**合并之后**跑：config.yaml 与 settings.json **两个来源**都能写坏段。
+    # ⚠️ `_CONFIG_ERROR` **不**用它（那个键的含义是「config.yaml 整个读不出来」，
+    #    第 141 期的语义）—— 「读出来了但某一段类型不对」是**另一件事**，
+    #    混进同一个键会让设置页把两件事说成同一句。
+    bad = section_type_errors(data)
+    if bad:
+        _BAD_SECTIONS = bad
+        for k in bad:
+            _log.error("配置的 %r 段类型不对（应为映射），本次按默认值运行", k)
+        for k in bad:
+            data[k] = dict(DEFAULTS[k])
 
     # 环境变量覆盖监听开关 / 轮询间隔：容器部署时无需改配置文件
     auto = os.getenv("AUTO_WATCH")
