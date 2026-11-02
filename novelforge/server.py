@@ -807,6 +807,65 @@ async def _security_headers_middleware(request: Request, call_next):
     return resp
 
 
+#: **请求体**的上限（字节）。
+#:
+#: ⚠️ 第 260 期：此前**全仓没有任何请求体上限** —— 95 个 JSON 端点（`Body(...)`）
+#: 收多少都照单全收 ⇒ 一个请求就能把容器内存打满。
+#:
+#: 实测（`POST /api/config/raw`，**未登录**）：50 MB 的请求体 ⇒ **峰值 125 MB**
+#: （**放大 2.5 倍** —— JSON 解析时字符串与字节各存一份）⇒
+#: ⚠️ **连 401 都拦不住**：请求体在鉴权**之前**就被读进内存了。
+#:
+#: 为什么是 16 MB：书上传那条路的上限是 50 MB（`upload.max_bytes`，**单本书**），
+#: 而**所有 JSON 端点**收的都是「小结构」（一个字段值、一批 id、配置原文）——
+#: 16 MB 已经比任何合理用法大一个数量级。
+#: ⚠️ 上传那条路（multipart）**不走这里** —— 它有自己的 `_read_capped` 分块上限
+#: （那才是大块数据该走的路）。
+_REQUEST_BODY_MAX = 16 * 1024 * 1024
+
+
+@app.middleware("http")
+async def _request_body_limit_middleware(request: Request, call_next):
+    """**请求体**超上限 ⇒ 413（**在读进内存之前**就拒）。
+
+    ⚠️ 第 260 期：此前**全仓没有任何请求体上限** ⇒ 一个请求就能打满容器内存
+    （实测 50 MB 的体 ⇒ 峰值 125 MB，**放大 2.5 倍**），
+    而**连 401 都拦不住**（体在鉴权之前就被读进去了）。
+
+    ⚠️ **两道闸，缺一不可**：
+      ① **看 ``Content-Length``**（绝大多数请求都有）⇒ **不读**就能拒 ⇒ 零成本；
+      ② **流式累计**（``Content-Length`` 缺失或撒谎时 —— chunked 传输）⇒
+         边读边数，超了立刻中断（**不**「先读完再判断」）。
+    ⚠️ 判据**只有一处**（`_REQUEST_BODY_MAX`）—— 别在别处再写一个数。
+    """
+    clen = request.headers.get("content-length")
+    if clen:
+        try:
+            if int(clen) > _REQUEST_BODY_MAX:
+                return JSONResponse(
+                    {"detail": f"请求体超过上限（{_human_size(_REQUEST_BODY_MAX)}）"},
+                    status_code=413)
+        except ValueError:
+            pass                     # 头是垃圾 ⇒ 交给第二道闸（流式累计）
+    # ⚠️ 第二道闸：流式累计。**只在有体的时候**替换 `receive`（GET 没有体）。
+    if request.method in ("POST", "PUT", "PATCH"):
+        received = 0
+        _origin_receive = request._receive      # ⚠️ **先抓住原件**（下面要替换它）
+
+        async def _capped_receive():
+            nonlocal received
+            message = await _origin_receive()   # ← 调**原件**，不是替换后的自己
+            if message.get("type") == "http.request":
+                received += len(message.get("body") or b"")
+                if received > _REQUEST_BODY_MAX:
+                    raise HTTPException(
+                        413, f"请求体超过上限（{_human_size(_REQUEST_BODY_MAX)}）")
+            return message
+
+        request._receive = _capped_receive
+    return await call_next(request)
+
+
 # ---------------- 实时事件（WebSocket，第 153 期）----------------
 # 浏览器 WebSocket 不能自定义请求头，所以 token 走 query（与 `/api/.../asset?token=`
 # 同一取舍）；明文只在内网 HTTP 上出现，与页面本身同级。
