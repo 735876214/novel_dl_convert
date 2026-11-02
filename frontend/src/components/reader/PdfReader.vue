@@ -60,12 +60,12 @@ const emit = defineEmits<{
   unitPos: [UnitPos]
   /** 单话模式：这一话读完了，且**书里还有下一话**（末话的跨册续接不走这里，见 `pastEnd`） */
   unitEnd: []
-  /** 第 222 期：添加了批注 —— 上层据此刷新批注列表（它持有那份数组） */
+  /** 第 223 期：添加了批注 —— 上层据此刷新批注列表（它持有那份数组） */
   annotated: []
 }>()
 const router = useRouter()
 const library = useLibraryStore()
-/** 轻提示（第 222 期）：批注保存的结果。**不引 ui store** —— PDF 阅读器不弹浮层，
+/** 轻提示（第 223 期）：批注保存的结果。**不引 ui store** —— PDF 阅读器不弹浮层，
     用一个就地的小提示条就够了（见模板里的 `annoMsg`）。 */
 const annoMsg = ref('')
 let annoMsgTimer: ReturnType<typeof setTimeout> | null = null
@@ -240,7 +240,7 @@ function setCanvas(n: number, el: unknown): void {
   else canvases.delete(n)
 }
 
-/** 文字层的容器（第 222 期）：每页一个，与 canvas 同尺寸同位置 */
+/** 文字层的容器（第 223 期）：每页一个，与 canvas 同尺寸同位置 */
 const textLayers = new Map<number, HTMLElement>()
 
 function setTextLayer(n: number, el: unknown): void {
@@ -279,7 +279,7 @@ async function renderPage(n: number): Promise<void> {
     drawn.value = new Set(drawn.value).add(n)
     const slot = slots.get(n)
     if (slot && n === 1) base.value = { w: vp.width / scale.value || base.value.w, h: vp.height / scale.value || base.value.h }
-    // 第 222 期：文字层与 canvas **同一个 viewport** —— 换算错一处，选中的字就偏。
+    // 第 223 期：文字层与 canvas **同一个 viewport** —— 换算错一处，选中的字就偏。
     await renderTextLayer(n, p, vp)
   } catch {
     /* 单页渲染失败不致命，其余页继续 */
@@ -288,7 +288,7 @@ async function renderPage(n: number): Promise<void> {
   }
 }
 
-// ---------------- 文字层（第 222 期）----------------
+// ---------------- 文字层（第 223 期）----------------
 //
 // canvas 只是图像：没有文字层就**选不了字**、做不了批注。这里把 pdf.js 的文字项
 // 叠成一层透明的、绝对定位的文字（坐标换算见 `lib/pdfTextLayer.ts`）。
@@ -299,7 +299,7 @@ async function renderPage(n: number): Promise<void> {
 /** 每页的文字层片段（换算好的 CSS 坐标） */
 const pageSpans = new Map<number, PdfTextSpan[]>()
 
-// ---------------- 选区与批注（第 222 期）----------------
+// ---------------- 选区与批注（第 223 期）----------------
 //
 // PDF 的「章」= **页**：`chapter` 字段装页码（0 起，与 EPUB 的 spine 序号同一个字段，
 // 不同坐标系 —— 见 `docs/user-guide.md` 的说明）。
@@ -318,7 +318,7 @@ const annoStyle = ref('highlight')
 const savingAnno = ref(false)
 
 /**
- * 这一页已有的批注（第 222 期）：画在文字层上。
+ * 这一页已有的批注（第 223 期）：画在文字层上。
  *
  * 形状与 EPUB 那边一致：按**页内字符偏移**定位，不是像素 —— 缩放后重画仍落在同一段字上。
  */
@@ -831,7 +831,7 @@ onMounted(async () => {
     await new Promise((r) => setTimeout(r, 150))
     if (prefs.value.scrollMode !== 'page') slots.get(page.value)?.scrollIntoView({ block: 'start' })
     settled = true
-    // 第 222 期：取这本书已有的批注（画成高亮）。失败不影响读。
+    // 第 223 期：取这本书已有的批注（画成高亮）。失败不影响读。
     void loadPdfAnnotations()
     // 文档真的打开了、能读了才开始计时（打不开的书不该留下零散会话）
     session.begin()
@@ -932,7 +932,7 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
       >
         <Icon name="search" class="h-4 w-4" />
       </Button>
-      <!-- 第 222 期：批注侧栏（PDF 的批注在本阅读器里，EPUB 的在主阅读器那边） -->
+      <!-- 第 223 期：批注侧栏（PDF 的批注在本阅读器里，EPUB 的在主阅读器那边） -->
       <Button
         size="sm"
         variant="ghost"
@@ -1054,7 +1054,7 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
         </button>
       </aside>
 
-      <!-- 批注侧栏（第 222 期）：按页列出；点一条跳到那一页 -->
+      <!-- 批注侧栏（第 223 期）：按页列出；点一条跳到那一页 -->
       <aside
         v-if="showAnnos"
         class="w-64 shrink-0 overflow-y-auto border-r border-border py-2 pr-2"
@@ -1135,7 +1135,7 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
         <template v-if="prefs.scrollMode === 'page'">
           <div v-for="n in shown" :key="n" :data-page="n" :ref="(el) => setSlot(n, el)" class="relative bg-white shadow-sm" :style="slotStyle(n)">
             <canvas :ref="(el) => setCanvas(n, el)" />
-            <!-- 第 222 期：文字层（透明但可选）—— 没有它就选不了字 -->
+            <!-- 第 223 期：文字层（透明但可选）—— 没有它就选不了字 -->
             <div
               :ref="(el) => setTextLayer(n, el)"
               :data-text-page="n"
@@ -1154,7 +1154,7 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
             :style="slotStyle(n)"
           >
             <canvas :ref="(el) => setCanvas(n, el)" />
-            <!-- 第 222 期：文字层（透明但可选）—— 没有它就选不了字 -->
+            <!-- 第 223 期：文字层（透明但可选）—— 没有它就选不了字 -->
             <div
               :ref="(el) => setTextLayer(n, el)"
               :data-text-page="n"
@@ -1165,7 +1165,7 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
         </template>
       </div>
 
-      <!-- 批注浮层（第 222 期）：选中文字后出现在选区上方 -->
+      <!-- 批注浮层（第 223 期）：选中文字后出现在选区上方 -->
       <div
         v-if="selPos && selAnchor"
         class="fixed z-50 w-64 rounded-lg border border-border bg-card p-2.5 shadow-lg"
@@ -1208,7 +1208,7 @@ watch([scale, () => prefs.value.scrollMode, () => prefs.value.spread], () => {
         </div>
       </div>
 
-      <!-- 轻提示（第 222 期）：批注保存结果 -->
+      <!-- 轻提示（第 223 期）：批注保存结果 -->
       <p
         v-if="annoMsg"
         class="pointer-events-none absolute bottom-3 left-1/2 z-50 -translate-x-1/2 rounded-full bg-card px-3 py-1.5 text-[11.5px] text-foreground shadow"

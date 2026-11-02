@@ -924,7 +924,7 @@ const chapterAnnotations = computed(() =>
   annotations.value.filter((a) => a.chapter === currentIndex.value),
 )
 
-/** 重新拉批注（第 222 期：PDF 阅读器里加了批注 ⇒ 这里的列表要跟着更新）。 */
+/** 重新拉批注（第 223 期：PDF 阅读器里加了批注 ⇒ 这里的列表要跟着更新）。 */
 async function reloadAnnotations(): Promise<void> {
   try {
     const res = await api.listAnnotations(bookId.value)
@@ -939,7 +939,7 @@ function titleOf(idx: number): string {
 }
 
 /**
- * 批注的位置标签（第 222 期）。
+ * 批注的位置标签（第 223 期）。
  *
  * ⚠️ **PDF 的「章」= 页**：PDF 没有章节目录，`chapter` 装的是页码（0 起）。
  * 用 `titleOf` 显示会退成「第 N 章」—— 那是在说这本书没有的东西（PDF 确实按页读）。
@@ -3066,7 +3066,7 @@ onBeforeUnmount(() => {
                 <div class="min-w-0 flex-1">
                   <p class="line-clamp-3 text-[12px] leading-relaxed text-foreground">「{{ a.quote }}」</p>
                   <p v-if="a.note" class="mt-1 text-[11.5px] text-muted-foreground">{{ a.note }}</p>
-                  <!-- PDF 的「章」= 页（第 222 期）：显示页码而不是章名 ——
+                  <!-- PDF 的「章」= 页（第 223 期）：显示页码而不是章名 ——
                        `titleOf` 查的是 EPUB 的 spine 目录，对 PDF 只会退回「第 N 章」 -->
                   <p class="mt-1 text-[10.5px] text-muted-foreground">{{ annoLabel(a.chapter) }}</p>
                 </div>

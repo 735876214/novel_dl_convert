@@ -9,7 +9,7 @@ import {
 } from '@/lib/pdfTextLayer'
 
 /**
- * PDF 文字层的**坐标换算**（第 222 期）。
+ * PDF 文字层的**坐标换算**（第 223 期）。
  *
  * 这一层最容易错：pdf.js 给的是 **PDF 用户空间**（原点左下、y 向上），
  * DOM 是 **CSS 像素**（原点左上、y 向下）—— 差一次 viewport 变换。
