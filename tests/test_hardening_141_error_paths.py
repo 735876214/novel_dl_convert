@@ -138,7 +138,19 @@ def test_库连不上时健康检查回503(client, monkeypatch):
     assert any("数据库" in p for p in r.json()["problems"])
 
 
-def test_config_destroyed要能看见(client, auth_headers, isolated):  # noqa: ARG001
+def test_config_destroyed要能看见(client, auth_headers, isolated, monkeypatch, tmp_path):  # noqa: ARG001
+    # ⚠️ 第 247 期：本用例**故意写坏 config.yaml**。而 `config.CONFIG_FILE` 是
+    # **会话级**路径（`tests/conftest.py` 把 `CONFIG_DIR` 指到 session 根）⇒
+    # 用例之间共享同一个文件 ⇒ 别的用例在这条用例的 try 块期间把 YAML 恢复回去，
+    # 这条用例随后读到的就是**好**配置 ⇒ `_config_error` 为空 ⇒ **顺序相关的偶发红**
+    # （实测全量里偶发一次，单跑必绿）。
+    # ⇒ 把它挪到**本用例自己的 tmp 目录**：三个常量（CONFIG_DIR / CONFIG_FILE /
+    # SETTINGS_FILE）一起改（后两个是导入时算好的模块级常量，改 CONFIG_DIR 不够）。
+    own_dir = tmp_path / "cfg"
+    own_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(config, "CONFIG_DIR", own_dir)
+    monkeypatch.setattr(config, "CONFIG_FILE", own_dir / "config.yaml")
+    monkeypatch.setattr(config, "SETTINGS_FILE", own_dir / "settings.json")
     cfg_file = config.CONFIG_DIR / "config.yaml"
     backup = cfg_file.read_text(encoding="utf-8") if cfg_file.exists() else None
     try:
