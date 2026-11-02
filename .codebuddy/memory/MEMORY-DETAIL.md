@@ -1,0 +1,89 @@
+# 域细节手册（按需读，不在每次会话的注入范围）
+
+> 第 220 期从 `.codebuddy/memory/MEMORY-REF.md` 拆出：那些是「**动到该领域前才读**」的细节
+> （命名规则、后端统计键、前端图表栈、文档锚点核验口径…），放在必读文件里是纯浪费上下文。
+> `MEMORY-REF.md` 现在只留「运行 / 上游取证 / 跨会话待办」这些**每次都可能要用**的部分。
+>
+> 内容与拆分前**逐行一致**（原 09-21 从 `MEMORY.md` 压缩而来，内容等价、未删减）。
+
+## 域细节（由 09-21 压缩从 `MEMORY.md` 外移；动到这些领域前先读本节）
+
+### 环境与构建
+- `.gitignore`：`.codebuddy/*` + `!.codebuddy/memory/`；忽略 `data/`、`*.db`、`novelforge/static/v2/`、`dist/`、`.playwright-cli/`。
+- macOS 首次跑测试：`/Users/stromboid/.local/bin/python3.12 -m venv .venv` → `.venv/bin/pip install -r requirements-dev.txt` → **再** `mkdir -p novelforge/static`（缺目录在 **import 期**就抛）。**别建 `static/v2/index.html`**，否则 `GET /` 不再是 503。
+- ⚠️ **本仓的测试与脚本以前只在 Windows 上验过，两个平台陷阱（2026-10-19 抓出，都已修）**：
+  ① macOS 自带 **bash 3.2** 会把**紧跟变量名后的多字节字符**算进变量名（`"$PY）"` ⇒ 变量 `PY）` ⇒ `set -u` 报
+  `unbound variable`）⇒ 写脚本时变量一律 `${VAR}`，别指望眼睛看住（`tests/test_scripts_contract.py` 钉着）；
+  ② `tests/conftest.py` 的仓库根守卫原本不看 `dir_fd`，而 POSIX 的 `shutil.rmtree` 删子项走
+  `os.unlink(name, dir_fd=fd)` ⇒ 裸文件名被按 cwd（=仓库根）解析 ⇒ 12 例数据安全用例（覆盖前留档 / FB2 重建 /
+  音频中途失败）在 Linux/macOS 上必红，还会以 `BaseExceptionGroup` 的形式指不到 conftest。
+  **前端/后端 CI**：`.github/workflows/tests.yml` 在 ubuntu-latest + Python 3.12 上跑 `bash scripts/test.sh`。
+- ⚠️ `npm install` 会删掉 `frontend/package-lock.json` 里一批 optional 的 `"dev": true`（纯噪声）。**规则（第 39 期修订，取代此前「提交前一律 `git checkout --`」）**：不再无脑还原 —— 那会把**本期真要加的新依赖一起丢掉**（第 39 期加 vitest 三件套时就会）。改为：提交前**逐段 `git diff frontend/package-lock.json`**，只放行「本期新增依赖引入的改动」，其余 `"dev": true` 增减照旧还原。
+- **发布自动化（第 79 期）**：`.github/workflows/release.yml` 一个 workflow 两个触发 —— 推 `main` 时读仓库根 `VERSION`，
+  `v<版本>` tag 不存在就**自动打 tag + 建 Release**（已存在则跳过）；人工推 `v*` tag 也走它（`gh release view` 命中则跳过）。
+  notes 的唯一实现 = `python3 -X utf8 -m novelforge.core.changelog <版本>`（与应用内「新功能」页同源；缺段以 1 退出）。
+  ⚠️ 打 tag 与建 Release **必须同 job**：`GITHUB_TOKEN` 推的 tag 不会再触发其它 workflow。
+  ⇒ **改 `VERSION` 必须同批补 `CHANGELOG.md` 段**，否则发布在 CI 里失败（不会发空 notes 的 Release）。
+  镜像另有一条链：`docker-image.yml` 在推 `main` 时构建并推 `ghcr.io/…:latest`（与 tag 无关）。
+- **核 CI 结果**（第 114 期）：本机**没有 `gh`**，匿名 REST 又撞 60 req/h 限额（`403 rate limit exceeded`）
+  ⇒ 改走**公开 HTML 页**（不限流、**免鉴权**）：① `/commit/<sha>/checks` 里数 `aria-label="This job succeeded"`；
+  ② job 页（`/actions/runs/<run>/job/<job>`）的注解块 `data-target="annotation-message.annotationContainer"`
+  —— **「Node.js 20 is deprecated」那类 warning 就落在这里**，判「升级有没有生效」靠它。
+  ⚠️ 判「镜像推没推上去」**别用** GHCR `tags/list`（有缓存，第 109 期）；⚠️ 别为了取 job 日志去
+  `git credential fill`（会把本机 token 打进会话记录，安全策略会拦）。
+
+### 命名与出版细节
+- `fileops.fill_pattern` 9 个占位符、**先长后短**；`{index}`=系列卷号（两位补零，非流水号）；`{ext}` 已带扩展名 ⇒ **只有模式以 `{ext}` 收尾时才摘尾扩展名**。
+- 「预览==落盘」共用 `publish.relpath_for`+`rel_verdict`（REL_REUSE/REBUILD/DECLINE）；仍会改 basename 的只剩 `apply_conflict_rename`/`apply_komga_layout`（成对调 `db.remap_book_id`）。
+- 目录型条目的源指纹=`source_sig._tree_files`。
+
+### 后端细节（统计 / 配置覆盖 / 页面入口）
+- `core/stats.py`：`overview.integrity` 原有 5 个计数键一个不能少；`largest` 独立新键、与作者/系列榜共用 `top` 但**不要塞进 `_top`**；既有 **16 键有测试钉住**。
+- 可覆盖项（每库）：`output.format`/`output.layout`、`watcher.recursive`/`watcher.copy_non_txt`、`metadata_fetch.*`、`naming.pattern`/`naming.scope`、`scrape.enabled`、`opds.expose`/`komga.expose`；`core/lib_settings.py` 的 `effective`/`config_for`/`apply_to`/`set_overrides`/`clear_overrides`/`schema()`。
+- 可见性判定的唯一落点是 `_opds_visible_libraries`/`_ko_visible_libraries`（「不可见」=「不存在」→ 直连 404）。
+- ⚠️ **判断「某能力有没有页面入口」要两头查**：先查 `server.py` 的 `EDITABLE` 白名单，再查前端 `settingsFields.ts` 的字段定义（只看配置文件会误判，`upload.max_bytes` 是一例）。
+- **`sqlite3.InterfaceError: bad parameter or other API misuse` 的定位法**（第 39 期查了半天，记下来省下次）：它就是 SQLite C 库 `sqlite3_errmsg` 里 **`SQLITE_MISUSE` 的文本** —— **不在** `_sqlite3.pyd` 里（去二进制里 `strings` 会扑空，实测偏移 -1）。它**与常见的 sqlite3 误用无关**：cursor 关后用 / 连接关后用 / 参数错 / `row_factory` 非 callable 产出的都是 `ProgrammingError`/`TypeError`，**没有一种能造出 `InterfaceError`**。本仓实测的唯一成因是「**同一连接上的无锁并发访问**」（`commit()` 重置语句那条假设已被实验证伪：三种操作各自对撞读线程，全 0 异常）。想抓抛出点用 `traceback.format_exc()`（Python 3.11+ 带 `^^^^` 精细定位，链式调用也能指出是哪一段）—— `format_stack()` 拿不到，异常已抛出栈。
+
+### 前端细节
+- **前端单测（第 39 期起）**：`cd frontend && npm run test:unit`（= `vitest run`）。脚本名**刻意不叫 `test`** —— 本仓库「测试」历来专指 pytest 那套。配置**不另起 `vitest.config.ts`**（`vite.config.ts` 的 `@` alias 是唯一真值源），就加在既有 `defineConfig` 的 `test` 块里；**不开 `globals`**（spec 在 `src/**` 下会被 `vue-tsc --build` 一并检查，显式 `import { describe, it, expect } from 'vitest'` 即可）。
+  - ⚠️ **前端用例数独立计数**，**不得并入 pytest 基线**（两套跑法、两套前提）。
+  - ⚠️ 要伪造时钟用 `vi.useFakeTimers({ toFake: ['Date'] })` —— **只伪造 `Date`**。全套假时钟会让 `flushPromises()` 自己挂住（它内部就靠一个 `setTimeout` 落地）。
+  - ⚠️ happy-dom 没实现 `scrollIntoView`，挂载阅读器类组件前先 `Element.prototype.scrollIntoView = vi.fn()`，否则滚到章节时抛。
+  - 挂载 harness 的坑：`vi.mock('@/lib/api')` 要**一次给齐所有**被调接口 —— 少一个就在 `onMounted` 里抛，异常被当成「加载失败」渲染成空态，用例最后以「找不到按钮」报错，**离真正原因很远**。
+- `bridge.css` 须 `@theme inline`；`main.css` 须 `@custom-variant dark (&:is(.dark *));`。
+- ⚠️ **设置页 `note` 是纯文本插值**（`SettingsPlaceholder.vue` 的 `{{ page.note }}`）⇒ 写 `**`、反引号、`<strong>` 都会**原样显示给用户**；有契约测试钉住。
+- 工具页 `ToolsLayout.vue` 子页用 `onActivated`（非 `onMounted`）；改磁盘工具「先预览再应用」、删除移回收站。例外：页面内 `v-if` 子组件（如 `ScrapePanel`）需 `onMounted` 首载、`onActivated` 只刷新。
+- 窄屏双写法：宽屏 `<table class="hidden md:block">` + 窄屏 `<ul class="md:hidden">`；纯装饰增强取不到就不设变量 ⇒ CSS 整条失效 ⇒ 天然回退。
+- **图表栈**：`echarts`+`vue-echarts`；`frontend/src/lib/charts.ts` 是**全站唯一**的注册/主题适配入口（组件里别各自 `use()`），按需注册 + 页面级动态 import；SVGRenderer + `oklchToHex()`（ECharts 不认 oklch）+ 幂等主题注册。
+- **外观偏好归属边界**：`stores/displayPrefs.ts`（Layout 页六项）**并入 `appearance` 块**随整套偏好走服务端；`stores/shelfPrefs.ts` **第 43 期起 `collapseSeries` 进第 7 块 `shelf`**（其余视图/排序/缩略图点击/筛选默认展开 + 卡片信息仍走 localStorage、不进同步）；写入经 `notifyPrefsChanged`、应用远端值走 `suppressing` 逐键挑。
+- **侧栏导航契约**（`data/nav.ts` + `AppSidebar.vue`，有 `tests/test_nav_contract.py`）：① 动态计数项**不许写死数字**（`countSource: 'running' | 'browse'`，写死即假数据）；② 菜单 id 全局唯一；③ 组底部 `more` 行必须 **`label` + `to` + `countSource` 三件一起声明**，别再用 `items.length` 当计数。
+- **命名避让**：`/explore`=「探索发现」=**外部书源检索**（`POST /api/search`）；`/browse`=「实体总览」=**本地书目按元数据维度浏览**（零外网）。两者不能合并、不能互相借名；侧栏「浏览」是**分组标题**，新页 label 别叫「浏览」。
+- **实体总览只有六个维度**（作者/系列/题材/出版社/语言/收藏）：本项目**只有 `tags`（OPF `dc:subject`）一个题材类字段** ⇒ 上游 genre/tag 两维在此会变成同一份数据列两遍 ⇒ 只做一个；演播者无实体（不做）。数据一律来自 `library.scopedBooks`（+`/api/books` 的 `collection_ids`），**不为它新增聚合接口**。
+
+### 文档锚点核验（工具口径）
+- 工具=`tests/check_doc_anchors.py`（**非 `test_` 前缀 ⇒ pytest 不收集**）：`--drift`/`--suggest`/`--todo`/`--file`；方法与四条局限见 `docs/bookorbit/bookorbit-capability-gap.md` §0.4（核法与局限）+ §0.5（工具固化）。
+- 自动核对的 ±6 窗口会吞掉偏 4 行的漂移、±2 假阳性约 80% ⇒ **脚本只能生成待核清单、不能判定**；区间引用只能按「它声称是什么」反向 grep。
+- 追加一类误报：**「文档写 `x.py:1`，真值 `:2`」这种更正句式**前半截是记录旧错，不该按漂移判。
+- ⚠️ **同期内「先写锚点、后改代码」也会让锚点作废**（第 34 期四笔代码落在最后、文档先行）⇒ 收尾必须按「当前真实行号」重测，**不记偏移量**。
+- 各期核验规模（判「这算多还是少」的参照）：32 期核 71 修 10、33 期核 312 修 28、35 期核 706 修 37、36 期核 719 修 7、39 期核 11 疑似漂移全修（12 处）、**40 期核 768 处 / 疑似漂移 17 全修（29 处，含同批行人工捞出的 15 处）**。39 期那批由 `core/db.py` 净增 102 行引起、40 期由同一文件的 6 个 hunk（+38/−7）引起，再次印证「动了锚点密集文件就顺手重核那一份」。
+  ⚠️ **核验规模那个数是「修前」口径，修完会变**（40 期 768 → 767，因为 1 处写错的锚点被改成了「第 N 行」的非锚点表述）；**符号命中数会随当期实施记录一起长**（40 期复校完成时 47 → 追完记录后 56）。引用这两个数时要说清是哪一刻的。
+  ⚠️ **40 期摸到的漏报面：工具只核对「`` `路径:行号` `` **后面**跟着反引号符号名」的锚点** ——符号写在锚点**之前**的（「… `books.by_format`（`core/stats.py:635`）」）**根本不进核对**，那一批 15 处漂移工具**一条都没报**，全靠人工在同一批行上捞。⇒ 判据「0 硬错 + 0 漂移」**只能是下限**。
+  ⚠️ **「不记偏移量」的实证（40 期）**：同一期 `core/db.py` 的 hunk 合计 +38/−7，但各锚点位移互不相同 —— 22 / 22 / 22 / 23 / **31** 行都有（只有落在该锚点**之前**的 hunk 才影响它）。
+  ⚠️ **被动产生的漂移**：写「第 40 期实施记录」时引用了旧锚点做例子，工具**立刻**把它算成一条新漂移 ⇒ 记录里引旧行号不要写成 `` `path:行号` `` 的形式，写「第 N 行」。历史实施记录里的旧行号（roadmap `:859` / `:879` / `:1416`）**一律不动** —— 改它等于篡改历史。
+
+---
+## 出版 / 元数据细节（09-23 压缩自 `MEMORY.md`；动这些领域前先读）
+
+- 硬链接副本内嵌元数据会变独立 inode ⇒ **不得宣称省空间**。
+- **目录型条目**（有声书一章一文件）同样出版：副本是**真目录 + 内部逐文件硬链接**；形态判据 = **名字带不带 `library.BOOK_EXTS` 扩展名**（不看 `format`、不 stat 磁盘）；**副本名不带扩展名**。
+- 无值哨兵 `db.META_CLEAR="-"`（`_CLEARABLE` 全字段、有测试）的三处翻译须一致：`db.get_effective_meta` / `metastore.effective` / `metastore.state`。
+- **抓取三道正交闸**：①字段策略 `metadata_fetch.fields[key] ∈ {overwrite(默认)/fill_only/skip}`（全局 + 每库）②`meta_locks` 显式字段锁（**只挡抓取、不挡手工编辑**；解锁后抓取重新接管）③「改过就不动」（`field in overrides` 隐式）；**自定义字段默认值同受此三闸**。
+- 相似书五路权重：`0.5·词袋余弦 + 0.1·同作者 + 0.25·题材 Jaccard + 0.1·同系列 + 0.05·评分接近度`；**任一方未评分时那一路不进分母**（不当 0 分）；词袋**简介不进**；`limit`≤25、详情页默认 6 可展开；0 分不返回；`SimilarBook.score`=0–1（前端不显示）；另有「实质重合」门（至少同作者 / 同题材 / 同系列之一才进候选）。
+- 作者排序名派生 `authors.derive_sort_name`：拉丁两名 →「姓, 名」、多名带小词表（`Le Guin`）、**CJK 原样返回 ⇒ 跳过**（填了等于没填）。
+- 阅读尝试（轮次）：一轮 =「开始读 → 读完」，读完再开始 = 新一轮（`round` 递增）；⚠️ 自动维护挂 `db.set_status`（进 reading 开轮 / finished 收尾；**搁置·弃读不动轮次**）；`reset_reading_state` **四清**（删 `reading_sessions` + `progress` + `reading_status` + `reading_attempts`，**不动批注/书签/评分/文件**）。
+- **remap 四处清单**：`ORPHAN_TABLES` / `REMAP_TABLES` / 有软删进 `REMAP_PROBE_FILTER` / 含库相关列进 `REMAP_EXPLICIT_TABLES`（唯一成员 `scrape_items`）。整体 `UPDATE` 撞唯一约束会被外层 `except` 吞成「搬 0 行」⇒ 必须**逐行搬 + 冲突取舍**。
+- `migrate.execute`/`rollback` 不按 `direction` 分支：自动归库(`move`)与用户移动(`bookmove`)共用 `_after_bookmove`/`_after_bookmove_back`，回程对称；`DIR_AUTO="move"` 字面量**不能改**；`server.py` 拒用 bookmove 执行自动归库批次那两处**保留**；反查所属库用 `_lib_id_of_path`（取**最长**匹配）。
+- ⚠️ **`db` 访问只走 `db._connect()`**：返回持 `_lock` 的代理 `db._Conn`（非裸 `sqlite3.Connection`）；`_lock` 是 **RLock**（非重入会自锁死）；「锁内写 + 裸读」实测全 `InterfaceError`、裸读 + `close()` 全段错误；`db._Result` 接口面收窄（execute/executemany/executescript/commit/rollback + 标量/fetchone/fetchall/迭代），新增游标属性要补。契约 `tests/test_db_concurrency_contract.py`。`db.close()` 生产无人调，但「锁内写 + 裸读」生产可达；旧代理线程拿 `ProgrammingError` 是**真错误、别吞**。
+- ⚠️ **win32 目录 `st_size` 恒 0**：「空文件」判据须 `if not p.is_dir() and p.stat().st_size==0`；目录体积用 `watcher._sig()`。
+
+---
