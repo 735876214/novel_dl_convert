@@ -4430,10 +4430,8 @@ def _metadata_limits() -> dict:
     这里**只读不改**，前端拿它做 `maxlength` ⇒ 前端不必抄一份上限表
     （抄一份 = 第二份实现，会漂移）。
     """
-    out = {}
-    for f in fileops.METADATA_FIELDS:
-        out[f] = int(db._FIELD_MAX_LEN.get(f, db._DEFAULT_FIELD_MAX_LEN))
-    return out
+    limits = db.metadata_field_limits()
+    return {f: int(limits[f]) for f in fileops.METADATA_FIELDS if f in limits}
 
 
 @app.post("/api/books/{bid}/metadata")

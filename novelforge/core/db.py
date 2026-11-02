@@ -5720,6 +5720,21 @@ _FIELD_MAX_LEN = {
 _DEFAULT_FIELD_MAX_LEN = 200
 
 
+def metadata_field_limits() -> dict:
+    """**全部**字段的长度上限（字段 → 字符数），未登记者用兜底值。
+
+    ⚠️ 判据**只有这一处**（`_FIELD_MAX_LEN` 是写入时的真正闸门）。给**别的模块**
+    读用（服务端据此下发给前端做 `maxlength`）—— 别去引用 `_FIELD_MAX_LEN` /
+    `_DEFAULT_FIELD_MAX_LEN` 那两个私有名（跨模块引用私有名 = 约定失效）。
+    """
+    # ⚠️ 用 `_CLEARABLE`（= `fileops.METADATA_FIELDS` 的同一份字段集，见上面
+    # 「db 不能 import fileops」的说明）—— 它与那份**必须同集合**（有测试钉住）。
+    out = dict(_FIELD_MAX_LEN)
+    for f in _CLEARABLE:
+        out.setdefault(f, _DEFAULT_FIELD_MAX_LEN)
+    return out
+
+
 def _too_long(field: str, value: str) -> int:
     """这个值是否超长 → 返回超出的字符数（0 = 没超）。
 
