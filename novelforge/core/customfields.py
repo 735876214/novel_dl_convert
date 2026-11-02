@@ -38,6 +38,39 @@ TYPES = (
 #: 类型键集合（校验用）
 TYPE_KEYS = tuple(k for k, _ in TYPES)
 
+#: **值的**长度上限（字符）。
+#:
+#: ⚠️ 第 255 期：自定义字段的值此前**一个上限都没有** ⇒ 用户在详情页把一个字段
+#: 粘成 1 MB 就能存进去 ⇒ **详情接口**每次都带着它（`custom` 段是详情响应的一部分）
+#: ⇒ 打开一次详情页 = 传 1 MB。
+#:
+#: ⚠️ 更狠的是**默认值**：`default_value` 会被抓取写进**每一本缺这一项的书**
+#: （`metafetch._custom_changes`）⇒ 一个 1 MB 的默认值 ⇒ **整个书库**每本都被
+#: 写进 1 MB ⇒ **放大到全库**。
+#:
+#: ⚠️ 上限**按类型**给：`list` 是**多个值**（存成字面量列表）⇒ 它的上限按
+#: **整段**算，不是「每条」。数字与日期的长度天然短，但走**同一个上限**即可
+#: （它们的取值本来就短 ⇒ 碰不到上限）。
+def _text_limit() -> int:
+    """文本类字段（text / number / date）的值长度上限。
+
+    ⚠️ **不另抄一份数** —— 取自元数据字段那张表（第 250 期立的「用户能填的
+    一段文字」口径）⇒ 两条路**永远同上限**。
+    """
+    try:
+        return int(db.metadata_field_limits().get("description") or 8000)
+    except Exception:                     # noqa: BLE001 —— 兜底，不让上限查询把写入搞挂
+        return 8000
+
+
+def value_limits() -> dict:
+    """自定义字段**值的**长度上限（类型 → 字符数）。
+
+    ⚠️ 判据**只有一处**（这里）。前端据此给输入框加 `maxlength`
+    （用户**输入时**就知道有上限，而不是提交后吃一个「服务器错误」）。
+    """
+    text = _text_limit()
+    return {"text": text, "number": text, "date": text, "list": text}
 
 def slug(name: str) -> str:
     """显示名 → **稳定**的字段 key。
@@ -53,21 +86,36 @@ def slug(name: str) -> str:
 
 
 def normalize(type_: str, value) -> str:
-    """校验外部值并转成**存储字符串**（非法值抛 ``ValueError``，接口层转 400）。"""
+    """校验外部值并转成**存储字符串**（非法值抛 ``ValueError``，接口层转 400）。
+
+    ⚠️ 第 255 期：**长度上限**在这里判（判据 `value_limits()`）。
+    处置是**抛 ValueError**（= 拒绝），与第 250 期「用户写入超限 ⇒ 拒绝」同口径
+    —— 这是**用户自己填的值**，截断会静默丢数据（用户以为写了整段）。
+    ⚠️ 而**批量**那条路（抓取写默认值）走的是**同一个** `normalize`
+    ⇒ 也会拒绝 ⇒ 一家源返回异常大的默认值会让那本书的抓取失败（而不是把
+    1 MB 写进库里）—— 与第 250 期「抓取跳过该字段」不同，但这里的值来自
+    **用户自己的字段定义**，不是外部站点 ⇒ 拒绝是合理的（让用户自己去改短）。
+    """
     t = str(type_ or "text")
+    limit = value_limits().get(t, _text_limit())
     if t == "list":
         if isinstance(value, (list, tuple)):
             items = [str(x).strip() for x in value]
         else:
             items = [s.strip() for s in re.split(r"[、,，]", str(value or ""))]
         # 存成字面量列表（与 tags 等列同一套存法，见 db._as_list）
-        return repr([x for x in items if x])
+        out = repr([x for x in items if x])
+        if len(out) > limit:
+            raise ValueError(f"太长了（{len(out)} 字符，上限 {limit}）")
+        return out
     s = str(value if value is not None else "").strip()
     if t == "number" and s:
         try:
             float(s)
         except (TypeError, ValueError):
             raise ValueError(f"必须是数字：{s}") from None
+    if len(s) > limit:
+        raise ValueError(f"太长了（{len(s)} 字符，上限 {limit}）")
     return s
 
 

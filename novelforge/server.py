@@ -4439,6 +4439,9 @@ def api_book_metadata(bid: str):
         # 上限表只有一份（`core/db.py` 的 `_FIELD_MAX_LEN`，那是**写入时**的判据）；
         # 这里只下发**可编辑字段**的那些，未登记的字段按兜底上限给。
         "limits": _metadata_limits(),
+        # 第 255 期：**自定义字段**值的长度上限（类型 → 字符数）——
+        # 自定义字段是**用户自己定义的**（类型可配）⇒ 上限按**类型**给。
+        "custom_limits": _custom_field_limits(),
     }
 
 
@@ -4451,6 +4454,20 @@ def _metadata_limits() -> dict:
     """
     limits = db.metadata_field_limits()
     return {f: int(limits[f]) for f in fileops.METADATA_FIELDS if f in limits}
+
+
+def _custom_field_limits() -> dict:
+    """**自定义字段**值的长度上限（类型 → 字符数）。
+
+    ⚠️ 第 255 期：自定义字段的值此前**没有上限**，前端也没有 `maxlength`
+    ⇒ 用户能粘 1 MB 进去（提交后才知道不行 ⇒ 那时已经是一次 1 MB 的请求）。
+    ⇒ 把上限**下发**（与 OPF 字段那条同思路：前端不抄上限表，只引用后端给的）。
+
+    ⚠️ 键是**类型**（`text` / `number` / `date` / `list`）而不是字段名 ——
+    自定义字段是**用户自己定义的**，前端拿到的 `custom` 段里**有** `type`
+    ⇒ 按类型查上限即可，不必给每个字段单开一个键。
+    """
+    return {t: int(n) for t, n in customfields.value_limits().items()}
 
 
 @app.post("/api/books/{bid}/metadata")
@@ -4737,7 +4754,10 @@ def _valid_library_ids(raw) -> list:
 @app.get("/api/custom-fields")
 def api_list_custom_fields(include_trashed: int = 0):
     """自定义字段定义列表（含归档项；`include_trashed=1` 时额外给 `trashed`）。"""
-    out = {"items": db.list_custom_fields(), "types": _custom_types()}
+    out = {"items": db.list_custom_fields(), "types": _custom_types(),
+           # ⚠️ 第 255 期：**值的**长度上限（类型 → 字符数）—— 下发给设置页，
+           # 让「默认值」那个输入框在**输入时**就知道有上限（与详情页那条同思路）。
+           "limits": _custom_field_limits()}
     if include_trashed:
         out["trashed"] = db.trashed_custom_fields()
     return out
