@@ -70,9 +70,14 @@ TS_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 _logger = logging.getLogger("novelforge.activity")
 
+#: 内存环形缓冲的**默认**条数。真实值由配置 `logging.max_entries` 决定
+#: （第 244 期：此前该键能保存、能回显，却**没有任何读点** —— 缓冲恒为 2000 条，
+#: 是个「假配置」）。改用 `set_max_entries()` 热调整。
+DEFAULT_MAX_ENTRIES = 2000
+
 # 用可重入锁：log() / clear() 在持锁时还会调用 log_dir()，普通 Lock 会自锁
 _lock = threading.RLock()
-_memory: "deque[dict]" = deque(maxlen=2000)   # 内存环形缓冲，避免每次读盘
+_memory: "deque[dict]" = deque(maxlen=DEFAULT_MAX_ENTRIES)   # 内存环形缓冲，避免每次读盘
 _dir: pathlib.Path | None = None
 _dir_ready = False
 
@@ -195,6 +200,41 @@ def invalidate_retention_cache() -> None:
     页面上的存盘情况却还显示「未启用」（`GET /api/logs` 的 storage 走同一个缓存）。
     """
     _cfg_cache.update(at=0.0, val=None)
+
+
+def max_entries() -> int:
+    """内存缓冲条数（配置 `logging.max_entries`，默认 2000）。
+
+    读点在这里 —— 此前该键**只**能被保存与回显，没有读点，是个假配置。
+    """
+    try:
+        from .. import config
+        raw = ((config.load_config().get("logging") or {}).get("max_entries"))
+    except Exception:
+        raw = None
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_ENTRIES
+
+
+def set_max_entries(n: int) -> int:
+    """热调整内存缓冲条数。返回**生效值**（夹到 ≥ 1）。
+
+    `deque.maxlen` 不可改 ⇒ 重建一个新的并把现有条目搬过去（超出新上限的丢尾，
+    与环形缓冲的语义一致）。重建期间持锁，避免与 `log()` 并发时丢条目。
+    """
+    global _memory
+    try:
+        want = max(1, int(n))
+    except (TypeError, ValueError):
+        want = DEFAULT_MAX_ENTRIES
+    with _lock:
+        if _memory.maxlen == want:
+            return want
+        keep = list(_memory)[-want:]
+        _memory = deque(keep, maxlen=want)
+    return want
 
 
 # ---------------- 同类型通知合并（第 61 期）----------------

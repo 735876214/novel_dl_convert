@@ -99,6 +99,11 @@ def _start_watcher(cfg: dict) -> "watcher_mod.FolderWatcher":
 async def lifespan(app: FastAPI):
     cfg = config.load_config()
     _init_logging(cfg)
+    # 第 244 期：内存日志缓冲条数按配置起手（此前该键无读点，缓冲恒为 2000 条）。
+    try:
+        activity_log.set_max_entries(activity_log.max_entries())
+    except Exception as e:  # noqa: BLE001 —— 参数是脏的就用默认值
+        logging.getLogger("novelforge").exception("日志缓冲条数初始化失败：%s", e)
     # 初始化 SQLite 持久层（进度 / 批注 / 账号），表与默认账号在此落地
     db.init()
     # 第 131 期：重启时把「没跑完」的任务如实收尾成失败。`tasks` 的 running 只由进程内的
@@ -9367,6 +9372,16 @@ def _apply_watcher_config():
             WATCHER.ignore = list(w["ignore"])
         if "max_retries" in w:
             WATCHER.max_retries = max(0, int(w["max_retries"]))
+        # ⚠️ 第 244 期：这两个键此前**只**在 `Watcher.__init__` 读一次 —— 保存成功、
+        # 界面如实回显，但监听线程仍按旧值判「写入是否稳定」，直到重启进程才生效。
+        # 用户把「写入稳定等待」从 1s 调到 5s（大文件经 NAS 拖进来）⇒ 界面显示已保存，
+        # 行为仍是 1s ⇒ 半截文件被当成写完就复制。
+        # 它们是**纯运行时参数**（`_is_stable` 每轮现读 `self.stable_rounds` /
+        # `self.settle_seconds`），热应用安全：改了立即影响下一轮的稳定判定。
+        if "settle_seconds" in w:
+            WATCHER.settle_seconds = float(w["settle_seconds"])
+        if "stable_rounds" in w:
+            WATCHER.stable_rounds = max(1, int(w["stable_rounds"]))
     except Exception as e:  # noqa: BLE001 —— 参数是脏的，但**必须有落笔**
         # 第 141 期：此前是 `except Exception: pass`。脏配置被静默丢掉时，界面上的
         # 「间隔 30 秒」与实际跑的间隔是两回事，而用户唯一的线索是自己的书没被收进去。
@@ -9636,6 +9651,12 @@ def api_put_config(payload: dict = Body(...)):
     # 第 52 期：留存策略在日志模块里有 5 秒缓存，配置一改就必须失效 ——
     # 否则刚开启留存，页面上的「存盘情况」仍按旧值显示未启用。
     activity_log.invalidate_retention_cache()
+    # 第 244 期：内存缓冲条数（`logging.max_entries`）此前**没有读点** ——
+    # 能保存、能回显，缓冲恒为 2000 条（假配置）。这里热应用：改了立即生效。
+    try:
+        activity_log.set_max_entries(activity_log.max_entries())
+    except Exception as e:  # noqa: BLE001 —— 参数是脏的，缓冲保持原样
+        logging.getLogger("novelforge").exception("日志缓冲条数热应用失败：%s", e)
     return {"ok": True, "overrides": ov}
 
 
