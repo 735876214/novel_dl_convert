@@ -56,3 +56,45 @@ jobs:
       # 收尾会打印 junit 路径与「X passed / Y failed / Z skipped」的汇总行。
       - name: Run pytest
         run: bash scripts/test.sh
+
+  # ⚠️ 第 247 期：前端的质量门此前**完全缺失** ——
+  #   · `docker build` 只跑 `npm run build`（= `vite build`），而 **vite 不做类型检查**
+  #     （esbuild/rolldown 只转译）⇒ **TS 类型错误不会被镜像构建抓到**；
+  #   · `tests.yml` 只有 pytest 一个 job ⇒ **vitest 的单测失败 CI 也抓不到**。
+  # 而本仓记忆里明写「`vue-tsc` 与 `vitest` 各有对方没有的判据力」——
+  # 缺了这两个门，等于**没有守门人**。
+  #
+  # 为什么只跑这两步（不跑 build / deploy）：
+  #   · `build` 已由 `docker-image.yml` 的镜像构建覆盖（它跑的就是 `npm run build`）；
+  #   · `deploy` 把产物同步进 `novelforge/static/v2/` —— 那个目录**已 gitignore**，
+  #     CI 里同步它纯属污染工作区。
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # ⚠️ 24.x 与本机一致（`AGENTS.md` §4：Node 走 nvm 24.x）。
+      # `npm ci` 用 `package-lock.json`（锁文件）⇒ 与本机装的是同一套依赖。
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # 类型检查（`vue-tsc --build`）：抓**只有它能抓**的那一类（组件 props / 导入的类型不匹配）。
+      - name: Type check
+        run: npm run type-check
+
+      # 单测（`vitest run`）：抓**只有它能抓**的那一类（真 mount 才暴露的问题，
+      # 例如缺 `</div>` —— `vue-tsc` 对它 exit 0）。
+      - name: Unit tests
+        run: npm run test:unit
