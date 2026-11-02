@@ -21,6 +21,8 @@ from novelforge import config
 from novelforge.core import catalog, db, fileops, library, metafetch, updater
 from novelforge.sources import rules
 
+from conftest import HAS_AF_UNIX
+
 
 # ---------------- ① 取整本：要么完整，要么报错 ----------------
 
@@ -187,6 +189,9 @@ def test_通道与探活是两件事(monkeypatch, tmp_path):
     ⚠️ 这两个判据**不许合并**：合成一个的话，要么界面说「可用」而点了必失（旧缺陷），
     要么宿主慢半秒就把整条更新路径判成不可用（拉镜像前的探活抖动）。
     """
+    # ⚠️ Windows 没有 `AF_UNIX` ⇒ 建不了真 socket（判据在 conftest，唯一一处）。
+    if not HAS_AF_UNIX:
+        pytest.skip("本机没有 unix domain socket（Windows）")
     sock = tmp_path / "docker.sock"
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:

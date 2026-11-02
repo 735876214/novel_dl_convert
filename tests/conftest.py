@@ -19,6 +19,7 @@
 import os
 import pathlib
 import shutil
+import socket
 import sys
 import tempfile
 import zipfile
@@ -739,3 +740,27 @@ def fake_redis(monkeypatch) -> dict:
     monkeypatch.setattr(cache_mod, "_set", _set)
     monkeypatch.setattr(cache_mod, "_del", _del)
     return store
+
+
+#: 本机能不能建 **unix domain socket**（Windows 的 `socket` 没有 `AF_UNIX`）。
+#: 更新器那几条用例要挂真 socket 才能测「通道在不在」（`S_ISSOCK`）—— Windows 上
+#: 直接 `AttributeError` **硬红**，不是 skip ⇒ 每次全量都要人工分辨「哪几条是环境项」。
+#: 唯一的判据放这里（**一处**），各用例 `pytest.mark.skipif` 引用它。
+HAS_AF_UNIX = hasattr(socket, "AF_UNIX")
+
+
+def _symlink_supported() -> bool:
+    """本机能不能建符号链接（Windows 要开发者模式 / 管理员）。"""
+    if os.name == "nt":
+        try:
+            import tempfile
+            with tempfile.TemporaryDirectory() as d:
+                os.symlink(os.path.join(d, "a"), os.path.join(d, "b"))
+            return True
+        except (OSError, NotImplementedError, AttributeError):
+            return False
+    return True
+
+
+#: 本机能不能建符号链接（同上：Windows 无权限时是硬红，不是 skip）。
+HAS_SYMLINK = _symlink_supported()

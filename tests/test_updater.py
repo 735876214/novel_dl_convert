@@ -23,6 +23,7 @@ import pytest
 
 from novelforge.core import backup as backup_mod
 from novelforge.core import updater
+from conftest import HAS_AF_UNIX
 
 #: 手动检查路径与兜底 tags 路径（与 `_remote_latest` 里的拼接逐字一致）。
 GITHUB_LATEST = updater._GITHUB_API
@@ -177,6 +178,11 @@ def _mount_socket(up) -> None:
     所以夹具必须建真 socket，否则它测的是「一个不可能在生产出现的状态」。
     建完立刻 close：unix socket 的**文件**不会随之消失，`S_ISSOCK` 依旧成立。
     """
+    # ⚠️ Windows 的 `socket` 没有 `AF_UNIX` ⇒ 建不了真 socket。
+    # 判据在 `tests/conftest.py`（`HAS_AF_UNIX`，**唯一一处**）—— 这里直接 skip，
+    # 而不是让每个用例硬红（Windows 上红、CI 绿 ⇒ 每次全量都要人工分辨环境项）。
+    if not HAS_AF_UNIX:
+        pytest.skip("本机没有 unix domain socket（Windows）")
     p = up.tmp / "docker.sock"
     srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:

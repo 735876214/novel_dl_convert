@@ -22,6 +22,8 @@ import zipfile
 
 import pytest
 
+from conftest import HAS_SYMLINK
+
 from novelforge import config
 from novelforge.core import catalog, comics, db, library, zipkind
 from novelforge.core.watcher import FolderWatcher
@@ -90,6 +92,10 @@ def test_隐藏文件与苹果双份影子文件都不进书目(isolated, tmp_pa
 # ---------------------------------------------------------------------------
 
 def test_指向库根外的符号链接不算这本书(isolated, tmp_path, make_library):  # noqa: ARG001
+    # ⚠️ Windows 建符号链接要开发者模式 / 管理员（判据在 conftest，唯一一处）⇒
+    # 没有就 skip，而不是硬红（Windows 红、CI 绿 ⇒ 每次全量都要人工分辨环境项）。
+    if not HAS_SYMLINK:
+        pytest.skip("本机不能建符号链接（Windows 未开开发者模式）")
     root = tmp_path / "root"
     lib = make_library("ln", "链接库", "mixed", root)
     outside = tmp_path / "secret.txt"
@@ -102,6 +108,10 @@ def test_指向库根外的符号链接不算这本书(isolated, tmp_path, make_
 
 
 def test_指向库根内的符号链接照旧收录(isolated, tmp_path, make_library):  # noqa: ARG001
+    # ⚠️ Windows 建符号链接要开发者模式 / 管理员（判据在 conftest，唯一一处）⇒
+    # 没有就 skip，而不是硬红（Windows 红、CI 绿 ⇒ 每次全量都要人工分辨环境项）。
+    if not HAS_SYMLINK:
+        pytest.skip("本机不能建符号链接（Windows 未开开发者模式）")
     """根内链接是一种正常用法（同一本书两处可见），必须照旧收录、不能一刀切禁掉。"""
     root = tmp_path / "root"
     lib = make_library("ln2", "链接库2", "mixed", root)
