@@ -35,7 +35,9 @@ def _setup(client, auth_headers, monkeypatch):
     return pid, eps
 
 
-def _wait_state(client, auth_headers, pid, eid, want, timeout=5.0):
+def _wait_state(client, auth_headers, pid, eid, want, timeout=20.0):
+    # ⚠️ 第 247 期：超时从 5s 放宽到 **20s** —— 等的是**后台下载线程**（真在干活），
+    # 慢的 CI runner（Linux 容器、2 核）上 5s 不够 ⇒ 偶发红。
     end = time.time() + timeout
     while time.time() < end:
         items = client.get(f"/api/podcasts/{pid}/episodes", headers=auth_headers).json()["items"]

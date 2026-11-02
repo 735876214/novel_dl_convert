@@ -32,7 +32,8 @@ def _setup(client, auth_headers, monkeypatch):
     return pid, {e["title"]: e["id"] for e in eps}
 
 
-def _wait(client, auth_headers, pid: str, eid: str, want: str, timeout: float = 5.0):
+def _wait(client, auth_headers, pid: str, eid: str, want: str, timeout: float = 20.0):
+    # ⚠️ 第 247 期：超时 5s → **20s**（等的是后台下载线程；慢的 CI runner 上 5s 不够）。
     end = time.time() + timeout
     while time.time() < end:
         items = client.get(f"/api/podcasts/{pid}/episodes", headers=auth_headers).json()["items"]
@@ -98,7 +99,7 @@ def test_批量下载只排未下载_失败落库(client, auth_headers, monkeypa
     n = len(calls)
     r2 = client.post(f"/api/podcasts/{pid}/download-all", headers=auth_headers)
     assert r2.json()["queued"] == 1
-    end = time.time() + 5
+    end = time.time() + 20
     while time.time() < end and len(calls) < n + 1:
         time.sleep(0.02)
     assert len(calls) == n + 1
