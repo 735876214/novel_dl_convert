@@ -13592,6 +13592,12 @@ Windows 上的写读撞车，以及死代码清理与「本机环境项该 skip 
 4. **读放大**：`db.get_progress` 在三处循环里逐本查（Komga 的「待读」页 / 系列 DTO /
    `readStatus` 过滤）⇒ 2309 本的库 = 2309 次 SQL。已有 `db.all_progress()`，
    但更对的做法是加 `db.progress_map(bids)`（IN 分批）。
+   **另一处（同一类）**：`GET /api/annotations`（`db.all_annotations`）**一次返回全库批注**
+   （含 quote / note 全文、无上限、无分页）⇒ 两个前端消费点：
+   ① 仪表盘小组件「今日划线」—— **只为了显示今天的一条，把全库批注拉下来**；
+   ② 批注总览页（`AnnotationsView`）—— 也无分页。
+   ⇒ 上万条批注时是几十 MB 的 JSON，浏览器直接卡住。
+   修法：端点加分页；小组件改用「今日划线」的专用端点（后端按 `created_at` 过滤）。
 5. **活动日志的日期筛选与显示的时区口径不一致**：筛选按**浏览器时区**
    （`new Date('2026-11-02T00:00:00')` 无时区），显示用**服务器本地墙钟**
    ⇒ 用户与服务器不同区时（如 NAS 在家、用户出差），筛「11-02」会看到
@@ -13681,3 +13687,224 @@ Windows 上的写读撞车，以及死代码清理与「本机环境项该 skip 
 | **统计的「今天」口径** | `db.local_day` 与 `daily_seconds` / `active_days` 是否同一天 | 第 119 期已统一为本地日历日 ⇒ 零缺陷 |
 | **追更的重复触发** | `autoupdate` 的 sidecar 状态标记 | 「已是最新版」有持久标记 ⇒ 零缺陷 |
 | **批量任务的进度上报频率** | `db.task_update` 的调用点 | 与工作量成正比（每处理一个写一次）⇒ 零缺陷 |
+
+## 第 247 期（持续审计第七轮：CI 的覆盖缺口 + **本机绿 ≠ CI 绿**）
+
+**需求来源**：持续审计任务（24 小时窗口，起点 2026-11-02 14:10）。
+
+### 一、CI 完全不校验前端（高）
+
+**现状**（读 `.github/workflows/` 确认）：
+
+| 工作流 | 跑什么 | 前端质量门 |
+|---|---|---|
+| `tests.yml` | 只有 pytest 一个 job | **无** |
+| `docker-image.yml` | `docker build` → 里面跑 `npm run build`（= `vite build`） | **无** |
+| `release.yml` | 打 tag / 建 Release | 无 |
+
+**关键**：`vite build` 用 esbuild/rolldown **只转译、不做类型检查** ⇒
+**TS 类型错误不会被镜像构建抓到**；`vitest` 的单测失败更是完全没人跑。
+⇒ `vue-tsc` 的类型错误与 `vitest` 的单测失败，**CI 全绿**。
+
+而本仓记忆里明写「**`vue-tsc` 与 `vitest` 各有对方没有的判据力**」
+（缺 `</div>` 时 `vue-tsc` 仍 exit 0，只有 vitest 真 mount 才报）⇒
+缺了这两个门，等于**没有守门人**。
+
+**修法**：`tests.yml` 加一个**独立**的 `frontend` job（与 pytest 并行，不拖慢后端）：
+`npm ci`（锁文件）→ `npm run type-check`（`vue-tsc --build`）→ `npm run test:unit`。
+
+**只跑这两步**：`build` 已由镜像构建覆盖；`deploy` 会把产物同步进
+`novelforge/static/v2/` —— 那个目录**已 gitignore**，CI 里同步纯属污染工作区。
+
+**核验**：用 **Linux 容器**（`node:24`）跑了一遍 `npm ci → type-check → test:unit`
+（模拟 CI 的 OS）—— 本机绿 ≠ CI 绿（第 118 期的教训）⇒ **必须**在 Linux 上验过才敢推。
+推上去后 CI 的 `frontend` job **success** ✔。
+
+**防回归**：`tests/test_ci_frontend_gate_247.py`（4 例：`tests.yml` 里必须有
+`npm run type-check` / `npm run test:unit`，且必须是**两个独立 job**）。
+判据用**字符串包含**（改措辞不红，**删掉那两个命令就红**）。
+
+> ⚠️ 顺带被这条契约抓住一次：我第一版用了 `actions/setup-node@v4` ——
+> 那是 **node20** 运行时。契约（`tests/test_ci_actions_contract.py`）要求每个 action
+> 都在**已登记的 node24 大版本**上 ⇒ 抓上游 `action.yml` 核过 `v5`/`v6` 都是 node24、
+> `inputs:` 与 v4 逐字相同 ⇒ 取 **v6** 并同批登记进白名单。
+
+### 二、播客下载 worker 跨用例常驻 ⇒ 制造随机假故障（中）
+
+**症状**：CI（Linux）上「批量下载」与「自动下载」两条播客用例**红**，而
+**本机（Windows）全绿**；单独跑 `test_podcast_auto_181.py` 在 Linux 上**也是绿的**，
+但与 `test_podcast_download_175.py` 一起跑就红 ⇒ 典型的**跨用例污染**。
+
+**根因**：播客下载 worker 是**跨用例常驻**的 daemon 线程（`while True` 阻塞在
+`_q.get()`），而测试的 DB 是**用例级隔离**的（`db.close()` + `db.init()`）⇒
+一个跨用例活着的线程会拿着**旧连接**去查**新库**。收尾只「等队列排空」
+（`wait_pending`）**不够**：它还活着，下一个用例入队时它会醒来处理 ⇒ 状态写错地方。
+
+⚠️ 这正是 `core/scrape.py::stop` 的注释里写的同一件事（「单独跑必过、全量跑随机挂」的
+假故障）—— 播客（第 173 期）**没有**这套机制。
+
+**修法**（与 `scrape.stop` 同一套）：
+① `core/podcasts.py` 加**世代号** `_gen` + `stop_worker(timeout)`；worker 取任务时带上
+世代号，作废后残留的任务**直接丢弃**（不查库、不写库、不落文件）；
+② `tests/conftest.py::_quiesce_background` 在 `db.close()` **之前**调 `stop_worker()`。
+
+**核验**：**Linux 容器**跑那两个文件 —— 修前 2 红 → 修后 **4 全绿**。
+
+**防回归**：`tests/test_podcast_worker_generation_247.py`（4 例）。
+
+**收尾的顺序也踩过一次**：原来收尾是「先等 5 秒、再作废」⇒ 慢的 CI runner 上 5 秒
+可能不够 ⇒ 放弃等待 → 收尾判「还有 N 个没退出」**硬失败**；或作废得太早 ⇒ 那一集的
+状态永远写不进去 ⇒ 用例偶发红。⇒ 最终口径：**先等（20 秒）在途任务做完、再作废**，
+且**超时不算收尾失败**（那一集本来就慢，用例自己也在等它）。另外用例内的等待超时
+也从 5 秒放宽到 20 秒（等的是**后台下载线程**，真在干活）。
+
+> ⚠️ **顺带撤回的一个想法**（本期试过并撤回，写在这里免得后人再踩）：
+> 「给 worker 加**空闲退出**」——听着像个优化，实际是**致命回归点**：worker 退出时若
+> 没把 `_worker_started` 置回 False，`_ensure_worker` 看到它仍是 True 就**不重起**
+> ⇒ 任务永远不被处理（用户点「下载」没反应，且**没有任何报错**）。常驻 daemon 线程
+> 多几个是无所谓的（`core/scrape.py` 的 worker 也是 `while True`）。
+> **教训**：给「已经在跑的常驻线程」加生命周期语义时，先想清楚「它不工作时谁来接」。
+
+### 本轮扫过、确认零缺陷的角度（别重查）
+
+| 角度 | 查了什么 | 结论 |
+|---|---|---|
+| 仪表盘小组件的**数据源重复** | 13 个小组件各调哪个接口 | 只有「今日划线」直连 API，其余全从 store 取 ⇒ 零缺陷 |
+| 小组件的 loading / error 三态 | 各组件的态与提示 | 统一走 store 的 `loaded` / `error` ⇒ 零缺陷 |
+| store 的错误态会不会卡在 loading | `stores/stats.ts` 的 `inflight` 复位 | `finally` 复位 ⇒ 零缺陷 |
+| 前端 `v-html` 的面 | `Icon.vue`（内部常量）/ `ReaderView`（走 `htmlsafe.sanitize`） | 两处都安全 ⇒ 零缺陷 |
+| localStorage / WS token / SW 缓存 / CSP | 敏感项与缓存策略 | 都是既有取舍，无新增风险 ⇒ 零缺陷 |
+| 事件总线的队列上界 | `events.MAX_QUEUE = 64`，满了丢最旧 | 有界 ⇒ 零缺陷 |
+| 成就目录的同步 / 任务表的增长 | `sync_catalog()` 在 `evaluate()` 里调；`task_prune()` 四个调用点 | 都收敛 ⇒ 零缺陷 |
+| 批量端点是否支持删书 / 删书三份回收 / 移除书库语义 | 三处删除路径 | 都符合 AGENTS 的口径 ⇒ 零缺陷 |
+| 小组件注册表与实际组件 | 13 个组件是否都注册 | 全注册 ⇒ 零缺陷 |
+| `WIDGET_IDS` 与 `IMPLEMENTED_WIDGET_IDS` | 两个数组 | 同一份（13 个全实现）⇒ 零缺陷 |
+
+### 本轮踩到的一个坑（工具层面的，代价是一次红 CI）
+
+用 **heredoc**（`bash - <<'PY'`）改 Python 源码时，**`\\n` 会被 shell 先吃掉一层**
+⇒ 写进 f-string 的就是**真换行** ⇒ SyntaxError ⇒ pytest 在**收集阶段**就中断
+（整轮全量都跑不起来）。而那一笔**已经推上去了** ⇒ CI 直接红。
+
+⇒ **Python 源码里的转义序列不要经 heredoc 传**：用编辑工具改，或写成脚本文件再执行
+（`tests/period_close.py` 那种「脚本文件」路线是稳的）。
+
+### 下一轮候选（本期**没做**，按优先级）
+
+0. ⭐ **公开的 `/health` 泄露「默认口令还在用」**（**安全类，可直接利用**）：
+   `_health_checks()` 里的 `default_pin` 与 `problems` 里的「仍在使用初始口令
+   changeme」都在**免鉴权**的 `/health` 响应里 ⇒ 任何人 curl 一下就知道「这台
+   机器的密码还是 changeme」⇒ 配合 admin/changeme 一次即可登录。
+   ⚠️ 代码注释里自己写着「默认口令还在用（局域网 8992 直通，**等于口令公开**）」——
+   「知道风险」≠「处理了」。
+   最小修法：`/health` 的**公开**响应不含 `default_pin` 与口令相关的 `problems`
+   条目（前端 `HealthInfo` **根本没用**这两个字段 ⇒ 前端零改动）；
+   完整诊断挪到**鉴权后**的端点。顺带：路径类字段（`input`/`output`/`logs`）
+   按 `_is_local_request` 判定（远程不给绝对路径）。
+1. **发版与镜像构建不依赖测试**：`.github/workflows/release.yml` 与 `docker-image.yml`
+   都在 **push 到 main** 时触发 ⇒ **测试红也会打 tag、也会推镜像**（用户能拉到坏版本）。
+   修法是改成 `workflow_run`（测试 workflow 成功后才触发）—— 但那会改发版链路，
+   且本项目当前「暂不发版」⇒ 本轮不做。
+2. **CI 的 junit 不保留**：pytest 的 junit xml 落在 runner 临时目录 ⇒ CI 失败时
+   **拿不到**报告（只能翻日志）。加一个 `upload-artifact` 步骤即可（纯改进）。
+3. **会话级 `config.yaml` 被用例共享**（本期只修了「故意写坏 YAML」那一条）：
+   `tests/conftest.py` 把 `CONFIG_DIR` 指到 session 根 ⇒ 所有用例共用一个
+   `config.yaml` / `settings.json` ⇒ 用例之间会互相影响（本期那条偶发红就是它）。
+   根治：把 `CONFIG_DIR` 改成**用例级**（`tmp_path`）—— 但 `config.CONFIG_FILE` /
+   `SETTINGS_FILE` 是**导入时算好的模块级常量**，得一起改（会牵动一批用例）。
+4. 之前各期留下的候选（书内搜索无工作量预算 / 读放大 / 元数据字段无长度上限 /
+   INFO 观测日志是哑巴 / 备份有效性未验证 / 事件总线两个事件无人订阅 /
+   前端无全局错误边界 / 批注 Markdown 导出结构 / 「今日划线」拉全库批注）仍在。
+
+
+---
+
+## 第 248 期（Pillow 链路的缺口补齐 —— **「缺依赖」不许说成「内容坏了」**）
+
+**需求来源**：用户要求「评估引入 Pillow」。核实结论是 —— **Pillow 早已引入并投入使用**
+（`requirements.txt` 已声明、许可已登记 `THIRD-PARTY-NOTICES.md`、四处实际使用）⇒
+不存在「要不要引入」的决策，本期做的是**补齐现有链路的缺口**。
+
+### 一、根因：Pillow 是软依赖，但四处用法**各自**静默降级
+
+Pillow 缺了，封面缩略 / 上传验图 / PDF 页渲染 / Komga 转码四件事都不工作。而此前这四处
+**没有一处**说真话 —— 实测（用 `builtins.__import__` 拦 `PIL` 模拟未安装）：
+
+| 使用点 | 缺 Pillow 时的实际行为 | 问题 |
+|---|---|---|
+| `core/thumbs.py::resize_image` | 返回原字节（`small is data`） | 静默：用户要 480 宽，拿到 300 KB 原图，**零提示** |
+| `server._validate_cover_upload` | 400「不是可识别的图片文件」 | **说谎**：合法的 PNG 被判成「不是图片」 |
+| `core/pdfrender.py::render_page` | `(None, None)` | 静默：端点翻译成 **404「页不存在」**（假象：PDF 在、页在） |
+| `core/komga_api.py::page_image` | `(None, "")` | 同上，404 而非 503 |
+
+这与本项目其余可选依赖的纪律**直接冲突**：`core/mobicache.py::state` /
+`core/comics.py::seven_available` / `core/jssandbox.py::state` / `core/saferegex.py::state`
+都走「缺依赖就**如实报** + 503 说清缺什么」（`server.py` 里 `comics.backend_problem`
+的用法），第 111 期段明写「**绝不假装能读**」。**Pillow 链路是唯一一处破例**。
+
+### 二、解压炸弹：上传封面的「验图」**不验尺寸**
+
+实测：12000×12000 的纯色 PNG 压缩后只有 **450 KB**（远低于 8 MB 体积上限），
+`Image.verify()` **顺利通过**（Pillow 只发 `DecompressionBombWarning`，不是异常），
+但真解码要 **411 MB** 内存。
+
+Pillow 自带的 `Image.MAX_IMAGE_PIXELS = 89478485` 只是**告警**闸（默认只 warn），
+而项目里 `grep MAX_IMAGE_PIXELS` **零命中** ⇒ 未被配置、未被测试。
+实测阈值：`open` 阶段 100 M 像素只 warn、**400 M 像素才抛** `DecompressionBombError`
+⇒ 两档之间（100 M ~ 400 M）完全无闸。
+
+### 三、透明像素变黑：同一判据的两份实现，其中一份是错的
+
+实测同一张全透明 RGBA PNG：
+- `core/komga_api.py` 的 `im.convert("RGB").save(buf, "JPEG")` ⇒ 角落像素 **(0, 0, 0) 全黑**；
+- `core/thumbs.py::_flatten`（铺白底）⇒ 角落像素 **(255, 255, 255)** 正确。
+
+`thumbs.py` 的模块头早把这条坑写清楚了（「不能只 `convert("RGB")`……第 208 期之前这里
+确实写成了 `convert("RGB")`」），但 `komga_api` 那一处没享受到 ⇒ **同一判据被复制成两份，
+其中一份是错的**。
+
+### 四、能力声明：Pillow 没有进「哪些可选依赖真的在」
+
+`GET /api/sources/capabilities`（`server.py`）如实报 Node / regex / lxml / js 四项，
+`core/*` 里有一批 `state()` / `_available()`（`mobicache` / `comics` / `jssandbox` /
+`saferegex` / `autoupdate` / `updater`），**唯独没有 Pillow** ⇒ 用户无从知道
+自己这台服务器的封面缩略图到底有没有在工作。`docs/architecture.md` §14 的
+「判据唯一真值源清单」里也没有图片处理这一行。
+
+### 修法
+
+新增 `novelforge/core/imaging.py` —— **图片处理的唯一实现**，三件事各一处：
+
+- `state()` —— 「Pillow 能不能用」的**唯一判据**（`available` / `version` / `reason`，
+  与 `core/mobicache.py::state` 同款）；
+- `open_image(data)` —— 解码前的**像素闸**（`MAX_PIXELS = 40 M`，约 160 MB 内存上界）；
+  超限抛 `TooManyPixels`，缺包抛 `MissingPillow`；
+- `flatten(im)` —— 「透明像素不能变黑」的**唯一实现**（铺白底）。
+
+接线：
+- `server._validate_cover_upload` ⇒ 缺 Pillow **503** / 像素超限 **413** / 真的是坏图 **400**
+  （此前一律 400）；
+- `server` 的 `/api/sources/capabilities` ⇒ 加 `pillow` 键 + `hints["pillow"]`（**保留既有键**）；
+- `server` 的 `/health` ⇒ `checks["pillow"]` + 缺包进 `problems`
+  （**200 + degraded**，不是 503 —— 只有「库连不上」才 503，重启容器不会装上 Pillow）；
+- `server` 的 Komga 页面端点 ⇒ 缺 Pillow **503**（不是 404「页不存在」）；
+- `core/komga_api.py` ⇒ 转码走 `imaging.flatten`（不再 `convert("RGB")`）；
+- `core/thumbs.py` ⇒ 走 `imaging.open_image` / `imaging.flatten`（**缩放与格式转换仍刻意分家**）。
+
+### 核验
+
+- `tests/test_pillow_contract_248.py`（**15 例**）：缺 Pillow 时上传 503 / PDF 页抛
+  `MissingPillow` / 能力接口与 `/health` 如实报 / 像素闸拦得住 12000×12000 / 缩略路径
+  对超限图**原样返回原图**（不解码）/ Komga 转码透明区是白底不是黑。
+  ⚠️ 缺 Pillow 的用例靠 **monkeypatch 拦 import** 模拟（不真的卸包）——
+  「环境没装就跳过」只适用于「本机真没装」，而这里要验的是**降级行为**，
+  它必须在装了 Pillow 的机器上也能跑（不然 CI 上永远验不到）。
+- 后端全量 + 前端四连 + `period_close check` 0。
+
+### 教训
+
+- **「缺依赖」与「内容坏了」是两类失败**，混起来用户就会去换图、重传、反复失败 ——
+  而真因是服务端少装了一个包。凡是**软依赖**都要走 `state()` + 503 这条路。
+- **体积闸不等于解压炸弹闸**：纯色大图压缩率极高（450 KB ↔ 411 MB）⇒ 必须查**像素数**。
+- **判据被复制成两份时，其中一份是错的**：`thumbs._flatten` 早就修好了，
+  `komga_api` 那一处却还留着 ⇒ 收敛到一处（`imaging.flatten`）才算真修。
