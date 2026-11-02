@@ -24,6 +24,7 @@ import {
 } from '@/lib/bookInfo'
 import { bookClickPath, seriesDetailPath } from '@/lib/bookOpen'
 import { statusBucket } from '@/lib/readingThresholds'
+import { scopeIdOf } from '@/lib/smartScope'
 import { sortBooks } from '@/lib/shelfSort'
 import {
   bucketKeyOfSort,
@@ -318,13 +319,29 @@ const expanded = ref<string[]>([])
 // 第 88 期 C 批（修正）：书架首屏**只取自己的第一页**（`shelfLoadedBooks`），**不**等全量
 // `loadBooks()` —— 首屏快正是分页的目的。全量 `books` 由侧栏 / 应用启动那条既有路径（B 批）
 // 负责，两者互不阻塞（`ShelfView.states.spec.ts` 也据此断言「挂载只发一次 /api/books」）。
-onMounted(() => library.loadShelfFirstPage())
+onMounted(() => {
+  library.loadShelfFirstPage()
+  // 第 218 期：自定义智能书架由服务端求值；进入页面时确保有这份结果
+  // （store 的 smartKey watcher 处理切换，这里兜住「直接落地在同一书架」的刷新）。
+  const sid = scopeIdOf(library.smartKey)
+  if (sid !== null) void library.ensureScopeBooks(sid, true)
+})
 
 /**
  * 书架页的基础筛选源（库 / 分面 / 智能书架）：建在**书架自己的分页缓冲**上，
  * 所以这里看到的只是**已加载的页** —— 页头 / 页脚用「已显示 N / 共 M」如实说明这一点。
  */
 const source = computed(() => library.shelfBooks)
+
+/**
+ * 当前是不是自定义智能书架（第 218 期：这一类由服务端求值，加载 / 失败判据单独一组）。
+ *
+ * ⚠️ 必须定义在**任何 immediate watcher 之前**：折叠系列的 watcher 在 setup 期间就会执行，
+ * 它要读 `isCustomScope` —— 定义在后文会踩 TDZ（默认折叠关时被短路掩盖，一开折叠就崩）。
+ */
+const activeScopeId = computed(() => scopeIdOf(library.smartKey))
+/** 自定义智能书架结果已是**全量命中**，没有「服务端还有下一页」这回事 */
+const isCustomScope = computed(() => activeScopeId.value !== null)
 
 /**
  * **分面计数的数据源**（第 156 期）：全量书目，而不是已加载的那几页。
@@ -643,6 +660,8 @@ function rebuildMoreObserver(): void {
 
 /** 拉下一页（哨兵与按钮共用；`shelfHasMore` / `shelfLoadingMore` / 单飞闸都在 store 里兜着） */
 function loadNextPage(): void {
+  // 自定义智能书架的结果是一次性全量命中，没有「下一页」（别误拉全部书目那一路）
+  if (isCustomScope.value) return
   void library.loadMoreShelfBooks()
 }
 
@@ -659,7 +678,7 @@ function loadNextPage(): void {
 watch(
   [() => prefs.prefs.collapseSeries, () => library.shelfHasMore, () => library.shelfLoadingMore],
   () => {
-    if (prefs.prefs.collapseSeries && library.shelfHasMore
+    if (prefs.prefs.collapseSeries && library.shelfHasMore && !isCustomScope.value
         && !library.shelfLoadingMore && !library.booksError) {
       void library.loadMoreShelfBooks()
     }
@@ -675,7 +694,8 @@ watch(
  * 「没有符合条件的书」—— 那是在谎报（用户会以为库里真的没有）。
  */
 const searchPending = computed(
-  () => !sorted.value.length && library.shelfHasMore && library.shelfLoadedBooks.length > 0,
+  () => !isCustomScope.value && !sorted.value.length && library.shelfHasMore
+    && library.shelfLoadedBooks.length > 0,
 )
 /** 自动续拉已到上限（不再自动拉，改为让用户点「继续加载以查找」手动推进）。 */
 const searchExhausted = computed(
@@ -732,7 +752,8 @@ watch(
 const headDesc = computed(() => {
   const shown = sorted.value.length
   const cut = source.value.length - shown
-  if (library.shelfHasMore) {
+  // 自定义智能书架：服务端返回的就是**全部命中**，不存在「已加载页 / 共 M 本」的分页口径
+  if (!isCustomScope.value && library.shelfHasMore) {
     const hit = shown !== library.shelfLoadedBooks.length ? ` · 当前条件命中 ${shown} 本` : ''
     return `已显示 ${library.shelfLoadedBooks.length} / 共 ${library.shelfTotal} 本${hit}`
   }
@@ -963,6 +984,18 @@ const isFiltered = computed(() => Boolean(library.shelfFacet) || library.isSmart
 
 // ---------------- 加载 / 失败 / 空 三态（第 88 期） ----------------
 
+/** 自定义书架正在取命中、且还没有任何结果 */
+const scopePending = computed(() => {
+  const id = activeScopeId.value
+  return id !== null && Boolean(library.scopeLoading[id]) && !library.scopeBooks(id).length
+})
+
+/** 自定义书架取命中失败的原因（空串 = 没有失败） */
+const scopeError = computed(() => {
+  const id = activeScopeId.value
+  return id !== null ? String(library.scopeError[id] || '') : ''
+})
+
 /**
  * 首屏骨架：**书架还没有任何已加载的页**、且首页正在加载时显示。
  *
@@ -970,24 +1003,40 @@ const isFiltered = computed(() => Boolean(library.shelfFacet) || library.isSmart
  * **不是**全量的 `books` / `loading` —— 书架首屏不等全量（首屏快正是分页的目的）。
  * 挂在未裁剪的源（而不是 `sorted`）上：切库 / 切筛选时已加载页非空 ⇒ 不闪骨架
  * （那些都是客户端过滤，不需要重新加载）。
+ * 自定义智能书架的结果是**另一份请求**（服务端求值），没有结果时也走骨架。
  */
-const showSkeleton = computed(() => !library.shelfLoadedBooks.length && library.shelfLoading)
+const showSkeleton = computed(
+  () => scopePending.value
+    || (!library.shelfLoadedBooks.length && library.shelfLoading),
+)
 
 /**
  * 失败态：书架没有已加载页、首页不在加载、且有失败原因时显示。
  *
  * ⚠️ 只在**没有数据**时显示 —— 已有的旧数据比一个错误页有用（force 刷新失败时保留旧列表，
  * 别把用户看得到的书换成一个报错）。
+ * 自定义智能书架失败只看它自己那份请求（与书架首页无关）。
  */
-const showError = computed(
-  () => !library.shelfLoadedBooks.length && !library.shelfLoading && Boolean(library.booksError),
-)
+const showError = computed(() => {
+  const id = activeScopeId.value
+  if (id !== null) {
+    return !scopePending.value && !library.scopeBooks(id).length && Boolean(scopeError.value)
+  }
+  return !library.shelfLoadedBooks.length && !library.shelfLoading && Boolean(library.booksError)
+})
 
 /** 失败原因文案（剥掉后端 `{"detail":…}` 外壳，必要时带上原始信息） */
-const errorText = computed(() => apiErrorMessage(new Error(library.booksError), '加载失败'))
+const errorText = computed(
+  () => apiErrorMessage(new Error(scopeError.value || library.booksError), '加载失败'),
+)
 
-/** 重试：重取书架首页（`force` 绕过 `shelfLoaded` 守卫；失败时它本就为 false，双保险） */
+/** 重试：自定义书架重取命中；普通书架重取首页（`force` 绕过 `shelfLoaded` 守卫）。 */
 function retryLoad(): void {
+  const id = activeScopeId.value
+  if (id !== null) {
+    void library.ensureScopeBooks(id, true)
+    return
+  }
   void library.loadShelfFirstPage(true)
 }
 
@@ -1851,7 +1900,7 @@ const INPUT_CLS =
       </p>
       <p v-if="library.booksError" class="text-[12px] text-amber-600">{{ errorText }}</p>
       <Button
-        v-if="library.shelfHasMore"
+        v-if="library.shelfHasMore && !isCustomScope"
         size="sm"
         variant="ghost"
         :disabled="library.shelfLoadingMore"

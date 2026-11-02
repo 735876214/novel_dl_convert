@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import {
   api,
@@ -10,7 +10,7 @@ import {
   type LibraryScanState,
 } from '@/lib/api'
 import { COLLECTIONS, LIBRARIES, SMART_SHELVES } from '@/data/collections'
-import { evaluateScope, type SmartScope } from '@/lib/smartScope'
+import { scopeIdOf, type SmartScope } from '@/lib/smartScope'
 import {
   ensureThresholds,
   isInProgress,
@@ -218,17 +218,74 @@ export const useLibraryStore = defineStore('library', () => {
       case 'annotated':
         return src.filter((b) => (b.annotation_count ?? 0) > 0)
       default:
-        // 自定义智能书架：smartKey 形如 scope:{id}，按存储规则在前端求值
-        if (key.startsWith('scope:')) {
-          const sc = scopes.value.find((s) => `scope:${s.id}` === key)
-          return sc ? evaluateScope(src, sc.rules, sc.match) : src
-        }
+        // 自定义智能书架（scope:{id}）由 `smartBooks` 单独取服务端结果，不走这里；
+        // 未知键 = 不筛选（宁多不漏）。
         return src
     }
   }
 
+  /** 自定义智能书架的书目缓存（第 218 期：**服务端求值**）。
+   *
+   * 规则命中由 `GET /api/books?scope_id=` 算好返回；前端不再拿全量书目自己求值。
+   * 缓存按 scope id 存，进入书架 / 保存规则时显式重取（`ensureScopeBooks(id, true)`）；
+   * 书目数据变更（进度 / 刷新）时整体失效，避免展示过期命中。
+   */
+  const scopeBooksMap = ref<Record<number, BookCard[] | undefined>>({})
+  const scopeLoading = ref<Record<number, boolean | undefined>>({})
+  const scopeError = ref<Record<number, string | undefined>>({})
+  const scopeInflight: Record<number, Promise<void> | undefined> = {}
+
+  function scopeBooks(id: number): BookCard[] {
+    return scopeBooksMap.value[id] || []
+  }
+
+  /**
+   * 自定义书架命中按**当前库**再裁一次。
+   *
+   * 服务端命中的是「全部书库」，而侧栏计数按当前库算（`/api/smart-scopes?library_id=`）；
+   * 这里不裁就会出现「侧栏 5、点进去 9」。缓存仍保留全量，切库时无需重取。
+   */
+  function scopedScopeBooks(id: number): BookCard[] {
+    const lid = currentLibraryId.value
+    return lid ? scopeBooks(id).filter((b) => (b.library_id || '') === lid) : scopeBooks(id)
+  }
+
+  function invalidateScopeBooks(): void {
+    scopeBooksMap.value = {}
+    scopeError.value = {}
+  }
+
+  async function ensureScopeBooks(id: number, force = false): Promise<void> {
+    if (!force && scopeBooksMap.value[id]) return
+    if (scopeInflight[id]) return scopeInflight[id]
+    scopeLoading.value = { ...scopeLoading.value, [id]: true }
+    scopeError.value = { ...scopeError.value, [id]: '' }
+    const p = (async () => {
+      try {
+        // 不传 limit：自定义书架要看全量命中（书架页的翻页仍由 shelfLoadedBooks 负责，
+        // 那条路只用于「全部书目 / 内置智能书架」，自定义书架是另一份完整结果）。
+        const res = await api.books({ scope_id: id })
+        scopeBooksMap.value = { ...scopeBooksMap.value, [id]: res.items }
+      } catch (e) {
+        // 失败不写空结果：宁可保留上一次命中，也不要把「请求失败」显示成「0 本」。
+        // 原因记下来，书架页据此显示失败态与重试入口。
+        scopeError.value = {
+          ...scopeError.value,
+          [id]: e instanceof Error ? e.message : '加载失败',
+        }
+      } finally {
+        scopeLoading.value = { ...scopeLoading.value, [id]: false }
+        delete scopeInflight[id]
+      }
+    })()
+    scopeInflight[id] = p
+    return p
+  }
+
   /** 按阅读状态筛书（真实状态优先，无状态行的书按进度兜底推导）。**限定在当前库内**（全量源）。 */
   function smartBooks(key: string): BookCard[] {
+    const sid = scopeIdOf(key)
+    if (sid !== null) return scopedScopeBooks(sid)
     return smartBooksOf(scopedBooks.value, key)
   }
 
@@ -293,6 +350,8 @@ export const useLibraryStore = defineStore('library', () => {
   const shelfBooks = computed(() => {
     const src = shelfScopedBooks.value
     if (shelfFacet.value) return facetBooksOf(src, shelfFacet.value)
+    const sid = scopeIdOf(smartKey.value)
+    if (sid !== null) return scopedScopeBooks(sid)
     if (smartKey.value) return smartBooksOf(src, smartKey.value)
     return src
   })
@@ -327,8 +386,13 @@ export const useLibraryStore = defineStore('library', () => {
       b.percent = pct
       if (ts > 0) b.updated_at = Math.max(ts, b.updated_at || 0)
     }
-    // 就地改了数据 ⇒ 让以「引用」为键的 memo（scopeCounts）知道该重算
+    // 就地改了数据 ⇒ 让以「引用」为键的 memo（scopeCounts）知道该重算；
+    // 自定义智能书架的服务端命中也可能变（状态 / 进度规则）：正在看某个书架就重取，
+    // 否则整体失效、下次进入再取。
     booksRevision.value += 1
+    const activeSid = scopeIdOf(smartKey.value)
+    if (activeSid !== null) void ensureScopeBooks(activeSid, true)
+    else invalidateScopeBooks()
   }
 
   /**
@@ -516,6 +580,7 @@ export const useLibraryStore = defineStore('library', () => {
    * 「书架首页对了、侧栏计数还是旧的」（或反过来）。收在一个方法里，避免调用点漏刷一处。
    */
   async function refreshBooks(): Promise<void> {
+    invalidateScopeBooks()
     await Promise.all([
       loadBooks(true),
       // 书架分页源**没用过**（用户没进过书架）就不必刷 —— 别为看不见的页面多发一次请求
@@ -524,7 +589,12 @@ export const useLibraryStore = defineStore('library', () => {
       // 它来自 `/api/libraries`（600 B）而不是书目列表 —— 侧栏的数字从此不再依赖
       // 全量书目，所以「数据变了」这条汇聚点必须把这份数字一起刷新，否则徽标会停在旧值。
       loadLibraries(true),
+      // 自定义智能书架的命中数同理（第 218 期：服务端算，数据变了要重算）
+      loadScopes(true),
     ])
+    // 正在看自定义书架就顺手重取那一条（缓存刚被清空，否则书架会先空一下）
+    const sid = scopeIdOf(smartKey.value)
+    if (sid !== null) void ensureScopeBooks(sid, true)
   }
 
   /** 书库实体 + 来源父目录（空则拉取）。同 `loadBooks`，并发调用共享同一次请求（第 67 期）。 */
@@ -577,17 +647,31 @@ export const useLibraryStore = defineStore('library', () => {
     await Promise.all([loadFeatures(), ensureThresholds(currentLibraryId.value)])
   }
 
-  /** 自定义智能书架（smart_scopes 表）：规则存后端、求值在前端 */
+  /** 自定义智能书架（smart_scopes 表）：规则与求值都在后端（`core/bookrules.py`） */
   const scopes = ref<SmartScope[]>([])
 
   async function loadScopes(force = false): Promise<void> {
     if (scopes.value.length && !force) return
     try {
-      scopes.value = (await api.smartScopes()).items
+      // 命中数按**当前库**算（`library_id` 空 = 全部书库）——侧栏徽标与书架看到的
+      // 是同一个范围，切库后必须重取，不能沿用上一个库的数字。
+      scopes.value = (await api.smartScopes(currentLibraryId.value)).items
     } catch {
       /* ignore */
     }
   }
+
+  // 切库 ⇒ 智能书架命中数换范围（服务端按库计数）。书目缓存**不清**：
+  // 它存的是「全部书库」的命中，`scopedScopeBooks` 会按当前库再裁，清掉反而让书架先空一下。
+  watch(currentLibraryId, () => {
+    void loadScopes(true)
+  })
+
+  // 进入自定义智能书架 ⇒ 取服务端求值结果（规则命中不在前端算）。
+  watch(smartKey, (key) => {
+    const sid = scopeIdOf(key)
+    if (sid !== null) void ensureScopeBooks(sid, true)
+  }, { immediate: true })
 
   // ---------------- 扫描 / 建索引进度（第 88 期） ----------------
   //
@@ -676,28 +760,12 @@ export const useLibraryStore = defineStore('library', () => {
   /**
    * 自定义书架计数：`scope:{id}` → 数量（侧栏徽标用，与内置 smartCounts 同一模式）。
    *
-   * 第 88 期加 memo：`evaluateScope` 对每个智能书架都要**全量扫一遍书**，而侧栏每渲染
-   * 一组都会读一遍这张表。以「书目数组引用 + scopes 引用 + 原地变更计数」为键 ——
-   * 三者都没变时直接复用上次结果，不做重复的全量求值。
+   * 第 218 期：计数来自服务端（`GET /api/smart-scopes?library_id=` 的 `count`），
+   * 与 `GET /api/books?scope_id=` 同一求值路径 —— 前端不再扫一遍书目算规则。
    */
-  let scopeCountsCache: {
-    books: BookCard[]
-    scopes: SmartScope[]
-    rev: number
-    out: Record<string, number>
-  } | null = null
-
   const scopeCounts = computed<Record<string, number>>(() => {
-    const src = scopedBooks.value
-    const scs = scopes.value
-    const rev = booksRevision.value
-    const c = scopeCountsCache
-    if (c && c.books === src && c.scopes === scs && c.rev === rev) return c.out
     const out: Record<string, number> = {}
-    for (const s of scs) {
-      out[`scope:${s.id}`] = evaluateScope(src, s.rules, s.match).length
-    }
-    scopeCountsCache = { books: src, scopes: scs, rev, out }
+    for (const s of scopes.value) out[`scope:${s.id}`] = Number(s.count ?? 0)
     return out
   })
 
@@ -797,6 +865,10 @@ export const useLibraryStore = defineStore('library', () => {
     scopes,
     loadScopes,
     scopeCounts,
+    ensureScopeBooks,
+    scopeBooks,
+    scopeLoading,
+    scopeError,
     findBook,
     getBookDetail,
     forgetDetail,

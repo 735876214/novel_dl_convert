@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import BookCover from '@/components/ui/BookCover.vue'
@@ -7,6 +7,7 @@ import Icon from '@/components/ui/Icon.vue'
 import { MAX_COVERS_PER_ROW, type ShelfDef, type ShelfType } from '@/data/dashboard'
 import type { BookCard } from '@/lib/api'
 import { openTargetOf } from '@/lib/bookOpen'
+import { scopeIdOf } from '@/lib/smartScope'
 import { filterByLibraries } from '@/lib/shelfScope'
 import {
   chunkIntoBands,
@@ -40,6 +41,14 @@ const router = useRouter()
 onMounted(() => {
   library.loadBooks()
   library.loadLibraries()
+  // 第 218 期：自定义智能书架由服务端求值；这份结果不在共享书目里，进页面时单独取
+  const sid = scopeIdOf(props.shelf.scope)
+  if (sid !== null) void library.ensureScopeBooks(sid)
+})
+
+watch(() => props.shelf.scope, (key) => {
+  const sid = scopeIdOf(key)
+  if (sid !== null) void library.ensureScopeBooks(sid)
 })
 
 const narrow = useNarrowScreenOnMount()

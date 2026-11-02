@@ -12,7 +12,7 @@
 import type { PrefsPayload } from './prefsPayload'
 import { localDate } from './format'
 import type { ImportResult } from './sourceImport'
-import type { SmartScope, ScopeRule } from './smartScope'
+import type { SmartScope, ScopeRule, RuleSchema } from './smartScope'
 import type { EpisodeRule } from './episodeScope'
 
 export interface HealthInfo {
@@ -4308,8 +4308,26 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  // ---------- 自定义智能书架（规则存后端，求值在前端 lib/smartScope.ts）----------
-  smartScopes: () => request<{ items: SmartScope[] }>('/api/smart-scopes'),
+  // ---------- 自定义智能书架（规则存后端，**求值也在后端** core/bookrules.py）----------
+  /** 字段 / 操作清单（前端表单的唯一真值源） */
+  ruleSchema: () => request<RuleSchema>('/api/book-rules'),
+
+  /** 列表 + 命中数（`library_id` 给值时按该库计数） */
+  smartScopes: (libraryId = '') => request<{ items: SmartScope[] }>(
+    `/api/smart-scopes${libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : ''}`,
+  ),
+
+  /** 规则实时预览：与保存后的求值同一条服务端路径 */
+  previewSmartScope: (payload: {
+    rules: ScopeRule[]
+    match: 'all' | 'any'
+    library_id?: string
+  }) =>
+    request<{ count: number; total: number }>('/api/smart-scopes/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }),
 
   createSmartScope: (payload: { name: string; rules: ScopeRule[]; match: 'all' | 'any' }) =>
     request<SmartScope>('/api/smart-scopes', {
@@ -4329,11 +4347,11 @@ export const api = {
     request<{ ok: boolean }>(`/api/smart-scopes/${id}`, { method: 'DELETE' }),
 
   /** 智能书架手动排序（第 154 期）：ids 必须是当前全部 id 的一个排列。 */
-  reorderSmartScopes: (ids: number[]) =>
+  reorderSmartScopes: (ids: number[], libraryId = '') =>
     request<{ items: SmartScope[] }>('/api/smart-scopes/reorder', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids }),
+      body: JSON.stringify({ ids, library_id: libraryId }),
     }),
 
   // ---------- 偏好模式 / 设备（按设备的偏好同步）----------
@@ -4710,10 +4728,11 @@ export const api = {
    *   · 传了就分页：`total` 仍是**未切片前的总数**，`has_more` 告诉我们还有没有下一页。
    * ⚠️ `limit` / `offset` / `has_more` 三个字段**可选**：拿不到（旧后端）就由 store 兜底推。
    */
-  books: (opts?: { limit?: number; offset?: number }) => {
+  books: (opts?: { limit?: number; offset?: number; scope_id?: number }) => {
     const q = new URLSearchParams()
     if (opts && typeof opts.limit === 'number') q.set('limit', String(opts.limit))
     if (opts && typeof opts.offset === 'number') q.set('offset', String(opts.offset))
+    if (opts && typeof opts.scope_id === 'number') q.set('scope_id', String(opts.scope_id))
     const qs = q.toString()
     return request<{
       items: BookCard[]

@@ -27,6 +27,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
       getProfile: ok({}),
       tasks: ok({ items: [], total: 0 }),
       libraries: ok({ items: [] }),
+      // 外壳 bootstrap 会拉一次自定义图标；不桩掉就会在测试结束**之后**才失败，
+      // 以「closing rpc while onUserConsoleLog was pending」的形式把整轮 vitest 判红。
+      customIcons: ok({ items: [] }),
     },
   }
 })

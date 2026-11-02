@@ -16,19 +16,22 @@
 │   · 只做**编排与形状**：参数校验 → 调 core → 组装响应（如 _card 收口 path）│
 └───────────────┬──────────────────────────────────────────────────────────┘
 ┌───────────────▼──────────────────────────────────────────────────────────┐
-│ novelforge/core/* —— 领域逻辑（**全部 74 个模块**，纯 Python，不依赖 FastAPI）│
-│  achievements · activity · activity_log · ai_detect · atomicio · audio · │
-│  audio_meta · auth · authors · autoupdate · backup · bookdock ·          │
-│  browse_counts · cache · catalog · changelog · comics · csvsafe ·        │
-│  customfields · db · detect · embed · epub_builder · epub_cfi ·          │
-│  epub_update · fb2cache · features · filename · fileops · fonts ·        │
-│  htmlsafe · integrations · jssandbox · komga · komga_api · koreader ·    │
-│  koreader_anno · landing · lib_settings · library · library_rules ·      │
-│  metadata · metafetch · metascore · metasources · metastore · migrate ·  │
-│  mobicache · narrators · netdiag · network · numbers · opds · pdfrender ·│
-│  pg · pgmigrate · pipeline · preprocess · publish · reading_list ·       │
-│  recommend · recycle · saferegex · scrape · series_meta · sqlcompat ·    │
-│  stats · sync · txtcache · units · updater · urlguard · watcher · zipkind│
+│ novelforge/core/* —— 领域逻辑（**全部 86 个模块**，纯 Python，不依赖 FastAPI）│
+│  achievements · activity · activity_log · ai_detect · atomicio ·         │
+│  audio · audio_meta · audiobook_zip · auth · authors · autoupdate ·      │
+│  backup · bookdock · bookrules · booksearch · browse_counts · cache ·    │
+│  catalog · changelog · comics · csvsafe · customfields · customicons ·   │
+│  db · detect · embed · entities · epub_builder · epub_cfi ·              │
+│  epub_update · events · fb2cache · features · filename · fileops ·       │
+│  fonts · htmlsafe · integrations · jssandbox · komga · komga_api ·       │
+│  koreader · koreader_anno · landing · lib_settings · library ·           │
+│  library_rules · m4b · metadata · metafetch · metascore · metasources ·  │
+│  metastore · migrate · mobicache · narrators · netdiag · network ·       │
+│  numbers · opds · pathmeta · pdfrender · pdfsearch · pg · pgmigrate ·    │
+│  pipeline · podcasts · preprocess · publish · readaloud ·                │
+│  reading_list · recommend · recycle · saferegex · scrape ·               │
+│  series_meta · sqlcompat · stats · sync · thumbs · txtcache · units ·    │
+│  updater · urlguard · watcher · zipkind ·                                │
 └───────────────┬──────────────────────────────────────────────────────────┘
                 │
    ┌────────────▼───────────┐   ┌──────────────┐   ┌───────────────────────┐

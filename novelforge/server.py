@@ -47,7 +47,7 @@ from .core import (db, stats, auth as auth_mod, achievements, activity, recommen
                    mobicache, fb2cache,
                    catalog, cache, units, recycle, urlguard, numbers, htmlsafe,
                    events, entities, pathmeta, m4b, audiobook_zip, podcasts, readaloud, booksearch, customicons,
-                   pdfsearch)
+                   pdfsearch, bookrules)
 from . import config
 from .sources import REGISTRY, DownloadManager
 from .sources import source_of
@@ -3468,8 +3468,68 @@ def api_podcast_delete(pid: str):
     return {"ok": True, "removed": pid}
 
 
+def _enriched_cards(books: list) -> list:
+    """书目条目 → 对外卡片 + 阅读状态（进度 / 批注 / 评分 / 状态 / 收藏夹）。
+
+    第 218 期从 ``api_books`` 摘出来给规则求值共用：智能书架的计数与书目必须和
+    ``GET /api/books`` 用**同一份**附加字段，否则「规则命中数」与「点进去看到的」
+    会各说各话。字段与顺序保持原样（条目不增不减，只是便于复用）。
+    """
+    prog = db.all_progress()
+    annos = db.annotation_counts()
+    ratings = db.all_ratings()
+    statuses = db.all_statuses()
+    colls = db.collection_map()
+    items = []
+    for b in books:
+        p = prog.get(b["id"])
+        st = statuses.get(b["id"])
+        items.append({
+            **_card(b),
+            "percent": float(p["percent"]) if p else 0.0,
+            "updated_at": p["updated_at"] if p else 0.0,
+            "annotation_count": annos.get(b["id"], 0),
+            # 评分：0 = 未评分（见 core/db.py 的说明，未评分不用 0 星表示）
+            "stars": ratings.get(b["id"], 0),
+            # 阅读状态：**真实状态优先**。没有状态行的书给 None，
+            # 由前端用进度兜底推导 —— 不能在这里编一个 'unread'，
+            # 否则「有进度但没标状态」的老书会被误判成未读。
+            "status": st["status"] if st else None,
+            "started_at": (st or {}).get("started_at") or 0,
+            "finished_at": (st or {}).get("finished_at") or 0,
+            # 所属收藏夹 id（第 34 期）：实体浏览页按「收藏」维度分组要用；
+            # 一次批量取（**不逐本查**），不在任何夹里就是空数组。
+            "collection_ids": colls.get(b["id"], []),
+        })
+    return items
+
+
+def _rule_context(library_id: str = None) -> dict:
+    """规则求值用到的上下文（书库名 / 收藏夹名 / 阅读阈值）。
+
+    状态兜底按**每本书所属库**的生效阈值（`thresholds_by_library`），与 ``stats`` /
+    书架的判定同源（``lib_settings.reading_thresholds``）；`library_id` 只用于给
+    没有归属库的书留一份兜底值。
+    """
+    libs = library.libraries()
+    lib_names = {str(l.get("id") or ""): str(l.get("name") or "") for l in libs}
+    coll_names = {int(c["id"]): str(c.get("name") or "") for c in db.list_collections()}
+    return {
+        "library_names": lib_names,
+        "collection_names": coll_names,
+        "thresholds": lib_settings.reading_thresholds(library_id or None),
+        # 每条书按**自己所属库**的阈值判「无状态行的书」是未读 / 在读 / 读完；
+        # 与 `stats` / 书架的判定同源（`lib_settings.reading_thresholds`）。
+        "thresholds_by_library": {
+            str(l.get("id") or ""): lib_settings.reading_thresholds(str(l.get("id") or ""))
+            for l in libs
+        },
+    }
+
+
 @app.get("/api/books")
-def api_books(limit: str | None = None, offset: str | None = None):
+def api_books(limit: str | None = None, offset: str | None = None,
+              scope_id: str | None = None):
     """书目列表：附带阅读进度 / 批注数 / 评分 / 阅读状态（来自 SQLite）。
 
     第 88 期：新增 ``scanning`` 字段（**追加，不改既有字段**，保持向后兼容）——
@@ -3490,6 +3550,13 @@ def api_books(limit: str | None = None, offset: str | None = None):
     - ``total`` **始终是「未切片前的总数」**（前端用它算「已显示 N / 共 M 本」）。
     - 追加 ``limit`` / ``offset`` / ``has_more`` 三个字段（``has_more`` =
       ``offset + len(items) < total``）。``limit`` 回显**生效值**（不限时为 ``null``）。
+
+    第 218 期：新增**可选**查询参数 ``scope_id``（智能书架规则求值，**服务端一处**）：
+
+    - 缺省 / 空串 ⇒ 与改造前逐字节一致（不筛选）。
+    - 给值时先按 ``core/bookrules.py`` 求值，再做分页；``total`` 是**筛选后**的总数，
+      顺序仍是 ``library.books()`` 的既有顺序（不重排）。
+    - 非整数 ⇒ **400**；查不到该智能书架 ⇒ **404**（不是静默返回全部书目）。
 
     ⚠️ 边界（如实写明）：这是 **Python 侧切片**，省的是「响应体积 + 前端渲染行数」，
     **不是** DB 读 —— ``catalog`` 仍是「一条 ``SELECT *`` + 内存排序」，分页与否
@@ -3517,32 +3584,26 @@ def api_books(limit: str | None = None, offset: str | None = None):
     if off < 0:
         raise HTTPException(400, "offset 不能为负数")
 
-    prog = db.all_progress()
-    annos = db.annotation_counts()
-    ratings = db.all_ratings()
-    statuses = db.all_statuses()
-    colls = db.collection_map()
-    items = []
-    for b in library.books():
-        p = prog.get(b["id"])
-        st = statuses.get(b["id"])
-        items.append({
-            **_card(b),
-            "percent": float(p["percent"]) if p else 0.0,
-            "updated_at": p["updated_at"] if p else 0.0,
-            "annotation_count": annos.get(b["id"], 0),
-            # 评分：0 = 未评分（见 core/db.py 的说明，未评分不用 0 星表示）
-            "stars": ratings.get(b["id"], 0),
-            # 阅读状态：**真实状态优先**。没有状态行的书给 None，
-            # 由前端用进度兜底推导 —— 不能在这里编一个 'unread'，
-            # 否则「有进度但没标状态」的老书会被误判成未读。
-            "status": st["status"] if st else None,
-            "started_at": (st or {}).get("started_at") or 0,
-            "finished_at": (st or {}).get("finished_at") or 0,
-            # 所属收藏夹 id（第 34 期）：实体浏览页按「收藏」维度分组要用；
-            # 一次批量取（**不逐本查**），不在任何夹里就是空数组。
-            "collection_ids": colls.get(b["id"], []),
-        })
+    items = _enriched_cards(library.books())
+    # ---- 智能书架筛选（第 218 期）----
+    # 规则求值只在 `core/bookrules.py` 一处实现；前端不再拿全量书目自己算。
+    # 筛选在**排序之后、切片之前**：顺序仍是 `library.books()` 的既有顺序，
+    # `total` 是筛选后的总数（前端据此算「已显示 N / 共 M」）。
+    raw_scope = str(scope_id or "").strip()
+    if raw_scope:
+        try:
+            sid = int(raw_scope)
+        except ValueError:
+            raise HTTPException(400, "scope_id 必须是整数") from None
+        scope = db.get_scope(sid)
+        if not scope:
+            raise HTTPException(404, "智能书架不存在")
+        try:
+            rules = json.loads(scope.get("rules") or "[]")
+        except (ValueError, TypeError):
+            rules = []
+        items = bookrules.evaluate(items, rules, str(scope.get("match") or "all"),
+                                   **_rule_context())
     total = len(items)                   # ⚠️ 未切片前的总数（前端算「已显示 N / 共 M」）
     # 切片在**排序之后**（`library.books()` 已有序，见文档串）。
     # `lim is None` ⇒ 不限，返回 `offset` 起的全部；越界时 `items[off:]` 自然是空列表。
@@ -8419,62 +8480,65 @@ def api_book_collections(bid: str):
 
 
 # ---------------- 自定义智能书架 ----------------
-# 规则存储在后端、求值在前端（书单整体下发，筛选不必再打接口）。
-# 字段/操作白名单在这里与前端 lib/smartScope.ts 各留一份，改动需两边同步。
+# 规则**存储与求值都在后端**（第 218 期）：字段 / 操作规格与判定语义只在
+# `core/bookrules.py` 一处；前端表单从 `GET /api/book-rules` 取同一份清单。
+# 此前白名单在 Python、判定在 TypeScript，加字段要两边同改 —— 已收敛。
 
-SCOPE_FIELDS = {
-    "title", "author", "series", "publisher", "language",
-    "tag", "format", "status", "stars", "year",
-    # 第 37 期补的两个数值字段：侧栏那 5 条内置智能书架下线之后，「最近添加」「有批注」
-    # 这两个视图**只能**靠规则重建，所以字段必须补齐（否则是能力净损失）。
-    #   · `annotations` = 批注数（`at_least 1` 就是「有批注」）
-    #   · `added`       = 入库天数（距今天数，`at_most 30` 就是「最近 30 天入库」）
-    "annotations", "added",
-}
-SCOPE_OPS = {
-    "title": {"contains", "not_contains", "equals"},
-    "author": {"contains", "not_contains", "equals"},
-    "series": {"contains", "not_contains", "equals"},
-    "publisher": {"contains", "not_contains", "equals"},
-    "language": {"contains", "not_contains", "equals"},
-    "tag": {"contains", "not_contains", "equals"},
-    "format": {"equals"},
-    "status": {"equals"},
-    "stars": {"at_least", "at_most"},
-    "year": {"at_least", "at_most"},
-    "annotations": {"at_least", "at_most"},
-    "added": {"at_least", "at_most"},
-}
+def _check_rules(rules, match: str = "all") -> tuple:
+    """结构校验（委托 ``core.bookrules.validate``），错误消息直接给用户看。"""
+    try:
+        return bookrules.validate(rules, match)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
 
 
-def _check_rules(rules) -> list:
-    """结构校验：非空数组、字段在白名单、操作与字段匹配。原样返回干净的三元组列表。"""
-    if not isinstance(rules, list) or not rules:
-        raise HTTPException(400, "rules 必须为非空数组")
-    out = []
-    for r in rules:
-        if not isinstance(r, dict):
-            raise HTTPException(400, "规则必须是对象")
-        field, op = r.get("field"), r.get("op")
-        value = str(r.get("value") or "")
-        if field not in SCOPE_FIELDS:
-            raise HTTPException(400, f"未知规则字段：{field}")
-        if op not in SCOPE_OPS[field]:
-            raise HTTPException(400, f"字段 {field} 不支持操作 {op}")
-        out.append({"field": field, "op": op, "value": value})
-    return out
+@app.get("/api/book-rules")
+def api_book_rules():
+    """规则字段 / 操作清单（前端表单的唯一真值源）。"""
+    return bookrules.schema()
 
 
 @app.get("/api/smart-scopes")
-def api_smart_scopes():
+def api_smart_scopes(library_id: str | None = None):
+    """智能书架列表（规则 + 命中数）。
+
+    `count` 按 **当前库**（`library_id` 给值时）或全部书库计算；计数与
+    `GET /api/books?scope_id=` 走同一个 ``bookrules.evaluate``，侧栏徽标与
+    点进去看到的书不会对不上。
+    """
+    lid = str(library_id or "").strip()
+    if lid and not library.get_library(lid):
+        raise HTTPException(404, "书库不存在")
+    rows = db.list_scopes()
+    # 一条规则都没有 ⇒ 不必读整个书目（侧栏启动时会调本接口，别为 0 个书架扫全库）
+    if not rows:
+        return {"items": []}
+    items = _enriched_cards(library.books(lid or None))
+    ctx = _rule_context(lid or None)
     out = []
-    for s in db.list_scopes():
+    for s in rows:
         try:
             rules = json.loads(s["rules"])
         except (ValueError, TypeError):
             rules = []
-        out.append({**s, "rules": rules})
+        matched = bookrules.evaluate(items, rules, str(s.get("match") or "all"), **ctx)
+        out.append({**s, "rules": rules, "count": len(matched)})
     return {"items": out}
+
+
+@app.post("/api/smart-scopes/preview")
+def api_smart_scope_preview(payload: dict = Body(...)):
+    """规则实时预览：`{rules, match, library_id?}` → `{count, total}`。
+
+    与保存后的求值同一条路径（`bookrules.evaluate`），不在客户端再算一遍。
+    """
+    rules, match = _check_rules(payload.get("rules"), payload.get("match") or "all")
+    lid = str(payload.get("library_id") or "").strip()
+    if lid and not library.get_library(lid):
+        raise HTTPException(404, "书库不存在")
+    items = _enriched_cards(library.books(lid or None))
+    matched = bookrules.evaluate(items, rules, match, **_rule_context(lid or None))
+    return {"count": len(matched), "total": len(items)}
 
 
 @app.post("/api/smart-scopes/reorder")
@@ -8490,7 +8554,7 @@ def api_reorder_smart_scopes(payload: dict = Body(...)):
     if len(ids) != len(set(ids)) or set(ids) != current:
         raise HTTPException(400, "ids 必须是当前全部智能书架的一个排列")
     db.reorder_scopes(ids)
-    return api_smart_scopes()
+    return api_smart_scopes(str((payload or {}).get("library_id") or ""))
 
 
 @app.post("/api/smart-scopes")
@@ -8498,10 +8562,7 @@ def api_create_smart_scope(payload: dict = Body(...)):
     name = str((payload or {}).get("name") or "").strip()
     if not name:
         raise HTTPException(400, "name 不能为空")
-    rules = _check_rules(payload.get("rules"))
-    match = payload.get("match") or "all"
-    if match not in ("all", "any"):
-        raise HTTPException(400, "match 必须是 all 或 any")
+    rules, match = _check_rules(payload.get("rules"), payload.get("match") or "all")
     return db.create_scope(name, json.dumps(rules, ensure_ascii=False), match)
 
 
@@ -8512,10 +8573,7 @@ def api_update_smart_scope(sid: int, payload: dict = Body(...)):
     name = str((payload or {}).get("name") or "").strip()
     if not name:
         raise HTTPException(400, "name 不能为空")
-    rules = _check_rules(payload.get("rules"))
-    match = payload.get("match") or "all"
-    if match not in ("all", "any"):
-        raise HTTPException(400, "match 必须是 all 或 any")
+    rules, match = _check_rules(payload.get("rules"), payload.get("match") or "all")
     return db.update_scope(sid, name, json.dumps(rules, ensure_ascii=False), match)
 
 

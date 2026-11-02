@@ -1,19 +1,15 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import Card from '@/components/ui/Card.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
-import { api, type BookCard } from '@/lib/api'
+import { api } from '@/lib/api'
 import {
-  evaluateScope,
-  FIELD_LABELS,
-  FIELD_OPS,
-  OP_LABELS,
   ruleText,
-  type ScopeField,
-  type ScopeOp,
+  schemaMaps,
+  type RuleSchema,
   type ScopeRule,
   type SmartScope,
 } from '@/lib/smartScope'
@@ -22,9 +18,11 @@ import { useUiStore } from '@/stores/ui'
 import { useDndSort } from '@/composables/useDndSort'
 
 /**
- * 自定义智能书架管理页：规则的增删改。
- * 规则存后端（smart_scopes 表）、求值在前端（lib/smartScope.ts），
- * 编辑时用当前书单做**实时预览计数**——用户不用保存后才知道规则框住了几本书。
+ * 自定义智能书架管理页：规则的增删改 + 实时预览。
+ *
+ * 第 218 期起**求值在服务端**（`core/bookrules.py`）：字段 / 操作清单来自
+ * `GET /api/book-rules`，预览走 `POST /api/smart-scopes/preview`，列表命中数由
+ * `GET /api/smart-scopes` 一并返回。前端不再加载全量书目自己算规则。
  */
 const router = useRouter()
 const library = useLibraryStore()
@@ -35,11 +33,26 @@ const loading = ref(true)
 /** 加载失败信息：失败不能退化成「还没有自定义书架」（否则「拉不到」被误读成「一条都没有」）。 */
 const error = ref('')
 
+/** 规则字段 / 操作清单（服务端单一真值源） */
+const schema = ref<RuleSchema | null>(null)
+const schemaError = ref('')
+const maps = computed(() => schemaMaps(schema.value))
+
+async function loadSchema(): Promise<void> {
+  schemaError.value = ''
+  try {
+    schema.value = await api.ruleSchema()
+  } catch (e) {
+    schema.value = null
+    schemaError.value = e instanceof Error ? e.message : '加载字段清单失败'
+  }
+}
+
 async function load(): Promise<void> {
   loading.value = true
   error.value = ''
   try {
-    scopes.value = (await api.smartScopes()).items
+    scopes.value = (await api.smartScopes(library.currentLibraryId)).items
     library.scopes.splice(0, library.scopes.length, ...scopes.value)
   } catch (e) {
     scopes.value = []
@@ -49,8 +62,7 @@ async function load(): Promise<void> {
   }
 }
 onMounted(async () => {
-  await library.loadBooks()
-  await load()
+  await Promise.all([loadSchema(), load()])
 })
 
 /** 手动排序（第 154 期）：拖拽与上下移共用一个提交口。 */
@@ -62,7 +74,7 @@ async function move(from: number, to: number): Promise<void> {
   const byId = new Map(scopes.value.map((s) => [s.id, s]))
   scopes.value = ids.map((id) => byId.get(id)).filter((s): s is SmartScope => !!s)
   try {
-    scopes.value = (await api.reorderSmartScopes(ids)).items
+    scopes.value = (await api.reorderSmartScopes(ids, library.currentLibraryId)).items
     library.scopes.splice(0, library.scopes.length, ...scopes.value)
   } catch (e) {
     await load()
@@ -82,7 +94,8 @@ const saving = ref(false)
 const isEditing = computed(() => editing.value !== null)
 
 function emptyRule(): ScopeRule {
-  return { field: 'author', op: 'contains', value: '' }
+  const f = schema.value?.fields.find((x) => x.key === 'author') || schema.value?.fields[0]
+  return { field: f?.key || 'author', op: f?.ops[0] || 'contains', value: '' }
 }
 
 function startCreate(): void {
@@ -90,6 +103,7 @@ function startCreate(): void {
   fName.value = ''
   fMatch.value = 'all'
   fRules.value = [emptyRule()]
+  schedulePreview()
 }
 
 function startEdit(s: SmartScope): void {
@@ -97,30 +111,87 @@ function startEdit(s: SmartScope): void {
   fName.value = s.name
   fMatch.value = s.match
   fRules.value = (s.rules || []).map((r) => ({ ...r }))
+  schedulePreview()
 }
 
 function cancel(): void {
   editing.value = null
+  clearPreviewTimer()
+  previewCount.value = null
+  previewError.value = ''
 }
 
 /** 字段切换时，若当前操作不被新字段支持则落到该字段的第一个合法操作 */
 function onFieldChange(r: ScopeRule): void {
-  const ops = FIELD_OPS[r.field]
-  if (!ops.includes(r.op)) r.op = ops[0]
+  const ops = maps.value.fieldOps[r.field] || []
+  if (!ops.includes(r.op)) r.op = ops[0] || 'equals'
+}
+
+/** 这个操作要不要填值（「为空 / 不为空」不要） */
+function opNeedsValue(r: ScopeRule): boolean {
+  return maps.value.opNeedsValue[r.op] ?? true
 }
 
 function ruleValid(r: ScopeRule): boolean {
-  return Boolean(String(r.value ?? '').trim())
+  return !opNeedsValue(r) || Boolean(String(r.value ?? '').trim())
 }
 
 const canSave = computed(
-  () => fName.value.trim() && fRules.value.length > 0 && fRules.value.every(ruleValid),
+  () => Boolean(schema.value) && fName.value.trim() && fRules.value.length > 0
+    && fRules.value.every(ruleValid),
 )
 
-/** 实时预览：当前书单里命中规则的数量 */
-const previewCount = computed(() =>
-  evaluateScope(library.books as BookCard[], fRules.value, fMatch.value).length,
-)
+// ---------- 实时预览（服务端求值，防抖）----------
+const previewCount = ref<number | null>(null)
+const previewError = ref('')
+const previewLoading = ref(false)
+let previewTimer: ReturnType<typeof setTimeout> | null = null
+let previewSeq = 0
+
+function clearPreviewTimer(): void {
+  if (previewTimer !== null) {
+    clearTimeout(previewTimer)
+    previewTimer = null
+  }
+}
+
+async function refreshPreview(): Promise<void> {
+  const seq = ++previewSeq
+  if (!isEditing.value || !canSave.value) {
+    previewCount.value = null
+    previewError.value = ''
+    return
+  }
+  previewLoading.value = true
+  try {
+    const res = await api.previewSmartScope({
+      rules: fRules.value.map((r) => ({
+        field: r.field, op: r.op, value: String(r.value ?? '').trim(),
+      })),
+      match: fMatch.value,
+      library_id: library.currentLibraryId,
+    })
+    if (seq === previewSeq) {
+      previewCount.value = res.count
+      previewError.value = ''
+    }
+  } catch (e) {
+    if (seq === previewSeq) {
+      previewCount.value = null
+      previewError.value = e instanceof Error ? e.message : '预览失败'
+    }
+  } finally {
+    if (seq === previewSeq) previewLoading.value = false
+  }
+}
+
+function schedulePreview(): void {
+  clearPreviewTimer()
+  previewTimer = setTimeout(() => void refreshPreview(), 250)
+}
+
+watch([fName, fRules, fMatch, () => library.currentLibraryId], schedulePreview, { deep: true })
+onBeforeUnmount(clearPreviewTimer)
 
 async function save(): Promise<void> {
   if (!canSave.value || saving.value) return
@@ -160,12 +231,15 @@ function openOnShelf(s: SmartScope): void {
   router.push('/shelf')
 }
 
-const FIELD_OPTIONS = Object.keys(FIELD_LABELS) as ScopeField[]
-function opOptions(field: ScopeField): ScopeOp[] {
-  return FIELD_OPS[field]
+const fieldOptions = computed(() => schema.value?.fields || [])
+function opOptions(field: string): string[] {
+  return maps.value.fieldOps[field] || []
 }
-function opLabel(op: ScopeOp): string {
-  return OP_LABELS[op] ?? op
+function opLabel(op: string): string {
+  return maps.value.opLabels[op] ?? op
+}
+function fieldValues(field: string): { value: string; label: string }[] {
+  return maps.value.fieldValues[field] || []
 }
 </script>
 
@@ -198,25 +272,51 @@ function opLabel(op: ScopeOp): string {
           </select>
         </label>
         <span class="ml-auto text-[12px] text-muted-foreground">
-          命中 <b class="text-foreground tabular-nums">{{ previewCount }}</b> 本（实时预览）
+          <template v-if="previewLoading">预览中…</template>
+          <template v-else-if="previewError">
+            <span class="text-destructive">预览失败：{{ previewError }}</span>
+          </template>
+          <template v-else-if="previewCount !== null">
+            命中 <b class="text-foreground tabular-nums">{{ previewCount }}</b> 本（服务端实时预览）
+          </template>
+          <template v-else>填完整规则后显示命中数</template>
         </span>
       </div>
+
+      <p v-if="schemaError" class="mt-2 flex items-center gap-2 text-[12px] text-destructive">
+        <Icon name="alert" class="h-3.5 w-3.5 shrink-0" />
+        <span>规则字段清单加载失败：{{ schemaError }}</span>
+        <button type="button" class="cursor-pointer underline" @click="loadSchema">重试</button>
+      </p>
 
       <div class="mt-3 flex flex-col gap-2">
         <div v-for="(r, i) in fRules" :key="i" class="flex flex-wrap items-center gap-2">
           <select v-model="r.field" aria-label="规则字段" class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring" @change="onFieldChange(r)">
-            <option v-for="f in FIELD_OPTIONS" :key="f" :value="f">{{ FIELD_LABELS[f] }}</option>
+            <option v-for="f in fieldOptions" :key="f.key" :value="f.key">{{ f.label }}</option>
           </select>
           <select v-model="r.op" aria-label="规则操作符" class="h-8 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring">
             <option v-for="o in opOptions(r.field)" :key="o" :value="o">{{ opLabel(o) }}</option>
           </select>
-          <input
-            v-model="r.value"
-            type="text"
-            aria-label="规则值"
-            placeholder="值"
-            class="h-8 w-52 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
-          >
+          <template v-if="opNeedsValue(r)">
+            <select
+              v-if="fieldValues(r.field).length"
+              v-model="r.value"
+              aria-label="规则值"
+              class="h-8 w-52 rounded-md border border-border bg-muted px-2 text-[12.5px] text-foreground outline-none focus:border-ring"
+            >
+              <option value="">选择…</option>
+              <option v-for="v in fieldValues(r.field)" :key="v.value" :value="v.value">{{ v.label }}</option>
+            </select>
+            <input
+              v-else
+              v-model="r.value"
+              type="text"
+              aria-label="规则值"
+              :placeholder="r.field === 'added' ? '天数（如 30）' : '值'"
+              class="h-8 w-52 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none placeholder:text-muted-foreground focus:border-ring focus:bg-card"
+            >
+          </template>
+          <span v-else class="text-[11.5px] text-muted-foreground">（无需填值）</span>
           <button
             type="button"
             class="cursor-pointer text-[12px] text-muted-foreground hover:text-destructive"
@@ -247,7 +347,9 @@ function opLabel(op: ScopeOp): string {
         <button type="button" class="cursor-pointer rounded-md px-3 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground" @click="cancel">
           取消
         </button>
-        <span v-if="!canSave" class="text-[11.5px] text-muted-foreground">名称与每条规则的值都必填。</span>
+        <span v-if="!canSave" class="text-[11.5px] text-muted-foreground">
+          {{ schema ? '名称必填；需要值的规则要填值。' : '字段清单尚未加载。' }}
+        </span>
       </div>
     </Card>
 
@@ -258,7 +360,8 @@ function opLabel(op: ScopeOp): string {
         <button
           v-if="!isEditing"
           type="button"
-          class="cursor-pointer rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground"
+          class="cursor-pointer rounded-md bg-primary px-3 py-1.5 text-[12.5px] font-medium text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="!schema"
           @click="startCreate"
         >
           新建
@@ -296,11 +399,11 @@ function opLabel(op: ScopeOp): string {
         <div class="min-w-0 flex-1">
           <div class="truncate text-[13px] font-medium text-foreground">{{ s.name }}</div>
           <div class="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-            {{ s.match === 'any' ? '任一' : '全部' }} · {{ s.rules.map(ruleText).join('；') }}
+            {{ s.match === 'any' ? '任一' : '全部' }} · {{ s.rules.map((r) => ruleText(r, schema)).join('；') }}
           </div>
         </div>
         <span class="shrink-0 text-[11.5px] text-muted-foreground tabular-nums">
-          {{ evaluateScope(library.books as BookCard[], s.rules, s.match).length }} 本
+          {{ s.count ?? 0 }} 本
         </span>
         <button type="button" class="shrink-0 cursor-pointer text-[12px] text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40" title="上移" aria-label="上移" :disabled="index === 0" @click="move(index, index - 1)">↑</button>
         <button type="button" class="shrink-0 cursor-pointer text-[12px] text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40" title="下移" aria-label="下移" :disabled="index === scopes.length - 1" @click="move(index, index + 1)">↓</button>

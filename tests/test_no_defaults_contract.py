@@ -11,8 +11,8 @@ pytest 校验）：
 1. `data/collections.ts` 的三个骨架数组都是空的，且那 5 条内置智能书架的名字不再出现；
 2. 后端「默认库」这个概念**整个**不存在了（常量 / 合成函数 / 启动播种都不许回来）；
 3. `smart_scopes` / `collections` 两张表只在各自的 `create_*` 里插入（没有种子数据）；
-4. 规则字段白名单在后端 `SCOPE_OPS` 与前端 `FIELD_OPS` 里**逐字一致**
-   （两边各留一份是本仓既有的设计，但写歪了只会在运行期表现为「选了字段筛不出书」）；
+4. 规则字段 / 操作清单**只有后端一份**（`core/bookrules.py`，第 218 期收敛）；
+   前端 `smartScope.ts` 只剩类型与展示辅助，不许再出现第二份求值实现。
 5. 书库的三个写接口都走 `_libraries_changed()` 钩子 —— 没有可接收的库时投递会被拒收，
    而拒收计入失败次数、到上限就永久跳过；「建完库文件自己动起来」全靠这个钩子。
 
@@ -108,35 +108,27 @@ def test_智能书架与收藏夹都没有种子数据():
 
 
 # ---------------------------------------------------------------------------
-# ④ 规则字段白名单：后端与前端逐字一致
+# ④ 规则字段清单：只有后端 `core/bookrules.py` 一份（第 218 期收敛）
 # ---------------------------------------------------------------------------
 
-def _parse_field_ops_ts() -> dict:
-    src = _read(SMART_SCOPE_TS)
-    m = re.search(r"export const FIELD_OPS[^{]*\{(.*?)\n\}", src, re.S)
-    assert m, "FIELD_OPS 的形状变了，请同步本测试"
-    out: dict = {}
-    for line in m.group(1).splitlines():
-        line = line.split("//")[0].strip()
-        if not line:
-            continue
-        k, _, v = line.partition(":")
-        ops = re.findall(r"'([a-z_]+)'", v)
-        assert k.strip() and ops, f"解析不出这条字段规则：{line!r}"
-        out[k.strip()] = set(ops)
-    return out
+def test_规则字段清单只有后端一份():
+    """字段 / 操作白名单必须只存在于服务端；前端不得再留判定实现。
 
-
-def test_规则字段白名单前后端逐字一致():
-    """`server.SCOPE_OPS` 与 `lib/smartScope.ts` 的 `FIELD_OPS` 必须同集合。
-
-    本仓刻意两边各留一份（前端求值、后端校验，见 server.py 的注释），代价就是**必须
-    有测试钉住**：少一个字段的表现是「管理页能选、选完筛不出书」，极难排查。
+    第 218 期之前这里钉的是「`server.SCOPE_OPS` 与前端 `FIELD_OPS` 逐字一致」——
+    两边各留一份、靠测试同步。求值下沉后前端那份已是第二份实现，按仓规删除：
+    本测试反过来钉住「它不许回来」。
     """
-    from novelforge import server
-    backend = {k: set(v) for k, v in server.SCOPE_OPS.items()}
-    assert backend == _parse_field_ops_ts()
-    assert set(server.SCOPE_FIELDS) == set(backend), "SCOPE_FIELDS 与 SCOPE_OPS 的键集合必须一致"
+    from novelforge.core import bookrules
+
+    schema = bookrules.schema()
+    keys = {f["key"] for f in schema["fields"]}
+    assert {"status", "annotations", "added", "percent", "has_cover"} <= keys
+    ops = {o["key"] for o in schema["ops"]}
+    assert {"contains", "equals", "at_least", "is_empty"} <= ops
+
+    src = _read(SMART_SCOPE_TS)
+    for needle in ("FIELD_OPS", "evaluateScope", "function ruleHit", "statusFromPercent"):
+        assert needle not in src, f"前端 smartScope.ts 里又出现了判定实现：{needle}"
 
 
 def test_内置书架删掉后_fields_仍能重建它们():
@@ -146,10 +138,11 @@ def test_内置书架删掉后_fields_仍能重建它们():
     · 有批注             → `annotations`（第 37 期补）
     · 最近添加           → `added`（第 37 期补，单位=入库天数）
     """
-    from novelforge import server
-    assert {"status", "annotations", "added"} <= set(server.SCOPE_FIELDS)
-    assert {"at_least", "at_most"} <= set(server.SCOPE_OPS["annotations"])
-    assert {"at_least", "at_most"} <= set(server.SCOPE_OPS["added"])
+    from novelforge.core import bookrules
+
+    assert {"status", "annotations", "added"} <= set(bookrules.FIELDS)
+    assert {"at_least", "at_most"} <= set(bookrules.FIELDS["annotations"]["ops"])
+    assert {"at_least", "at_most"} <= set(bookrules.FIELDS["added"]["ops"])
 
 
 # ---------------------------------------------------------------------------
