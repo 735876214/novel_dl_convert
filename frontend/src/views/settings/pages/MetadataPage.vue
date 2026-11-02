@@ -565,8 +565,12 @@ async function applyPicked(): Promise<void> {
   running.value = true
   try {
     const r = await api.metadataApply(items)
+    // ⚠️ 第 250 期：**太长而没写进去的字段**也要说出来（跳过 ≠ 已写入）。
+    const skippedLong = r.applied.reduce(
+      (n, a) => n + (a.skipped_long?.length ?? 0), 0)
     ui.toast(`已写入 ${r.count} 本` + (r.covers ? `（含 ${r.covers} 张封面）` : '')
-      + (r.failed.length ? `，${r.failed.length} 本失败` : ''))
+      + (r.failed.length ? `，${r.failed.length} 本失败` : '')
+      + (skippedLong ? `，${skippedLong} 个字段太长没写进去` : ''))
     if (r.failed.length) console.warn('[metadata] 失败', r.failed)
     await library.loadBooks(true)
     planItems.value = []

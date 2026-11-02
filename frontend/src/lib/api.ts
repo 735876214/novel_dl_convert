@@ -551,7 +551,16 @@ export interface MetadataPlan {
 }
 
 export interface MetadataApplyResult {
-  applied: Array<{ name: string; fields: string[]; cover: boolean }>
+  applied: Array<{
+    name: string
+    fields: string[]
+    cover: boolean
+    /**
+     * **太长而没写进去**的字段（第 250 期）—— 跳过 ≠ 已写入 ⇒ 必须如实回报。
+     * （后端先写、这里再显示；老服务没有这个字段 ⇒ 可选。）
+     */
+    skipped_long?: string[]
+  }>
   failed: Array<{ name: string; error: string }>
   count: number
   covers: number
