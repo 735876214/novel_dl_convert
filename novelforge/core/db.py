@@ -1974,16 +1974,6 @@ def trashed_bookmarks(book_id: str | None = None) -> list:
         args = (str(book_id),)
     rows = c.execute(sql + " ORDER BY deleted_at DESC", args).fetchall()
     return [_bookmark_out(r) for r in rows]
-
-
-def bookmark_counts() -> dict:
-    """每本书的**活跃**书签数（垃圾桶不计入）。"""
-    rows = _connect().execute(
-        "SELECT book_id, COUNT(*) AS n FROM bookmarks WHERE deleted_at=0 GROUP BY book_id"
-    ).fetchall()
-    return {r["book_id"]: r["n"] for r in rows}
-
-
 def _bookmark_apply(c, row, percent, chapter, label) -> dict:
     """把一次写入落到既有行上（活跃行更新 / 墓碑行复活），返回出参。"""
     now = time.time()
@@ -4259,18 +4249,6 @@ def source_ledger_delete(name: str) -> bool:
         c.execute("DELETE FROM source_ledger_history WHERE name=?", (str(name),))
         c.commit()
     return bool(n)
-
-
-def source_ledger_rename(old: str, new: str) -> bool:
-    """改名（保留旧名台账会与新的冲突；历史一并带过去）。"""
-    c = _connect()
-    with _lock:
-        n = c.execute("UPDATE source_ledger SET name=? WHERE name=?", (str(new), str(old))).rowcount
-        c.execute("UPDATE source_ledger_history SET name=? WHERE name=?", (str(new), str(old)))
-        c.commit()
-    return bool(n)
-
-
 # ---------------- 播客订阅（第 173 期）----------------
 # 两张表都不含 book_id ⇒ 不进 ORPHAN/REMAP 清单（那里管的是「书 id 变了关联数据要跟着搬」）。
 # 一切读点带 `deleted_at=0`（软删除）；彻底删除本期不提供 UI。
@@ -5168,15 +5146,6 @@ def list_koreader_docs() -> list:
         "SELECT * FROM koreader_docs ORDER BY computed_at DESC"
     ).fetchall()
     return [dict(r) for r in rows]
-
-
-def get_koreader_doc(book_id):
-    r = _connect().execute(
-        "SELECT * FROM koreader_docs WHERE book_id=?", (str(book_id),)
-    ).fetchone()
-    return dict(r) if r else None
-
-
 def find_koreader_doc(doc: str):
     """按 document 标识找书：partialMD5 与 ``md5(basename)`` 两种口径都认。"""
     d = str(doc or "").strip().lower()
@@ -5822,18 +5791,6 @@ def get_online(book_id) -> dict:
         "SELECT field, value, source FROM meta_online WHERE book_id=?", (str(book_id),)
     ).fetchall()
     return {r["field"]: {"value": r["value"], "source": r["source"]} for r in rows}
-
-
-def all_online() -> dict:
-    rows = _connect().execute(
-        "SELECT book_id, field, value, source FROM meta_online"
-    ).fetchall()
-    out: dict = {}
-    for r in rows:
-        out.setdefault(r["book_id"], {})[r["field"]] = {"value": r["value"], "source": r["source"]}
-    return out
-
-
 # ---------------- 元数据字段级锁定（第 35 期）----------------
 # 与「用户改过就受保护」（:func:`all_overrides` 那道闸）**互相独立、可以并存**：
 #   · override 那道是**隐式**的 —— 改过就保护，没改过不保护；
@@ -7147,17 +7104,6 @@ def list_attempts(book_id) -> list:
         (str(book_id),),
     ).fetchall()
     return [dict(r) for r in rows]
-
-
-def current_attempt(book_id) -> "dict | None":
-    """当前**进行中**（未读完）的那一轮，没有则 None。"""
-    r = _connect().execute(
-        "SELECT * FROM reading_attempts WHERE book_id=? AND finished_at=0 "
-        "ORDER BY round DESC, id DESC LIMIT 1", (str(book_id),)
-    ).fetchone()
-    return dict(r) if r else None
-
-
 def start_attempt(book_id, started_at=None) -> dict:
     """开新一轮阅读（「再来一遍」）。**幂等**：已有进行中的那一轮就原样返回，不重复开。"""
     bid = str(book_id)
@@ -7205,18 +7151,6 @@ def finish_attempt(book_id, finished_at=None) -> "dict | None":
         c.commit()
         r = c.execute("SELECT * FROM reading_attempts WHERE id=?", (cur["id"],)).fetchone()
     return dict(r)
-
-
-def delete_attempts(book_id) -> int:
-    c = _connect()
-    with _lock:
-        n = int(c.execute(
-            "DELETE FROM reading_attempts WHERE book_id=?", (str(book_id),)
-        ).rowcount or 0)
-        c.commit()
-    return n
-
-
 def backfill_attempts() -> dict:
     """从既有 ``reading_status`` 的起止日期补录**一轮**尝试（第 43 期一次性历史补录）。
 
