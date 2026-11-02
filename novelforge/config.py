@@ -720,7 +720,12 @@ _CONFIG_ERROR: "str | None" = None
 #:
 #: 现在这类段**降级**（该段回默认值）而不是让整个配置失声 —— 配置坏了不该让
 #: **整个服务**死掉（探活端点尤其要活着）。降级必须**留证**：段名进这里，
-#: 进 `_CONFIG_ERROR`（`/health` 与设置页红条都看得到）。
+#: 由 `bad_sections()` 交出去（`/health` 的 `problems` 与 `GET /api/config`
+#: 的 `_bad_sections` 都看得到）。
+#:
+#: ⚠️ **不**并进 `_CONFIG_ERROR` —— 那个键的含义是「config.yaml **整个**读不出来」
+#: （第 141 期的语义）；「读出来了但某一段类型不对」是**另一件事**，
+#: 混进同一个键会让设置页把两件事说成同一句。
 _BAD_SECTIONS: "list[str]" = []
 
 
