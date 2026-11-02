@@ -112,6 +112,28 @@ def test_格式分面接口已随零调用者移除(client, auth_headers):
     assert client.get("/api/library-facets", headers=auth_headers).status_code == 404
 
 
+def test_按格式归库端点已随第77期移除(client, auth_headers):
+    """第 77 期删掉了 ``/api/library-migrations/*`` **七个端点**（``b5503bc``）。
+
+    ⚠️ 这一组是全仓**唯一**「删了整组端点、却没有 404 断言」的缺口：删除时
+    `novelforge/core/migrate.py:10` 与 `novelforge/server.py:6822` 的**注释**记得，
+    但 `tests/` 里零命中 —— 违反 AGENTS §1「删功能要一处不落（含『接口 404』断言）」。
+
+    钉住 404，防止「删了后端、前端或别处又被人加回来」的半删状态。
+    """
+    for method, path in (
+        ("GET", "/api/library-migrations/preview"),
+        ("POST", "/api/library-migrations/plan"),
+        ("POST", "/api/library-migrations/apply"),
+        ("POST", "/api/library-migrations/rollback"),
+        ("GET", "/api/library-migrations/batches"),
+        ("POST", "/api/library-migrations/dismiss"),
+        ("POST", "/api/library-migrations/reset-gate"),
+    ):
+        r = client.request(method, path, headers=auth_headers)
+        assert r.status_code == 404, f"{method} {path} 应已被删除，却回 {r.status_code}"
+
+
 def test_旧内容端点已随零调用者移除(client, auth_headers):
     """第 97 期删掉了 `GET /content`（`docs/agents-audit-95.md` §2 那条 `[low]`）。
 
