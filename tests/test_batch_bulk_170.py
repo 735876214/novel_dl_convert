@@ -18,6 +18,8 @@
 外加一条**结构性**判据：提交次数必须是常数级，与书本数无关（数提交而不是掐秒表，
 免得用例变成「看机器快慢」的 flake）。
 """
+import threading
+
 from novelforge.core import db
 
 
@@ -171,29 +173,7 @@ def test_提交次数与书本数无关(client, auth_headers, default_root, make
     assert client.post(f"/api/libraries/{test_lib_id}/scan", headers=auth_headers).json()["ok"]
     ids = _books(client, auth_headers, 20)
 
-    real = db._connect
-
-    class Counting:
-        def __init__(self, inner):
-            self._inner = inner
-            self.commits = 0
-
-        def commit(self):
-            self.commits += 1
-            return self._inner.commit()
-
-        def __getattr__(self, name):
-            return getattr(self._inner, name)
-
-    seen: list = []
-    shared = Counting(real())
-
-    def fake_connect():
-        if not seen:
-            seen.append(shared)
-        return shared
-
-    monkeypatch.setattr(db, "_connect", fake_connect)
+    shared = _counting_connect(monkeypatch)
     try:
         r = _batch(client, auth_headers, "set_rating", ids, stars=3)
     finally:
@@ -206,8 +186,15 @@ def test_提交次数与书本数无关(client, auth_headers, default_root, make
 
 
 def _counting_connect(monkeypatch):
-    """把 `db._connect` 换成一个**数提交次数**的代理（判定「逐本 commit」的探针）。"""
+    """把 `db._connect` 换成一个**数提交次数**的代理（判定「逐本 commit」的探针）。
+
+    ⚠️ **只数本线程的提交**（第 246 期）：SQLite/PG 的连接是**进程级共享**的
+    （`db._conn_proxy`），后台线程（watcher / 播客 worker / 扫��线程）在**同一个
+    连接**上提交 ⇒ 它们的提交会被一起数进来 ⇒ 本用例**偶发红**（实测：全量里
+    「提交了 3 次」）。那不是被测行为，是环境噪声 ⇒ 按线程过滤掉。
+    """
     real = db._connect
+    main_thread = threading.get_ident()
 
     class Counting:
         def __init__(self, inner):
@@ -215,7 +202,8 @@ def _counting_connect(monkeypatch):
             self.commits = 0
 
         def commit(self):
-            self.commits += 1
+            if threading.get_ident() == main_thread:
+                self.commits += 1
             return self._inner.commit()
 
         def __getattr__(self, name):
