@@ -563,7 +563,11 @@ def dirs_failed() -> list:
 #: 自定义字段清理这四条路都是「load_overrides() → 改几个键 → save_overrides()」。
 #: 没有锁时两个并发保存会**各读一份旧值、各写一份全量**，后写的那份把先写的键抹回旧值 ——
 #: 表现为「连着点两下保存，第一处设置撤回去了」，而且没有任何报错。
-_OVERRIDES_LOCK = threading.Lock()
+#: ⚠️ 必须是 **RLock**（重入）：第 244 期把「读」也纳入这把锁 —— 读与「原子替换」
+#: 在 Windows 上会撞车（目标文件被另一个句柄打开时 `os.replace` 报 WinError 5）。
+#: 改成普通 `Lock` 的话，`mutate_overrides` 持锁后再调 `load_overrides` 会**自锁死**
+#: ⇒ 用可重入的那把。
+_OVERRIDES_LOCK = threading.RLock()
 
 #: 上一次 :func:`load_overrides` **I/O 失败**的原因（``None`` = 没失败）。
 #:
@@ -595,7 +599,11 @@ def load_overrides() -> dict:
         _OVERRIDES_READ_ERROR = None
         return {}
     try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+        # ⚠️ 读与「原子替换」互斥（第 244 期）：Windows 上 `os.replace` 的目标文件
+        # 若正被另一个句柄打开（哪怕只是读），会报 `WinError 5: 拒绝访问`。
+        # `load_config()` 那条读路径**不持锁** ⇒ 与 `save_overrides` 的替换撞车时，
+        # 保存直接失败（用户看到「设置写入失败」）。
+        with _OVERRIDES_LOCK, open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (ValueError, TypeError) as e:
         _OVERRIDES_READ_ERROR = None
@@ -621,6 +629,30 @@ def _quarantine_overrides(err: BaseException) -> pathlib.Path:
     return keep
 
 
+def _replace_with_retry(src, dst, attempts: int = 5, delay: float = 0.02) -> None:
+    """原子替换（`os.replace`）—— 撞上瞬时占用时**短退避重试**。
+
+    ⚠️ 第 244 期：Windows 上 `os.replace` 的**目标**文件若正被另一个句柄打开
+    （哪怕只是另一个线程在读），会报 `WinError 5: 拒绝访问` —— 那是**瞬时**占用，
+    稍等一下就好。同进程内的读写已由 `_OVERRIDES_LOCK` 互斥，但**外部进程**
+    （另一个容器 / 另一个 uvicorn worker / 备份脚本）仍可能撞上。
+
+    重试总时长上限 ≈ 100 ms —— 够覆盖「另一个读句柄刚开就关」的窗口，
+    又不至于让保存接口卡住。仍失败 ⇒ 原样抛（调用方据此回 500，不静默）。
+    """
+    last: OSError | None = None
+    for i in range(max(1, attempts)):
+        try:
+            os.replace(src, dst)
+            return
+        except OSError as e:
+            last = e
+            if i + 1 >= max(1, attempts):
+                break
+            time.sleep(delay * (i + 1))
+    raise last if last else OSError("replace 失败")
+
+
 def save_overrides(data: dict) -> None:
     """写入设置覆盖层（整份替换，**原子**）。
 
@@ -640,7 +672,7 @@ def save_overrides(data: dict) -> None:
             f.write(json.dumps(data, ensure_ascii=False, indent=2))
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, SETTINGS_FILE)
+        _replace_with_retry(tmp, SETTINGS_FILE)
         # 权限收敛（第 137 期）：这个文件里是各类 API key。先写再收紧 ——「原子 + 降权」
         # 合成一步做完，调用方不需要记得补一次 chmod（记得补的那种，迟早有人忘）。
         restrict_perms(SETTINGS_FILE)
