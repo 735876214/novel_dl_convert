@@ -334,6 +334,7 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    | TTS 分块与合成（句末切块 / 两种响应形态） | `novelforge/core/tts.py` 的 `_chunks` / `_audio_bytes` |
    | 版本号 | 仓库根 `VERSION`（`server.APP_VERSION` 读它，只由 `GET /health` 下发） |
    | 被**环境变量无条件覆盖**的配置键 | `novelforge/config.py` 的 `_ENV_OVERRIDES` / `env_overridden()`（第 244 期：这两个键在设置页改了不起作用 ⇒ 界面据此标注「由环境变量接管」） |
+   | 被**环境变量兜底**的配置键（当前这个值是谁给的） | `novelforge/config.py` 的 `_ENV_FALLBACKS` / `env_fallback()`（第 264 期：**兜底**语义 = 「没人写过的才用环境变量」⇒ 用户改了就**覆盖**环境变量 ⇒ 界面**不禁用**输入框、只**标注**来源；⚠️ 与 `env_overridden`（**无条件覆盖** ⇒ 界面**禁用**）是**两类**，必须分开报；⚠️ 判据读**原始来源**（settings.json / config.yaml），**不能**读 `load_config()` 的结果 —— 那份已把环境变量的值合进去 ⇒ 拿它判「用户改过没有」**逻辑自指**） |
    | 播客「残留下载」判据（这一集此刻有没有人在下） | `novelforge/core/podcasts.py` 的 `_stale_download`（复位点：列表端点 `reset_stale_in` + 启动时 `reset_stale_downloads`） |
    | 配置值**算不算「人写过」**（环境变量兜底的前提） | `novelforge/config.py` 的 `_differs_from_default()`（第 253 期：**按来源分别判** —— settings.json 里出现 ⇒ 算写过；config.yaml 里只算「与默认值不同」才算 ⇒ 「重置配置」写下的默认值不是人的选择） |
 | **清理动作的如实回报**（删不掉的怎么说） | `novelforge/server.py` 的 `api_clear_cache` / `api_clear_recycle`（第 141 / 256 期：**回执恒定带 `failed`** —— 删不掉的**必须列出来**且 `ok=False`；「说清空了却没清干净」比「没清干净」更坏） |
