@@ -28,7 +28,7 @@ const props = defineProps<{ section: string }>()
 
 const ui = useUiStore()
 const library = useLibraryStore()
-const { cfg, val, setVal, saving, loadConfig, saveSection } = useSettingsConfig()
+const { cfg, val, setVal, saving, loadConfig, saveSection, envFallback } = useSettingsConfig()
 
 const SECTIONS: Record<string, { zh: string; en: string; desc: string; blocks: string[] }> = {
   providers: {
@@ -1148,6 +1148,18 @@ watch(() => props.section, () => {
           <strong>0 = 关闭缓存</strong>（每次检索都真外呼，慢但最新）。只缓存「成功且非空」的结果 ——
           一次网络抖动不会让某家源在整个有效期内「假死」。
         </span>
+        <!-- ⚠️ 第 264 期：**当前这个值来自环境变量** ⇒ 明说。
+             ⚠️ **不禁用**这个输入框（用户**改得了** —— 与 `AUTO_WATCH` 那两个
+             **无条件覆盖**的键不同：那里改了没用，这里改了会**覆盖**环境变量）。
+             标注是为了让用户知道「现在这个 120 是部署者设的」，
+             免得改完发现「没生效」却**误判**（实际是自己没改保存）。 -->
+        <span
+          v-if="envFallback.includes('metadata_fetch.cache_ttl')"
+          class="text-[11.5px] text-warning"
+        >
+          · 当前这个值来自环境变量 <code class="font-mono">NOVELFORGE_METADATA_CACHE_TTL</code>
+          （你改成别的值就会**覆盖**它）
+        </span>
       </div>
 
       <!-- 按 ID 取详情（第 102 期）：默认关。打开后，库里记过记录标识的书按那个**精确键**
@@ -1173,6 +1185,15 @@ watch(() => props.section, () => {
         >
           {{ mf.detail_fetch ? '关闭' : '开启' }}
         </Button>
+        <!-- ⚠️ 第 264 期：**当前这个值来自环境变量** ⇒ 明说（同上：**不禁用**，
+             用户**改得了** —— 改了会**覆盖**环境变量）。 -->
+        <span
+          v-if="envFallback.includes('metadata_fetch.detail_fetch')"
+          class="text-[11.5px] text-warning"
+        >
+          · 当前这个值来自环境变量 <code class="font-mono">NOVELFORGE_METADATA_DETAIL_FETCH</code>
+          （你改成别的值就会**覆盖**它）
+        </span>
       </div>
     </Card>
 

@@ -31,6 +31,14 @@ const overridden = ref<string[]>([])
  * ⇒ 字段行据此标注「由环境变量接管」，不做假交互。
  */
 const envOverridden = ref<string[]>([])
+/**
+ * **由环境变量兜底**的配置键（第 264 期）—— 点号路径。
+ *
+ * ⚠️ 与 `envOverridden` 是**两件事**：那是**无条件覆盖**（界面**禁用**输入框）；
+ * 这里是**兜底**（用户**改得了**）⇒ 界面只需**标注**「当前这个值来自环境变量」，
+ * **不禁用** —— 否则用户看到 `120` 不知道是部署者设的还是自己设的。
+ */
+const envFallback = ref<string[]>([])
 const saving = ref(false)
 const loading = ref(false)
 const loadError = ref('')
@@ -137,6 +145,8 @@ export function useSettingsConfig() {
         baseline.value = clone(r.config)
         overridden.value = r.overridden ?? []
         envOverridden.value = r.env_overridden ?? []
+        // 第 264 期：**兜底链**上此刻由环境变量供值的键。
+        envFallback.value = r.env_fallback ?? []
         files.value = {
           config_file: r.config_file,
           settings_file: r.settings_file,
@@ -248,6 +258,7 @@ export function useSettingsConfig() {
     files,
     overridden,
     envOverridden,
+    envFallback,
     saving,
     loading,
     loadError,

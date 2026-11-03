@@ -2887,6 +2887,13 @@ export interface ConfigPayload {
    * 「由环境变量接管」，不做假交互。
    */
   env_overridden?: string[]
+  /**
+   * **由环境变量兜底**的配置键（点号路径）—— 第 264 期。
+   *
+   * ⚠️ 与 `env_overridden` 是**两件事**：那是**无条件覆盖**（界面**禁用**输入框）；
+   * 这里是**兜底**（用户**改得了**）⇒ 界面只需**标注**「当前这个值来自环境变量」。
+   */
+  env_fallback?: string[]
   config_file: string
   settings_file: string
   backup_dir: string
