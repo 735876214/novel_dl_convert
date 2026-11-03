@@ -6516,7 +6516,20 @@ export const api = {
   getRawConfig: () => request<RawConfig>('/api/config/raw'),
 
   saveRawConfig: (text: string) =>
-    request<{ ok: boolean; backup: string }>('/api/config/raw', {
+    request<{
+      ok: boolean
+      backup: string
+      /**
+       * 这次写入里**不认识的键**（第 263 期）。
+       *
+       * ⚠️ 这个端点让用户**直接写 config.yaml 原文** ⇒ 最容易打错键名
+       * ⇒ 而那些键**不会被任何读点消费**（写了等于没写）。
+       * ⚠️ **不拒**（与「段类型不对」刻意不同）：那个会让服务起不来；
+       * 这个只是**惰性**（且可能是**本版本还不认识**的键 —— 向前兼容的用法）。
+       * ⇒ **当场**告诉用户，而不是等下一次读配置时才发现。
+       */
+      unknown_keys?: string[]
+    }>('/api/config/raw', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),

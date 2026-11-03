@@ -32,6 +32,8 @@ const rawLoading = ref(false)
 const rawSaving = ref(false)
 const rawError = ref('')
 const rawOk = ref('')
+/** ⚠️ 第 263 期：这次写入里**不认识的键**（没人读 ⇒ 多半是拼错了）。 */
+const rawUnknown = ref<string[]>([])
 const backups = ref<BackupItem[]>([])
 
 async function loadRaw(): Promise<void> {
@@ -59,10 +61,14 @@ async function loadBackups(): Promise<void> {
 async function saveRaw(): Promise<void> {
   rawError.value = ''
   rawOk.value = ''
+  rawUnknown.value = []
   rawSaving.value = true
   try {
     const r = await api.saveRawConfig(rawText.value)
+    // ⚠️ 第 263 期：**不认识的键**当场说出来 —— 那些键**不会被任何读点消费**
+    // （写了等于没写，最常见是**打错键名**）。
     rawOk.value = r.backup ? `已保存（已备份为 ${r.backup}）` : '已保存'
+    rawUnknown.value = r.unknown_keys ?? []
     await loadRaw()
     await loadBackups()
     await loadConfig(true)
@@ -163,6 +169,11 @@ onMounted(async () => {
         />
         <p v-if="rawError" class="mt-2 text-[11.5px] text-destructive">{{ rawError }}</p>
         <p v-else-if="rawOk" class="mt-2 text-[11.5px] text-success">{{ rawOk }}</p>
+        <!-- ⚠️ 第 263 期：**不认识的键**单独一行（**不用 success 色** ——
+             它是「有一部分没生效」，不是「全好了」） -->
+        <p v-if="rawUnknown.length" class="mt-2 text-[11.5px] text-warning">
+          这些键没人读（多半是拼错了，它们不会生效）：{{ rawUnknown.join('、') }}
+        </p>
         <p v-else class="mt-2 text-[11px] text-muted-foreground">
           注意：直接编辑会丢失 config.yaml 的注释与排版；保存前会自动备份，可随时还原。
         </p>
