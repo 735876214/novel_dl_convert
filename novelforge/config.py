@@ -845,6 +845,81 @@ def env_overridden() -> list:
     return out
 
 
+#: **兜底链**上的键（环境变量是「没人写时才用」的**兜底**，不是**无条件覆盖**）。
+#:
+#: ⚠️ 第 264 期：这两类**必须分开报** ——
+#:   · `env_overridden` = **无条件覆盖**（`AUTO_WATCH` / `WATCH_INTERVAL`）
+#:     ⇒ 界面**禁用**那个输入框（改了没用）；
+#:   · `env_fallback` = **兜底**（`NOVELFORGE_METADATA_CACHE_TTL` /
+#:     `NOVELFORGE_METADATA_DETAIL_FETCH`）⇒ 界面**不禁用**（用户**改得了**），
+#:     但要**标注**「当前这个值是环境变量给的」——
+#:     否则用户看到 `120` 不知道它是部署者设的、还是自己设的 ⇒
+#:     改完发现「没生效」会**误判**（实际是被环境变量盖回去了）。
+_ENV_FALLBACKS = (
+    ("metadata_fetch.cache_ttl", _ENV_CACHE_TTL),
+    ("metadata_fetch.detail_fetch", _ENV_DETAIL_FETCH),
+)
+
+
+def env_fallback() -> list:
+    """当前**由环境变量兜底**的配置键（点号路径）。
+
+    ⚠️ 第 264 期：**只列「此刻真的由环境变量在供值」的** ——
+    用户已经**特意改过**（覆盖层里有值且与环境变量不同）⇒ 那就不是环境变量在供值
+    ⇒ **不列**（否则界面会误标「这个值来自环境变量」，而它其实是用户自己写的）。
+
+    ⚠️ 与 :func:`env_overridden` 的区别：那是**无条件覆盖**（界面**禁用**输入框），
+    这里是**兜底**（界面**不禁用**，只**标注**来源）。
+    """
+    out: list = []
+    for key, env in _ENV_FALLBACKS:
+        if os.getenv(env) is None:
+            continue
+        # 用户已经特意改过 ⇒ 不是环境变量在供值
+        if _user_set_this(key):
+            continue
+        out.append(key)
+    return out
+
+
+def _user_set_this(dotted: str) -> bool:
+    """这个点号路径上的键，**用户是不是特意改过**（覆盖层 / config.yaml 里有值）。
+
+    ⚠️ 判据**只有一处**（这里）。
+    ⚠️ **必须读「原始来源」，不能读 `load_config()` 的结果** ——
+    那份结果**已经**把环境变量的值合进去了 ⇒ 拿它判「用户改过没有」
+    **必然**是「改过」（环境变量的值也在里面）⇒ 逻辑自指。
+
+    ⇒ 读两处原始来源：**settings.json**（设置页的覆盖层）与 **config.yaml**
+    （运维手写的文件）；任一里有**该键** ⇒ 用户写过。
+    """
+    parts = dotted.split(".")
+    for src in (load_overrides(), _raw_config_yaml()):
+        if not isinstance(src, dict):
+            continue
+        cur = src
+        for p in parts:
+            if not isinstance(cur, dict):
+                cur = None
+                break
+            cur = cur.get(p)
+        if cur is not None:
+            return True
+    return False
+
+
+def _raw_config_yaml() -> dict:
+    """config.yaml 的**原始**内容（读不出来就当空的）。"""
+    if not CONFIG_FILE.is_file():
+        return {}
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:                     # noqa: BLE001 —— 读坏的文件按「没有」处理
+        return {}
+
+
 def config_error() -> "str | None":
     """`config.yaml` 这一轮是否读坏了（`/health` 与设置页据此报红条，第 141 期）。"""
     return _CONFIG_ERROR

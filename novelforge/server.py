@@ -9805,6 +9805,15 @@ def api_get_config():
         # `watcher.interval`）—— 界面上那些输入框改了不起作用（部署时环境变量把它压回去）
         # ⇒ 界面据此标注「由环境变量接管」，不做假交互。判据在 `config.env_overridden()`。
         "env_overridden": config.env_overridden(),
+        # ⚠️ 第 264 期：**兜底链**上的键（`metadata_fetch.cache_ttl` /
+        # `metadata_fetch.detail_fetch`）—— 与上面那类是**两件事**：
+        #   · `env_overridden` = **无条件覆盖** ⇒ 界面**禁用**输入框（改了没用）；
+        #   · `env_fallback` = **兜底**（没人写时才用环境变量）⇒ 界面**不禁用**
+        #     （用户**改得了**），但要**标注**「当前这个值是环境变量给的」——
+        #     否则用户看到 `120` 不知道是部署者设的还是自己设的 ⇒ 改完发现
+        #     「没生效」会**误判**（实际是被环境变量盖回去了）。
+        # ⚠️ 只列**此刻真的由环境变量在供值**的（用户已特意改过 ⇒ 不列）。
+        "env_fallback": config.env_fallback(),
         "config_file": str(config.CONFIG_FILE),
         "settings_file": str(config.SETTINGS_FILE),
         "backup_dir": str(config.BACKUP_DIR),
