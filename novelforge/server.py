@@ -10395,6 +10395,18 @@ def api_put_raw_config(payload: dict = Body(...)):
         raise HTTPException(
             400, f"这些段必须是键值映射（写成别的类型会让服务起不来）：{'、'.join(bad)}")
 
+    # ⚠️ 第 263 期：**不认识的键**要**当场**说出来。
+    #
+    # 这个端点让用户**直接写 config.yaml 原文** ⇒ 最容易打错键名
+    # （`watcher.interva` 而不是 `watcher.interval`）⇒ 而那个键**不会被任何读点
+    # 消费** ⇒ 写了等于没写。
+    #
+    # ⚠️ **不拒**（与「段类型不对」刻意不同）：那个会让服务起不来 ⇒ 必须拒；
+    # 这个只是**惰性**（不生效但也不坏）⇒ 而且**写进去的是用户自己写的原文**
+    # （可能包含**本版本还不认识**的键 —— 那是**向前兼容**的用法，不该拦）。
+    # ⇒ 回执带上**这些键**，前端**当场**告诉用户「这几个键没人读，多半是拼错了」。
+    unknown = config.unknown_keys(data)
+
     backup = _backup_config()
     tmp = config.CONFIG_FILE.with_name("config.yaml.tmp")
     try:
@@ -10405,7 +10417,7 @@ def api_put_raw_config(payload: dict = Body(...)):
         raise HTTPException(500, f"写入失败：{e}")
     _apply_runtime_config()
     _apply_log_config()
-    return {"ok": True, "backup": backup}
+    return {"ok": True, "backup": backup, "unknown_keys": unknown}
 
 
 @app.get("/api/config/backups")
