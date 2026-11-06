@@ -36,6 +36,7 @@ import threading
 import time
 
 from .. import config
+from . import derivedcache
 from . import atomicio, detect, epub_builder, htmlsafe, pipeline, preprocess, reading_list
 
 #: 缓存子目录名（小写 / 连字符，与 `pdf/`、`authors/` 同风格）
@@ -249,23 +250,6 @@ def _sweep(parent: pathlib.Path, book_id: str) -> None:
             shutil.rmtree(leftover, ignore_errors=True)
 
 
-def _swap_in(stage: pathlib.Path, final: pathlib.Path) -> None:
-    """把建好的 ``stage`` 目录整体换到 ``final``（同名替换，中途不留半成品）。"""
-    parent = final.parent
-    old = parent / f"{final.name}.old-{os.getpid()}-{int(time.time() * 1000)}"
-    had_old = final.exists()
-    if had_old:
-        final.replace(old)
-    try:
-        stage.replace(final)
-    except Exception:
-        if had_old and old.exists():          # 换不进去就把旧的还回去，绝不留下「什么都没有」
-            old.replace(final)
-        raise
-    if had_old:
-        shutil.rmtree(old, ignore_errors=True)
-
-
 def _lookup(cdir: pathlib.Path, fp: str) -> tuple:
     """``(结论, 派生件路径)``：``hit`` 可直接用 / ``locked`` 不重建 / ``miss`` 该构建。
 
@@ -361,7 +345,7 @@ def _build(book: dict, p: pathlib.Path, cdir: pathlib.Path, fp: str):
                              "chapters": len(chapters),
                              "encoding": info.get("encoding", ""),
                              "undecodable": int(info.get("undecodable") or 0)})
-        _swap_in(stage, cdir)
+        derivedcache.swap_in(stage, cdir)
         return cdir / EPUB_NAME
     except Exception as e:
         if stage is not None:                          # 半成品必须清掉，别留 .stage-* 垃圾

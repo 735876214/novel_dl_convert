@@ -11,6 +11,6 @@
 """
 
 # ⚠️ 这里**刻意不放** `__version__`：版本号的唯一真值源是仓库根 `VERSION` 文件
-# （`novelforge/server.py::_read_version()` 读它，只由 `GET /health` 下发）。
+# （`novelforge/core/appinfo.py::read_version()` 读它，`server.APP_VERSION` 引用、只由 `GET /health` 下发）。
 # 早先这里的 `__version__ = "0.5.0"` 一直没跟着升，是一条会误导人的**第二份版本**，
 # 第 79 期删掉（全仓无引用）。要版本号请读 `VERSION` 或调 `/health`，别再写一个字面量。

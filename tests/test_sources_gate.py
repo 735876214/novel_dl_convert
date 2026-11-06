@@ -27,7 +27,7 @@ CLI 里另写了一份）—— `/api/search`、`/api/download`、`/api/preview`
 import pytest
 
 from novelforge import config, server
-from novelforge.core import db
+from novelforge.core import db, jobs
 from novelforge.sources import DownloadManager, REGISTRY, store
 from novelforge.sources.base import SourceAdapter
 
@@ -77,15 +77,15 @@ def _set_download(monkeypatch, tmp_path, *, enabled: bool) -> None:
     config.save_overrides({"download": {"enabled": enabled}})
 
 
-async def _noop_run_download(tid: str, item: dict, actor: str = "系统",
-                            kind: str = "text") -> None:
+async def _noop_run_download(mgr, tid: str, item: dict, *, actor: str = "系统",
+                             kind: str = "text", input_dir=None, watcher=None) -> None:
     """把后台下载换成空操作：本文件测的是**入口拦截**，不是下载本身。
 
     少了这一步，后台任务会在测试结束、库已关闭之后才动手（第 39 期那类
     「线程攥着旧连接查库」的随机失败）。
 
-    ⚠️ 签名要**跟着 `server._run_download` 走**（第 86 期给它加了 `kind`：文本 / 漫画 / 音频
-    三类产物分流）。这里刻意**写全参数**而不是 `*args`：哪天又加参数，这条桩会当场报错，
+    ⚠️ 签名要**跟着 `core/jobs.run_download` 走**（第 86 期给它加了 `kind`：文本 / 漫画 / 音频
+    三类产物分流；第 265 期它从 `server.py` 挪进了 `core/jobs.py`，依赖改由调用方注入）。这里刻意**写全参数**而不是 `*args`：哪天又加参数，这条桩会当场报错，
     而不是把新参数悄悄吞掉 —— 那正好是「测试还绿着、线上已经不对」的经典成因。
     """
     return None
@@ -111,7 +111,7 @@ def test_关掉下载时搜索被拒且给出出口(client, auth_headers, isolat
 def test_关掉下载时下载被拒且不进队列(client, auth_headers, isolated, monkeypatch, tmp_path):
     """一次注定失败的往返没必要发：任务表里不该多出一条「已入队」再后台失败的任务。"""
     _set_download(monkeypatch, tmp_path, enabled=False)
-    monkeypatch.setattr(server, "_run_download", _noop_run_download)
+    monkeypatch.setattr(jobs, "run_download", _noop_run_download)
 
     r = client.post("/api/download", headers=auth_headers,
                     json={"source": "stub-public", "title": "三体", "url": "https://e.com/1"})
@@ -145,7 +145,7 @@ def test_非公版源不再被拦_照常搜索下载与预览(client, auth_heade
     留这条是为了防止「哪天有人顺手把 public 过滤加回 gate_reason」而没人发现。
     """
     _set_download(monkeypatch, tmp_path, enabled=True)
-    monkeypatch.setattr(server, "_run_download", _noop_run_download)
+    monkeypatch.setattr(jobs, "run_download", _noop_run_download)
 
     # ① 搜索：非公版源照搜，命中照出
     r = client.post("/api/search", headers=auth_headers, json={"title": "x"})
@@ -178,7 +178,7 @@ def test_非公版源不再被拦_照常搜索下载与预览(client, auth_heade
 def test_放行时下载照常入队且任务详情带源名(client, auth_headers, isolated, monkeypatch, tmp_path, stubs):
     """放行的路径也要钉：闸门不该拦错人，任务详情里的来源不能是空的。"""
     _set_download(monkeypatch, tmp_path, enabled=True)
-    monkeypatch.setattr(server, "_run_download", _noop_run_download)
+    monkeypatch.setattr(jobs, "run_download", _noop_run_download)
 
     r = client.post("/api/download", headers=auth_headers,
                     json={"source": stubs["public"], "title": "三体", "url": "https://e.com/1",
@@ -194,7 +194,7 @@ def test_放行时下载照常入队且任务详情带源名(client, auth_header
 def test_未知书源即时拒绝而不进队列(client, auth_headers, isolated, monkeypatch, tmp_path, stubs):  # noqa: ARG001
     """源名对不上就直接拒：先建任务再后台失败，用户得跑到任务中心才知道白等了。"""
     _set_download(monkeypatch, tmp_path, enabled=True)
-    monkeypatch.setattr(server, "_run_download", _noop_run_download)
+    monkeypatch.setattr(jobs, "run_download", _noop_run_download)
 
     r = client.post("/api/download", headers=auth_headers,
                     json={"source": "根本不存在的源", "title": "x", "url": "u"})

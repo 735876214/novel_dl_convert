@@ -169,9 +169,10 @@ def test_opds媒体类型覆盖所有可下载格式():
 # ---------------------------------------------------------------------------
 
 def test_事实校正的媒体后缀来自单一真值源():
-    from novelforge import server
-    assert set(server._ANY_MEDIA_EXTS) == set(library.BOOK_EXTS)   # noqa: SLF001
-    assert ".azw" in server._ANY_MEDIA_EXTS                        # noqa: SLF001
+    # 第 265 期：`_ANY_MEDIA_EXTS` 随 `_scan_media` 一起挪进了 `core/library_probe.py`
+    from novelforge.core import library_probe
+    assert set(library_probe.ANY_MEDIA_EXTS) == set(library.BOOK_EXTS)
+    assert ".azw" in library_probe.ANY_MEDIA_EXTS
 
 
 def test_入库自动补全覆盖主力格式():

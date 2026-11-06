@@ -29,11 +29,13 @@ import os
 import pathlib
 import re
 import shutil
+import sys
 import threading
 import time
 import xml.etree.ElementTree as ET
 
 from .. import config
+from . import derivedcache
 from . import epub_builder, pipeline
 
 #: 本模块认的扩展名（单文件 FB2）。
@@ -180,31 +182,6 @@ def _sweep(parent: pathlib.Path, bid: str) -> None:
     for pat in (f".stage-{bid}-*", f"{bid}.old-*"):
         for stale in parent.glob(pat):
             shutil.rmtree(stale, ignore_errors=True)
-
-
-def _swap_in(stage: pathlib.Path, final: pathlib.Path) -> None:
-    """把 stage 换成 final —— **原子换入**：旧目录先挪走、再 replace、最后删旧的。
-
-    直接往 final 里写是不行的：中途失败会留下半个目录，而 `state.json` 一旦写成 ok，
-    读者拿到的就是缺文件的正文。一律先在同卷临时目录里建完再换入（源不可变 + 临时文件 +
-    `Path.replace` 的既有纪律）。
-    """
-    old = None
-    if final.exists():
-        old = final.with_name(f"{final.name}.old-{os.getpid()}-{int(time.time() * 1000)}")
-        shutil.rmtree(old, ignore_errors=True)
-        final.replace(old)
-    try:
-        stage.replace(final)
-    except OSError:
-        if old is not None and old.exists() and not final.exists():
-            try:
-                old.replace(final)
-            except OSError:                            # noqa: BLE001
-                pass
-        raise
-    if old is not None:
-        shutil.rmtree(old, ignore_errors=True)
 
 
 # ---------------- FB2 解析（元素 → HTML）----------------
@@ -492,7 +469,7 @@ def _build(book: dict, src: pathlib.Path, bid: str, cdir: pathlib.Path, fp: str)
                              "recover": _recover_available(), "rel": EPUB_NAME, "kind": "epub",
                              "encoding": info.get("encoding"), "undecodable": info.get("undecodable"),
                              "chapters": len(chapters)})
-        _swap_in(stage, cdir)
+        derivedcache.swap_in(stage, cdir)
         return cdir / EPUB_NAME, "epub"
     except Exception as e:                             # noqa: BLE001 —— 坏书不能把接口打成 500
         shutil.rmtree(stage, ignore_errors=True)
@@ -511,31 +488,7 @@ def read_target(book: dict, *, path=None, root=None):
 
     非 `.fb2` / 文件不在 / 无 book_id ⇒ ``(None, "")``（调用方各自回落既有行为）。
     """
-    p = _src_path(book, path, root)
-    if p.suffix.lower() not in EXTS or not p.is_file():
-        return None, ""
-    bid = str(book.get("id") or "")
-    if not bid:
-        return None, ""
-    try:
-        fp = _fingerprint(p)
-    except OSError:
-        return None, ""
-    cdir = _cache_dir(bid)
-
-    verdict, target, kind = _lookup(cdir, fp, p)
-    if verdict == "hit":
-        return target, kind
-    if verdict == "locked":
-        return None, ""
-
-    with _BUILD_LOCK:
-        verdict, target, kind = _lookup(cdir, fp, p)
-        if verdict == "hit":
-            return target, kind
-        if verdict == "locked":
-            return None, ""
-        return _build(book, p, bid, cdir, fp)
+    return derivedcache.read_target(sys.modules[__name__], book, path=path, root=root)
 
 
 def unreadable_reason(book: dict, *, path=None, root=None) -> str:

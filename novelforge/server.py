@@ -39,6 +39,10 @@ from .core import zipkind                        # 第 87 期：容器展开
 from .core import thumbs                         # 第 152 期：封面缩略（?w=）
 from .core import imaging                       # 第 248 期：图片处理的通用判据（能力 / 像素闸 / alpha）
 from .core import watcher as watcher_mod
+from .core import appinfo                        # 第 265 期：版本号读取（领域层与 Web 层共用）
+from .core import library_probe                  # 第 265 期：书库内容探测 / 配置校正
+from .core import orphans as orphans_mod          # 第 265 期：孤儿 book_id 判据
+from .core import jobs                           # 第 265 期：下载 / 落地作业编排
 from .core import (db, stats, auth as auth_mod, achievements, activity, recommend,
                    fonts, comics, audio, opds, koreader, integrations, sync,
                    metasources, metafetch, metastore, komga_api, bookdock, metascore,
@@ -209,38 +213,11 @@ async def lifespan(app: FastAPI):
     autoupdate.stop()
 
 
-#: 读不到 `VERSION` 时上报的**哨兵值**。刻意不是一个像样的版本号 ——
-#: 早先这里回的是一个**看起来像真版本**的字面量（`0.80.0` 那一档），于是「部署里缺了
-#: VERSION」会伪装成「本应用就是那个版本」，而 `tests/test_version_contract.py` 只验
-#: 「非空且等于 APP_VERSION」⇒ **谁都不会发现**（第 95 期按 §7.1 清掉这第二份版本字面量）。
-#: `updater.parse_version(_VERSION_UNKNOWN) == (0, 0, 0)` ⇒ 任何真实版本都比它新，更新提示照常给出。
-_VERSION_UNKNOWN = "0.0.0-unknown"
-
-
-# 应用版本（**唯一真值源**）：第 30 期收敛为单一常量；第 78 期起改从仓库根 / 镜像内的
-# `VERSION` 文件读取（第 N 期 = V0.N.0），`tests/test_version_contract.py` 钉着这条契约。
-# 读不到文件时如实上报哨兵值并记 **error** 级日志，不阻断启动（部署不完整是运维问题，
-# 不该让整个应用起不来）—— 但绝不再假装成一个具体的版本号。
-def _read_version() -> str:
-    import pathlib
-    candidates = [
-        pathlib.Path("/app/VERSION"),                       # 容器内（Dockerfile COPY 到 /app）
-        pathlib.Path(__file__).resolve().parents[1] / "VERSION",  # 开发态：novelforge/server.py → 仓库根
-    ]
-    for p in candidates:
-        try:
-            v = p.read_text(encoding="utf-8").strip()
-        except Exception:
-            v = ""
-        if v:
-            return v
-    logging.getLogger("novelforge").error(
-        "读不到 VERSION 文件（试过 %s）—— 版本号按 %s 上报。请确认 VERSION 进了仓库根 / 镜像",
-        " / ".join(str(p) for p in candidates), _VERSION_UNKNOWN)
-    return _VERSION_UNKNOWN
-
-
-APP_VERSION = _read_version()
+# 应用版本（**唯一真值源**）：第 30 期收敛为单一常量；第 78 期起从仓库根 / 镜像内的
+# `VERSION` 文件读取（第 N 期 = V0.N.0）；**第 265 期**把读取逻辑挪进 `core/appinfo.py` ——
+# `core/updater.py` 也要用它，而领域层反向 import server 是**分层倒置**
+# （`tests/test_layering_265.py` 钉住）。这里是**引用**，不是第二份实现。
+APP_VERSION = appinfo.read_version()
 
 
 def _drop_nonfinite(v):
@@ -2382,54 +2359,10 @@ async def _run_sync(tid: str, b: dict, row: dict | None, *,
     """
     _ops_begin()
     try:
-        await _sync_worker(tid, b, row, actor=actor, overwrite=overwrite, allow_first=True)
+        await jobs.sync_worker(_manager(), tid, b, row, actor=actor,
+                               overwrite=overwrite, allow_first=True)
     finally:
         _ops_end()
-
-
-async def _sync_worker(tid: str, b: dict, row: dict | None, *, actor: str = "系统",
-                       overwrite: bool = False, allow_first: bool = True) -> None:
-    """「把源站内容落到这本书上」的**唯一后台实现**（两条触发路都走它）。
-
-    报告一律落进任务行（``notice`` 里是给人看的那句），**绝不吞掉原因**。三种结局分得开：
-
-    · ``first`` —— 整本落地成功：活动日志记「添加」（与收书目录收进来的书同一口径）；
-    · ``append`` —— 追加成功：**账已经由 `autoupdate.update_book_async` 记过了**，这里不再记
-      第二笔（两处都记会让同一本书在活动日志里出现两行，用户以为发生了两件事）；
-    · ``skip`` —— 什么都没做：如实记「失败」+ 原因。活动日志的状态词表只有成功 / 失败两档，
-      而「未自动写入」是用户**必须**看到的一条（不是一句可忽略的提示）。
-    """
-    db.task_update(tid, status="running", progress=50.0)
-    title = b.get("title") or b.get("name") or ""
-    try:
-        mgr = _manager()
-        reason = mgr.gate_reason()
-        if reason:
-            raise RuntimeError(reason)
-        if row:
-            rep = await landing.sync(mgr, b, row, overwrite=overwrite, allow_first=allow_first)
-        else:
-            # 只有留档、没有绑定：就是既有追更（同一函数、同一账）。
-            res = await autoupdate.update_book_async(b, mgr, origin="check-update")
-            added = int(res.get("added") or 0)
-            rep = {"mode": "append", "added": added, "note": str(res.get("note") or ""),
-                   "epub": str(res.get("epub") or ""), "title": landing.book_stem(b),
-                   "path": "", "detail": (f"新增 {added} 章" if added
-                                          else (res.get("note") or "没有新章节"))}
-        mode = str(rep.get("mode") or "")
-        note = str(rep.get("detail") or rep.get("note") or "")
-        name = str(rep.get("title") or landing.book_stem(b))
-        db.task_update(tid, status="done", progress=100.0, notice=note, fname=name)
-        if mode == "first":
-            activity_log.log_add_ok(name, str(rep.get("path") or ""), detail=note,
-                                    actor=actor, source="online")
-        elif mode == "skip":
-            activity_log.log(activity_log.ACTION_UPDATE, name, activity_log.STATUS_FAIL,
-                             detail=f"未执行：{note}", actor=actor, source="online")
-    except Exception as e:                                  # noqa: BLE001 —— 原因原文交给用户
-        db.task_update(tid, status="failed", progress=100.0, error=str(e))
-        activity_log.log(activity_log.ACTION_UPDATE, title, activity_log.STATUS_FAIL,
-                         detail=f"检查更新失败：{e}", actor=actor, source="online")
 
 
 @app.post("/api/online/cache/clear")
@@ -2464,20 +2397,6 @@ def _product_kind(name: str) -> str:
     return source_rules.product_kind(name)
 
 
-#: 产物类型 → 交给 `resolve_target` 判库用的**代表文件名**。
-#: ⚠️ 音频产物最终是**目录**，但 `resolve_target` 是按**扩展名 + 关键词**判库的 ——
-#: 传目录名会让「只收音频的库」认不出来，那本书就落不进任何库（只能报「没有可接收的书库」）。
-_KIND_PROBE_NAME = {"text": "{t}.epub", "comic": "{t}.cbz", "audio": "{t}.mp3"}
-
-
-async def _dispatch_product(mgr, kind: str, item: dict, root, opts: dict):
-    """按产物类型分流下载（第 86 期）：文本 → EPUB、漫画 → CBZ、有声书 → 目录树。"""
-    if kind == "comic":
-        return await mgr.download_comic(item, root, opts)
-    if kind == "audio":
-        return await mgr.download_audio(item, root, opts)
-    return await mgr.download_to(item, root, INPUT_DIR, opts)
-
 
 @app.post("/api/download")
 async def api_download(request: Request, item: dict = Body(...)):
@@ -2503,52 +2422,9 @@ async def api_download(request: Request, item: dict = Body(...)):
                                          item.get("format")) if x)
     db.task_create(tid, "download", title, detail=detail, actor=actor)
     db.task_prune()          # 只留最近 200 条，避免表无限增长
-    _spawn_bg(_run_download(tid, item, actor, kind))
+    _spawn_bg(jobs.run_download(_manager(), tid, item, actor=actor, kind=kind,
+                                input_dir=INPUT_DIR, watcher=lambda: WATCHER))
     return {"task_id": tid, "kind": kind}
-
-
-async def _run_download(tid: str, item: dict, actor: str = "系统", kind: str = "text"):
-    # progress 只记**真实里程碑**：0 = 已入队、50 = 已开始、100 = 已结束。
-    # 下载器不报细分进度，因此不伪造中间百分比。
-    db.task_update(tid, status="running", progress=50.0)
-    try:
-        mgr = _manager()
-        # 多书库：书源下载走产出 EPUB，按「来源子目录名 → 格式 → 关键词」归库。
-        # 没有可接收的库（一个库都没有，或规则不命中）⇒ 拒收，如实报错，不猜落点。
-        kind = kind or "text"
-        _dl_name = _KIND_PROBE_NAME.get(kind, "{t}.epub").format(
-            t=item.get("title") or "book")
-        tgt = library_rules.resolve_target(
-            name=_dl_name,
-            meta={"title": item.get("title"), "author": item.get("author")},
-        )
-        if tgt["root"] is None:
-            raise RuntimeError(library_rules.no_library_reason(name=_dl_name))
-        # 第 13 期：产物格式 / 落盘布局按**目标库**取（库没覆写时等于全局值）
-        opts = {"force": True, "merge": True,
-                "cfg": lib_settings.config_for(tgt["library_id"] or None)}
-        res = await _dispatch_product(mgr, kind, item, tgt["root"], opts)
-        notice = opts.get("_notice", "")
-        path = pathlib.Path(res)
-        name = path.name
-        db.task_update(tid, status="done", progress=100.0,
-                       result=f"/download/{name}", fname=name, notice=notice)
-        activity_log.log_convert_ok(
-            item.get("title") or name, name, source="download",
-            # 音频产物是**目录**：对目录取 st_size 是个毫无意义的数字，如实留空
-            size=(path.stat().st_size if path.is_file() else None),
-            detail=notice, actor=actor,
-        )
-        # ⚠️ 只有「文本」这条链路会顺带落一个 txt，才需要把它登记为已处理；
-        #    漫画 / 音频不产 txt，无条件 mark_recent 会把同一时间窗里**别人的** txt 一起盖掉。
-        if kind == "text" and WATCHER is not None:
-            await asyncio.to_thread(WATCHER.mark_recent, seconds=30, suffix=".txt")
-    except Exception as e:
-        db.task_update(tid, status="failed", progress=100.0, error=str(e))
-        activity_log.log_convert_fail(
-            item.get("title") or item.get("url") or "(未命名)",
-            f"{type(e).__name__}: {e}", source="download", actor=actor,
-        )
 
 
 @app.get("/api/tasks")
@@ -4145,7 +4021,7 @@ def api_delete_book(bid: str):
 
     **② 不清关联数据**（进度 / 批注 / 书签 / 评分 / 阅读状态 / 收藏关系）。
     判据是既有决策，不是省事：`DELETE /api/libraries/{lid}` 那条**更重**的路径都刻意
-    只移除登记、不清它们（见 `api_delete_library` 的 docstring 与 `_orphan_refs`），
+    只移除登记、不清它们（见 `api_delete_library` 的 docstring 与 `core/orphans.py`），
     删一本书不该比删整个库更狠。而且 `book_id` 由「库 id + 文件名」派生
     （`library._book_id`）—— **文件从回收目录放回原路径，id 就复原、数据自然接回**，
     保留数据让「删书」成为真正可撤销的动作；而清掉批注（用户手写的笔记）不可逆。
@@ -7701,92 +7577,6 @@ def api_library_source_dirs(root: int = None, path: str = ""):
 #: ⚠️ 第 123 期起**派生**自唯一真值源 `library.BOOK_EXTS`：此前是「`units.UNIT_EXTS` + 手抄
 #: 一串文档后缀」，同一个家族要改两处 —— `.azw` 进白名单那次就漏了这一处（于是 `.azw`
 #: 在「目录里到底有什么」的事实校正里被当成「不是媒体」）。
-_ANY_MEDIA_EXTS = library.BOOK_EXTS
-
-
-def _scan_media(dirs, cap: int = 3000) -> tuple:
-    """扫来源目录，得出**目录里真实装了什么**：``(扩展名集合, 需要合并的类型集合)``。
-
-    ⚠️ 只下探**两层**（顶层文件 + 一层子目录里的单元文件）：漫画库的常见形态就是
-    「顶层一堆 `.cbz`」或「一层目录、目录里一话一文件」，再深的树书架本来也不会合并成一本 ——
-    为它把整个库走一遍不值得（建库/改库是交互路径）。`cap` 是硬上限，超了就停。
-    """
-    found: set = set()
-    kinds: set = set()
-    n = 0
-    for raw in dirs or []:
-        root = pathlib.Path(str(raw))
-        try:
-            children = sorted(root.iterdir())
-        except Exception:                                    # noqa: BLE001 —— 目录不在 / 没权限都跳过
-            continue
-        for p in children:
-            n += 1
-            if n > cap:
-                return found, kinds
-            try:
-                if p.is_file():
-                    if p.suffix.lower() in _ANY_MEDIA_EXTS:
-                        found.add(p.suffix.lower())
-                    continue
-                if not p.is_dir():
-                    continue
-                files = [q for q in p.iterdir()
-                         if q.is_file() and q.suffix.lower() in _ANY_MEDIA_EXTS]
-                ext_here = {q.suffix.lower() for q in files}
-            except Exception:                                # noqa: BLE001
-                continue
-            # ⚠️ 判据是**文件数**≥2，不是**扩展名种类**≥2：目录型漫画/有声书最常见的样子是
-            # 「一层目录里全是 .cbz（或 .mp3）」—— 按扩展名种类判永远为 1，于是这棵树被漏掉，
-            # 类型就校正不过来，仍然看不见（本轮实测踩过）。
-            if len(files) >= 2:             # 一层里 ≥2 个媒体文件 ⇒ 这是一棵「单元树」
-                found |= ext_here
-                if ext_here <= set(audio.AUDIO_EXTS):
-                    kinds.add("audiobook")
-                else:
-                    kinds.add("comic")
-    return found, kinds
-
-
-def _fix_empty_library(ltype: str, allowed_exts, dirs) -> tuple:
-    """按**文件夹里真实装的东西**校正 `type` / 白名单；**只在会变成空库时动手**。
-
-    背景（第 86 期，用户报的缺陷）：库的配置来自请求，**不随文件夹复原** —— 删库再用同名
-    重建时，向导默认 `type='ebook'`，而 `.cbz/.cbr` 不在 ebook 白名单里；目录型漫画还要求
-    `type∈{comic,audiobook}` 才会被合并成一本书。于是「同一个文件夹」重建后**一本书都读不到**，
-    而本地原件明明还在（这类静默失败最难查：看起来像「库坏了」）。
-
-    三条规则（顺序即优先级）：
-
-    1. 目录里有本库**收得下**的文件 ⇒ **一个字都不改**（正常配置不许被悄悄动）；
-    2. 一个都收不下、但目录里确实有媒体 ⇒ 按实际内容补白名单；出现「单元树」时
-       同时把类型校正到 `comic` / `audiobook`（否则那棵树不会被合并成一本，仍然看不见）；
-    3. 目录本来就是空的 ⇒ 原样返回（不猜）。
-    """
-    if not dirs:
-        return ltype, allowed_exts
-    if isinstance(dirs, str):
-        try:
-            dirs = json.loads(dirs)
-        except Exception:                                    # noqa: BLE001
-            return ltype, allowed_exts
-    if not isinstance(dirs, (list, tuple)):
-        return ltype, allowed_exts
-    found, kinds = _scan_media(dirs)
-    if not found:
-        return ltype, allowed_exts
-    eff = library.exts_for_library({"type": ltype, "allowed_exts": allowed_exts})
-    if found & {str(e).lower() for e in eff}:
-        return ltype, allowed_exts                           # 规则 1：收得下，不碰
-    new_exts = list(dict.fromkeys([*(eff or ()), *sorted(found)]))
-    new_type = ltype
-    if kinds:
-        new_type = sorted(kinds)[0]                          # comic 优先于 audiobook（字典序）
-    logging.getLogger("novelforge").warning(
-        "书库配置与目录内容不符（目录里有 %s，但 type=%s 的白名单收不下）——"
-        "已按目录内容校正为 type=%s：这类「重建后一本书都读不到」的库，配置多半是重建时丢的",
-        "、".join(sorted(found)), ltype, new_type)
-    return new_type, _norm_exts(new_exts)
 
 
 @app.post("/api/libraries")
@@ -7821,7 +7611,11 @@ def api_create_library(payload: dict = Body(...)):
         except Exception:
             raw_dirs = []
     try:
-        ltype, allowed_exts = _fix_empty_library(ltype, allowed_exts, raw_dirs)
+        _new_type, _new_exts = library_probe.fix_empty_library(ltype, allowed_exts, raw_dirs)
+        ltype = _new_type
+        # 原样返回 ⇒ 没校正；返回新列表 ⇒ 按目录内容补白名单（形状校验仍在这里做）
+        if _new_exts is not allowed_exts:
+            allowed_exts = _norm_exts(_new_exts)
     except Exception as e:                       # noqa: BLE001 —— 校正失败绝不能挡住建库本身
         logging.getLogger("novelforge").warning("书库配置事实校正失败（按原配置建库）：%s", e)
     try:
@@ -8107,7 +7901,7 @@ async def api_delete_library(lid: str, purge_files: bool = False):
     第 37 期起**没有任何库是不可删的**；本函数**不再有**「库里还有书」的 400 拦截 ——
     默认动作已经零风险（一个文件都不动），拦它只会让用户困惑。
     book_id 形如 ``库$哈希``，库没了它的书就从书目里消失（进度 / 批注变成「库不存在的行」，
-    孤儿清理**刻意不碰**它们，见 `_orphan_refs`）。
+    孤儿清理**刻意不碰**它们，见 `core/orphans.py`）。
     """
     lib = db.get_library(lid)
     if not lib:
@@ -10281,66 +10075,10 @@ def api_achievements_backfill():
 # 书从 OUTPUT_DIR 移走后，progress / annotations / reading_sessions / collection_items
 # 里仍留着它 —— 界面上再也走不到，却一直占着库。
 
-def _orphan_refs() -> dict:
-    """各表里**真正的**孤儿 book_id：``{表名: [book_id]}``。
-
-    ⚠️ 第 37 期新增的第二道判据：「**书所属的库已经不存在**」的行不算孤儿。
-    那之前书库表为空会自动播一条默认库，所以「书目为空」≈「书真没了」；现在没有
-    默认库了，用户可以一个库都不建、也可以把库移除登记 —— 那时它的书只是**界面上
-    看不见**，文件和进度 / 批注都还在原地。漏掉这道判据，「清空全部书库 → 点清理
-    孤儿」就是一次不可恢复的数据大清洗。
-
-    ``book_id`` 形如 ``库$哈希``（见 `library._book_id`）；没有 ``$`` 的是第 17 期
-    库维度化之前的旧 id，无法归属到任何库，按老口径处理（不在书目里就算孤儿）。
-
-    ⚠️ **第 119 期第二道护栏**：「**该库当前一本书都没被索引到**」时，它的行一律
-    不判孤儿。判据与第一道同源（库还在），但防的是另一件事 —— 库根暂时不可用
-    （NAS 未挂载 / 网盘掉线 / Docker 挂载缺失）时书目会暂时为空，此时若照第一道
-    判据走，整库的进度 / 批注 / 书签 / 阅读会话**全部**会出现在「可清理」清单里，
-    而清理是真 ``DELETE``（不进回收站）—— 用户看到「书架空了」再点一下清理，
-    阅读历史就没了。代价：某库最后一本书被删后，它的残余行会留在清单外（清理不掉），
-    只能连库一起删 —— 比起「一次点错删光全部历史」，这是刻意选的那一边。
-    """
-    books = library.books()
-    valid = {b["id"] for b in books}
-    try:
-        lib_ids = {str(l.get("id") or "") for l in library.libraries()}
-    except Exception:
-        lib_ids = set()
-    #: 当前**确实索引到了书**的库（前缀命中的才有资格判孤儿，见 docstring 第二道护栏）
-    live_libs = {str(b.get("library_id") or "") for b in books}
-    refs = db.book_id_refs()
-
-    def _owner(i) -> str:
-        return str(i).split("$", 1)[0]
-
-    return {
-        name: [i for i in ids
-               if i not in valid and _owner(i) in lib_ids and _owner(i) in live_libs]
-        for name, ids in refs.items()
-    }
-
-
-def _orphans() -> dict:
-    """算出各表中的孤儿 book_id（不改任何数据）。"""
-    refs = db.book_id_refs()
-    orphans = _orphan_refs()
-    tables: dict = {}
-    total = 0
-    for name, ids in refs.items():
-        bad = orphans.get(name) or []
-        total += len(bad)
-        tables[name] = {"books": len(bad), "sample": bad[:10]}
-    return {"tables": tables, "total": total,
-            # 第 226 期：同「维护概览」—— 一次 COUNT 代替一次全库物化
-            # （口径一致：只数当前登记的库）。
-            "library_books": catalog.totals([l.get("id") for l in library.libraries()])["books"]}
-
-
 @app.get("/api/maintenance/orphans")
 def api_orphans():
     """孤儿记录扫描结果（只读）。"""
-    return _orphans()
+    return orphans_mod.orphans()
 
 
 @app.post("/api/maintenance/orphans/clear")
@@ -10351,7 +10089,7 @@ def api_orphans_clear():
     把同一个文件放回 OUTPUT_DIR，进度与批注会**重新关联上**。
     也就是说清掉的是「可能还有用」的数据，因此必须由用户在界面上显式确认。
     """
-    orphans = _orphan_refs()          # 与扫描口径**同源**，绝不各写一份判据
+    orphans = orphans_mod.orphan_refs()   # 与扫描口径**同源**，绝不各写一份判据
     removed = db.delete_orphans(orphans)
     total = sum(removed.values())
     activity_log.log(activity_log.ACTION_RECYCLE, "孤儿记录", activity_log.STATUS_OK,

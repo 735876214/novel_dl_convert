@@ -14,6 +14,7 @@ import inspect
 import pytest
 
 from novelforge import server
+from novelforge.core import jobs
 from novelforge.sources import store
 
 
@@ -59,9 +60,9 @@ def test_产物类型来自规则(isolated):                                    
 
 
 def test_判库用的代表文件名要有正确的扩展名():
-    assert server._KIND_PROBE_NAME["text"] == "{t}.epub"
-    assert server._KIND_PROBE_NAME["comic"] == "{t}.cbz"
-    name = server._KIND_PROBE_NAME["audio"].format(t="某书")
+    assert jobs.KIND_PROBE_NAME["text"] == "{t}.epub"
+    assert jobs.KIND_PROBE_NAME["comic"] == "{t}.cbz"
+    name = jobs.KIND_PROBE_NAME["audio"].format(t="某书")
     assert name.endswith(".mp3"), \
         "音频产物是目录，但判库必须看到音频扩展名，否则只收音频的库认不出它"
 
@@ -72,15 +73,19 @@ def test_按类型分流到对应下载器(tmp_path):
     mgr = _StubMgr()
     item = {"title": "某书", "url": "https://x.com/1"}
     for kind, want in (("text", "text"), ("comic", "comic"), ("audio", "audio")):
-        asyncio.run(server._dispatch_product(mgr, kind, item, tmp_path, {}))
+        asyncio.run(jobs.dispatch_product(mgr, kind, item, tmp_path, {}, input_dir=tmp_path))
         assert mgr.calls[-1][0] == want
     # 认不出来的类型按文本走（绝不静默什么都不做）
-    asyncio.run(server._dispatch_product(mgr, "???", item, tmp_path, {}))
+    asyncio.run(jobs.dispatch_product(mgr, "???", item, tmp_path, {}, input_dir=tmp_path))
     assert mgr.calls[-1][0] == "text"
 
 
 def test_只有文本链路才标记txt已处理():
-    """`mark_recent` 的调用必须挂在 `kind == "text"` 分支里（源码级断言，防回归）。"""
+    """`mark_recent` 的调用必须挂在 `kind == "text"` 分支里（字节码级断言，防回归）。
+
+    ⚠️ 第 265 期：这条逻辑随 `_run_download` 挪进了 `core/jobs.py`（函数名 `run_download`），
+    判据本身不变 —— 仍然从**函数对象自己**的常量/名字里看，与文件、行号无关。
+    """
     # ⚠️ 不用 `inspect.getsource`（第 232 期修）：它读**磁盘上的当前文件**并按
     # `co_firstlineno` 定位 —— 文件在进程启动后被改动过，截出来就是**别的函数**的源码
     # （断言会报莫名其妙的话）。改用**函数对象自己**的代码常量，与文件、行号无关。
@@ -89,9 +94,9 @@ def test_只有文本链路才标记txt已处理():
     #  不是字面量常量 ⇒ 只能从字节码看）。
     import dis
 
-    consts = {c for c in server._run_download.__code__.co_consts if isinstance(c, str)}
-    names = set(server._run_download.__code__.co_names)
-    ops = {i.opname for i in dis.get_instructions(server._run_download)}
+    consts = {c for c in jobs.run_download.__code__.co_consts if isinstance(c, str)}
+    names = set(jobs.run_download.__code__.co_names)
+    ops = {i.opname for i in dis.get_instructions(jobs.run_download)}
     assert "text" in consts, "少了 kind == \"text\" 的比较"
-    assert "WATCHER" in names, "少了 WATCHER"
+    assert "mark_recent" in names, "少了 mark_recent（文本链路的那次登记）"
     assert "COMPARE_OP" in ops, "少了那次比较 —— 分支条件可能变了"

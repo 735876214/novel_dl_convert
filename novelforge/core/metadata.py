@@ -75,6 +75,26 @@ FILENAME_RE = re.compile(
 )
 
 
+# ---------------- 出版年（**唯一真值源**，第 265 期立）----------------
+# 为什么必须只有一处：此前 `library._year_of`（读 OPF 的 `dc:date`）、
+# `calibreimport._year_of`（读 Calibre 的 `pubdate`）、`metasources._year_of`（读源站字段）
+# **三份实现、两套判据** —— 前两份用 `\d{4}`（任意四位），第三份限 1500–2099。
+# 于是同一个 `0001-01-01` 这类脏值：入库路径取出 `0001`、在线抓取路径取到空
+# ⇒ **同一本书的两条来路给出不同 `year`**，而 `year` 会参与排序与筛选。
+#: 只认 4 位、且在合理区间内的数：书籍元数据里 1500–2099 之外的「年份」只可能是解析噪音。
+_YEAR = re.compile(r"(?<!\d)(1[5-9]\d{2}|20\d{2})(?!\d)")
+
+
+def year_of(value) -> str:
+    """从各种形态里抠出 4 位出版年（`2008` / `'2008-05-01'` / `2008.0` / Calibre 的 `pubdate`）。
+
+    抠不出（或不在 1500–2099）⇒ 空串 —— **宁可少一个字段，也不给一个会被下游当数字用的错值**
+    （与 `_series_index_of` 对「Kindle Edition」那种文本的处理同一条纪律）。
+    """
+    m = _YEAR.search(str(value or ""))
+    return m.group(1) if m else ""
+
+
 def from_filename(name: str) -> dict:
     """从文件名解析「书名 / 作者」—— **书名解析的唯一入口**（两分支都过 `strip_count_note`）。
 

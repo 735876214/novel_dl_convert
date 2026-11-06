@@ -5,16 +5,19 @@
 ``type='ebook'``，而 ``_EBOOK_EXTS`` 不含 ``.cbz/.cbr``；目录型漫画还要求
 ``type∈{comic,audiobook}`` 才会被合并成一本书。
 
+⚠️ 第 265 期：实现从 `server.py` 挪到 `core/library_probe.py`（纯领域判断，不认识 HTTP），
+返回值随之从「JSON 文本」改成「扩展名列表」—— 形状校验仍留在 server。
+
 口径（**只在会变成空库时动手**，正常配置一概不碰）：
 1. 目录里有本库白名单收得下的文件 ⇒ 原样返回；
 2. 一个都收不下、但目录里确实有媒体 ⇒ 按实际内容补白名单；目录型（≥2 个单元文件一层）
    ⇒ 同时把类型校正为 comic / audiobook；
 3. 目录本来就是空的 ⇒ 原样返回（不猜）。
 """
+import json
 import pathlib
 
-from novelforge import server
-from novelforge.core import comics
+from novelforge.core import comics, library, library_probe
 
 
 def _cbz(p: pathlib.Path) -> pathlib.Path:
@@ -26,9 +29,10 @@ def test_只有cbz而类型是ebook时按事实校正(tmp_path):
     """**用户报的那一种**：文件夹里全是 .cbz，库类型是 ebook ⇒ 一本都读不到。"""
     _cbz(tmp_path / "第一卷.cbz")
     _cbz(tmp_path / "第二卷.cbz")
-    ltype, exts = server._fix_empty_library("ebook", "", [str(tmp_path)])
-    assert ".cbz" in server.library.parse_exts(exts), "漫画扩展名必须进白名单，否则书架永远是空的"
-    eff = server.library.exts_for_library({"type": ltype, "allowed_exts": exts})
+    ltype, exts = library_probe.fix_empty_library("ebook", "", [str(tmp_path)])
+    assert ".cbz" in exts, "漫画扩展名必须进白名单，否则书架永远是空的"
+    # server 落库前过 `_norm_exts`（→ JSON 文本），这里照同样的形状喂回去
+    eff = library.exts_for_library({"type": ltype, "allowed_exts": json.dumps(exts)})
     assert ".cbz" in eff, "校正后的配置必须真的能收下 .cbz"
 
 
@@ -37,14 +41,14 @@ def test_正常配置一概不碰(tmp_path):
     (tmp_path / "书.epub").write_bytes(b"PK\x03\x04" + b"\x00" * 32)
     _cbz(tmp_path / "漫画.cbz")
     before = ("ebook", "")
-    assert server._fix_empty_library(*before, [str(tmp_path)]) == before, \
+    assert library_probe.fix_empty_library(*before, [str(tmp_path)]) == before, \
         "非空库不该被改配置（否则就是「我以为我没改，其实被改了」）"
 
 
 def test_空目录不猜(tmp_path):
-    assert server._fix_empty_library("ebook", "", [str(tmp_path)]) == ("ebook", "")
-    assert server._fix_empty_library("ebook", "", []) == ("ebook", "")
-    assert server._fix_empty_library("ebook", "", ["/根本没有这个目录"]) == ("ebook", "")
+    assert library_probe.fix_empty_library("ebook", "", [str(tmp_path)]) == ("ebook", "")
+    assert library_probe.fix_empty_library("ebook", "", []) == ("ebook", "")
+    assert library_probe.fix_empty_library("ebook", "", ["/根本没有这个目录"]) == ("ebook", "")
 
 
 def test_目录型漫画要同时校正类型(tmp_path):
@@ -53,9 +57,9 @@ def test_目录型漫画要同时校正类型(tmp_path):
     d.mkdir()
     _cbz(d / "第1话.cbz")
     _cbz(d / "第2话.cbz")
-    ltype, exts = server._fix_empty_library("ebook", "", [str(tmp_path)])
+    ltype, exts = library_probe.fix_empty_library("ebook", "", [str(tmp_path)])
     assert ltype == "comic", "目录型内容必须把类型校正到合并得起来的那个"
-    assert ".cbz" in server.library.parse_exts(exts)
+    assert ".cbz" in exts
 
 
 def test_有声书目录校正成audiobook(tmp_path):
@@ -63,13 +67,13 @@ def test_有声书目录校正成audiobook(tmp_path):
     d.mkdir()
     for n in (1, 2):
         (d / f"第{n}话.mp3").write_bytes(b"ID3\x03\x00" + b"\x00" * 16)
-    ltype, _ = server._fix_empty_library("ebook", "", [str(tmp_path)])
+    ltype, _ = library_probe.fix_empty_library("ebook", "", [str(tmp_path)])
     assert ltype == "audiobook"
 
 
 def test_显式白名单不被无端扩大(tmp_path):
     """用户**显式**配了白名单 ⇒ 说明是有意过滤；但仍不许出现「配置收不下、目录里全是它」。"""
     _cbz(tmp_path / "漫画.cbz")
-    ltype, exts = server._fix_empty_library("comic", ".cbz", [str(tmp_path)])
+    ltype, exts = library_probe.fix_empty_library("comic", ".cbz", [str(tmp_path)])
     assert (ltype, exts) == ("comic", ".cbz"), "本来就收得下 ⇒ 一个字都不改"
     assert comics.is_comic(tmp_path / "漫画.cbz")

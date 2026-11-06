@@ -30,6 +30,8 @@ from __future__ import annotations
 import pathlib
 import sqlite3
 
+from . import metadata
+
 #: Calibre `metadata.db` �� `books` 表里我们关心的列。
 #:
 #: ⚠️ Calibre 的列名在 0.8 前后变过（`timestamp` / `pubdate` / `sort` …），
@@ -104,7 +106,7 @@ def read_calibre(db_path: pathlib.Path, limit: int = 5000) -> dict:
                 "series_index": _index_text(b.get("series_index")),
                 "isbn": str(b.get("isbn") or ""),
                 "publisher": str(b.get("publisher") or ""),
-                "year": _year_of(b.get("pubdate") or ""),
+                "year": metadata.year_of(b.get("pubdate") or ""),
                 "tags": tags.get(_first_id(b.get("tags") or ""), ""),
                 "path": str(b.get("path") or "").replace("\\", "/"),
                 "format": str(b.get("format") or ""),
@@ -191,14 +193,6 @@ def _index_text(raw) -> str:
     if f == int(f):
         return str(int(f))
     return s
-
-
-def _year_of(raw) -> str:
-    """从 Calibre 的日期串里取年份（`pubdate` 形如 `2011-03-05 00:00:00`）。"""
-    import re
-
-    m = re.search(r"(\d{4})", str(raw or ""))
-    return m.group(1) if m else ""
 
 
 def plan_registration(root: pathlib.Path, books: list, allowed_exts=None) -> dict:

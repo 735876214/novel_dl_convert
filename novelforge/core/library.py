@@ -576,11 +576,6 @@ def _tag_all(xml: str, tag: str) -> list:
     return re.findall(rf"<{tag}[^>]*>(.*?)</{tag}>", xml, re.S | re.I)
 
 
-def _year_of(opf: str) -> str:
-    m = re.search(r"(\d{4})", _tag_text(opf, "dc:date"))
-    return m.group(1) if m else ""
-
-
 def _isbn_of(opf: str) -> str:
     """从 ``dc:identifier`` 里挑 ISBN，返回**原始文本**（保留连字符等写法）。
 
@@ -1701,7 +1696,7 @@ def probe_epub(path: pathlib.Path) -> dict:
             if not out["has_cover"]:
                 # 无效 / 缺失封面：连路径一起清掉，避免前端去请求一张注定解不开的图
                 out["cover"] = ""
-            out["year"] = _year_of(opf)
+            out["year"] = metadata.year_of(_tag_text(opf, "dc:date"))
             out["publisher"] = _clip(_tag_text(opf, "dc:publisher"), "publisher")
             out["isbn"] = _isbn_of(opf)
             out["language"] = _clip(_tag_text(opf, "dc:language"), "language")

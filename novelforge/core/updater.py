@@ -1,7 +1,7 @@
 """版本检查与一键更新（第 78 期；第 80 期接线补全）。
 
 检查：定时（默认 6h）/ 启动 / 手动，调 GitHub API 取最新 Release 版本号，
-与本地 ``server.APP_VERSION`` 比较。**出网失败静默忽略**（不阻塞、不报错）；
+与本地 ``appinfo.read_version()`` 比较。**出网失败静默忽略**（不阻塞、不报错）；
 出网本身是**显式、可关、失败降级**的 —— ``update.check_enabled`` 关掉即完全不检查
 （第 80 期起该开关保存即生效，见 ``server._apply_update_config``）。
 
@@ -29,6 +29,8 @@ import urllib.parse
 import urllib.request
 
 import http.client  # noqa: F401 —— 仅类型引用；实际连接走 _UnixSocketConnection
+
+from . import appinfo
 
 _log = logging.getLogger("novelforge")
 
@@ -233,8 +235,8 @@ def _remote_latest() -> "tuple[str | None, str]":
 # ---------------- 检查与状态 ----------------
 
 def _local_version() -> str:
-    import novelforge.server as s  # 延迟导入，避免循环
-    return s.APP_VERSION
+    """本机版本 —— 走 :mod:`novelforge.core.appinfo`（**不**反向 import `server`：那是分层倒置）。"""
+    return appinfo.read_version()
 
 
 def check(force: bool = False, local_version: str = "") -> "dict":

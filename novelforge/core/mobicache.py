@@ -31,10 +31,12 @@ import os
 import pathlib
 import re
 import shutil
+import sys
 import threading
 import time
 
 from .. import config
+from . import derivedcache
 from . import detect, htmlsafe, pipeline, preprocess, reading_list
 
 #: 本模块认的扩展名。`.azw` 是未加密的 Mobipocket（Kindle 早期格式），与 `.mobi` 同一条解包
@@ -186,32 +188,6 @@ def _sweep(parent: pathlib.Path, bid: str) -> None:
             shutil.rmtree(stale, ignore_errors=True)
 
 
-def _swap_in(stage: pathlib.Path, final: pathlib.Path) -> None:
-    """把 stage 换成 final —— **原子换入**：旧目录先挪走、再 replace、最后删旧的。
-
-    直接往 final 里写是**不行**的：解包中途失败会留下半个目录，而 `state.json` 一旦在
-    那里写成 ok，读者拿到的是缺文件的正文。所以一律**先在同卷的临时目录里解完**再换入
-    （源不可变 + 临时文件 + `Path.replace` 的既有纪律）。
-    """
-    old = None
-    if final.exists():
-        old = final.with_name(f"{final.name}.old-{os.getpid()}-{int(time.time() * 1000)}")
-        shutil.rmtree(old, ignore_errors=True)
-        final.replace(old)
-    try:
-        stage.replace(final)
-    except OSError:
-        # 换入失败就把旧目录放回去：否则这本书的缓存目录整个消失（下次会重解，但没必要）
-        if old is not None and old.exists() and not final.exists():
-            try:
-                old.replace(final)
-            except OSError:                            # noqa: BLE001
-                pass
-        raise
-    if old is not None:
-        shutil.rmtree(old, ignore_errors=True)
-
-
 # ---------------- 缓存判定 / 解包 ----------------
 
 def _lookup(cdir: pathlib.Path, fp: str, src: pathlib.Path):
@@ -275,7 +251,7 @@ def _build(book: dict, src: pathlib.Path, bid: str, cdir: pathlib.Path, fp: str)
             raise ValueError("解包产物里没有 EPUB / HTML / PDF")
         _write_state(stage, {"status": "ok", "fingerprint": fp, "rule": RULE_VERSION,
                              "pkg": st.get("version"), "rel": rel, "kind": kind})
-        _swap_in(stage, cdir)
+        derivedcache.swap_in(stage, cdir)
         return cdir / rel, kind
     except Exception as e:                             # noqa: BLE001 —— 坏书不能把接口打成 500
         shutil.rmtree(stage, ignore_errors=True)
@@ -294,32 +270,7 @@ def read_target(book: dict, *, path=None, root=None):
 
     非 MOBI 扩展名 / 文件不在 / 无 book_id ⇒ ``(None, "")``（调用方各自回落既有行为）。
     """
-    p = _src_path(book, path, root)
-    if p.suffix.lower() not in EXTS or not p.is_file():
-        return None, ""
-    bid = str(book.get("id") or "")
-    if not bid:
-        return None, ""
-    try:
-        fp = _fingerprint(p)
-    except OSError:
-        return None, ""
-    cdir = _cache_dir(bid)
-
-    verdict, target, kind = _lookup(cdir, fp, p)
-    if verdict == "hit":
-        return target, kind
-    if verdict == "locked":
-        return None, ""
-
-    with _BUILD_LOCK:
-        # 双检：等锁期间别人可能已经解好了（解包是秒级操作，这里省掉重复的一遍）
-        verdict, target, kind = _lookup(cdir, fp, p)
-        if verdict == "hit":
-            return target, kind
-        if verdict == "locked":
-            return None, ""
-        return _build(book, p, bid, cdir, fp)
+    return derivedcache.read_target(sys.modules[__name__], book, path=path, root=root)
 
 
 def unreadable_reason(book: dict, *, path=None, root=None) -> str:

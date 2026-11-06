@@ -10,9 +10,10 @@ import pathlib
 import re
 
 from novelforge import server
+from novelforge.core import appinfo
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SERVER_PY = ROOT / "novelforge" / "server.py"
+APPINFO_PY = ROOT / "novelforge" / "core" / "appinfo.py"
 
 
 def test_health_exposes_version_matching_single_source(client):
@@ -42,27 +43,27 @@ def test_VERSION_文件必须是单行且不带CR():
 
 
 def test_版本真值源就是仓库根的VERSION文件():
-    """`_read_version()` 必须原样给出仓库根 `VERSION` 的内容（别读别处、别加工）。"""
+    """`appinfo.read_version()` 必须原样给出仓库根 `VERSION` 的内容（别读别处、别加工）。"""
     expected = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
     assert expected, "仓库根 VERSION 不该是空的"
-    assert server._read_version() == expected
+    assert appinfo.read_version() == expected
     assert server.APP_VERSION == expected
 
 
 def test_没有第二份版本字面量():
     """§7.1：清掉「读不到 VERSION 就回一个像样版本号」那条兜底。
 
-    早先 `_read_version()` 末尾是「记一条 warning + `return` 某个具体版本」，于是一台
+    早先读版本那段末尾是「记一条 warning + `return` 某个具体版本」，于是一台
     **缺了 VERSION 的部署**对外报的是一个**看起来完全正常**的版本号；
     而契约只验「非空且 == APP_VERSION」⇒ 谁都不会发现。
 
     现在兜底是一个**哨兵值**（`updater.parse_version()` 把它解析成 `(0, 0, 0)` ⇒
     任何真实版本都比它新，更新提示照常给出）。这条用例钉住：兜底不再是版本号，
-    且 `server.py` 里除哨兵外**没有别的 `"数字.数字"` 形态字面量**。
+    且 `core/appinfo.py` 里除哨兵外**没有别的 `"数字.数字"` 形态字面量**。
     """
-    src = SERVER_PY.read_text(encoding="utf-8")
-    m = re.search(r'^_VERSION_UNKNOWN = "([^"]+)"', src, re.M)
-    assert m, "找不到 `_VERSION_UNKNOWN` 哨兵定义"
+    src = APPINFO_PY.read_text(encoding="utf-8")
+    m = re.search(r'^VERSION_UNKNOWN = "([^"]+)"', src, re.M)
+    assert m, "找不到 `VERSION_UNKNOWN` 哨兵定义"
     sentinel = m.group(1)
     assert not re.fullmatch(r"\d+(\.\d+)*", sentinel), \
         f"兜底值 {sentinel!r} 看起来像个真版本号 —— 它会掩盖「部署缺 VERSION」"
@@ -77,5 +78,5 @@ def test_哨兵值让更新检查仍然可用():
     """哨兵不能把「检查更新」弄坏：`parse_version()` 要把它当 0，真实版本一律比它新。"""
     from novelforge.core import updater
 
-    assert updater.parse_version(server._VERSION_UNKNOWN) == (0, 0, 0)
-    assert updater.is_newer("0.94.0", server._VERSION_UNKNOWN) is True
+    assert updater.parse_version(appinfo.VERSION_UNKNOWN) == (0, 0, 0)
+    assert updater.is_newer("0.94.0", appinfo.VERSION_UNKNOWN) is True

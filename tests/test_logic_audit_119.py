@@ -20,7 +20,7 @@ import time
 import pytest
 
 from novelforge import config, server
-from novelforge.core import catalog, db, fileops, komga_api, library, library_rules
+from novelforge.core import catalog, db, fileops, komga_api, library, library_rules, orphans
 from novelforge.core import pipeline
 from novelforge.core import recycle
 
@@ -177,7 +177,7 @@ def test_库根离线时阅读记录不判孤儿(isolated, make_library):
         catalog.forget("orphan-lib")
         library.invalidate("orphan-lib")
         assert library.books("orphan-lib") == []
-        refs = server._orphan_refs()
+        refs = orphans.orphan_refs()
         flat = [i for ids in refs.values() for i in ids]
         assert bid not in flat, f"库根离线时不该把它的行判成孤儿（{refs}）"
     finally:
@@ -191,7 +191,7 @@ def test_库根在线时残留行照旧可清理(isolated, make_library):
     db.set_progress(gone, 3, 42.0)
     (library.roots_of(lib)[0] / "三体.epub").unlink()
     library.invalidate("live-lib")
-    refs = server._orphan_refs()
+    refs = orphans.orphan_refs()
     flat = [i for ids in refs.values() for i in ids]
     assert gone in flat, f"库在线、这本书确实没了，应判孤儿（{refs}）"
 

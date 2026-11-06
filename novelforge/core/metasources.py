@@ -383,12 +383,6 @@ def _soup(html: str):
         return None
 
 
-def _year_of(value) -> str:
-    """从各种形态里抠出 4 位年份（源里可能是 2008 / '2008-05-01' / 2008.0）。"""
-    m = re.search(r"(1[5-9]\d{2}|20\d{2})", str(value or ""))
-    return m.group(1) if m else ""
-
-
 #: 卷号只认这几种形态：``1`` / ``12`` / ``1.5``（calibre 的 series_index 是浮点文本）
 _SERIES_INDEX = re.compile(r"^\d+(?:\.\d+)?$")
 
@@ -672,7 +666,7 @@ def _entry(source: str, **kw) -> dict:
         "title": _strip_html(kw.get("title")),
         "author": _strip_html(kw.get("author")),
         "publisher": _strip_html(kw.get("publisher")),
-        "year": _year_of(kw.get("year")),
+        "year": metadata.year_of(kw.get("year")),
         "language": _lang_of(kw.get("language")),
         "isbn": _strip_html(kw.get("isbn")),
         "description": _strip_html(kw.get("description")),

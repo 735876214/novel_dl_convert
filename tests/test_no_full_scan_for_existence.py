@@ -21,6 +21,8 @@ import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SERVER = ROOT / "novelforge" / "server.py"
+#: 第 265 期：`_orphans` 挪进了 `core/orphans.py`（函数名 `orphans`）。
+ORPHANS = ROOT / "novelforge" / "core" / "orphans.py"
 
 
 def _function_body(src: str, name: str) -> str:
@@ -42,19 +44,22 @@ def test_按id存在性检查不用全库扫描():
 
 
 def test_维护页两处数书不用全库物化():
-    src = SERVER.read_text(encoding="utf-8")
-    for fn in ("api_maintenance", "_orphans"):
-        body = _function_body(src, fn)
-        assert "len(library.books())" not in body, \
-            f"{fn} 还在用 `len(library.books())` 数书（改用 `catalog.totals`）"
+    body = _function_body(SERVER.read_text(encoding="utf-8"), "api_maintenance")
+    assert "len(library.books())" not in body, \
+        "api_maintenance 还在用 `len(library.books())` 数书（改用 `catalog.totals`）"
+    body = _function_body(ORPHANS.read_text(encoding="utf-8"), "orphans")
+    assert "len(library.books())" not in body, \
+        "orphans 还在用 `len(library.books())` 数书（改用 `catalog.totals`）"
 
 
 def test_数书口径与_books_一致_只数登记在册的库():
     """`catalog.totals()` 默认数**全部索引行** —— 已移除库的残留索引会把数撑大。
     而 `library.books()` 只扫在册库 ⇒ 两处必须都传「当前登记的库 id」。"""
-    src = SERVER.read_text(encoding="utf-8")
-    for fn in ("api_maintenance", "_orphans"):
-        body = _function_body(src, fn)
-        assert "catalog.totals(" in body, f"{fn} 没用 catalog.totals"
-        assert "library.libraries()" in body, \
-            f"{fn} 的 totals 没过滤「当前登记的库」—— 口径会与 books() 不一致"
+    body = _function_body(SERVER.read_text(encoding="utf-8"), "api_maintenance")
+    assert "catalog.totals(" in body, "api_maintenance 没用 catalog.totals"
+    assert "library.libraries()" in body, \
+        "api_maintenance 的 totals 没过滤「当前登记的库」—— 口径会与 books() 不一致"
+    body = _function_body(ORPHANS.read_text(encoding="utf-8"), "orphans")
+    assert "catalog.totals(" in body, "orphans 没用 catalog.totals"
+    assert "library.libraries()" in body, \
+        "orphans 的 totals 没过滤「当前登记的库」—— 口径会与 books() 不一致"
