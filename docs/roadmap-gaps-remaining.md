@@ -15627,3 +15627,124 @@ DTO 排序的旧写法 `_ko_sorted` **删除**（它要求先造全 DTO，正是
 **认证三路** · **分页壳字段** · **Range** · **页面流与 `convert=jpeg`** · **目录型系列的卷号** ·
 **跨库 / 闭源库的 404** · **系列级已读的「保留原位置」** · **收藏夹 409** · **readlist 空分页** ·
 **`/analyze` 204**。
+
+## 第 267 期（Komga 第二轮审计：同一个对象里两个单位）
+
+**需求来源**：用户直接立项 —— 「再审计一遍 komga」（第二轮），看到结论后「修一下」。
+
+**这一轮换的角度**：第一轮（第 266 期）查的是「看起来实现了其实没做」（搜索 / 条件形状 /
+分页夹边界 / 缓存头 / 列表复杂度）。这一轮专查**跨字段一致性、单位、缓存口径、写开销**。
+
+### 一、测下来仍然健康（别重查）
+
+登录 → cookie → `/libraries` → `/logout` → 401 的**全流程** · `series/list` 的
+`condition.libraryId` 过滤（含**不存在的库 id → 空列表**，不报错）· `previous`/`next`
+按系列顺序（首尾各 404）· `locator` 往返（含 `./` 前缀与 URL 编码）· `/readlists` 空分页 ·
+收藏夹自定义封面 POST/PUT/DELETE → **403 且说清原因** · `/file` 的 ETag + Range ·
+目录型布局的卷号 1/2/3。
+
+### 二、七条缺陷
+
+#### 1. **同一份 DTO 里两个互相矛盾的百分比**（EPUB 的 `page` 不是页码）
+
+造一本 20 章、每章 3 万字的 EPUB，读到**第 10 章**：
+
+```
+media.pagesCount        = 883   ← 估算的「文本页数」（字节 ÷ 每页字节，成就判据用）
+readProgress.page       = 11    ← 其实是「章节序号 + 1」
+locator.progression     = 0.5
+```
+
+客户端若按 `page / pagesCount` 画进度条 ⇒ **1.2%**，而同一份对象的 `progression` 说 **50%**。
+根因：非 paged 分支里塞了 `page = locator + 1`（注释写「有些老客户端只读 page」）——
+那是一个**假数字**（章节序号冒充页码），Komga 在这一档本来就是 `page: null`。
+
+**修法**：`page` 改由 percent 折算成**与 `pagesCount` 同一把尺子**
+（`round(percent/100 × pagesCount)`）；**没有进度就不给 `page`**。
+
+#### 2. **卷号被压成整数、无卷号冒充「第 1 卷」**
+
+```
+原始书目（存得很准）： 第1.5卷.epub → series_index="1.5"
+Komga DTO（修前）：    number=1  metadata.number="1"  numberSort=1.0   ← 与真正的第 1 卷一样
+                      3 本没有卷号的书 → 全是 number=1（客户端显示三个「第 1 卷」）
+```
+
+根因一行：`int(str(series_index or "").strip() or 1)` —— **无值给 1**（断言「这是第一卷」）、
+**小数被 `int()` 截断**。而 `library._series_index_of` 特意保留了 `1.5`
+（注释：「非整数序号要保留，1.5 常表示系列里的中篇」）⇒ 是 Komga 这一层丢的。
+
+**修法**：`metadata.number` 用**原文**（`"1.5"` / `""`）、`numberSort` 用 **float**；
+`BookDto.number` 仍是 Int（与 Komga 一致，客户端显示「第几卷」读的是前两者）。
+
+#### 3. **`manifest` 的 href 取不到**（advertise 了但服务不了）
+
+manifest 给出 `EPUB/nav.xhtml`、`EPUB/c0000.xhtml`…，服务端却**没有任何路由**能取到它们
+（`/resource/…` 与裸 `/{href}` 都是 404）⇒ 照 manifest 走的客户端必然全 404。
+这不是「少个功能」，是一份**假清单**（AGENTS §1「不做假交互」）。
+
+**修法**：新增 `GET /api/v1/books/{id}/resource/{path}`，**复用** `api_book_asset`
+（zip 条目精确等名白名单 + 解压炸弹闸门 + `nosniff`/CSP 头都只有那一份），
+只补它没有的那件事：**可见性**（范围外 / 闭源库的书连资源也取不到）。
+⚠️ **不确定**：官方 Komga 的 Web 阅读器具体打哪个 URL —— 但「自己下发的清单自己取得到」
+与客户端用哪条路无关，是个更弱也更稳的前提。
+
+#### 4. **认证过的媒体资源回了 `Cache-Control: public`**
+
+`/books/{id}/thumbnail`、`/series/{id}/thumbnail`、`/pages/{n}` 全是 `public, max-age=86400`。
+这些出口**全在鉴权之后**，Komga 那几条还叠加了「只读凭据的书库范围」——
+`public` 允许**共享缓存**（局域网反代 / CDN）把封面与漫画页交给**没登录的人**。
+
+**修法**：改在**唯一组装点** `_MEDIA_UNTRUSTED_HEADERS`（第 135 期立的）⇒ `private`。
+一处改动覆盖全部十一个媒体出口，浏览器自己的缓存不受影响（`private` 只排除共享缓存）。
+
+#### 5. **系列级「标记已读」逐本写**
+
+```
+200 本的系列 POST /series/{id}/read-progress -> 204，460 ms
+```
+
+`mark_series_read` 对每本书一次 `db.set_progress`（**每次提交**）。2000 章的长系列
+≈ 4.6 s —— 正好撞客户端超时，超时后它重试，又把同一批写一遍。
+
+**修法**：新增 `db.set_progress_many()`（**一个事务、同一份 upsert 语句**，`cfi` 清空、
+`file_rel` 空串与单本写入同口径；事件仍按书逐条发）。
+
+#### 6. **`oneshot` 用「成员数 == 1」判**
+
+Komga 的 `oneshot` 是「这本书**没有系列元数据**、系列名是拿书名顶上去的」。
+我们判成「系列里只有一本书」⇒ **真实的单本系列**也被标成 one-shot（客户端于是藏掉系列层级）。
+
+**修法**：`oneshot = 成员里没有任何一本带 series 元数据`。
+
+#### 7. **错误体不是 Komga 的形状**
+
+我们回 `{"detail": "书不存在"}`，Komga 回 Spring 的
+`{timestamp, status, error, message, path}` ⇒ 客户端把 `error.message` 显示给用户时是**空白**。
+
+**修法**：给 `StarletteHTTPException` 加一个全局处理器，`/api/v1/*` **同批给两份**
+（`detail` 给本项目前端 / 用例，Spring 那几个键给客户端）。
+⚠️ 必须**透传 `exc.headers`**（401 的 `WWW-Authenticate`、429 的 `Retry-After` 都挂在那儿），
+否则客户端既不弹密码框也不退避重试。⚠️ 非 `/api/v1` 路径**逐字节保持原样** ——
+一次兼容性修补不该改掉整个应用的错误契约（用例 `test_应用自己的错误体不被改` 钉住）。
+
+### 三、防回归：`tests/test_komga_protocol_267.py`（10 例）
+
+`page` 与 `pagesCount` 同尺子（并且未读的书**不给** page）· 小数卷号保真 · 无卷号不冒充第 1 卷 ·
+`oneshot` 只给没有系列的书 · manifest 的 href **真的取得到**（且 `../../etc/passwd` 取不到）·
+三个媒体出口都是 `private` · 系列已读走**批量写**（用 `set_progress` 的调用计数断言，
+不靠耗时）· Komga 错误体带 Spring 键 · 应用自己的错误体不被改 · 401 的 `WWW-Authenticate` 没被吞。
+
+跟着改的既有用例 2 个：`test_media_headers_135`（缓存口径默认值）·
+`test_progress_per_file::test_Komga读到的仍是书级进度`（原先钉的是 `page == locator+1`
+这个**错误口径**；判据「书级 = 最新那行」不变，改断 `progression`）。
+
+### 四、核验
+
+后端全量见下（`period_close.py` 同步两处基线）；前端四连照跑（本期没改前端）。
+
+### 本轮扫过、确认零缺陷的角度（别重查）
+
+**登录 / 登出全流程** · **`series/list` 按库过滤（含不存在的库）** · **`previous`/`next` 的系列序** ·
+**locator 往返（`./` 前缀、URL 编码）** · **readlists 空分页** · **收藏夹自定义封面 403** ·
+**`/file` 的 ETag + Range** · **目录型布局的卷号**。

@@ -338,6 +338,10 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    | 派生缓存的**原子换入**与「正文在哪个文件」 | `novelforge/core/derivedcache.py` 的 `swap_in()` / `read_target()`
 （第 265 期收敛：`fb2cache` / `mobicache` 两处逐字相同、`txtcache` 是弱化变体 ⇒ 硬约束改一处漏一处；
 缓存模块保留同名 `read_target` 时**只许转调**，由用例钉住） |
+   | 媒体资源的**响应头与缓存口径**（书 / 上传件 / 抓来的图） | `novelforge/server.py` 的 `_MEDIA_UNTRUSTED_HEADERS`
+（第 135 期立的**唯一**组装点：`nosniff` + CSP `sandbox` + `Cache-Control`；第 267 期把
+`public` 改成 `private` —— 这十一个出口全在鉴定之后，`public` 允许共享缓存把封面 / 漫画页
+交给没登录的人。加新出口只许走 `_media_headers` / `_media_bytes` / `_media_file`） |
    | 一段搜索词**命中哪些书**（OPDS 搜索框 / Komga 的 `fullTextSearch`） | `novelforge/core/library.py` 的 `matches_text()`
 （第 266 期收敛：此前 OPDS 搜索独立写了一份「标题 / 作者 / 系列子串匹配」，而 Komga 的
 `fullTextSearch` **根本没读** ⇒ 同一本书在 OPDS 搜得到、在 Komga 搜不到） |
