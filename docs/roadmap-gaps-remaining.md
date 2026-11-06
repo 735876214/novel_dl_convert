@@ -15748,3 +15748,103 @@ Komga 的 `oneshot` 是「这本书**没有系列元数据**、系列名是拿�
 **登录 / 登出全流程** · **`series/list` 按库过滤（含不存在的库）** · **`previous`/`next` 的系列序** ·
 **locator 往返（`./` 前缀、URL 编码）** · **readlists 空分页** · **收藏夹自定义封面 403** ·
 **`/file` 的 ETag + Range** · **目录型布局的卷号**。
+
+## 第 268 期（Komga 第三轮审计：修了一半比没修更难发现）
+
+**需求来源**：用户直接立项 —— 「再审计一遍」（第三轮），看到结论后「全部修一下」。
+
+**这一轮的角度**：**筛选条件的两种形态**（`allOf` / `anyOf`）、**写后读回**、
+**条件请求（304）**、**HTTP 方法语义（HEAD）**，以及**上一轮的修复有没有覆盖全**。
+
+### 一、测下来仍然健康（别重查）
+
+并发写进度（5 个线程同时 PUT → 无异常、最后写入者胜）· 新 `/resource/{path}` 抗穿越
+（`..` / URL 编码 / 绝对路径全部拒绝或被鉴权中间件挡在 `/api/v1` 之外）·
+`/api/v1/libraries/{id}` 有可见性检查（探针误报过一次，已核实代码正确）。
+
+### 二、五条缺陷
+
+#### 1. **`POST /series/list` 的搜索与筛选全部被忽略**（第 266 期的修复只覆盖了 books）
+
+```
+全部系列                                      -> ['三体', '球状闪电', '超新星纪元']
+{"fullTextSearch": "三体"}                    -> 同上（没筛）
+{"condition":{"allOf":[{"title":{"contains":"三体"}}]}}  -> 同上（也没筛）
+{"condition":{"anyOf":[…]}}                   -> 同上
+```
+
+`_ko_library_id_of()` 只认 `condition` 里的 `libraryId` —— 连**自称支持**的
+`allOf.title` 在系列侧都没实现。**半截修复**：第 266 期给 books 补的那套没跟到 series。
+**用户看到**：在客户端的系列视图里搜索 → 结果 = 全部系列。
+
+#### 2. **`condition.anyOf` 在 books 那边也被忽略**
+
+Komga 的 `SearchCondition` 有**两半**：`allOf`（全部满足，AND）与 `anyOf`（任一满足，OR）。
+此前只读 `allOf` ⇒ 只发 `anyOf` 的客户端拿到**全量**（与 `fullTextSearch` 同一类，只是换了一半）。
+
+**修法（1 + 2 同一处）**：抽出 `_ko_condition_groups()`（拆两半）+ `_ko_clause_tests()`
+（一组子句 → 谓词）—— books 与 series 共用**解析**，各自解释**字段**；
+`allOf` 当 AND、`anyOf` 当 OR（两者同时给时 `AND(OR(...), …)`）。
+`_ko_library_id_of` 也改成两半都读。
+
+#### 3. **`DELETE /books/{id}/read-progress` 之后 `readProgress` 仍是对象**
+
+```
+写后：  {"completed": false, "page": 3, "readDate": "2026-11-06T14:58:24Z", …}
+DELETE -> 204
+之后：  {"completed": false, "page": 1, "readDate": "…"}   ← 仍非 null（写的是 percent=0 的一行）
+```
+
+Komga 用 `readProgress: **null**` 表达「未读」。写成 0 的一行 ⇒ 客户端仍显示
+「上次阅读 11-06 / 继续阅读第 1 页」——而用户点的是「标为未读」。
+
+**修法**：新增 `db.clear_progress()`（**真删行**）；`read_progress_dto()` 在没有行时返回
+`None`；书级 `DELETE` 与系列级「标记未读」都走它。
+
+#### 4. **`/file` 发 ETag 却从不回 304**
+
+```
+ETag: "1793977…-433" ；带 If-None-Match 再取 -> 200（整本重传）
+```
+
+客户端每次取书都重下整本（几十到几百 MB）。**修法**：`/file` 自己算
+`"<mtime_ns>-<size>"` 的 ETag，命中 `If-None-Match` 回 **304**（复用既有的
+`_etag_matches`，弱比较）。
+
+#### 5. **`HEAD` 对 FastAPI 的 GET 路由一律 404**
+
+```
+HEAD /health -> 404        HEAD / -> 200（静态挂载正常）
+HEAD /api/v1/books/{id}/file -> 404
+```
+
+FastAPI 的 `@app.get` **不自动加 HEAD**。客户端下载前用 HEAD 探存在性会误判「不存在」。
+**修法**：只给 Komga 的两个下载入口显式加 `@app.head`（`/file`、`/pages/{n}`）——
+**不动全局**（`/health` 等别的地方改 HEAD 语义属于另一件事）。
+⚠️ HEAD 的安全头**必须**走 `_media_headers()`：手写一份 `nosniff` 就是第二个组装点，
+`tests/test_media_headers_135.py` 当场会红（第一版就是这么红的）。
+
+### 三、防回归：`tests/test_komga_protocol_268.py`（11 例）
+
+系列侧的 `fullTextSearch` / `allOf` / `anyOf` 都真的筛 · 「没条件时仍是全部」（防「筛空了」）·
+books 的 `anyOf` 是「或」、`allOf` 是「与」· 两者同时出现时是 `AND(OR(...))` ·
+`DELETE` 之后 `readProgress is None` **且库里没有行** · 系列「标记未读」同款 ·
+未读的书根本不报 `readProgress` · `/file` 的 `If-None-Match → 304` · `/file` 与 `/pages/{n}`
+的 HEAD（带 Content-Length / Accept-Ranges）· HEAD 不是后门（不可见的书照样 404）。
+
+跟着改的既有用例 2 个（都是**我自己上一轮写的**，当时钉的是「`readProgress` 永远是对象」
+这个错误前提）：`test_komga_protocol_267` 的 page 断言与系列已读断言 —— 判据没放宽，
+反而更严（现在是 null）。
+
+### 四、核验
+
+后端全量见下（`period_close.py` 同步两处基线）；前端四连照跑（本期没改前端）。
+
+### 本轮扫过、确认零缺陷的角度（别重查）
+
+**并发写**（最后写入者胜，无异常）· **资源路由抗穿越**（`..` / 编码 / 绝对路径）·
+**`/libraries/{id}` 的可见性** · **认证三路 / 分页壳 / Range / 页面流 / `convert=jpeg`** ·
+**目录型布局卷号** · **跨库与闭源库 404** · **收藏夹 409 与越库过滤** ·
+**登录-登出全流程** · **`series/list` 的 `libraryId`（含不存在的库）** · **prev/next 系列序** ·
+**locator 往返** · **单位一致性** · **卷号保真** · **manifest 可取** · **缓存 `private`** ·
+**批量写** · **oneshot** · **错误体 Spring 键**。

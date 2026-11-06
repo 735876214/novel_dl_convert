@@ -342,6 +342,10 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 （第 135 期立的**唯一**组装点：`nosniff` + CSP `sandbox` + `Cache-Control`；第 267 期把
 `public` 改成 `private` —— 这十一个出口全在鉴定之后，`public` 允许共享缓存把封面 / 漫画页
 交给没登录的人。加新出口只许走 `_media_headers` / `_media_bytes` / `_media_file`） |
+   | Komga 的**筛选条件**怎么解释（`allOf` / `anyOf` 两半） | `novelforge/server.py` 的 `_ko_condition_groups()`
++ `_ko_clause_tests()` + `_ko_series_filter()`（第 268 期：`SearchCondition` 有 `allOf`(AND) 与
+`anyOf`(OR) **两半** —— 只实现 `allOf` 时，只发 `anyOf` 的客户端拿到**全量**；
+⚠️ books 与 series **两个入口都要筛**：第 266 期只修了 books，`POST /series/list` 仍只认 `libraryId`） |
    | 一段搜索词**命中哪些书**（OPDS 搜索框 / Komga 的 `fullTextSearch`） | `novelforge/core/library.py` 的 `matches_text()`
 （第 266 期收敛：此前 OPDS 搜索独立写了一份「标题 / 作者 / 系列子串匹配」，而 Komga 的
 `fullTextSearch` **根本没读** ⇒ 同一本书在 OPDS 搜得到、在 Komga 搜不到） |
