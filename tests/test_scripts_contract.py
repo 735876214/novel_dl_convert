@@ -62,3 +62,42 @@ def test_脚本语法可解析(path):
 def test_脚本行尾是_LF(path):
     """`AGENTS.md` §6：`*.sh` 必须 LF（CRLF 会让容器里的 `sh app/start.sh` 报 set 选项错）。"""
     assert b"\r\n" not in path.read_bytes(), f"{path.name} 含 CRLF"
+
+
+# ---------------------------------------------------------------------------
+# 解释器探测的能力判据（第 248 期）
+# ---------------------------------------------------------------------------
+
+def test_解释器探测带能力判据():
+    """**选中前必须验证它真能建临时目录**（第 248 期，本机 Windows 实测的真故障）。
+
+    `.venv` 的解释器可能在 `%TEMP%` 里建不出目录（`WinError 5`）⇒
+    `tempfile.gettempdir()` **静默退回 cwd**（= 仓库根）⇒ pytest 的默认 basetemp 落进仓库、
+    收尾 `rmtree` 被 `tests/conftest.py` 的仓库根防删除守卫拦下 ⇒ **整片 `[REPO-ROOT GUARD]`**
+    （几百条红，看着像「测试全坏了」，其实只是解释器选错了）。
+
+    判据是「**能力**」不是「文件存不存在」——`[ -x ]` / `command -v` 都会放过它。
+    """
+    lib = (ROOT / "scripts" / "_lib.sh").read_text(encoding="utf-8")
+    assert "nf_python_usable" in lib, "_lib.sh 少了能力探测函数"
+    # 每一次「选中」之前都要过探测：`.venv` 那条 + PATH 上 python3/python 那条
+    picks = [ln for ln in lib.splitlines()
+             if ('NF_PYTHON="' in ln) and not ln.lstrip().startswith("#")]
+    assert len(picks) >= 2, f"候选数看着不对（解释器探测被删了？）：{picks}"
+    for ln in picks:
+        assert "nf_python_usable" in ln, f"这个候选没过能力探测就选中了：{ln.strip()}"
+
+
+def test_解释器探测的调用方不能用命令替换():
+    """`PY="$(nf_resolve_python)"` 会**丢掉 export**（第 248 期踩过）。
+
+    命令替换跑在**子 shell** 里 ⇒ 退回系统解释器时设的 `PYTHONPATH` 传不回调用者的 shell
+    ⇒ 症状是「No module named pytest」（看着像依赖没装，其实是环境没传过去）。
+    """
+    for name in ("test.sh", "dev-instance.sh"):
+        text = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+        # 只看**非注释**行：注释里正写着「别写成 PY="$(nf_resolve_python)"」这句告诫
+        code = [ln for ln in text.splitlines() if not ln.lstrip().startswith("#")]
+        hits = [ln.strip() for ln in code if "$(nf_resolve_python)" in ln]
+        assert not hits, f"{name} 用命令替换调 nf_resolve_python ⇒ 子 shell 里的 export 会丢：{hits}"
+        assert any("NF_PYTHON" in ln for ln in code), f"{name} 没接 nf_resolve_python 的结果变量"

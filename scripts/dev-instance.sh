@@ -13,7 +13,10 @@ ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
 PORT="${1:-8412}"
-PY="$(nf_resolve_python)" || exit 2
+nf_resolve_python || exit 2
+# ⚠️ 接 `NF_PYTHON`，**别**写成 `PY="$(nf_resolve_python)"` ——
+#    命令替换跑在子 shell 里，退回系统解释器时设的 PYTHONPATH 传不回来。
+PY="$NF_PYTHON"
 nf_clean_env
 
 # 端口占用先提示（**别 kill 占用者** —— 本机常有并行会话/生产容器的实例）

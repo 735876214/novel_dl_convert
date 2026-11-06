@@ -24,18 +24,26 @@
 - 同一个 safe-delete shim 也拦 **PowerShell `Remove-Item`**（**静默不删**）与不带 `-Encoding` 的 `Out-File`
   ⇒ 清临时产物用删除工具、写文件显式给编码（别以为命令报错才算失败）。
 - ⚠️ **`.venv` 的解释器在 `%TEMP%` 里建不了目录**（第 247 期实测）：能写文件、能在仓库内建目录，
-  但 `os.makedirs` 在 `%TEMP%` 下报 `PermissionError [WinError 5]` ⇒ **pytest 的 `tmp_path` 整片报错**
-  （看起来像「测试坏了」，其实是环境）。
-  ⇒ 本机跑后端全量用**系统解释器 + `.venv` 的 site-packages**（`PYTHONPATH` 指过去），
-  并把 `--basetemp` 指到 `%TEMP%` 下一个**事先存在**的新目录（同名已存在时 pytest 的
-  `mkdir` 也会 WinError 5）：
+  但 `os.makedirs` 在 `%TEMP%` 下报 `PermissionError [WinError 5]` ⇒ `tempfile.gettempdir()`
+  **静默退回 cwd**（= 仓库根）⇒ pytest 的默认 basetemp 落进仓库、收尾 `rmtree` 被
+  `tests/conftest.py` 的**仓库根防删除守卫**拦下 ⇒ **整片 `[REPO-ROOT GUARD]`**
+  （看起来像「测试全坏了」，其实是解释器选错了）。
+
+  ✅ **第 248 期已把 `scripts/test.sh` 修好**：`scripts/_lib.sh` 的 `nf_resolve_python` 现在
+  会**探测**解释器能不能真建临时目录（`nf_python_usable`），用不了就自动退回**系统解释器**
+  并把 `.venv` 的 site-packages 挂到 `PYTHONPATH`（打印一行 ⚠️ 说明）。
+  ⇒ **本机直接 `bash scripts/test.sh` 就行**，不必再手写长命令；CI（Linux）上 `.venv` 通过探测
+  ⇒ 行为与改造前逐字相同。
+
+  仍然要手写长命令的场合（要自己控制 `--basetemp` 时，例如旧 basetemp 被上一轮进程占着）：
 
   ```bash
   PYTHONPATH="$PWD/.venv/Lib/site-packages"     "C:/Users/qingr/python312/python.exe" -m pytest     --junitxml="C:/Users/qingr/AppData/Local/Temp/nf/junit.xml" -q     --basetemp="C:/Users/qingr/AppData/Local/Temp/nf/pt"
   ```
 
-  ⚠️ `scripts/test.sh` 走的是 `.venv` ⇒ **本机跑它会红**（同一原因）；CI（Linux）正常。
-  这条坑**只在 Windows 本机**出现，Linux 上 `.venv` 建目录没问题。
+  两个配套坑：① `--basetemp` 的**父目录**必须已存在、且每次换新名字（同名已存在时 pytest 的
+  `mkdir` 也报 WinError 5）；② PATH 上的 `python3` 是**应用商店占位符**（执行零输出、直接失败）
+  ⇒ 探测里两个候选都要过能力判据，别只看 `command -v` 有没有命中。
 
 ## 2. 文件读写（编码坑）
 
