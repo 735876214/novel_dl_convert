@@ -2555,6 +2555,25 @@ def _books_of(lib: dict, force: bool = False) -> list:
     return catalog.books_of(lib)
 
 
+def matches_text(b: dict, term: str) -> bool:
+    """这本书命中这段**搜索词**吗（子串、大小写不敏感，看标题 / 作者 / 系列）。
+
+    **唯一实现**（第 266 期收敛）：OPDS 搜索框（`/opds/search?q=`）与 Komga 的
+    `fullTextSearch` / `condition.title.contains` 都走它 —— 两处各写一份的话，
+    「搜得到什么」会随出口而变（同一本书在 OPDS 搜得到、在 Komga 搜不到），
+    而用户只会觉得「搜索坏了」。
+
+    空白词 ⇒ ``False``（**「空词 = 不筛」由调用方表达**，不是这里返回 True ——
+    那样会让人误以为空词匹配全部书）。
+    """
+    t = str(term or "").strip().lower()
+    if not t:
+        return False
+    return (t in str(b.get("title") or "").lower()
+            or t in str(b.get("author") or "").lower()
+            or t in str(b.get("series") or "").lower())
+
+
 def books(library_id=None, force: bool = False) -> list:
     """书目列表（**多库合并**；可按库过滤）。
 

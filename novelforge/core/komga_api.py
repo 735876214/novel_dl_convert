@@ -113,6 +113,14 @@ MEDIA_TYPES = {
 _PROFILES = {"EPUB": "EPUB", "PDF": "PDF", "CBZ": "DIVINA", "CBR": "DIVINA"}
 
 
+#: 「调用方**没传**批量进度」的哨兵（与「这本书没有进度行」区分开）。
+#:
+#: ⚠️ 别用 ``None`` 表示「没传」：`prog.get(bid)` 对**没读过**的书正好返回 ``None``，
+#: 于是「这本书没进度」会被当成「调用方没给」⇒ 又去逐本查库 —— 第 266 期第一版就是这么
+#: 把「零次查询」退回成「一页 20 次」的（用例 `test_列表只给当前页造_DTO` 抓到了）。
+_UNSET = object()
+
+
 class KomgaAuthError(Exception):
     """凭据无效（调用方转成 401 + WWW-Authenticate）。"""
 
@@ -307,7 +315,8 @@ def find_series(name: str, library_id=None):
     return None
 
 
-def series_dto(name: str, items: list, meta: dict = None, th=None) -> dict:
+def series_dto(name: str, items: list, meta: dict = None, th=None,
+               prog=_UNSET) -> dict:
     """SeriesDto。读完/在读计数客户端会显示，所以要认真算（按 percent 判定）。
 
     ``meta`` 是**已解析好的**系列生效元数据（``series_meta.effective`` 或
@@ -319,7 +328,12 @@ def series_dto(name: str, items: list, meta: dict = None, th=None) -> dict:
     （逐系列自己解析会退化成逐系列读配置）。``None`` → 全局阈值。
     """
     meta = meta or {}
-    progs = {b["id"]: (db.get_progress(b["id"]) or {}) for b in items}
+    # `prog` = 已批量取好的 ``{book_id: 行}``（见 `book_dto` 的同名参数）；
+    # 不给才逐本查（单系列端点）。列表端点**必须**给：逐系列逐本查 = 整个书库查一遍。
+    if prog is _UNSET:
+        progs = {b["id"]: (db.get_progress(b["id"]) or {}) for b in items}
+    else:
+        progs = {b["id"]: (prog.get(b["id"]) or {}) for b in items}
     read = inprog = 0
     for b in items:
         pct = float((progs.get(b["id"]) or {}).get("percent") or 0)
@@ -385,13 +399,16 @@ def collection_dto(cid, name: str, created, groups: dict) -> dict:
     }
 
 
-def book_dto(b: dict, series_name: str = "", th=None) -> dict:
+def book_dto(b: dict, series_name: str = "", th=None, prog=_UNSET) -> dict:
     """BookDto —— 客户端依赖最多的结构，字段名必须逐字对齐。
 
     ``th`` 见 :func:`threshold_resolver`：**列表端点务必传**，否则逐本解析配置。
+    ``prog``：**已批量取好的**进度（`db.all_progress()` 的 ``{book_id: 行}``）。
+    列表端点传它 —— 否则一页 500 条就是 500 次单行查库（第 266 期实测：300 本的库
+    每翻一页 300 次 `get_progress`）。``None``（默认）时才自己查，供单本端点用。
     """
     fmt = str(b.get("format") or "").upper()
-    prog = db.get_progress(b["id"]) or {}
+    prog = (db.get_progress(b["id"]) or {}) if prog is _UNSET else (prog or {})
     pages = int(b.get("pages") or 0)
     if not pages and fmt == "PDF":
         # 本项目扫描书目时**不解析 PDF 页数**（避免扫描期就打开每个 PDF）；
@@ -441,9 +458,69 @@ def book_dto(b: dict, series_name: str = "", th=None) -> dict:
     }
 
 
+# ---------------- 排序（在**源行**上排，不造 DTO）----------------
+# 列表端点只给当前页造 DTO（见 :func:`paginate` 的 ``build``），所以排序必须发生在
+# **造 DTO 之前** —— 这些键取的是书目 dict / 系列分组，不是 DTO。字段名与 DTO 里的一致。
+#
+# ⚠️ 不认识的字段**按 default 排、不报错**：客户端传的排序字段五花八门
+# （`metadata.titleSort` / `readProgress.lastModified` / `media.pagesCount`…），
+# 为一个排序把整页打回失败不值得。
+
+def _max_mtime(items) -> float:
+    return max([float(b.get("mtime") or 0) for b in (items or [])] or [0.0])
+
+
+def book_sort_key(field: str, prog: dict = None):
+    """``sort=`` 的字段名 → 对**书目 dict** 的排序键；不认识返回 ``None``。
+
+    ``prog`` 只是给 ``readProgress.lastModified`` 用的（批量进度，见 :func:`book_dto`）。
+    """
+    p = prog or {}
+    keys = {
+        "name": lambda b: pathlib.PurePosixPath(str(b.get("name") or "")).name.lower(),
+        "title": lambda b: str(b.get("title") or "").lower(),
+        "metadata.titleSort": lambda b: str(b.get("title") or "").lower(),
+        "createdDate": lambda b: float(b.get("mtime") or 0),
+        "lastModifiedDate": lambda b: float(b.get("mtime") or 0),
+        "fileLastModified": lambda b: float(b.get("mtime") or 0),
+        "releaseDate": lambda b: str(b.get("year") or ""),
+        "metadata.releaseDate": lambda b: str(b.get("year") or ""),
+        "sizeBytes": lambda b: int(b.get("size") or 0),
+        "fileSize": lambda b: int(b.get("size") or 0),
+        "readProgress.lastModified": lambda b: float(
+            (p.get(b.get("id")) or {}).get("updated_at") or 0),
+    }
+    return keys.get(str(field or "").strip())
+
+
+def collection_sort_key(field: str):
+    """``sort=`` 的字段名 → 对**收藏夹行**（DB 记录）的排序键；不认识返回 ``None``。"""
+    keys = {
+        "name": lambda r: str(r.get("name") or "").lower(),
+        "title": lambda r: str(r.get("name") or "").lower(),
+        "createdDate": lambda r: float(r.get("created_at") or 0),
+        "lastModifiedDate": lambda r: float(r.get("created_at") or 0),
+    }
+    return keys.get(str(field or "").strip())
+
+
+def series_sort_key(field: str):
+    """``sort=`` 的字段名 → 对 ``(系列名, [书…])`` 的排序键；不认识返回 ``None``。"""
+    keys = {
+        "name": lambda pair: str(pair[0]).lower(),
+        "title": lambda pair: str(pair[0]).lower(),
+        "metadata.titleSort": lambda pair: str(pair[0]).lower(),
+        "createdDate": lambda pair: _max_mtime(pair[1]),
+        "lastModifiedDate": lambda pair: _max_mtime(pair[1]),
+        "fileLastModified": lambda pair: _max_mtime(pair[1]),
+        "booksCount": lambda pair: len(pair[1]),
+    }
+    return keys.get(str(field or "").strip())
+
+
 # ---------------- 分页壳 ----------------
 
-def paginate(items: list, page=0, size=20) -> dict:
+def paginate(items: list, page=0, size=20, *, build=None) -> dict:
     """Spring Data 风格分页壳 —— 客户端解析的是这个结构，**不是裸数组**。
 
     ⚠️ 第 119 期：与 Spring ``PageImpl`` 对齐了两处，此前是两个「看着更友好、
@@ -454,6 +531,11 @@ def paginate(items: list, page=0, size=20) -> dict:
        —— 夹住会把「客户端算错页」伪装成「这一页就这么点内容」，翻页循环永远停不下来。
     ``first`` / ``last`` 仍按 Spring 的算式（``number == 0`` / ``number + 1 >= totalPages``），
     故空集合上两者都是 true。
+
+    ``build``：给定时 ``items`` 是**待建的源行**（书目 / 系列分组），只给**当前页**调一次 ——
+    列表端点必须这样。此前是「给全库造 DTO 再切片」：一个 2000 本的库每翻一页要造 2000 个
+    书 DTO、发 2000 次进度查询、开 2000 个 epub/PDF（第 266 期实测：300 本 367 ms、
+    60 本 EPUB 开 60 次 zip），而客户端其实只要 20~500 条。
     """
     try:
         page = max(0, int(page))
@@ -467,6 +549,8 @@ def paginate(items: list, page=0, size=20) -> dict:
     pages = (total + size - 1) // size
     start = page * size
     chunk = items[start:start + size]
+    if build is not None:
+        chunk = [build(x) for x in chunk]
     return {
         "content": chunk, "totalElements": total, "totalPages": pages,
         "size": size, "number": page, "numberOfElements": len(chunk),
@@ -505,7 +589,10 @@ def read_progress_dto(b: dict, prog: dict, th=None) -> dict:
     if _is_paged(b):
         out["page"] = locator + 1          # Komga 的页码从 1 起
     else:
-        href = _spine_href(b, locator)
+        # ⚠️ 没有进度行时不查 spine：`_spine_href` 要**打开这个 epub 的 zip**，而一页
+        # 500 本就是 500 次开文件（第 266 期实测 60 本 EPUB 一次列表请求开 60 次）。
+        # 未读的书位置就是起点，客户端按 `progression: 0` 走即可。
+        href = _spine_href(b, locator) if prog else f"chapter_{locator}.xhtml"
         out["locator"] = {
             "href": href, "type": "application/xhtml+xml",
             "locations": {"progression": round(min(max(percent, 0), 100) / 100.0, 6)},
@@ -554,9 +641,15 @@ def apply_read_progress(b: dict, payload: dict = None) -> tuple:
         if page <= 0:
             # 非法页码不覆盖位置（见 docstring）；percent 归零表示「读到这里」没有进度
             return (int((db.get_progress(b["id"]) or {}).get("locator") or 0), 0.0)
-        percent = 0.0
         if total > 0:
+            # ⚠️ 第 266 期：页码**夹到 [1, pagesCount]** 再落库。此前只挡 `page <= 0`，
+            # 一个越界值（客户端算错页 / 文件被替换后总页数变小）会原样落成
+            # `locator=998`、`percent=100`（实测 pagesCount=4 时 PUT page=999）——
+            # 这本书在书架上永久「已读」，而本应用自己的阅读器打开会指向不存在的页。
+            page = min(page, total)
             percent = numbers.percent(round(page / total * 100.0, 4))
+        else:
+            percent = 0.0
         return (numbers.index(page - 1), percent)
 
     loc = p.get("locator") or {}

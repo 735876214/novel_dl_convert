@@ -2755,13 +2755,9 @@ def opds_search(request: Request, q: str = Query(""), page: int = Query(1, ge=1)
     _opds_guard(request)
     term = (q or "").strip().lower()
     bs = _opds_books(request)
-    if term:
-        bs = [b for b in bs
-              if term in (b.get("title") or "").lower()
-              or term in (b.get("author") or "").lower()
-              or term in (b.get("series") or "").lower()]
-    else:
-        bs = []
+    # 「哪个字段算命中」只有一处实现（`library.matches_text`）—— Komga 的
+    # `fullTextSearch` 也走它，免得同一本书在两个出口搜出不同结果（第 266 期）。
+    bs = [b for b in bs if library.matches_text(b, term)] if term else []
     bs = opds.sort_books(bs, "title", "asc")
     title = f"搜索：{q}" if term else "搜索（请带 ?q= 参数）"
     return _opds_xml(opds.acquisition_feed(_opds_base(request), title, "search", bs, page=page,
@@ -11292,8 +11288,12 @@ def api_metadata_apply(payload: dict = Body(...)):
 #    必须注册在 `/books/{book_id}` **之前**，否则 "latest" 会被当成 bookId 吞掉
 #    （本项目在 `/api/books/export` 与 `/opds/all` 上踩过同一个坑）。
 
-_KO_PAGE = Query(0, ge=0)
-_KO_SIZE = Query(20, ge=1, le=500)
+# ⚠️ **不加 `ge=` / `le=`**（第 266 期）：加了以后 `?size=1000` / `?page=-1` 会变成
+# FastAPI 的 **422 校验体**，而客户端解析的是**分页壳** —— 它只会显示「加载失败」，
+# 用户也无从知道是一页要得太多。夹边界本来就在 `komga_api.paginate()` 里（size ≤500、
+# page ≥0），所以这里**不设约束**、让它去夹。
+_KO_PAGE = Query(0)
+_KO_SIZE = Query(20)
 _KO_401 = {"WWW-Authenticate": 'Basic realm="Komga"'}
 
 
@@ -11327,25 +11327,35 @@ def _ko_404(msg: str = "不存在"):
     raise HTTPException(404, msg)
 
 
-def _ko_sorted(items: list, sort: str, default: str = "name") -> list:
-    """`sort=field,asc|desc`。**不认识的字段按 default 排，不报错** ——
-    客户端传的排序字段五花八门，为一个排序把整页打回失败不值得。"""
+def _ko_order(rows: list, sort: str, key, default: str = "name") -> list:
+    """按 ``sort=field,asc|desc`` 排**源行**（书目 dict / 系列分组 / 收藏夹行）。
+
+    ``key`` 是 ``field → 排序键`` 的解析器（`komga_api.book_sort_key` 那一族）。
+    **不认识的字段按 ``default`` 排、不报错** —— 客户端传的排序字段五花八门，
+    为一个排序把整页打回失败不值得。
+
+    ⚠️ 排序对象是**源行**而不是 DTO：列表端点只给当前页造 DTO（第 266 期），
+    所以排序必须发生在造 DTO 之前。DTO 排序的旧写法（`_ko_sorted`）已删除 ——
+    它要求先给全库造 DTO，正是那一版把「翻一页」变成「跑全库」。
+    """
     field, _, direction = (sort or "").partition(",")
     field = field.strip() or default
     desc = direction.strip().lower() in ("desc", "descending")
-    keys = {
-        "name": lambda x: str(x.get("name") or "").lower(),
-        "title": lambda x: str((x.get("metadata") or {}).get("title") or "").lower(),
-        "createdDate": lambda x: str(x.get("created") or ""),
-        "lastModifiedDate": lambda x: str(x.get("lastModified") or ""),
-        "fileSize": lambda x: x.get("sizeBytes") or 0,
-        "sizeBytes": lambda x: x.get("sizeBytes") or 0,
-        "booksCount": lambda x: x.get("booksCount") or 0,
-        "releaseDate": lambda x: str((x.get("metadata") or {}).get("releaseDate") or ""),
-        "metadata.releaseDate": lambda x: str((x.get("metadata") or {}).get("releaseDate") or ""),
-        "readProgress.lastModified": lambda x: str((x.get("readProgress") or {}).get("lastModified") or ""),
-    }
-    return sorted(items, key=keys.get(field) or keys[default], reverse=desc)
+    k = key(field) or key(default)
+    return sorted(rows, key=k, reverse=desc)
+
+
+def _ko_cond_value(cl: dict, key: str) -> dict:
+    """条件里某个字段的**字典值**；不是字典就当没给（第 266 期）。
+
+    ⚠️ 客户端的 `condition` 形状并不统一：Komga 1.19 里 `title` 是
+    ``{"operator": …}`` / ``{"contains": …}``，别的实现直接给字符串。
+    此前一律 ``(cl[k] or {}).get(…)`` ⇒ **字符串值直接 AttributeError ⇒ 整页 500**
+    （实测 ``{"condition": {"title": "球状"}}``），与「陌生条件一律忽略、宁可多返回」
+    这条口径正好相反。
+    """
+    v = cl.get(key)
+    return v if isinstance(v, dict) else {}
 
 
 def _ko_read_filter(payload: dict):
@@ -11355,17 +11365,27 @@ def _ko_read_filter(payload: dict):
     其余一概忽略 —— 宁可多返回，也不让客户端因为一个陌生的过滤条件整页失败
     （失败还很难排查：客户端只会显示「加载失败」）。
     """
-    cond = (payload or {}).get("condition") or {}
-    clauses = cond.get("allOf") or ([cond] if cond else [])
+    body = payload if isinstance(payload, dict) else {}
+    cond = body.get("condition")
+    if not isinstance(cond, dict):
+        cond = {}
+    _all = cond.get("allOf")
+    clauses = _all if isinstance(_all, list) else ([cond] if cond else [])
     # 第 40 期：readStatus 的三档也走配置阈值。过滤函数是**逐本**调用的，所以解析器
     # 在这里建一次、闭包捕获（见 komga_api.threshold_resolver）。
     th = komga_api.threshold_resolver()
     tests = []
+    # 第 266 期：**服务端搜索**。此前 `fullTextSearch` 全仓零命中 ⇒ 客户端搜「三体」
+    # 拿回的是整个书库（用户以为搜索坏了）。判据复用 `library.matches_text`
+    # （OPDS 搜索框也走它），不另写一份匹配规则。
+    term = str(body.get("fullTextSearch") or "").strip()
+    if term:
+        tests.append(lambda b, _t=term: library.matches_text(b, _t))
     for cl in clauses:
         if not isinstance(cl, dict):
             continue
         if "libraryId" in cl:
-            want = ((cl["libraryId"] or {}).get("in") or [])
+            want = (_ko_cond_value(cl, "libraryId").get("in") or [])
             if want:
                 wset = {str(x) for x in want}
                 # 老客户端可能仍发兜底常量（单库时代的「就那一个库」）；第 37 期起没有
@@ -11375,7 +11395,7 @@ def _ko_read_filter(payload: dict):
                     wset.update(str(l.get("id") or "") for l in library.libraries())
                 tests.append(lambda b, _w=wset: komga_api.book_library_id(b) in _w)
         if "readStatus" in cl:
-            want = [str(s).upper() for s in ((cl["readStatus"] or {}).get("in") or [])]
+            want = [str(s).upper() for s in (_ko_cond_value(cl, "readStatus").get("in") or [])]
             if want:
                 def _read(b, _w=want, _th=th):
                     pct = float((db.get_progress(b["id"]) or {}).get("percent") or 0)
@@ -11385,23 +11405,27 @@ def _ko_read_filter(payload: dict):
                     return st in _w
                 tests.append(_read)
         if "mediaStatus" in cl:
-            want = [str(s).upper() for s in ((cl["mediaStatus"] or {}).get("in") or [])]
+            want = [str(s).upper() for s in (_ko_cond_value(cl, "mediaStatus").get("in") or [])]
             if want and "READY" not in want:
                 tests.append(lambda b: False)
         if "seriesId" in cl:
-            want = set((cl["seriesId"] or {}).get("in") or [])
+            want = set(_ko_cond_value(cl, "seriesId").get("in") or [])
             if want:
                 tests.append(lambda b, _w=want: komga_api.series_id(
                     komga_api.series_name_of(b)) in _w)
         if "tag" in cl:
-            want = [str(t).lower() for t in ((cl["tag"] or {}).get("in") or [])]
+            want = [str(t).lower() for t in (_ko_cond_value(cl, "tag").get("in") or [])]
             if want:
                 def _tag(b, _w=want):
                     have = [str(t).lower() for t in (b.get("tags") or [])]
                     return any(t in have for t in _w)
                 tests.append(_tag)
         if "title" in cl:
-            want = str((cl["title"] or {}).get("contains") or "").lower()
+            raw = cl["title"]
+            if isinstance(raw, dict):
+                want = str(raw.get("contains") or raw.get("value") or "").strip().lower()
+            else:
+                want = str(raw or "").strip().lower()
             if want:
                 tests.append(lambda b, _w=want: _w in str(b.get("title") or "").lower())
     if not tests:
@@ -11528,7 +11552,7 @@ def _ko_library_id_of(payload: dict) -> str:
     for cl in (cond.get("allOf") or ([cond] if cond else [])):
         if not isinstance(cl, dict) or "libraryId" not in cl:
             continue
-        for raw in ((cl["libraryId"] or {}).get("in") or []):
+        for raw in (_ko_cond_value(cl, "libraryId").get("in") or []):
             lid = str(raw or "").strip()
             if not lid:
                 continue
@@ -11573,12 +11597,17 @@ def ko_logout(request: Request):
 def ko_me(request: Request):
     """客户端「测试连接」常调它。"""
     user = _komga_guard(request)
+    # ⚠️ 第 266 期：这里**必须**与 `GET /api/v1/libraries` 用同一份可见性判据
+    # （`_ko_visible_libraries`：库类型能力 + `komga.expose` + 只读凭据范围）。
+    # 此前用的是 `library.libraries()` 全量 ⇒ 只读凭据只许看 A 库时，`/libraries` 回 [A]、
+    # `/users/me` 却回 [default, A, B]（实测）—— 客户端按 sharedLibraries 画库列表，
+    # 用户点进 B 库是空的/404，而 `default` 那个 id 连 `/libraries` 都不返回。
     return {
         "id": "1", "email": f"{user}@novelforge.local",
         "roles": ["ADMIN", "USER"], "labelsAllow": [], "labelsExclude": [],
         "sharedLibraries": [
             {"libraryId": lib["id"], "userId": "1", "role": "ADMIN"}
-            for lib in library.libraries()
+            for lib in _ko_visible_libraries(request)
         ],
     }
 
@@ -11599,10 +11628,14 @@ def _ko_series_page(request: Request, page: int, size: int, sort: str, library_i
     # 列表端点遍历**全部**系列 → 走轻量分层（不聚合），一次取全元数据行
     rows = db.all_series_meta()
     th = komga_api.threshold_resolver()      # 第 40 期：一次解析、逐系列复用（见 komga_api）
-    items = [komga_api.series_dto(name, bs, series_meta.effective_light(name, rows.get(name) or {}),
-                                  th)
-             for name, bs in _ko_grouped(request, library_id).items()]
-    return komga_api.paginate(_ko_sorted(items, sort, "name"), page, size)
+    prog = db.all_progress()                 # 第 266 期：**一次**取全量进度，不逐本查
+    return komga_api.paginate(
+        _ko_order(list(_ko_grouped(request, library_id).items()), sort,
+                  komga_api.series_sort_key, "name"),
+        page, size,
+        build=lambda pair: komga_api.series_dto(
+            pair[0], pair[1], series_meta.effective_light(pair[0], rows.get(pair[0]) or {}),
+            th, prog))
 
 
 @app.get("/api/v1/series")
@@ -11630,9 +11663,14 @@ def ko_series_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZ
     _komga_guard(request)
     rows = db.all_series_meta()
     th = komga_api.threshold_resolver()
-    items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}), th)
-             for n, bs in _ko_grouped(request, library_id).items()]
-    return komga_api.paginate(_ko_sorted(items, "lastModifiedDate,desc"), page, size)
+    prog = db.all_progress()
+    return komga_api.paginate(
+        _ko_order(list(_ko_grouped(request, library_id).items()), "lastModifiedDate,desc",
+                  komga_api.series_sort_key, "name"),
+        page, size,
+        build=lambda pair: komga_api.series_dto(
+            pair[0], pair[1], series_meta.effective_light(pair[0], rows.get(pair[0]) or {}),
+            th, prog))
 
 
 @app.get("/api/v1/series/{series_id}")
@@ -11646,7 +11684,7 @@ def ko_series_one(request: Request, series_id: str):
     # 第 226 期：`effective` 把**已有的成员书 items** 传进去 —— 它内部本来会自己
     # 再扫一遍成员书目（等于同一个请求里扫两次）。
     return komga_api.series_dto(name, items, series_meta.effective(name, items),
-                                komga_api.threshold_resolver())
+                                komga_api.threshold_resolver(), db.all_progress())
 
 
 @app.get("/api/v1/series/{series_id}/books")
@@ -11658,8 +11696,11 @@ def ko_series_books(request: Request, series_id: str, page: int = _KO_PAGE,
         _ko_404("系列不存在")
     name, items = found
     th = komga_api.threshold_resolver()
-    dtos = [komga_api.book_dto(b, name, th) for b in items]
-    return komga_api.paginate(_ko_sorted(dtos, sort, "name"), page, size)
+    prog = db.all_progress()
+    return komga_api.paginate(
+        _ko_order(items, sort, lambda f: komga_api.book_sort_key(f, prog), "name"),
+        page, size,
+        build=lambda b: komga_api.book_dto(b, name, th, prog.get(b["id"])))
 
 
 @app.get("/api/v1/series/{series_id}/thumbnail")
@@ -11678,9 +11719,24 @@ def ko_series_thumb(request: Request, series_id: str):
 
 # ---- 书籍（latest / ondeck 必须先于 {book_id}）----
 
-def _ko_books_dto(request: Request, sort: str = "", library_id: str = "") -> list:
-    th = komga_api.threshold_resolver()      # 第 40 期：逐本构造 DTO，解析器必须只建一次
-    return _ko_sorted([komga_api.book_dto(b, th=th) for b in _ko_books(request, library_id)], sort, "name")
+def _ko_books_page(request: Request, page, size, sort: str = "", library_id: str = "",
+                   payload: dict = None) -> dict:
+    """书列表的分页结果（``/books``、``/books/list``、``/books/latest`` 共用）。
+
+    ⚠️ **先排、再切片、最后才给这一页造 DTO**（第 266 期）。此前是「给全库造 DTO 再切片」：
+    一个 2000 本的库每翻一页要造 2000 个书 DTO、发 2000 次进度查询、开 2000 个 epub/PDF
+    （实测 300 本 367 ms / 60 本 EPUB 开 60 次 zip），而客户端其实只要 20~500 条。
+    """
+    bs = _ko_books(request, library_id)          # 可见库范围内（有声书库不进 Komga）
+    flt = _ko_read_filter(payload)               # 搜索 + 筛选条件（`payload` 为 None 时不过滤）
+    if flt:
+        bs = [b for b in bs if flt(b)]
+    th = komga_api.threshold_resolver()          # 第 40 期：解析器只建一次
+    prog = db.all_progress()                     # 第 266 期：一次取全量进度
+    return komga_api.paginate(
+        _ko_order(bs, sort, lambda f: komga_api.book_sort_key(f, prog), "name"),
+        page, size,
+        build=lambda b: komga_api.book_dto(b, th=th, prog=prog.get(b["id"])))
 
 
 @app.get("/api/v1/books")
@@ -11691,28 +11747,21 @@ def ko_books_get(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
     ``library_id`` 为空 = 全部**可见**书库（与加参数前一致）。
     """
     _komga_guard(request)
-    return komga_api.paginate(_ko_books_dto(request, sort, library_id), page, size)
+    return _ko_books_page(request, page, size, sort, library_id)
 
 
 @app.post("/api/v1/books/list")
 def ko_books_list(request: Request, payload: dict = Body(None),
                   page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
     _komga_guard(request)
-    bs = _ko_books(request)                     # 可见库范围内（有声书库不进 Komga）
-    flt = _ko_read_filter(payload)
-    if flt:
-        bs = [b for b in bs if flt(b)]
-    th = komga_api.threshold_resolver()
-    items = _ko_sorted([komga_api.book_dto(b, th=th) for b in bs], sort, "name")
-    return komga_api.paginate(items, page, size)
+    return _ko_books_page(request, page, size, sort, payload=payload)
 
 
 @app.get("/api/v1/books/latest")
 def ko_books_latest(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
                     library_id: str = ""):
     _komga_guard(request)
-    return komga_api.paginate(_ko_sorted(_ko_books_dto(request, "", library_id),
-                                         "lastModifiedDate,desc"), page, size)
+    return _ko_books_page(request, page, size, "lastModifiedDate,desc", library_id)
 
 
 @app.get("/api/v1/books/ondeck")
@@ -11720,9 +11769,10 @@ def ko_books_ondeck(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE
     """待读：**系列里已有在读书**时，该系列的第一本未读书（Komga 的语义）。"""
     _komga_guard(request)
     th = komga_api.threshold_resolver()
+    prog = db.all_progress()                 # 第 266 期：一次取全量，不逐本查
     out = []
     for name, items in _ko_grouped(request).items():
-        pcts = [float((db.get_progress(b["id"]) or {}).get("percent") or 0) for b in items]
+        pcts = [float((prog.get(b["id"]) or {}).get("percent") or 0) for b in items]
         # 「在读」= 过了该书的开始阈值、且还没到它的读完阈值（第 40 期：口径随书所属库）
         fin = [komga_api.thresholds_of(th, b)[1] for b in items]
         sta = [komga_api.thresholds_of(th, b)[0] for b in items]
@@ -11730,8 +11780,10 @@ def ko_books_ondeck(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE
             continue
         nxt = next((b for b, p, f in zip(items, pcts, fin) if p < f), None)
         if nxt:
-            out.append(komga_api.book_dto(nxt, name, th))
-    return komga_api.paginate(out, page, size)
+            out.append((nxt, name))
+    return komga_api.paginate(out, page, size,
+                              build=lambda pair: komga_api.book_dto(
+                                  pair[0], pair[1], th, prog.get(pair[0]["id"])))
 
 
 @app.post("/api/v1/series/{series_id}/read-progress")
@@ -11782,7 +11834,12 @@ def ko_book_file(request: Request, book_id: str):
     path = library.abs_path(b)
     if not path.is_file():
         _ko_404("文件不存在")
-    return FileResponse(path, media_type="application/octet-stream",
+    # ⚠️ 第 266 期：用 `MEDIA_TYPES`（DTO 里报的就是它）。此前恒为
+    # `application/octet-stream` ⇒ 同一本书「DTO 说是 comicbook+zip、下载说是未知二进制」，
+    # 而第 123 期补那张表正是为了让客户端认得出格式。
+    media = komga_api.MEDIA_TYPES.get(
+        str(b.get("format") or "").upper(), "application/octet-stream")
+    return FileResponse(path, media_type=media,
                         filename=pathlib.PurePosixPath(b["name"]).name)
 
 
@@ -11889,10 +11946,11 @@ def _ko_collection_or_404(cid) -> dict:
 def ko_collections(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
                    sort: str = ""):
     _komga_guard(request)
-    items = [komga_api.collection_dto(r["id"], r["name"], r.get("created_at"),
-                                      _ko_collection_groups(request, r["id"]))
-             for r in db.list_collections()]
-    return komga_api.paginate(_ko_sorted(items, sort, "name"), page, size)
+    return komga_api.paginate(
+        _ko_order(db.list_collections(), sort, komga_api.collection_sort_key, "name"),
+        page, size,
+        build=lambda r: komga_api.collection_dto(
+            r["id"], r["name"], r.get("created_at"), _ko_collection_groups(request, r["id"])))
 
 
 @app.post("/api/v1/collections")
@@ -11952,9 +12010,14 @@ def ko_collection_series(request: Request, cid: int, page: int = _KO_PAGE,
     _ko_collection_or_404(cid)
     rows = db.all_series_meta()
     th = komga_api.threshold_resolver()
-    items = [komga_api.series_dto(n, bs, series_meta.effective_light(n, rows.get(n) or {}), th)
-             for n, bs in _ko_collection_groups(request, cid).items()]
-    return komga_api.paginate(_ko_sorted(items, "", "name"), page, size)
+    prog = db.all_progress()
+    return komga_api.paginate(
+        _ko_order(list(_ko_collection_groups(request, cid).items()), "",
+                  komga_api.series_sort_key, "name"),
+        page, size,
+        build=lambda pair: komga_api.series_dto(
+            pair[0], pair[1], series_meta.effective_light(pair[0], rows.get(pair[0]) or {}),
+            th, prog))
 
 
 @app.put("/api/v1/collections/{cid}/series")
