@@ -589,11 +589,18 @@ def _is_paged(b: dict) -> bool:
     return str(b.get("format") or "").upper() in ("CBZ", "PDF")
 
 
-def read_progress_dto(b: dict, prog: dict, th=None) -> dict:
-    """本项目进度 → Komga 的 readProgress（客户端据此显示「读到第几页/百分之多少」）。
+def read_progress_dto(b: dict, prog: dict, th=None):
+    """本项目进度 → Komga 的 readProgress；**没有进度行时返回 ``None``**（第 268 期）。
+
+    ⚠️ Komga 用 `readProgress: **null**` 表示「未读」。此前这里永远回一个对象 ——
+    于是 `DELETE /read-progress`（写的是 `percent=0` 的一行）之后，客户端仍然显示
+    「上次阅读 11-06 / 继续阅读第 1 页」，而用户点的是「标为未读」。
+    现在「没有行 ⇒ null」，与 Komga 一致；`DELETE` 也改成**真删行**（见 `db.clear_progress`）。
 
     ``completed`` 的判据是**配置阈值**（第 40 期，默认 99.5%），与统计 / 书架 / 成就同源。
     """
+    if not prog:
+        return None
     percent = float((prog or {}).get("percent") or 0)
     locator = int((prog or {}).get("locator") or 0)
     updated = (prog or {}).get("updated_at") or 0
@@ -705,17 +712,19 @@ def mark_series_read(items: list, completed: bool = True) -> int:
     （读完阈值走配置，第 40 期起可配；与 `read_progress_dto`、`_ko_read_filter` 同一口径），
     所以写完立即生效，不需要给 SeriesDto 加字段。
     """
+    if not completed:
+        # 「标记未读」= **删掉进度行**（Komga 的 `readProgress: null`），
+        # 不是写一个「读到第 0 页」—— 后者在客户端看来仍是「有进度」（第 268 期）。
+        return db.clear_progress([str(b.get("id") or "") for b in items or ()])
+
     rows = []
     for b in items or ():
         bid = str(b.get("id") or "")
         if not bid:
             continue
-        if completed:
-            # 「标记已读」保留每本书的原位置（见 docstring）
-            loc = int((db.get_progress(bid) or {}).get("locator") or 0)
-            rows.append((bid, loc, 100.0))
-        else:
-            rows.append((bid, 0, 0.0))
+        # 「标记已读」保留每本书的原位置（见 docstring）
+        loc = int((db.get_progress(bid) or {}).get("locator") or 0)
+        rows.append((bid, loc, 100.0))
     # ⚠️ 第 267 期：**一个事务**写完。逐本 `set_progress` 是每条一次提交 ——
     # 200 本实测 460 ms，2000 章的长系列到秒级，正好撞客户端超时（超时会重试，
     # 又把同一批写一遍）。

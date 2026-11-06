@@ -1706,6 +1706,36 @@ def set_progress(book_id: str, locator: int, percent: float, cfi: str = "",
     return now
 
 
+def clear_progress(book_ids) -> int:
+    """**删掉**这些书的全部进度行（书级 + 每文件），返回删除行数（第 268 期）。
+
+    ⚠️ 与 `set_progress(..., 0, 0)` 是**两件事**，别混：
+    · 写 0 留下的是「读到第 0 页」的一行 —— Komga 的 `readProgress` 于是**不是 null**，
+      客户端继续显示「上次阅读 11-06 / 继续阅读第 1 页」，用户明明点的是「标为未读」；
+    · 删行才是「没有进度」——Komga 用 `readProgress: null` 表达这个状态。
+    `DELETE /api/v1/books/{id}/read-progress` 与系列级「标记未读」都走这里。
+    """
+    ids = [book_ids] if isinstance(book_ids, str) else [str(x) for x in (book_ids or ())]
+    ids = [i for i in ids if i]
+    if not ids:
+        return 0
+    c = _connect()
+    with _lock:
+        n = 0
+        for bid in ids:
+            n += int(c.execute("DELETE FROM progress WHERE book_id=?", (bid,)).rowcount or 0)
+        c.commit()
+    try:
+        from . import events
+        for bid in ids:
+            events.publish("book:progress-changed",
+                           {"book_id": bid, "file_rel": "", "percent": 0.0,
+                            "updated_at": time.time()})
+    except Exception:
+        pass
+    return n
+
+
 def set_progress_many(rows) -> int:
     """批量写阅读进度：``[(book_id, locator, percent)]`` → 写入条数（第 267 期）。
 

@@ -11399,29 +11399,39 @@ def _ko_cond_value(cl: dict, key: str) -> dict:
     return v if isinstance(v, dict) else {}
 
 
-def _ko_read_filter(payload: dict):
-    """把 Komga 的 SearchCondition 翻成过滤函数；``None`` 表示不过滤。
+def _ko_condition_groups(payload: dict) -> tuple:
+    """把 Komga 的 `SearchCondition` 拆成 ``(allOf 子句, anyOf 子句)``（第 268 期）。
 
-    **只支持最常见的几个条件**（libraryId / readStatus / mediaStatus / seriesId / tag / title），
-    其余一概忽略 —— 宁可多返回，也不让客户端因为一个陌生的过滤条件整页失败
-    （失败还很难排查：客户端只会显示「加载失败」）。
+    ⚠️ Komga 的 `SearchCondition` **有两半**：`allOf`（**全部**满足，AND）与
+    `anyOf`（**任一**满足，OR）。此前只读 `allOf` ⇒ 只发 `anyOf` 的客户端拿到的是
+    **全量** —— 搜索 / 筛选等于没做，而用户只会觉得「搜出来不对」。
+    （与第 266 期修的 `fullTextSearch` 是同一类缺陷，只是换了一半。）
+
+    兼容三种老写法：只给 `condition` 本身（不在 `allOf` 里）、`allOf` 不是列表、整包不是字典。
     """
     body = payload if isinstance(payload, dict) else {}
     cond = body.get("condition")
     if not isinstance(cond, dict):
-        cond = {}
-    _all = cond.get("allOf")
-    clauses = _all if isinstance(_all, list) else ([cond] if cond else [])
-    # 第 40 期：readStatus 的三档也走配置阈值。过滤函数是**逐本**调用的，所以解析器
-    # 在这里建一次、闭包捕获（见 komga_api.threshold_resolver）。
-    th = komga_api.threshold_resolver()
+        return [], []
+    all_of = cond.get("allOf")
+    any_of = cond.get("anyOf")
+    if not isinstance(all_of, list):
+        # 老客户端把条件直接摊在 `condition` 上（没有 allOf 这层）
+        all_of = [cond] if any(k for k in cond if k not in ("anyOf",)) else []
+    if not isinstance(any_of, list):
+        any_of = []
+    return ([cl for cl in all_of if isinstance(cl, dict)],
+            [cl for cl in any_of if isinstance(cl, dict)])
+
+
+def _ko_clause_tests(clauses, th) -> list:
+    """一组 Komga 子句 → 谓词列表（每个谓词吃一本**书**）。语义由调用方组合：
+    `allOf` 的这组要**全部**成立，`anyOf` 的那组**任一**成立即可。
+
+    不认识的字段 / 不是字典的值一律**跳过** —— 宁可多返回，也不让客户端整页失败
+    （第 266 期的口径；`_ko_cond_value` 负责挡掉「值不是字典」那种形状）。
+    """
     tests = []
-    # 第 266 期：**服务端搜索**。此前 `fullTextSearch` 全仓零命中 ⇒ 客户端搜「三体」
-    # 拿回的是整个书库（用户以为搜索坏了）。判据复用 `library.matches_text`
-    # （OPDS 搜索框也走它），不另写一份匹配规则。
-    term = str(body.get("fullTextSearch") or "").strip()
-    if term:
-        tests.append(lambda b, _t=term: library.matches_text(b, _t))
     for cl in clauses:
         if not isinstance(cl, dict):
             continue
@@ -11436,7 +11446,7 @@ def _ko_read_filter(payload: dict):
                     wset.update(str(l.get("id") or "") for l in library.libraries())
                 tests.append(lambda b, _w=wset: komga_api.book_library_id(b) in _w)
         if "readStatus" in cl:
-            want = [str(s).upper() for s in (_ko_cond_value(cl, "readStatus").get("in") or [])]
+            want = [str(x).upper() for x in (_ko_cond_value(cl, "readStatus").get("in") or [])]
             if want:
                 def _read(b, _w=want, _th=th):
                     pct = float((db.get_progress(b["id"]) or {}).get("percent") or 0)
@@ -11446,7 +11456,7 @@ def _ko_read_filter(payload: dict):
                     return st in _w
                 tests.append(_read)
         if "mediaStatus" in cl:
-            want = [str(s).upper() for s in (_ko_cond_value(cl, "mediaStatus").get("in") or [])]
+            want = [str(x).upper() for x in (_ko_cond_value(cl, "mediaStatus").get("in") or [])]
             if want and "READY" not in want:
                 tests.append(lambda b: False)
         if "seriesId" in cl:
@@ -11462,16 +11472,101 @@ def _ko_read_filter(payload: dict):
                     return any(t in have for t in _w)
                 tests.append(_tag)
         if "title" in cl:
-            raw = cl["title"]
-            if isinstance(raw, dict):
-                want = str(raw.get("contains") or raw.get("value") or "").strip().lower()
-            else:
-                want = str(raw or "").strip().lower()
+            want = _ko_title_needle(cl["title"])
             if want:
                 tests.append(lambda b, _w=want: _w in str(b.get("title") or "").lower())
-    if not tests:
+    return tests
+
+
+def _ko_title_needle(raw) -> str:
+    """`condition.title` 的搜索词：认 `{"contains"}` / `{"value"}` / 裸字符串三种写法。"""
+    if isinstance(raw, dict):
+        return str(raw.get("contains") or raw.get("value") or "").strip().lower()
+    return str(raw or "").strip().lower()
+
+
+def _ko_series_filter(payload: dict):
+    """系列侧的过滤函数；``None`` = 不过滤（第 268 期）。
+
+    ⚠️ 此前 `POST /api/v1/series/list` **只认 `libraryId`** —— `fullTextSearch`、
+    `allOf.title`、`anyOf` 全被忽略（实测：搜「三体」回全部系列，连 `allOf.title.contains`
+    都不过滤）。第 266 期给 books 补的那套没覆盖到这里，是**半截修复**。
+
+    系列的字段比书少（没有 readStatus / mediaStatus / tag-in-series 这些），所以只解释
+    「按名字搜」与「按库筛」；其余子句**忽略**（宁可多返回）。
+    """
+    clauses, any_clauses = _ko_condition_groups(payload)
+    body = payload if isinstance(payload, dict) else {}
+    term = str(body.get("fullTextSearch") or "").strip().lower()
+
+    def _one(cl, kind: str):
+        """一个子句 → 谓词；只认这个函数认识的键。"""
+        if kind == "title":
+            needle = _ko_title_needle(cl["title"])
+            return (lambda pair, _w=needle: _w in str(pair[0]).lower()) if needle else None
+        if kind == "libraryId":
+            want = _ko_cond_value(cl, "libraryId").get("in") or []
+            wset = {str(x) for x in want} - {komga_api.LIBRARY_ID}
+            if not wset:
+                return None
+            return lambda pair, _w=wset: komga_api.book_library_id(
+                (pair[1] or [{}])[0]) in _w
         return None
-    return lambda b: all(t(b) for t in tests)
+
+    def _tests(group):
+        out = []
+        for cl in group:
+            for kind in ("title", "libraryId"):
+                if kind in cl:
+                    t = _one(cl, kind)
+                    if t:
+                        out.append(t)
+        return out
+
+    and_tests = _tests(clauses)
+    or_tests = _tests(any_clauses)
+    if term:
+        and_tests.append(lambda pair, _t=term: _t in str(pair[0]).lower())
+    if not and_tests and not or_tests:
+        return None
+
+    def _match(pair):
+        if not all(t(pair) for t in and_tests):
+            return False
+        return any(t(pair) for t in or_tests) if or_tests else True
+    return _match
+
+
+def _ko_read_filter(payload: dict):
+    """把 Komga 的 SearchCondition 翻成过滤函数；``None`` 表示不过滤。
+
+    **只支持最常见的几个条件**（libraryId / readStatus / mediaStatus / seriesId / tag / title），
+    其余一概忽略 —— 宁可多返回，也不让客户端因为一个陌生的过滤条件整页失败
+    （失败还很难排查：客户端只会显示「加载失败」）。
+    """
+    body = payload if isinstance(payload, dict) else {}
+    clauses, any_clauses = _ko_condition_groups(payload)
+    # 第 40 期：readStatus 的三档也走配置阈值。过滤函数是**逐本**调用的，所以解析器
+    # 在这里建一次、闭包捕获（见 komga_api.threshold_resolver）。
+    th = komga_api.threshold_resolver()
+    tests = []
+    or_tests = _ko_clause_tests(any_clauses, th)
+    # 第 266 期：**服务端搜索**。此前 `fullTextSearch` 全仓零命中 ⇒ 客户端搜「三体」
+    # 拿回的是整个书库（用户以为搜索坏了）。判据复用 `library.matches_text`
+    # （OPDS 搜索框也走它），不另写一份匹配规则。
+    term = str(body.get("fullTextSearch") or "").strip()
+    if term:
+        tests.append(lambda b, _t=term: library.matches_text(b, _t))
+    tests += _ko_clause_tests(clauses, th)
+    if not tests and not or_tests:
+        return None
+
+    def _match(b):
+        if not all(t(b) for t in tests):
+            return False
+        return any(t(b) for t in or_tests) if or_tests else True
+    return _match
+
 
 
 # ---- 按库过滤（第 15 期）----
@@ -11589,9 +11684,9 @@ def _ko_library_id_of(payload: dict) -> str:
     「就那一个库」。第 37 期起没有默认库可对应，映射成**空串 = 全部可见书库**
     （与 `_ko_read_filter` 里「展开成全部书库」同一个口径）。
     """
-    cond = (payload or {}).get("condition") or {}
-    for cl in (cond.get("allOf") or ([cond] if cond else [])):
-        if not isinstance(cl, dict) or "libraryId" not in cl:
+    clauses, any_clauses = _ko_condition_groups(payload)   # 第 268 期：两半都读
+    for cl in list(clauses) + list(any_clauses):
+        if "libraryId" not in cl:
             continue
         for raw in (_ko_cond_value(cl, "libraryId").get("in") or []):
             lid = str(raw or "").strip()
@@ -11664,15 +11759,23 @@ def ko_libraries(request: Request):
 
 # ---- 系列（latest 必须先于 {series_id}）----
 
-def _ko_series_page(request: Request, page: int, size: int, sort: str, library_id: str = "") -> dict:
-    """``library_id`` 为空 = 全部**可见**书库（与加参数前一致）。"""
+def _ko_series_page(request: Request, page: int, size: int, sort: str,
+                    library_id: str = "", payload: dict = None) -> dict:
+    """``library_id`` 为空 = 全部**可见**书库（与加参数前一致）。
+
+    ``payload`` 是 `POST /series/list` 的请求体：其中的 `fullTextSearch` / `allOf` /
+    `anyOf`（第 268 期起）都要真的筛 —— 此前**只认 `libraryId`**，搜索等于没做。
+    """
     # 列表端点遍历**全部**系列 → 走轻量分层（不聚合），一次取全元数据行
     rows = db.all_series_meta()
     th = komga_api.threshold_resolver()      # 第 40 期：一次解析、逐系列复用（见 komga_api）
     prog = db.all_progress()                 # 第 266 期：**一次**取全量进度，不逐本查
+    groups = list(_ko_grouped(request, library_id or _ko_library_id_of(payload)).items())
+    flt = _ko_series_filter(payload)
+    if flt:
+        groups = [pair for pair in groups if flt(pair)]
     return komga_api.paginate(
-        _ko_order(list(_ko_grouped(request, library_id).items()), sort,
-                  komga_api.series_sort_key, "name"),
+        _ko_order(groups, sort, komga_api.series_sort_key, "name"),
         page, size,
         build=lambda pair: komga_api.series_dto(
             pair[0], pair[1], series_meta.effective_light(pair[0], rows.get(pair[0]) or {}),
@@ -11695,7 +11798,7 @@ def ko_series_list(request: Request, payload: dict = Body(None),
                    page: int = _KO_PAGE, size: int = _KO_SIZE, sort: str = ""):
     """筛选条件里的 ``libraryId`` 现在真的生效（此前 payload 被整个丢掉）。"""
     _komga_guard(request)
-    return _ko_series_page(request, page, size, sort, _ko_library_id_of(payload))
+    return _ko_series_page(request, page, size, sort, payload=payload)
 
 
 @app.get("/api/v1/series/latest")
@@ -11868,9 +11971,8 @@ def ko_book_thumb(request: Request, book_id: str):
     return api_book_cover(book_id, _CATALOG_COVER_WIDTH)
 
 
-@app.get("/api/v1/books/{book_id}/file")
-def ko_book_file(request: Request, book_id: str):
-    _komga_guard(request)
+def _ko_file_target(request: Request, book_id: str) -> "tuple[pathlib.Path, str]":
+    """`/file` 与它的 HEAD 共用：鉴权 + 可见性 + 存在性 + 媒体类型（第 268 期）。"""
     b = _ko_book(request, book_id) or _ko_404("书不存在")
     path = library.abs_path(b)
     if not path.is_file():
@@ -11878,10 +11980,49 @@ def ko_book_file(request: Request, book_id: str):
     # ⚠️ 第 266 期：用 `MEDIA_TYPES`（DTO 里报的就是它）。此前恒为
     # `application/octet-stream` ⇒ 同一本书「DTO 说是 comicbook+zip、下载说是未知二进制」，
     # 而第 123 期补那张表正是为了让客户端认得出格式。
-    media = komga_api.MEDIA_TYPES.get(
+    return path, komga_api.MEDIA_TYPES.get(
         str(b.get("format") or "").upper(), "application/octet-stream")
+
+
+def _ko_file_etag(path: pathlib.Path) -> str:
+    """整本书的 ETag：**mtime + 大小**（源不可变 ⇒ 这两个变了才有必要重传）。"""
+    st = path.stat()
+    return f'"{int(st.st_mtime_ns)}-{st.st_size}"'
+
+
+@app.get("/api/v1/books/{book_id}/file")
+def ko_book_file(request: Request, book_id: str):
+    _komga_guard(request)
+    path, media = _ko_file_target(request, book_id)
+    etag = _ko_file_etag(path)
+    # ⚠️ 第 268 期：**有条件请求就该回 304**。此前 `/file` 发 ETag 却永远回 200
+    # ——客户端每次取书都把整本重传一遍（几十到几百 MB）。
+    if _etag_matches(request.headers.get("if-none-match", ""), etag):
+        return Response(status_code=304, headers={"ETag": etag})
     return FileResponse(path, media_type=media,
-                        filename=pathlib.PurePosixPath(b["name"]).name)
+                        filename=pathlib.PurePosixPath(path.name).name,
+                        headers={"ETag": etag})
+
+
+@app.head("/api/v1/books/{book_id}/file")
+def ko_book_file_head(request: Request, book_id: str):
+    """HEAD：客户端用它在下载前探存在性 / 大小（第 268 期）。
+
+    ⚠️ FastAPI 的 `@app.get` **不会**自动加 HEAD（实测 `HEAD /health` 也是 404），
+    所以得显式声明 —— 否则客户端把「有这本书」判成「不存在」。
+    """
+    _komga_guard(request)
+    path, media = _ko_file_target(request, book_id)
+    st = path.stat()
+    # ⚠️ 安全头**只许从 `_media_headers` 来**（第 135 期立的唯一组装点）——
+    # 手写一份 `nosniff` 就是第二处，`tests/test_media_headers_135.py` 会当场红。
+    return Response(status_code=200, headers={
+        **_media_headers(),
+        "Content-Type": media,
+        "Content-Length": str(st.st_size),
+        "Accept-Ranges": "bytes",
+        "ETag": _ko_file_etag(path),
+    })
 
 
 @app.get("/api/v1/books/{book_id}/pages")
@@ -11894,9 +12035,8 @@ def ko_book_pages(request: Request, book_id: str):
     return pages
 
 
-@app.get("/api/v1/books/{book_id}/pages/{number}")
-def ko_book_page(request: Request, book_id: str, number: int, convert: str = ""):
-    _komga_guard(request)
+def _ko_page_of(request: Request, book_id: str, number: int, convert: str) -> tuple:
+    """`/pages/{n}` 与它的 HEAD 共用（第 268 期）：鉴权 + 可见性 + 取页。"""
     b = _ko_book(request, book_id) or _ko_404("书不存在")
     try:
         data, media = komga_api.page_image(b, number, convert)
@@ -11907,7 +12047,26 @@ def ko_book_page(request: Request, book_id: str, number: int, convert: str = "")
         raise HTTPException(503, str(e)) from None
     if not data:
         _ko_404("页不存在")
+    return data, media
+
+
+@app.get("/api/v1/books/{book_id}/pages/{number}")
+def ko_book_page(request: Request, book_id: str, number: int, convert: str = ""):
+    _komga_guard(request)
+    data, media = _ko_page_of(request, book_id, number, convert)
     return _media_bytes(data, media)
+
+
+@app.head("/api/v1/books/{book_id}/pages/{number}")
+def ko_book_page_head(request: Request, book_id: str, number: int, convert: str = ""):
+    """HEAD：客户端取页前探存在性 / 大小（第 268 期；FastAPI 的 GET 不自动带 HEAD）。"""
+    _komga_guard(request)
+    data, media = _ko_page_of(request, book_id, number, convert)
+    return Response(status_code=200, headers={
+        **_media_headers(),                     # 见上面 HEAD /file 的同一条说明
+        "Content-Type": media,
+        "Content-Length": str(len(data)),
+    })
 
 
 @app.get("/api/v1/books/{book_id}/manifest")
@@ -11952,7 +12111,10 @@ def ko_delete_read_progress(request: Request, book_id: str):
     _komga_guard(request)
     if not _ko_book(request, book_id):
         _ko_404("书不存在")
-    db.set_progress(book_id, 0, 0)
+    # ⚠️ 第 268 期：**真删行**。写 `percent=0` 留下的是「读到第 0 页」——
+    # Komga 的 `readProgress` 于是不是 null，客户端仍在显示「继续阅读」，
+    # 而用户点的是「标为未读」。
+    db.clear_progress(book_id)
     return Response(status_code=204)
 
 

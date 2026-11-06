@@ -79,8 +79,8 @@ def test_epub的page与pagesCount是同一把尺子(client, auth_headers, make_l
 
     b = client.get("/api/v1/books?size=5", headers=komga_on).json()["content"][0]
     print(f"\npagesCount={b['media']['pagesCount']}")
-    # 未读 ⇒ 不给 page（Komga 这一档是 null），只给 locator
-    assert "page" not in b["readProgress"], "未读的书不该报一个假页码"
+    # 未读 ⇒ readProgress 整个是 **null**（Komga 语义；第 268 期把「写 0」改成「真删行」）
+    assert b["readProgress"] is None, "未读的书不该报 readProgress"
 
     spine = library._spine(library.abs_path(library.by_id(b["id"])))
     client.put(f"/api/v1/books/{b['id']}/read-progress",
@@ -215,7 +215,7 @@ def test_系列标记已读走批量写(client, auth_headers, make_library, tmp_
                          headers=komga_on).status_code == 204
     bs = client.get(f"/api/v1/series/{s['id']}/books?size=100",
                     headers=komga_on).json()["content"]
-    assert not any(b["readProgress"]["completed"] for b in bs)
+    assert all(b["readProgress"] is None for b in bs), "「标记未读」要真删进度行（回 null）"
 
 
 # ---------------------------------------------------------------- 7. 错误体形状
