@@ -644,8 +644,15 @@ def test_Komga读到的仍是书级进度(isolated):  # noqa: ARG001
     db.set_progress("lib$komga", 9, 90.0, file_rel="y.epub")
 
     dto = komga_api.read_progress_dto(b, db.get_progress("lib$komga"))
-    assert dto["page"] == 10, "Komga 的 page 从 1 起；这里应当反映**最后在看的**那个文件"
+    # 本条要证的是「读到的**最新那一行**」—— 证据是 0.9 而不是 0.3。
+    #
+    # ⚠️ 第 267 期：这里原先断言 `dto["page"] == 10`（= locator + 1）。那是**章节序号**
+    # 冒充页码 —— 同一份 DTO 里 `media.pagesCount` 是估算的文本页数，两个单位混在一起，
+    # 客户端按 page/pagesCount 画出来的进度条与 `progression` 打架（20 章的书读到第 10 章
+    # 显示 1.2% vs 50%）。现在非 paged 格式的 `page` 由 percent 折算，没有 progress 就不给。
+    # 所以这里改断 `progression`：判据（书级 = 最新那行）不变，只是不再钉那个错误口径。
     assert dto["locator"]["locations"]["progression"] == 0.9
+    assert dto["page"] == 1, "这本假书没有 pagesCount ⇒ 折算不出页，给 1 而不是章节号"
 
 
 def test_Komga写进度落在书级那一行(isolated):  # noqa: ARG001

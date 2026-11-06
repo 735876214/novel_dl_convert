@@ -375,7 +375,11 @@ def series_dto(name: str, items: list, meta: dict = None, th=None,
         # summaryNumber 是「卷号」语义，不是简介，保持不动。
         "booksMetadata": {"authors": [], "tags": [], "releaseDate": None,
                           "summary": str(meta.get("description") or ""), "summaryNumber": ""},
-        "deleted": False, "oneshot": len(items) == 1,
+        # ⚠️ 第 267 期：`oneshot` = 「这些书**没有系列元数据**、系列名是拿书名顶上去的」
+        # （Komga 的语义：为单本书自动成系列）。此前判的是「成员数 == 1」⇒ **真实的**
+        # 单本系列也被标成 oneshot，客户端于是把它当单本、藏掉系列层级。
+        "deleted": False,
+        "oneshot": bool(items) and not any(str(b.get("series") or "").strip() for b in items),
     }
 
 
@@ -419,10 +423,21 @@ def book_dto(b: dict, series_name: str = "", th=None, prog=_UNSET) -> dict:
         except Exception:
             pages = 0
     sname = series_name or series_name_of(b)
-    try:
-        number = int(str(b.get("series_index") or "").strip() or 1)
-    except ValueError:
-        number = 1
+    # ⚠️ 第 267 期：卷号**保真**。此前是 `int(str(series_index or "").strip() or 1)`：
+    #  · 没有卷号 ⇒ 当成 **1**（等于断言「这是第一卷」）⇒ 一个 3 本的未编号系列里
+    #    三个都报 `number=1`，客户端显示三个「第 1 卷」；
+    #  · `"1.5"` ⇒ `int()` 抛 ValueError ⇒ 也落到 **1** ⇒ 中篇与真正的第一卷撞号
+    #    （而 `library._series_index_of` 特意保留了 1.5：「非整数序号要保留」）。
+    # Komga 的 `BookDto.number` 是 Int（1.5 这种只能取整），但**客户端显示「第几卷」
+    # 读的是 `metadata.number` / `numberSort`** —— 那两个必须是原文与浮点。
+    raw_number = str(b.get("series_index") or "").strip()
+    number_sort = 0.0
+    if raw_number:
+        try:
+            number_sort = float(raw_number)
+        except ValueError:
+            number_sort = 0.0
+    number = int(number_sort)
     profile = _PROFILES.get(fmt)
     return {
         "id": b["id"], "seriesId": series_id(sname), "seriesTitle": sname,
@@ -443,8 +458,9 @@ def book_dto(b: dict, series_name: str = "", th=None, prog=_UNSET) -> dict:
         "metadata": {
             "title": str(b.get("title") or ""), "titleLock": False,
             "summary": str(b.get("description") or ""), "summaryLock": False,
-            "number": str(number), "numberLock": False,
-            "numberSort": float(number), "numberSortLock": False,
+            # 原文（`"1.5"` / `""`），不做整数化 —— 见上面 raw_number 的说明
+            "number": raw_number, "numberLock": False,
+            "numberSort": number_sort, "numberSortLock": False,
             "releaseDate": _day(b.get("year")) or None, "releaseDateLock": False,
             "authors": ([{"name": str(b["author"]), "role": "writer"}] if b.get("author") else []),
             "authorsLock": False,
@@ -598,8 +614,16 @@ def read_progress_dto(b: dict, prog: dict, th=None) -> dict:
             "locations": {"progression": round(min(max(percent, 0), 100) / 100.0, 6)},
             "koboSpan": "",
         }
-        # 有些客户端（老版）只读 `page`：EPUB 也给一个「近似页码」，避免显示空白
-        out["page"] = locator + 1
+        # ⚠️ 第 267 期：`page` 与 `media.pagesCount` 必须是**同一个单位**。
+        # 此前这里是 `locator + 1`，而 locator 是**章节序号**、pagesCount 是**估算的
+        # 文本页数**：一本 20 章、pagesCount=883 的书读到第 10 章 ⇒ `page=11` ⇒
+        # 客户端按 page/pagesCount 画出的进度条是 **1.2%**，而同一份 DTO 里的
+        # `locator.progression` 说 **50%**（实测）。两个单位混在同一个对象里。
+        # 现在按 percent 折算成同一把尺子；**没有进度就不给 page**（Komga 这一档是 null）。
+        if prog:
+            total = int(b.get("pages") or 0)
+            pct = max(0.0, min(float((prog or {}).get("percent") or 0), 100.0))
+            out["page"] = max(1, round(pct / 100.0 * total)) if total > 0 else 1
     return out
 
 
@@ -681,18 +705,21 @@ def mark_series_read(items: list, completed: bool = True) -> int:
     （读完阈值走配置，第 40 期起可配；与 `read_progress_dto`、`_ko_read_filter` 同一口径），
     所以写完立即生效，不需要给 SeriesDto 加字段。
     """
-    n = 0
+    rows = []
     for b in items or ():
         bid = str(b.get("id") or "")
         if not bid:
             continue
         if completed:
+            # 「标记已读」保留每本书的原位置（见 docstring）
             loc = int((db.get_progress(bid) or {}).get("locator") or 0)
-            db.set_progress(bid, loc, 100.0)
+            rows.append((bid, loc, 100.0))
         else:
-            db.set_progress(bid, 0, 0.0)
-        n += 1
-    return n
+            rows.append((bid, 0, 0.0))
+    # ⚠️ 第 267 期：**一个事务**写完。逐本 `set_progress` 是每条一次提交 ——
+    # 200 本实测 460 ms，2000 章的长系列到秒级，正好撞客户端超时（超时会重试，
+    # 又把同一批写一遍）。
+    return db.set_progress_many(rows)
 
 
 # ---------------- 页面流（客户端阅读的核心）----------------

@@ -3,6 +3,7 @@ import base64
 import contextlib
 import csv
 import hashlib
+import http
 import io
 import hmac
 import json
@@ -264,6 +265,42 @@ app = FastAPI(title="NovelForge", version=APP_VERSION, lifespan=lifespan,
               # Swagger UI 关闭（它在鉴权中间件后面本来就打不开）；OpenAPI schema
               # 仍留在 `/openapi.json` —— 鸿蒙端的版本契约用例与工具链都读它。
               docs_url=None, redoc_url=None, openapi_url="/openapi.json")
+
+
+#: Komga（Spring）错误体的键 —— 客户端读 `message`（而不是 FastAPI 的 `detail`）。
+#: 只在 `/api/v1/*` 上加，**不动应用自己的错误体**（前端与 40+ 个用例读 `detail`）。
+_KOMGA_ERROR_KEYS = ("status", "error", "message", "path")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def _http_error(request: Request, exc: StarletteHTTPException):
+    """HTTP 错误体的**唯一**组装点（第 267 期）。
+
+    `/api/v1/*` 是**冒充 Komga 服务端**的协议面：Komga 的错误体是 Spring 的形状
+    ``{timestamp, status, error, message, path}``，而这里是 FastAPI 的 ``{"detail": …}``
+    —— 客户端若把 `error.message` 显示给用户，用户看到的是**空白**而不是原因。
+    所以协议面**同批**给两份：`detail`（本项目自己的口径，前端与用例用它）+ Spring 那几个键。
+
+    ⚠️ **必须把 `exc.headers` 透传**：401 的 `WWW-Authenticate`、429 的 `Retry-After`
+    都挂在它上面 —— 丢了它们，客户端就不会弹密码框、也不会退避重试。
+    ⚠️ 非 `/api/v1` 路径**逐字节保持原样**（FastAPI 的默认行为），别让一次兼容性修补
+    改掉整个应用的错误契约。
+    """
+    detail = exc.detail
+    body = {"detail": detail}
+    if request.url.path.startswith("/api/v1/"):
+        try:
+            phrase = http.HTTPStatus(int(exc.status_code)).phrase
+        except ValueError:
+            phrase = ""
+        body.update({
+            "status": int(exc.status_code),
+            "error": phrase,
+            "message": detail if isinstance(detail, str) else str(detail),
+            "path": request.url.path,
+        })
+    return JSONResponse(status_code=exc.status_code, content=body,
+                        headers=getattr(exc, "headers", None))
 
 
 @app.exception_handler(library.BookIdConflict)
@@ -645,13 +682,17 @@ _MEDIA_TOKEN_PATHS = (
 #: CSP `sandbox` 让浏览器把这份响应当独立文档、**不给脚本权限**（对 ``<img>`` 这类子资源
 #: 加载无影响 —— CSP 只作用于文档）。
 _MEDIA_UNTRUSTED_HEADERS = {
-    "Cache-Control": "public, max-age=86400",
+    # ⚠️ 第 267 期：**`private`**，不是 `public`。这一族出口（封面 / 漫画页 / 书内资源 /
+    # 音频 / 头像）全在**鉴权之后**，且 Komga 那几条还受「只读凭据的书库范围」约束 ——
+    # `public` 允许**共享缓存**把它们交给没登录的人（局域网里的反代 / CDN 一配就成立）。
+    # 浏览器自己的缓存不受影响（`private` 只排除共享缓存）。
+    "Cache-Control": "private, max-age=86400",
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": "sandbox",
 }
 
 
-def _media_headers(cache_control: str = "public, max-age=86400") -> dict:
+def _media_headers(cache_control: str = "private, max-age=86400") -> dict:
     """媒体响应头的**唯一**组装点（第 134 期立，第 135 期把全部出口收口到这里）。
 
     ⚠️ 这一族出口的共同前提：**字节来自书 / 上传件 / 抓来的图**，媒体类型由后缀或
@@ -664,14 +705,14 @@ def _media_headers(cache_control: str = "public, max-age=86400") -> dict:
 
 
 def _media_bytes(data: bytes, media_type: str, *,
-                 cache_control: str = "public, max-age=86400") -> Response:
+                 cache_control: str = "private, max-age=86400") -> Response:
     """字节已在内存里的媒体出口（漫画页 / 书内资源 / 封面）。"""
     return Response(content=data, media_type=media_type,
                     headers=_media_headers(cache_control))
 
 
 def _media_file(path, media_type: str | None = None, *,
-                cache_control: str = "public, max-age=86400", **kw) -> FileResponse:
+                cache_control: str = "private, max-age=86400", **kw) -> FileResponse:
     """磁盘上的媒体出口（`FileResponse` 自带 Range，音频 / 漫画 / 字体要靠它）。"""
     return FileResponse(path, media_type=media_type,
                         headers=_media_headers(cache_control), **kw)
@@ -11875,6 +11916,26 @@ def ko_book_manifest(request: Request, book_id: str):
     b = _ko_book(request, book_id) or _ko_404("书不存在")
     return Response(content=json.dumps(komga_api.manifest_for(b), ensure_ascii=False),
                     media_type="application/webpub+json")
+
+
+@app.get("/api/v1/books/{book_id}/resource/{path:path}")
+def ko_book_resource(request: Request, book_id: str, path: str):
+    """manifest 里 `readingOrder` 那些 href 的**落点**（第 267 期）。
+
+    此前 `GET /books/{id}/manifest` 给出一串 `EPUB/c0000.xhtml`，而服务端**没有任何路由**
+    能取到它们 —— 「advertise 了但服务不了」，照 manifest 走的客户端必然全 404
+    （实测：`/resource/…` 与裸 `/{href}` 都是 404）。这不是「缺少一个功能」，
+    而是一份**假清单**（AGENTS §1 的「不做假交互」）。
+
+    取文件**复用** `api_book_asset`：zip 条目白名单（精确等名，不放宽）、解压炸弹闸门
+    （`zipkind.read_entry` 的大小上限）、媒体头（`nosniff` + CSP `sandbox`）都只有那一份 ——
+    再写一遍就是第二份实现。这里只补它没有的那件事：**可见性**（范围外 / 闭源库的书
+    连资源也取不到，与列表口径同源）。
+    """
+    _komga_guard(request)
+    if not _ko_book(request, book_id):
+        _ko_404("书不存在")
+    return api_book_asset(book_id, path)
 
 
 @app.put("/api/v1/books/{book_id}/read-progress")

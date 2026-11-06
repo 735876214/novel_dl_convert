@@ -1706,6 +1706,45 @@ def set_progress(book_id: str, locator: int, percent: float, cfi: str = "",
     return now
 
 
+def set_progress_many(rows) -> int:
+    """批量写阅读进度：``[(book_id, locator, percent)]`` → 写入条数（第 267 期）。
+
+    为什么不再逐本 ``set_progress``：那是**每条一次提交**，200 本的系列「标记已读」
+    实测 **460 ms**，2000 章的长系列就到秒级 —— 正好落在客户端超时区间（超时后它会
+    重试，又把同一批写一遍）。这里合成一个事务，同一份 upsert 语句、同一个 ``now``。
+
+    ⚠️ 仍走 ``set_progress`` 的同一条语句（``file_rel`` 用空串 = 「这本书自己」，
+    ``cfi`` 清空）—— 判据不复制。事件按书逐条发（订阅方要的是每本书的变化）。
+    """
+    rows = [(str(bid), int(loc or 0), float(pct or 0))
+            for bid, loc, pct in (rows or ()) if str(bid or "")]
+    if not rows:
+        return 0
+    now = time.time()
+    c = _connect()
+    with _lock:
+        c.executemany(
+            """INSERT INTO progress(book_id, file_rel, locator, percent, cfi, updated_at)
+               VALUES(?,?,?,?,?,?)
+               ON CONFLICT(book_id, file_rel) DO UPDATE SET
+                 locator=excluded.locator,
+                 percent=excluded.percent,
+                 cfi=excluded.cfi,
+                 updated_at=excluded.updated_at""",
+            [(bid, "", loc, pct, "", now) for bid, loc, pct in rows],
+        )
+        c.commit()
+    try:
+        from . import events
+        for bid, loc, pct in rows:
+            events.publish("book:progress-changed",
+                           {"book_id": bid, "file_rel": "", "percent": pct,
+                            "updated_at": now})
+    except Exception:
+        pass
+    return len(rows)
+
+
 # ---------------- annotations ----------------
 
 #: 批注的列清单（第 63 期 6/6 起含位置锚三列）。新增列请只改**这一处** ——

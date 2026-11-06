@@ -29,7 +29,7 @@ def _h(r) -> dict:
     return {k.lower(): v for k, v in r.headers.items()}
 
 
-def _assert_untrusted_media(r, *, cache: str = "public, max-age=86400") -> None:
+def _assert_untrusted_media(r, *, cache: str = "private, max-age=86400") -> None:
     h = _h(r)
     assert h.get("content-security-policy") == "sandbox", h
     assert h.get("x-content-type-options") == "nosniff", h
@@ -69,7 +69,9 @@ def test_媒体头helper可覆盖缓存口径():
     h = server._media_headers("private, max-age=3600")
     assert h["Cache-Control"] == "private, max-age=3600"
     # 覆盖的是**副本**：模块常量不能被调用方改脏
-    assert server._MEDIA_UNTRUSTED_HEADERS["Cache-Control"] == "public, max-age=86400"
+    # 第 267 期：默认从 `public` 改成 `private` —— 这一族出口全在鉴权之后，
+    # `public` 允许共享缓存把封面 / 漫画页交给没登录的人。
+    assert server._MEDIA_UNTRUSTED_HEADERS["Cache-Control"] == "private, max-age=86400"
     assert server._MEDIA_UNTRUSTED_HEADERS["Content-Security-Policy"] == "sandbox"
 
 
