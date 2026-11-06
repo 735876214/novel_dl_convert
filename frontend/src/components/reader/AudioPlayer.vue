@@ -21,6 +21,7 @@ import { useSeriesNext } from '@/lib/seriesNext'
 import { fromPercent, toPercent } from '@/lib/unitsProgress'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
+import { fmtClock } from '@/lib/format'
 
 /**
  * 有声书播放器（单文件 / 多轨目录通用）。
@@ -87,7 +88,7 @@ function bmPos(b: Bookmark): { track: number; sec: number } {
 
 function bmText(b: Bookmark): string {
   const { track, sec } = bmPos(b)
-  return total.value > 1 ? `第 ${track + 1} 轨 · ${fmt(sec)}` : fmt(sec)
+  return total.value > 1 ? `第 ${track + 1} 轨 · ${fmtClock(sec)}` : fmtClock(sec)
 }
 
 async function addBookmarkHere(): Promise<void> {
@@ -95,7 +96,7 @@ async function addBookmarkHere(): Promise<void> {
   const track = index.value
   const sec = Math.floor(currentTime.value)
   const anchor = `${AUDIO_ANCHOR}${track}:${sec}`
-  const fallback = total.value > 1 ? `第 ${track + 1} 轨 ${fmt(sec)}` : fmt(sec)
+  const fallback = total.value > 1 ? `第 ${track + 1} 轨 ${fmtClock(sec)}` : fmtClock(sec)
   bmBusy.value = true
   try {
     await api.addBookmark(props.bookId, {
@@ -248,15 +249,6 @@ const within = computed(() => (duration.value ? Math.min(1, Math.max(0, currentT
 const percent = computed(() => (unitMode.value
   ? toPercent(props.unit?.index ?? 0, within.value, props.unit?.total ?? 1)
   : toPercent(index.value, within.value, Math.max(1, total.value))))
-
-function fmt(sec: number): string {
-  if (!Number.isFinite(sec) || sec < 0) sec = 0
-  const s = Math.floor(sec % 60)
-  const m = Math.floor(sec / 60) % 60
-  const h = Math.floor(sec / 3600)
-  const mm = h ? String(m).padStart(2, '0') : String(m)
-  return `${h ? `${h}:` : ''}${mm}:${String(s).padStart(2, '0')}`
-}
 
 // ---------------- 播放控制 ----------------
 
@@ -605,8 +597,8 @@ onBeforeUnmount(() => {
         @input="seekTo(Number(($event.target as HTMLInputElement).value))"
       >
       <div class="mt-1 flex justify-between text-[11px] text-muted-foreground tabular-nums">
-        <span>{{ fmt(currentTime) }}</span>
-        <span>{{ ready ? fmt(duration) : '--:--' }}</span>
+        <span>{{ fmtClock(currentTime) }}</span>
+        <span>{{ ready ? fmtClock(duration) : '--:--' }}</span>
       </div>
     </div>
 
@@ -731,7 +723,7 @@ onBeforeUnmount(() => {
           >
             <span class="w-6 shrink-0 text-right text-[10.5px] text-muted-foreground tabular-nums">{{ ci + 1 }}</span>
             <span class="min-w-0 flex-1 truncate">{{ ch.title }}</span>
-            <span class="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">{{ fmt(ch.start_ms / 1000) }}</span>
+            <span class="shrink-0 text-[10.5px] text-muted-foreground tabular-nums">{{ fmtClock(ch.start_ms / 1000) }}</span>
           </button>
         </li>
       </ol>
@@ -803,7 +795,7 @@ onBeforeUnmount(() => {
           title="延长 15 分钟"
           @click="extendSleep"
         >+15 分钟</button>
-        <span v-if="sleepLeft" class="tabular-nums text-primary">{{ fmt(sleepLeft) }}</span>
+        <span v-if="sleepLeft" class="tabular-nums text-primary">{{ fmtClock(sleepLeft) }}</span>
         <span v-else-if="sleepAtTrackEnd" class="text-primary">本轨结束</span>
       </div>
 

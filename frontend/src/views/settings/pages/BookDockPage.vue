@@ -24,6 +24,7 @@ import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useUiStore } from '@/stores/ui'
 import { onRealtime } from '@/lib/realtime'
+import { fmtBytes, fmtWhen } from '@/lib/format'
 
 /**
  * SERVER → Book Dock（`/settings/admin/book-dock`）
@@ -121,13 +122,6 @@ const STATUS_TONE: Record<string, 'neutral' | 'ok' | 'warn' | 'err'> = {
   ignored: 'neutral',
 }
 
-function fmtSize(n: number): string {
-  const b = Number(n) || 0
-  if (b < 1024) return `${b} B`
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
-  return `${(b / 1024 / 1024).toFixed(1)} MB`
-}
-
 async function loadDock(): Promise<void> {
   dockLoading.value = true
   dockError.value = ''
@@ -157,25 +151,11 @@ async function switchTab(key: string): Promise<void> {
 }
 
 // ---- 时间维度：入库（created_at）总是显示，处理过才另标更新（updated_at） ----
-function fmtTime(ts?: number): string {
-  const n = Number(ts) || 0
-  if (!n) return ''
-  const d = new Date(n * 1000)
-  const p = (x: number) => String(x).padStart(2, '0')
-  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`
-  const md = `${p(d.getMonth() + 1)}-${p(d.getDate())}`
-  const now = new Date()
-  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
-    return `今天 ${hm}`
-  }
-  return d.getFullYear() === now.getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}-${md}`
-}
-
 /** 入库时间总是展示；updated_at 明显晚于 created_at（>60s）才额外标「更新」。 */
 function timeText(it: BookDockItem): string {
-  const created = fmtTime(it.created_at)
+  const created = fmtWhen(it.created_at, '')
   if (!created) return ''
-  const updated = fmtTime(it.updated_at)
+  const updated = fmtWhen(it.updated_at, '')
   if (updated && Number(it.updated_at) - Number(it.created_at) > 60) {
     return `入库 ${created} · 更新 ${updated}`
   }
@@ -876,7 +856,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="mt-1 truncate text-[11.5px] text-muted-foreground" :title="it.output || it.detail">
               {{ it.output ? `成品：${it.output}` : it.detail || '等待自动处理' }}
-              <span class="ml-1 opacity-70">{{ fmtSize(it.size) }}</span>
+              <span class="ml-1 opacity-70">{{ fmtBytes(it.size) }}</span>
               <span v-if="timeText(it)" class="ml-1 opacity-70">· {{ timeText(it) }}</span>
               <span v-if="it.retries" class="ml-1 text-warning">· 已重试 {{ it.retries }} 次</span>
             </div>

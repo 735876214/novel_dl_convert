@@ -7,6 +7,7 @@ import ChartEmptyState from '@/components/charts/ChartEmptyState.vue'
 import ChartFrame from '@/components/charts/ChartFrame.vue'
 import type { StatsOverview } from '@/lib/api'
 import { useChartTheme } from '@/lib/charts'
+import { fmtMinutes } from '@/lib/format'
 
 /**
  * 会话时间轴（上游 `ReadingSessionTimelineChart.vue`）：一周七行（周一–周日），
@@ -118,16 +119,17 @@ function renderItem(params: RenderParams, api: RenderApi): Record<string, unknow
   return { type: 'rect', shape: rect, style: api.style() }
 }
 
-function formatClock(minutes: number): string {
+/**
+ * 图表刻度：**当天第几分钟** → `HH:mm`。
+ *
+ * ⚠️ 与 `lib/format.ts` 的 `fmtClockHM`（**epoch 秒** → `HH:mm`）刻意分开：
+ * 这是坐标轴上的「时刻刻度」，不是某个真实时间戳。
+ */
+function clockOfMinutes(minutes: number): string {
   const total = Math.round(minutes)
   const h = Math.floor(total / 60) % 24
   const m = total % 60
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
-}
-
-function formatDuration(seconds: number): string {
-  const mins = Math.round(seconds / 60)
-  return mins < 60 ? `${mins} 分钟` : `${(mins / 60).toFixed(1)} 小时`
 }
 
 const option = computed(() => {
@@ -146,8 +148,8 @@ const option = computed(() => {
         const day = labels[r.value[0] ?? 0] ?? ''
         return (
           `<strong>${r.title}</strong><br/>` +
-          `${day} ${formatClock(r.from)}` +
-          `（${formatDuration(r.seconds)}）<br/>${r.format}`
+          `${day} ${clockOfMinutes(r.from)}` +
+          `（${fmtMinutes(r.seconds)}）<br/>${r.format}`
         )
       },
       ...t.tooltip,

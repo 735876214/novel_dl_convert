@@ -25,7 +25,7 @@ import LibraryCopiesPanel from '@/components/tools/LibraryCopiesPanel.vue'
 import LibrarySettingsPanel from '@/components/tools/LibrarySettingsPanel.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type LibraryEntity, type LibraryType, type ScanHistoryItem } from '@/lib/api'
-import { fmtBytes } from '@/lib/format'
+import { fmtAgo, fmtBytes } from '@/lib/format'
 import { ICONS } from '@/lib/icons'
 import { useCustomIconsStore } from '@/stores/customIcons'
 import { isAbsolutePath, pathsOverlap } from '@/lib/paths'
@@ -202,14 +202,6 @@ async function moveLibrary(index: number, delta: number): Promise<void> {
   }
 }
 
-/** 时间戳 → 「3 天前」这类相对说法（上游 LAST SCAN 就是这么显示的） */function ago(ts: number): string {
-  if (!ts) return '从未扫描'
-  const diff = Date.now() / 1000 - ts
-  if (diff < 60) return '刚刚'
-  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
-  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
-  return `${Math.floor(diff / 86400)} 天前`
-}
 
 /** 扫描全部库（上游工具条的 Scan All）：逐库串行，单个失败不打断 */
 async function scanAll(): Promise<void> {
@@ -709,7 +701,7 @@ async function confirmRemove(): Promise<void> {
 
           <div class="min-w-0">
             <div class="text-[10.5px] font-semibold tracking-[0.06em] text-muted-foreground">上次扫描</div>
-            <div class="mt-1 text-[11.5px] text-foreground">{{ ago(l.last_scan_at) }}</div>
+            <div class="mt-1 text-[11.5px] text-foreground">{{ fmtAgo(l.last_scan_at, '从未扫描') }}</div>
             <div
               v-if="l.last_scan_note"
               class="truncate text-[11px] text-muted-foreground"
@@ -1033,7 +1025,7 @@ async function confirmRemove(): Promise<void> {
           <template v-if="editingLib">
             <div class="rounded-md border border-border bg-muted px-3 py-2">
               <div class="text-[12px] text-foreground">
-                上次扫描：{{ ago(editingLib.last_scan_at) }}（{{ editingLib.book_count }} 本）
+                上次扫描：{{ fmtAgo(editingLib.last_scan_at, '从未扫描') }}（{{ editingLib.book_count }} 本）
               </div>
               <div v-if="editingLib.last_scan_note" class="mt-0.5 text-[11.5px] text-muted-foreground">
                 {{ editingLib.last_scan_note }}
@@ -1051,7 +1043,7 @@ async function confirmRemove(): Promise<void> {
               <ul class="divide-y divide-border">
                 <li v-for="h in scanHistory" :key="h.id" class="px-3 py-1.5 text-[11.5px]">
                   <div class="flex flex-wrap items-center gap-2">
-                    <span class="font-medium text-foreground">{{ ago(h.finished_at) }}</span>
+                    <span class="font-medium text-foreground">{{ fmtAgo(h.finished_at) }}</span>
                     <span :class="h.status === 'ok' ? 'text-success' : 'text-destructive'">
                       {{ h.status === 'ok' ? '正常' : '降级' }}
                     </span>

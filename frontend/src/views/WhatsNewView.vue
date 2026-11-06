@@ -7,6 +7,7 @@ import PageHead from '@/components/ui/PageHead.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { api, apiErrorMessage, type ChangelogEntry, type UpdateStatus } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
+import { fmtDateTime } from '@/lib/format'
 
 /** 新功能：应用内更新日志（数据源 = 后端解析的 CHANGELOG.md，离线可读）。 */
 const ui = useUiStore()
@@ -73,13 +74,6 @@ const autoFailed = computed(() => {
 })
 
 /** 时间戳 → 本地可读时间。 */
-function fmtTs(ts: number | undefined): string {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
 function selectVersion(v: string): void {
   selected.value = v
   query.value = ''
@@ -165,7 +159,7 @@ onMounted(async () => {
           <p class="mt-1 text-[11.5px] leading-relaxed text-muted-foreground">
             {{ status?.auto_message || '原因未知' }}
             <template v-if="status?.auto_retry_at">
-              将于 {{ fmtTs(status?.auto_retry_at) }} 自动重试（失败间隔逐次拉长：1 小时 → 6 小时 → 24 小时）。
+              将于 {{ fmtDateTime(status?.auto_retry_at, '') }} 自动重试（失败间隔逐次拉长：1 小时 → 6 小时 → 24 小时）。
             </template>
             失败不会升级成永久放弃：退避到点后仍会自动重试。
           </p>

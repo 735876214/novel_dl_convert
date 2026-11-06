@@ -6,6 +6,7 @@ import Card from '@/components/ui/Card.vue'
 import { usePrefSyncStore } from '@/stores/prefSync'
 import { useUiStore } from '@/stores/ui'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
+import { fmtDateTime, fmtAgo } from '@/lib/format'
 
 /**
  * YOU → Reader → General（`/settings/reader/general`）：偏好与同步。
@@ -99,21 +100,7 @@ async function removeDevice(id: string, name: string): Promise<void> {
   }
 }
 
-function fmtTime(ts: number): string {
-  if (!ts) return '—'
-  return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
-}
-
 /** 相对时间，用来一眼看出哪台设备最近在用 */
-function fmtAgo(ts: number): string {
-  if (!ts) return '—'
-  const s = Math.max(0, Date.now() / 1000 - ts)
-  if (s < 90) return '刚刚'
-  if (s < 3600) return `${Math.round(s / 60)} 分钟前`
-  if (s < 86400) return `${Math.round(s / 3600)} 小时前`
-  return `${Math.round(s / 86400)} 天前`
-}
-
 const profileName = (pid: number | null): string => {
   if (!pid) return '未套用'
   return sync.profiles.find((p) => p.id === pid)?.name ?? `#${pid}（已删除）`
@@ -249,7 +236,7 @@ const sortedDevices = computed(() =>
           >
             本设备正在用
           </span>
-          <span class="ml-auto text-[11.5px] text-muted-foreground">更新于 {{ fmtTime(p.updated_at) }}</span>
+          <span class="ml-auto text-[11.5px] text-muted-foreground">更新于 {{ fmtDateTime(p.updated_at) }}</span>
           <Button size="sm" :disabled="sync.busy" @click="applyProfile(p.id, p.name)">应用到本设备</Button>
           <button
             type="button"

@@ -19,6 +19,7 @@ import {
 } from '@/lib/episodeScope'
 import { usePodcastQueueStore } from '@/stores/podcastQueue'
 import { useUiStore } from '@/stores/ui'
+import { fmtClock, fmtDay } from '@/lib/format'
 
 /**
  * 播客（第 173 期）：订阅 / 刷新 / 浏览单集 / 直接试听。
@@ -786,7 +787,7 @@ async function addBookmark(e: PodcastEpisode): Promise<void> {
   const el = audioEls[e.id]
   const pos = Math.floor(el?.currentTime ?? e.position_sec ?? 0)
   try {
-    await api.addPodcastBookmark(e.id, { position_sec: pos, title: fmtPos(pos) })
+    await api.addPodcastBookmark(e.id, { position_sec: pos, title: fmtClock(pos) })
     ui.toast('已加书签')
     if (bmFor.value === e.id) bmItems.value = (await api.podcastBookmarks(e.id)).items
     else await toggleBookmarks(e)
@@ -876,25 +877,7 @@ async function downloadAll(): Promise<void> {
   }
 }
 
-function fmtDuration(sec: number): string {
-  if (!sec) return ''
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor(sec % 3600 / 60)
-  const s = sec % 60
-  return h ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-    : `${m}:${String(s).padStart(2, '0')}`
-}
-
 /** 时间点（书签 / 当前位置）：0 也要显示成 `0:00`（与时长不同，0 是一个真实位置） */
-function fmtPos(sec: number): string {
-  const s = Math.max(0, Math.floor(sec || 0))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-
-function fmtDate(ts: number): string {
-  if (!ts) return '未知时间'
-  return new Date(ts * 1000).toLocaleDateString()
-}
 </script>
 
 <template>
@@ -1118,7 +1101,7 @@ function fmtDate(ts: number): string {
               @click="playPlRow(r)"
             >{{ r.title }}</button>
             <span class="shrink-0 text-[11px] text-muted-foreground">{{ r.podcast_title }}</span>
-            <span v-if="r.duration_sec" class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ fmtDuration(r.duration_sec) }}</span>
+            <span v-if="r.duration_sec" class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ fmtClock(r.duration_sec) }}</span>
             <span v-if="r.status" class="shrink-0 text-[11px] text-muted-foreground">{{ r.status }}</span>
             <Button size="sm" variant="ghost" @click="playPlRow(r)">播放</Button>
           </li>
@@ -1138,7 +1121,7 @@ function fmtDate(ts: number): string {
           >{{ it.title }}</button>
           <span class="shrink-0 text-[11px] text-muted-foreground">{{ it.podcast_title }}</span>
           <span class="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-            {{ fmtPos(it.position_sec) }}<template v-if="it.duration_sec"> / {{ fmtDuration(it.duration_sec) }}</template>
+            {{ fmtClock(it.position_sec) }}<template v-if="it.duration_sec"> / {{ fmtClock(it.duration_sec) }}</template>
           </span>
           <Button size="sm" variant="ghost" @click="playContinue(it)">继续播放</Button>
         </li>
@@ -1180,7 +1163,7 @@ function fmtDate(ts: number): string {
               <div class="mt-0.5 truncate text-[11.5px] text-muted-foreground">
                 {{ p.author || '未知作者' }}
                 <span v-if="p.categories.length"> · {{ p.categories.join('、') }}</span>
-                <span v-if="p.last_fetched_at"> · 上次刷新 {{ fmtDate(p.last_fetched_at) }}</span>
+                <span v-if="p.last_fetched_at"> · 上次刷新 {{ fmtDay(p.last_fetched_at, '未知时间') }}</span>
                 <span
                   v-if="p.fail_count"
                   class="text-destructive"
@@ -1334,9 +1317,9 @@ function fmtDate(ts: number): string {
                 class="shrink-0 rounded bg-destructive/14 px-1 text-[10px] text-destructive"
                 :title="e.download_error"
               >下载失败</span>
-              <span class="shrink-0 text-[11px] text-muted-foreground">{{ fmtDate(e.published_at) }}</span>
+              <span class="shrink-0 text-[11px] text-muted-foreground">{{ fmtDay(e.published_at, '未知时间') }}</span>
               <span v-if="e.duration_sec" class="shrink-0 text-[11px] text-muted-foreground tabular-nums">
-                {{ fmtDuration(e.duration_sec) }}
+                {{ e.duration_sec ? fmtClock(e.duration_sec) : '' }}
               </span>
               <button
                 v-if="e.download_state !== 'downloaded' && e.download_state !== 'downloading' && e.audio_url"
@@ -1398,7 +1381,7 @@ function fmtDate(ts: number): string {
                     type="button"
                     class="shrink-0 cursor-pointer font-mono text-primary tabular-nums hover:underline"
                     @click="jumpBookmark(e, b)"
-                  >{{ fmtPos(b.position_sec) }}</button>
+                  >{{ fmtClock(b.position_sec) }}</button>
                   <span class="min-w-0 flex-1 truncate text-muted-foreground">{{ b.title || b.note }}</span>
                   <button
                     type="button"

@@ -10,7 +10,7 @@ import PageHead from '@/components/ui/PageHead.vue'
 import { HIGHLIGHT_COLORS, highlightHex, highlightStyleLabel } from '@/data/annotationColors'
 import { canJumpTo, chapterLabel, ORIGIN_LABELS, originLabel } from '@/lib/annotations'
 import { api, type AllAnnotation, type AnnotationOverview, type KoreaderImportResult } from '@/lib/api'
-import { localDate, localMonth } from '@/lib/format'
+import { fmtDay, localDate, localMonth } from '@/lib/format'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
 
@@ -48,11 +48,6 @@ const GROUP_MODES: { key: GroupMode; label: string }[] = [
 const COLOR_LABELS: Record<string, string> = Object.fromEntries(
   HIGHLIGHT_COLORS.map((c) => [c.key, c.label.replace('高亮', '')]),
 )
-
-function fmtDate(ts: number): string {
-  if (!ts) return ''
-  return localDate(new Date(ts * 1000))
-}
 
 function monthKey(ts: number): string {
   return localMonth(new Date(ts * 1000))
@@ -478,7 +473,7 @@ async function doExport(): Promise<void> {
                   <span v-if="a.book_author" class="text-muted-foreground"> · {{ a.book_author }}</span>
                   <!-- 序号未知时显示设备给的章节**标题**；连标题都没有就整段不渲染 -->
                   <span v-if="chapterLabel(a)" class="text-muted-foreground"> · {{ chapterLabel(a) }}</span>
-                  <span v-if="a.created_at" class="text-muted-foreground"> · {{ fmtDate(a.created_at) }}</span>
+                  <span v-if="a.created_at" class="text-muted-foreground"> · {{ fmtDay(a.created_at, '') }}</span>
                 </component>
               </div>
 

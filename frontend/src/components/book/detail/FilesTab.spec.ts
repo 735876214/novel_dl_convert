@@ -201,7 +201,7 @@ describe('文件标签 · 统计条不摆恒真的格子', () => {
     })
     const tiles = w.findAllComponents(StatTile)
     expect(tiles[0].props('value')).toBe('3')
-    expect(tiles[1].props('value')).toBe('7.0 KB')    // 1024 + 2048 + 4096 = 7168（fmtBytes 的口径）
+    expect(tiles[1].props('value')).toBe('7 KB')    // 1024 + 2048 + 4096 = 7168（fmtBytes 的口径；整数不留 `.0`）
     expect(tiles[2].props('value')).toBe('3')
     // 每组各一个文件 ⇒ 按格式名字典序；主文件那一组（EPUB）永远排头
     expect(tiles[2].props('hint')).toBe('EPUB / AZW3 / MOBI')

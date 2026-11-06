@@ -8,7 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import { api, type SourceStatus, type SourceTestResult } from '@/lib/api'
 import { importOutcome, type ImportError } from '@/lib/sourceImport'
-import { localDate } from '@/lib/format'
+import { fmtDay, localDate } from '@/lib/format'
 import {
   EMPTY_QUERY,
   filterSources,
@@ -311,11 +311,6 @@ function remove(name: string): void {
       load()
     })
     .catch((e: Error) => ui.toast(e.message))
-}
-
-function fmtTime(ts: number | null): string {
-  if (!ts) return ''
-  return localDate(new Date(ts * 1000))
 }
 
 // ---------------- 手动添加（表单）+ 逐源连通性自检（第 57 期）----------------
@@ -935,7 +930,7 @@ function testExisting(name: string): void {
                 {{ s.domains.join(' · ') }}
               </p>
               <p v-if="s.cookie.has" class="mt-0.5 text-[11px] text-muted-foreground">
-                Cookie 已持久化 · {{ fmtTime(s.cookie.mtime) }}
+                Cookie 已持久化 · {{ fmtDay(s.cookie.mtime, '') }}
               </p>
               <p v-if="!s.usable" class="mt-0.5 text-[11px] text-warning">{{ s.blocked_reason }}</p>
             </div>

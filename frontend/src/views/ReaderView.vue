@@ -45,6 +45,7 @@ import { tocGroups } from '@/lib/chapterGroups'
 import { useFontsStore } from '@/stores/fonts'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
+import { fmtDateTimeSec } from '@/lib/format'
 
 /**
  * 在线阅读器（Batch 2）。
@@ -2096,7 +2097,7 @@ function exportMarkdown(): void {
   const lines: string[] = [
     `# ${book.value?.title ?? '批注'}`,
     '',
-    `> 共 ${annotations.value.length} 条批注 · 导出于 ${new Date().toLocaleString()}`,
+    `> 共 ${annotations.value.length} 条批注 · 导出于 ${fmtDateTimeSec(Date.now() / 1000)}`,
     '',
   ]
   for (const ch of [...groups.keys()].sort((a, b) => a - b)) {

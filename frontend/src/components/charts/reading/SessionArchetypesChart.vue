@@ -5,6 +5,7 @@ import ChartCard from '@/components/charts/ChartCard.vue'
 import ChartFrame from '@/components/charts/ChartFrame.vue'
 import type { StatsOverview } from '@/lib/api'
 import { useChartTheme } from '@/lib/charts'
+import { fmtMinutes } from '@/lib/format'
 
 /**
  * 会话形态（上游 `SessionArchetypesChart.vue`）：x = 一天内的时刻、y = 这次读了
@@ -37,11 +38,6 @@ function formatHour(hour: number): string {
   return m === 0 ? `${h}:00` : `${h}:${String(m).padStart(2, '0')}`
 }
 
-function formatMinutes(minutes: number): string {
-  const rounded = Math.round(minutes)
-  if (rounded < 60) return `${rounded} 分钟`
-  return `${(rounded / 60).toFixed(1)} 小时`
-}
 
 const option = computed(() => {
   const t = theme.value
@@ -56,7 +52,7 @@ const option = computed(() => {
         data: { value: [number, number]; name: string }
       }) => {
         const [hour, mins] = params.data.value
-        return `<strong>${params.seriesName} ${formatHour(hour)}</strong><br/>${formatMinutes(mins)}<br/>${params.data.name}`
+        return `<strong>${params.seriesName} ${formatHour(hour)}</strong><br/>${fmtMinutes(mins)}<br/>${params.data.name}`
       },
       ...t.tooltip,
     },
@@ -91,7 +87,7 @@ const option = computed(() => {
       itemStyle: { color: palette.value[dow % palette.value.length], opacity: 0.7 },
       data: rows
         .filter((d) => d.weekday === dow)
-        .map((d) => ({ name: `${formatMinutes(d.minutes)}`, value: [d.hour, d.minutes] })),
+        .map((d) => ({ name: `${fmtMinutes(d.minutes)}`, value: [d.hour, d.minutes] })),
     })),
   }
 })

@@ -7,7 +7,7 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import StatTile from '@/components/ui/StatTile.vue'
 import { api, type BookFile } from '@/lib/api'
-import { fmtBytes, localDate } from '@/lib/format'
+import { fmtBytes, fmtDay, localDate } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -148,11 +148,6 @@ const groups = computed(() => {
 
 const formats = computed(() => groups.value.map((g) => g.format))
 
-function fmtDate(ts: number): string {
-  if (!ts) return '—'
-  return localDate(new Date(ts * 1000))
-}
-
 /** 复制哪一条（键是路径本身，不是文件名 —— 两行指向同一个路径时不该一起变「已复制」） */
 const copied = ref('')
 
@@ -291,7 +286,7 @@ const isDirBook = computed(() => props.files.length === 0 && (props.mainFormat |
                 <Badge v-if="f.name === mainName">本条目</Badge>
               </div>
               <div class="text-[11px] text-muted-foreground">
-                {{ fmtBytes(f.size) }} · {{ fmtDate(f.mtime) }}
+                {{ fmtBytes(f.size) }} · {{ fmtDay(f.mtime) }}
               </div>
             </div>
             <Button size="sm" @click="emit('download', f.name)">下载</Button>

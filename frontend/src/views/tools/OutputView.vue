@@ -8,6 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import { api, type FileEntry } from '@/lib/api'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
+import { fmtBytes, fmtDateTime } from '@/lib/format'
 
 /** 导出目录：列出 output/ 下的成品文件，支持下载。接真实 /api/files + /download/{name} */
 const ui = useUiStore()
@@ -48,16 +49,6 @@ const display = computed(() => {
         : b.mtime - a.mtime,
   )
 })
-
-function fmtSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 ** 2).toFixed(2)} MB`
-}
-
-function fmtTime(ts: number): string {
-  return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
-}
 
 /** 从扩展名取格式标签 */
 function ext(name: string): string {
@@ -152,7 +143,7 @@ function download(name: string): void {
       <div class="flex items-center gap-2 border-b border-border px-4 py-3">
         <h3 class="text-[13px] font-semibold text-foreground">成品文件</h3>
         <span class="text-[11.5px] text-muted-foreground">
-          {{ display.length }} 个 · 合计 {{ fmtSize(totalSize) }}
+          {{ display.length }} 个 · 合计 {{ fmtBytes(totalSize) }}
         </span>
       </div>
 
@@ -167,7 +158,7 @@ function download(name: string): void {
         <div class="min-w-0 flex-1">
           <div class="truncate text-[12.5px] font-medium text-foreground">{{ f.name }}</div>
           <div class="text-[11px] text-muted-foreground tabular-nums">
-            {{ fmtSize(f.size) }} · {{ fmtTime(f.mtime) }}
+            {{ fmtBytes(f.size) }} · {{ fmtDateTime(f.mtime) }}
           </div>
         </div>
         <Badge v-if="ext(f.name) === 'EPUB'" tone="ok">推荐</Badge>

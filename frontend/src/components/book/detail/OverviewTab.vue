@@ -6,7 +6,7 @@ import Card from '@/components/ui/Card.vue'
 import SimilarBooks from '@/components/book/detail/SimilarBooks.vue'
 import type { BookCard, BookFile, SimilarBook } from '@/lib/api'
 import { api } from '@/lib/api'
-import { localDate, localDateToEpoch } from '@/lib/format'
+import { fmtBytes, fmtDay, localDate, localDateToEpoch } from '@/lib/format'
 import { useLibraryStore } from '@/stores/library'
 
 /**
@@ -40,25 +40,6 @@ const library = useLibraryStore()
 const descOpen = ref(false)
 
 /** 日期格式化（秒 → 本地 YYYY/M/D）；供版本信息「入库」行使用（与文件行 fmtDate 区分） */
-function fmtDateSlash(sec?: number): string {
-  if (!sec) return '未知'
-  const d = new Date(sec * 1000)
-  if (Number.isNaN(d.getTime())) return '未知'
-  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`
-}
-
-function fmtSize(n: number): string {
-  if (!n && n !== 0) return '—'
-  if (n < 1024) return `${n} B`
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
-  return `${(n / 1024 / 1024).toFixed(1)} MB`
-}
-
-function fmtDate(ts: number): string {
-  if (!ts) return '—'
-  return localDate(new Date(ts * 1000))
-}
-
 /**
  * 书的归属书库名（`library_id` → 库实体名）；「全部书库」视图下 `library_id` 仍可能是具体库。
  * 查不到实体就不返回 —— **不回落 `library_id`**（那是内部 id，行内显示它没有意义），
@@ -221,7 +202,7 @@ async function removeCover(): Promise<void> {
           >
             <span class="text-[11px] font-semibold text-foreground">{{ f.format }}</span>
             <span class="min-w-0 flex-1 truncate text-[11.5px] text-muted-foreground">
-              {{ fmtSize(f.size) }} · {{ fmtDate(f.mtime) }}
+              {{ fmtBytes(f.size) }} · {{ fmtDay(f.mtime) }}
             </span>
             <Button size="sm" @click="emit('download', f.name)">下载</Button>
           </div>
@@ -257,7 +238,7 @@ async function removeCover(): Promise<void> {
         <div class="flex flex-wrap items-center gap-2 text-[11.5px]">
           <span class="w-[4.5rem] shrink-0 text-muted-foreground">入库</span>
           <template v-if="!editingAdded">
-            <span class="tabular-nums text-foreground">{{ addedTs ? fmtDateSlash(addedTs) : '未知' }}</span>
+            <span class="tabular-nums text-foreground">{{ fmtDay(addedTs, '未知') }}</span>
             <button type="button" class="cursor-pointer text-primary hover:underline" @click="startEditAdded">修改</button>
           </template>
           <template v-else>

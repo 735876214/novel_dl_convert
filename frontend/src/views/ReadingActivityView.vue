@@ -9,7 +9,7 @@ import PageHead from '@/components/ui/PageHead.vue'
 import Segment from '@/components/ui/Segment.vue'
 import { type ReadingEvent } from '@/lib/api'
 import { chartShades, useChartTheme } from '@/lib/chartTheme'
-import { localDate } from '@/lib/format'
+import { fmtClockHM, localDate } from '@/lib/format'
 import { useActivityStore } from '@/stores/activity'
 
 /**
@@ -142,11 +142,6 @@ function eventText(e: ReadingEvent): string {
   return `解锁成就：${e.name}`
 }
 
-function hhmm(ts: number): string {
-  const d = new Date(ts * 1000)
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
-}
-
 /** 时间轴上**实际渲染**的条数。后端默认只回最近 120 条，靠 `timeline.total` 才知道有没有被截断。 */
 const shownCount = computed(() => grouped.value.reduce((n, g) => n + g.items.length, 0))
 const timelineTotal = computed(() => data.value?.timeline.total ?? 0)
@@ -228,7 +223,7 @@ function loadMore(): void {
                 <div class="min-w-0 flex-1">
                   <div class="text-[12.5px] leading-relaxed text-foreground">{{ eventText(e) }}</div>
                 </div>
-                <span class="shrink-0 font-mono text-[11px] text-muted-foreground">{{ hhmm(e.ts) }}</span>
+                <span class="shrink-0 font-mono text-[11px] text-muted-foreground">{{ fmtClockHM(new Date(e.ts * 1000)) }}</span>
               </div>
             </div>
           </div>

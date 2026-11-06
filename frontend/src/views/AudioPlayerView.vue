@@ -8,6 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import AudioPlayer from '@/components/reader/AudioPlayer.vue'
 import { api, type AudioTrack, type BookDetail } from '@/lib/api'
+import { fmtBytes } from '@/lib/format'
 
 /**
  * 有声书播放页 `/listen/:id`。
@@ -54,11 +55,6 @@ const totalSize = computed(() =>
   tracks.value.reduce((n, t) => n + (t.size || 0), 0),
 )
 
-function fmtSize(n: number): string {
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
-  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
-  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
-}
 </script>
 
 <template>
@@ -106,7 +102,7 @@ function fmtSize(n: number): string {
             </p>
             <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-muted-foreground tabular-nums">
               <span>{{ tracks.length }} 轨</span>
-              <span v-if="totalSize">{{ fmtSize(totalSize) }}</span>
+              <span v-if="totalSize">{{ fmtBytes(totalSize) }}</span>
               <span v-if="book.year">{{ book.year }}</span>
               <a
                 :href="api.audioZipUrl(bookId)"

@@ -20,6 +20,7 @@ import {
   type RecycleOrphan,
 } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
+import { fmtBytes } from '@/lib/format'
 
 /**
  * LIBRARY → Maintenance（`/settings/library/maintenance`）
@@ -91,18 +92,6 @@ const dirs = computed(() => {
     ...d[k],
   }))
 })
-
-function fmtBytes(n: number | undefined | null): string {
-  if (n === undefined || n === null) return '—'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let v = n
-  let i = 0
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024
-    i += 1
-  }
-  return i === 0 ? `${v} B` : `${v.toFixed(1)} ${units[i]}`
-}
 
 function mbOf(bytes: number | undefined): string {
   if (!bytes) return '—'

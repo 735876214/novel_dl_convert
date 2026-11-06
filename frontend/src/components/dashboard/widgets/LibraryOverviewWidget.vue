@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import { useWidgetState } from '@/composables/useWidgetState'
 import type { WidgetSize } from '@/data/dashboard'
 import { useStatsStore } from '@/stores/stats'
+import { fmtBytes } from '@/lib/format'
 
 /**
  * 书库概览卡（对应 BookOrbit 的 LibraryOverviewWidget）。
@@ -23,13 +24,6 @@ const router = useRouter()
 onMounted(() => {
   stats.load()
 })
-
-function fmtBytes(bytes: number): string {
-  if (!bytes) return '0 B'
-  const gb = bytes / 1024 ** 3
-  if (gb >= 1) return `${gb.toFixed(1)} GB`
-  return `${(bytes / 1024 ** 2).toFixed(0)} MB`
-}
 
 const s = computed(() => stats.data)
 

@@ -11,6 +11,7 @@ import { useLibraryNames } from '@/composables/useLibraryNames'
 import { api, apiErrorMessage, type DuplicateGroup, type DuplicateItem } from '@/lib/api'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
+import { fmtBytes, fmtDateTime } from '@/lib/format'
 
 /**
  * 重复书籍：**同作者（归一化后一致）+ 书名相似度 ≥ 阈值** 分组。
@@ -42,16 +43,6 @@ const libScope = ref('')
 /** 每组保留哪一项（组 key → **条目键**，见 itemKey） */
 const keep = ref<Record<string, string>>({})
 const lastRecycleDir = ref('')
-
-function fmtSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 ** 2).toFixed(2)} MB`
-}
-
-function fmtTime(ts: number): string {
-  return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
-}
 
 /**
  * 组内条目的唯一键。**不能只用文件名**：不同库可以有同名文件
@@ -310,7 +301,7 @@ function apply(): void {
             <div class="min-w-0 flex-1">
               <div class="truncate text-[12.5px] text-foreground" :title="it.name">{{ it.name }}</div>
               <div class="text-[11px] text-muted-foreground tabular-nums">
-                {{ fmtSize(it.size) }} · {{ fmtTime(it.mtime) }}
+                {{ fmtBytes(it.size) }} · {{ fmtDateTime(it.mtime) }}
               </div>
             </div>
             <Badge v-if="!libScope && it.library_id" class="shrink-0">{{ nameOf(it.library_id) }}</Badge>

@@ -10,7 +10,7 @@ import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vu
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type LogItem, type LogStorage } from '@/lib/api'
 import { LOGGING_FIELDS } from '@/data/settingsFields'
-import { localDate } from '@/lib/format'
+import { fmtBytes, localDate } from '@/lib/format'
 import { useUiStore } from '@/stores/ui'
 
 /**
@@ -83,13 +83,6 @@ const retCompress = computed(() => Boolean(val('logging.retention.compress')))
 
 function setRet(key: string, v: unknown): void {
   setVal(`logging.retention.${key}`, v)
-}
-
-function fmtBytes(n: number): string {
-  const v = Number(n) || 0
-  if (v < 1024) return `${v} B`
-  if (v < 1048576) return `${(v / 1024).toFixed(1)} KB`
-  return `${(v / 1048576).toFixed(1)} MB`
 }
 
 async function saveRetention(): Promise<void> {

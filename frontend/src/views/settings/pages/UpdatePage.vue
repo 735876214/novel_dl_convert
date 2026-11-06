@@ -10,6 +10,7 @@ import { UPDATE_FIELDS } from '@/data/settingsFields'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type UpdateStatus } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
+import { fmtDateTime } from '@/lib/format'
 
 /**
  * EXTENSIONS → Updates（`/settings/ext/update`）
@@ -43,13 +44,6 @@ const autoFailed = computed(() => {
 })
 
 /** 时间戳 → 本地可读时间（把裸 epoch 甩给用户是偷懒） */
-function fmtTs(ts: number | undefined): string {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  const p = (n: number): string => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
-}
-
 async function refresh(): Promise<void> {
   try {
     st.value = await api.updateStatus()
@@ -162,7 +156,7 @@ onMounted(async () => {
         >
           自动更新失败{{ st?.auto_failures ? `（已连续 ${st?.auto_failures} 次）` : '' }}：{{ st?.auto_message || '原因未知' }}
           <template v-if="st?.auto_retry_at">
-            ，将于 {{ fmtTs(st?.auto_retry_at) }} 自动重试（失败间隔 1 小时 → 6 小时 → 24 小时）。
+            ，将于 {{ fmtDateTime(st?.auto_retry_at, '') }} 自动重试（失败间隔 1 小时 → 6 小时 → 24 小时）。
           </template>
         </p>
         <p v-else-if="st?.auto_apply && st?.updater_available" class="text-[11.5px] text-success">

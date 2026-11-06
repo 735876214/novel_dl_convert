@@ -12,6 +12,7 @@ import { useLibraryNames } from '@/composables/useLibraryNames'
 import { api, type MissingItem } from '@/lib/api'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
+import { fmtBytes, fmtDateTime } from '@/lib/format'
 
 /**
  * 缺失资源：列出零字节 / 无法解析 / 缺封面的成品文件，并说明每条的原因。
@@ -60,16 +61,6 @@ const filter = ref('')
 const error = ref('')
 /** 书库范围（第 13 期）：空串 = 全部书库 */
 const libScope = ref('')
-
-function fmtSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 ** 2).toFixed(2)} MB`
-}
-
-function fmtTime(ts: number): string {
-  return new Date(ts * 1000).toLocaleString('zh-CN', { hour12: false })
-}
 
 function meta(issue: string) {
   return ISSUE_META[issue] ?? { label: issue, tone: 'warn' as const, hint: '' }
@@ -206,7 +197,7 @@ function goConvert(): void {
               <Badge v-for="iss in it.issues" :key="iss" :tone="meta(iss).tone">{{ meta(iss).label }}</Badge>
             </div>
             <div class="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
-              {{ fmtSize(it.size) }} · {{ fmtTime(it.mtime) }}
+              {{ fmtBytes(it.size) }} · {{ fmtDateTime(it.mtime) }}
             </div>
             <ul class="mt-1.5 flex flex-col gap-0.5">
               <li v-for="iss in it.issues" :key="iss" class="text-[11.5px] leading-relaxed text-muted-foreground">

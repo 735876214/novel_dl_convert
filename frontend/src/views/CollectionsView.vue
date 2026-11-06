@@ -8,7 +8,7 @@ import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Icon from '@/components/ui/Icon.vue'
 import PageHead from '@/components/ui/PageHead.vue'
-import { localDate } from '@/lib/format'
+import { fmtDay, localDate } from '@/lib/format'
 import { useDndSort } from '@/composables/useDndSort'
 import { useCollectionsStore } from '@/stores/collections'
 import { useUiStore } from '@/stores/ui'
@@ -43,11 +43,6 @@ const editName = ref('')
 const renameError = ref('')
 
 onMounted(() => collections.load(true))
-
-function fmtDate(sec: number): string {
-  if (!sec) return '—'
-  return localDate(new Date(sec * 1000))
-}
 
 async function create(): Promise<void> {
   const name = draft.value.trim()
@@ -162,7 +157,7 @@ async function commitRename(id: number): Promise<void> {
               class="cursor-pointer truncate text-[13px] font-medium text-foreground"
             >{{ c.name }}</div>
             <div class="mt-0.5 text-[11.5px] text-muted-foreground tabular-nums">
-              {{ c.count }} 本 · 最后修改 {{ fmtDate(c.updated_at) }}
+              {{ c.count }} 本 · 最后修改 {{ fmtDay(c.updated_at) }}
             </div>
             <p v-if="editingId === c.id && renameError" class="mt-1 text-[11px] text-destructive">
               {{ renameError }}

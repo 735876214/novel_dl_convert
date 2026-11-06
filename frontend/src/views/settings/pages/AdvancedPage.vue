@@ -8,6 +8,7 @@ import Icon from '@/components/ui/Icon.vue'
 import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type BackupItem } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
+import { fmtDateTimeSec } from '@/lib/format'
 
 /**
  * EXTENSIONS → Advanced（`/settings/ext/advanced`）
@@ -105,13 +106,6 @@ async function resetRaw(): Promise<void> {
   }
 }
 
-function fmtTime(ts: number): string {
-  if (!ts) return '—'
-  const d = new Date(ts * 1000)
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`
-}
-
 onMounted(async () => {
   await loadConfig()
   await loadRaw()
@@ -153,7 +147,7 @@ onMounted(async () => {
         </span>
         <Badge v-if="!rawInfo.exists" tone="warn">文件不存在（保存后创建）</Badge>
         <span v-else class="text-[11px] text-muted-foreground tabular-nums">
-          {{ fmtTime(rawInfo.mtime) }} · {{ rawInfo.size }} B
+          {{ fmtDateTimeSec(rawInfo.mtime) }} · {{ rawInfo.size }} B
         </span>
         <span class="ml-auto text-[11px] text-muted-foreground">保存前自动备份到 backups/</span>
       </div>
@@ -199,7 +193,7 @@ onMounted(async () => {
         class="flex items-center gap-3 border-b border-border/60 px-4 py-2.5 last:border-b-0"
       >
         <span class="min-w-0 flex-1 truncate font-mono text-[11.5px] text-foreground">{{ b.name }}</span>
-        <span class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ fmtTime(b.mtime) }}</span>
+        <span class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ fmtDateTimeSec(b.mtime) }}</span>
         <Button size="sm" @click="restoreBackup(b.name)">还原</Button>
       </div>
     </Card>

@@ -6,7 +6,7 @@ import Button from '@/components/ui/Button.vue'
 import Card from '@/components/ui/Card.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { api, apiErrorMessage, type ReadingLogBook, type ReadingLogDay, type ReadingLogSession } from '@/lib/api'
-import { localDate } from '@/lib/format'
+import { fmtDay, fmtDuration, localDate } from '@/lib/format'
 import { paceText } from '@/lib/readingPace'
 import { useLibraryStore } from '@/stores/library'
 import { useUiStore } from '@/stores/ui'
@@ -120,18 +120,12 @@ const INPUT_CLS =
   'h-8 rounded-md border border-border bg-muted px-2.5 text-[12.5px] text-foreground outline-none focus:border-ring focus:bg-card'
 
 function human(sec: number): string {
-  if (sec <= 0) return '—'
-  const m = Math.round(sec / 60)
-  if (m < 60) return `${m} 分钟`
-  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`
+  return sec > 0 ? fmtDuration(sec) : '—'
 }
 
 /** 平均单次时长（秒 → 「23 分钟/次」） */
 function avgText(sec: number): string {
-  if (!sec || sec <= 0) return '—'
-  const m = Math.round(sec / 60)
-  if (m < 60) return `${m} 分钟/次`
-  return `${Math.floor(m / 60)} 小时 ${m % 60} 分/次`
+  return sec > 0 ? `${fmtDuration(sec)}/次` : '—'
 }
 
 // 阅读速度（页/小时）判据搬到了 `lib/readingPace.ts`：详情页「阅读日志」也用它，
@@ -273,7 +267,7 @@ function dayLabel(d: ReadingLogDay): string {
                 {{ b.author || '未知作者' }} · {{ b.sessions }} 次 · 平均 {{ avgText(b.avg_seconds) }}
               </p>
               <p class="truncate text-[11px] text-muted-foreground">
-                最近 {{ new Date(b.last_ended * 1000).toLocaleDateString() }}<template v-if="paceText(b)"> · {{ paceText(b) }}</template>
+                最近 {{ fmtDay(b.last_ended) }}<template v-if="paceText(b)"> · {{ paceText(b) }}</template>
               </p>
             </div>
             <span class="shrink-0 text-[12px] tabular-nums text-muted-foreground">{{ human(b.seconds) }}</span>

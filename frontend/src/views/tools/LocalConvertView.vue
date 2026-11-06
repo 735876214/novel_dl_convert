@@ -8,6 +8,7 @@ import { api, apiErrorMessage, type FileEntry, type WatcherStatus } from '@/lib/
 import { useLibraryStore } from '@/stores/library'
 import { useLibraryWizardStore } from '@/stores/libraryWizard'
 import { useUiStore } from '@/stores/ui'
+import { fmtBytes } from '@/lib/format'
 
 /**
  * 本地导入（路由名仍是 tools-local）：拖拽上传 / 按路径把文件交给 `pipeline.dispatch`
@@ -68,12 +69,6 @@ function extOf(name: string): string {
 }
 
 const watcherRunning = computed(() => Boolean(watcher.value?.running))
-
-function fmtSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / 1024 ** 2).toFixed(2)} MB`
-}
 
 function refreshWatcher(): void {
   api
@@ -268,7 +263,7 @@ function scan(): void {
               @click="pathValue = f.name"
             >
               <span class="min-w-0 flex-1 truncate text-[12px] text-foreground">{{ f.name }}</span>
-              <span class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ fmtSize(f.size) }}</span>
+              <span class="shrink-0 text-[11px] text-muted-foreground tabular-nums">{{ fmtBytes(f.size) }}</span>
             </button>
           </div>
           <p v-else class="text-[11.5px] text-muted-foreground">目录为空，拖文件进去或放进 input/ 目录。</p>

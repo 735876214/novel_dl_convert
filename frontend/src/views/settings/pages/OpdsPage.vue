@@ -7,6 +7,7 @@ import { useSettingsConfig } from '@/composables/useSettingsConfig'
 import { api, type LibraryEntity, type OpdsCredential } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
+import { fmtDateTime } from '@/lib/format'
 
 /**
  * DEVICES → OPDS（`/settings/opds`）
@@ -75,11 +76,6 @@ function libName(id: string): string {
 
 function scopeText(c: OpdsCredential): string {
   return c.library_ids.length ? c.library_ids.map(libName).join('、') : '全部可见书库'
-}
-
-function fmtUsed(ts: number): string {
-  if (!ts) return '从未使用'
-  return new Date(ts * 1000).toLocaleString()
 }
 
 async function loadCreds(): Promise<void> {
@@ -243,7 +239,7 @@ async function toggle(): Promise<void> {
               <span v-if="c.label" class="ml-1 text-muted-foreground">（{{ c.label }}）</span>
             </span>
             <span class="text-[11.5px] text-muted-foreground">{{ scopeText(c) }}</span>
-            <span class="text-[11px] text-muted-foreground/80">{{ fmtUsed(c.last_used_at) }}</span>
+            <span class="text-[11px] text-muted-foreground/80">{{ fmtDateTime(c.last_used_at, '从未使用') }}</span>
             <span
               class="rounded-full px-1.5 py-0.5 text-[10.5px]"
               :class="c.enabled

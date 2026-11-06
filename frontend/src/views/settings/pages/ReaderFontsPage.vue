@@ -7,6 +7,7 @@ import { customFontFamily } from '@/lib/fonts'
 import { useFontsStore } from '@/stores/fonts'
 import { useUiStore } from '@/stores/ui'
 import SettingsUnsupportedCard from '@/views/settings/SettingsUnsupportedCard.vue'
+import { fmtBytes } from '@/lib/format'
 
 /**
  * 字体管理。一个组件两种形态：
@@ -58,12 +59,6 @@ async function remove(id: string, name: string): Promise<void> {
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '删除失败')
   }
-}
-
-function fmtSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(0)} KB`
-  return `${(bytes / 1024 ** 2).toFixed(1)} MB`
 }
 
 const MAX_MB = () => Math.round(fonts.maxBytes / 1024 / 1024)
@@ -163,7 +158,7 @@ const SAMPLE =
           >
             <div class="min-w-0 flex-1">
               <div class="truncate text-[12.5px] text-foreground">{{ f.style || '（默认样式）' }}</div>
-              <div class="truncate text-[11px] text-muted-foreground">{{ f.format.toUpperCase() }} · {{ fmtSize(f.size) }}</div>
+              <div class="truncate text-[11px] text-muted-foreground">{{ f.format.toUpperCase() }} · {{ fmtBytes(f.size) }}</div>
             </div>
             <button
               type="button"
@@ -189,7 +184,7 @@ const SAMPLE =
               {{ g.items[0].name }}
             </div>
             <div class="truncate text-[11px] text-muted-foreground">
-              {{ g.items[0].style }} · {{ g.items[0].format.toUpperCase() }} · {{ fmtSize(g.items[0].size) }}
+              {{ g.items[0].style }} · {{ g.items[0].format.toUpperCase() }} · {{ fmtBytes(g.items[0].size) }}
             </div>
           </div>
           <button
