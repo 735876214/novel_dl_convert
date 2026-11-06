@@ -338,6 +338,12 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    | 派生缓存的**原子换入**与「正文在哪个文件」 | `novelforge/core/derivedcache.py` 的 `swap_in()` / `read_target()`
 （第 265 期收敛：`fb2cache` / `mobicache` 两处逐字相同、`txtcache` 是弱化变体 ⇒ 硬约束改一处漏一处；
 缓存模块保留同名 `read_target` 时**只许转调**，由用例钉住） |
+   | 一段搜索词**命中哪些书**（OPDS 搜索框 / Komga 的 `fullTextSearch`） | `novelforge/core/library.py` 的 `matches_text()`
+（第 266 期收敛：此前 OPDS 搜索独立写了一份「标题 / 作者 / 系列子串匹配」，而 Komga 的
+`fullTextSearch` **根本没读** ⇒ 同一本书在 OPDS 搜得到、在 Komga 搜不到） |
+   | Komga 列表端的**分页与排序**（在哪一层切页） | `novelforge/core/komga_api.py` 的 `paginate(..., build=)`
++ `book_sort_key` / `series_sort_key`（第 266 期：排序在**源行**上做、只给当前页造 DTO；
+此前先给全库造 DTO 再切片 ⇒ 一页 20 条也要发全书库的进度查询、开全书库的 epub/PDF） |
    | 前端的**体积 / 日期 / 时间格式** | `frontend/src/lib/format.ts` 的 `fmtBytes` / `fmtDay` / `fmtDateTime` /
 `fmtDateTimeSec` / `fmtClock` / `fmtClockHM` / `fmtAgo` / `fmtWhen`（第 265 期：此前 `fmtBytes` 有 11 份本地副本、
 取整规则 5 种 ⇒ 同一个 1.5 MB 显示 `1.5` / `1.50` / `2` MB，仪表盘对 500 KB 的书库显示 `0 MB`） |

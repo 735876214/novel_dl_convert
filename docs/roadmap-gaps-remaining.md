@@ -15506,3 +15506,124 @@ uvicorn 的 `ws_max_size` **默认就是 16 MB**（框架层给的）⇒ 超大�
 **`api.ts` 是不是逻辑堆积**（方法中位数 2 行，只是接口面大）· **`db.py` 是不是杂物堆**
 （48 个按域分节）· **前端 `lib/` 的切分质量**（118 个单一判据模块，跨文件导出的同名函数 = 0）·
 **`_product_kind` / `relpath_for` 是不是第二份实现**（都**委托**到唯一实现，不是）。
+
+## 第 266 期（Komga 兼容面审计：搜索是摆设，条件形状一怪就 500）
+
+**需求来源**：用户直接立项 —— 先「审计一下 komga 功能」，看到结论后「全部修完」。
+
+**方法**（先量再判）：起真实例、造**真** CBZ / EPUB / PDF（假字节解不出页，页数恒 0 会量出假结论）、
+用 Komga 客户端的三种凭据（Basic / `X-API-Key` / 会话）打 49 条 `/api/v1/*`，
+逐条看响应与耗时。
+
+### 一、测下来是对的部分（别重查）
+
+| 项 | 实测 |
+|---|---|
+| 认证 | 三选一全通；无凭据 → **401 + `WWW-Authenticate: Basic`**；未启用 → **404**（不是 401，客户端不会反复弹密码框） |
+| 分页壳 | `content/totalElements/totalPages/size/number/numberOfElements/first/last/empty` 齐全；**越界页返回空 content 且原样回显 `number`**（不悄悄夹到最后一页） |
+| 一次性资源 | `/file` 支持 **Range**（206 + `Content-Range`） |
+| 页面流 | CBZ `/pages` 给真实 `fileName`/`mediaType`（png 就报 png）；`/pages/{n}` 200；`?convert=jpeg` 真的转成 `image/jpeg` |
+| 系列 | **目录型布局**（`库/系列/系列 #1.cbz`）→ 1 个系列 3 本、卷号 1/2/3；平铺则各自 oneshot（与 Komga 同口径） |
+| 可见性 | 跨库按 id 直连 404；`komga.expose` 关掉后连单系列地址一起 404 |
+| 写语义 | 系列已读/未读 204 且**保留原位置**；收藏夹重名 409；readlist 诚实空分页；`/analyze` 204 |
+
+### 二、七条缺陷（每条都是实测出来的，不是读代码猜的）
+
+#### 1. **服务端搜索是摆设**（`fullTextSearch` 全仓零命中）
+
+`POST /api/v1/books/list {"fullTextSearch": "三体"}` → **回整个书库**。客户端（Mihon / Panels
+这类按 Komga 1.19+ 走的）搜「三体」拿到的和「没搜」一样 ⇒ 用户以为搜索坏了。
+`GET /series?search=` / `GET /books?search=` 也没有这个参数。
+
+**修法**：判据收敛到 `library.matches_text()`（标题 / 作者 / 系列子串），
+**OPDS 搜索框也改用它** —— 此前那是另一份一模一样的内联实现。两处各写一份的话，
+「搜得到什么」会随出口而变（同一本书在 OPDS 搜得到、在 Komga 搜不到）。
+
+#### 2. **`condition` 的值不是字典就 500**（六处）
+
+```python
+want = str((cl["title"] or {}).get("contains") or "").lower()   # cl["title"] 是字符串？
+```
+
+`{"condition": {"title": "球状"}}` → `AttributeError` → **整页 500**。同形六处：
+`title` / `tag` / `readStatus` / `mediaStatus` / `libraryId` / `seriesId`，另有 `_ko_library_id_of`。
+而这个函数的 docstring 明写「**宁可多返回，也不让客户端因为一个陌生的过滤条件整页失败**」——
+实现与口径正好相反：不认识的**键**确实忽略了，认识的字**用了别的形状**就直接崩。
+
+**修法**：`_ko_cond_value(cl, key)`（不是字典就当没给）统一六处；`condition` 本身
+不是字典、`allOf` 不是列表也一并挡住；`title` 同时认 `{"contains"}` / `{"value"}` / 裸字符串。
+
+#### 3. **分页参数越界 → 422**（客户端读不懂）
+
+`Query(le=500)` / `Query(ge=0)` 把**可夹**的输入变成硬失败：`?size=1000` / `?page=-1`
+回 `{"detail":[...]}`，而客户端解析的是**分页壳** ⇒ 只显示「加载失败」，用户也不知道
+是「一页要得太多」。夹边界本来就在 `paginate()` 里。
+
+**修法**：Query 去掉 `ge/le`，交给 `paginate()` 夹（size ≤ 500、page ≥ 0）。
+非数字页码仍是 422（Spring 也是 400 —— 那是真的坏输入，不假装成功）。
+
+#### 4. **`/file` 的 Content-Type 恒为 `application/octet-stream`**
+
+同一本书：DTO 的 `media.mediaType` 是 `application/vnd.comicbook+zip`，下载却报「未知二进制」。
+而第 123 期补 `MEDIA_TYPES` 正是为了让客户端认得出格式 —— 它在真正下载的那一刻没生效。
+
+**修法**：`media_type=komga_api.MEDIA_TYPES.get(fmt, "application/octet-stream")`。
+
+#### 5. **`users/me.sharedLibraries` 不按可见性 / 范围过滤**
+
+只读凭据只许看 A 库时：`/api/v1/libraries` 回 `[klib-a]`，`/api/v1/users/me` 却回
+`[default, klib-a, klib-b]`。而 `sharedLibraries` 正是客户端画库列表的依据（Komga 里它就是
+「这个用户能用哪些库」）⇒ 用户点进 B 库是空的 / 404，`default` 那个 id 连 `/libraries` 都不返回。
+
+**修法**：改用 `_ko_visible_libraries(request)`（与 `/libraries` 同一份判据：库类型能力 +
+`komga.expose` + 只读凭据范围）。
+
+#### 6. **阅读进度不夹页码上界**
+
+`pagesCount=4` 的书 `PUT {"page": 999}` → 204，落库 `locator=998`、`percent=100`（实测）：
+这本书在书架上**永久「已读」**，而本应用自己的阅读器打开会指向不存在的页。
+
+**修法**：`page = min(page, pagesCount)` 再算 percent。
+
+#### 7. **列表是 O(全书库)**：分页只切最后一刀
+
+`_ko_books_dto` 先给**全库**造 DTO，再 `paginate` 切片。而 `book_dto` 每本要发一次进度查询、
+非 paged 格式还要**打开这个 epub 的 zip** 找 href、PDF 还要**打开文件**取页数：
+
+| 场景 | 修前 | 修后 |
+|---|---|---|
+| 300 本 CBZ，`?size=20` | 进度查询 **×300** | **×20**（只有这一页） |
+| 300 本，`/series?size=20` | 进度查询 **×300** | **×0**（`db.all_progress()` 一次取全量） |
+| 60 本 EPUB，`?size=20` | **开 zip ×60** | 开 zip ×0（未读的书不再去查 spine） |
+| 300 本，`/series?size=20` 墙钟 | 80 ms | **19 ms** |
+
+**修法**：`paginate(items, page, size, build=…)` —— `items` 是**源行**，只给当前页调 `build`；
+排序键改到源行上（`book_sort_key` / `series_sort_key` / `collection_sort_key`），
+DTO 排序的旧写法 `_ko_sorted` **删除**（它要求先造全 DTO，正是病根）。
+进度用 `db.all_progress()` 一次取全量注入 DTO。
+
+⚠️ **踩到的坑**：第一版用 `prog=None` 表示「调用方没传」，而 `prog.get(bid)` 对**没读过**的书
+正好返回 `None` ⇒ 「这本书没进度」被当成「没传」⇒ 又去逐本查库，一页 20 条退回 20 次查询。
+改成模块级哨兵 `_UNSET`（**`None` 不能同时表示「没传」和「没有」**）。用例
+`test_列表只给当前页造_DTO` 当场抓到 —— 这就是「先量」的价值。
+
+⚠️ **还没压掉的那一层**：`_ko_books()` 仍要把可见库的书目**物化**一遍（与
+`/api/books` 走同一条读路径，`catalog.books()`），所以墙钟仍随书库大小线性增长
+（300 本约 30–60 ms）。再往下压需要「目录级分页 + 跨库全局序」，那是另一期的活；
+本期压掉的是**每本书一次查库 / 开文件**这一类（这才是百毫秒级的大头）。
+
+### 三、防回归：`tests/test_komga_protocol_266.py`（16 例）
+
+搜索真的会筛（不是摆设）· 八种怪形状的条件都不许 500（且认得的形状仍要真的过滤）·
+分页越界要夹住 · `/file` 的 Content-Type 与 DTO 一致 · `users/me` 的库列表与 `/libraries` 同源
+（含只读范围）· 进度页码不越界 · **列表不许逐本查库**（用计数断言，不是看耗时）。
+
+### 四、核验
+
+后端全量见下（`period_close.py` 同步两处基线）；前端四连照跑（本期没改前端，但收尾要过）。
+
+### 本轮扫过、确认零缺陷的角度（别重查）
+
+**认证三路** · **分页壳字段** · **Range** · **页面流与 `convert=jpeg`** · **目录型系列的卷号** ·
+**跨库 / 闭源库的 404** · **系列级已读的「保留原位置」** · **收藏夹 409** · **readlist 空分页** ·
+**`/analyze` 204**。
