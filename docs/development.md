@@ -117,7 +117,9 @@ DATA_DIR=$T/data LIBRARY_SOURCE_DIR=$T/libraries AUTO_WATCH=false \
 - 镜像：`Dockerfile` 多阶段（`builder` 装 venv → `nodejs` 只借 node 二进制 → `frontend` 构建 Vue → `runtime` python-slim）；
   生产镜像**不含** `requirements-dev.txt`。
 - **版本号**：唯一真值源 = **仓库根 `VERSION`**（约定「第 N 期 = V0.N.0」）。
-  `server._read_version()` 读它 → `APP_VERSION` → 只由 `GET /health` 下发（**无 `/api/health`**）；
+  `core/appinfo.py` 的 `read_version()` 读它 → `server.APP_VERSION` → 只由 `GET /health` 下发
+  （**无 `/api/health`**；第 265 期把读取逻辑从 `server.py` 挪进 `core/` —— `core/updater.py` 也要用，
+  而领域层反向 import `server` 是分层倒置，`tests/test_layering_265.py` 钉住）；
   `novelforge/__init__.py` 里的第二份 `__version__` 已在第 79 期删除 —— 别再引入版本字面量。
 - 🚀 **发布自动化**（`.github/workflows/release.yml`，第 79 期起）：
 

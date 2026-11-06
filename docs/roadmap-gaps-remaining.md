@@ -15374,3 +15374,135 @@ uvicorn 的 `ws_max_size` **默认就是 16 MB**（框架层给的）⇒ 超大�
 - **兜底要兜在「组合」处** —— 每项各自安全 ≠ 组合起来安全；
 - **提示别用 success 色** —— 「有一部分没生效」不是「全好了」；
 - **候选要复现，不能凭上次的结论** —— 第 263 期复现时发现上一轮**已修好**。
+
+## 第 265 期（模块化审计：共享层早就写好了，只是没人用）
+
+**需求来源**：用户直接立项 —— 先要「审计模块化功能」，看到结论后要「全部修一下」。
+
+> 起点不是「哪里写得不好看」，而是**先量**：模块规模分布、导入环、分层违规、
+> 同名函数跨文件重复、共享层被绕过的比例。下面每条都带「文件:行号 + 触发条件 + 用户看到什么」。
+
+### 一、测量结果（判据在这里，结论在第二节）
+
+| 项 | 实测 |
+|---|---|
+| Python | 125 个文件 / 65.0k 行；`core/` 原有 94 个领域模块 |
+| 最大模块 | `server.py` 12690 行（占全仓 19.5%）：**433 条路由 + 183 个非路由函数**；其次 `db.py` 7307 行（内部 48 个按域分节）、`library.py` 3084 行 |
+| 前端 | 87.5k 行；`lib/api.ts` 6582 行，但**方法行数中位数 = 2**（只是接口面大，不是逻辑堆积） |
+| 导入环 | 模块级 **0**；含函数内延迟导入也是 **0** |
+| `core/` 里的 fastapi / starlette | **0 处**（分层规则实际成立） |
+| `core/` 跨模块同名的顶层函数 | 90 组（多数是**巧合同名**，逐个读过：真正同判据的 3 组，见第三节） |
+
+⇒ **分层是成立的，问题不在分层，在「共享层已经存在、却被大量绕过」**：
+同一份判据在 13 个文件里各写一遍，谁也没报错。
+
+### 二、修了什么（五条，共同点都是「第二份实现」）
+
+#### 1. 前端的体积 / 日期 / 时间格式：**24 处本地副本 → 1 处**
+
+`lib/format.ts` 早就导出了 `fmtBytes`，但**只有 9 个文件在用**，另外 **11 个 `.vue` 各自
+定义了一份**，取整规则分成 5 种：
+
+| 位置 | 1.5 MB 显示 |
+|---|---|
+| `lib/format.ts`（正主） | `1.5 MB` |
+| 重复书籍 / 本地转换 / 缺失资源 / 输出目录 | `1.50 MB` |
+| 审计日志 / Book Dock | KB 取 1 位 |
+| 书籍概览 / 阅读字体 | KB 取 0 位 |
+| 仪表盘「占用」小卡片 | **`2 MB`** |
+
+⚠️ **最狠的是仪表盘那张卡片**：它只认 MB/GB 且 `toFixed(0)` ⇒ 一个合计 **500 KB** 的书库
+显示 **`0 MB`**（而空库显示 `0 B`）—— **有内容却报 0**。
+
+日期同理：5 份 `fmtDate` + 7 份 `fmtTime` 分成 4 种写法 —— 播客页走
+`toLocaleDateString()`（`2026/11/6`）、书籍概览用斜杠格式、阅读日志在模板里内联、
+其余走 `localDate()`（`2026-11-06`）；`OpdsPage` 甚至用了无参数的 `toLocaleString()`（带秒）。
+时长也有 3 份（`1:05:20` 的时钟读数、`1 小时 20 分` 的人话、`35 分钟/次` 的带后缀版）。
+
+**修法**：`lib/format.ts` 补齐并统一成 `fmtBytes` / `fmtDay` / `fmtDateTime` /
+`fmtDateTimeSec` / `fmtClock` / `fmtClockHM` / `fmtAgo` / `fmtWhen` / `fmtDuration` /
+`fmtMinutes`，24 处本地副本全部删掉、改 import。
+⚠️ `fmtBytes` 顺手修了一个口径问题：**整数值不再留 `.0`**（`1.0 KB` → `1 KB`）。
+
+#### 2. `core/updater.py` 反向依赖 `server.py`（**分层倒置，写契约测试当轮抓到的**）
+
+`updater._local_version()` 里写着 `import novelforge.server as s` —— 还要**延迟导入**才躲开循环：
+领域层为了拿一个版本号，反向依赖了 Web 层。
+
+**修法**：版本读取（读仓库根 / 镜像内 `VERSION`、读不到回哨兵值）挪进新模块
+`core/appinfo.py::read_version()`，`server.APP_VERSION` 与 `updater` 都往下依赖它。
+⚠️ 不留 `server._read_version` 这个转发（那是兼容垫片）：调用点与用例同批改。
+
+#### 3. `server.py` 里的 1921 行「完全不碰 HTTP」的领域逻辑 → 四个 core 模块
+
+用 AST 量：**110 个非路由函数一次都没引用** `Request` / `Response` / `HTTPException` /
+`UploadFile`，合计 1921 行。按 `docs/architecture.md` §1「server 只做编排与形状」，
+它们该在领域层。挪走的是：
+
+| 挪到 | 原在 server.py | 内容 |
+|---|---|---|
+| `core/jobs.py` | `_run_download` / `_sync_worker` / `_dispatch_product` | 下载与「源站内容落到这本书」两条后台作业（状态机 0/50/100 + 活动日志 + 落点选择） |
+| `core/library_probe.py` | `_scan_media` / `_fix_empty_library` | 「目录里真装了什么」与「配置与内容不符时按事实校正」 |
+| `core/orphans.py` | `_orphan_refs` / `_orphans` | 孤儿 `book_id` 的两道护栏（库还在 / 该库当前有索引） |
+| `core/appinfo.py` | `_read_version` | 见上一条 |
+
+⚠️ **依赖由调用方注入**（管理器 / 收书目录 / `INPUT_DIR`）：那些是运行时单例，属于 Web 层装配；
+`core` 不持有全局单例。⚠️ **请求形状校验留在 server**（`_norm_exts` 抛 `HTTPException`）——
+`fix_empty_library` 因此改为返回**扩展名列表**，由 server 归一化。
+
+#### 4. 三个派生缓存模块复制了「原子换入」这条硬约束 → `core/derivedcache.py`
+
+`_swap_in` 在 `fb2cache` 与 `mobicache` 里**逐字相同**（23/24 行），`txtcache` 那里是
+一个**弱化变体**（不先清残留、失败回滚少一个判据）；`read_target` 在
+`fb2cache` / `mobicache` 里也**逐字相同**（34/35 行），而它承载的是一条硬约束：
+「这本书的正文其实在哪个文件里，只允许有一处答案」。
+
+**修法**：`swap_in()` + `read_target(mod, …)` 收进 `core/derivedcache.py`，三个缓存模块
+只保留自己的 `_build`（真解析，格式知识）。
+⚠️ **别在导入期把钩子抓进对象**：第一版把 6 个函数塞进一个 dataclass，
+于是 `monkeypatch.setattr(fb2cache, "_build", …)` 全部失效 ——
+而测试正是靠打桩 `_build` 数「解析了几次」（当场 5 例红）。
+改成传**模块对象**、运行时属性查找，打桩照旧有效。
+
+#### 5. 出版年三份实现、两套判据 → `core/metadata.py::year_of`
+
+| 来路 | 原实现 | 判据 |
+|---|---|---|
+| 入库（OPF 的 `dc:date`） | `library._year_of` | `\d{4}` —— 任意四位 |
+| Calibre 只读登记（`pubdate`） | `calibreimport._year_of` | `\d{4}` —— 任意四位 |
+| 在线抓取（源站字段） | `metasources._year_of` | 限 1500–2099 |
+
+⇒ 一条 `dc:date` 写成 `0001-01-01` 的书：**入库**路径把 `0001` 写进 `year`、
+**抓取**路径写空串 —— 同一本书两条来路给出不同值，而 `year` 参与排序与筛选。
+现在统一按「4 位且 1500–2099」，脏值一律留空。
+
+### 三、防回归（四条契约，19 例）
+
+| 用例 | 钉什么 | 例数 |
+|---|---|---|
+| `tests/test_shared_formatters_265.py` | 除 `lib/format.ts` 外不许再定义那 10 个名字；不许用 `toLocaleDateString`；`toLocaleString` 只许两处（千分位 / 时区问候）；仪表盘不许回到「只认 MB」 | 5 |
+| `tests/test_layering_265.py` | `core/` `sources/` 不许 import fastapi/starlette、不许反向 import `server`；只有 `server.py` 能依赖 Web 框架 | 4 |
+| `tests/test_derived_cache_shared_265.py` | `swap_in` / `read_target` 只许一份（其余只许**转调**）；原子换入成功不留残留、**失败要把旧目录放回去** | 5 |
+| `tests/test_shared_year_265.py` | 出版年判据只有一处；脏值三路同答；正常四形态都能取到 | 5 |
+| 前端 `lib/format.spec.ts` | 新增 5 组：`fmtBytes` 取整与空值出口、三种日期形态、"今天/今年/跨年"、时钟读数、相对时间四档 | +5 |
+
+⚠️ **契约测试要能自证不是空转**：`test_layering_265.py` 里有一条
+「`_imports` 必须真的看得见 `server.py` 的 fastapi 导入」—— 否则上面三条会**永远绿**
+（本仓的老毛病：路径写错、正则不匹配，用例照样通过）。
+
+### 四、核验
+
+- 后端全量：见下（本条由 `period_close.py` 同步两处基线）；
+- 前端四连：type-check → unit（890 例）→ build → **deploy** 全过；
+- `tests/check_doc_anchors.py` 对本次改过的文档零新增漂移；
+- ⚠️ 改到的既有用例共 7 个文件（`test_version_contract` / `test_library_type_facts` /
+  `test_download_kind` / `test_sources_gate` / `test_logic_audit_119` /
+  `test_no_full_scan_for_existence` / `test_format_audit_123`）—— 全是**跟着实现走**的
+  符号/文件名更新，判据本身一条没放宽。
+
+### 本轮扫过、确认零缺陷的角度（别重查）
+
+**导入环**（模块级与延迟导入都是 0 环）· **`core/` 的 HTTP 依赖**（0 处）·
+**`api.ts` 是不是逻辑堆积**（方法中位数 2 行，只是接口面大）· **`db.py` 是不是杂物堆**
+（48 个按域分节）· **前端 `lib/` 的切分质量**（118 个单一判据模块，跨文件导出的同名函数 = 0）·
+**`_product_kind` / `relpath_for` 是不是第二份实现**（都**委托**到唯一实现，不是）。

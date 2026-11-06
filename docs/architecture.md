@@ -16,7 +16,7 @@
 │   · 只做**编排与形状**：参数校验 → 调 core → 组装响应（如 _card 收口 path）│
 └───────────────┬──────────────────────────────────────────────────────────┘
 ┌───────────────▼──────────────────────────────────────────────────────────┐
-│ novelforge/core/* —— 领域逻辑（**全部 93 个模块**，纯 Python，不依赖 FastAPI）│
+│ novelforge/core/* —— 领域逻辑（纯 Python，**不依赖 FastAPI**；模块数不在此写死）│
 │ achievements · activity · activity_log · ai_detect · atomicio · audio ·  │
 │ audio_meta · audiobook_zip · auth · authors · autoupdate · backup ·      │
 │ bookdock · bookfilter · bookrules · booksearch · browse_counts · cache · │
@@ -332,7 +332,17 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
    | KOReader 批注文件的**格式**（写与读逐字对称） | `novelforge/core/koreader_export.py`（写）↔ `novelforge/core/koreader_anno.py`（读） |
    | KEPUB 的结构（Kobo 要的三样 + `mimetype` 不压缩） | `novelforge/core/kepub.py` 的 `export_kepub` |
    | TTS 分块与合成（句末切块 / 两种响应形态） | `novelforge/core/tts.py` 的 `_chunks` / `_audio_bytes` |
-   | 版本号 | 仓库根 `VERSION`（`server.APP_VERSION` 读它，只由 `GET /health` 下发） |
+   | **出版年**的解析（三条来路同一个答案） | `novelforge/core/metadata.py` 的 `year_of()`（第 265 期收敛：
+入库读 OPF 的 `dc:date` / Calibre 读 `pubdate` / 抓取读源站字段 —— 此前**三份实现、两套判据**
+（前两份 `\d{4}`、第三份限 1500–2099）⇒ 同一个 `0001-01-01` 在两条路上给出不同 `year`） |
+   | 派生缓存的**原子换入**与「正文在哪个文件」 | `novelforge/core/derivedcache.py` 的 `swap_in()` / `read_target()`
+（第 265 期收敛：`fb2cache` / `mobicache` 两处逐字相同、`txtcache` 是弱化变体 ⇒ 硬约束改一处漏一处；
+缓存模块保留同名 `read_target` 时**只许转调**，由用例钉住） |
+   | 前端的**体积 / 日期 / 时间格式** | `frontend/src/lib/format.ts` 的 `fmtBytes` / `fmtDay` / `fmtDateTime` /
+`fmtDateTimeSec` / `fmtClock` / `fmtClockHM` / `fmtAgo` / `fmtWhen`（第 265 期：此前 `fmtBytes` 有 11 份本地副本、
+取整规则 5 种 ⇒ 同一个 1.5 MB 显示 `1.5` / `1.50` / `2` MB，仪表盘对 500 KB 的书库显示 `0 MB`） |
+   | 版本号 | 仓库根 `VERSION`（`core/appinfo.py` 的 `read_version()` 读它 —— 第 265 期从 `server.py` 挪下来：
+`core/updater.py` 也要用它，而领域层反向 import `server` 是**分层倒置**；`server.APP_VERSION` 只是引用，只由 `GET /health` 下发） |
    | 被**环境变量无条件覆盖**的配置键 | `novelforge/config.py` 的 `_ENV_OVERRIDES` / `env_overridden()`（第 244 期：这两个键在设置页改了不起作用 ⇒ 界面据此标注「由环境变量接管」） |
    | 被**环境变量兜底**的配置键（当前这个值是谁给的） | `novelforge/config.py` 的 `_ENV_FALLBACKS` / `env_fallback()`（第 264 期：**兜底**语义 = 「没人写过的才用环境变量」⇒ 用户改了就**覆盖**环境变量 ⇒ 界面**不禁用**输入框、只**标注**来源；⚠️ 与 `env_overridden`（**无条件覆盖** ⇒ 界面**禁用**）是**两类**，必须分开报；⚠️ 判据读**原始来源**（settings.json / config.yaml），**不能**读 `load_config()` 的结果 —— 那份已把环境变量的值合进去 ⇒ 拿它判「用户改过没有」**逻辑自指**） |
    | 播客「残留下载」判据（这一集此刻有没有人在下） | `novelforge/core/podcasts.py` 的 `_stale_download`（复位点：列表端点 `reset_stale_in` + 启动时 `reset_stale_downloads`） |
