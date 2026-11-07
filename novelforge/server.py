@@ -11738,11 +11738,17 @@ def ko_me(request: Request):
     # 此前用的是 `library.libraries()` 全量 ⇒ 只读凭据只许看 A 库时，`/libraries` 回 [A]、
     # `/users/me` 却回 [default, A, B]（实测）—— 客户端按 sharedLibraries 画库列表，
     # 用户点进 B 库是空的/404，而 `default` 那个 id 连 `/libraries` 都不返回。
+    # ⚠️ 第 270 期：`roles` 必须与**真实权限**一致。此前对只读凭据也报 `ADMIN`
+    # ⇒ 客户端显示管理 / 编辑入口，点下去要么 403、要么真的写进去（见 `_ko_require_write`）
+    # —— 那是 AGENTS §1 的「不做假交互」。
+    readonly = _ko_scope(request) is not None
     return {
         "id": "1", "email": f"{user}@novelforge.local",
-        "roles": ["ADMIN", "USER"], "labelsAllow": [], "labelsExclude": [],
+        "roles": ["USER"] if readonly else ["ADMIN", "USER"],
+        "labelsAllow": [], "labelsExclude": [],
         "sharedLibraries": [
-            {"libraryId": lib["id"], "userId": "1", "role": "ADMIN"}
+            {"libraryId": lib["id"], "userId": "1",
+             "role": "USER" if readonly else "ADMIN"}
             for lib in _ko_visible_libraries(request)
         ],
     }
@@ -12164,10 +12170,44 @@ def _ko_series_books(request: Request, ids: list) -> list:
     return out
 
 
-def _ko_collection_or_404(cid) -> dict:
+def _ko_scope_visible_books(request: Request) -> "set | None":
+    """只读凭据**能看到**的书 id 集合；``None`` = 不限定（管理员 / API Key / 会话）（第 270 期）。"""
+    if _ko_scope(request) is None:
+        return None
+    return {str(b.get("id") or "") for b in _ko_books(request)}
+
+
+def _ko_collection_visible(request: Request, cid) -> bool:
+    """这个收藏夹该不该让**当前凭据**看见（第 270 期）。
+
+    ⚠️ 收藏夹是**全局**的（不按库隔离），而只读凭据只许看它范围内的书。
+    此前列表与单夹接口都不过 scope ⇒ 一个只许看 A 库的客户端能**列出全部收藏夹的名字**
+    （成员已过滤，但名字没过滤）。口径：**只读凭据只看得到「与它可见书库有交集」的夹**。
+    """
+    vis = _ko_scope_visible_books(request)
+    if vis is None:
+        return True
+    return bool({str(b or "") for b in db.collection_book_ids(cid)} & vis)
+
+
+def _ko_require_write(request: Request, what: str = "收藏夹") -> None:
+    """**只读凭据不许写**（第 270 期）。
+
+    ⚠️ `_komga_guard` 只做认证 —— 它返回的 scope 之前**没有任何写入口用它**。
+    于是「只读账号」（`docs/user-guide.md` 对它的描述）能建 / 改名 / 删收藏夹，
+    而收藏夹就是本应用的「我的收藏」（全局用户数据）⇒ 实测把一个「只读」凭据交给
+    第三方客户端，那个客户端就能删掉用户的收藏夹。
+    """
+    if _ko_scope(request) is not None:
+        raise HTTPException(403, f"只读凭据不能修改{what}")
+
+
+def _ko_collection_or_404(request: Request, cid) -> dict:
     row = db.get_collection(int(cid))
     if not row:
         _ko_404("收藏夹不存在")
+    if not _ko_collection_visible(request, cid):
+        _ko_404("收藏夹不存在")          # 看不见的夹对客户端就是「不存在」，不泄露它存在
     return row
 
 
@@ -12175,8 +12215,13 @@ def _ko_collection_or_404(cid) -> dict:
 def ko_collections(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE,
                    sort: str = ""):
     _komga_guard(request)
+    rows = db.list_collections()
+    vis = _ko_scope_visible_books(request)
+    if vis is not None:
+        rows = [r for r in rows
+                if {str(b or "") for b in db.collection_book_ids(r["id"])} & vis]
     return komga_api.paginate(
-        _ko_order(db.list_collections(), sort, komga_api.collection_sort_key, "name"),
+        _ko_order(rows, sort, komga_api.collection_sort_key, "name"),
         page, size,
         build=lambda r: komga_api.collection_dto(
             r["id"], r["name"], r.get("created_at"), _ko_collection_groups(request, r["id"])))
@@ -12189,6 +12234,7 @@ def ko_collection_create(request: Request, payload: dict = Body(None)):
     if not name:
         raise HTTPException(400, "收藏夹名称不能为空")
     _komga_guard(request)
+    _ko_require_write(request)
     try:
         cid = db.create_collection(name)
     except Exception:                    # noqa: BLE001 —— 靠 name 的 UNIQUE 撞库判重
@@ -12203,7 +12249,7 @@ def ko_collection_create(request: Request, payload: dict = Body(None)):
 @app.get("/api/v1/collections/{cid}")
 def ko_collection_one(request: Request, cid: int):
     _komga_guard(request)
-    row = _ko_collection_or_404(cid)
+    row = _ko_collection_or_404(request, cid)
     return komga_api.collection_dto(row["id"], row["name"], row.get("created_at"),
                                     _ko_collection_groups(request, cid))
 
@@ -12211,7 +12257,8 @@ def ko_collection_one(request: Request, cid: int):
 @app.patch("/api/v1/collections/{cid}")
 def ko_collection_rename(request: Request, cid: int, payload: dict = Body(None)):
     _komga_guard(request)
-    row = _ko_collection_or_404(cid)
+    _ko_require_write(request)
+    row = _ko_collection_or_404(request, cid)
     name = str((payload or {}).get("name") or "").strip()
     if not name:
         raise HTTPException(400, "收藏夹名称不能为空")
@@ -12227,7 +12274,8 @@ def ko_collection_rename(request: Request, cid: int, payload: dict = Body(None))
 @app.delete("/api/v1/collections/{cid}")
 def ko_collection_delete(request: Request, cid: int):
     _komga_guard(request)
-    _ko_collection_or_404(cid)
+    _ko_require_write(request)
+    _ko_collection_or_404(request, cid)
     db.delete_collection(cid)
     return Response(status_code=204)
 
@@ -12236,7 +12284,7 @@ def ko_collection_delete(request: Request, cid: int):
 def ko_collection_series(request: Request, cid: int, page: int = _KO_PAGE,
                          size: int = _KO_SIZE):
     _komga_guard(request)
-    _ko_collection_or_404(cid)
+    _ko_collection_or_404(request, cid)
     rows = db.all_series_meta()
     th = komga_api.threshold_resolver()
     prog = db.all_progress()
@@ -12253,7 +12301,8 @@ def ko_collection_series(request: Request, cid: int, page: int = _KO_PAGE,
 def ko_collection_replace_series(request: Request, cid: int, payload: dict = Body(None)):
     """**整体替换**（Komga 的语义）：先清空，再按给定的系列逐本加入。"""
     _komga_guard(request)
-    row = _ko_collection_or_404(cid)
+    _ko_require_write(request)
+    row = _ko_collection_or_404(request, cid)
     db.clear_collection(cid)
     db.add_books_to_collection(cid, [str(b.get("id") or "") for b in
                                      _ko_series_books(request, (payload or {}).get("seriesIds") or [])])
@@ -12264,7 +12313,8 @@ def ko_collection_replace_series(request: Request, cid: int, payload: dict = Bod
 @app.delete("/api/v1/collections/{cid}/series/{series_id}")
 def ko_collection_remove_series(request: Request, cid: int, series_id: str):
     _komga_guard(request)
-    _ko_collection_or_404(cid)
+    _ko_require_write(request)
+    _ko_collection_or_404(request, cid)
     found = _ko_find_series(request, series_id)
     if not found:
         _ko_404("系列不存在")
@@ -12276,7 +12326,7 @@ def ko_collection_remove_series(request: Request, cid: int, series_id: str):
 def ko_collection_thumb(request: Request, cid: int):
     """夹封面 = 成员里**第一本有封面**的书。"""
     _komga_guard(request)
-    _ko_collection_or_404(cid)
+    _ko_collection_or_404(request, cid)
     for items in _ko_collection_groups(request, cid).values():
         for b in items:
             if b.get("has_cover"):
