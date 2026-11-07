@@ -473,6 +473,14 @@ def book_dto(b: dict, series_name: str = "", th=None, prog=_UNSET) -> dict:
     raw_number, number_sort = number_parts(b)
     number = int(number_sort)
     profile = _PROFILES.get(fmt)
+    # ⚠️ 第 274 期：**读不出来的书要报 `ERROR`，不是 `READY`**。
+    # 「这个格式有没有客户端阅读器」与「这本书读不读得出来」是**两件事**：此前 status 只由
+    # 格式决定 ⇒ 一个坏掉的 `.cbz`（扫描时已记进索引的 `issues=["unparsable"]`）照样报
+    # `READY` + `DIVINA` + `pagesCount=0` ⇒ 客户端显示「阅读」按钮，点进去 `/pages` 回 400 /
+    # 0 页 ⇒ 用户看到「加载失败」，以为是客户端或网络坏了，其实是书坏了。
+    # Komga 的 `Media.Status` 本来就有 `ERROR` 这一档；判据**不需要开文件** ——
+    # 扫描期就把「解不开」记进索引了（`catalog` 的 `unparsable` 列）。
+    unreadable = bool(profile) and "unparsable" in (b.get("issues") or ())
     return {
         "id": b["id"], "seriesId": series_id(sname), "seriesTitle": sname,
         "libraryId": book_library_id(b),
@@ -481,8 +489,9 @@ def book_dto(b: dict, series_name: str = "", th=None, prog=_UNSET) -> dict:
         "created": iso(b.get("mtime")), "lastModified": iso(b.get("mtime")),
         "fileLastModified": iso(b.get("mtime")), "sizeBytes": int(b.get("size") or 0),
         "media": {
-            # 只有客户端真有阅读器的格式才 READY，其余如实 UNSUPPORTED（见 `_PROFILES`）
-            "status": "READY" if profile else "UNSUPPORTED",
+            # 三档：① 读不出来 ⇒ ERROR（判据见上）；② 客户端真有阅读器的格式 ⇒ READY；
+            # ③ 其余如实 UNSUPPORTED（见 `_PROFILES`）
+            "status": "ERROR" if unreadable else ("READY" if profile else "UNSUPPORTED"),
             "mediaType": MEDIA_TYPES.get(fmt, "application/octet-stream"),
             "pagesCount": pages, "comment": "",
             "mediaProfile": profile,
