@@ -5147,6 +5147,26 @@ def api_book_cover(bid: str, w: int = 0):
             return data, media
         return _cover_cached(bid, path, _comic_cover, width)
 
+    if fmt == "PDF":
+        # ⚠️ 第 273 期：**PDF 也要有封面**。此前落到最后那句「该格式没有内嵌封面」⇒ 404，
+        # 于是 PDF 在客户端（Komga 官方 Web / Mihon）里**只有一块占位色**，而 Komga 本身
+        # 对任何「按页渲染」的格式都会拿第 1 页当封面（PDF 正是这一类）。
+        # 这里复用 `pdfrender.render_page`（**带磁盘缓存**，键含缩放档）—— 与
+        # `/api/v1/books/{id}/pages/1` 是同一条渲染路，不另写一份。
+        def _pdf_cover():
+            from .core import pdfrender
+            try:
+                data, _size = pdfrender.render_page(path, 0, bid)
+            except imaging.MissingPillow:
+                # 缺图片处理能力 ⇒ 这一格**没有封面**（前端回落渐变占位）。
+                # 不抛 503：封面出现在**列表**里，一个库几十上百张，503 只会把整页打红；
+                # 「缺什么能力」由 `imaging.state()` 与 `/api/v1/**/pages/{n}` 如实上报。
+                raise HTTPException(404, "这台服务器缺少图片处理能力（Pillow），封面渲染不了") from None
+            if not data:
+                raise HTTPException(404, "该 PDF 没有可渲染的首面")
+            return data, "image/jpeg"
+        return _cover_cached(bid, path, _pdf_cover, width)
+
     if fmt in ("AUDIO", "UNITS"):
         # 目录型条目（有声书 / 序号单元树）的封面：找的是 `cover` / `folder` / `poster`
         # 那几个名字。第 73 期起走 `units.cover_in_tree` —— 它**能在子树里找**

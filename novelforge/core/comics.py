@@ -78,9 +78,14 @@ class EntryTooLarge(RuntimeError):
         self.name = name
         self.size = size
         self.limit = limit
+        # ⚠️ 第 273 期：**别报「有多大」** —— `read_capped` 读到 `limit + 1` 就停了，
+        # 那个 `size` 只是「到此为止已读到多少」，不是真实解压体积。按 128 MiB 的上限算，
+        # `limit + 1` 四舍五入成 128.0 MB ⇒ 原来的文案是**自相矛盾**的一句：
+        # 「这个条目解压后有 128.0 MB，超过上限 128.0 MB」（实测，走 Komga 的
+        # `/resource` 与应用的 `/asset` 都能看到）。用户读到它会怀疑是 bug 还是自己看错。
+        # `self.size` 仍然保留给程序判断（调用方拿它做阈值/日志都行），只是**不进人话**。
         super().__init__(
-            f"这个条目解压后有 {_fmt_size(size)}，超过上限 "
-            f"{_fmt_size(limit)}（{name}）")
+            f"这个条目解压后超过上限 {_fmt_size(limit)}（{name}）")
 
 
 def _fmt_size(n: int) -> str:
