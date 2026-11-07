@@ -15848,3 +15848,97 @@ books 的 `anyOf` 是「或」、`allOf` 是「与」· 两者同时出现时是
 **登录-登出全流程** · **`series/list` 的 `libraryId`（含不存在的库）** · **prev/next 系列序** ·
 **locator 往返** · **单位一致性** · **卷号保真** · **manifest 可取** · **缓存 `private`** ·
 **批量写** · **oneshot** · **错误体 Spring 键**。
+
+## 第 269 期（Komga 第四轮审计：没写进字段表就等于没用）
+
+**需求来源**：用户直接立项 —— 「继续审计 komga」（第四轮），看到结论后「修一下」。
+
+**这一轮的角度**：**默认排序与排序字段的覆盖**、**聚合字段**、**`ondeck` 的语义**。
+
+### 一、测下来健康的部分（别重查）
+
+`POST` / `DELETE /collections/{cid}/series` 的替换语义 · `/referential` 给的是真实值 ·
+`/books/latest` 与 `/series/latest` 按 `lastModifiedDate,desc` · 跨库同名系列的 `booksCount` ·
+以及前三轮覆盖过的（认证三路 / 分页壳 / Range / 页面流 / 304 / HEAD / 条件的两半 /
+写后读回 / 缓存 `private` / 批量写 / 错误体形状）。
+
+### 二、四条缺陷
+
+#### 1. **系列内的默认顺序是文件名字典序**（12 卷排成 1,10,11,12,2,…）
+
+造一个 12 卷的系列：
+
+```
+默认（不带 sort）                  -> ['1','10','11','12','2','3','4','5','6','7','8','9']
+sort=metadata.numberSort,asc       -> 同一串（也没生效）
+```
+
+两个原因叠在一起：
+
+- `ko_series_books` 的默认排序键传的是 `"name"` —— 而 `komga_api.grouped()` **本来已经
+  按卷号排好**，默认再按字符串排一次反而把它打乱；
+- `book_sort_key()` 的字段表里**没有 `metadata.numberSort`**（也没有 `number`）——
+  Komga 客户端真的会传这个字段，于是回落成 `name`，还是同一个错序。
+
+**用户看到**：12 卷以上的系列顺序乱，「下一卷」跳到第 10 卷。
+
+**修法**：卷号解析抽成 `number_parts()`（DTO 与排序**共用一份**）；排序表补
+`metadata.numberSort` / `numberSort` / `number` / `metadata.number`；
+系列内的默认排序改成 `metadata.numberSort`。
+
+#### 2. **`ondeck` 读完一卷之后就空了**
+
+```
+都没读         -> []
+读完第 1 卷     -> []          ← 期望第 2 卷
+第 2 卷读到一半 -> ['系列 #2']   ✓
+```
+
+判据要求「系列里有一本**在途**（开始阈值 < 进度 < 读完阈值）」，而读完第 1 卷之后
+系列里没有在途的书 ⇒ 整个系列从「继续阅读」消失。Komga 的语义是「**已开始**的系列 →
+下一本未读完的书」。
+
+**修法**：判据改成「系列里**任意一本有过进度**」（含已读完），再取第一本未读完的。
+三本全读完 ⇒ `nxt` 为空 ⇒ 该系列照旧退出（不编造「下一本」）。
+
+#### 3. **`SeriesDto.booksMetadata.authors` 恒为空 —— 系列没有作者**
+
+```
+BookDto.metadata.authors = [{"name": "刘慈欣", "role": "writer"}]
+SeriesDto.booksMetadata  = {"authors": [], "releaseDate": null, …}
+```
+
+Komga 的系列作者就放在 `booksMetadata.authors`（从成员书聚合）；官方 Web 的系列卡片、
+Mihon 的系列详情都读它 ⇒ **书库按系列浏览时每个系列都没有作者**（点进书才有）。
+
+**修法**：`authors` 从成员书**保序去重**聚合；`releaseDate` 取**最早**的那本。
+
+#### 4. **系列的 `tags` 与 `genres` 口径不一致**
+
+同一份数据只进了 `genres`、`tags` 留空：
+
+```python
+"genres": (系列级 tags 或 成员书 tags 的并集)[:10],
+"tags": [],          # ← 同一份数据却不在这里
+```
+
+Komga 里 `tags` 与 `genres` 是**两个独立维度**，客户端「按标签筛」用的是前者 ⇒
+按标签筛系列永远筛不到、系列详情里也没有标签。
+
+**修法**：抽 `_series_tags(meta, items)`，`genres` / `metadata.tags` / `booksMetadata.tags`
+**三处同一份**（三处各算一遍就是三个可能漂移的真值源）。
+
+### 三、防回归：`tests/test_komga_protocol_269.py`（5 例）
+
+12 卷的默认顺序是 `1..12`（且 `metadata.numberSort` 的 asc/desc 都生效）· 全库列表也认卷号 ·
+`ondeck`：一本没读为空 / 读完第 1 卷给第 2 卷 / 全读完为空 · 系列的作者与首版年聚合 ·
+系列的 `metadata.tags` == `genres` == `booksMetadata.tags`（且非空）。
+
+### 四、核验
+
+后端全量见下（`period_close.py` 同步两处基线）；前端四连照跑（本期没改前端）。
+
+### 本轮扫过、确认零缺陷的角度（别重查）
+
+**Collections 的 series 替换 / 移除** · **`/referential`** · **`/books/latest`、`/series/latest`** ·
+**跨库同名系列的计数** · 前三轮已覆盖的所有角度（见第 266–268 期段）。
