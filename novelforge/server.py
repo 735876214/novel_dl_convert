@@ -11841,8 +11841,12 @@ def ko_series_books(request: Request, series_id: str, page: int = _KO_PAGE,
     name, items = found
     th = komga_api.threshold_resolver()
     prog = db.all_progress()
+    # ⚠️ 第 269 期：**系列内的默认顺序按卷号**（Komga 的语义）。此前默认 `name`
+    # ⇒ 12 卷的系列排成 `1,10,11,12,2,…`（文件名字典序），而且 `grouped()` 本来
+    # 已经按卷号排好，这里再按字符串排一次反而把它打乱。
     return komga_api.paginate(
-        _ko_order(items, sort, lambda f: komga_api.book_sort_key(f, prog), "name"),
+        _ko_order(items, sort, lambda f: komga_api.book_sort_key(f, prog),
+                  "metadata.numberSort"),
         page, size,
         build=lambda b: komga_api.book_dto(b, name, th, prog.get(b["id"])))
 
@@ -11917,10 +11921,12 @@ def ko_books_ondeck(request: Request, page: int = _KO_PAGE, size: int = _KO_SIZE
     out = []
     for name, items in _ko_grouped(request).items():
         pcts = [float((prog.get(b["id"]) or {}).get("percent") or 0) for b in items]
-        # 「在读」= 过了该书的开始阈值、且还没到它的读完阈值（第 40 期：口径随书所属库）
         fin = [komga_api.thresholds_of(th, b)[1] for b in items]
-        sta = [komga_api.thresholds_of(th, b)[0] for b in items]
-        if not any(s < p < f for p, s, f in zip(pcts, sta, fin)):
+        # ⚠️ 第 269 期：「已开始」= 系列里**任意一本有过进度**（含**已读完**的）。
+        # 此前要求「有一本**在途**」（开始阈值 < 进度 < 读完阈值）⇒ **读完第 1 卷之后
+        # 整个系列从 On Deck 消失**，客户端不提示下一卷（得自己回书库翻）。
+        # Komga 的语义是「已开始的系列 → 下一本未读完的书」。
+        if not any(p > 0 for p in pcts):
             continue
         nxt = next((b for b, p, f in zip(items, pcts, fin) if p < f), None)
         if nxt:

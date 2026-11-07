@@ -315,6 +315,17 @@ def find_series(name: str, library_id=None):
     return None
 
 
+def _series_tags(meta: dict, items: list) -> list:
+    """系列标签：系列级元数据优先，否则取成员书标签的**保序并集**（最多 10 个）。
+
+    `genres` / `metadata.tags` / `booksMetadata.tags` 三处**同一份**（第 269 期）——
+    三处各算一遍就是三个可能漂移的真值源。
+    """
+    meta = meta or {}
+    return (list(meta.get("tags") or [])
+            or list(dict.fromkeys(t for b in items for t in (b.get("tags") or []))))[:10]
+
+
 def series_dto(name: str, items: list, meta: dict = None, th=None,
                prog=_UNSET) -> dict:
     """SeriesDto。读完/在读计数客户端会显示，所以要认真算（按 percent 判定）。
@@ -344,6 +355,14 @@ def series_dto(name: str, items: list, meta: dict = None, th=None,
             inprog += 1
     latest = max([b.get("mtime") or 0 for b in items] or [0])
     first = items[0] if items else {}
+    # 第 269 期：**系列级作者与首版年从成员书聚合**。
+    # 此前 `booksMetadata.authors` 恒为 `[]` —— 而 Komga 的系列作者就放在这里，
+    # 官方 Web 的系列卡片与 Mihon 的系列详情都读它 ⇒ 系列列表里**每个系列都没有作者**
+    # （点进书才有）。`releaseDate` 同理取**最早**的那本（Komga 的 booksMetadata 语义）。
+    authors = [{"name": a, "role": "writer"} for a in dict.fromkeys(
+        str(b.get("author") or "").strip() for b in items
+        if str(b.get("author") or "").strip())]
+    years = sorted({_day(b.get("year")) for b in items if _day(b.get("year"))})
     return {
         # 系列按名字跨库聚合，若同名系列的书分散在多库，归属取**第一本**所在库
         # （Komga 的 SeriesDto 只允许一个 libraryId；给空会让客户端整页失败）
@@ -364,16 +383,20 @@ def series_dto(name: str, items: list, meta: dict = None, th=None,
             # 系列级题材优先；没有则退回成员书题材并集。
             # ⚠️ 原实现用 set 去重 → 每次运行顺序可能不同（字符串哈希随机化），
             #    这里改成保序去重：客户端看到的题材顺序不再乱跳。
-            "genres": (list(meta.get("tags") or [])
-                       or list(dict.fromkeys(t for b in items for t in (b.get("tags") or []))))[:10],
-            "genresLock": False, "tags": [], "tagsLock": False,
+            "genres": _series_tags(meta, items),
+            "genresLock": False,
+            # ⚠️ 第 269 期：`tags` 与 `genres` 是 Komga 里**两个独立维度**，客户端
+            # 「按标签筛」用的是前者。此前把同一份数据只放进 `genres`、`tags` 留空 ⇒
+            # 按标签筛系列永远筛不到、系列详情里也没有标签。现在两处都给同一份。
+            "tags": _series_tags(meta, items), "tagsLock": False,
             "totalBookCount": len(items), "totalBookCountLock": False,
             "sharingLabels": [], "sharingLabelsLock": False,
             "links": [], "linksLock": False,
         },
         # booksMetadata.summary 与 metadata.summary 同源（Komga 两处都展示系列级摘要）；
         # summaryNumber 是「卷号」语义，不是简介，保持不动。
-        "booksMetadata": {"authors": [], "tags": [], "releaseDate": None,
+        "booksMetadata": {"authors": authors, "tags": _series_tags(meta, items),
+                          "releaseDate": (years[0] if years else None),
                           "summary": str(meta.get("description") or ""), "summaryNumber": ""},
         # ⚠️ 第 267 期：`oneshot` = 「这些书**没有系列元数据**、系列名是拿书名顶上去的」
         # （Komga 的语义：为单本书自动成系列）。此前判的是「成员数 == 1」⇒ **真实的**
@@ -403,6 +426,23 @@ def collection_dto(cid, name: str, created, groups: dict) -> dict:
     }
 
 
+def number_parts(b: dict) -> tuple:
+    """卷号的**唯一解析**：``(原文, numberSort)``。DTO 与排序键共用一份（第 269 期）。
+
+    「原文」保留 `"1.5"` / `""`（无卷号）；`numberSort` 是浮点（无卷号 ⇒ ``0.0``）。
+    ⚠️ 排序也必须用它：此前 `book_sort_key` 的表里**没有** `metadata.numberSort`
+    （Komga 客户端真的会传这个字段），于是回落成 `name` ⇒ 12 卷的系列在客户端里
+    排成 `1,10,11,12,2,…`（字典序）。
+    """
+    raw = str(b.get("series_index") or "").strip()
+    if not raw:
+        return "", 0.0
+    try:
+        return raw, float(raw)
+    except ValueError:
+        return raw, 0.0
+
+
 def book_dto(b: dict, series_name: str = "", th=None, prog=_UNSET) -> dict:
     """BookDto —— 客户端依赖最多的结构，字段名必须逐字对齐。
 
@@ -430,13 +470,7 @@ def book_dto(b: dict, series_name: str = "", th=None, prog=_UNSET) -> dict:
     #    （而 `library._series_index_of` 特意保留了 1.5：「非整数序号要保留」）。
     # Komga 的 `BookDto.number` 是 Int（1.5 这种只能取整），但**客户端显示「第几卷」
     # 读的是 `metadata.number` / `numberSort`** —— 那两个必须是原文与浮点。
-    raw_number = str(b.get("series_index") or "").strip()
-    number_sort = 0.0
-    if raw_number:
-        try:
-            number_sort = float(raw_number)
-        except ValueError:
-            number_sort = 0.0
+    raw_number, number_sort = number_parts(b)
     number = int(number_sort)
     profile = _PROFILES.get(fmt)
     return {
@@ -503,6 +537,12 @@ def book_sort_key(field: str, prog: dict = None):
         "metadata.releaseDate": lambda b: str(b.get("year") or ""),
         "sizeBytes": lambda b: int(b.get("size") or 0),
         "fileSize": lambda b: int(b.get("size") or 0),
+        # 第 269 期：Komga 客户端的「按卷序」就是这几个字段名 —— 此前不在表里，
+        # 一律回落成 `name`（字符串序）⇒ 12 卷排成 1,10,11,12,2,…
+        "metadata.numberSort": lambda b: number_parts(b)[1],
+        "numberSort": lambda b: number_parts(b)[1],
+        "number": lambda b: number_parts(b)[1],
+        "metadata.number": lambda b: number_parts(b)[1],
         "readProgress.lastModified": lambda b: float(
             (p.get(b.get("id")) or {}).get("updated_at") or 0),
     }
