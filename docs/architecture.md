@@ -342,6 +342,10 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 （第 135 期立的**唯一**组装点：`nosniff` + CSP `sandbox` + `Cache-Control`；第 267 期把
 `public` 改成 `private` —— 这十一个出口全在鉴定之后，`public` 允许共享缓存把封面 / 漫画页
 交给没登录的人。加新出口只许走 `_media_headers` / `_media_bytes` / `_media_file`） |
+   | 写入口要不要校验「**这本书还在不在**」 | `novelforge/server.py` 的 `_require_book()`（第 272 期：
+**用户界面发起的**写入口（批注 / 书签 / 评分 / 阅读状态）一律 404 —— 页面能点就说明书该在，
+书不在 = 页面早已过期；⚠️ **`PUT /api/books/{bid}/progress` 刻意不校验** —— 「同步先到、
+扫描后到」是真实场景，挡掉会丢用户的读点。判据按**入口性质**分，不是一刀切） |
    | **认证失败退避**（登录 / OPDS+Komga 只读凭据 / KOReader） | `novelforge/core/auth.py` 的
 `verify_pin` / `verify_client` / `verify_koreader`（第 271 期补齐第三个：此前 KOReader 直接
 `hmac.compare_digest` **没有任何退避** —— 而 kosync 的 key 是用户密码的 MD5 ⇒ 无闸门的口令预言机；
