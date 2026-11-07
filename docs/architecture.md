@@ -342,6 +342,9 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 （第 135 期立的**唯一**组装点：`nosniff` + CSP `sandbox` + `Cache-Control`；第 267 期把
 `public` 改成 `private` —— 这十一个出口全在鉴定之后，`public` 允许共享缓存把封面 / 漫画页
 交给没登录的人。加新出口只许走 `_media_headers` / `_media_bytes` / `_media_file`） |
+   | 这本书客户端**读不读得出来**（`media.status`） | `novelforge/core/komga_api.py` 的 `book_dto`
+（第 274 期：三档 —— 索引里 `issues` 含 `unparsable` ⇒ **ERROR**；客户端有阅读器 ⇒ READY；
+其余 ⇒ UNSUPPORTED。⚠️ 判据**取自索引**、**不许为此开文件** —— 第 266 期刚把「列表 O(全书库)」收掉） |
    | 一本书的**封面是哪张图**（按格式分支） | `novelforge/server.py` 的 `api_book_cover`（第 273 期补齐 PDF：
 CBZ/CBR → 归档首页 · EPUB/FB2 → 内嵌图 · **PDF → `pdfrender.render_page(path, 0, bid)`**（带磁盘缓存、
 与 `/pages/1` 同一条渲染路）· 有声书/单元树 → 目录里的 cover 图。前端 `/cover` 与 Komga

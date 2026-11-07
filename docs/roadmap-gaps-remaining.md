@@ -16236,3 +16236,59 @@ PDF 有封面且与 `/pages/1` **字节相同** · 应用自己的 `/cover` 对 
 **大库性能（1200 本）** · **三出口「读完」一致性** · **六种格式的 DTO / 页流 / 文件 / 封面矩阵**
 （CBZ/EPUB/PDF READY + 正确 mediaType/profile；TXT/FB2/MOBI 如实 UNSUPPORTED + profile null）·
 **解压炸弹闸门（两条出口同一判据）**。
+
+## 第 274 期（持续审计第 2 轮：有阅读器不等于读得出来）
+
+**需求来源**：用户立项的**持续任务**（每 30 分钟一轮，**某一轮零新增缺陷即收尾并自删**）。第 2 轮。
+
+**这一轮扫的三个角度**：**排序 / 筛选 / 分页的组合**、**并发（系列标记已读 vs 单本续写）**、
+**索引过期与软删除**。
+
+### 一、三条零发现（**别重查**）
+
+**① 排序 / 筛选 / 分页的组合**：`sort` 的七个变体（空 / `name,asc` / 大写 / 带空格的
+` booksCount,desc ` / 不认识的字段 / `metadata.titleSort,desc` / `,asc`）都回 200 且顺序合理；
+同键重复请求**顺序稳定**；`condition.allOf` + `fullTextSearch` + `sort=metadata.numberSort,desc`
++ `page` **一起用**也正确（`total=3`、第 0 页给 #3 #2、第 1 页给 #1）。
+
+**② 并发（40 本的系列「标记已读」 vs 一直续写其中一本）**：结束时是**最后写入者胜**
+（`locator=8 / 90%`），批量写没有把后到的单本写吞掉。
+
+**③ 软删除与「文件已删但没重扫」**：软删除后视图立刻少一本（4→3）、系列 `booksCount` 3→2、
+单本详情 / 文件 / 封面全 404；直接从磁盘删文件（**不重扫**）视图也立刻少一本、`/file`
+`/thumbnail` `/pages` 全 404 —— 索引读路径**本来就会过滤掉不存在的条目**。
+
+### 二、一条发现：坏掉的书在客户端里报 `READY`
+
+```
+坏 #1.cbz  issues=["unparsable"]   →  DTO: status=READY  pagesCount=0  profile=DIVINA
+好 #1.cbz  issues=[]               →  DTO: status=READY  pagesCount=2  profile=DIVINA
+```
+
+`media.status` 此前**只由格式决定**（`READY` = 客户端有阅读器 / `UNSUPPORTED` = 没有），
+而「这本书读不读得出来」是**另一件事**。于是一个解不开的 `.cbz`（扫描期早已记进索引的
+`issues=["unparsable"]`）照样报 `READY` + `DIVINA` + `pagesCount=0` ⇒ 客户端显示「阅读」按钮，
+点进去 `/pages` 回 400 / 0 页 ⇒ **用户看到「加载失败」，以为是客户端或网络坏了，其实是书坏了**。
+
+Komga 的 `Media.Status` 本来就有 `ERROR` 这一档；判据**不需要开文件** —— 扫描期就把「解不开」
+记进索引了（`catalog` 的 `unparsable` 列）。
+
+**修法**：`book_dto` 里三档 —— 读不出来 ⇒ `ERROR`；客户端有阅读器 ⇒ `READY`；其余 ⇒ `UNSUPPORTED`。
+⚠️ **别为此去开文件**：第 266 期刚把「列表 O(全书库)」（每本开一次 zip）收掉，为了这条状态
+又去解归档就把那笔账还回去了 —— 用例里把 `comics.pages` 打成会抛，钉住「列表不为状态开文件」。
+
+### 三、防回归：`tests/test_komga_audit_274.py`（3 例）
+
+坏书 `ERROR` / 好书 `READY`（且 `pagesCount` 正确）· **`ERROR` 不波及 `UNSUPPORTED`**
+（没有阅读器的 `.txt` 仍是 `UNSUPPORTED` + `profile: null`）· **判据来自索引、不开文件**
+（`comics.pages` 被打成会抛，列表照常 200）。
+
+### 四、核验
+
+后端全量见下（`period_close.py` 同步两处基线）；前端四连照跑（本期没改前端）。
+
+### 本轮扫过、确认零缺陷的角度（别重查）
+
+**排序 / 筛选 / 分页的组合与稳定性** · **并发：批量标记已读 vs 单本写** ·
+**软删除 / 文件消失后的索引视图**（三条读点全 404）· **错误体不泄漏内部事实**
+（绝对路径 / Traceback / `.venv` / `site-packages` 全无 —— 坏书、不存在的 id、空收藏夹逐个试过）。
