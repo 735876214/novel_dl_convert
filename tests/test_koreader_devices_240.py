@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 
-from novelforge.core import db
+from novelforge.core import db, library
 
 
 def _md5(s: str) -> str:
@@ -50,11 +50,21 @@ def test_重置必须显式确认(client, auth_headers, isolated):
     assert st["enabled"] is True
 
 
-def test_写进度会记下设备(client, auth_headers, isolated):
+def test_写进度会记下设备(client, auth_headers, make_library, tmp_path):
     key = _md5("pass123")
     _set_ko(client, auth_headers, enabled=True, key=key)
+    # ⚠️ 第 271 期：索引行必须指向**真实存在的**书 —— `PUT /syncs/progress` 现在会校验
+    # （此前不校验，给一本已删的书也能写进度，留下谁都清不掉的孤儿行）。
+    # 本用例关心的是「设备被记下来」，所以造一本真书来承载它。
+    root = tmp_path / "K"
+    root.mkdir(parents=True, exist_ok=True)
+    make_library("k", "K 库", "comic", root)
+    (root / "书.cbz").write_bytes(bytes.fromhex("504b0304") + bytes(32))
+    client.post("/api/scan", headers=auth_headers)
+    library.invalidate()
+    bid = library.books()[0]["id"]
     db.replace_koreader_docs([
-        {"book_id": "book-1", "doc_md5": "aaa", "alt_md5": "bbb", "size": 1, "mtime": 0},
+        {"book_id": bid, "doc_md5": "aaa", "alt_md5": "bbb", "size": 1, "mtime": 0},
     ])
     h = {"x-auth-user": "koreader", "x-auth-key": key}
     r = client.put("/koreader/syncs/progress", headers=h, json={

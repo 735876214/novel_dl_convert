@@ -154,6 +154,35 @@ def verify_pin(user: str, pin: str, host: str) -> bool:
     return False
 
 
+def verify_koreader(user: str, key: str, host: str, expected_user: str,
+                    expected_key: str) -> bool:
+    """KOReader 的 key 校验 —— **与 PIN / 只读凭据共用同一套失败退避**（第 271 期）。
+
+    ⚠️ 此前 `/koreader/users/auth` 直接 `hmac.compare_digest` 比对，**没有任何失败退避**：
+    kosync 的「key」是用户所设**密码的 MD5**，客户端把它原样发上来 ⇒ 服务端只是比对一个
+    哈希。于是「猜密码」不需要撞哈希——攻击者本地算 `md5(猜测)` 直接提交，**尝试次数不受限**
+    就是一个**没有闸门的口令预言机**（与第 137 期 `/api/v1` 那条 PIN 预言机同一个形状，
+    只是换成了任意长度的口令：用户设了弱口令照样危险）。
+
+    键加 `kosync:` 前缀：与管理员 / 只读凭据两个维度的失败计数**互不连坐**。
+    被退避挡住时抛 :class:`Throttled`，调用方转成自己的响应形状。
+    """
+    name = str(user or "").strip()
+    got = str(key or "").strip().lower()
+    want_u = str(expected_user or "").strip()
+    want_k = str(expected_key or "").strip().lower()
+    k = f"kosync:{name or '(空)'}|{host}"
+    wait = _throttle_remaining(k)
+    if wait > 0:
+        raise Throttled(wait)
+    if want_k and name == want_u and hmac.compare_digest(got, want_k):
+        _clear_failures(k)
+        return True
+    # 失败一律记账（包括「用户名不对」）—— 否则两层判断的差异本身会被用来探测
+    _note_failure(k)
+    return False
+
+
 def verify_client(username: str, pin: str, host: str) -> "dict | None":
     """校验**只读客户端凭据**（第 160 期）：成功返回凭据行（含 library_ids），失败 `None`。
 

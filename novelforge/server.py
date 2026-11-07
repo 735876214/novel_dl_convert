@@ -2705,7 +2705,7 @@ def opds_root(request: Request):
 
 
 @app.get("/opds/all")
-def opds_all(request: Request, page: int = Query(1, ge=1),
+def opds_all(request: Request, page: int = Query(1),
              sort: str = Query("recent"), order: str = Query("desc")):
     _opds_guard(request)
     bs = opds.sort_books(_opds_books(request), sort, order)
@@ -2714,7 +2714,7 @@ def opds_all(request: Request, page: int = Query(1, ge=1),
 
 
 @app.get("/opds/recent")
-def opds_recent(request: Request, page: int = Query(1, ge=1)):
+def opds_recent(request: Request, page: int = Query(1)):
     _opds_guard(request)
     bs = opds.sort_books(_opds_books(request), "recent", "desc")
     return _opds_xml(opds.acquisition_feed(_opds_base(request), "最近添加", "recent", bs, page=page))
@@ -2752,7 +2752,7 @@ def opds_tags(request: Request):
 
 
 @app.get("/opds/author/{name}")
-def opds_by_author(request: Request, name: str, page: int = Query(1, ge=1)):
+def opds_by_author(request: Request, name: str, page: int = Query(1)):
     _opds_guard(request)
     target = unquote(name).strip()
     bs = [b for b in _opds_books(request) if (b.get("author") or "").strip() == target]
@@ -2764,7 +2764,7 @@ def opds_by_author(request: Request, name: str, page: int = Query(1, ge=1)):
 
 
 @app.get("/opds/series/{name}")
-def opds_by_series(request: Request, name: str, page: int = Query(1, ge=1)):
+def opds_by_series(request: Request, name: str, page: int = Query(1)):
     _opds_guard(request)
     target = unquote(name).strip()
     bs = [b for b in _opds_books(request) if (b.get("series") or "").strip() == target]
@@ -2778,7 +2778,7 @@ def opds_by_series(request: Request, name: str, page: int = Query(1, ge=1)):
 
 
 @app.get("/opds/tag/{name}")
-def opds_by_tag(request: Request, name: str, page: int = Query(1, ge=1)):
+def opds_by_tag(request: Request, name: str, page: int = Query(1)):
     _opds_guard(request)
     target = unquote(name).strip()
     bs = [b for b in _opds_books(request)
@@ -2791,7 +2791,7 @@ def opds_by_tag(request: Request, name: str, page: int = Query(1, ge=1)):
 
 
 @app.get("/opds/search")
-def opds_search(request: Request, q: str = Query(""), page: int = Query(1, ge=1)):
+def opds_search(request: Request, q: str = Query(""), page: int = Query(1)):
     """搜索。客户端在搜索框提交时带上 q（OpenSearch 惯例）。"""
     _opds_guard(request)
     term = (q or "").strip().lower()
@@ -2927,7 +2927,7 @@ def opds_lib_root(request: Request, lid: str):
 
 
 @app.get("/opds/lib/{lid}/all")
-def opds_lib_all(request: Request, lid: str, page: int = Query(1, ge=1),
+def opds_lib_all(request: Request, lid: str, page: int = Query(1),
                  sort: str = Query("recent"), order: str = Query("desc")):
     _opds_guard(request)
     lib_id = str(_opds_lib(request, lid)["id"])
@@ -2938,7 +2938,7 @@ def opds_lib_all(request: Request, lid: str, page: int = Query(1, ge=1),
 
 
 @app.get("/opds/lib/{lid}/recent")
-def opds_lib_recent(request: Request, lid: str, page: int = Query(1, ge=1)):
+def opds_lib_recent(request: Request, lid: str, page: int = Query(1)):
     _opds_guard(request)
     lib_id = str(_opds_lib(request, lid)["id"])
     bs = opds.sort_books(_opds_books(request, lib_id), "recent", "desc")
@@ -2984,7 +2984,7 @@ def opds_lib_tags(request: Request, lid: str):
 
 
 @app.get("/opds/lib/{lid}/author/{name}")
-def opds_lib_by_author(request: Request, lid: str, name: str, page: int = Query(1, ge=1)):
+def opds_lib_by_author(request: Request, lid: str, name: str, page: int = Query(1)):
     _opds_guard(request)
     lib_id = str(_opds_lib(request, lid)["id"])
     target = unquote(name).strip()
@@ -2999,7 +2999,7 @@ def opds_lib_by_author(request: Request, lid: str, name: str, page: int = Query(
 
 
 @app.get("/opds/lib/{lid}/series/{name}")
-def opds_lib_by_series(request: Request, lid: str, name: str, page: int = Query(1, ge=1)):
+def opds_lib_by_series(request: Request, lid: str, name: str, page: int = Query(1)):
     _opds_guard(request)
     lib_id = str(_opds_lib(request, lid)["id"])
     target = unquote(name).strip()
@@ -3016,7 +3016,7 @@ def opds_lib_by_series(request: Request, lid: str, name: str, page: int = Query(
 
 
 @app.get("/opds/lib/{lid}/tag/{name}")
-def opds_lib_by_tag(request: Request, lid: str, name: str, page: int = Query(1, ge=1)):
+def opds_lib_by_tag(request: Request, lid: str, name: str, page: int = Query(1)):
     _opds_guard(request)
     lib_id = str(_opds_lib(request, lid)["id"])
     target = unquote(name).strip()
@@ -3050,7 +3050,7 @@ def opds_lib_search_description(request: Request, lid: str):
 
 @app.get("/opds/lib/{lid}/search")
 def opds_lib_search(request: Request, lid: str, q: str = Query(""),
-                    page: int = Query(1, ge=1)):
+                    page: int = Query(1)):
     _opds_guard(request)
     lib_id = str(_opds_lib(request, lid)["id"])
     term = (q or "").strip().lower()
@@ -10780,7 +10780,16 @@ def _ko_guard(request: Request) -> None:
         raise HTTPException(401, "尚未设置同步密钥")
     user = (request.headers.get("x-auth-user") or "").strip()
     key = (request.headers.get("x-auth-key") or "").strip().lower()
-    if user != str(cfg.get("username") or "").strip() or not hmac.compare_digest(key, stored):
+    # ⚠️ 第 271 期：走 `auth.verify_koreader` —— 与 PIN / 只读凭据**共用同一套失败退避**。
+    # 此前这里直接 `hmac.compare_digest`，**没有任何退避**：kosync 的 key 是用户密码的
+    # MD5，攻击者本地算 `md5(猜测)` 直接提交即可，**尝试次数不受限** ⇒ 一个无闸门的
+    # 口令预言机（与第 137 期 `/api/v1` 那条同形）。用户设了弱口令就真能被穷举。
+    try:
+        ok = auth_mod.verify_koreader(user, key, auth_mod.client_host(request),
+                                      cfg.get("username"), stored)
+    except auth_mod.Throttled:
+        raise HTTPException(429, "连续认证失败过多，请稍后再试")
+    if not ok:
         raise HTTPException(401, "用户名或密码不正确")
 
 
@@ -10825,6 +10834,12 @@ def ko_put_progress(request: Request, payload: dict = Body(...)):
     row = db.find_koreader_doc(doc)
     if not row:
         raise HTTPException(404, "文档不在书库索引里：请先在「设置 → KOReader」扫描书库")
+    # ⚠️ 第 271 期：**索引行可能指向一本已经删掉的书**（删书不会清 `koreader_docs`，
+    # 要等一次「扫描书库」整表重建）。此前这里不校验 ⇒ 客户端继续上报，进度写进
+    # `progress` 表 —— 一条**谁都看不见也清不掉**的孤儿行（孤儿扫描要求「该库还有索引书」，
+    # 那本书恰是最后一本时连扫描都够不着）。GET 那条早就校验了，PUT 漏了。
+    if not library.by_id(row["book_id"]):
+        raise HTTPException(404, "书已不在库中：请重新扫描书库")
     locator, percent = koreader.to_nf(payload)
     db.set_progress(row["book_id"], locator, percent)
     # 第 240 期：顺手记一次设备同步（**不另存一份真值源** —— 设备信息就落在
