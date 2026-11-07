@@ -342,6 +342,13 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 （第 135 期立的**唯一**组装点：`nosniff` + CSP `sandbox` + `Cache-Control`；第 267 期把
 `public` 改成 `private` —— 这十一个出口全在鉴定之后，`public` 允许共享缓存把封面 / 漫画页
 交给没登录的人。加新出口只许走 `_media_headers` / `_media_bytes` / `_media_file`） |
+   | **认证失败退避**（登录 / OPDS+Komga 只读凭据 / KOReader） | `novelforge/core/auth.py` 的
+`verify_pin` / `verify_client` / `verify_koreader`（第 271 期补齐第三个：此前 KOReader 直接
+`hmac.compare_digest` **没有任何退避** —— 而 kosync 的 key 是用户密码的 MD5 ⇒ 无闸门的口令预言机；
+三个维度各用独立键前缀，失败计数**互不连坐**） |
+   | OPDS 的**页码夹边界** | `novelforge/core/opds.py` 的 `acquisition_feed()`（第 271 期：
+越界夹到 `[1, pages]` 是**这一处**的判据 ⇒ `server.py` 的端点参数**不要**再写 `ge=1` ——
+写了就把能救的 `page=0` 变成 422） |
    | **只读凭据**能做什么（Komga 写入口的闸门） | `novelforge/server.py` 的 `_ko_require_write()`
 + `_ko_collection_visible()`（第 270 期：带书库范围的凭据 ⇒ 收藏夹**写入口一律 403**、
 **看不见的夹一律 404**；⚠️ 阅读进度**不挡** —— 那是阅读器必须能写的。
