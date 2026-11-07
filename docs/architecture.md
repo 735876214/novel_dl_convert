@@ -342,6 +342,10 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 （第 135 期立的**唯一**组装点：`nosniff` + CSP `sandbox` + `Cache-Control`；第 267 期把
 `public` 改成 `private` —— 这十一个出口全在鉴定之后，`public` 允许共享缓存把封面 / 漫画页
 交给没登录的人。加新出口只许走 `_media_headers` / `_media_bytes` / `_media_file`） |
+   | **只读凭据**能做什么（Komga 写入口的闸门） | `novelforge/server.py` 的 `_ko_require_write()`
++ `_ko_collection_visible()`（第 270 期：带书库范围的凭据 ⇒ 收藏夹**写入口一律 403**、
+**看不见的夹一律 404**；⚠️ 阅读进度**不挡** —— 那是阅读器必须能写的。
+此前 scope 只在读路径用过 ⇒ 「只读账号」能删用户的收藏夹） |
    | Komga 的**卷号**（DTO 字段与排序键） | `novelforge/core/komga_api.py` 的 `number_parts()`（第 269 期：
 DTO 的 `metadata.number` / `numberSort` 与**排序表**共用同一份解析 —— 此前排序表里没有
 `metadata.numberSort`，客户端传了就回落成 `name` ⇒ 12 卷的系列排成 `1,10,11,12,2,…`） |
