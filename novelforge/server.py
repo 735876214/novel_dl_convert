@@ -1340,6 +1340,24 @@ def _finite_num(raw, name: str) -> float:
     return v
 
 
+def _require_book(bid: str) -> dict:
+    """**写入口的统一前置**：这本书必须现在还在书目里（第 272 期）。
+
+    ⚠️ 此前「这本书在不在」这条判据只在**一部分**写入口实现 —— 实测
+    `annotations` / `bookmarks` / `progress` / `review` 四个入口对**根本不存在的 id**
+    一律 **200 并照写**，而 `session` / `metadata` / `reading-status` 会 404。
+    后果是两条：
+      · 一个**过期的前端**（开着页面时书被删了）会「保存成功」，用户的批注 / 评分
+        写进一条**谁都看不见也清不掉**的行；
+      · 任何脚本手滑一个 id 就能往库里灌垃圾行。
+    判据只有这一处，别再在每条路由里各写一遍 `library.by_id(...) if not b`。
+    """
+    b = library.by_id(bid)          # 同名冲突会抛 BookIdConflict（全局处理器转 409）
+    if not b:
+        raise HTTPException(404, "书籍不存在")
+    return b
+
+
 def _bounded(payload: dict, key: str, lo: float, hi: float, *,
              default: float = 0.0, integer: bool = False, name: str = ""):
     """取 ``payload[key]`` 并夹到 ``[lo, hi]``（第 127 期）。
@@ -5977,6 +5995,11 @@ def api_get_progress(bid: str, file_rel: "str | None" = None):
 
 @app.put("/api/books/{bid}/progress")
 def api_set_progress(bid: str, payload: dict = Body(...)):
+    # ⚠️ 第 272 期：**这条刻意不查 `_require_book`** —— 「同步先到、扫描后到」是真实场景
+    # （KOReader / 第三方客户端先把进度推上来，书还没进索引），进度写给一本暂时扫不到的
+    # 书是**允许**的（`tests/test_progress_per_file.py::test_奇怪的file_rel不会把进度保存弄失败`
+    # 的 docstring 就是这条口径）。其余四个用户界面的写入口（批注 / 书签 / 评分 / 阅读状态）
+    # 则相反：它们由**已加载这本书**的页面发起，书不在 = 页面早已过期 ⇒ 404 更诚实。
     # 第 127 期：locator / percent 一律过 `_bounded`（非有限 ⇒ 400，越界 ⇒ 夹住）。
     # 此前是裸 `int()/float()`：`percent: 1e400` 落库后让书架首页 / 统计页同时 500。
     locator = _bounded(payload, "locator", 0, numbers.MAX_INDEX, integer=True)
@@ -6032,6 +6055,7 @@ def api_set_status(bid: str, request: Request, payload: dict = Body(...)):
     `float()`，`started_at: 1e400` 会写成 `inf`，而状态又被并进书目响应 ⇒
     `GET /api/books` 此后恒 500。
     """
+    _require_book(bid)                     # 第 272 期：不存在的书不许写阅读状态
     try:
         r = db.set_status(
             bid,
@@ -6119,6 +6143,7 @@ def api_set_review(bid: str, request: Request, payload: dict = Body(...)):
     ValueError)`` 覆盖面里 ⇒ 500），改走 `_bounded`（非有限 ⇒ 400，越界夹住 ⇒
     夹到 5 之前先由 1–5 校验拦下）。
     """
+    _require_book(bid)                     # 第 272 期：不存在的书不许写评分
     try:
         # 这里**不夹**（与 percent 口径不同）：评分是用户明确选的值，非法要回话，
         # 悄悄改成 5 分是替他做了决定。
@@ -6357,6 +6382,7 @@ def _anchor_off(payload: dict, key: str) -> int:
 
 @app.post("/api/books/{bid}/annotations")
 def api_add_annotation(bid: str, request: Request, payload: dict = Body(...)):
+    _require_book(bid)                     # 第 272 期：不存在的书不许写批注
     quote = str(payload.get("quote", "") or "").strip()
     if not quote:
         raise HTTPException(400, "quote 不能为空")
@@ -6435,6 +6461,7 @@ def api_add_bookmark(bid: str, payload: dict = Body(...)):
     ``anchor`` 是**位置锚**（前端按「章序号 + 章内归一化位置」生成），它是去重键：
     传同一个 anchor 绝不会产生第二条书签。
     """
+    _require_book(bid)                     # 第 272 期：不存在的书不许写书签
     # 第 127 期：`percent` / `chapter` 走 `_bounded` —— 此前 `percent: 1e400`
     # 会先落行、再在**回写响应时**炸成 500，于是 `GET .../bookmarks` 此后恒 500。
     percent = _bounded(payload, "percent", 0.0, 100.0)
