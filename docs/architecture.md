@@ -342,6 +342,10 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 （第 135 期立的**唯一**组装点：`nosniff` + CSP `sandbox` + `Cache-Control`；第 267 期把
 `public` 改成 `private` —— 这十一个出口全在鉴定之后，`public` 允许共享缓存把封面 / 漫画页
 交给没登录的人。加新出口只许走 `_media_headers` / `_media_bytes` / `_media_file`） |
+   | 一本书的**封面是哪张图**（按格式分支） | `novelforge/server.py` 的 `api_book_cover`（第 273 期补齐 PDF：
+CBZ/CBR → 归档首页 · EPUB/FB2 → 内嵌图 · **PDF → `pdfrender.render_page(path, 0, bid)`**（带磁盘缓存、
+与 `/pages/1` 同一条渲染路）· 有声书/单元树 → 目录里的 cover 图。前端 `/cover` 与 Komga
+`/thumbnail` **都走这一个函数** —— 两处各判一次就会漂） |
    | 写入口要不要校验「**这本书还在不在**」 | `novelforge/server.py` 的 `_require_book()`（第 272 期：
 **用户界面发起的**写入口（批注 / 书签 / 评分 / 阅读状态）一律 404 —— 页面能点就说明书该在，
 书不在 = 页面早已过期；⚠️ **`PUT /api/books/{bid}/progress` 刻意不校验** —— 「同步先到、
