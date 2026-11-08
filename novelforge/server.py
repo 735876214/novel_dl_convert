@@ -12807,6 +12807,14 @@ async def convert(file: UploadFile = File(...), traditionalize: bool = Form(Fals
     _allowed = set(pipeline.EBOOK_EXT)
     if _ext not in _allowed:
         raise HTTPException(400, "仅支持 .txt 与电子书格式：" + ", ".join(sorted(_allowed)))
+    # ⚠️ 第 279 期：上传件的名字必须是**纯文件名**。
+    # `fileops.input_path` 允许子目录 —— 那是给 `/convert-path` 用的（要读下载器在收书目录里
+    # 建的分目录），**上传**这条路不会替客户端建目录。于是 `a/b/c.cbz` 会一路走到**写临时件**
+    # 那一步才失败，回一句**误导**的话：「上传件写盘失败（可能磁盘已满或没有写权限）」（500）——
+    # 真实原因是「那个子目录不存在」，而且 `/convert` 是**未鉴权**的历史入口。
+    # 判据按入口性质分：读已有文件允许子路径，**写新文件只许纯文件名**。
+    if "/" in _name or "\\" in _name:
+        raise HTTPException(400, f"上传的文件名不能带目录：{_name}")
     # ⚠️ 落点同样要过包含性校验（第 119 期）：`file.filename` 是**客户端给的**，
     # 传 `../../etc/x.epub` 时 `INPUT_DIR / 名字` 会把文件写到收书目录之外。
     try:

@@ -106,7 +106,10 @@ def test_convert上传文件名穿越被拒(client, auth_headers, default_root, 
     r = client.post("/convert", data={"traditionalize": "false"},
                     files={"file": ("../../evil.epub", b"EPUB")}, headers=auth_headers)
     assert r.status_code == 400, r.text
-    assert "非法路径" in r.text
+    # ⚠️ 第 279 期：上传那条路**先**拒「名字里带目录」（比 `input_path` 的包含性校验更早，
+    # 因为上传不会替客户端建目录 ⇒ `a/b/c.epub` 以前要走到写盘才 500 + 误导文案）。
+    # 判据没变：**400 且说清原因**；具体措辞由入口决定。
+    assert ("目录" in r.text) or ("非法路径" in r.text), r.text
 
 
 # ---------------------------------------------------------------------------
