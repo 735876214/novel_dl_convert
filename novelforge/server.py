@@ -890,6 +890,10 @@ async def _request_body_limit_middleware(request: Request, call_next):
 # 事件只是「提前知道该刷新了」：断线后前端回退轮询，HTTP 仍是唯一真值源。
 _WS_UNAUTHORIZED = 4401          # 自定义关闭码：前端见到它就不重连（令牌无效）
 
+#: WebSocket 的**票据复核间隔**（秒）。连接建立时验一次票之后，每这么久（或每来一条事件）
+#: 再验一次 —— 见 `ws_events` 里的说明（第 276 期）。
+_WS_RECHECK_SECONDS = 30.0
+
 
 @app.websocket("/ws")
 async def ws_events(websocket: WebSocket):
@@ -910,12 +914,22 @@ async def ws_events(websocket: WebSocket):
         while True:
             # 同时等「总线来事件」与「客户端发消息/断开」——只等前者的话，
             # 客户端静默断开要等到下一条事件才会被发现（订阅者白白留着）。
+            # `timeout` 是**票据复核**的节拍：见下面那次 `verify_token`。
             recv = asyncio.create_task(websocket.receive_text())
             emit = asyncio.create_task(queue.get())
             done, pending = await asyncio.wait(
-                {recv, emit}, return_when=asyncio.FIRST_COMPLETED)
+                {recv, emit}, return_when=asyncio.FIRST_COMPLETED,
+                timeout=_WS_RECHECK_SECONDS)
             for task in pending:
                 task.cancel()
+            # ⚠️ 第 276 期：**连接建立时的验票不够**。改口令（`_cred_version` 变）/ 票据过期
+            # 之后，HTTP 侧立刻 401，但一个**已经开着**的 WebSocket 会继续收事件流 ——
+            # 而「改口令 = 断开所有设备」正是这个动作的语义（第 137 / 240 期）。
+            # 所以每 `_WS_RECHECK_SECONDS`（或每收到一条事件）复核一次；
+            # 失效就按 4401 关掉，前端见到 4401 会停止重连、等下次登录（`lib/realtime.ts`）。
+            if not auth_mod.verify_token(token):
+                await websocket.close(code=_WS_UNAUTHORIZED)
+                break
             if recv in done:
                 try:
                     recv.result()
