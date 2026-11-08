@@ -14,6 +14,7 @@ PG 还要加网络），2,000 本 × 2 字段 ≈ **9.5 s**，已顶到前端 15
 from __future__ import annotations
 
 import pathlib
+import threading
 
 from novelforge.core import db, pathmeta
 
@@ -21,8 +22,21 @@ RULE = r"^\[(?P<author>[^\]]+)\]\s*(?P<title>.+?)$"
 
 
 def _counting(monkeypatch):
-    """把 `db._connect` 换成数提交次数的代理。"""
+    """把 `db._connect` 换成数提交次数的代理 —— **只数本线程的提交**。
+
+    ⚠️ 第 278 期：此前数的是**全局**提交数。`apply` 是**同步调用**（跑在测试线程里），
+    而全量跑时别的线程（扫描 / 追更 / 监听 / 事件）可能同一时刻也在提交 ——
+    于是这条「常数次提交」的断言被**无关写入**污染、**假红**（实测：全量跑数到 6 次，
+    单独跑是 3 次，而产品代码一个字没改）。
+
+    判据的本意是「**这一次调用**提交了几次」，所以按线程过滤：只有测试线程
+    自己的 commit 计数。这样它仍然对「退回逐行 commit」（同一线程 20+ 次）足够灵敏。
+
+    ⚠️ **同一条判据在 `test_batch_bulk_170.py::_counting_connect` 里第 246 期就修过**
+    （那边写着同样的理由），这份是**漏掉的第二个副本** —— 两处现在一致。
+    """
     real = db._connect
+    owner = threading.get_ident()
 
     class Counting:
         def __init__(self, inner):
@@ -30,7 +44,8 @@ def _counting(monkeypatch):
             self.commits = 0
 
         def commit(self):
-            self.commits += 1
+            if threading.get_ident() == owner:
+                self.commits += 1
             return self._inner.commit()
 
         def __getattr__(self, name):
