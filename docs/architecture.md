@@ -342,6 +342,9 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 （第 135 期立的**唯一**组装点：`nosniff` + CSP `sandbox` + `Cache-Control`；第 267 期把
 `public` 改成 `private` —— 这十一个出口全在鉴定之后，`public` 允许共享缓存把封面 / 漫画页
 交给没登录的人。加新出口只许走 `_media_headers` / `_media_bytes` / `_media_file`） |
+   | **长连接**（`/ws`）的票怎么算数 | `novelforge/server.py` 的 `ws_events` + `_WS_RECHECK_SECONDS`
+（第 276 期：**建连验票不够** —— 改口令 / 过期之后 HTTP 立刻 401，但开着的连接会继续收事件流
+⇒ 循环里每 30 s 或每收到一条事件复核一次，失效按 4401 关（前端见到 4401 停止重连）） |
    | 能返回字节的出口**能不能被 HEAD 探一下** | `novelforge/server.py` 的 `_ko_head_like()`（第 275 期：
 FastAPI 的 `@app.get` **不自动加 HEAD** ⇒ `/file`、`/pages/{n}`、三条缩略图都要**显式声明**一条
 HEAD；HEAD 直接调 GET 的处理函数再丢掉正文 ⇒ 状态码与实体头天然与 GET 一致。
