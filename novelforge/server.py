@@ -11933,6 +11933,12 @@ def ko_series_thumb(request: Request, series_id: str):
     _ko_404("该系列没有可用封面")
 
 
+@app.head("/api/v1/series/{series_id}/thumbnail")
+def ko_series_thumb_head(request: Request, series_id: str):
+    _komga_guard(request)                  # 见 `ko_book_thumb_head` 的说明
+    return _ko_head_like(ko_series_thumb(request, series_id))
+
+
 # ---- 书籍（latest / ondeck 必须先于 {book_id}）----
 
 def _ko_books_page(request: Request, page, size, sort: str = "", library_id: str = "",
@@ -12043,6 +12049,38 @@ def ko_book_thumb(request: Request, book_id: str):
     if not _ko_book(request, book_id):
         _ko_404("书不存在")
     return api_book_cover(book_id, _CATALOG_COVER_WIDTH)
+
+
+@app.head("/api/v1/books/{book_id}/thumbnail")
+def ko_book_thumb_head(request: Request, book_id: str):
+    """HEAD：客户端「先探有没有封面」用（第 275 期；见 `_ko_head_like`）。
+
+    ⚠️ `_komga_guard` 在这里**显式再调一次**：下面调 GET 的处理函数时它本来也会校验，
+    但 `/api/v1/*` 的守卫契约（`tests/test_route_guard_contract.py`）是**源码级**的 ——
+    每条路由的函数体里都得看得见这个调用，否则「某条路由忘了鉴权」就查不出来了。
+    与 `/file`、`/pages/{n}` 的 HEAD 写法一致。
+    """
+    _komga_guard(request)
+    return _ko_head_like(ko_book_thumb(request, book_id))
+
+
+def _ko_head_like(resp) -> Response:
+    """HEAD = **同源 GET 的状态码与实体头**，正文丢掉（第 275 期）。
+
+    ⚠️ FastAPI 的 `@app.get` **不会**自动加 HEAD（第 268 期实测 `HEAD /health` 也是 404），
+    所以每加一条「能被 HEAD 探存在性」的 GET 都要显式声明一条 HEAD。
+    第 268 期只给 `/file` 与 `/pages/{n}` 补了 —— **半截修复**：三条缩略图的 HEAD 仍是 404，
+    客户端「先 HEAD 看看有没有封面」会误判成「没有封面」，于是列表里一片占位色。
+
+    这里不另算一遍内容（那会与 GET 分成两条会漂的路）：直接调用 GET 的处理函数拿响应，
+    再把正文去掉 —— 状态码（200 / 404 / 413 / 503）与 `Content-Type` / `Content-Length`
+    因此**天然与 GET 一致**。
+    """
+    body = getattr(resp, "body", b"") or b""
+    headers = {k: v for k, v in resp.headers.items() if k.lower() != "content-length"}
+    if body:
+        headers["Content-Length"] = str(len(body))
+    return Response(status_code=resp.status_code, headers=headers)
 
 
 def _ko_file_target(request: Request, book_id: str) -> "tuple[pathlib.Path, str]":
@@ -12394,6 +12432,12 @@ def ko_collection_thumb(request: Request, cid: int):
             if b.get("has_cover"):
                 return api_book_cover(b["id"], _CATALOG_COVER_WIDTH)
     _ko_404("该收藏夹没有可用封面")
+
+
+@app.head("/api/v1/collections/{cid}/thumbnail")
+def ko_collection_thumb_head(request: Request, cid: int):
+    _komga_guard(request)                  # 见 `ko_book_thumb_head` 的说明
+    return _ko_head_like(ko_collection_thumb(request, cid))
 
 
 @app.post("/api/v1/collections/{cid}/thumbnail")
