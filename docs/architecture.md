@@ -356,6 +356,10 @@ HEAD；HEAD 直接调 GET 的处理函数再丢掉正文 ⇒ 状态码与实体�
 CBZ/CBR → 归档首页 · EPUB/FB2 → 内嵌图 · **PDF → `pdfrender.render_page(path, 0, bid)`**（带磁盘缓存、
 与 `/pages/1` 同一条渲染路）· 有声书/单元树 → 目录里的 cover 图。前端 `/cover` 与 Komga
 `/thumbnail` **都走这一个函数** —— 两处各判一次就会漂） |
+   | 上传件的**名字**能不能带目录 | `novelforge/server.py` 的 `convert()`（第 279 期：
+**上传**只许纯文件名（`/` `\` 一律 400）—— 上传不会替客户端建目录，`a/b/c.cbz` 以前要走到
+写盘才 500 + 一句误导的「磁盘已满或没有写权限」。⚠️ `fileops.input_path` **故意**允许子目录
+（给 `/convert-path` 读下载器的分目录），**别把闸门加宽到那条路**） |
    | 写入口要不要校验「**这本书还在不在**」 | `novelforge/server.py` 的 `_require_book()`（第 272 期：
 **用户界面发起的**写入口（批注 / 书签 / 评分 / 阅读状态）一律 404 —— 页面能点就说明书该在，
 书不在 = 页面早已过期；⚠️ **`PUT /api/books/{bid}/progress` 刻意不校验** —— 「同步先到、
