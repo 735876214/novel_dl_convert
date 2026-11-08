@@ -342,6 +342,10 @@ DEFAULTS → config.yaml → settings.json → 环境变量           （全局�
 （第 135 期立的**唯一**组装点：`nosniff` + CSP `sandbox` + `Cache-Control`；第 267 期把
 `public` 改成 `private` —— 这十一个出口全在鉴定之后，`public` 允许共享缓存把封面 / 漫画页
 交给没登录的人。加新出口只许走 `_media_headers` / `_media_bytes` / `_media_file`） |
+   | 能返回字节的出口**能不能被 HEAD 探一下** | `novelforge/server.py` 的 `_ko_head_like()`（第 275 期：
+FastAPI 的 `@app.get` **不自动加 HEAD** ⇒ `/file`、`/pages/{n}`、三条缩略图都要**显式声明**一条
+HEAD；HEAD 直接调 GET 的处理函数再丢掉正文 ⇒ 状态码与实体头天然与 GET 一致。
+⚠️ 每条 `/api/v1` 路由的函数体里仍要看得见 `_komga_guard(request)`（守卫契约是**源码级**的）） |
    | 这本书客户端**读不读得出来**（`media.status`） | `novelforge/core/komga_api.py` 的 `book_dto`
 （第 274 期：三档 —— 索引里 `issues` 含 `unparsable` ⇒ **ERROR**；客户端有阅读器 ⇒ READY；
 其余 ⇒ UNSUPPORTED。⚠️ 判据**取自索引**、**不许为此开文件** —— 第 266 期刚把「列表 O(全书库)」收掉） |
