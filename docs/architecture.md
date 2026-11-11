@@ -408,6 +408,16 @@ DTO 的 `metadata.number` / `numberSort` 与**排序表**共用同一份解析 �
    | 图片处理（能力有无 / 解码像素闸 / 透明像素底色） | `novelforge/core/imaging.py` 的 `state` / `open_image` / `flatten`（第 248 期：缩略图 `novelforge/core/thumbs.py` 与格式转换 `novelforge/core/komga_api.py` **共用**这两条判据，但「缩到多宽 / 编成什么格式」各管各的，刻意不合并） |
    | 元数据字段的**长度上限**（谁写进去都算） | `novelforge/core/db.py` 的 `metadata_field_limits()`（第 250 期：用户写入**拒绝**超限 / 在线抓取**跳过**超限；第 254 期：扫描派生值**截断**到同一张表的上限 —— **三个入口共用这一张表**，不各抄一份） |
    | **自定义字段**值的长度上限 | `novelforge/core/customfields.py` 的 `value_limits()`（第 255 期：按**类型**给 —— 自定义字段的字段类型是用户可配的；文本类的数**取自** `db.metadata_field_limits()["description"]` ⇒ 不另抄一个数） |
+   | 收藏夹成员的**展示顺序**（分页建立在它上面） | `novelforge/core/db.py` 的 `collection_book_ids`（第 281 期：
+`added_at` **不是唯一键** —— `add_books_to_collection` 给整批成员写**同一个** `time`，
+实测一次加入 6 本只有 1 个不同的 `added_at` ⇒ 只按 `added_at DESC` 排时，这批成员的
+相对顺序**由 SQL 实现决定**：SQLite 恰好按插入序返回，PostgreSQL 的排序**不保证**跨请求稳定
+⇒ `GET /api/collections/{cid}/books` 的 offset 分页会**重复或漏项**。兜底 ``id ASC``（插入序）：
+与 SQLite 现状一致，只把「未定义」变成「确定」，不改变用户现有看到的结果） |
+   | 播客「残留下载」的**复位**（判快照、写时 CAS） | `novelforge/core/db.py` 的 `reset_episode_download_if_stale`（第 281 期：
+`_stale_download` 判的是**快照**（无 `.part`、无成品 ⇒ 认为没人下），而复位原先**无条件**写 `''` —— 判定与写入
+之间 worker 可能刚好完成（`os.replace` + 置 `downloaded`）⇒ 列表接口把刚下完的一集写回「未下载」（文件在、
+状态空，再点又下一遍、`auto_clean` 也不再清）。复位必须是 `UPDATE … WHERE id=? AND download_state='downloading'`） |
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
    ⚠️ **第 82 期显式新增运行时依赖 `vue-draggable-plus@^0.6.1`**（仪表盘部件行内拖拽）：理由是原生 HTML5 DnD

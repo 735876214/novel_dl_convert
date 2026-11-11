@@ -16673,3 +16673,104 @@ _safe_name('../x') / ('a/b')  → False（拒绝）；'ok.cbz' → True  ✓
 3. **配置生效路径的「界面说清了没有」**：哪些设置要重启才生效、界面有没有讲。
 4. **`/convert` 与 `/convert-path` 的未鉴权**（AGENTS §1 已记录的已知取舍）—— 要不要收，是**部署口径**的决定，不是代码缺陷。
 5. **真机客户端**（Mihon / Panels / KOReader）—— 本机做不到，只能靠 HTTP 层等价探测。
+
+## 第 281 期（全项目审计第 1 轮：三处「先读后写」的竞态）
+
+**需求来源**：用户重新立项的**全项目持续审计**任务（2026-11-11 18:30 起，硬截止 2026-11-12 18:30）。
+本轮起停止条件只有「到截止时间」（用户口径：**不断进行审计 24 小时**）—— 某轮零新增缺陷只记下来换角度继续。
+
+### 一、本轮扫的角度与三条缺陷
+
+#### ① 分页 / 排序的稳定性 → 收藏夹成员顺序不是全序
+
+先把「有多少个分页端点」量了一遍：后端只有三处 offset 分页 —— `/api/books`（第 88 期）、
+`/api/collections/{cid}/books`（第 210 期）、`/api/notifications`。逐个看**排序键是不是全序**：
+
+- `/api/books`：`catalog._order_key`（库序 → 根序 → **分段**路径比较），同一库内 `rel` 唯一
+  ⇒ 每一行都有唯一排序键，**是确定的全序**。
+- `/api/notifications`：顺序来自追加写的 jsonl（文件序固定）。新事件从头部插入会让 offset 漂移
+  （「加载更多」可能重复一条），这是**列表本身就是增长流**的固有取舍，不是实现缺陷。
+- `/api/collections/{cid}/books`：**有问题**。
+
+实测（6 本真 EPUB，一次批量加入）：
+
+```
+SELECT added_at … 6 行 → 只有 1 个不同的值        ← add_books_to_collection 用同一个 time.time() 写整批
+db.collection_book_ids(cid) → 恰好是插入序         ← 但 SQL 从没承诺过这个顺序
+GET /api/collections/{cid}/books?limit=2&offset=0/2/4 → 拼接与详情一致（SQLite 现状）
+```
+
+`added_at` **不是唯一键**，而 offset 分页**建立在这个顺序上**。SQLite 的实现恰好稳定，
+但 **PostgreSQL 的 `ORDER BY` 在键值相同时不保证跨请求稳定** ⇒ 换后端后跨页可能重复或漏项，
+详情页与分页端点也会对不上（两者读同一个列表，但两次查询可以给出不同排列）。
+
+**修法**：`ORDER BY added_at DESC, id ASC`。兜底选 `id ASC`（插入序）而不是 `id DESC`：
+批量加入时用户看到的正是「选择他们的顺序」，SQLite 现状也是这个顺序 —— 只把「未定义」变成「确定」。
+
+#### ② 输入面安全：RSS / OPML 的实体膨胀（测下来健康）
+
+播客的 `parse_feed` 与 `opml_import` 都用 `xml.etree.ElementTree.fromstring` 解析**外部输入**
+（远端 RSS / 用户上传的 OPML），而 Python 文档明说 ElementTree 不防恶意构造的数据。造一份嵌套实体
+（完全展开 10^9 字符当量）**实测**：两条路都在 0.1 s 内被 expat 的
+「input amplification factor breached」拒掉（Python 3.12 的 libexpat 已内置该保护）。
+
+附带确认（同一族，别重查）：feed 取回 **8 MiB 上限 + 20 s 超时**、音频下载 **1 GB 上限**、
+单集落盘名是 `uuid4().hex`（feed 里的 `guid` 进不了路径）；`_fetch` 只允许 `http(s)://`。
+
+#### ③ 追一条全量跑的偶发红 → 「残留下载」复位会把刚下完的一集写回未下载
+
+全量跑里 `test_podcast_auto_181::test_自动下载最新N集_听完清理` 偶发红（单独重跑 8 次红 1 次，
+每次失败都等满 20 s 超时，**不是环境噪声**）。现场：同一批排了两集，只有一集变成 `downloaded`，
+另一集是**空串**（连 `downloading` 都不是）。打桩日志复现出真实交错：
+
+```
+AnyIO worker thread  set 8adf945d downloading
+podcast-download     set 8adf945d downloaded     ← worker 落盘 + 置 downloaded
+AnyIO worker thread  set 8adf945d ''             ← 列表接口按旧快照复位，把结果抹掉
+```
+
+根因：`_stale_download()` 判的是**快照**（`download_state=='downloading'` 且磁盘上既没有
+`.part` 也没有成品），`reset_stale_in()` / `reset_stale_downloads()` 判完就**无条件**写 `''`。
+判定与写入之间 worker 可能刚好完成 ⇒ 复位把 `downloaded` 抹成未下载。
+**用户看到**：这一集显示「未下载」（文件明明在盘上），再点一次又下一遍；
+`auto_clean` 也不再清它（`_maybe_clean` 的判据是 `download_state == "downloaded"`）。
+**触发条件**：下载完成的那一瞬间正好有一次列表刷新（前端下载中会轮询）—— 窗口小，但结果**永久**。
+
+**修法**：新增 `db.reset_episode_download_if_stale()` ——
+`UPDATE … WHERE id=? AND download_state='downloading'`（compare-and-set）；两个复位点都改走它，
+只有真的改动了才同步内存快照。无论 worker 先写还是复位先写，最终状态都是 `downloaded`。
+
+#### ④ 同一轮的第三条：测试隔离 —— `server.WATCHER` 实例跨用例残留（用例假红）
+
+全量跑的另一次红：`test_dock_preview_224::test_预览接口_给出落点名与元数据` 断言
+`body["title"] == "预览书"` 得到 **空串**；单独跑 5 次全绿。这是**顺序依赖**，不是环境噪声。
+
+根因：`watcher.FolderWatcher.__init__` 把 `config.INPUT_DIR` **冻在 `self.input_dir`** 里，
+而 `conftest._quiesce_background()` 只 `w.stop()`，**没把实例丢掉** ⇒ `server.WATCHER` 跨用例存活。
+下一个用例换了隔离目录后，`server._get_watcher()` 复用旧实例，预览就跑到**上一个用例**的投递目录里
+找文件 ⇒ 文件不在 ⇒ 元数据空 ⇒ title 空串。实测复现：
+
+```
+probe: WATCHER input_dir = …/pytest-203/test_probe_make_watcher0/input
+AssertionError: assert '' == '预览书'
+```
+
+**修法**（只在测试侧，产品行为不变 —— 生产不会在运行期改 `INPUT_DIR`）：
+`_quiesce_background()` 在 stop 之后把 `server.WATCHER = None` 并 `watcher.set_current(None)`，
+下个用例重新按当前隔离配置构造。⚠️ 这类「**模块级实例把环境冻在构造时**」的残留，
+症状永远是「单跑绿、全量红」，而报错的用例往往是最无辜的那个。
+
+### 二、防回归
+
+- `tests/test_collection_order_281.py`（4 例）：批量加入的成员**共享同一 `added_at`**（缺陷前提）·
+  顺序确定且连读 5 次一致 · 分页拼接 == 详情顺序 == `db.collection_book_ids()`（不重不漏）·
+  逐个加入（时间戳不同）时仍是「最新在前」。
+- `tests/test_podcast_state_281.py`（2 例）：CAS 只对仍在 `downloading` 的行生效（已下完的一个字都不写）·
+  **真实交错**（列表接口判完、worker 完成、接口才写）之后状态仍是 `downloaded`。
+- 测试隔离：`conftest` 的改动由**顺序**验证 —— `tests/_probe（WATCHER）+ test_dock_preview_224`
+  同批跑从「必红」变「全绿」；全量跑不再出现该红。
+
+### 三、核验
+
+后端全量 **3415 例（3388 passed / 0 failed / 0 errors / 27 skipped）**、664.1 s；
+前端四连（type-check → unit → build → **deploy**）全过；`period_close check` **0 问题**。
