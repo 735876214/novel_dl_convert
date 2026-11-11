@@ -342,9 +342,17 @@ def _quiesce_background() -> None:
         pass
     try:
         from novelforge import server
+        from novelforge.core import watcher as watcher_mod
         w = getattr(server, "WATCHER", None)
         if w is not None and w.is_running():
             w.stop()
+        # ⚠️ 第 281 期：**实例本身也要丢**（不只是 stop）—— `input_dir` 是构造时从
+        # `config.INPUT_DIR` 冻下来的。下一用例换了隔离目录后，`server._get_watcher()`
+        # 若复用这个旧实例，就会去**上一个用例**的投递目录里找文件 ⇒ 全量跑时
+        # `test_dock_preview_224` 预览读到空元数据（title 变空串），单独跑恒绿。
+        # 生产不会在运行期改 INPUT_DIR（改了要重启），所以这是**测试隔离**判据。
+        server.WATCHER = None
+        watcher_mod.set_current(None)       # 别让 bookdock / landing 的回调挂在旧实例上
         # 第 54 期：语义向量后台重算线程（/similar 自愈 / 扫描钩子派生）也要收干净
         if not server.wait_embed_refresh(5.0):
             left += 1
