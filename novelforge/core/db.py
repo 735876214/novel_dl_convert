@@ -2280,9 +2280,23 @@ def collection_map() -> dict:
 
 
 def collection_book_ids(cid: int) -> list:
+    """收藏夹成员 id，**最新加入的在前**。
+
+    ⚠️ 第 281 期：必须带 ``id`` 兜底 —— ``added_at`` **不是唯一键**，而
+    :func:`add_books_to_collection` 给**整批**成员写的是**同一个** ``time.time()``
+    （实测一次加入 6 本 ⇒ 6 行 1 个值）。只按 ``added_at DESC`` 排时，这批成员的
+    相对顺序**由 SQL 实现决定**：SQLite 恰好按插入序返回，PostgreSQL 的排序**不保证**
+    跨请求稳定 ⇒ ``GET /api/collections/{cid}/books`` 的 offset 分页会**重复或漏项**
+    （详情页与分页端点读的是同一个列表，两边也会对不上）。
+
+    兜底选 ``id ASC``（插入序）而不是 ``id DESC``：批量加入时用户看到的就是
+    **选择他们的顺序**，而 SQLite 现状也正是这个顺序 —— 这次修复只把「未定义」
+    变成「确定」，不改变现有用户看到的结果。
+    """
     c = _connect()
     rows = c.execute(
-        "SELECT book_id FROM collection_items WHERE collection_id=? ORDER BY added_at DESC",
+        "SELECT book_id FROM collection_items WHERE collection_id=?"
+        " ORDER BY added_at DESC, id ASC",
         (cid,),
     ).fetchall()
     return [r["book_id"] for r in rows]
@@ -4830,6 +4844,27 @@ def set_episode_download(eid: str, state: str, *, local_path="", error="", size=
              now if state == "downloaded" else 0, str(eid)),
         )
         c.commit()
+
+
+def reset_episode_download_if_stale(eid: str) -> bool:
+    """把 ``downloading`` 复位成「未下载」—— **仅当库里此刻仍是 ``downloading``**。
+
+    ⚠️ 第 281 期：`podcasts.reset_stale_in` / `reset_stale_downloads` 原先「先判快照、
+    再无条件写 ``''``」。判定与写入之间 worker 可能刚好完成（``os.replace`` 落盘 +
+    置 ``downloaded``）⇒ 列表接口把**刚下完**的一集写回「未下载」（磁盘上文件明明在）
+    ⇒ 界面显示可下载、再点又下一遍，``auto_clean`` 也不再清它（判据是
+    ``download_state == "downloaded"``）。复位必须是 **compare-and-set**：
+    真正写入时那一行还是 ``downloading`` 才动手。
+
+    返回 ``True`` = 这次真的复位了（调用方据此把内存快照也改成 ``''``）。
+    """
+    c = _connect()
+    with _lock:
+        cur = c.execute(
+            "UPDATE podcast_episodes SET download_state='', download_error=''"
+            " WHERE id=? AND download_state='downloading'", (str(eid),))
+        c.commit()
+        return bool(cur.rowcount)
 
 
 def list_continue_podcast_episodes(limit: int = 20) -> list:

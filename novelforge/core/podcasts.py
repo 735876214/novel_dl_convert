@@ -644,8 +644,10 @@ def reset_stale_downloads() -> int:
     """
     n = 0
     for ep in db.list_all_podcast_episodes():
-        if _stale_download(str(ep.get("id") or ""), ep):
-            db.set_episode_download(str(ep.get("id") or ""), "", error="")
+        eid = str(ep.get("id") or "")
+        # ⚠️ 第 281 期：判定用的是**快照**，写入必须是 compare-and-set ——
+        # 否则「判完那一刻 worker 刚好下完」会被这一句写回「未下载」（见 DB 侧同名函数）。
+        if _stale_download(eid, ep) and db.reset_episode_download_if_stale(eid):
             n += 1
     return n
 
@@ -667,9 +669,12 @@ def reset_stale_in(items: list) -> int:
         eid = str(ep.get("id") or "")
         if not eid or not _stale_download(eid, ep):
             continue
-        db.set_episode_download(eid, "", error="")
-        ep["download_state"] = ""
-        n += 1
+        # ⚠️ 第 281 期：快照判定 + 无条件写入 = 会把「刚下完」的一集写回未下载
+        # （worker 在 `os.replace` 与 `set_episode_download("downloaded")` 之间恰好完成）。
+        # 写入走 compare-and-set，只有库里仍是 `downloading` 才改。
+        if db.reset_episode_download_if_stale(eid):
+            ep["download_state"] = ""
+            n += 1
     return n
 
 
