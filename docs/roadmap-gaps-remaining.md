@@ -16941,3 +16941,61 @@ SQLite 的隐式事务只在 `commit()` 时落盘：批量写中途抛错时，�
 
 后端全量 **3428 例（3401 passed / 0 failed / 0 errors / 27 skipped）**、720.7 s；
 前端四连（type-check → unit → build → **deploy**）全过；`period_close check` **0 问题**。
+
+## 第 285 期（全项目审计第 5 轮：作者抓取的开关与文案对不上）
+
+**需求来源**：24 小时全项目持续审计第 5 轮（第 281 期起，硬截止 2026-11-12 18:30）。
+
+### 一、本轮扫的角度与发现
+
+#### ① 依赖与出网（⑱）：逐个出口核对「有没有开关 / 关了会不会静默外呼」
+
+| 出口 | 开关 | 关闭后的行为 |
+|---|---|---|
+| 书籍元数据（13 家） | `metadata_fetch.enabled`（含每库覆写） | `plan` / `online_candidate` 都返回「未启用」，**手动「在线建议」也挡** |
+| 作者传记 / 头像 | `metadata_fetch.authors.enabled` | **只闸批量**（第 202 期口径）；单作者在详情页手动抓取仍可用 |
+| TTS 合成 | `tts.enabled` | 直接返回「TTS 未启用」 |
+| 版本检查 / 自动更新 | `update.check_enabled` / `update.auto_apply` | 不起线程、不再提示 |
+| 播客订阅 / 刷新 | 用户显式动作 | 目录搜索另有 `podcasts.directory_search` |
+| 书源下载 / 搜索 | `download.enabled` | 闸门与 `/api/download` 同一条 |
+| 书源 URL 订阅 | `source_import.url_enabled` | 400 + 人话，不静默出网 |
+| Hardcover / Readwise / StoryGraph | 凭据 + `auto_push` | 无凭据不发；`auto_push` 关则不自动推 |
+
+全部出口都有超时（第 280 期核过）与「失败折算成可读原因、不阻塞主流程」的降级。
+
+#### ② 注释与界面文本（⑭）：**设置页说「关掉也能用上面的按钮」，代码说不能**
+
+设置页「启用作者抓取」那一行的提示写的是「独立于上方书籍抓取的开关；关闭后仍可用**上面的按钮**
+手动触发单次抓取」，而**上面的按钮**是「立即抓取全部作者」—— `fetch_all()` 在 `enabled=false`
+时直接返回 `skipped: "作者抓取未开启"`（第 202 期定的口径：`enabled` 只闸**批量**）。于是：
+
+- 全新安装（`metadata_fetch.authors.enabled` 默认 **false**）⇒ 卡片显示「已关闭」⇒ 按提示点
+  「立即抓取全部作者」⇒ 得到「作者抓取未开启」；
+- 真正「关闭后仍可用」的是**作者详情页**的「抓取在线资料」（`fetch_author` 不查 `enabled`，
+  正是第 202 期写明保留的承诺）。
+
+**修法**：文案改成如实描述两条路（批量会被跳过 / 详情页单个仍可抓）；批量按钮在关闭时**禁用**
+并用 `title` 说明「先在下面开启」—— 不做「点了才被拒」的假交互。
+
+#### ③ 后台任务的生命周期（⑯）：测下来健康
+
+- `_spawn_bg` 留**强引用**（防 `create_task` 返回值被 GC）+ 完成回调里丢弃引用、记录未捕获异常；
+- 「长文件操作」的 `_ops_end()` 都在 **`finally`**（移库清理 / 回收站还原两条）；
+- 重启时 `task_reset_interrupted()` 把 `queued/running` 一律标失败并写明「服务重启时没跑完」，
+  `task_prune()` 只留最近 200 条 —— 任务表不会无限增长，也不会永远转圈。
+
+### 二、防回归
+
+本轮是**纯前端文案 + 禁用态**，没有可断言的逻辑分支：前端四连（type-check → unit → build →
+**deploy**）覆盖编译；行为口径由既有 `tests/test_author_config_202.py`（4 例）钉住 ——
+它已经写了「关闭时批量跳过」，本轮只是让界面不再说反话。
+
+### 三、核验
+
+后端全量 **3428 例（3401 passed / 0 failed / 0 errors / 27 skipped）**、719.9 s；
+前端四连（type-check → unit → build → **deploy**）全过；`period_close check` **0 问题**。
+
+⚠️ 本轮第一次全量出现 1 例红：`test_config_write_entries_246::test_clear_overrides_热应用`
+（`[WinError 32] settings.json 被另一个程序占用`）—— 正是 AGENTS §5 记录的 **Windows 特有**
+瞬时锁（`os.replace` 撞上一个正被读取的目标句柄；生产 Linux 容器上 rename 不受影响）。
+单跑 5 次全绿、重跑全量通过；下面的数字来自重跑。
