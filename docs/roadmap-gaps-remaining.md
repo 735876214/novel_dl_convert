@@ -16887,3 +16887,57 @@ sha1 前 8 位后缀 —— 确定且不撞名），`komga.relpath_for` / `relpa
 ⚠️ 本轮的第一次全量是**两个 pytest 并发**跑出来的（`TaskStop` 只杀了外层 shell，
 Windows 上它起的 pytest 子进程继续跑完，两个进程共用同一个 junit 路径）—— 那一份的 11 个红全是
 `git` / `bash` 起不来的 DLL 初始化失败。确认无残留进程后单独重跑，才得到上面这份数字。
+
+## 第 284 期（全项目审计第 4 轮：批量写失败后留下半截）
+
+**需求来源**：24 小时全项目持续审计第 4 轮（第 281 期起，硬截止 2026-11-12 18:30）。
+
+### 一、本轮扫的角度与发现
+
+#### ① 迁移与升级路径（㉔）：测下来健康
+
+用仓库里**最老的 tag** `v0.78.0` 建一份库，再用当前代码 `db.init()` 迁移，然后与「当前代码
+全新建的库」逐表比对：
+
+```
+表：fresh = 59   migrated = 59
+fresh 有、migrated 没有: []
+migrated 有、fresh 没有: []
+索引：fresh 有、migrated 没有: []
+DDL 不同的表: collections / smart_scopes / book_index   ← 只有**列顺序**（ALTER 加列在末尾）与注释
+```
+
+迁移后的库上跑一遍真实写入 + 读回（建库 / 扫描备注 / 进度 / 批注 / 书签 / 收藏夹列表）
+全部正常。`*_RULE_VERSION` 的存量自愈与 remap 清单不在本轮范围（既有用例钉住）。
+
+#### ② 事务边界与并发（⑨）：**批量写失败后，半截数据会被下一次提交带上**
+
+实测（`set_progress_many` 第 2 行失败，随后一次**无关**的写）：
+
+```
+set_progress_many([b1, b2])  → 第 2 行失败（模拟）
+save_bookmark("zz")          → 一次无关的写，commit
+新连接 SELECT progress       → [('b1', 0.1)]     ← 半截进度落盘了
+```
+
+SQLite 的隐式事务只在 `commit()` 时落盘：批量写中途抛错时，前面已写进事务的行**不会消失**；
+紧接着任何一次无关写操作的 `commit()` 会把它们一起落盘 ⇒ **接口回了 500，用户却看到
+「一半生效了」**（批量标记已读 / 设状态 / 评分 / 加入收藏夹都会）。触发条件是批量动作**中途**
+失败（磁盘满 / 数据库错误 / 约束冲突）—— 不常见，但后果是「报错的那次其实改了一部分」，
+而且与这些函数 docstring 里写的「一条事务」不符。
+
+**修法**：新增 `db._tx()`（成功 `commit`；**异常先 `rollback` 再抛**），所有标了「一条事务」
+的批量写都改走它：`set_progress_many` / `clear_progress` / `add_books_to_collection` /
+`remove_books_from_collection` / `set_ratings` / `clear_ratings` / `set_statuses` / `set_overrides`。
+单条写与派生缓存（toc_map / 覆盖层重建）**不在此列**：它们失败后会被下一次重建整体覆盖，
+不存在「一半生效」的用户可见语义 —— 不为了统一而给它们加一层事务。
+
+### 二、防回归：`tests/test_batch_tx_284.py`（4 例）
+
+进度 / 收藏夹 / 阅读状态三种批量写**中途失败**后，用**新连接**读库看不到任何半截行
+（新连接只有 `commit` 过的数据才看得见）；成功路径仍是一次提交、两行都可见。
+
+### 三、核验
+
+后端全量 **3428 例（3401 passed / 0 failed / 0 errors / 27 skipped）**、720.7 s；
+前端四连（type-check → unit → build → **deploy**）全过；`period_close check` **0 问题**。
