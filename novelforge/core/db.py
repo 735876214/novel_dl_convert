@@ -140,6 +140,26 @@ class _Conn:
             self._raw.rollback()
 
 
+@contextlib.contextmanager
+def _tx():
+    """多语句写：成功 ``commit``；**异常时先 ``rollback`` 再抛出**。
+
+    ⚠️ 第 284 期：SQLite 的隐式事务只在 ``commit()`` 时落盘 —— 批量写中途抛错时，
+    前面已写进事务的行**不会消失**；紧接着任何一次无关写操作的 ``commit()`` 会把它们
+    一起落盘 ⇒ 接口回了 500，用户却看到「一半生效了」（实测：`set_progress_many`
+    第 2 行失败后，一次无关的 `save_bookmark` 把第 1 行提交了）。
+    批量写一律走这里，别自己 ``commit()``。
+    """
+    c = _connect()
+    with _lock:
+        try:
+            yield c
+            c.commit()
+        except BaseException:
+            c.rollback()
+            raise
+
+
 def _connect():
     """取连接代理。后端由 ``NOVELFORGE_DB`` 选（默认 sqlite，见 core/sqlcompat）。
 
@@ -1719,12 +1739,10 @@ def clear_progress(book_ids) -> int:
     ids = [i for i in ids if i]
     if not ids:
         return 0
-    c = _connect()
-    with _lock:
-        n = 0
+    n = 0
+    with _tx() as c:
         for bid in ids:
             n += int(c.execute("DELETE FROM progress WHERE book_id=?", (bid,)).rowcount or 0)
-        c.commit()
     try:
         from . import events
         for bid in ids:
@@ -1751,8 +1769,7 @@ def set_progress_many(rows) -> int:
     if not rows:
         return 0
     now = time.time()
-    c = _connect()
-    with _lock:
+    with _tx() as c:
         c.executemany(
             """INSERT INTO progress(book_id, file_rel, locator, percent, cfi, updated_at)
                VALUES(?,?,?,?,?,?)
@@ -1763,7 +1780,6 @@ def set_progress_many(rows) -> int:
                  updated_at=excluded.updated_at""",
             [(bid, "", loc, pct, "", now) for bid, loc, pct in rows],
         )
-        c.commit()
     try:
         from . import events
         for bid, loc, pct in rows:
@@ -2351,8 +2367,7 @@ def add_books_to_collection(cid: int, book_ids) -> int:
     if not missing:
         return 0
     now = time.time()
-    c = _connect()
-    with _lock:
+    with _tx() as c:
         for i in range(0, len(missing), 900):
             part = missing[i:i + 900]
             c.executemany(
@@ -2360,7 +2375,6 @@ def add_books_to_collection(cid: int, book_ids) -> int:
                 "VALUES(?,?,?)",
                 [(int(cid), b, now) for b in part],
             )
-        c.commit()
     _touch_collection(cid)
     return len(missing)
 
@@ -2391,9 +2405,8 @@ def remove_books_from_collection(cid: int, book_ids) -> int:
     ids = [str(b) for b in book_ids if str(b or "")]
     if not ids:
         return 0
-    c = _connect()
     removed = 0
-    with _lock:
+    with _tx() as c:
         for i in range(0, len(ids), 900):
             part = ids[i:i + 900]
             q = ",".join(["?"] * len(part))
@@ -2402,7 +2415,6 @@ def remove_books_from_collection(cid: int, book_ids) -> int:
                 [int(cid), *part],
             )
             removed += int(cur.rowcount or 0)
-        c.commit()
     if removed:
         _touch_collection(cid)
     return removed
@@ -3890,14 +3902,12 @@ def set_ratings(book_ids, stars) -> int:
     if not ids:
         return 0
     now = time.time()
-    c = _connect()
-    with _lock:
+    with _tx() as c:
         c.executemany(
             "INSERT INTO ratings(book_id, stars, updated_at) VALUES(?,?,?) "
             "ON CONFLICT(book_id) DO UPDATE SET stars=excluded.stars, updated_at=excluded.updated_at",
             [(b, s, now) for b in ids],
         )
-        c.commit()
     return len(ids)
 
 
@@ -3906,15 +3916,13 @@ def clear_ratings(book_ids) -> int:
     ids = [str(b) for b in book_ids if str(b or "")]
     if not ids:
         return 0
-    c = _connect()
     removed = 0
-    with _lock:
+    with _tx() as c:
         for i in range(0, len(ids), 900):
             part = ids[i:i + 900]
             q = ",".join(["?"] * len(part))
             cur = c.execute(f"DELETE FROM ratings WHERE book_id IN ({q})", part)
             removed += int(cur.rowcount or 0)
-        c.commit()
     return removed
 
 
@@ -5909,13 +5917,11 @@ def set_overrides(items) -> int:
             upserts.append((str(book_id), str(field), v, o, now))
         else:
             deletes.append((str(book_id), str(field)))
-    c = _connect()
-    with _lock:
+    with _tx() as c:
         if upserts:
             c.executemany(_OVR_UPSERT, upserts)
         if deletes:
             c.executemany(_OVR_DELETE, deletes)
-        c.commit()
     return len(rows)
 
 
@@ -7270,8 +7276,7 @@ def set_statuses(book_ids, status, started_at=None, finished_at=None) -> int:
                                 cur.get("finished_at") or 0,
                                 started_at, finished_at, now)
         rows.append((bid, status, st, fin, now))
-    c = _connect()
-    with _lock:
+    with _tx() as c:
         c.executemany(
             "INSERT INTO reading_status(book_id, status, started_at, finished_at, updated_at) "
             "VALUES(?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET status=excluded.status, "
@@ -7281,7 +7286,6 @@ def set_statuses(book_ids, status, started_at=None, finished_at=None) -> int:
         )
         for bid, _s, st, fin, _now in rows:
             _sync_attempt(c, bid, status, st, fin, now)
-        c.commit()
     return len(rows)
 
 
