@@ -17044,3 +17044,59 @@ SQLite 的隐式事务只在 `commit()` 时落盘：批量写中途抛错时，�
 
 ⚠️ 本轮第一次全量的 2 条红是**自己造成的**，不是回归：新增 `keyboard.spec.ts` 未登记 `EXPECTED_SPECS`；新增 `keyboard.ts` 在**未入库**时 `test_source_tracking_contract` 必红（它查 `git ls-files`）。补登记 + 先把源码提交之后，两条契约用例转绿，重跑全量得到上面的数字。
 ⇒ 操作口径：**新增前端 spec 要同批登记；新增源码文件先提交再跑全量**。
+
+## 第 287 期（全项目审计第 7 轮：写一条批注，侧栏数字还是 0）
+
+**需求来源**：24 小时全项目持续审计第 7 轮（第 281 期起，硬截止 2026-11-12 18:30）。
+
+### 一、本轮扫的角度与发现
+
+#### ① 缓存失效点（⑦）：**写一条批注，侧栏数字还是 0**
+
+先逐个看「读侧有缓存」的地方，它的键是什么、写侧谁负责失效：
+
+| 缓存 | 键 | 失效方式 |
+|---|---|---|
+| 章节 HTML / 章节样式 | 书 id + 章号 + **源文件指纹**（+ `CHAPTER_HTML_VERSION`） | 源文件一变即自然失效 |
+| 封面（从文件读的那一支） | 书 id + **源文件指纹** + 宽度 | 同上 |
+| 服务端封面 `meta_cover` | —— | **刻意不进缓存**（表无版本列，靠 TTL 猜「重抓过没有」不值） |
+| 书目列表 | `book_list_key(library_id)` | `catalog.invalidate` 是唯一汇聚点（20+ 写调用点） |
+| 侧栏「浏览」三计数 | `library_id`（60s TTL） | `browse_counts.invalidate`，挂在 `library.invalidate` 里 |
+
+前四行健康。最后一行有问题 —— 实测：
+
+```
+GET  /api/browse-counts               → annotations=0, cached=false
+POST /api/books/{bid}/annotations     → 200
+GET  /api/browse-counts               → annotations=0, cached=true    ← 页面已经列出 1 条
+```
+
+`library.invalidate()` 的注释声称「新增 / 删书 / **写批注**」之后都已让三计数失效，
+而**批注端点一次都没调过它**。用户看到侧栏「批注 0」、点进去 1 条（最多错 60s）——
+正是这个模块文档里最忌讳的「侧栏显示 3、页面列出 12」。
+
+**修法**：新增 `library.invalidate_counts()`（只丢三计数，**不**标脏书目），
+批注写入口（新增 / 删除 / 恢复 / 彻底删除 / KOReader 导入）调它。
+**不走** `library.invalidate()`：批注不改书目，顺带标脏会让下一个请求白跑一次增量扫描。
+
+#### ② 同一角度的健康项（别重查）
+
+- 章节 / 样式 / 封面缓存的键都带**指纹**（源文件一变即失效），不靠手工删；
+- `meta_cover` 刻意不进缓存（理由写在代码里）；
+- `browse_counts.invalidate(lid)` 丢指定库时**也丢跨库键 `""`**（侧栏是跨库聚合）——第 139 期
+  修过的「只丢该库 ⇒ 侧栏仍是旧数」不再复发。
+
+### 二、防回归：`tests/test_annotation_counts_287.py`（1 例）
+
+写一条批注后 `/api/browse-counts` 的 `cached=false` 且 `annotations=1`；
+软删除后立刻回到 0（`cached=false`）。修前这条必红（第二次读拿到的是缓存）。
+
+### 三、核验
+
+后端全量 **3429 例（3402 passed / 0 failed / 0 errors / 27 skipped）**、682.2 s；
+前端四连（type-check → unit → build → **deploy**）全过；`period_close check` **0 问题**。
+
+⚠️ 第一次全量出现 1 例红：`test_hardening_141_error_paths::test_config_destroyed要能看见` ——
+测试自己在 `unlink` 临时 config.yaml 时撞上 `WinError 32`（该用例把 `CONFIG_FILE` 模块级改成
+自己的 tmp 路径，后台线程此刻也会读它）。单跑 3 次全绿；已给该用例的清理加短退避重试
+（与 `config._replace_with_retry` 同口径），重跑全量通过，下面的数字来自重跑。
