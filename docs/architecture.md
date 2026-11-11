@@ -418,6 +418,10 @@ DTO 的 `metadata.number` / `numberSort` 与**排序表**共用同一份解析 �
 `_stale_download` 判的是**快照**（无 `.part`、无成品 ⇒ 认为没人下），而复位原先**无条件**写 `''` —— 判定与写入
 之间 worker 可能刚好完成（`os.replace` + 置 `downloaded`）⇒ 列表接口把刚下完的一集写回「未下载」（文件在、
 状态空，再点又下一遍、`auto_clean` 也不再清）。复位必须是 `UPDATE … WHERE id=? AND download_state='downloading'`） |
+   | 定时表达式**是否可用**（写入口拒绝 / 运行时退化） | `novelforge/core/watcher.py` 的 `cron_problem`（第 282 期：唯一判据 ——
+建库 / 改库用它 **400 拒绝**坏 `scan_cron`（6 段 / 中文 / `@daily`）；`_should_scan` 用它判退化：记一条 warning
+并把原因拼进该库的「扫描备注」。修前是**静默**退化成「按间隔扫」——`scan_interval=0` 时就是全局 **5 s**，
+用户设的「每天 4 点」变成每 5 秒扫一次，而界面承诺的「错误记在扫描备注里」一个字也没有） |
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
    ⚠️ **第 82 期显式新增运行时依赖 `vue-draggable-plus@^0.6.1`**（仪表盘部件行内拖拽）：理由是原生 HTML5 DnD

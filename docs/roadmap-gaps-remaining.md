@@ -16774,3 +16774,58 @@ AssertionError: assert '' == '预览书'
 
 后端全量 **3415 例（3388 passed / 0 failed / 0 errors / 27 skipped）**、664.1 s；
 前端四连（type-check → unit → build → **deploy**）全过；`period_close check` **0 问题**。
+
+## 第 282 期（全项目审计第 2 轮：坏 cron 静默退化成 5 秒一扫）
+
+**需求来源**：24 小时全项目持续审计第 2 轮（第 281 期起，硬截止 2026-11-12 18:30）。
+
+### 一、本轮扫的角度与发现
+
+#### ① 定时任务的调度边界（㉑）+ 文案与实际（⑭）：坏 `scan_cron` 静默退化
+
+实测（修前，一个库的 `scan_cron = "每天 4 点"`、`scan_interval = 0`）：
+
+```
+目标 interval = 5.0（scan_interval=0 ⇒ 继承全局）
+  上次扫描在 0s 前 -> should_scan = False
+  上次扫描在 3s 前 -> should_scan = False
+  上次扫描在 6s 前 -> should_scan = True      ← 按 5 秒间隔狂扫
+last_scan_note = '扫描 1 项'                  ← 没有任何说明
+watcher.last_error = ''                       ← 日志里也没有
+```
+
+而设置页写的是「cron 写错了不会让监听整个坏掉 —— 会退化成按间隔扫描
+（**错误只记在扫描备注里**）」。
+
+**用户看到**：设了「每天 4 点」，实际变成**每 5 秒**扫一次来源目录（NAS 上的持续 I/O、
+扫描历史被刷满），而且没有任何地方告诉他表达式错了。触发条件就是**任何一次手打 cron 的笔误**
+（6 段、中文、`@daily` 都会被 croniter 拒）。
+
+**修法**：
+- 新增 `watcher.cron_problem()` 作为**唯一判据**：
+  - 建库 / 改库两个写入口用它拒绝坏表达式（400 + 人话「需要 5 段（分 时 日 月 周）」）——
+    新笔误在保存时就被挡住，不会先落库再「跑起来才发现」；
+  - 调度线程 `_should_scan()` 用它判退化：每个目标只写**一条** warning（5 s 一轮，不能刷屏），
+    原因留在 `_cron_problems`，下次扫描拼进该库的 `last_scan_note`；表达式改好后自动清掉。
+- 两处设置页文案同步改成「保存时会校验（写错会被拒绝）；已存的坏表达式会退化为按间隔扫描，
+  原因记在该库的扫描备注里」。
+
+#### ② 同一角度的健康项（别重查）
+
+- **时区**：`docker-compose.yml` 与 `Dockerfile` 都钉了 `TZ=Asia/Shanghai`（镜像装了 `tzdata`）；
+  `croniter` 用的是**容器本地**时间（`datetime.fromtimestamp`），与部署口径一致。
+- **扫描备注真的看得见**：`LibrariesView` 的库卡片与编辑弹窗都渲染 `last_scan_note`
+  （卡片上还带 `title` 全量）。
+- **错过的窗口**：`_target_last` 为 0（从未扫 / 刚重启）⇒ 首个 tick 必扫；此后按
+  「最近一次 cron 触发是否晚于上次扫描」判 —— 停机期间错过的窗口在启动后补一次，
+  不会每个 tick 重放。
+
+### 二、防回归：`tests/test_scan_cron_282.py`（4 例）
+
+`cron_problem` 是唯一判据（合法 4 种 / 非法 5 种）· 建库与改库都 400 **且坏值不落库** ·
+坏表达式退化为按间隔**且扫描备注写明原因** · 表达式改好后备注不再带错误。
+
+### 三、核验
+
+后端全量 **3419 例（3392 passed / 0 failed / 0 errors / 27 skipped）**、1126.3 s（本轮机器负载偏高：上轮同套用例 664 s；用例数 = 上轮 3415 + 本轮新增 4 例）；
+前端四连（type-check → unit → build → **deploy**）全过；`period_close check` **0 问题**。
