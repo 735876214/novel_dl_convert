@@ -16999,3 +16999,48 @@ SQLite 的隐式事务只在 `commit()` 时落盘：批量写中途抛错时，�
 （`[WinError 32] settings.json 被另一个程序占用`）—— 正是 AGENTS §5 记录的 **Windows 特有**
 瞬时锁（`os.replace` 撞上一个正被读取的目标句柄；生产 Linux 容器上 rename 不受影响）。
 单跑 5 次全绿、重跑全量通过；下面的数字来自重跑。
+
+## 第 286 期（全项目审计第 6 轮：在输入框里按方向键，书也跟着翻页）
+
+**需求来源**：24 小时全项目持续审计第 6 轮（第 281 期起，硬截止 2026-11-12 18:30）。
+
+### 一、本轮扫的角度与发现
+
+#### ① 可访问性与键盘操作（㉒）：阅读器的方向键**不看焦点在哪**
+
+三处阅读器都把翻页键挂在 window 上，但只有部分按键判了焦点：
+
+| 阅读器 | 可编辑控件 | 修前的焦点判据 |
+|---|---|---|
+| EPUB（`ReaderView` 翻页模式） | 书内搜索框 | `?` `/` `f` 判了；**方向键没判** |
+| PDF（`PdfReader`） | 「PDF 文内搜索」`<input type="search">`、批注内容 `<input type="text">` | **一处都没判** |
+| 漫画（`ComicReader`） | 跳页 `<input>`、页间距滑块、多个 `<select>` | **一处都没判** |
+
+**触发条件**：焦点在「PDF 文内搜索」里按 ←/→ 移动光标（或在下拉框里按 PageUp/PageDown 换选项、
+在间距滑块上按 ←/→ 调值）。
+**用户看到**：一次按键干了两件事 —— 光标动了，**书也翻了一页**（搜索 / 调参时页面在背后乱跳，
+用户失去位置感；滑块还会被改值）。
+
+**修法**：新增 `frontend/src/lib/keyboard.ts` 的 `isFormControlTarget()`
+（`INPUT` / `TEXTAREA` / `SELECT` / `contenteditable`），三处阅读器**共用这一份判据**：
+控件获得焦点时，方向键交给控件自己，阅读器不翻页。Esc 的行为**不变**（仍是先关面板，
+即使焦点在输入框里 —— 那是搜索框的既定操作）。
+
+#### ② 同一角度的其它入口（抽查，健康）
+
+- 全局 `⌘K`（`App.vue`）：只认带修饰键的组合 —— 输入框里也应全局可用，不判落点是**对的**；
+- `ExploreView` 的 Esc 只关预览弹窗，不吞别的组件的事件；
+- 各弹层用 reka-ui `Dialog`（焦点陷阱 / Esc 由库统一处理），没有自写一套。
+
+### 二、防回归
+
+`frontend/src/lib/keyboard.spec.ts`（2 例）：输入类控件与 `contenteditable` 返回 true；
+普通元素 / 空目标返回 false。三处阅读器的接线由前端四连（type-check + unit + build + deploy）覆盖。
+
+### 三、核验
+
+后端全量 **3428 例（3401 passed / 0 failed / 0 errors / 27 skipped）**、653.4 s；
+前端四连（type-check → unit → build → **deploy**）全过；`period_close check` **0 问题**。
+
+⚠️ 本轮第一次全量的 2 条红是**自己造成的**，不是回归：新增 `keyboard.spec.ts` 未登记 `EXPECTED_SPECS`；新增 `keyboard.ts` 在**未入库**时 `test_source_tracking_contract` 必红（它查 `git ls-files`）。补登记 + 先把源码提交之后，两条契约用例转绿，重跑全量得到上面的数字。
+⇒ 操作口径：**新增前端 spec 要同批登记；新增源码文件先提交再跑全量**。

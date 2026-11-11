@@ -439,6 +439,11 @@ DTO 的 `metadata.number` / `numberSort` 与**排序表**共用同一份解析 �
    | 作者抓取的**开关**到底闸哪条路 | `novelforge/core/authors.py` 的 `fetch_all` / `fetch_author`（第 202 期定、第 285 期把界面说清楚：`enabled` 只闸**批量**
 （`fetch_all` 关闭时返回 `skipped: "作者抓取未开启"`）；**单个作者**在详情页手动抓取不看它。⚠️ 设置页文案必须点名
 「哪条路还开着」—— 修前写的是「关闭后仍可用**上面的按钮**」，而上面正是被闸掉的批量按钮，默认又是关 ⇒ 新用户按提示点必然被拒） |
+   | `window` / `document` 级**键盘处理**的落点判据 | `frontend/src/lib/keyboard.ts` 的 `isFormControlTarget`
+（第 286 期：三处阅读器的翻页键挂在 window 上，事件会从输入框冒泡上来 ⇒ 在
+「PDF 文内搜索」里按 ←/→ 移动光标时**书也翻一页**（漫画的滑块还会被改值）。
+判据 = `INPUT` / `TEXTAREA` / `SELECT` / `contenteditable` ⇒ 方向键交给控件自己。
+⚠️ 带修饰键的全局组合（⌘K）**不**走这条 —— 它在输入框里也该生效） |
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
    ⚠️ **第 82 期显式新增运行时依赖 `vue-draggable-plus@^0.6.1`**（仪表盘部件行内拖拽）：理由是原生 HTML5 DnD
