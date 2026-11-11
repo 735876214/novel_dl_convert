@@ -1005,7 +1005,7 @@ async function confirmRemove(): Promise<void> {
             </div>
           </div>
           <div class="text-[11px] text-muted-foreground">
-            cron 写错了不会让监听整个坏掉 —— 会退化成按间隔扫描（错误只记在扫描备注里）。
+            cron 保存时会校验（写错会被拒绝）；已存的坏表达式会退化为按间隔扫描，原因记在该库的扫描备注里。
           </div>
 
           <label class="flex items-start gap-2 text-[12.5px] text-foreground">

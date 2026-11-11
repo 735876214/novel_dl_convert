@@ -65,6 +65,29 @@ def settle_seconds_of(raw, default: float = 1.0) -> float:
     """`watcher.settle_seconds` → 夹过下界的秒数。"""
     return _clamp_positive(raw, default, MIN_SETTLE_SECONDS)
 
+def cron_problem(expr: str) -> str:
+    """5 段 cron 表达式的问题描述（``""`` = 可用 / 未设置）。
+
+    ⚠️ 第 282 期：**唯一判据**。两个写入口（建库 / 改库）用它拒绝坏表达式；
+    调度线程 :meth:`FolderWatcher._should_scan` 用它判「退化」，并把原因写进该库的
+    **扫描备注** —— 两处各写一份会出现「保存时放行、跑起来才发现坏」。
+
+    实测定性（修前）：写错成 ``每天 4 点`` 的库会按**全局 5 s** 间隔狂扫，
+    而界面写的是「错误只记在扫描备注里」—— 备注里却什么也没有（`last_error` 也空）。
+    """
+    s = str(expr or "").strip()
+    if not s:
+        return ""
+    if len(s.split()) != 5:
+        return "需要 5 段（分 时 日 月 周）"
+    try:
+        from croniter import croniter
+        if not croniter.is_valid(s):
+            return "不是合法的 cron 表达式"
+    except Exception as e:                      # noqa: BLE001 —— 缺依赖 / 解析器自身异常
+        return f"无法解析（{type(e).__name__}: {e}）"
+    return ""
+
 _logger = logging.getLogger("novelforge.watcher")
 
 #: 旁路工作的**有界**执行器：`*_async` 派生那些「发了就不管」的任务（元数据抓取 /
@@ -278,6 +301,9 @@ class FolderWatcher:
         self._thread: threading.Thread | None = None
         # 已「首轮」过的扫描目标集合（逐个目标独立判定历史存量是否处理）
         self._primed: set = set()
+        #: 定时表达式无效的目标（`tkey` → 原因）。第 282 期：留痕用 ——
+        #: `_should_scan` 写入，`_scan_locked` 把它拼进该库的「扫描备注」。
+        self._cron_problems: dict = {}
         self.last_scan = 0.0
         #: 最近一次 tick 子系统失败的原因（`status()` 下发，界面看得见）。日志会滚走，
         #: 这个字符串留在状态里直到下次失败/成功复位（第 137 期：失败不再零日志）。
@@ -793,6 +819,10 @@ class FolderWatcher:
             try:
                 from . import db as _db
                 note = f"扫描 {result['scanned']} 项" if result["scanned"] else "无新文件"
+                # 第 282 期：定时表达式坏了要**说清楚**（界面承诺过「错误记在扫描备注里」）。
+                problem = self._cron_problems.get(str(tkey or ""))
+                if problem:
+                    note = f"定时表达式无效（{problem}），已退化为按间隔扫描；{note}"
                 _db.set_library_scan(library_id, note)
             except Exception:
                 pass
@@ -844,15 +874,26 @@ class FolderWatcher:
         now = time.time()
         last = self._target_last.get(t["tkey"], 0)
         if t["cron"]:
-            try:
-                from datetime import datetime
-                from croniter import croniter
-                # 最近一次 cron 触发晚于上次扫描 → 该扫一轮；
-                # 坏表达式走 except，退化成 interval 行为，绝不拖垮线程。
-                prev = croniter(t["cron"], datetime.fromtimestamp(now)).get_prev(datetime)
-                return prev.timestamp() > last
-            except Exception:
-                return (now - last) >= t["interval"]
+            problem = cron_problem(t["cron"])
+            if not problem:
+                try:
+                    from datetime import datetime
+                    from croniter import croniter
+                    # 最近一次 cron 触发晚于上次扫描 → 该扫一轮。
+                    prev = croniter(t["cron"], datetime.fromtimestamp(now)).get_prev(datetime)
+                    self._cron_problems.pop(t["tkey"], None)
+                    return prev.timestamp() > last
+                except Exception as e:        # noqa: BLE001 —— 绝不拖垮线程
+                    problem = f"调度计算失败（{type(e).__name__}: {e}）"
+            # ⚠️ 第 282 期：坏表达式**不再静默** —— 每个目标只写一条日志（5 s 一轮，
+            # 不能每轮刷屏），原因留在 `_cron_problems` 里由下次扫描写进该库的扫描备注；
+            # 行为仍退化为按间隔扫（界面写的就是这个口径），但用户查得到原因。
+            if t["tkey"] not in self._cron_problems:
+                _logger.warning(
+                    "书库「%s」的定时表达式 %r 无效（%s）—— 已退化为按间隔扫描",
+                    t.get("name") or t.get("tkey"), t["cron"], problem)
+            self._cron_problems[t["tkey"]] = problem
+            return (now - last) >= t["interval"]
         return (now - last) >= t["interval"]
 
     def _scan_target(self, t: dict) -> None:

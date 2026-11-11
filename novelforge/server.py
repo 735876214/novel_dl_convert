@@ -7742,6 +7742,12 @@ def api_create_library(payload: dict = Body(...)):
         except (TypeError, ValueError):
             scan_interval = 0
     scan_cron = (str(p.get("scan_cron") or "").strip()) if "scan_cron" in p else ""
+    # ⚠️ 第 282 期：坏表达式在**写入口**就拒 —— 否则它会静默退化成「按全局 5 s 间隔扫」，
+    # 而用户以为自己设的是「每天 4 点」。判据只有 `watcher_mod.cron_problem` 一处。
+    if scan_cron:
+        _cron_bad = watcher_mod.cron_problem(scan_cron)
+        if _cron_bad:
+            raise HTTPException(400, f"定时扫描表达式无效：{_cron_bad}（{scan_cron}）")
     # 刮削出版成品目录（第 18 期）：可选。给了就校验边界并预先建出来，
     # 免得界面显示「已配置」、首次刮削才发现目录不存在。
     publish = _publish_path_allowed(p.get("publish_path"),
@@ -7816,6 +7822,11 @@ def api_update_library(lid: str, payload: dict = Body(...)):
             fields["scan_interval"] = 0
     if "scan_cron" in p:
         fields["scan_cron"] = str(p.get("scan_cron") or "").strip()
+        if fields["scan_cron"]:
+            _cron_bad = watcher_mod.cron_problem(fields["scan_cron"])
+            if _cron_bad:
+                raise HTTPException(
+                    400, f"定时扫描表达式无效：{_cron_bad}（{fields['scan_cron']}）")
     # 刮削出版成品目录（第 18 期）：传空串 = 关闭该库的副本产出。
     # ⚠️ 改这一项**不动已有副本**（副本的清理由刮削页显式操作），只影响后续刮削落点。
     if "publish_path" in p:
