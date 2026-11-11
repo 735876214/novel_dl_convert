@@ -1203,7 +1203,9 @@ watch(() => props.section, () => {
           <span class="text-[13px] font-medium text-foreground">作者元数据</span>
           <Badge v-if="af.enabled" tone="accent">已启用</Badge>
           <Badge v-else>已关闭</Badge>
-          <Button size="sm" class="ml-auto" :disabled="authorFetching" @click="runAuthorFetch">
+          <Button size="sm" class="ml-auto" :disabled="authorFetching || !af.enabled"
+                  :title="af.enabled ? '' : '先在下面开启「启用作者抓取」'"
+                  @click="runAuthorFetch">
             {{ authorFetching ? '抓取中…' : '立即抓取全部作者' }}
           </Button>
         </div>
@@ -1219,7 +1221,7 @@ watch(() => props.section, () => {
         <div class="min-w-0 flex-1">
           <div class="text-[12.5px] text-foreground">启用作者抓取</div>
           <div class="mt-0.5 text-[11.5px] text-muted-foreground">
-            独立于上方书籍抓取的开关；关闭后仍可用上面的按钮手动触发单次抓取
+            独立于上方书籍抓取的开关。关闭后「立即抓取全部作者」会被跳过；作者详情页的「抓取在线资料」仍可手动抓单个作者
           </div>
         </div>
         <Button size="sm" :variant="af.enabled ? 'ghost' : 'primary'" :disabled="saving"
