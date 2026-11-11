@@ -357,6 +357,10 @@ EXPECTED_SPECS = (
     # 第 154 期：收藏夹手动排序。乐观换位后若服务端失败必须**回滚到服务端顺序** ——
     # 只显示 toast 不回滚的话，界面会一直撒谎到下次刷新。
     "src/stores/collections.spec.ts",
+    # 第 286 期：阅读器按键的**落点**判据（焦点在输入框里时方向键不该翻页）。失效全是
+    # 静默的：只认 INPUT/TEXTAREA/SELECT 会漏掉 contenteditable（富文本批注一上来就中招）；
+    # 反过来把带修饰键的全局组合（⌘K）也拦掉 —— 它在输入框里本该生效。
+    "src/lib/keyboard.spec.ts",
 )
 
 
