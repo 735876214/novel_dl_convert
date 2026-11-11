@@ -40,19 +40,16 @@ from xml.sax.saxutils import escape
 
 from .. import config
 from . import activity_log, comics, db, entities, komga, library, metadata, zipkind
-from .filename import UNSAFE_CHARS, strip_unsafe
+from .filename import NAME_MAX_BYTES, UNSAFE_CHARS, strip_unsafe
 
 RECYCLE_DIRNAME = "recycle"
 
-#: 单个路径片段的**字节**上限。取自 POSIX 的 ``PC_NAME_MAX`` 常见值（Linux ext4 / macOS
-#: APFS / NTFS 都是 255 字节）—— 不查 ``os.pathconf``：它在 Windows 上不可用，
-#: 而这里要的是「名字根本没法变成文件」的那条**前置**判据，不是精确的平台能力探测。
+#: 单个路径片段的**字节**上限 —— 常量与理由都在 `core/filename.py`（判据只有一处）。
 #:
 #: ⚠️ 第 129 期补这条的原因：超长名字不会让 ``Path.resolve()`` 报错，但会让 ``stat()`` /
 #: ``is_file()`` 抛 ``OSError(ENAMETOOLONG)``（``pathlib`` 的 ``_ignore_error`` 只忽略
 #: ENOENT / ENOTDIR / EBADF / ELOOP / EINVAL，**不忽略它**）⇒ 「取不到就 404」的写法
 #: 直接变成 500。而名字是外部输入（``/download/{name:path}``、书源名），必须先判长度。
-NAME_MAX_BYTES = 255
 
 
 def name_too_long(part: str) -> bool:

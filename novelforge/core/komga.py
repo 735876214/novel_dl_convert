@@ -23,7 +23,7 @@ Komga（漫画/电子书服务器）扫描库根目录，结构约定决定了�
 import pathlib
 import re
 
-from .filename import strip_unsafe
+from .filename import NAME_MAX_BYTES, fit_segment, strip_unsafe
 
 #: 能识别的「系列 + 卷号」文件名形态（按优先级）。全部要求卷号在**结尾**，
 #: 避免把「三体 2 体」这类中间带数字的书名误切。
@@ -97,13 +97,24 @@ def relpath_for(stem: str, ext: str, series: str, index: str, layout: str = "fla
     """
     ext = (ext or "").lstrip(".")
     stem = clean_segment(stem) or "untitled"
+    # ⚠️ 第 283 期：名字由元数据生成，必须压进文件系统的**字节**上限（见 `fit_segment`）。
+    suffix = f".{ext}" if ext else ""
     if layout != "komga":
-        return f"{stem}.{ext}"
+        return fit_segment(stem, NAME_MAX_BYTES - len(suffix.encode("utf-8"))) + suffix
     seg = clean_segment(series)
     if not seg:
-        return f"{stem}.{ext}"
+        return fit_segment(stem, NAME_MAX_BYTES - len(suffix.encode("utf-8"))) + suffix
     idx = normalize_index(index)
-    name = f"{seg} #{idx}.{ext}" if idx else f"{stem}.{ext}"
+    if idx:
+        # ⚠️ 先按「名字」的预算夹 `seg`，再**用它当目录名** —— 目录与文件名必须
+        # 逐字相同（Komga 靠 `<系列>/<系列> #N.ext` 解析）；各夹各的会得到两个不同的
+        # 截断点，目录名就不再是文件名的前缀。
+        tail = f" #{idx}{suffix}"
+        seg = fit_segment(seg, NAME_MAX_BYTES - len(tail.encode("utf-8")))
+        name = seg + tail
+    else:
+        name = fit_segment(stem, NAME_MAX_BYTES - len(suffix.encode("utf-8"))) + suffix
+        seg = fit_segment(seg, NAME_MAX_BYTES)
     return f"{seg}/{name}"
 
 
@@ -115,9 +126,16 @@ def relpath_for_dir(name: str, series: str, index: str, layout: str = "flat") ->
     seg = clean_segment(series)
     stem = clean_segment(name) or "untitled"
     if layout != "komga" or not seg:
-        return stem
+        return fit_segment(stem, NAME_MAX_BYTES)
     idx = normalize_index(index)
-    return f"{seg}/{seg} #{idx}" if idx else f"{seg}/{stem}"
+    if idx:
+        tail = f" #{idx}"
+        seg = fit_segment(seg, NAME_MAX_BYTES - len(tail.encode("utf-8")))
+        name = seg + tail
+    else:
+        name = fit_segment(stem, NAME_MAX_BYTES)
+        seg = fit_segment(seg, NAME_MAX_BYTES)
+    return f"{seg}/{name}"
 
 
 def series_dir(relpath: str) -> str:
