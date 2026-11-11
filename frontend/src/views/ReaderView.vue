@@ -14,6 +14,7 @@ import ReadAloudBar from '@/components/ReadAloudBar.vue'
 import TtsBar from '@/components/TtsBar.vue'
 import ReaderSearchPanel from '@/components/ReaderSearchPanel.vue'
 import { HIGHLIGHT_COLORS, highlightHex as hex, HIGHLIGHT_STYLES, DEFAULT_HIGHLIGHT_STYLE, highlightStyleLabel, type HighlightStyle } from '@/data/annotationColors'
+import { isFormControlTarget } from '@/lib/keyboard'
 import { api, apiErrorMessage, type Annotation, type BookDetail, type Bookmark, type FontItem, type OnlineChapters, type OnlineStatus, type ReadAloudInfo, type SessionExtra } from '@/lib/api'
 import { attachReaderClock, createSessionReporter, type ReaderClock } from '@/lib/readingSession'
 import { progressForFile } from '@/lib/readingProgress'
@@ -672,8 +673,7 @@ function onKeydown(e: KeyboardEvent): void {
     }
     return
   }
-  const tag = (e.target as HTMLElement | null)?.tagName || ''
-  const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+  const typing = isFormControlTarget(e)
   if (!typing) {
     if (e.key === '?') {
       showHelp.value = !showHelp.value
@@ -689,7 +689,9 @@ function onKeydown(e: KeyboardEvent): void {
       return
     }
   }
-  if (!paged.value) return
+  // ⚠️ 焦点在输入框 / 下拉里时，方向键是**控件自己的**（移动光标 / 换选项）——
+  // 不能同时把书翻一页（第 286 期）。
+  if (typing || !paged.value) return
   if (e.key === 'ArrowRight' || e.key === 'PageDown') flip(1)
   else if (e.key === 'ArrowLeft' || e.key === 'PageUp') flip(-1)
 }

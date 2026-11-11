@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 
 import Button from '@/components/ui/Button.vue'
 import Icon from '@/components/ui/Icon.vue'
+import { isFormControlTarget } from '@/lib/keyboard'
 import { api, type PdfOutlineItem, type PdfSearchHit, type SessionExtra, type UnitPos, type UnitRef } from '@/lib/api'
 import {
   PDF_FITS,
@@ -949,6 +950,7 @@ function cancelPendingLink(): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
+  if (isFormControlTarget(e)) return
   const step = spreadOn.value ? 2 : 1
   if (e.key === 'ArrowRight' || e.key === 'PageDown') go(page.value + step)
   else if (e.key === 'ArrowLeft' || e.key === 'PageUp') go(page.value - step)
