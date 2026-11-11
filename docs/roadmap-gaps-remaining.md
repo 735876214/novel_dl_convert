@@ -16829,3 +16829,61 @@ watcher.last_error = ''                       ← 日志里也没有
 
 后端全量 **3419 例（3392 passed / 0 failed / 0 errors / 27 skipped）**、1126.3 s（本轮机器负载偏高：上轮同套用例 664 s；用例数 = 上轮 3415 + 本轮新增 4 例）；
 前端四连（type-check → unit → build → **deploy**）全过；`period_close check` **0 问题**。
+
+## 第 283 期（全项目审计第 3 轮：生成的副本名没有字节上限）
+
+**需求来源**：24 小时全项目持续审计第 3 轮（第 281 期起，硬截止 2026-11-12 18:30）。
+
+### 一、本轮扫的角度与发现
+
+#### ① 文件系统语义（⑳）+ 边界与不变量（②）：**由元数据生成**的路径片段没有字节上限
+
+实测（`publish.relpath_for`，120 个汉字的书名）：
+
+```
+修前：超长书名×30.epub                 365 字节   ← Linux 单段上限 255 字节 ⇒ ENAMETOOLONG
+修后：超长书名×20-98c00a9d.epub        254 字节
+```
+
+`NAME_MAX_BYTES = 255` 这条判据早就有（第 129 期为了 `is_file()` 抛 `ENAMETOOLONG`
+变 500 而立），但只用在**进来的**路径（`safe_path` / `input_path`）。而副本名是**生成的**：
+书名 / 作者 / 系列 —— 书名允许 200 **字符**，中文 3 字节/字 ⇒ 最多 600 字节。生成的超长
+名字此前一路没判 ⇒
+
+- 出版 / 入库（pipeline、watcher 的 Komga 布局）/ 改名 在 Linux 上抛
+  `OSError(ENAMETOOLONG)`；
+- `publish()` 把这句裸 OS 错误当 `error` 返回（`[Errno 36] File name too long: '…'`）；
+- 命名预览（设置页 / 收书目录预览）照常显示那个**写不出来**的名字。
+
+**触发条件**：书名（或系列 + 书名按命名规则拼起来）的 UTF-8 字节数 > 255（≈85 个汉字）。
+**用户看到**：书卡在「出版失败」，错误是一句裸 OS 错误；预览里却是一个看起来正常的长名字。
+
+**修法**：`core/filename.py` 新增 `fit_segment()`（保留前 N 字节、按 UTF-8 边界切，加原名
+sha1 前 8 位后缀 —— 确定且不撞名），`komga.relpath_for` / `relpath_for_dir` 的**每一个片段**
+都过它：这两处是 publishing / pipeline / watcher / 改名 / 迁移 / 预览**共用**的唯一名字产出点，
+改一处全覆盖。`NAME_MAX_BYTES` 常数挪到 leaf 模块 `filename.py`，`fileops` 改为引用它 ——
+判据仍只有一处。
+
+#### ② 同一角度的健康项（别重查）
+
+- **进来的路径**（上传 / 下载 / 书源名）早就有同一判据（`safe_path` / `input_path`，第 129 期）。
+- **回收站落名**有自己的字节预算（`RECYCLE_NAME_MAX` + 截断，`fileops` 的 `_recycle_name`）——
+  名字再长也移得进回收站。
+- **目录型条目**（有声书）走 `relpath_for_dir`，同样按目录名（无扩展名）夹到 255 字节。
+
+### 二、防回归：`tests/test_long_name_283.py`（5 例）
+
+`fit_segment` 截到字节上限且不切半个 UTF-8 字、确定、不同长名不撞 · 平铺布局的整段 ≤255
+且保留 `.epub` · Komga 布局的系列目录与文件名都 ≤255 · 目录型条目都 ≤255 ·
+120 汉字的书**真的出版得出来**（`publish()` → `ok=True`、落盘文件存在）。
+
+跟着改的既有模块：`fileops`（引用常量）、`komga`（`relpath_for` / `relpath_for_dir`）、
+`filename`（新增 `fit_segment` / `NAME_MAX_BYTES`）。相关子集 93 例全绿。
+
+### 三、核验
+
+后端全量 **3424 例（3397 passed / 0 failed / 0 errors / 27 skipped）**、691.7 s；
+前端四连（type-check → unit → build → **deploy**）全过；`period_close check` **0 问题**。
+⚠️ 本轮的第一次全量是**两个 pytest 并发**跑出来的（`TaskStop` 只杀了外层 shell，
+Windows 上它起的 pytest 子进程继续跑完，两个进程共用同一个 junit 路径）—— 那一份的 11 个红全是
+`git` / `bash` 起不来的 DLL 初始化失败。确认无残留进程后单独重跑，才得到上面这份数字。
