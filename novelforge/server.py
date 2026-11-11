@@ -6442,6 +6442,7 @@ def api_add_annotation(bid: str, request: Request, payload: dict = Body(...)):
         end_off=_anchor_off(payload, "end_off"),
     )
     _sync_auto_push(bid, request)
+    library.invalidate_counts()            # 第 287 期：侧栏「批注」计数立刻反映
     return {"id": rid, "ok": True}
 
 
@@ -6449,6 +6450,8 @@ def api_add_annotation(bid: str, request: Request, payload: dict = Body(...)):
 def api_delete_annotation(bid: str, aid: int):
     """**移入垃圾桶**（软删除），不是真删；彻底删除走 `/purge`。"""
     n = db.delete_annotation(bid, aid)
+    if n:
+        library.invalidate_counts()
     return {"ok": True, "trashed": n > 0}
 
 
@@ -6457,6 +6460,7 @@ def api_restore_annotation(bid: str, aid: int):
     n = db.restore_annotation(bid, aid)
     if not n:
         raise HTTPException(404, "批注不存在或不在垃圾桶中")
+    library.invalidate_counts()
     return {"ok": True}
 
 
@@ -6467,6 +6471,7 @@ def api_purge_annotation(bid: str, aid: int):
     n = db.purge_annotation(bid, aid)
     if not n:
         raise HTTPException(400, "只能彻底删除垃圾桶中的批注（该条目不存在或仍为活跃状态）")
+    library.invalidate_counts()
     return {"ok": True}
 
 
@@ -7067,7 +7072,10 @@ def api_import_koreader_annotations(apply: int = 0):
     但**永不删除**：格式里没有墓碑，用户在设备上删掉的那条会留在本项目里。
     """
     from .core import koreader_anno
-    return koreader_anno.scan_and_import(apply=bool(apply))
+    res = koreader_anno.scan_and_import(apply=bool(apply))
+    if apply and (res.get("added") or res.get("updated")):
+        library.invalidate_counts()
+    return res
 
 
 @app.post("/api/annotations/export-koreader")

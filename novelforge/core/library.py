@@ -2599,6 +2599,18 @@ def books(library_id=None, force: bool = False) -> list:
     return catalog.books(library_id)
 
 
+def invalidate_counts() -> None:
+    """只让侧栏「浏览」三计数失效（**批注写入**专用）。
+
+    ⚠️ 第 287 期：批注写入不改书目，不该走 :func:`invalidate`（那会顺带把目录标脏，
+    下一个请求就要跑一次增量扫描）。但三计数里的「批注」要立刻反映 ——
+    :func:`invalidate` 的注释声称「写批注」已被覆盖，**实际批注端点一次都没调它**
+    （实测：写一条高亮后侧栏仍 `cached: true`、数字还是旧的，最多 60s）。
+    """
+    from . import browse_counts
+    browse_counts.invalidate("")
+
+
 def invalidate(library_id=None) -> None:
     """让书目缓存失效（任何改文件的操作之后都要调）。
 
