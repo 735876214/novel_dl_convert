@@ -148,6 +148,26 @@ def test_库连不上时健康检查回503(client, auth_headers, monkeypatch):
     assert any("数据库" in p for p in d.json()["problems"]), d.json()
 
 
+def _unlink_with_retry(path: pathlib.Path, attempts: int = 10, delay: float = 0.05) -> None:
+    """删文件撞上「别人还开着」时短退避重试（第 287 期）。
+
+    ⚠️ 本用例把 `config.CONFIG_FILE` **模块级**改成自己的 tmp 文件 —— 进程里的后台线程
+    （更新检查 / 追更 / 热应用）此刻看到的也是这个路径 ⇒ 它们的一次读可能晚于本用例的
+    `unlink`，Windows 上就是 `WinError 32`（全量跑偶发、单跑必绿）。这是**测试环境的
+    瞬时占用**，不是配置写坏；重试到 0.5s 即可，超了照旧抛。
+    """
+    import time
+    last: OSError | None = None
+    for i in range(attempts):
+        try:
+            path.unlink(missing_ok=True)
+            return
+        except OSError as e:
+            last = e
+            time.sleep(delay * (i + 1))
+    raise last if last else OSError("unlink 失败")
+
+
 def test_config_destroyed要能看见(client, auth_headers, isolated, monkeypatch, tmp_path):  # noqa: ARG001
     # ⚠️ 第 247 期：本用例**故意写坏 config.yaml**。而 `config.CONFIG_FILE` 是
     # **会话级**路径（`tests/conftest.py` 把 `CONFIG_DIR` 指到 session 根）⇒
@@ -173,7 +193,7 @@ def test_config_destroyed要能看见(client, auth_headers, isolated, monkeypatc
         assert body["config"]["_config_error"]
     finally:
         if backup is None:
-            cfg_file.unlink(missing_ok=True)
+            _unlink_with_retry(cfg_file)
         else:
             cfg_file.write_text(backup, encoding="utf-8")
         config.load_config()
