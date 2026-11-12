@@ -17203,3 +17203,74 @@ GET  /api/browse-counts               → annotations=0, cached=true    ← 页�
 测试里再 spawn node / bash / git 就起不来。停掉并发、用最终代码单独重跑，全绿。
 ⇒ 操作口径：**全量跑不要并行** —— 并行的代价不是慢，是「假红」，而且红在该死的环境项上。
 
+## 第 289 期（全项目审计第 9 轮：HTTP 传输语义（Range / 条件请求 / 分页边界），零新增缺陷）
+
+**需求来源**：24 小时全项目持续审计第 9 轮（第 281 期起；用户 2026-11-12 指示「本轮完成后终止」）。
+本轮角度：**HTTP 传输语义**——外部阅读器（Mihon / KOReader / OPDS 客户端）真正依赖的那一层，
+不是业务数据。**零新增缺陷**，下面记的是探到的口径与「为什么不是缺陷」。
+
+### 一、本轮扫的三个面（全部零发现）
+
+#### ① Range / 文件流语义：健康
+
+用隔离实例（`scripts/dev-instance.sh 8413`）对一本书的 `/api/books/{bid}/file` 实测（文件 1030 B）：
+
+```
+GET  （全量）                200  Content-Length: 1030   Accept-Ranges: bytes
+GET  Range: bytes=0-9        206  Content-Range: bytes 0-9/1030      len=10
+GET  Range: bytes=1018-      206  Content-Range: bytes 1018-1029/1030 len=12
+GET  Range: bytes=-5         206  Content-Range: bytes 1025-1029/1030 len=5
+GET  Range: bytes=1000-2000  206  Content-Range: bytes 1000-1029/1030（右端夹到文件尾）
+GET  Range: bytes=2000-      416
+GET  Range: bytes=0-1,4-5    206  Content-Type: multipart/byteranges; boundary=…（len=246）
+GET  Range: bytes=abc        400
+```
+
+`Starlette FileResponse` 的 Range 实现本身没有第二份；项目只是把文件交给它，没有自写区间解析。
+多段区间走的是标准 multipart/byteranges，客户端拼得起来。
+
+#### ② 条件请求 / 传输层缓存：健康
+
+```
+GET /api/books                   200  ETag: "3182…"  Cache-Control: private, no-cache  Vary: Authorization
+GET /api/books If-None-Match: 同  304  len=0（无 Content-Encoding / Content-Length）
+```
+
+- ETag 算的是**未压缩的 JSON**（中间件注册在 GZip 之内）⇒ 同一实体在 identity / gzip 下同一个标签；
+- 304 去掉了 `Content-Encoding` / `Content-Length`（它们描述的是没发出去的表示）；
+- `private, no-cache` + `Vary: Authorization` 让「每次都回源校验」成立，不会跨用户复用；
+- 端点自己声明了 `Cache-Control` 的一律不改写（`local-paths` 的 `no-store` 不会被降级）。
+
+#### ③ 分页 / 参数边界：健康
+
+- OPDS `acquisition_feed` 把 `page` 夹在 `[1, pages]`（`page=0` / 负数 / 翻过头都回落到合法页，
+  `next` / `previous` 链接不会拼出越界页码）；
+- `/api/books?limit=-5&offset=-3` → **400 +「limit 不能为负数」**（不是 500、不是静默当 0）；
+- `limit=999999999999` → 200，`numbers.row_limit` 的全局上限兜住（只在绑定处夹一次）；
+- 不存在的收藏夹 → 404 +「收藏夹不存在」。
+
+#### ④ 一个「看起来是缺陷、但不是」的观察：主应用端点的 HEAD 仍是 404
+
+`HEAD /api/books/{bid}/file` → 404。第 275 期立的判据是「**面向第三方客户端的**字节出口要能被
+HEAD 探一下」，已在 Komga 的 `/api/v1/books/{id}/file` 与 `…/pages/{n}` 实现（`_ko_head_like`）。
+主应用的 `/api/books/{bid}/file` 的消费者只有本站前端：全仓前端**没有任何 HEAD 调用**
+（唯一的 HEAD 在 PDF 库 `pdfjs-dist` 的下载辅助里，且不走这个端点）⇒ 按「没有消费者就不扩面」
+的口径**不补**；哪天前端或客户端开始用 HEAD，再按 275 期的同一写法补，而不是现在先加一条无人的路由。
+
+### 二、防回归
+
+本轮**零代码改动**，因此没有新增用例；既有的 Range / ETag / OPDS 契约用例覆盖上述口径
+（`test_media_headers_135`、`test_komga_audit_275`、OPDS 相关用例）。全量数字沿用第 288 期
+**同一棵树**（本轮未改任何文件）的那次干净全量。
+
+### 三、核验
+
+后端全量 **3433 例（3406 passed / 0 failed / 0 errors / 27 skipped）**、992.0 s（与第 288 期同一棵树）；
+前端四连沿用第 288 期结果（本轮未改前端）；`period_close check` **0 问题**。
+
+### 四、本任务的收尾
+
+用户 2026-11-12 指示「本轮审计完成后终止」。本轮（第 9 轮）零新增缺陷，按指令**不再开第 10 轮**。
+第 288 期交付的三条修复（缓存代际号 / 清孤儿失效 / 删库扫描竞态）已提交并推送；
+本轮的 HTTP 传输语义面已逐项取证，作为后续接手时的「别重查」清单。
+
