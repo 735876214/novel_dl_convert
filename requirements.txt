@@ -14,6 +14,14 @@ opencc-python-reimplemented>=0.1.7
 Pillow>=10.0
 fastapi>=0.110
 uvicorn>=0.29
+# 实时事件通道的 **WS 后端**（第 290 期）。`/ws` 是第 153 期交付的能力，前端
+# `lib/realtime.ts` 无条件连接、失败后按 1s→30s 退避**一直重连**。但裸 `uvicorn`
+# **不带任何 WebSocket 实现**：实测 0.53.0 对握手直接回 **404**，只在日志里警告
+# "No supported WebSocket library detected" ⇒ 所有部署里这条通道都是死的，
+# 只是**静默退回轮询**（单测走 TestClient 自带的 WS 实现，抓不到这个差异）。
+# uvicorn 支持 `websockets` / `wsproto` 两种后端（auto 探测）；这里显式声明前者，
+# 与 uvicorn 自己的 `[standard]` extra 同一条下限（`websockets>=13`）。
+websockets>=13
 python-multipart>=0.0.9
 beautifulsoup4>=4.12
 # XPath 取值通道（第 94 期阶段 2c）：真实书源里有 120 条用 XPath，唯一执行处是

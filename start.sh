@@ -10,7 +10,7 @@ set -e
 echo "[start] NovelForge 启动中（依赖已内置，跳过安装）"
 
 # 依赖自检：**只查得到、不导入**（第 179 期）。
-# `find_spec` 实测 4.7 ms，而真 import 一遍这三个包要 ~497 ms —— 且 uvicorn 随后会把
+# `find_spec` 实测 4.7 ms，而真 import 一遍这几个包要 ~497 ms —— 且 uvicorn 随后会把
 # 同一批模块**再导入一次**，等于每次启动白烧半秒。
 # 代价（刻意选的那一边）：路径在、包却装坏了（缺 .so / 元数据损毁）这里判不出来，
 # 由 uvicorn 自己的 traceback 兜底 —— 正常 wheel 安装不会走到那里。
@@ -18,7 +18,9 @@ has_mod() {
   python -c 'import importlib.util, sys; sys.exit(0 if all(importlib.util.find_spec(m) for m in sys.argv[1:]) else 1)' "$@" 2>/dev/null
 }
 
-if ! has_mod fastapi uvicorn ebooklib; then
+# ⚠️ `websockets` 也在硬集合里（第 290 期）：没有它时 uvicorn 对 `/ws` 握手回 404，
+# 实时推送会**静默**退化成轮询（前端只会默默重连）—— 正是「镜像少东西却不报错」的形状。
+if ! has_mod fastapi uvicorn ebooklib websockets; then
   echo "[start] [FATAL] Python 依赖缺失，/opt/venv 可能未正确写入镜像。"
   echo "[start] [FATAL] 请重新构建镜像：docker build -t novelforge ."
   exit 1

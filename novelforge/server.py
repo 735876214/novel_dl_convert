@@ -719,28 +719,44 @@ def _media_file(path, media_type: str | None = None, *,
 
 
 class _RedactMediaToken(logging.Filter):
-    """uvicorn access log 里的 ``?token=…`` 一律打码（第 134 期）。
+    """uvicorn 日志里的 ``?token=…`` 一律打码（第 134 期；第 290 期扩到 WS 日志）。
 
     媒体出口（`/asset`、`/cover`、`/audio`、`/units/…/page/…`）允许用 ``?token=`` 鉴权 ——
-    浏览器原生的 ``<img>`` / ``<audio>`` 带不了 Authorization 头。代价是 uvicorn 的 access
-    log 会打出**带查询串的完整路径**，于是一个 30 天有效的登录令牌明文进了容器日志，
+    浏览器原生的 ``<img>`` / ``<audio>`` 带不了 Authorization 头。代价是 uvicorn 的日志
+    会打出**带查询串的完整路径**，于是一个 30 天有效的登录令牌明文进了容器日志，
     随后会跟着 ``docker logs`` / 诊断包 / 用户贴出来的报错一起流出去。
 
     这里只抹值，路径与状态码照旧可查（排障要看的是「谁在什么时候取了哪个资源」）。
-    挂在 ``uvicorn.access`` 上而不是改日志格式：格式来自 uvicorn 自己的 config，动它
-    等于和 uvicorn 的版本绑死；过滤器只碰 ``record.args``（元组第 3 项是 full_path）。
+
+    ⚠️ **按「遍历所有字符串参数」打码，不假定位置**（第 290 期）：HTTP access 日志把
+    URL 放在 ``args[2]``，而 **WebSocket 握手日志把 URL 放在 ``args[1]``** —— 旧实现
+    只认 ``len(args) >= 3`` 且 ``args[2]`` 为字符串，对 WS 那条 logger 等于没挂。
     """
 
     _TOKEN_RE = re.compile(r"(token=)[^&\s\"]+")
 
+    @classmethod
+    def _scrub(cls, text: str) -> str:
+        return cls._TOKEN_RE.sub(r"\1***", text)
+
     def filter(self, record: logging.LogRecord) -> bool:   # noqa: A003 —— logging 的接口名
         args = record.args
-        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
-            record.args = (args[:2] + (self._TOKEN_RE.sub(r"\1***", args[2]),) + args[3:])
+        if isinstance(args, tuple):
+            record.args = tuple(self._scrub(a) if isinstance(a, str) else a for a in args)
+        elif isinstance(args, dict):
+            record.args = {k: (self._scrub(v) if isinstance(v, str) else v)
+                           for k, v in args.items()}
+        elif isinstance(args, str):
+            record.args = self._scrub(args)
         return True
 
 
-logging.getLogger("uvicorn.access").addFilter(_RedactMediaToken())
+# ⚠️ **两条 logger 都要挂**（第 290 期）：HTTP 访问日志走 ``uvicorn.access``；**WebSocket
+# 握手日志走 ``uvicorn.error``**（uvicorn 源码里的 ``logger.info('%s - "WebSocket %s" …')``）。
+# 只挂前者时，``/ws?token=…`` 的 30 天令牌会以明文进容器日志 —— 实测（uvicorn 0.53 +
+# websockets 17.4）装好 WS 后端后立刻复现，与第 134 期要防的是同一件事。
+for _log_name in ("uvicorn.access", "uvicorn.error"):
+    logging.getLogger(_log_name).addFilter(_RedactMediaToken())
 
 
 def _request_token(request: Request) -> str:
@@ -4277,6 +4293,11 @@ def api_login(request: Request, payload: dict = Body(...)):
     """
     user = str(payload.get("user", "") or "")
     pin = str(payload.get("pin", "") or "")
+    # ⚠️ 第 290 期：这两个值会进退避表的键（`auth._fails`）和审计日志的 actor/detail。
+    # 没有上限时，一个 16 MB 的账号名既能长期占住退避表，也会被**持久写进审计日志** ——
+    # 而这是**未鉴权**入口。合理账号 / PIN 远小于这些上限。
+    if len(user) > 128 or len(pin) > 512:
+        raise HTTPException(400, "账号或 PIN 过长")
     host = auth_mod.client_host(request)
     try:
         ok = auth_mod.verify_pin(user, pin, host)
@@ -4319,6 +4340,9 @@ def api_change_pin(request: Request, payload: dict = Body(...)):
     user = getattr(request.state, "user", "") or ""
     old = str(payload.get("old_pin") or "")
     new = str(payload.get("new_pin") or "")
+    # 与登录口同一组上限（第 290 期）：请求体本身有 16 MB 上限，但口令没有理由吃满它。
+    if len(old) > 512 or len(new) > 512:
+        raise HTTPException(400, "密码过长")
     try:
         ok = bool(user) and auth_mod.verify_pin(user, old, auth_mod.client_host(request))
     except auth_mod.Throttled:

@@ -38,6 +38,11 @@ _FAIL_FREE = 5
 #: 退避上限（秒）。再多的失败也不会超过它 —— 否则用户自己被锁在门外没法自救。
 _FAIL_CAP = 15 * 60
 
+#: 退避表的**条目上限**（第 290 期）。此前 `_fails` 只增不减：键里带调用方给的账号名
+#: （`/api/auth/login` 的请求体可达 16 MB），未鉴权入口用不同账号名连发就能让这张表
+#: 无限增长 —— 每条还带着那个超长键，进程内存被慢慢吃光。
+_FAILS_MAX = 4096
+
 #: ``"账号|来源IP" -> (失败次数, 下次允许尝试的时刻)``。单进程内即够：单用户自托管，
 #: 重启清零反而是「管理员救自己」的最后一条路。
 _fails: "dict[str, tuple[int, float]]" = {}
@@ -93,16 +98,35 @@ def _throttle_remaining(key: str) -> float:
         return wait if wait > 0 else 0.0
 
 
+def _prune_fails(now: float) -> None:
+    """退避表超过上限时收缩（调用方须持 ``_fails_lock``）。
+
+    先清「没有处于退避窗口」的旧条目；仍超限才丢最旧的。**正在退避的键优先保留** ——
+    清掉它等于给出一个绕过闸门的窗口。真要把 4096 个键全推进退避窗口，攻击者本身
+    已经是在洪泛（那已经是另一种资源问题了）。
+    """
+    if len(_fails) <= _FAILS_MAX:
+        return
+    for k in [k for k, (_, until) in _fails.items() if until <= now]:
+        _fails.pop(k, None)
+        if len(_fails) <= _FAILS_MAX:
+            return
+    for k in list(_fails)[: len(_fails) - _FAILS_MAX]:
+        _fails.pop(k, None)
+
+
 def _note_failure(key: str) -> None:
     """记一次失败；超过免罚次数后按指数退避（30 s 起，翻倍到 15 min 封顶）。"""
     with _fails_lock:
         n, _ = _fails.get(key, (0, 0.0))
         n += 1
+        now = time.time()
         if n <= _FAIL_FREE:
             _fails[key] = (n, 0.0)
-            return
-        backoff = min(_FAIL_CAP, 30 * (2 ** (n - _FAIL_FREE - 1)))
-        _fails[key] = (n, time.time() + backoff)
+        else:
+            backoff = min(_FAIL_CAP, 30 * (2 ** (n - _FAIL_FREE - 1)))
+            _fails[key] = (n, now + backoff)
+        _prune_fails(now)
 
 
 def _clear_failures(key: str) -> None:
@@ -241,7 +265,12 @@ def issue_token(user: str) -> str:
 
 def verify_token(token: str) -> "str | None":
     try:
-        user, exp, ver, sig = token.split(".")
+        # ⚠️ 第 290 期：从**右**往左切三段，而不是从左切四段。用户名由 ``AUTH_USER``
+        # 直接决定、没有任何字符限制（邮箱式账号很常见）—— ``split(".")`` 在
+        # ``AUTH_USER=john.doe`` 时会把令牌切成 5 段 ⇒ 这里恒返回 None ⇒ 登录接口
+        # 仍回 200，但此后每个请求都 401（「登录成功却什么都没法用」）。
+        # 旧令牌 ``user.exp.ver.sig`` 的形状不变，rsplit 对它结果相同。
+        user, exp, ver, sig = token.rsplit(".", 3)
         exp = int(exp)
     except Exception:
         return None
