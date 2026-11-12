@@ -17358,3 +17358,76 @@ INFO:     127.0.0.1:57416 - "WebSocket /ws?token=admin.1797…" [accepted]
 - 下一轮候选（已探到但未展开）：`db.py` / `calibreimport.py` 里少量 **SQL 标识符插值**
   （表名 / 列名来自内部常量或 Calibre 库 schema）；`pg.py` 的 schema 名插值。留待后续轮次取证。
 
+## 第 291 期（全项目审计第 11 轮：危险汇点（SQL / 路径 / 子进程 / 类型混淆 / 响应头 / HTML），零新增缺陷）
+
+**需求来源**：10 小时持续审计第 2 轮（2026-11-12）。角度：**用户输入 → 危险汇点**。第 289 期扫过
+HTTP 传输语义、第 290 期扫过认证 / 会话，本轮把「输入能到达的执行 / 存储 / 输出面」逐类走一遍。
+**零新增缺陷**，下面是取证与「为什么不是缺陷」，作为后续接手的「别重查」清单。
+
+### 一、扫过的六个面
+
+#### ① SQL：73 处动态构造全部由构造保证安全
+
+用 AST 枚举 `execute / executemany / executescript` 的第一个参数不是字符串常量的全部 73 处：
+
+- 标识符（表名 / 列名）来自**内部常量**（`_ANNO_COLS_FULL` / `_BOOKMARK_COLS` / `_LIBRARY_COLS` /
+  `_SCRAPE_COLS` / `_DOCK_FIELDS` / `SERIES_LOCAL_COLS` / `catalog._COLS`）或**白名单过滤后的键**
+  （`update_custom_field` 的 `allowed`、`task_update` 的 `allowed`、`update_library` 的 `_LIBRARY_COLS`）；
+- `IN (...)` 一律是 `",".join("?" * n)` 生成占位符，值走参数；
+- 没有任何用户可控的 `ORDER BY` / 列名进入 SQL 文本（排序在 Python 层，见 `_ko_order`）。
+
+两处**可信输入**的标识符插值：`calibreimport`（表 / 列名来自所读 Calibre DB 的 `PRAGMA table_info`）
+与 `pg.py` 的 schema 名（来自管理员环境变量）。威胁模型下不是远程面；照旧记录，不扩面。
+
+#### ② 路径 / 解压 / 子进程：没有 zip-slip，也没有 shell
+
+- 全仓**没有** `extractall` / `tarfile` / `unpack_archive`；所有 zip 读取都是
+  `z.open(name)`，`name` 要么来自 `namelist()`、要么先 `name in z.namelist()` 精确匹配
+  （`server.api_book_asset` 的那条白名单）—— 没有「按成员名拼磁盘路径」的写法。
+- 回收站还原：`recycle.plan_restore` 的 `target_dir` 过 `fileops.restore_target_dir`
+  包含性判据（第 242 期修的），条目名过 `_safe_name`；`orig_path` 来自台账。
+- 配置还原：`/api/config/restore` 只收 `BACKUP_DIR` 下的 `*.yaml`，显式拒绝 `/` 与 `\`。
+- 子进程只有三处（`pg_dump` / `node --version` / `node <script>`），**全部参数数组、无 `shell=True`**；
+  `run_js_sync` 的脚本来自书源（本来就要执行），与命令注入无关。
+
+#### ③ 请求体类型混淆：非字典 JSON 全在框架层 422，没有 500
+
+25 个 `Body(None)` 端点逐个看：全部 `(payload or {})` / `payload or {}` 兜底
+（`ko_put_read_progress` → `apply_read_progress` 也 `payload or {}`）。实测（TestClient）：
+`POST /api/auth/login` 传 `[]` / `"x"` / `123` / `null` / 无体 → **422**；
+`/api/recycle/restore` null → 200 空计划、`[]` → 422；`/api/koreader/reset` null → 400；
+`/api/auth/pin`、`/api/search`、`/api/collections` 传 `[]` → 422。
+`?limit=abc` / `1e400` → 400「limit 必须是整数」，`?offset=-1` → 400。
+
+#### ④ `Content-Disposition`：书名里的引号 / 换行不会注入响应头
+
+Starlette `FileResponse` 的分支是：ASCII 且 `quote()` 后不变才写
+`filename="{name}"`；只要含 `"`、CR、LF、非 ASCII 就改走
+`filename*=utf-8''<percent-encoded>`。引号 / 控制字符**必然**让 `quote()` 改变字符串 ⇒
+永远进编码分支。书名字符注入不成立。
+
+#### ⑤ HTML / XSS：所有进 `v-html` 的正文都过了允许清单净化
+
+- EPUB：`library.chapter_html` 在 `_rewrite_assets` 之后调 `htmlsafe.sanitize`
+  （允许清单 + 属性允许清单 + URL scheme 判据 + `CHAPTER_HTML_VERSION` 缓存版本）；
+- TXT / MOBI：`preprocess.paragraphs_to_html` 逐行 `_esc`（`& < >`）后再包 `<p>`，
+  标题走 `htmlsafe.heading` 先转义；
+- 前端 `v-html` 的三个落点（`ReaderView` 的 `html` / `c.html`）都来自上述服务端产出的章节 HTML；
+  另一个 `v-html` 只在 `Icon.vue`，内容来自内部常量表。
+
+#### ⑥ 顺带复核：历史未鉴权入口不是本轮新增
+
+`/download/{name:path}` 与 `/convert` 属中间件注释里明确写着的「历史不强制鉴权」入口
+（`/download` 仍过 `fileops.safe_path` 的包含性判据）；`/api/v1` + `/opds` 的闸门覆盖见第 290 期。
+
+### 二、防回归
+
+本轮**零代码改动**，因此没有新增用例；上述口径由既有用例覆盖：
+`tests/test_reader_html_133.py`（净化）、`tests/test_zip_entry_read_guard_242.py` /
+`test_archive_kinds.py`（zip 读取）、`tests/test_recycle_restore.py`（回收站还原）、
+`tests/test_hardening_134.py`（媒体头）。全量数字沿用第 290 期同一棵树（本轮只改文档）。
+
+### 三、核验
+
+后端全量 **3442 例（3415 passed / 0 failed / 0 errors / 27 skipped）**、846.1 s（与第 290 期同一棵树）；
+`period_close check` 0 问题。
