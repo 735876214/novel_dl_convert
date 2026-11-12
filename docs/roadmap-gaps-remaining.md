@@ -17274,3 +17274,87 @@ HEAD 探一下」，已在 Komga 的 `/api/v1/books/{id}/file` 与 `…/pages/{n
 第 288 期交付的三条修复（缓存代际号 / 清孤儿失效 / 删库扫描竞态）已提交并推送；
 本轮的 HTTP 传输语义面已逐项取证，作为后续接手时的「别重查」清单。
 
+## 第 290 期（全项目审计第 10 轮：实时通道是死的（WS 后端 / 令牌日志 / 输入上限））
+
+**需求来源**：10 小时全项目持续审计第 1 轮（用户 2026-11-12 指示「继续审计，持续10小时」；
+本任务第 1 期 = 全项目审计第 10 轮）。角度：**认证 / 会话 / 日志面** —— 近期各轮没专门扫过这一层。
+
+### 一、四处真缺陷（都落在「测试绿、真部署却不一样」的缝里）
+
+#### ① `/ws` 在**所有部署**里都是死的：裸 uvicorn 没有 WS 后端
+
+`requirements.txt` 只有 `uvicorn>=0.29`，而 uvicorn **不带任何 WebSocket 实现**。
+用隔离实例实测（uvicorn 0.53.0）：对 `/ws?token=…` 的握手直接回 **404**，日志里只有一句
+`WARNING: No supported WebSocket library detected`。于是第 153 期交付的实时推送在
+**每一个部署**里都没工作过 —— 前端 `lib/realtime.ts` 只是按设计静默退回轮询，
+并每 30 秒重连一次（1s→30s 退避），用户看不见、日志里也只有 404。
+
+**为什么一直没被发现**：`tests/test_realtime.py` 与 `test_komga_audit_276.py` 用
+`TestClient.websocket_connect` —— 它自带进程内 WS 实现，**根本不经过 uvicorn 的协议层**。
+这正是「单测 100% 绿、真站点全挂」的又一例（与第 94 期 `Content-Encoding` 那条同型）。
+
+**修法**：`requirements.txt` 显式声明 `websockets>=13`（与 uvicorn 自己 `[standard]`
+extra 的下限一致）；`start.sh` 的依赖自检把它放进硬集合 —— 镜像真少了它时**启动就报**，
+而不是等到用户发现推送不灵。
+
+#### ② 补上 WS 后端后，30 天令牌**立刻**以明文进容器日志
+
+第 134 期给媒体出口的 `?token=` 做了打码，但过滤器只挂在 `uvicorn.access`，且只认
+`args[2]`（HTTP access 的 full_path）。而 uvicorn 的 **WebSocket 握手日志走
+`uvicorn.error`**，URL 在 `args[1]`。实测（uvicorn 0.53 + websockets 17.4）：
+
+```
+INFO:     127.0.0.1:57416 - "WebSocket /ws?token=admin.1797…" [accepted]
+```
+
+**修法**：过滤器改为「遍历 `record.args` 里所有字符串参数」打码（tuple / dict / 单字符串
+三种形状），并同时挂到 `uvicorn.access` 与 `uvicorn.error`。复测同一实例：
+`"WebSocket /ws?token=***" [accepted]`，令牌不再出现。
+
+#### ③ 未鉴权的 `/api/auth/login`：账号名没有长度上限，会进两个持久结构
+
+`auth._fails`（失败退避表）的键是 `"{账号}|{来源IP}"`，而账号名直接来自请求体；
+`activity_log.log()` 也不截断 `actor`。一个 16 MB 的账号名既能长期占住退避表的键，
+也会被**持久写进审计日志** —— 而登录口是**未鉴权**的（请求体上限 16 MB 也拦不住，
+因为 16 MB 本身就是合法输入）。
+
+**修法**：① 登录口 `user > 128` / `pin > 512` 直接 400（不记账、不写审计）；
+② 改口令口同样上限；③ `auth._fails` 增加条目上限 `_FAILS_MAX = 4096`，超限时先清
+「不在退避窗口」的旧条目、仍超限才丢最旧的，**正在退避的键优先保留**（清掉它等于
+给出一个绕过闸门的窗口）。
+
+#### ④ `AUTH_USER` 含点时：登录回 200，之后每个请求 401
+
+令牌形状是 `user.exp.ver.sig`，`verify_token` 用 `split(".")` 从左切四段。用户名由
+`AUTH_USER` 直接决定、没有任何字符限制 —— `AUTH_USER=john.doe@example.com` 时令牌被
+切成 5 段 ⇒ verify 恒 `None` ⇒ 登录接口仍返回一个令牌，但此后每个请求都 401。
+
+**修法**：改 `rsplit(".", 3)`（从右切三段）；旧令牌形状结果不变。
+
+### 二、防回归
+
+`tests/test_auth_ws_290.py`（9 例）：① requirements 声明 + `find_spec` 双断言；
+② WS 形状（`uvicorn.error` / args[1]）与 HTTP 形状（`uvicorn.access` / args[2]）都打码；
+③ 打码器挂在两条 logger 上；④ 超长账号 400 且不进退避表 / 审计日志；⑤ 改口令超长 400；
+⑥ 退避表封顶且保留在退避中的键；⑦ 含点用户名令牌可往返、签名篡改仍失败；⑧ 普通用户名不受影响。
+
+修前红：①（requirements 无 websockets）、②（uvicorn.error 未挂 / 不认形状）、③（挂载缺一条）、
+④（401 且写审计）、⑤（200）、⑥（无上限）、⑦（verify 返回 None）。相关子集 232 例全绿。
+
+### 三、核验
+
+后端全量 **3442 例（3415 passed / 0 failed / 0 errors / 27 skipped）**、846.1 s（较第 289 期
++9 例，正是本期新增用例；skipped 不变）。真实 uvicorn 端到端：握手 **101**、
+日志中令牌 **0 次出现**（修复前同一脚本复现为 True）。
+前端未改（`lib/realtime.ts` 不动），沿用第 289 期的四连结果。`period_close check` 0 问题。
+
+### 四、口径与后续
+
+- **「单测绿 ≠ 部署能用」的判据要选对层**：WS 这种协议能力必须在**真实 uvicorn**
+  上验（TestClient 自带实现会掩盖缺后端）；同理，日志打码要在**真实 logger 名 + 真实参数
+  形状**上验，不能只测自己构造的那一种。
+- 装上 WS 后端后，`/ws` 的令牌仍在 URL 里（浏览器 WS 不能带自定义头）—— 这是既有取舍
+  （`server.py` 里那条注释），本轮只保证它**不进日志**；将来若要做短期票据，按单一真值源原则另开一期。
+- 下一轮候选（已探到但未展开）：`db.py` / `calibreimport.py` 里少量 **SQL 标识符插值**
+  （表名 / 列名来自内部常量或 Calibre 库 schema）；`pg.py` 的 schema 名插值。留待后续轮次取证。
+
