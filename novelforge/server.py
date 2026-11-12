@@ -10209,6 +10209,11 @@ def api_orphans_clear():
     orphans = orphans_mod.orphan_refs()   # 与扫描口径**同源**，绝不各写一份判据
     removed = db.delete_orphans(orphans)
     total = sum(removed.values())
+    # 第 288 期：`ORPHAN_TABLES` 含 `annotations` ⇒ 清孤儿会**真删**批注行，
+    # 侧栏「批注」计数（60s 缓存）必须立刻失效。与批注写入口走同一个函数 ——
+    # 孤儿行不挂在任何现存书上，但跨库总计数（侧栏不传 library_id）会把它算进去。
+    if removed.get("annotations"):
+        library.invalidate_counts()
     activity_log.log(activity_log.ACTION_RECYCLE, "孤儿记录", activity_log.STATUS_OK,
                      detail=f"清理孤儿记录：{total} 行（{removed}）", source="api")
     return {"ok": True, "removed": removed, "total": total}

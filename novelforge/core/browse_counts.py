@@ -26,6 +26,11 @@ CACHE_TTL = 60.0
 
 _lock = threading.Lock()
 _cache: dict = {}       # {library_id: (computed_at, payload)}
+#: 失效代际号。**写侧（invalidate）推进，读侧只在「算之前」与「存之前」同代时落缓存**。
+#: 第 288 期：此前 `counts()` 是「锁内查缓存 → 出锁计算 → 锁内写缓存」，计算期间若发生
+#: 一次写入，那次 `invalidate()` 丢的是**还没写进去的键**，随后旧结果被写回 ⇒ 侧栏又错
+#: 60 秒。与第 88 期 `catalog` 用脏计数解决「刷新与写并发」是同一条判据。
+_gen = 0
 
 
 def invalidate(library_id: str = "") -> None:
@@ -34,7 +39,9 @@ def invalidate(library_id: str = "") -> None:
     给「刚改完文件就要看到新数字」的调用方用（如扫描完成后的前端刷新）。
     TTL 到期本身也会自然失效，所以不调也不会错，只是多等一会儿。
     """
+    global _gen
     with _lock:
+        _gen += 1
         if not library_id:
             _cache.clear()
         else:
@@ -73,7 +80,12 @@ def counts(library_id: str = "") -> dict:
         hit = _cache.get(lid)
         if hit and now - hit[0] < CACHE_TTL:
             return {**hit[1], "cached": True}
+        gen = _gen
     data = _compute(lid)
     with _lock:
-        _cache[lid] = (now, data)
+        # 第 288 期：计算期间若有人写数据（`invalidate()` 已推进代际），这一份结果
+        # 可能来自半新半旧的快照 ⇒ **不落缓存**（本次照样返回，下次重算）。宁可多算
+        # 一次，也不能把失效后的旧值写回去再错 60 秒。
+        if gen == _gen:
+            _cache[lid] = (now, data)
     return {**data, "cached": False}
