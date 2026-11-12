@@ -10384,8 +10384,9 @@ def api_reset_config():
 def api_clear_overrides():
     """清空 settings.json 覆盖层 —— 让 config.yaml 里的值真正生效。"""
     try:
-        if config.SETTINGS_FILE.is_file():
-            config.SETTINGS_FILE.unlink()
+        # ⚠️ 第 292 期：走 `config.clear_overrides`（持 `_OVERRIDES_LOCK` + 短退避重试）。
+        # 此前直接 `SETTINGS_FILE.unlink()`：Windows 上并发读句柄会让它偶发 500。
+        config.clear_overrides()
     except Exception as e:
         raise HTTPException(500, f"清除失败：{e}")
     _apply_runtime_config()

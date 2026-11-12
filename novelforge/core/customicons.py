@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
+from . import xmlsafe
+
 MAX_SVG_BYTES = 256 * 1024
 MAX_PATHS = 200
 MAX_PATH_LEN = 20_000
@@ -37,7 +39,7 @@ def parse_svg(raw) -> list:
     if len(text.encode("utf-8")) > MAX_SVG_BYTES:
         raise ValueError(f"SVG 超过 {MAX_SVG_BYTES // 1024} KB 上限")
     try:
-        root = ET.fromstring(text)
+        root = xmlsafe.fromstring(text)
     except ET.ParseError as e:
         raise ValueError(f"SVG 解析失败：{e}") from None
     out: list = []

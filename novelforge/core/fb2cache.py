@@ -36,7 +36,7 @@ import xml.etree.ElementTree as ET
 
 from .. import config
 from . import derivedcache
-from . import epub_builder, pipeline
+from . import epub_builder, pipeline, xmlsafe
 
 #: 本模块认的扩展名（单文件 FB2）。
 EXTS = (".fb2",)
@@ -236,9 +236,15 @@ def _clean_xml(text: str) -> str:
 
 def _parse(text: str):
     """解析 FB2 XML；stdlib 失败时若 lxml 在就用它的 recover 模式兜一层。失败 ⇒ None。"""
+    # ⚠️ 第 292 期：实体膨胀判据必须在**任何解析之前**、且要在 `_clean_xml` 剥 DOCTYPE
+    # 之前问（剥完 `<!ENTITY` 就被切碎了）。带内部实体声明的 FB2 直接判「读不了」。
+    try:
+        xmlsafe.ensure_no_entities(text)
+    except ET.ParseError:
+        return None
     cleaned = _clean_xml(text)
     try:
-        return ET.fromstring(cleaned)
+        return xmlsafe.fromstring(cleaned)
     except ET.ParseError:
         pass
     except Exception:                                  # noqa: BLE001

@@ -685,6 +685,39 @@ def save_overrides(data: dict) -> None:
         raise
 
 
+def _unlink_with_retry(path, attempts: int = 5, delay: float = 0.02) -> None:
+    """删除文件 —— 撞上瞬时占用时**短退避重试**（与 :func:`_replace_with_retry` 同口径）。
+
+    ⚠️ 第 292 期：`DELETE /api/config/overrides` 此前直接 ``SETTINGS_FILE.unlink()``，
+    既不拿 :data:`_OVERRIDES_LOCK`、也不重试 —— Windows 上任何并发读句柄
+    （`load_overrides` 在另一个线程/进程里刚打开文件）都会让它 **500**（实测：
+    全量跑的中段偶发 `WinError 32`）。读与删除本来就该互斥，外部进程的占用
+    则靠这段短退避覆盖。
+    """
+    last: OSError | None = None
+    for i in range(max(1, attempts)):
+        try:
+            path.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except OSError as e:
+            last = e
+            if i + 1 >= max(1, attempts):
+                break
+            time.sleep(delay * (i + 1))
+    raise last if last else OSError("unlink 失败")
+
+
+def clear_overrides() -> None:
+    """清空 settings.json 覆盖层（删除文件）—— 与 :func:`save_overrides` 共用同一把锁。
+
+    语义 = 「让 config.yaml 里的值真正生效」；文件不存在也算成功（幂等）。
+    """
+    with _OVERRIDES_LOCK:
+        _unlink_with_retry(SETTINGS_FILE)
+
+
 def mutate_overrides(mutator) -> dict:
     """在锁内做一次「读 → 改 → 写」，返回写进去的整份覆盖层。
 

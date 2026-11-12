@@ -31,6 +31,8 @@ from __future__ import annotations
 import pathlib
 import zipfile
 
+from . import zipkind
+
 #: Kobo 要求的「无 DRM」声明（`encryption.xml`）。
 #:
 #: ⚠️ 内容**不能为空** —— 空的 `encryption.xml` 会被部分固件判为「加密但没给 key」。
@@ -103,7 +105,8 @@ def export_kepub(src: pathlib.Path, dest: pathlib.Path) -> pathlib.Path:
                 if item.filename in ("META-INF/encryption.xml",
                                     "META-INF/com.apple.ibooks.display-options.xml"):
                     continue                      # 原有的那些**不**照抄，我们自己写
-                data = zin.read(item.filename)
+                # 第 292 期：走统一入口（带解压后上限）；裸 `zin.read()` 是 zip 炸弹入口。
+                data = zipkind.read_entry(zin, item.filename)
                 if item.filename.endswith(".opf"):
                     data = _rewrite_opf(data.decode("utf-8", "ignore")).encode("utf-8")
                 # ⚠️ `mimetype` 必须是**第一个**且**不压缩**（EPUB 规范）

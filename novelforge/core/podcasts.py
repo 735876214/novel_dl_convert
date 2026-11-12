@@ -32,7 +32,7 @@ from urllib.parse import urlencode, urlparse
 import httpx
 
 from .. import config
-from . import db, fileops
+from . import db, fileops, xmlsafe
 
 TIMEOUT = 20.0
 MAX_BYTES = 8 * 1024 * 1024
@@ -299,7 +299,7 @@ def parse_duration(raw: str) -> int:
 def parse_feed(xml_text: str) -> "tuple[dict, list]":
     """RSS 2.0 → `(频道元信息, 单集列表)`。Atom / 非 RSS 一律 `ValueError`。"""
     try:
-        root = ET.fromstring(xml_text)
+        root = xmlsafe.fromstring(xml_text)
     except ET.ParseError as e:
         raise ValueError(f"订阅不是合法的 XML：{e}") from None
     if _local(root.tag) != "rss":
@@ -918,7 +918,7 @@ def opml_import(text: str) -> dict:
     if len(raw.encode("utf-8", "replace")) > MAX_OPML_BYTES:
         raise ValueError("OPML 文件过大（上限 2 MB）")
     try:
-        root = ET.fromstring(raw)
+        root = xmlsafe.fromstring(raw)
     except ET.ParseError as e:
         raise ValueError(f"OPML 不是合法的 XML：{e}") from None
     urls = []

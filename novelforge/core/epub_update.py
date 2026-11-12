@@ -26,7 +26,7 @@ from __future__ import annotations
 import pathlib
 import zipfile
 
-from . import atomicio
+from . import atomicio, zipkind
 
 #: EPUB 规范：mimetype 必须是第一条且不压缩
 MIMETYPE = "mimetype"
@@ -64,14 +64,15 @@ def copy_with_extra(src, dst, *, extra=None, replace=None) -> pathlib.Path:
         names = zin.namelist()
         first = names[0] if names else ""
         if first == MIMETYPE:
-            _write_entry(zout, MIMETYPE, zin.read(MIMETYPE), template=zin.getinfo(MIMETYPE),
-                         compress_type=_STORED)
+            _write_entry(zout, MIMETYPE, zipkind.read_entry(zin, MIMETYPE),
+                         template=zin.getinfo(MIMETYPE), compress_type=_STORED)
         for info in zin.infolist():
             if info.filename == MIMETYPE or info.is_dir():
                 continue
             data = replace.get(info.filename)
             if data is None:
-                data = zin.read(info.filename)
+                # 第 292 期：未替换的条目也走统一入口（带解压后上限）。
+                data = zipkind.read_entry(zin, info.filename)
             _write_entry(zout, info.filename, data, template=info)
         for name, data in extra:
             _write_entry(zout, name, data)
@@ -200,7 +201,6 @@ def append_chapters(epub, chapters, *, lang: str = "zh") -> dict:
         start = (max(nums) + 1) if nums else 0
         # 第 242 期：走 `zipkind.read_entry`（**按实际读到的字节数掐**）——
         # 裸 `z.read()` 会被「声称很小、实际极大」的归档绕过。
-        from . import zipkind
         opf = zipkind.read_entry(z, opf_path).decode("utf-8")
         nav = zipkind.read_entry(z, nav_path).decode("utf-8") if nav_path else ""
         ncx = zipkind.read_entry(z, ncx_path).decode("utf-8") if ncx_path else ""
@@ -257,6 +257,8 @@ def verify_unchanged(src, dst, *, added=(), replaced=()) -> list:
             ia, ib = a.getinfo(name), b.getinfo(name)
             if ia.compress_type != ib.compress_type or ia.date_time != ib.date_time:
                 problems.append(f"{name}: 元数据变了（compress/date）")
-            if a.read(name) != b.read(name):
+            # 第 292 期：比对也要过条目上限（`a` 是**源书**，不可信）——
+            # 裸 `read()` 会让「验证副本」变成又一个解压炸弹入口。
+            if zipkind.read_entry(a, name) != zipkind.read_entry(b, name):
                 problems.append(f"{name}: 内容字节变了")
     return problems

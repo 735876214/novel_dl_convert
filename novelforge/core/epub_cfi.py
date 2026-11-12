@@ -30,6 +30,8 @@ import re
 import zipfile
 import xml.etree.ElementTree as ET
 
+from . import xmlsafe
+
 #: 第 242 期：读 EPUB 条目统一走 `zipkind.read_entry`（**带解压后大小上限**）。
 #: 这里**函数内导入** —— `zipkind` 与本模块互不依赖，但顶层导入会让
 #: 「谁先被导入」变成隐式约定（`zipkind` 会拉 `comics`，`comics` 又拉别的）。
@@ -126,6 +128,9 @@ def _body_of_doc(path, spine_index: int):
 def _parse(raw: str):
     """宽容解析：剥 DOCTYPE、把 HTML 命名实体转成数字引用。失败 ⇒ None。"""
     try:
+        # ⚠️ 第 292 期：必须在**剥 DOCTYPE 之前**问实体判据 —— 下面的正则会把
+        # `<!DOCTYPE … [<!ENTITY …>]>` 从第一个 `>` 处切碎，之后就查不出声明了。
+        xmlsafe.ensure_no_entities(raw)
         raw = re.sub(r"<!DOCTYPE[^>]*>", "", raw, flags=re.I | re.S)
 
         def _ent(m):
@@ -136,7 +141,7 @@ def _parse(raw: str):
             return "&#" + str(ord(cp)) + ";"
 
         raw = re.sub(r"&([a-zA-Z][a-zA-Z0-9]+);", _ent, raw)
-        return ET.fromstring(raw)
+        return xmlsafe.fromstring(raw)
     except Exception:
         return None
 

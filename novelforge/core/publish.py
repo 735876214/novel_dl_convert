@@ -33,7 +33,7 @@ import time
 import zipfile
 import xml.etree.ElementTree as ET
 
-from . import atomicio, db, fileops, komga, library, readaloud
+from . import atomicio, db, fileops, komga, library, readaloud, xmlsafe, zipkind
 
 #: 副本的生成方式：硬链接（首选）/ 复制（文件系统不支持硬链接时的回退）
 LINK_HARD = "hardlink"
@@ -64,13 +64,15 @@ def export_deaudio_epub(src, dest, audio_hrefs) -> pathlib.Path:
         names = set(zin.namelist())
         if "META-INF/container.xml" not in names:
             raise ValueError("不是有效的 EPUB（缺少 META-INF/container.xml）")
-        container = zin.read("META-INF/container.xml")
-        croot = ET.fromstring(container)
+        # ⚠️ 第 292 期：容器 / OPF 也走统一入口（`zipkind.read_entry` 带解压后上限）——
+        # 裸 `zin.read()` 让「出版一份恶意 EPUB」变成 zip 炸弹的解压入口。
+        container = zipkind.read_entry(zin, "META-INF/container.xml")
+        croot = xmlsafe.fromstring(container)
         rootfile = next((el for el in croot.iter() if _xml_local(el.tag) == "rootfile"), None)
         opf_path = (rootfile.get("full-path") if rootfile is not None else "") or ""
         if not opf_path or opf_path not in names:
             raise ValueError("EPUB 的包文件（OPF）不存在")
-        opf = ET.fromstring(zin.read(opf_path))
+        opf = xmlsafe.fromstring(zipkind.read_entry(zin, opf_path))
         manifest = next((el for el in opf.iter() if _xml_local(el.tag) == "manifest"), None)
         if manifest is not None:
             for item in list(manifest):
@@ -97,7 +99,8 @@ def export_deaudio_epub(src, dest, audio_hrefs) -> pathlib.Path:
                     name = info.filename
                     if name in ("mimetype", "META-INF/container.xml", opf_path) or name in drop:
                         continue
-                    zout.writestr(info, zin.read(name))
+                    # 第 292 期：复制也要过同一个条目上限（裸 `zin.read()` 是解压炸弹入口）。
+                    zout.writestr(info, zipkind.read_entry(zin, name))
     return dest
 
 

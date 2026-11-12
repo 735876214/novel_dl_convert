@@ -23,7 +23,7 @@ import xml.etree.ElementTree as ET
 from urllib.parse import unquote
 
 from .. import config
-from . import library
+from . import library, xmlsafe
 
 MAX_XML_BYTES = 4 * 1024 * 1024
 CONTAINER = "META-INF/container.xml"
@@ -123,7 +123,7 @@ def _size(path: pathlib.Path) -> int:
 def _parse_smil(data: bytes, smil_path: str, names: set) -> "tuple[list, int]":
     """→ (可用 cues, 被丢弃的 par 数)。"""
     try:
-        root = ET.fromstring(data)
+        root = xmlsafe.fromstring(data)
     except ET.ParseError:
         return [], 0
     out: list = []
@@ -177,7 +177,7 @@ def inspect(path) -> dict:
         if CONTAINER not in names:
             return _unsupported(p, "EPUB 缺少 META-INF/container.xml")
         try:
-            container = ET.fromstring(_read(z, CONTAINER))
+            container = xmlsafe.fromstring(_read(z, CONTAINER))
         except (ET.ParseError, KeyError, ValueError):
             return _unsupported(p, "EPUB 的 container.xml 读不出来")
         rootfile = next((el for el in container.iter() if _local(el.tag) == "rootfile"), None)
@@ -185,7 +185,7 @@ def inspect(path) -> dict:
         if not opf_path or opf_path not in names:
             return _unsupported(p, "EPUB 的包文件（OPF）不存在")
         try:
-            opf = ET.fromstring(_read(z, opf_path))
+            opf = xmlsafe.fromstring(_read(z, opf_path))
         except (ET.ParseError, KeyError, ValueError):
             return _unsupported(p, "EPUB 的包文件（OPF）读不出来")
 
