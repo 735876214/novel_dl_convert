@@ -140,6 +140,11 @@ _dirty: dict = {}
 _dirty_all_seq: int = 0
 #: 库 id → 上次成功刷新时看到的 ``_dirty_all_seq``。比它大就是「之后又被全局标脏过」。
 _refreshed_seq: dict = {}
+#: 库 id → **被移除登记**的次数（第 288 期）。刷新在开扫前记下它，收尾时再比一次：
+#: 扫描期间库被删（或被删后同名重建）⇒ 这一轮写进去的行必须作废 —— 否则
+#: `forget()` 的 DELETE 跑在扫描**中间**，扫描随后又把行写回来，索引表里就留下
+#: 一条谁都看不见、也再没人清的行（`api_delete_library` 的注释专门怕这张表只增不减）。
+_forgotten: dict = {}
 _state_lock = threading.Lock()
 
 #: 本进程内「已经至少完整刷过一次」的库。**冷启动的唯一判据** ——
@@ -221,6 +226,8 @@ def reset_state() -> None:
         # 「索引非空」印象，把本该同步的首次扫描让给后台 —— 于是它读到空书架。
         _nonempty.clear()
         _scan_state.clear()
+        # 第 288 期：与其它库级进程内状态一并清掉，避免跨用例累积。
+        _forgotten.clear()
         _dirty_all_seq = 0
     # Redis 里的列表键也得丢：本函数是「换了一套库」的信号（`db.close()` 调它），
     # 而**库 id 会被重用**（测试里每个用例都叫 'novels'）—— 留着旧值，下一个用例
@@ -613,6 +620,7 @@ def refresh_library(lib: dict, force: bool = False, blocking: bool = True) -> di
     with _state_lock:
         seen_dirty = _dirty.get(lid)
         seen_seq = _dirty_all_seq
+        seen_forgotten = _forgotten.get(lid, 0)
     _scan_begin(lid)
     try:
         out = _refresh_locked(lib, force)
@@ -620,6 +628,26 @@ def refresh_library(lib: dict, force: bool = False, blocking: bool = True) -> di
         _scan_fail(lid, e)
         lk.release()
         raise
+    # 第 288 期：扫描期间库被移除（或被删后同名重建）⇒ 这一轮写进去的行属于一个
+    # 已经不存在的库。`forget()` 的 DELETE 可能跑在扫描**中间**，扫描随后又会把行
+    # 写回来 —— 那是一条谁都看不见、也再没人清的索引行。整轮结果作废；删除放在
+    # **持锁期间**做，否则同名重建后的新一轮扫描可能与这次清理交叉。
+    with _state_lock:
+        forgotten_now = _forgotten.get(lid, 0) != seen_forgotten
+    # 代际号只能抓住「扫描期间被删」；另一条窗口是调用方**拿的是删库之前取得的旧
+    # lib 实体**（监听线程按上一轮快照逐个目标扫）—— 扫描开始时库已经不在了，
+    # 代际号在开扫前就已是新值，比对不出来。收尾时再直接问一次库表（唯一真值源）。
+    if forgotten_now or db.get_library(lid) is None:
+        _drop_index_rows(lid)
+        with _state_lock:
+            _scan_state.pop(lid, None)
+            _ready.discard(lid)
+            _nonempty.discard(lid)
+        lk.release()
+        out["skipped"] = True
+        out["reason"] = "库在扫描期间被移除，本轮结果作废"
+        out["seconds"] = round(time.time() - t0, 3)
+        return out
     lk.release()
     # 跑完一整遍全量才记版本 —— 增量那一轮没资格代表「这库已按新口径重探过」
     if force and not out.get("skipped"):
@@ -906,13 +934,23 @@ def refresh_stale(blocking: bool = False) -> dict:
     return out
 
 
+def _drop_index_rows(lid: str) -> None:
+    """真删某库的全部索引行。**唯一实现**：移除登记与「扫描期间库被移除」的作废都走这里。"""
+    _exec(f"DELETE FROM {TABLE} WHERE library_id=?", (lid,))
+    _commit()
+
+
 def forget(library_id) -> None:
     """删掉某库的全部索引行（库被移除登记时调）。"""
     lid = str(library_id or "")
     if not lid:
         return
-    _exec(f"DELETE FROM {TABLE} WHERE library_id=?", (lid,))
-    _commit()
+    # ⚠️ 顺序要紧（第 288 期）：先推进「被移除」代际号，再删行。反过来的话，扫描
+    # 在这两步之间结束并向库表写回行时，收尾检查看不到代际变化（漏判），而
+    # `forget` 的 DELETE 已经跑过 ⇒ 行永远留着。先推进则扫描收尾必定作废。
+    with _state_lock:
+        _forgotten[lid] = _forgotten.get(lid, 0) + 1
+    _drop_index_rows(lid)
     # ⚠️ 口径标记也要一起清（第 86 期修）：库 id 是由**库名**派生的（`server._new_library_id`），
     # 「删库 → 用同一个库名重新添加」会**复用同一个 id** ⇒ 新库一上来就带着旧库留下的
     # `app_state['book_index_rule:{lid}']`，被 `_rule_stale` 认为「口径已是最新」而**不做全量重扫**。
