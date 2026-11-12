@@ -17100,3 +17100,106 @@ GET  /api/browse-counts               → annotations=0, cached=true    ← 页�
 测试自己在 `unlink` 临时 config.yaml 时撞上 `WinError 32`（该用例把 `CONFIG_FILE` 模块级改成
 自己的 tmp 路径，后台线程此刻也会读它）。单跑 3 次全绿；已给该用例的清理加短退避重试
 （与 `config._replace_with_retry` 同口径），重跑全量通过，下面的数字来自重跑。
+
+## 第 288 期（全项目审计第 8 轮：扫描还在跑，库已经被删了）
+
+**需求来源**：24 小时全项目持续审计第 8 轮（第 281 期起，硬截止 2026-11-12 18:30）。
+本轮角度：**后台任务与请求路径的锁序 / 并发**（上期交接清单的第 1 项），
+顺带把第 287 期「缓存失效点」这条线补完整。
+
+### 一、本轮扫的角度与发现
+
+#### ① 锁序（⑨ / ⑯）：静态枚举 + 实测并发，健康
+
+先把全仓的 `Lock` / `RLock` 与旁路线程入口逐个列出来（扫描 / 刮削 / 发布 / 自动追更 /
+播客下载 / 自动入库 / 集成推送 / 版本检查 / 更新应用），看「持锁期间会不会去要另一把锁」：
+
+- `db._lock` 是**可重入**的，普通语句只圈一条 SQL；唯一跨多条语句的 `_tx()` 有 **8 个使用点，
+  全部在 `core/db.py` 内部且只执行 SQL** ⇒ 不存在「持 db 锁去要 catalog 锁」的反序路径
+  （catalog 是 `_state_lock` → `db._lock` 的单向顺序）；
+- `watcher` 的 `_scan_lock` / `_ctl_lock`、`bookdock._reg_lock` 的两条不变量都写在代码里
+  （持 `_reg_lock` 时绝不碰 watcher；监听线程绝不碰 `_ctl_lock`），单文件处理的锁收在
+  `scan_once` / `rescan_one` 唯一入口；
+- `scrape._bid_guard` 只圈「状态机迁移 + 副本落地」，明写不嵌套；`_bid_locks_lock` 只保护
+  锁表本身，不跨着干活。
+
+**实测并发**：起隔离实例（`scripts/dev-instance.sh 8413`），4 个线程 10 秒内并发打
+`/api/books`、`/api/browse-counts`、`/api/libraries/{lid}/scan-state`、`/api/tasks`、
+`/api/stats`，并反复「写一条批注 → 读计数 → 删掉」，中途并发删库：
+
+```
+1321 × 200 · 447 × 404（删库之后的预期拒绝）· 0 × 5xx · 0 次挂起
+```
+
+唯一发现：`core/library.py` 的 `_lock = threading.RLock()` **全仓零引用** —— 第 62 期把扫描
+搬进 `catalog` 后的遗留死代码，连同只剩它一个用点的 `import threading` 一起删掉。
+
+#### ② 缓存「读-算-写」不是原子的：计算期间被失效，旧结果仍被写回
+
+第 287 期修了「批注写入口不失效」；顺着看 `browse_counts.counts()` 的**时序**：
+
+```
+锁内查缓存（未命中） → 出锁 _compute() → 锁内写缓存
+```
+
+`_compute()` 要遍历书目并查批注表（冷索引 / NAS 上可达数百毫秒）。若这期间发生一次写入
+（`invalidate()` / `invalidate_counts()`），那次失效丢的是**还没写进去的键**；随后旧结果
+被写回缓存 ⇒ 侧栏又错 60 秒。用例用可控的 `_compute` 卡住计算窗口，稳定复现：
+
+```
+线程 A: counts() 进入计算 → 阻塞
+主线程 : invalidate()            ← 写入发生
+线程 A: 旧结果写回缓存
+再次读 : cached=true，仍是旧数字   ← 修前
+```
+
+**修法**：`browse_counts._gen` 失效代际号（与 `catalog._dirty_all_seq` 同一判据）——
+`counts()` 查缓存时记下代际，落缓存前再比一次；**计算期间被失效 ⇒ 这一份不落缓存**
+（本次照样返回，下次重算）。宁可多算一次，也不能把失效后的旧值写回去。
+
+#### ③ 清孤儿记录会真删批注行，但侧栏计数不失效
+
+`ORPHAN_TABLES` 含 `annotations` ⇒ `POST /api/maintenance/orphans/clear` 会
+`DELETE FROM annotations ...`（实测 `removed["annotations"] == 1`），但这条路径没有让
+侧栏三计数失效 ⇒ 清完之后侧栏「批注」仍显示旧数字（最多 60 秒）。与第 287 期是同一条
+纪律漏掉的第二个入口：**失效点要按「会改哪些表」枚举，而不是按「批注相关端点」枚举**。
+**修法**：`removed.get("annotations")` 非零时调 `library.invalidate_counts()`。
+
+#### ④ 扫描与删库的竞态：`forget()` 删掉行，扫描随后又写回来
+
+`DELETE /api/libraries/{lid}` 的顺序是「删登记 → `catalog.forget(lid)`」。若此刻这个库
+正在扫（NAS 大目录可达分钟级），`forget()` 的 DELETE 跑在扫描**中间**，扫描随后又把
+`book_index` 行写回来 ⇒ 表里留下一条谁都看不见、也**再没人清**的行 —— 正是
+`api_delete_library` 的注释专门要避免的「只增不减的表」。还有第二个窗口：调用方拿的是
+**删库之前取得的旧 lib 实体**（监听线程按上一轮快照逐个目标扫），扫描开始时库已经不在了，
+代际号在开扫前就已是新值，比对不出来。
+
+**修法**：`catalog._forgotten`（库 id → 被移除次数）—— `forget()` **先推进代际号、再删行**；
+`refresh_library` 开扫前记下代际，收尾时比对，并**再问一次 `db.get_library(lid)`**（覆盖
+旧实体窗口，库表是唯一真值源）。判为作废时在**持锁期间**删掉本轮写入的行、清掉扫描态，
+返回 `skipped + reason`。删行的 SQL 收敛到 `_drop_index_rows()` 一处，`forget()` 与作废
+路径共用。
+
+### 二、防回归
+
+- `tests/test_browse_counts_288.py`（2 例）：① 用可控 `_compute` 卡住计算窗口，期间调
+  `invalidate()` ⇒ 第二次读必须 `cached=false` 且拿到重算后的数字；② 两本书的库、给 A
+  写批注、把 A 的文件移走、清孤儿 ⇒ `/api/browse-counts` 立刻 `cached=false`、
+  `annotations=0`。修前两条都红。
+- `tests/test_catalog_forget_288.py`（2 例）：① 扫描卡在中间时删库 ⇒ 收尾后索引 0 行、返回
+  `skipped`；② 用删库前的旧实体去刷 ⇒ 同样不写回。修前两条都红（实测分别写回 1 行 /
+  把 1 本书写进已删库）。
+- 相关子集 122 例（catalog / cache / 单位扫描 / 删除清理 / 新增用例）一并通过。
+
+### 三、核验
+
+后端全量 **3433 例（3406 passed / 0 failed / 0 errors / 27 skipped）**、992.0 s；
+前端四连（type-check → unit → build → **deploy**）全过（本轮没改前端）；
+`check_doc_anchors --strict` 硬错 0 条；`period_close check` **0 问题**。
+
+⚠️ 本轮第一次中间全量出现过 11 例红（`test_decrypt_wire` 的 node 执行、`test_scripts_contract`
+的 `bash -n`、`test_source_tracking_contract` 的 `git ls-files`）—— 报错全是
+**`0xC0000142`（DLL 初始化失败）**，来自我同时跑了两份全量 pytest：进程/句柄耗尽，
+测试里再 spawn node / bash / git 就起不来。停掉并发、用最终代码单独重跑，全绿。
+⇒ 操作口径：**全量跑不要并行** —— 并行的代价不是慢，是「假红」，而且红在该死的环境项上。
+
