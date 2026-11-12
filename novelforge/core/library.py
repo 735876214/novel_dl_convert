@@ -31,7 +31,6 @@ import posixpath
 from urllib.parse import quote, unquote
 import re
 import stat
-import threading
 import time
 import unicodedata
 import uuid
@@ -87,8 +86,6 @@ _COVER_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg")
 # 扩展名和 magic bytes 都对，接口也照常返回 200，但浏览器解码必然失败。
 # 这类书如果算作「有封面」，就会从「无封面」分组里消失，用户根本找不到它们。
 _COVER_MIN_BYTES = 1024
-
-_lock = threading.RLock()
 
 # 文件名噪声：括号里的版本说明 + 空白/连字符
 _NOISE_RE = re.compile(r"[（(][^）)]*(?:校对|全本|完结|精校|未删减|典藏|合集)[^）)]*[）)]|[\s\-_·]+")
