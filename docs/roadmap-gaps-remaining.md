@@ -17431,3 +17431,91 @@ Starlette `FileResponse` 的分支是：ASCII 且 `quote()` 后不变才写
 
 后端全量 **3442 例（3415 passed / 0 failed / 0 errors / 27 skipped）**、846.1 s（与第 290 期同一棵树）；
 `period_close check` 0 问题。
+
+## 第 292 期（全项目审计第 12 轮：不可信 XML / zip 的资源上限缺口（含清覆盖层并发 500））
+
+**需求来源**：10 小时持续审计第 3 轮（2026-11-12）。角度：**不可信输入的解析资源上限** ——
+第 291 期扫「危险汇点」时探到两条线索（XML 实体膨胀 / zip 条目裸读补漏），本轮把它们做成真修复。
+另外，**第一次全量跑的 1 例红不是环境噪音，而是第三个真缺陷**（清覆盖层的并发 500）。
+
+### 一、三处真缺陷
+
+#### ① 不可信 XML 的实体膨胀：stdlib 的「放大比」保护可被垫大输入绕过
+
+实测（Python 3.12）：
+
+- 10^5 实体 × 100 次引用、**743 B** 输入 ⇒ `ParseError: limit on input amplification factor … breached`（被拦）；
+- 同一份炸弹在 DOCTYPE 后**垫 1 MB 注释**（放大比降到 30 倍）⇒ **放行**，3 秒展开 **30 MB**。
+
+而 zip 条目上限是 128 MB（`comics.MAX_ENTRY_BYTES`）、RSS 上限 8 MB ⇒ 一份精心构造的
+OPF / RSS 就能在**自动扫描 / 订阅刷新**时把进程内存打爆。受影响的解析入口六处：
+`customicons.parse_svg`（上传 SVG）、`epub_cfi._parse`（章节 XHTML）、`fb2cache._parse`（FB2）、
+`podcasts.parse_feed` / `opml_import`（RSS / OPML）、`publish.export_deaudio_epub`（container / OPF）、
+`readaloud`（container / OPF / SMIL）。
+
+**修法**：新增 `core/xmlsafe.py`（判据唯一一处）：**含 `<!ENTITY` 的内部实体声明一律拒绝**
+（正常 EPUB / RSS / OPML / FB2 不需要自定义实体；`<!DOCTYPE … PUBLIC …>` 不受影响）。
+`ensure_no_entities` 必须先于任何解析 / DOCTYPE 剥除动作 —— `fb2cache` / `epub_cfi` 里的
+`re.sub(r"<!DOCTYPE[^>]*>")` 会从第一个 `>` 处把声明切碎，之后再也查不出来。
+六处入口全部改走 `xmlsafe.fromstring`。
+
+#### ② zip 条目裸读还漏了四处 —— 而第 242 期的守卫用例是假绿
+
+第 137 / 242 期把「读书籍本体条目」收敛到 `zipkind.read_entry`（解压后大小上限），
+`test_zip_entry_read_guard_242.py` 还声称「全仓不许再裸读」。但它的判据是**变量名白名单**
+（`z` / `zf` / `zip` / `archive` / `ar`），而下面四处用的是 **`zin` / `a` / `b`**：
+
+| 位置 | 读的是什么 | 后果 |
+|---|---|---|
+| `publish.export_deaudio_epub` | container / OPF / 每个复制条目 | 出版恶意 EPUB ⇒ 内存暴涨 |
+| `epub_update.copy_with_extra` | 每个未替换的条目 | 追更读炸弹书 ⇒ 内存暴涨 |
+| `epub_update.verify_unchanged` | 源包与副本逐条比对 | 「验证副本」变成解压入口 |
+| `kepub.export_kepub` | 每个条目 | 导出炸弹书 ⇒ 内存暴涨 |
+
+（`fileops._write_epub` 早在第 137 期就按同一判据**流式**复制了 —— 这四处是漏网。）
+**修法**：四处全部改走 `zipkind.read_entry`；守卫用例改成 **AST 判据**：先找作用域里绑定到
+`zipfile.ZipFile` 的变量（`with … as x` / `x = …`），再找这些变量上的 `.read(...)` ——
+变量名怎么起都跑不掉。新增一条**自证不是空转**的用例：`zin.read` 必须被认出来。
+
+#### ③ 清覆盖层：裸 `unlink()` 撞上并发读句柄 ⇒ 偶发 500
+
+`DELETE /api/config/overrides` 此前直接 `SETTINGS_FILE.unlink()`：既不拿
+`config._OVERRIDES_LOCK`、也没有短退避重试。Windows 上任何并发读句柄
+（`load_overrides` 在另一个线程 / 进程里刚打开文件）都会让它失败：
+
+```
+清除失败：[WinError 32] 另一个程序正在使用此文件，进程无法访问。: '…/settings.json'
+```
+
+第一次全量跑在 `test_clear_overrides_热应用` 上实测到了（**单跑必绿、全量中段偶发红** ——
+这正是并发读句柄的典型形态）。**修法**：收敛到 `config.clear_overrides()`
+（持 `_OVERRIDES_LOCK` + `_unlink_with_retry`，与 `save_overrides` 同一套口径）；
+删不掉时仍**如实抛**（接口回 500），不假装清空。
+
+### 二、防回归
+
+- `tests/test_untrusted_xml_292.py`（14 例）：实体炸弹拒绝 / 普通 XML 与预定义实体正常 /
+  外部 DTD 不受影响 / **垫 1 MB 输入也拦**（判据与输入大小无关）/ RSS、OPML、SVG、FB2 四个
+  入口的行为 / 六个模块「不许出现 `ET.fromstring(`」的源码契约。
+- `tests/test_zip_cap_rewrite_292.py`（4 例）：把 `comics.MAX_ENTRY_BYTES` 缩到 1 KB，
+  kepub / epub_update / publish 三条路径必须抛 `EntryTooLarge` 且不留半截目标；正常小书仍能导出。
+- `tests/test_config_clear_overrides_292.py`（3 例）：幂等 / 短暂读占用后重试成功 /
+  Windows 上永久占用必须**如实失败**（不静默）。
+- `tests/test_zip_entry_read_guard_242.py` 改为 AST（+1 自证例）。
+相关子集 174 例 + 配置子集 41 例全绿。
+
+### 三、核验
+
+后端全量 **3464 例（3437 passed / 0 failed / 0 errors / 27 skipped）**、905.7 s；
+前端未改；`period_close check` 0 问题。
+⚠️ 第一次全量跑出现 1 例红（`test_clear_overrides_热应用`，WinError 32）—— 修完 ③ 后重跑全量干净；
+这也说明「单跑绿不等于全量绿」：并发读句柄只在全量的多线程负载里才撞得上。
+
+### 四、口径
+
+- **相对阈值不是安全上限**：放大比 / 速率这类判据，攻击者只要加无关字节就能拉低分母；
+  可依赖的是**绝对字节上限**（条目大小）与**结构判据**（出现 `<!ENTITY` 就拒）。
+- **结构性守卫用例本身也要验「它到底能不能红」**：第 242 期那条白名单守卫连续三期全绿，
+  却漏了四处真裸读 —— 第 292 期的 AST 版带一条自证用例，防止再退化成空转。
+- **「单跑绿、全量红」不要先当环境噪音**：先看错误形态（文件占用 / 时序 / 进程句柄），
+  这一例就是真缺陷。

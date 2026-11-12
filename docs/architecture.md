@@ -449,6 +449,14 @@ DTO 的 `metadata.number` / `numberSort` 与**排序表**共用同一份解析 �
 **不**走 `invalidate()`（那会顺带标脏目录、让下一个请求跑一次增量扫描）。
 ⚠️ 修前 `invalidate()` 的注释声称「写批注」已覆盖，而批注端点一次都没调它 ——
 实测写一条高亮后侧栏仍 `cached: true`、数字是旧的） |
+   | **不可信 XML** 的解析入口（内部实体膨胀防护） | `novelforge/core/xmlsafe.py` 的 `fromstring` / `ensure_no_entities`
+（第 292 期：含 `<!ENTITY` 的内部实体声明一律拒绝；stdlib ET 的「放大比」保护可被**垫大输入**稀释 ——
+实测 743 B 炸弹被拦、垫 1 MB 注释后 3 秒展开 30 MB。EPUB container/OPF/SMIL · FB2 · RSS · OPML ·
+上传 SVG 六处入口全部走它，`ET.fromstring` 只许留在这里） |
+   | 读 **zip 条目**的唯一入口（解压后大小上限） | `novelforge/core/zipkind.py` 的 `read_entry`
+（第 137 / 242 期立，第 292 期补全：`publish` / `epub_update` / `kepub` 三处重写循环 +
+`verify_unchanged` 仍在裸 `zin.read()` ⇒ 出版 / 追更 / 导出恶意 EPUB 可打爆内存。
+守卫用例改成 **AST 判据**（按绑定到 `zipfile.ZipFile` 的变量找 `.read`）—— 旧的变量名白名单漏了 `zin`） |
 5. 抓取三闸 + 三处调用点同规则；预览==落盘（`publish.relpath_for` + `rel_verdict`）。
 6. 前端默认零外部请求（**默认取向，非硬约束** —— 第 80 期口径修订：出网由后端发起且可关 / 失败降级；引外部资源须显式声明理由）；设置页/偏好块/库列 的同步点一处不漏。
    ⚠️ **第 82 期显式新增运行时依赖 `vue-draggable-plus@^0.6.1`**（仪表盘部件行内拖拽）：理由是原生 HTML5 DnD
