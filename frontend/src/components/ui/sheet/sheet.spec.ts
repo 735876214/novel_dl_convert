@@ -2,7 +2,7 @@ import { mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, describe, expect, it } from 'vitest'
 import { defineComponent, h, nextTick, ref } from 'vue'
 
-import { Sheet, SheetContent } from '.'
+import { Sheet, SheetContent, SheetDescription, SheetTitle } from '.'
 
 /**
  * 抽屉（第 90 期，移植 BookOrbit 的 `ui/sheet`，基座是 reka-ui 的 Dialog）。
@@ -41,7 +41,15 @@ function mountSheet(props: { side?: 'right' | 'left' | 'top' | 'bottom'; hideClo
             {
               default: () =>
                 h(SheetContent, { side: props.side ?? 'right', hideClose: props.hideClose }, {
-                  default: () => h('p', '抽屉内容'),
+                  // ⚠️ `DialogContent`（reka-ui）要求有 `DialogTitle`，否则每次都往
+                  // stderr 打两行可访问性告警（CI 日志里 6 个用例 × 3 条 = 18 条噪声）。
+                  // 生产侧 `Sidebar.vue` 本来就有 Title / Description；这里补齐只是
+                  // 让测试挂载的形状与生产一致，不是改行为。
+                  default: () => [
+                    h(SheetTitle, () => '抽屉标题'),
+                    h(SheetDescription, () => '抽屉说明'),
+                    h('p', '抽屉内容'),
+                  ],
                 }),
             },
           )

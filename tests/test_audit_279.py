@@ -1,4 +1,4 @@
-"""持续审计第 2 轮（第 279 期）：**上传件的名字必须是纯文件名**。
+r"""持续审计第 2 轮（第 279 期）：**上传件的名字必须是纯文件名**。
 
 这一轮扫了三个角度，两个零发现（**别重查**）：
 
@@ -53,7 +53,7 @@ def _post(client, name: str):
 
 
 @pytest.mark.parametrize("name", [
-    "a/b/c.cbz", "a\b\c.cbz", "../../逃出去.cbz", "..\..\逃出去.cbz", "/etc/逃出去.cbz",
+    "a/b/c.cbz", r"a\b\c.cbz", "../../逃出去.cbz", r"..\..\逃出去.cbz", "/etc/逃出去.cbz",
 ])
 def test_上传件名字不许带目录(client, isolated, name):   # noqa: ARG001
     r = _post(client, name)
