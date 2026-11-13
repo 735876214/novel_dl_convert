@@ -237,7 +237,9 @@ function slotStyle(n: number = 1): Record<string, string> {
 }
 
 function setCanvas(n: number, el: unknown): void {
-  if (el instanceof HTMLCanvasElement) canvases.set(n, el)
+  // ⚠️ 测试环境在组件卸载后可能已经把 DOM 全局销毁（CI 实测：unmount 时
+  // `HTMLElement is not defined` 变成未处理异常 ⇒ vitest 退出 1）。
+  if (typeof HTMLCanvasElement !== 'undefined' && el instanceof HTMLCanvasElement) canvases.set(n, el)
   else canvases.delete(n)
 }
 
@@ -245,12 +247,12 @@ function setCanvas(n: number, el: unknown): void {
 const textLayers = new Map<number, HTMLElement>()
 
 function setTextLayer(n: number, el: unknown): void {
-  if (el instanceof HTMLElement) textLayers.set(n, el)
+  if (typeof HTMLElement !== 'undefined' && el instanceof HTMLElement) textLayers.set(n, el)
   else textLayers.delete(n)
 }
 
 function setSlot(n: number, el: unknown): void {
-  if (!(el instanceof HTMLElement)) {
+  if (typeof HTMLElement === 'undefined' || !(el instanceof HTMLElement)) {
     slots.delete(n)
     return
   }
@@ -260,10 +262,11 @@ function setSlot(n: number, el: unknown): void {
 
 async function renderPage(n: number): Promise<void> {
   const canvas = canvases.get(n)
-  if (!pdfDoc || !canvas || busy.has(n) || drawn.value.has(n)) return
+  if (disposed || !pdfDoc || !canvas || busy.has(n) || drawn.value.has(n)) return
   busy.add(n)
   try {
     const p = await pdfDoc.getPage(n)
+    if (disposed) return
     const vp = p.getViewport({ scale: scale.value })
     const dpr = Math.min(2, window.devicePixelRatio || 1)
     canvas.width = Math.floor(vp.width * dpr)
@@ -278,6 +281,7 @@ async function renderPage(n: number): Promise<void> {
         transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
       }).promise
     }
+    if (disposed) return
     drawn.value = new Set(drawn.value).add(n)
     const slot = slots.get(n)
     if (slot && n === 1) base.value = { w: vp.width / scale.value || base.value.w, h: vp.height / scale.value || base.value.h }
@@ -957,8 +961,11 @@ function onKeydown(e: KeyboardEvent): void {
 }
 
 let ro: ResizeObserver | null = null
+/** 组件已卸载：异步回调（onMounted 的后续段 / renderPage）恢复时**不许再碰 DOM / 全局**。 */
+let disposed = false
 
 onMounted(async () => {
+  if (typeof window === 'undefined') return
   try {
     const pdfjs: any = await import('pdfjs-dist')
     const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default
@@ -1019,6 +1026,7 @@ onMounted(async () => {
     loading.value = false
   }
 
+  if (disposed) return
   if (typeof ResizeObserver === 'function' && boxRef.value) {
     ro = new ResizeObserver(() => {
       const keep = page.value
@@ -1052,13 +1060,14 @@ function measure(): void {
 }
 
 onBeforeUnmount(() => {
+  disposed = true         // 先置位：后续恢复的异步段据此直接返回
   clock?.accrue()          // 先把最后这几秒结掉，再拆管线
   clock?.detach()
   clock = null
   void session.stop()
   if (saveTimer) clearTimeout(saveTimer)
   void save()
-  window.removeEventListener('keydown', onKeydown)
+  if (typeof window !== 'undefined') window.removeEventListener('keydown', onKeydown)
   io?.disconnect()
   ro?.disconnect()
   try {

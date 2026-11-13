@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
  * PDF 阅读器的两个交互（第 231 期）：**拖拽平移**与**站外链确认**。
@@ -50,6 +50,13 @@ vi.mock('@/lib/api', () => ({
 import PdfReader from '@/components/reader/PdfReader.vue'
 
 describe('PdfReader：拖拽平移 + 站外链确认（第 231 期）', () => {
+  // ⚠️ CI 实测：不卸载的组件会在 happy-dom 销毁后仍执行 `:ref` 回调 / `onMounted`
+  // 后续段 ⇒ `HTMLElement/window is not defined` 变成未处理异常（892 例全过但退出 1）。
+  const opened: { unmount: () => void }[] = []
+  afterEach(() => {
+    for (const w of opened.splice(0)) w.unmount()
+  })
+
   beforeEach(() => {
     setActivePinia(createPinia())
     localStorage.clear()
@@ -70,6 +77,7 @@ describe('PdfReader：拖拽平移 + 站外链确认（第 231 期）', () => {
     const w = mount(PdfReader, {
       props: { bookId: 'b1', title: '测试 PDF' },
     })
+    opened.push(w)
     await flushPromises()
     await flushPromises()
     return w
